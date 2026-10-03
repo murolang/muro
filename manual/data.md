@@ -62,7 +62,7 @@ def fromMaybe : run Π (-A : Type) → Π (d : A) → Π (m : Maybe A) → A :=
 
 ## Positivity
 
-`D` must not occur left of `Π` in a constructor telescope.
+A constructor field is strictly positive in `D` after the checker unfolds it. `D` may be absent. `D` may be the head of a spine whose arguments do not contain `D`. `D` may occur to the right of a `Π` whose domain does not contain `D`. A product is positive on both sides. `D` inside an argument of `D` is refused, including under a spec name: `Contra := Bad → Empty` is the negative arrow, and `List (Tree A)` is nested. A field that does not reduce in the fuel is refused.
 
 This is rejected:
 
@@ -86,7 +86,7 @@ With `match … motive (λ _ → Type)` such a `Box` would project a type back o
 
 ## Recursion
 
-A self-call in run or evidence must pass, at the position of the argument it descends on, a constructor argument whose type is `D …` from a `match` on that argument. For lists, that is the tail. For trees, either child. Fields of a `match` on a computed value are not smaller.
+A call in run or evidence, to the definition being checked or to another run or evidence definition that reaches it, must pass a constructor argument whose type is `D …` from a `match` on the argument the block descends on. The block shares one argument position. `even` and `odd` on `Nat` are one block (`examples/even_odd.muro`). For lists, that position is the tail. For trees, either child. Fields of a `match` on a computed value are not smaller. Spec is not checked for descent.
 
 ```
 def length : run Π (- A : Type) → Π (xs : List A) → Nat :=

@@ -73,7 +73,7 @@ def zeros-always-zero : evidence Always Nat (λ (_ : Nat) → {0 ≡ 0 : Nat}) z
 
 The tail of `zeros` is `zeros`, so the same proof is the tail obligation. `tt` does not have that type. `Always` of `λ n → {n ≡ 0}` at `natsFrom 0` fails for the same reason: the head is `0`, and the tail asks for the predicate at `natsFrom 1`.
 
-(`examples/always.muro`.) Surface: `Always A P s`. This is evidence. It is omitted at emit.
+(`examples/always.muro`.) Surface: `Always A P s`. This is evidence. It is omitted at emit. `uncons` of an `Always` proof is `P (head s) × Always P (tail s)`. `head` of the proof is the equation.
 
 ## Bisimulation
 
@@ -88,7 +88,7 @@ def nats-tail-bisim : evidence Π (n : Nat) → tail (natsFrom n) ~ natsFrom (su
     unfold tt (λ (_ : Unit) → (refl, nats-tail-bisim (suc n)))
 ```
 
-(`examples/bisim.muro`.) Always, `~`, and their inhabitants are evidence (or live in evidence). They are not Elixir streams.
+(`examples/bisim.muro`.) `uncons` of a proof of `σ ~ τ` is `{head σ ≡ head τ} × (tail σ ~ tail τ)`. Always, `~`, and their inhabitants are evidence (or live in evidence). They are not Elixir streams.
 
 There are no user-defined ν-predicates. See [Limits](limits.md).
 

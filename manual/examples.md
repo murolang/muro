@@ -50,11 +50,11 @@ A productive `run` Stream of zeros. `head-zeros` is `{head zeros ≡ 0 : Nat}` b
 
 ## always.muro
 
-`Always` as evidence: every element of `zeros` is `0`. The proof is the head equation together with the same proof at the tail.
+`Always` as evidence: every element of `zeros` is `0`. The proof is the head equation together with the same proof at the tail. `uncons` of that proof is the equation paired with the predicate at `tail zeros`.
 
 ## bisim.muro
 
-`zeros ~ zeros'` and `tail (natsFrom n) ~ natsFrom (suc n)`. Rutten’s stream calculus, Theorem 2.1. Evidence only.
+`zeros ~ zeros'` and `tail (natsFrom n) ~ natsFrom (suc n)`. Rutten’s stream calculus, Theorem 2.1. `uncons` of `zeros ~ zeros'` is the head equation and `tail zeros ~ tail zeros'`. Evidence only.
 
 See [Streams](streams.md).
 
@@ -75,6 +75,10 @@ See [Either and Dec](either.md).
 ## maybe.muro
 
 `Maybe`, `fromMaybe`, `fromJust1`. Erased type argument.
+
+## even_odd.muro
+
+`even` and `odd` call each other and descend on the same `Nat` argument. `even-two` is `refl`.
 
 ## tree.muro
 

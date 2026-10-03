@@ -58,8 +58,12 @@ defmodule Muro.Check do
     [{q, Subst.wk(a)} | Enum.map(gamma, fn {q1, a1} -> {q1, Subst.wk(a1)} end)]
   end
 
-  defp qty_of(gamma, x), do: elem(Enum.at(gamma, x), 0)
-  defp typ_of(gamma, x), do: elem(Enum.at(gamma, x), 1)
+  defp bound(gamma, x) do
+    case Enum.at(gamma, x) do
+      nil -> {:error, "unbound variable"}
+      {q, ty} -> {:ok, {q, ty}}
+    end
+  end
 
   # -- rec state -------------------------------------------------------------
   # A definition descends on one argument position `pos`, the same for every
@@ -70,10 +74,36 @@ defmodule Muro.Check do
   # check_def tries each non-erased position (Agda: RecSt, checkBody).
 
   defp empty_rec,
-    do: %{self: nil, pos: 0, next_arg: nil, smaller: [], rec_ok: [], names: [], guard: false}
+    do: %{
+      self: nil,
+      pos: 0,
+      next_arg: nil,
+      smaller: [],
+      rec_ok: [],
+      names: [],
+      guard: false,
+      block: MapSet.new()
+    }
 
-  defp def_rec(name, pos),
-    do: %{self: name, pos: pos, next_arg: pos, smaller: [], rec_ok: [], names: [], guard: false}
+  defp def_rec(name, pos, block) do
+    %{
+      self: name,
+      pos: pos,
+      next_arg: pos,
+      smaller: [],
+      rec_ok: [],
+      names: [],
+      guard: false,
+      block: block
+    }
+  end
+
+  defp block_of(%{block: %MapSet{} = block}), do: block
+
+  defp block_of(%{self: name}) when is_binary(name), do: MapSet.new([name])
+  defp block_of(_), do: MapSet.new()
+
+  defp in_block?(rs, name), do: MapSet.member?(block_of(rs), name)
 
   defp push_name(rs, x), do: %{rs | names: [x | Map.get(rs, :names, [])]}
 
@@ -170,12 +200,14 @@ defmodule Muro.Check do
   end
 
   defp infer_var_tax(k, book, gamma, n, x, mode) do
-    case qty_of(gamma, x) do
-      :erased ->
+    case bound(gamma, x) do
+      {:error, _} = err ->
+        err
+
+      {:ok, {:erased, _}} ->
         {:error, "no promotion: erased variable in #{mode} mode"}
 
-      q ->
-        ty = typ_of(gamma, x)
+      {:ok, {q, ty}} ->
         u = if q == :reuse, do: :uw, else: :u1
 
         if mode == :run do
@@ -221,10 +253,14 @@ defmodule Muro.Check do
 
   defp check_rec(mode, false, rs, t) when mode in [:run, :evidence] do
     case apps(t) do
-      {{:def, name}, args} when rs.self == name ->
-        case Enum.at(args, rs.pos) do
-          nil -> {:error, @no_descent}
-          a -> if smaller_var?(rs, a), do: :ok, else: {:error, @no_descent}
+      {{:def, name}, args} ->
+        if in_block?(rs, name) do
+          case Enum.at(args, rs.pos) do
+            nil -> {:error, @no_descent}
+            a -> if smaller_var?(rs, a), do: :ok, else: {:error, @no_descent}
+          end
+        else
+          :ok
         end
 
       _ ->
@@ -240,7 +276,7 @@ defmodule Muro.Check do
 
   defp self_applied(mode, false, rs, name) do
     cond do
-      rs.self != name ->
+      not in_block?(rs, name) ->
         :ok
 
       # The step of an indexed ν. The self-call is the coinductive step.
@@ -797,7 +833,8 @@ defmodule Muro.Check do
     end
   end
 
-  # ⇒-unf productivity: self may not occur in the pair's head.
+  # ⇒-unf productivity: a member of the recursive block may not occur in the pair's head.
+  defp has_self?(%MapSet{} = block, {:def, name}), do: MapSet.member?(block, name)
   defp has_self?(self, {:def, name}) when self == name, do: true
   defp has_self?(self, {:app, f, a}), do: has_self?(self, f) or has_self?(self, a)
   defp has_self?(self, {:su, t}), do: has_self?(self, t)
@@ -889,7 +926,7 @@ defmodule Muro.Check do
   defp check_unfold(_k, _book, :spec, _rs, _f), do: :ok
 
   defp check_unfold(k, book, _m, rs, f) do
-    with {:ok, f1} <- whnf(k, book, f), do: go_unfold(f1, rs.self)
+    with {:ok, f1} <- whnf(k, book, f), do: go_unfold(f1, block_of(rs))
   end
 
   defp go_unfold({:lam, _, _, _, t}, self), do: go_unfold(t, self)
@@ -990,7 +1027,10 @@ defmodule Muro.Check do
         infer_var_tax(k, book, gamma, n, x, :evidence)
 
       {:spec, {:var, x}} ->
-        {:ok, {typ_of(gamma, x), u0s(n)}}
+        case bound(gamma, x) do
+          {:error, _} = err -> err
+          {:ok, {_, ty}} -> {:ok, {ty, u0s(n)}}
+        end
 
       # ⇒-ze
       {_, :ze} ->
@@ -1284,11 +1324,13 @@ defmodule Muro.Check do
           {:ok, {{:nu, {:prod, Subst.wk(a), {:var, 0}}}, uses}}
         end
 
-      # ⇒-ucons
+      # ⇒-ucons. The same step an unfold checks: a bare ν substitutes the
+      # scrutinee's type for Y, and an applied family (Always, ~)
+      # substitutes ν F for Y and keeps the indices.
       {m, {:ucons, s}} ->
         with {:ok, {tt, u}} <- infer(k, book, rs, gamma, m, s),
-             {:ok, f} <- view_nu(k, book, tt, names_of(rs, gamma)) do
-          {:ok, {Subst.inst(f, tt), u}}
+             {:ok, {goal, _fam}} <- unf_step(k, book, rs, gamma, tt, tt) do
+          {:ok, {goal, u}}
         end
 
       # ⇒-i64 / ⇒-f32ty / ⇒-tensor
@@ -1583,15 +1625,142 @@ defmodule Muro.Check do
     end
   end
 
-  # The body is checked descending on the first non-erased argument; if that
-  # fails, on each later one. A definition with no self-call passes the first
-  # attempt. When every attempt fails, the first attempt's error is reported:
-  # the position only affects the descent check, so a type error is the same
-  # for every position (Agda: checkBody).
-  defp check_body(k, book, %{name: name, mode: mode, type: ty, body: body}) do
-    at = fn p -> check(k, book, def_rec(name, p), [], mode, body, ty) end
+  # Run and evidence definitions that reach each other are one block and
+  # descend on one shared argument. Spec is not in the block (Agda: component).
+  defp rec_mode?(mode), do: mode in [:run, :evidence]
 
-    case arg_positions(ty, 0) do
+  defp rec_names(book) do
+    for %{mode: mode, name: name} <- book, rec_mode?(mode), do: name
+  end
+
+  defp mentions(t), do: mentions(t, []) |> Enum.uniq()
+
+  defp mentions({:def, n}, acc), do: [n | acc]
+  defp mentions({:app, f, a}, acc), do: mentions(a, mentions(f, acc))
+  defp mentions({:pi, _, a, _, b}, acc), do: mentions(b, mentions(a, acc))
+  defp mentions({:lam, _, a, _, t}, acc), do: mentions(t, mentions(a, acc))
+  defp mentions({:su, t}, acc), do: mentions(t, acc)
+  defp mentions({:prod, a, b}, acc), do: mentions(b, mentions(a, acc))
+  defp mentions({:pair, a, b}, acc), do: mentions(b, mentions(a, acc))
+  defp mentions({:letp, e, t}, acc), do: mentions(t, mentions(e, acc))
+  defp mentions({:unf, s, f}, acc), do: mentions(f, mentions(s, acc))
+  defp mentions({:ucons, s}, acc), do: mentions(s, acc)
+  defp mentions({:nu, f}, acc), do: mentions(f, acc)
+  defp mentions({:bisim, s, t}, acc), do: mentions(t, mentions(s, acc))
+  defp mentions({:ann, e, a}, acc), do: mentions(a, mentions(e, acc))
+  defp mentions({:idt, a, x, y}, acc), do: mentions(y, mentions(x, mentions(a, acc)))
+  defp mentions({:rwt, e, p, t}, acc), do: mentions(t, mentions(p, mentions(e, acc)))
+  defp mentions({:tensor, d, s}, acc), do: mentions(s, mentions(d, acc))
+  defp mentions({:addi, x, y}, acc), do: mentions(y, mentions(x, acc))
+  defp mentions({:muli, x, y}, acc), do: mentions(y, mentions(x, acc))
+  defp mentions({:addt, t, u}, acc), do: mentions(u, mentions(t, acc))
+  defp mentions({:toi64, t}, acc), do: mentions(t, acc)
+  defp mentions({:packi, x, y}, acc), do: mentions(y, mentions(x, acc))
+
+  defp mentions({:mdata, e, p, bs}, acc) do
+    acc = mentions(p, mentions(e, acc))
+    Enum.reduce(bs, acc, fn {_, _, b}, acc -> mentions(b, acc) end)
+  end
+
+  defp mentions({:mnat, e, p, z, s}, acc),
+    do: mentions(s, mentions(z, mentions(p, mentions(e, acc))))
+
+  defp mentions({:memp, e, p}, acc), do: mentions(p, mentions(e, acc))
+
+  defp mentions({:munit, e, p, u}, acc), do: mentions(u, mentions(p, mentions(e, acc)))
+
+  defp mentions(_, acc), do: acc
+
+  defp rec_callees(book, name, names) do
+    case Enum.find(book, &(&1[:name] == name and rec_mode?(&1[:mode]))) do
+      nil -> []
+      d -> mentions(d.body) |> Enum.filter(&(&1 in names))
+    end
+  end
+
+  defp reaches?(edges, src, tgt), do: walk(edges, src, tgt, MapSet.new())
+
+  defp walk(_edges, cur, tgt, _vis) when cur == tgt, do: true
+
+  defp walk(edges, cur, tgt, vis) do
+    if MapSet.member?(vis, cur) do
+      false
+    else
+      vis = MapSet.put(vis, cur)
+      Enum.any?(Map.get(edges, cur, []), &walk(edges, &1, tgt, vis))
+    end
+  end
+
+  defp component(book, name) do
+    names = rec_names(book)
+    edges = Map.new(names, fn n -> {n, rec_callees(book, n, names)} end)
+
+    names
+    |> Enum.filter(fn j -> reaches?(edges, name, j) and reaches?(edges, j, name) end)
+    |> MapSet.new()
+  end
+
+  defp shared_positions(book, block) do
+    members = Enum.filter(book, &(rec_mode?(&1[:mode]) and MapSet.member?(block, &1.name)))
+
+    case members do
+      [] ->
+        []
+
+      [d | ds] ->
+        Enum.reduce(ds, MapSet.new(arg_positions(d.type, 0)), fn member, acc ->
+          MapSet.intersection(acc, MapSet.new(arg_positions(member.type, 0)))
+        end)
+        |> MapSet.to_list()
+        |> Enum.sort()
+    end
+  end
+
+  defp all_ok?(k, book, block, p) do
+    Enum.all?(book, fn d ->
+      if rec_mode?(d[:mode]) and MapSet.member?(block, d.name) do
+        match?(
+          {:ok, _},
+          check(k, book, def_rec(d.name, p, block), [], d.mode, d.body, d.type)
+        )
+      else
+        true
+      end
+    end)
+  end
+
+  defp find_pos(_k, _book, _block, []), do: nil
+
+  defp find_pos(k, book, block, [p | ps]) do
+    if all_ok?(k, book, block, p), do: p, else: find_pos(k, book, block, ps)
+  end
+
+  defp choose_positions(k, book, block, ps) do
+    case find_pos(k, book, block, ps) do
+      nil -> ps
+      p -> [p]
+    end
+  end
+
+  # The body is checked descending on the first shared non-erased argument
+  # that works for the whole block; if that fails, on each later one. A
+  # definition with no self-call passes the first attempt. When every attempt
+  # fails, the first attempt's error is reported: the position only affects
+  # the descent check, so a type error is the same for every position
+  # (Agda: checkBody). Spec keeps its own positions.
+  defp check_body(k, book, %{name: name, mode: mode, type: ty, body: body}) do
+    positions =
+      if rec_mode?(mode) do
+        block = component(book, name)
+        choose_positions(k, book, block, shared_positions(book, block))
+      else
+        arg_positions(ty, 0)
+      end
+
+    block = if(rec_mode?(mode), do: component(book, name), else: MapSet.new([name]))
+    at = fn p -> check(k, book, def_rec(name, p, block), [], mode, body, ty) end
+
+    case positions do
       [] ->
         at.(0)
 
@@ -1749,8 +1918,14 @@ defmodule Muro.Check do
             [] ->
               {:error, "missing branch for #{c.name}"}
 
-            [_ | bs1] ->
-              check_branches(k, book, rs, gamma, m, dname, sm, params, idxs, mot, cs, bs1)
+            [{bname, ar, _body} | bs1] ->
+              case branch_arity(bname, ar, rest) do
+                :ok ->
+                  check_branches(k, book, rs, gamma, m, dname, sm, params, idxs, mot, cs, bs1)
+
+                err ->
+                  err
+              end
           end
 
         {:ok, false} ->
@@ -1758,31 +1933,52 @@ defmodule Muro.Check do
             [] ->
               {:error, "missing branch for #{c.name}"}
 
-            [{bname, _ar, body} | bs1] ->
-              if bname != c.name do
-                {:error, "expected constructor #{c.name}, got #{bname}"}
-              else
-                wrapped = wrap_tel(rest, body)
+            [{bname, ar, body} | bs1] ->
+              cond do
+                bname != c.name ->
+                  {:error, "expected constructor #{c.name}, got #{bname}"}
 
-                with {:ok, u} <-
-                       check_br(k, book, rs, gamma, m, dname, c.name, sm, rest, wrapped, mot, []),
-                     {:ok, v} <-
-                       check_branches(
-                         k,
-                         book,
-                         rs,
-                         gamma,
-                         m,
-                         dname,
-                         sm,
-                         params,
-                         idxs,
-                         mot,
-                         cs,
-                         bs1
-                       ) do
-                  {:ok, combine_alt(m, u, v)}
-                end
+                true ->
+                  case branch_arity(bname, ar, rest) do
+                    :ok ->
+                      wrapped = wrap_tel(rest, body)
+
+                      with {:ok, u} <-
+                             check_br(
+                               k,
+                               book,
+                               rs,
+                               gamma,
+                               m,
+                               dname,
+                               c.name,
+                               sm,
+                               rest,
+                               wrapped,
+                               mot,
+                               []
+                             ),
+                           {:ok, v} <-
+                             check_branches(
+                               k,
+                               book,
+                               rs,
+                               gamma,
+                               m,
+                               dname,
+                               sm,
+                               params,
+                               idxs,
+                               mot,
+                               cs,
+                               bs1
+                             ) do
+                        {:ok, combine_alt(m, u, v)}
+                      end
+
+                    err ->
+                      err
+                  end
               end
           end
       end
@@ -1794,6 +1990,20 @@ defmodule Muro.Check do
 
   defp wrap_tel({:pi, q, a, x, b}, body), do: {:lam, q, a, x, wrap_tel(b, body)}
   defp wrap_tel(_, body), do: body
+
+  # Erased and non-erased binders both count: wrap_tel adds one λ per Π.
+  defp pi_count({:pi, _, _, _, b}), do: 1 + pi_count(b)
+  defp pi_count(_), do: 0
+
+  defp branch_arity(bname, ar, rest) do
+    n = pi_count(rest)
+
+    if ar == n do
+      :ok
+    else
+      {:error, "branch #{bname} binds #{ar} variables, constructor has #{n} fields"}
+    end
+  end
 
   defp nparams_of(book, dname) do
     case lookup_data(book, dname) do
@@ -1930,53 +2140,108 @@ defmodule Muro.Check do
     end
   end
 
-  defp occurs_d?(i, {:def, n}), do: n == i
-  defp occurs_d?(i, {:app, f, a}), do: occurs_d?(i, f) or occurs_d?(i, a)
-  defp occurs_d?(i, {:pi, _, a, _, b}), do: occurs_d?(i, a) or occurs_d?(i, b)
-  defp occurs_d?(i, {:lam, _, a, _, t}), do: occurs_d?(i, a) or occurs_d?(i, t)
-  defp occurs_d?(i, {:prod, a, b}), do: occurs_d?(i, a) or occurs_d?(i, b)
-  defp occurs_d?(i, {:pair, a, b}), do: occurs_d?(i, a) or occurs_d?(i, b)
-  defp occurs_d?(i, {:idt, a, b, c}), do: occurs_d?(i, a) or occurs_d?(i, b) or occurs_d?(i, c)
-  defp occurs_d?(i, {:su, t}), do: occurs_d?(i, t)
-  defp occurs_d?(i, {:letp, e, t}), do: occurs_d?(i, e) or occurs_d?(i, t)
-  defp occurs_d?(i, {:nu, f}), do: occurs_d?(i, f)
-  defp occurs_d?(i, {:unf, s, f}), do: occurs_d?(i, s) or occurs_d?(i, f)
-  defp occurs_d?(i, {:ucons, s}), do: occurs_d?(i, s)
-  defp occurs_d?(i, {:ann, e, a}), do: occurs_d?(i, e) or occurs_d?(i, a)
-  defp occurs_d?(i, {:tensor, d, s}), do: occurs_d?(i, d) or occurs_d?(i, s)
-  defp occurs_d?(i, {:addi, a, b}), do: occurs_d?(i, a) or occurs_d?(i, b)
-  defp occurs_d?(i, {:muli, a, b}), do: occurs_d?(i, a) or occurs_d?(i, b)
-  defp occurs_d?(i, {:addt, t, u}), do: occurs_d?(i, t) or occurs_d?(i, u)
-  defp occurs_d?(i, {:toi64, t}), do: occurs_d?(i, t)
-  defp occurs_d?(i, {:packi, a, b}), do: occurs_d?(i, a) or occurs_d?(i, b)
+  # A field is strictly positive in D when, after unfolding, D is absent,
+  # or D is the head of a spine whose arguments do not contain D, or D
+  # occurs only to the right of a Π whose domain does not contain D.
+  # A product is positive on both sides. D inside an argument of D is
+  # refused. A field that does not reduce in the fuel is refused
+  # (Agda: posField).
+  defp field_pos?(0, _book, _dname, _t), do: false
 
-  defp occurs_d?(i, {:mdata, e, p, bs}),
-    do: occurs_d?(i, e) or occurs_d?(i, p) or Enum.any?(bs, fn {_, _, b} -> occurs_d?(i, b) end)
+  defp field_pos?(k, book, dname, t) do
+    case whnf(k, book, t) do
+      {:ok, {:pi, _, a, _, b}} ->
+        absent?(k, book, dname, a) and field_pos?(k - 1, book, dname, b)
 
-  defp occurs_d?(_, _), do: false
+      {:ok, {:prod, a, b}} ->
+        field_pos?(k - 1, book, dname, a) and field_pos?(k - 1, book, dname, b)
 
-  defp pos_arg?(book, dname, a), do: is_d_type?(book, dname, a) or not occurs_d?(dname, a)
+      {:ok, t1} ->
+        if is_d_type?(book, dname, t1) do
+          {_h, args} = apps(t1)
+          Enum.all?(args, &absent?(k, book, dname, &1))
+        else
+          absent_go?(k - 1, book, dname, t1)
+        end
 
-  defp check_tel_pos(book, dname, np, ni, {:pi, _, a, _, b}) do
-    if pos_arg?(book, dname, a) do
-      check_tel_pos(book, dname, np, ni, b)
-    else
-      {:error, "constructor is not strictly positive"}
+      _ ->
+        false
     end
   end
 
-  defp check_tel_pos(book, dname, np, ni, t) do
-    {_h, args} = apps(t)
+  defp absent?(0, _book, _dname, _t), do: false
 
-    cond do
-      not is_d_type?(book, dname, t) ->
-        {:error, "constructor does not target the data type"}
+  defp absent?(k, book, dname, t) do
+    case whnf(k, book, t) do
+      {:ok, t1} -> absent_go?(k - 1, book, dname, t1)
+      _ -> false
+    end
+  end
 
-      length(args) != np + ni ->
-        {:error, "constructor target has the wrong number of arguments"}
+  defp absent_go?(k, book, dname, {:pi, _, a, _, b}),
+    do: absent?(k, book, dname, a) and absent?(k, book, dname, b)
 
-      true ->
-        :ok
+  defp absent_go?(k, book, dname, {:prod, a, b}),
+    do: absent?(k, book, dname, a) and absent?(k, book, dname, b)
+
+  defp absent_go?(k, book, dname, {:lam, _, a, _, t}),
+    do: absent?(k, book, dname, a) and absent?(k, book, dname, t)
+
+  defp absent_go?(k, book, dname, {:app, f, a}),
+    do: absent?(k, book, dname, f) and absent?(k, book, dname, a)
+
+  defp absent_go?(k, book, dname, {:pair, a, b}),
+    do: absent?(k, book, dname, a) and absent?(k, book, dname, b)
+
+  defp absent_go?(k, book, dname, {:idt, a, x, y}),
+    do: absent?(k, book, dname, a) and absent?(k, book, dname, x) and absent?(k, book, dname, y)
+
+  defp absent_go?(k, book, dname, {:ann, e, a}),
+    do: absent?(k, book, dname, e) and absent?(k, book, dname, a)
+
+  defp absent_go?(k, book, dname, {:su, t}), do: absent?(k, book, dname, t)
+
+  defp absent_go?(k, book, dname, {:letp, e, t}),
+    do: absent?(k, book, dname, e) and absent?(k, book, dname, t)
+
+  defp absent_go?(k, book, dname, {:nu, f}), do: absent?(k, book, dname, f)
+
+  defp absent_go?(k, book, dname, {:unf, s, f}),
+    do: absent?(k, book, dname, s) and absent?(k, book, dname, f)
+
+  defp absent_go?(k, book, dname, {:ucons, s}), do: absent?(k, book, dname, s)
+
+  defp absent_go?(_k, _book, dname, {:def, n}), do: n != dname
+
+  defp absent_go?(_k, _book, _dname, _), do: true
+
+  defp check_tel_pos(0, _book, _dname, _np, _ni, _t), do: {:error, @out_of_fuel}
+
+  defp check_tel_pos(k, book, dname, np, ni, t) do
+    case whnf(k, book, t) do
+      {:error, e} ->
+        {:error, e}
+
+      {:ok, {:pi, _, a, _, b}} ->
+        if field_pos?(k, book, dname, a) do
+          check_tel_pos(k - 1, book, dname, np, ni, b)
+        else
+          {:error, "constructor is not strictly positive"}
+        end
+
+      {:ok, t1} ->
+        {_h, args} = apps(t1)
+
+        cond do
+          not is_d_type?(book, dname, t1) ->
+            {:error, "constructor does not target the data type"}
+
+          length(args) != np + ni ->
+            {:error, "constructor target has the wrong number of arguments"}
+
+          true ->
+            :ok
+        end
     end
   end
 
@@ -2012,14 +2277,14 @@ defmodule Muro.Check do
 
   defp check_ctor_fields(_k, _book, _rs, _gamma, 0, _t), do: :ok
 
-  defp check_ctor_rest(book, dname, np, ni, t), do: skip_params(book, dname, np, ni, np, t)
+  defp check_ctor_rest(k, book, dname, np, ni, t), do: skip_params(k, book, dname, np, ni, np, t)
 
-  defp skip_params(book, dname, np, ni, 0, t), do: check_tel_pos(book, dname, np, ni, t)
+  defp skip_params(k, book, dname, np, ni, 0, t), do: check_tel_pos(k, book, dname, np, ni, t)
 
-  defp skip_params(book, dname, np, ni, k, {:pi, _, _, _, b}) when k > 0,
-    do: skip_params(book, dname, np, ni, k - 1, b)
+  defp skip_params(k, book, dname, np, ni, c, {:pi, _, _, _, b}) when c > 0,
+    do: skip_params(k, book, dname, np, ni, c - 1, b)
 
-  defp skip_params(_, _, _, _, k, _) when k > 0,
+  defp skip_params(_, _, _, _, _, c, _) when c > 0,
     do: {:error, "constructor type has too few parameter binders"}
 
   defp check_data(book, %{name: name, params: params, ctors: ctors} = d, k) do
@@ -2030,7 +2295,7 @@ defmodule Muro.Check do
       result =
         with :ok <- check_ty(k, book, empty_rec(), [], c.type),
              :ok <- check_ctor_fields(k, book, empty_rec(), [], np, c.type) do
-          check_ctor_rest(book, name, np, ni, c.type)
+          check_ctor_rest(k, book, name, np, ni, c.type)
         end
 
       case fail_at(d, "#{c.name} type", result) do
