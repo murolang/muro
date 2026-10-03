@@ -1,0 +1,6 @@
+-- bad_alias.muro — the same negative field, hidden behind a spec alias.
+-- The checker unfolds BadAlias. mix muro.check refuses the constructor.
+def BadAlias : spec Type := D → Nat
+
+data D : Type where
+  mk : BadAlias → D

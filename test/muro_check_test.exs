@@ -1222,6 +1222,54 @@ defmodule Muro.CheckTest do
     assert Check.check_sig(book) == :ok
   end
 
+  test "mix muro.check refuses a mutual Empty cycle" do
+    assert {:error, msg} = Muro.check_file("examples/cycle_empty.muro")
+    assert msg =~ "impossible"
+    assert msg =~ "helper"
+    assert msg =~ "recursive definition must be applied to its arguments"
+    refute msg =~ "unknown"
+
+    assert_raise Mix.Error, ~r/recursive definition must be applied to its arguments/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/cycle_empty.muro"])
+    end
+  end
+
+  test "mix muro.check refuses a negative constructor field" do
+    assert {:error, msg} = Muro.check_file("examples/bad_positive.muro")
+    assert msg =~ "constructor is not strictly positive"
+
+    assert_raise Mix.Error, ~r/constructor is not strictly positive/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/bad_positive.muro"])
+    end
+  end
+
+  test "mix muro.check unfolds a spec alias before positivity" do
+    assert {:error, msg} = Muro.check_file("examples/bad_alias.muro")
+    assert msg =~ "constructor is not strictly positive"
+    refute msg =~ "BadAlias"
+    refute msg =~ "unknown"
+
+    assert_raise Mix.Error, ~r/constructor is not strictly positive/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/bad_alias.muro"])
+    end
+  end
+
+  test "mix muro.check refuses a cons branch with the wrong binder count" do
+    assert {:error, msg} = Muro.check_file("examples/bad_cons.muro")
+    assert msg =~ "branch cons binds 1 variables, constructor has 2 fields"
+    assert msg =~ "branch cons binds 3 variables, constructor has 2 fields"
+
+    assert_raise Mix.Error, ~r/branch cons binds 1 variables, constructor has 2 fields/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/bad_cons.muro"])
+    end
+
+    assert Mix.Tasks.Muro.Check.run(["examples/list.muro"]) == :ok
+    assert Mix.Tasks.Muro.Check.run(["examples/vec.muro"]) == :ok
+    assert Mix.Tasks.Muro.Check.run(["examples/even_odd.muro"]) == :ok
+    assert Mix.Tasks.Muro.Check.run(["examples/always.muro"]) == :ok
+    assert Mix.Tasks.Muro.Check.run(["examples/bisim.muro"]) == :ok
+  end
+
   test "uncons of a Nat is not a ν step" do
     src = "def bad : run Nat := uncons 0\n"
     assert {:ok, book} = Parser.parse(src)

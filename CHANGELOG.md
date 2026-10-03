@@ -15,6 +15,7 @@ A constructor field is strictly positive after unfolding. A spec name is the typ
 
 - `data.md`, `streams.md`, `limits.md`, `examples.md`.
 - `examples/even_odd.muro`. `examples/always.muro` and `examples/bisim.muro` project a proof by `uncons`.
+- `examples/cycle_empty.muro`, `examples/bad_positive.muro`, `examples/bad_alias.muro`, and `examples/bad_cons.muro` are the programs `mix muro.check` refuses.
 
 ### Package
 
