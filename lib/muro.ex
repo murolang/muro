@@ -28,7 +28,8 @@ defmodule Muro do
 
   @doc """
   Write `<name>.h` and `<name>.c` next to `path` for its run definitions.
-  Streams and machine tensors are refused (`c:stream`, `c:machine`).
+  A `run` stream is a seed, an environment, and a step. Machine tensors
+  are refused (`c:machine`).
   """
   def emit_c(path, opts \\ []) do
     stem = Path.basename(path, ".muro")
