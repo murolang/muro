@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.16.0
+
+A constructor field is strictly positive after unfolding. A spec name is the type it unfolds to, so `Contra := Bad → Empty` does not hide a negative field, and a harmless alias of `Nat` stays positive. `D` inside an argument of `D` is refused. Run and evidence definitions that reach each other are one block and descend on one shared argument, so `even`/`odd` check and a cycle of `Empty` does not. A `match` branch binds as many variables as the constructor has fields. `uncons` of an `Always` proof or a `~` proof is the unfold step: the head fact and the same predicate at the tails.
+
+### Checker
+
+- `Muro.Check` and `agda/Muro/Check.agda`. Positivity unfolds, then requires the data type absent, at the head of a spine whose arguments do not contain it, or only to the right of a `Π` whose domain does not contain it.
+- A recursive block is the strongly connected component of run and evidence definitions. Productivity treats a call to any member as a self-call. Spec is not in the block.
+- A branch whose binder count differs from the constructor telescope is an error. An out-of-range de Bruijn index is `unbound variable`.
+- `uncons` uses the same step as `unfold`, for a bare `ν` and for an applied family.
+
+### Manual
+
+- `data.md`, `streams.md`, `limits.md`, `examples.md`.
+- `examples/even_odd.muro`. `examples/always.muro` and `examples/bisim.muro` project a proof by `uncons`.
+- `examples/cycle_empty.muro`, `examples/bad_positive.muro`, `examples/bad_alias.muro`, and `examples/bad_cons.muro` are the programs `mix muro.check` refuses.
+
+### Package
+
+- Version 0.16.0.
+
 ## 0.15.0
 
 `--backend c` emits a `run` stream. `unfold` is a struct holding the seed, an environment for values the step closes over, and a function pointer for the step. `uncons` calls the step and returns the head together with a new struct for the tail; the original seed stays in place. Elixir emit is still `Stream.unfold`. `I64`, `F32`, and `Tensor` stay `c:machine`. A lambda that is not an unfold step stays `c:lambda`. `Always` and `~` stay omitted.

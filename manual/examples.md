@@ -7,7 +7,7 @@ summary: Every file in examples/ and what it is for.
 
 # Examples
 
-In brief: every file below checks with `mix muro.check path`. They are the worked book, not sketches. Prefer copying from here over inventing syntax.
+In brief: every file in the sections above Refused checks with `mix muro.check path`. They are the worked book, not sketches. Prefer copying from here over inventing syntax. The four files under Refused are what that command turns down.
 
 Check one file:
 
@@ -50,11 +50,11 @@ A productive `run` Stream of zeros. `head-zeros` is `{head zeros ≡ 0 : Nat}` b
 
 ## always.muro
 
-`Always` as evidence: every element of `zeros` is `0`. The proof is the head equation together with the same proof at the tail.
+`Always` as evidence: every element of `zeros` is `0`. The proof is the head equation together with the same proof at the tail. `uncons` of that proof is the equation paired with the predicate at `tail zeros`.
 
 ## bisim.muro
 
-`zeros ~ zeros'` and `tail (natsFrom n) ~ natsFrom (suc n)`. Rutten’s stream calculus, Theorem 2.1. Evidence only.
+`zeros ~ zeros'` and `tail (natsFrom n) ~ natsFrom (suc n)`. Rutten’s stream calculus, Theorem 2.1. `uncons` of `zeros ~ zeros'` is the head equation and `tail zeros ~ tail zeros'`. Evidence only.
 
 See [Streams](streams.md).
 
@@ -75,6 +75,10 @@ See [Either and Dec](either.md).
 ## maybe.muro
 
 `Maybe`, `fromMaybe`, `fromJust1`. Erased type argument.
+
+## even_odd.muro
+
+`even` and `odd` call each other and descend on the same `Nat` argument. `even-two` is `refl`.
 
 ## tree.muro
 
@@ -107,6 +111,26 @@ See [Machine numbers](machine.md).
 ## using_prelude.muro
 
 Uses `sym`, `cong`, and `pred` from the prelude and defines none of them. `before` is `pred (suc (suc 0))`. There is no Agda twin: the prelude is an Elixir book, not a kernel rule. See [Terms](language.md#prelude).
+
+## Refused
+
+`mix muro.check` fails on each of these. `even_odd.muro` is the mutual recursion that checks.
+
+### cycle_empty.muro
+
+`impossible` calls `helper` and `helper` calls `impossible`. Both inhabit `Empty`. Neither calls itself. The failure is the cycle, not a missing name.
+
+### bad_positive.muro
+
+`mk : (D → Nat) → D`. `D` occurs in the domain of a field. Strict positivity refuses it.
+
+### bad_alias.muro
+
+`BadAlias := D → Nat`, then `mk : BadAlias → D`. The checker unfolds the alias and refuses the same negative field. The name `BadAlias` is not what fails.
+
+### bad_cons.muro
+
+`cons` has two fields. A branch with one binder and a branch with three both fail, naming `cons` and the count `2`. `list.muro` and `vec.muro` are the matches that check.
 
 ## Adding a file
 

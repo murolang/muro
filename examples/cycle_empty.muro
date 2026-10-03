@@ -1,0 +1,5 @@
+-- cycle_empty.muro — two evidence defs, each calling the other, inhabiting Empty.
+-- Neither calls itself. The block is a cycle. mix muro.check refuses it.
+def impossible : evidence Empty := helper
+
+def helper : evidence Empty := impossible

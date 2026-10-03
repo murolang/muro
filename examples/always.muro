@@ -7,3 +7,8 @@ def zeros : run Stream Nat :=
 
 def zeros-always-zero : evidence Always Nat (λ (_ : Nat) → {0 ≡ 0 : Nat}) zeros :=
   unfold tt (λ (_ : Unit) → (refl, zeros-always-zero))
+
+def zero-opened : evidence {0 ≡ 0 : Nat} × Always Nat (λ (_ : Nat) → {0 ≡ 0 : Nat}) (tail zeros) :=
+  uncons zeros-always-zero
+
+def zero-fact : evidence {0 ≡ 0 : Nat} := head zeros-always-zero
