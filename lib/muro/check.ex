@@ -533,6 +533,10 @@ defmodule Muro.Check do
 
   defp conv_n(k, book, names, {:nu, f}, {:nu, f1}), do: conv(k, book, names, f, f1)
 
+  defp conv_n(k, book, names, {:bisim, s, t}, {:bisim, s1, t1}) do
+    with :ok <- conv(k, book, names, s, s1), do: conv(k, book, names, t, t1)
+  end
+
   defp conv_n(k, book, names, {:unf, s, f}, {:unf, s1, f1}) do
     with :ok <- conv(k, book, names, s, s1), do: conv(k, book, names, f, f1)
   end
@@ -663,22 +667,6 @@ defmodule Muro.Check do
     end
   end
 
-  # Elaborate `~` inside a type so a self-call and the tail obligation
-  # are both applications of the same family.
-  defp elab_type(k, book, ty), do: elab_ty(k, book, empty_rec(), [], ty)
-
-  defp elab_ty(k, book, rs, gamma, {:pi, q, a, x, b}) do
-    with {:ok, b1} <-
-           elab_ty(k, book, push_name(ext_rec(rs, false, false), x), ext(gamma, q, a), b) do
-      {:ok, {:pi, q, a, x, b1}}
-    end
-  end
-
-  defp elab_ty(k, book, rs, gamma, {:bisim, s, t}),
-    do: expand_bisim(k, book, rs, gamma, s, t)
-
-  defp elab_ty(_k, _book, _rs, _gamma, t), do: {:ok, t}
-
   defp step_rec(rs, true), do: %{rs | guard: true}
   defp step_rec(rs, false), do: rs
 
@@ -700,8 +688,12 @@ defmodule Muro.Check do
   end
 
   defp unf_step_of(k, book, rs, gamma, _names, {:bisim, s, u}, seed_ty) do
-    with {:ok, expanded} <- expand_bisim(k, book, rs, gamma, s, u) do
-      unf_step(k, book, rs, gamma, expanded, seed_ty)
+    with {:ok, expanded} <- expand_bisim(k, book, rs, gamma, s, u),
+         {:ok, {{:prod, head, _tail}, true}} <-
+           unf_step(k, book, rs, gamma, expanded, seed_ty) do
+      # Keep the surface relation in every type position, not only at a
+      # definition's codomain. The indexed ν still supplies the head goal.
+      {:ok, {{:prod, head, {:bisim, Subst.tail(s), Subst.tail(u)}}, true}}
     end
   end
 
@@ -830,6 +822,22 @@ defmodule Muro.Check do
       Enum.any?(bs, fn {_, _, b} -> has_self?(self, b) end)
   end
 
+  defp has_self?(self, {:mnat, e, p, z, s}),
+    do: has_self?(self, e) or has_self?(self, p) or has_self?(self, z) or has_self?(self, s)
+
+  defp has_self?(self, {:memp, e, p}), do: has_self?(self, e) or has_self?(self, p)
+
+  defp has_self?(self, {:munit, e, p, u}),
+    do: has_self?(self, e) or has_self?(self, p) or has_self?(self, u)
+
+  defp has_self?(self, {:idt, a, x, y}),
+    do: has_self?(self, a) or has_self?(self, x) or has_self?(self, y)
+
+  defp has_self?(self, {:rwt, e, p, t}),
+    do: has_self?(self, e) or has_self?(self, p) or has_self?(self, t)
+
+  defp has_self?(self, {:ann, e, a}), do: has_self?(self, e) or has_self?(self, a)
+
   defp has_self?(_, _), do: false
 
   defp occurs?(x, {:var, y}), do: x == y
@@ -927,25 +935,19 @@ defmodule Muro.Check do
 
     case lookup_def(book, name) do
       {:ok, d} ->
-        case elab_type(k, book, d.type) do
-          {:ok, ty} ->
-            cond do
-              not allowed_def?(d.mode, m) ->
-                {:error, "no promotion: #{d.mode} definition #{name} in #{m} mode"}
+        cond do
+          not allowed_def?(d.mode, m) ->
+            {:error, "no promotion: #{d.mode} definition #{name} in #{m} mode"}
 
-              m == :run ->
-                case run_ty(k, book, ty) do
-                  {:ok, true} -> {:ok, {ty, u0s(n)}}
-                  {:ok, false} -> {:error, "no promotion: definition #{name} has a spec type"}
-                  err -> err
-                end
-
-              true ->
-                {:ok, {ty, u0s(n)}}
+          m == :run ->
+            case run_ty(k, book, d.type) do
+              {:ok, true} -> {:ok, {d.type, u0s(n)}}
+              {:ok, false} -> {:error, "no promotion: definition #{name} has a spec type"}
+              err -> err
             end
 
-          err ->
-            err
+          true ->
+            {:ok, {d.type, u0s(n)}}
         end
 
       {:error, _} ->
@@ -1236,7 +1238,8 @@ defmodule Muro.Check do
         {:error, "no promotion: ~ is an erased term"}
 
       {:spec, {:bisim, s, t}} ->
-        with {:ok, _} <- expand_bisim(k, book, rs, gamma, s, t),
+        with {:ok, expanded} <- expand_bisim(k, book, rs, gamma, s, t),
+             {:ok, _} <- check(k, book, rs, gamma, :spec, expanded, :typ),
              do: {:ok, {:typ, u0s(n)}}
 
       # ⇒-pair
@@ -1573,10 +1576,9 @@ defmodule Muro.Check do
   def check_def(book, %{kind: :data} = d, fuel), do: check_data(book, d, fuel)
 
   def check_def(book, %{mode: mode, type: ty, body: body} = d, k) do
-    with {:ok, ty1} <- fail_at(d, "type", elab_type(k, book, ty)),
-         :ok <- fail_at(d, "type", check_ty(k, book, empty_rec(), [], ty1)),
-         {:ok, _} <- fail_at(d, "body", check_body(k, book, %{d | type: ty1})),
-         :ok <- fail_at(d, "productivity", check_nu(mode, ty1, body)) do
+    with :ok <- fail_at(d, "type", check_ty(k, book, empty_rec(), [], ty)),
+         {:ok, _} <- fail_at(d, "body", check_body(k, book, d)),
+         :ok <- fail_at(d, "productivity", check_nu(mode, ty, body)) do
       :ok
     end
   end
