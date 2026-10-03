@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.14.0
+
+`--backend c` emits a `run` stream. `unfold` is a struct holding the seed, an environment for values the step closes over, and a function pointer for the step. `uncons` calls the step and returns the head together with a new struct for the tail; the original seed stays in place. Elixir emit is still `Stream.unfold`. `I64`, `F32`, and `Tensor` stay `c:machine`. A lambda that is not an unfold step stays `c:lambda`. `Always` and `~` stay omitted.
+
+### Elixir
+
+- `Muro.Emit.C`.
+
+### Manual
+
+- `emit.md`.
+
+### Package
+
+- Version 0.14.0.
+
 ## 0.13.0
 
 `Always P s` unfolds to `P (head s) × Always P (tail s)`, and `σ ~ τ` unfolds to `{head σ ≡ head τ} × (tail σ ~ tail τ)`. The binder is the predicate at a stream, and the recursive component of `unfold` is checked at that predicate on the tails. `tt` no longer proves `Always` of `IsZero` at `natsFrom 0`, nor `natsFrom 0 ~ zeros`. Stream is unchanged: a bare `ν` still substitutes the seed for the binder.
