@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.15.0
+
+`--backend c` emits a `run` stream. `unfold` is a struct holding the seed, an environment for values the step closes over, and a function pointer for the step. `uncons` calls the step and returns the head together with a new struct for the tail; the original seed stays in place. Elixir emit is still `Stream.unfold`. `I64`, `F32`, and `Tensor` stay `c:machine`. A lambda that is not an unfold step stays `c:lambda`. `Always` and `~` stay omitted.
+
+### Elixir
+
+- `Muro.Emit.C`.
+
+### Manual
+
+- `emit.md`.
+
+### Package
+
+- Version 0.15.0.
+
 ## 0.14.0
 
 A proof of `σ ~ τ` keeps that type in a product, a function argument, a constructor field, and a spec alias. Conversion compares both stream indices. The unfold step still takes its head goal from the indexed family, and the tail obligation stays `tail σ ~ tail τ`. Forming `~` checks that family, including in a binder domain, so a relation on `Stream F32` is refused. A recursive call wrapped in `rewrite`, `match`, or an annotation counts as an unfold head.

@@ -2,12 +2,12 @@
 title: Emit
 slug: emit
 order: 11
-summary: What becomes Elixir. A C backend is a flag. Spec and evidence are omitted.
+summary: What becomes Elixir. A C backend is a flag. A run stream is a seed and a step. Spec and evidence are omitted.
 ---
 
 # Emit
 
-In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat` and data.
+In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams.
 
 ## From a file
 
@@ -41,7 +41,9 @@ mix muro.emit path.muro --backend c
 
 `--backend c` writes `<name>.h` and `<name>.c` next to the file and prints those paths. It emits `run` and `run internal` only. `run internal` is `static`. Erased arguments are dropped. `Nat` is a tagged struct (`0` is zero, `1` is `suc`) with constructors `muro_zero` and `muro_suc`. `Unit` and user `data`, indexed data included, are a tag plus fields. `match` is a `switch`.
 
-A run whose type or body mentions `Stream`, `unfold`, `uncons`, `I64`, `F32`, or `Tensor` is refused (`c:stream`, `c:machine`). Those stay on the Elixir backend.
+A `run` stream is a struct: the seed, an environment for values the step closes over, and a function pointer for the step. `unfold n (λ k → (k, suc k))` is `muro_stream_new` of `n` and that step. `uncons` calls the step and returns the head together with a new struct for the tail. The original seed stays in place, as `Enum.take` plus `Stream.drop` does on the Elixir backend. `examples/zeros.muro` and `examples/nats.muro` are the drivers. `Always` and `~` are evidence, so they are omitted. A lambda that is not an unfold step is refused (`c:lambda`).
+
+A run whose type or body mentions `I64`, `F32`, or `Tensor` is refused (`c:machine`) and still emits on the Elixir backend. A raw `ν`, `Always`, or `~` inside a `run` is refused (`c:stream`).
 
 The header is shaped like this:
 

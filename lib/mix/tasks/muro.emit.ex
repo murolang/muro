@@ -14,7 +14,7 @@ defmodule Mix.Tasks.Muro.Emit do
   The module name is the file stem (`half_ok.muro` becomes `HalfOk`).
 
   `--backend c` writes `<name>.h` and `<name>.c` next to the file and
-  prints those paths. Streams and tensors are refused on that backend.
+  prints those paths. A `run` stream is emitted. Tensors are refused.
   """
 
   @switches [backend: :string]

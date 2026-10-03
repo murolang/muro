@@ -48,13 +48,26 @@ defmodule Muro.EmitCTest do
     cc!(dir, "half_ok.c", "half_ok.o")
   end
 
-  test "a run Stream is refused by C and still emitted as Elixir" do
-    assert_raise Mix.Error, ~r/c:stream/, fn ->
-      Mix.Tasks.Muro.Emit.run(["examples/zeros.muro", "--backend", "c"])
+  test "a run Stream compiles as a seed and a step, and Elixir still uses Stream.unfold" do
+    dir = tmp_dir()
+
+    for name <- ["zeros", "nats"] do
+      path = Path.join(dir, "#{name}.muro")
+      File.cp!("examples/#{name}.muro", path)
+      capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+      cc!(dir, "#{name}.c", "#{name}.o")
     end
 
-    refute File.exists?("examples/zeros.h")
-    refute File.exists?("examples/zeros.c")
+    header = File.read!(Path.join(dir, "nats.h"))
+    source = File.read!(Path.join(dir, "nats.c"))
+    assert header =~ "typedef struct muro_stream muro_stream;"
+    assert header =~ "muro_stream *natsFrom(muro_nat *n);"
+    assert source =~ "struct muro_stream {"
+    assert source =~ "void *seed;"
+    assert source =~ "muro_pair *(*step)(void *env, void *seed);"
+    assert source =~ "static muro_pair *muro_step_0(void *muro_envp, void *muro_seedp)"
+    assert source =~ "muro_stream_new(n, 0, muro_step_0)"
+    assert source =~ "p->seed = seed;"
 
     assert {:ok, src} = Muro.emit_file("examples/zeros.muro", Zeros)
     assert src =~ "Stream.unfold"
@@ -65,6 +78,71 @@ defmodule Muro.EmitCTest do
       end)
 
     assert out =~ "Stream.unfold"
+  end
+
+  test "uncons builds a new stream and a capturing step keeps the outer value" do
+    dir = tmp_dir()
+
+    head = Path.join(dir, "head_stream.muro")
+
+    File.write!(head, """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def zeros : run Stream Nat :=
+      unfold 0 (λ (_ : Nat) → (0, 0))
+
+    def hd : run Π (s : Stream Nat) → Nat :=
+      λ (s : Stream Nat) → head s
+    """)
+
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([head, "--backend", "c"]) end)
+    source = File.read!(Path.join(dir, "head_stream.c"))
+    assert source =~ "->step("
+    assert source =~ "muro_stream_new("
+    cc!(dir, "head_stream.c", "head_stream.o")
+
+    prefix = Path.join(dir, "prefix.muro")
+
+    File.write!(prefix, """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def prefix : run Π (n : Nat) → Stream Nat :=
+      λ (n : Nat) →
+        unfold 0 (λ (_ : Nat) → (n, 0))
+    """)
+
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([prefix, "--backend", "c"]) end)
+    pref = File.read!(Path.join(dir, "prefix.c"))
+    assert pref =~ "muro_env_0"
+    assert pref =~ "muro_ep0->n = n;"
+    cc!(dir, "prefix.c", "prefix.o")
+  end
+
+  test "a lambda that is not an unfold step is refused" do
+    dir = tmp_dir()
+    path = Path.join(dir, "lam.muro")
+
+    File.write!(path, """
+    def bad : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → (λ (m : Nat) → m) n
+    """)
+
+    assert_raise Mix.Error, ~r/c:lambda/, fn ->
+      Mix.Tasks.Muro.Emit.run([path, "--backend", "c"])
+    end
+  end
+
+  test "evidence Always is omitted from the C file" do
+    dir = tmp_dir()
+    path = Path.join(dir, "always.muro")
+    File.cp!("examples/always.muro", path)
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+    source = File.read!(Path.join(dir, "always.c"))
+    assert source =~ "muro_stream_new"
+    refute source =~ "zeros-always-zero"
+    cc!(dir, "always.c", "always.o")
   end
 
   test "I64 and Tensor are refused by C and still emitted as Elixir" do

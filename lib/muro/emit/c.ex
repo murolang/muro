@@ -6,9 +6,12 @@ defmodule Muro.Emit.C do
   plus fields. `match` is a `switch`. Erased arguments are dropped.
   `run internal` is `static`.
 
-  A run whose type or body mentions a stream or a machine tensor is
-  refused (`c:stream`, `c:machine`) and is not lowered. A residual
-  lambda is `c:lambda`.
+  A `run` stream is a struct: the seed, an environment for values the
+  step closes over, and a function pointer for the step. `uncons` calls
+  that function and builds a new struct for the tail. `Always`, `~`,
+  and a raw `ν` in a run are refused (`c:stream`). `I64`, `F32`, and
+  `Tensor` are refused (`c:machine`). A lambda that is not an unfold
+  step is `c:lambda`.
   """
 
   alias Muro.Emit
@@ -21,6 +24,7 @@ defmodule Muro.Emit.C do
 
   @reserved ~w(
     muro_nat muro_unit muro_pair muro_zero muro_suc muro_tt muro_nat_new muro_mk_pair
+    muro_stream muro_stream_new muro_envp muro_seedp muro_ep
   ) |> MapSet.new()
 
   @doc """
@@ -32,8 +36,8 @@ defmodule Muro.Emit.C do
     case reject(runs) do
       nil ->
         case compile_runs(runs, book) do
-          {:ok, sigs, funs} ->
-            {:ok, {header(book, sigs, stem), source(book, runs, sigs, funs, stem)}}
+          {:ok, sigs, funs, extras} ->
+            {:ok, {header(book, sigs, stem), source(book, runs, sigs, funs, extras, stem)}}
 
           {:error, _} = err ->
             err
@@ -67,9 +71,6 @@ defmodule Muro.Emit.C do
   defp forbid_children(t) when is_list(t), do: Enum.find_value(t, &forbid/1)
   defp forbid_children(_), do: nil
 
-  defp classify({:stream, _}), do: :stream
-  defp classify({:unf, _, _}), do: :stream
-  defp classify({:ucons, _}), do: :stream
   defp classify({:nu, _, _}), do: :stream
   defp classify({:always, _, _, _}), do: :stream
   defp classify({:bisim, _, _}), do: :stream
@@ -84,21 +85,25 @@ defmodule Muro.Emit.C do
   defp classify(_), do: nil
 
   defp compile_runs(runs, book) do
-    Enum.reduce_while(runs, {:ok, [], []}, fn d, {:ok, sigs, funs} ->
-      case compile_def(d, book) do
-        {:ok, sig, fun} -> {:cont, {:ok, sigs ++ [sig], funs ++ [fun]}}
-        {:error, _} = err -> {:halt, err}
+    Enum.reduce_while(runs, {:ok, [], [], [], 0}, fn d, {:ok, sigs, funs, extras, k} ->
+      case compile_def(d, book, k) do
+        {:ok, sig, fun, extra, k1} ->
+          {:cont, {:ok, sigs ++ [sig], funs ++ [fun], extras ++ extra, k1}}
+
+        {:error, _} = err ->
+          {:halt, err}
       end
     end)
     |> case do
-      {:ok, sigs, funs} -> {:ok, sigs, funs}
+      {:ok, sigs, funs, extras, _k} -> {:ok, sigs, funs, extras}
       err -> err
     end
   end
 
-  defp compile_def(d, book) do
+  defp compile_def(d, book, k) do
     with {:ok, sig} <- signature(d, book),
-         {:ok, {pre, expr, _st}} <- emit(sig.inner, sig.env, book, %{t: 0, s: 0}, sig.ret) do
+         {:ok, {pre, expr, st}} <-
+           emit(sig.inner, sig.env, book, %{t: 0, s: 0, k: k, steps: [], envs: []}, sig.ret) do
       body =
         if pre == "" do
           "  return #{expr};"
@@ -106,7 +111,7 @@ defmodule Muro.Emit.C do
           indent(pre, 2) <> "\n  return #{expr};"
         end
 
-      {:ok, sig, "#{decl(sig)} {\n#{body}\n}"}
+      {:ok, sig, "#{decl(sig)} {\n#{body}\n}", st.envs ++ st.steps, st.k}
     end
   end
 
@@ -346,8 +351,201 @@ defmodule Muro.Emit.C do
     end
   end
 
+  defp emit({:unf, seed, {:lam, q, dom, x, body}}, env, book, st, _expect) do
+    seed_ty = ctype(dom, book)
+
+    with {:ok, {pre, seed_ex, st}} <- emit(seed, env, book, st, seed_ty) do
+      id = st.k
+      st = %{st | k: id + 1}
+      caps = capture_fields(body, x, env)
+      {env_ty, env_pre, env_ex, st} = alloc_env(caps, id, st)
+      step = "muro_step_#{id}"
+
+      with {:ok, {src, st}} <-
+             emit_step(step, q, x, seed_ty, body, caps, env_ty, env, book, st) do
+        expr = "muro_stream_new(#{seed_ex}, #{env_ex}, #{step})"
+        {:ok, {squash([pre, env_pre]), expr, %{st | steps: st.steps ++ [src]}}}
+      end
+    end
+  end
+
+  defp emit({:unf, _, _}, _env, _book, _st, _expect), do: {:error, "c:lambda"}
+
+  defp emit({:ucons, s}, env, book, st, _expect) do
+    with {:ok, {pre, ex, st}} <- emit(s, env, book, st, "muro_stream *") do
+      {sname, st} = news(st)
+      {pname, st} = news(st)
+      {hname, st} = news(st)
+      {nname, st} = news(st)
+      {tname, st} = news(st)
+
+      stmt =
+        squash([
+          "#{stream_ptr()}#{sname} = #{ex};",
+          "muro_pair *#{pname} = #{sname}->step(#{sname}->env, #{sname}->seed);",
+          "void *#{hname} = #{pname}->fst;",
+          "void *#{nname} = #{pname}->snd;",
+          "#{stream_ptr()}#{tname} = muro_stream_new(#{nname}, #{sname}->env, #{sname}->step);"
+        ])
+
+      {:ok, {squash([pre, stmt]), "muro_mk_pair(#{hname}, #{tname})", st}}
+    end
+  end
+
   defp emit({:lam, _, _, _, _}, _env, _book, _st, _expect), do: {:error, "c:lambda"}
   defp emit(_other, _env, _book, _st, _expect), do: {:error, "c:unsupported"}
+
+  defp emit_step(step, q, x, seed_ty, body, caps, env_ty, env, book, st) do
+    cap_env =
+      Enum.reduce(Enum.reverse(caps), env, fn {name, field, _outer}, env ->
+        [{name, "muro_ep->#{field}", :live} | env]
+      end)
+
+    {seed_local, seed_env} =
+      case q do
+        :erased ->
+          {nil, [{x, "muro_seedp", :erased} | cap_env]}
+
+        _ ->
+          used = MapSet.new(["muro_ep", "muro_envp", "muro_seedp" | Enum.map(caps, &elem(&1, 1))])
+          {local, _} = fresh(c_name(x), used)
+          {local, [{x, local, :live} | cap_env]}
+      end
+
+    with {:ok, {pre, expr, st}} <- emit(body, seed_env, book, st, "muro_pair *") do
+      prelude =
+        cond do
+          pre == "" -> "  return #{expr};"
+          true -> indent(pre, 2) <> "\n  return #{expr};"
+        end
+
+      src = """
+      static muro_pair *#{step}(void *muro_envp, void *muro_seedp) {
+      #{step_bind(q, seed_ty, seed_local, caps, env_ty)}
+      #{prelude}
+      }
+      """
+
+      {:ok, {String.trim(src), st}}
+    end
+  end
+
+  defp step_bind(q, seed_ty, seed_local, caps, env_ty) do
+    env_line =
+      if caps == [] do
+        "  (void)muro_envp;"
+      else
+        "  #{env_ty} *muro_ep = muro_envp;"
+      end
+
+    seed_line =
+      if q == :erased or seed_local == nil do
+        "  (void)muro_seedp;"
+      else
+        "  #{seed_ty}#{seed_local} = muro_seedp;"
+      end
+
+    env_line <> "\n" <> seed_line
+  end
+
+  defp alloc_env([], _id, st), do: {nil, "", "0", st}
+
+  defp alloc_env(caps, id, st) do
+    env_ty = "muro_env_#{id}"
+    var = "muro_ep#{id}"
+
+    fields = Enum.map_join(caps, "\n", fn {_name, field, _outer} -> "  void *#{field};" end)
+
+    typedef = """
+    typedef struct {
+    #{fields}
+    } #{env_ty};
+    """
+
+    assigns =
+      Enum.map_join(caps, "\n", fn {_name, field, outer} ->
+        "#{var}->#{field} = #{outer};"
+      end)
+
+    pre = """
+    #{env_ty} *#{var} = malloc(sizeof *#{var});
+    if (#{var} == 0) abort();
+    #{assigns}
+    """
+
+    {env_ty, String.trim(pre), var, %{st | envs: st.envs ++ [String.trim(typedef)]}}
+  end
+
+  defp capture_fields(body, binder, env) do
+    body
+    |> free_names(MapSet.new([binder]))
+    |> Enum.uniq()
+    |> Enum.flat_map(fn name ->
+      case lookup(env, name) do
+        {:live, c} -> [{name, c}]
+        _ -> []
+      end
+    end)
+    |> then(fn caps ->
+      {named, _} =
+        Enum.map_reduce(caps, MapSet.new(), fn {name, outer}, used ->
+          {field, used} = fresh(c_name(name), used)
+          {{name, field, outer}, used}
+        end)
+
+      named
+    end)
+  end
+
+  defp free_names({:var, name}, bound) do
+    if MapSet.member?(bound, name), do: [], else: [name]
+  end
+
+  defp free_names({:lam, _, a, x, t}, bound) do
+    free_names(a, bound) ++ free_names(t, MapSet.put(bound, x))
+  end
+
+  defp free_names({:pi, _, a, x, b}, bound) do
+    free_names(a, bound) ++ free_names(b, MapSet.put(bound, x))
+  end
+
+  defp free_names({:letp, e, a, b, t}, bound) do
+    free_names(e, bound) ++ free_names(t, bound |> MapSet.put(a) |> MapSet.put(b))
+  end
+
+  defp free_names({:mnat, e, x, p, z, y, s}, bound) do
+    free_names(e, bound) ++
+      free_names(p, MapSet.put(bound, x)) ++
+      free_names(z, bound) ++ free_names(s, MapSet.put(bound, y))
+  end
+
+  defp free_names({:mdata, e, x, p, bs}, bound) do
+    free_names(e, bound) ++
+      free_names(p, MapSet.put(bound, x)) ++
+      Enum.flat_map(bs, fn {_c, binders, body} ->
+        bound1 = Enum.reduce(binders, bound, &MapSet.put(&2, &1))
+        free_names(body, bound1)
+      end)
+  end
+
+  defp free_names({:memp, e, x, p}, bound) do
+    free_names(e, bound) ++ free_names(p, MapSet.put(bound, x))
+  end
+
+  defp free_names({:munit, e, x, p, u}, bound) do
+    free_names(e, bound) ++ free_names(p, MapSet.put(bound, x)) ++ free_names(u, bound)
+  end
+
+  defp free_names({:rwt, e, x, p, t}, bound) do
+    free_names(e, bound) ++ free_names(p, MapSet.put(bound, x)) ++ free_names(t, bound)
+  end
+
+  defp free_names(t, bound) when is_tuple(t) do
+    t |> Tuple.to_list() |> Enum.flat_map(&free_names(&1, bound))
+  end
+
+  defp free_names(t, bound) when is_list(t), do: Enum.flat_map(t, &free_names(&1, bound))
+  defp free_names(_, _), do: []
 
   defp emit_cases(branches, data, sname, tname, env, book, st, expect) do
     Enum.reduce_while(branches, {:ok, {[], st}}, fn {cname, binders, body}, {:ok, {acc, st}} ->
@@ -524,6 +722,7 @@ defmodule Muro.Emit.C do
 
   defp ctype(:nat, _book), do: "muro_nat *"
   defp ctype(:unit, _book), do: "muro_unit *"
+  defp ctype({:stream, _}, _book), do: "muro_stream *"
 
   defp ctype({:var, name}, book) do
     if data?(book, name), do: struct_ptr(name), else: "void *"
@@ -604,6 +803,7 @@ defmodule Muro.Emit.C do
       "#include <stdint.h>",
       nat_struct(),
       unit_struct(),
+      stream_typedef(sigs),
       data_structs(book),
       prototypes(sigs),
       "#endif"
@@ -612,7 +812,7 @@ defmodule Muro.Emit.C do
     join_parts(parts)
   end
 
-  defp source(book, runs, sigs, funs, stem) do
+  defp source(book, runs, sigs, funs, extras, stem) do
     internals =
       sigs
       |> Enum.reject(& &1.export)
@@ -625,8 +825,10 @@ defmodule Muro.Emit.C do
       nat_helpers(),
       unit_helpers(),
       pair_helpers(runs),
+      stream_helpers(runs, exports_stream?(sigs)),
       data_ctors(book),
       internals,
+      Enum.join(extras, "\n\n"),
       Enum.join(funs, "\n\n")
     ]
 
@@ -698,7 +900,7 @@ defmodule Muro.Emit.C do
   end
 
   defp pair_helpers(runs) do
-    if mentions?(runs, &pair_form?/1) do
+    if mentions?(runs, &pair_form?/1) or mentions?(runs, &stream_form?/1) do
       """
       typedef struct muro_pair_s { void *fst; void *snd; } muro_pair;
 
@@ -719,6 +921,53 @@ defmodule Muro.Emit.C do
   defp pair_form?({:pair, _, _}), do: true
   defp pair_form?({:letp, _, _, _, _}), do: true
   defp pair_form?(_), do: false
+
+  defp stream_form?({:stream, _}), do: true
+  defp stream_form?({:unf, _, _}), do: true
+  defp stream_form?({:ucons, _}), do: true
+  defp stream_form?(_), do: false
+
+  defp stream_ptr, do: "muro_stream *"
+
+  defp exports_stream?(sigs) do
+    Enum.any?(sigs, fn sig ->
+      sig.export and
+        (stream_ty?(sig.ret) or Enum.any?(sig.params, fn {ty, _} -> stream_ty?(ty) end))
+    end)
+  end
+
+  defp stream_ty?(ty), do: String.starts_with?(ty, "muro_stream ")
+
+  defp stream_typedef(sigs) do
+    if exports_stream?(sigs), do: "typedef struct muro_stream muro_stream;", else: ""
+  end
+
+  defp stream_helpers(runs, exported?) do
+    if mentions?(runs, &stream_form?/1) do
+      decl = if exported?, do: "", else: "typedef struct muro_stream muro_stream;"
+
+      """
+      #{decl}
+      struct muro_stream {
+        void *seed;
+        void *env;
+        muro_pair *(*step)(void *env, void *seed);
+      };
+
+      static muro_stream *muro_stream_new(void *seed, void *env, muro_pair *(*step)(void *env, void *seed)) {
+        muro_stream *p = malloc(sizeof *p);
+        if (p == 0) abort();
+        p->seed = seed;
+        p->env = env;
+        p->step = step;
+        return p;
+      }
+      """
+      |> String.trim()
+    else
+      ""
+    end
+  end
 
   defp mentions?(runs, pred) do
     Enum.any?(runs, fn d -> walk?(d.type, pred) or walk?(d.body, pred) end)
