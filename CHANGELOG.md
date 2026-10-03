@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.0
+
+A proof of `σ ~ τ` keeps that type in a product, a function argument, a constructor field, and a spec alias. Conversion compares both stream indices. The unfold step still takes its head goal from the indexed family, and the tail obligation stays `tail σ ~ tail τ`. Forming `~` checks that family, including in a binder domain, so a relation on `Stream F32` is refused. A recursive call wrapped in `rewrite`, `match`, or an annotation counts as an unfold head.
+
+### Checker
+
+- `Muro.Check`. `~` stays `{:bisim}` in every type position. The head-occurrence walk covers `rewrite`, annotation, `match`, and identity, as in Agda.
+
+### Package
+
+- Version 0.14.0.
+
 ## 0.13.0
 
 `Always P s` unfolds to `P (head s) × Always P (tail s)`, and `σ ~ τ` unfolds to `{head σ ≡ head τ} × (tail σ ~ tail τ)`. The binder is the predicate at a stream, and the recursive component of `unfold` is checked at that predicate on the tails. `tt` no longer proves `Always` of `IsZero` at `natsFrom 0`, nor `natsFrom 0 ~ zeros`. Stream is unchanged: a bare `ν` still substitutes the seed for the binder.
