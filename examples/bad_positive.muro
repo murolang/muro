@@ -1,0 +1,4 @@
+-- bad_positive.muro — a constructor field D → Nat is not strictly positive.
+-- mix muro.check refuses it.
+data D : Type where
+  mk : (D → Nat) → D

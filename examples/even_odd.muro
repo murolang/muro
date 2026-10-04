@@ -1,0 +1,14 @@
+-- even_odd.muro — even and odd descend on one shared Nat argument.
+def even : run Π (n : Nat) → Nat :=
+  λ (n : Nat) →
+    match n motive (λ _ → Nat)
+      | 0 => 0
+      | suc m => odd m
+
+def odd : run Π (n : Nat) → Nat :=
+  λ (n : Nat) →
+    match n motive (λ _ → Nat)
+      | 0 => suc(0)
+      | suc m => even m
+
+def even-two : evidence {even suc(suc(0)) ≡ 0 : Nat} := refl

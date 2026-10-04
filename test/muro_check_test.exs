@@ -1093,4 +1093,187 @@ defmodule Muro.CheckTest do
     assert msg =~ "unsolved hole"
     assert msg =~ "expected: Nat"
   end
+
+  test "even and odd descend together" do
+    src = File.read!("examples/even_odd.muro")
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a spec alias does not hide a negative field" do
+    src = """
+    def Contra : spec Type := Bad → Empty
+    data Bad : Type where
+      roll : Contra → Bad
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "strictly positive"
+  end
+
+  test "a spec alias of Nat is a positive field" do
+    src = """
+    def N : spec Type := Nat
+    data D : Type where
+      mk : N → D
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a data type inside its own argument is refused" do
+    src = """
+    data T (A : Type) (B : Type) : Type where
+      node : A → T Empty (T A B → Empty) → T A B
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "strictly positive"
+  end
+
+  test "a direct negative field is refused" do
+    src = """
+    data Bad : Type where
+      roll : (Bad → Empty) → Bad
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "strictly positive"
+  end
+
+  test "mutual evidence of Empty is refused" do
+    src = """
+    def impossible : evidence Empty := helper
+    def helper : evidence Empty := impossible
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "applied" or msg =~ "descend"
+  end
+
+  test "mutual evidence of an absurd equation is refused" do
+    src = """
+    def ping : evidence Π (n : Nat) → {n ≡ suc(n) : Nat} :=
+      λ (n : Nat) → pong n
+    def pong : evidence Π (n : Nat) → {n ≡ suc(n) : Nat} :=
+      λ (n : Nat) → ping n
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "descend"
+  end
+
+  test "mutual unguarded run is refused" do
+    src = """
+    def spin : run Nat := spin2
+    def spin2 : run Nat := spin
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "applied" or msg =~ "descend"
+  end
+
+  test "a match branch must bind every constructor field" do
+    src = """
+    data P : Type where
+      mk : Nat → Nat → P
+    def g : run Π (p : P) → Nat :=
+      λ (p : P) →
+        match p motive (λ _ → Nat)
+          | mk a => a
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "branch mk binds 1 variables, constructor has 2 fields"
+  end
+
+  test "too many match binders is an error, not a crash" do
+    src = """
+    data P : Type where
+      mk : Nat → P
+    def g : run Π (p : P) → Nat :=
+      λ (p : P) →
+        match p motive (λ _ → Nat)
+          | mk a b => a
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "branch mk binds 2 variables, constructor has 1 fields"
+  end
+
+  test "uncons of an Always proof is the unfold step" do
+    src = File.read!("examples/always.muro")
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "uncons of a bisimulation is the head equation and the tails" do
+    src = File.read!("examples/bisim.muro")
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "mix muro.check refuses a mutual Empty cycle" do
+    assert {:error, msg} = Muro.check_file("examples/cycle_empty.muro")
+    assert msg =~ "impossible"
+    assert msg =~ "helper"
+    assert msg =~ "recursive definition must be applied to its arguments"
+    refute msg =~ "unknown"
+
+    assert_raise Mix.Error, ~r/recursive definition must be applied to its arguments/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/cycle_empty.muro"])
+    end
+  end
+
+  test "mix muro.check refuses a negative constructor field" do
+    assert {:error, msg} = Muro.check_file("examples/bad_positive.muro")
+    assert msg =~ "constructor is not strictly positive"
+
+    assert_raise Mix.Error, ~r/constructor is not strictly positive/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/bad_positive.muro"])
+    end
+  end
+
+  test "mix muro.check unfolds a spec alias before positivity" do
+    assert {:error, msg} = Muro.check_file("examples/bad_alias.muro")
+    assert msg =~ "constructor is not strictly positive"
+    refute msg =~ "BadAlias"
+    refute msg =~ "unknown"
+
+    assert_raise Mix.Error, ~r/constructor is not strictly positive/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/bad_alias.muro"])
+    end
+  end
+
+  test "mix muro.check refuses a cons branch with the wrong binder count" do
+    assert {:error, msg} = Muro.check_file("examples/bad_cons.muro")
+    assert msg =~ "branch cons binds 1 variables, constructor has 2 fields"
+    assert msg =~ "branch cons binds 3 variables, constructor has 2 fields"
+
+    assert_raise Mix.Error, ~r/branch cons binds 1 variables, constructor has 2 fields/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/bad_cons.muro"])
+    end
+
+    assert Mix.Tasks.Muro.Check.run(["examples/list.muro"]) == :ok
+    assert Mix.Tasks.Muro.Check.run(["examples/vec.muro"]) == :ok
+    assert Mix.Tasks.Muro.Check.run(["examples/even_odd.muro"]) == :ok
+    assert Mix.Tasks.Muro.Check.run(["examples/always.muro"]) == :ok
+    assert Mix.Tasks.Muro.Check.run(["examples/bisim.muro"]) == :ok
+  end
+
+  test "uncons of a Nat is not a ν step" do
+    src = "def bad : run Nat := uncons 0\n"
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "ν"
+  end
 end

@@ -36,34 +36,37 @@ open import Muro.Spine using (unspine; ctorSpine; dtyArgs; defArgs)
 
 ------------------------------------------------------------------------
 -- Recursion state: run and evid structural descent (not spec).
--- A definition descends on one argument position `pos`, the same for
--- every self-call: the variable bound by the leading λ at that position
--- is `recOk`; a field of a match on a recOk or smaller variable is
--- `smaller` (structurally below argument pos). A self-call must be the
--- head of a maximal application spine whose argument at `pos` is a
--- smaller variable. checkDef tries each non-erased position.
+-- A recursive block (one definition, or a strongly connected component
+-- of run/evid definitions) descends on one shared argument position
+-- `pos`: the variable bound by the leading λ at that position is
+-- `recOk`; a field of a match on a recOk or smaller variable is
+-- `smaller` (structurally below argument pos). A call to any member of
+-- the block must be the head of a maximal application spine whose
+-- argument at `pos` is a smaller variable. checkDef tries each
+-- non-erased position the whole block shares.
 ------------------------------------------------------------------------
 
 record RecSt (n : ℕ) : Set where
   constructor recst
   field
     self    : Maybe ℕ        -- the definition being checked
-    pos     : ℕ              -- the argument position it descends on
+    pos     : ℕ              -- the argument position the block descends on
     nextArg : Maybe ℕ        -- leading λs still to pass before that argument
     smaller : Vec Bool n
     recOk   : Vec Bool n
     -- Set on the step of an indexed ν (Always, ~). In evidence, a
     -- self-call there is the coinductive step and need not descend.
     coind   : Bool
+    block   : List ℕ         -- indices of the recursive block, including self
 
 extRec : ∀ {n} → RecSt n → Bool → Bool → RecSt (suc n)
-extRec (recst sl p _ sm rok g) newSmall newOk =
-  recst sl p nothing (newSmall ∷ sm) (newOk ∷ rok) g
+extRec (recst sl p _ sm rok g blk) newSmall newOk =
+  recst sl p nothing (newSmall ∷ sm) (newOk ∷ rok) g blk
 
 -- A leading λ of a definition body binds argument `pos` when nextArg
 -- is just 0; erased binders count as positions too.
 lamRec : ∀ {n} → RecSt n → RecSt (suc n)
-lamRec (recst sl p na sm rok g) = recst sl p (stepArg na) (false ∷ sm) (isArg na ∷ rok) g
+lamRec (recst sl p na sm rok g blk) = recst sl p (stepArg na) (false ∷ sm) (isArg na ∷ rok) g blk
   where
     isArg : Maybe ℕ → Bool
     isArg (just zero) = true
@@ -676,9 +679,13 @@ isDType i t with dtyArgs t
 ... | just (j , _) = i ≡ᵇ j
 ... | nothing      = false
 
+elemℕ : ℕ → List ℕ → Bool
+elemℕ _ []       = false
+elemℕ i (j ∷ js) = (i ≡ᵇ j) ∨ elemℕ i js
+
 mutual
-  hasSelf : ∀ {n} → Maybe ℕ → Tm n → Bool
-  hasSelf (just j) (def i) = i ≡ᵇ j
+  hasSelf : ∀ {n} → List ℕ → Tm n → Bool
+  hasSelf blk (def i) = elemℕ i blk
   hasSelf s (app f a)      = hasSelf s f ∨ hasSelf s a
   hasSelf s (su t)         = hasSelf s t
   hasSelf s (pair a b)     = hasSelf s a ∨ hasSelf s b
@@ -706,7 +713,7 @@ mutual
   hasSelf s (ann e A)      = hasSelf s e ∨ hasSelf s A
   hasSelf _ _              = false
 
-  hasSelfList : ∀ {n} → Maybe ℕ → List (Tm n) → Bool
+  hasSelfList : ∀ {n} → List ℕ → List (Tm n) → Bool
   hasSelfList _ []       = false
   hasSelfList s (t ∷ ts) = hasSelf s t ∨ hasSelfList s ts
 
@@ -719,7 +726,7 @@ checkUnfold k σ _ rs f = whnf k σ f >>= go
     go : ∀ {n} → Tm n → Result ⊤
     go (lam _ _ t) = go t
     go (pair h _)  =
-      if hasSelf (RecSt.self rs) h
+      if hasSelf (RecSt.block rs) h
       then fail "unguarded recursive call"
       else ok tt
     go _ = fail "unfold body must be a pair"
@@ -830,8 +837,73 @@ mutual
   occursDList _ []       = false
   occursDList i (t ∷ ts) = occursD i t ∨ occursDList i ts
 
-posArg : ∀ {n} → ℕ → Tm n → Bool
-posArg i A = isDType i A ∨ not (occursD i A)
+-- A field is strictly positive in data type i when, after unfolding,
+-- i is absent, or i is the head of a spine whose arguments do not
+-- contain i, or i occurs only to the right of a Π whose domain does
+-- not contain i. A product is positive on both sides. i inside an
+-- argument of i is refused (no nested inductives). Fuel exhaustion is
+-- refusal: a field that does not reduce is not accepted. checkData
+-- sits outside ⊢; this restores the invariant ⊢ relies on.
+mutual
+  absentD : ∀ {n} → ℕ → Sig → ℕ → Tm n → Bool
+  absentD zero _ _ _ = false
+  absentD (suc k) σ i t = absentWhnf k σ i (whnf (suc k) σ t)
+
+  absentWhnf : ∀ {n} → ℕ → Sig → ℕ → Result (Tm n) → Bool
+  absentWhnf k σ i (ok t)  = absentGo k σ i t
+  absentWhnf _ _ _ (fail _) = false
+
+  absentGo : ∀ {n} → ℕ → Sig → ℕ → Tm n → Bool
+  absentGo k σ i (pi _ A B)     = absentD k σ i A ∧ absentD k σ i B
+  absentGo k σ i (prod A B)     = absentD k σ i A ∧ absentD k σ i B
+  absentGo k σ i (lam _ A t)    = absentD k σ i A ∧ absentD k σ i t
+  absentGo k σ i (app f a)      = absentD k σ i f ∧ absentD k σ i a
+  absentGo k σ i (pair a b)     = absentD k σ i a ∧ absentD k σ i b
+  absentGo k σ i (idt A a b)    = absentD k σ i A ∧ absentD k σ i a ∧ absentD k σ i b
+  absentGo k σ i (ann e A)      = absentD k σ i e ∧ absentD k σ i A
+  absentGo k σ i (su t)         = absentD k σ i t
+  absentGo k σ i (letp e t)     = absentD k σ i e ∧ absentD k σ i t
+  absentGo k σ i (nu F)         = absentD k σ i F
+  absentGo k σ i (unf s f)      = absentD k σ i s ∧ absentD k σ i f
+  absentGo k σ i (ucons s)      = absentD k σ i s
+  absentGo k σ i (mNat e P z s) = absentD k σ i e ∧ absentD k σ i P ∧ absentD k σ i z ∧ absentD k σ i s
+  absentGo k σ i (mEmp e P)     = absentD k σ i e ∧ absentD k σ i P
+  absentGo k σ i (mUnit e P u)  = absentD k σ i e ∧ absentD k σ i P ∧ absentD k σ i u
+  absentGo k σ i (rwt e P t)    = absentD k σ i e ∧ absentD k σ i P ∧ absentD k σ i t
+  absentGo k σ i (tensor d s)   = absentD k σ i d ∧ absentD k σ i s
+  absentGo k σ i (addi a b)     = absentD k σ i a ∧ absentD k σ i b
+  absentGo k σ i (muli a b)     = absentD k σ i a ∧ absentD k σ i b
+  absentGo k σ i (addt t u)     = absentD k σ i t ∧ absentD k σ i u
+  absentGo k σ i (toi64 t)      = absentD k σ i t
+  absentGo k σ i (packi a b)    = absentD k σ i a ∧ absentD k σ i b
+  absentGo k σ i (mData e P bs) = absentD k σ i e ∧ absentD k σ i P ∧ absentDList k σ i bs
+  absentGo k σ i (dty j)        = not (i ≡ᵇ j)
+  absentGo _ _ _ _              = true
+
+  absentDList : ∀ {n} → ℕ → Sig → ℕ → List (Tm n) → Bool
+  absentDList _ _ _ []       = true
+  absentDList k σ i (t ∷ ts) = absentD k σ i t ∧ absentDList k σ i ts
+
+allAbsent : ∀ {n} → ℕ → Sig → ℕ → List (Tm n) → Bool
+allAbsent _ _ _ []       = true
+allAbsent k σ i (a ∷ as) = absentD k σ i a ∧ allAbsent k σ i as
+
+-- Split out of posWhnf so the spine test is not a with-abstraction.
+posSpine : ∀ {n} → ℕ → Sig → ℕ → Tm n → Maybe (ℕ × List (Tm n)) → Bool
+posSpine k σ i t (just (j , args)) =
+  if i ≡ᵇ j then allAbsent (suc k) σ i args else absentGo k σ i t
+posSpine k σ i t nothing = absentGo k σ i t
+
+mutual
+  posField : ∀ {n} → ℕ → Sig → ℕ → Tm n → Bool
+  posField zero _ _ _ = false
+  posField (suc k) σ i t = posWhnf k σ i (whnf (suc k) σ t)
+
+  posWhnf : ∀ {n} → ℕ → Sig → ℕ → Result (Tm n) → Bool
+  posWhnf _ _ _ (fail _)        = false
+  posWhnf k σ i (ok (pi _ A B)) = absentD (suc k) σ i A ∧ posField k σ i B
+  posWhnf k σ i (ok (prod A B)) = posField k σ i A ∧ posField k σ i B
+  posWhnf k σ i (ok t)          = posSpine k σ i t (dtyArgs t)
 
 instParams : ∀ {n} → ℕ → Sig → Tm n → List (Tm n) → Result (Tm n)
 instParams k σ t [] = ok t
@@ -840,23 +912,23 @@ instParams k σ t (p ∷ ps) with whnf k σ t
 ... | ok (pi _ _ B)   = instParams k σ (inst B p) ps
 ... | ok _            = fail "constructor type has too few parameter binders"
 
-checkTelPos : ∀ {n} → ℕ → ℕ → ℕ → Tm n → Result ⊤
-checkTelPos i np ni (pi _ A B) =
-  guard "constructor is not strictly positive" (posArg i A) >>
-  checkTelPos i np ni B
-checkTelPos i np ni t =
+checkTelPos : ∀ {n} → ℕ → Sig → ℕ → ℕ → ℕ → Tm n → Result ⊤
+checkTelPos k σ i np ni (pi _ A B) =
+  guard "constructor is not strictly positive" (posField k σ i A) >>
+  checkTelPos k σ i np ni B
+checkTelPos k σ i np ni t =
   guard "constructor does not target the data type" (isDType i t) >>
   guard "constructor target has the wrong number of arguments"
     (length (proj₂ (apps t)) ≡ᵇ (np + ni))
 
 -- Skip nparams Π-binders, then check the remaining telescope.
-checkCtorRest : ∀ {n} → ℕ → ℕ → ℕ → Tm n → Result ⊤
-checkCtorRest i np ni t = skip np t
+checkCtorRest : ∀ {n} → ℕ → Sig → ℕ → ℕ → ℕ → Tm n → Result ⊤
+checkCtorRest k σ i np ni t = skip np t
   where
     skip : ∀ {n} → ℕ → Tm n → Result ⊤
-    skip (suc k) (pi _ _ B) = skip k B
+    skip (suc c) (pi _ _ B) = skip c B
     skip (suc _) _          = fail "constructor type has too few parameter binders"
-    skip zero    u          = checkTelPos i np ni u
+    skip zero    u          = checkTelPos k σ i np ni u
 
 noDescent : String
 noDescent = "recursive call does not descend on a smaller argument"
@@ -872,9 +944,7 @@ checkRecGo rs t = go rs (apps t)
 
     go : ∀ {n} → RecSt n → Tm n × List (Tm n) → Result ⊤
     go rs (def i , args) =
-      case RecSt.self rs of λ where
-        nothing  → ok tt
-        (just j) → if i ≡ᵇ j then descend rs args else ok tt
+      if elemℕ i (RecSt.block rs) then descend rs args else ok tt
     go _ _ = ok tt
 
 -- A maximal application spine headed by the definition being checked
@@ -892,11 +962,9 @@ checkRec _    false rs t = checkRecGo rs t
 
 selfRefused : ∀ {n} → RecSt n → ℕ → Result ⊤
 selfRefused rs i =
-  case RecSt.self rs of λ where
-    nothing  → ok tt
-    (just j) → if i ≡ᵇ j
-      then fail "recursive definition must be applied to its arguments"
-      else ok tt
+  if elemℕ i (RecSt.block rs)
+  then fail "recursive definition must be applied to its arguments"
+  else ok tt
 
 -- The definition being checked may not occur unapplied in run or evid:
 -- passed along, it could be applied to anything. The Bool is infer′'s:
@@ -973,7 +1041,7 @@ skipAt {suc n} (suc k) (suc j) = suc <$> skipAt k j
 skipAt {zero}  (suc _) _       = fail "ν kind mentions its binder"
 
 setGuard : ∀ {n} → RecSt n → RecSt n
-setGuard (recst sl p na sm rok _) = recst sl p na sm rok true
+setGuard (recst sl p na sm rok _ blk) = recst sl p na sm rok true blk
 
 -- Kind of a ν body. A product (Stream) has kind Type. A λ-telescope
 -- has the Π of its domains; the binder Y does not occur in the kind.
@@ -1376,10 +1444,14 @@ mutual
     ok (nu (prod (wk A) (var zero)) , uses)
 
   -- ⇒-ucons
+  -- ⇒-ucons. The same step an unfold checks: a bare ν substitutes
+  -- the scrutinee's type for Y, and an applied family (Always, ~)
+  -- substitutes ν F for Y and keeps the indices. The goal is that
+  -- product; the family flag is the unfold check's, not this one's.
   infer′ k σ rs Γ (ucons s) m _ =
     infer k σ rs Γ m s >>= λ (T , u) →
-    viewNu k σ T >>= λ F →
-    ok (inst F T , u)
+    unfStep k σ T T >>= λ (goal , _) →
+    ok (goal , u)
 
   -- ⇒-i64 / ⇒-f32ty / ⇒-tensor  (spec formers)
   infer′ k σ rs Γ i64 run _ = fail "no promotion: I64 is an erased term"
@@ -1512,15 +1584,14 @@ mutual
   checkAgainst k σ rs Γ m e A _ _ = inferConv k σ rs Γ m e A
 
 ------------------------------------------------------------------------
--- Check a whole signature. Each def is its own recursion group.
+-- Check a whole signature. Run and evidence definitions that reach
+-- each other are one block and descend on one shared argument.
+-- Spec is not a logic: it is not in the block, and it is not checked
+-- for descent.
 ------------------------------------------------------------------------
 
 emptyRec : RecSt 0
-emptyRec = recst nothing 0 nothing [] [] false
-
--- Checking definition i, descending on argument position p.
-defRec : ℕ → ℕ → RecSt 0
-defRec i p = recst (just i) p (just p) [] [] false
+emptyRec = recst nothing 0 nothing [] [] false []
 
 -- The non-erased argument positions of a definition's type, read
 -- syntactically: the candidates for the position a self-call descends on.
@@ -1546,7 +1617,7 @@ checkCtorTy : ℕ → Sig → ℕ → ℕ → ℕ → Tm 0 → Result ⊤
 checkCtorTy k σ di np ni ctype =
   checkTy k σ emptyRec [] ctype >>
   checkCtorFields k σ emptyRec [] np ctype >>
-  checkCtorRest di np ni ctype
+  checkCtorRest k σ di np ni ctype
 
 checkCtors : ℕ → Sig → ℕ → ℕ → ℕ → List Ctor → Result ⊤
 checkCtors _ _ _  _  _  []       = ok tt
@@ -1566,13 +1637,141 @@ checkDatas k σ = go 0 (Sig.datas σ)
     go _ []       = ok tt
     go i (d ∷ ds) = checkData k σ i d >> go (suc i) ds
 
--- The body is checked descending on the first non-erased argument; if
--- that fails, on each later one. A definition with no self-call passes
--- the first attempt. When every attempt fails, the first attempt's
--- error is reported: the position only affects the descent check, so a
--- type error is the same for every position.
+-- Definitions a run or evidence body names. The call graph is these
+-- mentions; spec and data are not edges.
+cats : List ℕ → List ℕ → List ℕ
+cats []       ys = ys
+cats (x ∷ xs) ys = x ∷ cats xs ys
+
+mutual
+  mentions : ∀ {n} → Tm n → List ℕ
+  mentions (def i)        = i ∷ []
+  mentions (app f a)      = cats (mentions f) (mentions a)
+  mentions (pi _ A B)     = cats (mentions A) (mentions B)
+  mentions (lam _ A t)    = cats (mentions A) (mentions t)
+  mentions (su t)         = mentions t
+  mentions (mData e P bs) = cats (mentions e) (cats (mentions P) (mentionsList bs))
+  mentions (mNat e P z s) = cats (mentions e) (cats (mentions P) (cats (mentions z) (mentions s)))
+  mentions (mEmp e P)     = cats (mentions e) (mentions P)
+  mentions (mUnit e P u)  = cats (mentions e) (cats (mentions P) (mentions u))
+  mentions (idt A a b)    = cats (mentions A) (cats (mentions a) (mentions b))
+  mentions (rwt e P t)    = cats (mentions e) (cats (mentions P) (mentions t))
+  mentions (ann e A)      = cats (mentions e) (mentions A)
+  mentions (prod A B)     = cats (mentions A) (mentions B)
+  mentions (pair a b)     = cats (mentions a) (mentions b)
+  mentions (letp e t)     = cats (mentions e) (mentions t)
+  mentions (nu F)         = mentions F
+  mentions (unf s f)      = cats (mentions s) (mentions f)
+  mentions (ucons s)      = mentions s
+  mentions (tensor d s)   = cats (mentions d) (mentions s)
+  mentions (addi a b)     = cats (mentions a) (mentions b)
+  mentions (muli a b)     = cats (mentions a) (mentions b)
+  mentions (addt t u)     = cats (mentions t) (mentions u)
+  mentions (toi64 t)      = mentions t
+  mentions (packi a b)    = cats (mentions a) (mentions b)
+  mentions _              = []
+
+  mentionsList : ∀ {n} → List (Tm n) → List ℕ
+  mentionsList []       = []
+  mentionsList (t ∷ ts) = cats (mentions t) (mentionsList ts)
+
+recMode : Mode → Bool
+recMode run  = true
+recMode evid = true
+recMode spec = false
+
+keepRec : Sig → List ℕ → List ℕ
+keepRec _ []       = []
+keepRec σ (j ∷ js) with lookupDef σ j
+... | ok d    = if recMode (Def.dmode d) then j ∷ keepRec σ js else keepRec σ js
+... | fail _  = keepRec σ js
+
+edge : Sig → ℕ → List ℕ
+edge σ i with lookupDef σ i
+... | fail _ = []
+... | ok d   = if recMode (Def.dmode d) then keepRec σ (mentions (Def.dbody d)) else []
+
+mutual
+  reachGo : Sig → ℕ → ℕ → ℕ → List ℕ → Bool
+  reachGo _ zero _ _ _ = false
+  reachGo σ (suc f) tgt cur vis =
+    if cur ≡ᵇ tgt then true
+    else if elemℕ cur vis then false
+    else reachAny σ f tgt (edge σ cur) (cur ∷ vis)
+
+  reachAny : Sig → ℕ → ℕ → List ℕ → List ℕ → Bool
+  reachAny _ _ _ [] _ = false
+  reachAny σ f tgt (x ∷ xs) vis = reachGo σ f tgt x vis ∨ reachAny σ f tgt xs vis
+
+reaches : Sig → ℕ → ℕ → Bool
+reaches σ src tgt = reachGo σ (suc (length (Sig.defs σ))) tgt src []
+
+-- Indices j such that i and j reach each other. i reaches i, so a
+-- run or evidence definition is always in its own block.
+component : Sig → ℕ → List ℕ
+component σ i = go 0 (Sig.defs σ)
+  where
+    go : ℕ → List Def → List ℕ
+    go _ []       = []
+    go j (_ ∷ ds) =
+      let rest = go (suc j) ds in
+      if reaches σ i j ∧ reaches σ j i then j ∷ rest else rest
+
+argsOf : Sig → ℕ → List ℕ
+argsOf σ i with lookupDef σ i
+... | ok d   = argPositions 0 (Def.dtype d)
+... | fail _ = []
+
+interℕ : List ℕ → List ℕ → List ℕ
+interℕ [] _ = []
+interℕ (x ∷ xs) ys = if elemℕ x ys then x ∷ interℕ xs ys else interℕ xs ys
+
+sharedArgs : Sig → List ℕ → List ℕ
+sharedArgs _ []            = []
+sharedArgs σ (i ∷ [])      = argsOf σ i
+sharedArgs σ (i ∷ j ∷ js)  = interℕ (argsOf σ i) (sharedArgs σ (j ∷ js))
+
+-- Checking definition i, descending on argument position p, with every
+-- mutually reachable run/evid definition counted as a self-call.
+defRec : Sig → ℕ → ℕ → RecSt 0
+defRec σ i p = recst (just i) p (just p) [] [] false (component σ i)
+
+allOk : ℕ → Sig → List ℕ → ℕ → Bool
+allOk _ _ [] _ = true
+allOk k σ (i ∷ is) p with lookupDef σ i
+... | fail _ = false
+... | ok d with check k σ (defRec σ i p) [] (Def.dmode d) (Def.dbody d) (Def.dtype d)
+... | ok _   = allOk k σ is p
+... | fail _ = false
+
+findPos : ℕ → Sig → List ℕ → List ℕ → Maybe ℕ
+findPos _ _ _ []       = nothing
+findPos k σ blk (p ∷ ps) =
+  if allOk k σ blk p then just p else findPos k σ blk ps
+
+-- The position the whole block descends on, as a singleton, when one
+-- shared index works for every member. Otherwise the shared candidates,
+-- so the first failure is the one reported. Spec keeps its own
+-- positions: descent is not checked there.
+pickPos : ℕ → Sig → ℕ → Def → List ℕ
+pickPos k σ i d =
+  if recMode (Def.dmode d)
+  then choose (sharedArgs σ (component σ i))
+  else argPositions 0 (Def.dtype d)
+  where
+    choose : List ℕ → List ℕ
+    choose ps with findPos k σ (component σ i) ps
+    ... | nothing = ps
+    ... | just p  = p ∷ []
+
+-- The body is checked descending on the first shared non-erased
+-- argument that works for the whole block; if that fails, on each
+-- later one. A definition with no self-call passes the first attempt.
+-- When every attempt fails, the first attempt's error is reported: the
+-- position only affects the descent check, so a type error is the same
+-- for every position.
 checkAt : ℕ → Sig → ℕ → Def → ℕ → Result (UseVec 0)
-checkAt k σ i d p = check k σ (defRec i p) [] (Def.dmode d) (Def.dbody d) (Def.dtype d)
+checkAt k σ i d p = check k σ (defRec σ i p) [] (Def.dmode d) (Def.dbody d) (Def.dtype d)
 
 retryBody : ℕ → Sig → ℕ → Def → String → List ℕ → Result (UseVec 0)
 retryBody k σ i d msg []       = fail msg
@@ -1589,7 +1788,7 @@ checkBodyAt k σ i d (p ∷ ps) =
     (fail msg) → retryBody k σ i d msg ps
 
 checkBody : ℕ → Sig → ℕ → Def → Result (UseVec 0)
-checkBody k σ i d = checkBodyAt k σ i d (argPositions 0 (Def.dtype d))
+checkBody k σ i d = checkBodyAt k σ i d (pickPos k σ i d)
 
 checkDef : ℕ → Sig → ℕ → Result ⊤
 checkDef k σ i =

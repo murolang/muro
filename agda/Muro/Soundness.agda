@@ -50,7 +50,7 @@ open import Muro.Check
          checkLam; checkBr; checkBrPi; checkBranches; checkMotive; firstMotLam; nparamsOf;
          clashes; RecSt; extRec; lamRec; scrutOk; checkRec; selfApplied;
          infer′; floatIdOk;
-         isDType; checkDef; checkBody; checkBodyAt; retryBody; checkAt; argPositions; checkDefs; checkDatas; checkSig; emptyRec; defRec)
+         isDType; checkDef; checkBody; checkBodyAt; retryBody; checkAt; argPositions; pickPos; checkDefs; checkDatas; checkSig; emptyRec; defRec)
 open import Muro.Judgement
 open import Muro.Wall using (spec-⇒-uses)
 open import Muro.Typing using (typ-ext-suc; ≈-≡)
@@ -1004,20 +1004,20 @@ retryBody-sound : ∀ k σ i d msg ps {u} → retryBody k σ i d msg ps ≡ ok u
 retryBody-sound k σ i d msg [] eq = ⊥-elim (fail≢ok eq)
 retryBody-sound k σ i d msg (p ∷ ps) eq with checkAt k σ i d p in peq
 ... | ok u with ok-inj eq
-...   | refl = defRec i p , peq
+...   | refl = defRec σ i p , peq
 retryBody-sound k σ i d msg (p ∷ ps) eq | fail _ = retryBody-sound k σ i d msg ps eq
 
 checkBodyAt-sound : ∀ k σ i d ps {u} → checkBodyAt k σ i d ps ≡ ok u
   → ∃ λ rs → check k σ rs Vec.[] (Def.dmode d) (Def.dbody d) (Def.dtype d) ≡ ok u
-checkBodyAt-sound k σ i d [] eq = defRec i 0 , eq
+checkBodyAt-sound k σ i d [] eq = defRec σ i 0 , eq
 checkBodyAt-sound k σ i d (p ∷ ps) eq with checkAt k σ i d p in peq
 ... | ok u with ok-inj eq
-...   | refl = defRec i p , peq
+...   | refl = defRec σ i p , peq
 checkBodyAt-sound k σ i d (p ∷ ps) eq | fail msg = retryBody-sound k σ i d msg ps eq
 
 checkBody-sound : ∀ k σ i d {u} → checkBody k σ i d ≡ ok u
   → ∃ λ rs → check k σ rs Vec.[] (Def.dmode d) (Def.dbody d) (Def.dtype d) ≡ ok u
-checkBody-sound k σ i d eq = checkBodyAt-sound k σ i d (argPositions 0 (Def.dtype d)) eq
+checkBody-sound k σ i d eq = checkBodyAt-sound k σ i d (pickPos k σ i d) eq
 
 checkDef-sound k σ i {d} G leq eq with lookupDef σ i in leq′
 ... | fail _ = ⊥-elim (fail≢ok leq)

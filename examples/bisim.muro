@@ -13,6 +13,9 @@ def zeros' : run Stream Nat :=
 def zeros-bisim : evidence zeros ~ zeros' :=
   unfold tt (λ (_ : Unit) → (refl, zeros-bisim))
 
+def zeros-step : evidence {head zeros ≡ head zeros' : Nat} × (tail zeros ~ tail zeros') :=
+  uncons zeros-bisim
+
 def natsFrom : run Π (n : Nat) → Stream Nat :=
   λ (n : Nat) →
     unfold n (λ (+ k : Nat) → (k, suc k))

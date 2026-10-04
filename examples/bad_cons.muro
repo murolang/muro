@@ -1,0 +1,17 @@
+-- bad_cons.muro — cons has two fields. One binder and three binders are both wrong.
+-- mix muro.check refuses both matches. list.muro is the legal cons.
+data List (A : Type) : Type where
+  nil  : List A
+  cons : A → List A → List A
+
+def one : run Π (xs : List Nat) → Nat :=
+  λ (xs : List Nat) →
+    match xs motive (λ _ → Nat)
+      | nil => 0
+      | cons a => a
+
+def three : run Π (xs : List Nat) → Nat :=
+  λ (xs : List Nat) →
+    match xs motive (λ _ → Nat)
+      | nil => 0
+      | cons a b c => a
