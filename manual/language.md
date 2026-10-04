@@ -17,7 +17,7 @@ A `.muro` file is a **book**: a sequence of `ν`, `data`, and `def` entries.
 def name : tag type := body
 ```
 
-The tag is `run`, `run internal`, `spec`, or `evidence`. There is no other tag. These words are rejected as tags (they remain ordinary identifiers): `live`, `dead`, `proof`, `proof evidence`, `ghost`, `comp`, `export`.
+The tag is `run`, `run internal`, `spec`, or `evidence`. There is no other tag.
 
 Forward references are allowed. The checker sees every definition when it checks any one of them.
 

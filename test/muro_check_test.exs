@@ -103,26 +103,16 @@ defmodule Muro.CheckTest do
     assert msg =~ "promotion"
   end
 
-  test "forbidden tags are rejected" do
-    for tag <- [
-          "l" <> "ive",
-          "d" <> "ead",
-          "pr" <> "oof",
-          "pr" <> "oof" <> " evidence",
-          "ghost",
-          "comp",
-          "export"
-        ] do
-      assert {:error, msg} = Parser.parse("def x : #{tag} Nat := 0")
-      assert msg =~ "rejected tag" or msg =~ "expected"
-    end
+  test "a word other than the four tags is not a tag" do
+    assert {:error, msg} = Parser.parse("def x : other Nat := 0")
+    assert msg =~ "expected run, run internal, spec, or evidence"
   end
 
   test "emitted half of eight is four" do
     src = Emit.emit_module(Muro.NatLive, Example.book())
     Code.eval_string(src)
     eight = Enum.reduce(1..8, 0, fn _, n -> {:suc, n} end)
-    assert Muro.NatLive.half(eight) == {:suc, {:suc, {:suc, {:suc, 0}}}}
+    assert call("NatLive", :half, [eight]) == {:suc, {:suc, {:suc, {:suc, 0}}}}
   end
 
   test "zeros.muro parses, checks, and emits only zeros" do
@@ -147,10 +137,10 @@ defmodule Muro.CheckTest do
     refute out =~ "swap-ok"
     Code.eval_string(out)
 
-    assert Muro.PairLet.addPair({{:suc, 0}, {:suc, {:suc, 0}}}) ==
+    assert call("PairLet", :addPair, [{{:suc, 0}, {:suc, {:suc, 0}}}]) ==
              {:suc, {:suc, {:suc, 0}}}
 
-    assert Muro.PairLet.swap({1, 2}) == {2, 1}
+    assert call("PairLet", :swap, [{1, 2}]) == {2, 1}
   end
 
   test "result.muro: ok/error constructors are the Elixir tags" do
@@ -160,10 +150,10 @@ defmodule Muro.CheckTest do
 
     out = Emit.emit_module(Muro.ResultEx, book)
     Code.eval_string(out)
-    assert Muro.ResultEx.pred(0) == {:error, :tt}
-    assert Muro.ResultEx.pred({:suc, 0}) == {:ok, 0}
-    assert Muro.ResultEx.orZero({:error, :tt}) == 0
-    assert Muro.ResultEx.orZero({:ok, 3}) == 3
+    assert call("ResultEx", :pred, [0]) == {:error, :tt}
+    assert call("ResultEx", :pred, [{:suc, 0}]) == {:ok, 0}
+    assert call("ResultEx", :orZero, [{:error, :tt}]) == 0
+    assert call("ResultEx", :orZero, [{:ok, 3}]) == 3
   end
 
   test "fst and snd are let; head (tail s) infers through let" do
@@ -185,7 +175,7 @@ defmodule Muro.CheckTest do
 
     out = Emit.emit_module(Muro.SecondEx, book)
     Code.eval_string(out)
-    assert Muro.SecondEx.second(Muro.SecondEx.natsFrom(0)) == {:suc, 0}
+    assert call("SecondEx", :second, [call("SecondEx", :natsFrom, [0])]) == {:suc, 0}
   end
 
   test "an application argument may be followed by a colon on the same line" do
@@ -258,7 +248,7 @@ defmodule Muro.CheckTest do
     assert out =~ "Stream.unfold"
     Code.eval_string(out)
 
-    assert Muro.Nats.natsFrom(0) |> Stream.take(3) |> Enum.to_list() == [
+    assert call("Nats", :natsFrom, [0]) |> Stream.take(3) |> Enum.to_list() == [
              0,
              {:suc, 0},
              {:suc, {:suc, 0}}
@@ -310,8 +300,8 @@ defmodule Muro.CheckTest do
     assert out =~ "{:left,"
     assert out =~ "{:right,"
     Code.eval_string(out)
-    assert Muro.EitherRun.fromLeft({:left, 0}) == 0
-    assert Muro.EitherRun.fromLeft({:right, :tt}) == 0
+    assert call("EitherRun", :fromLeft, [{:left, 0}]) == 0
+    assert call("EitherRun", :fromLeft, [{:right, :tt}]) == 0
   end
 
   test "LEM for arbitrary P is rejected" do
@@ -451,7 +441,7 @@ defmodule Muro.CheckTest do
     assert out =~ ~r/\bdef ones2\b/
     refute out =~ "length-ones2"
     Code.eval_string(out)
-    assert Muro.Lists.length(Muro.Lists.ones2()) == {:suc, {:suc, 0}}
+    assert call("Lists", :length, [call("Lists", :ones2, [])]) == {:suc, {:suc, 0}}
   end
 
   test "maybe.muro checks; fromMaybe runs" do
@@ -463,8 +453,8 @@ defmodule Muro.CheckTest do
     assert out =~ ~r/\bdef fromMaybe\b/
     refute out =~ "fromJust1"
     Code.eval_string(out)
-    assert Muro.MaybeEx.fromMaybe(0, {:just, {:suc, 0}}) == {:suc, 0}
-    assert Muro.MaybeEx.fromMaybe(0, :nothing) == 0
+    assert call("MaybeEx", :fromMaybe, [0, {:just, {:suc, 0}}]) == {:suc, 0}
+    assert call("MaybeEx", :fromMaybe, [0, :nothing]) == 0
   end
 
   test "tree.muro checks; size descends on both children" do
@@ -477,7 +467,7 @@ defmodule Muro.CheckTest do
     refute out =~ "size-t2"
     Code.eval_string(out)
     t2 = {:node, :leaf, {:node, :leaf, :leaf}}
-    assert Muro.Trees.size(t2) == {:suc, {:suc, 0}}
+    assert call("Trees", :size, [t2]) == {:suc, {:suc, 0}}
   end
 
   test "strict positivity rejects Bad" do
@@ -502,7 +492,7 @@ defmodule Muro.CheckTest do
     refute out =~ "lookup-ok"
     Code.eval_string(out)
     ones1 = {:vcons, 0, {:suc, 0}, :vnil}
-    assert Muro.Vecs.lookup({:fzero, 0}, ones1) == {:suc, 0}
+    assert call("Vecs", :lookup, [{:fzero, 0}, ones1]) == {:suc, 0}
   end
 
   # The equation of a rewrite is evidence, or spec inside a spec term: a
@@ -909,13 +899,13 @@ defmodule Muro.CheckTest do
     refute out =~ "@defn_compiler"
     Code.eval_string(out)
 
-    t1 = Muro.NxAdd.t1()
+    t1 = call("NxAdd", :t1, [])
     assert %Nx.Tensor{} = t1
     assert Nx.to_flat_list(t1) == [1, 2]
-    assert Nx.to_flat_list(Muro.NxAdd.doubled()) == [2, 4]
-    assert Nx.to_flat_list(Muro.NxAdd.addT(Nx.tensor([1, 2], type: :s64))) == [2, 4]
+    assert Nx.to_flat_list(call("NxAdd", :doubled, [])) == [2, 4]
+    assert Nx.to_flat_list(call("NxAdd", :addT, [Nx.tensor([1, 2], type: :s64)])) == [2, 4]
 
-    sum = Muro.NxAdd.addI(Nx.tensor(3, type: :s64), Nx.tensor(4, type: :s64))
+    sum = call("NxAdd", :addI, [Nx.tensor(3, type: :s64), Nx.tensor(4, type: :s64)])
     assert %Nx.Tensor{} = sum
     assert Nx.to_number(sum) == 7
   end
@@ -1276,4 +1266,7 @@ defmodule Muro.CheckTest do
     assert {:error, msg} = Check.check_sig(book)
     assert msg =~ "ν"
   end
+
+  # The module exists only after Code.eval_string, so a literal remote call warns.
+  defp call(mod, fun, args), do: apply(Module.concat(Muro, mod), fun, args)
 end

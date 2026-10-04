@@ -70,8 +70,6 @@ Inside a `data` block each constructor declaration `ident ":" term` begins on it
 
 The parser only accepts `ν Stream` with constructor `uncons`. Other names are an error.
 
-Rejected as **tags** (not as ordinary identifiers): `live`, `dead`, `proof`, `proof evidence`, `ghost`, `comp`, `export`. There is no other tag.
-
 `?` is an unsolved goal. It parses. It never checks. See [Terms](language.md#holes).
 
 Not in the surface (present in the kernel AST only): `matchUnit`, annotations `{e : A}`, raw de Bruijn.
