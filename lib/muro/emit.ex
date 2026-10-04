@@ -58,7 +58,7 @@ defmodule Muro.Emit do
     args =
       0..(arity - 1)//1
       |> Enum.reject(&(&1 in erased))
-      |> Enum.map(&"x#{&1}")
+      |> Enum.map(&bound_name(inner, arity - 1 - &1, &1, book))
 
     expr = emit_db(inner, arity, book)
     kw = if Map.get(d, :export, true), do: "def", else: "defp"
@@ -91,13 +91,13 @@ defmodule Muro.Emit do
   defp emit_db({:lam, :erased, _, _, t}, d, book), do: emit_db(t, d + 1, book)
 
   defp emit_db({:lam, _, _, _, t}, d, book) do
-    "fn x#{d} -> #{emit_db(t, d + 1, book)} end"
+    "fn #{bound_name(t, 0, d, book)} -> #{emit_db(t, d + 1, book)} end"
   end
 
   defp emit_db({:mdata, e, _p, bs}, d, book) do
     clauses =
       Enum.map(bs, fn {name, ar, b} ->
-        pat = emit_ctor_pat(name, ar, d)
+        pat = emit_ctor_pat(name, ar, d, b, book)
         "      #{pat} -> #{emit_db(b, d + ar, book)}"
       end)
       |> Enum.join("\n")
@@ -114,7 +114,7 @@ defmodule Muro.Emit do
     """
     case #{emit_db(e, d, book)} do
       0 -> #{emit_db(z, d, book)}
-      {:suc, x#{d}} -> #{emit_db(s, d + 1, book)}
+      {:suc, #{bound_name(s, 0, d, book)}} -> #{emit_db(s, d + 1, book)}
     end
     """
     |> String.trim()
@@ -127,9 +127,11 @@ defmodule Muro.Emit do
   end
 
   defp emit_db({:pair, a, b}, d, book), do: "{#{emit_db(a, d, book)}, #{emit_db(b, d, book)}}"
-  # let (a, b) = e in t: a is x#{d}, b is x#{d + 1}; the body sees both.
+  # let (a, b) = e in t: a is de Bruijn 1 (x#{d}), b is de Bruijn 0 (x#{d + 1}).
   defp emit_db({:letp, e, t}, d, book) do
-    "({x#{d}, x#{d + 1}} = #{emit_db(e, d, book)}; #{emit_db(t, d + 2, book)})"
+    a = bound_name(t, 1, d, book)
+    b = bound_name(t, 0, d + 1, book)
+    "({#{a}, #{b}} = #{emit_db(e, d, book)}; #{emit_db(t, d + 2, book)})"
   end
 
   defp emit_db({:unf, seed, f}, d, book) do
@@ -198,11 +200,93 @@ defmodule Muro.Emit do
     end
   end
 
-  defp emit_ctor_pat(name, 0, _d), do: ":#{safe(name)}"
+  defp emit_ctor_pat(name, 0, _d, _body, _book), do: ":#{safe(name)}"
 
-  defp emit_ctor_pat(name, ar, d) do
-    vars = Enum.map(0..(ar - 1), fn i -> "x#{d + i}" end)
+  defp emit_ctor_pat(name, ar, d, body, book) do
+    vars = Enum.map(0..(ar - 1), fn i -> bound_name(body, ar - 1 - i, d + i, book) end)
     "{:#{safe(name)}, #{Enum.join(vars, ", ")}}"
+  end
+
+  # A binder the emitted term never mentions is `_`, so eval does not warn.
+  defp bound_name(body, idx, slot, book) do
+    if emitted_occurs?(idx, body, book), do: "x#{slot}", else: "_"
+  end
+
+  defp emitted_occurs?(i, {:var, j}, _), do: i == j
+  defp emitted_occurs?(i, {:lam, _, _, _, t}, book), do: emitted_occurs?(i + 1, t, book)
+  defp emitted_occurs?(i, {:su, t}, book), do: emitted_occurs?(i, t, book)
+  defp emitted_occurs?(i, {:ann, e, _}, book), do: emitted_occurs?(i, e, book)
+  defp emitted_occurs?(i, {:rwt, _, _, t}, book), do: emitted_occurs?(i, t, book)
+
+  defp emitted_occurs?(i, {:pair, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:letp, e, t}, book),
+    do: emitted_occurs?(i, e, book) or emitted_occurs?(i + 2, t, book)
+
+  defp emitted_occurs?(i, {:mnat, e, _, z, s}, book),
+    do:
+      emitted_occurs?(i, e, book) or emitted_occurs?(i, z, book) or
+        emitted_occurs?(i + 1, s, book)
+
+  defp emitted_occurs?(i, {:mdata, e, _, bs}, book) do
+    emitted_occurs?(i, e, book) or
+      Enum.any?(bs, fn {_, ar, b} -> emitted_occurs?(i + ar, b, book) end)
+  end
+
+  defp emitted_occurs?(i, {:munit, e, _, u}, book),
+    do: emitted_occurs?(i, e, book) or emitted_occurs?(i, u, book)
+
+  defp emitted_occurs?(i, {:unf, s, f}, book),
+    do: emitted_occurs?(i, s, book) or emitted_occurs?(i, f, book)
+
+  defp emitted_occurs?(i, {:ucons, s}, book), do: emitted_occurs?(i, s, book)
+
+  defp emitted_occurs?(i, {:addi, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:muli, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:addt, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:toi64, t}, book), do: emitted_occurs?(i, t, book)
+
+  defp emitted_occurs?(i, {:packi, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:app, _, _} = t, book) do
+    {h, args} = spine(t, [])
+
+    case h do
+      {:def, n} ->
+        if ctor_name?(book, n) do
+          Enum.any?(args, &emitted_occurs?(i, &1, book))
+        else
+          args
+          |> Enum.zip(arg_qtys(book, n, length(args)))
+          |> Enum.reject(fn {_, q} -> q == :erased end)
+          |> Enum.any?(fn {a, _} -> emitted_occurs?(i, a, book) end)
+        end
+
+      other ->
+        emitted_occurs?(i, other, book) or Enum.any?(args, &emitted_occurs?(i, &1, book))
+    end
+  end
+
+  defp emitted_occurs?(_, _, _), do: false
+
+  defp arg_qtys(book, name, n) do
+    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name)) do
+      nil ->
+        List.duplicate(:affine, n)
+
+      dfn ->
+        {:ok, ty} = Ast.to_db(dfn.type)
+        qtys = qty_spine(ty)
+        qtys ++ List.duplicate(:affine, max(n - length(qtys), 0))
+    end
   end
 
   defp ctor_name?(book, name) do
