@@ -282,8 +282,23 @@ defmodule Muro.Subst do
   # Open two binders at once (Agda: inst₂): the inner one (0) gets b.
   def inst2(t, a, b), do: inst(inst(t, wk(b)), a)
 
+  # Open n binders at once (Agda: appsFrom b args, β-reduced): the inner
+  # binder (0) gets the last argument. The arguments live outside all n
+  # binders, so they are substituted simultaneously. Opening them one at a
+  # time with inst would need each argument weakened by the binders still
+  # open over it, as inst2 does; without that, every field after the first
+  # lands one variable too low.
   def inst_n(t, args) do
-    Enum.reduce(Enum.reverse(args), t, fn a, acc -> inst(acc, a) end)
+    n = length(args)
+    rev = Enum.reverse(args)
+
+    sub(
+      fn
+        i when i < n -> Enum.at(rev, i)
+        i -> {:var, i - n}
+      end,
+      t
+    )
   end
 
   def apps_from(f, args), do: Enum.reduce(args, f, fn a, acc -> {:app, acc, a} end)

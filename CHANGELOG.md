@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.1
+
+A `match` on a constructor with two or more fields now reduces correctly. The checker substituted the fields one at a time without weakening the ones already in place, so every field after the first landed one variable too low, on whichever binder came next in scope. `drop1 (cons y ys)` reduced to `zs`: the true `{drop1 (cons y ys) ≡ ys}` was refused and the false `{drop1 (cons y ys) ≡ zs}` checked. Agda was right; the Elixir mirror had drifted from it.
+
+### Checker
+
+- `Muro.Subst.inst_n/2` substitutes all the fields at once, as Agda's `appsFrom b args` does once β-reduced.
+
+### Manual
+
+- `examples/second_field.muro` and `examples/bad_second_field.muro`, in `examples.md`.
+
+### Package
+
+- Version 0.16.1.
+
 ## 0.16.0
 
 A constructor field is strictly positive after unfolding. A spec name is the type it unfolds to, so `Contra := Bad → Empty` does not hide a negative field, and a harmless alias of `Nat` stays positive. `D` inside an argument of `D` is refused. Run and evidence definitions that reach each other are one block and descend on one shared argument, so `even`/`odd` check and a cycle of `Empty` does not. A `match` branch binds as many variables as the constructor has fields. `uncons` of an `Always` proof or a `~` proof is the unfold step: the head fact and the same predicate at the tails.

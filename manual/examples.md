@@ -132,6 +132,10 @@ Uses `sym`, `cong`, and `pred` from the prelude and defines none of them. `befor
 
 `cons` has two fields. A branch with one binder and a branch with three both fail, naming `cons` and the count `2`. `list.muro` and `vec.muro` are the matches that check.
 
+### bad_second_field.muro
+
+`drop1 (cons y ys)` is `ys`. The false equation `{drop1 (cons y ys) ≡ zs}` is refused; `second_field.muro` is the true one. A match on a constructor with several fields puts every field in place at once.
+
 ## Adding a file
 
 1. Put it in `examples/`. Use only `run` / `run internal` / `spec` / `evidence`.
