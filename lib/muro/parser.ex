@@ -327,8 +327,8 @@ defmodule Muro.Parser do
         case s do
           <<c, _::binary>>
           when c in ?a..?z or c in ?A..?Z or c in ?0..?9 or c == ?_ or c == ?( or
-                 c == ?{ or c == ?[ or c == ?? ->
-            true
+                 c == ?{ or c == ?[ or c == ?? or c == ?: ->
+            atom_lit?(s) or c != ?:
 
           _ ->
             false
@@ -340,6 +340,12 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      atom_lit?(s) ->
+        parse_atom_lit(s)
+
+      word_kw?(s, "Atom") ->
+        {:ok, :atom, after_kw(s, "Atom")}
+
       has_prefix?(s, "Type") ->
         {:ok, :typ, after_kw(s, "Type")}
 
@@ -612,6 +618,7 @@ defmodule Muro.Parser do
 
       cond do
         word_kw?(rest, "0") -> parse_mnat_cases(e, x, p, rest)
+        atom_lit?(rest) -> parse_matom_cases(e, x, p, rest)
         true -> parse_mdata_cases(e, x, p, rest)
       end
     end
@@ -637,6 +644,50 @@ defmodule Muro.Parser do
          {:ok, rest} <- tok(skip(rest), "=>"),
          {:ok, sc, rest} <- parse_term(skip(rest), 0) do
       {:ok, {:mnat, e, x, p, z, y, sc}, rest}
+    end
+  end
+
+  # The colon is glued to the name. `: List` is the colon of an identity type.
+  defp atom_lit?(s) do
+    case skip(s) do
+      <<":", c, _::binary>> when c in ?a..?z or c in ?A..?Z or c == ?_ -> true
+      _ -> false
+    end
+  end
+
+  defp parse_atom_lit(s) do
+    <<":", rest::binary>> = skip(s)
+
+    case rest do
+      <<c, _::binary>> when c in ?a..?z or c in ?A..?Z or c == ?_ ->
+        {name, rest} = take_ident(rest, "")
+        {:ok, {:atom, name}, rest}
+
+      _ ->
+        {:error, err(s, "expected atom")}
+    end
+  end
+
+  defp parse_matom_cases(e, x, p, rest) do
+    with {:ok, branches, rest} <- parse_matom_branches(rest, []) do
+      {:ok, {:matom, e, x, p, branches}, rest}
+    end
+  end
+
+  defp parse_matom_branches(s, acc) do
+    with {:ok, {:atom, name}, rest} <- parse_atom_lit(skip(s)),
+         {:ok, rest} <- tok(skip(rest), "=>"),
+         {:ok, body, rest} <- parse_term(skip(rest), 0) do
+      acc = [{name, body} | acc]
+      rest = skip(rest)
+
+      if has_prefix?(rest, "|") do
+        with {:ok, rest} <- tok(rest, "|") do
+          parse_matom_branches(skip(rest), acc)
+        end
+      else
+        {:ok, Enum.reverse(acc), rest}
+      end
     end
   end
 

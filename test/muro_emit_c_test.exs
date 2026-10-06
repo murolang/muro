@@ -168,6 +168,19 @@ defmodule Muro.EmitCTest do
     assert source =~ "static muro_nat *step(muro_nat *n)"
     cc!(dir, "internal_ok.c", "internal_ok.o")
 
+    sort = Path.join(dir, "sort.muro")
+    File.cp!("examples/sort.muro", sort)
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([sort, "--backend", "c"]) end)
+    sort_h = File.read!(Path.join(dir, "sort.h"))
+    sort_c = File.read!(Path.join(dir, "sort.c"))
+    assert sort_h =~ "typedef enum {"
+    assert sort_h =~ "MURO_ASC"
+    assert sort_h =~ "MURO_DESC"
+    refute sort_c =~ "\"asc\""
+    refute sort_c =~ "\"desc\""
+    assert sort_c =~ "switch"
+    cc!(dir, "sort.c", "sort.o")
+
     list = Path.join(dir, "list.muro")
     File.cp!("examples/list.muro", list)
     capture_io(fn -> Mix.Tasks.Muro.Emit.run([list, "--backend", "c"]) end)

@@ -1270,6 +1270,42 @@ defmodule Muro.CheckTest do
     assert msg =~ "drop1-other"
   end
 
+  test "sort.muro checks; an atom is not a Nat; a missing arm names the atom" do
+    assert Muro.check_file("examples/sort.muro") == :ok
+    assert Muro.check_file("examples/list.muro") == :ok
+    assert Muro.check_file("examples/vec.muro") == :ok
+
+    assert {:ok, ex} = Muro.emit_file("examples/sort.muro", Sort)
+    assert ex =~ ":asc"
+    assert ex =~ ":desc"
+
+    assert {:ok, book} = Parser.parse("def bad : run Nat := :asc\n")
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "Atom"
+    assert msg =~ "Nat"
+
+    src = """
+    def only : run Atom := :asc
+    def bad : run Π (d : Atom) → Nat :=
+      λ (d : Atom) →
+        match d motive (λ _ → Nat)
+          | :desc => 0
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "missing branch for :asc"
+
+    plus = """
+    def bad : run Π (+ d : Atom) → Atom :=
+      λ (+ d : Atom) → d
+    """
+
+    assert {:ok, book} = Parser.parse(plus)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "Data"
+  end
+
   test "uncons of a Nat is not a ν step" do
     src = "def bad : run Nat := uncons 0\n"
     assert {:ok, book} = Parser.parse(src)
