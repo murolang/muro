@@ -54,6 +54,7 @@ Primitive types you can write as atoms:
 | --- | --- |
 | `Type` | The sort |
 | `Nat` | Peano naturals |
+| `Atom` | The atom literals written in this file |
 | `Unit` | One constructor, `tt` |
 | `Empty` | No constructors |
 | `I64` / `F32` | Machine scalars; see [Machine numbers](machine.md) |
@@ -140,6 +141,14 @@ match m motive (λ _ → A)
 ```
 
 Motives are written in parentheses. Nested λ in the motive cover index binders (see [Indexed data](indexed.md)).
+
+## Atoms
+
+An atom literal is a tag written in the file, colon glued to the name: `:asc`. It is a value of type `Atom`. It is not a constructor and not a `Nat`. `Atom` is not Data, so `+` does not apply. There is no `where` block of atoms, and no function from a string to an atom.
+
+The spellings that occur in the file are the whole type. A `match` on `Atom` is exhaustive for that set. A missing arm is an error that names the atom (`missing branch for :asc`). Elixir prints the colon form and matches with `case`. C emits an enum of those spellings (`MURO_ASC`, `MURO_DESC`) and matches with `switch`. A name the file did not write is not added. Atom is checked and emitted by this implementation; it is not in the Agda kernel.
+
+`examples/sort.muro` is insertion sort on `List Nat`. `:asc` orders upward and `:desc` downward.
 
 ## Products
 
