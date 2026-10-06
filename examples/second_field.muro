@@ -1,0 +1,15 @@
+-- second_field.muro — matching a constructor with two fields reduces to the
+-- branch with both fields in place. bad_second_field.muro is the false twin.
+data List (A : Type) : Type where
+  nil  : List A
+  cons : A → List A → List A
+
+def drop1 : run Π (xs : List Nat) → List Nat :=
+  λ (xs : List Nat) →
+    match xs motive (λ _ → List Nat)
+      | nil => nil
+      | cons y ys => ys
+
+def drop1-cons : evidence Π (y : Nat) → Π (ys : List Nat) → Π (zs : List Nat) →
+                          {drop1 (cons y ys) ≡ ys : List Nat} :=
+  λ (y : Nat) → λ (ys : List Nat) → λ (zs : List Nat) → refl

@@ -1260,6 +1260,16 @@ defmodule Muro.CheckTest do
     assert Mix.Tasks.Muro.Check.run(["examples/bisim.muro"]) == :ok
   end
 
+  test "a match on a two-field constructor reduces with both fields in place" do
+    # The second field was substituted one variable too low, into whichever
+    # binder came next: drop1 (cons y ys) reduced to zs, so the true equation
+    # was refused and the false one checked.
+    assert Muro.check_file("examples/second_field.muro") == :ok
+
+    assert {:error, msg} = Muro.check_file("examples/bad_second_field.muro")
+    assert msg =~ "drop1-other"
+  end
+
   test "uncons of a Nat is not a ν step" do
     src = "def bad : run Nat := uncons 0\n"
     assert {:ok, book} = Parser.parse(src)
