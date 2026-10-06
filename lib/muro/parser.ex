@@ -439,10 +439,10 @@ defmodule Muro.Parser do
           {:ok, snd_sugar({:ucons, e}), rest}
         end
 
-      has_prefix?(s, "Π") or has_prefix?(s, "Pi") ->
+      word_kw?(s, "Π") or word_kw?(s, "Pi") ->
         parse_pi(s)
 
-      has_prefix?(s, "λ") or has_prefix?(s, "lam") ->
+      word_kw?(s, "λ") or word_kw?(s, "lam") ->
         parse_lam(s)
 
       has_prefix?(s, "matchEmpty") ->
@@ -796,14 +796,14 @@ defmodule Muro.Parser do
 
   defp eat_lam(s) do
     cond do
-      has_prefix?(s, "λ") -> {:ok, after_kw(s, "λ")}
-      has_prefix?(s, "lam") -> {:ok, after_kw(s, "lam")}
+      word_kw?(s, "λ") -> {:ok, after_kw(s, "λ")}
+      word_kw?(s, "lam") -> {:ok, after_kw(s, "lam")}
       true -> {:ok, s}
     end
   end
 
   defp eat_kw(s, [k | ks]) do
-    if has_prefix?(s, k), do: after_kw(s, k), else: eat_kw(s, ks)
+    if word_kw?(s, k), do: after_kw(s, k), else: eat_kw(s, ks)
   end
 
   defp eat_kw(s, []), do: s
