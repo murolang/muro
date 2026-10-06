@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.16.2
+
+`Pi` and `lam` are keywords only at a word boundary. `Pickle` and `lambda` are names. `Pi (x : Nat) → Nat` and `lam (x : Nat) → x` still parse as a pi and a lambda.
+
+### Parser
+
+- `Π` / `Pi` and `λ` / `lam` go through the same word boundary as the other keywords. `eat_kw` refuses a match when the next character continues an identifier.
+
+### Package
+
+- Version 0.16.2.
+
 ## 0.16.1
 
 A `match` on a constructor with two or more fields now reduces correctly. The checker substituted the fields one at a time without weakening the ones already in place, so every field after the first landed one variable too low, on whichever binder came next in scope. `drop1 (cons y ys)` reduced to `zs`: the true `{drop1 (cons y ys) ≡ ys}` was refused and the false `{drop1 (cons y ys) ≡ zs}` checked. Agda was right; the Elixir mirror had drifted from it.

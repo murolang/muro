@@ -1306,6 +1306,26 @@ defmodule Muro.CheckTest do
     assert msg =~ "Data"
   end
 
+  test "Pi and lam are keywords only at a word boundary" do
+    assert {:ok, [pickle]} = Parser.parse("def Pickle : run Nat := 0\n")
+    assert pickle.name == "Pickle"
+    assert Check.check_sig([pickle]) == :ok
+
+    assert {:ok, [lambda]} = Parser.parse("def lambda : run Nat := 0\n")
+    assert lambda.name == "lambda"
+    assert Check.check_sig([lambda]) == :ok
+
+    src = """
+    def id : run Pi (x : Nat) → Nat :=
+      lam (x : Nat) → x
+    """
+
+    assert {:ok, [id]} = Parser.parse(src)
+    assert {:pi, :affine, :nat, "x", :nat} = id.type
+    assert {:lam, :affine, :nat, "x", {:var, "x"}} = id.body
+    assert Check.check_sig([id]) == :ok
+  end
+
   test "uncons of a Nat is not a ν step" do
     src = "def bad : run Nat := uncons 0\n"
     assert {:ok, book} = Parser.parse(src)
