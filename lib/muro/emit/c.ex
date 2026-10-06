@@ -14,7 +14,7 @@ defmodule Muro.Emit.C do
   step is `c:lambda`.
   """
 
-  alias Muro.Emit
+  alias Muro.{Ast, Emit}
 
   @c_keywords ~w(
     auto break case char const continue default do double else enum extern
@@ -393,6 +393,39 @@ defmodule Muro.Emit.C do
   end
 
   defp emit({:lam, _, _, _, _}, _env, _book, _st, _expect), do: {:error, "c:lambda"}
+
+  defp emit({:atom, name}, _env, _book, st, _expect), do: {:ok, {"", atom_c(name), st}}
+
+  defp emit({:matom, e, _x, _p, bs}, env, book, st, expect) do
+    with {:ok, {pre, scrut, st}} <- emit(e, env, book, st, "muro_atom ") do
+      {sname, st} = news(st)
+      {tname, st} = newt(st)
+
+      case emit_atom_cases(bs, tname, env, book, st, expect) do
+        {:ok, {cases, st}} ->
+          stmt =
+            squash([
+              pre,
+              "#{expect}#{tname} = 0;",
+              "{",
+              "muro_atom #{sname} = #{scrut};",
+              "switch (#{sname}) {",
+              cases,
+              "default: {",
+              "abort();",
+              "}",
+              "}",
+              "}"
+            ])
+
+          {:ok, {stmt, tname, st}}
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
   defp emit(_other, _env, _book, _st, _expect), do: {:error, "c:unsupported"}
 
   defp emit_step(step, q, x, seed_ty, body, caps, env_ty, env, book, st) do
@@ -519,6 +552,12 @@ defmodule Muro.Emit.C do
       free_names(z, bound) ++ free_names(s, MapSet.put(bound, y))
   end
 
+  defp free_names({:matom, e, x, p, bs}, bound) do
+    free_names(e, bound) ++
+      free_names(p, MapSet.put(bound, x)) ++
+      Enum.flat_map(bs, fn {_n, body} -> free_names(body, bound) end)
+  end
+
   defp free_names({:mdata, e, x, p, bs}, bound) do
     free_names(e, bound) ++
       free_names(p, MapSet.put(bound, x)) ++
@@ -546,6 +585,31 @@ defmodule Muro.Emit.C do
 
   defp free_names(t, bound) when is_list(t), do: Enum.flat_map(t, &free_names(&1, bound))
   defp free_names(_, _), do: []
+
+  defp emit_atom_cases(bs, tname, env, book, st, expect) do
+    Enum.reduce_while(bs, {:ok, {[], st}}, fn {name, body}, {:ok, {acc, st}} ->
+      case emit(body, env, book, st, expect) do
+        {:ok, {bpre, bex, st}} ->
+          text =
+            squash([
+              "case #{atom_c(name)}: {",
+              bpre,
+              "#{tname} = #{bex};",
+              "break;",
+              "}"
+            ])
+
+          {:cont, {:ok, {acc ++ [text], st}}}
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, {cases, st}} -> {:ok, {Enum.join(cases, "\n"), st}}
+      err -> err
+    end
+  end
 
   defp emit_cases(branches, data, sname, tname, env, book, st, expect) do
     Enum.reduce_while(branches, {:ok, {[], st}}, fn {cname, binders, body}, {:ok, {acc, st}} ->
@@ -720,6 +784,7 @@ defmodule Muro.Emit.C do
   defp spine({:app, f, a}, acc), do: spine(f, [a | acc])
   defp spine(h, acc), do: {h, acc}
 
+  defp ctype(:atom, _book), do: "muro_atom "
   defp ctype(:nat, _book), do: "muro_nat *"
   defp ctype(:unit, _book), do: "muro_unit *"
   defp ctype({:stream, _}, _book), do: "muro_stream *"
@@ -803,6 +868,7 @@ defmodule Muro.Emit.C do
       "#include <stdint.h>",
       nat_struct(),
       unit_struct(),
+      atom_enum(book),
       stream_typedef(sigs),
       data_structs(book),
       prototypes(sigs),
@@ -855,6 +921,27 @@ defmodule Muro.Emit.C do
       |> String.replace(~r/[^A-Z0-9]/, "_")
 
     "MURO_#{body}_H"
+  end
+
+  defp atom_enum(book) do
+    case Ast.atoms(book) do
+      [] ->
+        ""
+
+      names ->
+        consts = Enum.map_join(names, ",\n  ", &atom_c/1)
+
+        """
+        typedef enum {
+          #{consts}
+        } muro_atom;
+        """
+        |> String.trim()
+    end
+  end
+
+  defp atom_c(name) do
+    "MURO_" <> (name |> safe() |> String.upcase())
   end
 
   defp nat_struct do

@@ -38,6 +38,9 @@ defmodule Muro.Ast do
           | {:nu, name, named}
           | {:unf, named, named}
           | {:ucons, named}
+          | :atom
+          | {:atom, name}
+          | {:matom, named, name, named, [{name, named}]}
           | :i64
           | :f32ty
           | {:tensor, named, named}
@@ -78,6 +81,9 @@ defmodule Muro.Ast do
           | {:bisim, db, db}
           | {:unf, db, db}
           | {:ucons, db}
+          | :atom
+          | {:atom, name}
+          | {:matom, db, db, [{name, db}]}
           | :i64
           | :f32ty
           | {:tensor, db, db}
@@ -229,6 +235,17 @@ defmodule Muro.Ast do
   end
 
   def to_db({:ucons, s}, env), do: map1(s, env, &{:ucons, &1})
+  def to_db(:atom, _), do: {:ok, :atom}
+  def to_db({:atom, n}, _), do: {:ok, {:atom, n}}
+
+  def to_db({:matom, e, x, p, bs}, env) do
+    with {:ok, e1} <- to_db(e, env),
+         {:ok, p1} <- to_db(p, [x | env]),
+         {:ok, bs1} <- to_db_atom_branches(bs, env) do
+      {:ok, {:matom, e1, p1, bs1}}
+    end
+  end
+
   def to_db(:i64, _), do: {:ok, :i64}
   def to_db(:f32ty, _), do: {:ok, :f32ty}
   def to_db({:toi64, t}, env), do: map1(t, env, &{:toi64, &1})
@@ -273,6 +290,15 @@ defmodule Muro.Ast do
 
   defp map1(t, env, f) do
     with {:ok, t1} <- to_db(t, env), do: {:ok, f.(t1)}
+  end
+
+  defp to_db_atom_branches(branches, env) do
+    Enum.reduce_while(branches, {:ok, []}, fn {name, body}, {:ok, acc} ->
+      case to_db(body, env) do
+        {:ok, b} -> {:cont, {:ok, acc ++ [{name, b}]}}
+        err -> {:halt, err}
+      end
+    end)
   end
 
   defp to_db_branches(branches, env) do
@@ -350,5 +376,50 @@ defmodule Muro.Ast do
         err -> {:halt, err}
       end
     end)
+  end
+
+  # Atom literals written in the book, first occurrence first.
+  # Binder names are not atoms. Nothing absent from the book is added.
+  def atoms(book) when is_list(book) do
+    Enum.reduce(book, [], fn
+      %{kind: :data, params: params, ctors: ctors} = d, acc ->
+        acc = atoms_in(params, acc)
+        acc = atoms_in(Map.get(d, :indices, []), acc)
+        Enum.reduce(ctors, acc, fn c, acc -> atoms_in(c.type, acc) end)
+
+      %{type: ty, body: bo}, acc ->
+        atoms_in(bo, atoms_in(ty, acc))
+    end)
+  end
+
+  defp atoms_in({:atom, n}, acc) when is_binary(n), do: remember_atom(acc, n)
+
+  defp atoms_in({:matom, e, x, p, bs}, acc) when is_binary(x) and is_list(bs) do
+    Enum.reduce(bs, atoms_in(p, atoms_in(e, acc)), fn {n, b}, acc ->
+      atoms_in(b, remember_atom(acc, n))
+    end)
+  end
+
+  defp atoms_in({:matom, e, p, bs}, acc) when is_list(bs) do
+    Enum.reduce(bs, atoms_in(p, atoms_in(e, acc)), fn {n, b}, acc ->
+      atoms_in(b, remember_atom(acc, n))
+    end)
+  end
+
+  defp atoms_in(t, acc) when is_tuple(t) do
+    t |> Tuple.to_list() |> Enum.reduce(acc, &atoms_child/2)
+  end
+
+  defp atoms_in(t, acc) when is_list(t), do: Enum.reduce(t, acc, &atoms_in/2)
+  defp atoms_in(_, acc), do: acc
+
+  defp atoms_child({:atom, n}, acc) when is_binary(n), do: remember_atom(acc, n)
+  defp atoms_child({:matom, _, _, _, _} = t, acc), do: atoms_in(t, acc)
+  defp atoms_child({:matom, _, _, _} = t, acc), do: atoms_in(t, acc)
+  defp atoms_child(t, acc) when is_tuple(t) or is_list(t), do: atoms_in(t, acc)
+  defp atoms_child(_, acc), do: acc
+
+  defp remember_atom(acc, n) do
+    if n in acc, do: acc, else: acc ++ [n]
   end
 end

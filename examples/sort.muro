@@ -1,0 +1,49 @@
+-- Insertion sort on List Nat. Direction is an atom literal.
+-- :asc orders upward, :desc downward. Each variable is used once:
+-- order consumes the two numbers and returns them in the result.
+data List (A : Type) : Type where
+  nil  : List A
+  cons : A → List A → List A
+
+data Ord : Type where
+  leq : Nat → Nat → Ord
+  gt  : Nat → Nat → Ord
+
+def order : run Π (y : Nat) → Π (x : Nat) → Ord :=
+  λ (y : Nat) → λ (x : Nat) →
+    match y motive (λ _ → Ord)
+      | 0 => leq 0 x
+      | suc y1 =>
+          match x motive (λ _ → Ord)
+            | 0 => gt (suc y1) 0
+            | suc x1 =>
+                match order y1 x1 motive (λ _ → Ord)
+                  | leq a b => leq (suc a) (suc b)
+                  | gt a b => gt (suc a) (suc b)
+
+def insert : run Π (d : Atom) → Π (y : Nat) → Π (xs : List Nat) → List Nat :=
+  λ (d : Atom) → λ (y : Nat) → λ (xs : List Nat) →
+    match xs motive (λ _ → List Nat)
+      | nil => cons y nil
+      | cons x xs1 =>
+          match d motive (λ _ → List Nat)
+            | :asc =>
+                (match order y x motive (λ _ → List Nat)
+                  | leq a b => cons a (cons b xs1)
+                  | gt a b => cons b (insert :asc a xs1))
+            | :desc =>
+                (match order x y motive (λ _ → List Nat)
+                  | leq a b => cons b (cons a xs1)
+                  | gt a b => cons a (insert :desc b xs1))
+
+def sort : run Π (d : Atom) → Π (xs : List Nat) → List Nat :=
+  λ (d : Atom) → λ (xs : List Nat) →
+    match xs motive (λ _ → List Nat)
+      | nil => nil
+      | cons x xs1 =>
+          match d motive (λ _ → List Nat)
+            | :asc => insert :asc x (sort :asc xs1)
+            | :desc => insert :desc x (sort :desc xs1)
+
+def sort-two : evidence {sort :asc (cons (suc 0) (cons 0 nil)) ≡ cons 0 (cons (suc 0) nil) : List Nat} :=
+  refl

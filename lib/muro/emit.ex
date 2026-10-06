@@ -88,6 +88,23 @@ defmodule Muro.Emit do
 
   defp emit_db({:hole, _}, _, _), do: raise("emit: hole")
 
+  defp emit_db({:atom, n}, _, _book), do: elixir_atom(n)
+
+  defp emit_db({:matom, e, _p, bs}, d, book) do
+    clauses =
+      Enum.map(bs, fn {name, b} ->
+        "      #{elixir_atom(name)} -> #{emit_db(b, d, book)}"
+      end)
+      |> Enum.join("\n")
+
+    """
+    (case #{emit_db(e, d, book)} do
+    #{clauses}
+    end)
+    """
+    |> String.trim()
+  end
+
   defp emit_db({:lam, :erased, _, _, t}, d, book), do: emit_db(t, d + 1, book)
 
   defp emit_db({:lam, _, _, _, t}, d, book) do
@@ -234,6 +251,11 @@ defmodule Muro.Emit do
       Enum.any?(bs, fn {_, ar, b} -> emitted_occurs?(i + ar, b, book) end)
   end
 
+  defp emitted_occurs?(i, {:matom, e, _, bs}, book) do
+    emitted_occurs?(i, e, book) or
+      Enum.any?(bs, fn {_, b} -> emitted_occurs?(i, b, book) end)
+  end
+
   defp emitted_occurs?(i, {:munit, e, _, u}, book),
     do: emitted_occurs?(i, e, book) or emitted_occurs?(i, u, book)
 
@@ -317,6 +339,12 @@ defmodule Muro.Emit do
 
   defp spine({:app, f, a}, acc), do: spine(f, [a | acc])
   defp spine(h, acc), do: {h, acc}
+
+  defp elixir_atom(name) do
+    if String.match?(name, ~r/^[A-Za-z_][A-Za-z0-9_@]*$/),
+      do: ":#{name}",
+      else: ":#{inspect(name)}"
+  end
 
   defp safe(name) do
     name

@@ -319,6 +319,22 @@ defmodule Muro.Check do
     end
   end
 
+  defp whnf(k, book, {:matom, e, p, bs}) do
+    case whnf(k - 1, book, e) do
+      {:ok, {:atom, name}} ->
+        case Enum.find(bs, fn {n, _} -> n == name end) do
+          {_, b} -> whnf(k - 1, book, b)
+          nil -> {:ok, {:matom, {:atom, name}, p, bs}}
+        end
+
+      {:ok, e1} ->
+        {:ok, {:matom, e1, p, bs}}
+
+      err ->
+        err
+    end
+  end
+
   defp whnf(k, book, {:mdata, e, p, bs}) do
     with {:ok, e1} <- whnf(k - 1, book, e) do
       case ctor_spine(book, e1) do
@@ -451,6 +467,7 @@ defmodule Muro.Check do
   end
 
   defp run_ty_n(_book, {:var, _}), do: true
+  defp run_ty_n(_book, :atom), do: true
   defp run_ty_n(_book, :nat), do: true
   defp run_ty_n(_book, :unit), do: true
   defp run_ty_n(_book, :empty), do: true
@@ -854,6 +871,11 @@ defmodule Muro.Check do
   defp has_self?(self, {:nu, f}), do: has_self?(self, f)
   defp has_self?(self, {:bisim, s, t}), do: has_self?(self, s) or has_self?(self, t)
 
+  defp has_self?(self, {:matom, e, p, bs}) do
+    has_self?(self, e) or has_self?(self, p) or
+      Enum.any?(bs, fn {_, b} -> has_self?(self, b) end)
+  end
+
   defp has_self?(self, {:mdata, e, p, bs}) do
     has_self?(self, e) or has_self?(self, p) or
       Enum.any?(bs, fn {_, _, b} -> has_self?(self, b) end)
@@ -887,6 +909,10 @@ defmodule Muro.Check do
   defp occurs?(x, {:letp, e, t}), do: occurs?(x, e) or occurs?(x + 2, t)
   defp occurs?(x, {:nu, f}), do: occurs?(x + 1, f)
   defp occurs?(x, {:bisim, s, t}), do: occurs?(x, s) or occurs?(x, t)
+
+  defp occurs?(x, {:matom, e, p, bs}) do
+    occurs?(x, e) or occurs?(x + 1, p) or Enum.any?(bs, fn {_, b} -> occurs?(x, b) end)
+  end
 
   defp occurs?(x, {:mdata, e, p, bs}) do
     occurs?(x, e) or occurs?(x + 1, p) or
@@ -1066,6 +1092,31 @@ defmodule Muro.Check do
 
       {:spec, :empty} ->
         {:ok, {:typ, u0s(n)}}
+
+      # Atom is a type. A literal is a value of that type.
+      {m, :atom} when m in [:run, :evidence] ->
+        {:error, "no promotion: Atom is an erased term"}
+
+      {:spec, :atom} ->
+        {:ok, {:typ, u0s(n)}}
+
+      {_, {:atom, _name}} ->
+        {:ok, {:atom, u0s(n)}}
+
+      {m, {:matom, e, p, bs}} ->
+        with {:ok, eu} <- check(k, book, rs, gamma, m, e, :atom),
+             :ok <-
+               check_ty(
+                 k,
+                 book,
+                 push_name(ext_rec(rs, false, false), "a"),
+                 ext(gamma, :affine, :atom),
+                 p
+               ),
+             {:ok, bu} <- check_atom_arms(k, book, rs, gamma, m, p, bs),
+             {:ok, uses} <- combine(m, eu, bu) do
+          {:ok, {Subst.inst(p, e), uses}}
+        end
 
       # ⇒-mData
       {m, {:mdata, e, p, bs}} ->
@@ -1657,6 +1708,11 @@ defmodule Muro.Check do
   defp mentions({:toi64, t}, acc), do: mentions(t, acc)
   defp mentions({:packi, x, y}, acc), do: mentions(y, mentions(x, acc))
 
+  defp mentions({:matom, e, p, bs}, acc) do
+    acc = mentions(p, mentions(e, acc))
+    Enum.reduce(bs, acc, fn {_, b}, acc -> mentions(b, acc) end)
+  end
+
   defp mentions({:mdata, e, p, bs}, acc) do
     acc = mentions(p, mentions(e, acc))
     Enum.reduce(bs, acc, fn {_, _, b}, acc -> mentions(b, acc) end)
@@ -1896,6 +1952,27 @@ defmodule Muro.Check do
         {:pi, _, _, _, _} -> {:error, "too few constructor arguments"}
         _ -> with :ok <- conv(k, book, names_of(rs, gamma), r1, expected), do: {:ok, u}
       end
+    end
+  end
+
+  defp check_atom_arms(k, book, rs, gamma, m, p, bs) do
+    wanted = Ast.atoms(book)
+    got = Enum.map(bs, fn {n, _} -> n end)
+
+    cond do
+      dup = Enum.find(got, fn n -> Enum.count(got, &(&1 == n)) > 1 end) ->
+        {:error, "duplicate branch for :#{dup}"}
+
+      missing = Enum.find(wanted, &(&1 not in got)) ->
+        {:error, "missing branch for :#{missing}"}
+
+      true ->
+        Enum.reduce_while(bs, {:ok, u0s(nctx(gamma))}, fn {name, body}, {:ok, acc} ->
+          case check(k, book, rs, gamma, m, body, Subst.inst(p, {:atom, name})) do
+            {:ok, u} -> {:cont, {:ok, combine_alt(m, acc, u)}}
+            err -> {:halt, err}
+          end
+        end)
     end
   end
 
@@ -2210,6 +2287,11 @@ defmodule Muro.Check do
     do: absent?(k, book, dname, s) and absent?(k, book, dname, f)
 
   defp absent_go?(k, book, dname, {:ucons, s}), do: absent?(k, book, dname, s)
+
+  defp absent_go?(k, book, dname, {:matom, e, p, bs}) do
+    absent?(k, book, dname, e) and absent?(k, book, dname, p) and
+      Enum.all?(bs, fn {_, b} -> absent?(k, book, dname, b) end)
+  end
 
   defp absent_go?(_k, _book, dname, {:def, n}), do: n != dname
 

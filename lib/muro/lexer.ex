@@ -65,6 +65,7 @@ defmodule Muro.Lexer do
     "head",
     "tail",
     "refl",
+    "Atom",
     "Nat",
     "I64",
     "F32",

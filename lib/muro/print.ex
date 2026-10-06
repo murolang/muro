@@ -59,6 +59,8 @@ defmodule Muro.Print do
   defp fmt(:unit, _, _), do: "Unit"
   defp fmt(:one, _, _), do: "tt"
   defp fmt(:empty, _, _), do: "Empty"
+  defp fmt(:atom, _, _), do: "Atom"
+  defp fmt({:atom, n}, _, _), do: ":#{n}"
   defp fmt(:rfl, _, _), do: "refl"
   defp fmt(:i64, _, _), do: "I64"
   defp fmt(:f32ty, _, _), do: "F32"
@@ -132,6 +134,15 @@ defmodule Muro.Print do
 
   defp fmt({:munit, e, p, u}, names, _) do
     "match #{fmt(e, names, :none)} motive (λ x → #{fmt(p, ["x" | names], :none)}) | tt => #{fmt(u, names, :none)}"
+  end
+
+  defp fmt({:matom, e, p, bs}, names, _) do
+    branches =
+      Enum.map_join(bs, " ", fn {name, body} ->
+        "| :#{name} => #{fmt(body, names, :none)}"
+      end)
+
+    "match #{fmt(e, names, :none)} motive (λ x → #{fmt(p, ["x" | names], :none)}) #{branches}"
   end
 
   defp fmt({:mdata, e, p, bs}, names, _) do
