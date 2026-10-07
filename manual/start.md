@@ -113,4 +113,4 @@ Identifiers are ASCII: `[A-Za-z_][A-Za-z0-9_-]*`.
 | Add a Muro program | Write a `.muro` file. Check with `mix muro.check path.muro`. Do not change Agda or the Elixir kernel. |
 | Change the type theory | Read [Extending the kernel](extending.md). Agda first. Then the matching Elixir clause. |
 
-Users still only run Mix. Next: [The wall](wall.md).
+Users still only run Mix. Next: [Marks](marks.md).

@@ -1,7 +1,7 @@
 ---
 title: Emit
 slug: emit
-order: 11
+order: 12
 summary: What becomes Elixir. A C backend is a flag. A run stream is a seed and a step. Spec and evidence are omitted.
 ---
 

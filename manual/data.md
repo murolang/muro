@@ -1,7 +1,7 @@
 ---
 title: Data
 slug: data
-order: 6
+order: 7
 summary: Inductive types, positivity, Maybe, List, Tree.
 ---
 

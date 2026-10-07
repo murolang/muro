@@ -1,7 +1,7 @@
 ---
 title: The wall
 slug: wall
-order: 3
+order: 4
 summary: spec, evidence, and run. Promotion is forbidden.
 ---
 
