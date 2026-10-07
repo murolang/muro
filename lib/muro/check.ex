@@ -1804,8 +1804,6 @@ defmodule Muro.Check do
   # is checked so its error is the one reported. A success there is still
   # an error: that member descended on its own index, not on one index for
   # the whole block (Agda: refuseShared).
-  defp refuse_shared(_at, []), do: {:error, @no_descent}
-
   defp refuse_shared(at, [p | _]) do
     case at.(p) do
       {:error, msg} -> {:error, msg}
