@@ -17,7 +17,7 @@ This manual is the language book. It is written for people first. Agents can fol
 
 ## How to read this
 
-If you want to write a program today, start at [Start](start.md), then [The wall](wall.md) and [Terms](language.md).
+If you want to write a program today, start at [Start](start.md), then [Marks](marks.md), [The wall](wall.md) and [Terms](language.md).
 
 If you are an agent (or you are pairing with one), read [For agents](for-agents.md) first. There are two jobs. Do not mix them.
 

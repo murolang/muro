@@ -14,6 +14,10 @@ pages:
     slug: start
     title: Start
     summary: Install, write a .muro file, check it, emit Elixir.
+  - file: marks.md
+    slug: marks
+    title: Marks
+    summary: Π, λ, modes, data, atoms, and streams, one paragraph each.
   - file: wall.md
     slug: wall
     title: The wall

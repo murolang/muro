@@ -1,7 +1,7 @@
 ---
 title: Extending the kernel
 slug: extending
-order: 15
+order: 16
 summary: How to change the type theory. Agda first, then Elixir.
 ---
 

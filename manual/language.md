@@ -1,7 +1,7 @@
 ---
 title: Terms
 slug: language
-order: 4
+order: 5
 summary: Type, Π, λ, match, quantities, and the book.
 ---
 

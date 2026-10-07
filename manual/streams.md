@@ -1,7 +1,7 @@
 ---
 title: Streams
 slug: streams
-order: 8
+order: 9
 summary: ν, unfold, Always, and bisimulation.
 ---
 
