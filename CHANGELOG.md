@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.3
+
+A mutual block is one descent. `ping` descending on its first argument and `pong` on its second was accepted, and that acceptance is a proof of `{suc 0 ≡ 0 : Nat}`, then of `Empty`. The block is refused unless one shared argument works for every member. `even` and `odd` still share their `Nat`. Agda `pickPos` had the same fallback; both checkers refuse the block.
+
+### Checker
+
+- `Muro.Check` and `agda/Muro/Check.agda`. When no shared index works for a block of two or more, a member that would pass on its own index is still an error.
+
+### Manual
+
+- `examples/bad_shared.muro`, in `examples.md`. `examples/even_odd.muro` is the mutual recursion that checks.
+
+### Package
+
+- Version 0.16.3.
+
 ## 0.16.2
 
 `Pi` and `lam` are keywords only at a word boundary. `Pickle` and `lambda` are names. `Pi (x : Nat) → Nat` and `lam (x : Nat) → x` still parse as a pi and a lambda.

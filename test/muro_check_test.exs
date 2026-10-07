@@ -1146,6 +1146,25 @@ defmodule Muro.CheckTest do
     assert msg =~ "applied" or msg =~ "descend"
   end
 
+  test "a mutual block with no shared descent position is refused" do
+    src = """
+    def ping : evidence Π (n : Nat) → Π (m : Nat) → {n ≡ 0 : Nat} :=
+      λ (n : Nat) → λ (m : Nat) →
+        match n motive (λ k → {k ≡ 0 : Nat}) | 0 => refl | suc p => pong p suc(p)
+    def pong : evidence Π (n : Nat) → Π (m : Nat) → {m ≡ 0 : Nat} :=
+      λ (n : Nat) → λ (m : Nat) →
+        match m motive (λ k → {k ≡ 0 : Nat}) | 0 => refl | suc q => ping suc(q) q
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "descend"
+
+    assert {:error, msg} = Muro.check_file("examples/bad_shared.muro")
+    assert msg =~ "descend"
+    assert Muro.check_file("examples/even_odd.muro") == :ok
+  end
+
   test "mutual evidence of an absurd equation is refused" do
     src = """
     def ping : evidence Π (n : Nat) → {n ≡ suc(n) : Nat} :=

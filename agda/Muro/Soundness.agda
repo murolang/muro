@@ -50,7 +50,8 @@ open import Muro.Check
          checkLam; checkBr; checkBrPi; checkBranches; checkMotive; firstMotLam; nparamsOf;
          clashes; RecSt; extRec; lamRec; scrutOk; checkRec; selfApplied;
          infer′; floatIdOk;
-         isDType; checkDef; checkBody; checkBodyAt; retryBody; checkAt; argPositions; pickPos; checkDefs; checkDatas; checkSig; emptyRec; defRec)
+         isDType; checkDef; checkBody; checkBodyAt; retryBody; checkAt; argPositions; pickPos; checkDefs; checkDatas; checkSig; emptyRec; defRec;
+         recMode; mutual?; component; sharedArgs)
 open import Muro.Judgement
 open import Muro.Wall using (spec-⇒-uses)
 open import Muro.Typing using (typ-ext-suc; ≈-≡)
@@ -1009,7 +1010,16 @@ retryBody-sound k σ i d msg (p ∷ ps) eq | fail _ = retryBody-sound k σ i d m
 
 checkBodyAt-sound : ∀ k σ i d ps {u} → checkBodyAt k σ i d ps ≡ ok u
   → ∃ λ rs → check k σ rs Vec.[] (Def.dmode d) (Def.dbody d) (Def.dtype d) ≡ ok u
-checkBodyAt-sound k σ i d [] eq = defRec σ i 0 , eq
+-- An empty position list checks at index 0, except a mutual block that
+-- has candidates and no shared index: that path is fail, so it never
+-- arrives here with ok.
+checkBodyAt-sound k σ i d [] eq with sharedArgs σ (component σ i)
+... | [] = defRec σ i 0 , eq
+... | p ∷ _ with recMode (Def.dmode d) ∧ mutual? (component σ i)
+... | false = defRec σ i 0 , eq
+... | true with checkAt k σ i d p
+... | fail _ = ⊥-elim (fail≢ok eq)
+... | ok _   = ⊥-elim (fail≢ok eq)
 checkBodyAt-sound k σ i d (p ∷ ps) eq with checkAt k σ i d p in peq
 ... | ok u with ok-inj eq
 ...   | refl = defRec σ i p , peq
