@@ -404,7 +404,7 @@ defmodule Muro.Emit.C do
 
   defp emit({:lam, _, _, _, _}, _env, _book, _st, _expect), do: {:error, "c:lambda"}
 
-  defp emit({:atom, name}, _env, _book, st, _expect), do: {:ok, {"", atom_c(name), st}}
+  defp emit({:atom, name}, _env, book, st, _expect), do: {:ok, {"", atom_c(name, book), st}}
 
   defp emit({:matom, e, _x, _p, bs}, env, book, st, expect) do
     with {:ok, {pre, scrut, st}} <- emit(e, env, book, st, "muro_atom ") do
@@ -622,7 +622,7 @@ defmodule Muro.Emit.C do
         {:ok, {bpre, bex, st}} ->
           text =
             squash([
-              "case #{atom_c(name)}: {",
+              "case #{atom_c(name, book)}: {",
               bpre,
               "#{tname} = #{bex};",
               "break;",
@@ -959,7 +959,7 @@ defmodule Muro.Emit.C do
         ""
 
       names ->
-        consts = Enum.map_join(names, ",\n  ", &atom_c/1)
+        consts = Enum.map_join(names, ",\n  ", &atom_c(&1, book))
 
         """
         typedef enum {
@@ -970,8 +970,20 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp atom_c(name) do
-    "MURO_" <> (name |> safe() |> String.upcase())
+  # First spelling in the file keeps MURO_ASC. A later spelling that
+  # sanitizes to the same identifier is bumped, as other C names are.
+  defp atom_c(name, book) do
+    Map.fetch!(atom_names(book), name)
+  end
+
+  defp atom_names(book) do
+    {map, _used} =
+      Enum.reduce(Ast.atoms(book), {%{}, MapSet.new()}, fn name, {map, used} ->
+        {c, used} = fresh("MURO_" <> (name |> safe() |> String.upcase()), used)
+        {Map.put(map, name, c), used}
+      end)
+
+    map
   end
 
   defp nat_struct do

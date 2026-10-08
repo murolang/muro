@@ -214,6 +214,40 @@ defmodule Muro.EmitCTest do
     cc!(dir, "list.c", "list.o")
   end
 
+  test "atom spellings that sanitize together get distinct enumerators" do
+    dir = tmp_dir()
+    path = Path.join(dir, "atoms.muro")
+
+    File.write!(path, """
+    def pick : run Π (a : Atom) → Nat :=
+      λ (a : Atom) →
+        match a motive (λ _ → Nat)
+          | :A => 0
+          | :a => suc 0
+          | :a-b => 0
+          | :a_b => suc 0
+          | :a' => 0
+          | :a_ => suc 0
+          | :asc => 0
+    """)
+
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+    header = File.read!(Path.join(dir, "atoms.h"))
+    source = File.read!(Path.join(dir, "atoms.c"))
+    assert header =~ "MURO_A,"
+    assert header =~ "MURO_A_2"
+    assert header =~ "MURO_A_B,"
+    assert header =~ "MURO_A_B_2"
+    assert header =~ "MURO_A_,"
+    assert header =~ "MURO_A__2"
+    assert header =~ "MURO_ASC"
+    refute header =~ "MURO_ASC_2"
+    assert source =~ "case MURO_A:"
+    assert source =~ "case MURO_A_2:"
+    assert source =~ "case MURO_ASC:"
+    cc!(dir, "atoms.c", "atoms.o")
+  end
+
   defp tmp_dir do
     dir = Path.join(System.tmp_dir!(), "muro_c_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)

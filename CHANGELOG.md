@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.8
+
+Distinct atom spellings stay distinct in C. `:A` and `:a` both became `MURO_A`, and `cc` rejected the repeated enumerator. The checker and Elixir already kept them apart. The first spelling in the file keeps its enumerator. Each later spelling that sanitizes to the same identifier is bumped, the way other C names are. `:asc` stays `MURO_ASC`.
+
+### Emit
+
+- `Muro.Emit.C`. Atom enumerators are unique after sanitizing case, `-`, and `'`.
+
+### Manual
+
+- Terms: a colliding atom spelling gets a numeric suffix.
+
+### Package
+
+- Version 0.16.8.
+
 ## 0.16.7
 
 A lambda applied on the spot emits to C. `(λ (m : Nat) → suc m) n` checked, and Elixir emitted it, and the C backend refused it with `c:lambda`. The argument is evaluated once into a local and the body uses that local. An erased binder drops the argument. A chain of lambdas peels one binder at a time. An unapplied lambda, and a call of a local function, are still `c:lambda`.
