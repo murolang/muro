@@ -1749,27 +1749,34 @@ findPos _ _ _ []       = nothing
 findPos k σ blk (p ∷ ps) =
   if allOk k σ blk p then just p else findPos k σ blk ps
 
+-- Two or more members. A single definition keeps its own candidates.
+mutual? : List ℕ → Bool
+mutual? (_ ∷ _ ∷ _) = true
+mutual? _            = false
+
 -- The position the whole block descends on, as a singleton, when one
--- shared index works for every member. Otherwise the shared candidates,
--- so the first failure is the one reported. Spec keeps its own
--- positions: descent is not checked there.
+-- shared index works for every member. A block of two or more members
+-- with no such index is empty here: handing back the candidates would
+-- let each member pass on its own index. A single member keeps the
+-- candidates, so the first failure is the one reported. Spec keeps its
+-- own positions: descent is not checked there.
 pickPos : ℕ → Sig → ℕ → Def → List ℕ
 pickPos k σ i d =
   if recMode (Def.dmode d)
-  then choose (sharedArgs σ (component σ i))
+  then choose (component σ i) (sharedArgs σ (component σ i))
   else argPositions 0 (Def.dtype d)
   where
-    choose : List ℕ → List ℕ
-    choose ps with findPos k σ (component σ i) ps
-    ... | nothing = ps
+    choose : List ℕ → List ℕ → List ℕ
+    choose blk ps with findPos k σ blk ps
     ... | just p  = p ∷ []
+    ... | nothing = if mutual? blk then [] else ps
 
 -- The body is checked descending on the first shared non-erased
--- argument that works for the whole block; if that fails, on each
--- later one. A definition with no self-call passes the first attempt.
--- When every attempt fails, the first attempt's error is reported: the
--- position only affects the descent check, so a type error is the same
--- for every position.
+-- argument that works for the whole block. A single definition keeps
+-- its later candidates, and the first failure is the one reported. A
+-- block of two or more with no such argument is refused. A definition
+-- with no self-call passes the first attempt. The position only affects
+-- the descent check, so a type error is the same for every position.
 checkAt : ℕ → Sig → ℕ → Def → ℕ → Result (UseVec 0)
 checkAt k σ i d p = check k σ (defRec σ i p) [] (Def.dmode d) (Def.dbody d) (Def.dtype d)
 
@@ -1780,8 +1787,24 @@ retryBody k σ i d msg (p ∷ ps) =
     (ok u)   → ok u
     (fail _) → retryBody k σ i d msg ps
 
+-- No shared index works for a block of two or more. The first candidate
+-- is checked so its error is the one reported. A success there is still
+-- noDescent: that member descended on its own index, not on one index
+-- for the whole block.
+refuseShared : ℕ → Sig → ℕ → Def → List ℕ → Result (UseVec 0)
+refuseShared _ _ _ _ [] = fail noDescent
+refuseShared k σ i d (p ∷ _) =
+  case checkAt k σ i d p of λ where
+    (fail msg) → fail msg
+    (ok _)     → fail noDescent
+
 checkBodyAt : ℕ → Sig → ℕ → Def → List ℕ → Result (UseVec 0)
-checkBodyAt k σ i d []       = checkAt k σ i d 0
+checkBodyAt k σ i d [] with sharedArgs σ (component σ i)
+... | [] = checkAt k σ i d 0
+... | ps@(_ ∷ _) =
+  if recMode (Def.dmode d) ∧ mutual? (component σ i)
+  then refuseShared k σ i d ps
+  else checkAt k σ i d 0
 checkBodyAt k σ i d (p ∷ ps) =
   case checkAt k σ i d p of λ where
     (ok u)     → ok u

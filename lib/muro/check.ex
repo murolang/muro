@@ -1791,36 +1791,58 @@ defmodule Muro.Check do
     if all_ok?(k, book, block, p), do: p, else: find_pos(k, book, block, ps)
   end
 
+  defp mutual_block?(block), do: MapSet.size(block) > 1
+
   defp choose_positions(k, book, block, ps) do
     case find_pos(k, book, block, ps) do
-      nil -> ps
+      nil -> if mutual_block?(block), do: [], else: ps
       p -> [p]
     end
   end
 
+  # No shared index works for a block of two or more. The first candidate
+  # is checked so its error is the one reported. A success there is still
+  # an error: that member descended on its own index, not on one index for
+  # the whole block (Agda: refuseShared).
+  defp refuse_shared(at, [p | _]) do
+    case at.(p) do
+      {:error, msg} -> {:error, msg}
+      {:ok, _} -> {:error, @no_descent}
+    end
+  end
+
   # The body is checked descending on the first shared non-erased argument
-  # that works for the whole block; if that fails, on each later one. A
-  # definition with no self-call passes the first attempt. When every attempt
-  # fails, the first attempt's error is reported: the position only affects
-  # the descent check, so a type error is the same for every position
+  # that works for the whole block. A single definition keeps its later
+  # candidates, and the first failure is the one reported. A block of two
+  # or more with no such argument is refused. A definition with no
+  # self-call passes the first attempt. The position only affects the
+  # descent check, so a type error is the same for every position
   # (Agda: checkBody). Spec keeps its own positions.
   defp check_body(k, book, %{name: name, mode: mode, type: ty, body: body}) do
+    block = if(rec_mode?(mode), do: component(book, name), else: MapSet.new([name]))
+
+    shared =
+      if rec_mode?(mode), do: shared_positions(book, block), else: arg_positions(ty, 0)
+
     positions =
       if rec_mode?(mode) do
-        block = component(book, name)
-        choose_positions(k, book, block, shared_positions(book, block))
+        choose_positions(k, book, block, shared)
       else
-        arg_positions(ty, 0)
+        shared
       end
 
-    block = if(rec_mode?(mode), do: component(book, name), else: MapSet.new([name]))
     at = fn p -> check(k, book, def_rec(name, p, block), [], mode, body, ty) end
 
-    case positions do
-      [] ->
+    cond do
+      rec_mode?(mode) and mutual_block?(block) and shared != [] and positions == [] ->
+        refuse_shared(at, shared)
+
+      positions == [] ->
         at.(0)
 
-      [p | ps] ->
+      true ->
+        [p | ps] = positions
+
         case at.(p) do
           {:ok, u} -> {:ok, u}
           {:error, msg} -> retry_body(at, msg, ps)

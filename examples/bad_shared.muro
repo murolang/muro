@@ -1,0 +1,12 @@
+-- bad_shared.muro — ping descends on its first argument, pong on its second.
+-- No index works for both, so the block is refused. Accepting it proves
+-- {suc 0 ≡ 0 : Nat}. even_odd.muro is the mutual recursion that checks.
+def ping : evidence Π (n : Nat) → Π (m : Nat) → {n ≡ 0 : Nat} :=
+  λ (n : Nat) → λ (m : Nat) →
+    match n motive (λ k → {k ≡ 0 : Nat}) | 0 => refl | suc p => pong p suc(p)
+
+def pong : evidence Π (n : Nat) → Π (m : Nat) → {m ≡ 0 : Nat} :=
+  λ (n : Nat) → λ (m : Nat) →
+    match m motive (λ k → {k ≡ 0 : Nat}) | 0 => refl | suc q => ping suc(q) q
+
+def one-is-zero : evidence {suc 0 ≡ 0 : Nat} := ping suc(0) 0
