@@ -2243,24 +2243,36 @@ defmodule Muro.Check do
   # or D is the head of a spine whose arguments do not contain D, or D
   # occurs only to the right of a Π whose domain does not contain D.
   # A product is positive on both sides. D inside an argument of D is
-  # refused. A field that does not reduce in the fuel is refused
-  # (Agda: posField).
-  defp field_pos?(0, _book, _dname, _t), do: false
+  # refused. Another data type is not opaque: its parameters are
+  # instantiated and every field is held to the same test, so D stored
+  # there and placed in a domain is refused. A type already on `seen`
+  # is the inductive occurrence. A field that does not reduce in the
+  # fuel is refused (Agda: posField).
+  defp field_pos?(k, book, dname, t), do: field_pos?(k, book, dname, t, MapSet.new())
 
-  defp field_pos?(k, book, dname, t) do
+  defp field_pos?(0, _book, _dname, _t, _seen), do: false
+
+  defp field_pos?(k, book, dname, t, seen) do
     case whnf(k, book, t) do
       {:ok, {:pi, _, a, _, b}} ->
-        absent?(k, book, dname, a) and field_pos?(k - 1, book, dname, b)
+        absent?(k, book, dname, a, seen) and field_pos?(k - 1, book, dname, b, seen)
 
       {:ok, {:prod, a, b}} ->
-        field_pos?(k - 1, book, dname, a) and field_pos?(k - 1, book, dname, b)
+        field_pos?(k - 1, book, dname, a, seen) and field_pos?(k - 1, book, dname, b, seen)
 
       {:ok, t1} ->
-        if is_d_type?(book, dname, t1) do
-          {_h, args} = apps(t1)
-          Enum.all?(args, &absent?(k, book, dname, &1))
-        else
-          absent_go?(k - 1, book, dname, t1)
+        {head, args} = apps(t1)
+
+        cond do
+          is_d_type?(book, dname, t1) ->
+            Enum.all?(args, &absent?(k, book, dname, &1, seen))
+
+          match?({:def, _}, head) and data_name?(book, elem(head, 1)) ->
+            Enum.all?(args, &absent?(k, book, dname, &1, seen)) and
+              pos_data?(k - 1, book, dname, seen, elem(head, 1), args)
+
+          true ->
+            absent_go?(k - 1, book, dname, t1, seen)
         end
 
       _ ->
@@ -2268,102 +2280,167 @@ defmodule Muro.Check do
     end
   end
 
-  defp absent?(0, _book, _dname, _t), do: false
+  # j already on the stack is an inductive occurrence, not a fresh copy of D.
+  defp pos_data?(0, _book, _dname, _seen, _j, _args), do: false
 
-  defp absent?(k, book, dname, t) do
+  defp pos_data?(k, book, dname, seen, j, args) do
+    if MapSet.member?(seen, j) do
+      true
+    else
+      case lookup_data(book, j) do
+        {:ok, d} ->
+          seen = MapSet.put(seen, j)
+          params = Enum.take(args, length(d.params))
+
+          Enum.all?(d.ctors, fn c ->
+            case inst_params(k, book, c.type, params) do
+              {:ok, rest} -> pos_tel?(k, book, dname, seen, rest)
+              _ -> false
+            end
+          end)
+
+        _ ->
+          false
+      end
+    end
+  end
+
+  defp pos_tel?(k, book, dname, seen, {:pi, _, a, _, b}),
+    do: field_pos?(k, book, dname, a, seen) and pos_tel?(k, book, dname, seen, b)
+
+  defp pos_tel?(_k, _book, _dname, _seen, _), do: true
+
+  defp absent?(0, _book, _dname, _t, _seen), do: false
+
+  defp absent?(k, book, dname, t, seen) do
     case whnf(k, book, t) do
-      {:ok, t1} -> absent_go?(k - 1, book, dname, t1)
+      {:ok, t1} -> absent_go?(k - 1, book, dname, t1, seen)
       _ -> false
     end
   end
 
-  defp absent_go?(k, book, dname, {:pi, _, a, _, b}),
-    do: absent?(k, book, dname, a) and absent?(k, book, dname, b)
+  defp absent_go?(k, book, dname, {:pi, _, a, _, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
 
-  defp absent_go?(k, book, dname, {:prod, a, b}),
-    do: absent?(k, book, dname, a) and absent?(k, book, dname, b)
+  defp absent_go?(k, book, dname, {:prod, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
 
-  defp absent_go?(k, book, dname, {:lam, _, a, _, t}),
-    do: absent?(k, book, dname, a) and absent?(k, book, dname, t)
+  defp absent_go?(k, book, dname, {:lam, _, a, _, t}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, t, seen)
 
-  defp absent_go?(k, book, dname, {:app, f, a}),
-    do: absent?(k, book, dname, f) and absent?(k, book, dname, a)
+  defp absent_go?(k, book, dname, {:app, f, a}, seen),
+    do: absent?(k, book, dname, f, seen) and absent?(k, book, dname, a, seen)
 
-  defp absent_go?(k, book, dname, {:pair, a, b}),
-    do: absent?(k, book, dname, a) and absent?(k, book, dname, b)
+  defp absent_go?(k, book, dname, {:pair, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
 
-  defp absent_go?(k, book, dname, {:idt, a, x, y}),
-    do: absent?(k, book, dname, a) and absent?(k, book, dname, x) and absent?(k, book, dname, y)
+  defp absent_go?(k, book, dname, {:idt, a, x, y}, seen),
+    do:
+      absent?(k, book, dname, a, seen) and absent?(k, book, dname, x, seen) and
+        absent?(k, book, dname, y, seen)
 
-  defp absent_go?(k, book, dname, {:ann, e, a}),
-    do: absent?(k, book, dname, e) and absent?(k, book, dname, a)
+  defp absent_go?(k, book, dname, {:ann, e, a}, seen),
+    do: absent?(k, book, dname, e, seen) and absent?(k, book, dname, a, seen)
 
-  defp absent_go?(k, book, dname, {:su, t}), do: absent?(k, book, dname, t)
+  defp absent_go?(k, book, dname, {:su, t}, seen), do: absent?(k, book, dname, t, seen)
 
-  defp absent_go?(k, book, dname, {:letp, e, t}),
-    do: absent?(k, book, dname, e) and absent?(k, book, dname, t)
+  defp absent_go?(k, book, dname, {:letp, e, t}, seen),
+    do: absent?(k, book, dname, e, seen) and absent?(k, book, dname, t, seen)
 
-  defp absent_go?(k, book, dname, {:nu, f}), do: absent?(k, book, dname, f)
+  defp absent_go?(k, book, dname, {:nu, f}, seen), do: absent?(k, book, dname, f, seen)
 
-  defp absent_go?(k, book, dname, {:unf, s, f}),
-    do: absent?(k, book, dname, s) and absent?(k, book, dname, f)
+  defp absent_go?(k, book, dname, {:unf, s, f}, seen),
+    do: absent?(k, book, dname, s, seen) and absent?(k, book, dname, f, seen)
 
-  defp absent_go?(k, book, dname, {:ucons, s}), do: absent?(k, book, dname, s)
+  defp absent_go?(k, book, dname, {:ucons, s}, seen), do: absent?(k, book, dname, s, seen)
 
-  defp absent_go?(k, book, dname, {:matom, e, p, bs}) do
-    absent?(k, book, dname, e) and absent?(k, book, dname, p) and
-      Enum.all?(bs, fn {_, b} -> absent?(k, book, dname, b) end)
+  defp absent_go?(k, book, dname, {:matom, e, p, bs}, seen) do
+    absent?(k, book, dname, e, seen) and absent?(k, book, dname, p, seen) and
+      Enum.all?(bs, fn {_, b} -> absent?(k, book, dname, b, seen) end)
   end
 
   # A stuck match still has subterms. Absent only when every one is
   # (Agda: absentGo on mNat, mData, mEmp, mUnit, rwt).
-  defp absent_go?(k, book, dname, {:mnat, e, p, z, s}),
+  defp absent_go?(k, book, dname, {:mnat, e, p, z, s}, seen),
     do:
-      absent?(k, book, dname, e) and absent?(k, book, dname, p) and
-        absent?(k, book, dname, z) and absent?(k, book, dname, s)
+      absent?(k, book, dname, e, seen) and absent?(k, book, dname, p, seen) and
+        absent?(k, book, dname, z, seen) and absent?(k, book, dname, s, seen)
 
-  defp absent_go?(k, book, dname, {:mdata, e, p, bs}) do
-    absent?(k, book, dname, e) and absent?(k, book, dname, p) and
-      Enum.all?(bs, fn {_, _, b} -> absent?(k, book, dname, b) end)
+  defp absent_go?(k, book, dname, {:mdata, e, p, bs}, seen) do
+    absent?(k, book, dname, e, seen) and absent?(k, book, dname, p, seen) and
+      Enum.all?(bs, fn {_, _, b} -> absent?(k, book, dname, b, seen) end)
   end
 
-  defp absent_go?(k, book, dname, {:memp, e, p}),
-    do: absent?(k, book, dname, e) and absent?(k, book, dname, p)
+  defp absent_go?(k, book, dname, {:memp, e, p}, seen),
+    do: absent?(k, book, dname, e, seen) and absent?(k, book, dname, p, seen)
 
-  defp absent_go?(k, book, dname, {:munit, e, p, u}),
+  defp absent_go?(k, book, dname, {:munit, e, p, u}, seen),
     do:
-      absent?(k, book, dname, e) and absent?(k, book, dname, p) and
-        absent?(k, book, dname, u)
+      absent?(k, book, dname, e, seen) and absent?(k, book, dname, p, seen) and
+        absent?(k, book, dname, u, seen)
 
-  defp absent_go?(k, book, dname, {:rwt, e, p, t}),
+  defp absent_go?(k, book, dname, {:rwt, e, p, t}, seen),
     do:
-      absent?(k, book, dname, e) and absent?(k, book, dname, p) and
-        absent?(k, book, dname, t)
+      absent?(k, book, dname, e, seen) and absent?(k, book, dname, p, seen) and
+        absent?(k, book, dname, t, seen)
 
-  defp absent_go?(k, book, dname, {:tensor, d, s}),
-    do: absent?(k, book, dname, d) and absent?(k, book, dname, s)
+  defp absent_go?(k, book, dname, {:tensor, d, s}, seen),
+    do: absent?(k, book, dname, d, seen) and absent?(k, book, dname, s, seen)
 
-  defp absent_go?(k, book, dname, {:addi, a, b}),
-    do: absent?(k, book, dname, a) and absent?(k, book, dname, b)
+  defp absent_go?(k, book, dname, {:addi, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
 
-  defp absent_go?(k, book, dname, {:muli, a, b}),
-    do: absent?(k, book, dname, a) and absent?(k, book, dname, b)
+  defp absent_go?(k, book, dname, {:muli, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
 
-  defp absent_go?(k, book, dname, {:addt, t, u}),
-    do: absent?(k, book, dname, t) and absent?(k, book, dname, u)
+  defp absent_go?(k, book, dname, {:addt, t, u}, seen),
+    do: absent?(k, book, dname, t, seen) and absent?(k, book, dname, u, seen)
 
-  defp absent_go?(k, book, dname, {:toi64, t}), do: absent?(k, book, dname, t)
+  defp absent_go?(k, book, dname, {:toi64, t}, seen), do: absent?(k, book, dname, t, seen)
 
-  defp absent_go?(k, book, dname, {:packi, a, b}),
-    do: absent?(k, book, dname, a) and absent?(k, book, dname, b)
+  defp absent_go?(k, book, dname, {:packi, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
 
-  defp absent_go?(k, book, dname, {:bisim, s, t}),
-    do: absent?(k, book, dname, s) and absent?(k, book, dname, t)
+  defp absent_go?(k, book, dname, {:bisim, s, t}, seen),
+    do: absent?(k, book, dname, s, seen) and absent?(k, book, dname, t, seen)
 
-  defp absent_go?(_k, _book, dname, {:def, n}), do: n != dname
+  defp absent_go?(k, book, dname, {:def, n}, seen) do
+    cond do
+      n == dname -> false
+      not data_name?(book, n) -> true
+      MapSet.member?(seen, n) -> true
+      true -> absent_decl?(k, book, dname, MapSet.put(seen, n), n)
+    end
+  end
 
   # No subterms: a variable, a sort, a literal, a hole.
-  defp absent_go?(_k, _book, _dname, _), do: true
+  defp absent_go?(_k, _book, _dname, _, _seen), do: true
+
+  defp absent_decl?(k, book, dname, seen, j) do
+    case lookup_data(book, j) do
+      {:ok, d} ->
+        np = length(d.params)
+
+        Enum.all?(d.ctors, fn c ->
+          case drop_pis(np, c.type) do
+            {:ok, rest} -> absent_tel?(k, book, dname, seen, rest)
+            _ -> false
+          end
+        end)
+
+      _ ->
+        false
+    end
+  end
+
+  defp drop_pis(0, t), do: {:ok, t}
+  defp drop_pis(n, {:pi, _, _, _, b}) when n > 0, do: drop_pis(n - 1, b)
+  defp drop_pis(_, _), do: :error
+
+  defp absent_tel?(k, book, dname, seen, {:pi, _, a, _, b}),
+    do: absent?(k, book, dname, a, seen) and absent_tel?(k, book, dname, seen, b)
+
+  defp absent_tel?(_k, _book, _dname, _seen, _), do: true
 
   defp check_tel_pos(0, _book, _dname, _np, _ni, _t), do: {:error, @out_of_fuel}
 

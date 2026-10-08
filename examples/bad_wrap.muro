@@ -1,0 +1,6 @@
+-- bad_wrap.muro — Bad is stored in Wrap, and Wrap sits in a domain.
+-- Each data type is strictly positive alone. mix muro.check refuses the pair.
+data Bad : Type where
+  bad : (Wrap → Empty) → Bad
+data Wrap : Type where
+  wrap : Bad → Wrap
