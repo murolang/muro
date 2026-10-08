@@ -120,6 +120,10 @@ Uses `sym`, `cong`, and `pred` from the prelude and defines none of them. `befor
 
 Two data types are both named `Foo`. `foo` builds the first at `0` and `bar` builds the second at `suc(0)`. One name for both types lets a match skip the branch it should check.
 
+### bad_wrap.muro
+
+`bad` takes `Wrap → Empty`, and `wrap` stores a `Bad`. Each declaration is strictly positive on its own. Together the negative occurrence is `Bad` inside `Wrap`, placed in a domain.
+
 ### cycle_empty.muro
 
 `impossible` calls `helper` and `helper` calls `impossible`. Both inhabit `Empty`. Neither calls itself. The failure is the cycle, not a missing name.

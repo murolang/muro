@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.6
+
+A field that mentions another data type is strictly positive only when that type's fields are. `Bad` with a field `Wrap → Empty`, and `Wrap` with a field `Bad`, each checked as positive on its own, and together they are a proof of `Empty`. The checker instantiates the other type's parameters and holds every field to the same test. `Tree` and `Forest`, each storing the other as a field, still check. Agda `absentGo` treated the other data type as opaque; both checkers now open it.
+
+### Checker
+
+- `Muro.Check` and `agda/Muro/Check.agda`. Positivity and absence descend into another data type's constructor fields. A type already being unfolded is the inductive occurrence.
+
+### Manual
+
+- `examples/bad_wrap.muro`, in `examples.md`. Data and limits: the other data type is not opaque.
+
+### Package
+
+- Version 0.16.6.
+
 ## 0.16.5
 
 A name is one declaration. Two data types both named `Foo`, a definition with a constructor's name, and two definitions both named `x` were accepted. The first is a proof of `{suc 0 ≡ 0 : Nat}`, then of `Empty`: the match looks up one `Foo` and a constructor of the other, skips the branch, and never checks it. Definitions, data types, and constructors are one set of names. Agda refers to each by index, so the collision cannot be written there.

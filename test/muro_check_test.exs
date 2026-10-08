@@ -1113,6 +1113,45 @@ defmodule Muro.CheckTest do
     assert Check.check_sig(book) == :ok
   end
 
+  test "a negative occurrence through a second data type is refused" do
+    src = """
+    data Bad : Type where
+      bad : (Wrap → Empty) → Bad
+    data Wrap : Type where
+      wrap : Bad → Wrap
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "strictly positive"
+  end
+
+  test "a negative occurrence through a second data type is refused in either order" do
+    src = """
+    data Wrap : Type where
+      wrap : Bad → Wrap
+    data Bad : Type where
+      bad : (Wrap → Empty) → Bad
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "strictly positive"
+  end
+
+  test "two data types that store each other in a field still check" do
+    src = """
+    data Tree : Type where
+      node : Forest → Tree
+    data Forest : Type where
+      nil : Forest
+      cons : Tree → Forest → Forest
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
   test "a data type inside its own argument is refused" do
     src = """
     data T (A : Type) (B : Type) : Type where
@@ -1323,6 +1362,15 @@ defmodule Muro.CheckTest do
 
     assert_raise Mix.Error, ~r/recursive definition must be applied to its arguments/, fn ->
       Mix.Tasks.Muro.Check.run(["examples/cycle_empty.muro"])
+    end
+  end
+
+  test "mix muro.check refuses a negative field through another data type" do
+    assert {:error, msg} = Muro.check_file("examples/bad_wrap.muro")
+    assert msg =~ "constructor is not strictly positive"
+
+    assert_raise Mix.Error, ~r/constructor is not strictly positive/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/bad_wrap.muro"])
     end
   end
 

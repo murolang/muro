@@ -837,74 +837,6 @@ mutual
   occursDList _ []       = false
   occursDList i (t ∷ ts) = occursD i t ∨ occursDList i ts
 
--- A field is strictly positive in data type i when, after unfolding,
--- i is absent, or i is the head of a spine whose arguments do not
--- contain i, or i occurs only to the right of a Π whose domain does
--- not contain i. A product is positive on both sides. i inside an
--- argument of i is refused (no nested inductives). Fuel exhaustion is
--- refusal: a field that does not reduce is not accepted. checkData
--- sits outside ⊢; this restores the invariant ⊢ relies on.
-mutual
-  absentD : ∀ {n} → ℕ → Sig → ℕ → Tm n → Bool
-  absentD zero _ _ _ = false
-  absentD (suc k) σ i t = absentWhnf k σ i (whnf (suc k) σ t)
-
-  absentWhnf : ∀ {n} → ℕ → Sig → ℕ → Result (Tm n) → Bool
-  absentWhnf k σ i (ok t)  = absentGo k σ i t
-  absentWhnf _ _ _ (fail _) = false
-
-  absentGo : ∀ {n} → ℕ → Sig → ℕ → Tm n → Bool
-  absentGo k σ i (pi _ A B)     = absentD k σ i A ∧ absentD k σ i B
-  absentGo k σ i (prod A B)     = absentD k σ i A ∧ absentD k σ i B
-  absentGo k σ i (lam _ A t)    = absentD k σ i A ∧ absentD k σ i t
-  absentGo k σ i (app f a)      = absentD k σ i f ∧ absentD k σ i a
-  absentGo k σ i (pair a b)     = absentD k σ i a ∧ absentD k σ i b
-  absentGo k σ i (idt A a b)    = absentD k σ i A ∧ absentD k σ i a ∧ absentD k σ i b
-  absentGo k σ i (ann e A)      = absentD k σ i e ∧ absentD k σ i A
-  absentGo k σ i (su t)         = absentD k σ i t
-  absentGo k σ i (letp e t)     = absentD k σ i e ∧ absentD k σ i t
-  absentGo k σ i (nu F)         = absentD k σ i F
-  absentGo k σ i (unf s f)      = absentD k σ i s ∧ absentD k σ i f
-  absentGo k σ i (ucons s)      = absentD k σ i s
-  absentGo k σ i (mNat e P z s) = absentD k σ i e ∧ absentD k σ i P ∧ absentD k σ i z ∧ absentD k σ i s
-  absentGo k σ i (mEmp e P)     = absentD k σ i e ∧ absentD k σ i P
-  absentGo k σ i (mUnit e P u)  = absentD k σ i e ∧ absentD k σ i P ∧ absentD k σ i u
-  absentGo k σ i (rwt e P t)    = absentD k σ i e ∧ absentD k σ i P ∧ absentD k σ i t
-  absentGo k σ i (tensor d s)   = absentD k σ i d ∧ absentD k σ i s
-  absentGo k σ i (addi a b)     = absentD k σ i a ∧ absentD k σ i b
-  absentGo k σ i (muli a b)     = absentD k σ i a ∧ absentD k σ i b
-  absentGo k σ i (addt t u)     = absentD k σ i t ∧ absentD k σ i u
-  absentGo k σ i (toi64 t)      = absentD k σ i t
-  absentGo k σ i (packi a b)    = absentD k σ i a ∧ absentD k σ i b
-  absentGo k σ i (mData e P bs) = absentD k σ i e ∧ absentD k σ i P ∧ absentDList k σ i bs
-  absentGo k σ i (dty j)        = not (i ≡ᵇ j)
-  absentGo _ _ _ _              = true
-
-  absentDList : ∀ {n} → ℕ → Sig → ℕ → List (Tm n) → Bool
-  absentDList _ _ _ []       = true
-  absentDList k σ i (t ∷ ts) = absentD k σ i t ∧ absentDList k σ i ts
-
-allAbsent : ∀ {n} → ℕ → Sig → ℕ → List (Tm n) → Bool
-allAbsent _ _ _ []       = true
-allAbsent k σ i (a ∷ as) = absentD k σ i a ∧ allAbsent k σ i as
-
--- Split out of posWhnf so the spine test is not a with-abstraction.
-posSpine : ∀ {n} → ℕ → Sig → ℕ → Tm n → Maybe (ℕ × List (Tm n)) → Bool
-posSpine k σ i t (just (j , args)) =
-  if i ≡ᵇ j then allAbsent (suc k) σ i args else absentGo k σ i t
-posSpine k σ i t nothing = absentGo k σ i t
-
-mutual
-  posField : ∀ {n} → ℕ → Sig → ℕ → Tm n → Bool
-  posField zero _ _ _ = false
-  posField (suc k) σ i t = posWhnf k σ i (whnf (suc k) σ t)
-
-  posWhnf : ∀ {n} → ℕ → Sig → ℕ → Result (Tm n) → Bool
-  posWhnf _ _ _ (fail _)        = false
-  posWhnf k σ i (ok (pi _ A B)) = absentD (suc k) σ i A ∧ posField k σ i B
-  posWhnf k σ i (ok (prod A B)) = posField k σ i A ∧ posField k σ i B
-  posWhnf k σ i (ok t)          = posSpine k σ i t (dtyArgs t)
-
 instParams : ∀ {n} → ℕ → Sig → Tm n → List (Tm n) → Result (Tm n)
 instParams k σ t [] = ok t
 instParams k σ t (p ∷ ps) with whnf k σ t
@@ -912,9 +844,136 @@ instParams k σ t (p ∷ ps) with whnf k σ t
 ... | ok (pi _ _ B)   = instParams k σ (inst B p) ps
 ... | ok _            = fail "constructor type has too few parameter binders"
 
+-- A field is strictly positive in data type i when, after unfolding,
+-- i is absent, or i is the head of a spine whose arguments do not
+-- contain i, or i occurs only to the right of a Π whose domain does
+-- not contain i. A product is positive on both sides. i inside an
+-- argument of i is refused (no nested inductives). Another data type
+-- is not opaque: its parameters are instantiated and every field is
+-- held to the same test, so i stored there and placed in a domain is
+-- refused. A type already being unfolded is the inductive occurrence.
+-- Fuel exhaustion is refusal. checkData sits outside ⊢; this restores
+-- the invariant ⊢ relies on.
+mutual
+  absentD : ∀ {n} → ℕ → Sig → ℕ → List ℕ → Tm n → Bool
+  absentD zero _ _ _ _ = false
+  absentD (suc k) σ i seen t = absentWhnf k σ i seen (whnf (suc k) σ t)
+
+  absentWhnf : ∀ {n} → ℕ → Sig → ℕ → List ℕ → Result (Tm n) → Bool
+  absentWhnf k σ i seen (ok t)  = absentGo k σ i seen t
+  absentWhnf _ _ _ _ (fail _) = false
+
+  absentGo : ∀ {n} → ℕ → Sig → ℕ → List ℕ → Tm n → Bool
+  absentGo k σ i seen (pi _ A B)     = absentD k σ i seen A ∧ absentD k σ i seen B
+  absentGo k σ i seen (prod A B)     = absentD k σ i seen A ∧ absentD k σ i seen B
+  absentGo k σ i seen (lam _ A t)    = absentD k σ i seen A ∧ absentD k σ i seen t
+  absentGo k σ i seen (app f a)      = absentD k σ i seen f ∧ absentD k σ i seen a
+  absentGo k σ i seen (pair a b)     = absentD k σ i seen a ∧ absentD k σ i seen b
+  absentGo k σ i seen (idt A a b)    = absentD k σ i seen A ∧ absentD k σ i seen a ∧ absentD k σ i seen b
+  absentGo k σ i seen (ann e A)      = absentD k σ i seen e ∧ absentD k σ i seen A
+  absentGo k σ i seen (su t)         = absentD k σ i seen t
+  absentGo k σ i seen (letp e t)     = absentD k σ i seen e ∧ absentD k σ i seen t
+  absentGo k σ i seen (nu F)         = absentD k σ i seen F
+  absentGo k σ i seen (unf s f)      = absentD k σ i seen s ∧ absentD k σ i seen f
+  absentGo k σ i seen (ucons s)      = absentD k σ i seen s
+  absentGo k σ i seen (mNat e P z s) = absentD k σ i seen e ∧ absentD k σ i seen P ∧ absentD k σ i seen z ∧ absentD k σ i seen s
+  absentGo k σ i seen (mEmp e P)     = absentD k σ i seen e ∧ absentD k σ i seen P
+  absentGo k σ i seen (mUnit e P u)  = absentD k σ i seen e ∧ absentD k σ i seen P ∧ absentD k σ i seen u
+  absentGo k σ i seen (rwt e P t)    = absentD k σ i seen e ∧ absentD k σ i seen P ∧ absentD k σ i seen t
+  absentGo k σ i seen (tensor d s)   = absentD k σ i seen d ∧ absentD k σ i seen s
+  absentGo k σ i seen (addi a b)     = absentD k σ i seen a ∧ absentD k σ i seen b
+  absentGo k σ i seen (muli a b)     = absentD k σ i seen a ∧ absentD k σ i seen b
+  absentGo k σ i seen (addt t u)     = absentD k σ i seen t ∧ absentD k σ i seen u
+  absentGo k σ i seen (toi64 t)      = absentD k σ i seen t
+  absentGo k σ i seen (packi a b)    = absentD k σ i seen a ∧ absentD k σ i seen b
+  absentGo k σ i seen (mData e P bs) = absentD k σ i seen e ∧ absentD k σ i seen P ∧ absentDList k σ i seen bs
+  absentGo k σ i seen (dty j)        = absentData k σ i seen j
+  absentGo _ _ _ _ _                 = true
+
+  -- j already on the stack is an inductive occurrence, not a fresh copy of i.
+  absentData : ℕ → Sig → ℕ → List ℕ → ℕ → Bool
+  absentData zero    _ _ _    _ = false
+  absentData (suc k) σ i seen j =
+    if i ≡ᵇ j then false
+    else if elemℕ j seen then true
+    else absentDecl k σ i (j ∷ seen) j
+
+  absentDecl : ℕ → Sig → ℕ → List ℕ → ℕ → Bool
+  absentDecl k σ i seen j =
+    case lookupData σ j of λ where
+      (fail _) → false
+      (ok d)   → absentCtors k σ i seen (nparams d) (DataDecl.ctors d)
+
+  absentCtors : ℕ → Sig → ℕ → List ℕ → ℕ → List Ctor → Bool
+  absentCtors _ _ _ _ _ []       = true
+  absentCtors k σ i seen np (c ∷ cs) =
+    absentTel k σ i seen np (Ctor.ctype c) ∧ absentCtors k σ i seen np cs
+
+  absentTel : ∀ {n} → ℕ → Sig → ℕ → List ℕ → ℕ → Tm n → Bool
+  absentTel zero    _ _ _ _ _ = false
+  absentTel (suc k) σ i seen (suc c) (pi _ _ B) = absentTel k σ i seen c B
+  absentTel (suc k) σ i seen zero (pi _ A B) =
+    absentD k σ i seen A ∧ absentTel k σ i seen zero B
+  absentTel _ _ _ _ _ _ = true
+
+  absentDList : ∀ {n} → ℕ → Sig → ℕ → List ℕ → List (Tm n) → Bool
+  absentDList _ _ _ _ []       = true
+  absentDList k σ i seen (t ∷ ts) = absentD k σ i seen t ∧ absentDList k σ i seen ts
+
+  allAbsent : ∀ {n} → ℕ → Sig → ℕ → List ℕ → List (Tm n) → Bool
+  allAbsent _ _ _ _ []       = true
+  allAbsent k σ i seen (a ∷ as) = absentD k σ i seen a ∧ allAbsent k σ i seen as
+
+  posField : ∀ {n} → ℕ → Sig → ℕ → List ℕ → Tm n → Bool
+  posField zero _ _ _ _ = false
+  posField (suc k) σ i seen t = posWhnf k σ i seen (whnf (suc k) σ t)
+
+  posWhnf : ∀ {n} → ℕ → Sig → ℕ → List ℕ → Result (Tm n) → Bool
+  posWhnf _ _ _ _ (fail _)        = false
+  posWhnf k σ i seen (ok (pi _ A B)) = absentD (suc k) σ i seen A ∧ posField k σ i seen B
+  posWhnf k σ i seen (ok (prod A B)) = posField k σ i seen A ∧ posField k σ i seen B
+  posWhnf k σ i seen (ok t)          = posSpine k σ i seen t (dtyArgs t)
+
+  posSpine : ∀ {n} → ℕ → Sig → ℕ → List ℕ → Tm n → Maybe (ℕ × List (Tm n)) → Bool
+  posSpine k σ i seen _ (just (j , args)) =
+    if i ≡ᵇ j then allAbsent (suc k) σ i seen args
+    else allAbsent (suc k) σ i seen args ∧ posData k σ i seen j args
+  posSpine k σ i seen t nothing = absentGo k σ i seen t
+
+  -- Parameters of j are instantiated with the spine. Each remaining
+  -- field is strictly positive. j already on the stack is the inductive
+  -- occurrence (Tree stored in Forest, Forest stored in Tree).
+  posData : ∀ {n} → ℕ → Sig → ℕ → List ℕ → ℕ → List (Tm n) → Bool
+  posData zero    _ _ _    _ _ = false
+  posData (suc k) σ i seen j args =
+    if elemℕ j seen then true
+    else posDecl k σ i (j ∷ seen) j args
+
+  posDecl : ∀ {n} → ℕ → Sig → ℕ → List ℕ → ℕ → List (Tm n) → Bool
+  posDecl k σ i seen j args =
+    case lookupData σ j of λ where
+      (fail _) → false
+      (ok d)   → posCtors k σ i seen (take (nparams d) args) (DataDecl.ctors d)
+
+  posCtors : ∀ {n} → ℕ → Sig → ℕ → List ℕ → List (Tm n) → List Ctor → Bool
+  posCtors _ _ _ _ _  []       = true
+  posCtors k σ i seen ps (c ∷ cs) =
+    posCtor k σ i seen ps (Ctor.ctype c) ∧ posCtors k σ i seen ps cs
+
+  posCtor : ∀ {n} → ℕ → Sig → ℕ → List ℕ → List (Tm n) → Tm 0 → Bool
+  posCtor k σ i seen ps ty =
+    case instParams k σ (closed ty) ps of λ where
+      (fail _) → false
+      (ok t)   → posTel k σ i seen t
+
+  posTel : ∀ {n} → ℕ → Sig → ℕ → List ℕ → Tm n → Bool
+  posTel zero    _ _ _ _ = false
+  posTel (suc k) σ i seen (pi _ A B) = posField k σ i seen A ∧ posTel k σ i seen B
+  posTel _ _ _ _ _ = true
+
 checkTelPos : ∀ {n} → ℕ → Sig → ℕ → ℕ → ℕ → Tm n → Result ⊤
 checkTelPos k σ i np ni (pi _ A B) =
-  guard "constructor is not strictly positive" (posField k σ i A) >>
+  guard "constructor is not strictly positive" (posField k σ i [] A) >>
   checkTelPos k σ i np ni B
 checkTelPos k σ i np ni t =
   guard "constructor does not target the data type" (isDType i t) >>
