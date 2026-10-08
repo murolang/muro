@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.4
+
+A constructor field is strictly positive only when a stuck `match` is looked through. `Bad → Empty` under `match n` on a bound `Nat` was accepted, and that acceptance is a proof of `Empty`. Agda's `absentGo` already walked every subterm of a match, a rewrite, and a tensor operation. The Elixir check now does the same. A `match` on a concrete numeral still reduces before that walk.
+
+### Checker
+
+- `Muro.Check`. `absent_go?` walks `match` on `Nat`, on a data type, on `Empty`, and on `Unit`, and walks `rewrite`, tensor operations, and `~`.
+
+### Manual
+
+- `examples/bad_stuck.muro`, in `examples.md`.
+
+### Package
+
+- Version 0.16.4.
+
 ## 0.16.3
 
 A mutual block is one descent. `ping` descending on its first argument and `pong` on its second was accepted, and that acceptance is a proof of `{suc 0 ≡ 0 : Nat}`, then of `Empty`. The block is refused unless one shared argument works for every member. `even` and `odd` still share their `Nat`. Agda `pickPos` had the same fallback; both checkers refuse the block.

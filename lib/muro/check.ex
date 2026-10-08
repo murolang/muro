@@ -2315,8 +2315,54 @@ defmodule Muro.Check do
       Enum.all?(bs, fn {_, b} -> absent?(k, book, dname, b) end)
   end
 
+  # A stuck match still has subterms. Absent only when every one is
+  # (Agda: absentGo on mNat, mData, mEmp, mUnit, rwt).
+  defp absent_go?(k, book, dname, {:mnat, e, p, z, s}),
+    do:
+      absent?(k, book, dname, e) and absent?(k, book, dname, p) and
+        absent?(k, book, dname, z) and absent?(k, book, dname, s)
+
+  defp absent_go?(k, book, dname, {:mdata, e, p, bs}) do
+    absent?(k, book, dname, e) and absent?(k, book, dname, p) and
+      Enum.all?(bs, fn {_, _, b} -> absent?(k, book, dname, b) end)
+  end
+
+  defp absent_go?(k, book, dname, {:memp, e, p}),
+    do: absent?(k, book, dname, e) and absent?(k, book, dname, p)
+
+  defp absent_go?(k, book, dname, {:munit, e, p, u}),
+    do:
+      absent?(k, book, dname, e) and absent?(k, book, dname, p) and
+        absent?(k, book, dname, u)
+
+  defp absent_go?(k, book, dname, {:rwt, e, p, t}),
+    do:
+      absent?(k, book, dname, e) and absent?(k, book, dname, p) and
+        absent?(k, book, dname, t)
+
+  defp absent_go?(k, book, dname, {:tensor, d, s}),
+    do: absent?(k, book, dname, d) and absent?(k, book, dname, s)
+
+  defp absent_go?(k, book, dname, {:addi, a, b}),
+    do: absent?(k, book, dname, a) and absent?(k, book, dname, b)
+
+  defp absent_go?(k, book, dname, {:muli, a, b}),
+    do: absent?(k, book, dname, a) and absent?(k, book, dname, b)
+
+  defp absent_go?(k, book, dname, {:addt, t, u}),
+    do: absent?(k, book, dname, t) and absent?(k, book, dname, u)
+
+  defp absent_go?(k, book, dname, {:toi64, t}), do: absent?(k, book, dname, t)
+
+  defp absent_go?(k, book, dname, {:packi, a, b}),
+    do: absent?(k, book, dname, a) and absent?(k, book, dname, b)
+
+  defp absent_go?(k, book, dname, {:bisim, s, t}),
+    do: absent?(k, book, dname, s) and absent?(k, book, dname, t)
+
   defp absent_go?(_k, _book, dname, {:def, n}), do: n != dname
 
+  # No subterms: a variable, a sort, a literal, a hole.
   defp absent_go?(_k, _book, _dname, _), do: true
 
   defp check_tel_pos(0, _book, _dname, _np, _ni, _t), do: {:error, @out_of_fuel}
