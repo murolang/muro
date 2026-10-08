@@ -1266,6 +1266,54 @@ defmodule Muro.CheckTest do
     assert Check.check_sig(book) == :ok
   end
 
+  test "two data types with one name are refused" do
+    src = """
+    data Foo : Nat → Type where
+      foo : Foo 0
+    data Foo : Nat → Type where
+      bar : Foo suc(0)
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "duplicate name Foo"
+  end
+
+  test "a definition with a constructor's name is refused" do
+    src = """
+    data Vec (A : Type) : Nat → Type where
+      vnil  : Vec A 0
+      vcons : Π (n : Nat) → A → Vec A n → Vec A suc(n)
+    def vnil : evidence Vec Nat suc(0) := vcons 0 0 vnil
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "duplicate name vnil"
+  end
+
+  test "two definitions with one name are refused" do
+    src = """
+    def x : run Nat := 0
+    def x : run Nat := suc(0)
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "duplicate name x"
+  end
+
+  test "a constructor that reuses a prelude name is refused" do
+    src = """
+    data D : Type where
+      plus : D
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(Muro.Prelude.for_check(book))
+    assert msg =~ "duplicate name plus"
+  end
+
   test "mix muro.check refuses a mutual Empty cycle" do
     assert {:error, msg} = Muro.check_file("examples/cycle_empty.muro")
     assert msg =~ "impossible"
@@ -1275,6 +1323,15 @@ defmodule Muro.CheckTest do
 
     assert_raise Mix.Error, ~r/recursive definition must be applied to its arguments/, fn ->
       Mix.Tasks.Muro.Check.run(["examples/cycle_empty.muro"])
+    end
+  end
+
+  test "mix muro.check refuses a repeated name" do
+    assert {:error, msg} = Muro.check_file("examples/bad_dup.muro")
+    assert msg =~ "duplicate name Foo"
+
+    assert_raise Mix.Error, ~r/duplicate name Foo/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/bad_dup.muro"])
     end
   end
 

@@ -362,7 +362,16 @@ defmodule Muro.Ast do
     end)
   end
 
+  # Definitions, data types, and constructors are one name space
+  # (`infer_def`). A second declaration with a name already used is a
+  # different entry, and a match can then skip the branch it should check.
   def book_to_db(book) do
+    with :ok <- unique_names(book) do
+      book_to_db_entries(book)
+    end
+  end
+
+  defp book_to_db_entries(book) do
     Enum.reduce_while(book, {:ok, []}, fn d, {:ok, acc} ->
       result =
         if Map.get(d, :kind) == :data do
@@ -376,6 +385,36 @@ defmodule Muro.Ast do
         err -> {:halt, err}
       end
     end)
+  end
+
+  defp unique_names(book) do
+    book
+    |> Enum.reduce_while(MapSet.new(), fn d, seen ->
+      case take_names(seen, entry_names(d)) do
+        {:ok, seen1} -> {:cont, seen1}
+        {:error, msg} -> {:halt, {:error, msg}}
+      end
+    end)
+    |> case do
+      {:error, _} = err -> err
+      %MapSet{} -> :ok
+    end
+  end
+
+  defp entry_names(%{kind: :data, name: name, ctors: ctors}) do
+    [name | Enum.map(ctors, & &1.name)]
+  end
+
+  defp entry_names(%{name: name}), do: [name]
+
+  defp take_names(seen, []), do: {:ok, seen}
+
+  defp take_names(seen, [name | names]) do
+    if MapSet.member?(seen, name) do
+      {:error, "duplicate name #{name}"}
+    else
+      take_names(MapSet.put(seen, name), names)
+    end
   end
 
   # Atom literals written in the book, first occurrence first.

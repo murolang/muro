@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.5
+
+A name is one declaration. Two data types both named `Foo`, a definition with a constructor's name, and two definitions both named `x` were accepted. The first is a proof of `{suc 0 ≡ 0 : Nat}`, then of `Empty`: the match looks up one `Foo` and a constructor of the other, skips the branch, and never checks it. Definitions, data types, and constructors are one set of names. Agda refers to each by index, so the collision cannot be written there.
+
+### Checker
+
+- `Muro.Ast.book_to_db/1` refuses a name that is already declared. The error names it.
+
+### Manual
+
+- `examples/bad_dup.muro`, in `examples.md`. Terms: the book has one set of names.
+
+### Package
+
+- Version 0.16.5.
+
 ## 0.16.4
 
 A constructor field is strictly positive only when a stuck `match` is looked through. `Bad → Empty` under `match n` on a bound `Nat` was accepted, and that acceptance is a proof of `Empty`. Agda's `absentGo` already walked every subterm of a match, a rewrite, and a tensor operation. The Elixir check now does the same. A `match` on a concrete numeral still reduces before that walk.

@@ -21,6 +21,8 @@ The tag is `run`, `run internal`, `spec`, or `evidence`. There is no other tag.
 
 Forward references are allowed. The checker sees every definition when it checks any one of them.
 
+Definitions, data types, and constructors share one set of names. Each name is declared once.
+
 ## Prelude
 
 `mix muro.check` and `Muro.check_file/2` put a small book in scope behind the file. These names are already defined:
@@ -34,7 +36,7 @@ Forward references are allowed. The checker sees every definition when it checks
 | `sym` | `evidence` | `{x ≡ y : A}` gives `{y ≡ x : A}`. |
 | `cong` | `evidence` | `{x ≡ y : A}` gives `{f x ≡ f y : B}`. |
 
-A name the file defines replaces that prelude definition. Anything in the prelude that refers to a replaced name is dropped with it: a file that defines its own `plus` does not see the prelude's `plus_suc`, because that lemma is about the prelude's `plus`.
+A definition with one of these names replaces that prelude entry. A data type or a constructor with one of these names is a duplicate name. Anything in the prelude that refers to a replaced name is dropped with it: a file that defines its own `plus` does not see the prelude's `plus_suc`, because that lemma is about the prelude's `plus`.
 
 The prelude is ordinary `.muro`. It is not a new rule. `check_sig` on a book you built yourself does not add it; `check_file` does. A prelude `run` is emitted only when a `run` term in the file calls it, and then as `defp`. Evidence in the prelude is not emitted.
 

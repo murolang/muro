@@ -1,0 +1,6 @@
+-- bad_dup.muro — two data types share the name Foo.
+-- mix muro.check refuses the second declaration.
+data Foo : Nat → Type where
+  foo : Foo 0
+data Foo : Nat → Type where
+  bar : Foo suc(0)

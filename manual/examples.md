@@ -116,6 +116,10 @@ Uses `sym`, `cong`, and `pred` from the prelude and defines none of them. `befor
 
 `mix muro.check` fails on each of these. `even_odd.muro` is the mutual recursion that checks.
 
+### bad_dup.muro
+
+Two data types are both named `Foo`. `foo` builds the first at `0` and `bar` builds the second at `suc(0)`. One name for both types lets a match skip the branch it should check.
+
 ### cycle_empty.muro
 
 `impossible` calls `helper` and `helper` calls `impossible`. Both inhabit `Empty`. Neither calls itself. The failure is the cycle, not a missing name.
