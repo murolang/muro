@@ -120,13 +120,37 @@ defmodule Muro.EmitCTest do
     cc!(dir, "prefix.c", "prefix.o")
   end
 
-  test "a lambda that is not an unfold step is refused" do
+  test "a lambda applied on the spot is a local" do
+    dir = tmp_dir()
+    path = Path.join(dir, "apply_lam.muro")
+
+    File.write!(path, """
+    def id : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → (λ (m : Nat) → suc m) n
+
+    def snd : run Π (n : Nat) → Π (m : Nat) → Nat :=
+      λ (n : Nat) → λ (m : Nat) → ((λ (x : Nat) → λ (y : Nat) → y) n) m
+
+    def keep : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → (λ (- k : Nat) → n) 0
+    """)
+
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+    source = File.read!(Path.join(dir, "apply_lam.c"))
+    assert source =~ "muro_nat *muro_s0 = n;"
+    assert source =~ "muro_suc(muro_s0)"
+    assert source =~ "muro_nat *muro_s1 = m;"
+    refute source =~ "muro_zero()"
+    cc!(dir, "apply_lam.c", "apply_lam.o")
+  end
+
+  test "a lambda that is passed as a value is refused" do
     dir = tmp_dir()
     path = Path.join(dir, "lam.muro")
 
     File.write!(path, """
-    def bad : run Π (n : Nat) → Nat :=
-      λ (n : Nat) → (λ (m : Nat) → m) n
+    def bad : run Π (f : Π (x : Nat) → Nat) → Nat :=
+      λ (f : Π (x : Nat) → Nat) → f 0
     """)
 
     assert_raise Mix.Error, ~r/c:lambda/, fn ->

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.7
+
+A lambda applied on the spot emits to C. `(λ (m : Nat) → suc m) n` checked, and Elixir emitted it, and the C backend refused it with `c:lambda`. The argument is evaluated once into a local and the body uses that local. An erased binder drops the argument. A chain of lambdas peels one binder at a time. An unapplied lambda, and a call of a local function, are still `c:lambda`.
+
+### Emit
+
+- `Muro.Emit.C`. An application whose head is a lambda is a let.
+
+### Manual
+
+- Emit: an applied lambda is a local.
+
+### Package
+
+- Version 0.16.7.
+
 ## 0.16.6
 
 A field that mentions another data type is strictly positive only when that type's fields are. `Bad` with a field `Wrap → Empty`, and `Wrap` with a field `Bad`, each checked as positive on its own, and together they are a proof of `Empty`. The checker instantiates the other type's parameters and holds every field to the same test. `Tree` and `Forest`, each storing the other as a field, still check. Agda `absentGo` treated the other data type as opaque; both checkers now open it.

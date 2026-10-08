@@ -10,8 +10,9 @@ defmodule Muro.Emit.C do
   step closes over, and a function pointer for the step. `uncons` calls
   that function and builds a new struct for the tail. `Always`, `~`,
   and a raw `ν` in a run are refused (`c:stream`). `I64`, `F32`, and
-  `Tensor` are refused (`c:machine`). A lambda that is not an unfold
-  step is `c:lambda`.
+  `Tensor` are refused (`c:machine`). A lambda applied on the spot is a
+  local. An unapplied lambda, and a call of a local function, are
+  `c:lambda`.
   """
 
   alias Muro.{Ast, Emit}
@@ -201,8 +202,17 @@ defmodule Muro.Emit.C do
   defp emit({:ann, e, _a}, env, book, st, expect), do: emit(e, env, book, st, expect)
   defp emit({:rwt, _eq, _x, _p, t}, env, book, st, expect), do: emit(t, env, book, st, expect)
 
-  defp emit({:app, _, _} = t, env, book, st, _expect) do
+  # An applied lambda is a let: the argument is evaluated once, then the
+  # body sees that local. An erased binder drops the argument. A chain
+  # `((λ x → λ y → e) a) b` peels one binder at a time.
+  defp emit({:app, {:lam, q, a, x, body}, arg}, env, book, st, expect),
+    do: emit_lam_app(q, a, x, body, arg, [], env, book, st, expect)
+
+  defp emit({:app, _, _} = t, env, book, st, expect) do
     case spine(t, []) do
+      {{:lam, q, a, x, body}, [arg | rest]} ->
+        emit_lam_app(q, a, x, body, arg, rest, env, book, st, expect)
+
       {{:var, name}, args} ->
         if lookup(env, name) == nil do
           emit_global(name, args, env, book, st)
@@ -427,6 +437,26 @@ defmodule Muro.Emit.C do
   end
 
   defp emit(_other, _env, _book, _st, _expect), do: {:error, "c:unsupported"}
+
+  defp emit_lam_app(:erased, _a, x, body, _arg, rest, env, book, st, expect) do
+    emit(apply_args(body, rest), [{x, "muro_erased", :erased} | env], book, st, expect)
+  end
+
+  defp emit_lam_app(_q, a, x, body, arg, rest, env, book, st, expect) do
+    ty = ctype(a, book)
+
+    with {:ok, {pre, ex, st}} <- emit(arg, env, book, st, ty) do
+      {local, st} = news(st)
+
+      with {:ok, {pre2, ex2, st}} <-
+             emit(apply_args(body, rest), [{x, local, :live} | env], book, st, expect) do
+        {:ok, {squash([pre, "#{ty}#{local} = #{ex};", pre2]), ex2, st}}
+      end
+    end
+  end
+
+  defp apply_args(body, []), do: body
+  defp apply_args(body, [a | as]), do: apply_args({:app, body, a}, as)
 
   defp emit_step(step, q, x, seed_ty, body, caps, env_ty, env, book, st) do
     cap_env =
