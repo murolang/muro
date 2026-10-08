@@ -7,7 +7,7 @@ summary: Every file in examples/ and what it is for.
 
 # Examples
 
-In brief: every file in the sections above Refused checks with `mix muro.check path`. They are the worked book, not sketches. Prefer copying from here over inventing syntax. The four files under Refused are what that command turns down.
+In brief: every file in the sections above Refused checks with `mix muro.check path`. They are the worked book, not sketches. Prefer copying from here over inventing syntax. The files under Refused are what that command turns down.
 
 Check one file:
 
@@ -119,6 +119,10 @@ Uses `sym`, `cong`, and `pred` from the prelude and defines none of them. `befor
 ### cycle_empty.muro
 
 `impossible` calls `helper` and `helper` calls `impossible`. Both inhabit `Empty`. Neither calls itself. The failure is the cycle, not a missing name.
+
+### bad_stuck.muro
+
+`bad` takes a function of a `Nat`. The `0` branch is `Bad → Empty`, and `n` is bound, so the match does not reduce. The field is still not strictly positive.
 
 ### bad_positive.muro
 

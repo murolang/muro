@@ -1,0 +1,4 @@
+-- bad_stuck.muro — Bad → Empty sits under a match on a bound Nat.
+-- The match does not reduce. mix muro.check still refuses the field.
+data Bad : Type where
+  bad : (Π (n : Nat) → match n motive (λ _ → Type) | 0 => (Bad → Empty) | suc _ => Unit) → Bad

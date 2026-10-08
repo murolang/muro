@@ -1124,6 +1124,41 @@ defmodule Muro.CheckTest do
     assert msg =~ "strictly positive"
   end
 
+  test "a negative field under a stuck match on Nat is refused" do
+    src = """
+    data Bad : Type where
+      bad : (Π (n : Nat) → match n motive (λ _ → Type) | 0 => (Bad → Empty) | suc _ => Unit) → Bad
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "strictly positive"
+  end
+
+  test "a negative field under a stuck match on a data type is refused" do
+    src = """
+    data B : Type where
+      t : B
+      f : B
+    data Bad : Type where
+      bad : (Π (b : B) → match b motive (λ _ → Type) | t => (Bad → Empty) | f => Unit) → Bad
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "strictly positive"
+  end
+
+  test "a match that reduces is unfolded before positivity" do
+    src = """
+    data D : Type where
+      mk : (Π (n : Nat) → match 0 motive (λ _ → Type) | 0 => Nat | suc _ => (D → Empty)) → D
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
   test "a direct negative field is refused" do
     src = """
     data Bad : Type where
@@ -1240,6 +1275,15 @@ defmodule Muro.CheckTest do
 
     assert_raise Mix.Error, ~r/recursive definition must be applied to its arguments/, fn ->
       Mix.Tasks.Muro.Check.run(["examples/cycle_empty.muro"])
+    end
+  end
+
+  test "mix muro.check refuses a negative field under a stuck match" do
+    assert {:error, msg} = Muro.check_file("examples/bad_stuck.muro")
+    assert msg =~ "constructor is not strictly positive"
+
+    assert_raise Mix.Error, ~r/constructor is not strictly positive/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/bad_stuck.muro"])
     end
   end
 
