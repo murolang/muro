@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.11
+
+Emitted C allocates through `MURO_ALLOC`. The macro is `malloc` unless the caller defines it before the generated file is compiled. A long-running process can point it at one block and set the cursor back to the start after each call. The pointer a function returns points into that block, so the caller reads or copies it before the reset. A fieldless constructor stays a static object and is not taken from the block.
+
+### Emit
+
+- `Muro.Emit.C`. Allocations call `MURO_ALLOC`.
+
+### Manual
+
+- Emit: the macro, and resetting the block after a call.
+
+### Package
+
+- Version 0.16.11.
+
 ## 0.16.10
 
 A constructor with no fields was a fresh `malloc` on every use. `nil`, `nothing`, `true`, and `false` each allocated. `tt` already returns the address of one static object. A fieldless constructor now does the same, including one whose arguments are all erased. A constructor with a field still allocates. Generated code writes fields only in that allocating constructor, so sharing the static object cannot be observed.
