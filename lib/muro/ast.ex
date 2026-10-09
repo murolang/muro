@@ -374,10 +374,15 @@ defmodule Muro.Ast do
   defp book_to_db_entries(book) do
     Enum.reduce_while(book, {:ok, []}, fn d, {:ok, acc} ->
       result =
-        if Map.get(d, :kind) == :data do
-          data_to_db(d)
-        else
-          def_to_db(d)
+        cond do
+          Map.get(d, :kind) == :import ->
+            {:error, import_left(d)}
+
+          Map.get(d, :kind) == :data ->
+            data_to_db(d)
+
+          true ->
+            def_to_db(d)
         end
 
       case result do
@@ -401,6 +406,8 @@ defmodule Muro.Ast do
     end
   end
 
+  defp entry_names(%{kind: :import}), do: []
+
   defp entry_names(%{kind: :data, name: name, ctors: ctors}) do
     [name | Enum.map(ctors, & &1.name)]
   end
@@ -417,10 +424,19 @@ defmodule Muro.Ast do
     end
   end
 
+  defp import_left(%{loc: {line, col}}) do
+    "#{line}:#{col}: import is resolved from a file"
+  end
+
+  defp import_left(_), do: "import is resolved from a file"
+
   # Atom literals written in the book, first occurrence first.
   # Binder names are not atoms. Nothing absent from the book is added.
   def atoms(book) when is_list(book) do
     Enum.reduce(book, [], fn
+      %{kind: :import}, acc ->
+        acc
+
       %{kind: :data, params: params, ctors: ctors} = d, acc ->
         acc = atoms_in(params, acc)
         acc = atoms_in(Map.get(d, :indices, []), acc)

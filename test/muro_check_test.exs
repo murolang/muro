@@ -1443,9 +1443,17 @@ defmodule Muro.CheckTest do
     assert Muro.check_file("examples/list.muro") == :ok
     assert Muro.check_file("examples/vec.muro") == :ok
 
+    sort_src = File.read!("examples/sort.muro")
+    refute sort_src =~ "data List"
+    assert {:ok, sort_book} = Parser.parse(sort_src)
+    assert Enum.any?(sort_book, &(&1[:kind] == :import and &1.path == "list.muro"))
+    refute Enum.any?(sort_book, &(&1[:kind] == :data and &1.name == "List"))
+
     assert {:ok, ex} = Muro.emit_file("examples/sort.muro", Sort)
     assert ex =~ ":asc"
     assert ex =~ ":desc"
+    refute ex =~ "length-ones2"
+    refute ex =~ "sort-two"
 
     assert {:ok, book} = Parser.parse("def bad : run Nat := :asc\n")
     assert {:error, msg} = Check.check_sig(book)
@@ -1492,6 +1500,74 @@ defmodule Muro.CheckTest do
     assert {:pi, :affine, :nat, "x", :nat} = id.type
     assert {:lam, :affine, :nat, "x", {:var, "x"}} = id.body
     assert Check.check_sig([id]) == :ok
+  end
+
+  test "import names a file, and a clash or a cycle is an error" do
+    dir = Path.join(System.tmp_dir!(), "muro_imp_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    File.write!(Path.join(dir, "lemma.muro"), """
+    def n : run Nat := 0
+    def n-zero : evidence {n ≡ 0 : Nat} := refl
+    """)
+
+    use = Path.join(dir, "use.muro")
+
+    File.write!(use, """
+    import "lemma.muro"
+    def use : evidence {n ≡ 0 : Nat} := n-zero
+    """)
+
+    assert Muro.check_file(use) == :ok
+    assert {:ok, src} = Muro.emit_file(use, Use)
+    assert src =~ "def n"
+    refute src =~ "n-zero"
+
+    missing = Path.join(dir, "miss.muro")
+
+    File.write!(missing, """
+    import "no-such.muro"
+    def z : run Nat := 0
+    """)
+
+    assert {:error, msg} = Muro.check_file(missing)
+    assert msg =~ "missing file"
+    assert msg =~ "no-such.muro"
+
+    File.cp!("examples/list.muro", Path.join(dir, "list.muro"))
+    again = Path.join(dir, "again.muro")
+
+    File.write!(again, """
+    import "list.muro"
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+    def z : run Nat := 0
+    """)
+
+    assert {:error, msg} = Muro.check_file(again)
+    assert msg =~ "duplicate name List"
+    assert msg =~ "again.muro"
+    assert msg =~ "list.muro"
+
+    File.write!(Path.join(dir, "a.muro"), """
+    import "b.muro"
+    def z : run Nat := 0
+    """)
+
+    File.write!(Path.join(dir, "b.muro"), """
+    import "a.muro"
+    def z : run Nat := 0
+    """)
+
+    assert {:error, msg} = Muro.check_file(Path.join(dir, "a.muro"))
+    assert msg =~ "import cycle"
+    assert msg =~ "a.muro"
+    assert msg =~ "b.muro"
+
+    assert {:error, msg} = Parser.parse("import \"list\n")
+    assert msg =~ "unclosed string"
   end
 
   test "uncons of a Nat is not a ν step" do

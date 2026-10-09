@@ -39,6 +39,7 @@ defmodule Muro.Lexer do
     "lam",
     "let",
     "def",
+    "import",
     "Pi",
     "nu",
     "in"
