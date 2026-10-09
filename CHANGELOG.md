@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.10
+
+A constructor with no fields was a fresh `malloc` on every use. `nil`, `nothing`, `true`, and `false` each allocated. `tt` already returns the address of one static object. A fieldless constructor now does the same, including one whose arguments are all erased. A constructor with a field still allocates. Generated code writes fields only in that allocating constructor, so sharing the static object cannot be observed.
+
+### Emit
+
+- `Muro.Emit.C`. A constructor with no runtime fields is one static object.
+
+### Manual
+
+- Emit: a fieldless constructor is static, like `tt`.
+
+### Package
+
+- Version 0.16.10.
+
 ## 0.16.9
 
 C names that are keywords or library functions stay out of the way. `true` and `false` are keywords in C23 and macros in `<stdbool.h>`, so a constructor with either spelling became `static muro_bool *true(void)` and `cc` rejected it. `read`, `write`, `delete`, and `error` clash the same way once a harness includes `<unistd.h>` or compiles as C++. The emitter already prefixed C11 keywords. That list now runs through C23, and it includes the `<stdint.h>` typedefs the header itself includes and the common functions from stdio, stdlib, string, and unistd. `half` stays `half`.

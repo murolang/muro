@@ -296,6 +296,61 @@ defmodule Muro.EmitCTest do
     cc!(dir, "harness.c", "harness.o", [c23_flag()])
   end
 
+  test "a constructor with no fields is one static object" do
+    dir = tmp_dir()
+    path = Path.join(dir, "nullary.muro")
+
+    File.write!(path, """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data Wrap : Type where
+      bare : Wrap
+      box : Nat → Wrap
+
+    data Tok : Nat → Type where
+      zed : Π (- n : Nat) → Tok n
+      one : Π (- n : Nat) → Nat → Tok n
+
+    def pick : run Π (b : Bool) → Wrap :=
+      λ (b : Bool) →
+        match b motive (λ _ → Wrap)
+          | true => bare
+          | false => box 0
+
+    def tok0 : run Tok 0 :=
+      zed 0
+    """)
+
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+    source = File.read!(Path.join(dir, "nullary.c"))
+    assert source =~ "static muro_bool muro_bool_true_obj = {0};"
+    assert source =~ "static muro_bool *muro_true(void) { return &muro_bool_true_obj; }"
+    assert source =~ "static muro_bool muro_bool_false_obj = {1};"
+    assert source =~ "static muro_bool *muro_false(void) { return &muro_bool_false_obj; }"
+    assert source =~ "static muro_wrap muro_wrap_bare_obj = {0};"
+    assert source =~ "static muro_wrap *bare(void) { return &muro_wrap_bare_obj; }"
+    assert source =~ "static muro_tok muro_tok_zed_obj = {0};"
+    assert source =~ "static muro_tok *zed(void) { return &muro_tok_zed_obj; }"
+    assert source =~ "static muro_wrap *box(muro_nat *f0) {"
+    assert source =~ "muro_wrap *p = malloc(sizeof *p);"
+    assert source =~ "static muro_tok *one(muro_nat *f0) {"
+    refute source =~ "muro_bool *p = malloc"
+    refute source =~ "muro_muro_bool"
+    cc!(dir, "nullary.c", "nullary.o")
+
+    list = Path.join(dir, "list.muro")
+    File.cp!("examples/list.muro", list)
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([list, "--backend", "c"]) end)
+    list_c = File.read!(Path.join(dir, "list.c"))
+    assert list_c =~ "static muro_list muro_list_nil_obj = {0};"
+    assert list_c =~ "static muro_list *nil(void) { return &muro_list_nil_obj; }"
+    assert list_c =~ "static muro_list *cons(void *f0, muro_list *f1) {"
+    assert list_c =~ "muro_list *p = malloc(sizeof *p);"
+    cc!(dir, "list.c", "list.o")
+  end
+
   # GCC 14 and Clang spell this `-std=c23`. GCC 13, which Ubuntu 24.04
   # ships, only accepts the earlier name `-std=c2x`. Both reject `true`.
   defp c23_flag do

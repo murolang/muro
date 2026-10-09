@@ -1208,17 +1208,24 @@ defmodule Muro.Emit.C do
   end
 
   defp data_ctors(book) do
-    book
-    |> data_defs()
-    |> Enum.flat_map(fn d ->
-      d.ctors
-      |> Enum.with_index()
-      |> Enum.map(fn {ctor, tag} -> ctor_fun(d, ctor, tag, book) end)
-    end)
-    |> Enum.join("\n\n")
+    {chunks, _} =
+      book
+      |> data_defs()
+      |> Enum.flat_map(fn d ->
+        d.ctors
+        |> Enum.with_index()
+        |> Enum.map(fn {ctor, tag} -> {d, ctor, tag} end)
+      end)
+      |> Enum.map_reduce(MapSet.new(), fn {d, ctor, tag}, used ->
+        ctor_fun(d, ctor, tag, book, used)
+      end)
+
+    Enum.join(chunks, "\n\n")
   end
 
-  defp ctor_fun(d, ctor, tag, book) do
+  # A constructor with no runtime fields has one value. Share it, as `tt`
+  # does. `struct_name/1` already includes the `muro_` prefix.
+  defp ctor_fun(d, ctor, tag, book, used) do
     {pis, _} = telescope(ctor.type)
 
     fields =
@@ -1235,42 +1242,40 @@ defmodule Muro.Emit.C do
       end)
 
     ptr = struct_ptr(d.name)
-    member = c_name(ctor.name)
+    fun = c_name(ctor.name)
 
-    assigns =
-      Enum.map_join(params, "\n", fn {_ty, cname, k} ->
-        "  p->as.#{member}.f#{k} = #{cname};"
-      end)
+    if params == [] do
+      {obj, used} = fresh(struct_name(d.name) <> "_" <> safe(ctor.name) <> "_obj", used)
 
-    args =
-      case params do
-        [] -> "void"
-        ps -> Enum.map_join(ps, ", ", fn {ty, n, _} -> "#{ty}#{n}" end)
-      end
+      text = """
+      static #{struct_name(d.name)} #{obj} = {#{tag}};
 
-    body =
-      if assigns == "" do
-        """
-        static #{ptr}#{c_name(ctor.name)}(#{args}) {
-          #{ptr}p = malloc(sizeof *p);
-          if (p == 0) abort();
-          p->tag = #{tag};
-          return p;
-        }
-        """
-      else
-        """
-        static #{ptr}#{c_name(ctor.name)}(#{args}) {
-          #{ptr}p = malloc(sizeof *p);
-          if (p == 0) abort();
-          p->tag = #{tag};
-        #{assigns}
-          return p;
-        }
-        """
-      end
+      static #{ptr}#{fun}(void) { return &#{obj}; }
+      """
 
-    String.trim(body)
+      {String.trim(text), used}
+    else
+      member = fun
+
+      assigns =
+        Enum.map_join(params, "\n", fn {_ty, cname, k} ->
+          "  p->as.#{member}.f#{k} = #{cname};"
+        end)
+
+      args = Enum.map_join(params, ", ", fn {ty, n, _} -> "#{ty}#{n}" end)
+
+      text = """
+      static #{ptr}#{fun}(#{args}) {
+        #{ptr}p = malloc(sizeof *p);
+        if (p == 0) abort();
+        p->tag = #{tag};
+      #{assigns}
+        return p;
+      }
+      """
+
+      {String.trim(text), used}
+    end
   end
 
   defp data_defs(book) do
