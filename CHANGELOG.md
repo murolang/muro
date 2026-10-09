@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.9
+
+C names that are keywords or library functions stay out of the way. `true` and `false` are keywords in C23 and macros in `<stdbool.h>`, so a constructor with either spelling became `static muro_bool *true(void)` and `cc` rejected it. `read`, `write`, `delete`, and `error` clash the same way once a harness includes `<unistd.h>` or compiles as C++. The emitter already prefixed C11 keywords. That list now runs through C23, and it includes the `<stdint.h>` typedefs the header itself includes and the common functions from stdio, stdlib, string, and unistd. `half` stays `half`.
+
+### Emit
+
+- `Muro.Emit.C`. A reserved C name is prefixed with `muro_`.
+
+### Manual
+
+- Emit: which C names get the prefix.
+
+### Package
+
+- Version 0.16.9.
+
 ## 0.16.8
 
 Distinct atom spellings stay distinct in C. `:A` and `:a` both became `MURO_A`, and `cc` rejected the repeated enumerator. The checker and Elixir already kept them apart. The first spelling in the file keeps its enumerator. Each later spelling that sanitizes to the same identifier is bumped, the way other C names are. `:asc` stays `MURO_ASC`.

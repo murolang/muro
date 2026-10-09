@@ -17,10 +17,46 @@ defmodule Muro.Emit.C do
 
   alias Muro.{Ast, Emit}
 
+  # Keywords through C23, including the underscore spellings. `bool`,
+  # `true`, and `false` are also the `<stdbool.h>` macros.
   @c_keywords ~w(
-    auto break case char const continue default do double else enum extern
-    float for goto if inline int long register restrict return short signed
-    sizeof static struct switch typedef union unsigned void volatile while
+    alignas alignof auto bool break case char const constexpr continue
+    default do double else enum extern false float for goto if inline int
+    long nullptr register restrict return short signed sizeof static
+    static_assert struct switch thread_local true typedef typeof
+    typeof_unqual union unsigned void volatile while
+    _Alignas _Alignof _Atomic _BitInt _Bool _Complex _Decimal128 _Decimal32
+    _Decimal64 _Generic _Imaginary _Noreturn _Static_assert _Thread_local
+  ) |> MapSet.new()
+
+  # Typedefs from `<stdint.h>`, which the header includes, and functions
+  # from stdio, stdlib, string, and unistd. `delete` is a C++ keyword.
+  # `error` is the GNU `error` function. A name outside this set is unchanged.
+  @host_names ~w(
+    int8_t int16_t int32_t int64_t uint8_t uint16_t uint32_t uint64_t
+    int_least8_t int_least16_t int_least32_t int_least64_t
+    uint_least8_t uint_least16_t uint_least32_t uint_least64_t
+    int_fast8_t int_fast16_t int_fast32_t int_fast64_t
+    uint_fast8_t uint_fast16_t uint_fast32_t uint_fast64_t
+    intptr_t uintptr_t intmax_t uintmax_t size_t ptrdiff_t wchar_t
+    NULL EOF assert offsetof stdin stdout stderr
+    remove rename tmpfile tmpnam fclose fflush fopen freopen setbuf setvbuf
+    fprintf fscanf printf scanf snprintf sprintf sscanf
+    vfprintf vfscanf vprintf vscanf vsnprintf vsprintf vsscanf
+    fgetc fgets fputc fputs getc getchar gets putc putchar puts ungetc
+    fread fwrite fgetpos fseek fsetpos ftell rewind clearerr feof ferror perror
+    atof atoi atol atoll strtod strtof strtold strtol strtoll strtoul strtoull
+    rand srand calloc malloc realloc free aligned_alloc
+    abort atexit at_quick_exit exit quick_exit getenv system bsearch qsort
+    abs labs llabs div ldiv lldiv mblen mbtowc wctomb mbstowcs wcstombs
+    memcpy memmove strcpy strncpy strcat strncat memcmp strcmp strncmp strcoll
+    memchr strchr strrchr strcspn strspn strpbrk strstr strtok memset strerror strlen
+    access alarm chdir chown close creat dup dup2
+    execl execle execlp execv execve execvp
+    fork fsync getcwd getegid geteuid getgid getpid getppid getuid
+    isatty link lseek open pause pipe read rmdir
+    setgid setuid sleep symlink sync unlink write
+    delete error
   ) |> MapSet.new()
 
   @reserved ~w(
@@ -849,6 +885,7 @@ defmodule Muro.Emit.C do
       n == "" or n == "_" -> "x"
       String.match?(n, ~r/^[0-9]/) -> "muro_" <> n
       MapSet.member?(@c_keywords, n) -> "muro_" <> n
+      MapSet.member?(@host_names, n) -> "muro_" <> n
       MapSet.member?(@reserved, n) -> "muro_" <> n
       String.starts_with?(n, "_") -> "muro_" <> n
       String.match?(n, ~r/^muro_[st][0-9]+$/) -> "muro_" <> n

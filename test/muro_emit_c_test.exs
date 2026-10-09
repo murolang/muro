@@ -248,6 +248,73 @@ defmodule Muro.EmitCTest do
     cc!(dir, "atoms.c", "atoms.o")
   end
 
+  test "C keywords and library names are prefixed" do
+    dir = tmp_dir()
+    path = Path.join(dir, "reserved.muro")
+
+    File.write!(path, """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    def read : run Π (close : Bool) → Nat :=
+      λ (close : Bool) →
+        match close motive (λ _ → Nat)
+          | true => 0
+          | false => suc 0
+
+    def write : run Nat := 0
+    def delete : run Nat := 0
+    def error : run Nat := 0
+    def uint8_t : run Nat := 0
+    def keep : run Nat := write
+    """)
+
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+    header = File.read!(Path.join(dir, "reserved.h"))
+    source = File.read!(Path.join(dir, "reserved.c"))
+    assert header =~ "muro_nat *muro_read(muro_bool *muro_close)"
+    assert header =~ "muro_nat *muro_write(void)"
+    assert header =~ "muro_nat *muro_delete(void)"
+    assert header =~ "muro_nat *muro_error(void)"
+    assert header =~ "muro_nat *muro_uint8_t(void)"
+    assert header =~ "muro_nat *keep(void)"
+    refute header =~ ~r/(?<![\w])read\(/
+    assert source =~ "static muro_bool *muro_true(void)"
+    assert source =~ "static muro_bool *muro_false(void)"
+    refute source =~ ~r/(?<![\w])true\(/
+    cc!(dir, "reserved.c", "reserved.o", [c23_flag()])
+
+    harness = Path.join(dir, "harness.c")
+
+    File.write!(harness, """
+    #include <unistd.h>
+    #include <stdbool.h>
+    #include "reserved.h"
+    """)
+
+    cc!(dir, "harness.c", "harness.o", [c23_flag()])
+  end
+
+  # GCC 14 and Clang spell this `-std=c23`. GCC 13, which Ubuntu 24.04
+  # ships, only accepts the earlier name `-std=c2x`. Both reject `true`.
+  defp c23_flag do
+    if cc_accepts?("-std=c23"), do: "-std=c23", else: "-std=c2x"
+  end
+
+  defp cc_accepts?(flag) do
+    src = Path.join(System.tmp_dir!(), "muro_cc_#{System.unique_integer([:positive])}.c")
+    obj = Path.rootname(src) <> ".o"
+    File.write!(src, "int x;\n")
+
+    {_out, status} =
+      System.cmd("cc", [flag, "-c", src, "-o", obj], stderr_to_stdout: true)
+
+    File.rm(src)
+    File.rm(obj)
+    status == 0
+  end
+
   defp tmp_dir do
     dir = Path.join(System.tmp_dir!(), "muro_c_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
@@ -255,9 +322,9 @@ defmodule Muro.EmitCTest do
     dir
   end
 
-  defp cc!(dir, src, obj) do
+  defp cc!(dir, src, obj, extra \\ []) do
     {out, status} =
-      System.cmd("cc", ["-c", src, "-o", obj], cd: dir, stderr_to_stdout: true)
+      System.cmd("cc", extra ++ ["-c", src, "-o", obj], cd: dir, stderr_to_stdout: true)
 
     assert status == 0, out
   end
