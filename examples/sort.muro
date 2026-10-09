@@ -1,9 +1,7 @@
 -- Insertion sort on List Nat. Direction is an atom literal.
 -- :asc orders upward, :desc downward. Each variable is used once:
 -- order consumes the two numbers and returns them in the result.
-data List (A : Type) : Type where
-  nil  : List A
-  cons : A → List A → List A
+import "list.muro"
 
 data Ord : Type where
   leq : Nat → Nat → Ord

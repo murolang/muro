@@ -7,7 +7,7 @@ summary: Π, λ, modes, data, atoms, and streams, one paragraph each.
 
 # Marks
 
-`examples/sort.muro` is a run that sorts a list. The direction is an atom written in the file.
+`examples/sort.muro` is a run that sorts a list. It imports the `List` it sorts ([Import](language.md#import)). The direction is an atom written in the file.
 
 ```
 def sort : run Π (d : Atom) → Π (xs : List Nat) → List Nat :=

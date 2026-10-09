@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.16.12
+
+One file may name another. `import "list.muro"` loads that file. The path is relative to the importing file, and the string is the whole path. The imported file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A cycle of imports is an error. `examples/sort.muro` imports `list.muro` and does not declare `List`.
+
+### Load
+
+- `Muro.Load`. An `import` is resolved from the importing file.
+
+### Manual
+
+- Terms: import names a file.
+- Marks: `sort.muro` imports the list it sorts.
+
+### Package
+
+- Version 0.16.12.
+
 ## 0.16.11
 
 Emitted C allocates through `MURO_ALLOC`. The macro is `malloc` unless the caller defines it before the generated file is compiled. A long-running process can point it at one block and set the cursor back to the start after each call. The pointer a function returns points into that block, so the caller reads or copies it before the reset. A fieldless constructor stays a static object and is not taken from the block.

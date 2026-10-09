@@ -51,6 +51,12 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      import_start?(s) ->
+        case parse_import(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
       data_start?(s) ->
         case parse_data(s) do
           {:ok, d, rest} -> parse_book(rest, [d | acc])
@@ -66,6 +72,33 @@ defmodule Muro.Parser do
   end
 
   defp nu_start?(s), do: word_kw?(s, "ν") or word_kw?(s, "nu")
+
+  defp import_start?(s), do: word_kw?(s, "import")
+
+  defp parse_import(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "import"),
+         {:ok, path, rest} <- parse_string(skip(rest)) do
+      {:ok, %{kind: :import, path: path, loc: loc}, rest}
+    end
+  end
+
+  defp parse_string(s) do
+    case s do
+      "\"" <> rest -> read_string(rest, "")
+      _ -> {:error, err(s, "expected a string")}
+    end
+  end
+
+  defp read_string("\"" <> rest, acc), do: {:ok, acc, rest}
+  defp read_string("\n" <> _ = s, _acc), do: {:error, err(s, "unclosed string")}
+  defp read_string("", _acc), do: {:error, err("", "unclosed string")}
+
+  defp read_string(s, acc) do
+    {c, rest} = String.split_at(s, 1)
+    read_string(rest, acc <> c)
+  end
 
   # v1: only `ν Stream (A : Type) : Type where uncons : Stream A → A × Stream A`.
   # Stream is primitive; the block is checked for shape and then dropped.

@@ -196,6 +196,7 @@ defmodule Muro.EmitCTest do
     assert source =~ "static muro_nat *step(muro_nat *n)"
     cc!(dir, "internal_ok.c", "internal_ok.o")
 
+    File.cp!("examples/list.muro", Path.join(dir, "list.muro"))
     sort = Path.join(dir, "sort.muro")
     File.cp!("examples/sort.muro", sort)
     capture_io(fn -> Mix.Tasks.Muro.Emit.run([sort, "--backend", "c"]) end)
