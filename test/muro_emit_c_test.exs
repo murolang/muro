@@ -283,7 +283,7 @@ defmodule Muro.EmitCTest do
     assert source =~ "static muro_bool *muro_true(void)"
     assert source =~ "static muro_bool *muro_false(void)"
     refute source =~ ~r/(?<![\w])true\(/
-    cc!(dir, "reserved.c", "reserved.o", ~w(-std=c23))
+    cc!(dir, "reserved.c", "reserved.o", [c23_flag()])
 
     harness = Path.join(dir, "harness.c")
 
@@ -293,7 +293,26 @@ defmodule Muro.EmitCTest do
     #include "reserved.h"
     """)
 
-    cc!(dir, "harness.c", "harness.o", ~w(-std=c23))
+    cc!(dir, "harness.c", "harness.o", [c23_flag()])
+  end
+
+  # GCC 14 and Clang spell this `-std=c23`. GCC 13, which Ubuntu 24.04
+  # ships, only accepts the earlier name `-std=c2x`. Both reject `true`.
+  defp c23_flag do
+    if cc_accepts?("-std=c23"), do: "-std=c23", else: "-std=c2x"
+  end
+
+  defp cc_accepts?(flag) do
+    src = Path.join(System.tmp_dir!(), "muro_cc_#{System.unique_integer([:positive])}.c")
+    obj = Path.rootname(src) <> ".o"
+    File.write!(src, "int x;\n")
+
+    {_out, status} =
+      System.cmd("cc", [flag, "-c", src, "-o", obj], stderr_to_stdout: true)
+
+    File.rm(src)
+    File.rm(obj)
+    status == 0
   end
 
   defp tmp_dir do
