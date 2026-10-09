@@ -11,7 +11,7 @@ In brief: one sort `Type`. Binders are written. Application is juxtaposition. `m
 
 ## The book
 
-A `.muro` file is a **book**: a sequence of `ν`, `data`, and `def` entries.
+A `.muro` file is a **book**: a sequence of `import`, `ν`, `data`, and `def` entries.
 
 ```
 def name : tag type := body
@@ -22,6 +22,10 @@ The tag is `run`, `run internal`, `spec`, or `evidence`. There is no other tag.
 Forward references are allowed. The checker sees every definition when it checks any one of them.
 
 Definitions, data types, and constructors share one set of names. Each name is declared once.
+
+## Import
+
+`import "list.muro"` names a file. The path is relative to the importing file, and the string is the whole path. The file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A cycle of imports is an error. `examples/sort.muro` imports `list.muro` and does not declare `List`.
 
 ## Prelude
 
