@@ -37,6 +37,8 @@ defmodule Muro.EmitCTest do
     assert header =~ "struct muro_nat { uint8_t tag; muro_nat *suc; }; /* 0 = zero, 1 = suc */"
     assert header =~ "muro_nat *half(muro_nat *n);"
     assert header =~ "muro_nat *plus(muro_nat *n, muro_nat *m);"
+    assert header =~ "#ifndef MURO_ALLOC"
+    assert header =~ "#define MURO_ALLOC(n) malloc(n)"
     refute header =~ "IsEven"
     refute header =~ "half_ok("
 
@@ -44,6 +46,8 @@ defmodule Muro.EmitCTest do
     assert source =~ "muro_suc"
     refute source =~ "static muro_nat *half"
     assert source =~ "half("
+    assert source =~ "MURO_ALLOC(sizeof *p)"
+    refute source =~ "malloc("
 
     cc!(dir, "half_ok.c", "half_ok.o")
   end
@@ -334,9 +338,9 @@ defmodule Muro.EmitCTest do
     assert source =~ "static muro_tok muro_tok_zed_obj = {0};"
     assert source =~ "static muro_tok *zed(void) { return &muro_tok_zed_obj; }"
     assert source =~ "static muro_wrap *box(muro_nat *f0) {"
-    assert source =~ "muro_wrap *p = malloc(sizeof *p);"
+    assert source =~ "muro_wrap *p = MURO_ALLOC(sizeof *p);"
     assert source =~ "static muro_tok *one(muro_nat *f0) {"
-    refute source =~ "muro_bool *p = malloc"
+    refute source =~ "muro_bool *p = MURO_ALLOC"
     refute source =~ "muro_muro_bool"
     cc!(dir, "nullary.c", "nullary.o")
 
@@ -347,8 +351,96 @@ defmodule Muro.EmitCTest do
     assert list_c =~ "static muro_list muro_list_nil_obj = {0};"
     assert list_c =~ "static muro_list *nil(void) { return &muro_list_nil_obj; }"
     assert list_c =~ "static muro_list *cons(void *f0, muro_list *f1) {"
-    assert list_c =~ "muro_list *p = malloc(sizeof *p);"
+    assert list_c =~ "muro_list *p = MURO_ALLOC(sizeof *p);"
     cc!(dir, "list.c", "list.o")
+  end
+
+  test "MURO_ALLOC can be one block that resets after a call" do
+    dir = tmp_dir()
+    path = Path.join(dir, "call.muro")
+
+    File.write!(path, """
+    data Bool : Type where
+      true : Bool
+
+    def two : run Nat := suc (suc 0)
+    def flag : run Bool := true
+    """)
+
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+    header = File.read!(Path.join(dir, "call.h"))
+    source = File.read!(Path.join(dir, "call.c"))
+    assert header =~ "#define MURO_ALLOC(n) malloc(n)"
+    assert source =~ "MURO_ALLOC(sizeof *p)"
+    assert source =~ "static muro_bool muro_bool_true_obj = {0};"
+    refute source =~ "malloc("
+    cc!(dir, "call.c", "call.o")
+
+    File.write!(Path.join(dir, "arena.h"), """
+    #include <stddef.h>
+    #define MURO_ALLOC(n) muro_arena_alloc(n)
+    void *muro_arena_alloc(size_t n);
+    extern size_t muro_arena_at;
+    """)
+
+    File.write!(Path.join(dir, "arena.c"), """
+    #include "arena.h"
+
+    static unsigned char block[1 << 16];
+    size_t muro_arena_at;
+
+    void *muro_arena_alloc(size_t n) {
+      size_t at = (muro_arena_at + 7u) & ~(size_t)7u;
+      if (n > sizeof block || at > sizeof block - n) return 0;
+      muro_arena_at = at + n;
+      return block + at;
+    }
+    """)
+
+    File.write!(Path.join(dir, "main.c"), """
+    #include "arena.h"
+    #include "call.h"
+
+    static int nats(muro_nat *n) {
+      int k = 0;
+      while (n->tag == 1) {
+        n = n->suc;
+        k++;
+      }
+      return k;
+    }
+
+    int main(void) {
+      muro_nat *a = two();
+      int n1 = nats(a);
+      size_t used = muro_arena_at;
+      muro_bool *f = flag();
+      size_t after_flag = muro_arena_at;
+      muro_arena_at = 0;
+      muro_nat *b = two();
+      int n2 = nats(b);
+      if (n1 != 2 || n2 != 2) return 1;
+      if (used == 0 || muro_arena_at != used) return 2;
+      if (after_flag != used) return 3;
+      if (f != flag()) return 4;
+      return 0;
+    }
+    """)
+
+    cc!(dir, "call.c", "call_arena.o", ~w(-include arena.h))
+    cc!(dir, "arena.c", "arena.o")
+    cc!(dir, "main.c", "main.o")
+
+    {link, status} =
+      System.cmd("cc", ~w(call_arena.o arena.o main.o -o call_bin),
+        cd: dir,
+        stderr_to_stdout: true
+      )
+
+    assert status == 0, link
+
+    {out, status} = System.cmd(Path.join(dir, "call_bin"), [], stderr_to_stdout: true)
+    assert status == 0, out
   end
 
   # GCC 14 and Clang spell this `-std=c23`. GCC 13, which Ubuntu 24.04

@@ -13,6 +13,9 @@ defmodule Muro.Emit.C do
   `Tensor` are refused (`c:machine`). A lambda applied on the spot is a
   local. An unapplied lambda, and a call of a local function, are
   `c:lambda`.
+
+  Allocations call `MURO_ALLOC`, which is `malloc` unless the caller
+  defines it. A constructor with no fields is a static object and does not.
   """
 
   alias Muro.{Ast, Emit}
@@ -567,7 +570,7 @@ defmodule Muro.Emit.C do
       end)
 
     pre = """
-    #{env_ty} *#{var} = malloc(sizeof *#{var});
+    #{env_ty} *#{var} = MURO_ALLOC(sizeof *#{var});
     if (#{var} == 0) abort();
     #{assigns}
     """
@@ -933,6 +936,7 @@ defmodule Muro.Emit.C do
       "#ifndef #{g}",
       "#define #{g}",
       "#include <stdint.h>",
+      alloc_macro(),
       nat_struct(),
       unit_struct(),
       atom_enum(book),
@@ -1023,6 +1027,15 @@ defmodule Muro.Emit.C do
     map
   end
 
+  defp alloc_macro do
+    """
+    #ifndef MURO_ALLOC
+    #define MURO_ALLOC(n) malloc(n)
+    #endif
+    """
+    |> String.trim()
+  end
+
   defp nat_struct do
     """
     typedef struct muro_nat muro_nat;
@@ -1042,7 +1055,7 @@ defmodule Muro.Emit.C do
   defp nat_helpers do
     """
     static muro_nat *muro_nat_new(uint8_t tag, muro_nat *suc) {
-      muro_nat *p = malloc(sizeof *p);
+      muro_nat *p = MURO_ALLOC(sizeof *p);
       if (p == 0) abort();
       p->tag = tag;
       p->suc = suc;
@@ -1071,7 +1084,7 @@ defmodule Muro.Emit.C do
       typedef struct muro_pair_s { void *fst; void *snd; } muro_pair;
 
       static muro_pair *muro_mk_pair(void *fst, void *snd) {
-        muro_pair *p = malloc(sizeof *p);
+        muro_pair *p = MURO_ALLOC(sizeof *p);
         if (p == 0) abort();
         p->fst = fst;
         p->snd = snd;
@@ -1121,7 +1134,7 @@ defmodule Muro.Emit.C do
       };
 
       static muro_stream *muro_stream_new(void *seed, void *env, muro_pair *(*step)(void *env, void *seed)) {
-        muro_stream *p = malloc(sizeof *p);
+        muro_stream *p = MURO_ALLOC(sizeof *p);
         if (p == 0) abort();
         p->seed = seed;
         p->env = env;
@@ -1266,7 +1279,7 @@ defmodule Muro.Emit.C do
 
       text = """
       static #{ptr}#{fun}(#{args}) {
-        #{ptr}p = malloc(sizeof *p);
+        #{ptr}p = MURO_ALLOC(sizeof *p);
         if (p == 0) abort();
         p->tag = #{tag};
       #{assigns}
