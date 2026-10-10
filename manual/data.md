@@ -60,6 +60,15 @@ def fromMaybe : run Π (-A : Type) → Π (d : A) → Π (m : Maybe A) → A :=
 
 `A` is erased. Emit drops that argument. `fromMaybe Nat 0 (just (suc 0))` converts to `suc 0`; `fromJust1` is `refl`.
 
+A branch binds each field at the quantity the constructor declares. The default is affine: `a` in `just a` is used at most once in run and evidence. A constructor may declare a field `+` when its type is copyable (Data, a function, or a pair of copyable types), and then every branch binds that field reusable:
+
+```
+data Seed : Type where
+  at : Π (+ s : State) → Π (+ n : Nat) → Seed
+```
+
+A `match` on a `Seed` may use `s` and `n` as often as it needs. The `+` on a field is checked like the `+` on a binder: `Π (+ s : Stream Nat) → …` is refused, and a `+` field of function type scales the uses of the argument that fills it, so `box (addn n)` with `box : Π (+ f : Nat → Nat) → Box` needs a reusable `n`.
+
 ## Positivity
 
 A constructor field is strictly positive in `D` after the checker unfolds it. `D` may be absent. `D` may be the head of a spine whose arguments do not contain `D`. `D` may occur to the right of a `Π` whose domain does not contain `D`. A product is positive on both sides. `D` inside an argument of `D` is refused, including under a spec name: `Contra := Bad → Empty` is the negative arrow, and `List (Tree A)` is nested. Another data type is held to the same test: its parameters are instantiated and every one of its fields must be strictly positive in `D`. `Wrap` that stores a `Bad`, placed in a domain `(Wrap → Empty)`, is refused. `Tree` and `Forest`, each storing the other as a field, are accepted. A field that does not reduce in the fuel is refused.
@@ -110,7 +119,7 @@ def size : run Π (t : Tree) → Nat :=
 
 ## When is a data type Data?
 
-`+` is allowed only if the type WHNFs to Data. For a user type, every *parameter* must be Data. Indices are not asked.
+`+` is allowed only if the type WHNFs to a copyable type: Data, a function, or a pair of copyable types ([Binders and quantities](language.md#binders-and-quantities)). For a user type to be Data, every *parameter* must be Data. Indices are not asked.
 
 - `List Nat` is Data. `+xs : List Nat` may be reused.
 - `List (Nat → Nat)` is not.

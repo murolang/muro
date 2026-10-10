@@ -1570,6 +1570,92 @@ defmodule Muro.CheckTest do
     assert msg =~ "unclosed string"
   end
 
+  test "a function and a pair of Data are copyable at +" do
+    plus =
+      "def plus : run Π (n : Nat) → Π (m : Nat) → Nat := λ (n : Nat) → λ (m : Nat) → n\n"
+
+    # a + function parameter is applied twice, and mapped over a list
+    fns =
+      plus <>
+        """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+        def twice : run Π (+ f : Π (_ : Nat) → Nat) → Π (n : Nat) → Nat :=
+          λ (+ f : Π (_ : Nat) → Nat) → λ (n : Nat) → f (f n)
+        def map : run Π (+ f : Π (_ : Nat) → Nat) → Π (xs : List Nat) → List Nat :=
+          λ (+ f : Π (_ : Nat) → Nat) → λ (xs : List Nat) →
+            match xs motive (λ _ → List Nat)
+              | nil => nil
+              | cons x rest => cons (f x) (map f rest)
+        def both : run Π (+ p : Nat × Nat) → Nat :=
+          λ (+ p : Nat × Nat) → plus (fst p) (snd p)
+        def two : evidence {twice (plus (suc 0)) 0 ≡ suc 0 : Nat} := refl
+        """
+
+    assert {:ok, book} = Parser.parse(fns)
+    assert Check.check_sig(book) == :ok
+
+    # a closure over a reusable variable may be passed at +
+    addn =
+      "def addn : run Π (n : Nat) → Π (m : Nat) → Nat := λ (n : Nat) → λ (m : Nat) → plus n m\n"
+
+    pass = fn q ->
+      plus <>
+        addn <>
+        """
+        def twice : run Π (+ f : Π (_ : Nat) → Nat) → Π (n : Nat) → Nat :=
+          λ (+ f : Π (_ : Nat) → Nat) → λ (n : Nat) → f (f n)
+        def g : run Π (#{q}n : Nat) → Nat :=
+          λ (#{q}n : Nat) → twice (addn n) (suc 0)
+        """
+    end
+
+    assert {:ok, book} = Parser.parse(pass.("+ "))
+    assert Check.check_sig(book) == :ok
+
+    # a closure over an affine variable is refused there: copying the
+    # function would copy what it captured
+    assert {:ok, book} = Parser.parse(pass.(""))
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "affine variable used as reusable"
+
+    # the same rule at a + constructor field
+    field = fn q ->
+      plus <>
+        addn <>
+        """
+        data Box : Type where
+          box : Π (+ f : Π (_ : Nat) → Nat) → Box
+        def use : run Π (b : Box) → Nat :=
+          λ (b : Box) → match b motive (λ _ → Nat) | box f => f (f (suc 0))
+        def g : run Π (#{q}n : Nat) → Box := λ (#{q}n : Nat) → box (addn n)
+        """
+    end
+
+    assert {:ok, book} = Parser.parse(field.("+ "))
+    assert Check.check_sig(book) == :ok
+    assert {:ok, book} = Parser.parse(field.(""))
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "affine variable used as reusable"
+
+    # a stream is not copyable, at a binder, a field, or a branch
+    stream = "def f : run Π (+ s : Stream Nat) → Nat := λ (+ s : Stream Nat) → head s\n"
+    assert {:ok, book} = Parser.parse(stream)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "+ requires a copyable type"
+
+    sfield = "data W : Type where\n  w : Π (+ s : Stream Nat) → W\n"
+    assert {:ok, book} = Parser.parse(sfield)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "+ requires a copyable type"
+
+    spair = "def f : run Π (+ p : Nat × Stream Nat) → Nat := λ (+ p : Nat × Stream Nat) → fst p\n"
+    assert {:ok, book} = Parser.parse(spair)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "+ requires a copyable type"
+  end
+
   test "uncons of a Nat is not a ν step" do
     src = "def bad : run Nat := uncons 0\n"
     assert {:ok, book} = Parser.parse(src)

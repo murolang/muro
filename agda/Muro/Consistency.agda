@@ -58,6 +58,7 @@ ctor-no-⇒ sp-[] ()
 ctor-no-⇒ (sp-snoc sp) (⇒-app-aff D _ _ _) = ctor-no-⇒ sp D
 ctor-no-⇒ (sp-snoc sp) (⇒-app-era D _ _) = ctor-no-⇒ sp D
 ctor-no-⇒ (sp-snoc sp) (⇒-app-reuse D _ _ _ _) = ctor-no-⇒ sp D
+ctor-no-⇒ (sp-snoc sp) (⇒-app-copy D _ _ _ _) = ctor-no-⇒ sp D
 
 ctor-no-⇐ : ∀ {n} {Γ : Ctx n} {m i j as e A u}
   → Spine (ctor i j) as e → σ-empty , Γ ⊢[ m ] e ⇐ A ⊣ u → ⊥
@@ -74,6 +75,7 @@ dty-no-⇒ sp-[] (⇒-dty lk) = fail≢ok lk
 dty-no-⇒ (sp-snoc sp) (⇒-app-aff D _ _ _) = dty-no-⇒ sp D
 dty-no-⇒ (sp-snoc sp) (⇒-app-era D _ _) = dty-no-⇒ sp D
 dty-no-⇒ (sp-snoc sp) (⇒-app-reuse D _ _ _ _) = dty-no-⇒ sp D
+dty-no-⇒ (sp-snoc sp) (⇒-app-copy D _ _ _ _) = dty-no-⇒ sp D
 
 dty-no-⇐ : ∀ {n} {Γ : Ctx n} {m i as e A u}
   → Spine (dty i) as e → σ-empty , Γ ⊢[ m ] e ⇐ A ⊣ u → ⊥
@@ -169,6 +171,7 @@ ne-untyped-⇒ (ne-def _) (⇒-def lk _) = fail≢ok lk
 ne-untyped-⇒ (ne-app ne) (⇒-app-aff D _ _ _) = ne-untyped-⇒ ne D
 ne-untyped-⇒ (ne-app ne) (⇒-app-era D _ _) = ne-untyped-⇒ ne D
 ne-untyped-⇒ (ne-app ne) (⇒-app-reuse D _ _ _ _) = ne-untyped-⇒ ne D
+ne-untyped-⇒ (ne-app ne) (⇒-app-copy D _ _ _ _) = ne-untyped-⇒ ne D
 ne-untyped-⇒ (ne-mNat ne) (⇒-mNat D _ _ _ _ _) = ne-untyped-⇐ ne D
 ne-untyped-⇒ (ne-mUnit ne) (⇒-mUnit D _ _ _) = ne-untyped-⇐ ne D
 ne-untyped-⇒ (ne-mEmp ne) (⇒-mEmp D _) = ne-untyped-⇐ ne D
@@ -393,6 +396,10 @@ progress-⇒ (⇒-app-era Df c _) with progress-⇒ Df
 ... | inj₁ nf with nf-fun nf Df c
 ...   | is-lam = inj₂ (_ , β)
 progress-⇒ (⇒-app-reuse Df c _ _ _) with progress-⇒ Df
+... | inj₂ (_ , s) = inj₂ (_ , app-f s)
+... | inj₁ nf with nf-fun nf Df c
+...   | is-lam = inj₂ (_ , β)
+progress-⇒ (⇒-app-copy Df c _ _ _) with progress-⇒ Df
 ... | inj₂ (_ , s) = inj₂ (_ , app-f s)
 ... | inj₁ nf with nf-fun nf Df c
 ...   | is-lam = inj₂ (_ , β)

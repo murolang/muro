@@ -130,7 +130,7 @@ data _,_⊢[_]_⇒_⊣_ σ Γ where
 
   ⇒-lam : ∀ {m q A t B u0 us}
     → σ , Γ ⊢ A wf
-    → ReuseOk σ q A
+    → CopyOk σ q A
     → σ , ext Γ q A ⊢[ m ] t ⇒ B ⊣ (u0 ∷ us)
     → checkBound m q u0 ≡ ok tt
     → σ , Γ ⊢[ m ] lam q A t ⇒ pi q A B ⊣ us
@@ -157,6 +157,18 @@ data _,_⊢[_]_⇒_⊣_ σ Γ where
     → IsData σ A
     → σ , Γ ⊢[ m ] a ⇐ A ⊣ au
     → appUses σ m f fu au ≡ ok uses
+    → σ , Γ ⊢[ m ] app f a ⇒ inst B a ⊣ uses
+
+  -- A copyable argument that is not Data is a closure (or holds one):
+  -- the function may apply it many times, so its uses are scaled to ω
+  -- before they are combined. Check takes this rule when isData is
+  -- false.
+  ⇒-app-copy : ∀ {m F A B f a fu au uses}
+    → σ , Γ ⊢[ m ] f ⇒ F ⊣ fu
+    → σ ⊢[ spec ] F ≈ pi reuse A B
+    → IsCopy σ A
+    → σ , Γ ⊢[ m ] a ⇐ A ⊣ au
+    → appUses σ m f fu (scaleω au) ≡ ok uses
     → σ , Γ ⊢[ m ] app f a ⇒ inst B a ⊣ uses
 
   -- The sort A may be a kind: {Nat ≡ Unit : Type} : Type. This is the one
@@ -272,7 +284,7 @@ data _,_⊢[_]_⇐_⊣_ σ Γ where
     → σ , Γ ⊢ A wf
     → σ ⊢[ spec ] T ≈ pi q A′ B
     → σ ⊢[ spec ] A ≈ A′
-    → ReuseOk σ q A′
+    → CopyOk σ q A′
     → σ , ext Γ q A′ ⊢[ m ] t ⇐ B ⊣ (u0 ∷ us)
     → checkBound m q u0 ≡ ok tt
     → σ , Γ ⊢[ m ] lam q A t ⇐ T ⊣ us
@@ -334,8 +346,19 @@ data _,_⊢[_]_▹_⇝_⊣_ σ Γ where
   args-snoc : ∀ {m T q A B a as R asu au uses}
     → σ , Γ ⊢[ m ] T ▹ as ⇝ R ⊣ asu
     → σ ⊢[ spec ] R ≈ pi q A B
+    → ReuseOk σ q A
     → σ , Γ ⊢[ fieldMode q m ] a ⇐ A ⊣ au
     → combineArg q m au asu ≡ ok uses
+    → σ , Γ ⊢[ m ] T ▹ (as ++ (a ∷ [])) ⇝ inst B a ⊣ uses
+
+  -- A + field whose type is copyable but not Data: the argument's uses
+  -- are scaled to ω, as in ⇒-app-copy.
+  args-snoc-copy : ∀ {m T A B a as R asu au uses}
+    → σ , Γ ⊢[ m ] T ▹ as ⇝ R ⊣ asu
+    → σ ⊢[ spec ] R ≈ pi reuse A B
+    → IsCopy σ A
+    → σ , Γ ⊢[ m ] a ⇐ A ⊣ au
+    → combineArg reuse m (scaleω au) asu ≡ ok uses
     → σ , Γ ⊢[ m ] T ▹ (as ++ (a ∷ [])) ⇝ inst B a ⊣ uses
 
 -- Branches, one per constructor. A constructor whose telescope (at the

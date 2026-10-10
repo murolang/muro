@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.16.13
+
+`+` accepts a copyable type: Data, a Π type, or a pair of copyable types. A Data argument at a `+` position keeps its uses, as before. A function (or a pair holding one) copies by closure, so such an argument has every use inside it counted as many: `twice (addn n) 1` with `twice : Π (+ f : Nat → Nat) → …` checks when `n` is reusable and is refused with `affine variable used as reusable` when `n` is affine. A constructor may declare a `+` field of function type under the same rule, and the `+` on a `match` branch binder is now checked by `Muro.Check` as the Agda checker always did. A pair of two Data types is Data. The refusal for a stream at `+` reads `+ requires a copyable type: Data, a pair of them, or a function`.
+
+### Kernel
+
+- `Data.IsCopy`, `Data.CopyOk`, `Data.d-prod`; `Env.scaleω`; `Judgement.⇒-app-copy`, `args-snoc-copy`, `CopyOk` on the λ rules and on `bt-pi`; `Typing`, `Wall`, `Consistency`; `Check.isCopy`, `Check.fieldUses`; `Soundness.Views.isCopy-sound`, `copyOk-sound`, `prodData-sound`; `Soundness`. Agda first, then `Muro.Check` (`is_copy`, `reuse_arg_uses`, `scale_omega`, `field_uses`).
+
+### Manual
+
+- Terms: copyable types and the scaling of a function argument at `+`.
+- Data: a `+` field of function type.
+- Either: a refutation is copyable.
+- Limits: `P → Empty` removed from the list of refusals.
+
+### Package
+
+- Version 0.16.13.
+
 ## 0.16.12
 
 One file may name another. `import "list.muro"` loads that file. The path is relative to the importing file, and the string is the whole path. The imported file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A cycle of imports is an error. `examples/sort.muro` imports `list.muro` and does not declare `List`.

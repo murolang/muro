@@ -104,6 +104,16 @@ u0s : ∀ {n} → UseVec n
 u0s {zero}  = Vec.[]
 u0s {suc n} = U0 Vec.∷ u0s
 
+-- An argument that will be copied: one use becomes many. Applied to the
+-- uses of a term passed at a + position whose type is copyable but not
+-- Data (a closure), so that an affine variable it captures is refused.
+scaleUse : Use → Use
+scaleUse U1 = Uω
+scaleUse u  = u
+
+scaleω : ∀ {n} → UseVec n → UseVec n
+scaleω = map scaleUse
+
 oneHot : ∀ {n} → Fin n → Use → UseVec n
 oneHot {suc _} zero    u = u  Vec.∷ u0s
 oneHot {suc _} (suc i) u = U0 Vec.∷ oneHot i u

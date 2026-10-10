@@ -21,7 +21,7 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - Quantities other than affine, `+`, and `-`
 - User-defined ν-predicates (Stream, Always, and `~` are the ones that exist)
 - `+` on Stream
-- `+` on Either, or on `P → Empty`
+- `+` on Either
 - Typing raw Elixir
 - Emitting spec or evidence
 - Identity on `F32` or `Tensor F32 S`
