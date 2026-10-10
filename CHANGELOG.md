@@ -2,7 +2,7 @@
 
 ## 0.16.14
 
-The predecessor bound by a `match` on `Nat` has the quantity of the scrutinee when the scrutinee is a variable. Under `(+ n : Nat)`, `match n` binds a reusable predecessor, and `plus p p` checks in the `suc p` branch. Under an affine variable, or a computed scrutinee, the predecessor is affine as before. A reusable number was free to copy, and so is the number under its `suc`. The `solve` of each environment under `examples/cshrl/` is now one `match` on the depth.
+The predecessor bound by a `match` on `Nat` has the quantity of the scrutinee when the scrutinee is a variable. Under `(+ n : Nat)`, `match n` binds a reusable predecessor, and `plus p p` checks in the `suc p` branch. Under an affine variable, or a computed scrutinee, the predecessor is affine as before. A reusable number was free to copy, and so is the number under its `suc`.
 
 ### Kernel
 
@@ -11,7 +11,7 @@ The predecessor bound by a `match` on `Nat` has the quantity of the scrutinee wh
 ### Manual
 
 - Terms: the predecessor's quantity.
-- Data: a constructor may declare a `+` field, and a branch binds it reusable.
+- Data: a `match` on `Nat` reads the scrutinee's quantity for the predecessor.
 
 ### Package
 
