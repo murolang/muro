@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.16.14
+
+The predecessor bound by a `match` on `Nat` has the quantity of the scrutinee when the scrutinee is a variable. Under `(+ n : Nat)`, `match n` binds a reusable predecessor, and `plus p p` checks in the `suc p` branch. Under an affine variable, or a computed scrutinee, the predecessor is affine as before. A reusable number was free to copy, and so is the number under its `suc`. The `solve` of each environment under `examples/cshrl/` is now one `match` on the depth.
+
+### Kernel
+
+- `Env.predQty`, `Judgement.⇒-mNat`, `Typing.t-mNat` (any quantity on the predecessor; `≤ᵐ-modeFor` for the ι step), `Check.infer′`, `Soundness`. Agda first, then `Muro.Check`.
+
+### Manual
+
+- Terms: the predecessor's quantity.
+- Data: a constructor may declare a `+` field, and a branch binds it reusable.
+
+### Package
+
+- Version 0.16.14.
+
 ## 0.16.13
 
 `+` accepts a copyable type: Data, a Π type, or a pair of copyable types. A Data argument at a `+` position keeps its uses, as before. A function (or a pair holding one) copies by closure, so such an argument has every use inside it counted as many: `twice (addn n) 1` with `twice : Π (+ f : Nat → Nat) → …` checks when `n` is reusable and is refused with `affine variable used as reusable` when `n` is affine. A constructor may declare a `+` field of function type under the same rule, and the `+` on a `match` branch binder is now checked by `Muro.Check` as the Agda checker always did. A pair of two Data types is Data. The refusal for a stream at `+` reads `+ requires a copyable type: Data, a pair of them, or a function`.
