@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.16.14
+
+The predecessor bound by a `match` on `Nat` has the quantity of the scrutinee when the scrutinee is a variable. Under `(+ n : Nat)`, `match n` binds a reusable predecessor, and `plus p p` checks in the `suc p` branch. Under an affine variable, or a computed scrutinee, the predecessor is affine as before. A reusable number was free to copy, and so is the number under its `suc`. The `solve` of each environment under `examples/cshrl/` is now one `match` on the depth.
+
+### Kernel
+
+- `Env.predQty`, `Judgement.⇒-mNat`, `Typing.t-mNat` (any quantity on the predecessor; `≤ᵐ-modeFor` for the ι step), `Check.infer′`, `Soundness`. Agda first, then `Muro.Check`.
+
+### Manual
+
+- Terms: the predecessor's quantity.
+- Data: a constructor may declare a `+` field, and a branch binds it reusable.
+
+### Package
+
+- Version 0.16.14.
+
 ## 0.16.13
 
 A library of `.muro` files under `stdlib/`, imported by path. `nat.muro` is the order `Le` on `Nat`, written as a `spec` function that computes on numerals, with `maxN` and its lemmas: `le-refl`, `le-trans`, `maxN-le`, `le-maxN-left`, `le-maxN-right`, `maxN-mono`. `cshrl.muro` states the two optimality conditions of Coinductive Symmetric Homomorphism RL for an environment given as arguments, `CoinductiveHomomorphism` and `CoindHomo`, with `ActionValue`, `Dominates`, `HeadCompatible`, and the two directions of the decomposition as evidence. Three environments under `examples/cshrl/` import it: `two_state.muro` is a `CoindHomo` assembled from the successor condition and the head condition; `binary_sacrifice.muro` is a `CoinductiveHomomorphism` whose head condition is refuted, and tabulates its value stream as a `run` that emits; `skill_investment.muro` proves three dominances in one induction on the depth.
