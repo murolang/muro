@@ -48,6 +48,7 @@ defmodule Muro.Parser do
       nu_start?(s) ->
         case parse_nu(s) do
           {:ok, rest} -> parse_book(rest, acc)
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
           err -> err
         end
 
@@ -100,14 +101,58 @@ defmodule Muro.Parser do
     read_string(rest, acc <> c)
   end
 
-  # v1: only `ν Stream (A : Type) : Type where uncons : Stream A → A × Stream A`.
-  # Stream is primitive; the block is checked for shape and then dropped.
+  # `ν Stream (A : Type) : Type where uncons : Stream A → A × Stream A`
+  # is checked for shape and dropped: Stream is primitive. Any other name
+  # declares a family over its indices,
+  #
+  #   ν Name (x₁ : A₁) … (xₙ : Aₙ) : Type where uncons : Name x₁ … xₙ → B
+  #
+  # and is the spec definition `Name : Π (x₁ : A₁) … → Type` whose body
+  # is `ν Name. λ x₁ … xₙ → B`: inside B, Name is the ν-bound family.
   defp parse_nu(s) do
+    loc = here(s)
     rest = s |> skip() |> eat_kw(["ν", "nu"])
 
-    with {:ok, name, rest} <- ident(skip(rest)),
-         :ok <- if(name == "Stream", do: :ok, else: {:error, "v1 only supports ν Stream"}),
-         {:ok, {_q, _x, a}, rest} <- parse_binder(rest),
+    with {:ok, name, rest} <- ident(skip(rest)) do
+      if name == "Stream", do: parse_nu_stream(rest), else: parse_nu_family(name, loc, rest)
+    end
+  end
+
+  defp parse_nu_family(name, loc, s) do
+    with {:ok, binders, rest} <- parse_param_binders(skip(s)),
+         :ok <-
+           if(binders == [],
+             do: {:error, err(rest, "a ν family takes at least one index")},
+             else: :ok
+           ),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, sort, rest} <- parse_term(skip(rest), 0),
+         :ok <- if(sort == :typ, do: :ok, else: {:error, err(rest, "a ν family is a Type")}),
+         {:ok, rest} <- kw(skip(rest), "where"),
+         {:ok, ctor, rest} <- ident(skip(rest)),
+         :ok <- if(ctor == "uncons", do: :ok, else: {:error, err(rest, "expected uncons")}),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, ctor_ty, rest} <- parse_term(skip(rest), 0),
+         {:ok, body} <- nu_family_body(name, binders, ctor_ty, rest) do
+      ty = List.foldr(binders, :typ, fn {q, x, a}, acc -> {:pi, q, a, x, acc} end)
+      fam = List.foldr(binders, body, fn {q, x, a}, acc -> {:lam, q, a, x, acc} end)
+      {:ok, %{name: name, mode: :spec, type: ty, body: {:nu, name, fam}, loc: loc}, rest}
+    end
+  end
+
+  defp nu_family_body(name, binders, {:pi, _, dom, _, body}, rest) do
+    self = Enum.reduce(binders, {:var, name}, fn {_, x, _}, acc -> {:app, acc, {:var, x}} end)
+
+    if dom == self,
+      do: {:ok, body},
+      else: {:error, err(rest, "uncons must take #{name} applied to its indices in order")}
+  end
+
+  defp nu_family_body(name, _binders, _ty, rest),
+    do: {:error, err(rest, "uncons must be a function from #{name} applied to its indices")}
+
+  defp parse_nu_stream(rest) do
+    with {:ok, {_q, _x, a}, rest} <- parse_binder(rest),
          {:ok, rest} <- tok(skip(rest), ":"),
          {:ok, ty, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- kw(skip(rest), "where"),

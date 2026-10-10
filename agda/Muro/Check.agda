@@ -759,19 +759,26 @@ checkUnfold k σ _ rs f = whnf k σ f >>= go
       else ok tt
     go _ = fail "unfold body must be a pair"
 
-checkNu : ∀ {n} → Mode → Tm n → Tm n → Result ⊤
-checkNu spec _ _ = ok tt
-checkNu _    T t = go T t
+-- On run/evid, a definition whose type reduces to a ν (bare, or a
+-- family applied to any number of indices) is an unfold, or it does not
+-- mention its own block: a call into the block is productive only as
+-- the tail of an unfold step, where checkUnfold guards it.
+isNuHead : ∀ {n} → Tm n → Bool
+isNuHead (nu _) = true
+isNuHead _      = false
+
+checkNu : ∀ {n} → ℕ → Sig → List ℕ → Mode → Tm n → Tm n → Result ⊤
+checkNu _       _ _   spec _ _ = ok tt
+checkNu zero    _ _   _    _ _ = fail outOfFuel
+checkNu (suc k) σ blk m    T t = whnf (suc k) σ T >>= λ T′ → go T′ t
   where
     go : ∀ {n} → Tm n → Tm n → Result ⊤
-    go (pi _ _ B)             (lam _ _ u) = go B u
-    go (nu _)                 (unf _ _)   = ok tt
-    go (nu _)                 _           = fail "ν value must be an unfold"
-    go (app (nu _) _)         (unf _ _)   = ok tt
-    go (app (app (nu _) _) _) (unf _ _)   = ok tt
-    go (app (nu _) _)         _           = fail "ν value must be an unfold"
-    go (app (app (nu _) _) _) _           = fail "ν value must be an unfold"
-    go _                      _           = ok tt
+    go (pi _ _ B) (lam _ _ u) = checkNu k σ blk m B u
+    go _          (unf _ _)   = ok tt
+    go T′         u           =
+      if isNuHead (proj₁ (apps T′)) ∧ hasSelf blk u
+      then fail "ν value calls its own block outside an unfold"
+      else ok tt
 
 mutual
   occurs : ∀ {n} → Fin n → Tm n → Bool
@@ -1131,25 +1138,17 @@ setGuard : ∀ {n} → RecSt n → RecSt n
 setGuard (recst sl p na sm rok _ blk) = recst sl p na sm rok true blk
 
 -- Kind of a ν body. A product (Stream) has kind Type. A λ-telescope
--- has the Π of its domains; the binder Y does not occur in the kind.
--- Deeper than Stream A → Stream A → Type is refused.
-nuKind₂ : ∀ {n} → Tm (suc (suc (suc n))) → Result (Tm (suc (suc n)))
-nuKind₂ (lam _ _ _) = fail "ν family is too deep"
-nuKind₂ _ = ok typ
-
-nuKind₁ : ∀ {n} → Tm (suc (suc n)) → Result (Tm (suc n))
-nuKind₁ (lam q A t) =
-  renM (skipAt 1) A >>= λ A′ →
-  nuKind₂ t >>= λ B →
+-- of any length has the Π of its domains; the binder Y, `y` binders
+-- out, does not occur in the kind.
+nuKindAt : ∀ {n} → ℕ → Tm (suc n) → Result (Tm n)
+nuKindAt y (lam q A t) =
+  renM (skipAt y) A >>= λ A′ →
+  nuKindAt (suc y) t >>= λ B →
   ok (pi q A′ B)
-nuKind₁ _ = ok typ
+nuKindAt _ _ = ok typ
 
 nuKind : ∀ {n} → Tm (suc n) → Result (Tm n)
-nuKind (lam q A t) =
-  renM (skipAt 0) A >>= λ A′ →
-  nuKind₁ t >>= λ B →
-  ok (pi q A′ B)
-nuKind _ = ok typ
+nuKind = nuKindAt 0
 
 applyFam : ∀ {n} → Tm n → List (Tm n) → Tm n
 applyFam t []             = t
@@ -1919,7 +1918,7 @@ checkDef k σ i =
   tag (Def.dname d ++ " type") (checkTy k σ emptyRec [] (Def.dtype d)) >>
   tag (Def.dname d ++ " body") (checkBody k σ i d) >>
   tag (Def.dname d ++ " productivity")
-      (checkNu (Def.dmode d) (Def.dtype d) (Def.dbody d)) >>
+      (checkNu k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d)) >>
   ok tt
 
 checkDefs : ℕ → Sig → ℕ → List Def → Result ⊤

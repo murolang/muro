@@ -2,7 +2,7 @@
 title: Streams
 slug: streams
 order: 9
-summary: ν, unfold, Always, and bisimulation.
+summary: ν, unfold, Always, bisimulation, and declared ν families.
 ---
 
 # Streams
@@ -11,7 +11,7 @@ In brief: μ descends (`match` on Nat). ν is a greatest fixed point. Stream is 
 
 ## ν Stream
 
-There is one ν former. The block is required for shape, then dropped — Stream is primitive.
+Stream is primitive: its block is required for shape, then dropped. Any other name declares a ν family ([Declared families](#declared-families)).
 
 ```
 ν Stream (A : Type) : Type where
@@ -24,15 +24,17 @@ ASCII: `nu Stream (A : Type) : Type where uncons : Stream A -> A * Stream A`.
 
 ## unfold
 
-A ν value must be an `unfold`.
+A ν value is built by an `unfold`.
 
 ```
 unfold seed (λ (s : S) → (head, next_seed))
 ```
 
-The body is a pair. Productivity: in `run` and `evidence`, the self-name of the definition must not occur in the pair’s **head**. The tail may continue the stream. Spec does not run this check.
+The body is a pair. Productivity: in `run` and `evidence`, no definition of the recursive block may occur in the pair’s **head**. The tail may continue the stream. Spec does not run this check.
 
-`+` is still only for Data. You may write `(+ k : Nat)` in an unfold step when the seed is Nat.
+A definition whose type is a ν need not be an `unfold` itself: `def nats : run Stream Nat := tabulate ident` checks. Such a body may not call its own block; a call into the block is productive only as the tail of an unfold step, so `def s : run Stream Nat := s` is refused.
+
+A stream is not copyable, so a seed of type `Stream` is affine. A Nat seed may be `+`: `(+ k : Nat)` in an unfold step.
 
 ### zeros
 
@@ -90,6 +92,29 @@ def nats-tail-bisim : evidence Π (n : Nat) → tail (natsFrom n) ~ natsFrom (su
 
 (`examples/bisim.muro`.) `uncons` of a proof of `σ ~ τ` is `{head σ ≡ head τ} × (tail σ ~ tail τ)`. Always, `~`, and their inhabitants are evidence (or live in evidence). They are not Elixir streams.
 
-There are no user-defined ν-predicates. See [Limits](limits.md).
+## Declared families
+
+A `ν` block with any name other than `Stream` declares a family over its indices. `uncons` takes the family at its indices, in order, to the body:
+
+```
+ν Dom (f : Stream Nat) (g : Stream Nat) : Type where
+  uncons : Dom f g → Le (head f) (head g) × Dom (tail f) (tail g)
+```
+
+`Dom` is the spec definition `Π (f : Stream Nat) → Π (g : Stream Nat) → Type` whose body is `ν Dom. λ f g → …`: inside the body, `Dom` is the family itself, as the recursive variable is for `Always` and `~`. The body is a type in which the family occurs strictly positively, applied to all its indices; it may occur more than once. A family takes at least one index, and as many as it needs.
+
+An `unfold` of `Dom f g` checks the body at `f` and `g`: the head obligation, and a proof of `Dom` at the tails. The proof at the tails is a call into the block, guarded as for `Always`. `uncons` of a proof reads the same pair back, so `head d : Le (head f) (head g)`.
+
+```
+def dom-refl : evidence Π (s : Stream Nat) → Dom s s :=
+  λ (s : Stream Nat) →
+    unfold tt (λ (_ : Unit) → (le-refl (head s), dom-refl (tail s)))
+
+def zeros-below : evidence Π (n : Nat) → Dom zeros (natsFrom n) :=
+  λ (n : Nat) →
+    unfold tt (λ (_ : Unit) → (tt, zeros-below (suc n)))
+```
+
+(`examples/dominance.muro`.) A family is spec; its proofs are evidence, omitted at emit. Declared families are checked by `Muro.Check` and by the Agda checker (`agda/Muro/ExampleFamily.agda`), and they are outside ⊢, as Stream, `Always`, and `~` are ([Limits](limits.md)).
 
 Next: [Either and Dec](either.md).
