@@ -1,0 +1,42 @@
+-- dominance.muro — a declared ν family: Dom f g holds when every element
+-- of f is at most the element of g at the same position.
+-- An unfold of Dom f g gives the head obligation and a proof of Dom at
+-- the tails; uncons (and head) read that pair back.
+ν Stream (A : Type) : Type where
+  uncons : Stream A → A × Stream A
+
+def Le : spec Π (m : Nat) → Π (n : Nat) → Type :=
+  λ (m : Nat) → λ (n : Nat) →
+    match m motive (λ _ → Type)
+      | 0 => Unit
+      | suc m1 =>
+          (match n motive (λ _ → Type)
+            | 0 => Empty
+            | suc n1 => Le m1 n1)
+
+def le-refl : evidence Π (n : Nat) → Le n n :=
+  λ (n : Nat) →
+    match n motive (λ (x : Nat) → Le x x)
+      | 0 => tt
+      | suc m => le-refl m
+
+ν Dom (f : Stream Nat) (g : Stream Nat) : Type where
+  uncons : Dom f g → Le (head f) (head g) × Dom (tail f) (tail g)
+
+def zeros : run Stream Nat :=
+  unfold 0 (λ (_ : Nat) → (0, 0))
+
+def natsFrom : run Π (n : Nat) → Stream Nat :=
+  λ (n : Nat) →
+    unfold n (λ (+ k : Nat) → (k, suc k))
+
+def dom-refl : evidence Π (s : Stream Nat) → Dom s s :=
+  λ (s : Stream Nat) →
+    unfold tt (λ (_ : Unit) → (le-refl (head s), dom-refl (tail s)))
+
+def zeros-below : evidence Π (n : Nat) → Dom zeros (natsFrom n) :=
+  λ (n : Nat) →
+    unfold tt (λ (_ : Unit) → (tt, zeros-below (suc n)))
+
+def dom-head : evidence Π (f : Stream Nat) → Π (g : Stream Nat) → Π (d : Dom f g) → Le (head f) (head g) :=
+  λ (f : Stream Nat) → λ (g : Stream Nat) → λ (d : Dom f g) → head d

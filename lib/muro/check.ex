@@ -815,30 +815,18 @@ defmodule Muro.Check do
     end
   end
 
-  # Kind of a ν body. Stream (a product) is Type. A λ-telescope is the
-  # Π of its domains; Y does not occur in the kind.
+  # Kind of a ν body. Stream (a product) is Type. A λ-telescope of any
+  # length is the Π of its domains; Y does not occur in the kind.
   defp nu_kind(f), do: telescope(f, 0)
 
   defp telescope({:lam, q, a, x, t}, y) do
     with {:ok, a1} <- drop_var(a, y),
-         {:ok, b} <- telescope_cod(t, y + 1) do
+         {:ok, b} <- telescope(t, y + 1) do
       {:ok, {:pi, q, a1, x, b}}
     end
   end
 
   defp telescope(_, _), do: {:ok, :typ}
-
-  defp telescope_cod({:lam, _, _, _, _}, y) when y >= 2,
-    do: {:error, "ν family is too deep"}
-
-  defp telescope_cod({:lam, q, a, x, t}, y) do
-    with {:ok, a1} <- drop_var(a, y),
-         {:ok, b} <- telescope_cod(t, y + 1) do
-      {:ok, {:pi, q, a1, x, b}}
-    end
-  end
-
-  defp telescope_cod(_, _), do: {:ok, :typ}
 
   defp drop_var(t, at) do
     try do
@@ -1020,29 +1008,32 @@ defmodule Muro.Check do
 
   defp go_unfold(_, _), do: {:error, "unfold body must be a pair"}
 
-  defp check_nu(:spec, _ty, _body), do: :ok
+  # Agda's checkNu: on run/evidence, a definition whose type reduces to a
+  # ν (bare, a family applied to any number of indices, or ~) is an
+  # unfold, or it does not mention its own block. A call into the block
+  # is productive only as the tail of an unfold step (check_unfold).
+  defp check_nu(_k, _book, _block, :spec, _ty, _body), do: :ok
+  defp check_nu(0, _book, _block, _mode, _ty, _body), do: {:error, @out_of_fuel}
 
-  defp check_nu(_mode, ty, body) do
-    go_nu(ty, body)
-  end
+  defp check_nu(k, book, block, mode, ty, body) do
+    with {:ok, ty1} <- whnf(k, book, ty) do
+      case {ty1, body} do
+        {{:pi, _, _, _, b}, {:lam, _, _, _, t}} ->
+          check_nu(k - 1, book, block, mode, b, t)
 
-  defp go_nu({:pi, _, _, _, b}, {:lam, _, _, _, t}), do: go_nu(b, t)
-  defp go_nu({:nu, _}, {:unf, _, _}), do: :ok
-  defp go_nu({:bisim, _, _}, {:unf, _, _}), do: :ok
-  defp go_nu({:nu, _}, _), do: {:error, "ν value must be an unfold"}
-  defp go_nu({:bisim, _, _}, _), do: {:error, "ν value must be an unfold"}
+        {_, {:unf, _, _}} ->
+          :ok
 
-  defp go_nu(ty, body) do
-    case apps(ty) do
-      {{:nu, _}, [_ | _]} ->
-        if match?({:unf, _, _}, body),
-          do: :ok,
-          else: {:error, "ν value must be an unfold"}
-
-      _ ->
-        :ok
+        _ ->
+          if nu_type?(ty1) and has_self?(block, body),
+            do: {:error, "ν value calls its own block outside an unfold"},
+            else: :ok
+      end
     end
   end
+
+  defp nu_type?({:bisim, _, _}), do: true
+  defp nu_type?(t), do: match?({{:nu, _}, _}, apps(t))
 
   # -- infer / check ---------------------------------------------------------
 
@@ -1727,7 +1718,12 @@ defmodule Muro.Check do
   def check_def(book, %{mode: mode, type: ty, body: body} = d, k) do
     with :ok <- fail_at(d, "type", check_ty(k, book, empty_rec(), [], ty)),
          {:ok, _} <- fail_at(d, "body", check_body(k, book, d)),
-         :ok <- fail_at(d, "productivity", check_nu(mode, ty, body)) do
+         :ok <-
+           fail_at(
+             d,
+             "productivity",
+             check_nu(k, book, MapSet.put(component(book, d.name), d.name), mode, ty, body)
+           ) do
       :ok
     end
   end

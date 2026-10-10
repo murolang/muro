@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.16.15
+
+A `ν` block with a name other than `Stream` declares a family over its indices: `ν Dom (f : Stream Nat) (g : Stream Nat) : Type where uncons : Dom f g → Le (head f) (head g) × Dom (tail f) (tail g)`. The family is the spec definition whose body is `ν Dom. λ f g → …`, the encoding `Always` and `~` already have. An `unfold` checks the head obligation and a proof of the same family at the tail; `uncons` reads the pair back. The body is any type with the family strictly positive and applied to all its indices; a family takes at least one index and as many as it needs. Declared families are checked by `Muro.Check` and the Agda checker and are outside ⊢, as Stream, `Always`, and `~` are.
+
+A definition whose type is a ν need not be an `unfold`: `def nats : run Stream Nat := tabulate ident` checks. Such a body may not call its own block. The type is reduced first, so a ν reached through a definition (`Dom s t`) is held to the same rule.
+
+### Checker
+
+- `Check.nuKind` takes a telescope of any length (it stopped at two). `Check.checkNu` reduces the type, accepts a family applied to any number of indices, and refuses a non-unfold body only when it calls its own block. `agda/Muro/ExampleFamily.agda` checks a three-index family and a ν-typed alias by `refl`. Then `Muro.Check` (`telescope`, `check_nu`, `nu_type?`) and the parser (`parse_nu_family`).
+
+### Manual
+
+- Streams: declared families; the productivity rule for a ν-typed definition; a Stream seed is affine, a Nat seed may be `+`.
+- Grammar: the `ν` production.
+- Limits, For agents: user-declared ν families removed from what is missing; ν families named among what ⊢ does not cover.
+- Examples: `dominance.muro`.
+
+### Package
+
+- Version 0.16.15.
+
 ## 0.16.14
 
 The predecessor bound by a `match` on `Nat` has the quantity of the scrutinee when the scrutinee is a variable. Under `(+ n : Nat)`, `match n` binds a reusable predecessor, and `plus p p` checks in the `suc p` branch. Under an affine variable, or a computed scrutinee, the predecessor is affine as before. A reusable number was free to copy, and so is the number under its `suc`.

@@ -414,6 +414,92 @@ defmodule Muro.CheckTest do
     refute out =~ "nats_tail_bisim"
   end
 
+  test "dominance.muro: a declared ν family checks; the family is not emitted" do
+    src = File.read!("examples/dominance.muro")
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+
+    out = Emit.emit_module(Muro.DominanceEx, book)
+    assert out =~ ~r/\bdef zeros\b/
+    assert out =~ ~r/\bdef natsFrom\b/
+    refute out =~ ~r/\bdef Dom\b/
+    refute out =~ "zeros_below"
+  end
+
+  test "a declared ν family: indices, positivity, the uncons shape, the step" do
+    stream = "ν Stream (A : Type) : Type where\n  uncons : Stream A → A × Stream A\n"
+    zeros = "def zeros : run Stream Nat := unfold 0 (λ (_ : Nat) → (0, 0))\n"
+
+    refused = fn src, want ->
+      assert {:ok, book} = Parser.parse(stream <> src)
+      assert {:error, msg} = Check.check_sig(book)
+      assert msg =~ want
+    end
+
+    # three indices, and a body with two recursive components
+    ok = """
+    ν Three (f : Stream Nat) (g : Stream Nat) (h : Stream Nat) : Type where
+      uncons : Three f g h → {head f ≡ head g : Nat} × Three (tail f) (tail g) (tail h)
+    ν Two (s : Stream Nat) : Type where
+      uncons : Two s → Unit × (Two (tail s) × Two (tail (tail s)))
+    #{zeros}
+    def t3 : evidence Three zeros zeros zeros := unfold tt (λ (_ : Unit) → (refl, t3))
+    def two : evidence Two zeros := unfold tt (λ (_ : Unit) → (tt, (two, two)))
+    """
+
+    assert {:ok, book} = Parser.parse(stream <> ok)
+    assert Check.check_sig(book) == :ok
+
+    refused.(
+      "ν Bad (s : Stream Nat) : Type where\n  uncons : Bad s → (Π (_ : Bad s) → Empty) × Bad (tail s)\n",
+      "not strictly positive"
+    )
+
+    assert {:error, msg} =
+             Parser.parse(
+               "ν D (f : Stream Nat) (g : Stream Nat) : Type where\n  uncons : D g f → Unit × D (tail f) (tail g)\n"
+             )
+
+    assert msg =~ "uncons must take D applied to its indices in order"
+
+    assert {:error, msg} = Parser.parse("ν Z : Type where\n  uncons : Z → Nat × Z\n")
+    assert msg =~ "a ν family takes at least one index"
+
+    fam =
+      "ν Eqs (f : Stream Nat) (g : Stream Nat) : Type where\n  uncons : Eqs f g → {head f ≡ head g : Nat} × Eqs (tail f) (tail g)\n" <>
+        zeros
+
+    # the head obligation is checked
+    refused.(
+      fam <>
+        "def bad : evidence Π (s : Stream Nat) → Eqs s zeros := λ (s : Stream Nat) → unfold tt (λ (_ : Unit) → (refl, bad (tail s)))\n",
+      "convert"
+    )
+
+    # a call into the block is not a head
+    refused.(
+      fam <>
+        "def bad : evidence Eqs zeros zeros := unfold tt (λ (_ : Unit) → (head bad, bad))\n",
+      "unguarded recursive call"
+    )
+  end
+
+  test "a ν-typed definition need not be an unfold when it does not call its block" do
+    src = """
+    def tabulate : run Π (+ f : Π (_ : Nat) → Nat) → Stream Nat :=
+      λ (+ f : Π (_ : Nat) → Nat) → unfold 0 (λ (+ k : Nat) → (f k, suc k))
+    def ident : run Π (n : Nat) → Nat := λ (n : Nat) → n
+    def nats : run Stream Nat := tabulate ident
+    def one : evidence {head (tail nats) ≡ suc 0 : Nat} := refl
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+
+    assert {:ok, book} = Parser.parse("def s : run Stream Nat := s\n")
+    assert {:error, _} = Check.check_sig(book)
+  end
+
   test "unguarded ~ evidence fails" do
     src = File.read!("examples/bisim.muro")
     assert {:ok, book} = Parser.parse(src)
