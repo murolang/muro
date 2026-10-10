@@ -60,14 +60,14 @@ def fromMaybe : run Π (-A : Type) → Π (d : A) → Π (m : Maybe A) → A :=
 
 `A` is erased. Emit drops that argument. `fromMaybe Nat 0 (just (suc 0))` converts to `suc 0`; `fromJust1` is `refl`.
 
-A branch binds each field at the quantity the constructor declares. The default is affine: `a` in `just a` is used at most once in run and evidence. A constructor may declare a field `+` when its type is Data, and then every branch binds that field reusable:
+A branch binds each field at the quantity the constructor declares. The default is affine: `a` in `just a` is used at most once in run and evidence. A constructor may declare a field `+` when its type is copyable (Data, a function, or a pair of copyable types), and then every branch binds that field reusable:
 
 ```
 data Seed : Type where
   at : Π (+ s : State) → Π (+ n : Nat) → Seed
 ```
 
-A `match` on a `Seed` may use `s` and `n` as often as it needs. The `+` on a field is checked like the `+` on a binder: `Π (+ f : Nat → Nat) → …` is refused. A `match` on `Nat` is the one case that reads the scrutinee instead: the predecessor of a reusable variable is reusable ([Terms](language.md#match)).
+A `match` on a `Seed` may use `s` and `n` as often as it needs. The `+` on a field is checked like the `+` on a binder: `Π (+ s : Stream Nat) → …` is refused, and a `+` field of function type scales the uses of the argument that fills it, so `box (addn n)` with `box : Π (+ f : Nat → Nat) → Box` needs a reusable `n`. A `match` on `Nat` is the one case that reads the scrutinee instead: the predecessor of a reusable variable is reusable ([Terms](language.md#match)).
 
 ## Positivity
 
@@ -119,7 +119,7 @@ def size : run Π (t : Tree) → Nat :=
 
 ## When is a data type Data?
 
-`+` is allowed only if the type WHNFs to Data. For a user type, every *parameter* must be Data. Indices are not asked.
+`+` is allowed only if the type WHNFs to a copyable type: Data, a function, or a pair of copyable types ([Binders and quantities](language.md#binders-and-quantities)). For a user type to be Data, every *parameter* must be Data. Indices are not asked.
 
 - `List Nat` is Data. `+xs : List Nat` may be reused.
 - `List (Nat → Nat)` is not.

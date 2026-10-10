@@ -444,11 +444,65 @@ defmodule Muro.Check do
             _ -> {:ok, false}
           end
 
+        {:prod, a, b} when as == [] ->
+          all_data(k, book, [a, b])
+
         _ ->
           {:ok, false}
       end
     end
   end
+
+  # Copyable (Agda's isCopy): Data, a Π, or a product of copyable types.
+  # A + binder asks this; an argument at a + position whose type is
+  # copyable and not Data has its uses scaled to ω (scale_omega).
+  defp is_copy(0, _book, _t), do: {:error, @out_of_fuel}
+
+  defp is_copy(k, book, t) do
+    with {:ok, t1} <- whnf(k, book, t) do
+      case t1 do
+        {:pi, _, _, _, _} ->
+          {:ok, true}
+
+        {:prod, a, b} ->
+          case is_copy(k - 1, book, a) do
+            {:ok, true} -> is_copy(k - 1, book, b)
+            other -> other
+          end
+
+        _ ->
+          is_data(k, book, t1)
+      end
+    end
+  end
+
+  @not_copy "+ requires a copyable type: Data, a pair of them, or a function"
+
+  defp guard_copy(k, book, a) do
+    case is_copy(k, book, a) do
+      {:ok, true} -> :ok
+      {:ok, false} -> {:error, @not_copy}
+      err -> err
+    end
+  end
+
+  # Uses of an argument at a + position: unchanged for Data (a value
+  # copies by value), scaled to ω otherwise (a closure duplicates what it
+  # captured), so check_bound refuses captured affine variables.
+  defp reuse_arg_uses(k, book, a, au) do
+    case is_data(k, book, a) do
+      {:ok, true} -> {:ok, au}
+      {:ok, false} -> with :ok <- guard_copy(k, book, a), do: {:ok, scale_omega(au)}
+      err -> err
+    end
+  end
+
+  defp scale_omega(us),
+    do:
+      Enum.map(us, fn
+        :u1 -> :uw
+        u -> u
+      end)
 
   defp all_data(_k, _book, []), do: {:ok, true}
 
@@ -456,16 +510,6 @@ defmodule Muro.Check do
     case is_data(k, book, a) do
       {:ok, true} -> all_data(k, book, as)
       other -> other
-    end
-  end
-
-  # `:ok` when `a` is a Data type, `{:error, msg}` when it is not or the
-  # fuel ran out.
-  defp guard_data(k, book, a, msg) do
-    case is_data(k, book, a) do
-      {:ok, true} -> :ok
-      {:ok, false} -> {:error, msg}
-      err -> err
     end
   end
 
@@ -1183,7 +1227,7 @@ defmodule Muro.Check do
         with :ok <- check_ty(k, book, rs, gamma, a),
              :ok <-
                if(q == :reuse,
-                 do: guard_data(k, book, a, "+ requires a Data type"),
+                 do: guard_copy(k, book, a),
                  else: :ok
                ),
              {:ok, {b, [u0 | us]}} <-
@@ -1503,9 +1547,9 @@ defmodule Muro.Check do
   end
 
   defp infer_arg(k, book, rs, gamma, m, :reuse, a, fu, arg, f) do
-    with :ok <- guard_data(k, book, a, "+ argument is not Data"),
-         {:ok, au} <- check(k, book, rs, gamma, m, arg, a),
-         do: app_uses(book, m, f, fu, au)
+    with {:ok, au} <- check(k, book, rs, gamma, m, arg, a),
+         {:ok, au1} <- reuse_arg_uses(k, book, a, au),
+         do: app_uses(book, m, f, fu, au1)
   end
 
   # A type is Type, a kind Π (x : A) → K, or a small type (⇒ Type).
@@ -1546,7 +1590,7 @@ defmodule Muro.Check do
                  :ok <- conv(k, book, names_of(rs, gamma), a_ann, a1),
                  :ok <-
                    if(q == :reuse,
-                     do: guard_data(k, book, a1, "+ requires a Data type"),
+                     do: guard_copy(k, book, a1),
                      else: :ok
                    ),
                  {:ok, [u0 | us]} <-
@@ -1958,7 +2002,8 @@ defmodule Muro.Check do
       case ty1 do
         {:pi, q, a_ty, _, b} ->
           with {:ok, au} <- check(k, book, rs, gamma, field_mode(q, m), a, a_ty),
-               {:ok, uses} <- combine_arg(q, m, au, fu),
+               {:ok, au1} <- field_uses(k, book, q, a_ty, au),
+               {:ok, uses} <- combine_arg(q, m, au1, fu),
                do: {:ok, {Subst.inst(b, a), uses}}
 
         _ ->
@@ -1969,6 +2014,10 @@ defmodule Muro.Check do
 
   defp infer_ctor_spine(_k, _book, _rs, _gamma, _m, _dname, _params, _e),
     do: {:error, "not a constructor spine"}
+
+  # Agda's fieldUses: a + field scales as a + argument does.
+  defp field_uses(k, book, :reuse, a_ty, au), do: reuse_arg_uses(k, book, a_ty, au)
+  defp field_uses(_k, _book, _q, _a_ty, au), do: {:ok, au}
 
   defp field_mode(:erased, _m), do: :spec
   defp field_mode(_q, m), do: m
@@ -2147,6 +2196,7 @@ defmodule Muro.Check do
             with :ok <- if(q == q1, do: :ok, else: {:error, "λ/Π quantity mismatch"}),
                  :ok <- check_ty(k, book, rs, gamma, a1),
                  :ok <- conv(k, book, names_of(rs, gamma), a1, a),
+                 :ok <- if(q == :reuse, do: guard_copy(k, book, a1), else: :ok),
                  {:ok, [u0 | us]} <-
                    check_br(
                      k,
@@ -2503,6 +2553,7 @@ defmodule Muro.Check do
 
   defp check_ctor_fields(k, book, rs, gamma, 0, {:pi, q, a, x, b}) do
     with {:ok, _} <- check(k, book, rs, gamma, :spec, a, :typ),
+         :ok <- if(q == :reuse, do: guard_copy(k, book, a), else: :ok),
          do:
            check_ctor_fields(
              k,

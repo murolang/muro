@@ -174,12 +174,40 @@ mutual
   isDataN k σ (f32ty , [])      = ok true
   isDataN k σ (tensor _ _ , []) = ok true
   isDataN k σ (dty i , as)      = dataParamsData k σ i as
+  isDataN k σ (prod A B , [])   = isData k σ A >>= λ b → if b then isData k σ B else ok false
   isDataN k σ _                 = ok false
 
   dataParamsData : ∀ {n} → ℕ → Sig → ℕ → List (Tm n) → Result Bool
   dataParamsData k σ i as with lookupData σ i
   ... | fail _ = ok false
   ... | ok d   = allData k σ (take (nparams d) as)
+
+-- Is a type copyable (Data.IsCopy): Data, a Π, or a product of copyable
+-- types. A + binder asks this; an argument at a + position that is
+-- copyable and not Data has its uses scaled (Env.scaleω).
+data CopyView {n} : Tm n → Set where
+  cv-pi    : ∀ {q A B} → CopyView (pi q A B)
+  cv-prod  : ∀ {A B} → CopyView (prod A B)
+  cv-other : ∀ {t} → CopyView t
+
+copyView : ∀ {n} (t : Tm n) → CopyView t
+copyView (pi q A B) = cv-pi
+copyView (prod A B) = cv-prod
+copyView t          = cv-other
+
+mutual
+  isCopy : ∀ {n} → ℕ → Sig → Tm n → Result Bool
+  isCopy zero    _ _ = fail outOfFuel
+  isCopy (suc k) σ t = whnf (suc k) σ t >>= λ t′ → isCopyN k σ t′
+
+  isCopyN : ∀ {n} → ℕ → Sig → Tm n → Result Bool
+  isCopyN k σ t with copyView t
+  ... | cv-pi              = ok true
+  ... | cv-prod {A} {B}    = isCopy k σ A >>= λ b → if b then isCopy k σ B else ok false
+  ... | cv-other           = isDataN k σ (apps t)
+
+notCopy : String
+notCopy = "+ requires a copyable type: Data, a pair of them, or a function"
 
 -- Shape of a run type: Nat, Unit, Empty, I64, F32, Tensor, a data type,
 -- a Π whose codomain is one, a product of two, ν F. Under ν the body is
@@ -1195,10 +1223,20 @@ mutual
     whnf k σ ty >>= λ where
       (pi q A B) →
         check k σ rs Γ (fieldMode q m) a A >>= λ au →
-        combineArg q m au fu >>= λ uses →
+        fieldUses k σ q m A au fu >>= λ uses →
         ok (inst B a , uses)
       _ → fail "too many constructor arguments"
   inferCtorSpine _ _ _ _ _ _ _ _ = fail "not a constructor spine"
+
+  -- Uses of a constructor argument: a + field that is Data keeps them,
+  -- a + field that is copyable scales them (args-snoc / args-snoc-copy).
+  fieldUses : ∀ {n} → ℕ → Sig → Qty → Mode → Tm n → UseVec n → UseVec n → Result (UseVec n)
+  fieldUses k σ reuse m A au fu =
+    isData k σ A >>= λ d →
+    if d then combineArg reuse m au fu
+    else (isCopy k σ A >>= guard notCopy >> combineArg reuse m (scaleω au) fu)
+  fieldUses k σ affine m A au fu = combineArg affine m au fu
+  fieldUses k σ erased m A au fu = combineArg erased m au fu
 
   -- After the arguments, the residual telescope must be exhausted and
   -- be the expected data type.
@@ -1230,7 +1268,7 @@ mutual
     guard "λ/Π quantity mismatch" (eqQty q q′) >>
     checkTy k σ rs Γ A′ >>
     conv k σ A′ A >>
-    (if eqQty q reuse then isData k σ A >>= guard "+ requires a Data type" else ok tt) >>
+    (if eqQty q reuse then isCopy k σ A >>= guard notCopy else ok tt) >>
     let rec? = sm ∧ isDType di A
         rs′  = extRec rs rec? rec?
         args′ = List._++_ (renList suc args) (var zero ∷ [])
@@ -1291,8 +1329,10 @@ mutual
   inferArg k σ rs Γ m f a affine A fu =
     check k σ rs Γ m a A >>= λ au → appUses σ m f fu au
   inferArg k σ rs Γ m f a reuse A fu =
-    isData k σ A >>= guard "+ argument is not Data" >>
-    check k σ rs Γ m a A >>= λ au → appUses σ m f fu au
+    isData k σ A >>= λ d →
+    if d then (check k σ rs Γ m a A >>= λ au → appUses σ m f fu au)
+    else (isCopy k σ A >>= guard notCopy >>
+          check k σ rs Γ m a A >>= λ au → appUses σ m f fu (scaleω au))
 
   -- ⇒-var-run / ⇒-var-evid / ⇒-var-spec
   infer′ k σ rs Γ (var x) run _ with qtyOf Γ x
@@ -1345,7 +1385,7 @@ mutual
   infer′ k σ rs Γ (lam q A t) m _ =
     checkTy k σ rs Γ A >>
     (if eqQty q reuse
-     then isData k σ A >>= guard "+ requires a Data type"
+     then isCopy k σ A >>= guard notCopy
      else ok tt) >>
     infer k σ (lamRec rs) (ext Γ q A) m t >>= λ (B , uses) →
     let (u₀ , us) = headTailU uses
@@ -1621,7 +1661,7 @@ mutual
     guard "λ/Π quantity mismatch" (eqQty q q′) >>
     checkTy k σ rs Γ A >>
     conv k σ A A′ >>
-    (if eqQty q reuse then isData k σ A′ >>= guard "+ requires a Data type" else ok tt) >>
+    (if eqQty q reuse then isCopy k σ A′ >>= guard notCopy else ok tt) >>
     check k σ (lamRec rs) (ext Γ q A′) m t B >>= λ uses →
     let (u₀ , us) = headTailU uses
     in checkBound m q u₀ >> ok us
@@ -1669,6 +1709,7 @@ checkCtorFields _ _ _ _ (suc _) _ =
   fail "constructor type has too few parameter binders"
 checkCtorFields k σ rs Γ zero (pi q A B) =
   check k σ rs Γ spec A typ >>
+  (if eqQty q reuse then isCopy k σ A >>= guard notCopy else ok tt) >>
   checkCtorFields k σ (extRec rs false false) (ext Γ q A) zero B
 checkCtorFields _ _ _ _ zero _ = ok tt
 

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.16.15
+
+`+` accepts a copyable type: Data, a Π type, or a pair of copyable types. A Data argument at a `+` position keeps its uses, as before. A function (or a pair holding one) copies by closure, so such an argument has every use inside it counted as many: `twice (addn n) 1` with `twice : Π (+ f : Nat → Nat) → …` checks when `n` is reusable and is refused with `affine variable used as reusable` when `n` is affine. A constructor may declare a `+` field of function type under the same rule, and the `+` on a `match` branch binder is now checked by `Muro.Check` as the Agda checker always did. A pair of two Data types is Data. The refusal for a stream at `+` reads `+ requires a copyable type: Data, a pair of them, or a function`.
+
+### Kernel
+
+- `Data.IsCopy`, `Data.CopyOk`, `Data.d-prod`; `Env.scaleω`; `Judgement.⇒-app-copy`, `args-snoc-copy`, `CopyOk` on the λ rules and on `bt-pi`; `Typing`, `Wall`, `Consistency`; `Check.isCopy`, `Check.fieldUses`; `Soundness.Views.isCopy-sound`, `copyOk-sound`, `prodData-sound`; `Soundness`. Agda first, then `Muro.Check` (`is_copy`, `reuse_arg_uses`, `scale_omega`, `field_uses`).
+
+### Manual
+
+- Terms: copyable types and the scaling of a function argument at `+`.
+- Data: a `+` field of function type.
+- Either: a refutation is copyable.
+- Limits: `P → Empty` removed from the list of refusals.
+
+### Package
+
+- Version 0.16.15.
+
 ## 0.16.14
 
 The predecessor bound by a `match` on `Nat` has the quantity of the scrutinee when the scrutinee is a variable. Under `(+ n : Nat)`, `match n` binds a reusable predecessor, and `plus p p` checks in the `suc p` branch. Under an affine variable, or a computed scrutinee, the predecessor is affine as before. A reusable number was free to copy, and so is the number under its `suc`. The `solve` of each environment under `examples/cshrl/` is now one `match` on the depth.

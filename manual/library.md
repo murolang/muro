@@ -79,7 +79,7 @@ Their environment arguments are erased (`-`). At a call they are checked in spec
 
 ## What an instance writes
 
-The library does not hold `solve`. A `run` function that is used on every action needs `+` on its arguments, and `+` asks for a Data type, which an abstract `S` is not. So each environment writes its own `solve`, one `match` on the depth per action, and a `spec` definition that presents it without the marks:
+The library does not hold `solve`. A `run` function that is used on every action needs `+` on its arguments, and `+` asks for a copyable type, which an abstract `S : Type` is not. So each environment writes its own `solve`, one `match` on the depth per action, and a `spec` definition that presents it without the marks:
 
 ```
 def best : spec Π (s : State) → Π (n : Nat) → Nat := λ (s : State) → λ (n : Nat) → solve s n

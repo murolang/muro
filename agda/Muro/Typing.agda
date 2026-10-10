@@ -142,7 +142,7 @@ data _,_⊨⁰[_]_∶_ σ Γ where
   t-lam : ∀ {m q A A′ t B}
     → σ , Γ ⊨ A wf
     → σ ⊢[ spec ] A ≈ A′
-    → ReuseOk σ q A′
+    → CopyOk σ q A′
     → σ , ext Γ q A′ ⊨[ m ] t ∶ B
     → σ , Γ ⊨⁰[ m ] lam q A t ∶ pi q A′ B
 
@@ -156,9 +156,11 @@ data _,_⊨⁰[_]_∶_ σ Γ where
     → σ , Γ ⊨[ spec ] a ∶ A
     → σ , Γ ⊨⁰[ m ] app f a ∶ inst B a
 
+  -- The argument is copyable; ⊨ forgets uses, so Data and closure
+  -- arguments (⊢'s ⇒-app-reuse and ⇒-app-copy) share this rule.
   t-app-reuse : ∀ {m f a A B}
     → σ , Γ ⊨[ m ] f ∶ pi reuse A B
-    → IsData σ A
+    → IsCopy σ A
     → σ , Γ ⊨[ m ] a ∶ A
     → σ , Γ ⊨⁰[ m ] app f a ∶ inst B a
 
@@ -310,7 +312,7 @@ conv-≈ (conv D c) c′ = conv D (≈-trans c c′)
 
 -- Application at each quantity, the argument in the mode ⊢ checks it.
 app-q : ∀ {σ n} {Γ : Ctx n} {m f a A B} q
-  → σ , Γ ⊨[ m ] f ∶ pi q A B → ReuseOk σ q A
+  → σ , Γ ⊨[ m ] f ∶ pi q A B → CopyOk σ q A
   → σ , Γ ⊨[ fieldMode q m ] a ∶ A
   → σ , Γ ⊨[ m ] app f a ∶ inst B a
 app-q affine Df _   Da = conv (t-app-aff Df Da) ≈-refl
@@ -366,7 +368,9 @@ forget-⇒ (⇒-app-aff Df c Da _) =
 forget-⇒ (⇒-app-era Df c Da) =
   conv (t-app-era (conv-≈ (forget-⇒ Df) c) (forget-⇐ Da)) ≈-refl
 forget-⇒ (⇒-app-reuse Df c isd Da _) =
-  conv (t-app-reuse (conv-≈ (forget-⇒ Df) c) isd (forget-⇐ Da)) ≈-refl
+  conv (t-app-reuse (conv-≈ (forget-⇒ Df) c) (c-data isd) (forget-⇐ Da)) ≈-refl
+forget-⇒ (⇒-app-copy Df c isc Da _) =
+  conv (t-app-reuse (conv-≈ (forget-⇒ Df) c) isc (forget-⇐ Da)) ≈-refl
 forget-⇒ (⇒-idt W Da Db) =
   conv (t-idt (forget-wf W) (forget-⇐ Da) (forget-⇐ Db)) ≈-refl
 forget-⇒ (⇒-rwt Deq c W Dt) =
@@ -397,7 +401,8 @@ forget-⇐ (⇐-letp De c Dt _ _ _) =
   conv (t-letp (conv-≈ (forget-⇒ De) c) (forget-⇐ Dt)) ≈-refl
 
 forget-args args-[] = a-[] ≈-refl
-forget-args (args-snoc Ar c Da _) = ▹-snoc (forget-args Ar) c (forget-⇐ Da)
+forget-args (args-snoc Ar c _ Da _) = ▹-snoc (forget-args Ar) c (forget-⇐ Da)
+forget-args (args-snoc-copy Ar c _ Da _) = ▹-snoc (forget-args Ar) c (forget-⇐ Da)
 
 forget-brs brs-[] = b-[]
 forget-brs (brs-∷ ip bt Db Bs) = b-∷ ip bt (forget-⇐ Db) (forget-brs Bs)
@@ -551,13 +556,13 @@ mot-ren : ∀ {σ n k} {ρ : Fin n → Fin k} {Γ Δ di ps ixs P}
 ⊨⁰-ren r t-empty = t-empty
 ⊨⁰-ren r (t-pi W D) = t-pi (wf-ren r W) (⊨-ren (Ren-lift r _ _) D)
 ⊨⁰-ren {ρ = ρ} r (t-lam {q = q} W c rok D) =
-  t-lam (wf-ren r W) (≈-ren ρ c) (ReuseOk-ren ρ q rok) (⊨-ren (Ren-lift r _ _) D)
+  t-lam (wf-ren r W) (≈-ren ρ c) (CopyOk-ren ρ q rok) (⊨-ren (Ren-lift r _ _) D)
 ⊨⁰-ren {ρ = ρ} r (t-app-aff {a = a} {B = B} Df Da) rewrite ren-inst ρ B a =
   t-app-aff (⊨-ren r Df) (⊨-ren r Da)
 ⊨⁰-ren {ρ = ρ} r (t-app-era {a = a} {B = B} Df Da) rewrite ren-inst ρ B a =
   t-app-era (⊨-ren r Df) (⊨-ren r Da)
 ⊨⁰-ren {ρ = ρ} r (t-app-reuse {a = a} {B = B} Df isd Da) rewrite ren-inst ρ B a =
-  t-app-reuse (⊨-ren r Df) (IsData-ren ρ isd) (⊨-ren r Da)
+  t-app-reuse (⊨-ren r Df) (IsCopy-ren ρ isd) (⊨-ren r Da)
 ⊨⁰-ren r (t-idt W Da Db) = t-idt (wf-ren r W) (⊨-ren r Da) (⊨-ren r Db)
 ⊨⁰-ren {ρ = ρ} r (t-rfl c) = t-rfl (≈-ren ρ c)
 ⊨⁰-ren {ρ = ρ} r (t-rwt {l = l} {r = r′} {P = P} Deq W Dt) rewrite ren-inst ρ P l =
@@ -719,7 +724,7 @@ mot-sub : ∀ {σ n k m₀} {τ : Fin n → Tm k} {Γ Δ di ps ixs P}
 ⊨⁰-sub lm s (t-pi W D) =
   conv (t-pi (wf-sub s W) (⊨-sub ≤ᵐ-spec-top (Subst-lifts s _ _) D)) ≈-refl
 ⊨⁰-sub {τ = τ} lm s (t-lam {q = q} W c rok D) =
-  conv (t-lam (wf-sub s W) (≈-sub τ c) (ReuseOk-sub τ q rok)
+  conv (t-lam (wf-sub s W) (≈-sub τ c) (CopyOk-sub τ q rok)
           (⊨-sub lm (Subst-lifts s _ _) D)) ≈-refl
 ⊨⁰-sub {τ = τ} lm s (t-app-aff {a = a} {B = B} Df Da) =
   conv (t-app-aff (⊨-sub lm s Df) (⊨-sub lm s Da)) (≈-≡ (sym (sub-inst τ B a)))
@@ -727,7 +732,7 @@ mot-sub : ∀ {σ n k m₀} {τ : Fin n → Tm k} {Γ Δ di ps ixs P}
   conv (t-app-era (⊨-sub lm s Df) (⊨-sub ≤ᵐ-spec-top s Da))
     (≈-≡ (sym (sub-inst τ B a)))
 ⊨⁰-sub {τ = τ} lm s (t-app-reuse {a = a} {B = B} Df isd Da) =
-  conv (t-app-reuse (⊨-sub lm s Df) (IsData-sub τ isd) (⊨-sub lm s Da))
+  conv (t-app-reuse (⊨-sub lm s Df) (IsCopy-sub τ isd) (⊨-sub lm s Da))
     (≈-≡ (sym (sub-inst τ B a)))
 ⊨⁰-sub lm s (t-idt W Da Db) =
   conv (t-idt (wf-sub s W) (⊨-sub ≤ᵐ-spec-top s Da) (⊨-sub ≤ᵐ-spec-top s Db))

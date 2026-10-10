@@ -162,6 +162,7 @@ spec-⇒-uses (⇒-lam _ _ D _) with spec-⇒-uses D
 spec-⇒-uses (⇒-app-aff _ _ _ eq) = sym (ok-inj eq)
 spec-⇒-uses (⇒-app-era D _ _) = spec-⇒-uses D
 spec-⇒-uses (⇒-app-reuse _ _ _ _ eq) = sym (ok-inj eq)
+spec-⇒-uses (⇒-app-copy _ _ _ _ eq) = sym (ok-inj eq)
 spec-⇒-uses (⇒-idt _ _ _) = refl
 spec-⇒-uses (⇒-rwt _ _ _ D) = spec-⇐-uses D
 spec-⇒-uses (⇒-mNat _ _ _ _ _ eq) = sym (ok-inj eq)
@@ -186,9 +187,10 @@ spec-⇐-uses (⇐-letp _ _ _ _ _ eq) = sym (ok-inj eq)
 -- combineArg at spec: an erased argument gives u0s outright; the others
 -- go through combine spec, which forgets.
 spec-args-uses args-[] = refl
-spec-args-uses (args-snoc {q = erased} _ _ _ eq) = sym (ok-inj eq)
-spec-args-uses (args-snoc {q = affine} _ _ _ eq) = sym (ok-inj eq)
-spec-args-uses (args-snoc {q = reuse}  _ _ _ eq) = sym (ok-inj eq)
+spec-args-uses (args-snoc {q = erased} _ _ _ _ eq) = sym (ok-inj eq)
+spec-args-uses (args-snoc {q = affine} _ _ _ _ eq) = sym (ok-inj eq)
+spec-args-uses (args-snoc {q = reuse}  _ _ _ _ eq) = sym (ok-inj eq)
+spec-args-uses (args-snoc-copy _ _ _ _ eq) = sym (ok-inj eq)
 
 spec-brs-uses brs-[] = refl
 spec-brs-uses (brs-∷ _ _ _ _) = refl
