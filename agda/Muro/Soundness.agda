@@ -422,9 +422,9 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-mNat {e = e} {P = P} {z = z} {s = s}
 ...   | fail _ = ⊥-elim (fail≢ok eq)
 ...   | ok tt with check k σ rs Γ m z (inst P ze) in zeq
 ...     | fail _ = ⊥-elim (fail≢ok eq)
-...     | ok zu with check k σ (extRec rs (scrutOk rs e) (scrutOk rs e)) (ext Γ affine nat) m s (motSuc P) in seq
+...     | ok zu with check k σ (extRec rs (scrutOk rs e) (scrutOk rs e)) (ext Γ (predQty Γ e) nat) m s (motSuc P) in seq
 ...       | fail _ = ⊥-elim (fail≢ok eq)
-...       | ok (u₀ Vec.∷ sus) with checkBound m affine u₀ in beq
+...       | ok (u₀ Vec.∷ sus) with checkBound m (predQty Γ e) u₀ in beq
 ...         | fail _ = ⊥-elim (fail≢ok eq)
 ...         | ok tt with combine m eu (combineAlt m zu sus) in ceq
 ...           | fail _ = ⊥-elim (fail≢ok eq)

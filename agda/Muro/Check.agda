@@ -1453,10 +1453,10 @@ mutual
     check k σ rs Γ m z (inst P ze) >>= λ zu →
     let ok? = scrutOk rs e
         rs′ = extRec rs ok? ok?
-        Γ′  = ext Γ affine nat
+        Γ′  = ext Γ (predQty Γ e) nat
     in check k σ rs′ Γ′ m s (motSuc P) >>= λ su-uses →
     let (u₀ , sus) = headTailU su-uses
-    in checkBound m affine u₀ >>
+    in checkBound m (predQty Γ e) u₀ >>
        let bu = combineAlt m zu sus
        in combine m eu bu >>= λ uses → ok (inst P e , uses)
 
