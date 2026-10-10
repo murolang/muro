@@ -67,7 +67,7 @@ data Seed : Type where
   at : Π (+ s : State) → Π (+ n : Nat) → Seed
 ```
 
-A `match` on a `Seed` may use `s` and `n` as often as it needs. The `+` on a field is checked like the `+` on a binder: `Π (+ s : Stream Nat) → …` is refused, and a `+` field of function type scales the uses of the argument that fills it, so `box (addn n)` with `box : Π (+ f : Nat → Nat) → Box` needs a reusable `n`.
+A `match` on a `Seed` may use `s` and `n` as often as it needs. The `+` on a field is checked like the `+` on a binder: `Π (+ s : Stream Nat) → …` is refused, and a `+` field of function type scales the uses of the argument that fills it, so `box (addn n)` with `box : Π (+ f : Nat → Nat) → Box` needs a reusable `n`. A `match` on `Nat` is the one case that reads the scrutinee instead: the predecessor of a reusable variable is reusable ([Terms](language.md#match)).
 
 ## Positivity
 
