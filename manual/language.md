@@ -74,15 +74,17 @@ A binder is always parenthesized.
 
 ```
 (n : Nat)        affine (default): at most one run/evidence use
-(+ n : Nat)      reuse: only if the type WHNFs to Data
+(+ n : Nat)      reuse: only if the type WHNFs to a copyable type
 (- e : IsEven n) erased: compile-time; cannot be used computationally
 ```
 
 The `+` or `-` sits immediately before the name, inside the parentheses. `(-A : Type)` and `(- A : Type)` both parse.
 
-**Data** (after WHNF) for `+`: `Nat`, `Unit`, `Empty`, `I64`, `F32`, `Tensor`, or a user `data` type whose *parameters* are Data. Indices do not have to be Data. `List A` is Data iff `A` is. `List (Nat → Nat)` is not, so you cannot write `+xs : List (Nat → Nat)`.
+**Data** (after WHNF): `Nat`, `Unit`, `Empty`, `I64`, `F32`, `Tensor`, a pair of two Data types, or a user `data` type whose *parameters* are Data. Indices do not have to be Data. `List A` is Data iff `A` is. `List (Nat → Nat)` is not, so you cannot write `+xs : List (Nat → Nat)`.
 
-`Stream` and `Either` are not Data. There is no `+` on a stream or on a refutation `P → Empty`.
+**Copyable** (after WHNF), the types `+` accepts: a Data type, a Π type, or a pair of two copyable types. A Data value copies by value, so a Data argument at a `+` position keeps its uses. A function copies by closure: copying it copies what it captured, so an argument at a `+` position whose type is a Π, or a pair holding one, has every use inside it counted as many. `twice (addn n) 1` with `twice : Π (+ f : Nat → Nat) → …` checks when `n` is reusable and is refused with `affine variable used as reusable` when `n` is affine. The domain and codomain of a `+` function are not asked to be copyable: `Π (+ f : Π (s : Stream Nat) → Nat) → …` is fine, the closure is what is copied, not the stream it will be given.
+
+`Stream` and `Either` are not copyable. There is no `+` on a stream. The refusal is `+ requires a copyable type: Data, a pair of them, or a function`.
 
 In spec, uses are forgotten. You can mention an affine variable twice while building a type.
 

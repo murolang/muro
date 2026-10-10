@@ -31,7 +31,7 @@ open import Muro.Reduction
 open import Muro.Convert
 open import Muro.Data hiding (subst₂)
 open import Muro.Check
-  using (whnf; apps; viewPi; viewId; viewProd; viewData; splitData; isData; isDataN; allData;
+  using (whnf; apps; viewPi; viewId; viewProd; viewData; splitData; isData; isDataN; allData; isCopy; isCopyN; CopyView; cv-pi; cv-prod; cv-other; copyView;
          dataParamsData; instParams; clashes; clashIdx; clashIdxN; clashIdxV; clashIdxs; NatView; nv-su; nv-ze; nv-other; natView; nparamsOf; firstMotLam)
 open import Muro.Typing using (typ-ext-suc)
 open import Muro.Soundness.Conv
@@ -225,6 +225,8 @@ FragL-drop (suc k) fl-[] = fl-[]
 FragL-drop (suc k) (fl-∷ F Fs) = FragL-drop k Fs
 
 isData-sound : ∀ k σ {n} {t : Tm n} → FragSig σ → Frag t → isData k σ t ≡ ok true → IsData σ t
+prodData-sound : ∀ k σ {n} {A B : Tm n} → FragSig σ → Frag (prod A B)
+  → (isData k σ A >>= λ b → if b then isData k σ B else ok false) ≡ ok true → IsData σ (prod A B)
 isDataN-sound : ∀ k σ {n} {t : Tm n} → FragSig σ → Frag t
   → isDataN k σ (apps t) ≡ ok true → IsData σ t
 allData-sound : ∀ k σ {n} {ts : List (Tm n)} → FragSig σ → FragL ts
@@ -237,6 +239,13 @@ allData-sound k σ fs (fl-∷ {t = t} F Fs) eq with isData k σ t in ieq
   where false≢true : false ≡ true → ⊥
         false≢true ()
 ... | ok true = ad-∷ (isData-sound k σ fs F ieq) (allData-sound k σ fs Fs eq)
+
+prodData-sound k σ {A = A} fs (f-prod FA FB) eq with isData k σ A in aeq
+... | fail _ = ⊥-elim (fail≢ok eq)
+... | ok false = ⊥-elim (false≢true (ok-inj eq))
+  where false≢true : false ≡ true → ⊥
+        false≢true ()
+... | ok true = d-prod (isData-sound k σ fs FA aeq) (isData-sound k σ fs FB eq)
 
 isData-sound (suc k) σ {t = t} fs Ft eq with whnf (suc k) σ t in weq
 ... | fail _ = ⊥-elim (fail≢ok eq)
@@ -331,7 +340,9 @@ isDataN-sound k σ fs Ft eq | ((def _) , _) = ⊥-elim (false≢true (ok-inj eq)
 isDataN-sound k σ fs Ft eq | ((ann _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
   where false≢true : false ≡ true → ⊥
         false≢true ()
-isDataN-sound k σ fs Ft eq | ((prod _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
+isDataN-sound k σ {t = t} fs Ft eq | ((prod A B) , []) with Spine-≡ (unspine→Spine′ ueq)
+...   | weq = subst (IsData σ) (sym weq) (prodData-sound k σ fs (subst Frag weq Ft) eq)
+isDataN-sound k σ fs Ft eq | ((prod _ _) , _ ∷ _) = ⊥-elim (false≢true (ok-inj eq))
   where false≢true : false ≡ true → ⊥
         false≢true ()
 isDataN-sound k σ fs Ft eq | ((pair _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
@@ -374,15 +385,35 @@ isDataN-sound k σ fs Ft eq | ((packi _ _) , _) = ⊥-elim (false≢true (ok-inj
   where false≢true : false ≡ true → ⊥
         false≢true ()
 
--- if q is +, the domain was checked to be Data
-reuseOk-sound : ∀ k σ {n} {A : Tm n} {s y} q → FragSig σ → Frag A
-  → (if eqQty q reuse then isData k σ A >>= guard s else ok tt) ≡ ok y → ReuseOk σ q A
-reuseOk-sound k σ affine fs FA _ = tt
-reuseOk-sound k σ erased fs FA _ = tt
-reuseOk-sound k σ {A = A} reuse fs FA eq with isData k σ A in ieq
+-- isCopy says yes only on a copyable type (Check.isCopy, Data.IsCopy).
+isCopy-sound : ∀ k σ {n} {t : Tm n} → FragSig σ → Frag t → isCopy k σ t ≡ ok true → IsCopy σ t
+isCopyN-sound : ∀ k σ {n} {t : Tm n} → FragSig σ → Frag t → isCopyN k σ t ≡ ok true → IsCopy σ t
+
+isCopy-sound (suc k) σ {t = t} fs Ft eq with whnf (suc k) σ t in weq
+... | fail _ = ⊥-elim (fail≢ok eq)
+... | ok t′ with whnf-sound (suc k) σ fs Ft weq
+...   | r , F = c-conv (⟶*→≈ r) (isCopyN-sound k σ fs F eq)
+
+isCopyN-sound k σ {t = t} fs Ft eq with copyView t
+... | cv-pi = c-pi
+... | cv-other = c-data (isDataN-sound k σ fs Ft eq)
+isCopyN-sound k σ fs Ft eq | cv-prod {A = A} {B = B} with Ft
+... | f-prod FA FB with isCopy k σ A in aeq
+...   | fail _ = ⊥-elim (fail≢ok eq)
+...   | ok false = ⊥-elim (false≢true (ok-inj eq))
+  where false≢true : false ≡ true → ⊥
+        false≢true ()
+...   | ok true = c-prod (isCopy-sound k σ fs FA aeq) (isCopy-sound k σ fs FB eq)
+
+-- if q is +, the binder's type was checked to be copyable
+copyOk-sound : ∀ k σ {n} {A : Tm n} {s y} q → FragSig σ → Frag A
+  → (if eqQty q reuse then isCopy k σ A >>= guard s else ok tt) ≡ ok y → CopyOk σ q A
+copyOk-sound k σ affine fs FA _ = tt
+copyOk-sound k σ erased fs FA _ = tt
+copyOk-sound k σ {A = A} reuse fs FA eq with isCopy k σ A in ieq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok false = ⊥-elim (fail≢ok eq)
-... | ok true = isData-sound k σ fs FA ieq
+... | ok true = isCopy-sound k σ fs FA ieq
 
 ------------------------------------------------------------------------
 -- Part 3: the signatures covered, and the shape of constructor types.

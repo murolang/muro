@@ -45,7 +45,7 @@ open import Muro.Reduction
 open import Muro.Convert
 open import Muro.Data hiding (subst₂)
 open import Muro.Check
-  using (whnf; conv; apps; viewPi; viewId; viewProd; viewData; isData; instParams; isRunType;
+  using (whnf; conv; apps; viewPi; viewId; viewProd; viewData; isData; isCopy; notCopy; fieldUses; instParams; isRunType;
          infer; check; checkTy; checkAgainst; checkCtorApp; inferCtorSpine; inferConv;
          checkLam; checkBr; checkBrPi; checkBranches; checkMotive; firstMotLam; nparamsOf;
          clashes; RecSt; extRec; lamRec; scrutOk; checkRec; selfApplied;
@@ -124,6 +124,24 @@ viewProd-Frag k σ fs FT eq with whnf-Frag k σ fs FT (viewProd-sound k σ eq)
 -- hd: the term is inferred as the head of an application spine (Check
 -- then skips the descent tests, which have no bearing on ⊢); infer is
 -- infer′ … false.
+-- The uses of a constructor argument (Check.fieldUses): a + field that
+-- is Data is args-snoc, a copyable one is args-snoc-copy.
+fieldUses-sound : ∀ k σ {n} {Γ : Ctx n} {m q A B a as T R au fu uses} → FragSig σ → Frag A
+  → σ , Γ ⊢[ m ] T ▹ as ⇝ R ⊣ fu
+  → σ ⊢[ spec ] R ≈ pi q A B
+  → σ , Γ ⊢[ fieldMode q m ] a ⇐ A ⊣ au
+  → fieldUses k σ q m A au fu ≡ ok uses
+  → σ , Γ ⊢[ m ] T ▹ (as ++ (a ∷ [])) ⇝ inst B a ⊣ uses
+fieldUses-sound k σ {q = affine} fs FA Ar c Da eq = args-snoc Ar c tt Da eq
+fieldUses-sound k σ {q = erased} fs FA Ar c Da eq = args-snoc Ar c tt Da eq
+fieldUses-sound k σ {q = reuse} {A = A} fs FA Ar c Da eq with isData k σ A in deq
+... | fail _ = ⊥-elim (fail≢ok eq)
+... | ok true = args-snoc Ar c (isData-sound k σ fs FA deq) Da eq
+... | ok false with isCopy k σ A in ceq
+...   | fail _ = ⊥-elim (fail≢ok eq)
+...   | ok false = ⊥-elim (fail≢ok eq)
+...   | ok true = args-snoc-copy Ar c (isCopy-sound k σ fs FA ceq) Da eq
+
 infer-sound : ∀ k σ {n} (rs : RecSt n) {Γ : Ctx n} m hd {e A u} → GoodSig σ → FragCtx Γ → Frag e
   → infer′ k σ rs Γ e m hd ≡ ok (A , u)
   → Frag A × ∃ λ A′ → (σ , Γ ⊢[ m ] e ⇒ A′ ⊣ u) × (σ ⊢[ spec ] A′ ≈ A)
@@ -235,7 +253,7 @@ infer-sound k σ rs {Γ = Γ} spec hd G FΓ (f-pi {q = q} {A = A} {B = B} FA FB)
 -- λ
 infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-lam {q = q} {A = A} {t = t} FA Ft) eq with checkTy k σ rs Γ A in teq
 ... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok tt with (if eqQty q reuse then isData k σ A >>= guard "+ requires a Data type" else ok tt) in req
+... | ok tt with (if eqQty q reuse then isCopy k σ A >>= guard notCopy else ok tt) in req
 ...   | fail _ = ⊥-elim (fail≢ok eq)
 ...   | ok tt with infer k σ (lamRec rs) (ext Γ q A) m t in ieq
 ...     | fail _ = ⊥-elim (fail≢ok eq)
@@ -244,7 +262,7 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-lam {q = q} {A = A} {t = t} FA Ft) e
 ...       | ok tt with ok-inj eq
 ...         | refl with infer-sound k σ (lamRec rs) m false G (FragCtx-ext FΓ FA) Ft ieq
 ...           | FB , B′ , D , c = f-pi FA FB , _
-            , ⇒-lam (checkTy-sound k σ rs G FΓ FA teq) (reuseOk-sound k σ q (GoodSig.frag G) FA req) D beq
+            , ⇒-lam (checkTy-sound k σ rs G FΓ FA teq) (copyOk-sound k σ q (GoodSig.frag G) FA req) D beq
             , ≈-pi ≈-refl c
 
 -- application: the head as a head; the descent test on the maximal
@@ -268,8 +286,24 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-app {f = f} {a = a} Ff Fa) eq with i
                 , ≈-refl
 infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-app {f = f} {a = a} Ff Fa) eq | ok (ft , fu) | ok (reuse , A , B) with isData k σ A in deq
 ...     | fail _ = ⊥-elim (fail≢ok eq)
-...     | ok false = ⊥-elim (fail≢ok eq)
-...     | ok true with check k σ rs Γ m a A in aeq
+...     | ok false with isCopy k σ A in ceq
+...       | fail _ = ⊥-elim (fail≢ok eq)
+...       | ok false = ⊥-elim (fail≢ok eq)
+...       | ok true with check k σ rs Γ m a A in aeq
+...         | fail _ = ⊥-elim (fail≢ok eq)
+...         | ok au with appUses σ m f fu (scaleω au) in ueq
+...           | fail _ = ⊥-elim (fail≢ok eq)
+...           | ok uses with checkRec m hd rs (app f a)
+...             | fail _ = ⊥-elim (fail≢ok eq)
+...             | ok _ with ok-inj eq
+...               | refl with infer-sound k σ rs m true G FΓ Ff feq
+...                 | Fft , F′ , Df , c with viewPi-Frag k σ (GoodSig.frag G) Fft peq
+...                   | FA , FB = Frag-inst FB Fa , _
+                    , ⇒-app-copy Df (≈-trans c (viewPi-≈ k σ (GoodSig.frag G) Fft peq))
+                        (isCopy-sound k σ (GoodSig.frag G) FA ceq)
+                        (check-sound k σ rs m G FΓ Fa FA aeq) ueq
+                    , ≈-refl
+infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-app {f = f} {a = a} Ff Fa) eq | ok (ft , fu) | ok (reuse , A , B) | ok true with check k σ rs Γ m a A in aeq
 ...       | fail _ = ⊥-elim (fail≢ok eq)
 ...       | ok au with appUses σ m f fu au in ueq
 ...         | fail _ = ⊥-elim (fail≢ok eq)
@@ -635,7 +669,7 @@ checkLam-sound k σ rs {Γ = Γ} m {T = T} G FΓ (f-lam {q = q} {A = A} {t = t} 
 ...     | fail _ = ⊥-elim (fail≢ok eq)
 ...     | ok tt with conv k σ A A′ in ceq
 ...       | fail _ = ⊥-elim (fail≢ok eq)
-...       | ok tt with (if eqQty q reuse then isData k σ A′ >>= guard "+ requires a Data type" else ok tt) in req
+...       | ok tt with (if eqQty q reuse then isCopy k σ A′ >>= guard notCopy else ok tt) in req
 ...         | fail _ = ⊥-elim (fail≢ok eq)
 ...         | ok tt with check k σ (lamRec rs) (ext Γ q A′) m t B in beq
 ...           | fail _ = ⊥-elim (fail≢ok eq)
@@ -645,7 +679,7 @@ checkLam-sound k σ rs {Γ = Γ} m {T = T} G FΓ (f-lam {q = q} {A = A} {t = t} 
 ...               | refl with viewPi-Frag k σ (GoodSig.frag G) FT peq
 ...                 | FA′ , FB =
   ⇐-lam (checkTy-sound k σ rs G FΓ FA teq) (viewPi-≈ k σ (GoodSig.frag G) FT peq)
-    (conv-sound k σ (GoodSig.frag G) FA FA′ ceq) (reuseOk-sound k σ q (GoodSig.frag G) FA′ req)
+    (conv-sound k σ (GoodSig.frag G) FA FA′ ceq) (copyOk-sound k σ q (GoodSig.frag G) FA′ req)
     (check-sound k σ (lamRec rs) m G (FragCtx-ext FΓ FA′) Ft FB beq) bq
 checkLam-sound k σ rs m G FΓ f-var FT (ok _) peq eq = ⊥-elim (fail≢ok eq)
 checkLam-sound k σ rs m G FΓ f-typ FT (ok _) peq eq = ⊥-elim (fail≢ok eq)
@@ -734,11 +768,12 @@ inferCtorSpine-sound k σ rs {Γ = Γ} m {di} {ps} G FΓ (f-app {f = f} {a = a} 
 ...         | tel-end (sp-snoc _) _ | _ = ⊥-elim (fail≢ok eq)
 ...         | tel-pi {q = q} {A = A} {B = B} tl′ | f-pi FA FB with check k σ rs Γ (fieldMode q m) a A in aeq
 ...           | fail _ = ⊥-elim (fail≢ok eq)
-...           | ok au with combineArg q m au fu in ceq
+...           | ok au with fieldUses k σ q m A au fu in ceq
 ...             | fail _ = ⊥-elim (fail≢ok eq)
 ...             | ok uses with ok-inj eq
 ...               | refl = as ++ (a ∷ []) , ci , c , T , sp-snoc sp , keq , ip
-                        , args-snoc Ar ≈-refl (check-sound k σ rs (fieldMode q m) G FΓ Fa FA aeq) ceq
+                        , fieldUses-sound k σ (GoodSig.frag G) FA Ar ≈-refl
+                            (check-sound k σ rs (fieldMode q m) G FΓ Fa FA aeq) ceq
                         , Frag-inst FB Fa , Tel-sub _ tl′
 inferCtorSpine-sound k σ rs m G FΓ f-var Fps leq eq = ⊥-elim (fail≢ok eq)
 inferCtorSpine-sound k σ rs m G FΓ f-typ Fps leq eq = ⊥-elim (fail≢ok eq)
@@ -816,7 +851,7 @@ checkBrPi-sound k σ rs {Γ = Γ} m di ci sm {q = q} {A = A} {B = B} {q′ = mq}
 ...     | fail _ = ⊥-elim (fail≢ok eq)
 ...     | ok tt with conv k σ A′ A in ceq
 ...       | fail _ = ⊥-elim (fail≢ok eq)
-...       | ok tt with (if eqQty q reuse then isData k σ A >>= guard "+ requires a Data type" else ok tt) in req
+...       | ok tt with (if eqQty q reuse then isCopy k σ A >>= guard notCopy else ok tt) in req
 ...         | fail _ = ⊥-elim (fail≢ok eq)
 ...         | ok tt
           with checkBr k σ (brRec rs sm di A) (ext Γ q A) m di ci sm B t (lam mq (wk D) (ren (lift suc) P))
@@ -830,9 +865,9 @@ checkBrPi-sound k σ rs {Γ = Γ} m di ci sm {q = q} {A = A} {B = B} {q′ = mq}
                      (Frag-ren (lift suc) FP) (FragL-++ (FragL-ren suc Fargs) (fl-∷ f-var fl-[])) tl npeq beq
 ...               | X , bt , Dt =
   pi q A X
-  , bt-pi ≈-refl (reuseOk-sound k σ q (GoodSig.frag G) FA req) bt
+  , bt-pi ≈-refl (copyOk-sound k σ q (GoodSig.frag G) FA req) bt
   , ⇐-lam (checkTy-sound k σ rs G FΓ FA′ teq) ≈-refl (conv-sound k σ (GoodSig.frag G) FA′ FA ceq)
-      (reuseOk-sound k σ q (GoodSig.frag G) FA req) Dt bq
+      (copyOk-sound k σ q (GoodSig.frag G) FA req) Dt bq
 checkBrPi-sound k σ rs m di ci sm G FΓ FA FB f-var FD FP Fargs tl npeq eq = ⊥-elim (fail≢ok eq)
 checkBrPi-sound k σ rs m di ci sm G FΓ FA FB f-typ FD FP Fargs tl npeq eq = ⊥-elim (fail≢ok eq)
 checkBrPi-sound k σ rs m di ci sm G FΓ FA FB (f-pi _ _) FD FP Fargs tl npeq eq = ⊥-elim (fail≢ok eq)

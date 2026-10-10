@@ -65,6 +65,7 @@ data IsData σ where
     → lookupData σ i ≡ ok d → Spine (dty i) as e
     → AllData σ (take (nparams d) as)
     → IsData σ e
+  d-prod  : ∀ {A B} → IsData σ A → IsData σ B → IsData σ (prod A B)
   d-conv  : ∀ {A A′} → σ ⊢[ spec ] A ≈ A′ → IsData σ A′ → IsData σ A
 
 data AllData σ where
@@ -86,6 +87,7 @@ IsData-ren ρ d-empty = d-empty
 IsData-ren ρ (d-dty {d = d} {as} lk sp ad) =
   d-dty lk (Spine-ren ρ sp)
     (subst (AllData _) (renList-take ρ (nparams d) as) (AllData-ren ρ ad))
+IsData-ren ρ (d-prod a b) = d-prod (IsData-ren ρ a) (IsData-ren ρ b)
 IsData-ren ρ (d-conv c d) = d-conv (≈-ren ρ c) (IsData-ren ρ d)
 
 AllData-ren ρ ad-[] = ad-[]
@@ -101,6 +103,7 @@ IsData-sub τ d-empty = d-empty
 IsData-sub τ (d-dty {d = d} {as} lk sp ad) =
   d-dty lk (Spine-sub τ sp)
     (subst (AllData _) (subList-take τ (nparams d) as) (AllData-sub τ ad))
+IsData-sub τ (d-prod a b) = d-prod (IsData-sub τ a) (IsData-sub τ b)
 IsData-sub τ (d-conv c d) = d-conv (≈-sub τ c) (IsData-sub τ d)
 
 AllData-sub τ ad-[] = ad-[]
@@ -122,6 +125,62 @@ ReuseOk-≈ : ∀ {σ n} q {A A′ : Tm n} → σ ⊢[ spec ] A ≈ A′ → Reu
 ReuseOk-≈ reuse  c h = d-conv c h
 ReuseOk-≈ affine _ _ = tt
 ReuseOk-≈ erased _ _ = tt
+
+------------------------------------------------------------------------
+-- Copyable: a value that a + binder may use more than once. Data copies
+-- by value. A function copies by closure: what is duplicated is its
+-- captured variables, so an argument of function type at a + position
+-- is checked with its uses scaled to ω (Judgement.⇒-app-copy,
+-- args-snoc-copy), and an affine capture is then refused by checkBound.
+-- A pair is copyable when both components are. A binder (+ x : A) asks
+-- CopyOk; a constructor argument at a + field that is Data keeps its
+-- uses (ReuseOk), any other copyable one is scaled.
+------------------------------------------------------------------------
+
+data IsCopy (σ : Sig) {n} : Tm n → Set where
+  c-data : ∀ {A} → IsData σ A → IsCopy σ A
+  c-pi   : ∀ {q A B} → IsCopy σ (pi q A B)
+  c-prod : ∀ {A B} → IsCopy σ A → IsCopy σ B → IsCopy σ (prod A B)
+  c-conv : ∀ {A A′} → σ ⊢[ spec ] A ≈ A′ → IsCopy σ A′ → IsCopy σ A
+
+IsCopy-ren : ∀ {σ n k} (ρ : Fin n → Fin k) {A : Tm n} → IsCopy σ A → IsCopy σ (ren ρ A)
+IsCopy-ren ρ (c-data d) = c-data (IsData-ren ρ d)
+IsCopy-ren ρ c-pi = c-pi
+IsCopy-ren ρ (c-prod a b) = c-prod (IsCopy-ren ρ a) (IsCopy-ren ρ b)
+IsCopy-ren ρ (c-conv c d) = c-conv (≈-ren ρ c) (IsCopy-ren ρ d)
+
+IsCopy-sub : ∀ {σ n k} (τ : Fin n → Tm k) {A : Tm n} → IsCopy σ A → IsCopy σ (sub τ A)
+IsCopy-sub τ (c-data d) = c-data (IsData-sub τ d)
+IsCopy-sub τ c-pi = c-pi
+IsCopy-sub τ (c-prod a b) = c-prod (IsCopy-sub τ a) (IsCopy-sub τ b)
+IsCopy-sub τ (c-conv c d) = c-conv (≈-sub τ c) (IsCopy-sub τ d)
+
+CopyOk : Sig → Qty → ∀ {n} → Tm n → Set
+CopyOk σ reuse  A = IsCopy σ A
+CopyOk σ affine A = ⊤
+CopyOk σ erased A = ⊤
+
+CopyOk-ren : ∀ {σ n k} (ρ : Fin n → Fin k) q {A : Tm n}
+  → CopyOk σ q A → CopyOk σ q (ren ρ A)
+CopyOk-ren ρ reuse  h = IsCopy-ren ρ h
+CopyOk-ren ρ affine _ = tt
+CopyOk-ren ρ erased _ = tt
+
+CopyOk-sub : ∀ {σ n k} (τ : Fin n → Tm k) q {A : Tm n}
+  → CopyOk σ q A → CopyOk σ q (sub τ A)
+CopyOk-sub τ reuse  h = IsCopy-sub τ h
+CopyOk-sub τ affine _ = tt
+CopyOk-sub τ erased _ = tt
+
+CopyOk-≈ : ∀ {σ n} q {A A′ : Tm n} → σ ⊢[ spec ] A ≈ A′ → CopyOk σ q A′ → CopyOk σ q A
+CopyOk-≈ reuse  c h = c-conv c h
+CopyOk-≈ affine _ _ = tt
+CopyOk-≈ erased _ _ = tt
+
+ReuseOk→CopyOk : ∀ {σ n} q {A : Tm n} → ReuseOk σ q A → CopyOk σ q A
+ReuseOk→CopyOk reuse  h = c-data h
+ReuseOk→CopyOk affine _ = tt
+ReuseOk→CopyOk erased _ = tt
 
 ------------------------------------------------------------------------
 -- Instantiating the parameters of a constructor type.
@@ -233,7 +292,7 @@ sub-motiveTail τ di args ((q , T) ∷ ixs)
 data BrTy (σ : Sig) (i j np : ℕ) : ∀ {n} → Tm n → Tm (ℕ.suc n) → List (Tm n) → Tm n → Set where
   bt-pi  : ∀ {n} {T : Tm n} {q A B P acc X}
     → σ ⊢[ spec ] T ≈ pi q A B
-    → ReuseOk σ q A
+    → CopyOk σ q A
     → BrTy σ i j np B (ren (lift suc) P) (renList suc acc ++ (var zero ∷ [])) X
     → BrTy σ i j np T P acc (pi q A X)
   bt-end : ∀ {n} {T : Tm n} {P acc qs D}
@@ -294,7 +353,7 @@ BrTy-ren : ∀ {σ i j np n k} (ρ : Fin n → Fin k) {T : Tm n} {P acc X}
   → BrTy σ i j np T P acc X
   → BrTy σ i j np (ren ρ T) (ren (lift ρ) P) (renList ρ acc) (ren ρ X)
 BrTy-ren ρ (bt-pi {q = q} {P = P} {acc = acc} c rok bt) =
-  bt-pi (≈-ren ρ c) (ReuseOk-ren ρ q rok)
+  bt-pi (≈-ren ρ c) (CopyOk-ren ρ q rok)
     (subst₂ (λ P′ acc′ → BrTy _ _ _ _ _ P′ acc′ _) (ren-lift-suc ρ P) (renList-acc ρ acc)
       (BrTy-ren (lift ρ) bt))
 BrTy-ren {i = i} {j = j} {np = np} ρ (bt-end {P = P} {acc = acc} {qs = qs} sp c)
@@ -306,7 +365,7 @@ BrTy-sub : ∀ {σ i j np n k} (τ : Fin n → Tm k) {T : Tm n} {P acc X}
   → BrTy σ i j np T P acc X
   → BrTy σ i j np (sub τ T) (sub (lifts τ) P) (subList τ acc) (sub τ X)
 BrTy-sub τ (bt-pi {q = q} {P = P} {acc = acc} c rok bt) =
-  bt-pi (≈-sub τ c) (ReuseOk-sub τ q rok)
+  bt-pi (≈-sub τ c) (CopyOk-sub τ q rok)
     (subst₂ (λ P′ acc′ → BrTy _ _ _ _ _ P′ acc′ _) (sub-lift-suc τ P) (subList-acc τ acc)
       (BrTy-sub (lifts τ) bt))
 BrTy-sub {i = i} {j = j} {np = np} τ (bt-end {P = P} {acc = acc} {qs = qs} sp c)

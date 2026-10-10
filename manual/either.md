@@ -33,7 +33,7 @@ def fromLeft : run Π (e : Either Nat Unit) → Nat :=
 
 Emit: `{:left, n}` / `{:right, t}`.
 
-Either is not Data. Closures `P → Empty` are not Data. No `+` on a refutation.
+Either is not Data. A refutation `P → Empty` is a function, so it is copyable at `+` like any other function ([Binders and quantities](language.md#binders-and-quantities)).
 
 ## Dec is a spec
 
