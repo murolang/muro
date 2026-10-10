@@ -178,11 +178,13 @@ data _,_⊨⁰[_]_∶_ σ Γ where
     → σ , Γ ⊨[ m ] t ∶ inst P r
     → σ , Γ ⊨⁰[ m ] rwt eq P t ∶ inst P l
 
-  t-mNat : ∀ {m e P z s}
+  -- The predecessor's quantity is any q: ⊢ binds it at predQty Γ e, and
+  -- ⊨ does not depend on which non-erased quantity it was.
+  t-mNat : ∀ {m q e P z s}
     → σ , Γ ⊨[ m ] e ∶ nat
     → σ , ext Γ affine nat ⊨ P wf
     → σ , Γ ⊨[ m ] z ∶ inst P ze
-    → σ , ext Γ affine nat ⊨[ m ] s ∶ motSuc P
+    → σ , ext Γ q nat ⊨[ m ] s ∶ motSuc P
     → σ , Γ ⊨⁰[ m ] mNat e P z s ∶ inst P e
 
   t-mEmp : ∀ {m e P}
@@ -641,6 +643,12 @@ modeFor erased _ = spec
 modeFor affine m = m
 modeFor reuse  m = m
 
+-- The mode of a binder's argument is at or above the derivation's.
+≤ᵐ-modeFor : ∀ q m → m ≤ᵐ modeFor q m
+≤ᵐ-modeFor erased m = ≤ᵐ-spec-top
+≤ᵐ-modeFor affine m = ≤ᵐ-refl
+≤ᵐ-modeFor reuse  m = ≤ᵐ-refl
+
 varOk-modeFor : ∀ q m₀ → VarOk (modeFor q m₀) q
 varOk-modeFor erased m₀ = v-spec
 varOk-modeFor affine run  = v-run (λ ())
@@ -1023,8 +1031,8 @@ pres⁰ wf (t-app-reuse Df isd Da) (app-f s) =
   conv (t-app-reuse (pres wf Df s) isd Da) ≈-refl
 -- ι
 pres⁰ wf (t-mNat De W Dz Ds) ιz = Dz
-pres⁰ wf (t-mNat {P = P} (conv (t-su Du) _) W Dz Ds) (ιs {u = u}) =
-  conv-≈ (⊨-inst ≤ᵐ-refl Ds Du) (≈-≡ (inst-motSuc P u))
+pres⁰ wf (t-mNat {m = m} {q = q} {P = P} (conv (t-su Du) _) W Dz Ds) (ιs {u = u}) =
+  conv-≈ (⊨-inst ≤ᵐ-refl Ds (⊨-mode (≤ᵐ-modeFor q m) Du)) (≈-≡ (inst-motSuc P u))
 pres⁰ wf (t-mNat {P = P} De W Dz Ds) (mNat-e s) =
   conv (t-mNat (pres wf De s) W Dz Ds) (≈-inst P (step-≈ s))
 pres⁰ wf (t-mUnit De W Du) ιtt = Du

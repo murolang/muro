@@ -97,6 +97,14 @@ qtyOf Γ x = Bind.bqty (lookup Γ x)
 typOf : ∀ {n} → Ctx n → Fin n → Tm n
 typOf Γ x = Bind.btyp (lookup Γ x)
 
+-- The quantity of the predecessor bound by a match on Nat. A reusable
+-- variable was free to copy, and so is the number under its suc: the
+-- predecessor is reusable. Any other scrutinee binds an affine
+-- predecessor (Judgement.⇒-mNat, Check.infer′).
+predQty : ∀ {n} → Ctx n → Tm n → Qty
+predQty Γ (var x) = if eqQty (qtyOf Γ x) reuse then reuse else affine
+predQty _ _       = affine
+
 UseVec : ℕ → Set
 UseVec n = Vec Use n
 

@@ -30,12 +30,9 @@ def reward : run Π (s : State) → Π (a : Action) → Nat :=
 
 def solve : run Π (+ s : State) → Π (+ n : Nat) → Nat :=
   λ (+ s : State) → λ (+ n : Nat) →
-    maxN (match n motive (λ _ → Nat)
-           | 0 => reward s stay
-           | suc n1 => solve (next s stay) n1)
-         (match n motive (λ _ → Nat)
-           | 0 => reward s go
-           | suc n1 => solve (next s go) n1)
+    match n motive (λ _ → Nat)
+      | 0 => maxN (reward s stay) (reward s go)
+      | suc n1 => maxN (solve (next s stay) n1) (solve (next s go) n1)
 
 def best : spec Π (s : State) → Π (n : Nat) → Nat := λ (s : State) → λ (n : Nat) → solve s n
 

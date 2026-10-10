@@ -1629,6 +1629,73 @@ defmodule Muro.CheckTest do
     assert msg =~ "head-ok"
   end
 
+  test "the predecessor of a reusable variable is reusable" do
+    plus =
+      "def plus : run Π (n : Nat) → Π (m : Nat) → Nat := λ (n : Nat) → λ (m : Nat) → n\n"
+
+    body = fn q ->
+      plus <>
+        """
+        def f : run Π (#{q}n : Nat) → Nat :=
+          λ (#{q}n : Nat) →
+            match n motive (λ _ → Nat)
+              | 0 => 0
+              | suc p => plus p p
+        """
+    end
+
+    assert {:ok, book} = Parser.parse(body.("+ "))
+    assert Check.check_sig(book) == :ok
+
+    assert {:ok, book} = Parser.parse(body.(""))
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "affine variable used twice"
+
+    # a computed scrutinee binds an affine predecessor, whatever n is
+    computed =
+      plus <>
+        """
+        def f : run Π (+ n : Nat) → Nat :=
+          λ (+ n : Nat) →
+            match plus n n motive (λ _ → Nat)
+              | 0 => 0
+              | suc p => plus p p
+        """
+
+    assert {:ok, book} = Parser.parse(computed)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "affine variable used twice"
+
+    # the predecessor is still a smaller argument for descent
+    twice =
+      """
+      def double : run Π (+ n : Nat) → Nat :=
+        λ (+ n : Nat) →
+          match n motive (λ _ → Nat)
+            | 0 => 0
+            | suc p => suc (suc (double p))
+      def four : evidence {double (suc (suc 0)) ≡ suc (suc (suc (suc 0))) : Nat} := refl
+      """
+
+    assert {:ok, book} = Parser.parse(twice)
+    assert Check.check_sig(book) == :ok
+
+    # a constructor may declare a reusable field, and a branch binds it so
+    seed =
+      plus <>
+        """
+        data Seed : Type where
+          at : Π (+ s : Nat) → Π (+ n : Nat) → Seed
+        def both : run Π (p : Seed) → Nat :=
+          λ (p : Seed) →
+            match p motive (λ _ → Nat)
+              | at s n => plus (plus s s) (plus n n)
+        """
+
+    assert {:ok, book} = Parser.parse(seed)
+    assert Check.check_sig(book) == :ok
+  end
+
   test "uncons of a Nat is not a ν step" do
     src = "def bad : run Nat := uncons 0\n"
     assert {:ok, book} = Parser.parse(src)

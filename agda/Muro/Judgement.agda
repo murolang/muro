@@ -180,12 +180,14 @@ data _,_⊢[_]_⇒_⊣_ σ Γ where
     → σ , Γ ⊢[ m ] t ⇐ inst P r ⊣ tu
     → σ , Γ ⊢[ m ] rwt eq P t ⇒ inst P l ⊣ tu
 
+  -- The predecessor is bound at predQty Γ e: reusable under a reusable
+  -- variable, affine otherwise.
   ⇒-mNat : ∀ {m e P z s eu zu u0 sus uses}
     → σ , Γ ⊢[ m ] e ⇐ nat ⊣ eu
     → σ , ext Γ affine nat ⊢ P wf
     → σ , Γ ⊢[ m ] z ⇐ inst P ze ⊣ zu
-    → σ , ext Γ affine nat ⊢[ m ] s ⇐ motSuc P ⊣ (u0 ∷ sus)
-    → checkBound m affine u0 ≡ ok tt
+    → σ , ext Γ (predQty Γ e) nat ⊢[ m ] s ⇐ motSuc P ⊣ (u0 ∷ sus)
+    → checkBound m (predQty Γ e) u0 ≡ ok tt
     → combine m eu (combineAlt m zu sus) ≡ ok uses
     → σ , Γ ⊢[ m ] mNat e P z s ⇒ inst P e ⊣ uses
 

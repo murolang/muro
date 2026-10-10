@@ -130,6 +130,8 @@ match n motive (λ x → P)
 
 `x` is bound in `P`. `p` is bound in `ts`. `suc p` here is a pattern binder, not `suc` applied to a term.
 
+`p` has the quantity of the scrutinee when the scrutinee is a variable: under `(+ n : Nat)`, a `match n` binds a reusable `p`, and `plus p p` checks. Under an affine `n`, or when the scrutinee is a computed term such as `match (f n)`, `p` is affine. A reusable number was free to copy, and so is the number under its `suc`.
+
 Empty:
 
 ```

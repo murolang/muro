@@ -33,16 +33,13 @@ def reward : run Π (s : State) → Π (a : Action) → Nat :=
       | start => (match a motive (λ _ → Nat) | goTrap => suc 0 | goParadise => 0)
       | paradise => suc 0
 
--- Best reward exactly n steps ahead. One match per action, because the
--- predecessor bound by a match on a + scrutinee is affine.
+-- Best reward exactly n steps ahead. n is reusable, so its predecessor
+-- n1 is too, and one match serves both actions.
 def solve : run Π (+ s : State) → Π (+ n : Nat) → Nat :=
   λ (+ s : State) → λ (+ n : Nat) →
-    maxN (match n motive (λ _ → Nat)
-           | 0 => reward s goTrap
-           | suc n1 => solve (next s goTrap) n1)
-         (match n motive (λ _ → Nat)
-           | 0 => reward s goParadise
-           | suc n1 => solve (next s goParadise) n1)
+    match n motive (λ _ → Nat)
+      | 0 => maxN (reward s goTrap) (reward s goParadise)
+      | suc n1 => maxN (solve (next s goTrap) n1) (solve (next s goParadise) n1)
 
 -- solve seen as a plain function, for the library statements. The +
 -- marks are part of the type of solve and the library asks for none.

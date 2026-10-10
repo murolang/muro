@@ -60,6 +60,15 @@ def fromMaybe : run Π (-A : Type) → Π (d : A) → Π (m : Maybe A) → A :=
 
 `A` is erased. Emit drops that argument. `fromMaybe Nat 0 (just (suc 0))` converts to `suc 0`; `fromJust1` is `refl`.
 
+A branch binds each field at the quantity the constructor declares. The default is affine: `a` in `just a` is used at most once in run and evidence. A constructor may declare a field `+` when its type is Data, and then every branch binds that field reusable:
+
+```
+data Seed : Type where
+  at : Π (+ s : State) → Π (+ n : Nat) → Seed
+```
+
+A `match` on a `Seed` may use `s` and `n` as often as it needs. The `+` on a field is checked like the `+` on a binder: `Π (+ f : Nat → Nat) → …` is refused. A `match` on `Nat` is the one case that reads the scrutinee instead: the predecessor of a reusable variable is reusable ([Terms](language.md#match)).
+
 ## Positivity
 
 A constructor field is strictly positive in `D` after the checker unfolds it. `D` may be absent. `D` may be the head of a spine whose arguments do not contain `D`. `D` may occur to the right of a `Π` whose domain does not contain `D`. A product is positive on both sides. `D` inside an argument of `D` is refused, including under a spec name: `Contra := Bad → Empty` is the negative arrow, and `List (Tree A)` is nested. Another data type is held to the same test: its parameters are instantiated and every one of its fields must be strictly positive in `D`. `Wrap` that stores a `Bad`, placed in a domain `(Wrap → Empty)`, is refused. `Tree` and `Forest`, each storing the other as a field, are accepted. A field that does not reduce in the fuel is refused.

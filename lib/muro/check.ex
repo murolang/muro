@@ -65,6 +65,17 @@ defmodule Muro.Check do
     end
   end
 
+  # The quantity of the predecessor bound by a match on Nat (Agda:
+  # Env.predQty): reusable under a reusable variable, affine otherwise.
+  defp pred_qty(gamma, {:var, x}) do
+    case Enum.at(gamma, x) do
+      {:reuse, _} -> :reuse
+      _ -> :affine
+    end
+  end
+
+  defp pred_qty(_gamma, _e), do: :affine
+
   # -- rec state -------------------------------------------------------------
   # A definition descends on one argument position `pos`, the same for every
   # self-call: the variable bound by the leading λ at that position is
@@ -1235,17 +1246,18 @@ defmodule Muro.Check do
                ),
              {:ok, zu} <- check(k, book, rs, gamma, m, z, Subst.inst(p, :ze)),
              ok? = scrut_ok(rs, e),
+             pq = pred_qty(gamma, e),
              {:ok, [u0 | sus]} <-
                check(
                  k,
                  book,
                  push_name(ext_rec(rs, ok?, ok?), "n"),
-                 ext(gamma, :affine, :nat),
+                 ext(gamma, pq, :nat),
                  m,
                  s,
                  Subst.mot_suc(p)
                ),
-             :ok <- check_bound(m, :affine, u0),
+             :ok <- check_bound(m, pq, u0),
              {:ok, uses} <- combine(m, eu, combine_alt(m, zu, sus)) do
           {:ok, {Subst.inst(p, e), uses}}
         end
