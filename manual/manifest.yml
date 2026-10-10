@@ -62,6 +62,10 @@ pages:
     slug: examples
     title: Examples
     summary: Every file in examples/ and what it is for.
+  - file: library.md
+    slug: library
+    title: Library
+    summary: The .muro files under stdlib/, imported by path.
   - file: for-agents.md
     slug: for-agents
     title: For agents

@@ -65,7 +65,7 @@ space      ::= [ \t\n\r] | comment
 
 ## Notes the grammar does not say loudly enough
 
-Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an argument. Digits start atoms, so `| 0 =>` parses.
+Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an argument. Digits start atoms, so `| 0 =>` parses. A keyword ends at a word boundary: `successor`, `ttl`, and `reflex` are identifiers, not `suc`, `tt`, or `refl` followed by letters.
 
 Inside a `data` block each constructor declaration `ident ":" term` begins on its own line; that is how an application stops before the next constructor. On one line, `f x : Nat` inside `{ … }` is the application `f x` followed by the type.
 

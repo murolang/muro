@@ -1,0 +1,105 @@
+-- cshrl.muro — Coinductive Symmetric Homomorphism RL: the statements.
+--
+-- An environment is a State, an Action, next, and reward. solve s n is
+-- the best reward exactly n steps ahead, and its tabulation is the
+-- value stream of the paper. A stream is dominated at every depth when
+-- its tabulation is dominated at every n, so dominance is a Π over the
+-- depth. Each statement takes the environment as arguments. They are
+-- spec, so those arguments may be used as often as the statement needs.
+-- An instance writes its own solve, a ranking, and the proof.
+import "nat.muro"
+
+-- The reward of a, then the values of the state a leads to.
+def ActionValue : spec Π (S : Type) → Π (A : Type) →
+                       Π (reward : Π (_ : S) → Π (_ : A) → Nat) →
+                       Π (next : Π (_ : S) → Π (_ : A) → S) →
+                       Π (solve : Π (_ : S) → Π (_ : Nat) → Nat) →
+                       Π (s : S) → Π (a : A) → Π (n : Nat) → Nat :=
+  λ (S : Type) → λ (A : Type) →
+  λ (reward : Π (_ : S) → Π (_ : A) → Nat) →
+  λ (next : Π (_ : S) → Π (_ : A) → S) →
+  λ (solve : Π (_ : S) → Π (_ : Nat) → Nat) →
+  λ (s : S) → λ (a : A) → λ (n : Nat) →
+    match n motive (λ _ → Nat)
+      | 0 => reward s a
+      | suc m => solve (next s a) m
+
+-- f is dominated by g at every depth.
+def Dominates : spec Π (f : Π (_ : Nat) → Nat) → Π (g : Π (_ : Nat) → Nat) → Type :=
+  λ (f : Π (_ : Nat) → Nat) → λ (g : Π (_ : Nat) → Nat) →
+    Π (n : Nat) → Le (f n) (g n)
+
+-- Successor condition: a ranked below b leads to a dominated state.
+def CoinductiveHomomorphism : spec Π (S : Type) → Π (A : Type) →
+                                   Π (next : Π (_ : S) → Π (_ : A) → S) →
+                                   Π (solve : Π (_ : S) → Π (_ : Nat) → Nat) →
+                                   Π (rank : Π (_ : S) → Π (_ : A) → Π (_ : A) → Type) → Type :=
+  λ (S : Type) → λ (A : Type) →
+  λ (next : Π (_ : S) → Π (_ : A) → S) →
+  λ (solve : Π (_ : S) → Π (_ : Nat) → Nat) →
+  λ (rank : Π (_ : S) → Π (_ : A) → Π (_ : A) → Type) →
+    Π (s : S) → Π (a : A) → Π (b : A) → Π (_ : rank s a b) →
+      Dominates (solve (next s a)) (solve (next s b))
+
+-- Action-value condition: the reward now and the whole future.
+def CoindHomo : spec Π (S : Type) → Π (A : Type) →
+                     Π (reward : Π (_ : S) → Π (_ : A) → Nat) →
+                     Π (next : Π (_ : S) → Π (_ : A) → S) →
+                     Π (solve : Π (_ : S) → Π (_ : Nat) → Nat) →
+                     Π (rank : Π (_ : S) → Π (_ : A) → Π (_ : A) → Type) → Type :=
+  λ (S : Type) → λ (A : Type) →
+  λ (reward : Π (_ : S) → Π (_ : A) → Nat) →
+  λ (next : Π (_ : S) → Π (_ : A) → S) →
+  λ (solve : Π (_ : S) → Π (_ : Nat) → Nat) →
+  λ (rank : Π (_ : S) → Π (_ : A) → Π (_ : A) → Type) →
+    Π (s : S) → Π (a : A) → Π (b : A) → Π (_ : rank s a b) →
+      Dominates (ActionValue S A reward next solve s a) (ActionValue S A reward next solve s b)
+
+-- The immediate rewards respect the ranking.
+def HeadCompatible : spec Π (S : Type) → Π (A : Type) →
+                          Π (reward : Π (_ : S) → Π (_ : A) → Nat) →
+                          Π (rank : Π (_ : S) → Π (_ : A) → Π (_ : A) → Type) → Type :=
+  λ (S : Type) → λ (A : Type) →
+  λ (reward : Π (_ : S) → Π (_ : A) → Nat) →
+  λ (rank : Π (_ : S) → Π (_ : A) → Π (_ : A) → Type) →
+    Π (s : S) → Π (a : A) → Π (b : A) → Π (_ : rank s a b) → Le (reward s a) (reward s b)
+
+-- Decomposition, one way: every CoindHomo is a CoinductiveHomomorphism.
+def coindHomo-successor : evidence Π (- S : Type) → Π (- A : Type) →
+    Π (- reward : Π (_ : S) → Π (_ : A) → Nat) →
+    Π (- next : Π (_ : S) → Π (_ : A) → S) →
+    Π (- solve : Π (_ : S) → Π (_ : Nat) → Nat) →
+    Π (- rank : Π (_ : S) → Π (_ : A) → Π (_ : A) → Type) →
+    Π (h : CoindHomo S A reward next solve rank) →
+    CoinductiveHomomorphism S A next solve rank :=
+  λ (- S : Type) → λ (- A : Type) →
+  λ (- reward : Π (_ : S) → Π (_ : A) → Nat) →
+  λ (- next : Π (_ : S) → Π (_ : A) → S) →
+  λ (- solve : Π (_ : S) → Π (_ : Nat) → Nat) →
+  λ (- rank : Π (_ : S) → Π (_ : A) → Π (_ : A) → Type) →
+  λ (h : CoindHomo S A reward next solve rank) →
+  λ (s : S) → λ (a : A) → λ (b : A) → λ (r : rank s a b) → λ (n : Nat) →
+    h s a b r (suc n)
+
+-- Decomposition, the other way: a CoinductiveHomomorphism whose rewards
+-- respect the ranking is a CoindHomo.
+def successor-head-coindHomo : evidence Π (- S : Type) → Π (- A : Type) →
+    Π (- reward : Π (_ : S) → Π (_ : A) → Nat) →
+    Π (- next : Π (_ : S) → Π (_ : A) → S) →
+    Π (- solve : Π (_ : S) → Π (_ : Nat) → Nat) →
+    Π (- rank : Π (_ : S) → Π (_ : A) → Π (_ : A) → Type) →
+    Π (ch : CoinductiveHomomorphism S A next solve rank) →
+    Π (hc : HeadCompatible S A reward rank) →
+    CoindHomo S A reward next solve rank :=
+  λ (- S : Type) → λ (- A : Type) →
+  λ (- reward : Π (_ : S) → Π (_ : A) → Nat) →
+  λ (- next : Π (_ : S) → Π (_ : A) → S) →
+  λ (- solve : Π (_ : S) → Π (_ : Nat) → Nat) →
+  λ (- rank : Π (_ : S) → Π (_ : A) → Π (_ : A) → Type) →
+  λ (ch : CoinductiveHomomorphism S A next solve rank) →
+  λ (hc : HeadCompatible S A reward rank) →
+  λ (s : S) → λ (a : A) → λ (b : A) → λ (r : rank s a b) → λ (n : Nat) →
+    match n motive (λ (k : Nat) → Le (ActionValue S A reward next solve s a k)
+                                     (ActionValue S A reward next solve s b k))
+      | 0 => hc s a b r
+      | suc m => ch s a b r m

@@ -1,0 +1,119 @@
+-- binary_sacrifice.muro — the sacrifice pattern: a CoinductiveHomomorphism
+-- that is not a CoindHomo.
+--
+-- Three states and two actions. From start, goTrap pays 1 now and leads
+-- to trap, which pays 0 forever. goParadise pays 0 now and leads to
+-- paradise, which pays 1 forever. The ranking puts goTrap below
+-- goParadise at start. The successor condition holds: the value of
+-- paradise dominates the value of trap at every depth. The head
+-- condition fails, since 1 is not below 0, so no CoindHomo ranks these
+-- two actions in that order.
+import "../../stdlib/cshrl.muro"
+
+data State : Type where
+  trap : State
+  start : State
+  paradise : State
+
+data Action : Type where
+  goTrap : Action
+  goParadise : Action
+
+def next : run Π (s : State) → Π (a : Action) → State :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State)
+      | trap => trap
+      | start => (match a motive (λ _ → State) | goTrap => trap | goParadise => paradise)
+      | paradise => paradise
+
+def reward : run Π (s : State) → Π (a : Action) → Nat :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → Nat)
+      | trap => 0
+      | start => (match a motive (λ _ → Nat) | goTrap => suc 0 | goParadise => 0)
+      | paradise => suc 0
+
+-- Best reward exactly n steps ahead. One match per action, because the
+-- predecessor bound by a match on a + scrutinee is affine.
+def solve : run Π (+ s : State) → Π (+ n : Nat) → Nat :=
+  λ (+ s : State) → λ (+ n : Nat) →
+    maxN (match n motive (λ _ → Nat)
+           | 0 => reward s goTrap
+           | suc n1 => solve (next s goTrap) n1)
+         (match n motive (λ _ → Nat)
+           | 0 => reward s goParadise
+           | suc n1 => solve (next s goParadise) n1)
+
+-- solve seen as a plain function, for the library statements. The +
+-- marks are part of the type of solve and the library asks for none.
+def best : spec Π (s : State) → Π (n : Nat) → Nat := λ (s : State) → λ (n : Nat) → solve s n
+
+def solve-start-0 : evidence {solve start 0 ≡ suc 0 : Nat} := refl
+def solve-start-2 : evidence {solve start (suc (suc 0)) ≡ suc 0 : Nat} := refl
+def solve-trap-3 : evidence {solve trap (suc (suc (suc 0))) ≡ 0 : Nat} := refl
+
+-- The value stream of the paper: solve s tabulated over the depth.
+ν Stream (A : Type) : Type where
+  uncons : Stream A → A × Stream A
+
+data Seed : Type where
+  at : State → Nat → Seed
+
+def seed0 : run Π (s : State) → Seed := λ (s : State) → at s 0
+
+def value : run Π (s : State) → Stream Nat :=
+  λ (s : State) →
+    unfold (seed0 s) (λ (+ p : Seed) →
+      ((match p motive (λ _ → Nat) | at s1 n => solve s1 n),
+       (match p motive (λ _ → Seed) | at s1 n => at s1 (suc n))))
+
+def value-start-head : evidence {head (value start) ≡ suc 0 : Nat} := refl
+
+-- The ranking: at start, goTrap is below goParadise. Nothing else is ranked.
+def rank : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
+  λ (s : State) → λ (a : Action) → λ (b : Action) →
+    match s motive (λ _ → Type)
+      | trap => Empty
+      | start => (match a motive (λ _ → Type)
+                   | goTrap => (match b motive (λ _ → Type) | goTrap => Empty | goParadise => Unit)
+                   | goParadise => Empty)
+      | paradise => Empty
+
+def trap-zero : evidence Π (n : Nat) → {solve trap n ≡ 0 : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (x : Nat) → {solve trap x ≡ 0 : Nat})
+      | 0 => refl
+      | suc n1 => rewrite (trap-zero n1) motive (λ z → {maxN z z ≡ 0 : Nat}) in refl
+
+def paradise-one : evidence Π (n : Nat) → {solve paradise n ≡ suc 0 : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (x : Nat) → {solve paradise x ≡ suc 0 : Nat})
+      | 0 => refl
+      | suc n1 => rewrite (paradise-one n1) motive (λ z → {maxN z z ≡ suc 0 : Nat}) in refl
+
+def trap-le-paradise : evidence Dominates (best trap) (best paradise) :=
+  λ (n : Nat) →
+    rewrite (trap-zero n) motive (λ z → Le z (solve paradise n)) in tt
+
+-- The successor condition holds for the ranking.
+def successor : evidence CoinductiveHomomorphism State Action next best rank :=
+  λ (s : State) → λ (a : Action) → λ (b : Action) →
+    match s motive (λ (x : State) → Π (_ : rank x a b) → Dominates (best (next x a)) (best (next x b)))
+      | trap => λ (r : Empty) → matchEmpty r motive (λ _ → Dominates (best (next trap a)) (best (next trap b)))
+      | start =>
+          (match a motive (λ (y : Action) → Π (_ : rank start y b) → Dominates (best (next start y)) (best (next start b)))
+            | goTrap =>
+                (match b motive (λ (z : Action) → Π (_ : rank start goTrap z) → Dominates (best (next start goTrap)) (best (next start z)))
+                  | goTrap => λ (r : Empty) → matchEmpty r motive (λ _ → Dominates (best trap) (best trap))
+                  | goParadise => λ (r : Unit) → trap-le-paradise)
+            | goParadise => λ (r : Empty) → matchEmpty r motive (λ _ → Dominates (best (next start goParadise)) (best (next start b))))
+      | paradise => λ (r : Empty) → matchEmpty r motive (λ _ → Dominates (best (next paradise a)) (best (next paradise b)))
+
+-- The head condition fails: goTrap pays 1 now and goParadise pays 0.
+def not-head : evidence Π (hc : HeadCompatible State Action reward rank) → Empty :=
+  λ (hc : HeadCompatible State Action reward rank) → hc start goTrap goParadise tt
+
+-- So the ranking is not a CoindHomo: depth 0 of the action values is
+-- the head condition.
+def not-coindHomo : evidence Π (h : CoindHomo State Action reward next best rank) → Empty :=
+  λ (h : CoindHomo State Action reward next best rank) → h start goTrap goParadise tt 0

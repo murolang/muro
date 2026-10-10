@@ -1,0 +1,92 @@
+-- nat.muro — the order on Nat, the maximum, and the lemmas that join them.
+--
+-- Le is a spec function, not a data type: Le 0 n is Unit, Le suc(m) 0 is
+-- Empty, and Le suc(m) suc(n) is Le m n. A proof of Le m n is then tt
+-- at the bottom of a descent on both numbers, and a lemma about Le is a
+-- match on the numbers with no index equations to carry.
+def Le : spec Π (m : Nat) → Π (n : Nat) → Type :=
+  λ (m : Nat) → λ (n : Nat) →
+    match m motive (λ _ → Type)
+      | 0 => Unit
+      | suc m1 =>
+          (match n motive (λ _ → Type)
+            | 0 => Empty
+            | suc n1 => Le m1 n1)
+
+def le-refl : evidence Π (n : Nat) → Le n n :=
+  λ (n : Nat) →
+    match n motive (λ (x : Nat) → Le x x)
+      | 0 => tt
+      | suc m => le-refl m
+
+def le-zero : evidence Π (n : Nat) → Le 0 n :=
+  λ (n : Nat) → tt
+
+def maxN : run Π (a : Nat) → Π (b : Nat) → Nat :=
+  λ (a : Nat) → λ (b : Nat) →
+    match a motive (λ _ → Nat)
+      | 0 => b
+      | suc a1 =>
+          (match b motive (λ _ → Nat)
+            | 0 => suc a1
+            | suc b1 => suc (maxN a1 b1))
+
+-- A bound on both arguments is a bound on the maximum.
+def maxN-le : evidence Π (a : Nat) → Π (b : Nat) → Π (c : Nat) →
+                       Π (p : Le a c) → Π (q : Le b c) → Le (maxN a b) c :=
+  λ (a : Nat) →
+    match a motive (λ (x : Nat) → Π (b : Nat) → Π (c : Nat) → Π (p : Le x c) → Π (q : Le b c) → Le (maxN x b) c)
+      | 0 => λ (b : Nat) → λ (c : Nat) → λ (p : Le 0 c) → λ (q : Le b c) → q
+      | suc a1 =>
+          λ (b : Nat) →
+            (match b motive (λ (y : Nat) → Π (c : Nat) → Π (p : Le suc(a1) c) → Π (q : Le y c) → Le (maxN suc(a1) y) c)
+              | 0 => λ (c : Nat) → λ (p : Le suc(a1) c) → λ (q : Le 0 c) → p
+              | suc b1 =>
+                  λ (c : Nat) →
+                    (match c motive (λ (z : Nat) → Π (p : Le suc(a1) z) → Π (q : Le suc(b1) z) → Le suc(maxN a1 b1) z)
+                      | 0 => λ (p : Empty) → λ (q : Empty) → matchEmpty p motive (λ _ → Empty)
+                      | suc c1 => λ (p : Le a1 c1) → λ (q : Le b1 c1) → maxN-le a1 b1 c1 p q))
+
+-- Each argument is below the maximum.
+def le-maxN-left : evidence Π (a : Nat) → Π (b : Nat) → Le a (maxN a b) :=
+  λ (a : Nat) →
+    match a motive (λ (x : Nat) → Π (b : Nat) → Le x (maxN x b))
+      | 0 => λ (b : Nat) → tt
+      | suc a1 =>
+          λ (b : Nat) →
+            (match b motive (λ (y : Nat) → Le suc(a1) (maxN suc(a1) y))
+              | 0 => le-refl a1
+              | suc b1 => le-maxN-left a1 b1)
+
+def le-maxN-right : evidence Π (a : Nat) → Π (b : Nat) → Le b (maxN a b) :=
+  λ (a : Nat) →
+    match a motive (λ (x : Nat) → Π (b : Nat) → Le b (maxN x b))
+      | 0 => λ (b : Nat) → le-refl b
+      | suc a1 =>
+          λ (b : Nat) →
+            (match b motive (λ (y : Nat) → Le y (maxN suc(a1) y))
+              | 0 => tt
+              | suc b1 => le-maxN-right a1 b1)
+
+def le-trans : evidence Π (a : Nat) → Π (b : Nat) → Π (c : Nat) →
+                        Π (p : Le a b) → Π (q : Le b c) → Le a c :=
+  λ (a : Nat) →
+    match a motive (λ (x : Nat) → Π (b : Nat) → Π (c : Nat) → Π (p : Le x b) → Π (q : Le b c) → Le x c)
+      | 0 => λ (b : Nat) → λ (c : Nat) → λ (p : Le 0 b) → λ (q : Le b c) → tt
+      | suc a1 =>
+          λ (b : Nat) →
+            (match b motive (λ (y : Nat) → Π (c : Nat) → Π (p : Le suc(a1) y) → Π (q : Le y c) → Le suc(a1) c)
+              | 0 => λ (c : Nat) → λ (p : Empty) → λ (q : Le 0 c) → matchEmpty p motive (λ _ → Le suc(a1) c)
+              | suc b1 =>
+                  λ (c : Nat) →
+                    (match c motive (λ (z : Nat) → Π (p : Le a1 b1) → Π (q : Le suc(b1) z) → Le suc(a1) z)
+                      | 0 => λ (p : Le a1 b1) → λ (q : Empty) → matchEmpty q motive (λ _ → Empty)
+                      | suc c1 => λ (p : Le a1 b1) → λ (q : Le b1 c1) → le-trans a1 b1 c1 p q))
+
+-- The maximum is monotone in both arguments.
+def maxN-mono : evidence Π (a : Nat) → Π (b : Nat) → Π (c : Nat) → Π (d : Nat) →
+                         Π (p : Le a c) → Π (q : Le b d) → Le (maxN a b) (maxN c d) :=
+  λ (a : Nat) → λ (b : Nat) → λ (c : Nat) → λ (d : Nat) → λ (p : Le a c) → λ (q : Le b d) →
+    maxN-le a b (maxN c d)
+      (le-trans a c (maxN c d) p (le-maxN-left c d))
+      (le-trans b d (maxN c d) q (le-maxN-right c d))

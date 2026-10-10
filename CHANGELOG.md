@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.16.13
+
+A library of `.muro` files under `stdlib/`, imported by path. `nat.muro` is the order `Le` on `Nat`, written as a `spec` function that computes on numerals, with `maxN` and its lemmas: `le-refl`, `le-trans`, `maxN-le`, `le-maxN-left`, `le-maxN-right`, `maxN-mono`. `cshrl.muro` states the two optimality conditions of Coinductive Symmetric Homomorphism RL for an environment given as arguments, `CoinductiveHomomorphism` and `CoindHomo`, with `ActionValue`, `Dominates`, `HeadCompatible`, and the two directions of the decomposition as evidence. Three environments under `examples/cshrl/` import it: `two_state.muro` is a `CoindHomo` assembled from the successor condition and the head condition; `binary_sacrifice.muro` is a `CoinductiveHomomorphism` whose head condition is refuted, and tabulates its value stream as a `run` that emits; `skill_investment.muro` proves three dominances in one induction on the depth.
+
+The keywords `suc`, `tt`, and `refl` end at a word boundary, so `successor`, `ttl`, and `reflex` are identifiers.
+
+### Library
+
+- `stdlib/nat.muro` and `stdlib/cshrl.muro`. The directory is in the Hex package.
+
+### Parser
+
+- `suc`, `tt`, `refl` are keywords only at a word boundary.
+
+### Manual
+
+- Library: the files under `stdlib/`, what an instance writes.
+- Examples: the three files under `examples/cshrl/`.
+- Terms: an import path may climb.
+- Grammar: keywords end at a word boundary.
+
+### Package
+
+- Version 0.16.13.
+
 ## 0.16.12
 
 One file may name another. `import "list.muro"` loads that file. The path is relative to the importing file, and the string is the whole path. The imported file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A cycle of imports is an error. `examples/sort.muro` imports `list.muro` and does not declare `List`.

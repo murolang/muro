@@ -1,0 +1,92 @@
+-- two_state.muro — the aligned case: a CoindHomo, assembled from the
+-- successor condition and the head condition.
+--
+-- Two states and two actions. From idle, stay pays 0 and leads back to
+-- idle; go pays 0 and leads to done, which pays 1 forever. The ranking
+-- puts stay below go at idle. The rewards respect it (0 is below 0) and
+-- the value of done dominates the value of idle at every depth, so the
+-- decomposition in the library gives the CoindHomo.
+import "../../stdlib/cshrl.muro"
+
+data State : Type where
+  idle : State
+  done : State
+
+data Action : Type where
+  stay : Action
+  go : Action
+
+def next : run Π (s : State) → Π (a : Action) → State :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State)
+      | idle => (match a motive (λ _ → State) | stay => idle | go => done)
+      | done => done
+
+def reward : run Π (s : State) → Π (a : Action) → Nat :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → Nat)
+      | idle => 0
+      | done => suc 0
+
+def solve : run Π (+ s : State) → Π (+ n : Nat) → Nat :=
+  λ (+ s : State) → λ (+ n : Nat) →
+    maxN (match n motive (λ _ → Nat)
+           | 0 => reward s stay
+           | suc n1 => solve (next s stay) n1)
+         (match n motive (λ _ → Nat)
+           | 0 => reward s go
+           | suc n1 => solve (next s go) n1)
+
+def best : spec Π (s : State) → Π (n : Nat) → Nat := λ (s : State) → λ (n : Nat) → solve s n
+
+def solve-idle-0 : evidence {solve idle 0 ≡ 0 : Nat} := refl
+def solve-idle-1 : evidence {solve idle (suc 0) ≡ suc 0 : Nat} := refl
+
+def rank : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
+  λ (s : State) → λ (a : Action) → λ (b : Action) →
+    match s motive (λ _ → Type)
+      | idle => (match a motive (λ _ → Type)
+                  | stay => (match b motive (λ _ → Type) | stay => Empty | go => Unit)
+                  | go => Empty)
+      | done => Empty
+
+def done-one : evidence Π (n : Nat) → {solve done n ≡ suc 0 : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (x : Nat) → {solve done x ≡ suc 0 : Nat})
+      | 0 => refl
+      | suc n1 => rewrite (done-one n1) motive (λ z → {maxN z z ≡ suc 0 : Nat}) in refl
+
+-- The value of idle never exceeds 1: at depth 0 it is 0, and after that
+-- it is the maximum of two numbers below 1.
+def idle-le-one : evidence Π (n : Nat) → Le (solve idle n) (suc 0) :=
+  λ (n : Nat) →
+    match n motive (λ (x : Nat) → Le (solve idle x) (suc 0))
+      | 0 => tt
+      | suc n1 =>
+          rewrite (done-one n1) motive (λ z → Le (maxN (solve idle n1) z) (suc 0)) in
+            maxN-le (solve idle n1) (suc 0) (suc 0) (idle-le-one n1) (le-refl (suc 0))
+
+def idle-le-done : evidence Dominates (best idle) (best done) :=
+  λ (n : Nat) →
+    rewrite (done-one n) motive (λ w → Le (solve idle n) w) in idle-le-one n
+
+def successor : evidence CoinductiveHomomorphism State Action next best rank :=
+  λ (s : State) → λ (a : Action) → λ (b : Action) →
+    match s motive (λ (x : State) → Π (_ : rank x a b) → Dominates (best (next x a)) (best (next x b)))
+      | idle =>
+          (match a motive (λ (y : Action) → Π (_ : rank idle y b) → Dominates (best (next idle y)) (best (next idle b)))
+            | stay =>
+                (match b motive (λ (z : Action) → Π (_ : rank idle stay z) → Dominates (best (next idle stay)) (best (next idle z)))
+                  | stay => λ (r : Empty) → matchEmpty r motive (λ _ → Dominates (best idle) (best idle))
+                  | go => λ (r : Unit) → idle-le-done)
+            | go => λ (r : Empty) → matchEmpty r motive (λ _ → Dominates (best (next idle go)) (best (next idle b))))
+      | done => λ (r : Empty) → matchEmpty r motive (λ _ → Dominates (best (next done a)) (best (next done b)))
+
+def head-ok : evidence HeadCompatible State Action reward rank :=
+  λ (s : State) → λ (a : Action) → λ (b : Action) →
+    match s motive (λ (x : State) → Π (_ : rank x a b) → Le (reward x a) (reward x b))
+      | idle => λ (r : rank idle a b) → tt
+      | done => λ (r : Empty) → matchEmpty r motive (λ _ → Le (reward done a) (reward done b))
+
+def homo : evidence CoindHomo State Action reward next best rank :=
+  successor-head-coindHomo State Action reward next best rank successor head-ok

@@ -1,7 +1,7 @@
 ---
 title: For agents
 slug: for-agents
-order: 15
+order: 16
 summary: Two jobs. Do not mix them. Commands and file map.
 ---
 
