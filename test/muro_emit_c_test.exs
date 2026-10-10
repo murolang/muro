@@ -219,6 +219,47 @@ defmodule Muro.EmitCTest do
     cc!(dir, "list.c", "list.o")
   end
 
+  test "a cshrl instance emits its value stream to Elixir and compiles as C" do
+    assert {:ok, src} = Muro.emit_file("examples/cshrl/binary_sacrifice.muro", BinarySacrifice)
+    assert src =~ "def solve"
+    assert src =~ "def value"
+    assert src =~ "def maxN"
+    refute src =~ "best"
+    refute src =~ "CoindHomo"
+    refute src =~ "successor"
+    Code.eval_string(src)
+
+    peano = fn
+      0, _ -> 0
+      {:suc, m}, f -> 1 + f.(m, f)
+    end
+
+    take = fn s -> s |> Enum.take(3) |> Enum.map(&peano.(&1, peano)) end
+    assert take.(call(BinarySacrifice, :value, [:trap])) == [0, 0, 0]
+    assert take.(call(BinarySacrifice, :value, [:start])) == [1, 1, 1]
+    assert take.(call(BinarySacrifice, :value, [:paradise])) == [1, 1, 1]
+    assert call(BinarySacrifice, :solve, [:start, {:suc, {:suc, 0}}]) == {:suc, 0}
+
+    dir = tmp_dir()
+    File.mkdir_p!(Path.join(dir, "examples/cshrl"))
+    File.mkdir_p!(Path.join(dir, "stdlib"))
+    File.cp!("stdlib/nat.muro", Path.join(dir, "stdlib/nat.muro"))
+    File.cp!("stdlib/cshrl.muro", Path.join(dir, "stdlib/cshrl.muro"))
+
+    for name <- ["two_state", "binary_sacrifice", "skill_investment"] do
+      path = Path.join(dir, "examples/cshrl/#{name}.muro")
+      File.cp!("examples/cshrl/#{name}.muro", path)
+      capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+      header = File.read!(Path.join(dir, "examples/cshrl/#{name}.h"))
+      assert header =~ "muro_nat *solve(muro_state *s, muro_nat *n);"
+      refute header =~ "best"
+      cc!(Path.join(dir, "examples/cshrl"), "#{name}.c", "#{name}.o")
+    end
+
+    source = File.read!(Path.join(dir, "examples/cshrl/binary_sacrifice.c"))
+    assert source =~ "muro_stream *value(muro_state *s)"
+  end
+
   test "atom spellings that sanitize together get distinct enumerators" do
     dir = tmp_dir()
     path = Path.join(dir, "atoms.muro")
@@ -462,6 +503,9 @@ defmodule Muro.EmitCTest do
     File.rm(obj)
     status == 0
   end
+
+  # The module exists only after Code.eval_string, so a literal remote call warns.
+  defp call(mod, fun, args), do: apply(mod, fun, args)
 
   defp tmp_dir do
     dir = Path.join(System.tmp_dir!(), "muro_c_#{System.unique_integer([:positive])}")

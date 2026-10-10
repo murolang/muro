@@ -1,0 +1,123 @@
+-- skill_investment.muro — a chain of sacrifices: at every stage, train
+-- pays nothing now and leads to a state whose value dominates.
+--
+-- Four states and two actions. work pays 1, 2, 3, 5 at novice,
+-- apprentice, expert, master and stays. train pays 0 and advances one
+-- stage; at master it stays. The ranking puts work below train at the
+-- first three stages. The successor condition holds at every stage by
+-- one induction on the depth, shared by the three stages, and the head
+-- condition fails at every stage.
+import "../../stdlib/cshrl.muro"
+
+data State : Type where
+  novice : State
+  apprentice : State
+  expert : State
+  master : State
+
+data Action : Type where
+  train : Action
+  work : Action
+
+def next : run Π (s : State) → Π (a : Action) → State :=
+  λ (s : State) → λ (a : Action) →
+    match a motive (λ _ → State)
+      | train => (match s motive (λ _ → State)
+                   | novice => apprentice
+                   | apprentice => expert
+                   | expert => master
+                   | master => master)
+      | work => s
+
+def reward : run Π (s : State) → Π (a : Action) → Nat :=
+  λ (s : State) → λ (a : Action) →
+    match a motive (λ _ → Nat)
+      | train => 0
+      | work => (match s motive (λ _ → Nat)
+                  | novice => suc 0
+                  | apprentice => suc (suc 0)
+                  | expert => suc (suc (suc 0))
+                  | master => suc (suc (suc (suc (suc 0)))))
+
+def solve : run Π (+ s : State) → Π (+ n : Nat) → Nat :=
+  λ (+ s : State) → λ (+ n : Nat) →
+    maxN (match n motive (λ _ → Nat)
+           | 0 => reward s train
+           | suc n1 => solve (next s train) n1)
+         (match n motive (λ _ → Nat)
+           | 0 => reward s work
+           | suc n1 => solve (next s work) n1)
+
+def best : spec Π (s : State) → Π (n : Nat) → Nat := λ (s : State) → λ (n : Nat) → solve s n
+
+-- The value of novice is 1, 2, 3, 5, 5, ...: a capability profile, not
+-- a trajectory.
+def novice-0 : evidence {solve novice 0 ≡ suc 0 : Nat} := refl
+def novice-1 : evidence {solve novice (suc 0) ≡ suc (suc 0) : Nat} := refl
+def novice-2 : evidence {solve novice (suc (suc 0)) ≡ suc (suc (suc 0)) : Nat} := refl
+def novice-3 : evidence {solve novice (suc (suc (suc 0))) ≡ suc (suc (suc (suc (suc 0)))) : Nat} := refl
+
+-- work is below train, except at master where nothing is ranked.
+def rank : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
+  λ (s : State) → λ (a : Action) → λ (b : Action) →
+    match s motive (λ _ → Type)
+      | novice => (match a motive (λ _ → Type) | train => Empty | work => (match b motive (λ _ → Type) | train => Unit | work => Empty))
+      | apprentice => (match a motive (λ _ → Type) | train => Empty | work => (match b motive (λ _ → Type) | train => Unit | work => Empty))
+      | expert => (match a motive (λ _ → Type) | train => Empty | work => (match b motive (λ _ → Type) | train => Unit | work => Empty))
+      | master => Empty
+
+-- Three dominances, one induction. At depth suc n each is the maximum
+-- of the next stage and the same stage, compared term by term with the
+-- three at depth n.
+def novice-le-apprentice : evidence Π (n : Nat) → Le (solve novice n) (solve apprentice n) :=
+  λ (n : Nat) →
+    match n motive (λ (x : Nat) → Le (solve novice x) (solve apprentice x))
+      | 0 => tt
+      | suc m => maxN-mono (solve apprentice m) (solve novice m) (solve expert m) (solve apprentice m)
+                   (apprentice-le-expert m) (novice-le-apprentice m)
+
+def apprentice-le-expert : evidence Π (n : Nat) → Le (solve apprentice n) (solve expert n) :=
+  λ (n : Nat) →
+    match n motive (λ (x : Nat) → Le (solve apprentice x) (solve expert x))
+      | 0 => tt
+      | suc m => maxN-mono (solve expert m) (solve apprentice m) (solve master m) (solve expert m)
+                   (expert-le-master m) (apprentice-le-expert m)
+
+def expert-le-master : evidence Π (n : Nat) → Le (solve expert n) (solve master n) :=
+  λ (n : Nat) →
+    match n motive (λ (x : Nat) → Le (solve expert x) (solve master x))
+      | 0 => tt
+      | suc m => maxN-mono (solve master m) (solve expert m) (solve master m) (solve master m)
+                   (le-refl (solve master m)) (expert-le-master m)
+
+def successor : evidence CoinductiveHomomorphism State Action next best rank :=
+  λ (s : State) → λ (a : Action) → λ (b : Action) →
+    match a motive (λ (y : Action) → Π (_ : rank s y b) → Dominates (best (next s y)) (best (next s b)))
+      | train =>
+          λ (r : rank s train b) →
+            (match s motive (λ (x : State) → Π (_ : rank x train b) → Dominates (best (next x train)) (best (next x b)))
+              | novice => λ (r1 : Empty) → matchEmpty r1 motive (λ _ → Dominates (best apprentice) (best (next novice b)))
+              | apprentice => λ (r1 : Empty) → matchEmpty r1 motive (λ _ → Dominates (best expert) (best (next apprentice b)))
+              | expert => λ (r1 : Empty) → matchEmpty r1 motive (λ _ → Dominates (best master) (best (next expert b)))
+              | master => λ (r1 : Empty) → matchEmpty r1 motive (λ _ → Dominates (best master) (best (next master b)))) r
+      | work =>
+          λ (r : rank s work b) →
+            (match b motive (λ (z : Action) → Π (_ : rank s work z) → Dominates (best s) (best (next s z)))
+              | train =>
+                  λ (r1 : rank s work train) →
+                    (match s motive (λ (x : State) → Π (_ : rank x work train) → Dominates (best x) (best (next x train)))
+                      | novice => λ (r2 : Unit) → novice-le-apprentice
+                      | apprentice => λ (r2 : Unit) → apprentice-le-expert
+                      | expert => λ (r2 : Unit) → expert-le-master
+                      | master => λ (r2 : Empty) → matchEmpty r2 motive (λ _ → Dominates (best master) (best master))) r1
+              | work =>
+                  λ (r1 : rank s work work) →
+                    (match s motive (λ (x : State) → Π (_ : rank x work work) → Dominates (best x) (best x))
+                      | novice => λ (r2 : Empty) → matchEmpty r2 motive (λ _ → Dominates (best novice) (best novice))
+                      | apprentice => λ (r2 : Empty) → matchEmpty r2 motive (λ _ → Dominates (best apprentice) (best apprentice))
+                      | expert => λ (r2 : Empty) → matchEmpty r2 motive (λ _ → Dominates (best expert) (best expert))
+                      | master => λ (r2 : Empty) → matchEmpty r2 motive (λ _ → Dominates (best master) (best master))) r1) r
+
+-- At novice, work pays 1 and train pays 0: no CoindHomo ranks them so.
+def not-head : evidence Π (hc : HeadCompatible State Action reward rank) → Empty :=
+  λ (hc : HeadCompatible State Action reward rank) → hc novice work train tt

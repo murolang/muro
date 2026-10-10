@@ -1570,6 +1570,65 @@ defmodule Muro.CheckTest do
     assert msg =~ "unclosed string"
   end
 
+  test "suc, tt, and refl are keywords only at a word boundary" do
+    src = """
+    def successor : run Π (n : Nat) → Nat := λ (n : Nat) → suc n
+    def ttl : run Nat := successor 0
+    def reflex : evidence {ttl ≡ suc 0 : Nat} := refl
+    def tt-ok : evidence Unit := tt
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Enum.map(book, & &1.name) == ["successor", "ttl", "reflex", "tt-ok"]
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "the library checks, and the cshrl examples check against it" do
+    assert Muro.check_file("stdlib/nat.muro") == :ok
+    assert Muro.check_file("stdlib/cshrl.muro") == :ok
+
+    for name <- ["two_state", "binary_sacrifice", "skill_investment"] do
+      assert Muro.check_file("examples/cshrl/#{name}.muro") == :ok
+    end
+
+    {:ok, flat} = Muro.Load.file("examples/cshrl/two_state.muro")
+    names = flat |> Enum.map(&Map.get(&1, :name)) |> Enum.reject(&is_nil/1)
+    assert "CoindHomo" in names
+    assert "successor-head-coindHomo" in names
+    assert "maxN-mono" in names
+    assert "homo" in names
+
+    # A refutation is a function into Empty; the depth at which it fails is 0.
+    {:ok, bs} = Muro.Load.file("examples/cshrl/binary_sacrifice.muro")
+    not_homo = Enum.find(bs, &(Map.get(&1, :name) == "not-coindHomo"))
+    assert {:pi, _, _, "h", :empty} = not_homo.type
+
+    # The sacrifice instance cannot be made a CoindHomo by the decomposition:
+    # the head condition is refuted, so a proof of it is refused.
+    src = """
+    import "binary_sacrifice.muro"
+    def head-ok : evidence HeadCompatible State Action reward rank :=
+      λ (s : State) → λ (a : Action) → λ (b : Action) → λ (r : rank s a b) → tt
+    """
+
+    dir = Path.join(System.tmp_dir!(), "muro_cshrl_#{System.unique_integer([:positive])}")
+    on_exit(fn -> File.rm_rf!(dir) end)
+    File.mkdir_p!(Path.join(dir, "examples/cshrl"))
+    File.mkdir_p!(Path.join(dir, "stdlib"))
+    File.cp!("stdlib/nat.muro", Path.join(dir, "stdlib/nat.muro"))
+    File.cp!("stdlib/cshrl.muro", Path.join(dir, "stdlib/cshrl.muro"))
+
+    File.cp!(
+      "examples/cshrl/binary_sacrifice.muro",
+      Path.join(dir, "examples/cshrl/binary_sacrifice.muro")
+    )
+
+    bad = Path.join(dir, "examples/cshrl/bad_head.muro")
+    File.write!(bad, src)
+    assert {:error, msg} = Muro.check_file(bad)
+    assert msg =~ "head-ok"
+  end
+
   test "uncons of a Nat is not a ν step" do
     src = "def bad : run Nat := uncons 0\n"
     assert {:ok, book} = Parser.parse(src)

@@ -67,6 +67,7 @@ A definition is in the book the moment `Parser.parse/1` returns it. The checker 
 | [Terms](manual/language.md) | Π, λ, match, quantities |
 | [Grammar](manual/grammar.md) | What the parser implements |
 | [Examples](manual/examples.md) | Every file in `examples/` |
+| [Library](manual/library.md) | `stdlib/`: the order on Nat, and the CSHRL statements |
 | [For agents](manual/for-agents.md) | Operational contract |
 | [Limits](manual/limits.md) | What the language does not do |
 

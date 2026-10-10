@@ -415,10 +415,10 @@ defmodule Muro.Parser do
       has_prefix?(s, "Empty") ->
         {:ok, :empty, after_kw(s, "Empty")}
 
-      has_prefix?(s, "refl") ->
+      word_kw?(s, "refl") ->
         {:ok, :rfl, after_kw(s, "refl")}
 
-      has_prefix?(s, "tt") ->
+      word_kw?(s, "tt") ->
         {:ok, :one, after_kw(s, "tt")}
 
       has_prefix?(s, "?") ->
@@ -427,7 +427,7 @@ defmodule Muro.Parser do
       has_prefix?(s, "0") ->
         {:ok, :ze, after_kw(s, "0")}
 
-      has_prefix?(s, "suc") ->
+      word_kw?(s, "suc") ->
         parse_suc(s)
 
       has_prefix?(s, "[]") ->

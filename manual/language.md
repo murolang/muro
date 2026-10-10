@@ -25,7 +25,7 @@ Definitions, data types, and constructors share one set of names. Each name is d
 
 ## Import
 
-`import "list.muro"` names a file. The path is relative to the importing file, and the string is the whole path. The file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A cycle of imports is an error. `examples/sort.muro` imports `list.muro` and does not declare `List`.
+`import "list.muro"` names a file. The path is relative to the importing file, and the string is the whole path. The file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A cycle of imports is an error. The path may climb: `examples/cshrl/two_state.muro` imports `"../../stdlib/cshrl.muro"`. `examples/sort.muro` imports `list.muro` and does not declare `List`. The files under `stdlib/` are described in [Library](library.md).
 
 ## Prelude
 

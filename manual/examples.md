@@ -112,6 +112,22 @@ See [Machine numbers](machine.md).
 
 Uses `sym`, `cong`, and `pred` from the prelude and defines none of them. `before` is `pred (suc (suc 0))`. There is no Agda twin: the prelude is an Elixir book, not a kernel rule. See [Terms](language.md#prelude).
 
+## cshrl
+
+Three environments that import [`stdlib/cshrl.muro`](library.md) with `import "../../stdlib/cshrl.muro"`. Each declares `State`, `Action`, `next`, `reward`, `solve`, a ranking, and proves which of the two conditions its ranking meets.
+
+### cshrl/two_state.muro
+
+`idle` and `done`; `stay` and `go`. The ranking puts `stay` below `go` at `idle`. `successor` is the successor condition, `head-ok` the head condition, and `homo : CoindHomo …` is their composition through `successor-head-coindHomo`.
+
+### cshrl/binary_sacrifice.muro
+
+`trap`, `start`, `paradise`; `goTrap` pays `1` and leads to `trap`, `goParadise` pays `0` and leads to `paradise`. `successor` is the successor condition. `not-head` and `not-coindHomo` are refutations: `goTrap` pays more now. `value` tabulates `solve` as a `run` stream and emits; `value start` is `1, 1, 1, …`.
+
+### cshrl/skill_investment.muro
+
+`novice`, `apprentice`, `expert`, `master`; `train` pays `0` and advances, `work` pays `1`, `2`, `3`, `5` and stays. `work` is below `train` at the first three stages. The three dominances are one induction on the depth through `maxN-mono`. `novice-0` to `novice-3` are `refl`: the value of `novice` is `1, 2, 3, 5`.
+
 ## Refused
 
 `mix muro.check` fails on each of these. `even_odd.muro` is the mutual recursion that checks.
@@ -154,7 +170,7 @@ Two data types are both named `Foo`. `foo` builds the first at `0` and `bar` bui
 
 ## Adding a file
 
-1. Put it in `examples/`. Use only `run` / `run internal` / `spec` / `evidence`.
+1. Put it in `examples/`, or under `examples/cshrl/` if it imports the library. Use only `run` / `run internal` / `spec` / `evidence`.
 2. Every binder is `(x : A)` or `(+ x : A)` or `(- x : A)`.
 3. Every `match` / `rewrite` writes `motive (λ x → …)` in parentheses.
 4. Recursion on `run`/`evidence` goes through `match` and a smaller variable.
@@ -162,3 +178,5 @@ Two data types are both named `Foo`. `foo` builds the first at `0` and `bar` bui
 6. If it belongs in CI, add parse/check/emit in `test/muro_check_test.exs`.
 
 Do not edit Agda or `lib/muro/*.ex` to make a program work. If the program is allowed by the grammar and the checker refuses a term that should check, that is a kernel bug — a different job. See [For agents](for-agents.md).
+
+Next: [Library](library.md).
