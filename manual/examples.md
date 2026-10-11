@@ -56,6 +56,10 @@ A productive `run` Stream of zeros. `head-zeros` is `{head zeros ≡ 0 : Nat}` b
 
 `zeros ~ zeros'` and `tail (natsFrom n) ~ natsFrom (suc n)`. Rutten’s stream calculus, Theorem 2.1. `uncons` of `zeros ~ zeros'` is the head equation and `tail zeros ~ tail zeros'`. Evidence only.
 
+## higher_order.muro
+
+A `run` definition as a value. `map` and `tabulate` take a `+` function; `tabulate ident` passes a definition, `map (plus 2)` a partial application, and `measure (length Nat)` a partial application whose given argument is erased. The emitted code passes curried closures ([Emit](emit.md#functions-as-values)); C emit refuses it (`c:lambda`).
+
 ## dominance.muro
 
 A declared ν family, `Dom f g`: every element of `f` is at most the element of `g` at the same position. `dom-refl` proves `Dom s s`, `zeros-below` proves `Dom zeros (natsFrom n)` with the tail obligation at `natsFrom (suc n)`, and `dom-head` reads the head obligation back with `head`. Evidence only; `zeros` and `natsFrom` are emitted.

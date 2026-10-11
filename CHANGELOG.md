@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.16.16
+
+Elixir emit of a definition used as a value. A reference given fewer arguments than its type has Πs is a curried closure over the rest, the given arguments evaluated once and erased ones dropped: `tabulate ident` passes `fn y -> ident(y) end`, where it emitted `ident()`, and `map (plus 2) xs` passes a closure, where it emitted `plus(2)`. A reference given more arguments applies the result with `.()`. A body with fewer λs than its type has Πs (`def adder : … := plus`) is applied to the binders it does not name, where it ignored them. A head that is not a name or a call is parenthesized before it is applied. The checker is unchanged; these programs checked before and emitted code that did not compile. C emit still refuses them (`c:lambda`).
+
+### Emit
+
+- `Muro.Emit`: `emit_ref`, `apply_rest`, `eta_body`.
+
+### Manual
+
+- Emit: functions as values.
+- Examples: `higher_order.muro`.
+
+### Package
+
+- Version 0.16.16.
+
 ## 0.16.15
 
 A `ν` block with a name other than `Stream` declares a family over its indices: `ν Dom (f : Stream Nat) (g : Stream Nat) : Type where uncons : Dom f g → Le (head f) (head g) × Dom (tail f) (tail g)`. The family is the spec definition whose body is `ν Dom. λ f g → …`, the encoding `Always` and `~` already have. An `unfold` checks the head obligation and a proof of the same family at the tail; `uncons` reads the pair back. The body is a product, the family strictly positive in it and applied to all its indices (a body that is not a product is refused with `ν body is not a product`, in both checkers); a family takes at least one index and as many as it needs. Declared families are checked by `Muro.Check` and the Agda checker and are outside ⊢, as Stream, `Always`, and `~` are.

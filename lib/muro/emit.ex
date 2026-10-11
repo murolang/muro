@@ -53,7 +53,7 @@ defmodule Muro.Emit do
     {:ok, ty_db} = Ast.to_db(ty)
     {:ok, body_db} = Ast.to_db(body)
     {erased, arity} = telescope(ty_db, 0, [])
-    inner = peel_lams(body_db, arity)
+    inner = eta_body(body_db, arity)
 
     args =
       0..(arity - 1)//1
@@ -76,6 +76,25 @@ defmodule Muro.Emit do
 
   defp peel_lams({:lam, _, _, _, t}, n) when n > 0, do: peel_lams(t, n - 1)
   defp peel_lams(t, _), do: t
+
+  # The body under `arity` binders. A body with fewer λs than its type
+  # has Πs (`def f : run Π (n : Nat) → Stream Nat := natsFrom`) is
+  # applied to the binders it does not name.
+  defp eta_body(body, arity) do
+    named = count_lams(body, arity)
+    missing = arity - named
+    inner = peel_lams(body, named)
+
+    if missing == 0 do
+      inner
+    else
+      shifted = Muro.Subst.ren(&(&1 + missing), inner)
+      Enum.reduce((missing - 1)..0//-1, shifted, fn i, acc -> {:app, acc, {:var, i}} end)
+    end
+  end
+
+  defp count_lams({:lam, _, _, _, t}, n) when n > 0, do: 1 + count_lams(t, n - 1)
+  defp count_lams(_, _), do: 0
 
   # de Bruijn 0 is the nearest binder = last peeled λ = x#{depth-1}.
   defp emit_db({:var, i}, depth, _book), do: "x#{depth - 1 - i}"
@@ -183,30 +202,83 @@ defmodule Muro.Emit do
     {h, args} = spine(t, [])
 
     case h do
-      {:def, n} ->
-        if ctor_name?(book, n) do
-          emit_ctor(n, args, d, book)
-        else
-          live = live_args(book, n, args, d)
-          "#{safe(n)}(#{Enum.join(live, ", ")})"
-        end
-
-      _ ->
-        Enum.reduce(args, emit_db(h, d, book), fn a, acc ->
-          "#{acc}.(#{emit_db(a, d, book)})"
-        end)
+      {:def, n} -> emit_ref(n, args, d, book)
+      _ -> apply_rest(emit_db(h, d, book), args, d, book)
     end
   end
 
-  defp emit_db({:def, n}, d, book) do
-    if ctor_name?(book, n) do
-      emit_ctor(n, [], d, book)
-    else
-      "#{safe(n)}()"
-    end
-  end
+  defp emit_db({:def, n}, d, book), do: emit_ref(n, [], d, book)
 
   defp emit_db(_, _, _book), do: "raise \"erased term\""
+
+  # A definition applied to `args`. With as many arguments as its type
+  # has Πs it is a direct call. With more, the result is a function value
+  # and the rest are applied with `.()`. With fewer it is a curried
+  # closure over the remaining live arguments, the given ones evaluated
+  # once; erased binders take no argument, as for an anonymous λ. A
+  # constructor is always fully applied (the checker asks for it).
+  defp emit_ref(n, args, d, book) do
+    cond do
+      ctor_name?(book, n) -> emit_ctor(n, args, d, book)
+      qtys = ref_qtys(book, n) -> emit_ref(n, qtys, args, d, book)
+      true -> "#{safe(n)}(#{Enum.join(Enum.map(args, &emit_db(&1, d, book)), ", ")})"
+    end
+  end
+
+  defp emit_ref(n, qtys, args, d, book) do
+    arity = length(qtys)
+    {now, rest} = Enum.split(args, arity)
+
+    cond do
+      length(args) >= arity ->
+        apply_rest(full_call(n, now, d, book), rest, d, book)
+
+      true ->
+        live_given =
+          for {a, q} <- Enum.zip(now, qtys), q != :erased, do: emit_db(a, d, book)
+
+        missing = Enum.drop(qtys, length(now))
+        as = for {_, i} <- Enum.with_index(live_given), do: "a#{d}_#{i}"
+        ys = for {q, i} <- Enum.with_index(missing), q != :erased, do: "y#{d}_#{i}"
+        call = "#{safe(n)}(#{Enum.join(as ++ ys, ", ")})"
+        closure = Enum.reduce(Enum.reverse(ys), call, fn y, acc -> "fn #{y} -> #{acc} end" end)
+
+        if as == [],
+          do: closure,
+          else: "(fn #{Enum.join(as, ", ")} -> #{closure} end).(#{Enum.join(live_given, ", ")})"
+    end
+  end
+
+  defp full_call(n, args, d, book),
+    do: "#{safe(n)}(#{Enum.join(live_args(book, n, args, d), ", ")})"
+
+  defp apply_rest(head, [], _d, _book), do: head
+
+  defp apply_rest(head, args, d, book) do
+    Enum.reduce(args, callable(head), fn a, acc -> "#{acc}.(#{emit_db(a, d, book)})" end)
+  end
+
+  # `case … end.(x)` does not parse; a head that is not a name or a call
+  # is parenthesized before it is applied.
+  defp callable(head) do
+    if String.match?(head, ~r/\A[A-Za-z_][A-Za-z0-9_]*(\(.*\))?\z/s) and
+         not String.contains?(head, "\n"),
+       do: head,
+       else: "(#{head})"
+  end
+
+  # Quantities of the Πs of a definition's type; nil for a name the book
+  # does not define.
+  defp ref_qtys(book, name) do
+    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name)) do
+      nil ->
+        nil
+
+      dfn ->
+        {:ok, ty} = Ast.to_db(dfn.type)
+        qty_spine(ty)
+    end
+  end
 
   defp emit_ctor(name, args, d, book) do
     xs = Enum.map(args, &emit_db(&1, d, book))

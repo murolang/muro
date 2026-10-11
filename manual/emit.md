@@ -130,6 +130,18 @@ def length : run Π (- A : Type) → Π (xs : List A) → Nat
 
 becomes something like `def length(xs)`. The type argument is gone. In Muro you still write `length Nat ones2` (or `length A as` in a recursive call). The checker sees `A`. Emit does not.
 
+## Functions as values
+
+A `run` definition becomes an Elixir function with one parameter per live (non-erased) argument, and a function value is a curried closure: a variable applied to two arguments is `f.(a).(b)`, and `λ (x : A) → t` is `fn x -> t end`. A reference to a definition is emitted by how many arguments it is given (`examples/higher_order.muro`):
+
+- As many as its type has Πs: a direct call, `plus(a, b)`.
+- Fewer: a curried closure over the rest. `tabulate ident` passes `fn y -> ident(y) end`; `map (plus 2) xs` passes `plus` with `2` bound once and the second argument open. An erased argument is dropped here too, so `length Nat` is a one-argument closure.
+- More: the call, then `.()` for each extra argument, since the result is a function value.
+
+A body with fewer λs than its type has Πs is applied to the binders it does not name: `def adder : run Π (n : Nat) → Π (m : Nat) → Nat := plus` emits `def adder(x0, x1)` calling `plus(x0, x1)`.
+
+The C backend has no closures. An unapplied lambda, a definition passed as a value, and a call of a local function are refused there (`c:lambda`).
+
 ## What emit is not
 
 It does not type raw Elixir. It does not emit spec or evidence. It does not turn a Stream that is only evidence into `Stream`. It does not use `Nx.Defn`.
