@@ -143,6 +143,53 @@ defmodule Muro.CheckTest do
     assert call("PairLet", :swap, [{1, 2}]) == {2, 1}
   end
 
+  test "higher_order.muro: a definition passed as a value or partially applied is a closure" do
+    src = File.read!("examples/higher_order.muro")
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+
+    out = Emit.emit_module(Muro.HigherOrder, book)
+    refute out =~ "ident()"
+    refute out =~ "add2-ok"
+    Code.eval_string(out)
+
+    assert call("HigherOrder", :nats, []) |> Enum.take(3) == [0, {:suc, 0}, {:suc, {:suc, 0}}]
+
+    assert call("HigherOrder", :add2, []) ==
+             {:cons, {:suc, {:suc, 0}}, {:cons, {:suc, {:suc, {:suc, 0}}}, nil}}
+
+    assert call("HigherOrder", :len_one, []) == {:suc, 0}
+    assert call("HigherOrder", :adder, [{:suc, 0}, {:suc, 0}]) == {:suc, {:suc, 0}}
+  end
+
+  test "emit: extra arguments apply the result; an eta-reduced match body takes its binder" do
+    src = """
+    def ident : run Π (n : Nat) → Nat := λ (n : Nat) → n
+    def plus : run Π (n : Nat) → Π (m : Nat) → Nat :=
+      λ (n : Nat) → λ (m : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => m
+          | suc p => suc (plus p m)
+    def picker : run Π (n : Nat) → Π (_ : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Π (_ : Nat) → Nat)
+        | 0 => ident
+        | suc p => plus p
+    def pick : run Π (n : Nat) → Π (_ : Nat) → Nat := λ (n : Nat) → picker n
+    def seven : run Nat := picker (suc (suc 0)) (suc (suc (suc (suc (suc (suc 0))))))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+    out = Emit.emit_module(Muro.EmitEta, book)
+    Code.eval_string(out)
+
+    assert call("EmitEta", :seven, []) ==
+             {:suc, {:suc, {:suc, {:suc, {:suc, {:suc, {:suc, 0}}}}}}}
+
+    assert call("EmitEta", :picker, [0, {:suc, 0}]) == {:suc, 0}
+    assert call("EmitEta", :pick, [{:suc, 0}, {:suc, 0}]) == {:suc, 0}
+  end
+
   test "result.muro: ok/error constructors are the Elixir tags" do
     src = File.read!("examples/result.muro")
     assert {:ok, book} = Parser.parse(src)

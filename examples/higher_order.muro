@@ -1,0 +1,42 @@
+-- higher_order.muro — a run definition passed as a value. A + function
+-- parameter is copyable; a definition given fewer arguments than its type
+-- has Πs is a closure over the rest.
+data List (A : Type) : Type where
+  nil  : List A
+  cons : A → List A → List A
+
+def plus : run Π (n : Nat) → Π (m : Nat) → Nat :=
+  λ (n : Nat) → λ (m : Nat) →
+    match n motive (λ _ → Nat)
+      | 0 => m
+      | suc p => suc (plus p m)
+
+def ident : run Π (n : Nat) → Nat := λ (n : Nat) → n
+
+def map : run Π (+ f : Π (_ : Nat) → Nat) → Π (xs : List Nat) → List Nat :=
+  λ (+ f : Π (_ : Nat) → Nat) → λ (xs : List Nat) →
+    match xs motive (λ _ → List Nat)
+      | nil => nil
+      | cons x rest => cons (f x) (map f rest)
+
+def tabulate : run Π (+ f : Π (_ : Nat) → Nat) → Stream Nat :=
+  λ (+ f : Π (_ : Nat) → Nat) → unfold 0 (λ (+ k : Nat) → (f k, suc k))
+
+def nats : run Stream Nat := tabulate ident
+
+def add2 : run List Nat := map (plus (suc (suc 0))) (cons 0 (cons (suc 0) nil))
+
+def length : run Π (- A : Type) → Π (xs : List A) → Nat :=
+  λ (- A : Type) → λ (xs : List A) →
+    match xs motive (λ _ → Nat)
+      | nil => 0
+      | cons _ rest => suc (length A rest)
+
+def measure : run Π (+ m : Π (xs : List Nat) → Nat) → Nat :=
+  λ (+ m : Π (xs : List Nat) → Nat) → plus (m (cons 0 nil)) (m nil)
+
+def len-one : run Nat := measure (length Nat)
+
+def adder : run Π (n : Nat) → Π (_ : Nat) → Nat := plus
+
+def add2-ok : evidence {map (plus (suc (suc 0))) (cons 0 nil) ≡ cons (suc (suc 0)) nil : List Nat} := refl
