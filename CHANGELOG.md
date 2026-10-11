@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.16.17
+
+Conversion unfolds two calls of the same definition when their arguments differ. The congruence step compares the arguments of `f a₁ … aₙ` and `f b₁ … bₙ` when `a₁` and `b₁` are not constructor-headed; a failure there was final. A definition with a type parameter first and a `match` on a later argument (`g R n k`, matching on `n`) then never unfolded against itself: `{g Nat (suc 0) k ≡ g Nat 0 k : Nat}` was refused although both sides reduce to `k`. A failed congruence now falls back to weak head normal form, as a congruence that does not apply already did.
+
+A file reached by two imports is loaded once. A library file that imports `nat.muro`, imported next to `nat.muro` itself, was refused with `duplicate name` for every name in `nat.muro`. Two different declarations of one name are still refused, with both sites.
+
+`Type`, `Nat`, `Unit`, `Empty`, `refl`, `tt`, `suc`, `match`, `matchEmpty`, and `rewrite` are keywords only as whole words, as the other keywords already were. `successor`, `reflect`, `ttl`, and `Natural` are names; `successor-value` was read as `suc` applied to `cessor-value`. `->` after a keyword ends it, so `Nat->Nat` is still an arrow.
+
+### Checker
+
+- `Check.convStuck`: the argumentwise comparison `orElse` `convWhnf` (`_orElse_` in `Muro.Base`). `Soundness.Conv.convStuck-sound` covers the fallback with `convWhnf-sound`. Then `Muro.Check.stuck_cong`.
+
+### Import
+
+- `Muro.Load`: an entry from the same file and position as one already in scope is the same entry.
+
+### Parser
+
+- Every keyword is matched with `word_kw?`.
+
+### Manual
+
+- Identity: the order of conversion. Extending: the checklist line. Terms: a file reached by two imports.
+
+### Package
+
+- Version 0.16.17.
+
 ## 0.16.16
 
 Elixir emit of a definition used as a value. A reference given fewer arguments than its type has Πs is a curried closure over the rest, the given arguments evaluated once and erased ones dropped: `tabulate ident` passes `fn y -> ident(y) end`, where it emitted `ident()`, and `map (plus 2) xs` passes a closure, where it emitted `plus(2)`. A reference given more arguments applies the result with `.()`. A body with fewer λs than its type has Πs (`def adder : … := plus`) is applied to the binders it does not name, where it ignored them. A head that is not a name or a call is parenthesized before it is applied. The checker is unchanged; these programs checked before and emitted code that did not compile. C emit still refuses them (`c:lambda`).

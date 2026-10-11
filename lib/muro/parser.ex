@@ -270,7 +270,7 @@ defmodule Muro.Parser do
 
   defp ident_continue?(s, w) do
     rest = after_kw(s, w)
-    rest != "" and ident_char?(String.first(rest))
+    rest != "" and ident_char?(String.first(rest)) and not String.starts_with?(rest, "->")
   end
 
   # Pratt-ish: apps are juxtaposition, arrows bind looser via Π/λ.
@@ -424,10 +424,10 @@ defmodule Muro.Parser do
       word_kw?(s, "Atom") ->
         {:ok, :atom, after_kw(s, "Atom")}
 
-      has_prefix?(s, "Type") ->
+      word_kw?(s, "Type") ->
         {:ok, :typ, after_kw(s, "Type")}
 
-      has_prefix?(s, "Nat") ->
+      word_kw?(s, "Nat") ->
         {:ok, :nat, after_kw(s, "Nat")}
 
       word_kw?(s, "I64") ->
@@ -454,16 +454,16 @@ defmodule Muro.Parser do
       word_kw?(s, "packI") ->
         parse_binary(s, "packI", :packi)
 
-      has_prefix?(s, "Unit") ->
+      word_kw?(s, "Unit") ->
         {:ok, :unit, after_kw(s, "Unit")}
 
-      has_prefix?(s, "Empty") ->
+      word_kw?(s, "Empty") ->
         {:ok, :empty, after_kw(s, "Empty")}
 
-      has_prefix?(s, "refl") ->
+      word_kw?(s, "refl") ->
         {:ok, :rfl, after_kw(s, "refl")}
 
-      has_prefix?(s, "tt") ->
+      word_kw?(s, "tt") ->
         {:ok, :one, after_kw(s, "tt")}
 
       has_prefix?(s, "?") ->
@@ -472,7 +472,7 @@ defmodule Muro.Parser do
       has_prefix?(s, "0") ->
         {:ok, :ze, after_kw(s, "0")}
 
-      has_prefix?(s, "suc") ->
+      word_kw?(s, "suc") ->
         parse_suc(s)
 
       has_prefix?(s, "[]") ->
@@ -523,13 +523,13 @@ defmodule Muro.Parser do
       word_kw?(s, "λ") or word_kw?(s, "lam") ->
         parse_lam(s)
 
-      has_prefix?(s, "matchEmpty") ->
+      word_kw?(s, "matchEmpty") ->
         parse_memp(s)
 
-      has_prefix?(s, "match") ->
+      word_kw?(s, "match") ->
         parse_match(s)
 
-      has_prefix?(s, "rewrite") ->
+      word_kw?(s, "rewrite") ->
         parse_rwt(s)
 
       first_char(s) == ?{ ->

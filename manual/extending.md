@@ -134,6 +134,6 @@ Hard rules you must not relax without a new theory:
 3. No promotion. Erased variables have no computational use.
 4. Emitted code is run only.
 
-Conversion: syntactic equality first; then stuck-def congruence when the first argument is not constructor-headed; then WHNF. Fuel is for reduction (`whnf`, conversion, `isData`, the index-clash test); infer and check are structural on the term. Out of fuel is an error, not an unreduced term: a new use of `whnf` must propagate `{:error, _}` (Elixir) / `Result` (Agda), and a new recursion that is not on a subterm must spend fuel in a clause head, as `clashIdx` does.
+Conversion: syntactic equality first; then stuck-def congruence when the first argument is not constructor-headed; then WHNF, also when that congruence fails (`_orElse_` in `Check.convStuck`). Fuel is for reduction (`whnf`, conversion, `isData`, the index-clash test); infer and check are structural on the term. Out of fuel is an error, not an unreduced term: a new use of `whnf` must propagate `{:error, _}` (Elixir) / `Result` (Agda), and a new recursion that is not on a subterm must spend fuel in a clause head, as `clashIdx` does.
 
 After you change the kernel, update this manual so `manual/` stays the language book. Do not put the change only in `@moduledoc`.

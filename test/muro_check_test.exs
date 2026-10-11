@@ -190,6 +190,51 @@ defmodule Muro.CheckTest do
     assert call("EmitEta", :pick, [{:suc, 0}, {:suc, 0}]) == {:suc, 0}
   end
 
+  test "a keyword is a whole word: successor, reflect, ttl, Natural, matcher are names" do
+    src = """
+    def successor : run Π (n : Nat) → Nat := λ (n : Nat) → suc(n)
+    def reflect : run Nat := successor 0
+    def ttl : run Nat := reflect
+    def Natural : spec Type := Nat
+    def matcher : run Π (n : Natural) → Nat := λ (n : Natural) → match n motive (λ _ → Nat) | 0 => ttl | suc m => m
+    def rewriter : run Nat->Nat := matcher
+    def Unity : spec Type := Unit
+    def Emptiness : spec Type := Empty
+    def Typed : spec Type := Natural
+    def ok : evidence {rewriter (successor 0) ≡ 0 : Nat} := refl
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "conversion unfolds a definition that matches past a type parameter" do
+    src = """
+    def g : spec Π (R : Type) → Π (n : Nat) → Π (k : R) → R :=
+      λ (R : Type) → λ (n : Nat) → λ (k : R) →
+        match n motive (λ _ → R)
+          | 0 => k
+          | suc m => g R m k
+
+    def closed : evidence {g Nat (suc 0) (suc 0) ≡ g Nat 0 (suc 0) : Nat} := refl
+
+    def open : evidence Π (- m : Nat) → Π (- k : Nat) → {g Nat (suc m) k ≡ g Nat m k : Nat} :=
+      λ (- m : Nat) → λ (- k : Nat) → refl
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+
+    {:ok, bad} =
+      Parser.parse(
+        String.replace(src, "| suc m => g R m k", "| suc m => g R m (g R m k)") <>
+          "\ndef no : evidence {g Nat (suc 0) (suc 0) ≡ g Nat 0 0 : Nat} := refl\n"
+      )
+
+    assert {:error, msg} = Check.check_sig(bad)
+    assert msg =~ "no body: cannot convert"
+  end
+
   test "result.muro: ok/error constructors are the Elixir tags" do
     src = File.read!("examples/result.muro")
     assert {:ok, book} = Parser.parse(src)
@@ -1707,6 +1752,42 @@ defmodule Muro.CheckTest do
 
     assert {:error, msg} = Parser.parse("import \"list\n")
     assert msg =~ "unclosed string"
+  end
+
+  test "a file reached by two imports is loaded once" do
+    dir = Path.join(System.tmp_dir!(), "muro_dia_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    File.write!(Path.join(dir, "base.muro"), "def one : run Nat := suc 0\n")
+    File.write!(Path.join(dir, "a.muro"), "import \"base.muro\"\ndef two : run Nat := suc one\n")
+
+    top = Path.join(dir, "top.muro")
+
+    File.write!(top, """
+    import "a.muro"
+    import "base.muro"
+    def four : run Nat := suc (suc (suc one))
+    def four-ok : evidence {four ≡ suc (suc (suc (suc 0))) : Nat} := refl
+    """)
+
+    assert Muro.check_file(top) == :ok
+    assert {:ok, src} = Muro.emit_file(top, Dia)
+    assert length(Regex.scan(~r/\bdef one\b/, src)) == 1
+
+    File.write!(
+      Path.join(dir, "b.muro"),
+      "import \"base.muro\"\ndef three : run Nat := suc one\n"
+    )
+
+    File.write!(Path.join(dir, "other.muro"), "def one : run Nat := 0\n")
+    clash = Path.join(dir, "clash.muro")
+    File.write!(clash, "import \"a.muro\"\nimport \"b.muro\"\nimport \"other.muro\"\n")
+
+    assert {:error, msg} = Muro.check_file(clash)
+    assert msg =~ "duplicate name one"
+    assert msg =~ "base.muro"
+    assert msg =~ "other.muro"
   end
 
   test "a function and a pair of Data are copyable at +" do
