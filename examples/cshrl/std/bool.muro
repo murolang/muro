@@ -1,0 +1,4 @@
+-- bool.muro — Bool.
+data Bool : Type where
+  true  : Bool
+  false : Bool

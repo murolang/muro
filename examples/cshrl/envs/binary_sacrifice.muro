@@ -1,0 +1,117 @@
+-- binary_sacrifice.muro — sacrifice now, gain later.
+--
+--   start ──go-paradise (r = 0)──▸ paradise ⟳ (r = 1)
+--         ╲
+--          ╲─go-trap (r = 1)──▸ trap ⟳ (r = 0)
+--
+-- A CoinductiveHomomorphism ranks go-paradise above go-trap, and
+-- CoindHomo can rank them in neither direction.
+import "../std/nat.muro"
+import "../lib/successor_sum.muro"
+import "../lib/agent.muro"
+
+data State : Type where
+  start    : State
+  paradise : State
+  trap     : State
+
+data Action : Type where
+  go-paradise : Action
+  go-trap     : Action
+
+def Reward : spec Type := Nat
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Reward)
+      | start =>
+          (match a motive (λ _ → State × Reward)
+            | go-paradise => (paradise, 0)
+            | go-trap => (trap, suc 0))
+      | paradise => (paradise, suc 0)
+      | trap => (trap, 0)
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons go-paradise (cons go-trap nil)
+def default-action : run Action := go-paradise
+def horizon : run Nat := suc (suc (suc 0))
+def add : evidence Π (r : Reward) → Π (q : Reward) → Reward := plus
+def add-mono : evidence Π (a : Reward) → Π (b : Reward) → Π (c : Reward) → Π (d : Reward) →
+                        Π (ab : le a b) → Π (cd : le c d) → le (add a c) (add b d) := plus-mono
+
+-- The absorbing states have constant values.
+def solve-trap : evidence Π (n : Nat) → {solve trap n ≡ 0 : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → {solve trap k ≡ 0 : Nat})
+      | 0 => refl
+      | suc m => rewrite solve-trap m motive (λ z → {maxN z (maxN z 0) ≡ 0 : Nat}) in refl
+
+def solve-paradise : evidence Π (n : Nat) → {solve paradise n ≡ suc 0 : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → {solve paradise k ≡ suc 0 : Nat})
+      | 0 => refl
+      | suc m => rewrite solve-paradise m motive (λ z → {maxN z (maxN z 0) ≡ suc 0 : Nat}) in refl
+
+def value-trap-paradise : evidence Dom Reward le (value trap) (value paradise) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve trap n) (λ (n : Nat) → solve paradise n)
+    (λ (n : Nat) →
+      rewrite solve-trap n motive (λ z → Le z (solve paradise n)) in
+      rewrite solve-paradise n motive (λ z → Le 0 z) in tt)
+    0
+
+-- At start, go-trap is below go-paradise and go-paradise is not below
+-- go-trap. Every other pair is ranked both ways.
+def ranking : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
+  λ (s : State) → λ (a : Action) → λ (b : Action) →
+    match s motive (λ _ → Type)
+      | start =>
+          (match a motive (λ _ → Type)
+            | go-paradise => (match b motive (λ _ → Type) | go-paradise => Unit | go-trap => Empty)
+            | go-trap => Unit)
+      | paradise => Unit
+      | trap => Unit
+
+def sacrifice-homomorphism : evidence CoinductiveHomomorphism ranking :=
+  λ (a : Action) → λ (b : Action) → λ (s : State) →
+    match s motive (λ (x : State) → Π (r : ranking x a b) → Dom Reward le (successor-value x a) (successor-value x b))
+      | start =>
+          (match a motive (λ (y : Action) → Π (r : ranking start y b) → Dom Reward le (successor-value start y) (successor-value start b))
+            | go-paradise =>
+                (match b motive (λ (z : Action) → Π (r : ranking start go-paradise z) →
+                                   Dom Reward le (successor-value start go-paradise) (successor-value start z))
+                  | go-paradise => λ (r : Unit) → dom-refl Reward le le-refl (value paradise)
+                  | go-trap => λ (r : Empty) →
+                      matchEmpty r motive (λ _ → Dom Reward le (value paradise) (value trap)))
+            | go-trap =>
+                (match b motive (λ (z : Action) → Π (r : ranking start go-trap z) →
+                                   Dom Reward le (successor-value start go-trap) (successor-value start z))
+                  | go-paradise => λ (r : Unit) → value-trap-paradise
+                  | go-trap => λ (r : Unit) → dom-refl Reward le le-refl (value trap)))
+      | paradise => λ (r : Unit) → dom-refl Reward le le-refl (value paradise)
+      | trap => λ (r : Unit) → dom-refl Reward le le-refl (value trap)
+
+-- go-trap below go-paradise would need the immediate rewards 1 ≤ 0.
+def coindHomo-forward-impossible : evidence Π (- rank : State → Action → Action → Type) →
+    Π (h : CoindHomo rank) → Π (r : rank start go-trap go-paradise) → Empty :=
+  λ (- rank : State → Action → Action → Type) → λ (h : CoindHomo rank) → λ (r : rank start go-trap go-paradise) →
+    head (h go-trap go-paradise start r)
+
+-- go-paradise below go-trap would need, one step later, 1 ≤ 0.
+def coindHomo-reverse-impossible : evidence Π (- rank : State → Action → Action → Type) →
+    Π (h : CoindHomo rank) → Π (r : rank start go-paradise go-trap) → Empty :=
+  λ (- rank : State → Action → Action → Type) → λ (h : CoindHomo rank) → λ (r : rank start go-paradise go-trap) →
+    head (tail (h go-paradise go-trap start r))
+
+-- go-paradise is at the top, so its successor return dominates at every
+-- horizon.
+def paradise-subsumes : evidence Π (a : Action) → Π (N : Nat) →
+    le (partial-sum N (successor-value start a)) (partial-sum N (successor-value start go-paradise)) :=
+  λ (a : Action) → λ (N : Nat) →
+    successor-argmax-subsumed ranking sacrifice-homomorphism start go-paradise
+      (λ (x : Action) → match x motive (λ (y : Action) → ranking start y go-paradise) | go-paradise => tt | go-trap => tt)
+      a N
+
+def finder-takes-trap : evidence {find-policy start horizon ≡ go-trap : Action} := refl
+def successor-finder-takes-paradise : evidence {find-successor-policy start horizon ≡ go-paradise : Action} := refl

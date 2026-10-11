@@ -1,7 +1,7 @@
 ---
 title: For agents
 slug: for-agents
-order: 15
+order: 16
 summary: Two jobs. Do not mix them. Commands and file map.
 ---
 
@@ -80,6 +80,7 @@ Users still only run Mix. If you are doing Job A, you are not doing Job B.
 ```
 manual/                 this book (muro-lang.dev). Not ExDoc.
 examples/*.muro         programs
+examples/cshrl/         CSHRL: lib/ on params, envs/ supply them
 lib/muro/parser.ex      .muro → named FOAS
 lib/muro/ast.ex         named FOAS, to_db
 lib/muro/print.ex       surface syntax, locations, hole messages

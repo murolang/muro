@@ -1,0 +1,80 @@
+-- two_state.muro — the minimal verified example. From start, go reaches
+-- goal and its reward; stay waits. The Finder's ranking is a CoindHomo,
+-- and its policy at start is go.
+import "../std/nat.muro"
+import "../lib/agent.muro"
+
+data State : Type where
+  start : State
+  goal  : State
+
+data Action : Type where
+  go   : Action
+  stay : Action
+
+def Reward : spec Type := Nat
+
+def move : run Π (s : State) → Π (a : Action) → State :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State)
+      | start => (match a motive (λ _ → State) | go => goal | stay => start)
+      | goal => goal
+
+def reward-fn : run Π (s : State) → Reward :=
+  λ (s : State) → match s motive (λ _ → Reward) | start => 0 | goal => suc 0
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) → step-from (move s a)
+
+def step-from : run Π (+ s : State) → State × Reward := λ (+ s : State) → (s, reward-fn s)
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons go (cons stay nil)
+def default-action : run Action := go
+def horizon : run Nat := suc 0
+
+-- solve is 1 everywhere.
+def solve-goal : evidence Π (n : Nat) → {solve goal n ≡ suc 0 : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → {solve goal k ≡ suc 0 : Nat})
+      | 0 => refl
+      | suc m => rewrite solve-goal m motive (λ z → {maxN z (maxN z 0) ≡ suc 0 : Nat}) in refl
+
+def solve-start : evidence Π (n : Nat) → {solve start n ≡ suc 0 : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → {solve start k ≡ suc 0 : Nat})
+      | 0 => refl
+      | suc m =>
+          rewrite solve-goal m motive (λ z → {maxN z (maxN (solve start m) 0) ≡ suc 0 : Nat}) in
+          rewrite solve-start m motive (λ z → {maxN (suc 0) (maxN z 0) ≡ suc 0 : Nat}) in refl
+
+-- stay is below go at start, position by position.
+def stay-below-go : evidence Π (n : Nat) → Le (action-at start stay n) (action-at start go n) :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → Le (action-at start stay k) (action-at start go k))
+      | 0 => tt
+      | suc m =>
+          rewrite solve-start m motive (λ z → Le z (solve goal m)) in
+          rewrite solve-goal m motive (λ z → Le (suc 0) z) in tt
+
+def direct-preserves : evidence CoindHomo ranks :=
+  λ (a : Action) → λ (b : Action) → λ (s : State) →
+    match s motive (λ (x : State) → Π (r : ranks x a b) → Dom Reward le (action-value x a) (action-value x b))
+      | start =>
+          (match a motive (λ (y : Action) → Π (r : ranks start y b) → Dom Reward le (action-value start y) (action-value start b))
+            | go =>
+                (match b motive (λ (z : Action) → Π (r : ranks start go z) → Dom Reward le (action-value start go) (action-value start z))
+                  | go => λ (r : ranks start go go) → dom-refl Reward le le-refl (action-value start go)
+                  | stay => λ (r : ranks start go stay) →
+                      matchEmpty (fst r) motive (λ _ → Dom Reward le (action-value start go) (action-value start stay)))
+            | stay =>
+                (match b motive (λ (z : Action) → Π (r : ranks start stay z) → Dom Reward le (action-value start stay) (action-value start z))
+                  | go => λ (r : ranks start stay go) →
+                      tabulate-dom Reward le (λ (n : Nat) → action-at start stay n) (λ (n : Nat) → action-at start go n)
+                        stay-below-go 0
+                  | stay => λ (r : ranks start stay stay) → dom-refl Reward le le-refl (action-value start stay)))
+      | goal => λ (r : ranks goal a b) → dom-refl Reward le le-refl (action-value goal a)
+
+def test-start : evidence {find-policy start horizon ≡ go : Action} := refl

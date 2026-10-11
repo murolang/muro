@@ -1,0 +1,52 @@
+-- core.muro — CSHRL's Core module: the optimal value of a deterministic
+-- environment as a stream, and CoindHomo, a ranking of actions whose
+-- order is preserved into the action-value streams.
+--
+-- The environment is the params, in the order of the artifact's Core:
+-- the state, action, and reward types; step, the next state and the
+-- reward together; the order on rewards; max and its bottom; and the
+-- list of all actions.
+import "../std/list.muro"
+import "../std/stream.muro"
+
+param State : spec Type
+param Action : spec Type
+param Reward : spec Type
+param step : run Π (s : State) → Π (a : Action) → State × Reward
+param le : spec Π (r : Reward) → Π (q : Reward) → Type
+param max : run Π (r : Reward) → Π (q : Reward) → Reward
+param bottom : run Reward
+param all-actions : run List Action
+
+def max-list : run Π (rs : List Reward) → Reward :=
+  λ (rs : List Reward) → foldr Reward Reward max bottom rs
+
+-- The best reward exactly n steps after s, over every action.
+def solve : run Π (+ s : State) → Π (+ n : Nat) → Reward :=
+  λ (+ s : State) → λ (+ n : Nat) →
+    match n motive (λ _ → Reward)
+      | 0 => max-list (map Action Reward (λ (a : Action) → snd (step s a)) all-actions)
+      | suc m => max-list (map Action Reward (λ (a : Action) → solve (fst (step s a)) m) all-actions)
+
+-- Acting optimally from s forever: solve s 0, solve s 1, …
+def value : run Π (+ s : State) → Stream Reward :=
+  λ (+ s : State) → tabulate Reward (λ (n : Nat) → solve s n) 0
+
+-- Position n of action-value s a: the reward of a, then the value of the
+-- state a leads to.
+def action-at : run Π (+ s : State) → Π (+ a : Action) → Π (n : Nat) → Reward :=
+  λ (+ s : State) → λ (+ a : Action) → λ (n : Nat) →
+    match n motive (λ _ → Reward)
+      | 0 => snd (step s a)
+      | suc m => solve (fst (step s a)) m
+
+-- Doing a, then acting optimally.
+def action-value : run Π (+ s : State) → Π (+ a : Action) → Stream Reward :=
+  λ (+ s : State) → λ (+ a : Action) → tabulate Reward (λ (n : Nat) → action-at s a n) 0
+
+-- The symmetric homomorphism: a ranking whose order is preserved into
+-- the action-value streams, as Dom, the coinductive order.
+def CoindHomo : spec Π (rank : State → Action → Action → Type) → Type :=
+  λ (rank : State → Action → Action → Type) →
+    Π (a : Action) → Π (b : Action) → Π (s : State) → Π (r : rank s a b) →
+      Dom Reward le (action-value s a) (action-value s b)

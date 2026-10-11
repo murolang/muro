@@ -160,6 +160,14 @@ Two data types are both named `Foo`. `foo` builds the first at `0` and `bar` bui
 
 `drop1 (cons y ys)` is `ys`. The false equation `{drop1 (cons y ys) ≡ zs}` is refused; `second_field.muro` is the true one. A match on a constructor with several fields puts every field in place at once.
 
+## cshrl/
+
+[CSHRL](cshrl.md) as a library. `lib/` holds the generic modules, written against `param` entries, and `envs/` holds three environments that supply them, prove their theorems, and run an agent. Check an environment; a file under `lib/` alone is refused for its unsupplied params.
+
+```
+mix muro.check examples/cshrl/envs/binary_sacrifice.muro
+```
+
 ## Adding a file
 
 1. Put it in `examples/`. Use only `run` / `run internal` / `spec` / `evidence`.

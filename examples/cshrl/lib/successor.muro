@@ -1,0 +1,45 @@
+-- successor.muro — CSHRL's SuccessorCore: a ranking preserved into the
+-- values of the successor states, without the immediate reward.
+--
+--   CoindHomo ⟹ CoinductiveHomomorphism
+--   CoinductiveHomomorphism and HeadCompatible ⟹ CoindHomo
+import "core.muro"
+
+def next : run Π (s : State) → Π (a : Action) → State :=
+  λ (s : State) → λ (a : Action) → fst (step s a)
+
+-- The value of the state a leads to. It is the tail of action-value s a
+-- up to dom-shift: the tail of a tabulation is the tabulation of the
+-- shifted function.
+def successor-value : run Π (+ s : State) → Π (+ a : Action) → Stream Reward :=
+  λ (+ s : State) → λ (+ a : Action) → value (next s a)
+
+def CoinductiveHomomorphism : spec Π (rank : State → Action → Action → Type) → Type :=
+  λ (rank : State → Action → Action → Type) →
+    Π (a : Action) → Π (b : Action) → Π (s : State) → Π (r : rank s a b) →
+      Dom Reward le (successor-value s a) (successor-value s b)
+
+-- The immediate rewards respect the ranking.
+def HeadCompatible : spec Π (rank : State → Action → Action → Type) → Type :=
+  λ (rank : State → Action → Action → Type) →
+    Π (a : Action) → Π (b : Action) → Π (s : State) → Π (r : rank s a b) →
+      le (snd (step s a)) (snd (step s b))
+
+-- The tail of the action-value dominance.
+def coindHomo-successor : evidence Π (- rank : State → Action → Action → Type) →
+    Π (h : CoindHomo rank) → CoinductiveHomomorphism rank :=
+  λ (- rank : State → Action → Action → Type) → λ (h : CoindHomo rank) →
+  λ (a : Action) → λ (b : Action) → λ (s : State) → λ (r : rank s a b) →
+    dom-shift Reward le (λ (n : Nat) → action-at s a n) (λ (n : Nat) → action-at s b n) 0
+      (tail (h a b s r))
+
+-- The head from HeadCompatible, the tail from CoinductiveHomomorphism.
+def successor-head-coindHomo : evidence Π (- rank : State → Action → Action → Type) →
+    Π (ch : CoinductiveHomomorphism rank) → Π (hc : HeadCompatible rank) → CoindHomo rank :=
+  λ (- rank : State → Action → Action → Type) →
+  λ (ch : CoinductiveHomomorphism rank) → λ (hc : HeadCompatible rank) →
+  λ (a : Action) → λ (b : Action) → λ (s : State) → λ (r : rank s a b) →
+    unfold tt (λ (_ : Unit) →
+      (hc a b s r,
+       dom-unshift Reward le (λ (n : Nat) → action-at s a n) (λ (n : Nat) → action-at s b n) 0
+         (ch a b s r)))

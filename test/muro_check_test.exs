@@ -2148,6 +2148,47 @@ defmodule Muro.CheckTest do
     assert msg =~ "ν"
   end
 
+  test "CSHRL checks in every environment, and its agents run" do
+    assert {:error, msg} = Muro.check_file("examples/cshrl/lib/core.muro")
+    assert msg =~ "is supplied by a file that imports this one"
+
+    nat = fn
+      _f, 0 -> 0
+      f, {:suc, n} -> 1 + f.(f, n)
+    end
+
+    load = fn path, mod ->
+      assert Muro.check_file(path) == :ok
+      assert {:ok, src} = Muro.emit_file(path, Module.concat(Muro, mod))
+      refute src =~ "CoindHomo"
+      Code.eval_string(src)
+    end
+
+    take = fn mod, fun, start, k ->
+      call(mod, fun, [start])
+      |> Enum.take(k)
+      |> Enum.map(fn {a, r} -> {a, nat.(nat, r)} end)
+    end
+
+    load.("examples/cshrl/envs/two_state.muro", "CshrlTwo")
+    assert take.("CshrlTwo", :episode, :start, 3) == [go: 1, go: 1, go: 1]
+
+    load.("examples/cshrl/envs/binary_sacrifice.muro", "CshrlSac")
+    assert take.("CshrlSac", :episode, :start, 3) == [go_trap: 1, go_paradise: 0, go_paradise: 0]
+
+    assert take.("CshrlSac", :successor_episode, :start, 3) ==
+             [go_paradise: 0, go_paradise: 1, go_paradise: 1]
+
+    load.("examples/cshrl/envs/skill_investment.muro", "CshrlSkill")
+    assert take.("CshrlSkill", :episode, :novice, 3) == [work: 1, work: 1, work: 1]
+
+    assert take.("CshrlSkill", :successor_episode, :novice, 5) ==
+             [train: 0, train: 0, train: 0, work: 5, work: 5]
+
+    assert call("CshrlSkill", :value, [:novice]) |> Enum.take(5) |> Enum.map(&nat.(nat, &1)) ==
+             [1, 2, 3, 5, 5]
+  end
+
   # The module exists only after Code.eval_string, so a literal remote call warns.
   defp call(mod, fun, args), do: apply(Module.concat(Muro, mod), fun, args)
 end
