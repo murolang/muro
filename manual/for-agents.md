@@ -21,6 +21,7 @@ In brief: two jobs. Do not mix them. This page is the operational contract. Huma
 - Keep every binder typed. Write every motive.
 - `pred`, `plus`, `inj-suc`, `plus_suc`, `sym`, and `cong` are already in scope (`lib/muro/prelude.muro`). Defining one of those names replaces it, and drops any prelude definition that refers to it.
 - Use only tags `run`, `run internal`, `spec`, `evidence`.
+- Write a library for many environments with `param` entries, and check it through a file that supplies them with `def` or `data` of the same names and tags ([Params](language.md#params)). `mix muro.check` on the library itself names the params it is missing.
 - Leave `?` only while a term is unfinished. A hole always fails and is not in the finished book.
 
 **Do not**

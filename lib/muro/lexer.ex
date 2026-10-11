@@ -40,6 +40,7 @@ defmodule Muro.Lexer do
     "let",
     "def",
     "import",
+    "param",
     "Pi",
     "nu",
     "in"

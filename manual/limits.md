@@ -48,6 +48,7 @@ The language was once described as *nothing dead runs* and *a proof never become
 - The full consistency statement (`Empty-evid`) is not proved. Normalisation of closed evidence is its one open hypothesis (`Empty-evid-from`).
 - `Type` is impredicative and kinds are not small types. Before the kind/small-type distinction was enforced, the checker accepted `Π (x : A) → Type : Type`, which retracts `Type` into a small type; that was a bug in the calculus, not in a program, and it is fixed in both Agda and Elixir.
 - Example twins are not a proof that a `.muro` file is correct.
+- `import` and `param` are resolved by `Muro.Load` before anything is checked, and they are not in Agda. What is checked is the resulting book: the importer's entries, each imported file's entries, and the supplying definitions in the params' place. A library with params is checked once per program that supplies them, not once for every environment: a statement in it is proved for the supplied `State`, `step`, and so on, the way an Agda module is checked at its parameters.
 
 ## If you need a hole
 

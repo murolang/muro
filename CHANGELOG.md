@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.16.19
+
+A file can declare `param` entries, which a file that imports it supplies. `param step : run Π (+ s : State) → State` is a name with a tag and a type; the importing book supplies it with a `def` or `data` of the same name and tag, and the supplying type is checked against the param's. Inside the library the param is the supplied definition, so `+ s : State` is copyable when the supplied `State` is, a run param is run code that emits, and a call to an evidence param discards its arguments' uses. A library for every environment no longer passes the environment as arguments to each definition, where a spec argument could not reach evidence and an abstract type could not be `+`. A file with an unsupplied param is checked where it is imported, with its errors at its own path and line; checked alone it names each missing param.
+
+A run definition with the name and live arity of a `Kernel` function or macro (`max/2`, `min/2`) emitted a module that did not compile; only `length/1` was excluded from `import Kernel`. Every such name is excluded now.
+
+### Import
+
+- `Muro.Load`: `supply`, `param_check` (a definition `name (param)` checked with the book and not returned), `all_supplied`. An entry from another file reports at its own file (`Print.loc_prefix` reads `{file, line, col}`).
+- `Muro.Parser`: the `param` entry; `param` ends a term and a constructor list. `Muro.Ast.book_to_db` refuses a `param` left in a book.
+
+### Emit
+
+- `Muro.Emit.kernel_clashes`.
+
+### Manual
+
+- Terms: Params. Grammar: `param`. Limits: what is checked for a library with params. For agents: writing one. Emit: Kernel names.
+
+### Package
+
+- Version 0.16.19.
+
 ## 0.16.18
 
 A definition naming a type is that type inside a run type. The run-type test reduced the type to weak head normal form once and read the rest as written, so the codomain of `Π (r : R) → R` with `def R : spec Type := Nat` was the definition `R`, not `Nat`, and `inc : run Π (r : R) → R` was refused in run with `definition inc has a spec type`. Each Π codomain, product side, and ν body is now reduced before it is read. An identity type is still refused, under a name or not.

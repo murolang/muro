@@ -130,6 +130,8 @@ def length : run Π (- A : Type) → Π (xs : List A) → Nat
 
 becomes something like `def length(xs)`. The type argument is gone. In Muro you still write `length Nat ones2` (or `length A as` in a recursive call). The checker sees `A`. Emit does not.
 
+A run definition with the name and live arity of a `Kernel` function or macro (`length/1`, `max/2`, `min/2`, `div/2`) is excluded from the module's `import Kernel`, so the call means the definition: `import Kernel, except: [max: 2]`.
+
 ## Functions as values
 
 A `run` definition becomes an Elixir function with one parameter per live (non-erased) argument, and a function value is a curried closure: a variable applied to two arguments is `f.(a).(b)`, and `λ (x : A) → t` is `fn x -> t end`. A reference to a definition is emitted by how many arguments it is given (`examples/higher_order.muro`):

@@ -11,7 +11,7 @@ In brief: one sort `Type`. Binders are written. Application is juxtaposition. `m
 
 ## The book
 
-A `.muro` file is a **book**: a sequence of `import`, `ν`, `data`, and `def` entries.
+A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, and `def` entries.
 
 ```
 def name : tag type := body
@@ -26,6 +26,20 @@ Definitions, data types, and constructors share one set of names. Each name is d
 ## Import
 
 `import "list.muro"` names a file. The path is relative to the importing file, and the string is the whole path. The file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A file reached by two imports, directly or through another file, is loaded once. A cycle of imports is an error. `examples/sort.muro` imports `list.muro` and does not declare `List`.
+
+## Params
+
+A library written once for many environments declares what it needs and leaves it to the file that imports it:
+
+```
+param State : spec Type
+param step : run Π (+ s : State) → State
+param keep : evidence Π (+ s : State) → Π (p : P s) → P (step s)
+```
+
+A `param` is a name with a tag and a type, and no body. The file that imports the library supplies it with a `def` or a `data` of the same name; a declaration anywhere in the importing book counts, including one from another import. The supplying declaration has the param's tag (a `data` type supplies a `spec` param), and its type converts with the param's type, which is checked by a definition `step (param) : run Π (+ s : State) → State := step` that is checked and not kept. Inside the library a param is that definition: `+ s : State` is copyable when the supplied `State` is, a run param is run code, and a call to an evidence param discards the uses of its arguments like a call to any evidence definition.
+
+A file with a param nobody has supplied is not checked on its own: it is checked in the file that supplies the param, together with the supplying declarations, and an error in it prints the library's path and line. Its params pass through a file that imports it without supplying them. `Muro.check_file/2` on such a file is refused, naming each param: `param State is supplied by a file that imports this one`. A program is one book, so each param has one supplier in it. Agda's module application (`open Core State Action ℕ step …`) is the model; here the names do the applying.
 
 ## Prelude
 
