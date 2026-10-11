@@ -213,7 +213,10 @@ notCopy = "+ requires a copyable type: Data, a pair of them, or a function"
 -- a Π whose codomain is one, a product of two, ν F. Under ν the body is
 -- read as it is, the bound variable counting as a run type: substituting
 -- Unit for it (as the older definition did) gives the same answer, since
--- runTy accepts every variable and every leaf alike.
+-- runTy accepts every variable and every leaf alike. runTy reads a head
+-- normal form; isRunType reduces each Π codomain, product side, and ν
+-- body before reading it, so a definition naming a type counts as the
+-- type it names.
 runTy : ∀ {n} → Tm n → Bool
 runTy (var _)        = true
 runTy nat            = true
@@ -229,8 +232,16 @@ runTy (dty _)        = true
 runTy (app f _)      = runTy f
 runTy _              = false
 
-isRunType : ∀ {n} → ℕ → Sig → Tm n → Result Bool
-isRunType k σ t = runTy <$> whnf k σ t
+mutual
+  isRunType : ∀ {n} → ℕ → Sig → Tm n → Result Bool
+  isRunType zero    _ _ = fail outOfFuel
+  isRunType (suc k) σ t = whnf (suc k) σ t >>= λ t′ → isRunTypeN k σ t′
+
+  isRunTypeN : ∀ {n} → ℕ → Sig → Tm n → Result Bool
+  isRunTypeN k σ (pi _ _ B) = isRunType k σ B
+  isRunTypeN k σ (nu F)     = isRunType k σ F
+  isRunTypeN k σ (prod A B) = isRunType k σ A >>= λ b → if b then isRunType k σ B else ok false
+  isRunTypeN k σ t          = ok (runTy t)
 
 ------------------------------------------------------------------------
 -- Conversion on weak-head normal forms.

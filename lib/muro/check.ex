@@ -517,9 +517,25 @@ defmodule Muro.Check do
   # runTy: a variable, a leaf type, a Π whose codomain is one, a product
   # of two, ν F with F one (the bound variable counts as a run type), a
   # data type or an application of one.
+  # Each Π codomain, product side, and ν body is reduced before it is read,
+  # so a definition naming a type counts as the type it names.
+  defp run_ty(0, _book, _t), do: {:error, @out_of_fuel}
+
   defp run_ty(k, book, t) do
-    with {:ok, t1} <- whnf(k, book, t), do: {:ok, run_ty_n(book, t1)}
+    with {:ok, t1} <- whnf(k, book, t), do: run_ty_w(k - 1, book, t1)
   end
+
+  defp run_ty_w(k, book, {:pi, _, _, _, b}), do: run_ty(k, book, b)
+  defp run_ty_w(k, book, {:nu, f}), do: run_ty(k, book, f)
+
+  defp run_ty_w(k, book, {:prod, a, b}) do
+    case run_ty(k, book, a) do
+      {:ok, true} -> run_ty(k, book, b)
+      other -> other
+    end
+  end
+
+  defp run_ty_w(_k, book, t), do: {:ok, run_ty_n(book, t)}
 
   defp run_ty_n(_book, {:var, _}), do: true
   defp run_ty_n(_book, :atom), do: true

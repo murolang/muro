@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.18
+
+A definition naming a type is that type inside a run type. The run-type test reduced the type to weak head normal form once and read the rest as written, so the codomain of `Π (r : R) → R` with `def R : spec Type := Nat` was the definition `R`, not `Nat`, and `inc : run Π (r : R) → R` was refused in run with `definition inc has a spec type`. Each Π codomain, product side, and ν body is now reduced before it is read. An identity type is still refused, under a name or not.
+
+### Checker
+
+- `Check.isRunType` with `isRunTypeN`, fuel-indexed like `isCopy`. Soundness reads only its verdict, and `var-run` and `⇒-def` have no run-type premise, so no proof changes. Then `Muro.Check.run_ty`.
+
+### Manual
+
+- Terms: the run-type rule, which the manual did not state.
+
+### Package
+
+- Version 0.16.18.
+
 ## 0.16.17
 
 Conversion unfolds two calls of the same definition when their arguments differ. The congruence step compares the arguments of `f a₁ … aₙ` and `f b₁ … bₙ` when `a₁` and `b₁` are not constructor-headed; a failure there was final. A definition with a type parameter first and a `match` on a later argument (`g R n k`, matching on `n`) then never unfolded against itself: `{g Nat (suc 0) k ≡ g Nat 0 k : Nat}` was refused although both sides reduce to `k`. A failed congruence now falls back to weak head normal form, as a congruence that does not apply already did.
