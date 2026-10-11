@@ -19,7 +19,7 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - Unification
 - Metavariables / unification (`?` is an unsolved goal that always fails; it does not unify)
 - Quantities other than affine, `+`, and `-`
-- A ν family with no index, or one whose `uncons` takes the family at other arguments than its indices in order
+- A ν family with no index, one whose `uncons` takes the family at other arguments than its indices in order, or one whose body is not a product
 - `+` on Stream
 - `+` on Either
 - Typing raw Elixir

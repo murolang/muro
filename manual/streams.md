@@ -101,7 +101,7 @@ A `ν` block with any name other than `Stream` declares a family over its indice
   uncons : Dom f g → Le (head f) (head g) × Dom (tail f) (tail g)
 ```
 
-`Dom` is the spec definition `Π (f : Stream Nat) → Π (g : Stream Nat) → Type` whose body is `ν Dom. λ f g → …`: inside the body, `Dom` is the family itself, as the recursive variable is for `Always` and `~`. The body is a type in which the family occurs strictly positively, applied to all its indices; it may occur more than once. A family takes at least one index, and as many as it needs.
+`Dom` is the spec definition `Π (f : Stream Nat) → Π (g : Stream Nat) → Type` whose body is `ν Dom. λ f g → …`: inside the body, `Dom` is the family itself, as the recursive variable is for `Always` and `~`. The body is a product, a head and a tail, since an `unfold` step is a pair and `uncons` reads one back; `ν body is not a product` refuses any other. The family occurs in it strictly positively, applied to all its indices, and may occur more than once. A family takes at least one index, and as many as it needs.
 
 An `unfold` of `Dom f g` checks the body at `f` and `g`: the head obligation, and a proof of `Dom` at the tails. The proof at the tails is a call into the block, guarded as for `Always`. `uncons` of a proof reads the same pair back, so `head d : Le (head f) (head g)`.
 

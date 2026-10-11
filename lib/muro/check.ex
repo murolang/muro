@@ -828,6 +828,12 @@ defmodule Muro.Check do
 
   defp telescope(_, _), do: {:ok, :typ}
 
+  # Agda's nuBodyProd: under its telescope a ν body is a product, since
+  # an unfold step is a pair and uncons reads one back.
+  defp nu_body_prod?({:lam, _, _, _, t}), do: nu_body_prod?(t)
+  defp nu_body_prod?({:prod, _, _}), do: true
+  defp nu_body_prod?(_), do: false
+
   defp drop_var(t, at) do
     try do
       {:ok,
@@ -1355,6 +1361,7 @@ defmodule Muro.Check do
       # body small. A λ-telescope is a family: Y and the body share its kind.
       {:spec, {:nu, f}} ->
         with {:ok, knd} <- nu_kind(f),
+             :ok <- if(nu_body_prod?(f), do: :ok, else: {:error, "ν body is not a product"}),
              {:ok, _} <-
                check(
                  k,

@@ -1150,6 +1150,13 @@ nuKindAt _ _ = ok typ
 nuKind : ∀ {n} → Tm (suc n) → Result (Tm n)
 nuKind = nuKindAt 0
 
+-- A ν body, under its telescope, is a product: an unfold step is a
+-- pair and uncons reads one back, so no other body has inhabitants.
+nuBodyProd : ∀ {n} → Tm n → Bool
+nuBodyProd (lam _ _ t) = nuBodyProd t
+nuBodyProd (prod _ _)  = true
+nuBodyProd _           = false
+
 applyFam : ∀ {n} → Tm n → List (Tm n) → Tm n
 applyFam t []             = t
 applyFam (lam _ _ b) (i ∷ is) = applyFam (inst b i) is
@@ -1503,6 +1510,7 @@ mutual
   infer′ k σ rs Γ (nu _) evid _ = fail "no promotion: ν is an erased term"
   infer′ k σ rs Γ (nu F) spec _ =
     nuKind F >>= λ K →
+    guard "ν body is not a product" (nuBodyProd F) >>
     check k σ (extRec rs false false) (ext Γ affine K) spec F (wk K) >>
     guard "ν body is not strictly positive" (strictPos F) >>
     ok (K , u0s)

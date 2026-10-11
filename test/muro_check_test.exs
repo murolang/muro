@@ -455,6 +455,12 @@ defmodule Muro.CheckTest do
       "not strictly positive"
     )
 
+    # an unfold step is a pair, so a body that is not a product is refused
+    refused.(
+      "ν F (s : Stream Nat) : Type where\n  uncons : F s → Π (n : Nat) → F (tail s)\n",
+      "ν body is not a product"
+    )
+
     assert {:error, msg} =
              Parser.parse(
                "ν D (f : Stream Nat) (g : Stream Nat) : Type where\n  uncons : D g f → Unit × D (tail f) (tail g)\n"

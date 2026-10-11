@@ -2,13 +2,13 @@
 
 ## 0.16.15
 
-A `ν` block with a name other than `Stream` declares a family over its indices: `ν Dom (f : Stream Nat) (g : Stream Nat) : Type where uncons : Dom f g → Le (head f) (head g) × Dom (tail f) (tail g)`. The family is the spec definition whose body is `ν Dom. λ f g → …`, the encoding `Always` and `~` already have. An `unfold` checks the head obligation and a proof of the same family at the tail; `uncons` reads the pair back. The body is any type with the family strictly positive and applied to all its indices; a family takes at least one index and as many as it needs. Declared families are checked by `Muro.Check` and the Agda checker and are outside ⊢, as Stream, `Always`, and `~` are.
+A `ν` block with a name other than `Stream` declares a family over its indices: `ν Dom (f : Stream Nat) (g : Stream Nat) : Type where uncons : Dom f g → Le (head f) (head g) × Dom (tail f) (tail g)`. The family is the spec definition whose body is `ν Dom. λ f g → …`, the encoding `Always` and `~` already have. An `unfold` checks the head obligation and a proof of the same family at the tail; `uncons` reads the pair back. The body is a product, the family strictly positive in it and applied to all its indices (a body that is not a product is refused with `ν body is not a product`, in both checkers); a family takes at least one index and as many as it needs. Declared families are checked by `Muro.Check` and the Agda checker and are outside ⊢, as Stream, `Always`, and `~` are.
 
 A definition whose type is a ν need not be an `unfold`: `def nats : run Stream Nat := tabulate ident` checks. Such a body may not call its own block. The type is reduced first, so a ν reached through a definition (`Dom s t`) is held to the same rule.
 
 ### Checker
 
-- `Check.nuKind` takes a telescope of any length (it stopped at two). `Check.checkNu` reduces the type, accepts a family applied to any number of indices, and refuses a non-unfold body only when it calls its own block. `agda/Muro/ExampleFamily.agda` checks a three-index family and a ν-typed alias by `refl`. Then `Muro.Check` (`telescope`, `check_nu`, `nu_type?`) and the parser (`parse_nu_family`).
+- `Check.nuKind` takes a telescope of any length (it stopped at two). `Check.nuBodyProd` asks that a ν body be a product under its telescope. `Check.checkNu` reduces the type, accepts a family applied to any number of indices, and refuses a non-unfold body only when it calls its own block. `agda/Muro/ExampleFamily.agda` checks a three-index family and a ν-typed alias by `refl`. Then `Muro.Check` (`telescope`, `check_nu`, `nu_type?`) and the parser (`parse_nu_family`).
 
 ### Manual
 
