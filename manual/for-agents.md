@@ -143,6 +143,6 @@ Elixir constraints when you are in Job B: ASCII identifiers only. Do not define 
 
 ## What is not in the language
 
-Type : Type, cubical, tactics, implicits, unification, metavariables (a `?` always fails; it does not unify), extra quantities, user-defined ν-predicates, `+` on Stream or Either, typing raw Elixir, emitting spec or evidence.
+Type : Type, cubical, tactics, implicits, unification, metavariables (a `?` always fails; it does not unify), extra quantities, `+` on Stream or Either, typing raw Elixir, emitting spec or evidence.
 
 Full list: [Limits](limits.md).

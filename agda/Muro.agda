@@ -30,6 +30,7 @@ open import Muro.ExampleStream public
 import Muro.ExampleEither
 import Muro.ExampleAlways
 import Muro.ExampleBisim
+import Muro.ExampleFamily
 import Muro.ExampleList
 import Muro.ExampleVec
 import Muro.ExampleNx

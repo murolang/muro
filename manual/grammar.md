@@ -12,7 +12,7 @@ In brief: this is the grammar `lib/muro/parser.ex` implements. ASCII aliases are
 ```
 book       ::= (import | nu | data | def)*
 import     ::= "import" string             -- a path, relative to this file
-nu         ::= ("ν" | "nu") "Stream" binder ":" term "where" "uncons" ":" term
+nu         ::= ("ν" | "nu") ident binder+ ":" "Type" "where" "uncons" ":" term
 data       ::= "data" ident binder* ":" telescope "where" (ident ":" term)+
 telescope  ::= "Type" | binder ("→" | "->") telescope | term ("→" | "->") "Type"
 def        ::= "def" ident ":" tag term ":=" term
@@ -69,7 +69,7 @@ Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an
 
 Inside a `data` block each constructor declaration `ident ":" term` begins on its own line; that is how an application stops before the next constructor. On one line, `f x : Nat` inside `{ … }` is the application `f x` followed by the type.
 
-The parser only accepts `ν Stream` with constructor `uncons`. Other names are an error.
+A `ν` block has one destructor, `uncons`. `ν Stream (A : Type)` is checked for shape and dropped. Any other name declares a family: its binders are the indices, at least one, and the type of `uncons` must be the family applied to them in order, `→` the body ([Streams](streams.md#declared-families)).
 
 `?` is an unsolved goal. It parses. It never checks. See [Terms](language.md#holes).
 
