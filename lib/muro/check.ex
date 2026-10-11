@@ -550,11 +550,19 @@ defmodule Muro.Check do
     end
   end
 
+  # The same def at arguments that are not constructor-headed: compare the
+  # arguments first. Arguments that differ do not decide it, since the def
+  # may match on a later argument; both sides are then unfolded.
   defp stuck_cong(k, book, names, u, v) do
     case {apps(u), apps(v)} do
       {{{:def, i}, [a | as]}, {{:def, j}, [b | bs]}} ->
         if i == j and not ctor_head_book?(book, a) and not ctor_head_book?(book, b) do
-          with :ok <- conv(k - 1, book, names, a, b), do: conv_args(k - 1, book, names, as, bs)
+          with :ok <- conv(k - 1, book, names, a, b),
+               :ok <- conv_args(k - 1, book, names, as, bs) do
+            :ok
+          else
+            _ -> conv_whnf(k - 1, book, names, u, v)
+          end
         else
           conv_whnf(k - 1, book, names, u, v)
         end

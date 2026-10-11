@@ -28,8 +28,8 @@ Kernel identity on `F32` and on `Tensor F32 S` is refused. Machine floats are no
 Conversion, in order:
 
 1. Syntactic equality.
-2. Stuck-definition congruence, when the first argument is not constructor-headed.
-3. Weak head normal form, then compare again.
+2. Stuck-definition congruence, when the first argument is not constructor-headed: the same definition at convertible arguments.
+3. Weak head normal form, then compare again. This also follows a congruence whose arguments differ, since a definition may match on a later argument: `g Nat (suc 0) k` and `g Nat 0 k` convert when `g` matches on its second argument and both reduce to `k`.
 
 Fuel bounds reduction (`@fuel 2000` in Elixir, `mix muro.check --fuel N` to change it). Infer and check recurse on the term; they do not spend that fuel. Running out is the error `out of fuel`, not a failed conversion.
 

@@ -313,12 +313,13 @@ mutual
   -- Two applications of the same def to arguments that are not
   -- constructor-headed are compared argumentwise before unfolding
   -- (otherwise a recursive def is unfolded just to compare a call with
-  -- itself).
+  -- itself). Arguments that differ do not decide it: the def may match
+  -- on a later argument, so both sides are unfolded and compared.
   convStuck : ∀ {n} → ℕ → Sig → Tm n → Tm n
     → Maybe (ℕ × Tm n × List (Tm n)) → Maybe (ℕ × Tm n × List (Tm n)) → Result ⊤
   convStuck k σ u v (just (i , a , as)) (just (j , b , bs)) =
     if (i ≡ᵇ j) ∧ not (ctorHead a) ∧ not (ctorHead b)
-    then (conv k σ a b >> convArgs k σ as bs)
+    then ((conv k σ a b >> convArgs k σ as bs) orElse convWhnf k σ u v)
     else convWhnf k σ u v
   convStuck k σ u v _ _ = convWhnf k σ u v
 

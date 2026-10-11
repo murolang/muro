@@ -98,7 +98,12 @@ ok f   ⊛ ok x   = ok (f x)
 fail e ⊛ _      = fail e
 _      ⊛ fail e = fail e
 
-infixl 1 _>>=_ _>>_
+-- The second result, when the first fails.
+_orElse_ : ∀ {A : Set} → Result A → Result A → Result A
+ok x   orElse _ = ok x
+fail _ orElse r = r
+
+infixl 1 _>>=_ _>>_ _orElse_
 infixl 4 _<$>_ _⊛_
 
 fromBool : String → Bool → Result ⊤

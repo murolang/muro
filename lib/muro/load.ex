@@ -4,7 +4,8 @@ defmodule Muro.Load do
 
   The string is the file. The path is relative to the importing file.
   There is no load path. The imported file is checked, and its data,
-  constructors, and definitions join the importer. Evidence stays in that
+  constructors, and definitions join the importer, once each when the
+  file is reached by more than one import. Evidence stays in that
   book; emit drops it, as it drops any evidence.
   """
 
@@ -64,9 +65,12 @@ defmodule Muro.Load do
 
     with {:ok, loaded} <- load_all(imps, [path | stack], opts),
          :ok <- clashes(own, loaded) do
-      {:ok, own ++ Enum.concat(loaded)}
+      {:ok, own ++ Enum.uniq_by(Enum.concat(loaded), &origin/1)}
     end
   end
+
+  # A file reached by two imports brings the same entries twice.
+  defp origin(d), do: {Map.get(d, :file), Map.get(d, :loc)}
 
   defp load_all(imps, stack, opts) do
     Enum.reduce_while(imps, {:ok, []}, fn imp, {:ok, acc} ->
@@ -114,7 +118,11 @@ defmodule Muro.Load do
   defp clash_names(seen, d, [name | names]) do
     case Map.fetch(seen, name) do
       {:ok, prev} ->
-        {:error, "#{site(prev)}duplicate name #{name}\n#{site(d)}duplicate name #{name}"}
+        if origin(prev) == origin(d) do
+          clash_names(seen, d, names)
+        else
+          {:error, "#{site(prev)}duplicate name #{name}\n#{site(d)}duplicate name #{name}"}
+        end
 
       :error ->
         clash_names(Map.put(seen, name, d), d, names)

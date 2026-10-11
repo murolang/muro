@@ -745,9 +745,11 @@ convWhnf-sound k σ {u = u} {v} fs Fu Fv eq with whnf k σ u in ueq
 convStuck-sound k σ {u = u} {v} fs Fu Fv (just (i , a , as)) (just (j , b , bs)) du dv eq
   with (i ≡ᵇ j) ∧ not (ctorHead a) ∧ not (ctorHead b) in ceq
 ... | false = convWhnf-sound k σ fs Fu Fv eq
-... | true with ≡ᵇ-sound {i} {j} (proj₁ (∧-true {i ≡ᵇ j} ceq)) | defArgs-just du | defArgs-just dv | >>-ok eq
-...   | refl | spu | spv | (_ , ca) , cas with Frag-Spine spu Fu | Frag-Spine spv Fv
-...     | _ , fl-∷ Fa Fas | _ , fl-∷ Fb Fbs =
+... | true with conv k σ a b >> convArgs k σ as bs in aeq
+...   | fail _ = convWhnf-sound k σ fs Fu Fv eq
+...   | ok _ with ≡ᵇ-sound {i} {j} (proj₁ (∧-true {i ≡ᵇ j} ceq)) | defArgs-just du | defArgs-just dv | >>-ok aeq
+...     | refl | spu | spv | (_ , ca) , cas with Frag-Spine spu Fu | Frag-Spine spv Fv
+...       | _ , fl-∷ Fa Fas | _ , fl-∷ Fb Fbs =
   subst₂ (λ x y → σ ⊢[ spec ] x ≈ y) (sym (Spine-≡ spu)) (sym (Spine-≡ spv))
     (≈-appsFrom {f = def i} ≈-refl
       (≈L-∷ (conv-sound k σ fs Fa Fb ca) (convArgs-sound k σ fs Fas Fbs cas)))
