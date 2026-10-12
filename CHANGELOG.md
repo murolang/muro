@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.19
+
+`refl` is not a run term. Identity has one introduction, and run code could build it: `f refl` for `f : run Π (p : {0 ≡ 0 : Nat}) → Nat`, a run pair `(n, refl)`, or `def e : run {0 ≡ 0 : Nat} := refl` all checked, and emit printed `:refl`. Proof variables were already refused at use, and evidence definitions cannot be used in run, so without `refl` no run term builds a proof and none reaches emitted code. A proof passed to a run function is an erased argument, checked in spec. An absurd branch may still have an identity type, since it never runs.
+
+### Checker
+
+- `⇐-refl` in `Check` and `Judgement` takes `eqMode m run ≡ false`; `Check.check′` refuses `refl` in run with `no promotion: refl in run mode`. `Soundness.check-sound` follows the new branch, and `Wall.no-run-rfl` states that `refl` has no run derivation. Then `Muro.Check`.
+
+### Examples
+
+- `vec.muro`: `lookup` passed `refl` to the inner match at runtime (the convoy pattern). `vhead` and `vtail` match a `Vec A suc(m)` with a motive that computes from the index, `Vec A (pred k)`, and `lookup` recurses on `vtail`. `inj-suc` stays in the prelude. `agda/Muro/ExampleVec.agda` follows.
+
+### Manual
+
+- The wall: `refl` in run. Indexed data: a motive that computes from the index; the equation in the motive is for proofs. Examples: `vec.muro`.
+
+### Package
+
+- Version 0.16.19.
+
 ## 0.16.18
 
 A definition naming a type is that type inside a run type. The run-type test reduced the type to weak head normal form once and read the rest as written, so the codomain of `Π (r : R) → R` with `def R : spec Type := Nat` was the definition `R`, not `Nat`, and `inc : run Π (r : R) → R` was refused in run with `definition inc has a spec type`. Each Π codomain, product side, and ν body is now reduced before it is read. An identity type is still refused, under a name or not.

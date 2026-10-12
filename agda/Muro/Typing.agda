@@ -393,7 +393,7 @@ forget-⇒ (⇒-letp De c Dt cT _ _ _) =
 forget-⇐ (⇐-conv D c) = conv-≈ (forget-⇒ D) c
 forget-⇐ (⇐-lam W cT c rok D _) =
   conv (t-lam (forget-wf W) c rok (forget-⇐ D)) (≈-sym cT)
-forget-⇐ (⇐-refl cT c) = conv (t-rfl c) (≈-sym cT)
+forget-⇐ (⇐-refl cT c _) = conv (t-rfl c) (≈-sym cT)
 forget-⇐ (⇐-ctor sp c lk lps lidx lkc ip Ar cR) =
   conv (t-ctor sp (ca lk lkc lps lidx ip (▹-R cR (forget-args Ar)))) (≈-sym c)
 forget-⇐ (⇐-pair cT Da Db _) = conv (t-pair (forget-⇐ Da) (forget-⇐ Db)) (≈-sym cT)

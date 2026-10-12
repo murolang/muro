@@ -46,6 +46,8 @@ A program may mention other programs, and may be mentioned from evidence or spec
 
 There is no rule that takes a spec derivation and returns an evidence derivation. The formers that live only in spec (`Nat` as a type, `Π`, identity types, …) have no constructor in a `run` or `evidence` derivation. That is proved for the core fragment in `agda/Muro/Wall.agda`.
 
+Identity has one introduction, `refl`, and it has no `run` derivation (`no-run-rfl` in `Muro.Wall`). Run code cannot build a proof, hand one to a function, or return one, so no proof reaches emitted code. Pass a proof to a `run` function as an erased argument, `(- e : {a ≡ b : A})`: it is checked in spec and not emitted. An absurd branch (`matchEmpty`) may still have an identity type, since it never runs.
+
 ## What is checked in spec
 
 Even inside a `run` or `evidence` term, some positions are spec:

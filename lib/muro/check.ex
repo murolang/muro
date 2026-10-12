@@ -1633,7 +1633,10 @@ defmodule Muro.Check do
             infer_conv(k, book, rs, gamma, mode, e, a)
         end
 
-      # ⇐-refl
+      # ⇐-refl; not in run, so run code never builds a proof
+      :rfl when mode == :run ->
+        {:error, "no promotion: refl in run mode"}
+
       :rfl ->
         with {:ok, {sort, x, y}} <- view_id(k, book, a, names_of(rs, gamma)),
              :ok <- float_id_ok(k, book, sort),
