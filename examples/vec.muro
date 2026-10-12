@@ -7,38 +7,34 @@ data Vec (A : Type) : Nat → Type where
   vnil  : Vec A 0
   vcons : Π (n : Nat) → A → Vec A n → Vec A suc(n)
 
--- suc is injective: the evidence is a rewrite along the equation, with
--- pred as the motive's eliminator.
 def pred : run Π (n : Nat) → Nat :=
   λ (n : Nat) →
     match n motive (λ _ → Nat)
       | 0 => 0
       | suc m => m
 
-def inj-suc : evidence Π (-m : Nat) → Π (-p : Nat) →
-                        Π (e : {suc(m) ≡ suc(p) : Nat}) → {m ≡ p : Nat} :=
-  λ (-m : Nat) → λ (-p : Nat) → λ (e : {suc(m) ≡ suc(p) : Nat}) →
-    rewrite e motive (λ z → {pred z ≡ p : Nat}) in refl
+-- Each branch of a match on an indexed type is typed at its
+-- constructor's own index. A motive that computes from the index carries
+-- what the branch needs: at the scrutinee's index suc(m), Vec A (pred k)
+-- is Vec A m, and the vcons p a as branch returns as : Vec A p. vnil
+-- cannot produce suc(m), so its branch is skipped.
+def vhead : run Π (-A : Type) → Π (-m : Nat) → Π (ys : Vec A suc(m)) → A :=
+  λ (-A : Type) → λ (-m : Nat) → λ (ys : Vec A suc(m)) →
+    match ys motive (λ (k : Nat) → λ (_ : Vec A k) → A)
+      | vnil => 0
+      | vcons p a as => a
 
--- Each branch of the outer match is typed at its constructor's own
--- index (suc(m)). The inner match on ys carries the index equation in
--- its motive: the vcons branch learns {suc(m) ≡ suc(p)}, and rewrites
--- as : Vec A p to Vec A m for the recursive call. vnil cannot produce
--- suc(m), so its branch is skipped.
+def vtail : run Π (-A : Type) → Π (-m : Nat) → Π (ys : Vec A suc(m)) → Vec A m :=
+  λ (-A : Type) → λ (-m : Nat) → λ (ys : Vec A suc(m)) →
+    match ys motive (λ (k : Nat) → λ (_ : Vec A k) → Vec A (pred k))
+      | vnil => 0
+      | vcons p a as => as
+
 def lookup : run Π (-A : Type) → Π (-n : Nat) → Π (i : Fin n) → Π (xs : Vec A n) → A :=
   λ (-A : Type) → λ (-n : Nat) → λ (i : Fin n) → λ (xs : Vec A n) →
     (match i motive (λ (k : Nat) → λ (_ : Fin k) → Vec A k → A)
-      | fzero m =>
-          λ (ys : Vec A suc(m)) →
-            (match ys motive (λ (k : Nat) → λ (_ : Vec A k) → {suc(m) ≡ k : Nat} → A)
-              | vnil => 0
-              | vcons p a as => λ (_ : {suc(m) ≡ suc(p) : Nat}) → a) refl
-      | fsuc m j =>
-          λ (ys : Vec A suc(m)) →
-            (match ys motive (λ (k : Nat) → λ (_ : Vec A k) → {suc(m) ≡ k : Nat} → A)
-              | vnil => 0
-              | vcons p a as => λ (e : {suc(m) ≡ suc(p) : Nat}) →
-                  lookup A m j (rewrite inj-suc m p e motive (λ z → Vec A z) in as)) refl) xs
+      | fzero m => λ (ys : Vec A suc(m)) → vhead A m ys
+      | fsuc m j => λ (ys : Vec A suc(m)) → lookup A m j (vtail A m ys)) xs
 
 def ones1 : run Vec Nat suc(0) :=
   vcons 0 (suc 0) vnil
