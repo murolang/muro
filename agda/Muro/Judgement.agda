@@ -294,6 +294,7 @@ data _,_⊢[_]_⇐_⊣_ σ Γ where
   ⇐-refl : ∀ {m T A a b}
     → σ ⊢[ spec ] T ≈ idt A a b
     → σ ⊢[ spec ] a ≈ b
+    → eqMode m run ≡ false
     → σ , Γ ⊢[ m ] rfl ⇐ T ⊣ u0s
 
   -- The expected type is read through ≈ (Check: viewProd).
@@ -398,7 +399,7 @@ MotiveOk σ Γ di ps ((q , T) ∷ ixs) P =
   → σ , Γ ⊢[ m ] e ⇐ A ⊣ u → σ ⊢[ spec ] A ≈ A′ → σ , Γ ⊢[ m ] e ⇐ A′ ⊣ u
 ⇐-≈ (⇐-conv D c) c′ = ⇐-conv D (≈-trans c c′)
 ⇐-≈ (⇐-lam W c cA rok D b) c′ = ⇐-lam W (≈-trans (≈-sym c′) c) cA rok D b
-⇐-≈ (⇐-refl c cab) c′ = ⇐-refl (≈-trans (≈-sym c′) c) cab
+⇐-≈ (⇐-refl c cab nr) c′ = ⇐-refl (≈-trans (≈-sym c′) c) cab nr
 ⇐-≈ (⇐-ctor sp c lk lps lidx lkc ip Ar cR) c′ = ⇐-ctor sp (≈-trans (≈-sym c′) c) lk lps lidx lkc ip Ar cR
 ⇐-≈ (⇐-pair c Da Db cu) c′ = ⇐-pair (≈-trans (≈-sym c′) c) Da Db cu
 ⇐-≈ (⇐-letp De c Dt bb ba cu) c′ =

@@ -79,6 +79,13 @@ no-run-idt : ∀ {σ n} {Γ : Ctx n} {A a b T u} →
   σ , Γ ⊢[ run ] idt A a b ⇒ T ⊣ u → ⊥
 no-run-idt ()
 
+-- Identity has one introduction, and it is not in run: run code never
+-- builds a proof, so none reaches emitted code.
+no-run-rfl : ∀ {σ n} {Γ : Ctx n} {T u} →
+  σ , Γ ⊢[ run ] rfl ⇐ T ⊣ u → ⊥
+no-run-rfl (⇐-conv () _)
+no-run-rfl (⇐-refl _ _ ())
+
 no-evid-idt : ∀ {σ n} {Γ : Ctx n} {A a b T u} →
   σ , Γ ⊢[ evid ] idt A a b ⇒ T ⊣ u → ⊥
 no-evid-idt ()
@@ -179,7 +186,7 @@ spec-⇒-uses (⇒-letp _ _ _ _ _ _ eq) = sym (ok-inj eq)
 spec-⇐-uses (⇐-conv D _) = spec-⇒-uses D
 spec-⇐-uses (⇐-lam _ _ _ _ D _) with spec-⇐-uses D
 ... | refl = refl
-spec-⇐-uses (⇐-refl _ _) = refl
+spec-⇐-uses (⇐-refl _ _ _) = refl
 spec-⇐-uses (⇐-ctor _ _ _ _ _ _ _ Ar _) = spec-args-uses Ar
 spec-⇐-uses (⇐-pair _ _ _ eq) = sym (ok-inj eq)
 spec-⇐-uses (⇐-letp _ _ _ _ _ eq) = sym (ok-inj eq)
