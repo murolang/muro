@@ -94,7 +94,7 @@ Binary trees of structure (no payloads). `size` descends on both children.
 
 ## vec.muro
 
-`Fin n`, `Vec A n`, `lookup` without a runtime bounds check. The inner `match` carries the index equation in its motive and `rewrite`s along `inj-suc` (the convoy pattern). `lookup-ok` is `refl`.
+`Fin n`, `Vec A n`, `lookup` without a runtime bounds check. `vhead` and `vtail` match a `Vec A suc(m)` with a motive that computes from the index (`Vec A (pred k)`), and `lookup` recurses on the tail. `lookup-ok` is `refl`.
 
 See [Data](data.md) and [Indexed data](indexed.md).
 
