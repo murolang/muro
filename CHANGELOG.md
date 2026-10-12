@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.19
+## 0.16.20
 
 A file can declare `param` entries, which a file that imports it supplies. `param step : run Π (+ s : State) → State` is a name with a tag and a type; the importing book supplies it with a `def` or `data` of the same name and tag, and the supplying type is checked against the param's. Inside the library the param is the supplied definition, so `+ s : State` is copyable when the supplied `State` is, a run param is run code that emits, and a call to an evidence param discards its arguments' uses. A library for every environment no longer passes the environment as arguments to each definition, where a spec argument could not reach evidence and an abstract type could not be `+`. A file with an unsupplied param is checked where it is imported, with its errors at its own path and line; checked alone it names each missing param.
 
@@ -18,6 +18,29 @@ A run definition with the name and live arity of a `Kernel` function or macro (`
 ### Manual
 
 - Terms: Params. Grammar: `param`. Limits: what is checked for a library with params. For agents: writing one. Emit: Kernel names.
+
+### Package
+
+- Version 0.16.20.
+
+## 0.16.19
+
+`refl` is not a run term. Identity has one introduction, and run code could build it: `f refl` for `f : run Π (p : {0 ≡ 0 : Nat}) → Nat`, a run pair `(n, refl)`, or `def e : run {0 ≡ 0 : Nat} := refl` all checked, and emit printed `:refl`. Proof variables were already refused at use, and evidence definitions cannot be used in run, so without `refl` no run term builds a proof and none reaches emitted code. A proof passed to a run function is an erased argument, checked in spec. An absurd branch may still have an identity type, since it never runs.
+
+A run definition has a run type, used or not. `def e : run {0 ≡ 0 : Nat}` was accepted, and refused only where another run term used `e`. It is refused at its type now. This does not replace the `refl` rule: `def g : run Nat := f refl` has a run type.
+
+### Checker
+
+- `⇐-refl` in `Check` and `Judgement` takes `eqMode m run ≡ false`; `Check.check′` refuses `refl` in run with `no promotion: refl in run mode`. `Soundness.check-sound` follows the new branch, and `Wall.no-run-rfl` states that `refl` has no run derivation. Then `Muro.Check`.
+- `Check.runDecl`: `checkDef` reads a run definition's type with `isRunType`, under the `type` tag. `Soundness.checkDef-sound` takes the `checkTy` part of that step. Then `Muro.Check.run_decl`.
+
+### Examples
+
+- `vec.muro`: `lookup` passed `refl` to the inner match at runtime (the convoy pattern). `vhead` and `vtail` match a `Vec A suc(m)` with a motive that computes from the index, `Vec A (pred k)`, and `lookup` recurses on `vtail`. `inj-suc` stays in the prelude. `agda/Muro/ExampleVec.agda` follows.
+
+### Manual
+
+- The wall: `refl` in run, and the type of a run definition. Indexed data: a motive that computes from the index; the equation in the motive is for proofs. Examples: `vec.muro`.
 
 ### Package
 

@@ -589,15 +589,17 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-letp {e = e} {t = t} Fe Ft) eq with 
 check-sound k σ rs m {e = lam q A t} {A = T} G FΓ Fe FT eq = checkLam-sound k σ rs m G FΓ Fe FT (viewPi k σ T) refl eq
 
 -- refl against a type
-check-sound k σ rs {Γ = Γ} m {A = T} G FΓ f-rfl FT eq with viewId k σ T in veq
-... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok (A , a , b) with floatIdOk k σ A
+check-sound k σ rs {Γ = Γ} m {A = T} G FΓ f-rfl FT eq with eqMode m run in req
+... | true = ⊥-elim (fail≢ok eq)
+... | false with viewId k σ T in veq
 ...   | fail _ = ⊥-elim (fail≢ok eq)
-...   | ok tt with conv k σ a b in ceq
+...   | ok (A , a , b) with floatIdOk k σ A
 ...     | fail _ = ⊥-elim (fail≢ok eq)
-...     | ok tt with ok-inj eq
-...       | refl with viewId-Frag k σ (GoodSig.frag G) FT veq
-...         | FA , Fa , Fb = ⇐-refl (viewId-≈ k σ (GoodSig.frag G) FT veq) (conv-sound k σ (GoodSig.frag G) Fa Fb ceq)
+...     | ok tt with conv k σ a b in ceq
+...       | fail _ = ⊥-elim (fail≢ok eq)
+...       | ok tt with ok-inj eq
+...         | refl with viewId-Frag k σ (GoodSig.frag G) FT veq
+...           | FA , Fa , Fb = ⇐-refl (viewId-≈ k σ (GoodSig.frag G) FT veq) (conv-sound k σ (GoodSig.frag G) Fa Fb ceq) req
 
 -- pair against a type: viewProd, then the components
 check-sound k σ rs {Γ = Γ} m {A = T} G FΓ (f-pair {a = a} {b = b} Fa Fb) FT eq with viewProd k σ T in veq
@@ -1071,7 +1073,8 @@ checkDef-sound k σ i {d} G leq eq with lookupDef σ i in leq′
 ...     | (_ , teq) , (_ , beq) , _ , _ with FragSig.defs (GoodSig.frag G) i d′ leq′
 ...       | FT , FB with checkBody-sound k σ i d′ (tag-ok beq)
 ...         | rs , ceq =
-  checkTy-sound k σ emptyRec G FragCtx-[] FT (ok-tt (tag-ok teq))
+  checkTy-sound k σ emptyRec G FragCtx-[] FT
+    (ok-tt (proj₂ (proj₁ (>>-ok {r = checkTy k σ emptyRec Vec.[] (Def.dtype d′)} (tag-ok teq)))))
   , _ , check-sound k σ rs (Def.dmode d′) G FragCtx-[] FB FT ceq
 
 checkDefs-sound : ∀ k σ j ds → checkDefs k σ j ds ≡ ok tt

@@ -65,7 +65,7 @@ ctor-no-⇐ : ∀ {n} {Γ : Ctx n} {m i j as e A u}
 ctor-no-⇐ sp (⇐-conv D _) = ctor-no-⇒ sp D
 ctor-no-⇐ _ (⇐-ctor _ _ lk _ _ _ _ _ _) = fail≢ok lk
 ctor-no-⇐ () (⇐-lam _ _ _ _ _ _)
-ctor-no-⇐ () (⇐-refl _ _)
+ctor-no-⇐ () (⇐-refl _ _ _)
 ctor-no-⇐ () (⇐-pair _ _ _ _)
 ctor-no-⇐ () (⇐-letp _ _ _ _ _ _)
 
@@ -82,7 +82,7 @@ dty-no-⇐ : ∀ {n} {Γ : Ctx n} {m i as e A u}
 dty-no-⇐ sp (⇐-conv D _) = dty-no-⇒ sp D
 dty-no-⇐ _ (⇐-ctor _ _ lk _ _ _ _ _ _) = fail≢ok lk
 dty-no-⇐ () (⇐-lam _ _ _ _ _ _)
-dty-no-⇐ () (⇐-refl _ _)
+dty-no-⇐ () (⇐-refl _ _ _)
 dty-no-⇐ () (⇐-pair _ _ _ _)
 dty-no-⇐ () (⇐-letp _ _ _ _ _ _)
 
@@ -145,7 +145,7 @@ Empty-intro : ∀ {σ n} {Γ : Ctx n} {m e u} →
 Empty-intro i (⇐-conv D c) = Empty-intro-⇒ i D c
 Empty-intro i-lam (⇐-lam _ c _ _ _ _) with ≈-shape h-empty h-pi c
 ... | ()
-Empty-intro i-rfl (⇐-refl c _) with ≈-shape h-empty h-idt c
+Empty-intro i-rfl (⇐-refl c _ _) with ≈-shape h-empty h-idt c
 ... | ()
 Empty-intro i-pair (⇐-pair c _ _ _) with ≈-shape h-empty h-prod c
 ... | ()
@@ -193,7 +193,7 @@ ne-untyped-⇒ (ne-foreign f-packi) ()
 ne-untyped-⇐ ne (⇐-conv D _) = ne-untyped-⇒ ne D
 ne-untyped-⇐ _ (⇐-ctor _ _ lk _ _ _ _ _ _) = fail≢ok lk
 ne-untyped-⇐ (ne-foreign ()) (⇐-lam _ _ _ _ _ _)
-ne-untyped-⇐ (ne-foreign ()) (⇐-refl _ _)
+ne-untyped-⇐ (ne-foreign ()) (⇐-refl _ _ _)
 ne-untyped-⇐ (ne-foreign ()) (⇐-pair _ _ _ _)
 ne-untyped-⇐ (ne-letp ne) (⇐-letp D _ _ _ _ _) = ne-untyped-⇒ ne D
 
@@ -273,7 +273,7 @@ nf-nat-prog nf-lam (⇐-conv (⇒-lam _ _ _ _) c) with ≈-shape h-pi h-nat c
 ... | ()
 nf-nat-prog nf-lam (⇐-lam _ c _ _ _ _) with ≈-shape h-nat h-pi c
 ... | ()
-nf-nat-prog nf-rfl (⇐-refl c _) with ≈-shape h-nat h-idt c
+nf-nat-prog nf-rfl (⇐-refl c _ _) with ≈-shape h-nat h-idt c
 ... | ()
 nf-nat-prog nf-one (⇐-conv ⇒-one c) with ≈-shape h-unit h-nat c
 ... | ()
@@ -306,7 +306,7 @@ nf-unit-prog nf-lam (⇐-conv (⇒-lam _ _ _ _) c) with ≈-shape h-pi h-unit c
 ... | ()
 nf-unit-prog nf-lam (⇐-lam _ c _ _ _ _) with ≈-shape h-unit h-pi c
 ... | ()
-nf-unit-prog nf-rfl (⇐-refl c _) with ≈-shape h-unit h-idt c
+nf-unit-prog nf-rfl (⇐-refl c _ _) with ≈-shape h-unit h-idt c
 ... | ()
 nf-unit-prog nf-typ (⇐-conv () _)
 nf-unit-prog nf-pi (⇐-conv () _)
@@ -376,7 +376,7 @@ progress-⇐ : ∀ {e A u} → σ-empty , ε ⊢[ evid ] e ⇐ A ⊣ u → Prog 
 progress-⇐ (⇐-conv D _) = progress-⇒ D
 progress-⇐ (⇐-ctor _ _ lk _ _ _ _ _ _) = ⊥-elim (fail≢ok lk)
 progress-⇐ (⇐-lam _ _ _ _ _ _) = inj₁ nf-lam
-progress-⇐ (⇐-refl _ _) = inj₁ nf-rfl
+progress-⇐ (⇐-refl _ _ _) = inj₁ nf-rfl
 progress-⇐ (⇐-pair _ _ _ _) = inj₁ nf-pair
 progress-⇐ (⇐-letp De c _ _ _ _) with progress-⇒ De
 ... | inj₂ (_ , s) = inj₂ (_ , letp-e s)

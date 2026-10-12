@@ -206,6 +206,9 @@ mutual
   ... | cv-prod {A} {B}    = isCopy k σ A >>= λ b → if b then isCopy k σ B else ok false
   ... | cv-other           = isDataN k σ (apps t)
 
+noRunRefl : String
+noRunRefl = "no promotion: refl in run mode"
+
 notCopy : String
 notCopy = "+ requires a copyable type: Data, a pair of them, or a function"
 
@@ -609,6 +612,7 @@ data _,_⊢[_]_⇐_ σ Γ where
 
   ⇐-refl : ∀ {m A a b}
     → a ≈[ σ ] b
+    → eqMode m run ≡ false
     → σ , Γ ⊢[ m ] rfl ⇐ idt A a b
 
   ⇐-ctor : ∀ {m di ci params args d}
@@ -1623,11 +1627,12 @@ mutual
   -- ⇐-lam: against a Π after whnf; otherwise inferred and converted.
   check′ k σ rs Γ m (lam q A t) T = checkLam k σ rs Γ m (lam q A t) T (viewPi k σ T)
 
-  -- ⇐-refl
+  -- ⇐-refl; not in run, so run code never builds a proof
   check′ k σ rs Γ m rfl T =
-    viewId k σ T >>= λ (A , a , b) →
-    floatIdOk k σ A >>
-    conv k σ a b >> ok u0s
+    if eqMode m run then fail noRunRefl
+    else (viewId k σ T >>= λ (A , a , b) →
+          floatIdOk k σ A >>
+          conv k σ a b >> ok u0s)
 
   -- ⇐-pair
   check′ k σ rs Γ m (pair a b) T =
@@ -1932,10 +1937,18 @@ checkBodyAt k σ i d (p ∷ ps) =
 checkBody : ℕ → Sig → ℕ → Def → Result (UseVec 0)
 checkBody k σ i d = checkBodyAt k σ i d (pickPos k σ i d)
 
+-- A run definition has a run type, used or not.
+runDecl : ℕ → Sig → Mode → Tm 0 → Result ⊤
+runDecl k σ m A =
+  if eqMode m run
+  then (isRunType k σ A >>= guard "no promotion: a run definition has a spec type")
+  else ok tt
+
 checkDef : ℕ → Sig → ℕ → Result ⊤
 checkDef k σ i =
   lookupDef σ i >>= λ d →
-  tag (Def.dname d ++ " type") (checkTy k σ emptyRec [] (Def.dtype d)) >>
+  tag (Def.dname d ++ " type")
+      (checkTy k σ emptyRec [] (Def.dtype d) >> runDecl k σ (Def.dmode d) (Def.dtype d)) >>
   tag (Def.dname d ++ " body") (checkBody k σ i d) >>
   tag (Def.dname d ++ " productivity")
       (checkNu k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d)) >>

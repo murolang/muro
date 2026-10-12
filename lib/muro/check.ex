@@ -1633,7 +1633,10 @@ defmodule Muro.Check do
             infer_conv(k, book, rs, gamma, mode, e, a)
         end
 
-      # ⇐-refl
+      # ⇐-refl; not in run, so run code never builds a proof
+      :rfl when mode == :run ->
+        {:error, "no promotion: refl in run mode"}
+
       :rfl ->
         with {:ok, {sort, x, y}} <- view_id(k, book, a, names_of(rs, gamma)),
              :ok <- float_id_ok(k, book, sort),
@@ -1748,6 +1751,7 @@ defmodule Muro.Check do
 
   def check_def(book, %{mode: mode, type: ty, body: body} = d, k) do
     with :ok <- fail_at(d, "type", check_ty(k, book, empty_rec(), [], ty)),
+         :ok <- fail_at(d, "type", run_decl(k, book, mode, ty)),
          {:ok, _} <- fail_at(d, "body", check_body(k, book, d)),
          :ok <-
            fail_at(
@@ -1758,6 +1762,17 @@ defmodule Muro.Check do
       :ok
     end
   end
+
+  # A run definition has a run type, used or not (Agda: runDecl).
+  defp run_decl(k, book, :run, ty) do
+    case run_ty(k, book, ty) do
+      {:ok, true} -> :ok
+      {:ok, false} -> {:error, "no promotion: a run definition has a spec type"}
+      err -> err
+    end
+  end
+
+  defp run_decl(_k, _book, _mode, _ty), do: :ok
 
   # Run and evidence definitions that reach each other are one block and
   # descend on one shared argument. Spec is not in the block (Agda: component).
