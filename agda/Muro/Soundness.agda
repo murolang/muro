@@ -1073,7 +1073,8 @@ checkDef-sound k σ i {d} G leq eq with lookupDef σ i in leq′
 ...     | (_ , teq) , (_ , beq) , _ , _ with FragSig.defs (GoodSig.frag G) i d′ leq′
 ...       | FT , FB with checkBody-sound k σ i d′ (tag-ok beq)
 ...         | rs , ceq =
-  checkTy-sound k σ emptyRec G FragCtx-[] FT (ok-tt (tag-ok teq))
+  checkTy-sound k σ emptyRec G FragCtx-[] FT
+    (ok-tt (proj₂ (proj₁ (>>-ok {r = checkTy k σ emptyRec Vec.[] (Def.dtype d′)} (tag-ok teq)))))
   , _ , check-sound k σ rs (Def.dmode d′) G FragCtx-[] FB FT ceq
 
 checkDefs-sound : ∀ k σ j ds → checkDefs k σ j ds ≡ ok tt

@@ -48,6 +48,8 @@ There is no rule that takes a spec derivation and returns an evidence derivation
 
 Identity has one introduction, `refl`, and it has no `run` derivation (`no-run-rfl` in `Muro.Wall`). Run code cannot build a proof, hand one to a function, or return one, so no proof reaches emitted code. Pass a proof to a `run` function as an erased argument, `(- e : {a ≡ b : A})`: it is checked in spec and not emitted. An absurd branch (`matchEmpty`) may still have an identity type, since it never runs.
 
+A `run` definition has a run type, used or not: the codomains of its Π, each side of a product, and the body of a ν are data, `Nat`, `Unit`, `Empty`, machine numbers, or names that reduce to one of those. `def e : run {0 ≡ 0 : Nat}` is refused at its type, `e type: no promotion: a run definition has a spec type`. Π domains are not read there; a run variable of a spec type is refused where it is used.
+
 ## What is checked in spec
 
 Even inside a `run` or `evidence` term, some positions are spec:

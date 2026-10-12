@@ -1937,10 +1937,18 @@ checkBodyAt k σ i d (p ∷ ps) =
 checkBody : ℕ → Sig → ℕ → Def → Result (UseVec 0)
 checkBody k σ i d = checkBodyAt k σ i d (pickPos k σ i d)
 
+-- A run definition has a run type, used or not.
+runDecl : ℕ → Sig → Mode → Tm 0 → Result ⊤
+runDecl k σ m A =
+  if eqMode m run
+  then (isRunType k σ A >>= guard "no promotion: a run definition has a spec type")
+  else ok tt
+
 checkDef : ℕ → Sig → ℕ → Result ⊤
 checkDef k σ i =
   lookupDef σ i >>= λ d →
-  tag (Def.dname d ++ " type") (checkTy k σ emptyRec [] (Def.dtype d)) >>
+  tag (Def.dname d ++ " type")
+      (checkTy k σ emptyRec [] (Def.dtype d) >> runDecl k σ (Def.dmode d) (Def.dtype d)) >>
   tag (Def.dname d ++ " body") (checkBody k σ i d) >>
   tag (Def.dname d ++ " productivity")
       (checkNu k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d)) >>

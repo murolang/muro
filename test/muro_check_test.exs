@@ -267,11 +267,7 @@ defmodule Muro.CheckTest do
 
     for body <- [
           "def f : run Π (p : Eq0) → Nat := λ (p : Eq0) → 0\ndef g : run Nat := f refl\n",
-          "def h : run Π (n : Nat) → Nat × Eq0 := λ (n : Nat) → (n, refl)\n",
-          "def e : run {0 ≡ 0 : Nat} := refl\n",
-          "def k : run Nat := (λ (p : Eq0) → 0) refl\n",
-          "ν Stream (A : Type) : Type where\n  uncons : Stream A → A × Stream A\n" <>
-            "def s : run Stream Eq0 := unfold 0 (λ (+ n : Nat) → (refl, n))\n"
+          "def k : run Nat := (λ (p : Eq0) → 0) refl\n"
         ] do
       assert {:ok, book} = Parser.parse(eq0 <> body)
       assert {:error, msg} = Check.check_sig(book)
@@ -291,6 +287,34 @@ defmodule Muro.CheckTest do
     assert Check.check_sig(book) == :ok
     out = Emit.emit_module(Muro.NoRunRefl, book)
     refute out =~ "refl"
+  end
+
+  test "a run definition has a run type, used or not" do
+    eq0 = "def Eq0 : spec Type := {0 ≡ 0 : Nat}\n"
+
+    for {name, body} <- [
+          {"e", "def e : run Eq0 := refl\n"},
+          {"h", "def h : run Π (n : Nat) → Nat × Eq0 := λ (n : Nat) → (n, refl)\n"},
+          {"c", "def c : run Π (n : Nat) → {n ≡ n : Nat} := λ (n : Nat) → refl\n"},
+          {"t", "def t : run Type := Nat\n"},
+          {"s",
+           "ν Stream (A : Type) : Type where\n  uncons : Stream A → A × Stream A\n" <>
+             "def s : run Stream Eq0 := unfold 0 (λ (+ n : Nat) → (refl, n))\n"}
+        ] do
+      assert {:ok, book} = Parser.parse(eq0 <> body)
+      assert {:error, msg} = Check.check_sig(book)
+      assert msg =~ "#{name} type: no promotion: a run definition has a spec type"
+    end
+
+    # the domain is not read: a run argument of spec type is refused at its use
+    dom = eq0 <> "def f : run Π (p : Eq0) → Nat := λ (p : Eq0) → 0\n"
+    assert {:ok, book} = Parser.parse(dom)
+    assert Check.check_sig(book) == :ok
+
+    # an alias of Nat is a run type at the colon too
+    alias_ok = "def R : spec Type := Nat\ndef two : run R := suc (suc 0)\n"
+    assert {:ok, book} = Parser.parse(alias_ok)
+    assert Check.check_sig(book) == :ok
   end
 
   test "result.muro: ok/error constructors are the Elixir tags" do
@@ -1240,7 +1264,7 @@ defmodule Muro.CheckTest do
 
   test "conversion prints surface types with binder names" do
     src = """
-    def bad : run Π (n : Nat) → {n ≡ 0 : Nat} :=
+    def bad : evidence Π (n : Nat) → {n ≡ 0 : Nat} :=
       λ (n : Nat) → n
     """
 

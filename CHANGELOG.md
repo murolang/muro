@@ -4,9 +4,12 @@
 
 `refl` is not a run term. Identity has one introduction, and run code could build it: `f refl` for `f : run Π (p : {0 ≡ 0 : Nat}) → Nat`, a run pair `(n, refl)`, or `def e : run {0 ≡ 0 : Nat} := refl` all checked, and emit printed `:refl`. Proof variables were already refused at use, and evidence definitions cannot be used in run, so without `refl` no run term builds a proof and none reaches emitted code. A proof passed to a run function is an erased argument, checked in spec. An absurd branch may still have an identity type, since it never runs.
 
+A run definition has a run type, used or not. `def e : run {0 ≡ 0 : Nat}` was accepted, and refused only where another run term used `e`. It is refused at its type now. This does not replace the `refl` rule: `def g : run Nat := f refl` has a run type.
+
 ### Checker
 
 - `⇐-refl` in `Check` and `Judgement` takes `eqMode m run ≡ false`; `Check.check′` refuses `refl` in run with `no promotion: refl in run mode`. `Soundness.check-sound` follows the new branch, and `Wall.no-run-rfl` states that `refl` has no run derivation. Then `Muro.Check`.
+- `Check.runDecl`: `checkDef` reads a run definition's type with `isRunType`, under the `type` tag. `Soundness.checkDef-sound` takes the `checkTy` part of that step. Then `Muro.Check.run_decl`.
 
 ### Examples
 
@@ -14,7 +17,7 @@
 
 ### Manual
 
-- The wall: `refl` in run. Indexed data: a motive that computes from the index; the equation in the motive is for proofs. Examples: `vec.muro`.
+- The wall: `refl` in run, and the type of a run definition. Indexed data: a motive that computes from the index; the equation in the motive is for proofs. Examples: `vec.muro`.
 
 ### Package
 
