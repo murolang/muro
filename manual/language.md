@@ -86,6 +86,8 @@ The `+` or `-` sits immediately before the name, inside the parentheses. `(-A : 
 
 `Stream` and `Either` are not copyable. There is no `+` on a stream. The refusal is `+ requires a copyable type: Data, a pair of them, or a function`.
 
+**Run type**: a variable or a definition used in run code has one. It is `Nat`, `Unit`, `Empty`, `Atom`, `I64`, `F32`, `Tensor`, a `data` type, a type variable, a Π whose codomain is a run type, a pair of two, or a ν type whose body is one. Each part is read after WHNF, so a definition naming a type is the type it names: with `def R : spec Type := Nat`, `inc : run Π (r : R) → R` is used in run like `Π (r : Nat) → Nat`. An identity type is not a run type, under a name or not: `p : Nat × Eq0` with `def Eq0 : spec Type := {0 ≡ 0 : Nat}` is refused in run with `variable has a spec type`.
+
 In spec, uses are forgotten. You can mention an affine variable twice while building a type.
 
 In run and evidence, using an affine variable twice is an error: `affine variable used twice`. Using an erased variable computationally is an error: `erased variable used computationally`.

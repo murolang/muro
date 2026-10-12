@@ -235,6 +235,33 @@ defmodule Muro.CheckTest do
     assert msg =~ "no body: cannot convert"
   end
 
+  test "a definition naming a type is that type in a run type" do
+    src = """
+    def R : spec Type := Nat
+    def Pair : spec Type := Nat × R
+    def inc : run Π (r : R) → R := λ (r : R) → suc r
+    def swap : run Π (p : Pair) → Pair := λ (p : Pair) → let (a, b) = p in (b, a)
+    def two : run R := inc (inc 0)
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+
+    out = Emit.emit_module(Muro.RunAliasEx, book)
+    Code.eval_string(out)
+    assert call("RunAliasEx", :two, []) == {:suc, {:suc, 0}}
+    assert call("RunAliasEx", :swap, [{0, {:suc, 0}}]) == {{:suc, 0}, 0}
+
+    {:ok, bad} =
+      Parser.parse("""
+      def Eq0 : spec Type := {0 ≡ 0 : Nat}
+      def h : run Π (p : Nat × Eq0) → Nat := λ (p : Nat × Eq0) → let (a, b) = p in a
+      """)
+
+    assert {:error, msg} = Check.check_sig(bad)
+    assert msg =~ "variable has a spec type"
+  end
+
   test "result.muro: ok/error constructors are the Elixir tags" do
     src = File.read!("examples/result.muro")
     assert {:ok, book} = Parser.parse(src)
