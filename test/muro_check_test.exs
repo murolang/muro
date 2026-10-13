@@ -1872,6 +1872,133 @@ defmodule Muro.CheckTest do
     assert msg =~ "other.muro"
   end
 
+  test "a param is supplied by the declaration of that name in the importing file" do
+    dir = Path.join(System.tmp_dir!(), "muro_param_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    File.write!(Path.join(dir, "lib.muro"), """
+    param S : spec Type
+    param step : run Π (+ s : S) → S
+    param P : spec Π (s : S) → Type
+    param keep : evidence Π (+ s : S) → Π (p : P s) → P (step s)
+
+    def twice : run Π (+ s : S) → S := λ (+ s : S) → step (step s)
+
+    def keep2 : evidence Π (+ s : S) → Π (p : P s) → P (twice s) :=
+      λ (+ s : S) → λ (p : P s) → keep (step s) (keep s p)
+    """)
+
+    supply = """
+    def S : spec Type := Nat
+    def step : run Π (+ s : Nat) → Nat := λ (+ s : Nat) → suc s
+    def P : spec Π (s : Nat) → Type := λ (s : Nat) → Unit
+    def keep : evidence Π (+ s : Nat) → Π (p : Unit) → Unit := λ (+ s : Nat) → λ (p : Unit) → p
+    """
+
+    top = Path.join(dir, "top.muro")
+    File.write!(top, "import \"lib.muro\"\n" <> supply <> "def two : run Nat := twice 0\n")
+
+    assert Muro.check_file(top) == :ok
+    assert {:ok, src} = Muro.emit_file(top, Muro.ParamEx)
+    refute src =~ "param"
+    Code.eval_string(src)
+    assert call("ParamEx", :two, []) == {:suc, {:suc, 0}}
+
+    assert {:error, msg} = Muro.check_file(Path.join(dir, "lib.muro"))
+    assert msg =~ "lib.muro:1:1: param S is supplied by a file that imports this one"
+    assert msg =~ "param keep is supplied"
+
+    # A library that imports one with params passes them on.
+    File.write!(Path.join(dir, "mid.muro"), """
+    import "lib.muro"
+    def four : run Π (+ s : S) → S := λ (+ s : S) → twice (twice s)
+    """)
+
+    via = Path.join(dir, "via.muro")
+    File.write!(via, "import \"mid.muro\"\n" <> supply)
+    assert Muro.check_file(via) == :ok
+    assert {:error, msg} = Muro.check_file(Path.join(dir, "mid.muro"))
+    assert msg =~ "lib.muro:2:1: param step is supplied"
+
+    bad = Path.join(dir, "bad.muro")
+
+    File.write!(
+      bad,
+      "import \"lib.muro\"\n" <> String.replace(supply, "step : run", "step : spec")
+    )
+
+    assert {:error, msg} = Muro.check_file(bad)
+    assert msg =~ "bad.muro:3:1: step is spec; the param it supplies is run"
+    assert msg =~ "lib.muro:2:1: param step : run"
+
+    File.write!(
+      bad,
+      "import \"lib.muro\"\n" <>
+        String.replace(
+          supply,
+          "Π (+ s : Nat) → Nat := λ (+ s : Nat) → suc s",
+          "Π (s : Nat) → Nat := λ (s : Nat) → s"
+        )
+    )
+
+    assert {:error, msg} = Muro.check_file(bad)
+    assert msg =~ "lib.muro:2:1: step (param) body"
+
+    # S is abstract in the library: without the instance, + s : S is not
+    # known to be copyable. With S := Stream Nat it is not, and the
+    # refusal is reported at the library's line.
+    File.write!(
+      bad,
+      "import \"lib.muro\"\n" <>
+        String.replace(supply, "S : spec Type := Nat", "S : spec Type := Stream Nat")
+    )
+
+    assert {:error, msg} = Muro.check_file(bad)
+    assert msg =~ ~r/lib\.muro:6:1: twice \w+: \+ requires a copyable type/
+
+    File.write!(
+      Path.join(dir, "pick.muro"),
+      "param T : spec Type\nparam t0 : run T\ndef t1 : run T := t0\n"
+    )
+
+    File.write!(
+      bad,
+      "import \"pick.muro\"\ndata T : Type where\n  a : T\n  b : T\ndef t0 : run T := b\n"
+    )
+
+    assert Muro.check_file(bad) == :ok
+
+    File.write!(bad, "param S : spec Type\ndef S : spec Type := Nat\n")
+    assert {:error, msg} = Muro.check_file(bad)
+    assert msg =~ "duplicate name S"
+
+    assert {:ok, book} = Parser.parse("param S : spec Type\ndef n : run Nat := 0\n")
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "1:1: param S is supplied by a file that imports this one"
+  end
+
+  test "a run definition named like a Kernel function of its arity is emitted" do
+    src = """
+    def max : run Π (m : Nat) → Π (n : Nat) → Nat :=
+      λ (m : Nat) → λ (n : Nat) →
+        match m motive (λ _ → Nat)
+          | 0 => n
+          | suc p => (match n motive (λ _ → Nat) | 0 => suc p | suc q => suc (max p q))
+    def length : run Π (n : Nat) → Nat := λ (n : Nat) → n
+    def min : run Π (- k : Nat) → Π (n : Nat) → Nat := λ (- k : Nat) → λ (n : Nat) → n
+    def top : run Nat := max (length (suc 0)) (suc (suc 0))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+    out = Emit.emit_module(Muro.KernelNameEx, book)
+    assert out =~ "import Kernel, except: [max: 2, length: 1]"
+    Code.eval_string(out)
+    assert call("KernelNameEx", :top, []) == {:suc, {:suc, 0}}
+    assert call("KernelNameEx", :min, [0]) == 0
+  end
+
   test "a function and a pair of Data are copyable at +" do
     plus =
       "def plus : run Π (n : Nat) → Π (m : Nat) → Nat := λ (n : Nat) → λ (m : Nat) → n\n"

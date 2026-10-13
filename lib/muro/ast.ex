@@ -378,6 +378,9 @@ defmodule Muro.Ast do
           Map.get(d, :kind) == :import ->
             {:error, import_left(d)}
 
+          Map.get(d, :kind) == :param ->
+            {:error, param_left(d)}
+
           Map.get(d, :kind) == :data ->
             data_to_db(d)
 
@@ -430,12 +433,19 @@ defmodule Muro.Ast do
 
   defp import_left(_), do: "import is resolved from a file"
 
+  defp param_left(d) do
+    "#{Muro.Print.loc_prefix(Map.get(d, :loc))}param #{d.name} is supplied by a file that imports this one"
+  end
+
   # Atom literals written in the book, first occurrence first.
   # Binder names are not atoms. Nothing absent from the book is added.
   def atoms(book) when is_list(book) do
     Enum.reduce(book, [], fn
       %{kind: :import}, acc ->
         acc
+
+      %{kind: :param, type: ty}, acc ->
+        atoms_in(ty, acc)
 
       %{kind: :data, params: params, ctors: ctors} = d, acc ->
         acc = atoms_in(params, acc)

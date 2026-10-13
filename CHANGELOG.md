@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.16.20
+
+A file can declare `param` entries, which a file that imports it supplies. `param step : run Π (+ s : State) → State` is a name with a tag and a type; the importing book supplies it with a `def` or `data` of the same name and tag, and the supplying type is checked against the param's. Inside the library the param is the supplied definition, so `+ s : State` is copyable when the supplied `State` is, a run param is run code that emits, and a call to an evidence param discards its arguments' uses. A library for every environment no longer passes the environment as arguments to each definition, where a spec argument could not reach evidence and an abstract type could not be `+`. A file with an unsupplied param is checked where it is imported, with its errors at its own path and line; checked alone it names each missing param.
+
+A run definition with the name and live arity of a `Kernel` function or macro (`max/2`, `min/2`) emitted a module that did not compile; only `length/1` was excluded from `import Kernel`. Every such name is excluded now.
+
+### Import
+
+- `Muro.Load`: `supply`, `param_check` (a definition `name (param)` checked with the book and not returned), `all_supplied`. An entry from another file reports at its own file (`Print.loc_prefix` reads `{file, line, col}`).
+- `Muro.Parser`: the `param` entry; `param` ends a term and a constructor list. `Muro.Ast.book_to_db` refuses a `param` left in a book.
+
+### Emit
+
+- `Muro.Emit.kernel_clashes`.
+
+### Manual
+
+- Terms: Params. Grammar: `param`. Limits: what is checked for a library with params. For agents: writing one. Emit: Kernel names.
+
+### Package
+
+- Version 0.16.20.
+
 ## 0.16.19
 
 `refl` is not a run term. Identity has one introduction, and run code could build it: `f refl` for `f : run Π (p : {0 ≡ 0 : Nat}) → Nat`, a run pair `(n, refl)`, or `def e : run {0 ≡ 0 : Nat} := refl` all checked, and emit printed `:refl`. Proof variables were already refused at use, and evidence definitions cannot be used in run, so without `refl` no run term builds a proof and none reaches emitted code. A proof passed to a run function is an erased argument, checked in spec. An absurd branch may still have an identity type, since it never runs.

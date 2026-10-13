@@ -18,6 +18,10 @@ defmodule Muro.Print do
   end
 
   def loc_prefix({line, col}) when is_integer(line) and is_integer(col), do: "#{line}:#{col}: "
+
+  def loc_prefix({file, line, col}) when is_binary(file) and is_integer(line) and is_integer(col),
+    do: "#{file}:#{line}:#{col}: "
+
   def loc_prefix(_), do: ""
 
   @doc "Pretty-print a de Bruijn term. `names` is newest-first."

@@ -23,10 +23,9 @@ defmodule Muro.Emit do
     funs = runs |> Enum.map(&emit_def(&1, book)) |> Enum.join("\n\n")
 
     except =
-      if Enum.any?(runs, &(&1.name == "length")) do
-        "  import Kernel, except: [length: 1]\n"
-      else
-        ""
+      case kernel_clashes(runs) do
+        [] -> ""
+        clashes -> "  import Kernel, except: #{inspect(clashes)}\n"
       end
 
     nat_helper =
@@ -68,6 +67,21 @@ defmodule Muro.Emit do
     else
       "#{kw} #{safe(name)}(#{Enum.join(args, ", ")}) do\n  #{expr}\nend"
     end
+  end
+
+  # A run definition named like a Kernel function or macro of the same
+  # arity (`max/2`, `length/1`) would be ambiguous with the import.
+  defp kernel_clashes(runs) do
+    kernel = Kernel.__info__(:functions) ++ Kernel.__info__(:macros)
+
+    runs
+    |> Enum.map(fn %{name: name, type: ty} ->
+      {:ok, ty_db} = Ast.to_db(ty)
+      {erased, arity} = telescope(ty_db, 0, [])
+      {String.to_atom(safe(name)), arity - length(erased)}
+    end)
+    |> Enum.filter(&(&1 in kernel))
+    |> Enum.uniq()
   end
 
   defp telescope({:pi, :erased, _, _, b}, i, er), do: telescope(b, i + 1, [i | er])

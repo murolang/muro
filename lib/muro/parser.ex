@@ -58,6 +58,12 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      param_start?(s) ->
+        case parse_param(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
       data_start?(s) ->
         case parse_data(s) do
           {:ok, d, rest} -> parse_book(rest, [d | acc])
@@ -82,6 +88,20 @@ defmodule Muro.Parser do
     with {:ok, rest} <- kw(s, "import"),
          {:ok, path, rest} <- parse_string(skip(rest)) do
       {:ok, %{kind: :import, path: path, loc: loc}, rest}
+    end
+  end
+
+  defp param_start?(s), do: word_kw?(s, "param")
+
+  defp parse_param(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "param"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, tag, rest} <- parse_mode(skip(rest)),
+         {:ok, ty, rest} <- parse_term(skip(rest), 0) do
+      {:ok, Map.merge(%{kind: :param, name: name, type: ty, loc: loc}, tag), rest}
     end
   end
 
@@ -212,7 +232,7 @@ defmodule Muro.Parser do
       s == "" ->
         {:ok, Enum.reverse(acc), s}
 
-      word_kw?(s, "def") or word_kw?(s, "data") or nu_start?(s) ->
+      word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or nu_start?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
@@ -399,6 +419,9 @@ defmodule Muro.Parser do
         false
 
       word_kw?(s, "data") ->
+        false
+
+      word_kw?(s, "param") ->
         false
 
       true ->
