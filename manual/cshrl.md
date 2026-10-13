@@ -19,6 +19,7 @@ In brief: `examples/cshrl/` is [CSHRL](https://github.com/doctorcorral/csh-rl) i
 | `lib/finder.muro` | `EnvironmentClass.FiniteDeterministicMDP`: `best-trace`, `find-ranking`, `find-policy`, `ranks`, `preserves-head`; the successor Finder |
 | `lib/agent.muro` | The agent: `episode` and `successor-episode` |
 | `envs/two_state.muro` | `TwoState`: `CoindHomo ranks` for the Finder's ranking, policy `go` |
+| `envs/optimal.muro` | The return theorem: `agent` goes, and its reward stream dominates every other policy |
 | `envs/binary_sacrifice.muro` | `BinarySacrifice` |
 | `envs/skill_investment.muro` | `SkillInvestment` |
 | `std/` | Bool, Nat order and `maxN`, List, Stream with `Dom` |
@@ -56,7 +57,7 @@ The Finder adds `leb`, `default-action` and `horizon`. `successor_sum.muro` adds
 
 ## The environments
 
-**TwoState.** From `start`, `go` reaches `goal`, whose reward is 1. `direct-preserves : CoindHomo ranks` and `test-start : find-policy start horizon ≡ go`.
+**TwoState.** From `start`, `go` reaches `goal`, whose reward is 1. `direct-preserves : CoindHomo ranks` and `test-start : find-policy start horizon ≡ go`. Optimality of that policy is `envs/optimal.muro`, below.
 
 **BinarySacrifice.** `go-trap` earns 1 now and 0 forever. `go-paradise` earns 0 now and 1 forever. `sacrifice-homomorphism` is a `CoinductiveHomomorphism` ranking `go-paradise` above `go-trap`. `coindHomo-forward-impossible` and `coindHomo-reverse-impossible` refute every `CoindHomo` that ranks them in either direction. `paradise-subsumes` is `SuccessorArgmaxSubsumed` at start: the successor return of `go-paradise` dominates at every horizon. `finder-takes-trap` and `successor-finder-takes-paradise` hold by `refl`.
 
@@ -73,6 +74,21 @@ The Finder adds `leb`, `default-action` and `horizon`. `successor_sum.muro` adds
 
 In `trap` both actions return to `trap`. The Finder's sort is stable, so the tie goes to `go_paradise`, the first action in `all-actions`.
 
+## The return theorem
+
+`envs/optimal.muro` is one agent and one step. `agent` goes from either state. `returns policy s` is the stream of rewards from following `policy` at `s`.
+
+```
+def agent-optimal : evidence Π (+ policy : State → Action) → Π (+ s : State) →
+    Dom Nat Le (returns policy s) (returns agent s)
+```
+
+`+` is there because the policy and the state are read now and again at the successors. The proof is `dominates`, an `unfold`. The head is the reward now: `go` earns 1, and every reward this step pays is 0 or 1. The tail is `dominates` at both successors, the state `policy` reached and the state `agent` reached.
+
+`CoindHomo ranks` is a property of a ranking of actions. `find-policy start horizon ≡ go` is the Finder's choice at `start`. `agent-optimal` is the statement that this agent's return dominates every other policy.
+
+In BinarySacrifice the stream of `go-trap` is 1, 0, 0, … and the stream of `go-paradise` is 0, 1, 1, …. Each is strictly ahead at a position where the other is behind, so `Dom` holds in neither direction. No policy's return dominates every other policy there.
+
 ## What is proved
 
-The theorems above are what `mix muro.check` accepts. Every statement about values goes through `Stream` and `Dom`, and ν is outside the fragment of the soundness theorem ([Limits](limits.md)). The checker's ν rules, and the descent of the mutual blocks in `finder.muro`, are argued, not proved in Agda. The library has none of the artifact's appendices or stochastic environment classes.
+`agent-optimal` and the ranking theorems above are what `mix muro.check` accepts. Every statement about streams goes through `Dom`, and ν is outside the fragment of the soundness theorem ([Limits](limits.md)). The checker's ν rules, including this `unfold`, and the descent of the mutual blocks in `finder.muro`, are argued, not proved in Agda. The library has none of the artifact's appendices or stochastic environment classes.

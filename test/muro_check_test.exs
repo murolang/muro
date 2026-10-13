@@ -2242,6 +2242,8 @@ defmodule Muro.CheckTest do
 
     assert call("CshrlSkill", :value, [:novice]) |> Enum.take(5) |> Enum.map(&nat.(nat, &1)) ==
              [1, 2, 3, 5, 5]
+
+    assert Muro.check_file("examples/cshrl/envs/optimal.muro") == :ok
   end
 
   # The module exists only after Code.eval_string, so a literal remote call warns.

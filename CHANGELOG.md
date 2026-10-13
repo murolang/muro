@@ -2,7 +2,9 @@
 
 ## 0.16.22
 
-CSHRL in Muro, under `examples/cshrl/`. The artifact's parameterised modules (Core, SuccessorCore, SuccessorCoreWithArithmetic, the finite deterministic environment class with its Finder) are files whose environment is a list of `param` entries. TwoState, BinarySacrifice and SkillInvestment supply them and prove their theorems: `CoindHomo ranks` for TwoState, a `CoinductiveHomomorphism` ranking the sacrifice first and the impossibility of a `CoindHomo` in either direction for BinarySacrifice, and the same at each level below master for SkillInvestment. Each environment emits an agent that plans with the Finder, or with the successor Finder, and acts: in SkillInvestment the first works for 1 forever, and the second trains three times and then earns 5.
+CSHRL in Muro, under `examples/cshrl/`. The artifact's parameterised modules (Core, SuccessorCore, SuccessorCoreWithArithmetic, the finite deterministic environment class with its Finder) are files whose environment is a list of `param` entries. TwoState, BinarySacrifice and SkillInvestment supply them and prove their ranking theorems: `CoindHomo ranks` for TwoState, a `CoinductiveHomomorphism` ranking the sacrifice first and the impossibility of a `CoindHomo` in either direction for BinarySacrifice, and the same at each level below master for SkillInvestment. Each environment emits an agent that plans with the Finder, or with the successor Finder, and acts: in SkillInvestment the first works for 1 forever, and the second trains three times and then earns 5.
+
+`envs/optimal.muro` is the return theorem. One agent, the step of TwoState, and `agent-optimal`: the reward stream of `agent` dominates the reward stream of every other policy, from every state. The proof is an unfold whose tail is the same statement at both successors. A ranking's `CoindHomo` does not say this, and neither does the Finder's choice of `go`. In BinarySacrifice the two policies' streams are incomparable under `Dom`.
 
 ### Examples
 
@@ -10,11 +12,11 @@ CSHRL in Muro, under `examples/cshrl/`. The artifact's parameterised modules (Co
 
 ### Tests
 
-- Each environment checks, emits without spec or evidence, and its agents' first steps are the ones above. A library file alone is refused for its unsupplied params.
+- Each environment checks, emits without spec or evidence, and its agents' first steps are the ones above. A library file alone is refused for its unsupplied params. `envs/optimal.muro` checks.
 
 ### Manual
 
-- CSHRL: the layout, the params, the correspondence with the artifact, the agents, and what is proved. Examples, For agents, README: links to it.
+- CSHRL: the layout, the params, the correspondence with the artifact, the agents, the return theorem, and what is proved. Examples, For agents, README: links to it.
 
 ### Package
 
