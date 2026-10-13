@@ -18,7 +18,7 @@ open import Data.Empty using (⊥)
 open import Data.Fin.Base using (Fin; zero; suc)
 open import Data.List.Base as List using (List; []; _∷_; length; take; drop)
 open import Data.Maybe.Base using (Maybe; just; nothing)
-open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _+_)
+open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _<ᵇ_; _+_)
 open import Data.Nat.Show using (show)
 open import Data.Product.Base using (_×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String; _++_)
@@ -37,20 +37,23 @@ open import Muro.Spine using (unspine; ctorSpine; dtyArgs; defArgs)
 ------------------------------------------------------------------------
 -- Recursion state: run and evid structural descent (not spec).
 -- A recursive block (one definition, or a strongly connected component
--- of run/evid definitions) descends on one shared argument position
--- `pos`: the variable bound by the leading λ at that position is
--- `recOk`; a field of a match on a recOk or smaller variable is
--- `smaller` (structurally below argument pos). A call to any member of
--- the block must be the head of a maximal application spine whose
--- argument at `pos` is a smaller variable. checkDef tries each
--- non-erased position the whole block shares.
+-- of run/evid definitions) gives each member an argument position,
+-- `poss`, in the order of `block`. The variable bound by the leading λ
+-- at the position of the definition being checked is `recOk`; a field
+-- of a match on a recOk or smaller variable is `smaller` (structurally
+-- below that argument). A call to a member of the block must be the
+-- head of a maximal application spine whose argument at the callee's
+-- position is a smaller variable, or the recOk argument itself when
+-- the callee comes earlier in the signature. Every call then lowers
+-- (size of the argument, index of the definition) lexicographically.
+-- checkDef tries each assignment of non-erased positions to members.
 ------------------------------------------------------------------------
 
 record RecSt (n : ℕ) : Set where
   constructor recst
   field
     self    : Maybe ℕ        -- the definition being checked
-    pos     : ℕ              -- the argument position the block descends on
+    poss    : List ℕ         -- each member's argument position, as block
     nextArg : Maybe ℕ        -- leading λs still to pass before that argument
     smaller : Vec Bool n
     recOk   : Vec Bool n
@@ -82,6 +85,21 @@ scrutOk _  _       = false
 isSmallerVar : ∀ {n} → RecSt n → Tm n → Bool
 isSmallerVar rs (var x) = lookup (RecSt.smaller rs) x
 isSmallerVar _  _       = false
+
+-- The argument the definition being checked descends on, unchanged.
+isArgVar : ∀ {n} → RecSt n → Tm n → Bool
+isArgVar rs (var x) = lookup (RecSt.recOk rs) x ∧ not (lookup (RecSt.smaller rs) x)
+isArgVar _  _       = false
+
+-- The position of member i, read along the block.
+posOf : List ℕ → List ℕ → ℕ → Maybe ℕ
+posOf (b ∷ bs) (p ∷ ps) i = if b ≡ᵇ i then just p else posOf bs ps i
+posOf _        _        _ = nothing
+
+-- A callee defined before the definition being checked.
+earlier : Maybe ℕ → ℕ → Bool
+earlier (just s) i = i <ᵇ s
+earlier nothing  _ = false
 
 ------------------------------------------------------------------------
 -- Small helpers.
@@ -1046,20 +1064,26 @@ noDescent = "recursive call does not descend on a smaller argument"
 checkRecGo : ∀ {n} → RecSt n → Tm n → Result ⊤
 checkRecGo rs t = go rs (apps t)
   where
-    descend : ∀ {n} → RecSt n → List (Tm n) → Result ⊤
-    descend rs args =
-      case lookupList args (RecSt.pos rs) of λ where
-        (ok a)   → if isSmallerVar rs a then ok tt else fail noDescent
-        (fail _) → fail noDescent
+    passes : ∀ {n} → RecSt n → ℕ → Tm n → Bool
+    passes rs i a = isSmallerVar rs a ∨ (isArgVar rs a ∧ earlier (RecSt.self rs) i)
+
+    descend : ∀ {n} → RecSt n → ℕ → List (Tm n) → Result ⊤
+    descend rs i args =
+      case posOf (RecSt.block rs) (RecSt.poss rs) i of λ where
+        nothing  → fail noDescent
+        (just p) → case lookupList args p of λ where
+          (ok a)   → if passes rs i a then ok tt else fail noDescent
+          (fail _) → fail noDescent
 
     go : ∀ {n} → RecSt n → Tm n × List (Tm n) → Result ⊤
     go rs (def i , args) =
-      if elemℕ i (RecSt.block rs) then descend rs args else ok tt
+      if elemℕ i (RecSt.block rs) then descend rs i args else ok tt
     go _ _ = ok tt
 
--- A maximal application spine headed by the definition being checked
--- (run and evid; spec is not checked): the argument at `pos` must be a
--- smaller variable. A shorter spine has no such argument. The Bool is
+-- A maximal application spine headed by a member of the block (run and
+-- evid; spec is not checked): the argument at the callee's position
+-- must be a smaller variable, or the descended-on argument itself for a
+-- callee defined earlier. A shorter spine has no such argument. The Bool is
 -- infer′'s: an inner application (the head of a larger spine) is not
 -- the maximal spine and is not checked. An evidence self-call in the
 -- step of an indexed ν is the coinductive step (`RecSt.coind`).
@@ -1708,13 +1732,13 @@ mutual
 
 ------------------------------------------------------------------------
 -- Check a whole signature. Run and evidence definitions that reach
--- each other are one block and descend on one shared argument.
--- Spec is not a logic: it is not in the block, and it is not checked
--- for descent.
+-- each other are one block, and each member descends on an argument of
+-- its own. Spec is not a logic: it is not in the block, and it is not
+-- checked for descent.
 ------------------------------------------------------------------------
 
 emptyRec : RecSt 0
-emptyRec = recst nothing 0 nothing [] [] false []
+emptyRec = recst nothing [] nothing [] [] false []
 
 -- The non-erased argument positions of a definition's type, read
 -- syntactically: the candidates for the position a self-call descends on.
@@ -1846,89 +1870,101 @@ argsOf σ i with lookupDef σ i
 ... | ok d   = argPositions 0 (Def.dtype d)
 ... | fail _ = []
 
-interℕ : List ℕ → List ℕ → List ℕ
-interℕ [] _ = []
-interℕ (x ∷ xs) ys = if elemℕ x ys then x ∷ interℕ xs ys else interℕ xs ys
+-- Every choice of one element from each list, the first list's choice
+-- first.
+choices : List (List ℕ) → List (List ℕ)
+choices []         = [] ∷ []
+choices (xs ∷ xss) = concatMapℕ xs
+  where
+    rest = choices xss
+    concatMapℕ : List ℕ → List (List ℕ)
+    concatMapℕ []       = []
+    concatMapℕ (x ∷ ys) = List.map (x ∷_) rest List.++ concatMapℕ ys
 
-sharedArgs : Sig → List ℕ → List ℕ
-sharedArgs _ []            = []
-sharedArgs σ (i ∷ [])      = argsOf σ i
-sharedArgs σ (i ∷ j ∷ js)  = interℕ (argsOf σ i) (sharedArgs σ (j ∷ js))
+-- The candidate assignments of the block: a non-erased position for
+-- each member, in block order. Empty when a member has none.
+sharedArgs : Sig → List ℕ → List (List ℕ)
+sharedArgs _ []  = []
+sharedArgs σ blk = choices (List.map (argsOf σ) blk)
 
--- Checking definition i, descending on argument position p, with every
--- mutually reachable run/evid definition counted as a self-call.
-defRec : Sig → ℕ → ℕ → RecSt 0
-defRec σ i p = recst (just i) p (just p) [] [] false (component σ i)
+-- Every member at position 0, for a definition with no candidates.
+zeroPos : Sig → ℕ → List ℕ
+zeroPos σ i = List.map (λ _ → 0) (component σ i)
 
-allOk : ℕ → Sig → List ℕ → ℕ → Bool
+-- Checking definition i under the assignment ps, with every mutually
+-- reachable run/evid definition counted as a self-call.
+defRec : Sig → ℕ → List ℕ → RecSt 0
+defRec σ i ps = recst (just i) ps (posOf (component σ i) ps i) [] [] false (component σ i)
+
+allOk : ℕ → Sig → List ℕ → List ℕ → Bool
 allOk _ _ [] _ = true
-allOk k σ (i ∷ is) p with lookupDef σ i
+allOk k σ (i ∷ is) ps with lookupDef σ i
 ... | fail _ = false
-... | ok d with check k σ (defRec σ i p) [] (Def.dmode d) (Def.dbody d) (Def.dtype d)
-... | ok _   = allOk k σ is p
+... | ok d with check k σ (defRec σ i ps) [] (Def.dmode d) (Def.dbody d) (Def.dtype d)
+... | ok _   = allOk k σ is ps
 ... | fail _ = false
 
-findPos : ℕ → Sig → List ℕ → List ℕ → Maybe ℕ
+findPos : ℕ → Sig → List ℕ → List (List ℕ) → Maybe (List ℕ)
 findPos _ _ _ []       = nothing
-findPos k σ blk (p ∷ ps) =
-  if allOk k σ blk p then just p else findPos k σ blk ps
+findPos k σ blk (ps ∷ pss) =
+  if allOk k σ blk ps then just ps else findPos k σ blk pss
 
 -- Two or more members. A single definition keeps its own candidates.
 mutual? : List ℕ → Bool
 mutual? (_ ∷ _ ∷ _) = true
 mutual? _            = false
 
--- The position the whole block descends on, as a singleton, when one
--- shared index works for every member. A block of two or more members
--- with no such index is empty here: handing back the candidates would
--- let each member pass on its own index. A single member keeps the
+-- The assignment the whole block descends on, as a singleton, when one
+-- works for every member. A block of two or more members with none is
+-- empty here: handing back the candidates would let each member pass
+-- under an assignment the others fail. A single member keeps the
 -- candidates, so the first failure is the one reported. Spec keeps its
 -- own positions: descent is not checked there.
-pickPos : ℕ → Sig → ℕ → Def → List ℕ
+pickPos : ℕ → Sig → ℕ → Def → List (List ℕ)
 pickPos k σ i d =
   if recMode (Def.dmode d)
   then choose (component σ i) (sharedArgs σ (component σ i))
-  else argPositions 0 (Def.dtype d)
+  else List.map (_∷ []) (argPositions 0 (Def.dtype d))
   where
-    choose : List ℕ → List ℕ → List ℕ
-    choose blk ps with findPos k σ blk ps
-    ... | just p  = p ∷ []
-    ... | nothing = if mutual? blk then [] else ps
+    choose : List ℕ → List (List ℕ) → List (List ℕ)
+    choose blk pss with findPos k σ blk pss
+    ... | just ps = ps ∷ []
+    ... | nothing = if mutual? blk then [] else pss
 
--- The body is checked descending on the first shared non-erased
--- argument that works for the whole block. A single definition keeps
--- its later candidates, and the first failure is the one reported. A
--- block of two or more with no such argument is refused. A definition
--- with no self-call passes the first attempt. The position only affects
--- the descent check, so a type error is the same for every position.
-checkAt : ℕ → Sig → ℕ → Def → ℕ → Result (UseVec 0)
-checkAt k σ i d p = check k σ (defRec σ i p) [] (Def.dmode d) (Def.dbody d) (Def.dtype d)
+-- The body is checked under the first assignment that works for the
+-- whole block. A single definition keeps its later candidates, and the
+-- first failure is the one reported. A block of two or more with no
+-- such assignment is refused. A definition with no self-call passes the
+-- first attempt. The assignment only affects the descent check, so a
+-- type error is the same for every one.
+checkAt : ℕ → Sig → ℕ → Def → List ℕ → Result (UseVec 0)
+checkAt k σ i d ps = check k σ (defRec σ i ps) [] (Def.dmode d) (Def.dbody d) (Def.dtype d)
 
-retryBody : ℕ → Sig → ℕ → Def → String → List ℕ → Result (UseVec 0)
-retryBody k σ i d msg []       = fail msg
-retryBody k σ i d msg (p ∷ ps) =
-  case checkAt k σ i d p of λ where
+retryBody : ℕ → Sig → ℕ → Def → String → List (List ℕ) → Result (UseVec 0)
+retryBody k σ i d msg []         = fail msg
+retryBody k σ i d msg (ps ∷ pss) =
+  case checkAt k σ i d ps of λ where
     (ok u)   → ok u
-    (fail _) → retryBody k σ i d msg ps
+    (fail _) → retryBody k σ i d msg pss
 
--- No shared index works for a block of two or more. The first candidate
+-- No assignment works for a block of two or more. The first candidate
 -- is checked so its error is the one reported. A success there is still
--- noDescent: that member descended on its own index, not on one index
--- for the whole block.
-refuseShared : ℕ → Sig → ℕ → Def → List ℕ → Result (UseVec 0)
+-- noDescent: that member passed under an assignment another member
+-- fails.
+refuseShared : ℕ → Sig → ℕ → Def → List (List ℕ) → Result (UseVec 0)
 refuseShared _ _ _ _ [] = fail noDescent
-refuseShared k σ i d (p ∷ _) =
-  case checkAt k σ i d p of λ where
+refuseShared k σ i d (ps ∷ _) =
+  case checkAt k σ i d ps of λ where
     (fail msg) → fail msg
     (ok _)     → fail noDescent
 
-checkBodyAt : ℕ → Sig → ℕ → Def → List ℕ → Result (UseVec 0)
+checkBodyAt : ℕ → Sig → ℕ → Def → List (List ℕ) → Result (UseVec 0)
 checkBodyAt k σ i d [] with sharedArgs σ (component σ i)
-... | [] = checkAt k σ i d 0
-... | ps@(_ ∷ _) =
+... | [] = checkAt k σ i d (zeroPos σ i)
+... | pss@(_ ∷ _) =
   if recMode (Def.dmode d) ∧ mutual? (component σ i)
-  then refuseShared k σ i d ps
-  else checkAt k σ i d 0
+  then refuseShared k σ i d pss
+  else checkAt k σ i d (zeroPos σ i)
 checkBodyAt k σ i d (p ∷ ps) =
   case checkAt k σ i d p of λ where
     (ok u)     → ok u

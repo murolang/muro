@@ -235,6 +235,50 @@ defmodule Muro.CheckTest do
     assert msg =~ "no body: cannot convert"
   end
 
+  test "a mutual block descends per member, and keeps the argument only into an earlier member" do
+    finder = """
+    def best-trace : run Π (+ s : Nat) → Π (+ k : Nat) → Nat :=
+      λ (+ s : Nat) → λ (+ k : Nat) →
+        match k motive (λ _ → Nat)
+          | 0 => s
+          | suc j => trace-action s (suc 0) j
+
+    def trace-action : run Π (+ s : Nat) → Π (a : Nat) → Π (+ k : Nat) → Nat :=
+      λ (+ s : Nat) → λ (a : Nat) → λ (+ k : Nat) → best-trace (suc s) k
+    """
+
+    three =
+      "def three : evidence {best-trace 0 (suc (suc (suc 0))) ≡ suc (suc (suc 0)) : Nat} := refl\n"
+
+    assert {:ok, book} = Parser.parse(finder <> three)
+    assert Check.check_sig(book) == :ok
+
+    [best, trace] = String.split(finder, "\n\n")
+    assert {:ok, swapped} = Parser.parse(trace <> "\n" <> best)
+    assert {:error, msg} = Check.check_sig(swapped)
+    assert msg =~ "trace-action body: recursive call does not descend"
+
+    parity = """
+    def even : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => suc 0 | suc p => odd 0 p
+    def odd : run Π (b : Nat) → Π (n : Nat) → Nat :=
+      λ (b : Nat) → λ (n : Nat) → match n motive (λ _ → Nat) | 0 => b | suc p => even p
+    """
+
+    assert {:ok, book} = Parser.parse(parity)
+    assert Check.check_sig(book) == :ok
+
+    for src <- [
+          "def f : evidence Π (n : Nat) → Empty := λ (n : Nat) → g n\n" <>
+            "def g : evidence Π (n : Nat) → Empty := λ (n : Nat) → f n\n",
+          "def f : evidence Π (n : Nat) → Empty := λ (n : Nat) → f n\n"
+        ] do
+      assert {:ok, book} = Parser.parse(src)
+      assert {:error, msg} = Check.check_sig(book)
+      assert msg =~ "f body: recursive call does not descend on a smaller argument"
+    end
+  end
+
   test "a definition naming a type is that type in a run type" do
     src = """
     def R : spec Type := Nat

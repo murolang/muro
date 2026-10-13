@@ -154,7 +154,7 @@ Two data types are both named `Foo`. `foo` builds the first at `0` and `bar` bui
 
 ### bad_shared.muro
 
-`ping` descends on its first argument and `pong` on its second. No index works for both, so the block is refused. `even_odd.muro` is the mutual recursion that checks.
+`ping` matches on its first argument and passes `suc(p)` as `pong`'s second; `pong` matches on its second and passes `suc(q)` as `ping`'s first. Under every choice of positions some call passes a `suc`, not a smaller variable or the argument itself, so the block is refused. `even_odd.muro` is the mutual recursion that checks.
 
 ### bad_second_field.muro
 

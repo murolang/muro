@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.21
+
+Each member of a mutual block descends on an argument of its own, and a call may pass the caller's argument unchanged to a member defined earlier. A block shared one argument position, and every call in it passed a smaller variable there. CSHRL's Finder did not fit: `best-trace s (suc k)` calls `trace-action s a k`, and `trace-action s a k` calls `best-trace s′ k` at the same `k`, with `k` second in one and third in the other. Now every call passes, at the callee's position, a variable smaller than the caller's argument or, into an earlier definition, that argument itself, so (size, index) decreases at every call. A self-call still needs a smaller argument, and two members that pass the argument unchanged to each other are still refused. Every block accepted before is accepted now.
+
+### Checker
+
+- `Check.RecSt`: `poss`, a position for each member of `block`, in place of `pos`; `isArgVar`, `posOf`, `earlier`; `checkRecGo` reads the callee's position. `sharedArgs` is every assignment of non-erased positions (`choices`), and `defRec`, `checkAt`, `retryBody`, `refuseShared`, `pickPos`, `checkBodyAt` take assignments; `zeroPos` in place of index 0. `Soundness.checkBodyAt-sound` takes `zeroPos`; nothing else in the proofs reads the recursion state. Then `Muro.Check` (`poss`, `order`, `arg_var?`, `earlier?`, `choices`).
+
+### Manual
+
+- Terms: descent in a mutual block. Limits, Extending: the rule and what is argued, not proved. Examples: why `bad_shared.muro` is refused.
+
+### Package
+
+- Version 0.16.21.
+
 ## 0.16.20
 
 A file can declare `param` entries, which a file that imports it supplies. `param step : run Π (+ s : State) → State` is a name with a tag and a type; the importing book supplies it with a `def` or `data` of the same name and tag, and the supplying type is checked against the param's. Inside the library the param is the supplied definition, so `+ s : State` is copyable when the supplied `State` is, a run param is run code that emits, and a call to an evidence param discards its arguments' uses. A library for every environment no longer passes the environment as arguments to each definition, where a spec argument could not reach evidence and an abstract type could not be `+`. A file with an unsupplied param is checked where it is imported, with its errors at its own path and line; checked alone it names each missing param.

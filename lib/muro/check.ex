@@ -77,17 +77,21 @@ defmodule Muro.Check do
   defp pred_qty(_gamma, _e), do: :affine
 
   # -- rec state -------------------------------------------------------------
-  # A definition descends on one argument position `pos`, the same for every
-  # self-call: the variable bound by the leading λ at that position is
-  # rec_ok; a field of a match on a rec_ok or smaller variable is smaller
-  # (structurally below argument pos). A self-call must be the head of a
-  # maximal application spine whose argument at pos is a smaller variable.
-  # check_def tries each non-erased position (Agda: RecSt, checkBody).
+  # Each member of a recursive block descends on an argument position of
+  # its own (`poss`, name to position). The variable bound by the leading
+  # λ at the position of the definition being checked is rec_ok; a field
+  # of a match on a rec_ok or smaller variable is smaller (structurally
+  # below that argument). A call to a member must be the head of a maximal
+  # application spine whose argument at the callee's position is a smaller
+  # variable, or the rec_ok argument itself when the callee comes earlier
+  # in the book (`order`). check_def tries each assignment of non-erased
+  # positions (Agda: RecSt, checkBody).
 
   defp empty_rec,
     do: %{
       self: nil,
-      pos: 0,
+      poss: %{},
+      order: %{},
       next_arg: nil,
       smaller: [],
       rec_ok: [],
@@ -96,11 +100,12 @@ defmodule Muro.Check do
       block: MapSet.new()
     }
 
-  defp def_rec(name, pos, block) do
+  defp def_rec(name, poss, block, order) do
     %{
       self: name,
-      pos: pos,
-      next_arg: pos,
+      poss: poss,
+      order: order,
+      next_arg: Map.get(poss, name),
       smaller: [],
       rec_ok: [],
       names: [],
@@ -155,6 +160,17 @@ defmodule Muro.Check do
 
   defp smaller_var?(rs, {:var, x}), do: at(rs.smaller, x)
   defp smaller_var?(_, _), do: false
+
+  # The argument the definition being checked descends on, unchanged.
+  defp arg_var?(rs, {:var, x}), do: at(rs.rec_ok, x) and not at(rs.smaller, x)
+  defp arg_var?(_, _), do: false
+
+  defp earlier?(rs, name) do
+    case {Map.fetch(rs.order, name), Map.fetch(rs.order, rs.self)} do
+      {{:ok, i}, {:ok, s}} -> i < s
+      _ -> false
+    end
+  end
 
   # -- uses ------------------------------------------------------------------
 
@@ -253,9 +269,10 @@ defmodule Muro.Check do
 
   @no_descent "recursive call does not descend on a smaller argument"
 
-  # A maximal application spine headed by the definition being checked (run
-  # and evidence; spec is not checked): the argument at pos must be a
-  # smaller variable. A shorter spine has no such argument. head? is
+  # A maximal application spine headed by a member of the block (run and
+  # evidence; spec is not checked): the argument at the callee's position
+  # must be a smaller variable, or the descended-on argument itself for a
+  # callee earlier in the book. A shorter spine has no such argument. head? is
   # infer's: an inner application (the head of a larger spine) is not the
   # maximal spine and is not checked (Agda: checkRec).
   defp check_rec(:spec, _head?, _rs, _t), do: :ok
@@ -266,10 +283,11 @@ defmodule Muro.Check do
     case apps(t) do
       {{:def, name}, args} ->
         if in_block?(rs, name) do
-          case Enum.at(args, rs.pos) do
-            nil -> {:error, @no_descent}
-            a -> if smaller_var?(rs, a), do: :ok, else: {:error, @no_descent}
-          end
+          a = Enum.at(args, Map.get(rs.poss, name, length(args)))
+
+          if a != nil and (smaller_var?(rs, a) or (arg_var?(rs, a) and earlier?(rs, name))),
+            do: :ok,
+            else: {:error, @no_descent}
         else
           :ok
         end
@@ -1854,28 +1872,38 @@ defmodule Muro.Check do
     |> MapSet.new()
   end
 
+  # The candidate assignments of the block: a non-erased position for each
+  # member, members in book order, the first member's choice first. Empty
+  # when a member has none (Agda: sharedArgs, choices).
   defp shared_positions(book, block) do
     members = Enum.filter(book, &(rec_mode?(&1[:mode]) and MapSet.member?(block, &1.name)))
 
     case members do
-      [] ->
-        []
-
-      [d | ds] ->
-        Enum.reduce(ds, MapSet.new(arg_positions(d.type, 0)), fn member, acc ->
-          MapSet.intersection(acc, MapSet.new(arg_positions(member.type, 0)))
-        end)
-        |> MapSet.to_list()
-        |> Enum.sort()
+      [] -> []
+      _ -> members |> Enum.map(&{&1.name, arg_positions(&1.type, 0)}) |> choices()
     end
   end
 
-  defp all_ok?(k, book, block, p) do
+  defp choices([]), do: [%{}]
+
+  defp choices([{name, ps} | rest]) do
+    tails = choices(rest)
+    for p <- ps, t <- tails, do: Map.put(t, name, p)
+  end
+
+  defp book_order(book, block) do
+    book
+    |> Enum.with_index()
+    |> Enum.filter(fn {d, _} -> MapSet.member?(block, d[:name]) end)
+    |> Map.new(fn {d, i} -> {d.name, i} end)
+  end
+
+  defp all_ok?(k, book, block, order, poss) do
     Enum.all?(book, fn d ->
       if rec_mode?(d[:mode]) and MapSet.member?(block, d.name) do
         match?(
           {:ok, _},
-          check(k, book, def_rec(d.name, p, block), [], d.mode, d.body, d.type)
+          check(k, book, def_rec(d.name, poss, block, order), [], d.mode, d.body, d.type)
         )
       else
         true
@@ -1883,60 +1911,65 @@ defmodule Muro.Check do
     end)
   end
 
-  defp find_pos(_k, _book, _block, []), do: nil
+  defp find_pos(_k, _book, _block, _order, []), do: nil
 
-  defp find_pos(k, book, block, [p | ps]) do
-    if all_ok?(k, book, block, p), do: p, else: find_pos(k, book, block, ps)
+  defp find_pos(k, book, block, order, [poss | rest]) do
+    if all_ok?(k, book, block, order, poss),
+      do: poss,
+      else: find_pos(k, book, block, order, rest)
   end
 
   defp mutual_block?(block), do: MapSet.size(block) > 1
 
-  defp choose_positions(k, book, block, ps) do
-    case find_pos(k, book, block, ps) do
-      nil -> if mutual_block?(block), do: [], else: ps
-      p -> [p]
+  defp choose_positions(k, book, block, order, pss) do
+    case find_pos(k, book, block, order, pss) do
+      nil -> if mutual_block?(block), do: [], else: pss
+      poss -> [poss]
     end
   end
 
-  # No shared index works for a block of two or more. The first candidate
-  # is checked so its error is the one reported. A success there is still
-  # an error: that member descended on its own index, not on one index for
-  # the whole block (Agda: refuseShared).
-  defp refuse_shared(at, [p | _]) do
-    case at.(p) do
+  # No assignment works for a block of two or more. The first candidate is
+  # checked so its error is the one reported. A success there is still an
+  # error: that member passed under an assignment another member fails
+  # (Agda: refuseShared).
+  defp refuse_shared(at, [poss | _]) do
+    case at.(poss) do
       {:error, msg} -> {:error, msg}
       {:ok, _} -> {:error, @no_descent}
     end
   end
 
-  # The body is checked descending on the first shared non-erased argument
-  # that works for the whole block. A single definition keeps its later
-  # candidates, and the first failure is the one reported. A block of two
-  # or more with no such argument is refused. A definition with no
-  # self-call passes the first attempt. The position only affects the
-  # descent check, so a type error is the same for every position
-  # (Agda: checkBody). Spec keeps its own positions.
+  # The body is checked under the first assignment that works for the
+  # whole block. A single definition keeps its later candidates, and the
+  # first failure is the one reported. A block of two or more with no such
+  # assignment is refused. A definition with no self-call passes the first
+  # attempt. The assignment only affects the descent check, so a type
+  # error is the same for every one (Agda: checkBody). Spec keeps its own
+  # positions.
   defp check_body(k, book, %{name: name, mode: mode, type: ty, body: body}) do
     block = if(rec_mode?(mode), do: component(book, name), else: MapSet.new([name]))
+    order = book_order(book, block)
 
     shared =
-      if rec_mode?(mode), do: shared_positions(book, block), else: arg_positions(ty, 0)
+      if rec_mode?(mode),
+        do: shared_positions(book, block),
+        else: Enum.map(arg_positions(ty, 0), &%{name => &1})
 
     positions =
       if rec_mode?(mode) do
-        choose_positions(k, book, block, shared)
+        choose_positions(k, book, block, order, shared)
       else
         shared
       end
 
-    at = fn p -> check(k, book, def_rec(name, p, block), [], mode, body, ty) end
+    at = fn poss -> check(k, book, def_rec(name, poss, block, order), [], mode, body, ty) end
 
     cond do
       rec_mode?(mode) and mutual_block?(block) and shared != [] and positions == [] ->
         refuse_shared(at, shared)
 
       positions == [] ->
-        at.(0)
+        at.(Map.new(block, &{&1, 0}))
 
       true ->
         [p | ps] = positions
