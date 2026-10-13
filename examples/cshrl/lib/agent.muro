@@ -1,0 +1,20 @@
+-- agent.muro — an agent in a CSHRL environment. At each state it asks
+-- its policy for an action, takes it, collects the reward, and goes on
+-- from the state it reaches. episode-with policy s is that run from s, as
+-- a stream of actions and rewards.
+import "finder.muro"
+
+def act : run Π (+ s : State) → Π (+ a : Action) → Action × Reward :=
+  λ (+ s : State) → λ (+ a : Action) → (a, snd (step s a))
+
+def episode-with : run Π (+ policy : State → Action) → Π (s : State) → Stream (Action × Reward) :=
+  λ (+ policy : State → Action) → λ (s : State) →
+    unfold s (λ (+ x : State) → (act x (policy x), fst (step x (policy x))))
+
+-- Planning with the Finder at the horizon.
+def episode : run Π (s : State) → Stream (Action × Reward) :=
+  λ (s : State) → episode-with (λ (x : State) → find-policy x horizon) s
+
+-- Planning with the successor Finder at the horizon.
+def successor-episode : run Π (s : State) → Stream (Action × Reward) :=
+  λ (s : State) → episode-with (λ (x : State) → find-successor-policy x horizon) s

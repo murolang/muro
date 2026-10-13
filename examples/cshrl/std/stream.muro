@@ -1,0 +1,69 @@
+-- stream.muro — streams, their tabulation, and dominance.
+--
+-- Dom R le x y is the coinductive order on streams over R: the head of x
+-- is below the head of y under le, and Dom holds again at the tails. It
+-- is a declared ν family, so a proof is an unfold (the head obligation
+-- and a proof at the tails) and uncons reads the pair back.
+ν Stream (A : Type) : Type where
+  uncons : Stream A → A × Stream A
+
+ν Dom (R : Type) (le : R → R → Type) (x : Stream R) (y : Stream R) : Type where
+  uncons : Dom R le x y → le (head x) (head y) × Dom R le (tail x) (tail y)
+
+-- f k, f (k + 1), f (k + 2), …
+def tabulate : run Π (- R : Type) → Π (+ f : Nat → R) → Π (k : Nat) → Stream R :=
+  λ (- R : Type) → λ (+ f : Nat → R) → λ (k : Nat) →
+    unfold k (λ (+ j : Nat) → (f j, suc j))
+
+-- The element at position n.
+def at : spec Π (R : Type) → Π (n : Nat) → Π (s : Stream R) → R :=
+  λ (R : Type) → λ (n : Nat) → λ (s : Stream R) →
+    match n motive (λ _ → R)
+      | 0 => head s
+      | suc m => at R m (tail s)
+
+def dom-refl : evidence Π (- R : Type) → Π (- le : R → R → Type) →
+                        Π (+ le-refl : Π (r : R) → le r r) → Π (s : Stream R) → Dom R le s s :=
+  λ (- R : Type) → λ (- le : R → R → Type) →
+  λ (+ le-refl : Π (r : R) → le r r) → λ (s : Stream R) →
+    unfold tt (λ (_ : Unit) → (le-refl (head s), dom-refl R le le-refl (tail s)))
+
+-- Pointwise below at every position from k gives Dom of the tabulations.
+def tabulate-dom : evidence Π (- R : Type) → Π (- le : R → R → Type) →
+                            Π (- f : Nat → R) → Π (- g : Nat → R) →
+                            Π (+ pw : Π (n : Nat) → le (f n) (g n)) → Π (k : Nat) →
+                            Dom R le (tabulate R f k) (tabulate R g k) :=
+  λ (- R : Type) → λ (- le : R → R → Type) →
+  λ (- f : Nat → R) → λ (- g : Nat → R) →
+  λ (+ pw : Π (n : Nat) → le (f n) (g n)) → λ (k : Nat) →
+    unfold tt (λ (_ : Unit) → (pw k, tabulate-dom R le f g pw (suc k)))
+
+-- Dom gives the order at every position.
+def dom-at : evidence Π (- R : Type) → Π (- le : R → R → Type) → Π (n : Nat) →
+                      Π (- x : Stream R) → Π (- y : Stream R) → Π (d : Dom R le x y) →
+                      le (at R n x) (at R n y) :=
+  λ (- R : Type) → λ (- le : R → R → Type) → λ (n : Nat) →
+    match n motive (λ (k : Nat) → Π (- x : Stream R) → Π (- y : Stream R) → Π (d : Dom R le x y) → le (at R k x) (at R k y))
+      | 0 => λ (- x : Stream R) → λ (- y : Stream R) → λ (d : Dom R le x y) → head d
+      | suc m => λ (- x : Stream R) → λ (- y : Stream R) → λ (d : Dom R le x y) →
+          dom-at R le m (tail x) (tail y) (tail d)
+
+-- Dom of two tabulations from k + 1 is Dom of the shifted functions from k.
+def dom-shift : evidence Π (- R : Type) → Π (- le : R → R → Type) →
+                         Π (- f : Nat → R) → Π (- g : Nat → R) → Π (- k : Nat) →
+                         Π (d : Dom R le (tabulate R f (suc k)) (tabulate R g (suc k))) →
+                         Dom R le (tabulate R (λ (j : Nat) → f (suc j)) k) (tabulate R (λ (j : Nat) → g (suc j)) k) :=
+  λ (- R : Type) → λ (- le : R → R → Type) →
+  λ (- f : Nat → R) → λ (- g : Nat → R) → λ (- k : Nat) →
+  λ (d : Dom R le (tabulate R f (suc k)) (tabulate R g (suc k))) →
+    unfold tt (λ (_ : Unit) → (head d, dom-shift R le f g (suc k) (tail d)))
+
+-- The converse shift.
+def dom-unshift : evidence Π (- R : Type) → Π (- le : R → R → Type) →
+                           Π (- f : Nat → R) → Π (- g : Nat → R) → Π (- k : Nat) →
+                           Π (d : Dom R le (tabulate R (λ (j : Nat) → f (suc j)) k) (tabulate R (λ (j : Nat) → g (suc j)) k)) →
+                           Dom R le (tabulate R f (suc k)) (tabulate R g (suc k)) :=
+  λ (- R : Type) → λ (- le : R → R → Type) →
+  λ (- f : Nat → R) → λ (- g : Nat → R) → λ (- k : Nat) →
+  λ (d : Dom R le (tabulate R (λ (j : Nat) → f (suc j)) k) (tabulate R (λ (j : Nat) → g (suc j)) k)) →
+    unfold tt (λ (_ : Unit) → (head d, dom-unshift R le f g (suc k) (tail d)))

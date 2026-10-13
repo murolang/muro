@@ -1,0 +1,30 @@
+-- list.muro — List, map, and foldr, written once for every element type.
+-- The function argument is +: map applies it to every element.
+data List (A : Type) : Type where
+  nil  : List A
+  cons : A → List A → List A
+
+def map : run Π (- A : Type) → Π (- B : Type) → Π (+ f : A → B) → Π (xs : List A) → List B :=
+  λ (- A : Type) → λ (- B : Type) → λ (+ f : A → B) → λ (xs : List A) →
+    match xs motive (λ _ → List B)
+      | nil => nil
+      | cons x rest => cons (f x) (map A B f rest)
+
+def foldr : run Π (- A : Type) → Π (- B : Type) → Π (+ f : A → B → B) → Π (z : B) → Π (xs : List A) → B :=
+  λ (- A : Type) → λ (- B : Type) → λ (+ f : A → B → B) → λ (z : B) → λ (xs : List A) →
+    match xs motive (λ _ → B)
+      | nil => z
+      | cons x rest => f x (foldr A B f z rest)
+
+-- Two functions equal at every element map a list to the same list.
+def map-cong : evidence Π (- A : Type) → Π (- B : Type) → Π (- f : A → B) → Π (- g : A → B) →
+                        Π (+ eq : Π (a : A) → {f a ≡ g a : B}) → Π (xs : List A) →
+                        {map A B f xs ≡ map A B g xs : List B} :=
+  λ (- A : Type) → λ (- B : Type) → λ (- f : A → B) → λ (- g : A → B) →
+  λ (+ eq : Π (a : A) → {f a ≡ g a : B}) → λ (xs : List A) →
+    match xs motive (λ (ys : List A) → {map A B f ys ≡ map A B g ys : List B})
+      | nil => refl
+      | cons x rest =>
+          rewrite eq x motive (λ z → {cons z (map A B f rest) ≡ cons (g x) (map A B g rest) : List B}) in
+          rewrite map-cong A B f g eq rest motive (λ z → {cons (g x) z ≡ cons (g x) (map A B g rest) : List B}) in
+          refl

@@ -62,6 +62,10 @@ pages:
     slug: examples
     title: Examples
     summary: Every file in examples/ and what it is for.
+  - file: cshrl.md
+    slug: cshrl
+    title: CSHRL
+    summary: Coinductive symmetric homomorphisms for RL, as a library on params, with three environments and their agents.
   - file: for-agents.md
     slug: for-agents
     title: For agents

@@ -1,0 +1,192 @@
+-- skill_investment.muro — a chain of sacrifices.
+--
+--   novice ──train (0)──▸ apprentice ──train (0)──▸ expert ──train (0)──▸ master
+--     ⟳ work (1)            ⟳ work (2)               ⟳ work (3)            ⟳ (5)
+--
+-- A CoinductiveHomomorphism ranks train above work everywhere below
+-- master, and CoindHomo cannot rank train at or above work at novice,
+-- apprentice, or expert: work's immediate reward is larger.
+import "../std/nat.muro"
+import "../lib/successor_sum.muro"
+import "../lib/agent.muro"
+
+data State : Type where
+  novice     : State
+  apprentice : State
+  expert     : State
+  master     : State
+
+data Action : Type where
+  work  : Action
+  train : Action
+
+def Reward : spec Type := Nat
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Reward)
+      | novice => (match a motive (λ _ → State × Reward) | work => (novice, suc 0) | train => (apprentice, 0))
+      | apprentice => (match a motive (λ _ → State × Reward) | work => (apprentice, suc (suc 0)) | train => (expert, 0))
+      | expert => (match a motive (λ _ → State × Reward) | work => (expert, suc (suc (suc 0))) | train => (master, 0))
+      | master => (master, suc (suc (suc (suc (suc 0)))))
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons work (cons train nil)
+def default-action : run Action := train
+def horizon : run Nat := suc (suc (suc 0))
+def add : evidence Π (r : Reward) → Π (q : Reward) → Reward := plus
+def add-mono : evidence Π (a : Reward) → Π (b : Reward) → Π (c : Reward) → Π (d : Reward) →
+                        Π (ab : le a b) → Π (cd : le c d) → le (add a c) (add b d) := plus-mono
+
+-- Every value settles at 5.
+def solve-master : evidence Π (n : Nat) → {solve master n ≡ suc (suc (suc (suc (suc 0)))) : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → {solve master k ≡ suc (suc (suc (suc (suc 0)))) : Nat})
+      | 0 => refl
+      | suc m =>
+          rewrite solve-master m motive (λ z → {maxN z (maxN z 0) ≡ suc (suc (suc (suc (suc 0)))) : Nat}) in refl
+
+def solve-expert-suc : evidence Π (n : Nat) → {solve expert (suc n) ≡ suc (suc (suc (suc (suc 0)))) : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → {solve expert (suc k) ≡ suc (suc (suc (suc (suc 0)))) : Nat})
+      | 0 => refl
+      | suc m =>
+          rewrite solve-expert-suc m motive (λ z → {maxN z (maxN (solve master (suc m)) 0) ≡ suc (suc (suc (suc (suc 0)))) : Nat}) in
+          rewrite solve-master (suc m) motive (λ z → {maxN (suc (suc (suc (suc (suc 0))))) (maxN z 0) ≡ suc (suc (suc (suc (suc 0)))) : Nat}) in
+          refl
+
+def solve-apprentice-suc-suc : evidence Π (n : Nat) → {solve apprentice (suc (suc n)) ≡ suc (suc (suc (suc (suc 0)))) : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → {solve apprentice (suc (suc k)) ≡ suc (suc (suc (suc (suc 0)))) : Nat})
+      | 0 => refl
+      | suc m =>
+          rewrite solve-apprentice-suc-suc m motive (λ z → {maxN z (maxN (solve expert (suc (suc m))) 0) ≡ suc (suc (suc (suc (suc 0)))) : Nat}) in
+          rewrite solve-expert-suc (suc m) motive (λ z → {maxN (suc (suc (suc (suc (suc 0))))) (maxN z 0) ≡ suc (suc (suc (suc (suc 0)))) : Nat}) in
+          refl
+
+def solve-novice-suc-suc-suc : evidence Π (n : Nat) → {solve novice (suc (suc (suc n))) ≡ suc (suc (suc (suc (suc 0)))) : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → {solve novice (suc (suc (suc k))) ≡ suc (suc (suc (suc (suc 0)))) : Nat})
+      | 0 => refl
+      | suc m =>
+          rewrite solve-novice-suc-suc-suc m motive (λ z → {maxN z (maxN (solve apprentice (suc (suc (suc m)))) 0) ≡ suc (suc (suc (suc (suc 0)))) : Nat}) in
+          rewrite solve-apprentice-suc-suc (suc m) motive (λ z → {maxN (suc (suc (suc (suc (suc 0))))) (maxN z 0) ≡ suc (suc (suc (suc (suc 0)))) : Nat}) in
+          refl
+
+-- novice ≤ apprentice ≤ expert ≤ master, position by position.
+def novice-apprentice : evidence Π (n : Nat) → Le (solve novice n) (solve apprentice n) :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → Le (solve novice k) (solve apprentice k))
+      | 0 => tt
+      | suc n1 =>
+          (match n1 motive (λ (k : Nat) → Le (solve novice (suc k)) (solve apprentice (suc k)))
+            | 0 => tt
+            | suc n2 =>
+                (match n2 motive (λ (k : Nat) → Le (solve novice (suc (suc k))) (solve apprentice (suc (suc k))))
+                  | 0 => tt
+                  | suc m =>
+                      rewrite solve-novice-suc-suc-suc m motive (λ z → Le z (solve apprentice (suc (suc (suc m))))) in
+                      rewrite solve-apprentice-suc-suc (suc m) motive (λ z → Le (suc (suc (suc (suc (suc 0))))) z) in
+                      tt))
+
+def apprentice-expert : evidence Π (n : Nat) → Le (solve apprentice n) (solve expert n) :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → Le (solve apprentice k) (solve expert k))
+      | 0 => tt
+      | suc n1 =>
+          (match n1 motive (λ (k : Nat) → Le (solve apprentice (suc k)) (solve expert (suc k)))
+            | 0 => tt
+            | suc m =>
+                rewrite solve-apprentice-suc-suc m motive (λ z → Le z (solve expert (suc (suc m)))) in
+                rewrite solve-expert-suc (suc m) motive (λ z → Le (suc (suc (suc (suc (suc 0))))) z) in
+                tt)
+
+def expert-master : evidence Π (n : Nat) → Le (solve expert n) (solve master n) :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → Le (solve expert k) (solve master k))
+      | 0 => tt
+      | suc m =>
+          rewrite solve-expert-suc m motive (λ z → Le z (solve master (suc m))) in
+          rewrite solve-master (suc m) motive (λ z → Le (suc (suc (suc (suc (suc 0))))) z) in
+          tt
+
+def value-novice-apprentice : evidence Dom Reward le (value novice) (value apprentice) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve novice n) (λ (n : Nat) → solve apprentice n) novice-apprentice 0
+
+def value-apprentice-expert : evidence Dom Reward le (value apprentice) (value expert) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve apprentice n) (λ (n : Nat) → solve expert n) apprentice-expert 0
+
+def value-expert-master : evidence Dom Reward le (value expert) (value master) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve expert n) (λ (n : Nat) → solve master n) expert-master 0
+
+-- Below master, train is ranked above work and not below it.
+def below : spec Π (a : Action) → Π (b : Action) → Type :=
+  λ (a : Action) → λ (b : Action) →
+    match a motive (λ _ → Type)
+      | work => Unit
+      | train => (match b motive (λ _ → Type) | work => Empty | train => Unit)
+
+def ranking : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
+  λ (s : State) → λ (a : Action) → λ (b : Action) →
+    match s motive (λ _ → Type)
+      | novice => below a b
+      | apprentice => below a b
+      | expert => below a b
+      | master => Unit
+
+def skill-homomorphism : evidence CoinductiveHomomorphism ranking :=
+  λ (a : Action) → λ (b : Action) → λ (s : State) →
+    match s motive (λ (x : State) → Π (r : ranking x a b) → Dom Reward le (successor-value x a) (successor-value x b))
+      | novice =>
+          (match a motive (λ (y : Action) → Π (r : ranking novice y b) → Dom Reward le (successor-value novice y) (successor-value novice b))
+            | work =>
+                (match b motive (λ (z : Action) → Π (r : ranking novice work z) → Dom Reward le (value novice) (successor-value novice z))
+                  | work => λ (r : Unit) → dom-refl Reward le le-refl (value novice)
+                  | train => λ (r : Unit) → value-novice-apprentice)
+            | train =>
+                (match b motive (λ (z : Action) → Π (r : ranking novice train z) → Dom Reward le (value apprentice) (successor-value novice z))
+                  | work => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value apprentice) (value novice))
+                  | train => λ (r : Unit) → dom-refl Reward le le-refl (value apprentice)))
+      | apprentice =>
+          (match a motive (λ (y : Action) → Π (r : ranking apprentice y b) → Dom Reward le (successor-value apprentice y) (successor-value apprentice b))
+            | work =>
+                (match b motive (λ (z : Action) → Π (r : ranking apprentice work z) → Dom Reward le (value apprentice) (successor-value apprentice z))
+                  | work => λ (r : Unit) → dom-refl Reward le le-refl (value apprentice)
+                  | train => λ (r : Unit) → value-apprentice-expert)
+            | train =>
+                (match b motive (λ (z : Action) → Π (r : ranking apprentice train z) → Dom Reward le (value expert) (successor-value apprentice z))
+                  | work => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value expert) (value apprentice))
+                  | train => λ (r : Unit) → dom-refl Reward le le-refl (value expert)))
+      | expert =>
+          (match a motive (λ (y : Action) → Π (r : ranking expert y b) → Dom Reward le (successor-value expert y) (successor-value expert b))
+            | work =>
+                (match b motive (λ (z : Action) → Π (r : ranking expert work z) → Dom Reward le (value expert) (successor-value expert z))
+                  | work => λ (r : Unit) → dom-refl Reward le le-refl (value expert)
+                  | train => λ (r : Unit) → value-expert-master)
+            | train =>
+                (match b motive (λ (z : Action) → Π (r : ranking expert train z) → Dom Reward le (value master) (successor-value expert z))
+                  | work => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value master) (value expert))
+                  | train => λ (r : Unit) → dom-refl Reward le le-refl (value master)))
+      | master => λ (r : Unit) → dom-refl Reward le le-refl (value master)
+
+-- Ranking work at or below train would need work's reward at or below 0.
+def coindHomo-novice-impossible : evidence Π (- rank : State → Action → Action → Type) →
+    Π (h : CoindHomo rank) → Π (r : rank novice work train) → Empty :=
+  λ (- rank : State → Action → Action → Type) → λ (h : CoindHomo rank) → λ (r : rank novice work train) →
+    head (h work train novice r)
+
+def coindHomo-apprentice-impossible : evidence Π (- rank : State → Action → Action → Type) →
+    Π (h : CoindHomo rank) → Π (r : rank apprentice work train) → Empty :=
+  λ (- rank : State → Action → Action → Type) → λ (h : CoindHomo rank) → λ (r : rank apprentice work train) →
+    head (h work train apprentice r)
+
+def coindHomo-expert-impossible : evidence Π (- rank : State → Action → Action → Type) →
+    Π (h : CoindHomo rank) → Π (r : rank expert work train) → Empty :=
+  λ (- rank : State → Action → Action → Type) → λ (h : CoindHomo rank) → λ (r : rank expert work train) →
+    head (h work train expert r)
+
+-- The Finder works at novice; the successor Finder trains.
+def finder-works : evidence {find-policy novice horizon ≡ work : Action} := refl
+def successor-finder-trains : evidence {find-successor-policy novice horizon ≡ train : Action} := refl

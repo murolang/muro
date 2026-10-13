@@ -1,0 +1,125 @@
+-- finder.muro — CSHRL's Finder for finite deterministic environments.
+--
+-- Trace k from s is the best list of the next k rewards, compared
+-- lexicographically. find-ranking orders the actions at s by the trace
+-- each starts, find-policy takes the first, and ranks is the ranking as
+-- a proposition: the order on the traces at the horizon.
+import "core.muro"
+import "../std/bool.muro"
+
+param leb : run Π (r : Reward) → Π (q : Reward) → Bool
+param default-action : run Action
+param horizon : run Nat
+
+def Trace : spec Type := List Reward
+
+-- r1 ≤ r2, and when r2 ≤ r1 as well, the rest decides.
+def lex-step : run Π (+ r1 : Reward) → Π (+ r2 : Reward) → Π (rest : Unit → Bool) → Bool :=
+  λ (+ r1 : Reward) → λ (+ r2 : Reward) → λ (rest : Unit → Bool) →
+    match leb r1 r2 motive (λ _ → Bool)
+      | true => (match leb r2 r1 motive (λ _ → Bool) | true => rest tt | false => true)
+      | false => false
+
+-- t1 ≤ t2: the empty trace is below every trace.
+def trace-le : run Π (t1 : Trace) → Π (t2 : Trace) → Bool :=
+  λ (t1 : Trace) → λ (t2 : Trace) →
+    match t1 motive (λ _ → Bool)
+      | nil => true
+      | cons r1 u1 =>
+          (match t2 motive (λ _ → Bool)
+            | nil => false
+            | cons r2 u2 => lex-step r1 r2 (λ (_ : Unit) → trace-le u1 u2))
+
+-- The later of two traces when the first is below it.
+def trace-max : run Π (+ current : Trace) → Π (+ t : Trace) → Trace :=
+  λ (+ current : Trace) → λ (+ t : Trace) →
+    match trace-le current t motive (λ _ → Trace) | true => t | false => current
+
+def max-helper : run Π (+ current : Trace) → Π (ts : List Trace) → Trace :=
+  λ (+ current : Trace) → λ (ts : List Trace) →
+    match ts motive (λ _ → Trace)
+      | nil => current
+      | cons t rest => max-helper (trace-max current t) rest
+
+def max-trace : run Π (ts : List Trace) → Trace :=
+  λ (ts : List Trace) →
+    match ts motive (λ _ → Trace) | nil => nil | cons t rest => max-helper t rest
+
+-- best-trace descends on k; trace-action passes its k unchanged to
+-- best-trace, which comes first.
+def best-trace : run Π (+ s : State) → Π (+ k : Nat) → Trace :=
+  λ (+ s : State) → λ (+ k : Nat) →
+    match k motive (λ _ → Trace)
+      | 0 => nil
+      | suc j => max-trace (map Action Trace (λ (a : Action) → trace-action s a j) all-actions)
+
+def trace-action : run Π (+ s : State) → Π (+ a : Action) → Π (+ k : Nat) → Trace :=
+  λ (+ s : State) → λ (+ a : Action) → λ (+ k : Nat) →
+    cons (snd (step s a)) (best-trace (fst (step s a)) k)
+
+-- Insertion by trace, best first. insert descends on xs; insert-cons
+-- passes its ys unchanged to insert, which comes first.
+def insert : run Π (+ x : Action × Trace) → Π (xs : List (Action × Trace)) → List (Action × Trace) :=
+  λ (+ x : Action × Trace) → λ (xs : List (Action × Trace)) →
+    match xs motive (λ _ → List (Action × Trace))
+      | nil => cons x nil
+      | cons y ys => insert-cons x y ys
+
+def insert-cons : run Π (+ x : Action × Trace) → Π (+ y : Action × Trace) → Π (+ ys : List (Action × Trace)) →
+                      List (Action × Trace) :=
+  λ (+ x : Action × Trace) → λ (+ y : Action × Trace) → λ (+ ys : List (Action × Trace)) →
+    match trace-le (snd y) (snd x) motive (λ _ → List (Action × Trace))
+      | true => cons x (cons y ys)
+      | false => cons y (insert x ys)
+
+def sort-scored : run Π (xs : List (Action × Trace)) → List (Action × Trace) :=
+  λ (xs : List (Action × Trace)) →
+    match xs motive (λ _ → List (Action × Trace))
+      | nil => nil
+      | cons x rest => insert x (sort-scored rest)
+
+def scored : run Π (+ s : State) → Π (+ k : Nat) → Π (+ a : Action) → Action × Trace :=
+  λ (+ s : State) → λ (+ k : Nat) → λ (+ a : Action) → (a, trace-action s a k)
+
+def find-ranking : run Π (+ s : State) → Π (+ k : Nat) → List Action :=
+  λ (+ s : State) → λ (+ k : Nat) →
+    map (Action × Trace) Action (λ (p : Action × Trace) → fst p)
+      (sort-scored (map Action (Action × Trace) (λ (a : Action) → scored s k a) all-actions))
+
+def find-policy : run Π (+ s : State) → Π (+ k : Nat) → Action :=
+  λ (+ s : State) → λ (+ k : Nat) →
+    match find-ranking s k motive (λ _ → Action) | nil => default-action | cons a rest => a
+
+-- The adapted Finder described in the artifact's BinarySacrifice: each
+-- action is scored by the best trace from the state it leads to, without
+-- its own reward.
+def successor-scored : run Π (+ s : State) → Π (+ k : Nat) → Π (+ a : Action) → Action × Trace :=
+  λ (+ s : State) → λ (+ k : Nat) → λ (+ a : Action) → (a, best-trace (fst (step s a)) k)
+
+def find-successor-ranking : run Π (+ s : State) → Π (+ k : Nat) → List Action :=
+  λ (+ s : State) → λ (+ k : Nat) →
+    map (Action × Trace) Action (λ (p : Action × Trace) → fst p)
+      (sort-scored (map Action (Action × Trace) (λ (a : Action) → successor-scored s k a) all-actions))
+
+def find-successor-policy : run Π (+ s : State) → Π (+ k : Nat) → Action :=
+  λ (+ s : State) → λ (+ k : Nat) →
+    match find-successor-ranking s k motive (λ _ → Action) | nil => default-action | cons a rest => a
+
+-- The order on traces as a proposition.
+def trace-lex : spec Π (t1 : Trace) → Π (t2 : Trace) → Type :=
+  λ (t1 : Trace) → λ (t2 : Trace) →
+    match t1 motive (λ _ → Type)
+      | nil => Unit
+      | cons r1 u1 =>
+          (match t2 motive (λ _ → Type)
+            | nil => Empty
+            | cons r2 u2 => le r1 r2 × (le r2 r1 → trace-lex u1 u2))
+
+def ranks : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
+  λ (s : State) → λ (a : Action) → λ (b : Action) →
+    trace-lex (trace-action s a horizon) (trace-action s b horizon)
+
+-- The head of the action-value streams follows the ranking.
+def preserves-head : evidence Π (- s : State) → Π (- a : Action) → Π (- b : Action) → Π (p : ranks s a b) →
+    le (head (action-value s a)) (head (action-value s b)) :=
+  λ (- s : State) → λ (- a : Action) → λ (- b : Action) → λ (p : ranks s a b) → fst p

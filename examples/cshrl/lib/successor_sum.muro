@@ -1,0 +1,62 @@
+-- successor_sum.muro — CSHRL's SuccessorCoreWithArithmetic: under a
+-- CoinductiveHomomorphism, the return from the successor of the better
+-- action dominates at every horizon.
+--
+-- Three more params: addition on rewards, reflexivity of le, and
+-- monotonicity of addition. partial-sum is a ghost: it is evidence, so
+-- it appears in statements and is never run.
+import "successor.muro"
+
+param add : evidence Π (r : Reward) → Π (q : Reward) → Reward
+param le-refl : evidence Π (r : Reward) → le r r
+param add-mono : evidence Π (a : Reward) → Π (b : Reward) → Π (c : Reward) → Π (d : Reward) →
+                          Π (ab : le a b) → Π (cd : le c d) → le (add a c) (add b d)
+
+def PointwiseDominance : spec Π (x : Stream Reward) → Π (y : Stream Reward) → Type :=
+  λ (x : Stream Reward) → λ (y : Stream Reward) → Π (n : Nat) → le (at Reward n x) (at Reward n y)
+
+def dom-pointwise : evidence Π (- x : Stream Reward) → Π (- y : Stream Reward) →
+                             Π (d : Dom Reward le x y) → PointwiseDominance x y :=
+  λ (- x : Stream Reward) → λ (- y : Stream Reward) → λ (d : Dom Reward le x y) →
+  λ (n : Nat) → dom-at Reward le n x y d
+
+-- The sum of the first N elements, from bottom.
+def partial-sum : evidence Π (N : Nat) → Π (s : Stream Reward) → Reward :=
+  λ (N : Nat) → λ (s : Stream Reward) →
+    match N motive (λ _ → Reward)
+      | 0 => bottom
+      | suc n => add (head s) (partial-sum n (tail s))
+
+def partial-sum-mono : evidence Π (N : Nat) → Π (x : Stream Reward) → Π (y : Stream Reward) →
+    Π (+ pw : PointwiseDominance x y) → le (partial-sum N x) (partial-sum N y) :=
+  λ (N : Nat) →
+    match N motive (λ (k : Nat) → Π (x : Stream Reward) → Π (y : Stream Reward) →
+                                  Π (+ pw : PointwiseDominance x y) → le (partial-sum k x) (partial-sum k y))
+      | 0 => λ (x : Stream Reward) → λ (y : Stream Reward) → λ (+ pw : PointwiseDominance x y) → le-refl bottom
+      | suc n => λ (x : Stream Reward) → λ (y : Stream Reward) → λ (+ pw : PointwiseDominance x y) →
+          add-mono (head x) (head y) (partial-sum n (tail x)) (partial-sum n (tail y))
+            (pw 0)
+            (partial-sum-mono n (tail x) (tail y) (λ (k : Nat) → pw (suc k)))
+
+def SubsumesSuccessorReturn : spec Π (rank : State → Action → Action → Type) → Type :=
+  λ (rank : State → Action → Action → Type) →
+    Π (s : State) → Π (a : Action) → Π (b : Action) → Π (N : Nat) → Π (r : rank s a b) →
+      le (partial-sum N (successor-value s a)) (partial-sum N (successor-value s b))
+
+def subsumes-successor-return : evidence Π (- rank : State → Action → Action → Type) →
+    Π (ch : CoinductiveHomomorphism rank) → SubsumesSuccessorReturn rank :=
+  λ (- rank : State → Action → Action → Type) → λ (ch : CoinductiveHomomorphism rank) →
+  λ (s : State) → λ (a : Action) → λ (b : Action) → λ (N : Nat) → λ (r : rank s a b) →
+    partial-sum-mono N (successor-value s a) (successor-value s b)
+      (dom-pointwise (successor-value s a) (successor-value s b) (ch a b s r))
+
+def SuccessorArgmaxSubsumed : spec Π (rank : State → Action → Action → Type) → Type :=
+  λ (rank : State → Action → Action → Type) →
+    Π (s : State) → Π (b : Action) → Π (top : Π (a : Action) → rank s a b) → Π (a : Action) → Π (N : Nat) →
+      le (partial-sum N (successor-value s a)) (partial-sum N (successor-value s b))
+
+def successor-argmax-subsumed : evidence Π (- rank : State → Action → Action → Type) →
+    Π (ch : CoinductiveHomomorphism rank) → SuccessorArgmaxSubsumed rank :=
+  λ (- rank : State → Action → Action → Type) → λ (ch : CoinductiveHomomorphism rank) →
+  λ (s : State) → λ (b : Action) → λ (top : Π (a : Action) → rank s a b) → λ (a : Action) → λ (N : Nat) →
+    subsumes-successor-return rank ch s a b N (top a)

@@ -1,0 +1,66 @@
+-- optimal.muro — one agent, one step, and the return theorem.
+--
+-- From start, go reaches goal and its reward; stay waits. agent goes.
+-- returns policy s is the reward stream of following policy from s. The
+-- head is the reward taken now. The tail is returns at the state reached.
+--
+-- agent-optimal says that stream dominates the stream of every other
+-- policy, from every state. The proof is an unfold: the head is the
+-- reward now, and the tail is the same statement at both successors,
+-- the state the other policy reached and the state the agent reached.
+import "../std/nat.muro"
+import "../std/stream.muro"
+
+data State : Type where
+  start : State
+  goal  : State
+
+data Action : Type where
+  go   : Action
+  stay : Action
+
+def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Nat)
+      | start => (match a motive (λ _ → State × Nat) | go => (goal, suc 0) | stay => (start, 0))
+      | goal => (goal, suc 0)
+
+def agent : run Π (s : State) → Action := λ (_ : State) → go
+
+def returns : run Π (+ policy : State → Action) → Π (s : State) → Stream Nat :=
+  λ (+ policy : State → Action) → λ (s : State) →
+    unfold s (λ (+ x : State) → (snd (step x (policy x)), fst (step x (policy x))))
+
+-- Going earns 1 from either state.
+def reward-go : evidence Π (t : State) → {snd (step t go) ≡ suc 0 : Nat} :=
+  λ (t : State) →
+    match t motive (λ (x : State) → {snd (step x go) ≡ suc 0 : Nat})
+      | start => refl
+      | goal => refl
+
+-- Every reward this step pays is 0 or 1, so it is at most 1.
+def reward-le-one : evidence Π (s : State) → Π (+ a : Action) → Le (snd (step s a)) (suc 0) :=
+  λ (s : State) → λ (+ a : Action) →
+    match s motive (λ (x : State) → Le (snd (step x a)) (suc 0))
+      | start =>
+          (match a motive (λ (c : Action) → Le (snd (step start c)) (suc 0))
+            | go => tt
+            | stay => tt)
+      | goal =>
+          (match a motive (λ (c : Action) → Le (snd (step goal c)) (suc 0))
+            | go => tt
+            | stay => tt)
+
+-- From any state the other policy is in, and any state the agent is in.
+-- The tail is this statement at the two successors.
+def dominates : evidence Π (+ policy : State → Action) → Π (+ s : State) → Π (+ t : State) →
+    Dom Nat Le (returns policy s) (returns agent t) :=
+  λ (+ policy : State → Action) → λ (+ s : State) → λ (+ t : State) →
+    unfold tt (λ (_ : Unit) →
+      (rewrite reward-go t motive (λ z → Le (snd (step s (policy s))) z) in
+         reward-le-one s (policy s),
+       dominates policy (fst (step s (policy s))) (fst (step t (agent t)))))
+
+def agent-optimal : evidence Π (+ policy : State → Action) → Π (+ s : State) →
+    Dom Nat Le (returns policy s) (returns agent s) :=
+  λ (+ policy : State → Action) → λ (+ s : State) → dominates policy s s
