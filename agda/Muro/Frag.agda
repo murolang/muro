@@ -1,7 +1,8 @@
 ------------------------------------------------------------------------
 -- The ⊢ fragment as a predicate on terms: the constructors ⊢ has rules
--- for. ν, unfold, I64 / F32 / Tensor are outside. Closed under renaming and substitution, so under everything Check.whnf does
--- to a fragment term over a fragment signature.
+-- for. ν, unfold, and uncons are in it. I64 / F32 / Tensor are outside.
+-- Closed under renaming and substitution, so under everything Check.whnf
+-- does to a fragment term over a fragment signature.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
@@ -18,6 +19,20 @@ open import Muro.Syntax
 open import Muro.Subst
 open import Muro.Env
 open import Muro.Spine
+
+-- An unfold the step can read: the function is a λ whose body is a
+-- pair, or it is the identity and the seed is already a pair.
+data UShape {n} : Tm n → Tm n → Set where
+  us-pair : ∀ {s q A h t} → UShape s (lam q A (pair h t))
+  us-id   : ∀ {a b q A} → UShape (pair a b) (lam q A (var zero))
+  -- The step is already the pair uncons reads.
+  us-step : ∀ {s h t} → UShape s (pair h t)
+
+-- Fragment unfolds: the λ of a pair, whose uncons wraps, and the pair,
+-- whose uncons reads. The identity λ's tail is not one of these.
+data FShape {n} : Tm n → Tm n → Set where
+  fs-pair : ∀ {s q A h t} → FShape s (lam q A (pair h t))
+  fs-step : ∀ {s h t} → FShape s (pair h t)
 
 data Frag {n} : Tm n → Set
 data FragL {n} : List (Tm n) → Set
@@ -48,10 +63,42 @@ data Frag where
   f-prod  : ∀ {A B} → Frag A → Frag B → Frag (prod A B)
   f-pair  : ∀ {a b} → Frag a → Frag b → Frag (pair a b)
   f-letp  : ∀ {e t} → Frag e → Frag t → Frag (letp e t)
+  f-nu    : ∀ {F} → Frag F → Frag (nu F)
+  f-unf   : ∀ {s f} → Frag s → Frag f → FShape s f → Frag (unf s f)
+  f-ucons : ∀ {s} → Frag s → Frag (ucons s)
 
 data FragL where
   fl-[] : FragL []
   fl-∷  : ∀ {t ts} → Frag t → FragL ts → FragL (t ∷ ts)
+
+UShape-ren : ∀ {n m} (ρ : Fin n → Fin m) {s f} → UShape s f → UShape (ren ρ s) (ren ρ f)
+UShape-ren ρ us-pair = us-pair
+UShape-ren ρ us-id = us-id
+UShape-ren ρ us-step = us-step
+
+UShape-unren : ∀ {n m} (ρ : Fin n → Fin m) (s f : Tm n)
+  → UShape (ren ρ s) (ren ρ f) → UShape s f
+UShape-unren ρ _ (lam _ _ (pair _ _)) us-pair = us-pair
+UShape-unren ρ (pair _ _) (lam _ _ (var zero)) us-id = us-id
+UShape-unren ρ _ (pair _ _) us-step = us-step
+
+UShape-sub : ∀ {n k} {τ : Fin n → Tm k} {s f} → UShape s f → UShape (sub τ s) (sub τ f)
+UShape-sub us-pair = us-pair
+UShape-sub us-id = us-id
+UShape-sub us-step = us-step
+
+FShape-ren : ∀ {n m} (ρ : Fin n → Fin m) {s f} → FShape s f → FShape (ren ρ s) (ren ρ f)
+FShape-ren ρ fs-pair = fs-pair
+FShape-ren ρ fs-step = fs-step
+
+FShape-unren : ∀ {n m} (ρ : Fin n → Fin m) (s f : Tm n)
+  → FShape (ren ρ s) (ren ρ f) → FShape s f
+FShape-unren ρ _ (lam _ _ (pair _ _)) fs-pair = fs-pair
+FShape-unren ρ _ (pair _ _) fs-step = fs-step
+
+FShape-sub : ∀ {n k} {τ : Fin n → Tm k} {s f} → FShape s f → FShape (sub τ s) (sub τ f)
+FShape-sub fs-pair = fs-pair
+FShape-sub fs-step = fs-step
 
 ------------------------------------------------------------------------
 -- Closure.
@@ -86,6 +133,9 @@ Frag-ren ρ (f-ann e A) = f-ann (Frag-ren ρ e) (Frag-ren ρ A)
 Frag-ren ρ (f-prod A B) = f-prod (Frag-ren ρ A) (Frag-ren ρ B)
 Frag-ren ρ (f-pair a b) = f-pair (Frag-ren ρ a) (Frag-ren ρ b)
 Frag-ren ρ (f-letp e t) = f-letp (Frag-ren ρ e) (Frag-ren (lift (lift ρ)) t)
+Frag-ren ρ (f-nu F) = f-nu (Frag-ren (lift ρ) F)
+Frag-ren ρ (f-unf s f sh) = f-unf (Frag-ren ρ s) (Frag-ren ρ f) (FShape-ren ρ sh)
+Frag-ren ρ (f-ucons s) = f-ucons (Frag-ren ρ s)
 
 FragL-ren ρ fl-[] = fl-[]
 FragL-ren ρ (fl-∷ t ts) = fl-∷ (Frag-ren ρ t) (FragL-ren ρ ts)
@@ -126,6 +176,10 @@ Frag-unren ρ (ann e A) (f-ann Fe FA) = f-ann (Frag-unren ρ e Fe) (Frag-unren �
 Frag-unren ρ (prod A B) (f-prod FA FB) = f-prod (Frag-unren ρ A FA) (Frag-unren ρ B FB)
 Frag-unren ρ (pair a b) (f-pair Fa Fb) = f-pair (Frag-unren ρ a Fa) (Frag-unren ρ b Fb)
 Frag-unren ρ (letp e t) (f-letp Fe Ft) = f-letp (Frag-unren ρ e Fe) (Frag-unren (lift (lift ρ)) t Ft)
+Frag-unren ρ (nu F) (f-nu FF) = f-nu (Frag-unren (lift ρ) F FF)
+Frag-unren ρ (unf s f) (f-unf Fs Ff sh) =
+  f-unf (Frag-unren ρ s Fs) (Frag-unren ρ f Ff) (FShape-unren ρ s f sh)
+Frag-unren ρ (ucons s) (f-ucons Fs) = f-ucons (Frag-unren ρ s Fs)
 FragL-unren ρ [] fl-[] = fl-[]
 FragL-unren ρ (t ∷ ts) (fl-∷ Ft Fts) = fl-∷ (Frag-unren ρ t Ft) (FragL-unren ρ ts Fts)
 
@@ -169,6 +223,9 @@ Frag-sub s (f-ann e A) = f-ann (Frag-sub s e) (Frag-sub s A)
 Frag-sub s (f-prod A B) = f-prod (Frag-sub s A) (Frag-sub s B)
 Frag-sub s (f-pair a b) = f-pair (Frag-sub s a) (Frag-sub s b)
 Frag-sub s (f-letp e t) = f-letp (Frag-sub s e) (Frag-sub (FragS-lifts (FragS-lifts s)) t)
+Frag-sub s (f-nu F) = f-nu (Frag-sub (FragS-lifts s) F)
+Frag-sub s (f-unf u f sh) = f-unf (Frag-sub s u) (Frag-sub s f) (FShape-sub sh)
+Frag-sub s (f-ucons u) = f-ucons (Frag-sub s u)
 
 FragL-sub s fl-[] = fl-[]
 FragL-sub s (fl-∷ t ts) = fl-∷ (Frag-sub s t) (FragL-sub s ts)

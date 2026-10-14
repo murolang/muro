@@ -30,18 +30,23 @@
 {-# OPTIONS --safe #-}
 module Muro.Consistency where
 
+open import Data.Bool.Base using (true)
 open import Data.Empty using (⊥; ⊥-elim)
 open import Data.Fin.Base using (Fin)
-open import Data.List.Base using (List)
-open import Data.Product.Base using (_×_; _,_; ∃)
+open import Data.List.Base using (List; []; _∷_)
+open import Data.Product.Base using (_×_; _,_; ∃; Σ)
 open import Data.Sum.Base using (_⊎_; inj₁; inj₂)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
 open import Muro.Base
 open import Muro.Syntax
+open import Muro.Subst using (appsFrom)
 open import Muro.Env
 open import Muro.Spine
+open import Muro.Reduction
 open import Muro.Convert
+open import Muro.Check using (unfStepOf; unfSpine)
+open import Muro.Frag using (us-pair; us-id; us-step)
 open import Muro.Judgement
 open import Muro.Typing
 
@@ -68,6 +73,8 @@ ctor-no-⇐ () (⇐-lam _ _ _ _ _ _)
 ctor-no-⇐ () (⇐-refl _ _ _)
 ctor-no-⇐ () (⇐-pair _ _ _ _)
 ctor-no-⇐ () (⇐-letp _ _ _ _ _ _)
+ctor-no-⇐ () (⇐-unf _ _ _ _ _ _ _ _)
+ctor-no-⇐ () (⇐-unfR _ _ _ _ _ _ _ _)
 
 dty-no-⇒ : ∀ {n} {Γ : Ctx n} {m i as e B u}
   → Spine (dty i) as e → σ-empty , Γ ⊢[ m ] e ⇒ B ⊣ u → ⊥
@@ -85,6 +92,8 @@ dty-no-⇐ () (⇐-lam _ _ _ _ _ _)
 dty-no-⇐ () (⇐-refl _ _ _)
 dty-no-⇐ () (⇐-pair _ _ _ _)
 dty-no-⇐ () (⇐-letp _ _ _ _ _ _)
+dty-no-⇐ () (⇐-unf _ _ _ _ _ _ _ _)
+dty-no-⇐ () (⇐-unfR _ _ _ _ _ _ _ _)
 
 ctor-no⊨ : ∀ {n} {Γ : Ctx n} {m i j as e A}
   → Spine (ctor i j) as e → σ-empty , Γ ⊨⁰[ m ] e ∶ A → ⊥
@@ -178,9 +187,7 @@ ne-untyped-⇒ (ne-mEmp ne) (⇒-mEmp D _) = ne-untyped-⇐ ne D
 ne-untyped-⇒ (ne-rwt ne) (⇒-rwt D _ _ _) = ne-untyped-⇒ ne D
 ne-untyped-⇒ (ne-mData ne) (⇒-mData D _ _ _ _ _ _ _) = ne-untyped-⇒ ne D
 ne-untyped-⇒ (ne-letp ne) (⇒-letp D _ _ _ _ _ _) = ne-untyped-⇒ ne D
-ne-untyped-⇒ (ne-foreign f-nu) ()
-ne-untyped-⇒ (ne-foreign f-unf) ()
-ne-untyped-⇒ (ne-foreign f-ucons) ()
+ne-untyped-⇒ (ne-ucons ne) (⇒-ucons D _ _) = ne-untyped-⇒ ne D
 ne-untyped-⇒ (ne-foreign f-i64) ()
 ne-untyped-⇒ (ne-foreign f-f32ty) ()
 ne-untyped-⇒ (ne-foreign f-tensor) ()
@@ -196,6 +203,111 @@ ne-untyped-⇐ (ne-foreign ()) (⇐-lam _ _ _ _ _ _)
 ne-untyped-⇐ (ne-foreign ()) (⇐-refl _ _ _)
 ne-untyped-⇐ (ne-foreign ()) (⇐-pair _ _ _ _)
 ne-untyped-⇐ (ne-letp ne) (⇐-letp D _ _ _ _ _) = ne-untyped-⇒ ne D
+ne-untyped-⇐ (ne-foreign ()) (⇐-unf _ _ _ _ _ _ _ _)
+ne-untyped-⇐ (ne-foreign ()) (⇐-unfR _ _ _ _ _ _ _ _)
+
+-- unfStepOf on an application succeeds only when the head is ν, so the
+-- application is a ν spine and stays one under reduction.
+ok-nu-app : ∀ {n} {S G fam} {f a : Tm n}
+  → unfStepOf S (app f a) ≡ ok (G , fam)
+  → Σ (NuSpine (app f a)) (λ p → appish p ≡ true)
+ok-nu-app {S = S} {G = G} {fam = fam} {f = f} {a = a} eq = go f a [] eq
+  where
+  go : ∀ h i is → unfSpine S (unspine-go h (i ∷ is)) ≡ ok (G , fam)
+    → Σ (NuSpine (appsFrom h (i ∷ is))) (λ p → appish p ≡ true)
+  go (app h′ b) i is eq′ = go h′ b (i ∷ is) eq′
+  go (nu F) i is _ = ns-apps F i is , appish-apps F i is
+  go (var _) _ _ ()
+  go typ _ _ ()
+  go (pi _ _ _) _ _ ()
+  go (lam _ _ _) _ _ ()
+  go nat _ _ ()
+  go ze _ _ ()
+  go (su _) _ _ ()
+  go unit _ _ ()
+  go one _ _ ()
+  go empty _ _ ()
+  go (dty _) _ _ ()
+  go (ctor _ _) _ _ ()
+  go (mData _ _ _) _ _ ()
+  go (mNat _ _ _ _) _ _ ()
+  go (mEmp _ _) _ _ ()
+  go (mUnit _ _ _) _ _ ()
+  go (idt _ _ _) _ _ ()
+  go rfl _ _ ()
+  go (rwt _ _ _) _ _ ()
+  go (def _) _ _ ()
+  go (ann _ _) _ _ ()
+  go (prod _ _) _ _ ()
+  go (pair _ _) _ _ ()
+  go (letp _ _) _ _ ()
+  go (unf _ _) _ _ ()
+  go (ucons _) _ _ ()
+  go i64 _ _ ()
+  go f32ty _ _ ()
+  go (tensor _ _) _ _ ()
+  go (addi _ _) _ _ ()
+  go (muli _ _) _ _ ()
+  go (addt _ _) _ _ ()
+  go (toi64 _) _ _ ()
+  go (packi _ _) _ _ ()
+
+-- An application is not a shaped term. A bare ν is.
+shape-app : ∀ {n s} {t : Tm n}
+  → HasShape t s → (h : NuSpine t) → appish h ≡ true → ⊥
+shape-app _ ns-nu ()
+shape-app () (ns-app _) _
+
+-- The type a ν step reads is not a shaped term of a different head.
+-- A bare ν keeps shape s-nu. An application of one stays an application.
+rigid-spine : ∀ {σ n} {S T′ G : Tm n} {fam s} {A : Tm n}
+  → HasShape A s → (s ≡ s-nu → ⊥)
+  → unfStepOf S T′ ≡ ok (G , fam)
+  → σ ⊢[ spec ] A ≈ T′ → ⊥
+rigid-spine {σ = σ} {S = S} {G = G} {fam = fam} {s = s} hs diff eq c with ≈→join c
+... | v , rv , uv = side eq uv (shape-⇛* hs rv)
+  where
+  side : ∀ {T′} → unfStepOf S T′ ≡ ok (G , fam)
+    → σ ⊢[ spec ] T′ ⇛* v → HasShape v s → ⊥
+  side {nu _} _ r hv with nu-⇛* r
+  ... | _ , refl , _ = diff (shape-unique hv h-nu)
+  side {app _ _} eq′ r hv =
+    let p , q = ok-nu-app eq′ in
+    shape-app hv (ns-star p r) (ns-keep* p q r)
+  side {var _} () _ _
+  side {typ} () _ _
+  side {pi _ _ _} () _ _
+  side {lam _ _ _} () _ _
+  side {nat} () _ _
+  side {ze} () _ _
+  side {su _} () _ _
+  side {unit} () _ _
+  side {one} () _ _
+  side {empty} () _ _
+  side {dty _} () _ _
+  side {ctor _ _} () _ _
+  side {mData _ _ _} () _ _
+  side {mNat _ _ _ _} () _ _
+  side {mEmp _ _} () _ _
+  side {mUnit _ _ _} () _ _
+  side {idt _ _ _} () _ _
+  side {rfl} () _ _
+  side {rwt _ _ _} () _ _
+  side {def _} () _ _
+  side {ann _ _} () _ _
+  side {prod _ _} () _ _
+  side {pair _ _} () _ _
+  side {letp _ _} () _ _
+  side {unf _ _} () _ _
+  side {ucons _} () _ _
+  side {i64} () _ _
+  side {f32ty} () _ _
+  side {tensor _ _} () _ _
+  side {addi _ _} () _ _
+  side {muli _ _} () _ _
+  side {addt _ _} () _ _
+  side {toi64 _} () _ _
+  side {packi _ _} () _ _
 
 ------------------------------------------------------------------------
 -- No closed normal evidence of Empty.
@@ -220,6 +332,14 @@ Empty-nf nf-idt (⇐-conv () _)
 Empty-nf nf-rfl D = Empty-intro i-rfl D
 Empty-nf nf-prod (⇐-conv () _)
 Empty-nf nf-pair D = Empty-intro i-pair D
+Empty-nf nf-nu (⇐-conv () _)
+Empty-nf nf-unf (⇐-conv (⇒-unf _ _ _ _ _) c) with ≈-shape h-nu h-empty c
+... | ()
+Empty-nf nf-unf (⇐-unf _ _ c _ refl _ _ _) with ≈-shape h-empty h-nu c
+... | ()
+Empty-nf nf-unf (⇐-unfR _ _ cT st _ _ _ _) =
+  ⊥-elim (rigid-spine h-empty (λ ()) st cT) 
+
 
 ------------------------------------------------------------------------
 -- Progress: a closed well-typed evidence term is normal or steps.
@@ -230,6 +350,37 @@ Step e = ∃ λ e′ → σ-empty ⊢[ evid ] e ⟶ e′
 
 Prog : Tm 0 → Set
 Prog e = Nf σ-empty evid e ⊎ Step e
+
+-- uncons of a closed evidence term. An inferred unfold has UShape, so
+-- the step is the stream wrap or the identity unfold. A neutral
+-- scrutinee stays neutral. Any other canonical form has a type whose
+-- shape is not a ν spine.
+ucons-canon : ∀ {s T T′ G fam u} →
+  Nf σ-empty evid s →
+  σ-empty , ε ⊢[ evid ] s ⇒ T ⊣ u →
+  σ-empty ⊢[ spec ] T ≈ T′ →
+  unfStepOf T T′ ≡ ok (G , fam) →
+  Prog (ucons s)
+ucons-canon (nf-ne ne) _ _ _ = inj₁ (nf-ne (ne-ucons ne))
+ucons-canon nf-ze ⇒-ze c st = ⊥-elim (rigid-spine h-nat (λ ()) st c)
+ucons-canon nf-su (⇒-su _) c st = ⊥-elim (rigid-spine h-nat (λ ()) st c)
+ucons-canon nf-one ⇒-one c st = ⊥-elim (rigid-spine h-unit (λ ()) st c)
+ucons-canon nf-lam (⇒-lam _ _ _ _) c st = ⊥-elim (rigid-spine h-pi (λ ()) st c)
+ucons-canon nf-pair (⇒-pair _ _ _) c st = ⊥-elim (rigid-spine h-prod (λ ()) st c)
+ucons-canon nf-unf (⇒-unf _ _ _ us-pair _) _ _ = inj₂ (_ , ι-ucons-p)
+ucons-canon nf-unf (⇒-unf _ _ _ us-id _) _ _ = inj₂ (_ , ι-ucons-0)
+ucons-canon nf-unf (⇒-unf _ _ _ us-step _) _ _ = inj₂ (_ , ι-ucons-r)
+ucons-canon (nf-ctor sp) D _ _ = ⊥-elim (ctor-no-⇒ sp D)
+ucons-canon (nf-dty sp) D _ _ = ⊥-elim (dty-no-⇒ sp D)
+ucons-canon nf-typ ()
+ucons-canon nf-pi ()
+ucons-canon nf-nat ()
+ucons-canon nf-unit ()
+ucons-canon nf-empty ()
+ucons-canon nf-idt ()
+ucons-canon nf-rfl ()
+ucons-canon nf-prod ()
+ucons-canon nf-nu ()
 
 data IsLam {n} : Tm n → Set where
   is-lam : ∀ {q A t} → IsLam (lam q A t)
@@ -258,6 +409,9 @@ nf-fun nf-idt () _
 nf-fun nf-rfl () _
 nf-fun nf-prod () _
 nf-fun nf-pair (⇒-pair _ _ _) c with ≈-shape h-prod h-pi c
+... | ()
+nf-fun nf-nu ()
+nf-fun nf-unf (⇒-unf _ _ _ _ _) c with ≈-shape h-nu h-pi c
 ... | ()
 
 nf-nat-prog : ∀ {e P z s u} →
@@ -289,6 +443,13 @@ nf-nat-prog nf-pair (⇐-conv (⇒-pair _ _ _) c) with ≈-shape h-prod h-nat c
 ... | ()
 nf-nat-prog nf-pair (⇐-pair c _ _ _) with ≈-shape h-nat h-prod c
 ... | ()
+nf-nat-prog nf-nu (⇐-conv () _)
+nf-nat-prog nf-unf (⇐-conv (⇒-unf _ _ _ _ _) c) with ≈-shape h-nu h-nat c
+... | ()
+nf-nat-prog nf-unf (⇐-unf _ _ c _ refl _ _ _) with ≈-shape h-nat h-nu c
+... | ()
+nf-nat-prog nf-unf (⇐-unfR _ _ cT st _ _ _ _) =
+  ⊥-elim (rigid-spine h-nat (λ ()) st cT)
 
 nf-unit-prog : ∀ {e P t u} →
   Nf σ-empty evid e → σ-empty , ε ⊢[ evid ] e ⇐ unit ⊣ u →
@@ -320,6 +481,13 @@ nf-unit-prog nf-pair (⇐-conv (⇒-pair _ _ _) c) with ≈-shape h-prod h-unit 
 ... | ()
 nf-unit-prog nf-pair (⇐-pair c _ _ _) with ≈-shape h-unit h-prod c
 ... | ()
+nf-unit-prog nf-nu (⇐-conv () _)
+nf-unit-prog nf-unf (⇐-conv (⇒-unf _ _ _ _ _) c) with ≈-shape h-nu h-unit c
+... | ()
+nf-unit-prog nf-unf (⇐-unf _ _ c _ refl _ _ _) with ≈-shape h-unit h-nu c
+... | ()
+nf-unit-prog nf-unf (⇐-unfR _ _ cT st _ _ _ _) =
+  ⊥-elim (rigid-spine h-unit (λ ()) st cT)
 
 nf-eq-prog : ∀ {eq E A l r P t u} →
   Nf σ-empty evid eq → σ-empty , ε ⊢[ evid ] eq ⇒ E ⊣ u →
@@ -345,6 +513,9 @@ nf-eq-prog nf-idt () _
 nf-eq-prog nf-prod () _
 nf-eq-prog nf-pair (⇒-pair _ _ _) c with ≈-shape h-prod h-idt c
 ... | ()
+nf-eq-prog nf-nu ()
+nf-eq-prog nf-unf (⇒-unf _ _ _ _ _) c with ≈-shape h-nu h-idt c
+... | ()
 
 nf-prod-prog : ∀ {e E A B t u} →
   Nf σ-empty evid e → σ-empty , ε ⊢[ evid ] e ⇒ E ⊣ u →
@@ -369,6 +540,9 @@ nf-prod-prog nf-empty () _
 nf-prod-prog nf-idt () _
 nf-prod-prog nf-rfl () _
 nf-prod-prog nf-prod () _
+nf-prod-prog nf-nu ()
+nf-prod-prog nf-unf (⇒-unf _ _ _ _ _) c with ≈-shape h-nu h-prod c
+... | ()
 
 progress-⇒ : ∀ {e B u} → σ-empty , ε ⊢[ evid ] e ⇒ B ⊣ u → Prog e
 progress-⇐ : ∀ {e A u} → σ-empty , ε ⊢[ evid ] e ⇐ A ⊣ u → Prog e
@@ -381,6 +555,8 @@ progress-⇐ (⇐-pair _ _ _ _) = inj₁ nf-pair
 progress-⇐ (⇐-letp De c _ _ _ _) with progress-⇒ De
 ... | inj₂ (_ , s) = inj₂ (_ , letp-e s)
 ... | inj₁ nf = nf-prod-prog nf De c
+progress-⇐ (⇐-unf _ _ _ _ _ _ _ _) = inj₁ nf-unf
+progress-⇐ (⇐-unfR _ _ _ _ _ _ _ _) = inj₁ nf-unf
 
 progress-⇒ (⇒-var-evid {x = ()} _)
 progress-⇒ ⇒-ze = inj₁ nf-ze
@@ -422,6 +598,10 @@ progress-⇒ (⇒-pair _ _ _) = inj₁ nf-pair
 progress-⇒ (⇒-letp De c _ _ _ _ _) with progress-⇒ De
 ... | inj₂ (_ , s) = inj₂ (_ , letp-e s)
 ... | inj₁ nf = nf-prod-prog nf De c
+progress-⇒ (⇒-unf _ _ _ _ _) = inj₁ nf-unf
+progress-⇒ (⇒-ucons D c st) with progress-⇒ D
+... | inj₂ (_ , s) = inj₂ (_ , ucons-e s)
+... | inj₁ nf = ucons-canon nf D c st
 
 ------------------------------------------------------------------------
 -- The same canonical-forms argument for the declarative judgment ⊨,
@@ -445,6 +625,11 @@ ne-untyped⁰ (ne-mEmp ne) (t-mEmp De _) = ne-untyped⊨ ne De
 ne-untyped⁰ (ne-rwt ne) (t-rwt Deq _ _) = ne-untyped⊨ ne Deq
 ne-untyped⁰ (ne-mData ne) (t-mData De _ _ _ _ _) = ne-untyped⊨ ne De
 ne-untyped⁰ (ne-letp ne) (t-letp De _) = ne-untyped⊨ ne De
+ne-untyped⁰ (ne-ucons ne) (t-ucons Ds _ _) = ne-untyped⊨ ne Ds
+ne-untyped⁰ (ne-foreign ()) (t-nu _)
+ne-untyped⁰ (ne-foreign ()) (t-unf _ _)
+ne-untyped⁰ (ne-foreign ()) (t-unfG _ _ _ _ _)
+ne-untyped⁰ (ne-foreign ()) (t-unfR _ _ _ _ _)
 ne-untyped⁰ (ne-foreign ()) t-ze
 ne-untyped⁰ (ne-foreign ()) (t-su _)
 ne-untyped⁰ (ne-foreign ()) t-one
@@ -490,6 +675,14 @@ Empty-nf⊨ nf-prod (conv (t-ctor () _) _)
 Empty-nf⊨ nf-pair (conv (t-pair _ _) c) with ≈-shape h-prod h-empty c
 ... | ()
 Empty-nf⊨ nf-pair (conv (t-ctor () _) _)
+Empty-nf⊨ nf-nu (conv (t-ctor () _) _)
+Empty-nf⊨ nf-unf (conv (t-unf _ _) c) with ≈-shape h-nu h-empty c
+... | ()
+Empty-nf⊨ nf-unf (conv (t-unfG _ _ _ refl _) c) with ≈-shape h-nu h-empty c
+... | ()
+Empty-nf⊨ nf-unf (conv (t-unfR _ _ st _ _) c) =
+  ⊥-elim (rigid-spine h-empty (λ ()) st (≈-sym c))
+Empty-nf⊨ nf-unf (conv (t-ctor () _) _)
 
 ------------------------------------------------------------------------
 -- Preservation, specialised. A corollary of Muro.Typing.pres.

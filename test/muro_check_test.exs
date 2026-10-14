@@ -708,6 +708,34 @@ defmodule Muro.CheckTest do
     )
   end
 
+  test "an unfold that calls itself in the head is refused" do
+    src = """
+    ν Count (n : Nat) : Type where
+      uncons : Count n → Nat × Count (suc n)
+    def bad : evidence Π (n : Nat) → Count n :=
+      λ (n : Nat) → unfold tt (λ (_ : Unit) → (head (bad n), bad (suc n)))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "unguarded recursive call"
+  end
+
+  test "a declared family unfold checks, and a stream tail wraps" do
+    src = """
+    ν Count (n : Nat) : Type where
+      uncons : Count n → Nat × Count (suc n)
+    def c : evidence Π (n : Nat) → Count n :=
+      λ (n : Nat) → unfold tt (λ (_ : Unit) → (n, c (suc n)))
+    def idu : run Π (_ : Unit) → Unit := λ (_ : Unit) → tt
+    def s : run Stream Unit := unfold tt (λ (_ : Unit) → (tt, idu tt))
+    def hs : evidence {head (tail s) ≡ tt : Unit} := refl
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
   test "a ν-typed definition need not be an unfold when it does not call its block" do
     src = """
     def tabulate : run Π (+ f : Π (_ : Nat) → Nat) → Stream Nat :=

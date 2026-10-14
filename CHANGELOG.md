@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.23
+
+ν is in ⊢. Stream, `Always`, `~`, and a declared family are rules of the judgment: `unfold` and `uncons`, the way `match` and `refl` are. An unfold of a stream is the λ, and `uncons` of that λ wraps. An unfold of a declared family is the pair instantiated at the seed, and `uncons` of that pair reads the head obligation and the proof at the tail. `uncons` of the source λ wraps, and that wrap is not the family read. The checker still refuses a self-call in the head; the judgment records the pair and does not recheck that guard, so productivity of an accepted unfold is argued from the checker's shape. Preservation covers the wrap and the pair read. It does not cover `uncons` after unfolding a definition whose body is a family λ, and the signature hypothesis of preservation is not the checker's acceptance of that definition. A checker yes is a derivation at the checker's type when the subject is that term and every premise meets its rule; a family unfold is a derivation of the pair, and a premise off its rule is not claimed. Tensor and Atom remain outside.
+
+### Checker
+
+- `uncons` of an unfold is the pair read, the λ wrap, or the identity on a pair seed, the same steps as `⟶`. Anything else stays stuck. The step that read a declared family off the λ is gone.
+
+### Tests
+
+- A declared family unfold checks, and `head (tail s)` on a unit stream is `tt`. A body that is not a product is refused. An unfold that calls itself in the head is refused. `examples/dominance.muro` still checks.
+
+### Manual
+
+- Limits, Streams, Extending, CSHRL, README: ν is in ⊢, with the two subjects, the guard, and what preservation does not cover.
+
+### Package
+
+- Version 0.16.23.
+
 ## 0.16.22
 
 CSHRL in Muro, under `examples/cshrl/`. The artifact's parameterised modules (Core, SuccessorCore, SuccessorCoreWithArithmetic, the finite deterministic environment class with its Finder) are files whose environment is a list of `param` entries. TwoState, BinarySacrifice and SkillInvestment supply them and prove their ranking theorems: `CoindHomo ranks` for TwoState, a `CoinductiveHomomorphism` ranking the sacrifice first and the impossibility of a `CoindHomo` in either direction for BinarySacrifice, and the same at each level below master for SkillInvestment. Each environment emits an agent that plans with the Finder, or with the successor Finder, and acts: in SkillInvestment the first works for 1 forever, and the second trains three times and then earns 5.

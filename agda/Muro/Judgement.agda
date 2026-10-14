@@ -17,9 +17,13 @@
 --   annotation,
 --   A × B / (a, b) / let (a, b) = e in t (the tensor eliminator, in
 --     both modes; fst / snd are surface sugar for it),
+--   ν (Stream, a declared family, unfold, uncons). The unfold's
+--     function is a λ whose body is a pair, or the identity on a pair
+--     seed: that is the step uncons reads. The checker also refuses a
+--     self-call in the head; ⊢ records the pair and does not recheck it.
 --   uses as in Check (spec forgets; run/evid count).
 --
--- omitted = ν / Tensor / I64 / F32.
+-- omitted = Tensor / I64 / F32.
 -- ⊢ does not track RecSt descent and does not use fuel. It does not
 -- check the data declarations of σ (Check.checkData); Muro.Typing
 -- states what preservation needs of them.
@@ -55,6 +59,8 @@ open import Muro.Env
 open import Muro.Convert using (_⊢[_]_≈_; ≈-trans; ≈-sym; ≈-ren)
 open import Muro.Spine using (Spine)
 open import Muro.Data
+open import Muro.Frag using (UShape)
+open import Muro.Check using (nuKind; nuBodyProd; strictPos; unfStepOf)
 
 ------------------------------------------------------------------------
 -- Bidirectional ⊢. Uses sit in the conclusion (⊣). Two auxiliary
@@ -274,6 +280,36 @@ data _,_⊢[_]_⇒_⊣_ σ Γ where
     → combine m eu tus ≡ ok uses
     → σ , Γ ⊢[ m ] letp e t ⇒ C ⊣ uses
 
+  -- ν X. F. Spec only, like the other erased formers. The body is a
+  -- product (Stream) or a λ telescope ending in one (a declared family),
+  -- strictly positive, and the binder does not occur in the kind.
+  ⇒-nu : ∀ {F K u}
+    → nuKind F ≡ ok K
+    → nuBodyProd F ≡ true
+    → strictPos F ≡ true
+    → σ , ext Γ affine K ⊢[ spec ] F ⇐ wk K ⊣ u
+    → σ , Γ ⊢[ spec ] nu F ⇒ K ⊣ u0s
+
+  -- unfold seed f infers Stream. f's codomain, instantiated at the seed,
+  -- is a product whose second component is the seed's type. UShape is
+  -- the pair the recursive call sits under.
+  ⇒-unf : ∀ {m seed S su f Ft q A fu uses}
+    → σ , Γ ⊢[ m ] seed ⇒ S ⊣ su
+    → σ , Γ ⊢[ m ] f ⇒ Ft ⊣ fu
+    → σ ⊢[ spec ] Ft ≈ pi q S (prod (wk A) (wk S))
+    → UShape seed f
+    → combine m su fu ≡ ok uses
+    → σ , Γ ⊢[ m ] unf seed f ⇒ nu (prod (wk A) (var Fin.zero)) ⊣ uses
+
+  -- uncons reads the pair. unfStepOf is the checker's codomain: a bare
+  -- ν substitutes the scrutinee's type, an applied family substitutes
+  -- ν F and keeps the indices.
+  ⇒-ucons : ∀ {m s T T′ G fam u}
+    → σ , Γ ⊢[ m ] s ⇒ T ⊣ u
+    → σ ⊢[ spec ] T ≈ T′
+    → unfStepOf T T′ ≡ ok (G , fam)
+    → σ , Γ ⊢[ m ] ucons s ⇒ G ⊣ u
+
 data _,_⊢[_]_⇐_⊣_ σ Γ where
   ⇐-conv : ∀ {m e A B u}
     → σ , Γ ⊢[ m ] e ⇒ B ⊣ u
@@ -319,6 +355,33 @@ data _,_⊢[_]_⇐_⊣_ σ Γ where
     → checkBound m affine ua ≡ ok tt
     → combine m eu tus ≡ ok uses
     → σ , Γ ⊢[ m ] letp e t ⇐ C ⊣ uses
+
+  -- unfold seed (λ (q x : A) → (h, t)), checked at a stream
+  -- ν X. Eh × X. The tail is the next seed. uncons wraps it.
+  ⇐-unf : ∀ {m q seed S su A h t T T′ Eh G fam u0 bus uses}
+    → σ , Γ ⊢[ m ] seed ⇒ S ⊣ su
+    → σ ⊢[ spec ] A ≈ S
+    → σ ⊢[ spec ] T ≈ T′
+    → unfStepOf S T′ ≡ ok (G , fam)
+    → T′ ≡ nu (prod (wk Eh) (var Fin.zero))
+    → σ , ext Γ q S ⊢[ m ] pair h t ⇐ wk G ⊣ (u0 ∷ bus)
+    → checkBound m q u0 ≡ ok tt
+    → combine m su bus ≡ ok uses
+    → σ , Γ ⊢[ m ] unf seed (lam q A (pair h t)) ⇐ T ⊣ uses
+
+  -- unfold seed (h, t) at a declared family. The pair is already the
+  -- step: h is the head obligation, t the same family at the tail
+  -- indices. The recursive call sits under the pair. uncons reads it.
+  ⇐-unfR : ∀ {m q seed S su A h t T T′ G fam u0 bus uses}
+    → σ , Γ ⊢[ m ] seed ⇒ S ⊣ su
+    → σ ⊢[ spec ] A ≈ S
+    → σ ⊢[ spec ] T ≈ T′
+    → unfStepOf S T′ ≡ ok (G , fam)
+    → fam ≡ true
+    → σ , ext Γ q S ⊢[ m ] pair h t ⇐ wk G ⊣ (u0 ∷ bus)
+    → checkBound m q u0 ≡ ok tt
+    → combine m su bus ≡ ok uses
+    → σ , Γ ⊢[ m ] unf seed (pair (inst h seed) (inst t seed)) ⇐ T ⊣ uses
 
   -- A constructor application ctor di ci a₁ … aₙ is checked against a
   -- data type (Check: viewData on the expected type, then
@@ -404,6 +467,10 @@ MotiveOk σ Γ di ps ((q , T) ∷ ixs) P =
 ⇐-≈ (⇐-pair c Da Db cu) c′ = ⇐-pair (≈-trans (≈-sym c′) c) Da Db cu
 ⇐-≈ (⇐-letp De c Dt bb ba cu) c′ =
   ⇐-letp De c (⇐-≈ Dt (≈-ren Fin.suc (≈-ren Fin.suc c′))) bb ba cu
+⇐-≈ (⇐-unf Ds cA c ng sh Dp bnd cu) c′ =
+  ⇐-unf Ds cA (≈-trans (≈-sym c′) c) ng sh Dp bnd cu
+⇐-≈ (⇐-unfR Ds cA c ng nf Dp bnd cu) c′ =
+  ⇐-unfR Ds cA (≈-trans (≈-sym c′) c) ng nf Dp bnd cu
 
 σ-empty : Sig
 σ-empty = mkSig [] []

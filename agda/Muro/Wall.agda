@@ -182,6 +182,9 @@ spec-⇒-uses (⇒-ann _ D) = spec-⇐-uses D
 spec-⇒-uses (⇒-prod _ _) = refl
 spec-⇒-uses (⇒-pair _ _ eq) = sym (ok-inj eq)
 spec-⇒-uses (⇒-letp _ _ _ _ _ _ eq) = sym (ok-inj eq)
+spec-⇒-uses (⇒-nu _ _ _ _) = refl
+spec-⇒-uses (⇒-unf _ _ _ _ eq) = sym (ok-inj eq)
+spec-⇒-uses (⇒-ucons D _ _) = spec-⇒-uses D
 
 spec-⇐-uses (⇐-conv D _) = spec-⇒-uses D
 spec-⇐-uses (⇐-lam _ _ _ _ D _) with spec-⇐-uses D
@@ -190,6 +193,8 @@ spec-⇐-uses (⇐-refl _ _ _) = refl
 spec-⇐-uses (⇐-ctor _ _ _ _ _ _ _ Ar _) = spec-args-uses Ar
 spec-⇐-uses (⇐-pair _ _ _ eq) = sym (ok-inj eq)
 spec-⇐-uses (⇐-letp _ _ _ _ _ eq) = sym (ok-inj eq)
+spec-⇐-uses (⇐-unf _ _ _ _ _ _ _ eq) = sym (ok-inj eq)
+spec-⇐-uses (⇐-unfR _ _ _ _ _ _ _ eq) = sym (ok-inj eq)
 
 -- combineArg at spec: an erased argument gives u0s outright; the others
 -- go through combine spec, which forgets.

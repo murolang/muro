@@ -724,6 +724,14 @@ mutual
   renMList-sound ρ? ρ h (t ∷ ts) eq with renM ρ? t in et | renMList ρ? ts in ets
   renMList-sound ρ? ρ h (t ∷ ts) refl | ok t′ | ok ts′ = cong₂ _∷_ (renM-sound ρ? ρ h t et) (renMList-sound ρ? ρ h ts ets)
 
+unwk-inv : ∀ {n} → Inv (unwk {n}) suc
+unwk-inv (suc i) j refl = refl
+
+-- strengthen T = ok C means T is C weakened once.
+strengthen-sound : ∀ {n} (T : Tm (suc n)) {C : Tm n}
+  → strengthen T ≡ ok C → T ≡ wk C
+strengthen-sound T eq = sym (renM-sound unwk suc unwk-inv T eq)
+
 unwk₂-inv : ∀ {n} → Inv (unwk₂ {n}) (λ i → suc (suc i))
 unwk₂-inv (suc (suc i)) j refl = refl
 

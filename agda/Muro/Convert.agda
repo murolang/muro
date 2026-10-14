@@ -21,7 +21,9 @@
 --    different heads are never convertible (≈-shape), and Π / ≡ are
 --    injective up to ≈. No normalisation is assumed anywhere.
 --
--- ≈ does not contain η, or any rule for ν / Nx (those terms are inert).
+-- ≈ does not contain η. ν and unfold are rigid. uncons of an unfold
+-- converts to the pair it reads, by the syntactic contraction in ⇛.
+-- Tensor and the numeric formers stay inert.
 -- Pairs are eliminated by letp only. Check.conv is the algorithm; it
 -- compares subterms after whnf and is expected to be sound for ≈.
 --
@@ -37,7 +39,7 @@ module Muro.Convert where
 
 open import Data.Bool.Base using (Bool; true; false)
 open import Data.Empty using (⊥; ⊥-elim)
-open import Data.Fin.Base using (Fin)
+open import Data.Fin.Base using (Fin; zero)
 open import Data.List.Base using (List; []; _∷_)
 open import Data.Nat.Base using (ℕ; suc)
 open import Data.Product.Base using (Σ; _×_; _,_; ∃)
@@ -60,9 +62,6 @@ ok-inj refl = refl
 ------------------------------------------------------------------------
 
 data Foreign {n} : Tm n → Set where
-  f-nu     : ∀ {F} → Foreign (nu F)
-  f-unf    : ∀ {s f} → Foreign (unf s f)
-  f-ucons  : ∀ {s} → Foreign (ucons s)
   f-i64    : Foreign i64
   f-f32ty  : Foreign f32ty
   f-tensor : ∀ {d s} → Foreign (tensor d s)
@@ -94,6 +93,7 @@ data Ne σ m where
   ne-rwt     : ∀ {eq P t} → Ne σ m eq → Ne σ m (rwt eq P t)
   ne-mData   : ∀ {e P bs} → Ne σ m e → Ne σ m (mData e P bs)
   ne-letp    : ∀ {e t} → Ne σ m e → Ne σ m (letp e t)
+  ne-ucons   : ∀ {s} → Ne σ m s → Ne σ m (ucons s)
   ne-foreign : ∀ {t} → Foreign t → Ne σ m t
 
 data Nf σ m where
@@ -111,6 +111,8 @@ data Nf σ m where
   nf-rfl   : Nf σ m rfl
   nf-prod  : ∀ {A B} → Nf σ m (prod A B)
   nf-pair  : ∀ {a b} → Nf σ m (pair a b)
+  nf-nu    : ∀ {F} → Nf σ m (nu F)
+  nf-unf   : ∀ {s f} → Nf σ m (unf s f)
   nf-ctor  : ∀ {i j as e} → Spine (ctor i j) as e → Nf σ m e
   nf-dty   : ∀ {i as e} → Spine (dty i) as e → Nf σ m e
 
@@ -180,14 +182,32 @@ data _⊢[_]_⟶_ (σ : Sig) (m : Mode) {n} : Tm n → Tm n → Set where
     → σ ⊢[ m ] e ⟶ e′
     → σ ⊢[ m ] letp e t ⟶ letp e′ t
 
+  -- uncons reads a pair that is already the body. The tail keeps
+  -- this λ. Instantiation does not reduce the components further,
+  -- which is what whnf does on a pair.
+  ι-ucons-p : ∀ {q A s h t}
+    → σ ⊢[ m ] ucons (unf s (lam q A (pair h t)))
+      ⟶ pair (inst h s) (unf (inst t s) (lam q A (pair h t)))
+
+  -- uncons (unfold (a, b) (λ s → s))
+  ι-ucons-0 : ∀ {q A a b}
+    → σ ⊢[ m ] ucons (unf (pair a b) (lam q A (var zero)))
+      ⟶ pair a (unf b (lam q A (var zero)))
+
+  -- uncons (unfold s (h, t)): read the pair. The components are
+  -- already the head obligation and the tail proof.
+  ι-ucons-r : ∀ {s h t}
+    → σ ⊢[ m ] ucons (unf s (pair h t)) ⟶ pair h t
+
+  ucons-e : ∀ {e e′}
+    → σ ⊢[ m ] e ⟶ e′
+    → σ ⊢[ m ] ucons e ⟶ ucons e′
+
 ------------------------------------------------------------------------
 -- Normal forms do not step.
 ------------------------------------------------------------------------
 
 foreign-no-step : ∀ {σ m n} {t u : Tm n} → Foreign t → σ ⊢[ m ] t ⟶ u → ⊥
-foreign-no-step f-nu     ()
-foreign-no-step f-unf    ()
-foreign-no-step f-ucons  ()
 foreign-no-step f-i64    ()
 foreign-no-step f-f32ty  ()
 foreign-no-step f-tensor ()
@@ -205,6 +225,9 @@ Spine-no-step dh-dty sp-[] ()
 Spine-no-step hd (sp-snoc sp) β = Spine-lam hd sp
 Spine-no-step hd (sp-snoc sp) (app-f s) = Spine-no-step hd sp s
 
+ne-unf : ∀ {σ m n s f} → Ne σ m (unf {n} s f) → ⊥
+ne-unf (ne-foreign ())
+
 ne-no-step : ∀ {σ m n} {t u : Tm n} → Ne σ m t → σ ⊢[ m ] t ⟶ u → ⊥
 nf-no-step : ∀ {σ m n} {t u : Tm n} → Nf σ m t → σ ⊢[ m ] t ⟶ u → ⊥
 
@@ -214,6 +237,7 @@ ne-Spine : ∀ {σ m n} {i j} {as : List (Tm n)} {e}
 ne-Spine (ne-foreign ()) sp-[]
 ne-Spine (ne-app ne) (sp-snoc sp) = ne-Spine ne sp
 ne-Spine (ne-foreign ()) (sp-snoc sp)
+ne-Spine (ne-ucons _) ()
 
 ne-no-step ne-var ()
 ne-no-step (ne-def stuck) (δ lk al) = stuck lk al
@@ -231,6 +255,10 @@ ne-no-step (ne-mData ne) (ι-data sp _) = ne-Spine ne sp
 ne-no-step (ne-mData ne) (mData-e s) = ne-no-step ne s
 ne-no-step (ne-letp (ne-foreign ())) ι-letp
 ne-no-step (ne-letp ne) (letp-e s) = ne-no-step ne s
+ne-no-step (ne-ucons ne) ι-ucons-p = ne-unf ne
+ne-no-step (ne-ucons ne) ι-ucons-0 = ne-unf ne
+ne-no-step (ne-ucons ne) ι-ucons-r = ne-unf ne
+ne-no-step (ne-ucons ne) (ucons-e s) = ne-no-step ne s
 ne-no-step (ne-foreign f) s = foreign-no-step f s
 
 nf-no-step (nf-ne ne) s = ne-no-step ne s
@@ -247,6 +275,8 @@ nf-no-step nf-idt ()
 nf-no-step nf-rfl ()
 nf-no-step nf-prod ()
 nf-no-step nf-pair ()
+nf-no-step nf-nu ()
+nf-no-step nf-unf ()
 nf-no-step (nf-ctor sp) s = Spine-no-step dh-ctor sp s
 nf-no-step (nf-dty sp) s = Spine-no-step dh-dty sp s
 
@@ -289,6 +319,16 @@ det ι-letp ι-letp = refl
 det ι-letp (letp-e ())
 det (letp-e ()) ι-letp
 det (letp-e s) (letp-e s′) = cong (λ e → letp e _) (det s s′)
+det ι-ucons-p ι-ucons-p = refl
+det ι-ucons-p (ucons-e ())
+det ι-ucons-0 ι-ucons-0 = refl
+det ι-ucons-0 (ucons-e ())
+det ι-ucons-r ι-ucons-r = refl
+det ι-ucons-r (ucons-e ())
+det (ucons-e ()) ι-ucons-p
+det (ucons-e ()) ι-ucons-0
+det (ucons-e ()) ι-ucons-r
+det (ucons-e s) (ucons-e s′) = cong ucons (det s s′)
 
 ------------------------------------------------------------------------
 -- Reflexive-transitive closure.
@@ -317,32 +357,6 @@ nf-⟶* _ ⟶*-refl = refl
 nf-⟶* nf (⟶*-step s _) = ⊥-elim (nf-no-step nf s)
 
 ------------------------------------------------------------------------
--- Weak-head steps are parallel steps.
-------------------------------------------------------------------------
-
-⟶⊆⇛ : ∀ {σ m n} {t u : Tm n} → σ ⊢[ m ] t ⟶ u → σ ⊢[ m ] t ⇛ u
-⟶⊆⇛ (δ lk al) = ⇛-δ lk al
-⟶⊆⇛ β = ⇛-β (⇛-refl _) (⇛-refl _)
-⟶⊆⇛ (app-f s) = ⇛-app (⟶⊆⇛ s) (⇛-refl _)
-⟶⊆⇛ ιz = ⇛-ιz (⇛-refl _)
-⟶⊆⇛ ιs = ⇛-ιs (⇛-refl _) (⇛-refl _)
-⟶⊆⇛ (mNat-e s) = ⇛-mNat (⟶⊆⇛ s) (⇛-refl _) (⇛-refl _) (⇛-refl _)
-⟶⊆⇛ ιtt = ⇛-ιtt (⇛-refl _)
-⟶⊆⇛ (mUnit-e s) = ⇛-mUnit (⟶⊆⇛ s) (⇛-refl _) (⇛-refl _)
-⟶⊆⇛ (mEmp-e s) = ⇛-mEmp (⟶⊆⇛ s) (⇛-refl _)
-⟶⊆⇛ ιrfl = ⇛-ιrfl (⇛-refl _)
-⟶⊆⇛ (rwt-e s) = ⇛-rwt (⟶⊆⇛ s) (⇛-refl _) (⇛-refl _)
-⟶⊆⇛ ann-e = ⇛-ann (⇛-refl _)
-⟶⊆⇛ (ι-data sp lk) = ⇛-ιdata sp lk (⇛L-refl _) (⇛-refl _)
-⟶⊆⇛ (mData-e s) = ⇛-mData (⟶⊆⇛ s) (⇛-refl _) (⇛L-refl _)
-⟶⊆⇛ ι-letp = ⇛-ιletp (⇛-refl _) (⇛-refl _) (⇛-refl _)
-⟶⊆⇛ (letp-e s) = ⇛-letp (⟶⊆⇛ s) (⇛-refl _)
-
-⟶*⊆⇛* : ∀ {σ m n} {t u : Tm n} → σ ⊢[ m ] t ⟶* u → σ ⊢[ m ] t ⇛* u
-⟶*⊆⇛* ⟶*-refl = ⇛*-refl
-⟶*⊆⇛* (⟶*-step s r) = ⇛*-step (⟶⊆⇛ s) (⟶*⊆⇛* r)
-
-------------------------------------------------------------------------
 -- Conversion: the equivalence generated by ⇛.
 ------------------------------------------------------------------------
 
@@ -356,11 +370,42 @@ data _⊢[_]_≈_ (σ : Sig) (m : Mode) {n} : Tm n → Tm n → Set where
 ⇛*→≈ ⇛*-refl = ≈-refl
 ⇛*→≈ (⇛*-step s r) = ≈-trans (≈-step s) (⇛*→≈ r)
 
+≈-map : ∀ {σ m n} (f : Tm n → Tm n)
+  → (∀ {a b} → σ ⊢[ m ] a ⇛ b → σ ⊢[ m ] f a ⇛ f b)
+  → ∀ {a b} → σ ⊢[ m ] a ≈ b → σ ⊢[ m ] f a ≈ f b
+≈-map f h (≈-step s) = ≈-step (h s)
+≈-map f h ≈-refl = ≈-refl
+≈-map f h (≈-sym c) = ≈-sym (≈-map f h c)
+≈-map f h (≈-trans c d) = ≈-trans (≈-map f h c) (≈-map f h d)
+
+≈-ucons : ∀ {σ m n} {a b : Tm n} → σ ⊢[ m ] a ≈ b → σ ⊢[ m ] ucons a ≈ ucons b
+≈-ucons = ≈-map ucons ⇛-ucons
+
 ⟶→≈ : ∀ {σ m n} {t u : Tm n} → σ ⊢[ m ] t ⟶ u → σ ⊢[ m ] t ≈ u
-⟶→≈ s = ≈-step (⟶⊆⇛ s)
+⟶→≈ (δ lk al) = ≈-step (⇛-δ lk al)
+⟶→≈ β = ≈-step (⇛-β (⇛-refl _) (⇛-refl _))
+⟶→≈ (app-f s) = ≈-map (λ f → app f _) (λ d → ⇛-app d (⇛-refl _)) (⟶→≈ s)
+⟶→≈ ιz = ≈-step (⇛-ιz (⇛-refl _))
+⟶→≈ ιs = ≈-step (⇛-ιs (⇛-refl _) (⇛-refl _))
+⟶→≈ (mNat-e s) = ≈-map (λ e → mNat e _ _ _) (λ d → ⇛-mNat d (⇛-refl _) (⇛-refl _) (⇛-refl _)) (⟶→≈ s)
+⟶→≈ ιtt = ≈-step (⇛-ιtt (⇛-refl _))
+⟶→≈ (mUnit-e s) = ≈-map (λ e → mUnit e _ _) (λ d → ⇛-mUnit d (⇛-refl _) (⇛-refl _)) (⟶→≈ s)
+⟶→≈ (mEmp-e s) = ≈-map (λ e → mEmp e _) (λ d → ⇛-mEmp d (⇛-refl _)) (⟶→≈ s)
+⟶→≈ ιrfl = ≈-step (⇛-ιrfl (⇛-refl _))
+⟶→≈ (rwt-e s) = ≈-map (λ e → rwt e _ _) (λ d → ⇛-rwt d (⇛-refl _) (⇛-refl _)) (⟶→≈ s)
+⟶→≈ ann-e = ≈-step (⇛-ann (⇛-refl _))
+⟶→≈ (ι-data sp lk) = ≈-step (⇛-ιdata sp lk (⇛L-refl _) (⇛-refl _))
+⟶→≈ (mData-e s) = ≈-map (λ e → mData e _ _) (λ d → ⇛-mData d (⇛-refl _) (⇛L-refl _)) (⟶→≈ s)
+⟶→≈ ι-letp = ≈-step (⇛-ιletp (⇛-refl _) (⇛-refl _) (⇛-refl _))
+⟶→≈ (letp-e s) = ≈-map (λ e → letp e _) (λ d → ⇛-letp d (⇛-refl _)) (⟶→≈ s)
+⟶→≈ ι-ucons-p = ≈-step (⇛-ιβp (⇛-refl _) (⇛-refl _) (⇛-refl _) (⇛-refl _))
+⟶→≈ ι-ucons-0 = ≈-step (⇛-ιβ0 (⇛-refl _) (⇛-refl _) (⇛-refl _))
+⟶→≈ ι-ucons-r = ≈-step (⇛-ιβr (⇛-refl _) (⇛-refl _) (⇛-refl _))
+⟶→≈ (ucons-e s) = ≈-ucons (⟶→≈ s)
 
 ⟶*→≈ : ∀ {σ m n} {t u : Tm n} → σ ⊢[ m ] t ⟶* u → σ ⊢[ m ] t ≈ u
-⟶*→≈ r = ⇛*→≈ (⟶*⊆⇛* r)
+⟶*→≈ ⟶*-refl = ≈-refl
+⟶*→≈ (⟶*-step s r) = ≈-trans (⟶→≈ s) (⟶*→≈ r)
 
 -- Joinability: by confluence, convertible terms have a common reduct.
 ≈→join : ∀ {σ m n} {t u : Tm n}
@@ -437,7 +482,7 @@ join→≈ tv uv = ≈-trans (⇛*→≈ tv) (≈-sym (⇛*→≈ uv))
 
 data Shape : Set where
   s-typ s-pi s-nat s-unit s-empty s-idt s-lam s-ze s-su s-one s-rfl : Shape
-  s-prod s-pair : Shape
+  s-prod s-pair s-nu s-unf : Shape
 
 data HasShape {n} : Tm n → Shape → Set where
   h-typ   : HasShape typ s-typ
@@ -453,6 +498,8 @@ data HasShape {n} : Tm n → Shape → Set where
   h-rfl   : HasShape rfl s-rfl
   h-prod  : ∀ {A B} → HasShape (prod A B) s-prod
   h-pair  : ∀ {a b} → HasShape (pair a b) s-pair
+  h-nu    : ∀ {F} → HasShape (nu F) s-nu
+  h-unf   : ∀ {s f} → HasShape (unf s f) s-unf
 
 shape-⇛* : ∀ {σ m n} {t u : Tm n} {s}
   → HasShape t s → σ ⊢[ m ] t ⇛* u → HasShape u s
@@ -475,6 +522,10 @@ shape-⇛* h-prod r with prod-⇛* r
 ... | _ , _ , refl , _ , _ = h-prod
 shape-⇛* h-pair r with pair-⇛* r
 ... | _ , _ , refl , _ , _ = h-pair
+shape-⇛* h-nu r with nu-⇛* r
+... | _ , refl , _ = h-nu
+shape-⇛* h-unf r with unf-⇛* r
+... | _ , _ , refl , _ , _ = h-unf
 
 shape-unique : ∀ {n} {t : Tm n} {s s′} → HasShape t s → HasShape t s′ → s ≡ s′
 shape-unique h-typ h-typ = refl
@@ -490,6 +541,8 @@ shape-unique h-one h-one = refl
 shape-unique h-rfl h-rfl = refl
 shape-unique h-prod h-prod = refl
 shape-unique h-pair h-pair = refl
+shape-unique h-nu h-nu = refl
+shape-unique h-unf h-unf = refl
 
 ≈-shape : ∀ {σ m n} {t u : Tm n} {s s′}
   → HasShape t s → HasShape u s′ → σ ⊢[ m ] t ≈ u → s ≡ s′

@@ -91,4 +91,4 @@ In BinarySacrifice the stream of `go-trap` is 1, 0, 0, … and the stream of `go
 
 ## What is proved
 
-`agent-optimal` and the ranking theorems above are what `mix muro.check` accepts. Every statement about streams goes through `Dom`, and ν is outside the fragment of the soundness theorem ([Limits](limits.md)). The checker's ν rules, including this `unfold`, and the descent of the mutual blocks in `finder.muro`, are argued, not proved in Agda. The library has none of the artifact's appendices or stochastic environment classes.
+`agent-optimal` and the ranking theorems above are what `mix muro.check` accepts. `Dom` is a declared ν family, and that shape is in ⊢ ([Limits](limits.md)): the unfold is a derivation of the pair instantiated at the seed, and `uncons` of that pair is the head and the proof at the tails. Unfolding the definition and then taking `uncons` is not a step the preservation proof covers. The guard on the recursive call is the checker's shape, argued there. The descent of the mutual blocks in `finder.muro` is the checker's measure, argued, not an Agda theorem. The library has none of the artifact's appendices or stochastic environment classes.

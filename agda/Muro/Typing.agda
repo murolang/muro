@@ -1,6 +1,7 @@
 ------------------------------------------------------------------------
 -- Declarative typing for the ⊢ fragment, without uses. This is the
 -- judgment the metatheory is about.
+{-# OPTIONS --safe #-}
 --
 --   σ , Γ ⊨[ m ] e ∶ A   is   σ , Γ ⊨⁰[ m ] e ∶ A₀  with  σ ⊢[ spec ] A₀ ≈ A
 --
@@ -43,12 +44,11 @@
 -- checks). Preservation of ⊢ up to re-annotation is not attempted.
 ------------------------------------------------------------------------
 
-{-# OPTIONS --safe #-}
 module Muro.Typing where
 
 open import Data.Bool.Base using (Bool; true; false)
 open import Data.Empty using (⊥; ⊥-elim)
-open import Data.Fin.Base using (Fin; zero; suc)
+open import Data.Fin.Base as Fin using (Fin; zero; suc)
 open import Data.List.Base using (List; []; _∷_; _++_; length; drop)
 open import Data.Nat.Base using (ℕ; zero; suc; _+_)
 open import Data.Nat.Properties using (+-identityʳ; +-suc)
@@ -56,7 +56,7 @@ open import Data.Product.Base using (_×_; _,_; ∃; proj₁; proj₂)
 open import Data.Vec.Base as Vec using ([]; _∷_; lookup; map)
 open import Data.Vec.Properties using (lookup-map)
 open import Relation.Binary.PropositionalEquality.Core
-  using (_≡_; refl; sym; trans; cong; subst)
+  using (_≡_; refl; sym; trans; cong; cong₂; subst)
 
 open import Muro.Base
 open import Muro.Syntax
@@ -68,6 +68,8 @@ open import Muro.Reduction
 open import Muro.Convert
 open import Muro.Data
 open import Muro.Judgement
+open import Muro.Frag using (UShape)
+open import Muro.Check using (unfStepOf; unfSpine; unfFam; applyFam)
 
 ------------------------------------------------------------------------
 -- Variables: which qty may be used in which mode.
@@ -245,6 +247,47 @@ data _,_⊨⁰[_]_∶_ σ Γ where
     → σ , ext (ext Γ affine A) affine (wk B) ⊨[ m ] t ∶ wk (wk C)
     → σ , Γ ⊨⁰[ m ] letp e t ∶ C
 
+  -- Positivity and the product-body test stay in ⊢. A ν that is typed
+  -- has kind K and its body is a term of that kind.
+  t-nu : ∀ {F K}
+    → σ , ext Γ affine K ⊨[ spec ] F ∶ wk K
+    → σ , Γ ⊨⁰[ spec ] nu F ∶ K
+
+  -- Inferred unfold: Stream A, the codomain a product with the seed
+  -- type in the tail. The pair shape is UShape, dropped here the way
+  -- checkBound is.
+  t-unf : ∀ {m q seed S f A}
+    → σ , Γ ⊨[ m ] seed ∶ S
+    → σ , Γ ⊨[ m ] f ∶ pi q S (prod (wk A) (wk S))
+    → σ , Γ ⊨⁰[ m ] unf seed f ∶ nu (prod (wk A) (var zero))
+
+  -- Checked unfold at a stream ν X. Eh × X. The tail is the next
+  -- seed, so uncons wraps.
+  t-unfG : ∀ {m q seed S A h t T Eh G fam}
+    → σ , Γ ⊨[ m ] seed ∶ S
+    → σ ⊢[ spec ] A ≈ S
+    → unfStepOf S T ≡ ok (G , fam)
+    → T ≡ nu (prod (wk Eh) (var zero))
+    → σ , ext Γ q S ⊨[ m ] pair h t ∶ wk G
+    → σ , Γ ⊨⁰[ m ] unf seed (lam q A (pair h t)) ∶ T
+
+  -- Checked unfold at a declared family. The subject is the pair
+  -- instantiated at the seed: the tail is already the proof at the
+  -- next indices, and uncons reads it.
+  t-unfR : ∀ {m q seed S A h t T G fam}
+    → σ , Γ ⊨[ m ] seed ∶ S
+    → σ ⊢[ spec ] A ≈ S
+    → unfStepOf S T ≡ ok (G , fam)
+    → fam ≡ true
+    → σ , ext Γ q S ⊨[ m ] pair h t ∶ wk G
+    → σ , Γ ⊨⁰[ m ] unf seed (pair (inst h seed) (inst t seed)) ∶ T
+
+  t-ucons : ∀ {m s T T′ G fam}
+    → σ , Γ ⊨[ m ] s ∶ T
+    → σ ⊢[ spec ] T ≈ T′
+    → unfStepOf T T′ ≡ ok (G , fam)
+    → σ , Γ ⊨⁰[ m ] ucons s ∶ G
+
 data _,_⊨[_]_▹_⇝_ σ Γ where
   a-[] : ∀ {m T R}
     → σ ⊢[ spec ] T ≈ R
@@ -389,6 +432,10 @@ forget-⇒ (⇒-prod DA DB) = conv (t-prod (forget-⇐ DA) (forget-⇐ DB)) ≈-
 forget-⇒ (⇒-pair Da Db _) = conv (t-pair (forget-⇒ Da) (forget-⇒ Db)) ≈-refl
 forget-⇒ (⇒-letp De c Dt cT _ _ _) =
   conv (t-letp (conv-≈ (forget-⇒ De) c) (conv-≈ (forget-⇒ Dt) cT)) ≈-refl
+forget-⇒ (⇒-nu _ _ _ D) = conv (t-nu (forget-⇐ D)) ≈-refl
+forget-⇒ (⇒-unf Ds Df c _ _) =
+  conv (t-unf (forget-⇒ Ds) (conv-≈ (forget-⇒ Df) c)) ≈-refl
+forget-⇒ (⇒-ucons Ds c st) = conv (t-ucons (forget-⇒ Ds) c st) ≈-refl
 
 forget-⇐ (⇐-conv D c) = conv-≈ (forget-⇒ D) c
 forget-⇐ (⇐-lam W cT c rok D _) =
@@ -399,6 +446,10 @@ forget-⇐ (⇐-ctor sp c lk lps lidx lkc ip Ar cR) =
 forget-⇐ (⇐-pair cT Da Db _) = conv (t-pair (forget-⇐ Da) (forget-⇐ Db)) (≈-sym cT)
 forget-⇐ (⇐-letp De c Dt _ _ _) =
   conv (t-letp (conv-≈ (forget-⇒ De) c) (forget-⇐ Dt)) ≈-refl
+forget-⇐ (⇐-unf Ds cA c st sh Dp _ _) =
+  conv (t-unfG (forget-⇒ Ds) cA st sh (forget-⇐ Dp)) (≈-sym c)
+forget-⇐ (⇐-unfR Ds cA c st nf Dp _ _) =
+  conv (t-unfR (forget-⇒ Ds) cA st nf (forget-⇐ Dp)) (≈-sym c)
 
 forget-args args-[] = a-[] ≈-refl
 forget-args (args-snoc Ar c _ Da _) = ▹-snoc (forget-args Ar) c (forget-⇐ Da)
@@ -465,6 +516,11 @@ fieldMode-mono reuse  h = h
 ⊨⁰-mode ≤ᵐ-spec (t-prod DA DB) = t-prod DA DB
 ⊨⁰-mode h (t-pair Da Db) = t-pair (⊨-mode h Da) (⊨-mode h Db)
 ⊨⁰-mode h (t-letp De Dt) = t-letp (⊨-mode h De) (⊨-mode h Dt)
+⊨⁰-mode ≤ᵐ-spec (t-nu D) = t-nu D
+⊨⁰-mode h (t-unf Ds Df) = t-unf (⊨-mode h Ds) (⊨-mode h Df)
+⊨⁰-mode h (t-unfG Ds c st sh Dp) = t-unfG (⊨-mode h Ds) c st sh (⊨-mode h Dp)
+⊨⁰-mode h (t-unfR Ds c st nf Dp) = t-unfR (⊨-mode h Ds) c st nf (⊨-mode h Dp)
+⊨⁰-mode h (t-ucons Ds c st) = t-ucons (⊨-mode h Ds) c st
 
 ▹-mode h (a-[] c) = a-[] c
 ▹-mode h (a-∷ {q = q} c Da ar) = a-∷ c (⊨-mode (fieldMode-mono q h) Da) (▹-mode h ar)
@@ -506,6 +562,174 @@ dtyType-sub τ (q ∷ qs) ixs = cong (pi q typ) (dtyType-sub (lifts τ) qs ixs)
 dtyType-sub τ [] ((q , T) ∷ ixs) rewrite closed-sub τ T = cong (pi q (closed T)) (dtyType-sub (lifts τ) [] ixs)
 
 
+-- unfStepOf commutes with renaming. A bare ν instantiates the first
+-- argument; an applied family ignores it and keeps the indices.
+applyFam-ren : ∀ {n m} (ρ : Fin n → Fin m) (t : Tm n) (is : List (Tm n))
+  → applyFam (ren ρ t) (renList ρ is) ≡ ren ρ (applyFam t is)
+applyFam-ren ρ t [] = refl
+applyFam-ren ρ (var x) (i ∷ is) = applyFam-ren ρ (app (var x) i) is
+applyFam-ren ρ typ (i ∷ is) = applyFam-ren ρ (app typ i) is
+applyFam-ren ρ (pi q A B) (i ∷ is) = applyFam-ren ρ (app (pi q A B) i) is
+applyFam-ren ρ (lam q A b) (i ∷ is) rewrite sym (ren-inst ρ b i) =
+  applyFam-ren ρ (inst b i) is
+applyFam-ren ρ (app f a) (i ∷ is) = applyFam-ren ρ (app (app f a) i) is
+applyFam-ren ρ nat (i ∷ is) = applyFam-ren ρ (app nat i) is
+applyFam-ren ρ ze (i ∷ is) = applyFam-ren ρ (app ze i) is
+applyFam-ren ρ (su u) (i ∷ is) = applyFam-ren ρ (app (su u) i) is
+applyFam-ren ρ unit (i ∷ is) = applyFam-ren ρ (app unit i) is
+applyFam-ren ρ one (i ∷ is) = applyFam-ren ρ (app one i) is
+applyFam-ren ρ empty (i ∷ is) = applyFam-ren ρ (app empty i) is
+applyFam-ren ρ (dty x) (i ∷ is) = applyFam-ren ρ (app (dty x) i) is
+applyFam-ren ρ (ctor x y) (i ∷ is) = applyFam-ren ρ (app (ctor x y) i) is
+applyFam-ren ρ (mData e P bs) (i ∷ is) = applyFam-ren ρ (app (mData e P bs) i) is
+applyFam-ren ρ (mNat e P z s) (i ∷ is) = applyFam-ren ρ (app (mNat e P z s) i) is
+applyFam-ren ρ (mEmp e P) (i ∷ is) = applyFam-ren ρ (app (mEmp e P) i) is
+applyFam-ren ρ (mUnit e P u) (i ∷ is) = applyFam-ren ρ (app (mUnit e P u) i) is
+applyFam-ren ρ (idt A a b) (i ∷ is) = applyFam-ren ρ (app (idt A a b) i) is
+applyFam-ren ρ rfl (i ∷ is) = applyFam-ren ρ (app rfl i) is
+applyFam-ren ρ (rwt e P t) (i ∷ is) = applyFam-ren ρ (app (rwt e P t) i) is
+applyFam-ren ρ (def x) (i ∷ is) = applyFam-ren ρ (app (def x) i) is
+applyFam-ren ρ (ann e A) (i ∷ is) = applyFam-ren ρ (app (ann e A) i) is
+applyFam-ren ρ (prod A B) (i ∷ is) = applyFam-ren ρ (app (prod A B) i) is
+applyFam-ren ρ (pair a b) (i ∷ is) = applyFam-ren ρ (app (pair a b) i) is
+applyFam-ren ρ (letp e t) (i ∷ is) = applyFam-ren ρ (app (letp e t) i) is
+applyFam-ren ρ (nu F) (i ∷ is) = applyFam-ren ρ (app (nu F) i) is
+applyFam-ren ρ (unf s f) (i ∷ is) = applyFam-ren ρ (app (unf s f) i) is
+applyFam-ren ρ (ucons s) (i ∷ is) = applyFam-ren ρ (app (ucons s) i) is
+applyFam-ren ρ i64 (i ∷ is) = applyFam-ren ρ (app i64 i) is
+applyFam-ren ρ f32ty (i ∷ is) = applyFam-ren ρ (app f32ty i) is
+applyFam-ren ρ (tensor d s) (i ∷ is) = applyFam-ren ρ (app (tensor d s) i) is
+applyFam-ren ρ (addi x y) (i ∷ is) = applyFam-ren ρ (app (addi x y) i) is
+applyFam-ren ρ (muli x y) (i ∷ is) = applyFam-ren ρ (app (muli x y) i) is
+applyFam-ren ρ (addt t u) (i ∷ is) = applyFam-ren ρ (app (addt t u) i) is
+applyFam-ren ρ (toi64 t) (i ∷ is) = applyFam-ren ρ (app (toi64 t) i) is
+applyFam-ren ρ (packi x y) (i ∷ is) = applyFam-ren ρ (app (packi x y) i) is
+
+unfFam-ren : ∀ {n m} (ρ : Fin n → Fin m) S F is {G fam}
+  → unfFam S F is ≡ ok (G , fam)
+  → unfFam (ren ρ S) (ren (lift ρ) F) (renList ρ is) ≡ ok (ren ρ G , fam)
+unfFam-ren ρ S F [] refl = cong (λ g → ok (g , false)) (sym (ren-inst ρ F S))
+unfFam-ren ρ S (lam q A b) (i ∷ is) refl =
+  cong (λ g → ok (g , true))
+    (trans (cong (λ t → applyFam t (renList ρ (i ∷ is)))
+             (sym (ren-inst ρ (lam q A b) (nu (lam q A b)))))
+           (applyFam-ren ρ (inst (lam q A b) (nu (lam q A b))) (i ∷ is)))
+unfFam-ren ρ S (var _) (_ ∷ _) ()
+unfFam-ren ρ S typ (_ ∷ _) ()
+unfFam-ren ρ S (pi _ _ _) (_ ∷ _) ()
+unfFam-ren ρ S (app _ _) (_ ∷ _) ()
+unfFam-ren ρ S nat (_ ∷ _) ()
+unfFam-ren ρ S ze (_ ∷ _) ()
+unfFam-ren ρ S (su _) (_ ∷ _) ()
+unfFam-ren ρ S unit (_ ∷ _) ()
+unfFam-ren ρ S one (_ ∷ _) ()
+unfFam-ren ρ S empty (_ ∷ _) ()
+unfFam-ren ρ S (dty _) (_ ∷ _) ()
+unfFam-ren ρ S (ctor _ _) (_ ∷ _) ()
+unfFam-ren ρ S (mData _ _ _) (_ ∷ _) ()
+unfFam-ren ρ S (mNat _ _ _ _) (_ ∷ _) ()
+unfFam-ren ρ S (mEmp _ _) (_ ∷ _) ()
+unfFam-ren ρ S (mUnit _ _ _) (_ ∷ _) ()
+unfFam-ren ρ S (idt _ _ _) (_ ∷ _) ()
+unfFam-ren ρ S rfl (_ ∷ _) ()
+unfFam-ren ρ S (rwt _ _ _) (_ ∷ _) ()
+unfFam-ren ρ S (def _) (_ ∷ _) ()
+unfFam-ren ρ S (ann _ _) (_ ∷ _) ()
+unfFam-ren ρ S (prod _ _) (_ ∷ _) ()
+unfFam-ren ρ S (pair _ _) (_ ∷ _) ()
+unfFam-ren ρ S (letp _ _) (_ ∷ _) ()
+unfFam-ren ρ S (nu _) (_ ∷ _) ()
+unfFam-ren ρ S (unf _ _) (_ ∷ _) ()
+unfFam-ren ρ S (ucons _) (_ ∷ _) ()
+unfFam-ren ρ S i64 (_ ∷ _) ()
+unfFam-ren ρ S f32ty (_ ∷ _) ()
+unfFam-ren ρ S (tensor _ _) (_ ∷ _) ()
+unfFam-ren ρ S (addi _ _) (_ ∷ _) ()
+unfFam-ren ρ S (muli _ _) (_ ∷ _) ()
+unfFam-ren ρ S (addt _ _) (_ ∷ _) ()
+unfFam-ren ρ S (toi64 _) (_ ∷ _) ()
+unfFam-ren ρ S (packi _ _) (_ ∷ _) ()
+
+unfStepOf-ren : ∀ {n m} (ρ : Fin n → Fin m) (S T : Tm n) {G fam}
+  → unfStepOf S T ≡ ok (G , fam)
+  → unfStepOf (ren ρ S) (ren ρ T) ≡ ok (ren ρ G , fam)
+unfStepOf-ren ρ S (nu F) refl = cong (λ g → ok (g , false)) (sym (ren-inst ρ F S))
+unfStepOf-ren ρ S (app f a) eq = go f (a ∷ []) eq
+  where
+  go : ∀ (h : Tm _) is {G′ fam′}
+    → unfSpine S (unspine-go h is) ≡ ok (G′ , fam′)
+    → unfSpine (ren ρ S) (unspine-go (ren ρ h) (renList ρ is)) ≡ ok (ren ρ G′ , fam′)
+  go (app f′ a′) is eq′ = go f′ (a′ ∷ is) eq′
+  go (nu F) is eq′ = unfFam-ren ρ S F is eq′
+  go (var _) _ ()
+  go typ _ ()
+  go (pi _ _ _) _ ()
+  go (lam _ _ _) _ ()
+  go nat _ ()
+  go ze _ ()
+  go (su _) _ ()
+  go unit _ ()
+  go one _ ()
+  go empty _ ()
+  go (dty _) _ ()
+  go (ctor _ _) _ ()
+  go (mData _ _ _) _ ()
+  go (mNat _ _ _ _) _ ()
+  go (mEmp _ _) _ ()
+  go (mUnit _ _ _) _ ()
+  go (idt _ _ _) _ ()
+  go rfl _ ()
+  go (rwt _ _ _) _ ()
+  go (def _) _ ()
+  go (ann _ _) _ ()
+  go (prod _ _) _ ()
+  go (pair _ _) _ ()
+  go (letp _ _) _ ()
+  go (unf _ _) _ ()
+  go (ucons _) _ ()
+  go i64 _ ()
+  go f32ty _ ()
+  go (tensor _ _) _ ()
+  go (addi _ _) _ ()
+  go (muli _ _) _ ()
+  go (addt _ _) _ ()
+  go (toi64 _) _ ()
+  go (packi _ _) _ ()
+unfStepOf-ren ρ S (var _) ()
+unfStepOf-ren ρ S typ ()
+unfStepOf-ren ρ S (pi _ _ _) ()
+unfStepOf-ren ρ S (lam _ _ _) ()
+unfStepOf-ren ρ S nat ()
+unfStepOf-ren ρ S ze ()
+unfStepOf-ren ρ S (su _) ()
+unfStepOf-ren ρ S unit ()
+unfStepOf-ren ρ S one ()
+unfStepOf-ren ρ S empty ()
+unfStepOf-ren ρ S (dty _) ()
+unfStepOf-ren ρ S (ctor _ _) ()
+unfStepOf-ren ρ S (mData _ _ _) ()
+unfStepOf-ren ρ S (mNat _ _ _ _) ()
+unfStepOf-ren ρ S (mEmp _ _) ()
+unfStepOf-ren ρ S (mUnit _ _ _) ()
+unfStepOf-ren ρ S (idt _ _ _) ()
+unfStepOf-ren ρ S rfl ()
+unfStepOf-ren ρ S (rwt _ _ _) ()
+unfStepOf-ren ρ S (def _) ()
+unfStepOf-ren ρ S (ann _ _) ()
+unfStepOf-ren ρ S (prod _ _) ()
+unfStepOf-ren ρ S (pair _ _) ()
+unfStepOf-ren ρ S (letp _ _) ()
+unfStepOf-ren ρ S (unf _ _) ()
+unfStepOf-ren ρ S (ucons _) ()
+unfStepOf-ren ρ S i64 ()
+unfStepOf-ren ρ S f32ty ()
+unfStepOf-ren ρ S (tensor _ _) ()
+unfStepOf-ren ρ S (addi _ _) ()
+unfStepOf-ren ρ S (muli _ _) ()
+unfStepOf-ren ρ S (addt _ _) ()
+unfStepOf-ren ρ S (toi64 _) ()
+unfStepOf-ren ρ S (packi _ _) ()
+
 Ren : ∀ {n k} → (Fin n → Fin k) → Ctx n → Ctx k → Set
 Ren ρ Γ Δ = ∀ x → (qtyOf Δ (ρ x) ≡ qtyOf Γ x) × (typOf Δ (ρ x) ≡ ren ρ (typOf Γ x))
 
@@ -524,6 +748,23 @@ Ren-wk Γ q A x = qty-ext-suc Γ q A x , typ-ext-suc Γ q A x
 -- The empty context renames into any context.
 Ren-closed : ∀ {n} (Γ : Ctx n) → Ren fromZero ε Γ
 Ren-closed Γ ()
+
+-- The codomain of an inferred unfold sits under the Π, so wk commutes
+-- with renaming there and the ν variable stays zero.
+unf-ren⁰ : ∀ {σ n k m q} {ρ : Fin n → Fin k} {Δ : Ctx k} {seed′ f′}
+  (S A : Tm n)
+  → σ , Δ ⊨[ m ] seed′ ∶ ren ρ S
+  → σ , Δ ⊨[ m ] f′ ∶ ren ρ (pi q S (prod (wk A) (wk S)))
+  → σ , Δ ⊨⁰[ m ] unf seed′ f′ ∶ ren ρ (nu (prod (wk A) (var zero)))
+unf-ren⁰ {ρ = ρ} S A Ds Df rewrite ren-wk ρ A | ren-wk ρ S = t-unf Ds Df
+
+unf-sub⁰ : ∀ {σ n k m q} {τ : Fin n → Tm k} {Δ : Ctx k} {seed′ f′}
+  (S A : Tm n)
+  → σ , Δ ⊨[ m ] seed′ ∶ sub τ S
+  → σ , Δ ⊨[ m ] f′ ∶ sub τ (pi q S (prod (wk A) (wk S)))
+  → σ , Δ ⊨[ m ] unf seed′ f′ ∶ sub τ (nu (prod (wk A) (var zero)))
+unf-sub⁰ {τ = τ} S A Ds Df rewrite sub-wk τ A | sub-wk τ S =
+  conv (t-unf Ds Df) ≈-refl
 
 ⊨-ren : ∀ {σ n k} {ρ : Fin n → Fin k} {Γ Δ m e A}
   → Ren ρ Γ Δ → σ , Γ ⊨[ m ] e ∶ A → σ , Δ ⊨[ m ] ren ρ e ∶ ren ρ A
@@ -595,6 +836,21 @@ mot-ren : ∀ {σ n k} {ρ : Fin n → Fin k} {Γ Δ di ps ixs P}
     (⊨-≡ (trans (ren-wk (lift ρ) (wk C)) (cong wk (ren-wk ρ C)))
       (⊨-ctx (cong (ext _ affine) (ren-wk ρ B))
         (⊨-ren (Ren-lift (Ren-lift r affine A) affine (wk B)) Dt)))
+⊨⁰-ren {ρ = ρ} r (t-nu {K = K} D) =
+  t-nu (⊨-≡ (ren-wk ρ K) (⊨-ren (Ren-lift r affine K) D))
+⊨⁰-ren {ρ = ρ} r (t-unf {S = S} {A = A} Ds Df) =
+  unf-ren⁰ S A (⊨-ren r Ds) (⊨-ren r Df)
+⊨⁰-ren {ρ = ρ} {A = A} r (t-unfG {q = q} {S = S} {Eh = Eh} {G = G} Ds c st sh Dp) =
+  t-unfG (⊨-ren r Ds) (≈-ren ρ c) (unfStepOf-ren ρ S A st)
+    (trans (cong (ren ρ) sh) (cong (λ E → nu (prod E (var zero))) (ren-wk ρ Eh)))
+    (⊨-≡ (ren-wk ρ G) (⊨-ren (Ren-lift r q S) Dp))
+⊨⁰-ren {σ = σ} {ρ = ρ} {Δ = Δ} {m = m} r (t-unfR {q = q} {seed = seed} {S = S} {A = A} {h = h} {t = t} {T = T} {G = G} Ds c st nf Dp) =
+  subst (λ e → σ , Δ ⊨⁰[ m ] e ∶ ren ρ T)
+    (sym (cong₂ (λ x y → unf (ren ρ seed) (pair x y)) (ren-inst ρ h seed) (ren-inst ρ t seed)))
+    (t-unfR (⊨-ren r Ds) (≈-ren ρ c) (unfStepOf-ren ρ S T st) nf
+      (⊨-≡ (ren-wk ρ G) (⊨-ren (Ren-lift r q S) Dp)))
+⊨⁰-ren {ρ = ρ} r (t-ucons {T = T} {T′ = T′} Ds c st) =
+  t-ucons (⊨-ren r Ds) (≈-ren ρ c) (unfStepOf-ren ρ T T′ st)
 
 ▹-ren {ρ = ρ} r (a-[] c) = a-[] (≈-ren ρ c)
 ▹-ren {ρ = ρ} r (a-∷ {B = B} {a = a} c Da ar) =
@@ -637,6 +893,192 @@ closed-⊨ : ∀ {σ n} {Γ : Ctx n} {m e A}
 closed-⊨ {Γ = Γ} D = ⊨-ren (Ren-closed Γ) D
 
 ------------------------------------------------------------------------
+-- applyFam instantiates a λ head. Substitution can turn a neutral index
+-- into a λ, so the instantiated goal is the β-reduct of the substituted
+-- spine, not the substituted goal. appsFrom never instantiates, and it
+-- commutes with substitution on the nose; the two goals are convertible.
+applyFam-apps : ∀ {σ n} (t : Tm n) (is : List (Tm n))
+  → σ ⊢[ spec ] applyFam t is ≈ appsFrom t is
+applyFam-apps t [] = ≈-refl
+applyFam-apps (lam q A b) (i ∷ is) =
+  ≈-trans (applyFam-apps (inst b i) is)
+    (≈-appsFrom (≈-sym (⟶→≈ β)) (≈L-refl is))
+applyFam-apps (var x) (i ∷ is) = applyFam-apps (app (var x) i) is
+applyFam-apps typ (i ∷ is) = applyFam-apps (app typ i) is
+applyFam-apps (pi q A B) (i ∷ is) = applyFam-apps (app (pi q A B) i) is
+applyFam-apps (app f a) (i ∷ is) = applyFam-apps (app (app f a) i) is
+applyFam-apps nat (i ∷ is) = applyFam-apps (app nat i) is
+applyFam-apps ze (i ∷ is) = applyFam-apps (app ze i) is
+applyFam-apps (su u) (i ∷ is) = applyFam-apps (app (su u) i) is
+applyFam-apps unit (i ∷ is) = applyFam-apps (app unit i) is
+applyFam-apps one (i ∷ is) = applyFam-apps (app one i) is
+applyFam-apps empty (i ∷ is) = applyFam-apps (app empty i) is
+applyFam-apps (dty x) (i ∷ is) = applyFam-apps (app (dty x) i) is
+applyFam-apps (ctor x y) (i ∷ is) = applyFam-apps (app (ctor x y) i) is
+applyFam-apps (mData e P bs) (i ∷ is) = applyFam-apps (app (mData e P bs) i) is
+applyFam-apps (mNat e P z s) (i ∷ is) = applyFam-apps (app (mNat e P z s) i) is
+applyFam-apps (mEmp e P) (i ∷ is) = applyFam-apps (app (mEmp e P) i) is
+applyFam-apps (mUnit e P u) (i ∷ is) = applyFam-apps (app (mUnit e P u) i) is
+applyFam-apps (idt A a b) (i ∷ is) = applyFam-apps (app (idt A a b) i) is
+applyFam-apps rfl (i ∷ is) = applyFam-apps (app rfl i) is
+applyFam-apps (rwt e P t) (i ∷ is) = applyFam-apps (app (rwt e P t) i) is
+applyFam-apps (def x) (i ∷ is) = applyFam-apps (app (def x) i) is
+applyFam-apps (ann e A) (i ∷ is) = applyFam-apps (app (ann e A) i) is
+applyFam-apps (prod A B) (i ∷ is) = applyFam-apps (app (prod A B) i) is
+applyFam-apps (pair a b) (i ∷ is) = applyFam-apps (app (pair a b) i) is
+applyFam-apps (letp e t) (i ∷ is) = applyFam-apps (app (letp e t) i) is
+applyFam-apps (nu F) (i ∷ is) = applyFam-apps (app (nu F) i) is
+applyFam-apps (unf s f) (i ∷ is) = applyFam-apps (app (unf s f) i) is
+applyFam-apps (ucons s) (i ∷ is) = applyFam-apps (app (ucons s) i) is
+applyFam-apps i64 (i ∷ is) = applyFam-apps (app i64 i) is
+applyFam-apps f32ty (i ∷ is) = applyFam-apps (app f32ty i) is
+applyFam-apps (tensor d s) (i ∷ is) = applyFam-apps (app (tensor d s) i) is
+applyFam-apps (addi x y) (i ∷ is) = applyFam-apps (app (addi x y) i) is
+applyFam-apps (muli x y) (i ∷ is) = applyFam-apps (app (muli x y) i) is
+applyFam-apps (addt t u) (i ∷ is) = applyFam-apps (app (addt t u) i) is
+applyFam-apps (toi64 t) (i ∷ is) = applyFam-apps (app (toi64 t) i) is
+applyFam-apps (packi x y) (i ∷ is) = applyFam-apps (app (packi x y) i) is
+
+applyFam-sub≈ : ∀ {σ n k} (τ : Fin n → Tm k) (t : Tm n) (is : List (Tm n))
+  → σ ⊢[ spec ] sub τ (applyFam t is) ≈ applyFam (sub τ t) (subList τ is)
+applyFam-sub≈ τ t is =
+  ≈-trans (≈-sub τ (applyFam-apps t is))
+    (≈-trans (≈-≡ (sub-appsFrom τ t is))
+      (≈-sym (applyFam-apps (sub τ t) (subList τ is))))
+
+unfFam-sub : ∀ {σ n k} (τ : Fin n → Tm k) S F is {G fam}
+  → unfFam S F is ≡ ok (G , fam)
+  → ∃ λ G′ → unfFam (sub τ S) (sub (lifts τ) F) (subList τ is) ≡ ok (G′ , fam)
+           × (σ ⊢[ spec ] sub τ G ≈ G′)
+unfFam-sub τ S F [] refl =
+  inst (sub (lifts τ) F) (sub τ S) , refl , ≈-≡ (sub-inst τ F S)
+unfFam-sub {σ = σ} τ S (lam q A b) idxs@(i ∷ _) refl =
+  G′ , refl , ≈-trans (applyFam-sub≈ {σ = σ} τ head idxs) (≈-≡ (cong (λ h → applyFam h (subList τ idxs)) head≡))
+  where
+  F = lam q A b
+  head = inst F (nu F)
+  head≡ : sub τ head ≡ inst (sub (lifts τ) F) (nu (sub (lifts τ) F))
+  head≡ = sub-inst τ F (nu F)
+  G′ = applyFam (inst (sub (lifts τ) F) (nu (sub (lifts τ) F))) (subList τ idxs)
+unfFam-sub τ S (var _) (_ ∷ _) ()
+unfFam-sub τ S typ (_ ∷ _) ()
+unfFam-sub τ S (pi _ _ _) (_ ∷ _) ()
+unfFam-sub τ S (app _ _) (_ ∷ _) ()
+unfFam-sub τ S nat (_ ∷ _) ()
+unfFam-sub τ S ze (_ ∷ _) ()
+unfFam-sub τ S (su _) (_ ∷ _) ()
+unfFam-sub τ S unit (_ ∷ _) ()
+unfFam-sub τ S one (_ ∷ _) ()
+unfFam-sub τ S empty (_ ∷ _) ()
+unfFam-sub τ S (dty _) (_ ∷ _) ()
+unfFam-sub τ S (ctor _ _) (_ ∷ _) ()
+unfFam-sub τ S (mData _ _ _) (_ ∷ _) ()
+unfFam-sub τ S (mNat _ _ _ _) (_ ∷ _) ()
+unfFam-sub τ S (mEmp _ _) (_ ∷ _) ()
+unfFam-sub τ S (mUnit _ _ _) (_ ∷ _) ()
+unfFam-sub τ S (idt _ _ _) (_ ∷ _) ()
+unfFam-sub τ S rfl (_ ∷ _) ()
+unfFam-sub τ S (rwt _ _ _) (_ ∷ _) ()
+unfFam-sub τ S (def _) (_ ∷ _) ()
+unfFam-sub τ S (ann _ _) (_ ∷ _) ()
+unfFam-sub τ S (prod _ _) (_ ∷ _) ()
+unfFam-sub τ S (pair _ _) (_ ∷ _) ()
+unfFam-sub τ S (letp _ _) (_ ∷ _) ()
+unfFam-sub τ S (nu _) (_ ∷ _) ()
+unfFam-sub τ S (unf _ _) (_ ∷ _) ()
+unfFam-sub τ S (ucons _) (_ ∷ _) ()
+unfFam-sub τ S i64 (_ ∷ _) ()
+unfFam-sub τ S f32ty (_ ∷ _) ()
+unfFam-sub τ S (tensor _ _) (_ ∷ _) ()
+unfFam-sub τ S (addi _ _) (_ ∷ _) ()
+unfFam-sub τ S (muli _ _) (_ ∷ _) ()
+unfFam-sub τ S (addt _ _) (_ ∷ _) ()
+unfFam-sub τ S (toi64 _) (_ ∷ _) ()
+unfFam-sub τ S (packi _ _) (_ ∷ _) ()
+
+unfStepOf-sub : ∀ {σ n k} (τ : Fin n → Tm k) (S T : Tm n) {G fam}
+  → unfStepOf S T ≡ ok (G , fam)
+  → ∃ λ G′ → unfStepOf (sub τ S) (sub τ T) ≡ ok (G′ , fam)
+           × (σ ⊢[ spec ] sub τ G ≈ G′)
+unfStepOf-sub τ S (nu F) refl =
+  inst (sub (lifts τ) F) (sub τ S) , refl , ≈-≡ (sub-inst τ F S)
+unfStepOf-sub {σ = σ} τ S (app f a) eq = go f (a ∷ []) eq
+  where
+  go : ∀ (h : Tm _) is {G′ fam′}
+    → unfSpine S (unspine-go h is) ≡ ok (G′ , fam′)
+    → ∃ λ G″ → unfSpine (sub τ S) (unspine-go (sub τ h) (subList τ is)) ≡ ok (G″ , fam′)
+             × (σ ⊢[ spec ] sub τ G′ ≈ G″)
+  go (app f′ a′) is eq′ = go f′ (a′ ∷ is) eq′
+  go (nu F) is eq′ = unfFam-sub τ S F is eq′
+  go (var _) _ ()
+  go typ _ ()
+  go (pi _ _ _) _ ()
+  go (lam _ _ _) _ ()
+  go nat _ ()
+  go ze _ ()
+  go (su _) _ ()
+  go unit _ ()
+  go one _ ()
+  go empty _ ()
+  go (dty _) _ ()
+  go (ctor _ _) _ ()
+  go (mData _ _ _) _ ()
+  go (mNat _ _ _ _) _ ()
+  go (mEmp _ _) _ ()
+  go (mUnit _ _ _) _ ()
+  go (idt _ _ _) _ ()
+  go rfl _ ()
+  go (rwt _ _ _) _ ()
+  go (def _) _ ()
+  go (ann _ _) _ ()
+  go (prod _ _) _ ()
+  go (pair _ _) _ ()
+  go (letp _ _) _ ()
+  go (unf _ _) _ ()
+  go (ucons _) _ ()
+  go i64 _ ()
+  go f32ty _ ()
+  go (tensor _ _) _ ()
+  go (addi _ _) _ ()
+  go (muli _ _) _ ()
+  go (addt _ _) _ ()
+  go (toi64 _) _ ()
+  go (packi _ _) _ ()
+unfStepOf-sub τ S (var _) ()
+unfStepOf-sub τ S typ ()
+unfStepOf-sub τ S (pi _ _ _) ()
+unfStepOf-sub τ S (lam _ _ _) ()
+unfStepOf-sub τ S nat ()
+unfStepOf-sub τ S ze ()
+unfStepOf-sub τ S (su _) ()
+unfStepOf-sub τ S unit ()
+unfStepOf-sub τ S one ()
+unfStepOf-sub τ S empty ()
+unfStepOf-sub τ S (dty _) ()
+unfStepOf-sub τ S (ctor _ _) ()
+unfStepOf-sub τ S (mData _ _ _) ()
+unfStepOf-sub τ S (mNat _ _ _ _) ()
+unfStepOf-sub τ S (mEmp _ _) ()
+unfStepOf-sub τ S (mUnit _ _ _) ()
+unfStepOf-sub τ S (idt _ _ _) ()
+unfStepOf-sub τ S rfl ()
+unfStepOf-sub τ S (rwt _ _ _) ()
+unfStepOf-sub τ S (def _) ()
+unfStepOf-sub τ S (ann _ _) ()
+unfStepOf-sub τ S (prod _ _) ()
+unfStepOf-sub τ S (pair _ _) ()
+unfStepOf-sub τ S (letp _ _) ()
+unfStepOf-sub τ S (unf _ _) ()
+unfStepOf-sub τ S (ucons _) ()
+unfStepOf-sub τ S i64 ()
+unfStepOf-sub τ S f32ty ()
+unfStepOf-sub τ S (tensor _ _) ()
+unfStepOf-sub τ S (addi _ _) ()
+unfStepOf-sub τ S (muli _ _) ()
+unfStepOf-sub τ S (addt _ _) ()
+unfStepOf-sub τ S (toi64 _) ()
+unfStepOf-sub τ S (packi _ _) ()
+
 -- Substitution. τ maps Γ into Δ when each τ x has the (substituted)
 -- type of x, in mode m₀ if x is usable computationally and in spec if
 -- x is erased. m₀ ≤ m: the substituted terms are in a mode below the
@@ -775,6 +1217,31 @@ mot-sub : ∀ {σ n k m₀} {τ : Fin n → Tm k} {Γ Δ di ps ixs P}
             (⊨-ctx (cong (ext _ affine) (sub-wk τ B))
               (⊨-sub lm (Subst-lifts (Subst-lifts s affine A) affine (wk B)) Dt))))
     ≈-refl
+⊨⁰-sub {τ = τ} lm s (t-nu {K = K} D) =
+  conv (t-nu (⊨-≡ (sub-wk τ K) (⊨-sub ≤ᵐ-spec-top (Subst-lifts s affine K) D))) ≈-refl
+⊨⁰-sub {τ = τ} lm s (t-unf {S = S} {A = A} Ds Df) =
+  unf-sub⁰ S A (⊨-sub lm s Ds) (⊨-sub lm s Df)
+⊨⁰-sub {σ = σ} {τ = τ} lm s (t-unfG {q = q} {S = S} {T = T} {Eh = Eh} {G = G} Ds c st sh Dp)
+  with unfStepOf-sub {σ = σ} τ S T st
+... | G′ , st′ , cG =
+  conv (t-unfG (⊨-sub lm s Ds) (≈-sub τ c) st′
+          (trans (cong (sub τ) sh) (cong (λ E → nu (prod E (var zero))) (sub-wk τ Eh)))
+          (conv-≈ (⊨-≡ (sub-wk τ G) (⊨-sub lm (Subst-lifts s q S) Dp))
+                  (≈-ren suc cG)))
+    ≈-refl
+⊨⁰-sub {σ = σ} {m = m} {τ = τ} {Δ = Δ} lm s (t-unfR {q = q} {seed = seed} {S = S} {h = h} {t = t} {T = T} {G = G} Ds c st nf Dp)
+  with unfStepOf-sub {σ = σ} τ S T st
+... | G′ , st′ , cG =
+  conv (subst (λ e → σ , Δ ⊨⁰[ m ] e ∶ sub τ T)
+          (sym (cong₂ (λ x y → unf (sub τ seed) (pair x y)) (sub-inst τ h seed) (sub-inst τ t seed)))
+          (t-unfR (⊨-sub lm s Ds) (≈-sub τ c) st′ nf
+            (conv-≈ (⊨-≡ (sub-wk τ G) (⊨-sub lm (Subst-lifts s q S) Dp))
+                    (≈-ren suc cG))))
+    ≈-refl
+⊨⁰-sub {σ = σ} {τ = τ} lm s (t-ucons {T = T} {T′ = T′} Ds c st)
+  with unfStepOf-sub {σ = σ} τ T T′ st
+... | G′ , st′ , cG =
+  conv (t-ucons (⊨-sub lm s Ds) (≈-sub τ c) st′) (≈-sym cG)
 
 ▹-sub {τ = τ} lm s (a-[] c) = a-[] (≈-sub τ c)
 ▹-sub {τ = τ} lm s (a-∷ {q = q} {B = B} {a = a} c Da ar) =
@@ -887,6 +1354,11 @@ ctor-inv () (t-ann _ _)
 ctor-inv () (t-prod _ _)
 ctor-inv () (t-pair _ _)
 ctor-inv () (t-letp _ _)
+ctor-inv () (t-nu _)
+ctor-inv () (t-unf _ _)
+ctor-inv () (t-unfG _ _ _ _ _)
+ctor-inv () (t-unfR _ _ _ _ _)
+ctor-inv () (t-ucons _ _ _)
 
 ------------------------------------------------------------------------
 -- Branches: the branch for constructor k.
@@ -1001,6 +1473,594 @@ pres-ιdata {σ = σ} {Γ = Γ} {m} {as = as} {di = di} {ps₀} {is₀} {P = P} 
   ⊥-elim (Clash-▹ (Clash-≈ (InstParams-≈ ≈-refl (≈L-sym cps′) ip′ ip) cl) ar ≈-refl
     (subst (λ xs → σ ⊢[ spec ] xs ≈L is₀) (sym (drop-++ (length ps₀) ps idxs (trans lps′ (sym lps)))) cidx))
 
+≈-prod : ∀ {σ n} {A A′ B B′ : Tm n}
+  → σ ⊢[ spec ] A ≈ A′ → σ ⊢[ spec ] B ≈ B′
+  → σ ⊢[ spec ] prod A B ≈ prod A′ B′
+≈-prod {A′ = A′} {B = B} cA cB =
+  ≈-trans (≈-map (λ x → prod x B) (λ d → ⇛-prod d (⇛-refl _)) cA)
+          (≈-map (λ x → prod A′ x) (λ d → ⇛-prod (⇛-refl _) d) cB)
+
+≈-nu-inj : ∀ {σ n} {F F′ : Tm (suc n)}
+  → σ ⊢[ spec ] nu F ≈ nu F′ → σ ⊢[ spec ] F ≈ F′
+≈-nu-inj c with ≈→join c
+... | v , tv , uv with nu-⇛* tv
+... | F₁ , refl , r1 with nu-⇛* uv
+... | _ , refl , r2 = join→≈ r1 r2
+
+nu-⇛-inv : ∀ {σ m n} {F : Tm (suc n)} {u}
+  → σ ⊢[ m ] nu F ⇛ u → ∃ λ F′ → u ≡ nu F′
+nu-⇛-inv (⇛-nu _) = _ , refl
+
+app-nu-⇛* : ∀ {σ m n} {F : Tm (suc n)} {a u}
+  → σ ⊢[ m ] app (nu F) a ⇛* u
+  → ∃ λ F′ → ∃ λ a′ → u ≡ app (nu F′) a′
+app-nu-⇛* ⇛*-refl = _ , _ , refl
+app-nu-⇛* (⇛*-step (⇛-app d da) r) with nu-⇛-inv d
+... | _ , refl = app-nu-⇛* r
+
+data NuSpine {n} : Tm n → Set where
+  ns-nu  : ∀ {F} → NuSpine (nu F)
+  ns-app : ∀ {f a} → NuSpine f → NuSpine (app f a)
+
+ns-step : ∀ {σ m n} {t u : Tm n} → NuSpine t → σ ⊢[ m ] t ⇛ u → NuSpine u
+ns-step ns-nu (⇛-nu _) = ns-nu
+ns-step (ns-app h) (⇛-app d _) = ns-app (ns-step h d)
+
+ns-star : ∀ {σ m n} {t u : Tm n} → NuSpine t → σ ⊢[ m ] t ⇛* u → NuSpine u
+ns-star h ⇛*-refl = h
+ns-star h (⇛*-step s r) = ns-star (ns-step h s) r
+
+ns-apps-go : ∀ {n} (f : Tm n) → NuSpine f → ∀ j js → NuSpine (appsFrom f (j ∷ js))
+ns-apps-go f hf j [] = ns-app hf
+ns-apps-go f hf j (k ∷ ks) = ns-apps-go (app f j) (ns-app hf) k ks
+
+ns-apps : ∀ {n} (F : Tm (suc n)) i is → NuSpine (appsFrom (nu F) (i ∷ is))
+ns-apps F i [] = ns-app ns-nu
+ns-apps F i (j ∷ js) = ns-apps-go (app (nu F) i) (ns-app ns-nu) j js
+
+appish : ∀ {n} {t : Tm n} → NuSpine t → Bool
+appish ns-nu = false
+appish (ns-app _) = true
+
+ns-keep : ∀ {σ m n} {t u : Tm n} (h : NuSpine t)
+  → appish h ≡ true → (s : σ ⊢[ m ] t ⇛ u) → appish (ns-step h s) ≡ true
+ns-keep (ns-app _) refl (⇛-app _ _) = refl
+
+ns-keep* : ∀ {σ m n} {t u : Tm n} (h : NuSpine t)
+  → appish h ≡ true → (r : σ ⊢[ m ] t ⇛* u) → appish (ns-star h r) ≡ true
+ns-keep* h a ⇛*-refl = a
+ns-keep* h a (⇛*-step s r) = ns-keep* (ns-step h s) (ns-keep h a s) r
+
+kill-nu : ∀ {n} {F : Tm (suc n)} (h : NuSpine (nu F)) → appish h ≡ true → ⊥
+kill-nu ns-nu ()
+
+appish-go : ∀ {n} {f : Tm n} (hf : NuSpine f) j js → appish (ns-apps-go f hf j js) ≡ true
+appish-go hf j [] = refl
+appish-go hf j (k ∷ ks) = appish-go (ns-app hf) k ks
+
+appish-apps : ∀ {n} (F : Tm (suc n)) i is → appish (ns-apps F i is) ≡ true
+appish-apps F i [] = refl
+appish-apps F i (j ∷ js) = appish-go (ns-app ns-nu) j js
+
+nu-app-body : ∀ {σ n} {T : Tm n} {G fam} {P : Tm (suc n)} {f a}
+  → unfStepOf T (app f a) ≡ ok (G , fam)
+  → σ ⊢[ spec ] nu P ≈ app f a → ⊥
+nu-app-body {σ = σ} {T = T} {G = G} {fam = fam} eq c with ≈→join c
+... | v , tv , uv with nu-⇛* tv
+... | _ , refl , _ = spine eq uv
+  where
+  spine : ∀ {f a} → unfStepOf T (app f a) ≡ ok (G , fam)
+    → σ ⊢[ spec ] app f a ⇛* v → ⊥
+  spine {f} {a} eq r = go f a [] eq r
+    where
+    go : ∀ h i is → unfSpine T (unspine-go h (i ∷ is)) ≡ ok (G , fam)
+      → σ ⊢[ spec ] appsFrom h (i ∷ is) ⇛* v → ⊥
+    go (app h′ b) i is eq r = go h′ b (i ∷ is) eq r
+    go (nu F) i is _ r =
+      kill-nu (ns-star (ns-apps F i is) r) (ns-keep* (ns-apps F i is) (appish-apps F i is) r)
+    go (var _) _ _ () _
+    go typ _ _ () _
+    go (pi _ _ _) _ _ () _
+    go (lam _ _ _) _ _ () _
+    go nat _ _ () _
+    go ze _ _ () _
+    go (su _) _ _ () _
+    go unit _ _ () _
+    go one _ _ () _
+    go empty _ _ () _
+    go (dty _) _ _ () _
+    go (ctor _ _) _ _ () _
+    go (mData _ _ _) _ _ () _
+    go (mNat _ _ _ _) _ _ () _
+    go (mEmp _ _) _ _ () _
+    go (mUnit _ _ _) _ _ () _
+    go (idt _ _ _) _ _ () _
+    go rfl _ _ () _
+    go (rwt _ _ _) _ _ () _
+    go (def _) _ _ () _
+    go (ann _ _) _ _ () _
+    go (prod _ _) _ _ () _
+    go (pair _ _) _ _ () _
+    go (letp _ _) _ _ () _
+    go (unf _ _) _ _ () _
+    go (ucons _) _ _ () _
+    go i64 _ _ () _
+    go f32ty _ _ () _
+    go (tensor _ _) _ _ () _
+    go (addi _ _) _ _ () _
+    go (muli _ _) _ _ () _
+    go (addt _ _) _ _ () _
+    go (toi64 _) _ _ () _
+    go (packi _ _) _ _ () _
+
+-- An inferred unfold's uncons goal is the element paired with the
+-- stream. The λ's tail is the next seed; wrapping it in the same λ
+-- rebuilds the stream.
+stream-goal : ∀ {σ n} {Eh : Tm n} {T T′ G fam}
+  → σ ⊢[ spec ] nu (prod (wk Eh) (var zero)) ≈ T
+  → σ ⊢[ spec ] T ≈ T′
+  → unfStepOf T T′ ≡ ok (G , fam)
+  → σ ⊢[ spec ] prod Eh (nu (prod (wk Eh) (var zero))) ≈ G
+stream-goal {σ = σ} {Eh = Eh} {T = T} {G = G} {fam = fam} cU cT st = go _ st (≈-trans cU cT)
+  where
+  P = prod (wk Eh) (var zero)
+  go : ∀ T′ → unfStepOf T T′ ≡ ok (G , fam) → σ ⊢[ spec ] nu P ≈ T′
+    → σ ⊢[ spec ] prod Eh (nu P) ≈ G
+  go (nu F) refl cN =
+    ≈-trans (≈-prod ≈-refl cU)
+      (≈-trans (≈-≡ (sym (cong (λ B → prod B T) (inst-wk Eh T))))
+        (≈-sub (instσ T) (≈-nu-inj cN)))
+  go (app f a) eq cN = ⊥-elim (nu-app-body eq cN)
+  go (var _) () _
+  go typ () _
+  go (pi _ _ _) () _
+  go (lam _ _ _) () _
+  go nat () _
+  go ze () _
+  go (su _) () _
+  go unit () _
+  go one () _
+  go empty () _
+  go (dty _) () _
+  go (ctor _ _) () _
+  go (mData _ _ _) () _
+  go (mNat _ _ _ _) () _
+  go (mEmp _ _) () _
+  go (mUnit _ _ _) () _
+  go (idt _ _ _) () _
+  go rfl () _
+  go (rwt _ _ _) () _
+  go (def _) () _
+  go (ann _ _) () _
+  go (prod _ _) () _
+  go (pair _ _) () _
+  go (letp _ _) () _
+  go (unf _ _) () _
+  go (ucons _) () _
+  go i64 () _
+  go f32ty () _
+  go (tensor _ _) () _
+  go (addi _ _) () _
+  go (muli _ _) () _
+  go (addt _ _) () _
+  go (toi64 _) () _
+  go (packi _ _) () _
+
+pres-ι-unf : ∀ {σ n} {Γ : Ctx n} {m q q′ A S Eh s h t T T′ G fam}
+  → σ , Γ ⊨[ m ] s ∶ S
+  → σ , Γ ⊨[ m ] lam q′ A (pair h t) ∶ pi q S (prod (wk Eh) (wk S))
+  → σ ⊢[ spec ] nu (prod (wk Eh) (var zero)) ≈ T
+  → σ ⊢[ spec ] T ≈ T′
+  → unfStepOf T T′ ≡ ok (G , fam)
+  → σ , Γ ⊨[ m ] pair (inst h s) (unf (inst t s) (lam q′ A (pair h t))) ∶ G
+pres-ι-unf {m = m} {q′ = q′} Ds (conv (t-lam {q = q′} {A′ = A′} W cAnn rok Dbody) cpi) cU cT st
+  with ≈-pi-inj cpi
+... | refl , cA′ , cB with Dbody
+... | conv (t-pair Dh Dt) cp with ≈-prod-inj (≈-trans cp cB)
+... | cH , cTail =
+  let Darg = ⊨-mode (≤ᵐ-modeFor q′ m) (conv-≈ Ds (≈-sym cA′))
+      Dhead = conv-≈ (⊨-inst ≤ᵐ-refl Dh Darg)
+                (≈-trans (≈-sub (instσ _) cH) (≈-≡ (inst-wk _ _)))
+      Dnext = conv-≈ (⊨-inst ≤ᵐ-refl Dt Darg)
+                (≈-trans (≈-sub (instσ _) cTail) (≈-≡ (inst-wk _ _)))
+      Dtail = conv (t-unf Dnext (conv (t-lam W cAnn rok Dbody) cpi)) ≈-refl
+  in conv-≈ (conv (t-pair Dhead Dtail) ≈-refl) (stream-goal cU cT st)
+
+pres-ι-unfG : ∀ {σ n} {Γ : Ctx n} {m q s S A h t T0 Eh G0 fam0 T T′ G fam}
+  → σ , Γ ⊨[ m ] s ∶ S
+  → σ ⊢[ spec ] A ≈ S
+  → unfStepOf S T0 ≡ ok (G0 , fam0)
+  → T0 ≡ nu (prod (wk Eh) (var zero))
+  → σ , ext Γ q S ⊨[ m ] pair h t ∶ wk G0
+  → σ ⊢[ spec ] T0 ≈ T
+  → σ ⊢[ spec ] T ≈ T′
+  → unfStepOf T T′ ≡ ok (G , fam)
+  → σ , Γ ⊨[ m ] pair (inst h s) (unf (inst t s) (lam q A (pair h t))) ∶ G
+pres-ι-unfG {m = m} {q = q} {S = S} {A = A} {Eh = Eh} Ds cA stG sh Dp cU cT st
+  rewrite sh with stG | Dp
+... | refl | conv (t-pair Dh Dt) cp =
+  let Darg = ⊨-mode (≤ᵐ-modeFor q m) Ds
+      Dhead = conv-≈ (⊨-inst ≤ᵐ-refl Dh Darg)
+                (≈-trans (≈-sub (instσ _) (proj₁ (≈-prod-inj cp)))
+                  (≈-trans (≈-≡ (inst-wk (inst (wk Eh) S) _)) (≈-≡ (inst-wk Eh _))))
+      Dnext = conv-≈ (⊨-inst ≤ᵐ-refl Dt Darg)
+                (≈-trans (≈-sub (instσ _) (proj₂ (≈-prod-inj cp))) (≈-≡ (inst-wk S _)))
+      Dtail = conv (t-unfG Dnext cA refl refl Dp) ≈-refl
+  in conv-≈ (conv (t-pair Dhead Dtail) ≈-refl) (stream-goal cU cT st)
+
+pres-ιp : ∀ {σ n} {Γ : Ctx n} {m s q A h t T T′ G fam}
+  → WfSig σ
+  → σ , Γ ⊨[ m ] unf s (lam q A (pair h t)) ∶ T
+  → σ ⊢[ spec ] T ≈ T′
+  → unfStepOf T T′ ≡ ok (G , fam)
+  → σ , Γ ⊨[ m ] pair (inst h s) (unf (inst t s) (lam q A (pair h t))) ∶ G
+pres-ιp wf (conv (t-unf Ds Df) cU) cT st = pres-ι-unf Ds Df cU cT st
+pres-ιp wf (conv (t-unfG Ds cA stG sh Dp) cU) cT st = pres-ι-unfG Ds cA stG sh Dp cU cT st
+
+-- Weakening is injective on conversion: instantiate the extra variable away.
+≈-wk-inj : ∀ {σ m n} {A B : Tm n}
+  → σ ⊢[ m ] wk A ≈ wk B → σ ⊢[ m ] A ≈ B
+≈-wk-inj {A = A} {B = B} c =
+  ≈-trans (≈-≡ (sym (inst-wk A ze)))
+    (≈-trans (≈-sub (instσ ze) c) (≈-≡ (inst-wk B ze)))
+
+≈-nu : ∀ {σ m n} {F F′ : Tm (suc n)}
+  → σ ⊢[ m ] F ≈ F′ → σ ⊢[ m ] nu F ≈ nu F′
+≈-nu (≈-step s) = ≈-step (⇛-nu s)
+≈-nu ≈-refl = ≈-refl
+≈-nu (≈-sym c) = ≈-sym (≈-nu c)
+≈-nu (≈-trans c d) = ≈-trans (≈-nu c) (≈-nu d)
+
+×2 : ∀ {A B : Set} {a c : A} {b d : B} → (a , b) ≡ (c , d) → (a ≡ c) × (b ≡ d)
+×2 refl = refl , refl
+
+false≢true : false ≡ true → ⊥
+false≢true ()
+
+-- applyFam instantiates a λ; appsFrom applies it. β makes them agree,
+-- and on any other head they are the same recursion.
+apps-apply : ∀ {σ m n} (t : Tm n) (is : List (Tm n))
+  → σ ⊢[ m ] appsFrom t is ≈ applyFam t is
+apps-apply t [] = ≈-refl
+apps-apply (lam q A b) (i ∷ is) =
+  ≈-trans (≈-appsFrom (≈-step (⇛-β (⇛-refl b) (⇛-refl i))) (≈L-refl is))
+          (apps-apply (inst b i) is)
+apps-apply (var x) (i ∷ is) = apps-apply (app (var x) i) is
+apps-apply typ (i ∷ is) = apps-apply (app typ i) is
+apps-apply (pi q A B) (i ∷ is) = apps-apply (app (pi q A B) i) is
+apps-apply (app f a) (i ∷ is) = apps-apply (app (app f a) i) is
+apps-apply nat (i ∷ is) = apps-apply (app nat i) is
+apps-apply ze (i ∷ is) = apps-apply (app ze i) is
+apps-apply (su t) (i ∷ is) = apps-apply (app (su t) i) is
+apps-apply unit (i ∷ is) = apps-apply (app unit i) is
+apps-apply one (i ∷ is) = apps-apply (app one i) is
+apps-apply empty (i ∷ is) = apps-apply (app empty i) is
+apps-apply (dty k) (i ∷ is) = apps-apply (app (dty k) i) is
+apps-apply (ctor di ci) (i ∷ is) = apps-apply (app (ctor di ci) i) is
+apps-apply (mData e P bs) (i ∷ is) = apps-apply (app (mData e P bs) i) is
+apps-apply (mNat e P z s) (i ∷ is) = apps-apply (app (mNat e P z s) i) is
+apps-apply (mEmp e P) (i ∷ is) = apps-apply (app (mEmp e P) i) is
+apps-apply (mUnit e P u) (i ∷ is) = apps-apply (app (mUnit e P u) i) is
+apps-apply (idt A a b) (i ∷ is) = apps-apply (app (idt A a b) i) is
+apps-apply rfl (i ∷ is) = apps-apply (app rfl i) is
+apps-apply (rwt e P t) (i ∷ is) = apps-apply (app (rwt e P t) i) is
+apps-apply (def k) (i ∷ is) = apps-apply (app (def k) i) is
+apps-apply (ann e A) (i ∷ is) = apps-apply (app (ann e A) i) is
+apps-apply (prod A B) (i ∷ is) = apps-apply (app (prod A B) i) is
+apps-apply (pair a b) (i ∷ is) = apps-apply (app (pair a b) i) is
+apps-apply (letp e t) (i ∷ is) = apps-apply (app (letp e t) i) is
+apps-apply (nu F) (i ∷ is) = apps-apply (app (nu F) i) is
+apps-apply (unf s f) (i ∷ is) = apps-apply (app (unf s f) i) is
+apps-apply (ucons s) (i ∷ is) = apps-apply (app (ucons s) i) is
+apps-apply i64 (i ∷ is) = apps-apply (app i64 i) is
+apps-apply f32ty (i ∷ is) = apps-apply (app f32ty i) is
+apps-apply (tensor d s) (i ∷ is) = apps-apply (app (tensor d s) i) is
+apps-apply (addi x y) (i ∷ is) = apps-apply (app (addi x y) i) is
+apps-apply (muli x y) (i ∷ is) = apps-apply (app (muli x y) i) is
+apps-apply (addt t u) (i ∷ is) = apps-apply (app (addt t u) i) is
+apps-apply (toi64 t) (i ∷ is) = apps-apply (app (toi64 t) i) is
+apps-apply (packi x y) (i ∷ is) = apps-apply (app (packi x y) i) is
+
+head-nu : ∀ {n} {F : Tm (suc n)} → Head (nu F)
+head-nu _ = refl
+
+-- A ν-headed spine is not a λ, so β never fires on it.
+spine-nu-one : ∀ {σ m n} {F : Tm (suc n)} {as e e′}
+  → Spine (nu F) as e → σ ⊢[ m ] e ⇛ e′
+  → ∃ λ F′ → ∃ λ as′
+    → Spine (nu F′) as′ e′ × (σ ⊢[ m ] F ⇛ F′) × (σ ⊢[ m ] as ⇛L as′)
+spine-nu-one sp-[] (⇛-nu d) = _ , [] , sp-[] , d , ⇛L-[]
+spine-nu-one (sp-snoc ()) (⇛-β _ _)
+spine-nu-one (sp-snoc sp) (⇛-app df da) with spine-nu-one sp df
+... | F′ , as′ , sp′ , dF , das =
+  F′ , as′ ++ (_ ∷ []) , sp-snoc sp′ , dF , ⇛L-++ das (⇛L-∷ da ⇛L-[])
+
+spine-nu-star : ∀ {σ m n} {F : Tm (suc n)} {as e e′}
+  → Spine (nu F) as e → σ ⊢[ m ] e ⇛* e′
+  → ∃ λ F′ → ∃ λ as′
+    → Spine (nu F′) as′ e′ × (σ ⊢[ m ] F ⇛* F′) × (σ ⊢[ m ] as ⇛L* as′)
+spine-nu-star sp ⇛*-refl = _ , _ , sp , ⇛*-refl , ⇛L*-refl _
+spine-nu-star sp (⇛*-step s r) with spine-nu-one sp s
+... | F₁ , as₁ , sp₁ , dF , das with spine-nu-star sp₁ r
+... | F′ , as′ , sp′ , rF , ras =
+  F′ , as′ , sp′ , ⇛*-step dF rF , ⇛L-⇛L* das ras
+
+-- unfStepOf on an application succeeds only for a ν of a λ applied to
+-- at least one index, and the goal is that λ instantiated at the ν
+-- and then at the indices. The seed is ignored.
+fam-of : ∀ {n} {S f a G fam}
+  → unfStepOf S (app f a) ≡ ok (G , fam)
+  → ∃ λ (q : Qty) → ∃ λ (A : Tm (suc n)) → ∃ λ (b : Tm (suc (suc n))) →
+     ∃ λ (is : List (Tm n)) →
+     Spine (nu (lam q A b)) is (app f a)
+     × (G ≡ applyFam (inst (lam q A b) (nu (lam q A b))) is)
+fam-of {n = n} {S = S} {f = f} {a = a} {G = G} {fam = fam} eq = go f a [] refl eq
+  where
+  -- The index list is i ∷ is, so it is never empty: a bare ν is not an
+  -- application, and unfFam only returns the family goal for a λ.
+  go : ∀ h i is → app f a ≡ appsFrom h (i ∷ is)
+    → unfSpine S (unspine-go h (i ∷ is)) ≡ ok (G , fam)
+    → ∃ λ (q : Qty) → ∃ λ (A : Tm (suc n)) → ∃ λ (b : Tm (suc (suc n))) →
+       ∃ λ (is′ : List (Tm n)) →
+       Spine (nu (lam q A b)) is′ (app f a)
+       × (G ≡ applyFam (inst (lam q A b) (nu (lam q A b))) is′)
+  go (app f′ a′) i is eq eq′ = go f′ a′ (i ∷ is) eq eq′
+  go (nu (lam q A b)) i is eq eq′ =
+    let p = ×2 (ok-inj eq′) in
+    q , A , b , (i ∷ is) ,
+    subst (Spine (nu (lam q A b)) (i ∷ is)) (sym eq)
+      (Spine-appsFrom (nu (lam q A b)) (i ∷ is)) ,
+    sym (proj₁ p)
+  go (nu (var _)) _ _ _ ()
+  go (nu typ) _ _ _ ()
+  go (nu (pi _ _ _)) _ _ _ ()
+  go (nu (app _ _)) _ _ _ ()
+  go (nu nat) _ _ _ ()
+  go (nu ze) _ _ _ ()
+  go (nu (su _)) _ _ _ ()
+  go (nu unit) _ _ _ ()
+  go (nu one) _ _ _ ()
+  go (nu empty) _ _ _ ()
+  go (nu (dty _)) _ _ _ ()
+  go (nu (ctor _ _)) _ _ _ ()
+  go (nu (mData _ _ _)) _ _ _ ()
+  go (nu (mNat _ _ _ _)) _ _ _ ()
+  go (nu (mEmp _ _)) _ _ _ ()
+  go (nu (mUnit _ _ _)) _ _ _ ()
+  go (nu (idt _ _ _)) _ _ _ ()
+  go (nu rfl) _ _ _ ()
+  go (nu (rwt _ _ _)) _ _ _ ()
+  go (nu (def _)) _ _ _ ()
+  go (nu (ann _ _)) _ _ _ ()
+  go (nu (prod _ _)) _ _ _ ()
+  go (nu (pair _ _)) _ _ _ ()
+  go (nu (letp _ _)) _ _ _ ()
+  go (nu (nu _)) _ _ _ ()
+  go (nu (unf _ _)) _ _ _ ()
+  go (nu (ucons _)) _ _ _ ()
+  go (nu i64) _ _ _ ()
+  go (nu f32ty) _ _ _ ()
+  go (nu (tensor _ _)) _ _ _ ()
+  go (nu (addi _ _)) _ _ _ ()
+  go (nu (muli _ _)) _ _ _ ()
+  go (nu (addt _ _)) _ _ _ ()
+  go (nu (toi64 _)) _ _ _ ()
+  go (nu (packi _ _)) _ _ _ ()
+  go (var _) _ _ _ ()
+  go typ _ _ _ ()
+  go (pi _ _ _) _ _ _ ()
+  go (lam _ _ _) _ _ _ ()
+  go nat _ _ _ ()
+  go ze _ _ _ ()
+  go (su _) _ _ _ ()
+  go unit _ _ _ ()
+  go one _ _ _ ()
+  go empty _ _ _ ()
+  go (dty _) _ _ _ ()
+  go (ctor _ _) _ _ _ ()
+  go (mData _ _ _) _ _ _ ()
+  go (mNat _ _ _ _) _ _ _ ()
+  go (mEmp _ _) _ _ _ ()
+  go (mUnit _ _ _) _ _ _ ()
+  go (idt _ _ _) _ _ _ ()
+  go rfl _ _ _ ()
+  go (rwt _ _ _) _ _ _ ()
+  go (def _) _ _ _ ()
+  go (ann _ _) _ _ _ ()
+  go (prod _ _) _ _ _ ()
+  go (pair _ _) _ _ _ ()
+  go (letp _ _) _ _ _ ()
+  go (unf _ _) _ _ _ ()
+  go (ucons _) _ _ _ ()
+  go i64 _ _ _ ()
+  go f32ty _ _ _ ()
+  go (tensor _ _) _ _ _ ()
+  go (addi _ _) _ _ _ ()
+  go (muli _ _) _ _ _ ()
+  go (addt _ _) _ _ _ ()
+  go (toi64 _) _ _ _ ()
+  go (packi _ _) _ _ _ ()
+
+-- Two ν spines that join have the same instantiated family goal.
+-- The λ lives under the ν binder: its domain is a term one level up.
+fam-join : ∀ {σ n q q′} {A : Tm (suc n)} {b : Tm (suc (suc n))}
+    {A′ : Tm (suc n)} {b′ : Tm (suc (suc n))}
+    {is is′ : List (Tm n)} {f a f′ a′ : Tm n}
+  → Spine (nu (lam q A b)) is (app f a)
+  → Spine (nu (lam q′ A′ b′)) is′ (app f′ a′)
+  → σ ⊢[ spec ] app f a ≈ app f′ a′
+  → σ ⊢[ spec ]
+      applyFam (inst (lam q A b) (nu (lam q A b))) is
+    ≈ applyFam (inst (lam q′ A′ b′) (nu (lam q′ A′ b′))) is′
+fam-join {σ = σ} {q = q} {q′ = q′} {A = A} {b = b} {A′ = A′} {b′ = b′}
+    {is = is} {is′ = is′} {f = f} {a = a} {f′ = f′} {a′ = a′} sp sp′ c =
+  go (≈→join c)
+  where
+  F  = lam q A b
+  F0 = lam q′ A′ b′
+  goal = σ ⊢[ spec ] applyFam (inst F (nu F)) is ≈ applyFam (inst F0 (nu F0)) is′
+  go : (∃ λ v → (σ ⊢[ spec ] app f a ⇛* v) × (σ ⊢[ spec ] app f′ a′ ⇛* v)) → goal
+  go (v , tv , uv) = close (spine-nu-star sp tv) (spine-nu-star sp′ uv)
+    where
+    close :
+      (∃ λ G1 → ∃ λ i1 →
+         Spine (nu G1) i1 v × (σ ⊢[ spec ] F ⇛* G1) × (σ ⊢[ spec ] is ⇛L* i1))
+      → (∃ λ G2 → ∃ λ i2 →
+         Spine (nu G2) i2 v × (σ ⊢[ spec ] F0 ⇛* G2) × (σ ⊢[ spec ] is′ ⇛L* i2))
+      → goal
+    close (_ , _ , spv , rF , ris) (_ , _ , spv′ , rF′ , ris′) =
+      done (Spine-unique head-nu head-nu spv spv′) rF rF′ ris ris′
+      where
+      done : ∀ {G1 i1 G2 i2}
+        → (nu G1 ≡ nu G2) × (i1 ≡ i2)
+        → σ ⊢[ spec ] F ⇛* G1 → σ ⊢[ spec ] F0 ⇛* G2
+        → σ ⊢[ spec ] is ⇛L* i1 → σ ⊢[ spec ] is′ ⇛L* i2
+        → goal
+      done (refl , refl) rF rF′ ris ris′ =
+        ≈-trans (≈-sym (apps-apply (inst F (nu F)) is))
+          (≈-trans
+            (≈-appsFrom (≈-inst₂ (join→≈ rF rF′) (≈-nu (join→≈ rF rF′)))
+                        (join→≈L ris ris′))
+            (apps-apply (inst F0 (nu F0)) is′))
+
+-- The two fam-of results are matched here, at a fixed context level,
+-- and handed to fam-join.
+fam-apps : ∀ {σ n S} {f a : Tm n} {G0 : Tm n} {T f′ a′ G fam}
+  → unfStepOf S (app f a) ≡ ok (G0 , true)
+  → σ ⊢[ spec ] app f a ≈ app f′ a′
+  → unfStepOf T (app f′ a′) ≡ ok (G , fam)
+  → σ ⊢[ spec ] G0 ≈ G
+fam-apps {σ = σ} {n = n} st0 c st with fam-of st0
+... | q , A , b , is , sp , refl with fam-of st
+... | q′ , A′ , b′ , is′ , sp′ , refl =
+  fam-join {σ = σ} {n = n} {q = q} {q′ = q′} {A = A} {b = b}
+    {A′ = A′} {b′ = b′} {is = is} {is′ = is′} sp sp′ c
+
+-- Two successful family steps at convertible types have convertible
+-- goals. unfFam does not read the seed, and a ν spine reduces only in
+-- its body and its indices.
+fam-goal : ∀ {σ n} {S T0 G0 T T′ G fam}
+  → unfStepOf S T0 ≡ ok (G0 , true)
+  → σ ⊢[ spec ] T0 ≈ T
+  → σ ⊢[ spec ] T ≈ T′
+  → unfStepOf T T′ ≡ ok (G , fam)
+  → σ ⊢[ spec ] G0 ≈ G
+fam-goal {σ = σ} {n = n} {S = S} {T0 = app f a} {G0 = G0} {T = T}
+    {T′ = app f′ a′} {G = G} {fam = fam} st0 cS c st =
+  fam-apps {σ = σ} {n = n} {S = S} {f = f} {a = a} {G0 = G0} {T = T}
+    {f′ = f′} {a′ = a′} {G = G} {fam = fam} st0 (≈-trans cS c) st
+fam-goal {T0 = app _ _} {T′ = nu _} st0 cS c _ =
+  ⊥-elim (nu-app-body st0 (≈-sym (≈-trans cS c)))
+fam-goal {T0 = app _ _} {T′ = var _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = typ} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = pi _ _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = lam _ _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = nat} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = ze} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = su _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = unit} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = one} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = empty} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = dty _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = ctor _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = mData _ _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = mNat _ _ _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = mEmp _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = mUnit _ _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = idt _ _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = rfl} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = rwt _ _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = def _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = ann _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = prod _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = pair _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = letp _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = unf _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = ucons _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = i64} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = f32ty} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = tensor _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = addi _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = muli _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = addt _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = toi64 _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = packi _ _} _ _ _ ()
+fam-goal {T0 = nu _} st0 _ _ _ = ⊥-elim (false≢true (proj₂ (×2 (ok-inj st0))))
+fam-goal {T0 = var _} ()
+fam-goal {T0 = typ} ()
+fam-goal {T0 = pi _ _ _} ()
+fam-goal {T0 = lam _ _ _} ()
+fam-goal {T0 = nat} ()
+fam-goal {T0 = ze} ()
+fam-goal {T0 = su _} ()
+fam-goal {T0 = unit} ()
+fam-goal {T0 = one} ()
+fam-goal {T0 = empty} ()
+fam-goal {T0 = dty _} ()
+fam-goal {T0 = ctor _ _} ()
+fam-goal {T0 = mData _ _ _} ()
+fam-goal {T0 = mNat _ _ _ _} ()
+fam-goal {T0 = mEmp _ _} ()
+fam-goal {T0 = mUnit _ _ _} ()
+fam-goal {T0 = idt _ _ _} ()
+fam-goal {T0 = rfl} ()
+fam-goal {T0 = rwt _ _ _} ()
+fam-goal {T0 = def _} ()
+fam-goal {T0 = ann _ _} ()
+fam-goal {T0 = prod _ _} ()
+fam-goal {T0 = pair _ _} ()
+fam-goal {T0 = letp _ _} ()
+fam-goal {T0 = unf _ _} ()
+fam-goal {T0 = ucons _} ()
+fam-goal {T0 = i64} ()
+fam-goal {T0 = f32ty} ()
+fam-goal {T0 = tensor _ _} ()
+fam-goal {T0 = addi _ _} ()
+fam-goal {T0 = muli _ _} ()
+fam-goal {T0 = addt _ _} ()
+fam-goal {T0 = toi64 _} ()
+fam-goal {T0 = packi _ _} ()
+
+-- uncons of a family unfold reads the pair. The components are already
+-- the head obligation and the tail proof, so the reduct is that pair.
+pres-ιr : ∀ {σ n} {Γ : Ctx n} {m q s S A h t T0 G0 T T′ G fam}
+  → σ , Γ ⊨[ m ] s ∶ S
+  → σ ⊢[ spec ] A ≈ S
+  → unfStepOf S T0 ≡ ok (G0 , true)
+  → σ , ext Γ q S ⊨[ m ] pair h t ∶ wk G0
+  → σ ⊢[ spec ] T0 ≈ T
+  → σ ⊢[ spec ] T ≈ T′
+  → unfStepOf T T′ ≡ ok (G , fam)
+  → σ , Γ ⊨[ m ] pair (inst h s) (inst t s) ∶ G
+pres-ιr {m = m} {q = q} {G0 = G0} Ds _ stG Dp cS c st with Dp
+... | conv (t-pair Dh Dt) cp =
+  let Darg = ⊨-mode (≤ᵐ-modeFor q m) Ds
+      Dread = conv-≈ (conv (t-pair (⊨-inst ≤ᵐ-refl Dh Darg) (⊨-inst ≤ᵐ-refl Dt Darg)) ≈-refl)
+                (≈-trans (≈-sub (instσ _) cp) (≈-≡ (inst-wk G0 _)))
+  in conv-≈ Dread (fam-goal stG cS c st)
+
+pres-ι0 : ∀ {σ n} {Γ : Ctx n} {m a b q A T T′ G fam}
+  → WfSig σ
+  → σ , Γ ⊨[ m ] unf (pair a b) (lam q A (var zero)) ∶ T
+  → σ ⊢[ spec ] T ≈ T′
+  → unfStepOf T T′ ≡ ok (G , fam)
+  → σ , Γ ⊨[ m ] pair a (unf b (lam q A (var zero))) ∶ G
+pres-ι0 {σ = σ} {m = m} {q = q} {G = G} wf (conv (t-unf {S = S} {A = Eh} Ds Df) cU) cT st =
+  body Df Ds
+  where
+  body : σ , _ ⊨[ m ] lam q _ (var zero) ∶ pi _ S (prod (wk Eh) (wk S))
+    → σ , _ ⊨[ m ] pair _ _ ∶ S
+    → σ , _ ⊨[ m ] pair _ (unf _ (lam q _ (var zero))) ∶ G
+  body (conv (t-lam _ _ _ (conv (t-var _) cB)) cpi) (conv (t-pair Da Db) cp)
+    with ≈-pi-inj cpi
+  ... | refl , cDom , cCod =
+    let cS = ≈-wk-inj (≈-trans (≈-sym (≈-ren suc cDom)) (≈-trans cB cCod))
+        cEh , cTail = ≈-prod-inj (≈-trans cp cS)
+        Dseed = conv-≈ Db cTail
+        Dtail = conv (t-unf Dseed Df) ≈-refl
+        Dhead = conv-≈ Da cEh
+    in conv-≈ (conv (t-pair Dhead Dtail) ≈-refl) (stream-goal cU cT st)
+
 -- The step may be taken in any mode m′: δ is justified by the typing's
 -- allowedDef, not the step's.
 pres : ∀ {σ n} {Γ : Ctx n} {m m′ e e′ A}
@@ -1083,6 +2143,19 @@ pres⁰ wf (t-rfl _) ()
 pres⁰ wf (t-dty _) ()
 pres⁰ wf (t-prod _ _) ()
 pres⁰ wf (t-pair _ _) ()
+pres⁰ wf (t-nu _) ()
+pres⁰ wf (t-unf _ _) ()
+pres⁰ wf (t-unfG _ _ _ _ _) ()
+pres⁰ wf (t-unfR _ _ _ _ _) ()
+pres⁰ wf (t-ucons Ds c st) (ucons-e s) =
+  conv (t-ucons (pres wf Ds s) c st) ≈-refl
+pres⁰ wf (t-ucons Ds c st) ι-ucons-p = pres-ιp wf Ds c st
+pres⁰ wf (t-ucons Ds c st) ι-ucons-0 = pres-ι0 wf Ds c st
+pres⁰ wf (t-ucons (conv (t-unf _ (conv (t-pair _ _) cp)) _) _ _) ι-ucons-r
+  with ≈-shape h-prod h-pi cp
+... | ()
+pres⁰ wf (t-ucons (conv (t-unfR Ds cA stG refl Dp) cS) c st) ι-ucons-r =
+  pres-ιr Ds cA stG Dp cS c st
 
 pres* : ∀ {σ n} {Γ : Ctx n} {m m′ e e′ A}
   → WfSig σ
