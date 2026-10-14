@@ -95,7 +95,7 @@ With `match … motive (λ _ → Type)` such a `Box` would project a type back o
 
 ## Recursion
 
-A call in run or evidence, to the definition being checked or to another run or evidence definition that reaches it, must pass a constructor argument whose type is `D …` from a `match` on the argument the block descends on. The block shares one argument position. `even` and `odd` on `Nat` are one block (`examples/even_odd.muro`). For lists, that position is the tail. For trees, either child. Fields of a `match` on a computed value are not smaller. Spec is not checked for descent.
+A call in run, evidence, or spec, to the definition being checked or to another definition that reaches it, must pass a constructor argument whose type is `D …` from a `match` on the argument the block descends on. The block shares one argument position. `even` and `odd` on `Nat` are one block (`examples/even_odd.muro`). For lists, that position is the tail. For trees, either child. Fields of a `match` on a computed value are not smaller.
 
 ```
 def length : run Π (- A : Type) → Π (xs : List A) → Nat :=

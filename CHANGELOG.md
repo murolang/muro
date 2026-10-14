@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.24
+
+A spec definition descends, as a run or evidence definition does. A spec type could name itself unapplied, and `whnf` unfolded it, so `X := Π (+ x : X) → Empty` checked and `self-app self-app` was a closed evidence term of `Empty`. The same body as `T := T`. Spec is now in the call graph: a self-reference must be applied, and a call must pass a smaller variable at the callee's position, or the caller's argument unchanged to an earlier definition. `IsEven` stays, because it recurses on a match-bound predecessor. A spec definition that reaches a run or evidence definition, and is reached by it, is in that block. The guard that lets an evidence unfold name itself does not apply to spec. Termination of an accepted block is still argued from that measure, not proved, and fuel still bounds a spec computation inside a type.
+
+### Checker
+
+- `Check.recMode spec` and `rec_mode?(:spec)`. `checkRec` and `selfApplied` no longer skip spec. Then `Muro.Check` (`check_rec`, `self_applied`).
+
+### Tests
+
+- A spec negation and a spec defined as itself are refused. A spec family that recurses on a match-bound predecessor checks, as do `examples/half_ok.muro` and `examples/even_dec.muro`.
+
+### Manual
+
+- Terms, Data, Start, Limits, Extending: spec descends. Limits: this removes the negation; it does not prove normalisation.
+
+### Package
+
+- Version 0.16.24.
+
 ## 0.16.23
 
 ν is in ⊢. Stream, `Always`, `~`, and a declared family are rules of the judgment: `unfold` and `uncons`, the way `match` and `refl` are. An unfold of a stream is the λ, and `uncons` of that λ wraps. An unfold of a declared family is the pair instantiated at the seed, and `uncons` of that pair reads the head obligation and the proof at the tail. `uncons` of the source λ wraps, and that wrap is not the family read. The checker still refuses a self-call in the head; the judgment records the pair and does not recheck that guard, so productivity of an accepted unfold is argued from the checker's shape. Preservation covers the wrap and the pair read. It does not cover `uncons` after unfolding a definition whose body is a family λ, and the signature hypothesis of preservation is not the checker's acceptance of that definition. A checker yes is a derivation at the checker's type when the subject is that term and every premise meets its rule; a family unfold is a derivation of the pair, and a premise off its rule is not claimed. Tensor and Atom remain outside.

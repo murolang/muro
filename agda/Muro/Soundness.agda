@@ -773,19 +773,21 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-app {f = f} {a = a} Ff Fa) eq | ok (
 ...     | fail _ = ⊥-elim (fail≢ok eq)
 ...     | ok au with eqMode m spec in meq
 ...       | true with eqMode-sound m spec meq
-...         | refl with ok-inj eq
-...           | refl with infer-sound k σ rs spec true G FΓ Ff feq
-...             | inf Fft Df c with spec-⇒-uses Df
-...               | refl with viewPi-Frag k σ (GoodSig.frag G) Fft peq
-...                 | FA , FB with check-sound k σ rs spec G FΓ Fa FA aeq
-...                   | chk Da = inf (Frag-inst FB Fa)
-                        (⇒-app-era Df (≈-trans c (viewPi-≈ k σ (GoodSig.frag G) Fft peq)) Da) ≈-refl
-...                   | chk′ _ = miss
-...                   | miss = miss
+...         | refl with checkRec spec hd rs (app f a)
+...           | fail _ = ⊥-elim (fail≢ok eq)
+...           | ok _ with ok-inj eq
+...             | refl with infer-sound k σ rs spec true G FΓ Ff feq
+...               | inf Fft Df c with spec-⇒-uses Df
+...                 | refl with viewPi-Frag k σ (GoodSig.frag G) Fft peq
+...                   | FA , FB with check-sound k σ rs spec G FΓ Fa FA aeq
+...                     | chk Da = inf (Frag-inst FB Fa)
+                          (⇒-app-era Df (≈-trans c (viewPi-≈ k σ (GoodSig.frag G) Fft peq)) Da) ≈-refl
+...                     | chk′ _ = miss
+...                     | miss = miss
 infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-app {f = f} {a = a} Ff Fa) eq
-    | ok (ft , fu) | ok (erased , A , B) | ok au | true | refl | refl | inf′ _ = miss
+    | ok (ft , fu) | ok (erased , A , B) | ok au | true | refl | ok _ | refl | inf′ _ = miss
 infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-app {f = f} {a = a} Ff Fa) eq
-    | ok (ft , fu) | ok (erased , A , B) | ok au | true | refl | refl | miss = miss
+    | ok (ft , fu) | ok (erased , A , B) | ok au | true | refl | ok _ | refl | miss = miss
 infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-app {f = f} {a = a} Ff Fa) eq | ok (ft , fu) | ok (erased , A , B) | ok au | false
   with checkRec m hd rs (app f a)
 ...         | fail _ = ⊥-elim (fail≢ok eq)
