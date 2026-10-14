@@ -158,10 +158,13 @@ mutual
   whnf (suc _) _ t = ok t
 
   uconsWhnf : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n)
-  uconsWhnf k σ (unf s f) with whnf k σ (app f s)
-  ... | fail m          = fail m
-  ... | ok (pair h t)   = ok (pair h (unf t f))
-  ... | ok _            = ok (ucons (unf s f))
+  -- The three uncons steps, on the nose. A λ whose body merely reduces
+  -- to a pair is not one of them, and stays stuck.
+  uconsWhnf _ _ (unf s (pair h t)) = ok (pair h t)
+  uconsWhnf _ _ (unf s (lam q A (pair h t))) =
+    ok (pair (inst h s) (unf (inst t s) (lam q A (pair h t))))
+  uconsWhnf _ _ (unf (pair a b) (lam q A (var zero))) =
+    ok (pair a (unf b (lam q A (var zero))))
   uconsWhnf _ _ e = ok (ucons e)
 
   dataWhnf : ∀ {n} → ℕ → Sig → Tm n → Tm (suc n) → List (Tm n) → Result (Tm n)
@@ -1197,6 +1200,15 @@ nuBodyProd (lam _ _ t) = nuBodyProd t
 nuBodyProd (prod _ _)  = true
 nuBodyProd _           = false
 
+-- A bare ν is a stream when it is ν X. A × X and A does not mention X.
+-- Declared families are applications, not this shape: their unfold is
+-- the instantiated pair, and uncons reads that pair.
+lamForm : ∀ {n} → Tm n → Bool
+lamForm (nu (prod B (var zero))) with strengthen B
+... | ok _    = true
+... | fail _  = false
+lamForm _ = false
+
 applyFam : ∀ {n} → Tm n → List (Tm n) → Tm n
 applyFam t []             = t
 applyFam (lam _ _ b) (i ∷ is) = applyFam (inst b i) is
@@ -1685,6 +1697,8 @@ mutual
     infer k σ rs Γ m seed >>= λ (S , seedU) →
     conv k σ A S >>
     unfStep k σ T S >>= λ (goal , fam) →
+    (if fam then ok tt else whnf k σ T >>= λ T′ →
+      guard "bare ν is not a stream" (lamForm T′)) >>
     check k σ (extRec (if fam then setGuard rs else rs) false false)
           (ext Γ q S) m t (wk goal) >>= λ uses →
     let (u₀ , us) = headTailU uses
@@ -1695,6 +1709,8 @@ mutual
   check′ k σ rs Γ m (unf seed f) T =
     infer k σ rs Γ m seed >>= λ (S , seedU) →
     unfStep k σ T S >>= λ (goal , fam) →
+    (if fam then ok tt else whnf k σ T >>= λ T′ →
+      guard "bare ν is not a stream" (lamForm T′)) >>
     check k σ (if fam then setGuard rs else rs) Γ m f
           (pi affine S (wk goal)) >>= λ fu →
     checkUnfold k σ m rs f >>

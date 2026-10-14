@@ -12,8 +12,11 @@
 -- development of t. Hence ⇛* is confluent, and the conversion that ⇛
 -- generates (Muro.Convert) is joinability.
 --
--- Nothing here is about typing. Terms outside the ⊢ fragment (ν, Nx)
--- have congruence rules and no redexes.
+-- Nothing here is about typing. ν and unfold have congruence rules and
+-- no redex of their own. uncons of an unfold contracts when instantiating
+-- the λ-body at the seed is already a pair (the body is a pair, or it is
+-- the variable and the seed is a pair). That is the step uncons reads.
+-- Tensor and the numeric formers have congruence rules and no redexes.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
@@ -22,6 +25,7 @@ module Muro.Reduction where
 open import Data.Bool.Base using (Bool; true; false)
 open import Data.Empty using (⊥; ⊥-elim)
 open import Data.Fin.Base using (Fin; zero; suc)
+import Data.Fin.Base as Fin
 open import Data.List.Base using (List; []; _∷_; _++_)
 open import Data.Nat.Base using (ℕ; zero; suc)
 open import Data.Product.Base using (_×_; _,_; ∃; proj₂)
@@ -68,6 +72,22 @@ data _⊢[_]_⇛_ σ m where
   ⇛-ιletp : ∀ {a a′ b b′ t t′}
     → σ ⊢[ m ] a ⇛ a′ → σ ⊢[ m ] b ⇛ b′ → σ ⊢[ m ] t ⇛ t′
     → σ ⊢[ m ] letp (pair a b) t ⇛ inst₂ t′ a′ b′
+  -- uncons (unfold s (λ _ → (h, t))): instantiation is already the pair.
+  -- The tail keeps the reduced λ, the way β keeps the reduced body.
+  ⇛-ιβp : ∀ {q A A′ h h′ t t′ s s′}
+    → σ ⊢[ m ] h ⇛ h′ → σ ⊢[ m ] t ⇛ t′ → σ ⊢[ m ] s ⇛ s′ → σ ⊢[ m ] A ⇛ A′
+    → σ ⊢[ m ] ucons (unf s (lam q A (pair h t)))
+      ⇛ pair (inst h′ s′) (unf (inst t′ s′) (lam q A′ (pair h′ t′)))
+  -- uncons (unfold (a, b) (λ s → s)): the seed is the pair.
+  ⇛-ιβ0 : ∀ {q A A′ a a′ b b′}
+    → σ ⊢[ m ] a ⇛ a′ → σ ⊢[ m ] b ⇛ b′ → σ ⊢[ m ] A ⇛ A′
+    → σ ⊢[ m ] ucons (unf (pair a b) (lam q A (var zero)))
+      ⇛ pair a′ (unf b′ (lam q A′ (var zero)))
+  -- uncons (unfold s (h, t)): the pair is already the step. A declared
+  -- family's tail is the proof at the next indices, not a new seed.
+  ⇛-ιβr : ∀ {h h′ t t′ s s′}
+    → σ ⊢[ m ] h ⇛ h′ → σ ⊢[ m ] t ⇛ t′ → σ ⊢[ m ] s ⇛ s′
+    → σ ⊢[ m ] ucons (unf s (pair h t)) ⇛ pair h′ t′
   -- match on a constructor application: the j-th branch applied to the
   -- constructor's arguments (Check.dataWhnf)
   ⇛-ιdata : ∀ {i j as as′ e P bs b b′}
@@ -204,6 +224,10 @@ mutual
   ⇛-mode h (⇛-ιrfl t) = ⇛-ιrfl (⇛-mode h t)
   ⇛-mode h (⇛-ann e) = ⇛-ann (⇛-mode h e)
   ⇛-mode h (⇛-ιletp a b t) = ⇛-ιletp (⇛-mode h a) (⇛-mode h b) (⇛-mode h t)
+  ⇛-mode h (⇛-ιβp dh dt ds dA) =
+    ⇛-ιβp (⇛-mode h dh) (⇛-mode h dt) (⇛-mode h ds) (⇛-mode h dA)
+  ⇛-mode h (⇛-ιβ0 da db dA) = ⇛-ιβ0 (⇛-mode h da) (⇛-mode h db) (⇛-mode h dA)
+  ⇛-mode h (⇛-ιβr dh dt ds) = ⇛-ιβr (⇛-mode h dh) (⇛-mode h dt) (⇛-mode h ds)
   ⇛-mode h (⇛-ιdata sp lk as b) = ⇛-ιdata sp lk (⇛L-mode h as) (⇛-mode h b)
   ⇛-mode h ⇛-var = ⇛-var
   ⇛-mode h ⇛-typ = ⇛-typ
@@ -266,6 +290,11 @@ mutual
   ⇛-ren ρ (⇛-ann e) = ⇛-ann (⇛-ren ρ e)
   ⇛-ren ρ (⇛-ιletp {a′ = a′} {b′ = b′} {t′ = t′} a b t) rewrite ren-inst₂ ρ t′ a′ b′ =
     ⇛-ιletp (⇛-ren ρ a) (⇛-ren ρ b) (⇛-ren (lift (lift ρ)) t)
+  ⇛-ren ρ (⇛-ιβp {h′ = h′} {t′ = t′} {s′ = s′} dh dt ds dA)
+    rewrite ren-inst ρ h′ s′ | ren-inst ρ t′ s′ =
+    ⇛-ιβp (⇛-ren (lift ρ) dh) (⇛-ren (lift ρ) dt) (⇛-ren ρ ds) (⇛-ren ρ dA)
+  ⇛-ren ρ (⇛-ιβ0 da db dA) = ⇛-ιβ0 (⇛-ren ρ da) (⇛-ren ρ db) (⇛-ren ρ dA)
+  ⇛-ren ρ (⇛-ιβr dh dt ds) = ⇛-ιβr (⇛-ren ρ dh) (⇛-ren ρ dt) (⇛-ren ρ ds)
   ⇛-ren ρ (⇛-ιdata {as′ = as′} {bs = bs} {b′ = b′} sp lk as b)
     rewrite ren-appsFrom ρ b′ as′ =
     ⇛-ιdata (Spine-ren ρ sp) (lookupList-ren ρ bs _ lk) (⇛L-ren ρ as) (⇛-ren ρ b)
@@ -339,6 +368,11 @@ mutual
   ⇛-sub h (⇛-ann e) = ⇛-ann (⇛-sub h e)
   ⇛-sub {τ′ = τ′} h (⇛-ιletp {a′ = a′} {b′ = b′} {t′ = t′} a b t) rewrite sub-inst₂ τ′ t′ a′ b′ =
     ⇛-ιletp (⇛-sub h a) (⇛-sub h b) (⇛-sub (⇛σ-lifts (⇛σ-lifts h)) t)
+  ⇛-sub {τ′ = τ′} h (⇛-ιβp {h′ = h′} {t′ = t′} {s′ = s′} dh dt ds dA)
+    rewrite sub-inst τ′ h′ s′ | sub-inst τ′ t′ s′ =
+    ⇛-ιβp (⇛-sub (⇛σ-lifts h) dh) (⇛-sub (⇛σ-lifts h) dt) (⇛-sub h ds) (⇛-sub h dA)
+  ⇛-sub h (⇛-ιβ0 da db dA) = ⇛-ιβ0 (⇛-sub h da) (⇛-sub h db) (⇛-sub h dA)
+  ⇛-sub h (⇛-ιβr dh dt ds) = ⇛-ιβr (⇛-sub h dh) (⇛-sub h dt) (⇛-sub h ds)
   ⇛-sub {τ′ = τ′} h (⇛-ιdata {as′ = as′} {bs = bs} {b′ = b′} sp lk as b)
     rewrite sub-appsFrom τ′ b′ as′ =
     ⇛-ιdata (Spine-sub _ sp) (lookupList-sub _ bs _ lk) (⇛L-sub h as) (⇛-sub h b)
@@ -438,6 +472,29 @@ devData (ctor i j , _) e′ P′ bs′ =
 devData _ e′ P′ bs′ = mData e′ P′ bs′
 
 mutual
+  -- The λ-body is split before the index, and the index is split by
+  -- `with`, so a `suc` index reduces. A nested `var zero` pattern next
+  -- to a catch-all does not.
+  dev-unf-var0 : ∀ {n} → Sig → Mode → Tm n → Qty → Tm n → Tm n
+  dev-unf-var0 σ m (pair a b) q A =
+    pair (dev σ m a) (unf (dev σ m b) (lam q (dev σ m A) (var zero)))
+  dev-unf-var0 σ m s q A =
+    ucons (unf (dev σ m s) (lam q (dev σ m A) (var zero)))
+
+  dev-unf-var : ∀ {n} → Sig → Mode → Tm n → Qty → Tm n → Fin (suc n) → Tm n
+  dev-unf-var σ m s q A Fin.zero = dev-unf-var0 σ m s q A
+  dev-unf-var σ m s q A (Fin.suc j) =
+    ucons (unf (dev σ m s) (lam q (dev σ m A) (var (Fin.suc j))))
+
+  dev-unf-lam : ∀ {n} → Sig → Mode → Tm n → Qty → Tm n → Tm (suc n) → Tm n
+  dev-unf-lam σ m s q A (pair h t) =
+    pair (inst (dev σ m h) (dev σ m s))
+         (unf (inst (dev σ m t) (dev σ m s))
+              (lam q (dev σ m A) (pair (dev σ m h) (dev σ m t))))
+  dev-unf-lam σ m s q A (var i) = dev-unf-var σ m s q A i
+  dev-unf-lam σ m s q A b =
+    ucons (unf (dev σ m s) (lam q (dev σ m A) (dev σ m b)))
+
   dev : ∀ {n} → Sig → Mode → Tm n → Tm n
   dev σ m (var x) = var x
   dev σ m typ = typ
@@ -472,6 +529,8 @@ mutual
   dev σ m (letp e t) = letp (dev σ m e) (dev σ m t)
   dev σ m (nu F) = nu (dev σ m F)
   dev σ m (unf s f) = unf (dev σ m s) (dev σ m f)
+  dev σ m (ucons (unf s (pair h t))) = pair (dev σ m h) (dev σ m t)
+  dev σ m (ucons (unf s (lam q A b))) = dev-unf-lam σ m s q A b
   dev σ m (ucons s) = ucons (dev σ m s)
   dev σ m i64 = i64
   dev σ m f32ty = f32ty
@@ -594,6 +653,13 @@ mutual
   tri (⇛-ιrfl t) = tri t
   tri (⇛-ann e) = tri e
   tri (⇛-ιletp a b t) = ⇛-inst₂ (tri t) (tri a) (tri b)
+  tri (⇛-ιβp dh dt ds dA) =
+    ⇛-pair (⇛-inst (tri dh) (tri ds))
+           (⇛-unf (⇛-inst (tri dt) (tri ds))
+                  (⇛-lam (tri dA) (⇛-pair (tri dh) (tri dt))))
+  tri (⇛-ιβ0 da db dA) =
+    ⇛-pair (tri da) (⇛-unf (tri db) (⇛-lam (tri dA) ⇛-var))
+  tri (⇛-ιβr dh dt _ds) = ⇛-pair (tri dh) (tri dt)
   tri (⇛-ιdata {P = P} sp lk as b) = tri-ιdata {P = P} sp lk (triL as) (tri b)
   tri ⇛-var = ⇛-var
   tri ⇛-typ = ⇛-typ
@@ -622,7 +688,7 @@ mutual
   tri (⇛-letp e t) = tri-letp e (tri e) (tri t)
   tri (⇛-nu F) = ⇛-nu (tri F)
   tri (⇛-unf s f) = ⇛-unf (tri s) (tri f)
-  tri (⇛-ucons s) = ⇛-ucons (tri s)
+  tri (⇛-ucons s) = tri-ucons s (tri s)
   tri ⇛-i64 = ⇛-i64
   tri ⇛-f32ty = ⇛-f32ty
   tri (⇛-tensor d s) = ⇛-tensor (tri d) (tri s)
@@ -916,6 +982,164 @@ mutual
   tri-rwt {e = toi64 _} _ e* P* t* = ⇛-rwt e* P* t*
   tri-rwt {e = packi _ _} _ e* P* t* = ⇛-rwt e* P* t*
 
+  -- uncons contracts exactly when the scrutinee is one of the two
+  -- syntactic redexes. A congruence reduct of a redex is still a redex,
+  -- so it takes the same step; anything else stays under uncons.
+  tri-ucons : ∀ {σ m n} {e e′ : Tm n}
+    → σ ⊢[ m ] e ⇛ e′ → σ ⊢[ m ] e′ ⇛ dev σ m e
+    → σ ⊢[ m ] ucons e′ ⇛ dev σ m (ucons e)
+  tri-ucons {e = unf _ (lam _ _ (pair _ _))}
+            (⇛-unf _ (⇛-lam _ (⇛-pair _ _)))
+            (⇛-unf s* (⇛-lam A* (⇛-pair h* t*))) =
+    ⇛-ιβp h* t* s* A*
+  tri-ucons {e = unf (pair _ _) (lam _ _ (var zero))}
+            (⇛-unf (⇛-pair _ _) (⇛-lam _ ⇛-var))
+            (⇛-unf (⇛-pair a* b*) (⇛-lam A* ⇛-var)) =
+    ⇛-ιβ0 a* b* A*
+  tri-ucons {e = var _} _ e* = ⇛-ucons e*
+  tri-ucons {e = typ} _ e* = ⇛-ucons e*
+  tri-ucons {e = pi _ _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = lam _ _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = app _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = nat} _ e* = ⇛-ucons e*
+  tri-ucons {e = ze} _ e* = ⇛-ucons e*
+  tri-ucons {e = su _} _ e* = ⇛-ucons e*
+  tri-ucons {e = unit} _ e* = ⇛-ucons e*
+  tri-ucons {e = one} _ e* = ⇛-ucons e*
+  tri-ucons {e = empty} _ e* = ⇛-ucons e*
+  tri-ucons {e = dty _} _ e* = ⇛-ucons e*
+  tri-ucons {e = ctor _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = mData _ _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = mNat _ _ _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = mEmp _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = mUnit _ _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = idt _ _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = rfl} _ e* = ⇛-ucons e*
+  tri-ucons {e = rwt _ _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = def _} _ e* = ⇛-ucons e*
+  tri-ucons {e = ann _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = prod _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = pair _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = letp _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = nu _} _ e* = ⇛-ucons e*
+  tri-ucons {e = ucons _} _ e* = ⇛-ucons e*
+  tri-ucons {e = i64} _ e* = ⇛-ucons e*
+  tri-ucons {e = f32ty} _ e* = ⇛-ucons e*
+  tri-ucons {e = tensor _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = addi _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = muli _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = addt _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = toi64 _} _ e* = ⇛-ucons e*
+  tri-ucons {e = packi _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (var _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ typ} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (pi _ _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (app _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ nat} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ ze} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (su _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ unit} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ one} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ empty} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (dty _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (ctor _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (mData _ _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (mNat _ _ _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (mEmp _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (mUnit _ _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (idt _ _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ rfl} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (rwt _ _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (def _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (ann _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (prod _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (pair _ _)}
+            (⇛-unf _ (⇛-pair _ _))
+            (⇛-unf s* (⇛-pair h* t*)) =
+    ⇛-ιβr h* t* s*
+  tri-ucons {e = unf _ (letp _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (nu _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (unf _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (ucons _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ i64} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ f32ty} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (tensor _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (addi _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (muli _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (addt _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (toi64 _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (packi _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (var (suc _)))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ typ)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (pi _ _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (lam _ _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (app _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ nat)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ ze)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (su _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ unit)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ one)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ empty)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (dty _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (ctor _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (mData _ _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (mNat _ _ _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (mEmp _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (mUnit _ _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (idt _ _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ rfl)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (rwt _ _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (def _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (ann _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (prod _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (letp _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (nu _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (unf _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (ucons _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ i64)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ f32ty)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (tensor _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (addi _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (muli _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (addt _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (toi64 _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (packi _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (var _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf typ (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (pi _ _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (lam _ _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (app _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf nat (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf ze (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (su _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf unit (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf one (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf empty (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (dty _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (ctor _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (mData _ _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (mNat _ _ _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (mEmp _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (mUnit _ _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (idt _ _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf rfl (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (rwt _ _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (def _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (ann _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (prod _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (letp _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (nu _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (unf _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (ucons _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf i64 (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf f32ty (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (tensor _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (addi _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (muli _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (addt _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (toi64 _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (packi _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+
 ------------------------------------------------------------------------
 -- Diamond, and confluence of the reflexive-transitive closure.
 ------------------------------------------------------------------------
@@ -1008,6 +1232,20 @@ pair-⇛* : ∀ {σ m n} {a b : Tm n} {u}
 pair-⇛* ⇛*-refl = _ , _ , refl , ⇛*-refl , ⇛*-refl
 pair-⇛* (⇛*-step (⇛-pair a b) r) with pair-⇛* r
 ... | a′ , b′ , refl , ra , rb = a′ , b′ , refl , ⇛*-step a ra , ⇛*-step b rb
+
+nu-⇛* : ∀ {σ m n} {F : Tm (suc n)} {u}
+  → σ ⊢[ m ] nu F ⇛* u
+  → ∃ λ F′ → (u ≡ nu F′) × (σ ⊢[ m ] F ⇛* F′)
+nu-⇛* ⇛*-refl = _ , refl , ⇛*-refl
+nu-⇛* (⇛*-step (⇛-nu a) r) with nu-⇛* r
+... | F′ , refl , rF = F′ , refl , ⇛*-step a rF
+
+unf-⇛* : ∀ {σ m n} {s f : Tm n} {u}
+  → σ ⊢[ m ] unf s f ⇛* u
+  → ∃ λ s′ → ∃ λ f′ → (u ≡ unf s′ f′) × (σ ⊢[ m ] s ⇛* s′) × (σ ⊢[ m ] f ⇛* f′)
+unf-⇛* ⇛*-refl = _ , _ , refl , ⇛*-refl , ⇛*-refl
+unf-⇛* (⇛*-step (⇛-unf a b) r) with unf-⇛* r
+... | s′ , f′ , refl , rs , rf = s′ , f′ , refl , ⇛*-step a rs , ⇛*-step b rf
 
 su-⇛* : ∀ {σ m n} {t : Tm n} {u}
   → σ ⊢[ m ] su t ⇛* u → ∃ λ t′ → (u ≡ su t′) × (σ ⊢[ m ] t ⇛* t′)

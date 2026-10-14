@@ -125,6 +125,14 @@ mutual
   renMList ρ []       = ok []
   renMList ρ (t ∷ ts) = _∷_ <$> renM ρ t ⊛ renMList ρ ts
 
+unwk : ∀ {n} → Fin (suc n) → Result (Fin n)
+unwk zero    = fail "not a weakening"
+unwk (suc i) = ok i
+
+-- Drop one unused binder. Stream's element type is a weakening.
+strengthen : ∀ {n} → Tm (suc n) → Result (Tm n)
+strengthen = renM unwk
+
 unwk₂ : ∀ {n} → Fin (suc (suc n)) → Result (Fin n)
 unwk₂ zero          = fail "let: the body's type mentions a component of the pair"
 unwk₂ (suc zero)    = fail "let: the body's type mentions a component of the pair"

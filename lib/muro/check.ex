@@ -411,12 +411,20 @@ defmodule Muro.Check do
 
   defp whnf(k, book, {:ucons, e}) do
     case whnf(k - 1, book, e) do
+      # ι-ucons-r
+      {:ok, {:unf, _s, {:pair, h, t}}} ->
+        {:ok, {:pair, h, t}}
+
+      # ι-ucons-p
+      {:ok, {:unf, s, {:lam, q, a, x, {:pair, h, t}}}} ->
+        {:ok, {:pair, Subst.inst(h, s), {:unf, Subst.inst(t, s), {:lam, q, a, x, {:pair, h, t}}}}}
+
+      # ι-ucons-0
+      {:ok, {:unf, {:pair, a, b}, {:lam, q, dom, x, {:var, 0}}}} ->
+        {:ok, {:pair, a, {:unf, b, {:lam, q, dom, x, {:var, 0}}}}}
+
       {:ok, {:unf, s, f}} ->
-        case whnf(k - 1, book, {:app, f, s}) do
-          {:ok, {:pair, h, t}} -> {:ok, {:pair, h, {:unf, t, f}}}
-          {:ok, _} -> {:ok, {:ucons, {:unf, s, f}}}
-          err -> err
-        end
+        {:ok, {:ucons, {:unf, s, f}}}
 
       {:ok, e1} ->
         {:ok, {:ucons, e1}}
@@ -823,6 +831,22 @@ defmodule Muro.Check do
   defp apply_fam(t, []), do: t
   defp apply_fam({:lam, _, _, _, b}, [i | is]), do: apply_fam(Subst.inst(b, i), is)
   defp apply_fam(t, [i | is]), do: apply_fam({:app, t, i}, is)
+
+  # A bare ν unfold is a stream: ν X. A × X with A free of X. A declared
+  # family (fam) is the pair the body checked, not this shape.
+  defp bare_stream(_k, _book, true, _ty), do: :ok
+
+  defp bare_stream(k, book, false, ty) do
+    case whnf(k, book, ty) do
+      {:ok, {:nu, {:prod, b, {:var, 0}}}} ->
+        if occurs?(0, b),
+          do: {:error, "bare ν is not a stream"},
+          else: :ok
+
+      _ ->
+        {:error, "bare ν is not a stream"}
+    end
+  end
 
   # Codomain of an unfold step, and whether the goal is an applied family.
   defp unf_step(k, book, rs, gamma, ty, seed_ty) do
@@ -1696,6 +1720,7 @@ defmodule Muro.Check do
         with {:ok, {s_ty, seed_u}} <- infer(k, book, rs, gamma, mode, seed),
              :ok <- conv(k, book, names_of(rs, gamma), a_ann, s_ty),
              {:ok, {goal, fam}} <- unf_step(k, book, rs, gamma, a, s_ty),
+             :ok <- bare_stream(k, book, fam, a),
              {:ok, [u0 | us]} <-
                check(
                  k,
@@ -1713,6 +1738,7 @@ defmodule Muro.Check do
       {:unf, seed, f} ->
         with {:ok, {s_ty, seed_u}} <- infer(k, book, rs, gamma, mode, seed),
              {:ok, {goal, fam}} <- unf_step(k, book, rs, gamma, a, s_ty),
+             :ok <- bare_stream(k, book, fam, a),
              {:ok, fu} <-
                check(
                  k,

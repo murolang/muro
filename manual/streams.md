@@ -115,6 +115,6 @@ def zeros-below : evidence Π (n : Nat) → Dom zeros (natsFrom n) :=
     unfold tt (λ (_ : Unit) → (tt, zeros-below (suc n)))
 ```
 
-(`examples/dominance.muro`.) A family is spec; its proofs are evidence, omitted at emit. Declared families are checked by `Muro.Check` and by the Agda checker (`agda/Muro/ExampleFamily.agda`), and they are outside ⊢, as Stream, `Always`, and `~` are ([Limits](limits.md)).
+(`examples/dominance.muro`.) A family is spec; its proofs are evidence, omitted at emit. Stream, `Always`, `~`, and a declared family are in ⊢ ([Limits](limits.md)). An unfold of the family is a derivation of the pair at the seed, and `uncons` of that pair reads it back. The guard that keeps the recursive call under the pair is the checker's shape; the judgment records the pair and does not recheck it.
 
 Next: [Either and Dec](either.md).

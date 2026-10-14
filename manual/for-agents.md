@@ -104,7 +104,7 @@ agda/Muro/Frag.agda     the ⊢ fragment as a predicate on terms, signatures, co
 agda/Muro/Reduction.agda  parallel reduction ⇛, confluence
 agda/Muro/Convert.agda  whnf strategy ⟶ and conversion ≈ for ⊢
 agda/Muro/Data.agda     IsData, InstParams, BrTy: what the data rules are stated with
-agda/Muro/Judgement.agda  inductive ⊢ with uses (core fragment, with data / match)
+agda/Muro/Judgement.agda  inductive ⊢ with uses (core fragment, with data / match / ν)
 agda/Muro/Typing.agda   declarative ⊨ (no uses); substitution, preservation
 agda/Muro/Wall.agda     mode wall lemmas
 agda/Muro/Consistency.agda  Empty-nf, progress, preservation at Empty; Empty-evid is not proved
