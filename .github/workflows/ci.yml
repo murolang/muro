@@ -44,7 +44,8 @@ jobs:
   agda:
     name: Agda 2.8.0
     runs-on: ubuntu-24.04
-    # Muro.Soundness alone takes ~10 minutes on a laptop; the cache of
+    # Muro.Soundness typechecks one large mutual block. On a 16 GB runner
+    # that check is killed; the swap gives it room. The cache of
     # agda/_build makes a rerun with unchanged sources fast.
     timeout-minutes: 75
     steps:
@@ -77,6 +78,16 @@ jobs:
           key: agda-${{ runner.os }}-2.8.0-stdlib-2.3-${{ hashFiles('agda/**/*.agda', 'agda/**/*.agda-lib') }}
           restore-keys: |
             agda-${{ runner.os }}-2.8.0-stdlib-2.3-
+
+      # The hosted runner has 16 GB and no swap. Soundness peaks above that
+      # and the kernel kills it (`make: Killed`) with no Agda error.
+      - name: Add swap
+        run: |
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
 
       # Same flags as `make agda`: --no-libraries so extra .agda-lib files
       # shipped with the stdlib checkout (tests, docs) are not loaded.
