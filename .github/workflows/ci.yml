@@ -83,6 +83,13 @@ jobs:
       # and the kernel kills it (`make: Killed`) with no Agda error.
       - name: Add swap
         run: |
+          set -euo pipefail
+          free -h
+          swapon --show || true
+          if swapon --show | grep -q '/swapfile'; then
+            sudo swapoff /swapfile
+          fi
+          sudo rm -f /swapfile
           sudo fallocate -l 16G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
