@@ -69,6 +69,45 @@ defmodule Muro.SynthTest do
     assert Synth.rollout(:done, :long, step, stop?, pi, 4) == 0
   end
 
+  test "the synthesized policy checks and runs" do
+    assert {:converged, pred} =
+             Synth.run(&score/1, &oracle/2, &traj/1, &feats/1, &bit/2, 0)
+
+    spell = fn :bit -> "s" end
+    src = Synth.policy([{pred, :go}], :stay, spell)
+
+    path =
+      Path.join(System.tmp_dir!(), "muro_synth_policy_#{System.unique_integer([:positive])}.muro")
+
+    File.write!(path, src)
+
+    assert Muro.check_file(path) == :ok
+    assert {:ok, out} = Muro.emit_file(path, Muro.SynthBitPolicy)
+    Code.eval_string(out)
+    assert apply(Muro.SynthBitPolicy, :policy, [true]) == :go
+    assert apply(Muro.SynthBitPolicy, :policy, [false]) == :stay
+
+    assert {:converged, negated} =
+             Synth.cegar(0, 0, &neg_score/1, &neg_oracle/2, &traj/1, &feats/1, &bit/2)
+
+    neg = Synth.policy([{negated, :go}], :stay, spell)
+
+    neg_path =
+      Path.join(System.tmp_dir!(), "muro_synth_neg_#{System.unique_integer([:positive])}.muro")
+
+    File.write!(neg_path, neg)
+    assert Muro.check_file(neg_path) == :ok
+    assert {:ok, neg_out} = Muro.emit_file(neg_path, Muro.SynthNegPolicy)
+    Code.eval_string(neg_out)
+    assert apply(Muro.SynthNegPolicy, :policy, [true]) == :stay
+    assert apply(Muro.SynthNegPolicy, :policy, [false]) == :go
+  end
+
+  defp neg_score({:not, {:feat, _}}), do: 1
+  defp neg_score(_), do: 0
+
+  defp neg_oracle(_pred, state), do: not state
+
   test "a miss at depth 0 deepens once and finds the negation" do
     # The oracle wants the bit off. Depth 0 has the positive test, not
     # its negation. One deepening builds {:not, {:feat, :bit}}.

@@ -11,7 +11,11 @@ defmodule Muro.Synth do
   call of `step` is one action. A state that has already stopped ties
   them.
 
-  The checker is not involved. A candidate is a predicate, not a reduct.
+  `policy/3` transcribes a chain into a `run` definition. The checker
+  sees that definition. It does not see the search that built the chain.
+
+  The checker is not involved in the search. A candidate is a predicate,
+  not a reduct.
   """
 
   @doc """
@@ -140,6 +144,36 @@ defmodule Muro.Synth do
     rollout(state, a1, step, stop?, pi, fuel) <= rollout(state, a2, step, stop?, pi, fuel)
   end
 
+  @doc """
+  A `.muro` book whose `policy` is this chain.
+
+  `s` is a reusable `Bool`. `spell.(feature)` is the `Bool` term for one
+  test, written in scope of `s`. Each action and the default are
+  constructors of `Action`. The book typechecks when those spellings do.
+  """
+  def policy(chain, default, spell) when is_list(chain) and is_function(spell, 1) do
+    actions =
+      chain
+      |> Enum.map(fn {_pred, action} -> muro_name(action) end)
+      |> Enum.concat([muro_name(default)])
+      |> Enum.uniq()
+
+    ctors = Enum.map_join(actions, "\n", &"  #{&1} : Action")
+
+    """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data Action : Type where
+    #{ctors}
+
+    def policy : run Π (+ s : Bool) → Action :=
+      λ (+ s : Bool) →
+        #{chain_term(chain, default, spell)}
+    """
+  end
+
   defp step(_budget, _depth, {:converged, pred}, _score, _oracle, _traj, _feats, _feat),
     do: {:converged, pred}
 
@@ -151,6 +185,38 @@ defmodule Muro.Synth do
       next
     else
       step(budget - 1, depth + 1, next, score, oracle, traj, feats, feat)
+    end
+  end
+
+  defp chain_term([], default, _spell), do: muro_name(default)
+
+  defp chain_term([{pred, action} | rest], default, spell) do
+    "(match #{bool_term(pred, spell)} motive (λ _ → Action) | true => #{muro_name(action)} | false => #{chain_term(rest, default, spell)})"
+  end
+
+  defp bool_term(true, _spell), do: "true"
+  defp bool_term(false, _spell), do: "false"
+  defp bool_term({:feat, feature}, spell), do: "(#{spell.(feature)})"
+
+  defp bool_term({:not, pred}, spell) do
+    "(match #{bool_term(pred, spell)} motive (λ _ → Bool) | true => false | false => true)"
+  end
+
+  defp bool_term({:and, p, q}, spell) do
+    "(match #{bool_term(p, spell)} motive (λ _ → Bool) | true => #{bool_term(q, spell)} | false => false)"
+  end
+
+  defp bool_term({:or, p, q}, spell) do
+    "(match #{bool_term(p, spell)} motive (λ _ → Bool) | true => true | false => #{bool_term(q, spell)})"
+  end
+
+  defp muro_name(name) when is_atom(name) do
+    text = Atom.to_string(name)
+
+    if String.match?(text, ~r/^[A-Za-z_][A-Za-z0-9_-]*$/) do
+      text
+    else
+      raise ArgumentError, "not a Muro name: #{inspect(name)}"
     end
   end
 

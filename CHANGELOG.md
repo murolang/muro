@@ -2,7 +2,7 @@
 
 ## 0.16.27
 
-Discrete predicate synthesis, beside the checker. A predicate is a Boolean combination of feature tests. A chain fires the action of the first predicate that holds, or the default. The search keeps the highest-scoring predicate that agrees with an oracle on a trajectory, and drops a score of zero. `fewer?/7` compares two actions by how soon a stop is reached. The checker is not involved. A candidate is a predicate, not a reduct.
+Discrete predicate synthesis, beside the checker. A predicate is a Boolean combination of feature tests. A chain fires the action of the first predicate that holds, or the default. The search keeps the highest-scoring predicate that agrees with an oracle on a trajectory, and drops a score of zero. `fewer?/7` compares two actions by how soon a stop is reached. `policy/3` writes that chain as a `run` definition over `Bool`. The checker sees the policy. It does not see the search.
 
 ### Library
 
@@ -10,7 +10,7 @@ Discrete predicate synthesis, beside the checker. A predicate is a Boolean combi
 
 ### Tests
 
-- A chain fires one action. Depth 0 returns the feature test that matches the oracle. An observation shrinks the version space. States that agree on the features a predicate reads agree on its value. Fewer steps is the better action, and a stop ties them. A miss at depth 0 deepens once and finds the negation.
+- A chain fires one action. Depth 0 returns the feature test that matches the oracle. An observation shrinks the version space. States that agree on the features a predicate reads agree on its value. Fewer steps is the better action, and a stop ties them. A miss at depth 0 deepens once and finds the negation. The policy from that search checks, emits, and runs.
 
 ### Package
 
