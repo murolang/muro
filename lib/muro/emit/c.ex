@@ -125,8 +125,10 @@ defmodule Muro.Emit.C do
   defp classify(_), do: nil
 
   defp compile_runs(runs, book) do
+    names = Emit.def_names(book, &c_name/1, ctor_fun_names(book))
+
     Enum.reduce_while(runs, {:ok, [], [], [], 0}, fn d, {:ok, sigs, funs, extras, k} ->
-      case compile_def(d, book, k) do
+      case compile_def(d, book, k, names) do
         {:ok, sig, fun, extra, k1} ->
           {:cont, {:ok, sigs ++ [sig], funs ++ [fun], extras ++ extra, k1}}
 
@@ -140,10 +142,25 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp compile_def(d, book, k) do
-    with {:ok, sig} <- signature(d, book),
+  defp ctor_fun_names(book) do
+    book
+    |> Enum.flat_map(fn
+      %{kind: :data, ctors: cs} -> Enum.map(cs, &c_name(&1.name))
+      _ -> []
+    end)
+    |> MapSet.new()
+  end
+
+  defp compile_def(d, book, k, names) do
+    with {:ok, sig} <- signature(d, book, names),
          {:ok, {pre, expr, st}} <-
-           emit(sig.inner, sig.env, book, %{t: 0, s: 0, k: k, steps: [], envs: []}, sig.ret) do
+           emit(
+             sig.inner,
+             sig.env,
+             book,
+             %{t: 0, s: 0, k: k, steps: [], envs: [], names: names},
+             sig.ret
+           ) do
       body =
         if pre == "" do
           "  return #{expr};"
@@ -155,7 +172,7 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp signature(d, book) do
+  defp signature(d, book, names) do
     {pis, ret} = telescope(d.type)
 
     case peel_lams(d.body, length(pis)) do
@@ -181,7 +198,7 @@ defmodule Muro.Emit.C do
 
         {:ok,
          %{
-           name: c_name(d.name),
+           name: Map.fetch!(names, d.name),
            export: Map.get(d, :export, true),
            params: params,
            ret: ctype(ret, book),
@@ -758,7 +775,7 @@ defmodule Muro.Emit.C do
 
       true ->
         with {:ok, {pres, exprs, st}} <- emit_specs(specs, env, book, st) do
-          {:ok, {squash(pres), "#{c_name(name)}(#{Enum.join(exprs, ", ")})", st}}
+          {:ok, {squash(pres), "#{ename(st, name)}(#{Enum.join(exprs, ", ")})", st}}
         end
     end
   end
@@ -880,6 +897,8 @@ defmodule Muro.Emit.C do
       base
     end
   end
+
+  defp ename(st, name), do: Map.get(st.names, name, c_name(name))
 
   defp c_name(name) do
     n = safe(name)

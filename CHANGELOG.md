@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.26
+
+Two run definitions that spell the same way after `-` and `'` become `_` stay two functions, and a definition named like an Elixir reserved word still compiles. `foo-bar` and `foo_bar` used to become one `foo_bar`, so a proof about the second ran the first. `and` was emitted as `def and` and the module did not parse. The later definition takes a numeric suffix (`foo_bar_2`). A reserved word is prefixed with `muro_`. The C backend uses the same suffix when two definitions, or a definition and a constructor function, claim one spelling. `and` stays `and` in C.
+
+### Emit
+
+- `Muro.Emit.def_names/3`. Elixir and `Muro.Emit.C` both take definition names from it.
+
+### Tests
+
+- `foo-bar` and `foo_bar` emit two functions, and the call of `foo_bar` returns `suc 0`. A reserved word emits `muro_` and the module evaluates. The same pair compiles as two C functions.
+
+### Manual
+
+- Emit: the suffix and the `muro_` prefix.
+
+### Package
+
+- Version 0.16.26.
+
 ## 0.16.25
 
 A `+` binder on an unfold step must be a copyable type, as a λ, a match branch, and a constructor field must. `unfold s (λ (+ t : Stream Nat) → ((t, t), t))` is refused. A Nat seed may still be `+`.

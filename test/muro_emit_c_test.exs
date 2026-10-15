@@ -463,6 +463,31 @@ defmodule Muro.EmitCTest do
     status == 0
   end
 
+  test "two definitions that spell the same stay two C functions" do
+    dir = tmp_dir()
+    path = Path.join(dir, "collide.muro")
+
+    File.write!(path, """
+    def foo-bar : run Nat := 0
+    def foo_bar : run Nat := suc 0
+    def answer : run Nat := foo_bar
+    def and : run Π (a : Nat) → Nat := λ (a : Nat) → a
+    def use-and : run Nat := and 0
+    """)
+
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+    header = File.read!(Path.join(dir, "collide.h"))
+    source = File.read!(Path.join(dir, "collide.c"))
+    assert header =~ "muro_nat *foo_bar(void);"
+    assert header =~ "muro_nat *foo_bar_2(void);"
+    assert header =~ "muro_nat *answer(void);"
+    assert header =~ "muro_nat *and("
+    assert header =~ "muro_nat *use_and(void);"
+    refute header =~ "muro_and"
+    assert source =~ "foo_bar_2()"
+    cc!(dir, "collide.c", "collide.o")
+  end
+
   defp tmp_dir do
     dir = Path.join(System.tmp_dir!(), "muro_c_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
