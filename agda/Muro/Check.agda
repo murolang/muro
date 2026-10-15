@@ -1691,13 +1691,15 @@ mutual
        checkBound m affine ua >>
        combine m eu tus
 
-  -- ⇐-unf (λ may be affine or + on Data)
+  -- ⇐-unf. The step binder is affine, or + when the seed type is
+  -- copyable, the same test as ⇐-lam.
   check′ k σ rs Γ m (unf seed (lam q A t)) T =
     infer k σ rs Γ m seed >>= λ (S , seedU) →
     conv k σ A S >>
     unfStep k σ T S >>= λ (goal , fam) →
     (if fam then ok tt else whnf k σ T >>= λ T′ →
       guard "bare ν is not a stream" (lamForm T′)) >>
+    (if eqQty q reuse then isCopy k σ S >>= guard notCopy else ok tt) >>
     check k σ (extRec (if fam then setGuard rs else rs) false false)
           (ext Γ q S) m t (wk goal) >>= λ uses →
     let (u₀ , us) = headTailU uses
