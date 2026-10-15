@@ -39,7 +39,7 @@ mix muro.emit path.muro --backend elixir
 mix muro.emit path.muro --backend c
 ```
 
-`--backend c` writes `<name>.h` and `<name>.c` next to the file and prints those paths. It emits `run` and `run internal` only. `run internal` is `static`. Erased arguments are dropped. `Nat` is a tagged struct (`0` is zero, `1` is `suc`) with constructors `muro_zero` and `muro_suc`. `Unit` and user `data`, indexed data included, are a tag plus fields. `match` is a `switch`. A constructor with no fields is one static object, the way `tt` is `muro_tt_obj`, and its function returns that address. A constructor with fields allocates through `MURO_ALLOC`. A name that is a C keyword through C23, a typedef from `<stdint.h>`, or a common function from the C library and POSIX (`true`, `read`, `malloc`) is prefixed with `muro_`. Any other name is emitted as spelled.
+`--backend c` writes `<name>.h` and `<name>.c` next to the file and prints those paths. It emits `run` and `run internal` only. `run internal` is `static`. Erased arguments are dropped. `Nat` is a tagged struct (`0` is zero, `1` is `suc`) with constructors `muro_zero` and `muro_suc`. `Unit` and user `data`, indexed data included, are a tag plus fields. `match` is a `switch`. A constructor with no fields is one static object, the way `tt` is `muro_tt_obj`, and its function returns that address. A constructor with fields allocates through `MURO_ALLOC`. A name that is a C keyword through C23, a typedef from `<stdint.h>`, or a common function from the C library and POSIX (`true`, `read`, `malloc`) is prefixed with `muro_`. Any other name is emitted as spelled. A definition whose spelling is already taken, by an earlier definition or by a constructor function, gains a numeric suffix (`foo_bar_2`).
 
 A `run` stream is a struct: the seed, an environment for values the step closes over, and a function pointer for the step. `unfold n (λ k → (k, suc k))` is `muro_stream_new` of `n` and that step. `uncons` calls the step and returns the head together with a new struct for the tail. The original seed stays in place, as `Enum.take` plus `Stream.drop` does on the Elixir backend. `examples/zeros.muro` and `examples/nats.muro` are the drivers. `Always` and `~` are evidence, so they are omitted. A lambda applied on the spot is a local: the argument is evaluated once and the body uses it. An unapplied lambda, and a call of a local function, are refused (`c:lambda`).
 
@@ -131,6 +131,8 @@ def length : run Π (- A : Type) → Π (xs : List A) → Nat
 becomes something like `def length(xs)`. The type argument is gone. In Muro you still write `length Nat ones2` (or `length A as` in a recursive call). The checker sees `A`. Emit does not.
 
 A run definition with the name and live arity of a `Kernel` function or macro (`length/1`, `max/2`, `min/2`, `div/2`) is excluded from the module's `import Kernel`, so the call means the definition: `import Kernel, except: [max: 2]`.
+
+`-` and `'` in a name become `_`. An Elixir reserved word (`and`, `or`, `nil`, `fn`, and the rest of that list) is prefixed with `muro_`. Two source names that spell the same way stay two functions: the later one takes the suffix, so `foo-bar` is `foo_bar` and `foo_bar` is `foo_bar_2`, and a call uses the name of the definition it names.
 
 ## Functions as values
 

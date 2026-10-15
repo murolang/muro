@@ -2114,6 +2114,42 @@ defmodule Muro.CheckTest do
     assert call("KernelNameEx", :min, [0]) == 0
   end
 
+  test "two names with one Elixir spelling do not collide on emit" do
+    src = """
+    def foo-bar : run Nat := 0
+    def foo_bar : run Nat := suc 0
+    def answer : run Nat := foo_bar
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert :ok = Check.check_sig(book)
+    out = Emit.emit_module(Muro.Collide, book)
+    assert out =~ "def foo_bar do"
+    assert out =~ "def foo_bar_2 do"
+    assert out =~ "foo_bar_2()"
+    Code.eval_string(out)
+    assert call("Collide", :answer, []) == {:suc, 0}
+    assert call("Collide", :foo_bar, []) == 0
+    assert call("Collide", :foo_bar_2, []) == {:suc, 0}
+  end
+
+  test "a definition named like an Elixir reserved word emits a compilable module" do
+    for word <- ~w(and or not when fn do end nil true false catch rescue after else) do
+      src = """
+      def #{word} : run Π (a : Nat) → Nat := λ (a : Nat) → a
+      def use-#{word} : run Nat := #{word} 0
+      """
+
+      assert {:ok, book} = Parser.parse(src)
+      assert :ok = Check.check_sig(book)
+      mod = Module.concat(Muro, "Reserved#{word}")
+      out = Emit.emit_module(mod, book)
+      assert out =~ "def muro_#{word}("
+      Code.eval_string(out)
+      assert apply(mod, :"use_#{word}", []) == 0
+    end
+  end
+
   test "a function and a pair of Data are copyable at +" do
     plus =
       "def plus : run Π (n : Nat) → Π (m : Nat) → Nat := λ (n : Nat) → λ (m : Nat) → n\n"

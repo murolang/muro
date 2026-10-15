@@ -10,6 +10,13 @@ defmodule Muro.Emit do
 
   alias Muro.Ast
 
+  # Words the Elixir parser rejects as function names (`syntax error before: do`).
+  @elixir_reserved ~w(
+    true false nil
+    when and or not in
+    fn do end catch rescue after else
+  ) |> MapSet.new()
+
   @doc """
   Run definitions in book order. Data, spec, and evidence are omitted.
   `run internal` stays in the list; its `export` flag is false.
@@ -18,12 +25,37 @@ defmodule Muro.Emit do
     Enum.filter(book, &(Map.get(&1, :kind, :def) != :data and &1.mode == :run))
   end
 
+  @doc """
+  Source name to emitted name for each run definition, in book order.
+
+  `spell` turns a source name into the backend's base spelling. The first
+  definition to claim a spelling keeps it. A later one takes `base_2`,
+  then `base_3`, and so on. `taken` is spellings already used by the
+  backend (a constructor function, the Nat helper).
+  """
+  def def_names(book, spell, taken \\ MapSet.new()) when is_function(spell, 1) do
+    {map, _} =
+      Enum.reduce(run_defs(book), {%{}, taken}, fn %{name: name}, {map, used} ->
+        {emitted, used} = claim(spell.(name), used)
+        {Map.put(map, name, emitted), used}
+      end)
+
+    map
+  end
+
   def emit_module(module, book) when is_atom(module) do
     runs = run_defs(book)
-    funs = runs |> Enum.map(&emit_def(&1, book)) |> Enum.join("\n\n")
+
+    taken =
+      if Enum.any?(runs, &term_has_toi64?(&1.body)),
+        do: MapSet.new(["muro_nat_to_int"]),
+        else: MapSet.new()
+
+    names = def_names(book, &elixir_base/1, taken)
+    funs = runs |> Enum.map(&emit_def(&1, book, names)) |> Enum.join("\n\n")
 
     except =
-      case kernel_clashes(runs) do
+      case kernel_clashes(runs, names) do
         [] -> ""
         clashes -> "  import Kernel, except: #{inspect(clashes)}\n"
       end
@@ -48,7 +80,7 @@ defmodule Muro.Emit do
     """
   end
 
-  defp emit_def(%{name: name, type: ty, body: body} = d, book) do
+  defp emit_def(%{name: name, type: ty, body: body} = d, book, names) do
     {:ok, ty_db} = Ast.to_db(ty)
     {:ok, body_db} = Ast.to_db(body)
     {erased, arity} = telescope(ty_db, 0, [])
@@ -59,26 +91,27 @@ defmodule Muro.Emit do
       |> Enum.reject(&(&1 in erased))
       |> Enum.map(&bound_name(inner, arity - 1 - &1, &1, book))
 
-    expr = emit_db(inner, arity, book)
+    expr = emit_db(inner, arity, book, names)
     kw = if Map.get(d, :export, true), do: "def", else: "defp"
+    fun = Map.fetch!(names, name)
 
     if args == [] do
-      "#{kw} #{safe(name)} do\n  #{expr}\nend"
+      "#{kw} #{fun} do\n  #{expr}\nend"
     else
-      "#{kw} #{safe(name)}(#{Enum.join(args, ", ")}) do\n  #{expr}\nend"
+      "#{kw} #{fun}(#{Enum.join(args, ", ")}) do\n  #{expr}\nend"
     end
   end
 
   # A run definition named like a Kernel function or macro of the same
   # arity (`max/2`, `length/1`) would be ambiguous with the import.
-  defp kernel_clashes(runs) do
+  defp kernel_clashes(runs, names) do
     kernel = Kernel.__info__(:functions) ++ Kernel.__info__(:macros)
 
     runs
     |> Enum.map(fn %{name: name, type: ty} ->
       {:ok, ty_db} = Ast.to_db(ty)
       {erased, arity} = telescope(ty_db, 0, [])
-      {String.to_atom(safe(name)), arity - length(erased)}
+      {String.to_atom(Map.fetch!(names, name)), arity - length(erased)}
     end)
     |> Enum.filter(&(&1 in kernel))
     |> Enum.uniq()
@@ -111,119 +144,121 @@ defmodule Muro.Emit do
   defp count_lams(_, _), do: 0
 
   # de Bruijn 0 is the nearest binder = last peeled λ = x#{depth-1}.
-  defp emit_db({:var, i}, depth, _book), do: "x#{depth - 1 - i}"
-  defp emit_db(:ze, _, _book), do: "0"
-  defp emit_db(:one, _, _book), do: ":tt"
-  defp emit_db({:su, u}, d, book), do: "{:suc, #{emit_db(u, d, book)}}"
-  defp emit_db({:ann, e, _}, d, book), do: emit_db(e, d, book)
-  defp emit_db(:rfl, _, _book), do: ":refl"
-  defp emit_db({:rwt, _, _, t}, d, book), do: emit_db(t, d, book)
+  defp emit_db({:var, i}, depth, _book, _names), do: "x#{depth - 1 - i}"
+  defp emit_db(:ze, _, _book, _names), do: "0"
+  defp emit_db(:one, _, _book, _names), do: ":tt"
+  defp emit_db({:su, u}, d, book, names), do: "{:suc, #{emit_db(u, d, book, names)}}"
+  defp emit_db({:ann, e, _}, d, book, names), do: emit_db(e, d, book, names)
+  defp emit_db(:rfl, _, _book, _names), do: ":refl"
+  defp emit_db({:rwt, _, _, t}, d, book, names), do: emit_db(t, d, book, names)
 
-  defp emit_db({:hole, _}, _, _), do: raise("emit: hole")
+  defp emit_db({:hole, _}, _, _, _), do: raise("emit: hole")
 
-  defp emit_db({:atom, n}, _, _book), do: elixir_atom(n)
+  defp emit_db({:atom, n}, _, _book, _names), do: elixir_atom(n)
 
-  defp emit_db({:matom, e, _p, bs}, d, book) do
+  defp emit_db({:matom, e, _p, bs}, d, book, names) do
     clauses =
       Enum.map(bs, fn {name, b} ->
-        "      #{elixir_atom(name)} -> #{emit_db(b, d, book)}"
+        "      #{elixir_atom(name)} -> #{emit_db(b, d, book, names)}"
       end)
       |> Enum.join("\n")
 
     """
-    (case #{emit_db(e, d, book)} do
+    (case #{emit_db(e, d, book, names)} do
     #{clauses}
     end)
     """
     |> String.trim()
   end
 
-  defp emit_db({:lam, :erased, _, _, t}, d, book), do: emit_db(t, d + 1, book)
+  defp emit_db({:lam, :erased, _, _, t}, d, book, names), do: emit_db(t, d + 1, book, names)
 
-  defp emit_db({:lam, _, _, _, t}, d, book) do
-    "fn #{bound_name(t, 0, d, book)} -> #{emit_db(t, d + 1, book)} end"
+  defp emit_db({:lam, _, _, _, t}, d, book, names) do
+    "fn #{bound_name(t, 0, d, book)} -> #{emit_db(t, d + 1, book, names)} end"
   end
 
-  defp emit_db({:mdata, e, _p, bs}, d, book) do
+  defp emit_db({:mdata, e, _p, bs}, d, book, names) do
     clauses =
       Enum.map(bs, fn {name, ar, b} ->
         pat = emit_ctor_pat(name, ar, d, b, book)
-        "      #{pat} -> #{emit_db(b, d + ar, book)}"
+        "      #{pat} -> #{emit_db(b, d + ar, book, names)}"
       end)
       |> Enum.join("\n")
 
     """
-    (case #{emit_db(e, d, book)} do
+    (case #{emit_db(e, d, book, names)} do
     #{clauses}
     end)
     """
     |> String.trim()
   end
 
-  defp emit_db({:mnat, e, _p, z, s}, d, book) do
+  defp emit_db({:mnat, e, _p, z, s}, d, book, names) do
     """
-    case #{emit_db(e, d, book)} do
-      0 -> #{emit_db(z, d, book)}
-      {:suc, #{bound_name(s, 0, d, book)}} -> #{emit_db(s, d + 1, book)}
+    case #{emit_db(e, d, book, names)} do
+      0 -> #{emit_db(z, d, book, names)}
+      {:suc, #{bound_name(s, 0, d, book)}} -> #{emit_db(s, d + 1, book, names)}
     end
     """
     |> String.trim()
   end
 
-  defp emit_db({:memp, _, _}, _, _book), do: "raise \"Empty\""
+  defp emit_db({:memp, _, _}, _, _book, _names), do: "raise \"Empty\""
 
-  defp emit_db({:munit, e, _, u}, d, book) do
-    "(#{emit_db(e, d, book)}; #{emit_db(u, d, book)})"
+  defp emit_db({:munit, e, _, u}, d, book, names) do
+    "(#{emit_db(e, d, book, names)}; #{emit_db(u, d, book, names)})"
   end
 
-  defp emit_db({:pair, a, b}, d, book), do: "{#{emit_db(a, d, book)}, #{emit_db(b, d, book)}}"
+  defp emit_db({:pair, a, b}, d, book, names),
+    do: "{#{emit_db(a, d, book, names)}, #{emit_db(b, d, book, names)}}"
+
   # let (a, b) = e in t: a is de Bruijn 1 (x#{d}), b is de Bruijn 0 (x#{d + 1}).
-  defp emit_db({:letp, e, t}, d, book) do
+  defp emit_db({:letp, e, t}, d, book, names) do
     a = bound_name(t, 1, d, book)
     b = bound_name(t, 0, d + 1, book)
-    "({#{a}, #{b}} = #{emit_db(e, d, book)}; #{emit_db(t, d + 2, book)})"
+    "({#{a}, #{b}} = #{emit_db(e, d, book, names)}; #{emit_db(t, d + 2, book, names)})"
   end
 
-  defp emit_db({:unf, seed, f}, d, book) do
-    "Stream.unfold(#{emit_db(seed, d, book)}, #{emit_db(f, d, book)})"
+  defp emit_db({:unf, seed, f}, d, book, names) do
+    "Stream.unfold(#{emit_db(seed, d, book, names)}, #{emit_db(f, d, book, names)})"
   end
 
-  defp emit_db({:ucons, s}, d, book) do
-    "(fn s -> {s |> Enum.take(1) |> hd(), Stream.drop(s, 1)} end).(#{emit_db(s, d, book)})"
+  defp emit_db({:ucons, s}, d, book, names) do
+    "(fn s -> {s |> Enum.take(1) |> hd(), Stream.drop(s, 1)} end).(#{emit_db(s, d, book, names)})"
   end
 
-  defp emit_db({:addi, x, y}, d, book) do
-    "Nx.add(#{emit_db(x, d, book)}, #{emit_db(y, d, book)})"
+  defp emit_db({:addi, x, y}, d, book, names) do
+    "Nx.add(#{emit_db(x, d, book, names)}, #{emit_db(y, d, book, names)})"
   end
 
-  defp emit_db({:muli, x, y}, d, book) do
-    "Nx.multiply(#{emit_db(x, d, book)}, #{emit_db(y, d, book)})"
+  defp emit_db({:muli, x, y}, d, book, names) do
+    "Nx.multiply(#{emit_db(x, d, book, names)}, #{emit_db(y, d, book, names)})"
   end
 
-  defp emit_db({:addt, t, u}, d, book) do
-    "Nx.add(#{emit_db(t, d, book)}, #{emit_db(u, d, book)})"
+  defp emit_db({:addt, t, u}, d, book, names) do
+    "Nx.add(#{emit_db(t, d, book, names)}, #{emit_db(u, d, book, names)})"
   end
 
-  defp emit_db({:toi64, t}, d, book) do
-    "Nx.tensor(muro_nat_to_int(#{emit_db(t, d, book)}), type: :s64)"
+  defp emit_db({:toi64, t}, d, book, names) do
+    "Nx.tensor(muro_nat_to_int(#{emit_db(t, d, book, names)}), type: :s64)"
   end
 
-  defp emit_db({:packi, x, y}, d, book) do
-    "Nx.stack([#{emit_db(x, d, book)}, #{emit_db(y, d, book)}])"
+  defp emit_db({:packi, x, y}, d, book, names) do
+    "Nx.stack([#{emit_db(x, d, book, names)}, #{emit_db(y, d, book, names)}])"
   end
 
-  defp emit_db({:app, _, _} = t, d, book) do
+  defp emit_db({:app, _, _} = t, d, book, names) do
     {h, args} = spine(t, [])
 
     case h do
-      {:def, n} -> emit_ref(n, args, d, book)
-      _ -> apply_rest(emit_db(h, d, book), args, d, book)
+      {:def, n} -> emit_ref(n, args, d, book, names)
+      _ -> apply_rest(emit_db(h, d, book, names), args, d, book, names)
     end
   end
 
-  defp emit_db({:def, n}, d, book), do: emit_ref(n, [], d, book)
+  defp emit_db({:def, n}, d, book, names), do: emit_ref(n, [], d, book, names)
 
-  defp emit_db(_, _, _book), do: "raise \"erased term\""
+  defp emit_db(_, _, _book, _names), do: "raise \"erased term\""
 
   # A definition applied to `args`. With as many arguments as its type
   # has Πs it is a direct call. With more, the result is a function value
@@ -231,30 +266,35 @@ defmodule Muro.Emit do
   # closure over the remaining live arguments, the given ones evaluated
   # once; erased binders take no argument, as for an anonymous λ. A
   # constructor is always fully applied (the checker asks for it).
-  defp emit_ref(n, args, d, book) do
+  defp emit_ref(n, args, d, book, names) do
     cond do
-      ctor_name?(book, n) -> emit_ctor(n, args, d, book)
-      qtys = ref_qtys(book, n) -> emit_ref(n, qtys, args, d, book)
-      true -> "#{safe(n)}(#{Enum.join(Enum.map(args, &emit_db(&1, d, book)), ", ")})"
+      ctor_name?(book, n) ->
+        emit_ctor(n, args, d, book, names)
+
+      qtys = ref_qtys(book, n) ->
+        emit_ref(n, qtys, args, d, book, names)
+
+      true ->
+        "#{ename(names, n)}(#{Enum.join(Enum.map(args, &emit_db(&1, d, book, names)), ", ")})"
     end
   end
 
-  defp emit_ref(n, qtys, args, d, book) do
+  defp emit_ref(n, qtys, args, d, book, names) do
     arity = length(qtys)
     {now, rest} = Enum.split(args, arity)
 
     cond do
       length(args) >= arity ->
-        apply_rest(full_call(n, now, d, book), rest, d, book)
+        apply_rest(full_call(n, now, d, book, names), rest, d, book, names)
 
       true ->
         live_given =
-          for {a, q} <- Enum.zip(now, qtys), q != :erased, do: emit_db(a, d, book)
+          for {a, q} <- Enum.zip(now, qtys), q != :erased, do: emit_db(a, d, book, names)
 
         missing = Enum.drop(qtys, length(now))
         as = for {_, i} <- Enum.with_index(live_given), do: "a#{d}_#{i}"
         ys = for {q, i} <- Enum.with_index(missing), q != :erased, do: "y#{d}_#{i}"
-        call = "#{safe(n)}(#{Enum.join(as ++ ys, ", ")})"
+        call = "#{ename(names, n)}(#{Enum.join(as ++ ys, ", ")})"
         closure = Enum.reduce(Enum.reverse(ys), call, fn y, acc -> "fn #{y} -> #{acc} end" end)
 
         if as == [],
@@ -263,13 +303,13 @@ defmodule Muro.Emit do
     end
   end
 
-  defp full_call(n, args, d, book),
-    do: "#{safe(n)}(#{Enum.join(live_args(book, n, args, d), ", ")})"
+  defp full_call(n, args, d, book, names),
+    do: "#{ename(names, n)}(#{Enum.join(live_args(book, n, args, d, names), ", ")})"
 
-  defp apply_rest(head, [], _d, _book), do: head
+  defp apply_rest(head, [], _d, _book, _names), do: head
 
-  defp apply_rest(head, args, d, book) do
-    Enum.reduce(args, callable(head), fn a, acc -> "#{acc}.(#{emit_db(a, d, book)})" end)
+  defp apply_rest(head, args, d, book, names) do
+    Enum.reduce(args, callable(head), fn a, acc -> "#{acc}.(#{emit_db(a, d, book, names)})" end)
   end
 
   # `case … end.(x)` does not parse; a head that is not a name or a call
@@ -294,8 +334,8 @@ defmodule Muro.Emit do
     end
   end
 
-  defp emit_ctor(name, args, d, book) do
-    xs = Enum.map(args, &emit_db(&1, d, book))
+  defp emit_ctor(name, args, d, book, names) do
+    xs = Enum.map(args, &emit_db(&1, d, book, names))
 
     case xs do
       [] -> ":#{safe(name)}"
@@ -404,10 +444,10 @@ defmodule Muro.Emit do
     end)
   end
 
-  defp live_args(book, name, args, d) do
+  defp live_args(book, name, args, d, names) do
     case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name)) do
       nil ->
-        Enum.map(args, &emit_db(&1, d, book))
+        Enum.map(args, &emit_db(&1, d, book, names))
 
       dfn ->
         {:ok, ty} = Ast.to_db(dfn.type)
@@ -416,7 +456,7 @@ defmodule Muro.Emit do
         args
         |> Enum.zip(qtys ++ List.duplicate(:affine, length(args)))
         |> Enum.reject(fn {_, q} -> q == :erased end)
-        |> Enum.map(fn {a, _} -> emit_db(a, d, book) end)
+        |> Enum.map(fn {a, _} -> emit_db(a, d, book, names) end)
     end
   end
 
@@ -436,6 +476,23 @@ defmodule Muro.Emit do
     name
     |> String.replace("-", "_")
     |> String.replace("'", "_")
+  end
+
+  defp elixir_base(name) do
+    n = safe(name)
+    if MapSet.member?(@elixir_reserved, n), do: "muro_" <> n, else: n
+  end
+
+  defp ename(names, name), do: Map.fetch!(names, name)
+
+  defp claim(base, used) do
+    name = if MapSet.member?(used, base), do: bump(base, 2, used), else: base
+    {name, MapSet.put(used, name)}
+  end
+
+  defp bump(base, i, used) do
+    n = "#{base}_#{i}"
+    if MapSet.member?(used, n), do: bump(base, i + 1, used), else: n
   end
 
   defp term_has_toi64?({:toi64, _}), do: true
