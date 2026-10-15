@@ -13,7 +13,7 @@ Muro is an explicit affine dependent type theory. You write `.muro` files. Elixi
 
 The name is Spanish for *wall*. The wall stands between a specification, a proof, and a program. Nothing is promoted across it. Types, erased arguments, equations, and paradoxes never execute. Only `run` terms become running code.
 
-This manual is the language book. It is written for people first. Agents can follow it too: every command is copy-pasteable, every example is a real file under `examples/`, and the [grammar](grammar.md) is what the parser implements — not a sketch.
+This manual is the language book. It is written for agents and people alike: every command is copy-pasteable, every example is a real file under `examples/`, and the [grammar](grammar.md) is what the parser implements — not a sketch.
 
 ## How to read this
 
