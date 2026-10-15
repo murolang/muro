@@ -46,7 +46,7 @@ Bidirectional. Explicit. A `?` is an unsolved goal, not a solution.
 - Every `match` and `rewrite` writes its motive.
 - No metavariables, no implicits, no unification, no tactics. `?` always fails.
 - A `run` or `evidence` variable is used at most once, unless `+` on Data.
-- Recursion in `run` and `evidence` must descend. Spec does not check descent.
+- Recursion in `run`, `evidence`, and `spec` must descend.
 - Emitted code is `run` only.
 
 [half of eight is four](examples.md#half_okmuro) is the book that shows the three modes together: evenness as a spec, half as a run, the proof as evidence. Evidence is an ordinary term. It is not emitted.

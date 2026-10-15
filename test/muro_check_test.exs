@@ -1134,7 +1134,50 @@ defmodule Muro.CheckTest do
     """
 
     assert {:ok, book2} = Parser.parse(spec)
-    assert Check.check_sig(book2) == :ok
+    assert {:error, msg2} = Check.check_sig(book2)
+    assert msg2 =~ "selfSpec body"
+    assert msg2 =~ "descend"
+  end
+
+  test "a spec definition may not be its own negation" do
+    src = """
+    def X : spec Type := Π (+ x : X) → Empty
+    def self-app : evidence X := λ (+ x : X) → x x
+    def boom : evidence Empty := self-app self-app
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "X body"
+    assert msg =~ "applied"
+  end
+
+  test "a spec definition may not be plainly its own body" do
+    assert {:ok, book} = Parser.parse("def T : spec Type := T\n")
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "T body"
+    assert msg =~ "applied"
+
+    assert {:ok, book2} = Parser.parse("def n : spec Nat := n\n")
+    assert {:error, msg2} = Check.check_sig(book2)
+    assert msg2 =~ "applied"
+  end
+
+  test "a spec family may recurse on a match-bound predecessor" do
+    src = """
+    def Even : spec Π (n : Nat) → Type :=
+      λ (n : Nat) →
+        match n motive (λ _ → Type)
+          | 0 => Unit
+          | suc m =>
+              match m motive (λ _ → Type)
+                | 0 => Empty
+                | suc k => Even k
+    def two-even : evidence Even (suc (suc 0)) := tt
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
   end
 
   # The position a definition descends on is found by the checker; it need

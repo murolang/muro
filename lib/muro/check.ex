@@ -269,17 +269,17 @@ defmodule Muro.Check do
 
   @no_descent "recursive call does not descend on a smaller argument"
 
-  # A maximal application spine headed by a member of the block (run and
-  # evidence; spec is not checked): the argument at the callee's position
-  # must be a smaller variable, or the descended-on argument itself for a
-  # callee earlier in the book. A shorter spine has no such argument. head? is
-  # infer's: an inner application (the head of a larger spine) is not the
-  # maximal spine and is not checked (Agda: checkRec).
-  defp check_rec(:spec, _head?, _rs, _t), do: :ok
+  # A maximal application spine headed by a member of the block: the
+  # argument at the callee's position must be a smaller variable, or the
+  # descended-on argument itself for a callee earlier in the book. A
+  # shorter spine has no such argument. head? is infer's: an inner
+  # application (the head of a larger spine) is not the maximal spine and
+  # is not checked (Agda: checkRec). Spec descends the same way. An
+  # evidence self-call under the ν guard is the coinductive step.
   defp check_rec(_mode, true, _rs, _t), do: :ok
   defp check_rec(:evidence, false, %{guard: true}, _t), do: :ok
 
-  defp check_rec(mode, false, rs, t) when mode in [:run, :evidence] do
+  defp check_rec(mode, false, rs, t) when mode in [:run, :evidence, :spec] do
     case apps(t) do
       {{:def, name}, args} ->
         if in_block?(rs, name) do
@@ -297,10 +297,10 @@ defmodule Muro.Check do
     end
   end
 
-  # The definition being checked may not occur unapplied in run or evidence:
-  # passed along, it could be applied to anything. head? is infer's: at the
-  # head of a spine it is applied (Agda: selfApplied).
-  defp self_applied(:spec, _head?, _rs, _name), do: :ok
+  # The definition being checked may not occur unapplied: passed along, it
+  # could be applied to anything. head? is infer's: at the head of a spine
+  # it is applied (Agda: selfApplied). Evidence under the ν guard may name
+  # itself; that occurrence is the coinductive step. Spec has no such step.
   defp self_applied(_mode, true, _rs, _name), do: :ok
 
   defp self_applied(mode, false, rs, name) do
@@ -1818,9 +1818,9 @@ defmodule Muro.Check do
 
   defp run_decl(_k, _book, _mode, _ty), do: :ok
 
-  # Run and evidence definitions that reach each other are one block and
-  # descend on one shared argument. Spec is not in the block (Agda: component).
-  defp rec_mode?(mode), do: mode in [:run, :evidence]
+  # Run, evidence, and spec definitions that reach each other are one
+  # block and descend on one shared argument (Agda: component).
+  defp rec_mode?(mode), do: mode in [:run, :evidence, :spec]
 
   defp rec_names(book) do
     for %{mode: mode, name: name} <- book, rec_mode?(mode), do: name
@@ -1970,8 +1970,8 @@ defmodule Muro.Check do
   # first failure is the one reported. A block of two or more with no such
   # assignment is refused. A definition with no self-call passes the first
   # attempt. The assignment only affects the descent check, so a type
-  # error is the same for every one (Agda: checkBody). Spec keeps its own
-  # positions.
+  # error is the same for every one (Agda: checkBody). Spec descends on
+  # the same positions as run and evidence.
   defp check_body(k, book, %{name: name, mode: mode, type: ty, body: body}) do
     block = if(rec_mode?(mode), do: component(book, name), else: MapSet.new([name]))
     order = book_order(book, block)

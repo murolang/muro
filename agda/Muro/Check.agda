@@ -1083,15 +1083,15 @@ checkRecGo rs t = go rs (apps t)
       if elemℕ i (RecSt.block rs) then descend rs i args else ok tt
     go _ _ = ok tt
 
--- A maximal application spine headed by a member of the block (run and
--- evid; spec is not checked): the argument at the callee's position
--- must be a smaller variable, or the descended-on argument itself for a
--- callee defined earlier. A shorter spine has no such argument. The Bool is
--- infer′'s: an inner application (the head of a larger spine) is not
--- the maximal spine and is not checked. An evidence self-call in the
--- step of an indexed ν is the coinductive step (`RecSt.coind`).
+-- A maximal application spine headed by a member of the block: the
+-- argument at the callee's position must be a smaller variable, or the
+-- descended-on argument itself for a callee defined earlier. A shorter
+-- spine has no such argument. The Bool is infer′'s: an inner application
+-- (the head of a larger spine) is not the maximal spine and is not
+-- checked. An evidence self-call in the step of an indexed ν is the
+-- coinductive step (`RecSt.coind`). Spec descends the same way; it does
+-- not take that step.
 checkRec : ∀ {n} → Mode → Bool → RecSt n → Tm n → Result ⊤
-checkRec spec _    _  _ = ok tt
 checkRec _    true _  _ = ok tt
 checkRec evid false rs t =
   if RecSt.coind rs then ok tt else checkRecGo rs t
@@ -1103,12 +1103,11 @@ selfRefused rs i =
   then fail "recursive definition must be applied to its arguments"
   else ok tt
 
--- The definition being checked may not occur unapplied in run or evid:
--- passed along, it could be applied to anything. The Bool is infer′'s:
--- at the head of a spine it is applied. Evidence under `RecSt.coind`
--- may name itself: that occurrence is the coinductive step.
+-- The definition being checked may not occur unapplied: passed along,
+-- it could be applied to anything. The Bool is infer′'s: at the head of
+-- a spine it is applied. Evidence under `RecSt.coind` may name itself:
+-- that occurrence is the coinductive step. Spec has no such step.
 selfApplied : ∀ {n} → Mode → Bool → RecSt n → ℕ → Result ⊤
-selfApplied spec _    _  _ = ok tt
 selfApplied _    true _  _ = ok tt
 selfApplied evid false rs i =
   if RecSt.coind rs then ok tt else selfRefused rs i
@@ -1801,8 +1800,8 @@ checkDatas k σ = go 0 (Sig.datas σ)
     go _ []       = ok tt
     go i (d ∷ ds) = checkData k σ i d >> go (suc i) ds
 
--- Definitions a run or evidence body names. The call graph is these
--- mentions; spec and data are not edges.
+-- Definitions a body names. The call graph is these mentions among
+-- run, evidence, and spec. Data declarations are not edges.
 cats : List ℕ → List ℕ → List ℕ
 cats []       ys = ys
 cats (x ∷ xs) ys = x ∷ cats xs ys
@@ -1842,7 +1841,7 @@ mutual
 recMode : Mode → Bool
 recMode run  = true
 recMode evid = true
-recMode spec = false
+recMode spec = true
 
 keepRec : Sig → List ℕ → List ℕ
 keepRec _ []       = []
@@ -1871,7 +1870,7 @@ reaches : Sig → ℕ → ℕ → Bool
 reaches σ src tgt = reachGo σ (suc (length (Sig.defs σ))) tgt src []
 
 -- Indices j such that i and j reach each other. i reaches i, so a
--- run or evidence definition is always in its own block.
+-- run, evidence, or spec definition is always in its own block.
 component : Sig → ℕ → List ℕ
 component σ i = go 0 (Sig.defs σ)
   where
@@ -1934,8 +1933,8 @@ mutual? _            = false
 -- works for every member. A block of two or more members with none is
 -- empty here: handing back the candidates would let each member pass
 -- under an assignment the others fail. A single member keeps the
--- candidates, so the first failure is the one reported. Spec keeps its
--- own positions: descent is not checked there.
+-- candidates, so the first failure is the one reported. Spec descends
+-- on the same positions as run and evidence.
 pickPos : ℕ → Sig → ℕ → Def → List (List ℕ)
 pickPos k σ i d =
   if recMode (Def.dmode d)
