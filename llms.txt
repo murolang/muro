@@ -1,0 +1,40 @@
+# Muro
+
+> Muro is an explicit affine dependent type theory built for agents to write: the agent writes the program together with its types, motives and proofs, nothing is inferred, and `mix muro.check` accepts or rejects every definition. Definitions are tagged `spec`, `evidence` or `run`; a spec never becomes evidence and evidence never becomes a run. Proofs are erased, and only `run` terms are emitted, as Elixir for the BEAM or as C (`mix muro.emit --backend c`). Agda specifies the calculus and proves the checker sound on a fragment.
+
+Nothing is inferred: there are no implicits, unification, metavariables or tactics, and every binder and motive is written out. Agents should read the For agents page first, and copy syntax from the files in `examples/` rather than writing it from memory. `out of fuel` is not acceptance; raise `--fuel` and check again.
+
+## Docs
+
+- [Manual](https://muro-lang.dev/docs): What Muro is, how to read this book, and the three documentation layers.
+- [For agents](https://muro-lang.dev/docs/for-agents): Two jobs. Do not mix them. Commands and file map.
+- [Start](https://muro-lang.dev/docs/start): Install, write a .muro file, check it, emit Elixir.
+- [Marks](https://muro-lang.dev/docs/marks): Π, λ, modes, data, atoms, and streams, one paragraph each.
+- [The wall](https://muro-lang.dev/docs/wall): spec, evidence, and run. Promotion is forbidden.
+- [Terms](https://muro-lang.dev/docs/language): Type, Π, λ, match, quantities, and the book.
+- [Grammar](https://muro-lang.dev/docs/grammar): The surface grammar lib/muro/parser.ex implements.
+- [Identity](https://muro-lang.dev/docs/identity): Equations, refl, rewrite, and explicit motives.
+- [Data](https://muro-lang.dev/docs/data): Inductive types, positivity, Maybe, List, Tree.
+- [Indexed data](https://muro-lang.dev/docs/indexed): Fin, Vec, and lookup without a runtime bounds check.
+- [Streams](https://muro-lang.dev/docs/streams): ν, unfold, Always, and bisimulation.
+- [Either and Dec](https://muro-lang.dev/docs/either): Disjoint union and decisions. Not LEM.
+- [Machine numbers](https://muro-lang.dev/docs/machine): I64, F32, Tensor, and Nx. Nat stays Peano.
+- [Emit](https://muro-lang.dev/docs/emit): What becomes Elixir. A C backend is a flag. A run stream is a seed and a step. Spec and evidence are omitted.
+- [Limits](https://muro-lang.dev/docs/limits): What the language does not do. Facts about the checker, not a roadmap.
+
+## Examples
+
+- [Examples](https://muro-lang.dev/docs/examples): Every file in examples/ and what it is for.
+- [half_ok.muro](https://github.com/murolang/muro/blob/main/examples/half_ok.muro): The canonical book: a spec, a program, and a theorem about it.
+- [examples/ on GitHub](https://github.com/murolang/muro/tree/main/examples): All example programs.
+
+## Repository
+
+- [murolang/muro](https://github.com/murolang/muro): Source, README, CI (Elixir tests and `make agda`).
+- [muro on Hex](https://hex.pm/packages/muro): The Mix package; check files with `mix muro.check`.
+
+## Optional
+
+- [Extending the kernel](https://muro-lang.dev/docs/extending): How to change the type theory. Agda first, then Elixir.
+- [CSHRL](https://muro-lang.dev/docs/cshrl): Coinductive symmetric homomorphisms for RL, as a library on params, with three environments and their agents.
+- [CHANGELOG](https://github.com/murolang/muro/blob/main/CHANGELOG.md): Release history.
