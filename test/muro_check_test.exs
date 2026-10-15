@@ -2200,6 +2200,31 @@ defmodule Muro.CheckTest do
     assert msg =~ "+ requires a copyable type"
   end
 
+  test "a + binder on an unfold step must be copyable" do
+    src = """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+    def dup-stream : run Π (s : Stream Nat) → Stream (Stream Nat × Stream Nat) :=
+      λ (s : Stream Nat) → unfold s (λ (+ t : Stream Nat) → ((t, t), t))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "+ requires a copyable type"
+  end
+
+  test "a + binder on an unfold step over a Data seed still checks" do
+    src = """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+    def nats : run Stream Nat :=
+      unfold 0 (λ (+ n : Nat) → (n, suc n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
   test "the predecessor of a reusable variable is reusable" do
     plus =
       "def plus : run Π (n : Nat) → Π (m : Nat) → Nat := λ (n : Nat) → λ (m : Nat) → n\n"

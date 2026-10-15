@@ -34,7 +34,7 @@ The body is a pair. Productivity: in `run` and `evidence`, no definition of the 
 
 A definition whose type is a ν need not be an `unfold` itself: `def nats : run Stream Nat := tabulate ident` checks. Such a body may not call its own block; a call into the block is productive only as the tail of an unfold step, so `def s : run Stream Nat := s` is refused.
 
-A stream is not copyable, so a seed of type `Stream` is affine. A Nat seed may be `+`: `(+ k : Nat)` in an unfold step.
+A stream is not copyable, so a seed of type `Stream` is affine. The binder of an unfold step is held to the same test as any other `+`: `(+ t : Stream Nat)` is refused. A Nat seed may be `+`: `(+ k : Nat)`.
 
 ### zeros
 

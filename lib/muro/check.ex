@@ -1721,6 +1721,7 @@ defmodule Muro.Check do
              :ok <- conv(k, book, names_of(rs, gamma), a_ann, s_ty),
              {:ok, {goal, fam}} <- unf_step(k, book, rs, gamma, a, s_ty),
              :ok <- bare_stream(k, book, fam, a),
+             :ok <- if(q == :reuse, do: guard_copy(k, book, s_ty), else: :ok),
              {:ok, [u0 | us]} <-
                check(
                  k,

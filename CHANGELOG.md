@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.25
+
+A `+` binder on an unfold step must be a copyable type, as a λ, a match branch, and a constructor field must. `unfold s (λ (+ t : Stream Nat) → ((t, t), t))` is refused. A Nat seed may still be `+`.
+
+### Checker
+
+- `Check` ⇐-unf for a λ step, and `Muro.Check`. The seed type is the type `isCopy` sees.
+
+### Tests
+
+- A reusable stream step is refused. A reusable Nat step still checks.
+
+### Manual
+
+- Streams: the unfold binder is the same `+` test as any other binder.
+
+### Package
+
+- Version 0.16.25.
+
 ## 0.16.24
 
 A spec definition descends, as a run or evidence definition does. A spec type could name itself unapplied, and `whnf` unfolded it, so `X := Π (+ x : X) → Empty` checked and `self-app self-app` was a closed evidence term of `Empty`. The same body as `T := T`. Spec is now in the call graph: a self-reference must be applied, and a call must pass a smaller variable at the callee's position, or the caller's argument unchanged to an earlier definition. `IsEven` stays, because it recurses on a match-bound predecessor. A spec definition that reaches a run or evidence definition, and is reached by it, is in that block. The guard that lets an evidence unfold name itself does not apply to spec. Termination of an accepted block is still argued from that measure, not proved, and fuel still bounds a spec computation inside a type.
