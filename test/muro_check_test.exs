@@ -2378,6 +2378,25 @@ defmodule Muro.CheckTest do
     assert Muro.check_file("examples/cshrl/envs/optimal.muro") == :ok
   end
 
+  test "binary successor checks, and the bits of 11 step to the bits of 12" do
+    assert Muro.check_file("stdlib/binary.muro") == :ok
+    assert {:ok, src} = Muro.emit_file("stdlib/binary.muro", Muro.StdlibBinary)
+    assert src =~ ~r/\bdef sucBin\b/
+    assert src =~ ~r/\bdefp double\b/
+    refute src =~ "sucBin-corresp"
+    refute src =~ "sucBits-id"
+    refute src =~ "toNat-toBits"
+    Code.eval_string(src)
+
+    bits11 = call("StdlibBinary", :bits11, [])
+    bits12 = call("StdlibBinary", :bits12, [])
+    assert call("StdlibBinary", :sucBin, [bits11]) == bits12
+
+    eleven = call("StdlibBinary", :eleven, [])
+    assert call("StdlibBinary", :toNat, [bits11]) == eleven
+    assert call("StdlibBinary", :toNat, [bits12]) == {:suc, eleven}
+  end
+
   # The module exists only after Code.eval_string, so a literal remote call warns.
   defp call(mod, fun, args), do: apply(Module.concat(Muro, mod), fun, args)
 end
