@@ -27,6 +27,7 @@ Nothing is inferred: there are no implicits, unification, metavariables or tacti
 - [Examples](https://muro-lang.dev/docs/examples): Every file in examples/ and what it is for.
 - [half_ok.muro](https://github.com/murolang/muro/blob/main/examples/half_ok.muro): The canonical book: a spec, a program, and a theorem about it.
 - [examples/ on GitHub](https://github.com/murolang/muro/tree/main/examples): All example programs.
+- [stdlib/binary.muro](https://github.com/murolang/muro/blob/main/stdlib/binary.muro): Library binary successor. Inductive Nat stays primary. `sucBin` is a Mealy machine on `List Bit`.
 
 ## Repository
 

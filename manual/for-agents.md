@@ -81,6 +81,7 @@ Users still only run Mix. If you are doing Job A, you are not doing Job B.
 manual/                 this book (muro-lang.dev). Not ExDoc.
 examples/*.muro         programs
 examples/cshrl/         CSHRL: lib/ on params, envs/ supply them
+stdlib/binary.muro      binary successor on List Bit; Nat stays primary
 lib/muro/parser.ex      .muro → named FOAS
 lib/muro/ast.ex         named FOAS, to_db
 lib/muro/print.ex       surface syntax, locations, hole messages

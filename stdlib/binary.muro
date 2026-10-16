@@ -1,0 +1,166 @@
+-- binary.muro — library-level binary successor.
+--
+-- Inductive Nat stays the primary number type. Nothing here replaces it,
+-- and nothing here is a new primitive: Bit, List, and the functions below
+-- are ordinary Muro terms. A spec never becomes evidence. Evidence never
+-- becomes a run.
+--
+-- A List Bit is a binary numeral, least significant bit first. O is the
+-- zero bit, I is the one bit. The empty list is zero. Leading zeros are
+-- allowed, so a number has more than one bit list.
+--
+-- sucBit, sucBits, and sucBin are a Mealy machine (a finite-state
+-- transducer). The carry is the state. sucBit is the transition
+-- (bit, carry-in) → (output bit, carry-out). sucBits walks LSB to MSB,
+-- threading that state. sucBin starts with carry I, which is adding one.
+-- If the carry is still I after the last bit, one extra I is emitted.
+--
+-- No host integer is used. There is no fixed width. The limit is the
+-- number of bits the runtime can store.
+--
+-- Call:
+--   sucBin (cons I (cons I (cons O (cons I nil))))
+-- The bits of 11, LSB first, are the bits of 12.
+-- Checked by suc-11 below. The correspondence is sucBin-corresp:
+--   toNat (sucBin (toBits n)) ≡ suc n
+
+data Bit : Type where
+  O : Bit
+  I : Bit
+
+data List (A : Type) : Type where
+  nil  : List A
+  cons : A → List A → List A
+
+-- Transition. Rows are the current bit, columns the carry-in.
+--   O, O → (O, O)    O, I → (I, O)
+--   I, O → (I, O)    I, I → (O, I)
+def sucBit : run Π (b : Bit) → Π (c : Bit) → Bit × Bit :=
+  λ (b : Bit) → λ (c : Bit) →
+    match b motive (λ _ → Bit × Bit)
+      | O =>
+          (match c motive (λ _ → Bit × Bit)
+            | O => (O, O)
+            | I => (I, O))
+      | I =>
+          (match c motive (λ _ → Bit × Bit)
+            | O => (I, O)
+            | I => (O, I))
+
+-- One pass of the transducer. c is the carry state at this bit.
+def sucBits : run Π (bs : List Bit) → Π (c : Bit) → List Bit :=
+  λ (bs : List Bit) → λ (c : Bit) →
+    match bs motive (λ _ → List Bit)
+      | nil =>
+          (match c motive (λ _ → List Bit)
+            | O => nil
+            | I => cons I nil)
+      | cons b rest =>
+          let (out, cout) = sucBit b c in
+          cons out (sucBits rest cout)
+
+-- Public entry. Adding one is the transducer started in state I.
+def sucBin : run Π (bs : List Bit) → List Bit :=
+  λ (bs : List Bit) → sucBits bs I
+
+-- Place value for toNat. Recursion on n, so an affine Nat is not copied.
+-- Not addition and not multiplication: only the shift a higher bit needs.
+def double : run internal Π (n : Nat) → Nat :=
+  λ (n : Nat) →
+    match n motive (λ _ → Nat)
+      | 0 => 0
+      | suc m => suc (suc (double m))
+
+def toNat : run Π (bs : List Bit) → Nat :=
+  λ (bs : List Bit) →
+    match bs motive (λ _ → Nat)
+      | nil => 0
+      | cons b rest =>
+          (match b motive (λ _ → Nat)
+            | O => double (toNat rest)
+            | I => suc (double (toNat rest)))
+
+-- The bits of n: start from zero and step the automaton n times.
+def toBits : run Π (n : Nat) → List Bit :=
+  λ (n : Nat) →
+    match n motive (λ _ → List Bit)
+      | 0 => nil
+      | suc m => sucBin (toBits m)
+
+-- Carry O writes every bit unchanged. Induction on the list.
+def sucBits-id : evidence Π (bs : List Bit) → {sucBits bs O ≡ bs : List Bit} :=
+  λ (bs : List Bit) →
+    match bs motive (λ xs → {sucBits xs O ≡ xs : List Bit})
+      | nil => refl
+      | cons b rest =>
+          (match b motive (λ bit → {sucBits (cons bit rest) O ≡ cons bit rest : List Bit})
+            | O =>
+                rewrite sucBits-id rest
+                  motive (λ z → {cons O z ≡ cons O rest : List Bit}) in
+                refl
+            | I =>
+                rewrite sucBits-id rest
+                  motive (λ z → {cons I z ≡ cons I rest : List Bit}) in
+                refl)
+
+-- The automaton agrees with inductive successor on every bit list,
+-- including those with leading zeros. Induction on the list.
+def sucBin-step : evidence Π (bs : List Bit) →
+                            {toNat (sucBin bs) ≡ suc (toNat bs) : Nat} :=
+  λ (bs : List Bit) →
+    match bs motive (λ xs → {toNat (sucBin xs) ≡ suc (toNat xs) : Nat})
+      | nil => refl
+      | cons b rest =>
+          (match b motive (λ bit → {toNat (sucBin (cons bit rest)) ≡ suc (toNat (cons bit rest)) : Nat})
+            | O =>
+                rewrite cong (List Bit) Nat toNat (sucBits rest O) rest (sucBits-id rest)
+                  motive (λ z → {suc (double z) ≡ suc (double (toNat rest)) : Nat}) in
+                refl
+            | I =>
+                rewrite sucBin-step rest
+                  motive (λ z → {double z ≡ suc (suc (double (toNat rest))) : Nat}) in
+                refl)
+
+-- Reading the bits of n returns n. Induction on n, using sucBin-step.
+def toNat-toBits : evidence Π (n : Nat) → {toNat (toBits n) ≡ n : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ k → {toNat (toBits k) ≡ k : Nat})
+      | 0 => refl
+      | suc m =>
+          rewrite sucBin-step (toBits m)
+            motive (λ z → {z ≡ suc m : Nat}) in
+          rewrite toNat-toBits m
+            motive (λ w → {suc w ≡ suc m : Nat}) in
+          refl
+
+-- toNat (sucBin (toBits n)) ≡ suc n. Induction on n.
+def sucBin-corresp : evidence Π (n : Nat) →
+                               {toNat (sucBin (toBits n)) ≡ suc n : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ k → {toNat (sucBin (toBits k)) ≡ suc k : Nat})
+      | 0 => refl
+      | suc m =>
+          rewrite sucBin-step (sucBin (toBits m))
+            motive (λ z → {z ≡ suc (suc m) : Nat}) in
+          rewrite sucBin-corresp m
+            motive (λ w → {suc w ≡ suc (suc m) : Nat}) in
+          refl
+
+-- 11 is 1011₂, LSB first: I, I, O, I. 12 is 1100₂: O, O, I, I.
+def bits11 : run List Bit :=
+  cons I (cons I (cons O (cons I nil)))
+
+def bits12 : run List Bit :=
+  cons O (cons O (cons I (cons I nil)))
+
+def suc-11 : evidence {sucBin bits11 ≡ bits12 : List Bit} :=
+  refl
+
+def eleven : run Nat :=
+  suc(suc(suc(suc(suc(suc(suc(suc(suc(suc(suc(0)))))))))))
+
+def bits11-nat : evidence {toNat bits11 ≡ eleven : Nat} :=
+  refl
+
+def suc-11-nat : evidence {toNat (sucBin bits11) ≡ suc eleven : Nat} :=
+  refl

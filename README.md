@@ -16,12 +16,12 @@ The language book is [`manual/`](manual/index.md). That is what [muro-lang.dev](
 
 ## Install
 
-[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.16.27. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
+[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.16.28. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ```elixir
 def deps do
   [
-    {:muro, "~> 0.16.27"}
+    {:muro, "~> 0.16.28"}
   ]
 end
 ```
@@ -57,6 +57,12 @@ mix muro.check examples/your_file.muro
 ```
 
 A definition is in the book the moment `Parser.parse/1` returns it. The checker sees the whole book (forward references are allowed). Emit keeps only `run`.
+
+---
+
+## Library
+
+[`stdlib/binary.muro`](stdlib/binary.muro) is a binary successor. Inductive `Nat` stays the number type. `sucBin` is a Mealy machine on `List Bit`, least significant bit first, and the carry is the state. `toNat (sucBin (toBits n)) ≡ suc n`. The bits of 11 step to the bits of 12. There is no fixed width.
 
 ---
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.28
+
+A library binary successor, under `stdlib/`. Inductive Nat stays the primary number type. `List Bit` is a numeral, least significant bit first, and leading zeros are allowed. `sucBit`, `sucBits`, and `sucBin` are a Mealy machine: the carry is the state, and `sucBin` starts at `I`. No host integer is used, and there is no fixed width. `sucBin-corresp` is `toNat (sucBin (toBits n)) ≡ suc n`, by induction on the bit list and on `n`. The bits of 11 step to the bits of 12.
+
+### Library
+
+- `stdlib/binary.muro`. `double` is `run internal`, the place-value shift `toNat` needs.
+
+### Tests
+
+- The file checks. Emit omits the proofs and keeps `double` as `defp`. `sucBin` of the bits of 11 is the bits of 12, and `toNat` reads both.
+
+### Manual
+
+- README and For agents: where the library lives.
+
+### Package
+
+- Version 0.16.28.
+
 ## 0.16.27
 
 Discrete predicate synthesis, beside the checker. A predicate is a Boolean combination of feature tests. A chain fires the action of the first predicate that holds, or the default. The search keeps the highest-scoring predicate that agrees with an oracle on a trajectory, and drops a score of zero. `fewer?/7` compares two actions by how soon a stop is reached. `policy/3` writes that chain as a `run` definition over `Bool`. The checker sees the policy. It does not see the search.
