@@ -14,6 +14,9 @@
 --                       structural recursion on the fragment witness,
 --                       and checkDef-sound / checkSig-sound: every
 --                       definition Check accepts is derivable in ⊢.
+--                       fam-def-uncons: unfold a def whose body is a
+--                       family λ, then uncons the instantiated pair;
+--                       the read is derivable at the family goal.
 --
 -- One direction only: nothing here says ⊢ derivations are found by
 -- Check. Fuel is universally quantified: a run that stops for lack of
@@ -56,7 +59,8 @@ open import Muro.Check
          applyFam; unfFam; unfSpine)
 open import Muro.Judgement
 open import Muro.Wall using (spec-⇒-uses)
-open import Muro.Typing using (typ-ext-suc; ≈-≡)
+open import Muro.Typing
+  using (typ-ext-suc; ≈-≡; forget-⇒; forget-⇐; pres-ιr; closed-⊨; _,_⊨[_]_∶_)
 open import Muro.Soundness.Conv
 open import Muro.Soundness.Views
 open import Data.List.Properties using (take++drop≡id; length-take; length-drop)
@@ -1961,3 +1965,171 @@ checkSig-sound : ∀ k σ → GoodSig σ → checkSig k σ ≡ ok tt
 checkSig-sound k σ G eq i d leq =
   checkDef-sound k σ i G leq
     (checkDefs-sound k σ 0 (Sig.defs σ) (proj₂ (>>-ok {r = checkDatas k σ} eq)) i d leq)
+
+------------------------------------------------------------------------
+-- A family step's goal is the ν instantiated at its indices. The seed
+-- argument does not occur in that goal, so the same step at the
+-- scrutinee's type is the goal uncons reads.
+------------------------------------------------------------------------
+
+unfStepOf-fam : ∀ {n} {S S′ T : Tm n} {G : Tm n}
+  → unfStepOf S T ≡ ok (G , true)
+  → unfStepOf S′ T ≡ ok (G , true)
+unfStepOf-fam {n = n} {S = S} {S′ = S′} {T = T} {G = G} eq = on T eq
+  where
+  not-fam : ∀ {F : Tm (suc n)} → unfFam S F [] ≡ ok (G , true) → ⊥
+  not-fam e = false≢true (cong proj₂ (ok-inj e))
+
+  spine : (h : Tm n) (is : List (Tm n))
+    → unfSpine S (unspine-go h is) ≡ ok (G , true)
+    → unfSpine S′ (unspine-go h is) ≡ ok (G , true)
+  spine (app f a) is e = spine f (a ∷ is) e
+  spine (nu F) [] e = ⊥-elim (not-fam {F = F} e)
+  -- The family goal does not mention the seed, so the same equation
+  -- holds at S′.
+  spine (nu (lam _ _ _)) (_ ∷ _) e = e
+  spine (nu (var _)) (_ ∷ _) ()
+  spine (nu typ) (_ ∷ _) ()
+  spine (nu (pi _ _ _)) (_ ∷ _) ()
+  spine (nu (app _ _)) (_ ∷ _) ()
+  spine (nu nat) (_ ∷ _) ()
+  spine (nu ze) (_ ∷ _) ()
+  spine (nu (su _)) (_ ∷ _) ()
+  spine (nu unit) (_ ∷ _) ()
+  spine (nu one) (_ ∷ _) ()
+  spine (nu empty) (_ ∷ _) ()
+  spine (nu (dty _)) (_ ∷ _) ()
+  spine (nu (ctor _ _)) (_ ∷ _) ()
+  spine (nu (mData _ _ _)) (_ ∷ _) ()
+  spine (nu (mNat _ _ _ _)) (_ ∷ _) ()
+  spine (nu (mEmp _ _)) (_ ∷ _) ()
+  spine (nu (mUnit _ _ _)) (_ ∷ _) ()
+  spine (nu (idt _ _ _)) (_ ∷ _) ()
+  spine (nu rfl) (_ ∷ _) ()
+  spine (nu (rwt _ _ _)) (_ ∷ _) ()
+  spine (nu (def _)) (_ ∷ _) ()
+  spine (nu (ann _ _)) (_ ∷ _) ()
+  spine (nu (prod _ _)) (_ ∷ _) ()
+  spine (nu (pair _ _)) (_ ∷ _) ()
+  spine (nu (letp _ _)) (_ ∷ _) ()
+  spine (nu (nu _)) (_ ∷ _) ()
+  spine (nu (unf _ _)) (_ ∷ _) ()
+  spine (nu (ucons _)) (_ ∷ _) ()
+  spine (nu i64) (_ ∷ _) ()
+  spine (nu f32ty) (_ ∷ _) ()
+  spine (nu (tensor _ _)) (_ ∷ _) ()
+  spine (nu (addi _ _)) (_ ∷ _) ()
+  spine (nu (muli _ _)) (_ ∷ _) ()
+  spine (nu (addt _ _)) (_ ∷ _) ()
+  spine (nu (toi64 _)) (_ ∷ _) ()
+  spine (nu (packi _ _)) (_ ∷ _) ()
+  spine (var _) _ ()
+  spine typ _ ()
+  spine (pi _ _ _) _ ()
+  spine (lam _ _ _) _ ()
+  spine nat _ ()
+  spine ze _ ()
+  spine (su _) _ ()
+  spine unit _ ()
+  spine one _ ()
+  spine empty _ ()
+  spine (dty _) _ ()
+  spine (ctor _ _) _ ()
+  spine (mData _ _ _) _ ()
+  spine (mNat _ _ _ _) _ ()
+  spine (mEmp _ _) _ ()
+  spine (mUnit _ _ _) _ ()
+  spine (idt _ _ _) _ ()
+  spine rfl _ ()
+  spine (rwt _ _ _) _ ()
+  spine (def _) _ ()
+  spine (ann _ _) _ ()
+  spine (prod _ _) _ ()
+  spine (pair _ _) _ ()
+  spine (letp _ _) _ ()
+  spine (unf _ _) _ ()
+  spine (ucons _) _ ()
+  spine i64 _ ()
+  spine f32ty _ ()
+  spine (tensor _ _) _ ()
+  spine (addi _ _) _ ()
+  spine (muli _ _) _ ()
+  spine (addt _ _) _ ()
+  spine (toi64 _) _ ()
+  spine (packi _ _) _ ()
+
+  on : (t : Tm n) → unfStepOf S t ≡ ok (G , true) → unfStepOf S′ t ≡ ok (G , true)
+  on (nu _) e = ⊥-elim (false≢true (cong proj₂ (ok-inj e)))
+  on (app f a) e = spine f (a ∷ []) e
+  on (var _) ()
+  on typ ()
+  on (pi _ _ _) ()
+  on (lam _ _ _) ()
+  on nat ()
+  on ze ()
+  on (su _) ()
+  on unit ()
+  on one ()
+  on empty ()
+  on (dty _) ()
+  on (ctor _ _) ()
+  on (mData _ _ _) ()
+  on (mNat _ _ _ _) ()
+  on (mEmp _ _) ()
+  on (mUnit _ _ _) ()
+  on (idt _ _ _) ()
+  on rfl ()
+  on (rwt _ _ _) ()
+  on (def _) ()
+  on (ann _ _) ()
+  on (prod _ _) ()
+  on (pair _ _) ()
+  on (letp _ _) ()
+  on (unf _ _) ()
+  on (ucons _) ()
+  on i64 ()
+  on f32ty ()
+  on (tensor _ _) ()
+  on (addi _ _) ()
+  on (muli _ _) ()
+  on (addt _ _) ()
+  on (toi64 _) ()
+  on (packi _ _) ()
+
+------------------------------------------------------------------------
+-- Unfold a definition whose body is a family λ, then uncons the
+-- instantiated pair. δ opens the definition onto that λ. The family
+-- rule's subject is the pair at the seed, and uncons of that pair
+-- reads it. The read is a derivation at the family goal, in any
+-- context.
+------------------------------------------------------------------------
+
+fam-def-uncons :
+  ∀ {σ n} {Γ : Ctx n} {i} {d : Def} {q}
+    {seed S A : Tm 0} {h t : Tm 1} {Tw G : Tm 0} {su u}
+  → lookupDef σ i ≡ ok d
+  → Def.dbody d ≡ unf seed (lam q A (pair h t))
+  → σ , ε ⊢[ Def.dmode d ] seed ⇒ S ⊣ su
+  → σ ⊢[ spec ] A ≈ S
+  → σ ⊢[ spec ] Def.dtype d ≈ Tw
+  → unfStepOf S Tw ≡ ok (G , true)
+  → σ , ext ε q S ⊢[ Def.dmode d ] pair h t ⇐ wk G ⊣ u
+  → (σ ⊢[ spec ] def i ⟶ closed {n} (unf seed (lam q A (pair h t))))
+  × (σ ⊢[ spec ]
+       ucons (closed {n} (unf seed (pair (inst h seed) (inst t seed))))
+       ⟶ closed {n} (pair (inst h seed) (inst t seed)))
+  × (σ , Γ ⊨[ Def.dmode d ]
+       closed {n} (pair (inst h seed) (inst t seed)) ∶ closed {n} G)
+fam-def-uncons {σ = σ} {n = n} {Γ = Γ} {i = i} {d = d} {q = q}
+    {seed = seed} {S = S} {A = A} {h = h} {t = t} {Tw = Tw} {G = G}
+    lk body Ds cA cT st Dp =
+  subst (λ b → σ ⊢[ spec ] def i ⟶ closed {n} b) body
+        (δ {n = n} lk (allowedDef-spec (Def.dmode d)))
+  , ι-ucons-r {n = n}
+  , closed-⊨ {n = n} {Γ = Γ}
+      (pres-ιr {σ = σ} {n = 0} {Γ = ε} {m = Def.dmode d} {q = q} {s = seed}
+               {S = S} {A = A} {h = h} {t = t} {T0 = Tw} {G0 = G}
+               {T = Def.dtype d} {T′ = Tw} {G = G} {fam = true}
+               (forget-⇒ Ds) cA st (forget-⇐ Dp)
+               (≈-sym cT) cT
+               (unfStepOf-fam {n = 0} {S = S} {S′ = Def.dtype d} {T = Tw} {G = G} st))
