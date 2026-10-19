@@ -46,8 +46,9 @@ jobs:
     runs-on: ubuntu-24.04
     # Muro.Soundness typechecks one large mutual block. On a 16 GB runner
     # that check is killed; the swap gives it room. The cache of
-    # agda/_build makes a rerun with unchanged sources fast.
-    timeout-minutes: 75
+    # agda/_build makes a rerun with unchanged sources fast. A changed
+    # Soundness rechecks for longer than 75 minutes on the hosted runner.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
 
