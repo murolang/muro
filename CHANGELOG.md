@@ -6,7 +6,7 @@
 
 ### Manual
 
-- Limits records the wrap of a stream λ and the read of a family pair. This release derives the family-λ case beside them. The productivity sentence stays.
+- Limits, CSHRL, Extending: `fam-def-uncons` opens a family-λ definition onto that λ and derives `uncons` of the pair at the seed. The productivity sentence stays.
 
 ### Package
 
