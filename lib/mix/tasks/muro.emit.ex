@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.Muro.Emit do
   use Mix.Task
 
-  @shortdoc "Emit run definitions as Elixir or C"
+  @shortdoc "Emit run definitions as Elixir, C, or Rust"
 
   @moduledoc """
   Emit the `run` definitions of a `.muro` file.
@@ -9,12 +9,17 @@ defmodule Mix.Tasks.Muro.Emit do
       mix muro.emit path.muro
       mix muro.emit path.muro --backend elixir
       mix muro.emit path.muro --backend c
+      mix muro.emit path.muro --backend rust
 
   The default backend is Elixir, the same text as `Muro.emit_file/3`.
   The module name is the file stem (`half_ok.muro` becomes `HalfOk`).
 
   `--backend c` writes `<name>.h` and `<name>.c` next to the file and
   prints those paths. A `run` stream is emitted. Tensors are refused.
+  An exported `Nat` run is also a NIF.
+
+  `--backend rust` writes `<name>.rs` next to the file and prints that
+  path. `rustc` translates it. The proof stops at the run image.
   """
 
   @switches [backend: :string]
@@ -45,6 +50,13 @@ defmodule Mix.Tasks.Muro.Emit do
 
   defp emit(path, "c") do
     case Muro.emit_c(path) do
+      {:ok, files} -> Enum.each(files, fn path -> Mix.shell().info(path) end)
+      {:error, e} -> Mix.raise(e)
+    end
+  end
+
+  defp emit(path, "rust") do
+    case Muro.emit_rust(path) do
       {:ok, files} -> Enum.each(files, fn path -> Mix.shell().info(path) end)
       {:error, e} -> Mix.raise(e)
     end

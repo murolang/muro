@@ -10,18 +10,18 @@
 
 An explicit affine dependent type theory. Elixir parses, checks, and emits `.muro`. Only run terms become running code. Users do not need Agda.
 
-Muro is built for agents to write. The agent carries the load of formal verification: every type, motive and proof step is written out and nothing is inferred, so `mix muro.check` either accepts what it wrote or names each definition that fails. Proofs are checked, then erased. Only `run` terms are emitted: as Elixir for the BEAM, or as C with `mix muro.emit --backend c`, from the same source. The checker's soundness is proved in Agda for a fragment of the calculus (see [Limits](manual/limits.md)); it is not a proof about every program.
+Muro is built for agents to write. The agent carries the load of formal verification: every type, motive and proof step is written out and nothing is inferred, so `mix muro.check` either accepts what it wrote or names each definition that fails. Proofs are checked, then erased. Only `run` terms are emitted: as Elixir for the BEAM, as C with `mix muro.emit --backend c`, or as Rust with `mix muro.emit --backend rust`, from the same source. The checker's soundness is proved in Agda for a fragment of the calculus (see [Limits](manual/limits.md)); it is not a proof about every program.
 
 The language book is [`manual/`](manual/index.md). That is what [muro-lang.dev](https://muro-lang.dev) will render. It is not ExDoc. Elixir API docs, when added, stay on `@moduledoc` / `mix docs`. Agda in `agda/Muro/` is a third layer: the rules of the calculus, not a certificate that a `.muro` file is correct.
 
 ## Install
 
-[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.16.30. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
+[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.16.31. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ```elixir
 def deps do
   [
-    {:muro, "~> 0.16.30"}
+    {:muro, "~> 0.16.31"}
   ]
 end
 ```
