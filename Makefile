@@ -3,10 +3,10 @@ AGDA  := agda
 AFLAGS := --no-libraries -i agda -i vendor/agda-stdlib/src --warning=noUnsupportedIndexedMatch
 
 # Theorem modules — Judgement, Wall, Consistency, Typing, Convert,
-# Reduction, Spine, Data, Frag, Tag, the checker Check and its soundness
-# proof Soundness (with Soundness.Conv, Soundness.Views), and what they
-# import (Base, Syntax, Subst, SubstLemmas, Env) — are checked under
-# --safe: no postulates, no TERMINATING, no --type-in-type. Check is
+# Reduction, Spine, Data, Frag, Tag, Session, the checker Check and its
+# soundness proof Soundness (with Soundness.Conv, Soundness.Views), and
+# what they import (Base, Syntax, Subst, SubstLemmas, Env) — are checked
+# under --safe: no postulates, no TERMINATING, no --type-in-type. Check is
 # structurally recursive on the term, with fuel only where it reduces.
 # Unembed (PHOAS → de Bruijn, for the examples only) carries a
 # TERMINATING pragma, so the full tree with the examples is checked
@@ -17,6 +17,7 @@ agda: agda-safe agda-all
 
 agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/IR.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Session.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Wall.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Consistency.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Frag.agda

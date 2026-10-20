@@ -31,6 +31,8 @@ Do not add a fourth representation. Do not use raw HOAS (`Tm → Tm`) as inducti
 
 Elixir `Muro.Ast.to_db/2` sends named FOAS to de Bruijn (unbound names become `{:def, name}`).
 
+`agda/Muro/Session.agda` is the affine session judgment. A protocol is spec. A conformance derivation is evidence. The continuation after a bit is the branch for that bit. Abandoning a channel has a derivation. A second action the protocol does not name has none. `run` is unchanged. None of those constructors is added to `Tm` or `PTm`. The Elixir checker does not decide this judgment.
+
 ## Rules that keep the sort honest
 
 Some premises are there for consistency of the calculus, not for programs. Keep them when you add a former.
