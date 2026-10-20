@@ -66,6 +66,7 @@ defmodule Muro.Emit.C do
   @reserved ~w(
     muro_nat muro_unit muro_pair muro_zero muro_suc muro_tt muro_nat_new muro_mk_pair
     muro_stream muro_stream_new muro_envp muro_seedp muro_ep
+    muro_nif_alloc muro_nif_reset muro_nif_lock muro_nif_chunks muro_nif_of muro_nif_read
   ) |> MapSet.new()
 
   @doc """
@@ -74,12 +75,27 @@ defmodule Muro.Emit.C do
   Run bodies are printed from `Muro.IR`. A refusal is that elaboration's.
   """
   def render(book, stem) when is_list(book) and is_binary(stem) do
+    case prepare(book, stem) do
+      {:ok, header, source, _sigs} -> {:ok, {header, source}}
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc """
+  `render/2` plus the signature of each run, in book order.
+
+  A signature is `%{name, export, params, ret}`. `name` is the C spelling.
+  `params` is `{ctype, c_name}` for each live argument. `run internal` has
+  `export: false`.
+  """
+  def prepare(book, stem) when is_list(book) and is_binary(stem) do
     case IR.elaborate(book) do
       {:ok, funs} ->
         case compile_funs(funs, book) do
           {:ok, sigs, texts, extras} ->
             runs = Emit.run_defs(book)
-            {:ok, {header(book, sigs, stem), source(book, runs, sigs, texts, extras, stem)}}
+
+            {:ok, header(book, sigs, stem), source(book, runs, sigs, texts, extras, stem), sigs}
 
           {:error, _} = err ->
             err

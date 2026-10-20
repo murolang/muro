@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.30
+
+An exported run whose arguments and result are `Nat` is a NIF. `half(4)` is the integer `2`, and `plus(2, 3)` is `5`. The argument and the result are non-negative integers that fit in 64 bits; anything else is a bad argument. The generated C is unchanged: `Nat` is the tagged struct, and the call allocates it through one `MURO_ALLOC` block that the next call reuses. `elixir_make` runs the makefile. A file with no such run still writes the `.h` and the `.c` only. `run internal` stays `static`.
+
+### Emit
+
+- `Muro.Emit.Nif`, from `--backend c`. The library is `priv/<stem>.so`. The module is the camelized stem.
+
+### Tests
+
+- `half(4)` is `2` and `plus(2, 3)` is `5`. A negative argument is a bad argument. `nats` writes no NIF. `inc` is an entry and `step` is not.
+
+### Manual
+
+- Emit: the Nat NIF and the block. `cc` translates the C. The proof stops at the run image.
+
+### Package
+
+- Version 0.16.30.
+
 ## 0.16.29
 
 A checked book has a closed `run` image. `Muro.IR` keeps `mode: :run`, records `run internal` as `export: false`, and drops spec, evidence, and data declarations. An atom is a nullary constructor of one closed data declaration. An index outside that declaration is refused. Nothing in the image builds an atom from a string. The C emitter prints this image. The Elixir emitter still walks the named AST. A program the C emitter already accepted prints the same text. The refusals stay `c:lambda`, `c:machine`, `c:stream`, `c:erased`, and `c:unsupported`.

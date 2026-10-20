@@ -52,6 +52,31 @@ defmodule Muro.EmitCTest do
     cc!(dir, "half_ok.c", "half_ok.o")
   end
 
+  test "an exported Nat run loads as a NIF" do
+    dir = tmp_dir()
+    path = Path.join(dir, "half_ok.muro")
+    File.cp!("examples/half_ok.muro", path)
+
+    out = capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+    assert out =~ Path.join(dir, "priv/half_ok.so")
+    assert File.exists?(Path.join(dir, "priv/half_ok.so"))
+
+    on_exit(fn ->
+      :code.purge(HalfOk)
+      :code.delete(HalfOk)
+    end)
+
+    Code.compile_file(Path.join(dir, "half_ok.ex"))
+    half = fn n -> apply(:"Elixir.HalfOk", :half, [n]) end
+    plus = fn n, m -> apply(:"Elixir.HalfOk", :plus, [n, m]) end
+    assert half.(0) == 0
+    assert half.(1) == 0
+    assert half.(4) == 2
+    assert plus.(2, 3) == 5
+    assert_raise ArgumentError, fn -> half.(-1) end
+    assert_raise ArgumentError, fn -> plus.(:no, 1) end
+  end
+
   test "a run Stream compiles as a seed and a step, and Elixir still uses Stream.unfold" do
     dir = tmp_dir()
 
@@ -59,6 +84,8 @@ defmodule Muro.EmitCTest do
       path = Path.join(dir, "#{name}.muro")
       File.cp!("examples/#{name}.muro", path)
       capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+      refute File.exists?(Path.join(dir, "#{name}.ex"))
+      refute File.exists?(Path.join(dir, "#{name}_nif.c"))
       cc!(dir, "#{name}.c", "#{name}.o")
     end
 
@@ -194,6 +221,9 @@ defmodule Muro.EmitCTest do
     assert header =~ "muro_nat *inc(muro_nat *n);"
     refute header =~ "step"
     assert source =~ "static muro_nat *step(muro_nat *n)"
+    ex = File.read!(Path.join(dir, "internal_ok.ex"))
+    assert ex =~ "def inc(_a0)"
+    refute ex =~ "def step"
     cc!(dir, "internal_ok.c", "internal_ok.o")
 
     File.cp!("examples/list.muro", Path.join(dir, "list.muro"))
