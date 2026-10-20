@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.29
+
+A checked book has a closed `run` image. `Muro.IR` keeps `mode: :run`, records `run internal` as `export: false`, and drops spec, evidence, and data declarations. An atom is a nullary constructor of one closed data declaration. An index outside that declaration is refused. Nothing in the image builds an atom from a string. The C emitter prints this image. The Elixir emitter still walks the named AST. A program the C emitter already accepted prints the same text. The refusals stay `c:lambda`, `c:machine`, `c:stream`, `c:erased`, and `c:unsupported`.
+
+### Emit
+
+- `Muro.IR` in Agda and `Muro.IR.elaborate/1`. `Muro.Emit.C` prints that image.
+
+### Tests
+
+- `half_ok`, `nats`, `list`, and `sort` elaborate. `nx_add` is `c:machine`. A bare λ is `c:lambda`. An erased argument is dropped. A raw ν is `c:stream`. A name outside the book is `c:unsupported`. An atom literal is a nullary constructor of `Atom`.
+
+### Manual
+
+- Extending: the image is not a source syntax. The C emitter prints it. The Elixir emitter still walks the named AST.
+
+### Package
+
+- Version 0.16.29.
+
 ## 0.16.28
 
 `uncons` after unfolding a definition whose body is a family λ has a derivation. `fam-def-uncons` opens that definition onto the λ, and `uncons` of the pair instantiated at the seed reads it at the family goal, in any context. The signature hypothesis of preservation is still not the checker's acceptance of the definition. Productivity of an accepted unfold is still argued from the checker's shape.
