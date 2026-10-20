@@ -2,12 +2,12 @@
 title: Emit
 slug: emit
 order: 12
-summary: What becomes Elixir. A C backend is a flag. A run stream is a seed and a step. Spec and evidence are omitted.
+summary: What becomes Elixir. A C backend is a flag. A Nat run is a NIF. A run stream is a seed and a step. Spec and evidence are omitted.
 ---
 
 # Emit
 
-In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams.
+In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF.
 
 ## From a file
 
@@ -72,6 +72,14 @@ muro_nat *n = two();
 /* copy what you need from n */
 arena_at = 0;
 ```
+
+## A Nat run is a NIF
+
+An exported run whose live arguments and result are `Nat` is a NIF entry. `--backend c` writes `<stem>_nif.h`, `<stem>_nif.c`, `<stem>.mk`, and `<stem>.ex` beside the C, and `elixir_make` runs that makefile. The library is `priv/<stem>.so`. The module is the camelized stem (`half_ok.muro` is `HalfOk`). `HalfOk.half(4)` is the integer `2`, and `HalfOk.plus(2, 3)` is `5`.
+
+The entry builds the tagged struct and reads it back. An argument that is not a non-negative integer fitting in 64 bits is a bad argument, and so is a result that does not fit. Allocation goes through `MURO_ALLOC`, defined as one block for the call. The call copies the integer out and resets the block, so the next call reuses it. Two calls do not share the cursor.
+
+`run internal` stays `static` and is not an entry. A run whose argument or result is not `Nat` stays in the C file and is not an entry. A file with no Nat entry writes the `.h` and the `.c` only. A definition that spells `muro_nif_alloc` takes the `muro_` prefix, as the other runtime names do. `cc` translates the C. The proof stops at the run image.
 
 ## Visibility
 

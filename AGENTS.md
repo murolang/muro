@@ -47,15 +47,15 @@ Emit only after a successful check. Spec and evidence are omitted; erased argume
 
 ```
 mix muro.emit path.muro                     # Elixir (default); module name from the file stem
-mix muro.emit path.muro --backend c         # writes <name>.h and <name>.c next to the file
+mix muro.emit path.muro --backend c         # <name>.h and <name>.c; a Nat run is also a NIF
 ```
 
 ```elixir
 {:ok, src} = Muro.emit_file("examples/your_file.muro", Foo)   # Elixir source
-{:ok, [h, c]} = Muro.emit_c("examples/your_file.muro")        # C header + source
+{:ok, files} = Muro.emit_c("examples/your_file.muro")         # .h and .c, then the Nat NIF paths
 ```
 
-The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` and `Tensor` are refused as `c:machine`. Unapplied lambdas, definitions passed as values and calls of local functions are refused as `c:lambda`, because C has no closures. A raw `ν`, `Always` or `~` inside a `run` is refused as `c:stream`. Allocation goes through `MURO_ALLOC`, which is `malloc` unless you define it. See [Emit](manual/emit.md).
+The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` and `Tensor` are refused as `c:machine`. Unapplied lambdas, definitions passed as values and calls of local functions are refused as `c:lambda`, because C has no closures. A raw `ν`, `Always` or `~` inside a `run` is refused as `c:stream`. Allocation goes through `MURO_ALLOC`, which is `malloc` unless you define it. An exported run of `Nat` arguments and a `Nat` result is a NIF; that build defines `MURO_ALLOC` as one block and resets it when the call returns. See [Emit](manual/emit.md).
 
 ## Pitfalls seen in practice
 

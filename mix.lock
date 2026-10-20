@@ -1,5 +1,6 @@
 %{
   "complex": {:hex, :complex, "0.7.0", "695632ef9487517aa5d57edd1697801079d622414cb2e1a7cf538b1f9a50f205", [:mix], [], "hexpm", "0ee39c0803129f546e7f3f640da8f021c9e659402bf59da6f7f2c4848f068f8d"},
+  "elixir_make": {:hex, :elixir_make, "0.10.0", "16577e2583a79bb79237bbff349619ef5d80afffc07eac6e4faf0d00e2ddaf7d", [:mix], [], "hexpm", "dc1f09fb7fa68866b886abd5f0f3c83553b1a19a52359a899e92af1bb3b31982"},
   "makeup": {:hex, :makeup, "1.2.2", "882d46dc0905e9ff7abf2aab61a7e6b3dcc555533977d8a23b06019e6c89ac94", [:mix], [{:nimble_parsec, "~> 1.4", [hex: :nimble_parsec, repo: "hexpm", optional: false]}], "hexpm", "9a1a24e5b343b8ae16abea0822c10a6f75da27af7fa802ada5251f7579bfccfa"},
   "nimble_parsec": {:hex, :nimble_parsec, "1.4.2", "8efba0122db06df95bfaa78f791344a89352ba04baedd3849593bfce4d0dc1c6", [:mix], [], "hexpm", "4b21398942dda052b403bbe1da991ccd03a053668d147d53fb8c4e0efe09c973"},
   "nx": {:hex, :nx, "0.13.1", "f96311a573dcd57d11ff889958ee518f52f7c16dbf6d22191020d322887856fc", [:mix], [{:complex, "~> 0.7", [hex: :complex, repo: "hexpm", optional: false]}, {:telemetry, "~> 0.4.0 or ~> 1.0", [hex: :telemetry, repo: "hexpm", optional: false]}], "hexpm", "20556ea36c1e9732c1d87eebbf7c0773517e876e92af4ff592b974f80db0b9d9"},

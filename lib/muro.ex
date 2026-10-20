@@ -29,18 +29,21 @@ defmodule Muro do
   Write `<name>.h` and `<name>.c` next to `path` for its run definitions.
   A `run` stream is a seed, an environment, and a step. Machine tensors
   are refused (`c:machine`).
+
+  An exported run whose live arguments and result are `Nat` is also a NIF.
+  `elixir_make` builds `priv/<name>.so`, and `<name>.ex` loads it.
   """
   def emit_c(path, opts \\ []) do
     stem = Path.basename(path, ".muro")
     dir = Path.dirname(path)
 
     with {:ok, book} <- checked_book(path, opts),
-         {:ok, {header, source}} <- Emit.C.render(book, stem) do
+         {:ok, header, source, sigs} <- Emit.C.prepare(book, stem) do
       h = Path.join(dir, stem <> ".h")
       c = Path.join(dir, stem <> ".c")
       File.write!(h, header)
       File.write!(c, source)
-      {:ok, [h, c]}
+      {:ok, [h, c | Emit.Nif.build(dir, stem, sigs)]}
     end
   end
 
