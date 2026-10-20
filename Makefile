@@ -16,6 +16,7 @@ AFLAGS := --no-libraries -i agda -i vendor/agda-stdlib/src --warning=noUnsupport
 agda: agda-safe agda-all
 
 agda-safe:
+	$(AGDA) $(AFLAGS) --safe agda/Muro/IR.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Wall.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Consistency.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Frag.agda
