@@ -63,6 +63,22 @@ defmodule Muro do
     end
   end
 
+  @doc """
+  Write `<name>.s` next to `path` for a closed Nat run.
+  The assembler translates that file. The proof stops at the run image.
+  """
+  def emit_asm(path, opts \\ []) do
+    stem = Path.basename(path, ".muro")
+    dir = Path.dirname(path)
+
+    with {:ok, book} <- checked_book(path, opts),
+         {:ok, source} <- Emit.Asm.render(book, stem) do
+      s = Path.join(dir, stem <> ".s")
+      File.write!(s, source)
+      {:ok, [s]}
+    end
+  end
+
   defp checked_book(path, opts) do
     with {:ok, book} <- Load.file(path, opts) do
       {:ok, Prelude.for_emit(book)}

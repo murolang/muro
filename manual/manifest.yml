@@ -53,7 +53,7 @@ pages:
   - file: emit.md
     slug: emit
     title: Emit
-    summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Spec and evidence are omitted.
+    summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. Spec and evidence are omitted.
   - file: grammar.md
     slug: grammar
     title: Grammar

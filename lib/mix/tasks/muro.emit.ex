@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.Muro.Emit do
   use Mix.Task
 
-  @shortdoc "Emit run definitions as Elixir, C, or Rust"
+  @shortdoc "Emit run definitions as Elixir, C, Rust, or Cortex-M assembly"
 
   @moduledoc """
   Emit the `run` definitions of a `.muro` file.
@@ -10,6 +10,7 @@ defmodule Mix.Tasks.Muro.Emit do
       mix muro.emit path.muro --backend elixir
       mix muro.emit path.muro --backend c
       mix muro.emit path.muro --backend rust
+      mix muro.emit path.muro --backend asm
 
   The default backend is Elixir, the same text as `Muro.emit_file/3`.
   The module name is the file stem (`half_ok.muro` becomes `HalfOk`).
@@ -20,6 +21,10 @@ defmodule Mix.Tasks.Muro.Emit do
 
   `--backend rust` writes `<name>.rs` next to the file and prints that
   path. `rustc` translates it. The proof stops at the run image.
+
+  `--backend asm` writes `<name>.s` next to the file and prints that
+  path. The text is Thumb for Cortex-M0, for a closed `Nat` run.
+  The assembler translates it. The proof stops at the run image.
   """
 
   @switches [backend: :string]
@@ -57,6 +62,13 @@ defmodule Mix.Tasks.Muro.Emit do
 
   defp emit(path, "rust") do
     case Muro.emit_rust(path) do
+      {:ok, files} -> Enum.each(files, fn path -> Mix.shell().info(path) end)
+      {:error, e} -> Mix.raise(e)
+    end
+  end
+
+  defp emit(path, "asm") do
+    case Muro.emit_asm(path) do
       {:ok, files} -> Enum.each(files, fn path -> Mix.shell().info(path) end)
       {:error, e} -> Mix.raise(e)
     end

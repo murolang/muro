@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.32
+
+`--backend asm` prints a Cortex-M run for `Nat`. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. The assembler translates that text. The proof stops at the run image.
+
+### Emit
+
+- `Muro.Emit.Asm`, from `--backend asm`. The file is `<stem>.s`.
+
+### Tests
+
+- `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns.
+
+### Manual
+
+- Emit: the Cortex-M file. The assembler translates. The proof stops at the run image.
+
+### Package
+
+- Version 0.16.32.
+
 ## 0.16.31
 
 `--backend rust` prints the same closed run as the C backend. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. `rustc` translates that text. `cc` translates the C. CompCert is the high-assurance C translator. The proof stops at the run image.
