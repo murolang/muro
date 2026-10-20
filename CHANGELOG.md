@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.16.33
+
+Affine session protocols are specified in Agda. Sending a bit continues as the branch for that bit. Abandoning a channel has a conformance derivation. A second send, or a send where the protocol says receive, has none. `run` is unchanged.
+
+### Manual
+
+- Extending: the affine session judgment. A protocol is spec. A conformance derivation is evidence.
+
+### Package
+
+- Version 0.16.33.
+
 ## 0.16.32
 
 `--backend asm` prints a Cortex-M run for `Nat`. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. The assembler translates that text. The proof stops at the run image.

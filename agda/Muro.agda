@@ -26,6 +26,7 @@ import Muro.Soundness.Conv
 import Muro.Soundness.Views
 import Muro.Soundness
 import Muro.IR
+import Muro.Session
 open import Muro.Example public
 open import Muro.ExampleStream public
 import Muro.ExampleEither
