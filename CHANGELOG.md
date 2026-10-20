@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.16.28
+
+`uncons` after unfolding a definition whose body is a family λ has a derivation. `fam-def-uncons` opens that definition onto the λ, and `uncons` of the pair instantiated at the seed reads it at the family goal, in any context. The signature hypothesis of preservation is still not the checker's acceptance of the definition. Productivity of an accepted unfold is still argued from the checker's shape.
+
+### Manual
+
+- Limits, CSHRL, Extending: `fam-def-uncons` opens a family-λ definition onto that λ and derives `uncons` of the pair at the seed. The productivity sentence stays.
+
+### Package
+
+- Version 0.16.28.
+
 ## 0.16.27
 
 Discrete predicate synthesis, beside the checker. A predicate is a Boolean combination of feature tests. A chain fires the action of the first predicate that holds, or the default. The search keeps the highest-scoring predicate that agrees with an oracle on a trajectory, and drops a score of zero. `fewer?/7` compares two actions by how soon a stop is reached. `policy/3` writes that chain as a `run` definition over `Bool`. The checker sees the policy. It does not see the search.
