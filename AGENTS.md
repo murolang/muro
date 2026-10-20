@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Muro is an explicit affine dependent type theory built for agents to write. As the agent, you carry the formal verification: every type, motive and proof step is written out and nothing is inferred, so the checker either accepts your file or names each failing definition. A spec never becomes evidence. Evidence never becomes a run. Only `run` terms are emitted, as Elixir (BEAM), as C, or as Rust, from the same source.
+Muro is an explicit affine dependent type theory built for agents to write. As the agent, you carry the formal verification: every type, motive and proof step is written out and nothing is inferred, so the checker either accepts your file or names each failing definition. A spec never becomes evidence. Evidence never becomes a run. Only `run` terms are emitted, as Elixir (BEAM), as C, as Rust, or as Cortex-M assembly, from the same source.
 
 The canonical contract is [`manual/for-agents.md`](manual/for-agents.md). If this file and that page ever disagree, that page wins.
 
@@ -49,15 +49,17 @@ Emit only after a successful check. Spec and evidence are omitted; erased argume
 mix muro.emit path.muro                     # Elixir (default); module name from the file stem
 mix muro.emit path.muro --backend c         # <name>.h and <name>.c; a Nat run is also a NIF
 mix muro.emit path.muro --backend rust      # <name>.rs
+mix muro.emit path.muro --backend asm       # <name>.s, Cortex-M0, Nat run
 ```
 
 ```elixir
 {:ok, src} = Muro.emit_file("examples/your_file.muro", Foo)   # Elixir source
 {:ok, files} = Muro.emit_c("examples/your_file.muro")         # .h and .c, then the Nat NIF paths
 {:ok, files} = Muro.emit_rust("examples/your_file.muro")      # .rs
+{:ok, files} = Muro.emit_asm("examples/your_file.muro")       # .s
 ```
 
-The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` and `Tensor` are refused as `c:machine`. Unapplied lambdas, definitions passed as values and calls of local functions are refused as `c:lambda`, because C has no closures. A raw `ν`, `Always` or `~` inside a `run` is refused as `c:stream`. Allocation goes through `MURO_ALLOC`, which is `malloc` unless you define it. An exported run of `Nat` arguments and a `Nat` result is a NIF; that build defines `MURO_ALLOC` as one block and resets it when the call returns. The Rust backend prints the same image and refuses a term the C backend refuses. `rustc` translates that text. See [Emit](manual/emit.md).
+The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` and `Tensor` are refused as `c:machine`. Unapplied lambdas, definitions passed as values and calls of local functions are refused as `c:lambda`, because C has no closures. A raw `ν`, `Always` or `~` inside a `run` is refused as `c:stream`. Allocation goes through `MURO_ALLOC`, which is `malloc` unless you define it. An exported run of `Nat` arguments and a `Nat` result is a NIF; that build defines `MURO_ALLOC` as one block and resets it when the call returns. The Rust backend prints the same image and refuses a term the C backend refuses. `rustc` translates that text. The Cortex-M backend prints the Nat fragment of that image. The assembler translates that text. See [Emit](manual/emit.md).
 
 ## Pitfalls seen in practice
 

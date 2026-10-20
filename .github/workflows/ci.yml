@@ -23,6 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Install the ARM assembler and QEMU
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi qemu-system-arm
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: jdx/mise-action@v4
