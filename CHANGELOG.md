@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.31
+
+`--backend rust` prints the same closed run as the C backend. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. `rustc` translates that text. `cc` translates the C. CompCert is the high-assurance C translator. The proof stops at the run image.
+
+### Emit
+
+- `Muro.Emit.Rust`, from `--backend rust`. The file is `<stem>.rs`.
+
+### Tests
+
+- `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns.
+
+### Manual
+
+- Emit: the Rust file. `rustc` and `cc` translate. CompCert is the high-assurance C translator. The proof stops at the run image.
+
+### Package
+
+- Version 0.16.31.
+
 ## 0.16.30
 
 An exported run whose arguments and result are `Nat` is a NIF. `half(4)` is the integer `2`, and `plus(2, 3)` is `5`. The argument and the result are non-negative integers that fit in 64 bits; anything else is a bad argument. The generated C is unchanged: `Nat` is the tagged struct, and the call allocates it through one `MURO_ALLOC` block that the next call reuses. `elixir_make` runs the makefile. A file with no such run still writes the `.h` and the `.c` only. `run internal` stays `static`.

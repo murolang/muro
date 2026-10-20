@@ -47,6 +47,22 @@ defmodule Muro do
     end
   end
 
+  @doc """
+  Write `<name>.rs` next to `path` for its run definitions.
+  `rustc` translates that file. The proof stops at the run image.
+  """
+  def emit_rust(path, opts \\ []) do
+    stem = Path.basename(path, ".muro")
+    dir = Path.dirname(path)
+
+    with {:ok, book} <- checked_book(path, opts),
+         {:ok, source} <- Emit.Rust.render(book, stem) do
+      rs = Path.join(dir, stem <> ".rs")
+      File.write!(rs, source)
+      {:ok, [rs]}
+    end
+  end
+
   defp checked_book(path, opts) do
     with {:ok, book} <- Load.file(path, opts) do
       {:ok, Prelude.for_emit(book)}

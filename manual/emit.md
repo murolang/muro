@@ -2,12 +2,12 @@
 title: Emit
 slug: emit
 order: 12
-summary: What becomes Elixir. A C backend is a flag. A Nat run is a NIF. A run stream is a seed and a step. Spec and evidence are omitted.
+summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. A run stream is a seed and a step. Spec and evidence are omitted.
 ---
 
 # Emit
 
-In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF.
+In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust.
 
 ## From a file
 
@@ -37,6 +37,7 @@ defmodule Foo do
 mix muro.emit path.muro
 mix muro.emit path.muro --backend elixir
 mix muro.emit path.muro --backend c
+mix muro.emit path.muro --backend rust
 ```
 
 `--backend c` writes `<name>.h` and `<name>.c` next to the file and prints those paths. It emits `run` and `run internal` only. `run internal` is `static`. Erased arguments are dropped. `Nat` is a tagged struct (`0` is zero, `1` is `suc`) with constructors `muro_zero` and `muro_suc`. `Unit` and user `data`, indexed data included, are a tag plus fields. `match` is a `switch`. A constructor with no fields is one static object, the way `tt` is `muro_tt_obj`, and its function returns that address. A constructor with fields allocates through `MURO_ALLOC`. A name that is a C keyword through C23, a typedef from `<stdint.h>`, or a common function from the C library and POSIX (`true`, `read`, `malloc`) is prefixed with `muro_`. Any other name is emitted as spelled. A definition whose spelling is already taken, by an earlier definition or by a constructor function, gains a numeric suffix (`foo_bar_2`).
@@ -80,6 +81,12 @@ An exported run whose live arguments and result are `Nat` is a NIF entry. `--bac
 The entry builds the tagged struct and reads it back. An argument that is not a non-negative integer fitting in 64 bits is a bad argument, and so is a result that does not fit. Allocation goes through `MURO_ALLOC`, defined as one block for the call. The call copies the integer out and resets the block, so the next call reuses it. Two calls do not share the cursor.
 
 `run internal` stays `static` and is not an entry. A run whose argument or result is not `Nat` stays in the C file and is not an entry. A file with no Nat entry writes the `.h` and the `.c` only. A definition that spells `muro_nif_alloc` takes the `muro_` prefix, as the other runtime names do. `cc` translates the C. The proof stops at the run image.
+
+## Rust
+
+`--backend rust` writes `<name>.rs` next to the file and prints that path. It prints the same closed run as the C backend. `run internal` is a private function. `Nat` is `Zero` or `Suc`. An atom is one variant of a closed enum. A stream is a seed and a step. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. A term the C backend refuses is refused here, with the same reason.
+
+`rustc` translates this text. `cc` translates the C. CompCert is the high-assurance C translator. Neither is the proof. The proof stops at the run image.
 
 ## Visibility
 
