@@ -92,7 +92,7 @@ lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
 lib/muro/emit.ex        run → Elixir source
 lib/muro/emit/otp.ex    conforming process → GenServer (`--backend otp`)
-lib/muro/emit/node.ex   cross → one call and one monitor (`--node`)
+lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
 lib/muro/example.ex     same book as Agda
 lib/mix/tasks/muro.check.ex
 agda/Muro.agda          public re-export
@@ -105,7 +105,7 @@ agda/Muro/Check.agda    the decision procedure: structural on the term, fuel onl
 agda/Muro/Session.agda  affine session judgment; %1 must finish; decide searches, skel is the OTP actions
 agda/Muro/Arrow.agda    %1 on a Π binder must be used; both marks are the affine quantity
 agda/Muro/Place.agda    placement coeffect; ambient by default; one boundary; run has no seat
-agda/Muro/Located.agda  a session at a place; `endpoint` and `read` follow the sitting
+agda/Muro/Located.agda  a session at a place; `endpoint` and `read` follow the sitting; `--node` follows a cross reading
 agda/Muro/Tag.agda      constructor tags (Check compares tags before structure)
 agda/Muro/Spine.agda    application spines (constructor / dty applications), spine views
 agda/Muro/Frag.agda     the ⊢ fragment as a predicate on terms, signatures, contexts

@@ -129,7 +129,15 @@ The function returns whatever that process replies. If the name is not registere
 
 A `stay` writes no function. `move stay local : home`, and both reads of `poly`, are absent from `place_node.ex`. A file whose moves all stay still writes the module, with `node/0` and no call.
 
-`kept` is a `run` definition in the same file. `mix muro.emit examples/place.muro` emits it. The place, the scheme, and the move are omitted there, as they are from every run emitter.
+A `read cross` is the same call. The scheme is the one the endpoint names, and the place is the one the reading names. The message is the read of that scheme. The bits stay on the session.
+
+```
+mix muro.emit examples/located.muro --node a
+```
+
+That writes `examples/located_node.ex`. The module is `LocatedNode`. `read cross pong-away : ping-home at away` is `LocatedNode.cross_local_at_away/1`, because `ping-home` names `local`. `pong-done` and `left-open` also read `local` at `away`, so they are `cross_local_at_away2` and `cross_local_at_away3`. Each one monitors `:local` on `:a` and calls with `{:muro_read, "local"}`. `read stay pong` writes no function. A reading of `poly` writes no function either: `poly` stays at `home` and at `away`.
+
+`kept` is a `run` definition in the same file. `mix muro.emit examples/place.muro` emits it. The place, the scheme, and the move are omitted there, as they are from every run emitter. `mix muro.emit examples/located.muro` emits `kept` the same way. The endpoint and the reading are omitted there.
 
 The BEAM runs this call. The proof stops at the move.
 
