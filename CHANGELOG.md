@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.34
+
+A `.muro` file can state an affine session protocol and a process that conforms to it. Abandoning a channel is accepted. A second send, or a send where the protocol says receive, is refused. `run` is unchanged.
+
+### Manual
+
+- Grammar, Terms, Examples, Limits, and For agents: `session` and `conform`. A payload is a bit.
+- Extending: the checker decides the session judgment.
+
+### Package
+
+- Version 0.16.34.
+
 ## 0.16.33
 
 Affine session protocols are specified in Agda. Sending a bit continues as the branch for that bit. Abandoning a channel has a conformance derivation. A second send, or a send where the protocol says receive, has none. `run` is unchanged.

@@ -31,6 +31,7 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - A fourth term representation
 - Raw HOAS (`Tm → Tm`) as inductive syntax
 - Tags other than `run`, `run internal`, `spec`, `evidence`
+- A session payload other than the bits `b0` and `b1`
 
 ## Former names (history, not syntax)
 

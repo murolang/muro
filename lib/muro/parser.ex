@@ -70,6 +70,18 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      session_start?(s) ->
+        case parse_session(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
+      conform_start?(s) ->
+        case parse_conform(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
       true ->
         case parse_def(s) do
           {:ok, d, rest} -> parse_book(rest, [d | acc])
@@ -185,6 +197,119 @@ defmodule Muro.Parser do
     end
   end
 
+  defp session_start?(s), do: word_kw?(s, "session")
+
+  defp conform_start?(s), do: word_kw?(s, "conform")
+
+  # session ping := recv end (send end end)
+  # The protocol is spec. Keywords here are not term keywords.
+  defp parse_session(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "session"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, proto, rest} <- parse_proto(skip(rest)) do
+      {:ok, %{kind: :session, name: name, mode: :spec, proto: proto, loc: loc}, rest}
+    end
+  end
+
+  # conform pong : ping := get b1 (put b0 done)
+  # The process is evidence that it conforms to the named session.
+  defp parse_conform(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "conform"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, session, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, proc, rest} <- parse_proc(skip(rest)) do
+      {:ok,
+       %{kind: :conform, name: name, mode: :evidence, session: session, proc: proc, loc: loc},
+       rest}
+    end
+  end
+
+  defp parse_proto(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "end") -> {:ok, :end, after_kw(s, "end")}
+      word_kw?(s, "send") -> parse_proto2(s, "send", :send)
+      word_kw?(s, "recv") -> parse_proto2(s, "recv", :recv)
+      word_kw?(s, "choose") -> parse_proto2(s, "choose", :choose)
+      word_kw?(s, "branch") -> parse_proto2(s, "branch", :branch)
+      has_prefix?(s, "(") -> parse_paren(s, &parse_proto/1)
+      true -> {:error, err(s, "expected a protocol")}
+    end
+  end
+
+  defp parse_proto2(s, word, tag) do
+    with {:ok, rest} <- kw(s, word),
+         {:ok, a, rest} <- parse_proto(skip(rest)),
+         {:ok, b, rest} <- parse_proto(skip(rest)) do
+      {:ok, {tag, a, b}, rest}
+    end
+  end
+
+  defp parse_proc(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "done") -> {:ok, :done, after_kw(s, "done")}
+      word_kw?(s, "stop") -> {:ok, :stop, after_kw(s, "stop")}
+      word_kw?(s, "put") -> parse_comm(s, "put", :put)
+      word_kw?(s, "get") -> parse_comm(s, "get", :get)
+      word_kw?(s, "pick0") -> parse_proc1(s, "pick0", :pick0)
+      word_kw?(s, "pick1") -> parse_proc1(s, "pick1", :pick1)
+      word_kw?(s, "cover") -> parse_proc2(s, "cover", :cover)
+      has_prefix?(s, "(") -> parse_paren(s, &parse_proc/1)
+      true -> {:error, err(s, "expected a process")}
+    end
+  end
+
+  defp parse_comm(s, word, tag) do
+    with {:ok, rest} <- kw(s, word),
+         {:ok, bit, rest} <- parse_bit(skip(rest)),
+         {:ok, p, rest} <- parse_proc(skip(rest)) do
+      {:ok, {tag, bit, p}, rest}
+    end
+  end
+
+  defp parse_proc1(s, word, tag) do
+    with {:ok, rest} <- kw(s, word),
+         {:ok, p, rest} <- parse_proc(skip(rest)) do
+      {:ok, {tag, p}, rest}
+    end
+  end
+
+  defp parse_proc2(s, word, tag) do
+    with {:ok, rest} <- kw(s, word),
+         {:ok, p, rest} <- parse_proc(skip(rest)),
+         {:ok, q, rest} <- parse_proc(skip(rest)) do
+      {:ok, {tag, p, q}, rest}
+    end
+  end
+
+  defp parse_bit(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "b0") -> {:ok, :b0, after_kw(s, "b0")}
+      word_kw?(s, "b1") -> {:ok, :b1, after_kw(s, "b1")}
+      true -> {:error, err(s, "expected b0 or b1")}
+    end
+  end
+
+  defp parse_paren(s, parse) do
+    with {:ok, rest} <- tok(s, "("),
+         {:ok, x, rest} <- parse.(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ")") do
+      {:ok, x, rest}
+    end
+  end
+
   defp data_start?(s), do: word_kw?(s, "data")
 
   # Parameters before `:`. Index telescope after `:` before Type.
@@ -232,7 +357,8 @@ defmodule Muro.Parser do
       s == "" ->
         {:ok, Enum.reverse(acc), s}
 
-      word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or nu_start?(s) ->
+      word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
+        word_kw?(s, "session") or word_kw?(s, "conform") or nu_start?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
@@ -334,7 +460,8 @@ defmodule Muro.Parser do
           parse_infix(rest, {:bisim, left, right}, min_bp)
         end
 
-      starts_atom?(s0) and min_bp <= 20 and not ctor_decl_start?(s, s0) ->
+      starts_atom?(s0) and min_bp <= 20 and not ctor_decl_start?(s, s0) and
+          not session_line?(s, s0) ->
         with {:ok, arg, rest} <- parse_atom(s0) do
           parse_infix(rest, {:app, left, arg}, min_bp)
         end
@@ -400,6 +527,14 @@ defmodule Muro.Parser do
         _ ->
           false
       end
+  end
+
+  # `session` and `conform` use `:=`, so ctor_decl_start? does not see
+  # them. A new line that starts either form ends the constructor's type.
+  defp session_line?(s, s0) do
+    skipped = binary_part(s, 0, byte_size(s) - byte_size(s0))
+
+    String.contains?(skipped, "\n") and (session_start?(s0) or conform_start?(s0))
   end
 
   defp starts_atom?(s) do

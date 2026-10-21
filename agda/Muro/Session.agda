@@ -8,7 +8,8 @@
 -- not in this judgment: abandonment is conformance, not an error.
 --
 -- This is not a source syntax. None of these constructors is added
--- to Tm or PTm. The Elixir checker does not decide this judgment.
+-- to Tm or PTm. `decide` searches for a derivation. The Elixir
+-- checker follows that search for `session` and `conform`.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
@@ -16,6 +17,7 @@
 module Muro.Session where
 
 open import Data.Empty using (⊥)
+open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
 open import Muro.Base using (Mode; spec; evid; run)
 
@@ -126,3 +128,99 @@ chosen = pick0-ok done-end
 
 both : Conforms (cover done (put b0 done)) (branch end (send end end))
 both = cover-ok done-end (put0 done-end)
+
+------------------------------------------------------------------------
+-- The search. `yes` carries a derivation. `no` carries its refutation.
+-- The Elixir checker follows these clauses.
+------------------------------------------------------------------------
+
+data Answer (P : Proc) (S : Proto) : Set where
+  yes : Conforms P S → Answer P S
+  no  : ¬ Conforms P S → Answer P S
+
+on0 : ∀ {P S T} → Answer P S → Answer (put b0 P) (send S T)
+on0 (yes d) = yes (put0 d)
+on0 (no nd) = no (λ { (put0 d) → nd d })
+
+on1 : ∀ {P S T} → Answer P T → Answer (put b1 P) (send S T)
+on1 (yes d) = yes (put1 d)
+on1 (no nd) = no (λ { (put1 d) → nd d })
+
+in0 : ∀ {P S T} → Answer P S → Answer (get b0 P) (recv S T)
+in0 (yes d) = yes (get0 d)
+in0 (no nd) = no (λ { (get0 d) → nd d })
+
+in1 : ∀ {P S T} → Answer P T → Answer (get b1 P) (recv S T)
+in1 (yes d) = yes (get1 d)
+in1 (no nd) = no (λ { (get1 d) → nd d })
+
+at0 : ∀ {P S T} → Answer P S → Answer (pick0 P) (choose S T)
+at0 (yes d) = yes (pick0-ok d)
+at0 (no nd) = no (λ { (pick0-ok d) → nd d })
+
+at1 : ∀ {P S T} → Answer P T → Answer (pick1 P) (choose S T)
+at1 (yes d) = yes (pick1-ok d)
+at1 (no nd) = no (λ { (pick1-ok d) → nd d })
+
+both-of : ∀ {P Q S T} → Answer P S → Answer Q T → Answer (cover P Q) (branch S T)
+both-of (yes d) (yes e) = yes (cover-ok d e)
+both-of (no nd) _ = no (λ { (cover-ok d _) → nd d })
+both-of (yes _) (no nd) = no (λ { (cover-ok _ e) → nd e })
+
+decide : (P : Proc) (S : Proto) → Answer P S
+decide done end = yes done-end
+decide done (send _ _) = no (λ ())
+decide done (recv _ _) = no (λ ())
+decide done (choose _ _) = no (λ ())
+decide done (branch _ _) = no (λ ())
+decide stop _ = yes abandon
+decide (put b0 P) (send S _) = on0 (decide P S)
+decide (put b0 _) end = no (λ ())
+decide (put b0 _) (recv _ _) = no (λ ())
+decide (put b0 _) (choose _ _) = no (λ ())
+decide (put b0 _) (branch _ _) = no (λ ())
+decide (put b1 P) (send _ T) = on1 (decide P T)
+decide (put b1 _) end = no (λ ())
+decide (put b1 _) (recv _ _) = no (λ ())
+decide (put b1 _) (choose _ _) = no (λ ())
+decide (put b1 _) (branch _ _) = no (λ ())
+decide (get b0 P) (recv S _) = in0 (decide P S)
+decide (get b0 _) end = no (λ ())
+decide (get b0 _) (send _ _) = no (λ ())
+decide (get b0 _) (choose _ _) = no (λ ())
+decide (get b0 _) (branch _ _) = no (λ ())
+decide (get b1 P) (recv _ T) = in1 (decide P T)
+decide (get b1 _) end = no (λ ())
+decide (get b1 _) (send _ _) = no (λ ())
+decide (get b1 _) (choose _ _) = no (λ ())
+decide (get b1 _) (branch _ _) = no (λ ())
+decide (pick0 P) (choose S _) = at0 (decide P S)
+decide (pick0 _) end = no (λ ())
+decide (pick0 _) (send _ _) = no (λ ())
+decide (pick0 _) (recv _ _) = no (λ ())
+decide (pick0 _) (branch _ _) = no (λ ())
+decide (pick1 P) (choose _ T) = at1 (decide P T)
+decide (pick1 _) end = no (λ ())
+decide (pick1 _) (send _ _) = no (λ ())
+decide (pick1 _) (recv _ _) = no (λ ())
+decide (pick1 _) (branch _ _) = no (λ ())
+decide (cover P Q) (branch S T) = both-of (decide P S) (decide Q T)
+decide (cover _ _) end = no (λ ())
+decide (cover _ _) (send _ _) = no (λ ())
+decide (cover _ _) (recv _ _) = no (λ ())
+decide (cover _ _) (choose _ _) = no (λ ())
+
+pong-decides : decide pong ping ≡ yes pong-ok
+pong-decides = refl
+
+left-open-decides : decide (put b0 stop) (send (send end end) end) ≡ yes left-open
+left-open-decides = refl
+
+untouched-decides : decide stop (send end end) ≡ yes untouched
+untouched-decides = refl
+
+chosen-decides : decide (pick0 done) (choose end (send end end)) ≡ yes chosen
+chosen-decides = refl
+
+both-decides : decide (cover done (put b0 done)) (branch end (send end end)) ≡ yes both
+both-decides = refl
