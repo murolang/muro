@@ -38,7 +38,7 @@ See [The wall](wall.md), [Terms](language.md), [Identity](identity.md).
 
 ## ping.muro
 
-An affine session. The protocol is spec. The process is evidence. Nothing here is emitted.
+An affine session. The protocol is spec. The process is evidence. The Elixir, C, Rust, and assembly emitters omit it. `--backend otp` writes a GenServer for each process.
 
 ```
 session ping := recv end (send end end)
@@ -47,7 +47,7 @@ conform pong : ping := get b1 (put b0 done)
 
 `pong` receives `b1` and sends `b0`. `left-open` sends `b0` and then abandons the channel. `untouched` abandons it before any action. `chosen` takes the first arm of an internal choice. `both` offers both arms of an external choice. A second send, or a send where the protocol says receive, is refused; those books live in `test/muro_session_test.exs`, so a program copies the form that checks.
 
-See [Terms](language.md#session).
+See [Terms](language.md#session) and [Emit](emit.md#otp).
 
 ## internal_ok.muro
 

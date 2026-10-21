@@ -79,6 +79,23 @@ defmodule Muro do
     end
   end
 
+  @doc """
+  Write `<stem>_otp.ex` next to `path`. Each conforming process is a
+  GenServer that talks to one peer pid. The BEAM runs that server.
+  The proof stops at the conformance derivation.
+  """
+  def emit_otp(path, opts \\ []) do
+    stem = Path.basename(path, ".muro")
+    dir = Path.dirname(path)
+
+    with {:ok, book} <- checked_book(path, opts),
+         {:ok, source} <- Emit.Otp.render(book, stem) do
+      file = Path.join(dir, stem <> "_otp.ex")
+      File.write!(file, source)
+      {:ok, [file]}
+    end
+  end
+
   defp checked_book(path, opts) do
     with {:ok, book} <- Load.file(path, opts) do
       {:ok, Prelude.for_emit(book)}

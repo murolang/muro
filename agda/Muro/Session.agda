@@ -10,6 +10,8 @@
 -- This is not a source syntax. None of these constructors is added
 -- to Tm or PTm. `decide` searches for a derivation. The Elixir
 -- checker follows that search for `session` and `conform`.
+-- `skel` is that process as actions. `--backend otp` follows `skel`.
+-- The BEAM runs the server. The proof stops at the derivation.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
@@ -224,3 +226,41 @@ chosen-decides = refl
 
 both-decides : decide (cover done (put b0 done)) (branch end (send end end)) ≡ yes both
 both-decides = refl
+
+------------------------------------------------------------------------
+-- The actions a process takes. `say` and `hear` are a bit. `choose`
+-- is the process's choice. `offer` is both arms of the other side's
+-- choice. `leave` abandons the channel. `finish` closes it.
+------------------------------------------------------------------------
+
+data Skel : Set where
+  finish : Skel
+  leave  : Skel
+  say    : Bit → Skel → Skel
+  hear   : Bit → Skel → Skel
+  choose : Bit → Skel → Skel
+  offer  : Skel → Skel → Skel
+
+skel : Proc → Skel
+skel done = finish
+skel stop = leave
+skel (put b P) = say b (skel P)
+skel (get b P) = hear b (skel P)
+skel (pick0 P) = choose b0 (skel P)
+skel (pick1 P) = choose b1 (skel P)
+skel (cover P Q) = offer (skel P) (skel Q)
+
+pong-skel : skel pong ≡ hear b1 (say b0 finish)
+pong-skel = refl
+
+left-open-skel : skel (put b0 stop) ≡ say b0 leave
+left-open-skel = refl
+
+untouched-skel : skel stop ≡ leave
+untouched-skel = refl
+
+chosen-skel : skel (pick0 done) ≡ choose b0 finish
+chosen-skel = refl
+
+both-skel : skel (cover done (put b0 done)) ≡ offer finish (say b0 finish)
+both-skel = refl
