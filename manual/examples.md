@@ -52,6 +52,22 @@ conform pong-done : ping-done := get b1 (put b0 done)
 
 See [Terms](language.md#session) and [Emit](emit.md#otp).
 
+## arrow.muro
+
+A `%1` binder must be used. A `%0` binder, and an unmarked binder, may be dropped.
+
+```
+def keep : run Π (%1 x : Nat) → Nat :=
+  λ (%1 x : Nat) → x
+
+def loose : run Π (%0 x : Nat) → Nat :=
+  λ (%0 x : Nat) → 0
+```
+
+`keep` returns its argument. `use` applies it to `0`. `loose` and `plain` drop the argument. A `%1` binder that is never used, a λ whose mark disagrees with the Π, or a second use of the variable, is refused; those books live in `test/muro_arrow_test.exs`.
+
+See [Terms](language.md#binders-and-quantities).
+
 ## internal_ok.muro
 
 `run internal` helper `step` emits `defp`. `inc` is `run` and calls it. See [Emit](emit.md).

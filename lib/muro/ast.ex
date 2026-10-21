@@ -3,7 +3,9 @@ defmodule Muro.Ast do
   Named FOAS (parser / pretty / emit) and de Bruijn terms (checker).
   """
 
-  @type qty :: :affine | :reuse | :erased
+  # `:linear` is Mark m1 in agda/Muro/Arrow.agda: the affine quantity,
+  # plus a must-use obligation. It is not a fourth Agda Qty.
+  @type qty :: :affine | :reuse | :erased | :linear
   @type mode :: :run | :spec | :evidence
   @type name :: String.t()
 

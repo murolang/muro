@@ -18,7 +18,7 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - Implicits
 - Unification
 - Metavariables / unification (`?` is an unsolved goal that always fails; it does not unify)
-- Quantities other than affine, `+`, and `-`
+- A quantity other than affine, `+`, and `-`. `%0` and `%1` are marks on the affine quantity
 - A ν family with no index, one whose `uncons` takes the family at other arguments than its indices in order, or one whose body is not a product
 - `+` on Stream
 - `+` on Either
@@ -32,7 +32,6 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - Raw HOAS (`Tm → Tm`) as inductive syntax
 - Tags other than `run`, `run internal`, `spec`, `evidence`
 - A session payload other than the bits `b0` and `b1`
-- `%0` or `%1` on a Π binder. Those marks belong to a session
 - An OTP session process talking to more than one peer
 
 ## Former names (history, not syntax)

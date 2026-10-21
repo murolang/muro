@@ -18,6 +18,7 @@ agda: agda-safe agda-all
 agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/IR.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Session.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Arrow.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Wall.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Consistency.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Frag.agda

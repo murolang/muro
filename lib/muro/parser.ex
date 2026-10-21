@@ -840,6 +840,17 @@ defmodule Muro.Parser do
 
   defp parse_qty(<<"+", rest::binary>>), do: {:ok, :reuse, rest}
   defp parse_qty(<<"-", rest::binary>>), do: {:ok, :erased, rest}
+
+  # %0 is affine. %1 is the affine quantity that must be used.
+  # Both are whole tokens. %10 is not %1 followed by 0.
+  defp parse_qty("%" <> _ = s) do
+    case parse_mult(s) do
+      {:ok, :linear, rest} -> {:ok, :linear, rest}
+      {:ok, :affine, rest} -> {:ok, :affine, rest}
+      {:error, _} = err -> err
+    end
+  end
+
   defp parse_qty(s), do: {:ok, :affine, s}
 
   defp parse_pi(s) do

@@ -193,6 +193,7 @@ defmodule Muro.Print do
 
   defp qty_mark(:erased), do: "-"
   defp qty_mark(:reuse), do: "+"
+  defp qty_mark(:linear), do: "%1 "
   defp qty_mark(_), do: ""
 
   defp wrap(:none, _, s), do: s
