@@ -4,14 +4,18 @@
 --
 -- A protocol is spec. A conformance derivation is evidence. Neither
 -- is a run. `stop` abandons the channel at any protocol. A second
--- action the protocol does not name has no derivation. Linearity is
--- not in this judgment: abandonment is conformance, not an error.
+-- action the protocol does not name has no derivation.
+--
+-- `%0`, and an unmarked session, is this conformance: abandonment
+-- is allowed. `%1` asks for `Ends` as well. The process finishes
+-- at `done`, and `stop` has no derivation of `Ends`. Both marks
+-- are the affine quantity. Neither is a new constructor of Qty.
 --
 -- This is not a source syntax. None of these constructors is added
--- to Tm or PTm. `decide` searches for a derivation. The Elixir
--- checker follows that search for `session` and `conform`.
--- `skel` is that process as actions. `--backend otp` follows `skel`.
--- The BEAM runs the server. The proof stops at the derivation.
+-- to Tm or PTm. `decide` searches for a derivation. `finishes`
+-- decides `Ends`. The Elixir checker follows both. `skel` is the
+-- process as actions. `--backend otp` follows `skel`. The BEAM
+-- runs the server. The proof stops at the derivation.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
@@ -21,7 +25,7 @@ module Muro.Session where
 open import Data.Empty using (⊥)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
-open import Muro.Base using (Mode; spec; evid; run)
+open import Muro.Base using (Mode; spec; evid; run; Qty; affine)
 
 ¬_ : Set → Set
 ¬ A = A → ⊥
@@ -264,3 +268,123 @@ chosen-skel = refl
 
 both-skel : skel (cover done (put b0 done)) ≡ offer finish (say b0 finish)
 both-skel = refl
+
+------------------------------------------------------------------------
+-- Finishing. `done` at every leaf. `stop` has no constructor, so an
+-- abandoned channel does not finish. The Elixir checker follows
+-- `finishes` when the session is `%1`.
+------------------------------------------------------------------------
+
+data Ends : Proc → Set where
+  ends-done  : Ends done
+  ends-put   : ∀ {b P} → Ends P → Ends (put b P)
+  ends-get   : ∀ {b P} → Ends P → Ends (get b P)
+  ends-pick0 : ∀ {P} → Ends P → Ends (pick0 P)
+  ends-pick1 : ∀ {P} → Ends P → Ends (pick1 P)
+  ends-cover : ∀ {P Q} → Ends P → Ends Q → Ends (cover P Q)
+
+data Finish (P : Proc) : Set where
+  ends   : Ends P → Finish P
+  leaves : ¬ Ends P → Finish P
+
+step-put : ∀ {b P} → Finish P → Finish (put b P)
+step-put (ends d) = ends (ends-put d)
+step-put (leaves nd) = leaves (λ { (ends-put d) → nd d })
+
+step-get : ∀ {b P} → Finish P → Finish (get b P)
+step-get (ends d) = ends (ends-get d)
+step-get (leaves nd) = leaves (λ { (ends-get d) → nd d })
+
+step-pick0 : ∀ {P} → Finish P → Finish (pick0 P)
+step-pick0 (ends d) = ends (ends-pick0 d)
+step-pick0 (leaves nd) = leaves (λ { (ends-pick0 d) → nd d })
+
+step-pick1 : ∀ {P} → Finish P → Finish (pick1 P)
+step-pick1 (ends d) = ends (ends-pick1 d)
+step-pick1 (leaves nd) = leaves (λ { (ends-pick1 d) → nd d })
+
+step-cover : ∀ {P Q} → Finish P → Finish Q → Finish (cover P Q)
+step-cover (ends d) (ends e) = ends (ends-cover d e)
+step-cover (leaves nd) _ = leaves (λ { (ends-cover d _) → nd d })
+step-cover (ends _) (leaves nd) = leaves (λ { (ends-cover _ e) → nd e })
+
+finishes : (P : Proc) → Finish P
+finishes done = ends ends-done
+finishes stop = leaves (λ ())
+finishes (put _ P) = step-put (finishes P)
+finishes (get _ P) = step-get (finishes P)
+finishes (pick0 P) = step-pick0 (finishes P)
+finishes (pick1 P) = step-pick1 (finishes P)
+finishes (cover P Q) = step-cover (finishes P) (finishes Q)
+
+pong-finishes : finishes pong ≡ ends (ends-get (ends-put ends-done))
+pong-finishes = refl
+
+stop-finishes : finishes stop ≡ leaves (λ ())
+stop-finishes = refl
+
+left-open-finishes : finishes (put b0 stop) ≡ step-put (leaves (λ ()))
+left-open-finishes = refl
+
+chosen-finishes : finishes (pick0 done) ≡ ends (ends-pick0 ends-done)
+chosen-finishes = refl
+
+both-finishes :
+  finishes (cover done (put b0 done)) ≡ ends (ends-cover ends-done (ends-put ends-done))
+both-finishes = refl
+
+¬ends-stop : ¬ Ends stop
+¬ends-stop ()
+
+¬ends-left-open : ¬ Ends (put b0 stop)
+¬ends-left-open (ends-put ())
+
+------------------------------------------------------------------------
+-- `%0` and `%1` name the same arrow quantity. The linear mark is
+-- `Ends`, not a fourth constructor of Qty. An unmarked session is `%0`.
+------------------------------------------------------------------------
+
+data Mark : Set where
+  aff : Mark
+  lin : Mark
+
+qty : Mark → Qty
+qty aff = affine
+qty lin = affine
+
+same-qty : qty aff ≡ qty lin
+same-qty = refl
+
+-- A `%1` conformance is an affine conformance that also finishes.
+-- `lin-aff` is `%1` implies `%0`.
+record Linear (P : Proc) (S : Proto) : Set where
+  constructor linear
+  field
+    held   : Conforms P S
+    closed : Ends P
+
+lin-aff : ∀ {P S} → Linear P S → Conforms P S
+lin-aff = Linear.held
+
+pong-linear : Linear pong ping
+pong-linear = linear pong-ok (ends-get (ends-put ends-done))
+
+------------------------------------------------------------------------
+-- A process that finishes has no `leave` in the skeleton `--backend otp`
+-- follows. `stop` is the only way to `leave`, and `Ends` has no `stop`.
+------------------------------------------------------------------------
+
+data NoLeave : Skel → Set where
+  finish-ok : NoLeave finish
+  say-ok    : ∀ {b k} → NoLeave k → NoLeave (say b k)
+  hear-ok   : ∀ {b k} → NoLeave k → NoLeave (hear b k)
+  choose-ok : ∀ {b k} → NoLeave k → NoLeave (choose b k)
+  offer-ok  : ∀ {k q} → NoLeave k → NoLeave q → NoLeave (offer k q)
+
+ends-no-leave : ∀ {P} → Ends P → NoLeave (skel P)
+ends-no-leave ends-done = finish-ok
+ends-no-leave (ends-put e) = say-ok (ends-no-leave e)
+ends-no-leave (ends-get e) = hear-ok (ends-no-leave e)
+ends-no-leave (ends-pick0 e) = choose-ok (ends-no-leave e)
+ends-no-leave (ends-pick1 e) = choose-ok (ends-no-leave e)
+ends-no-leave (ends-cover e f) = offer-ok (ends-no-leave e) (ends-no-leave f)

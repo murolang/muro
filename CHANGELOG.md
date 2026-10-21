@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.36
+
+A session can require the process to finish. `session %1` refuses an abandoned channel. An unmarked session, and `session %0`, still allow it. `run` is unchanged.
+
+### Manual
+
+- Grammar, Terms, Examples: `%0` and `%1` on a session.
+- Extending: a `%1` session must finish. `%0` is the affine session.
+
+### Package
+
+- Version 0.16.36.
+
 ## 0.16.35
 
 `--backend otp` writes a GenServer for each process that conforms to a session. The process sends and receives bits with its peer. Abandoning the channel stops the server, and a monitor sees that stop. The BEAM runs the server. The proof stops at the conformance derivation. `run` is unchanged.

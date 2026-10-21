@@ -202,16 +202,39 @@ defmodule Muro.Parser do
   defp conform_start?(s), do: word_kw?(s, "conform")
 
   # session ping := recv end (send end end)
-  # The protocol is spec. Keywords here are not term keywords.
+  # session %1 ping-done := recv end (send end end)
+  # %0 is affine, and it is the default. %1 must finish.
+  # Neither mark is a quantity on a Π binder. Keywords here are not term keywords.
   defp parse_session(s) do
     loc = here(s)
 
     with {:ok, rest} <- kw(s, "session"),
+         {:ok, mult, rest} <- parse_mult(skip(rest)),
          {:ok, name, rest} <- ident(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":="),
          {:ok, proto, rest} <- parse_proto(skip(rest)) do
-      {:ok, %{kind: :session, name: name, mode: :spec, proto: proto, loc: loc}, rest}
+      {:ok, %{kind: :session, name: name, mode: :spec, mult: mult, proto: proto, loc: loc}, rest}
     end
+  end
+
+  # %1 is a whole token. %10 is not %1 followed by 0.
+  defp parse_mult("%" <> rest = s) do
+    case take_mult(rest) do
+      {:ok, mult, more} -> {:ok, mult, more}
+      :error -> {:error, err(s, "expected %0 or %1")}
+    end
+  end
+
+  defp parse_mult(s), do: {:ok, :affine, s}
+
+  defp take_mult("0" <> more), do: close_mult(:affine, more)
+  defp take_mult("1" <> more), do: close_mult(:linear, more)
+  defp take_mult(_), do: :error
+
+  defp close_mult(mult, more) do
+    if more == "" or not ident_char?(String.first(more)),
+      do: {:ok, mult, more},
+      else: :error
   end
 
   # conform pong : ping := get b1 (put b0 done)

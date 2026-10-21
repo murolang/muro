@@ -5,7 +5,7 @@ defmodule Muro.EmitOtpTest do
 
   setup do
     on_exit(fn ->
-      for name <- [:Pong, :LeftOpen, :Untouched, :Chosen, :Both, ""] do
+      for name <- [:Pong, :LeftOpen, :Untouched, :Chosen, :Both, :PongDone, :OpenStop, ""] do
         mod = if name == "", do: Module.concat(["PingOtp"]), else: Module.concat("PingOtp", name)
         :code.purge(mod)
         :code.delete(mod)
@@ -24,6 +24,11 @@ defmodule Muro.EmitOtpTest do
     assert Session.skel(proc["untouched"]) == :leave
     assert Session.skel(proc["chosen"]) == {:choose, :b0, :finish}
     assert Session.skel(proc["both"]) == {:offer, :finish, {:say, :b0, :finish}}
+    assert Session.skel(proc["pong-done"]) == {:hear, :b1, {:say, :b0, :finish}}
+    assert Session.skel(proc["open-stop"]) == :leave
+    assert Session.finishes(proc["pong-done"]) == :yes
+    assert Session.finishes(proc["open-stop"]) == :no
+    assert Session.finishes(proc["left-open"]) == :no
   end
 
   test "otp emit writes the servers and leaves run emit alone" do
@@ -87,6 +92,8 @@ defmodule Muro.EmitOtpTest do
     untouched()
     chosen()
     both_arms()
+    pong_done()
+    open_stop()
   end
 
   defp pong_roundtrip do
@@ -131,6 +138,19 @@ defmodule Muro.EmitOtpTest do
     {:ok, pid, ref} = start(:Chosen)
     assert_receive {:muro_pick, ^pid, :b0}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+  end
+
+  defp pong_done do
+    {:ok, pid, ref} = start(:PongDone)
+    send(pid, {:muro, self(), :b1})
+    assert_receive {:muro, ^pid, :b0}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+  end
+
+  defp open_stop do
+    {:ok, pid, ref} = start(:OpenStop)
+    assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :abandon}}
+    refute_received {:muro, ^pid, _}
   end
 
   defp both_arms do
