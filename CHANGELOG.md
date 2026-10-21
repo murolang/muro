@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.38
+
+A value can sit at a place. The place is ambient when it is not named. Staying there takes no boundary. Crossing to another place takes one. A polymorphic value is used where it is instantiated, and that use stays. A run term has no place.
+
+### Manual
+
+- Extending: placement is a coeffect. Ambient is the default. A boundary is one step.
+- Limits: a `.muro` file does not write a place yet.
+
+### Package
+
+- Version 0.16.38.
+
 ## 0.16.37
 
 A Π binder can require its variable to be used. `(%1 x : A)` refuses a binder that is never used. `(%0 x : A)`, and an unmarked binder, still allow that. The λ mark and the Π mark must agree. `run` is unchanged.
