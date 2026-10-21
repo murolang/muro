@@ -16,7 +16,8 @@
 -- scheme, and `read` states stay or cross. The run emitters omit
 -- both. `--node` follows a cross reading with one call. The message
 -- is the read of the scheme. The bit stays on the session. A stay
--- emits no call.
+-- emits no call. `--backend otp` follows the process. The server
+-- talks to one peer. The place stays on the reading.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}

@@ -29,8 +29,10 @@ defmodule Mix.Tasks.Muro.Emit do
   The assembler translates it. The proof stops at the run image.
 
   `--backend otp` writes `<stem>_otp.ex` next to the file and prints
-  that path. Each conforming process is a GenServer. The BEAM runs
-  that server. The proof stops at the conformance derivation.
+  that path. Each conforming process is a GenServer, and so is each
+  reading. The server talks to one peer. The place stays on the
+  reading. The BEAM runs that server. The proof stops at the
+  conformance derivation.
 
   `--node` writes `<stem>_node.ex` next to the file and prints that
   path. `place.muro` with `--node a` is `place_node.ex`. Each `cross`

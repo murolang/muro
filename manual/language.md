@@ -66,7 +66,7 @@ The checker sees the whole book, so a `move` may name a place or a scheme declar
 
 ## Endpoint
 
-An `endpoint` is a session at a scheme. The session's mark is the endpoint's mark. A `read` is the evidence that a process conforms to that session, and that reading the scheme at a place stays or crosses once. The run emitters omit both. A run definition has no seat. `--node` writes one call for each cross reading. The call reads the scheme the endpoint names. The bits stay on the session. A reading that stays writes no call. See [Emit](emit.md#node).
+An `endpoint` is a session at a scheme. The session's mark is the endpoint's mark. A `read` is the evidence that a process conforms to that session, and that reading the scheme at a place stays or crosses once. The run emitters omit both. A run definition has no seat. `--node` writes one call for each cross reading. The call reads the scheme the endpoint names. The bits stay on the session. A reading that stays writes no call. See [Emit](emit.md#node). `--backend otp` writes each reading as a GenServer with one peer. See [Emit](emit.md#otp).
 
 ```
 session ping := recv end (send end end)

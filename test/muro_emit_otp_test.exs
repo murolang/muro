@@ -5,10 +5,17 @@ defmodule Muro.EmitOtpTest do
 
   setup do
     on_exit(fn ->
-      for name <- [:Pong, :LeftOpen, :Untouched, :Chosen, :Both, :PongDone, :OpenStop, ""] do
-        mod = if name == "", do: Module.concat(["PingOtp"]), else: Module.concat("PingOtp", name)
-        :code.purge(mod)
-        :code.delete(mod)
+      for {parent, names} <- [
+            {"PingOtp", [:Pong, :LeftOpen, :Untouched, :Chosen, :Both, :PongDone, :OpenStop, ""]},
+            {"LocatedOtp",
+             [:Pong, :PongAway, :PongPoly, :PongPolyAway, :PongDone, :LeftOpen, ""]},
+            {"BothOtp", [:Pong, :PongHome, ""]}
+          ] do
+        for name <- names do
+          mod = if name == "", do: Module.concat([parent]), else: Module.concat(parent, name)
+          :code.purge(mod)
+          :code.delete(mod)
+        end
       end
     end)
 
@@ -79,6 +86,90 @@ defmodule Muro.EmitOtpTest do
     src = File.read!(file)
     assert src =~ "defmodule DoneIt do"
     refute src =~ "def z"
+  end
+
+  test "a reading is the same server" do
+    dir = tmp!()
+    path = Path.join(dir, "located.muro")
+    File.cp!("examples/located.muro", path)
+
+    assert {:ok, [file]} = Muro.emit_otp(path)
+    assert Path.basename(file) == "located_otp.ex"
+
+    src = File.read!(file)
+    assert src =~ "defmodule LocatedOtp do"
+    assert src =~ "defmodule Pong do"
+    assert src =~ "defmodule PongAway do"
+    assert src =~ "defmodule PongPoly do"
+    assert src =~ "defmodule PongPolyAway do"
+    assert src =~ "defmodule PongDone do"
+    assert src =~ "defmodule LeftOpen do"
+    assert src =~ "{:hear, :b1, {:say, :b0, :finish}}"
+    assert src =~ "{:say, :b0, :leave}"
+    assert src =~ "The server talks to one peer."
+    refute src =~ "def kept"
+    refute src =~ "GenServer.call"
+    refute src =~ "@node"
+
+    assert {:ok, elixir} = Muro.emit_file("examples/located.muro", LocatedRun)
+    assert elixir =~ ~r/\bdef kept\b/
+    refute elixir =~ "GenServer"
+  end
+
+  test "a conform and a reading are two servers" do
+    dir = tmp!()
+    path = Path.join(dir, "both.muro")
+
+    File.write!(path, """
+    session ping := recv end (send end end)
+    conform pong : ping := get b1 (put b0 done)
+    place home := ambient
+    scheme local := fixed home
+    endpoint ping-home := ping at local
+    read stay pong-home : ping-home at home := get b1 (put b0 done)
+    """)
+
+    assert {:ok, src} = Emit.Otp.render(checked!(path), "both")
+    assert src =~ "defmodule Pong do"
+    assert src =~ "defmodule PongHome do"
+    assert length(String.split(src, "{:hear, :b1, {:say, :b0, :finish}}")) == 3
+  end
+
+  test "a refused reading is not emitted" do
+    dir = tmp!()
+    path = Path.join(dir, "bad_read.muro")
+
+    File.write!(path, """
+    session ping := recv end (send end end)
+    place home := ambient
+    place away := node a
+    scheme local := fixed home
+    endpoint ping-home := ping at local
+    read cross early : ping-home at away := get b0 (put b0 done)
+    """)
+
+    assert {:error, msg} = Muro.emit_otp(path)
+    assert msg =~ "does not conform"
+    refute File.exists?(Path.join(dir, "bad_read_otp.ex"))
+  end
+
+  test "the reading's server speaks the session" do
+    assert {:ok, src} = Emit.Otp.render(checked!("examples/located.muro"), "located")
+    Code.compile_string(src)
+
+    {:ok, pid, ref} = located(:Pong)
+    send(pid, {:muro, self(), :b1})
+    assert_receive {:muro, ^pid, :b0}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, away, away_ref} = located(:PongAway)
+    send(away, {:muro, self(), :b1})
+    assert_receive {:muro, ^away, :b0}
+    assert_receive {:DOWN, ^away_ref, :process, ^away, :normal}
+
+    {:ok, open, open_ref} = located(:LeftOpen)
+    assert_receive {:muro, ^open, :b0}
+    assert_receive {:DOWN, ^open_ref, :process, ^open, {:shutdown, :abandon}}
   end
 
   test "the servers speak the session" do
@@ -167,6 +258,10 @@ defmodule Muro.EmitOtpTest do
 
   defp start(name, peer \\ self()) do
     apply(Module.concat("PingOtp", name), :start, [peer])
+  end
+
+  defp located(name, peer \\ self()) do
+    apply(Module.concat("LocatedOtp", name), :start, [peer])
   end
 
   defp tmp! do
