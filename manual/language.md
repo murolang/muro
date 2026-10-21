@@ -45,7 +45,7 @@ The checker sees the whole book, so a `conform` may name a session declared late
 
 ## Place
 
-A `place` is ambient or a node. A `scheme` is a place in spec: `fixed` names one place, and `any` is instantiated where it is read. A `move` is the evidence that reading the scheme at a place stays or crosses once. The run emitters omit all three. A run definition has no place.
+A `place` is ambient or a node. A `scheme` is a place in spec: `fixed` names one place, and `any` is instantiated where it is read. A `move` is the evidence that reading the scheme at a place stays or crosses once. The run emitters omit all three. A run definition has no place. `--node` writes one call for each cross. See [Emit](emit.md#node).
 
 ```
 place home := ambient
@@ -56,12 +56,13 @@ scheme poly := any
 
 move stay local : home
 move cross local : away
+move stay poly : home
 move stay poly : away
 ```
 
-`home` is the ambient place. `away` is the node named `a`. Reading `local` at `home` stays. Reading `local` at `away` crosses once. Reading `poly` stays at whichever place reads it. The node name is the identifier after `node`. Two place names with the same node name are the same place.
+`home` is the ambient place. `away` is the node named `a`. Reading `local` at `home` stays. Reading `local` at `away` crosses once. Reading `poly` stays at whichever place reads it. The node name is the identifier after `node`. Two place names with the same node name are the same place. The generated call is addressed to the node given to `--node`.
 
-The checker sees the whole book, so a `move` may name a place or a scheme declared later. A `stay` where the reading crosses, or a `cross` where it stays, is refused. `examples/place.muro` is the worked book.
+The checker sees the whole book, so a `move` may name a place or a scheme declared later. A `stay` where the reading crosses, or a `cross` where it stays, is refused. `examples/place.muro` is the worked book. `run` is unchanged.
 
 ## Import
 

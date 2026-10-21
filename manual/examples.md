@@ -70,7 +70,7 @@ See [Terms](language.md#binders-and-quantities).
 
 ## place.muro
 
-A named place stays or crosses once. The place and the scheme are spec. The move is evidence. A run definition has no place.
+A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, and assembly emitters omit all three. `--node` writes one call for each cross.
 
 ```
 place home := ambient
@@ -81,11 +81,21 @@ scheme poly := any
 
 move stay local : home
 move cross local : away
+move stay poly : home
+move stay poly : away
 ```
 
-`local` read at `home` stays. `local` read at `away` crosses once. `poly` stays at `home` and at `away`. A `stay` on that cross, a `cross` on a stay, or a `cross` of `poly`, is refused; those books live in `test/muro_place_test.exs`, so a program copies the form that checks. `kept` is the run definition in the same file.
+`local` is fixed at `home`. Reading it there stays. Reading it at `away` crosses once. `poly` stays at `home` and at `away`. `kept` is the `run` definition in the same file.
 
-See [Terms](language.md#place).
+```
+mix muro.emit examples/place.muro --node a
+```
+
+That writes `place_node.ex`. The module is `PlaceNode`. The cross is `PlaceNode.cross_local_at_away/1`: a call to the process registered as `:local` on the node `:a`, with the message `{:muro_read, "local"}`. Each stay is absent from that file. `mix muro.emit examples/place.muro` emits `kept`.
+
+A `stay` on that cross, a `cross` on a stay, or a `cross` of `poly`, is refused. Those books live in `test/muro_place_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#place) and [Emit](emit.md#node).
 
 ## internal_ok.muro
 

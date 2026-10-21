@@ -2,12 +2,12 @@
 title: Emit
 slug: emit
 order: 12
-summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. Spec and evidence are omitted from a run.
+summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A cross is one call on a named node. Spec and evidence are omitted from a run.
 ---
 
 # Emit
 
-In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session.
+In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--node` writes one call for each cross, on the node the flag names.
 
 ## From a file
 
@@ -40,6 +40,7 @@ mix muro.emit path.muro --backend c
 mix muro.emit path.muro --backend rust
 mix muro.emit path.muro --backend asm
 mix muro.emit path.muro --backend otp
+mix muro.emit path.muro --node a
 ```
 
 `--backend c` writes `<name>.h` and `<name>.c` next to the file and prints those paths. It emits `run` and `run internal` only. `run internal` is `static`. Erased arguments are dropped. `Nat` is a tagged struct (`0` is zero, `1` is `suc`) with constructors `muro_zero` and `muro_suc`. `Unit` and user `data`, indexed data included, are a tag plus fields. `match` is a `switch`. A constructor with no fields is one static object, the way `tt` is `muro_tt_obj`, and its function returns that address. A constructor with fields allocates through `MURO_ALLOC`. A name that is a C keyword through C23, a typedef from `<stdint.h>`, or a common function from the C library and POSIX (`true`, `read`, `malloc`) is prefixed with `muro_`. Any other name is emitted as spelled. A definition whose spelling is already taken, by an earlier definition or by a constructor function, gains a numeric suffix (`foo_bar_2`).
@@ -103,6 +104,34 @@ The assembler translates this text. The proof stops at the run image.
 The process sends `{:muro, from, :b0}` or `:b1`, and a choice as `{:muro_pick, from, :b0}` or `:b1`. It receives the same shapes from that peer. A message that arrives before the server reaches that receive is kept, in order. `done` stops the server with `:normal`. `stop` stops it with `{:shutdown, :abandon}`. A monitor of the server sees that reason. If the peer dies while the server is running, the server stops with `{:shutdown, :abandon}`. A bit the process did not choose stops it with `{:shutdown, {:unexpected, bit}}`.
 
 The server talks to one peer. The run emitters still omit the protocol and the process. The BEAM runs this server. The proof stops at the conformance derivation.
+
+## Node
+
+`--node` writes `<stem>_node.ex` next to the file and prints that path. The book is checked first. A book that fails to check writes nothing. With no `--backend`, or with `--backend elixir`, that file is the only output. Any other backend together with `--node` is refused.
+
+```
+mix muro.emit examples/place.muro --node a
+```
+
+That writes `examples/place_node.ex`. The module is `PlaceNode`. The flag is a BEAM node name: it starts with a letter or `_`, and the rest is letters, digits, `_`, `@`, `.`, or `-`. Anything else is refused. `a` is the atom `:a`, and `PlaceNode.node/0` returns it. Every cross in the file is sent to that node.
+
+`place away := node a` is what the checker reads. `away` is the place, and `a` is the node in that declaration. The flag is what the generated call addresses. This example spells that node `a` in the declaration and in the flag.
+
+`place.muro` has one cross, `move cross local : away`. It is the function `PlaceNode.cross_local_at_away/1`. `local` is the scheme and `away` is the place, and both names are in the function. A second cross of that scheme at that place is `cross_local_at_away2`. A hyphen in either name becomes an underscore in the function. The name registered on the node is the scheme as an atom. For this cross that atom is `:local`. A hyphen in the scheme stays in the atom.
+
+`cross_local_at_away` takes a timeout in milliseconds. The default is 5000, so `PlaceNode.cross_local_at_away()` uses that. The destination is `{:local, :a}`: a process registered as `:local` on the node `:a`. That process handles `{:muro_read, "local"}`, the read of the scheme. The function monitors the destination, and then calls:
+
+```
+GenServer.call({:local, :a}, {:muro_read, "local"}, timeout)
+```
+
+The function returns whatever that process replies. If the name is not registered, the monitor reports `:noproc` and the function returns `{:error, :noproc}`. If the call exits, the function returns `{:error, reason}`. Each call looks the name up again. A process that later registers as `:local` is the one the next call reaches.
+
+A `stay` writes no function. `move stay local : home`, and both reads of `poly`, are absent from `place_node.ex`. A file whose moves all stay still writes the module, with `node/0` and no call.
+
+`kept` is a `run` definition in the same file. `mix muro.emit examples/place.muro` emits it. The place, the scheme, and the move are omitted there, as they are from every run emitter.
+
+The BEAM runs this call. The proof stops at the move.
 
 ## Visibility
 
@@ -179,7 +208,7 @@ The C backend has no closures. An unapplied lambda, a definition passed as a val
 
 ## What emit is not
 
-It does not type raw Elixir. It does not emit spec or evidence. It does not turn a Stream that is only evidence into `Stream`. It does not use `Nx.Defn`.
+It does not type raw Elixir. A run emit omits spec and evidence. `--backend otp` and `--node` are separate files, one for a conformance and one for a cross, and neither file is a run term. It does not turn a Stream that is only evidence into `Stream`. It does not use `Nx.Defn`.
 
 If you want a book in the test suite, parse/check/emit it from `test/muro_check_test.exs`. The canonical book `Muro.Example.book/0` must stay in sync with `examples/half_ok.muro` and `agda/Muro/Example.agda`.
 

@@ -9,7 +9,8 @@
 --
 -- This is not a source syntax. None of these constructors is added
 -- to Tm or PTm. `decide` chooses stay or one boundary. The Elixir
--- checker follows that choice. There is no RPC here.
+-- checker follows that choice. `--node` follows a cross with one
+-- call. A stay emits no call.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
