@@ -68,6 +68,25 @@ def loose : run Π (%0 x : Nat) → Nat :=
 
 See [Terms](language.md#binders-and-quantities).
 
+## place.muro
+
+A named place stays or crosses once. The place and the scheme are spec. The move is evidence. A run definition has no place.
+
+```
+place home := ambient
+place away := node a
+
+scheme local := fixed home
+scheme poly := any
+
+move stay local : home
+move cross local : away
+```
+
+`local` read at `home` stays. `local` read at `away` crosses once. `poly` stays at `home` and at `away`. A `stay` on that cross, a `cross` on a stay, or a `cross` of `poly`, is refused; those books live in `test/muro_place_test.exs`, so a program copies the form that checks. `kept` is the run definition in the same file.
+
+See [Terms](language.md#place).
+
 ## internal_ok.muro
 
 `run internal` helper `step` emits `defp`. `inc` is `run` and calls it. See [Emit](emit.md).

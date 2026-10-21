@@ -891,7 +891,7 @@ defmodule Muro.Emit.C do
   end
 
   defp find_def(book, name) do
-    Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name))
+    Enum.find(book, &(Map.get(&1, :kind, :def) != :data and Map.get(&1, :name) == name))
   end
 
   defp find_data(book, name) do

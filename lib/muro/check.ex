@@ -4,7 +4,7 @@ defmodule Muro.Check do
   from `Muro.Check` (`⇒-var-run`, `⇐-refl`, …). There is no promotion.
   """
 
-  alias Muro.{Ast, Print, Subst}
+  alias Muro.{Ast, Place, Print, Subst}
 
   # Default fuel. Fuel bounds reduction (whnf, conversion, isData, the
   # index-clash test); everything else is structural recursion on the
@@ -19,7 +19,7 @@ defmodule Muro.Check do
   # -- lookup ----------------------------------------------------------------
 
   defp lookup_def(book, name) do
-    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name)) do
+    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and Map.get(&1, :name) == name)) do
       nil ->
         {:error, "unknown definition #{name}"}
 
@@ -29,6 +29,12 @@ defmodule Muro.Check do
 
       %{kind: :conform} ->
         {:skip, "#{name} is a conformance, not a definition"}
+
+      %{kind: :place} ->
+        {:skip, "#{name} is a place, not a definition"}
+
+      %{kind: :scheme} ->
+        {:skip, "#{name} is a scheme, not a definition"}
 
       d ->
         {:ok, d}
@@ -1851,6 +1857,40 @@ defmodule Muro.Check do
     end
   end
 
+  # A place is ambient or a node name. The node name is a string.
+  def check_def(_book, %{kind: :place}, _fuel), do: :ok
+
+  # A scheme is spec. `fixed` names a place declared in the book.
+  def check_def(book, %{kind: :scheme, name: name, scheme: scheme} = d, _fuel) do
+    case resolve_scheme(book, scheme) do
+      {:ok, _} ->
+        :ok
+
+      {:error, msg} ->
+        {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+    end
+  end
+
+  # Muro.Place.conform. The stated mark is stay or cross. A mark whose
+  # boundary disagrees with `bounds` is refused. A move is evidence.
+  def check_def(book, %{kind: :move, mark: mark, scheme: sname, place: pname} = d, _fuel) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, scheme} <- fetch_scheme(book, sname),
+         {:ok, resolved} <- resolve_scheme(book, scheme.scheme),
+         {:ok, placed} <- fetch_place(book, pname) do
+      actual = Place.conform(resolved, placed.place)
+
+      if actual == mark do
+        :ok
+      else
+        {:error, "#{loc}expected #{actual}"}
+      end
+    else
+      {:error, msg} -> {:error, "#{loc}#{msg}"}
+    end
+  end
+
   def check_def(book, %{kind: :data} = d, fuel), do: check_data(book, d, fuel)
 
   def check_def(book, %{mode: mode, type: ty, body: body} = d, k) do
@@ -1870,6 +1910,29 @@ defmodule Muro.Check do
   # `%1` is Mark lin. An unmarked session, and `%0`, are affine.
   defp linear_session?(session), do: Map.get(session, :mult, :affine) == :linear
 
+  defp fetch_place(book, name) do
+    case Enum.find(book, &(Map.get(&1, :kind) == :place and &1.name == name)) do
+      nil -> {:error, "unknown place #{name}"}
+      p -> {:ok, p}
+    end
+  end
+
+  defp fetch_scheme(book, name) do
+    case Enum.find(book, &(Map.get(&1, :kind) == :scheme and &1.name == name)) do
+      nil -> {:error, "unknown scheme #{name}"}
+      s -> {:ok, s}
+    end
+  end
+
+  defp resolve_scheme(_book, :any), do: {:ok, :any}
+
+  defp resolve_scheme(book, {:fixed, pname}) do
+    case fetch_place(book, pname) do
+      {:ok, %{place: p}} -> {:ok, {:fixed, p}}
+      {:error, _} = err -> err
+    end
+  end
+
   # A run definition has a run type, used or not (Agda: runDecl).
   defp run_decl(k, book, :run, ty) do
     case run_ty(k, book, ty) do
@@ -1885,12 +1948,12 @@ defmodule Muro.Check do
   # block and descend on one shared argument (Agda: component).
   defp rec_mode?(mode), do: mode in [:run, :evidence, :spec]
 
-  # A session and a conformance have a mode and no term, so they are
-  # outside the descent block.
+  # A session, a conformance, a place, a scheme, and a move have a mode
+  # and no term, so they are outside the descent block.
   defp rec_names(book) do
     for %{mode: mode, name: name} = d <- book,
         rec_mode?(mode),
-        Map.get(d, :kind) not in [:session, :conform],
+        Map.get(d, :kind) not in [:session, :conform, :place, :scheme, :move],
         do: name
   end
 
@@ -1970,7 +2033,11 @@ defmodule Muro.Check do
   # member, members in book order, the first member's choice first. Empty
   # when a member has none (Agda: sharedArgs, choices).
   defp shared_positions(book, block) do
-    members = Enum.filter(book, &(rec_mode?(&1[:mode]) and MapSet.member?(block, &1.name)))
+    members =
+      Enum.filter(book, fn d ->
+        name = Map.get(d, :name)
+        name != nil and rec_mode?(d[:mode]) and MapSet.member?(block, name)
+      end)
 
     case members do
       [] -> []
@@ -1994,10 +2061,12 @@ defmodule Muro.Check do
 
   defp all_ok?(k, book, block, order, poss) do
     Enum.all?(book, fn d ->
-      if rec_mode?(d[:mode]) and MapSet.member?(block, d.name) do
+      name = Map.get(d, :name)
+
+      if name != nil and rec_mode?(d[:mode]) and MapSet.member?(block, name) do
         match?(
           {:ok, _},
-          check(k, book, def_rec(d.name, poss, block, order), [], d.mode, d.body, d.type)
+          check(k, book, def_rec(name, poss, block, order), [], d.mode, d.body, d.type)
         )
       else
         true

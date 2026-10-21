@@ -53,7 +53,7 @@ defmodule Muro.Prelude do
     Enum.reject(prelude, &(&1.name in hidden))
   end
 
-  defp names(book), do: MapSet.new(book, & &1.name)
+  defp names(book), do: MapSet.new(for %{name: name} <- book, do: name)
 
   # User names, plus any prelude definition that refers to one of them.
   defp hidden(prelude, user_names) do

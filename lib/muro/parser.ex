@@ -82,6 +82,24 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      place_start?(s) ->
+        case parse_place(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
+      scheme_start?(s) ->
+        case parse_scheme(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
+      move_start?(s) ->
+        case parse_move(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
       true ->
         case parse_def(s) do
           {:ok, d, rest} -> parse_book(rest, [d | acc])
@@ -254,6 +272,121 @@ defmodule Muro.Parser do
     end
   end
 
+  defp place_start?(s), do: word_kw?(s, "place")
+
+  defp scheme_start?(s), do: word_kw?(s, "scheme")
+
+  defp move_start?(s), do: word_kw?(s, "move")
+
+  # place home := ambient
+  # place away := node a
+  # `ambient` and `node` are keywords only on this right-hand side.
+  defp parse_place(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "place"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, place, rest} <- parse_place_rhs(skip(rest)) do
+      {:ok, %{kind: :place, name: name, mode: :spec, place: place, loc: loc}, rest}
+    end
+  end
+
+  defp parse_place_rhs(s) do
+    cond do
+      word_kw?(s, "ambient") ->
+        {:ok, :ambient, after_kw(s, "ambient")}
+
+      word_kw?(s, "node") ->
+        with {:ok, name, rest} <- ident(skip(after_kw(s, "node"))) do
+          {:ok, {:node, name}, rest}
+        end
+
+      true ->
+        {:error, err(s, "expected ambient or node")}
+    end
+  end
+
+  # scheme local := fixed home
+  # scheme poly := any
+  defp parse_scheme(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "scheme"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, scheme, rest} <- parse_scheme_rhs(skip(rest)) do
+      {:ok, %{kind: :scheme, name: name, mode: :spec, scheme: scheme, loc: loc}, rest}
+    end
+  end
+
+  defp parse_scheme_rhs(s) do
+    cond do
+      word_kw?(s, "any") ->
+        {:ok, :any, after_kw(s, "any")}
+
+      word_kw?(s, "fixed") ->
+        with {:ok, name, rest} <- ident(skip(after_kw(s, "fixed"))) do
+          {:ok, {:fixed, name}, rest}
+        end
+
+      true ->
+        {:error, err(s, "expected any or fixed")}
+    end
+  end
+
+  # move stay local : home
+  # move cross local : away
+  # The mark is evidence. `stay` and `cross` are keywords only here.
+  defp parse_move(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "move"),
+         {:ok, mark, rest} <- parse_mark(skip(rest)),
+         {:ok, scheme, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, place, rest} <- ident(skip(rest)) do
+      {:ok, %{kind: :move, mode: :evidence, mark: mark, scheme: scheme, place: place, loc: loc},
+       rest}
+    end
+  end
+
+  defp parse_mark(s) do
+    cond do
+      word_kw?(s, "stay") -> {:ok, :stay, after_kw(s, "stay")}
+      word_kw?(s, "cross") -> {:ok, :cross, after_kw(s, "cross")}
+      true -> {:error, err(s, "expected stay or cross")}
+    end
+  end
+
+  # A place or scheme entry is `name := …`. A constructor `place : Box`
+  # is not one. A move entry starts `move stay` or `move cross`.
+  defp assign_entry?(s, word) do
+    if word_kw?(s, word) do
+      rest = s |> after_kw(word) |> skip()
+
+      case ident(rest) do
+        {:ok, _, rest} -> has_prefix?(skip(rest), ":=")
+        _ -> false
+      end
+    else
+      false
+    end
+  end
+
+  defp place_entry?(s), do: assign_entry?(s, "place")
+
+  defp scheme_entry?(s), do: assign_entry?(s, "scheme")
+
+  defp move_entry?(s) do
+    if word_kw?(s, "move") do
+      rest = s |> after_kw("move") |> skip()
+      word_kw?(rest, "stay") or word_kw?(rest, "cross")
+    else
+      false
+    end
+  end
+
   defp parse_proto(s) do
     s = skip(s)
 
@@ -381,7 +514,8 @@ defmodule Muro.Parser do
         {:ok, Enum.reverse(acc), s}
 
       word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
-        word_kw?(s, "session") or word_kw?(s, "conform") or nu_start?(s) ->
+        word_kw?(s, "session") or word_kw?(s, "conform") or nu_start?(s) or
+        place_entry?(s) or scheme_entry?(s) or move_entry?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
@@ -553,11 +687,14 @@ defmodule Muro.Parser do
   end
 
   # `session` and `conform` use `:=`, so ctor_decl_start? does not see
-  # them. A new line that starts either form ends the constructor's type.
+  # them. A new line that starts either form, or a place, scheme, or move
+  # entry, ends the constructor's type.
   defp session_line?(s, s0) do
     skipped = binary_part(s, 0, byte_size(s) - byte_size(s0))
 
-    String.contains?(skipped, "\n") and (session_start?(s0) or conform_start?(s0))
+    String.contains?(skipped, "\n") and
+      (session_start?(s0) or conform_start?(s0) or place_entry?(s0) or scheme_entry?(s0) or
+         move_entry?(s0))
   end
 
   defp starts_atom?(s) do

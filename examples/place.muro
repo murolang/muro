@@ -1,0 +1,21 @@
+-- place.muro — a named place stays or crosses once.
+-- A place and a scheme are spec. A move is evidence.
+-- A run definition has no place.
+
+place home := ambient
+
+place away := node a
+
+scheme local := fixed home
+
+scheme poly := any
+
+move stay local : home
+
+move cross local : away
+
+move stay poly : home
+
+move stay poly : away
+
+def kept : run Nat := 0

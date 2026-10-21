@@ -11,7 +11,7 @@ In brief: one sort `Type`. Binders are written. Application is juxtaposition. `m
 
 ## The book
 
-A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `session`, `conform`, and `def` entries.
+A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `session`, `conform`, `place`, `scheme`, `move`, and `def` entries.
 
 ```
 def name : tag type := body
@@ -21,7 +21,7 @@ The tag is `run`, `run internal`, `spec`, or `evidence`. There is no other tag.
 
 Forward references are allowed. The checker sees every definition when it checks any one of them.
 
-Definitions, data types, constructors, sessions, and conformances share one set of names. Each name is declared once.
+Definitions, data types, constructors, sessions, conformances, places, and schemes share one set of names. Each name is declared once.
 
 ## Session
 
@@ -42,6 +42,26 @@ conform pong-done : ping-done := get b1 (put b0 done)
 ```
 
 The checker sees the whole book, so a `conform` may name a session declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
+
+## Place
+
+A `place` is ambient or a node. A `scheme` is a place in spec: `fixed` names one place, and `any` is instantiated where it is read. A `move` is the evidence that reading the scheme at a place stays or crosses once. The run emitters omit all three. A run definition has no place.
+
+```
+place home := ambient
+place away := node a
+
+scheme local := fixed home
+scheme poly := any
+
+move stay local : home
+move cross local : away
+move stay poly : away
+```
+
+`home` is the ambient place. `away` is the node named `a`. Reading `local` at `home` stays. Reading `local` at `away` crosses once. Reading `poly` stays at whichever place reads it. The node name is the identifier after `node`. Two place names with the same node name are the same place.
+
+The checker sees the whole book, so a `move` may name a place or a scheme declared later. A `stay` where the reading crosses, or a `cross` where it stays, is refused. `examples/place.muro` is the worked book.
 
 ## Import
 
