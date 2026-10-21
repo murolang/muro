@@ -33,9 +33,10 @@ defmodule Mix.Tasks.Muro.Emit do
   that server. The proof stops at the conformance derivation.
 
   `--node` writes `<stem>_node.ex` next to the file and prints that
-  path. The argument is the node in `{name, node}`. Each `cross` is
-  one call and one monitor. A `stay` emits no call. The BEAM runs
-  the call. The proof stops at the move.
+  path. `place.muro` with `--node a` is `place_node.ex`. Each `cross`
+  is one call to the scheme, registered on that node, after a monitor
+  of the same name. A `stay` emits no call. The BEAM runs the call.
+  The proof stops at the move.
   """
 
   @switches [backend: :string, node: :string]

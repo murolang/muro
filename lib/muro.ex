@@ -98,9 +98,10 @@ defmodule Muro do
 
   @doc """
   Write `<stem>_node.ex` next to `path`. Each `cross` is one
-  `GenServer.call({name, node}, msg, timeout)` and one monitor of
-  `{name, node}`, installed first. A `stay` emits no call. The BEAM
-  runs the call. The proof stops at the move.
+  `GenServer.call({name, node}, {:muro_read, scheme}, timeout)`.
+  `name` is the scheme, registered on `node`. The monitor of that
+  name is installed first. A `stay` emits no call. The BEAM runs
+  the call. The proof stops at the move.
   """
   def emit_node(path, node, opts \\ []) when is_atom(node) do
     stem = Path.basename(path, ".muro")

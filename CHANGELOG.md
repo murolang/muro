@@ -6,9 +6,10 @@ A cross can be sent to a node. `mix muro.emit --node` names that node. Each cros
 
 ### Manual
 
-- Emit: `--node`.
+- Emit: `--node` writes one call for each cross. `place.muro` is the example.
+- Terms, Examples: that call sits next to the place.
 - Extending: the call follows a cross. The registered name is the reference.
-- Limits: one cross is one call.
+- Limits: one cross is one call. A stay emits no call.
 
 ### Package
 

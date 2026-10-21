@@ -2,10 +2,10 @@ defmodule Muro.Emit.Node do
   @moduledoc """
   Emit one native BEAM call for each `cross`.
 
-  `--node` is the node in `{name, node}`. `name` is the scheme,
-  registered on that node. The monitor is `:erlang.monitor(:process,
-  {name, node})`, installed before `GenServer.call/3`. A `stay` emits
-  no call. `run` is not emitted here.
+  `--node` names the BEAM node. The registered name on that node is
+  the scheme. The monitor is `:erlang.monitor(:process, {name, node})`,
+  installed before `GenServer.call({name, node}, {:muro_read, scheme},
+  timeout)`. A `stay` emits no call. `run` is not emitted here.
 
   The BEAM runs the call. The proof stops at the move.
   """
