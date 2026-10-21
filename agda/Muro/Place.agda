@@ -8,8 +8,8 @@
 -- seat: run is placement-agnostic.
 --
 -- This is not a source syntax. None of these constructors is added
--- to Tm or PTm. `decide` chooses stay or one boundary. A later
--- checker can follow that choice. There is no RPC here.
+-- to Tm or PTm. `decide` chooses stay or one boundary. The Elixir
+-- checker follows that choice. There is no RPC here.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}

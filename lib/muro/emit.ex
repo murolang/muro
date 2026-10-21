@@ -324,7 +324,7 @@ defmodule Muro.Emit do
   # Quantities of the Πs of a definition's type; nil for a name the book
   # does not define.
   defp ref_qtys(book, name) do
-    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name)) do
+    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and Map.get(&1, :name) == name)) do
       nil ->
         nil
 
@@ -426,7 +426,7 @@ defmodule Muro.Emit do
   defp emitted_occurs?(_, _, _), do: false
 
   defp arg_qtys(book, name, n) do
-    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name)) do
+    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and Map.get(&1, :name) == name)) do
       nil ->
         List.duplicate(:affine, n)
 
@@ -445,7 +445,7 @@ defmodule Muro.Emit do
   end
 
   defp live_args(book, name, args, d, names) do
-    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name)) do
+    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and Map.get(&1, :name) == name)) do
       nil ->
         Enum.map(args, &emit_db(&1, d, book, names))
 

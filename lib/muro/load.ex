@@ -213,6 +213,7 @@ defmodule Muro.Load do
 
   defp decl_names(%{kind: :import}), do: []
   defp decl_names(%{kind: :param}), do: []
+  defp decl_names(%{kind: :move}), do: []
   defp decl_names(%{name: name}), do: [name]
 
   defp site(d) do

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.39
+
+A named place can be ambient or a node. Reading a fixed place at that same place stays. Reading it at another place crosses once. A polymorphic place stays wherever it is read. `run` has no place.
+
+### Manual
+
+- Grammar, Terms, Examples: a place, a scheme, and a move.
+- Extending: the checker follows `decide`.
+
+### Package
+
+- Version 0.16.39.
+
 ## 0.16.38
 
 A value can sit at a place. The place is ambient when it is not named. Staying there takes no boundary. Crossing to another place takes one. A polymorphic value is used where it is instantiated, and that use stays. A run term has no place.

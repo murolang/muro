@@ -386,7 +386,7 @@ defmodule Muro.Ast do
           Map.get(d, :kind) == :data ->
             data_to_db(d)
 
-          Map.get(d, :kind) in [:session, :conform] ->
+          Map.get(d, :kind) in [:session, :conform, :place, :scheme, :move] ->
             {:ok, d}
 
           true ->
@@ -415,6 +415,7 @@ defmodule Muro.Ast do
   end
 
   defp entry_names(%{kind: :import}), do: []
+  defp entry_names(%{kind: :move}), do: []
 
   defp entry_names(%{kind: :data, name: name, ctors: ctors}) do
     [name | Enum.map(ctors, & &1.name)]
