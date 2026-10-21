@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.41
+
+A session can sit at a place. The place is ambient when it is not named. Reading it there stays. Reading it at another place crosses once. A polymorphic session stays wherever it is read. The bits stay on the session. A session that must finish still has to finish. A run term has no seat.
+
+### Manual
+
+- Extending: a session sits at a place. The bits stay on the session. One boundary.
+- Limits: a `.muro` file does not locate a session yet.
+
+### Package
+
+- Version 0.16.41.
+
 ## 0.16.40
 
 A cross can be sent to a node. `mix muro.emit --node` names that node. Each cross is one call and one monitor of a registered name on the node. A stay emits no call. A run term has no place.

@@ -29,6 +29,7 @@ import Muro.IR
 import Muro.Session
 import Muro.Arrow
 import Muro.Place
+import Muro.Located
 open import Muro.Example public
 open import Muro.ExampleStream public
 import Muro.ExampleEither
