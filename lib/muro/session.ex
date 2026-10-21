@@ -1,10 +1,11 @@
 defmodule Muro.Session do
   @moduledoc """
-  The Elixir mirror of `decide` in `agda/Muro/Session.agda`.
+  The Elixir mirror of `decide` and `finishes` in `agda/Muro/Session.agda`.
 
   A protocol is spec. A conformance derivation is evidence. `stop`
   conforms to every protocol (`abandon`). The continuation after a
-  bit is that bit's branch. `skel/1` is the process as actions.
+  bit is that bit's branch. `finishes/1` is `:yes` when every leaf is
+  `done`. `skel/1` is the process as actions.
   """
 
   @doc """
@@ -32,6 +33,38 @@ defmodule Muro.Session do
 
   # skel (cover P Q) = offer (skel P) (skel Q)
   defp skel_go({:cover, p, q}), do: {:offer, skel_go(p), skel_go(q)}
+
+  @doc """
+  `:yes` when `finishes` returns `ends`. `stop` is `:no`.
+  Mirrors `finishes` in `agda/Muro/Session.agda`.
+  """
+  def finishes(proc), do: finishes_go(proc)
+
+  # finishes done = ends ends-done
+  defp finishes_go(:done), do: :yes
+
+  # finishes stop = leaves (λ ())
+  defp finishes_go(:stop), do: :no
+
+  # finishes (put _ P) = step-put (finishes P)
+  defp finishes_go({:put, _, p}), do: finishes_go(p)
+
+  # finishes (get _ P) = step-get (finishes P)
+  defp finishes_go({:get, _, p}), do: finishes_go(p)
+
+  # finishes (pick0 P) = step-pick0 (finishes P)
+  defp finishes_go({:pick0, p}), do: finishes_go(p)
+
+  # finishes (pick1 P) = step-pick1 (finishes P)
+  defp finishes_go({:pick1, p}), do: finishes_go(p)
+
+  # finishes (cover P Q) = step-cover (finishes P) (finishes Q)
+  defp finishes_go({:cover, p, q}) do
+    case finishes_go(p) do
+      :yes -> finishes_go(q)
+      :no -> :no
+    end
+  end
 
   @doc """
   `:ok` when `decide` returns `yes`. Otherwise the pair where it returns `no`.

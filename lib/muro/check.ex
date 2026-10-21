@@ -1807,17 +1807,24 @@ defmodule Muro.Check do
 
   def check_def(_book, %{kind: :session}, _fuel), do: :ok
 
-  # Muro.Session.decide. The protocol is the named session. The process
-  # conforms, or the search stops at the pair it returns `no` for.
+  # Muro.Session.decide, then `finishes` when the session is `%1`.
+  # A protocol mismatch is reported before an abandoned linear channel.
   def check_def(book, %{kind: :conform, name: name, session: sname, proc: proc} = d, _fuel) do
     case Enum.find(book, &(Map.get(&1, :kind) == :session and &1.name == sname)) do
       nil ->
         {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: unknown session #{sname}"}
 
-      %{proto: proto} ->
-        case Muro.Session.conforms(proc, proto) do
-          :ok -> :ok
-          {:error, msg} -> {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+      session ->
+        case Muro.Session.conforms(proc, session.proto) do
+          :ok ->
+            if linear_session?(session) and Muro.Session.finishes(proc) == :no do
+              {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: linear channel abandoned"}
+            else
+              :ok
+            end
+
+          {:error, msg} ->
+            {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
         end
     end
   end
@@ -1837,6 +1844,9 @@ defmodule Muro.Check do
       :ok
     end
   end
+
+  # `%1` is Mark lin. An unmarked session, and `%0`, are affine.
+  defp linear_session?(session), do: Map.get(session, :mult, :affine) == :linear
 
   # A run definition has a run type, used or not (Agda: runDecl).
   defp run_decl(k, book, :run, ty) do

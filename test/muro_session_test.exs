@@ -1,7 +1,7 @@
 defmodule Muro.SessionTest do
   use ExUnit.Case, async: true
 
-  alias Muro.{Check, Emit, IR, Parser}
+  alias Muro.{Check, Emit, IR, Parser, Session}
 
   test "ping.muro checks, and emit keeps no session" do
     path = "examples/ping.muro"
@@ -104,6 +104,85 @@ defmodule Muro.SessionTest do
              """)
 
     assert msg =~ "ping is a session, not a definition"
+  end
+
+  test "finishes when every leaf is done" do
+    assert Session.finishes(:done) == :yes
+    assert Session.finishes(:stop) == :no
+    assert Session.finishes({:put, :b0, :stop}) == :no
+    assert Session.finishes({:get, :b1, {:put, :b0, :done}}) == :yes
+    assert Session.finishes({:pick0, :done}) == :yes
+    assert Session.finishes({:pick1, :stop}) == :no
+    assert Session.finishes({:cover, :done, :stop}) == :no
+    assert Session.finishes({:cover, :done, {:put, :b0, :done}}) == :yes
+  end
+
+  test "a session records its mark" do
+    assert {:ok, book} =
+             Parser.parse("""
+             session ping := end
+             session %0 open := end
+             session %1 closed := end
+             """)
+
+    mults = Map.new(book, &{&1.name, &1.mult})
+    assert mults["ping"] == :affine
+    assert mults["open"] == :affine
+    assert mults["closed"] == :linear
+  end
+
+  test "%1 is a whole token" do
+    assert {:error, msg} = Parser.parse("session %10 once := end\n")
+    assert msg =~ "expected %0 or %1"
+  end
+
+  test "a finishing linear session checks" do
+    assert check("""
+           session %1 ping-done := recv end (send end end)
+           conform pong-done : ping-done := get b1 (put b0 done)
+           session %1 arms := branch end (send end end)
+           conform both : arms := cover done (put b0 done)
+           """) == :ok
+  end
+
+  test "%0 still allows abandonment" do
+    assert check("""
+           session %0 once := send end end
+           conform left : once := put b0 stop
+           conform none : once := stop
+           """) == :ok
+  end
+
+  test "a linear session refuses an abandoned channel" do
+    assert {:error, msg} =
+             check("""
+             session %1 once := send end end
+             conform left : once := put b0 stop
+             """)
+
+    assert msg =~ "linear channel abandoned"
+    refute msg =~ "does not conform"
+  end
+
+  test "one abandoned arm of a linear branch is refused" do
+    assert {:error, msg} =
+             check("""
+             session %1 arms := branch end end
+             conform half : arms := cover done stop
+             """)
+
+    assert msg =~ "linear channel abandoned"
+  end
+
+  test "a linear session still reports a protocol mismatch" do
+    assert {:error, msg} =
+             check("""
+             session %1 once := end
+             conform bad : once := put b0 done
+             """)
+
+    assert msg =~ "put b0 done does not conform to end"
+    refute msg =~ "abandoned"
   end
 
   test "a session name is declared once" do

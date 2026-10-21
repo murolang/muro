@@ -34,6 +34,13 @@ conform pong : ping := get b1 (put b0 done)
 
 The payload is a bit, `b0` or `b1`. `send` and `recv` each name both continuations, and the bit that was communicated selects the branch. `choose` is the process's choice (`pick0`, `pick1`). `branch` is the other side's choice, and `cover` offers both arms. `done` closes the channel at `end`. `stop` abandons it, at any protocol.
 
+An unmarked session, and `session %0`, may abandon the channel. `session %1` requires the process to finish: every leaf is `done`, and an abandoned channel is refused. Both marks are the affine quantity. A `%1` binder on Π is not this form.
+
+```
+session %1 ping-done := recv end (send end end)
+conform pong-done : ping-done := get b1 (put b0 done)
+```
+
 The checker sees the whole book, so a `conform` may name a session declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
 
 ## Import

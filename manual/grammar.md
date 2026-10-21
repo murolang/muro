@@ -16,7 +16,8 @@ param      ::= "param" ident ":" tag term  -- supplied by an importing file
 nu         ::= ("ν" | "nu") ident binder+ ":" "Type" "where" "uncons" ":" term
 data       ::= "data" ident binder* ":" telescope "where" (ident ":" term)+
 telescope  ::= "Type" | binder ("→" | "->") telescope | term ("→" | "->") "Type"
-session    ::= "session" ident ":=" proto
+session    ::= "session" mult? ident ":=" proto
+mult       ::= "%0" | "%1"             -- default %0; %1 must finish
 conform    ::= "conform" ident ":" ident ":=" proc
 proto      ::= "end" | "(" proto ")"
              | ("send" | "recv" | "choose" | "branch") proto proto
@@ -80,6 +81,8 @@ Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an
 A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are identifiers; `suc`, `refl`, `tt`, and `Nat` are not. `->` ends a word, so `Nat->Nat` is an arrow.
 
 `end`, `send`, `recv`, `choose`, `branch`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. Parentheses group a nested protocol or process: `recv end (send end end)`.
+
+`%0` and `%1` are marks on a session, and each is a whole token. `%10` is not `%1` followed by `0`. An unmarked session is `%0`. `%1` requires the process to finish. These marks are not quantities on a Π binder.
 
 Inside a `data` block each constructor declaration `ident ":" term` begins on its own line; that is how an application stops before the next constructor. On one line, `f x : Nat` inside `{ … }` is the application `f x` followed by the type. A following line that starts with `session` or `conform` ends that type the same way.
 
