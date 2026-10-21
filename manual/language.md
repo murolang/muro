@@ -11,7 +11,7 @@ In brief: one sort `Type`. Binders are written. Application is juxtaposition. `m
 
 ## The book
 
-A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `session`, `conform`, `place`, `scheme`, `move`, and `def` entries.
+A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `session`, `conform`, `place`, `scheme`, `move`, `endpoint`, `read`, and `def` entries.
 
 ```
 def name : tag type := body
@@ -63,6 +63,29 @@ move stay poly : away
 `home` is the ambient place. `away` is the node named `a`. Reading `local` at `home` stays. Reading `local` at `away` crosses once. Reading `poly` stays at whichever place reads it. The node name is the identifier after `node`. Two place names with the same node name are the same place. The generated call is addressed to the node given to `--node`.
 
 The checker sees the whole book, so a `move` may name a place or a scheme declared later. A `stay` where the reading crosses, or a `cross` where it stays, is refused. `examples/place.muro` is the worked book. `run` is unchanged.
+
+## Endpoint
+
+An `endpoint` is a session at a scheme. The session's mark is the endpoint's mark. A `read` is the evidence that a process conforms to that session, and that reading the scheme at a place stays or crosses once. The run emitters omit both. A run definition has no seat.
+
+```
+session ping := recv end (send end end)
+
+place home := ambient
+place away := node a
+scheme local := fixed home
+
+endpoint ping-home := ping at local
+
+read stay pong : ping-home at home := get b1 (put b0 done)
+read cross pong-away : ping-home at away := get b1 (put b0 done)
+```
+
+`ping` at `local` sits at `home`. Reading it there stays. Reading it at `away` crosses once. The process is `get b1` and then `put b0`. The bit is the session's. The boundary is the reading's.
+
+A polymorphic scheme stays at the place that reads it. `session %1` still has to finish, at `home` and at `away`. A bit the protocol does not name is refused at every place. An unmarked session may abandon the channel. Reading that process at another place crosses once.
+
+The checker sees the whole book, so a `read` may name an endpoint declared later. A `stay` where the reading crosses, or a `cross` where it stays, is refused. `examples/located.muro` is the worked book. `run` is unchanged.
 
 ## Import
 

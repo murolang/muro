@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.42
+
+A session can be read at a place. The endpoint names the session and the scheme. Reading it where the scheme sits stays. Reading it at another place crosses once. A polymorphic scheme stays where it is read. The bits stay on the session. A session that must finish still has to finish. A run term has no seat.
+
+### Manual
+
+- Grammar, Terms, Examples: an endpoint and a reading.
+- Extending: the checker follows the sitting.
+
+### Package
+
+- Version 0.16.42.
+
 ## 0.16.41
 
 A session can sit at a place. The place is ambient when it is not named. Reading it there stays. Reading it at another place crosses once. A polymorphic session stays wherever it is read. The bits stay on the session. A session that must finish still has to finish. A run term has no seat.

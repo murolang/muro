@@ -105,7 +105,7 @@ agda/Muro/Check.agda    the decision procedure: structural on the term, fuel onl
 agda/Muro/Session.agda  affine session judgment; %1 must finish; decide searches, skel is the OTP actions
 agda/Muro/Arrow.agda    %1 on a Π binder must be used; both marks are the affine quantity
 agda/Muro/Place.agda    placement coeffect; ambient by default; one boundary; run has no seat
-agda/Muro/Located.agda  a session at a place; one boundary; the bit stays on the session
+agda/Muro/Located.agda  a session at a place; `endpoint` and `read` follow the sitting
 agda/Muro/Tag.agda      constructor tags (Check compares tags before structure)
 agda/Muro/Spine.agda    application spines (constructor / dty applications), spine views
 agda/Muro/Frag.agda     the ⊢ fragment as a predicate on terms, signatures, contexts
