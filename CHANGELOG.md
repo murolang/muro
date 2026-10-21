@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.43
+
+A cross reading is one call. The call reads the scheme the endpoint names, on the node given to `--node`. A reading that stays writes no call. The bits stay on the session. A run term has no seat.
+
+### Manual
+
+- Emit, Terms, Examples: a cross reading is one call.
+- Extending: the call follows a cross reading. The bits stay on the session.
+
+### Package
+
+- Version 0.16.43.
+
 ## 0.16.42
 
 A session can be read at a place. The endpoint names the session and the scheme. Reading it where the scheme sits stays. Reading it at another place crosses once. A polymorphic scheme stays where it is read. The bits stay on the session. A session that must finish still has to finish. A run term has no seat.
