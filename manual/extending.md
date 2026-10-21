@@ -35,6 +35,8 @@ Elixir `Muro.Ast.to_db/2` sends named FOAS to de Bruijn (unbound names become `{
 
 `agda/Muro/Arrow.agda` is the multiplicity on an affine Π binder. `%0`, and an unmarked binder, may be unused. `%1` must be used once. `checkArrow` is `checkBound` for the affine quantity, then `checkMark`. For `%0`, `checkMark` accepts every use, so an existing binder is unchanged. Spec forgets uses. A second use is still the affine refusal. Neither mark is a constructor of `Qty`, and neither is added to `Tm` or `PTm`. The Elixir checker follows `checkArrow` for a binder written `%1` (`:linear` on the binder). The λ mark and the Π mark must be the same mark. At an application, `%1` counts as the affine quantity.
 
+`agda/Muro/Place.agda` is the placement coeffect. A value sits at a place. Ambient is the default. A polymorphic scheme is instantiated at the place where it is used, and that use stays. A fixed value used at another place crosses once: `stay` has no boundary and `cross` has one. Spec holds the scheme. Evidence is the move. A run term has no seat. None of those constructors is added to `Tm` or `PTm`. `decide` chooses stay or one boundary. A `.muro` file does not write a place yet, and this judgment does not emit an RPC.
+
 ## Rules that keep the sort honest
 
 Some premises are there for consistency of the calculus, not for programs. Keep them when you add a former.
