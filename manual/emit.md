@@ -105,6 +105,14 @@ The process sends `{:muro, from, :b0}` or `:b1`, and a choice as `{:muro_pick, f
 
 The server talks to one peer. The run emitters still omit the protocol and the process. The BEAM runs this server. The proof stops at the conformance derivation.
 
+A `read` is the same process. The actions are the reading's process, and the child module is the reading's name.
+
+```
+mix muro.emit examples/located.muro --backend otp
+```
+
+That writes `examples/located_otp.ex`. The module is `LocatedOtp`. `read stay pong : ping-home at home` is `LocatedOtp.Pong.start/1`, and `read cross pong-away : ping-home at away` is `LocatedOtp.PongAway.start/1`. Both take the peer pid. Both receive `b1` and send `b0`, then stop with `:normal`. `pong-poly`, `pong-poly-away`, and `pong-done` are that same exchange. `left-open` sends `b0` and stops with `{:shutdown, :abandon}`. `Pong` stays at `home` and `PongAway` crosses at `away`. The server talks to one peer either way. The boundary is the call `--node` writes.
+
 ## Node
 
 `--node` writes `<stem>_node.ex` next to the file and prints that path. The book is checked first. A book that fails to check writes nothing. With no `--backend`, or with `--backend elixir`, that file is the only output. Any other backend together with `--node` is refused.

@@ -81,8 +81,9 @@ defmodule Muro do
 
   @doc """
   Write `<stem>_otp.ex` next to `path`. Each conforming process is a
-  GenServer that talks to one peer pid. The BEAM runs that server.
-  The proof stops at the conformance derivation.
+  GenServer that talks to one peer pid. A `read` is that same
+  process. The place stays on the reading. The BEAM runs that
+  server. The proof stops at the conformance derivation.
   """
   def emit_otp(path, opts \\ []) do
     stem = Path.basename(path, ".muro")

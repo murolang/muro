@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.44
+
+A reading is a process. `--backend otp` writes that process as a GenServer with one peer. The bits are the session's. The place stays the reading's boundary. A run term has no seat.
+
+### Manual
+
+- Emit, Terms, Examples: a reading is a GenServer.
+- Extending: the server follows the reading.
+
+### Package
+
+- Version 0.16.44.
+
 ## 0.16.43
 
 A cross reading is one call. The call reads the scheme the endpoint names, on the node given to `--node`. A reading that stays writes no call. The bits stay on the session. A run term has no seat.

@@ -112,6 +112,8 @@ read cross pong-away : ping-home at away := get b1 (put b0 done)
 
 `mix muro.emit examples/located.muro --node a` writes `located_node.ex`. `pong-away`, `pong-done`, and `left-open` are the three calls, and each one reads `local`. `pong`, `pong-poly`, and `pong-poly-away` stay, so they write no call. The bits stay on the session. See [Emit](emit.md#node).
 
+`mix muro.emit examples/located.muro --backend otp` writes `located_otp.ex`. `Pong` and `PongAway` both receive `b1` and send `b0`. `LeftOpen` sends `b0` and abandons the channel. The server talks to one peer. See [Emit](emit.md#otp).
+
 A `stay` on that cross, a `cross` on a stay, a `cross` of `ping-poly`, a wrong bit, or an abandoned `%1` channel, is refused. Those books live in `test/muro_located_test.exs`, so a program copies the form that checks.
 
 See [Terms](language.md#endpoint).
