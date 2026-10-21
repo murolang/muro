@@ -100,6 +100,18 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      endpoint_start?(s) ->
+        case parse_endpoint(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
+      read_start?(s) ->
+        case parse_read(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
       true ->
         case parse_def(s) do
           {:ok, d, rest} -> parse_book(rest, [d | acc])
@@ -359,6 +371,62 @@ defmodule Muro.Parser do
     end
   end
 
+  defp endpoint_start?(s), do: word_kw?(s, "endpoint")
+
+  defp read_start?(s), do: word_kw?(s, "read")
+
+  # endpoint ping-home := ping at local
+  # The session's mark is the endpoint's mark. `at` is a keyword only here.
+  defp parse_endpoint(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "endpoint"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, session, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "at"),
+         {:ok, scheme, rest} <- ident(skip(rest)) do
+      {:ok,
+       %{
+         kind: :endpoint,
+         name: name,
+         mode: :spec,
+         session: session,
+         scheme: scheme,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  # read stay pong : ping-home at home := get b1 (put b0 done)
+  # read cross pong : ping-home at away := get b1 (put b0 done)
+  # The process conforms to the session. The mark is the move.
+  defp parse_read(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "read"),
+         {:ok, mark, rest} <- parse_mark(skip(rest)),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, endpoint, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "at"),
+         {:ok, place, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, proc, rest} <- parse_proc(skip(rest)) do
+      {:ok,
+       %{
+         kind: :read,
+         name: name,
+         mode: :evidence,
+         mark: mark,
+         endpoint: endpoint,
+         place: place,
+         proc: proc,
+         loc: loc
+       }, rest}
+    end
+  end
+
   # A place or scheme entry is `name := …`. A constructor `place : Box`
   # is not one. A move entry starts `move stay` or `move cross`.
   defp assign_entry?(s, word) do
@@ -381,6 +449,17 @@ defmodule Muro.Parser do
   defp move_entry?(s) do
     if word_kw?(s, "move") do
       rest = s |> after_kw("move") |> skip()
+      word_kw?(rest, "stay") or word_kw?(rest, "cross")
+    else
+      false
+    end
+  end
+
+  defp endpoint_entry?(s), do: assign_entry?(s, "endpoint")
+
+  defp read_entry?(s) do
+    if word_kw?(s, "read") do
+      rest = s |> after_kw("read") |> skip()
       word_kw?(rest, "stay") or word_kw?(rest, "cross")
     else
       false
@@ -515,7 +594,8 @@ defmodule Muro.Parser do
 
       word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
         word_kw?(s, "session") or word_kw?(s, "conform") or nu_start?(s) or
-        place_entry?(s) or scheme_entry?(s) or move_entry?(s) ->
+        place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
+        endpoint_entry?(s) or read_entry?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
@@ -694,7 +774,7 @@ defmodule Muro.Parser do
 
     String.contains?(skipped, "\n") and
       (session_start?(s0) or conform_start?(s0) or place_entry?(s0) or scheme_entry?(s0) or
-         move_entry?(s0))
+         move_entry?(s0) or endpoint_entry?(s0) or read_entry?(s0))
   end
 
   defp starts_atom?(s) do

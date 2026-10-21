@@ -97,6 +97,23 @@ A `stay` on that cross, a `cross` on a stay, or a `cross` of `poly`, is refused.
 
 See [Terms](language.md#place) and [Emit](emit.md#node).
 
+## located.muro
+
+A session read at a place. The endpoint is spec. The reading is evidence. The Elixir, C, Rust, and assembly emitters omit both. A run definition has no seat.
+
+```
+endpoint ping-home := ping at local
+
+read stay pong : ping-home at home := get b1 (put b0 done)
+read cross pong-away : ping-home at away := get b1 (put b0 done)
+```
+
+`ping` is fixed at `home` through `local`. Reading it there stays. Reading it at `away` crosses once. `ping-poly` stays at `home` and at `away`. `pong-done` is `session %1` and finishes at `away`. `left-open` abandons an unmarked session, and that reading crosses once. `kept` is the run definition in the same file. `mix muro.emit examples/located.muro` emits `kept`.
+
+A `stay` on that cross, a `cross` on a stay, a `cross` of `ping-poly`, a wrong bit, or an abandoned `%1` channel, is refused. Those books live in `test/muro_located_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#endpoint).
+
 ## internal_ok.muro
 
 `run internal` helper `step` emits `defp`. `inc` is `run` and calls it. See [Emit](emit.md).

@@ -32,7 +32,6 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - Raw HOAS (`Tm → Tm`) as inductive syntax
 - Tags other than `run`, `run internal`, `spec`, `evidence`
 - A session payload other than the bits `b0` and `b1`
-- A session located at a place
 - An OTP session process talking to more than one peer
 - Two calls for one `cross`
 - A call for a `stay`

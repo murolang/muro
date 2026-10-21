@@ -36,6 +36,12 @@ defmodule Muro.Check do
       %{kind: :scheme} ->
         {:skip, "#{name} is a scheme, not a definition"}
 
+      %{kind: :endpoint} ->
+        {:skip, "#{name} is an endpoint, not a definition"}
+
+      %{kind: :read} ->
+        {:skip, "#{name} is a reading, not a definition"}
+
       d ->
         {:ok, d}
     end
@@ -1838,22 +1844,13 @@ defmodule Muro.Check do
   # Muro.Session.decide, then `finishes` when the session is `%1`.
   # A protocol mismatch is reported before an abandoned linear channel.
   def check_def(book, %{kind: :conform, name: name, session: sname, proc: proc} = d, _fuel) do
-    case Enum.find(book, &(Map.get(&1, :kind) == :session and &1.name == sname)) do
-      nil ->
-        {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: unknown session #{sname}"}
+    loc = Print.loc_prefix(Map.get(d, :loc))
 
-      session ->
-        case Muro.Session.conforms(proc, session.proto) do
-          :ok ->
-            if linear_session?(session) and Muro.Session.finishes(proc) == :no do
-              {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: linear channel abandoned"}
-            else
-              :ok
-            end
-
-          {:error, msg} ->
-            {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
-        end
+    with {:ok, session} <- fetch_session(book, sname),
+         :ok <- session_sits(session, proc) do
+      :ok
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
     end
   end
 
@@ -1891,6 +1888,43 @@ defmodule Muro.Check do
     end
   end
 
+  # Muro.Located. The endpoint is the session's mark, its protocol, and
+  # the scheme. Spec holds that. The scheme's place must resolve.
+  def check_def(book, %{kind: :endpoint, name: name, session: sname, scheme: sch} = d, _fuel) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, _} <- fetch_session(book, sname),
+         {:ok, scheme} <- fetch_scheme(book, sch),
+         {:ok, _} <- resolve_scheme(book, scheme.scheme) do
+      :ok
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
+  # Muro.Located.Sits. The process conforms, and `%1` finishes, before the
+  # move is checked. The stated mark is stay or cross. A mark whose
+  # boundary disagrees with `Place.conform` is refused. A reading is evidence.
+  def check_def(
+        book,
+        %{kind: :read, name: name, mark: mark, endpoint: ename, place: pname, proc: proc} = d,
+        _fuel
+      ) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, endpoint} <- fetch_endpoint(book, ename),
+         {:ok, session} <- fetch_session(book, endpoint.session),
+         {:ok, scheme} <- fetch_scheme(book, endpoint.scheme),
+         {:ok, resolved} <- resolve_scheme(book, scheme.scheme),
+         {:ok, placed} <- fetch_place(book, pname),
+         :ok <- session_sits(session, proc),
+         :ok <- move_sits(resolved, placed.place, mark) do
+      :ok
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
   def check_def(book, %{kind: :data} = d, fuel), do: check_data(book, d, fuel)
 
   def check_def(book, %{mode: mode, type: ty, body: body} = d, k) do
@@ -1909,6 +1943,47 @@ defmodule Muro.Check do
 
   # `%1` is Mark lin. An unmarked session, and `%0`, are affine.
   defp linear_session?(session), do: Map.get(session, :mult, :affine) == :linear
+
+  # Conforms, then Ends when the session is `%1`. A protocol mismatch is
+  # reported before an abandoned channel. Mirrors `held` and `finished`.
+  defp session_sits(session, proc) do
+    case Muro.Session.conforms(proc, session.proto) do
+      :ok ->
+        if linear_session?(session) and Muro.Session.finishes(proc) == :no do
+          {:error, "linear channel abandoned"}
+        else
+          :ok
+        end
+
+      {:error, msg} ->
+        {:error, msg}
+    end
+  end
+
+  # The boundary is `Place.conform`. The bit is not consulted.
+  defp move_sits(scheme, place, mark) do
+    actual = Place.conform(scheme, place)
+
+    if actual == mark do
+      :ok
+    else
+      {:error, "expected #{actual}"}
+    end
+  end
+
+  defp fetch_session(book, name) do
+    case Enum.find(book, &(Map.get(&1, :kind) == :session and &1.name == name)) do
+      nil -> {:error, "unknown session #{name}"}
+      s -> {:ok, s}
+    end
+  end
+
+  defp fetch_endpoint(book, name) do
+    case Enum.find(book, &(Map.get(&1, :kind) == :endpoint and &1.name == name)) do
+      nil -> {:error, "unknown endpoint #{name}"}
+      e -> {:ok, e}
+    end
+  end
 
   defp fetch_place(book, name) do
     case Enum.find(book, &(Map.get(&1, :kind) == :place and &1.name == name)) do
@@ -1953,7 +2028,7 @@ defmodule Muro.Check do
   defp rec_names(book) do
     for %{mode: mode, name: name} = d <- book,
         rec_mode?(mode),
-        Map.get(d, :kind) not in [:session, :conform, :place, :scheme, :move],
+        Map.get(d, :kind) not in [:session, :conform, :place, :scheme, :move, :endpoint, :read],
         do: name
   end
 
