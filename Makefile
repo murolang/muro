@@ -3,7 +3,7 @@ AGDA  := agda
 AFLAGS := --no-libraries -i agda -i vendor/agda-stdlib/src --warning=noUnsupportedIndexedMatch
 
 # Theorem modules — Judgement, Wall, Consistency, Typing, Convert,
-# Reduction, Spine, Data, Frag, Tag, Session, Place, Located, the checker Check and its
+# Reduction, Spine, Data, Frag, Tag, Session, Dual, Place, Located, the checker Check and its
 # soundness proof Soundness (with Soundness.Conv, Soundness.Views), and
 # what they import (Base, Syntax, Subst, SubstLemmas, Env) — are checked
 # under --safe: no postulates, no TERMINATING, no --type-in-type. Check is
@@ -18,6 +18,7 @@ agda: agda-safe agda-all
 agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/IR.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Session.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Dual.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Arrow.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Place.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Located.agda

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.45
+
+A session has another end. Sending here is receiving there, and choosing here is offering there. The bit stays the bit. The other end of the other end is the same session. A run term has no seat.
+
+### Manual
+
+- Extending: the other end of a session swaps send with recv and choose with branch.
+- Limits: a `.muro` file does not write the other end yet.
+
+### Package
+
+- Version 0.16.45.
+
 ## 0.16.44
 
 A reading is a process. `--backend otp` writes that process as a GenServer with one peer. The bits are the session's. The place stays the reading's boundary. A run term has no seat.
