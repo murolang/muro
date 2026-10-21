@@ -223,7 +223,23 @@ defmodule Muro.Check do
   defp check_bound(m, :affine, :uw) when m in [:run, :evidence],
     do: {:error, "affine variable used as reusable"}
 
+  # checkArrow (agda/Muro/Arrow.agda). :linear is Mark m1. Its
+  # quantity is affine, so a reusable use fails checkBound first.
+  # checkMark then refuses a drop in run and evidence.
+  defp check_bound(m, :linear, :uw) when m in [:run, :evidence],
+    do: {:error, "affine variable used as reusable"}
+
+  defp check_bound(m, :linear, :u0) when m in [:run, :evidence],
+    do: {:error, "linear variable unused"}
+
   defp check_bound(_, _, _), do: :ok
+
+  # The λ mark and the Π mark are the same mark. :linear is m1;
+  # :affine is m0, whether the binder was written %0 or left unmarked.
+  defp qty_agree(:linear, q) when q != :linear, do: {:error, "λ/Π multiplicity mismatch"}
+  defp qty_agree(q, :linear) when q != :linear, do: {:error, "λ/Π multiplicity mismatch"}
+  defp qty_agree(q, q), do: :ok
+  defp qty_agree(_, _), do: {:error, "λ/Π quantity mismatch"}
 
   # Using a definition of `from` while checking in `to`.
   # spec ↛ evidence, evidence ↛ run, spec ↛ run.
@@ -1623,6 +1639,12 @@ defmodule Muro.Check do
          do: app_uses(book, m, f, fu, au)
   end
 
+  # Mark m1 has the affine quantity (Arrow.qty-affine): one use of the
+  # argument, not erased and not scaled.
+  defp infer_arg(k, book, rs, gamma, m, :linear, a, fu, arg, f) do
+    infer_arg(k, book, rs, gamma, m, :affine, a, fu, arg, f)
+  end
+
   defp infer_arg(k, book, rs, gamma, m, :reuse, a, fu, arg, f) do
     with {:ok, au} <- check(k, book, rs, gamma, m, arg, a),
          {:ok, au1} <- reuse_arg_uses(k, book, a, au),
@@ -1662,7 +1684,7 @@ defmodule Muro.Check do
       {:lam, q, a_ann, x, t} ->
         case view_pi(k, book, a, names_of(rs, gamma)) do
           {:ok, {q1, a1, b}} ->
-            with :ok <- if(q == q1, do: :ok, else: {:error, "λ/Π quantity mismatch"}),
+            with :ok <- qty_agree(q, q1),
                  :ok <- check_ty(k, book, rs, gamma, a_ann),
                  :ok <- conv(k, book, names_of(rs, gamma), a_ann, a1),
                  :ok <-
@@ -2340,7 +2362,7 @@ defmodule Muro.Check do
             rs2 = push_name(ext_rec(rs, rec?, rec?), x)
             args1 = Enum.map(args, &Subst.wk/1) ++ [{:var, 0}]
 
-            with :ok <- if(q == q1, do: :ok, else: {:error, "λ/Π quantity mismatch"}),
+            with :ok <- qty_agree(q, q1),
                  :ok <- check_ty(k, book, rs, gamma, a1),
                  :ok <- conv(k, book, names_of(rs, gamma), a1, a),
                  :ok <- if(q == :reuse, do: guard_copy(k, book, a1), else: :ok),

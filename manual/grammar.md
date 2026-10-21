@@ -52,7 +52,7 @@ suc        ::= "suc" "(" term ")" | "suc" atom
 stream     ::= "Stream" atom
 unfold     ::= "unfold" atom atom         -- seed, λ s → (head, next_seed)
 uncons     ::= "uncons" atom
-qty        ::= "+" | "-" | ε               -- ε = affine (default)
+qty        ::= "+" | "-" | "%0" | "%1" | ε  -- ε = %0 = affine (default); %1 must be used
 binder     ::= "(" qty ident ":" term ")"
 pi         ::= ("Π" | "Pi") binder ("→" | "->") term
 lam        ::= ("λ" | "lam") binder ("→" | "->") term
@@ -82,7 +82,7 @@ A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are iden
 
 `end`, `send`, `recv`, `choose`, `branch`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. Parentheses group a nested protocol or process: `recv end (send end end)`.
 
-`%0` and `%1` are marks on a session, and each is a whole token. `%10` is not `%1` followed by `0`. An unmarked session is `%0`. `%1` requires the process to finish. These marks are not quantities on a Π binder.
+`%0` and `%1` are whole tokens. `%10` is not `%1` followed by `0`. On a session, an unmarked session is `%0`, and `%1` requires the process to finish. On a Π or λ binder, an unmarked binder is `%0`, and `%1` requires the variable to be used. Both marks are the affine quantity. The λ mark and the Π mark must agree.
 
 Inside a `data` block each constructor declaration `ident ":" term` begins on its own line; that is how an application stops before the next constructor. On one line, `f x : Nat` inside `{ … }` is the application `f x` followed by the type. A following line that starts with `session` or `conform` ends that type the same way.
 
@@ -108,7 +108,9 @@ From the Pratt parser in `lib/muro/parser.ex`:
 ## Binder quantities
 
 ```
-Π (n : Nat) → …        affine (default)
+Π (n : Nat) → …        affine (default), and the variable may be unused
+Π (%0 n : Nat) → …     the same affine binder, written out
+Π (%1 n : Nat) → …     affine, and the variable must be used once
 Π (+ n : Nat) → …      reuse, if the type WHNFs to Data
 Π (- e : IsEven n) → … erased
 ```

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.37
+
+A Π binder can require its variable to be used. `(%1 x : A)` refuses a binder that is never used. `(%0 x : A)`, and an unmarked binder, still allow that. The λ mark and the Π mark must agree. `run` is unchanged.
+
+### Manual
+
+- Grammar, Terms, Examples: `%0` and `%1` on a Π binder.
+- Extending: a `%1` binder must be used. Both marks are the affine quantity.
+
+### Package
+
+- Version 0.16.37.
+
 ## 0.16.36
 
 A session can require the process to finish. `session %1` refuses an abandoned channel. An unmarked session, and `session %0`, still allow it. `run` is unchanged.

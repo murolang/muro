@@ -101,6 +101,7 @@ agda/Muro/SubstLemmas.agda  renaming / substitution algebra
 agda/Muro/Env.agda      Sig, Ctx, uses, mode order (shared by Check and ⊢)
 agda/Muro/Check.agda    the decision procedure: structural on the term, fuel only where it reduces
 agda/Muro/Session.agda  affine session judgment; %1 must finish; decide searches, skel is the OTP actions
+agda/Muro/Arrow.agda    %1 on a Π binder must be used; both marks are the affine quantity
 agda/Muro/Tag.agda      constructor tags (Check compares tags before structure)
 agda/Muro/Spine.agda    application spines (constructor / dty applications), spine views
 agda/Muro/Frag.agda     the ⊢ fragment as a predicate on terms, signatures, contexts

@@ -107,12 +107,16 @@ Primitive types you can write as atoms:
 A binder is always parenthesized.
 
 ```
-(n : Nat)        affine (default): at most one run/evidence use
+(n : Nat)        affine (default): at most one run/evidence use, and it may be unused
+(%0 n : Nat)     the same affine binder, written out
+(%1 n : Nat)     affine, and the variable must be used once
 (+ n : Nat)      reuse: only if the type WHNFs to a copyable type
 (- e : IsEven n) erased: compile-time; cannot be used computationally
 ```
 
-The `+` or `-` sits immediately before the name, inside the parentheses. `(-A : Type)` and `(- A : Type)` both parse.
+The mark sits immediately before the name, inside the parentheses. `(-A : Type)` and `(- A : Type)` both parse. `%1` is a whole token, so `(%1n : Nat)` does not.
+
+`%0` and `%1` are the affine quantity. In run and evidence, a `%1` binder that is never used is refused. Spec forgets uses, so the obligation is not checked there. Using the variable twice is still refused, because the quantity is affine. The λ mark and the Π mark must agree. `examples/arrow.muro` is the worked book.
 
 **Data** (after WHNF): `Nat`, `Unit`, `Empty`, `I64`, `F32`, `Tensor`, a pair of two Data types, or a user `data` type whose *parameters* are Data. Indices do not have to be Data. `List A` is Data iff `A` is. `List (Nat → Nat)` is not, so you cannot write `+xs : List (Nat → Nat)`.
 
@@ -124,7 +128,7 @@ The `+` or `-` sits immediately before the name, inside the parentheses. `(-A : 
 
 In spec, uses are forgotten. You can mention an affine variable twice while building a type.
 
-In run and evidence, using an affine variable twice is an error: `affine variable used twice`. Using an erased variable computationally is an error: `erased variable used computationally`.
+In run and evidence, using an affine variable twice is an error: `affine variable used twice`. A `%1` binder that is never used is an error: `linear variable unused`. Using an erased variable computationally is an error: `erased variable used computationally`.
 
 ## Π and λ
 
