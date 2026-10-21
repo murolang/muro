@@ -25,7 +25,7 @@ Definitions, data types, constructors, sessions, and conformances share one set 
 
 ## Session
 
-A `session` is a protocol. A `conform` is a process that follows a named session. The protocol is spec. The derivation is evidence. Emit omits both.
+A `session` is a protocol. A `conform` is a process that follows a named session. The protocol is spec. The derivation is evidence. The run emitters omit both. `--backend otp` writes the process as a GenServer. See [Emit](emit.md#otp).
 
 ```
 session ping := recv end (send end end)

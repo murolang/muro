@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.35
+
+`--backend otp` writes a GenServer for each process that conforms to a session. The process sends and receives bits with its peer. Abandoning the channel stops the server, and a monitor sees that stop. The BEAM runs the server. The proof stops at the conformance derivation. `run` is unchanged.
+
+### Emit
+
+- `Muro.Emit.Otp`, from `--backend otp`. The file is `<stem>_otp.ex`.
+
+### Manual
+
+- Emit: the OTP process. One peer. A bit is the payload.
+
+### Package
+
+- Version 0.16.35.
+
 ## 0.16.34
 
 A `.muro` file can state an affine session protocol and a process that conforms to it. Abandoning a channel is accepted. A second send, or a send where the protocol says receive, is refused. `run` is unchanged.

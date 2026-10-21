@@ -2,12 +2,12 @@
 title: Emit
 slug: emit
 order: 12
-summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. Spec and evidence are omitted.
+summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. Spec and evidence are omitted from a run.
 ---
 
 # Emit
 
-In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend asm` writes a Cortex-M0 `Nat` run.
+In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session.
 
 ## From a file
 
@@ -39,6 +39,7 @@ mix muro.emit path.muro --backend elixir
 mix muro.emit path.muro --backend c
 mix muro.emit path.muro --backend rust
 mix muro.emit path.muro --backend asm
+mix muro.emit path.muro --backend otp
 ```
 
 `--backend c` writes `<name>.h` and `<name>.c` next to the file and prints those paths. It emits `run` and `run internal` only. `run internal` is `static`. Erased arguments are dropped. `Nat` is a tagged struct (`0` is zero, `1` is `suc`) with constructors `muro_zero` and `muro_suc`. `Unit` and user `data`, indexed data included, are a tag plus fields. `match` is a `switch`. A constructor with no fields is one static object, the way `tt` is `muro_tt_obj`, and its function returns that address. A constructor with fields allocates through `MURO_ALLOC`. A name that is a C keyword through C23, a typedef from `<stdint.h>`, or a common function from the C library and POSIX (`true`, `read`, `malloc`) is prefixed with `muro_`. Any other name is emitted as spelled. A definition whose spelling is already taken, by an earlier definition or by a constructor function, gains a numeric suffix (`foo_bar_2`).
@@ -94,6 +95,14 @@ The entry builds the tagged struct and reads it back. An argument that is not a 
 `--backend asm` writes `<name>.s` next to the file and prints that path. The text is GNU assembler, Thumb, for Cortex-M0. It prints a `Nat` run. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. `run internal` is a label the file can call. It is not exported.
 
 The assembler translates this text. The proof stops at the run image.
+
+## OTP
+
+`--backend otp` writes `<stem>_otp.ex` next to the file and prints that path. `ping.muro` is `ping_otp.ex`, and the module is `PingOtp`. Each `conform` is a child module. `PingOtp.Pong.start/1` takes the peer pid and returns `{:ok, pid, ref}`. `ref` is a monitor of the server, installed before the process takes its first action.
+
+The process sends `{:muro, from, :b0}` or `:b1`, and a choice as `{:muro_pick, from, :b0}` or `:b1`. It receives the same shapes from that peer. A message that arrives before the server reaches that receive is kept, in order. `done` stops the server with `:normal`. `stop` stops it with `{:shutdown, :abandon}`. A monitor of the server sees that reason. If the peer dies while the server is running, the server stops with `{:shutdown, :abandon}`. A bit the process did not choose stops it with `{:shutdown, {:unexpected, bit}}`.
+
+The server talks to one peer. The run emitters still omit the protocol and the process. The BEAM runs this server. The proof stops at the conformance derivation.
 
 ## Visibility
 

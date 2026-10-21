@@ -4,8 +4,34 @@ defmodule Muro.Session do
 
   A protocol is spec. A conformance derivation is evidence. `stop`
   conforms to every protocol (`abandon`). The continuation after a
-  bit is that bit's branch.
+  bit is that bit's branch. `skel/1` is the process as actions.
   """
+
+  @doc """
+  The actions of a process. Mirrors `skel` in `agda/Muro/Session.agda`.
+  """
+  def skel(proc), do: skel_go(proc)
+
+  # skel done = finish
+  defp skel_go(:done), do: :finish
+
+  # skel stop = leave
+  defp skel_go(:stop), do: :leave
+
+  # skel (put b P) = say b (skel P)
+  defp skel_go({:put, bit, p}), do: {:say, bit, skel_go(p)}
+
+  # skel (get b P) = hear b (skel P)
+  defp skel_go({:get, bit, p}), do: {:hear, bit, skel_go(p)}
+
+  # skel (pick0 P) = choose b0 (skel P)
+  defp skel_go({:pick0, p}), do: {:choose, :b0, skel_go(p)}
+
+  # skel (pick1 P) = choose b1 (skel P)
+  defp skel_go({:pick1, p}), do: {:choose, :b1, skel_go(p)}
+
+  # skel (cover P Q) = offer (skel P) (skel Q)
+  defp skel_go({:cover, p, q}), do: {:offer, skel_go(p), skel_go(q)}
 
   @doc """
   `:ok` when `decide` returns `yes`. Otherwise the pair where it returns `no`.
