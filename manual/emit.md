@@ -104,6 +104,14 @@ The process sends `{:muro, from, :b0}` or `:b1`, and a choice as `{:muro_pick, f
 
 The server talks to one peer. The run emitters still omit the protocol and the process. The BEAM runs this server. The proof stops at the conformance derivation.
 
+## Node
+
+`--node` writes `<stem>_node.ex` next to the file and prints that path. `place.muro` with `--node a` is `place_node.ex`, and the module is `PlaceNode`. The argument is the node in `{name, node}`. `name` is the scheme, registered on that node.
+
+Each `cross` is one function. `move cross local : away` is `cross_local_at_away/1`. It monitors `{name, node}`, then calls `GenServer.call({name, node}, {:muro_read, scheme}, timeout)`. The timeout defaults to 5000. A `stay` emits no function. A book of stays emits the module and no call. The run emitters still omit the place, the scheme, and the move.
+
+The registered name is the reference. The monitor is that incarnation: a dead registration is `{:error, :noproc}`, and the call does not keep a pid. The BEAM runs the call. The proof stops at the move.
+
 ## Visibility
 
 | Tag | Elixir |

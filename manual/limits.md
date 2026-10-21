@@ -33,7 +33,8 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - Tags other than `run`, `run internal`, `spec`, `evidence`
 - A session payload other than the bits `b0` and `b1`
 - An OTP session process talking to more than one peer
-- An RPC emitted for a place boundary
+- A second call for one cross
+- A call emitted for a stay
 
 ## Former names (history, not syntax)
 

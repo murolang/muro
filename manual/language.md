@@ -61,7 +61,7 @@ move stay poly : away
 
 `home` is the ambient place. `away` is the node named `a`. Reading `local` at `home` stays. Reading `local` at `away` crosses once. Reading `poly` stays at whichever place reads it. The node name is the identifier after `node`. Two place names with the same node name are the same place.
 
-The checker sees the whole book, so a `move` may name a place or a scheme declared later. A `stay` where the reading crosses, or a `cross` where it stays, is refused. `examples/place.muro` is the worked book.
+The checker sees the whole book, so a `move` may name a place or a scheme declared later. A `stay` where the reading crosses, or a `cross` where it stays, is refused. `examples/place.muro` is the worked book. Emit with `--node` writes one call for each cross. See [Emit](emit.md#node).
 
 ## Import
 

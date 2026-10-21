@@ -83,9 +83,9 @@ move stay local : home
 move cross local : away
 ```
 
-`local` read at `home` stays. `local` read at `away` crosses once. `poly` stays at `home` and at `away`. A `stay` on that cross, a `cross` on a stay, or a `cross` of `poly`, is refused; those books live in `test/muro_place_test.exs`, so a program copies the form that checks. `kept` is the run definition in the same file.
+`local` read at `home` stays. `local` read at `away` crosses once. `poly` stays at `home` and at `away`. A `stay` on that cross, a `cross` on a stay, or a `cross` of `poly`, is refused; those books live in `test/muro_place_test.exs`, so a program copies the form that checks. `kept` is the run definition in the same file. `mix muro.emit examples/place.muro --node a` writes one call for the cross and no call for a stay.
 
-See [Terms](language.md#place).
+See [Terms](language.md#place) and [Emit](emit.md#node).
 
 ## internal_ok.muro
 

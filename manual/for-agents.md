@@ -92,6 +92,7 @@ lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
 lib/muro/emit.ex        run → Elixir source
 lib/muro/emit/otp.ex    conforming process → GenServer (`--backend otp`)
+lib/muro/emit/node.ex   cross → one call and one monitor (`--node`)
 lib/muro/example.ex     same book as Agda
 lib/mix/tasks/muro.check.ex
 agda/Muro.agda          public re-export

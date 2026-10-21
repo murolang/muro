@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.40
+
+A cross can be sent to a node. `mix muro.emit --node` names that node. Each cross is one call and one monitor of a registered name on the node. A stay emits no call. A run term has no place.
+
+### Manual
+
+- Emit: `--node`.
+- Extending: the call follows a cross. The registered name is the reference.
+- Limits: one cross is one call.
+
+### Package
+
+- Version 0.16.40.
+
 ## 0.16.39
 
 A named place can be ambient or a node. Reading a fixed place at that same place stays. Reading it at another place crosses once. A polymorphic place stays wherever it is read. `run` has no place.
