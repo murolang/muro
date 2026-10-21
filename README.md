@@ -16,12 +16,12 @@ The language book is [`manual/`](manual/index.md). That is what [muro-lang.dev](
 
 ## Install
 
-[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.16.45. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
+[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.16.46. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ```elixir
 def deps do
   [
-    {:muro, "~> 0.16.45"}
+    {:muro, "~> 0.16.46"}
   ]
 end
 ```

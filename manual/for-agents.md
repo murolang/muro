@@ -103,7 +103,7 @@ agda/Muro/SubstLemmas.agda  renaming / substitution algebra
 agda/Muro/Env.agda      Sig, Ctx, uses, mode order (shared by Check and ⊢)
 agda/Muro/Check.agda    the decision procedure: structural on the term, fuel only where it reduces
 agda/Muro/Session.agda  affine session judgment; %1 must finish; decide searches, skel is the OTP actions
-agda/Muro/Dual.agda     the other end of a session; send swaps with recv; choose swaps with branch
+agda/Muro/Dual.agda     the other end of a session; `session name := dual name` follows it
 agda/Muro/Arrow.agda    %1 on a Π binder must be used; both marks are the affine quantity
 agda/Muro/Place.agda    placement coeffect; ambient by default; one boundary; run has no seat
 agda/Muro/Located.agda  a session at a place; `endpoint` and `read` follow the sitting; `--node` follows a cross reading; `--backend otp` follows the process

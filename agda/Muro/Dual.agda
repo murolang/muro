@@ -5,8 +5,9 @@
 -- does not. The other end of the other end is the same protocol.
 --
 -- The other end is spec. A run term has no seat. The mark stays
--- the session's mark. This is not a source syntax. None of these
--- constructors is added to Tm or PTm.
+-- the session's mark. None of these constructors is added to Tm
+-- or PTm. The Elixir checker follows `dual`: `session name := dual
+-- name`. An omitted mark is the named session's mark.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}

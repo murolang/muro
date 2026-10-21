@@ -41,7 +41,17 @@ session %1 ping-done := recv end (send end end)
 conform pong-done : ping-done := get b1 (put b0 done)
 ```
 
-The checker sees the whole book, so a `conform` may name a session declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
+A session has another end. `session back := dual ping` names it. `send` swaps with `recv`, and `choose` swaps with `branch`. The bit stays the bit. The other end of the other end is the same session. The mark stays the session's mark.
+
+```
+session ping := recv end (send end end)
+session back := dual ping
+conform peer : back := put b1 (get b0 done)
+```
+
+`peer` sends `b1` and then receives `b0`. `examples/dual.muro` is that book.
+
+The checker sees the whole book, so a `conform` may name a session declared later, and a dual session may name a session declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
 
 ## Place
 

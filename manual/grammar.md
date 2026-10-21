@@ -16,7 +16,7 @@ param      ::= "param" ident ":" tag term  -- supplied by an importing file
 nu         ::= ("ν" | "nu") ident binder+ ":" "Type" "where" "uncons" ":" term
 data       ::= "data" ident binder* ":" telescope "where" (ident ":" term)+
 telescope  ::= "Type" | binder ("→" | "->") telescope | term ("→" | "->") "Type"
-session    ::= "session" mult? ident ":=" proto
+session    ::= "session" mult? ident ":=" (proto | "dual" ident)
 mult       ::= "%0" | "%1"             -- default %0; %1 must finish
 conform    ::= "conform" ident ":" ident ":=" proc
 place      ::= "place" ident ":=" ("ambient" | "node" ident)
@@ -85,7 +85,7 @@ Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an
 
 A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are identifiers; `suc`, `refl`, `tt`, and `Nat` are not. `->` ends a word, so `Nat->Nat` is an arrow.
 
-`end`, `send`, `recv`, `choose`, `branch`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. Parentheses group a nested protocol or process: `recv end (send end end)`.
+`end`, `send`, `recv`, `choose`, `branch`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. Parentheses group a nested protocol or process: `recv end (send end end)`. `dual` is a keyword in `session name := dual name`. Outside that form it is an identifier, so `def dual : run Nat := 0` is a definition. The mark on a dual session is the named session's mark when it is omitted.
 
 `ambient` and `node` are keywords on the right of a `place`. `any` and `fixed` are keywords on the right of a `scheme`. `stay` and `cross` are keywords in a `move`. Outside those forms they are identifiers, so `def stay : run Nat := 0` is a definition. A `place` names `ambient` or `node` followed by a node name. A `scheme` is `any`, or `fixed` followed by a place name. A `move` states `stay` or `cross`, then a scheme name, then a place name.
 

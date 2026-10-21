@@ -233,17 +233,45 @@ defmodule Muro.Parser do
 
   # session ping := recv end (send end end)
   # session %1 ping-done := recv end (send end end)
+  # session back := dual ping
   # %0 is affine, and it is the default. %1 must finish.
-  # Neither mark is a quantity on a Π binder. Keywords here are not term keywords.
+  # A dual session with no mark takes the named session's mark.
+  # `dual` is a keyword only in that form. Neither mark is a quantity
+  # on a Π binder. Keywords here are not term keywords.
   defp parse_session(s) do
     loc = here(s)
 
     with {:ok, rest} <- kw(s, "session"),
-         {:ok, mult, rest} <- parse_mult(skip(rest)),
+         {:ok, mult, stated, rest} <- parse_session_mult(skip(rest)),
          {:ok, name, rest} <- ident(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":="),
-         {:ok, proto, rest} <- parse_proto(skip(rest)) do
+         {:ok, proto, rest} <- parse_session_proto(skip(rest)) do
+      mult =
+        case proto do
+          {:dual, _} -> if stated, do: mult, else: :inherit
+          _ -> mult
+        end
+
       {:ok, %{kind: :session, name: name, mode: :spec, mult: mult, proto: proto, loc: loc}, rest}
+    end
+  end
+
+  defp parse_session_mult("%" <> _ = s) do
+    with {:ok, mult, rest} <- parse_mult(s), do: {:ok, mult, true, rest}
+  end
+
+  defp parse_session_mult(s), do: {:ok, :affine, false, s}
+
+  # session back := dual ping
+  # The other end of ping. The mark stays on ping.
+  defp parse_session_proto(s) do
+    if word_kw?(s, "dual") do
+      with {:ok, rest} <- kw(s, "dual"),
+           {:ok, name, rest} <- ident(skip(rest)) do
+        {:ok, {:dual, name}, rest}
+      end
+    else
+      parse_proto(s)
     end
   end
 

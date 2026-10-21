@@ -1839,7 +1839,18 @@ defmodule Muro.Check do
   """
   def check_def(book, d, fuel \\ @fuel)
 
-  def check_def(_book, %{kind: :session}, _fuel), do: :ok
+  # The other end is `Muro.Session.dual`. An omitted mark is the named
+  # session's mark. A written mark that disagrees is refused. A cycle
+  # of duals has no protocol.
+  def check_def(book, %{kind: :session, name: name} = d, _fuel) do
+    case resolve_session(book, name, MapSet.new()) do
+      {:ok, _} ->
+        :ok
+
+      {:error, msg} ->
+        {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+    end
+  end
 
   # Muro.Session.decide, then `finishes` when the session is `%1`.
   # A protocol mismatch is reported before an abandoned linear channel.
@@ -1971,12 +1982,36 @@ defmodule Muro.Check do
     end
   end
 
-  defp fetch_session(book, name) do
-    case Enum.find(book, &(Map.get(&1, :kind) == :session and &1.name == name)) do
-      nil -> {:error, "unknown session #{name}"}
-      s -> {:ok, s}
+  defp fetch_session(book, name), do: resolve_session(book, name, MapSet.new())
+
+  # Walk `dual` to a protocol. The mark of an omitted dual is the mark
+  # at the end of that walk. `dual (dual S)` is `S`.
+  defp resolve_session(book, name, seen) do
+    if MapSet.member?(seen, name) do
+      {:error, "dual cycle"}
+    else
+      case Enum.find(book, &(Map.get(&1, :kind) == :session and &1.name == name)) do
+        nil ->
+          {:error, "unknown session #{name}"}
+
+        %{proto: {:dual, other}} = s ->
+          with {:ok, base} <- resolve_session(book, other, MapSet.put(seen, name)),
+               {:ok, mark} <- agreed_mark(s.mult, base.mult) do
+            {:ok, %{s | proto: Muro.Session.dual(base.proto), mult: mark}}
+          end
+
+        s ->
+          {:ok, s}
+      end
     end
   end
+
+  defp agreed_mark(:inherit, mark), do: {:ok, mark}
+  defp agreed_mark(mark, mark), do: {:ok, mark}
+  defp agreed_mark(_stated, actual), do: {:error, "expected #{show_mark(actual)}"}
+
+  defp show_mark(:linear), do: "%1"
+  defp show_mark(:affine), do: "%0"
 
   defp fetch_endpoint(book, name) do
     case Enum.find(book, &(Map.get(&1, :kind) == :endpoint and &1.name == name)) do

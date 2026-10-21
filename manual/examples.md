@@ -52,6 +52,22 @@ conform pong-done : ping-done := get b1 (put b0 done)
 
 See [Terms](language.md#session) and [Emit](emit.md#otp).
 
+## dual.muro
+
+The other end of a session. The protocol is spec. The process is evidence. The run emitters omit both.
+
+```
+session ping := recv end (send end end)
+session back := dual ping
+conform peer : back := put b1 (get b0 done)
+```
+
+`ping` receives `b1` and then sends `b0`. `back` is the other end, so `peer` sends `b1` and then receives `b0`. `forth` is `dual back`, and that is `ping` again. `reply` is the other end of `session %1 ping-done`, so it carries that mark and the process finishes. `offered` is the other end of a `choose`, and the process is a `cover`. `kept` is the run definition in the same file. `mix muro.emit examples/dual.muro` emits `kept`.
+
+A bit the other end does not name, a mark other than the named session's mark, or a cycle of duals, is refused. Those books live in `test/muro_dual_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#session).
+
 ## arrow.muro
 
 A `%1` binder must be used. A `%0` binder, and an unmarked binder, may be dropped.

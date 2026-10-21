@@ -5,8 +5,21 @@ defmodule Muro.Session do
   A protocol is spec. A conformance derivation is evidence. `stop`
   conforms to every protocol (`abandon`). The continuation after a
   bit is that bit's branch. `finishes/1` is `:yes` when every leaf is
-  `done`. `skel/1` is the process as actions.
+  `done`. `skel/1` is the process as actions. `dual/1` is the other
+  end: `send` swaps with `recv`, and `choose` swaps with `branch`.
   """
+
+  @doc """
+  The other end of a protocol. Mirrors `dual` in `agda/Muro/Dual.agda`.
+
+  `send` swaps with `recv`. `choose` swaps with `branch`. Both
+  continuations dualise. The bit stays the selector.
+  """
+  def dual(:end), do: :end
+  def dual({:send, s, t}), do: {:recv, dual(s), dual(t)}
+  def dual({:recv, s, t}), do: {:send, dual(s), dual(t)}
+  def dual({:choose, s, t}), do: {:branch, dual(s), dual(t)}
+  def dual({:branch, s, t}), do: {:choose, dual(s), dual(t)}
 
   @doc """
   The actions of a process. Mirrors `skel` in `agda/Muro/Session.agda`.
