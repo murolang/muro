@@ -20,8 +20,18 @@ defmodule Muro.Check do
 
   defp lookup_def(book, name) do
     case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name)) do
-      nil -> {:error, "unknown definition #{name}"}
-      d -> {:ok, d}
+      nil ->
+        {:error, "unknown definition #{name}"}
+
+      # A session shares the book name space and is not a term.
+      %{kind: :session} ->
+        {:skip, "#{name} is a session, not a definition"}
+
+      %{kind: :conform} ->
+        {:skip, "#{name} is a conformance, not a definition"}
+
+      d ->
+        {:ok, d}
     end
   end
 
@@ -1131,6 +1141,9 @@ defmodule Muro.Check do
             {:ok, {d.type, u0s(n)}}
         end
 
+      {:skip, msg} ->
+        {:error, msg}
+
       {:error, _} ->
         case lookup_data(book, name) do
           {:ok, d} when m == :spec ->
@@ -1792,6 +1805,23 @@ defmodule Muro.Check do
   """
   def check_def(book, d, fuel \\ @fuel)
 
+  def check_def(_book, %{kind: :session}, _fuel), do: :ok
+
+  # Muro.Session.decide. The protocol is the named session. The process
+  # conforms, or the search stops at the pair it returns `no` for.
+  def check_def(book, %{kind: :conform, name: name, session: sname, proc: proc} = d, _fuel) do
+    case Enum.find(book, &(Map.get(&1, :kind) == :session and &1.name == sname)) do
+      nil ->
+        {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: unknown session #{sname}"}
+
+      %{proto: proto} ->
+        case Muro.Session.conforms(proc, proto) do
+          :ok -> :ok
+          {:error, msg} -> {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+        end
+    end
+  end
+
   def check_def(book, %{kind: :data} = d, fuel), do: check_data(book, d, fuel)
 
   def check_def(book, %{mode: mode, type: ty, body: body} = d, k) do
@@ -1823,8 +1853,13 @@ defmodule Muro.Check do
   # block and descend on one shared argument (Agda: component).
   defp rec_mode?(mode), do: mode in [:run, :evidence, :spec]
 
+  # A session and a conformance have a mode and no term, so they are
+  # outside the descent block.
   defp rec_names(book) do
-    for %{mode: mode, name: name} <- book, rec_mode?(mode), do: name
+    for %{mode: mode, name: name} = d <- book,
+        rec_mode?(mode),
+        Map.get(d, :kind) not in [:session, :conform],
+        do: name
   end
 
   defp mentions(t), do: mentions(t, []) |> Enum.uniq()
@@ -1873,7 +1908,7 @@ defmodule Muro.Check do
   defp rec_callees(book, name, names) do
     case Enum.find(book, &(&1[:name] == name and rec_mode?(&1[:mode]))) do
       nil -> []
-      d -> mentions(d.body) |> Enum.filter(&(&1 in names))
+      d -> mentions(Map.get(d, :body)) |> Enum.filter(&(&1 in names))
     end
   end
 

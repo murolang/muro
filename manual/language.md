@@ -11,7 +11,7 @@ In brief: one sort `Type`. Binders are written. Application is juxtaposition. `m
 
 ## The book
 
-A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, and `def` entries.
+A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `session`, `conform`, and `def` entries.
 
 ```
 def name : tag type := body
@@ -21,7 +21,20 @@ The tag is `run`, `run internal`, `spec`, or `evidence`. There is no other tag.
 
 Forward references are allowed. The checker sees every definition when it checks any one of them.
 
-Definitions, data types, and constructors share one set of names. Each name is declared once.
+Definitions, data types, constructors, sessions, and conformances share one set of names. Each name is declared once.
+
+## Session
+
+A `session` is a protocol. A `conform` is a process that follows a named session. The protocol is spec. The derivation is evidence. Emit omits both.
+
+```
+session ping := recv end (send end end)
+conform pong : ping := get b1 (put b0 done)
+```
+
+The payload is a bit, `b0` or `b1`. `send` and `recv` each name both continuations, and the bit that was communicated selects the branch. `choose` is the process's choice (`pick0`, `pick1`). `branch` is the other side's choice, and `cover` offers both arms. `done` closes the channel at `end`. `stop` abandons it, at any protocol.
+
+The checker sees the whole book, so a `conform` may name a session declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
 
 ## Import
 

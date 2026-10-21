@@ -10,12 +10,21 @@ summary: The surface grammar lib/muro/parser.ex implements.
 In brief: this is the grammar `lib/muro/parser.ex` implements. ASCII aliases are in parentheses. If this page and the parser disagree, the parser is the implementation and this page is wrong.
 
 ```
-book       ::= (import | param | nu | data | def)*
+book       ::= (import | param | nu | data | session | conform | def)*
 import     ::= "import" string             -- a path, relative to this file
 param      ::= "param" ident ":" tag term  -- supplied by an importing file
 nu         ::= ("ν" | "nu") ident binder+ ":" "Type" "where" "uncons" ":" term
 data       ::= "data" ident binder* ":" telescope "where" (ident ":" term)+
 telescope  ::= "Type" | binder ("→" | "->") telescope | term ("→" | "->") "Type"
+session    ::= "session" ident ":=" proto
+conform    ::= "conform" ident ":" ident ":=" proc
+proto      ::= "end" | "(" proto ")"
+             | ("send" | "recv" | "choose" | "branch") proto proto
+proc       ::= "done" | "stop" | "(" proc ")"
+             | ("put" | "get") bit proc
+             | ("pick0" | "pick1") proc
+             | "cover" proc proc
+bit        ::= "b0" | "b1"
 def        ::= "def" ident ":" tag term ":=" term
 tag        ::= "run" "internal"? | "spec" | "evidence"
 
@@ -70,7 +79,9 @@ Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an
 
 A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are identifiers; `suc`, `refl`, `tt`, and `Nat` are not. `->` ends a word, so `Nat->Nat` is an arrow.
 
-Inside a `data` block each constructor declaration `ident ":" term` begins on its own line; that is how an application stops before the next constructor. On one line, `f x : Nat` inside `{ … }` is the application `f x` followed by the type.
+`end`, `send`, `recv`, `choose`, `branch`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. Parentheses group a nested protocol or process: `recv end (send end end)`.
+
+Inside a `data` block each constructor declaration `ident ":" term` begins on its own line; that is how an application stops before the next constructor. On one line, `f x : Nat` inside `{ … }` is the application `f x` followed by the type. A following line that starts with `session` or `conform` ends that type the same way.
 
 A `ν` block has one destructor, `uncons`. `ν Stream (A : Type)` is checked for shape and dropped. Any other name declares a family: its binders are the indices, at least one, and the type of `uncons` must be the family applied to them in order, `→` the body ([Streams](streams.md#declared-families)).
 

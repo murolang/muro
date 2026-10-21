@@ -384,6 +384,9 @@ defmodule Muro.Ast do
           Map.get(d, :kind) == :data ->
             data_to_db(d)
 
+          Map.get(d, :kind) in [:session, :conform] ->
+            {:ok, d}
+
           true ->
             def_to_db(d)
         end
@@ -454,6 +457,9 @@ defmodule Muro.Ast do
 
       %{type: ty, body: bo}, acc ->
         atoms_in(bo, atoms_in(ty, acc))
+
+      _, acc ->
+        acc
     end)
   end
 

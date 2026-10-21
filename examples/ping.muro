@@ -1,0 +1,20 @@
+-- ping.muro — an affine session. The protocol is spec. The process is evidence.
+-- Abandoning the channel conforms. A second send does not.
+
+session ping := recv end (send end end)
+
+conform pong : ping := get b1 (put b0 done)
+
+session send-then-send := send (send end end) end
+
+conform left-open : send-then-send := put b0 stop
+
+conform untouched : send-then-send := stop
+
+session pick := choose end (send end end)
+
+conform chosen : pick := pick0 done
+
+session both-arms := branch end (send end end)
+
+conform both : both-arms := cover done (put b0 done)
