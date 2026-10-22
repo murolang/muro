@@ -176,7 +176,7 @@ defmodule Muro.EmitOtpTest do
     assert src =~ "def a_b2 do"
     assert src =~ "def muro_end do"
     assert src =~ "{:hear, :nat, :_, {:say, 1, :finish}}"
-    assert src =~ "{:say, 1, {:hear, :nat, :finish}}"
+    assert src =~ "{:say, 1, {:hear, :nat, :_, :finish}}"
   end
 
   test "a conform and a reading are two servers" do

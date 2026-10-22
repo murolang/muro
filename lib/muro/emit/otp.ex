@@ -231,9 +231,11 @@ defmodule Muro.Emit.Otp do
         {:noreply, %{st | queue: queue ++ [msg]}}
       end
 
-      defp arrived(msg, %{wait: wait} = st) do
+      defp arrived(msg, %{wait: wait, bindings: bindings} = st) do
         case step(wait, msg) do
           {:go, next} -> drive(next, %{st | wait: nil})
+          {:bind, :_, _value, next} -> drive(next, %{st | wait: nil})
+          {:bind, name, value, next} -> drive(next, %{st | wait: nil, bindings: Map.put(bindings, name, value)})
           {:unexpected, value} -> {:stop, {:shutdown, {:unexpected, value}}, st}
         end
       end
