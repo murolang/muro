@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.16.50
+
+One description covers the exchange. Each party has the session that description gives them on the channel with one other party. The other party has the other end. A party off that channel has a session only when both continuations are the same description. A run term has no seat.
+
+### Manual
+
+- Extending: one description, and each party has a session.
+
+### Package
+
+- Version 0.16.50.
+
 ## 0.16.49
 
 A meeting starts its two processes as each other's peer. Each process still talks to one peer. The bits stay on the session. A run term has no seat.

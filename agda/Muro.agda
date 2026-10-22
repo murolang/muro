@@ -29,6 +29,7 @@ import Muro.IR
 import Muro.Session
 import Muro.Dual
 import Muro.Meet
+import Muro.Talk
 import Muro.Arrow
 import Muro.Place
 import Muro.Located
