@@ -162,6 +162,11 @@ defmodule Muro.Session do
   defp show_val(:b1), do: "b1"
   defp show_val(:tt), do: "tt"
   defp show_val({:tup, a, b}), do: "(#{show_val(a)}, #{show_val(b)})"
+
+  defp show_val({:rec, []}) do
+    "{}"
+  end
+
   defp show_val({:rec, fields}) when is_list(fields) do
     inner = Enum.map_join(fields, ", ", fn {name, val} -> "#{name} = #{show_val(val)}" end)
     "{#{inner}}"
@@ -186,19 +191,6 @@ defmodule Muro.Session do
 
   defp show_pay_atom({:pair, _, _} = ty), do: "(#{show_pay(ty)})"
   defp show_pay_atom(ty), do: show_pay(ty)
-
-  defp show_val({:nat, n}), do: Integer.to_string(n)
-  defp show_val(:b0), do: "b0"
-  defp show_val(:b1), do: "b1"
-  defp show_val(:tt), do: "tt"
-  defp show_val({:var, name}), do: Atom.to_string(name)
-  defp show_val({:tup, a, b}), do: "(#{show_val(a)}, #{show_val(b)})"
-  defp show_val({:rec, []}), do: "{}"
-
-  defp show_val({:rec, fields}) do
-    inner = Enum.map_join(fields, ", ", fn {name, val} -> "#{name} = #{show_val(val)}" end)
-    "{#{inner}}"
-  end
 
   defp paren_proc(p) when is_atom(p), do: show_proc(p)
   defp paren_proc(p), do: "(#{show_proc(p)})"
