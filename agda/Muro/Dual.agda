@@ -90,8 +90,8 @@ choice = choose end (send box end)
 choice-other : dual choice ≡ branch end (recv box end)
 choice-other = refl
 
-offered : Conforms (cover done (get box done)) (dual choice)
+offered : Conforms [] (cover done (get box "x" done)) (dual choice)
 offered = cover-ok done-end (get-ok done-end)
 
-not-pick : ¬ Conforms (pick0 done) (dual choice)
+not-pick : ¬ Conforms [] (pick0 done) (dual choice)
 not-pick ()
