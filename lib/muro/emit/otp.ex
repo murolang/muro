@@ -116,7 +116,7 @@ defmodule Muro.Emit.Otp do
   defp open_init do
     """
       def init({skel, :open}) do
-        {:ok, %{peer: nil, mon: nil, skel: skel, wait: nil, queue: []}}
+        {:ok, %{peer: nil, mon: nil, skel: skel, wait: nil, queue: [], bindings: %{}}}
       end
 
     """
@@ -202,7 +202,7 @@ defmodule Muro.Emit.Otp do
       @impl true
       def init({skel, peer}) do
         mon = Process.monitor(peer)
-        {:ok, %{peer: peer, mon: mon, skel: skel, wait: nil, queue: []}}
+        {:ok, %{peer: peer, mon: mon, skel: skel, wait: nil, queue: [], bindings: %{}}}
       end
 
       @impl true
@@ -241,8 +241,9 @@ defmodule Muro.Emit.Otp do
       defp drive(:finish, st), do: {:stop, :normal, st}
       defp drive(:leave, st), do: {:stop, {:shutdown, :abandon}, st}
 
-      defp drive({:say, value, next}, %{peer: peer} = st) do
-        send(peer, {:muro, self(), value})
+      defp drive({:say, value, next}, %{peer: peer, bindings: bindings} = st) do
+        resolved = substitute(value, bindings)
+        send(peer, {:muro, self(), resolved})
         drive(next, st)
       end
 
@@ -251,20 +252,34 @@ defmodule Muro.Emit.Otp do
         drive(next, st)
       end
 
-      defp drive({:hear, ty, next}, st), do: park({:hear, ty, next}, st)
+      defp drive({:hear, ty, name, next}, st), do: park({:hear, ty, name, next}, st)
       defp drive({:offer, left, right}, st), do: park({:offer, left, right}, st)
 
       defp park(wait, %{queue: []} = st), do: {:noreply, %{st | wait: wait}}
 
-      defp park(wait, %{queue: [msg | rest]} = st) do
+      defp park(wait, %{queue: [msg | rest], bindings: bindings} = st) do
         case step(wait, msg) do
-          {:go, next} -> drive(next, %{st | wait: nil, queue: rest})
-          {:unexpected, value} -> {:stop, {:shutdown, {:unexpected, value}}, st}
+          {:go, next} ->
+            drive(next, %{st | wait: nil, queue: rest})
+
+          {:bind, :_, _value, next} ->
+            # Anonymous binder, don't store
+            drive(next, %{st | wait: nil, queue: rest})
+
+          {:bind, name, value, next} ->
+            drive(next, %{st | wait: nil, queue: rest, bindings: Map.put(bindings, name, value)})
+
+          {:unexpected, value} ->
+            {:stop, {:shutdown, {:unexpected, value}}, st}
         end
       end
 
-      defp step({:hear, ty, next}, {:muro, _, value}) do
-        if payload?(ty, value), do: {:go, next}, else: {:unexpected, value}
+      defp step({:hear, ty, name, next}, {:muro, _, value}) do
+        if payload?(ty, value) do
+          {:bind, name, value, next}
+        else
+          {:unexpected, value}
+        end
       end
 
       defp step({:offer, left, _}, {:muro_pick, _, :b0}), do: {:go, left}
@@ -285,6 +300,20 @@ defmodule Muro.Emit.Otp do
       end
 
       defp payload?(_, _), do: false
+
+      defp substitute({:var, name}, bindings) do
+        Map.get(bindings, name, {:var, name})
+      end
+
+      defp substitute({a, b}, bindings) do
+        {substitute(a, bindings), substitute(b, bindings)}
+      end
+
+      defp substitute(map, bindings) when is_map(map) do
+        Map.new(map, fn {k, v} -> {k, substitute(v, bindings)} end)
+      end
+
+      defp substitute(value, _bindings), do: value
 
     #{indent(children, 2)}
     end

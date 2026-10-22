@@ -35,7 +35,7 @@ defmodule Muro.Session do
   defp skel_go(:done), do: :finish
   defp skel_go(:stop), do: :leave
   defp skel_go({:put, _ty, val, p}), do: {:say, runtime(val), skel_go(p)}
-  defp skel_go({:get, ty, _name, p}), do: {:hear, ty, skel_go(p)}
+  defp skel_go({:get, ty, name, p}), do: {:hear, ty, name, skel_go(p)}
   defp skel_go({:pick0, p}), do: {:choose, :b0, skel_go(p)}
   defp skel_go({:pick1, p}), do: {:choose, :b1, skel_go(p)}
   defp skel_go({:cover, p, q}), do: {:offer, skel_go(p), skel_go(q)}
@@ -48,6 +48,7 @@ defmodule Muro.Session do
   def runtime({:nat, n}) when is_integer(n) and n >= 0, do: n
   def runtime(bit) when bit in [:b0, :b1], do: bit
   def runtime(:tt), do: :tt
+  def runtime({:var, name}), do: {:var, name}
   def runtime({:tup, a, b}), do: {runtime(a), runtime(b)}
 
   def runtime({:rec, fields}) when is_list(fields) do
