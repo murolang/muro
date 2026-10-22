@@ -42,6 +42,9 @@ defmodule Muro.Check do
       %{kind: :read} ->
         {:skip, "#{name} is a reading, not a definition"}
 
+      %{kind: :meet} ->
+        {:skip, "#{name} is a meeting, not a definition"}
+
       d ->
         {:ok, d}
     end
@@ -1936,6 +1939,24 @@ defmodule Muro.Check do
     end
   end
 
+  # Muro.Meet.decide. Both names are processes. The protocol of one is
+  # the other end of the other, and then the bits meet. A protocol that
+  # is not the other end is reported before a bit they do not share.
+  def check_def(book, %{kind: :meet, name: name, left: left, right: right} = d, _fuel) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, lp} <- fetch_process(book, left),
+         {:ok, rp} <- fetch_process(book, right),
+         {:ok, l} <- process_session(book, lp),
+         {:ok, r} <- process_session(book, rp),
+         :ok <- other_end(l.proto, r.proto),
+         :ok <- Muro.Meet.meets(l.proc, r.proc) do
+      :ok
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
   def check_def(book, %{kind: :data} = d, fuel), do: check_data(book, d, fuel)
 
   def check_def(book, %{mode: mode, type: ty, body: body} = d, k) do
@@ -2013,6 +2034,35 @@ defmodule Muro.Check do
   defp show_mark(:linear), do: "%1"
   defp show_mark(:affine), do: "%0"
 
+  # One direction is enough: `dual` is an involution.
+  defp other_end(proto, other) do
+    if other == Muro.Session.dual(proto) do
+      :ok
+    else
+      {:error, "expected the other end"}
+    end
+  end
+
+  defp fetch_process(book, name) do
+    case Enum.find(book, &(Map.get(&1, :kind) in [:conform, :read] and &1.name == name)) do
+      nil -> {:error, "unknown process #{name}"}
+      p -> {:ok, p}
+    end
+  end
+
+  defp process_session(book, %{kind: :conform, session: sname, proc: proc}) do
+    with {:ok, session} <- fetch_session(book, sname) do
+      {:ok, %{proc: proc, proto: session.proto}}
+    end
+  end
+
+  defp process_session(book, %{kind: :read, endpoint: ename, proc: proc}) do
+    with {:ok, endpoint} <- fetch_endpoint(book, ename),
+         {:ok, session} <- fetch_session(book, endpoint.session) do
+      {:ok, %{proc: proc, proto: session.proto}}
+    end
+  end
+
   defp fetch_endpoint(book, name) do
     case Enum.find(book, &(Map.get(&1, :kind) == :endpoint and &1.name == name)) do
       nil -> {:error, "unknown endpoint #{name}"}
@@ -2058,12 +2108,22 @@ defmodule Muro.Check do
   # block and descend on one shared argument (Agda: component).
   defp rec_mode?(mode), do: mode in [:run, :evidence, :spec]
 
-  # A session, a conformance, a place, a scheme, and a move have a mode
-  # and no term, so they are outside the descent block.
+  # A session, a conformance, a place, a scheme, a move, an endpoint, a
+  # reading, and a meeting have a mode and no term, so they are outside
+  # the descent block.
   defp rec_names(book) do
     for %{mode: mode, name: name} = d <- book,
         rec_mode?(mode),
-        Map.get(d, :kind) not in [:session, :conform, :place, :scheme, :move, :endpoint, :read],
+        Map.get(d, :kind) not in [
+          :session,
+          :conform,
+          :place,
+          :scheme,
+          :move,
+          :endpoint,
+          :read,
+          :meet
+        ],
         do: name
   end
 

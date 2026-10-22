@@ -112,6 +112,12 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      meet_start?(s) ->
+        case parse_meet(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
       true ->
         case parse_def(s) do
           {:ok, d, rest} -> parse_book(rest, [d | acc])
@@ -494,6 +500,49 @@ defmodule Muro.Parser do
     end
   end
 
+  defp meet_start?(s), do: meet_entry?(s)
+
+  # meet wire : pong with peer
+  # `meet` and `with` are keywords only in this form.
+  defp parse_meet(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "meet"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, left, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "with"),
+         {:ok, right, rest} <- ident(skip(rest)) do
+      {:ok,
+       %{
+         kind: :meet,
+         name: name,
+         mode: :evidence,
+         left: left,
+         right: right,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  # A meeting is `meet name :`. A constructor `meet : Box` is not one.
+  defp meet_entry?(s) do
+    if word_kw?(s, "meet") do
+      rest = s |> after_kw("meet") |> skip()
+
+      case ident(rest) do
+        {:ok, _, rest} ->
+          rest = skip(rest)
+          has_prefix?(rest, ":") and not has_prefix?(rest, ":=") and not has_prefix?(rest, "::")
+
+        _ ->
+          false
+      end
+    else
+      false
+    end
+  end
+
   defp parse_proto(s) do
     s = skip(s)
 
@@ -623,7 +672,7 @@ defmodule Muro.Parser do
       word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
         word_kw?(s, "session") or word_kw?(s, "conform") or nu_start?(s) or
         place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
-        endpoint_entry?(s) or read_entry?(s) ->
+        endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
@@ -795,14 +844,14 @@ defmodule Muro.Parser do
   end
 
   # `session` and `conform` use `:=`, so ctor_decl_start? does not see
-  # them. A new line that starts either form, or a place, scheme, or move
-  # entry, ends the constructor's type.
+  # them. A new line that starts either form, or a place, scheme, move,
+  # endpoint, reading, or meeting entry, ends the constructor's type.
   defp session_line?(s, s0) do
     skipped = binary_part(s, 0, byte_size(s) - byte_size(s0))
 
     String.contains?(skipped, "\n") and
       (session_start?(s0) or conform_start?(s0) or place_entry?(s0) or scheme_entry?(s0) or
-         move_entry?(s0) or endpoint_entry?(s0) or read_entry?(s0))
+         move_entry?(s0) or endpoint_entry?(s0) or read_entry?(s0) or meet_entry?(s0))
   end
 
   defp starts_atom?(s) do

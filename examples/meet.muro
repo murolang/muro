@@ -1,0 +1,34 @@
+-- meet.muro — two processes on one session.
+-- The meeting is evidence. A run definition has no seat.
+
+session ping := recv end (send end end)
+
+session back := dual ping
+
+conform pong : ping := get b1 (put b0 done)
+
+conform peer : back := put b1 (get b0 done)
+
+meet wire : pong with peer
+
+session choice := choose end (send end end)
+
+session offered := dual choice
+
+conform taker : choice := pick0 done
+
+conform giver : offered := cover done (get b0 done)
+
+meet arm : taker with giver
+
+session open := send end end
+
+session closed := dual open
+
+conform left : open := put b0 stop
+
+conform right : closed := get b0 stop
+
+meet drop : left with right
+
+def kept : run Nat := 0

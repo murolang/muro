@@ -386,7 +386,16 @@ defmodule Muro.Ast do
           Map.get(d, :kind) == :data ->
             data_to_db(d)
 
-          Map.get(d, :kind) in [:session, :conform, :place, :scheme, :move, :endpoint, :read] ->
+          Map.get(d, :kind) in [
+            :session,
+            :conform,
+            :place,
+            :scheme,
+            :move,
+            :endpoint,
+            :read,
+            :meet
+          ] ->
             {:ok, d}
 
           true ->
