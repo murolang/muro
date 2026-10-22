@@ -2059,7 +2059,9 @@ defmodule Muro.Check do
   end
 
   defp check_proc_vars({:get, _ty, name, p}, ctx) do
-    check_proc_vars(p, MapSet.put(ctx, name))
+    # Anonymous binder _ doesn't add to context
+    new_ctx = if name == :_, do: ctx, else: MapSet.put(ctx, name)
+    check_proc_vars(p, new_ctx)
   end
 
   defp check_proc_vars({:pick0, p}, ctx), do: check_proc_vars(p, ctx)

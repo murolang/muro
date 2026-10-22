@@ -796,14 +796,54 @@ defmodule Muro.Parser do
   end
 
   defp parse_comm(s, "get", :get) do
+    with {:ok, rest} <- kw(s, "get") do
+      rest = skip(rest)
+      
+      # Try parsing with binding: get (name : Type) proc
+      if has_prefix?(rest, "(") do
+        case tok(rest, "(") do
+          {:ok, after_paren} ->
+            after_paren = skip(after_paren)
+            
+            # Check if this is a binder (identifier followed by :)
+            case ident(after_paren) do
+              {:ok, name, after_name} ->
+                after_name = skip(after_name)
+                
+                if has_prefix?(after_name, ":") do
+                  # This is get (name : Type) proc
+                  with {:ok, rest} <- tok(after_name, ":"),
+                       {:ok, ty, rest} <- parse_pay(skip(rest)),
+                       {:ok, rest} <- tok(skip(rest), ")"),
+                       {:ok, p, rest} <- parse_proc(skip(rest)) do
+                    {:ok, {:get, ty, String.to_atom(name), p}, rest}
+                  end
+                else
+                  # Not a binder, fall back to old syntax: get Type proc
+                  parse_get_no_binding(s)
+                end
+              
+              _ ->
+                # Couldn't parse identifier, fall back
+                parse_get_no_binding(s)
+            end
+          
+          _ ->
+            parse_get_no_binding(s)
+        end
+      else
+        # No opening paren, must be old syntax: get Type proc
+        parse_get_no_binding(s)
+      end
+    end
+  end
+  
+  defp parse_get_no_binding(s) do
     with {:ok, rest} <- kw(s, "get"),
-         {:ok, rest} <- tok(skip(rest), "("),
-         {:ok, name, rest} <- ident(skip(rest)),
-         {:ok, rest} <- tok(skip(rest), ":"),
          {:ok, ty, rest} <- parse_pay(skip(rest)),
-         {:ok, rest} <- tok(skip(rest), ")"),
          {:ok, p, rest} <- parse_proc(skip(rest)) do
-      {:ok, {:get, ty, String.to_atom(name), p}, rest}
+      # Use a generated anonymous variable name
+      {:ok, {:get, ty, :_, p}, rest}
     end
   end
 

@@ -149,6 +149,7 @@ defmodule Muro.Session do
   def show_proc(:done), do: "done"
   def show_proc(:stop), do: "stop"
   def show_proc({:put, _ty, val, p}), do: "put #{show_val(val)} #{paren_proc(p)}"
+  def show_proc({:get, ty, :_, p}), do: "get #{show_pay_atom(ty)} #{paren_proc(p)}"
   def show_proc({:get, ty, name, p}), do: "get (#{name} : #{show_pay_atom(ty)}) #{paren_proc(p)}"
   def show_proc({:pick0, p}), do: "pick0 #{paren_proc(p)}"
   def show_proc({:pick1, p}), do: "pick1 #{paren_proc(p)}"
