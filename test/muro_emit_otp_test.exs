@@ -27,7 +27,7 @@ defmodule Muro.EmitOtpTest do
     assert {:ok, book} = Parser.parse(File.read!("examples/ping.muro"))
     proc = Map.new(book, &{&1.name, Map.get(&1, :proc)})
 
-    assert Session.skel(proc["pong"]) == {:hear, :nat, {:say, 1, :finish}}
+    assert Session.skel(proc["pong"]) == {:hear, :nat, :_, {:say, 1, :finish}}
     assert Session.skel(proc["left-open"]) == {:say, 0, :leave}
     assert Session.skel(proc["untouched"]) == :leave
     assert Session.skel(proc["chosen"]) == {:choose, :b0, :finish}

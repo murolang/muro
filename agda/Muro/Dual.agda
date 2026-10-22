@@ -67,16 +67,16 @@ ping-back : dual (dual ping) ≡ ping
 ping-back = refl
 
 peer : Proc
-peer = put nat two (get nat done)
+peer = put nat (lit two) (get nat "x" done)
 
-peer-ok : Conforms peer (dual ping)
-peer-ok = put-ok (get-ok done-end)
+peer-ok : Conforms [] peer (dual ping)
+peer-ok = put-ok lit-ok (get-ok done-end)
 
-early : ¬ Conforms (put box here done) (dual ping)
+early : ¬ Conforms [] (put box (lit v-here) done) (dual ping)
 early ()
 
 -- Abandonment still has a derivation at the other end.
-peer-stop : Conforms stop (dual ping)
+peer-stop : Conforms [] stop (dual ping)
 peer-stop = abandon
 
 ------------------------------------------------------------------------
