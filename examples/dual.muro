@@ -1,0 +1,28 @@
+-- dual.muro — the other end of a session.
+-- The other end is spec. A run definition has no seat.
+
+session ping := recv end (send end end)
+
+session back := dual ping
+
+session forth := dual back
+
+session %1 ping-done := recv end (send end end)
+
+session reply := dual ping-done
+
+session choice := choose end (send end end)
+
+session offered := dual choice
+
+conform peer : back := put b1 (get b0 done)
+
+conform again : forth := get b1 (put b0 done)
+
+conform peer-done : reply := put b1 (get b0 done)
+
+conform either : offered := cover done (get b0 done)
+
+conform left : back := stop
+
+def kept : run Nat := 0

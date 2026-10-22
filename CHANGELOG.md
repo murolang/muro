@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.46
+
+A session can name the other end of a session. `session back := dual ping` swaps send with recv and choose with branch. The bit stays the bit. The mark stays the session's mark. A run term has no seat.
+
+### Manual
+
+- Grammar, Terms, Examples: the other end of a session.
+- Extending: the checker follows the other end.
+
+### Package
+
+- Version 0.16.46.
+
 ## 0.16.45
 
 A session has another end. Sending here is receiving there, and choosing here is offering there. The bit stays the bit. The other end of the other end is the same session. A run term has no seat.
