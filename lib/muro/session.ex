@@ -156,6 +156,17 @@ defmodule Muro.Session do
   def show_proc({:pick1, p}), do: "pick1 #{paren_proc(p)}"
   def show_proc({:cover, p, q}), do: "cover #{paren_proc(p)} #{paren_proc(q)}"
 
+  defp show_val({:var, name}), do: "#{name}"
+  defp show_val({:nat, n}), do: "#{n}"
+  defp show_val(:b0), do: "b0"
+  defp show_val(:b1), do: "b1"
+  defp show_val(:tt), do: "tt"
+  defp show_val({:tup, a, b}), do: "(#{show_val(a)}, #{show_val(b)})"
+  defp show_val({:rec, fields}) when is_list(fields) do
+    inner = Enum.map_join(fields, ", ", fn {name, val} -> "#{name} = #{show_val(val)}" end)
+    "{#{inner}}"
+  end
+
   def show_proto(:end), do: "end"
   def show_proto({:send, ty, s}), do: "send #{show_pay_atom(ty)} #{paren_proto(s)}"
   def show_proto({:recv, ty, s}), do: "recv #{show_pay_atom(ty)} #{paren_proto(s)}"
