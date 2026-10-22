@@ -8,6 +8,7 @@
 -- other conforms to the other end of that protocol. A run term has
 -- no seat. None of these constructors is added to Tm or PTm. The
 -- Elixir checker follows the meeting: `meet name : left with right`.
+-- The OTP emitter starts those two processes as each other's peer.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}

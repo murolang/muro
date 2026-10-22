@@ -57,7 +57,7 @@ Two processes are one exchange when a send is a receive of that bit and each ses
 meet wire : pong with peer
 ```
 
-`pong` is `get b1 (put b0 done)` on `ping`. `peer` is `put b1 (get b0 done)` on `back`. A choice meets the arm that was offered. Both ends close, or both abandon. A run term has no seat. `examples/meet.muro` is that book.
+`pong` is `get b1 (put b0 done)` on `ping`. `peer` is `put b1 (get b0 done)` on `back`. A choice meets the arm that was offered. Both ends close, or both abandon. A run term has no seat. `examples/meet.muro` is that book. `--backend otp` starts the two processes as each other's peer. Each server still talks to one peer. See [Emit](emit.md#otp).
 
 The checker sees the whole book, so a `conform` may name a session declared later, a dual session may name a session declared later, and a meeting may name a process declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
 

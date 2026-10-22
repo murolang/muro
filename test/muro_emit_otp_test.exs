@@ -9,7 +9,8 @@ defmodule Muro.EmitOtpTest do
             {"PingOtp", [:Pong, :LeftOpen, :Untouched, :Chosen, :Both, :PongDone, :OpenStop, ""]},
             {"LocatedOtp",
              [:Pong, :PongAway, :PongPoly, :PongPolyAway, :PongDone, :LeftOpen, ""]},
-            {"BothOtp", [:Pong, :PongHome, ""]}
+            {"BothOtp", [:Pong, :PongHome, ""]},
+            {"MeetOtp", [:Pong, :Peer, :Taker, :Giver, :Left, :Right, ""]}
           ] do
         for name <- names do
           mod = if name == "", do: Module.concat([parent]), else: Module.concat(parent, name)
@@ -52,6 +53,7 @@ defmodule Muro.EmitOtpTest do
     assert src =~ "{:hear, :b1, {:say, :b0, :finish}}"
     assert src =~ "The proof stops at the conformance derivation."
     refute src =~ "def z"
+    refute src =~ "muro_peer"
 
     assert {:ok, elixir} = Muro.emit_file("examples/ping.muro", Ping)
     refute elixir =~ "Pong"
@@ -114,6 +116,63 @@ defmodule Muro.EmitOtpTest do
     assert {:ok, elixir} = Muro.emit_file("examples/located.muro", LocatedRun)
     assert elixir =~ ~r/\bdef kept\b/
     refute elixir =~ "GenServer"
+  end
+
+  test "a meeting starts the two processes as peers" do
+    assert {:ok, src} = Emit.Otp.render(checked!("examples/meet.muro"), "meet")
+    assert src =~ "A meeting starts the two processes as each other's peer."
+    assert src =~ "def wire do"
+    assert src =~ "def arm do"
+    assert src =~ "def drop do"
+    assert src =~ "defmodule Pong do"
+    refute src =~ "def kept"
+    refute src =~ "{:muro_read"
+
+    Code.compile_string(src)
+
+    {:ok, left, right, left_ref, right_ref} = meet(:wire)
+    assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
+    assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
+
+    {:ok, taker, giver, taker_ref, giver_ref} = meet(:arm)
+    assert_receive {:DOWN, ^taker_ref, :process, ^taker, :normal}
+    assert_receive {:DOWN, ^giver_ref, :process, ^giver, :normal}
+
+    {:ok, opened, closed, opened_ref, closed_ref} = meet(:drop)
+    assert_receive {:DOWN, ^opened_ref, :process, ^opened, {:shutdown, :abandon}}
+    assert_receive {:DOWN, ^closed_ref, :process, ^closed, {:shutdown, :abandon}}
+
+    {:ok, pid, ref} = meet_one(:Pong)
+    send(pid, {:muro, self(), :b1})
+    assert_receive {:muro, ^pid, :b0}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+  end
+
+  test "a meeting of a reading uses that process" do
+    dir = tmp!()
+    path = Path.join(dir, "read_meet.muro")
+
+    File.write!(path, """
+    session ping := recv end (send end end)
+    session back := dual ping
+    place home := ambient
+    scheme local := fixed home
+    endpoint there := back at local
+    read stay peer : there at home := put b1 (get b0 done)
+    conform pong : ping := get b1 (put b0 done)
+    meet wire : pong with peer
+    meet a-b : peer with pong
+    meet a_b : pong with peer
+    meet end : pong with peer
+    """)
+
+    assert {:ok, src} = Emit.Otp.render(checked!(path), "read-meet")
+    assert src =~ "def wire do"
+    assert src =~ "def a_b do"
+    assert src =~ "def a_b2 do"
+    assert src =~ "def muro_end do"
+    assert src =~ "{:hear, :b1, {:say, :b0, :finish}}"
+    assert src =~ "{:say, :b1, {:hear, :b0, :finish}}"
   end
 
   test "a conform and a reading are two servers" do
@@ -258,6 +317,14 @@ defmodule Muro.EmitOtpTest do
 
   defp start(name, peer \\ self()) do
     apply(Module.concat("PingOtp", name), :start, [peer])
+  end
+
+  defp meet(fun) do
+    apply(Module.concat(["MeetOtp"]), fun, [])
+  end
+
+  defp meet_one(name) do
+    apply(Module.concat("MeetOtp", name), :start, [self()])
   end
 
   defp located(name, peer \\ self()) do
