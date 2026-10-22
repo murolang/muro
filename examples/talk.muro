@@ -7,11 +7,18 @@ session ping := seen pong with peer in ping-exchange
 
 session back := seen peer with pong in ping-exchange
 
-conform pong : ping := get Nat (put 1 done)
+conform pong : ping := get (k : Nat) (put 1 done)
 
-conform peer : back := put 1 (get Nat done)
+conform peer : back := put 1 (get (m : Nat) done)
 
 meet wire : pong with peer
+
+-- Echo example
+conform echo : ping := get (k : Nat) (put k done)
+
+conform peer-echo : back := put 3 (get (n : Nat) done)
+
+meet echo-wire : echo with peer-echo
 
 talk both-arms := offer a b (say b c Nat over) (say b c Nat over)
 

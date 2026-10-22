@@ -10,6 +10,11 @@ defmodule Muro.Emit.Otp do
   `{:shutdown, :abandon}`, which a monitor observes. `finish` stops
   with `:normal`.
 
+  Value binding: When a process has `get (k : Type) continuation`, the
+  received value is checked against the type, but variable substitution
+  in the continuation is not yet implemented in the OTP backend. The
+  skeleton uses a witness value.
+
   The BEAM runs this server. The proof stops at the conformance
   derivation. `run` is not emitted here.
   """
