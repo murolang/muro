@@ -7,6 +7,7 @@ A meeting sits where the parties sit. Two processes that meet are the two partie
 ### Manual
 
 - Extending: a meeting sits where the parties sit.
+- Limits: the meeting is checked.
 
 ### Package
 

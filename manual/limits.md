@@ -36,6 +36,8 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - Two calls for one `cross`
 - A call for a `stay`
 
+The meeting is checked. The OTP image is the only runtime that can produce the event of two processes exchanging the session bits and stopping `:normal` when the parties sit at different places. Other emitters are unchanged because they do not implement the meeting.
+
 ## Former names (history, not syntax)
 
 The language was once described as *nothing dead runs* and *a proof never becomes a run*. Those words are not tags. The tags are `spec`, `evidence`, and `run`.
