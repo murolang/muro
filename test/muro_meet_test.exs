@@ -4,9 +4,9 @@ defmodule Muro.MeetTest do
   alias Muro.{Check, IR, Meet, Parser}
 
   test "a send meets a receive of the same type" do
-    pong = {:get, :nat, {:put, :nat, {:nat, 1}, :done}}
-    peer = {:put, :nat, {:nat, 0}, {:get, :nat, :done}}
-    other = {:put, :nat, {:nat, 2}, {:get, :nat, :done}}
+    pong = {:get, :nat, :_, {:put, :nat, {:nat, 1}, :done}}
+    peer = {:put, :nat, {:nat, 0}, {:get, :nat, :_, :done}}
+    other = {:put, :nat, {:nat, 2}, {:get, :nat, :_, :done}}
     assert Meet.meets(pong, peer) == :ok
     assert Meet.meets(pong, other) == :ok
     assert Meet.meets(peer, pong) == :ok
@@ -14,17 +14,17 @@ defmodule Muro.MeetTest do
     box = {:pair, :bit, {:rec, [{"x", :nat}, {"y", :nat}]}}
     here = {:tup, :b0, {:rec, [{"x", {:nat, 0}}, {"y", {:nat, 0}}]}}
     there = {:tup, :b1, {:rec, [{"x", {:nat, 1}}, {"y", {:nat, 2}}]}}
-    assert Meet.meets({:put, box, here, :done}, {:get, box, :done}) == :ok
-    assert Meet.meets({:put, box, there, :done}, {:get, box, :done}) == :ok
+    assert Meet.meets({:put, box, here, :done}, {:get, box, :_, :done}) == :ok
+    assert Meet.meets({:put, box, there, :done}, {:get, box, :_, :done}) == :ok
 
-    assert Meet.meets({:put, :nat, {:nat, 0}, :stop}, {:get, :nat, :stop}) == :ok
-    assert Meet.meets({:pick0, :done}, {:cover, :done, {:get, :nat, :done}}) == :ok
+    assert Meet.meets({:put, :nat, {:nat, 0}, :stop}, {:get, :nat, :_, :stop}) == :ok
+    assert Meet.meets({:pick0, :done}, {:cover, :done, {:get, :nat, :_, :done}}) == :ok
     assert Meet.meets(:done, :done) == :ok
     assert Meet.meets(:stop, :stop) == :ok
   end
 
   test "a type they do not share has no derivation" do
-    assert {:error, msg} = Meet.meets({:get, :bit, :done}, {:put, :nat, {:nat, 0}, :done})
+    assert {:error, msg} = Meet.meets({:get, :bit, :_, :done}, {:put, :nat, {:nat, 0}, :done})
     assert msg == "get Bit done does not meet put 0 done"
 
     swapped = {:rec, [{"y", :nat}, {"x", :nat}]}
@@ -33,7 +33,7 @@ defmodule Muro.MeetTest do
     assert {:error, msg} =
              Meet.meets(
                {:put, point, {:rec, [{"x", {:nat, 0}}, {"y", {:nat, 1}}]}, :done},
-               {:get, swapped, :done}
+               {:get, swapped, :_, :done}
              )
 
     assert msg =~ "does not meet"
@@ -43,11 +43,11 @@ defmodule Muro.MeetTest do
 
     assert msg == "put 0 done does not meet put 0 done"
 
-    assert {:error, msg} = Meet.meets({:put, :nat, {:nat, 0}, :stop}, {:get, :nat, :done})
+    assert {:error, msg} = Meet.meets({:put, :nat, {:nat, 0}, :stop}, {:get, :nat, :_, :done})
     assert msg == "stop does not meet done"
 
     assert {:error, msg} =
-             Meet.meets({:pick0, :done}, {:cover, :stop, {:get, :nat, :done}})
+             Meet.meets({:pick0, :done}, {:cover, :stop, {:get, :nat, :_, :done}})
 
     assert msg == "done does not meet stop"
   end
