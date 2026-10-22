@@ -35,7 +35,8 @@
 module Muro.Session where
 
 open import Data.Empty using (⊥)
-open import Data.Sum using (_⊎_; inj₁; inj₂; case_of_)
+open import Data.Product using (_×_; _,_)
+open import Data.Sum using (_⊎_; inj₁; inj₂)
 open import Data.String.Base using (String)
 open import Data.String.Properties using (_≟_)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
@@ -211,7 +212,7 @@ conformMode = evid
 
 data Seat : Mode → Set where
   protocol : Proto → Seat spec
-  conforms : ∀ {P S} → Conforms P S → Seat evid
+  conforms : ∀ {Γ P S} → Conforms Γ P S → Seat evid
 
 no-run : ¬ Seat run
 no-run ()
@@ -233,11 +234,11 @@ point = named "x" nat (named "y" nat noFields)
 box : Ty
 box = pair bit (rec point)
 
-here : Val box
-here = tup b0 (rec (cell zero (cell zero noRow)))
+v-here : Val box
+v-here = tup b0 (rec (cell zero (cell zero noRow)))
 
-there : Val box
-there = tup b1 (rec (cell one (cell two noRow)))
+v-there : Val box
+v-there = tup b1 (rec (cell one (cell two noRow)))
 
 ping : Proto
 ping = recv nat (send nat end)
@@ -258,22 +259,22 @@ echo = get nat "v" (put nat (var "v") done)
 echo-ok : Conforms [] echo ping
 echo-ok = get-ok (put-ok (var-ok here) done-end)
 
-here-ok : Conforms [] (put box (lit here) done) (send box end)
-here-ok = put-ok lit-ok done-end
+v-here-ok : Conforms [] (put box (lit v-here) done) (send box end)
+v-here-ok = put-ok lit-ok done-end
 
-there-ok : Conforms [] (put box (lit there) done) (send box end)
-there-ok = put-ok done-end
+v-there-ok : Conforms [] (put box (lit v-there) done) (send box end)
+v-there-ok = put-ok lit-ok done-end
 
-not-type : ¬ Conforms (put nat zero done) (send box end)
+not-type : ¬ Conforms [] (put nat (lit zero) done) (send box end)
 not-type ()
 
 -- A send where the protocol says receive.
-swapped : ¬ Conforms (put nat zero done) (recv nat end)
+swapped : ¬ Conforms [] (put nat (lit zero) done) (recv nat end)
 swapped ()
 
 -- The continuation is end, so a second send has no derivation.
 twice : ¬ Conforms [] (put nat (lit zero) (put nat (lit zero) done)) (send nat end)
-twice (put-ok _ (put-ok _ ()))
+twice (put-ok _ ())
 
 untouched : Conforms [] stop (send nat end)
 untouched = abandon
@@ -281,7 +282,7 @@ untouched = abandon
 chosen : Conforms [] (pick0 done) (choose end (send nat end))
 chosen = pick0-ok done-end
 
-both : Conforms [] (cover done (put box (lit here) done)) (branch end (send box end))
+both : Conforms [] (cover done (put box (lit v-here) done)) (branch end (send box end))
 both = cover-ok done-end (put-ok lit-ok done-end)
 
 ------------------------------------------------------------------------
@@ -299,12 +300,12 @@ x ∈? [] ∷? A = no′ (λ ())
 x ∈? ((y , B) ∷ Γ) ∷? A with x ≟ y
 ... | yes′ refl with ty≟ A B
 ... | yes′ refl = yes′ here
-... | no′ ¬eq = case (x ∈? Γ ∷? A) of λ where
-  (yes′ p) → yes′ (there p)
-  (no′ np) → no′ (λ { here → ¬eq refl ; (there p) → np p })
-x ∈? ((y , B) ∷ Γ) ∷? A | no′ _ with x ∈? Γ ∷? A
+... | no′ ¬AB with x ∈? Γ ∷? A
 ... | yes′ p = yes′ (there p)
-... | no′ np = no′ (λ { (there p) → np p })
+... | no′ np = no′ (λ { here → ¬AB refl ; (there p) → np p })
+x ∈? ((y , B) ∷ Γ) ∷? A | no′ ¬xy with x ∈? Γ ∷? A
+... | yes′ p = yes′ (there p)
+... | no′ np = no′ (λ { here → ¬xy refl ; (there p) → np p })
 
 -- Decide if a value expression is well-scoped
 decideValExpr : ∀ {A} (Γ : Ctx) (v : ValExpr A) → Dec (ValExprOk Γ v)
@@ -382,11 +383,11 @@ pong-decides = refl
 other-nat-decides : decide [] (get nat "x" (put nat (lit zero) done)) ping ≡ yes other-nat
 other-nat-decides = refl
 
-here-decides : decide [] (put box (lit here) done) (send box end) ≡ yes here-ok
-here-decides = refl
+v-here-decides : decide [] (put box (lit v-here) done) (send box end) ≡ yes v-here-ok
+v-here-decides = refl
 
-there-decides : decide [] (put box (lit there) done) (send box end) ≡ yes there-ok
-there-decides = refl
+v-there-decides : decide [] (put box (lit v-there) done) (send box end) ≡ yes v-there-ok
+v-there-decides = refl
 
 left-open : Conforms [] (put nat (lit zero) stop) (send nat (send nat end))
 left-open = put-ok lit-ok abandon
@@ -400,7 +401,7 @@ untouched-decides = refl
 chosen-decides : decide [] (pick0 done) (choose end (send nat end)) ≡ yes chosen
 chosen-decides = refl
 
-both-decides : decide [] (cover done (put box (lit here) done)) (branch end (send box end)) ≡ yes both
+both-decides : decide [] (cover done (put box (lit v-here) done)) (branch end (send box end)) ≡ yes both
 both-decides = refl
 
 ------------------------------------------------------------------------
@@ -440,7 +441,7 @@ untouched-skel = refl
 chosen-skel : skel (pick0 done) ≡ choose0 finish
 chosen-skel = refl
 
-both-skel : skel (cover done (put box (lit here) done)) ≡ offer finish (say (lit here) finish)
+both-skel : skel (cover done (put box (lit v-here) done)) ≡ offer finish (say (lit v-here) finish)
 both-skel = refl
 
 ------------------------------------------------------------------------
@@ -497,20 +498,20 @@ pong-finishes = refl
 stop-finishes : finishes stop ≡ leaves (λ ())
 stop-finishes = refl
 
-left-open-finishes : finishes (put nat zero stop) ≡ step-put (leaves (λ ()))
+left-open-finishes : finishes (put nat (lit zero) stop) ≡ step-put (leaves (λ ()))
 left-open-finishes = refl
 
 chosen-finishes : finishes (pick0 done) ≡ ends (ends-pick0 ends-done)
 chosen-finishes = refl
 
 both-finishes :
-  finishes (cover done (put box here done)) ≡ ends (ends-cover ends-done (ends-put ends-done))
+  finishes (cover done (put box (lit v-here) done)) ≡ ends (ends-cover ends-done (ends-put ends-done))
 both-finishes = refl
 
 ¬ends-stop : ¬ Ends stop
 ¬ends-stop ()
 
-¬ends-left-open : ¬ Ends (put nat zero stop)
+¬ends-left-open : ¬ Ends (put nat (lit zero) stop)
 ¬ends-left-open (ends-put ())
 
 ------------------------------------------------------------------------
@@ -534,14 +535,15 @@ same-qty = refl
 record Linear (P : Proc) (S : Proto) : Set where
   constructor linear
   field
-    held   : Conforms P S
+    {ctx}  : Ctx
+    held   : Conforms ctx P S
     closed : Ends P
 
-lin-aff : ∀ {P S} → Linear P S → Conforms P S
+lin-aff : ∀ {P S} (l : Linear P S) → Conforms (Linear.ctx l) P S
 lin-aff = Linear.held
 
 pong-linear : Linear pong ping
-pong-linear = linear pong-ok (ends-get (λ _ → ends-put ends-done))
+pong-linear = linear pong-ok (ends-get (ends-put ends-done))
 
 ------------------------------------------------------------------------
 -- A process that finishes has no `leave` in its skeleton. `stop` is
@@ -551,7 +553,7 @@ pong-linear = linear pong-ok (ends-get (λ _ → ends-put ends-done))
 data NoLeave : Skel → Set where
   finish-ok  : NoLeave finish
   say-ok     : ∀ {A v k} → NoLeave k → NoLeave (say {A} v k)
-  hear-ok    : ∀ {A k} → NoLeave k → NoLeave (hear A k)
+  hear-ok    : ∀ {A x k} → NoLeave k → NoLeave (hear A x k)
   choose0-ok : ∀ {k} → NoLeave k → NoLeave (choose0 k)
   choose1-ok : ∀ {k} → NoLeave k → NoLeave (choose1 k)
   offer-ok   : ∀ {k q} → NoLeave k → NoLeave q → NoLeave (offer k q)
