@@ -14,7 +14,8 @@
 --
 -- Spec holds the description. Evidence is one party's session. A
 -- run term has no seat. None of these constructors is added to Tm
--- or PTm. A `.muro` file does not write the description.
+-- or PTm. A `.muro` file writes the description, and the checker
+-- follows `seen`.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}

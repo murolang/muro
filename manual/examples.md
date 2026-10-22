@@ -88,6 +88,25 @@ A process whose session is not the other end, or a bit the two processes do not 
 
 See [Terms](language.md#session).
 
+## talk.muro
+
+One description of an exchange. Each party has a session. The description is spec. The run emitters omit it.
+
+```
+talk ping-exchange := say peer pong over (say pong peer over over)
+session ping := seen pong with peer in ping-exchange
+session back := seen peer with pong in ping-exchange
+conform pong : ping := get b1 (put b0 done)
+conform peer : back := put b1 (get b0 done)
+meet wire : pong with peer
+```
+
+`pong` receives `b1` and then sends `b0`, so `ping` is `recv end (send end end)`. `peer` has the other end. `wire` is the evidence that those two processes are that exchange. `both-arms` is one description in which `a` sends to `b` and `b` sends to `c`, and `a` with `c` is `end` because both continuations are the same description. `arm` is `a` offering `b` the choice of `end` or a send. `kept` is the run definition in the same file. `mix muro.emit examples/talk.muro` emits `kept`.
+
+A party the description does not seat, or a description that refers to itself, is refused. Those books live in `test/muro_talk_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#session).
+
 ## arrow.muro
 
 A `%1` binder must be used. A `%0` binder, and an unmarked binder, may be dropped.
