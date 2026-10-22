@@ -98,54 +98,70 @@ defmodule Muro.Session do
   `:ok` when `decide` returns `yes`. Otherwise the pair where it returns `no`.
   """
   def conforms(proc, proto) do
-    case go(proc, proto) do
+    case go(proc, proto, %{}) do
       :ok -> :ok
       {:no, p, s} -> {:error, "#{show_proc(p)} does not conform to #{show_proto(s)}"}
     end
   end
 
-  defp go(:done, :end), do: :ok
-  defp go(:stop, _), do: :ok
+  defp go(:done, :end, _ctx), do: :ok
+  defp go(:stop, _, _ctx), do: :ok
 
-  defp go({:put, ty, val, p} = proc, {:send, ty, s} = proto) do
-    if value?(val, ty), do: keep(go(p, s)), else: {:no, proc, proto}
+  # put with inferred type (when value is a literal)
+  defp go({:put, ty, val, p} = proc, {:send, ty, s} = proto, ctx) do
+    if value?(val, ty, ctx), do: keep(go(p, s, ctx)), else: {:no, proc, proto}
   end
 
-  defp go({:get, ty, _name, p}, {:recv, ty, s}), do: keep(go(p, s))
-  defp go({:pick0, p}, {:choose, s, _}), do: keep(go(p, s))
-  defp go({:pick1, p}, {:choose, _, t}), do: keep(go(p, t))
+  # put with unknown type (when value is a variable) - check against protocol's expected type
+  defp go({:put, :unknown, val, p} = proc, {:send, expected_ty, s} = proto, ctx) do
+    if value?(val, expected_ty, ctx), do: keep(go(p, s, ctx)), else: {:no, proc, proto}
+  end
 
-  defp go({:cover, p, q}, {:branch, s, t}) do
-    case go(p, s) do
-      :ok -> keep(go(q, t))
+  defp go({:get, ty, name, p}, {:recv, ty, s}, ctx) do
+    # Add variable binding to context (anonymous _ doesn't add)
+    new_ctx = if name == :_, do: ctx, else: Map.put(ctx, name, ty)
+    keep(go(p, s, new_ctx))
+  end
+
+  defp go({:pick0, p}, {:choose, s, _}, ctx), do: keep(go(p, s, ctx))
+  defp go({:pick1, p}, {:choose, _, t}, ctx), do: keep(go(p, t, ctx))
+
+  defp go({:cover, p, q}, {:branch, s, t}, ctx) do
+    case go(p, s, ctx) do
+      :ok -> keep(go(q, t, ctx))
       no -> no
     end
   end
 
-  defp go(p, s), do: {:no, p, s}
+  defp go(p, s, _ctx), do: {:no, p, s}
 
   defp keep(:ok), do: :ok
   defp keep({:no, _, _} = no), do: no
 
-  defp value?({:nat, n}, :nat) when is_integer(n) and n >= 0, do: true
-  defp value?(bit, :bit) when bit in [:b0, :b1], do: true
-  defp value?(:tt, :unit), do: true
-  defp value?({:tup, a, b}, {:pair, ta, tb}), do: value?(a, ta) and value?(b, tb)
+  defp value?({:nat, n}, :nat, _ctx) when is_integer(n) and n >= 0, do: true
+  defp value?(bit, :bit, _ctx) when bit in [:b0, :b1], do: true
+  defp value?(:tt, :unit, _ctx), do: true
+  defp value?({:tup, a, b}, {:pair, ta, tb}, ctx), do: value?(a, ta, ctx) and value?(b, tb, ctx)
 
-  defp value?({:rec, vals}, {:rec, fields}) when is_list(vals) and is_list(fields) do
+  defp value?({:rec, vals}, {:rec, fields}, ctx) when is_list(vals) and is_list(fields) do
     length(vals) == length(fields) and
       Enum.all?(fields, fn {name, ty} ->
         case List.keyfind(vals, name, 0) do
-          {^name, val} -> value?(val, ty)
+          {^name, val} -> value?(val, ty, ctx)
           _ -> false
         end
       end)
   end
 
-  # A variable reference is assumed to have the right type (checked by the type checker)
-  defp value?({:var, _name}, _ty), do: true
+  # Check that a variable has the expected type in the context
+  defp value?({:var, name}, expected_ty, ctx) do
+    case Map.get(ctx, name) do
+      ^expected_ty -> true
+      _ -> false
+    end
+  end
 
-  defp value?(_, _), do: false
+  defp value?(_, _, _ctx), do: false
 
   def show_proc(:done), do: "done"
   def show_proc(:stop), do: "stop"
