@@ -25,8 +25,8 @@ defmodule Muro.Meet do
   defp go(:done, :done), do: :ok
   defp go(:stop, :stop), do: :ok
 
-  defp go({:put, ty, _, p}, {:get, ty, q}), do: keep(go(p, q))
-  defp go({:get, ty, p}, {:put, ty, _, q}), do: keep(go(p, q))
+  defp go({:put, ty, _, p}, {:get, ty, _, q}), do: keep(go(p, q))
+  defp go({:get, ty, _, p}, {:put, ty, _, q}), do: keep(go(p, q))
 
   defp go({:pick0, p}, {:cover, q, _}), do: keep(go(p, q))
   defp go({:pick1, p}, {:cover, _, r}), do: keep(go(p, r))
