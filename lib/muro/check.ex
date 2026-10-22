@@ -2040,18 +2040,63 @@ defmodule Muro.Check do
   # Conforms, then Ends when the session is `%1`. A protocol mismatch is
   # reported before an abandoned channel. Mirrors `held` and `finished`.
   defp session_sits(session, proc) do
-    case Muro.Session.conforms(proc, session.proto) do
-      :ok ->
-        if linear_session?(session) and Muro.Session.finishes(proc) == :no do
-          {:error, "linear channel abandoned"}
-        else
-          :ok
-        end
-
-      {:error, msg} ->
-        {:error, msg}
+    with :ok <- check_proc_vars(proc, MapSet.new()),
+         :ok <- Muro.Session.conforms(proc, session.proto) do
+      if linear_session?(session) and Muro.Session.finishes(proc) == :no do
+        {:error, "linear channel abandoned"}
+      else
+        :ok
+      end
     end
   end
+
+  # Check that all variables used in a process are bound
+  defp check_proc_vars(:done, _ctx), do: :ok
+  defp check_proc_vars(:stop, _ctx), do: :ok
+
+  defp check_proc_vars({:put, _ty, val, p}, ctx) do
+    with :ok <- check_val_vars(val, ctx), do: check_proc_vars(p, ctx)
+  end
+
+  defp check_proc_vars({:get, _ty, name, p}, ctx) do
+    check_proc_vars(p, MapSet.put(ctx, name))
+  end
+
+  defp check_proc_vars({:pick0, p}, ctx), do: check_proc_vars(p, ctx)
+  defp check_proc_vars({:pick1, p}, ctx), do: check_proc_vars(p, ctx)
+
+  defp check_proc_vars({:cover, p, q}, ctx) do
+    with :ok <- check_proc_vars(p, ctx), do: check_proc_vars(q, ctx)
+  end
+
+  # Check that all variables in a value are bound
+  defp check_val_vars({:var, name}, ctx) do
+    if MapSet.member?(ctx, name) do
+      :ok
+    else
+      {:error, "unbound variable #{name}"}
+    end
+  end
+
+  defp check_val_vars({:nat, _}, _ctx), do: :ok
+  defp check_val_vars(:b0, _ctx), do: :ok
+  defp check_val_vars(:b1, _ctx), do: :ok
+  defp check_val_vars(:tt, _ctx), do: :ok
+
+  defp check_val_vars({:tup, a, b}, ctx) do
+    with :ok <- check_val_vars(a, ctx), do: check_val_vars(b, ctx)
+  end
+
+  defp check_val_vars({:rec, fields}, ctx) when is_list(fields) do
+    Enum.reduce_while(fields, :ok, fn {_name, val}, :ok ->
+      case check_val_vars(val, ctx) do
+        :ok -> {:cont, :ok}
+        err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp check_val_vars(_, _ctx), do: :ok
 
   # The boundary is `Place.conform`. The payload stays on the session.
   defp move_sits(scheme, place, mark) do

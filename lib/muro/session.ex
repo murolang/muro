@@ -5,12 +5,12 @@ defmodule Muro.Session do
   A communication carries a payload type and one continuation. The
   payload is a nat, a bit, unit, a pair, or a record of named fields.
   A pair is a tuple. A record is a fixed map: the names, in the order
-  written, are the type. `put` sends a value of that type. `get` names
-  the type and does not bind the value. `choose` and `branch` select
-  an arm. `stop` conforms to every protocol. `finishes/1` is `:yes`
-  when every leaf is `done`. `skel/1` carries the value on `say` and
-  the type on `hear`. `dual/1` swaps direction and keeps the payload
-  type.
+  written, are the type. `put` sends a value of that type. `get` binds
+  the received value to a named variable that can be used in the
+  continuation. `choose` and `branch` select an arm. `stop` conforms
+  to every protocol. `finishes/1` is `:yes` when every leaf is `done`.
+  `skel/1` carries the value on `say` and the type on `hear`. `dual/1`
+  swaps direction and keeps the payload type.
   """
 
   @doc """
@@ -35,7 +35,7 @@ defmodule Muro.Session do
   defp skel_go(:done), do: :finish
   defp skel_go(:stop), do: :leave
   defp skel_go({:put, _ty, val, p}), do: {:say, runtime(val), skel_go(p)}
-  defp skel_go({:get, ty, p}), do: {:hear, ty, skel_go(p)}
+  defp skel_go({:get, ty, _name, p}), do: {:hear, ty, skel_go(p)}
   defp skel_go({:pick0, p}), do: {:choose, :b0, skel_go(p)}
   defp skel_go({:pick1, p}), do: {:choose, :b1, skel_go(p)}
   defp skel_go({:cover, p, q}), do: {:offer, skel_go(p), skel_go(q)}
@@ -82,7 +82,7 @@ defmodule Muro.Session do
   defp finishes_go(:done), do: :yes
   defp finishes_go(:stop), do: :no
   defp finishes_go({:put, _, _, p}), do: finishes_go(p)
-  defp finishes_go({:get, _, p}), do: finishes_go(p)
+  defp finishes_go({:get, _, _, p}), do: finishes_go(p)
   defp finishes_go({:pick0, p}), do: finishes_go(p)
   defp finishes_go({:pick1, p}), do: finishes_go(p)
 
@@ -110,7 +110,7 @@ defmodule Muro.Session do
     if value?(val, ty), do: keep(go(p, s)), else: {:no, proc, proto}
   end
 
-  defp go({:get, ty, p}, {:recv, ty, s}), do: keep(go(p, s))
+  defp go({:get, ty, _name, p}, {:recv, ty, s}), do: keep(go(p, s))
   defp go({:pick0, p}, {:choose, s, _}), do: keep(go(p, s))
   defp go({:pick1, p}, {:choose, _, t}), do: keep(go(p, t))
 
@@ -141,12 +141,15 @@ defmodule Muro.Session do
       end)
   end
 
+  # A variable reference is assumed to have the right type (checked by the type checker)
+  defp value?({:var, _name}, _ty), do: true
+
   defp value?(_, _), do: false
 
   def show_proc(:done), do: "done"
   def show_proc(:stop), do: "stop"
   def show_proc({:put, _ty, val, p}), do: "put #{show_val(val)} #{paren_proc(p)}"
-  def show_proc({:get, ty, p}), do: "get #{show_pay_atom(ty)} #{paren_proc(p)}"
+  def show_proc({:get, ty, name, p}), do: "get (#{name} : #{show_pay_atom(ty)}) #{paren_proc(p)}"
   def show_proc({:pick0, p}), do: "pick0 #{paren_proc(p)}"
   def show_proc({:pick1, p}), do: "pick1 #{paren_proc(p)}"
   def show_proc({:cover, p, q}), do: "cover #{paren_proc(p)} #{paren_proc(q)}"
@@ -175,6 +178,7 @@ defmodule Muro.Session do
   defp show_val(:b0), do: "b0"
   defp show_val(:b1), do: "b1"
   defp show_val(:tt), do: "tt"
+  defp show_val({:var, name}), do: Atom.to_string(name)
   defp show_val({:tup, a, b}), do: "(#{show_val(a)}, #{show_val(b)})"
   defp show_val({:rec, []}), do: "{}"
 

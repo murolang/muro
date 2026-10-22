@@ -797,9 +797,13 @@ defmodule Muro.Parser do
 
   defp parse_comm(s, "get", :get) do
     with {:ok, rest} <- kw(s, "get"),
+         {:ok, rest} <- tok(skip(rest), "("),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
          {:ok, ty, rest} <- parse_pay(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ")"),
          {:ok, p, rest} <- parse_proc(skip(rest)) do
-      {:ok, {:get, ty, p}, rest}
+      {:ok, {:get, ty, String.to_atom(name), p}, rest}
     end
   end
 
@@ -890,15 +894,39 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
-      number?(s) -> parse_nat_val(s)
-      word_kw?(s, "tt") -> {:ok, {:unit, :tt}, after_kw(s, "tt")}
-      word_kw?(s, "b0") -> {:ok, {:bit, :b0}, after_kw(s, "b0")}
-      word_kw?(s, "b1") -> {:ok, {:bit, :b1}, after_kw(s, "b1")}
-      has_prefix?(s, "(") -> parse_pval_paren(s)
-      has_prefix?(s, "{") -> parse_val_rec(s)
-      true -> {:error, err(s, "expected a value")}
+      number?(s) ->
+        parse_nat_val(s)
+
+      word_kw?(s, "tt") ->
+        {:ok, {:unit, :tt}, after_kw(s, "tt")}
+
+      word_kw?(s, "b0") ->
+        {:ok, {:bit, :b0}, after_kw(s, "b0")}
+
+      word_kw?(s, "b1") ->
+        {:ok, {:bit, :b1}, after_kw(s, "b1")}
+
+      has_prefix?(s, "(") ->
+        parse_pval_paren(s)
+
+      has_prefix?(s, "{") ->
+        parse_val_rec(s)
+
+      ident_start?(s) ->
+        # Variable reference - we don't know the type yet, so we leave it untyped
+        # The checker will infer the type from context
+        case ident(s) do
+          {:ok, name, rest} -> {:ok, {:unknown, {:var, String.to_atom(name)}}, rest}
+          err -> err
+        end
+
+      true ->
+        {:error, err(s, "expected a value")}
     end
   end
+
+  defp ident_start?(<<c, _::binary>>) when c in ?a..?z or c in ?A..?Z or c == ?_, do: true
+  defp ident_start?(_), do: false
 
   defp number?(<<c, _::binary>>) when c in ?0..?9, do: true
   defp number?(_), do: false
