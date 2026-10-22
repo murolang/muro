@@ -45,6 +45,9 @@ defmodule Muro.Check do
       %{kind: :meet} ->
         {:skip, "#{name} is a meeting, not a definition"}
 
+      %{kind: :talk} ->
+        {:skip, "#{name} is a talk, not a definition"}
+
       d ->
         {:ok, d}
     end
@@ -1939,6 +1942,19 @@ defmodule Muro.Check do
     end
   end
 
+  # The description expands. A name that refers to itself has no
+  # description. A party with no session is refused on the session.
+  # A talk is spec.
+  def check_def(book, %{kind: :talk, name: name, body: body} = d, _fuel) do
+    case expand_talk(book, body, MapSet.new([name])) do
+      {:ok, _} ->
+        :ok
+
+      {:error, msg} ->
+        {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+    end
+  end
+
   # Muro.Meet.decide. Both names are processes. The protocol of one is
   # the other end of the other, and then the bits meet. A protocol that
   # is not the other end is reported before a bit they do not share.
@@ -2006,7 +2022,9 @@ defmodule Muro.Check do
   defp fetch_session(book, name), do: resolve_session(book, name, MapSet.new())
 
   # Walk `dual` to a protocol. The mark of an omitted dual is the mark
-  # at the end of that walk. `dual (dual S)` is `S`.
+  # at the end of that walk. `dual (dual S)` is `S`. A `seen` session is
+  # the protocol one party has with another in the description. Its mark
+  # is the mark written on the session. The talk cycle is its own set.
   defp resolve_session(book, name, seen) do
     if MapSet.member?(seen, name) do
       {:error, "dual cycle"}
@@ -2021,11 +2039,44 @@ defmodule Muro.Check do
             {:ok, %{s | proto: Muro.Session.dual(base.proto), mult: mark}}
           end
 
+        %{proto: {:seen, p, q, talk}} = s ->
+          with {:ok, tree} <- resolve_talk_name(book, talk, MapSet.new()),
+               {:ok, proto} <- Muro.Talk.seen(p, q, tree) do
+            {:ok, %{s | proto: proto}}
+          end
+
         s ->
           {:ok, s}
       end
     end
   end
+
+  # Names expand before `seen`. Two names of one body are one description.
+  # The stack is the talks currently being expanded, not the dual walk.
+  defp resolve_talk_name(book, name, stack) do
+    if MapSet.member?(stack, name) do
+      {:error, "talk cycle"}
+    else
+      case Enum.find(book, &(Map.get(&1, :kind) == :talk and &1.name == name)) do
+        nil ->
+          {:error, "unknown talk #{name}"}
+
+        %{body: body} ->
+          expand_talk(book, body, MapSet.put(stack, name))
+      end
+    end
+  end
+
+  defp expand_talk(_book, :over, _stack), do: {:ok, :over}
+
+  defp expand_talk(book, {tag, a, b, t0, t1}, stack) when tag in [:say, :offer] do
+    with {:ok, u0} <- expand_talk(book, t0, stack),
+         {:ok, u1} <- expand_talk(book, t1, stack) do
+      {:ok, {tag, a, b, u0, u1}}
+    end
+  end
+
+  defp expand_talk(book, {:ref, name}, stack), do: resolve_talk_name(book, name, stack)
 
   defp agreed_mark(:inherit, mark), do: {:ok, mark}
   defp agreed_mark(mark, mark), do: {:ok, mark}
@@ -2109,8 +2160,8 @@ defmodule Muro.Check do
   defp rec_mode?(mode), do: mode in [:run, :evidence, :spec]
 
   # A session, a conformance, a place, a scheme, a move, an endpoint, a
-  # reading, and a meeting have a mode and no term, so they are outside
-  # the descent block.
+  # reading, a meeting, and a description have a mode and no term, so
+  # they are outside the descent block.
   defp rec_names(book) do
     for %{mode: mode, name: name} = d <- book,
         rec_mode?(mode),
@@ -2122,7 +2173,8 @@ defmodule Muro.Check do
           :move,
           :endpoint,
           :read,
-          :meet
+          :meet,
+          :talk
         ],
         do: name
   end

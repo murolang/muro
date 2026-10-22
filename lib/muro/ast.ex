@@ -394,7 +394,8 @@ defmodule Muro.Ast do
             :move,
             :endpoint,
             :read,
-            :meet
+            :meet,
+            :talk
           ] ->
             {:ok, d}
 

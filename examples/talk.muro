@@ -1,0 +1,34 @@
+-- talk.muro — one description, and each party has a session.
+-- The description is spec. A run definition has no seat.
+
+talk ping-exchange := say peer pong over (say pong peer over over)
+
+session ping := seen pong with peer in ping-exchange
+
+session back := seen peer with pong in ping-exchange
+
+conform pong : ping := get b1 (put b0 done)
+
+conform peer : back := put b1 (get b0 done)
+
+meet wire : pong with peer
+
+talk both-arms := say a b (say b c over over) (say b c over over)
+
+session ab := seen a with b in both-arms
+
+session bc := seen b with c in both-arms
+
+session ac := seen a with c in both-arms
+
+talk arm := offer a b over (say a b over over)
+
+session choice := seen a with b in arm
+
+session offered := seen b with a in arm
+
+conform taker : choice := pick0 done
+
+conform giver : offered := cover done (get b0 done)
+
+def kept : run Nat := 0

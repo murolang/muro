@@ -118,6 +118,12 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      talk_start?(s) ->
+        case parse_talk(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
       true ->
         case parse_def(s) do
           {:ok, d, rest} -> parse_book(rest, [d | acc])
@@ -270,14 +276,33 @@ defmodule Muro.Parser do
 
   # session back := dual ping
   # The other end of ping. The mark stays on ping.
+  # session ping := seen pong with peer in ping-exchange
+  # The session pong has with peer in that description. The mark is
+  # the mark written here. `seen` is a keyword only in this form.
   defp parse_session_proto(s) do
-    if word_kw?(s, "dual") do
-      with {:ok, rest} <- kw(s, "dual"),
-           {:ok, name, rest} <- ident(skip(rest)) do
-        {:ok, {:dual, name}, rest}
-      end
-    else
-      parse_proto(s)
+    cond do
+      word_kw?(s, "dual") ->
+        with {:ok, rest} <- kw(s, "dual"),
+             {:ok, name, rest} <- ident(skip(rest)) do
+          {:ok, {:dual, name}, rest}
+        end
+
+      word_kw?(s, "seen") ->
+        parse_seen(s)
+
+      true ->
+        parse_proto(s)
+    end
+  end
+
+  defp parse_seen(s) do
+    with {:ok, rest} <- kw(s, "seen"),
+         {:ok, p, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "with"),
+         {:ok, q, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "in"),
+         {:ok, talk, rest} <- ident(skip(rest)) do
+      {:ok, {:seen, p, q, talk}, rest}
     end
   end
 
@@ -525,6 +550,68 @@ defmodule Muro.Parser do
     end
   end
 
+  # talk ping-exchange := say peer pong over (say pong peer over over)
+  # The description is spec. `talk`, `over`, `say`, and `offer` are
+  # keywords only in this form. A constructor `talk : Box` is not one.
+  defp talk_start?(s), do: assign_entry?(s, "talk")
+
+  defp parse_talk(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "talk"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, body, rest} <- parse_talk_term(skip(rest)) do
+      {:ok, %{kind: :talk, name: name, mode: :spec, body: body, loc: loc}, rest}
+    end
+  end
+
+  defp parse_talk_term(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "over") ->
+        {:ok, :over, after_kw(s, "over")}
+
+      word_kw?(s, "say") ->
+        parse_talk2(s, "say", :say)
+
+      word_kw?(s, "offer") ->
+        parse_talk2(s, "offer", :offer)
+
+      has_prefix?(s, "(") ->
+        parse_paren(s, &parse_talk_term/1)
+
+      true ->
+        with {:ok, name, rest} <- ident(s) do
+          {:ok, {:ref, name}, rest}
+        end
+    end
+  end
+
+  defp parse_talk2(s, word, tag) do
+    with {:ok, rest} <- kw(s, word),
+         {:ok, a, rest} <- parse_party(skip(rest)),
+         {:ok, b, rest} <- parse_party(skip(rest)),
+         {:ok, t0, rest} <- parse_talk_term(skip(rest)),
+         {:ok, t1, rest} <- parse_talk_term(skip(rest)) do
+      {:ok, {tag, a, b, t0, t1}, rest}
+    end
+  end
+
+  # A party is a name. `over`, `say`, and `offer` stay the description words.
+  defp parse_party(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "over") or word_kw?(s, "say") or word_kw?(s, "offer") ->
+        {:error, err(s, "expected a party")}
+
+      true ->
+        ident(s)
+    end
+  end
+
   # A meeting is `meet name :`. A constructor `meet : Box` is not one.
   defp meet_entry?(s) do
     if word_kw?(s, "meet") do
@@ -672,7 +759,7 @@ defmodule Muro.Parser do
       word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
         word_kw?(s, "session") or word_kw?(s, "conform") or nu_start?(s) or
         place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
-        endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) ->
+        endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or talk_start?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
@@ -845,13 +932,14 @@ defmodule Muro.Parser do
 
   # `session` and `conform` use `:=`, so ctor_decl_start? does not see
   # them. A new line that starts either form, or a place, scheme, move,
-  # endpoint, reading, or meeting entry, ends the constructor's type.
+  # endpoint, reading, meeting, or talk entry, ends the constructor's type.
   defp session_line?(s, s0) do
     skipped = binary_part(s, 0, byte_size(s) - byte_size(s0))
 
     String.contains?(skipped, "\n") and
       (session_start?(s0) or conform_start?(s0) or place_entry?(s0) or scheme_entry?(s0) or
-         move_entry?(s0) or endpoint_entry?(s0) or read_entry?(s0) or meet_entry?(s0))
+         move_entry?(s0) or endpoint_entry?(s0) or read_entry?(s0) or meet_entry?(s0) or
+         talk_start?(s0))
   end
 
   defp starts_atom?(s) do

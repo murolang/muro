@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.51
+
+A session can be the session one party has with another in one description of the exchange. `talk ping-exchange := say peer pong over (say pong peer over over)` is that description. `session ping := seen pong with peer in ping-exchange` is `recv end (send end end)`. The other party has the other end. A run term has no seat.
+
+### Manual
+
+- Grammar, Terms, and Examples: one description, and each party has a session.
+- Extending: the checker follows the description.
+
+### Package
+
+- Version 0.16.51.
+
 ## 0.16.50
 
 One description covers the exchange. Each party has the session that description gives them on the channel with one other party. The other party has the other end. A party off that channel has a session only when both continuations are the same description. A run term has no seat.

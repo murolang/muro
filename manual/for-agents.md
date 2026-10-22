@@ -87,6 +87,7 @@ lib/muro/print.ex       surface syntax, locations, hole messages
 lib/muro/subst.ex       de Bruijn subst
 lib/muro/check.ex       Elixir mirror of ⊢
 lib/muro/session.ex     session / conform, mirror of decide and finishes
+lib/muro/talk.ex        one description of an exchange, mirror of seen
 lib/muro/place.ex       place / scheme / move, mirror of decide
 lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
@@ -105,7 +106,7 @@ agda/Muro/Check.agda    the decision procedure: structural on the term, fuel onl
 agda/Muro/Session.agda  affine session judgment; %1 must finish; decide searches, skel is the OTP actions
 agda/Muro/Dual.agda     the other end of a session; `session name := dual name` follows it
 agda/Muro/Meet.agda     two processes on one channel; a send meets a receive of the same bit; `meet name : left with right` follows it
-agda/Muro/Talk.agda     one description of an exchange; each party has a session; the other party has the other end
+agda/Muro/Talk.agda     one description of an exchange; each party has a session; `session name := seen party with party in talk` follows it
 agda/Muro/Arrow.agda    %1 on a Π binder must be used; both marks are the affine quantity
 agda/Muro/Place.agda    placement coeffect; ambient by default; one boundary; run has no seat
 agda/Muro/Located.agda  a session at a place; `endpoint` and `read` follow the sitting; `--node` follows a cross reading; `--backend otp` follows the process
