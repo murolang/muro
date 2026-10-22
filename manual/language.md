@@ -11,7 +11,7 @@ In brief: one sort `Type`. Binders are written. Application is juxtaposition. `m
 
 ## The book
 
-A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `session`, `conform`, `place`, `scheme`, `move`, `endpoint`, `read`, and `def` entries.
+A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `session`, `conform`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, and `def` entries.
 
 ```
 def name : tag type := body
@@ -21,7 +21,7 @@ The tag is `run`, `run internal`, `spec`, or `evidence`. There is no other tag.
 
 Forward references are allowed. The checker sees every definition when it checks any one of them.
 
-Definitions, data types, constructors, sessions, conformances, places, and schemes share one set of names. Each name is declared once.
+Definitions, data types, constructors, sessions, conformances, places, schemes, and meetings share one set of names. Each name is declared once.
 
 ## Session
 
@@ -51,7 +51,15 @@ conform peer : back := put b1 (get b0 done)
 
 `peer` sends `b1` and then receives `b0`. `examples/dual.muro` is that book.
 
-The checker sees the whole book, so a `conform` may name a session declared later, and a dual session may name a session declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
+Two processes are one exchange when a send is a receive of that bit and each session is the other end of the other.
+
+```
+meet wire : pong with peer
+```
+
+`pong` is `get b1 (put b0 done)` on `ping`. `peer` is `put b1 (get b0 done)` on `back`. A choice meets the arm that was offered. Both ends close, or both abandon. A run term has no seat. `examples/meet.muro` is that book.
+
+The checker sees the whole book, so a `conform` may name a session declared later, a dual session may name a session declared later, and a meeting may name a process declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
 
 ## Place
 

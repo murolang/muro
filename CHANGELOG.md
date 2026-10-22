@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.48
+
+Two processes can be written as one session. `meet wire : pong with peer` is the evidence that they exchange the same bits, and that each session is the other end of the other. A run term has no seat.
+
+### Manual
+
+- Grammar, Terms, Examples: two processes meet.
+- Extending: the checker follows the meeting.
+
+### Package
+
+- Version 0.16.48.
+
 ## 0.16.47
 
 Two processes can be the two ends of one session. A send meets a receive of the same bit, and a choice meets the arm that was offered. Both ends close, or both abandon. A bit they do not share has no derivation. A run term has no seat.

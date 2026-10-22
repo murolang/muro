@@ -68,6 +68,24 @@ A bit the other end does not name, a mark other than the named session's mark, o
 
 See [Terms](language.md#session).
 
+## meet.muro
+
+Two processes on one session. The meeting is evidence. The run emitters omit it.
+
+```
+session ping := recv end (send end end)
+session back := dual ping
+conform pong : ping := get b1 (put b0 done)
+conform peer : back := put b1 (get b0 done)
+meet wire : pong with peer
+```
+
+`pong` receives `b1` and sends `b0`. `peer` is the other end, so it sends `b1` and receives `b0`. `wire` is the evidence that those two processes are that exchange. `arm` is a choice: `pick0 done` meets `cover done (get b0 done)`. `drop` is both ends abandoning after `b0`. `kept` is the run definition in the same file. `mix muro.emit examples/meet.muro` emits `kept`.
+
+A process whose session is not the other end, or a bit the two processes do not share, is refused. Those books live in `test/muro_meet_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#session).
+
 ## arrow.muro
 
 A `%1` binder must be used. A `%0` binder, and an unmarked binder, may be dropped.

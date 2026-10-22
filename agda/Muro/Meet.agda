@@ -6,8 +6,8 @@
 --
 -- The meeting is evidence. One end conforms to the protocol. The
 -- other conforms to the other end of that protocol. A run term has
--- no seat. This is not a source syntax. None of these constructors
--- is added to Tm or PTm.
+-- no seat. None of these constructors is added to Tm or PTm. The
+-- Elixir checker follows the meeting: `meet name : left with right`.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
