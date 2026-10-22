@@ -26,8 +26,8 @@ open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans
 open import Muro.Base using (Mode; evid; run)
 open import Muro.Session using
   ( Proto; nat; end; send; recv; choose
-  ; Proc; done; stop; put; get; zero; suc
-  ; Conforms; done-end; put-ok; get-ok; pick0-ok; cover-ok
+  ; Proc; done; stop; put; get; zero; suc; lit
+  ; Conforms; done-end; put-ok; get-ok; pick0-ok; cover-ok; lit-ok
   )
 open import Muro.Dual using (dual)
 open import Muro.Place using (Place; ambient; node; Bounds; none; one)

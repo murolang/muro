@@ -260,5 +260,5 @@ choice-channel : Channel taker giver choice
 choice-channel =
   channel choice-meet (pick0-ok done-end) (cover-ok done-end (get-ok done-end))
 
-not-arm : ¬ Meets (pick0 done) (cover (put nat zero done) done)
+not-arm : ¬ Meets (pick0 done) (cover (put nat (lit zero) done) done)
 not-arm (pick0-cover ())
