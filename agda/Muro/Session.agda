@@ -4,8 +4,8 @@
 -- a nat, a bit, unit, a pair, or a record of named fields. A pair
 -- is a tuple. A record is a fixed map: the names are the type, and
 -- a pair around a record is a tuple wrapping that map. An open map,
--- whose keys are chosen at run time, is not a type. The continuation
--- does not depend on the value.
+-- whose keys are chosen at run time, is not a type. The `get`
+-- continuation is a function of the received value.
 --
 -- `send A S` sends a value of type A and continues as S. `recv A S`
 -- receives one. Any value of that type conforms. `choose` and
@@ -30,12 +30,12 @@
 -- meeting.
 ------------------------------------------------------------------------
 
--- {-# OPTIONS --safe #-}  -- Disabled due to postulates for decidability
+{-# OPTIONS --safe #-}
 
 module Muro.Session where
 
 open import Data.Empty using (⊥)
-open import Data.Sum using (_⊎_; inj₁; inj₂)
+open import Data.Sum using (_⊎_; inj₁; inj₂; case_of_)
 open import Data.String.Base using (String)
 open import Data.String.Properties using (_≟_)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
@@ -81,6 +81,14 @@ data Val where
   tt   : Val unit
   tup  : ∀ {A B} → Val A → Val B → Val (pair A B)
   rec  : ∀ {fs} → Row fs → Val (rec fs)
+
+------------------------------------------------------------------------
+-- Value expressions: literals or variable references
+------------------------------------------------------------------------
+
+data ValExpr : Ty → Set where
+  lit : ∀ {A} → Val A → ValExpr A
+  var : ∀ {A} → String → ValExpr A
 
 mutual
   fields≟ : (fs gs : Fields) → Dec (fs ≡ gs)
@@ -144,36 +152,54 @@ protoMode = spec
 
 ------------------------------------------------------------------------
 -- The process is the run's actions on the channel. `put` sends a
--- value of the payload type. `get` receives a value of that type
--- and binds it: the continuation is a function from the received
--- value to the next step. The continuation must conform for every
--- possible received value. `pick0` and `pick1` are the process's
--- choice. `cover` offers both branches. `stop` uses the channel
--- no further.
+-- value expression (literal or variable). `get` receives a value
+-- and binds it to a named variable. The continuation may reference
+-- that variable. `pick0` and `pick1` are the process's choice.
+-- `cover` offers both branches. `stop` uses the channel no further.
 ------------------------------------------------------------------------
 
 data Proc : Set where
   done  : Proc
   stop  : Proc
-  put   : (A : Ty) → Val A → Proc → Proc
-  get   : (A : Ty) → (Val A → Proc) → Proc
+  put   : (A : Ty) → ValExpr A → Proc → Proc
+  get   : (A : Ty) → String → Proc → Proc
   pick0 : Proc → Proc
   pick1 : Proc → Proc
   cover : Proc → Proc → Proc
 
-data Conforms : Proc → Proto → Set where
-  done-end : Conforms done end
+------------------------------------------------------------------------
+-- Variable context: list of (name, type) pairs
+------------------------------------------------------------------------
 
-  abandon : ∀ {S} → Conforms stop S
+open import Data.List.Base using (List; []; _∷_)
 
-  put-ok : ∀ {A v P S} → Conforms P S → Conforms (put A v P) (send A S)
+Ctx : Set
+Ctx = List (String × Ty)
 
-  get-ok : ∀ {A f S} → (∀ v → Conforms (f v) S) → Conforms (get A f) (recv A S)
+-- Variable lookup in context
+data _∈_∷_ : String → Ctx → Ty → Set where
+  here  : ∀ {x A Γ} → x ∈ ((x , A) ∷ Γ) ∷ A
+  there : ∀ {x y A B Γ} → x ∈ Γ ∷ A → x ∈ ((y , B) ∷ Γ) ∷ A
 
-  pick0-ok : ∀ {P S T} → Conforms P S → Conforms (pick0 P) (choose S T)
-  pick1-ok : ∀ {P S T} → Conforms P T → Conforms (pick1 P) (choose S T)
+-- Well-scoped value expressions
+data ValExprOk : Ctx → ∀ {A} → ValExpr A → Set where
+  lit-ok : ∀ {Γ A} {v : Val A} → ValExprOk Γ (lit v)
+  var-ok : ∀ {Γ A} {x : String} → x ∈ Γ ∷ A → ValExprOk Γ (var {A} x)
 
-  cover-ok : ∀ {P Q S T} → Conforms P S → Conforms Q T → Conforms (cover P Q) (branch S T)
+-- Conformance with variable context
+data Conforms : Ctx → Proc → Proto → Set where
+  done-end : ∀ {Γ} → Conforms Γ done end
+
+  abandon : ∀ {Γ S} → Conforms Γ stop S
+
+  put-ok : ∀ {Γ A v P S} → ValExprOk Γ v → Conforms Γ P S → Conforms Γ (put A v P) (send A S)
+
+  get-ok : ∀ {Γ A x P S} → Conforms ((x , A) ∷ Γ) P S → Conforms Γ (get A x P) (recv A S)
+
+  pick0-ok : ∀ {Γ P S T} → Conforms Γ P S → Conforms Γ (pick0 P) (choose S T)
+  pick1-ok : ∀ {Γ P S T} → Conforms Γ P T → Conforms Γ (pick1 P) (choose S T)
+
+  cover-ok : ∀ {Γ P Q S T} → Conforms Γ P S → Conforms Γ Q T → Conforms Γ (cover P Q) (branch S T)
 
 conformMode : Mode
 conformMode = evid
@@ -217,25 +243,25 @@ ping : Proto
 ping = recv nat (send nat end)
 
 pong : Proc
-pong = get nat (λ _ → put nat one done)
+pong = get nat "x" (put nat (lit one) done)
 
-pong-ok : Conforms pong ping
-pong-ok = get-ok (λ _ → put-ok done-end)
+pong-ok : Conforms [] pong ping
+pong-ok = get-ok (put-ok lit-ok done-end)
 
-other-nat : Conforms (get nat (λ _ → put nat zero done)) ping
-other-nat = get-ok (λ _ → put-ok done-end)
+other-nat : Conforms [] (get nat "x" (put nat (lit zero) done)) ping
+other-nat = get-ok (put-ok lit-ok done-end)
 
 -- Echo: receive a value and send it back.
 echo : Proc
-echo = get nat (λ v → put nat v done)
+echo = get nat "v" (put nat (var "v") done)
 
-echo-ok : Conforms echo ping
-echo-ok = get-ok (λ v → put-ok done-end)
+echo-ok : Conforms [] echo ping
+echo-ok = get-ok (put-ok (var-ok here) done-end)
 
-here-ok : Conforms (put box here done) (send box end)
-here-ok = put-ok done-end
+here-ok : Conforms [] (put box (lit here) done) (send box end)
+here-ok = put-ok lit-ok done-end
 
-there-ok : Conforms (put box there done) (send box end)
+there-ok : Conforms [] (put box (lit there) done) (send box end)
 there-ok = put-ok done-end
 
 not-type : ¬ Conforms (put nat zero done) (send box end)
@@ -246,164 +272,166 @@ swapped : ¬ Conforms (put nat zero done) (recv nat end)
 swapped ()
 
 -- The continuation is end, so a second send has no derivation.
-twice : ¬ Conforms (put nat zero (put nat zero done)) (send nat end)
-twice (put-ok ())
+twice : ¬ Conforms [] (put nat (lit zero) (put nat (lit zero) done)) (send nat end)
+twice (put-ok _ (put-ok _ ()))
 
--- The channel is used once and then abandoned. Affine, not linear.
-left-open : Conforms (put nat zero stop) (send nat (send nat end))
-left-open = put-ok abandon
-
-untouched : Conforms stop (send nat end)
+untouched : Conforms [] stop (send nat end)
 untouched = abandon
 
-chosen : Conforms (pick0 done) (choose end (send nat end))
+chosen : Conforms [] (pick0 done) (choose end (send nat end))
 chosen = pick0-ok done-end
 
-both : Conforms (cover done (put box here done)) (branch end (send box end))
-both = cover-ok done-end (put-ok done-end)
+both : Conforms [] (cover done (put box (lit here) done)) (branch end (send box end))
+both = cover-ok done-end (put-ok lit-ok done-end)
 
 ------------------------------------------------------------------------
 -- The search. `yes` carries a derivation. `no` carries its refutation.
 -- The Elixir checker follows `decide`.
 ------------------------------------------------------------------------
 
-data Answer (P : Proc) (S : Proto) : Set where
-  yes : Conforms P S → Answer P S
-  no  : ¬ Conforms P S → Answer P S
+data Answer (Γ : Ctx) (P : Proc) (S : Proto) : Set where
+  yes : Conforms Γ P S → Answer Γ P S
+  no  : ¬ Conforms Γ P S → Answer Γ P S
 
-put-type : ∀ {A B v P S} → Conforms (put A v P) (send B S) → A ≡ B
-put-type (put-ok _) = refl
+-- Decidable variable lookup
+_∈?_∷?_ : (x : String) (Γ : Ctx) (A : Ty) → Dec (x ∈ Γ ∷ A)
+x ∈? [] ∷? A = no′ (λ ())
+x ∈? ((y , B) ∷ Γ) ∷? A with x ≟ y
+... | yes′ refl with ty≟ A B
+... | yes′ refl = yes′ here
+... | no′ ¬eq = case (x ∈? Γ ∷? A) of λ where
+  (yes′ p) → yes′ (there p)
+  (no′ np) → no′ (λ { here → ¬eq refl ; (there p) → np p })
+x ∈? ((y , B) ∷ Γ) ∷? A | no′ _ with x ∈? Γ ∷? A
+... | yes′ p = yes′ (there p)
+... | no′ np = no′ (λ { (there p) → np p })
 
-get-type : ∀ {A B f S} → Conforms (get A f) (recv B S) → A ≡ B
+-- Decide if a value expression is well-scoped
+decideValExpr : ∀ {A} (Γ : Ctx) (v : ValExpr A) → Dec (ValExprOk Γ v)
+decideValExpr Γ (lit v) = yes′ lit-ok
+decideValExpr {A} Γ (var x) with x ∈? Γ ∷? A
+... | yes′ p = yes′ (var-ok p)
+... | no′ np = no′ (λ { (var-ok p) → np p })
+
+put-type : ∀ {Γ A B v P S} → Conforms Γ (put A v P) (send B S) → A ≡ B
+put-type (put-ok _ _) = refl
+
+get-type : ∀ {Γ A B x P S} → Conforms Γ (get A x P) (recv B S) → A ≡ B
 get-type (get-ok _) = refl
 
-on-put : ∀ {A B v P S} → Dec (A ≡ B) → Answer P S → Answer (put A v P) (send B S)
-on-put (yes′ refl) (yes d) = yes (put-ok d)
-on-put (yes′ refl) (no nd) = no (λ { (put-ok d) → nd d })
-on-put (no′ ¬eq) _ = no (λ d → ¬eq (put-type d))
+on-put : ∀ {Γ A B v P S} → Dec (A ≡ B) → Dec (ValExprOk Γ v) → Answer Γ P S → Answer Γ (put A v P) (send B S)
+on-put (yes′ refl) (yes′ vok) (yes d) = yes (put-ok vok d)
+on-put (yes′ refl) (yes′ vok) (no nd) = no (λ { (put-ok _ d) → nd d })
+on-put (yes′ refl) (no′ nvok) _ = no (λ { (put-ok vok _) → nvok vok })
+on-put (no′ ¬eq) _ _ = no (λ d → ¬eq (put-type d))
 
--- Checking get requires checking the continuation for all possible values.
--- This is not constructively decidable, so we postulate it.
--- The Elixir implementation handles this via named variables and substitution.
-postulate
-  check-cont : ∀ {A f S} → (∀ v → Conforms (f v) S) ⊎ (∀ v → ¬ Conforms (f v) S)
+on-get : ∀ {Γ A B x P S} → Dec (A ≡ B) → Answer ((x , A) ∷ Γ) P S → Answer Γ (get A x P) (recv B S)
+on-get (yes′ refl) (yes d) = yes (get-ok d)
+on-get (yes′ refl) (no nd) = no (λ { (get-ok d) → nd d })
+on-get (no′ ¬eq) _ = no (λ d → ¬eq (get-type d))
 
-on-get : ∀ {A B f S} → Dec (A ≡ B) → Answer (get A f) (recv B S)
-on-get {A} {f = f} {S = S} (yes′ refl) with check-cont {A} {f} {S}
-... | inj₁ all-ok = yes (get-ok all-ok)
-... | inj₂ all-fail = no (λ { (get-ok d) → all-fail zero (d zero) })
-on-get (no′ ¬eq) = no (λ d → ¬eq (get-type d))
-
-at0 : ∀ {P S T} → Answer P S → Answer (pick0 P) (choose S T)
+at0 : ∀ {Γ P S T} → Answer Γ P S → Answer Γ (pick0 P) (choose S T)
 at0 (yes d) = yes (pick0-ok d)
 at0 (no nd) = no (λ { (pick0-ok d) → nd d })
 
-at1 : ∀ {P S T} → Answer P T → Answer (pick1 P) (choose S T)
+at1 : ∀ {Γ P S T} → Answer Γ P T → Answer Γ (pick1 P) (choose S T)
 at1 (yes d) = yes (pick1-ok d)
 at1 (no nd) = no (λ { (pick1-ok d) → nd d })
 
-both-of : ∀ {P Q S T} → Answer P S → Answer Q T → Answer (cover P Q) (branch S T)
+both-of : ∀ {Γ P Q S T} → Answer Γ P S → Answer Γ Q T → Answer Γ (cover P Q) (branch S T)
 both-of (yes d) (yes e) = yes (cover-ok d e)
 both-of (no nd) _ = no (λ { (cover-ok d _) → nd d })
 both-of (yes _) (no nd) = no (λ { (cover-ok _ e) → nd e })
 
-decide : (P : Proc) (S : Proto) → Answer P S
-decide done end = yes done-end
-decide done (send _ _) = no (λ ())
-decide done (recv _ _) = no (λ ())
-decide done (choose _ _) = no (λ ())
-decide done (branch _ _) = no (λ ())
-decide stop _ = yes abandon
-decide (put A v P) (send B S) = on-put (ty≟ A B) (decide P S)
-decide (put _ _ _) end = no (λ ())
-decide (put _ _ _) (recv _ _) = no (λ ())
-decide (put _ _ _) (choose _ _) = no (λ ())
-decide (put _ _ _) (branch _ _) = no (λ ())
-decide (get A f) (recv B S) = on-get (ty≟ A B)
-decide (get _ _) end = no (λ ())
-decide (get _ _) (send _ _) = no (λ ())
-decide (get _ _) (choose _ _) = no (λ ())
-decide (get _ _) (branch _ _) = no (λ ())
-decide (pick0 P) (choose S _) = at0 (decide P S)
-decide (pick0 _) end = no (λ ())
-decide (pick0 _) (send _ _) = no (λ ())
-decide (pick0 _) (recv _ _) = no (λ ())
-decide (pick0 _) (branch _ _) = no (λ ())
-decide (pick1 P) (choose _ T) = at1 (decide P T)
-decide (pick1 _) end = no (λ ())
-decide (pick1 _) (send _ _) = no (λ ())
-decide (pick1 _) (recv _ _) = no (λ ())
-decide (pick1 _) (branch _ _) = no (λ ())
-decide (cover P Q) (branch S T) = both-of (decide P S) (decide Q T)
-decide (cover _ _) end = no (λ ())
-decide (cover _ _) (send _ _) = no (λ ())
-decide (cover _ _) (recv _ _) = no (λ ())
-decide (cover _ _) (choose _ _) = no (λ ())
+decide : (Γ : Ctx) (P : Proc) (S : Proto) → Answer Γ P S
+decide Γ done end = yes done-end
+decide Γ done (send _ _) = no (λ ())
+decide Γ done (recv _ _) = no (λ ())
+decide Γ done (choose _ _) = no (λ ())
+decide Γ done (branch _ _) = no (λ ())
+decide Γ stop _ = yes abandon
+decide Γ (put A v P) (send B S) = on-put (ty≟ A B) (decideValExpr Γ v) (decide Γ P S)
+decide Γ (put _ _ _) end = no (λ ())
+decide Γ (put _ _ _) (recv _ _) = no (λ ())
+decide Γ (put _ _ _) (choose _ _) = no (λ ())
+decide Γ (put _ _ _) (branch _ _) = no (λ ())
+decide Γ (get A x P) (recv B S) = on-get (ty≟ A B) (decide ((x , A) ∷ Γ) P S)
+decide Γ (get _ _ _) end = no (λ ())
+decide Γ (get _ _ _) (send _ _) = no (λ ())
+decide Γ (get _ _ _) (choose _ _) = no (λ ())
+decide Γ (get _ _ _) (branch _ _) = no (λ ())
+decide Γ (pick0 P) (choose S _) = at0 (decide Γ P S)
+decide Γ (pick0 _) end = no (λ ())
+decide Γ (pick0 _) (send _ _) = no (λ ())
+decide Γ (pick0 _) (recv _ _) = no (λ ())
+decide Γ (pick0 _) (branch _ _) = no (λ ())
+decide Γ (pick1 P) (choose _ T) = at1 (decide Γ P T)
+decide Γ (pick1 _) end = no (λ ())
+decide Γ (pick1 _) (send _ _) = no (λ ())
+decide Γ (pick1 _) (recv _ _) = no (λ ())
+decide Γ (pick1 _) (branch _ _) = no (λ ())
+decide Γ (cover P Q) (branch S T) = both-of (decide Γ P S) (decide Γ Q T)
+decide Γ (cover _ _) end = no (λ ())
+decide Γ (cover _ _) (send _ _) = no (λ ())
+decide Γ (cover _ _) (recv _ _) = no (λ ())
+decide Γ (cover _ _) (choose _ _) = no (λ ())
 
-pong-decides : decide pong ping ≡ yes pong-ok
+pong-decides : decide [] pong ping ≡ yes pong-ok
 pong-decides = refl
 
-other-nat-decides : decide (get nat (put nat zero done)) ping ≡ yes other-nat
+other-nat-decides : decide [] (get nat "x" (put nat (lit zero) done)) ping ≡ yes other-nat
 other-nat-decides = refl
 
-here-decides : decide (put box here done) (send box end) ≡ yes here-ok
+here-decides : decide [] (put box (lit here) done) (send box end) ≡ yes here-ok
 here-decides = refl
 
-there-decides : decide (put box there done) (send box end) ≡ yes there-ok
+there-decides : decide [] (put box (lit there) done) (send box end) ≡ yes there-ok
 there-decides = refl
 
-left-open-decides : decide (put nat zero stop) (send nat (send nat end)) ≡ yes left-open
+left-open : Conforms [] (put nat (lit zero) stop) (send nat (send nat end))
+left-open = put-ok lit-ok abandon
+
+left-open-decides : decide [] (put nat (lit zero) stop) (send nat (send nat end)) ≡ yes left-open
 left-open-decides = refl
 
-untouched-decides : decide stop (send nat end) ≡ yes untouched
+untouched-decides : decide [] stop (send nat end) ≡ yes untouched
 untouched-decides = refl
 
-chosen-decides : decide (pick0 done) (choose end (send nat end)) ≡ yes chosen
+chosen-decides : decide [] (pick0 done) (choose end (send nat end)) ≡ yes chosen
 chosen-decides = refl
 
-both-decides : decide (cover done (put box here done)) (branch end (send box end)) ≡ yes both
+both-decides : decide [] (cover done (put box (lit here) done)) (branch end (send box end)) ≡ yes both
 both-decides = refl
 
 ------------------------------------------------------------------------
--- The actions a process takes. `say` carries the value. `hear`
--- carries the type. `choose0` and `choose1` are the process's
--- choice. `offer` is both arms. `leave` abandons the channel.
--- `finish` closes it.
+-- The actions a process takes. `say` carries the value expression.
+-- `hear` carries the type and variable name. `choose0` and `choose1`
+-- are the process's choice. `offer` is both arms. `leave` abandons
+-- the channel. `finish` closes it.
 ------------------------------------------------------------------------
 
 data Skel : Set where
   finish  : Skel
   leave   : Skel
-  say     : ∀ {A} → Val A → Skel → Skel
-  hear    : Ty → Skel → Skel
+  say     : ∀ {A} → ValExpr A → Skel → Skel
+  hear    : Ty → String → Skel → Skel
   choose0 : Skel → Skel
   choose1 : Skel → Skel
   offer   : Skel → Skel → Skel
-
--- Witness values for extracting the skeleton of a continuation.
--- The skeleton should be the same for all values.
-witness : (A : Ty) → Val A
-witness nat = zero
-witness bit = b0
-witness unit = tt
-witness (pair A B) = tup (witness A) (witness B)
-witness (rec noFields) = rec noRow
-witness (rec (named _ A fs)) with witness (rec fs)
-... | rec r = rec (cell (witness A) r)
 
 skel : Proc → Skel
 skel done = finish
 skel stop = leave
 skel (put _ v P) = say v (skel P)
-skel (get A f) = hear A (skel (f (witness A)))
+skel (get A x P) = hear A x (skel P)
 skel (pick0 P) = choose0 (skel P)
 skel (pick1 P) = choose1 (skel P)
 skel (cover P Q) = offer (skel P) (skel Q)
 
-pong-skel : skel pong ≡ hear nat (say one finish)
+pong-skel : skel pong ≡ hear nat "x" (say (lit one) finish)
 pong-skel = refl
 
-left-open-skel : skel (put nat zero stop) ≡ say zero leave
+left-open-skel : skel (put nat (lit zero) stop) ≡ say (lit zero) leave
 left-open-skel = refl
 
 untouched-skel : skel stop ≡ leave
@@ -412,7 +440,7 @@ untouched-skel = refl
 chosen-skel : skel (pick0 done) ≡ choose0 finish
 chosen-skel = refl
 
-both-skel : skel (cover done (put box here done)) ≡ offer finish (say here finish)
+both-skel : skel (cover done (put box (lit here) done)) ≡ offer finish (say (lit here) finish)
 both-skel = refl
 
 ------------------------------------------------------------------------
@@ -424,7 +452,7 @@ both-skel = refl
 data Ends : Proc → Set where
   ends-done  : Ends done
   ends-put   : ∀ {A v P} → Ends P → Ends (put A v P)
-  ends-get   : ∀ {A f} → (∀ v → Ends (f v)) → Ends (get A f)
+  ends-get   : ∀ {A x P} → Ends P → Ends (get A x P)
   ends-pick0 : ∀ {P} → Ends P → Ends (pick0 P)
   ends-pick1 : ∀ {P} → Ends P → Ends (pick1 P)
   ends-cover : ∀ {P Q} → Ends P → Ends Q → Ends (cover P Q)
@@ -437,14 +465,9 @@ step-put : ∀ {A v P} → Finish P → Finish (put A v P)
 step-put (ends d) = ends (ends-put d)
 step-put (leaves nd) = leaves (λ { (ends-put d) → nd d })
 
--- Similar to check-cont, we postulate the ability to decide if a continuation finishes for all values.
-postulate
-  check-ends : ∀ {A f} → (∀ v → Ends (f v)) ⊎ (∀ v → ¬ Ends (f v))
-
-step-get : ∀ {A f} → Finish (get A f)
-step-get {A} {f} with check-ends {A} {f}
-... | inj₁ all-end = ends (ends-get all-end)
-... | inj₂ some-leave = leaves (λ { (ends-get d) → some-leave zero (d zero) })
+step-get : ∀ {A x P} → Finish P → Finish (get A x P)
+step-get (ends d) = ends (ends-get d)
+step-get (leaves nd) = leaves (λ { (ends-get d) → nd d })
 
 step-pick0 : ∀ {P} → Finish P → Finish (pick0 P)
 step-pick0 (ends d) = ends (ends-pick0 d)
@@ -463,14 +486,13 @@ finishes : (P : Proc) → Finish P
 finishes done = ends ends-done
 finishes stop = leaves (λ ())
 finishes (put _ _ P) = step-put (finishes P)
-finishes (get _ _) = step-get
+finishes (get _ _ P) = step-get (finishes P)
 finishes (pick0 P) = step-pick0 (finishes P)
 finishes (pick1 P) = step-pick1 (finishes P)
 finishes (cover P Q) = step-cover (finishes P) (finishes Q)
 
--- pong-finishes requires the postulate, so we comment it out for now
--- pong-finishes : finishes pong ≡ ends (ends-get (λ _ → ends-put ends-done))
--- pong-finishes = refl
+pong-finishes : finishes pong ≡ ends (ends-get (ends-put ends-done))
+pong-finishes = refl
 
 stop-finishes : finishes stop ≡ leaves (λ ())
 stop-finishes = refl
