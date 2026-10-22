@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.53
+
+A party of a description can sit at a place. `seat pong-home : pong at home in ping-exchange` is that seating. Two parties who have a session stay when the place is the same, and cross once when the places differ. The bits stay on the session. A run term has no seat.
+
+### Manual
+
+- Grammar, Terms, and Examples: a party sits at a place.
+- Extending: the checker follows the seating.
+
+### Package
+
+- Version 0.16.53.
+
 ## 0.16.52
 
 A party of a description sits at a place. Two parties who have a session stay when that place is the same, and cross once when the places differ. The bits stay on the session. A run term has no seat.

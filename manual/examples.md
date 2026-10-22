@@ -107,6 +107,25 @@ A party the description does not seat, or a description that refers to itself, i
 
 See [Terms](language.md#session).
 
+## seated.muro
+
+A party of a description sits at a place. The seating is spec. The boundary is evidence. The run emitters omit both.
+
+```
+place home := node a
+place away := node b
+talk ping-exchange := say peer pong over (say pong peer over over)
+seat pong-home : pong at home in ping-exchange
+seat peer-away : peer at away in ping-exchange
+link go : cross pong-home with peer-away in ping-exchange
+```
+
+`pong` sits at `home`. `peer` sits at `away`. They have a session, so the boundary crosses once. `peer` at `home` stays with `pong`. Ambient stays with itself, and ambient to a node crosses once. The other direction of a boundary is that same boundary. `ping` is still `recv end (send end end)`, and `pong` receives `b1` and then sends `b0`. `kept` is the run definition in the same file. `mix muro.emit examples/seated.muro` emits `kept`.
+
+A party with no session in the description has no boundary. A `stay` where the places differ, or a `cross` where they are the same, is refused. Those books live in `test/muro_seated_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#session).
+
 ## arrow.muro
 
 A `%1` binder must be used. A `%0` binder, and an unmarked binder, may be dropped.

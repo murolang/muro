@@ -48,6 +48,12 @@ defmodule Muro.Check do
       %{kind: :talk} ->
         {:skip, "#{name} is a talk, not a definition"}
 
+      %{kind: :seat} ->
+        {:skip, "#{name} is a seat, not a definition"}
+
+      %{kind: :link} ->
+        {:skip, "#{name} is a link, not a definition"}
+
       d ->
         {:ok, d}
     end
@@ -1942,6 +1948,44 @@ defmodule Muro.Check do
     end
   end
 
+  # Where a party of a description sits. The description expands, and
+  # the place is declared. A party with no session may still sit.
+  # A seat is spec.
+  def check_def(book, %{kind: :seat, name: name, place: pname, talk: talk} = d, _fuel) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, _} <- resolve_talk_name(book, talk, MapSet.new()),
+         {:ok, _} <- fetch_place(book, pname) do
+      :ok
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
+  # The boundary is `Place.decide` of the two places. Both seats are
+  # that description, and the parties have a session, before the
+  # stated mark is checked. The bit is not on the link. Evidence.
+  def check_def(
+        book,
+        %{kind: :link, name: name, mark: mark, left: left, right: right, talk: talk} = d,
+        _fuel
+      ) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, l} <- fetch_seat(book, left),
+         {:ok, r} <- fetch_seat(book, right),
+         :ok <- one_description(l.talk, r.talk, talk),
+         {:ok, tree} <- resolve_talk_name(book, talk, MapSet.new()),
+         {:ok, _} <- Muro.Talk.seen(l.party, r.party, tree),
+         {:ok, lp} <- fetch_place(book, l.place),
+         {:ok, rp} <- fetch_place(book, r.place),
+         :ok <- boundary_sits(lp.place, rp.place, mark) do
+      :ok
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
   # The description expands. A name that refers to itself has no
   # description. A party with no session is refused on the session.
   # A talk is spec.
@@ -2128,6 +2172,28 @@ defmodule Muro.Check do
     end
   end
 
+  defp fetch_seat(book, name) do
+    case Enum.find(book, &(Map.get(&1, :kind) == :seat and &1.name == name)) do
+      nil -> {:error, "unknown seat #{name}"}
+      s -> {:ok, s}
+    end
+  end
+
+  # Both seats are the description the link names.
+  defp one_description(talk, talk, talk), do: :ok
+  defp one_description(_left, _right, _talk), do: {:error, "expected one description"}
+
+  # `decide` of the two places. The same place stays. Two places cross once.
+  defp boundary_sits(p, q, mark) do
+    actual = Place.decide(p, q)
+
+    if actual == mark do
+      :ok
+    else
+      {:error, "expected #{actual}"}
+    end
+  end
+
   defp fetch_scheme(book, name) do
     case Enum.find(book, &(Map.get(&1, :kind) == :scheme and &1.name == name)) do
       nil -> {:error, "unknown scheme #{name}"}
@@ -2160,8 +2226,8 @@ defmodule Muro.Check do
   defp rec_mode?(mode), do: mode in [:run, :evidence, :spec]
 
   # A session, a conformance, a place, a scheme, a move, an endpoint, a
-  # reading, a meeting, and a description have a mode and no term, so
-  # they are outside the descent block.
+  # reading, a meeting, a description, a seat, and a link have a mode
+  # and no term, so they are outside the descent block.
   defp rec_names(book) do
     for %{mode: mode, name: name} = d <- book,
         rec_mode?(mode),
@@ -2174,7 +2240,9 @@ defmodule Muro.Check do
           :endpoint,
           :read,
           :meet,
-          :talk
+          :talk,
+          :seat,
+          :link
         ],
         do: name
   end

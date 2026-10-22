@@ -11,7 +11,7 @@ In brief: one sort `Type`. Binders are written. Application is juxtaposition. `m
 
 ## The book
 
-A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `talk`, `session`, `conform`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, and `def` entries.
+A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `talk`, `session`, `conform`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `seat`, `link`, and `def` entries.
 
 ```
 def name : tag type := body
@@ -21,7 +21,7 @@ The tag is `run`, `run internal`, `spec`, or `evidence`. There is no other tag.
 
 Forward references are allowed. The checker sees every definition when it checks any one of them.
 
-Definitions, data types, constructors, sessions, conformances, places, schemes, meetings, and talks share one set of names. Each name is declared once.
+Definitions, data types, constructors, sessions, conformances, places, schemes, meetings, talks, seats, and links share one set of names. Each name is declared once.
 
 ## Session
 
@@ -69,7 +69,17 @@ session back := seen peer with pong in ping-exchange
 
 `say` is one party sending a bit to another. The first continuation is `b0` and the second is `b1`. `offer` is one party choosing and the other offering both arms. The sender's session is `send` or `choose`. The receiver's session is `recv` or `branch`. `pong` receiving `b1` and then sending `b0` is `recv end (send end end)`. `peer` has `send end (recv end end)`. A party off that channel has that continuation's session when both continuations are the same description. A run term has no seat. `examples/talk.muro` is that book.
 
-The checker sees the whole book, so a `conform` may name a session declared later, a dual session may name a session declared later, a meeting may name a process declared later, and a session may name a description declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
+A party of that description sits at a place.
+
+```
+seat pong-home : pong at home in ping-exchange
+seat peer-away : peer at away in ping-exchange
+link go : cross pong-home with peer-away in ping-exchange
+```
+
+`pong` sits at `home` and `peer` sits at `away`. They have a session, and the places differ, so the boundary crosses once. The same place stays. The other party reads that same boundary. The bits stay on the session. `examples/seated.muro` is that book.
+
+The checker sees the whole book, so a `conform` may name a session declared later, a dual session may name a session declared later, a meeting may name a process declared later, a session may name a description declared later, and a seat may name a place or a description declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
 
 ## Place
 

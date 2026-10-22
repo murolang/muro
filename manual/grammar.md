@@ -10,7 +10,7 @@ summary: The surface grammar lib/muro/parser.ex implements.
 In brief: this is the grammar `lib/muro/parser.ex` implements. ASCII aliases are in parentheses. If this page and the parser disagree, the parser is the implementation and this page is wrong.
 
 ```
-book       ::= (import | param | nu | data | talk | session | conform | place | scheme | move | endpoint | read | meet | def)*
+book       ::= (import | param | nu | data | talk | session | conform | place | scheme | move | endpoint | read | meet | seat | link | def)*
 import     ::= "import" string             -- a path, relative to this file
 param      ::= "param" ident ":" tag term  -- supplied by an importing file
 nu         ::= ("ν" | "nu") ident binder+ ":" "Type" "where" "uncons" ":" term
@@ -29,6 +29,8 @@ move       ::= "move" ("stay" | "cross") ident ":" ident
 endpoint   ::= "endpoint" ident ":=" ident "at" ident
 read       ::= "read" ("stay" | "cross") ident ":" ident "at" ident ":=" proc
 meet       ::= "meet" ident ":" ident "with" ident
+seat       ::= "seat" ident ":" party "at" ident "in" ident
+link       ::= "link" ident ":" ("stay" | "cross") ident "with" ident "in" ident
 proto      ::= "end" | "(" proto ")"
              | ("send" | "recv" | "choose" | "branch") proto proto
 proc       ::= "done" | "stop" | "(" proc ")"
@@ -94,13 +96,13 @@ A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are iden
 
 `talk`, `over`, `say`, and `offer` are keywords in `talk name := …`. `over` finishes the description. `say` is one party sending a bit: the first continuation is `b0` and the second is `b1`. `offer` is one party choosing. A party is a name. `over`, `say`, and `offer` are not party names. A name in a description is another description. Outside that form they are identifiers, so `def talk : run Nat := 0` and `def say : run Nat := 0` are definitions. The mark on a `seen` session is the mark written there. An omitted mark is `%0`.
 
-`ambient` and `node` are keywords on the right of a `place`. `any` and `fixed` are keywords on the right of a `scheme`. `stay` and `cross` are keywords in a `move`. Outside those forms they are identifiers, so `def stay : run Nat := 0` is a definition. A `place` names `ambient` or `node` followed by a node name. A `scheme` is `any`, or `fixed` followed by a place name. A `move` states `stay` or `cross`, then a scheme name, then a place name.
+`ambient` and `node` are keywords on the right of a `place`. `any` and `fixed` are keywords on the right of a `scheme`. `stay` and `cross` are keywords in a `move`, and in a `link`. Outside those forms they are identifiers, so `def stay : run Nat := 0` is a definition. A `place` names `ambient` or `node` followed by a node name. A `scheme` is `any`, or `fixed` followed by a place name. A `move` states `stay` or `cross`, then a scheme name, then a place name.
 
-`at` is a keyword in an `endpoint` and in a `read`. An `endpoint` names a session and a scheme: `endpoint name := session at scheme`. A `read` states `stay` or `cross`, then a process name, an endpoint name, `at`, a place name, and a process. Outside those forms `endpoint`, `read`, and `at` are identifiers, so `def read : run Nat := 0` is a definition.
+`at` is a keyword in an `endpoint`, in a `read`, and in a `seat`. An `endpoint` names a session and a scheme: `endpoint name := session at scheme`. A `read` states `stay` or `cross`, then a process name, an endpoint name, `at`, a place name, and a process. A `seat` names a party, a place, and a description: `seat name : party at place in talk`. A `link` states `stay` or `cross`, then two seats, `in`, and that description: `link name : stay seat with seat in talk`. Outside those forms `endpoint`, `read`, `at`, `seat`, and `link` are identifiers, so `def seat : run Nat := 0` and `def link : run Nat := 0` are definitions. The same place stays. Two places cross once. The bits stay on the session.
 
 `%0` and `%1` are whole tokens. `%10` is not `%1` followed by `0`. On a session, an unmarked session is `%0`, and `%1` requires the process to finish. On a Π or λ binder, an unmarked binder is `%0`, and `%1` requires the variable to be used. Both marks are the affine quantity. The λ mark and the Π mark must agree.
 
-Inside a `data` block each constructor declaration `ident ":" term` begins on its own line; that is how an application stops before the next constructor. On one line, `f x : Nat` inside `{ … }` is the application `f x` followed by the type. A following line that starts with `session` or `conform`, or with a `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, or `talk` entry, ends that type the same way. A constructor may be named `talk`, `place`, `scheme`, `move`, `endpoint`, `read`, or `meet`: the entry forms are `talk name :=`, `place name :=`, `scheme name :=`, `move stay` or `move cross`, `endpoint name :=`, `read stay` or `read cross`, and `meet name :`. `talk : Type` and `meet : Type` are constructors.
+Inside a `data` block each constructor declaration `ident ":" term` begins on its own line; that is how an application stops before the next constructor. On one line, `f x : Nat` inside `{ … }` is the application `f x` followed by the type. A following line that starts with `session` or `conform`, or with a `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `talk`, `seat`, or `link` entry, ends that type the same way. A constructor may be named `talk`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `seat`, or `link`: the entry forms are `talk name :=`, `place name :=`, `scheme name :=`, `move stay` or `move cross`, `endpoint name :=`, `read stay` or `read cross`, `meet name :`, `seat name :`, and `link name :`. `talk : Type`, `meet : Type`, `seat : Type`, and `link : Type` are constructors.
 
 A `ν` block has one destructor, `uncons`. `ν Stream (A : Type)` is checked for shape and dropped. Any other name declares a family: its binders are the indices, at least one, and the type of `uncons` must be the family applied to them in order, `→` the body ([Streams](streams.md#declared-families)).
 
