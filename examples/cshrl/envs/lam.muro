@@ -1,0 +1,1598 @@
+-- lam.muro — substitution graphs as one environment.
+--
+-- The states are the terms reachable from copy2, copy4, copy8, the
+-- one-use and discarding programs, and len-one, by either substitution.
+-- Each step is one substitution. done is a stopped head: it pays 1
+-- forever. Every earlier step pays 0. The steps until the head stops
+-- are the leading zeros of the return.
+--
+-- policy takes arg at copy, copy4, and copy8, where that call would be
+-- copied. It takes the spine call everywhere else. At len the argument's
+-- call is not the one being copied, and taking it adds a step, so the
+-- spine call stays first.
+import "../std/nat.muro"
+import "../lib/successor.muro"
+import "../lib/agent.muro"
+
+data State : Type where
+  copy : State
+  copy4 : State
+  copy8 : State
+  ready : State
+  ready4 : State
+  ready8 : State
+  len : State
+  affine : State
+  discard : State
+  drop : State
+  w0 : State
+  w1 : State
+  w10 : State
+  w11 : State
+  w12 : State
+  w13 : State
+  w14 : State
+  w15 : State
+  w16 : State
+  w17 : State
+  w18 : State
+  w19 : State
+  w2 : State
+  w20 : State
+  w21 : State
+  w22 : State
+  w23 : State
+  w24 : State
+  w25 : State
+  w26 : State
+  w27 : State
+  w28 : State
+  w29 : State
+  w3 : State
+  w30 : State
+  w31 : State
+  w32 : State
+  w33 : State
+  w34 : State
+  w35 : State
+  w36 : State
+  w37 : State
+  w38 : State
+  w39 : State
+  w4 : State
+  w40 : State
+  w41 : State
+  w42 : State
+  w43 : State
+  w44 : State
+  w45 : State
+  w46 : State
+  w5 : State
+  w6 : State
+  w7 : State
+  w8 : State
+  w9 : State
+  done : State
+
+data Action : Type where
+  arg   : Action
+  spine : Action
+
+def Reward : spec Type := Nat
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Reward)
+      | copy =>
+          (match a motive (λ _ → State × Reward) | arg => (ready, 0) | spine => (w10, 0))
+      | copy4 =>
+          (match a motive (λ _ → State × Reward) | arg => (ready4, 0) | spine => (w23, 0))
+      | copy8 =>
+          (match a motive (λ _ → State × Reward) | arg => (ready8, 0) | spine => (w8, 0))
+      | ready => (w12, 0)
+      | ready4 => (w2, 0)
+      | ready8 => (w37, 0)
+      | len =>
+          (match a motive (λ _ → State × Reward) | arg => (w3, 0) | spine => (w45, 0))
+      | affine =>
+          (match a motive (λ _ → State × Reward) | arg => (w20, 0) | spine => (w4, 0))
+      | discard =>
+          (match a motive (λ _ → State × Reward) | arg => (w29, 0) | spine => (done, 0))
+      | drop =>
+          (match a motive (λ _ → State × Reward) | arg => (w22, 0) | spine => (done, 0))
+      | w0 => (w28, 0)
+      | w1 => (done, 0)
+      | w10 => (w11, 0)
+      | w11 =>
+          (match a motive (λ _ → State × Reward) | arg => (w12, 0) | spine => (w4, 0))
+      | w12 => (w43, 0)
+      | w13 => (w7, 0)
+      | w14 => (w24, 0)
+      | w15 =>
+          (match a motive (λ _ → State × Reward) | arg => (w39, 0) | spine => (w31, 0))
+      | w16 =>
+          (match a motive (λ _ → State × Reward) | arg => (w6, 0) | spine => (done, 0))
+      | w17 => (w26, 0)
+      | w18 =>
+          (match a motive (λ _ → State × Reward) | arg => (w9, 0) | spine => (w25, 0))
+      | w19 =>
+          (match a motive (λ _ → State × Reward) | arg => (w1, 0) | spine => (done, 0))
+      | w2 => (w38, 0)
+      | w20 => (w43, 0)
+      | w21 =>
+          (match a motive (λ _ → State × Reward) | arg => (w27, 0) | spine => (done, 0))
+      | w22 => (done, 0)
+      | w23 => (w24, 0)
+      | w24 =>
+          (match a motive (λ _ → State × Reward) | arg => (w32, 0) | spine => (w17, 0))
+      | w25 => (w15, 0)
+      | w26 =>
+          (match a motive (λ _ → State × Reward) | arg => (w33, 0) | spine => (w10, 0))
+      | w27 => (done, 0)
+      | w28 => (w5, 0)
+      | w29 => (done, 0)
+      | w3 => (w30, 0)
+      | w30 =>
+          (match a motive (λ _ → State × Reward) | arg => (w44, 0) | spine => (w19, 0))
+      | w31 => (w36, 0)
+      | w32 => (w26, 0)
+      | w33 => (w11, 0)
+      | w34 =>
+          (match a motive (λ _ → State × Reward) | arg => (w35, 0) | spine => (w42, 0))
+      | w35 => (w40, 0)
+      | w36 =>
+          (match a motive (λ _ → State × Reward) | arg => (w46, 0) | spine => (w13, 0))
+      | w37 => (w0, 0)
+      | w38 => (w12, 0)
+      | w39 => (w36, 0)
+      | w4 => (w43, 0)
+      | w40 =>
+          (match a motive (λ _ → State × Reward) | arg => (w21, 0) | spine => (done, 0))
+      | w41 =>
+          (match a motive (λ _ → State × Reward) | arg => (w16, 0) | spine => (done, 0))
+      | w42 =>
+          (match a motive (λ _ → State × Reward) | arg => (w19, 0) | spine => (done, 0))
+      | w43 => (done, 0)
+      | w44 => (w21, 0)
+      | w45 =>
+          (match a motive (λ _ → State × Reward) | arg => (w34, 0) | spine => (w41, 0))
+      | w46 => (w7, 0)
+      | w5 => (w2, 0)
+      | w6 => (done, 0)
+      | w7 =>
+          (match a motive (λ _ → State × Reward) | arg => (w14, 0) | spine => (w23, 0))
+      | w8 => (w18, 0)
+      | w9 => (w15, 0)
+      | done => (done, suc 0)
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons arg (cons spine nil)
+def default-action : run Action := spine
+def horizon : run Nat := suc (suc (suc (suc (suc 0))))
+
+def pay : run Π (n : Nat) → Π (d : Nat) → Nat :=
+  λ (n : Nat) → λ (d : Nat) →
+    match d motive (λ _ → Nat)
+      | 0 => suc 0
+      | suc d1 =>
+          (match n motive (λ _ → Nat)
+            | 0 => 0
+            | suc n1 => pay n1 d1)
+
+def dist : run Π (s : State) → Nat :=
+  λ (s : State) →
+    match s motive (λ _ → Nat)
+      | copy => suc (suc (suc (suc (0))))
+      | copy4 => suc (suc (suc (suc (suc (suc (0))))))
+      | copy8 => suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (0))))))))))
+      | ready => suc (suc (suc (0)))
+      | ready4 => suc (suc (suc (suc (suc (0)))))
+      | ready8 => suc (suc (suc (suc (suc (suc (suc (suc (suc (0)))))))))
+      | len => suc (suc (suc (0)))
+      | affine => suc (suc (suc (0)))
+      | discard => suc (0)
+      | drop => suc (0)
+      | w0 => suc (suc (suc (suc (suc (suc (suc (0)))))))
+      | w1 => suc (0)
+      | w10 => suc (suc (suc (suc (0))))
+      | w11 => suc (suc (suc (0)))
+      | w12 => suc (suc (0))
+      | w13 => suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (0))))))))))
+      | w14 => suc (suc (suc (suc (suc (suc (suc (suc (0))))))))
+      | w15 => suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (0)))))))))))))
+      | w16 => suc (0)
+      | w17 => suc (suc (suc (suc (suc (suc (0))))))
+      | w18 => suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (0)))))))))))))))
+      | w19 => suc (0)
+      | w2 => suc (suc (suc (suc (0))))
+      | w20 => suc (suc (0))
+      | w21 => suc (0)
+      | w22 => suc (0)
+      | w23 => suc (suc (suc (suc (suc (suc (suc (suc (0))))))))
+      | w24 => suc (suc (suc (suc (suc (suc (suc (0)))))))
+      | w25 => suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (0))))))))))))))
+      | w26 => suc (suc (suc (suc (suc (0)))))
+      | w27 => suc (0)
+      | w28 => suc (suc (suc (suc (suc (suc (0))))))
+      | w29 => suc (0)
+      | w3 => suc (suc (suc (0)))
+      | w30 => suc (suc (0))
+      | w31 => suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (0))))))))))))
+      | w32 => suc (suc (suc (suc (suc (suc (0))))))
+      | w33 => suc (suc (suc (suc (0))))
+      | w34 => suc (suc (0))
+      | w35 => suc (suc (0))
+      | w36 => suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (0)))))))))))
+      | w37 => suc (suc (suc (suc (suc (suc (suc (suc (0))))))))
+      | w38 => suc (suc (suc (0)))
+      | w39 => suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (0))))))))))))
+      | w4 => suc (suc (0))
+      | w40 => suc (0)
+      | w41 => suc (0)
+      | w42 => suc (0)
+      | w43 => suc (0)
+      | w44 => suc (suc (0))
+      | w45 => suc (suc (0))
+      | w46 => suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (0))))))))))
+      | w5 => suc (suc (suc (suc (suc (0)))))
+      | w6 => suc (0)
+      | w7 => suc (suc (suc (suc (suc (suc (suc (suc (suc (0)))))))))
+      | w8 => suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (0))))))))))))))))
+      | w9 => suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (suc (0))))))))))))))
+      | done => 0
+
+def max-refl : evidence Π (n : Nat) → {maxN n n ≡ n : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → {maxN k k ≡ k : Nat})
+      | 0 => refl
+      | suc p => rewrite max-refl p motive (λ z → {suc z ≡ suc p : Nat}) in refl
+
+def max-same : evidence Π (n : Nat) → {maxN n (maxN n 0) ≡ n : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → {maxN k (maxN k 0) ≡ k : Nat})
+      | 0 => refl
+      | suc p => rewrite max-refl p motive (λ z → {suc z ≡ suc p : Nat}) in refl
+
+def max-zero : evidence Π (n : Nat) → {maxN n 0 ≡ n : Nat} :=
+  λ (n : Nat) →
+    match n motive (λ (k : Nat) → {maxN k 0 ≡ k : Nat})
+      | 0 => refl
+      | suc _ => refl
+
+-- maxN x y is x when y is below x.
+def max-ge : evidence Π (x : Nat) → Π (y : Nat) → Π (yx : Le y x) → {maxN x y ≡ x : Nat} :=
+  λ (x : Nat) → λ (y : Nat) → λ (yx : Le y x) →
+    (match x motive (λ (a : Nat) → Π (b : Nat) → Π (ba : Le b a) → {maxN a b ≡ a : Nat})
+      | 0 =>
+          (λ (b : Nat) →
+            match b motive (λ (c : Nat) → Π (ca : Le c 0) → {maxN 0 c ≡ 0 : Nat})
+              | 0 => λ (_ : Unit) → refl
+              | suc q => λ (ca : Empty) → matchEmpty ca motive (λ _ → {maxN 0 (suc q) ≡ 0 : Nat}))
+      | suc p =>
+          (λ (b : Nat) →
+            match b motive (λ (c : Nat) → Π (ca : Le c (suc p)) → {maxN (suc p) c ≡ suc p : Nat})
+              | 0 => λ (_ : Unit) → refl
+              | suc q => λ (ca : Le q p) →
+                  rewrite max-ge p q ca motive (λ z → {suc z ≡ suc p : Nat}) in refl))
+    y yx
+
+-- maxN x y is y when x is below y.
+def max-ge-right : evidence Π (x : Nat) → Π (y : Nat) → Π (xy : Le x y) → {maxN x y ≡ y : Nat} :=
+  λ (x : Nat) → λ (y : Nat) → λ (xy : Le x y) →
+    (match y motive (λ (b : Nat) → Π (a : Nat) → Π (ab : Le a b) → {maxN a b ≡ b : Nat})
+      | 0 =>
+          (λ (a : Nat) →
+            match a motive (λ (c : Nat) → Π (ca : Le c 0) → {maxN c 0 ≡ 0 : Nat})
+              | 0 => λ (_ : Unit) → refl
+              | suc q => λ (ca : Empty) → matchEmpty ca motive (λ _ → {maxN (suc q) 0 ≡ 0 : Nat}))
+      | suc q =>
+          (λ (a : Nat) →
+            match a motive (λ (c : Nat) → Π (ca : Le c (suc q)) → {maxN c (suc q) ≡ suc q : Nat})
+              | 0 => λ (_ : Unit) → refl
+              | suc p => λ (ca : Le p q) →
+                  rewrite max-ge-right p q ca motive (λ z → {suc z ≡ suc q : Nat}) in refl))
+    x xy
+
+def pay-later : evidence Π (n : Nat) → Π (d : Nat) → Le (pay n (suc d)) (pay n d) :=
+  λ (n : Nat) → λ (d : Nat) →
+    match d motive (λ (e : Nat) → Le (pay n (suc e)) (pay n e))
+      | 0 =>
+          (match n motive (λ (k : Nat) → Le (pay k (suc 0)) (pay k 0))
+            | 0 => tt
+            | suc _ => tt)
+      | suc d1 =>
+          (match n motive (λ (k : Nat) → Le (pay k (suc (suc d1))) (pay k (suc d1)))
+            | 0 => tt
+            | suc p => pay-later p d1)
+
+def pay-le : evidence Π (n : Nat) → Π (d : Nat) → Π (k : Nat) → Le (pay n (plus k d)) (pay n d) :=
+  λ (n : Nat) → λ (d : Nat) → λ (k : Nat) →
+    match k motive (λ (j : Nat) → Le (pay n (plus j d)) (pay n d))
+      | 0 => le-refl (pay n d)
+      | suc k1 =>
+          le-trans (pay n (plus (suc k1) d)) (pay n (plus k1 d)) (pay n d)
+            (pay-later n (plus k1 d)) (pay-le n d k1)
+
+def solve-is : evidence Π (n : Nat) → Π (s : State) → {solve s n ≡ pay n (dist s) : Nat} :=
+  λ (n : Nat) → λ (s : State) →
+    match s motive (λ (x : State) → {solve x n ≡ pay n (dist x) : Nat})
+      | copy =>
+          (match n motive (λ (k : Nat) → {solve copy k ≡ pay k (dist copy) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m ready motive (λ z → {maxN z (maxN (solve w10 m) 0) ≡ pay (suc m) (dist copy) : Nat}) in
+                rewrite solve-is m w10 motive (λ w → {maxN (pay m (dist ready)) (maxN w 0) ≡ pay (suc m) (dist copy) : Nat}) in
+                rewrite max-zero (pay m (dist w10)) motive (λ y → {maxN (pay m (dist ready)) y ≡ pay (suc m) (dist copy) : Nat}) in
+                rewrite max-ge (pay m (dist ready)) (pay m (dist w10)) (pay-le m (dist ready) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist copy) : Nat}) in
+                refl)
+      | copy4 =>
+          (match n motive (λ (k : Nat) → {solve copy4 k ≡ pay k (dist copy4) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m ready4 motive (λ z → {maxN z (maxN (solve w23 m) 0) ≡ pay (suc m) (dist copy4) : Nat}) in
+                rewrite solve-is m w23 motive (λ w → {maxN (pay m (dist ready4)) (maxN w 0) ≡ pay (suc m) (dist copy4) : Nat}) in
+                rewrite max-zero (pay m (dist w23)) motive (λ y → {maxN (pay m (dist ready4)) y ≡ pay (suc m) (dist copy4) : Nat}) in
+                rewrite max-ge (pay m (dist ready4)) (pay m (dist w23)) (pay-le m (dist ready4) suc (suc (suc (0)))) motive (λ z → {z ≡ pay (suc m) (dist copy4) : Nat}) in
+                refl)
+      | copy8 =>
+          (match n motive (λ (k : Nat) → {solve copy8 k ≡ pay k (dist copy8) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m ready8 motive (λ z → {maxN z (maxN (solve w8 m) 0) ≡ pay (suc m) (dist copy8) : Nat}) in
+                rewrite solve-is m w8 motive (λ w → {maxN (pay m (dist ready8)) (maxN w 0) ≡ pay (suc m) (dist copy8) : Nat}) in
+                rewrite max-zero (pay m (dist w8)) motive (λ y → {maxN (pay m (dist ready8)) y ≡ pay (suc m) (dist copy8) : Nat}) in
+                rewrite max-ge (pay m (dist ready8)) (pay m (dist w8)) (pay-le m (dist ready8) suc (suc (suc (suc (suc (suc (suc (0)))))))) motive (λ z → {z ≡ pay (suc m) (dist copy8) : Nat}) in
+                refl)
+      | ready =>
+          (match n motive (λ (k : Nat) → {solve ready k ≡ pay k (dist ready) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w12 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist ready) : Nat}) in
+                rewrite max-same (pay m (dist w12)) motive (λ z → {z ≡ pay (suc m) (dist ready) : Nat}) in
+                refl)
+      | ready4 =>
+          (match n motive (λ (k : Nat) → {solve ready4 k ≡ pay k (dist ready4) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w2 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist ready4) : Nat}) in
+                rewrite max-same (pay m (dist w2)) motive (λ z → {z ≡ pay (suc m) (dist ready4) : Nat}) in
+                refl)
+      | ready8 =>
+          (match n motive (λ (k : Nat) → {solve ready8 k ≡ pay k (dist ready8) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w37 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist ready8) : Nat}) in
+                rewrite max-same (pay m (dist w37)) motive (λ z → {z ≡ pay (suc m) (dist ready8) : Nat}) in
+                refl)
+      | len =>
+          (match n motive (λ (k : Nat) → {solve len k ≡ pay k (dist len) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w3 motive (λ z → {maxN z (maxN (solve w45 m) 0) ≡ pay (suc m) (dist len) : Nat}) in
+                rewrite solve-is m w45 motive (λ w → {maxN (pay m (dist w3)) (maxN w 0) ≡ pay (suc m) (dist len) : Nat}) in
+                rewrite max-zero (pay m (dist w45)) motive (λ y → {maxN (pay m (dist w3)) y ≡ pay (suc m) (dist len) : Nat}) in
+                rewrite max-ge-right (pay m (dist w3)) (pay m (dist w45)) (pay-le m (dist w45) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist len) : Nat}) in
+                refl)
+      | affine =>
+          (match n motive (λ (k : Nat) → {solve affine k ≡ pay k (dist affine) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w20 motive (λ z → {maxN z (maxN (solve w4 m) 0) ≡ pay (suc m) (dist affine) : Nat}) in
+                rewrite solve-is m w4 motive (λ w → {maxN (pay m (dist w20)) (maxN w 0) ≡ pay (suc m) (dist affine) : Nat}) in
+                rewrite max-zero (pay m (dist w4)) motive (λ y → {maxN (pay m (dist w20)) y ≡ pay (suc m) (dist affine) : Nat}) in
+                rewrite max-refl (pay m (dist w20)) motive (λ z → {z ≡ pay (suc m) (dist affine) : Nat}) in
+                refl)
+      | discard =>
+          (match n motive (λ (k : Nat) → {solve discard k ≡ pay k (dist discard) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w29 motive (λ z → {maxN z (maxN (solve done m) 0) ≡ pay (suc m) (dist discard) : Nat}) in
+                rewrite solve-is m done motive (λ w → {maxN (pay m (dist w29)) (maxN w 0) ≡ pay (suc m) (dist discard) : Nat}) in
+                rewrite max-zero (pay m (dist done)) motive (λ y → {maxN (pay m (dist w29)) y ≡ pay (suc m) (dist discard) : Nat}) in
+                rewrite max-ge-right (pay m (dist w29)) (pay m (dist done)) (pay-le m (dist done) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist discard) : Nat}) in
+                refl)
+      | drop =>
+          (match n motive (λ (k : Nat) → {solve drop k ≡ pay k (dist drop) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w22 motive (λ z → {maxN z (maxN (solve done m) 0) ≡ pay (suc m) (dist drop) : Nat}) in
+                rewrite solve-is m done motive (λ w → {maxN (pay m (dist w22)) (maxN w 0) ≡ pay (suc m) (dist drop) : Nat}) in
+                rewrite max-zero (pay m (dist done)) motive (λ y → {maxN (pay m (dist w22)) y ≡ pay (suc m) (dist drop) : Nat}) in
+                rewrite max-ge-right (pay m (dist w22)) (pay m (dist done)) (pay-le m (dist done) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist drop) : Nat}) in
+                refl)
+      | w0 =>
+          (match n motive (λ (k : Nat) → {solve w0 k ≡ pay k (dist w0) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w28 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w0) : Nat}) in
+                rewrite max-same (pay m (dist w28)) motive (λ z → {z ≡ pay (suc m) (dist w0) : Nat}) in
+                refl)
+      | w1 =>
+          (match n motive (λ (k : Nat) → {solve w1 k ≡ pay k (dist w1) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m done motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w1) : Nat}) in
+                rewrite max-same (pay m (dist done)) motive (λ z → {z ≡ pay (suc m) (dist w1) : Nat}) in
+                refl)
+      | w10 =>
+          (match n motive (λ (k : Nat) → {solve w10 k ≡ pay k (dist w10) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w11 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w10) : Nat}) in
+                rewrite max-same (pay m (dist w11)) motive (λ z → {z ≡ pay (suc m) (dist w10) : Nat}) in
+                refl)
+      | w11 =>
+          (match n motive (λ (k : Nat) → {solve w11 k ≡ pay k (dist w11) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w12 motive (λ z → {maxN z (maxN (solve w4 m) 0) ≡ pay (suc m) (dist w11) : Nat}) in
+                rewrite solve-is m w4 motive (λ w → {maxN (pay m (dist w12)) (maxN w 0) ≡ pay (suc m) (dist w11) : Nat}) in
+                rewrite max-zero (pay m (dist w4)) motive (λ y → {maxN (pay m (dist w12)) y ≡ pay (suc m) (dist w11) : Nat}) in
+                rewrite max-refl (pay m (dist w12)) motive (λ z → {z ≡ pay (suc m) (dist w11) : Nat}) in
+                refl)
+      | w12 =>
+          (match n motive (λ (k : Nat) → {solve w12 k ≡ pay k (dist w12) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w43 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w12) : Nat}) in
+                rewrite max-same (pay m (dist w43)) motive (λ z → {z ≡ pay (suc m) (dist w12) : Nat}) in
+                refl)
+      | w13 =>
+          (match n motive (λ (k : Nat) → {solve w13 k ≡ pay k (dist w13) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w7 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w13) : Nat}) in
+                rewrite max-same (pay m (dist w7)) motive (λ z → {z ≡ pay (suc m) (dist w13) : Nat}) in
+                refl)
+      | w14 =>
+          (match n motive (λ (k : Nat) → {solve w14 k ≡ pay k (dist w14) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w24 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w14) : Nat}) in
+                rewrite max-same (pay m (dist w24)) motive (λ z → {z ≡ pay (suc m) (dist w14) : Nat}) in
+                refl)
+      | w15 =>
+          (match n motive (λ (k : Nat) → {solve w15 k ≡ pay k (dist w15) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w39 motive (λ z → {maxN z (maxN (solve w31 m) 0) ≡ pay (suc m) (dist w15) : Nat}) in
+                rewrite solve-is m w31 motive (λ w → {maxN (pay m (dist w39)) (maxN w 0) ≡ pay (suc m) (dist w15) : Nat}) in
+                rewrite max-zero (pay m (dist w31)) motive (λ y → {maxN (pay m (dist w39)) y ≡ pay (suc m) (dist w15) : Nat}) in
+                rewrite max-refl (pay m (dist w39)) motive (λ z → {z ≡ pay (suc m) (dist w15) : Nat}) in
+                refl)
+      | w16 =>
+          (match n motive (λ (k : Nat) → {solve w16 k ≡ pay k (dist w16) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w6 motive (λ z → {maxN z (maxN (solve done m) 0) ≡ pay (suc m) (dist w16) : Nat}) in
+                rewrite solve-is m done motive (λ w → {maxN (pay m (dist w6)) (maxN w 0) ≡ pay (suc m) (dist w16) : Nat}) in
+                rewrite max-zero (pay m (dist done)) motive (λ y → {maxN (pay m (dist w6)) y ≡ pay (suc m) (dist w16) : Nat}) in
+                rewrite max-ge-right (pay m (dist w6)) (pay m (dist done)) (pay-le m (dist done) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist w16) : Nat}) in
+                refl)
+      | w17 =>
+          (match n motive (λ (k : Nat) → {solve w17 k ≡ pay k (dist w17) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w26 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w17) : Nat}) in
+                rewrite max-same (pay m (dist w26)) motive (λ z → {z ≡ pay (suc m) (dist w17) : Nat}) in
+                refl)
+      | w18 =>
+          (match n motive (λ (k : Nat) → {solve w18 k ≡ pay k (dist w18) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w9 motive (λ z → {maxN z (maxN (solve w25 m) 0) ≡ pay (suc m) (dist w18) : Nat}) in
+                rewrite solve-is m w25 motive (λ w → {maxN (pay m (dist w9)) (maxN w 0) ≡ pay (suc m) (dist w18) : Nat}) in
+                rewrite max-zero (pay m (dist w25)) motive (λ y → {maxN (pay m (dist w9)) y ≡ pay (suc m) (dist w18) : Nat}) in
+                rewrite max-refl (pay m (dist w9)) motive (λ z → {z ≡ pay (suc m) (dist w18) : Nat}) in
+                refl)
+      | w19 =>
+          (match n motive (λ (k : Nat) → {solve w19 k ≡ pay k (dist w19) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w1 motive (λ z → {maxN z (maxN (solve done m) 0) ≡ pay (suc m) (dist w19) : Nat}) in
+                rewrite solve-is m done motive (λ w → {maxN (pay m (dist w1)) (maxN w 0) ≡ pay (suc m) (dist w19) : Nat}) in
+                rewrite max-zero (pay m (dist done)) motive (λ y → {maxN (pay m (dist w1)) y ≡ pay (suc m) (dist w19) : Nat}) in
+                rewrite max-ge-right (pay m (dist w1)) (pay m (dist done)) (pay-le m (dist done) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist w19) : Nat}) in
+                refl)
+      | w2 =>
+          (match n motive (λ (k : Nat) → {solve w2 k ≡ pay k (dist w2) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w38 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w2) : Nat}) in
+                rewrite max-same (pay m (dist w38)) motive (λ z → {z ≡ pay (suc m) (dist w2) : Nat}) in
+                refl)
+      | w20 =>
+          (match n motive (λ (k : Nat) → {solve w20 k ≡ pay k (dist w20) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w43 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w20) : Nat}) in
+                rewrite max-same (pay m (dist w43)) motive (λ z → {z ≡ pay (suc m) (dist w20) : Nat}) in
+                refl)
+      | w21 =>
+          (match n motive (λ (k : Nat) → {solve w21 k ≡ pay k (dist w21) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w27 motive (λ z → {maxN z (maxN (solve done m) 0) ≡ pay (suc m) (dist w21) : Nat}) in
+                rewrite solve-is m done motive (λ w → {maxN (pay m (dist w27)) (maxN w 0) ≡ pay (suc m) (dist w21) : Nat}) in
+                rewrite max-zero (pay m (dist done)) motive (λ y → {maxN (pay m (dist w27)) y ≡ pay (suc m) (dist w21) : Nat}) in
+                rewrite max-ge-right (pay m (dist w27)) (pay m (dist done)) (pay-le m (dist done) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist w21) : Nat}) in
+                refl)
+      | w22 =>
+          (match n motive (λ (k : Nat) → {solve w22 k ≡ pay k (dist w22) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m done motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w22) : Nat}) in
+                rewrite max-same (pay m (dist done)) motive (λ z → {z ≡ pay (suc m) (dist w22) : Nat}) in
+                refl)
+      | w23 =>
+          (match n motive (λ (k : Nat) → {solve w23 k ≡ pay k (dist w23) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w24 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w23) : Nat}) in
+                rewrite max-same (pay m (dist w24)) motive (λ z → {z ≡ pay (suc m) (dist w23) : Nat}) in
+                refl)
+      | w24 =>
+          (match n motive (λ (k : Nat) → {solve w24 k ≡ pay k (dist w24) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w32 motive (λ z → {maxN z (maxN (solve w17 m) 0) ≡ pay (suc m) (dist w24) : Nat}) in
+                rewrite solve-is m w17 motive (λ w → {maxN (pay m (dist w32)) (maxN w 0) ≡ pay (suc m) (dist w24) : Nat}) in
+                rewrite max-zero (pay m (dist w17)) motive (λ y → {maxN (pay m (dist w32)) y ≡ pay (suc m) (dist w24) : Nat}) in
+                rewrite max-refl (pay m (dist w32)) motive (λ z → {z ≡ pay (suc m) (dist w24) : Nat}) in
+                refl)
+      | w25 =>
+          (match n motive (λ (k : Nat) → {solve w25 k ≡ pay k (dist w25) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w15 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w25) : Nat}) in
+                rewrite max-same (pay m (dist w15)) motive (λ z → {z ≡ pay (suc m) (dist w25) : Nat}) in
+                refl)
+      | w26 =>
+          (match n motive (λ (k : Nat) → {solve w26 k ≡ pay k (dist w26) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w33 motive (λ z → {maxN z (maxN (solve w10 m) 0) ≡ pay (suc m) (dist w26) : Nat}) in
+                rewrite solve-is m w10 motive (λ w → {maxN (pay m (dist w33)) (maxN w 0) ≡ pay (suc m) (dist w26) : Nat}) in
+                rewrite max-zero (pay m (dist w10)) motive (λ y → {maxN (pay m (dist w33)) y ≡ pay (suc m) (dist w26) : Nat}) in
+                rewrite max-refl (pay m (dist w33)) motive (λ z → {z ≡ pay (suc m) (dist w26) : Nat}) in
+                refl)
+      | w27 =>
+          (match n motive (λ (k : Nat) → {solve w27 k ≡ pay k (dist w27) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m done motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w27) : Nat}) in
+                rewrite max-same (pay m (dist done)) motive (λ z → {z ≡ pay (suc m) (dist w27) : Nat}) in
+                refl)
+      | w28 =>
+          (match n motive (λ (k : Nat) → {solve w28 k ≡ pay k (dist w28) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w5 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w28) : Nat}) in
+                rewrite max-same (pay m (dist w5)) motive (λ z → {z ≡ pay (suc m) (dist w28) : Nat}) in
+                refl)
+      | w29 =>
+          (match n motive (λ (k : Nat) → {solve w29 k ≡ pay k (dist w29) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m done motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w29) : Nat}) in
+                rewrite max-same (pay m (dist done)) motive (λ z → {z ≡ pay (suc m) (dist w29) : Nat}) in
+                refl)
+      | w3 =>
+          (match n motive (λ (k : Nat) → {solve w3 k ≡ pay k (dist w3) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w30 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w3) : Nat}) in
+                rewrite max-same (pay m (dist w30)) motive (λ z → {z ≡ pay (suc m) (dist w3) : Nat}) in
+                refl)
+      | w30 =>
+          (match n motive (λ (k : Nat) → {solve w30 k ≡ pay k (dist w30) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w44 motive (λ z → {maxN z (maxN (solve w19 m) 0) ≡ pay (suc m) (dist w30) : Nat}) in
+                rewrite solve-is m w19 motive (λ w → {maxN (pay m (dist w44)) (maxN w 0) ≡ pay (suc m) (dist w30) : Nat}) in
+                rewrite max-zero (pay m (dist w19)) motive (λ y → {maxN (pay m (dist w44)) y ≡ pay (suc m) (dist w30) : Nat}) in
+                rewrite max-ge-right (pay m (dist w44)) (pay m (dist w19)) (pay-le m (dist w19) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist w30) : Nat}) in
+                refl)
+      | w31 =>
+          (match n motive (λ (k : Nat) → {solve w31 k ≡ pay k (dist w31) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w36 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w31) : Nat}) in
+                rewrite max-same (pay m (dist w36)) motive (λ z → {z ≡ pay (suc m) (dist w31) : Nat}) in
+                refl)
+      | w32 =>
+          (match n motive (λ (k : Nat) → {solve w32 k ≡ pay k (dist w32) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w26 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w32) : Nat}) in
+                rewrite max-same (pay m (dist w26)) motive (λ z → {z ≡ pay (suc m) (dist w32) : Nat}) in
+                refl)
+      | w33 =>
+          (match n motive (λ (k : Nat) → {solve w33 k ≡ pay k (dist w33) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w11 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w33) : Nat}) in
+                rewrite max-same (pay m (dist w11)) motive (λ z → {z ≡ pay (suc m) (dist w33) : Nat}) in
+                refl)
+      | w34 =>
+          (match n motive (λ (k : Nat) → {solve w34 k ≡ pay k (dist w34) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w35 motive (λ z → {maxN z (maxN (solve w42 m) 0) ≡ pay (suc m) (dist w34) : Nat}) in
+                rewrite solve-is m w42 motive (λ w → {maxN (pay m (dist w35)) (maxN w 0) ≡ pay (suc m) (dist w34) : Nat}) in
+                rewrite max-zero (pay m (dist w42)) motive (λ y → {maxN (pay m (dist w35)) y ≡ pay (suc m) (dist w34) : Nat}) in
+                rewrite max-ge-right (pay m (dist w35)) (pay m (dist w42)) (pay-le m (dist w42) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist w34) : Nat}) in
+                refl)
+      | w35 =>
+          (match n motive (λ (k : Nat) → {solve w35 k ≡ pay k (dist w35) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w40 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w35) : Nat}) in
+                rewrite max-same (pay m (dist w40)) motive (λ z → {z ≡ pay (suc m) (dist w35) : Nat}) in
+                refl)
+      | w36 =>
+          (match n motive (λ (k : Nat) → {solve w36 k ≡ pay k (dist w36) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w46 motive (λ z → {maxN z (maxN (solve w13 m) 0) ≡ pay (suc m) (dist w36) : Nat}) in
+                rewrite solve-is m w13 motive (λ w → {maxN (pay m (dist w46)) (maxN w 0) ≡ pay (suc m) (dist w36) : Nat}) in
+                rewrite max-zero (pay m (dist w13)) motive (λ y → {maxN (pay m (dist w46)) y ≡ pay (suc m) (dist w36) : Nat}) in
+                rewrite max-refl (pay m (dist w46)) motive (λ z → {z ≡ pay (suc m) (dist w36) : Nat}) in
+                refl)
+      | w37 =>
+          (match n motive (λ (k : Nat) → {solve w37 k ≡ pay k (dist w37) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w0 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w37) : Nat}) in
+                rewrite max-same (pay m (dist w0)) motive (λ z → {z ≡ pay (suc m) (dist w37) : Nat}) in
+                refl)
+      | w38 =>
+          (match n motive (λ (k : Nat) → {solve w38 k ≡ pay k (dist w38) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w12 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w38) : Nat}) in
+                rewrite max-same (pay m (dist w12)) motive (λ z → {z ≡ pay (suc m) (dist w38) : Nat}) in
+                refl)
+      | w39 =>
+          (match n motive (λ (k : Nat) → {solve w39 k ≡ pay k (dist w39) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w36 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w39) : Nat}) in
+                rewrite max-same (pay m (dist w36)) motive (λ z → {z ≡ pay (suc m) (dist w39) : Nat}) in
+                refl)
+      | w4 =>
+          (match n motive (λ (k : Nat) → {solve w4 k ≡ pay k (dist w4) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w43 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w4) : Nat}) in
+                rewrite max-same (pay m (dist w43)) motive (λ z → {z ≡ pay (suc m) (dist w4) : Nat}) in
+                refl)
+      | w40 =>
+          (match n motive (λ (k : Nat) → {solve w40 k ≡ pay k (dist w40) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w21 motive (λ z → {maxN z (maxN (solve done m) 0) ≡ pay (suc m) (dist w40) : Nat}) in
+                rewrite solve-is m done motive (λ w → {maxN (pay m (dist w21)) (maxN w 0) ≡ pay (suc m) (dist w40) : Nat}) in
+                rewrite max-zero (pay m (dist done)) motive (λ y → {maxN (pay m (dist w21)) y ≡ pay (suc m) (dist w40) : Nat}) in
+                rewrite max-ge-right (pay m (dist w21)) (pay m (dist done)) (pay-le m (dist done) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist w40) : Nat}) in
+                refl)
+      | w41 =>
+          (match n motive (λ (k : Nat) → {solve w41 k ≡ pay k (dist w41) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w16 motive (λ z → {maxN z (maxN (solve done m) 0) ≡ pay (suc m) (dist w41) : Nat}) in
+                rewrite solve-is m done motive (λ w → {maxN (pay m (dist w16)) (maxN w 0) ≡ pay (suc m) (dist w41) : Nat}) in
+                rewrite max-zero (pay m (dist done)) motive (λ y → {maxN (pay m (dist w16)) y ≡ pay (suc m) (dist w41) : Nat}) in
+                rewrite max-ge-right (pay m (dist w16)) (pay m (dist done)) (pay-le m (dist done) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist w41) : Nat}) in
+                refl)
+      | w42 =>
+          (match n motive (λ (k : Nat) → {solve w42 k ≡ pay k (dist w42) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w19 motive (λ z → {maxN z (maxN (solve done m) 0) ≡ pay (suc m) (dist w42) : Nat}) in
+                rewrite solve-is m done motive (λ w → {maxN (pay m (dist w19)) (maxN w 0) ≡ pay (suc m) (dist w42) : Nat}) in
+                rewrite max-zero (pay m (dist done)) motive (λ y → {maxN (pay m (dist w19)) y ≡ pay (suc m) (dist w42) : Nat}) in
+                rewrite max-ge-right (pay m (dist w19)) (pay m (dist done)) (pay-le m (dist done) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist w42) : Nat}) in
+                refl)
+      | w43 =>
+          (match n motive (λ (k : Nat) → {solve w43 k ≡ pay k (dist w43) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m done motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w43) : Nat}) in
+                rewrite max-same (pay m (dist done)) motive (λ z → {z ≡ pay (suc m) (dist w43) : Nat}) in
+                refl)
+      | w44 =>
+          (match n motive (λ (k : Nat) → {solve w44 k ≡ pay k (dist w44) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w21 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w44) : Nat}) in
+                rewrite max-same (pay m (dist w21)) motive (λ z → {z ≡ pay (suc m) (dist w44) : Nat}) in
+                refl)
+      | w45 =>
+          (match n motive (λ (k : Nat) → {solve w45 k ≡ pay k (dist w45) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w34 motive (λ z → {maxN z (maxN (solve w41 m) 0) ≡ pay (suc m) (dist w45) : Nat}) in
+                rewrite solve-is m w41 motive (λ w → {maxN (pay m (dist w34)) (maxN w 0) ≡ pay (suc m) (dist w45) : Nat}) in
+                rewrite max-zero (pay m (dist w41)) motive (λ y → {maxN (pay m (dist w34)) y ≡ pay (suc m) (dist w45) : Nat}) in
+                rewrite max-ge-right (pay m (dist w34)) (pay m (dist w41)) (pay-le m (dist w41) suc (0)) motive (λ z → {z ≡ pay (suc m) (dist w45) : Nat}) in
+                refl)
+      | w46 =>
+          (match n motive (λ (k : Nat) → {solve w46 k ≡ pay k (dist w46) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w7 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w46) : Nat}) in
+                rewrite max-same (pay m (dist w7)) motive (λ z → {z ≡ pay (suc m) (dist w46) : Nat}) in
+                refl)
+      | w5 =>
+          (match n motive (λ (k : Nat) → {solve w5 k ≡ pay k (dist w5) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w2 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w5) : Nat}) in
+                rewrite max-same (pay m (dist w2)) motive (λ z → {z ≡ pay (suc m) (dist w5) : Nat}) in
+                refl)
+      | w6 =>
+          (match n motive (λ (k : Nat) → {solve w6 k ≡ pay k (dist w6) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m done motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w6) : Nat}) in
+                rewrite max-same (pay m (dist done)) motive (λ z → {z ≡ pay (suc m) (dist w6) : Nat}) in
+                refl)
+      | w7 =>
+          (match n motive (λ (k : Nat) → {solve w7 k ≡ pay k (dist w7) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w14 motive (λ z → {maxN z (maxN (solve w23 m) 0) ≡ pay (suc m) (dist w7) : Nat}) in
+                rewrite solve-is m w23 motive (λ w → {maxN (pay m (dist w14)) (maxN w 0) ≡ pay (suc m) (dist w7) : Nat}) in
+                rewrite max-zero (pay m (dist w23)) motive (λ y → {maxN (pay m (dist w14)) y ≡ pay (suc m) (dist w7) : Nat}) in
+                rewrite max-refl (pay m (dist w14)) motive (λ z → {z ≡ pay (suc m) (dist w7) : Nat}) in
+                refl)
+      | w8 =>
+          (match n motive (λ (k : Nat) → {solve w8 k ≡ pay k (dist w8) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w18 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w8) : Nat}) in
+                rewrite max-same (pay m (dist w18)) motive (λ z → {z ≡ pay (suc m) (dist w8) : Nat}) in
+                refl)
+      | w9 =>
+          (match n motive (λ (k : Nat) → {solve w9 k ≡ pay k (dist w9) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m w15 motive (λ z → {maxN z (maxN z 0) ≡ pay (suc m) (dist w9) : Nat}) in
+                rewrite max-same (pay m (dist w15)) motive (λ z → {z ≡ pay (suc m) (dist w9) : Nat}) in
+                refl)
+      | done =>
+          (match n motive (λ (k : Nat) → {solve done k ≡ pay k (dist done) : Nat})
+            | 0 => refl
+            | suc m =>
+                rewrite solve-is m done motive (λ z → {maxN z (maxN z 0) ≡ suc 0 : Nat}) in
+                rewrite max-same (pay m 0) motive (λ z → {z ≡ suc 0 : Nat}) in
+                refl)
+
+def dom-w10-ready : evidence Dom Reward le (value w10) (value ready) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w10 n) (λ (n : Nat) → solve ready n)
+    (λ (n : Nat) →
+      rewrite solve-is n w10 motive (λ z → Le z (solve ready n)) in
+      rewrite solve-is n ready motive (λ z → Le (pay n (dist w10)) z) in
+      pay-le n (dist ready) suc (0))
+    0
+
+def dom-w23-ready4 : evidence Dom Reward le (value w23) (value ready4) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w23 n) (λ (n : Nat) → solve ready4 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w23 motive (λ z → Le z (solve ready4 n)) in
+      rewrite solve-is n ready4 motive (λ z → Le (pay n (dist w23)) z) in
+      pay-le n (dist ready4) suc (suc (suc (0))))
+    0
+
+def dom-w8-ready8 : evidence Dom Reward le (value w8) (value ready8) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w8 n) (λ (n : Nat) → solve ready8 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w8 motive (λ z → Le z (solve ready8 n)) in
+      rewrite solve-is n ready8 motive (λ z → Le (pay n (dist w8)) z) in
+      pay-le n (dist ready8) suc (suc (suc (suc (suc (suc (suc (0))))))))
+    0
+
+def dom-w3-w45 : evidence Dom Reward le (value w3) (value w45) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w3 n) (λ (n : Nat) → solve w45 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w3 motive (λ z → Le z (solve w45 n)) in
+      rewrite solve-is n w45 motive (λ z → Le (pay n (dist w3)) z) in
+      pay-le n (dist w45) suc (0))
+    0
+
+def dom-w20-w4 : evidence Dom Reward le (value w20) (value w4) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w20 n) (λ (n : Nat) → solve w4 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w20 motive (λ z → Le z (solve w4 n)) in
+      rewrite solve-is n w4 motive (λ z → Le (pay n (dist w20)) z) in
+      le-refl (pay n (dist w20)))
+    0
+
+def dom-w4-w20 : evidence Dom Reward le (value w4) (value w20) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w4 n) (λ (n : Nat) → solve w20 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w4 motive (λ z → Le z (solve w20 n)) in
+      rewrite solve-is n w20 motive (λ z → Le (pay n (dist w4)) z) in
+      le-refl (pay n (dist w4)))
+    0
+
+def dom-w29-done : evidence Dom Reward le (value w29) (value done) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w29 n) (λ (n : Nat) → solve done n)
+    (λ (n : Nat) →
+      rewrite solve-is n w29 motive (λ z → Le z (solve done n)) in
+      rewrite solve-is n done motive (λ z → Le (pay n (dist w29)) z) in
+      pay-le n (dist done) suc (0))
+    0
+
+def dom-w22-done : evidence Dom Reward le (value w22) (value done) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w22 n) (λ (n : Nat) → solve done n)
+    (λ (n : Nat) →
+      rewrite solve-is n w22 motive (λ z → Le z (solve done n)) in
+      rewrite solve-is n done motive (λ z → Le (pay n (dist w22)) z) in
+      pay-le n (dist done) suc (0))
+    0
+
+def dom-w12-w4 : evidence Dom Reward le (value w12) (value w4) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w12 n) (λ (n : Nat) → solve w4 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w12 motive (λ z → Le z (solve w4 n)) in
+      rewrite solve-is n w4 motive (λ z → Le (pay n (dist w12)) z) in
+      le-refl (pay n (dist w12)))
+    0
+
+def dom-w4-w12 : evidence Dom Reward le (value w4) (value w12) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w4 n) (λ (n : Nat) → solve w12 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w4 motive (λ z → Le z (solve w12 n)) in
+      rewrite solve-is n w12 motive (λ z → Le (pay n (dist w4)) z) in
+      le-refl (pay n (dist w4)))
+    0
+
+def dom-w39-w31 : evidence Dom Reward le (value w39) (value w31) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w39 n) (λ (n : Nat) → solve w31 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w39 motive (λ z → Le z (solve w31 n)) in
+      rewrite solve-is n w31 motive (λ z → Le (pay n (dist w39)) z) in
+      le-refl (pay n (dist w39)))
+    0
+
+def dom-w31-w39 : evidence Dom Reward le (value w31) (value w39) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w31 n) (λ (n : Nat) → solve w39 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w31 motive (λ z → Le z (solve w39 n)) in
+      rewrite solve-is n w39 motive (λ z → Le (pay n (dist w31)) z) in
+      le-refl (pay n (dist w31)))
+    0
+
+def dom-w6-done : evidence Dom Reward le (value w6) (value done) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w6 n) (λ (n : Nat) → solve done n)
+    (λ (n : Nat) →
+      rewrite solve-is n w6 motive (λ z → Le z (solve done n)) in
+      rewrite solve-is n done motive (λ z → Le (pay n (dist w6)) z) in
+      pay-le n (dist done) suc (0))
+    0
+
+def dom-w9-w25 : evidence Dom Reward le (value w9) (value w25) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w9 n) (λ (n : Nat) → solve w25 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w9 motive (λ z → Le z (solve w25 n)) in
+      rewrite solve-is n w25 motive (λ z → Le (pay n (dist w9)) z) in
+      le-refl (pay n (dist w9)))
+    0
+
+def dom-w25-w9 : evidence Dom Reward le (value w25) (value w9) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w25 n) (λ (n : Nat) → solve w9 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w25 motive (λ z → Le z (solve w9 n)) in
+      rewrite solve-is n w9 motive (λ z → Le (pay n (dist w25)) z) in
+      le-refl (pay n (dist w25)))
+    0
+
+def dom-w1-done : evidence Dom Reward le (value w1) (value done) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w1 n) (λ (n : Nat) → solve done n)
+    (λ (n : Nat) →
+      rewrite solve-is n w1 motive (λ z → Le z (solve done n)) in
+      rewrite solve-is n done motive (λ z → Le (pay n (dist w1)) z) in
+      pay-le n (dist done) suc (0))
+    0
+
+def dom-w27-done : evidence Dom Reward le (value w27) (value done) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w27 n) (λ (n : Nat) → solve done n)
+    (λ (n : Nat) →
+      rewrite solve-is n w27 motive (λ z → Le z (solve done n)) in
+      rewrite solve-is n done motive (λ z → Le (pay n (dist w27)) z) in
+      pay-le n (dist done) suc (0))
+    0
+
+def dom-w32-w17 : evidence Dom Reward le (value w32) (value w17) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w32 n) (λ (n : Nat) → solve w17 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w32 motive (λ z → Le z (solve w17 n)) in
+      rewrite solve-is n w17 motive (λ z → Le (pay n (dist w32)) z) in
+      le-refl (pay n (dist w32)))
+    0
+
+def dom-w17-w32 : evidence Dom Reward le (value w17) (value w32) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w17 n) (λ (n : Nat) → solve w32 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w17 motive (λ z → Le z (solve w32 n)) in
+      rewrite solve-is n w32 motive (λ z → Le (pay n (dist w17)) z) in
+      le-refl (pay n (dist w17)))
+    0
+
+def dom-w33-w10 : evidence Dom Reward le (value w33) (value w10) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w33 n) (λ (n : Nat) → solve w10 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w33 motive (λ z → Le z (solve w10 n)) in
+      rewrite solve-is n w10 motive (λ z → Le (pay n (dist w33)) z) in
+      le-refl (pay n (dist w33)))
+    0
+
+def dom-w10-w33 : evidence Dom Reward le (value w10) (value w33) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w10 n) (λ (n : Nat) → solve w33 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w10 motive (λ z → Le z (solve w33 n)) in
+      rewrite solve-is n w33 motive (λ z → Le (pay n (dist w10)) z) in
+      le-refl (pay n (dist w10)))
+    0
+
+def dom-w44-w19 : evidence Dom Reward le (value w44) (value w19) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w44 n) (λ (n : Nat) → solve w19 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w44 motive (λ z → Le z (solve w19 n)) in
+      rewrite solve-is n w19 motive (λ z → Le (pay n (dist w44)) z) in
+      pay-le n (dist w19) suc (0))
+    0
+
+def dom-w35-w42 : evidence Dom Reward le (value w35) (value w42) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w35 n) (λ (n : Nat) → solve w42 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w35 motive (λ z → Le z (solve w42 n)) in
+      rewrite solve-is n w42 motive (λ z → Le (pay n (dist w35)) z) in
+      pay-le n (dist w42) suc (0))
+    0
+
+def dom-w46-w13 : evidence Dom Reward le (value w46) (value w13) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w46 n) (λ (n : Nat) → solve w13 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w46 motive (λ z → Le z (solve w13 n)) in
+      rewrite solve-is n w13 motive (λ z → Le (pay n (dist w46)) z) in
+      le-refl (pay n (dist w46)))
+    0
+
+def dom-w13-w46 : evidence Dom Reward le (value w13) (value w46) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w13 n) (λ (n : Nat) → solve w46 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w13 motive (λ z → Le z (solve w46 n)) in
+      rewrite solve-is n w46 motive (λ z → Le (pay n (dist w13)) z) in
+      le-refl (pay n (dist w13)))
+    0
+
+def dom-w21-done : evidence Dom Reward le (value w21) (value done) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w21 n) (λ (n : Nat) → solve done n)
+    (λ (n : Nat) →
+      rewrite solve-is n w21 motive (λ z → Le z (solve done n)) in
+      rewrite solve-is n done motive (λ z → Le (pay n (dist w21)) z) in
+      pay-le n (dist done) suc (0))
+    0
+
+def dom-w16-done : evidence Dom Reward le (value w16) (value done) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w16 n) (λ (n : Nat) → solve done n)
+    (λ (n : Nat) →
+      rewrite solve-is n w16 motive (λ z → Le z (solve done n)) in
+      rewrite solve-is n done motive (λ z → Le (pay n (dist w16)) z) in
+      pay-le n (dist done) suc (0))
+    0
+
+def dom-w19-done : evidence Dom Reward le (value w19) (value done) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w19 n) (λ (n : Nat) → solve done n)
+    (λ (n : Nat) →
+      rewrite solve-is n w19 motive (λ z → Le z (solve done n)) in
+      rewrite solve-is n done motive (λ z → Le (pay n (dist w19)) z) in
+      pay-le n (dist done) suc (0))
+    0
+
+def dom-w34-w41 : evidence Dom Reward le (value w34) (value w41) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w34 n) (λ (n : Nat) → solve w41 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w34 motive (λ z → Le z (solve w41 n)) in
+      rewrite solve-is n w41 motive (λ z → Le (pay n (dist w34)) z) in
+      pay-le n (dist w41) suc (0))
+    0
+
+def dom-w14-w23 : evidence Dom Reward le (value w14) (value w23) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w14 n) (λ (n : Nat) → solve w23 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w14 motive (λ z → Le z (solve w23 n)) in
+      rewrite solve-is n w23 motive (λ z → Le (pay n (dist w14)) z) in
+      le-refl (pay n (dist w14)))
+    0
+
+def dom-w23-w14 : evidence Dom Reward le (value w23) (value w14) :=
+  tabulate-dom Reward le (λ (n : Nat) → solve w23 n) (λ (n : Nat) → solve w14 n)
+    (λ (n : Nat) →
+      rewrite solve-is n w23 motive (λ z → Le z (solve w14 n)) in
+      rewrite solve-is n w14 motive (λ z → Le (pay n (dist w23)) z) in
+      le-refl (pay n (dist w23)))
+    0
+
+
+def ranking : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
+  λ (s : State) → λ (a : Action) → λ (b : Action) →
+    match s motive (λ _ → Type)
+      | copy =>
+          (match a motive (λ _ → Type)
+            | arg => (match b motive (λ _ → Type) | arg => Unit | spine => Empty)
+            | spine => Unit)
+      | copy4 =>
+          (match a motive (λ _ → Type)
+            | arg => (match b motive (λ _ → Type) | arg => Unit | spine => Empty)
+            | spine => Unit)
+      | copy8 =>
+          (match a motive (λ _ → Type)
+            | arg => (match b motive (λ _ → Type) | arg => Unit | spine => Empty)
+            | spine => Unit)
+      | ready => Unit
+      | ready4 => Unit
+      | ready8 => Unit
+      | len =>
+          (match a motive (λ _ → Type)
+            | arg => Unit
+            | spine => (match b motive (λ _ → Type) | arg => Empty | spine => Unit))
+      | affine => Unit
+      | discard =>
+          (match a motive (λ _ → Type)
+            | arg => Unit
+            | spine => (match b motive (λ _ → Type) | arg => Empty | spine => Unit))
+      | drop =>
+          (match a motive (λ _ → Type)
+            | arg => Unit
+            | spine => (match b motive (λ _ → Type) | arg => Empty | spine => Unit))
+      | w0 => Unit
+      | w1 => Unit
+      | w10 => Unit
+      | w11 => Unit
+      | w12 => Unit
+      | w13 => Unit
+      | w14 => Unit
+      | w15 => Unit
+      | w16 =>
+          (match a motive (λ _ → Type)
+            | arg => Unit
+            | spine => (match b motive (λ _ → Type) | arg => Empty | spine => Unit))
+      | w17 => Unit
+      | w18 => Unit
+      | w19 =>
+          (match a motive (λ _ → Type)
+            | arg => Unit
+            | spine => (match b motive (λ _ → Type) | arg => Empty | spine => Unit))
+      | w2 => Unit
+      | w20 => Unit
+      | w21 =>
+          (match a motive (λ _ → Type)
+            | arg => Unit
+            | spine => (match b motive (λ _ → Type) | arg => Empty | spine => Unit))
+      | w22 => Unit
+      | w23 => Unit
+      | w24 => Unit
+      | w25 => Unit
+      | w26 => Unit
+      | w27 => Unit
+      | w28 => Unit
+      | w29 => Unit
+      | w3 => Unit
+      | w30 =>
+          (match a motive (λ _ → Type)
+            | arg => Unit
+            | spine => (match b motive (λ _ → Type) | arg => Empty | spine => Unit))
+      | w31 => Unit
+      | w32 => Unit
+      | w33 => Unit
+      | w34 =>
+          (match a motive (λ _ → Type)
+            | arg => Unit
+            | spine => (match b motive (λ _ → Type) | arg => Empty | spine => Unit))
+      | w35 => Unit
+      | w36 => Unit
+      | w37 => Unit
+      | w38 => Unit
+      | w39 => Unit
+      | w4 => Unit
+      | w40 =>
+          (match a motive (λ _ → Type)
+            | arg => Unit
+            | spine => (match b motive (λ _ → Type) | arg => Empty | spine => Unit))
+      | w41 =>
+          (match a motive (λ _ → Type)
+            | arg => Unit
+            | spine => (match b motive (λ _ → Type) | arg => Empty | spine => Unit))
+      | w42 =>
+          (match a motive (λ _ → Type)
+            | arg => Unit
+            | spine => (match b motive (λ _ → Type) | arg => Empty | spine => Unit))
+      | w43 => Unit
+      | w44 => Unit
+      | w45 =>
+          (match a motive (λ _ → Type)
+            | arg => Unit
+            | spine => (match b motive (λ _ → Type) | arg => Empty | spine => Unit))
+      | w46 => Unit
+      | w5 => Unit
+      | w6 => Unit
+      | w7 => Unit
+      | w8 => Unit
+      | w9 => Unit
+      | done => Unit
+
+def lam-homomorphism : evidence CoinductiveHomomorphism ranking :=
+  λ (a : Action) → λ (b : Action) → λ (s : State) →
+    match s motive (λ (x : State) → Π (r : ranking x a b) → Dom Reward le (successor-value x a) (successor-value x b))
+      | copy =>
+          (match a motive (λ (y : Action) → Π (r : ranking copy y b) → Dom Reward le (successor-value copy y) (successor-value copy b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking copy arg z) → Dom Reward le (value ready) (successor-value copy z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value ready)
+                  | spine => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value ready) (value w10)))
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking copy spine z) → Dom Reward le (value w10) (successor-value copy z))
+                  | arg => λ (_ : Unit) → dom-w10-ready
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w10)))
+      | copy4 =>
+          (match a motive (λ (y : Action) → Π (r : ranking copy4 y b) → Dom Reward le (successor-value copy4 y) (successor-value copy4 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking copy4 arg z) → Dom Reward le (value ready4) (successor-value copy4 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value ready4)
+                  | spine => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value ready4) (value w23)))
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking copy4 spine z) → Dom Reward le (value w23) (successor-value copy4 z))
+                  | arg => λ (_ : Unit) → dom-w23-ready4
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w23)))
+      | copy8 =>
+          (match a motive (λ (y : Action) → Π (r : ranking copy8 y b) → Dom Reward le (successor-value copy8 y) (successor-value copy8 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking copy8 arg z) → Dom Reward le (value ready8) (successor-value copy8 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value ready8)
+                  | spine => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value ready8) (value w8)))
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking copy8 spine z) → Dom Reward le (value w8) (successor-value copy8 z))
+                  | arg => λ (_ : Unit) → dom-w8-ready8
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w8)))
+      | ready => λ (_ : Unit) → dom-refl Reward le le-refl (value w12)
+      | ready4 => λ (_ : Unit) → dom-refl Reward le le-refl (value w2)
+      | ready8 => λ (_ : Unit) → dom-refl Reward le le-refl (value w37)
+      | len =>
+          (match a motive (λ (y : Action) → Π (r : ranking len y b) → Dom Reward le (successor-value len y) (successor-value len b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking len arg z) → Dom Reward le (value w3) (successor-value len z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w3)
+                  | spine => λ (_ : Unit) → dom-w3-w45)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking len spine z) → Dom Reward le (value w45) (successor-value len z))
+                  | arg => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value w45) (value w3))
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w45)))
+      | affine =>
+          (match a motive (λ (y : Action) → Π (r : ranking affine y b) → Dom Reward le (successor-value affine y) (successor-value affine b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking affine arg z) → Dom Reward le (value w20) (successor-value affine z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w20)
+                  | spine => λ (_ : Unit) → dom-w20-w4)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking affine spine z) → Dom Reward le (value w4) (successor-value affine z))
+                  | arg => λ (_ : Unit) → dom-w4-w20
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w4)))
+      | discard =>
+          (match a motive (λ (y : Action) → Π (r : ranking discard y b) → Dom Reward le (successor-value discard y) (successor-value discard b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking discard arg z) → Dom Reward le (value w29) (successor-value discard z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w29)
+                  | spine => λ (_ : Unit) → dom-w29-done)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking discard spine z) → Dom Reward le (value done) (successor-value discard z))
+                  | arg => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value done) (value w29))
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value done)))
+      | drop =>
+          (match a motive (λ (y : Action) → Π (r : ranking drop y b) → Dom Reward le (successor-value drop y) (successor-value drop b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking drop arg z) → Dom Reward le (value w22) (successor-value drop z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w22)
+                  | spine => λ (_ : Unit) → dom-w22-done)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking drop spine z) → Dom Reward le (value done) (successor-value drop z))
+                  | arg => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value done) (value w22))
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value done)))
+      | w0 => λ (_ : Unit) → dom-refl Reward le le-refl (value w28)
+      | w1 => λ (_ : Unit) → dom-refl Reward le le-refl (value done)
+      | w10 => λ (_ : Unit) → dom-refl Reward le le-refl (value w11)
+      | w11 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w11 y b) → Dom Reward le (successor-value w11 y) (successor-value w11 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w11 arg z) → Dom Reward le (value w12) (successor-value w11 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w12)
+                  | spine => λ (_ : Unit) → dom-w12-w4)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w11 spine z) → Dom Reward le (value w4) (successor-value w11 z))
+                  | arg => λ (_ : Unit) → dom-w4-w12
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w4)))
+      | w12 => λ (_ : Unit) → dom-refl Reward le le-refl (value w43)
+      | w13 => λ (_ : Unit) → dom-refl Reward le le-refl (value w7)
+      | w14 => λ (_ : Unit) → dom-refl Reward le le-refl (value w24)
+      | w15 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w15 y b) → Dom Reward le (successor-value w15 y) (successor-value w15 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w15 arg z) → Dom Reward le (value w39) (successor-value w15 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w39)
+                  | spine => λ (_ : Unit) → dom-w39-w31)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w15 spine z) → Dom Reward le (value w31) (successor-value w15 z))
+                  | arg => λ (_ : Unit) → dom-w31-w39
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w31)))
+      | w16 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w16 y b) → Dom Reward le (successor-value w16 y) (successor-value w16 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w16 arg z) → Dom Reward le (value w6) (successor-value w16 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w6)
+                  | spine => λ (_ : Unit) → dom-w6-done)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w16 spine z) → Dom Reward le (value done) (successor-value w16 z))
+                  | arg => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value done) (value w6))
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value done)))
+      | w17 => λ (_ : Unit) → dom-refl Reward le le-refl (value w26)
+      | w18 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w18 y b) → Dom Reward le (successor-value w18 y) (successor-value w18 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w18 arg z) → Dom Reward le (value w9) (successor-value w18 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w9)
+                  | spine => λ (_ : Unit) → dom-w9-w25)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w18 spine z) → Dom Reward le (value w25) (successor-value w18 z))
+                  | arg => λ (_ : Unit) → dom-w25-w9
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w25)))
+      | w19 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w19 y b) → Dom Reward le (successor-value w19 y) (successor-value w19 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w19 arg z) → Dom Reward le (value w1) (successor-value w19 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w1)
+                  | spine => λ (_ : Unit) → dom-w1-done)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w19 spine z) → Dom Reward le (value done) (successor-value w19 z))
+                  | arg => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value done) (value w1))
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value done)))
+      | w2 => λ (_ : Unit) → dom-refl Reward le le-refl (value w38)
+      | w20 => λ (_ : Unit) → dom-refl Reward le le-refl (value w43)
+      | w21 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w21 y b) → Dom Reward le (successor-value w21 y) (successor-value w21 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w21 arg z) → Dom Reward le (value w27) (successor-value w21 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w27)
+                  | spine => λ (_ : Unit) → dom-w27-done)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w21 spine z) → Dom Reward le (value done) (successor-value w21 z))
+                  | arg => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value done) (value w27))
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value done)))
+      | w22 => λ (_ : Unit) → dom-refl Reward le le-refl (value done)
+      | w23 => λ (_ : Unit) → dom-refl Reward le le-refl (value w24)
+      | w24 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w24 y b) → Dom Reward le (successor-value w24 y) (successor-value w24 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w24 arg z) → Dom Reward le (value w32) (successor-value w24 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w32)
+                  | spine => λ (_ : Unit) → dom-w32-w17)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w24 spine z) → Dom Reward le (value w17) (successor-value w24 z))
+                  | arg => λ (_ : Unit) → dom-w17-w32
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w17)))
+      | w25 => λ (_ : Unit) → dom-refl Reward le le-refl (value w15)
+      | w26 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w26 y b) → Dom Reward le (successor-value w26 y) (successor-value w26 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w26 arg z) → Dom Reward le (value w33) (successor-value w26 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w33)
+                  | spine => λ (_ : Unit) → dom-w33-w10)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w26 spine z) → Dom Reward le (value w10) (successor-value w26 z))
+                  | arg => λ (_ : Unit) → dom-w10-w33
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w10)))
+      | w27 => λ (_ : Unit) → dom-refl Reward le le-refl (value done)
+      | w28 => λ (_ : Unit) → dom-refl Reward le le-refl (value w5)
+      | w29 => λ (_ : Unit) → dom-refl Reward le le-refl (value done)
+      | w3 => λ (_ : Unit) → dom-refl Reward le le-refl (value w30)
+      | w30 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w30 y b) → Dom Reward le (successor-value w30 y) (successor-value w30 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w30 arg z) → Dom Reward le (value w44) (successor-value w30 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w44)
+                  | spine => λ (_ : Unit) → dom-w44-w19)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w30 spine z) → Dom Reward le (value w19) (successor-value w30 z))
+                  | arg => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value w19) (value w44))
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w19)))
+      | w31 => λ (_ : Unit) → dom-refl Reward le le-refl (value w36)
+      | w32 => λ (_ : Unit) → dom-refl Reward le le-refl (value w26)
+      | w33 => λ (_ : Unit) → dom-refl Reward le le-refl (value w11)
+      | w34 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w34 y b) → Dom Reward le (successor-value w34 y) (successor-value w34 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w34 arg z) → Dom Reward le (value w35) (successor-value w34 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w35)
+                  | spine => λ (_ : Unit) → dom-w35-w42)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w34 spine z) → Dom Reward le (value w42) (successor-value w34 z))
+                  | arg => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value w42) (value w35))
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w42)))
+      | w35 => λ (_ : Unit) → dom-refl Reward le le-refl (value w40)
+      | w36 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w36 y b) → Dom Reward le (successor-value w36 y) (successor-value w36 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w36 arg z) → Dom Reward le (value w46) (successor-value w36 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w46)
+                  | spine => λ (_ : Unit) → dom-w46-w13)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w36 spine z) → Dom Reward le (value w13) (successor-value w36 z))
+                  | arg => λ (_ : Unit) → dom-w13-w46
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w13)))
+      | w37 => λ (_ : Unit) → dom-refl Reward le le-refl (value w0)
+      | w38 => λ (_ : Unit) → dom-refl Reward le le-refl (value w12)
+      | w39 => λ (_ : Unit) → dom-refl Reward le le-refl (value w36)
+      | w4 => λ (_ : Unit) → dom-refl Reward le le-refl (value w43)
+      | w40 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w40 y b) → Dom Reward le (successor-value w40 y) (successor-value w40 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w40 arg z) → Dom Reward le (value w21) (successor-value w40 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w21)
+                  | spine => λ (_ : Unit) → dom-w21-done)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w40 spine z) → Dom Reward le (value done) (successor-value w40 z))
+                  | arg => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value done) (value w21))
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value done)))
+      | w41 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w41 y b) → Dom Reward le (successor-value w41 y) (successor-value w41 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w41 arg z) → Dom Reward le (value w16) (successor-value w41 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w16)
+                  | spine => λ (_ : Unit) → dom-w16-done)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w41 spine z) → Dom Reward le (value done) (successor-value w41 z))
+                  | arg => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value done) (value w16))
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value done)))
+      | w42 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w42 y b) → Dom Reward le (successor-value w42 y) (successor-value w42 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w42 arg z) → Dom Reward le (value w19) (successor-value w42 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w19)
+                  | spine => λ (_ : Unit) → dom-w19-done)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w42 spine z) → Dom Reward le (value done) (successor-value w42 z))
+                  | arg => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value done) (value w19))
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value done)))
+      | w43 => λ (_ : Unit) → dom-refl Reward le le-refl (value done)
+      | w44 => λ (_ : Unit) → dom-refl Reward le le-refl (value w21)
+      | w45 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w45 y b) → Dom Reward le (successor-value w45 y) (successor-value w45 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w45 arg z) → Dom Reward le (value w34) (successor-value w45 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w34)
+                  | spine => λ (_ : Unit) → dom-w34-w41)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w45 spine z) → Dom Reward le (value w41) (successor-value w45 z))
+                  | arg => λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (value w41) (value w34))
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w41)))
+      | w46 => λ (_ : Unit) → dom-refl Reward le le-refl (value w7)
+      | w5 => λ (_ : Unit) → dom-refl Reward le le-refl (value w2)
+      | w6 => λ (_ : Unit) → dom-refl Reward le le-refl (value done)
+      | w7 =>
+          (match a motive (λ (y : Action) → Π (r : ranking w7 y b) → Dom Reward le (successor-value w7 y) (successor-value w7 b))
+            | arg =>
+                (match b motive (λ (z : Action) → Π (r : ranking w7 arg z) → Dom Reward le (value w14) (successor-value w7 z))
+                  | arg => λ (_ : Unit) → dom-refl Reward le le-refl (value w14)
+                  | spine => λ (_ : Unit) → dom-w14-w23)
+            | spine =>
+                (match b motive (λ (z : Action) → Π (r : ranking w7 spine z) → Dom Reward le (value w23) (successor-value w7 z))
+                  | arg => λ (_ : Unit) → dom-w23-w14
+                  | spine => λ (_ : Unit) → dom-refl Reward le le-refl (value w23)))
+      | w8 => λ (_ : Unit) → dom-refl Reward le le-refl (value w18)
+      | w9 => λ (_ : Unit) → dom-refl Reward le le-refl (value w15)
+      | done => λ (_ : Unit) → dom-refl Reward le le-refl (value done)
+
+def lam-heads : evidence HeadCompatible ranking :=
+  λ (a : Action) → λ (b : Action) → λ (s : State) → λ (_ : ranking s a b) →
+    match s motive (λ (x : State) → Le (snd (step x a)) (snd (step x b)))
+      | copy =>
+          (match a motive (λ (y : Action) → Le (snd (step copy y)) (snd (step copy b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step copy z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step copy z))) | arg => tt | spine => tt))
+      | copy4 =>
+          (match a motive (λ (y : Action) → Le (snd (step copy4 y)) (snd (step copy4 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step copy4 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step copy4 z))) | arg => tt | spine => tt))
+      | copy8 =>
+          (match a motive (λ (y : Action) → Le (snd (step copy8 y)) (snd (step copy8 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step copy8 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step copy8 z))) | arg => tt | spine => tt))
+      | ready => tt
+      | ready4 => tt
+      | ready8 => tt
+      | len =>
+          (match a motive (λ (y : Action) → Le (snd (step len y)) (snd (step len b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step len z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step len z))) | arg => tt | spine => tt))
+      | affine =>
+          (match a motive (λ (y : Action) → Le (snd (step affine y)) (snd (step affine b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step affine z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step affine z))) | arg => tt | spine => tt))
+      | discard =>
+          (match a motive (λ (y : Action) → Le (snd (step discard y)) (snd (step discard b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step discard z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step discard z))) | arg => tt | spine => tt))
+      | drop =>
+          (match a motive (λ (y : Action) → Le (snd (step drop y)) (snd (step drop b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step drop z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step drop z))) | arg => tt | spine => tt))
+      | w0 => tt
+      | w1 => tt
+      | w10 => tt
+      | w11 =>
+          (match a motive (λ (y : Action) → Le (snd (step w11 y)) (snd (step w11 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w11 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w11 z))) | arg => tt | spine => tt))
+      | w12 => tt
+      | w13 => tt
+      | w14 => tt
+      | w15 =>
+          (match a motive (λ (y : Action) → Le (snd (step w15 y)) (snd (step w15 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w15 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w15 z))) | arg => tt | spine => tt))
+      | w16 =>
+          (match a motive (λ (y : Action) → Le (snd (step w16 y)) (snd (step w16 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w16 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w16 z))) | arg => tt | spine => tt))
+      | w17 => tt
+      | w18 =>
+          (match a motive (λ (y : Action) → Le (snd (step w18 y)) (snd (step w18 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w18 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w18 z))) | arg => tt | spine => tt))
+      | w19 =>
+          (match a motive (λ (y : Action) → Le (snd (step w19 y)) (snd (step w19 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w19 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w19 z))) | arg => tt | spine => tt))
+      | w2 => tt
+      | w20 => tt
+      | w21 =>
+          (match a motive (λ (y : Action) → Le (snd (step w21 y)) (snd (step w21 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w21 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w21 z))) | arg => tt | spine => tt))
+      | w22 => tt
+      | w23 => tt
+      | w24 =>
+          (match a motive (λ (y : Action) → Le (snd (step w24 y)) (snd (step w24 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w24 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w24 z))) | arg => tt | spine => tt))
+      | w25 => tt
+      | w26 =>
+          (match a motive (λ (y : Action) → Le (snd (step w26 y)) (snd (step w26 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w26 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w26 z))) | arg => tt | spine => tt))
+      | w27 => tt
+      | w28 => tt
+      | w29 => tt
+      | w3 => tt
+      | w30 =>
+          (match a motive (λ (y : Action) → Le (snd (step w30 y)) (snd (step w30 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w30 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w30 z))) | arg => tt | spine => tt))
+      | w31 => tt
+      | w32 => tt
+      | w33 => tt
+      | w34 =>
+          (match a motive (λ (y : Action) → Le (snd (step w34 y)) (snd (step w34 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w34 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w34 z))) | arg => tt | spine => tt))
+      | w35 => tt
+      | w36 =>
+          (match a motive (λ (y : Action) → Le (snd (step w36 y)) (snd (step w36 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w36 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w36 z))) | arg => tt | spine => tt))
+      | w37 => tt
+      | w38 => tt
+      | w39 => tt
+      | w4 => tt
+      | w40 =>
+          (match a motive (λ (y : Action) → Le (snd (step w40 y)) (snd (step w40 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w40 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w40 z))) | arg => tt | spine => tt))
+      | w41 =>
+          (match a motive (λ (y : Action) → Le (snd (step w41 y)) (snd (step w41 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w41 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w41 z))) | arg => tt | spine => tt))
+      | w42 =>
+          (match a motive (λ (y : Action) → Le (snd (step w42 y)) (snd (step w42 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w42 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w42 z))) | arg => tt | spine => tt))
+      | w43 => tt
+      | w44 => tt
+      | w45 =>
+          (match a motive (λ (y : Action) → Le (snd (step w45 y)) (snd (step w45 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w45 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w45 z))) | arg => tt | spine => tt))
+      | w46 => tt
+      | w5 => tt
+      | w6 => tt
+      | w7 =>
+          (match a motive (λ (y : Action) → Le (snd (step w7 y)) (snd (step w7 b)))
+            | arg => (match b motive (λ (z : Action) → Le 0 (snd (step w7 z))) | arg => tt | spine => tt)
+            | spine => (match b motive (λ (z : Action) → Le 0 (snd (step w7 z))) | arg => tt | spine => tt))
+      | w8 => tt
+      | w9 => tt
+      | done => tt
+
+def lam-coind : evidence CoindHomo ranking :=
+  successor-head-coindHomo ranking lam-homomorphism lam-heads
+
+def policy : run Π (s : State) → Action :=
+  λ (s : State) →
+    match s motive (λ _ → Action)
+      | copy => arg
+      | copy4 => arg
+      | copy8 => arg
+      | ready => spine
+      | ready4 => spine
+      | ready8 => spine
+      | len => spine
+      | affine => spine
+      | discard => spine
+      | drop => spine
+      | w0 => spine
+      | w1 => spine
+      | w10 => spine
+      | w11 => spine
+      | w12 => spine
+      | w13 => spine
+      | w14 => spine
+      | w15 => spine
+      | w16 => spine
+      | w17 => spine
+      | w18 => spine
+      | w19 => spine
+      | w2 => spine
+      | w20 => spine
+      | w21 => spine
+      | w22 => spine
+      | w23 => spine
+      | w24 => spine
+      | w25 => spine
+      | w26 => spine
+      | w27 => spine
+      | w28 => spine
+      | w29 => spine
+      | w3 => spine
+      | w30 => spine
+      | w31 => spine
+      | w32 => spine
+      | w33 => spine
+      | w34 => spine
+      | w35 => spine
+      | w36 => spine
+      | w37 => spine
+      | w38 => spine
+      | w39 => spine
+      | w4 => spine
+      | w40 => spine
+      | w41 => spine
+      | w42 => spine
+      | w43 => spine
+      | w44 => spine
+      | w45 => spine
+      | w46 => spine
+      | w5 => spine
+      | w6 => spine
+      | w7 => spine
+      | w8 => spine
+      | w9 => spine
+      | done => spine
+
+def agent : run Π (s : State) → Stream (Action × Reward) :=
+  λ (s : State) → episode-with policy s
+
+def successor-at-copy : evidence {find-successor-policy copy horizon ≡ arg : Action} := refl

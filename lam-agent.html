@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Which call to perform — Muro</title>
+<style>
+  :root {
+    --bg: #f4f1ea;
+    --ink: #1c1915;
+    --muted: #5c564c;
+    --line: #d9d2c5;
+    --card: #fffdf8;
+    --accent: #1f4d3a;
+    --accent-soft: #e5f0ea;
+    --warn: #8a3d12;
+    --warn-soft: #f8ebe3;
+    --code: #221f1b;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    font-family: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
+    color: var(--ink);
+    background: var(--bg);
+  }
+  .deck { height: 100%; }
+  .slide {
+    display: none;
+    height: 100%;
+    overflow: auto;
+    padding: 48px 64px 80px;
+    max-width: 1040px;
+  }
+  .slide.active { display: block; }
+  h1 { font-size: 40px; line-height: 1.12; font-weight: 500; margin: 0 0 14px; }
+  h2 { font-size: 28px; font-weight: 500; margin: 0 0 14px; }
+  p { font-size: 19px; line-height: 1.45; margin: 0 0 12px; }
+  .lede { font-size: 22px; color: var(--muted); }
+  ul, ol { font-size: 19px; line-height: 1.45; padding-left: 1.2em; }
+  li { margin: 0 0 8px; }
+  code, pre, .mono {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  code { font-size: 0.86em; }
+  pre {
+    font-size: 14px;
+    background: var(--code);
+    color: #f3efe6;
+    padding: 16px 18px;
+    border-radius: 8px;
+    overflow: auto;
+    line-height: 1.45;
+    margin: 0 0 12px;
+  }
+  .kicker {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 10px;
+  }
+  .streams { display: grid; gap: 8px; margin: 4px 0 12px; }
+  .stream {
+    display: grid;
+    grid-template-columns: 92px 1fr;
+    gap: 12px;
+    align-items: center;
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 16px;
+  }
+  .stream .who { color: var(--muted); font-size: 13px; }
+  .bits { display: flex; }
+  .bits i {
+    font-style: normal;
+    width: 1.7em;
+    text-align: center;
+  }
+  .bits i.one { color: var(--accent); font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 17px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.win td { background: var(--accent-soft); }
+  tr.loss td { background: var(--warn-soft); }
+  .bars { display: grid; gap: 12px; margin: 8px 0 4px; }
+  .bar-row { display: grid; grid-template-columns: 92px 1fr; gap: 12px; align-items: center; }
+  .bar-label { font-size: 16px; }
+  .track { display: flex; flex-direction: column; gap: 4px; }
+  .meter { display: grid; grid-template-columns: 1fr 148px; align-items: center; gap: 8px; }
+  .bar { height: 14px; background: var(--accent); border-radius: 3px; }
+  .bar.spine { background: #8d8678; }
+  .meter span {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: 13px;
+  }
+  .note, .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .note { margin-top: 14px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 8px 0 12px; }
+  .card h3 { margin: 0 0 8px; font-size: 18px; font-weight: 500; }
+  .card p:last-child { margin-bottom: 0; }
+  .formula {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    font-size: 15px;
+    background: var(--accent-soft);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin: 0 0 12px;
+  }
+  ol.take { list-style: none; padding: 0; margin: 0; }
+  ol.take li {
+    display: grid;
+    grid-template-columns: 36px 1fr;
+    gap: 12px;
+    padding: 12px 0;
+    border-top: 1px solid var(--line);
+    margin: 0;
+  }
+  ol.take li:first-child { border-top: 0; }
+  .n {
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    color: var(--accent);
+    font-size: 16px;
+    padding-top: 2px;
+  }
+  .nav {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 24px;
+    background: var(--bg);
+    border-top: 1px solid var(--line);
+    font-family: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  button {
+    font: inherit;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    color: var(--ink);
+  }
+  button:hover { border-color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="deck" id="deck">
+
+<section class="slide active" data-arc="Result">
+  <div class="kicker">Muro · for programmers</div>
+  <h1>Do the call before you copy it</h1>
+  <p class="lede">When the value about to be copied is still a call, performing that call first saves one substitution per extra use. Nest the copier, and the same choice saves almost nothing, because the copying itself is the long part.</p>
+  <div class="grid2">
+    <div class="card">
+      <h3>Proved, on three programs</h3>
+      <p>8 uses: 10 steps instead of 17. The save is <code>k − 1</code>.</p>
+    </div>
+    <div class="card">
+      <h3>Counted, on nested copies</h3>
+      <p>16 nested copies: 262,142 steps. Preferring the argument saves 8.</p>
+    </div>
+  </div>
+</section>
+
+<section class="slide" data-arc="Score">
+  <div class="kicker">The score</div>
+  <h2>One substitution, then stop at the head</h2>
+  <p>A step writes the argument in place of the parameter:</p>
+  <pre>(λ (x) → body) argument    →    body, with argument for x</pre>
+  <p>Count those steps until the term in front of us is no longer a call we can step into. That count is the whole score. Written as a stream, each step is <code>0</code>, and the stopped head is <code>1</code> forever. Fewer steps means the <code>1</code>s start sooner.</p>
+  <p>The checker’s reducer is left as it is. This is a second way of choosing the next call.</p>
+</section>
+
+<section class="slide" data-arc="Choice">
+  <div class="kicker">The only choice</div>
+  <h2>The call in front of you, or the call inside its argument</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>Spine</h3>
+      <p>Perform <code>(λ (+ f) → …)</code> applied to the whole argument. If that argument is still a call, the call is copied into every use.</p>
+    </div>
+    <div class="card">
+      <h3>Argument</h3>
+      <p>Perform <code>(λ h → h)</code> applied to <code>(λ g → g)</code> first. What gets copied is the function that call returns.</p>
+    </div>
+  </div>
+  <pre>(λ (+ f) → f (f done))   ((λ h → h) (λ g → g))</pre>
+  <p><code>+</code> means <code>f</code> may occur more than once, so the value is copied. There is no third kind of step. A call that is not already in the term is never invented.</p>
+</section>
+
+<section class="slide" data-arc="Programs">
+  <div class="kicker">examples/lam_uses.muro</div>
+  <h2>The same call, used 2, 4, and 8 times</h2>
+  <pre>def redex := (λ h → h) (λ g → g)
+
+def copy2 :=
+  (λ (+ f) → f (f (λ n → n))) redex</pre>
+  <p><code>redex</code> returns its argument unchanged, so performing it yields <code>λ g → g</code>. Until then, <code>f</code> receives the whole call. <code>copy4</code> and <code>copy8</code> are this definition with four and eight uses. In the file, <code>f</code> has the type of <code>redex</code> and the result is <code>Π (n : Nat) → Nat</code>.</p>
+</section>
+
+<section class="slide" data-arc="Gap">
+  <div class="kicker">The proved gap</div>
+  <h2>One saved substitution per extra use</h2>
+  <div class="bars">
+    <div class="bar-row"><div class="bar-label">2 uses</div><div class="track"><div class="meter"><div class="bar spine" style="width:29%"></div><span>5 spine</span></div><div class="meter"><div class="bar" style="width:24%"></div><span>4 argument first</span></div></div></div>
+    <div class="bar-row"><div class="bar-label">4 uses</div><div class="track"><div class="meter"><div class="bar spine" style="width:53%"></div><span>9 spine</span></div><div class="meter"><div class="bar" style="width:35%"></div><span>6 argument first</span></div></div></div>
+    <div class="bar-row"><div class="bar-label">8 uses</div><div class="track"><div class="meter"><div class="bar spine" style="width:100%"></div><span>17 spine</span></div><div class="meter"><div class="bar" style="width:59%"></div><span>10 argument first</span></div></div></div>
+  </div>
+  <div class="formula">spine = 1 + 2k &nbsp;&nbsp; argument first = 2 + k &nbsp;&nbsp; saved = k − 1</div>
+  <p>For <code>k</code> uses the spine pays two steps per copy, because each copy is still a call. Doing the call once, up front, leaves a function, and each use is then one step.</p>
+</section>
+
+<section class="slide" data-arc="Ties">
+  <div class="kicker">The same programs, other shapes</div>
+  <h2>Early work helps only when a call would be copied</h2>
+  <table>
+    <thead><tr><th>Program</th><th>Shape</th><th class="num">Spine</th><th class="num">Proved choice</th></tr></thead>
+    <tbody>
+      <tr><td><code>affine</code></td><td>the parameter is used once</td><td class="num">3</td><td class="num">3</td></tr>
+      <tr><td><code>discard</code></td><td>the body ignores the argument</td><td class="num">1</td><td class="num">1</td></tr>
+      <tr><td><code>copy_discard</code></td><td><code>+</code>, and the body ignores it</td><td class="num">1</td><td class="num">1</td></tr>
+      <tr><td><code>copy_ready</code></td><td>two uses, argument already a function</td><td class="num">3</td><td class="num">3</td></tr>
+    </tbody>
+  </table>
+  <div class="note">Doing the argument anyway is longer when the body ignores it: <code>discard</code> becomes 2. The proved choice stays on the spine and keeps 1.</div>
+</section>
+
+<section class="slide" data-arc="Length">
+  <div class="kicker">examples/higher_order.muro</div>
+  <h2><code>length</code> matches the test, and the test adds a step</h2>
+  <pre>def measure := λ (+ m) → plus (m (cons 0 nil)) (m nil)
+def len-one  := measure (length Nat)</pre>
+  <table>
+    <thead><tr><th>Run</th><th class="num">Steps</th></tr></thead>
+    <tbody>
+      <tr class="win"><td>Spine, which is the proved choice</td><td class="num">3</td></tr>
+      <tr class="loss"><td>Test: used more than once, and the argument contains a call</td><td class="num">4</td></tr>
+      <tr><td>That argument action on every following step as well</td><td class="num">6</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:14px"><code>m</code> is used twice and <code>length Nat</code> is a call, so the test says yes. Performing <code>length</code> first does not remove a call the spine would repeat.</p>
+  <div class="note">Across the 179 definitions named in the tests, this test is shorter on the three <code>copy</code> programs, longer here, and tied or already finished on the rest: 165 already done, 10 ties. Deeper boolean combinations of those same observations still cannot tell <code>copy2</code> from <code>len-one</code>.</div>
+</section>
+
+<section class="slide" data-arc="Proof">
+  <div class="kicker">What the checker accepted</div>
+  <h2>The 1s start sooner</h2>
+  <div class="streams">
+    <div class="stream"><span class="who">argument</span><span class="bits"><i>0</i><i>0</i><i>0</i><i>0</i><i class="one">1</i><i>1</i><i>1</i><i>…</i></span></div>
+    <div class="stream"><span class="who">spine</span><span class="bits"><i>0</i><i>0</i><i>0</i><i>0</i><i>0</i><i class="one">1</i><i>1</i><i>…</i></span></div>
+  </div>
+  <p>This is <code>copy2</code>: four substitutions, then 1 forever, against five. At every position the first stream is at least the second. That is dominance.</p>
+  <p>The same statement is proved for every term reachable from these programs by either substitution: 57 terms, plus the stopped state. The statement the checker accepted is a coinductive homomorphism of the ranking.</p>
+  <div class="formula">argument at copy, copy4, copy8 &nbsp;&nbsp;·&nbsp;&nbsp; spine everywhere else, including length</div>
+  <div class="note">A policy that typechecks is not this proof. The proof is the dominance, on this graph. The bars earlier are this ranking.</div>
+</section>
+
+<section class="slide" data-arc="Tower">
+  <div class="kicker">Counted · a longer episode</div>
+  <h2>Nesting the copier doubles the steps</h2>
+  <pre>def dup := λ (+ f) → λ n → f (f n)
+def bad := (λ h → h) (λ n → n)
+
+depth d  :=  dup (dup (… (dup bad))) 0</pre>
+  <p><code>dup</code> places two uses of <code>f</code> on the spine. Wrapping another <code>dup</code> around it doubles those uses. The head stops at <code>0</code>. Spine steps are exactly <code>4·2^d − 2</code>.</p>
+  <table>
+    <thead><tr><th class="num">Depth</th><th class="num">Spine</th><th class="num">Argument whenever it applies</th><th class="num">Saved</th></tr></thead>
+    <tbody>
+      <tr><td class="num">1</td><td class="num">6</td><td class="num">5</td><td class="num">1</td></tr>
+      <tr><td class="num">8</td><td class="num">1,022</td><td class="num">1,018</td><td class="num">4</td></tr>
+      <tr><td class="num">16</td><td class="num">262,142</td><td class="num">262,134</td><td class="num">8</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="slide" data-arc="Split">
+  <div class="kicker">Counted · where the steps go</div>
+  <h2>The copying is the long part</h2>
+  <div class="grid2">
+    <div class="card">
+      <h3>Depth 1</h3>
+      <p><code>bad</code> is the argument of <code>dup</code>. Doing it first saves one step. Same shape as <code>copy2</code>.</p>
+    </div>
+    <div class="card">
+      <h3>Depth 2 and on</h3>
+      <p>The argument of the outer <code>dup</code> is another <code>dup</code>. That step copies <code>bad</code> before <code>bad</code> is a function.</p>
+    </div>
+  </div>
+  <p>At depth 16 the argument action fires 262,108 times and the spine 26 times. The total is 262,134.</p>
+  <table>
+    <thead><tr><th>Depth 16, spine</th><th class="num">Steps</th><th>What they are</th></tr></thead>
+    <tbody>
+      <tr><td>Argument is already <code>λ n → n</code></td><td class="num">196,606</td><td>the copies <code>dup</code> puts on the spine</td></tr>
+      <tr><td>Argument is the redex <code>bad</code></td><td class="num">262,142</td><td>those copies, plus one step per copy</td></tr>
+      <tr><td>Difference</td><td class="num">65,536</td><td><code>2^16</code>, one extra substitution per copy</td></tr>
+    </tbody>
+  </table>
+  <div class="note">These rows are substitution counts until the head stops. The homomorphism is the earlier graph, which stops at the <code>copy8</code> family. Its longest spine run is 17.</div>
+</section>
+
+<section class="slide" data-arc="Conclusion">
+  <div class="kicker">Conclusion</div>
+  <h2>What is worth repeating</h2>
+  <ol class="take">
+    <li><span class="n">1</span><span>The score is the number of substitutions until the head stops. On two, four, and eight uses of one pending call, doing that call first takes 4, 6, and 10. The spine takes 5, 9, and 17. The save is <code>k − 1</code>.</span></li>
+    <li><span class="n">2</span><span>That choice is proved for every term reachable from those programs, together with the one-use, discarding, and <code>length</code> terms. The proof is a coinductive homomorphism: the preferred action’s rewards dominate. The preferred action is the argument only at the three copy programs, and the spine everywhere else.</span></li>
+    <li><span class="n">3</span><span>A boolean test with the same idea — parameter used more than once, argument contains a call — is one step longer on <code>length</code> (4 against 3). The proof does not follow that test.</span></li>
+    <li><span class="n">4</span><span>Nesting <code>dup</code> makes the episode <code>4·2^d − 2</code>. At depth 16 that is 262,142 steps, and preferring the argument saves 8. The same tower on a function that is already a λ takes 196,606. The long part is the copying.</span></li>
+  </ol>
+</section>
+
+</div>
+<div class="nav">
+  <button type="button" id="prev">Previous</button>
+  <span id="count"></span>
+  <button type="button" id="next">Next</button>
+</div>
+<script>
+  const slides = Array.from(document.querySelectorAll(".slide"));
+  let i = 0;
+  const count = document.getElementById("count");
+  function show(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, k) => s.classList.toggle("active", k === i));
+    const arc = slides[i].dataset.arc || "";
+    count.textContent = (i + 1) + " / " + slides.length + (arc ? "  ·  " + arc : "");
+    slides[i].scrollTop = 0;
+  }
+  document.getElementById("prev").onclick = () => show(i - 1);
+  document.getElementById("next").onclick = () => show(i + 1);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowRight" || e.key === "PageDown" || e.key === " ") { e.preventDefault(); show(i + 1); }
+    if (e.key === "ArrowLeft" || e.key === "PageUp") { e.preventDefault(); show(i - 1); }
+  });
+  show(0);
+</script>
+</body>
+</html>

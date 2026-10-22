@@ -1,0 +1,34 @@
+-- How many times a λ application is substituted, for the two ways of
+-- choosing which application to take. redex is (λ h → h) applied to
+-- (λ g → g). A + binder copies that argument.
+def redex : run Π (g : Π (n : Nat) → Nat) → Π (n : Nat) → Nat :=
+  (λ (h : Π (g : Π (n : Nat) → Nat) → Π (n : Nat) → Nat) → h)
+    (λ (g : Π (n : Nat) → Nat) → g)
+
+def affine : run Π (n : Nat) → Nat :=
+  (λ (f : Π (g : Π (n : Nat) → Nat) → Π (n : Nat) → Nat) → f (λ (n : Nat) → n))
+    redex
+
+def discard : run Nat :=
+  (λ (f : Π (g : Π (n : Nat) → Nat) → Π (n : Nat) → Nat) → 0) redex
+
+def copy_discard : run Nat :=
+  (λ (+ f : Π (g : Π (n : Nat) → Nat) → Π (n : Nat) → Nat) → 0) redex
+
+def copy_ready : run Π (n : Nat) → Nat :=
+  (λ (+ f : Π (g : Π (n : Nat) → Nat) → Π (n : Nat) → Nat) → f (f (λ (n : Nat) → n)))
+    (λ (g : Π (n : Nat) → Nat) → g)
+
+def copy2 : run Π (n : Nat) → Nat :=
+  (λ (+ f : Π (g : Π (n : Nat) → Nat) → Π (n : Nat) → Nat) → f (f (λ (n : Nat) → n)))
+    redex
+
+def copy4 : run Π (n : Nat) → Nat :=
+  (λ (+ f : Π (g : Π (n : Nat) → Nat) → Π (n : Nat) → Nat) →
+      f (f (f (f (λ (n : Nat) → n)))))
+    redex
+
+def copy8 : run Π (n : Nat) → Nat :=
+  (λ (+ f : Π (g : Π (n : Nat) → Nat) → Π (n : Nat) → Nat) →
+      f (f (f (f (f (f (f (f (λ (n : Nat) → n)))))))))
+    redex
