@@ -1,7 +1,7 @@
 ---
 title: Machine numbers
 slug: machine
-order: 11
+order: 12
 summary: I64, F32, Tensor, and Nx. Nat stays Peano.
 ---
 

@@ -67,6 +67,7 @@ A definition is in the book the moment `Parser.parse/1` returns it. The checker 
 | [Start](manual/start.md) | Install, first file, emit |
 | [The wall](manual/wall.md) | spec / evidence / run |
 | [Terms](manual/language.md) | Π, λ, match, quantities |
+| [Sessions](manual/sessions.md) | The messages two processes exchange |
 | [Grammar](manual/grammar.md) | What the parser implements |
 | [Examples](manual/examples.md) | Every file in `examples/` |
 | [CSHRL](manual/cshrl.md) | A library on params, three environments, their agents |

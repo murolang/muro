@@ -1,7 +1,7 @@
 ---
 title: Limits
 slug: limits
-order: 18
+order: 19
 summary: What the language does not do. Facts about the checker, not a roadmap.
 ---
 

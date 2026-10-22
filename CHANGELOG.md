@@ -7,6 +7,7 @@ A session sends a value and then continues. The value is a nat, a bit, unit, a p
 ### Manual
 
 - Grammar, Terms, and Examples: a payload is a nat, a bit, unit, a pair, or a record of named fields.
+- Sessions: the messages two processes exchange, and where the meeting stays or crosses.
 - Emit: the OTP message carries that value.
 - Extending: the checker follows the payload.
 - Limits: a payload is one of those types.

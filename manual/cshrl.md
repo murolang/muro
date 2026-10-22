@@ -1,7 +1,7 @@
 ---
 title: CSHRL
 slug: cshrl
-order: 15
+order: 16
 summary: Coinductive symmetric homomorphisms for RL, as a library on params, with three environments and their agents.
 ---
 

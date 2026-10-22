@@ -1,7 +1,7 @@
 ---
 title: Emit
 slug: emit
-order: 12
+order: 13
 summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A cross is one call on a named node. Spec and evidence are omitted from a run.
 ---
 

@@ -1,6 +1,7 @@
 ---
 title: Sessions
 slug: sessions
+order: 6
 summary: A session is the messages two processes exchange, and the order they exchange them.
 ---
 
