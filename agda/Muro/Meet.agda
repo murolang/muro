@@ -16,6 +16,7 @@
 module Muro.Meet where
 
 open import Data.Empty using (⊥)
+open import Data.List.Base using ([])
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 open import Relation.Nullary.Decidable.Core using (Dec) renaming (yes to yes′; no to no′)
 

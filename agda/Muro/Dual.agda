@@ -14,6 +14,7 @@
 module Muro.Dual where
 
 open import Data.Empty using (⊥)
+open import Data.List.Base using ([])
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; cong₂)
 
 open import Muro.Base using (Mode; spec; run)

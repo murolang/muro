@@ -20,6 +20,7 @@
 module Muro.Held where
 
 open import Data.Empty using (⊥)
+open import Data.List.Base using ([])
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans; subst)
 
 open import Muro.Base using (Mode; evid; run)

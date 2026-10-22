@@ -25,6 +25,7 @@
 module Muro.Located where
 
 open import Data.Empty using (⊥)
+open import Data.List.Base using ([])
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
 open import Muro.Base using (Mode; spec; evid; run)
