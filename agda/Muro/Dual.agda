@@ -1,13 +1,12 @@
 ------------------------------------------------------------------------
 -- The other end of a session. One channel has two ends. Sending
 -- here is receiving there. Choosing here is offering there. The
--- bit stays the bit: each continuation dualises, and the selector
--- does not. The other end of the other end is the same protocol.
+-- payload type stays the payload type, and the continuation
+-- dualises. The other end of the other end is the same protocol.
 --
 -- The other end is spec. A run term has no seat. The mark stays
 -- the session's mark. None of these constructors is added to Tm
--- or PTm. The Elixir checker follows `dual`: `session name := dual
--- name`. An omitted mark is the named session's mark.
+-- or PTm. The Elixir checker follows this form of `dual`.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
@@ -15,7 +14,7 @@
 module Muro.Dual where
 
 open import Data.Empty using (⊥)
-open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong₂)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; cong₂)
 
 open import Muro.Base using (Mode; spec; run)
 open import Muro.Session hiding (¬_; Seat; no-run; ping)
@@ -25,20 +24,20 @@ open import Muro.Session hiding (¬_; Seat; no-run; ping)
 
 ------------------------------------------------------------------------
 -- `send` swaps with `recv`. `choose` swaps with `branch`. `end`
--- stays `end`. Both continuations dualise.
+-- stays `end`. The payload type stays. The continuation dualises.
 ------------------------------------------------------------------------
 
 dual : Proto → Proto
 dual end = end
-dual (send S T) = recv (dual S) (dual T)
-dual (recv S T) = send (dual S) (dual T)
+dual (send A S) = recv A (dual S)
+dual (recv A S) = send A (dual S)
 dual (choose S T) = branch (dual S) (dual T)
 dual (branch S T) = choose (dual S) (dual T)
 
 dual-invol : ∀ S → dual (dual S) ≡ S
 dual-invol end = refl
-dual-invol (send S T) = cong₂ send (dual-invol S) (dual-invol T)
-dual-invol (recv S T) = cong₂ recv (dual-invol S) (dual-invol T)
+dual-invol (send A S) = cong (send A) (dual-invol S)
+dual-invol (recv A S) = cong (recv A) (dual-invol S)
 dual-invol (choose S T) = cong₂ choose (dual-invol S) (dual-invol T)
 dual-invol (branch S T) = cong₂ branch (dual-invol S) (dual-invol T)
 
@@ -53,45 +52,45 @@ no-run : ¬ Seat run
 no-run ()
 
 ------------------------------------------------------------------------
--- `ping` receives `b1` and then sends `b0`. The other end sends
--- `b1` and then receives `b0`. Sending `b1` and finishing has no
--- derivation there: that bit's continuation is a receive.
+-- `ping` receives a nat and then sends a nat. The other end sends
+-- a nat and then receives a nat. The payload type is the same type.
+-- Sending a tuple where the protocol says nat has no derivation.
 ------------------------------------------------------------------------
 
 ping : Proto
-ping = recv end (send end end)
+ping = recv nat (send nat end)
 
-ping-other : dual ping ≡ send end (recv end end)
+ping-other : dual ping ≡ send nat (recv nat end)
 ping-other = refl
 
 ping-back : dual (dual ping) ≡ ping
 ping-back = refl
 
 peer : Proc
-peer = put b1 (get b0 done)
+peer = put nat two (get nat done)
 
 peer-ok : Conforms peer (dual ping)
-peer-ok = put1 (get0 done-end)
+peer-ok = put-ok (get-ok done-end)
 
-early : ¬ Conforms (put b1 done) (dual ping)
-early (put1 ())
+early : ¬ Conforms (put box here done) (dual ping)
+early ()
 
 -- Abandonment still has a derivation at the other end.
 peer-stop : Conforms stop (dual ping)
 peer-stop = abandon
 
 ------------------------------------------------------------------------
--- Choosing swaps with offering. The bit stays the selector.
+-- Choosing swaps with offering. The payload type stays.
 ------------------------------------------------------------------------
 
 choice : Proto
-choice = choose end (send end end)
+choice = choose end (send box end)
 
-choice-other : dual choice ≡ branch end (recv end end)
+choice-other : dual choice ≡ branch end (recv box end)
 choice-other = refl
 
-offered : Conforms (cover done (get b0 done)) (dual choice)
-offered = cover-ok done-end (get0 done-end)
+offered : Conforms (cover done (get box done)) (dual choice)
+offered = cover-ok done-end (get-ok done-end)
 
 not-pick : ¬ Conforms (pick0 done) (dual choice)
 not-pick ()

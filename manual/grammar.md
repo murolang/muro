@@ -18,7 +18,8 @@ data       ::= "data" ident binder* ":" telescope "where" (ident ":" term)+
 telescope  ::= "Type" | binder ("→" | "->") telescope | term ("→" | "->") "Type"
 talk       ::= "talk" ident ":=" talk-term
 talk-term  ::= "over" | "(" talk-term ")" | ident
-             | ("say" | "offer") party party talk-term talk-term
+             | "say" party party pay talk-term
+             | "offer" party party talk-term talk-term
 party      ::= ident                  -- over, say, and offer are not parties
 session    ::= "session" mult? ident ":=" (proto | "dual" ident | "seen" ident "with" ident "in" ident)
 mult       ::= "%0" | "%1"             -- default %0; %1 must finish
@@ -32,12 +33,19 @@ meet       ::= "meet" ident ":" ident "with" ident
 seat       ::= "seat" ident ":" party "at" ident "in" ident
 link       ::= "link" ident ":" ("stay" | "cross") ident "with" ident "in" ident
 proto      ::= "end" | "(" proto ")"
-             | ("send" | "recv" | "choose" | "branch") proto proto
+             | ("send" | "recv") pay proto
+             | ("choose" | "branch") proto proto
 proc       ::= "done" | "stop" | "(" proc ")"
-             | ("put" | "get") bit proc
+             | "put" pval proc
+             | "get" pay proc
              | ("pick0" | "pick1") proc
              | "cover" proc proc
-bit        ::= "b0" | "b1"
+pay        ::= "Nat" | "Bit" | "Unit" | pay "*" pay | "(" pay ")"
+             | "{" (ident ":" pay ("," ident ":" pay)*)? "}"
+pval       ::= numeral | "tt" | "b0" | "b1" | "(" pval ")"
+             | "(" pval "," pval ")"
+             | "{" (ident "=" pval ("," ident "=" pval)*)? "}"
+numeral    ::= [0-9]+
 def        ::= "def" ident ":" tag term ":=" term
 tag        ::= "run" "internal"? | "spec" | "evidence"
 
@@ -92,13 +100,15 @@ Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an
 
 A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are identifiers; `suc`, `refl`, `tt`, and `Nat` are not. `->` ends a word, so `Nat->Nat` is an arrow.
 
-`end`, `send`, `recv`, `choose`, `branch`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. Parentheses group a nested protocol or process: `recv end (send end end)`. `dual` is a keyword in `session name := dual name`. Outside that form it is an identifier, so `def dual : run Nat := 0` is a definition. The mark on a dual session is the named session's mark when it is omitted. `seen` is a keyword in `session name := seen party with party in talk`. `with` there names the other party, and `in` names the description. Outside that form `seen` is an identifier, so `def seen : run Nat := 0` is a definition. `meet` and `with` are keywords in `meet name : left with right`. `with` is also the keyword between the two parties of a `seen` session. Outside those forms they are identifiers, so `def meet : run Nat := 0` and `def with : run Nat := 0` are definitions.
+`end`, `send`, `recv`, `choose`, `branch`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. Parentheses group a nested protocol or process: `recv Nat (send Nat end)`. `send` and `recv` name one payload type and one continuation. `put` writes a value of that type. `get` names the type. `choose` and `branch` still name two protocols. `dual` is a keyword in `session name := dual name`. Outside that form it is an identifier, so `def dual : run Nat := 0` is a definition. The mark on a dual session is the named session's mark when it is omitted. `seen` is a keyword in `session name := seen party with party in talk`. `with` there names the other party, and `in` names the description. Outside that form `seen` is an identifier, so `def seen : run Nat := 0` is a definition. `meet` and `with` are keywords in `meet name : left with right`. `with` is also the keyword between the two parties of a `seen` session. Outside those forms they are identifiers, so `def meet : run Nat := 0` and `def with : run Nat := 0` are definitions.
 
-`talk`, `over`, `say`, and `offer` are keywords in `talk name := …`. `over` finishes the description. `say` is one party sending a bit: the first continuation is `b0` and the second is `b1`. `offer` is one party choosing. A party is a name. `over`, `say`, and `offer` are not party names. A name in a description is another description. Outside that form they are identifiers, so `def talk : run Nat := 0` and `def say : run Nat := 0` are definitions. The mark on a `seen` session is the mark written there. An omitted mark is `%0`.
+A payload type is `Nat`, `Bit`, `Unit`, a pair, or a record of named fields. A pair is a tuple, and `*` in a payload associates to the right, so `send Nat * Bit end` is `send (Nat * Bit) end`. A record is a map whose keys are the names written there, in that order, and that order is the type: `{x : Nat, y : Nat}` and `{y : Nat, x : Nat}` are different types. `{}` is the empty record. A repeated name is refused. A key is a name in the type. `Nat`, `Bit`, and `Unit` are those types only where a payload is written. Outside a payload, `Bit` is an identifier, so `def Bit : run Nat := 0` is a definition. A payload value is a numeral, `tt`, `b0`, `b1`, a pair `(v, w)`, or a record `{ name = v }`. The type of a value is the type of what was written, in that order.
+
+`talk`, `over`, `say`, and `offer` are keywords in `talk name := …`. `over` finishes the description. `say` is one party sending one payload, then one continuation. A party off that `say` has the continuation's session. `offer` is one party choosing, and it still has two arms. A party off an `offer` has a session when both arms are the same description. A party is a name. `over`, `say`, and `offer` are not party names. A name in a description is another description. Outside that form they are identifiers, so `def talk : run Nat := 0` and `def say : run Nat := 0` are definitions. The mark on a `seen` session is the mark written there. An omitted mark is `%0`.
 
 `ambient` and `node` are keywords on the right of a `place`. `any` and `fixed` are keywords on the right of a `scheme`. `stay` and `cross` are keywords in a `move`, and in a `link`. Outside those forms they are identifiers, so `def stay : run Nat := 0` is a definition. A `place` names `ambient` or `node` followed by a node name. A `scheme` is `any`, or `fixed` followed by a place name. A `move` states `stay` or `cross`, then a scheme name, then a place name.
 
-`at` is a keyword in an `endpoint`, in a `read`, and in a `seat`. An `endpoint` names a session and a scheme: `endpoint name := session at scheme`. A `read` states `stay` or `cross`, then a process name, an endpoint name, `at`, a place name, and a process. A `seat` names a party, a place, and a description: `seat name : party at place in talk`. A `link` states `stay` or `cross`, then two seats, `in`, and that description: `link name : stay seat with seat in talk`. Outside those forms `endpoint`, `read`, `at`, `seat`, and `link` are identifiers, so `def seat : run Nat := 0` and `def link : run Nat := 0` are definitions. The same place stays. Two places cross once. The bits stay on the session.
+`at` is a keyword in an `endpoint`, in a `read`, and in a `seat`. An `endpoint` names a session and a scheme: `endpoint name := session at scheme`. A `read` states `stay` or `cross`, then a process name, an endpoint name, `at`, a place name, and a process. A `seat` names a party, a place, and a description: `seat name : party at place in talk`. A `link` states `stay` or `cross`, then two seats, `in`, and that description: `link name : stay seat with seat in talk`. Outside those forms `endpoint`, `read`, `at`, `seat`, and `link` are identifiers, so `def seat : run Nat := 0` and `def link : run Nat := 0` are definitions. The same place stays. Two places cross once. The payload stays on the session.
 
 `%0` and `%1` are whole tokens. `%10` is not `%1` followed by `0`. On a session, an unmarked session is `%0`, and `%1` requires the process to finish. On a Π or λ binder, an unmarked binder is `%0`, and `%1` requires the variable to be used. Both marks are the affine quantity. The λ mark and the Π mark must agree.
 

@@ -10,7 +10,7 @@ defmodule Muro.EmitOtpTest do
             {"LocatedOtp",
              [:Pong, :PongAway, :PongPoly, :PongPolyAway, :PongDone, :LeftOpen, ""]},
             {"BothOtp", [:Pong, :PongHome, ""]},
-            {"MeetOtp", [:Pong, :Peer, :Taker, :Giver, :Left, :Right, ""]}
+            {"MeetOtp", [:Pong, :Peer, :Taker, :Giver, :Left, :Right, :Here, :There, :Far, ""]}
           ] do
         for name <- names do
           mod = if name == "", do: Module.concat([parent]), else: Module.concat(parent, name)
@@ -27,12 +27,12 @@ defmodule Muro.EmitOtpTest do
     assert {:ok, book} = Parser.parse(File.read!("examples/ping.muro"))
     proc = Map.new(book, &{&1.name, Map.get(&1, :proc)})
 
-    assert Session.skel(proc["pong"]) == {:hear, :b1, {:say, :b0, :finish}}
-    assert Session.skel(proc["left-open"]) == {:say, :b0, :leave}
+    assert Session.skel(proc["pong"]) == {:hear, :nat, {:say, 1, :finish}}
+    assert Session.skel(proc["left-open"]) == {:say, 0, :leave}
     assert Session.skel(proc["untouched"]) == :leave
     assert Session.skel(proc["chosen"]) == {:choose, :b0, :finish}
-    assert Session.skel(proc["both"]) == {:offer, :finish, {:say, :b0, :finish}}
-    assert Session.skel(proc["pong-done"]) == {:hear, :b1, {:say, :b0, :finish}}
+    assert Session.skel(proc["both"]) == {:offer, :finish, {:say, 0, :finish}}
+    assert Session.skel(proc["pong-done"]) == {:hear, :nat, {:say, 1, :finish}}
     assert Session.skel(proc["open-stop"]) == :leave
     assert Session.finishes(proc["pong-done"]) == :yes
     assert Session.finishes(proc["open-stop"]) == :no
@@ -50,7 +50,7 @@ defmodule Muro.EmitOtpTest do
     src = File.read!(file)
     assert src =~ "defmodule PingOtp do"
     assert src =~ "defmodule Pong do"
-    assert src =~ "{:hear, :b1, {:say, :b0, :finish}}"
+    assert src =~ "{:hear, :nat, {:say, 1, :finish}}"
     assert src =~ "The proof stops at the conformance derivation."
     refute src =~ "def z"
     refute src =~ "muro_peer"
@@ -66,7 +66,7 @@ defmodule Muro.EmitOtpTest do
 
     File.write!(path, """
     session ping := end
-    conform bad : ping := put b0 done
+    conform bad : ping := put 0 done
     """)
 
     assert {:error, msg} = Muro.emit_otp(path)
@@ -106,8 +106,8 @@ defmodule Muro.EmitOtpTest do
     assert src =~ "defmodule PongPolyAway do"
     assert src =~ "defmodule PongDone do"
     assert src =~ "defmodule LeftOpen do"
-    assert src =~ "{:hear, :b1, {:say, :b0, :finish}}"
-    assert src =~ "{:say, :b0, :leave}"
+    assert src =~ "{:hear, :nat, {:say, 1, :finish}}"
+    assert src =~ "{:say, 0, :leave}"
     assert src =~ "The server talks to one peer."
     refute src =~ "def kept"
     refute src =~ "GenServer.call"
@@ -134,6 +134,10 @@ defmodule Muro.EmitOtpTest do
     assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
 
+    {:ok, here, there, here_ref, there_ref} = meet(:wrapped)
+    assert_receive {:DOWN, ^here_ref, :process, ^here, :normal}
+    assert_receive {:DOWN, ^there_ref, :process, ^there, :normal}
+
     {:ok, taker, giver, taker_ref, giver_ref} = meet(:arm)
     assert_receive {:DOWN, ^taker_ref, :process, ^taker, :normal}
     assert_receive {:DOWN, ^giver_ref, :process, ^giver, :normal}
@@ -143,8 +147,8 @@ defmodule Muro.EmitOtpTest do
     assert_receive {:DOWN, ^closed_ref, :process, ^closed, {:shutdown, :abandon}}
 
     {:ok, pid, ref} = meet_one(:Pong)
-    send(pid, {:muro, self(), :b1})
-    assert_receive {:muro, ^pid, :b0}
+    send(pid, {:muro, self(), 0})
+    assert_receive {:muro, ^pid, 1}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
   end
 
@@ -153,13 +157,13 @@ defmodule Muro.EmitOtpTest do
     path = Path.join(dir, "read_meet.muro")
 
     File.write!(path, """
-    session ping := recv end (send end end)
+    session ping := recv Nat (send Nat end)
     session back := dual ping
     place home := ambient
     scheme local := fixed home
     endpoint there := back at local
-    read stay peer : there at home := put b1 (get b0 done)
-    conform pong : ping := get b1 (put b0 done)
+    read stay peer : there at home := put 1 (get Nat done)
+    conform pong : ping := get Nat (put 1 done)
     meet wire : pong with peer
     meet a-b : peer with pong
     meet a_b : pong with peer
@@ -171,8 +175,8 @@ defmodule Muro.EmitOtpTest do
     assert src =~ "def a_b do"
     assert src =~ "def a_b2 do"
     assert src =~ "def muro_end do"
-    assert src =~ "{:hear, :b1, {:say, :b0, :finish}}"
-    assert src =~ "{:say, :b1, {:hear, :b0, :finish}}"
+    assert src =~ "{:hear, :nat, {:say, 1, :finish}}"
+    assert src =~ "{:say, 1, {:hear, :nat, :finish}}"
   end
 
   test "a conform and a reading are two servers" do
@@ -180,18 +184,18 @@ defmodule Muro.EmitOtpTest do
     path = Path.join(dir, "both.muro")
 
     File.write!(path, """
-    session ping := recv end (send end end)
-    conform pong : ping := get b1 (put b0 done)
+    session ping := recv Nat (send Nat end)
+    conform pong : ping := get Nat (put 1 done)
     place home := ambient
     scheme local := fixed home
     endpoint ping-home := ping at local
-    read stay pong-home : ping-home at home := get b1 (put b0 done)
+    read stay pong-home : ping-home at home := get Nat (put 1 done)
     """)
 
     assert {:ok, src} = Emit.Otp.render(checked!(path), "both")
     assert src =~ "defmodule Pong do"
     assert src =~ "defmodule PongHome do"
-    assert length(String.split(src, "{:hear, :b1, {:say, :b0, :finish}}")) == 3
+    assert length(String.split(src, "{:hear, :nat, {:say, 1, :finish}}")) == 3
   end
 
   test "a refused reading is not emitted" do
@@ -199,12 +203,12 @@ defmodule Muro.EmitOtpTest do
     path = Path.join(dir, "bad_read.muro")
 
     File.write!(path, """
-    session ping := recv end (send end end)
+    session ping := recv Nat (send Nat end)
     place home := ambient
     place away := node a
     scheme local := fixed home
     endpoint ping-home := ping at local
-    read cross early : ping-home at away := get b0 (put b0 done)
+    read cross early : ping-home at away := get Bit (put b0 done)
     """)
 
     assert {:error, msg} = Muro.emit_otp(path)
@@ -217,17 +221,17 @@ defmodule Muro.EmitOtpTest do
     Code.compile_string(src)
 
     {:ok, pid, ref} = located(:Pong)
-    send(pid, {:muro, self(), :b1})
-    assert_receive {:muro, ^pid, :b0}
+    send(pid, {:muro, self(), 0})
+    assert_receive {:muro, ^pid, 1}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
     {:ok, away, away_ref} = located(:PongAway)
-    send(away, {:muro, self(), :b1})
-    assert_receive {:muro, ^away, :b0}
+    send(away, {:muro, self(), 0})
+    assert_receive {:muro, ^away, 1}
     assert_receive {:DOWN, ^away_ref, :process, ^away, :normal}
 
     {:ok, open, open_ref} = located(:LeftOpen)
-    assert_receive {:muro, ^open, :b0}
+    assert_receive {:muro, ^open, 0}
     assert_receive {:DOWN, ^open_ref, :process, ^open, {:shutdown, :abandon}}
   end
 
@@ -248,8 +252,8 @@ defmodule Muro.EmitOtpTest do
 
   defp pong_roundtrip do
     {:ok, pid, ref} = start(:Pong)
-    send(pid, {:muro, self(), :b1})
-    assert_receive {:muro, ^pid, :b0}
+    send(pid, {:muro, self(), 0})
+    assert_receive {:muro, ^pid, 1}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
   end
 
@@ -274,7 +278,7 @@ defmodule Muro.EmitOtpTest do
 
   defp left_open do
     {:ok, pid, ref} = start(:LeftOpen)
-    assert_receive {:muro, ^pid, :b0}
+    assert_receive {:muro, ^pid, 0}
     assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :abandon}}
   end
 
@@ -292,8 +296,8 @@ defmodule Muro.EmitOtpTest do
 
   defp pong_done do
     {:ok, pid, ref} = start(:PongDone)
-    send(pid, {:muro, self(), :b1})
-    assert_receive {:muro, ^pid, :b0}
+    send(pid, {:muro, self(), 0})
+    assert_receive {:muro, ^pid, 1}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
   end
 
@@ -311,7 +315,7 @@ defmodule Muro.EmitOtpTest do
 
     {:ok, right, right_ref} = start(:Both)
     send(right, {:muro_pick, self(), :b1})
-    assert_receive {:muro, ^right, :b0}
+    assert_receive {:muro, ^right, 0}
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
   end
 

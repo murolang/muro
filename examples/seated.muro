@@ -8,7 +8,7 @@ place away := node b
 
 place here := ambient
 
-talk ping-exchange := say peer pong over (say pong peer over over)
+talk ping-exchange := say peer pong Nat (say pong peer Nat over)
 
 seat pong-home : pong at home in ping-exchange
 
@@ -34,6 +34,6 @@ link out : cross pong-here with peer-away in ping-exchange
 
 session ping := seen pong with peer in ping-exchange
 
-conform pong : ping := get b1 (put b0 done)
+conform pong : ping := get Nat (put 1 done)
 
 def kept : run Nat := 0

@@ -2,28 +2,28 @@
 -- An unmarked session, and session %0, may abandon the channel.
 -- session %1 requires the process to finish. A second send does not conform.
 
-session ping := recv end (send end end)
+session ping := recv Nat (send Nat end)
 
-conform pong : ping := get b1 (put b0 done)
+conform pong : ping := get Nat (put 1 done)
 
-session send-then-send := send (send end end) end
+session send-then-send := send Nat (send Nat end)
 
-conform left-open : send-then-send := put b0 stop
+conform left-open : send-then-send := put 0 stop
 
 conform untouched : send-then-send := stop
 
-session pick := choose end (send end end)
+session pick := choose end (send Nat end)
 
 conform chosen : pick := pick0 done
 
-session both-arms := branch end (send end end)
+session both-arms := branch end (send Nat end)
 
-conform both : both-arms := cover done (put b0 done)
+conform both : both-arms := cover done (put 0 done)
 
-session %1 ping-done := recv end (send end end)
+session %1 ping-done := recv Nat (send Nat end)
 
-conform pong-done : ping-done := get b1 (put b0 done)
+conform pong-done : ping-done := get Nat (put 1 done)
 
-session %0 open := send end end
+session %0 open := send Nat end
 
 conform open-stop : open := stop

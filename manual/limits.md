@@ -31,12 +31,12 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - A fourth term representation
 - Raw HOAS (`Tm → Tm`) as inductive syntax
 - Tags other than `run`, `run internal`, `spec`, `evidence`
-- A session payload other than the bits `b0` and `b1`
+- A session payload other than a nat, a bit, unit, a pair, or a record whose keys are names written in the type
 - An OTP session process talking to more than one peer
 - Two calls for one `cross`
 - A call for a `stay`
 
-The meeting is checked. The OTP image is the only runtime that can produce the event of two processes exchanging the session bits and stopping `:normal` when the parties sit at different places. Other emitters are unchanged because they do not implement the meeting.
+The meeting is checked. The OTP image is the only runtime that can produce the event of two processes exchanging the payload and stopping `:normal` when the parties sit at different places. Other emitters are unchanged because they do not implement the meeting.
 
 ## Former names (history, not syntax)
 

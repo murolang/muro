@@ -3,30 +3,51 @@ defmodule Muro.MeetTest do
 
   alias Muro.{Check, IR, Meet, Parser}
 
-  test "a send meets a receive of the same bit" do
-    pong = {:get, :b1, {:put, :b0, :done}}
-    peer = {:put, :b1, {:get, :b0, :done}}
+  test "a send meets a receive of the same type" do
+    pong = {:get, :nat, {:put, :nat, {:nat, 1}, :done}}
+    peer = {:put, :nat, {:nat, 0}, {:get, :nat, :done}}
+    other = {:put, :nat, {:nat, 2}, {:get, :nat, :done}}
     assert Meet.meets(pong, peer) == :ok
+    assert Meet.meets(pong, other) == :ok
     assert Meet.meets(peer, pong) == :ok
 
-    assert Meet.meets({:put, :b0, :stop}, {:get, :b0, :stop}) == :ok
-    assert Meet.meets({:pick0, :done}, {:cover, :done, {:get, :b0, :done}}) == :ok
+    box = {:pair, :bit, {:rec, [{"x", :nat}, {"y", :nat}]}}
+    here = {:tup, :b0, {:rec, [{"x", {:nat, 0}}, {"y", {:nat, 0}}]}}
+    there = {:tup, :b1, {:rec, [{"x", {:nat, 1}}, {"y", {:nat, 2}}]}}
+    assert Meet.meets({:put, box, here, :done}, {:get, box, :done}) == :ok
+    assert Meet.meets({:put, box, there, :done}, {:get, box, :done}) == :ok
+
+    assert Meet.meets({:put, :nat, {:nat, 0}, :stop}, {:get, :nat, :stop}) == :ok
+    assert Meet.meets({:pick0, :done}, {:cover, :done, {:get, :nat, :done}}) == :ok
     assert Meet.meets(:done, :done) == :ok
     assert Meet.meets(:stop, :stop) == :ok
   end
 
-  test "a bit they do not share has no derivation" do
-    assert {:error, msg} = Meet.meets({:get, :b1, :done}, {:put, :b0, :done})
-    assert msg == "get b1 done does not meet put b0 done"
+  test "a type they do not share has no derivation" do
+    assert {:error, msg} = Meet.meets({:get, :bit, :done}, {:put, :nat, {:nat, 0}, :done})
+    assert msg == "get Bit done does not meet put 0 done"
 
-    assert {:error, msg} = Meet.meets({:put, :b0, :done}, {:put, :b0, :done})
-    assert msg == "put b0 done does not meet put b0 done"
+    swapped = {:rec, [{"y", :nat}, {"x", :nat}]}
+    point = {:rec, [{"x", :nat}, {"y", :nat}]}
 
-    assert {:error, msg} = Meet.meets({:put, :b0, :stop}, {:get, :b0, :done})
+    assert {:error, msg} =
+             Meet.meets(
+               {:put, point, {:rec, [{"x", {:nat, 0}}, {"y", {:nat, 1}}]}, :done},
+               {:get, swapped, :done}
+             )
+
+    assert msg =~ "does not meet"
+
+    assert {:error, msg} =
+             Meet.meets({:put, :nat, {:nat, 0}, :done}, {:put, :nat, {:nat, 0}, :done})
+
+    assert msg == "put 0 done does not meet put 0 done"
+
+    assert {:error, msg} = Meet.meets({:put, :nat, {:nat, 0}, :stop}, {:get, :nat, :done})
     assert msg == "stop does not meet done"
 
     assert {:error, msg} =
-             Meet.meets({:pick0, :done}, {:cover, :stop, {:get, :b0, :done}})
+             Meet.meets({:pick0, :done}, {:cover, :stop, {:get, :nat, :done}})
 
     assert msg == "done does not meet stop"
   end
@@ -50,28 +71,28 @@ defmodule Muro.MeetTest do
   test "a meeting may name a process declared later" do
     assert check("""
            meet wire : pong with peer
-           conform peer : back := put b1 (get b0 done)
+           conform peer : back := put 1 (get Nat done)
            session back := dual ping
-           conform pong : ping := get b1 (put b0 done)
-           session ping := recv end (send end end)
+           conform pong : ping := get Nat (put 1 done)
+           session ping := recv Nat (send Nat end)
            """) == :ok
   end
 
   test "the other end of the other end meets" do
     assert check("""
-           session ping := recv end (send end end)
+           session ping := recv Nat (send Nat end)
            session back := dual ping
            session forth := dual back
-           conform again : forth := get b1 (put b0 done)
-           conform peer : back := put b1 (get b0 done)
+           conform again : forth := get Nat (put 1 done)
+           conform peer : back := put 1 (get Nat done)
            meet wire : again with peer
            """) == :ok
 
     assert check("""
-           session ping := recv end (send end end)
+           session ping := recv Nat (send Nat end)
            session back := dual ping
-           conform pong : ping := get b1 (put b0 done)
-           conform peer : back := put b1 (get b0 done)
+           conform pong : ping := get Nat (put 1 done)
+           conform peer : back := put 1 (get Nat done)
            meet wire : peer with pong
            """) == :ok
   end
@@ -87,25 +108,25 @@ defmodule Muro.MeetTest do
 
   test "a reading meets a conformance" do
     assert check("""
-           session ping := recv end (send end end)
+           session ping := recv Nat (send Nat end)
            session back := dual ping
            place home := ambient
            scheme local := fixed home
            endpoint there := back at local
-           read stay peer : there at home := put b1 (get b0 done)
-           conform pong : ping := get b1 (put b0 done)
+           read stay peer : there at home := put 1 (get Nat done)
+           conform pong : ping := get Nat (put 1 done)
            meet wire : pong with peer
            """) == :ok
 
     assert check("""
-           session ping := recv end (send end end)
+           session ping := recv Nat (send Nat end)
            session back := dual ping
            place home := ambient
            scheme local := fixed home
            endpoint here := ping at local
            endpoint there := back at local
-           read stay pong : here at home := get b1 (put b0 done)
-           read stay peer : there at home := put b1 (get b0 done)
+           read stay pong : here at home := get Nat (put 1 done)
+           read stay peer : there at home := put 1 (get Nat done)
            meet wire : pong with peer
            """) == :ok
   end
@@ -113,10 +134,10 @@ defmodule Muro.MeetTest do
   test "protocols that are not the other end are refused before the bits" do
     assert {:error, msg} =
              check("""
-             session a := send end end
-             session b := recv end (send end end)
-             conform left : a := put b0 done
-             conform right : b := get b0 done
+             session a := send Nat end
+             session b := recv Nat (send Nat end)
+             conform left : a := put 0 done
+             conform right : b := get Nat (put 0 done)
              meet wire : left with right
              """)
 
@@ -124,27 +145,27 @@ defmodule Muro.MeetTest do
     refute msg =~ "does not meet"
   end
 
-  test "a bit the two processes do not share is refused" do
+  test "one end finishing and the other abandoning is refused" do
     assert {:error, msg} =
              check("""
-             session ping := recv end (send end end)
+             session ping := recv Nat (send Nat end)
              session back := dual ping
-             conform pong : ping := get b1 (put b0 done)
-             conform early : back := put b0 done
+             conform pong : ping := get Nat (put 1 done)
+             conform early : back := put 0 stop
              meet wire : pong with early
              """)
 
-    assert msg =~ "get b1 (put b0 done) does not meet put b0 done"
+    assert msg =~ "put 1 done does not meet stop"
     refute msg =~ "expected the other end"
   end
 
   test "the wrong arm of an offer is refused" do
     assert {:error, msg} =
              check("""
-             session choice := choose end (send end end)
+             session choice := choose end (send Nat end)
              session offered := dual choice
              conform taker : choice := pick0 done
-             conform giver : offered := cover stop (get b0 done)
+             conform giver : offered := cover stop (get Nat done)
              meet arm : taker with giver
              """)
 
@@ -153,10 +174,10 @@ defmodule Muro.MeetTest do
 
     assert {:error, msg} =
              check("""
-             session open := send end end
+             session open := send Nat end
              session closed := dual open
-             conform left : open := put b0 stop
-             conform right : closed := get b0 done
+             conform left : open := put 0 stop
+             conform right : closed := get Nat done
              meet drop : left with right
              """)
 
@@ -208,10 +229,10 @@ defmodule Muro.MeetTest do
   test "a meeting is not a definition" do
     assert {:error, msg} =
              check("""
-             session ping := recv end (send end end)
+             session ping := recv Nat (send Nat end)
              session back := dual ping
-             conform pong : ping := get b1 (put b0 done)
-             conform peer : back := put b1 (get b0 done)
+             conform pong : ping := get Nat (put 1 done)
+             conform peer : back := put 1 (get Nat done)
              meet wire : pong with peer
              def use : run Nat := wire
              """)
@@ -243,10 +264,10 @@ defmodule Muro.MeetTest do
         Box
 
     meet wire : pong with peer
-    conform pong : ping := get b1 (put b0 done)
-    conform peer : back := put b1 (get b0 done)
+    conform pong : ping := get Nat (put 1 done)
+    conform peer : back := put 1 (get Nat done)
     session back := dual ping
-    session ping := recv end (send end end)
+    session ping := recv Nat (send Nat end)
     """
 
     assert {:ok, book} = Parser.parse(src)

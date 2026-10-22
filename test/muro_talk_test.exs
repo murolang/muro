@@ -4,44 +4,44 @@ defmodule Muro.TalkTest do
   alias Muro.{Check, IR, Parser, Session, Talk}
 
   test "the sender's session is send, and the receiver's is recv" do
-    ping = {:say, "peer", "pong", :over, {:say, "pong", "peer", :over, :over}}
+    ping = {:say, "peer", "pong", :nat, {:say, "pong", "peer", :nat, :over}}
 
-    assert Talk.seen("pong", "peer", ping) == {:ok, {:recv, :end, {:send, :end, :end}}}
-    assert Talk.seen("peer", "pong", ping) == {:ok, {:send, :end, {:recv, :end, :end}}}
+    assert Talk.seen("pong", "peer", ping) == {:ok, {:recv, :nat, {:send, :nat, :end}}}
+    assert Talk.seen("peer", "pong", ping) == {:ok, {:send, :nat, {:recv, :nat, :end}}}
 
     {:ok, there} = Talk.seen("pong", "peer", ping)
     {:ok, here} = Talk.seen("peer", "pong", ping)
     assert Session.dual(there) == here
 
-    assert Talk.seen("log", "peer", ping) == {:error, "log has no session with peer"}
+    assert Talk.seen("log", "peer", ping) == {:ok, :end}
   end
 
-  test "equal continuations give an outsider that session" do
-    arm = {:say, "b", "c", :over, :over}
-    both = {:say, "a", "b", arm, arm}
+  test "equal arms of an offer give an outsider that session" do
+    arm = {:say, "b", "c", :nat, :over}
+    both = {:offer, "a", "b", arm, arm}
 
-    assert Talk.seen("a", "b", both) == {:ok, {:send, :end, :end}}
-    assert Talk.seen("b", "c", both) == {:ok, {:send, :end, :end}}
+    assert Talk.seen("a", "b", both) == {:ok, {:choose, :end, :end}}
+    assert Talk.seen("b", "c", both) == {:ok, {:send, :nat, :end}}
     assert Talk.seen("a", "c", both) == {:ok, :end}
   end
 
-  test "an outsider of two different continuations has no session" do
-    one = {:say, "a", "b", :over, {:say, "b", "c", :over, :over}}
+  test "an outsider of two different arms has no session" do
+    one = {:offer, "a", "b", :over, {:say, "b", "c", :nat, :over}}
 
-    assert Talk.seen("a", "b", one) == {:ok, {:send, :end, :end}}
+    assert Talk.seen("a", "b", one) == {:ok, {:choose, :end, :end}}
     assert Talk.seen("b", "c", one) == {:error, "b has no session with c"}
   end
 
   test "an offer is choose for the party who chooses, and branch for the other" do
-    arm = {:offer, "a", "b", :over, {:say, "a", "b", :over, :over}}
+    arm = {:offer, "a", "b", :over, {:say, "a", "b", :nat, :over}}
 
-    assert Talk.seen("a", "b", arm) == {:ok, {:choose, :end, {:send, :end, :end}}}
-    assert Talk.seen("b", "a", arm) == {:ok, {:branch, :end, {:recv, :end, :end}}}
+    assert Talk.seen("a", "b", arm) == {:ok, {:choose, :end, {:send, :nat, :end}}}
+    assert Talk.seen("b", "a", arm) == {:ok, {:branch, :end, {:recv, :nat, :end}}}
     assert Talk.seen("log", "a", arm) == {:error, "log has no session with a"}
   end
 
   test "a party does not have a session with itself on a send" do
-    self = {:say, "a", "a", :over, :over}
+    self = {:say, "a", "a", :nat, :over}
     assert Talk.seen("a", "b", self) == {:error, "a has no session with b"}
     assert Talk.seen("a", "a", :over) == {:ok, :end}
   end
@@ -65,63 +65,63 @@ defmodule Muro.TalkTest do
 
   test "a session and a talk may be declared later" do
     assert check("""
-           conform pong : ping := get b1 (put b0 done)
+           conform pong : ping := get Nat (put 1 done)
            session ping := seen pong with peer in ping-exchange
-           talk ping-exchange := say peer pong over (say pong peer over over)
+           talk ping-exchange := say peer pong Nat (say pong peer Nat over)
            """) == :ok
 
     assert check("""
-           talk outer := say a b inner inner
+           talk outer := say a b Nat inner
            session bc := seen b with c in outer
-           conform relay : bc := put b0 done
-           talk inner := say b c over over
+           conform relay : bc := put 0 done
+           talk inner := say b c Nat over
            """) == :ok
   end
 
   test "two names of one description are the same description" do
     assert check("""
-           talk left := say b c over over
-           talk right := say b c over over
-           talk outer := say a b left right
+           talk left := say b c Nat over
+           talk right := say b c Nat over
+           talk outer := offer a b left right
            session bc := seen b with c in outer
            session same := seen b with c in left
-           conform relay : bc := put b0 done
-           conform again : same := put b1 done
+           conform relay : bc := put 0 done
+           conform again : same := put 1 done
            """) == :ok
   end
 
   test "the other end of a seen session is that session's dual" do
     assert check("""
-           talk ping-exchange := say peer pong over (say pong peer over over)
+           talk ping-exchange := say peer pong Nat (say pong peer Nat over)
            session ping := seen pong with peer in ping-exchange
            session back := dual ping
-           conform peer : back := put b1 (get b0 done)
-           conform pong : ping := get b1 (put b0 done)
+           conform peer : back := put 1 (get Nat done)
+           conform pong : ping := get Nat (put 1 done)
            meet wire : pong with peer
            """) == :ok
   end
 
   test "a %1 session from a description must finish, and the mark stays" do
     assert check("""
-           talk ping-exchange := say peer pong over (say pong peer over over)
+           talk ping-exchange := say peer pong Nat (say pong peer Nat over)
            session %1 ping := seen pong with peer in ping-exchange
-           conform pong : ping := get b1 (put b0 done)
+           conform pong : ping := get Nat (put 1 done)
            session back := dual ping
-           conform peer : back := put b1 (get b0 done)
+           conform peer : back := put 1 (get Nat done)
            """) == :ok
 
     assert {:error, msg} =
              check("""
-             talk ping-exchange := say peer pong over (say pong peer over over)
+             talk ping-exchange := say peer pong Nat (say pong peer Nat over)
              session %1 ping := seen pong with peer in ping-exchange
-             conform pong : ping := get b1 (put b0 stop)
+             conform pong : ping := get Nat (put 0 stop)
              """)
 
     assert msg =~ "linear channel abandoned"
 
     assert {:error, msg} =
              check("""
-             talk ping-exchange := say peer pong over (say pong peer over over)
+             talk ping-exchange := say peer pong Nat (say pong peer Nat over)
              session %1 ping := seen pong with peer in ping-exchange
              session %0 back := dual ping
              """)
@@ -159,16 +159,19 @@ defmodule Muro.TalkTest do
     assert msg =~ "talk cycle"
   end
 
-  test "a third party on the exchange has no session, and the description checks" do
+  test "a party off a say has the continuation, which here is end" do
     assert check("""
-           talk ping-exchange := say peer pong over (say pong peer over over)
-           def kept : run Nat := 0
+           talk ping-exchange := say peer pong Nat (say pong peer Nat over)
+           session log := seen log with peer in ping-exchange
+           conform quiet : log := done
            """) == :ok
+  end
 
+  test "a party off an offer whose arms differ has no session" do
     assert {:error, msg} =
              check("""
-             talk ping-exchange := say peer pong over (say pong peer over over)
-             session log := seen log with peer in ping-exchange
+             talk split := offer peer pong over (say pong peer Nat over)
+             session log := seen log with peer in split
              """)
 
     assert msg =~ "log has no session with peer"
@@ -179,28 +182,28 @@ defmodule Muro.TalkTest do
   test "one arm that differs gives the inner parties no session" do
     assert {:error, msg} =
              check("""
-             talk one-arm := say a b over (say b c over over)
+             talk one-arm := offer a b over (say b c Nat over)
              session bc := seen b with c in one-arm
              """)
 
     assert msg =~ "b has no session with c"
 
     assert check("""
-           talk one-arm := say a b over (say b c over over)
+           talk one-arm := offer a b over (say b c Nat over)
            session ab := seen a with b in one-arm
-           conform sender : ab := put b0 done
+           conform sender : ab := pick0 done
            """) == :ok
   end
 
   test "a self-send is a description, and that view has no session" do
     assert check("""
-           talk self := say a a over over
+           talk self := say a a Nat over
            def kept : run Nat := 0
            """) == :ok
 
     assert {:error, msg} =
              check("""
-             talk self := say a a over over
+             talk self := say a a Nat over
              session s := seen a with b in self
              """)
 
@@ -267,9 +270,9 @@ defmodule Muro.TalkTest do
       c : Π (n : Nat) →
         Box
 
-    talk ping-exchange := say peer pong over (say pong peer over over)
+    talk ping-exchange := say peer pong Nat (say pong peer Nat over)
     session ping := seen pong with peer in ping-exchange
-    conform pong : ping := get b1 (put b0 done)
+    conform pong : ping := get Nat (put 1 done)
     """
 
     assert {:ok, book} = Parser.parse(src)

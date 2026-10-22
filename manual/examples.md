@@ -41,14 +41,14 @@ See [The wall](wall.md), [Terms](language.md), [Identity](identity.md).
 An affine session. The protocol is spec. The process is evidence. The Elixir, C, Rust, and assembly emitters omit it. `--backend otp` writes a GenServer for each process.
 
 ```
-session ping := recv end (send end end)
-conform pong : ping := get b1 (put b0 done)
+session ping := recv Nat (send Nat end)
+conform pong : ping := get Nat (put 1 done)
 
-session %1 ping-done := recv end (send end end)
-conform pong-done : ping-done := get b1 (put b0 done)
+session %1 ping-done := recv Nat (send Nat end)
+conform pong-done : ping-done := get Nat (put 1 done)
 ```
 
-`pong` receives `b1` and sends `b0`. `left-open` sends `b0` and then abandons the channel. `untouched` abandons it before any action. `open-stop` is the same abandonment written `session %0`. `pong-done` is that protocol as `session %1`, and it finishes. `chosen` takes the first arm of an internal choice. `both` offers both arms of an external choice. A second send, a send where the protocol says receive, or an abandoned `%1` channel, is refused; those books live in `test/muro_session_test.exs`, so a program copies the form that checks.
+`pong` receives a nat and sends `1`. `left-open` sends `0` and then abandons the channel. `untouched` abandons it before any action. `open-stop` is the same abandonment written `session %0`. `pong-done` is that protocol as `session %1`, and it finishes. `chosen` takes the first arm of an internal choice. `both` offers `done` and then `put 0 done`. A second send, a send where the protocol says receive, or an abandoned `%1` channel, is refused; those books live in `test/muro_session_test.exs`, so a program copies the form that checks.
 
 See [Terms](language.md#session) and [Emit](emit.md#otp).
 
@@ -57,14 +57,14 @@ See [Terms](language.md#session) and [Emit](emit.md#otp).
 The other end of a session. The protocol is spec. The process is evidence. The run emitters omit both.
 
 ```
-session ping := recv end (send end end)
+session ping := recv Nat (send Nat end)
 session back := dual ping
-conform peer : back := put b1 (get b0 done)
+conform peer : back := put 1 (get Nat done)
 ```
 
-`ping` receives `b1` and then sends `b0`. `back` is the other end, so `peer` sends `b1` and then receives `b0`. `forth` is `dual back`, and that is `ping` again. `reply` is the other end of `session %1 ping-done`, so it carries that mark and the process finishes. `offered` is the other end of a `choose`, and the process is a `cover`. `kept` is the run definition in the same file. `mix muro.emit examples/dual.muro` emits `kept`.
+`ping` receives a nat and then sends `1`. `back` is the other end, so `peer` sends `1` and then receives a nat. `forth` is `dual back`, and that is `ping` again. `reply` is the other end of `session %1 ping-done`, so it carries that mark and the process finishes. `offered` is the other end of a `choose`, and the process is a `cover`. `kept` is the run definition in the same file. `mix muro.emit examples/dual.muro` emits `kept`.
 
-A bit the other end does not name, a mark other than the named session's mark, or a cycle of duals, is refused. Those books live in `test/muro_dual_test.exs`, so a program copies the form that checks.
+A value of a type the other end does not name, a mark other than the named session's mark, or a cycle of duals, is refused. Those books live in `test/muro_dual_test.exs`, so a program copies the form that checks.
 
 See [Terms](language.md#session).
 
@@ -73,18 +73,18 @@ See [Terms](language.md#session).
 Two processes on one session. The meeting is evidence. The run emitters omit it.
 
 ```
-session ping := recv end (send end end)
+session ping := recv Nat (send Nat end)
 session back := dual ping
-conform pong : ping := get b1 (put b0 done)
-conform peer : back := put b1 (get b0 done)
+conform pong : ping := get Nat (put 1 done)
+conform peer : back := put 1 (get Nat done)
 meet wire : pong with peer
 ```
 
-`pong` receives `b1` and sends `b0`. `peer` is the other end, so it sends `b1` and receives `b0`. `wire` is the evidence that those two processes are that exchange. `arm` is a choice: `pick0 done` meets `cover done (get b0 done)`. `drop` is both ends abandoning after `b0`. `kept` is the run definition in the same file. `mix muro.emit examples/meet.muro` emits `kept`.
+`pong` receives a nat and sends `1`. `peer` is the other end, so it sends `1` and receives a nat. `wire` is the evidence that those two processes are that exchange. `arm` is a choice: `pick0 done` meets `cover done (get Nat done)`. `drop` is both ends abandoning after `0`. `box` sends a pair of a bit and a record `{x : Nat, y : Nat}`. That pair is a tuple, and the record is a map whose keys are `x` and `y`. `here` sends `(b0, {x = 0, y = 0})`. `far` sends `(b1, {x = 1, y = 2})` of that same type, and it meets `there`. `kept` is the run definition in the same file. `mix muro.emit examples/meet.muro` emits `kept`.
 
-`mix muro.emit examples/meet.muro --backend otp` writes `meet_otp.ex`. `MeetOtp.wire/0` starts `pong` and `peer` as each other's peer. `arm` starts the choice. `drop` starts both ends abandoning after `b0`. Each server talks to one peer. `Pong.start/1` still takes a peer pid supplied by the caller. See [Emit](emit.md#otp).
+`mix muro.emit examples/meet.muro --backend otp` writes `meet_otp.ex`. `MeetOtp.wire/0` starts `pong` and `peer` as each other's peer. `arm` starts the choice. `drop` starts both ends abandoning after `0`. `wrapped` carries the pair. Each server talks to one peer. `Pong.start/1` still takes a peer pid supplied by the caller. See [Emit](emit.md#otp).
 
-A process whose session is not the other end, or a bit the two processes do not share, is refused. Those books live in `test/muro_meet_test.exs`, so a program copies the form that checks.
+A process whose session is not the other end, or a payload type the two processes do not share, is refused. Those books live in `test/muro_meet_test.exs`, so a program copies the form that checks.
 
 See [Terms](language.md#session).
 
@@ -93,15 +93,15 @@ See [Terms](language.md#session).
 One description of an exchange. Each party has a session. The description is spec. The run emitters omit it.
 
 ```
-talk ping-exchange := say peer pong over (say pong peer over over)
+talk ping-exchange := say peer pong Nat (say pong peer Nat over)
 session ping := seen pong with peer in ping-exchange
 session back := seen peer with pong in ping-exchange
-conform pong : ping := get b1 (put b0 done)
-conform peer : back := put b1 (get b0 done)
+conform pong : ping := get Nat (put 1 done)
+conform peer : back := put 1 (get Nat done)
 meet wire : pong with peer
 ```
 
-`pong` receives `b1` and then sends `b0`, so `ping` is `recv end (send end end)`. `peer` has the other end. `wire` is the evidence that those two processes are that exchange. `both-arms` is one description in which `a` sends to `b` and `b` sends to `c`, and `a` with `c` is `end` because both continuations are the same description. `arm` is `a` offering `b` the choice of `end` or a send. `kept` is the run definition in the same file. `mix muro.emit examples/talk.muro` emits `kept`.
+`pong` receives a nat and then sends `1`, so `ping` is `recv Nat (send Nat end)`. `peer` has `send Nat (recv Nat end)`. `wire` is the evidence that those two processes are that exchange. `both-arms` is an offer of two sends of a nat from `b` to `c`, so `a` with `b` is `choose end end`, `b` with `c` is `send Nat end`, and `a` with `c` is `end`. `arm` is `a` offering `b` the choice of `end` or a send of a nat. `kept` is the run definition in the same file. `mix muro.emit examples/talk.muro` emits `kept`.
 
 A party the description does not seat, or a description that refers to itself, is refused. Those books live in `test/muro_talk_test.exs`, so a program copies the form that checks.
 
@@ -114,13 +114,13 @@ A party of a description sits at a place. The seating is spec. The boundary is e
 ```
 place home := node a
 place away := node b
-talk ping-exchange := say peer pong over (say pong peer over over)
+talk ping-exchange := say peer pong Nat (say pong peer Nat over)
 seat pong-home : pong at home in ping-exchange
 seat peer-away : peer at away in ping-exchange
 link go : cross pong-home with peer-away in ping-exchange
 ```
 
-`pong` sits at `home`. `peer` sits at `away`. They have a session, so the boundary crosses once. `peer` at `home` stays with `pong`. Ambient stays with itself, and ambient to a node crosses once. The other direction of a boundary is that same boundary. `ping` is still `recv end (send end end)`, and `pong` receives `b1` and then sends `b0`. `kept` is the run definition in the same file. `mix muro.emit examples/seated.muro` emits `kept`.
+`pong` sits at `home`. `peer` sits at `away`. They have a session, so the boundary crosses once. `peer` at `home` stays with `pong`. Ambient stays with itself, and ambient to a node crosses once. The other direction of a boundary is that same boundary. `ping` is still `recv Nat (send Nat end)`, and `pong` receives a nat and then sends `1`. The payload stays on the session. `kept` is the run definition in the same file. `mix muro.emit examples/seated.muro` emits `kept`.
 
 A party with no session in the description has no boundary. A `stay` where the places differ, or a `cross` where they are the same, is refused. Those books live in `test/muro_seated_test.exs`, so a program copies the form that checks.
 
@@ -178,17 +178,17 @@ A session read at a place. The endpoint is spec. The reading is evidence. The El
 ```
 endpoint ping-home := ping at local
 
-read stay pong : ping-home at home := get b1 (put b0 done)
-read cross pong-away : ping-home at away := get b1 (put b0 done)
+read stay pong : ping-home at home := get Nat (put 1 done)
+read cross pong-away : ping-home at away := get Nat (put 1 done)
 ```
 
 `ping` is fixed at `home` through `local`. Reading it there stays. Reading it at `away` crosses once. `ping-poly` stays at `home` and at `away`. `pong-done` is `session %1` and finishes at `away`. `left-open` abandons an unmarked session, and that reading crosses once. `kept` is the run definition in the same file. `mix muro.emit examples/located.muro` emits `kept`.
 
-`mix muro.emit examples/located.muro --node a` writes `located_node.ex`. `pong-away`, `pong-done`, and `left-open` are the three calls, and each one reads `local`. `pong`, `pong-poly`, and `pong-poly-away` stay, so they write no call. The bits stay on the session. See [Emit](emit.md#node).
+`mix muro.emit examples/located.muro --node a` writes `located_node.ex`. `pong-away`, `pong-done`, and `left-open` are the three calls, and each one reads `local`. `pong`, `pong-poly`, and `pong-poly-away` stay, so they write no call. The payload stays on the session. See [Emit](emit.md#node).
 
-`mix muro.emit examples/located.muro --backend otp` writes `located_otp.ex`. `Pong` and `PongAway` both receive `b1` and send `b0`. `LeftOpen` sends `b0` and abandons the channel. The server talks to one peer. See [Emit](emit.md#otp).
+`mix muro.emit examples/located.muro --backend otp` writes `located_otp.ex`. `Pong` and `PongAway` both receive a nat and send `1`. `LeftOpen` sends `0` and abandons the channel. The server talks to one peer. See [Emit](emit.md#otp).
 
-A `stay` on that cross, a `cross` on a stay, a `cross` of `ping-poly`, a wrong bit, or an abandoned `%1` channel, is refused. Those books live in `test/muro_located_test.exs`, so a program copies the form that checks.
+A `stay` on that cross, a `cross` on a stay, a `cross` of `ping-poly`, a value of a type the protocol does not name, or an abandoned `%1` channel, is refused. Those books live in `test/muro_located_test.exs`, so a program copies the form that checks.
 
 See [Terms](language.md#endpoint).
 

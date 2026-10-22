@@ -28,46 +28,55 @@ Definitions, data types, constructors, sessions, conformances, places, schemes, 
 A `session` is a protocol. A `conform` is a process that follows a named session. The protocol is spec. The derivation is evidence. The run emitters omit both. `--backend otp` writes the process as a GenServer. See [Emit](emit.md#otp).
 
 ```
-session ping := recv end (send end end)
-conform pong : ping := get b1 (put b0 done)
+session ping := recv Nat (send Nat end)
+conform pong : ping := get Nat (put 1 done)
 ```
 
-The payload is a bit, `b0` or `b1`. `send` and `recv` each name both continuations, and the bit that was communicated selects the branch. `choose` is the process's choice (`pick0`, `pick1`). `branch` is the other side's choice, and `cover` offers both arms. `done` closes the channel at `end`. `stop` abandons it, at any protocol.
+The payload is a nat, a bit, unit, a pair, or a record of named fields. A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. `send` and `recv` each name that type and one continuation. `put` sends a value of the type. `get` names the type and does not bind the value. `choose` is the process's choice (`pick0`, `pick1`). `branch` is the other side's choice, and `cover` offers both arms. `done` closes the channel at `end`. `stop` abandons it, at any protocol.
+
+```
+session box := send (Bit * {x : Nat, y : Nat}) end
+session boxed := dual box
+conform here : box := put (b0, {x = 0, y = 0}) done
+conform there : boxed := get (Bit * {x : Nat, y : Nat}) done
+```
+
+`here` sends a tuple: a bit, and a map whose keys are `x` and `y`. `there` receives that type. `{x : Nat, y : Nat}` and `{y : Nat, x : Nat}` are different types. `examples/meet.muro` is that book.
 
 An unmarked session, and `session %0`, may abandon the channel. `session %1` requires the process to finish: every leaf is `done`, and an abandoned channel is refused. Both marks are the affine quantity. A `%1` binder on Π is not this form.
 
 ```
-session %1 ping-done := recv end (send end end)
-conform pong-done : ping-done := get b1 (put b0 done)
+session %1 ping-done := recv Nat (send Nat end)
+conform pong-done : ping-done := get Nat (put 1 done)
 ```
 
-A session has another end. `session back := dual ping` names it. `send` swaps with `recv`, and `choose` swaps with `branch`. The bit stays the bit. The other end of the other end is the same session. The mark stays the session's mark.
+A session has another end. `session back := dual ping` names it. `send` swaps with `recv`, and `choose` swaps with `branch`. The payload type stays. The continuation dualises. The other end of the other end is the same session. The mark stays the session's mark.
 
 ```
-session ping := recv end (send end end)
+session ping := recv Nat (send Nat end)
 session back := dual ping
-conform peer : back := put b1 (get b0 done)
+conform peer : back := put 1 (get Nat done)
 ```
 
-`peer` sends `b1` and then receives `b0`. `examples/dual.muro` is that book.
+`peer` sends `1` and then receives a nat. `examples/dual.muro` is that book.
 
-Two processes are one exchange when a send is a receive of that bit and each session is the other end of the other.
+Two processes are one exchange when a send is a receive of that type and each session is the other end of the other. Any value of that type meets.
 
 ```
 meet wire : pong with peer
 ```
 
-`pong` is `get b1 (put b0 done)` on `ping`. `peer` is `put b1 (get b0 done)` on `back`. A choice meets the arm that was offered. Both ends close, or both abandon. A run term has no seat. `examples/meet.muro` is that book. `--backend otp` starts the two processes as each other's peer. Each server still talks to one peer. See [Emit](emit.md#otp).
+`pong` is `get Nat (put 1 done)` on `ping`. `peer` is `put 1 (get Nat done)` on `back`. A choice meets the arm that was offered. Both ends close, or both abandon. A run term has no seat. `examples/meet.muro` is that book. `--backend otp` starts the two processes as each other's peer. Each server still talks to one peer. See [Emit](emit.md#otp).
 
 One description covers the exchange. `talk` writes it. `session ping := seen pong with peer in ping-exchange` is the session `pong` has with `peer`.
 
 ```
-talk ping-exchange := say peer pong over (say pong peer over over)
+talk ping-exchange := say peer pong Nat (say pong peer Nat over)
 session ping := seen pong with peer in ping-exchange
 session back := seen peer with pong in ping-exchange
 ```
 
-`say` is one party sending a bit to another. The first continuation is `b0` and the second is `b1`. `offer` is one party choosing and the other offering both arms. The sender's session is `send` or `choose`. The receiver's session is `recv` or `branch`. `pong` receiving `b1` and then sending `b0` is `recv end (send end end)`. `peer` has `send end (recv end end)`. A party off that channel has that continuation's session when both continuations are the same description. A run term has no seat. `examples/talk.muro` is that book.
+`say` is one party sending a value of one type to another, then one continuation. `offer` is one party choosing and the other offering both arms. On a `say`, the sender's session is `send` of that type and the receiver's session is `recv` of that type. On an `offer`, the sender's session is `choose` and the receiver's session is `branch`. `pong` receiving a nat and then sending `1` is `recv Nat (send Nat end)`. `peer` has `send Nat (recv Nat end)`. A party off a `say` has the continuation's session. A party off an `offer` has a session when both arms are the same description. A run term has no seat. `examples/talk.muro` is that book.
 
 A party of that description sits at a place.
 
@@ -77,7 +86,7 @@ seat peer-away : peer at away in ping-exchange
 link go : cross pong-home with peer-away in ping-exchange
 ```
 
-`pong` sits at `home` and `peer` sits at `away`. They have a session, and the places differ, so the boundary crosses once. The same place stays. The other party reads that same boundary. The bits stay on the session. `examples/seated.muro` is that book.
+`pong` sits at `home` and `peer` sits at `away`. They have a session, and the places differ, so the boundary crosses once. The same place stays. The other party reads that same boundary. The payload stays on the session. `examples/seated.muro` is that book.
 
 The checker sees the whole book, so a `conform` may name a session declared later, a dual session may name a session declared later, a meeting may name a process declared later, a session may name a description declared later, and a seat may name a place or a description declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
 
@@ -104,10 +113,10 @@ The checker sees the whole book, so a `move` may name a place or a scheme declar
 
 ## Endpoint
 
-An `endpoint` is a session at a scheme. The session's mark is the endpoint's mark. A `read` is the evidence that a process conforms to that session, and that reading the scheme at a place stays or crosses once. The run emitters omit both. A run definition has no seat. `--node` writes one call for each cross reading. The call reads the scheme the endpoint names. The bits stay on the session. A reading that stays writes no call. See [Emit](emit.md#node). `--backend otp` writes each reading as a GenServer with one peer. See [Emit](emit.md#otp).
+An `endpoint` is a session at a scheme. The session's mark is the endpoint's mark. A `read` is the evidence that a process conforms to that session, and that reading the scheme at a place stays or crosses once. The run emitters omit both. A run definition has no seat. `--node` writes one call for each cross reading. The call reads the scheme the endpoint names. The payload stays on the session. A reading that stays writes no call. See [Emit](emit.md#node). `--backend otp` writes each reading as a GenServer with one peer. See [Emit](emit.md#otp).
 
 ```
-session ping := recv end (send end end)
+session ping := recv Nat (send Nat end)
 
 place home := ambient
 place away := node a
@@ -115,13 +124,13 @@ scheme local := fixed home
 
 endpoint ping-home := ping at local
 
-read stay pong : ping-home at home := get b1 (put b0 done)
-read cross pong-away : ping-home at away := get b1 (put b0 done)
+read stay pong : ping-home at home := get Nat (put 1 done)
+read cross pong-away : ping-home at away := get Nat (put 1 done)
 ```
 
-`ping` at `local` sits at `home`. Reading it there stays. Reading it at `away` crosses once. The process is `get b1` and then `put b0`. The bit is the session's. The boundary is the reading's.
+`ping` at `local` sits at `home`. Reading it there stays. Reading it at `away` crosses once. The process is `get Nat` and then `put 1`. The payload is the session's. The boundary is the reading's.
 
-A polymorphic scheme stays at the place that reads it. `session %1` still has to finish, at `home` and at `away`. A bit the protocol does not name is refused at every place. An unmarked session may abandon the channel. Reading that process at another place crosses once.
+A polymorphic scheme stays at the place that reads it. `session %1` still has to finish, at `home` and at `away`. A value of a type the protocol does not name is refused at every place. An unmarked session may abandon the channel. Reading that process at another place crosses once.
 
 The checker sees the whole book, so a `read` may name an endpoint declared later. A `stay` where the reading crosses, or a `cross` where it stays, is refused. `examples/located.muro` is the worked book. `run` is unchanged.
 

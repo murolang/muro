@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.16.55
+
+A session sends a value and then continues. The value is a nat, a bit, unit, a pair, or a record of named fields. A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. A pair around a record is a tuple wrapping that map. Sending that type is receiving it. Two processes meet when the types agree. A choice stays a choice. The OTP image carries that value between the two peers.
+
+### Manual
+
+- Grammar, Terms, and Examples: a payload is a nat, a bit, unit, a pair, or a record of named fields.
+- Emit: the OTP message carries that value.
+- Extending: the checker follows the payload.
+- Limits: a payload is one of those types.
+- For agents: the checker follows the payload.
+
+### Package
+
+- Version 0.16.55.
+
 ## 0.16.54
 
 A meeting sits where the parties sit. Two processes that meet are the two parties of one description. They stay when those parties sit at the same place, and cross once when the places differ. The bits stay on the session. A run term has no seat.

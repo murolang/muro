@@ -1964,7 +1964,7 @@ defmodule Muro.Check do
 
   # The boundary is `Place.decide` of the two places. Both seats are
   # that description, and the parties have a session, before the
-  # stated mark is checked. The bit is not on the link. Evidence.
+  # stated mark is checked. The payload stays on the session. Evidence.
   def check_def(
         book,
         %{kind: :link, name: name, mark: mark, left: left, right: right, talk: talk} = d,
@@ -2000,8 +2000,9 @@ defmodule Muro.Check do
   end
 
   # Muro.Meet.decide. Both names are processes. The protocol of one is
-  # the other end of the other, and then the bits meet. A protocol that
-  # is not the other end is reported before a bit they do not share.
+  # the other end of the other, and then the payload types meet. A
+  # protocol that is not the other end is reported before a type they
+  # do not share.
   def check_def(book, %{kind: :meet, name: name, left: left, right: right} = d, _fuel) do
     loc = Print.loc_prefix(Map.get(d, :loc))
 
@@ -2052,7 +2053,7 @@ defmodule Muro.Check do
     end
   end
 
-  # The boundary is `Place.conform`. The bit is not consulted.
+  # The boundary is `Place.conform`. The payload stays on the session.
   defp move_sits(scheme, place, mark) do
     actual = Place.conform(scheme, place)
 
@@ -2113,10 +2114,18 @@ defmodule Muro.Check do
 
   defp expand_talk(_book, :over, _stack), do: {:ok, :over}
 
-  defp expand_talk(book, {tag, a, b, t0, t1}, stack) when tag in [:say, :offer] do
+  # `say` names one payload type and one continuation. `offer` still
+  # has two arms. A name expands to the tree it stands for.
+  defp expand_talk(book, {:say, a, b, ty, t}, stack) do
+    with {:ok, u} <- expand_talk(book, t, stack) do
+      {:ok, {:say, a, b, ty, u}}
+    end
+  end
+
+  defp expand_talk(book, {:offer, a, b, t0, t1}, stack) do
     with {:ok, u0} <- expand_talk(book, t0, stack),
          {:ok, u1} <- expand_talk(book, t1, stack) do
-      {:ok, {tag, a, b, u0, u1}}
+      {:ok, {:offer, a, b, u0, u1}}
     end
   end
 

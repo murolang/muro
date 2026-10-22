@@ -22,9 +22,9 @@ defmodule Muro.LocatedTest do
 
   test "a reading may name an endpoint declared later" do
     assert check("""
-           read stay pong : ping-home at home := get b1 (put b0 done)
+           read stay pong : ping-home at home := get Nat (put 1 done)
            endpoint ping-home := ping at local
-           session ping := recv end (send end end)
+           session ping := recv Nat (send Nat end)
            scheme local := fixed home
            place home := ambient
            """) == :ok
@@ -36,11 +36,11 @@ defmodule Muro.LocatedTest do
              c : Π (n : Nat) →
                Box
 
-           session ping := recv end (send end end)
+           session ping := recv Nat (send Nat end)
            place home := ambient
            scheme local := fixed home
            endpoint ping-home := ping at local
-           read stay pong : ping-home at home := get b1 (put b0 done)
+           read stay pong : ping-home at home := get Nat (put 1 done)
            """) == :ok
   end
 
@@ -64,27 +64,27 @@ defmodule Muro.LocatedTest do
   test "a polymorphic session stays, and a fixed one crosses once" do
     assert check("""
            #{base()}
-           read stay pong : ping-home at home := get b1 (put b0 done)
-           read cross pong-away : ping-home at away := get b1 (put b0 done)
-           read stay here : ping-poly at away := get b1 (put b0 done)
+           read stay pong : ping-home at home := get Nat (put 1 done)
+           read cross pong-away : ping-home at away := get Nat (put 1 done)
+           read stay here : ping-poly at away := get Nat (put 1 done)
            """) == :ok
   end
 
   test "a session that must finish may finish at another place" do
     assert check("""
            #{base()}
-           session %1 ping-done := recv end (send end end)
+           session %1 ping-done := recv Nat (send Nat end)
            endpoint done-home := ping-done at local
-           read cross pong-done : done-home at away := get b1 (put b0 done)
+           read cross pong-done : done-home at away := get Nat (put 1 done)
            """) == :ok
   end
 
   test "abandonment is allowed for an unmarked session, and the reading still crosses" do
     assert check("""
            #{base()}
-           session send-then-send := send (send end end) end
+           session send-then-send := send Nat (send Nat end)
            endpoint open-home := send-then-send at local
-           read cross left-open : open-home at away := put b0 stop
+           read cross left-open : open-home at away := put 0 stop
            """) == :ok
   end
 
@@ -92,7 +92,7 @@ defmodule Muro.LocatedTest do
     assert {:error, msg} =
              check("""
              #{base()}
-             read stay pong : ping-home at away := get b1 (put b0 done)
+             read stay pong : ping-home at away := get Nat (put 1 done)
              """)
 
     assert msg =~ "expected cross"
@@ -102,7 +102,7 @@ defmodule Muro.LocatedTest do
     assert {:error, msg} =
              check("""
              #{base()}
-             read cross pong : ping-home at home := get b1 (put b0 done)
+             read cross pong : ping-home at home := get Nat (put 1 done)
              """)
 
     assert msg =~ "expected stay"
@@ -112,7 +112,7 @@ defmodule Muro.LocatedTest do
     assert {:error, msg} =
              check("""
              #{base()}
-             read cross pong : ping-poly at away := get b1 (put b0 done)
+             read cross pong : ping-poly at away := get Nat (put 1 done)
              """)
 
     assert msg =~ "expected stay"
@@ -122,7 +122,7 @@ defmodule Muro.LocatedTest do
     assert {:error, msg} =
              check("""
              #{base()}
-             read cross early : ping-home at away := get b0 (put b0 done)
+             read cross early : ping-home at away := get Bit (put b0 done)
              """)
 
     assert msg =~ "does not conform"
@@ -132,7 +132,7 @@ defmodule Muro.LocatedTest do
   test "a session that must finish refuses abandonment at home and away" do
     src = """
     #{base()}
-    session %1 ping-done := recv end (send end end)
+    session %1 ping-done := recv Nat (send Nat end)
     endpoint done-home := ping-done at local
     """
 
@@ -156,7 +156,7 @@ defmodule Muro.LocatedTest do
     assert {:error, msg} =
              check("""
              #{base()}
-             read stay pong : gone at home := get b1 (put b0 done)
+             read stay pong : gone at home := get Nat (put 1 done)
              """)
 
     assert msg =~ "unknown endpoint gone"
@@ -193,7 +193,7 @@ defmodule Muro.LocatedTest do
     assert {:error, msg} =
              check("""
              #{base()}
-             read stay pong : ping-home at home := get b1 (put b0 done)
+             read stay pong : ping-home at home := get Nat (put 1 done)
              def z : run Nat := pong
              """)
 
@@ -213,7 +213,7 @@ defmodule Muro.LocatedTest do
 
   defp base do
     """
-    session ping := recv end (send end end)
+    session ping := recv Nat (send Nat end)
     place home := ambient
     place away := node a
     scheme local := fixed home

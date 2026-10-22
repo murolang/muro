@@ -255,8 +255,8 @@ defmodule Muro.Parser do
 
   defp conform_start?(s), do: word_kw?(s, "conform")
 
-  # session ping := recv end (send end end)
-  # session %1 ping-done := recv end (send end end)
+  # session ping := recv Nat (send Nat end)
+  # session %1 ping-done := recv Nat (send Nat end)
   # session back := dual ping
   # %0 is affine, and it is the default. %1 must finish.
   # A dual session with no mark takes the named session's mark.
@@ -338,7 +338,7 @@ defmodule Muro.Parser do
       else: :error
   end
 
-  # conform pong : ping := get b1 (put b0 done)
+  # conform pong : ping := get Nat (put 1 done)
   # The process is evidence that it conforms to the named session.
   defp parse_conform(s) do
     loc = here(s)
@@ -469,8 +469,8 @@ defmodule Muro.Parser do
     end
   end
 
-  # read stay pong : ping-home at home := get b1 (put b0 done)
-  # read cross pong : ping-home at away := get b1 (put b0 done)
+  # read stay pong : ping-home at home := get Nat (put 1 done)
+  # read cross pong : ping-home at away := get Nat (put 1 done)
   # The process conforms to the session. The mark is the move.
   defp parse_read(s) do
     loc = here(s)
@@ -562,7 +562,7 @@ defmodule Muro.Parser do
     end
   end
 
-  # talk ping-exchange := say peer pong over (say pong peer over over)
+  # talk ping-exchange := say peer pong Nat (say pong peer Nat over)
   # The description is spec. `talk`, `over`, `say`, and `offer` are
   # keywords only in this form. A constructor `talk : Box` is not one.
   defp talk_start?(s), do: assign_entry?(s, "talk")
@@ -586,7 +586,7 @@ defmodule Muro.Parser do
         {:ok, :over, after_kw(s, "over")}
 
       word_kw?(s, "say") ->
-        parse_talk2(s, "say", :say)
+        parse_say(s)
 
       word_kw?(s, "offer") ->
         parse_talk2(s, "offer", :offer)
@@ -598,6 +598,18 @@ defmodule Muro.Parser do
         with {:ok, name, rest} <- ident(s) do
           {:ok, {:ref, name}, rest}
         end
+    end
+  end
+
+  # say peer pong Nat (say pong peer Nat over)
+  # One payload type, then one continuation.
+  defp parse_say(s) do
+    with {:ok, rest} <- kw(s, "say"),
+         {:ok, a, rest} <- parse_party(skip(rest)),
+         {:ok, b, rest} <- parse_party(skip(rest)),
+         {:ok, ty, rest} <- parse_pay(skip(rest)),
+         {:ok, t, rest} <- parse_talk_term(skip(rest)) do
+      {:ok, {:say, a, b, ty, t}, rest}
     end
   end
 
@@ -734,12 +746,20 @@ defmodule Muro.Parser do
 
     cond do
       word_kw?(s, "end") -> {:ok, :end, after_kw(s, "end")}
-      word_kw?(s, "send") -> parse_proto2(s, "send", :send)
-      word_kw?(s, "recv") -> parse_proto2(s, "recv", :recv)
+      word_kw?(s, "send") -> parse_comm_proto(s, "send", :send)
+      word_kw?(s, "recv") -> parse_comm_proto(s, "recv", :recv)
       word_kw?(s, "choose") -> parse_proto2(s, "choose", :choose)
       word_kw?(s, "branch") -> parse_proto2(s, "branch", :branch)
       has_prefix?(s, "(") -> parse_paren(s, &parse_proto/1)
       true -> {:error, err(s, "expected a protocol")}
+    end
+  end
+
+  defp parse_comm_proto(s, word, tag) do
+    with {:ok, rest} <- kw(s, word),
+         {:ok, ty, rest} <- parse_pay(skip(rest)),
+         {:ok, p, rest} <- parse_proto(skip(rest)) do
+      {:ok, {tag, ty, p}, rest}
     end
   end
 
@@ -767,11 +787,19 @@ defmodule Muro.Parser do
     end
   end
 
-  defp parse_comm(s, word, tag) do
-    with {:ok, rest} <- kw(s, word),
-         {:ok, bit, rest} <- parse_bit(skip(rest)),
+  defp parse_comm(s, "put", :put) do
+    with {:ok, rest} <- kw(s, "put"),
+         {:ok, {ty, val}, rest} <- parse_pval(skip(rest)),
          {:ok, p, rest} <- parse_proc(skip(rest)) do
-      {:ok, {tag, bit, p}, rest}
+      {:ok, {:put, ty, val, p}, rest}
+    end
+  end
+
+  defp parse_comm(s, "get", :get) do
+    with {:ok, rest} <- kw(s, "get"),
+         {:ok, ty, rest} <- parse_pay(skip(rest)),
+         {:ok, p, rest} <- parse_proc(skip(rest)) do
+      {:ok, {:get, ty, p}, rest}
     end
   end
 
@@ -790,13 +818,172 @@ defmodule Muro.Parser do
     end
   end
 
-  defp parse_bit(s) do
+  # A payload type. `Nat`, `Bit`, and `Unit` are those types. `*` is a
+  # pair, and a pair is a tuple. `{ name : type }` is a record, and a
+  # record is a map whose keys are fixed in that order. A key chosen
+  # at run time is not a type.
+  defp parse_pay(s) do
+    with {:ok, ty, rest} <- parse_pay_atom(skip(s)) do
+      parse_pay_rest(ty, rest)
+    end
+  end
+
+  defp parse_pay_rest(ty, s) do
+    s = skip(s)
+
+    if has_prefix?(s, "*") and not has_prefix?(s, "**") do
+      with {:ok, right, rest} <- parse_pay(after_kw(s, "*")) do
+        {:ok, {:pair, ty, right}, rest}
+      end
+    else
+      {:ok, ty, s}
+    end
+  end
+
+  defp parse_pay_atom(s) do
     s = skip(s)
 
     cond do
-      word_kw?(s, "b0") -> {:ok, :b0, after_kw(s, "b0")}
-      word_kw?(s, "b1") -> {:ok, :b1, after_kw(s, "b1")}
-      true -> {:error, err(s, "expected b0 or b1")}
+      word_kw?(s, "Nat") -> {:ok, :nat, after_kw(s, "Nat")}
+      word_kw?(s, "Bit") -> {:ok, :bit, after_kw(s, "Bit")}
+      word_kw?(s, "Unit") -> {:ok, :unit, after_kw(s, "Unit")}
+      has_prefix?(s, "(") -> parse_paren(s, &parse_pay/1)
+      has_prefix?(s, "{") -> parse_pay_rec(s)
+      true -> {:error, err(s, "expected a payload")}
+    end
+  end
+
+  defp parse_pay_rec(s) do
+    with {:ok, rest} <- tok(s, "{"),
+         {:ok, fields, rest} <- parse_pay_fields(skip(rest), []) do
+      {:ok, {:rec, fields}, rest}
+    end
+  end
+
+  defp parse_pay_fields(s, acc) do
+    s = skip(s)
+
+    if has_prefix?(s, "}") do
+      {:ok, Enum.reverse(acc), after_kw(s, "}")}
+    else
+      with {:ok, name, rest} <- ident(s),
+           {:ok, rest} <- tok(skip(rest), ":"),
+           {:ok, ty, rest} <- parse_pay(skip(rest)),
+           :ok <- fresh_field(name, acc, s),
+           {:ok, more, rest} <- field_sep(skip(rest)) do
+        case more do
+          :end -> {:ok, Enum.reverse([{name, ty} | acc]), rest}
+          :next -> parse_pay_fields(rest, [{name, ty} | acc])
+        end
+      end
+    end
+  end
+
+  # A payload value. A numeral is a nat. `tt` is unit. `b0` and `b1`
+  # are bits. `(v, w)` is a pair. `{ name = v }` is a record. The type
+  # is the type of that value. `get` names a type and does not bind.
+  defp parse_pval(s) do
+    parse_pval_atom(skip(s))
+  end
+
+  defp parse_pval_atom(s) do
+    s = skip(s)
+
+    cond do
+      number?(s) -> parse_nat_val(s)
+      word_kw?(s, "tt") -> {:ok, {:unit, :tt}, after_kw(s, "tt")}
+      word_kw?(s, "b0") -> {:ok, {:bit, :b0}, after_kw(s, "b0")}
+      word_kw?(s, "b1") -> {:ok, {:bit, :b1}, after_kw(s, "b1")}
+      has_prefix?(s, "(") -> parse_pval_paren(s)
+      has_prefix?(s, "{") -> parse_val_rec(s)
+      true -> {:error, err(s, "expected a value")}
+    end
+  end
+
+  defp number?(<<c, _::binary>>) when c in ?0..?9, do: true
+  defp number?(_), do: false
+
+  defp parse_nat_val(s) do
+    {digits, rest} = take_digits(s, "")
+    {:ok, {:nat, {:nat, String.to_integer(digits)}}, rest}
+  end
+
+  defp take_digits(<<c, r::binary>>, acc) when c in ?0..?9, do: take_digits(r, acc <> <<c>>)
+  defp take_digits(s, acc), do: {acc, s}
+
+  defp parse_pval_paren(s) do
+    with {:ok, rest} <- tok(s, "("),
+         {:ok, {ty, val}, rest} <- parse_pval(skip(rest)) do
+      rest = skip(rest)
+
+      cond do
+        has_prefix?(rest, ",") ->
+          with {:ok, {ty2, val2}, rest} <- parse_pval(after_kw(rest, ",")),
+               {:ok, rest} <- tok(skip(rest), ")") do
+            {:ok, {{:pair, ty, ty2}, {:tup, val, val2}}, rest}
+          end
+
+        has_prefix?(rest, ")") ->
+          {:ok, {ty, val}, after_kw(rest, ")")}
+
+        true ->
+          {:error, err(rest, "expected , or )")}
+      end
+    end
+  end
+
+  defp parse_val_rec(s) do
+    with {:ok, rest} <- tok(s, "{"),
+         {:ok, fields, rest} <- parse_val_fields(skip(rest), []) do
+      tys = Enum.map(fields, fn {name, ty, _} -> {name, ty} end)
+      vals = Enum.map(fields, fn {name, _, val} -> {name, val} end)
+      {:ok, {{:rec, tys}, {:rec, vals}}, rest}
+    end
+  end
+
+  defp parse_val_fields(s, acc) do
+    s = skip(s)
+
+    if has_prefix?(s, "}") do
+      {:ok, Enum.reverse(acc), after_kw(s, "}")}
+    else
+      with {:ok, name, rest} <- ident(s),
+           {:ok, rest} <- field_eq(skip(rest)),
+           {:ok, {ty, val}, rest} <- parse_pval(skip(rest)),
+           :ok <- fresh_field(name, acc, s),
+           {:ok, more, rest} <- field_sep(skip(rest)) do
+        case more do
+          :end -> {:ok, Enum.reverse([{name, ty, val} | acc]), rest}
+          :next -> parse_val_fields(rest, [{name, ty, val} | acc])
+        end
+      end
+    end
+  end
+
+  defp field_sep(s) do
+    cond do
+      has_prefix?(s, ",") -> {:ok, :next, after_kw(s, ",")}
+      has_prefix?(s, "}") -> {:ok, :end, after_kw(s, "}")}
+      true -> {:error, err(s, "expected , or }")}
+    end
+  end
+
+  defp field_eq(s) do
+    if has_prefix?(s, "=") and not has_prefix?(s, "==") and not has_prefix?(s, "=>") do
+      {:ok, after_kw(s, "=")}
+    else
+      {:error, err(s, "expected =")}
+    end
+  end
+
+  defp fresh_field(name, acc, s) do
+    if Enum.any?(acc, fn
+         {n, _, _} -> n == name
+         {n, _} -> n == name
+       end) do
+      {:error, err(s, "duplicate field #{name}")}
+    else
+      :ok
     end
   end
 

@@ -6,9 +6,9 @@
 -- boundary.
 --
 -- The boundary is `decide` of the two places. The protocol is the
--- session, and it is the same protocol at every place. The bit
--- stays on the session. There is no constructor that carries a bit
--- on the move.
+-- session, and it is the same protocol at every place. The payload
+-- stays on the session. There is no constructor that carries a
+-- payload on the move.
 --
 -- Spec holds where the party sits. Evidence is the boundary. A run
 -- term has no seat. None of these constructors is added to Tm or
@@ -25,12 +25,13 @@ open import Data.Maybe.Base using (just; nothing)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans)
 
 open import Muro.Base using (Mode; spec; evid; run)
-open import Muro.Session using (Proto; end; send; recv)
+open import Muro.Session using (Proto; nat; end; send; recv)
 open import Muro.Dual using (dual)
 open import Muro.Place using (Place; ambient; node; Bounds; none; one; bounds; decide)
 open import Muro.Talk using
   ( Party; party; Talk; seen
-  ; ping-talk; pong-seen; peer-seen; ping-log
+  ; ping-talk; pong-seen; peer-seen
+  ; split; split-log
   ; one-arm; one-arm-bc
   )
 
@@ -67,8 +68,8 @@ bits-stay :
 bits-stay (apart eq) (apart eq′) = just-inj (trans (sym eq) eq′)
 
 -- A party with no session has no boundary, at any place.
-no-link : ∀ {a b} → ¬ Apart (party "log") a (party "peer") b ping-talk
-no-link (apart eq) = nothing≢just (trans (sym ping-log) eq)
+no-link : ∀ {a b} → ¬ Apart (party "log") a (party "peer") b split
+no-link (apart eq) = nothing≢just (trans (sym split-log) eq)
 
 no-arm : ∀ {u v} → ¬ Apart (party "b") u (party "c") v one-arm
 no-arm (apart eq) = nothing≢just (trans (sym one-arm-bc) eq)
@@ -120,10 +121,10 @@ to-node = apart pong-seen
 to-node-crosses : bound to-node ≡ one
 to-node-crosses = refl
 
-home-bits : proto home ≡ recv end (send end end)
+home-bits : proto home ≡ recv nat (send nat end)
 home-bits = refl
 
-away-bits : proto away ≡ recv end (send end end)
+away-bits : proto away ≡ recv nat (send nat end)
 away-bits = refl
 
 same-bits : proto home ≡ proto away

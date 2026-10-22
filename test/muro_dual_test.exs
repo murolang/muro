@@ -4,12 +4,12 @@ defmodule Muro.DualTest do
   alias Muro.{Check, IR, Parser, Session}
 
   test "dual swaps send with recv and choose with branch" do
-    ping = {:recv, :end, {:send, :end, :end}}
-    assert Session.dual(ping) == {:send, :end, {:recv, :end, :end}}
+    ping = {:recv, :nat, {:send, :nat, :end}}
+    assert Session.dual(ping) == {:send, :nat, {:recv, :nat, :end}}
     assert Session.dual(Session.dual(ping)) == ping
 
-    choice = {:choose, :end, {:send, :end, :end}}
-    assert Session.dual(choice) == {:branch, :end, {:recv, :end, :end}}
+    choice = {:choose, :end, {:send, {:pair, :bit, :nat}, :end}}
+    assert Session.dual(choice) == {:branch, :end, {:recv, {:pair, :bit, :nat}, :end}}
     assert Session.dual(Session.dual(choice)) == choice
   end
 
@@ -32,31 +32,31 @@ defmodule Muro.DualTest do
 
   test "a dual may name a session declared later" do
     assert check("""
-           conform peer : back := put b1 (get b0 done)
+           conform peer : back := put 1 (get Nat done)
            session back := dual ping
-           session ping := recv end (send end end)
+           session ping := recv Nat (send Nat end)
            """) == :ok
   end
 
   test "the other end of the other end is the same session" do
     assert check("""
-           session ping := recv end (send end end)
+           session ping := recv Nat (send Nat end)
            session back := dual ping
            session forth := dual back
-           conform again : forth := get b1 (put b0 done)
+           conform again : forth := get Nat (put 1 done)
            """) == :ok
   end
 
   test "an omitted mark is the named session's mark" do
     assert check("""
-           session %1 ping := recv end (send end end)
+           session %1 ping := recv Nat (send Nat end)
            session back := dual ping
-           conform peer : back := put b1 (get b0 done)
+           conform peer : back := put 1 (get Nat done)
            """) == :ok
 
     assert {:error, msg} =
              check("""
-             session %1 ping := recv end (send end end)
+             session %1 ping := recv Nat (send Nat end)
              session back := dual ping
              conform stopped : back := stop
              """)
@@ -66,14 +66,14 @@ defmodule Muro.DualTest do
 
   test "a written mark agrees with the named session" do
     assert check("""
-           session %1 ping := recv end (send end end)
+           session %1 ping := recv Nat (send Nat end)
            session %1 back := dual ping
-           conform peer : back := put b1 (get b0 done)
+           conform peer : back := put 1 (get Nat done)
            """) == :ok
 
     assert {:error, msg} =
              check("""
-             session ping := recv end (send end end)
+             session ping := recv Nat (send Nat end)
              session %1 back := dual ping
              """)
 
@@ -81,34 +81,34 @@ defmodule Muro.DualTest do
 
     assert {:error, msg} =
              check("""
-             session %1 ping := recv end (send end end)
+             session %1 ping := recv Nat (send Nat end)
              session %0 back := dual ping
              """)
 
     assert msg =~ "expected %1"
   end
 
-  test "a bit the other end does not name is refused" do
+  test "a payload the other end does not name is refused" do
     assert {:error, msg} =
              check("""
-             session ping := recv end (send end end)
+             session ping := recv Nat (send Nat end)
              session back := dual ping
              conform early : back := put b1 done
              """)
 
-    assert msg =~ "does not conform"
+    assert msg =~ "put b1 done does not conform to send Nat (recv Nat end)"
   end
 
   test "choosing swaps with offering" do
     assert check("""
-           session choice := choose end (send end end)
+           session choice := choose end (send Nat end)
            session offered := dual choice
-           conform either : offered := cover done (get b0 done)
+           conform either : offered := cover done (get Nat done)
            """) == :ok
 
     assert {:error, msg} =
              check("""
-             session choice := choose end (send end end)
+             session choice := choose end (send Nat end)
              session offered := dual choice
              conform early : offered := pick0 done
              """)
@@ -118,17 +118,17 @@ defmodule Muro.DualTest do
 
   test "a reading takes the other end's protocol and mark" do
     assert check("""
-           session %1 ping := recv end (send end end)
+           session %1 ping := recv Nat (send Nat end)
            session back := dual ping
            place home := ambient
            scheme local := fixed home
            endpoint e := back at local
-           read stay peer : e at home := put b1 (get b0 done)
+           read stay peer : e at home := put 1 (get Nat done)
            """) == :ok
 
     assert {:error, msg} =
              check("""
-             session %1 ping := recv end (send end end)
+             session %1 ping := recv Nat (send Nat end)
              session back := dual ping
              place home := ambient
              scheme local := fixed home
@@ -183,7 +183,7 @@ defmodule Muro.DualTest do
                Box
 
            session back := dual ping
-           session ping := recv end (send end end)
+           session ping := recv Nat (send Nat end)
            """) == :ok
   end
 

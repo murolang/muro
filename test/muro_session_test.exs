@@ -20,8 +20,8 @@ defmodule Muro.SessionTest do
 
   test "a conform may name a session declared later" do
     assert check("""
-           conform pong : ping := get b1 (put b0 done)
-           session ping := recv end (send end end)
+           conform pong : ping := get Nat (put 1 done)
+           session ping := recv Nat (send Nat end)
            """) == :ok
   end
 
@@ -39,13 +39,32 @@ defmodule Muro.SessionTest do
     assert check("""
            def end : run Nat := 0
            def send : run Nat := 0
+           def Bit : run Nat := 0
            """) == :ok
+  end
+
+  test "a tuple wrapping a fixed map conforms, and so does another value of that type" do
+    assert check("""
+           session box := send (Bit * {x : Nat, y : Nat}) end
+           conform here : box := put (b0, {x = 0, y = 0}) done
+           conform there : box := put (b1, {x = 1, y = 2}) done
+           session take := dual box
+           conform recv : take := get (Bit * {x : Nat, y : Nat}) done
+           """) == :ok
+  end
+
+  test "a repeated field and a payload that is not a type are refused" do
+    assert {:error, msg} = Parser.parse("session box := send {x : Nat, x : Bit} end\n")
+    assert msg =~ "duplicate field x"
+
+    assert {:error, msg} = Parser.parse("session box := send String end\n")
+    assert msg =~ "expected a payload"
   end
 
   test "a run beside a session is what emit keeps" do
     src = """
-    session ping := recv end (send end end)
-    conform pong : ping := get b1 (put b0 done)
+    session ping := recv Nat (send Nat end)
+    conform pong : ping := get Nat (put 1 done)
     def z : run Nat := 0
     """
 
@@ -57,34 +76,34 @@ defmodule Muro.SessionTest do
     refute out =~ "put"
   end
 
-  test "a second send is refused" do
+  test "a value of the wrong type is refused" do
     assert {:error, msg} =
              check("""
-             session ping := recv end (send end end)
-             conform early-send : ping := get b0 (put b0 done)
+             session ping := recv Nat (send Nat end)
+             conform early-send : ping := get Bit (put b0 done)
              """)
 
-    assert msg =~ "put b0 done does not conform to end"
+    assert msg =~ "get Bit (put b0 done) does not conform to recv Nat (send Nat end)"
   end
 
   test "two sends where the continuation is end are refused" do
     assert {:error, msg} =
              check("""
-             session once := send end end
-             conform twice : once := put b0 (put b1 done)
+             session once := send Nat end
+             conform twice : once := put 0 (put 1 done)
              """)
 
-    assert msg =~ "put b1 done does not conform to end"
+    assert msg =~ "put 1 done does not conform to end"
   end
 
   test "a send where the protocol says receive is refused" do
     assert {:error, msg} =
              check("""
-             session ping := recv end end
-             conform swapped : ping := put b0 done
+             session ping := recv Nat end
+             conform swapped : ping := put 0 done
              """)
 
-    assert msg =~ "put b0 done does not conform to recv end end"
+    assert msg =~ "put 0 done does not conform to recv Nat end"
   end
 
   test "an unknown session is refused" do
@@ -109,12 +128,12 @@ defmodule Muro.SessionTest do
   test "finishes when every leaf is done" do
     assert Session.finishes(:done) == :yes
     assert Session.finishes(:stop) == :no
-    assert Session.finishes({:put, :b0, :stop}) == :no
-    assert Session.finishes({:get, :b1, {:put, :b0, :done}}) == :yes
+    assert Session.finishes({:put, :nat, {:nat, 0}, :stop}) == :no
+    assert Session.finishes({:get, :nat, {:put, :nat, {:nat, 0}, :done}}) == :yes
     assert Session.finishes({:pick0, :done}) == :yes
     assert Session.finishes({:pick1, :stop}) == :no
     assert Session.finishes({:cover, :done, :stop}) == :no
-    assert Session.finishes({:cover, :done, {:put, :b0, :done}}) == :yes
+    assert Session.finishes({:cover, :done, {:put, :nat, {:nat, 0}, :done}}) == :yes
   end
 
   test "a session records its mark" do
@@ -138,17 +157,17 @@ defmodule Muro.SessionTest do
 
   test "a finishing linear session checks" do
     assert check("""
-           session %1 ping-done := recv end (send end end)
-           conform pong-done : ping-done := get b1 (put b0 done)
-           session %1 arms := branch end (send end end)
-           conform both : arms := cover done (put b0 done)
+           session %1 ping-done := recv Nat (send Nat end)
+           conform pong-done : ping-done := get Nat (put 1 done)
+           session %1 arms := branch end (send Nat end)
+           conform both : arms := cover done (put 0 done)
            """) == :ok
   end
 
   test "%0 still allows abandonment" do
     assert check("""
-           session %0 once := send end end
-           conform left : once := put b0 stop
+           session %0 once := send Nat end
+           conform left : once := put 0 stop
            conform none : once := stop
            """) == :ok
   end
@@ -156,8 +175,8 @@ defmodule Muro.SessionTest do
   test "a linear session refuses an abandoned channel" do
     assert {:error, msg} =
              check("""
-             session %1 once := send end end
-             conform left : once := put b0 stop
+             session %1 once := send Nat end
+             conform left : once := put 0 stop
              """)
 
     assert msg =~ "linear channel abandoned"
@@ -178,10 +197,10 @@ defmodule Muro.SessionTest do
     assert {:error, msg} =
              check("""
              session %1 once := end
-             conform bad : once := put b0 done
+             conform bad : once := put 0 done
              """)
 
-    assert msg =~ "put b0 done does not conform to end"
+    assert msg =~ "put 0 done does not conform to end"
     refute msg =~ "abandoned"
   end
 
