@@ -50,3 +50,16 @@ sequenceDiagram
 ```
 
 `examples/meet.muro`
+
+## Value binding
+
+A process can bind the value it receives and use it in the continuation:
+
+```muro
+session ping := recv Nat (send Nat end)
+
+-- Echo: receive a value and send it back
+conform echo : ping := get (k : Nat) (put k done)
+```
+
+The bound variable `k` can be used in any `put` within the continuation. Variables follow affine rules: they may be used at most once, unless the type is copyable.
