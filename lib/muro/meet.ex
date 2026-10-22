@@ -14,7 +14,9 @@ defmodule Muro.Meet do
   """
   def meets(p, q) do
     case go(p, q) do
-      :ok -> :ok
+      :ok ->
+        :ok
+
       {:no, a, b} ->
         {:error, "#{Muro.Session.show_proc(a)} does not meet #{Muro.Session.show_proc(b)}"}
     end
