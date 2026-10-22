@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.47
+
+Two processes can be the two ends of one session. A send meets a receive of the same bit, and a choice meets the arm that was offered. Both ends close, or both abandon. A bit they do not share has no derivation. A run term has no seat.
+
+### Manual
+
+- Extending: two processes meet when they exchange the same bits.
+- Limits: a `.muro` file does not write that two processes meet yet.
+
+### Package
+
+- Version 0.16.47.
+
 ## 0.16.46
 
 A session can name the other end of a session. `session back := dual ping` swaps send with recv and choose with branch. The bit stays the bit. The mark stays the session's mark. A run term has no seat.
