@@ -129,7 +129,7 @@ defmodule Muro.SessionTest do
     assert Session.finishes(:done) == :yes
     assert Session.finishes(:stop) == :no
     assert Session.finishes({:put, :nat, {:nat, 0}, :stop}) == :no
-    assert Session.finishes({:get, :nat, {:put, :nat, {:nat, 0}, :done}}) == :yes
+    assert Session.finishes({:get, :nat, :k, {:put, :nat, {:nat, 0}, :done}}) == :yes
     assert Session.finishes({:pick0, :done}) == :yes
     assert Session.finishes({:pick1, :stop}) == :no
     assert Session.finishes({:cover, :done, :stop}) == :no
@@ -212,6 +212,45 @@ defmodule Muro.SessionTest do
              """)
 
     assert msg =~ "duplicate name ping"
+  end
+
+  test "value binding: echo conforms" do
+    assert check("""
+           session ping := recv Nat (send Nat end)
+           conform echo : ping := get (k : Nat) (put k done)
+           """) == :ok
+  end
+
+  test "value binding: variable can be used in put" do
+    assert check("""
+           session box := recv (Nat * Nat) (send Nat end)
+           conform use-first : box := get (p : (Nat * Nat)) (put 0 done)
+           """) == :ok
+  end
+
+  test "value binding: unbound variable is refused" do
+    assert {:error, msg} =
+             check("""
+             session ping := recv Nat (send Nat end)
+             conform bad : ping := get (k : Nat) (put m done)
+             """)
+
+    assert msg =~ "unbound variable m"
+  end
+
+  test "value binding: variable from outer scope" do
+    assert check("""
+           session nested := recv Nat (recv Nat (send Nat end))
+           conform outer : nested := get (k : Nat) (get (m : Nat) (put k done))
+           """) == :ok
+  end
+
+  test "value binding: parse get with binder" do
+    src = "conform test : ping := get (k : Nat) (put k done)\nsession ping := recv Nat (send Nat end)\n"
+    assert {:ok, book} = Parser.parse(src)
+    [conform | _] = book
+    assert conform.kind == :conform
+    assert {:get, :nat, :k, _} = conform.proc
   end
 
   defp check(src) do
