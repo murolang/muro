@@ -1,0 +1,39 @@
+-- seated.muro — a party of a description sits at a place.
+-- The seating is spec. The boundary is evidence.
+-- A run definition has no seat.
+
+place home := node a
+
+place away := node b
+
+place here := ambient
+
+talk ping-exchange := say peer pong over (say pong peer over over)
+
+seat pong-home : pong at home in ping-exchange
+
+seat peer-home : peer at home in ping-exchange
+
+link stay-here : stay pong-home with peer-home in ping-exchange
+
+link stay-back : stay peer-home with pong-home in ping-exchange
+
+seat peer-away : peer at away in ping-exchange
+
+link go : cross pong-home with peer-away in ping-exchange
+
+link go-back : cross peer-away with pong-home in ping-exchange
+
+seat pong-here : pong at here in ping-exchange
+
+seat peer-here : peer at here in ping-exchange
+
+link local : stay pong-here with peer-here in ping-exchange
+
+link out : cross pong-here with peer-away in ping-exchange
+
+session ping := seen pong with peer in ping-exchange
+
+conform pong : ping := get b1 (put b0 done)
+
+def kept : run Nat := 0

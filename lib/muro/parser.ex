@@ -124,6 +124,18 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      seat_start?(s) ->
+        case parse_seat(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
+      link_start?(s) ->
+        case parse_link(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
       true ->
         case parse_def(s) do
           {:ok, d, rest} -> parse_book(rest, [d | acc])
@@ -612,6 +624,93 @@ defmodule Muro.Parser do
     end
   end
 
+  # seat pong-home : pong at home in ping-exchange
+  # Where a party of a description sits. `seat`, `at`, and `in` are
+  # keywords only in this form. A constructor `seat : Box` is not one.
+  defp seat_start?(s), do: colon_entry?(s, "seat")
+
+  defp parse_seat(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "seat"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, party, rest} <- parse_party(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "at"),
+         {:ok, place, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "in"),
+         {:ok, talk, rest} <- ident(skip(rest)) do
+      {:ok,
+       %{
+         kind: :seat,
+         name: name,
+         mode: :spec,
+         party: party,
+         place: place,
+         talk: talk,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  # link go : cross pong-home with peer-away in ping-exchange
+  # The boundary between two seatings. `link` is a keyword only in
+  # this form. `stay` and `cross` name the boundary. A constructor
+  # `link : Box` is not one.
+  defp link_start?(s), do: colon_entry?(s, "link")
+
+  defp parse_link(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "link"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, mark, rest} <- parse_link_mark(skip(rest)),
+         {:ok, left, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "with"),
+         {:ok, right, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "in"),
+         {:ok, talk, rest} <- ident(skip(rest)) do
+      {:ok,
+       %{
+         kind: :link,
+         name: name,
+         mode: :evidence,
+         mark: mark,
+         left: left,
+         right: right,
+         talk: talk,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  defp parse_link_mark(s) do
+    cond do
+      word_kw?(s, "stay") -> {:ok, :stay, after_kw(s, "stay")}
+      word_kw?(s, "cross") -> {:ok, :cross, after_kw(s, "cross")}
+      true -> {:error, err(s, "expected stay or cross")}
+    end
+  end
+
+  # `name :` and not `:=` or `::`. A constructor `word : Box` is not one.
+  defp colon_entry?(s, word) do
+    if word_kw?(s, word) do
+      rest = s |> after_kw(word) |> skip()
+
+      case ident(rest) do
+        {:ok, _, rest} ->
+          rest = skip(rest)
+          has_prefix?(rest, ":") and not has_prefix?(rest, ":=") and not has_prefix?(rest, "::")
+
+        _ ->
+          false
+      end
+    else
+      false
+    end
+  end
+
   # A meeting is `meet name :`. A constructor `meet : Box` is not one.
   defp meet_entry?(s) do
     if word_kw?(s, "meet") do
@@ -759,7 +858,8 @@ defmodule Muro.Parser do
       word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
         word_kw?(s, "session") or word_kw?(s, "conform") or nu_start?(s) or
         place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
-        endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or talk_start?(s) ->
+        endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or talk_start?(s) or
+        seat_start?(s) or link_start?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
@@ -932,14 +1032,15 @@ defmodule Muro.Parser do
 
   # `session` and `conform` use `:=`, so ctor_decl_start? does not see
   # them. A new line that starts either form, or a place, scheme, move,
-  # endpoint, reading, meeting, or talk entry, ends the constructor's type.
+  # endpoint, reading, meeting, talk, seat, or link entry, ends the
+  # constructor's type.
   defp session_line?(s, s0) do
     skipped = binary_part(s, 0, byte_size(s) - byte_size(s0))
 
     String.contains?(skipped, "\n") and
       (session_start?(s0) or conform_start?(s0) or place_entry?(s0) or scheme_entry?(s0) or
          move_entry?(s0) or endpoint_entry?(s0) or read_entry?(s0) or meet_entry?(s0) or
-         talk_start?(s0))
+         talk_start?(s0) or seat_start?(s0) or link_start?(s0))
   end
 
   defp starts_atom?(s) do
