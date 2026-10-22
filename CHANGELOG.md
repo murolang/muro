@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.16.52
+
+A party of a description sits at a place. Two parties who have a session stay when that place is the same, and cross once when the places differ. The bits stay on the session. A run term has no seat.
+
+### Manual
+
+- Extending: a party sits at a place.
+
+### Package
+
+- Version 0.16.52.
+
 ## 0.16.51
 
 A session can be the session one party has with another in one description of the exchange. `talk ping-exchange := say peer pong over (say pong peer over over)` is that description. `session ping := seen pong with peer in ping-exchange` is `recv end (send end end)`. The other party has the other end. A run term has no seat.
