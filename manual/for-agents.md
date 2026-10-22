@@ -108,6 +108,7 @@ agda/Muro/Dual.agda     the other end of a session; `session name := dual name` 
 agda/Muro/Meet.agda     two processes on one channel; a send meets a receive of the same bit; `meet name : left with right` follows it
 agda/Muro/Talk.agda     one description of an exchange; each party has a session; `session name := seen party with party in talk` follows it
 agda/Muro/Seated.agda   a party of a description sits at a place; `seat name : party at place in talk` follows it; the same place stays; two places cross once
+agda/Muro/Held.agda     a meeting at the parties' places; the same place stays; two places cross once; a `.muro` file does not write it
 agda/Muro/Arrow.agda    %1 on a Π binder must be used; both marks are the affine quantity
 agda/Muro/Place.agda    placement coeffect; ambient by default; one boundary; run has no seat
 agda/Muro/Located.agda  a session at a place; `endpoint` and `read` follow the sitting; `--node` follows a cross reading; `--backend otp` follows the process
