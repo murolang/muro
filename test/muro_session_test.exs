@@ -246,7 +246,9 @@ defmodule Muro.SessionTest do
   end
 
   test "value binding: parse get with binder" do
-    src = "conform test : ping := get (k : Nat) (put k done)\nsession ping := recv Nat (send Nat end)\n"
+    src =
+      "conform test : ping := get (k : Nat) (put k done)\nsession ping := recv Nat (send Nat end)\n"
+
     assert {:ok, book} = Parser.parse(src)
     [conform | _] = book
     assert conform.kind == :conform
