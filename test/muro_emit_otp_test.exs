@@ -32,7 +32,7 @@ defmodule Muro.EmitOtpTest do
     assert Session.skel(proc["untouched"]) == :leave
     assert Session.skel(proc["chosen"]) == {:choose, :b0, :finish}
     assert Session.skel(proc["both"]) == {:offer, :finish, {:say, 0, :finish}}
-    assert Session.skel(proc["pong-done"]) == {:hear, :nat, {:say, 1, :finish}}
+    assert Session.skel(proc["pong-done"]) == {:hear, :nat, :_, {:say, 1, :finish}}
     assert Session.skel(proc["open-stop"]) == :leave
     assert Session.finishes(proc["pong-done"]) == :yes
     assert Session.finishes(proc["open-stop"]) == :no
@@ -50,7 +50,7 @@ defmodule Muro.EmitOtpTest do
     src = File.read!(file)
     assert src =~ "defmodule PingOtp do"
     assert src =~ "defmodule Pong do"
-    assert src =~ "{:hear, :nat, {:say, 1, :finish}}"
+    assert src =~ "{:hear, :nat, :_, {:say, 1, :finish}}"
     assert src =~ "The proof stops at the conformance derivation."
     refute src =~ "def z"
     refute src =~ "muro_peer"
@@ -106,7 +106,7 @@ defmodule Muro.EmitOtpTest do
     assert src =~ "defmodule PongPolyAway do"
     assert src =~ "defmodule PongDone do"
     assert src =~ "defmodule LeftOpen do"
-    assert src =~ "{:hear, :nat, {:say, 1, :finish}}"
+    assert src =~ "{:hear, :nat, :_, {:say, 1, :finish}}"
     assert src =~ "{:say, 0, :leave}"
     assert src =~ "The server talks to one peer."
     refute src =~ "def kept"
@@ -175,7 +175,7 @@ defmodule Muro.EmitOtpTest do
     assert src =~ "def a_b do"
     assert src =~ "def a_b2 do"
     assert src =~ "def muro_end do"
-    assert src =~ "{:hear, :nat, {:say, 1, :finish}}"
+    assert src =~ "{:hear, :nat, :_, {:say, 1, :finish}}"
     assert src =~ "{:say, 1, {:hear, :nat, :finish}}"
   end
 
@@ -195,7 +195,7 @@ defmodule Muro.EmitOtpTest do
     assert {:ok, src} = Emit.Otp.render(checked!(path), "both")
     assert src =~ "defmodule Pong do"
     assert src =~ "defmodule PongHome do"
-    assert length(String.split(src, "{:hear, :nat, {:say, 1, :finish}}")) == 3
+    assert length(String.split(src, "{:hear, :nat, :_, {:say, 1, :finish}}")) == 3
   end
 
   test "a refused reading is not emitted" do
