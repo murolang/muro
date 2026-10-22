@@ -4,7 +4,8 @@ defmodule Muro.Emit.Otp do
 
   A `conform` is one process. A `read` is one process. The actions
   are `Muro.Session.skel/1`, Agda's `skel`. The server talks to one
-  peer pid. The place stays on the reading. `leave` stops with
+  peer pid. The place stays on the reading. A `meet` starts those
+  two processes as each other's peer. `leave` stops with
   `{:shutdown, :abandon}`, which a monitor observes. `finish` stops
   with `:normal`.
 
@@ -21,7 +22,7 @@ defmodule Muro.Emit.Otp do
   def render(book, stem) when is_list(book) and is_binary(stem) do
     parent = module_name(stem)
     mods = modules(book)
-    {:ok, source(parent, mods)}
+    {:ok, source(parent, mods) |> with_meetings(meetings(book))}
   end
 
   defp modules(book) do
@@ -39,6 +40,135 @@ defmodule Muro.Emit.Otp do
   defp process?(%{kind: :conform, proc: proc}) when not is_nil(proc), do: true
   defp process?(%{kind: :read, proc: proc}) when not is_nil(proc), do: true
   defp process?(_), do: false
+
+  # A meeting names the peer. Both processes exist before either is told
+  # to go, and each is monitored by the other from that moment.
+  defp meetings(book) do
+    {funs, _} =
+      book
+      |> Enum.filter(&match?(%{kind: :meet}, &1))
+      |> Enum.reduce({[], MapSet.new()}, fn %{name: name, left: left, right: right},
+                                            {acc, used} ->
+        {fname, used} = claim(fun_base(name), used)
+        {[{fname, skel_of(book, left), skel_of(book, right)} | acc], used}
+      end)
+
+    Enum.reverse(funs)
+  end
+
+  defp skel_of(book, name) do
+    %{proc: proc} =
+      Enum.find(book, fn
+        %{kind: kind, name: ^name, proc: proc}
+        when kind in [:conform, :read] and not is_nil(proc) ->
+          true
+
+        _ ->
+          false
+      end)
+
+    Session.skel(proc)
+  end
+
+  # `end`, `do`, and the other reserved words are not function names.
+  defp fun_base(name) do
+    base = String.replace(name, "-", "_")
+
+    if base in ~w(end do else catch rescue after fn when and or not in) do
+      "muro_#{base}"
+    else
+      base
+    end
+  end
+
+  defp with_meetings(src, []), do: src
+
+  defp with_meetings(src, meets) do
+    src
+    |> splice(
+      "  # A reading is this same process. The server talks to one peer.\n",
+      "  # A reading is this same process. The server talks to one peer.\n  # A meeting starts the two processes as each other's peer.\n"
+    )
+    |> splice(
+      "  @impl true\n  def init({skel, peer}) do\n",
+      meeting_funs(meets) <>
+        "\n  @impl true\n" <> open_init() <> "  def init({skel, peer}) do\n"
+    )
+    |> splice(
+      "  @impl true\n  def handle_info(:muro_go",
+      peer_call() <> "  @impl true\n  def handle_info(:muro_go"
+    )
+  end
+
+  defp splice(src, anchor, replacement) do
+    case String.split(src, anchor, parts: 2) do
+      [pre, post] -> pre <> replacement <> post
+      _ -> raise "otp template is missing an anchor"
+    end
+  end
+
+  defp open_init do
+    """
+      def init({skel, :open}) do
+        {:ok, %{peer: nil, mon: nil, skel: skel, wait: nil, queue: []}}
+      end
+
+    """
+  end
+
+  defp peer_call do
+    """
+      @impl true
+      def handle_call({:muro_peer, peer}, _from, %{peer: nil} = st) when is_pid(peer) do
+        {:reply, :ok, %{st | peer: peer, mon: Process.monitor(peer)}}
+      end
+
+    """
+  end
+
+  defp meeting_funs(meets) do
+    funs = Enum.map_join(meets, "\n\n", &meeting_fun/1)
+
+    funs <> "\n\n" <> exchange_fun() <> "\n"
+  end
+
+  defp meeting_fun({name, left, right}) do
+    """
+      def #{name} do
+        exchange(#{inspect(left)}, #{inspect(right)})
+      end
+    """
+    |> String.trim_trailing()
+  end
+
+  defp exchange_fun do
+    """
+      defp exchange(left_skel, right_skel) do
+        with {:ok, left} <- GenServer.start(__MODULE__, {left_skel, :open}),
+             {:ok, right} <- open_peer(right_skel, left) do
+          :ok = GenServer.call(left, {:muro_peer, right})
+          :ok = GenServer.call(right, {:muro_peer, left})
+          ref_l = Process.monitor(left)
+          ref_r = Process.monitor(right)
+          send(left, :muro_go)
+          send(right, :muro_go)
+          {:ok, left, right, ref_l, ref_r}
+        end
+      end
+
+      defp open_peer(skel, sibling) do
+        case GenServer.start(__MODULE__, {skel, :open}) do
+          {:ok, pid} ->
+            {:ok, pid}
+
+          {:error, reason} ->
+            GenServer.stop(sibling)
+            {:error, reason}
+        end
+      end
+    """
+    |> String.trim_trailing()
+  end
 
   defp source(parent, mods) do
     children = Enum.map_join(mods, "\n\n", &child(parent, &1))

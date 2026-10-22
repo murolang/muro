@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.49
+
+A meeting starts its two processes as each other's peer. Each process still talks to one peer. The bits stay on the session. A run term has no seat.
+
+### Manual
+
+- Emit, Terms, Examples: a meeting starts the two processes together.
+- Extending: the server follows the meeting.
+
+### Package
+
+- Version 0.16.49.
+
 ## 0.16.48
 
 Two processes can be written as one session. `meet wire : pong with peer` is the evidence that they exchange the same bits, and that each session is the other end of the other. A run term has no seat.

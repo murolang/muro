@@ -82,6 +82,8 @@ meet wire : pong with peer
 
 `pong` receives `b1` and sends `b0`. `peer` is the other end, so it sends `b1` and receives `b0`. `wire` is the evidence that those two processes are that exchange. `arm` is a choice: `pick0 done` meets `cover done (get b0 done)`. `drop` is both ends abandoning after `b0`. `kept` is the run definition in the same file. `mix muro.emit examples/meet.muro` emits `kept`.
 
+`mix muro.emit examples/meet.muro --backend otp` writes `meet_otp.ex`. `MeetOtp.wire/0` starts `pong` and `peer` as each other's peer. `arm` starts the choice. `drop` starts both ends abandoning after `b0`. Each server talks to one peer. `Pong.start/1` still takes a peer pid supplied by the caller. See [Emit](emit.md#otp).
+
 A process whose session is not the other end, or a bit the two processes do not share, is refused. Those books live in `test/muro_meet_test.exs`, so a program copies the form that checks.
 
 See [Terms](language.md#session).

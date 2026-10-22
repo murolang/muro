@@ -113,6 +113,14 @@ mix muro.emit examples/located.muro --backend otp
 
 That writes `examples/located_otp.ex`. The module is `LocatedOtp`. `read stay pong : ping-home at home` is `LocatedOtp.Pong.start/1`, and `read cross pong-away : ping-home at away` is `LocatedOtp.PongAway.start/1`. Both take the peer pid. Both receive `b1` and send `b0`, then stop with `:normal`. `pong-poly`, `pong-poly-away`, and `pong-done` are that same exchange. `left-open` sends `b0` and stops with `{:shutdown, :abandon}`. `Pong` stays at `home` and `PongAway` crosses at `away`. The server talks to one peer either way. The boundary is the call `--node` writes.
 
+A meeting starts the two processes it names as each other's peer. Both are running before either takes its first action.
+
+```
+mix muro.emit examples/meet.muro --backend otp
+```
+
+That writes `examples/meet_otp.ex`. The module is `MeetOtp`. `meet wire : pong with peer` is `MeetOtp.wire/0`. It returns `{:ok, left, right, left_ref, right_ref}`. `left` runs `pong` and `right` runs `peer`. Each ref is a monitor of that server, installed before the first action. Both servers of `wire` finish with `:normal`. `arm` is the choice, and both servers finish with `:normal`. `drop` is both ends abandoning after `b0`, and both stop with `{:shutdown, :abandon}`. `Pong.start/1` still takes a peer pid supplied by the caller. The bits stay on the session. The place stays the call `--node` writes.
+
 ## Node
 
 `--node` writes `<stem>_node.ex` next to the file and prints that path. The book is checked first. A book that fails to check writes nothing. With no `--backend`, or with `--backend elixir`, that file is the only output. Any other backend together with `--node` is refused.

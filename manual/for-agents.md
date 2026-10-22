@@ -91,7 +91,7 @@ lib/muro/place.ex       place / scheme / move, mirror of decide
 lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
 lib/muro/emit.ex        run → Elixir source
-lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer (`--backend otp`)
+lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a meeting starts the two processes as each other's peer (`--backend otp`)
 lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
 lib/muro/example.ex     same book as Agda
 lib/mix/tasks/muro.check.ex
