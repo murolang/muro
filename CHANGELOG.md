@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.16.54
+
+A meeting sits where the parties sit. Two processes that meet are the two parties of one description. They stay when those parties sit at the same place, and cross once when the places differ. The bits stay on the session. A run term has no seat.
+
+### Manual
+
+- Extending: a meeting sits where the parties sit.
+
+### Package
+
+- Version 0.16.54.
+
 ## 0.16.53
 
 A party of a description can sit at a place. `seat pong-home : pong at home in ping-exchange` is that seating. Two parties who have a session stay when the place is the same, and cross once when the places differ. The bits stay on the session. A run term has no seat.
