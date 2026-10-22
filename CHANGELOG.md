@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.56
+
+A process can bind the value it receives. `get (k : Type) continuation` binds the received value to `k`, and the continuation can use that variable in payload values. Example: `get (k : Nat) (put k done)` echoes the received value back. The bound variable is affine: it may be used at most once, unless the type is copyable. The parser tracks variable names, and the checker verifies that variables are in scope. The OTP backend does not yet fully implement variable substitution at runtime.
+
+### Manual
+
+- Grammar: `get (name : Type) proc` syntax. Payload values can be variables.
+- Sessions: value binding with echo example.
+- Examples: `meet.muro`, `talk.muro`, `dual.muro` use value binding.
+
+### Package
+
+- Version 0.16.56.
+
 ## 0.16.55
 
 A session sends a value and then continues. The value is a nat, a bit, unit, a pair, or a record of named fields. A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. A pair around a record is a tuple wrapping that map. Sending that type is receiving it. Two processes meet when the types agree. A choice stays a choice. The OTP image carries that value between the two peers.
