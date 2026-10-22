@@ -30,15 +30,15 @@ defmodule Mix.Tasks.Muro.Emit do
 
   `--backend otp` writes `<stem>_otp.ex` next to the file and prints
   that path. Each conforming process is a GenServer, and so is each
-  reading. The server talks to one peer. The place stays on the
-  reading. The BEAM runs that server. The proof stops at the
-  conformance derivation.
+  reading. The server talks to one peer. The message carries the
+  value. The place stays on the reading. The BEAM runs that server.
+  The proof stops at the conformance derivation.
 
   `--node` writes `<stem>_node.ex` next to the file and prints that
   path. `place.muro` with `--node a` is `place_node.ex`. Each `cross`
   is one call to the scheme, registered on that node, after a monitor
   of the same name. A `read cross` calls the scheme its endpoint
-  names. A `stay` emits no call. The bits stay on the session.
+  names. A `stay` emits no call. The payload stays on the session.
   The BEAM runs the call. The proof stops at the move.
   """
 

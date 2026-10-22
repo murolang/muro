@@ -7,17 +7,17 @@
 -- place crosses once. A polymorphic scheme stays wherever it is
 -- read. `%0` is the affine session: abandonment has a derivation.
 -- `%1` also finishes, and `stop` has none. The boundary is the
--- move. The bit stays on the session. A wrong bit has no derivation
--- at any place.
+-- move. The payload stays on the session. A value of the wrong
+-- type has no derivation at any place.
 --
 -- Neither mark is a constructor of Qty. This is not a source syntax.
 -- None of these constructors is added to Tm or PTm. The Elixir
 -- checker follows this sitting: `endpoint` names the session and the
 -- scheme, and `read` states stay or cross. The run emitters omit
 -- both. `--node` follows a cross reading with one call. The message
--- is the read of the scheme. The bit stays on the session. A stay
--- emits no call. `--backend otp` follows the process. The server
--- talks to one peer. The place stays on the reading.
+-- is the read of the scheme. The payload stays on the session. A
+-- stay emits no call. `--backend otp` follows the process. The
+-- server talks to one peer. The place stays on the reading.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
@@ -28,7 +28,7 @@ open import Data.Empty using (⊥)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
 open import Muro.Base using (Mode; spec; evid; run)
-open import Muro.Session hiding (¬_; Seat; no-run; conforms; decide)
+open import Muro.Session hiding (¬_; Seat; no-run; conforms; decide; one)
 open import Muro.Place hiding (¬_; Seat; no-run; conforms; boundary)
 
 ¬_ : Set → Set
@@ -44,9 +44,9 @@ data Endpoint : Set where
   endpoint : Mark → Proto → Scheme → Endpoint
 
 ------------------------------------------------------------------------
--- Evidence. The conformance is the bits. The move is the boundary.
--- There is no constructor that carries a bit on the move, and none
--- that adds a second boundary.
+-- Evidence. The conformance is the payload. The move is the
+-- boundary. There is no constructor that carries a payload on the
+-- move, and none that adds a second boundary.
 ------------------------------------------------------------------------
 
 data Sits : Proc → Endpoint → Place → Set where
@@ -80,7 +80,7 @@ pong-done-away : Sits pong (endpoint lin ping (fixed ambient)) (node "a")
 pong-done-away = finished pong-linear (conform (fixed ambient) (node "a"))
 
 -- Abandonment is allowed for `%0`, and the reading still crosses once.
-open-away : Sits (put b0 stop) (endpoint aff (send (send end end) end) (fixed ambient)) (node "a")
+open-away : Sits (put nat zero stop) (endpoint aff (send nat (send nat end)) (fixed ambient)) (node "a")
 open-away = held left-open (conform (fixed ambient) (node "a"))
 
 sits-home : boundary pong-home ≡ none
@@ -98,7 +98,7 @@ sits-done = refl
 sits-open : boundary open-away ≡ one
 sits-open = refl
 
--- The bits at home are the bits at the node.
+-- The payload at home is the payload at the node.
 bits-of : ∀ {P S s q} → Sits P (endpoint aff S s) q → Conforms P S
 bits-of (held d _) = d
 
@@ -106,22 +106,22 @@ same-bits : bits-of pong-home ≡ bits-of pong-away
 same-bits = refl
 
 ------------------------------------------------------------------------
--- A wrong bit is refused at every scheme and every reading place.
--- `%1` refuses abandonment the same way. The place does not excuse
--- either.
+-- A value of the wrong type is refused at every scheme and every
+-- reading place. `%1` refuses abandonment the same way. The place
+-- does not excuse either.
 ------------------------------------------------------------------------
 
 early : Proc
-early = get b0 (put b0 done)
+early = get bit done
 
 early-any : ∀ {s q} → ¬ Sits early (endpoint aff ping s) q
-early-any (held (get0 ()) _)
+early-any (held () _)
 
 early-lin-any : ∀ {s q} → ¬ Sits early (endpoint lin ping s) q
-early-lin-any (finished (linear (get0 ()) _) _)
+early-lin-any (finished (linear () _) _)
 
 abandon-any : ∀ {s q} →
-  ¬ Sits (put b0 stop) (endpoint lin (send (send end end) end) s) q
+  ¬ Sits (put nat zero stop) (endpoint lin (send nat (send nat end)) s) q
 abandon-any (finished l _) = ¬ends-left-open (Linear.closed l)
 
 ------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 ---
 title: Indexed data
 slug: indexed
-order: 8
+order: 9
 summary: Fin, Vec, motives that compute from the index, and lookup without a runtime bounds check.
 ---
 

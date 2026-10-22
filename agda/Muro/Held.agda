@@ -6,9 +6,9 @@
 -- The boundary is the seating's boundary: `decide` of the two
 -- places. The same place cannot be written as a cross. The protocol
 -- is the session, and it is the same protocol at every place. The
--- bit stays on the session. A party with no session has no meeting,
--- at any place. Processes that exchange some other bits are not
--- these parties.
+-- payload stays on the session. A party with no session has no
+-- meeting, at any place. Processes that exchange some other payload
+-- are not these parties.
 --
 -- The meeting is evidence. A run term has no seat. None of these
 -- constructors is added to Tm or PTm. A `.muro` file does not write
@@ -24,10 +24,9 @@ open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans
 
 open import Muro.Base using (Mode; evid; run)
 open import Muro.Session using
-  ( Proto; end; send; recv; choose
-  ; Proc; done; stop; put; get
-  ; b0; b1
-  ; Conforms; done-end; put0; put1; get0; get1; pick0-ok; cover-ok
+  ( Proto; nat; end; send; recv; choose
+  ; Proc; done; stop; put; get; zero; suc
+  ; Conforms; done-end; put-ok; get-ok; pick0-ok; cover-ok
   )
 open import Muro.Dual using (dual)
 open import Muro.Place using (Place; ambient; node; Bounds; none; one)
@@ -37,7 +36,7 @@ open import Muro.Meet using
   )
 open import Muro.Talk using
   ( Party; party; Talk; over
-  ; ping-talk; pong-seen; arm; arm-a; arm-b; one-arm
+  ; ping-talk; pong-seen; arm; arm-a; arm-b; one-arm; split
   )
 import Muro.Seated as Seated
 
@@ -78,13 +77,13 @@ boundary-is-seating :
 boundary-is-seating _ _ _ _ = refl
 
 ------------------------------------------------------------------------
--- `pong` receives `b1` and sends `b0`. `peer` sends `b1` and
--- receives `b0`. At one node the boundary is empty. At two nodes
+-- `pong` receives a nat and sends a nat. `peer` sends a nat and
+-- receives a nat. At one node the boundary is empty. At two nodes
 -- it is one. The session is the same session.
 ------------------------------------------------------------------------
 
 home : Held pong (party "pong") (node "a") peer (party "peer") (node "a") ping-talk
-home = held Seated.home pong-peer (get1 (put0 done-end)) (put1 (get0 done-end))
+home = held Seated.home pong-peer (get-ok (put-ok done-end)) (put-ok (get-ok done-end))
 
 home-stays : bound home ≡ none
 home-stays = refl
@@ -93,7 +92,7 @@ home-not-cross : ¬ (bound home ≡ one)
 home-not-cross ()
 
 away : Held pong (party "pong") (node "a") peer (party "peer") (node "b") ping-talk
-away = held Seated.away pong-peer (get1 (put0 done-end)) (put1 (get0 done-end))
+away = held Seated.away pong-peer (get-ok (put-ok done-end)) (put-ok (get-ok done-end))
 
 away-crosses : bound away ≡ one
 away-crosses = refl
@@ -105,18 +104,18 @@ away-not-stay ()
 bits-stay : proto home ≡ proto away
 bits-stay = refl
 
-home-bits : proto home ≡ recv end (send end end)
+home-bits : proto home ≡ recv nat (send nat end)
 home-bits = refl
 
-away-bits : proto away ≡ recv end (send end end)
+away-bits : proto away ≡ recv nat (send nat end)
 away-bits = refl
 
 -- The other party reads the same boundary, and the other end.
 away-back : Held peer (party "peer") (node "b") pong (party "pong") (node "a") ping-talk
 away-back =
   held Seated.away-back (meets-sym pong-peer)
-    (put1 (get0 done-end))
-    (get1 (put0 done-end))
+    (put-ok (get-ok done-end))
+    (get-ok (put-ok done-end))
 
 away-back-crosses : bound away-back ≡ one
 away-back-crosses = refl
@@ -131,14 +130,14 @@ peer-bits = refl
 -- node crosses once.
 both-ambient : Held pong (party "pong") ambient peer (party "peer") ambient ping-talk
 both-ambient =
-  held Seated.both-ambient pong-peer (get1 (put0 done-end)) (put1 (get0 done-end))
+  held Seated.both-ambient pong-peer (get-ok (put-ok done-end)) (put-ok (get-ok done-end))
 
 ambient-stays : bound both-ambient ≡ none
 ambient-stays = refl
 
 to-node : Held pong (party "pong") ambient peer (party "peer") (node "a") ping-talk
 to-node =
-  held Seated.to-node pong-peer (get1 (put0 done-end)) (put1 (get0 done-end))
+  held Seated.to-node pong-peer (get-ok (put-ok done-end)) (put-ok (get-ok done-end))
 
 to-node-crosses : bound to-node ≡ one
 to-node-crosses = refl
@@ -167,7 +166,7 @@ quiet-same-bits : proto quiet ≡ proto quiet-away
 quiet-same-bits = refl
 
 ------------------------------------------------------------------------
--- Choosing `b0` finishes. The other party offers that arm. Two
+-- The left arm finishes. The other party offers that arm. Two
 -- places cross once. The other party's session is the other end.
 ------------------------------------------------------------------------
 
@@ -175,18 +174,18 @@ choice-away : Held taker (party "a") (node "a") giver (party "b") (node "b") arm
 choice-away =
   held (Seated.apart arm-a) choice-meet
     (pick0-ok done-end)
-    (cover-ok done-end (get0 done-end))
+    (cover-ok done-end (get-ok done-end))
 
 choice-crosses : bound choice-away ≡ one
 choice-crosses = refl
 
-choice-bits : proto choice-away ≡ choose end (send end end)
+choice-bits : proto choice-away ≡ choose end (send nat end)
 choice-bits = refl
 
 choice-back : Held giver (party "b") (node "b") taker (party "a") (node "a") arm
 choice-back =
   held (Seated.apart arm-b) (meets-sym choice-meet)
-    (cover-ok done-end (get0 done-end))
+    (cover-ok done-end (get-ok done-end))
     (pick0-ok done-end)
 
 choice-back-crosses : bound choice-back ≡ one
@@ -197,40 +196,40 @@ choice-back-bits = refl
 
 ------------------------------------------------------------------------
 -- A party with no session has no meeting, at any place. The
--- processes are not consulted. A bit the two processes do not share
--- has no derivation. Processes that do meet, on bits the session
--- does not name, are not these parties. One end finishing and the
--- other abandoning has no derivation.
+-- processes are not consulted. A type the two processes do not share
+-- has no derivation. Processes that do meet, on a direction the
+-- session does not name, are not these parties. One end finishing
+-- and the other abandoning has no derivation.
 ------------------------------------------------------------------------
 
-no-session : ∀ {P Q a b} → ¬ Held P (party "log") a Q (party "peer") b ping-talk
+no-session : ∀ {P Q a b} → ¬ Held P (party "log") a Q (party "peer") b split
 no-session (held h _ _ _) = Seated.no-link h
 
 no-arm : ∀ {P Q u v} → ¬ Held P (party "b") u Q (party "c") v one-arm
 no-arm (held h _ _ _) = Seated.no-arm h
 
-not-bit : ∀ {a b} →
-  ¬ Held pong (party "pong") a (put b0 done) (party "peer") b ping-talk
-not-bit (held _ () _ _)
+not-type : ∀ {a b} →
+  ¬ Held pong (party "pong") a (put nat zero done) (party "peer") b ping-talk
+not-type (held _ (get-put ()) _ _)
 
 ¬done-stop : ¬ Meets done stop
 ¬done-stop ()
 
-¬finishes-abandons : ¬ Meets (put b0 done) (get b0 stop)
+¬finishes-abandons : ¬ Meets (put nat (suc zero) done) (get nat stop)
 ¬finishes-abandons (put-get m) = ¬done-stop m
 
 not-ending : ∀ {a b} →
-  ¬ Held pong (party "pong") a (put b1 (get b0 stop)) (party "peer") b ping-talk
+  ¬ Held pong (party "pong") a (put nat zero (get nat stop)) (party "peer") b ping-talk
 not-ending (held _ (get-put m) _ _) = ¬finishes-abandons m
 
-put-not-recv : ¬ Conforms (put b0 done) (recv end (send end end))
+put-not-recv : ¬ Conforms (put nat zero done) (recv nat (send nat end))
 put-not-recv ()
 
 not-role : ∀ {a b} →
-  ¬ Held (put b0 done) (party "pong") a (get b0 done) (party "peer") b ping-talk
+  ¬ Held (put nat zero done) (party "pong") a (get nat done) (party "peer") b ping-talk
 not-role (held (Seated.apart eq) _ c _) =
   put-not-recv
-    (subst (Conforms (put b0 done))
+    (subst (Conforms (put nat zero done))
       (sym (Seated.just-inj (trans (sym pong-seen) eq)))
       c)
 

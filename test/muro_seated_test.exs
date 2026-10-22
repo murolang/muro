@@ -27,7 +27,7 @@ defmodule Muro.SeatedTest do
            link stay-here : stay pong-home with peer-home in ping-exchange
            seat peer-home : peer at home in ping-exchange
            seat pong-home : pong at home in ping-exchange
-           talk ping-exchange := say peer pong over (say pong peer over over)
+           talk ping-exchange := say peer pong Nat (say pong peer Nat over)
            place home := node a
            """) == :ok
   end
@@ -36,7 +36,7 @@ defmodule Muro.SeatedTest do
     assert check("""
            place home := node a
            place also := node a
-           talk ping-exchange := say peer pong over (say pong peer over over)
+           talk ping-exchange := say peer pong Nat (say pong peer Nat over)
            seat pong-home : pong at home in ping-exchange
            seat peer-also : peer at also in ping-exchange
            link stay-here : stay pong-home with peer-also in ping-exchange
@@ -57,15 +57,18 @@ defmodule Muro.SeatedTest do
   test "a party with no session may sit, and the link has no boundary" do
     assert check("""
            #{base()}
-           seat log-home : log at home in ping-exchange
+           talk split := offer peer pong over (say pong peer Nat over)
+           seat log-home : log at home in split
            def kept : run Nat := 0
            """) == :ok
 
     assert {:error, msg} =
              check("""
              #{base()}
-             seat log-home : log at home in ping-exchange
-             link go : cross log-home with peer-away in ping-exchange
+             talk split := offer peer pong over (say pong peer Nat over)
+             seat log-home : log at home in split
+             seat peer-split : peer at away in split
+             link go : cross log-home with peer-split in split
              """)
 
     assert msg =~ "log has no session with peer"
@@ -144,7 +147,7 @@ defmodule Muro.SeatedTest do
     assert {:error, msg} =
              check("""
              place home := node a
-             talk one-arm := say a b over (say b c over over)
+             talk one-arm := offer a b over (say b c Nat over)
              seat b-home : b at home in one-arm
              seat c-home : c at home in one-arm
              link bad : stay b-home with c-home in one-arm
@@ -154,7 +157,7 @@ defmodule Muro.SeatedTest do
 
     assert check("""
            place home := node a
-           talk one-arm := say a b over (say b c over over)
+           talk one-arm := offer a b over (say b c Nat over)
            seat a-home : a at home in one-arm
            seat b-home : b at home in one-arm
            link ok : stay a-home with b-home in one-arm
@@ -220,7 +223,7 @@ defmodule Muro.SeatedTest do
         Box
 
     place home := node a
-    talk ping-exchange := say peer pong over (say pong peer over over)
+    talk ping-exchange := say peer pong Nat (say pong peer Nat over)
     seat pong-home : pong at home in ping-exchange
     seat peer-home : peer at home in ping-exchange
     link stay-here : stay pong-home with peer-home in ping-exchange
@@ -236,7 +239,7 @@ defmodule Muro.SeatedTest do
     """
     place home := node a
     place away := node b
-    talk ping-exchange := say peer pong over (say pong peer over over)
+    talk ping-exchange := say peer pong Nat (say pong peer Nat over)
     seat pong-home : pong at home in ping-exchange
     seat peer-home : peer at home in ping-exchange
     seat peer-away : peer at away in ping-exchange

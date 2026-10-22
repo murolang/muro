@@ -133,7 +133,7 @@ defmodule Muro.EmitNodeTest do
     assert String.contains?(src, "def cross_local_at_away3(")
     assert String.contains?(src, "dest = {:local, @node}")
     assert String.contains?(src, "GenServer.call(dest, {:muro_read, \"local\"}, timeout)")
-    assert String.contains?(src, "The bits stay on the session.")
+    assert String.contains?(src, "The payload stays on the session.")
     refute String.contains?(src, "def cross_local_at_home")
     refute String.contains?(src, "def cross_poly")
     refute String.contains?(src, "def kept")
@@ -156,11 +156,11 @@ defmodule Muro.EmitNodeTest do
     place away := node a
     scheme local := fixed home
     scheme poly := any
-    session ping := recv end (send end end)
+    session ping := recv Nat (send Nat end)
     endpoint ping-home := ping at local
     endpoint ping-poly := ping at poly
-    read stay pong : ping-home at home := get b1 (put b0 done)
-    read stay pong-poly : ping-poly at away := get b1 (put b0 done)
+    read stay pong : ping-home at home := get Nat (put 1 done)
+    read stay pong-poly : ping-poly at away := get Nat (put 1 done)
     def kept : run Nat := 0
     """)
 
@@ -181,10 +181,10 @@ defmodule Muro.EmitNodeTest do
     place home := ambient
     place away := node a
     scheme local := fixed home
-    session ping := recv end (send end end)
+    session ping := recv Nat (send Nat end)
     endpoint ping-home := ping at local
     move cross local : away
-    read cross pong : ping-home at away := get b1 (put b0 done)
+    read cross pong : ping-home at away := get Nat (put 1 done)
     """)
 
     assert {:ok, src} = Emit.Node.render(checked!(path), "both", :a)
@@ -198,9 +198,9 @@ defmodule Muro.EmitNodeTest do
     path = Path.join(dir, "later.muro")
 
     File.write!(path, """
-    read cross pong : ping-home at away := get b1 (put b0 done)
+    read cross pong : ping-home at away := get Nat (put 1 done)
     endpoint ping-home := ping at local
-    session ping := recv end (send end end)
+    session ping := recv Nat (send Nat end)
     scheme local := fixed home
     place home := ambient
     place away := node a
@@ -219,9 +219,9 @@ defmodule Muro.EmitNodeTest do
     place home := ambient
     place away := node a
     scheme local := fixed home
-    session ping := recv end (send end end)
+    session ping := recv Nat (send Nat end)
     endpoint ping-home := ping at local
-    read stay pong : ping-home at away := get b1 (put b0 done)
+    read stay pong : ping-home at away := get Nat (put 1 done)
     """)
 
     assert {:error, msg} = Muro.emit_node(path, :a)

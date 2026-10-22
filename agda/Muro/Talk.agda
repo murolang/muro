@@ -1,16 +1,18 @@
 ------------------------------------------------------------------------
 -- One description of an exchange. A party is a name. `say` is one
--- party sending a bit to another: the first continuation is `b0`
--- and the second is `b1`. `offer` is one party choosing and the
--- other offering both arms. A party does not talk to itself.
+-- party sending a payload of a named type, then one continuation.
+-- The payload is a nat, a bit, unit, a pair, or a record of named
+-- fields. A pair is a tuple. A record is a fixed map. `offer` is
+-- one party choosing and the other offering both arms. A party
+-- does not talk to itself.
 --
 -- On the channel between two parties, the sender's session is
 -- `send` or `choose` and the receiver's session is `recv` or
--- `branch`. A party off that channel has a session only when both
--- continuations are the same description, and then it is that
--- continuation's session. The other party's session is the other
--- end. A description that does not give a party a session has no
--- evidence at that party.
+-- `branch`. A party off a `say` has that continuation's session.
+-- A party off an `offer` has a session only when both arms are the
+-- same description, and then it is that arm's session. The other
+-- party's session is the other end. A description that does not
+-- give a party a session has no evidence at that party.
 --
 -- Spec holds the description. Evidence is one party's session. A
 -- run term has no seat. None of these constructors is added to Tm
@@ -30,7 +32,7 @@ open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; cong
 open import Relation.Nullary.Decidable.Core using (Dec; yes; no)
 
 open import Muro.Base using (Mode; spec; evid; run)
-open import Muro.Session using (Proto; end; send; recv; choose; branch)
+open import Muro.Session using (Proto; Ty; nat; end; send; recv; choose; branch; ty≟)
 open import Muro.Dual using (dual)
 
 ¬_ : Set → Set
@@ -38,7 +40,7 @@ open import Muro.Dual using (dual)
 
 ------------------------------------------------------------------------
 -- A party is a name. The description finishes, or one party sends
--- a bit, or one party chooses.
+-- a payload and continues, or one party chooses.
 ------------------------------------------------------------------------
 
 data Party : Set where
@@ -51,7 +53,7 @@ party≟ (party x) (party y) with x ≟ y
 
 data Talk : Set where
   over  : Talk
-  say   : Party → Party → Talk → Talk → Talk
+  say   : Party → Party → Ty → Talk → Talk
   offer : Party → Party → Talk → Talk → Talk
 
 ------------------------------------------------------------------------
@@ -139,13 +141,13 @@ talk≟ (say _ _ _ _) over = no (λ ())
 talk≟ (offer _ _ _ _) over = no (λ ())
 talk≟ (say _ _ _ _) (offer _ _ _ _) = no (λ ())
 talk≟ (offer _ _ _ _) (say _ _ _ _) = no (λ ())
-talk≟ (say a b t0 t1) (say c d u0 u1) with party≟ a c
+talk≟ (say a b A t) (say c d B u) with party≟ a c
 ... | no ¬eq = no (λ { refl → ¬eq refl })
 ... | yes refl with party≟ b d
 ... | no ¬eq = no (λ { refl → ¬eq refl })
-... | yes refl with talk≟ t0 u0
+... | yes refl with ty≟ A B
 ... | no ¬eq = no (λ { refl → ¬eq refl })
-... | yes refl with talk≟ t1 u1
+... | yes refl with talk≟ t u
 ... | no ¬eq = no (λ { refl → ¬eq refl })
 ... | yes refl = yes refl
 talk≟ (offer a b t0 t1) (offer c d u0 u1) with party≟ a c
@@ -163,30 +165,36 @@ talk≟ (offer a b t0 t1) (offer c d u0 u1) with party≟ a c
 -- with no session there.
 ------------------------------------------------------------------------
 
-data Kind : Set where
-  said    : Kind
-  offered : Kind
+wrap : (Proto → Proto) → Maybe Proto → Maybe Proto
+wrap _ nothing = nothing
+wrap ctor (just S) = just (ctor S)
 
 both : (Proto → Proto → Proto) → Maybe Proto → Maybe Proto → Maybe Proto
 both _ nothing _ = nothing
 both _ _ nothing = nothing
 both ctor (just S) (just T) = just (ctor S T)
 
-join : Kind → Hear → {A : Set} → Dec A → Maybe Proto → Maybe Proto → Maybe Proto
-join _ bad _ _ _ = nothing
-join _ off (no _) _ _ = nothing
-join _ off (yes _) m _ = m
-join said out _ m n = both send m n
-join said got _ m n = both recv m n
-join offered out _ m n = both choose m n
-join offered got _ m n = both branch m n
+-- A `say` names one payload and one continuation. `off` has that
+-- continuation. `out` sends the payload. `got` receives it.
+said : Hear → Ty → Maybe Proto → Maybe Proto
+said bad _ _ = nothing
+said off _ m = m
+said out A m = wrap (send A) m
+said got A m = wrap (recv A) m
+
+-- An `offer` still has two arms. An outsider needs them equal.
+join : Hear → {A : Set} → Dec A → Maybe Proto → Maybe Proto → Maybe Proto
+join bad _ _ _ = nothing
+join off (no _) _ _ = nothing
+join off (yes _) m _ = m
+join out _ m n = both choose m n
+join got _ m n = both branch m n
 
 seen : Party → Party → Talk → Maybe Proto
 seen p q over = just end
-seen p q (say a b t0 t1) =
-  join said (hear p q a b) (talk≟ t0 t1) (seen p q t0) (seen p q t1)
+seen p q (say a b A t) = said (hear p q a b) A (seen p q t)
 seen p q (offer a b t0 t1) =
-  join offered (hear p q a b) (talk≟ t0 t1) (seen p q t0) (seen p q t1)
+  join (hear p q a b) (talk≟ t0 t1) (seen p q t0) (seen p q t1)
 
 ------------------------------------------------------------------------
 -- The other party's session is the other end. Both have one, or
@@ -197,40 +205,44 @@ data Agree : Maybe Proto → Maybe Proto → Set where
   none : Agree nothing nothing
   ends : ∀ {S T} → T ≡ dual S → Agree (just S) (just T)
 
+said-dual :
+  ∀ A h h′ m n →
+  Swapped h h′ →
+  Agree m n →
+  Agree (said h A m) (said h′ A n)
+said-dual _ _ _ _ _ bad-bad _ = none
+said-dual _ off off _ _ off-off agr = agr
+said-dual A out got _ _ out-got none = none
+said-dual A out got _ _ out-got (ends eq) = ends (cong (recv A) eq)
+said-dual A got out _ _ got-out none = none
+said-dual A got out _ _ got-out (ends eq) = ends (cong (send A) eq)
+
 join-dual :
-  ∀ act h h′ {A} (eq : Dec A) m0 n0 m1 n1 →
+  ∀ h h′ {A} (eq : Dec A) m0 n0 m1 n1 →
   Swapped h h′ →
   Agree m0 n0 →
   Agree m1 n1 →
-  Agree (join act h eq m0 m1) (join act h′ eq n0 n1)
-join-dual _ _ _ _ _ _ _ _ bad-bad _ _ = none
-join-dual _ off off (yes _) _ _ _ _ off-off agr0 _ = agr0
-join-dual _ off off (no _) _ _ _ _ off-off _ _ = none
-join-dual said out got _ _ _ _ _ out-got none none = none
-join-dual said out got _ _ _ _ _ out-got none (ends _) = none
-join-dual said out got _ _ _ _ _ out-got (ends _) none = none
-join-dual said out got _ _ _ _ _ out-got (ends eq0) (ends eq1) = ends (cong₂ recv eq0 eq1)
-join-dual said got out _ _ _ _ _ got-out none none = none
-join-dual said got out _ _ _ _ _ got-out none (ends _) = none
-join-dual said got out _ _ _ _ _ got-out (ends _) none = none
-join-dual said got out _ _ _ _ _ got-out (ends eq0) (ends eq1) = ends (cong₂ send eq0 eq1)
-join-dual offered out got _ _ _ _ _ out-got none none = none
-join-dual offered out got _ _ _ _ _ out-got none (ends _) = none
-join-dual offered out got _ _ _ _ _ out-got (ends _) none = none
-join-dual offered out got _ _ _ _ _ out-got (ends eq0) (ends eq1) = ends (cong₂ branch eq0 eq1)
-join-dual offered got out _ _ _ _ _ got-out none none = none
-join-dual offered got out _ _ _ _ _ got-out none (ends _) = none
-join-dual offered got out _ _ _ _ _ got-out (ends _) none = none
-join-dual offered got out _ _ _ _ _ got-out (ends eq0) (ends eq1) = ends (cong₂ choose eq0 eq1)
+  Agree (join h eq m0 m1) (join h′ eq n0 n1)
+join-dual _ _ _ _ _ _ _ bad-bad _ _ = none
+join-dual off off (yes _) _ _ _ _ off-off agr0 _ = agr0
+join-dual off off (no _) _ _ _ _ off-off _ _ = none
+join-dual out got _ _ _ _ _ out-got none none = none
+join-dual out got _ _ _ _ _ out-got none (ends _) = none
+join-dual out got _ _ _ _ _ out-got (ends _) none = none
+join-dual out got _ _ _ _ _ out-got (ends eq0) (ends eq1) = ends (cong₂ branch eq0 eq1)
+join-dual got out _ _ _ _ _ got-out none none = none
+join-dual got out _ _ _ _ _ got-out none (ends _) = none
+join-dual got out _ _ _ _ _ got-out (ends _) none = none
+join-dual got out _ _ _ _ _ got-out (ends eq0) (ends eq1) = ends (cong₂ choose eq0 eq1)
 
 ends-dual : (p q : Party) (t : Talk) → Agree (seen p q t) (seen q p t)
 ends-dual p q over = ends refl
-ends-dual p q (say a b t0 t1) =
-  join-dual said (hear p q a b) (hear q p a b) (talk≟ t0 t1)
-    (seen p q t0) (seen q p t0) (seen p q t1) (seen q p t1)
-    (swapped-hear p q a b) (ends-dual p q t0) (ends-dual p q t1)
+ends-dual p q (say a b A t) =
+  said-dual A (hear p q a b) (hear q p a b)
+    (seen p q t) (seen q p t)
+    (swapped-hear p q a b) (ends-dual p q t)
 ends-dual p q (offer a b t0 t1) =
-  join-dual offered (hear p q a b) (hear q p a b) (talk≟ t0 t1)
+  join-dual (hear p q a b) (hear q p a b) (talk≟ t0 t1)
     (seen p q t0) (seen q p t0) (seen p q t1) (seen q p t1)
     (swapped-hear p q a b) (ends-dual p q t0) (ends-dual p q t1)
 
@@ -255,40 +267,51 @@ no-run : ¬ Seat run
 no-run ()
 
 ------------------------------------------------------------------------
--- `pong` receives `b1` and then sends `b0`. That is `ping`. The
--- other party sends `b1` and then receives `b0`. The two
--- continuations differ, so a third party has no session there.
+-- `pong` receives a nat and then sends a nat. The other party sends
+-- a nat and then receives a nat. A party off that `say` has the
+-- continuation's session, which here is `end`. An `offer` whose
+-- arms differ still gives that party nothing.
 ------------------------------------------------------------------------
 
 ping-talk : Talk
 ping-talk =
-  say (party "peer") (party "pong") over
-    (say (party "pong") (party "peer") over over)
+  say (party "peer") (party "pong") nat
+    (say (party "pong") (party "peer") nat over)
 
-pong-seen : seen (party "pong") (party "peer") ping-talk ≡ just (recv end (send end end))
+pong-seen : seen (party "pong") (party "peer") ping-talk ≡ just (recv nat (send nat end))
 pong-seen = refl
 
-peer-seen : seen (party "peer") (party "pong") ping-talk ≡ just (send end (recv end end))
+peer-seen : seen (party "peer") (party "pong") ping-talk ≡ just (send nat (recv nat end))
 peer-seen = refl
 
-ping-ends : seen (party "peer") (party "pong") ping-talk ≡ just (dual (recv end (send end end)))
+ping-ends : seen (party "peer") (party "pong") ping-talk ≡ just (dual (recv nat (send nat end)))
 ping-ends = other-end (party "pong") (party "peer") ping-talk pong-seen
 
-ping-log : seen (party "log") (party "peer") ping-talk ≡ nothing
+ping-log : seen (party "log") (party "peer") ping-talk ≡ just end
 ping-log = refl
 
--- Both arms carry the same message from `b` to `c`, so `a` with `c`
--- is `end`, and `b` with `c` is the send.
+-- The arms differ, so a party off the choice has no session.
+split : Talk
+split =
+  offer (party "peer") (party "pong") over
+    (say (party "pong") (party "peer") nat over)
+
+split-log : seen (party "log") (party "peer") split ≡ nothing
+split-log = refl
+
+-- Both arms carry the same message from `b` to `c`, so `a` with `b`
+-- chooses that send, `b` with `c` sends the nat, and `a` with `c`
+-- is `end`.
 both-arms : Talk
 both-arms =
-  say (party "a") (party "b")
-    (say (party "b") (party "c") over over)
-    (say (party "b") (party "c") over over)
+  offer (party "a") (party "b")
+    (say (party "b") (party "c") nat over)
+    (say (party "b") (party "c") nat over)
 
-arms-ab : seen (party "a") (party "b") both-arms ≡ just (send end end)
+arms-ab : seen (party "a") (party "b") both-arms ≡ just (choose end end)
 arms-ab = refl
 
-arms-bc : seen (party "b") (party "c") both-arms ≡ just (send end end)
+arms-bc : seen (party "b") (party "c") both-arms ≡ just (send nat end)
 arms-bc = refl
 
 arms-ac : seen (party "a") (party "c") both-arms ≡ just end
@@ -298,22 +321,22 @@ arms-ac = refl
 -- has no session.
 one-arm : Talk
 one-arm =
-  say (party "a") (party "b") over
-    (say (party "b") (party "c") over over)
+  offer (party "a") (party "b") over
+    (say (party "b") (party "c") nat over)
 
 one-arm-bc : seen (party "b") (party "c") one-arm ≡ nothing
 one-arm-bc = refl
 
--- Choosing `b0` finishes. Choosing `b1` sends `b0`.
+-- The left arm finishes. The right arm sends a nat.
 arm : Talk
 arm =
   offer (party "a") (party "b") over
-    (say (party "a") (party "b") over over)
+    (say (party "a") (party "b") nat over)
 
-arm-a : seen (party "a") (party "b") arm ≡ just (choose end (send end end))
+arm-a : seen (party "a") (party "b") arm ≡ just (choose end (send nat end))
 arm-a = refl
 
-arm-b : seen (party "b") (party "a") arm ≡ just (branch end (recv end end))
+arm-b : seen (party "b") (party "a") arm ≡ just (branch end (recv nat end))
 arm-b = refl
 
 arm-log : seen (party "log") (party "a") arm ≡ nothing
@@ -321,7 +344,7 @@ arm-log = refl
 
 -- A party does not talk to itself.
 self : Talk
-self = say (party "a") (party "a") over over
+self = say (party "a") (party "a") nat over
 
 self-ab : seen (party "a") (party "b") self ≡ nothing
 self-ab = refl

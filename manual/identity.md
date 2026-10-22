@@ -1,7 +1,7 @@
 ---
 title: Identity
 slug: identity
-order: 6
+order: 7
 summary: Equations, refl, rewrite, and explicit motives.
 ---
 

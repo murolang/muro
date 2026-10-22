@@ -1,7 +1,7 @@
 ---
 title: Emit
 slug: emit
-order: 12
+order: 13
 summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A cross is one call on a named node. Spec and evidence are omitted from a run.
 ---
 
@@ -101,7 +101,7 @@ The assembler translates this text. The proof stops at the run image.
 
 `--backend otp` writes `<stem>_otp.ex` next to the file and prints that path. `ping.muro` is `ping_otp.ex`, and the module is `PingOtp`. Each `conform` is a child module. `PingOtp.Pong.start/1` takes the peer pid and returns `{:ok, pid, ref}`. `ref` is a monitor of the server, installed before the process takes its first action.
 
-The process sends `{:muro, from, :b0}` or `:b1`, and a choice as `{:muro_pick, from, :b0}` or `:b1`. It receives the same shapes from that peer. A message that arrives before the server reaches that receive is kept, in order. `done` stops the server with `:normal`. `stop` stops it with `{:shutdown, :abandon}`. A monitor of the server sees that reason. If the peer dies while the server is running, the server stops with `{:shutdown, :abandon}`. A bit the process did not choose stops it with `{:shutdown, {:unexpected, bit}}`.
+The process sends `{:muro, from, value}`. A nat is an integer. A bit is `:b0` or `:b1`. Unit is `:tt`. A pair is a two-element tuple. A record is a map whose keys are the field names. A choice is `{:muro_pick, from, :b0}` or `:b1`. It receives the same shapes from that peer. A message that arrives before the server reaches that receive is kept, in order. `done` stops the server with `:normal`. `stop` stops it with `{:shutdown, :abandon}`. A monitor of the server sees that reason. If the peer dies while the server is running, the server stops with `{:shutdown, :abandon}`. A value of a type the process did not name stops it with `{:shutdown, {:unexpected, value}}`.
 
 The server talks to one peer. The run emitters still omit the protocol and the process. The BEAM runs this server. The proof stops at the conformance derivation.
 
@@ -111,7 +111,7 @@ A `read` is the same process. The actions are the reading's process, and the chi
 mix muro.emit examples/located.muro --backend otp
 ```
 
-That writes `examples/located_otp.ex`. The module is `LocatedOtp`. `read stay pong : ping-home at home` is `LocatedOtp.Pong.start/1`, and `read cross pong-away : ping-home at away` is `LocatedOtp.PongAway.start/1`. Both take the peer pid. Both receive `b1` and send `b0`, then stop with `:normal`. `pong-poly`, `pong-poly-away`, and `pong-done` are that same exchange. `left-open` sends `b0` and stops with `{:shutdown, :abandon}`. `Pong` stays at `home` and `PongAway` crosses at `away`. The server talks to one peer either way. The boundary is the call `--node` writes.
+That writes `examples/located_otp.ex`. The module is `LocatedOtp`. `read stay pong : ping-home at home` is `LocatedOtp.Pong.start/1`, and `read cross pong-away : ping-home at away` is `LocatedOtp.PongAway.start/1`. Both take the peer pid. Both receive a nat and send `1`, then stop with `:normal`. `pong-poly`, `pong-poly-away`, and `pong-done` are that same exchange. `left-open` sends `0` and stops with `{:shutdown, :abandon}`. `Pong` stays at `home` and `PongAway` crosses at `away`. The server talks to one peer either way. The boundary is the call `--node` writes.
 
 A meeting starts the two processes it names as each other's peer. Both are running before either takes its first action.
 
@@ -119,7 +119,7 @@ A meeting starts the two processes it names as each other's peer. Both are runni
 mix muro.emit examples/meet.muro --backend otp
 ```
 
-That writes `examples/meet_otp.ex`. The module is `MeetOtp`. `meet wire : pong with peer` is `MeetOtp.wire/0`. It returns `{:ok, left, right, left_ref, right_ref}`. `left` runs `pong` and `right` runs `peer`. Each ref is a monitor of that server, installed before the first action. Both servers of `wire` finish with `:normal`. `arm` is the choice, and both servers finish with `:normal`. `drop` is both ends abandoning after `b0`, and both stop with `{:shutdown, :abandon}`. `Pong.start/1` still takes a peer pid supplied by the caller. The bits stay on the session. The place stays the call `--node` writes.
+That writes `examples/meet_otp.ex`. The module is `MeetOtp`. `meet wire : pong with peer` is `MeetOtp.wire/0`. It returns `{:ok, left, right, left_ref, right_ref}`. `left` runs `pong` and `right` runs `peer`. Each ref is a monitor of that server, installed before the first action. Both servers of `wire` finish with `:normal`. `arm` is the choice, and both servers finish with `:normal`. `drop` is both ends abandoning after `0`, and both stop with `{:shutdown, :abandon}`. `wrapped` sends `(b0, {x = 0, y = 0})`, which the peer receives as a tuple whose second element is a map with keys `x` and `y`, and both servers finish with `:normal`. `Pong.start/1` still takes a peer pid supplied by the caller. The payload stays on the session. The place stays the call `--node` writes.
 
 ## Node
 
@@ -145,7 +145,7 @@ The function returns whatever that process replies. If the name is not registere
 
 A `stay` writes no function. `move stay local : home`, and both reads of `poly`, are absent from `place_node.ex`. A file whose moves all stay still writes the module, with `node/0` and no call.
 
-A `read cross` is the same call. The scheme is the one the endpoint names, and the place is the one the reading names. The message is the read of that scheme. The bits stay on the session.
+A `read cross` is the same call. The scheme is the one the endpoint names, and the place is the one the reading names. The message is the read of that scheme. The payload stays on the session.
 
 ```
 mix muro.emit examples/located.muro --node a

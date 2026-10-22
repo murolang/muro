@@ -16,12 +16,12 @@ The language book is [`manual/`](manual/index.md). That is what [muro-lang.dev](
 
 ## Install
 
-[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.16.54. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
+[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.16.55. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ```elixir
 def deps do
   [
-    {:muro, "~> 0.16.54"}
+    {:muro, "~> 0.16.55"}
   ]
 end
 ```
@@ -67,6 +67,7 @@ A definition is in the book the moment `Parser.parse/1` returns it. The checker 
 | [Start](manual/start.md) | Install, first file, emit |
 | [The wall](manual/wall.md) | spec / evidence / run |
 | [Terms](manual/language.md) | Π, λ, match, quantities |
+| [Sessions](manual/sessions.md) | The messages two processes exchange |
 | [Grammar](manual/grammar.md) | What the parser implements |
 | [Examples](manual/examples.md) | Every file in `examples/` |
 | [CSHRL](manual/cshrl.md) | A library on params, three environments, their agents |

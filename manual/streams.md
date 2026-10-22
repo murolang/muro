@@ -1,7 +1,7 @@
 ---
 title: Streams
 slug: streams
-order: 9
+order: 10
 summary: ν, unfold, Always, bisimulation, and declared ν families.
 ---
 

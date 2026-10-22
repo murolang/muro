@@ -26,6 +26,10 @@ pages:
     slug: language
     title: Terms
     summary: Type, Π, λ, match, quantities, and the book.
+  - file: sessions.md
+    slug: sessions
+    title: Sessions
+    summary: A session is the messages two processes exchange, and the order they exchange them.
   - file: identity.md
     slug: identity
     title: Identity
