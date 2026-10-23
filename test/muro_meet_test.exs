@@ -143,13 +143,14 @@ defmodule Muro.MeetTest do
   end
 
   test "a claimed length does not meet the length of the received nat" do
-    # sender claims length 2, receiver expects length of the received nat
-    vec2 = {:var, :vec2}
+    # The sender sends 3 and then a vector of length 2.
+    # The receiver expects a vector whose length is that nat.
+    vec2 = {:rep, {:nat, 2}, {:nat, 0}}
 
     assert {:no, {:put, {:vec, :nat, {:lit, 2}}, ^vec2, :done},
             {:get, {:vec, :nat, {:var, :n}}, :_, :done}} =
              Meet.go(
-               {:put, :nat, {:nat, 2}, {:put, {:vec, :nat, {:lit, 2}}, vec2, :done}},
+               {:put, :nat, {:nat, 3}, {:put, {:vec, :nat, {:lit, 2}}, vec2, :done}},
                {:get, :nat, :n, {:get, {:vec, :nat, {:var, :n}}, :_, :done}}
              )
   end
