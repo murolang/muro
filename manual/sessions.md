@@ -109,6 +109,27 @@ A continuation may mention a nat that was received, as the length of a vector. T
 session sized := recv (n : Nat) (send (Vec Nat n) end)
 ```
 
+`mix muro.emit examples/meet.muro --backend otp` writes `MeetOtp`. `SizedServer` receives `n` and sends `rep n 0`. The first message is `{:muro, from, n}`. The second is `{:muro, from, vec}`, and `vec` is a list of `n` zeros. A list of another length stops the process that receives it, with `{:shutdown, {:unexpected, value}}`.
+
+```iex
+iex> {:ok, pid, _ref} = MeetOtp.SizedServer.start(self())
+iex> send(pid, {:muro, self(), 2})
+{:muro, #PID<0.94.0>, 2}
+iex> flush()
+{:muro, #PID<0.243.0>, [0, 0]}
+{:DOWN, #Reference<0.2243224680.2436628488.185463>, :process, #PID<0.243.0>, :normal}
+:ok
+iex> {:ok, pid, _ref} = MeetOtp.SizedClient.start(self())
+iex> flush()
+{:muro, #PID<0.246.0>, 2}
+:ok
+iex> send(pid, {:muro, self(), [0, 0, 0]})
+{:muro, #PID<0.94.0>, [0, 0, 0]}
+iex> flush()
+{:DOWN, #Reference<0.2243224680.2436628488.185504>, :process, #PID<0.246.0>, {:shutdown, {:unexpected, [0, 0, 0]}}}
+:ok
+```
+
 ## Choice
 
 A choice is an arm selection:
