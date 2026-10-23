@@ -62,4 +62,4 @@ session ping := recv Nat (send Nat end)
 conform echo : ping := get (k : Nat) (put k done)
 ```
 
-The bound variable `k` can be used in any `put` within the continuation. Variables follow affine rules: they may be used at most once, unless the type is copyable.
+The bound variable `k` can be sent by any `put` in the continuation, at its type. A name bound twice is the inner binding. Every payload type is data, so a bound value can be sent more than once.

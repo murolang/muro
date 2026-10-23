@@ -2,13 +2,13 @@
 
 ## 0.16.56
 
-A process can bind the value it receives. `get (k : Type) continuation` binds the received value to `k`, and the continuation can use that variable in payload values. Example: `get (k : Nat) (put k done)` echoes the received value back. The bound variable is affine: it may be used at most once, unless the type is copyable. The parser tracks variable names, and the checker verifies that variables are in scope. The OTP backend does not yet fully implement variable substitution at runtime.
+A process can bind the value it receives. `get (k : Nat) (put k done)` binds the received value to `k` and sends it back. `get Nat` still receives without a name. A bound name is sent at its type. A name bound twice is the inner binding: sending it at the outer binding's type is refused, in Agda (`shadowed-refused`) and in the checker. Every payload type is data, so a bound value can be sent more than once. The OTP image keeps the latest value bound to each name and sends it. A run term has no seat.
 
 ### Manual
 
-- Grammar: `get (name : Type) proc` syntax. Payload values can be variables.
-- Sessions: value binding with echo example.
-- Examples: `meet.muro`, `talk.muro`, `dual.muro` use value binding.
+- Grammar: `get (name : Type) proc`. A payload value can be a variable.
+- Terms, Extending, Sessions: value binding, the context `Conforms` carries, and shadowing.
+- Examples: `meet.muro`, `talk.muro`, `dual.muro` bind values.
 
 ### Package
 

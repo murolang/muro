@@ -39,7 +39,7 @@ open import Data.Product using (_×_; _,_)
 open import Data.Sum using (_⊎_; inj₁; inj₂)
 open import Data.String.Base using (String)
 open import Data.String.Properties using (_≟_)
-open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
+open import Relation.Binary.PropositionalEquality.Core using (_≡_; _≢_; refl)
 open import Relation.Nullary.Decidable.Core using (Dec)
 open import Relation.Nullary.Decidable.Core using () renaming (yes to yes′; no to no′)
 
@@ -177,10 +177,14 @@ open import Data.List.Base using (List; []; _∷_)
 Ctx : Set
 Ctx = List (String × Ty)
 
--- Variable lookup in context
+-- Variable lookup in context. The innermost binding of a name is the
+-- one a variable refers to: `there` steps past a binding only when it
+-- binds a different name, so a shadowed binding is out of reach. The
+-- OTP image keeps the latest value bound to a name, and the Elixir
+-- checker looks the name up the same way.
 data _∈_∷_ : String → Ctx → Ty → Set where
   here  : ∀ {x A Γ} → x ∈ ((x , A) ∷ Γ) ∷ A
-  there : ∀ {x y A B Γ} → x ∈ Γ ∷ A → x ∈ ((y , B) ∷ Γ) ∷ A
+  there : ∀ {x y A B Γ} → x ≢ y → x ∈ Γ ∷ A → x ∈ ((y , B) ∷ Γ) ∷ A
 
 -- Well-scoped value expressions
 data ValExprOk : Ctx → ∀ {A} → ValExpr A → Set where
@@ -300,12 +304,10 @@ x ∈? [] ∷? A = no′ (λ ())
 x ∈? ((y , B) ∷ Γ) ∷? A with x ≟ y
 ... | yes′ refl with ty≟ A B
 ... | yes′ refl = yes′ here
-... | no′ ¬AB with x ∈? Γ ∷? A
-... | yes′ p = yes′ (there p)
-... | no′ np = no′ (λ { here → ¬AB refl ; (there p) → np p })
+... | no′ ¬AB = no′ (λ { here → ¬AB refl ; (there x≢x _) → x≢x refl })
 x ∈? ((y , B) ∷ Γ) ∷? A | no′ ¬xy with x ∈? Γ ∷? A
-... | yes′ p = yes′ (there p)
-... | no′ np = no′ (λ { here → ¬xy refl ; (there p) → np p })
+... | yes′ p = yes′ (there ¬xy p)
+... | no′ np = no′ (λ { here → ¬xy refl ; (there _ p) → np p })
 
 -- Decide if a value expression is well-scoped
 decideValExpr : ∀ {A} (Γ : Ctx) (v : ValExpr A) → Dec (ValExprOk Γ v)
@@ -388,6 +390,24 @@ v-here-decides = refl
 
 v-there-decides : decide [] (put box (lit v-there) done) (send box end) ≡ yes v-there-ok
 v-there-decides = refl
+
+-- A name rebound at another type refers to the inner binding. Sending
+-- it at the outer binding's type has no derivation, and `decide` says so.
+shadowed : Proc
+shadowed = get nat "v" (get bit "v" (put nat (var "v") done))
+
+shadowed-refused : ¬ Conforms [] shadowed (recv nat (recv bit (send nat end)))
+shadowed-refused (get-ok (get-ok (put-ok (var-ok (there v≢v _)) _))) = v≢v refl
+
+-- The inner binding at its own type conforms.
+inner : Conforms [] (get nat "v" (get bit "v" (put bit (var "v") done))) (recv nat (recv bit (send bit end)))
+inner = get-ok (get-ok (put-ok (var-ok here) done-end))
+
+inner-decides : decide [] (get nat "v" (get bit "v" (put bit (var "v") done))) (recv nat (recv bit (send bit end))) ≡ yes inner
+inner-decides = refl
+
+shadowed-decides : decide [] shadowed (recv nat (recv bit (send nat end))) ≡ no shadowed-refused
+shadowed-decides = refl
 
 left-open : Conforms [] (put nat (lit zero) stop) (send nat (send nat end))
 left-open = put-ok lit-ok abandon

@@ -221,7 +221,7 @@ defmodule Muro.SessionTest do
            """) == :ok
   end
 
-  test "value binding: variable can be used in put" do
+  test "value binding: a bound value need not be used" do
     assert check("""
            session box := recv (Nat * Nat) (send Nat end)
            conform use-first : box := get (p : (Nat * Nat)) (put 0 done)
@@ -243,6 +243,38 @@ defmodule Muro.SessionTest do
            session nested := recv Nat (recv Nat (send Nat end))
            conform outer : nested := get (k : Nat) (get (m : Nat) (put k done))
            """) == :ok
+  end
+
+  test "value binding: a bound value is sent at its own type" do
+    assert check("""
+           session pair-echo := recv (Nat * Nat) (send (Nat * Nat) end)
+           conform swap : pair-echo := get (p : (Nat * Nat)) (put p done)
+           """) == :ok
+  end
+
+  test "value binding: a bound value sent at another type is refused" do
+    assert {:error, msg} =
+             check("""
+             session mixed := recv Bit (send Nat end)
+             conform mix : mixed := get (v : Bit) (put v done)
+             """)
+
+    assert msg =~ "put v done does not conform to send Nat end"
+  end
+
+  test "value binding: a rebound name refers to the inner binding" do
+    assert check("""
+           session inner := recv Nat (recv Bit (send Bit end))
+           conform latest : inner := get (v : Nat) (get (v : Bit) (put v done))
+           """) == :ok
+
+    assert {:error, msg} =
+             check("""
+             session outer := recv Nat (recv Bit (send Nat end))
+             conform stale : outer := get (v : Nat) (get (v : Bit) (put v done))
+             """)
+
+    assert msg =~ "put v done does not conform to send Nat end"
   end
 
   test "value binding: parse get with binder" do
