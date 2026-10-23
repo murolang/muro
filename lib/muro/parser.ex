@@ -755,11 +755,63 @@ defmodule Muro.Parser do
     end
   end
 
+  # `recv (n : Nat)` binds `n` for the continuation. `recv (Nat)` and
+  # `recv (Vec Nat n)` are payload types and do not bind.
   defp parse_comm_proto(s, word, tag) do
-    with {:ok, rest} <- kw(s, word),
-         {:ok, ty, rest} <- parse_pay(skip(rest)),
-         {:ok, p, rest} <- parse_proto(skip(rest)) do
-      {:ok, {tag, ty, p}, rest}
+    with {:ok, rest} <- kw(s, word) do
+      rest = skip(rest)
+
+      case try_binder(rest) do
+        {:ok, name, ty, rest} ->
+          with {:ok, p, rest} <- parse_proto(skip(rest)) do
+            {:ok, {dep_tag(tag), name, ty, p}, rest}
+          end
+
+        :not_binder ->
+          with {:ok, ty, rest} <- parse_pay(rest),
+               {:ok, p, rest} <- parse_proto(skip(rest)) do
+            {:ok, {tag, ty, p}, rest}
+          end
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  defp dep_tag(:send), do: :dsend
+  defp dep_tag(:recv), do: :drecv
+
+  defp try_binder(s) do
+    if has_prefix?(s, "(") do
+      case tok(s, "(") do
+        {:ok, rest} ->
+          rest = skip(rest)
+
+          case ident(rest) do
+            {:ok, name, rest} ->
+              rest = skip(rest)
+
+              if has_prefix?(rest, ":") and not has_prefix?(rest, ":=") and
+                   not has_prefix?(rest, "::") do
+                with {:ok, rest} <- tok(rest, ":"),
+                     {:ok, ty, rest} <- parse_pay(skip(rest)),
+                     {:ok, rest} <- tok(skip(rest), ")") do
+                  {:ok, String.to_atom(name), ty, rest}
+                end
+              else
+                :not_binder
+              end
+
+            _ ->
+              :not_binder
+          end
+
+        _ ->
+          :not_binder
+      end
+    else
+      :not_binder
     end
   end
 
@@ -891,9 +943,34 @@ defmodule Muro.Parser do
       word_kw?(s, "Nat") -> {:ok, :nat, after_kw(s, "Nat")}
       word_kw?(s, "Bit") -> {:ok, :bit, after_kw(s, "Bit")}
       word_kw?(s, "Unit") -> {:ok, :unit, after_kw(s, "Unit")}
+      word_kw?(s, "Vec") -> parse_vec(s)
       has_prefix?(s, "(") -> parse_paren(s, &parse_pay/1)
       has_prefix?(s, "{") -> parse_pay_rec(s)
       true -> {:error, err(s, "expected a payload")}
+    end
+  end
+
+  # `Vec Nat n` and `Vec Nat 2`. The length is a numeral or a name.
+  # A successor, or a missing length, is not a length.
+  defp parse_vec(s) do
+    with {:ok, rest} <- kw(s, "Vec"),
+         {:ok, elem, rest} <- parse_pay_atom(skip(rest)) do
+      rest = skip(rest)
+
+      cond do
+        number?(rest) ->
+          {digits, rest} = take_digits(rest, "")
+          {:ok, {:vec, elem, {:lit, String.to_integer(digits)}}, rest}
+
+        ident_start?(rest) ->
+          case ident(rest) do
+            {:ok, name, rest} -> {:ok, {:vec, elem, {:var, String.to_atom(name)}}, rest}
+            err -> err
+          end
+
+        true ->
+          {:error, err(rest, "expected a vector length")}
+      end
     end
   end
 
@@ -946,6 +1023,9 @@ defmodule Muro.Parser do
       word_kw?(s, "b1") ->
         {:ok, {:bit, :b1}, after_kw(s, "b1")}
 
+      word_kw?(s, "rep") ->
+        parse_rep(s)
+
       has_prefix?(s, "(") ->
         parse_pval_paren(s)
 
@@ -975,6 +1055,20 @@ defmodule Muro.Parser do
     {digits, rest} = take_digits(s, "")
     {:ok, {:nat, {:nat, String.to_integer(digits)}}, rest}
   end
+
+  # `rep n 0` is a vector of that length. The length is a numeral or a name.
+  defp parse_rep(s) do
+    with {:ok, rest} <- kw(s, "rep"),
+         {:ok, {_ity, ix}, rest} <- parse_pval(skip(rest)),
+         {:ok, {ety, elem}, rest} <- parse_pval(skip(rest)),
+         {:ok, ixexp} <- length_exp(ix, s) do
+      {:ok, {{:vec, ety, ixexp}, {:rep, ix, elem}}, rest}
+    end
+  end
+
+  defp length_exp({:nat, n}, _s) when is_integer(n) and n >= 0, do: {:ok, {:lit, n}}
+  defp length_exp({:var, name}, _s), do: {:ok, {:var, name}}
+  defp length_exp(_ix, s), do: {:error, err(s, "vector length is not a nat")}
 
   defp take_digits(<<c, r::binary>>, acc) when c in ?0..?9, do: take_digits(r, acc <> <<c>>)
   defp take_digits(s, acc), do: {acc, s}

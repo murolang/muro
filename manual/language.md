@@ -32,7 +32,7 @@ session ping := recv Nat (send Nat end)
 conform pong : ping := get Nat (put 1 done)
 ```
 
-The payload is a nat, a bit, unit, a pair, or a record of named fields. A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. `send` and `recv` each name that type and one continuation. `put` sends a value of the type, or a name a `get` bound. `get Nat` receives a value and does not name it. `get (k : Nat)` binds it to `k`, and the continuation can send `k` at that type. A name bound twice is the inner binding. `choose` is the process's choice (`pick0`, `pick1`). `branch` is the other side's choice, and `cover` offers both arms. `done` closes the channel at `end`. `stop` abandons it, at any protocol.
+The payload is a nat, a bit, unit, a pair, a record of named fields, or a vector. A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. `send` and `recv` each name that type and one continuation. `recv (n : Nat)` binds `n`, and a later payload may mention `n` as the length of a vector. `put` sends a value of the type, or a name a `get` bound. `get Nat` receives a value and does not name it. `get (k : Nat)` binds it to `k`, and the continuation can send `k` at that type. A name bound twice is the inner binding. `choose` is the process's choice (`pick0`, `pick1`). `branch` is the other side's choice, and `cover` offers both arms. `done` closes the channel at `end`. `stop` abandons it, at any protocol.
 
 ```
 session box := send (Bit * {x : Nat, y : Nat}) end
@@ -60,7 +60,7 @@ conform peer : back := put 1 (get Nat done)
 
 `peer` sends `1` and then receives a nat. `examples/dual.muro` is that book.
 
-Two processes are one exchange when a send is a receive of that type and each session is the other end of the other. Any value of that type meets. A name bound by `get` meets that receive at the type it was bound. A name bound twice is the inner binding.
+Two processes are one exchange when a send is a receive of that type and each session is the other end of the other. Any value of that type meets. A name bound by `get` meets that receive at the type it was bound. A name bound twice is the inner binding. A nat that was sent is the length of a vector the continuation names.
 
 ```
 meet wire : pong with peer

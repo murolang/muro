@@ -108,6 +108,40 @@ defmodule Muro.MeetTest do
     assert msg == "put p done does not meet get {y : Nat, x : Nat} done"
   end
 
+  test "a received nat is the length of the vector that meets it" do
+    vec = fn e -> {:vec, :nat, e} end
+    server = {:get, :nat, :n, {:put, vec.({:var, :n}), {:rep, {:var, :n}, {:nat, 0}}, :done}}
+    client = {:put, :nat, {:nat, 2}, {:get, vec.({:lit, 2}), :_, :done}}
+    assert Meet.meets(server, client) == :ok
+    assert Meet.meets(client, server) == :ok
+
+    short = {:put, :nat, {:nat, 2}, {:get, vec.({:lit, 3}), :_, :done}}
+    assert {:error, msg} = Meet.meets(server, short)
+    assert msg == "put rep n 0 done does not meet get (Vec Nat 3) done"
+    assert {:error, msg} = Meet.meets(short, server)
+    assert msg == "get (Vec Nat 3) done does not meet put rep n 0 done"
+
+    assert check("""
+           session sized := recv (n : Nat) (send (Vec Nat n) end)
+           session back := dual sized
+           conform server : sized := get (n : Nat) (put (rep n 0) done)
+           conform client : back := put 2 (get (Vec Nat 2) done)
+           meet wire : server with client
+           """) == :ok
+
+    assert {:error, msg} =
+             check("""
+             session sized := recv (n : Nat) (send (Vec Nat n) end)
+             session back := dual sized
+             conform server : sized := get (n : Nat) (put (rep n 0) done)
+             conform bad : back := put 2 (get (Vec Nat 3) done)
+             meet wire : server with bad
+             """)
+
+    assert msg =~ "does not conform"
+    assert msg =~ "put rep n 0 done does not meet get (Vec Nat 3) done"
+  end
+
   test "a meeting reports a bound name sent at another type" do
     assert {:error, msg} =
              check("""

@@ -2,7 +2,8 @@
 -- The other end of a session. One channel has two ends. Sending
 -- here is receiving there. Choosing here is offering there. The
 -- payload type stays the payload type, and the continuation
--- dualises. The other end of the other end is the same protocol.
+-- dualises. A dependent receive is a dependent send of the same
+-- type. The other end of the other end is the same protocol.
 --
 -- The other end is spec. A run term has no seat. The mark stays
 -- the session's mark. None of these constructors is added to Tm
@@ -32,6 +33,8 @@ dual : Proto → Proto
 dual end = end
 dual (send A S) = recv A (dual S)
 dual (recv A S) = send A (dual S)
+dual (dsend x A S) = drecv x A (dual S)
+dual (drecv x A S) = dsend x A (dual S)
 dual (choose S T) = branch (dual S) (dual T)
 dual (branch S T) = choose (dual S) (dual T)
 
@@ -39,6 +42,8 @@ dual-invol : ∀ S → dual (dual S) ≡ S
 dual-invol end = refl
 dual-invol (send A S) = cong (send A) (dual-invol S)
 dual-invol (recv A S) = cong (recv A) (dual-invol S)
+dual-invol (dsend x A S) = cong (dsend x A) (dual-invol S)
+dual-invol (drecv x A S) = cong (drecv x A) (dual-invol S)
 dual-invol (choose S T) = cong₂ choose (dual-invol S) (dual-invol T)
 dual-invol (branch S T) = cong₂ branch (dual-invol S) (dual-invol T)
 
@@ -67,14 +72,21 @@ ping-other = refl
 ping-back : dual (dual ping) ≡ ping
 ping-back = refl
 
+-- The dual of a dependent receive is a dependent send of the same type.
+sized-other : dual sized ≡ dsend "n" nat (recv (vec nat (nvar "n")) end)
+sized-other = refl
+
+sized-back : dual (dual sized) ≡ sized
+sized-back = refl
+
 peer : Proc
 peer = put nat (lit two) (get nat "x" done)
 
 peer-ok : Conforms [] peer (dual ping)
-peer-ok = put-ok lit-ok (get-ok done-end)
+peer-ok = put-ok refl lit-ok (get-ok refl done-end)
 
 early : ¬ Conforms [] (put box (lit v-here) done) (dual ping)
-early ()
+early (put-ok () _ _)
 
 -- Abandonment still has a derivation at the other end.
 peer-stop : Conforms [] stop (dual ping)
@@ -91,7 +103,7 @@ choice-other : dual choice ≡ branch end (recv box end)
 choice-other = refl
 
 offered : Conforms [] (cover done (get box "x" done)) (dual choice)
-offered = cover-ok done-end (get-ok done-end)
+offered = cover-ok done-end (get-ok refl done-end)
 
 not-pick : ¬ Conforms [] (pick0 done) (dual choice)
 not-pick ()

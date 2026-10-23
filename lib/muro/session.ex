@@ -3,11 +3,14 @@ defmodule Muro.Session do
   The Elixir mirror of `decide` and `finishes` in `agda/Muro/Session.agda`.
 
   A communication carries a payload type and one continuation. The
-  payload is a nat, a bit, unit, a pair, or a record of named fields.
-  A pair is a tuple. A record is a fixed map: the names, in the order
-  written, are the type. `put` sends a value of that type. `get` binds
-  the received value to a named variable that can be used in the
-  continuation. `choose` and `branch` select an arm. `stop` conforms
+  payload is a nat, a bit, unit, a pair, a record of named fields, or a
+  vector whose length is a numeral or a nat received earlier. A pair is
+  a tuple. A record is a fixed map: the names, in the order written,
+  are the type. A vector is a list of that length. `put` sends a value
+  of that type. `get` binds the received value to a named variable that
+  can be used in the continuation. A dependent receive binds a name the
+  continuation's payload may mention as a vector length. `choose` and
+  `branch` select an arm. `stop` conforms
   to every protocol. `finishes/1` is `:yes` when every leaf is `done`.
   `skel/1` carries the value on `say` and the type on `hear`. `dual/1`
   swaps direction and keeps the payload type.
@@ -22,6 +25,8 @@ defmodule Muro.Session do
   def dual(:end), do: :end
   def dual({:send, a, s}), do: {:recv, a, dual(s)}
   def dual({:recv, a, s}), do: {:send, a, dual(s)}
+  def dual({:dsend, x, a, s}), do: {:drecv, x, a, dual(s)}
+  def dual({:drecv, x, a, s}), do: {:dsend, x, a, dual(s)}
   def dual({:choose, s, t}), do: {:branch, dual(s), dual(t)}
   def dual({:branch, s, t}), do: {:choose, dual(s), dual(t)}
 
@@ -55,6 +60,12 @@ defmodule Muro.Session do
     Map.new(fields, fn {name, val} -> {name, runtime(val)} end)
   end
 
+  def runtime({:rep, {:nat, n}, val}) when is_integer(n) and n >= 0 do
+    List.duplicate(runtime(val), n)
+  end
+
+  def runtime({:rep, {:var, name}, val}), do: {:rep, {:var, name}, runtime(val)}
+
   @doc """
   Whether a message value is of the payload type. A record matches by
   field name. The order of the names is the type, and it is compared
@@ -70,6 +81,10 @@ defmodule Muro.Session do
 
     Enum.sort(Map.keys(map)) == Enum.sort(names) and
       Enum.all?(fields, fn {name, ty} -> fits?(ty, Map.get(map, name)) end)
+  end
+
+  def fits?({:vec, elem, {:lit, n}}, list) when is_list(list) and is_integer(n) and n >= 0 do
+    length(list) == n and Enum.all?(list, &fits?(elem, &1))
   end
 
   def fits?(_, _), do: false
@@ -98,42 +113,161 @@ defmodule Muro.Session do
   `:ok` when `decide` returns `yes`. Otherwise the pair where it returns `no`.
   """
   def conforms(proc, proto) do
-    case go(proc, proto, %{}) do
+    case go(proc, proto, %{}, %{}) do
       :ok -> :ok
       {:no, p, s} -> {:error, "#{show_proc(p)} does not conform to #{show_proto(s)}"}
     end
   end
 
-  defp go(:done, :end, _ctx), do: :ok
-  defp go(:stop, _, _ctx), do: :ok
+  @doc """
+  `:ok` when every vector length is a numeral or a nat in scope.
+  A dependent action extends that scope with its binder.
+  """
+  def proto_ok(proto), do: proto_ok(proto, %{})
 
-  # put with inferred type (when value is a literal)
-  defp go({:put, ty, val, p} = proc, {:send, ty, s} = proto, ctx) do
-    if value?(val, ty, ctx), do: keep(go(p, s, ctx)), else: {:no, proc, proto}
+  defp go(:done, :end, _ctx, _idx), do: :ok
+  defp go(:stop, _, _ctx, _idx), do: :ok
+
+  defp go({:put, ty, val, p} = proc, {:send, sty, s} = proto, ctx, idx) do
+    expected = apply_ty(idx, sty)
+
+    if put_ok?(ty, val, expected, ctx) do
+      keep(go(p, s, ctx, idx))
+    else
+      {:no, proc, proto}
+    end
   end
 
-  # put with unknown type (when value is a variable) - check against protocol's expected type
-  defp go({:put, :unknown, val, p} = proc, {:send, expected_ty, s} = proto, ctx) do
-    if value?(val, expected_ty, ctx), do: keep(go(p, s, ctx)), else: {:no, proc, proto}
+  defp go({:put, ty, val, p} = proc, {:dsend, y, sty, s} = proto, ctx, idx) do
+    expected = apply_ty(idx, sty)
+
+    if put_ok?(ty, val, expected, ctx) do
+      keep(go(p, s, ctx, ext(idx, y, val, expected)))
+    else
+      {:no, proc, proto}
+    end
   end
 
-  defp go({:get, ty, name, p}, {:recv, ty, s}, ctx) do
-    # Add variable binding to context (anonymous _ doesn't add)
-    new_ctx = if name == :_, do: ctx, else: Map.put(ctx, name, ty)
-    keep(go(p, s, new_ctx))
+  defp go({:get, ty, name, p} = proc, {:recv, sty, s} = proto, ctx, idx) do
+    expected = apply_ty(idx, sty)
+
+    if ty == expected do
+      keep(go(p, s, bind_ctx(ctx, name, expected), idx))
+    else
+      {:no, proc, proto}
+    end
   end
 
-  defp go({:pick0, p}, {:choose, s, _}, ctx), do: keep(go(p, s, ctx))
-  defp go({:pick1, p}, {:choose, _, t}, ctx), do: keep(go(p, t, ctx))
+  defp go({:get, ty, name, p} = proc, {:drecv, y, sty, s} = proto, ctx, idx) do
+    expected = apply_ty(idx, sty)
 
-  defp go({:cover, p, q}, {:branch, s, t}, ctx) do
-    case go(p, s, ctx) do
-      :ok -> keep(go(q, t, ctx))
+    if ty == expected do
+      keep(go(p, s, bind_ctx(ctx, name, expected), rename_idx(idx, y, name)))
+    else
+      {:no, proc, proto}
+    end
+  end
+
+  defp go({:pick0, p}, {:choose, s, _}, ctx, idx), do: keep(go(p, s, ctx, idx))
+  defp go({:pick1, p}, {:choose, _, t}, ctx, idx), do: keep(go(p, t, ctx, idx))
+
+  defp go({:cover, p, q}, {:branch, s, t}, ctx, idx) do
+    case go(p, s, ctx, idx) do
+      :ok -> keep(go(q, t, ctx, idx))
       no -> no
     end
   end
 
-  defp go(p, s, _ctx), do: {:no, p, s}
+  defp go(p, s, _ctx, _idx), do: {:no, p, s}
+
+  defp put_ok?(:unknown, val, expected, ctx), do: value?(val, expected, ctx)
+  defp put_ok?(ty, val, expected, ctx), do: ty == expected and value?(val, ty, ctx)
+
+  defp bind_ctx(ctx, :_, _ty), do: ctx
+  defp bind_ctx(ctx, name, ty), do: Map.put(ctx, name, ty)
+
+  # A nat instantiates the lengths that name it. Another payload
+  # shadows the name and does not instantiate a length. `_` binds nothing.
+  defp ext(idx, :_, _val, _ty), do: idx
+
+  defp ext(idx, name, val, :nat) do
+    case nexp_of(val) do
+      nil -> Map.delete(idx, name)
+      e -> Map.put(idx, name, e)
+    end
+  end
+
+  defp ext(idx, name, _val, _ty), do: Map.delete(idx, name)
+
+  # The protocol binder is the process binder in the continuation.
+  defp rename_idx(idx, y, :_), do: Map.delete(idx, y)
+  defp rename_idx(idx, y, name), do: Map.put(Map.delete(idx, y), y, {:var, name})
+
+  defp nexp_of({:nat, n}) when is_integer(n) and n >= 0, do: {:lit, n}
+  defp nexp_of({:var, name}), do: {:var, name}
+  defp nexp_of(_), do: nil
+
+  defp apply_ty(_idx, ty) when ty in [:nat, :bit, :unit, :unknown], do: ty
+  defp apply_ty(idx, {:pair, a, b}), do: {:pair, apply_ty(idx, a), apply_ty(idx, b)}
+
+  defp apply_ty(idx, {:rec, fields}) when is_list(fields) do
+    {:rec, Enum.map(fields, fn {name, ty} -> {name, apply_ty(idx, ty)} end)}
+  end
+
+  defp apply_ty(idx, {:vec, elem, e}), do: {:vec, apply_ty(idx, elem), apply_nexp(idx, e)}
+
+  defp apply_nexp(_idx, {:lit, _n} = e), do: e
+
+  defp apply_nexp(idx, {:var, name}) do
+    case Map.get(idx, name) do
+      nil -> {:var, name}
+      e -> e
+    end
+  end
+
+  defp proto_ok(:end, _ctx), do: :ok
+  defp proto_ok({:send, ty, s}, ctx), do: with_ty(ty_ok(ty, ctx), proto_ok(s, ctx))
+  defp proto_ok({:recv, ty, s}, ctx), do: with_ty(ty_ok(ty, ctx), proto_ok(s, ctx))
+
+  defp proto_ok({:dsend, name, ty, s}, ctx) do
+    with_ty(ty_ok(ty, ctx), proto_ok(s, Map.put(ctx, name, ty)))
+  end
+
+  defp proto_ok({:drecv, name, ty, s}, ctx) do
+    with_ty(ty_ok(ty, ctx), proto_ok(s, Map.put(ctx, name, ty)))
+  end
+
+  defp proto_ok({:choose, s, t}, ctx), do: with_ty(proto_ok(s, ctx), proto_ok(t, ctx))
+  defp proto_ok({:branch, s, t}, ctx), do: with_ty(proto_ok(s, ctx), proto_ok(t, ctx))
+  defp proto_ok(_, _ctx), do: {:error, "ill-formed protocol"}
+
+  defp with_ty(:ok, rest), do: rest
+  defp with_ty({:error, _} = err, _rest), do: err
+
+  defp ty_ok(ty, _ctx) when ty in [:nat, :bit, :unit], do: :ok
+  defp ty_ok({:pair, a, b}, ctx), do: with_ty(ty_ok(a, ctx), ty_ok(b, ctx))
+
+  defp ty_ok({:rec, fields}, ctx) when is_list(fields) do
+    Enum.reduce_while(fields, :ok, fn {_name, ty}, :ok ->
+      case ty_ok(ty, ctx) do
+        :ok -> {:cont, :ok}
+        err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp ty_ok({:vec, elem, {:lit, n}}, ctx) when is_integer(n) and n >= 0, do: ty_ok(elem, ctx)
+
+  defp ty_ok({:vec, elem, {:var, name}}, ctx) do
+    case Map.get(ctx, name) do
+      nil -> {:error, "unbound length"}
+      :nat -> ty_ok(elem, ctx)
+      _ -> {:error, "vector length is not a nat"}
+    end
+  end
+
+  defp ty_ok({:vec, _, _}, _ctx), do: {:error, "vector length is not a nat"}
+  defp ty_ok(_, _ctx), do: {:error, "ill-formed payload"}
 
   defp keep(:ok), do: :ok
   defp keep({:no, _, _} = no), do: no
@@ -151,6 +285,10 @@ defmodule Muro.Session do
           _ -> false
         end
       end)
+  end
+
+  defp value?({:rep, ix, elem}, {:vec, ety, e}, ctx) do
+    nexp_of(ix) == e and value?(elem, ety, ctx)
   end
 
   # Check that a variable has the expected type in the context
@@ -178,6 +316,7 @@ defmodule Muro.Session do
   defp show_val(:b1), do: "b1"
   defp show_val(:tt), do: "tt"
   defp show_val({:tup, a, b}), do: "(#{show_val(a)}, #{show_val(b)})"
+  defp show_val({:rep, ix, elem}), do: "rep #{show_val(ix)} #{show_val(elem)}"
 
   defp show_val({:rec, []}) do
     "{}"
@@ -191,6 +330,15 @@ defmodule Muro.Session do
   def show_proto(:end), do: "end"
   def show_proto({:send, ty, s}), do: "send #{show_pay_atom(ty)} #{paren_proto(s)}"
   def show_proto({:recv, ty, s}), do: "recv #{show_pay_atom(ty)} #{paren_proto(s)}"
+
+  def show_proto({:dsend, name, ty, s}) do
+    "send (#{name} : #{show_pay(ty)}) #{paren_proto(s)}"
+  end
+
+  def show_proto({:drecv, name, ty, s}) do
+    "recv (#{name} : #{show_pay(ty)}) #{paren_proto(s)}"
+  end
+
   def show_proto({:choose, s, t}), do: "choose #{paren_proto(s)} #{paren_proto(t)}"
   def show_proto({:branch, s, t}), do: "branch #{paren_proto(s)} #{paren_proto(t)}"
 
@@ -205,7 +353,13 @@ defmodule Muro.Session do
     "{#{inner}}"
   end
 
+  defp show_pay({:vec, elem, e}), do: "Vec #{show_pay_atom(elem)} #{show_ix(e)}"
+
+  defp show_ix({:lit, n}), do: "#{n}"
+  defp show_ix({:var, name}), do: "#{name}"
+
   defp show_pay_atom({:pair, _, _} = ty), do: "(#{show_pay(ty)})"
+  defp show_pay_atom({:vec, _, _} = ty), do: "(#{show_pay(ty)})"
   defp show_pay_atom(ty), do: show_pay(ty)
 
   defp paren_proc(p) when is_atom(p), do: show_proc(p)

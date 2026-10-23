@@ -32,7 +32,7 @@ open import Muro.Session using
 open import Muro.Dual using (dual)
 open import Muro.Place using (Place; ambient; node; Bounds; none; one)
 open import Muro.Meet using
-  ( Meets; meets-sym; done-done; put-get; get-put
+  ( Meets; Meetsρ; meets-sym; done-done; put-get; get-put
   ; pong; peer; pong-peer; taker; giver; choice-meet
   )
 open import Muro.Talk using
@@ -84,7 +84,7 @@ boundary-is-seating _ _ _ _ = refl
 ------------------------------------------------------------------------
 
 home : Held pong (party "pong") (node "a") peer (party "peer") (node "a") ping-talk
-home = held Seated.home pong-peer (get-ok (put-ok lit-ok done-end)) (put-ok lit-ok (get-ok done-end))
+home = held Seated.home pong-peer (get-ok refl (put-ok refl lit-ok done-end)) (put-ok refl lit-ok (get-ok refl done-end))
 
 home-stays : bound home ≡ none
 home-stays = refl
@@ -93,7 +93,7 @@ home-not-cross : ¬ (bound home ≡ one)
 home-not-cross ()
 
 away : Held pong (party "pong") (node "a") peer (party "peer") (node "b") ping-talk
-away = held Seated.away pong-peer (get-ok (put-ok lit-ok done-end)) (put-ok lit-ok (get-ok done-end))
+away = held Seated.away pong-peer (get-ok refl (put-ok refl lit-ok done-end)) (put-ok refl lit-ok (get-ok refl done-end))
 
 away-crosses : bound away ≡ one
 away-crosses = refl
@@ -115,8 +115,8 @@ away-bits = refl
 away-back : Held peer (party "peer") (node "b") pong (party "pong") (node "a") ping-talk
 away-back =
   held Seated.away-back (meets-sym pong-peer)
-    (put-ok lit-ok (get-ok done-end))
-    (get-ok (put-ok lit-ok done-end))
+    (put-ok refl lit-ok (get-ok refl done-end))
+    (get-ok refl (put-ok refl lit-ok done-end))
 
 away-back-crosses : bound away-back ≡ one
 away-back-crosses = refl
@@ -131,14 +131,14 @@ peer-bits = refl
 -- node crosses once.
 both-ambient : Held pong (party "pong") ambient peer (party "peer") ambient ping-talk
 both-ambient =
-  held Seated.both-ambient pong-peer (get-ok (put-ok lit-ok done-end)) (put-ok lit-ok (get-ok done-end))
+  held Seated.both-ambient pong-peer (get-ok refl (put-ok refl lit-ok done-end)) (put-ok refl lit-ok (get-ok refl done-end))
 
 ambient-stays : bound both-ambient ≡ none
 ambient-stays = refl
 
 to-node : Held pong (party "pong") ambient peer (party "peer") (node "a") ping-talk
 to-node =
-  held Seated.to-node pong-peer (get-ok (put-ok lit-ok done-end)) (put-ok lit-ok (get-ok done-end))
+  held Seated.to-node pong-peer (get-ok refl (put-ok refl lit-ok done-end)) (put-ok refl lit-ok (get-ok refl done-end))
 
 to-node-crosses : bound to-node ≡ one
 to-node-crosses = refl
@@ -175,7 +175,7 @@ choice-away : Held taker (party "a") (node "a") giver (party "b") (node "b") arm
 choice-away =
   held (Seated.apart arm-a) choice-meet
     (pick0-ok done-end)
-    (cover-ok done-end (get-ok done-end))
+    (cover-ok done-end (get-ok refl done-end))
 
 choice-crosses : bound choice-away ≡ one
 choice-crosses = refl
@@ -186,7 +186,7 @@ choice-bits = refl
 choice-back : Held giver (party "b") (node "b") taker (party "a") (node "a") arm
 choice-back =
   held (Seated.apart arm-b) (meets-sym choice-meet)
-    (cover-ok done-end (get-ok done-end))
+    (cover-ok done-end (get-ok refl done-end))
     (pick0-ok done-end)
 
 choice-back-crosses : bound choice-back ≡ one
@@ -211,17 +211,18 @@ no-arm (held h _ _ _) = Seated.no-arm h
 
 not-type : ∀ {a b} →
   ¬ Held pong (party "pong") a (put nat (lit zero) done) (party "peer") b ping-talk
-not-type (held _ (get-put ()) _ _)
+not-type (held _ (get-put _ ()) _ _)
 
-¬done-stop : ¬ Meets done stop
+¬done-stop : ∀ {σ τ} → ¬ Meetsρ σ τ done stop
 ¬done-stop ()
 
-¬finishes-abandons : ¬ Meets (put nat (lit (suc zero)) done) (get nat "x" stop)
-¬finishes-abandons (put-get m) = ¬done-stop m
+¬finishes-abandons : ∀ {σ τ} →
+  ¬ Meetsρ σ τ (put nat (lit (suc zero)) done) (get nat "x" stop)
+¬finishes-abandons (put-get _ ())
 
 not-ending : ∀ {a b} →
   ¬ Held pong (party "pong") a (put nat (lit zero) (get nat "x" stop)) (party "peer") b ping-talk
-not-ending (held _ (get-put m) _ _) = ¬finishes-abandons m
+not-ending (held _ (get-put _ m) _ _) = ¬finishes-abandons m
 
 put-not-recv : ¬ Conforms [] (put nat (lit zero) done) (recv nat (send nat end))
 put-not-recv ()

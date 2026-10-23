@@ -232,7 +232,7 @@ defmodule Muro.Emit.Otp do
       end
 
       defp arrived(msg, %{wait: wait, bindings: bindings} = st) do
-        case step(wait, msg) do
+        case step(ready(wait, bindings), msg) do
           {:go, next} -> drive(next, %{st | wait: nil})
           {:bind, :_, _value, next} -> drive(next, %{st | wait: nil})
           {:bind, name, value, next} -> drive(next, %{st | wait: nil, bindings: Map.put(bindings, name, value)})
@@ -260,7 +260,7 @@ defmodule Muro.Emit.Otp do
       defp park(wait, %{queue: []} = st), do: {:noreply, %{st | wait: wait}}
 
       defp park(wait, %{queue: [msg | rest], bindings: bindings} = st) do
-        case step(wait, msg) do
+        case step(ready(wait, bindings), msg) do
           {:go, next} ->
             drive(next, %{st | wait: nil, queue: rest})
 
@@ -301,10 +301,56 @@ defmodule Muro.Emit.Otp do
           Enum.all?(fields, fn {name, ty} -> payload?(ty, Map.get(map, name)) end)
       end
 
+      defp payload?({:vec, elem, {:lit, n}}, list)
+           when is_list(list) and is_integer(n) and n >= 0 do
+        length(list) == n and Enum.all?(list, &payload?(elem, &1))
+      end
+
       defp payload?(_, _), do: false
+
+      defp ready({:hear, ty, name, next}, bindings) do
+        {:hear, subst_ty(ty, bindings), name, next}
+      end
+
+      defp ready(wait, _bindings), do: wait
+
+      defp subst_ty({:pair, a, b}, bindings), do: {:pair, subst_ty(a, bindings), subst_ty(b, bindings)}
+
+      defp subst_ty({:rec, fields}, bindings) when is_list(fields) do
+        {:rec, Enum.map(fields, fn {name, ty} -> {name, subst_ty(ty, bindings)} end)}
+      end
+
+      defp subst_ty({:vec, elem, e}, bindings) do
+        {:vec, subst_ty(elem, bindings), subst_ix(e, bindings)}
+      end
+
+      defp subst_ty(ty, _bindings), do: ty
+
+      defp subst_ix({:var, name}, bindings) do
+        case Map.get(bindings, name) do
+          n when is_integer(n) and n >= 0 -> {:lit, n}
+          _ -> {:var, name}
+        end
+      end
+
+      defp subst_ix(e, _bindings), do: e
 
       defp substitute({:var, name}, bindings) do
         Map.get(bindings, name, {:var, name})
+      end
+
+      defp substitute({:rep, {:var, name}, val}, bindings) do
+        case Map.get(bindings, name) do
+          n when is_integer(n) and n >= 0 ->
+            List.duplicate(substitute(val, bindings), n)
+
+          _ ->
+            {:rep, {:var, name}, substitute(val, bindings)}
+        end
+      end
+
+      defp substitute({:rep, n, val}, bindings) when is_integer(n) and n >= 0 do
+        List.duplicate(substitute(val, bindings), n)
       end
 
       defp substitute({a, b}, bindings) do
@@ -313,6 +359,10 @@ defmodule Muro.Emit.Otp do
 
       defp substitute(map, bindings) when is_map(map) do
         Map.new(map, fn {k, v} -> {k, substitute(v, bindings)} end)
+      end
+
+      defp substitute(list, bindings) when is_list(list) do
+        Enum.map(list, &substitute(&1, bindings))
       end
 
       defp substitute(value, _bindings), do: value

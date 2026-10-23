@@ -101,6 +101,14 @@ conform echo : ping := get (k : Nat) (put k done)
 
 `k` is bound by the `get`. The `put` uses it. The innermost binding wins. The payload type is data, so the bound value can be sent more than once. The meeting requires that name to be bound at exactly the type the other process receives.
 
+## Dependence
+
+A continuation may mention a nat that was received, as the length of a vector. The length of the vector that will be sent is the nat that was received. The dual sends that nat and then receives a vector of that length. The meeting checks that the value the sender provides is the length the receiver's continuation expects.
+
+```muro
+session sized := recv (n : Nat) (send (Vec Nat n) end)
+```
+
 ## Choice
 
 A choice is an arm selection:
