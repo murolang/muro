@@ -6,7 +6,9 @@ A meeting sends a bound name at the type it was received. `get (k : Nat) (put k 
 
 ### Manual
 
-- Terms, Sessions, Extending, and For agents: a bound name meets a receive of the type it was bound at.
+- Sessions: the protocol, its dual, the process, the meeting, value binding, and choice.
+- Terms, Extending, and For agents: a bound name meets a receive of the type it was bound at.
+- Grammar: a bound payload can be sent more than once.
 
 ### Package
 
