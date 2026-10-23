@@ -6,7 +6,8 @@ defmodule Muro.Meet do
   continuations meet. The values need not be the same term. A nat
   sent for a dependent receive instantiates vector lengths that name
   it on the receiver's side. A variable is sent at the type of its
-  innermost binding, and that is the type the other process receives.
+  innermost binding, after a nat received on that side has instantiated
+  the lengths in that type. That is the type the other process receives.
   A choice meets the arm that was offered.
   Both ends close, or both abandon. `meets/2` is `:ok` when `decide`
   returns `yes`. Otherwise the pair where it returns `no`.
@@ -29,13 +30,14 @@ defmodule Muro.Meet do
   defp go(:done, :done, _lp, _rq, _li, _ri), do: :ok
   defp go(:stop, :stop, _lp, _rq, _li, _ri), do: :ok
 
-  # A variable has no type of its own. The innermost binding is compared
-  # with the receive after the length substitution. This clause stays
-  # ahead of the concrete one: `:unknown` is not a payload type.
+  # A variable has no type of its own. Its innermost binding is read
+  # after this side's lengths are instantiated, and that type is
+  # compared with the receive. `:unknown` is not a payload type, so
+  # this clause stays ahead of the concrete one.
   defp go({:put, :unknown, {:var, name} = val, p}, {:get, gty, gname, q}, lp, rq, li, ri) do
     ty = apply_ty(ri, gty)
 
-    if bound?(lp, name, ty) do
+    if held(lp, li, name) == ty do
       keep(go(p, q, lp, bind(rq, gname, ty), li, ext(ri, gname, val, ty)))
     else
       {:no, {:put, :unknown, val, p}, {:get, gty, gname, q}}
@@ -45,7 +47,7 @@ defmodule Muro.Meet do
   defp go({:get, gty, gname, p}, {:put, :unknown, {:var, name} = val, q}, lp, rq, li, ri) do
     ty = apply_ty(li, gty)
 
-    if bound?(rq, name, ty) do
+    if held(rq, ri, name) == ty do
       keep(go(p, q, bind(lp, gname, ty), rq, ext(li, gname, val, ty), ri))
     else
       {:no, {:get, gty, gname, p}, {:put, :unknown, val, q}}
@@ -53,12 +55,13 @@ defmodule Muro.Meet do
   end
 
   # The payload types agree after a received nat instantiates lengths.
+  # A variable is the type of its innermost binding, as in `conforms`.
   # A `get` binds that type for its continuation.
   defp go({:put, ty, val, p}, {:get, gty, name, q}, lp, rq, li, ri) when ty != :unknown do
     left = apply_ty(li, ty)
     right = apply_ty(ri, gty)
 
-    if left == right do
+    if left == right and inhabits?(val, left, li, lp) do
       keep(go(p, q, lp, bind(rq, name, right), li, ext(ri, name, val, right)))
     else
       {:no, {:put, ty, val, p}, {:get, gty, name, q}}
@@ -69,7 +72,7 @@ defmodule Muro.Meet do
     left = apply_ty(li, gty)
     right = apply_ty(ri, ty)
 
-    if left == right do
+    if left == right and inhabits?(val, right, ri, rq) do
       keep(go(p, q, bind(lp, name, left), rq, ext(li, name, val, left), ri))
     else
       {:no, {:get, gty, name, p}, {:put, ty, val, q}}
@@ -91,12 +94,19 @@ defmodule Muro.Meet do
   defp bind(ctx, :_, _ty), do: ctx
   defp bind(ctx, name, ty), do: Map.put(ctx, name, ty)
 
-  defp bound?(ctx, name, ty) do
+  # The innermost binding, with this side's lengths instantiated.
+  # An unbound name has no type.
+  defp held(ctx, idx, name) do
     case Map.get(ctx, name) do
-      ^ty -> true
-      _ -> false
+      nil -> nil
+      stored -> apply_ty(idx, stored)
     end
   end
+
+  # A literal inhabits the type written on the send. A name inhabits its
+  # instantiated binding, and an unbound or mistyped name does not.
+  defp inhabits?({:var, name}, ty, idx, ctx), do: held(ctx, idx, name) == ty
+  defp inhabits?(_val, _ty, _idx, _ctx), do: true
 
   # A nat received under a name instantiates lengths on that side.
   # Another payload shadows the name. `_` binds nothing.
