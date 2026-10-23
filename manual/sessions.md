@@ -50,3 +50,16 @@ sequenceDiagram
 ```
 
 `examples/meet.muro`
+
+## Value binding
+
+A process can bind the value it receives and use it in the continuation:
+
+```muro
+session ping := recv Nat (send Nat end)
+
+-- Echo: receive a value and send it back
+conform echo : ping := get (k : Nat) (put k done)
+```
+
+The bound variable `k` can be sent by any `put` in the continuation, at its type. A name bound twice is the inner binding. Every payload type is data, so a bound value can be sent more than once.

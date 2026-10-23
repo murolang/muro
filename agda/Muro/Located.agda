@@ -25,6 +25,7 @@
 module Muro.Located where
 
 open import Data.Empty using (⊥)
+open import Data.List.Base using ([])
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
 open import Muro.Base using (Mode; spec; evid; run)
@@ -51,7 +52,7 @@ data Endpoint : Set where
 
 data Sits : Proc → Endpoint → Place → Set where
   held : ∀ {P S s q} →
-    Conforms P S →
+    Conforms [] P S →
     Move (ground s q) q →
     Sits P (endpoint aff S s) q
   finished : ∀ {P S s q} →
@@ -80,7 +81,7 @@ pong-done-away : Sits pong (endpoint lin ping (fixed ambient)) (node "a")
 pong-done-away = finished pong-linear (conform (fixed ambient) (node "a"))
 
 -- Abandonment is allowed for `%0`, and the reading still crosses once.
-open-away : Sits (put nat zero stop) (endpoint aff (send nat (send nat end)) (fixed ambient)) (node "a")
+open-away : Sits (put nat (lit zero) stop) (endpoint aff (send nat (send nat end)) (fixed ambient)) (node "a")
 open-away = held left-open (conform (fixed ambient) (node "a"))
 
 sits-home : boundary pong-home ≡ none
@@ -99,7 +100,7 @@ sits-open : boundary open-away ≡ one
 sits-open = refl
 
 -- The payload at home is the payload at the node.
-bits-of : ∀ {P S s q} → Sits P (endpoint aff S s) q → Conforms P S
+bits-of : ∀ {P S s q} → Sits P (endpoint aff S s) q → Conforms [] P S
 bits-of (held d _) = d
 
 same-bits : bits-of pong-home ≡ bits-of pong-away
@@ -112,7 +113,7 @@ same-bits = refl
 ------------------------------------------------------------------------
 
 early : Proc
-early = get bit done
+early = get bit "x" done
 
 early-any : ∀ {s q} → ¬ Sits early (endpoint aff ping s) q
 early-any (held () _)
@@ -121,7 +122,7 @@ early-lin-any : ∀ {s q} → ¬ Sits early (endpoint lin ping s) q
 early-lin-any (finished (linear () _) _)
 
 abandon-any : ∀ {s q} →
-  ¬ Sits (put nat zero stop) (endpoint lin (send nat (send nat end)) s) q
+  ¬ Sits (put nat (lit zero) stop) (endpoint lin (send nat (send nat end)) s) q
 abandon-any (finished l _) = ¬ends-left-open (Linear.closed l)
 
 ------------------------------------------------------------------------

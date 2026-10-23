@@ -16,6 +16,7 @@
 module Muro.Meet where
 
 open import Data.Empty using (⊥)
+open import Data.List.Base using ([])
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 open import Relation.Nullary.Decidable.Core using (Dec) renaming (yes to yes′; no to no′)
 
@@ -37,8 +38,8 @@ data Meets : Proc → Proc → Set where
   done-done : Meets done done
   stop-stop : Meets stop stop
 
-  put-get : ∀ {A v P Q} → Meets P Q → Meets (put A v P) (get A Q)
-  get-put : ∀ {A v P Q} → Meets P Q → Meets (get A P) (put A v Q)
+  put-get : ∀ {A v x P Q} → Meets P Q → Meets (put A v P) (get A x Q)
+  get-put : ∀ {A v x P Q} → Meets P Q → Meets (get A x P) (put A v Q)
 
   pick0-cover : ∀ {P Q R} → Meets P Q → Meets (pick0 P) (cover Q R)
   pick1-cover : ∀ {P Q R} → Meets P R → Meets (pick1 P) (cover Q R)
@@ -71,7 +72,7 @@ no-run ()
 ------------------------------------------------------------------------
 
 data Channel (P Q : Proc) (S : Proto) : Set where
-  channel : Meets P Q → Conforms P S → Conforms Q (dual S) → Channel P Q S
+  channel : Meets P Q → Conforms [] P S → Conforms [] Q (dual S) → Channel P Q S
 
 ------------------------------------------------------------------------
 -- The search. `yes` carries a derivation. `no` carries its refutation.
@@ -81,19 +82,19 @@ data Answer (P Q : Proc) : Set where
   yes : Meets P Q → Answer P Q
   no  : ¬ Meets P Q → Answer P Q
 
-put-get-yes : ∀ {A v P Q} → Answer P Q → Answer (put A v P) (get A Q)
+put-get-yes : ∀ {A v x P Q} → Answer P Q → Answer (put A v P) (get A x Q)
 put-get-yes (yes m) = yes (put-get m)
 put-get-yes (no nm) = no (λ { (put-get m) → nm m })
 
-get-put-yes : ∀ {A v P Q} → Answer P Q → Answer (get A P) (put A v Q)
+get-put-yes : ∀ {A v x P Q} → Answer P Q → Answer (get A x P) (put A v Q)
 get-put-yes (yes m) = yes (get-put m)
 get-put-yes (no nm) = no (λ { (get-put m) → nm m })
 
-same-put : ∀ {A B v P Q} → Dec (A ≡ B) → Answer P Q → Answer (put A v P) (get B Q)
+same-put : ∀ {A B v x P Q} → Dec (A ≡ B) → Answer P Q → Answer (put A v P) (get B x Q)
 same-put (yes′ refl) a = put-get-yes a
 same-put (no′ ¬eq) _ = no (λ { (put-get _) → ¬eq refl })
 
-same-get : ∀ {A B v P Q} → Dec (A ≡ B) → Answer P Q → Answer (get A P) (put B v Q)
+same-get : ∀ {A B v x P Q} → Dec (A ≡ B) → Answer P Q → Answer (get A x P) (put B v Q)
 same-get (yes′ refl) a = get-put-yes a
 same-get (no′ ¬eq) _ = no (λ { (get-put _) → ¬eq refl })
 
@@ -117,43 +118,43 @@ decide : (P Q : Proc) → Answer P Q
 decide done done = yes done-done
 decide done stop = no (λ ())
 decide done (put _ _ _) = no (λ ())
-decide done (get _ _) = no (λ ())
+decide done (get _ _ _) = no (λ ())
 decide done (pick0 _) = no (λ ())
 decide done (pick1 _) = no (λ ())
 decide done (cover _ _) = no (λ ())
 decide stop done = no (λ ())
 decide stop stop = yes stop-stop
 decide stop (put _ _ _) = no (λ ())
-decide stop (get _ _) = no (λ ())
+decide stop (get _ _ _) = no (λ ())
 decide stop (pick0 _) = no (λ ())
 decide stop (pick1 _) = no (λ ())
 decide stop (cover _ _) = no (λ ())
-decide (put A _ P) (get B Q) = same-put (ty≟ A B) (decide P Q)
+decide (put A _ P) (get B _ Q) = same-put (ty≟ A B) (decide P Q)
 decide (put _ _ _) done = no (λ ())
 decide (put _ _ _) stop = no (λ ())
 decide (put _ _ _) (put _ _ _) = no (λ ())
 decide (put _ _ _) (pick0 _) = no (λ ())
 decide (put _ _ _) (pick1 _) = no (λ ())
 decide (put _ _ _) (cover _ _) = no (λ ())
-decide (get A P) (put B _ Q) = same-get (ty≟ A B) (decide P Q)
-decide (get _ _) done = no (λ ())
-decide (get _ _) stop = no (λ ())
-decide (get _ _) (get _ _) = no (λ ())
-decide (get _ _) (pick0 _) = no (λ ())
-decide (get _ _) (pick1 _) = no (λ ())
-decide (get _ _) (cover _ _) = no (λ ())
+decide (get A _ P) (put B _ Q) = same-get (ty≟ A B) (decide P Q)
+decide (get _ _ _) done = no (λ ())
+decide (get _ _ _) stop = no (λ ())
+decide (get _ _ _) (get _ _ _) = no (λ ())
+decide (get _ _ _) (pick0 _) = no (λ ())
+decide (get _ _ _) (pick1 _) = no (λ ())
+decide (get _ _ _) (cover _ _) = no (λ ())
 decide (pick0 P) (cover Q _) = pick0-yes (decide P Q)
 decide (pick0 _) done = no (λ ())
 decide (pick0 _) stop = no (λ ())
 decide (pick0 _) (put _ _ _) = no (λ ())
-decide (pick0 _) (get _ _) = no (λ ())
+decide (pick0 _) (get _ _ _) = no (λ ())
 decide (pick0 _) (pick0 _) = no (λ ())
 decide (pick0 _) (pick1 _) = no (λ ())
 decide (pick1 P) (cover _ R) = pick1-yes (decide P R)
 decide (pick1 _) done = no (λ ())
 decide (pick1 _) stop = no (λ ())
 decide (pick1 _) (put _ _ _) = no (λ ())
-decide (pick1 _) (get _ _) = no (λ ())
+decide (pick1 _) (get _ _ _) = no (λ ())
 decide (pick1 _) (pick0 _) = no (λ ())
 decide (pick1 _) (pick1 _) = no (λ ())
 decide (cover P _) (pick0 R) = cover0-yes (decide P R)
@@ -161,7 +162,7 @@ decide (cover _ Q) (pick1 R) = cover1-yes (decide Q R)
 decide (cover _ _) done = no (λ ())
 decide (cover _ _) stop = no (λ ())
 decide (cover _ _) (put _ _ _) = no (λ ())
-decide (cover _ _) (get _ _) = no (λ ())
+decide (cover _ _) (get _ _ _) = no (λ ())
 decide (cover _ _) (cover _ _) = no (λ ())
 
 ------------------------------------------------------------------------
@@ -176,10 +177,10 @@ ping : Proto
 ping = recv nat (send nat end)
 
 pong : Proc
-pong = get nat (put nat one done)
+pong = get nat "x" (put nat (lit one) done)
 
 peer : Proc
-peer = put nat zero (get nat done)
+peer = put nat (lit zero) (get nat "y" done)
 
 pong-peer : Meets pong peer
 pong-peer = get-put (put-get done-done)
@@ -191,7 +192,7 @@ peer-pong : decide peer pong ≡ yes (meets-sym pong-peer)
 peer-pong = refl
 
 other : Proc
-other = put nat two (get nat done)
+other = put nat (lit two) (get nat "z" done)
 
 other-meets : Meets pong other
 other-meets = get-put (put-get done-done)
@@ -200,24 +201,24 @@ other-decides : decide pong other ≡ yes other-meets
 other-decides = refl
 
 ping-channel : Channel pong peer ping
-ping-channel = channel pong-peer (get-ok (put-ok done-end)) (put-ok (get-ok done-end))
+ping-channel = channel pong-peer (get-ok (put-ok lit-ok done-end)) (put-ok lit-ok (get-ok done-end))
 
-box-meet : Meets (put box here done) (get box done)
+box-meet : Meets (put box (lit v-here) done) (get box "a" done)
 box-meet = put-get done-done
 
-there-meet : Meets (put box there done) (get box done)
+there-meet : Meets (put box (lit v-there) done) (get box "b" done)
 there-meet = put-get done-done
 
-box-decides : decide (put box here done) (get box done) ≡ yes box-meet
+box-decides : decide (put box (lit v-here) done) (get box "a" done) ≡ yes box-meet
 box-decides = refl
 
-not-payload : ¬ Meets (put nat zero done) (get box done)
+not-payload : ¬ Meets (put nat (lit zero) done) (get box "x" done)
 not-payload ()
 
-not-send : ¬ Meets (put nat zero done) (put nat zero done)
+not-send : ¬ Meets (put nat (lit zero) done) (put nat (lit zero) done)
 not-send ()
 
-not-ending : ¬ Meets (put nat zero stop) (get nat done)
+not-ending : ¬ Meets (put nat (lit zero) stop) (get nat "x" done)
 not-ending (put-get ())
 
 ------------------------------------------------------------------------
@@ -226,10 +227,10 @@ not-ending (put-get ())
 ------------------------------------------------------------------------
 
 left : Proc
-left = put nat zero stop
+left = put nat (lit zero) stop
 
 right : Proc
-right = get nat stop
+right = get nat "x" stop
 
 left-right : Meets left right
 left-right = put-get stop-stop
@@ -238,7 +239,7 @@ left-decides : decide left right ≡ yes left-right
 left-decides = refl
 
 abandon-channel : Channel left right (send nat end)
-abandon-channel = channel left-right (put-ok abandon) (get-ok abandon)
+abandon-channel = channel left-right (put-ok lit-ok abandon) (get-ok abandon)
 
 choice : Proto
 choice = choose end (send nat end)
@@ -247,7 +248,7 @@ taker : Proc
 taker = pick0 done
 
 giver : Proc
-giver = cover done (get nat done)
+giver = cover done (get nat "x" done)
 
 choice-meet : Meets taker giver
 choice-meet = pick0-cover done-done
@@ -259,5 +260,5 @@ choice-channel : Channel taker giver choice
 choice-channel =
   channel choice-meet (pick0-ok done-end) (cover-ok done-end (get-ok done-end))
 
-not-arm : ¬ Meets (pick0 done) (cover (put nat zero done) done)
+not-arm : ¬ Meets (pick0 done) (cover (put nat (lit zero) done) done)
 not-arm (pick0-cover ())

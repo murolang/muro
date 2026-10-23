@@ -20,13 +20,14 @@
 module Muro.Held where
 
 open import Data.Empty using (⊥)
+open import Data.List.Base using ([])
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans; subst)
 
 open import Muro.Base using (Mode; evid; run)
 open import Muro.Session using
   ( Proto; nat; end; send; recv; choose
-  ; Proc; done; stop; put; get; zero; suc
-  ; Conforms; done-end; put-ok; get-ok; pick0-ok; cover-ok
+  ; Proc; done; stop; put; get; zero; suc; lit
+  ; Conforms; done-end; put-ok; get-ok; pick0-ok; cover-ok; lit-ok
   )
 open import Muro.Dual using (dual)
 open import Muro.Place using (Place; ambient; node; Bounds; none; one)
@@ -56,8 +57,8 @@ data Held
   held :
     (h : Seated.Apart p a q b t) →
     Meets P Q →
-    Conforms P (Seated.proto h) →
-    Conforms Q (dual (Seated.proto h)) →
+    Conforms [] P (Seated.proto h) →
+    Conforms [] Q (dual (Seated.proto h)) →
     Held P p a Q q b t
 
 bound : ∀ {P p a Q q b t} → Held P p a Q q b t → Bounds
@@ -71,8 +72,8 @@ boundary-is-seating :
   ∀ {P p a Q q b t}
   (h : Seated.Apart p a q b t)
   (m : Meets P Q)
-  (c : Conforms P (Seated.proto h))
-  (d : Conforms Q (dual (Seated.proto h))) →
+  (c : Conforms [] P (Seated.proto h))
+  (d : Conforms [] Q (dual (Seated.proto h))) →
   bound (held h m c d) ≡ Seated.bound h
 boundary-is-seating _ _ _ _ = refl
 
@@ -83,7 +84,7 @@ boundary-is-seating _ _ _ _ = refl
 ------------------------------------------------------------------------
 
 home : Held pong (party "pong") (node "a") peer (party "peer") (node "a") ping-talk
-home = held Seated.home pong-peer (get-ok (put-ok done-end)) (put-ok (get-ok done-end))
+home = held Seated.home pong-peer (get-ok (put-ok lit-ok done-end)) (put-ok lit-ok (get-ok done-end))
 
 home-stays : bound home ≡ none
 home-stays = refl
@@ -92,7 +93,7 @@ home-not-cross : ¬ (bound home ≡ one)
 home-not-cross ()
 
 away : Held pong (party "pong") (node "a") peer (party "peer") (node "b") ping-talk
-away = held Seated.away pong-peer (get-ok (put-ok done-end)) (put-ok (get-ok done-end))
+away = held Seated.away pong-peer (get-ok (put-ok lit-ok done-end)) (put-ok lit-ok (get-ok done-end))
 
 away-crosses : bound away ≡ one
 away-crosses = refl
@@ -114,8 +115,8 @@ away-bits = refl
 away-back : Held peer (party "peer") (node "b") pong (party "pong") (node "a") ping-talk
 away-back =
   held Seated.away-back (meets-sym pong-peer)
-    (put-ok (get-ok done-end))
-    (get-ok (put-ok done-end))
+    (put-ok lit-ok (get-ok done-end))
+    (get-ok (put-ok lit-ok done-end))
 
 away-back-crosses : bound away-back ≡ one
 away-back-crosses = refl
@@ -130,14 +131,14 @@ peer-bits = refl
 -- node crosses once.
 both-ambient : Held pong (party "pong") ambient peer (party "peer") ambient ping-talk
 both-ambient =
-  held Seated.both-ambient pong-peer (get-ok (put-ok done-end)) (put-ok (get-ok done-end))
+  held Seated.both-ambient pong-peer (get-ok (put-ok lit-ok done-end)) (put-ok lit-ok (get-ok done-end))
 
 ambient-stays : bound both-ambient ≡ none
 ambient-stays = refl
 
 to-node : Held pong (party "pong") ambient peer (party "peer") (node "a") ping-talk
 to-node =
-  held Seated.to-node pong-peer (get-ok (put-ok done-end)) (put-ok (get-ok done-end))
+  held Seated.to-node pong-peer (get-ok (put-ok lit-ok done-end)) (put-ok lit-ok (get-ok done-end))
 
 to-node-crosses : bound to-node ≡ one
 to-node-crosses = refl
@@ -209,27 +210,27 @@ no-arm : ∀ {P Q u v} → ¬ Held P (party "b") u Q (party "c") v one-arm
 no-arm (held h _ _ _) = Seated.no-arm h
 
 not-type : ∀ {a b} →
-  ¬ Held pong (party "pong") a (put nat zero done) (party "peer") b ping-talk
+  ¬ Held pong (party "pong") a (put nat (lit zero) done) (party "peer") b ping-talk
 not-type (held _ (get-put ()) _ _)
 
 ¬done-stop : ¬ Meets done stop
 ¬done-stop ()
 
-¬finishes-abandons : ¬ Meets (put nat (suc zero) done) (get nat stop)
+¬finishes-abandons : ¬ Meets (put nat (lit (suc zero)) done) (get nat "x" stop)
 ¬finishes-abandons (put-get m) = ¬done-stop m
 
 not-ending : ∀ {a b} →
-  ¬ Held pong (party "pong") a (put nat zero (get nat stop)) (party "peer") b ping-talk
+  ¬ Held pong (party "pong") a (put nat (lit zero) (get nat "x" stop)) (party "peer") b ping-talk
 not-ending (held _ (get-put m) _ _) = ¬finishes-abandons m
 
-put-not-recv : ¬ Conforms (put nat zero done) (recv nat (send nat end))
+put-not-recv : ¬ Conforms [] (put nat (lit zero) done) (recv nat (send nat end))
 put-not-recv ()
 
 not-role : ∀ {a b} →
-  ¬ Held (put nat zero done) (party "pong") a (get nat done) (party "peer") b ping-talk
+  ¬ Held (put nat (lit zero) done) (party "pong") a (get nat "x" done) (party "peer") b ping-talk
 not-role (held (Seated.apart eq) _ c _) =
   put-not-recv
-    (subst (Conforms (put nat zero done))
+    (subst (Conforms [] (put nat (lit zero) done))
       (sym (Seated.just-inj (trans (sym pong-seen) eq)))
       c)
 

@@ -5,11 +5,18 @@ session ping := recv Nat (send Nat end)
 
 session back := dual ping
 
-conform pong : ping := get Nat (put 1 done)
+conform pong : ping := get (k : Nat) (put 1 done)
 
-conform peer : back := put 1 (get Nat done)
+conform peer : back := put 1 (get (m : Nat) done)
 
 meet wire : pong with peer
+
+-- Echo: receive a value and send it back.
+conform echo : ping := get (k : Nat) (put k done)
+
+conform peer-echo : back := put 2 (get (n : Nat) done)
+
+meet echo-wire : echo with peer-echo
 
 session choice := choose end (send Nat end)
 

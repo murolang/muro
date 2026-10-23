@@ -37,12 +37,12 @@ proto      ::= "end" | "(" proto ")"
              | ("choose" | "branch") proto proto
 proc       ::= "done" | "stop" | "(" proc ")"
              | "put" pval proc
-             | "get" pay proc
+             | "get" "(" ident ":" pay ")" proc
              | ("pick0" | "pick1") proc
              | "cover" proc proc
 pay        ::= "Nat" | "Bit" | "Unit" | pay "*" pay | "(" pay ")"
              | "{" (ident ":" pay ("," ident ":" pay)*)? "}"
-pval       ::= numeral | "tt" | "b0" | "b1" | "(" pval ")"
+pval       ::= numeral | "tt" | "b0" | "b1" | ident | "(" pval ")"
              | "(" pval "," pval ")"
              | "{" (ident "=" pval ("," ident "=" pval)*)? "}"
 numeral    ::= [0-9]+
@@ -102,7 +102,9 @@ A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are iden
 
 `end`, `send`, `recv`, `choose`, `branch`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. Parentheses group a nested protocol or process: `recv Nat (send Nat end)`. `send` and `recv` name one payload type and one continuation. `put` writes a value of that type. `get` names the type. `choose` and `branch` still name two protocols. `dual` is a keyword in `session name := dual name`. Outside that form it is an identifier, so `def dual : run Nat := 0` is a definition. The mark on a dual session is the named session's mark when it is omitted. `seen` is a keyword in `session name := seen party with party in talk`. `with` there names the other party, and `in` names the description. Outside that form `seen` is an identifier, so `def seen : run Nat := 0` is a definition. `meet` and `with` are keywords in `meet name : left with right`. `with` is also the keyword between the two parties of a `seen` session. Outside those forms they are identifiers, so `def meet : run Nat := 0` and `def with : run Nat := 0` are definitions.
 
-A payload type is `Nat`, `Bit`, `Unit`, a pair, or a record of named fields. A pair is a tuple, and `*` in a payload associates to the right, so `send Nat * Bit end` is `send (Nat * Bit) end`. A record is a map whose keys are the names written there, in that order, and that order is the type: `{x : Nat, y : Nat}` and `{y : Nat, x : Nat}` are different types. `{}` is the empty record. A repeated name is refused. A key is a name in the type. `Nat`, `Bit`, and `Unit` are those types only where a payload is written. Outside a payload, `Bit` is an identifier, so `def Bit : run Nat := 0` is a definition. A payload value is a numeral, `tt`, `b0`, `b1`, a pair `(v, w)`, or a record `{ name = v }`. The type of a value is the type of what was written, in that order.
+A payload type is `Nat`, `Bit`, `Unit`, a pair, or a record of named fields. A pair is a tuple, and `*` in a payload associates to the right, so `send Nat * Bit end` is `send (Nat * Bit) end`. A record is a map whose keys are the names written there, in that order, and that order is the type: `{x : Nat, y : Nat}` and `{y : Nat, x : Nat}` are different types. `{}` is the empty record. A repeated name is refused. A key is a name in the type. `Nat`, `Bit`, and `Unit` are those types only where a payload is written. Outside a payload, `Bit` is an identifier, so `def Bit : run Nat := 0` is a definition. A payload value is a numeral, `tt`, `b0`, `b1`, a pair `(v, w)`, a record `{ name = v }`, or a variable bound by an enclosing `get`. The type of a value is the type of what was written, in that order.
+
+Value binding: `get (k : Type) continuation` receives a value of that type and binds it to `k`. The variable can be used in payload values within the continuation. Example: `get (k : Nat) (put k done)` echoes the received value. Bound variables follow affine rules: they may be used at most once, unless the type is copyable.
 
 `talk`, `over`, `say`, and `offer` are keywords in `talk name := …`. `over` finishes the description. `say` is one party sending one payload, then one continuation. A party off that `say` has the continuation's session. `offer` is one party choosing, and it still has two arms. A party off an `offer` has a session when both arms are the same description. A party is a name. `over`, `say`, and `offer` are not party names. A name in a description is another description. Outside that form they are identifiers, so `def talk : run Nat := 0` and `def say : run Nat := 0` are definitions. The mark on a `seen` session is the mark written there. An omitted mark is `%0`.
 

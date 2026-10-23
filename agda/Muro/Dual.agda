@@ -14,6 +14,7 @@
 module Muro.Dual where
 
 open import Data.Empty using (⊥)
+open import Data.List.Base using ([])
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; cong₂)
 
 open import Muro.Base using (Mode; spec; run)
@@ -67,16 +68,16 @@ ping-back : dual (dual ping) ≡ ping
 ping-back = refl
 
 peer : Proc
-peer = put nat two (get nat done)
+peer = put nat (lit two) (get nat "x" done)
 
-peer-ok : Conforms peer (dual ping)
-peer-ok = put-ok (get-ok done-end)
+peer-ok : Conforms [] peer (dual ping)
+peer-ok = put-ok lit-ok (get-ok done-end)
 
-early : ¬ Conforms (put box here done) (dual ping)
+early : ¬ Conforms [] (put box (lit v-here) done) (dual ping)
 early ()
 
 -- Abandonment still has a derivation at the other end.
-peer-stop : Conforms stop (dual ping)
+peer-stop : Conforms [] stop (dual ping)
 peer-stop = abandon
 
 ------------------------------------------------------------------------
@@ -89,8 +90,8 @@ choice = choose end (send box end)
 choice-other : dual choice ≡ branch end (recv box end)
 choice-other = refl
 
-offered : Conforms (cover done (get box done)) (dual choice)
+offered : Conforms [] (cover done (get box "x" done)) (dual choice)
 offered = cover-ok done-end (get-ok done-end)
 
-not-pick : ¬ Conforms (pick0 done) (dual choice)
+not-pick : ¬ Conforms [] (pick0 done) (dual choice)
 not-pick ()

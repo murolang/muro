@@ -15,14 +15,17 @@ session choice := choose end (send Nat end)
 
 session offered := dual choice
 
-conform peer : back := put 1 (get Nat done)
+conform peer : back := put 1 (get (k : Nat) done)
 
-conform again : forth := get Nat (put 1 done)
+conform again : forth := get (k : Nat) (put 1 done)
 
-conform peer-done : reply := put 1 (get Nat done)
+conform peer-done : reply := put 1 (get (m : Nat) done)
 
-conform either : offered := cover done (get Nat done)
+conform either : offered := cover done (get (n : Nat) done)
 
 conform left : back := stop
+
+-- Echo example
+conform echo : forth := get (k : Nat) (put k done)
 
 def kept : run Nat := 0

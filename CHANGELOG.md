@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.56
+
+A process can bind the value it receives. `get (k : Nat) (put k done)` binds the received value to `k` and sends it back. `get Nat` still receives without a name. A bound name is sent at its type. A name bound twice is the inner binding. Sending that name at the outer binding's type is refused. Every payload type is data, so a bound value can be sent more than once. The OTP image keeps the latest value bound to each name and sends it. A run term has no seat.
+
+### Manual
+
+- Grammar: `get (name : Type) proc`. A payload value can be a variable.
+- Terms, Extending, Sessions: value binding, the context `Conforms` carries, and shadowing.
+- Examples: `meet.muro`, `talk.muro`, `dual.muro` bind values.
+
+### Package
+
+- Version 0.16.56.
+
 ## 0.16.55
 
 A session sends a value and then continues. The value is a nat, a bit, unit, a pair, or a record of named fields. A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. A pair around a record is a tuple wrapping that map. Sending that type is receiving it. Two processes meet when the types agree. A choice stays a choice. The OTP image carries that value between the two peers.

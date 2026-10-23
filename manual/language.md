@@ -32,7 +32,7 @@ session ping := recv Nat (send Nat end)
 conform pong : ping := get Nat (put 1 done)
 ```
 
-The payload is a nat, a bit, unit, a pair, or a record of named fields. A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. `send` and `recv` each name that type and one continuation. `put` sends a value of the type. `get` names the type and does not bind the value. `choose` is the process's choice (`pick0`, `pick1`). `branch` is the other side's choice, and `cover` offers both arms. `done` closes the channel at `end`. `stop` abandons it, at any protocol.
+The payload is a nat, a bit, unit, a pair, or a record of named fields. A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. `send` and `recv` each name that type and one continuation. `put` sends a value of the type, or a name a `get` bound. `get Nat` receives a value and does not name it. `get (k : Nat)` binds it to `k`, and the continuation can send `k` at that type. A name bound twice is the inner binding. `choose` is the process's choice (`pick0`, `pick1`). `branch` is the other side's choice, and `cover` offers both arms. `done` closes the channel at `end`. `stop` abandons it, at any protocol.
 
 ```
 session box := send (Bit * {x : Nat, y : Nat}) end
