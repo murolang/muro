@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.16.57
+
+A meeting sends a bound name at the type it was received. `get (k : Nat) (put k done)` meets a process that receives a nat. A process that receives a bit has no meeting with that name. A name bound twice is sent at the inner binding. The same name can be sent again, at that type.
+
+### Manual
+
+- Sessions: the protocol, its dual, the process, the meeting, value binding, and choice.
+- Terms, Extending, and For agents: a bound name meets a receive of the type it was bound at.
+- Grammar: a bound payload can be sent more than once.
+
+### Package
+
+- Version 0.16.57.
+
 ## 0.16.56
 
 A process can bind the value it receives. `get (k : Nat) (put k done)` binds the received value to `k` and sends it back. `get Nat` still receives without a name. A bound name is sent at its type. A name bound twice is the inner binding. Sending that name at the outer binding's type is refused. Every payload type is data, so a bound value can be sent more than once. The OTP image keeps the latest value bound to each name and sends it. A run term has no seat.

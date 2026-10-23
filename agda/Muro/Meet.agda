@@ -215,6 +215,28 @@ box-decides = refl
 not-payload : ¬ Meets (put nat (lit zero) done) (get box "x" done)
 not-payload ()
 
+------------------------------------------------------------------------
+-- A bound name is sent at the type it was received. `reply` receives
+-- a nat and sends that name. It meets a process that receives a nat.
+-- A receive of a bit has no meeting with that name. The value is not
+-- compared. The type written on `put` is the type compared.
+------------------------------------------------------------------------
+
+reply : Proc
+reply = get nat "k" (put nat (var "k") done)
+
+reply-peer : Proc
+reply-peer = put nat (lit zero) (get nat "n" done)
+
+reply-meet : Meets reply reply-peer
+reply-meet = get-put (put-get done-done)
+
+reply-decides : decide reply reply-peer ≡ yes reply-meet
+reply-decides = refl
+
+not-bound-type : ¬ Meets reply (put nat (lit zero) (get bit "n" done))
+not-bound-type (get-put ())
+
 not-send : ¬ Meets (put nat (lit zero) done) (put nat (lit zero) done)
 not-send ()
 

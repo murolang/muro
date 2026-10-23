@@ -29,7 +29,7 @@ pages:
   - file: sessions.md
     slug: sessions
     title: Sessions
-    summary: A session is the messages two processes exchange, and the order they exchange them.
+    summary: A session is the protocol two processes follow.
   - file: identity.md
     slug: identity
     title: Identity
