@@ -26,6 +26,9 @@ defmodule Muro.Meet do
     end
   end
 
+  @doc false
+  def go(p, q), do: go(p, q, %{}, %{}, %{}, %{})
+
   # `done-done` and `stop-stop`.
   defp go(:done, :done, _lp, _rq, _li, _ri), do: :ok
   defp go(:stop, :stop, _lp, _rq, _li, _ri), do: :ok

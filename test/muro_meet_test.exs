@@ -142,6 +142,18 @@ defmodule Muro.MeetTest do
     assert msg =~ "put rep n 0 done does not meet get (Vec Nat 3) done"
   end
 
+  test "a claimed length does not meet the length of the received nat" do
+    # sender claims length 2, receiver expects length of the received nat
+    vec2 = {:var, :vec2}
+
+    assert {:no, {:put, {:vec, :nat, {:lit, 2}}, ^vec2, :done},
+            {:get, {:vec, :nat, {:var, :n}}, :_, :done}} =
+             Meet.go(
+               {:put, :nat, {:nat, 2}, {:put, {:vec, :nat, {:lit, 2}}, vec2, :done}},
+               {:get, :nat, :n, {:get, {:vec, :nat, {:var, :n}}, :_, :done}}
+             )
+  end
+
   test "a variable does not meet a length the other side has not received" do
     # `v` is bound at `Vec Nat n` before this side receives `n`.
     # The send is `:unknown`. Receiving `n` instantiates that length to 2.
