@@ -52,6 +52,75 @@ defmodule Muro.MeetTest do
     assert msg == "done does not meet stop"
   end
 
+  test "a bound name meets a receive of the type it was bound" do
+    echo = {:get, :nat, :k, {:put, :unknown, {:var, :k}, :done}}
+    peer = {:put, :nat, {:nat, 1}, {:get, :nat, :_, :done}}
+    assert Meet.meets(echo, peer) == :ok
+    assert Meet.meets(peer, echo) == :ok
+
+    twice =
+      {:get, :nat, :k, {:put, :unknown, {:var, :k}, {:put, :unknown, {:var, :k}, :done}}}
+
+    again = {:put, :nat, {:nat, 1}, {:get, :nat, :_, {:get, :nat, :_, :done}}}
+    assert Meet.meets(twice, again) == :ok
+
+    point = {:rec, [{"x", :nat}, {"y", :nat}]}
+    sent = {:rec, [{"x", {:nat, 0}}, {"y", {:nat, 1}}]}
+    record = {:get, point, :p, {:put, :unknown, {:var, :p}, :done}}
+    assert Meet.meets(record, {:put, point, sent, {:get, point, :_, :done}}) == :ok
+
+    inner = {:get, :nat, :v, {:get, :bit, :v, {:put, :unknown, {:var, :v}, :done}}}
+    bits = {:put, :nat, {:nat, 0}, {:put, :bit, :b0, {:get, :bit, :_, :done}}}
+    assert Meet.meets(inner, bits) == :ok
+    assert Meet.meets(bits, inner) == :ok
+
+    chosen = {:pick0, {:get, :nat, :k, {:put, :unknown, {:var, :k}, :done}}}
+    offered = {:cover, {:put, :nat, {:nat, 1}, {:get, :nat, :_, :done}}, :done}
+    assert Meet.meets(chosen, offered) == :ok
+  end
+
+  test "a bound name does not meet a receive of another type" do
+    echo = {:get, :nat, :k, {:put, :unknown, {:var, :k}, :done}}
+    bit = {:put, :nat, {:nat, 0}, {:get, :bit, :_, :done}}
+    assert {:error, msg} = Meet.meets(echo, bit)
+    assert msg == "put k done does not meet get Bit done"
+    assert {:error, msg} = Meet.meets(bit, echo)
+    assert msg == "get Bit done does not meet put k done"
+
+    assert {:error, msg} =
+             Meet.meets({:put, :unknown, {:var, :k}, :done}, {:get, :nat, :_, :done})
+
+    assert msg == "put k done does not meet get Nat done"
+
+    inner = {:get, :nat, :v, {:get, :bit, :v, {:put, :unknown, {:var, :v}, :done}}}
+    nats = {:put, :nat, {:nat, 0}, {:put, :bit, :b0, {:get, :nat, :_, :done}}}
+    assert {:error, msg} = Meet.meets(inner, nats)
+    assert msg == "put v done does not meet get Nat done"
+
+    point = {:rec, [{"x", :nat}, {"y", :nat}]}
+    swapped = {:rec, [{"y", :nat}, {"x", :nat}]}
+    sent = {:rec, [{"x", {:nat, 0}}, {"y", {:nat, 1}}]}
+    record = {:get, point, :p, {:put, :unknown, {:var, :p}, :done}}
+
+    assert {:error, msg} =
+             Meet.meets(record, {:put, point, sent, {:get, swapped, :_, :done}})
+
+    assert msg == "put p done does not meet get {y : Nat, x : Nat} done"
+  end
+
+  test "a meeting reports a bound name sent at another type" do
+    assert {:error, msg} =
+             check("""
+             session ping := recv Nat (send Nat end)
+             session back := dual ping
+             conform echo : ping := get (k : Nat) (put k done)
+             conform bad : back := put 0 (get Bit done)
+             meet wire : echo with bad
+             """)
+
+    assert msg =~ "put k done does not meet get Bit done"
+  end
+
   test "meet.muro checks, and emit keeps the run" do
     path = "examples/meet.muro"
     src = File.read!(path)

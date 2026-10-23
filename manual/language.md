@@ -60,7 +60,7 @@ conform peer : back := put 1 (get Nat done)
 
 `peer` sends `1` and then receives a nat. `examples/dual.muro` is that book.
 
-Two processes are one exchange when a send is a receive of that type and each session is the other end of the other. Any value of that type meets.
+Two processes are one exchange when a send is a receive of that type and each session is the other end of the other. Any value of that type meets. A name bound by `get` meets that receive at the type it was bound. A name bound twice is the inner binding.
 
 ```
 meet wire : pong with peer
