@@ -142,6 +142,42 @@ defmodule Muro.MeetTest do
     assert msg =~ "put rep n 0 done does not meet get (Vec Nat 3) done"
   end
 
+  test "an evidence payload meets as a nat" do
+    server = {:get, :nat, :w, {:put, :unknown, {:var, :w}, :done}}
+    client = {:put, :nat, {:nat, 8}, {:get, :nat, :d, :done}}
+    assert Meet.meets(server, client) == :ok
+    assert Meet.meets(client, server) == :ok
+
+    assert check("""
+           session window := recv (w : Nat) (send (d : Nat) {d ≤ w} end)
+           session grant-end := dual window
+           conform server : window := get (w : Nat) (put w done)
+           conform client : grant-end := put 8 (get (d : Nat) done)
+           meet wire : server with client
+           """) == :ok
+  end
+
+  test "a guess meets the grant but has no conformance" do
+    # The meeting compares nats. The evidence is the conformance.
+    guess = {:get, :nat, :w, {:put, :nat, {:nat, 9}, :done}}
+    client = {:put, :nat, {:nat, 8}, {:get, :nat, :d, :done}}
+    assert Meet.meets(guess, client) == :ok
+
+    assert {:error, msg} =
+             check("""
+             session window := recv (w : Nat) (send (d : Nat) {d ≤ w} end)
+             session grant-end := dual window
+             conform guess : window := get (w : Nat) (put 9 done)
+             conform client : grant-end := put 8 (get (d : Nat) done)
+             meet wire : guess with client
+             """)
+
+    assert msg =~ "put 9 done does not conform to send (d : Nat) {d ≤ w} end"
+
+    # The receiver gets a nat. A bit does not meet it.
+    assert {:no, _, _} = Meet.go(guess, {:put, :nat, {:nat, 8}, {:get, :bit, :d, :done}})
+  end
+
   test "a claimed length does not meet the length of the received nat" do
     # The sender sends 3 and then a vector of length 2.
     # The receiver expects a vector whose length is that nat.
