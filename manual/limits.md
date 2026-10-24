@@ -31,7 +31,9 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - A fourth term representation
 - Raw HOAS (`Tm → Tm`) as inductive syntax
 - Tags other than `run`, `run internal`, `spec`, `evidence`
-- A session payload other than a nat, a bit, unit, a pair, a record whose keys are names written in the type, or a vector whose length is a numeral or a nat received earlier. A later payload may mention that nat as the length of a vector
+- A session payload other than a nat, a bit, unit, a pair, a record whose keys are names written in the type, a vector whose length is a numeral or a nat received earlier, or a nat at most a bound (`send (d : Nat) {d ≤ w}`). A later payload may mention a received nat as the length of a vector
+- An evidence payload other than that one case: the bound is one `≤` whose left side is the sent nat and whose right side is a numeral or a nat bound earlier. A sum, a successor, `<`, `≡`, two bounds on one payload, a bound inside a pair, a record, or a vector, and a bound that names a nat bound later are refused. The name of the sent nat is in scope in its bound only, so a later length may not mention it
+- Evidence that the checker does not find: a numeral within a numeral bound, zero within a name, or the bound name itself when the process bound that name once. A numeral against a received window, another received nat, and a name bound twice have no evidence. A received nat that carried a bound is a plain nat to the receiver, so relaying it is not evidence
 - A vector length other than a numeral or that nat (a successor, a bit, a pair, a record, a vector, or a name not bound at a nat), and a next action chosen by a received value
 - An OTP session process talking to more than one peer
 - Two calls for one `cross`
