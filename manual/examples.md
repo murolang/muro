@@ -108,6 +108,30 @@ A nat written as the index, a variable bit used to select an arm, a bit used as 
 
 See [Terms](language.md#session).
 
+## recursive.muro
+
+A protocol may repeat. The variable sits under an action. The run emitters omit the session.
+
+```
+session loop := rec X. recv Nat (send Nat X)
+session loop-back := dual loop
+conform forever : loop := rec X. get (n : Nat) (put n X)
+conform sender : loop-back := rec Y. put 1 (get (m : Nat) Y)
+session echo := rec X. recv (b : Bit) on (recv Nat (send Nat X)) end
+session echo-back := dual echo
+conform server : echo := rec X. get (b : Bit) on (get (n : Nat) (put n X)) done
+conform client : echo-back := put b0 (put 1 (get (m : Nat) (put b1 done)))
+meet wire : server with client
+```
+
+`loop` receives a nat and sends it back, and then it is that protocol again. `loop-back` is `rec` of the dual. `echo` repeats when the bit is `b0` and ends when it is `b1`. `client` echoes one nat and then sends `b1`. `wire` is the evidence that both sides take the same arms. `kept` is the run definition in the same file. `mix muro.emit examples/recursive.muro` emits `kept`.
+
+`mix muro.emit examples/recursive.muro --backend otp` writes `recursive_otp.ex`. `RecursiveOtp.wire/0` starts the server and the client as each other's peer. Both finish with `:normal`. `Forever.start/1` is the loop that never finishes: each nat comes back, and the jump is a tail call. See [Emit](emit.md#otp).
+
+`rec X. X`, a free session variable, and `session %1` on a process that jumps are refused. Those books live in `test/muro_session_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#session).
+
 ## talk.muro
 
 One description of an exchange. Each party has a session. The description is spec. The run emitters omit it.

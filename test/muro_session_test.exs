@@ -612,6 +612,116 @@ defmodule Muro.SessionTest do
     assert {:get, :nat, :k, _} = conform.proc
   end
 
+  test "a protocol may repeat, and the variable is the same protocol" do
+    assert check("""
+           session loop := rec X. recv Nat (send Nat X)
+           session back := dual loop
+           conform forever : loop := rec X. get (n : Nat) (put n X)
+           conform sender : back := rec Y. put 1 (get (m : Nat) Y)
+           meet endless : forever with sender
+           session echo := rec X. recv (b : Bit) on (recv Nat (send Nat X)) end
+           session echo-back := dual echo
+           conform server : echo := rec X. get (b : Bit) on (get (n : Nat) (put n X)) done
+           conform client : echo-back := put b0 (put 1 (get (m : Nat) (put b1 done)))
+           meet wire : server with client
+           def kept : run Nat := 0
+           """) == :ok
+
+    assert {:ok, book} = Parser.parse("session loop := rec X. recv Nat (send Nat X)\n")
+    loop = Enum.find(book, &(&1.name == "loop"))
+
+    assert Session.show_proto(loop.proto) == "rec X. recv Nat (send Nat X)"
+
+    assert Session.show_proto(Session.dual(loop.proto)) ==
+             "rec X. send Nat (recv Nat X)"
+
+    assert Session.dual(Session.dual(loop.proto)) == loop.proto
+  end
+
+  test "a recursion variable guarded by a later action is one loop" do
+    assert check("""
+           session flat := rec X. rec Y. send Nat X
+           conform once : flat := rec X. rec Y. put 1 X
+           session nest := rec X. send Nat (rec Y. recv Nat X)
+           session back := dual nest
+           conform reply : nest := rec X. put 1 (rec Y. get Nat X)
+           conform ask : back := rec A. get Nat (rec B. put 0 A)
+           meet w : reply with ask
+           session sized := rec X. recv (n : Nat) (send (Vec Nat n) X)
+           conform give : sized := rec X. get (n : Nat) (put (rep n 0) X)
+           session outer := recv (n : Nat) (rec X. send (Vec Nat n) X)
+           conform hold : outer := get (n : Nat) (rec X. put (rep n 0) X)
+           """) == :ok
+  end
+
+  test "an unused rec is the body, and a jump is not a finished leaf" do
+    assert check("""
+           session closed := rec X. end
+           conform finished : closed := rec X. done
+           session %1 closed-lin := rec X. end
+           conform finished-lin : closed-lin := done
+           """) == :ok
+
+    assert {:error, msg} =
+             check("""
+             session %1 loop := rec X. recv Nat (send Nat X)
+             conform spins : loop := rec X. get (n : Nat) (put n X)
+             """)
+
+    assert msg =~ "linear channel abandoned"
+    refute msg =~ "does not conform"
+    refute msg =~ "unguarded"
+  end
+
+  test "unguarded recursion and a free session variable are refused" do
+    assert {:error, msg} = check("session bad := rec X. X\n")
+    assert msg =~ "unguarded recursion"
+
+    assert {:error, msg} = check("session bad := rec X. rec Y. X\n")
+    assert msg =~ "unguarded recursion"
+
+    assert {:error, msg} = check("session bad := rec X. rec Y. Y\n")
+    assert msg =~ "unguarded recursion"
+
+    assert {:error, msg} = check("session bad := X\n")
+    assert msg =~ "free session variable X"
+
+    assert {:error, msg} = check("session bad := rec X. send Nat Y\n")
+    assert msg =~ "free session variable Y"
+
+    assert {:error, msg} =
+             check("""
+             session ping := rec X. end
+             conform bad : ping := rec X. X
+             """)
+
+    assert msg =~ "unguarded recursion"
+
+    assert {:error, msg} =
+             check("""
+             session ping := end
+             conform bad : ping := X
+             """)
+
+    assert msg =~ "free session variable X"
+
+    assert {:error, msg} =
+             check("""
+             session loop := rec X. recv Nat (send Nat X)
+             conform bad : loop := rec X. get (n : Nat) (put X X)
+             """)
+
+    assert msg =~ "unbound variable X"
+  end
+
+  test "rec stays an identifier outside a session" do
+    assert check("""
+           def rec : run Nat := 0
+           def end : run Nat := 0
+           def send : run Nat := 0
+           """) == :ok
+  end
+
   defp check(src) do
     assert {:ok, book} = Parser.parse(src)
     Check.check_sig(book)

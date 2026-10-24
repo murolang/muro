@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.16.62
+
+A protocol may repeat. `rec X. recv Nat (send Nat X)` receives a nat and sends a nat, and then it is that protocol again. `rec X. recv (b : Bit) on (recv Nat (send Nat X)) end` repeats when the bit is `b0` and ends when it is `b1`. The other end is `rec` of the dual, and the variable stays. A process repeats with `rec X. … X`. The variable must sit under an action of its own `rec`. `rec X. X` and a free session variable are refused. A jump does not finish, so `session %1` still refuses a loop. The OTP image is a tail call, not an unrolling. In Agda the protocol is coinductive and guarded. `Muro.agda` imports that module, so its pragma is `--safe --guardedness`.
+
+### Manual
+
+- Sessions: `rec X. S`, the echo, and the bit that ends the loop.
+- Limits: a guarded recursion variable is allowed. Unguarded recursion, a free session variable, a recursion variable used as a payload, and `%1` on a jump stay refused. A nat, a variable bit, and a third arm stay refused as the index.
+- Grammar, Terms, Extending, Examples, Emit, and For agents: `rec X. S` and the tail call.
+
+### Examples
+
+- `recursive.muro`: a server that echoes a nat until the bit says stop.
+
+### Emit
+
+- OTP stores the body of a `rec` and a jump calls `drive` on that body.
+
+### Package
+
+- Version 0.16.62.
+
 ## 0.16.61
 
 The Agda examples are de Bruijn terms. `plus`, `IsEven`, `half`, `plus_suc`, and `half_ok` are `Tm n`, and so are `List`, `Either`, `Fin`, `Vec`, and the `I64` wrappers. The books still check. `plus (half 2) (half 2)` still converts to `2`. Equality of floats, and of a float tensor, is still refused. The whole Agda tree is checked under `--safe`.

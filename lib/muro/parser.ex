@@ -750,7 +750,9 @@ defmodule Muro.Parser do
       word_kw?(s, "recv") -> parse_comm_proto(s, "recv", :recv)
       word_kw?(s, "choose") -> parse_proto2(s, "choose", :choose)
       word_kw?(s, "branch") -> parse_proto2(s, "branch", :branch)
+      word_kw?(s, "rec") -> parse_rec(s, &parse_proto/1)
       has_prefix?(s, "(") -> parse_paren(s, &parse_proto/1)
+      ident_start?(s) -> parse_name_cont(s, :svar, "protocol")
       true -> {:error, err(s, "expected a protocol")}
     end
   end
@@ -906,6 +908,43 @@ defmodule Muro.Parser do
     end
   end
 
+  # `rec X. S`. The variable is a continuation. `rec` is a keyword only
+  # inside a protocol or a process. The dot separates the name.
+  defp parse_rec(s, parse_body) do
+    with {:ok, rest} <- kw(s, "rec"),
+         {:ok, name, rest} <- rec_name(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), "."),
+         {:ok, body, rest} <- parse_body.(skip(rest)) do
+      {:ok, {:rec, name, body}, rest}
+    end
+  end
+
+  defp rec_name(s) do
+    with {:ok, name, rest} <- ident(s) do
+      if reserved_session?(name) do
+        {:error, err(s, "expected a session variable")}
+      else
+        {:ok, String.to_atom(name), rest}
+      end
+    end
+  end
+
+  defp parse_name_cont(s, tag, what) do
+    s0 = skip(s)
+
+    with {:ok, name, rest} <- ident(s0) do
+      if reserved_session?(name) do
+        {:error, err(s0, "expected a #{what}")}
+      else
+        {:ok, {tag, String.to_atom(name)}, rest}
+      end
+    end
+  end
+
+  defp reserved_session?(name) do
+    name in ~w(end send recv choose branch rec done stop put get pick0 pick1 cover on Nat Bit Unit Vec dual seen)
+  end
+
   defp parse_proto2(s, word, tag) do
     with {:ok, rest} <- kw(s, word),
          {:ok, a, rest} <- parse_proto(skip(rest)),
@@ -925,7 +964,9 @@ defmodule Muro.Parser do
       word_kw?(s, "pick0") -> parse_proc1(s, "pick0", :pick0)
       word_kw?(s, "pick1") -> parse_proc1(s, "pick1", :pick1)
       word_kw?(s, "cover") -> parse_proc2(s, "cover", :cover)
+      word_kw?(s, "rec") -> parse_rec(s, &parse_proc/1)
       has_prefix?(s, "(") -> parse_paren(s, &parse_proc/1)
+      ident_start?(s) -> parse_name_cont(s, :call, "process")
       true -> {:error, err(s, "expected a process")}
     end
   end

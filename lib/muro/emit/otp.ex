@@ -124,7 +124,7 @@ defmodule Muro.Emit.Otp do
   defp open_init do
     """
       def init({skel, :open}) do
-        {:ok, %{peer: nil, mon: nil, skel: skel, wait: nil, queue: [], bindings: %{}}}
+        {:ok, %{peer: nil, mon: nil, skel: skel, wait: nil, queue: [], bindings: %{}, loops: %{}}}
       end
 
     """
@@ -210,7 +210,7 @@ defmodule Muro.Emit.Otp do
       @impl true
       def init({skel, peer}) do
         mon = Process.monitor(peer)
-        {:ok, %{peer: peer, mon: mon, skel: skel, wait: nil, queue: [], bindings: %{}}}
+        {:ok, %{peer: peer, mon: mon, skel: skel, wait: nil, queue: [], bindings: %{}, loops: %{}}}
       end
 
       @impl true
@@ -250,6 +250,14 @@ defmodule Muro.Emit.Otp do
 
       defp drive(:finish, st), do: {:stop, :normal, st}
       defp drive(:leave, st), do: {:stop, {:shutdown, :abandon}, st}
+
+      defp drive({:loop, name, body}, %{loops: loops} = st) do
+        drive(body, %{st | loops: Map.put(loops, name, body)})
+      end
+
+      defp drive({:jump, name}, %{loops: loops} = st) do
+        drive(Map.fetch!(loops, name), st)
+      end
 
       defp drive({:say, value, next}, %{peer: peer, bindings: bindings} = st) do
         resolved = substitute(value, bindings)

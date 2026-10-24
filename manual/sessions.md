@@ -170,3 +170,39 @@ meet arm : taker with giver
 ```
 
 `pick0` takes the first arm. The other party covers both arms. The meeting checks that the chosen arm matches.
+
+## Recursion
+
+A protocol may repeat. `rec X. S` is that protocol again where `X` stands. The variable is a continuation, and the dot separates the name. It must sit under an action of its own `rec`. `send`, `recv`, a dependent action, an evidence action, an indexed bit, `choose`, and `branch` guard it. `rec` itself does not.
+
+```muro
+session loop := rec X. recv Nat (send Nat X)
+
+session loop-back := dual loop
+
+conform forever : loop := rec X. get (n : Nat) (put n X)
+
+conform sender : loop-back := rec Y. put 1 (get (m : Nat) Y)
+```
+
+`loop` receives a nat and sends a nat, and then it is that protocol again. `loop-back` is `rec` of the dual, and the variable stays, so it sends a nat and receives a nat, forever. The process repeats with the same form. The name on the process is not the name on the protocol. `forever` and `sender` meet. A nat bound inside the loop is bound again on the next arrival.
+
+A received bit can end the loop. `b0` takes the arm that repeats. `b1` takes the arm that ends.
+
+```muro
+session echo := rec X. recv (b : Bit) on (recv Nat (send Nat X)) end
+
+session echo-back := dual echo
+
+conform server : echo := rec X. get (b : Bit) on (get (n : Nat) (put n X)) done
+
+conform client : echo-back := put b0 (put 1 (get (m : Nat) (put b1 done)))
+
+meet wire : server with client
+```
+
+`client` echoes one nat and then sends `b1`. Both processes finish. The OTP image is a tail call: the server stores the body of `rec` and a jump runs that body again. It is not an unrolling.
+
+`rec X. X` is not a protocol. `rec X. rec Y. X` is not one either: the second `rec` does not guard `X`. A name with no `rec` is not a protocol. `rec X. end` binds nothing and is `end`. `rec X. rec Y. send Nat X` is one loop, and both names are that loop. A jump does not finish, so `session %1` still refuses a process that can return to its `rec`. `rec X. done` does not jump, and it finishes.
+
+`examples/recursive.muro`

@@ -86,13 +86,13 @@ lib/muro/ast.ex         named FOAS, to_db
 lib/muro/print.ex       surface syntax, locations, hole messages
 lib/muro/subst.ex       de Bruijn subst
 lib/muro/check.ex       Elixir mirror of ⊢
-lib/muro/session.ex     session / conform, mirror of decide and finishes
+lib/muro/session.ex     session / conform, mirror of decide and finishes; `rec X. S` unfolds one action and a repeated head conforms
 lib/muro/talk.ex        one description of an exchange, mirror of seen
 lib/muro/place.ex       place / scheme / move, mirror of decide
 lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
 lib/muro/emit.ex        run → Elixir source
-lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a meeting starts the two processes as each other's peer (`--backend otp`)
+lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a meeting starts the two processes as each other's peer; a `rec` is a tail call on `drive` (`--backend otp`)
 lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
 lib/muro/example.ex     same book as Agda
 lib/mix/tasks/muro.check.ex
@@ -103,6 +103,7 @@ agda/Muro/SubstLemmas.agda  renaming / substitution algebra
 agda/Muro/Env.agda      Sig, Ctx, uses, mode order (shared by Check and ⊢)
 agda/Muro/Check.agda    the decision procedure: structural on the term, fuel only where it reduces
 agda/Muro/Session.agda  affine session judgment; a payload is a nat, a bit, unit, a pair, a record, a vector whose length is a received nat, or a nat at most a bound the sender owes evidence for; a received bit selects one of two arms; %1 must finish; decide searches, skel is the OTP actions
+agda/Muro/Rec.agda      equi-recursive `rec X. S` unfolded to a guarded coinductive protocol (`--safe --guardedness`); `dual∞`, conformance, and meet are bisimulations; `Finishes` stays finite, so a jump is not `%1`. `agda/Muro.agda` imports it, so that file carries the same pragma
 agda/Muro/Dual.agda     the other end of a session; send swaps with recv, a dependent receive swaps with a dependent send, an evidence send swaps with an evidence receive, an indexed bit keeps its index and each arm dualises, and the payload type stays; `session name := dual name` follows it
 agda/Muro/Meet.agda     two processes on one channel; a send meets a receive of the same payload type; a received nat instantiates a vector length; an evidence payload meets as a nat; a literal bit meets the arm of that bit; a variable meets a receive at its innermost binding; `meet name : left with right` follows it
 agda/Muro/Talk.agda     one description of an exchange; say names one payload and one continuation; `session name := seen party with party in talk` follows it

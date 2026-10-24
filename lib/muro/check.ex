@@ -2048,6 +2048,7 @@ defmodule Muro.Check do
   # reported before an abandoned channel. Mirrors `held` and `finished`.
   defp session_sits(session, proc) do
     with :ok <- check_proc_vars(proc, MapSet.new()),
+         :ok <- Muro.Session.proc_ok(proc),
          :ok <- Muro.Session.conforms(proc, session.proto) do
       if linear_session?(session) and Muro.Session.finishes(proc) == :no do
         {:error, "linear channel abandoned"}
@@ -2082,6 +2083,10 @@ defmodule Muro.Check do
     ctx1 = if name == :_, do: ctx, else: MapSet.put(ctx, name)
     with :ok <- check_proc_vars(p, ctx1), do: check_proc_vars(q, ctx1)
   end
+
+  # A recursion variable is not a payload. The value context is unchanged.
+  defp check_proc_vars({:rec, _name, body}, ctx), do: check_proc_vars(body, ctx)
+  defp check_proc_vars({:call, _name}, _ctx), do: :ok
 
   # Check that all variables in a value are bound
   defp check_val_vars({:var, name}, ctx) do
