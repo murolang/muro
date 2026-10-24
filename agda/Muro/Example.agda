@@ -6,176 +6,116 @@
 --   half_ok : (n : Nat) → IsEven n → half n + half n ≡ n
 --
 -- Proofs are ordinary terms: match + refl + rewrite with motive.
+-- Binders are de Bruijn: the innermost variable is var zero.
 ------------------------------------------------------------------------
 
+{-# OPTIONS --safe #-}
 module Muro.Example where
 
+open import Data.Fin.Base using (zero; suc)
 open import Data.List.Base using (List; []; _∷_)
-open import Data.Nat.Base using (ℕ)
-open import Data.String.Base using (String)
 open import Data.Unit.Base using (⊤; tt)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
 open import Muro.Base
 open import Muro.Syntax
-open import Muro.Subst
-open import Muro.Unembed
 open import Muro.Check
 
-------------------------------------------------------------------------
--- PHOAS constructors for the book.
-------------------------------------------------------------------------
+-- plus : Nat → Nat → Nat
+plusTy : Tm 0
+plusTy =
+  pi affine nat
+    (pi affine nat
+      nat)
 
-Plus IsEven half plusSuc halfOk : ∀ {V} → PTm V
-Plus    = def plusId
-IsEven  = def isEvenId
-half    = def halfId
-plusSuc = def plusSucId
-halfOk  = def halfOkId
-
-_·_ : ∀ {V} → PTm V → PTm V → PTm V
-_·_ = app
-infixl 10 _·_
-
-plusTy : ∀ {V} → PTm V
-plusTy = pi affine nat (λ _ → pi affine nat (λ _ → nat))
-
-plusTm : ∀ {V} → PTm V
+plusTm : Tm 0
 plusTm =
-  lam affine nat (λ n →
-  lam affine nat (λ m →
-    mNat (var n) (λ _ → nat)
-      (var m)
-      (λ n′ → su ((Plus · var n′) · var m))))
+  lam affine nat
+    (lam affine nat
+      (mNat (var (suc zero)) nat
+        (var zero)
+        (su (app (app (def plusId) (var zero)) (var (suc zero))))))
 
-isEvenTy : ∀ {V} → PTm V
-isEvenTy = pi affine nat (λ _ → typ)
+-- IsEven : Nat → Type
+isEvenTy : Tm 0
+isEvenTy =
+  pi affine nat
+    typ
 
-isEvenTm : ∀ {V} → PTm V
+isEvenTm : Tm 0
 isEvenTm =
-  lam affine nat (λ n →
-    mNat (var n) (λ _ → typ)
+  lam affine nat
+    (mNat (var zero) typ
       unit
-      (λ n1 →
-        mNat (var n1) (λ _ → typ)
-          empty
-          (λ p → IsEven · var p)))
+      (mNat (var zero) typ
+        empty
+        (app (def isEvenId) (var zero))))
 
-halfTy : ∀ {V} → PTm V
-halfTy = pi affine nat (λ _ → nat)
+-- half : Nat → Nat
+halfTy : Tm 0
+halfTy =
+  pi affine nat
+    nat
 
-halfTm : ∀ {V} → PTm V
+halfTm : Tm 0
 halfTm =
-  lam affine nat (λ n →
-    mNat (var n) (λ _ → nat)
+  lam affine nat
+    (mNat (var zero) nat
       ze
-      (λ n1 →
-        mNat (var n1) (λ _ → nat)
-          ze
-          (λ p → su (half · var p))))
+      (mNat (var zero) nat
+        ze
+        (su (app (def halfId) (var zero)))))
 
-plusSucTy : ∀ {V} → PTm V
+-- plus_suc : (n m : Nat) → plus n (suc m) ≡ suc (plus n m)
+plusSucTy : Tm 0
 plusSucTy =
-  pi affine nat (λ n →
-  pi affine nat (λ m →
-    idt nat ((Plus · var n) · su (var m))
-            (su ((Plus · var n) · var m))))
+  pi affine nat
+    (pi affine nat
+      (idt nat (app (app (def plusId) (var (suc zero))) (su (var zero))) (su (app (app (def plusId) (var (suc zero))) (var zero)))))
 
-plusSucTm : ∀ {V} → PTm V
+plusSucTm : Tm 0
 plusSucTm =
-  lam affine nat (λ n →
-  lam affine nat (λ m →
-    mNat (var n)
-      (λ n′ →
-        idt nat ((Plus · var n′) · su (var m))
-                (su ((Plus · var n′) · var m)))
-      rfl
-      (λ n′ →
-        rwt ((plusSuc · var n′) · var m)
-            (λ z → idt nat (su (var z))
-                           (su (su ((Plus · var n′) · var m))))
-            rfl)))
+  lam affine nat
+    (lam affine nat
+      (mNat (var (suc zero)) (idt nat (app (app (def plusId) (var zero)) (su (var (suc zero)))) (su (app (app (def plusId) (var zero)) (var (suc zero)))))
+        rfl
+        (rwt (app (app (def plusSucId) (var zero)) (var (suc zero))) (idt nat (su (var zero)) (su (su (app (app (def plusId) (var (suc zero))) (var (suc (suc zero)))))))
+          rfl)))
 
 -- half_ok : (n : Nat) → IsEven n → half n + half n ≡ n
-halfOkTy : ∀ {V} → PTm V
+--
+-- Match n. Zero is refl. A successor matches again: the odd case is
+-- empty, and the even case rewrites by plus_suc, then by half_ok.
+halfOkTy : Tm 0
 halfOkTy =
-  pi affine nat (λ n →
-  pi affine (IsEven · var n) (λ _ →
-    idt nat ((Plus · (half · var n)) · (half · var n))
-            (var n)))
+  pi affine nat
+    (pi affine (app (def isEvenId) (var zero))
+      (idt nat (app (app (def plusId) (app (def halfId) (var (suc zero)))) (app (def halfId) (var (suc zero)))) (var (suc zero))))
 
-idHalf : ∀ {V} → PTm V → PTm V
-idHalf x = idt nat ((Plus · (half · x)) · (half · x)) x
-
-halfOkTm : ∀ {V} → PTm V
+halfOkTm : Tm 0
 halfOkTm =
-  lam affine nat (λ n →
-  lam affine (IsEven · var n) (λ e →
-    app (evenMatch n) (var e)))
-  where
-    evenStep : ∀ {W} → W → PTm W
-    evenStep p =
-      lam affine (IsEven · su (su (var p))) (λ e2 →
-        rwt ((plusSuc · (half · var p)) · (half · var p))
-            (λ z → idt nat (su (var z)) (su (su (var p))))
-            (rwt ((halfOk · var p) · var e2)
-                 (λ z → idt nat (su (su (var z))) (su (su (var p))))
-                 rfl))
-
-    oddMatch : ∀ {W} → W → PTm W
-    oddMatch n1 =
-      mNat (var n1)
-        (λ y → pi affine (IsEven · su (var y)) (λ _ → idHalf (su (var y))))
-        (lam affine (IsEven · su ze) (λ e1 →
-          mEmp (var e1) (λ _ → idHalf (su ze))))
-        (λ p → evenStep p)
-
-    evenMatch : ∀ {W} → W → PTm W
-    evenMatch n =
-      mNat (var n)
-        (λ x → pi affine (IsEven · var x) (λ _ → idHalf (var x)))
-        (lam affine (IsEven · ze) (λ _ → rfl))
-        (λ n1 → oddMatch n1)
-
-------------------------------------------------------------------------
--- Unembed PHOAS → de Bruijn. IsOk forces the conversion to succeed.
-------------------------------------------------------------------------
-
-data IsOk {A : Set} : Result A → Set where
-  is-ok : (x : A) → IsOk (ok x)
-
-out : ∀ {A} {r : Result A} → IsOk r → A
-out (is-ok x) = x
-
-plusTy-ok    : IsOk (unembed∀ plusTy)
-plusTm-ok    : IsOk (unembed∀ plusTm)
-isEvenTy-ok  : IsOk (unembed∀ isEvenTy)
-isEvenTm-ok  : IsOk (unembed∀ isEvenTm)
-halfTy-ok    : IsOk (unembed∀ halfTy)
-halfTm-ok    : IsOk (unembed∀ halfTm)
-plusSucTy-ok : IsOk (unembed∀ plusSucTy)
-plusSucTm-ok : IsOk (unembed∀ plusSucTm)
-halfOkTy-ok  : IsOk (unembed∀ halfOkTy)
-halfOkTm-ok  : IsOk (unembed∀ halfOkTm)
-
-plusTy-ok    = is-ok _
-plusTm-ok    = is-ok _
-isEvenTy-ok  = is-ok _
-isEvenTm-ok  = is-ok _
-halfTy-ok    = is-ok _
-halfTm-ok    = is-ok _
-plusSucTy-ok = is-ok _
-plusSucTm-ok = is-ok _
-halfOkTy-ok  = is-ok _
-halfOkTm-ok  = is-ok _
+  lam affine nat
+    (lam affine (app (def isEvenId) (var zero))
+      (app (mNat (var (suc zero)) (pi affine (app (def isEvenId) (var zero))
+        (idt nat (app (app (def plusId) (app (def halfId) (var (suc zero)))) (app (def halfId) (var (suc zero)))) (var (suc zero))))
+        (lam affine (app (def isEvenId) ze)
+          rfl)
+        (mNat (var zero) (pi affine (app (def isEvenId) (su (var zero)))
+          (idt nat (app (app (def plusId) (app (def halfId) (su (var (suc zero))))) (app (def halfId) (su (var (suc zero))))) (su (var (suc zero)))))
+          (lam affine (app (def isEvenId) (su ze))
+            (mEmp (var zero) (idt nat (app (app (def plusId) (app (def halfId) (su ze))) (app (def halfId) (su ze))) (su ze))))
+          (lam affine (app (def isEvenId) (su (su (var zero))))
+            (rwt (app (app (def plusSucId) (app (def halfId) (var (suc zero)))) (app (def halfId) (var (suc zero)))) (idt nat (su (var zero)) (su (su (var (suc (suc zero))))))
+              (rwt (app (app (def halfOkId) (var (suc zero))) (var zero)) (idt nat (su (su (var zero))) (su (su (var (suc (suc zero))))))
+                rfl))))) (var zero)))
 
 book : Sig
 book = fromDefs (
-  mkDef "plus"     run  (out plusTy-ok)    (out plusTm-ok)    ∷
-  mkDef "IsEven"   spec (out isEvenTy-ok)  (out isEvenTm-ok)  ∷
-  mkDef "half"     run  (out halfTy-ok)    (out halfTm-ok)    ∷
-  mkDef "plus_suc" evid (out plusSucTy-ok) (out plusSucTm-ok) ∷
-  mkDef "half_ok"  evid (out halfOkTy-ok)  (out halfOkTm-ok)  ∷
+  mkDef "plus"     run  plusTy    plusTm    ∷
+  mkDef "IsEven"   spec isEvenTy  isEvenTm  ∷
+  mkDef "half"     run  halfTy    halfTm    ∷
+  mkDef "plus_suc" evid plusSucTy plusSucTm ∷
+  mkDef "half_ok"  evid halfOkTy  halfOkTm  ∷
   [])
 
 -- Closed computation: plus (half 2) (half 2) ≡ 2.

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.16.61
+
+The Agda examples are de Bruijn terms. `plus`, `IsEven`, `half`, `plus_suc`, and `half_ok` are `Tm n`, and so are `List`, `Either`, `Fin`, `Vec`, and the `I64` wrappers. The books still check. `plus (half 2) (half 2)` still converts to `2`. Equality of floats, and of a float tensor, is still refused. The whole Agda tree is checked under `--safe`.
+
+### Manual
+
+- Extending and For agents: examples and metatheory are de Bruijn `Tm n`. `make agda` checks that tree under `--safe`.
+
+### Package
+
+- Version 0.16.61.
+
 ## 0.16.60
 
 A received bit selects one of two written continuations. `recv (b : Bit) on (send Nat end) (recv Nat end)` receives a bit. `b0` continues by sending a nat. `b1` continues by receiving a nat. The other end sends the literal `b0` or `b1` and then takes the dual of that arm. `get (b : Bit) on (put 1 done) (get (n : Nat) done)` offers both arms. The meeting checks that both sides take the same arm for the same bit. The bound bit is a bit, so it is not a vector length. Inside an arm it can be sent as an ordinary bit. The OTP message is the bit alone.
@@ -1187,7 +1199,7 @@ The kernel has one pair eliminator. `fst` and `snd` are no longer constructors o
 
 ### Kernel (Agda)
 
-- `Muro.Syntax`: `fst`, `snd` removed, with their clauses in every module (`Tag`, `Subst`, `SubstLemmas`, `Unembed`, `Spine`, `Reduction`, `Convert`, `Check`, `Consistency`, `Soundness/*`). `Subst.fstTm` / `sndTm` build the `let` forms; `always` and `bisim` use them.
+- `Muro.Syntax`: `fst`, `snd` removed, with their clauses in every module (`Tag`, `Subst`, `SubstLemmas`, `Spine`, `Reduction`, `Convert`, `Check`, `Consistency`, `Soundness/*`). `Subst.fstTm` / `sndTm` build the `let` forms; `always` and `bisim` use them.
 - `Muro.Subst`: `renM` (partial renaming), `strengthen₂ = renM unwk₂`. `Muro.SubstLemmas`: `renM-sound`, `strengthen₂-sound : strengthen₂ T ≡ ok C → T ≡ wk (wk C)`.
 - `Muro.Judgement`: `⇒-letp`. `Muro.Typing`: `forget-⇒` case. `Muro.Wall`: `spec-⇒-uses` case. `Muro.Consistency`: `ne-untyped-⇒`, `progress-⇒` cases.
 - `Muro.Frag`: `Frag-unren` (the fragment is closed under un-renaming). `Muro.Soundness`: `infer-sound` for `letp` through `strengthen₂-sound`; `checkTy-sound` on a `let` goes through `infer`. Statements unchanged; `--safe`, no postulates.
@@ -1390,7 +1402,7 @@ The checker changes. A book that checked under 0.1.0 still checks unless it used
 - Conversion in ⊢ is a relation. `Muro.Convert` defines deterministic weak-head reduction `⟶` (δ, β, ι for `Nat` / `Unit` / `Empty` / `rewrite`, congruence under `suc`, in the function and argument of an application, and in eliminator scrutinees) and `≈` as its equivalence closure, without fuel. `⇐-conv`, `⇐-lam`, `⇐-refl`, and the `Π` / `≡` views of `Muro.Judgement` use `≈` instead of `_≡_`. `≈` does not reduce under `λ`, `Π`, identity types, motives, or branches. `≈-nf`: distinct normal forms are not convertible.
 - `Muro.Judgement`: `wf` has `type-pi`; `⇒-pi` checks the codomain against `Type`. `⇒-var-run` and `⇒-var-evid` were mis-parenthesised (two premises instead of `(qtyOf Γ x ≡ erased → ⊥)`) and no run or evidence variable was derivable; fixed.
 - `Muro.Consistency`: the `Empty-evid` postulate is deleted. Proved: introduction forms never check against `Empty`; no closed normal evidence term has type `Empty`; closed neutral terms are untyped in the empty context; closed well-typed evidence terms are normal or take a `⟶` step. `Empty-evid-from : Preservation → Normalising → … → ⊥` states what remains. `Empty-evid` itself is not proved.
-- `make agda` checks `Muro.Judgement`, `Muro.Wall`, `Muro.Consistency`, and their imports under `--safe`, then the whole tree. `Muro.Env` (signature, context, uses) and `Muro.Unembed` (PHOAS to de Bruijn, `TERMINATING`) are split out of `Muro.Check` and `Muro.Subst` so the theorem modules have no `TERMINATING` dependency. There are no postulates in `agda/`.
+- `make agda` checks `Muro.Judgement`, `Muro.Wall`, `Muro.Consistency`, and their imports under `--safe`, then the whole tree. `Muro.Env` (signature, context, uses) is split out of `Muro.Check`, and the PHOAS-to-de-Bruijn pass (`TERMINATING`) is split out of `Muro.Subst`, so the theorem modules have no `TERMINATING` dependency. There are no postulates in `agda/`.
 - data, ν, and Tensor are still outside ⊢.
 
 ### Manual

@@ -1,119 +1,93 @@
 ------------------------------------------------------------------------
 -- Either / Dec / evenDec.
 -- Dec P = P ⊎ (P → Empty). A decision, not LEM.
+-- Binders are de Bruijn: the innermost variable is var zero.
 ------------------------------------------------------------------------
 
+{-# OPTIONS --safe #-}
 module Muro.ExampleEither where
 
+open import Data.Fin.Base using (zero; suc)
 open import Data.List.Base using (List; []; _∷_)
 open import Data.Unit.Base using (⊤; tt)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
 open import Muro.Base
 open import Muro.Syntax
-open import Muro.Subst
-open import Muro.Unembed
 open import Muro.Check
 
-IsEven′ Dec′ evenDec′ : ∀ {V} → PTm V
-IsEven′  = def 0
-Dec′     = def 1
-evenDec′ = def 2
+-- IsEven is def 0, Dec is def 1, evenDec is def 2.
 
-isEvenTy : ∀ {V} → PTm V
-isEvenTy = pi affine nat (λ _ → typ)
+isEvenTy : Tm 0
+isEvenTy =
+  pi affine nat
+    typ
 
-isEvenTm : ∀ {V} → PTm V
+isEvenTm : Tm 0
 isEvenTm =
-  lam affine nat (λ n →
-    mNat (var n) (λ _ → typ)
+  lam affine nat
+    (mNat (var zero) typ
       unit
-      (λ n1 →
-        mNat (var n1) (λ _ → typ)
-          empty
-          (λ p → app IsEven′ (var p))))
+      (mNat (var zero) typ
+        empty
+        (app (def 0) (var zero))))
 
-leftTy : ∀ {V} → PTm V
+leftTy : Tm 0
 leftTy =
-  pi affine typ (λ A →
-  pi affine typ (λ B →
-  pi affine (var A) (λ _ →
-    app (app (dty 0) (var A)) (var B))))
+  pi affine typ
+    (pi affine typ
+      (pi affine (var (suc zero))
+        (app (app (dty 0) (var (suc (suc zero)))) (var (suc zero)))))
 
-rightTy : ∀ {V} → PTm V
+rightTy : Tm 0
 rightTy =
-  pi affine typ (λ A →
-  pi affine typ (λ B →
-  pi affine (var B) (λ _ →
-    app (app (dty 0) (var A)) (var B))))
+  pi affine typ
+    (pi affine typ
+      (pi affine (var zero)
+        (app (app (dty 0) (var (suc (suc zero)))) (var (suc zero)))))
 
-decTy : ∀ {V} → PTm V
-decTy = pi affine typ (λ _ → typ)
+decTy : Tm 0
+decTy =
+  pi affine typ
+    typ
 
-decTm : ∀ {V} → PTm V
+decTm : Tm 0
 decTm =
-  lam affine typ (λ P →
-    app (app (dty 0) (var P)) (pi affine (var P) (λ _ → empty)))
+  lam affine typ
+    (app (app (dty 0) (var zero)) (pi affine (var zero)
+      empty))
 
-evenDecTy : ∀ {V} → PTm V
-evenDecTy = pi affine nat (λ n → app Dec′ (app IsEven′ (var n)))
+evenDecTy : Tm 0
+evenDecTy =
+  pi affine nat
+    (app (def 1) (app (def 0) (var zero)))
 
-evenDecTm : ∀ {V} → PTm V
+evenDecTm : Tm 0
 evenDecTm =
-  lam affine nat (λ n →
-    mNat (var n)
-      (λ x → app Dec′ (app IsEven′ (var x)))
+  lam affine nat
+    (mNat (var zero) (app (def 1) (app (def 0) (var zero)))
       (app (ctor 0 0) one)
-      (λ n1 →
-        mNat (var n1)
-          (λ y → app Dec′ (app IsEven′ (su (var y))))
-          (app (ctor 0 1) (lam affine (app IsEven′ (su ze)) (λ e →
-            mEmp (var e) (λ _ → empty))))
-          (λ p →
-            mData (app evenDec′ (var p))
-              (λ _ → app Dec′ (app IsEven′ (su (su (var p)))))
-              ( lam affine (app IsEven′ (var p)) (λ e → app (ctor 0 0) (var e)) ∷
-                lam affine (pi affine (app IsEven′ (var p)) (λ _ → empty))
-                  (λ c → app (ctor 0 1) (var c)) ∷
-                [] ))))
-
-data IsOk {A : Set} : Result A → Set where
-  is-ok : (x : A) → IsOk (ok x)
-
-out : ∀ {A} {r : Result A} → IsOk r → A
-out (is-ok x) = x
-
-leftTy-ok    : IsOk (unembed∀ leftTy)
-rightTy-ok   : IsOk (unembed∀ rightTy)
-isEvenTy-ok  : IsOk (unembed∀ isEvenTy)
-isEvenTm-ok  : IsOk (unembed∀ isEvenTm)
-decTy-ok     : IsOk (unembed∀ decTy)
-decTm-ok     : IsOk (unembed∀ decTm)
-evenDecTy-ok : IsOk (unembed∀ evenDecTy)
-evenDecTm-ok : IsOk (unembed∀ evenDecTm)
-
-leftTy-ok    = is-ok _
-rightTy-ok   = is-ok _
-isEvenTy-ok  = is-ok _
-isEvenTm-ok  = is-ok _
-decTy-ok     = is-ok _
-decTm-ok     = is-ok _
-evenDecTy-ok = is-ok _
-evenDecTm-ok = is-ok _
+      (mNat (var zero) (app (def 1) (app (def 0) (su (var zero))))
+        (app (ctor 0 1) (lam affine (app (def 0) (su ze))
+          (mEmp (var zero) empty)))
+        (mData (app (def 2) (var zero)) (app (def 1) (app (def 0) (su (su (var (suc zero)))))) ((lam affine (app (def 0) (var zero))
+          (app (ctor 0 0) (var zero))) ∷ (lam affine (pi affine (app (def 0) (var zero))
+          empty)
+          (app (ctor 0 1) (var zero))) ∷ []))))
 
 eitherDecl : DataDecl
 eitherDecl =
   mkData "Either" (affine ∷ affine ∷ []) []
-    ( mkCtor "left"  (out leftTy-ok)  ∷
-      mkCtor "right" (out rightTy-ok) ∷
+    ( mkCtor "left"  leftTy  ∷
+      mkCtor "right" rightTy ∷
       [] )
 
 evenDecBook : Sig
 evenDecBook =
   mkSig (eitherDecl ∷ [])
-    ( mkDef "IsEven"  spec (out isEvenTy-ok)  (out isEvenTm-ok)  ∷
-      mkDef "Dec"     spec (out decTy-ok)     (out decTm-ok)     ∷
-      mkDef "evenDec" evid (out evenDecTy-ok) (out evenDecTm-ok) ∷
+    ( mkDef "IsEven"  spec isEvenTy  isEvenTm  ∷
+      mkDef "Dec"     spec decTy     decTm     ∷
+      mkDef "evenDec" evid evenDecTy evenDecTm ∷
       [] )
 
 evenDec-checks : checkSig! evenDecBook ≡ ok tt

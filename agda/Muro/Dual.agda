@@ -9,8 +9,8 @@
 -- the other end is the same protocol.
 --
 -- The other end is spec. A run term has no seat. The mark stays
--- the session's mark. None of these constructors is added to Tm
--- or PTm. The Elixir checker follows this form of `dual`.
+-- the session's mark. None of these constructors is added to Tm.
+-- The Elixir checker follows this form of `dual`.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}

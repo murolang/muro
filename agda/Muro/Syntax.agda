@@ -1,9 +1,7 @@
 ------------------------------------------------------------------------
 -- MuroTT v1 syntax.
 --
--- Two representations, as required:
---   de Bruijn  Tm n     — metatheory / executable check
---   PHOAS      PTm V    — substitution and example construction
+-- de Bruijn Tm n — metatheory, the executable check, and the examples.
 --
 -- Raw HOAS (Tm → Tm) is not the inductive syntax.
 ------------------------------------------------------------------------
@@ -73,48 +71,6 @@ data Tm (n : ℕ) : Set where
   addt   : Tm n → Tm n → Tm n
   toi64  : Tm n → Tm n
   packi  : Tm n → Tm n → Tm n                  -- two I64s; shape toi64 (suc (suc 0))
-
-------------------------------------------------------------------------
--- PHOAS terms. Binders are V → PTm V, not Tm → Tm.
-------------------------------------------------------------------------
-
-data PTm (V : Set) : Set where
-  var   : V → PTm V
-  typ   : PTm V
-  pi    : Qty → PTm V → (V → PTm V) → PTm V
-  lam   : Qty → PTm V → (V → PTm V) → PTm V
-  app   : PTm V → PTm V → PTm V
-  nat   : PTm V
-  ze    : PTm V
-  su    : PTm V → PTm V
-  unit  : PTm V
-  one   : PTm V
-  empty : PTm V
-  dty   : ℕ → PTm V
-  ctor  : (di ci : ℕ) → PTm V
-  mData : PTm V → (V → PTm V) → List (PTm V) → PTm V
-  mNat  : PTm V → (V → PTm V) → PTm V → (V → PTm V) → PTm V
-  mEmp  : PTm V → (V → PTm V) → PTm V
-  mUnit : PTm V → (V → PTm V) → PTm V → PTm V
-  idt   : PTm V → PTm V → PTm V → PTm V
-  rfl   : PTm V
-  rwt   : PTm V → (V → PTm V) → PTm V → PTm V
-  def   : ℕ → PTm V
-  ann   : PTm V → PTm V → PTm V
-  prod  : PTm V → PTm V → PTm V
-  pair  : PTm V → PTm V → PTm V
-  letp  : PTm V → (V → V → PTm V) → PTm V
-  nu    : (V → PTm V) → PTm V
-  unf   : PTm V → PTm V → PTm V
-  ucons : PTm V → PTm V
-  i64    : PTm V
-  f32ty  : PTm V
-  tensor : PTm V → PTm V → PTm V
-  addi   : PTm V → PTm V → PTm V
-  muli   : PTm V → PTm V → PTm V
-  addt   : PTm V → PTm V → PTm V
-  toi64  : PTm V → PTm V
-  packi  : PTm V → PTm V → PTm V
 
 ------------------------------------------------------------------------
 -- Global definition identifiers (closed book).

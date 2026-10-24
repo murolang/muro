@@ -18,8 +18,8 @@
 -- give a party a session has no evidence at that party.
 --
 -- Spec holds the description. Evidence is one party's session. A
--- run term has no seat. None of these constructors is added to Tm
--- or PTm. A `.muro` file writes the description, and the checker
+-- run term has no seat. None of these constructors is added to Tm.
+-- A `.muro` file writes the description, and the checker
 -- follows `seen`.
 ------------------------------------------------------------------------
 

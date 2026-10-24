@@ -12,7 +12,7 @@
 -- these meetings carry none.
 --
 -- The meeting is evidence. A run term has no seat. None of these
--- constructors is added to Tm or PTm. A `.muro` file does not write
+-- constructors is added to Tm. A `.muro` file does not write
 -- this meeting. The emitters are unchanged.
 ------------------------------------------------------------------------
 

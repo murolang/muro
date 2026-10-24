@@ -1,5 +1,5 @@
 ------------------------------------------------------------------------
--- Substitution on de Bruijn terms, plus toPHOAS. unembed is Muro.Unembed.
+-- Substitution on de Bruijn terms.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
@@ -269,64 +269,3 @@ motiveTail : ∀ {n} → ℕ → List (Tm n) → List (Qty × Tm 0) → Tm n
 motiveTail di args []             = pi affine (appsFrom (dty di) args) typ
 motiveTail di args ((q , T) ∷ is) =
   pi q (closed T) (motiveTail di (renList suc args ++ (var zero ∷ [])) is)
-
-------------------------------------------------------------------------
--- toPHOAS : de Bruijn → PHOAS
-------------------------------------------------------------------------
-
-mutual
-  toPHOAS : ∀ {n} {V : Set} → (Fin n → V) → Tm n → PTm V
-  toPHOAS ρ (var i)        = var (ρ i)
-  toPHOAS ρ typ            = typ
-  toPHOAS ρ (pi q A B)     = pi q (toPHOAS ρ A) (λ v → toPHOAS (λ { zero → v ; (suc i) → ρ i }) B)
-  toPHOAS ρ (lam q A t)    = lam q (toPHOAS ρ A) (λ v → toPHOAS (λ { zero → v ; (suc i) → ρ i }) t)
-  toPHOAS ρ (app f a)      = app (toPHOAS ρ f) (toPHOAS ρ a)
-  toPHOAS ρ nat            = nat
-  toPHOAS ρ ze             = ze
-  toPHOAS ρ (su t)         = su (toPHOAS ρ t)
-  toPHOAS ρ unit           = unit
-  toPHOAS ρ one            = one
-  toPHOAS ρ empty          = empty
-  toPHOAS ρ (dty i)        = dty i
-  toPHOAS ρ (ctor i j)     = ctor i j
-  toPHOAS ρ (mData e P bs) = mData (toPHOAS ρ e)
-                                  (λ v → toPHOAS (λ { zero → v ; (suc i) → ρ i }) P)
-                                  (toPHOASList ρ bs)
-  toPHOAS ρ (mNat e P z s) = mNat (toPHOAS ρ e)
-                                  (λ v → toPHOAS (λ { zero → v ; (suc i) → ρ i }) P)
-                                  (toPHOAS ρ z)
-                                  (λ v → toPHOAS (λ { zero → v ; (suc i) → ρ i }) s)
-  toPHOAS ρ (mEmp e P)     = mEmp (toPHOAS ρ e)
-                                  (λ v → toPHOAS (λ { zero → v ; (suc i) → ρ i }) P)
-  toPHOAS ρ (mUnit e P u)  = mUnit (toPHOAS ρ e)
-                                   (λ v → toPHOAS (λ { zero → v ; (suc i) → ρ i }) P)
-                                   (toPHOAS ρ u)
-  toPHOAS ρ (idt A a b)    = idt (toPHOAS ρ A) (toPHOAS ρ a) (toPHOAS ρ b)
-  toPHOAS ρ rfl            = rfl
-  toPHOAS ρ (rwt e P t)    = rwt (toPHOAS ρ e)
-                                 (λ v → toPHOAS (λ { zero → v ; (suc i) → ρ i }) P)
-                                 (toPHOAS ρ t)
-  toPHOAS ρ (def i)        = def i
-  toPHOAS ρ (ann e A)      = ann (toPHOAS ρ e) (toPHOAS ρ A)
-  toPHOAS ρ (prod A B)     = prod (toPHOAS ρ A) (toPHOAS ρ B)
-  toPHOAS ρ (pair a b)     = pair (toPHOAS ρ a) (toPHOAS ρ b)
-  toPHOAS ρ (letp e t)     = letp (toPHOAS ρ e)
-                                  (λ a b → toPHOAS (λ { zero → b ; (suc zero) → a ; (suc (suc i)) → ρ i }) t)
-  toPHOAS ρ (nu F)         = nu (λ v → toPHOAS (λ { zero → v ; (suc i) → ρ i }) F)
-  toPHOAS ρ (unf s f)      = unf (toPHOAS ρ s) (toPHOAS ρ f)
-  toPHOAS ρ (ucons s)      = ucons (toPHOAS ρ s)
-  toPHOAS ρ i64            = i64
-  toPHOAS ρ f32ty          = f32ty
-  toPHOAS ρ (tensor d s)   = tensor (toPHOAS ρ d) (toPHOAS ρ s)
-  toPHOAS ρ (addi x y)     = addi (toPHOAS ρ x) (toPHOAS ρ y)
-  toPHOAS ρ (muli x y)     = muli (toPHOAS ρ x) (toPHOAS ρ y)
-  toPHOAS ρ (addt t u)     = addt (toPHOAS ρ t) (toPHOAS ρ u)
-  toPHOAS ρ (toi64 t)      = toi64 (toPHOAS ρ t)
-  toPHOAS ρ (packi x y)    = packi (toPHOAS ρ x) (toPHOAS ρ y)
-
-  toPHOASList : ∀ {n} {V : Set} → (Fin n → V) → List (Tm n) → List (PTm V)
-  toPHOASList ρ []       = []
-  toPHOASList ρ (t ∷ ts) = toPHOAS ρ t ∷ toPHOASList ρ ts
-
-toPHOAS0 : ∀ {V : Set} → Tm 0 → PTm V
-toPHOAS0 t = toPHOAS (λ ()) t
