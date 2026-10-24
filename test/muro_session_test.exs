@@ -277,6 +277,61 @@ defmodule Muro.SessionTest do
     assert msg =~ "put v done does not conform to send Nat end"
   end
 
+  test "a continuation may mention a received nat as a vector length" do
+    src = """
+    session sized := recv (n : Nat) (send (Vec Nat n) end)
+    session back := dual sized
+    conform server : sized := get (n : Nat) (put (rep n 0) done)
+    conform client : back := put 2 (get (Vec Nat 2) done)
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    sized = Enum.find(book, &(&1.name == "sized"))
+    assert sized.proto == {:drecv, :n, :nat, {:send, {:vec, :nat, {:var, :n}}, :end}}
+
+    assert Session.dual(sized.proto) ==
+             {:dsend, :n, :nat, {:recv, {:vec, :nat, {:var, :n}}, :end}}
+
+    assert Session.dual(Session.dual(sized.proto)) == sized.proto
+    assert Session.proto_ok(sized.proto) == :ok
+    assert Session.show_proto(sized.proto) == "recv (n : Nat) (send (Vec Nat n) end)"
+
+    assert Session.show_proto(Session.dual(sized.proto)) ==
+             "send (n : Nat) (recv (Vec Nat n) end)"
+
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a vector length that is not that nat is refused" do
+    assert {:error, msg} =
+             check("""
+             session bits := recv (b : Bit) (send (Vec Nat b) end)
+             """)
+
+    assert msg =~ "vector length is not a nat"
+
+    assert {:error, msg} =
+             check("""
+             session open := send (Vec Nat n) end
+             """)
+
+    assert msg =~ "unbound length"
+
+    assert {:error, msg} = Parser.parse("session bare := send (Vec Nat) end\n")
+    assert msg =~ "expected a vector length"
+  end
+
+  test "a vector of another length does not conform" do
+    assert {:error, msg} =
+             check("""
+             session sized := recv (n : Nat) (send (Vec Nat n) end)
+             session back := dual sized
+             conform bad : back := put 2 (get (Vec Nat 3) done)
+             """)
+
+    assert msg =~ "does not conform"
+  end
+
   test "value binding: parse get with binder" do
     src =
       "conform test : ping := get (k : Nat) (put k done)\nsession ping := recv Nat (send Nat end)\n"

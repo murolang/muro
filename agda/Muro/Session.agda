@@ -1,16 +1,19 @@
 ------------------------------------------------------------------------
 -- Affine sessions. One channel. A communication carries a payload
 -- and one continuation. The payload is a run type in this fragment:
--- a nat, a bit, unit, a pair, or a record of named fields. A pair
--- is a tuple. A record is a fixed map: the names are the type, and
--- a pair around a record is a tuple wrapping that map. An open map,
--- whose keys are chosen at run time, is not a type. The `get`
--- continuation is a function of the received value.
+-- a nat, a bit, unit, a pair, a record of named fields, or a vector
+-- whose length is a numeral or a nat name. A pair is a tuple. A
+-- record is a fixed map: the names are the type, and a pair around a
+-- record is a tuple wrapping that map. An open map, whose keys are
+-- chosen at run time, is not a type.
 --
 -- `send A S` sends a value of type A and continues as S. `recv A S`
--- receives one. Any value of that type conforms. `choose` and
--- `branch` select an arm. Two processes meet when the sent type is
--- the received type.
+-- receives one. `drecv x A S` binds that value to `x`, and `S` may
+-- mention `x` as the length of a vector. `dsend x A S` is the other
+-- direction: the value sent for `x` instantiates `S`. The next
+-- action does not depend on the value. Any value of the payload
+-- type conforms. `choose` and `branch` select an arm. Two processes
+-- meet when the sent type is the type the continuation expects.
 --
 -- A protocol is spec. A conformance derivation is evidence. Neither
 -- is a run. `stop` abandons the channel at any protocol. A second
@@ -35,6 +38,9 @@
 module Muro.Session where
 
 open import Data.Empty using (⊥)
+open import Data.Maybe.Base using (Maybe; just; nothing)
+open import Data.Nat.Base using (ℕ) renaming (zero to nzero; suc to nsuc)
+open import Data.Nat.Properties using () renaming (_≟_ to _≟ℕ_)
 open import Data.Product using (_×_; _,_)
 open import Data.Sum using (_⊎_; inj₁; inj₂)
 open import Data.String.Base using (String)
@@ -51,7 +57,12 @@ open import Muro.Base using (Mode; spec; evid; run; Qty; affine)
 ------------------------------------------------------------------------
 -- The payload types. `pair` is a tuple. `rec` is a fixed map, one
 -- named field after another. The names are part of the type.
+-- `vec A e` is a vector of `A` whose length is a numeral or a name.
 ------------------------------------------------------------------------
+
+data NExp : Set where
+  nlit : ℕ → NExp
+  nvar : String → NExp
 
 data Ty : Set
 data Fields : Set
@@ -66,6 +77,7 @@ data Ty where
   unit : Ty
   pair : Ty → Ty → Ty
   rec  : Fields → Ty
+  vec  : Ty → NExp → Ty
 
 data Row : Fields → Set
 data Val : Ty → Set
@@ -82,6 +94,7 @@ data Val where
   tt   : Val unit
   tup  : ∀ {A B} → Val A → Val B → Val (pair A B)
   rec  : ∀ {fs} → Row fs → Val (rec fs)
+  rep  : ∀ {A e} → Val A → Val (vec A e)
 
 ------------------------------------------------------------------------
 -- Value expressions: literals or variable references
@@ -90,6 +103,16 @@ data Val where
 data ValExpr : Ty → Set where
   lit : ∀ {A} → Val A → ValExpr A
   var : ∀ {A} → String → ValExpr A
+
+nexp≟ : (e f : NExp) → Dec (e ≡ f)
+nexp≟ (nlit m) (nlit n) with m ≟ℕ n
+... | yes′ refl = yes′ refl
+... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+nexp≟ (nlit _) (nvar _) = no′ (λ ())
+nexp≟ (nvar _) (nlit _) = no′ (λ ())
+nexp≟ (nvar x) (nvar y) with x ≟ y
+... | yes′ refl = yes′ refl
+... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
 
 mutual
   fields≟ : (fs gs : Fields) → Dec (fs ≡ gs)
@@ -110,16 +133,19 @@ mutual
   ty≟ nat unit = no′ (λ ())
   ty≟ nat (pair _ _) = no′ (λ ())
   ty≟ nat (rec _) = no′ (λ ())
+  ty≟ nat (vec _ _) = no′ (λ ())
   ty≟ bit nat = no′ (λ ())
   ty≟ bit bit = yes′ refl
   ty≟ bit unit = no′ (λ ())
   ty≟ bit (pair _ _) = no′ (λ ())
   ty≟ bit (rec _) = no′ (λ ())
+  ty≟ bit (vec _ _) = no′ (λ ())
   ty≟ unit nat = no′ (λ ())
   ty≟ unit bit = no′ (λ ())
   ty≟ unit unit = yes′ refl
   ty≟ unit (pair _ _) = no′ (λ ())
   ty≟ unit (rec _) = no′ (λ ())
+  ty≟ unit (vec _ _) = no′ (λ ())
   ty≟ (pair _ _) nat = no′ (λ ())
   ty≟ (pair _ _) bit = no′ (λ ())
   ty≟ (pair _ _) unit = no′ (λ ())
@@ -129,11 +155,23 @@ mutual
   ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
   ... | yes′ refl = yes′ refl
   ty≟ (pair _ _) (rec _) = no′ (λ ())
+  ty≟ (pair _ _) (vec _ _) = no′ (λ ())
   ty≟ (rec _) nat = no′ (λ ())
   ty≟ (rec _) bit = no′ (λ ())
   ty≟ (rec _) unit = no′ (λ ())
   ty≟ (rec _) (pair _ _) = no′ (λ ())
   ty≟ (rec fs) (rec gs) with fields≟ fs gs
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl = yes′ refl
+  ty≟ (rec _) (vec _ _) = no′ (λ ())
+  ty≟ (vec _ _) nat = no′ (λ ())
+  ty≟ (vec _ _) bit = no′ (λ ())
+  ty≟ (vec _ _) unit = no′ (λ ())
+  ty≟ (vec _ _) (pair _ _) = no′ (λ ())
+  ty≟ (vec _ _) (rec _) = no′ (λ ())
+  ty≟ (vec A e) (vec B f) with ty≟ A B
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl with nexp≟ e f
   ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
   ... | yes′ refl = yes′ refl
 
@@ -145,6 +183,8 @@ data Proto : Set where
   end    : Proto
   send   : Ty → Proto → Proto
   recv   : Ty → Proto → Proto
+  dsend  : String → Ty → Proto → Proto
+  drecv  : String → Ty → Proto → Proto
   choose : Proto → Proto → Proto
   branch : Proto → Proto → Proto
 
@@ -191,20 +231,152 @@ data ValExprOk : Ctx → ∀ {A} → ValExpr A → Set where
   lit-ok : ∀ {Γ A} {v : Val A} → ValExprOk Γ (lit v)
   var-ok : ∀ {Γ A} {x : String} → x ∈ Γ ∷ A → ValExprOk Γ (var {A} x)
 
--- Conformance with variable context
-data Conforms : Ctx → Proc → Proto → Set where
-  done-end : ∀ {Γ} → Conforms Γ done end
+------------------------------------------------------------------------
+-- A received nat instantiates the lengths that name it. `none` is
+-- the identity. `bind` is the latest binding of a name, so a later
+-- binder of that name hides it. Applying `none` is the protocol.
+------------------------------------------------------------------------
 
-  abandon : ∀ {Γ S} → Conforms Γ stop S
+data Idx : Set where
+  none : Idx
+  bind : String → NExp → Idx → Idx
 
-  put-ok : ∀ {Γ A v P S} → ValExprOk Γ v → Conforms Γ P S → Conforms Γ (put A v P) (send A S)
+lookupIdx : Idx → String → Maybe NExp
+lookupIdx none _ = nothing
+lookupIdx (bind y i ρ) x with x ≟ y
+... | yes′ _ = just i
+... | no′ _ = lookupIdx ρ x
 
-  get-ok : ∀ {Γ A x P S} → Conforms ((x , A) ∷ Γ) P S → Conforms Γ (get A x P) (recv A S)
+shadow : String → Idx → Idx
+shadow _ none = none
+shadow x (bind y i ρ) with x ≟ y
+... | yes′ _ = shadow x ρ
+... | no′ _ = bind y i (shadow x ρ)
 
-  pick0-ok : ∀ {Γ P S T} → Conforms Γ P S → Conforms Γ (pick0 P) (choose S T)
-  pick1-ok : ∀ {Γ P S T} → Conforms Γ P T → Conforms Γ (pick1 P) (choose S T)
+-- The protocol binder `y` is the process binder `x` in the continuation.
+renameIdx : String → String → Idx → Idx
+renameIdx y x ρ = bind y (nvar x) (shadow y ρ)
 
-  cover-ok : ∀ {Γ P Q S T} → Conforms Γ P S → Conforms Γ Q T → Conforms Γ (cover P Q) (branch S T)
+applyNExp : Idx → NExp → NExp
+applyNExp _ (nlit n) = nlit n
+applyNExp ρ (nvar x) with lookupIdx ρ x
+... | nothing = nvar x
+... | just e = e
+
+applyTy : Idx → Ty → Ty
+applyFields : Idx → Fields → Fields
+
+applyTy none A = A
+applyTy ρ@(bind _ _ _) nat = nat
+applyTy ρ@(bind _ _ _) bit = bit
+applyTy ρ@(bind _ _ _) unit = unit
+applyTy ρ@(bind _ _ _) (pair A B) = pair (applyTy ρ A) (applyTy ρ B)
+applyTy ρ@(bind _ _ _) (rec fs) = rec (applyFields ρ fs)
+applyTy ρ@(bind _ _ _) (vec A e) = vec (applyTy ρ A) (applyNExp ρ e)
+
+applyFields none fs = fs
+applyFields ρ@(bind _ _ _) noFields = noFields
+applyFields ρ@(bind _ _ _) (named n A fs) = named n (applyTy ρ A) (applyFields ρ fs)
+
+applyProto : Idx → Proto → Proto
+applyProto none S = S
+applyProto ρ@(bind _ _ _) end = end
+applyProto ρ@(bind _ _ _) (send A S) = send (applyTy ρ A) (applyProto ρ S)
+applyProto ρ@(bind _ _ _) (recv A S) = recv (applyTy ρ A) (applyProto ρ S)
+applyProto ρ@(bind _ _ _) (dsend y A S) = dsend y (applyTy ρ A) (applyProto (shadow y ρ) S)
+applyProto ρ@(bind _ _ _) (drecv y A S) = drecv y (applyTy ρ A) (applyProto (shadow y ρ) S)
+applyProto ρ@(bind _ _ _) (choose S T) = choose (applyProto ρ S) (applyProto ρ T)
+applyProto ρ@(bind _ _ _) (branch S T) = branch (applyProto ρ S) (applyProto ρ T)
+
+toℕ : Val nat → ℕ
+toℕ zero = nzero
+toℕ (suc n) = nsuc (toℕ n)
+
+natExp : ValExpr nat → NExp
+natExp (lit v) = nlit (toℕ v)
+natExp (var x) = nvar x
+
+-- A length comes from a nat. Another payload does not instantiate one.
+ixOf : (A : Ty) → ValExpr A → NExp
+ixOf nat v = natExp v
+ixOf bit _ = nlit nzero
+ixOf unit _ = nlit nzero
+ixOf (pair _ _) _ = nlit nzero
+ixOf (rec _) _ = nlit nzero
+ixOf (vec _ _) _ = nlit nzero
+
+-- Conformance under an index substitution. `none` is the identity,
+-- which is the conformance a session is checked at. A dependent send
+-- extends the substitution with the value. A dependent receive
+-- extends it with the process's name for that binder. The protocol
+-- in the index is the protocol as written.
+data Conformsρ (Γ : Ctx) (ρ : Idx) : Proc → Proto → Set where
+  done-end : Conformsρ Γ ρ done end
+
+  abandon : ∀ {S} → Conformsρ Γ ρ stop S
+
+  put-ok : ∀ {A B v P S} →
+    A ≡ applyTy ρ B →
+    ValExprOk Γ v →
+    Conformsρ Γ ρ P S →
+    Conformsρ Γ ρ (put A v P) (send B S)
+
+  get-ok : ∀ {A B x P S} →
+    A ≡ applyTy ρ B →
+    Conformsρ ((x , A) ∷ Γ) ρ P S →
+    Conformsρ Γ ρ (get A x P) (recv B S)
+
+  dput-ok : ∀ {A B y v P S} →
+    A ≡ applyTy ρ B →
+    ValExprOk Γ v →
+    Conformsρ Γ (bind y (ixOf A v) (shadow y ρ)) P S →
+    Conformsρ Γ ρ (put A v P) (dsend y B S)
+
+  dget-ok : ∀ {A B x y P S} →
+    A ≡ applyTy ρ B →
+    Conformsρ ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) P S →
+    Conformsρ Γ ρ (get A x P) (drecv y B S)
+
+  pick0-ok : ∀ {P S T} → Conformsρ Γ ρ P S → Conformsρ Γ ρ (pick0 P) (choose S T)
+  pick1-ok : ∀ {P S T} → Conformsρ Γ ρ P T → Conformsρ Γ ρ (pick1 P) (choose S T)
+
+  cover-ok : ∀ {P Q S T} → Conformsρ Γ ρ P S → Conformsρ Γ ρ Q T → Conformsρ Γ ρ (cover P Q) (branch S T)
+
+Conforms : Ctx → Proc → Proto → Set
+Conforms Γ P S = Conformsρ Γ none P S
+
+------------------------------------------------------------------------
+-- A protocol is well formed when every length is a numeral or a nat
+-- in scope. The binder of a dependent action extends that scope.
+------------------------------------------------------------------------
+
+data TyOk : Ctx → Ty → Set
+data FieldsOk : Ctx → Fields → Set
+
+data NExpOk : Ctx → NExp → Set where
+  nlit-ok : ∀ {Γ n} → NExpOk Γ (nlit n)
+  nvar-ok : ∀ {Γ x} → x ∈ Γ ∷ nat → NExpOk Γ (nvar x)
+
+data FieldsOk where
+  noFields-ok : ∀ {Γ} → FieldsOk Γ noFields
+  named-ok    : ∀ {Γ n A fs} → TyOk Γ A → FieldsOk Γ fs → FieldsOk Γ (named n A fs)
+
+data TyOk where
+  nat-ok  : ∀ {Γ} → TyOk Γ nat
+  bit-ok  : ∀ {Γ} → TyOk Γ bit
+  unit-ok : ∀ {Γ} → TyOk Γ unit
+  pair-ok : ∀ {Γ A B} → TyOk Γ A → TyOk Γ B → TyOk Γ (pair A B)
+  rec-ok  : ∀ {Γ fs} → FieldsOk Γ fs → TyOk Γ (rec fs)
+  vec-ok  : ∀ {Γ A e} → TyOk Γ A → NExpOk Γ e → TyOk Γ (vec A e)
+
+data ProtoOk : Ctx → Proto → Set where
+  end-ok    : ∀ {Γ} → ProtoOk Γ end
+  send-ok   : ∀ {Γ A S} → TyOk Γ A → ProtoOk Γ S → ProtoOk Γ (send A S)
+  recv-ok   : ∀ {Γ A S} → TyOk Γ A → ProtoOk Γ S → ProtoOk Γ (recv A S)
+  dsend-ok  : ∀ {Γ x A S} → TyOk Γ A → ProtoOk ((x , A) ∷ Γ) S → ProtoOk Γ (dsend x A S)
+  drecv-ok  : ∀ {Γ x A S} → TyOk Γ A → ProtoOk ((x , A) ∷ Γ) S → ProtoOk Γ (drecv x A S)
+  choose-ok : ∀ {Γ S T} → ProtoOk Γ S → ProtoOk Γ T → ProtoOk Γ (choose S T)
+  branch-ok : ∀ {Γ S T} → ProtoOk Γ S → ProtoOk Γ T → ProtoOk Γ (branch S T)
 
 conformMode : Mode
 conformMode = evid
@@ -251,26 +423,26 @@ pong : Proc
 pong = get nat "x" (put nat (lit one) done)
 
 pong-ok : Conforms [] pong ping
-pong-ok = get-ok (put-ok lit-ok done-end)
+pong-ok = get-ok refl (put-ok refl lit-ok done-end)
 
 other-nat : Conforms [] (get nat "x" (put nat (lit zero) done)) ping
-other-nat = get-ok (put-ok lit-ok done-end)
+other-nat = get-ok refl (put-ok refl lit-ok done-end)
 
 -- Echo: receive a value and send it back.
 echo : Proc
 echo = get nat "v" (put nat (var "v") done)
 
 echo-ok : Conforms [] echo ping
-echo-ok = get-ok (put-ok (var-ok here) done-end)
+echo-ok = get-ok refl (put-ok refl (var-ok here) done-end)
 
 v-here-ok : Conforms [] (put box (lit v-here) done) (send box end)
-v-here-ok = put-ok lit-ok done-end
+v-here-ok = put-ok refl lit-ok done-end
 
 v-there-ok : Conforms [] (put box (lit v-there) done) (send box end)
-v-there-ok = put-ok lit-ok done-end
+v-there-ok = put-ok refl lit-ok done-end
 
 not-type : ¬ Conforms [] (put nat (lit zero) done) (send box end)
-not-type ()
+not-type (put-ok () _ _)
 
 -- A send where the protocol says receive.
 swapped : ¬ Conforms [] (put nat (lit zero) done) (recv nat end)
@@ -278,7 +450,7 @@ swapped ()
 
 -- The continuation is end, so a second send has no derivation.
 twice : ¬ Conforms [] (put nat (lit zero) (put nat (lit zero) done)) (send nat end)
-twice (put-ok _ ())
+twice (put-ok _ _ ())
 
 untouched : Conforms [] stop (send nat end)
 untouched = abandon
@@ -287,16 +459,19 @@ chosen : Conforms [] (pick0 done) (choose end (send nat end))
 chosen = pick0-ok done-end
 
 both : Conforms [] (cover done (put box (lit v-here) done)) (branch end (send box end))
-both = cover-ok done-end (put-ok lit-ok done-end)
+both = cover-ok done-end (put-ok refl lit-ok done-end)
 
 ------------------------------------------------------------------------
 -- The search. `yes` carries a derivation. `no` carries its refutation.
 -- The Elixir checker follows `decide`.
 ------------------------------------------------------------------------
 
-data Answer (Γ : Ctx) (P : Proc) (S : Proto) : Set where
-  yes : Conforms Γ P S → Answer Γ P S
-  no  : ¬ Conforms Γ P S → Answer Γ P S
+data Answerρ (Γ : Ctx) (ρ : Idx) (P : Proc) (S : Proto) : Set where
+  yes : Conformsρ Γ ρ P S → Answerρ Γ ρ P S
+  no  : ¬ Conformsρ Γ ρ P S → Answerρ Γ ρ P S
+
+Answer : Ctx → Proc → Proto → Set
+Answer Γ P S = Answerρ Γ none P S
 
 -- Decidable variable lookup
 _∈?_∷?_ : (x : String) (Γ : Ctx) (A : Ty) → Dec (x ∈ Γ ∷ A)
@@ -316,68 +491,113 @@ decideValExpr {A} Γ (var x) with x ∈? Γ ∷? A
 ... | yes′ p = yes′ (var-ok p)
 ... | no′ np = no′ (λ { (var-ok p) → np p })
 
-put-type : ∀ {Γ A B v P S} → Conforms Γ (put A v P) (send B S) → A ≡ B
-put-type (put-ok _ _) = refl
+put-type : ∀ {Γ ρ A B v P S} → Conformsρ Γ ρ (put A v P) (send B S) → A ≡ applyTy ρ B
+put-type (put-ok eq _ _) = eq
 
-get-type : ∀ {Γ A B x P S} → Conforms Γ (get A x P) (recv B S) → A ≡ B
-get-type (get-ok _) = refl
+get-type : ∀ {Γ ρ A B x P S} → Conformsρ Γ ρ (get A x P) (recv B S) → A ≡ applyTy ρ B
+get-type (get-ok eq _) = eq
 
-on-put : ∀ {Γ A B v P S} → Dec (A ≡ B) → Dec (ValExprOk Γ v) → Answer Γ P S → Answer Γ (put A v P) (send B S)
-on-put (yes′ refl) (yes′ vok) (yes d) = yes (put-ok vok d)
-on-put (yes′ refl) (yes′ vok) (no nd) = no (λ { (put-ok _ d) → nd d })
-on-put (yes′ refl) (no′ nvok) _ = no (λ { (put-ok vok _) → nvok vok })
-on-put (no′ ¬eq) _ _ = no (λ d → ¬eq (put-type d))
+dput-type : ∀ {Γ ρ A B y v P S} → Conformsρ Γ ρ (put A v P) (dsend y B S) → A ≡ applyTy ρ B
+dput-type (dput-ok eq _ _) = eq
 
-on-get : ∀ {Γ A B x P S} → Dec (A ≡ B) → Answer ((x , A) ∷ Γ) P S → Answer Γ (get A x P) (recv B S)
-on-get (yes′ refl) (yes d) = yes (get-ok d)
-on-get (yes′ refl) (no nd) = no (λ { (get-ok d) → nd d })
-on-get (no′ ¬eq) _ = no (λ d → ¬eq (get-type d))
+dget-type : ∀ {Γ ρ A B x y P S} → Conformsρ Γ ρ (get A x P) (drecv y B S) → A ≡ applyTy ρ B
+dget-type (dget-ok eq _) = eq
 
-at0 : ∀ {Γ P S T} → Answer Γ P S → Answer Γ (pick0 P) (choose S T)
+on-put : ∀ {Γ ρ A B v P S} →
+  Dec (A ≡ applyTy ρ B) → Dec (ValExprOk Γ v) → Answerρ Γ ρ P S →
+  Answerρ Γ ρ (put A v P) (send B S)
+on-put (yes′ refl) (yes′ vok) (yes d) = yes (put-ok refl vok d)
+on-put (yes′ refl) (yes′ vok) (no nd) = no (λ { (put-ok refl _ d) → nd d })
+on-put (yes′ refl) (no′ nvok) _ = no (λ { (put-ok refl vok _) → nvok vok })
+on-put (no′ ¬eq) _ _ = no (λ { (put-ok eq _ _) → ¬eq eq })
+
+on-get : ∀ {Γ ρ A B x P S} →
+  Dec (A ≡ applyTy ρ B) → Answerρ ((x , A) ∷ Γ) ρ P S →
+  Answerρ Γ ρ (get A x P) (recv B S)
+on-get (yes′ refl) (yes d) = yes (get-ok refl d)
+on-get (yes′ refl) (no nd) = no (λ { (get-ok refl d) → nd d })
+on-get (no′ ¬eq) _ = no (λ { (get-ok eq _) → ¬eq eq })
+
+on-dput : ∀ {Γ ρ B y v P S} →
+  let A = applyTy ρ B in
+  Dec (ValExprOk Γ v) →
+  Answerρ Γ (bind y (ixOf A v) (shadow y ρ)) P S →
+  Answerρ Γ ρ (put A v P) (dsend y B S)
+on-dput (yes′ vok) (yes d) = yes (dput-ok refl vok d)
+on-dput (yes′ vok) (no nd) = no (λ { (dput-ok refl _ d) → nd d })
+on-dput (no′ nvok) _ = no (λ { (dput-ok refl vok _) → nvok vok })
+
+on-dget : ∀ {Γ ρ B x y P S} →
+  let A = applyTy ρ B in
+  Answerρ ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) P S →
+  Answerρ Γ ρ (get A x P) (drecv y B S)
+on-dget (yes d) = yes (dget-ok refl d)
+on-dget (no nd) = no (λ { (dget-ok refl d) → nd d })
+
+at0 : ∀ {Γ ρ P S T} → Answerρ Γ ρ P S → Answerρ Γ ρ (pick0 P) (choose S T)
 at0 (yes d) = yes (pick0-ok d)
 at0 (no nd) = no (λ { (pick0-ok d) → nd d })
 
-at1 : ∀ {Γ P S T} → Answer Γ P T → Answer Γ (pick1 P) (choose S T)
+at1 : ∀ {Γ ρ P S T} → Answerρ Γ ρ P T → Answerρ Γ ρ (pick1 P) (choose S T)
 at1 (yes d) = yes (pick1-ok d)
 at1 (no nd) = no (λ { (pick1-ok d) → nd d })
 
-both-of : ∀ {Γ P Q S T} → Answer Γ P S → Answer Γ Q T → Answer Γ (cover P Q) (branch S T)
+both-of : ∀ {Γ ρ P Q S T} → Answerρ Γ ρ P S → Answerρ Γ ρ Q T → Answerρ Γ ρ (cover P Q) (branch S T)
 both-of (yes d) (yes e) = yes (cover-ok d e)
 both-of (no nd) _ = no (λ { (cover-ok d _) → nd d })
 both-of (yes _) (no nd) = no (λ { (cover-ok _ e) → nd e })
 
+decideρ : (Γ : Ctx) (ρ : Idx) (P : Proc) (S : Proto) → Answerρ Γ ρ P S
+decideρ Γ ρ done end = yes done-end
+decideρ Γ ρ done (send _ _) = no (λ ())
+decideρ Γ ρ done (recv _ _) = no (λ ())
+decideρ Γ ρ done (dsend _ _ _) = no (λ ())
+decideρ Γ ρ done (drecv _ _ _) = no (λ ())
+decideρ Γ ρ done (choose _ _) = no (λ ())
+decideρ Γ ρ done (branch _ _) = no (λ ())
+decideρ Γ ρ stop _ = yes abandon
+decideρ Γ ρ (put A v P) (send B S) = on-put (ty≟ A (applyTy ρ B)) (decideValExpr Γ v) (decideρ Γ ρ P S)
+decideρ Γ ρ (put A v P) (dsend y B S) with ty≟ A (applyTy ρ B)
+... | yes′ refl = on-dput (decideValExpr Γ v) (decideρ Γ (bind y (ixOf (applyTy ρ B) v) (shadow y ρ)) P S)
+... | no′ ¬eq = no (λ d → ¬eq (dput-type d))
+decideρ Γ ρ (put _ _ _) end = no (λ ())
+decideρ Γ ρ (put _ _ _) (recv _ _) = no (λ ())
+decideρ Γ ρ (put _ _ _) (drecv _ _ _) = no (λ ())
+decideρ Γ ρ (put _ _ _) (choose _ _) = no (λ ())
+decideρ Γ ρ (put _ _ _) (branch _ _) = no (λ ())
+decideρ Γ ρ (get A x P) (recv B S) = on-get (ty≟ A (applyTy ρ B)) (decideρ ((x , A) ∷ Γ) ρ P S)
+decideρ Γ ρ (get A x P) (drecv y B S) with ty≟ A (applyTy ρ B)
+... | yes′ refl = on-dget (decideρ ((x , applyTy ρ B) ∷ Γ) (renameIdx y x (shadow y ρ)) P S)
+... | no′ ¬eq = no (λ d → ¬eq (dget-type d))
+decideρ Γ ρ (get _ _ _) end = no (λ ())
+decideρ Γ ρ (get _ _ _) (send _ _) = no (λ ())
+decideρ Γ ρ (get _ _ _) (dsend _ _ _) = no (λ ())
+decideρ Γ ρ (get _ _ _) (choose _ _) = no (λ ())
+decideρ Γ ρ (get _ _ _) (branch _ _) = no (λ ())
+decideρ Γ ρ (pick0 P) (choose S _) = at0 (decideρ Γ ρ P S)
+decideρ Γ ρ (pick0 _) end = no (λ ())
+decideρ Γ ρ (pick0 _) (send _ _) = no (λ ())
+decideρ Γ ρ (pick0 _) (recv _ _) = no (λ ())
+decideρ Γ ρ (pick0 _) (dsend _ _ _) = no (λ ())
+decideρ Γ ρ (pick0 _) (drecv _ _ _) = no (λ ())
+decideρ Γ ρ (pick0 _) (branch _ _) = no (λ ())
+decideρ Γ ρ (pick1 P) (choose _ T) = at1 (decideρ Γ ρ P T)
+decideρ Γ ρ (pick1 _) end = no (λ ())
+decideρ Γ ρ (pick1 _) (send _ _) = no (λ ())
+decideρ Γ ρ (pick1 _) (recv _ _) = no (λ ())
+decideρ Γ ρ (pick1 _) (dsend _ _ _) = no (λ ())
+decideρ Γ ρ (pick1 _) (drecv _ _ _) = no (λ ())
+decideρ Γ ρ (pick1 _) (branch _ _) = no (λ ())
+decideρ Γ ρ (cover P Q) (branch S T) = both-of (decideρ Γ ρ P S) (decideρ Γ ρ Q T)
+decideρ Γ ρ (cover _ _) end = no (λ ())
+decideρ Γ ρ (cover _ _) (send _ _) = no (λ ())
+decideρ Γ ρ (cover _ _) (recv _ _) = no (λ ())
+decideρ Γ ρ (cover _ _) (dsend _ _ _) = no (λ ())
+decideρ Γ ρ (cover _ _) (drecv _ _ _) = no (λ ())
+decideρ Γ ρ (cover _ _) (choose _ _) = no (λ ())
+
 decide : (Γ : Ctx) (P : Proc) (S : Proto) → Answer Γ P S
-decide Γ done end = yes done-end
-decide Γ done (send _ _) = no (λ ())
-decide Γ done (recv _ _) = no (λ ())
-decide Γ done (choose _ _) = no (λ ())
-decide Γ done (branch _ _) = no (λ ())
-decide Γ stop _ = yes abandon
-decide Γ (put A v P) (send B S) = on-put (ty≟ A B) (decideValExpr Γ v) (decide Γ P S)
-decide Γ (put _ _ _) end = no (λ ())
-decide Γ (put _ _ _) (recv _ _) = no (λ ())
-decide Γ (put _ _ _) (choose _ _) = no (λ ())
-decide Γ (put _ _ _) (branch _ _) = no (λ ())
-decide Γ (get A x P) (recv B S) = on-get (ty≟ A B) (decide ((x , A) ∷ Γ) P S)
-decide Γ (get _ _ _) end = no (λ ())
-decide Γ (get _ _ _) (send _ _) = no (λ ())
-decide Γ (get _ _ _) (choose _ _) = no (λ ())
-decide Γ (get _ _ _) (branch _ _) = no (λ ())
-decide Γ (pick0 P) (choose S _) = at0 (decide Γ P S)
-decide Γ (pick0 _) end = no (λ ())
-decide Γ (pick0 _) (send _ _) = no (λ ())
-decide Γ (pick0 _) (recv _ _) = no (λ ())
-decide Γ (pick0 _) (branch _ _) = no (λ ())
-decide Γ (pick1 P) (choose _ T) = at1 (decide Γ P T)
-decide Γ (pick1 _) end = no (λ ())
-decide Γ (pick1 _) (send _ _) = no (λ ())
-decide Γ (pick1 _) (recv _ _) = no (λ ())
-decide Γ (pick1 _) (branch _ _) = no (λ ())
-decide Γ (cover P Q) (branch S T) = both-of (decide Γ P S) (decide Γ Q T)
-decide Γ (cover _ _) end = no (λ ())
-decide Γ (cover _ _) (send _ _) = no (λ ())
-decide Γ (cover _ _) (recv _ _) = no (λ ())
-decide Γ (cover _ _) (choose _ _) = no (λ ())
+decide Γ P S = decideρ Γ none P S
 
 pong-decides : decide [] pong ping ≡ yes pong-ok
 pong-decides = refl
@@ -397,11 +617,11 @@ shadowed : Proc
 shadowed = get nat "v" (get bit "v" (put nat (var "v") done))
 
 shadowed-refused : ¬ Conforms [] shadowed (recv nat (recv bit (send nat end)))
-shadowed-refused (get-ok (get-ok (put-ok (var-ok (there v≢v _)) _))) = v≢v refl
+shadowed-refused (get-ok refl (get-ok refl (put-ok refl (var-ok (there v≢v _)) _))) = v≢v refl
 
 -- The inner binding at its own type conforms.
 inner : Conforms [] (get nat "v" (get bit "v" (put bit (var "v") done))) (recv nat (recv bit (send bit end)))
-inner = get-ok (get-ok (put-ok (var-ok here) done-end))
+inner = get-ok refl (get-ok refl (put-ok refl (var-ok here) done-end))
 
 inner-decides : decide [] (get nat "v" (get bit "v" (put bit (var "v") done))) (recv nat (recv bit (send bit end))) ≡ yes inner
 inner-decides = refl
@@ -410,7 +630,7 @@ shadowed-decides : decide [] shadowed (recv nat (recv bit (send nat end))) ≡ n
 shadowed-decides = refl
 
 left-open : Conforms [] (put nat (lit zero) stop) (send nat (send nat end))
-left-open = put-ok lit-ok abandon
+left-open = put-ok refl lit-ok abandon
 
 left-open-decides : decide [] (put nat (lit zero) stop) (send nat (send nat end)) ≡ yes left-open
 left-open-decides = refl
@@ -423,6 +643,54 @@ chosen-decides = refl
 
 both-decides : decide [] (cover done (put box (lit v-here) done)) (branch end (send box end)) ≡ yes both
 both-decides = refl
+
+------------------------------------------------------------------------
+-- A received nat is the length of the vector sent next. The length
+-- is that name. A bit is not a length. The continuation's action
+-- does not depend on the value.
+------------------------------------------------------------------------
+
+sized : Proto
+sized = drecv "n" nat (send (vec nat (nvar "n")) end)
+
+sized-wf : ProtoOk [] sized
+sized-wf = drecv-ok nat-ok (send-ok (vec-ok nat-ok (nvar-ok here)) end-ok)
+
+len-two : NExp
+len-two = natExp (lit two)
+
+sized-server : Proc
+sized-server = get nat "n" (put (vec nat (nvar "n")) (lit (rep zero)) done)
+
+sized-client : Proc
+sized-client = put nat (lit two) (get (vec nat len-two) "_" done)
+
+sized-server-ok : Conforms [] sized-server sized
+sized-server-ok = dget-ok refl (put-ok refl lit-ok done-end)
+
+sized-client-ok : Conforms [] sized-client (dsend "n" nat (recv (vec nat (nvar "n")) end))
+sized-client-ok = dput-ok refl lit-ok (get-ok refl done-end)
+
+sized-server-decides : decide [] sized-server sized ≡ yes sized-server-ok
+sized-server-decides = refl
+
+sized-client-decides : decide [] sized-client (dsend "n" nat (recv (vec nat (nvar "n")) end)) ≡ yes sized-client-ok
+sized-client-decides = refl
+
+len-three : NExp
+len-three = nlit (nsuc (nsuc (nsuc nzero)))
+
+sized-bad : Proc
+sized-bad = put nat (lit two) (get (vec nat len-three) "_" done)
+
+sized-mismatch : ¬ Conforms [] sized-bad (dsend "n" nat (recv (vec nat (nvar "n")) end))
+sized-mismatch (dput-ok refl _ (get-ok () _))
+
+bit-len : Proto
+bit-len = drecv "b" bit (send (vec nat (nvar "b")) end)
+
+not-bit-len : ¬ ProtoOk [] bit-len
+not-bit-len (drecv-ok _ (send-ok (vec-ok _ (nvar-ok (there _ ()))) _))
 
 ------------------------------------------------------------------------
 -- The actions a process takes. `say` carries the value expression.

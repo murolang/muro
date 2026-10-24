@@ -52,4 +52,14 @@ conform far : box := put (b1, {x = 1, y = 2}) done
 
 meet far-wrap : far with there
 
+session sized := recv (n : Nat) (send (Vec Nat n) end)
+
+session sized-back := dual sized
+
+conform sized-server : sized := get (n : Nat) (put (rep n 0) done)
+
+conform sized-client : sized-back := put 2 (get (Vec Nat 2) done)
+
+meet sized-wire : sized-server with sized-client
+
 def kept : run Nat := 0

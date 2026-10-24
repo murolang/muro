@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.16.58
+
+A session continuation may mention a nat that was received, as the length of a vector. `recv (n : Nat) (send (Vec Nat n) end)` receives a nat and then sends a vector of that length. The other end sends the nat and then receives that vector. The meeting checks the length. The next action does not depend on the value. The OTP image carries the vector.
+
+### Manual
+
+- Sessions: a continuation may depend on a received nat as a vector length.
+- Limits: that dependence is allowed. A length that is not that nat, and a next action chosen by the value, are refused.
+- Grammar, Terms, Extending, and For agents: `Vec`, `rep`, and a binder on `send` and `recv`.
+
+### Emit
+
+- OTP carries a vector whose length is the nat that was received.
+
+### Package
+
+- Version 0.16.58.
+
 ## 0.16.57
 
 A meeting sends a bound name at the type it was received. `get (k : Nat) (put k done)` meets a process that receives a nat. A process that receives a bit has no meeting with that name. A name bound twice is sent at the inner binding. The same name can be sent again, at that type.

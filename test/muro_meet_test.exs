@@ -108,6 +108,69 @@ defmodule Muro.MeetTest do
     assert msg == "put p done does not meet get {y : Nat, x : Nat} done"
   end
 
+  test "a received nat is the length of the vector that meets it" do
+    vec = fn e -> {:vec, :nat, e} end
+    server = {:get, :nat, :n, {:put, vec.({:var, :n}), {:rep, {:var, :n}, {:nat, 0}}, :done}}
+    client = {:put, :nat, {:nat, 2}, {:get, vec.({:lit, 2}), :_, :done}}
+    assert Meet.meets(server, client) == :ok
+    assert Meet.meets(client, server) == :ok
+
+    short = {:put, :nat, {:nat, 2}, {:get, vec.({:lit, 3}), :_, :done}}
+    assert {:error, msg} = Meet.meets(server, short)
+    assert msg == "put rep n 0 done does not meet get (Vec Nat 3) done"
+    assert {:error, msg} = Meet.meets(short, server)
+    assert msg == "get (Vec Nat 3) done does not meet put rep n 0 done"
+
+    assert check("""
+           session sized := recv (n : Nat) (send (Vec Nat n) end)
+           session back := dual sized
+           conform server : sized := get (n : Nat) (put (rep n 0) done)
+           conform client : back := put 2 (get (Vec Nat 2) done)
+           meet wire : server with client
+           """) == :ok
+
+    assert {:error, msg} =
+             check("""
+             session sized := recv (n : Nat) (send (Vec Nat n) end)
+             session back := dual sized
+             conform server : sized := get (n : Nat) (put (rep n 0) done)
+             conform bad : back := put 2 (get (Vec Nat 3) done)
+             meet wire : server with bad
+             """)
+
+    assert msg =~ "does not conform"
+    assert msg =~ "put rep n 0 done does not meet get (Vec Nat 3) done"
+  end
+
+  test "a claimed length does not meet the length of the received nat" do
+    # The sender sends 3 and then a vector of length 2.
+    # The receiver expects a vector whose length is that nat.
+    vec2 = {:rep, {:nat, 2}, {:nat, 0}}
+
+    assert {:no, {:put, {:vec, :nat, {:lit, 2}}, ^vec2, :done},
+            {:get, {:vec, :nat, {:var, :n}}, :_, :done}} =
+             Meet.go(
+               {:put, :nat, {:nat, 3}, {:put, {:vec, :nat, {:lit, 2}}, vec2, :done}},
+               {:get, :nat, :n, {:get, {:vec, :nat, {:var, :n}}, :_, :done}}
+             )
+  end
+
+  test "a variable does not meet a length the other side has not received" do
+    # `v` is bound at `Vec Nat n` before this side receives `n`.
+    # The send is `:unknown`. Receiving `n` instantiates that length to 2.
+    # The other side still expects the name. Meet refuses.
+    vec = {:vec, :nat, {:var, :n}}
+
+    sender =
+      {:get, vec, :v, {:get, :nat, :n, {:put, :unknown, {:var, :v}, :done}}}
+
+    receiver =
+      {:put, vec, {:rep, {:var, :n}, {:nat, 0}}, {:put, :nat, {:nat, 2}, {:get, vec, :_, :done}}}
+
+    assert {:error, _} = Meet.meets(sender, receiver)
+    assert {:error, _} = Meet.meets(receiver, sender)
+  end
+
   test "a meeting reports a bound name sent at another type" do
     assert {:error, msg} =
              check("""

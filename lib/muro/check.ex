@@ -1856,8 +1856,14 @@ defmodule Muro.Check do
   # of duals has no protocol.
   def check_def(book, %{kind: :session, name: name} = d, _fuel) do
     case resolve_session(book, name, MapSet.new()) do
-      {:ok, _} ->
-        :ok
+      {:ok, session} ->
+        case Muro.Session.proto_ok(session.proto) do
+          :ok ->
+            :ok
+
+          {:error, msg} ->
+            {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+        end
 
       {:error, msg} ->
         {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
@@ -2096,6 +2102,10 @@ defmodule Muro.Check do
         err -> {:halt, err}
       end
     end)
+  end
+
+  defp check_val_vars({:rep, ix, elem}, ctx) do
+    with :ok <- check_val_vars(ix, ctx), do: check_val_vars(elem, ctx)
   end
 
   defp check_val_vars(_, _ctx), do: :ok

@@ -10,7 +10,21 @@ defmodule Muro.EmitOtpTest do
             {"LocatedOtp",
              [:Pong, :PongAway, :PongPoly, :PongPolyAway, :PongDone, :LeftOpen, ""]},
             {"BothOtp", [:Pong, :PongHome, ""]},
-            {"MeetOtp", [:Pong, :Peer, :Taker, :Giver, :Left, :Right, :Here, :There, :Far, ""]}
+            {"MeetOtp",
+             [
+               :Pong,
+               :Peer,
+               :Taker,
+               :Giver,
+               :Left,
+               :Right,
+               :Here,
+               :There,
+               :Far,
+               :SizedServer,
+               :SizedClient,
+               ""
+             ]}
           ] do
         for name <- names do
           mod = if name == "", do: Module.concat([parent]), else: Module.concat(parent, name)
@@ -150,6 +164,10 @@ defmodule Muro.EmitOtpTest do
     send(pid, {:muro, self(), 0})
     assert_receive {:muro, ^pid, 1}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, server, client, server_ref, client_ref} = meet(:sized_wire)
+    assert_receive {:DOWN, ^server_ref, :process, ^server, :normal}
+    assert_receive {:DOWN, ^client_ref, :process, ^client, :normal}
   end
 
   test "a meeting of a reading uses that process" do

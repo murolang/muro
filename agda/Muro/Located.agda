@@ -116,10 +116,10 @@ early : Proc
 early = get bit "x" done
 
 early-any : ∀ {s q} → ¬ Sits early (endpoint aff ping s) q
-early-any (held () _)
+early-any (held (get-ok () _) _)
 
 early-lin-any : ∀ {s q} → ¬ Sits early (endpoint lin ping s) q
-early-lin-any (finished (linear () _) _)
+early-lin-any (finished (linear (get-ok () _) _) _)
 
 abandon-any : ∀ {s q} →
   ¬ Sits (put nat (lit zero) stop) (endpoint lin (send nat (send nat end)) s) q

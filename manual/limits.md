@@ -31,7 +31,8 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - A fourth term representation
 - Raw HOAS (`Tm → Tm`) as inductive syntax
 - Tags other than `run`, `run internal`, `spec`, `evidence`
-- A session payload other than a nat, a bit, unit, a pair, or a record whose keys are names written in the type
+- A session payload other than a nat, a bit, unit, a pair, a record whose keys are names written in the type, or a vector whose length is a numeral or a nat received earlier. A later payload may mention that nat as the length of a vector
+- A vector length other than a numeral or that nat (a successor, a bit, a pair, a record, a vector, or a name not bound at a nat), and a next action chosen by a received value
 - An OTP session process talking to more than one peer
 - Two calls for one `cross`
 - A call for a `stay`
