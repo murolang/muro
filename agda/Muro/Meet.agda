@@ -4,7 +4,9 @@
 -- the same term. A choice meets the arm that was offered. Both ends
 -- close, or both abandon. A type they do not share has no derivation.
 -- A received nat instantiates vector lengths that name it. A vector
--- of another length has no derivation.
+-- of another length has no derivation. An evidence payload meets as
+-- a nat: the evidence is in each conformance, not in the meeting, so
+-- a channel needs both conformances as well.
 --
 -- The meeting is evidence. One end conforms to the protocol. The
 -- other conforms to the other end of that protocol. A run term has
@@ -25,7 +27,7 @@ open import Relation.Nullary.Decidable.Core using (Dec) renaming (yes to yes′;
 
 open import Muro.Base using (Mode; evid; run)
 open import Muro.Session hiding (¬_; Seat; no-run; ping; pong; Answer; Answerρ; yes; no; decide; decideρ)
-open import Muro.Dual using (dual)
+open import Muro.Dual using (dual; grant; grant-ok)
 
 ¬_ : Set → Set
 ¬ A = A → ⊥
@@ -286,6 +288,27 @@ sized-decides = refl
 
 sized-miss : ¬ Meets sized-server sized-bad
 sized-miss (get-put refl (put-get () _))
+
+------------------------------------------------------------------------
+-- The window is granted and the data is sent within it. The meeting
+-- compares the nats. The evidence is the server's conformance, so a
+-- server that guesses meets the grant but has no channel.
+------------------------------------------------------------------------
+
+window-meet : Meets full grant
+window-meet = get-put refl (put-get refl done-done)
+
+window-decides : decide full grant ≡ yes window-meet
+window-decides = refl
+
+window-channel : Channel full grant window
+window-channel = channel window-meet full-ok grant-ok
+
+guess-meets : Meets guess grant
+guess-meets = get-put refl (put-get refl done-done)
+
+guess-no-channel : ¬ Channel guess grant window
+guess-no-channel (channel _ c _) = guess-refused c
 
 not-send : ¬ Meets (put nat (lit zero) done) (put nat (lit zero) done)
 not-send ()
