@@ -4,8 +4,9 @@
 -- payload type stays the payload type, and the continuation
 -- dualises. A dependent receive is a dependent send of the same
 -- type. An evidence payload keeps its bound: the sender owes the
--- evidence and the receiver gets the nat. The other end of the other
--- end is the same protocol.
+-- evidence and the receiver gets the nat. An indexed bit keeps its
+-- index: each arm dualises, and `b0` stays `b0`. The other end of
+-- the other end is the same protocol.
 --
 -- The other end is spec. A run term has no seat. The mark stays
 -- the session's mark. None of these constructors is added to Tm
@@ -39,6 +40,8 @@ dual (dsend x A S) = drecv x A (dual S)
 dual (drecv x A S) = dsend x A (dual S)
 dual (esend x e S) = erecv x e (dual S)
 dual (erecv x e S) = esend x e (dual S)
+dual (isend x S T) = irecv x (dual S) (dual T)
+dual (irecv x S T) = isend x (dual S) (dual T)
 dual (choose S T) = branch (dual S) (dual T)
 dual (branch S T) = choose (dual S) (dual T)
 
@@ -50,6 +53,8 @@ dual-invol (dsend x A S) = cong (dsend x A) (dual-invol S)
 dual-invol (drecv x A S) = cong (drecv x A) (dual-invol S)
 dual-invol (esend x e S) = cong (esend x e) (dual-invol S)
 dual-invol (erecv x e S) = cong (erecv x e) (dual-invol S)
+dual-invol (isend x S T) = cong₂ (isend x) (dual-invol S) (dual-invol T)
+dual-invol (irecv x S T) = cong₂ (irecv x) (dual-invol S) (dual-invol T)
 dual-invol (choose S T) = cong₂ choose (dual-invol S) (dual-invol T)
 dual-invol (branch S T) = cong₂ branch (dual-invol S) (dual-invol T)
 
@@ -131,3 +136,20 @@ offered = cover-ok done-end (get-ok refl done-end)
 
 not-pick : ¬ Conforms [] (pick0 done) (dual choice)
 not-pick ()
+
+------------------------------------------------------------------------
+-- The other end of an indexed bit dualises each arm and keeps the
+-- index. An arm that was not dualised is not that end.
+------------------------------------------------------------------------
+
+route-other : dual route ≡ isend "b" (recv nat end) (send nat end)
+route-other = refl
+
+route-round : dual (dual route) ≡ route
+route-round = refl
+
+crossed : Proto
+crossed = isend "b" (send nat end) (recv nat end)
+
+route-not-crossed : ¬ (dual route ≡ crossed)
+route-not-crossed ()

@@ -207,6 +207,66 @@ defmodule Muro.MeetTest do
     assert {:error, _} = Meet.meets(receiver, sender)
   end
 
+  test "a bit index meets the arm of that bit" do
+    server =
+      {:iget, :b, {:put, :nat, {:nat, 1}, :done}, {:get, :nat, :n, :done}}
+
+    zero = {:put, :bit, :b0, {:get, :nat, :m, :done}}
+    one = {:put, :bit, :b1, {:put, :nat, {:nat, 0}, :done}}
+    assert Meet.meets(server, zero) == :ok
+    assert Meet.meets(zero, server) == :ok
+    assert Meet.meets(server, one) == :ok
+    assert Meet.meets(one, server) == :ok
+
+    # b0's arm sends a nat. A client that also sends on that arm has no meeting.
+    miss = {:put, :bit, :b0, {:put, :nat, {:nat, 1}, :done}}
+    assert {:error, msg} = Meet.meets(server, miss)
+    assert msg == "put 1 done does not meet put 1 done"
+
+    assert {:error, _} = Meet.meets(server, {:put, :unknown, {:var, :b}, :done})
+    assert {:error, _} = Meet.meets(server, {:put, :nat, {:nat, 0}, :done})
+    assert {:error, _} = Meet.meets(server, {:iget, :c, :done, :done})
+
+    echo =
+      {:iget, :b, {:put, :unknown, {:var, :b}, :done}, {:put, :unknown, {:var, :b}, :done}}
+
+    ask = {:put, :bit, :b1, {:get, :bit, :c, :done}}
+    assert Meet.meets(echo, ask) == :ok
+    assert Meet.meets(ask, echo) == :ok
+
+    assert {:error, msg} = Meet.meets(echo, {:put, :bit, :b1, {:get, :nat, :c, :done}})
+    assert msg == "put b done does not meet get (c : Nat) done"
+
+    assert check("""
+           session route := recv (b : Bit) on (send Nat end) (recv Nat end)
+           session back := dual route
+           conform server : route := get (b : Bit) on (put 1 done) (get (n : Nat) done)
+           conform client : back := put b0 (get (m : Nat) done)
+           conform client-one : back := put b1 (put 0 done)
+           meet wire : server with client
+           meet wire-one : server with client-one
+           session echo-bit := recv (b : Bit) on (send Bit end) (send Bit end)
+           session echo-back := dual echo-bit
+           conform echo : echo-bit := get (b : Bit) on (put b done) (put b done)
+           conform ask : echo-back := put b1 (get (c : Bit) done)
+           meet echo-wire : echo with ask
+           """) == :ok
+  end
+
+  test "arms that are not dualised pointwise are not the other end" do
+    assert {:error, msg} =
+             check("""
+             session route := recv (b : Bit) on (send Nat end) (recv Nat end)
+             session crossed := send (b : Bit) on (send Nat end) (recv Nat end)
+             conform server : route := get (b : Bit) on (put 1 done) (get (n : Nat) done)
+             conform client : crossed := put b0 (put 1 done)
+             meet wire : server with client
+             """)
+
+    assert msg =~ "expected the other end"
+    refute msg =~ "does not meet"
+  end
+
   test "a meeting reports a bound name sent at another type" do
     assert {:error, msg} =
              check("""

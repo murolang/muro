@@ -19,6 +19,10 @@ defmodule Muro.Emit.Otp do
   of the conformance derivation, not part of the process, so `skel` has
   no evidence to carry and the message is the nat alone.
 
+  A bit index is that bit on the channel. The receiver's skeleton holds
+  both arms. `b0` takes the first and `b1` takes the second. The message
+  is `{:muro, from, bit}`. It is not a choice label.
+
   The BEAM runs this server. The proof stops at the conformance
   derivation. `run` is not emitted here.
   """
@@ -261,6 +265,10 @@ defmodule Muro.Emit.Otp do
       defp drive({:hear, ty, name, next}, st), do: park({:hear, ty, name, next}, st)
       defp drive({:offer, left, right}, st), do: park({:offer, left, right}, st)
 
+      defp drive({:index, name, left, right}, st) do
+        park({:index, name, left, right}, st)
+      end
+
       defp park(wait, %{queue: []} = st), do: {:noreply, %{st | wait: wait}}
 
       defp park(wait, %{queue: [msg | rest], bindings: bindings} = st) do
@@ -290,6 +298,8 @@ defmodule Muro.Emit.Otp do
 
       defp step({:offer, left, _}, {:muro_pick, _, :b0}), do: {:go, left}
       defp step({:offer, _, right}, {:muro_pick, _, :b1}), do: {:go, right}
+      defp step({:index, name, left, _}, {:muro, _, :b0}), do: {:bind, name, :b0, left}
+      defp step({:index, name, _, right}, {:muro, _, :b1}), do: {:bind, name, :b1, right}
       defp step(_wait, {:muro, _, value}), do: {:unexpected, value}
       defp step(_wait, {:muro_pick, _, bit}), do: {:unexpected, bit}
 

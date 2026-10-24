@@ -767,15 +767,20 @@ defmodule Muro.Parser do
         {:ok, name, ty, rest} ->
           rest = skip(rest)
 
-          if has_prefix?(rest, "{") do
-            with {:ok, e, rest} <- parse_bound(rest, name, ty),
-                 {:ok, p, rest} <- parse_proto(skip(rest)) do
-              {:ok, {ev_tag(tag), name, e, p}, rest}
-            end
-          else
-            with {:ok, p, rest} <- parse_proto(rest) do
-              {:ok, {dep_tag(tag), name, ty, p}, rest}
-            end
+          cond do
+            has_prefix?(rest, "{") ->
+              with {:ok, e, rest} <- parse_bound(rest, name, ty),
+                   {:ok, p, rest} <- parse_proto(skip(rest)) do
+                {:ok, {ev_tag(tag), name, e, p}, rest}
+              end
+
+            word_kw?(rest, "on") ->
+              parse_index_proto(rest, tag, name, ty)
+
+            true ->
+              with {:ok, p, rest} <- parse_proto(rest) do
+                {:ok, {dep_tag(tag), name, ty, p}, rest}
+              end
           end
 
         :not_binder ->
@@ -795,6 +800,36 @@ defmodule Muro.Parser do
 
   defp ev_tag(:send), do: :esend
   defp ev_tag(:recv), do: :erecv
+
+  # `recv (b : Bit) on S T` receives a bit. `b0` continues as `S` and
+  # `b1` continues as `T`. A nat does not choose the arm.
+  defp parse_index_proto(s, tag, name, :bit) do
+    with {:ok, rest} <- kw(s, "on"),
+         {:ok, a, rest} <- parse_proto(skip(rest)),
+         {:ok, b, rest} <- parse_proto(skip(rest)) do
+      {:ok, {ix_tag(tag), name, a, b}, rest}
+    end
+  end
+
+  defp parse_index_proto(s, _tag, _name, _ty) do
+    {:error, err(s, "a next action is chosen by a bit")}
+  end
+
+  defp ix_tag(:send), do: :isend
+  defp ix_tag(:recv), do: :irecv
+
+  # `get (b : Bit) on P Q` offers both arms. The name is bound in each.
+  defp parse_index_proc(s, name, :bit) do
+    with {:ok, rest} <- kw(s, "on"),
+         {:ok, p, rest} <- parse_proc(skip(rest)),
+         {:ok, q, rest} <- parse_proc(skip(rest)) do
+      {:ok, {:iget, name, p, q}, rest}
+    end
+  end
+
+  defp parse_index_proc(s, _name, _ty) do
+    {:error, err(s, "a next action is chosen by a bit")}
+  end
 
   # `{d ≤ w}` or `{d <= w}`. The left side is the name just bound. The
   # bound is a numeral or a name. The payload is a nat.
@@ -919,12 +954,19 @@ defmodule Muro.Parser do
                 after_name = skip(after_name)
 
                 if has_prefix?(after_name, ":") do
-                  # This is get (name : Type) proc
+                  # This is get (name : Type) proc, or get (b : Bit) on P Q.
                   with {:ok, rest} <- tok(after_name, ":"),
                        {:ok, ty, rest} <- parse_pay(skip(rest)),
-                       {:ok, rest} <- tok(skip(rest), ")"),
-                       {:ok, p, rest} <- parse_proc(skip(rest)) do
-                    {:ok, {:get, ty, String.to_atom(name), p}, rest}
+                       {:ok, rest} <- tok(skip(rest), ")") do
+                    rest = skip(rest)
+
+                    if word_kw?(rest, "on") do
+                      parse_index_proc(rest, String.to_atom(name), ty)
+                    else
+                      with {:ok, p, rest} <- parse_proc(rest) do
+                        {:ok, {:get, ty, String.to_atom(name), p}, rest}
+                      end
+                    end
                   end
                 else
                   # Not a binder, fall back to old syntax: get Type proc
@@ -948,10 +990,17 @@ defmodule Muro.Parser do
 
   defp parse_get_no_binding(s) do
     with {:ok, rest} <- kw(s, "get"),
-         {:ok, ty, rest} <- parse_pay(skip(rest)),
-         {:ok, p, rest} <- parse_proc(skip(rest)) do
-      # Use a generated anonymous variable name
-      {:ok, {:get, ty, :_, p}, rest}
+         {:ok, ty, rest} <- parse_pay(skip(rest)) do
+      rest = skip(rest)
+
+      if word_kw?(rest, "on") do
+        {:error, err(rest, "a bit index is bound")}
+      else
+        with {:ok, p, rest} <- parse_proc(rest) do
+          # Use a generated anonymous variable name
+          {:ok, {:get, ty, :_, p}, rest}
+        end
+      end
     end
   end
 

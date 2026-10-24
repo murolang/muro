@@ -12,11 +12,15 @@ defmodule Muro.Session do
   continuation's payload may mention as a vector length. An evidence
   payload sends a nat at most a bound, a numeral or a nat bound
   earlier. The sender owes that evidence, and the checker decides it as
-  `decide` does. The process puts the nat alone. `choose` and
-  `branch` select an arm. `stop` conforms
-  to every protocol. `finishes/1` is `:yes` when every leaf is `done`.
-  `skel/1` carries the value on `say` and the type on `hear`. `dual/1`
-  swaps direction and keeps the payload type.
+  `decide` does. The process puts the nat alone. `isend` and `irecv`
+  send or receive a bit whose two arms are the index. `b0` takes the
+  first arm and `b1` takes the second. The sender writes the literal.
+  A variable bit does not select an arm. `iget` offers both arms and
+  binds the bit. `choose` and `branch` select an arm by a label.
+  `stop` conforms to every protocol. `finishes/1` is `:yes` when every
+  leaf is `done`. `skel/1` carries the value on `say` and the type on
+  `hear`, and both arms of an indexed receive. `dual/1` swaps direction
+  and keeps the payload type and the index.
   """
 
   @doc """
@@ -32,6 +36,8 @@ defmodule Muro.Session do
   def dual({:drecv, x, a, s}), do: {:dsend, x, a, dual(s)}
   def dual({:esend, x, e, s}), do: {:erecv, x, e, dual(s)}
   def dual({:erecv, x, e, s}), do: {:esend, x, e, dual(s)}
+  def dual({:isend, x, s, t}), do: {:irecv, x, dual(s), dual(t)}
+  def dual({:irecv, x, s, t}), do: {:isend, x, dual(s), dual(t)}
   def dual({:choose, s, t}), do: {:branch, dual(s), dual(t)}
   def dual({:branch, s, t}), do: {:choose, dual(s), dual(t)}
 
@@ -49,6 +55,7 @@ defmodule Muro.Session do
   defp skel_go({:pick0, p}), do: {:choose, :b0, skel_go(p)}
   defp skel_go({:pick1, p}), do: {:choose, :b1, skel_go(p)}
   defp skel_go({:cover, p, q}), do: {:offer, skel_go(p), skel_go(q)}
+  defp skel_go({:iget, name, p, q}), do: {:index, name, skel_go(p), skel_go(q)}
 
   @doc """
   The value as the OTP message carries it. A nat is an integer. A
@@ -108,6 +115,13 @@ defmodule Muro.Session do
   defp finishes_go({:pick1, p}), do: finishes_go(p)
 
   defp finishes_go({:cover, p, q}) do
+    case finishes_go(p) do
+      :yes -> finishes_go(q)
+      :no -> :no
+    end
+  end
+
+  defp finishes_go({:iget, _, p, q}) do
     case finishes_go(p) do
       :yes -> finishes_go(q)
       :no -> :no
@@ -186,6 +200,32 @@ defmodule Muro.Session do
   # `eget-ok`. The receiver binds a nat and owes nothing.
   defp go({:get, :nat, name, p}, {:erecv, _y, _e, s}, ctx, idx) do
     keep(go(p, s, bind_ctx(ctx, name, :nat), idx))
+  end
+
+  # `iput0-ok` and `iput1-ok`. The literal selects the arm. A variable
+  # bit does not. The name is shadowed so it does not instantiate a length.
+  defp go({:put, ty, val, p} = proc, {:isend, y, s, t} = proto, ctx, idx) do
+    cond do
+      val == :b0 and put_ok?(ty, val, :bit, ctx) ->
+        keep(go(p, s, ctx, Map.delete(idx, y)))
+
+      val == :b1 and put_ok?(ty, val, :bit, ctx) ->
+        keep(go(p, t, ctx, Map.delete(idx, y)))
+
+      true ->
+        {:no, proc, proto}
+    end
+  end
+
+  # `iget-ok`. Both arms are checked with the bit bound. It is not a length.
+  defp go({:iget, name, p, q}, {:irecv, y, s, t}, ctx, idx) do
+    ctx1 = bind_ctx(ctx, name, :bit)
+    idx1 = Map.delete(idx, y)
+
+    case go(p, s, ctx1, idx1) do
+      :ok -> keep(go(q, t, ctx1, idx1))
+      no -> no
+    end
   end
 
   defp go({:pick0, p}, {:choose, s, _}, ctx, idx), do: keep(go(p, s, ctx, idx))
@@ -280,6 +320,17 @@ defmodule Muro.Session do
   # The name of an evidence payload is in scope in its bound only.
   defp proto_ok({:esend, _name, e, s}, ctx), do: with_ty(bound_ok(e, ctx), proto_ok(s, ctx))
   defp proto_ok({:erecv, _name, e, s}, ctx), do: with_ty(bound_ok(e, ctx), proto_ok(s, ctx))
+
+  defp proto_ok({:isend, name, s, t}, ctx) do
+    ctx1 = Map.put(ctx, name, :bit)
+    with_ty(proto_ok(s, ctx1), proto_ok(t, ctx1))
+  end
+
+  defp proto_ok({:irecv, name, s, t}, ctx) do
+    ctx1 = Map.put(ctx, name, :bit)
+    with_ty(proto_ok(s, ctx1), proto_ok(t, ctx1))
+  end
+
   defp proto_ok({:choose, s, t}, ctx), do: with_ty(proto_ok(s, ctx), proto_ok(t, ctx))
   defp proto_ok({:branch, s, t}, ctx), do: with_ty(proto_ok(s, ctx), proto_ok(t, ctx))
   defp proto_ok(_, _ctx), do: {:error, "ill-formed protocol"}
@@ -365,6 +416,10 @@ defmodule Muro.Session do
   def show_proc({:pick1, p}), do: "pick1 #{paren_proc(p)}"
   def show_proc({:cover, p, q}), do: "cover #{paren_proc(p)} #{paren_proc(q)}"
 
+  def show_proc({:iget, name, p, q}) do
+    "get (#{name} : Bit) on #{paren_proc(p)} #{paren_proc(q)}"
+  end
+
   defp show_val({:var, name}), do: "#{name}"
   defp show_val({:nat, n}), do: "#{n}"
   defp show_val(:b0), do: "b0"
@@ -400,6 +455,14 @@ defmodule Muro.Session do
 
   def show_proto({:erecv, name, e, s}) do
     "recv (#{name} : Nat) {#{name} ≤ #{show_ix(e)}} #{paren_proto(s)}"
+  end
+
+  def show_proto({:isend, name, s, t}) do
+    "send (#{name} : Bit) on #{paren_proto(s)} #{paren_proto(t)}"
+  end
+
+  def show_proto({:irecv, name, s, t}) do
+    "recv (#{name} : Bit) on #{paren_proto(s)} #{paren_proto(t)}"
   end
 
   def show_proto({:choose, s, t}), do: "choose #{paren_proto(s)} #{paren_proto(t)}"

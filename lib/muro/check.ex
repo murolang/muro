@@ -2078,6 +2078,11 @@ defmodule Muro.Check do
     with :ok <- check_proc_vars(p, ctx), do: check_proc_vars(q, ctx)
   end
 
+  defp check_proc_vars({:iget, name, p, q}, ctx) do
+    ctx1 = if name == :_, do: ctx, else: MapSet.put(ctx, name)
+    with :ok <- check_proc_vars(p, ctx1), do: check_proc_vars(q, ctx1)
+  end
+
   # Check that all variables in a value are bound
   defp check_val_vars({:var, name}, ctx) do
     if MapSet.member?(ctx, name) do

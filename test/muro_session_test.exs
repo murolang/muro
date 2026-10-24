@@ -456,6 +456,141 @@ defmodule Muro.SessionTest do
     assert msg =~ "get Bit done does not conform to recv (d : Nat) {d ≤ w} end"
   end
 
+  test "a received bit selects one of two arms" do
+    src = """
+    session route := recv (b : Bit) on (send Nat end) (recv Nat end)
+    session route-back := dual route
+    conform server : route := get (b : Bit) on (put 1 done) (get (n : Nat) done)
+    conform client : route-back := put b0 (get (m : Nat) done)
+    conform client-one : route-back := put b1 (put 0 done)
+    session echo-bit := recv (b : Bit) on (send Bit end) (send Bit end)
+    conform echo : echo-bit := get (b : Bit) on (put b done) (put b done)
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    route = Enum.find(book, &(&1.name == "route"))
+
+    assert route.proto ==
+             {:irecv, :b, {:send, :nat, :end}, {:recv, :nat, :end}}
+
+    assert Session.dual(route.proto) ==
+             {:isend, :b, {:recv, :nat, :end}, {:send, :nat, :end}}
+
+    assert Session.dual(Session.dual(route.proto)) == route.proto
+    assert Session.proto_ok(route.proto) == :ok
+
+    assert Session.show_proto(route.proto) ==
+             "recv (b : Bit) on (send Nat end) (recv Nat end)"
+
+    assert Session.show_proto(Session.dual(route.proto)) ==
+             "send (b : Bit) on (recv Nat end) (send Nat end)"
+
+    server = Enum.find(book, &(&1.name == "server"))
+
+    assert Session.show_proc(server.proc) ==
+             "get (b : Bit) on (put 1 done) (get (n : Nat) done)"
+
+    assert Session.skel(server.proc) ==
+             {:index, :b, {:say, 1, :finish}, {:hear, :nat, :n, :finish}}
+
+    assert Session.finishes(server.proc) == :yes
+    assert Check.check_sig(book) == :ok
+
+    # A length received outside the index stays a length. The bit shadows its own name.
+    assert check("""
+           session sized := recv (n : Nat) (recv (b : Bit) on (send (Vec Nat n) end) (recv (Vec Nat n) end))
+           session back := dual sized
+           conform server : sized := get (n : Nat) (get (b : Bit) on (put (rep n 0) done) (get (Vec Nat n) done))
+           conform client : back := put 2 (put b0 (get (Vec Nat 2) done))
+           """) == :ok
+  end
+
+  test "a bit index is not a vector length, and a nat does not choose an arm" do
+    assert {:error, msg} =
+             check("session bits := recv (b : Bit) on (send (Vec Nat b) end) end\n")
+
+    assert msg =~ "vector length is not a nat"
+
+    assert {:error, msg} = Parser.parse("session n := recv (n : Nat) on end end\n")
+    assert msg =~ "a next action is chosen by a bit"
+
+    assert {:error, msg} = Parser.parse("conform n : s := get (n : Nat) on done done\n")
+    assert msg =~ "a next action is chosen by a bit"
+
+    assert {:error, msg} = Parser.parse("conform n : s := get Bit on done done\n")
+    assert msg =~ "a bit index is bound"
+  end
+
+  test "a variable bit does not select an arm, and one arm is not an index" do
+    assert {:error, msg} =
+             check("""
+             session fwd := recv (b : Bit) (send (c : Bit) on end (send Nat end))
+             conform bad : fwd := get (b : Bit) (put b done)
+             """)
+
+    assert msg =~ "put b done does not conform to send (c : Bit) on end (send Nat end)"
+
+    assert check("""
+           session fwd := recv (b : Bit) (send (c : Bit) on end (send Nat end))
+           conform lit : fwd := get (b : Bit) (put b0 done)
+           """) == :ok
+
+    assert {:error, msg} =
+             check("""
+             session route := recv (b : Bit) on (send Nat end) (recv Nat end)
+             conform one : route := get (b : Bit) (put 1 done)
+             """)
+
+    assert msg =~
+             "get (b : Bit) (put 1 done) does not conform to recv (b : Bit) on (send Nat end) (recv Nat end)"
+
+    assert {:error, msg} =
+             check("""
+             session route := recv (b : Bit) on (send Nat end) (recv Nat end)
+             session back := dual route
+             conform bad : back := put b0 (put 1 done)
+             """)
+
+    assert msg =~ "put 1 done does not conform to recv Nat end"
+  end
+
+  test "a linear index finishes on both arms" do
+    assert {:error, msg} =
+             check("""
+             session %1 route := recv (b : Bit) on end (send Nat end)
+             conform open : route := get (b : Bit) on done stop
+             """)
+
+    assert msg =~ "linear channel abandoned"
+
+    assert check("""
+           session %1 route := recv (b : Bit) on end (send Nat end)
+           conform shut : route := get (b : Bit) on done (put 1 done)
+           """) == :ok
+  end
+
+  test "on stays an identifier outside a session" do
+    assert check("""
+           def on : run Nat := 0
+           """) == :ok
+  end
+
+  test "indexed.muro checks, and emit keeps the runs" do
+    path = "examples/indexed.muro"
+    assert {:ok, book} = Parser.parse(File.read!(path))
+    assert Check.check_sig(book) == :ok
+    assert Muro.check_file(path) == :ok
+
+    assert {:ok, out} = Muro.emit_file(path, IndexedRun)
+    assert out =~ ~r/\bdef on\b/
+    assert out =~ ~r/\bdef kept\b/
+    refute out =~ "wire"
+    refute out =~ "GenServer"
+
+    assert {:ok, funs} = IR.elaborate_file(path)
+    assert Enum.map(funs, & &1.name) == ["on", "kept"]
+  end
+
   test "the evidence is not in the skeleton" do
     assert {:ok, book} =
              Parser.parse("""

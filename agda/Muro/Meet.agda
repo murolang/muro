@@ -6,7 +6,9 @@
 -- A received nat instantiates vector lengths that name it. A vector
 -- of another length has no derivation. An evidence payload meets as
 -- a nat: the evidence is in each conformance, not in the meeting, so
--- a channel needs both conformances as well.
+-- a channel needs both conformances as well. A bit index meets the
+-- arm of that same bit. `b0` meets the first arm. `b1` meets the
+-- second. A variable bit selects neither arm.
 --
 -- The meeting is evidence. One end conforms to the protocol. The
 -- other conforms to the other end of that protocol. A run term has
@@ -74,6 +76,20 @@ data Meetsρ (σ τ : Idx) : Proc → Proc → Set where
   cover-pick0 : ∀ {P Q R} → Meetsρ σ τ P R → Meetsρ σ τ (cover P Q) (pick0 R)
   cover-pick1 : ∀ {P Q R} → Meetsρ σ τ Q R → Meetsρ σ τ (cover P Q) (pick1 R)
 
+  -- The literal selects the arm. The bit does not instantiate a length.
+  iget-b0 : ∀ {x P Q R} →
+    Meetsρ (ext x (lit b0) σ) τ P R →
+    Meetsρ σ τ (iget x P Q) (put bit (lit b0) R)
+  iget-b1 : ∀ {x P Q R} →
+    Meetsρ (ext x (lit b1) σ) τ Q R →
+    Meetsρ σ τ (iget x P Q) (put bit (lit b1) R)
+  b0-iget : ∀ {x P Q R} →
+    Meetsρ σ (ext x (lit b0) τ) P Q →
+    Meetsρ σ τ (put bit (lit b0) P) (iget x Q R)
+  b1-iget : ∀ {x P Q R} →
+    Meetsρ σ (ext x (lit b1) τ) P R →
+    Meetsρ σ τ (put bit (lit b1) P) (iget x Q R)
+
 Meets : Proc → Proc → Set
 Meets P Q = Meetsρ none none P Q
 
@@ -86,6 +102,10 @@ meets-sym (pick0-cover m) = cover-pick0 (meets-sym m)
 meets-sym (pick1-cover m) = cover-pick1 (meets-sym m)
 meets-sym (cover-pick0 m) = pick0-cover (meets-sym m)
 meets-sym (cover-pick1 m) = pick1-cover (meets-sym m)
+meets-sym (iget-b0 m) = b0-iget (meets-sym m)
+meets-sym (iget-b1 m) = b1-iget (meets-sym m)
+meets-sym (b0-iget m) = iget-b0 (meets-sym m)
+meets-sym (b1-iget m) = iget-b1 (meets-sym m)
 
 ------------------------------------------------------------------------
 -- The wall. A meeting sits at evidence.
@@ -147,6 +167,30 @@ cover1-yes : ∀ {σ τ P Q R} → Answerρ σ τ Q R → Answerρ σ τ (cover 
 cover1-yes (yes m) = yes (cover-pick1 m)
 cover1-yes (no nm) = no (λ { (cover-pick1 m) → nm m })
 
+on-iget-b0 : ∀ {σ τ x P Q R} →
+  Answerρ (ext x (lit b0) σ) τ P R →
+  Answerρ σ τ (iget x P Q) (put bit (lit b0) R)
+on-iget-b0 (yes m) = yes (iget-b0 m)
+on-iget-b0 (no nm) = no (λ { (iget-b0 m) → nm m })
+
+on-iget-b1 : ∀ {σ τ x P Q R} →
+  Answerρ (ext x (lit b1) σ) τ Q R →
+  Answerρ σ τ (iget x P Q) (put bit (lit b1) R)
+on-iget-b1 (yes m) = yes (iget-b1 m)
+on-iget-b1 (no nm) = no (λ { (iget-b1 m) → nm m })
+
+on-b0-iget : ∀ {σ τ x P Q R} →
+  Answerρ σ (ext x (lit b0) τ) P Q →
+  Answerρ σ τ (put bit (lit b0) P) (iget x Q R)
+on-b0-iget (yes m) = yes (b0-iget m)
+on-b0-iget (no nm) = no (λ { (b0-iget m) → nm m })
+
+on-b1-iget : ∀ {σ τ x P Q R} →
+  Answerρ σ (ext x (lit b1) τ) P R →
+  Answerρ σ τ (put bit (lit b1) P) (iget x Q R)
+on-b1-iget (yes m) = yes (b1-iget m)
+on-b1-iget (no nm) = no (λ { (b1-iget m) → nm m })
+
 decideρ : (σ τ : Idx) (P Q : Proc) → Answerρ σ τ P Q
 decideρ _ _ done done = yes done-done
 decideρ _ _ done stop = no (λ ())
@@ -155,6 +199,7 @@ decideρ _ _ done (get _ _ _) = no (λ ())
 decideρ _ _ done (pick0 _) = no (λ ())
 decideρ _ _ done (pick1 _) = no (λ ())
 decideρ _ _ done (cover _ _) = no (λ ())
+decideρ _ _ done (iget _ _ _) = no (λ ())
 decideρ _ _ stop done = no (λ ())
 decideρ _ _ stop stop = yes stop-stop
 decideρ _ _ stop (put _ _ _) = no (λ ())
@@ -162,6 +207,7 @@ decideρ _ _ stop (get _ _ _) = no (λ ())
 decideρ _ _ stop (pick0 _) = no (λ ())
 decideρ _ _ stop (pick1 _) = no (λ ())
 decideρ _ _ stop (cover _ _) = no (λ ())
+decideρ _ _ stop (iget _ _ _) = no (λ ())
 decideρ σ τ (put A v P) (get B x Q) =
   on-put-get (ty≟ (applyTy σ A) (applyTy τ B)) (decideρ σ (ext x v τ) P Q)
 decideρ _ _ (put _ _ _) done = no (λ ())
@@ -170,6 +216,14 @@ decideρ _ _ (put _ _ _) (put _ _ _) = no (λ ())
 decideρ _ _ (put _ _ _) (pick0 _) = no (λ ())
 decideρ _ _ (put _ _ _) (pick1 _) = no (λ ())
 decideρ _ _ (put _ _ _) (cover _ _) = no (λ ())
+decideρ σ τ (put bit (lit b0) P) (iget x Q _) = on-b0-iget (decideρ σ (ext x (lit b0) τ) P Q)
+decideρ σ τ (put bit (lit b1) P) (iget x _ R) = on-b1-iget (decideρ σ (ext x (lit b1) τ) P R)
+decideρ _ _ (put bit (var _) _) (iget _ _ _) = no (λ ())
+decideρ _ _ (put nat _ _) (iget _ _ _) = no (λ ())
+decideρ _ _ (put unit _ _) (iget _ _ _) = no (λ ())
+decideρ _ _ (put (pair _ _) _ _) (iget _ _ _) = no (λ ())
+decideρ _ _ (put (rec _) _ _) (iget _ _ _) = no (λ ())
+decideρ _ _ (put (vec _ _) _ _) (iget _ _ _) = no (λ ())
 decideρ σ τ (get A x P) (put B v Q) =
   on-get-put (ty≟ (applyTy σ A) (applyTy τ B)) (decideρ (ext x v σ) τ P Q)
 decideρ _ _ (get _ _ _) done = no (λ ())
@@ -178,6 +232,7 @@ decideρ _ _ (get _ _ _) (get _ _ _) = no (λ ())
 decideρ _ _ (get _ _ _) (pick0 _) = no (λ ())
 decideρ _ _ (get _ _ _) (pick1 _) = no (λ ())
 decideρ _ _ (get _ _ _) (cover _ _) = no (λ ())
+decideρ _ _ (get _ _ _) (iget _ _ _) = no (λ ())
 decideρ σ τ (pick0 P) (cover Q _) = pick0-yes (decideρ σ τ P Q)
 decideρ _ _ (pick0 _) done = no (λ ())
 decideρ _ _ (pick0 _) stop = no (λ ())
@@ -185,6 +240,7 @@ decideρ _ _ (pick0 _) (put _ _ _) = no (λ ())
 decideρ _ _ (pick0 _) (get _ _ _) = no (λ ())
 decideρ _ _ (pick0 _) (pick0 _) = no (λ ())
 decideρ _ _ (pick0 _) (pick1 _) = no (λ ())
+decideρ _ _ (pick0 _) (iget _ _ _) = no (λ ())
 decideρ σ τ (pick1 P) (cover _ R) = pick1-yes (decideρ σ τ P R)
 decideρ _ _ (pick1 _) done = no (λ ())
 decideρ _ _ (pick1 _) stop = no (λ ())
@@ -192,6 +248,7 @@ decideρ _ _ (pick1 _) (put _ _ _) = no (λ ())
 decideρ _ _ (pick1 _) (get _ _ _) = no (λ ())
 decideρ _ _ (pick1 _) (pick0 _) = no (λ ())
 decideρ _ _ (pick1 _) (pick1 _) = no (λ ())
+decideρ _ _ (pick1 _) (iget _ _ _) = no (λ ())
 decideρ σ τ (cover P _) (pick0 R) = cover0-yes (decideρ σ τ P R)
 decideρ σ τ (cover _ Q) (pick1 R) = cover1-yes (decideρ σ τ Q R)
 decideρ _ _ (cover _ _) done = no (λ ())
@@ -199,6 +256,22 @@ decideρ _ _ (cover _ _) stop = no (λ ())
 decideρ _ _ (cover _ _) (put _ _ _) = no (λ ())
 decideρ _ _ (cover _ _) (get _ _ _) = no (λ ())
 decideρ _ _ (cover _ _) (cover _ _) = no (λ ())
+decideρ _ _ (cover _ _) (iget _ _ _) = no (λ ())
+decideρ σ τ (iget x P Q) (put bit (lit b0) R) = on-iget-b0 (decideρ (ext x (lit b0) σ) τ P R)
+decideρ σ τ (iget x P Q) (put bit (lit b1) R) = on-iget-b1 (decideρ (ext x (lit b1) σ) τ Q R)
+decideρ _ _ (iget _ _ _) (put bit (var _) _) = no (λ ())
+decideρ _ _ (iget _ _ _) (put nat _ _) = no (λ ())
+decideρ _ _ (iget _ _ _) (put unit _ _) = no (λ ())
+decideρ _ _ (iget _ _ _) (put (pair _ _) _ _) = no (λ ())
+decideρ _ _ (iget _ _ _) (put (rec _) _ _) = no (λ ())
+decideρ _ _ (iget _ _ _) (put (vec _ _) _ _) = no (λ ())
+decideρ _ _ (iget _ _ _) done = no (λ ())
+decideρ _ _ (iget _ _ _) stop = no (λ ())
+decideρ _ _ (iget _ _ _) (get _ _ _) = no (λ ())
+decideρ _ _ (iget _ _ _) (pick0 _) = no (λ ())
+decideρ _ _ (iget _ _ _) (pick1 _) = no (λ ())
+decideρ _ _ (iget _ _ _) (cover _ _) = no (λ ())
+decideρ _ _ (iget _ _ _) (iget _ _ _) = no (λ ())
 
 decide : (P Q : Proc) → Answer P Q
 decide P Q = decideρ none none P Q
@@ -357,3 +430,56 @@ choice-channel =
 
 not-arm : ¬ Meets (pick0 done) (cover (put nat (lit zero) done) done)
 not-arm (pick0-cover ())
+
+------------------------------------------------------------------------
+-- The bit selects the arm. `b0` meets the first continuation. `b1`
+-- meets the second. The same index with the other continuation has
+-- no meeting. A variable bit selects neither arm. A channel also
+-- needs the other end, so an arm that was not dualised has none.
+------------------------------------------------------------------------
+
+route-client : Proc
+route-client = put bit (lit b0) (get nat "m" done)
+
+route-meet : Meets route-server route-client
+route-meet = iget-b0 (put-get refl done-done)
+
+route-meet-decides : decide route-server route-client ≡ yes route-meet
+route-meet-decides = refl
+
+route-client-one : Proc
+route-client-one = put bit (lit b1) (put nat (lit zero) done)
+
+route-one : Meets route-server route-client-one
+route-one = iget-b1 (get-put refl done-done)
+
+route-one-decides : decide route-server route-client-one ≡ yes route-one
+route-one-decides = refl
+
+route-miss : Proc
+route-miss = put bit (lit b0) (put nat (lit one) done)
+
+not-route : ¬ Meets route-server route-miss
+not-route (iget-b0 ())
+
+not-route-decides : decide route-server route-miss ≡ no not-route
+not-route-decides = refl
+
+route-channel : Channel route-server route-client route
+route-channel =
+  channel route-meet route-server-ok (iput0-ok (get-ok refl done-end))
+
+not-crossed-channel : ¬ Channel route-server route-miss route
+not-crossed-channel (channel _ _ (iput0-ok ()))
+
+ask : Proc
+ask = put bit (lit b1) (get bit "c" done)
+
+echo-meet : Meets echo-bit ask
+echo-meet = iget-b1 (put-get refl done-done)
+
+echo-meet-decides : decide echo-bit ask ≡ yes echo-meet
+echo-meet-decides = refl
+
+not-var : ¬ Meets echo-bit (put bit (var "b") (get bit "c" done))
+not-var ()

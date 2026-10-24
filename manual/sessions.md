@@ -131,6 +131,32 @@ The server receives a window and sends data within it. The process writes the na
 
 The meeting compares the nats. The evidence is in each conformance, so a process without it is refused at its `conform`. The OTP image sends `{:muro, from, d}`. The evidence is not in the message.
 
+## Index
+
+A received bit selects one of two written continuations. The arm is the index. `b0` takes the first arm and `b1` takes the second. The sender writes the literal. A variable bit does not select an arm.
+
+```muro
+session route := recv (b : Bit) on (send Nat end) (recv Nat end)
+
+session route-back := dual route
+
+conform server : route := get (b : Bit) on (put 1 done) (get (n : Nat) done)
+
+conform client : route-back := put b0 (get (m : Nat) done)
+
+meet wire : server with client
+```
+
+`route` receives a bit. `b0` continues by sending a nat. `b1` continues by receiving a nat. `route-back` is the other end, so each arm is dualised and the index stays. `put b0` sends the literal and then receives the nat. `put b1 (put 0 done)` sends the bit and then the nat. The meeting checks that both sides take the same arm for the same bit.
+
+The bound bit is a bit. A vector length may not mention it. Inside an arm the process can send it as an ordinary bit: `get (b : Bit) on (put b done) (put b done)` follows `recv (b : Bit) on (send Bit end) (send Bit end)`.
+
+The OTP image sends `{:muro, from, :b0}` or `{:muro, from, :b1}`. The receiver's skeleton holds both arms. The message is the bit.
+
+A nat does not choose the next action, so `recv (n : Nat) on end end` is refused. `get Bit on done done` is refused, because the bit is bound. `put b` against `send (c : Bit) on …` is refused: the sender writes `b0` or `b1`. A protocol whose arms are not dualised pointwise is not the other end. `choose` stays a label.
+
+`examples/indexed.muro`
+
 ## Choice
 
 A choice is an arm selection:

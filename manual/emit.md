@@ -101,7 +101,7 @@ The assembler translates this text. The proof stops at the run image.
 
 `--backend otp` writes `<stem>_otp.ex` next to the file and prints that path. `ping.muro` is `ping_otp.ex`, and the module is `PingOtp`. Each `conform` is a child module. `PingOtp.Pong.start/1` takes the peer pid and returns `{:ok, pid, ref}`. `ref` is a monitor of the server, installed before the process takes its first action.
 
-The process sends `{:muro, from, value}`. A nat is an integer. A bit is `:b0` or `:b1`. Unit is `:tt`. A pair is a two-element tuple. A record is a map whose keys are the field names. A choice is `{:muro_pick, from, :b0}` or `:b1`. It receives the same shapes from that peer. A message that arrives before the server reaches that receive is kept, in order. `done` stops the server with `:normal`. `stop` stops it with `{:shutdown, :abandon}`. A monitor of the server sees that reason. If the peer dies while the server is running, the server stops with `{:shutdown, :abandon}`. A value of a type the process did not name stops it with `{:shutdown, {:unexpected, value}}`.
+The process sends `{:muro, from, value}`. A nat is an integer. A bit is `:b0` or `:b1`. Unit is `:tt`. A pair is a two-element tuple. A record is a map whose keys are the field names. A choice is `{:muro_pick, from, :b0}` or `:b1`. A bit index is `{:muro, from, :b0}` or `{:muro, from, :b1}`. The receiver holds both arms and takes the one that bit names. It receives the same shapes from that peer. A message that arrives before the server reaches that receive is kept, in order. `done` stops the server with `:normal`. `stop` stops it with `{:shutdown, :abandon}`. A monitor of the server sees that reason. If the peer dies while the server is running, the server stops with `{:shutdown, :abandon}`. A value of a type the process did not name stops it with `{:shutdown, {:unexpected, value}}`.
 
 The server talks to one peer. The run emitters still omit the protocol and the process. The BEAM runs this server. The proof stops at the conformance derivation.
 
@@ -120,6 +120,8 @@ mix muro.emit examples/meet.muro --backend otp
 ```
 
 That writes `examples/meet_otp.ex`. The module is `MeetOtp`. `meet wire : pong with peer` is `MeetOtp.wire/0`. It returns `{:ok, left, right, left_ref, right_ref}`. `left` runs `pong` and `right` runs `peer`. Each ref is a monitor of that server, installed before the first action. Both servers of `wire` finish with `:normal`. `arm` is the choice, and both servers finish with `:normal`. `drop` is both ends abandoning after `0`, and both stop with `{:shutdown, :abandon}`. `wrapped` sends `(b0, {x = 0, y = 0})`, which the peer receives as a tuple whose second element is a map with keys `x` and `y`, and both servers finish with `:normal`. `Pong.start/1` still takes a peer pid supplied by the caller. The payload stays on the session. The place stays the call `--node` writes.
+
+`examples/indexed.muro` is the same image for a bit index. `IndexedOtp.wire/0` starts the server that offers both arms and the client that sends `:b0`. The server answers `1`. `wire_one` sends `:b1` and then `0`. `echo_wire` sends `:b1` and receives that same bit. The message is `{:muro, from, bit}`. A nat sent where the index is expected stops the server with `{:shutdown, {:unexpected, value}}`.
 
 ## Node
 

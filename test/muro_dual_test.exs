@@ -3,6 +3,28 @@ defmodule Muro.DualTest do
 
   alias Muro.{Check, IR, Parser, Session}
 
+  test "an indexed bit keeps its index and each arm dualises" do
+    route = {:irecv, :b, {:send, :nat, :end}, {:recv, :nat, :end}}
+    assert Session.dual(route) == {:isend, :b, {:recv, :nat, :end}, {:send, :nat, :end}}
+    assert Session.dual(Session.dual(route)) == route
+
+    crossed = {:isend, :b, {:send, :nat, :end}, {:recv, :nat, :end}}
+    refute Session.dual(route) == crossed
+
+    assert check("""
+           session route := recv (b : Bit) on (send Nat end) (recv Nat end)
+           session back := dual route
+           conform client : back := put b0 (get (m : Nat) done)
+           conform client-one : back := put b1 (put 0 done)
+           """) == :ok
+
+    # Swapping the arms without dualising them is a session of its own.
+    assert check("""
+           session crossed := send (b : Bit) on (send Nat end) (recv Nat end)
+           conform client : crossed := put b0 (put 1 done)
+           """) == :ok
+  end
+
   test "dual swaps send with recv and choose with branch" do
     ping = {:recv, :nat, {:send, :nat, :end}}
     assert Session.dual(ping) == {:send, :nat, {:recv, :nat, :end}}
