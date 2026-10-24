@@ -111,6 +111,26 @@ session sized := recv (n : Nat) (send (Vec Nat n) end)
 
 The OTP image sends two messages. The first is `{:muro, from, n}`. The second is `{:muro, from, vec}`, and the length of `vec` is `n`. A vector of another length stops the process with `{:shutdown, {:unexpected, value}}`.
 
+## Evidence
+
+A protocol may require that a sent nat is at most a bound. The bound is a numeral, or a nat bound earlier in the session. The sender owes that evidence. The receiver gets a nat.
+
+```muro
+session window := recv (w : Nat) (send (d : Nat) {d ≤ w} end)
+
+session grant-end := dual window
+
+conform window-server : window := get (w : Nat) (put w done)
+
+conform window-client : grant-end := put 8 (get (d : Nat) done)
+
+meet window-wire : window-server with window-client
+```
+
+The server receives a window and sends data within it. The process writes the nat alone. The checker finds the evidence, as `decide` in `Session.agda` does. A numeral within a numeral bound is evidence by `≤`. Zero is within any window. The window itself is within the window, when the process bound that name once. `get (w : Nat) (put 2 done)` has no evidence, because the window may be smaller. `put 8 (put 9 done)` at `send (w : Nat) (send (d : Nat) {d ≤ w} end)` is refused, because nine is not at most eight. `<=` is the same as `≤`.
+
+The meeting compares the nats. The evidence is in each conformance, so a process without it is refused at its `conform`. The OTP image sends `{:muro, from, d}`. The evidence is not in the message.
+
 ## Choice
 
 A choice is an arm selection:
