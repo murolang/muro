@@ -32,7 +32,7 @@ session ping := recv Nat (send Nat end)
 conform pong : ping := get Nat (put 1 done)
 ```
 
-The payload is a nat, a bit, unit, a pair, a record of named fields, or a vector. A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. `send` and `recv` each name that type and one continuation. `recv (n : Nat)` binds `n`, and a later payload may mention `n` as the length of a vector. `send (d : Nat) {d ≤ w}` sends a nat at most `w`, and the process owes that evidence. `put` sends a value of the type, or a name a `get` bound. `get Nat` receives a value and does not name it. `get (k : Nat)` binds it to `k`, and the continuation can send `k` at that type. A name bound twice is the inner binding. `choose` is the process's choice (`pick0`, `pick1`). `branch` is the other side's choice, and `cover` offers both arms. `done` closes the channel at `end`. `stop` abandons it, at any protocol.
+The payload is a nat, a bit, unit, a pair, a record of named fields, or a vector. A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. `send` and `recv` each name that type and one continuation. `recv (n : Nat)` binds `n`, and a later payload may mention `n` as the length of a vector. `send (d : Nat) {d ≤ w}` sends a nat at most `w`, and the process owes that evidence. `recv (b : Bit) on S T` receives a bit and continues as one of the two protocols. `b0` takes the first and `b1` takes the second. The sender writes `put b0` or `put b1`. `get (b : Bit) on P Q` offers both arms and binds the bit. `put` sends a value of the type, or a name a `get` bound. `get Nat` receives a value and does not name it. `get (k : Nat)` binds it to `k`, and the continuation can send `k` at that type. A name bound twice is the inner binding. `choose` is the process's choice (`pick0`, `pick1`). `branch` is the other side's choice, and `cover` offers both arms. `done` closes the channel at `end`. `stop` abandons it, at any protocol.
 
 ```
 session box := send (Bit * {x : Nat, y : Nat}) end
@@ -50,7 +50,7 @@ session %1 ping-done := recv Nat (send Nat end)
 conform pong-done : ping-done := get Nat (put 1 done)
 ```
 
-A session has another end. `session back := dual ping` names it. `send` swaps with `recv`, and `choose` swaps with `branch`. The payload type stays. The continuation dualises. The other end of the other end is the same session. The mark stays the session's mark.
+A session has another end. `session back := dual ping` names it. `send` swaps with `recv`, an indexed bit keeps its index and each arm dualises, and `choose` swaps with `branch`. The payload type stays. The continuation dualises. The other end of the other end is the same session. The mark stays the session's mark.
 
 ```
 session ping := recv Nat (send Nat end)
@@ -60,13 +60,13 @@ conform peer : back := put 1 (get Nat done)
 
 `peer` sends `1` and then receives a nat. `examples/dual.muro` is that book.
 
-Two processes are one exchange when a send is a receive of that type and each session is the other end of the other. Any value of that type meets. A name bound by `get` meets that receive at the type it was bound. A name bound twice is the inner binding. A nat that was sent is the length of a vector the continuation names. An evidence payload meets as a nat.
+Two processes are one exchange when a send is a receive of that type and each session is the other end of the other. Any value of that type meets. A name bound by `get` meets that receive at the type it was bound. A name bound twice is the inner binding. A nat that was sent is the length of a vector the continuation names. An evidence payload meets as a nat. A bit index meets the arm of that same bit. A variable bit selects neither arm.
 
 ```
 meet wire : pong with peer
 ```
 
-`pong` is `get Nat (put 1 done)` on `ping`. `peer` is `put 1 (get Nat done)` on `back`. A choice meets the arm that was offered. Both ends close, or both abandon. A run term has no seat. `examples/meet.muro` is that book. `--backend otp` starts the two processes as each other's peer. Each server still talks to one peer. See [Emit](emit.md#otp).
+`pong` is `get Nat (put 1 done)` on `ping`. `peer` is `put 1 (get Nat done)` on `back`. A choice meets the arm that was offered. A received bit meets the same way: both sides take the arm of that bit. Both ends close, or both abandon. A run term has no seat. `examples/meet.muro` is that book. `examples/indexed.muro` is the bit index. `--backend otp` starts the two processes as each other's peer. Each server still talks to one peer. See [Emit](emit.md#otp).
 
 One description covers the exchange. `talk` writes it. `session ping := seen pong with peer in ping-exchange` is the session `pong` has with `peer`.
 

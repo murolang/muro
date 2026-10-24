@@ -10,6 +10,8 @@ defmodule Muro.Meet do
   the lengths in that type. That is the type the other process receives.
   An evidence payload meets as a nat. The evidence is in each
   conformance, not in the meeting, so this module has no case for it.
+  A bit index meets the arm of that same bit. `b0` meets the first
+  arm and `b1` meets the second. A variable bit selects neither.
   A choice meets the arm that was offered.
   Both ends close, or both abandon. `meets/2` is `:ok` when `decide`
   returns `yes`. Otherwise the pair where it returns `no`.
@@ -82,6 +84,24 @@ defmodule Muro.Meet do
     else
       {:no, {:get, gty, name, p}, {:put, ty, val, q}}
     end
+  end
+
+  # `iget-b0`, `iget-b1`, `b0-iget`, `b1-iget`. The literal selects the
+  # arm. The bit is bound on the receiver and does not instantiate a length.
+  defp go({:iget, name, p, _q}, {:put, :bit, :b0, r}, lp, rq, li, ri) do
+    keep(go(p, r, bind(lp, name, :bit), rq, ext(li, name, :b0, :bit), ri))
+  end
+
+  defp go({:iget, name, _p, q}, {:put, :bit, :b1, r}, lp, rq, li, ri) do
+    keep(go(q, r, bind(lp, name, :bit), rq, ext(li, name, :b1, :bit), ri))
+  end
+
+  defp go({:put, :bit, :b0, p}, {:iget, name, q, _r}, lp, rq, li, ri) do
+    keep(go(p, q, lp, bind(rq, name, :bit), li, ext(ri, name, :b0, :bit)))
+  end
+
+  defp go({:put, :bit, :b1, p}, {:iget, name, _q, r}, lp, rq, li, ri) do
+    keep(go(p, r, lp, bind(rq, name, :bit), li, ext(ri, name, :b1, :bit)))
   end
 
   # `pick0-cover`, `pick1-cover`, `cover-pick0`, `cover-pick1`.

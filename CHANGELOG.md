@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.16.60
+
+A received bit selects one of two written continuations. `recv (b : Bit) on (send Nat end) (recv Nat end)` receives a bit. `b0` continues by sending a nat. `b1` continues by receiving a nat. The other end sends the literal `b0` or `b1` and then takes the dual of that arm. `get (b : Bit) on (put 1 done) (get (n : Nat) done)` offers both arms. The meeting checks that both sides take the same arm for the same bit. The bound bit is a bit, so it is not a vector length. Inside an arm it can be sent as an ordinary bit. The OTP message is the bit alone.
+
+### Manual
+
+- Sessions: a bit index, the route exchange, and its OTP message.
+- Limits: a next action chosen by a bit, written as two arms, is allowed. A nat, a variable bit, a third arm, and a recursive session stay refused.
+- Grammar, Terms, Extending, and For agents: `recv (b : Bit) on`, `send (b : Bit) on`, and `get (b : Bit) on`.
+
+### Examples
+
+- `indexed.muro`: a bit selects the next action.
+
+### Emit
+
+- OTP sends the bit of an indexed session. The receiver holds both arms. The message is not a choice label.
+
+### Package
+
+- Version 0.16.60.
+
 ## 0.16.59
 
 A protocol may require that a sent nat is at most a bound. `recv (w : Nat) (send (d : Nat) {d ≤ w} end)` receives a window and sends a nat within it. The bound is a numeral or a nat bound earlier. The sender owes the evidence, and the checker decides it: a numeral within a numeral by `≤`, zero within a name, or the bound name itself when the process bound that name once. `get (w : Nat) (put 2 done)` is refused. `put 8 (put 9 done)` at `send (w : Nat) (send (d : Nat) {d ≤ w} end)` is refused. The receiver gets a nat. The meeting compares the nats. The evidence is erased, and the OTP message is the nat alone.

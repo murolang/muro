@@ -10,14 +10,19 @@
 -- `send A S` sends a value of type A and continues as S. `recv A S`
 -- receives one. `drecv x A S` binds that value to `x`, and `S` may
 -- mention `x` as the length of a vector. `dsend x A S` is the other
--- direction: the value sent for `x` instantiates `S`. The next
--- action does not depend on the value. Any value of the payload
--- type conforms. `esend x e S` sends a nat `x` with `x ≤ e`, where
--- `e` is a numeral or a nat bound earlier. The process owes that
--- evidence. `erecv x e S` receives such a nat as a nat. The evidence
--- is part of the conformance derivation, not of the process, so
--- `skel` does not carry it. `choose` and `branch` select an arm. Two processes
--- meet when the sent type is the type the continuation expects.
+-- direction: the value sent for `x` instantiates `S`. A later payload
+-- may mention that nat as a length. The action itself does not.
+-- `esend x e S` sends a nat `x` with `x ≤ e`, where `e` is a numeral
+-- or a nat bound earlier. The process owes that evidence. `erecv x e S`
+-- receives such a nat as a nat. The evidence is part of the
+-- conformance derivation, not of the process, so `skel` does not
+-- carry it. `isend x S T` sends a bit. `b0` continues as `S` and
+-- `b1` continues as `T`. `irecv x S T` receives that bit and binds
+-- it. The two arms are the index. A nat does not choose an arm, and
+-- a variable bit does not select one: the sender writes `b0` or
+-- `b1`. `choose` and `branch` select an arm by a label, not by a
+-- payload. Two processes meet when the sent type is the type the
+-- continuation expects, and an index meets the arm of that same bit.
 --
 -- A protocol is spec. A conformance derivation is evidence. Neither
 -- is a run. `stop` abandons the channel at any protocol. A second
@@ -180,7 +185,8 @@ mutual
   ... | yes′ refl = yes′ refl
 
 ------------------------------------------------------------------------
--- One continuation after the payload. Choice is a separate arm.
+-- One continuation after the payload. An indexed bit has two
+-- continuations, one for each value. Choice is a separate arm.
 ------------------------------------------------------------------------
 
 data Proto : Set where
@@ -191,6 +197,10 @@ data Proto : Set where
   drecv  : String → Ty → Proto → Proto
   esend  : String → NExp → Proto → Proto
   erecv  : String → NExp → Proto → Proto
+  -- `b0` continues as the first protocol. `b1` continues as the second.
+  -- The name is bound at bit in both arms, and it is not a length.
+  isend  : String → Proto → Proto → Proto
+  irecv  : String → Proto → Proto → Proto
   choose : Proto → Proto → Proto
   branch : Proto → Proto → Proto
 
@@ -202,7 +212,9 @@ protoMode = spec
 -- value expression (literal or variable). `get` receives a value
 -- and binds it to a named variable. The continuation may reference
 -- that variable. `pick0` and `pick1` are the process's choice.
--- `cover` offers both branches. `stop` uses the channel no further.
+-- `cover` offers both branches. `iget x P Q` receives a bit, binds
+-- it to `x`, and offers both arms: `b0` continues as `P` and `b1`
+-- continues as `Q`. `stop` uses the channel no further.
 ------------------------------------------------------------------------
 
 data Proc : Set where
@@ -213,6 +225,7 @@ data Proc : Set where
   pick0 : Proc → Proc
   pick1 : Proc → Proc
   cover : Proc → Proc → Proc
+  iget  : String → Proc → Proc → Proc
 
 ------------------------------------------------------------------------
 -- Variable context: list of (name, type) pairs
@@ -293,6 +306,8 @@ applyProto ρ@(bind _ _ _) (dsend y A S) = dsend y (applyTy ρ A) (applyProto (s
 applyProto ρ@(bind _ _ _) (drecv y A S) = drecv y (applyTy ρ A) (applyProto (shadow y ρ) S)
 applyProto ρ@(bind _ _ _) (esend y e S) = esend y (applyNExp ρ e) (applyProto ρ S)
 applyProto ρ@(bind _ _ _) (erecv y e S) = erecv y (applyNExp ρ e) (applyProto ρ S)
+applyProto ρ@(bind _ _ _) (isend y S T) = isend y (applyProto (shadow y ρ) S) (applyProto (shadow y ρ) T)
+applyProto ρ@(bind _ _ _) (irecv y S T) = irecv y (applyProto (shadow y ρ) S) (applyProto (shadow y ρ) T)
 applyProto ρ@(bind _ _ _) (choose S T) = choose (applyProto ρ S) (applyProto ρ T)
 applyProto ρ@(bind _ _ _) (branch S T) = branch (applyProto ρ S) (applyProto ρ T)
 
@@ -385,6 +400,22 @@ data Conformsρ (Γ : Ctx) (ρ : Idx) : Proc → Proto → Set where
     Conformsρ ((x , nat) ∷ Γ) ρ P S →
     Conformsρ Γ ρ (get nat x P) (erecv y e S)
 
+  -- The literal selects the arm. A variable bit has no rule.
+  iput0-ok : ∀ {y P S T} →
+    Conformsρ Γ (shadow y ρ) P S →
+    Conformsρ Γ ρ (put bit (lit b0) P) (isend y S T)
+
+  iput1-ok : ∀ {y P S T} →
+    Conformsρ Γ (shadow y ρ) P T →
+    Conformsρ Γ ρ (put bit (lit b1) P) (isend y S T)
+
+  -- Both arms are checked. The name is bound at bit in each.
+  -- The bit does not instantiate a length.
+  iget-ok : ∀ {x y P Q S T} →
+    Conformsρ ((x , bit) ∷ Γ) (shadow y ρ) P S →
+    Conformsρ ((x , bit) ∷ Γ) (shadow y ρ) Q T →
+    Conformsρ Γ ρ (iget x P Q) (irecv y S T)
+
   pick0-ok : ∀ {P S T} → Conformsρ Γ ρ P S → Conformsρ Γ ρ (pick0 P) (choose S T)
   pick1-ok : ∀ {P S T} → Conformsρ Γ ρ P T → Conformsρ Γ ρ (pick1 P) (choose S T)
 
@@ -426,6 +457,9 @@ data ProtoOk : Ctx → Proto → Set where
   -- The name of an evidence payload is in scope in its bound only.
   esend-ok  : ∀ {Γ x e S} → NExpOk Γ e → ProtoOk Γ S → ProtoOk Γ (esend x e S)
   erecv-ok  : ∀ {Γ x e S} → NExpOk Γ e → ProtoOk Γ S → ProtoOk Γ (erecv x e S)
+  -- The binder is a bit in both arms, so a length that names it is refused.
+  isend-ok  : ∀ {Γ x S T} → ProtoOk ((x , bit) ∷ Γ) S → ProtoOk ((x , bit) ∷ Γ) T → ProtoOk Γ (isend x S T)
+  irecv-ok  : ∀ {Γ x S T} → ProtoOk ((x , bit) ∷ Γ) S → ProtoOk ((x , bit) ∷ Γ) T → ProtoOk Γ (irecv x S T)
   choose-ok : ∀ {Γ S T} → ProtoOk Γ S → ProtoOk Γ T → ProtoOk Γ (choose S T)
   branch-ok : ∀ {Γ S T} → ProtoOk Γ S → ProtoOk Γ T → ProtoOk Γ (branch S T)
 
@@ -636,6 +670,26 @@ on-eget : ∀ {Γ ρ y e x P S} →
 on-eget (yes d) = yes (eget-ok d)
 on-eget (no nd) = no (λ { (eget-ok d) → nd d })
 
+-- A literal bit selects one arm. A variable selects neither.
+isend-bit : ∀ {Γ ρ y P S T} →
+  (v : ValExpr bit) →
+  Answerρ Γ (shadow y ρ) P S →
+  Answerρ Γ (shadow y ρ) P T →
+  Answerρ Γ ρ (put bit v P) (isend y S T)
+isend-bit (lit b0) (yes d) _ = yes (iput0-ok d)
+isend-bit (lit b0) (no nd) _ = no (λ { (iput0-ok d) → nd d })
+isend-bit (lit b1) _ (yes d) = yes (iput1-ok d)
+isend-bit (lit b1) _ (no nd) = no (λ { (iput1-ok d) → nd d })
+isend-bit (var _) _ _ = no (λ ())
+
+on-iget : ∀ {Γ ρ x y P Q S T} →
+  Answerρ ((x , bit) ∷ Γ) (shadow y ρ) P S →
+  Answerρ ((x , bit) ∷ Γ) (shadow y ρ) Q T →
+  Answerρ Γ ρ (iget x P Q) (irecv y S T)
+on-iget (yes d) (yes e) = yes (iget-ok d e)
+on-iget (no nd) _ = no (λ { (iget-ok d _) → nd d })
+on-iget (yes _) (no nd) = no (λ { (iget-ok _ e) → nd e })
+
 at0 : ∀ {Γ ρ P S T} → Answerρ Γ ρ P S → Answerρ Γ ρ (pick0 P) (choose S T)
 at0 (yes d) = yes (pick0-ok d)
 at0 (no nd) = no (λ { (pick0-ok d) → nd d })
@@ -657,6 +711,8 @@ decideρ Γ ρ done (dsend _ _ _) = no (λ ())
 decideρ Γ ρ done (drecv _ _ _) = no (λ ())
 decideρ Γ ρ done (esend _ _ _) = no (λ ())
 decideρ Γ ρ done (erecv _ _ _) = no (λ ())
+decideρ Γ ρ done (isend _ _ _) = no (λ ())
+decideρ Γ ρ done (irecv _ _ _) = no (λ ())
 decideρ Γ ρ done (choose _ _) = no (λ ())
 decideρ Γ ρ done (branch _ _) = no (λ ())
 decideρ Γ ρ stop _ = yes abandon
@@ -667,7 +723,11 @@ decideρ Γ ρ (put A v P) (dsend y B S) with ty≟ A (applyTy ρ B)
 decideρ Γ ρ (put A v P) (esend y e S) with ty≟ A nat
 ... | yes′ refl = on-eput (decideValExpr Γ v) (owed? Γ v (resolve ρ e)) (decideρ Γ ρ P S)
 ... | no′ ¬eq = no (λ { (eput-ok _ _ _) → ¬eq refl })
+decideρ Γ ρ (put A v P) (isend y S T) with ty≟ A bit
+... | yes′ refl = isend-bit v (decideρ Γ (shadow y ρ) P S) (decideρ Γ (shadow y ρ) P T)
+... | no′ ¬eq = no (λ { (iput0-ok _) → ¬eq refl ; (iput1-ok _) → ¬eq refl })
 decideρ Γ ρ (put _ _ _) (erecv _ _ _) = no (λ ())
+decideρ Γ ρ (put _ _ _) (irecv _ _ _) = no (λ ())
 decideρ Γ ρ (put _ _ _) end = no (λ ())
 decideρ Γ ρ (put _ _ _) (recv _ _) = no (λ ())
 decideρ Γ ρ (put _ _ _) (drecv _ _ _) = no (λ ())
@@ -680,12 +740,26 @@ decideρ Γ ρ (get A x P) (drecv y B S) with ty≟ A (applyTy ρ B)
 decideρ Γ ρ (get A x P) (erecv y e S) with ty≟ A nat
 ... | yes′ refl = on-eget (decideρ ((x , nat) ∷ Γ) ρ P S)
 ... | no′ ¬eq = no (λ { (eget-ok _) → ¬eq refl })
+decideρ Γ ρ (iget x P Q) (irecv y S T) =
+  on-iget (decideρ ((x , bit) ∷ Γ) (shadow y ρ) P S) (decideρ ((x , bit) ∷ Γ) (shadow y ρ) Q T)
 decideρ Γ ρ (get _ _ _) (esend _ _ _) = no (λ ())
+decideρ Γ ρ (get _ _ _) (isend _ _ _) = no (λ ())
+decideρ Γ ρ (get _ _ _) (irecv _ _ _) = no (λ ())
 decideρ Γ ρ (get _ _ _) end = no (λ ())
 decideρ Γ ρ (get _ _ _) (send _ _) = no (λ ())
 decideρ Γ ρ (get _ _ _) (dsend _ _ _) = no (λ ())
 decideρ Γ ρ (get _ _ _) (choose _ _) = no (λ ())
 decideρ Γ ρ (get _ _ _) (branch _ _) = no (λ ())
+decideρ Γ ρ (iget _ _ _) end = no (λ ())
+decideρ Γ ρ (iget _ _ _) (send _ _) = no (λ ())
+decideρ Γ ρ (iget _ _ _) (recv _ _) = no (λ ())
+decideρ Γ ρ (iget _ _ _) (dsend _ _ _) = no (λ ())
+decideρ Γ ρ (iget _ _ _) (drecv _ _ _) = no (λ ())
+decideρ Γ ρ (iget _ _ _) (esend _ _ _) = no (λ ())
+decideρ Γ ρ (iget _ _ _) (erecv _ _ _) = no (λ ())
+decideρ Γ ρ (iget _ _ _) (isend _ _ _) = no (λ ())
+decideρ Γ ρ (iget _ _ _) (choose _ _) = no (λ ())
+decideρ Γ ρ (iget _ _ _) (branch _ _) = no (λ ())
 decideρ Γ ρ (pick0 P) (choose S _) = at0 (decideρ Γ ρ P S)
 decideρ Γ ρ (pick0 _) end = no (λ ())
 decideρ Γ ρ (pick0 _) (send _ _) = no (λ ())
@@ -694,6 +768,8 @@ decideρ Γ ρ (pick0 _) (dsend _ _ _) = no (λ ())
 decideρ Γ ρ (pick0 _) (drecv _ _ _) = no (λ ())
 decideρ Γ ρ (pick0 _) (esend _ _ _) = no (λ ())
 decideρ Γ ρ (pick0 _) (erecv _ _ _) = no (λ ())
+decideρ Γ ρ (pick0 _) (isend _ _ _) = no (λ ())
+decideρ Γ ρ (pick0 _) (irecv _ _ _) = no (λ ())
 decideρ Γ ρ (pick0 _) (branch _ _) = no (λ ())
 decideρ Γ ρ (pick1 P) (choose _ T) = at1 (decideρ Γ ρ P T)
 decideρ Γ ρ (pick1 _) end = no (λ ())
@@ -703,6 +779,8 @@ decideρ Γ ρ (pick1 _) (dsend _ _ _) = no (λ ())
 decideρ Γ ρ (pick1 _) (drecv _ _ _) = no (λ ())
 decideρ Γ ρ (pick1 _) (esend _ _ _) = no (λ ())
 decideρ Γ ρ (pick1 _) (erecv _ _ _) = no (λ ())
+decideρ Γ ρ (pick1 _) (isend _ _ _) = no (λ ())
+decideρ Γ ρ (pick1 _) (irecv _ _ _) = no (λ ())
 decideρ Γ ρ (pick1 _) (branch _ _) = no (λ ())
 decideρ Γ ρ (cover P Q) (branch S T) = both-of (decideρ Γ ρ P S) (decideρ Γ ρ Q T)
 decideρ Γ ρ (cover _ _) end = no (λ ())
@@ -712,6 +790,8 @@ decideρ Γ ρ (cover _ _) (dsend _ _ _) = no (λ ())
 decideρ Γ ρ (cover _ _) (drecv _ _ _) = no (λ ())
 decideρ Γ ρ (cover _ _) (esend _ _ _) = no (λ ())
 decideρ Γ ρ (cover _ _) (erecv _ _ _) = no (λ ())
+decideρ Γ ρ (cover _ _) (isend _ _ _) = no (λ ())
+decideρ Γ ρ (cover _ _) (irecv _ _ _) = no (λ ())
 decideρ Γ ρ (cover _ _) (choose _ _) = no (λ ())
 
 decide : (Γ : Ctx) (P : Proc) (S : Proto) → Answer Γ P S
@@ -906,10 +986,94 @@ stale-decides : decide [] stale stale-proto ≡ no stale-refused
 stale-decides = refl
 
 ------------------------------------------------------------------------
+-- A received bit chooses the arm. `b0` continues as the first
+-- protocol. `b1` continues as the second. The sender writes the
+-- literal. A variable bit does not select an arm. A nat is not an
+-- index, so it has no constructor here. The bit is not a length.
+------------------------------------------------------------------------
+
+route : Proto
+route = irecv "b" (send nat end) (recv nat end)
+
+route-server : Proc
+route-server = iget "b" (put nat (lit one) done) (get nat "n" done)
+
+route-server-ok : Conforms [] route-server route
+route-server-ok = iget-ok (put-ok refl lit-ok done-end) (get-ok refl done-end)
+
+route-decides : decide [] route-server route ≡ yes route-server-ok
+route-decides = refl
+
+one-arm : Proc
+one-arm = get bit "b" (put nat (lit one) done)
+
+one-arm-refused : ¬ Conforms [] one-arm route
+one-arm-refused ()
+
+one-arm-decides : decide [] one-arm route ≡ no one-arm-refused
+one-arm-decides = refl
+
+-- The sender writes `b0`. The received name does not select the arm.
+route-fwd : Proto
+route-fwd = drecv "b" bit (isend "c" end (send nat end))
+
+fwd : Proc
+fwd = get bit "b" (put bit (var "b") done)
+
+fwd-refused : ¬ Conforms [] fwd route-fwd
+fwd-refused (dget-ok refl ())
+
+fwd-decides : decide [] fwd route-fwd ≡ no fwd-refused
+fwd-decides = refl
+
+fwd-lit : Proc
+fwd-lit = get bit "b" (put bit (lit b0) done)
+
+fwd-lit-ok : Conforms [] fwd-lit route-fwd
+fwd-lit-ok = dget-ok refl (iput0-ok done-end)
+
+fwd-lit-decides : decide [] fwd-lit route-fwd ≡ yes fwd-lit-ok
+fwd-lit-decides = refl
+
+route-back : Proto
+route-back = isend "b" (recv nat end) (send nat end)
+
+crossed-proc : Proc
+crossed-proc = put bit (lit b0) (put nat (lit one) done)
+
+crossed-refused : ¬ Conforms [] crossed-proc route-back
+crossed-refused (iput0-ok ())
+
+crossed-decides : decide [] crossed-proc route-back ≡ no crossed-refused
+crossed-decides = refl
+
+-- The received bit can be sent later as a bit. It does not select that send.
+echo-bit : Proc
+echo-bit = iget "b" (put bit (var "b") done) (put bit (var "b") done)
+
+echo-proto : Proto
+echo-proto = irecv "b" (send bit end) (send bit end)
+
+echo-bit-ok : Conforms [] echo-bit echo-proto
+echo-bit-ok = iget-ok (put-ok refl (var-ok here) done-end) (put-ok refl (var-ok here) done-end)
+
+echo-bit-decides : decide [] echo-bit echo-proto ≡ yes echo-bit-ok
+echo-bit-decides = refl
+
+-- The index bit is not a vector length.
+bit-arm : Proto
+bit-arm = irecv "b" (send (vec nat (nvar "b")) end) end
+
+not-bit-arm : ¬ ProtoOk [] bit-arm
+not-bit-arm (irecv-ok (send-ok (vec-ok _ (nvar-ok (there _ ()))) _) _)
+
+------------------------------------------------------------------------
 -- The actions a process takes. `say` carries the value expression.
 -- `hear` carries the type and variable name. `choose0` and `choose1`
--- are the process's choice. `offer` is both arms. `leave` abandons
--- the channel. `finish` closes it.
+-- are the process's choice. `offer` is both arms. `index` holds both
+-- arms of a received bit. The bit itself is the message the other
+-- process says, not a label beside it. `leave` abandons the channel.
+-- `finish` closes it.
 ------------------------------------------------------------------------
 
 data Skel : Set where
@@ -920,6 +1084,7 @@ data Skel : Set where
   choose0 : Skel → Skel
   choose1 : Skel → Skel
   offer   : Skel → Skel → Skel
+  index   : String → Skel → Skel → Skel
 
 skel : Proc → Skel
 skel done = finish
@@ -929,6 +1094,7 @@ skel (get A x P) = hear A x (skel P)
 skel (pick0 P) = choose0 (skel P)
 skel (pick1 P) = choose1 (skel P)
 skel (cover P Q) = offer (skel P) (skel Q)
+skel (iget x P Q) = index x (skel P) (skel Q)
 
 pong-skel : skel pong ≡ hear nat "x" (say (lit one) finish)
 pong-skel = refl
@@ -952,6 +1118,14 @@ full-skel = refl
 within-skel : skel within ≡ say (lit (num 8)) (say (lit (num 5)) finish)
 within-skel = refl
 
+-- Both arms are in the skeleton. The selecting bit is not a label.
+route-skel : skel route-server ≡ index "b" (say (lit one) finish) (hear nat "n" finish)
+route-skel = refl
+
+-- The sender's literal is an ordinary payload. The other arm is not sent.
+index-say : skel (put bit (lit b0) done) ≡ say (lit b0) finish
+index-say = refl
+
 ------------------------------------------------------------------------
 -- Finishing. `done` at every leaf. `stop` has no constructor, so an
 -- abandoned channel does not finish. The Elixir checker follows
@@ -965,6 +1139,7 @@ data Ends : Proc → Set where
   ends-pick0 : ∀ {P} → Ends P → Ends (pick0 P)
   ends-pick1 : ∀ {P} → Ends P → Ends (pick1 P)
   ends-cover : ∀ {P Q} → Ends P → Ends Q → Ends (cover P Q)
+  ends-iget  : ∀ {x P Q} → Ends P → Ends Q → Ends (iget x P Q)
 
 data Finish (P : Proc) : Set where
   ends   : Ends P → Finish P
@@ -991,6 +1166,11 @@ step-cover (ends d) (ends e) = ends (ends-cover d e)
 step-cover (leaves nd) _ = leaves (λ { (ends-cover d _) → nd d })
 step-cover (ends _) (leaves nd) = leaves (λ { (ends-cover _ e) → nd e })
 
+step-iget : ∀ {x P Q} → Finish P → Finish Q → Finish (iget x P Q)
+step-iget (ends d) (ends e) = ends (ends-iget d e)
+step-iget (leaves nd) _ = leaves (λ { (ends-iget d _) → nd d })
+step-iget (ends _) (leaves nd) = leaves (λ { (ends-iget _ e) → nd e })
+
 finishes : (P : Proc) → Finish P
 finishes done = ends ends-done
 finishes stop = leaves (λ ())
@@ -999,6 +1179,7 @@ finishes (get _ _ P) = step-get (finishes P)
 finishes (pick0 P) = step-pick0 (finishes P)
 finishes (pick1 P) = step-pick1 (finishes P)
 finishes (cover P Q) = step-cover (finishes P) (finishes Q)
+finishes (iget x P Q) = step-iget (finishes P) (finishes Q)
 
 pong-finishes : finishes pong ≡ ends (ends-get (ends-put ends-done))
 pong-finishes = refl
@@ -1015,6 +1196,10 @@ chosen-finishes = refl
 both-finishes :
   finishes (cover done (put box (lit v-here) done)) ≡ ends (ends-cover ends-done (ends-put ends-done))
 both-finishes = refl
+
+route-finishes :
+  finishes route-server ≡ ends (ends-iget (ends-put ends-done) (ends-get ends-done))
+route-finishes = refl
 
 ¬ends-stop : ¬ Ends stop
 ¬ends-stop ()
@@ -1065,6 +1250,7 @@ data NoLeave : Skel → Set where
   choose0-ok : ∀ {k} → NoLeave k → NoLeave (choose0 k)
   choose1-ok : ∀ {k} → NoLeave k → NoLeave (choose1 k)
   offer-ok   : ∀ {k q} → NoLeave k → NoLeave q → NoLeave (offer k q)
+  index-ok   : ∀ {x k q} → NoLeave k → NoLeave q → NoLeave (index x k q)
 
 ends-no-leave : ∀ {P} → Ends P → NoLeave (skel P)
 ends-no-leave ends-done = finish-ok
@@ -1073,3 +1259,4 @@ ends-no-leave (ends-get e) = hear-ok (ends-no-leave e)
 ends-no-leave (ends-pick0 e) = choose0-ok (ends-no-leave e)
 ends-no-leave (ends-pick1 e) = choose1-ok (ends-no-leave e)
 ends-no-leave (ends-cover e f) = offer-ok (ends-no-leave e) (ends-no-leave f)
+ends-no-leave (ends-iget e f) = index-ok (ends-no-leave e) (ends-no-leave f)

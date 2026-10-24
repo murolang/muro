@@ -28,7 +28,8 @@ defmodule Muro.EmitOtpTest do
                :WindowServer,
                :WindowClient,
                ""
-             ]}
+             ]},
+            {"IndexedOtp", [:Server, :Client, :ClientOne, :Echo, :Ask, ""]}
           ] do
         for name <- names do
           mod = if name == "", do: Module.concat([parent]), else: Module.concat(parent, name)
@@ -199,6 +200,68 @@ defmodule Muro.EmitOtpTest do
     {:ok, pid, ref} = meet_one(:WindowClient)
     assert_receive {:muro, ^pid, 8}
     send(pid, {:muro, self(), 5})
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+  end
+
+  test "a bit index carries the bit alone" do
+    assert {:ok, src} = Emit.Otp.render(checked!("examples/indexed.muro"), "indexed")
+    assert src =~ "def wire do"
+    assert src =~ "def wire_one do"
+    assert src =~ "def echo_wire do"
+    assert src =~ "{:index, :b, {:say, 1, :finish}, {:hear, :nat, :n, :finish}}"
+    assert src =~ "{:say, :b0, {:hear, :nat, :m, :finish}}"
+    assert src =~ "{:say, :b1, {:say, 0, :finish}}"
+    assert src =~ "{:index, :b, {:say, {:var, :b}, :finish}, {:say, {:var, :b}, :finish}}"
+    assert src =~ "{:say, :b1, {:hear, :bit, :c, :finish}}"
+    refute src =~ "def kept"
+    refute src =~ "def on"
+
+    Code.compile_string(src)
+
+    {:ok, server, client, server_ref, client_ref} = indexed(:wire)
+    assert_receive {:DOWN, ^server_ref, :process, ^server, :normal}
+    assert_receive {:DOWN, ^client_ref, :process, ^client, :normal}
+
+    {:ok, server, client, server_ref, client_ref} = indexed(:wire_one)
+    assert_receive {:DOWN, ^server_ref, :process, ^server, :normal}
+    assert_receive {:DOWN, ^client_ref, :process, ^client, :normal}
+
+    {:ok, echo, ask, echo_ref, ask_ref} = indexed(:echo_wire)
+    assert_receive {:DOWN, ^echo_ref, :process, ^echo, :normal}
+    assert_receive {:DOWN, ^ask_ref, :process, ^ask, :normal}
+
+    # b0 takes the arm that sends 1.
+    {:ok, pid, ref} = indexed_one(:Server)
+    send(pid, {:muro, self(), :b0})
+    assert_receive {:muro, ^pid, 1}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    # b1 takes the arm that receives a nat.
+    {:ok, pid, ref} = indexed_one(:Server)
+    send(pid, {:muro, self(), :b1})
+    send(pid, {:muro, self(), 0})
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+    refute_received {:muro, ^pid, _}
+
+    # A nat is not an index.
+    {:ok, pid, ref} = indexed_one(:Server)
+    send(pid, {:muro, self(), 0})
+    assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, {:unexpected, 0}}}
+
+    # A choice label is not an index.
+    {:ok, pid, ref} = indexed_one(:Server)
+    send(pid, {:muro_pick, self(), :b0})
+    assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, {:unexpected, :b0}}}
+
+    # The arm sends the bit it received.
+    {:ok, pid, ref} = indexed_one(:Echo)
+    send(pid, {:muro, self(), :b1})
+    assert_receive {:muro, ^pid, :b1}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = indexed_one(:Echo)
+    send(pid, {:muro, self(), :b0})
+    assert_receive {:muro, ^pid, :b0}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
   end
 
@@ -379,6 +442,14 @@ defmodule Muro.EmitOtpTest do
 
   defp meet_one(name) do
     apply(Module.concat("MeetOtp", name), :start, [self()])
+  end
+
+  defp indexed(fun) do
+    apply(Module.concat(["IndexedOtp"]), fun, [])
+  end
+
+  defp indexed_one(name) do
+    apply(Module.concat("IndexedOtp", name), :start, [self()])
   end
 
   defp located(name, peer \\ self()) do
