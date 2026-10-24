@@ -12,8 +12,8 @@
 -- seated party owes no evidence.
 --
 -- Spec holds where the party sits. Evidence is the boundary. A run
--- term has no seat. None of these constructors is added to Tm or
--- PTm. The checker follows this seating: `seat` names the party,
+-- term has no seat. None of these constructors is added to Tm.
+-- The checker follows this seating: `seat` names the party,
 -- the place, and the description, and `link` states stay or cross.
 ------------------------------------------------------------------------
 

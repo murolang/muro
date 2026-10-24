@@ -2,6 +2,7 @@
 -- ν example: zeros : Stream Nat, head zeros ≡ 0.
 ------------------------------------------------------------------------
 
+{-# OPTIONS --safe #-}
 module Muro.ExampleStream where
 
 open import Data.List.Base using (List; []; _∷_)

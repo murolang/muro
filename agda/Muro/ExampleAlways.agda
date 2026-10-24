@@ -3,6 +3,7 @@
 -- The recursive component is a proof about the tail, not Unit.
 ------------------------------------------------------------------------
 
+{-# OPTIONS --safe #-}
 module Muro.ExampleAlways where
 
 open import Data.List.Base using (List; []; _∷_)

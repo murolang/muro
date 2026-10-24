@@ -12,7 +12,7 @@
 --
 -- The meeting is evidence. One end conforms to the protocol. The
 -- other conforms to the other end of that protocol. A run term has
--- no seat. None of these constructors is added to Tm or PTm. The
+-- no seat. None of these constructors is added to Tm. The
 -- Elixir checker follows this meeting. The OTP image carries the
 -- value. The other emitters do not implement the meeting.
 ------------------------------------------------------------------------

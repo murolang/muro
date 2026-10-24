@@ -13,7 +13,7 @@
 -- and does not cross.
 --
 -- Neither mark is a constructor of Qty. This is not a source syntax.
--- None of these constructors is added to Tm or PTm. The Elixir
+-- None of these constructors is added to Tm. The Elixir
 -- checker follows this sitting: `endpoint` names the session and the
 -- scheme, and `read` states stay or cross. The run emitters omit
 -- both. `--node` follows a cross reading with one call. The message

@@ -1,7 +1,7 @@
 ------------------------------------------------------------------------
 -- Multiplicity on an affine arrow. `%0` may drop the binder. `%1`
 -- must use it once. Both marks are the affine quantity. Neither is
--- a constructor of Qty, and neither is added to Tm or PTm.
+-- a constructor of Qty, and neither is added to Tm.
 --
 -- An unmarked binder is `%0`. `checkArrow` is `checkBound` for that
 -- quantity, then `checkMark`. For `%0` the second check accepts

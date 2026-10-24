@@ -1,6 +1,6 @@
 ------------------------------------------------------------------------
 -- Closed-run image. Not a source syntax: none of these constructors is
--- added to Tm or PTm.
+-- added to Tm.
 --
 -- An atom is a nullary constructor of one closed data declaration named
 -- Atom. `atom` and `matom` are `ctor` and `mData` of that declaration, so

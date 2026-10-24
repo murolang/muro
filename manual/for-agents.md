@@ -29,7 +29,7 @@ In brief: two jobs. Do not mix them. This page is the operational contract. Huma
 - Edit `agda/`.
 - Edit `lib/muro/*.ex`.
 - Edit `lib/mix/tasks/`.
-- Add a fourth representation (no raw HOAS as inductive syntax).
+- Add a third representation (no raw HOAS as inductive syntax).
 - Invent tags, implicits, metavariables, or tactics.
 - Promote a spec to evidence or evidence to run.
 - Treat this manual as ExDoc. Elixir API docs are `@moduledoc` / `mix docs`.
@@ -97,9 +97,8 @@ lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monito
 lib/muro/example.ex     same book as Agda
 lib/mix/tasks/muro.check.ex
 agda/Muro.agda          public re-export
-agda/Muro/Syntax.agda   Tm n (de Bruijn) and PTm V (PHOAS)
+agda/Muro/Syntax.agda   Tm n (de Bruijn)
 agda/Muro/Subst.agda    wk, sub, inst
-agda/Muro/Unembed.agda  PHOAS → de Bruijn (TERMINATING, not --safe)
 agda/Muro/SubstLemmas.agda  renaming / substitution algebra
 agda/Muro/Env.agda      Sig, Ctx, uses, mode order (shared by Check and ⊢)
 agda/Muro/Check.agda    the decision procedure: structural on the term, fuel only where it reduces
@@ -146,14 +145,13 @@ All terms check. Evidence never becomes a run.
 
 `Muro.Check.check_sig/2` returns `:ok` on a well-typed book, or `{:error, msg}` with every definition error in book order. `check_sig(book, fuel: n)` sets the fuel for each definition. Definitions are checked concurrently; the fuel is the bound, not a wall-clock timeout.
 
-## Representations (do not add a fourth)
+## Representations (do not add a third)
 
 | Layer | Form | Where |
 | --- | --- | --- |
 | Parser / pretty / emit | named FOAS | `lib/muro/{parser,ast,emit}.ex` |
 | Check / subst | de Bruijn | `lib/muro/{check,subst}.ex`, `agda/Muro/{Check,Subst}.agda` |
-| Examples in Agda | PHOAS `PTm V` | `agda/Muro/Syntax.agda`, `agda/Muro/Example.agda` |
-| Metatheory | de Bruijn `Tm n` | `agda/Muro/Syntax.agda` |
+| Examples and metatheory | de Bruijn `Tm n` | `agda/Muro/Syntax.agda`, `agda/Muro/Example*.agda` |
 
 Elixir constraints when you are in Job B: ASCII identifiers only. Do not define local `hd/1`. Guards cannot call ordinary `defp` helpers.
 

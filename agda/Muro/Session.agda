@@ -35,7 +35,7 @@
 -- are the affine quantity. Neither is a new constructor of Qty.
 --
 -- This is not a source syntax. None of these constructors is added
--- to Tm or PTm. `decide` searches for a derivation. `finishes`
+-- to Tm. `decide` searches for a derivation. `finishes`
 -- decides `Ends`. The Elixir checker follows this judgment. `skel`
 -- carries the value on `say` and the type on `hear`. The OTP image
 -- exchanges that value. The other emitters do not implement the

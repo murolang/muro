@@ -2,15 +2,13 @@ AGDA  := agda
 # --no-libraries: vendored stdlib ships extra .agda-lib files (tests, cubical).
 AFLAGS := --no-libraries -i agda -i vendor/agda-stdlib/src --warning=noUnsupportedIndexedMatch
 
-# Theorem modules — Judgement, Wall, Consistency, Typing, Convert,
+# The Agda tree — Judgement, Wall, Consistency, Typing, Convert,
 # Reduction, Spine, Data, Frag, Tag, Session, Dual, Meet, Talk, Seated, Held, Place, Located, the checker Check and its
-# soundness proof Soundness (with Soundness.Conv, Soundness.Views), and
-# what they import (Base, Syntax, Subst, SubstLemmas, Env) — are checked
-# under --safe: no postulates, no TERMINATING, no --type-in-type. Check is
-# structurally recursive on the term, with fuel only where it reduces.
-# Unembed (PHOAS → de Bruijn, for the examples only) carries a
-# TERMINATING pragma, so the full tree with the examples is checked
-# without --safe.
+# soundness proof Soundness (with Soundness.Conv, Soundness.Views),
+# what they import (Base, Syntax, Subst, SubstLemmas, Env), and the
+# examples — is checked under --safe: no postulates, no TERMINATING,
+# no --type-in-type. Check is structurally recursive on the term, with
+# fuel only where it reduces.
 .PHONY: agda agda-safe agda-all agda-soundness agda-syntax agda-check elixir clean
 
 agda: agda-safe agda-all
@@ -37,7 +35,7 @@ agda-soundness:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Soundness.agda
 
 agda-all:
-	$(AGDA) $(AFLAGS) agda/Muro.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro.agda
 
 agda-syntax:
 	$(AGDA) $(AFLAGS) agda/Muro/Syntax.agda
