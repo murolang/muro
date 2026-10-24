@@ -4,7 +4,7 @@
 ------------------------------------------------------------------------
 
 -- `Muro.Rec` is coinductive. `--guardedness` is infective, and it
--- is allowed under `--safe`.
+-- is allowed under `--safe`. `Muro.Linear` imports `Muro.Rec`.
 {-# OPTIONS --safe --guardedness #-}
 module Muro where
 
@@ -36,6 +36,7 @@ import Muro.Talk
 import Muro.Seated
 import Muro.Held
 import Muro.Arrow
+import Muro.Linear
 import Muro.Place
 import Muro.Located
 open import Muro.Example public

@@ -36,20 +36,37 @@ proto      ::= "end" | "(" proto ")"
              | ("send" | "recv") pay proto
              | ("send" | "recv") "(" ident ":" "Bit" ")" "on" proto proto
              | ("choose" | "branch") proto proto
+             | "rec" ident "." proto
+             | ident                         -- recursion variable
 proc       ::= "done" | "stop" | "(" proc ")"
              | "put" pval proc
              | "get" "(" ident ":" pay ")" proc
              | "get" "(" ident ":" "Bit" ")" "on" proc proc
              | ("pick0" | "pick1") proc
              | "cover" proc proc
+             | "rec" ident "." proc
+             | ident                         -- jump
 pay        ::= "Nat" | "Bit" | "Unit" | pay "*" pay | "(" pay ")"
              | "{" (ident ":" pay ("," ident ":" pay)*)? "}"
+             | "Vec" pay pay
+             | ident pay*                    -- non-indexed declared data type
 pval       ::= numeral | "tt" | "b0" | "b1" | ident | "(" pval ")"
              | "(" pval "," pval ")"
              | "{" (ident "=" pval ("," ident "=" pval)*)? "}"
 numeral    ::= [0-9]+
 def        ::= "def" ident ":" tag term ":=" term
+             | "def" ident ":" ety ":=" etm
 tag        ::= "run" "internal"? | "spec" | "evidence"
+ety        ::= "(" ident ":" ident ")" earrow ety
+             | "done"
+             | ident
+earrow     ::= "⊸" | "-o" | "→" | "->"
+etm        ::= eatom eatom*
+eatom      ::= ("λ¹" | "lam1" | "λ" | "lam") "(" ident ":" ident ")" earrow etm
+             | "dual" eatom
+             | "meet" eatom eatom
+             | "(" etm ")"
+             | ident
 
 term       ::= atom atom*                  -- juxtaposition is application
              | term ("×" | "*") term
@@ -102,7 +119,7 @@ Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an
 
 A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are identifiers; `suc`, `refl`, `tt`, and `Nat` are not. `->` ends a word, so `Nat->Nat` is an arrow.
 
-`end`, `send`, `recv`, `choose`, `branch`, `rec`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. Parentheses group a nested protocol or process: `recv Nat (send Nat end)`. `send` and `recv` name one payload type and one continuation. `put` writes a value of that type. `get` names the type. `choose` and `branch` still name two protocols. `dual` is a keyword in `session name := dual name`. Outside that form it is an identifier, so `def dual : run Nat := 0` is a definition. The mark on a dual session is the named session's mark when it is omitted. `seen` is a keyword in `session name := seen party with party in talk`. `with` there names the other party, and `in` names the description. Outside that form `seen` is an identifier, so `def seen : run Nat := 0` is a definition. `meet` and `with` are keywords in `meet name : left with right`. `with` is also the keyword between the two parties of a `seen` session. Outside those forms they are identifiers, so `def meet : run Nat := 0` and `def with : run Nat := 0` are definitions.
+`end`, `send`, `recv`, `choose`, `branch`, `rec`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. Parentheses group a nested protocol or process: `recv Nat (send Nat end)`. `send` and `recv` name one payload type and one continuation. `put` writes a value of that type. `get` names the type. `choose` and `branch` still name two protocols. `dual` is a keyword in `session name := dual name` and in an endpoint function (`dual s`). Outside those forms it is an identifier, so `def dual : run Nat := 0` is a definition. The mark on a dual session is the named session's mark when it is omitted. `seen` is a keyword in `session name := seen party with party in talk`. `with` there names the other party, and `in` names the description. Outside that form `seen` is an identifier, so `def seen : run Nat := 0` is a definition. `meet` and `with` are keywords in `meet name : left with right`. `meet` is also the keyword in an endpoint function (`meet s t`). `with` is also the keyword between the two parties of a `seen` session. Outside those forms they are identifiers, so `def meet : run Nat := 0` and `def with : run Nat := 0` are definitions.
 
 A payload type is `Nat`, `Bit`, `Unit`, a pair, a record of named fields, a vector, or a non-indexed declared data type applied to the payload types written after it (`send Bool end`, `send (Maybe Nat) end`). `Vec` is the vector form, so a data type of that name is not written there. A pair is a tuple, and `*` in a payload associates to the right, so `send Nat * Bit end` is `send (Nat * Bit) end`. A record is a map whose keys are the names written there, in that order, and that order is the type: `{x : Nat, y : Nat}` and `{y : Nat, x : Nat}` are different types. `{}` is the empty record. A repeated name is refused. A key is a name in the type. `Vec Nat n` is a vector whose length is the name `n`. `Vec Nat 2` is a vector of that numeral length. The element is one payload type, so a pair element is parenthesized: `Vec (Nat * Bit) n`. `Nat`, `Bit`, `Unit`, and `Vec` are those types only where a payload is written. Outside a payload, `Bit` is an identifier, so `def Bit : run Nat := 0` is a definition, and so is `def Vec : run Nat := 0`. A payload value is a numeral, `tt`, `b0`, `b1`, a pair `(v, w)`, a record `{ name = v }`, `rep`, a constructor (`true`, `(just 0)`, `(cons 0 nil)`), or a variable bound by an enclosing `get`. `rep n 0` is a vector of the length `n` whose element is `0`. `rep` is that value only where a payload value is written. The type of a value is the type of what was written, in that order.
 
@@ -115,6 +132,8 @@ Value binding: `get (k : Type) continuation` receives a value of that type and b
 `at` is a keyword in an `endpoint`, in a `read`, and in a `seat`. An `endpoint` names a session and a scheme: `endpoint name := session at scheme`. A `read` states `stay` or `cross`, then a process name, an endpoint name, `at`, a place name, and a process. A `seat` names a party, a place, and a description: `seat name : party at place in talk`. A `link` states `stay` or `cross`, then two seats, `in`, and that description: `link name : stay seat with seat in talk`. Outside those forms `endpoint`, `read`, `at`, `seat`, and `link` are identifiers, so `def seat : run Nat := 0` and `def link : run Nat := 0` are definitions. The same place stays. Two places cross once. The payload stays on the session.
 
 `%0` and `%1` are whole tokens. `%10` is not `%1` followed by `0`. On a session, an unmarked session is `%0`, and `%1` requires the process to finish. On a Π or λ binder, an unmarked binder is `%0`, and `%1` requires the variable to be used. Both marks are the affine quantity. The λ mark and the Π mark must agree.
+
+An endpoint function has no mode tag. Its type starts with `(`. `(s : ping) ⊸ ping` is a linear arrow (`-o` is the same arrow). `(s : ping) → ping` is affine. `λ¹` (`lam1`) binds the endpoint linearly. `λ` (`lam`) binds it affinely. The arrow after `λ` may be `→` or `⊸`; the multiplicity is the lambda's. `done` is the meeting. `dual` and `meet` are keywords in that body: `dual s`, `meet s t`. `+`, `-`, and `%` on an endpoint binder are refused. The function is evidence. The named session may repeat, and its payload may be a declared data type. `dual` keeps `rec` and that payload. A following `def`, `session`, or `meet name :` is the next entry.
 
 Inside a `data` block each constructor declaration `ident ":" term` begins on its own line; that is how an application stops before the next constructor. On one line, `f x : Nat` inside `{ … }` is the application `f x` followed by the type. A following line that starts with `session` or `conform`, or with a `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `talk`, `seat`, or `link` entry, ends that type the same way. A constructor may be named `talk`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `seat`, or `link`: the entry forms are `talk name :=`, `place name :=`, `scheme name :=`, `move stay` or `move cross`, `endpoint name :=`, `read stay` or `read cross`, `meet name :`, `seat name :`, and `link name :`. `talk : Type`, `meet : Type`, `seat : Type`, and `link : Type` are constructors.
 

@@ -46,7 +46,7 @@ defmodule Muro.Lexer do
     "in"
   ]
 
-  @sigils ["λ", "Π", "ν"]
+  @sigils ["λ¹", "λ", "Π", "ν"]
 
   @tags ["evidence", "internal", "spec", "run"]
 
@@ -77,7 +77,7 @@ defmodule Muro.Lexer do
     "tt"
   ]
 
-  @operators [":=", "->", "=>", "::", "==", "→", "×", "⊎", "≡"]
+  @operators [":=", "->", "-o", "=>", "::", "==", "⊸", "→", "×", "⊎", "≡"]
 
   @spec tokenize(String.t()) :: [token]
   def tokenize(source) when is_binary(source) do

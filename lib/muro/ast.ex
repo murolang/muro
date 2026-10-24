@@ -397,7 +397,8 @@ defmodule Muro.Ast do
             :meet,
             :talk,
             :seat,
-            :link
+            :link,
+            :relay
           ] ->
             {:ok, d}
 
@@ -469,6 +470,9 @@ defmodule Muro.Ast do
         acc = atoms_in(params, acc)
         acc = atoms_in(Map.get(d, :indices, []), acc)
         Enum.reduce(ctors, acc, fn c, acc -> atoms_in(c.type, acc) end)
+
+      %{kind: :relay}, acc ->
+        acc
 
       %{type: ty, body: bo}, acc ->
         atoms_in(bo, atoms_in(ty, acc))

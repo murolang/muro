@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.16.64
+
+A session endpoint may be bound linearly. A binder stays affine by default: the endpoint is used at most once. `λ¹` requires the variable to be used once. `⊸` is the arrow that accepts or returns a linear endpoint.
+
+```
+session ping := recv Nat (send Nat end)
+session back := dual ping
+
+def forward : (s : ping) ⊸ ping := λ¹ (s : ping) → s
+```
+
+`dual s` keeps the linear multiplicity and dualises the protocol. `meet s t` checks when `t` is the other end and each linear endpoint is consumed once. An unused linear endpoint is refused. A linear endpoint used twice is refused, with the affine message. An affine endpoint may still be dropped, and a second use of it is still refused. Data declared `+` stays reusable. `%1` on a session still means the process must finish, and `%1` on a Π binder still means that variable must be used. A linear binder on `Nat` is refused. `+`, `-`, and `%` on an endpoint binder are refused. The endpoint function is evidence, so emit drops it. The protocol stays spec. The process stays evidence. The OTP image carries the value.
+
+### Manual
+
+- Sessions: one paragraph and the `forward` example.
+- Limits: affine and linear are the endpoint multiplicities. A third multiplicity, a quantity mark on an endpoint, a linear binder on data, an unused linear endpoint, a linear endpoint used twice, and a meeting that drops a linear endpoint stay refused.
+
+### Examples
+
+- `linear.muro`: `forward`, its dual, a matching meeting, and a run that emit keeps.
+
+### Package
+
+- Version 0.16.64.
 ## 0.16.63
 
 A declared data type may be a session payload. `session flag := send Bool end` checks when `Bool` is `data Bool : Type where true : Bool` and `false : Bool`. The other end is `recv Bool end`. `put true done` meets `get Bool done`. `put (just 0) done` does not inhabit `Bool`. `Maybe Nat`, `List Nat`, and `Either Nat Bit` are payloads the same way: `nothing` and `(just 0)`, `nil` and `(cons 0 nil)`, `(left 0)` and `(right b0)`. The OTP image carries the atom `true`, or the tagged tuple `{:just, 0}`. An evidence term is still dropped before the message.

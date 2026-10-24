@@ -19,6 +19,7 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - Unification
 - Metavariables / unification (`?` is an unsolved goal that always fails; it does not unify)
 - A quantity other than affine, `+`, and `-`. `%0` and `%1` are marks on the affine quantity
+- A multiplicity on a session endpoint other than affine and linear. Affine, written `(s : session) →`, is used at most once. Linear, written `λ¹` and `(s : session) ⊸`, is used exactly once. `+`, `-`, and `%` on an endpoint binder are refused. A linear binder on ordinary data, on evidence, or on a run term is refused. An unused linear endpoint is refused. A linear endpoint used twice is refused. A meeting that does not consume a linear endpoint exactly once is refused. Neither multiplicity is a quantity. A linear endpoint may be a recursive session, and it may carry a declared data payload. The multiplicity is the endpoint's, and the payload stays data
 - A ν family with no index, one whose `uncons` takes the family at other arguments than its indices in order, or one whose body is not a product
 - `+` on Stream
 - `+` on Either

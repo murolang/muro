@@ -226,3 +226,33 @@ meet wire : server with client
 `rec X. X` is not a protocol. `rec X. rec Y. X` is not one either: the second `rec` does not guard `X`. A name with no `rec` is not a protocol. `rec X. end` binds nothing and is `end`. `rec X. rec Y. send Nat X` is one loop, and both names are that loop. A jump does not finish, so `session %1` still refuses a process that can return to its `rec`. `rec X. done` does not jump, and it finishes.
 
 `examples/recursive.muro`
+
+## A linear endpoint
+
+An endpoint binder is affine by default, so the endpoint is used at most once. `λ¹` binds a session endpoint linearly, and the checker requires that variable to be used once. `⊸` is the arrow that accepts or returns a linear endpoint. `dual` keeps the multiplicity and dualises the protocol. A meeting of two linear endpoints requires each one to be consumed once; abandoning either is refused. The function is evidence, so it is erased before emit. The protocol stays spec. The process stays evidence. The OTP image still carries the value. `examples/linear.muro` is the worked book.
+
+```muro
+session ping := recv Nat (send Nat end)
+
+def forward : (s : ping) ⊸ ping := λ¹ (s : ping) → s
+```
+
+The protocol may repeat, and a payload may be a declared data type. `dual` keeps `rec` and the payload. The multiplicity is the endpoint's.
+
+```muro
+session loop := rec X. recv Nat (send Nat X)
+
+def echo : (s : loop) ⊸ loop := λ¹ (s : loop) → s
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+session flag := send Bool end
+
+def pass : (s : flag) ⊸ flag := λ¹ (s : flag) → s
+
+session flags := rec X. send Bool X
+
+def flags-pass : (s : flags) ⊸ flags := λ¹ (s : flags) → s
+```
