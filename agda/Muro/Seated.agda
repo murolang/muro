@@ -8,7 +8,8 @@
 -- The boundary is `decide` of the two places. The protocol is the
 -- session, and it is the same protocol at every place. The payload
 -- stays on the session. There is no constructor that carries a
--- payload on the move.
+-- payload on the move. A description has no evidence payload, so a
+-- seated party owes no evidence.
 --
 -- Spec holds where the party sits. Evidence is the boundary. A run
 -- term has no seat. None of these constructors is added to Tm or

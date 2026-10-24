@@ -9,7 +9,10 @@ defmodule Muro.Session do
   are the type. A vector is a list of that length. `put` sends a value
   of that type. `get` binds the received value to a named variable that
   can be used in the continuation. A dependent receive binds a name the
-  continuation's payload may mention as a vector length. `choose` and
+  continuation's payload may mention as a vector length. An evidence
+  payload sends a nat at most a bound, a numeral or a nat bound
+  earlier. The sender owes that evidence, and the checker decides it as
+  `decide` does. The process puts the nat alone. `choose` and
   `branch` select an arm. `stop` conforms
   to every protocol. `finishes/1` is `:yes` when every leaf is `done`.
   `skel/1` carries the value on `say` and the type on `hear`. `dual/1`
@@ -27,6 +30,8 @@ defmodule Muro.Session do
   def dual({:recv, a, s}), do: {:send, a, dual(s)}
   def dual({:dsend, x, a, s}), do: {:drecv, x, a, dual(s)}
   def dual({:drecv, x, a, s}), do: {:dsend, x, a, dual(s)}
+  def dual({:esend, x, e, s}), do: {:erecv, x, e, dual(s)}
+  def dual({:erecv, x, e, s}), do: {:esend, x, e, dual(s)}
   def dual({:choose, s, t}), do: {:branch, dual(s), dual(t)}
   def dual({:branch, s, t}), do: {:choose, dual(s), dual(t)}
 
@@ -168,6 +173,21 @@ defmodule Muro.Session do
     end
   end
 
+  # `eput-ok`. The nat is a numeral or a name bound at Nat, and it owes
+  # the bound the substitution resolves.
+  defp go({:put, ty, val, p} = proc, {:esend, _y, e, s} = proto, ctx, idx) do
+    if put_ok?(ty, val, :nat, ctx) and owed?(val, resolve(idx, e), ctx) do
+      keep(go(p, s, ctx, idx))
+    else
+      {:no, proc, proto}
+    end
+  end
+
+  # `eget-ok`. The receiver binds a nat and owes nothing.
+  defp go({:get, :nat, name, p}, {:erecv, _y, _e, s}, ctx, idx) do
+    keep(go(p, s, bind_ctx(ctx, name, :nat), idx))
+  end
+
   defp go({:pick0, p}, {:choose, s, _}, ctx, idx), do: keep(go(p, s, ctx, idx))
   defp go({:pick1, p}, {:choose, _, t}, ctx, idx), do: keep(go(p, t, ctx, idx))
 
@@ -183,8 +203,28 @@ defmodule Muro.Session do
   defp put_ok?(:unknown, val, expected, ctx), do: value?(val, expected, ctx)
   defp put_ok?(ty, val, expected, ctx), do: ty == expected and value?(val, ty, ctx)
 
+  # The count under `{:bound, name}` is how often the name was bound.
+  # `Once` reads it.
   defp bind_ctx(ctx, :_, _ty), do: ctx
-  defp bind_ctx(ctx, name, ty), do: Map.put(ctx, name, ty)
+
+  defp bind_ctx(ctx, name, ty) do
+    ctx
+    |> Map.put(name, ty)
+    |> Map.update({:bound, name}, 1, &(&1 + 1))
+  end
+
+  # `resolve`. A numeral is its own bound. A name is what the
+  # substitution holds for it, and an unresolved name has no bound.
+  defp resolve(_idx, {:lit, n}), do: {:lit, n}
+  defp resolve(idx, {:var, name}), do: Map.get(idx, name)
+
+  # `owed?` and `le?`. A numeral is at most a numeral by `≤`. Zero is
+  # at most a name. A name is at most itself when it was bound once.
+  defp owed?(_val, nil, _ctx), do: false
+  defp owed?({:nat, m}, {:lit, n}, _ctx), do: m <= n
+  defp owed?({:nat, 0}, {:var, _}, _ctx), do: true
+  defp owed?({:var, x}, {:var, x}, ctx), do: Map.get(ctx, {:bound, x}) == 1
+  defp owed?(_val, _e, _ctx), do: false
 
   # A nat instantiates the lengths that name it. Another payload
   # shadows the name and does not instantiate a length. `_` binds nothing.
@@ -200,7 +240,7 @@ defmodule Muro.Session do
   defp ext(idx, name, _val, _ty), do: Map.delete(idx, name)
 
   # The protocol binder is the process binder in the continuation.
-  defp rename_idx(idx, y, :_), do: Map.delete(idx, y)
+  defp rename_idx(idx, y, :_), do: Map.put(Map.delete(idx, y), y, {:var, :_})
   defp rename_idx(idx, y, name), do: Map.put(Map.delete(idx, y), y, {:var, name})
 
   defp nexp_of({:nat, n}) when is_integer(n) and n >= 0, do: {:lit, n}
@@ -237,12 +277,27 @@ defmodule Muro.Session do
     with_ty(ty_ok(ty, ctx), proto_ok(s, Map.put(ctx, name, ty)))
   end
 
+  # The name of an evidence payload is in scope in its bound only.
+  defp proto_ok({:esend, _name, e, s}, ctx), do: with_ty(bound_ok(e, ctx), proto_ok(s, ctx))
+  defp proto_ok({:erecv, _name, e, s}, ctx), do: with_ty(bound_ok(e, ctx), proto_ok(s, ctx))
   defp proto_ok({:choose, s, t}, ctx), do: with_ty(proto_ok(s, ctx), proto_ok(t, ctx))
   defp proto_ok({:branch, s, t}, ctx), do: with_ty(proto_ok(s, ctx), proto_ok(t, ctx))
   defp proto_ok(_, _ctx), do: {:error, "ill-formed protocol"}
 
   defp with_ty(:ok, rest), do: rest
   defp with_ty({:error, _} = err, _rest), do: err
+
+  defp bound_ok({:lit, n}, _ctx) when is_integer(n) and n >= 0, do: :ok
+
+  defp bound_ok({:var, name}, ctx) do
+    case Map.get(ctx, name) do
+      nil -> {:error, "unbound bound name"}
+      :nat -> :ok
+      _ -> {:error, "bound is not a nat"}
+    end
+  end
+
+  defp bound_ok(_, _ctx), do: {:error, "bound is not a nat"}
 
   defp ty_ok(ty, _ctx) when ty in [:nat, :bit, :unit], do: :ok
   defp ty_ok({:pair, a, b}, ctx), do: with_ty(ty_ok(a, ctx), ty_ok(b, ctx))
@@ -337,6 +392,14 @@ defmodule Muro.Session do
 
   def show_proto({:drecv, name, ty, s}) do
     "recv (#{name} : #{show_pay(ty)}) #{paren_proto(s)}"
+  end
+
+  def show_proto({:esend, name, e, s}) do
+    "send (#{name} : Nat) {#{name} ≤ #{show_ix(e)}} #{paren_proto(s)}"
+  end
+
+  def show_proto({:erecv, name, e, s}) do
+    "recv (#{name} : Nat) {#{name} ≤ #{show_ix(e)}} #{paren_proto(s)}"
   end
 
   def show_proto({:choose, s, t}), do: "choose #{paren_proto(s)} #{paren_proto(t)}"

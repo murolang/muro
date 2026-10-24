@@ -4,7 +4,10 @@
 -- The payload is a nat, a bit, unit, a pair, or a record of named
 -- fields. A pair is a tuple. A record is a fixed map. `offer` is
 -- one party choosing and the other offering both arms. A party
--- does not talk to itself.
+-- does not talk to itself. A description binds no name, so it has
+-- no dependent payload and no evidence payload: `seen` gives neither
+-- `esend` nor `erecv`. A session that owes evidence is written as a
+-- session.
 --
 -- On the channel between two parties, the sender's session is
 -- `send` or `choose` and the receiver's session is `recv` or

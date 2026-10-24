@@ -332,6 +332,141 @@ defmodule Muro.SessionTest do
     assert msg =~ "does not conform"
   end
 
+  test "an evidence payload sends a nat at most a bound" do
+    src = """
+    session window := recv (w : Nat) (send (d : Nat) {d ≤ w} end)
+    session grant-end := dual window
+    conform full : window := get (w : Nat) (put w done)
+    conform empty : window := get (w : Nat) (put 0 done)
+    conform grant : grant-end := put 8 (get (d : Nat) done)
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    window = Enum.find(book, &(&1.name == "window"))
+    assert window.proto == {:drecv, :w, :nat, {:esend, :d, {:var, :w}, :end}}
+    assert Session.dual(window.proto) == {:dsend, :w, :nat, {:erecv, :d, {:var, :w}, :end}}
+    assert Session.dual(Session.dual(window.proto)) == window.proto
+    assert Session.proto_ok(window.proto) == :ok
+    assert Session.show_proto(window.proto) == "recv (w : Nat) (send (d : Nat) {d ≤ w} end)"
+
+    assert Session.show_proto(Session.dual(window.proto)) ==
+             "send (w : Nat) (recv (d : Nat) {d ≤ w} end)"
+
+    assert Check.check_sig(book) == :ok
+
+    assert {:ok, [ascii]} = Parser.parse("session frame := send (d : Nat) {d <= 16384} end\n")
+    assert ascii.proto == {:esend, :d, {:lit, 16384}, :end}
+  end
+
+  test "a numeral within a numeral bound conforms, and one past it does not" do
+    assert check("""
+           session granted := send (w : Nat) (send (d : Nat) {d ≤ w} end)
+           conform within : granted := put 8 (put 5 done)
+           conform edge : granted := put 8 (put 8 done)
+           session frame := send (d : Nat) {d ≤ 16384} end
+           conform small : frame := put 16384 done
+           """) == :ok
+
+    # d > w: nine is not at most eight.
+    assert {:error, msg} =
+             check("""
+             session granted := send (w : Nat) (send (d : Nat) {d ≤ w} end)
+             conform over : granted := put 8 (put 9 done)
+             """)
+
+    assert msg =~ "put 9 done does not conform to send (d : Nat) {d ≤ w} end"
+
+    assert {:error, msg} =
+             check("""
+             session frame := send (d : Nat) {d ≤ 16384} end
+             conform big : frame := put 16385 done
+             """)
+
+    assert msg =~ "does not conform"
+  end
+
+  test "a numeral against a received window has no evidence" do
+    assert {:error, msg} =
+             check("""
+             session window := recv (w : Nat) (send (d : Nat) {d ≤ w} end)
+             conform guess : window := get (w : Nat) (put 2 done)
+             """)
+
+    assert msg =~ "put 2 done does not conform to send (d : Nat) {d ≤ w} end"
+
+    # Zero is at most any window, named or not.
+    assert check("""
+           session window := recv (w : Nat) (send (d : Nat) {d ≤ w} end)
+           conform anon : window := get Nat (put 0 done)
+           """) == :ok
+  end
+
+  test "a window name bound twice is no evidence" do
+    assert {:error, msg} =
+             check("""
+             session stale := recv (w : Nat) (recv Nat (send (d : Nat) {d ≤ w} end))
+             conform s : stale := get (w : Nat) (get (w : Nat) (put w done))
+             """)
+
+    assert msg =~ "put w done does not conform"
+
+    assert check("""
+           session stale := recv (w : Nat) (recv Nat (send (d : Nat) {d ≤ w} end))
+           conform s : stale := get (w : Nat) (get (u : Nat) (put w done))
+           """) == :ok
+
+    # The window is a nat. Sending another received nat is no evidence.
+    assert {:error, _} =
+             check("""
+             session two := recv (w : Nat) (recv Nat (send (d : Nat) {d ≤ w} end))
+             conform s : two := get (w : Nat) (get (u : Nat) (put u done))
+             """)
+  end
+
+  test "an ill-formed evidence payload is refused" do
+    assert {:error, msg} = check("session open := send (d : Nat) {d ≤ w} end\n")
+    assert msg =~ "unbound bound name"
+
+    assert {:error, msg} =
+             check("session bits := recv (b : Bit) (send (d : Nat) {d ≤ b} end)\n")
+
+    assert msg =~ "bound is not a nat"
+
+    assert {:error, msg} = Parser.parse("session other := send (d : Nat) {e ≤ 3} end\n")
+    assert msg =~ "the bound names the nat that is sent"
+
+    assert {:error, msg} = Parser.parse("session bit := send (d : Bit) {d ≤ 3} end\n")
+    assert msg =~ "an evidence payload is a nat"
+
+    # The name is in scope in its bound only.
+    assert {:error, msg} =
+             check("session later := send (d : Nat) {d ≤ 4} (send (Vec Nat d) end)\n")
+
+    assert msg =~ "unbound length"
+  end
+
+  test "the receiver of an evidence payload gets a nat" do
+    assert {:error, msg} =
+             check("""
+             session window := recv (w : Nat) (send (d : Nat) {d ≤ w} end)
+             session grant-end := dual window
+             conform g : grant-end := put 8 (get Bit done)
+             """)
+
+    assert msg =~ "get Bit done does not conform to recv (d : Nat) {d ≤ w} end"
+  end
+
+  test "the evidence is not in the skeleton" do
+    assert {:ok, book} =
+             Parser.parse("""
+             session window := recv (w : Nat) (send (d : Nat) {d ≤ w} end)
+             conform full : window := get (w : Nat) (put w done)
+             """)
+
+    full = Enum.find(book, &(&1.name == "full"))
+    assert Session.skel(full.proc) == {:hear, :nat, :w, {:say, {:var, :w}, :finish}}
+  end
+
   test "value binding: parse get with binder" do
     src =
       "conform test : ping := get (k : Nat) (put k done)\nsession ping := recv Nat (send Nat end)\n"

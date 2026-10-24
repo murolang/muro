@@ -23,6 +23,10 @@ defmodule Muro.EmitOtpTest do
                :Far,
                :SizedServer,
                :SizedClient,
+               :Echo,
+               :PeerEcho,
+               :WindowServer,
+               :WindowClient,
                ""
              ]}
           ] do
@@ -168,6 +172,34 @@ defmodule Muro.EmitOtpTest do
     {:ok, server, client, server_ref, client_ref} = meet(:sized_wire)
     assert_receive {:DOWN, ^server_ref, :process, ^server, :normal}
     assert_receive {:DOWN, ^client_ref, :process, ^client, :normal}
+
+    {:ok, server, client, server_ref, client_ref} = meet(:window_wire)
+    assert_receive {:DOWN, ^server_ref, :process, ^server, :normal}
+    assert_receive {:DOWN, ^client_ref, :process, ^client, :normal}
+  end
+
+  test "an evidence payload carries the nat alone" do
+    assert {:ok, src} = Emit.Otp.render(checked!("examples/meet.muro"), "meet")
+    assert src =~ "def window_wire do"
+    assert src =~ "{:hear, :nat, :w, {:say, {:var, :w}, :finish}}"
+    assert src =~ "{:say, 8, {:hear, :nat, :d, :finish}}"
+    refute src =~ "esend"
+    refute src =~ "erecv"
+    refute src =~ "≤"
+
+    Code.compile_string(src)
+
+    # The window arrives as a nat, and the data goes back as that nat.
+    {:ok, pid, ref} = meet_one(:WindowServer)
+    send(pid, {:muro, self(), 8})
+    assert_receive {:muro, ^pid, 8}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    # The client sends the window and receives the data as one nat.
+    {:ok, pid, ref} = meet_one(:WindowClient)
+    assert_receive {:muro, ^pid, 8}
+    send(pid, {:muro, self(), 5})
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
   end
 
   test "a meeting of a reading uses that process" do

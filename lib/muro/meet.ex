@@ -8,6 +8,8 @@ defmodule Muro.Meet do
   it on the receiver's side. A variable is sent at the type of its
   innermost binding, after a nat received on that side has instantiated
   the lengths in that type. That is the type the other process receives.
+  An evidence payload meets as a nat. The evidence is in each
+  conformance, not in the meeting, so this module has no case for it.
   A choice meets the arm that was offered.
   Both ends close, or both abandon. `meets/2` is `:ok` when `decide`
   returns `yes`. Otherwise the pair where it returns `no`.

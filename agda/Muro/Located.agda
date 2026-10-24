@@ -8,7 +8,9 @@
 -- read. `%0` is the affine session: abandonment has a derivation.
 -- `%1` also finishes, and `stop` has none. The boundary is the
 -- move. The payload stays on the session. A value of the wrong
--- type has no derivation at any place.
+-- type has no derivation at any place. The evidence an evidence
+-- payload owes is in the conformance, so it sits with the process
+-- and does not cross.
 --
 -- Neither mark is a constructor of Qty. This is not a source syntax.
 -- None of these constructors is added to Tm or PTm. The Elixir
@@ -98,6 +100,17 @@ sits-done = refl
 
 sits-open : boundary open-away ≡ one
 sits-open = refl
+
+-- The window read at a node. The evidence is the conformance, and the
+-- reading crosses once. A guess has no conformance at any place.
+window-away : Sits full (endpoint aff window (fixed ambient)) (node "a")
+window-away = held full-ok (conform (fixed ambient) (node "a"))
+
+sits-window : boundary window-away ≡ one
+sits-window = refl
+
+guess-nowhere : ∀ {s q} → ¬ Sits guess (endpoint aff window s) q
+guess-nowhere (held c _) = guess-refused c
 
 -- The payload at home is the payload at the node.
 bits-of : ∀ {P S s q} → Sits P (endpoint aff S s) q → Conforms [] P S

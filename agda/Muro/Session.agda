@@ -12,7 +12,11 @@
 -- mention `x` as the length of a vector. `dsend x A S` is the other
 -- direction: the value sent for `x` instantiates `S`. The next
 -- action does not depend on the value. Any value of the payload
--- type conforms. `choose` and `branch` select an arm. Two processes
+-- type conforms. `esend x e S` sends a nat `x` with `x ≤ e`, where
+-- `e` is a numeral or a nat bound earlier. The process owes that
+-- evidence. `erecv x e S` receives such a nat as a nat. The evidence
+-- is part of the conformance derivation, not of the process, so
+-- `skel` does not carry it. `choose` and `branch` select an arm. Two processes
 -- meet when the sent type is the type the continuation expects.
 --
 -- A protocol is spec. A conformance derivation is evidence. Neither
@@ -39,8 +43,8 @@ module Muro.Session where
 
 open import Data.Empty using (⊥)
 open import Data.Maybe.Base using (Maybe; just; nothing)
-open import Data.Nat.Base using (ℕ) renaming (zero to nzero; suc to nsuc)
-open import Data.Nat.Properties using () renaming (_≟_ to _≟ℕ_)
+open import Data.Nat.Base using (ℕ; _≤_; z≤n; s≤s) renaming (zero to nzero; suc to nsuc)
+open import Data.Nat.Properties using () renaming (_≟_ to _≟ℕ_; _≤?_ to _≤?ℕ_)
 open import Data.Product using (_×_; _,_)
 open import Data.Sum using (_⊎_; inj₁; inj₂)
 open import Data.String.Base using (String)
@@ -185,6 +189,8 @@ data Proto : Set where
   recv   : Ty → Proto → Proto
   dsend  : String → Ty → Proto → Proto
   drecv  : String → Ty → Proto → Proto
+  esend  : String → NExp → Proto → Proto
+  erecv  : String → NExp → Proto → Proto
   choose : Proto → Proto → Proto
   branch : Proto → Proto → Proto
 
@@ -285,6 +291,8 @@ applyProto ρ@(bind _ _ _) (send A S) = send (applyTy ρ A) (applyProto ρ S)
 applyProto ρ@(bind _ _ _) (recv A S) = recv (applyTy ρ A) (applyProto ρ S)
 applyProto ρ@(bind _ _ _) (dsend y A S) = dsend y (applyTy ρ A) (applyProto (shadow y ρ) S)
 applyProto ρ@(bind _ _ _) (drecv y A S) = drecv y (applyTy ρ A) (applyProto (shadow y ρ) S)
+applyProto ρ@(bind _ _ _) (esend y e S) = esend y (applyNExp ρ e) (applyProto ρ S)
+applyProto ρ@(bind _ _ _) (erecv y e S) = erecv y (applyNExp ρ e) (applyProto ρ S)
 applyProto ρ@(bind _ _ _) (choose S T) = choose (applyProto ρ S) (applyProto ρ T)
 applyProto ρ@(bind _ _ _) (branch S T) = branch (applyProto ρ S) (applyProto ρ T)
 
@@ -304,6 +312,35 @@ ixOf unit _ = nlit nzero
 ixOf (pair _ _) _ = nlit nzero
 ixOf (rec _) _ = nlit nzero
 ixOf (vec _ _) _ = nlit nzero
+
+------------------------------------------------------------------------
+-- The evidence a sent nat owes. The bound is a numeral, or a name the
+-- substitution resolves. A protocol name it does not resolve has no
+-- bound. A numeral is at most a numeral by `≤`. Zero is at most a
+-- name. A name is at most itself when the context binds it once, so
+-- the value sent is the value the bound names. A name bound twice
+-- has no evidence: the substitution may still name the outer binding.
+------------------------------------------------------------------------
+
+resolve : Idx → NExp → Maybe NExp
+resolve _ (nlit n) = just (nlit n)
+resolve ρ (nvar x) = lookupIdx ρ x
+
+data Absent (x : String) : Ctx → Set where
+  gone : Absent x []
+  past : ∀ {y B Γ} → x ≢ y → Absent x Γ → Absent x ((y , B) ∷ Γ)
+
+data Once (x : String) : Ctx → Set where
+  first : ∀ {A Γ} → Absent x Γ → Once x ((x , A) ∷ Γ)
+  later : ∀ {y B Γ} → x ≢ y → Once x Γ → Once x ((y , B) ∷ Γ)
+
+data Le (Γ : Ctx) : ValExpr nat → NExp → Set where
+  lit-le  : ∀ {m n} → toℕ m ≤ n → Le Γ (lit m) (nlit n)
+  zero-le : ∀ {y} → Le Γ (lit zero) (nvar y)
+  same-le : ∀ {x} → Once x Γ → Le Γ (var x) (nvar x)
+
+data Owed (Γ : Ctx) (v : ValExpr nat) : Maybe NExp → Set where
+  owed : ∀ {e} → Le Γ v e → Owed Γ v (just e)
 
 -- Conformance under an index substitution. `none` is the identity,
 -- which is the conformance a session is checked at. A dependent send
@@ -336,6 +373,17 @@ data Conformsρ (Γ : Ctx) (ρ : Idx) : Proc → Proto → Set where
     A ≡ applyTy ρ B →
     Conformsρ ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) P S →
     Conformsρ Γ ρ (get A x P) (drecv y B S)
+
+  -- The evidence is a premise. The process puts the nat alone.
+  eput-ok : ∀ {y e v P S} →
+    ValExprOk Γ v →
+    Owed Γ v (resolve ρ e) →
+    Conformsρ Γ ρ P S →
+    Conformsρ Γ ρ (put nat v P) (esend y e S)
+
+  eget-ok : ∀ {y e x P S} →
+    Conformsρ ((x , nat) ∷ Γ) ρ P S →
+    Conformsρ Γ ρ (get nat x P) (erecv y e S)
 
   pick0-ok : ∀ {P S T} → Conformsρ Γ ρ P S → Conformsρ Γ ρ (pick0 P) (choose S T)
   pick1-ok : ∀ {P S T} → Conformsρ Γ ρ P T → Conformsρ Γ ρ (pick1 P) (choose S T)
@@ -375,6 +423,9 @@ data ProtoOk : Ctx → Proto → Set where
   recv-ok   : ∀ {Γ A S} → TyOk Γ A → ProtoOk Γ S → ProtoOk Γ (recv A S)
   dsend-ok  : ∀ {Γ x A S} → TyOk Γ A → ProtoOk ((x , A) ∷ Γ) S → ProtoOk Γ (dsend x A S)
   drecv-ok  : ∀ {Γ x A S} → TyOk Γ A → ProtoOk ((x , A) ∷ Γ) S → ProtoOk Γ (drecv x A S)
+  -- The name of an evidence payload is in scope in its bound only.
+  esend-ok  : ∀ {Γ x e S} → NExpOk Γ e → ProtoOk Γ S → ProtoOk Γ (esend x e S)
+  erecv-ok  : ∀ {Γ x e S} → NExpOk Γ e → ProtoOk Γ S → ProtoOk Γ (erecv x e S)
   choose-ok : ∀ {Γ S T} → ProtoOk Γ S → ProtoOk Γ T → ProtoOk Γ (choose S T)
   branch-ok : ∀ {Γ S T} → ProtoOk Γ S → ProtoOk Γ T → ProtoOk Γ (branch S T)
 
@@ -534,6 +585,57 @@ on-dget : ∀ {Γ ρ B x y P S} →
 on-dget (yes d) = yes (dget-ok refl d)
 on-dget (no nd) = no (λ { (dget-ok refl d) → nd d })
 
+absent? : (x : String) (Γ : Ctx) → Dec (Absent x Γ)
+absent? x [] = yes′ gone
+absent? x ((y , _) ∷ Γ) with x ≟ y
+... | yes′ refl = no′ (λ { (past x≢x _) → x≢x refl })
+... | no′ ¬eq with absent? x Γ
+...   | yes′ a = yes′ (past ¬eq a)
+...   | no′ na = no′ (λ { (past _ a) → na a })
+
+once? : (x : String) (Γ : Ctx) → Dec (Once x Γ)
+once? x [] = no′ (λ ())
+once? x ((y , _) ∷ Γ) with x ≟ y
+... | yes′ refl with absent? x Γ
+...   | yes′ a = yes′ (first a)
+...   | no′ na = no′ (λ { (first a) → na a ; (later x≢x _) → x≢x refl })
+once? x ((y , _) ∷ Γ) | no′ ¬eq with once? x Γ
+...   | yes′ o = yes′ (later ¬eq o)
+...   | no′ no-o = no′ (λ { (first _) → ¬eq refl ; (later _ o) → no-o o })
+
+le? : (Γ : Ctx) (v : ValExpr nat) (e : NExp) → Dec (Le Γ v e)
+le? Γ (lit m) (nlit n) with toℕ m ≤?ℕ n
+... | yes′ p = yes′ (lit-le p)
+... | no′ np = no′ (λ { (lit-le p) → np p })
+le? Γ (lit zero) (nvar _) = yes′ zero-le
+le? Γ (lit (suc _)) (nvar _) = no′ (λ ())
+le? Γ (var _) (nlit _) = no′ (λ ())
+le? Γ (var x) (nvar y) with x ≟ y
+... | no′ ¬eq = no′ (λ { (same-le _) → ¬eq refl })
+... | yes′ refl with once? x Γ
+...   | yes′ o = yes′ (same-le o)
+...   | no′ no-o = no′ (λ { (same-le o) → no-o o })
+
+owed? : (Γ : Ctx) (v : ValExpr nat) (m : Maybe NExp) → Dec (Owed Γ v m)
+owed? Γ v nothing = no′ (λ ())
+owed? Γ v (just e) with le? Γ v e
+... | yes′ l = yes′ (owed l)
+... | no′ nl = no′ (λ { (owed l) → nl l })
+
+on-eput : ∀ {Γ ρ y e v P S} →
+  Dec (ValExprOk Γ v) → Dec (Owed Γ v (resolve ρ e)) → Answerρ Γ ρ P S →
+  Answerρ Γ ρ (put nat v P) (esend y e S)
+on-eput (yes′ vok) (yes′ ow) (yes d) = yes (eput-ok vok ow d)
+on-eput (yes′ _) (yes′ _) (no nd) = no (λ { (eput-ok _ _ d) → nd d })
+on-eput (yes′ _) (no′ nw) _ = no (λ { (eput-ok _ ow _) → nw ow })
+on-eput (no′ nvok) _ _ = no (λ { (eput-ok vok _ _) → nvok vok })
+
+on-eget : ∀ {Γ ρ y e x P S} →
+  Answerρ ((x , nat) ∷ Γ) ρ P S →
+  Answerρ Γ ρ (get nat x P) (erecv y e S)
+on-eget (yes d) = yes (eget-ok d)
+on-eget (no nd) = no (λ { (eget-ok d) → nd d })
+
 at0 : ∀ {Γ ρ P S T} → Answerρ Γ ρ P S → Answerρ Γ ρ (pick0 P) (choose S T)
 at0 (yes d) = yes (pick0-ok d)
 at0 (no nd) = no (λ { (pick0-ok d) → nd d })
@@ -553,6 +655,8 @@ decideρ Γ ρ done (send _ _) = no (λ ())
 decideρ Γ ρ done (recv _ _) = no (λ ())
 decideρ Γ ρ done (dsend _ _ _) = no (λ ())
 decideρ Γ ρ done (drecv _ _ _) = no (λ ())
+decideρ Γ ρ done (esend _ _ _) = no (λ ())
+decideρ Γ ρ done (erecv _ _ _) = no (λ ())
 decideρ Γ ρ done (choose _ _) = no (λ ())
 decideρ Γ ρ done (branch _ _) = no (λ ())
 decideρ Γ ρ stop _ = yes abandon
@@ -560,6 +664,10 @@ decideρ Γ ρ (put A v P) (send B S) = on-put (ty≟ A (applyTy ρ B)) (decideV
 decideρ Γ ρ (put A v P) (dsend y B S) with ty≟ A (applyTy ρ B)
 ... | yes′ refl = on-dput (decideValExpr Γ v) (decideρ Γ (bind y (ixOf (applyTy ρ B) v) (shadow y ρ)) P S)
 ... | no′ ¬eq = no (λ d → ¬eq (dput-type d))
+decideρ Γ ρ (put A v P) (esend y e S) with ty≟ A nat
+... | yes′ refl = on-eput (decideValExpr Γ v) (owed? Γ v (resolve ρ e)) (decideρ Γ ρ P S)
+... | no′ ¬eq = no (λ { (eput-ok _ _ _) → ¬eq refl })
+decideρ Γ ρ (put _ _ _) (erecv _ _ _) = no (λ ())
 decideρ Γ ρ (put _ _ _) end = no (λ ())
 decideρ Γ ρ (put _ _ _) (recv _ _) = no (λ ())
 decideρ Γ ρ (put _ _ _) (drecv _ _ _) = no (λ ())
@@ -569,6 +677,10 @@ decideρ Γ ρ (get A x P) (recv B S) = on-get (ty≟ A (applyTy ρ B)) (decide�
 decideρ Γ ρ (get A x P) (drecv y B S) with ty≟ A (applyTy ρ B)
 ... | yes′ refl = on-dget (decideρ ((x , applyTy ρ B) ∷ Γ) (renameIdx y x (shadow y ρ)) P S)
 ... | no′ ¬eq = no (λ d → ¬eq (dget-type d))
+decideρ Γ ρ (get A x P) (erecv y e S) with ty≟ A nat
+... | yes′ refl = on-eget (decideρ ((x , nat) ∷ Γ) ρ P S)
+... | no′ ¬eq = no (λ { (eget-ok _) → ¬eq refl })
+decideρ Γ ρ (get _ _ _) (esend _ _ _) = no (λ ())
 decideρ Γ ρ (get _ _ _) end = no (λ ())
 decideρ Γ ρ (get _ _ _) (send _ _) = no (λ ())
 decideρ Γ ρ (get _ _ _) (dsend _ _ _) = no (λ ())
@@ -580,6 +692,8 @@ decideρ Γ ρ (pick0 _) (send _ _) = no (λ ())
 decideρ Γ ρ (pick0 _) (recv _ _) = no (λ ())
 decideρ Γ ρ (pick0 _) (dsend _ _ _) = no (λ ())
 decideρ Γ ρ (pick0 _) (drecv _ _ _) = no (λ ())
+decideρ Γ ρ (pick0 _) (esend _ _ _) = no (λ ())
+decideρ Γ ρ (pick0 _) (erecv _ _ _) = no (λ ())
 decideρ Γ ρ (pick0 _) (branch _ _) = no (λ ())
 decideρ Γ ρ (pick1 P) (choose _ T) = at1 (decideρ Γ ρ P T)
 decideρ Γ ρ (pick1 _) end = no (λ ())
@@ -587,6 +701,8 @@ decideρ Γ ρ (pick1 _) (send _ _) = no (λ ())
 decideρ Γ ρ (pick1 _) (recv _ _) = no (λ ())
 decideρ Γ ρ (pick1 _) (dsend _ _ _) = no (λ ())
 decideρ Γ ρ (pick1 _) (drecv _ _ _) = no (λ ())
+decideρ Γ ρ (pick1 _) (esend _ _ _) = no (λ ())
+decideρ Γ ρ (pick1 _) (erecv _ _ _) = no (λ ())
 decideρ Γ ρ (pick1 _) (branch _ _) = no (λ ())
 decideρ Γ ρ (cover P Q) (branch S T) = both-of (decideρ Γ ρ P S) (decideρ Γ ρ Q T)
 decideρ Γ ρ (cover _ _) end = no (λ ())
@@ -594,6 +710,8 @@ decideρ Γ ρ (cover _ _) (send _ _) = no (λ ())
 decideρ Γ ρ (cover _ _) (recv _ _) = no (λ ())
 decideρ Γ ρ (cover _ _) (dsend _ _ _) = no (λ ())
 decideρ Γ ρ (cover _ _) (drecv _ _ _) = no (λ ())
+decideρ Γ ρ (cover _ _) (esend _ _ _) = no (λ ())
+decideρ Γ ρ (cover _ _) (erecv _ _ _) = no (λ ())
 decideρ Γ ρ (cover _ _) (choose _ _) = no (λ ())
 
 decide : (Γ : Ctx) (P : Proc) (S : Proto) → Answer Γ P S
@@ -693,6 +811,101 @@ not-bit-len : ¬ ProtoOk [] bit-len
 not-bit-len (drecv-ok _ (send-ok (vec-ok _ (nvar-ok (there _ ()))) _))
 
 ------------------------------------------------------------------------
+-- A window is received, and data is sent within it. The process owes
+-- `d ≤ w`. Sending the window itself is evidence, and so is zero. A
+-- numeral against a window that was received has no evidence: the
+-- window may be smaller. A window the process sent is a numeral, so
+-- `≤` decides it. A name bound twice is refused.
+------------------------------------------------------------------------
+
+num : ℕ → Val nat
+num nzero = zero
+num (nsuc n) = suc (num n)
+
+window : Proto
+window = drecv "w" nat (esend "d" (nvar "w") end)
+
+window-wf : ProtoOk [] window
+window-wf = drecv-ok nat-ok (esend-ok (nvar-ok here) end-ok)
+
+-- The bound of an evidence payload is a numeral or a nat in scope.
+unbound-window : ¬ ProtoOk [] (esend "d" (nvar "w") end)
+unbound-window (esend-ok (nvar-ok ()) _)
+
+full : Proc
+full = get nat "w" (put nat (var "w") done)
+
+full-ok : Conforms [] full window
+full-ok = dget-ok refl (eput-ok (var-ok here) (owed (same-le (first gone))) done-end)
+
+full-decides : decide [] full window ≡ yes full-ok
+full-decides = refl
+
+empty : Proc
+empty = get nat "w" (put nat (lit zero) done)
+
+empty-ok : Conforms [] empty window
+empty-ok = dget-ok refl (eput-ok lit-ok (owed zero-le) done-end)
+
+empty-decides : decide [] empty window ≡ yes empty-ok
+empty-decides = refl
+
+guess : Proc
+guess = get nat "w" (put nat (lit two) done)
+
+guess-refused : ¬ Conforms [] guess window
+guess-refused (dget-ok refl (eput-ok _ (owed ()) _))
+
+guess-decides : decide [] guess window ≡ no guess-refused
+guess-decides = refl
+
+granted : Proto
+granted = dsend "w" nat (esend "d" (nvar "w") end)
+
+within : Proc
+within = put nat (lit (num 8)) (put nat (lit (num 5)) done)
+
+within-ok : Conforms [] within granted
+within-ok =
+  dput-ok refl lit-ok
+    (eput-ok lit-ok (owed (lit-le (s≤s (s≤s (s≤s (s≤s (s≤s z≤n))))))) done-end)
+
+within-decides : decide [] within granted ≡ yes within-ok
+within-decides = refl
+
+-- `d > w`: nine is not at most eight.
+over : Proc
+over = put nat (lit (num 8)) (put nat (lit (num 9)) done)
+
+over-refused : ¬ Conforms [] over granted
+over-refused
+  (dput-ok refl _ (eput-ok _ (owed (lit-le (s≤s (s≤s (s≤s (s≤s (s≤s (s≤s (s≤s (s≤s ())))))))))) _))
+
+over-decides : decide [] over granted ≡ no over-refused
+over-decides = refl
+
+-- A numeral bound in the protocol.
+frame : Proto
+frame = esend "d" (nlit 16384) end
+
+frame-ok : Conforms [] (put nat (lit zero) done) frame
+frame-ok = eput-ok lit-ok (owed (lit-le z≤n)) done-end
+
+-- A second `w` hides the window. The bound still names the first.
+stale-proto : Proto
+stale-proto = drecv "w" nat (recv nat (esend "d" (nvar "w") end))
+
+stale : Proc
+stale = get nat "w" (get nat "w" (put nat (var "w") done))
+
+stale-refused : ¬ Conforms [] stale stale-proto
+stale-refused (dget-ok refl (get-ok refl (eput-ok _ (owed (same-le (first (past w≢w _)))) _))) = w≢w refl
+stale-refused (dget-ok refl (get-ok refl (eput-ok _ (owed (same-le (later w≢w _))) _))) = w≢w refl
+
+stale-decides : decide [] stale stale-proto ≡ no stale-refused
+stale-decides = refl
+
+------------------------------------------------------------------------
 -- The actions a process takes. `say` carries the value expression.
 -- `hear` carries the type and variable name. `choose0` and `choose1`
 -- are the process's choice. `offer` is both arms. `leave` abandons
@@ -731,6 +944,13 @@ chosen-skel = refl
 
 both-skel : skel (cover done (put box (lit v-here) done)) ≡ offer finish (say (lit v-here) finish)
 both-skel = refl
+
+-- The value goes on the channel. The evidence is not in the skeleton.
+full-skel : skel full ≡ hear nat "w" (say (var "w") finish)
+full-skel = refl
+
+within-skel : skel within ≡ say (lit (num 8)) (say (lit (num 5)) finish)
+within-skel = refl
 
 ------------------------------------------------------------------------
 -- Finishing. `done` at every leaf. `stop` has no constructor, so an

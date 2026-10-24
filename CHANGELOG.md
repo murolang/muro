@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.16.59
+
+A protocol may require that a sent nat is at most a bound. `recv (w : Nat) (send (d : Nat) {d ≤ w} end)` receives a window and sends a nat within it. The bound is a numeral or a nat bound earlier. The sender owes the evidence, and the checker decides it: a numeral within a numeral by `≤`, zero within a name, or the bound name itself when the process bound that name once. `get (w : Nat) (put 2 done)` is refused. `put 8 (put 9 done)` at `send (w : Nat) (send (d : Nat) {d ≤ w} end)` is refused. The receiver gets a nat. The meeting compares the nats. The evidence is erased, and the OTP message is the nat alone.
+
+### Manual
+
+- Sessions: an evidence payload, the window exchange, and its OTP message.
+- Limits: one `≤` between the sent nat and a numeral or a nat bound earlier is allowed. Other constraints, and evidence the checker does not find, are refused.
+- Grammar, Terms, Extending, and For agents: `send (d : Nat) {d ≤ w}` and `recv (d : Nat) {d ≤ w}`.
+
+### Examples
+
+- `meet.muro`: a window exchange.
+
+### Emit
+
+- OTP sends the nat of an evidence payload. The evidence is not in the message.
+
+### Package
+
+- Version 0.16.59.
+
 ## 0.16.58
 
 A session continuation may mention a nat that was received, as the length of a vector. `recv (n : Nat) (send (Vec Nat n) end)` receives a nat and then sends a vector of that length. The other end sends the nat and then receives that vector. The meeting checks the length. The next action does not depend on the value. The OTP image carries the vector.
