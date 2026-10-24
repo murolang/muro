@@ -757,14 +757,25 @@ defmodule Muro.Parser do
 
   # `recv (n : Nat)` binds `n` for the continuation. `recv (Nat)` and
   # `recv (Vec Nat n)` are payload types and do not bind.
+  # `send (d : Nat) {d ≤ w}` is an evidence payload: the sender owes
+  # `d ≤ w`. The name is in scope in its bound only.
   defp parse_comm_proto(s, word, tag) do
     with {:ok, rest} <- kw(s, word) do
       rest = skip(rest)
 
       case try_binder(rest) do
         {:ok, name, ty, rest} ->
-          with {:ok, p, rest} <- parse_proto(skip(rest)) do
-            {:ok, {dep_tag(tag), name, ty, p}, rest}
+          rest = skip(rest)
+
+          if has_prefix?(rest, "{") do
+            with {:ok, e, rest} <- parse_bound(rest, name, ty),
+                 {:ok, p, rest} <- parse_proto(skip(rest)) do
+              {:ok, {ev_tag(tag), name, e, p}, rest}
+            end
+          else
+            with {:ok, p, rest} <- parse_proto(rest) do
+              {:ok, {dep_tag(tag), name, ty, p}, rest}
+            end
           end
 
         :not_binder ->
@@ -781,6 +792,51 @@ defmodule Muro.Parser do
 
   defp dep_tag(:send), do: :dsend
   defp dep_tag(:recv), do: :drecv
+
+  defp ev_tag(:send), do: :esend
+  defp ev_tag(:recv), do: :erecv
+
+  # `{d ≤ w}` or `{d <= w}`. The left side is the name just bound. The
+  # bound is a numeral or a name. The payload is a nat.
+  defp parse_bound(s, name, :nat) do
+    with {:ok, rest} <- tok(s, "{"),
+         rest = skip(rest),
+         {:ok, left, rest} <- ident(rest),
+         :ok <- bound_left(left, name, s),
+         rest = skip(rest),
+         {:ok, rest} <- either_tok(rest, ["≤", "<="]),
+         {:ok, e, rest} <- parse_bound_exp(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), "}") do
+      {:ok, e, rest}
+    end
+  end
+
+  defp parse_bound(s, _name, _ty), do: {:error, err(s, "an evidence payload is a nat")}
+
+  defp bound_left(left, name, s) do
+    if String.to_atom(left) == name do
+      :ok
+    else
+      {:error, err(s, "the bound names the nat that is sent")}
+    end
+  end
+
+  defp parse_bound_exp(s) do
+    cond do
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, {:lit, String.to_integer(digits)}, rest}
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, rest} -> {:ok, {:var, String.to_atom(name)}, rest}
+          err -> err
+        end
+
+      true ->
+        {:error, err(s, "expected a bound")}
+    end
+  end
 
   defp try_binder(s) do
     if has_prefix?(s, "(") do
