@@ -8,7 +8,8 @@
 -- is the session, and it is the same protocol at every place. The
 -- payload stays on the session. A party with no session has no
 -- meeting, at any place. Processes that exchange some other payload
--- are not these parties.
+-- are not these parties. A description has no evidence payload, so
+-- these meetings carry none.
 --
 -- The meeting is evidence. A run term has no seat. None of these
 -- constructors is added to Tm or PTm. A `.muro` file does not write
