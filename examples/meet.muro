@@ -62,4 +62,16 @@ conform sized-client : sized-back := put 2 (get (Vec Nat 2) done)
 
 meet sized-wire : sized-server with sized-client
 
+-- A window is granted and the data is sent within it. The server owes
+-- d ≤ w. Sending the window itself is that evidence. Only the nat travels.
+session window := recv (w : Nat) (send (d : Nat) {d ≤ w} end)
+
+session grant-end := dual window
+
+conform window-server : window := get (w : Nat) (put w done)
+
+conform window-client : grant-end := put 8 (get (d : Nat) done)
+
+meet window-wire : window-server with window-client
+
 def kept : run Nat := 0
