@@ -103,9 +103,9 @@ agda/Muro/Unembed.agda  PHOAS → de Bruijn (TERMINATING, not --safe)
 agda/Muro/SubstLemmas.agda  renaming / substitution algebra
 agda/Muro/Env.agda      Sig, Ctx, uses, mode order (shared by Check and ⊢)
 agda/Muro/Check.agda    the decision procedure: structural on the term, fuel only where it reduces
-agda/Muro/Session.agda  affine session judgment; a payload is a nat, a bit, unit, a pair, a record, or a vector whose length is a received nat; %1 must finish; decide searches, skel is the OTP actions
-agda/Muro/Dual.agda     the other end of a session; send swaps with recv, a dependent receive swaps with a dependent send, and the payload type stays; `session name := dual name` follows it
-agda/Muro/Meet.agda     two processes on one channel; a send meets a receive of the same payload type; a received nat instantiates a vector length; a variable meets it at its innermost binding; `meet name : left with right` follows it
+agda/Muro/Session.agda  affine session judgment; a payload is a nat, a bit, unit, a pair, a record, a vector whose length is a received nat, or a nat at most a bound the sender owes evidence for; %1 must finish; decide searches, skel is the OTP actions
+agda/Muro/Dual.agda     the other end of a session; send swaps with recv, a dependent receive swaps with a dependent send, an evidence send swaps with an evidence receive, and the payload type stays; `session name := dual name` follows it
+agda/Muro/Meet.agda     two processes on one channel; a send meets a receive of the same payload type; a received nat instantiates a vector length; an evidence payload meets as a nat; a variable meets it at its innermost binding; `meet name : left with right` follows it
 agda/Muro/Talk.agda     one description of an exchange; say names one payload and one continuation; `session name := seen party with party in talk` follows it
 agda/Muro/Seated.agda   a party of a description sits at a place; `seat name : party at place in talk` follows it; the same place stays; two places cross once
 agda/Muro/Held.agda     a meeting at the parties' places; the same place stays; two places cross once; a `.muro` file does not write it
