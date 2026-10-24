@@ -1870,7 +1870,8 @@ defmodule Muro.Check do
     end
   end
 
-  # Muro.Session.decide, then `finishes` when the session is `%1`.
+  # Muro.Session.decide, then `finishes` when the session is `%1`. The
+  # evidence an evidence payload owes is decided there.
   # A protocol mismatch is reported before an abandoned linear channel.
   def check_def(book, %{kind: :conform, name: name, session: sname, proc: proc} = d, _fuel) do
     loc = Print.loc_prefix(Map.get(d, :loc))
