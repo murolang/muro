@@ -15,6 +15,10 @@ defmodule Muro.Emit.Otp do
   in the continuation is not yet implemented in the OTP backend. The
   skeleton uses a witness value.
 
+  An evidence payload is a nat on the channel. The evidence is a premise
+  of the conformance derivation, not part of the process, so `skel` has
+  no evidence to carry and the message is the nat alone.
+
   The BEAM runs this server. The proof stops at the conformance
   derivation. `run` is not emitted here.
   """
