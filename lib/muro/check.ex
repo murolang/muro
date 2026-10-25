@@ -54,6 +54,9 @@ defmodule Muro.Check do
       %{kind: :link} ->
         {:skip, "#{name} is a link, not a definition"}
 
+      %{kind: :relay} ->
+        {:skip, "#{name} is an endpoint function, not a definition"}
+
       d ->
         {:ok, d}
     end
@@ -2027,6 +2030,10 @@ defmodule Muro.Check do
 
   def check_def(book, %{kind: :data} = d, fuel), do: check_data(book, d, fuel)
 
+  # Muro.Linear. The function is evidence. A linear endpoint is used
+  # once. An affine endpoint is used at most once. The body is not a term.
+  def check_def(book, %{kind: :relay} = d, _fuel), do: check_relay(book, d)
+
   def check_def(book, %{mode: mode, type: ty, body: body} = d, k) do
     with :ok <- fail_at(d, "type", check_ty(k, book, empty_rec(), [], ty)),
          :ok <- fail_at(d, "type", run_decl(k, book, mode, ty)),
@@ -2150,6 +2157,48 @@ defmodule Muro.Check do
     else
       {:error, "expected #{actual}"}
     end
+  end
+
+  # Ground the declared sessions, then `Muro.Linear.check`. A closed
+  # endpoint function is its declared type. Its body is not unfolded.
+  defp check_relay(book, %{name: name, type: ty, body: body} = d) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, protos} <- session_protos(book),
+         relays = relay_types(book, protos),
+         {:ok, ty} <- Muro.Linear.ground_ty(protos, ty),
+         {:ok, body} <- Muro.Linear.ground_tm(protos, body),
+         :ok <- Muro.Linear.check(relays, ty, body) do
+      :ok
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
+  defp session_protos(book) do
+    Enum.reduce_while(book, {:ok, %{}}, fn
+      %{kind: :session, name: name}, {:ok, acc} ->
+        case fetch_session(book, name) do
+          {:ok, %{proto: proto}} -> {:cont, {:ok, Map.put(acc, name, proto)}}
+          {:error, msg} -> {:halt, {:error, msg}}
+        end
+
+      _, acc ->
+        {:cont, acc}
+    end)
+  end
+
+  defp relay_types(book, protos) do
+    Enum.flat_map(book, fn
+      %{kind: :relay, name: name, type: ty} ->
+        case Muro.Linear.ground_ty(protos, ty) do
+          {:ok, gty} -> [{name, gty}]
+          _ -> []
+        end
+
+      _ ->
+        []
+    end)
   end
 
   defp fetch_session(book, name), do: resolve_session(book, name, MapSet.new())
@@ -2339,7 +2388,8 @@ defmodule Muro.Check do
           :meet,
           :talk,
           :seat,
-          :link
+          :link,
+          :relay
         ],
         do: name
   end

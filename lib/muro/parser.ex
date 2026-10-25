@@ -1525,17 +1525,212 @@ defmodule Muro.Parser do
     end
   end
 
+  # `def name : run|spec|evidence …` is a core definition.
+  # `def name : (s : session) ⊸ …` is an endpoint function. The type
+  # starts with `(`, which a tagged definition does not.
   defp parse_def(s) do
     loc = here(s)
 
     with {:ok, rest} <- kw(s, "def"),
          {:ok, name, rest} <- ident(skip(rest)),
-         {:ok, rest} <- tok(skip(rest), ":"),
-         {:ok, tag, rest} <- parse_mode(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":") do
+      rest = skip(rest)
+
+      if has_prefix?(rest, "("),
+        do: parse_relay(loc, name, rest),
+        else: parse_tagged_def(loc, name, rest)
+    end
+  end
+
+  defp parse_tagged_def(loc, name, s) do
+    with {:ok, tag, rest} <- parse_mode(s),
          {:ok, ty, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), ":="),
          {:ok, body, rest} <- parse_term(skip(rest), 0) do
       {:ok, Map.merge(%{name: name, type: ty, body: body, loc: loc}, tag), rest}
+    end
+  end
+
+  # Evidence. The arrow's multiplicity is the binder's obligation.
+  # `⊸` (`-o`) accepts or returns a linear endpoint. `→` is affine.
+  defp parse_relay(loc, name, s) do
+    with {:ok, ty, rest} <- parse_etype(s, :aff),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, body, rest} <- parse_eterm(skip(rest)) do
+      {:ok, %{kind: :relay, name: name, mode: :evidence, type: ty, body: body, loc: loc}, rest}
+    end
+  end
+
+  # A bare session name takes `bare`. `done` is the meeting, not a session.
+  defp parse_etype(s, bare) do
+    s = skip(s)
+
+    cond do
+      has_prefix?(s, "(") ->
+        with {:ok, _x, sess, rest} <- parse_ebinder(s),
+             {:ok, q, rest} <- eat_earrow(rest),
+             {:ok, cod, rest} <- parse_etype(rest, q) do
+          {:ok, {:arr, q, {:sess, q, sess}, cod}, rest}
+        end
+
+      word_kw?(s, "done") ->
+        {:ok, {:done}, after_kw(s, "done")}
+
+      true ->
+        with {:ok, name, rest} <- ident(s) do
+          {:ok, {:sess, bare, name}, rest}
+        end
+    end
+  end
+
+  # `+`, `-`, and `%` are term quantities. An endpoint is affine or linear.
+  defp parse_ebinder(s) do
+    with {:ok, rest} <- tok(skip(s), "(") do
+      rest = skip(rest)
+
+      cond do
+        has_prefix?(rest, "+") or has_prefix?(rest, "-") or has_prefix?(rest, "%") ->
+          {:error, err(rest, "a session endpoint is affine or linear")}
+
+        true ->
+          with {:ok, name, rest} <- ident(rest),
+               {:ok, rest} <- tok(skip(rest), ":"),
+               {:ok, sess, rest} <- ident(skip(rest)),
+               {:ok, rest} <- tok(skip(rest), ")") do
+            {:ok, name, sess, rest}
+          end
+      end
+    end
+  end
+
+  # `λ¹` (`lam1`) is linear. `λ` (`lam`) is affine. The arrow after the
+  # binder may be `→` or `⊸`. The multiplicity is the lambda's.
+  defp parse_eterm(s) do
+    with {:ok, left, rest} <- parse_eatom(skip(s)) do
+      parse_eapp(rest, left)
+    end
+  end
+
+  defp parse_eapp(s, left) do
+    s0 = skip(s)
+
+    cond do
+      s0 == "" or eboundary?(s0) or not eatom_start?(s0) ->
+        {:ok, left, s}
+
+      true ->
+        with {:ok, arg, rest} <- parse_eatom(s0) do
+          parse_eapp(rest, {:app, left, arg})
+        end
+    end
+  end
+
+  defp parse_eatom(s) do
+    s = skip(s)
+
+    cond do
+      has_prefix?(s, "(") ->
+        with {:ok, rest} <- tok(s, "("),
+             {:ok, t, rest} <- parse_eterm(rest),
+             {:ok, rest} <- tok(skip(rest), ")") do
+          {:ok, t, rest}
+        end
+
+      word_kw?(s, "λ¹") || word_kw?(s, "lam1") || word_kw?(s, "λ") || word_kw?(s, "lam") ->
+        parse_elam(s)
+
+      word_kw?(s, "dual") ->
+        parse_edual(s)
+
+      word_kw?(s, "meet") ->
+        parse_emeet(s)
+
+      true ->
+        with {:ok, name, rest} <- ident(s) do
+          {:ok, {:var, name}, rest}
+        end
+    end
+  end
+
+  defp parse_elam(s) do
+    s = skip(s)
+
+    {q, rest} =
+      cond do
+        word_kw?(s, "λ¹") -> {:lin, after_kw(s, "λ¹")}
+        word_kw?(s, "lam1") -> {:lin, after_kw(s, "lam1")}
+        word_kw?(s, "λ") -> {:aff, after_kw(s, "λ")}
+        word_kw?(s, "lam") -> {:aff, after_kw(s, "lam")}
+      end
+
+    with {:ok, name, sess, rest} <- parse_ebinder(rest),
+         {:ok, _arrow, rest} <- eat_earrow(rest),
+         {:ok, body, rest} <- parse_eterm(rest) do
+      {:ok, {:lam, q, name, {:sess, q, sess}, body}, rest}
+    end
+  end
+
+  defp parse_edual(s) do
+    with {:ok, rest} <- kw(s, "dual"),
+         {:ok, t, rest} <- parse_eatom(skip(rest)) do
+      {:ok, {:dual, t}, rest}
+    end
+  end
+
+  defp parse_emeet(s) do
+    with {:ok, rest} <- kw(s, "meet"),
+         {:ok, a, rest} <- parse_eatom(skip(rest)),
+         {:ok, b, rest} <- parse_eatom(skip(rest)) do
+      {:ok, {:meet, a, b}, rest}
+    end
+  end
+
+  defp eat_earrow(s) do
+    s = skip(s)
+
+    cond do
+      has_prefix?(s, "⊸") -> {:ok, :lin, after_kw(s, "⊸")}
+      has_prefix?(s, "-o") -> {:ok, :lin, after_kw(s, "-o")}
+      has_prefix?(s, "→") -> {:ok, :aff, after_kw(s, "→")}
+      has_prefix?(s, "->") and not has_prefix?(s, "=>") -> {:ok, :aff, after_kw(s, "->")}
+      true -> {:error, err(s, "expected ⊸")}
+    end
+  end
+
+  # A following book entry is not an argument. `meet s t` is the term.
+  # `meet name :` is the next entry.
+  defp eboundary?(s) do
+    s = skip(s)
+
+    word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
+      word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
+      word_kw?(s, "where") or word_kw?(s, "motive") or word_kw?(s, "in") or
+      nu_start?(s) or place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
+      endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or talk_start?(s) or
+      seat_start?(s) or link_start?(s)
+  end
+
+  defp eatom_start?(s) do
+    s = skip(s)
+
+    cond do
+      eboundary?(s) ->
+        false
+
+      has_prefix?(s, "(") ->
+        true
+
+      word_kw?(s, "λ¹") || word_kw?(s, "lam1") || word_kw?(s, "λ") || word_kw?(s, "lam") ->
+        true
+
+      word_kw?(s, "dual") or word_kw?(s, "meet") ->
+        true
+
+      true ->
+        case s do
+          <<c, _::binary>> when c in ?a..?z or c in ?A..?Z or c == ?_ -> true
+          _ -> false
+        end
     end
   end
 

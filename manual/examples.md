@@ -186,6 +186,19 @@ def loose : run Π (%0 x : Nat) → Nat :=
 
 See [Terms](language.md#binders-and-quantities).
 
+## linear.muro
+
+A session endpoint may be bound linearly. `λ¹` uses it once. `⊸` accepts or returns it.
+
+```
+session ping := recv Nat (send Nat end)
+session back := dual ping
+
+def forward : (s : ping) ⊸ ping := λ¹ (s : ping) → s
+```
+
+`backed` is `dual s` and stays linear. `wire` meets `ping` with `back`. `again` is `forward s`, so the obligation travels. `echo` returns a repeating endpoint, and `echo-back` is `dual s`, so `rec` stays. `pass` returns an endpoint whose payload is `Bool`. `flags-pass` returns that payload on a repeating protocol, and `flags-backed` is its dual. `kept` is the run. Emit keeps `kept` and drops the endpoint functions. An unused linear endpoint, and a linear endpoint used twice, are refused; those books live in `test/muro_linear_test.exs`.
+
 ## place.muro
 
 A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, and assembly emitters omit all three. `--node` writes one call for each cross.
@@ -371,7 +384,7 @@ mix muro.check examples/cshrl/envs/binary_sacrifice.muro
 ## Adding a file
 
 1. Put it in `examples/`. Use only `run` / `run internal` / `spec` / `evidence`.
-2. Every binder is `(x : A)` or `(+ x : A)` or `(- x : A)`.
+2. Every binder is `(x : A)` or `(+ x : A)` or `(- x : A)`. A linear session endpoint is `λ¹ (s : session)`, and its arrow is `⊸`.
 3. Every `match` / `rewrite` writes `motive (λ x → …)` in parentheses.
 4. Recursion on `run`/`evidence` goes through `match` and a smaller variable.
 5. `mix muro.check examples/your_file.muro`.

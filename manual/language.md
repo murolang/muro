@@ -43,7 +43,7 @@ conform there : boxed := get (Bit * {x : Nat, y : Nat}) done
 
 `here` sends a tuple: a bit, and a map whose keys are `x` and `y`. `there` receives that type. `{x : Nat, y : Nat}` and `{y : Nat, x : Nat}` are different types. `examples/meet.muro` is that book.
 
-An unmarked session, and `session %0`, may abandon the channel. `session %1` requires the process to finish: every leaf is `done`, and an abandoned channel is refused. Both marks are the affine quantity. A `%1` binder on Π is not this form.
+An unmarked session, and `session %0`, may abandon the channel. `session %1` requires the process to finish: every leaf is `done`, and an abandoned channel is refused. Both marks are the affine quantity. A `%1` binder on Π is not this form. A linear endpoint is `λ¹` and `⊸` ([Sessions](sessions.md#a-linear-endpoint)).
 
 ```
 session %1 ping-done := recv Nat (send Nat end)

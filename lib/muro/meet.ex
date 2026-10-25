@@ -35,6 +35,14 @@ defmodule Muro.Meet do
     end
   end
 
+  @doc """
+  `meets/2`, then the multiplicity. Affine abandonment stays.
+  A linear endpoint that is not consumed once is refused.
+  """
+  def meet_mult(mult, p, q) when mult in [:aff, :lin] do
+    with :ok <- meets(p, q), do: Muro.Linear.meet_proc(mult, p, q)
+  end
+
   @doc false
   def go(p, q), do: go(p, q, [])
 
