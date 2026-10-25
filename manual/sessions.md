@@ -101,6 +101,26 @@ conform echo : ping := get (k : Nat) (put k done)
 
 `k` is bound by the `get`. The `put` uses it. The innermost binding wins. The payload type is data, so the bound value can be sent more than once. The meeting requires that name to be bound at exactly the type the other process receives.
 
+## Declared data
+
+A data definition may be a payload when it has no indices and every constructor field is a payload: a nat, a bit, unit, a pair of those, a parameter, that same data type, or another such data type. The constructors are the ones that definition has. The other end receives the same type. The meeting checks that the sent value inhabits the type. `put (just 0)` does not inhabit `Bool`. `nothing` and `(just 0)` inhabit `Maybe Nat`. The OTP image carries the atom `true`, or the tagged tuple `{:just, 0}`.
+
+```muro
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+session flag := send Bool end
+
+session flag-back := dual flag
+
+conform up : flag := put true done
+
+conform down : flag-back := get Bool done
+
+meet flag-wire : up with down
+```
+
 ## Dependence
 
 A continuation may mention a nat that was received, as the length of a vector. The length of the vector that will be sent is the nat that was received. The dual sends that nat and then receives a vector of that length. The meeting checks that the value the sender provides is the length the receiver's continuation expects.

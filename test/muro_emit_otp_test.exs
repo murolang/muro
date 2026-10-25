@@ -30,7 +30,8 @@ defmodule Muro.EmitOtpTest do
                ""
              ]},
             {"IndexedOtp", [:Server, :Client, :ClientOne, :Echo, :Ask, ""]},
-            {"RecursiveOtp", [:Forever, :Sender, :Server, :Client, ""]}
+            {"RecursiveOtp", [:Forever, :Sender, :Server, :Client, ""]},
+            {"DataOtp", [:Up, :Down, :Some, :Take, :Echoer, :Ask, :Shadow, ""]}
           ] do
         for name <- names do
           mod = if name == "", do: Module.concat([parent]), else: Module.concat(parent, name)
@@ -459,6 +460,86 @@ defmodule Muro.EmitOtpTest do
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
   end
 
+  test "a declared data value is the OTP message" do
+    src = """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data Maybe (A : Type) : Type where
+      nothing : Maybe A
+      just : A → Maybe A
+
+    session flag := send Bool end
+    session flag-back := dual flag
+    conform up : flag := put true done
+    conform down : flag-back := get Bool done
+    meet flag-wire : up with down
+
+    session opt := send (Maybe Nat) end
+    session opt-back := dual opt
+    conform some : opt := put (just 0) done
+    conform take : opt-back := get (Maybe Nat) done
+    meet opt-wire : some with take
+
+    session echo := recv Bool (send Bool end)
+    session echo-back := dual echo
+    conform echoer : echo := get (k : Bool) (put k done)
+    conform ask : echo-back := put false (get (m : Bool) done)
+    meet echo-wire : echoer with ask
+
+    conform shadow : echo := get (true : Bool) (put true done)
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Muro.Check.check_sig(book) == :ok
+    emit = Muro.Prelude.for_emit(book)
+    assert {:ok, otp} = Emit.Otp.render(emit, "data")
+    assert otp =~ "{:say, true, :finish}"
+    assert otp =~ "{:hear, {:dat, \"Bool\", []}, :_, :finish}"
+    assert otp =~ "{:say, {:just, 0}, :finish}"
+    assert otp =~ "{:hear, {:dat, \"Bool\", []}, :k, {:say, {:var, :k}, :finish}}"
+    assert otp =~ "{:hear, {:dat, \"Bool\", []}, true, {:say, {:var, true}, :finish}}"
+    refute otp =~ "esend"
+    refute otp =~ "≤"
+
+    Code.compile_string(otp)
+
+    {:ok, left, right, left_ref, right_ref} = data(:flag_wire)
+    assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
+    assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
+
+    {:ok, left, right, left_ref, right_ref} = data(:opt_wire)
+    assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
+    assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
+
+    {:ok, pid, ref} = data_one(:Down)
+    send(pid, {:muro, self(), true})
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = data_one(:Down)
+    send(pid, {:muro, self(), :nothing})
+    assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, {:unexpected, :nothing}}}
+
+    {:ok, pid, ref} = data_one(:Take)
+    send(pid, {:muro, self(), {:just, 0}})
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = data_one(:Take)
+    send(pid, {:muro, self(), true})
+    assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, {:unexpected, true}}}
+
+    {:ok, pid, ref} = data_one(:Echoer)
+    send(pid, {:muro, self(), false})
+    assert_receive {:muro, ^pid, false}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = data_one(:Shadow)
+    send(pid, {:muro, self(), false})
+    assert_receive {:muro, ^pid, false}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+  end
+
   defp start(name, peer \\ self()) do
     apply(Module.concat("PingOtp", name), :start, [peer])
   end
@@ -469,6 +550,14 @@ defmodule Muro.EmitOtpTest do
 
   defp meet_one(name) do
     apply(Module.concat("MeetOtp", name), :start, [self()])
+  end
+
+  defp data(fun) do
+    apply(Module.concat(["DataOtp"]), fun, [])
+  end
+
+  defp data_one(name) do
+    apply(Module.concat("DataOtp", name), :start, [self()])
   end
 
   defp indexed(fun) do

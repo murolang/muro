@@ -29,9 +29,11 @@
 
 module Muro.Rec where
 
+open import Data.Bool.Base using (true)
 open import Data.Empty using (⊥)
 open import Data.List.Base using (List; []; _∷_)
 open import Data.Maybe.Base using (Maybe; just; nothing)
+open import Data.Nat.Base using () renaming (zero to nzero)
 open import Data.Product.Base using (_×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String)
 open import Data.String.Properties using (_≟_)
@@ -41,12 +43,15 @@ open import Relation.Nullary.Decidable.Core using (yes; no)
 
 open import Muro.Base using (Mode; spec; evid; run)
 open import Muro.Session using
-  ( Ty; nat; bit; unit; pair; vec
+  ( Ty; nat; bit; unit; pair; vec; dat
+  ; Decl; mkDecl; ctor
+  ; Spine; snil; con
   ; NExp; nlit; nvar
   ; Val; zero; suc; b0; b1; tt; one
   ; ValExpr; lit; var
   ; Ctx; _∈_∷_; here
   ; ValExprOk; lit-ok; var-ok
+  ; sent
   ; Idx; none; bind; shadow; renameIdx; applyTy; ixOf
   ; Owed; resolve
   )
@@ -702,8 +707,9 @@ data Conf Γ ρ where
 open Conforms∞
 
 ------------------------------------------------------------------------
--- Two processes. A send meets a receive of that type. A literal bit
--- meets that arm. Both ends close, or both abandon. The step is
+-- Two processes. A send meets a receive of that type when the value
+-- inhabits it (`sent`, the same premise as `Muro.Meet`). A literal
+-- bit meets that arm. Both ends close, or both abandon. The step is
 -- one observation; the continuations are the bisimulation.
 ------------------------------------------------------------------------
 
@@ -716,13 +722,17 @@ data MStep σ τ where
   m-done : MStep σ τ p-done p-done
   m-stop : MStep σ τ p-stop p-stop
 
+  -- A literal meets when it inhabits the payload (`sent` is `fits`
+  -- for a literal). A variable already inhabits its binding.
   m-put-get : ∀ {A B v x p q} →
     applyTy σ A ≡ applyTy τ B →
+    sent v ≡ true →
     Meets∞ σ (ext x v τ) p q →
     MStep σ τ (p-put A v p) (p-get B x q)
 
   m-get-put : ∀ {A B v x p q} →
     applyTy σ A ≡ applyTy τ B →
+    sent v ≡ true →
     Meets∞ (ext x v σ) τ p q →
     MStep σ τ (p-get A x p) (p-put B v q)
 
@@ -818,7 +828,7 @@ cliP : ∞Proc
 cliP = unfoldP cliPEnv cliPG
 
 cli-ok : ∀ {Γ ρ} → Conforms∞ Γ ρ cliP natBack
-ok (cli-ok {Γ} {ρ}) = put-ok (nat-here ρ) lit-ok (cli-get {Γ} {ρ})
+ok (cli-ok {Γ} {ρ}) = put-ok (nat-here ρ) (lit-ok refl) (cli-get {Γ} {ρ})
   where
     cli-get : ∀ {Γ ρ} →
       Conforms∞ Γ ρ
@@ -828,14 +838,14 @@ ok (cli-ok {Γ} {ρ}) = put-ok (nat-here ρ) lit-ok (cli-get {Γ} {ρ})
 
 mutual
   forever : ∀ {σ τ} → Meets∞ σ τ natP cliP
-  mstep (forever {σ} {τ}) = m-get-put (nat-eq σ τ) (forever-put {σ} {τ})
+  mstep (forever {σ} {τ}) = m-get-put (nat-eq σ τ) refl (forever-put {σ} {τ})
 
   forever-put : ∀ {σ τ} →
     Meets∞ (ext {nat} "n" (lit one) σ) τ
       (unfoldP natPEnv (pg-put nat (var "n") (pc-var "X")))
       (unfoldP cliPEnv (pg-get nat "m" (pc-var "Y")))
   mstep (forever-put {σ} {τ}) =
-    m-put-get (nat-eq (ext {nat} "n" (lit one) σ) τ)
+    m-put-get (nat-eq (ext {nat} "n" (lit one) σ) τ) refl
       (forever {ext {nat} "n" (lit one) σ} {ext {nat} "m" (var "n") τ})
 
 ------------------------------------------------------------------------
@@ -932,7 +942,7 @@ ok (once-ok {Γ}) = iput0-ok (once-nat {Γ})
             (pc-emb (pg-put bit (lit b1) (pc-emb pg-done)))))))
         (unfold (dualEnv routeEnv)
           (g-send nat (c-emb (g-recv nat (c-var "X")))))
-    ok (once-nat {Γ}) = put-ok (nat-here (shadow "b" none)) lit-ok (once-get {Γ})
+    ok (once-nat {Γ}) = put-ok (nat-here (shadow "b" none)) (lit-ok refl) (once-get {Γ})
 
 wire : ∀ {σ τ} → Meets∞ σ τ routeP onceP
 mstep (wire {σ} {τ}) = m-iget-b0 (wire-nat {ext "b" (lit b0) σ} {τ})
@@ -953,7 +963,7 @@ mstep (wire {σ} {τ}) = m-iget-b0 (wire-nat {ext "b" (lit b0) σ} {τ})
         (unfoldP [] (pg-get nat "k"
           (pc-emb (pg-put bit (lit b1) (pc-emb pg-done)))))
     mstep (wire-back {σ} {τ}) =
-      m-put-get (nat-eq σ τ) (wire-end {σ} {ext {nat} "k" (var "n") τ})
+      m-put-get (nat-eq σ τ) refl (wire-end {σ} {ext {nat} "k" (var "n") τ})
 
     wire-nat : ∀ {σ τ} →
       Meets∞ σ τ
@@ -962,4 +972,101 @@ mstep (wire {σ} {τ}) = m-iget-b0 (wire-nat {ext "b" (lit b0) σ} {τ})
           (pc-emb (pg-get nat "k"
             (pc-emb (pg-put bit (lit b1) (pc-emb pg-done)))))))
     mstep (wire-nat {σ} {τ}) =
-      m-get-put (nat-eq σ τ) (wire-back {ext {nat} "n" (lit one) σ} {τ})
+      m-get-put (nat-eq σ τ) refl (wire-back {ext {nat} "n" (lit one) σ} {τ})
+
+------------------------------------------------------------------------
+-- A declared data payload inside `rec`. `Bool` is sent forever.
+-- `applyTy` does not reduce on an abstract index. A declaration with
+-- no arguments is still that declaration.
+------------------------------------------------------------------------
+
+boolDecl : Decl
+boolDecl = mkDecl "Bool" nzero (ctor "true" [] ∷ ctor "false" [] ∷ [])
+
+boolTy : Ty
+boolTy = dat boolDecl []
+
+trueV : Val boolTy
+trueV = con "true" snil
+
+noneV : Val boolTy
+noneV = con "none" snil
+
+apply-nil : ∀ {d} (ρ : Idx) → applyTy ρ (dat d []) ≡ dat d []
+apply-nil none = refl
+apply-nil (bind _ _ _) = refl
+
+bool-eq : (σ τ : Idx) → applyTy σ boolTy ≡ applyTy τ boolTy
+bool-eq σ τ = trans (apply-nil {boolDecl} σ) (sym (apply-nil {boolDecl} τ))
+
+flagSyn : SExp
+flagSyn = mu "X" (send boolTy (svar "X"))
+
+flagC : CExp
+flagC = c-mu ("X" ∷ []) (g-send boolTy (c-var "X"))
+
+flag-elab : elabC [] flagSyn ≡ good flagC
+flag-elab = refl
+
+flagG : GExp
+flagG = g-send boolTy (c-var "X")
+
+flagEnv : Env
+flagEnv = ("X" , flagG) ∷ []
+
+flagS : ∞Proto
+flagS = unfold flagEnv flagG
+
+flagPG : PG
+flagPG = pg-put boolTy (lit trueV) (pc-var "X")
+
+flagPEnv : PEnv
+flagPEnv = ("X" , flagPG) ∷ []
+
+flagP : ∞Proc
+flagP = unfoldP flagPEnv flagPG
+
+flag-ok : ∀ {Γ ρ} → Conforms∞ Γ ρ flagP flagS
+ok (flag-ok {Γ} {ρ}) = put-ok (sym (apply-nil ρ)) (lit-ok refl) (flag-ok {Γ} {ρ})
+
+flagBack : ∞Proto
+flagBack = unfold (dualEnv flagEnv) (dualG flagG)
+
+flag-dual : dual∞ flagS ~ flagBack
+flag-dual = comm flagEnv flagG
+
+downG : GExp
+downG = g-recv boolTy (c-var "Y")
+
+downEnv : Env
+downEnv = ("Y" , downG) ∷ []
+
+downPG : PG
+downPG = pg-get boolTy "b" (pc-var "Y")
+
+downPEnv : PEnv
+downPEnv = ("Y" , downPG) ∷ []
+
+downP : ∞Proc
+downP = unfoldP downPEnv downPG
+
+flag-meet : ∀ {σ τ} → Meets∞ σ τ flagP downP
+mstep (flag-meet {σ} {τ}) =
+  m-put-get (bool-eq σ τ) refl
+    (flag-meet {σ} {ext {boolTy} "b" (lit trueV) τ})
+
+-- A constructor the declaration does not have has no meeting.
+missPG : PG
+missPG = pg-put boolTy (lit noneV) (pc-var "Z")
+
+missPEnv : PEnv
+missPEnv = ("Z" , missPG) ∷ []
+
+missP : ∞Proc
+missP = unfoldP missPEnv missPG
+
+miss-flag : ∀ {σ τ} → ¬ Meets∞ σ τ missP downP
+miss-flag {σ} {τ} m = bad (mstep m)
+  where
+    bad : MStep σ τ (act missP) (act downP) → ⊥
+    bad (m-put-get _ () _)

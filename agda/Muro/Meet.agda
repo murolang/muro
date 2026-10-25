@@ -1,7 +1,8 @@
 ------------------------------------------------------------------------
 -- Two processes on one channel. A send meets a receive of the same
--- payload type, and the continuations meet. The values need not be
--- the same term. A choice meets the arm that was offered. Both ends
+-- payload type, and the continuations meet. The sent value inhabits
+-- that type. The values need not be the same term. A choice meets
+-- the arm that was offered. Both ends
 -- close, or both abandon. A type they do not share has no derivation.
 -- A received nat instantiates vector lengths that name it. A vector
 -- of another length has no derivation. An evidence payload meets as
@@ -21,6 +22,7 @@
 
 module Muro.Meet where
 
+open import Data.Bool.Base using (true)
 open import Data.Empty using (⊥)
 open import Data.List.Base using ([])
 open import Data.String.Base using (String)
@@ -35,8 +37,9 @@ open import Muro.Dual using (dual; grant; grant-ok)
 ¬ A = A → ⊥
 
 ------------------------------------------------------------------------
--- The payload types agree. `put` meets `get` of that type. The
--- value is not compared. `pick0` meets the left arm of `cover`.
+-- The payload types agree, and the sent value inhabits that type.
+-- Two values of one type both meet. A value that does not inhabit
+-- the type has no derivation. `pick0` meets the left arm of `cover`.
 -- `pick1` meets the right arm. `done` meets `done`. `stop` meets
 -- `stop`.
 ------------------------------------------------------------------------
@@ -55,6 +58,7 @@ ext {unit} x _ ρ = shadow x ρ
 ext {pair _ _} x _ ρ = shadow x ρ
 ext {rec _} x _ ρ = shadow x ρ
 ext {vec _ _} x _ ρ = shadow x ρ
+ext {dat _ _} x _ ρ = shadow x ρ
 
 data Meetsρ (σ τ : Idx) : Proc → Proc → Set where
   done-done : Meetsρ σ τ done done
@@ -62,11 +66,13 @@ data Meetsρ (σ τ : Idx) : Proc → Proc → Set where
 
   put-get : ∀ {A B v x P Q} →
     applyTy σ A ≡ applyTy τ B →
+    sent v ≡ true →
     Meetsρ σ (ext x v τ) P Q →
     Meetsρ σ τ (put A v P) (get B x Q)
 
   get-put : ∀ {A B v x P Q} →
     applyTy σ A ≡ applyTy τ B →
+    sent v ≡ true →
     Meetsρ (ext x v σ) τ P Q →
     Meetsρ σ τ (get A x P) (put B v Q)
 
@@ -96,8 +102,8 @@ Meets P Q = Meetsρ none none P Q
 meets-sym : ∀ {σ τ P Q} → Meetsρ σ τ P Q → Meetsρ τ σ Q P
 meets-sym done-done = done-done
 meets-sym stop-stop = stop-stop
-meets-sym (put-get eq m) = get-put (sym eq) (meets-sym m)
-meets-sym (get-put eq m) = put-get (sym eq) (meets-sym m)
+meets-sym (put-get eq fv m) = get-put (sym eq) fv (meets-sym m)
+meets-sym (get-put eq fv m) = put-get (sym eq) fv (meets-sym m)
 meets-sym (pick0-cover m) = cover-pick0 (meets-sym m)
 meets-sym (pick1-cover m) = cover-pick1 (meets-sym m)
 meets-sym (cover-pick0 m) = pick0-cover (meets-sym m)
@@ -137,19 +143,23 @@ Answer P Q = Answerρ none none P Q
 
 on-put-get : ∀ {σ τ A B v x P Q} →
   Dec (applyTy σ A ≡ applyTy τ B) →
+  Dec (sent v ≡ true) →
   Answerρ σ (ext x v τ) P Q →
   Answerρ σ τ (put A v P) (get B x Q)
-on-put-get (yes′ eq) (yes m) = yes (put-get eq m)
-on-put-get (yes′ _) (no nm) = no (λ { (put-get _ m) → nm m })
-on-put-get (no′ ¬eq) _ = no (λ { (put-get eq _) → ¬eq eq })
+on-put-get (yes′ eq) (yes′ fv) (yes m) = yes (put-get eq fv m)
+on-put-get (yes′ _) (yes′ _) (no nm) = no (λ { (put-get _ _ m) → nm m })
+on-put-get (yes′ _) (no′ nf) _ = no (λ { (put-get _ fv _) → nf fv })
+on-put-get (no′ ¬eq) _ _ = no (λ { (put-get eq _ _) → ¬eq eq })
 
 on-get-put : ∀ {σ τ A B v x P Q} →
   Dec (applyTy σ A ≡ applyTy τ B) →
+  Dec (sent v ≡ true) →
   Answerρ (ext x v σ) τ P Q →
   Answerρ σ τ (get A x P) (put B v Q)
-on-get-put (yes′ eq) (yes m) = yes (get-put eq m)
-on-get-put (yes′ _) (no nm) = no (λ { (get-put _ m) → nm m })
-on-get-put (no′ ¬eq) _ = no (λ { (get-put eq _) → ¬eq eq })
+on-get-put (yes′ eq) (yes′ fv) (yes m) = yes (get-put eq fv m)
+on-get-put (yes′ _) (yes′ _) (no nm) = no (λ { (get-put _ _ m) → nm m })
+on-get-put (yes′ _) (no′ nf) _ = no (λ { (get-put _ fv _) → nf fv })
+on-get-put (no′ ¬eq) _ _ = no (λ { (get-put eq _ _) → ¬eq eq })
 
 pick0-yes : ∀ {σ τ P Q R} → Answerρ σ τ P Q → Answerρ σ τ (pick0 P) (cover Q R)
 pick0-yes (yes m) = yes (pick0-cover m)
@@ -209,7 +219,7 @@ decideρ _ _ stop (pick1 _) = no (λ ())
 decideρ _ _ stop (cover _ _) = no (λ ())
 decideρ _ _ stop (iget _ _ _) = no (λ ())
 decideρ σ τ (put A v P) (get B x Q) =
-  on-put-get (ty≟ (applyTy σ A) (applyTy τ B)) (decideρ σ (ext x v τ) P Q)
+  on-put-get (ty≟ (applyTy σ A) (applyTy τ B)) (sent? v) (decideρ σ (ext x v τ) P Q)
 decideρ _ _ (put _ _ _) done = no (λ ())
 decideρ _ _ (put _ _ _) stop = no (λ ())
 decideρ _ _ (put _ _ _) (put _ _ _) = no (λ ())
@@ -224,8 +234,9 @@ decideρ _ _ (put unit _ _) (iget _ _ _) = no (λ ())
 decideρ _ _ (put (pair _ _) _ _) (iget _ _ _) = no (λ ())
 decideρ _ _ (put (rec _) _ _) (iget _ _ _) = no (λ ())
 decideρ _ _ (put (vec _ _) _ _) (iget _ _ _) = no (λ ())
+decideρ _ _ (put (dat _ _) _ _) (iget _ _ _) = no (λ ())
 decideρ σ τ (get A x P) (put B v Q) =
-  on-get-put (ty≟ (applyTy σ A) (applyTy τ B)) (decideρ (ext x v σ) τ P Q)
+  on-get-put (ty≟ (applyTy σ A) (applyTy τ B)) (sent? v) (decideρ (ext x v σ) τ P Q)
 decideρ _ _ (get _ _ _) done = no (λ ())
 decideρ _ _ (get _ _ _) stop = no (λ ())
 decideρ _ _ (get _ _ _) (get _ _ _) = no (λ ())
@@ -265,6 +276,7 @@ decideρ _ _ (iget _ _ _) (put unit _ _) = no (λ ())
 decideρ _ _ (iget _ _ _) (put (pair _ _) _ _) = no (λ ())
 decideρ _ _ (iget _ _ _) (put (rec _) _ _) = no (λ ())
 decideρ _ _ (iget _ _ _) (put (vec _ _) _ _) = no (λ ())
+decideρ _ _ (iget _ _ _) (put (dat _ _) _ _) = no (λ ())
 decideρ _ _ (iget _ _ _) done = no (λ ())
 decideρ _ _ (iget _ _ _) stop = no (λ ())
 decideρ _ _ (iget _ _ _) (get _ _ _) = no (λ ())
@@ -294,7 +306,7 @@ peer : Proc
 peer = put nat (lit zero) (get nat "y" done)
 
 pong-peer : Meets pong peer
-pong-peer = get-put refl (put-get refl done-done)
+pong-peer = get-put refl refl (put-get refl refl done-done)
 
 meets-decides : decide pong peer ≡ yes pong-peer
 meets-decides = refl
@@ -306,25 +318,25 @@ other : Proc
 other = put nat (lit two) (get nat "z" done)
 
 other-meets : Meets pong other
-other-meets = get-put refl (put-get refl done-done)
+other-meets = get-put refl refl (put-get refl refl done-done)
 
 other-decides : decide pong other ≡ yes other-meets
 other-decides = refl
 
 ping-channel : Channel pong peer ping
-ping-channel = channel pong-peer (get-ok refl (put-ok refl lit-ok done-end)) (put-ok refl lit-ok (get-ok refl done-end))
+ping-channel = channel pong-peer (get-ok refl (put-ok refl (lit-ok refl) done-end)) (put-ok refl (lit-ok refl) (get-ok refl done-end))
 
 box-meet : Meets (put box (lit v-here) done) (get box "a" done)
-box-meet = put-get refl done-done
+box-meet = put-get refl refl done-done
 
 there-meet : Meets (put box (lit v-there) done) (get box "b" done)
-there-meet = put-get refl done-done
+there-meet = put-get refl refl done-done
 
 box-decides : decide (put box (lit v-here) done) (get box "a" done) ≡ yes box-meet
 box-decides = refl
 
 not-payload : ¬ Meets (put nat (lit zero) done) (get box "x" done)
-not-payload (put-get () _)
+not-payload (put-get () _ _)
 
 ------------------------------------------------------------------------
 -- A bound name is sent at the type it was received. `reply` receives
@@ -340,13 +352,13 @@ reply-peer : Proc
 reply-peer = put nat (lit zero) (get nat "n" done)
 
 reply-meet : Meets reply reply-peer
-reply-meet = get-put refl (put-get refl done-done)
+reply-meet = get-put refl refl (put-get refl refl done-done)
 
 reply-decides : decide reply reply-peer ≡ yes reply-meet
 reply-decides = refl
 
 not-bound-type : ¬ Meets reply (put nat (lit zero) (get bit "n" done))
-not-bound-type (get-put refl (put-get () _))
+not-bound-type (get-put refl refl (put-get () _ _))
 
 ------------------------------------------------------------------------
 -- The length that was received is the length of the vector. A vector
@@ -354,13 +366,13 @@ not-bound-type (get-put refl (put-get () _))
 ------------------------------------------------------------------------
 
 sized-meet : Meets sized-server sized-client
-sized-meet = get-put refl (put-get refl done-done)
+sized-meet = get-put refl refl (put-get refl refl done-done)
 
 sized-decides : decide sized-server sized-client ≡ yes sized-meet
 sized-decides = refl
 
 sized-miss : ¬ Meets sized-server sized-bad
-sized-miss (get-put refl (put-get () _))
+sized-miss (get-put refl refl (put-get () _ _))
 
 ------------------------------------------------------------------------
 -- The window is granted and the data is sent within it. The meeting
@@ -369,7 +381,7 @@ sized-miss (get-put refl (put-get () _))
 ------------------------------------------------------------------------
 
 window-meet : Meets full grant
-window-meet = get-put refl (put-get refl done-done)
+window-meet = get-put refl refl (put-get refl refl done-done)
 
 window-decides : decide full grant ≡ yes window-meet
 window-decides = refl
@@ -378,7 +390,7 @@ window-channel : Channel full grant window
 window-channel = channel window-meet full-ok grant-ok
 
 guess-meets : Meets guess grant
-guess-meets = get-put refl (put-get refl done-done)
+guess-meets = get-put refl refl (put-get refl refl done-done)
 
 guess-no-channel : ¬ Channel guess grant window
 guess-no-channel (channel _ c _) = guess-refused c
@@ -387,7 +399,7 @@ not-send : ¬ Meets (put nat (lit zero) done) (put nat (lit zero) done)
 not-send ()
 
 not-ending : ¬ Meets (put nat (lit zero) stop) (get nat "x" done)
-not-ending (put-get refl ())
+not-ending (put-get refl refl ())
 
 ------------------------------------------------------------------------
 -- Both abandon after the same payload type. Choosing meets the
@@ -401,13 +413,13 @@ right : Proc
 right = get nat "x" stop
 
 left-right : Meets left right
-left-right = put-get refl stop-stop
+left-right = put-get refl refl stop-stop
 
 left-decides : decide left right ≡ yes left-right
 left-decides = refl
 
 abandon-channel : Channel left right (send nat end)
-abandon-channel = channel left-right (put-ok refl lit-ok abandon) (get-ok refl abandon)
+abandon-channel = channel left-right (put-ok refl (lit-ok refl) abandon) (get-ok refl abandon)
 
 choice : Proto
 choice = choose end (send nat end)
@@ -442,7 +454,7 @@ route-client : Proc
 route-client = put bit (lit b0) (get nat "m" done)
 
 route-meet : Meets route-server route-client
-route-meet = iget-b0 (put-get refl done-done)
+route-meet = iget-b0 (put-get refl refl done-done)
 
 route-meet-decides : decide route-server route-client ≡ yes route-meet
 route-meet-decides = refl
@@ -451,7 +463,7 @@ route-client-one : Proc
 route-client-one = put bit (lit b1) (put nat (lit zero) done)
 
 route-one : Meets route-server route-client-one
-route-one = iget-b1 (get-put refl done-done)
+route-one = iget-b1 (get-put refl refl done-done)
 
 route-one-decides : decide route-server route-client-one ≡ yes route-one
 route-one-decides = refl
@@ -476,10 +488,31 @@ ask : Proc
 ask = put bit (lit b1) (get bit "c" done)
 
 echo-meet : Meets echo-bit ask
-echo-meet = iget-b1 (put-get refl done-done)
+echo-meet = iget-b1 (put-get refl refl done-done)
 
 echo-meet-decides : decide echo-bit ask ≡ yes echo-meet
 echo-meet-decides = refl
 
 not-var : ¬ Meets echo-bit (put bit (var "b") (get bit "c" done))
 not-var ()
+
+------------------------------------------------------------------------
+-- A declared data payload meets a receive of that type when the
+-- value inhabits it. A constructor the declaration does not have
+-- has no meeting.
+------------------------------------------------------------------------
+
+flag-meet : Meets (put boolTy (lit trueV) done) (get boolTy "b" done)
+flag-meet = put-get refl refl done-done
+
+flag-decides : decide (put boolTy (lit trueV) done) (get boolTy "b" done) ≡ yes flag-meet
+flag-decides = refl
+
+miss-meet : ¬ Meets (put boolTy (lit noneV) done) (get boolTy "b" done)
+miss-meet (put-get _ () _)
+
+opt-meet : Meets (put maybeNat (lit just0) done) (get maybeNat "m" done)
+opt-meet = put-get refl refl done-done
+
+opt-decides : decide (put maybeNat (lit just0) done) (get maybeNat "m" done) ≡ yes opt-meet
+opt-decides = refl

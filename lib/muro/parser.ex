@@ -741,17 +741,17 @@ defmodule Muro.Parser do
     end
   end
 
-  defp parse_proto(s) do
+  defp parse_proto(s, bound \\ MapSet.new()) do
     s = skip(s)
 
     cond do
       word_kw?(s, "end") -> {:ok, :end, after_kw(s, "end")}
-      word_kw?(s, "send") -> parse_comm_proto(s, "send", :send)
-      word_kw?(s, "recv") -> parse_comm_proto(s, "recv", :recv)
-      word_kw?(s, "choose") -> parse_proto2(s, "choose", :choose)
-      word_kw?(s, "branch") -> parse_proto2(s, "branch", :branch)
-      word_kw?(s, "rec") -> parse_rec(s, &parse_proto/1)
-      has_prefix?(s, "(") -> parse_paren(s, &parse_proto/1)
+      word_kw?(s, "send") -> parse_comm_proto(s, "send", :send, bound)
+      word_kw?(s, "recv") -> parse_comm_proto(s, "recv", :recv, bound)
+      word_kw?(s, "choose") -> parse_proto2(s, "choose", :choose, bound)
+      word_kw?(s, "branch") -> parse_proto2(s, "branch", :branch, bound)
+      word_kw?(s, "rec") -> parse_rec(s, &parse_proto/2, bound)
+      has_prefix?(s, "(") -> parse_paren(s, fn body -> parse_proto(body, bound) end)
       ident_start?(s) -> parse_name_cont(s, :svar, "protocol")
       true -> {:error, err(s, "expected a protocol")}
     end
@@ -761,33 +761,33 @@ defmodule Muro.Parser do
   # `recv (Vec Nat n)` are payload types and do not bind.
   # `send (d : Nat) {d ≤ w}` is an evidence payload: the sender owes
   # `d ≤ w`. The name is in scope in its bound only.
-  defp parse_comm_proto(s, word, tag) do
+  defp parse_comm_proto(s, word, tag, bound) do
     with {:ok, rest} <- kw(s, word) do
       rest = skip(rest)
 
-      case try_binder(rest) do
+      case try_binder(rest, bound) do
         {:ok, name, ty, rest} ->
           rest = skip(rest)
 
           cond do
             has_prefix?(rest, "{") ->
               with {:ok, e, rest} <- parse_bound(rest, name, ty),
-                   {:ok, p, rest} <- parse_proto(skip(rest)) do
+                   {:ok, p, rest} <- parse_proto(skip(rest), bound) do
                 {:ok, {ev_tag(tag), name, e, p}, rest}
               end
 
             word_kw?(rest, "on") ->
-              parse_index_proto(rest, tag, name, ty)
+              parse_index_proto(rest, tag, name, ty, bound)
 
             true ->
-              with {:ok, p, rest} <- parse_proto(rest) do
+              with {:ok, p, rest} <- parse_proto(rest, bound) do
                 {:ok, {dep_tag(tag), name, ty, p}, rest}
               end
           end
 
         :not_binder ->
-          with {:ok, ty, rest} <- parse_pay(rest),
-               {:ok, p, rest} <- parse_proto(skip(rest)) do
+          with {:ok, ty, rest} <- parse_pay(rest, bound),
+               {:ok, p, rest} <- parse_proto(skip(rest), bound) do
             {:ok, {tag, ty, p}, rest}
           end
 
@@ -805,15 +805,15 @@ defmodule Muro.Parser do
 
   # `recv (b : Bit) on S T` receives a bit. `b0` continues as `S` and
   # `b1` continues as `T`. A nat does not choose the arm.
-  defp parse_index_proto(s, tag, name, :bit) do
+  defp parse_index_proto(s, tag, name, :bit, bound) do
     with {:ok, rest} <- kw(s, "on"),
-         {:ok, a, rest} <- parse_proto(skip(rest)),
-         {:ok, b, rest} <- parse_proto(skip(rest)) do
+         {:ok, a, rest} <- parse_proto(skip(rest), bound),
+         {:ok, b, rest} <- parse_proto(skip(rest), bound) do
       {:ok, {ix_tag(tag), name, a, b}, rest}
     end
   end
 
-  defp parse_index_proto(s, _tag, _name, _ty) do
+  defp parse_index_proto(s, _tag, _name, _ty, _bound) do
     {:error, err(s, "a next action is chosen by a bit")}
   end
 
@@ -821,15 +821,15 @@ defmodule Muro.Parser do
   defp ix_tag(:recv), do: :irecv
 
   # `get (b : Bit) on P Q` offers both arms. The name is bound in each.
-  defp parse_index_proc(s, name, :bit) do
+  defp parse_index_proc(s, name, :bit, bound) do
     with {:ok, rest} <- kw(s, "on"),
-         {:ok, p, rest} <- parse_proc(skip(rest)),
-         {:ok, q, rest} <- parse_proc(skip(rest)) do
+         {:ok, p, rest} <- parse_proc(skip(rest), bound),
+         {:ok, q, rest} <- parse_proc(skip(rest), bound) do
       {:ok, {:iget, name, p, q}, rest}
     end
   end
 
-  defp parse_index_proc(s, _name, _ty) do
+  defp parse_index_proc(s, _name, _ty, _bound) do
     {:error, err(s, "a next action is chosen by a bit")}
   end
 
@@ -875,7 +875,7 @@ defmodule Muro.Parser do
     end
   end
 
-  defp try_binder(s) do
+  defp try_binder(s, bound) do
     if has_prefix?(s, "(") do
       case tok(s, "(") do
         {:ok, rest} ->
@@ -888,7 +888,7 @@ defmodule Muro.Parser do
               if has_prefix?(rest, ":") and not has_prefix?(rest, ":=") and
                    not has_prefix?(rest, "::") do
                 with {:ok, rest} <- tok(rest, ":"),
-                     {:ok, ty, rest} <- parse_pay(skip(rest)),
+                     {:ok, ty, rest} <- parse_pay(skip(rest), bound),
                      {:ok, rest} <- tok(skip(rest), ")") do
                   {:ok, String.to_atom(name), ty, rest}
                 end
@@ -910,11 +910,14 @@ defmodule Muro.Parser do
 
   # `rec X. S`. The variable is a continuation. `rec` is a keyword only
   # inside a protocol or a process. The dot separates the name.
-  defp parse_rec(s, parse_body) do
+  # `bound` is the recursion variables in scope. One of those names is
+  # the continuation, so a payload does not take it as an argument:
+  # `send Bool X` is `Bool`, then `X`, and `put n X` is `n`, then `X`.
+  defp parse_rec(s, parse_body, bound) do
     with {:ok, rest} <- kw(s, "rec"),
          {:ok, name, rest} <- rec_name(skip(rest)),
          {:ok, rest} <- tok(skip(rest), "."),
-         {:ok, body, rest} <- parse_body.(skip(rest)) do
+         {:ok, body, rest} <- parse_body.(skip(rest), MapSet.put(bound, Atom.to_string(name))) do
       {:ok, {:rec, name, body}, rest}
     end
   end
@@ -945,41 +948,41 @@ defmodule Muro.Parser do
     name in ~w(end send recv choose branch rec done stop put get pick0 pick1 cover on Nat Bit Unit Vec dual seen)
   end
 
-  defp parse_proto2(s, word, tag) do
+  defp parse_proto2(s, word, tag, bound) do
     with {:ok, rest} <- kw(s, word),
-         {:ok, a, rest} <- parse_proto(skip(rest)),
-         {:ok, b, rest} <- parse_proto(skip(rest)) do
+         {:ok, a, rest} <- parse_proto(skip(rest), bound),
+         {:ok, b, rest} <- parse_proto(skip(rest), bound) do
       {:ok, {tag, a, b}, rest}
     end
   end
 
-  defp parse_proc(s) do
+  defp parse_proc(s, bound \\ MapSet.new()) do
     s = skip(s)
 
     cond do
       word_kw?(s, "done") -> {:ok, :done, after_kw(s, "done")}
       word_kw?(s, "stop") -> {:ok, :stop, after_kw(s, "stop")}
-      word_kw?(s, "put") -> parse_comm(s, "put", :put)
-      word_kw?(s, "get") -> parse_comm(s, "get", :get)
-      word_kw?(s, "pick0") -> parse_proc1(s, "pick0", :pick0)
-      word_kw?(s, "pick1") -> parse_proc1(s, "pick1", :pick1)
-      word_kw?(s, "cover") -> parse_proc2(s, "cover", :cover)
-      word_kw?(s, "rec") -> parse_rec(s, &parse_proc/1)
-      has_prefix?(s, "(") -> parse_paren(s, &parse_proc/1)
+      word_kw?(s, "put") -> parse_comm(s, "put", :put, bound)
+      word_kw?(s, "get") -> parse_comm(s, "get", :get, bound)
+      word_kw?(s, "pick0") -> parse_proc1(s, "pick0", :pick0, bound)
+      word_kw?(s, "pick1") -> parse_proc1(s, "pick1", :pick1, bound)
+      word_kw?(s, "cover") -> parse_proc2(s, "cover", :cover, bound)
+      word_kw?(s, "rec") -> parse_rec(s, &parse_proc/2, bound)
+      has_prefix?(s, "(") -> parse_paren(s, fn body -> parse_proc(body, bound) end)
       ident_start?(s) -> parse_name_cont(s, :call, "process")
       true -> {:error, err(s, "expected a process")}
     end
   end
 
-  defp parse_comm(s, "put", :put) do
+  defp parse_comm(s, "put", :put, bound) do
     with {:ok, rest} <- kw(s, "put"),
-         {:ok, {ty, val}, rest} <- parse_pval(skip(rest)),
-         {:ok, p, rest} <- parse_proc(skip(rest)) do
+         {:ok, {ty, val}, rest} <- parse_pval(skip(rest), bound),
+         {:ok, p, rest} <- parse_proc(skip(rest), bound) do
       {:ok, {:put, ty, val, p}, rest}
     end
   end
 
-  defp parse_comm(s, "get", :get) do
+  defp parse_comm(s, "get", :get, bound) do
     with {:ok, rest} <- kw(s, "get") do
       rest = skip(rest)
 
@@ -997,47 +1000,47 @@ defmodule Muro.Parser do
                 if has_prefix?(after_name, ":") do
                   # This is get (name : Type) proc, or get (b : Bit) on P Q.
                   with {:ok, rest} <- tok(after_name, ":"),
-                       {:ok, ty, rest} <- parse_pay(skip(rest)),
+                       {:ok, ty, rest} <- parse_pay(skip(rest), bound),
                        {:ok, rest} <- tok(skip(rest), ")") do
                     rest = skip(rest)
 
                     if word_kw?(rest, "on") do
-                      parse_index_proc(rest, String.to_atom(name), ty)
+                      parse_index_proc(rest, String.to_atom(name), ty, bound)
                     else
-                      with {:ok, p, rest} <- parse_proc(rest) do
+                      with {:ok, p, rest} <- parse_proc(rest, bound) do
                         {:ok, {:get, ty, String.to_atom(name), p}, rest}
                       end
                     end
                   end
                 else
                   # Not a binder, fall back to old syntax: get Type proc
-                  parse_get_no_binding(s)
+                  parse_get_no_binding(s, bound)
                 end
 
               _ ->
                 # Couldn't parse identifier, fall back
-                parse_get_no_binding(s)
+                parse_get_no_binding(s, bound)
             end
 
           _ ->
-            parse_get_no_binding(s)
+            parse_get_no_binding(s, bound)
         end
       else
         # No opening paren, must be old syntax: get Type proc
-        parse_get_no_binding(s)
+        parse_get_no_binding(s, bound)
       end
     end
   end
 
-  defp parse_get_no_binding(s) do
+  defp parse_get_no_binding(s, bound) do
     with {:ok, rest} <- kw(s, "get"),
-         {:ok, ty, rest} <- parse_pay(skip(rest)) do
+         {:ok, ty, rest} <- parse_pay(skip(rest), bound) do
       rest = skip(rest)
 
       if word_kw?(rest, "on") do
         {:error, err(rest, "a bit index is bound")}
       else
-        with {:ok, p, rest} <- parse_proc(rest) do
+        with {:ok, p, rest} <- parse_proc(rest, bound) do
           # Use a generated anonymous variable name
           {:ok, {:get, ty, :_, p}, rest}
         end
@@ -1045,36 +1048,37 @@ defmodule Muro.Parser do
     end
   end
 
-  defp parse_proc1(s, word, tag) do
+  defp parse_proc1(s, word, tag, bound) do
     with {:ok, rest} <- kw(s, word),
-         {:ok, p, rest} <- parse_proc(skip(rest)) do
+         {:ok, p, rest} <- parse_proc(skip(rest), bound) do
       {:ok, {tag, p}, rest}
     end
   end
 
-  defp parse_proc2(s, word, tag) do
+  defp parse_proc2(s, word, tag, bound) do
     with {:ok, rest} <- kw(s, word),
-         {:ok, p, rest} <- parse_proc(skip(rest)),
-         {:ok, q, rest} <- parse_proc(skip(rest)) do
+         {:ok, p, rest} <- parse_proc(skip(rest), bound),
+         {:ok, q, rest} <- parse_proc(skip(rest), bound) do
       {:ok, {tag, p, q}, rest}
     end
   end
 
-  # A payload type. `Nat`, `Bit`, and `Unit` are those types. `*` is a
-  # pair, and a pair is a tuple. `{ name : type }` is a record, and a
-  # record is a map whose keys are fixed in that order. A key chosen
-  # at run time is not a type.
-  defp parse_pay(s) do
-    with {:ok, ty, rest} <- parse_pay_atom(skip(s)) do
-      parse_pay_rest(ty, rest)
+  # A payload type. `Nat`, `Bit`, and `Unit` are those types. A name is
+  # a declared data type, applied to the payload types written after it.
+  # `*` is a pair, and a pair is a tuple. `{ name : type }` is a record,
+  # and a record is a map whose keys are fixed in that order. A key
+  # chosen at run time is not a type.
+  defp parse_pay(s, bound \\ MapSet.new()) do
+    with {:ok, ty, rest} <- parse_pay_atom(skip(s), bound) do
+      parse_pay_rest(ty, rest, bound)
     end
   end
 
-  defp parse_pay_rest(ty, s) do
+  defp parse_pay_rest(ty, s, bound) do
     s = skip(s)
 
     if has_prefix?(s, "*") and not has_prefix?(s, "**") do
-      with {:ok, right, rest} <- parse_pay(after_kw(s, "*")) do
+      with {:ok, right, rest} <- parse_pay(after_kw(s, "*"), bound) do
         {:ok, {:pair, ty, right}, rest}
       end
     else
@@ -1082,25 +1086,80 @@ defmodule Muro.Parser do
     end
   end
 
-  defp parse_pay_atom(s) do
+  defp parse_pay_atom(s, bound) do
     s = skip(s)
 
     cond do
       word_kw?(s, "Nat") -> {:ok, :nat, after_kw(s, "Nat")}
       word_kw?(s, "Bit") -> {:ok, :bit, after_kw(s, "Bit")}
       word_kw?(s, "Unit") -> {:ok, :unit, after_kw(s, "Unit")}
-      word_kw?(s, "Vec") -> parse_vec(s)
-      has_prefix?(s, "(") -> parse_paren(s, &parse_pay/1)
-      has_prefix?(s, "{") -> parse_pay_rec(s)
+      word_kw?(s, "Vec") -> parse_vec(s, bound)
+      has_prefix?(s, "(") -> parse_paren(s, fn body -> parse_pay(body, bound) end)
+      has_prefix?(s, "{") -> parse_pay_rec(s, bound)
+      ident_start?(s) and not pay_stop?(s) -> parse_dat(s, bound)
       true -> {:error, err(s, "expected a payload")}
     end
   end
 
+  # `Maybe Nat` is that data type applied to `Nat`. A protocol keyword
+  # is not an argument: `send Bool end` stops before `end`. A recursion
+  # variable is the continuation, not an argument: `send Bool X`.
+  defp parse_dat(s, bound) do
+    with {:ok, name, rest} <- ident(s),
+         {:ok, args, rest} <- take_pay_args(rest, [], bound) do
+      {:ok, {:dat, name, args}, rest}
+    end
+  end
+
+  defp take_pay_args(s, acc, bound) do
+    s = skip(s)
+
+    if pay_arg?(s, bound) do
+      case parse_pay_atom(s, bound) do
+        {:ok, ty, rest} -> take_pay_args(rest, [ty | acc], bound)
+        _ -> {:ok, Enum.reverse(acc), s}
+      end
+    else
+      {:ok, Enum.reverse(acc), s}
+    end
+  end
+
+  defp pay_arg?(s, bound) do
+    s = skip(s)
+
+    cond do
+      pay_stop?(s) ->
+        false
+
+      word_kw?(s, "Nat") or word_kw?(s, "Bit") or word_kw?(s, "Unit") or word_kw?(s, "Vec") ->
+        true
+
+      has_prefix?(s, "(") or has_prefix?(s, "{") ->
+        true
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, _} -> not MapSet.member?(bound, name)
+          _ -> false
+        end
+
+      true ->
+        false
+    end
+  end
+
+  defp pay_stop?(s) do
+    Enum.any?(
+      ~w(end send recv choose branch rec on done stop put get pick0 pick1 cover where),
+      &word_kw?(s, &1)
+    )
+  end
+
   # `Vec Nat n` and `Vec Nat 2`. The length is a numeral or a name.
   # A successor, or a missing length, is not a length.
-  defp parse_vec(s) do
+  defp parse_vec(s, bound) do
     with {:ok, rest} <- kw(s, "Vec"),
-         {:ok, elem, rest} <- parse_pay_atom(skip(rest)) do
+         {:ok, elem, rest} <- parse_pay_atom(skip(rest), bound) do
       rest = skip(rest)
 
       cond do
@@ -1120,14 +1179,14 @@ defmodule Muro.Parser do
     end
   end
 
-  defp parse_pay_rec(s) do
+  defp parse_pay_rec(s, bound) do
     with {:ok, rest} <- tok(s, "{"),
-         {:ok, fields, rest} <- parse_pay_fields(skip(rest), []) do
+         {:ok, fields, rest} <- parse_pay_fields(skip(rest), [], bound) do
       {:ok, {:rec, fields}, rest}
     end
   end
 
-  defp parse_pay_fields(s, acc) do
+  defp parse_pay_fields(s, acc, bound) do
     s = skip(s)
 
     if has_prefix?(s, "}") do
@@ -1135,25 +1194,27 @@ defmodule Muro.Parser do
     else
       with {:ok, name, rest} <- ident(s),
            {:ok, rest} <- tok(skip(rest), ":"),
-           {:ok, ty, rest} <- parse_pay(skip(rest)),
+           {:ok, ty, rest} <- parse_pay(skip(rest), bound),
            :ok <- fresh_field(name, acc, s),
            {:ok, more, rest} <- field_sep(skip(rest)) do
         case more do
           :end -> {:ok, Enum.reverse([{name, ty} | acc]), rest}
-          :next -> parse_pay_fields(rest, [{name, ty} | acc])
+          :next -> parse_pay_fields(rest, [{name, ty} | acc], bound)
         end
       end
     end
   end
 
   # A payload value. A numeral is a nat. `tt` is unit. `b0` and `b1`
-  # are bits. `(v, w)` is a pair. `{ name = v }` is a record. The type
-  # is the type of that value. `get` names a type and does not bind.
-  defp parse_pval(s) do
-    parse_pval_atom(skip(s))
+  # are bits. `(v, w)` is a pair. `{ name = v }` is a record. A name
+  # with arguments is a constructor (`just 0`, `node leaf leaf`). A
+  # name alone is a variable or a nullary constructor. The type is the
+  # type of that value. `get` names a type and does not bind.
+  defp parse_pval(s, bound) do
+    parse_pval_atom(skip(s), bound)
   end
 
-  defp parse_pval_atom(s) do
+  defp parse_pval_atom(s, bound) do
     s = skip(s)
 
     cond do
@@ -1170,20 +1231,32 @@ defmodule Muro.Parser do
         {:ok, {:bit, :b1}, after_kw(s, "b1")}
 
       word_kw?(s, "rep") ->
-        parse_rep(s)
+        parse_rep(s, bound)
 
       has_prefix?(s, "(") ->
-        parse_pval_paren(s)
+        parse_pval_paren(s, bound)
 
       has_prefix?(s, "{") ->
-        parse_val_rec(s)
+        parse_val_rec(s, bound)
 
       ident_start?(s) ->
-        # Variable reference - we don't know the type yet, so we leave it untyped
-        # The checker will infer the type from context
+        # A name with no arguments is a variable or a nullary constructor.
+        # The binding wins; the checker decides which. Arguments make it
+        # a constructor. A process keyword is not a value. A recursion
+        # variable is the continuation, so it is not an argument.
         case ident(s) do
-          {:ok, name, rest} -> {:ok, {:unknown, {:var, String.to_atom(name)}}, rest}
-          err -> err
+          {:ok, name, rest} ->
+            if proc_word?(name) do
+              {:error, err(s, "expected a value")}
+            else
+              case take_val_args(rest, [], bound) do
+                {:ok, [], rest} -> {:ok, {:unknown, {:var, String.to_atom(name)}}, rest}
+                {:ok, args, rest} -> {:ok, {:unknown, {:con, name, args}}, rest}
+              end
+            end
+
+          err ->
+            err
         end
 
       true ->
@@ -1194,6 +1267,92 @@ defmodule Muro.Parser do
   defp ident_start?(<<c, _::binary>>) when c in ?a..?z or c in ?A..?Z or c == ?_, do: true
   defp ident_start?(_), do: false
 
+  # An argument is one value: a name does not take arguments of its own.
+  # `node leaf leaf` is `node` applied to `leaf` and `leaf`.
+  # `rep n 0` keeps `n` and `0` as two operands. A nested application
+  # is parenthesized: `cons 0 (cons 0 nil)`.
+  defp take_val_args(s, acc, bound) do
+    s = skip(s)
+
+    if val_arg?(s, bound) do
+      case parse_pval_atomic(s, bound) do
+        {:ok, {_ty, val}, rest} -> take_val_args(rest, [val | acc], bound)
+        _ -> {:ok, Enum.reverse(acc), s}
+      end
+    else
+      {:ok, Enum.reverse(acc), s}
+    end
+  end
+
+  defp parse_pval_atomic(s, bound) do
+    s = skip(s)
+
+    cond do
+      number?(s) ->
+        parse_nat_val(s)
+
+      word_kw?(s, "tt") ->
+        {:ok, {:unit, :tt}, after_kw(s, "tt")}
+
+      word_kw?(s, "b0") ->
+        {:ok, {:bit, :b0}, after_kw(s, "b0")}
+
+      word_kw?(s, "b1") ->
+        {:ok, {:bit, :b1}, after_kw(s, "b1")}
+
+      word_kw?(s, "rep") ->
+        parse_rep(s, bound)
+
+      has_prefix?(s, "(") ->
+        parse_pval_paren(s, bound)
+
+      has_prefix?(s, "{") ->
+        parse_val_rec(s, bound)
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, rest} ->
+            if proc_word?(name) do
+              {:error, err(s, "expected a value")}
+            else
+              {:ok, {:unknown, {:var, String.to_atom(name)}}, rest}
+            end
+
+          err ->
+            err
+        end
+
+      true ->
+        {:error, err(s, "expected a value")}
+    end
+  end
+
+  defp val_arg?(s, bound) do
+    s = skip(s)
+
+    cond do
+      number?(s) or word_kw?(s, "tt") or word_kw?(s, "b0") or word_kw?(s, "b1") or
+          word_kw?(s, "rep") ->
+        true
+
+      has_prefix?(s, "(") or has_prefix?(s, "{") ->
+        true
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, _} -> not proc_word?(name) and not MapSet.member?(bound, name)
+          _ -> false
+        end
+
+      true ->
+        false
+    end
+  end
+
+  defp proc_word?(name) do
+    name in ~w(done stop put get pick0 pick1 cover rec end send recv choose branch on)
+  end
+
   defp number?(<<c, _::binary>>) when c in ?0..?9, do: true
   defp number?(_), do: false
 
@@ -1203,10 +1362,10 @@ defmodule Muro.Parser do
   end
 
   # `rep n 0` is a vector of that length. The length is a numeral or a name.
-  defp parse_rep(s) do
+  defp parse_rep(s, bound) do
     with {:ok, rest} <- kw(s, "rep"),
-         {:ok, {_ity, ix}, rest} <- parse_pval(skip(rest)),
-         {:ok, {ety, elem}, rest} <- parse_pval(skip(rest)),
+         {:ok, {_ity, ix}, rest} <- parse_pval_atomic(skip(rest), bound),
+         {:ok, {ety, elem}, rest} <- parse_pval_atomic(skip(rest), bound),
          {:ok, ixexp} <- length_exp(ix, s) do
       {:ok, {{:vec, ety, ixexp}, {:rep, ix, elem}}, rest}
     end
@@ -1219,14 +1378,14 @@ defmodule Muro.Parser do
   defp take_digits(<<c, r::binary>>, acc) when c in ?0..?9, do: take_digits(r, acc <> <<c>>)
   defp take_digits(s, acc), do: {acc, s}
 
-  defp parse_pval_paren(s) do
+  defp parse_pval_paren(s, bound) do
     with {:ok, rest} <- tok(s, "("),
-         {:ok, {ty, val}, rest} <- parse_pval(skip(rest)) do
+         {:ok, {ty, val}, rest} <- parse_pval(skip(rest), bound) do
       rest = skip(rest)
 
       cond do
         has_prefix?(rest, ",") ->
-          with {:ok, {ty2, val2}, rest} <- parse_pval(after_kw(rest, ",")),
+          with {:ok, {ty2, val2}, rest} <- parse_pval(after_kw(rest, ","), bound),
                {:ok, rest} <- tok(skip(rest), ")") do
             {:ok, {{:pair, ty, ty2}, {:tup, val, val2}}, rest}
           end
@@ -1240,16 +1399,16 @@ defmodule Muro.Parser do
     end
   end
 
-  defp parse_val_rec(s) do
+  defp parse_val_rec(s, bound) do
     with {:ok, rest} <- tok(s, "{"),
-         {:ok, fields, rest} <- parse_val_fields(skip(rest), []) do
+         {:ok, fields, rest} <- parse_val_fields(skip(rest), [], bound) do
       tys = Enum.map(fields, fn {name, ty, _} -> {name, ty} end)
       vals = Enum.map(fields, fn {name, _, val} -> {name, val} end)
       {:ok, {{:rec, tys}, {:rec, vals}}, rest}
     end
   end
 
-  defp parse_val_fields(s, acc) do
+  defp parse_val_fields(s, acc, bound) do
     s = skip(s)
 
     if has_prefix?(s, "}") do
@@ -1257,12 +1416,12 @@ defmodule Muro.Parser do
     else
       with {:ok, name, rest} <- ident(s),
            {:ok, rest} <- field_eq(skip(rest)),
-           {:ok, {ty, val}, rest} <- parse_pval(skip(rest)),
+           {:ok, {ty, val}, rest} <- parse_pval(skip(rest), bound),
            :ok <- fresh_field(name, acc, s),
            {:ok, more, rest} <- field_sep(skip(rest)) do
         case more do
           :end -> {:ok, Enum.reverse([{name, ty, val} | acc]), rest}
-          :next -> parse_val_fields(rest, [{name, ty, val} | acc])
+          :next -> parse_val_fields(rest, [{name, ty, val} | acc], bound)
         end
       end
     end

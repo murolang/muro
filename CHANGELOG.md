@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.63
+
+A declared data type may be a session payload. `session flag := send Bool end` checks when `Bool` is `data Bool : Type where true : Bool` and `false : Bool`. The other end is `recv Bool end`. `put true done` meets `get Bool done`. `put (just 0) done` does not inhabit `Bool`. `Maybe Nat`, `List Nat`, and `Either Nat Bit` are payloads the same way: `nothing` and `(just 0)`, `nil` and `(cons 0 nil)`, `(left 0)` and `(right b0)`. The OTP image carries the atom `true`, or the tagged tuple `{:just, 0}`. An evidence term is still dropped before the message.
+
+An indexed declaration is still refused, and so is `Atom`, a field that is a function or erased, a parameter that is not `Type`, and a name that is not a declared data type. `put (plus 0 0) done` and `put (suc 0) done` are refused. A received bit may still select one of two written continuations. A received `Bool` or data value may not: `recv (b : Bool) on end end` is refused.
+
+### Manual
+
+- Sessions: a declared data type as a payload, the flag exchange.
+- Limits: `Bool`, `Maybe Nat`, `List Nat`, and `Either Nat Bit` are payloads. An indexed declaration, `Atom`, a computed put, and a next action chosen by a received `Bool` or data value stay refused. A received bit with two written arms stays allowed.
+- Grammar, Terms, Extending, and For agents: a non-indexed declared data type in a payload.
+
+### Emit
+
+- OTP carries a declared data value. A nullary constructor is an atom. A constructor with fields is a tagged tuple. The evidence in an evidence payload is still not in the message.
+
+### Package
+
+- Version 0.16.63.
+
 ## 0.16.62
 
 A protocol may repeat. `rec X. recv Nat (send Nat X)` receives a nat and sends a nat, and then it is that protocol again. `rec X. recv (b : Bit) on (recv Nat (send Nat X)) end` repeats when the bit is `b0` and ends when it is `b1`. The other end is `rec` of the dual, and the variable stays. A process repeats with `rec X. … X`. The variable must sit under an action of its own `rec`. `rec X. X` and a free session variable are refused. A jump does not finish, so `session %1` still refuses a loop. The OTP image is a tail call, not an unrolling. In Agda the protocol is coinductive and guarded. `Muro.agda` imports that module, so its pragma is `--safe --guardedness`.
