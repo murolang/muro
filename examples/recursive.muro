@@ -1,0 +1,24 @@
+-- recursive.muro — a protocol may repeat.
+-- `rec X. S` is that protocol again where X stands.
+-- The variable sits under an action. The other end is `rec` of the dual.
+
+session loop := rec X. recv Nat (send Nat X)
+
+session loop-back := dual loop
+
+conform forever : loop := rec X. get (n : Nat) (put n X)
+
+conform sender : loop-back := rec Y. put 1 (get (m : Nat) Y)
+
+-- b0 receives a nat, sends it back, and repeats. b1 ends.
+session echo := rec X. recv (b : Bit) on (recv Nat (send Nat X)) end
+
+session echo-back := dual echo
+
+conform server : echo := rec X. get (b : Bit) on (get (n : Nat) (put n X)) done
+
+conform client : echo-back := put b0 (put 1 (get (m : Nat) (put b1 done)))
+
+meet wire : server with client
+
+def kept : run Nat := 0

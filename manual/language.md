@@ -68,6 +68,8 @@ meet wire : pong with peer
 
 `pong` is `get Nat (put 1 done)` on `ping`. `peer` is `put 1 (get Nat done)` on `back`. A choice meets the arm that was offered. A received bit meets the same way: both sides take the arm of that bit. Both ends close, or both abandon. A run term has no seat. `examples/meet.muro` is that book. `examples/indexed.muro` is the bit index. `--backend otp` starts the two processes as each other's peer. Each server still talks to one peer. See [Emit](emit.md#otp).
 
+A protocol may repeat. `session loop := rec X. recv Nat (send Nat X)` receives a nat and sends a nat, and then it is that protocol again. The other end is `rec` of the dual, and the variable stays. A process repeats with `rec X. … X`. The variable must sit under an action. `rec X. X` and a free name are refused. A jump does not finish, so `session %1` still refuses a loop. `rec X. recv (b : Bit) on (recv Nat (send Nat X)) end` repeats on `b0` and ends on `b1`. `examples/recursive.muro` is that book. The OTP image of a loop is a tail call.
+
 One description covers the exchange. `talk` writes it. `session ping := seen pong with peer in ping-exchange` is the session `pong` has with `peer`.
 
 ```

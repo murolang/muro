@@ -3,12 +3,14 @@ AGDA  := agda
 AFLAGS := --no-libraries -i agda -i vendor/agda-stdlib/src --warning=noUnsupportedIndexedMatch
 
 # The Agda tree — Judgement, Wall, Consistency, Typing, Convert,
-# Reduction, Spine, Data, Frag, Tag, Session, Dual, Meet, Talk, Seated, Held, Place, Located, the checker Check and its
+# Reduction, Spine, Data, Frag, Tag, Session, Rec, Dual, Meet, Talk, Seated, Held, Place, Located, the checker Check and its
 # soundness proof Soundness (with Soundness.Conv, Soundness.Views),
 # what they import (Base, Syntax, Subst, SubstLemmas, Env), and the
 # examples — is checked under --safe: no postulates, no TERMINATING,
-# no --type-in-type. Check is structurally recursive on the term, with
-# fuel only where it reduces.
+# no --type-in-type. `Muro.agda` and `Muro.Rec` also pass
+# `--guardedness`, which `--safe` allows, so a repeating protocol is
+# a guarded coinductive definition. Check is structurally recursive
+# on the term, with fuel only where it reduces.
 .PHONY: agda agda-safe agda-all agda-soundness agda-syntax agda-check elixir clean
 
 agda: agda-safe agda-all
@@ -16,6 +18,7 @@ agda: agda-safe agda-all
 agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/IR.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Session.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Rec.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Dual.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Meet.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Talk.agda

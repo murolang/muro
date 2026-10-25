@@ -3,7 +3,9 @@
 -- Elixir checks it, Agda specifies it, only run terms run.
 ------------------------------------------------------------------------
 
-{-# OPTIONS --safe #-}
+-- `Muro.Rec` is coinductive. `--guardedness` is infective, and it
+-- is allowed under `--safe`.
+{-# OPTIONS --safe --guardedness #-}
 module Muro where
 
 open import Muro.Base public
@@ -27,6 +29,7 @@ import Muro.Soundness.Views
 import Muro.Soundness
 import Muro.IR
 import Muro.Session
+import Muro.Rec
 import Muro.Dual
 import Muro.Meet
 import Muro.Talk

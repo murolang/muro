@@ -13,8 +13,9 @@ defmodule Muro.Meet do
   A bit index meets the arm of that same bit. `b0` meets the first
   arm and `b1` meets the second. A variable bit selects neither.
   A choice meets the arm that was offered.
-  Both ends close, or both abandon. `meets/2` is `:ok` when `decide`
-  returns `yes`. Otherwise the pair where it returns `no`.
+  Both ends close, or both abandon. A repeated head is the same pair
+  of processes again, and that pair meets. `meets/2` is `:ok` when
+  `decide` returns `yes`. Otherwise the pair where it returns `no`.
   """
 
   @doc """
@@ -27,35 +28,114 @@ defmodule Muro.Meet do
 
       {:no, a, b} ->
         {:error, "#{Muro.Session.show_proc(a)} does not meet #{Muro.Session.show_proc(b)}"}
+
+      {:error, msg} ->
+        {:error, msg}
     end
   end
 
   @doc false
   def go(p, q), do: go(p, q, %{}, %{}, %{}, %{})
 
+  @meet_fuel 10_000
+
+  defp go(p, q, lp, rq, li, ri) do
+    advance(p, q, lp, rq, li, ri, %{}, %{}, MapSet.new(), @meet_fuel)
+  end
+
+  # The value indices stay inside one pass. They are not part of the
+  # pair, so a nat bound in the loop does not have to be the same nat
+  # on the next arrival at the head.
+  defp advance(p, q, lp, rq, li, ri, penv, qenv, seen, fuel) do
+    if fuel <= 0 do
+      {:error, "out of fuel"}
+    else
+      with {:ok, p, penv} <- Muro.Session.unwind_proc(p, penv),
+           {:ok, q, qenv} <- Muro.Session.unwind_proc(q, qenv),
+           {:ok, pk} <- Muro.Session.project_proc(penv, p),
+           {:ok, qk} <- Muro.Session.project_proc(qenv, q) do
+        key = {p, pk, q, qk}
+
+        if MapSet.member?(seen, key) do
+          :ok
+        else
+          step(p, q, lp, rq, li, ri, penv, qenv, MapSet.put(seen, key), fuel)
+        end
+      end
+    end
+  end
+
   # `done-done` and `stop-stop`.
-  defp go(:done, :done, _lp, _rq, _li, _ri), do: :ok
-  defp go(:stop, :stop, _lp, _rq, _li, _ri), do: :ok
+  defp step(:done, :done, _lp, _rq, _li, _ri, _penv, _qenv, _seen, _fuel), do: :ok
+  defp step(:stop, :stop, _lp, _rq, _li, _ri, _penv, _qenv, _seen, _fuel), do: :ok
 
   # A variable has no type of its own. Its innermost binding is read
   # after this side's lengths are instantiated, and that type is
   # compared with the receive. `:unknown` is not a payload type, so
   # this clause stays ahead of the concrete one.
-  defp go({:put, :unknown, {:var, name} = val, p}, {:get, gty, gname, q}, lp, rq, li, ri) do
+  defp step(
+         {:put, :unknown, {:var, name} = val, p},
+         {:get, gty, gname, q},
+         lp,
+         rq,
+         li,
+         ri,
+         penv,
+         qenv,
+         seen,
+         fuel
+       ) do
     ty = apply_ty(ri, gty)
 
     if held(lp, li, name) == ty do
-      keep(go(p, q, lp, bind(rq, gname, ty), li, ext(ri, gname, val, ty)))
+      keep(
+        advance(
+          p,
+          q,
+          lp,
+          bind(rq, gname, ty),
+          li,
+          ext(ri, gname, val, ty),
+          penv,
+          qenv,
+          seen,
+          fuel - 1
+        )
+      )
     else
       {:no, {:put, :unknown, val, p}, {:get, gty, gname, q}}
     end
   end
 
-  defp go({:get, gty, gname, p}, {:put, :unknown, {:var, name} = val, q}, lp, rq, li, ri) do
+  defp step(
+         {:get, gty, gname, p},
+         {:put, :unknown, {:var, name} = val, q},
+         lp,
+         rq,
+         li,
+         ri,
+         penv,
+         qenv,
+         seen,
+         fuel
+       ) do
     ty = apply_ty(li, gty)
 
     if held(rq, ri, name) == ty do
-      keep(go(p, q, bind(lp, gname, ty), rq, ext(li, gname, val, ty), ri))
+      keep(
+        advance(
+          p,
+          q,
+          bind(lp, gname, ty),
+          rq,
+          ext(li, gname, val, ty),
+          ri,
+          penv,
+          qenv,
+          seen,
+          fuel - 1
+        )
+      )
     else
       {:no, {:get, gty, gname, p}, {:put, :unknown, val, q}}
     end
@@ -64,23 +144,51 @@ defmodule Muro.Meet do
   # The payload types agree after a received nat instantiates lengths.
   # A variable is the type of its innermost binding, as in `conforms`.
   # A `get` binds that type for its continuation.
-  defp go({:put, ty, val, p}, {:get, gty, name, q}, lp, rq, li, ri) when ty != :unknown do
+  defp step({:put, ty, val, p}, {:get, gty, name, q}, lp, rq, li, ri, penv, qenv, seen, fuel)
+       when ty != :unknown do
     left = apply_ty(li, ty)
     right = apply_ty(ri, gty)
 
     if left == right and inhabits?(val, left, li, lp) do
-      keep(go(p, q, lp, bind(rq, name, right), li, ext(ri, name, val, right)))
+      keep(
+        advance(
+          p,
+          q,
+          lp,
+          bind(rq, name, right),
+          li,
+          ext(ri, name, val, right),
+          penv,
+          qenv,
+          seen,
+          fuel - 1
+        )
+      )
     else
       {:no, {:put, ty, val, p}, {:get, gty, name, q}}
     end
   end
 
-  defp go({:get, gty, name, p}, {:put, ty, val, q}, lp, rq, li, ri) when ty != :unknown do
+  defp step({:get, gty, name, p}, {:put, ty, val, q}, lp, rq, li, ri, penv, qenv, seen, fuel)
+       when ty != :unknown do
     left = apply_ty(li, gty)
     right = apply_ty(ri, ty)
 
     if left == right and inhabits?(val, right, ri, rq) do
-      keep(go(p, q, bind(lp, name, left), rq, ext(li, name, val, left), ri))
+      keep(
+        advance(
+          p,
+          q,
+          bind(lp, name, left),
+          rq,
+          ext(li, name, val, left),
+          ri,
+          penv,
+          qenv,
+          seen,
+          fuel - 1
+        )
+      )
     else
       {:no, {:get, gty, name, p}, {:put, ty, val, q}}
     end
@@ -88,32 +196,96 @@ defmodule Muro.Meet do
 
   # `iget-b0`, `iget-b1`, `b0-iget`, `b1-iget`. The literal selects the
   # arm. The bit is bound on the receiver and does not instantiate a length.
-  defp go({:iget, name, p, _q}, {:put, :bit, :b0, r}, lp, rq, li, ri) do
-    keep(go(p, r, bind(lp, name, :bit), rq, ext(li, name, :b0, :bit), ri))
+  defp step({:iget, name, p, _q}, {:put, :bit, :b0, r}, lp, rq, li, ri, penv, qenv, seen, fuel) do
+    keep(
+      advance(
+        p,
+        r,
+        bind(lp, name, :bit),
+        rq,
+        ext(li, name, :b0, :bit),
+        ri,
+        penv,
+        qenv,
+        seen,
+        fuel - 1
+      )
+    )
   end
 
-  defp go({:iget, name, _p, q}, {:put, :bit, :b1, r}, lp, rq, li, ri) do
-    keep(go(q, r, bind(lp, name, :bit), rq, ext(li, name, :b1, :bit), ri))
+  defp step({:iget, name, _p, q}, {:put, :bit, :b1, r}, lp, rq, li, ri, penv, qenv, seen, fuel) do
+    keep(
+      advance(
+        q,
+        r,
+        bind(lp, name, :bit),
+        rq,
+        ext(li, name, :b1, :bit),
+        ri,
+        penv,
+        qenv,
+        seen,
+        fuel - 1
+      )
+    )
   end
 
-  defp go({:put, :bit, :b0, p}, {:iget, name, q, _r}, lp, rq, li, ri) do
-    keep(go(p, q, lp, bind(rq, name, :bit), li, ext(ri, name, :b0, :bit)))
+  defp step({:put, :bit, :b0, p}, {:iget, name, q, _r}, lp, rq, li, ri, penv, qenv, seen, fuel) do
+    keep(
+      advance(
+        p,
+        q,
+        lp,
+        bind(rq, name, :bit),
+        li,
+        ext(ri, name, :b0, :bit),
+        penv,
+        qenv,
+        seen,
+        fuel - 1
+      )
+    )
   end
 
-  defp go({:put, :bit, :b1, p}, {:iget, name, _q, r}, lp, rq, li, ri) do
-    keep(go(p, r, lp, bind(rq, name, :bit), li, ext(ri, name, :b1, :bit)))
+  defp step({:put, :bit, :b1, p}, {:iget, name, _q, r}, lp, rq, li, ri, penv, qenv, seen, fuel) do
+    keep(
+      advance(
+        p,
+        r,
+        lp,
+        bind(rq, name, :bit),
+        li,
+        ext(ri, name, :b1, :bit),
+        penv,
+        qenv,
+        seen,
+        fuel - 1
+      )
+    )
   end
 
   # `pick0-cover`, `pick1-cover`, `cover-pick0`, `cover-pick1`.
-  defp go({:pick0, p}, {:cover, q, _}, lp, rq, li, ri), do: keep(go(p, q, lp, rq, li, ri))
-  defp go({:pick1, p}, {:cover, _, r}, lp, rq, li, ri), do: keep(go(p, r, lp, rq, li, ri))
-  defp go({:cover, p, _}, {:pick0, r}, lp, rq, li, ri), do: keep(go(p, r, lp, rq, li, ri))
-  defp go({:cover, _, q}, {:pick1, r}, lp, rq, li, ri), do: keep(go(q, r, lp, rq, li, ri))
+  defp step({:pick0, p}, {:cover, q, _}, lp, rq, li, ri, penv, qenv, seen, fuel) do
+    keep(advance(p, q, lp, rq, li, ri, penv, qenv, seen, fuel - 1))
+  end
 
-  defp go(p, q, _lp, _rq, _li, _ri), do: {:no, p, q}
+  defp step({:pick1, p}, {:cover, _, r}, lp, rq, li, ri, penv, qenv, seen, fuel) do
+    keep(advance(p, r, lp, rq, li, ri, penv, qenv, seen, fuel - 1))
+  end
+
+  defp step({:cover, p, _}, {:pick0, r}, lp, rq, li, ri, penv, qenv, seen, fuel) do
+    keep(advance(p, r, lp, rq, li, ri, penv, qenv, seen, fuel - 1))
+  end
+
+  defp step({:cover, _, q}, {:pick1, r}, lp, rq, li, ri, penv, qenv, seen, fuel) do
+    keep(advance(q, r, lp, rq, li, ri, penv, qenv, seen, fuel - 1))
+  end
+
+  defp step(p, q, _lp, _rq, _li, _ri, _penv, _qenv, _seen, _fuel), do: {:no, p, q}
 
   defp keep(:ok), do: :ok
   defp keep({:no, _, _} = no), do: no
+  defp keep({:error, _} = err), do: err
 
   # `_` is an unnamed `get` and adds no binding. A later binding of the same name wins.
   defp bind(ctx, :_, _ty), do: ctx

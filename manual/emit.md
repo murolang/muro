@@ -123,6 +123,8 @@ That writes `examples/meet_otp.ex`. The module is `MeetOtp`. `meet wire : pong w
 
 `examples/indexed.muro` is the same image for a bit index. `IndexedOtp.wire/0` starts the server that offers both arms and the client that sends `:b0`. The server answers `1`. `wire_one` sends `:b1` and then `0`. `echo_wire` sends `:b1` and receives that same bit. The message is `{:muro, from, bit}`. A nat sent where the index is expected stops the server with `{:shutdown, {:unexpected, value}}`.
 
+`examples/recursive.muro` is the same image for a protocol that repeats. `RecursiveOtp.wire/0` starts the server that echoes a nat while the bit is `b0` and the client that sends `b0`, `1`, and then `b1`. Both finish with `:normal`. The skeleton of the loop is `{:loop, name, body}` and the jump is `{:jump, name}`. `drive` stores the body and a jump calls `drive` on that body. The call is in tail position. `Forever` is `rec X. get (n : Nat) (put n X)`. It does not finish. A caller sends a nat and receives that nat, then sends another.
+
 ## Node
 
 `--node` writes `<stem>_node.ex` next to the file and prints that path. The book is checked first. A book that fails to check writes nothing. With no `--backend`, or with `--backend elixir`, that file is the only output. Any other backend together with `--node` is refused.

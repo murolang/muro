@@ -29,7 +29,8 @@ defmodule Muro.EmitOtpTest do
                :WindowClient,
                ""
              ]},
-            {"IndexedOtp", [:Server, :Client, :ClientOne, :Echo, :Ask, ""]}
+            {"IndexedOtp", [:Server, :Client, :ClientOne, :Echo, :Ask, ""]},
+            {"RecursiveOtp", [:Forever, :Sender, :Server, :Client, ""]}
           ] do
         for name <- names do
           mod = if name == "", do: Module.concat([parent]), else: Module.concat(parent, name)
@@ -265,6 +266,32 @@ defmodule Muro.EmitOtpTest do
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
   end
 
+  test "a recursive protocol is a tail call on the BEAM" do
+    assert {:ok, src} = Emit.Otp.render(checked!("examples/recursive.muro"), "recursive")
+    assert src =~ "def wire do"
+    assert src =~ "{:loop, :X, {:hear, :nat, :n, {:say, {:var, :n}, {:jump, :X}}}}"
+
+    assert src =~
+             "{:loop, :X, {:index, :b, {:hear, :nat, :n, {:say, {:var, :n}, {:jump, :X}}}, :finish}}"
+
+    assert src =~ "loops: %{}"
+    refute src =~ "def kept"
+
+    Code.compile_string(src)
+
+    {:ok, server, client, server_ref, client_ref} = recursive(:wire)
+    assert_receive {:DOWN, ^server_ref, :process, ^server, :normal}
+    assert_receive {:DOWN, ^client_ref, :process, ^client, :normal}
+
+    {:ok, pid, ref} = recursive_one(:Forever)
+    send(pid, {:muro, self(), 1})
+    assert_receive {:muro, ^pid, 1}
+    send(pid, {:muro, self(), 2})
+    assert_receive {:muro, ^pid, 2}
+    GenServer.stop(pid)
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+  end
+
   test "a meeting of a reading uses that process" do
     dir = tmp!()
     path = Path.join(dir, "read_meet.muro")
@@ -450,6 +477,14 @@ defmodule Muro.EmitOtpTest do
 
   defp indexed_one(name) do
     apply(Module.concat("IndexedOtp", name), :start, [self()])
+  end
+
+  defp recursive(fun) do
+    apply(Module.concat(["RecursiveOtp"]), fun, [])
+  end
+
+  defp recursive_one(name) do
+    apply(Module.concat("RecursiveOtp", name), :start, [self()])
   end
 
   defp located(name, peer \\ self()) do

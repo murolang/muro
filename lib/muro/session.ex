@@ -17,17 +17,23 @@ defmodule Muro.Session do
   first arm and `b1` takes the second. The sender writes the literal.
   A variable bit does not select an arm. `iget` offers both arms and
   binds the bit. `choose` and `branch` select an arm by a label.
-  `stop` conforms to every protocol. `finishes/1` is `:yes` when every
-  leaf is `done`. `skel/1` carries the value on `say` and the type on
-  `hear`, and both arms of an indexed receive. `dual/1` swaps direction
-  and keeps the payload type and the index.
+  `rec X. S` is that protocol again where `X` stands. The variable
+  must sit under an action. `rec X. X` is not a protocol, and a name
+  with no `rec` is not one. A process repeats the same way. A jump
+  does not finish, so `%1` still refuses a loop. `stop` conforms to
+  every protocol. `finishes/1` is `:yes` when every leaf is `done`.
+  `skel/1` carries the value on `say` and the type on `hear`, and both
+  arms of an indexed receive. A loop is one action and a jump is the
+  name. `dual/1` swaps direction and keeps the payload type, the index,
+  and the recursion variable.
   """
 
   @doc """
   The other end of a protocol. Mirrors `dual` in `agda/Muro/Dual.agda`.
 
   `send` swaps with `recv`. `choose` swaps with `branch`. The payload
-  type stays. The continuation dualises.
+  type stays. The continuation dualises. `rec` stays `rec` and a
+  variable stays.
   """
   def dual(:end), do: :end
   def dual({:send, a, s}), do: {:recv, a, dual(s)}
@@ -40,6 +46,8 @@ defmodule Muro.Session do
   def dual({:irecv, x, s, t}), do: {:isend, x, dual(s), dual(t)}
   def dual({:choose, s, t}), do: {:branch, dual(s), dual(t)}
   def dual({:branch, s, t}), do: {:choose, dual(s), dual(t)}
+  def dual({:rec, x, s}), do: {:rec, x, dual(s)}
+  def dual({:svar, x}), do: {:svar, x}
 
   @doc """
   The actions of a process. Mirrors `skel` in `agda/Muro/Session.agda`.
@@ -56,6 +64,8 @@ defmodule Muro.Session do
   defp skel_go({:pick1, p}), do: {:choose, :b1, skel_go(p)}
   defp skel_go({:cover, p, q}), do: {:offer, skel_go(p), skel_go(q)}
   defp skel_go({:iget, name, p, q}), do: {:index, name, skel_go(p), skel_go(q)}
+  defp skel_go({:rec, name, body}), do: {:loop, name, skel_go(body)}
+  defp skel_go({:call, name}), do: {:jump, name}
 
   @doc """
   The value as the OTP message carries it. A nat is an integer. A
@@ -128,13 +138,29 @@ defmodule Muro.Session do
     end
   end
 
+  # A jump has no derivation. `rec X. done` does not jump.
+  defp finishes_go({:rec, _, body}), do: finishes_go(body)
+  defp finishes_go({:call, _}), do: :no
+
   @doc """
   `:ok` when `decide` returns `yes`. Otherwise the pair where it returns `no`.
+
+  A repeated head is the same process and the same protocol again.
+  That pair conforms. The value context is not part of the pair:
+  one pass of a regular protocol is the whole check.
   """
+  @conform_fuel 10_000
+
   def conforms(proc, proto) do
-    case go(proc, proto, %{}, %{}) do
-      :ok -> :ok
-      {:no, p, s} -> {:error, "#{show_proc(p)} does not conform to #{show_proto(s)}"}
+    case go(proc, proto, %{}, %{}, %{}, %{}, MapSet.new(), @conform_fuel) do
+      :ok ->
+        :ok
+
+      {:no, p, s} ->
+        {:error, "#{show_proc(p)} does not conform to #{show_proto(s)}"}
+
+      {:error, msg} ->
+        {:error, msg}
     end
   end
 
@@ -144,44 +170,100 @@ defmodule Muro.Session do
   """
   def proto_ok(proto), do: proto_ok(proto, %{})
 
-  defp go(:done, :end, _ctx, _idx), do: :ok
-  defp go(:stop, _, _ctx, _idx), do: :ok
+  @doc """
+  `:ok` when every recursion variable of a process sits under an action
+  of its own `rec`. A free name is not a process.
+  """
+  def proc_ok(proc), do: proc_ok(proc, %{})
 
-  defp go({:put, ty, val, p} = proc, {:send, sty, s} = proto, ctx, idx) do
+  # Leading `rec` and a jump unwind before the step. A cycle with no
+  # action between is unguarded. Seeing the same head again conforms.
+  defp go(proc, proto, ctx, idx, penv, senv, seen, fuel) do
+    if fuel <= 0 do
+      {:error, "out of fuel"}
+    else
+      with {:ok, proc, penv} <- unwind_proc(proc, penv),
+           {:ok, proto, senv} <- unwind_proto(proto, senv),
+           {:ok, pkey} <- project(penv, free_proc(proc)),
+           {:ok, skey} <- project(senv, free_proto(proto)) do
+        key = {proc, pkey, proto, skey}
+
+        if MapSet.member?(seen, key) do
+          :ok
+        else
+          step(proc, proto, ctx, idx, penv, senv, MapSet.put(seen, key), fuel)
+        end
+      end
+    end
+  end
+
+  defp step(:done, :end, _ctx, _idx, _penv, _senv, _seen, _fuel), do: :ok
+  defp step(:stop, _, _ctx, _idx, _penv, _senv, _seen, _fuel), do: :ok
+
+  defp step({:put, ty, val, p} = proc, {:send, sty, s} = proto, ctx, idx, penv, senv, seen, fuel) do
     expected = apply_ty(idx, sty)
 
     if put_ok?(ty, val, expected, ctx) do
-      keep(go(p, s, ctx, idx))
+      keep(go(p, s, ctx, idx, penv, senv, seen, fuel - 1))
     else
       {:no, proc, proto}
     end
   end
 
-  defp go({:put, ty, val, p} = proc, {:dsend, y, sty, s} = proto, ctx, idx) do
+  defp step(
+         {:put, ty, val, p} = proc,
+         {:dsend, y, sty, s} = proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel
+       ) do
     expected = apply_ty(idx, sty)
 
     if put_ok?(ty, val, expected, ctx) do
-      keep(go(p, s, ctx, ext(idx, y, val, expected)))
+      keep(go(p, s, ctx, ext(idx, y, val, expected), penv, senv, seen, fuel - 1))
     else
       {:no, proc, proto}
     end
   end
 
-  defp go({:get, ty, name, p} = proc, {:recv, sty, s} = proto, ctx, idx) do
+  defp step({:get, ty, name, p} = proc, {:recv, sty, s} = proto, ctx, idx, penv, senv, seen, fuel) do
     expected = apply_ty(idx, sty)
 
     if ty == expected do
-      keep(go(p, s, bind_ctx(ctx, name, expected), idx))
+      keep(go(p, s, bind_ctx(ctx, name, expected), idx, penv, senv, seen, fuel - 1))
     else
       {:no, proc, proto}
     end
   end
 
-  defp go({:get, ty, name, p} = proc, {:drecv, y, sty, s} = proto, ctx, idx) do
+  defp step(
+         {:get, ty, name, p} = proc,
+         {:drecv, y, sty, s} = proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel
+       ) do
     expected = apply_ty(idx, sty)
 
     if ty == expected do
-      keep(go(p, s, bind_ctx(ctx, name, expected), rename_idx(idx, y, name)))
+      keep(
+        go(
+          p,
+          s,
+          bind_ctx(ctx, name, expected),
+          rename_idx(idx, y, name),
+          penv,
+          senv,
+          seen,
+          fuel - 1
+        )
+      )
     else
       {:no, proc, proto}
     end
@@ -189,28 +271,46 @@ defmodule Muro.Session do
 
   # `eput-ok`. The nat is a numeral or a name bound at Nat, and it owes
   # the bound the substitution resolves.
-  defp go({:put, ty, val, p} = proc, {:esend, _y, e, s} = proto, ctx, idx) do
+  defp step(
+         {:put, ty, val, p} = proc,
+         {:esend, _y, e, s} = proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel
+       ) do
     if put_ok?(ty, val, :nat, ctx) and owed?(val, resolve(idx, e), ctx) do
-      keep(go(p, s, ctx, idx))
+      keep(go(p, s, ctx, idx, penv, senv, seen, fuel - 1))
     else
       {:no, proc, proto}
     end
   end
 
   # `eget-ok`. The receiver binds a nat and owes nothing.
-  defp go({:get, :nat, name, p}, {:erecv, _y, _e, s}, ctx, idx) do
-    keep(go(p, s, bind_ctx(ctx, name, :nat), idx))
+  defp step({:get, :nat, name, p}, {:erecv, _y, _e, s}, ctx, idx, penv, senv, seen, fuel) do
+    keep(go(p, s, bind_ctx(ctx, name, :nat), idx, penv, senv, seen, fuel - 1))
   end
 
   # `iput0-ok` and `iput1-ok`. The literal selects the arm. A variable
   # bit does not. The name is shadowed so it does not instantiate a length.
-  defp go({:put, ty, val, p} = proc, {:isend, y, s, t} = proto, ctx, idx) do
+  defp step(
+         {:put, ty, val, p} = proc,
+         {:isend, y, s, t} = proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel
+       ) do
     cond do
       val == :b0 and put_ok?(ty, val, :bit, ctx) ->
-        keep(go(p, s, ctx, Map.delete(idx, y)))
+        keep(go(p, s, ctx, Map.delete(idx, y), penv, senv, seen, fuel - 1))
 
       val == :b1 and put_ok?(ty, val, :bit, ctx) ->
-        keep(go(p, t, ctx, Map.delete(idx, y)))
+        keep(go(p, t, ctx, Map.delete(idx, y), penv, senv, seen, fuel - 1))
 
       true ->
         {:no, proc, proto}
@@ -218,27 +318,126 @@ defmodule Muro.Session do
   end
 
   # `iget-ok`. Both arms are checked with the bit bound. It is not a length.
-  defp go({:iget, name, p, q}, {:irecv, y, s, t}, ctx, idx) do
+  defp step({:iget, name, p, q}, {:irecv, y, s, t}, ctx, idx, penv, senv, seen, fuel) do
     ctx1 = bind_ctx(ctx, name, :bit)
     idx1 = Map.delete(idx, y)
 
-    case go(p, s, ctx1, idx1) do
-      :ok -> keep(go(q, t, ctx1, idx1))
+    case go(p, s, ctx1, idx1, penv, senv, seen, fuel - 1) do
+      :ok -> keep(go(q, t, ctx1, idx1, penv, senv, seen, fuel - 1))
       no -> no
     end
   end
 
-  defp go({:pick0, p}, {:choose, s, _}, ctx, idx), do: keep(go(p, s, ctx, idx))
-  defp go({:pick1, p}, {:choose, _, t}, ctx, idx), do: keep(go(p, t, ctx, idx))
+  defp step({:pick0, p}, {:choose, s, _}, ctx, idx, penv, senv, seen, fuel) do
+    keep(go(p, s, ctx, idx, penv, senv, seen, fuel - 1))
+  end
 
-  defp go({:cover, p, q}, {:branch, s, t}, ctx, idx) do
-    case go(p, s, ctx, idx) do
-      :ok -> keep(go(q, t, ctx, idx))
+  defp step({:pick1, p}, {:choose, _, t}, ctx, idx, penv, senv, seen, fuel) do
+    keep(go(p, t, ctx, idx, penv, senv, seen, fuel - 1))
+  end
+
+  defp step({:cover, p, q}, {:branch, s, t}, ctx, idx, penv, senv, seen, fuel) do
+    case go(p, s, ctx, idx, penv, senv, seen, fuel - 1) do
+      :ok -> keep(go(q, t, ctx, idx, penv, senv, seen, fuel - 1))
       no -> no
     end
   end
 
-  defp go(p, s, _ctx, _idx), do: {:no, p, s}
+  defp step(p, s, _ctx, _idx, _penv, _senv, _seen, _fuel), do: {:no, p, s}
+
+  # The binding is the `rec` term. A jump unfolds that term. The stack
+  # is only the unwind, so a cycle here has no action under it.
+  @doc false
+  def unwind_proc(proc, env \\ %{}) do
+    unwind_p(proc, env, MapSet.new())
+  end
+
+  defp unwind_p({:rec, name, body} = term, env, stack) do
+    if MapSet.member?(stack, term) do
+      {:error, "unguarded recursion"}
+    else
+      unwind_p(body, Map.put(env, name, term), MapSet.put(stack, term))
+    end
+  end
+
+  defp unwind_p({:call, name}, env, stack) do
+    case Map.get(env, name) do
+      nil ->
+        {:error, "free session variable #{name}"}
+
+      term ->
+        if MapSet.member?(stack, term) do
+          {:error, "unguarded recursion"}
+        else
+          unwind_p(term, env, stack)
+        end
+    end
+  end
+
+  defp unwind_p(proc, env, _stack), do: {:ok, proc, env}
+
+  defp unwind_proto(proto, env), do: unwind_s(proto, env, MapSet.new())
+
+  defp unwind_s({:rec, name, body} = term, env, stack) do
+    if MapSet.member?(stack, term) do
+      {:error, "unguarded recursion"}
+    else
+      unwind_s(body, Map.put(env, name, term), MapSet.put(stack, term))
+    end
+  end
+
+  defp unwind_s({:svar, name}, env, stack) do
+    case Map.get(env, name) do
+      nil ->
+        {:error, "free session variable #{name}"}
+
+      term ->
+        if MapSet.member?(stack, term) do
+          {:error, "unguarded recursion"}
+        else
+          unwind_s(term, env, stack)
+        end
+    end
+  end
+
+  defp unwind_s(proto, env, _stack), do: {:ok, proto, env}
+
+  @doc false
+  def project_proc(env, proc), do: project(env, free_proc(proc))
+
+  defp project(env, names) do
+    Enum.reduce_while(names, {:ok, %{}}, fn name, {:ok, acc} ->
+      case Map.fetch(env, name) do
+        {:ok, term} -> {:cont, {:ok, Map.put(acc, name, term)}}
+        :error -> {:halt, {:error, "free session variable #{name}"}}
+      end
+    end)
+  end
+
+  defp free_proc(:done), do: MapSet.new()
+  defp free_proc(:stop), do: MapSet.new()
+  defp free_proc({:put, _, _, p}), do: free_proc(p)
+  defp free_proc({:get, _, _, p}), do: free_proc(p)
+  defp free_proc({:pick0, p}), do: free_proc(p)
+  defp free_proc({:pick1, p}), do: free_proc(p)
+  defp free_proc({:cover, p, q}), do: MapSet.union(free_proc(p), free_proc(q))
+  defp free_proc({:iget, _, p, q}), do: MapSet.union(free_proc(p), free_proc(q))
+  defp free_proc({:call, name}), do: MapSet.new([name])
+  defp free_proc({:rec, name, body}), do: MapSet.delete(free_proc(body), name)
+
+  defp free_proto(:end), do: MapSet.new()
+  defp free_proto({:send, _, s}), do: free_proto(s)
+  defp free_proto({:recv, _, s}), do: free_proto(s)
+  defp free_proto({:dsend, _, _, s}), do: free_proto(s)
+  defp free_proto({:drecv, _, _, s}), do: free_proto(s)
+  defp free_proto({:esend, _, _, s}), do: free_proto(s)
+  defp free_proto({:erecv, _, _, s}), do: free_proto(s)
+  defp free_proto({:isend, _, s, t}), do: MapSet.union(free_proto(s), free_proto(t))
+  defp free_proto({:irecv, _, s, t}), do: MapSet.union(free_proto(s), free_proto(t))
+  defp free_proto({:choose, s, t}), do: MapSet.union(free_proto(s), free_proto(t))
+  defp free_proto({:branch, s, t}), do: MapSet.union(free_proto(s), free_proto(t))
+  defp free_proto({:svar, name}), do: MapSet.new([name])
+  defp free_proto({:rec, name, body}), do: MapSet.delete(free_proto(body), name)
 
   defp put_ok?(:unknown, val, expected, ctx), do: value?(val, expected, ctx)
   defp put_ok?(ty, val, expected, ctx), do: ty == expected and value?(val, ty, ctx)
@@ -306,34 +505,96 @@ defmodule Muro.Session do
   end
 
   defp proto_ok(:end, _ctx), do: :ok
-  defp proto_ok({:send, ty, s}, ctx), do: with_ty(ty_ok(ty, ctx), proto_ok(s, ctx))
-  defp proto_ok({:recv, ty, s}, ctx), do: with_ty(ty_ok(ty, ctx), proto_ok(s, ctx))
+  defp proto_ok({:send, ty, s}, ctx), do: with_ty(ty_ok(ty, ctx), proto_ok(s, guard(ctx)))
+  defp proto_ok({:recv, ty, s}, ctx), do: with_ty(ty_ok(ty, ctx), proto_ok(s, guard(ctx)))
 
   defp proto_ok({:dsend, name, ty, s}, ctx) do
-    with_ty(ty_ok(ty, ctx), proto_ok(s, Map.put(ctx, name, ty)))
+    with_ty(ty_ok(ty, ctx), proto_ok(s, guard(Map.put(ctx, name, ty))))
   end
 
   defp proto_ok({:drecv, name, ty, s}, ctx) do
-    with_ty(ty_ok(ty, ctx), proto_ok(s, Map.put(ctx, name, ty)))
+    with_ty(ty_ok(ty, ctx), proto_ok(s, guard(Map.put(ctx, name, ty))))
   end
 
   # The name of an evidence payload is in scope in its bound only.
-  defp proto_ok({:esend, _name, e, s}, ctx), do: with_ty(bound_ok(e, ctx), proto_ok(s, ctx))
-  defp proto_ok({:erecv, _name, e, s}, ctx), do: with_ty(bound_ok(e, ctx), proto_ok(s, ctx))
+  defp proto_ok({:esend, _name, e, s}, ctx),
+    do: with_ty(bound_ok(e, ctx), proto_ok(s, guard(ctx)))
+
+  defp proto_ok({:erecv, _name, e, s}, ctx),
+    do: with_ty(bound_ok(e, ctx), proto_ok(s, guard(ctx)))
 
   defp proto_ok({:isend, name, s, t}, ctx) do
-    ctx1 = Map.put(ctx, name, :bit)
+    ctx1 = guard(Map.put(ctx, name, :bit))
     with_ty(proto_ok(s, ctx1), proto_ok(t, ctx1))
   end
 
   defp proto_ok({:irecv, name, s, t}, ctx) do
-    ctx1 = Map.put(ctx, name, :bit)
+    ctx1 = guard(Map.put(ctx, name, :bit))
     with_ty(proto_ok(s, ctx1), proto_ok(t, ctx1))
   end
 
-  defp proto_ok({:choose, s, t}, ctx), do: with_ty(proto_ok(s, ctx), proto_ok(t, ctx))
-  defp proto_ok({:branch, s, t}, ctx), do: with_ty(proto_ok(s, ctx), proto_ok(t, ctx))
+  defp proto_ok({:choose, s, t}, ctx) do
+    ctx1 = guard(ctx)
+    with_ty(proto_ok(s, ctx1), proto_ok(t, ctx1))
+  end
+
+  defp proto_ok({:branch, s, t}, ctx) do
+    ctx1 = guard(ctx)
+    with_ty(proto_ok(s, ctx1), proto_ok(t, ctx1))
+  end
+
+  # `rec` binds the name unguarded. An action, not another `rec`, guards it.
+  defp proto_ok({:rec, name, body}, ctx) do
+    proto_ok(body, Map.put(ctx, {:sess, name}, :unguarded))
+  end
+
+  defp proto_ok({:svar, name}, ctx) do
+    case Map.get(ctx, {:sess, name}) do
+      :guarded -> :ok
+      :unguarded -> {:error, "unguarded recursion"}
+      nil -> {:error, "free session variable #{name}"}
+    end
+  end
+
   defp proto_ok(_, _ctx), do: {:error, "ill-formed protocol"}
+
+  defp guard(ctx) do
+    Map.new(ctx, fn
+      {{:sess, name}, _} -> {{:sess, name}, :guarded}
+      pair -> pair
+    end)
+  end
+
+  defp proc_ok(:done, _ctx), do: :ok
+  defp proc_ok(:stop, _ctx), do: :ok
+  defp proc_ok({:put, _, _, p}, ctx), do: proc_ok(p, guard_proc(ctx))
+  defp proc_ok({:get, _, _, p}, ctx), do: proc_ok(p, guard_proc(ctx))
+  defp proc_ok({:pick0, p}, ctx), do: proc_ok(p, guard_proc(ctx))
+  defp proc_ok({:pick1, p}, ctx), do: proc_ok(p, guard_proc(ctx))
+
+  defp proc_ok({:cover, p, q}, ctx) do
+    ctx1 = guard_proc(ctx)
+    with_ty(proc_ok(p, ctx1), proc_ok(q, ctx1))
+  end
+
+  defp proc_ok({:iget, _, p, q}, ctx) do
+    ctx1 = guard_proc(ctx)
+    with_ty(proc_ok(p, ctx1), proc_ok(q, ctx1))
+  end
+
+  defp proc_ok({:rec, name, body}, ctx), do: proc_ok(body, Map.put(ctx, name, :unguarded))
+
+  defp proc_ok({:call, name}, ctx) do
+    case Map.get(ctx, name) do
+      :guarded -> :ok
+      :unguarded -> {:error, "unguarded recursion"}
+      nil -> {:error, "free session variable #{name}"}
+    end
+  end
+
+  defp proc_ok(_, _ctx), do: {:error, "ill-formed process"}
+
+  defp guard_proc(ctx), do: Map.new(ctx, fn {name, _} -> {name, :guarded} end)
 
   defp with_ty(:ok, rest), do: rest
   defp with_ty({:error, _} = err, _rest), do: err
@@ -377,6 +638,7 @@ defmodule Muro.Session do
 
   defp keep(:ok), do: :ok
   defp keep({:no, _, _} = no), do: no
+  defp keep({:error, _} = err), do: err
 
   defp value?({:nat, n}, :nat, _ctx) when is_integer(n) and n >= 0, do: true
   defp value?(bit, :bit, _ctx) when bit in [:b0, :b1], do: true
@@ -419,6 +681,9 @@ defmodule Muro.Session do
   def show_proc({:iget, name, p, q}) do
     "get (#{name} : Bit) on #{paren_proc(p)} #{paren_proc(q)}"
   end
+
+  def show_proc({:rec, name, body}), do: "rec #{name}. #{show_proc(body)}"
+  def show_proc({:call, name}), do: "#{name}"
 
   defp show_val({:var, name}), do: "#{name}"
   defp show_val({:nat, n}), do: "#{n}"
@@ -467,6 +732,8 @@ defmodule Muro.Session do
 
   def show_proto({:choose, s, t}), do: "choose #{paren_proto(s)} #{paren_proto(t)}"
   def show_proto({:branch, s, t}), do: "branch #{paren_proto(s)} #{paren_proto(t)}"
+  def show_proto({:rec, name, body}), do: "rec #{name}. #{show_proto(body)}"
+  def show_proto({:svar, name}), do: "#{name}"
 
   defp show_pay(:nat), do: "Nat"
   defp show_pay(:bit), do: "Bit"
@@ -489,8 +756,10 @@ defmodule Muro.Session do
   defp show_pay_atom(ty), do: show_pay(ty)
 
   defp paren_proc(p) when is_atom(p), do: show_proc(p)
+  defp paren_proc({:call, _} = p), do: show_proc(p)
   defp paren_proc(p), do: "(#{show_proc(p)})"
 
   defp paren_proto(:end), do: "end"
+  defp paren_proto({:svar, _} = s), do: show_proto(s)
   defp paren_proto(s), do: "(#{show_proto(s)})"
 end
