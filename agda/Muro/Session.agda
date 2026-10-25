@@ -1,11 +1,14 @@
 ------------------------------------------------------------------------
 -- Affine sessions. One channel. A communication carries a payload
 -- and one continuation. The payload is a run type in this fragment:
--- a nat, a bit, unit, a pair, a record of named fields, or a vector
--- whose length is a numeral or a nat name. A pair is a tuple. A
--- record is a fixed map: the names are the type, and a pair around a
--- record is a tuple wrapping that map. An open map, whose keys are
--- chosen at run time, is not a type.
+-- a nat, a bit, unit, a pair, a record of named fields, a vector
+-- whose length is a numeral or a nat name, or a declared data type.
+-- The constructors are the ones that declaration already has. A
+-- value inhabits the type when each field inhabits the field's type.
+-- A pair is a tuple. A record is a fixed map: the names are the type,
+-- and a pair around a record is a tuple wrapping that map. An open
+-- map, whose keys are chosen at run time, is not a type. An indexed
+-- declaration is not a payload. A computed term is not a value.
 --
 -- `send A S` sends a value of type A and continues as S. `recv A S`
 -- receives one. `drecv x A S` binds that value to `x`, and `S` may
@@ -22,7 +25,8 @@
 -- a variable bit does not select one: the sender writes `b0` or
 -- `b1`. `choose` and `branch` select an arm by a label, not by a
 -- payload. Two processes meet when the sent type is the type the
--- continuation expects, and an index meets the arm of that same bit.
+-- continuation expects, the value inhabits that type, and an index
+-- meets the arm of that same bit.
 --
 -- A protocol is spec. A conformance derivation is evidence. Neither
 -- is a run. `stop` abandons the channel at any protocol. A second
@@ -46,7 +50,9 @@
 
 module Muro.Session where
 
+open import Data.Bool.Base using (Bool; true; false; _∧_)
 open import Data.Empty using (⊥)
+open import Data.List.Base using (List; []; _∷_; length)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; _≤_; z≤n; s≤s) renaming (zero to nzero; suc to nsuc)
 open import Data.Nat.Properties using () renaming (_≟_ to _≟ℕ_; _≤?_ to _≤?ℕ_)
@@ -54,7 +60,7 @@ open import Data.Product using (_×_; _,_)
 open import Data.Sum using (_⊎_; inj₁; inj₂)
 open import Data.String.Base using (String)
 open import Data.String.Properties using (_≟_)
-open import Relation.Binary.PropositionalEquality.Core using (_≡_; _≢_; refl)
+open import Relation.Binary.PropositionalEquality.Core using (_≡_; _≢_; refl; sym; trans)
 open import Relation.Nullary.Decidable.Core using (Dec)
 open import Relation.Nullary.Decidable.Core using () renaming (yes to yes′; no to no′)
 
@@ -64,9 +70,147 @@ open import Muro.Base using (Mode; spec; evid; run; Qty; affine)
 ¬ A = A → ⊥
 
 ------------------------------------------------------------------------
+-- A declared data type, as a payload. Parameters are a count. Each
+-- constructor carries the fields the declaration already has. `fPar`
+-- is a parameter. `fSelf` is this declaration, applied to payload
+-- arguments. `fDat` is another such declaration. An index is not a
+-- parameter, and a field that is a function is not a field here.
+------------------------------------------------------------------------
+
+mutual
+  data Fld : Set where
+    fNat  : Fld
+    fBit  : Fld
+    fUnit : Fld
+    fPair : Fld → Fld → Fld
+    fPar  : ℕ → Fld
+    fSelf : List Fld → Fld
+    fDat  : Decl → List Fld → Fld
+
+  data Ctor : Set where
+    ctor : String → List Fld → Ctor
+
+  data Decl : Set where
+    mkDecl : String → ℕ → List Ctor → Decl
+
+np : Decl → ℕ
+np (mkDecl _ n _) = n
+
+ctorsOf : Decl → List Ctor
+ctorsOf (mkDecl _ _ cs) = cs
+
+true≢false : true ≢ false
+true≢false ()
+
+false≢true : false ≢ true
+false≢true ()
+
+mutual
+  fld≟ : (a b : Fld) → Dec (a ≡ b)
+  fld≟ fNat fNat = yes′ refl
+  fld≟ fNat fBit = no′ (λ ())
+  fld≟ fNat fUnit = no′ (λ ())
+  fld≟ fNat (fPair _ _) = no′ (λ ())
+  fld≟ fNat (fPar _) = no′ (λ ())
+  fld≟ fNat (fSelf _) = no′ (λ ())
+  fld≟ fNat (fDat _ _) = no′ (λ ())
+  fld≟ fBit fNat = no′ (λ ())
+  fld≟ fBit fBit = yes′ refl
+  fld≟ fBit fUnit = no′ (λ ())
+  fld≟ fBit (fPair _ _) = no′ (λ ())
+  fld≟ fBit (fPar _) = no′ (λ ())
+  fld≟ fBit (fSelf _) = no′ (λ ())
+  fld≟ fBit (fDat _ _) = no′ (λ ())
+  fld≟ fUnit fNat = no′ (λ ())
+  fld≟ fUnit fBit = no′ (λ ())
+  fld≟ fUnit fUnit = yes′ refl
+  fld≟ fUnit (fPair _ _) = no′ (λ ())
+  fld≟ fUnit (fPar _) = no′ (λ ())
+  fld≟ fUnit (fSelf _) = no′ (λ ())
+  fld≟ fUnit (fDat _ _) = no′ (λ ())
+  fld≟ (fPair _ _) fNat = no′ (λ ())
+  fld≟ (fPair _ _) fBit = no′ (λ ())
+  fld≟ (fPair _ _) fUnit = no′ (λ ())
+  fld≟ (fPair a b) (fPair c d) with fld≟ a c
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl with fld≟ b d
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl = yes′ refl
+  fld≟ (fPair _ _) (fPar _) = no′ (λ ())
+  fld≟ (fPair _ _) (fSelf _) = no′ (λ ())
+  fld≟ (fPair _ _) (fDat _ _) = no′ (λ ())
+  fld≟ (fPar _) fNat = no′ (λ ())
+  fld≟ (fPar _) fBit = no′ (λ ())
+  fld≟ (fPar _) fUnit = no′ (λ ())
+  fld≟ (fPar _) (fPair _ _) = no′ (λ ())
+  fld≟ (fPar m) (fPar n) with m ≟ℕ n
+  ... | yes′ refl = yes′ refl
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  fld≟ (fPar _) (fSelf _) = no′ (λ ())
+  fld≟ (fPar _) (fDat _ _) = no′ (λ ())
+  fld≟ (fSelf _) fNat = no′ (λ ())
+  fld≟ (fSelf _) fBit = no′ (λ ())
+  fld≟ (fSelf _) fUnit = no′ (λ ())
+  fld≟ (fSelf _) (fPair _ _) = no′ (λ ())
+  fld≟ (fSelf _) (fPar _) = no′ (λ ())
+  fld≟ (fSelf fs) (fSelf gs) with flds≟ fs gs
+  ... | yes′ refl = yes′ refl
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  fld≟ (fSelf _) (fDat _ _) = no′ (λ ())
+  fld≟ (fDat _ _) fNat = no′ (λ ())
+  fld≟ (fDat _ _) fBit = no′ (λ ())
+  fld≟ (fDat _ _) fUnit = no′ (λ ())
+  fld≟ (fDat _ _) (fPair _ _) = no′ (λ ())
+  fld≟ (fDat _ _) (fPar _) = no′ (λ ())
+  fld≟ (fDat _ _) (fSelf _) = no′ (λ ())
+  fld≟ (fDat d fs) (fDat e gs) with decl≟ d e
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl with flds≟ fs gs
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl = yes′ refl
+
+  flds≟ : (fs gs : List Fld) → Dec (fs ≡ gs)
+  flds≟ [] [] = yes′ refl
+  flds≟ [] (_ ∷ _) = no′ (λ ())
+  flds≟ (_ ∷ _) [] = no′ (λ ())
+  flds≟ (f ∷ fs) (g ∷ gs) with fld≟ f g
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl with flds≟ fs gs
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl = yes′ refl
+
+  ctor≟ : (c d : Ctor) → Dec (c ≡ d)
+  ctor≟ (ctor x fs) (ctor y gs) with x ≟ y
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl with flds≟ fs gs
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl = yes′ refl
+
+  ctors≟ : (cs ds : List Ctor) → Dec (cs ≡ ds)
+  ctors≟ [] [] = yes′ refl
+  ctors≟ [] (_ ∷ _) = no′ (λ ())
+  ctors≟ (_ ∷ _) [] = no′ (λ ())
+  ctors≟ (c ∷ cs) (d ∷ ds) with ctor≟ c d
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl with ctors≟ cs ds
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl = yes′ refl
+
+  decl≟ : (d e : Decl) → Dec (d ≡ e)
+  decl≟ (mkDecl x m cs) (mkDecl y n ds) with x ≟ y
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl with m ≟ℕ n
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl with ctors≟ cs ds
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl = yes′ refl
+
+------------------------------------------------------------------------
 -- The payload types. `pair` is a tuple. `rec` is a fixed map, one
 -- named field after another. The names are part of the type.
 -- `vec A e` is a vector of `A` whose length is a numeral or a name.
+-- `dat d as` is the declaration `d` applied to the payload arguments
+-- `as`.
 ------------------------------------------------------------------------
 
 data NExp : Set where
@@ -87,9 +231,15 @@ data Ty where
   pair : Ty → Ty → Ty
   rec  : Fields → Ty
   vec  : Ty → NExp → Ty
+  dat  : Decl → List Ty → Ty
 
 data Row : Fields → Set
 data Val : Ty → Set
+data Spine : Set
+
+data Spine where
+  snil  : Spine
+  scons : (A : Ty) → Val A → Spine → Spine
 
 data Row where
   noRow : Row noFields
@@ -104,6 +254,8 @@ data Val where
   tup  : ∀ {A B} → Val A → Val B → Val (pair A B)
   rec  : ∀ {fs} → Row fs → Val (rec fs)
   rep  : ∀ {A e} → Val A → Val (vec A e)
+  -- The name need not be a constructor. `fits` refuses it.
+  con  : ∀ {d as} → String → Spine → Val (dat d as)
 
 ------------------------------------------------------------------------
 -- Value expressions: literals or variable references
@@ -143,18 +295,21 @@ mutual
   ty≟ nat (pair _ _) = no′ (λ ())
   ty≟ nat (rec _) = no′ (λ ())
   ty≟ nat (vec _ _) = no′ (λ ())
+  ty≟ nat (dat _ _) = no′ (λ ())
   ty≟ bit nat = no′ (λ ())
   ty≟ bit bit = yes′ refl
   ty≟ bit unit = no′ (λ ())
   ty≟ bit (pair _ _) = no′ (λ ())
   ty≟ bit (rec _) = no′ (λ ())
   ty≟ bit (vec _ _) = no′ (λ ())
+  ty≟ bit (dat _ _) = no′ (λ ())
   ty≟ unit nat = no′ (λ ())
   ty≟ unit bit = no′ (λ ())
   ty≟ unit unit = yes′ refl
   ty≟ unit (pair _ _) = no′ (λ ())
   ty≟ unit (rec _) = no′ (λ ())
   ty≟ unit (vec _ _) = no′ (λ ())
+  ty≟ unit (dat _ _) = no′ (λ ())
   ty≟ (pair _ _) nat = no′ (λ ())
   ty≟ (pair _ _) bit = no′ (λ ())
   ty≟ (pair _ _) unit = no′ (λ ())
@@ -165,6 +320,7 @@ mutual
   ... | yes′ refl = yes′ refl
   ty≟ (pair _ _) (rec _) = no′ (λ ())
   ty≟ (pair _ _) (vec _ _) = no′ (λ ())
+  ty≟ (pair _ _) (dat _ _) = no′ (λ ())
   ty≟ (rec _) nat = no′ (λ ())
   ty≟ (rec _) bit = no′ (λ ())
   ty≟ (rec _) unit = no′ (λ ())
@@ -173,6 +329,7 @@ mutual
   ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
   ... | yes′ refl = yes′ refl
   ty≟ (rec _) (vec _ _) = no′ (λ ())
+  ty≟ (rec _) (dat _ _) = no′ (λ ())
   ty≟ (vec _ _) nat = no′ (λ ())
   ty≟ (vec _ _) bit = no′ (λ ())
   ty≟ (vec _ _) unit = no′ (λ ())
@@ -181,6 +338,28 @@ mutual
   ty≟ (vec A e) (vec B f) with ty≟ A B
   ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
   ... | yes′ refl with nexp≟ e f
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl = yes′ refl
+  ty≟ (vec _ _) (dat _ _) = no′ (λ ())
+  ty≟ (dat _ _) nat = no′ (λ ())
+  ty≟ (dat _ _) bit = no′ (λ ())
+  ty≟ (dat _ _) unit = no′ (λ ())
+  ty≟ (dat _ _) (pair _ _) = no′ (λ ())
+  ty≟ (dat _ _) (rec _) = no′ (λ ())
+  ty≟ (dat _ _) (vec _ _) = no′ (λ ())
+  ty≟ (dat d as) (dat e bs) with decl≟ d e
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl with tys≟ as bs
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl = yes′ refl
+
+  tys≟ : (as bs : List Ty) → Dec (as ≡ bs)
+  tys≟ [] [] = yes′ refl
+  tys≟ [] (_ ∷ _) = no′ (λ ())
+  tys≟ (_ ∷ _) [] = no′ (λ ())
+  tys≟ (A ∷ as) (B ∷ bs) with ty≟ A B
+  ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+  ... | yes′ refl with tys≟ as bs
   ... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
   ... | yes′ refl = yes′ refl
 
@@ -228,10 +407,82 @@ data Proc : Set where
   iget  : String → Proc → Proc → Proc
 
 ------------------------------------------------------------------------
--- Variable context: list of (name, type) pairs
+-- A parameter index, or nothing when the index is past the arguments.
 ------------------------------------------------------------------------
 
-open import Data.List.Base using (List; []; _∷_)
+nth : ∀ {A : Set} → List A → ℕ → Maybe A
+nth [] _ = nothing
+nth (x ∷ _) nzero = just x
+nth (_ ∷ xs) (nsuc n) = nth xs n
+
+bindM : ∀ {A B : Set} → Maybe A → (A → Maybe B) → Maybe B
+bindM nothing _ = nothing
+bindM (just x) f = f x
+
+-- `just` only when the instantiated arguments have the declaration's arity.
+sameLen : Decl → List Ty → Maybe Ty
+sameLen d ts = lenOk (length ts) (np d) ts
+  where
+  lenOk : ℕ → ℕ → List Ty → Maybe Ty
+  lenOk nzero nzero us = just (dat d us)
+  lenOk nzero (nsuc _) _ = nothing
+  lenOk (nsuc _) nzero _ = nothing
+  lenOk (nsuc m) (nsuc n) us = lenOk m n us
+
+mutual
+  inst : Decl → List Ty → Fld → Maybe Ty
+  inst _ _ fNat = just nat
+  inst _ _ fBit = just bit
+  inst _ _ fUnit = just unit
+  inst d as (fPair a b) =
+    bindM (inst d as a) (λ A → bindM (inst d as b) (λ B → just (pair A B)))
+  inst _ as (fPar i) = nth as i
+  inst d as (fSelf fs) = bindM (instAll d as fs) (sameLen d)
+  inst d as (fDat e fs) = bindM (instAll d as fs) (sameLen e)
+
+  instAll : Decl → List Ty → List Fld → Maybe (List Ty)
+  instAll _ _ [] = just []
+  instAll d as (f ∷ fs) =
+    bindM (inst d as f) (λ A → bindM (instAll d as fs) (λ ts → just (A ∷ ts)))
+
+-- A literal inhabits its type when `fits` is true. A constructor the
+-- declaration does not have, or a field of the wrong type, is false.
+-- The recursion follows the spine of the value.
+mutual
+  fits : ∀ {A} → Val A → Bool
+  fits zero = true
+  fits (suc v) = fits v
+  fits b0 = true
+  fits b1 = true
+  fits tt = true
+  fits (tup a b) = fits a ∧ fits b
+  fits (rec r) = fitsRow r
+  fits (rep v) = fits v
+  fits (con {d} {as} c sp) = fitsCtors (ctorsOf d) d as c sp
+
+  fitsRow : ∀ {fs} → Row fs → Bool
+  fitsRow noRow = true
+  fitsRow (cell v r) = fits v ∧ fitsRow r
+
+  fitsCtors : List Ctor → Decl → List Ty → String → Spine → Bool
+  fitsCtors [] _ _ _ _ = false
+  fitsCtors (ctor n fs ∷ cs) d as c sp with c ≟ n
+  ... | no′ _ = fitsCtors cs d as c sp
+  ... | yes′ _ = fitsFlds d as fs sp
+
+  fitsFlds : Decl → List Ty → List Fld → Spine → Bool
+  fitsFlds _ _ [] snil = true
+  fitsFlds _ _ [] (scons _ _ _) = false
+  fitsFlds _ _ (_ ∷ _) snil = false
+  fitsFlds d as (f ∷ fs) (scons B v sp) with inst d as f
+  ... | nothing = false
+  ... | just A with ty≟ A B
+  ... | no′ _ = false
+  ... | yes′ _ = fits v ∧ fitsFlds d as fs sp
+
+------------------------------------------------------------------------
+-- Variable context: list of (name, type) pairs
+------------------------------------------------------------------------
 
 Ctx : Set
 Ctx = List (String × Ty)
@@ -245,10 +496,22 @@ data _∈_∷_ : String → Ctx → Ty → Set where
   here  : ∀ {x A Γ} → x ∈ ((x , A) ∷ Γ) ∷ A
   there : ∀ {x y A B Γ} → x ≢ y → x ∈ Γ ∷ A → x ∈ ((y , B) ∷ Γ) ∷ A
 
--- Well-scoped value expressions
+-- A literal is in scope when it inhabits its type. A variable is in
+-- scope when the innermost binding of its name has that type.
 data ValExprOk : Ctx → ∀ {A} → ValExpr A → Set where
-  lit-ok : ∀ {Γ A} {v : Val A} → ValExprOk Γ (lit v)
+  lit-ok : ∀ {Γ A} {v : Val A} → fits v ≡ true → ValExprOk Γ (lit v)
   var-ok : ∀ {Γ A} {x : String} → x ∈ Γ ∷ A → ValExprOk Γ (var {A} x)
+
+-- A bound variable inhabits the type it was bound at.
+sent : ∀ {A} → ValExpr A → Bool
+sent (lit v) = fits v
+sent (var _) = true
+
+sent? : ∀ {A} (v : ValExpr A) → Dec (sent v ≡ true)
+sent? (lit v) with fits v
+... | true = yes′ refl
+... | false = no′ (λ p → false≢true p)
+sent? (var _) = yes′ refl
 
 ------------------------------------------------------------------------
 -- A received nat instantiates the lengths that name it. `none` is
@@ -284,6 +547,7 @@ applyNExp ρ (nvar x) with lookupIdx ρ x
 
 applyTy : Idx → Ty → Ty
 applyFields : Idx → Fields → Fields
+applyTys : Idx → List Ty → List Ty
 
 applyTy none A = A
 applyTy ρ@(bind _ _ _) nat = nat
@@ -292,10 +556,15 @@ applyTy ρ@(bind _ _ _) unit = unit
 applyTy ρ@(bind _ _ _) (pair A B) = pair (applyTy ρ A) (applyTy ρ B)
 applyTy ρ@(bind _ _ _) (rec fs) = rec (applyFields ρ fs)
 applyTy ρ@(bind _ _ _) (vec A e) = vec (applyTy ρ A) (applyNExp ρ e)
+applyTy ρ@(bind _ _ _) (dat d as) = dat d (applyTys ρ as)
 
 applyFields none fs = fs
 applyFields ρ@(bind _ _ _) noFields = noFields
 applyFields ρ@(bind _ _ _) (named n A fs) = named n (applyTy ρ A) (applyFields ρ fs)
+
+applyTys none ts = ts
+applyTys _ [] = []
+applyTys ρ@(bind _ _ _) (A ∷ ts) = applyTy ρ A ∷ applyTys ρ ts
 
 applyProto : Idx → Proto → Proto
 applyProto none S = S
@@ -327,6 +596,7 @@ ixOf unit _ = nlit nzero
 ixOf (pair _ _) _ = nlit nzero
 ixOf (rec _) _ = nlit nzero
 ixOf (vec _ _) _ = nlit nzero
+ixOf (dat _ _) _ = nlit nzero
 
 ------------------------------------------------------------------------
 -- The evidence a sent nat owes. The bound is a numeral, or a name the
@@ -431,6 +701,10 @@ Conforms Γ P S = Conformsρ Γ none P S
 
 data TyOk : Ctx → Ty → Set
 data FieldsOk : Ctx → Fields → Set
+data AllTy : Ctx → List Ty → Set
+data FldsFit : Ctx → Decl → List Ty → List Fld → Set
+data CtorsFit : Ctx → Decl → List Ty → List Ctor → Set
+data FieldFit : Ctx → Decl → List Ty → Fld → Set
 
 data NExpOk : Ctx → NExp → Set where
   nlit-ok : ∀ {Γ n} → NExpOk Γ (nlit n)
@@ -440,6 +714,36 @@ data FieldsOk where
   noFields-ok : ∀ {Γ} → FieldsOk Γ noFields
   named-ok    : ∀ {Γ n A fs} → TyOk Γ A → FieldsOk Γ fs → FieldsOk Γ (named n A fs)
 
+data AllTy where
+  tys-nil  : ∀ {Γ} → AllTy Γ []
+  tys-cons : ∀ {Γ A as} → TyOk Γ A → AllTy Γ as → AllTy Γ (A ∷ as)
+
+data FldsFit where
+  flds-nil  : ∀ {Γ d as} → FldsFit Γ d as []
+  flds-cons : ∀ {Γ d as f fs} →
+    FieldFit Γ d as f → FldsFit Γ d as fs → FldsFit Γ d as (f ∷ fs)
+
+data CtorsFit where
+  ctors-nil  : ∀ {Γ d as} → CtorsFit Γ d as []
+  ctors-cons : ∀ {Γ d as n fs cs} →
+    FldsFit Γ d as fs → CtorsFit Γ d as cs → CtorsFit Γ d as (ctor n fs ∷ cs)
+
+-- A recursive field is not checked as a fresh `TyOk` of this same
+-- declaration: the arguments are, and the declaration is checked once
+-- at `dat-ok`. Another declaration is checked on its own.
+data FieldFit where
+  ff-nat  : ∀ {Γ d as} → FieldFit Γ d as fNat
+  ff-bit  : ∀ {Γ d as} → FieldFit Γ d as fBit
+  ff-unit : ∀ {Γ d as} → FieldFit Γ d as fUnit
+  ff-pair : ∀ {Γ d as a b} →
+    FieldFit Γ d as a → FieldFit Γ d as b → FieldFit Γ d as (fPair a b)
+  ff-par  : ∀ {Γ d as i A} → nth as i ≡ just A → TyOk Γ A → FieldFit Γ d as (fPar i)
+  ff-self : ∀ {Γ d as fs A} →
+    inst d as (fSelf fs) ≡ just A → FldsFit Γ d as fs → FieldFit Γ d as (fSelf fs)
+  ff-dat  : ∀ {Γ d e as fs ts} →
+    inst d as (fDat e fs) ≡ just (dat e ts) →
+    FldsFit Γ d as fs → TyOk Γ (dat e ts) → FieldFit Γ d as (fDat e fs)
+
 data TyOk where
   nat-ok  : ∀ {Γ} → TyOk Γ nat
   bit-ok  : ∀ {Γ} → TyOk Γ bit
@@ -447,6 +751,8 @@ data TyOk where
   pair-ok : ∀ {Γ A B} → TyOk Γ A → TyOk Γ B → TyOk Γ (pair A B)
   rec-ok  : ∀ {Γ fs} → FieldsOk Γ fs → TyOk Γ (rec fs)
   vec-ok  : ∀ {Γ A e} → TyOk Γ A → NExpOk Γ e → TyOk Γ (vec A e)
+  dat-ok  : ∀ {Γ d as} →
+    length as ≡ np d → AllTy Γ as → CtorsFit Γ d as (ctorsOf d) → TyOk Γ (dat d as)
 
 data ProtoOk : Ctx → Proto → Set where
   end-ok    : ∀ {Γ} → ProtoOk Γ end
@@ -508,10 +814,10 @@ pong : Proc
 pong = get nat "x" (put nat (lit one) done)
 
 pong-ok : Conforms [] pong ping
-pong-ok = get-ok refl (put-ok refl lit-ok done-end)
+pong-ok = get-ok refl (put-ok refl (lit-ok refl) done-end)
 
 other-nat : Conforms [] (get nat "x" (put nat (lit zero) done)) ping
-other-nat = get-ok refl (put-ok refl lit-ok done-end)
+other-nat = get-ok refl (put-ok refl (lit-ok refl) done-end)
 
 -- Echo: receive a value and send it back.
 echo : Proc
@@ -521,10 +827,10 @@ echo-ok : Conforms [] echo ping
 echo-ok = get-ok refl (put-ok refl (var-ok here) done-end)
 
 v-here-ok : Conforms [] (put box (lit v-here) done) (send box end)
-v-here-ok = put-ok refl lit-ok done-end
+v-here-ok = put-ok refl (lit-ok refl) done-end
 
 v-there-ok : Conforms [] (put box (lit v-there) done) (send box end)
-v-there-ok = put-ok refl lit-ok done-end
+v-there-ok = put-ok refl (lit-ok refl) done-end
 
 not-type : ¬ Conforms [] (put nat (lit zero) done) (send box end)
 not-type (put-ok () _ _)
@@ -544,7 +850,7 @@ chosen : Conforms [] (pick0 done) (choose end (send nat end))
 chosen = pick0-ok done-end
 
 both : Conforms [] (cover done (put box (lit v-here) done)) (branch end (send box end))
-both = cover-ok done-end (put-ok refl lit-ok done-end)
+both = cover-ok done-end (put-ok refl (lit-ok refl) done-end)
 
 ------------------------------------------------------------------------
 -- The search. `yes` carries a derivation. `no` carries its refutation.
@@ -571,7 +877,9 @@ x ∈? ((y , B) ∷ Γ) ∷? A | no′ ¬xy with x ∈? Γ ∷? A
 
 -- Decide if a value expression is well-scoped
 decideValExpr : ∀ {A} (Γ : Ctx) (v : ValExpr A) → Dec (ValExprOk Γ v)
-decideValExpr Γ (lit v) = yes′ lit-ok
+decideValExpr Γ (lit v) with fits v in eq
+... | true = yes′ (lit-ok eq)
+... | false = no′ (λ { (lit-ok p) → true≢false (trans (sym p) eq) })
 decideValExpr {A} Γ (var x) with x ∈? Γ ∷? A
 ... | yes′ p = yes′ (var-ok p)
 ... | no′ np = no′ (λ { (var-ok p) → np p })
@@ -828,7 +1136,7 @@ shadowed-decides : decide [] shadowed (recv nat (recv bit (send nat end))) ≡ n
 shadowed-decides = refl
 
 left-open : Conforms [] (put nat (lit zero) stop) (send nat (send nat end))
-left-open = put-ok refl lit-ok abandon
+left-open = put-ok refl (lit-ok refl) abandon
 
 left-open-decides : decide [] (put nat (lit zero) stop) (send nat (send nat end)) ≡ yes left-open
 left-open-decides = refl
@@ -864,10 +1172,10 @@ sized-client : Proc
 sized-client = put nat (lit two) (get (vec nat len-two) "_" done)
 
 sized-server-ok : Conforms [] sized-server sized
-sized-server-ok = dget-ok refl (put-ok refl lit-ok done-end)
+sized-server-ok = dget-ok refl (put-ok refl (lit-ok refl) done-end)
 
 sized-client-ok : Conforms [] sized-client (dsend "n" nat (recv (vec nat (nvar "n")) end))
-sized-client-ok = dput-ok refl lit-ok (get-ok refl done-end)
+sized-client-ok = dput-ok refl (lit-ok refl) (get-ok refl done-end)
 
 sized-server-decides : decide [] sized-server sized ≡ yes sized-server-ok
 sized-server-decides = refl
@@ -925,7 +1233,7 @@ empty : Proc
 empty = get nat "w" (put nat (lit zero) done)
 
 empty-ok : Conforms [] empty window
-empty-ok = dget-ok refl (eput-ok lit-ok (owed zero-le) done-end)
+empty-ok = dget-ok refl (eput-ok (lit-ok refl) (owed zero-le) done-end)
 
 empty-decides : decide [] empty window ≡ yes empty-ok
 empty-decides = refl
@@ -947,8 +1255,8 @@ within = put nat (lit (num 8)) (put nat (lit (num 5)) done)
 
 within-ok : Conforms [] within granted
 within-ok =
-  dput-ok refl lit-ok
-    (eput-ok lit-ok (owed (lit-le (s≤s (s≤s (s≤s (s≤s (s≤s z≤n))))))) done-end)
+  dput-ok refl (lit-ok refl)
+    (eput-ok (lit-ok refl) (owed (lit-le (s≤s (s≤s (s≤s (s≤s (s≤s z≤n))))))) done-end)
 
 within-decides : decide [] within granted ≡ yes within-ok
 within-decides = refl
@@ -969,7 +1277,7 @@ frame : Proto
 frame = esend "d" (nlit 16384) end
 
 frame-ok : Conforms [] (put nat (lit zero) done) frame
-frame-ok = eput-ok lit-ok (owed (lit-le z≤n)) done-end
+frame-ok = eput-ok (lit-ok refl) (owed (lit-le z≤n)) done-end
 
 -- A second `w` hides the window. The bound still names the first.
 stale-proto : Proto
@@ -999,7 +1307,7 @@ route-server : Proc
 route-server = iget "b" (put nat (lit one) done) (get nat "n" done)
 
 route-server-ok : Conforms [] route-server route
-route-server-ok = iget-ok (put-ok refl lit-ok done-end) (get-ok refl done-end)
+route-server-ok = iget-ok (put-ok refl (lit-ok refl) done-end) (get-ok refl done-end)
 
 route-decides : decide [] route-server route ≡ yes route-server-ok
 route-decides = refl
@@ -1260,3 +1568,138 @@ ends-no-leave (ends-pick0 e) = choose0-ok (ends-no-leave e)
 ends-no-leave (ends-pick1 e) = choose1-ok (ends-no-leave e)
 ends-no-leave (ends-cover e f) = offer-ok (ends-no-leave e) (ends-no-leave f)
 ends-no-leave (ends-iget e f) = index-ok (ends-no-leave e) (ends-no-leave f)
+
+------------------------------------------------------------------------
+-- A declared data type is a payload. The constructors are the ones
+-- the declaration has. A constructor it does not have does not
+-- inhabit the type, and neither does a field of the wrong type.
+------------------------------------------------------------------------
+
+boolDecl : Decl
+boolDecl = mkDecl "Bool" nzero (ctor "true" [] ∷ ctor "false" [] ∷ [])
+
+boolTy : Ty
+boolTy = dat boolDecl []
+
+trueV : Val boolTy
+trueV = con "true" snil
+
+falseV : Val boolTy
+falseV = con "false" snil
+
+noneV : Val boolTy
+noneV = con "none" snil
+
+flag : Proto
+flag = send boolTy end
+
+up : Proc
+up = put boolTy (lit trueV) done
+
+up-ok : Conforms [] up flag
+up-ok = put-ok refl (lit-ok refl) done-end
+
+up-decides : decide [] up flag ≡ yes up-ok
+up-decides = refl
+
+bad-bool : ¬ Conforms [] (put boolTy (lit noneV) done) flag
+bad-bool (put-ok refl (lit-ok ()) _)
+
+bad-bool-decides : decide [] (put boolTy (lit noneV) done) flag ≡ no bad-bool
+bad-bool-decides = refl
+
+bool-formed : TyOk [] boolTy
+bool-formed = dat-ok refl tys-nil (ctors-cons flds-nil (ctors-cons flds-nil ctors-nil))
+
+maybeDecl : Decl
+maybeDecl = mkDecl "Maybe" (nsuc nzero)
+  (ctor "nothing" [] ∷ ctor "just" (fPar nzero ∷ []) ∷ [])
+
+maybeNat : Ty
+maybeNat = dat maybeDecl (nat ∷ [])
+
+nothingV : Val maybeNat
+nothingV = con "nothing" snil
+
+just0 : Val maybeNat
+just0 = con "just" (scons nat zero snil)
+
+justBit : Val maybeNat
+justBit = con "just" (scons bit b0 snil)
+
+opt : Proto
+opt = send maybeNat end
+
+opt-ok : Conforms [] (put maybeNat (lit just0) done) opt
+opt-ok = put-ok refl (lit-ok refl) done-end
+
+opt-none : Conforms [] (put maybeNat (lit nothingV) done) opt
+opt-none = put-ok refl (lit-ok refl) done-end
+
+bad-maybe : ¬ Conforms [] (put maybeNat (lit justBit) done) opt
+bad-maybe (put-ok refl (lit-ok ()) _)
+
+maybe-formed : TyOk [] maybeNat
+maybe-formed =
+  dat-ok refl (tys-cons nat-ok tys-nil)
+    (ctors-cons flds-nil
+      (ctors-cons (flds-cons (ff-par refl nat-ok) flds-nil) ctors-nil))
+
+listDecl : Decl
+listDecl = mkDecl "List" (nsuc nzero)
+  (ctor "nil" [] ∷ ctor "cons" (fPar nzero ∷ fSelf (fPar nzero ∷ []) ∷ []) ∷ [])
+
+listNat : Ty
+listNat = dat listDecl (nat ∷ [])
+
+nilV : Val listNat
+nilV = con "nil" snil
+
+consV : Val listNat
+consV = con "cons" (scons nat zero (scons listNat nilV snil))
+
+list-ok : Conforms [] (put listNat (lit nilV) done) (send listNat end)
+list-ok = put-ok refl (lit-ok refl) done-end
+
+list-cons-ok : Conforms [] (put listNat (lit consV) done) (send listNat end)
+list-cons-ok = put-ok refl (lit-ok refl) done-end
+
+list-formed : TyOk [] listNat
+list-formed =
+  dat-ok refl (tys-cons nat-ok tys-nil)
+    (ctors-cons flds-nil
+      (ctors-cons
+        (flds-cons (ff-par refl nat-ok)
+          (flds-cons (ff-self refl (flds-cons (ff-par refl nat-ok) flds-nil)) flds-nil))
+        ctors-nil))
+
+eitherDecl : Decl
+eitherDecl = mkDecl "Either" (nsuc (nsuc nzero))
+  (ctor "left" (fPar nzero ∷ []) ∷ ctor "right" (fPar (nsuc nzero) ∷ []) ∷ [])
+
+eitherNB : Ty
+eitherNB = dat eitherDecl (nat ∷ bit ∷ [])
+
+left0 : Val eitherNB
+left0 = con "left" (scons nat zero snil)
+
+rightB : Val eitherNB
+rightB = con "right" (scons bit b0 snil)
+
+badRight : Val eitherNB
+badRight = con "right" (scons nat zero snil)
+
+either-ok : Conforms [] (put eitherNB (lit left0) done) (send eitherNB end)
+either-ok = put-ok refl (lit-ok refl) done-end
+
+either-right-ok : Conforms [] (put eitherNB (lit rightB) done) (send eitherNB end)
+either-right-ok = put-ok refl (lit-ok refl) done-end
+
+either-miss : ¬ Conforms [] (put eitherNB (lit badRight) done) (send eitherNB end)
+either-miss (put-ok refl (lit-ok ()) _)
+
+either-formed : TyOk [] eitherNB
+either-formed =
+  dat-ok refl (tys-cons nat-ok (tys-cons bit-ok tys-nil))
+    (ctors-cons (flds-cons (ff-par refl nat-ok) flds-nil)
+      (ctors-cons (flds-cons (ff-par refl bit-ok) flds-nil) ctors-nil))

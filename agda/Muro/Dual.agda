@@ -102,7 +102,7 @@ grant : Proc
 grant = put nat (lit (num 8)) (get nat "d" done)
 
 grant-ok : Conforms [] grant (dual window)
-grant-ok = dput-ok refl lit-ok (eget-ok done-end)
+grant-ok = dput-ok refl (lit-ok refl) (eget-ok done-end)
 
 -- The receiver gets a nat, not a bit.
 grant-bit : ¬ Conforms [] (put nat (lit (num 8)) (get bit "d" done)) (dual window)
@@ -112,7 +112,7 @@ peer : Proc
 peer = put nat (lit two) (get nat "x" done)
 
 peer-ok : Conforms [] peer (dual ping)
-peer-ok = put-ok refl lit-ok (get-ok refl done-end)
+peer-ok = put-ok refl (lit-ok refl) (get-ok refl done-end)
 
 early : ¬ Conforms [] (put box (lit v-here) done) (dual ping)
 early (put-ok () _ _)
@@ -153,3 +153,16 @@ crossed = isend "b" (send nat end) (recv nat end)
 
 route-not-crossed : ¬ (dual route ≡ crossed)
 route-not-crossed ()
+
+-- The other end of a data payload receives that same type.
+flag-other : dual flag ≡ recv boolTy end
+flag-other = refl
+
+flag-back : dual (dual flag) ≡ flag
+flag-back = refl
+
+down : Proc
+down = get boolTy "b" done
+
+down-ok : Conforms [] down (dual flag)
+down-ok = get-ok refl done-end

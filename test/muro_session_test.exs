@@ -53,12 +53,17 @@ defmodule Muro.SessionTest do
            """) == :ok
   end
 
-  test "a repeated field and a payload that is not a type are refused" do
+  test "a repeated field is refused, and an undeclared payload name is refused" do
     assert {:error, msg} = Parser.parse("session box := send {x : Nat, x : Bit} end\n")
     assert msg =~ "duplicate field x"
 
-    assert {:error, msg} = Parser.parse("session box := send String end\n")
-    assert msg =~ "expected a payload"
+    assert {:error, msg} = check("session box := send String end\n")
+    assert msg =~ "ill-formed payload"
+  end
+
+  test "a data argument stops before a pair" do
+    assert {:ok, [box]} = Parser.parse("session box := send Maybe Nat * Bit end\n")
+    assert box.proto == {:send, {:pair, {:dat, "Maybe", [:nat]}, :bit}, :end}
   end
 
   test "a run beside a session is what emit keeps" do
@@ -720,6 +725,264 @@ defmodule Muro.SessionTest do
            def end : run Nat := 0
            def send : run Nat := 0
            """) == :ok
+  end
+
+  test "a declared data type is a payload, and so is its dual" do
+    src = """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data Maybe (A : Type) : Type where
+      nothing : Maybe A
+      just : A → Maybe A
+
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+
+    data Either (A : Type) (B : Type) : Type where
+      left : A → Either A B
+      right : B → Either A B
+
+    data Tree : Type where
+      leaf : Tree
+      node : Tree → Tree → Tree
+
+    session flag := send Bool end
+    session flag-back := dual flag
+    conform up : flag := put true done
+    conform down : flag-back := get Bool done
+    meet flag-wire : up with down
+
+    session opt := send (Maybe Nat) end
+    session opt-back := dual opt
+    conform some : opt := put (just 0) done
+    conform none-p : opt := put nothing done
+    conform take : opt-back := get (Maybe Nat) done
+    meet opt-wire : some with take
+
+    session nums := send (List Nat) end
+    conform empty : nums := put nil done
+    conform grown : nums := put (cons 0 (cons 0 nil)) done
+
+    session sum := send (Either Nat Bit) end
+    conform on-left : sum := put (left 0) done
+    conform on-right : sum := put (right b0) done
+
+    session trees := send Tree end
+    conform twig : trees := put (node leaf leaf) done
+
+    session echo := recv Bool (send Bool end)
+    conform echoer : echo := get (k : Bool) (put k done)
+    conform shadow : echo := get (true : Bool) (put true done)
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+
+    flag = Enum.find(book, &(&1.name == "flag"))
+    assert flag.proto == {:send, {:dat, "Bool", []}, :end}
+    assert Session.dual(flag.proto) == {:recv, {:dat, "Bool", []}, :end}
+    assert Session.proto_ok(flag.proto, book) == :ok
+    assert Session.proto_ok(Session.dual(flag.proto), book) == :ok
+
+    opt = Enum.find(book, &(&1.name == "opt"))
+    assert opt.proto == {:send, {:dat, "Maybe", [:nat]}, :end}
+    assert Session.proto_ok(opt.proto, book) == :ok
+    assert Session.proto_ok(Session.dual(opt.proto), book) == :ok
+
+    up = Enum.find(book, &(&1.name == "up"))
+    down = Enum.find(book, &(&1.name == "down"))
+    some = Enum.find(book, &(&1.name == "some"))
+    assert Session.skel(up.proc) == {:say, {:var, true}, :finish}
+    assert Session.carry(up.proc, book) == {:say, true, :finish}
+    assert Session.carry(some.proc, book) == {:say, {:just, 0}, :finish}
+
+    assert Session.carry(Enum.find(book, &(&1.name == "grown")).proc, book) ==
+             {:say, {:cons, 0, {:cons, 0, nil}}, :finish}
+
+    assert Muro.Meet.meets(up.proc, down.proc, book) == :ok
+    assert Muro.Meet.meets(some.proc, Enum.find(book, &(&1.name == "take")).proc, book) == :ok
+  end
+
+  test "a constructor that does not inhabit the payload is refused" do
+    src = """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data Maybe (A : Type) : Type where
+      nothing : Maybe A
+      just : A → Maybe A
+
+    data Either (A : Type) (B : Type) : Type where
+      left : A → Either A B
+      right : B → Either A B
+
+    session flag := send Bool end
+    session flag-back := dual flag
+    conform up : flag := put true done
+    conform down : flag-back := get Bool done
+    conform miss : flag := put (just 0) done
+    conform wrong-atom : flag := put nothing done
+    session opt := send (Maybe Nat) end
+    conform bad-maybe : opt := put (just b0) done
+    conform bad-right : sum := put (right 0) done
+    session sum := send (Either Nat Bit) end
+    """
+
+    assert {:error, msg} = check(src)
+    assert msg =~ "put (just 0) done does not conform to send Bool end"
+    assert msg =~ "put nothing done does not conform to send Bool end"
+    assert msg =~ "put (just b0) done does not conform to send (Maybe Nat) end"
+    assert msg =~ "put (right 0) done does not conform to send (Either Nat Bit) end"
+
+    assert {:ok, book} = Parser.parse(src)
+    down = Enum.find(book, &(&1.name == "down"))
+    miss = Enum.find(book, &(&1.name == "miss"))
+    assert {:error, meet} = Muro.Meet.meets(miss.proc, down.proc, book)
+    assert meet =~ "put (just 0) done does not meet get Bool done"
+  end
+
+  test "an indexed declaration, an atom, and a computed put stay refused" do
+    assert {:error, msg} =
+             check("""
+             session atom := send Atom end
+             """)
+
+    assert msg =~ "ill-formed payload"
+
+    assert {:error, msg} =
+             check("""
+             data Fin : Nat → Type where
+               fzero : Π (n : Nat) → Fin suc(n)
+               fsuc : Π (n : Nat) → Fin n → Fin suc(n)
+
+             session fin := send Fin end
+             """)
+
+    assert msg =~ "ill-formed payload"
+
+    assert {:error, msg} =
+             check("""
+             data Count (n : Nat) : Type where
+               counted : Count n
+
+             session count := send Count end
+             """)
+
+    assert msg =~ "ill-formed payload"
+
+    assert {:error, msg} =
+             check("""
+             data Fun : Type where
+               wrap : (Nat → Nat) → Fun
+
+             session fun := send Fun end
+             """)
+
+    assert msg =~ "ill-formed payload"
+
+    assert {:error, msg} =
+             check("""
+             data Hide : Type where
+               pack : Π (- n : Nat) → Hide
+
+             session hidden := send Hide end
+             """)
+
+    assert msg =~ "ill-formed payload"
+
+    assert {:error, msg} =
+             check("""
+             session nums := send Nat end
+             conform computed : nums := put (suc 0) done
+             conform added : nums := put (plus 0 0) done
+             """)
+
+    assert msg =~ "unbound variable suc"
+    assert msg =~ "unbound variable plus"
+
+    assert {:error, msg} =
+             Parser.parse("""
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             session route := recv (b : Bool) on end end
+             """)
+
+    assert msg =~ "a next action is chosen by a bit"
+  end
+
+  test "a declared data payload inside rec checks, dualises, and meets" do
+    src = """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data Maybe (A : Type) : Type where
+      nothing : Maybe A
+      just : A → Maybe A
+
+    session flags := rec X. send Bool X
+    session flags-back := dual flags
+    conform up : flags := rec X. put true X
+    conform down : flags-back := rec Y. get Bool Y
+    meet flag-loop : up with down
+    """
+
+    assert check(src) == :ok
+    assert {:ok, book} = Parser.parse(src)
+    flags = Enum.find(book, &(&1.name == "flags"))
+    assert Session.show_proto(flags.proto) == "rec X. send Bool X"
+    assert Session.show_proto(Session.dual(flags.proto)) == "rec X. recv Bool X"
+    assert Session.dual(Session.dual(flags.proto)) == flags.proto
+    assert Session.proto_ok(flags.proto, book) == :ok
+    assert Session.proto_ok(Session.dual(flags.proto), book) == :ok
+
+    up = Enum.find(book, &(&1.name == "up"))
+    down = Enum.find(book, &(&1.name == "down"))
+    assert Session.carry(up.proc, book) == {:loop, :X, {:say, true, {:jump, :X}}}
+    assert Muro.Meet.meets(up.proc, down.proc, book) == :ok
+
+    assert {:error, msg} =
+             check("""
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             data Maybe (A : Type) : Type where
+               nothing : Maybe A
+               just : A → Maybe A
+
+             session flags := rec X. send Bool X
+             conform bad : flags := rec X. put (just 0) X
+             """)
+
+    assert msg =~ "put (just 0) X does not conform to send Bool X"
+
+    assert {:ok, bad_book} =
+             Parser.parse("""
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             data Maybe (A : Type) : Type where
+               nothing : Maybe A
+               just : A → Maybe A
+
+             session flags := rec X. send Bool X
+             session flags-back := dual flags
+             conform bad : flags := rec X. put (just 0) X
+             conform down : flags-back := rec Y. get Bool Y
+             """)
+
+    bad = Enum.find(bad_book, &(&1.name == "bad"))
+    down = Enum.find(bad_book, &(&1.name == "down"))
+    assert {:error, meet} = Muro.Meet.meets(bad.proc, down.proc, bad_book)
+    assert meet =~ "put (just 0) X does not meet get Bool Y"
   end
 
   defp check(src) do

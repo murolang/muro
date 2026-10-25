@@ -2,13 +2,13 @@ defmodule Muro.Emit.Otp do
   @moduledoc """
   Emit each conforming process as a GenServer.
 
-  A `conform` is one process. A `read` is one process. The actions
-  are `Muro.Session.skel/1`, Agda's `skel`. The server talks to one
+  A `conform` is one process. A `read` is one process. The actions are
+  `Muro.Session.carry/2`: Agda's `skel`, with an unbound constructor
+  resolved to the value the message carries. The server talks to one
   peer pid. The message carries the value. The place stays on the
-  reading. A `meet` starts those
-  two processes as each other's peer. `leave` stops with
-  `{:shutdown, :abandon}`, which a monitor observes. `finish` stops
-  with `:normal`.
+  reading. A `meet` starts those two processes as each other's peer.
+  `leave` stops with `{:shutdown, :abandon}`, which a monitor observes.
+  `finish` stops with `:normal`.
 
   Value binding: When a process has `get (k : Type) continuation`, the
   received value is checked against the type, but variable substitution
@@ -18,6 +18,10 @@ defmodule Muro.Emit.Otp do
   An evidence payload is a nat on the channel. The evidence is a premise
   of the conformance derivation, not part of the process, so `skel` has
   no evidence to carry and the message is the nat alone.
+
+  A declared data value is an atom when the constructor has no fields,
+  and a tagged tuple when it has fields. `skel/1` leaves the constructor
+  name as a variable. `carry/2` resolves an unbound one.
 
   A bit index is that bit on the channel. The receiver's skeleton holds
   both arms. `b0` takes the first and `b1` takes the second. The message
@@ -36,7 +40,7 @@ defmodule Muro.Emit.Otp do
   def render(book, stem) when is_list(book) and is_binary(stem) do
     parent = module_name(stem)
     mods = modules(book)
-    {:ok, source(parent, mods) |> with_meetings(meetings(book))}
+    {:ok, source(parent, mods, Session.payload_decls(book)) |> with_meetings(meetings(book))}
   end
 
   defp modules(book) do
@@ -45,7 +49,7 @@ defmodule Muro.Emit.Otp do
       |> Enum.filter(&process?/1)
       |> Enum.reduce({[], MapSet.new()}, fn %{name: name, proc: proc}, {acc, used} ->
         {mod, used} = claim(camel(name), used)
-        {[{mod, Session.skel(proc)} | acc], used}
+        {[{mod, Session.carry(proc, book)} | acc], used}
       end)
 
     Enum.reverse(mods)
@@ -81,7 +85,7 @@ defmodule Muro.Emit.Otp do
           false
       end)
 
-    Session.skel(proc)
+    Session.carry(proc, book)
   end
 
   # `end`, `do`, and the other reserved words are not function names.
@@ -184,7 +188,7 @@ defmodule Muro.Emit.Otp do
     |> String.trim_trailing()
   end
 
-  defp source(parent, mods) do
+  defp source(parent, mods, decls) do
     children = Enum.map_join(mods, "\n\n", &child(parent, &1))
 
     """
@@ -328,7 +332,64 @@ defmodule Muro.Emit.Otp do
         length(list) == n and Enum.all?(list, &payload?(elem, &1))
       end
 
+      defp payload?({:dat, name, args}, value) when is_list(args) do
+        case Map.get(data_decls(), name) do
+          %{np: n, ctors: ctors} when length(args) == n ->
+            dat_payload?(ctors, name, args, value)
+
+          _ ->
+            false
+        end
+      end
+
       defp payload?(_, _), do: false
+
+      # A nullary constructor is an atom. A constructor with fields is a
+      # tagged tuple. `{:par, i}` is a parameter of this declaration.
+      # `{:self, args}` is this declaration. `{:dat, name, args}` is another.
+      defp data_decls, do: #{inspect(decls, limit: :infinity)}
+
+      defp dat_payload?(ctors, _dname, _args, value) when is_atom(value) do
+        case Map.get(ctors, Atom.to_string(value)) do
+          [] -> true
+          _ -> false
+        end
+      end
+
+      defp dat_payload?(ctors, dname, args, value) when is_tuple(value) and tuple_size(value) >= 1 do
+        [tag | fields] = Tuple.to_list(value)
+
+        if is_atom(tag) do
+          case Map.get(ctors, Atom.to_string(tag)) do
+            tmpl when is_list(tmpl) and length(tmpl) == length(fields) ->
+              Enum.zip(tmpl, fields)
+              |> Enum.all?(fn {field, got} -> payload?(inst_pay(field, dname, args), got) end)
+
+            _ ->
+              false
+          end
+        else
+          false
+        end
+      end
+
+      defp dat_payload?(_, _, _, _), do: false
+
+      defp inst_pay({:par, i}, _dname, args), do: Enum.at(args, i)
+
+      defp inst_pay({:pair, a, b}, dname, args) do
+        {:pair, inst_pay(a, dname, args), inst_pay(b, dname, args)}
+      end
+
+      defp inst_pay({:self, ts}, dname, args) do
+        {:dat, dname, Enum.map(ts, &inst_pay(&1, dname, args))}
+      end
+
+      defp inst_pay({:dat, name, ts}, dname, args) do
+        {:dat, name, Enum.map(ts, &inst_pay(&1, dname, args))}
+      end
+
+      defp inst_pay(ty, _dname, _args), do: ty
 
       defp ready({:hear, ty, name, next}, bindings) do
         {:hear, subst_ty(ty, bindings), name, next}
@@ -344,6 +405,10 @@ defmodule Muro.Emit.Otp do
 
       defp subst_ty({:vec, elem, e}, bindings) do
         {:vec, subst_ty(elem, bindings), subst_ix(e, bindings)}
+      end
+
+      defp subst_ty({:dat, name, args}, bindings) do
+        {:dat, name, Enum.map(args, &subst_ty(&1, bindings))}
       end
 
       defp subst_ty(ty, _bindings), do: ty
@@ -375,8 +440,8 @@ defmodule Muro.Emit.Otp do
         List.duplicate(substitute(val, bindings), n)
       end
 
-      defp substitute({a, b}, bindings) do
-        {substitute(a, bindings), substitute(b, bindings)}
+      defp substitute(tuple, bindings) when is_tuple(tuple) do
+        tuple |> Tuple.to_list() |> Enum.map(&substitute(&1, bindings)) |> List.to_tuple()
       end
 
       defp substitute(map, bindings) when is_map(map) do
