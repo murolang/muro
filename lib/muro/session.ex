@@ -9,8 +9,15 @@ defmodule Muro.Session do
   constructors are the ones that declaration has. A pair is a tuple. A
   record is a fixed map: the names, in the order written, are the type.
   A vector is a list of that length. `put` sends a value
-  of that type. `get` binds the received value to a named variable that
-  can be used in the continuation. A dependent receive binds a name the
+  of that type: a literal, a name bound by `get`, or the value an
+  in-scope `run` definition computes from its arguments. The body is a
+  first-order term, and a definition may call only a definition declared
+  before it. A definition that calls itself or a later definition is
+  refused. `get` binds the received value to
+  a named variable. `get (b : Bit) (match b P Q)` matches on that value.
+  Each arm conforms to the one continuation, and the processes may differ:
+  the received value chooses which process runs. A declared data type has
+  one arm per constructor, in declaration order. A dependent receive binds a name the
   continuation's payload may mention as a vector length. An evidence
   payload sends a nat at most a bound, a numeral or a nat bound
   earlier. The sender owes that evidence, and the checker decides it as
@@ -64,11 +71,72 @@ defmodule Muro.Session do
   message carries: a nullary constructor is an atom, and a constructor
   with fields is a tagged tuple. A bound name stays a variable.
   """
-  def carry(proc, book), do: carry_go(proc, data_entries(book), %{})
+  def carry(proc, book), do: carry_go(proc, prepare(book), %{})
 
   @doc false
   def inhabits?(val, ty, ctx, book) when is_map(ctx) and is_list(book) do
-    value?(val, ty, ctx, data_entries(book))
+    answer(val, ty, ctx, prepare(book)) == :yes
+  end
+
+  @doc false
+  def answer(val, ty, ctx, book) when is_list(book), do: answer(val, ty, ctx, prepare(book))
+
+  def answer(val, ty, ctx, %{decls: _, runs: _} = book) do
+    case reduce(val, ctx, book) do
+      {:error, _} = err -> err
+      {:ok, v} -> fits(v, ty, ctx, book)
+    end
+  end
+
+  @doc false
+  def form(val, ctx, book) when is_list(book), do: form(val, ctx, prepare(book))
+
+  def form(val, ctx, %{decls: _, runs: _} = book) do
+    case reduce(val, ctx, book) do
+      {:ok, v} -> {:ok, canon(v, book)}
+      other -> other
+    end
+  end
+
+  @doc false
+  def covered?(ty, arms, book) when is_list(book), do: covered?(ty, arms, prepare(book))
+  def covered?(:bit, arms, _book) when length(arms) == 2, do: :ok
+
+  def covered?({:dat, name, _}, arms, book) do
+    names = ctor_names(book, name)
+    if names != [] and length(names) == length(arms), do: :ok, else: :error
+  end
+
+  def covered?(_, _, _), do: :error
+
+  @doc false
+  def arm(ty, val, arms, book) when is_list(book), do: arm(ty, val, arms, prepare(book))
+
+  def arm(ty, val, arms, book) do
+    val = canon(val, book)
+
+    case {ty, val, arms} do
+      {:bit, :b0, [p, _]} ->
+        {:ok, p}
+
+      {:bit, :b1, [_, q]} ->
+        {:ok, q}
+
+      {{:dat, dname, _}, {:con, c, _}, _} ->
+        case Enum.find_index(ctor_names(book, dname), &(&1 == cname(c))) do
+          i when is_integer(i) ->
+            case Enum.at(arms, i) do
+              nil -> :error
+              p -> {:ok, p}
+            end
+
+          _ ->
+            :error
+        end
+
+      _ ->
+        :error
+    end
   end
 
   @doc """
@@ -96,6 +164,7 @@ defmodule Muro.Session do
   defp skel_go({:pick1, p}), do: {:choose, :b1, skel_go(p)}
   defp skel_go({:cover, p, q}), do: {:offer, skel_go(p), skel_go(q)}
   defp skel_go({:iget, name, p, q}), do: {:index, name, skel_go(p), skel_go(q)}
+  defp skel_go({:match, _name, arms}), do: {:pick, Enum.map(arms, &skel_go/1)}
   defp skel_go({:rec, name, body}), do: {:loop, name, skel_go(body)}
   defp skel_go({:call, name}), do: {:jump, name}
 
@@ -122,6 +191,10 @@ defmodule Muro.Session do
     {:index, name, carry_go(p, book, ctx1), carry_go(q, book, ctx1)}
   end
 
+  defp carry_go({:match, _name, arms}, book, ctx) do
+    {:pick, Enum.map(arms, &carry_go(&1, book, ctx))}
+  end
+
   defp carry_go({:rec, name, body}, book, ctx), do: {:loop, name, carry_go(body, book, ctx)}
   defp carry_go({:call, name}, _book, _ctx), do: {:jump, name}
 
@@ -130,14 +203,34 @@ defmodule Muro.Session do
 
   defp resolve_val({:var, name} = val, book, ctx) do
     cond do
-      Map.has_key?(ctx, name) -> val
-      nullary_name?(book, name) -> {:con, cname(name), []}
-      true -> val
+      Map.has_key?(ctx, name) ->
+        val
+
+      nullary_name?(book, name) ->
+        {:con, cname(name), []}
+
+      run?(book, cname(name)) ->
+        case eval_call(cname(name), [], book) do
+          {:ok, v} when v != :miss -> v
+          _ -> val
+        end
+
+      true ->
+        val
     end
   end
 
   defp resolve_val({:con, name, args}, book, ctx) do
-    {:con, name, Enum.map(args, &resolve_val(&1, book, ctx))}
+    args = Enum.map(args, &resolve_val(&1, book, ctx))
+
+    if run?(book, name) and Enum.all?(args, &closed?(&1, ctx, book)) do
+      case eval_call(name, args, book) do
+        {:ok, v} when v != :miss -> v
+        _ -> {:con, cname(name), args}
+      end
+    else
+      {:con, cname(name), args}
+    end
   end
 
   defp resolve_val({:tup, a, b}, book, ctx) do
@@ -232,9 +325,20 @@ defmodule Muro.Session do
     end
   end
 
+  defp finishes_go({:match, _, arms}), do: finishes_all(arms)
+
   # A jump has no derivation. `rec X. done` does not jump.
   defp finishes_go({:rec, _, body}), do: finishes_go(body)
   defp finishes_go({:call, _}), do: :no
+
+  defp finishes_all([]), do: :yes
+
+  defp finishes_all([p | ps]) do
+    case finishes_go(p) do
+      :yes -> finishes_all(ps)
+      :no -> :no
+    end
+  end
 
   @doc """
   `:ok` when `decide` returns `yes`. Otherwise the pair where it returns `no`.
@@ -246,7 +350,7 @@ defmodule Muro.Session do
   @conform_fuel 10_000
 
   def conforms(proc, proto, book \\ []) do
-    case go(proc, proto, %{}, %{}, %{}, %{}, MapSet.new(), @conform_fuel, data_entries(book)) do
+    case go(proc, proto, %{}, %{}, %{}, %{}, MapSet.new(), @conform_fuel, prepare(book)) do
       :ok ->
         :ok
 
@@ -310,10 +414,10 @@ defmodule Muro.Session do
        ) do
     expected = apply_ty(idx, sty)
 
-    if put_ok?(ty, val, expected, ctx, book) do
-      keep(go(p, s, ctx, idx, penv, senv, seen, fuel - 1, book))
-    else
-      {:no, proc, proto}
+    case put_ok?(ty, val, expected, ctx, book) do
+      :yes -> keep(go(p, s, ctx, idx, penv, senv, seen, fuel - 1, book))
+      :no -> {:no, proc, proto}
+      {:error, _} = err -> err
     end
   end
 
@@ -330,10 +434,27 @@ defmodule Muro.Session do
        ) do
     expected = apply_ty(idx, sty)
 
-    if put_ok?(ty, val, expected, ctx, book) do
-      keep(go(p, s, ctx, ext(idx, y, val, expected), penv, senv, seen, fuel - 1, book))
-    else
-      {:no, proc, proto}
+    case put_ok?(ty, val, expected, ctx, book) do
+      :yes ->
+        keep(
+          go(
+            p,
+            s,
+            ctx,
+            ext(idx, y, sent_val(val, ctx, book), expected),
+            penv,
+            senv,
+            seen,
+            fuel - 1,
+            book
+          )
+        )
+
+      :no ->
+        {:no, proc, proto}
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -351,7 +472,7 @@ defmodule Muro.Session do
     expected = apply_ty(idx, sty)
 
     if ty == expected do
-      keep(go(p, s, bind_ctx(ctx, name, expected), idx, penv, senv, seen, fuel - 1, book))
+      keep(cont(p, s, name, expected, ctx, idx, penv, senv, seen, fuel, book))
     else
       {:no, proc, proto}
     end
@@ -372,15 +493,17 @@ defmodule Muro.Session do
 
     if ty == expected do
       keep(
-        go(
+        cont(
           p,
           s,
-          bind_ctx(ctx, name, expected),
+          name,
+          expected,
+          ctx,
           rename_idx(idx, y, name),
           penv,
           senv,
           seen,
-          fuel - 1,
+          fuel,
           book
         )
       )
@@ -402,16 +525,31 @@ defmodule Muro.Session do
          fuel,
          book
        ) do
-    if put_ok?(ty, val, :nat, ctx, book) and owed?(val, resolve(idx, e), ctx) do
-      keep(go(p, s, ctx, idx, penv, senv, seen, fuel - 1, book))
-    else
-      {:no, proc, proto}
+    case put_ok?(ty, val, :nat, ctx, book) do
+      :yes ->
+        case reduce(val, ctx, book) do
+          {:ok, got} ->
+            if owed?(got, resolve(idx, e), ctx) do
+              keep(go(p, s, ctx, idx, penv, senv, seen, fuel - 1, book))
+            else
+              {:no, proc, proto}
+            end
+
+          {:error, _} = err ->
+            err
+        end
+
+      :no ->
+        {:no, proc, proto}
+
+      {:error, _} = err ->
+        err
     end
   end
 
   # `eget-ok`. The receiver binds a nat and owes nothing.
   defp step({:get, :nat, name, p}, {:erecv, _y, _e, s}, ctx, idx, penv, senv, seen, fuel, book) do
-    keep(go(p, s, bind_ctx(ctx, name, :nat), idx, penv, senv, seen, fuel - 1, book))
+    keep(cont(p, s, name, :nat, ctx, idx, penv, senv, seen, fuel, book))
   end
 
   # `iput0-ok` and `iput1-ok`. The literal selects the arm. A variable
@@ -427,15 +565,21 @@ defmodule Muro.Session do
          fuel,
          book
        ) do
-    cond do
-      val == :b0 and put_ok?(ty, val, :bit, ctx, book) ->
+    case put_ok?(ty, val, :bit, ctx, book) do
+      :yes when val == :b0 ->
         keep(go(p, s, ctx, Map.delete(idx, y), penv, senv, seen, fuel - 1, book))
 
-      val == :b1 and put_ok?(ty, val, :bit, ctx, book) ->
+      :yes when val == :b1 ->
         keep(go(p, t, ctx, Map.delete(idx, y), penv, senv, seen, fuel - 1, book))
 
-      true ->
+      :no ->
         {:no, proc, proto}
+
+      :yes ->
+        {:no, proc, proto}
+
+      {:error, _} = err ->
+        err
     end
   end
 
@@ -466,6 +610,39 @@ defmodule Muro.Session do
   end
 
   defp step(p, s, _ctx, _idx, _penv, _senv, _seen, _fuel, _book), do: {:no, p, s}
+
+  # A match is the continuation of the `get` just taken. Each arm conforms
+  # to that one protocol. The processes may differ: the received value
+  # chooses which process runs, and it does not choose another protocol.
+  # The scrutinee is the received name. A nat, a pair, a record, a vector,
+  # or unit has no covering.
+  @cover "match does not cover the received value"
+
+  defp cont({:match, scrut, arms}, proto, name, ty, ctx, idx, penv, senv, seen, fuel, book) do
+    cond do
+      scrut != name ->
+        {:error, @cover}
+
+      covered?(ty, arms, book) != :ok ->
+        {:error, @cover}
+
+      true ->
+        arms_go(arms, proto, bind_ctx(ctx, name, ty), idx, penv, senv, seen, fuel, book)
+    end
+  end
+
+  defp cont(p, proto, name, ty, ctx, idx, penv, senv, seen, fuel, book) do
+    go(p, proto, bind_ctx(ctx, name, ty), idx, penv, senv, seen, fuel - 1, book)
+  end
+
+  defp arms_go([], _proto, _ctx, _idx, _penv, _senv, _seen, _fuel, _book), do: :ok
+
+  defp arms_go([p | ps], proto, ctx, idx, penv, senv, seen, fuel, book) do
+    case go(p, proto, ctx, idx, penv, senv, seen, fuel - 1, book) do
+      :ok -> arms_go(ps, proto, ctx, idx, penv, senv, seen, fuel, book)
+      other -> other
+    end
+  end
 
   # The binding is the `rec` term. A jump unfolds that term. The stack
   # is only the unwind, so a cycle here has no action under it.
@@ -544,6 +721,10 @@ defmodule Muro.Session do
   defp free_proc({:pick1, p}), do: free_proc(p)
   defp free_proc({:cover, p, q}), do: MapSet.union(free_proc(p), free_proc(q))
   defp free_proc({:iget, _, p, q}), do: MapSet.union(free_proc(p), free_proc(q))
+
+  defp free_proc({:match, _, arms}),
+    do: Enum.reduce(arms, MapSet.new(), &MapSet.union(free_proc(&1), &2))
+
   defp free_proc({:call, name}), do: MapSet.new([name])
   defp free_proc({:rec, name, body}), do: MapSet.delete(free_proc(body), name)
 
@@ -561,8 +742,11 @@ defmodule Muro.Session do
   defp free_proto({:svar, name}), do: MapSet.new([name])
   defp free_proto({:rec, name, body}), do: MapSet.delete(free_proto(body), name)
 
-  defp put_ok?(:unknown, val, expected, ctx, book), do: value?(val, expected, ctx, book)
-  defp put_ok?(ty, val, expected, ctx, book), do: ty == expected and value?(val, ty, ctx, book)
+  defp put_ok?(:unknown, val, expected, ctx, book), do: answer(val, expected, ctx, book)
+
+  defp put_ok?(ty, val, expected, ctx, book) do
+    if ty == expected, do: answer(val, expected, ctx, book), else: :no
+  end
 
   # The count under `{:bound, name}` is how often the name was bound.
   # `Once` reads it.
@@ -712,6 +896,15 @@ defmodule Muro.Session do
     with_ty(proc_ok(p, ctx1), proc_ok(q, ctx1))
   end
 
+  defp proc_ok({:match, _, arms}, ctx) do
+    Enum.reduce_while(arms, :ok, fn p, :ok ->
+      case proc_ok(p, ctx) do
+        :ok -> {:cont, :ok}
+        err -> {:halt, err}
+      end
+    end)
+  end
+
   defp proc_ok({:rec, name, body}, ctx), do: proc_ok(body, Map.put(ctx, name, :unguarded))
 
   defp proc_ok({:call, name}, ctx) do
@@ -783,43 +976,56 @@ defmodule Muro.Session do
   defp keep({:no, _, _} = no), do: no
   defp keep({:error, _} = err), do: err
 
-  defp value?({:nat, n}, :nat, _ctx, _book) when is_integer(n) and n >= 0, do: true
-  defp value?(bit, :bit, _ctx, _book) when bit in [:b0, :b1], do: true
-  defp value?(:tt, :unit, _ctx, _book), do: true
+  defp fits({:nat, n}, :nat, _ctx, _book) when is_integer(n) and n >= 0, do: :yes
+  defp fits(bit, :bit, _ctx, _book) when bit in [:b0, :b1], do: :yes
+  defp fits(:tt, :unit, _ctx, _book), do: :yes
 
-  defp value?({:tup, a, b}, {:pair, ta, tb}, ctx, book) do
-    value?(a, ta, ctx, book) and value?(b, tb, ctx, book)
+  defp fits({:tup, a, b}, {:pair, ta, tb}, ctx, book) do
+    both(answer(a, ta, ctx, book), fn -> answer(b, tb, ctx, book) end)
   end
 
-  defp value?({:rec, vals}, {:rec, fields}, ctx, book) when is_list(vals) and is_list(fields) do
-    length(vals) == length(fields) and
-      Enum.all?(fields, fn {name, ty} ->
+  defp fits({:rec, vals}, {:rec, fields}, ctx, book) when is_list(vals) and is_list(fields) do
+    if length(vals) == length(fields) do
+      Enum.reduce_while(fields, :yes, fn {name, ty}, :yes ->
         case List.keyfind(vals, name, 0) do
-          {^name, val} -> value?(val, ty, ctx, book)
-          _ -> false
+          {^name, val} ->
+            case answer(val, ty, ctx, book) do
+              :yes -> {:cont, :yes}
+              other -> {:halt, other}
+            end
+
+          _ ->
+            {:halt, :no}
         end
       end)
+    else
+      :no
+    end
   end
 
-  defp value?({:rep, ix, elem}, {:vec, ety, e}, ctx, book) do
-    nexp_of(ix) == e and value?(elem, ety, ctx, book)
+  defp fits({:rep, ix, elem}, {:vec, ety, e}, ctx, book) do
+    if nexp_of(ix) == e, do: answer(elem, ety, ctx, book), else: :no
   end
 
-  defp value?({:con, name, args}, {:dat, _, _} = ty, ctx, book) do
-    con_ok?(name, args, ty, ctx, book)
+  defp fits({:con, name, args}, {:dat, _, _} = ty, ctx, book) do
+    con_fits(name, args, ty, ctx, book)
   end
 
   # A bound name inhabits its binding. An unbound name inhabits a data
   # type when it is a nullary constructor of that type. The binding wins.
-  defp value?({:var, name}, expected, ctx, book) do
+  defp fits({:var, name}, expected, ctx, book) do
     case Map.get(ctx, name) do
-      ^expected -> true
-      nil -> nullary_ctor?(book, expected, name)
-      _ -> false
+      ^expected -> :yes
+      nil -> if nullary_ctor?(book, expected, name), do: :yes, else: :no
+      _ -> :no
     end
   end
 
-  defp value?(_, _, _ctx, _book), do: false
+  defp fits(_, _, _ctx, _book), do: :no
+
+  defp both(:yes, rest), do: rest.()
+  defp both({:error, _} = err, _rest), do: err
+  defp both(_, _rest), do: :no
 
   defp ty_dat(name, args, ctx, book, seen) do
     key = {name, args}
@@ -867,21 +1073,23 @@ defmodule Muro.Session do
     end)
   end
 
-  defp con_ok?(name, args, {:dat, dname, targs}, ctx, book) do
+  defp con_fits(name, args, {:dat, dname, targs}, ctx, book) do
     case find_decl(book, dname) do
       nil ->
-        false
+        :no
 
       d ->
         case ctor_fields(d, cname(name)) do
           {:ok, fields} when length(fields) == length(args) ->
-            Enum.zip(fields, args)
-            |> Enum.all?(fn {field, arg} ->
-              value?(arg, inst_field(field, dname, targs), ctx, book)
+            Enum.reduce_while(Enum.zip(fields, args), :yes, fn {field, arg}, :yes ->
+              case answer(arg, inst_field(field, dname, targs), ctx, book) do
+                :yes -> {:cont, :yes}
+                other -> {:halt, other}
+              end
             end)
 
           _ ->
-            false
+            :no
         end
     end
   end
@@ -897,14 +1105,14 @@ defmodule Muro.Session do
 
   defp nullary_name?(book, name) do
     label = cname(name)
-    Enum.any?(book, fn d -> ctor_fields(d, label) == {:ok, []} end)
+    Enum.any?(decls(book), fn d -> ctor_fields(d, label) == {:ok, []} end)
   end
 
   defp cname(name) when is_atom(name), do: Atom.to_string(name)
   defp cname(name) when is_binary(name), do: name
 
   defp find_decl(book, name) do
-    Enum.find(book, &(Map.get(&1, :kind) == :data and &1.name == name))
+    Enum.find(decls(book), &(Map.get(&1, :kind) == :data and &1.name == name))
   end
 
   # De Bruijn data declarations. A named book is converted once.
@@ -933,6 +1141,13 @@ defmodule Muro.Session do
   end
 
   defp named_term?({:var, v}) when is_binary(v), do: true
+  defp named_term?({:var, v}) when is_integer(v), do: false
+  defp named_term?({:mnat, _, _, _, _, _, _}), do: true
+  defp named_term?({:mdata, _, _, _, _}), do: true
+  defp named_term?({:munit, _, _, _, _}), do: true
+  defp named_term?({:memp, _, _, _}), do: true
+  defp named_term?({:letp, _, _, _, _}), do: true
+  defp named_term?({:rwt, _, _, _, _}), do: true
   defp named_term?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&named_term?/1)
   defp named_term?(t) when is_list(t), do: Enum.any?(t, &named_term?/1)
   defp named_term?(_), do: false
@@ -950,6 +1165,8 @@ defmodule Muro.Session do
         :error
 
       true ->
+        order = Enum.map(ctors, & &1.name)
+
         Enum.reduce_while(ctors, {:ok, %{}}, fn c, {:ok, acc} ->
           case fields_of(d, c) do
             {:ok, fields} -> {:cont, {:ok, Map.put(acc, c.name, fields)}}
@@ -957,7 +1174,7 @@ defmodule Muro.Session do
           end
         end)
         |> case do
-          {:ok, ctors} -> {:ok, {name, %{np: length(params), ctors: ctors}}}
+          {:ok, ctors} -> {:ok, {name, %{np: length(params), order: order, ctors: ctors}}}
           :error -> :error
         end
     end
@@ -1083,6 +1300,10 @@ defmodule Muro.Session do
     "get (#{name} : Bit) on #{paren_proc(p)} #{paren_proc(q)}"
   end
 
+  def show_proc({:match, name, arms}) do
+    "match #{name} #{Enum.map_join(arms, " ", &paren_proc/1)}"
+  end
+
   def show_proc({:rec, name, body}), do: "rec #{name}. #{show_proc(body)}"
   def show_proc({:call, name}), do: "#{name}"
 
@@ -1175,4 +1396,438 @@ defmodule Muro.Session do
   defp paren_proto(:end), do: "end"
   defp paren_proto({:svar, _} = s), do: show_proto(s)
   defp paren_proto(s), do: "(#{show_proto(s)})"
+
+  # The value a dependent send instantiates. A run application is the
+  # nat it computes. A name stays a name.
+  defp sent_val(val, ctx, book) do
+    case reduce(val, ctx, book) do
+      {:ok, v} when v != :miss -> v
+      _ -> val
+    end
+  end
+
+  # Data declarations for payload templates, and `run` definitions for
+  # the first-order evaluator. A named book is converted once. A de Bruijn
+  # book is kept: converting it again would rewrite `{:var, 0}`.
+  defp prepare(book) when is_list(book) do
+    %{decls: data_entries(book), runs: eval_book(book)}
+  end
+
+  defp decls(%{decls: decls}), do: decls
+  defp decls(book) when is_list(book), do: book
+
+  defp runs(%{runs: runs}), do: runs
+  defp runs(_), do: []
+
+  defp eval_book(book) do
+    Enum.flat_map(book, fn d ->
+      cond do
+        Map.get(d, :kind) == :data ->
+          case ensure_db(d) do
+            {:ok, db} -> [db]
+            _ -> []
+          end
+
+        run_entry?(d) ->
+          case ensure_run(d) do
+            {:ok, db} -> [db]
+            _ -> []
+          end
+
+        true ->
+          []
+      end
+    end)
+  end
+
+  defp run_entry?(%{mode: :run, name: _, body: _, type: _} = d), do: termish?(d)
+  defp run_entry?(_), do: false
+
+  defp termish?(%{kind: kind})
+       when kind in [
+              :data,
+              :session,
+              :conform,
+              :place,
+              :scheme,
+              :move,
+              :endpoint,
+              :read,
+              :meet,
+              :talk,
+              :seat,
+              :link,
+              :relay,
+              :import,
+              :param
+            ],
+       do: false
+
+  defp termish?(_), do: true
+
+  defp ensure_run(%{type: ty, body: body} = d) do
+    if named_term?(ty) or named_term?(body), do: Muro.Ast.def_to_db(d), else: {:ok, d}
+  end
+
+  defp run?(book, name) do
+    Enum.any?(runs(book), &(&1.name == name and &1.mode == :run))
+  end
+
+  defp ctor?(book, name) do
+    label = cname(name)
+
+    Enum.any?(decls(book), fn d ->
+      match?({:ok, _}, ctor_fields(d, label))
+    end)
+  end
+
+  defp ctor_names(book, dname) do
+    case find_decl(book, dname) do
+      %{ctors: ctors} -> Enum.map(ctors, & &1.name)
+      _ -> []
+    end
+  end
+
+  defp canon({:var, name} = val, book) do
+    if nullary_name?(book, name), do: {:con, cname(name), []}, else: val
+  end
+
+  defp canon({:con, name, args}, book) do
+    {:con, cname(name), Enum.map(args, &canon(&1, book))}
+  end
+
+  defp canon({:tup, a, b}, book), do: {:tup, canon(a, book), canon(b, book)}
+  defp canon(val, _book), do: val
+
+  # A run application is evaluated in the first-order fragment. A
+  # definition may call only a definition declared before it.
+  defp reduce({:con, name, args}, ctx, book) do
+    with {:ok, args} <- reduce_list(args, ctx, book) do
+      if run?(book, name) and Enum.all?(args, &closed?(&1, ctx, book)) do
+        eval_call(name, args, book)
+      else
+        {:ok, {:con, cname(name), args}}
+      end
+    end
+  end
+
+  defp reduce({:tup, a, b}, ctx, book) do
+    with {:ok, a} <- reduce(a, ctx, book),
+         {:ok, b} <- reduce(b, ctx, book) do
+      {:ok, {:tup, a, b}}
+    end
+  end
+
+  defp reduce({:rec, fields}, ctx, book) when is_list(fields) do
+    Enum.reduce_while(fields, {:ok, []}, fn {name, val}, {:ok, acc} ->
+      case reduce(val, ctx, book) do
+        {:ok, v} -> {:cont, {:ok, acc ++ [{name, v}]}}
+        err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, fields} -> {:ok, {:rec, fields}}
+      err -> err
+    end
+  end
+
+  defp reduce({:rep, ix, elem}, ctx, book) do
+    with {:ok, ix} <- reduce(ix, ctx, book),
+         {:ok, elem} <- reduce(elem, ctx, book) do
+      {:ok, {:rep, ix, elem}}
+    end
+  end
+
+  # A bare name is a nullary run when it is not bound and not a constructor.
+  # The binding wins, and so does a constructor.
+  defp reduce({:var, name} = val, ctx, book) do
+    cond do
+      Map.has_key?(ctx, name) or nullary_name?(book, name) ->
+        {:ok, val}
+
+      run?(book, cname(name)) ->
+        eval_call(cname(name), [], book)
+
+      true ->
+        {:ok, val}
+    end
+  end
+
+  defp reduce(val, _ctx, _book), do: {:ok, val}
+
+  defp reduce_list(args, ctx, book) do
+    Enum.reduce_while(args, {:ok, []}, fn arg, {:ok, acc} ->
+      case reduce(arg, ctx, book) do
+        {:ok, v} -> {:cont, {:ok, acc ++ [v]}}
+        err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp closed?({:nat, n}, _ctx, _book) when is_integer(n) and n >= 0, do: true
+  defp closed?(bit, _ctx, _book) when bit in [:b0, :b1], do: true
+  defp closed?(:tt, _ctx, _book), do: true
+  defp closed?({:tup, a, b}, ctx, book), do: closed?(a, ctx, book) and closed?(b, ctx, book)
+
+  defp closed?({:rec, fields}, ctx, book) when is_list(fields) do
+    Enum.all?(fields, fn {_name, val} -> closed?(val, ctx, book) end)
+  end
+
+  defp closed?({:rep, ix, elem}, ctx, book) do
+    closed?(ix, ctx, book) and closed?(elem, ctx, book)
+  end
+
+  defp closed?({:con, name, args}, ctx, book) do
+    ctor?(book, name) and Enum.all?(args, &closed?(&1, ctx, book))
+  end
+
+  defp closed?({:var, name}, ctx, book) do
+    not Map.has_key?(ctx, name) and nullary_name?(book, name)
+  end
+
+  defp closed?(_, _, _), do: false
+
+  defp eval_call(name, args, book) do
+    defs = run_defs(book)
+    args = Enum.map(args, &canon_arg(&1, book))
+
+    case Enum.find_index(defs, &(&1.name == name)) do
+      nil ->
+        {:ok, :miss}
+
+      i ->
+        eval_def(Enum.at(defs, i), args, Enum.take(defs, i), defs, book)
+    end
+  end
+
+  defp run_defs(book) do
+    Enum.filter(runs(book), &(&1[:mode] == :run))
+  end
+
+  defp canon_arg({:var, name}, book) do
+    if nullary_name?(book, name), do: {:con, cname(name), []}, else: {:var, name}
+  end
+
+  defp canon_arg({:con, name, args}, book) do
+    {:con, cname(name), Enum.map(args, &canon_arg(&1, book))}
+  end
+
+  defp canon_arg({:tup, a, b}, book), do: {:tup, canon_arg(a, book), canon_arg(b, book)}
+  defp canon_arg(val, _book), do: val
+
+  defp eval_def(%{body: body}, args, prefix, defs, book) do
+    case drop_lams(body, length(args)) do
+      {:ok, core} ->
+        if calls_out?(core, prefix, defs) do
+          {:error, "recursive run definition"}
+        else
+          ev(core, Enum.reverse(args), prefix, defs, book)
+        end
+
+      :error ->
+        {:ok, :miss}
+    end
+  end
+
+  defp drop_lams(body, 0), do: {:ok, body}
+  defp drop_lams({:lam, _, _, _, body}, n) when n > 0, do: drop_lams(body, n - 1)
+  defp drop_lams(_, _), do: :error
+
+  defp ev(:ze, _env, _prefix, _defs, _book), do: {:ok, {:nat, 0}}
+  defp ev(:one, _env, _prefix, _defs, _book), do: {:ok, :tt}
+  defp ev({:ann, t, _}, env, prefix, defs, book), do: ev(t, env, prefix, defs, book)
+
+  defp ev({:su, t}, env, prefix, defs, book) do
+    case ev(t, env, prefix, defs, book) do
+      {:ok, {:nat, n}} -> {:ok, {:nat, n + 1}}
+      {:ok, _} -> {:ok, :miss}
+      other -> other
+    end
+  end
+
+  defp ev({:pair, a, b}, env, prefix, defs, book) do
+    with {:ok, a} <- ev(a, env, prefix, defs, book),
+         {:ok, b} <- ev(b, env, prefix, defs, book) do
+      if a == :miss or b == :miss, do: {:ok, :miss}, else: {:ok, {:tup, a, b}}
+    end
+  end
+
+  defp ev({:var, i}, env, _prefix, _defs, _book) when is_integer(i) do
+    case Enum.at(env, i) do
+      nil -> {:ok, :miss}
+      val -> {:ok, val}
+    end
+  end
+
+  defp ev({:mnat, e, _motive, z, s}, env, prefix, defs, book) do
+    case ev(e, env, prefix, defs, book) do
+      {:ok, {:nat, 0}} ->
+        ev(z, env, prefix, defs, book)
+
+      {:ok, {:nat, n}} when n > 0 ->
+        ev(s, [{:nat, n - 1} | env], prefix, defs, book)
+
+      {:ok, _} ->
+        {:ok, :miss}
+
+      other ->
+        other
+    end
+  end
+
+  defp ev({:mdata, e, _motive, branches}, env, prefix, defs, book) do
+    case ev(e, env, prefix, defs, book) do
+      {:ok, val} ->
+        case tagged(val) do
+          {:con, name, fields} ->
+            case find_branch(branches, name) do
+              {_, arity, body} when length(fields) == arity ->
+                ev(body, Enum.reverse(fields) ++ env, prefix, defs, book)
+
+              _ ->
+                {:ok, :miss}
+            end
+
+          _ ->
+            {:ok, :miss}
+        end
+
+      other ->
+        other
+    end
+  end
+
+  defp ev({:app, _, _} = term, env, prefix, defs, book) do
+    case spine_term(term, []) do
+      {:ok, name, args} -> apply_head(name, args, env, prefix, defs, book)
+      :error -> {:ok, :miss}
+    end
+  end
+
+  defp ev({:def, name}, env, prefix, defs, book) do
+    apply_head(name, [], env, prefix, defs, book)
+  end
+
+  defp ev(_, _, _, _, _), do: {:ok, :miss}
+
+  defp tagged(:b0), do: {:con, "b0", []}
+  defp tagged(:b1), do: {:con, "b1", []}
+  defp tagged({:con, name, fields}), do: {:con, cname(name), fields}
+  defp tagged(_), do: :no
+
+  defp find_branch(branches, name) do
+    Enum.find_value(branches, fn branch ->
+      case branch_shape(branch) do
+        {n, arity, body} -> if cname(n) == cname(name), do: {n, arity, body}
+        _ -> nil
+      end
+    end)
+  end
+
+  defp branch_shape({name, binders, body}) when is_list(binders) do
+    {name, length(binders), body}
+  end
+
+  defp branch_shape({name, arity, body}) when is_integer(arity), do: {name, arity, body}
+  defp branch_shape(_), do: :no
+
+  defp spine_term({:app, f, a}, acc), do: spine_term(f, [a | acc])
+  defp spine_term({:def, name}, acc), do: {:ok, name, acc}
+  defp spine_term(_, _), do: :error
+
+  defp apply_head(name, args, env, prefix, defs, book) do
+    with {:ok, vals} <- evs(args, env, prefix, defs, book) do
+      if Enum.any?(vals, &(&1 == :miss)) do
+        {:ok, :miss}
+      else
+        dispatch(name, vals, prefix, defs, book)
+      end
+    end
+  end
+
+  defp evs(ts, env, prefix, defs, book) do
+    Enum.reduce_while(ts, {:ok, []}, fn t, {:ok, acc} ->
+      case ev(t, env, prefix, defs, book) do
+        {:ok, v} -> {:cont, {:ok, acc ++ [v]}}
+        other -> {:halt, other}
+      end
+    end)
+  end
+
+  defp dispatch(name, vals, prefix, defs, book) do
+    case Enum.find_index(prefix, &(&1.name == name)) do
+      i when is_integer(i) ->
+        eval_def(Enum.at(prefix, i), vals, Enum.take(prefix, i), defs, book)
+
+      nil ->
+        cond do
+          Enum.any?(defs, &(&1.name == name)) ->
+            {:error, "recursive run definition"}
+
+          ctor?(book, name) ->
+            {:ok, {:con, cname(name), vals}}
+
+          true ->
+            {:ok, :miss}
+        end
+    end
+  end
+
+  # The whole body, including an arm this argument does not take. A call
+  # of this definition or of one declared later is a recursive run.
+  defp calls_out?(term, prefix, defs) do
+    case term do
+      {:su, t} ->
+        calls_out?(t, prefix, defs)
+
+      {:ann, t, _} ->
+        calls_out?(t, prefix, defs)
+
+      {:pair, a, b} ->
+        calls_out?(a, prefix, defs) or calls_out?(b, prefix, defs)
+
+      {:mnat, e, _motive, z, s} ->
+        calls_out?(e, prefix, defs) or calls_out?(z, prefix, defs) or
+          calls_out?(s, prefix, defs)
+
+      {:mnat, e, _x, _motive, z, _y, s} ->
+        calls_out?(e, prefix, defs) or calls_out?(z, prefix, defs) or
+          calls_out?(s, prefix, defs)
+
+      {:mdata, e, motive, branches} when is_list(branches) ->
+        calls_out?(e, prefix, defs) or calls_out?(motive, prefix, defs) or
+          Enum.any?(branches, &branch_out?(&1, prefix, defs))
+
+      {:mdata, e, _x, motive, branches} when is_list(branches) ->
+        calls_out?(e, prefix, defs) or calls_out?(motive, prefix, defs) or
+          Enum.any?(branches, &branch_out?(&1, prefix, defs))
+
+      {:app, _, _} ->
+        case spine_term(term, []) do
+          {:ok, name, args} ->
+            out_of_prefix?(name, prefix, defs) or
+              Enum.any?(args, &calls_out?(&1, prefix, defs))
+
+          :error ->
+            false
+        end
+
+      {:def, name} ->
+        out_of_prefix?(name, prefix, defs)
+
+      _ ->
+        false
+    end
+  end
+
+  defp branch_out?(branch, prefix, defs) do
+    case branch_shape(branch) do
+      {_, _, body} -> calls_out?(body, prefix, defs)
+      _ -> false
+    end
+  end
+
+  defp out_of_prefix?(name, prefix, defs) do
+    Enum.any?(defs, &(&1.name == name)) and not Enum.any?(prefix, &(&1.name == name))
+  end
 end

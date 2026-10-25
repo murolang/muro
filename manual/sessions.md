@@ -121,6 +121,68 @@ conform down : flag-back := get Bool done
 meet flag-wire : up with down
 ```
 
+## A computed put
+
+A `put` may send the value an in-scope `run` definition computes from its arguments. The value that is sent is the value that function computes. The body is a first-order term: a variable, a literal, a constructor, a match on a constructor or a nat, or a call of a definition declared before it. Evaluation walks that prefix and the term, so a definition that calls itself, or a definition declared later, does not evaluate, including an arm the argument does not take. The meeting checks that the value inhabits the payload. The protocol stays spec. The process stays evidence. Nothing is added to the term language. The OTP image carries the value, and the definition is erased.
+
+```muro
+data Item : Type where
+  self : Item
+  other : Item
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+data Maybe (A : Type) : Type where
+  nothing : Maybe A
+  just : A → Maybe A
+
+def mark : run Π (f : Item) → Bool :=
+  λ (f : Item) →
+    match f motive (λ _ → Bool)
+      | self => true
+      | other => false
+
+def effective : run Π (+ f : Item) → Maybe Bool :=
+  λ (+ f : Item) →
+    match f motive (λ _ → Maybe Bool)
+      | self => just (mark f)
+      | other => nothing
+
+session answer := send (Maybe Bool) end
+
+session answer-back := dual answer
+
+conform reply : answer := put (effective self) done
+
+conform hear : answer-back := get (Maybe Bool) done
+
+meet reply-wire : reply with hear
+```
+
+`effective self` computes `just (mark self)`, and `mark self` is `true`, so the value sent is `just true`. `effective other` computes `nothing`. Both inhabit `Maybe Bool`, and they are different values. `put (bad self)` does not conform when `bad` computes a `Bool`. `put (size self)` sends `0`, which meets `send (d : Nat) {d ≤ 1}`. `put (size other)` sends `2` and does not. The same put may sit under `rec`: `rec X. put (effective self) X` follows `rec X. send (Maybe Bool) X`, and it meets the dual. A nullary `run` is the same form with no argument. `put (bump 0)` sends `1` when `bump` calls an earlier `run`. `put (plus 0 0)` is refused when `plus` calls itself.
+
+## A value chooses the next action
+
+The continuation of a `get` may match on the value that `get` just bound. The process has one arm per constructor, in declaration order. A bit is `b0`, then `b1`. The protocol after the `get` is one protocol. Each arm is a process that conforms to that protocol, and the processes may differ: `pick0 done` and `pick1 (put 0 done)` both follow `choose`, and `stop` and `done` both follow `end`. The received value chooses which of those processes runs. It does not choose a different protocol. Two protocols after a bit stay `recv (b : Bit) on S T`, and the sender writes the literal `b0` or `b1`. A variable bit and a computed bit do not select an `on` arm. The meeting checks that the chosen arm is the one the other party covers. The same form works for a declared data type.
+
+```muro
+session choice := recv Bit (choose end (send Nat end))
+
+session offered := dual choice
+
+conform taker : choice := get (b : Bit) (match b pick0 done pick1 (put 0 done))
+
+conform giver : offered := put b0 (cover done (get Nat done))
+
+meet arm : taker with giver
+```
+
+`b0` takes `pick0 done`. `b1` takes `pick1 (put 0 done)`. `get (b : Bool) (match b done done)` and `get (m : Maybe Nat) (match m done done)` cover `Bool` and `Maybe` the same way: `true` then `false`, `nothing` then `just`. A match that does not cover the received value is refused. `recv (b : Bool) on end end` is still refused: an indexed protocol is a bit, and the sender writes the literal.
+
+`examples/computed.muro`
+
 ## Dependence
 
 A continuation may mention a nat that was received, as the length of a vector. The length of the vector that will be sent is the nat that was received. The dual sends that nat and then receives a vector of that length. The meeting checks that the value the sender provides is the length the receiver's continuation expects.
@@ -237,7 +299,7 @@ session ping := recv Nat (send Nat end)
 def forward : (s : ping) ⊸ ping := λ¹ (s : ping) → s
 ```
 
-The protocol may repeat, and a payload may be a declared data type. `dual` keeps `rec` and the payload. The multiplicity is the endpoint's.
+The protocol may repeat, and a payload may be a declared data type. `dual` keeps `rec` and the payload. The multiplicity is the endpoint's. A computed put consumes the endpoint once, and so does a match whose every arm does. One abandoned arm does not: the meeting reports `linear variable unused`.
 
 ```muro
 session loop := rec X. recv Nat (send Nat X)

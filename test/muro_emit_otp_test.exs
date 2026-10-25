@@ -540,6 +540,70 @@ defmodule Muro.EmitOtpTest do
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
   end
 
+  test "a computed put and a value match are the OTP message" do
+    assert {:ok, src} = Emit.Otp.render(checked!("examples/computed.muro"), "computed")
+    assert src =~ "{:say, {:just, true}, :finish}"
+    assert src =~ "{:loop, :X, {:say, {:just, true}, {:jump, :X}}}"
+    assert src =~ "{:pick, ["
+    refute src =~ "effective"
+    refute src =~ "esend"
+
+    Code.compile_string(src)
+
+    {:ok, left, right, left_ref, right_ref} = computed(:reply_wire)
+    assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
+    assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
+
+    {:ok, left, right, left_ref, right_ref} = computed(:arm0)
+    assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
+    assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
+    refute_received {:muro, _, 0}
+
+    {:ok, left, right, left_ref, right_ref} = computed(:arm1)
+    assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
+    assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
+
+    {:ok, pid, ref} = computed_one(:Taker)
+    send(pid, {:muro, self(), :b0})
+    assert_receive {:muro_pick, ^pid, :b0}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+    refute_received {:muro, ^pid, 0}
+
+    {:ok, pid, ref} = computed_one(:Taker)
+    send(pid, {:muro, self(), :b1})
+    assert_receive {:muro_pick, ^pid, :b1}
+    assert_receive {:muro, ^pid, 0}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = computed_one(:FlagTaker)
+    send(pid, {:muro, self(), true})
+    assert_receive {:muro_pick, ^pid, :b0}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+    refute_received {:muro, ^pid, _}
+
+    {:ok, pid, ref} = computed_one(:FlagTaker)
+    send(pid, {:muro, self(), false})
+    assert_receive {:muro_pick, ^pid, :b1}
+    assert_receive {:muro, ^pid, 1}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = computed_one(:FlagTaker)
+    send(pid, {:muro, self(), :nothing})
+    assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, {:unexpected, :nothing}}}
+
+    {:ok, pid, ref} = computed_one(:OptTaker)
+    send(pid, {:muro, self(), :nothing})
+    assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :abandon}}
+
+    {:ok, pid, ref} = computed_one(:OptTaker)
+    send(pid, {:muro, self(), {:just, 0}})
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = computed_one(:OptTaker)
+    send(pid, {:muro, self(), true})
+    assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, {:unexpected, true}}}
+  end
+
   defp start(name, peer \\ self()) do
     apply(Module.concat("PingOtp", name), :start, [peer])
   end
@@ -550,6 +614,14 @@ defmodule Muro.EmitOtpTest do
 
   defp meet_one(name) do
     apply(Module.concat("MeetOtp", name), :start, [self()])
+  end
+
+  defp computed(fun) do
+    apply(Module.concat(["ComputedOtp"]), fun, [])
+  end
+
+  defp computed_one(name) do
+    apply(Module.concat("ComputedOtp", name), :start, [self()])
   end
 
   defp data(fun) do

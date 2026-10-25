@@ -580,6 +580,22 @@ defmodule Muro.SessionTest do
            """) == :ok
   end
 
+  test "computed.muro checks, and emit keeps the runs" do
+    path = "examples/computed.muro"
+    assert Muro.check_file(path) == :ok
+
+    assert {:ok, out} = Muro.emit_file(path, ComputedRun)
+    assert out =~ ~r/\bdef effective\b/
+    assert out =~ ~r/\bdef kept\b/
+    refute out =~ "reply"
+    refute out =~ "taker"
+    refute out =~ "pass"
+    refute out =~ "⊸"
+
+    assert {:ok, funs} = IR.elaborate_file(path)
+    assert Enum.map(funs, & &1.name) == ["mark", "effective", "kept"]
+  end
+
   test "indexed.muro checks, and emit keeps the runs" do
     path = "examples/indexed.muro"
     assert {:ok, book} = Parser.parse(File.read!(path))
@@ -983,6 +999,423 @@ defmodule Muro.SessionTest do
     down = Enum.find(bad_book, &(&1.name == "down"))
     assert {:error, meet} = Muro.Meet.meets(bad.proc, down.proc, bad_book)
     assert meet =~ "put (just 0) X does not meet get Bool Y"
+  end
+
+  test "a computed put and a match on the received value check, dualise, and meet" do
+    src = """
+    data Item : Type where
+      self : Item
+      other : Item
+
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data Maybe (A : Type) : Type where
+      nothing : Maybe A
+      just : A → Maybe A
+
+    def mark : run Π (f : Item) → Bool :=
+      λ (f : Item) →
+        match f motive (λ _ → Bool)
+          | self => true
+          | other => false
+
+    def effective : run Π (+ f : Item) → Maybe Bool :=
+      λ (+ f : Item) →
+        match f motive (λ _ → Maybe Bool)
+          | self => just (mark f)
+          | other => nothing
+
+    def id : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → n
+
+    def bump : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → suc (id n)
+
+    def count : run Nat := suc 0
+
+    def size : run Π (f : Item) → Nat :=
+      λ (f : Item) →
+        match f motive (λ _ → Nat)
+          | self => 0
+          | other => suc (suc 0)
+
+    def eq : evidence {0 ≡ 0 : Nat} := refl
+
+    def bad : run Π (f : Item) → Bool :=
+      λ (f : Item) → true
+
+    session answer := send (Maybe Bool) end
+    session answer-back := dual answer
+    conform reply : answer := put (effective self) done
+    conform other-reply : answer := put (effective other) done
+    conform hear : answer-back := get (Maybe Bool) done
+    meet reply-wire : reply with hear
+    meet other-wire : other-reply with hear
+
+    session nums := send Nat end
+    session nums-back := dual nums
+    conform counted : nums := put count done
+    conform bumped : nums := put (bump 0) done
+    conform hear-num : nums-back := get Nat done
+
+    session cap := send (d : Nat) {d ≤ 1} end
+    session cap-back := dual cap
+    conform under : cap := put (size self) done
+    conform hear-cap : cap-back := get (d : Nat) done
+    meet cap-wire : under with hear-cap
+
+    session flags := rec X. send (Maybe Bool) X
+    session flags-back := dual flags
+    conform loop : flags := rec X. put (effective self) X
+    conform loop-back : flags-back := rec Y. get (m : Maybe Bool) Y
+    meet loop-wire : loop with loop-back
+
+    session choice := recv Bit (choose end (send Nat end))
+    session offered := dual choice
+    conform taker : choice := get (b : Bit) (match b pick0 done pick1 (put 0 done))
+    conform giver : offered := put b0 (cover done (get Nat done))
+    conform giver-one : offered := put b1 (cover done (get Nat done))
+    meet arm0 : taker with giver
+    meet arm1 : taker with giver-one
+
+    session flag := recv Bool (choose end (send Nat end))
+    session flag-back := dual flag
+    conform flag-taker : flag := get (b : Bool) (match b pick0 done pick1 (put 1 done))
+    conform flag-yes : flag-back := put true (cover done (get Nat done))
+    conform flag-no : flag-back := put false (cover done (get Nat done))
+    meet flag-yes-wire : flag-taker with flag-yes
+    meet flag-no-wire : flag-taker with flag-no
+
+    session opt := recv (Maybe Nat) end
+    session opt-back := dual opt
+    conform opt-taker : opt := get (m : Maybe Nat) (match m stop done)
+    conform opt-none : opt-back := put nothing stop
+    conform opt-some : opt-back := put (just 0) done
+    meet opt-none-wire : opt-taker with opt-none
+    meet opt-some-wire : opt-taker with opt-some
+
+    session %1 closed := send (Maybe Bool) end
+    conform finished : closed := put (effective self) done
+    session %1 choice-done := recv Bit (choose end end)
+    conform both-done : choice-done := get (b : Bit) (match b pick0 done pick1 done)
+
+    def pass : (s : answer) ⊸ answer := λ¹ (s : answer) → s
+    """
+
+    assert check(src) == :ok
+    assert {:ok, book} = Parser.parse(src)
+
+    answer = Enum.find(book, &(&1.name == "answer"))
+    assert Session.show_proto(Session.dual(answer.proto)) == "recv (Maybe Bool) end"
+    assert Session.dual(Session.dual(answer.proto)) == answer.proto
+
+    reply = Enum.find(book, &(&1.name == "reply"))
+    other_reply = Enum.find(book, &(&1.name == "other-reply"))
+    hear = Enum.find(book, &(&1.name == "hear"))
+    assert Session.carry(reply.proc, book) == {:say, {:just, true}, :finish}
+    assert Session.carry(other_reply.proc, book) == {:say, :nothing, :finish}
+    assert Muro.Meet.meets(reply.proc, hear.proc, book) == :ok
+    assert Muro.Meet.meets(hear.proc, reply.proc, book) == :ok
+    assert Muro.Meet.meets(other_reply.proc, hear.proc, book) == :ok
+    assert Muro.Meet.meets(hear.proc, other_reply.proc, book) == :ok
+    assert Muro.Meet.meet_mult(:lin, reply.proc, hear.proc, book) == :ok
+
+    counted = Enum.find(book, &(&1.name == "counted"))
+    bumped = Enum.find(book, &(&1.name == "bumped"))
+    hear_num = Enum.find(book, &(&1.name == "hear-num"))
+    under = Enum.find(book, &(&1.name == "under"))
+    hear_cap = Enum.find(book, &(&1.name == "hear-cap"))
+    assert Session.carry(counted.proc, book) == {:say, 1, :finish}
+    assert Session.carry(bumped.proc, book) == {:say, 1, :finish}
+    assert Session.carry(under.proc, book) == {:say, 0, :finish}
+    assert Muro.Meet.meets(counted.proc, hear_num.proc, book) == :ok
+    assert Muro.Meet.meets(bumped.proc, hear_num.proc, book) == :ok
+    assert Muro.Meet.meets(hear_num.proc, bumped.proc, book) == :ok
+    assert Muro.Meet.meets(under.proc, hear_cap.proc, book) == :ok
+    assert Muro.Meet.meets(hear_cap.proc, under.proc, book) == :ok
+
+    flags = Enum.find(book, &(&1.name == "flags"))
+    assert Session.show_proto(Session.dual(flags.proto)) == "rec X. recv (Maybe Bool) X"
+    loop = Enum.find(book, &(&1.name == "loop"))
+    loop_back = Enum.find(book, &(&1.name == "loop-back"))
+    assert Session.carry(loop.proc, book) == {:loop, :X, {:say, {:just, true}, {:jump, :X}}}
+    assert Muro.Meet.meets(loop.proc, loop_back.proc, book) == :ok
+    assert Muro.Meet.meets(loop_back.proc, loop.proc, book) == :ok
+
+    choice = Enum.find(book, &(&1.name == "choice"))
+    assert Session.show_proto(choice.proto) == "recv Bit (choose end (send Nat end))"
+
+    assert Session.show_proto(Session.dual(choice.proto)) ==
+             "send Bit (branch end (recv Nat end))"
+
+    taker = Enum.find(book, &(&1.name == "taker"))
+    giver = Enum.find(book, &(&1.name == "giver"))
+    giver_one = Enum.find(book, &(&1.name == "giver-one"))
+    assert Muro.Meet.meets(taker.proc, giver.proc, book) == :ok
+    assert Muro.Meet.meets(giver.proc, taker.proc, book) == :ok
+    assert Muro.Meet.meets(taker.proc, giver_one.proc, book) == :ok
+    assert Muro.Meet.meets(giver_one.proc, taker.proc, book) == :ok
+    assert Muro.Meet.meet_mult(:lin, taker.proc, giver.proc, book) == :ok
+
+    flag_taker = Enum.find(book, &(&1.name == "flag-taker"))
+    flag_yes = Enum.find(book, &(&1.name == "flag-yes"))
+    flag_no = Enum.find(book, &(&1.name == "flag-no"))
+    assert Muro.Meet.meets(flag_taker.proc, flag_yes.proc, book) == :ok
+    assert Muro.Meet.meets(flag_yes.proc, flag_taker.proc, book) == :ok
+    assert Muro.Meet.meets(flag_taker.proc, flag_no.proc, book) == :ok
+    assert Muro.Meet.meets(flag_no.proc, flag_taker.proc, book) == :ok
+
+    opt_taker = Enum.find(book, &(&1.name == "opt-taker"))
+    opt_none = Enum.find(book, &(&1.name == "opt-none"))
+    opt_some = Enum.find(book, &(&1.name == "opt-some"))
+    assert Muro.Meet.meets(opt_taker.proc, opt_none.proc, book) == :ok
+    assert Muro.Meet.meets(opt_none.proc, opt_taker.proc, book) == :ok
+    assert Muro.Meet.meets(opt_taker.proc, opt_some.proc, book) == :ok
+    assert Muro.Meet.meets(opt_some.proc, opt_taker.proc, book) == :ok
+
+    # b0 takes done, which meets done. The abandoned arm is still consumed.
+    stopped = {:get, :bit, :b, {:match, :b, [:done, :stop]}}
+    sent0 = {:put, :bit, :b0, :done}
+    assert Muro.Meet.meets(stopped, sent0, book) == :ok
+    assert {:error, lin} = Muro.Meet.meet_mult(:lin, stopped, sent0, book)
+    assert lin =~ "linear variable unused"
+
+    # The value that was computed does not inhabit the payload.
+    assert {:error, msg} =
+             check("""
+             data Item : Type where
+               self : Item
+
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             data Maybe (A : Type) : Type where
+               nothing : Maybe A
+               just : A → Maybe A
+
+             def bad : run Π (f : Item) → Bool :=
+               λ (f : Item) → true
+
+             def wrong : run Π (f : Item) → Maybe Bool :=
+               λ (f : Item) → nothing
+
+             def plus : run Π (n : Nat) → Π (m : Nat) → Nat :=
+               λ (n : Nat) → λ (m : Nat) → n
+
+             def eq : evidence {0 ≡ 0 : Nat} := refl
+             def ghost : spec Type := Nat
+
+             session answer := send (Maybe Bool) end
+             conform miss : answer := put (bad self) done
+             session flag := send Bool end
+             conform miss-bool : flag := put (wrong self) done
+             session nums := send Nat end
+             conform open : nums := put (plus n 0) done
+             conform bare : nums := put plus done
+             conform proof : nums := put eq done
+             conform applied : nums := put (eq 0) done
+             conform specced : nums := put ghost done
+             conform successor : nums := put (suc 0) done
+             """)
+
+    assert msg =~ "put (bad self) done does not conform to send (Maybe Bool) end"
+    assert msg =~ "put (wrong self) done does not conform to send Bool end"
+    assert msg =~ "unbound variable n"
+    assert msg =~ "put plus done does not conform to send Nat end"
+    assert msg =~ "proof: eq is not a run definition"
+    assert msg =~ "applied: eq is not a run definition"
+    assert msg =~ "ghost is not a run definition"
+    assert msg =~ "unbound variable suc"
+
+    assert {:ok, miss_book} =
+             Parser.parse("""
+             data Item : Type where
+               self : Item
+
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             data Maybe (A : Type) : Type where
+               nothing : Maybe A
+               just : A → Maybe A
+
+             def bad : run Π (f : Item) → Bool :=
+               λ (f : Item) → true
+
+             session answer := send (Maybe Bool) end
+             session answer-back := dual answer
+             conform miss : answer := put (bad self) done
+             conform hear : answer-back := get (Maybe Bool) done
+             """)
+
+    miss = Enum.find(miss_book, &(&1.name == "miss"))
+    hear = Enum.find(miss_book, &(&1.name == "hear"))
+    assert {:error, meet} = Muro.Meet.meets(miss.proc, hear.proc, miss_book)
+    assert meet =~ "put (bad self) done does not meet get (Maybe Bool) done"
+    assert {:error, meet} = Muro.Meet.meets(hear.proc, miss.proc, miss_book)
+    assert meet =~ "does not meet"
+
+    # An argument that is not a value is not computed.
+    assert {:error, msg} =
+             check("""
+             def plus : run Π (n : Nat) → Π (m : Nat) → Nat :=
+               λ (n : Nat) → λ (m : Nat) →
+                 match n motive (λ _ → Nat)
+                   | 0 => m
+                   | suc np => suc(plus np m)
+
+             session echo := recv Nat (send Nat end)
+             conform open : echo := get (n : Nat) (put (plus n 0) done)
+             """)
+
+    assert msg =~ "put (plus n 0) done does not conform to send Nat end"
+
+    # A definition that calls itself is refused on every argument, including
+    # the arm that does not take the call. A call of a later definition is
+    # the same refusal. A `let` and a partial application are outside the
+    # fragment the meeting evaluates.
+    assert {:error, msg} =
+             check("""
+             def plus : run Π (n : Nat) → Π (m : Nat) → Nat :=
+               λ (n : Nat) → λ (m : Nat) →
+                 match n motive (λ _ → Nat)
+                   | 0 => m
+                   | suc np => suc (plus np m)
+
+             def early : run Nat := late
+
+             def late : run Nat := 0
+
+             def hop : run Π (n : Nat) → Π (m : Nat) → Nat :=
+               λ (n : Nat) → λ (m : Nat) → n
+
+             def dropped : run Nat := let (a, b) = (0, 0) in a
+
+             session nums := send Nat end
+             conform zero : nums := put (plus 0 0) done
+             conform one : nums := put (plus 1 0) done
+             conform fwd : nums := put early done
+             conform partial : nums := put (hop 0) done
+             conform letbound : nums := put dropped done
+             """)
+
+    assert msg =~ "zero: recursive run definition"
+    assert msg =~ "one: recursive run definition"
+    assert msg =~ "fwd: recursive run definition"
+    assert msg =~ "put (hop 0) done does not conform to send Nat end"
+    assert msg =~ "put dropped done does not conform to send Nat end"
+
+    # `size other` computes 2, and 2 is not at most 1.
+    assert {:error, msg} =
+             check("""
+             data Item : Type where
+               self : Item
+               other : Item
+
+             def size : run Π (f : Item) → Nat :=
+               λ (f : Item) →
+                 match f motive (λ _ → Nat)
+                   | self => 0
+                   | other => suc (suc 0)
+
+             session cap := send (d : Nat) {d ≤ 1} end
+             conform over : cap := put (size other) done
+             """)
+
+    assert msg =~ "put (size other) done does not conform to send (d : Nat) {d ≤ 1} end"
+
+    # The match covers the value the get just bound, one arm per constructor.
+    assert {:error, msg} =
+             check("""
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             data Maybe (A : Type) : Type where
+               nothing : Maybe A
+               just : A → Maybe A
+
+             session choice := recv Bit (choose end end)
+             conform short : choice := get (b : Bit) (match b pick0 done)
+             conform third : choice := get (b : Bit) (match b pick0 done pick1 done done)
+             conform other : choice := get (b : Bit) (match c pick0 done pick1 done)
+             conform later : choice := get (b : Bit) (put b (match b done done))
+             conform stray : choice := match b done done
+             session nums := recv Nat end
+             conform natty : nums := get (n : Nat) (match n done done)
+             session box := recv (Nat * Nat) end
+             conform paired : box := get (p : Nat * Nat) (match p done done)
+             session unit := recv Unit end
+             conform united : unit := get (u : Unit) (match u done)
+             session row := recv {x : Nat} end
+             conform recorded : row := get (r : {x : Nat}) (match r done)
+             session vecs := recv (Vec Nat 2) end
+             conform vectored : vecs := get (v : Vec Nat 2) (match v done)
+             session flag := recv Bool end
+             conform short-bool : flag := get (b : Bool) (match b done)
+             session opt := recv (Maybe Nat) end
+             conform third-opt : opt := get (m : Maybe Nat) (match m done done done)
+             session %1 open := recv Bit end
+             conform abandoned : open := get (b : Bit) (match b done stop)
+             """)
+
+    assert msg =~ "match does not cover the received value"
+    assert msg =~ "put b (match b done done) does not conform to choose end end"
+    assert msg =~ "linear channel abandoned"
+
+    # A variable selects no arm. The other party does not cover both arms.
+    assert {:ok, var_book} =
+             Parser.parse("""
+             session relay := recv Bit (send Bit (choose end end))
+             session relay-back := dual relay
+             conform forward : relay := get (c : Bit) (put c (cover done done))
+             conform taker : relay-back := put b0 (get (b : Bit) (match b pick0 done pick1 done))
+             """)
+
+    forward = Enum.find(var_book, &(&1.name == "forward"))
+    var_taker = Enum.find(var_book, &(&1.name == "taker"))
+    assert {:error, meet} = Muro.Meet.meets(forward.proc, var_taker.proc, var_book)
+    assert meet =~ "match does not cover the received value"
+
+    # A nat computed where a Bool is received selects no arm of that match.
+    assert {:ok, count_book} =
+             Parser.parse("""
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             def count : run Nat := 0
+
+             session flag := recv Bool end
+             session flag-back := dual flag
+             conform taker : flag := get (b : Bool) (match b done done)
+             conform counted : flag-back := put count done
+             """)
+
+    counted = Enum.find(count_book, &(&1.name == "counted"))
+    taker = Enum.find(count_book, &(&1.name == "taker"))
+    assert {:error, meet} = Muro.Meet.meets(counted.proc, taker.proc, count_book)
+    assert meet =~ "put count done does not meet"
+    assert {:error, meet} = Muro.Meet.meets(taker.proc, counted.proc, count_book)
+    assert meet =~ "does not meet"
+
+    # The crossed arms do not meet: b0 takes the first process.
+    assert {:ok, cross_book} =
+             Parser.parse("""
+             session choice := recv Bit end
+             session offered := dual choice
+             conform taker : choice := get (b : Bit) (match b done stop)
+             conform giver : offered := put b0 stop
+             """)
+
+    taker = Enum.find(cross_book, &(&1.name == "taker"))
+    giver = Enum.find(cross_book, &(&1.name == "giver"))
+    assert {:error, meet} = Muro.Meet.meets(taker.proc, giver.proc, cross_book)
+    assert meet =~ "done does not meet stop"
   end
 
   defp check(src) do

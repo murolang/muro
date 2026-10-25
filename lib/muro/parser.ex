@@ -945,7 +945,7 @@ defmodule Muro.Parser do
   end
 
   defp reserved_session?(name) do
-    name in ~w(end send recv choose branch rec done stop put get pick0 pick1 cover on Nat Bit Unit Vec dual seen)
+    name in ~w(end send recv choose branch rec done stop put get pick0 pick1 cover match on Nat Bit Unit Vec dual seen)
   end
 
   defp parse_proto2(s, word, tag, bound) do
@@ -967,6 +967,7 @@ defmodule Muro.Parser do
       word_kw?(s, "pick0") -> parse_proc1(s, "pick0", :pick0, bound)
       word_kw?(s, "pick1") -> parse_proc1(s, "pick1", :pick1, bound)
       word_kw?(s, "cover") -> parse_proc2(s, "cover", :cover, bound)
+      word_kw?(s, "match") -> parse_match(s, bound)
       word_kw?(s, "rec") -> parse_rec(s, &parse_proc/2, bound)
       has_prefix?(s, "(") -> parse_paren(s, fn body -> parse_proc(body, bound) end)
       ident_start?(s) -> parse_name_cont(s, :call, "process")
@@ -1061,6 +1062,70 @@ defmodule Muro.Parser do
          {:ok, q, rest} <- parse_proc(skip(rest), bound) do
       {:ok, {tag, p, q}, rest}
     end
+  end
+
+  # `match b P Q` is one process per constructor of the value `get` just
+  # bound, in declaration order. A bit is `b0` then `b1`. The arms stop
+  # before the next declaration.
+  defp parse_match(s, bound) do
+    with {:ok, rest} <- kw(s, "match"),
+         {:ok, name, rest} <- match_name(skip(rest)),
+         {:ok, arms, rest} <- parse_match_arms(skip(rest), [], bound) do
+      {:ok, {:match, name, arms}, rest}
+    end
+  end
+
+  defp match_name(s) do
+    with {:ok, name, rest} <- ident(s) do
+      if reserved_session?(name) or decl_word?(name) do
+        {:error, err(s, "expected a name")}
+      else
+        {:ok, String.to_atom(name), rest}
+      end
+    end
+  end
+
+  defp parse_match_arms(s, acc, bound) do
+    s = skip(s)
+
+    cond do
+      proc_start?(s) ->
+        case parse_proc(s, bound) do
+          {:ok, p, rest} -> parse_match_arms(rest, [p | acc], bound)
+          err -> err
+        end
+
+      acc == [] ->
+        {:error, err(s, "expected a process")}
+
+      true ->
+        {:ok, Enum.reverse(acc), s}
+    end
+  end
+
+  defp proc_start?(s) do
+    s = skip(s)
+
+    cond do
+      Enum.any?(~w(done stop put get pick0 pick1 cover rec match), &word_kw?(s, &1)) ->
+        true
+
+      has_prefix?(s, "(") ->
+        true
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, _} -> not reserved_session?(name) and not decl_word?(name)
+          _ -> false
+        end
+
+      true ->
+        false
+    end
+  end
+
+  defp decl_word?(name) do
+    name in ~w(def data session conform meet place scheme move endpoint read talk seat link relay import param where)
   end
 
   # A payload type. `Nat`, `Bit`, and `Unit` are those types. A name is
@@ -1350,7 +1415,7 @@ defmodule Muro.Parser do
   end
 
   defp proc_word?(name) do
-    name in ~w(done stop put get pick0 pick1 cover rec end send recv choose branch on)
+    name in ~w(done stop put get pick0 pick1 cover rec match end send recv choose branch on)
   end
 
   defp number?(<<c, _::binary>>) when c in ?0..?9, do: true
@@ -2281,10 +2346,11 @@ defmodule Muro.Parser do
          {:ok, rest} <- tok(skip(rest), "=>"),
          {:ok, body, rest} <- parse_term(skip(rest), 0) do
       acc = [{name, body} | acc]
-      rest = skip(rest)
+      # Keep the newline. A following `session` or `conform` is not an argument.
+      looked = skip(rest)
 
-      if has_prefix?(rest, "|") do
-        with {:ok, rest} <- tok(rest, "|") do
+      if has_prefix?(looked, "|") do
+        with {:ok, rest} <- tok(looked, "|") do
           parse_matom_branches(skip(rest), acc)
         end
       else
@@ -2305,10 +2371,11 @@ defmodule Muro.Parser do
          {:ok, rest} <- tok(skip(rest), "=>"),
          {:ok, body, rest} <- parse_term(skip(rest), 0) do
       acc = [{cname, binders, body} | acc]
-      rest = skip(rest)
+      # Keep the newline. A following `session` or `conform` is not an argument.
+      looked = skip(rest)
 
-      if has_prefix?(rest, "|") do
-        with {:ok, rest} <- tok(rest, "|") do
+      if has_prefix?(looked, "|") do
+        with {:ok, rest} <- tok(looked, "|") do
           parse_mdata_branches(skip(rest), acc)
         end
       else

@@ -31,7 +31,7 @@ open import Data.List.Base using ([])
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
 open import Muro.Base using (Mode; spec; evid; run)
-open import Muro.Session hiding (¬_; Seat; no-run; conforms; decide; one)
+open import Muro.Session hiding (¬_; Seat; no-run; conforms; decide; one; ground)
 open import Muro.Place hiding (¬_; Seat; no-run; conforms; boundary)
 
 ¬_ : Set → Set

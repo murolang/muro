@@ -97,9 +97,14 @@ defmodule Muro.Linear do
   defp consume({:pick1, p}), do: consume(p)
   defp consume({:cover, p, q}), do: once(consume(p), consume(q))
   defp consume({:iget, _, p, q}), do: once(consume(p), consume(q))
+  # Every arm is consumed. An empty match is one use. One abandoned arm is none.
+  defp consume({:match, _, arms}), do: arms_use(arms)
   # A jump does not finish. `rec X. done` does, and it is one use.
   defp consume({:rec, _, body}), do: consume(body)
   defp consume({:call, _}), do: :u0
+
+  defp arms_use([]), do: :u1
+  defp arms_use([p | ps]), do: once(consume(p), arms_use(ps))
 
   defp once(:u1, :u1), do: :u1
   defp once(_, _), do: :u0

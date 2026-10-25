@@ -199,6 +199,30 @@ def forward : (s : ping) ⊸ ping := λ¹ (s : ping) → s
 
 `backed` is `dual s` and stays linear. `wire` meets `ping` with `back`. `again` is `forward s`, so the obligation travels. `echo` returns a repeating endpoint, and `echo-back` is `dual s`, so `rec` stays. `pass` returns an endpoint whose payload is `Bool`. `flags-pass` returns that payload on a repeating protocol, and `flags-backed` is its dual. `kept` is the run. Emit keeps `kept` and drops the endpoint functions. An unused linear endpoint, and a linear endpoint used twice, are refused; those books live in `test/muro_linear_test.exs`.
 
+## computed.muro
+
+A put may send the value a `run` definition computes. A `get` may match on the received value and choose the next action.
+
+```
+def mark : run Π (f : Item) → Bool :=
+  λ (f : Item) →
+    match f motive (λ _ → Bool)
+      | self => true
+      | other => false
+
+def effective : run Π (+ f : Item) → Maybe Bool :=
+  λ (+ f : Item) →
+    match f motive (λ _ → Maybe Bool)
+      | self => just (mark f)
+      | other => nothing
+
+conform reply : answer := put (effective self) done
+```
+
+`reply` sends `just true`, which is `just (mark self)`. `effective other` sends `nothing`. `hear` receives `Maybe Bool`, and `reply-wire` meets them. `loop` sends that value on every turn of `rec X. send (Maybe Bool) X`. `taker` matches on a bit: `b0` ends, and `b1` sends a nat. The two arms are different processes, and both follow `choose`. `flag-taker` matches on `Bool`, and `opt-taker` matches on `Maybe Nat`. `finished` is that computed put on `session %1`. `pass` returns the `answer` endpoint linearly. `kept` is the run. Emit keeps `mark`, `effective`, and `kept`. The meeting is evidence, and a run definition has no seat.
+
+See [Sessions](sessions.md#a-computed-put).
+
 ## place.muro
 
 A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, and assembly emitters omit all three. `--node` writes one call for each cross.

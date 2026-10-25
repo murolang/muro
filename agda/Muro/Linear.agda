@@ -38,6 +38,7 @@
 module Muro.Linear where
 
 open import Data.Bool.Base using (Bool; true; false; _∧_; _∨_; not)
+open import Data.List.Base using (List; []; _∷_)
 open import Data.Fin.Base using (Fin) renaming (zero to fzero; suc to fsuc)
 open import Data.Nat.Base using (ℕ; suc)
 open import Data.Product.Base using (_×_; _,_)
@@ -53,16 +54,18 @@ open import Muro.Base using
 open import Muro.Env using (checkBound; combine; oneHot)
 open import Muro.Arrow using (m1; checkArrow)
 open import Muro.Session using
-  ( nat; boolTy
+  ( nat; bit; boolTy; maybeBool
   ; ty≟; nexp≟
-  ; Proc; done; stop; put; get; pick0; pick1; cover; iget
+  ; Proc; done; stop; put; get; pick0; pick1; cover; iget; mget
+  ; lit; b0
+  ; effCall; bitTaker
   ; pong)
 open import Muro.Dual using (peer)
 open import Muro.Rec using
   ( SExp; dualS
   ; end; send; recv; dsend; drecv; esend; erecv; isend; irecv; choose; branch
   ; svar; mu)
-open import Muro.Meet using () renaming (decide to meetDecide; yes to meetYes; no to meetNo)
+open import Muro.Meet using (bitGiver) renaming (decide to meetDecide; yes to meetYes; no to meetNo)
 
 ------------------------------------------------------------------------
 -- Affine is the default. Linear is exactly once. Both sit on the
@@ -251,24 +254,32 @@ check m Γ A t =
 
 ------------------------------------------------------------------------
 -- A process consumes its endpoint once when it finishes, and not at
--- all when it abandons. A cover consumes once when both arms do.
--- `meetProc` is a meeting of those consumptions. Affine abandonment
--- stays. A linear endpoint that is not consumed once is refused.
+-- all when it abandons. A cover consumes once when both arms do. A
+-- match consumes once when every arm does. An empty match consumes
+-- once. `meetProc` is a meeting of those consumptions. Affine
+-- abandonment stays. A linear endpoint that is not consumed once is
+-- refused.
 ------------------------------------------------------------------------
 
 once : Use → Use → Use
 once U1 U1 = U1
 once _  _  = U0
 
-consume : Proc → Use
-consume done = U1
-consume stop = U0
-consume (put _ _ P) = consume P
-consume (get _ _ P) = consume P
-consume (pick0 P) = consume P
-consume (pick1 P) = consume P
-consume (cover P Q) = once (consume P) (consume Q)
-consume (iget _ P Q) = once (consume P) (consume Q)
+mutual
+  consume : Proc → Use
+  consume done = U1
+  consume stop = U0
+  consume (put _ _ P) = consume P
+  consume (get _ _ P) = consume P
+  consume (pick0 P) = consume P
+  consume (pick1 P) = consume P
+  consume (cover P Q) = once (consume P) (consume Q)
+  consume (iget _ P Q) = once (consume P) (consume Q)
+  consume (mget _ _ ps) = arms ps
+
+  arms : List Proc → Use
+  arms [] = U1
+  arms (p ∷ ps) = once (consume p) (arms ps)
 
 meetProc : Mult → Proc → Proc → Result ⊤
 meetProc q P Q with meetDecide P Q
@@ -480,3 +491,14 @@ flagsBack = lam lin (sess lin flagsProto) (dualₑ (var fzero))
 
 flags-back-ok : check evid [] flagsBackTy flagsBack ≡ ok []
 flags-back-ok = refl
+
+-- A computed put, and a match on the received bit, each consume the
+-- linear endpoint once. One abandoned arm does not.
+lin-computed : meetProc lin (put maybeBool effCall done) (get maybeBool "m" done) ≡ ok tt
+lin-computed = refl
+
+lin-match : meetProc lin bitTaker bitGiver ≡ ok tt
+lin-match = refl
+
+lin-match-stop : meetProc lin (mget bit "b" (done ∷ stop ∷ [])) (put bit (lit b0) done) ≡ fail "linear variable unused"
+lin-match-stop = refl
