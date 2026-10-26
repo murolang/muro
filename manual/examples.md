@@ -270,6 +270,22 @@ session gate :=
 
 See [Sessions](sessions.md#a-protocol-follows-the-received-constructor).
 
+## async-meetings.muro
+
+Two processes meet across a bounded queue in each direction.
+
+```
+meet inflight : client with server buffer 1
+session ping := send Nat (recv Nat end)
+conform ping-a : ping := put 1 (get (n : Nat) done)
+conform ping-b : ping := put 1 (get (n : Nat) done)
+meet crossed : ping-a with ping-b buffer 1
+```
+
+`client` sends two frames and then takes one control message. `server` sends `rst` after the first frame and still takes the frame already in flight, whichever constructor it is. That meeting checks at buffer 1 and at buffer 2. `crossed` is two processes that both send first. `owed-wire` sends a nat inside `d ≤ 1`. `vec-wire` sends the vector of `out 1`. `stream-async` sends `0` on every turn of a parameterised session. `echo-wire` sends back the nat it just received. `spin-wire` sends `bytes` on every turn. `line-wire` is `%1`, and each side finishes. A synchronous meeting of `up` with `down` is in the same file, with no buffer. A server that answers the in-flight frame with `goaway` is refused; that book is in `test/muro_async_test.exs`.
+
+See [Sessions](sessions.md#a-bounded-buffer).
+
 ## place.muro
 
 A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, and assembly emitters omit all three. `--node` writes one call for each cross.

@@ -405,6 +405,16 @@ session flags := rec X. send Bool X
 def flags-pass : (s : flags) ⊸ flags := λ¹ (s : flags) → s
 ```
 
+## A bounded buffer
+
+A meeting may name a buffer. `meet inflight : client with server buffer 1` checks the two processes against every interleaving that bound allows: each direction is a queue of at most that many messages, a send waits when its queue is full, and a receive takes the head of the other queue. The synchronous meeting, written with no buffer, is still the rendezvous. The OTP image was already a mailbox; this meeting is the check that matches that runtime. A pair that both send first meets at buffer 1. A server that, after its own message, still accepts the frame already in flight meets at buffer 1 and at buffer 2. A server that answers that frame with a further message leaves it queued, and the meeting names the trace.
+
+```muro
+meet inflight : client with server buffer 1
+```
+
+`examples/async-meetings.muro` is the worked book.
+
 ## Where a check fails
 
 A refusal names the step and the position of that step. The line and column are the `put`, `get`, `pick0`, `pick1`, `cover`, or `match`, not the `conform` that contains it. A conformance says what the process does and which protocol step it was checked against. A reason comes after that, when the value was computed.

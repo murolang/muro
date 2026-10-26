@@ -2106,10 +2106,12 @@ defmodule Muro.Check do
     end
   end
 
-  # Muro.Meet.decide. Both names are processes. The protocol of one is
-  # the other end of the other, and then the payload types meet. A
-  # protocol that is not the other end is reported before a type they
-  # do not share.
+  # Muro.Meet.decide when no buffer is written. Both names are processes.
+  # The protocol of one is the other end of the other, and then the
+  # payload types meet. A protocol that is not the other end is reported
+  # before a type they do not share. `buffer N` is Muro.Async: the same
+  # processes across two queues of that length. Those protocols need not
+  # be dual. Each side still has to conform.
   def check_def(book, %{kind: :meet, name: name, left: left, right: right} = d, _fuel) do
     loc = Print.loc_prefix(Map.get(d, :loc))
 
@@ -2119,8 +2121,7 @@ defmodule Muro.Check do
          :ok <- guard_sits(book, rp, right),
          {:ok, l} <- process_session(book, lp),
          {:ok, r} <- process_session(book, rp),
-         :ok <- other_end(l.proto, r.proto),
-         :ok <- Muro.Meet.meets(l.proc, r.proc, book, l.proto) do
+         :ok <- meet_ends(book, l, r, left, right, Map.get(d, :buffer)) do
       :ok
     else
       {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
@@ -2145,6 +2146,16 @@ defmodule Muro.Check do
            ) do
       :ok
     end
+  end
+
+  defp meet_ends(book, l, r, _left, _right, nil) do
+    with :ok <- other_end(l.proto, r.proto) do
+      Muro.Meet.meets(l.proc, r.proc, book, l.proto)
+    end
+  end
+
+  defp meet_ends(book, l, r, left, right, k) when is_integer(k) do
+    Muro.Async.meets(l.proc, r.proc, book, k, left, right)
   end
 
   # The meeting is not a second report of a process that already failed.

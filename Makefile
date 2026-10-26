@@ -5,7 +5,8 @@ AFLAGS := --no-libraries -i agda -i vendor/agda-stdlib/src --warning=noUnsupport
 # The Agda tree — Judgement, Wall, Consistency, Typing, Convert,
 # Reduction, Spine, Data, Frag, Tag, Session, Rec, Dual, Meet, Talk, Seated, Held, Arrow, Linear, Place, Located, the checker Check and its
 # soundness proof Soundness (with Soundness.Conv, Soundness.Views),
-# what they import (Base, Syntax, Subst, SubstLemmas, Env), and the
+# what they import (Base, Syntax, Subst, SubstLemmas, Env), Async,
+# AsyncSync, AsyncRec, and the
 # examples — is checked under --safe: no postulates, no TERMINATING,
 # no --type-in-type. `Muro.agda`, `Muro.Rec`, and `Muro.Linear` also pass
 # `--guardedness`, which `--safe` allows, so a repeating protocol is
@@ -21,6 +22,9 @@ agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Rec.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Dual.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Meet.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Async.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/AsyncSync.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/AsyncRec.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Talk.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Seated.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Held.agda
