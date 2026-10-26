@@ -341,7 +341,7 @@ session ping := recv Nat (send Nat end)
 def forward : (s : ping) ⊸ ping := λ¹ (s : ping) → s
 ```
 
-The protocol may repeat, and a payload may be a declared data type. `dual` keeps `rec` and the payload. The multiplicity is the endpoint's. A computed put consumes the endpoint once, and so does a match whose every arm does. One abandoned arm does not: the meeting reports `linear variable unused`.
+The protocol may repeat, and a payload may be a declared data type. `dual` keeps `rec` and the payload. The multiplicity is the endpoint's. A computed put consumes the endpoint once, and so does a match whose every arm does. One abandoned arm does not: the meeting reports `linear endpoint not consumed`.
 
 ```muro
 session loop := rec X. recv Nat (send Nat X)
@@ -360,3 +360,17 @@ session flags := rec X. send Bool X
 
 def flags-pass : (s : flags) ⊸ flags := λ¹ (s : flags) → s
 ```
+
+## Where a check fails
+
+A refusal names the step and the position of that step. The line and column are the `put`, `get`, `pick0`, `pick1`, `cover`, or `match`, not the `conform` that contains it. A conformance says what the process does and which protocol step it was checked against. A reason comes after that, when the value was computed.
+
+```
+3:3: bad: put b0 done does not conform to recv Nat end
+```
+
+```
+13:3: over: put (size other) done does not conform to send (d : Nat) {d ≤ 1} end: computed value 2 misses bound ≤ 1
+```
+
+A meeting names the first step where the two processes disagree, the path that got there, and the protocol both were checked against. `diverged after put 0, get b, arm b1: left: put goaway; right: get (f : Frame); protocol: recv Frame end` is that step: the left process puts `goaway` and the right process gets a `Frame`. A meeting whose participant failed its own conform is not run. The report says `skipped because bad does not conform`, and the conform is the diagnosis.

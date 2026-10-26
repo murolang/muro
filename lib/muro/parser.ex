@@ -6,6 +6,8 @@ defmodule Muro.Parser do
   alias Muro.Print
 
   @src_key {__MODULE__, :src}
+  @noting_key {__MODULE__, :noting_proc}
+  @notes_key {__MODULE__, :proc_notes}
 
   def parse(src) when is_binary(src) do
     Process.put(@src_key, src)
@@ -34,7 +36,98 @@ defmodule Muro.Parser do
     Print.offset_to_loc(src, max(0, byte_size(src) - byte_size(rest)))
   end
 
-  defp err(rest, msg), do: "#{Print.loc_prefix(here(rest))}#{msg}"
+  # An error with nothing left names the last line of the file.
+  defp err(rest, msg) do
+    src = Process.get(@src_key, "")
+
+    if skip(rest) == "" do
+      "#{Print.loc_prefix(Print.offset_to_loc(src, byte_size(src)))}#{eof_msg(msg)}"
+    else
+      "#{Print.loc_prefix(here(rest))}#{msg}"
+    end
+  end
+
+  defp eof_msg("expected " <> what), do: "unexpected end of file, expected #{what}"
+  defp eof_msg(msg), do: msg
+
+  # Locations of process steps, in preorder, while a conform or a read is parsed.
+  # A parenthesis is not a step. A protocol `rec` is not one either.
+  defp note(s) do
+    if Process.get(@noting_key) do
+      Process.put(@notes_key, [here(s) | Process.get(@notes_key, [])])
+    end
+
+    :ok
+  end
+
+  defp with_steps(s, bound \\ MapSet.new()) do
+    Process.put(@noting_key, true)
+    Process.put(@notes_key, [])
+
+    try do
+      case parse_proc(s, bound) do
+        {:ok, proc, rest} ->
+          notes = Enum.reverse(Process.get(@notes_key, []))
+          {:ok, proc, zip_steps(proc, notes), rest}
+
+        other ->
+          other
+      end
+    after
+      Process.delete(@noting_key)
+      Process.delete(@notes_key)
+    end
+  end
+
+  defp zip_steps(proc, notes) do
+    case take_span(proc, notes) do
+      {:ok, span, []} -> span
+      _ -> nil
+    end
+  end
+
+  defp take_span(:done, [at | rest]), do: {:ok, %{at: at, down: []}, rest}
+  defp take_span(:stop, [at | rest]), do: {:ok, %{at: at, down: []}, rest}
+  defp take_span({:call, _}, [at | rest]), do: {:ok, %{at: at, down: []}, rest}
+
+  defp take_span({:put, _, _, p}, [at | rest]), do: take_one(at, p, rest)
+  defp take_span({:get, _, _, p}, [at | rest]), do: take_one(at, p, rest)
+  defp take_span({:pick0, p}, [at | rest]), do: take_one(at, p, rest)
+  defp take_span({:pick1, p}, [at | rest]), do: take_one(at, p, rest)
+  defp take_span({:rec, _, p}, [at | rest]), do: take_one(at, p, rest)
+
+  defp take_span({:cover, p, q}, [at | rest]), do: take_two(at, p, q, rest)
+  defp take_span({:iget, _, p, q}, [at | rest]), do: take_two(at, p, q, rest)
+
+  defp take_span({:match, _, arms}, [at | rest]) do
+    with {:ok, cs, rest} <- take_many(arms, rest) do
+      {:ok, %{at: at, down: cs}, rest}
+    end
+  end
+
+  defp take_span(_, _), do: :error
+
+  defp take_one(at, p, rest) do
+    with {:ok, c, rest} <- take_span(p, rest) do
+      {:ok, %{at: at, down: [c]}, rest}
+    end
+  end
+
+  defp take_two(at, p, q, rest) do
+    with {:ok, a, rest} <- take_span(p, rest),
+         {:ok, b, rest} <- take_span(q, rest) do
+      {:ok, %{at: at, down: [a, b]}, rest}
+    end
+  end
+
+  defp take_many([], rest), do: {:ok, [], rest}
+
+  defp take_many([p | ps], rest) do
+    with {:ok, s, rest} <- take_span(p, rest),
+         {:ok, ss, rest} <- take_many(ps, rest) do
+      {:ok, [s | ss], rest}
+    end
+  end
 
   defp parse_book(s), do: parse_book(s, [])
 
@@ -391,10 +484,17 @@ defmodule Muro.Parser do
          {:ok, rest} <- tok(skip(rest), ":"),
          {:ok, session, rest} <- parse_session_use(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":="),
-         {:ok, proc, rest} <- parse_proc(skip(rest)) do
+         {:ok, proc, steps, rest} <- with_steps(skip(rest)) do
       {:ok,
-       %{kind: :conform, name: name, mode: :evidence, session: session, proc: proc, loc: loc},
-       rest}
+       %{
+         kind: :conform,
+         name: name,
+         mode: :evidence,
+         session: session,
+         proc: proc,
+         steps: steps,
+         loc: loc
+       }, rest}
     end
   end
 
@@ -526,7 +626,7 @@ defmodule Muro.Parser do
          {:ok, rest} <- kw(skip(rest), "at"),
          {:ok, place, rest} <- ident(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":="),
-         {:ok, proc, rest} <- parse_proc(skip(rest)) do
+         {:ok, proc, steps, rest} <- with_steps(skip(rest)) do
       {:ok,
        %{
          kind: :read,
@@ -536,6 +636,7 @@ defmodule Muro.Parser do
          endpoint: endpoint,
          place: place,
          proc: proc,
+         steps: steps,
          loc: loc
        }, rest}
     end
@@ -957,6 +1058,8 @@ defmodule Muro.Parser do
   # the continuation, so a payload does not take it as an argument:
   # `send Bool X` is `Bool`, then `X`, and `put n X` is `n`, then `X`.
   defp parse_rec(s, parse_body, bound) do
+    note(skip(s))
+
     with {:ok, rest} <- kw(s, "rec"),
          {:ok, name, rest} <- rec_name(skip(rest)),
          {:ok, rest} <- tok(skip(rest), "."),
@@ -1195,6 +1298,7 @@ defmodule Muro.Parser do
 
   defp parse_name_cont(s, tag, what) do
     s0 = skip(s)
+    note(s0)
 
     with {:ok, name, rest} <- ident(s0) do
       if reserved_session?(name) do
@@ -1217,26 +1321,53 @@ defmodule Muro.Parser do
     end
   end
 
-  defp parse_proc(s, bound \\ MapSet.new()) do
+  defp parse_proc(s, bound) do
     s = skip(s)
 
     cond do
-      word_kw?(s, "done") -> {:ok, :done, after_kw(s, "done")}
-      word_kw?(s, "stop") -> {:ok, :stop, after_kw(s, "stop")}
-      word_kw?(s, "put") -> parse_comm(s, "put", :put, bound)
-      word_kw?(s, "get") -> parse_comm(s, "get", :get, bound)
-      word_kw?(s, "pick0") -> parse_proc1(s, "pick0", :pick0, bound)
-      word_kw?(s, "pick1") -> parse_proc1(s, "pick1", :pick1, bound)
-      word_kw?(s, "cover") -> parse_proc2(s, "cover", :cover, bound)
-      word_kw?(s, "match") -> parse_match(s, bound)
-      word_kw?(s, "rec") -> parse_rec(s, &parse_proc/2, bound)
-      has_prefix?(s, "(") -> parse_paren(s, fn body -> parse_proc(body, bound) end)
-      ident_start?(s) -> parse_name_cont(s, :call, "process")
-      true -> {:error, err(s, "expected a process")}
+      word_kw?(s, "done") ->
+        note(s)
+        {:ok, :done, after_kw(s, "done")}
+
+      word_kw?(s, "stop") ->
+        note(s)
+        {:ok, :stop, after_kw(s, "stop")}
+
+      word_kw?(s, "put") ->
+        parse_comm(s, "put", :put, bound)
+
+      word_kw?(s, "get") ->
+        parse_comm(s, "get", :get, bound)
+
+      word_kw?(s, "pick0") ->
+        parse_proc1(s, "pick0", :pick0, bound)
+
+      word_kw?(s, "pick1") ->
+        parse_proc1(s, "pick1", :pick1, bound)
+
+      word_kw?(s, "cover") ->
+        parse_proc2(s, "cover", :cover, bound)
+
+      word_kw?(s, "match") ->
+        parse_match(s, bound)
+
+      word_kw?(s, "rec") ->
+        parse_rec(s, &parse_proc/2, bound)
+
+      has_prefix?(s, "(") ->
+        parse_paren(s, fn body -> parse_proc(body, bound) end)
+
+      ident_start?(s) ->
+        parse_name_cont(s, :call, "process")
+
+      true ->
+        {:error, err(s, "expected a process")}
     end
   end
 
   defp parse_comm(s, "put", :put, bound) do
+    note(skip(s))
+
     with {:ok, rest} <- kw(s, "put"),
          {:ok, {ty, val}, rest} <- parse_pval(skip(rest), bound),
          {:ok, p, rest} <- parse_proc(skip(rest), bound) do
@@ -1245,6 +1376,8 @@ defmodule Muro.Parser do
   end
 
   defp parse_comm(s, "get", :get, bound) do
+    note(skip(s))
+
     with {:ok, rest} <- kw(s, "get") do
       rest = skip(rest)
 
@@ -1311,6 +1444,8 @@ defmodule Muro.Parser do
   end
 
   defp parse_proc1(s, word, tag, bound) do
+    note(skip(s))
+
     with {:ok, rest} <- kw(s, word),
          {:ok, p, rest} <- parse_proc(skip(rest), bound) do
       {:ok, {tag, p}, rest}
@@ -1318,6 +1453,8 @@ defmodule Muro.Parser do
   end
 
   defp parse_proc2(s, word, tag, bound) do
+    note(skip(s))
+
     with {:ok, rest} <- kw(s, word),
          {:ok, p, rest} <- parse_proc(skip(rest), bound),
          {:ok, q, rest} <- parse_proc(skip(rest), bound) do
@@ -1329,6 +1466,8 @@ defmodule Muro.Parser do
   # bound, in declaration order. A bit is `b0` then `b1`. The arms stop
   # before the next declaration.
   defp parse_match(s, bound) do
+    note(skip(s))
+
     with {:ok, rest} <- kw(s, "match"),
          {:ok, name, rest} <- match_name(skip(rest)),
          {:ok, arms, rest} <- parse_match_arms(skip(rest), [], bound) do

@@ -33,10 +33,22 @@ defmodule Muro.Linear do
   Affine accepts abandonment. Linear requires one use.
   """
   def meet_proc(mult, p, q) when mult in [:aff, :lin] do
-    with :ok <- check_mult(:evidence, mult, consume(p)) do
-      check_mult(:evidence, mult, consume(q))
+    with :ok <- endpoint_use(mult, p, :left) do
+      endpoint_use(mult, q, :right)
     end
   end
+
+  # A linear endpoint that is not consumed is this meeting. A `%1` binder
+  # in a term still says `linear variable unused`.
+  defp endpoint_use(:lin, proc, side) do
+    case consume(proc) do
+      :u0 -> {:error, "linear endpoint not consumed: #{side}"}
+      :uw -> {:error, "affine variable used as reusable"}
+      _ -> :ok
+    end
+  end
+
+  defp endpoint_use(mult, proc, _side), do: check_mult(:evidence, mult, consume(proc))
 
   @doc """
   Replace session names with protocols. An unknown name is refused.

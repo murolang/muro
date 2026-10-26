@@ -12,6 +12,13 @@ defmodule Muro.Print do
   @doc "1-based `{line, column}` for a UTF-8 byte offset into `src`."
   def offset_to_loc(src, offset) when is_binary(src) and is_integer(offset) do
     n = min(max(offset, 0), byte_size(src))
+
+    # A trailing newline is the end of the last line, not a line past it.
+    n =
+      if n == byte_size(src) and n > 0 and binary_part(src, n - 1, 1) == "\n",
+        do: n - 1,
+        else: n
+
     prefix = binary_part(src, 0, n)
     parts = String.split(prefix, "\n")
     {length(parts), byte_size(List.last(parts)) + 1}

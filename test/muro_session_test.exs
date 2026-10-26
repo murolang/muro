@@ -858,7 +858,7 @@ defmodule Muro.SessionTest do
     down = Enum.find(book, &(&1.name == "down"))
     miss = Enum.find(book, &(&1.name == "miss"))
     assert {:error, meet} = Muro.Meet.meets(miss.proc, down.proc, book)
-    assert meet =~ "put (just 0) done does not meet get Bool done"
+    assert meet =~ "diverged: left: put (just 0); right: get Bool"
   end
 
   test "an indexed declaration, an atom, and a computed put stay refused" do
@@ -998,7 +998,7 @@ defmodule Muro.SessionTest do
     bad = Enum.find(bad_book, &(&1.name == "bad"))
     down = Enum.find(bad_book, &(&1.name == "down"))
     assert {:error, meet} = Muro.Meet.meets(bad.proc, down.proc, bad_book)
-    assert meet =~ "put (just 0) X does not meet get Bool Y"
+    assert meet =~ "diverged: left: put (just 0); right: get Bool"
   end
 
   test "a computed put and a match on the received value check, dualise, and meet" do
@@ -1180,7 +1180,7 @@ defmodule Muro.SessionTest do
     sent0 = {:put, :bit, :b0, :done}
     assert Muro.Meet.meets(stopped, sent0, book) == :ok
     assert {:error, lin} = Muro.Meet.meet_mult(:lin, stopped, sent0, book)
-    assert lin =~ "linear variable unused"
+    assert lin =~ "linear endpoint not consumed: left"
 
     # The value that was computed does not inhabit the payload.
     assert {:error, msg} =
@@ -1225,8 +1225,8 @@ defmodule Muro.SessionTest do
     assert msg =~ "put (wrong self) done does not conform to send Bool end"
     assert msg =~ "unbound variable n"
     assert msg =~ "put plus done does not conform to send Nat end"
-    assert msg =~ "proof: eq is not a run definition"
-    assert msg =~ "applied: eq is not a run definition"
+    assert msg =~ "proof: evidence is not a value"
+    assert msg =~ "applied: evidence is not a value"
     assert msg =~ "ghost is not a run definition"
     assert msg =~ "unbound variable suc"
 
@@ -1255,9 +1255,12 @@ defmodule Muro.SessionTest do
     miss = Enum.find(miss_book, &(&1.name == "miss"))
     hear = Enum.find(miss_book, &(&1.name == "hear"))
     assert {:error, meet} = Muro.Meet.meets(miss.proc, hear.proc, miss_book)
-    assert meet =~ "put (bad self) done does not meet get (Maybe Bool) done"
+
+    assert meet =~
+             "diverged: left: put (bad self); right: get (Maybe Bool): computed value true does not inhabit Maybe Bool"
+
     assert {:error, meet} = Muro.Meet.meets(hear.proc, miss.proc, miss_book)
-    assert meet =~ "does not meet"
+    assert meet =~ "diverged: left: get (Maybe Bool); right: put (bad self)"
 
     # An argument that is not a value is not computed.
     assert {:error, msg} =
@@ -1303,9 +1306,15 @@ defmodule Muro.SessionTest do
              conform letbound : nums := put dropped done
              """)
 
-    assert msg =~ "zero: recursive run definition"
-    assert msg =~ "one: recursive run definition"
-    assert msg =~ "fwd: recursive run definition"
+    assert msg =~
+             "zero: put (plus 0 0) done does not conform to send Nat end: run definition calls itself"
+
+    assert msg =~
+             "one: put (plus 1 0) done does not conform to send Nat end: run definition calls itself"
+
+    assert msg =~
+             "fwd: put early done does not conform to send Nat end: run definition declared later"
+
     assert msg =~ "put (hop 0) done does not conform to send Nat end"
     assert msg =~ "put dropped done does not conform to send Nat end"
 
@@ -1379,9 +1388,9 @@ defmodule Muro.SessionTest do
     forward = Enum.find(var_book, &(&1.name == "forward"))
     var_taker = Enum.find(var_book, &(&1.name == "taker"))
     assert {:error, meet} = Muro.Meet.meets(forward.proc, var_taker.proc, var_book)
-    assert meet =~ "match does not cover the received value"
+    assert meet =~ "the value c does not select an arm"
 
-    # A nat computed where a Bool is received selects no arm of that match.
+    # A nat computed where a Bool is received does not inhabit that payload.
     assert {:ok, count_book} =
              Parser.parse("""
              data Bool : Type where
@@ -1399,9 +1408,14 @@ defmodule Muro.SessionTest do
     counted = Enum.find(count_book, &(&1.name == "counted"))
     taker = Enum.find(count_book, &(&1.name == "taker"))
     assert {:error, meet} = Muro.Meet.meets(counted.proc, taker.proc, count_book)
-    assert meet =~ "put count done does not meet"
+
+    assert meet ==
+             "diverged: left: put count; right: get (b : Bool): computed value 0 does not inhabit Bool"
+
     assert {:error, meet} = Muro.Meet.meets(taker.proc, counted.proc, count_book)
-    assert meet =~ "does not meet"
+
+    assert meet ==
+             "diverged: left: get (b : Bool); right: put count: computed value 0 does not inhabit Bool"
 
     # The crossed arms do not meet: b0 takes the first process.
     assert {:ok, cross_book} =
@@ -1415,7 +1429,7 @@ defmodule Muro.SessionTest do
     taker = Enum.find(cross_book, &(&1.name == "taker"))
     giver = Enum.find(cross_book, &(&1.name == "giver"))
     assert {:error, meet} = Muro.Meet.meets(taker.proc, giver.proc, cross_book)
-    assert meet =~ "done does not meet stop"
+    assert meet =~ "diverged after get b, arm b0: left: done; right: stop"
   end
 
   test "session-calls.muro checks, and emit keeps the runs" do
@@ -1538,8 +1552,8 @@ defmodule Muro.SessionTest do
              session bad-name := frames nope
              """)
 
-    assert msg =~ "argument (plus 0 0): recursive run definition"
-    assert msg =~ "argument early: recursive run definition"
+    assert msg =~ "argument (plus 0 0): run definition calls itself"
+    assert msg =~ "argument early: run definition declared later"
     assert msg =~ "argument nope is not a nat"
 
     assert {:error, msg} = Parser.parse("session bad (b : Bit) := end\n")
@@ -1579,7 +1593,7 @@ defmodule Muro.SessionTest do
              meet bad : up with down
              """)
 
-    assert msg =~ "expected the other end"
+    assert msg =~ "diverged"
 
     assert {:error, _} = Parser.parse("session c := choose ack (frames 3)\n")
 
