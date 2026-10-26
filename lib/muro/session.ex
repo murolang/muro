@@ -27,8 +27,9 @@ defmodule Muro.Session do
   A variable bit does not select an arm. `iget` offers both arms and
   binds the bit. `choose` and `branch` select an arm by a label.
   `rec X. S` is that protocol again where `X` stands. The variable
-  must sit under an action. `rec X. X` is not a protocol, and a name
-  with no `rec` is not one. A process repeats the same way. A jump
+  must sit under an action. `rec X. X` is not a protocol. A name with
+  no `rec` is a call of a session declared earlier. A call of the
+  session itself sits under an action. A process repeats the same way. A jump
   does not finish, so `%1` still refuses a loop. `stop` conforms to
   every protocol. `finishes/1` is `:yes` when every leaf is `done`.
   `skel/1` carries the value on `say` and the type on `hear`, and both
@@ -57,6 +58,10 @@ defmodule Muro.Session do
   def dual({:branch, s, t}), do: {:choose, dual(s), dual(t)}
   def dual({:rec, x, s}), do: {:rec, x, dual(s)}
   def dual({:svar, x}), do: {:svar, x}
+  def dual({:sjump, target, args}), do: {:sjump, flip_jump(target), args}
+
+  defp flip_jump({:dual, name}), do: name
+  defp flip_jump(name), do: {:dual, name}
 
   @doc """
   The actions of a process. Mirrors `skel` in `agda/Muro/Session.agda`.
@@ -372,31 +377,111 @@ defmodule Muro.Session do
   def proto_ok(proto, book \\ []), do: proto_at(proto, %{}, data_entries(book))
 
   @doc """
+  The declaration is well formed. A call of an earlier session checks
+  its arguments. A call of this session must sit under an action.
+  A later session, an unknown name, and the wrong number of arguments
+  are refused here, before a meeting.
+  """
+  def decl_ok(session, book) when is_list(book) do
+    params = Map.get(session, :params, [])
+
+    ctx =
+      params
+      |> Map.new(&{&1, :nat})
+      |> Map.put({:self, session.name}, :unguarded)
+      |> Map.put({:__book__, :book}, book)
+      |> Map.put({:__self__, :index}, session_index(book, session.name))
+
+    case session.proto do
+      {:dual, _} -> :ok
+      {:seen, _, _, _} -> :ok
+      proto -> proto_at(proto, ctx, data_entries(book))
+    end
+  end
+
+  @doc """
+  Open a nullary session body. Earlier calls are inlined. A guarded
+  self-call is a jump that carries the next arguments.
+  """
+  def elaborate(session, book) when is_list(book) do
+    elab(session.proto, elab_state(session.name, session_index(book, session.name), book, %{}))
+  end
+
+  @doc """
+  Open `name` applied to `args`. The arguments are evaluated before the
+  body is opened. The result is that session with a concrete protocol.
+  """
+  def open_applied(book, name, args) when is_list(book) and is_list(args) do
+    case locate_session(book, name) do
+      nil ->
+        {:error, "unknown session #{name}"}
+
+      {i, sess} ->
+        st = elab_state(nil, nil, book, %{})
+
+        with {:ok, exps} <- eval_arg_list(args, st),
+             :ok <- arity_ok(sess, exps) do
+          subst = Map.new(Enum.zip(Map.get(sess, :params, []), exps))
+
+          case elab(sess.proto, %{elab_state(name, i, book, subst) | guarded: false}) do
+            {:ok, proto} -> {:ok, %{sess | proto: proto, params: []}}
+            {:error, _} = err -> err
+          end
+        end
+    end
+  end
+
+  @doc """
   `:ok` when every recursion variable of a process sits under an action
   of its own `rec`. A free name is not a process.
   """
   def proc_ok(proc), do: proc_ok(proc, %{})
 
-  # Leading `rec` and a jump unwind before the step. A cycle with no
+  # Leading `rec` and a jump unwind before the step. Opening a jump may
+  # return another `rec`, so the head is exposed again. A cycle with no
   # action between is unguarded. Seeing the same head again conforms.
   defp go(proc, proto, ctx, idx, penv, senv, seen, fuel, book) do
     if fuel <= 0 do
       {:error, "out of fuel"}
     else
-      with {:ok, proc, penv} <- unwind_proc(proc, penv),
-           {:ok, proto, senv} <- unwind_proto(proto, senv),
+      with {:ok, proc, proto, penv, senv} <- open_head(proc, proto, penv, senv, book),
            {:ok, pkey} <- project(penv, free_proc(proc)),
            {:ok, skey} <- project(senv, free_proto(proto)) do
         key = {proc, pkey, proto, skey}
 
-        if MapSet.member?(seen, key) do
-          :ok
-        else
-          step(proc, proto, ctx, idx, penv, senv, MapSet.put(seen, key), fuel, book)
+        cond do
+          MapSet.member?(seen, key) -> :ok
+          absorb_loop?(seen, proc, pkey, proto) -> :ok
+          true -> step(proc, proto, ctx, idx, penv, senv, MapSet.put(seen, key), fuel, book)
         end
       end
     end
   end
+
+  defp open_head(proc, proto, penv, senv, book) do
+    open_head(proc, proto, penv, senv, book, MapSet.new())
+  end
+
+  defp open_head(proc, proto, penv, senv, book, seen) do
+    with {:ok, proc, penv} <- unwind_proc(proc, penv),
+         {:ok, proto, senv} <- unwind_proto(proto, senv),
+         {:ok, proto} <- expand_head(proto, book) do
+      if head_again?(proto) do
+        if MapSet.member?(seen, proto) do
+          {:error, "unguarded session call"}
+        else
+          open_head(proc, proto, penv, senv, book, MapSet.put(seen, proto))
+        end
+      else
+        {:ok, proc, proto, penv, senv}
+      end
+    end
+  end
+
+  defp head_again?({:rec, _, _}), do: true
+  defp head_again?({:svar, _}), do: true
+  defp head_again?({:sjump, _, _}), do: true
+  defp head_again?(_), do: false
 
   defp step(:done, :end, _ctx, _idx, _penv, _senv, _seen, _fuel, _book), do: :ok
   defp step(:stop, _, _ctx, _idx, _penv, _senv, _seen, _fuel, _book), do: :ok
@@ -741,6 +826,8 @@ defmodule Muro.Session do
   defp free_proto({:branch, s, t}), do: MapSet.union(free_proto(s), free_proto(t))
   defp free_proto({:svar, name}), do: MapSet.new([name])
   defp free_proto({:rec, name, body}), do: MapSet.delete(free_proto(body), name)
+  defp free_proto({:sjump, _, _}), do: MapSet.new()
+  defp free_proto({:sess, _, _}), do: MapSet.new()
 
   defp put_ok?(:unknown, val, expected, ctx, book), do: answer(val, expected, ctx, book)
 
@@ -870,11 +957,110 @@ defmodule Muro.Session do
     end
   end
 
+  defp proto_at({:sjump, _, _}, _ctx, _book), do: :ok
+
+  defp proto_at({:sess, name, args}, ctx, book) when is_binary(name) and is_list(args) do
+    with :ok <- args_ok(args, ctx, book) do
+      # The self name is the key that `decl_ok` stored. A guarded call
+      # of that name is the loop. It is not opened again here.
+      self = self_of(ctx)
+
+      cond do
+        name == self and Map.get(ctx, {:self, name}) == :unguarded ->
+          {:error, "unguarded session call"}
+
+        name == self ->
+          :ok
+
+        true ->
+          call_known(name, args, ctx)
+      end
+    end
+  end
+
   defp proto_at(_, _ctx, _book), do: {:error, "ill-formed protocol"}
+
+  defp self_of(ctx) do
+    Enum.find_value(ctx, fn
+      {{:self, name}, _} when is_binary(name) -> name
+      _ -> nil
+    end)
+  end
+
+  defp call_known(name, args, ctx) do
+    book = Map.get(ctx, {:__book__, :book}, [])
+
+    case locate_session(book, name) do
+      nil ->
+        {:error, "unknown session #{name}"}
+
+      {i, sess} ->
+        idx = Map.get(ctx, {:__self__, :index})
+
+        cond do
+          is_integer(idx) and i > idx ->
+            {:error, "session declared later"}
+
+          length(Map.get(sess, :params, [])) != length(args) ->
+            {:error, "wrong number of session arguments"}
+
+          true ->
+            :ok
+        end
+    end
+  end
+
+  defp args_ok(args, ctx, book) do
+    Enum.reduce_while(args, :ok, fn arg, :ok ->
+      case arg_ok(arg, ctx, book) do
+        :ok -> {:cont, :ok}
+        err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp arg_ok({:lit, n}, _ctx, _book) when is_integer(n) and n >= 0, do: :ok
+  defp arg_ok({:lit, n}, _ctx, _book), do: {:error, "argument #{n} is not a nat"}
+
+  defp arg_ok({:var, name}, ctx, _book) do
+    source = Map.get(ctx, {:__book__, :book}, [])
+
+    cond do
+      Map.get(ctx, name) == :nat -> :ok
+      run?(prepare(source), cname(name)) -> :ok
+      true -> {:error, "argument #{name} is not a nat"}
+    end
+  end
+
+  defp arg_ok({:suc, a}, ctx, book), do: arg_ok(a, ctx, book)
+
+  defp arg_ok({:con, _, inner} = arg, ctx, book) do
+    with :ok <- args_ok(inner, ctx, book) do
+      if symbolic_arg?(arg, ctx) do
+        :ok
+      else
+        st = elab_state(nil, nil, Map.get(ctx, {:__book__, :book}, []), %{})
+
+        case eval_arg_exp(arg, st) do
+          {:ok, {:lit, _}} -> :ok
+          {:error, msg} -> {:error, msg}
+          _ -> {:error, "argument #{show_arg(arg)} is not a nat"}
+        end
+      end
+    end
+  end
+
+  defp arg_ok(other, _ctx, _book), do: {:error, "argument #{show_arg(other)} is not a nat"}
+
+  defp symbolic_arg?({:var, name}, ctx), do: Map.get(ctx, name) == :nat
+  defp symbolic_arg?({:suc, a}, ctx), do: symbolic_arg?(a, ctx)
+  defp symbolic_arg?({:con, _, args}, ctx), do: Enum.any?(args, &symbolic_arg?(&1, ctx))
+  defp symbolic_arg?(_, _), do: false
 
   defp guard(ctx) do
     Map.new(ctx, fn
       {{:sess, name}, _} -> {{:sess, name}, :guarded}
+      {{:self, name}, _} -> {{:self, name}, :guarded}
       pair -> pair
     end)
   end
@@ -1363,6 +1549,26 @@ defmodule Muro.Session do
   def show_proto({:rec, name, body}), do: "rec #{name}. #{show_proto(body)}"
   def show_proto({:svar, name}), do: "#{name}"
 
+  def show_proto({:sjump, target, args}) do
+    name =
+      case target do
+        {:dual, n} -> n
+        n -> n
+      end
+
+    case args do
+      [] -> "#{name}"
+      _ -> "#{name} #{Enum.map_join(args, " ", &show_ix/1)}"
+    end
+  end
+
+  def show_proto({:sess, name, args}) do
+    case args do
+      [] -> name
+      _ -> "#{name} #{Enum.map_join(args, " ", &show_arg/1)}"
+    end
+  end
+
   defp show_pay(:nat), do: "Nat"
   defp show_pay(:bit), do: "Bit"
   defp show_pay(:unit), do: "Unit"
@@ -1395,6 +1601,8 @@ defmodule Muro.Session do
 
   defp paren_proto(:end), do: "end"
   defp paren_proto({:svar, _} = s), do: show_proto(s)
+  defp paren_proto({:sjump, _, _} = s), do: show_proto(s)
+  defp paren_proto({:sess, _, _} = s), do: show_proto(s)
   defp paren_proto(s), do: "(#{show_proto(s)})"
 
   # The value a dependent send instantiates. A run application is the
@@ -1410,7 +1618,7 @@ defmodule Muro.Session do
   # the first-order evaluator. A named book is converted once. A de Bruijn
   # book is kept: converting it again would rewrite `{:var, 0}`.
   defp prepare(book) when is_list(book) do
-    %{decls: data_entries(book), runs: eval_book(book)}
+    %{decls: data_entries(book), runs: eval_book(book), entries: book}
   end
 
   defp decls(%{decls: decls}), do: decls
@@ -1418,6 +1626,461 @@ defmodule Muro.Session do
 
   defp runs(%{runs: runs}), do: runs
   defp runs(_), do: []
+
+  # A jump at the head is one unfolding of that session. The body is
+  # the declaration, opened at these arguments. A jump that opens to a
+  # jump has no action under it.
+  defp expand_head({:sjump, target, args}, book) do
+    case reopen(target, args, book) do
+      {:ok, {:sjump, _, _}} -> {:error, "unguarded session call"}
+      other -> other
+    end
+  end
+
+  defp expand_head(proto, _book), do: {:ok, proto}
+
+  defp reopen(name, args, book) when is_binary(name) do
+    open_jump(name, args, source_entries(book))
+  end
+
+  defp reopen({:dual, name}, args, book) when is_binary(name) do
+    case open_jump(name, args, source_entries(book)) do
+      {:ok, proto} -> {:ok, dual(proto)}
+      err -> err
+    end
+  end
+
+  defp reopen(_, _, _), do: {:error, "unknown session"}
+
+  defp open_jump(name, args, book) do
+    case locate_session(book, name) do
+      nil ->
+        {:error, "unknown session #{name}"}
+
+      {i, sess} ->
+        params = Map.get(sess, :params, [])
+
+        if length(params) != length(args) do
+          {:error, "wrong number of session arguments"}
+        else
+          subst = Map.new(Enum.zip(params, args))
+          elab(sess.proto, elab_state(name, i, book, subst))
+        end
+    end
+  end
+
+  defp source_entries(%{entries: entries}) when is_list(entries), do: entries
+  defp source_entries(book) when is_list(book), do: book
+  defp source_entries(_), do: []
+
+  # The same process, and a protocol of the same shape, whose evidence
+  # bounds and jump arguments have not decreased. A vector length is
+  # part of the shape, so a changed length is a different protocol.
+  defp absorb_loop?(seen, proc, pkey, proto) do
+    case shape_lits(proto) do
+      {:ok, shape, lits} ->
+        Enum.any?(seen, fn
+          {^proc, ^pkey, old, _} ->
+            case shape_lits(old) do
+              {:ok, ^shape, prev} ->
+                length(prev) == length(lits) and
+                  Enum.all?(Enum.zip(prev, lits), fn {a, b} -> b >= a end)
+
+              _ ->
+                false
+            end
+
+          _ ->
+            false
+        end)
+
+      _ ->
+        false
+    end
+  end
+
+  defp shape_lits(proto) do
+    case shape_go(proto, []) do
+      {:ok, shape, lits} -> {:ok, shape, Enum.reverse(lits)}
+      :error -> :error
+    end
+  end
+
+  defp shape_go(:end, lits), do: {:ok, :end, lits}
+
+  defp shape_go({:send, ty, s}, lits) do
+    with {:ok, s, lits} <- shape_go(s, lits), do: {:ok, {:send, ty, s}, lits}
+  end
+
+  defp shape_go({:recv, ty, s}, lits) do
+    with {:ok, s, lits} <- shape_go(s, lits), do: {:ok, {:recv, ty, s}, lits}
+  end
+
+  defp shape_go({:dsend, name, ty, s}, lits) do
+    with {:ok, s, lits} <- shape_go(s, lits), do: {:ok, {:dsend, name, ty, s}, lits}
+  end
+
+  defp shape_go({:drecv, name, ty, s}, lits) do
+    with {:ok, s, lits} <- shape_go(s, lits), do: {:ok, {:drecv, name, ty, s}, lits}
+  end
+
+  defp shape_go({:esend, name, {:lit, n}, s}, lits) when is_integer(n) do
+    with {:ok, s, lits} <- shape_go(s, [n | lits]), do: {:ok, {:esend, name, :hole, s}, lits}
+  end
+
+  defp shape_go({:esend, name, e, s}, lits) do
+    with {:ok, s, lits} <- shape_go(s, lits), do: {:ok, {:esend, name, e, s}, lits}
+  end
+
+  defp shape_go({:erecv, name, {:lit, n}, s}, lits) when is_integer(n) do
+    with {:ok, s, lits} <- shape_go(s, [n | lits]), do: {:ok, {:erecv, name, :hole, s}, lits}
+  end
+
+  defp shape_go({:erecv, name, e, s}, lits) do
+    with {:ok, s, lits} <- shape_go(s, lits), do: {:ok, {:erecv, name, e, s}, lits}
+  end
+
+  defp shape_go({:isend, name, s, t}, lits) do
+    with {:ok, s, lits} <- shape_go(s, lits),
+         {:ok, t, lits} <- shape_go(t, lits) do
+      {:ok, {:isend, name, s, t}, lits}
+    end
+  end
+
+  defp shape_go({:irecv, name, s, t}, lits) do
+    with {:ok, s, lits} <- shape_go(s, lits),
+         {:ok, t, lits} <- shape_go(t, lits) do
+      {:ok, {:irecv, name, s, t}, lits}
+    end
+  end
+
+  defp shape_go({:choose, s, t}, lits) do
+    with {:ok, s, lits} <- shape_go(s, lits),
+         {:ok, t, lits} <- shape_go(t, lits) do
+      {:ok, {:choose, s, t}, lits}
+    end
+  end
+
+  defp shape_go({:branch, s, t}, lits) do
+    with {:ok, s, lits} <- shape_go(s, lits),
+         {:ok, t, lits} <- shape_go(t, lits) do
+      {:ok, {:branch, s, t}, lits}
+    end
+  end
+
+  defp shape_go({:rec, name, body}, lits) do
+    with {:ok, body, lits} <- shape_go(body, lits), do: {:ok, {:rec, name, body}, lits}
+  end
+
+  defp shape_go({:svar, name}, lits), do: {:ok, {:svar, name}, lits}
+
+  defp shape_go({:sjump, target, args}, lits) do
+    {holes, nums} = hole_jump_args(args)
+    {:ok, {:sjump, target, holes}, nums ++ lits}
+  end
+
+  defp shape_go(_, _), do: :error
+
+  defp hole_jump_args(args) do
+    Enum.map_reduce(args, [], fn
+      {:lit, n}, nums when is_integer(n) -> {:hole, nums ++ [n]}
+      other, nums -> {other, nums}
+    end)
+  end
+
+  defp locate_session(book, name) when is_list(book) do
+    case Enum.find_index(book, &(Map.get(&1, :kind) == :session and &1.name == name)) do
+      nil -> nil
+      i -> {i, Enum.at(book, i)}
+    end
+  end
+
+  defp locate_session(_, _), do: nil
+
+  defp session_index(book, name) do
+    case locate_session(book, name) do
+      {i, _} -> i
+      nil -> nil
+    end
+  end
+
+  defp elab_state(self, index, book, subst) do
+    %{
+      book: book,
+      self: self,
+      index: index,
+      guarded: false,
+      subst: subst,
+      prepared: prepare(book)
+    }
+  end
+
+  defp arity_ok(sess, exps) do
+    if length(Map.get(sess, :params, [])) == length(exps) do
+      :ok
+    else
+      {:error, "wrong number of session arguments"}
+    end
+  end
+
+  defp elab(:end, _st), do: {:ok, :end}
+
+  defp elab({:send, ty, s}, st) do
+    with {:ok, s} <- elab(s, %{st | guarded: true}) do
+      {:ok, {:send, subst_ty(ty, st.subst), s}}
+    end
+  end
+
+  defp elab({:recv, ty, s}, st) do
+    with {:ok, s} <- elab(s, %{st | guarded: true}) do
+      {:ok, {:recv, subst_ty(ty, st.subst), s}}
+    end
+  end
+
+  defp elab({:dsend, name, ty, s}, st) do
+    ty = subst_ty(ty, st.subst)
+
+    with {:ok, s} <- elab(s, %{bind_st(st, name, ty) | guarded: true}) do
+      {:ok, {:dsend, name, ty, s}}
+    end
+  end
+
+  defp elab({:drecv, name, ty, s}, st) do
+    ty = subst_ty(ty, st.subst)
+
+    with {:ok, s} <- elab(s, %{bind_st(st, name, ty) | guarded: true}) do
+      {:ok, {:drecv, name, ty, s}}
+    end
+  end
+
+  defp elab({:esend, name, e, s}, st) do
+    with {:ok, s} <- elab(s, %{st | guarded: true}) do
+      {:ok, {:esend, name, subst_ix(e, st.subst), s}}
+    end
+  end
+
+  defp elab({:erecv, name, e, s}, st) do
+    with {:ok, s} <- elab(s, %{st | guarded: true}) do
+      {:ok, {:erecv, name, subst_ix(e, st.subst), s}}
+    end
+  end
+
+  defp elab({:isend, name, s, t}, st) do
+    st1 = %{shadow_st(st, name) | guarded: true}
+
+    with {:ok, s} <- elab(s, st1),
+         {:ok, t} <- elab(t, st1) do
+      {:ok, {:isend, name, s, t}}
+    end
+  end
+
+  defp elab({:irecv, name, s, t}, st) do
+    st1 = %{shadow_st(st, name) | guarded: true}
+
+    with {:ok, s} <- elab(s, st1),
+         {:ok, t} <- elab(t, st1) do
+      {:ok, {:irecv, name, s, t}}
+    end
+  end
+
+  defp elab({:choose, s, t}, st) do
+    st1 = %{st | guarded: true}
+
+    with {:ok, s} <- elab(s, st1),
+         {:ok, t} <- elab(t, st1) do
+      {:ok, {:choose, s, t}}
+    end
+  end
+
+  defp elab({:branch, s, t}, st) do
+    st1 = %{st | guarded: true}
+
+    with {:ok, s} <- elab(s, st1),
+         {:ok, t} <- elab(t, st1) do
+      {:ok, {:branch, s, t}}
+    end
+  end
+
+  # `rec` does not guard a session call, and it does not clear a guard
+  # an action outside it already gave.
+  defp elab({:rec, name, body}, st) do
+    with {:ok, body} <- elab(body, st) do
+      {:ok, {:rec, name, body}}
+    end
+  end
+
+  defp elab({:svar, name}, _st), do: {:ok, {:svar, name}}
+  defp elab({:sjump, _, _} = jump, _st), do: {:ok, jump}
+
+  defp elab({:sess, name, args}, st) when is_binary(name) do
+    elab_sess(name, args, st)
+  end
+
+  defp elab({:dual, ref}, st) do
+    elab_dual(ref, st)
+  end
+
+  defp elab(_, _), do: {:error, "ill-formed protocol"}
+
+  defp elab_dual(name, st) when is_binary(name) do
+    case locate_session(st.book, name) do
+      nil ->
+        {:error, "unknown session #{name}"}
+
+      {i, sess} ->
+        with {:ok, proto} <- elab(sess.proto, elab_state(name, i, st.book, %{})) do
+          {:ok, dual(proto)}
+        end
+    end
+  end
+
+  defp elab_dual({:sess, name, args}, st) do
+    case open_applied(st.book, name, subst_args(args, st.subst)) do
+      {:ok, %{proto: proto}} -> {:ok, dual(proto)}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp elab_dual(_, _), do: {:error, "unknown session"}
+
+  defp elab_sess(name, args, st) do
+    with {:ok, exps} <- eval_arg_list(args, st) do
+      cond do
+        name == st.self and not st.guarded ->
+          {:error, "unguarded session call"}
+
+        name == st.self ->
+          {:ok, {:sjump, name, exps}}
+
+        true ->
+          case locate_session(st.book, name) do
+            nil ->
+              {:error, "unknown session #{name}"}
+
+            {i, _} when is_integer(st.index) and i > st.index ->
+              {:error, "session declared later"}
+
+            {i, sess} ->
+              with :ok <- arity_ok(sess, exps) do
+                subst = Map.new(Enum.zip(Map.get(sess, :params, []), exps))
+                elab(sess.proto, elab_state(sess.name, i, st.book, subst))
+              end
+          end
+      end
+    end
+  end
+
+  defp bind_st(st, name, :nat), do: %{st | subst: Map.put(st.subst, name, {:var, name})}
+  defp bind_st(st, name, _), do: shadow_st(st, name)
+  defp shadow_st(st, name), do: %{st | subst: Map.delete(st.subst, name)}
+
+  defp subst_args(args, subst) do
+    Enum.map(args, fn
+      {:var, name} -> Map.get(subst, name, {:var, name})
+      {:suc, a} -> {:suc, subst_one(a, subst)}
+      {:con, name, inner} -> {:con, name, subst_args(inner, subst)}
+      other -> other
+    end)
+  end
+
+  defp subst_one(arg, subst), do: hd(subst_args([arg], subst))
+
+  defp subst_ty(ty, _subst) when ty in [:nat, :bit, :unit], do: ty
+  defp subst_ty({:pair, a, b}, subst), do: {:pair, subst_ty(a, subst), subst_ty(b, subst)}
+
+  defp subst_ty({:rec, fields}, subst) when is_list(fields) do
+    {:rec, Enum.map(fields, fn {name, ty} -> {name, subst_ty(ty, subst)} end)}
+  end
+
+  defp subst_ty({:vec, elem, e}, subst), do: {:vec, subst_ty(elem, subst), subst_ix(e, subst)}
+
+  defp subst_ty({:dat, name, args}, subst) do
+    {:dat, name, Enum.map(args, &subst_ty(&1, subst))}
+  end
+
+  defp subst_ty(ty, _subst), do: ty
+
+  defp subst_ix({:lit, n}, _subst), do: {:lit, n}
+
+  defp subst_ix({:var, name}, subst) do
+    case Map.get(subst, name) do
+      nil -> {:var, name}
+      exp -> exp
+    end
+  end
+
+  defp subst_ix(e, _subst), do: e
+
+  defp eval_arg_list(args, st) do
+    Enum.reduce_while(args, {:ok, []}, fn arg, {:ok, acc} ->
+      case eval_arg_exp(arg, st) do
+        {:ok, exp} -> {:cont, {:ok, acc ++ [exp]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp eval_arg_exp({:lit, n}, _st) when is_integer(n) and n >= 0, do: {:ok, {:lit, n}}
+  defp eval_arg_exp({:lit, n}, _st), do: {:error, "argument #{n} is not a nat"}
+
+  defp eval_arg_exp({:var, name}, st) do
+    case Map.get(st.subst, name) do
+      {:lit, n} ->
+        {:ok, {:lit, n}}
+
+      {:var, v} ->
+        {:ok, {:var, v}}
+
+      nil ->
+        case reduce({:var, name}, %{}, st.prepared) do
+          {:ok, {:nat, n}} when is_integer(n) and n >= 0 -> {:ok, {:lit, n}}
+          {:error, msg} -> {:error, "argument #{name}: #{msg}"}
+          _ -> {:error, "argument #{name} is not a nat"}
+        end
+    end
+  end
+
+  defp eval_arg_exp({:suc, a} = arg, st) do
+    case eval_arg_exp(a, st) do
+      {:ok, {:lit, n}} -> {:ok, {:lit, n + 1}}
+      {:ok, _} -> {:error, "argument #{show_arg(arg)} is not a nat"}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp eval_arg_exp({:con, name, args} = arg, st) do
+    with {:ok, exps} <- eval_arg_list(args, st) do
+      if Enum.all?(exps, &match?({:lit, _}, &1)) do
+        term = {:con, cname(name), Enum.map(exps, fn {:lit, n} -> {:nat, n} end)}
+
+        case reduce(term, %{}, st.prepared) do
+          {:ok, {:nat, n}} when is_integer(n) and n >= 0 ->
+            {:ok, {:lit, n}}
+
+          {:error, msg} ->
+            {:error, "argument #{show_arg(arg)}: #{msg}"}
+
+          _ ->
+            {:error, "argument #{show_arg(arg)} is not a nat"}
+        end
+      else
+        {:error, "argument #{show_arg(arg)} is not a nat"}
+      end
+    end
+  end
+
+  defp eval_arg_exp(other, _st), do: {:error, "argument #{show_arg(other)} is not a nat"}
+
+  defp show_arg({:lit, n}), do: "#{n}"
+  defp show_arg({:var, name}), do: "#{name}"
+  defp show_arg({:suc, a}), do: "(suc #{show_arg(a)})"
+  defp show_arg({:con, name, []}), do: "#{name}"
+
+  defp show_arg({:con, name, args}) do
+    "(#{name} #{Enum.map_join(args, " ", &show_arg/1)})"
+  end
+
+  defp show_arg(other), do: "#{other}"
 
   defp eval_book(book) do
     Enum.flat_map(book, fn d ->

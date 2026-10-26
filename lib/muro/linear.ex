@@ -43,6 +43,7 @@ defmodule Muro.Linear do
   """
   def ground_ty(protos, {:sess, q, name}) when is_binary(name) and q in [:aff, :lin] do
     case Map.fetch(protos, name) do
+      {:ok, :arity} -> {:error, "wrong number of session arguments"}
       {:ok, proto} -> {:ok, {:sess, q, proto}}
       :error -> {:error, "unknown session #{name}"}
     end

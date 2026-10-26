@@ -1943,18 +1943,30 @@ defmodule Muro.Check do
   # session's mark. A written mark that disagrees is refused. A cycle
   # of duals has no protocol.
   def check_def(book, %{kind: :session, name: name} = d, _fuel) do
-    case resolve_session(book, name, MapSet.new()) do
-      {:ok, session} ->
-        case Muro.Session.proto_ok(session.proto, book) do
-          :ok ->
-            :ok
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with :ok <- Muro.Session.decl_ok(d, book) do
+      params = Map.get(d, :params, [])
+
+      # A parameterised declaration is the template. It is opened at a use.
+      # `dual` and `seen` still resolve, including a forward `dual`.
+      if params != [] and not match?({:dual, _}, d.proto) and
+           not match?({:seen, _, _, _}, d.proto) do
+        :ok
+      else
+        case resolve_session(book, name, MapSet.new()) do
+          {:ok, session} ->
+            case Muro.Session.proto_ok(session.proto, book) do
+              :ok -> :ok
+              {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+            end
 
           {:error, msg} ->
-            {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+            {:error, "#{loc}#{name}: #{msg}"}
         end
-
-      {:error, msg} ->
-        {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+      end
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
     end
   end
 
@@ -1964,7 +1976,7 @@ defmodule Muro.Check do
   def check_def(book, %{kind: :conform, name: name, session: sname, proc: proc} = d, _fuel) do
     loc = Print.loc_prefix(Map.get(d, :loc))
 
-    with {:ok, session} <- fetch_session(book, sname),
+    with {:ok, session} <- open_session(book, sname),
          :ok <- session_sits(book, session, proc) do
       :ok
     else
@@ -2011,7 +2023,7 @@ defmodule Muro.Check do
   def check_def(book, %{kind: :endpoint, name: name, session: sname, scheme: sch} = d, _fuel) do
     loc = Print.loc_prefix(Map.get(d, :loc))
 
-    with {:ok, _} <- fetch_session(book, sname),
+    with {:ok, _} <- open_session(book, sname),
          {:ok, scheme} <- fetch_scheme(book, sch),
          {:ok, _} <- resolve_scheme(book, scheme.scheme) do
       :ok
@@ -2285,10 +2297,14 @@ defmodule Muro.Check do
 
   defp session_protos(book) do
     Enum.reduce_while(book, {:ok, %{}}, fn
-      %{kind: :session, name: name}, {:ok, acc} ->
-        case fetch_session(book, name) do
-          {:ok, %{proto: proto}} -> {:cont, {:ok, Map.put(acc, name, proto)}}
-          {:error, msg} -> {:halt, {:error, msg}}
+      %{kind: :session, name: name} = s, {:ok, acc} ->
+        if Map.get(s, :params, []) != [] do
+          {:cont, {:ok, Map.put(acc, name, :arity)}}
+        else
+          case fetch_session(book, name) do
+            {:ok, %{proto: proto}} -> {:cont, {:ok, Map.put(acc, name, proto)}}
+            {:error, msg} -> {:halt, {:error, msg}}
+          end
         end
 
       _, acc ->
@@ -2324,9 +2340,9 @@ defmodule Muro.Check do
           {:error, "unknown session #{name}"}
 
         %{proto: {:dual, other}} = s ->
-          with {:ok, base} <- resolve_session(book, other, MapSet.put(seen, name)),
+          with {:ok, base} <- resolve_dual_target(book, other, MapSet.put(seen, name)),
                {:ok, mark} <- agreed_mark(s.mult, base.mult) do
-            {:ok, %{s | proto: Muro.Session.dual(base.proto), mult: mark}}
+            {:ok, %{s | proto: Muro.Session.dual(base.proto), mult: mark, params: []}}
           end
 
         %{proto: {:seen, p, q, talk}} = s ->
@@ -2336,9 +2352,36 @@ defmodule Muro.Check do
           end
 
         s ->
-          {:ok, s}
+          cond do
+            Map.get(s, :params, []) != [] ->
+              {:error, "wrong number of session arguments"}
+
+            true ->
+              case Muro.Session.elaborate(s, book) do
+                {:ok, proto} -> {:ok, %{s | proto: proto}}
+                {:error, _} = err -> err
+              end
+          end
       end
     end
+  end
+
+  # `dual ping` may name a later session. `dual (stream 0)` opens that call.
+  defp resolve_dual_target(book, name, seen) when is_binary(name) do
+    resolve_session(book, name, seen)
+  end
+
+  defp resolve_dual_target(book, {:sess, name, args}, _seen) do
+    Muro.Session.open_applied(book, name, args)
+  end
+
+  defp resolve_dual_target(_book, _, _), do: {:error, "unknown session"}
+
+  defp open_session(book, name) when is_binary(name),
+    do: resolve_session(book, name, MapSet.new())
+
+  defp open_session(book, {:sess, name, args}) do
+    Muro.Session.open_applied(book, name, args)
   end
 
   # Names expand before `seen`. Two names of one body are one description.
@@ -2400,7 +2443,7 @@ defmodule Muro.Check do
   end
 
   defp process_session(book, %{kind: :conform, session: sname, proc: proc}) do
-    with {:ok, session} <- fetch_session(book, sname) do
+    with {:ok, session} <- open_session(book, sname) do
       {:ok, %{proc: proc, proto: session.proto}}
     end
   end

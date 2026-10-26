@@ -285,9 +285,51 @@ meet wire : server with client
 
 `client` echoes one nat and then sends `b1`. Both processes finish. The OTP image is a tail call: the server stores the body of `rec` and a jump runs that body again. It is not an unrolling.
 
-`rec X. X` is not a protocol. `rec X. rec Y. X` is not one either: the second `rec` does not guard `X`. A name with no `rec` is not a protocol. `rec X. end` binds nothing and is `end`. `rec X. rec Y. send Nat X` is one loop, and both names are that loop. A jump does not finish, so `session %1` still refuses a process that can return to its `rec`. `rec X. done` does not jump, and it finishes.
+`rec X. X` is not a protocol. `rec X. rec Y. X` is not one either: the second `rec` does not guard `X`. A name in a process with no `rec` is not a process. A name in a protocol is a session declared earlier, and that form is the next section. `rec X. end` binds nothing and is `end`. `rec X. rec Y. send Nat X` is one loop, and both names are that loop. A jump does not finish, so `session %1` still refuses a process that can return to its `rec`. `rec X. done` does not jump, and it finishes.
 
 `examples/recursive.muro`
+
+## A named continuation
+
+A session declared earlier may be the continuation of another session. `req` is `send Nat (send Bit end)`. The name means that body. The same name may sit in an arm of `choose` or `branch`, after `on`, inside `rec`, and as the protocol of an endpoint. `dual req` is `req` with `dual` applied to that body. A process that conforms to `req` conforms to the body, and a meeting of the two ends checks as if the body had been written out.
+
+```muro
+session ack := send Bit end
+
+session req := send Nat ack
+
+session req-back := dual req
+
+conform client : req := put 1 (put b0 done)
+
+conform server : req-back := get Nat (get Bit done)
+
+meet wire : client with server
+```
+
+`client` sends a nat and then a bit. `server` receives both. `wire` is that exchange, and the swapped meeting is the same pair. `examples/session-calls.muro` also writes `ack` in a `choose` arm, after `on`, and inside `rec`, and returns `req` from a linear endpoint.
+
+## A parameterised session
+
+A session may take parameters. A parameter is a nat, written before `:=`, and it may appear wherever a length or an evidence bound may appear. An argument is a numeral, a nat already in scope, or a `run` application that evaluates to a nat. `frames 3` is `send (Vec Nat 3) end`. `stream n` sends a nat at most `n` and continues as `stream (suc n)`. The self-call sits under `send`, so it is that protocol again, at the next nat. `dual (stream 0)` is the body of `stream` with `dual` applied at `0`. A meeting of the two ends checks as if that body had been written out, in either order.
+
+```muro
+session frames (k : Nat) := send (Vec Nat k) end
+
+session stream (n : Nat) := send (d : Nat) {d ≤ n} (stream (suc n))
+
+session stream0 := stream 0
+
+session stream-back := dual stream0
+
+conform up : stream0 := rec X. put 0 X
+
+conform down : stream-back := rec Y. get (d : Nat) Y
+
+meet stream-wire : up with down
+```
+
+`up` sends `0` on every turn. The bound is `0`, then `1`, then the next nat, so `0` stays inside it. `down` is the other end. `frames (bump 0)` is `frames 1` when `bump` computes `suc` of an earlier `run`. `put (bump 0)` sends that nat on `send Nat`. A call of the session itself with no action under it, a call of a session declared later, an unknown name, the wrong number of arguments, and an argument that does not evaluate to a nat are refused before a meeting. `examples/session-calls.muro` is the worked book.
 
 ## A linear endpoint
 

@@ -694,7 +694,7 @@ defmodule Muro.SessionTest do
     refute msg =~ "unguarded"
   end
 
-  test "unguarded recursion and a free session variable are refused" do
+  test "unguarded recursion, an unknown session, and a free process variable are refused" do
     assert {:error, msg} = check("session bad := rec X. X\n")
     assert msg =~ "unguarded recursion"
 
@@ -705,10 +705,10 @@ defmodule Muro.SessionTest do
     assert msg =~ "unguarded recursion"
 
     assert {:error, msg} = check("session bad := X\n")
-    assert msg =~ "free session variable X"
+    assert msg =~ "unknown session X"
 
     assert {:error, msg} = check("session bad := rec X. send Nat Y\n")
-    assert msg =~ "free session variable Y"
+    assert msg =~ "unknown session Y"
 
     assert {:error, msg} =
              check("""
@@ -1416,6 +1416,178 @@ defmodule Muro.SessionTest do
     giver = Enum.find(cross_book, &(&1.name == "giver"))
     assert {:error, meet} = Muro.Meet.meets(taker.proc, giver.proc, cross_book)
     assert meet =~ "done does not meet stop"
+  end
+
+  test "session-calls.muro checks, and emit keeps the runs" do
+    path = "examples/session-calls.muro"
+    src = File.read!(path)
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+    assert Muro.check_file(path) == :ok
+
+    assert {:ok, out} = Muro.emit_file(path, Calls)
+    assert out =~ "kept"
+    refute out =~ "session"
+    refute out =~ "stream"
+  end
+
+  test "a session call opens as its body, and a guarded self-call is a jump" do
+    assert {:ok, book} =
+             Parser.parse("""
+             session ack := send Bit end
+             session req := send Nat ack
+             session stream (n : Nat) := send (d : Nat) {d ≤ n} (stream (suc n))
+             session spin := choose (send Nat spin) end
+             session again := rec X. send Nat again
+             """)
+
+    assert {:ok, db} = Muro.Ast.book_to_db(book)
+    req = Enum.find(db, &(&1.name == "req"))
+    assert {:ok, proto} = Session.elaborate(req, db)
+    assert proto == {:send, :nat, {:send, :bit, :end}}
+    assert Session.dual(proto) == {:recv, :nat, {:recv, :bit, :end}}
+
+    assert {:ok, %{proto: stream}} = Session.open_applied(db, "stream", [{:lit, 0}])
+
+    assert stream == {:esend, :d, {:lit, 0}, {:sjump, "stream", [{:lit, 1}]}}
+
+    assert Session.dual(stream) ==
+             {:erecv, :d, {:lit, 0}, {:sjump, {:dual, "stream"}, [{:lit, 1}]}}
+
+    assert check("""
+           session ack := send Bit end
+           session req := send Nat ack
+           session choice := choose ack end
+           session route := recv (b : Bit) on ack end
+           session loop := rec X. recv Nat (send Nat ack)
+           session spin := choose (send Nat spin) end
+           conform looped : spin := rec X. pick0 (put 0 X)
+           session again := rec X. send Nat again
+           conform hops : again := rec Y. put 1 Y
+           def pass : (s : req) ⊸ req := λ¹ (s : req) → s
+           """) == :ok
+  end
+
+  test "a parameterised session, a computed argument, and a data payload check" do
+    assert check("""
+           def id : run Π (n : Nat) → Nat :=
+             λ (n : Nat) → n
+
+           def bump : run Π (n : Nat) → Nat :=
+             λ (n : Nat) → suc (id n)
+
+           data Bool : Type where
+             true : Bool
+             false : Bool
+
+           session flag (k : Nat) := send Bool end
+           session flag1 := flag 1
+           conform yes : flag1 := put true done
+           session frames (k : Nat) := send (Vec Nat k) end
+           session three := frames 3
+           session counted := frames (bump 0)
+           conform send1 : counted := put (rep 1 0) done
+           session nums (k : Nat) := send Nat end
+           conform bumped : nums (bump 0) := put (bump 0) done
+           session rest (n : Nat) := send (Vec Nat n) end
+           session sized := recv (n : Nat) (rest n)
+           conform server : sized := get (n : Nat) (put (rep n 0) done)
+           def pass : (s : three) ⊸ three := λ¹ (s : three) → s
+           place home := ambient
+           scheme local := fixed home
+           endpoint three-home := three at local
+           """) == :ok
+  end
+
+  test "an unguarded call, a forward call, an unknown name, and a bad argument are refused" do
+    assert {:error, msg} = check("session s := s\n")
+    assert msg =~ "unguarded session call"
+
+    assert {:error, msg} =
+             check("""
+             session a := send Nat b
+             session b := end
+             """)
+
+    assert msg =~ "session declared later"
+
+    assert {:error, msg} = check("session q := no-such\n")
+    assert msg =~ "unknown session no-such"
+
+    assert {:error, msg} =
+             check("""
+             session frames (k : Nat) := send (Vec Nat k) end
+             session bad := frames
+             session two := frames 1 2
+             """)
+
+    assert msg =~ "wrong number of session arguments"
+
+    assert {:error, msg} =
+             check("""
+             def plus : run Π (n : Nat) → Π (m : Nat) → Nat :=
+               λ (n : Nat) → λ (m : Nat) → plus n m
+
+             def early : run Nat := late
+
+             def late : run Nat := 0
+
+             session frames (k : Nat) := end
+             session bad-plus := frames (plus 0 0)
+             session bad-early := frames early
+             session bad-name := frames nope
+             """)
+
+    assert msg =~ "argument (plus 0 0): recursive run definition"
+    assert msg =~ "argument early: recursive run definition"
+    assert msg =~ "argument nope is not a nat"
+
+    assert {:error, msg} = Parser.parse("session bad (b : Bit) := end\n")
+    assert msg =~ "a session parameter is a nat"
+
+    assert {:error, msg} =
+             check("""
+             session w (n : Nat) := send (d : Nat) {d ≤ n} end
+             conform over : w 0 := put 1 done
+             """)
+
+    assert msg =~ "put 1 done does not conform to send (d : Nat) {d ≤ 0} end"
+
+    assert {:error, msg} =
+             check("""
+             session shrink (n : Nat) := send (d : Nat) {d ≤ n} (shrink 0)
+             conform shrinks : shrink 5 := rec X. put 5 X
+             """)
+
+    assert msg =~ "d ≤ 0"
+
+    assert {:error, msg} =
+             check("""
+             session grow (n : Nat) := send (Vec Nat n) (grow (suc n))
+             conform grows : grow 0 := rec X. put (rep 0 0) X
+             """)
+
+    assert msg =~ "send (Vec Nat 1)"
+
+    assert {:error, msg} =
+             check("""
+             session stream (n : Nat) := send (d : Nat) {d ≤ n} (stream (suc n))
+             session stream0 := stream 0
+             session mirror := rec X. recv (d : Nat) X
+             conform up : stream0 := rec X. put 0 X
+             conform down : mirror := rec Y. get (d : Nat) Y
+             meet bad : up with down
+             """)
+
+    assert msg =~ "expected the other end"
+
+    assert {:error, _} = Parser.parse("session c := choose ack (frames 3)\n")
+
+    assert check("""
+           session ack := send Bit end
+           session frames (k : Nat) := end
+           session c := choose (ack) (frames 3)
+           """) == :ok
   end
 
   defp check(src) do
