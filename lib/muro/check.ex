@@ -89,6 +89,43 @@ defmodule Muro.Check do
   defp data_name?(book, name), do: match?({:ok, _}, lookup_data(book, name))
   defp ctor_name?(book, name), do: match?({:ok, _}, lookup_ctor(book, name))
 
+  # A session value may be this application when the definition is `run`.
+  # Evidence and spec stay out of the payload.
+  defp run_def?(book, name) do
+    Enum.any?(book, fn d ->
+      Map.get(d, :name) == name and Map.get(d, :mode) == :run and term_def?(d)
+    end)
+  end
+
+  defp term_def?(book, name) do
+    Enum.any?(book, fn d ->
+      Map.get(d, :name) == name and Map.get(d, :mode) in [:run, :spec, :evidence] and
+        term_def?(d)
+    end)
+  end
+
+  defp term_def?(%{kind: kind})
+       when kind in [
+              :data,
+              :session,
+              :conform,
+              :place,
+              :scheme,
+              :move,
+              :endpoint,
+              :read,
+              :meet,
+              :talk,
+              :seat,
+              :link,
+              :relay,
+              :import,
+              :param
+            ],
+       do: false
+
+  defp term_def?(_), do: true
+
   # -- context: newest at index 0 -------------------------------------------
 
   defp ext(gamma, q, a) do
@@ -382,30 +419,34 @@ defmodule Muro.Check do
 
   # Weak-head normalisation, fuelled. `{:ok, t}` is a weak-head normal form
   # (or a stuck term); `{:error, msg}` is out of fuel.
-  defp whnf(0, _book, _t), do: {:error, @out_of_fuel}
+  # `:all` unfolds every definition. `:run` unfolds only a `run` definition,
+  # which is the value a computed session payload may send.
+  defp whnf(k, book, t), do: whnf(k, book, t, :all)
 
-  defp whnf(k, book, {:app, f, a}) do
-    case whnf(k - 1, book, f) do
-      {:ok, {:lam, _, _, _, t}} -> whnf(k - 1, book, Subst.inst(t, a))
+  defp whnf(0, _book, _t, _unfold), do: {:error, @out_of_fuel}
+
+  defp whnf(k, book, {:app, f, a}, unfold) do
+    case whnf(k - 1, book, f, unfold) do
+      {:ok, {:lam, _, _, _, t}} -> whnf(k - 1, book, Subst.inst(t, a), unfold)
       {:ok, f1} -> {:ok, {:app, f1, a}}
       err -> err
     end
   end
 
-  defp whnf(k, book, {:mnat, e, p, z, s}) do
-    case whnf(k - 1, book, e) do
-      {:ok, :ze} -> whnf(k - 1, book, z)
-      {:ok, {:su, u}} -> whnf(k - 1, book, Subst.inst(s, u))
+  defp whnf(k, book, {:mnat, e, p, z, s}, unfold) do
+    case whnf(k - 1, book, e, unfold) do
+      {:ok, :ze} -> whnf(k - 1, book, z, unfold)
+      {:ok, {:su, u}} -> whnf(k - 1, book, Subst.inst(s, u), unfold)
       {:ok, e1} -> {:ok, {:mnat, e1, p, z, s}}
       err -> err
     end
   end
 
-  defp whnf(k, book, {:matom, e, p, bs}) do
-    case whnf(k - 1, book, e) do
+  defp whnf(k, book, {:matom, e, p, bs}, unfold) do
+    case whnf(k - 1, book, e, unfold) do
       {:ok, {:atom, name}} ->
         case Enum.find(bs, fn {n, _} -> n == name end) do
-          {_, b} -> whnf(k - 1, book, b)
+          {_, b} -> whnf(k - 1, book, b, unfold)
           nil -> {:ok, {:matom, {:atom, name}, p, bs}}
         end
 
@@ -417,12 +458,12 @@ defmodule Muro.Check do
     end
   end
 
-  defp whnf(k, book, {:mdata, e, p, bs}) do
-    with {:ok, e1} <- whnf(k - 1, book, e) do
+  defp whnf(k, book, {:mdata, e, p, bs}, unfold) do
+    with {:ok, e1} <- whnf(k - 1, book, e, unfold) do
       case ctor_spine(book, e1) do
         {:ok, {_dname, ci, args}} ->
           case Enum.at(bs, ci) do
-            {_n, _ar, b} -> whnf(k - 1, book, Subst.inst_n(b, args))
+            {_n, _ar, b} -> whnf(k - 1, book, Subst.inst_n(b, args), unfold)
             nil -> {:ok, {:mdata, e1, p, bs}}
           end
 
@@ -432,38 +473,44 @@ defmodule Muro.Check do
     end
   end
 
-  defp whnf(k, book, {:munit, e, p, u}) do
-    case whnf(k - 1, book, e) do
-      {:ok, :one} -> whnf(k - 1, book, u)
+  defp whnf(k, book, {:munit, e, p, u}, unfold) do
+    case whnf(k - 1, book, e, unfold) do
+      {:ok, :one} -> whnf(k - 1, book, u, unfold)
       {:ok, e1} -> {:ok, {:munit, e1, p, u}}
       err -> err
     end
   end
 
-  defp whnf(k, book, {:memp, e, p}) do
-    with {:ok, e1} <- whnf(k - 1, book, e), do: {:ok, {:memp, e1, p}}
+  defp whnf(k, book, {:memp, e, p}, unfold) do
+    with {:ok, e1} <- whnf(k - 1, book, e, unfold), do: {:ok, {:memp, e1, p}}
   end
 
-  defp whnf(k, book, {:def, name}) do
+  defp whnf(k, book, {:def, name}, unfold) do
     case lookup_def(book, name) do
-      {:ok, d} -> whnf(k - 1, book, d.body)
-      _ -> {:ok, {:def, name}}
+      {:ok, %{mode: :run} = d} ->
+        whnf(k - 1, book, d.body, unfold)
+
+      {:ok, d} when unfold == :all ->
+        whnf(k - 1, book, d.body, unfold)
+
+      _ ->
+        {:ok, {:def, name}}
     end
   end
 
-  defp whnf(k, book, {:ann, e, _}), do: whnf(k - 1, book, e)
+  defp whnf(k, book, {:ann, e, _}, unfold), do: whnf(k - 1, book, e, unfold)
 
   # ι-letp
-  defp whnf(k, book, {:letp, e, t}) do
-    case whnf(k - 1, book, e) do
-      {:ok, {:pair, a, b}} -> whnf(k - 1, book, Subst.inst2(t, a, b))
+  defp whnf(k, book, {:letp, e, t}, unfold) do
+    case whnf(k - 1, book, e, unfold) do
+      {:ok, {:pair, a, b}} -> whnf(k - 1, book, Subst.inst2(t, a, b), unfold)
       {:ok, e1} -> {:ok, {:letp, e1, t}}
       err -> err
     end
   end
 
-  defp whnf(k, book, {:ucons, e}) do
-    case whnf(k - 1, book, e) do
+  defp whnf(k, book, {:ucons, e}, unfold) do
+    case whnf(k - 1, book, e, unfold) do
       # ι-ucons-r
       {:ok, {:unf, _s, {:pair, h, t}}} ->
         {:ok, {:pair, h, t}}
@@ -487,7 +534,45 @@ defmodule Muro.Check do
     end
   end
 
-  defp whnf(_, _, t), do: {:ok, t}
+  defp whnf(_, _, t, _), do: {:ok, t}
+
+  @doc """
+  Full normal form of a de Bruijn term. Fuel bounds every reduction step.
+  Out of fuel is an error. A stuck term is returned as that term.
+
+  Only a `run` definition is unfolded. An evidence or spec definition
+  stays stuck, so a session payload cannot be computed from one.
+  """
+  def normalize(book, term, fuel \\ @fuel) do
+    nf(fuel, book, term, :run)
+  end
+
+  defp nf(k, book, term, unfold) do
+    with {:ok, t} <- whnf(k, book, term, unfold), do: deepen(k, book, t, unfold)
+  end
+
+  defp deepen(k, book, {:su, u}, unfold) do
+    with {:ok, u1} <- nf(fuel_dec(k), book, u, unfold), do: {:ok, {:su, u1}}
+  end
+
+  defp deepen(k, book, {:pair, a, b}, unfold) do
+    with {:ok, a1} <- nf(fuel_dec(k), book, a, unfold),
+         {:ok, b1} <- nf(fuel_dec(k), book, b, unfold) do
+      {:ok, {:pair, a1, b1}}
+    end
+  end
+
+  defp deepen(k, book, {:app, f, a}, unfold) do
+    with {:ok, f1} <- nf(fuel_dec(k), book, f, unfold),
+         {:ok, a1} <- nf(fuel_dec(k), book, a, unfold) do
+      {:ok, {:app, f1, a1}}
+    end
+  end
+
+  defp deepen(_k, _book, t, _unfold), do: {:ok, t}
+
+  defp fuel_dec(k) when k > 0, do: k - 1
+  defp fuel_dec(_), do: 0
 
   # Fuelled, as Agda's isData: fuel also bounds the descent into data
   # parameters (a spec definition may be recursive: X : Type := D X).
@@ -2096,27 +2181,50 @@ defmodule Muro.Check do
   defp check_proc_vars({:rec, _name, body}, ctx, book), do: check_proc_vars(body, ctx, book)
   defp check_proc_vars({:call, _name}, _ctx, _book), do: :ok
 
-  # A bound name is in scope. An unbound name is in scope when it is a
-  # constructor. Conformance then decides whether that constructor
-  # inhabits the payload.
-  defp check_val_vars({:var, name}, ctx, book) do
-    cond do
-      MapSet.member?(ctx, name) -> :ok
-      ctor_name?(book, ctor_label(name)) -> :ok
-      true -> {:error, "unbound variable #{name}"}
-    end
-  end
-
-  defp check_val_vars({:con, name, args}, ctx, book) when is_list(args) do
-    if ctor_name?(book, name) do
-      Enum.reduce_while(args, :ok, fn arg, :ok ->
-        case check_val_vars(arg, ctx, book) do
+  # The scrutinee is the value `get` just bound. Each arm is that continuation.
+  defp check_proc_vars({:match, name, arms}, ctx, book) do
+    if MapSet.member?(ctx, name) do
+      Enum.reduce_while(arms, :ok, fn arm, :ok ->
+        case check_proc_vars(arm, ctx, book) do
           :ok -> {:cont, :ok}
           err -> {:halt, err}
         end
       end)
     else
-      {:error, "unbound variable #{name}"}
+      {:error, "match does not cover the received value"}
+    end
+  end
+
+  # A bound name is in scope. An unbound name is in scope when it is a
+  # constructor. Conformance then decides whether that constructor
+  # inhabits the payload.
+  defp check_val_vars({:var, name}, ctx, book) do
+    label = ctor_label(name)
+
+    cond do
+      MapSet.member?(ctx, name) -> :ok
+      ctor_name?(book, label) -> :ok
+      run_def?(book, label) -> :ok
+      term_def?(book, label) -> {:error, "#{label} is not a run definition"}
+      true -> {:error, "unbound variable #{name}"}
+    end
+  end
+
+  defp check_val_vars({:con, name, args}, ctx, book) when is_list(args) do
+    cond do
+      ctor_name?(book, name) or run_def?(book, name) ->
+        Enum.reduce_while(args, :ok, fn arg, :ok ->
+          case check_val_vars(arg, ctx, book) do
+            :ok -> {:cont, :ok}
+            err -> {:halt, err}
+          end
+        end)
+
+      term_def?(book, name) ->
+        {:error, "#{name} is not a run definition"}
+
+      true ->
+        {:error, "unbound variable #{name}"}
     end
   end
 

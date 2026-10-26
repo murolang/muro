@@ -8,7 +8,21 @@
 -- A pair is a tuple. A record is a fixed map: the names are the type,
 -- and a pair around a record is a tuple wrapping that map. An open
 -- map, whose keys are chosen at run time, is not a type. An indexed
--- declaration is not a payload. A computed term is not a value.
+-- declaration is not a payload. A put may send the value a run
+-- definition computes from its arguments. The body is a first-order
+-- term, and a definition may call only a definition declared before
+-- it. Evaluation recurses on that prefix and on the term. A
+-- definition whose body calls itself or a later definition does not
+-- evaluate, including an arm the argument does not take. A variable
+-- argument does not evaluate. The result is cast to the payload
+-- type. A cast that fails, or a value that does not inhabit the
+-- type, has no derivation. `get` may continue as a match on the
+-- value it just bound. The arms are the constructors of that
+-- payload, in order. Each arm conforms to the one continuation, and
+-- the processes may differ. The meeting selects the arm of the value
+-- that was sent. A match that does not
+-- cover the received value has no derivation. An indexed bit is
+-- still the literal the sender writes.
 --
 -- `send A S` sends a value of type A and continues as S. `recv A S`
 -- receives one. `drecv x A S` binds that value to `x`, and `S` may
@@ -52,15 +66,15 @@ module Muro.Session where
 
 open import Data.Bool.Base using (Bool; true; false; _∧_)
 open import Data.Empty using (⊥)
-open import Data.List.Base using (List; []; _∷_; length)
+open import Data.List.Base using (List; []; _∷_; _++_; length)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; _≤_; z≤n; s≤s) renaming (zero to nzero; suc to nsuc)
 open import Data.Nat.Properties using () renaming (_≟_ to _≟ℕ_; _≤?_ to _≤?ℕ_)
 open import Data.Product using (_×_; _,_)
 open import Data.Sum using (_⊎_; inj₁; inj₂)
 open import Data.String.Base using (String)
-open import Data.String.Properties using (_≟_)
-open import Relation.Binary.PropositionalEquality.Core using (_≡_; _≢_; refl; sym; trans)
+open import Data.String.Properties using (_≟_; _==_)
+open import Relation.Binary.PropositionalEquality.Core using (_≡_; _≢_; refl; sym; trans; cong; subst)
 open import Relation.Nullary.Decidable.Core using (Dec)
 open import Relation.Nullary.Decidable.Core using () renaming (yes to yes′; no to no′)
 
@@ -104,6 +118,12 @@ true≢false ()
 
 false≢true : false ≢ true
 false≢true ()
+
+just≢nothing : ∀ {A : Set} {x : A} → just x ≢ nothing
+just≢nothing ()
+
+just-inj : ∀ {A : Set} {x y : A} → just x ≡ just y → x ≡ y
+just-inj refl = refl
 
 mutual
   fld≟ : (a b : Fld) → Dec (a ≡ b)
@@ -258,12 +278,19 @@ data Val where
   con  : ∀ {d as} → String → Spine → Val (dat d as)
 
 ------------------------------------------------------------------------
--- Value expressions: literals or variable references
+-- Value expressions. A literal is a value. A variable is a name
+-- bound by `get`. A call is an application of a run definition in
+-- this fragment. The index is the payload type the call claims.
 ------------------------------------------------------------------------
 
-data ValExpr : Ty → Set where
-  lit : ∀ {A} → Val A → ValExpr A
-  var : ∀ {A} → String → ValExpr A
+mutual
+  data VArg : Set where
+    varg : (B : Ty) → ValExpr B → VArg
+
+  data ValExpr : Ty → Set where
+    lit  : ∀ {A} → Val A → ValExpr A
+    var  : ∀ {A} → String → ValExpr A
+    call : ∀ {A} → String → List VArg → ValExpr A
 
 nexp≟ : (e f : NExp) → Dec (e ≡ f)
 nexp≟ (nlit m) (nlit n) with m ≟ℕ n
@@ -388,12 +415,16 @@ protoMode = spec
 
 ------------------------------------------------------------------------
 -- The process is the run's actions on the channel. `put` sends a
--- value expression (literal or variable). `get` receives a value
--- and binds it to a named variable. The continuation may reference
--- that variable. `pick0` and `pick1` are the process's choice.
--- `cover` offers both branches. `iget x P Q` receives a bit, binds
--- it to `x`, and offers both arms: `b0` continues as `P` and `b1`
--- continues as `Q`. `stop` uses the channel no further.
+-- value expression: a literal, a variable, or a call of a run
+-- definition. `get` receives a value and binds it to a named
+-- variable. The continuation may reference that variable. `mget`
+-- receives and matches that same name. The arms are one process per
+-- constructor, `b0` then `b1` for a bit, and declaration order for
+-- data. Each arm conforms to the one continuation, and the processes
+-- may differ. `pick0` and `pick1` are the process's choice. `cover` offers
+-- both branches. `iget x P Q` receives a bit, binds it to `x`, and
+-- offers both arms: `b0` continues as `P` and `b1` continues as `Q`.
+-- `stop` uses the channel no further.
 ------------------------------------------------------------------------
 
 data Proc : Set where
@@ -405,6 +436,7 @@ data Proc : Set where
   pick1 : Proc → Proc
   cover : Proc → Proc → Proc
   iget  : String → Proc → Proc → Proc
+  mget  : (A : Ty) → String → List Proc → Proc
 
 ------------------------------------------------------------------------
 -- A parameter index, or nothing when the index is past the arguments.
@@ -496,22 +528,383 @@ data _∈_∷_ : String → Ctx → Ty → Set where
   here  : ∀ {x A Γ} → x ∈ ((x , A) ∷ Γ) ∷ A
   there : ∀ {x y A B Γ} → x ≢ y → x ∈ Γ ∷ A → x ∈ ((y , B) ∷ Γ) ∷ A
 
--- A literal is in scope when it inhabits its type. A variable is in
--- scope when the innermost binding of its name has that type.
-data ValExprOk : Ctx → ∀ {A} → ValExpr A → Set where
-  lit-ok : ∀ {Γ A} {v : Val A} → fits v ≡ true → ValExprOk Γ (lit v)
-  var-ok : ∀ {Γ A} {x : String} → x ∈ Γ ∷ A → ValExprOk Γ (var {A} x)
+------------------------------------------------------------------------
+-- Declarations the run table and the examples share. A constructor
+-- the declaration does not have does not inhabit the type.
+------------------------------------------------------------------------
 
--- A bound variable inhabits the type it was bound at.
+boolDecl : Decl
+boolDecl = mkDecl "Bool" nzero (ctor "true" [] ∷ ctor "false" [] ∷ [])
+
+boolTy : Ty
+boolTy = dat boolDecl []
+
+trueV : Val boolTy
+trueV = con "true" snil
+
+falseV : Val boolTy
+falseV = con "false" snil
+
+noneV : Val boolTy
+noneV = con "none" snil
+
+maybeDecl : Decl
+maybeDecl = mkDecl "Maybe" (nsuc nzero)
+  (ctor "nothing" [] ∷ ctor "just" (fPar nzero ∷ []) ∷ [])
+
+maybeNat : Ty
+maybeNat = dat maybeDecl (nat ∷ [])
+
+maybeBool : Ty
+maybeBool = dat maybeDecl (boolTy ∷ [])
+
+nothingV : Val maybeNat
+nothingV = con "nothing" snil
+
+just0 : Val maybeNat
+just0 = con "just" (scons nat zero snil)
+
+justBit : Val maybeNat
+justBit = con "just" (scons bit b0 snil)
+
+justTrue : Val maybeBool
+justTrue = con "just" (scons boolTy trueV snil)
+
+itemDecl : Decl
+itemDecl = mkDecl "Item" nzero (ctor "self" [] ∷ ctor "other" [] ∷ [])
+
+itemTy : Ty
+itemTy = dat itemDecl []
+
+selfV : Val itemTy
+selfV = con "self" snil
+
+otherV : Val itemTy
+otherV = con "other" snil
+
+nothingB : Val maybeBool
+nothingB = con "nothing" snil
+
+------------------------------------------------------------------------
+-- A run term. A variable is one of the definition's parameters, de
+-- Bruijn, with 0 the last parameter. A call names a definition. The
+-- table is ordered latest first, so the tail of a definition is
+-- every definition declared before it. Evaluation of a call recurses
+-- on that tail and on the term. Before the body is evaluated, every
+-- call in it must name a definition in that tail. A name that is not
+-- in the tail, including the definition itself and any definition
+-- declared later, does not evaluate.
+------------------------------------------------------------------------
+
+mutual
+  data Arm : Set where
+    arm : String → RTm → Arm
+
+  data RTm : Set where
+    rNat : ℕ → RTm
+    rSuc : RTm → RTm
+    rBit0 : RTm
+    rBit1 : RTm
+    rUnit : RTm
+    rPair : RTm → RTm → RTm
+    rVar : ℕ → RTm
+    rCon : String → List RTm → RTm
+    rMatch : RTm → List Arm → RTm
+    rMatchNat : RTm → RTm → RTm → RTm
+    rCall : String → List RTm → RTm
+
+data RDef : Set where
+  rdef : String → ℕ → RTm → RDef
+
+-- `mark self` is `true`. `mark other` is `false`.
+markBody : RTm
+markBody = rMatch (rVar nzero)
+  (arm "self" (rCon "true" []) ∷ arm "other" (rCon "false" []) ∷ [])
+
+markRun : RDef
+markRun = rdef "mark" (nsuc nzero) markBody
+
+-- `effective self` is `just (mark self)`. `effective other` is `nothing`.
+effBody : RTm
+effBody = rMatch (rVar nzero)
+  ( arm "self" (rCon "just" (rCall "mark" (rVar nzero ∷ []) ∷ []))
+  ∷ arm "other" (rCon "nothing" [])
+  ∷ [])
+
+effectiveRun : RDef
+effectiveRun = rdef "effective" (nsuc nzero) effBody
+
+countRun : RDef
+countRun = rdef "count" nzero (rSuc (rNat nzero))
+
+badRun : RDef
+badRun = rdef "bad" nzero (rCon "none" [])
+
+-- `size self` is 0. `size other` is 2.
+sizeBody : RTm
+sizeBody = rMatch (rVar nzero)
+  ( arm "self" (rNat nzero)
+  ∷ arm "other" (rSuc (rSuc (rNat nzero)))
+  ∷ [])
+
+sizeRun : RDef
+sizeRun = rdef "size" (nsuc nzero) sizeBody
+
+-- Calls itself, so the prefix does not contain the callee.
+loopRun : RDef
+loopRun = rdef "loop" (nsuc nzero) (rCall "loop" (rVar nzero ∷ []))
+
+-- The zero arm returns the second argument. The successor arm calls
+-- `plus`. The body calls itself, so neither argument is evaluated.
+plusBody : RTm
+plusBody = rMatchNat (rVar (nsuc nzero)) (rVar nzero)
+  (rSuc (rCall "plus" (rVar nzero ∷ rVar (nsuc (nsuc nzero)) ∷ [])))
+
+plusRun : RDef
+plusRun = rdef "plus" (nsuc (nsuc nzero)) plusBody
+
+-- Declared before `late`, and its body calls `late`.
+earlyRun : RDef
+earlyRun = rdef "early" nzero (rCall "late" [])
+
+lateRun : RDef
+lateRun = rdef "late" nzero (rNat nzero)
+
+-- Latest first. The tail of a definition is the earlier prefix.
+runs : List RDef
+runs =
+  plusRun ∷ loopRun ∷ lateRun ∷ sizeRun ∷ badRun ∷ countRun ∷ effectiveRun ∷ markRun ∷ earlyRun ∷ []
+
+-- Every call in the body names a definition in the prefix. The check
+-- walks the whole term, so a call in an arm that is not taken still
+-- refuses the definition.
+mutual
+  namedBefore : List RDef → String → Bool
+  namedBefore [] _ = false
+  namedBefore (rdef n _ _ ∷ Δ) f = namedHere (f ≟ n) Δ f
+
+  namedHere : {f n : String} → Dec (f ≡ n) → List RDef → String → Bool
+  namedHere (yes′ _) _ _ = true
+  namedHere (no′ _) Δ f = namedBefore Δ f
+
+mutual
+  callsBefore : List RDef → RTm → Bool
+  callsBefore _ (rNat _) = true
+  callsBefore Δ (rSuc t) = callsBefore Δ t
+  callsBefore _ rBit0 = true
+  callsBefore _ rBit1 = true
+  callsBefore _ rUnit = true
+  callsBefore Δ (rPair a b) = callsBefore Δ a ∧ callsBefore Δ b
+  callsBefore _ (rVar _) = true
+  callsBefore Δ (rCon _ ts) = callsAll Δ ts
+  callsBefore Δ (rMatch t as) = callsBefore Δ t ∧ armsBefore Δ as
+  callsBefore Δ (rMatchNat t z s) =
+    callsBefore Δ t ∧ callsBefore Δ z ∧ callsBefore Δ s
+  callsBefore Δ (rCall f ts) = namedBefore Δ f ∧ callsAll Δ ts
+
+  callsAll : List RDef → List RTm → Bool
+  callsAll _ [] = true
+  callsAll Δ (t ∷ ts) = callsBefore Δ t ∧ callsAll Δ ts
+
+  armsBefore : List RDef → List Arm → Bool
+  armsBefore _ [] = true
+  armsBefore Δ (arm _ b ∷ as) = callsBefore Δ b ∧ armsBefore Δ as
+
+------------------------------------------------------------------------
+-- Evaluate a term against a prefix. `apply` steps to the tail when
+-- the name matches, and that tail is structurally smaller.
+------------------------------------------------------------------------
+
+data Raw : Set where
+  rawNat : ℕ → Raw
+  rawBit : Val bit → Raw
+  rawUnit : Raw
+  rawPair : Raw → Raw → Raw
+  rawCon : String → List Raw → Raw
+
+Env : Set
+Env = List Raw
+
+nthRaw : List Raw → ℕ → Maybe Raw
+nthRaw [] _ = nothing
+nthRaw (x ∷ _) nzero = just x
+nthRaw (_ ∷ xs) (nsuc n) = nthRaw xs n
+
+envOf : List Raw → Env
+envOf [] = []
+envOf (v ∷ vs) = envOf vs ++ (v ∷ [])
+
+mutual
+  eval : List RDef → RTm → Env → Maybe Raw
+  eval _ (rNat n) _ = just (rawNat n)
+  eval Δ (rSuc t) env = bindM (eval Δ t env) sucRaw
+  eval _ rBit0 _ = just (rawBit b0)
+  eval _ rBit1 _ = just (rawBit b1)
+  eval _ rUnit _ = just rawUnit
+  eval Δ (rPair a b) env =
+    bindM (eval Δ a env) (λ a′ → bindM (eval Δ b env) (λ b′ → just (rawPair a′ b′)))
+  eval _ (rVar i) env = nthRaw env i
+  eval Δ (rCon c ts) env = bindM (evals Δ ts env) (λ vs → just (rawCon c vs))
+  eval Δ (rCall f ts) env = bindM (evals Δ ts env) (apply Δ f)
+  eval Δ (rMatch t arms) env = bindM (eval Δ t env) (matchArms Δ arms env)
+  eval Δ (rMatchNat t z s) env = bindM (eval Δ t env) (matchNat Δ z s env)
+
+  evals : List RDef → List RTm → Env → Maybe (List Raw)
+  evals _ [] _ = just []
+  evals Δ (t ∷ ts) env =
+    bindM (eval Δ t env) (λ v → bindM (evals Δ ts env) (λ vs → just (v ∷ vs)))
+
+  sucRaw : Raw → Maybe Raw
+  sucRaw (rawNat n) = just (rawNat (nsuc n))
+  sucRaw _ = nothing
+
+  apply : List RDef → String → List Raw → Maybe Raw
+  apply [] _ _ = nothing
+  apply (rdef n ar body ∷ Δ) f args =
+    applyHere (f ≟ n) (length args ≟ℕ ar) Δ body f args
+
+  applyHere :
+    {f n : String} {k ar : ℕ} →
+    Dec (f ≡ n) → Dec (k ≡ ar) → List RDef → RTm → String → List Raw → Maybe Raw
+  applyHere (yes′ _) (yes′ _) Δ body _ args with callsBefore Δ body
+  ... | true = eval Δ body (envOf args)
+  ... | false = nothing
+  applyHere (yes′ _) (no′ _) _ _ _ _ = nothing
+  applyHere (no′ _) _ Δ _ f args = apply Δ f args
+
+  matchNat : List RDef → RTm → RTm → Env → Raw → Maybe Raw
+  matchNat Δ z _ env (rawNat nzero) = eval Δ z env
+  matchNat Δ _ s env (rawNat (nsuc n)) = eval Δ s (rawNat n ∷ env)
+  matchNat _ _ _ _ _ = nothing
+
+  matchArms : List RDef → List Arm → Env → Raw → Maybe Raw
+  matchArms _ [] _ _ = nothing
+  matchArms Δ (arm c b ∷ as) env (rawCon d fs) =
+    matchCon (c ≟ d) Δ as b fs env d
+  matchArms Δ (arm c b ∷ as) env (rawBit b0) =
+    matchNamed (c ≟ "b0") Δ as b env (rawBit b0)
+  matchArms Δ (arm c b ∷ as) env (rawBit b1) =
+    matchNamed (c ≟ "b1") Δ as b env (rawBit b1)
+  matchArms Δ (_ ∷ as) env v@(rawNat _) = matchArms Δ as env v
+  matchArms Δ (_ ∷ as) env v@rawUnit = matchArms Δ as env v
+  matchArms Δ (_ ∷ as) env v@(rawPair _ _) = matchArms Δ as env v
+
+  matchCon :
+    {c d : String} → Dec (c ≡ d) → List RDef → List Arm → RTm →
+    List Raw → Env → String → Maybe Raw
+  matchCon (yes′ _) Δ _ b fs env _ = eval Δ b (envOf fs ++ env)
+  matchCon (no′ _) Δ as _ fs env d = matchArms Δ as env (rawCon d fs)
+
+  matchNamed :
+    {c x : String} → Dec (c ≡ x) → List RDef → List Arm → RTm →
+    Env → Raw → Maybe Raw
+  matchNamed (yes′ _) Δ _ b env _ = eval Δ b env
+  matchNamed (no′ _) Δ as _ env v = matchArms Δ as env v
+
+mutual
+  findCtor : List Ctor → String → Maybe (List Fld)
+  findCtor [] _ = nothing
+  findCtor (ctor n fs ∷ cs) c = findHere (c ≟ n) fs cs c
+
+  findHere : {c n : String} → Dec (c ≡ n) → List Fld → List Ctor → String → Maybe (List Fld)
+  findHere (yes′ _) fs _ _ = just fs
+  findHere (no′ _) _ cs c = findCtor cs c
+
+mutual
+  rawOf : ∀ {A} → Val A → Maybe Raw
+  rawOf zero = just (rawNat nzero)
+  rawOf (suc v) = bindM (rawOf v) (λ r → sucRaw r)
+  rawOf b0 = just (rawBit b0)
+  rawOf b1 = just (rawBit b1)
+  rawOf tt = just rawUnit
+  rawOf (tup a b) =
+    bindM (rawOf a) (λ a′ → bindM (rawOf b) (λ b′ → just (rawPair a′ b′)))
+  rawOf (con c sp) = bindM (rawSpine sp) (λ vs → just (rawCon c vs))
+  rawOf (rec _) = nothing
+  rawOf (rep _) = nothing
+
+  rawSpine : Spine → Maybe (List Raw)
+  rawSpine snil = just []
+  rawSpine (scons _ v sp) =
+    bindM (rawOf v) (λ r → bindM (rawSpine sp) (λ rs → just (r ∷ rs)))
+
+mutual
+  cast : (A : Ty) → Raw → Maybe (Val A)
+  cast nat (rawNat nzero) = just zero
+  cast nat (rawNat (nsuc n)) = bindM (cast nat (rawNat n)) (λ v → just (suc v))
+  cast bit (rawBit b0) = just b0
+  cast bit (rawBit b1) = just b1
+  cast unit rawUnit = just tt
+  cast (pair A B) (rawPair a b) =
+    bindM (cast A a) (λ a′ → bindM (cast B b) (λ b′ → just (tup a′ b′)))
+  cast (dat d as) (rawCon c rs) = castFound d as c rs (findCtor (ctorsOf d) c)
+  cast _ _ = nothing
+
+  castFound :
+    (d : Decl) (as : List Ty) (c : String) (rs : List Raw) →
+    Maybe (List Fld) → Maybe (Val (dat d as))
+  castFound d as c rs (just fs) =
+    bindM (castFlds d as fs rs) (λ sp → just (con {d} {as} c sp))
+  castFound d as c [] nothing = just (con {d} {as} c snil)
+  castFound _ _ _ (_ ∷ _) nothing = nothing
+
+  castFlds : Decl → List Ty → List Fld → List Raw → Maybe Spine
+  castFlds _ _ [] [] = just snil
+  castFlds d as (f ∷ fs) (r ∷ rs) =
+    bindM (inst d as f) (λ A →
+      bindM (cast A r) (λ v →
+        bindM (castFlds d as fs rs) (λ sp → just (scons A v sp))))
+  castFlds _ _ _ _ = nothing
+
+mutual
+  evalExpr : ∀ {A} → ValExpr A → Maybe (Val A)
+  evalExpr (lit v) = just v
+  evalExpr (var _) = nothing
+  evalExpr (call {A} f as) =
+    bindM (evalArgs as) (λ vs → bindM (apply runs f vs) (cast A))
+
+  evalArgs : List VArg → Maybe (List Raw)
+  evalArgs [] = just []
+  evalArgs (varg _ e ∷ as) =
+    bindM (evalArg e) (λ v → bindM (evalArgs as) (λ vs → just (v ∷ vs)))
+
+  evalArg : ∀ {B} → ValExpr B → Maybe Raw
+  evalArg (lit v) = rawOf v
+  evalArg (var _) = nothing
+  evalArg (call {B} f as) = bindM (evalExpr (call {B} f as)) rawOf
+
+-- A literal is in scope when it inhabits its type. A variable is in
+-- scope when the innermost binding of its name has that type. A call
+-- is in scope when evaluation returns a value of the
+-- claimed type and that value inhabits the type. The context does
+-- not bind the function: a run definition has no seat.
+data ValExprOk : Ctx → ∀ {A} → ValExpr A → Set where
+  lit-ok  : ∀ {Γ A} {v : Val A} → fits v ≡ true → ValExprOk Γ (lit v)
+  var-ok  : ∀ {Γ A} {x : String} → x ∈ Γ ∷ A → ValExprOk Γ (var {A} x)
+  call-ok : ∀ {Γ A f as v} →
+    evalExpr (call {A} f as) ≡ just v →
+    fits v ≡ true →
+    ValExprOk Γ (call {A} f as)
+
+sentOf : ∀ {A} → Maybe (Val A) → Bool
+sentOf nothing = false
+sentOf (just v) = fits v
+
+-- A bound variable inhabits the type it was bound at. A call inhabits
+-- the type when evaluation returns an inhabitant.
 sent : ∀ {A} → ValExpr A → Bool
 sent (lit v) = fits v
 sent (var _) = true
+sent {A} (call f as) = sentOf (evalExpr (call {A} f as))
+
+decTrue : (b : Bool) → Dec (b ≡ true)
+decTrue true = yes′ refl
+decTrue false = no′ false≢true
 
 sent? : ∀ {A} (v : ValExpr A) → Dec (sent v ≡ true)
-sent? (lit v) with fits v
-... | true = yes′ refl
-... | false = no′ (λ p → false≢true p)
+sent? (lit v) = decTrue (fits v)
 sent? (var _) = yes′ refl
+sent? {A} (call f as) = decTrue (sent {A} (call f as))
 
 ------------------------------------------------------------------------
 -- A received nat instantiates the lengths that name it. `none` is
@@ -587,6 +980,12 @@ toℕ (suc n) = nsuc (toℕ n)
 natExp : ValExpr nat → NExp
 natExp (lit v) = nlit (toℕ v)
 natExp (var x) = nvar x
+natExp (call f as) = computedNat (evalExpr (call {nat} f as))
+  where
+  -- A failed evaluation is not a numeral and not a name in scope.
+  computedNat : Maybe (Val nat) → NExp
+  computedNat (just v) = nlit (toℕ v)
+  computedNat nothing = nvar " "
 
 -- A length comes from a nat. Another payload does not instantiate one.
 ixOf : (A : Ty) → ValExpr A → NExp
@@ -623,6 +1022,10 @@ data Le (Γ : Ctx) : ValExpr nat → NExp → Set where
   lit-le  : ∀ {m n} → toℕ m ≤ n → Le Γ (lit m) (nlit n)
   zero-le : ∀ {y} → Le Γ (lit zero) (nvar y)
   same-le : ∀ {x} → Once x Γ → Le Γ (var x) (nvar x)
+  call-le : ∀ {f as v e} →
+    evalExpr (call {nat} f as) ≡ just v →
+    Le Γ (lit v) e →
+    Le Γ (call f as) e
 
 data Owed (Γ : Ctx) (v : ValExpr nat) : Maybe NExp → Set where
   owed : ∀ {e} → Le Γ v e → Owed Γ v (just e)
@@ -632,67 +1035,131 @@ data Owed (Γ : Ctx) (v : ValExpr nat) : Maybe NExp → Set where
 -- extends the substitution with the value. A dependent receive
 -- extends it with the process's name for that binder. The protocol
 -- in the index is the protocol as written.
-data Conformsρ (Γ : Ctx) (ρ : Idx) : Proc → Proto → Set where
-  done-end : Conformsρ Γ ρ done end
+--
+-- A match covers a bit with two arms, `b0` then `b1`, or a declared
+-- data type with one arm per constructor, in declaration order. Each
+-- arm conforms to the same continuation. A nat, unit, a pair, a
+-- record, a vector, or the wrong number of arms does not cover.
+mutual
+  data Covered : Ty → List Proc → Set where
+    bit-cov : ∀ {p q} → Covered bit (p ∷ q ∷ [])
+    dat-cov : ∀ {d as ps} → length ps ≡ length (ctorsOf d) → Covered (dat d as) ps
 
-  abandon : ∀ {S} → Conformsρ Γ ρ stop S
+  data Arms (Γ : Ctx) (ρ : Idx) : List Proc → Proto → Set where
+    arms-nil  : ∀ {S} → Arms Γ ρ [] S
+    arms-cons : ∀ {p ps S} →
+      Conformsρ Γ ρ p S →
+      Arms Γ ρ ps S →
+      Arms Γ ρ (p ∷ ps) S
 
-  put-ok : ∀ {A B v P S} →
-    A ≡ applyTy ρ B →
-    ValExprOk Γ v →
-    Conformsρ Γ ρ P S →
-    Conformsρ Γ ρ (put A v P) (send B S)
+  data Conformsρ (Γ : Ctx) (ρ : Idx) : Proc → Proto → Set where
+    done-end : Conformsρ Γ ρ done end
 
-  get-ok : ∀ {A B x P S} →
-    A ≡ applyTy ρ B →
-    Conformsρ ((x , A) ∷ Γ) ρ P S →
-    Conformsρ Γ ρ (get A x P) (recv B S)
+    abandon : ∀ {S} → Conformsρ Γ ρ stop S
 
-  dput-ok : ∀ {A B y v P S} →
-    A ≡ applyTy ρ B →
-    ValExprOk Γ v →
-    Conformsρ Γ (bind y (ixOf A v) (shadow y ρ)) P S →
-    Conformsρ Γ ρ (put A v P) (dsend y B S)
+    put-ok : ∀ {A B v P S} →
+      A ≡ applyTy ρ B →
+      ValExprOk Γ v →
+      Conformsρ Γ ρ P S →
+      Conformsρ Γ ρ (put A v P) (send B S)
 
-  dget-ok : ∀ {A B x y P S} →
-    A ≡ applyTy ρ B →
-    Conformsρ ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) P S →
-    Conformsρ Γ ρ (get A x P) (drecv y B S)
+    get-ok : ∀ {A B x P S} →
+      A ≡ applyTy ρ B →
+      Conformsρ ((x , A) ∷ Γ) ρ P S →
+      Conformsρ Γ ρ (get A x P) (recv B S)
 
-  -- The evidence is a premise. The process puts the nat alone.
-  eput-ok : ∀ {y e v P S} →
-    ValExprOk Γ v →
-    Owed Γ v (resolve ρ e) →
-    Conformsρ Γ ρ P S →
-    Conformsρ Γ ρ (put nat v P) (esend y e S)
+    dput-ok : ∀ {A B y v P S} →
+      A ≡ applyTy ρ B →
+      ValExprOk Γ v →
+      Conformsρ Γ (bind y (ixOf A v) (shadow y ρ)) P S →
+      Conformsρ Γ ρ (put A v P) (dsend y B S)
 
-  eget-ok : ∀ {y e x P S} →
-    Conformsρ ((x , nat) ∷ Γ) ρ P S →
-    Conformsρ Γ ρ (get nat x P) (erecv y e S)
+    dget-ok : ∀ {A B x y P S} →
+      A ≡ applyTy ρ B →
+      Conformsρ ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) P S →
+      Conformsρ Γ ρ (get A x P) (drecv y B S)
 
-  -- The literal selects the arm. A variable bit has no rule.
-  iput0-ok : ∀ {y P S T} →
-    Conformsρ Γ (shadow y ρ) P S →
-    Conformsρ Γ ρ (put bit (lit b0) P) (isend y S T)
+    -- The evidence is a premise. The process puts the nat alone.
+    eput-ok : ∀ {y e v P S} →
+      ValExprOk Γ v →
+      Owed Γ v (resolve ρ e) →
+      Conformsρ Γ ρ P S →
+      Conformsρ Γ ρ (put nat v P) (esend y e S)
 
-  iput1-ok : ∀ {y P S T} →
-    Conformsρ Γ (shadow y ρ) P T →
-    Conformsρ Γ ρ (put bit (lit b1) P) (isend y S T)
+    eget-ok : ∀ {y e x P S} →
+      Conformsρ ((x , nat) ∷ Γ) ρ P S →
+      Conformsρ Γ ρ (get nat x P) (erecv y e S)
 
-  -- Both arms are checked. The name is bound at bit in each.
-  -- The bit does not instantiate a length.
-  iget-ok : ∀ {x y P Q S T} →
-    Conformsρ ((x , bit) ∷ Γ) (shadow y ρ) P S →
-    Conformsρ ((x , bit) ∷ Γ) (shadow y ρ) Q T →
-    Conformsρ Γ ρ (iget x P Q) (irecv y S T)
+    -- The literal selects the arm. A variable bit has no rule.
+    iput0-ok : ∀ {y P S T} →
+      Conformsρ Γ (shadow y ρ) P S →
+      Conformsρ Γ ρ (put bit (lit b0) P) (isend y S T)
 
-  pick0-ok : ∀ {P S T} → Conformsρ Γ ρ P S → Conformsρ Γ ρ (pick0 P) (choose S T)
-  pick1-ok : ∀ {P S T} → Conformsρ Γ ρ P T → Conformsρ Γ ρ (pick1 P) (choose S T)
+    iput1-ok : ∀ {y P S T} →
+      Conformsρ Γ (shadow y ρ) P T →
+      Conformsρ Γ ρ (put bit (lit b1) P) (isend y S T)
 
-  cover-ok : ∀ {P Q S T} → Conformsρ Γ ρ P S → Conformsρ Γ ρ Q T → Conformsρ Γ ρ (cover P Q) (branch S T)
+    -- Both arms are checked. The name is bound at bit in each.
+    -- The bit does not instantiate a length.
+    iget-ok : ∀ {x y P Q S T} →
+      Conformsρ ((x , bit) ∷ Γ) (shadow y ρ) P S →
+      Conformsρ ((x , bit) ∷ Γ) (shadow y ρ) Q T →
+      Conformsρ Γ ρ (iget x P Q) (irecv y S T)
+
+    pick0-ok : ∀ {P S T} → Conformsρ Γ ρ P S → Conformsρ Γ ρ (pick0 P) (choose S T)
+    pick1-ok : ∀ {P S T} → Conformsρ Γ ρ P T → Conformsρ Γ ρ (pick1 P) (choose S T)
+
+    cover-ok : ∀ {P Q S T} → Conformsρ Γ ρ P S → Conformsρ Γ ρ Q T → Conformsρ Γ ρ (cover P Q) (branch S T)
+
+    -- The name is the one `mget` just bound. Each arm is that continuation.
+    mget-ok : ∀ {A B x ps S} →
+      A ≡ applyTy ρ B →
+      Covered A ps →
+      Arms ((x , A) ∷ Γ) ρ ps S →
+      Conformsρ Γ ρ (mget A x ps) (recv B S)
 
 Conforms : Ctx → Proc → Proto → Set
 Conforms Γ P S = Conformsρ Γ none P S
+
+-- The value a call computes, or the literal. A variable is not a
+-- concrete value, so it selects no arm.
+ground : ∀ {A} → ValExpr A → Maybe (Val A)
+ground (lit v) = just v
+ground (var _) = nothing
+ground {A} (call f as) = evalExpr (call {A} f as)
+
+-- `pickCtor` receives the Boolean comparison. `nthProc` makes it.
+-- A meeting follows that same comparison, so the equality is the one
+-- `pickCtor` computes. The false branch is the tail of the constructor list.
+mutual
+  pickCtor : Bool → Proc → List Ctor → String → List Proc → Maybe Proc
+  pickCtor true p _ _ _ = just p
+  pickCtor false _ cs name ps = nthProc cs name ps
+
+  nthProc : List Ctor → String → List Proc → Maybe Proc
+  nthProc [] _ _ = nothing
+  nthProc (_ ∷ _) _ [] = nothing
+  nthProc (ctor n _ ∷ cs) c (p ∷ ps) = pickCtor (c == n) p cs c ps
+
+armOf : (A : Ty) → Val A → List Proc → Maybe Proc
+armOf bit b0 (p ∷ _ ∷ []) = just p
+armOf bit b1 (_ ∷ q ∷ []) = just q
+armOf bit _ _ = nothing
+armOf nat _ _ = nothing
+armOf unit _ _ = nothing
+armOf (pair _ _) _ _ = nothing
+armOf (rec _) _ _ = nothing
+armOf (vec _ _) _ _ = nothing
+armOf (dat d _) (con c _) ps = nthProc (ctorsOf d) c ps
+
+-- One function for the value `ground` returns, so a meeting can
+-- follow that step by congruence. `nothing` selects no arm.
+armStep : ∀ {A} → List Proc → Maybe (Val A) → Maybe Proc
+armStep _ nothing = nothing
+armStep ps (just u) = armOf _ u ps
+
+armExpr : ∀ {A} → ValExpr A → List Proc → Maybe Proc
+armExpr v ps = armStep ps (ground v)
 
 ------------------------------------------------------------------------
 -- A protocol is well formed when every length is a numeral or a nat
@@ -883,6 +1350,12 @@ decideValExpr Γ (lit v) with fits v in eq
 decideValExpr {A} Γ (var x) with x ∈? Γ ∷? A
 ... | yes′ p = yes′ (var-ok p)
 ... | no′ np = no′ (λ { (var-ok p) → np p })
+decideValExpr Γ (call {A} f as) with evalExpr (call {A} f as) in eq
+... | nothing = no′ (λ { (call-ok p _) → just≢nothing (trans (sym p) eq) })
+... | just v with fits v in fq
+... | true = yes′ (call-ok eq fq)
+... | false = no′ (λ { (call-ok p r) →
+    true≢false (trans (sym r) (trans (cong fits (just-inj (trans (sym p) eq))) fq)) })
 
 put-type : ∀ {Γ ρ A B v P S} → Conformsρ Γ ρ (put A v P) (send B S) → A ≡ applyTy ρ B
 put-type (put-ok eq _ _) = eq
@@ -945,6 +1418,22 @@ once? x ((y , _) ∷ Γ) | no′ ¬eq with once? x Γ
 ...   | yes′ o = yes′ (later ¬eq o)
 ...   | no′ no-o = no′ (λ { (first _) → ¬eq refl ; (later _ o) → no-o o })
 
+zero≢suc : ∀ {n} → zero ≢ suc n
+zero≢suc ()
+
+-- The computed numeral owes what that numeral owes. No recursive call:
+-- `v` is the result of evaluation, not a subterm of the call.
+leCall : ∀ {Γ f as} (v : Val nat) →
+  evalExpr (call {nat} f as) ≡ just v →
+  (e : NExp) → Dec (Le Γ (call f as) e)
+leCall v eq (nlit n) with toℕ v ≤?ℕ n
+... | yes′ p = yes′ (call-le eq (lit-le p))
+... | no′ np = no′ (λ { (call-le p (lit-le q)) →
+    np (subst (λ w → toℕ w ≤ n) (just-inj (trans (sym p) eq)) q) })
+leCall zero eq (nvar _) = yes′ (call-le eq zero-le)
+leCall (suc _) eq (nvar _) = no′ (λ { (call-le p zero-le) →
+  zero≢suc (just-inj (trans (sym p) eq)) })
+
 le? : (Γ : Ctx) (v : ValExpr nat) (e : NExp) → Dec (Le Γ v e)
 le? Γ (lit m) (nlit n) with toℕ m ≤?ℕ n
 ... | yes′ p = yes′ (lit-le p)
@@ -957,6 +1446,9 @@ le? Γ (var x) (nvar y) with x ≟ y
 ... | yes′ refl with once? x Γ
 ...   | yes′ o = yes′ (same-le o)
 ...   | no′ no-o = no′ (λ { (same-le o) → no-o o })
+le? Γ (call f as) e with evalExpr (call {nat} f as) in eq
+... | nothing = no′ (λ { (call-le p _) → just≢nothing (trans (sym p) eq) })
+... | just v = leCall v eq e
 
 owed? : (Γ : Ctx) (v : ValExpr nat) (m : Maybe NExp) → Dec (Owed Γ v m)
 owed? Γ v nothing = no′ (λ ())
@@ -989,6 +1481,7 @@ isend-bit (lit b0) (no nd) _ = no (λ { (iput0-ok d) → nd d })
 isend-bit (lit b1) _ (yes d) = yes (iput1-ok d)
 isend-bit (lit b1) _ (no nd) = no (λ { (iput1-ok d) → nd d })
 isend-bit (var _) _ _ = no (λ ())
+isend-bit (call _ _) _ _ = no (λ ())
 
 on-iget : ∀ {Γ ρ x y P Q S T} →
   Answerρ ((x , bit) ∷ Γ) (shadow y ρ) P S →
@@ -1011,96 +1504,145 @@ both-of (yes d) (yes e) = yes (cover-ok d e)
 both-of (no nd) _ = no (λ { (cover-ok d _) → nd d })
 both-of (yes _) (no nd) = no (λ { (cover-ok _ e) → nd e })
 
-decideρ : (Γ : Ctx) (ρ : Idx) (P : Proc) (S : Proto) → Answerρ Γ ρ P S
-decideρ Γ ρ done end = yes done-end
-decideρ Γ ρ done (send _ _) = no (λ ())
-decideρ Γ ρ done (recv _ _) = no (λ ())
-decideρ Γ ρ done (dsend _ _ _) = no (λ ())
-decideρ Γ ρ done (drecv _ _ _) = no (λ ())
-decideρ Γ ρ done (esend _ _ _) = no (λ ())
-decideρ Γ ρ done (erecv _ _ _) = no (λ ())
-decideρ Γ ρ done (isend _ _ _) = no (λ ())
-decideρ Γ ρ done (irecv _ _ _) = no (λ ())
-decideρ Γ ρ done (choose _ _) = no (λ ())
-decideρ Γ ρ done (branch _ _) = no (λ ())
-decideρ Γ ρ stop _ = yes abandon
-decideρ Γ ρ (put A v P) (send B S) = on-put (ty≟ A (applyTy ρ B)) (decideValExpr Γ v) (decideρ Γ ρ P S)
-decideρ Γ ρ (put A v P) (dsend y B S) with ty≟ A (applyTy ρ B)
-... | yes′ refl = on-dput (decideValExpr Γ v) (decideρ Γ (bind y (ixOf (applyTy ρ B) v) (shadow y ρ)) P S)
-... | no′ ¬eq = no (λ d → ¬eq (dput-type d))
-decideρ Γ ρ (put A v P) (esend y e S) with ty≟ A nat
-... | yes′ refl = on-eput (decideValExpr Γ v) (owed? Γ v (resolve ρ e)) (decideρ Γ ρ P S)
-... | no′ ¬eq = no (λ { (eput-ok _ _ _) → ¬eq refl })
-decideρ Γ ρ (put A v P) (isend y S T) with ty≟ A bit
-... | yes′ refl = isend-bit v (decideρ Γ (shadow y ρ) P S) (decideρ Γ (shadow y ρ) P T)
-... | no′ ¬eq = no (λ { (iput0-ok _) → ¬eq refl ; (iput1-ok _) → ¬eq refl })
-decideρ Γ ρ (put _ _ _) (erecv _ _ _) = no (λ ())
-decideρ Γ ρ (put _ _ _) (irecv _ _ _) = no (λ ())
-decideρ Γ ρ (put _ _ _) end = no (λ ())
-decideρ Γ ρ (put _ _ _) (recv _ _) = no (λ ())
-decideρ Γ ρ (put _ _ _) (drecv _ _ _) = no (λ ())
-decideρ Γ ρ (put _ _ _) (choose _ _) = no (λ ())
-decideρ Γ ρ (put _ _ _) (branch _ _) = no (λ ())
-decideρ Γ ρ (get A x P) (recv B S) = on-get (ty≟ A (applyTy ρ B)) (decideρ ((x , A) ∷ Γ) ρ P S)
-decideρ Γ ρ (get A x P) (drecv y B S) with ty≟ A (applyTy ρ B)
-... | yes′ refl = on-dget (decideρ ((x , applyTy ρ B) ∷ Γ) (renameIdx y x (shadow y ρ)) P S)
-... | no′ ¬eq = no (λ d → ¬eq (dget-type d))
-decideρ Γ ρ (get A x P) (erecv y e S) with ty≟ A nat
-... | yes′ refl = on-eget (decideρ ((x , nat) ∷ Γ) ρ P S)
-... | no′ ¬eq = no (λ { (eget-ok _) → ¬eq refl })
-decideρ Γ ρ (iget x P Q) (irecv y S T) =
-  on-iget (decideρ ((x , bit) ∷ Γ) (shadow y ρ) P S) (decideρ ((x , bit) ∷ Γ) (shadow y ρ) Q T)
-decideρ Γ ρ (get _ _ _) (esend _ _ _) = no (λ ())
-decideρ Γ ρ (get _ _ _) (isend _ _ _) = no (λ ())
-decideρ Γ ρ (get _ _ _) (irecv _ _ _) = no (λ ())
-decideρ Γ ρ (get _ _ _) end = no (λ ())
-decideρ Γ ρ (get _ _ _) (send _ _) = no (λ ())
-decideρ Γ ρ (get _ _ _) (dsend _ _ _) = no (λ ())
-decideρ Γ ρ (get _ _ _) (choose _ _) = no (λ ())
-decideρ Γ ρ (get _ _ _) (branch _ _) = no (λ ())
-decideρ Γ ρ (iget _ _ _) end = no (λ ())
-decideρ Γ ρ (iget _ _ _) (send _ _) = no (λ ())
-decideρ Γ ρ (iget _ _ _) (recv _ _) = no (λ ())
-decideρ Γ ρ (iget _ _ _) (dsend _ _ _) = no (λ ())
-decideρ Γ ρ (iget _ _ _) (drecv _ _ _) = no (λ ())
-decideρ Γ ρ (iget _ _ _) (esend _ _ _) = no (λ ())
-decideρ Γ ρ (iget _ _ _) (erecv _ _ _) = no (λ ())
-decideρ Γ ρ (iget _ _ _) (isend _ _ _) = no (λ ())
-decideρ Γ ρ (iget _ _ _) (choose _ _) = no (λ ())
-decideρ Γ ρ (iget _ _ _) (branch _ _) = no (λ ())
-decideρ Γ ρ (pick0 P) (choose S _) = at0 (decideρ Γ ρ P S)
-decideρ Γ ρ (pick0 _) end = no (λ ())
-decideρ Γ ρ (pick0 _) (send _ _) = no (λ ())
-decideρ Γ ρ (pick0 _) (recv _ _) = no (λ ())
-decideρ Γ ρ (pick0 _) (dsend _ _ _) = no (λ ())
-decideρ Γ ρ (pick0 _) (drecv _ _ _) = no (λ ())
-decideρ Γ ρ (pick0 _) (esend _ _ _) = no (λ ())
-decideρ Γ ρ (pick0 _) (erecv _ _ _) = no (λ ())
-decideρ Γ ρ (pick0 _) (isend _ _ _) = no (λ ())
-decideρ Γ ρ (pick0 _) (irecv _ _ _) = no (λ ())
-decideρ Γ ρ (pick0 _) (branch _ _) = no (λ ())
-decideρ Γ ρ (pick1 P) (choose _ T) = at1 (decideρ Γ ρ P T)
-decideρ Γ ρ (pick1 _) end = no (λ ())
-decideρ Γ ρ (pick1 _) (send _ _) = no (λ ())
-decideρ Γ ρ (pick1 _) (recv _ _) = no (λ ())
-decideρ Γ ρ (pick1 _) (dsend _ _ _) = no (λ ())
-decideρ Γ ρ (pick1 _) (drecv _ _ _) = no (λ ())
-decideρ Γ ρ (pick1 _) (esend _ _ _) = no (λ ())
-decideρ Γ ρ (pick1 _) (erecv _ _ _) = no (λ ())
-decideρ Γ ρ (pick1 _) (isend _ _ _) = no (λ ())
-decideρ Γ ρ (pick1 _) (irecv _ _ _) = no (λ ())
-decideρ Γ ρ (pick1 _) (branch _ _) = no (λ ())
-decideρ Γ ρ (cover P Q) (branch S T) = both-of (decideρ Γ ρ P S) (decideρ Γ ρ Q T)
-decideρ Γ ρ (cover _ _) end = no (λ ())
-decideρ Γ ρ (cover _ _) (send _ _) = no (λ ())
-decideρ Γ ρ (cover _ _) (recv _ _) = no (λ ())
-decideρ Γ ρ (cover _ _) (dsend _ _ _) = no (λ ())
-decideρ Γ ρ (cover _ _) (drecv _ _ _) = no (λ ())
-decideρ Γ ρ (cover _ _) (esend _ _ _) = no (λ ())
-decideρ Γ ρ (cover _ _) (erecv _ _ _) = no (λ ())
-decideρ Γ ρ (cover _ _) (isend _ _ _) = no (λ ())
-decideρ Γ ρ (cover _ _) (irecv _ _ _) = no (λ ())
-decideρ Γ ρ (cover _ _) (choose _ _) = no (λ ())
+data AnswerArms (Γ : Ctx) (ρ : Idx) (ps : List Proc) (S : Proto) : Set where
+  yes-arms : Arms Γ ρ ps S → AnswerArms Γ ρ ps S
+  no-arms  : ¬ Arms Γ ρ ps S → AnswerArms Γ ρ ps S
+
+cover? : (A : Ty) (ps : List Proc) → Dec (Covered A ps)
+cover? bit [] = no′ (λ ())
+cover? bit (_ ∷ []) = no′ (λ ())
+cover? bit (_ ∷ _ ∷ []) = yes′ bit-cov
+cover? bit (_ ∷ _ ∷ _ ∷ _) = no′ (λ ())
+cover? nat _ = no′ (λ ())
+cover? unit _ = no′ (λ ())
+cover? (pair _ _) _ = no′ (λ ())
+cover? (rec _) _ = no′ (λ ())
+cover? (vec _ _) _ = no′ (λ ())
+cover? (dat d _) ps with length ps ≟ℕ length (ctorsOf d)
+... | yes′ eq = yes′ (dat-cov eq)
+... | no′ ¬eq = no′ (λ { (dat-cov eq) → ¬eq eq })
+
+on-mget : ∀ {Γ ρ A B x ps S} →
+  Dec (A ≡ applyTy ρ B) →
+  Dec (Covered A ps) →
+  AnswerArms ((x , A) ∷ Γ) ρ ps S →
+  Answerρ Γ ρ (mget A x ps) (recv B S)
+on-mget (yes′ refl) (yes′ c) (yes-arms ds) = yes (mget-ok refl c ds)
+on-mget (yes′ refl) (yes′ _) (no-arms nd) = no (λ { (mget-ok refl _ ds) → nd ds })
+on-mget (yes′ refl) (no′ nc) _ = no (λ { (mget-ok refl c _) → nc c })
+on-mget (no′ ¬eq) _ _ = no (λ { (mget-ok eq _ _) → ¬eq eq })
+
+mutual
+  decideArms : (Γ : Ctx) (ρ : Idx) (ps : List Proc) (S : Proto) → AnswerArms Γ ρ ps S
+  decideArms Γ ρ [] _ = yes-arms arms-nil
+  decideArms Γ ρ (p ∷ ps) S with decideρ Γ ρ p S
+  ... | no nd = no-arms (λ { (arms-cons d _) → nd d })
+  ... | yes d with decideArms Γ ρ ps S
+  ... | yes-arms ds = yes-arms (arms-cons d ds)
+  ... | no-arms nd = no-arms (λ { (arms-cons _ ds) → nd ds })
+
+  decideρ : (Γ : Ctx) (ρ : Idx) (P : Proc) (S : Proto) → Answerρ Γ ρ P S
+  decideρ Γ ρ done end = yes done-end
+  decideρ Γ ρ done (send _ _) = no (λ ())
+  decideρ Γ ρ done (recv _ _) = no (λ ())
+  decideρ Γ ρ done (dsend _ _ _) = no (λ ())
+  decideρ Γ ρ done (drecv _ _ _) = no (λ ())
+  decideρ Γ ρ done (esend _ _ _) = no (λ ())
+  decideρ Γ ρ done (erecv _ _ _) = no (λ ())
+  decideρ Γ ρ done (isend _ _ _) = no (λ ())
+  decideρ Γ ρ done (irecv _ _ _) = no (λ ())
+  decideρ Γ ρ done (choose _ _) = no (λ ())
+  decideρ Γ ρ done (branch _ _) = no (λ ())
+  decideρ Γ ρ stop _ = yes abandon
+  decideρ Γ ρ (put A v P) (send B S) = on-put (ty≟ A (applyTy ρ B)) (decideValExpr Γ v) (decideρ Γ ρ P S)
+  decideρ Γ ρ (put A v P) (dsend y B S) with ty≟ A (applyTy ρ B)
+  ... | yes′ refl = on-dput (decideValExpr Γ v) (decideρ Γ (bind y (ixOf (applyTy ρ B) v) (shadow y ρ)) P S)
+  ... | no′ ¬eq = no (λ d → ¬eq (dput-type d))
+  decideρ Γ ρ (put A v P) (esend y e S) with ty≟ A nat
+  ... | yes′ refl = on-eput (decideValExpr Γ v) (owed? Γ v (resolve ρ e)) (decideρ Γ ρ P S)
+  ... | no′ ¬eq = no (λ { (eput-ok _ _ _) → ¬eq refl })
+  decideρ Γ ρ (put A v P) (isend y S T) with ty≟ A bit
+  ... | yes′ refl = isend-bit v (decideρ Γ (shadow y ρ) P S) (decideρ Γ (shadow y ρ) P T)
+  ... | no′ ¬eq = no (λ { (iput0-ok _) → ¬eq refl ; (iput1-ok _) → ¬eq refl })
+  decideρ Γ ρ (put _ _ _) (erecv _ _ _) = no (λ ())
+  decideρ Γ ρ (put _ _ _) (irecv _ _ _) = no (λ ())
+  decideρ Γ ρ (put _ _ _) end = no (λ ())
+  decideρ Γ ρ (put _ _ _) (recv _ _) = no (λ ())
+  decideρ Γ ρ (put _ _ _) (drecv _ _ _) = no (λ ())
+  decideρ Γ ρ (put _ _ _) (choose _ _) = no (λ ())
+  decideρ Γ ρ (put _ _ _) (branch _ _) = no (λ ())
+  decideρ Γ ρ (get A x P) (recv B S) = on-get (ty≟ A (applyTy ρ B)) (decideρ ((x , A) ∷ Γ) ρ P S)
+  decideρ Γ ρ (get A x P) (drecv y B S) with ty≟ A (applyTy ρ B)
+  ... | yes′ refl = on-dget (decideρ ((x , applyTy ρ B) ∷ Γ) (renameIdx y x (shadow y ρ)) P S)
+  ... | no′ ¬eq = no (λ d → ¬eq (dget-type d))
+  decideρ Γ ρ (get A x P) (erecv y e S) with ty≟ A nat
+  ... | yes′ refl = on-eget (decideρ ((x , nat) ∷ Γ) ρ P S)
+  ... | no′ ¬eq = no (λ { (eget-ok _) → ¬eq refl })
+  decideρ Γ ρ (iget x P Q) (irecv y S T) =
+    on-iget (decideρ ((x , bit) ∷ Γ) (shadow y ρ) P S) (decideρ ((x , bit) ∷ Γ) (shadow y ρ) Q T)
+  decideρ Γ ρ (get _ _ _) (esend _ _ _) = no (λ ())
+  decideρ Γ ρ (get _ _ _) (isend _ _ _) = no (λ ())
+  decideρ Γ ρ (get _ _ _) (irecv _ _ _) = no (λ ())
+  decideρ Γ ρ (get _ _ _) end = no (λ ())
+  decideρ Γ ρ (get _ _ _) (send _ _) = no (λ ())
+  decideρ Γ ρ (get _ _ _) (dsend _ _ _) = no (λ ())
+  decideρ Γ ρ (get _ _ _) (choose _ _) = no (λ ())
+  decideρ Γ ρ (get _ _ _) (branch _ _) = no (λ ())
+  decideρ Γ ρ (iget _ _ _) end = no (λ ())
+  decideρ Γ ρ (iget _ _ _) (send _ _) = no (λ ())
+  decideρ Γ ρ (iget _ _ _) (recv _ _) = no (λ ())
+  decideρ Γ ρ (iget _ _ _) (dsend _ _ _) = no (λ ())
+  decideρ Γ ρ (iget _ _ _) (drecv _ _ _) = no (λ ())
+  decideρ Γ ρ (iget _ _ _) (esend _ _ _) = no (λ ())
+  decideρ Γ ρ (iget _ _ _) (erecv _ _ _) = no (λ ())
+  decideρ Γ ρ (iget _ _ _) (isend _ _ _) = no (λ ())
+  decideρ Γ ρ (iget _ _ _) (choose _ _) = no (λ ())
+  decideρ Γ ρ (iget _ _ _) (branch _ _) = no (λ ())
+  decideρ Γ ρ (pick0 P) (choose S _) = at0 (decideρ Γ ρ P S)
+  decideρ Γ ρ (pick0 _) end = no (λ ())
+  decideρ Γ ρ (pick0 _) (send _ _) = no (λ ())
+  decideρ Γ ρ (pick0 _) (recv _ _) = no (λ ())
+  decideρ Γ ρ (pick0 _) (dsend _ _ _) = no (λ ())
+  decideρ Γ ρ (pick0 _) (drecv _ _ _) = no (λ ())
+  decideρ Γ ρ (pick0 _) (esend _ _ _) = no (λ ())
+  decideρ Γ ρ (pick0 _) (erecv _ _ _) = no (λ ())
+  decideρ Γ ρ (pick0 _) (isend _ _ _) = no (λ ())
+  decideρ Γ ρ (pick0 _) (irecv _ _ _) = no (λ ())
+  decideρ Γ ρ (pick0 _) (branch _ _) = no (λ ())
+  decideρ Γ ρ (pick1 P) (choose _ T) = at1 (decideρ Γ ρ P T)
+  decideρ Γ ρ (pick1 _) end = no (λ ())
+  decideρ Γ ρ (pick1 _) (send _ _) = no (λ ())
+  decideρ Γ ρ (pick1 _) (recv _ _) = no (λ ())
+  decideρ Γ ρ (pick1 _) (dsend _ _ _) = no (λ ())
+  decideρ Γ ρ (pick1 _) (drecv _ _ _) = no (λ ())
+  decideρ Γ ρ (pick1 _) (esend _ _ _) = no (λ ())
+  decideρ Γ ρ (pick1 _) (erecv _ _ _) = no (λ ())
+  decideρ Γ ρ (pick1 _) (isend _ _ _) = no (λ ())
+  decideρ Γ ρ (pick1 _) (irecv _ _ _) = no (λ ())
+  decideρ Γ ρ (pick1 _) (branch _ _) = no (λ ())
+  decideρ Γ ρ (cover P Q) (branch S T) = both-of (decideρ Γ ρ P S) (decideρ Γ ρ Q T)
+  decideρ Γ ρ (cover _ _) end = no (λ ())
+  decideρ Γ ρ (cover _ _) (send _ _) = no (λ ())
+  decideρ Γ ρ (cover _ _) (recv _ _) = no (λ ())
+  decideρ Γ ρ (cover _ _) (dsend _ _ _) = no (λ ())
+  decideρ Γ ρ (cover _ _) (drecv _ _ _) = no (λ ())
+  decideρ Γ ρ (cover _ _) (esend _ _ _) = no (λ ())
+  decideρ Γ ρ (cover _ _) (erecv _ _ _) = no (λ ())
+  decideρ Γ ρ (cover _ _) (isend _ _ _) = no (λ ())
+  decideρ Γ ρ (cover _ _) (irecv _ _ _) = no (λ ())
+  decideρ Γ ρ (cover _ _) (choose _ _) = no (λ ())
+  decideρ Γ ρ (mget A x ps) (recv B S) =
+    on-mget (ty≟ A (applyTy ρ B)) (cover? A ps) (decideArms ((x , A) ∷ Γ) ρ ps S)
+  decideρ Γ ρ (mget _ _ _) end = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (send _ _) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (dsend _ _ _) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (drecv _ _ _) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (esend _ _ _) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (erecv _ _ _) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (isend _ _ _) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (irecv _ _ _) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (choose _ _) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (branch _ _) = no (λ ())
 
 decide : (Γ : Ctx) (P : Proc) (S : Proto) → Answer Γ P S
 decide Γ P S = decideρ Γ none P S
@@ -1393,16 +1935,24 @@ data Skel : Set where
   choose1 : Skel → Skel
   offer   : Skel → Skel → Skel
   index   : String → Skel → Skel → Skel
+  -- The arms of a match. The value that selects one was heard just before.
+  pick    : List Skel → Skel
 
-skel : Proc → Skel
-skel done = finish
-skel stop = leave
-skel (put _ v P) = say v (skel P)
-skel (get A x P) = hear A x (skel P)
-skel (pick0 P) = choose0 (skel P)
-skel (pick1 P) = choose1 (skel P)
-skel (cover P Q) = offer (skel P) (skel Q)
-skel (iget x P Q) = index x (skel P) (skel Q)
+mutual
+  skel : Proc → Skel
+  skel done = finish
+  skel stop = leave
+  skel (put _ v P) = say v (skel P)
+  skel (get A x P) = hear A x (skel P)
+  skel (pick0 P) = choose0 (skel P)
+  skel (pick1 P) = choose1 (skel P)
+  skel (cover P Q) = offer (skel P) (skel Q)
+  skel (iget x P Q) = index x (skel P) (skel Q)
+  skel (mget A x ps) = hear A x (pick (skelAll ps))
+
+  skelAll : List Proc → List Skel
+  skelAll [] = []
+  skelAll (p ∷ ps) = skel p ∷ skelAll ps
 
 pong-skel : skel pong ≡ hear nat "x" (say (lit one) finish)
 pong-skel = refl
@@ -1440,14 +1990,20 @@ index-say = refl
 -- `finishes`.
 ------------------------------------------------------------------------
 
-data Ends : Proc → Set where
-  ends-done  : Ends done
-  ends-put   : ∀ {A v P} → Ends P → Ends (put A v P)
-  ends-get   : ∀ {A x P} → Ends P → Ends (get A x P)
-  ends-pick0 : ∀ {P} → Ends P → Ends (pick0 P)
-  ends-pick1 : ∀ {P} → Ends P → Ends (pick1 P)
-  ends-cover : ∀ {P Q} → Ends P → Ends Q → Ends (cover P Q)
-  ends-iget  : ∀ {x P Q} → Ends P → Ends Q → Ends (iget x P Q)
+mutual
+  data Ends : Proc → Set where
+    ends-done  : Ends done
+    ends-put   : ∀ {A v P} → Ends P → Ends (put A v P)
+    ends-get   : ∀ {A x P} → Ends P → Ends (get A x P)
+    ends-pick0 : ∀ {P} → Ends P → Ends (pick0 P)
+    ends-pick1 : ∀ {P} → Ends P → Ends (pick1 P)
+    ends-cover : ∀ {P Q} → Ends P → Ends Q → Ends (cover P Q)
+    ends-iget  : ∀ {x P Q} → Ends P → Ends Q → Ends (iget x P Q)
+    ends-mget  : ∀ {A x ps} → AllEnds ps → Ends (mget A x ps)
+
+  data AllEnds : List Proc → Set where
+    ends-nil  : AllEnds []
+    ends-cons : ∀ {P ps} → Ends P → AllEnds ps → AllEnds (P ∷ ps)
 
 data Finish (P : Proc) : Set where
   ends   : Ends P → Finish P
@@ -1479,15 +2035,34 @@ step-iget (ends d) (ends e) = ends (ends-iget d e)
 step-iget (leaves nd) _ = leaves (λ { (ends-iget d _) → nd d })
 step-iget (ends _) (leaves nd) = leaves (λ { (ends-iget _ e) → nd e })
 
-finishes : (P : Proc) → Finish P
-finishes done = ends ends-done
-finishes stop = leaves (λ ())
-finishes (put _ _ P) = step-put (finishes P)
-finishes (get _ _ P) = step-get (finishes P)
-finishes (pick0 P) = step-pick0 (finishes P)
-finishes (pick1 P) = step-pick1 (finishes P)
-finishes (cover P Q) = step-cover (finishes P) (finishes Q)
-finishes (iget x P Q) = step-iget (finishes P) (finishes Q)
+data FinishAll (ps : List Proc) : Set where
+  all-ends   : AllEnds ps → FinishAll ps
+  all-leaves : ¬ AllEnds ps → FinishAll ps
+
+step-all : ∀ {P ps} → Finish P → FinishAll ps → FinishAll (P ∷ ps)
+step-all (ends d) (all-ends e) = all-ends (ends-cons d e)
+step-all (leaves nd) _ = all-leaves (λ { (ends-cons d _) → nd d })
+step-all (ends _) (all-leaves ne) = all-leaves (λ { (ends-cons _ e) → ne e })
+
+step-mget : ∀ {A x ps} → FinishAll ps → Finish (mget A x ps)
+step-mget (all-ends d) = ends (ends-mget d)
+step-mget (all-leaves nd) = leaves (λ { (ends-mget d) → nd d })
+
+mutual
+  finishes : (P : Proc) → Finish P
+  finishes done = ends ends-done
+  finishes stop = leaves (λ ())
+  finishes (put _ _ P) = step-put (finishes P)
+  finishes (get _ _ P) = step-get (finishes P)
+  finishes (pick0 P) = step-pick0 (finishes P)
+  finishes (pick1 P) = step-pick1 (finishes P)
+  finishes (cover P Q) = step-cover (finishes P) (finishes Q)
+  finishes (iget x P Q) = step-iget (finishes P) (finishes Q)
+  finishes (mget _ _ ps) = step-mget (finishesAll ps)
+
+  finishesAll : (ps : List Proc) → FinishAll ps
+  finishesAll [] = all-ends ends-nil
+  finishesAll (p ∷ ps) = step-all (finishes p) (finishesAll ps)
 
 pong-finishes : finishes pong ≡ ends (ends-get (ends-put ends-done))
 pong-finishes = refl
@@ -1551,44 +2126,41 @@ pong-linear = linear pong-ok (ends-get (ends-put ends-done))
 -- the only way to `leave`, and `Ends` has no `stop`.
 ------------------------------------------------------------------------
 
-data NoLeave : Skel → Set where
-  finish-ok  : NoLeave finish
-  say-ok     : ∀ {A v k} → NoLeave k → NoLeave (say {A} v k)
-  hear-ok    : ∀ {A x k} → NoLeave k → NoLeave (hear A x k)
-  choose0-ok : ∀ {k} → NoLeave k → NoLeave (choose0 k)
-  choose1-ok : ∀ {k} → NoLeave k → NoLeave (choose1 k)
-  offer-ok   : ∀ {k q} → NoLeave k → NoLeave q → NoLeave (offer k q)
-  index-ok   : ∀ {x k q} → NoLeave k → NoLeave q → NoLeave (index x k q)
+mutual
+  data NoLeave : Skel → Set where
+    finish-ok  : NoLeave finish
+    say-ok     : ∀ {A v k} → NoLeave k → NoLeave (say {A} v k)
+    hear-ok    : ∀ {A x k} → NoLeave k → NoLeave (hear A x k)
+    choose0-ok : ∀ {k} → NoLeave k → NoLeave (choose0 k)
+    choose1-ok : ∀ {k} → NoLeave k → NoLeave (choose1 k)
+    offer-ok   : ∀ {k q} → NoLeave k → NoLeave q → NoLeave (offer k q)
+    index-ok   : ∀ {x k q} → NoLeave k → NoLeave q → NoLeave (index x k q)
+    pick-ok    : ∀ {ks} → AllLeave ks → NoLeave (pick ks)
 
-ends-no-leave : ∀ {P} → Ends P → NoLeave (skel P)
-ends-no-leave ends-done = finish-ok
-ends-no-leave (ends-put e) = say-ok (ends-no-leave e)
-ends-no-leave (ends-get e) = hear-ok (ends-no-leave e)
-ends-no-leave (ends-pick0 e) = choose0-ok (ends-no-leave e)
-ends-no-leave (ends-pick1 e) = choose1-ok (ends-no-leave e)
-ends-no-leave (ends-cover e f) = offer-ok (ends-no-leave e) (ends-no-leave f)
-ends-no-leave (ends-iget e f) = index-ok (ends-no-leave e) (ends-no-leave f)
+  data AllLeave : List Skel → Set where
+    leave-nil  : AllLeave []
+    leave-cons : ∀ {k ks} → NoLeave k → AllLeave ks → AllLeave (k ∷ ks)
+
+mutual
+  ends-no-leave : ∀ {P} → Ends P → NoLeave (skel P)
+  ends-no-leave ends-done = finish-ok
+  ends-no-leave (ends-put e) = say-ok (ends-no-leave e)
+  ends-no-leave (ends-get e) = hear-ok (ends-no-leave e)
+  ends-no-leave (ends-pick0 e) = choose0-ok (ends-no-leave e)
+  ends-no-leave (ends-pick1 e) = choose1-ok (ends-no-leave e)
+  ends-no-leave (ends-cover e f) = offer-ok (ends-no-leave e) (ends-no-leave f)
+  ends-no-leave (ends-iget e f) = index-ok (ends-no-leave e) (ends-no-leave f)
+  ends-no-leave (ends-mget e) = hear-ok (pick-ok (ends-all e))
+
+  ends-all : ∀ {ps} → AllEnds ps → AllLeave (skelAll ps)
+  ends-all ends-nil = leave-nil
+  ends-all (ends-cons e es) = leave-cons (ends-no-leave e) (ends-all es)
 
 ------------------------------------------------------------------------
 -- A declared data type is a payload. The constructors are the ones
 -- the declaration has. A constructor it does not have does not
 -- inhabit the type, and neither does a field of the wrong type.
 ------------------------------------------------------------------------
-
-boolDecl : Decl
-boolDecl = mkDecl "Bool" nzero (ctor "true" [] ∷ ctor "false" [] ∷ [])
-
-boolTy : Ty
-boolTy = dat boolDecl []
-
-trueV : Val boolTy
-trueV = con "true" snil
-
-falseV : Val boolTy
-falseV = con "false" snil
-
-noneV : Val boolTy
-noneV = con "none" snil
 
 flag : Proto
 flag = send boolTy end
@@ -1610,22 +2182,6 @@ bad-bool-decides = refl
 
 bool-formed : TyOk [] boolTy
 bool-formed = dat-ok refl tys-nil (ctors-cons flds-nil (ctors-cons flds-nil ctors-nil))
-
-maybeDecl : Decl
-maybeDecl = mkDecl "Maybe" (nsuc nzero)
-  (ctor "nothing" [] ∷ ctor "just" (fPar nzero ∷ []) ∷ [])
-
-maybeNat : Ty
-maybeNat = dat maybeDecl (nat ∷ [])
-
-nothingV : Val maybeNat
-nothingV = con "nothing" snil
-
-just0 : Val maybeNat
-just0 = con "just" (scons nat zero snil)
-
-justBit : Val maybeNat
-justBit = con "just" (scons bit b0 snil)
 
 opt : Proto
 opt = send maybeNat end
@@ -1703,3 +2259,208 @@ either-formed =
   dat-ok refl (tys-cons nat-ok (tys-cons bit-ok tys-nil))
     (ctors-cons (flds-cons (ff-par refl nat-ok) flds-nil)
       (ctors-cons (flds-cons (ff-par refl bit-ok) flds-nil) ctors-nil))
+
+------------------------------------------------------------------------
+-- A put of a run application. The value sent is the value computed.
+-- A result of the wrong type has no derivation. A value that does
+-- not inhabit the type has none either.
+------------------------------------------------------------------------
+
+effCall : ValExpr maybeBool
+effCall = call "effective" (varg itemTy (lit selfV) ∷ [])
+
+eff-sent : sent effCall ≡ true
+eff-sent = refl
+
+effReply : Proc
+effReply = put maybeBool effCall done
+
+effAnswer : Proto
+effAnswer = send maybeBool end
+
+effReply-ok : Conforms [] effReply effAnswer
+effReply-ok = put-ok refl (call-ok refl refl) done-end
+
+effReply-decides : decide [] effReply effAnswer ≡ yes effReply-ok
+effReply-decides = refl
+
+countCall : ValExpr boolTy
+countCall = call "count" []
+
+bad-count : ¬ Conforms [] (put boolTy countCall done) (send boolTy end)
+bad-count (put-ok refl (call-ok () _) _)
+
+bad-count-decides : decide [] (put boolTy countCall done) (send boolTy end) ≡ no bad-count
+bad-count-decides = refl
+
+badCall : ValExpr boolTy
+badCall = call "bad" []
+
+bad-eval : evalExpr badCall ≡ just noneV
+bad-eval = refl
+
+bad-fits : fits noneV ≡ false
+bad-fits = refl
+
+bad-fit : ¬ Conforms [] (put boolTy badCall done) (send boolTy end)
+bad-fit (put-ok refl (call-ok eq p) _) =
+  true≢false
+    (trans (sym p)
+      (trans (cong fits (just-inj (trans (sym eq) bad-eval))) bad-fits))
+
+bad-fit-decides : decide [] (put boolTy badCall done) (send boolTy end) ≡ no bad-fit
+bad-fit-decides = refl
+
+-- `effective` matches its argument and calls `mark`, declared before it.
+otherCall : ValExpr maybeBool
+otherCall = call "effective" (varg itemTy (lit otherV) ∷ [])
+
+eff-eval : evalExpr effCall ≡ just justTrue
+eff-eval = refl
+
+other-eval : evalExpr otherCall ≡ just nothingB
+other-eval = refl
+
+markCall : ValExpr boolTy
+markCall = call "mark" (varg itemTy (lit selfV) ∷ [])
+
+mark-eval : evalExpr markCall ≡ just trueV
+mark-eval = refl
+
+sizeSelf : ValExpr nat
+sizeSelf = call "size" (varg itemTy (lit selfV) ∷ [])
+
+sizeOther : ValExpr nat
+sizeOther = call "size" (varg itemTy (lit otherV) ∷ [])
+
+size-self-eval : evalExpr sizeSelf ≡ just zero
+size-self-eval = refl
+
+size-other-eval : evalExpr sizeOther ≡ just two
+size-other-eval = refl
+
+sizeCap : Proto
+sizeCap = esend "d" (nlit (nsuc nzero)) end
+
+size-le : Le [] sizeSelf (nlit (nsuc nzero))
+size-le = call-le size-self-eval (lit-le z≤n)
+
+size-under : Conforms [] (put nat sizeSelf done) sizeCap
+size-under = eput-ok (call-ok size-self-eval refl) (owed size-le) done-end
+
+two≰one : nsuc (nsuc nzero) ≤ nsuc nzero → ⊥
+two≰one (s≤s ())
+
+size-over : ¬ Conforms [] (put nat sizeOther done) sizeCap
+size-over (eput-ok _ (owed (call-le eq (lit-le q))) _) =
+  two≰one
+    (subst (λ w → toℕ w ≤ nsuc nzero)
+      (just-inj (trans (sym eq) size-other-eval)) q)
+
+loopCall : ValExpr nat
+loopCall = call "loop" (varg nat (lit zero) ∷ [])
+
+loop-eval : evalExpr loopCall ≡ nothing
+loop-eval = refl
+
+loop-refused : ¬ Conforms [] (put nat loopCall done) (send nat end)
+loop-refused (put-ok refl (call-ok () _) _)
+
+-- `plus 0 0` takes the arm that does not call `plus`. The body still
+-- calls itself, so the application does not evaluate.
+plusCall : ValExpr nat
+plusCall = call "plus" (varg nat (lit zero) ∷ varg nat (lit zero) ∷ [])
+
+plus-eval : evalExpr plusCall ≡ nothing
+plus-eval = refl
+
+plus-refused : ¬ Conforms [] (put nat plusCall done) (send nat end)
+plus-refused (put-ok refl (call-ok () _) _)
+
+earlyCall : ValExpr nat
+earlyCall = call "early" []
+
+early-eval : evalExpr earlyCall ≡ nothing
+early-eval = refl
+
+early-refused : ¬ Conforms [] (put nat earlyCall done) (send nat end)
+early-refused (put-ok refl (call-ok () _) _)
+
+lateCall : ValExpr nat
+lateCall = call "late" []
+
+late-eval : evalExpr lateCall ≡ just zero
+late-eval = refl
+
+------------------------------------------------------------------------
+-- A get followed by a match. Each arm conforms to the one
+-- continuation. The processes may differ. A short match, a nat, and
+-- a third arm do not cover.
+------------------------------------------------------------------------
+
+bitChoice : Proto
+bitChoice = recv bit (choose end end)
+
+bitTaker : Proc
+bitTaker = mget bit "b" (pick0 done ∷ pick1 done ∷ [])
+
+bitTaker-ok : Conforms [] bitTaker bitChoice
+bitTaker-ok =
+  mget-ok refl bit-cov
+    (arms-cons (pick0-ok done-end)
+      (arms-cons (pick1-ok done-end) arms-nil))
+
+bitTaker-decides : decide [] bitTaker bitChoice ≡ yes bitTaker-ok
+bitTaker-decides = refl
+
+boolChoice : Proto
+boolChoice = recv boolTy end
+
+boolTaker : Proc
+boolTaker = mget boolTy "b" (done ∷ done ∷ [])
+
+bool-taker-ok : Conforms [] boolTaker boolChoice
+bool-taker-ok = mget-ok refl (dat-cov refl) (arms-cons done-end (arms-cons done-end arms-nil))
+
+bool-taker-decides : decide [] boolTaker boolChoice ≡ yes bool-taker-ok
+bool-taker-decides = refl
+
+optChoice : Proto
+optChoice = recv maybeNat end
+
+optTaker : Proc
+optTaker = mget maybeNat "m" (done ∷ done ∷ [])
+
+opt-taker-ok : Conforms [] optTaker optChoice
+opt-taker-ok = mget-ok refl (dat-cov refl) (arms-cons done-end (arms-cons done-end arms-nil))
+
+opt-taker-decides : decide [] optTaker optChoice ≡ yes opt-taker-ok
+opt-taker-decides = refl
+
+shortMatch : Proc
+shortMatch = mget bit "b" (done ∷ [])
+
+short-refused : ¬ Conforms [] shortMatch (recv bit end)
+short-refused (mget-ok refl () _)
+
+short-decides : decide [] shortMatch (recv bit end) ≡ no short-refused
+short-decides = refl
+
+nat-match : Proc
+nat-match = mget nat "n" (done ∷ done ∷ [])
+
+nat-match-refused : ¬ Conforms [] nat-match (recv nat end)
+nat-match-refused (mget-ok refl () _)
+
+third-arm : Proc
+third-arm = mget bit "b" (done ∷ done ∷ done ∷ [])
+
+third-refused : ¬ Conforms [] third-arm (recv bit end)
+third-refused (mget-ok refl () _)
+
+-- A match finishes when every arm does. One abandoned arm does not.
+match-finishes : finishes bitTaker ≡ ends (ends-mget (ends-cons (ends-pick0 ends-done) (ends-cons (ends-pick1 ends-done) ends-nil)))
+match-finishes = refl
+
+match-skel : skel bitTaker ≡ hear bit "b" (pick (choose0 finish ∷ choose1 finish ∷ []))
+match-skel = refl

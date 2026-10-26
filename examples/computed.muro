@@ -1,0 +1,97 @@
+-- computed.muro — a put may be the value a run definition computes.
+-- A get may match on the received value and choose the next action.
+-- The meeting is evidence. A run definition has no seat.
+
+data Item : Type where
+  self : Item
+  other : Item
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+data Maybe (A : Type) : Type where
+  nothing : Maybe A
+  just : A → Maybe A
+
+def mark : run Π (f : Item) → Bool :=
+  λ (f : Item) →
+    match f motive (λ _ → Bool)
+      | self => true
+      | other => false
+
+def effective : run Π (+ f : Item) → Maybe Bool :=
+  λ (+ f : Item) →
+    match f motive (λ _ → Maybe Bool)
+      | self => just (mark f)
+      | other => nothing
+
+session answer := send (Maybe Bool) end
+
+session answer-back := dual answer
+
+conform reply : answer := put (effective self) done
+
+conform hear : answer-back := get (Maybe Bool) done
+
+meet reply-wire : reply with hear
+
+session flags := rec X. send (Maybe Bool) X
+
+session flags-back := dual flags
+
+conform loop : flags := rec X. put (effective self) X
+
+conform loop-back : flags-back := rec Y. get (m : Maybe Bool) Y
+
+meet loop-wire : loop with loop-back
+
+session choice := recv Bit (choose end (send Nat end))
+
+session offered := dual choice
+
+conform taker : choice := get (b : Bit) (match b pick0 done pick1 (put 0 done))
+
+conform giver : offered := put b0 (cover done (get Nat done))
+
+conform giver-one : offered := put b1 (cover done (get Nat done))
+
+meet arm0 : taker with giver
+
+meet arm1 : taker with giver-one
+
+session flag := recv Bool (choose end (send Nat end))
+
+session flag-back := dual flag
+
+conform flag-taker : flag := get (b : Bool) (match b pick0 done pick1 (put 1 done))
+
+conform flag-yes : flag-back := put true (cover done (get Nat done))
+
+conform flag-no : flag-back := put false (cover done (get Nat done))
+
+meet flag-yes-wire : flag-taker with flag-yes
+
+meet flag-no-wire : flag-taker with flag-no
+
+session opt := recv (Maybe Nat) end
+
+session opt-back := dual opt
+
+conform opt-taker : opt := get (m : Maybe Nat) (match m stop done)
+
+conform opt-none : opt-back := put nothing stop
+
+conform opt-some : opt-back := put (just 0) done
+
+meet opt-none-wire : opt-taker with opt-none
+
+meet opt-some-wire : opt-taker with opt-some
+
+session %1 closed := send (Maybe Bool) end
+
+conform finished : closed := put (effective self) done
+
+def pass : (s : answer) ⊸ answer := λ¹ (s : answer) → s
+
+def kept : run Nat := 0

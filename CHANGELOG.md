@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.16.65
+
+A put may send the value a `run` definition computes. A `get` may match on the received value and choose the next action.
+
+```
+def effective : run Π (+ f : Item) → Maybe Bool :=
+  λ (+ f : Item) →
+    match f motive (λ _ → Maybe Bool)
+      | self => just (mark f)
+      | other => nothing
+
+conform reply : answer := put (effective self) done
+```
+
+`effective self` computes `just true`, and `mark` is an earlier `run`. `effective other` computes `nothing`. The meeting checks that the value inhabits `Maybe Bool`. `put (bad self)` is refused when `bad` computes a `Bool`. `put (size other)` is refused when the computed nat misses the bound. A `run` that calls itself or a later `run` is refused. The same put may sit inside `rec`.
+
+```
+conform taker : choice := get (b : Bit) (match b pick0 done pick1 (put 0 done))
+```
+
+The process matches on the received bit. The protocol after `get` is one protocol, and the received value chooses which process runs. The processes may differ. The meeting checks that the chosen arm is the one the other party covers. A term `match` keeps the newline after its last arm, so the following `session` or `conform` is not an argument. `get (b : Bool) (match b done done)` and `get (m : Maybe Nat) (match m done done)` cover a declared data type the same way, one process per constructor in declaration order. A match that does not cover the received value is refused. `recv (b : Bool) on end end` stays refused. A computed bit does not select an indexed arm. The protocol stays spec. The process stays evidence. The OTP image carries the value. Evidence is erased. A linear endpoint is still consumed once. A match consumes every arm, so one abandoned arm is refused.
+
+### Manual
+
+- Sessions: a computed put, and a match on the received value.
+- Limits: a `run` application whose value inhabits the payload, and a match on a bit or a declared data type, are allowed. The body may call only an earlier `run`. `put (suc 0)`, an evidence or spec application, an open application, a value that does not inhabit the payload, a `run` that calls itself or a later `run`, a term outside that fragment, `recv (b : Bool) on`, a nat, a pair, a record, a vector, or unit as the scrutinee, a variable or computed bit as an `on` index, a short match, an extra arm, a match that is not the `get` just taken, and a scrutinee that is not the received name stay refused.
+- Extending, Grammar, Terms, and Examples: the judgment and the surface form.
+
+### Examples
+
+- `computed.muro`: `mark` and `effective`, a repeating protocol, a match on a bit, on `Bool`, and on `Maybe`, a `%1` session, a linear endpoint, and a run that emit keeps.
+
+### Emit
+
+- OTP carries the computed value. A `get` whose continuation is a match selects the arm of the value that arrives. A nullary constructor is an atom. A constructor with fields is a tagged tuple.
+
+### Package
+
+- Version 0.16.65.
+
 ## 0.16.64
 
 A session endpoint may be bound linearly. A binder stays affine by default: the endpoint is used at most once. `λ¹` requires the variable to be used once. `⊸` is the arrow that accepts or returns a linear endpoint.

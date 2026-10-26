@@ -48,9 +48,10 @@ open import Muro.Session using
   ; Spine; snil; con
   ; NExp; nlit; nvar
   ; Val; zero; suc; b0; b1; tt; one
-  ; ValExpr; lit; var
+  ; ValExpr; lit; var; call
+  ; maybeBool; effCall
   ; Ctx; _∈_∷_; here
-  ; ValExprOk; lit-ok; var-ok
+  ; ValExprOk; lit-ok; var-ok; call-ok
   ; sent
   ; Idx; none; bind; shadow; renameIdx; applyTy; ixOf
   ; Owed; resolve
@@ -722,8 +723,9 @@ data MStep σ τ where
   m-done : MStep σ τ p-done p-done
   m-stop : MStep σ τ p-stop p-stop
 
-  -- A literal meets when it inhabits the payload (`sent` is `fits`
-  -- for a literal). A variable already inhabits its binding.
+  -- A value meets when it inhabits the payload. `sent` is `fits`
+  -- for a literal and the computed value for a call. A variable
+  -- already inhabits its binding.
   m-put-get : ∀ {A B v x p q} →
     applyTy σ A ≡ applyTy τ B →
     sent v ≡ true →
@@ -1070,3 +1072,72 @@ miss-flag {σ} {τ} m = bad (mstep m)
   where
     bad : MStep σ τ (act missP) (act downP) → ⊥
     bad (m-put-get _ () _)
+
+------------------------------------------------------------------------
+-- A computed put inside `rec`. Each turn sends the value `effective`
+-- computes, and the other end receives it. The loop is guarded by
+-- that action.
+------------------------------------------------------------------------
+
+maybe-eq : (ρ : Idx) → applyTy ρ maybeBool ≡ maybeBool
+maybe-eq none = refl
+maybe-eq (bind _ _ _) = refl
+
+loop-ty : (σ τ : Idx) → applyTy σ maybeBool ≡ applyTy τ maybeBool
+loop-ty σ τ = trans (maybe-eq σ) (sym (maybe-eq τ))
+
+loopSyn : SExp
+loopSyn = mu "X" (send maybeBool (svar "X"))
+
+loopC : CExp
+loopC = c-mu ("X" ∷ []) (g-send maybeBool (c-var "X"))
+
+loop-elab : elabC [] loopSyn ≡ good loopC
+loop-elab = refl
+
+loopG : GExp
+loopG = g-send maybeBool (c-var "X")
+
+loopEnv : Env
+loopEnv = ("X" , loopG) ∷ []
+
+loopS : ∞Proto
+loopS = unfold loopEnv loopG
+
+loopPG : PG
+loopPG = pg-put maybeBool effCall (pc-var "X")
+
+loopPEnv : PEnv
+loopPEnv = ("X" , loopPG) ∷ []
+
+loopP : ∞Proc
+loopP = unfoldP loopPEnv loopPG
+
+loop-ok : ∀ {Γ ρ} → Conforms∞ Γ ρ loopP loopS
+ok (loop-ok {Γ} {ρ}) = put-ok (sym (maybe-eq ρ)) (call-ok refl refl) (loop-ok {Γ} {ρ})
+
+loopBack : ∞Proto
+loopBack = unfold (dualEnv loopEnv) (dualG loopG)
+
+loop-dual : dual∞ loopS ~ loopBack
+loop-dual = comm loopEnv loopG
+
+loopDownG : GExp
+loopDownG = g-recv maybeBool (c-var "Y")
+
+loopDownEnv : Env
+loopDownEnv = ("Y" , loopDownG) ∷ []
+
+loopDownPG : PG
+loopDownPG = pg-get maybeBool "m" (pc-var "Y")
+
+loopDownPEnv : PEnv
+loopDownPEnv = ("Y" , loopDownPG) ∷ []
+
+loopDown : ∞Proc
+loopDown = unfoldP loopDownPEnv loopDownPG
+
+loop-meet : ∀ {σ τ} → Meets∞ σ τ loopP loopDown
+mstep (loop-meet {σ} {τ}) =
+  m-put-get (loop-ty σ τ) refl
+    (loop-meet {σ} {ext {maybeBool} "m" effCall τ})

@@ -300,6 +300,17 @@ defmodule Muro.Emit.Otp do
         end
       end
 
+      defp step({:hear, ty, name, {:pick, arms}}, {:muro, _, value}) do
+        if payload?(ty, value) do
+          case pick_arm(ty, value, arms) do
+            {:ok, arm} -> {:bind, name, value, arm}
+            :error -> {:unexpected, value}
+          end
+        else
+          {:unexpected, value}
+        end
+      end
+
       defp step({:hear, ty, name, next}, {:muro, _, value}) do
         if payload?(ty, value) do
           {:bind, name, value, next}
@@ -314,6 +325,44 @@ defmodule Muro.Emit.Otp do
       defp step({:index, name, _, right}, {:muro, _, :b1}), do: {:bind, name, :b1, right}
       defp step(_wait, {:muro, _, value}), do: {:unexpected, value}
       defp step(_wait, {:muro_pick, _, bit}), do: {:unexpected, bit}
+
+      # `b0` is the first arm and `b1` the second. A declared data value
+      # takes the arm of its constructor, in declaration order. The order
+      # is a list: inspecting the constructor map sorts its keys.
+      defp pick_arm(:bit, :b0, [arm, _]), do: {:ok, arm}
+      defp pick_arm(:bit, :b1, [_, arm]), do: {:ok, arm}
+
+      defp pick_arm({:dat, name, _}, value, arms) do
+        case Map.get(data_decls(), name) do
+          %{order: order} ->
+            tag = tag_of(value)
+
+            case Enum.find_index(order, &(&1 == tag)) do
+              i when is_integer(i) ->
+                case Enum.at(arms, i) do
+                  nil -> :error
+                  arm -> {:ok, arm}
+                end
+
+              _ ->
+                :error
+            end
+
+          _ ->
+            :error
+        end
+      end
+
+      defp pick_arm(_, _, _), do: :error
+
+      defp tag_of(value) when is_atom(value), do: Atom.to_string(value)
+
+      defp tag_of(value) when is_tuple(value) and tuple_size(value) >= 1 do
+        tag = elem(value, 0)
+        if is_atom(tag), do: Atom.to_string(tag), else: ""
+      end
+
+      defp tag_of(_), do: ""
 
       defp payload?(:nat, n) when is_integer(n) and n >= 0, do: true
       defp payload?(:bit, bit) when bit in [:b0, :b1], do: true
