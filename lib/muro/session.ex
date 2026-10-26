@@ -353,19 +353,47 @@ defmodule Muro.Session do
   one pass of a regular protocol is the whole check.
   """
   @conform_fuel 10_000
+  @span_key {__MODULE__, :span}
+  @pspans_key {__MODULE__, :pspans}
+  @run_key {__MODULE__, :run}
 
   def conforms(proc, proto, book \\ []) do
-    case go(proc, proto, %{}, %{}, %{}, %{}, MapSet.new(), @conform_fuel, prepare(book)) do
-      :ok ->
-        :ok
-
-      {:no, p, s} ->
-        {:error, "#{show_proc(p)} does not conform to #{show_proto(s)}"}
-
-      {:error, msg} ->
-        {:error, msg}
+    case conform_at(proc, proto, book, nil) do
+      :ok -> :ok
+      {:error, _at, msg} -> {:error, msg}
     end
   end
+
+  @doc false
+  def conform_at(proc, proto, book, steps) do
+    Process.put(@span_key, steps)
+    Process.put(@pspans_key, %{})
+
+    try do
+      case go(proc, proto, %{}, %{}, %{}, %{}, MapSet.new(), @conform_fuel, prepare(book)) do
+        :ok ->
+          :ok
+
+        {:no, p, s} ->
+          {:error, nil, blame(p, s, nil)}
+
+        {:no, p, s, reason, at} ->
+          {:error, at, blame(p, s, reason)}
+
+        {:error, msg} ->
+          {:error, nil, msg}
+
+        {:error, at, msg} ->
+          {:error, at, msg}
+      end
+    after
+      Process.delete(@span_key)
+      Process.delete(@pspans_key)
+    end
+  end
+
+  defp blame(p, s, nil), do: "#{show_proc(p)} does not conform to #{show_proto(s)}"
+  defp blame(p, s, reason), do: "#{show_proc(p)} does not conform to #{show_proto(s)}: #{reason}"
 
   @doc """
   `:ok` when every payload is a nat, a bit, unit, a pair, a record, a
@@ -444,18 +472,89 @@ defmodule Muro.Session do
     if fuel <= 0 do
       {:error, "out of fuel"}
     else
-      with {:ok, proc, proto, penv, senv} <- open_head(proc, proto, penv, senv, book),
-           {:ok, pkey} <- project(penv, free_proc(proc)),
-           {:ok, skey} <- project(senv, free_proto(proto)) do
-        key = {proc, pkey, proto, skey}
+      span0 = Process.get(@span_key)
+      pspans0 = Process.get(@pspans_key) || %{}
+      orig = proc
 
-        cond do
-          MapSet.member?(seen, key) -> :ok
-          absorb_loop?(seen, proc, pkey, proto) -> :ok
-          true -> step(proc, proto, ctx, idx, penv, senv, MapSet.put(seen, key), fuel, book)
+      with {:ok, proc, proto, penv, senv} <- open_head(orig, proto, penv, senv, book) do
+        {span, pspans} = placed(orig, span0, pspans0)
+        Process.put(@span_key, span)
+        Process.put(@pspans_key, pspans)
+
+        try do
+          with {:ok, pkey} <- project(penv, free_proc(proc)),
+               {:ok, skey} <- project(senv, free_proto(proto)) do
+            key = {proc, pkey, proto, skey}
+
+            cond do
+              MapSet.member?(seen, key) -> :ok
+              absorb_loop?(seen, proc, pkey, proto) -> :ok
+              true -> step(proc, proto, ctx, idx, penv, senv, MapSet.put(seen, key), fuel, book)
+            end
+          end
+        after
+          Process.put(@span_key, span0)
+          Process.put(@pspans_key, pspans0)
         end
       end
     end
+  end
+
+  # The span of the head `unwind_proc` exposes. A cycle here is the
+  # unguarded recursion `unwind_proc` already refused, so a miss is no location.
+  defp placed(proc, span, pspans) do
+    case place_span(proc, span, pspans, MapSet.new()) do
+      {:ok, span, pspans} -> {span, pspans}
+      _ -> {nil, pspans}
+    end
+  end
+
+  defp place_span({:rec, name, body} = term, span, pspans, stack) do
+    if MapSet.member?(stack, term) do
+      :error
+    else
+      place_span(
+        body,
+        step_down(span, 0),
+        Map.put(pspans, name, {span, body}),
+        MapSet.put(stack, term)
+      )
+    end
+  end
+
+  defp place_span({:call, name}, _span, pspans, stack) do
+    case Map.get(pspans, name) do
+      {rec_span, body} ->
+        term = {:rec, name, body}
+
+        if MapSet.member?(stack, term) do
+          :error
+        else
+          place_span(body, step_down(rec_span, 0), pspans, MapSet.put(stack, term))
+        end
+
+      _ ->
+        {:ok, nil, pspans}
+    end
+  end
+
+  defp place_span(_proc, span, pspans, _stack), do: {:ok, span, pspans}
+
+  defp descend(p, proto, ctx, idx, penv, senv, seen, fuel, book, span) do
+    span0 = Process.get(@span_key)
+    pspans0 = Process.get(@pspans_key)
+    Process.put(@span_key, span)
+
+    try do
+      go(p, proto, ctx, idx, penv, senv, seen, fuel, book)
+    after
+      Process.put(@span_key, span0)
+      Process.put(@pspans_key, pspans0)
+    end
+  end
+
+  defp refuse(proc, proto, reason \\ nil) do
+    {:no, proc, proto, reason, step_at(Process.get(@span_key))}
   end
 
   defp open_head(proc, proto, penv, senv, book) do
@@ -499,9 +598,14 @@ defmodule Muro.Session do
     expected = apply_ty(idx, sty)
 
     case put_ok?(ty, val, expected, ctx, book) do
-      :yes -> keep(go(p, s, ctx, idx, penv, senv, seen, fuel - 1, book))
-      :no -> {:no, proc, proto}
-      {:error, _} = err -> err
+      :yes ->
+        keep(descend(p, s, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(here_span(), 0)))
+
+      :no ->
+        refuse(proc, proto, explain_no(ty, val, expected, ctx, book))
+
+      {:error, msg} ->
+        refuse(proc, proto, rewrite_run(msg))
     end
   end
 
@@ -521,7 +625,7 @@ defmodule Muro.Session do
     case put_ok?(ty, val, expected, ctx, book) do
       :yes ->
         keep(
-          go(
+          descend(
             p,
             s,
             ctx,
@@ -530,15 +634,16 @@ defmodule Muro.Session do
             senv,
             seen,
             fuel - 1,
-            book
+            book,
+            step_down(here_span(), 0)
           )
         )
 
       :no ->
-        {:no, proc, proto}
+        refuse(proc, proto, explain_no(ty, val, expected, ctx, book))
 
-      {:error, _} = err ->
-        err
+      {:error, msg} ->
+        refuse(proc, proto, rewrite_run(msg))
     end
   end
 
@@ -556,9 +661,24 @@ defmodule Muro.Session do
     expected = apply_ty(idx, sty)
 
     if ty == expected do
-      keep(cont(p, s, name, expected, ctx, idx, penv, senv, seen, fuel, book))
+      keep(
+        cont(
+          p,
+          s,
+          name,
+          expected,
+          ctx,
+          idx,
+          penv,
+          senv,
+          seen,
+          fuel,
+          book,
+          step_down(here_span(), 0)
+        )
+      )
     else
-      {:no, proc, proto}
+      refuse(proc, proto)
     end
   end
 
@@ -588,11 +708,12 @@ defmodule Muro.Session do
           senv,
           seen,
           fuel,
-          book
+          book,
+          step_down(here_span(), 0)
         )
       )
     else
-      {:no, proc, proto}
+      refuse(proc, proto)
     end
   end
 
@@ -613,27 +734,44 @@ defmodule Muro.Session do
       :yes ->
         case reduce(val, ctx, book) do
           {:ok, got} ->
-            if owed?(got, resolve(idx, e), ctx) do
-              keep(go(p, s, ctx, idx, penv, senv, seen, fuel - 1, book))
+            bound = resolve(idx, e)
+
+            if owed?(got, bound, ctx) do
+              keep(
+                descend(
+                  p,
+                  s,
+                  ctx,
+                  idx,
+                  penv,
+                  senv,
+                  seen,
+                  fuel - 1,
+                  book,
+                  step_down(here_span(), 0)
+                )
+              )
             else
-              {:no, proc, proto}
+              refuse(proc, proto, bound_reason(val, got, bound, book))
             end
 
-          {:error, _} = err ->
-            err
+          {:error, msg} ->
+            refuse(proc, proto, rewrite_run(msg))
         end
 
       :no ->
-        {:no, proc, proto}
+        refuse(proc, proto, explain_no(ty, val, :nat, ctx, book))
 
-      {:error, _} = err ->
-        err
+      {:error, msg} ->
+        refuse(proc, proto, rewrite_run(msg))
     end
   end
 
   # `eget-ok`. The receiver binds a nat and owes nothing.
   defp step({:get, :nat, name, p}, {:erecv, _y, _e, s}, ctx, idx, penv, senv, seen, fuel, book) do
-    keep(cont(p, s, name, :nat, ctx, idx, penv, senv, seen, fuel, book))
+    keep(
+      cont(p, s, name, :nat, ctx, idx, penv, senv, seen, fuel, book, step_down(here_span(), 0))
+    )
   end
 
   # `iput0-ok` and `iput1-ok`. The literal selects the arm. A variable
@@ -651,19 +789,45 @@ defmodule Muro.Session do
        ) do
     case put_ok?(ty, val, :bit, ctx, book) do
       :yes when val == :b0 ->
-        keep(go(p, s, ctx, Map.delete(idx, y), penv, senv, seen, fuel - 1, book))
+        keep(
+          descend(
+            p,
+            s,
+            ctx,
+            Map.delete(idx, y),
+            penv,
+            senv,
+            seen,
+            fuel - 1,
+            book,
+            step_down(here_span(), 0)
+          )
+        )
 
       :yes when val == :b1 ->
-        keep(go(p, t, ctx, Map.delete(idx, y), penv, senv, seen, fuel - 1, book))
+        keep(
+          descend(
+            p,
+            t,
+            ctx,
+            Map.delete(idx, y),
+            penv,
+            senv,
+            seen,
+            fuel - 1,
+            book,
+            step_down(here_span(), 0)
+          )
+        )
 
       :no ->
-        {:no, proc, proto}
+        refuse(proc, proto, explain_no(ty, val, :bit, ctx, book))
 
       :yes ->
-        {:no, proc, proto}
+        refuse(proc, proto)
 
-      {:error, _} = err ->
-        err
+      {:error, msg} ->
+        refuse(proc, proto, rewrite_run(msg))
     end
   end
 
@@ -671,29 +835,34 @@ defmodule Muro.Session do
   defp step({:iget, name, p, q}, {:irecv, y, s, t}, ctx, idx, penv, senv, seen, fuel, book) do
     ctx1 = bind_ctx(ctx, name, :bit)
     idx1 = Map.delete(idx, y)
+    span = here_span()
 
-    case go(p, s, ctx1, idx1, penv, senv, seen, fuel - 1, book) do
-      :ok -> keep(go(q, t, ctx1, idx1, penv, senv, seen, fuel - 1, book))
+    case descend(p, s, ctx1, idx1, penv, senv, seen, fuel - 1, book, step_down(span, 0)) do
+      :ok -> keep(descend(q, t, ctx1, idx1, penv, senv, seen, fuel - 1, book, step_down(span, 1)))
       no -> no
     end
   end
 
   defp step({:pick0, p}, {:choose, s, _}, ctx, idx, penv, senv, seen, fuel, book) do
-    keep(go(p, s, ctx, idx, penv, senv, seen, fuel - 1, book))
+    keep(descend(p, s, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(here_span(), 0)))
   end
 
   defp step({:pick1, p}, {:choose, _, t}, ctx, idx, penv, senv, seen, fuel, book) do
-    keep(go(p, t, ctx, idx, penv, senv, seen, fuel - 1, book))
+    keep(descend(p, t, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(here_span(), 0)))
   end
 
   defp step({:cover, p, q}, {:branch, s, t}, ctx, idx, penv, senv, seen, fuel, book) do
-    case go(p, s, ctx, idx, penv, senv, seen, fuel - 1, book) do
-      :ok -> keep(go(q, t, ctx, idx, penv, senv, seen, fuel - 1, book))
+    span = here_span()
+
+    case descend(p, s, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(span, 0)) do
+      :ok -> keep(descend(q, t, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(span, 1)))
       no -> no
     end
   end
 
-  defp step(p, s, _ctx, _idx, _penv, _senv, _seen, _fuel, _book), do: {:no, p, s}
+  defp step(p, s, _ctx, _idx, _penv, _senv, _seen, _fuel, _book), do: refuse(p, s)
+
+  defp here_span, do: Process.get(@span_key)
 
   # A match is the continuation of the `get` just taken. Each arm conforms
   # to that one protocol. The processes may differ: the received value
@@ -702,28 +871,28 @@ defmodule Muro.Session do
   # or unit has no covering.
   @cover "match does not cover the received value"
 
-  defp cont({:match, scrut, arms}, proto, name, ty, ctx, idx, penv, senv, seen, fuel, book) do
+  defp cont({:match, scrut, arms}, proto, name, ty, ctx, idx, penv, senv, seen, fuel, book, span) do
     cond do
       scrut != name ->
-        {:error, @cover}
+        {:error, step_at(span), @cover}
 
       covered?(ty, arms, book) != :ok ->
-        {:error, @cover}
+        {:error, step_at(span), @cover}
 
       true ->
-        arms_go(arms, proto, bind_ctx(ctx, name, ty), idx, penv, senv, seen, fuel, book)
+        arms_go(arms, proto, bind_ctx(ctx, name, ty), idx, penv, senv, seen, fuel, book, span, 0)
     end
   end
 
-  defp cont(p, proto, name, ty, ctx, idx, penv, senv, seen, fuel, book) do
-    go(p, proto, bind_ctx(ctx, name, ty), idx, penv, senv, seen, fuel - 1, book)
+  defp cont(p, proto, name, ty, ctx, idx, penv, senv, seen, fuel, book, span) do
+    descend(p, proto, bind_ctx(ctx, name, ty), idx, penv, senv, seen, fuel - 1, book, span)
   end
 
-  defp arms_go([], _proto, _ctx, _idx, _penv, _senv, _seen, _fuel, _book), do: :ok
+  defp arms_go([], _proto, _ctx, _idx, _penv, _senv, _seen, _fuel, _book, _span, _i), do: :ok
 
-  defp arms_go([p | ps], proto, ctx, idx, penv, senv, seen, fuel, book) do
-    case go(p, proto, ctx, idx, penv, senv, seen, fuel - 1, book) do
-      :ok -> arms_go(ps, proto, ctx, idx, penv, senv, seen, fuel, book)
+  defp arms_go([p | ps], proto, ctx, idx, penv, senv, seen, fuel, book, span, i) do
+    case descend(p, proto, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(span, i)) do
+      :ok -> arms_go(ps, proto, ctx, idx, penv, senv, seen, fuel, book, span, i + 1)
       other -> other
     end
   end
@@ -1159,7 +1328,9 @@ defmodule Muro.Session do
 
   defp keep(:ok), do: :ok
   defp keep({:no, _, _} = no), do: no
+  defp keep({:no, _, _, _, _} = no), do: no
   defp keep({:error, _} = err), do: err
+  defp keep({:error, _, _} = err), do: err
 
   defp fits({:nat, n}, :nat, _ctx, _book) when is_integer(n) and n >= 0, do: :yes
   defp fits(bit, :bit, _ctx, _book) when bit in [:b0, :b1], do: :yes
@@ -2277,18 +2448,46 @@ defmodule Muro.Session do
   defp canon_arg({:tup, a, b}, book), do: {:tup, canon_arg(a, book), canon_arg(b, book)}
   defp canon_arg(val, _book), do: val
 
-  defp eval_def(%{body: body}, args, prefix, defs, book) do
-    case drop_lams(body, length(args)) do
-      {:ok, core} ->
-        if calls_out?(core, prefix, defs) do
-          {:error, "recursive run definition"}
-        else
-          ev(core, Enum.reverse(args), prefix, defs, book)
-        end
+  defp eval_def(%{name: name, body: body}, args, prefix, defs, book) do
+    push_self(name)
 
-      :error ->
-        {:ok, :miss}
+    try do
+      case drop_lams(body, length(args)) do
+        {:ok, core} ->
+          if calls_out?(core, prefix, defs) do
+            {:error, cycle_reason(name, core)}
+          else
+            ev(core, Enum.reverse(args), prefix, defs, book)
+          end
+
+        :error ->
+          {:ok, :miss}
+      end
+    after
+      pop_self()
     end
+  end
+
+  defp push_self(name), do: Process.put(@run_key, [name | Process.get(@run_key, [])])
+
+  defp pop_self do
+    case Process.get(@run_key, []) do
+      [_ | rest] -> Process.put(@run_key, rest)
+      _ -> Process.delete(@run_key)
+    end
+  end
+
+  defp current_self do
+    case Process.get(@run_key, []) do
+      [name | _] -> name
+      _ -> nil
+    end
+  end
+
+  defp cycle_reason(self, core) do
+    if call_of?(core, self),
+      do: "run definition calls itself",
+      else: "run definition declared later"
   end
 
   defp drop_lams(body, 0), do: {:ok, body}
@@ -2424,7 +2623,11 @@ defmodule Muro.Session do
       nil ->
         cond do
           Enum.any?(defs, &(&1.name == name)) ->
-            {:error, "recursive run definition"}
+            {:error,
+             if(name == current_self(),
+               do: "run definition calls itself",
+               else: "run definition declared later"
+             )}
 
           ctor?(book, name) ->
             {:ok, {:con, cname(name), vals}}
@@ -2492,4 +2695,255 @@ defmodule Muro.Session do
   defp out_of_prefix?(name, prefix, defs) do
     Enum.any?(defs, &(&1.name == name)) and not Enum.any?(prefix, &(&1.name == name))
   end
+
+  defp call_of?(term, name) do
+    case term do
+      {:su, t} ->
+        call_of?(t, name)
+
+      {:ann, t, _} ->
+        call_of?(t, name)
+
+      {:pair, a, b} ->
+        call_of?(a, name) or call_of?(b, name)
+
+      {:mnat, e, _motive, z, s} ->
+        call_of?(e, name) or call_of?(z, name) or call_of?(s, name)
+
+      {:mnat, e, _x, _motive, z, _y, s} ->
+        call_of?(e, name) or call_of?(z, name) or call_of?(s, name)
+
+      {:mdata, e, motive, branches} when is_list(branches) ->
+        call_of?(e, name) or call_of?(motive, name) or
+          Enum.any?(branches, &branch_call?(&1, name))
+
+      {:mdata, e, _x, motive, branches} when is_list(branches) ->
+        call_of?(e, name) or call_of?(motive, name) or
+          Enum.any?(branches, &branch_call?(&1, name))
+
+      {:app, _, _} ->
+        case spine_term(term, []) do
+          {:ok, n, args} -> n == name or Enum.any?(args, &call_of?(&1, name))
+          :error -> false
+        end
+
+      {:def, n} ->
+        n == name
+
+      _ ->
+        false
+    end
+  end
+
+  defp branch_call?(branch, name) do
+    case branch_shape(branch) do
+      {_, _, body} -> call_of?(body, name)
+      _ -> false
+    end
+  end
+
+  @doc false
+  def step_at(nil), do: nil
+  def step_at(%{at: at}), do: at
+  def step_at(_), do: nil
+
+  @doc false
+  def step_down(nil, _), do: nil
+  def step_down(%{down: ds}, i) when is_list(ds), do: Enum.at(ds, i)
+  def step_down(_, _), do: nil
+
+  @doc false
+  def step_proc(:done), do: "done"
+  def step_proc(:stop), do: "stop"
+  def step_proc({:put, _ty, val, _}), do: "put #{show_val(val)}"
+  def step_proc({:get, ty, :_, _}), do: "get #{show_pay_atom(ty)}"
+  def step_proc({:get, ty, name, _}), do: "get (#{name} : #{show_pay_atom(ty)})"
+  def step_proc({:pick0, _}), do: "pick0"
+  def step_proc({:pick1, _}), do: "pick1"
+  def step_proc({:cover, _, _}), do: "cover"
+  def step_proc({:iget, name, _, _}), do: "get (#{name} : Bit)"
+  def step_proc({:match, name, _}), do: "match #{name}"
+  def step_proc({:rec, name, _}), do: "rec #{name}"
+  def step_proc({:call, name}), do: "#{name}"
+  def step_proc(other), do: inspect(other)
+
+  @doc false
+  def step_proto(:end), do: "end"
+  def step_proto({:send, ty, _}), do: "send #{show_pay_atom(ty)}"
+  def step_proto({:recv, ty, _}), do: "recv #{show_pay_atom(ty)}"
+  def step_proto({:dsend, name, ty, _}), do: "send (#{name} : #{show_pay(ty)})"
+  def step_proto({:drecv, name, ty, _}), do: "recv (#{name} : #{show_pay(ty)})"
+  def step_proto({:esend, name, e, _}), do: "send (#{name} : Nat) {#{name} ≤ #{show_ix(e)}}"
+  def step_proto({:erecv, name, e, _}), do: "recv (#{name} : Nat) {#{name} ≤ #{show_ix(e)}}"
+  def step_proto({:isend, name, _, _}), do: "send (#{name} : Bit)"
+  def step_proto({:irecv, name, _, _}), do: "recv (#{name} : Bit)"
+  def step_proto({:choose, _, _}), do: "choose"
+  def step_proto({:branch, _, _}), do: "branch"
+  def step_proto({:rec, name, _}), do: "rec #{name}"
+  def step_proto({:svar, name}), do: "#{name}"
+  def step_proto({:sjump, _, _} = p), do: show_proto(p)
+  def step_proto({:sess, _, _} = p), do: show_proto(p)
+  def step_proto(other), do: inspect(other)
+
+  @doc false
+  def show_value(val), do: show_val(val)
+
+  @doc false
+  def explain_put(val, ty, ctx, book) when is_list(book),
+    do: explain_put(val, ty, ctx, prepare(book))
+
+  def explain_put(val, ty, ctx, %{decls: _, runs: _} = book) do
+    explain_no(:unknown, val, ty, ctx, book)
+  end
+
+  defp explain_no(ty, val, expected, ctx, book) do
+    if ty == :unknown or ty == expected do
+      explain_val(val, expected, ctx, book)
+    else
+      nil
+    end
+  end
+
+  defp explain_val(val, expected, ctx, book) do
+    cond do
+      open_run_arg?(val, ctx, book) ->
+        "argument is not a value"
+
+      true ->
+        case reduce(val, ctx, book) do
+          {:error, msg} ->
+            rewrite_run(msg)
+
+          {:ok, v} ->
+            cond do
+              reason = fragment_reason(val, v, book) ->
+                reason
+
+              v != :miss and computed_send?(val, ctx, book) and
+                  fits(v, expected, ctx, book) == :no ->
+                "computed value #{show_val(v)} does not inhabit #{show_pay(expected)}"
+
+              true ->
+                nil
+            end
+        end
+    end
+  end
+
+  defp rewrite_run("recursive run definition"), do: "run definition calls itself"
+  defp rewrite_run(msg), do: msg
+
+  defp bound_reason(val, got, bound, book) do
+    shown = if got == :miss, do: show_val(val), else: show_val(got)
+    kind = if computed_send?(val, %{}, book), do: "computed value", else: "value"
+    "#{kind} #{shown} misses bound #{show_bound(bound)}"
+  end
+
+  defp show_bound(nil), do: "≤ ?"
+  defp show_bound(e), do: "≤ #{show_ix(e)}"
+
+  defp open_run_arg?({:con, name, args}, ctx, book) do
+    run?(book, name) and not Enum.all?(args, &closed?(&1, ctx, book))
+  end
+
+  defp open_run_arg?(_, _, _), do: false
+
+  defp computed_send?({:con, name, _}, ctx, book) do
+    run?(book, name) and not Map.has_key?(ctx, name)
+  end
+
+  defp computed_send?({:var, name}, ctx, book) do
+    not Map.has_key?(ctx, name) and not nullary_name?(book, name) and run?(book, cname(name))
+  end
+
+  defp computed_send?(_, _, _), do: false
+
+  defp fragment_reason(val, v, book) do
+    case run_apply(val, book) do
+      nil ->
+        nil
+
+      {name, args} ->
+        case find_run(book, name) do
+          nil ->
+            nil
+
+          %{body: body} ->
+            case drop_lams(body, length(args)) do
+              :error ->
+                "outside the computed fragment: partial application"
+
+              {:ok, core} ->
+                frag = if v == :miss, do: fragment_term(core), else: nil
+
+                cond do
+                  match?({:lam, _, _, _, _}, core) ->
+                    "outside the computed fragment: partial application"
+
+                  frag == :let ->
+                    "outside the computed fragment: let"
+
+                  frag == :lam ->
+                    "outside the computed fragment: λ"
+
+                  record_arg?(args) and (v == :miss or match?({:rec, _}, v)) ->
+                    "outside the computed fragment: record"
+
+                  vector_arg?(args) and (v == :miss or match?({:rep, _, _}, v)) ->
+                    "outside the computed fragment: vector"
+
+                  true ->
+                    nil
+                end
+            end
+        end
+    end
+  end
+
+  defp run_apply({:con, name, args}, book) do
+    if run?(book, name), do: {cname(name), args}, else: nil
+  end
+
+  defp run_apply({:var, name}, book) do
+    if run?(book, cname(name)) and not nullary_name?(book, name), do: {cname(name), []}, else: nil
+  end
+
+  defp run_apply(_, _), do: nil
+
+  defp find_run(book, name) do
+    Enum.find(run_defs(book), &(&1.name == name))
+  end
+
+  defp record_arg?(args), do: Enum.any?(args, &match?({:rec, _}, &1))
+  defp vector_arg?(args), do: Enum.any?(args, &match?({:rep, _, _}, &1))
+
+  defp fragment_term({:letp, _, _}), do: :let
+  defp fragment_term({:lam, _, _, _, _}), do: :lam
+  defp fragment_term({:ann, t, _}), do: fragment_term(t)
+  defp fragment_term({:su, t}), do: fragment_term(t)
+  defp fragment_term({:pair, a, b}), do: fragment_term(a) || fragment_term(b)
+
+  defp fragment_term({:app, f, a}) do
+    fragment_term(f) || fragment_term(a)
+  end
+
+  defp fragment_term({:mnat, e, _, z, s}) do
+    fragment_term(e) || fragment_term(z) || fragment_term(s)
+  end
+
+  defp fragment_term({:mnat, e, _, _, z, _, s}) do
+    fragment_term(e) || fragment_term(z) || fragment_term(s)
+  end
+
+  defp fragment_term({:mdata, e, motive, branches}) when is_list(branches) do
+    fragment_term(e) || fragment_term(motive) ||
+      Enum.find_value(branches, fn b ->
+        case branch_shape(b) do
+          {_, _, body} -> fragment_term(body)
+          _ -> nil
+        end
+      end)
+  end
+
+  defp fragment_term(_), do: nil
 end

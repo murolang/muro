@@ -25,7 +25,7 @@ defmodule Muro.MeetTest do
 
   test "a type they do not share has no derivation" do
     assert {:error, msg} = Meet.meets({:get, :bit, :_, :done}, {:put, :nat, {:nat, 0}, :done})
-    assert msg == "get Bit done does not meet put 0 done"
+    assert msg == "diverged: left: get Bit; right: put 0"
 
     swapped = {:rec, [{"y", :nat}, {"x", :nat}]}
     point = {:rec, [{"x", :nat}, {"y", :nat}]}
@@ -36,20 +36,20 @@ defmodule Muro.MeetTest do
                {:get, swapped, :_, :done}
              )
 
-    assert msg =~ "does not meet"
+    assert msg =~ "diverged"
 
     assert {:error, msg} =
              Meet.meets({:put, :nat, {:nat, 0}, :done}, {:put, :nat, {:nat, 0}, :done})
 
-    assert msg == "put 0 done does not meet put 0 done"
+    assert msg == "diverged: left: put 0; right: put 0"
 
     assert {:error, msg} = Meet.meets({:put, :nat, {:nat, 0}, :stop}, {:get, :nat, :_, :done})
-    assert msg == "stop does not meet done"
+    assert msg == "diverged after put 0: left: stop; right: done"
 
     assert {:error, msg} =
              Meet.meets({:pick0, :done}, {:cover, :stop, {:get, :nat, :_, :done}})
 
-    assert msg == "done does not meet stop"
+    assert msg == "diverged after arm pick0: left: done; right: stop"
   end
 
   test "a bound name meets a receive of the type it was bound" do
@@ -83,19 +83,19 @@ defmodule Muro.MeetTest do
     echo = {:get, :nat, :k, {:put, :unknown, {:var, :k}, :done}}
     bit = {:put, :nat, {:nat, 0}, {:get, :bit, :_, :done}}
     assert {:error, msg} = Meet.meets(echo, bit)
-    assert msg == "put k done does not meet get Bit done"
+    assert msg == "diverged after put 0: left: put k; right: get Bit"
     assert {:error, msg} = Meet.meets(bit, echo)
-    assert msg == "get Bit done does not meet put k done"
+    assert msg == "diverged after put 0: left: get Bit; right: put k"
 
     assert {:error, msg} =
              Meet.meets({:put, :unknown, {:var, :k}, :done}, {:get, :nat, :_, :done})
 
-    assert msg == "put k done does not meet get Nat done"
+    assert msg == "diverged: left: put k; right: get Nat"
 
     inner = {:get, :nat, :v, {:get, :bit, :v, {:put, :unknown, {:var, :v}, :done}}}
     nats = {:put, :nat, {:nat, 0}, {:put, :bit, :b0, {:get, :nat, :_, :done}}}
     assert {:error, msg} = Meet.meets(inner, nats)
-    assert msg == "put v done does not meet get Nat done"
+    assert msg == "diverged after put 0, put b0: left: put v; right: get Nat"
 
     point = {:rec, [{"x", :nat}, {"y", :nat}]}
     swapped = {:rec, [{"y", :nat}, {"x", :nat}]}
@@ -105,7 +105,8 @@ defmodule Muro.MeetTest do
     assert {:error, msg} =
              Meet.meets(record, {:put, point, sent, {:get, swapped, :_, :done}})
 
-    assert msg == "put p done does not meet get {y : Nat, x : Nat} done"
+    assert msg ==
+             "diverged after put {x = 0, y = 1}: left: put p; right: get {y : Nat, x : Nat}"
   end
 
   test "a received nat is the length of the vector that meets it" do
@@ -117,9 +118,9 @@ defmodule Muro.MeetTest do
 
     short = {:put, :nat, {:nat, 2}, {:get, vec.({:lit, 3}), :_, :done}}
     assert {:error, msg} = Meet.meets(server, short)
-    assert msg == "put rep n 0 done does not meet get (Vec Nat 3) done"
+    assert msg == "diverged after put 2: left: put rep n 0; right: get (Vec Nat 3)"
     assert {:error, msg} = Meet.meets(short, server)
-    assert msg == "get (Vec Nat 3) done does not meet put rep n 0 done"
+    assert msg == "diverged after put 2: left: get (Vec Nat 3); right: put rep n 0"
 
     assert check("""
            session sized := recv (n : Nat) (send (Vec Nat n) end)
@@ -139,7 +140,8 @@ defmodule Muro.MeetTest do
              """)
 
     assert msg =~ "does not conform"
-    assert msg =~ "put rep n 0 done does not meet get (Vec Nat 3) done"
+    assert msg =~ "skipped because bad does not conform"
+    refute msg =~ "diverged"
   end
 
   test "an evidence payload meets as a nat" do
@@ -221,7 +223,7 @@ defmodule Muro.MeetTest do
     # b0's arm sends a nat. A client that also sends on that arm has no meeting.
     miss = {:put, :bit, :b0, {:put, :nat, {:nat, 1}, :done}}
     assert {:error, msg} = Meet.meets(server, miss)
-    assert msg == "put 1 done does not meet put 1 done"
+    assert msg == "diverged after get b, arm b0: left: put 1; right: put 1"
 
     assert {:error, _} = Meet.meets(server, {:put, :unknown, {:var, :b}, :done})
     assert {:error, _} = Meet.meets(server, {:put, :nat, {:nat, 0}, :done})
@@ -235,7 +237,7 @@ defmodule Muro.MeetTest do
     assert Meet.meets(ask, echo) == :ok
 
     assert {:error, msg} = Meet.meets(echo, {:put, :bit, :b1, {:get, :nat, :c, :done}})
-    assert msg == "put b done does not meet get (c : Nat) done"
+    assert msg == "diverged after get b, arm b1: left: put b; right: get (c : Nat)"
 
     assert check("""
            session route := recv (b : Bit) on (send Nat end) (recv Nat end)
@@ -263,7 +265,7 @@ defmodule Muro.MeetTest do
              meet wire : server with client
              """)
 
-    assert msg =~ "expected the other end"
+    assert msg =~ "diverged"
     refute msg =~ "does not meet"
   end
 
@@ -277,7 +279,8 @@ defmodule Muro.MeetTest do
              meet wire : echo with bad
              """)
 
-    assert msg =~ "put k done does not meet get Bit done"
+    assert msg =~ "skipped because bad does not conform"
+    refute msg =~ "diverged"
   end
 
   test "meet.muro checks, and emit keeps the run" do
@@ -369,7 +372,7 @@ defmodule Muro.MeetTest do
              meet wire : left with right
              """)
 
-    assert msg =~ "expected the other end"
+    assert msg =~ "diverged"
     refute msg =~ "does not meet"
   end
 
@@ -383,7 +386,7 @@ defmodule Muro.MeetTest do
              meet wire : pong with early
              """)
 
-    assert msg =~ "put 1 done does not meet stop"
+    assert msg =~ "diverged after put 0: left: put 1; right: stop; protocol: send Nat end"
     refute msg =~ "expected the other end"
   end
 
@@ -397,7 +400,7 @@ defmodule Muro.MeetTest do
              meet arm : taker with giver
              """)
 
-    assert msg =~ "done does not meet stop"
+    assert msg =~ "diverged after arm pick0: left: done; right: stop; protocol: end"
     refute msg =~ "expected the other end"
 
     assert {:error, msg} =
@@ -409,7 +412,7 @@ defmodule Muro.MeetTest do
              meet drop : left with right
              """)
 
-    assert msg =~ "stop does not meet done"
+    assert msg =~ "diverged after put 0: left: stop; right: done; protocol: end"
   end
 
   test "a session is not a process" do

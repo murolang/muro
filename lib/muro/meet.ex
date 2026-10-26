@@ -22,18 +22,79 @@ defmodule Muro.Meet do
   @doc """
   `:ok` when the two processes meet. Otherwise the pair where `decide` returns `no`.
   """
-  def meets(p, q, book \\ []) do
-    case go(p, q, book) do
-      :ok ->
-        :ok
+  @path_key {__MODULE__, :path}
+  @proto_key {__MODULE__, :proto}
+  @why_key {__MODULE__, :why}
 
-      {:no, a, b} ->
-        {:error, "#{Muro.Session.show_proc(a)} does not meet #{Muro.Session.show_proc(b)}"}
+  def meets(p, q, book \\ [], proto \\ nil) do
+    Process.put(@path_key, [])
+    Process.put(@proto_key, proto)
+    Process.delete(@why_key)
 
-      {:error, msg} ->
-        {:error, msg}
+    try do
+      case go(p, q, book) do
+        :ok ->
+          :ok
+
+        {:no, a, b} ->
+          {:error, diverged(a, b)}
+
+        {:error, msg} ->
+          {:error, msg}
+      end
+    after
+      Process.delete(@path_key)
+      Process.delete(@proto_key)
+      Process.delete(@why_key)
     end
   end
+
+  defp diverged(a, b) do
+    path = Process.get(@path_key, [])
+    where = if path == [], do: "", else: " after " <> Enum.join(path, ", ")
+
+    msg =
+      "diverged#{where}: left: #{Muro.Session.step_proc(a)}; right: #{Muro.Session.step_proc(b)}"
+
+    msg =
+      case Process.get(@why_key) do
+        nil -> msg
+        reason -> msg <> ": #{reason}"
+      end
+
+    case Process.get(@proto_key) do
+      proto when proto in [nil, :unset] -> msg
+      proto -> msg <> "; protocol: #{Muro.Session.show_proto(proto)}"
+    end
+  end
+
+  defp took(labels, proto_step) do
+    Process.put(@path_key, Process.get(@path_key, []) ++ List.wrap(labels))
+    Process.put(@proto_key, advance_proto(Process.get(@proto_key), proto_step))
+  end
+
+  defp why(nil), do: :ok
+  defp why(reason) when is_binary(reason), do: Process.put(@why_key, reason)
+
+  defp advance_proto(nil, _), do: nil
+  defp advance_proto(proto, step), do: advance_head(proto, step)
+
+  defp advance_head({:rec, _, body}, step), do: advance_head(body, step)
+  defp advance_head({:send, _, s}, :put), do: s
+  defp advance_head({:dsend, _, _, s}, :put), do: s
+  defp advance_head({:esend, _, _, s}, :put), do: s
+  defp advance_head({:isend, _, s, _}, {:put, :b0}), do: s
+  defp advance_head({:isend, _, _, t}, {:put, :b1}), do: t
+  defp advance_head({:recv, _, s}, :get), do: s
+  defp advance_head({:drecv, _, _, s}, :get), do: s
+  defp advance_head({:erecv, _, _, s}, :get), do: s
+  defp advance_head({:irecv, _, s, _}, {:get, :b0}), do: s
+  defp advance_head({:irecv, _, _, t}, {:get, :b1}), do: t
+  defp advance_head({:choose, s, _}, :pick0), do: s
+  defp advance_head({:choose, _, t}, :pick1), do: t
+  defp advance_head({:branch, s, _}, :cover0), do: s
+  defp advance_head({:branch, _, t}, :cover1), do: t
+  defp advance_head(proto, _), do: proto
 
   @doc """
   `meets/2`, then the multiplicity. Affine abandonment stays.
@@ -175,6 +236,8 @@ defmodule Muro.Meet do
 
     case sends?(val, ty, lp, li, book) do
       :yes ->
+        took(put_label(val), :put)
+
         keep(
           advance(
             p,
@@ -192,6 +255,7 @@ defmodule Muro.Meet do
         )
 
       :no ->
+        why(Muro.Session.explain_put(val, ty, ground(lp, li), book))
         {:no, {:put, :unknown, val, p}, {:get, gty, gname, q}}
 
       {:error, _} = err ->
@@ -216,6 +280,8 @@ defmodule Muro.Meet do
 
     case sends?(val, ty, rq, ri, book) do
       :yes ->
+        took(put_label(val), :get)
+
         keep(
           advance(
             p,
@@ -233,6 +299,7 @@ defmodule Muro.Meet do
         )
 
       :no ->
+        why(Muro.Session.explain_put(val, ty, ground(rq, ri), book))
         {:no, {:get, gty, gname, p}, {:put, :unknown, val, q}}
 
       {:error, _} = err ->
@@ -262,6 +329,8 @@ defmodule Muro.Meet do
 
     case {left == right, inhabits?(val, left, li, lp, book)} do
       {true, :yes} ->
+        took(put_label(val), :put)
+
         keep(
           advance(
             p,
@@ -278,10 +347,12 @@ defmodule Muro.Meet do
           )
         )
 
-      {_, {:error, _} = err} ->
-        err
+      {_, {:error, msg}} ->
+        why(msg)
+        {:no, {:put, ty, val, p}, {:get, gty, name, q}}
 
       _ ->
+        why(Muro.Session.explain_put(val, left, ground(lp, li), book))
         {:no, {:put, ty, val, p}, {:get, gty, name, q}}
     end
   end
@@ -305,6 +376,8 @@ defmodule Muro.Meet do
 
     case {left == right, inhabits?(val, right, ri, rq, book)} do
       {true, :yes} ->
+        took(put_label(val), :get)
+
         keep(
           advance(
             p,
@@ -321,10 +394,12 @@ defmodule Muro.Meet do
           )
         )
 
-      {_, {:error, _} = err} ->
-        err
+      {_, {:error, msg}} ->
+        why(msg)
+        {:no, {:get, gty, name, p}, {:put, ty, val, q}}
 
       _ ->
+        why(Muro.Session.explain_put(val, right, ground(rq, ri), book))
         {:no, {:get, gty, name, p}, {:put, ty, val, q}}
     end
   end
@@ -344,6 +419,8 @@ defmodule Muro.Meet do
          fuel,
          book
        ) do
+    took(["get #{name}", "arm b0"], {:get, :b0})
+
     keep(
       advance(
         p,
@@ -374,6 +451,8 @@ defmodule Muro.Meet do
          fuel,
          book
        ) do
+    took(["get #{name}", "arm b1"], {:get, :b1})
+
     keep(
       advance(
         q,
@@ -404,6 +483,8 @@ defmodule Muro.Meet do
          fuel,
          book
        ) do
+    took(["get #{name}", "arm b0"], {:put, :b0})
+
     keep(
       advance(
         p,
@@ -434,6 +515,8 @@ defmodule Muro.Meet do
          fuel,
          book
        ) do
+    took(["get #{name}", "arm b1"], {:put, :b1})
+
     keep(
       advance(
         p,
@@ -453,18 +536,22 @@ defmodule Muro.Meet do
 
   # `pick0-cover`, `pick1-cover`, `cover-pick0`, `cover-pick1`.
   defp step({:pick0, p}, {:cover, q, _}, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
+    took("arm pick0", :pick0)
     keep(advance(p, q, lp, rq, li, ri, penv, qenv, seen, fuel - 1, book))
   end
 
   defp step({:pick1, p}, {:cover, _, r}, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
+    took("arm pick1", :pick1)
     keep(advance(p, r, lp, rq, li, ri, penv, qenv, seen, fuel - 1, book))
   end
 
   defp step({:cover, p, _}, {:pick0, r}, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
+    took("arm pick0", :cover0)
     keep(advance(p, r, lp, rq, li, ri, penv, qenv, seen, fuel - 1, book))
   end
 
   defp step({:cover, _, q}, {:pick1, r}, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
+    took("arm pick1", :cover1)
     keep(advance(q, r, lp, rq, li, ri, penv, qenv, seen, fuel - 1, book))
   end
 
@@ -473,6 +560,8 @@ defmodule Muro.Meet do
   defp keep(:ok), do: :ok
   defp keep({:no, _, _} = no), do: no
   defp keep({:error, _} = err), do: err
+
+  defp put_label(val), do: "put #{Muro.Session.show_value(val)}"
 
   # `_` is an unnamed `get` and adds no binding. A later binding of the same name wins.
   defp bind(ctx, :_, _ty), do: ctx
@@ -552,11 +641,13 @@ defmodule Muro.Meet do
         {:no, left, right}
       else
         case Muro.Session.form(val, ground(sctx, sidx), book) do
-          {:error, _} = err ->
-            err
+          {:error, msg} ->
+            why(msg)
+            {:no, left, right}
 
-          {:ok, {:var, _}} ->
-            {:error, @cover}
+          {:ok, {:var, name}} ->
+            why("the value #{name} does not select an arm")
+            {:no, left, right}
 
           {:ok, :miss} ->
             {:no, left, right}
@@ -566,6 +657,8 @@ defmodule Muro.Meet do
               :yes ->
                 case Muro.Session.arm(send_ty, v, arms, book) do
                   {:ok, arm} ->
+                    took(["get #{gname}", "arm #{arm_name(v)}"], :get)
+
                     advance_arm(
                       orient,
                       cont,
@@ -585,19 +678,27 @@ defmodule Muro.Meet do
                     )
 
                   :error ->
-                    {:error, @cover}
+                    why("the value #{Muro.Session.show_value(v)} does not select an arm")
+                    {:no, left, right}
                 end
 
               :no ->
+                why(Muro.Session.explain_put(val, send_ty, ground(sctx, sidx), book))
                 {:no, left, right}
 
-              {:error, _} = err ->
-                err
+              {:error, msg} ->
+                why(msg)
+                {:no, left, right}
             end
         end
       end
     end
   end
+
+  defp arm_name(:b0), do: "b0"
+  defp arm_name(:b1), do: "b1"
+  defp arm_name({:con, name, _}), do: name
+  defp arm_name(other), do: Muro.Session.show_value(other)
 
   defp advance_arm(
          :put_first,

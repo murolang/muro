@@ -189,7 +189,7 @@ defmodule Muro.LinearTest do
     client = Enum.find(book, &(&1.name == "client")).proc
     assert Meet.meet_mult(:lin, finished, other) == :ok
     assert {:error, msg} = Meet.meet_mult(:lin, server, client)
-    assert msg =~ "linear variable unused"
+    assert msg =~ "linear endpoint not consumed"
   end
 
   test "a linear meeting consumes each end once" do
@@ -201,7 +201,7 @@ defmodule Muro.LinearTest do
     assert Meet.meets(:stop, :stop) == :ok
 
     assert {:error, msg} = Meet.meet_mult(:lin, :stop, :stop)
-    assert msg =~ "linear variable unused"
+    assert msg =~ "linear endpoint not consumed: left"
   end
 
   defp check(src) do

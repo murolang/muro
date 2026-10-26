@@ -1974,13 +1974,12 @@ defmodule Muro.Check do
   # evidence an evidence payload owes is decided there.
   # A protocol mismatch is reported before an abandoned linear channel.
   def check_def(book, %{kind: :conform, name: name, session: sname, proc: proc} = d, _fuel) do
-    loc = Print.loc_prefix(Map.get(d, :loc))
-
     with {:ok, session} <- open_session(book, sname),
-         :ok <- session_sits(book, session, proc) do
+         :ok <- session_sits(book, session, proc, Map.get(d, :steps)) do
       :ok
     else
-      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+      {:error, at, msg} -> {:error, "#{Print.loc_prefix(at)}#{name}: #{msg}"}
+      {:error, msg} -> {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
     end
   end
 
@@ -2047,10 +2046,11 @@ defmodule Muro.Check do
          {:ok, scheme} <- fetch_scheme(book, endpoint.scheme),
          {:ok, resolved} <- resolve_scheme(book, scheme.scheme),
          {:ok, placed} <- fetch_place(book, pname),
-         :ok <- session_sits(book, session, proc),
+         :ok <- session_sits(book, session, proc, Map.get(d, :steps)),
          :ok <- move_sits(resolved, placed.place, mark) do
       :ok
     else
+      {:error, at, msg} -> {:error, "#{Print.loc_prefix(at)}#{name}: #{msg}"}
       {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
     end
   end
@@ -2115,10 +2115,12 @@ defmodule Muro.Check do
 
     with {:ok, lp} <- fetch_process(book, left),
          {:ok, rp} <- fetch_process(book, right),
+         :ok <- guard_sits(book, lp, left),
+         :ok <- guard_sits(book, rp, right),
          {:ok, l} <- process_session(book, lp),
          {:ok, r} <- process_session(book, rp),
          :ok <- other_end(l.proto, r.proto),
-         :ok <- Muro.Meet.meets(l.proc, r.proc, book) do
+         :ok <- Muro.Meet.meets(l.proc, r.proc, book, l.proto) do
       :ok
     else
       {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
@@ -2145,124 +2147,188 @@ defmodule Muro.Check do
     end
   end
 
+  # The meeting is not a second report of a process that already failed.
+  defp guard_sits(book, defn, name) do
+    case sits_participant(book, defn) do
+      :ok -> :ok
+      _ -> {:error, "skipped because #{name} does not conform"}
+    end
+  end
+
+  defp sits_participant(book, %{kind: :conform, session: sname, proc: proc} = d) do
+    case open_session(book, sname) do
+      {:ok, session} -> session_sits(book, session, proc, Map.get(d, :steps))
+      err -> err
+    end
+  end
+
+  defp sits_participant(book, %{kind: :read, endpoint: ename, proc: proc} = d) do
+    with {:ok, endpoint} <- fetch_endpoint(book, ename),
+         {:ok, session} <- fetch_session(book, endpoint.session) do
+      session_sits(book, session, proc, Map.get(d, :steps))
+    end
+  end
+
   # `%1` is Mark lin. An unmarked session, and `%0`, are affine.
   defp linear_session?(session), do: Map.get(session, :mult, :affine) == :linear
 
   # Conforms, then Ends when the session is `%1`. A protocol mismatch is
   # reported before an abandoned channel. Mirrors `held` and `finished`.
-  defp session_sits(book, session, proc) do
-    with :ok <- check_proc_vars(proc, MapSet.new(), book),
-         :ok <- Muro.Session.proc_ok(proc),
-         :ok <- Muro.Session.conforms(proc, session.proto, book) do
-      if linear_session?(session) and Muro.Session.finishes(proc) == :no do
-        {:error, "linear channel abandoned"}
-      else
-        :ok
+  defp session_sits(book, session, proc, steps) do
+    with :ok <- check_proc_vars(proc, MapSet.new(), book, steps),
+         :ok <- Muro.Session.proc_ok(proc) do
+      case Muro.Session.conform_at(proc, session.proto, book, steps) do
+        :ok ->
+          if linear_session?(session) and Muro.Session.finishes(proc) == :no do
+            {:error, "linear channel abandoned"}
+          else
+            :ok
+          end
+
+        {:error, at, msg} when not is_nil(at) ->
+          {:error, at, msg}
+
+        {:error, _at, msg} ->
+          {:error, msg}
       end
     end
   end
 
   # Check that all variables used in a process are bound.
   # A constructor of a declared data type is not a variable.
-  defp check_proc_vars(:done, _ctx, _book), do: :ok
-  defp check_proc_vars(:stop, _ctx, _book), do: :ok
+  defp check_proc_vars(proc, ctx, book, span)
 
-  defp check_proc_vars({:put, _ty, val, p}, ctx, book) do
-    with :ok <- check_val_vars(val, ctx, book), do: check_proc_vars(p, ctx, book)
+  defp check_proc_vars(:done, _ctx, _book, _span), do: :ok
+  defp check_proc_vars(:stop, _ctx, _book, _span), do: :ok
+
+  defp check_proc_vars({:put, _ty, val, p}, ctx, book, span) do
+    with :ok <- check_val_vars(val, ctx, book, Muro.Session.step_at(span)),
+         do: check_proc_vars(p, ctx, book, Muro.Session.step_down(span, 0))
   end
 
-  defp check_proc_vars({:get, _ty, name, p}, ctx, book) do
+  defp check_proc_vars({:get, _ty, name, p}, ctx, book, span) do
     # Anonymous binder _ doesn't add to context
     new_ctx = if name == :_, do: ctx, else: MapSet.put(ctx, name)
-    check_proc_vars(p, new_ctx, book)
+    check_proc_vars(p, new_ctx, book, Muro.Session.step_down(span, 0))
   end
 
-  defp check_proc_vars({:pick0, p}, ctx, book), do: check_proc_vars(p, ctx, book)
-  defp check_proc_vars({:pick1, p}, ctx, book), do: check_proc_vars(p, ctx, book)
+  defp check_proc_vars({:pick0, p}, ctx, book, span),
+    do: check_proc_vars(p, ctx, book, Muro.Session.step_down(span, 0))
 
-  defp check_proc_vars({:cover, p, q}, ctx, book) do
-    with :ok <- check_proc_vars(p, ctx, book), do: check_proc_vars(q, ctx, book)
+  defp check_proc_vars({:pick1, p}, ctx, book, span),
+    do: check_proc_vars(p, ctx, book, Muro.Session.step_down(span, 0))
+
+  defp check_proc_vars({:cover, p, q}, ctx, book, span) do
+    with :ok <- check_proc_vars(p, ctx, book, Muro.Session.step_down(span, 0)),
+         do: check_proc_vars(q, ctx, book, Muro.Session.step_down(span, 1))
   end
 
-  defp check_proc_vars({:iget, name, p, q}, ctx, book) do
+  defp check_proc_vars({:iget, name, p, q}, ctx, book, span) do
     ctx1 = if name == :_, do: ctx, else: MapSet.put(ctx, name)
-    with :ok <- check_proc_vars(p, ctx1, book), do: check_proc_vars(q, ctx1, book)
+
+    with :ok <- check_proc_vars(p, ctx1, book, Muro.Session.step_down(span, 0)),
+         do: check_proc_vars(q, ctx1, book, Muro.Session.step_down(span, 1))
   end
 
   # A recursion variable is not a payload. The value context is unchanged.
-  defp check_proc_vars({:rec, _name, body}, ctx, book), do: check_proc_vars(body, ctx, book)
-  defp check_proc_vars({:call, _name}, _ctx, _book), do: :ok
+  defp check_proc_vars({:rec, _name, body}, ctx, book, span),
+    do: check_proc_vars(body, ctx, book, Muro.Session.step_down(span, 0))
+
+  defp check_proc_vars({:call, _name}, _ctx, _book, _span), do: :ok
 
   # The scrutinee is the value `get` just bound. Each arm is that continuation.
-  defp check_proc_vars({:match, name, arms}, ctx, book) do
+  defp check_proc_vars({:match, name, arms}, ctx, book, span) do
     if MapSet.member?(ctx, name) do
-      Enum.reduce_while(arms, :ok, fn arm, :ok ->
-        case check_proc_vars(arm, ctx, book) do
+      arms
+      |> Enum.with_index()
+      |> Enum.reduce_while(:ok, fn {arm, i}, :ok ->
+        case check_proc_vars(arm, ctx, book, Muro.Session.step_down(span, i)) do
           :ok -> {:cont, :ok}
           err -> {:halt, err}
         end
       end)
     else
-      {:error, "match does not cover the received value"}
+      at_step(span, "match does not cover the received value")
     end
   end
 
   # A bound name is in scope. An unbound name is in scope when it is a
   # constructor. Conformance then decides whether that constructor
   # inhabits the payload.
-  defp check_val_vars({:var, name}, ctx, book) do
+  defp check_val_vars(val, ctx, book, at)
+
+  defp check_val_vars({:var, name}, ctx, book, at) do
     label = ctor_label(name)
 
     cond do
       MapSet.member?(ctx, name) -> :ok
       ctor_name?(book, label) -> :ok
       run_def?(book, label) -> :ok
-      term_def?(book, label) -> {:error, "#{label} is not a run definition"}
-      true -> {:error, "unbound variable #{name}"}
+      evidence_def?(book, label) -> at_step(at, "evidence is not a value")
+      term_def?(book, label) -> at_step(at, "#{label} is not a run definition")
+      true -> at_step(at, "unbound variable #{name}")
     end
   end
 
-  defp check_val_vars({:con, name, args}, ctx, book) when is_list(args) do
+  defp check_val_vars({:con, name, args}, ctx, book, at) when is_list(args) do
     cond do
       ctor_name?(book, name) or run_def?(book, name) ->
         Enum.reduce_while(args, :ok, fn arg, :ok ->
-          case check_val_vars(arg, ctx, book) do
+          case check_val_vars(arg, ctx, book, at) do
             :ok -> {:cont, :ok}
             err -> {:halt, err}
           end
         end)
 
+      evidence_def?(book, name) ->
+        at_step(at, "evidence is not a value")
+
       term_def?(book, name) ->
-        {:error, "#{name} is not a run definition"}
+        at_step(at, "#{name} is not a run definition")
 
       true ->
-        {:error, "unbound variable #{name}"}
+        at_step(at, "unbound variable #{name}")
     end
   end
 
-  defp check_val_vars({:nat, _}, _ctx, _book), do: :ok
-  defp check_val_vars(:b0, _ctx, _book), do: :ok
-  defp check_val_vars(:b1, _ctx, _book), do: :ok
-  defp check_val_vars(:tt, _ctx, _book), do: :ok
+  defp check_val_vars({:nat, _}, _ctx, _book, _at), do: :ok
+  defp check_val_vars(:b0, _ctx, _book, _at), do: :ok
+  defp check_val_vars(:b1, _ctx, _book, _at), do: :ok
+  defp check_val_vars(:tt, _ctx, _book, _at), do: :ok
 
-  defp check_val_vars({:tup, a, b}, ctx, book) do
-    with :ok <- check_val_vars(a, ctx, book), do: check_val_vars(b, ctx, book)
+  defp check_val_vars({:tup, a, b}, ctx, book, at) do
+    with :ok <- check_val_vars(a, ctx, book, at), do: check_val_vars(b, ctx, book, at)
   end
 
-  defp check_val_vars({:rec, fields}, ctx, book) when is_list(fields) do
+  defp check_val_vars({:rec, fields}, ctx, book, at) when is_list(fields) do
     Enum.reduce_while(fields, :ok, fn {_name, val}, :ok ->
-      case check_val_vars(val, ctx, book) do
+      case check_val_vars(val, ctx, book, at) do
         :ok -> {:cont, :ok}
         err -> {:halt, err}
       end
     end)
   end
 
-  defp check_val_vars({:rep, ix, elem}, ctx, book) do
-    with :ok <- check_val_vars(ix, ctx, book), do: check_val_vars(elem, ctx, book)
+  defp check_val_vars({:rep, ix, elem}, ctx, book, at) do
+    with :ok <- check_val_vars(ix, ctx, book, at), do: check_val_vars(elem, ctx, book, at)
   end
 
-  defp check_val_vars(_, _ctx, _book), do: :ok
+  defp check_val_vars(_, _ctx, _book, _at), do: :ok
+
+  # `at` is a `{line, col}` of the step, or a span, or nil for the definition.
+  defp at_step(%{at: at}, msg), do: at_step(at, msg)
+
+  defp at_step({line, col}, msg) when is_integer(line) and is_integer(col),
+    do: {:error, {line, col}, msg}
+
+  defp at_step({file, line, col}, msg) when is_binary(file), do: {:error, {file, line, col}, msg}
+  defp at_step(_, msg), do: {:error, msg}
+
+  defp evidence_def?(book, name) do
+    Enum.any?(book, fn d ->
+      Map.get(d, :name) == name and Map.get(d, :mode) == :evidence and term_def?(d)
+    end)
+  end
 
   defp ctor_label(name) when is_atom(name), do: Atom.to_string(name)
   defp ctor_label(name) when is_binary(name), do: name
@@ -2427,13 +2493,61 @@ defmodule Muro.Check do
   defp show_mark(:affine), do: "%0"
 
   # One direction is enough: `dual` is an involution.
-  defp other_end(proto, other) do
-    if other == Muro.Session.dual(proto) do
+  # The first step where the right protocol is not that dual is the refusal.
+  defp other_end(proto, other), do: ends_walk(proto, other, [])
+
+  defp ends_walk(left, right, path) do
+    if right == Muro.Session.dual(left) do
       :ok
     else
-      {:error, "expected the other end"}
+      case peel_ends(left, right) do
+        {:one, label, l, r} ->
+          ends_walk(l, r, path ++ [label])
+
+        {:two, label, l0, r0, l1, r1} ->
+          case ends_walk(l0, r0, path ++ [label, "arm b0"]) do
+            :ok -> ends_walk(l1, r1, path ++ [label, "arm b1"])
+            err -> err
+          end
+
+        :diff ->
+          {:error, proto_diverged(left, right, path)}
+      end
     end
   end
+
+  defp proto_diverged(left, right, path) do
+    where = if path == [], do: "", else: " after " <> Enum.join(path, ", ")
+
+    "diverged#{where}: left: #{Muro.Session.step_proto(left)}; right: #{Muro.Session.step_proto(right)}; protocol: #{Muro.Session.show_proto(left)}"
+  end
+
+  defp peel_ends({:send, a, s}, {:recv, a, t}), do: {:one, "send #{pay_atom(a)}", s, t}
+  defp peel_ends({:recv, a, s}, {:send, a, t}), do: {:one, "recv #{pay_atom(a)}", s, t}
+  defp peel_ends({:dsend, x, a, s}, {:drecv, x, a, t}), do: {:one, dep_label("send", x, a), s, t}
+  defp peel_ends({:drecv, x, a, s}, {:dsend, x, a, t}), do: {:one, dep_label("recv", x, a), s, t}
+  defp peel_ends({:esend, x, e, s}, {:erecv, x, e, t}), do: {:one, ev_label("send", x, e), s, t}
+  defp peel_ends({:erecv, x, e, s}, {:esend, x, e, t}), do: {:one, ev_label("recv", x, e), s, t}
+
+  defp peel_ends({:choose, s, t}, {:branch, u, v}), do: {:two, "choose", s, u, t, v}
+  defp peel_ends({:branch, s, t}, {:choose, u, v}), do: {:two, "branch", s, u, t, v}
+
+  defp peel_ends({:isend, x, s, t}, {:irecv, x, u, v}),
+    do: {:two, "send (#{x} : Bit)", s, u, t, v}
+
+  defp peel_ends({:irecv, x, s, t}, {:isend, x, u, v}),
+    do: {:two, "recv (#{x} : Bit)", s, u, t, v}
+
+  defp peel_ends({:rec, x, s}, {:rec, x, t}), do: {:one, "rec #{x}", s, t}
+  defp peel_ends(_, _), do: :diff
+
+  defp pay_atom(ty),
+    do: Muro.Session.step_proto({:send, ty, :end}) |> String.replace_prefix("send ", "")
+
+  defp dep_label(dir, x, a), do: "#{dir} (#{x} : #{pay_atom(a)})"
+
+  defp ev_label(dir, x, e),
+    do: Muro.Session.step_proto({if(dir == "send", do: :esend, else: :erecv), x, e, :end})
 
   defp fetch_process(book, name) do
     case Enum.find(book, &(Map.get(&1, :kind) in [:conform, :read] and &1.name == name)) do

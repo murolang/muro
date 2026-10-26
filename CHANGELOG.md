@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.16.67
+
+A session refusal names the step, and the line and column of that step.
+
+A conform says the process step and the protocol step it was checked against. `3:3: bad: put b0 done does not conform to recv Nat end` points at `put`, not at `conform`. A computed put says why: `run definition calls itself`, `run definition declared later`, `outside the computed fragment: let`, `evidence is not a value`, `argument is not a value`, or `computed value true does not inhabit Maybe Bool`. An evidence bound names the value and the bound: `computed value 2 misses bound ≤ 1`. Only a name with no binding says `unbound variable`.
+
+A meeting names the first divergence. `diverged after put 0, get b, arm b1: left: put goaway; right: get (f : Frame); protocol: recv Frame end` is the step, what each side does there, and the protocol both were checked against. The same shape covers a payload, a choice, a match arm the value does not select, `done` against a pending action, and `linear endpoint not consumed`. A meeting whose participant failed its own conform is not run: `skipped because bad does not conform`.
+
+A parse error at the end of a file points at the last line: `unexpected end of file, expected a process`.
+
+### Manual
+
+- Sessions: where a check fails.
+- Limits: a session argument that does not evaluate names `run definition calls itself` or `run definition declared later`.
+
+### Package
+
+- Version 0.16.67.
+
 ## 0.16.66
 
 A declared session may be the continuation of another session, and a session may take nat parameters.
