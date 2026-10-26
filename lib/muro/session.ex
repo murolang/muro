@@ -480,7 +480,6 @@ defmodule Muro.Session do
 
   defp head_again?({:rec, _, _}), do: true
   defp head_again?({:svar, _}), do: true
-  defp head_again?({:sjump, _, _}), do: true
   defp head_again?(_), do: false
 
   defp step(:done, :end, _ctx, _idx, _penv, _senv, _seen, _fuel, _book), do: :ok
