@@ -1604,6 +1604,97 @@ defmodule Muro.SessionTest do
            """) == :ok
   end
 
+  test "value-protocols.muro checks, and a case dualises arm by arm" do
+    path = "examples/value-protocols.muro"
+    src = File.read!(path)
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+    assert Muro.check_file(path) == :ok
+
+    assert {:ok, db} = Muro.Ast.book_to_db(book)
+    srv = Enum.find(db, &(&1.name == "srv"))
+    assert {:ok, proto} = Session.elaborate(srv, db)
+
+    assert proto ==
+             {:drecv, :f, {:dat, "Frame", []},
+              {:case, {:name, :f},
+               [
+                 {"bytes", {:send, :bit, :end}},
+                 {"trailers", :end},
+                 {"headers", :end}
+               ]}}
+
+    assert Session.dual(Session.dual(proto)) == proto
+
+    assert Session.dual(proto) ==
+             {:dsend, :f, {:dat, "Frame", []},
+              {:case, {:name, :f},
+               [
+                 {"bytes", {:recv, :bit, :end}},
+                 {"trailers", :end},
+                 {"headers", :end}
+               ]}}
+
+    gate = Enum.find(db, &(&1.name == "gate"))
+    assert {:ok, late} = Session.elaborate(gate, db)
+
+    assert late ==
+             {:drecv, :f, {:dat, "Frame", []},
+              {:case, {:run, "late", :f},
+               [
+                 {"true", {:send, {:dat, "Ctl", []}, :end}},
+                 {"false", {:send, {:dat, "Goaway", []}, :end}}
+               ]}}
+
+    assert Session.dual(Session.dual(late)) == late
+  end
+
+  test "a receiver may abandon a case, and a concrete sender follows one arm" do
+    assert check("""
+           data Frame : Type where
+             bytes : Frame
+             trailers : Frame
+             headers : Frame
+
+           data Ctl : Type where
+             rst : Ctl
+
+           session server :=
+             recv (f : Frame) (case f
+               | bytes => send Ctl end
+               | trailers => end
+               | headers => end)
+           conform leave : server := get (f : Frame) stop
+           conform one : server := get (f : Frame) (match f (put rst done) done done)
+           """) == :ok
+  end
+
+  test "a run that reads a field accepts the protocol and a concrete sender" do
+    assert check("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+
+           data Maybe (A : Type) : Type where
+             nothing : Maybe A
+             just : A → Maybe A
+
+           def onJust : run Π (m : Maybe Bool) → Bool :=
+             λ (m : Maybe Bool) →
+               match m motive (λ _ → Bool)
+                 | nothing => false
+                 | just b => true
+
+           session peek :=
+             recv (m : Maybe Bool) (case (onJust m)
+               | true => end
+               | false => send Bool end)
+           session peek-back := dual peek
+           conform none : peek-back := put nothing (get Bool done)
+           conform some : peek-back := put (just true) done
+           """) == :ok
+  end
+
   defp check(src) do
     assert {:ok, book} = Parser.parse(src)
     Check.check_sig(book)

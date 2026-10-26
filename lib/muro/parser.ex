@@ -895,6 +895,7 @@ defmodule Muro.Parser do
       word_kw?(s, "choose") -> parse_proto2(s, "choose", :choose, bound)
       word_kw?(s, "branch") -> parse_proto2(s, "branch", :branch, bound)
       word_kw?(s, "rec") -> parse_rec(s, &parse_proto/2, bound)
+      word_kw?(s, "case") -> parse_case_proto(s, bound)
       has_prefix?(s, "(") -> parse_paren(s, fn body -> parse_proto(body, bound) end)
       ident_start?(s) -> parse_proto_name(s, bound)
       true -> {:error, err(s, "expected a protocol")}
@@ -963,6 +964,62 @@ defmodule Muro.Parser do
 
   defp ix_tag(:send), do: :isend
   defp ix_tag(:recv), do: :irecv
+
+  # `case f | data => S | headers => T` is one protocol per constructor
+  # of the value just bound. `case (late f) | true => S | false => T`
+  # is one protocol per constructor of what `late` returns. The arms
+  # are written in declaration order. The case is the continuation of
+  # the `send` or `recv` that bound the name.
+  defp parse_case_proto(s, bound) do
+    with {:ok, rest} <- kw(s, "case"),
+         {:ok, scrut, rest} <- parse_case_scrut(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), "|"),
+         {:ok, arms, rest} <- parse_case_arms(skip(rest), [], bound) do
+      {:ok, {:case, scrut, arms}, rest}
+    end
+  end
+
+  defp parse_case_scrut(s) do
+    s = skip(s)
+
+    if has_prefix?(s, "(") do
+      with {:ok, rest} <- tok(s, "("),
+           {:ok, fname, rest} <- ident(skip(rest)),
+           {:ok, arg, rest} <- ident(skip(rest)),
+           {:ok, rest} <- tok(skip(rest), ")") do
+        if reserved_session?(fname) or reserved_session?(arg) do
+          {:error, err(s, "expected a name")}
+        else
+          {:ok, {:run, fname, String.to_atom(arg)}, rest}
+        end
+      end
+    else
+      with {:ok, name, rest} <- ident(s) do
+        if reserved_session?(name) do
+          {:error, err(s, "expected a name")}
+        else
+          {:ok, {:name, String.to_atom(name)}, rest}
+        end
+      end
+    end
+  end
+
+  defp parse_case_arms(s, acc, bound) do
+    with {:ok, cname, rest} <- ident(skip(s)),
+         {:ok, rest} <- tok(skip(rest), "=>"),
+         {:ok, proto, rest} <- parse_proto(skip(rest), bound) do
+      acc = [{cname, proto} | acc]
+      looked = skip(rest)
+
+      if has_prefix?(looked, "|") do
+        with {:ok, rest} <- tok(looked, "|") do
+          parse_case_arms(skip(rest), acc, bound)
+        end
+      else
+        {:ok, Enum.reverse(acc), rest}
+      end
+    end
+  end
 
   # `get (b : Bit) on P Q` offers both arms. The name is bound in each.
   defp parse_index_proc(s, name, :bit, bound) do
@@ -1310,7 +1367,7 @@ defmodule Muro.Parser do
   end
 
   defp reserved_session?(name) do
-    name in ~w(end send recv choose branch rec done stop put get pick0 pick1 cover match on Nat Bit Unit Vec dual seen)
+    name in ~w(end send recv choose branch rec case done stop put get pick0 pick1 cover match on Nat Bit Unit Vec dual seen)
   end
 
   defp parse_proto2(s, word, tag, bound) do
@@ -1615,7 +1672,7 @@ defmodule Muro.Parser do
 
   defp pay_stop?(s) do
     Enum.any?(
-      ~w(end send recv choose branch rec on done stop put get pick0 pick1 cover where),
+      ~w(end send recv choose branch rec case on done stop put get pick0 pick1 cover where),
       &word_kw?(s, &1)
     )
   end

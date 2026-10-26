@@ -25,10 +25,12 @@ defmodule Muro.Meet do
   @path_key {__MODULE__, :path}
   @proto_key {__MODULE__, :proto}
   @why_key {__MODULE__, :why}
+  @book_key {__MODULE__, :book}
 
   def meets(p, q, book \\ [], proto \\ nil) do
     Process.put(@path_key, [])
     Process.put(@proto_key, proto)
+    Process.put(@book_key, book)
     Process.delete(@why_key)
 
     try do
@@ -46,6 +48,7 @@ defmodule Muro.Meet do
       Process.delete(@path_key)
       Process.delete(@proto_key)
       Process.delete(@why_key)
+      Process.delete(@book_key)
     end
   end
 
@@ -80,6 +83,19 @@ defmodule Muro.Meet do
   defp advance_proto(proto, step), do: advance_head(proto, step)
 
   defp advance_head({:rec, _, body}, step), do: advance_head(body, step)
+
+  defp advance_head({:dsend, _, _, {:case, scrut, arms}}, {:arm, val}),
+    do: enter_case(scrut, val, arms)
+
+  defp advance_head({:drecv, _, _, {:case, scrut, arms}}, {:arm, val}),
+    do: enter_case(scrut, val, arms)
+
+  defp advance_head({:dsend, _, _, s}, {:arm, _}), do: s
+  defp advance_head({:drecv, _, _, s}, {:arm, _}), do: s
+  defp advance_head({:send, _, s}, {:arm, _}), do: s
+  defp advance_head({:recv, _, s}, {:arm, _}), do: s
+  defp advance_head({:esend, _, _, s}, {:arm, _}), do: s
+  defp advance_head({:erecv, _, _, s}, {:arm, _}), do: s
   defp advance_head({:send, _, s}, :put), do: s
   defp advance_head({:dsend, _, _, s}, :put), do: s
   defp advance_head({:esend, _, _, s}, :put), do: s
@@ -95,6 +111,15 @@ defmodule Muro.Meet do
   defp advance_head({:branch, s, _}, :cover0), do: s
   defp advance_head({:branch, _, t}, :cover1), do: t
   defp advance_head(proto, _), do: proto
+
+  # The sent value selects the same arm on this protocol that conformance
+  # selected. A run is applied to that value, not to an invented field.
+  defp enter_case(scrut, val, arms) do
+    case Muro.Session.chosen_arm(scrut, val, arms, Process.get(@book_key, [])) do
+      {:ok, proto} -> proto
+      _ -> {:case, scrut, arms}
+    end
+  end
 
   @doc """
   `meets/2`, then the multiplicity. Affine abandonment stays.
@@ -657,7 +682,7 @@ defmodule Muro.Meet do
               :yes ->
                 case Muro.Session.arm(send_ty, v, arms, book) do
                   {:ok, arm} ->
-                    took(["get #{gname}", "arm #{arm_name(v)}"], :get)
+                    took(["get #{gname}", "arm #{arm_name(v)}"], {:arm, v})
 
                     advance_arm(
                       orient,

@@ -321,6 +321,390 @@ defmodule Muro.SessionErrorTest do
     assert msg =~ "unexpected end of file, expected"
   end
 
+  test "an in-flight frame that sends goaway is refused, and the meeting is skipped" do
+    assert {:error, msg} =
+             check("""
+             data Frame : Type where
+               bytes : Frame
+               trailers : Frame
+               headers : Frame
+
+             data Ctl : Type where
+               rst : Ctl
+
+             data Goaway : Type where
+               goaway : Goaway
+
+             data Body : Type where
+               chunk : Body
+
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             def late : run Π (f : Frame) → Bool :=
+               λ (f : Frame) →
+                 match f motive (λ _ → Bool)
+                   | bytes => true
+                   | trailers => true
+                   | headers => false
+
+             session server :=
+               recv (f : Frame) (case f
+                 | bytes => send Ctl end
+                 | trailers => send Ctl end
+                 | headers => recv Body end)
+             session client := dual server
+             conform inflight-bad : client :=
+               put bytes (put goaway done)
+             conform stream : server :=
+               get (f : Frame) (match f (get Ctl done) (get Ctl done) (get (b : Body) done))
+             meet wire : inflight-bad with stream
+             """)
+
+    assert msg =~ "inflight-bad: put goaway done does not conform to recv Ctl end"
+    assert msg =~ "wire: skipped because inflight-bad does not conform"
+    refute msg =~ "diverged"
+
+    assert {:error, msg} =
+             check("""
+             data Frame : Type where
+               bytes : Frame
+               trailers : Frame
+               headers : Frame
+
+             data Ctl : Type where
+               rst : Ctl
+
+             data Goaway : Type where
+               goaway : Goaway
+
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             def late : run Π (f : Frame) → Bool :=
+               λ (f : Frame) →
+                 match f motive (λ _ → Bool)
+                   | bytes => true
+                   | trailers => true
+                   | headers => false
+
+             session gate :=
+               recv (f : Frame) (case (late f)
+                 | true => send Ctl end
+                 | false => send Goaway end)
+             conform late-bad : gate :=
+               get (f : Frame) (match f (put goaway done) (put rst done) (put goaway done))
+             """)
+
+    assert msg =~ "late-bad: put goaway done does not conform to send Ctl end"
+  end
+
+  test "a case meeting names the value and the arm" do
+    assert {:error, msg} =
+             check("""
+             data Frame : Type where
+               bytes : Frame
+               trailers : Frame
+               headers : Frame
+
+             data Body : Type where
+               chunk : Body
+
+             session server :=
+               recv (f : Frame) (case f
+                 | bytes => end
+                 | trailers => end
+                 | headers => recv Body end)
+             session client := dual server
+             conform stream : server :=
+               get (f : Frame) (match f done done (get (b : Body) stop))
+             conform open : client :=
+               put headers (put chunk done)
+             meet wire : stream with open
+             meet swap : open with stream
+             """)
+
+    assert msg =~
+             "wire: diverged after get f, arm headers, put chunk: left: stop; right: done; protocol: end"
+
+    assert msg =~
+             "swap: diverged after get f, arm headers, put chunk: left: done; right: stop; protocol: end"
+
+    assert {:error, msg} =
+             check("""
+             data Frame : Type where
+               bytes : Frame
+               trailers : Frame
+               headers : Frame
+
+             data Ctl : Type where
+               rst : Ctl
+
+             session left :=
+               recv (f : Frame) (case f
+                 | bytes => send Ctl end
+                 | trailers => end
+                 | headers => end)
+             session right :=
+               send (f : Frame) (case f
+                 | bytes => send Ctl end
+                 | trailers => end
+                 | headers => end)
+             conform a : left :=
+               get (f : Frame) (match f (put rst done) done done)
+             conform b : right :=
+               put bytes (put rst done)
+             meet bad : a with b
+             """)
+
+    assert msg =~ "arm bytes"
+    assert msg =~ "bad: diverged after recv (f : Frame), arm bytes"
+  end
+
+  test "a case is refused on the wrong type, the wrong name, and the wrong arms" do
+    assert {:error, msg} =
+             check("""
+             data Frame : Type where
+               bytes : Frame
+               trailers : Frame
+               headers : Frame
+
+             session natty := recv (n : Nat) (case n | bytes => end)
+             session paired := recv (p : Nat * Nat) (case p | bytes => end)
+             session recorded := recv (r : {x : Nat}) (case r | bytes => end)
+             session vectored := recv (v : Vec Nat 2) (case v | bytes => end)
+             session united := recv (u : Unit) (case u | bytes => end)
+             session early :=
+               recv (g : Frame) (recv (f : Frame) (case g
+                 | bytes => end
+                 | trailers => end
+                 | headers => end))
+             session bare := case f | bytes => end
+             session loose := recv Frame (case f | bytes => end | trailers => end | headers => end)
+             session short :=
+               recv (f : Frame) (case f
+                 | bytes => end
+                 | trailers => end)
+             session extra :=
+               recv (f : Frame) (case f
+                 | bytes => end
+                 | trailers => end
+                 | headers => end
+                 | extra => end)
+             session order :=
+               recv (f : Frame) (case f
+                 | headers => end
+                 | bytes => end
+                 | trailers => end)
+             """)
+
+    for name <- ~w(natty paired recorded vectored united) do
+      assert msg =~ "#{name}: a case is on a bit or a declared data type"
+    end
+
+    assert msg =~ "early: a case is on the name just bound"
+    assert msg =~ "bare: a case follows the value just exchanged"
+    assert msg =~ "loose: a case follows the value just exchanged"
+    assert msg =~ "short: case arms do not match the constructors"
+    assert msg =~ "extra: case arms do not match the constructors"
+    assert msg =~ "order: case arms do not match the constructors"
+  end
+
+  test "a run case is refused when the run is recursive, later, or outside the fragment" do
+    assert {:error, msg} =
+             check("""
+             data Nest : Type where
+               tip : Nest
+               nest : Nest → Nest
+
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             def walk : run Π (t : Nest) → Bool :=
+               λ (t : Nest) →
+                 match t motive (λ _ → Bool)
+                   | tip => true
+                   | nest u => walk u
+
+             session looped :=
+               recv (t : Nest) (case (walk t)
+                 | true => end
+                 | false => end)
+             """)
+
+    assert msg =~ "looped: run definition calls itself"
+
+    assert {:error, msg} =
+             check("""
+             data Frame : Type where
+               bytes : Frame
+               trailers : Frame
+               headers : Frame
+
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             def early : run Π (f : Frame) → Bool :=
+               λ (f : Frame) → later
+
+             def later : run Bool := true
+
+             session forwarded :=
+               recv (f : Frame) (case (early f)
+                 | true => end
+                 | false => end)
+             """)
+
+    assert msg =~ "forwarded: run definition declared later"
+
+    assert {:error, msg} =
+             check("""
+             data Frame : Type where
+               bytes : Frame
+               trailers : Frame
+               headers : Frame
+
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             def dropped : run Π (f : Frame) → Bool :=
+               λ (f : Frame) → let (a, b) = (true, false) in a
+
+             session letcase :=
+               recv (f : Frame) (case (dropped f)
+                 | true => end
+                 | false => end)
+             """)
+
+    assert msg =~ "letcase: outside the computed fragment: let"
+
+    assert {:error, msg} =
+             check("""
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             data Maybe (A : Type) : Type where
+               nothing : Maybe A
+               just : A → Maybe A
+
+             def onJust : run Π (m : Maybe Bool) → Bool :=
+               λ (m : Maybe Bool) →
+                 match m motive (λ _ → Bool)
+                   | nothing => false
+                   | just b => true
+
+             session peek :=
+               recv (m : Maybe Bool) (case (onJust m)
+                 | true => end
+                 | false => end)
+             conform bad : peek :=
+               get (m : Maybe Bool) (match m done done)
+             """)
+
+    assert msg =~
+             "bad: get (m : (Maybe Bool)) (match m done done) does not conform to recv (m : Maybe Bool) (case (onJust m) | true => end | false => end): the run does not decide an arm"
+
+    refute msg =~ "peek:"
+  end
+
+  test "an unknown sender is refused unless every arm agrees, and the meeting stays refused" do
+    assert {:error, msg} =
+             check("""
+             data Frame : Type where
+               bytes : Frame
+               trailers : Frame
+               headers : Frame
+
+             data Ctl : Type where
+               rst : Ctl
+
+             session split :=
+               recv (g : Frame) (send (f : Frame) (case f
+                 | bytes => send Ctl end
+                 | trailers => end
+                 | headers => end))
+             conform bad : split :=
+               get (g : Frame) (put g done)
+             """)
+
+    assert msg =~
+             "bad: put g done does not conform to send (f : Frame) (case f | bytes => send Ctl end | trailers => end | headers => end): the value g does not select an arm"
+
+    assert {:error, msg} =
+             check("""
+             data Frame : Type where
+               bytes : Frame
+               trailers : Frame
+               headers : Frame
+
+             session relay :=
+               recv (g : Frame) (send (f : Frame) (case f
+                 | bytes => end
+                 | trailers => end
+                 | headers => end))
+             session back := dual relay
+             conform relayed : relay :=
+               get (g : Frame) (put g done)
+             conform hear : back :=
+               put headers (get (f : Frame) (match f done done done))
+             meet wire : relayed with hear
+             """)
+
+    assert msg =~ "the value g does not select an arm"
+    refute msg =~ "relayed: "
+    refute msg =~ "hear: "
+
+    assert {:error, msg} =
+             check("""
+             data Frame : Type where
+               bytes : Frame
+               trailers : Frame
+               headers : Frame
+
+             session server :=
+               recv (f : Frame) (case f
+                 | bytes => end
+                 | trailers => end
+                 | headers => end)
+             conform short : server :=
+               get (f : Frame) (match f done done)
+             conform other : server :=
+               get (f : Frame) (match g done done done)
+             conform closed : server :=
+               get (f : Frame) done
+             session %1 once :=
+               recv (f : Frame) (case f
+                 | bytes => end
+                 | trailers => end
+                 | headers => end)
+             conform abandoned : once :=
+               get (f : Frame) (match f stop done done)
+             """)
+
+    assert msg =~
+             "short: get (f : Frame) (match f done done) does not conform to recv (f : Frame) (case f | bytes => end | trailers => end | headers => end): match does not cover the received value"
+
+    assert msg =~ "other: match does not cover the received value"
+    assert msg =~ "closed: done does not conform to case f"
+    assert msg =~ "abandoned: linear channel abandoned"
+
+    assert {:error, msg} =
+             Parser.parse("""
+             data Bool : Type where
+               true : Bool
+               false : Bool
+             session bad := recv (b : Bool) on end end
+             """)
+
+    assert msg =~ "a next action is chosen by a bit"
+  end
+
   defp check(src) do
     assert {:ok, book} = Parser.parse(src)
     Check.check_sig(book)

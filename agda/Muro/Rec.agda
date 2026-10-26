@@ -55,6 +55,7 @@ open import Muro.Session using
   ; sent
   ; Idx; none; bind; shadow; renameIdx; applyTy; ixOf
   ; Owed; owed; Le; lit-le; resolve
+  ; Scrut; byVal; byRun
   )
 
 ¬_ : Set → Set
@@ -78,6 +79,10 @@ data SExp : Set where
   irecv  : String → SExp → SExp → SExp
   choose : SExp → SExp → SExp
   branch : SExp → SExp → SExp
+  -- The scrutinee is the name the enclosing action binds. The arms
+  -- are elaborated in that action's context, so the case itself
+  -- does not guard a variable.
+  pcase  : Scrut → List (String × SExp) → SExp
   svar   : String → SExp
   mu     : String → SExp → SExp
 
@@ -98,35 +103,47 @@ data PExp : Set where
 -- The continuation dualises. Structural, so it terminates.
 ------------------------------------------------------------------------
 
-dualS : SExp → SExp
-dualS end = end
-dualS (send A s) = recv A (dualS s)
-dualS (recv A s) = send A (dualS s)
-dualS (dsend x A s) = drecv x A (dualS s)
-dualS (drecv x A s) = dsend x A (dualS s)
-dualS (esend x e s) = erecv x e (dualS s)
-dualS (erecv x e s) = esend x e (dualS s)
-dualS (isend x s t) = irecv x (dualS s) (dualS t)
-dualS (irecv x s t) = isend x (dualS s) (dualS t)
-dualS (choose s t) = branch (dualS s) (dualS t)
-dualS (branch s t) = choose (dualS s) (dualS t)
-dualS (svar x) = svar x
-dualS (mu x s) = mu x (dualS s)
+mutual
+  dualS : SExp → SExp
+  dualS end = end
+  dualS (send A s) = recv A (dualS s)
+  dualS (recv A s) = send A (dualS s)
+  dualS (dsend x A s) = drecv x A (dualS s)
+  dualS (drecv x A s) = dsend x A (dualS s)
+  dualS (esend x e s) = erecv x e (dualS s)
+  dualS (erecv x e s) = esend x e (dualS s)
+  dualS (isend x s t) = irecv x (dualS s) (dualS t)
+  dualS (irecv x s t) = isend x (dualS s) (dualS t)
+  dualS (choose s t) = branch (dualS s) (dualS t)
+  dualS (branch s t) = choose (dualS s) (dualS t)
+  dualS (pcase scrut as) = pcase scrut (dualSArms as)
+  dualS (svar x) = svar x
+  dualS (mu x s) = mu x (dualS s)
 
-dualS-invol : (s : SExp) → dualS (dualS s) ≡ s
-dualS-invol end = refl
-dualS-invol (send A s) = cong (send A) (dualS-invol s)
-dualS-invol (recv A s) = cong (recv A) (dualS-invol s)
-dualS-invol (dsend x A s) = cong (dsend x A) (dualS-invol s)
-dualS-invol (drecv x A s) = cong (drecv x A) (dualS-invol s)
-dualS-invol (esend x e s) = cong (esend x e) (dualS-invol s)
-dualS-invol (erecv x e s) = cong (erecv x e) (dualS-invol s)
-dualS-invol (isend x s t) = cong₂ (isend x) (dualS-invol s) (dualS-invol t)
-dualS-invol (irecv x s t) = cong₂ (irecv x) (dualS-invol s) (dualS-invol t)
-dualS-invol (choose s t) = cong₂ choose (dualS-invol s) (dualS-invol t)
-dualS-invol (branch s t) = cong₂ branch (dualS-invol s) (dualS-invol t)
-dualS-invol (svar x) = refl
-dualS-invol (mu x s) = cong (mu x) (dualS-invol s)
+  dualSArms : List (String × SExp) → List (String × SExp)
+  dualSArms [] = []
+  dualSArms ((c , s) ∷ as) = (c , dualS s) ∷ dualSArms as
+
+  dualS-invol : (s : SExp) → dualS (dualS s) ≡ s
+  dualS-invol end = refl
+  dualS-invol (send A s) = cong (send A) (dualS-invol s)
+  dualS-invol (recv A s) = cong (recv A) (dualS-invol s)
+  dualS-invol (dsend x A s) = cong (dsend x A) (dualS-invol s)
+  dualS-invol (drecv x A s) = cong (drecv x A) (dualS-invol s)
+  dualS-invol (esend x e s) = cong (esend x e) (dualS-invol s)
+  dualS-invol (erecv x e s) = cong (erecv x e) (dualS-invol s)
+  dualS-invol (isend x s t) = cong₂ (isend x) (dualS-invol s) (dualS-invol t)
+  dualS-invol (irecv x s t) = cong₂ (irecv x) (dualS-invol s) (dualS-invol t)
+  dualS-invol (choose s t) = cong₂ choose (dualS-invol s) (dualS-invol t)
+  dualS-invol (branch s t) = cong₂ branch (dualS-invol s) (dualS-invol t)
+  dualS-invol (pcase scrut as) = cong (pcase scrut) (dualSArms-invol as)
+  dualS-invol (svar x) = refl
+  dualS-invol (mu x s) = cong (mu x) (dualS-invol s)
+
+  dualSArms-invol : ∀ as → dualSArms (dualSArms as) ≡ as
+  dualSArms-invol [] = refl
+  dualSArms-invol ((c , s) ∷ as) =
+    cong₂ (λ s′ as′ → (c , s′) ∷ as′) (dualS-invol s) (dualSArms-invol as)
 
 ------------------------------------------------------------------------
 -- Guarded syntax. A head is an action. A continuation is that
@@ -150,6 +167,7 @@ data GExp where
   g-irecv  : String → CExp → CExp → GExp
   g-choose : CExp → CExp → GExp
   g-branch : CExp → CExp → GExp
+  g-case   : Scrut → List (String × CExp) → GExp
 
 data CExp where
   c-emb : GExp → CExp
@@ -185,6 +203,7 @@ bad-unguarded >>= _ = bad-unguarded
 
 elabC : SCtx → SExp → Elab CExp
 elabNest : List String → SCtx → SExp → Elab CExp
+elabArms : SCtx → List (String × SExp) → Elab (List (String × CExp))
 
 elabVar : SCtx → String → Elab CExp
 elabVar Γ x with find x Γ
@@ -215,6 +234,7 @@ elabC Γ (branch s t) =
   elabC (guard Γ) s >>= λ c →
   elabC (guard Γ) t >>= λ d →
   good (c-emb (g-branch c d))
+elabC Γ (pcase scrut as) = elabArms Γ as >>= λ es → good (c-emb (g-case scrut es))
 elabC Γ (svar x) = elabVar Γ x
 elabC Γ (mu x s) = elabNest (x ∷ []) ((x , ung) ∷ Γ) s
 
@@ -243,6 +263,15 @@ elabNest xs Γ (branch s t) =
   elabC (guard Γ) s >>= λ c →
   elabC (guard Γ) t >>= λ d →
   good (c-mu xs (g-branch c d))
+elabNest xs Γ (pcase scrut as) = elabArms Γ as >>= λ es → good (c-mu xs (g-case scrut es))
+
+-- A case keeps the context it was elaborated in. The enclosing
+-- action is what guards a variable inside an arm.
+elabArms _ [] = good []
+elabArms Γ ((c , s) ∷ as) =
+  elabC Γ s >>= λ e →
+  elabArms Γ as >>= λ es →
+  good ((c , e) ∷ es)
 
 -- `rec X. X` is unguarded. `rec X. rec Y. X` is unguarded.
 -- A bare name is free. A name under an action of its `rec` is a loop.
@@ -286,12 +315,41 @@ bitC = c-mu ("X" ∷ []) (g-irecv "b" (c-var "X") (c-emb g-end))
 bit-elab : elabC [] bitSyn ≡ good bitC
 bit-elab = refl
 
+-- A variable under only a case is unguarded. Under the receive, it is the loop.
+bareCase : SExp
+bareCase = mu "X" (pcase (byVal "b") (("b0" , svar "X") ∷ []))
+
+bare-case : elabC [] bareCase ≡ bad-unguarded
+bare-case = refl
+
+caseSyn : SExp
+caseSyn = mu "X" (drecv "b" bit (pcase (byVal "b") (("b0" , svar "X") ∷ ("b1" , end) ∷ [])))
+
+caseC : CExp
+caseC = c-mu ("X" ∷ []) (g-drecv "b" bit (c-emb (g-case (byVal "b")
+  (("b0" , c-var "X") ∷ ("b1" , c-emb g-end) ∷ []))))
+
+case-elab : elabC [] caseSyn ≡ good caseC
+case-elab = refl
+
+case-round : dualS (dualS caseSyn) ≡ caseSyn
+case-round = refl
+
 ------------------------------------------------------------------------
 -- The coinductive protocol. One observation is one action.
 -- `unfold` places the recursive call under that action.
 ------------------------------------------------------------------------
 
-data SStep (P : Set) : Set where
+data SStep (P : Set) : Set
+data ArmF (P A : Set) : Set
+record ∞Proto : Set
+record Arms∞ : Set
+
+data ArmF P A where
+  a-nil  : ArmF P A
+  a-cons : String → P → A → ArmF P A
+
+data SStep P where
   s-end    : SStep P
   s-send   : Ty → P → SStep P
   s-recv   : Ty → P → SStep P
@@ -303,12 +361,20 @@ data SStep (P : Set) : Set where
   s-irecv  : String → P → P → SStep P
   s-choose : P → P → SStep P
   s-branch : P → P → SStep P
+  s-case   : Scrut → Arms∞ → SStep P
 
-record ∞Proto : Set where
+record ∞Proto where
   coinductive
   field observe : SStep ∞Proto
 
+-- One constructor of the case, then the rest. The tail is the
+-- coinductive record, so unfolding an arm sits under `a-cons`.
+record Arms∞ where
+  coinductive
+  field ahead : ArmF ∞Proto Arms∞
+
 open ∞Proto
+open Arms∞
 
 Env : Set
 Env = List (String × GExp)
@@ -328,22 +394,31 @@ cont ρ (c-emb g) = ρ , g
 cont ρ (c-var x) = ρ , lookupG x ρ
 cont ρ (c-mu xs g) = bindAll xs g ρ , g
 
-unfold : Env → GExp → ∞Proto
-observe (unfold ρ g-end) = s-end
-observe (unfold ρ (g-send A c)) = s-send A (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c)))
-observe (unfold ρ (g-recv A c)) = s-recv A (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c)))
-observe (unfold ρ (g-dsend x A c)) = s-dsend x A (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c)))
-observe (unfold ρ (g-drecv x A c)) = s-drecv x A (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c)))
-observe (unfold ρ (g-esend x e c)) = s-esend x e (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c)))
-observe (unfold ρ (g-erecv x e c)) = s-erecv x e (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c)))
-observe (unfold ρ (g-isend x c d)) =
-  s-isend x (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c))) (unfold (proj₁ (cont ρ d)) (proj₂ (cont ρ d)))
-observe (unfold ρ (g-irecv x c d)) =
-  s-irecv x (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c))) (unfold (proj₁ (cont ρ d)) (proj₂ (cont ρ d)))
-observe (unfold ρ (g-choose c d)) =
-  s-choose (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c))) (unfold (proj₁ (cont ρ d)) (proj₂ (cont ρ d)))
-observe (unfold ρ (g-branch c d)) =
-  s-branch (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c))) (unfold (proj₁ (cont ρ d)) (proj₂ (cont ρ d)))
+mutual
+  unfold : Env → GExp → ∞Proto
+  observe (unfold ρ g-end) = s-end
+  observe (unfold ρ (g-send A c)) = s-send A (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c)))
+  observe (unfold ρ (g-recv A c)) = s-recv A (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c)))
+  observe (unfold ρ (g-dsend x A c)) = s-dsend x A (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c)))
+  observe (unfold ρ (g-drecv x A c)) = s-drecv x A (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c)))
+  observe (unfold ρ (g-esend x e c)) = s-esend x e (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c)))
+  observe (unfold ρ (g-erecv x e c)) = s-erecv x e (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c)))
+  observe (unfold ρ (g-isend x c d)) =
+    s-isend x (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c))) (unfold (proj₁ (cont ρ d)) (proj₂ (cont ρ d)))
+  observe (unfold ρ (g-irecv x c d)) =
+    s-irecv x (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c))) (unfold (proj₁ (cont ρ d)) (proj₂ (cont ρ d)))
+  observe (unfold ρ (g-choose c d)) =
+    s-choose (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c))) (unfold (proj₁ (cont ρ d)) (proj₂ (cont ρ d)))
+  observe (unfold ρ (g-branch c d)) =
+    s-branch (unfold (proj₁ (cont ρ c)) (proj₂ (cont ρ c))) (unfold (proj₁ (cont ρ d)) (proj₂ (cont ρ d)))
+  observe (unfold ρ (g-case scrut as)) = s-case scrut (armsOf ρ as)
+
+  -- The recursive unfolding of an arm is an argument of `a-cons`.
+  armsOf : Env → List (String × CExp) → Arms∞
+  ahead (armsOf _ []) = a-nil
+  ahead (armsOf ρ ((c , c-emb g) ∷ as)) = a-cons c (unfold ρ g) (armsOf ρ as)
+  ahead (armsOf ρ ((c , c-var x) ∷ as)) = a-cons c (unfold ρ (lookupG x ρ)) (armsOf ρ as)
+  ahead (armsOf ρ ((c , c-mu xs g) ∷ as)) = a-cons c (unfold (bindAll xs g ρ) g) (armsOf ρ as)
 
 ------------------------------------------------------------------------
 -- Processes, the same way. A jump is a variable under an action.
@@ -491,6 +566,7 @@ loop-open (f-mu (f-get (f-put ())))
 
 dualG : GExp → GExp
 dualC : CExp → CExp
+dualList : List (String × CExp) → List (String × CExp)
 dualG g-end = g-end
 dualG (g-send A c) = g-recv A (dualC c)
 dualG (g-recv A c) = g-send A (dualC c)
@@ -502,15 +578,20 @@ dualG (g-isend x c d) = g-irecv x (dualC c) (dualC d)
 dualG (g-irecv x c d) = g-isend x (dualC c) (dualC d)
 dualG (g-choose c d) = g-branch (dualC c) (dualC d)
 dualG (g-branch c d) = g-choose (dualC c) (dualC d)
+dualG (g-case scrut as) = g-case scrut (dualList as)
 dualC (c-emb g) = c-emb (dualG g)
 dualC (c-var x) = c-var x
 dualC (c-mu xs g) = c-mu xs (dualG g)
+
+dualList [] = []
+dualList ((c , e) ∷ as) = (c , dualC e) ∷ dualList as
 
 dualEnv : Env → Env
 dualEnv [] = []
 dualEnv ((x , g) ∷ ρ) = (x , dualG g) ∷ dualEnv ρ
 
 dual∞ : ∞Proto → ∞Proto
+dualArms∞ : Arms∞ → Arms∞
 observe (dual∞ p) = mapDual (observe p)
   where
     mapDual : SStep ∞Proto → SStep ∞Proto
@@ -525,11 +606,20 @@ observe (dual∞ p) = mapDual (observe p)
     mapDual (s-irecv x q r) = s-isend x (dual∞ q) (dual∞ r)
     mapDual (s-choose q r) = s-branch (dual∞ q) (dual∞ r)
     mapDual (s-branch q r) = s-choose (dual∞ q) (dual∞ r)
+    mapDual (s-case scrut as) = s-case scrut (dualArms∞ as)
+
+ahead (dualArms∞ as) with ahead as
+... | a-nil = a-nil
+... | a-cons c p qs = a-cons c (dual∞ p) (dualArms∞ qs)
 
 data _~S_ : SStep ∞Proto → SStep ∞Proto → Set
+data _~AS_ : ArmF ∞Proto Arms∞ → ArmF ∞Proto Arms∞ → Set
 record _~_ (p q : ∞Proto) : Set where
   coinductive
   field obs : observe p ~S observe q
+record _~A_ (as bs : Arms∞) : Set where
+  coinductive
+  field aobs : ahead as ~AS ahead bs
 
 data _~S_ where
   ~end    : s-end ~S s-end
@@ -543,10 +633,17 @@ data _~S_ where
   ~irecv  : ∀ {x p q p' q'} → p ~ q → p' ~ q' → s-irecv x p p' ~S s-irecv x q q'
   ~choose : ∀ {p q p' q'} → p ~ q → p' ~ q' → s-choose p p' ~S s-choose q q'
   ~branch : ∀ {p q p' q'} → p ~ q → p' ~ q' → s-branch p p' ~S s-branch q q'
+  ~case   : ∀ {scrut as bs} → as ~A bs → s-case scrut as ~S s-case scrut bs
+
+data _~AS_ where
+  ~anil  : a-nil ~AS a-nil
+  ~acons : ∀ {c p q as bs} → p ~ q → as ~A bs → a-cons c p as ~AS a-cons c q bs
 
 open _~_
+open _~A_
 
 invol : (p : ∞Proto) → dual∞ (dual∞ p) ~ p
+involA : (as : Arms∞) → dualArms∞ (dualArms∞ as) ~A as
 obs (invol p) with observe p
 ... | s-end = ~end
 ... | s-send A q = ~send (invol q)
@@ -559,6 +656,11 @@ obs (invol p) with observe p
 ... | s-irecv x q r = ~irecv (invol q) (invol r)
 ... | s-choose q r = ~choose (invol q) (invol r)
 ... | s-branch q r = ~branch (invol q) (invol r)
+... | s-case scrut as = ~case (involA as)
+
+aobs (involA as) with ahead as
+... | a-nil = ~anil
+... | a-cons c p qs = ~acons (invol p) (involA qs)
 
 lookup-dual : (x : String) (ρ : Env) → lookupG x (dualEnv ρ) ≡ dualG (lookupG x ρ)
 lookup-dual x [] = refl
@@ -577,6 +679,8 @@ bindAll-dual (x ∷ xs) g ρ = cong ((x , dualG g) ∷_) (bindAll-dual xs g ρ)
 
 -- Unfolding `dual` is dualising the unfolding.
 comm : (ρ : Env) (g : GExp) → dual∞ (unfold ρ g) ~ unfold (dualEnv ρ) (dualG g)
+commA : (ρ : Env) (as : List (String × CExp)) →
+  dualArms∞ (armsOf ρ as) ~A armsOf (dualEnv ρ) (dualList as)
 obs (comm ρ g-end) = ~end
 obs (comm ρ (g-send A (c-emb g))) = ~recv (comm ρ g)
 obs (comm ρ (g-send A (c-var v))) rewrite lookup-dual v ρ = ~recv (comm ρ (lookupG v ρ))
@@ -632,6 +736,14 @@ obs (comm ρ (g-branch (c-var v) (c-mu ys h))) rewrite lookup-dual v ρ | bindAl
 obs (comm ρ (g-branch (c-mu xs g) (c-emb h))) rewrite bindAll-dual xs g ρ = ~choose (comm (bindAll xs g ρ) g) (comm ρ h)
 obs (comm ρ (g-branch (c-mu xs g) (c-var w))) rewrite bindAll-dual xs g ρ | lookup-dual w ρ = ~choose (comm (bindAll xs g ρ) g) (comm ρ (lookupG w ρ))
 obs (comm ρ (g-branch (c-mu xs g) (c-mu ys h))) rewrite bindAll-dual xs g ρ | bindAll-dual ys h ρ = ~choose (comm (bindAll xs g ρ) g) (comm (bindAll ys h ρ) h)
+obs (comm ρ (g-case scrut as)) = ~case (commA ρ as)
+
+aobs (commA _ []) = ~anil
+aobs (commA ρ ((c , c-emb g) ∷ as)) = ~acons (comm ρ g) (commA ρ as)
+aobs (commA ρ ((c , c-var v) ∷ as)) rewrite lookup-dual v ρ =
+  ~acons (comm ρ (lookupG v ρ)) (commA ρ as)
+aobs (commA ρ ((c , c-mu xs g) ∷ as)) rewrite bindAll-dual xs g ρ =
+  ~acons (comm (bindAll xs g ρ) g) (commA ρ as)
 
 ------------------------------------------------------------------------
 -- Conformance is a bisimulation. One action agrees, then the

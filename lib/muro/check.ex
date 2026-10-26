@@ -2510,6 +2510,14 @@ defmodule Muro.Check do
             err -> err
           end
 
+        {:many, label, pairs} ->
+          Enum.reduce_while(pairs, :ok, fn {arm, l, r}, :ok ->
+            case ends_walk(l, r, path ++ [label, "arm #{arm}"]) do
+              :ok -> {:cont, :ok}
+              err -> {:halt, err}
+            end
+          end)
+
         :diff ->
           {:error, proto_diverged(left, right, path)}
       end
@@ -2524,6 +2532,15 @@ defmodule Muro.Check do
 
   defp peel_ends({:send, a, s}, {:recv, a, t}), do: {:one, "send #{pay_atom(a)}", s, t}
   defp peel_ends({:recv, a, s}, {:send, a, t}), do: {:one, "recv #{pay_atom(a)}", s, t}
+
+  defp peel_ends({:dsend, x, a, {:case, sl, arms}}, {:drecv, x, a, {:case, sr, arms2}}) do
+    peel_case("send", x, a, sl, sr, arms, arms2)
+  end
+
+  defp peel_ends({:drecv, x, a, {:case, sl, arms}}, {:dsend, x, a, {:case, sr, arms2}}) do
+    peel_case("recv", x, a, sl, sr, arms, arms2)
+  end
+
   defp peel_ends({:dsend, x, a, s}, {:drecv, x, a, t}), do: {:one, dep_label("send", x, a), s, t}
   defp peel_ends({:drecv, x, a, s}, {:dsend, x, a, t}), do: {:one, dep_label("recv", x, a), s, t}
   defp peel_ends({:esend, x, e, s}, {:erecv, x, e, t}), do: {:one, ev_label("send", x, e), s, t}
@@ -2540,6 +2557,21 @@ defmodule Muro.Check do
 
   defp peel_ends({:rec, x, s}, {:rec, x, t}), do: {:one, "rec #{x}", s, t}
   defp peel_ends(_, _), do: :diff
+
+  defp peel_case(dir, x, a, sl, sr, arms, arms2) do
+    left = Enum.map(arms, fn {c, s} -> {c, s} end)
+    right = Enum.map(arms2, fn {c, s} -> {c, s} end)
+
+    if sl == sr and Enum.map(left, &elem(&1, 0)) == Enum.map(right, &elem(&1, 0)) do
+      pairs =
+        Enum.zip(left, right)
+        |> Enum.map(fn {{c, s}, {_c, t}} -> {c, s, t} end)
+
+      {:many, dep_label(dir, x, a), pairs}
+    else
+      :diff
+    end
+  end
 
   defp pay_atom(ty),
     do: Muro.Session.step_proto({:send, ty, :end}) |> String.replace_prefix("send ", "")

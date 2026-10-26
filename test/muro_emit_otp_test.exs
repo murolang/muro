@@ -604,6 +604,26 @@ defmodule Muro.EmitOtpTest do
     assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, {:unexpected, true}}}
   end
 
+  test "a value case picks the process arm, and evidence stays off the message" do
+    assert {:ok, src} =
+             Emit.Otp.render(checked!("examples/value-protocols.muro"), "value-protocols")
+
+    assert src =~
+             "{:hear, {:dat, \"Frame\", []}, :f, {:pick, [{:say, :rst, :finish}, {:say, :rst, :finish}, {:hear, {:dat, \"Body\", []}, :b, :finish}]}}"
+
+    assert src =~
+             "{:hear, {:dat, \"Frame\", []}, :f, {:pick, [{:say, :rst, :finish}, {:say, :rst, :finish}, {:say, :goaway, :finish}]}}"
+
+    assert src =~
+             "{:hear, {:dat, \"Frame\", []}, :f, {:pick, [{:say, 0, :finish}, :finish, :finish]}}"
+
+    assert src =~ "{:say, :headers, {:say, :chunk, :finish}}"
+    refute src =~ "≤"
+    refute src =~ "late"
+
+    Code.compile_string(src)
+  end
+
   defp start(name, peer \\ self()) do
     apply(Module.concat("PingOtp", name), :start, [peer])
   end

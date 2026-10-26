@@ -242,6 +242,34 @@ meet stream-wire : up with down
 
 See [Sessions](sessions.md#a-named-continuation).
 
+## value-protocols.muro
+
+A protocol continues by the value just exchanged. One form follows the constructor. The other follows a `run` of it.
+
+```
+session server :=
+  recv (f : Frame) (case f
+    | bytes => send Ctl end
+    | trailers => send Ctl end
+    | headers => recv Body end)
+
+def late : run Π (f : Frame) → Bool :=
+  λ (f : Frame) →
+    match f motive (λ _ → Bool)
+      | bytes => true
+      | trailers => true
+      | headers => false
+
+session gate :=
+  recv (f : Frame) (case (late f)
+    | true => send Ctl end
+    | false => send Goaway end)
+```
+
+`stream` matches on `Frame`. `bytes` and `trailers` send `rst`. `headers` receives a body. `open-headers` and `inflight` are the other end, and both meeting orders check. `as-headers` and `as-bytes` are computed puts, and each is checked on the arm that value selects. `gate-server` sends `rst` when `late` is `true` and `goaway` when it is `false`. `loop` is that `case` under `rec`. `spin` calls itself from the `bytes` arm. `srv` continues as `ack`. `sized 3` sends a vector on `b0`. `counted` owes `d ≤ 1` on `bytes`, and the nat is what travels. `once` is `%1`, and each arm finishes. `pass` returns that endpoint. `relayed` forwards a frame when every arm is `end`. A server that sends `goaway` for an in-flight frame is refused; that book is in `test/muro_session_error_test.exs`.
+
+See [Sessions](sessions.md#a-protocol-follows-the-received-constructor).
+
 ## place.muro
 
 A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, and assembly emitters omit all three. `--node` writes one call for each cross.

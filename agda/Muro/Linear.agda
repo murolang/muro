@@ -55,16 +55,17 @@ open import Muro.Env using (checkBound; combine; oneHot)
 open import Muro.Arrow using (m1; checkArrow)
 open import Muro.Session using
   ( nat; bit; boolTy; maybeBool
-  ; ty≟; nexp≟
+  ; ty≟; nexp≟; scrutEq
   ; Proc; done; stop; put; get; pick0; pick1; cover; iget; mget
   ; lit; b0
   ; effCall; bitTaker
-  ; pong)
+  ; pong
+  ; byVal)
 open import Muro.Dual using (peer)
 open import Muro.Rec using
   ( SExp; dualS
   ; end; send; recv; dsend; drecv; esend; erecv; isend; irecv; choose; branch
-  ; svar; mu)
+  ; pcase; svar; mu)
 open import Muro.Meet using (bitGiver) renaming (decide to meetDecide; yes to meetYes; no to meetNo)
 
 ------------------------------------------------------------------------
@@ -163,21 +164,28 @@ bindOk lin _            = false
 bindOk aff (sess lin _) = false
 bindOk aff _            = true
 
-protoEq : SExp → SExp → Bool
-protoEq end end = true
-protoEq (send A S) (send B T) = ⌊ ty≟ A B ⌋ ∧ protoEq S T
-protoEq (recv A S) (recv B T) = ⌊ ty≟ A B ⌋ ∧ protoEq S T
-protoEq (dsend x A S) (dsend y B T) = ⌊ x ≟S y ⌋ ∧ ⌊ ty≟ A B ⌋ ∧ protoEq S T
-protoEq (drecv x A S) (drecv y B T) = ⌊ x ≟S y ⌋ ∧ ⌊ ty≟ A B ⌋ ∧ protoEq S T
-protoEq (esend x e S) (esend y f T) = ⌊ x ≟S y ⌋ ∧ ⌊ nexp≟ e f ⌋ ∧ protoEq S T
-protoEq (erecv x e S) (erecv y f T) = ⌊ x ≟S y ⌋ ∧ ⌊ nexp≟ e f ⌋ ∧ protoEq S T
-protoEq (isend x S T) (isend y U V) = ⌊ x ≟S y ⌋ ∧ protoEq S U ∧ protoEq T V
-protoEq (irecv x S T) (irecv y U V) = ⌊ x ≟S y ⌋ ∧ protoEq S U ∧ protoEq T V
-protoEq (choose S T) (choose U V) = protoEq S U ∧ protoEq T V
-protoEq (branch S T) (branch U V) = protoEq S U ∧ protoEq T V
-protoEq (svar x) (svar y) = ⌊ x ≟S y ⌋
-protoEq (mu x s) (mu y t) = ⌊ x ≟S y ⌋ ∧ protoEq s t
-protoEq _ _ = false
+mutual
+  protoEq : SExp → SExp → Bool
+  protoEq end end = true
+  protoEq (send A S) (send B T) = ⌊ ty≟ A B ⌋ ∧ protoEq S T
+  protoEq (recv A S) (recv B T) = ⌊ ty≟ A B ⌋ ∧ protoEq S T
+  protoEq (dsend x A S) (dsend y B T) = ⌊ x ≟S y ⌋ ∧ ⌊ ty≟ A B ⌋ ∧ protoEq S T
+  protoEq (drecv x A S) (drecv y B T) = ⌊ x ≟S y ⌋ ∧ ⌊ ty≟ A B ⌋ ∧ protoEq S T
+  protoEq (esend x e S) (esend y f T) = ⌊ x ≟S y ⌋ ∧ ⌊ nexp≟ e f ⌋ ∧ protoEq S T
+  protoEq (erecv x e S) (erecv y f T) = ⌊ x ≟S y ⌋ ∧ ⌊ nexp≟ e f ⌋ ∧ protoEq S T
+  protoEq (isend x S T) (isend y U V) = ⌊ x ≟S y ⌋ ∧ protoEq S U ∧ protoEq T V
+  protoEq (irecv x S T) (irecv y U V) = ⌊ x ≟S y ⌋ ∧ protoEq S U ∧ protoEq T V
+  protoEq (choose S T) (choose U V) = protoEq S U ∧ protoEq T V
+  protoEq (branch S T) (branch U V) = protoEq S U ∧ protoEq T V
+  protoEq (pcase s as) (pcase t bs) = scrutEq s t ∧ armsEq as bs
+  protoEq (svar x) (svar y) = ⌊ x ≟S y ⌋
+  protoEq (mu x s) (mu y t) = ⌊ x ≟S y ⌋ ∧ protoEq s t
+  protoEq _ _ = false
+
+  armsEq : List (String × SExp) → List (String × SExp) → Bool
+  armsEq [] [] = true
+  armsEq ((c , S) ∷ as) ((d , T) ∷ bs) = ⌊ c ≟S d ⌋ ∧ protoEq S T ∧ armsEq as bs
+  armsEq _ _ = false
 
 eqETy : ETy → ETy → Bool
 eqETy (sess q S) (sess q' T) = eqMult q q' ∧ protoEq S T
@@ -515,3 +523,19 @@ lin-match = refl
 
 lin-match-stop : meetProc lin (mget bit "b" (done ∷ stop ∷ [])) (put bit (lit b0) done) ≡ fail "linear variable unused"
 lin-match-stop = refl
+
+-- A case protocol is an endpoint. Each direction is one use.
+valueProto : SExp
+valueProto = drecv "b" bit (pcase (byVal "b") (("b0" , end) ∷ ("b1" , send nat end) ∷ []))
+
+value-round : dualS (dualS valueProto) ≡ valueProto
+value-round = refl
+
+valueBackTy : ETy
+valueBackTy = arr lin (sess lin valueProto) (sess lin (dualS valueProto))
+
+valueBack : ETm 0
+valueBack = lam lin (sess lin valueProto) (dualₑ (var fzero))
+
+value-back-ok : check evid [] valueBackTy valueBack ≡ ok []
+value-back-ok = refl

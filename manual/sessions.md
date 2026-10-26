@@ -165,7 +165,7 @@ meet reply-wire : reply with hear
 
 ## A value chooses the next action
 
-The continuation of a `get` may match on the value that `get` just bound. The process has one arm per constructor, in declaration order. A bit is `b0`, then `b1`. The protocol after the `get` is one protocol. Each arm is a process that conforms to that protocol, and the processes may differ: `pick0 done` and `pick1 (put 0 done)` both follow `choose`, and `stop` and `done` both follow `end`. The received value chooses which of those processes runs. It does not choose a different protocol. Two protocols after a bit stay `recv (b : Bit) on S T`, and the sender writes the literal `b0` or `b1`. A variable bit and a computed bit do not select an `on` arm. The meeting checks that the chosen arm is the one the other party covers. The same form works for a declared data type.
+The continuation of a `get` may match on the value that `get` just bound. The process has one arm per constructor, in declaration order. A bit is `b0`, then `b1`. The protocol after the `get` is one protocol. Each arm is a process that conforms to that protocol, and the processes may differ: `pick0 done` and `pick1 (put 0 done)` both follow `choose`, and `stop` and `done` both follow `end`. The received value chooses which of those processes runs. It does not choose a different protocol. A different protocol after the value is `case`, below. Two protocols after a bit stay `recv (b : Bit) on S T`, and the sender writes the literal `b0` or `b1`. A variable bit and a computed bit do not select an `on` arm. The meeting checks that the chosen arm is the one the other party covers. The same form works for a declared data type.
 
 ```muro
 session choice := recv Bit (choose end (send Nat end))
@@ -182,6 +182,50 @@ meet arm : taker with giver
 `b0` takes `pick0 done`. `b1` takes `pick1 (put 0 done)`. `get (b : Bool) (match b done done)` and `get (m : Maybe Nat) (match m done done)` cover `Bool` and `Maybe` the same way: `true` then `false`, `nothing` then `just`. A match that does not cover the received value is refused. `recv (b : Bool) on end end` is still refused: an indexed protocol is a bit, and the sender writes the literal.
 
 `examples/computed.muro`
+
+## A protocol follows the received constructor
+
+The continuation of the value just exchanged may be one protocol per constructor. The payload is a bit or a declared data type. The arms are that declaration's constructors, in declaration order, and each arm is a protocol. The dual writes `send` and dualises each arm. A receiver covers every constructor. Each process arm conforms to the protocol arm of that constructor. A sender of a literal, or of a value a `run` computes, is checked only on the arm that value selects.
+
+```muro
+session server :=
+  recv (f : Frame) (case f
+    | bytes => send Ctl end
+    | trailers => send Ctl end
+    | headers => recv Body end)
+
+conform stream : server :=
+  get (f : Frame) (match f (put rst done) (put rst done) (get (b : Body) done))
+
+conform open-headers : client := put headers (put chunk done)
+```
+
+`headers` takes `recv Body`. `bytes` and `trailers` take `send Ctl`. `client` is `dual server`, so `open-headers` sends `headers` and then a body. `put bytes (get (c : Ctl) done)` follows the `bytes` arm. A sender that writes `goaway` on that arm does not.
+
+## A protocol follows a run of the value
+
+The scrutinee may be a `run` applied to the value just bound. The `run` is one argument, the payload, and its body is the computed fragment: it does not call itself or a later `run`. The arms are the constructors of the result, in declaration order. A receiver still has one process arm per constructor of the payload. That arm is checked against the protocol the `run` returns for that constructor, probed with no fields.
+
+```muro
+def late : run Π (f : Frame) → Bool :=
+  λ (f : Frame) →
+    match f motive (λ _ → Bool)
+      | bytes => true
+      | trailers => true
+      | headers => false
+
+session gate :=
+  recv (f : Frame) (case (late f)
+    | true => send Ctl end
+    | false => send Goaway end)
+
+conform gate-server : gate :=
+  get (f : Frame) (match f (put rst done) (put rst done) (put goaway done))
+```
+
+`late bytes` and `late trailers` are `true`, so those arms send `Ctl`. `late headers` is `false`, so that arm sends `Goaway`. The same `case` may sit under `rec`, in a session call, and on a linear endpoint. Each arm of a linear endpoint consumes it once.
+
+`examples/value-protocols.muro`
 
 ## Dependence
 

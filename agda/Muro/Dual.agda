@@ -18,7 +18,9 @@
 module Muro.Dual where
 
 open import Data.Empty using (⊥)
-open import Data.List.Base using ([])
+open import Data.List.Base using (List; []; _∷_)
+open import Data.Product using (_×_; _,_)
+open import Data.String.Base using (String)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; cong₂)
 
 open import Muro.Base using (Mode; spec; run)
@@ -32,31 +34,42 @@ open import Muro.Session hiding (¬_; Seat; no-run; ping)
 -- stays `end`. The payload type stays. The continuation dualises.
 ------------------------------------------------------------------------
 
-dual : Proto → Proto
-dual end = end
-dual (send A S) = recv A (dual S)
-dual (recv A S) = send A (dual S)
-dual (dsend x A S) = drecv x A (dual S)
-dual (drecv x A S) = dsend x A (dual S)
-dual (esend x e S) = erecv x e (dual S)
-dual (erecv x e S) = esend x e (dual S)
-dual (isend x S T) = irecv x (dual S) (dual T)
-dual (irecv x S T) = isend x (dual S) (dual T)
-dual (choose S T) = branch (dual S) (dual T)
-dual (branch S T) = choose (dual S) (dual T)
+mutual
+  dual : Proto → Proto
+  dual end = end
+  dual (send A S) = recv A (dual S)
+  dual (recv A S) = send A (dual S)
+  dual (dsend x A S) = drecv x A (dual S)
+  dual (drecv x A S) = dsend x A (dual S)
+  dual (esend x e S) = erecv x e (dual S)
+  dual (erecv x e S) = esend x e (dual S)
+  dual (isend x S T) = irecv x (dual S) (dual T)
+  dual (irecv x S T) = isend x (dual S) (dual T)
+  dual (choose S T) = branch (dual S) (dual T)
+  dual (branch S T) = choose (dual S) (dual T)
+  dual (pcase scrut arms) = pcase scrut (dualArms arms)
 
-dual-invol : ∀ S → dual (dual S) ≡ S
-dual-invol end = refl
-dual-invol (send A S) = cong (send A) (dual-invol S)
-dual-invol (recv A S) = cong (recv A) (dual-invol S)
-dual-invol (dsend x A S) = cong (dsend x A) (dual-invol S)
-dual-invol (drecv x A S) = cong (drecv x A) (dual-invol S)
-dual-invol (esend x e S) = cong (esend x e) (dual-invol S)
-dual-invol (erecv x e S) = cong (erecv x e) (dual-invol S)
-dual-invol (isend x S T) = cong₂ (isend x) (dual-invol S) (dual-invol T)
-dual-invol (irecv x S T) = cong₂ (irecv x) (dual-invol S) (dual-invol T)
-dual-invol (choose S T) = cong₂ choose (dual-invol S) (dual-invol T)
-dual-invol (branch S T) = cong₂ branch (dual-invol S) (dual-invol T)
+  dualArms : List (String × Proto) → List (String × Proto)
+  dualArms [] = []
+  dualArms ((c , S) ∷ as) = (c , dual S) ∷ dualArms as
+
+  dual-invol : ∀ S → dual (dual S) ≡ S
+  dual-invol end = refl
+  dual-invol (send A S) = cong (send A) (dual-invol S)
+  dual-invol (recv A S) = cong (recv A) (dual-invol S)
+  dual-invol (dsend x A S) = cong (dsend x A) (dual-invol S)
+  dual-invol (drecv x A S) = cong (drecv x A) (dual-invol S)
+  dual-invol (esend x e S) = cong (esend x e) (dual-invol S)
+  dual-invol (erecv x e S) = cong (erecv x e) (dual-invol S)
+  dual-invol (isend x S T) = cong₂ (isend x) (dual-invol S) (dual-invol T)
+  dual-invol (irecv x S T) = cong₂ (irecv x) (dual-invol S) (dual-invol T)
+  dual-invol (choose S T) = cong₂ choose (dual-invol S) (dual-invol T)
+  dual-invol (branch S T) = cong₂ branch (dual-invol S) (dual-invol T)
+  dual-invol (pcase scrut arms) = cong (pcase scrut) (arms-invol arms)
+
+  arms-invol : ∀ as → dualArms (dualArms as) ≡ as
+  arms-invol [] = refl
+  arms-invol ((c , S) ∷ as) = cong₂ (λ S′ as′ → (c , S′) ∷ as′) (dual-invol S) (arms-invol as)
 
 ------------------------------------------------------------------------
 -- The wall. The other end is a protocol, so it sits at spec.
@@ -102,11 +115,11 @@ grant : Proc
 grant = put nat (lit (num 8)) (get nat "d" done)
 
 grant-ok : Conforms [] grant (dual window)
-grant-ok = dput-ok refl (lit-ok refl) (eget-ok done-end)
+grant-ok = dput-ok refl (lit-ok refl) plain-erecv (eget-ok done-end)
 
 -- The receiver gets a nat, not a bit.
 grant-bit : ¬ Conforms [] (put nat (lit (num 8)) (get bit "d" done)) (dual window)
-grant-bit (dput-ok refl _ ())
+grant-bit (dput-ok refl _ _ ())
 
 peer : Proc
 peer = put nat (lit two) (get nat "x" done)
@@ -166,3 +179,16 @@ down = get boolTy "b" done
 
 down-ok : Conforms [] down (dual flag)
 down-ok = get-ok refl done-end
+
+-- A case dualises arm by arm. The scrutinee stays the scrutinee.
+frame-other : dual frameCase ≡ frameClientProto
+frame-other = refl
+
+frame-round : dual (dual frameCase) ≡ frameCase
+frame-round = refl
+
+late-other : dual lateCase ≡ lateClientProto
+late-other = refl
+
+late-round : dual (dual lateCase) ≡ lateCase
+late-round = refl
