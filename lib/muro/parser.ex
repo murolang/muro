@@ -268,6 +268,7 @@ defmodule Muro.Parser do
     with {:ok, rest} <- kw(s, "session"),
          {:ok, mult, stated, rest} <- parse_session_mult(skip(rest)),
          {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, params, rest} <- parse_session_params(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":="),
          {:ok, proto, rest} <- parse_session_proto(skip(rest)) do
       mult =
@@ -276,7 +277,49 @@ defmodule Muro.Parser do
           _ -> mult
         end
 
-      {:ok, %{kind: :session, name: name, mode: :spec, mult: mult, proto: proto, loc: loc}, rest}
+      {:ok,
+       %{
+         kind: :session,
+         name: name,
+         mode: :spec,
+         mult: mult,
+         params: params,
+         proto: proto,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  # `(k : Nat)` before `:=`. A parameter is a nat. The name is in scope
+  # in the protocol, as a length or as an argument of a later session.
+  defp parse_session_params(s) do
+    s = skip(s)
+
+    if has_prefix?(s, "(") do
+      with {:ok, name, rest} <- parse_session_param(s),
+           {:ok, more, rest} <- parse_session_params(rest) do
+        {:ok, [name | more], rest}
+      end
+    else
+      {:ok, [], s}
+    end
+  end
+
+  defp parse_session_param(s) do
+    with {:ok, rest} <- tok(s, "("),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, rest} <- session_param_type(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ")") do
+      {:ok, String.to_atom(name), rest}
+    end
+  end
+
+  defp session_param_type(s) do
+    if word_kw?(s, "Nat") do
+      {:ok, after_kw(s, "Nat")}
+    else
+      {:error, err(s, "a session parameter is a nat")}
     end
   end
 
@@ -295,8 +338,8 @@ defmodule Muro.Parser do
     cond do
       word_kw?(s, "dual") ->
         with {:ok, rest} <- kw(s, "dual"),
-             {:ok, name, rest} <- ident(skip(rest)) do
-          {:ok, {:dual, name}, rest}
+             {:ok, ref, rest} <- parse_dual_ref(skip(rest)) do
+          {:ok, {:dual, ref}, rest}
         end
 
       word_kw?(s, "seen") ->
@@ -346,7 +389,7 @@ defmodule Muro.Parser do
     with {:ok, rest} <- kw(s, "conform"),
          {:ok, name, rest} <- ident(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":"),
-         {:ok, session, rest} <- ident(skip(rest)),
+         {:ok, session, rest} <- parse_session_use(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":="),
          {:ok, proc, rest} <- parse_proc(skip(rest)) do
       {:ok,
@@ -752,7 +795,7 @@ defmodule Muro.Parser do
       word_kw?(s, "branch") -> parse_proto2(s, "branch", :branch, bound)
       word_kw?(s, "rec") -> parse_rec(s, &parse_proto/2, bound)
       has_prefix?(s, "(") -> parse_paren(s, fn body -> parse_proto(body, bound) end)
-      ident_start?(s) -> parse_name_cont(s, :svar, "protocol")
+      ident_start?(s) -> parse_proto_name(s, bound)
       true -> {:error, err(s, "expected a protocol")}
     end
   end
@@ -929,6 +972,224 @@ defmodule Muro.Parser do
       else
         {:ok, String.to_atom(name), rest}
       end
+    end
+  end
+
+  # A name in the `rec` bound is that variable. Any other name is a
+  # session declared earlier, applied to the arguments that follow.
+  # A parenthesis whose body is a protocol is the next protocol, not
+  # an argument: `choose ack (send Nat end)`.
+  defp parse_proto_name(s, bound) do
+    s0 = skip(s)
+
+    with {:ok, name, rest} <- ident(s0) do
+      cond do
+        reserved_session?(name) ->
+          {:error, err(s0, "expected a protocol")}
+
+        MapSet.member?(bound, name) ->
+          {:ok, {:svar, String.to_atom(name)}, rest}
+
+        true ->
+          with {:ok, args, rest} <- parse_sargs(skip(rest)) do
+            {:ok, {:sess, name, args}, rest}
+          end
+      end
+    end
+  end
+
+  # `dual ping` keeps the bare name. `dual (stream 0)` carries the arguments.
+  defp parse_dual_ref(s) do
+    s = skip(s)
+
+    if has_prefix?(s, "(") do
+      with {:ok, rest} <- tok(s, "("),
+           {:ok, ref, rest} <- parse_session_use(skip(rest)),
+           {:ok, rest} <- tok(skip(rest), ")") do
+        {:ok, ref, rest}
+      end
+    else
+      parse_session_use(s)
+    end
+  end
+
+  # No arguments stays a string, so a use that names a session is the
+  # name it always was. Arguments are the application.
+  defp parse_session_use(s) do
+    with {:ok, name, rest} <- ident(skip(s)) do
+      if reserved_session?(name) do
+        {:error, err(s, "expected a session")}
+      else
+        # A declaration word is a legal session name (`relay`). It is not
+        # an argument: `parse_sarg` stops before the next entry.
+        with {:ok, args, rest} <- parse_sargs(skip(rest)) do
+          if args == [] do
+            {:ok, name, rest}
+          else
+            {:ok, {:sess, name, args}, rest}
+          end
+        end
+      end
+    end
+  end
+
+  defp parse_sargs(s) do
+    case parse_sarg(skip(s)) do
+      {:ok, arg, rest} ->
+        with {:ok, more, rest} <- parse_sargs(rest) do
+          {:ok, [arg | more], rest}
+        end
+
+      :no ->
+        {:ok, [], s}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp parse_sarg(s) do
+    s = skip(s)
+
+    cond do
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, {:lit, String.to_integer(digits)}, rest}
+
+      word_kw?(s, "suc") ->
+        case parse_sarg(skip(after_kw(s, "suc"))) do
+          {:ok, arg, rest} -> {:ok, {:suc, arg}, rest}
+          :no -> {:error, err(s, "expected a session argument")}
+          {:error, _} = err -> err
+        end
+
+      has_prefix?(s, "(") ->
+        parse_sarg_paren(s)
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, rest} ->
+            if reserved_session?(name) or decl_word?(name) do
+              :no
+            else
+              {:ok, {:var, String.to_atom(name)}, rest}
+            end
+
+          _ ->
+            :no
+        end
+
+      true ->
+        :no
+    end
+  end
+
+  # `(send …)` is a protocol. `(suc n)` and `(bump 0)` are arguments.
+  defp parse_sarg_paren(s) do
+    with {:ok, rest} <- tok(s, "(") do
+      inner = skip(rest)
+
+      if proto_head?(inner) do
+        :no
+      else
+        with {:ok, arg, rest} <- parse_sexpr(inner),
+             {:ok, rest} <- tok(skip(rest), ")") do
+          {:ok, arg, rest}
+        end
+      end
+    end
+  end
+
+  defp proto_head?(s) do
+    Enum.any?(~w(end send recv choose branch rec), &word_kw?(s, &1))
+  end
+
+  defp parse_sexpr(s) do
+    s = skip(s)
+
+    cond do
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, {:lit, String.to_integer(digits)}, rest}
+
+      word_kw?(s, "suc") ->
+        case parse_sarg(skip(after_kw(s, "suc"))) do
+          {:ok, arg, rest} -> {:ok, {:suc, arg}, rest}
+          :no -> {:error, err(s, "expected a session argument")}
+          {:error, _} = err -> err
+        end
+
+      has_prefix?(s, "(") ->
+        parse_sarg_paren(s)
+
+      ident_start?(s) ->
+        with {:ok, name, rest} <- ident(s) do
+          if reserved_session?(name) or decl_word?(name) do
+            {:error, err(s, "expected a session argument")}
+          else
+            parse_sexpr_args(skip(rest), name, [])
+          end
+        end
+
+      true ->
+        {:error, err(s, "expected a session argument")}
+    end
+  end
+
+  defp parse_sexpr_args(s, name, acc) do
+    case parse_sexpr_atom(skip(s)) do
+      {:ok, arg, rest} ->
+        parse_sexpr_args(rest, name, [arg | acc])
+
+      :no ->
+        args = Enum.reverse(acc)
+
+        if args == [] do
+          {:ok, {:var, String.to_atom(name)}, s}
+        else
+          {:ok, {:con, name, args}, s}
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # One atom of an application. An identifier is not itself an application:
+  # `bump 0` is `bump` applied to `0`.
+  defp parse_sexpr_atom(s) do
+    s = skip(s)
+
+    cond do
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, {:lit, String.to_integer(digits)}, rest}
+
+      word_kw?(s, "suc") ->
+        case parse_sarg(skip(after_kw(s, "suc"))) do
+          {:ok, arg, rest} -> {:ok, {:suc, arg}, rest}
+          :no -> {:error, err(s, "expected a session argument")}
+          {:error, _} = err -> err
+        end
+
+      has_prefix?(s, "(") ->
+        parse_sarg_paren(s)
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, rest} ->
+            if reserved_session?(name) or decl_word?(name) do
+              :no
+            else
+              {:ok, {:var, String.to_atom(name)}, rest}
+            end
+
+          _ ->
+            :no
+        end
+
+      true ->
+        :no
     end
   end
 

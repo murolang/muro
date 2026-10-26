@@ -128,7 +128,7 @@ meet wire : server with client
 
 `mix muro.emit examples/recursive.muro --backend otp` writes `recursive_otp.ex`. `RecursiveOtp.wire/0` starts the server and the client as each other's peer. Both finish with `:normal`. `Forever.start/1` is the loop that never finishes: each nat comes back, and the jump is a tail call. See [Emit](emit.md#otp).
 
-`rec X. X`, a free session variable, and `session %1` on a process that jumps are refused. Those books live in `test/muro_session_test.exs`, so a program copies the form that checks.
+`rec X. X`, a free process variable, and `session %1` on a process that jumps are refused. A bare name in a protocol is a session call. Those books live in `test/muro_session_test.exs`, so a program copies the form that checks.
 
 See [Terms](language.md#session).
 
@@ -222,6 +222,25 @@ conform reply : answer := put (effective self) done
 `reply` sends `just true`, which is `just (mark self)`. `effective other` sends `nothing`. `hear` receives `Maybe Bool`, and `reply-wire` meets them. `loop` sends that value on every turn of `rec X. send (Maybe Bool) X`. `taker` matches on a bit: `b0` ends, and `b1` sends a nat. The two arms are different processes, and both follow `choose`. `flag-taker` matches on `Bool`, and `opt-taker` matches on `Maybe Nat`. `finished` is that computed put on `session %1`. `pass` returns the `answer` endpoint linearly. `kept` is the run. Emit keeps `mark`, `effective`, and `kept`. The meeting is evidence, and a run definition has no seat.
 
 See [Sessions](sessions.md#a-computed-put).
+
+## session-calls.muro
+
+A declared session may be the continuation of another, and a session may take a nat parameter.
+
+```
+session ack := send Bit end
+session req := send Nat ack
+session stream (n : Nat) := send (d : Nat) {d ≤ n} (stream (suc n))
+session stream0 := stream 0
+session stream-back := dual stream0
+conform up : stream0 := rec X. put 0 X
+conform down : stream-back := rec Y. get (d : Nat) Y
+meet stream-wire : up with down
+```
+
+`req` is `send Nat` followed by `ack`. `choice` puts `ack` in a `choose` arm, `route` puts it after `on`, and `loop` puts it inside `rec`. `flag 1` sends a `Bool`. `frames 3` and `frames (bump 0)` send a vector of that length. `stream 0` sends a nat at most the current counter and continues at the next one. `stream-swap` is the same meeting in the other order. `bumped` sends the nat `bump` computes. `pass` returns the `req` endpoint, and `three-home` is an endpoint at `frames 3`. `kept`, `id`, `bump`, and `zero` are the runs. Emit keeps those and drops the sessions. An unguarded self-call, a forward call, an unknown session, and a bad argument are refused; those books live in `test/muro_session_test.exs`.
+
+See [Sessions](sessions.md#a-named-continuation).
 
 ## place.muro
 

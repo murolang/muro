@@ -289,10 +289,23 @@ meetProc q P Q with meetDecide P Q
 ------------------------------------------------------------------------
 -- `(s : ping) ⊸ ping`, written `λ¹ (s : ping) → s`.
 -- `ping` is finite syntax, the same carrier as `rec` and a `dat` payload.
+-- `reqS` is the protocol `req` opens to: a nat, then `ack`.
 ------------------------------------------------------------------------
 
 ping : SExp
 ping = recv nat (send nat end)
+
+reqS : SExp
+reqS = send nat (send bit end)
+
+reqPassTy : ETy
+reqPassTy = arr lin (sess lin reqS) (sess lin reqS)
+
+reqPass : ETm 0
+reqPass = lam lin (sess lin reqS) (var fzero)
+
+reqPass-ok : check evid [] reqPassTy reqPass ≡ ok []
+reqPass-ok = refl
 
 forwardTy : ETy
 forwardTy = arr lin (sess lin ping) (sess lin ping)

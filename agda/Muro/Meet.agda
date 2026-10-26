@@ -869,3 +869,47 @@ just-split = put-mget refl refl refl done-done
 
 just-split-decides : decide (put maybeNat (lit just0) done) optSplit ≡ yes just-split
 just-split-decides = refl
+
+------------------------------------------------------------------------
+-- A named session opens to its body. The meeting is the meeting of
+-- that body. Both orders meet. `frames 3` is the opened vector.
+------------------------------------------------------------------------
+
+sess-meet : Meets sessClient sessServer
+sess-meet = put-get refl refl (put-get refl refl done-done)
+
+sess-meet-swap : Meets sessServer sessClient
+sess-meet-swap = get-put refl refl (get-put refl refl done-done)
+
+sess-channel : Channel sessClient sessServer sessReqProto
+sess-channel = channel sess-meet sess-client sess-server-dual
+  where
+  sess-server-dual : Conforms [] sessServer (dual sessReqProto)
+  sess-server-dual = get-ok refl (get-ok refl done-end)
+
+sess-meet-decides : decide sessClient sessServer ≡ yes sess-meet
+sess-meet-decides = refl
+
+framesServer : Proc
+framesServer = get (vec nat (nlit three)) "v" done
+
+frames-meet : Meets sessFramesClient framesServer
+frames-meet = put-get refl refl done-done
+
+frames-meet-swap : Meets framesServer sessFramesClient
+frames-meet-swap = get-put refl refl done-done
+
+frames-channel : Channel sessFramesClient framesServer sessFramesProto
+frames-channel = channel frames-meet sess-frames-ok frames-back
+  where
+  frames-back : Conforms [] framesServer (dual sessFramesProto)
+  frames-back = get-ok refl done-end
+
+noteServer : Proc
+noteServer = get boolTy "b" done
+
+note-meet : Meets (put boolTy (lit trueV) done) noteServer
+note-meet = put-get refl refl done-done
+
+note-meet-swap : Meets noteServer (put boolTy (lit trueV) done)
+note-meet-swap = get-put refl refl done-done

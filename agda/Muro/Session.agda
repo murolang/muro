@@ -2464,3 +2464,356 @@ match-finishes = refl
 
 match-skel : skel bitTaker ≡ hear bit "b" (pick (choose0 finish ∷ choose1 finish ∷ []))
 match-skel = refl
+
+------------------------------------------------------------------------
+-- A declared session used as a continuation. The table is latest
+-- first, as the run table is. A call of a session in the tail unfolds
+-- by structural recursion on that tail and on the protocol. A call of
+-- the session being opened is not in the tail: under an action it is
+-- a guarded loop, and at the head it is refused. A name that is in
+-- the book but not in the tail was declared later. A name in neither
+-- is unknown. An argument is a numeral, a nat in scope, a successor,
+-- or a run application. The run application is `apply` on `runs`.
+-- Nothing here is added to `Tm`.
+------------------------------------------------------------------------
+
+data SArg : Set where
+  saLit  : ℕ → SArg
+  saVar  : String → SArg
+  saSuc  : SArg → SArg
+  saCall : String → List SArg → SArg
+
+data QProto : Set where
+  q-end    : QProto
+  q-send   : Ty → QProto → QProto
+  q-recv   : Ty → QProto → QProto
+  q-dsend  : String → Ty → QProto → QProto
+  q-drecv  : String → Ty → QProto → QProto
+  q-esend  : String → NExp → QProto → QProto
+  q-erecv  : String → NExp → QProto → QProto
+  q-isend  : String → QProto → QProto → QProto
+  q-irecv  : String → QProto → QProto → QProto
+  q-choose : QProto → QProto → QProto
+  q-branch : QProto → QProto → QProto
+  q-call   : String → List SArg → QProto
+
+data SDecl : Set where
+  sdecl : String → List String → QProto → SDecl
+
+data ArgR : Set where
+  argOk : List NExp → ArgR
+  argNo : String → ArgR
+
+data Opened : Set where
+  finite    : Proto → Opened
+  looping   : Opened
+  unguarded : Opened
+  later     : String → Opened
+  unknown   : String → Opened
+  badArity  : String → Opened
+  badArg    : String → Opened
+
+namedS : List SDecl → String → Bool
+namedS [] _ = false
+namedS (sdecl n _ _ ∷ Δ) f with f ≟ n
+... | yes′ _ = true
+... | no′ _ = namedS Δ f
+
+missing : List SDecl → String → Opened
+missing Δ f with namedS Δ f
+... | true = later f
+... | false = unknown f
+
+envOfS : List String → List NExp → Idx
+envOfS [] _ = none
+envOfS (_ ∷ _) [] = none
+envOfS (x ∷ xs) (e ∷ es) = bind x e (envOfS xs es)
+
+idxBind : String → Ty → Idx → Idx
+idxBind x nat ρ = bind x (nvar x) (shadow x ρ)
+idxBind x _ ρ = shadow x ρ
+
+badOf : SArg → String
+badOf (saLit _) = "literal"
+badOf (saVar x) = x
+badOf (saSuc a) = badOf a
+badOf (saCall f _) = f
+
+natsRaw : List NExp → Maybe (List Raw)
+natsRaw [] = just []
+natsRaw (nlit n ∷ es) = bindM (natsRaw es) (λ rs → just (rawNat n ∷ rs))
+natsRaw (nvar _ ∷ _) = nothing
+
+sucN : NExp → Maybe NExp
+sucN (nlit n) = just (nlit (nsuc n))
+sucN (nvar _) = nothing
+
+rawToN : Raw → Maybe NExp
+rawToN (rawNat n) = just (nlit n)
+rawToN _ = nothing
+
+callArg : ArgR → String → Maybe NExp
+callArg (argOk xs) f = bindM (natsRaw xs) (λ rs → bindM (apply runs f rs) rawToN)
+callArg (argNo _) _ = nothing
+
+mutual
+  evalS : Idx → SArg → Maybe NExp
+  evalS _ (saLit n) = just (nlit n)
+  evalS ρ (saVar x) with lookupIdx ρ x
+  ... | just e = just e
+  ... | nothing = nothing
+  evalS ρ (saSuc a) = bindM (evalS ρ a) sucN
+  evalS ρ (saCall f as) = callArg (evalSArgs ρ as) f
+
+  evalSArgs : Idx → List SArg → ArgR
+  evalSArgs _ [] = argOk []
+  evalSArgs ρ (a ∷ as) with evalS ρ a
+  ... | nothing = argNo (badOf a)
+  ... | just e with evalSArgs ρ as
+  ... | argNo msg = argNo msg
+  ... | argOk es = argOk (e ∷ es)
+
+sendOf : Ty → Opened → Opened
+sendOf A (finite p) = finite (send A p)
+sendOf _ o = o
+
+recvOf : Ty → Opened → Opened
+recvOf A (finite p) = finite (recv A p)
+recvOf _ o = o
+
+dsendOf : String → Ty → Opened → Opened
+dsendOf x A (finite p) = finite (dsend x A p)
+dsendOf _ _ o = o
+
+drecvOf : String → Ty → Opened → Opened
+drecvOf x A (finite p) = finite (drecv x A p)
+drecvOf _ _ o = o
+
+esendOf : String → NExp → Opened → Opened
+esendOf x e (finite p) = finite (esend x e p)
+esendOf _ _ o = o
+
+erecvOf : String → NExp → Opened → Opened
+erecvOf x e (finite p) = finite (erecv x e p)
+erecvOf _ _ o = o
+
+isendOf : String → Opened → Opened → Opened
+isendOf x (finite p) (finite q) = finite (isend x p q)
+isendOf _ (finite _) o = o
+isendOf _ o _ = o
+
+irecvOf : String → Opened → Opened → Opened
+irecvOf x (finite p) (finite q) = finite (irecv x p q)
+irecvOf _ (finite _) o = o
+irecvOf _ o _ = o
+
+chooseOf : Opened → Opened → Opened
+chooseOf (finite p) (finite q) = finite (choose p q)
+chooseOf (finite _) o = o
+chooseOf o _ = o
+
+branchOf : Opened → Opened → Opened
+branchOf (finite p) (finite q) = finite (branch p q)
+branchOf (finite _) o = o
+branchOf o _ = o
+
+mutual
+  expand : List SDecl → List SDecl → String → Bool → QProto → Idx → Opened
+  expand _ _ _ _ q-end _ = finite end
+  expand book Δ self _ (q-send A s) ρ =
+    sendOf (applyTy ρ A) (expand book Δ self true s ρ)
+  expand book Δ self _ (q-recv A s) ρ =
+    recvOf (applyTy ρ A) (expand book Δ self true s ρ)
+  expand book Δ self _ (q-dsend x A s) ρ =
+    dsendOf x (applyTy ρ A) (expand book Δ self true s (idxBind x (applyTy ρ A) ρ))
+  expand book Δ self _ (q-drecv x A s) ρ =
+    drecvOf x (applyTy ρ A) (expand book Δ self true s (idxBind x (applyTy ρ A) ρ))
+  expand book Δ self _ (q-esend x e s) ρ =
+    esendOf x (applyNExp ρ e) (expand book Δ self true s ρ)
+  expand book Δ self _ (q-erecv x e s) ρ =
+    erecvOf x (applyNExp ρ e) (expand book Δ self true s ρ)
+  expand book Δ self _ (q-isend x s t) ρ =
+    isendOf x (expand book Δ self true s (shadow x ρ)) (expand book Δ self true t (shadow x ρ))
+  expand book Δ self _ (q-irecv x s t) ρ =
+    irecvOf x (expand book Δ self true s (shadow x ρ)) (expand book Δ self true t (shadow x ρ))
+  expand book Δ self _ (q-choose s t) ρ =
+    chooseOf (expand book Δ self true s ρ) (expand book Δ self true t ρ)
+  expand book Δ self _ (q-branch s t) ρ =
+    branchOf (expand book Δ self true s ρ) (expand book Δ self true t ρ)
+  expand book Δ self g (q-call f as) ρ with evalSArgs ρ as | f ≟ self | g
+  ... | argNo msg | _ | _ = badArg msg
+  ... | argOk _ | yes′ _ | true = looping
+  ... | argOk _ | yes′ _ | false = unguarded
+  ... | argOk es | no′ _ | _ = openName book Δ f es
+
+  openName : List SDecl → List SDecl → String → List NExp → Opened
+  openName book [] f _ = missing book f
+  openName book (sdecl n ps body ∷ Δ) f es =
+    openHere (f ≟ n) (length es ≟ℕ length ps) book Δ n ps body f es
+
+  openHere :
+    {f n : String} {k ar : ℕ} →
+    Dec (f ≡ n) → Dec (k ≡ ar) →
+    List SDecl → List SDecl → String → List String → QProto → String → List NExp → Opened
+  openHere (yes′ _) (yes′ _) book Δ n ps body _ es =
+    expand book Δ n false body (envOfS ps es)
+  openHere (yes′ _) (no′ _) _ _ n _ _ _ _ = badArity n
+  openHere (no′ _) _ book Δ _ _ _ f es = openName book Δ f es
+
+-- The book is latest first. Opening starts at that book, so the tail
+-- of the matching declaration is everything declared before it.
+openTop : List SDecl → String → List SArg → Opened
+openTop book f as with evalSArgs none as
+... | argNo msg = badArg msg
+... | argOk es = openName book book f es
+
+------------------------------------------------------------------------
+-- `ack` is `send Bit end`. `req` is `send Nat ack`, which opens to
+-- `send Nat (send Bit end)`. A choice arm, an indexed arm, and a
+-- dependent continuation open the same way. `frames 3` is a vector
+-- of that length. `frames (count)` is the nat `count` computes.
+-- `s := s` is unguarded. A call of a later session is refused.
+-- A guarded self-call is a loop, not a finite protocol.
+------------------------------------------------------------------------
+
+sessAck : SDecl
+sessAck = sdecl "ack" [] (q-send bit q-end)
+
+sessReq : SDecl
+sessReq = sdecl "req" [] (q-send nat (q-call "ack" []))
+
+sessBook : List SDecl
+sessBook = sessReq ∷ sessAck ∷ []
+
+sessReqProto : Proto
+sessReqProto = send nat (send bit end)
+
+sess-req : openTop sessBook "req" [] ≡ finite sessReqProto
+sess-req = refl
+
+sess-ack : openTop sessBook "ack" [] ≡ finite (send bit end)
+sess-ack = refl
+
+sessClient : Proc
+sessClient = put nat (lit zero) (put bit (lit b0) done)
+
+sessServer : Proc
+sessServer = get nat "n" (get bit "b" done)
+
+sess-client : Conforms [] sessClient sessReqProto
+sess-client = put-ok refl (lit-ok refl) (put-ok refl (lit-ok refl) done-end)
+
+sess-server : Conforms [] sessServer (recv nat (recv bit end))
+sess-server = get-ok refl (get-ok refl done-end)
+
+sessChoice : SDecl
+sessChoice = sdecl "choice" [] (q-choose (q-call "ack" []) q-end)
+
+sessChoiceProto : Proto
+sessChoiceProto = choose (send bit end) end
+
+sess-choice : openTop (sessChoice ∷ sessAck ∷ []) "choice" [] ≡ finite sessChoiceProto
+sess-choice = refl
+
+sess-choice-ok : Conforms [] (pick0 (put bit (lit b0) done)) sessChoiceProto
+sess-choice-ok = pick0-ok (put-ok refl (lit-ok refl) done-end)
+
+sessBranch : SDecl
+sessBranch = sdecl "offered" [] (q-branch (q-call "ack" []) q-end)
+
+sess-branch : openTop (sessBranch ∷ sessAck ∷ []) "offered" [] ≡ finite (branch (send bit end) end)
+sess-branch = refl
+
+sessRoute : SDecl
+sessRoute = sdecl "route" [] (q-irecv "b" (q-call "ack" []) (q-recv nat q-end))
+
+sess-route :
+  openTop (sessRoute ∷ sessAck ∷ []) "route" []
+    ≡ finite (irecv "b" (send bit end) (recv nat end))
+sess-route = refl
+
+sessRest : SDecl
+sessRest = sdecl "rest" ("k" ∷ []) (q-send (vec nat (nvar "k")) q-end)
+
+sessSized : SDecl
+sessSized = sdecl "sized" [] (q-drecv "n" nat (q-call "rest" (saVar "n" ∷ [])))
+
+sess-sized :
+  openTop (sessSized ∷ sessRest ∷ []) "sized" []
+    ≡ finite (drecv "n" nat (send (vec nat (nvar "n")) end))
+sess-sized = refl
+
+three : ℕ
+three = nsuc (nsuc (nsuc nzero))
+
+sessFrames : SDecl
+sessFrames = sdecl "frames" ("k" ∷ []) (q-send (vec nat (nvar "k")) q-end)
+
+sessFramesProto : Proto
+sessFramesProto = send (vec nat (nlit three)) end
+
+sess-frames : openTop (sessFrames ∷ []) "frames" (saLit three ∷ []) ≡ finite sessFramesProto
+sess-frames = refl
+
+sess-frames-count :
+  openTop (sessFrames ∷ []) "frames" (saCall "count" [] ∷ [])
+    ≡ finite (send (vec nat (nlit (nsuc nzero))) end)
+sess-frames-count = refl
+
+sessFramesClient : Proc
+sessFramesClient = put (vec nat (nlit three)) (lit (rep zero)) done
+
+sess-frames-ok : Conforms [] sessFramesClient sessFramesProto
+sess-frames-ok = put-ok refl (lit-ok refl) done-end
+
+sessNote : SDecl
+sessNote = sdecl "note" ("k" ∷ []) (q-send boolTy q-end)
+
+sess-note : openTop (sessNote ∷ []) "note" (saLit (nsuc nzero) ∷ []) ≡ finite (send boolTy end)
+sess-note = refl
+
+sess-note-ok : Conforms [] (put boolTy (lit trueV) done) (send boolTy end)
+sess-note-ok = put-ok refl (lit-ok refl) done-end
+
+sessSelf : SDecl
+sessSelf = sdecl "s" [] (q-call "s" [])
+
+sess-unguarded : openTop (sessSelf ∷ []) "s" [] ≡ unguarded
+sess-unguarded = refl
+
+sessSpin : SDecl
+sessSpin = sdecl "spin" [] (q-send nat (q-call "spin" []))
+
+sess-loop : openTop (sessSpin ∷ []) "spin" [] ≡ looping
+sess-loop = refl
+
+sessStream : SDecl
+sessStream =
+  sdecl "stream" ("n" ∷ [])
+    (q-esend "d" (nvar "n") (q-call "stream" (saSuc (saVar "n") ∷ [])))
+
+sess-stream : openTop (sessStream ∷ []) "stream" (saLit nzero ∷ []) ≡ looping
+sess-stream = refl
+
+sessEarly : SDecl
+sessEarly = sdecl "early" [] (q-call "late" [])
+
+sessLate : SDecl
+sessLate = sdecl "late" [] q-end
+
+sess-later : openTop (sessLate ∷ sessEarly ∷ []) "early" [] ≡ later "late"
+sess-later = refl
+
+sess-unknown : openTop sessBook "gone" [] ≡ unknown "gone"
+sess-unknown = refl
+
+sess-arity : openTop (sessFrames ∷ []) "frames" [] ≡ badArity "frames"
+sess-arity = refl
+
+sess-arg : openTop (sessFrames ∷ []) "frames" (saVar "nope" ∷ []) ≡ badArg "nope"
+sess-arg = refl
+
+sess-plus :
+  openTop (sessFrames ∷ []) "frames" (saCall "plus" (saLit nzero ∷ saLit nzero ∷ []) ∷ [])
+    ≡ badArg "plus"
+sess-plus = refl

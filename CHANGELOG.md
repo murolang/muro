@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.16.66
+
+A declared session may be the continuation of another session, and a session may take nat parameters.
+
+```
+session ack := send Bit end
+session req := send Nat ack
+
+session stream (n : Nat) := send (d : Nat) {d ≤ n} (stream (suc n))
+session stream0 := stream 0
+session stream-back := dual stream0
+```
+
+`req` is `send Nat (send Bit end)`. The name may sit in a `choose` or `branch` arm, after `on`, inside `rec`, and as an endpoint's protocol. `stream 0` sends a nat at most `0` and continues as `stream 1`. `stream-back` is the dual of that body at `0`. Both meeting orders check. `frames 3` and `frames (bump 0)` open a parameterised session at a numeral or at a `run` that evaluates. An unguarded self-call, a call of a session declared later, an unknown name, the wrong number of arguments, and an argument that does not evaluate to a nat are refused before a meeting. The protocol stays spec. The process stays evidence. Nothing is added to the term language. The OTP image is the process skeleton.
+
+### Manual
+
+- Sessions: a named continuation, and a parameterised session.
+- Limits: a guarded call of an earlier session, and a guarded self-call at nat arguments, are allowed. `unguarded session call`, `session declared later`, `unknown session`, `wrong number of session arguments`, and an argument that does not evaluate to a nat stay refused. A self-call that changes a vector length is not absorbed. The other end of a self-calling session is `dual` of that call.
+- Grammar and Examples: the surface form.
+
+### Examples
+
+- `session-calls.muro`: `req` continues as `ack`, `stream` counts, both meeting orders, a declared data payload, a computed put, and a linear endpoint at a named session.
+
+### Emit
+
+- Unchanged. A session call is spec and is erased with the protocol. The image keeps the run definitions.
+
+### Package
+
+- Version 0.16.66.
+
 ## 0.16.65
 
 A put may send the value a `run` definition computes. A `get` may match on the received value and choose the next action.

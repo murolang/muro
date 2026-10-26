@@ -33,7 +33,7 @@ open import Data.Bool.Base using (true)
 open import Data.Empty using (⊥)
 open import Data.List.Base using (List; []; _∷_)
 open import Data.Maybe.Base using (Maybe; just; nothing)
-open import Data.Nat.Base using () renaming (zero to nzero)
+open import Data.Nat.Base using (ℕ; z≤n) renaming (zero to nzero; suc to nsuc)
 open import Data.Product.Base using (_×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String)
 open import Data.String.Properties using (_≟_)
@@ -54,7 +54,7 @@ open import Muro.Session using
   ; ValExprOk; lit-ok; var-ok; call-ok
   ; sent
   ; Idx; none; bind; shadow; renameIdx; applyTy; ixOf
-  ; Owed; resolve
+  ; Owed; owed; Le; lit-le; resolve
   )
 
 ¬_ : Set → Set
@@ -1141,3 +1141,44 @@ loop-meet : ∀ {σ τ} → Meets∞ σ τ loopP loopDown
 mstep (loop-meet {σ} {τ}) =
   m-put-get (loop-ty σ τ) refl
     (loop-meet {σ} {ext {maybeBool} "m" effCall τ})
+
+------------------------------------------------------------------------
+-- `stream n` sends a nat at most `n` and continues as `stream (suc n)`.
+-- The self-call sits under the evidence send, so the copattern is
+-- guarded. `dual` swaps that send for a receive and keeps the next
+-- counter. Zero is at most every bound, so one process conforms at
+-- every counter. Both orders meet.
+------------------------------------------------------------------------
+
+stream : ℕ → ∞Proto
+observe (stream n) = s-esend "d" (nlit n) (stream (nsuc n))
+
+streamDual : ℕ → ∞Proto
+observe (streamDual n) = s-erecv "d" (nlit n) (streamDual (nsuc n))
+
+puts : ∞Proc
+act puts = p-put nat (lit zero) puts
+
+takes : ∞Proc
+act takes = p-get nat "d" takes
+
+stream-ok : (n : ℕ) → ∀ {Γ ρ} → Conforms∞ Γ ρ puts (stream n)
+ok (stream-ok n {Γ} {ρ}) =
+  eput-ok (lit-ok refl) (owed (lit-le z≤n)) (stream-ok (nsuc n) {Γ} {ρ})
+
+stream-dual-ok : (n : ℕ) → ∀ {Γ ρ} → Conforms∞ Γ ρ takes (dual∞ (stream n))
+ok (stream-dual-ok n {Γ} {ρ}) =
+  eget-ok (stream-dual-ok (nsuc n) {("d" , nat) ∷ Γ} {ρ})
+
+stream~ : (n : ℕ) → dual∞ (stream n) ~ streamDual n
+obs (stream~ n) = ~erecv (stream~ (nsuc n))
+
+stream-meet : ∀ {σ τ} → Meets∞ σ τ puts takes
+mstep (stream-meet {σ} {τ}) =
+  m-put-get (nat-eq σ τ) refl
+    (stream-meet {σ} {ext {nat} "d" (lit zero) τ})
+
+stream-meet-swap : ∀ {σ τ} → Meets∞ σ τ takes puts
+mstep (stream-meet-swap {σ} {τ}) =
+  m-get-put (nat-eq σ τ) refl
+    (stream-meet-swap {ext {nat} "d" (lit zero) σ} {τ})
