@@ -23,7 +23,7 @@ module Muro.AsyncSync where
 
 open import Data.Bool.Base using (Bool; true; false)
 open import Data.Empty using (⊥; ⊥-elim)
-open import Data.Nat.Base using (_≤_)
+open import Data.Nat.Base using (_≤_; _+_)
 open import Data.Nat.Properties using (≤-trans; m≤m+n; m≤n+m)
 open import Data.Product using (Σ; _,_; proj₁)
 open import Data.List.Base using (List; []; _∷_)
@@ -38,11 +38,15 @@ open import Muro.Session using (Proc; done; stop; put; get; pick0; pick1; cover
   ; armOf; armExpr; sent; sent?; applyTy; ty≟; known; lit; b0; b1; con; ctorsOf
   ; evalExpr; var; call
   ; nat; unit; bit; none; bind
-  ; pair; rec; vec; dat)
+  ; pair; rec; vec; dat
+  ; Spine; PArm; bare; named; openNamed; rawSpine; lenEnv; substProc
+  ; fieldReply; fwdField; tailPass)
 open import Muro.Async
 open import Muro.Meet using (ext; Meetsρ; done-done; stop-stop; put-get; get-put
   ; pick0-cover; pick1-cover; cover-pick0; cover-pick1
-  ; iget-b0; iget-b1; b0-iget; b1-iget; put-mget; mget-put)
+  ; iget-b0; iget-b1; b0-iget; b1-iget; put-mget; mget-put
+  ; meets-sym; fieldSender; field-meet; fwd-meet
+  ; nothingSender; nothing-meet; tailSender; tail-meet)
 
 ------------------------------------------------------------------------
 -- One enabled step. The other side waits, so the class is that step
@@ -91,37 +95,65 @@ fullR _ (mget _ _ _) _ _ _ _ _ = refl
 -- bound the search records.
 ------------------------------------------------------------------------
 
-find-spec : (name : String) (cs : List Ctor) (ps : List Proc) (R : Proc) →
-            nthProc cs name ps ≡ just R →
-            Σ (size R ≤ sizeArms ps) (λ le → findIn name cs ps ≡ just (R , le))
-find-spec _ [] _ _ ()
-find-spec _ (_ ∷ _) [] _ ()
-find-spec name (ctor n _ ∷ cs) (P ∷ ps) R eq with name == n
-find-spec name (ctor n _ ∷ cs) (P ∷ ps) .P refl | true =
+-- `openHit` returns the process `openNamed` returns, with the size
+-- of the stored process. The two functions follow one comparison.
+open-spec : (k c : String) (xs : List String) (p : Proc) (sp : Spine)
+            (ps : List PArm) (R : Proc) →
+            openNamed k c xs p sp ≡ just R →
+            Σ (size R ≤ size p + sizeArms ps)
+              (λ le → openHit k c xs p sp ps ≡ just (R , le))
+open-spec k c xs p sp ps R eq with k == c | rawSpine sp
+open-spec k c xs p sp ps R () | false | _
+open-spec k c xs p sp ps R () | true | nothing
+open-spec k c xs p sp ps R eq | true | just rs with lenEnv xs rs
+open-spec k c xs p sp ps R () | true | just rs | nothing
+open-spec k c xs p sp ps .(substProc e p) refl | true | just rs | just e =
+  leSubst e p ps , refl
+
+find-spec : (name : String) (sp : Spine) (cs : List Ctor) (ps : List PArm) (R : Proc) →
+            nthProc cs name sp ps ≡ just R →
+            Σ (size R ≤ sizeArms ps) (λ le → findIn name sp cs ps ≡ just (R , le))
+find-spec _ _ [] _ _ ()
+find-spec _ _ (_ ∷ _) [] _ ()
+find-spec name sp (ctor n _ ∷ cs) (bare P ∷ ps) R eq with name == n
+find-spec name sp (ctor n _ ∷ cs) (bare P ∷ ps) .P refl | true =
   m≤m+n (size P) (sizeArms ps) , refl
-find-spec name (ctor n _ ∷ cs) (P ∷ ps) R eq | false
-  with find-spec name cs ps R eq
+find-spec name sp (ctor n _ ∷ cs) (bare P ∷ ps) R eq | false
+  with find-spec name sp cs ps R eq
 ... | le , eqf rewrite eqf =
   ≤-trans le (m≤n+m (sizeArms ps) (size P)) , refl
+find-spec name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) R eq with name == n
+find-spec name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) R eq | true
+  with open-spec k name xs p sp ps R eq
+... | le , eqh rewrite eqh = le , refl
+find-spec name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) R eq | false
+  with find-spec name sp cs ps R eq
+... | le , eqf rewrite eqf =
+  ≤-trans le (m≤n+m (sizeArms ps) (size p)) , refl
 
-armPick-spec : ∀ {A} (u : Val A) (ps : List Proc) (R : Proc) →
+armPick-spec : ∀ {A} (u : Val A) (ps : List PArm) (R : Proc) →
                armOf A u ps ≡ just R →
                Σ (size R ≤ sizeArms ps) (λ le → armPick A u ps ≡ just (R , le))
 armPick-spec b0 [] _ ()
 armPick-spec b0 (_ ∷ []) _ ()
-armPick-spec b0 (P ∷ Q ∷ []) .P refl =
-  m≤m+n (size P) (sizeArms (Q ∷ [])) , refl
 armPick-spec b0 (_ ∷ _ ∷ _ ∷ _) _ ()
+armPick-spec b0 (bare P ∷ Q ∷ []) .P refl =
+  m≤m+n (size P) (sizeArms (Q ∷ [])) , refl
+armPick-spec b0 (named _ [] P ∷ Q ∷ []) .P refl =
+  m≤m+n (size P) (sizeArms (Q ∷ [])) , refl
+armPick-spec b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) _ ()
 armPick-spec b1 [] _ ()
 armPick-spec b1 (_ ∷ []) _ ()
-armPick-spec b1 (P ∷ Q ∷ []) .Q refl = b1≤ P Q , refl
 armPick-spec b1 (_ ∷ _ ∷ _ ∷ _) _ ()
+armPick-spec b1 (A ∷ bare Q ∷ []) .Q refl = b1≤ A (bare Q) , refl
+armPick-spec b1 (A ∷ named c [] Q ∷ []) .Q refl = b1≤ A (named c [] Q) , refl
+armPick-spec b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) _ ()
 armPick-spec {nat} _ _ _ ()
 armPick-spec {unit} _ _ _ ()
 armPick-spec {pair _ _} _ _ _ ()
 armPick-spec {rec _} _ _ _ ()
 armPick-spec {vec _ _} _ _ _ ()
-armPick-spec {dat d _} (con c _) ps R eq = find-spec c (ctorsOf d) ps R eq
+armPick-spec {dat d _} (con c sp) ps R eq = find-spec c sp (ctorsOf d) ps R eq
 
 ------------------------------------------------------------------------
 -- Buffer 1. `lv` and `rv` are the names already received. The
@@ -132,11 +164,11 @@ apply-bit : (ρ : Idx) → applyTy ρ bit ≡ bit
 apply-bit none = refl
 apply-bit (bind _ _ _) = refl
 
-var-arm : ∀ {A} {x : String} {ps : List Proc} {R : Proc} →
+var-arm : ∀ {A} {x : String} {ps : List PArm} {R : Proc} →
           armExpr (var {A} x) ps ≡ just R → ⊥
 var-arm ()
 
-ready-arm : ∀ {A} (e : VEnv) (v : ValExpr A) (ps : List Proc) (R : Proc) →
+ready-arm : ∀ {A} (e : VEnv) (v : ValExpr A) (ps : List PArm) (R : Proc) →
             sent v ≡ true → armExpr v ps ≡ just R →
             Σ (size R ≤ sizeArms ps)
               (λ le → armExprPick (prepare e v) ps ≡ just (R , le))
@@ -355,3 +387,25 @@ meets-async {σ} {τ} lv rv (mget-put {A} {B} {v} {x} {ps} {R} {P} tyeq fv sel m
   ... | no′ ¬eq | _ = ⊥-elim (¬eq eq)
   next : Safe (mk k1 R P [] [] lv′ rv σ′ τ)
   next = meets-async lv′ rv m
+
+------------------------------------------------------------------------
+-- A named arm meets asynchronously. The queued value fills the
+-- binders. `just true` evaluates `grant b` to `true`, and forwarding
+-- the field sends that `Bool`. Either order is the synchronous
+-- meeting at buffer 1. An empty spine and a list tail do the same.
+------------------------------------------------------------------------
+
+field-async : Safe (mk k1 fieldSender fieldReply [] [] [] [] none none)
+field-async = meets-async [] [] field-meet
+
+field-async-swap : Safe (mk k1 fieldReply fieldSender [] [] [] [] none none)
+field-async-swap = meets-async [] [] (meets-sym field-meet)
+
+fwd-async : Safe (mk k1 fieldSender fwdField [] [] [] [] none none)
+fwd-async = meets-async [] [] fwd-meet
+
+nothing-async : Safe (mk k1 nothingSender fieldReply [] [] [] [] none none)
+nothing-async = meets-async [] [] nothing-meet
+
+tail-async : Safe (mk k1 tailSender tailPass [] [] [] [] none none)
+tail-async = meets-async [] [] tail-meet

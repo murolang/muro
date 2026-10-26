@@ -2248,12 +2248,13 @@ defmodule Muro.Check do
   defp check_proc_vars({:call, _name}, _ctx, _book, _span), do: :ok
 
   # The scrutinee is the value `get` just bound. Each arm is that continuation.
+  # A named arm's binders are in scope in its body.
   defp check_proc_vars({:match, name, arms}, ctx, book, span) do
     if MapSet.member?(ctx, name) do
       arms
       |> Enum.with_index()
       |> Enum.reduce_while(:ok, fn {arm, i}, :ok ->
-        case check_proc_vars(arm, ctx, book, Muro.Session.step_down(span, i)) do
+        case check_arm_vars(arm, ctx, book, Muro.Session.step_down(span, i)) do
           :ok -> {:cont, :ok}
           err -> {:halt, err}
         end
@@ -2262,6 +2263,13 @@ defmodule Muro.Check do
       at_step(span, "match does not cover the received value")
     end
   end
+
+  defp check_arm_vars({:arm, _ctor, binders, body}, ctx, book, span) when is_list(binders) do
+    ctx1 = Enum.reduce(binders, ctx, &MapSet.put(&2, &1))
+    check_proc_vars(body, ctx1, book, span)
+  end
+
+  defp check_arm_vars(arm, ctx, book, span), do: check_proc_vars(arm, ctx, book, span)
 
   # A bound name is in scope. An unbound name is in scope when it is a
   # constructor. Conformance then decides whether that constructor

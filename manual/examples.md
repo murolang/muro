@@ -223,6 +223,22 @@ conform reply : answer := put (effective self) done
 
 See [Sessions](sessions.md#a-computed-put).
 
+## field-bindings.muro
+
+A match on the value just received may name the constructor and bind its fields.
+
+```
+conform reply : ask :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => put false done
+      | just b => put (grant b) done)
+```
+
+`reply` sends `false` for `nothing` and `grant b` for `just`. `grant true` is `true`. `pass` sends the field itself. `rest` sends the tail of a `List`. A binder count other than the field count is refused; that program is a comment in the file.
+
+See [Sessions](sessions.md#a-value-chooses-the-next-action).
+
 ## session-calls.muro
 
 A declared session may be the continuation of another, and a session may take a nat parameter.

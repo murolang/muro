@@ -705,6 +705,177 @@ defmodule Muro.SessionErrorTest do
     assert msg =~ "a next action is chosen by a bit"
   end
 
+  test "a field binding is refused when the arm, the name, or the put is wrong" do
+    prelude = """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data Maybe (A : Type) : Type where
+      nothing : Maybe A
+      just : A → Maybe A
+
+    def grant : run Π (b : Bool) → Bool :=
+      λ (b : Bool) →
+        match b motive (λ _ → Bool)
+          | true => true
+          | false => false
+
+    session ask := recv (Maybe Bool) (send Bool end)
+    """
+
+    assert {:error, msg} =
+             check("""
+             #{prelude}
+             conform short : ask :=
+               get (m : Maybe Bool)
+                 (match m
+                   | nothing => put false done
+                   | just => put false done)
+             """)
+
+    assert msg =~ "wrong arity"
+
+    assert {:error, msg} =
+             check("""
+             #{prelude}
+             conform extra : ask :=
+               get (m : Maybe Bool)
+                 (match m
+                   | nothing x => put false done
+                   | just b => put b done)
+             """)
+
+    assert msg =~ "wrong arity"
+
+    assert {:error, msg} =
+             check("""
+             #{prelude}
+             conform loose : ask :=
+               get (m : Maybe Bool)
+                 (match m
+                   | nothing => put false done
+                   | just b => put c done)
+             """)
+
+    assert msg =~ "unbound variable c"
+
+    assert {:error, msg} =
+             check("""
+             #{prelude}
+             conform wrapped : ask :=
+               get (m : Maybe Bool)
+                 (match m
+                   | nothing => put false done
+                   | just b => put (just b) done)
+             """)
+
+    assert msg =~ "outside the computed fragment"
+    refute msg =~ "outside the computed fragment:"
+
+    assert {:error, msg} =
+             check("""
+             #{prelude}
+             conform nested : ask :=
+               get (m : Maybe Bool)
+                 (match m
+                   | nothing => put false done
+                   | just b => put (grant (just b)) done)
+             """)
+
+    assert msg =~ "argument is not a value"
+
+    assert {:error, msg} =
+             check("""
+             #{prelude}
+             conform swapped : ask :=
+               get (m : Maybe Bool)
+                 (match m
+                   | just b => put b done
+                   | nothing => put false done)
+             """)
+
+    assert msg =~ "match does not cover the received value"
+
+    assert {:error, msg} =
+             check("""
+             #{prelude}
+             session nest := recv Bool (recv (Maybe Bool) end)
+             conform other : nest :=
+               get (k : Bool)
+                 (get (m : Maybe Bool)
+                   (match k
+                     | true => done
+                     | false => done))
+             """)
+
+    assert msg =~ "match does not cover the received value"
+
+    assert {:error, msg} =
+             check("""
+             #{prelude}
+             session nums := recv (Maybe Bool) (send Nat end)
+             conform bad : nums :=
+               get (m : Maybe Bool)
+                 (match m
+                   | nothing => put 0 done
+                   | just b => put b done)
+             """)
+
+    assert msg =~ "put b done does not conform to send Nat end"
+    refute msg =~ "does not inhabit"
+
+    assert {:error, msg} =
+             check("""
+             #{prelude}
+             session nums := recv (Maybe Bool) (send Nat end)
+             conform bad : nums :=
+               get (m : Maybe Bool)
+                 (match m
+                   | nothing => put 0 done
+                   | just b => put (grant b) done)
+             """)
+
+    assert msg =~ "computed value (grant b) does not inhabit Nat"
+
+    assert {:error, msg} =
+             check("""
+             #{prelude}
+             def onJust : run Π (m : Maybe Bool) → Bool :=
+               λ (m : Maybe Bool) →
+                 match m motive (λ _ → Bool)
+                   | nothing => false
+                   | just b => true
+
+             session peek :=
+               recv (m : Maybe Bool) (case (onJust m)
+                 | true => end
+                 | false => end)
+             conform bad : peek :=
+               get (m : Maybe Bool)
+                 (match m
+                   | nothing => done
+                   | just b => done)
+             """)
+
+    assert msg =~ "the run does not decide an arm"
+
+    assert {:error, msg} =
+             check("""
+             data Box : Type where
+               box : Π (n : Nat) →
+                 Box
+
+             session owed := recv Box (send (d : Nat) {d ≤ 1} end)
+             conform over : owed :=
+               get (x : Box)
+                 (match x
+                   | box n => put n done)
+             """)
+
+    assert msg =~ "misses bound"
+  end
+
   defp check(src) do
     assert {:ok, book} = Parser.parse(src)
     Check.check_sig(book)

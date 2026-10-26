@@ -117,7 +117,7 @@ defmodule Muro.Linear do
   defp consume({:call, _}), do: :u0
 
   defp arms_use([]), do: :u1
-  defp arms_use([p | ps]), do: once(consume(p), arms_use(ps))
+  defp arms_use([p | ps]), do: once(consume(Session.arm_body(p)), arms_use(ps))
 
   defp once(:u1, :u1), do: :u1
   defp once(_, _), do: :u0

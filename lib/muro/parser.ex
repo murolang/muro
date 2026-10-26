@@ -105,6 +105,9 @@ defmodule Muro.Parser do
     end
   end
 
+  # A named arm is the process it stores. The `|` line is not a step of its own.
+  defp take_span({:arm, _, _, p}, notes), do: take_span(p, notes)
+
   defp take_span(_, _), do: :error
 
   defp take_one(at, p, rest) do
@@ -1542,13 +1545,25 @@ defmodule Muro.Parser do
   # `match b P Q` is one process per constructor of the value `get` just
   # bound, in declaration order. A bit is `b0` then `b1`. The arms stop
   # before the next declaration.
+  # `| just b => P` names that constructor and binds its fields. The old
+  # positional form stays a list of processes.
   defp parse_match(s, bound) do
     note(skip(s))
 
     with {:ok, rest} <- kw(s, "match"),
-         {:ok, name, rest} <- match_name(skip(rest)),
-         {:ok, arms, rest} <- parse_match_arms(skip(rest), [], bound) do
-      {:ok, {:match, name, arms}, rest}
+         {:ok, name, rest} <- match_name(skip(rest)) do
+      rest = skip(rest)
+
+      if has_prefix?(rest, "|") do
+        with {:ok, rest} <- tok(rest, "|"),
+             {:ok, arms, rest} <- parse_named_arms(skip(rest), [], bound) do
+          {:ok, {:match, name, arms}, rest}
+        end
+      else
+        with {:ok, arms, rest} <- parse_match_arms(rest, [], bound) do
+          {:ok, {:match, name, arms}, rest}
+        end
+      end
     end
   end
 
@@ -1577,6 +1592,48 @@ defmodule Muro.Parser do
 
       true ->
         {:ok, Enum.reverse(acc), s}
+    end
+  end
+
+  defp parse_named_arms(s, acc, bound) do
+    with {:ok, cname, rest} <- ident(skip(s)),
+         {:ok, binders, rest} <- parse_proc_binders(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), "=>"),
+         {:ok, body, rest} <- parse_proc(skip(rest), bound) do
+      binders = Enum.map(binders, &String.to_atom/1)
+      acc = [{:arm, cname, binders, body} | acc]
+      looked = skip(rest)
+
+      if has_prefix?(looked, "|") do
+        with {:ok, rest} <- tok(looked, "|") do
+          parse_named_arms(skip(rest), acc, bound)
+        end
+      else
+        {:ok, Enum.reverse(acc), rest}
+      end
+    end
+  end
+
+  # Binders are names, innermost last. A process keyword is not a field.
+  defp parse_proc_binders(s) do
+    s = skip(s)
+
+    if has_prefix?(s, "=>") do
+      {:ok, [], s}
+    else
+      case ident(s) do
+        {:ok, x, rest} ->
+          if proc_word?(x) or reserved_session?(x) or decl_word?(x) do
+            {:error, err(s, "expected =>")}
+          else
+            with {:ok, xs, rest} <- parse_proc_binders(rest) do
+              {:ok, [x | xs], rest}
+            end
+          end
+
+        _ ->
+          {:error, err(s, "expected =>")}
+      end
     end
   end
 

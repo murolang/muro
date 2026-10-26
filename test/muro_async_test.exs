@@ -255,6 +255,72 @@ defmodule Muro.AsyncTest do
     assert meet.buffer == nil
   end
 
+  test "a received field meets across a buffer" do
+    assert {:ok, book} = Parser.parse(File.read!("examples/field-bindings.muro"))
+
+    for {left, right} <- [{"reply", "asker"}, {"pass", "passer"}, {"rest", "rest-peer"}] do
+      l = Enum.find(book, &(&1.name == left))
+      r = Enum.find(book, &(&1.name == right))
+      assert Async.meets(l.proc, r.proc, book, 1) == :ok
+      assert Async.meets(r.proc, l.proc, book, 1) == :ok
+    end
+
+    assert check("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+
+           data Maybe (A : Type) : Type where
+             nothing : Maybe A
+             just : A → Maybe A
+
+           def grant : run Π (b : Bool) → Bool :=
+             λ (b : Bool) →
+               match b motive (λ _ → Bool)
+                 | true => true
+                 | false => false
+
+           session flags := rec X. recv (Maybe Bool) (send Bool X)
+           session flags-back := dual flags
+           conform loop : flags :=
+             rec X. get (m : Maybe Bool)
+               (match m
+                 | nothing => put false X
+                 | just b => put (grant b) X)
+           conform hear : flags-back :=
+             rec Y. put (just false) (get (k : Bool) Y)
+           meet wire : loop with hear buffer 1
+           meet swap : hear with loop buffer 1
+           """) == :ok
+  end
+
+  test "a constructor of a bound field is not the recursive alphabet" do
+    assert {:error, msg} =
+             check("""
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             data Maybe (A : Type) : Type where
+               nothing : Maybe A
+               just : A → Maybe A
+
+             session grow := rec X. recv (Maybe Bool) (send (Maybe Bool) X)
+             session feed := rec Y. send (Maybe Bool) (recv (Maybe Bool) Y)
+             conform up : grow :=
+               rec X. get (m : Maybe Bool)
+                 (match m
+                   | nothing => put nothing X
+                   | just b => put (just b) X)
+             conform down : feed :=
+               rec Y. put (just true) (get (k : Maybe Bool) Y)
+             meet wire : up with down buffer 1
+             """)
+
+    assert msg =~ "outside the computed fragment"
+    refute msg =~ "unbounded recursive payload"
+  end
+
   defp check(src) do
     assert {:ok, book} = Parser.parse(src)
     Check.check_sig(book)

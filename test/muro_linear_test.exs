@@ -204,6 +204,90 @@ defmodule Muro.LinearTest do
     assert msg =~ "linear endpoint not consumed: left"
   end
 
+  test "a field binding on a linear endpoint is consumed once" do
+    assert check("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+
+           data Maybe (A : Type) : Type where
+             nothing : Maybe A
+             just : A → Maybe A
+
+           session %1 asked := recv (Maybe Bool) (send Bool (send Bool end))
+           session asked-back := dual asked
+           conform reply : asked :=
+             get (m : Maybe Bool)
+               (match m
+                 | nothing => put false (put true done)
+                 | just b => put b (put b done))
+           conform asker : asked-back :=
+             put (just true) (get (k : Bool) (get (n : Bool) done))
+
+           session %1 closed := recv (Maybe Bool) end
+           conform finished : closed :=
+             get (m : Maybe Bool)
+               (match m
+                 | nothing => done
+                 | just b => done)
+
+           session flags := rec X. recv (Maybe Bool) (send Bool X)
+           conform spin : flags :=
+             rec X. get (m : Maybe Bool)
+               (match m
+                 | nothing => put false X
+                 | just b => put b X)
+           """) == :ok
+
+    assert {:ok, book} =
+             Parser.parse("""
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             data Maybe (A : Type) : Type where
+               nothing : Maybe A
+               just : A → Maybe A
+
+             session %1 asked := recv (Maybe Bool) (send Bool (send Bool end))
+             session asked-back := dual asked
+             conform reply : asked :=
+               get (m : Maybe Bool)
+                 (match m
+                   | nothing => put false (put true done)
+                   | just b => put b (put b done))
+             conform asker : asked-back :=
+               put (just false) (get (k : Bool) (get (n : Bool) done))
+             """)
+
+    assert Check.check_sig(book) == :ok
+    reply = Enum.find(book, &(&1.name == "reply"))
+    asker = Enum.find(book, &(&1.name == "asker"))
+    assert Meet.meets(reply.proc, asker.proc, book) == :ok
+    assert Meet.meet_mult(:lin, reply.proc, asker.proc, book) == :ok
+    assert Meet.meet_mult(:lin, asker.proc, reply.proc, book) == :ok
+
+    assert {:error, msg} =
+             check("""
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             data Maybe (A : Type) : Type where
+               nothing : Maybe A
+               just : A → Maybe A
+
+             session %1 flags := rec X. recv (Maybe Bool) (send Bool X)
+             conform spin : flags :=
+               rec X. get (m : Maybe Bool)
+                 (match m
+                   | nothing => put false X
+                   | just b => put b X)
+             """)
+
+    assert msg =~ "linear channel abandoned"
+  end
+
   defp check(src) do
     assert {:ok, book} = Parser.parse(src)
     Check.check_sig(book)
