@@ -913,3 +913,47 @@ note-meet = put-get refl refl done-done
 
 note-meet-swap : Meets noteServer (put boolTy (lit trueV) done)
 note-meet-swap = get-put refl refl done-done
+
+------------------------------------------------------------------------
+-- A put of headers meets the headers arm. Data meets the data arm.
+-- The two protocol arms are the case of that same value.
+------------------------------------------------------------------------
+
+frame-meet : Meets frameClient frameServer
+frame-meet = put-mget refl refl refl (put-get refl refl done-done)
+
+frame-meet-swap : Meets frameServer frameClient
+frame-meet-swap = mget-put refl refl refl (get-put refl refl done-done)
+
+frame-meet-decides : decide frameClient frameServer ≡ yes frame-meet
+frame-meet-decides = refl
+
+frame-meet-swap-decides : decide frameServer frameClient ≡ yes frame-meet-swap
+frame-meet-swap-decides = refl
+
+frame-channel : Channel frameServer frameClient frameCase
+frame-channel = channel frame-meet-swap frame-server-ok frame-client-ok
+
+data-meet : Meets frameData frameServer
+data-meet = put-mget refl refl refl (get-put refl refl done-done)
+
+data-meet-swap : Meets frameServer frameData
+data-meet-swap = mget-put refl refl refl (put-get refl refl done-done)
+
+data-channel : Channel frameData frameServer frameClientProto
+data-channel = channel data-meet frame-data-ok frame-server-ok
+
+late-meet : Meets lateClient lateServer
+late-meet = put-mget refl refl refl (get-put refl refl done-done)
+
+late-meet-swap : Meets lateServer lateClient
+late-meet-swap = mget-put refl refl refl (put-get refl refl done-done)
+
+late-meet-decides : decide lateClient lateServer ≡ yes late-meet
+late-meet-decides = refl
+
+late-meet-swap-decides : decide lateServer lateClient ≡ yes late-meet-swap
+late-meet-swap-decides = refl
+
+late-channel : Channel lateServer lateClient lateCase
+late-channel = channel late-meet-swap late-server-ok late-client-ok

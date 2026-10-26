@@ -24,6 +24,18 @@
 -- cover the received value has no derivation. An indexed bit is
 -- still the literal the sender writes.
 --
+-- A dependent continuation may also be a `case` on the name just
+-- bound, or on a run applied to that name. The arms are one protocol
+-- per constructor, in declaration order: of the payload, or of the
+-- run's result. A sender whose value is known is checked on the arm
+-- that value selects. A receiver matches every constructor of the
+-- payload, and each process arm conforms to the protocol arm that
+-- constructor selects. Selecting an arm is the same evaluator. It
+-- uses no fuel. A case that is not that continuation, a scrutinee
+-- other than a bit or a declared data type, a run outside the
+-- fragment, and a sender whose value is not known when the arms
+-- differ, have no derivation.
+--
 -- `send A S` sends a value of type A and continues as S. `recv A S`
 -- receives one. `drecv x A S` binds that value to `x`, and `S` may
 -- mention `x` as the length of a vector. `dsend x A S` is the other
@@ -393,7 +405,14 @@ mutual
 ------------------------------------------------------------------------
 -- One continuation after the payload. An indexed bit has two
 -- continuations, one for each value. Choice is a separate arm.
+-- `pcase` is that continuation chosen by the value just bound:
+-- `byVal` matches the payload's constructors, `byRun` matches the
+-- constructors of the run's result. The name is the binder.
 ------------------------------------------------------------------------
+
+data Scrut : Set where
+  byVal : String → Scrut
+  byRun : String → String → Ty → Scrut
 
 data Proto : Set where
   end    : Proto
@@ -409,6 +428,7 @@ data Proto : Set where
   irecv  : String → Proto → Proto → Proto
   choose : Proto → Proto → Proto
   branch : Proto → Proto → Proto
+  pcase  : Scrut → List (String × Proto) → Proto
 
 protoMode : Mode
 protoMode = spec
@@ -538,6 +558,13 @@ boolDecl = mkDecl "Bool" nzero (ctor "true" [] ∷ ctor "false" [] ∷ [])
 
 boolTy : Ty
 boolTy = dat boolDecl []
+
+frameDecl : Decl
+frameDecl = mkDecl "Frame" nzero
+  (ctor "data" [] ∷ ctor "trailers" [] ∷ ctor "headers" [] ∷ [])
+
+frameTy : Ty
+frameTy = dat frameDecl []
 
 trueV : Val boolTy
 trueV = con "true" snil
@@ -670,10 +697,32 @@ earlyRun = rdef "early" nzero (rCall "late" [])
 lateRun : RDef
 lateRun = rdef "late" nzero (rNat nzero)
 
+-- `lateFrame` is false on headers and true on the other frames.
+lateFrameBody : RTm
+lateFrameBody = rMatch (rVar nzero)
+  ( arm "data" (rCon "true" [])
+  ∷ arm "trailers" (rCon "true" [])
+  ∷ arm "headers" (rCon "false" [])
+  ∷ [])
+
+lateFrameRun : RDef
+lateFrameRun = rdef "lateFrame" (nsuc nzero) lateFrameBody
+
+-- The `just` arm reads the field. An empty field environment does not.
+onJustBody : RTm
+onJustBody = rMatch (rVar nzero)
+  ( arm "nothing" (rCon "true" [])
+  ∷ arm "just" (rMatchNat (rVar nzero) (rCon "false" []) (rCon "true" []))
+  ∷ [])
+
+onJustRun : RDef
+onJustRun = rdef "onJust" (nsuc nzero) onJustBody
+
 -- Latest first. The tail of a definition is the earlier prefix.
 runs : List RDef
 runs =
-  plusRun ∷ loopRun ∷ lateRun ∷ sizeRun ∷ badRun ∷ countRun ∷ effectiveRun ∷ markRun ∷ earlyRun ∷ []
+  onJustRun ∷ lateFrameRun ∷ plusRun ∷ loopRun ∷ lateRun ∷ sizeRun ∷ badRun ∷ countRun
+    ∷ effectiveRun ∷ markRun ∷ earlyRun ∷ []
 
 -- Every call in the body names a definition in the prefix. The check
 -- walks the whole term, so a call in an arm that is not taken still
@@ -972,6 +1021,49 @@ applyProto ρ@(bind _ _ _) (isend y S T) = isend y (applyProto (shadow y ρ) S) 
 applyProto ρ@(bind _ _ _) (irecv y S T) = irecv y (applyProto (shadow y ρ) S) (applyProto (shadow y ρ) T)
 applyProto ρ@(bind _ _ _) (choose S T) = choose (applyProto ρ S) (applyProto ρ T)
 applyProto ρ@(bind _ _ _) (branch S T) = branch (applyProto ρ S) (applyProto ρ T)
+applyProto ρ@(bind _ _ _) (pcase scrut arms) = pcase scrut (applyArms ρ arms)
+  where
+  applyArms : Idx → List (String × Proto) → List (String × Proto)
+  applyArms _ [] = []
+  applyArms σ ((c , S) ∷ as) = (c , applyProto σ S) ∷ applyArms σ as
+
+eqTy : Ty → Ty → Bool
+eqTy A B with ty≟ A B
+... | yes′ _ = true
+... | no′ _ = false
+
+eqN : NExp → NExp → Bool
+eqN e f with nexp≟ e f
+... | yes′ _ = true
+... | no′ _ = false
+
+scrutEq : Scrut → Scrut → Bool
+scrutEq (byVal x) (byVal y) = x == y
+scrutEq (byRun f x R) (byRun g y S) = (f == g) ∧ (x == y) ∧ eqTy R S
+scrutEq _ _ = false
+
+-- Syntactic equality of protocols. A sender whose value is not known
+-- continues only when every arm is this same protocol.
+mutual
+  protoEq : Proto → Proto → Bool
+  protoEq end end = true
+  protoEq (send A S) (send B T) = eqTy A B ∧ protoEq S T
+  protoEq (recv A S) (recv B T) = eqTy A B ∧ protoEq S T
+  protoEq (dsend x A S) (dsend y B T) = (x == y) ∧ eqTy A B ∧ protoEq S T
+  protoEq (drecv x A S) (drecv y B T) = (x == y) ∧ eqTy A B ∧ protoEq S T
+  protoEq (esend x e S) (esend y f T) = (x == y) ∧ eqN e f ∧ protoEq S T
+  protoEq (erecv x e S) (erecv y f T) = (x == y) ∧ eqN e f ∧ protoEq S T
+  protoEq (isend x S T) (isend y U V) = (x == y) ∧ protoEq S U ∧ protoEq T V
+  protoEq (irecv x S T) (irecv y U V) = (x == y) ∧ protoEq S U ∧ protoEq T V
+  protoEq (choose S T) (choose U V) = protoEq S U ∧ protoEq T V
+  protoEq (branch S T) (branch U V) = protoEq S U ∧ protoEq T V
+  protoEq (pcase s as) (pcase t bs) = scrutEq s t ∧ armsEq as bs
+  protoEq _ _ = false
+
+  armsEq : List (String × Proto) → List (String × Proto) → Bool
+  armsEq [] [] = true
+  armsEq ((c , S) ∷ as) ((d , T) ∷ bs) = (c == d) ∧ protoEq S T ∧ armsEq as bs
+  armsEq _ _ = false
 
 toℕ : Val nat → ℕ
 toℕ zero = nzero
@@ -996,6 +1088,151 @@ ixOf (pair _ _) _ = nlit nzero
 ixOf (rec _) _ = nlit nzero
 ixOf (vec _ _) _ = nlit nzero
 ixOf (dat _ _) _ = nlit nzero
+
+------------------------------------------------------------------------
+-- The arm a value selects. A bit's constructors are `b0` then `b1`.
+-- A declared data type's constructors are the declaration's, in
+-- order. A known value is a literal or a call the evaluator returns.
+-- A variable is not known. A run is applied with that same evaluator,
+-- and the result is cast to the result type written on the scrutinee.
+-- Probing a constructor passes no fields: an arm that reads a field
+-- does not decide, and no field value is invented.
+------------------------------------------------------------------------
+
+ctorNames : List Ctor → List String
+ctorNames [] = []
+ctorNames (ctor n _ ∷ cs) = n ∷ ctorNames cs
+
+payCtors : Ty → Maybe (List String)
+payCtors bit = just ("b0" ∷ "b1" ∷ [])
+payCtors (dat d _) = just (ctorNames (ctorsOf d))
+payCtors _ = nothing
+
+armNames : List (String × Proto) → List String
+armNames [] = []
+armNames ((c , _) ∷ as) = c ∷ armNames as
+
+namesEq : List String → List String → Bool
+namesEq [] [] = true
+namesEq (x ∷ xs) (y ∷ ys) = (x == y) ∧ namesEq xs ys
+namesEq _ _ = false
+
+labelled : Ty → List (String × Proto) → Bool
+labelled A arms with payCtors A
+... | nothing = false
+... | just cs = namesEq cs (armNames arms)
+
+known : ∀ {A} → ValExpr A → Maybe (Val A)
+known (lit v) = just v
+known (var _) = nothing
+known (call f as) = evalExpr (call f as)
+
+valCtor : ∀ {A} → Val A → Maybe String
+valCtor b0 = just "b0"
+valCtor b1 = just "b1"
+valCtor (con c _) = just c
+valCtor _ = nothing
+
+findArm : String → List (String × Proto) → Maybe Proto
+findArm _ [] = nothing
+findArm c ((d , S) ∷ as) with c ≟ d
+... | yes′ _ = just S
+... | no′ _ = findArm c as
+
+sameArms : List (String × Proto) → Maybe Proto
+sameArms [] = nothing
+sameArms ((_ , S) ∷ as) = agree S as
+  where
+  agree : Proto → List (String × Proto) → Maybe Proto
+  agree S [] = just S
+  agree S ((_ , T) ∷ bs) with protoEq S T
+  ... | true = agree S bs
+  ... | false = nothing
+
+rawAt : Ty → String → Raw
+rawAt bit "b0" = rawBit b0
+rawAt bit "b1" = rawBit b1
+rawAt bit _ = rawCon "" []
+rawAt _ c = rawCon c []
+
+evalAt : String → Ty → String → (R : Ty) → Maybe (Val R)
+evalAt f A c R = bindM (apply runs f (rawAt A c ∷ [])) (cast R)
+
+evalVal : ∀ {A} → String → Val A → (R : Ty) → Maybe (Val R)
+evalVal f v R = bindM (rawOf v) (λ r → bindM (apply runs f (r ∷ [])) (cast R))
+
+runReady : String → Bool
+runReady f = readyAt runs f
+  where
+  readyAt : List RDef → String → Bool
+  readyAt [] _ = false
+  readyAt (rdef n ar body ∷ Δ) g with g ≟ n
+  ... | no′ _ = readyAt Δ g
+  ... | yes′ _ with ar ≟ℕ (nsuc nzero)
+  ... | no′ _ = false
+  ... | yes′ _ = callsBefore Δ body
+
+-- The protocol the sender continues as. `nothing` is not an arm:
+-- the scrutinee is not the binder, the labels are not the
+-- constructors, the run is not an earlier definition of one
+-- argument, or the value does not select one arm. A variable
+-- continues as the common protocol when every arm is that protocol.
+selectProto : ∀ {A} → String → ValExpr A → Scrut → List (String × Proto) → Maybe Proto
+selectProto {A} y v (byVal x) arms with x ≟ y
+... | no′ _ = nothing
+... | yes′ _ with labelled A arms
+... | false = nothing
+... | true with known v
+... | nothing = sameArms arms
+... | just u with valCtor u
+... | nothing = nothing
+... | just c = findArm c arms
+selectProto {A} y v (byRun f x R) arms with x ≟ y
+... | no′ _ = nothing
+... | yes′ _ with labelled R arms
+... | false = nothing
+... | true with runReady f
+... | false = nothing
+... | true with known v
+... | nothing = sameArms arms
+... | just u with evalVal f u R
+... | nothing = nothing
+... | just r with valCtor r
+... | nothing = nothing
+... | just c = findArm c arms
+
+zipVal : List (String × Proto) → List Proc → Maybe (List (Proc × Proto))
+zipVal [] [] = just []
+zipVal ((_ , S) ∷ as) (p ∷ ps) = bindM (zipVal as ps) (λ rs → just ((p , S) ∷ rs))
+zipVal _ _ = nothing
+
+zipRun : String → Ty → Ty → List (String × Proto) → List String → List Proc → Maybe (List (Proc × Proto))
+zipRun _ _ _ _ [] [] = just []
+zipRun f A R arms (c ∷ cs) (p ∷ ps) =
+  bindM (evalAt f A c R) (λ r →
+    bindM (valCtor r) (λ k →
+      bindM (findArm k arms) (λ S →
+        bindM (zipRun f A R arms cs ps) (λ rs → just ((p , S) ∷ rs)))))
+zipRun _ _ _ _ _ _ = nothing
+
+-- Each process arm is paired with the protocol arm its constructor
+-- selects. Direct case zips in declaration order. A computed case
+-- evaluates the run at each constructor of the payload.
+zipCase : (A : Ty) → String → Scrut → List (String × Proto) → List Proc → Maybe (List (Proc × Proto))
+zipCase A y (byVal x) arms ps with x ≟ y
+... | no′ _ = nothing
+... | yes′ _ with labelled A arms
+... | false = nothing
+... | true = zipVal arms ps
+zipCase A y (byRun f x R) arms ps with x ≟ y
+... | no′ _ = nothing
+... | yes′ _ with labelled R arms
+... | false = nothing
+... | true with runReady f
+... | false = nothing
+... | true with payCtors A
+... | nothing = nothing
+... | just cs = zipRun f A R arms cs ps
 
 ------------------------------------------------------------------------
 -- The evidence a sent nat owes. The bound is a numeral, or a name the
@@ -1030,6 +1267,24 @@ data Le (Γ : Ctx) : ValExpr nat → NExp → Set where
 data Owed (Γ : Ctx) (v : ValExpr nat) : Maybe NExp → Set where
   owed : ∀ {e} → Le Γ v e → Owed Γ v (just e)
 
+-- A continuation that is not itself a case. `dput-ok` is that
+-- continuation. A case is `dput-arm`: the value selects one arm.
+data Plain : Proto → Set where
+  plain-end    : Plain end
+  plain-send   : ∀ {A S} → Plain (send A S)
+  plain-recv   : ∀ {A S} → Plain (recv A S)
+  plain-dsend  : ∀ {x A S} → Plain (dsend x A S)
+  plain-drecv  : ∀ {x A S} → Plain (drecv x A S)
+  plain-esend  : ∀ {x e S} → Plain (esend x e S)
+  plain-erecv  : ∀ {x e S} → Plain (erecv x e S)
+  plain-isend  : ∀ {x S T} → Plain (isend x S T)
+  plain-irecv  : ∀ {x S T} → Plain (irecv x S T)
+  plain-choose : ∀ {S T} → Plain (choose S T)
+  plain-branch : ∀ {S T} → Plain (branch S T)
+
+plain-not : ∀ {scrut arms} → Plain (pcase scrut arms) → ⊥
+plain-not ()
+
 -- Conformance under an index substitution. `none` is the identity,
 -- which is the conformance a session is checked at. A dependent send
 -- extends the substitution with the value. A dependent receive
@@ -1040,6 +1295,9 @@ data Owed (Γ : Ctx) (v : ValExpr nat) : Maybe NExp → Set where
 -- data type with one arm per constructor, in declaration order. Each
 -- arm conforms to the same continuation. A nat, unit, a pair, a
 -- record, a vector, or the wrong number of arms does not cover.
+-- A case is the continuation of the dependent action that binds the
+-- scrutinee. The sender is checked on the selected arm. The receiver
+-- is checked on every arm.
 mutual
   data Covered : Ty → List Proc → Set where
     bit-cov : ∀ {p q} → Covered bit (p ∷ q ∷ [])
@@ -1051,6 +1309,28 @@ mutual
       Conformsρ Γ ρ p S →
       Arms Γ ρ ps S →
       Arms Γ ρ (p ∷ ps) S
+
+  -- One process per protocol arm, in order. The process is a subterm
+  -- of the match, so the check recurses on it.
+  data ArmsAt (Γ : Ctx) (ρ : Idx) : List (String × Proto) → List Proc → Set where
+    at-nil  : ArmsAt Γ ρ [] []
+    at-cons : ∀ {c S as p ps} →
+      Conformsρ Γ ρ p S →
+      ArmsAt Γ ρ as ps →
+      ArmsAt Γ ρ ((c , S) ∷ as) (p ∷ ps)
+
+  -- A computed case. Each constructor of the payload is evaluated,
+  -- and the process arm conforms to the arm of that result.
+  data ArmsRun (Γ : Ctx) (ρ : Idx) (f : String) (A R : Ty)
+      (arms : List (String × Proto)) : List String → List Proc → Set where
+    run-nil  : ArmsRun Γ ρ f A R arms [] []
+    run-cons : ∀ {c cs p ps r k S} →
+      evalAt f A c R ≡ just r →
+      valCtor r ≡ just k →
+      findArm k arms ≡ just S →
+      Conformsρ Γ ρ p S →
+      ArmsRun Γ ρ f A R arms cs ps →
+      ArmsRun Γ ρ f A R arms (c ∷ cs) (p ∷ ps)
 
   data Conformsρ (Γ : Ctx) (ρ : Idx) : Proc → Proto → Set where
     done-end : Conformsρ Γ ρ done end
@@ -1071,8 +1351,17 @@ mutual
     dput-ok : ∀ {A B y v P S} →
       A ≡ applyTy ρ B →
       ValExprOk Γ v →
+      Plain S →
       Conformsρ Γ (bind y (ixOf A v) (shadow y ρ)) P S →
       Conformsρ Γ ρ (put A v P) (dsend y B S)
+
+    -- The value selects one arm of the case. The continuation is that arm.
+    dput-arm : ∀ {A B y v P scrut arms T} →
+      A ≡ applyTy ρ B →
+      ValExprOk Γ v →
+      selectProto y v scrut arms ≡ just T →
+      Conformsρ Γ (bind y (ixOf A v) (shadow y ρ)) P T →
+      Conformsρ Γ ρ (put A v P) (dsend y B (pcase scrut arms))
 
     dget-ok : ∀ {A B x y P S} →
       A ≡ applyTy ρ B →
@@ -1117,6 +1406,23 @@ mutual
       Covered A ps →
       Arms ((x , A) ∷ Γ) ρ ps S →
       Conformsρ Γ ρ (mget A x ps) (recv B S)
+
+    -- Each process arm conforms to the protocol arm of that constructor.
+    mget-val : ∀ {A B x y ps arms} →
+      A ≡ applyTy ρ B →
+      Covered A ps →
+      labelled A arms ≡ true →
+      ArmsAt ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) arms ps →
+      Conformsρ Γ ρ (mget A x ps) (drecv y B (pcase (byVal y) arms))
+
+    mget-run : ∀ {A B x y f R ps arms cs} →
+      A ≡ applyTy ρ B →
+      Covered A ps →
+      runReady f ≡ true →
+      labelled R arms ≡ true →
+      payCtors A ≡ just cs →
+      ArmsRun ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) f A R arms cs ps →
+      Conformsρ Γ ρ (mget A x ps) (drecv y B (pcase (byRun f y R) arms))
 
 Conforms : Ctx → Proc → Proto → Set
 Conforms Γ P S = Conformsρ Γ none P S
@@ -1221,20 +1527,47 @@ data TyOk where
   dat-ok  : ∀ {Γ d as} →
     length as ≡ np d → AllTy Γ as → CtorsFit Γ d as (ctorsOf d) → TyOk Γ (dat d as)
 
-data ProtoOk : Ctx → Proto → Set where
-  end-ok    : ∀ {Γ} → ProtoOk Γ end
-  send-ok   : ∀ {Γ A S} → TyOk Γ A → ProtoOk Γ S → ProtoOk Γ (send A S)
-  recv-ok   : ∀ {Γ A S} → TyOk Γ A → ProtoOk Γ S → ProtoOk Γ (recv A S)
-  dsend-ok  : ∀ {Γ x A S} → TyOk Γ A → ProtoOk ((x , A) ∷ Γ) S → ProtoOk Γ (dsend x A S)
-  drecv-ok  : ∀ {Γ x A S} → TyOk Γ A → ProtoOk ((x , A) ∷ Γ) S → ProtoOk Γ (drecv x A S)
-  -- The name of an evidence payload is in scope in its bound only.
-  esend-ok  : ∀ {Γ x e S} → NExpOk Γ e → ProtoOk Γ S → ProtoOk Γ (esend x e S)
-  erecv-ok  : ∀ {Γ x e S} → NExpOk Γ e → ProtoOk Γ S → ProtoOk Γ (erecv x e S)
-  -- The binder is a bit in both arms, so a length that names it is refused.
-  isend-ok  : ∀ {Γ x S T} → ProtoOk ((x , bit) ∷ Γ) S → ProtoOk ((x , bit) ∷ Γ) T → ProtoOk Γ (isend x S T)
-  irecv-ok  : ∀ {Γ x S T} → ProtoOk ((x , bit) ∷ Γ) S → ProtoOk ((x , bit) ∷ Γ) T → ProtoOk Γ (irecv x S T)
-  choose-ok : ∀ {Γ S T} → ProtoOk Γ S → ProtoOk Γ T → ProtoOk Γ (choose S T)
-  branch-ok : ∀ {Γ S T} → ProtoOk Γ S → ProtoOk Γ T → ProtoOk Γ (branch S T)
+-- A case is well formed only as the continuation of the action that
+-- binds its scrutinee. The arms are that payload's constructors, or
+-- the result's, in declaration order. Each arm is a protocol in the
+-- scope of the binder. A bare case is not a protocol on its own.
+mutual
+  data ArmsOk (Γ : Ctx) : List (String × Proto) → Set where
+    arms-none : ArmsOk Γ []
+    arms-one  : ∀ {c S as} → ProtoOk Γ S → ArmsOk Γ as → ArmsOk Γ ((c , S) ∷ as)
+
+  data CaseOk (Γ : Ctx) (x : String) (A : Ty) : Scrut → List (String × Proto) → Set where
+    ok-val : ∀ {arms} →
+      labelled A arms ≡ true →
+      ArmsOk Γ arms →
+      CaseOk Γ x A (byVal x) arms
+    ok-run : ∀ {f R arms cs} →
+      runReady f ≡ true →
+      labelled R arms ≡ true →
+      payCtors A ≡ just cs →
+      ArmsOk Γ arms →
+      CaseOk Γ x A (byRun f x R) arms
+
+  data ProtoOk : Ctx → Proto → Set where
+    end-ok    : ∀ {Γ} → ProtoOk Γ end
+    send-ok   : ∀ {Γ A S} → TyOk Γ A → ProtoOk Γ S → ProtoOk Γ (send A S)
+    recv-ok   : ∀ {Γ A S} → TyOk Γ A → ProtoOk Γ S → ProtoOk Γ (recv A S)
+    dsend-ok  : ∀ {Γ x A S} → TyOk Γ A → ProtoOk ((x , A) ∷ Γ) S → ProtoOk Γ (dsend x A S)
+    drecv-ok  : ∀ {Γ x A S} → TyOk Γ A → ProtoOk ((x , A) ∷ Γ) S → ProtoOk Γ (drecv x A S)
+    dsend-case : ∀ {Γ x A scrut arms} →
+      TyOk Γ A → CaseOk ((x , A) ∷ Γ) x A scrut arms →
+      ProtoOk Γ (dsend x A (pcase scrut arms))
+    drecv-case : ∀ {Γ x A scrut arms} →
+      TyOk Γ A → CaseOk ((x , A) ∷ Γ) x A scrut arms →
+      ProtoOk Γ (drecv x A (pcase scrut arms))
+    -- The name of an evidence payload is in scope in its bound only.
+    esend-ok  : ∀ {Γ x e S} → NExpOk Γ e → ProtoOk Γ S → ProtoOk Γ (esend x e S)
+    erecv-ok  : ∀ {Γ x e S} → NExpOk Γ e → ProtoOk Γ S → ProtoOk Γ (erecv x e S)
+    -- The binder is a bit in both arms, so a length that names it is refused.
+    isend-ok  : ∀ {Γ x S T} → ProtoOk ((x , bit) ∷ Γ) S → ProtoOk ((x , bit) ∷ Γ) T → ProtoOk Γ (isend x S T)
+    irecv-ok  : ∀ {Γ x S T} → ProtoOk ((x , bit) ∷ Γ) S → ProtoOk ((x , bit) ∷ Γ) T → ProtoOk Γ (irecv x S T)
+    choose-ok : ∀ {Γ S T} → ProtoOk Γ S → ProtoOk Γ T → ProtoOk Γ (choose S T)
+    branch-ok : ∀ {Γ S T} → ProtoOk Γ S → ProtoOk Γ T → ProtoOk Γ (branch S T)
 
 conformMode : Mode
 conformMode = evid
@@ -1364,7 +1697,8 @@ get-type : ∀ {Γ ρ A B x P S} → Conformsρ Γ ρ (get A x P) (recv B S) →
 get-type (get-ok eq _) = eq
 
 dput-type : ∀ {Γ ρ A B y v P S} → Conformsρ Γ ρ (put A v P) (dsend y B S) → A ≡ applyTy ρ B
-dput-type (dput-ok eq _ _) = eq
+dput-type (dput-ok eq _ _ _) = eq
+dput-type (dput-arm eq _ _ _) = eq
 
 dget-type : ∀ {Γ ρ A B x y P S} → Conformsρ Γ ρ (get A x P) (drecv y B S) → A ≡ applyTy ρ B
 dget-type (dget-ok eq _) = eq
@@ -1386,12 +1720,17 @@ on-get (no′ ¬eq) _ = no (λ { (get-ok eq _) → ¬eq eq })
 
 on-dput : ∀ {Γ ρ B y v P S} →
   let A = applyTy ρ B in
+  Plain S →
   Dec (ValExprOk Γ v) →
   Answerρ Γ (bind y (ixOf A v) (shadow y ρ)) P S →
   Answerρ Γ ρ (put A v P) (dsend y B S)
-on-dput (yes′ vok) (yes d) = yes (dput-ok refl vok d)
-on-dput (yes′ vok) (no nd) = no (λ { (dput-ok refl _ d) → nd d })
-on-dput (no′ nvok) _ = no (λ { (dput-ok refl vok _) → nvok vok })
+on-dput pl (yes′ vok) (yes d) = yes (dput-ok refl vok pl d)
+on-dput pl (yes′ _) (no nd) = no (λ where
+  (dput-ok refl _ _ d) → nd d
+  (dput-arm _ _ _ _) → plain-not pl)
+on-dput pl (no′ nvok) _ = no (λ where
+  (dput-ok refl vok _ _) → nvok vok
+  (dput-arm _ vok _ _) → plain-not pl)
 
 on-dget : ∀ {Γ ρ B x y P S} →
   let A = applyTy ρ B in
@@ -1508,6 +1847,15 @@ data AnswerArms (Γ : Ctx) (ρ : Idx) (ps : List Proc) (S : Proto) : Set where
   yes-arms : Arms Γ ρ ps S → AnswerArms Γ ρ ps S
   no-arms  : ¬ Arms Γ ρ ps S → AnswerArms Γ ρ ps S
 
+data AnswerAt (Γ : Ctx) (ρ : Idx) (arms : List (String × Proto)) (ps : List Proc) : Set where
+  yes-at : ArmsAt Γ ρ arms ps → AnswerAt Γ ρ arms ps
+  no-at  : ¬ ArmsAt Γ ρ arms ps → AnswerAt Γ ρ arms ps
+
+data AnswerRun (Γ : Ctx) (ρ : Idx) (f : String) (A R : Ty)
+    (arms : List (String × Proto)) (cs : List String) (ps : List Proc) : Set where
+  yes-cr : ArmsRun Γ ρ f A R arms cs ps → AnswerRun Γ ρ f A R arms cs ps
+  no-cr  : ¬ ArmsRun Γ ρ f A R arms cs ps → AnswerRun Γ ρ f A R arms cs ps
+
 cover? : (A : Ty) (ps : List Proc) → Dec (Covered A ps)
 cover? bit [] = no′ (λ ())
 cover? bit (_ ∷ []) = no′ (λ ())
@@ -1532,6 +1880,31 @@ on-mget (yes′ refl) (yes′ _) (no-arms nd) = no (λ { (mget-ok refl _ ds) →
 on-mget (yes′ refl) (no′ nc) _ = no (λ { (mget-ok refl c _) → nc c })
 on-mget (no′ ¬eq) _ _ = no (λ { (mget-ok eq _ _) → ¬eq eq })
 
+-- The scrutinee is the binder, so the arm list is the one `mget` carries.
+on-at : ∀ {Γ ρ B x y ps arms} →
+  let A = applyTy ρ B in
+  Covered A ps →
+  labelled A arms ≡ true →
+  AnswerAt ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) arms ps →
+  Answerρ Γ ρ (mget A x ps) (drecv y B (pcase (byVal y) arms))
+on-at c lb (yes-at ds) = yes (mget-val refl c lb ds)
+on-at _ _ (no-at nd) = no (λ { (mget-val _ _ _ ds) → nd ds })
+
+on-run : ∀ {Γ ρ B x y f R ps arms cs} →
+  let A = applyTy ρ B in
+  Covered A ps →
+  runReady f ≡ true →
+  labelled R arms ≡ true →
+  payCtors A ≡ just cs →
+  AnswerRun ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) f A R arms cs ps →
+  Answerρ Γ ρ (mget A x ps) (drecv y B (pcase (byRun f y R) arms))
+on-run c rd lb eq (yes-cr ds) = yes (mget-run refl c rd lb eq ds)
+on-run {Γ} {ρ} {B} {x} {y} {f} {R} {ps} {arms} _ _ _ eq (no-cr nd) =
+  no (λ { (mget-run _ _ _ _ p ds) →
+    nd (subst (λ cs →
+          ArmsRun ((x , applyTy ρ B) ∷ Γ) (renameIdx y x (shadow y ρ)) f (applyTy ρ B) R arms cs ps)
+        (just-inj (trans (sym p) eq)) ds) })
+
 mutual
   decideArms : (Γ : Ctx) (ρ : Idx) (ps : List Proc) (S : Proto) → AnswerArms Γ ρ ps S
   decideArms Γ ρ [] _ = yes-arms arms-nil
@@ -1553,10 +1926,11 @@ mutual
   decideρ Γ ρ done (irecv _ _ _) = no (λ ())
   decideρ Γ ρ done (choose _ _) = no (λ ())
   decideρ Γ ρ done (branch _ _) = no (λ ())
+  decideρ Γ ρ done (pcase _ _) = no (λ ())
   decideρ Γ ρ stop _ = yes abandon
   decideρ Γ ρ (put A v P) (send B S) = on-put (ty≟ A (applyTy ρ B)) (decideValExpr Γ v) (decideρ Γ ρ P S)
   decideρ Γ ρ (put A v P) (dsend y B S) with ty≟ A (applyTy ρ B)
-  ... | yes′ refl = on-dput (decideValExpr Γ v) (decideρ Γ (bind y (ixOf (applyTy ρ B) v) (shadow y ρ)) P S)
+  ... | yes′ refl = sendBy Γ ρ y v P B S refl
   ... | no′ ¬eq = no (λ d → ¬eq (dput-type d))
   decideρ Γ ρ (put A v P) (esend y e S) with ty≟ A nat
   ... | yes′ refl = on-eput (decideValExpr Γ v) (owed? Γ v (resolve ρ e)) (decideρ Γ ρ P S)
@@ -1571,6 +1945,7 @@ mutual
   decideρ Γ ρ (put _ _ _) (drecv _ _ _) = no (λ ())
   decideρ Γ ρ (put _ _ _) (choose _ _) = no (λ ())
   decideρ Γ ρ (put _ _ _) (branch _ _) = no (λ ())
+  decideρ Γ ρ (put _ _ _) (pcase _ _) = no (λ ())
   decideρ Γ ρ (get A x P) (recv B S) = on-get (ty≟ A (applyTy ρ B)) (decideρ ((x , A) ∷ Γ) ρ P S)
   decideρ Γ ρ (get A x P) (drecv y B S) with ty≟ A (applyTy ρ B)
   ... | yes′ refl = on-dget (decideρ ((x , applyTy ρ B) ∷ Γ) (renameIdx y x (shadow y ρ)) P S)
@@ -1588,6 +1963,7 @@ mutual
   decideρ Γ ρ (get _ _ _) (dsend _ _ _) = no (λ ())
   decideρ Γ ρ (get _ _ _) (choose _ _) = no (λ ())
   decideρ Γ ρ (get _ _ _) (branch _ _) = no (λ ())
+  decideρ Γ ρ (get _ _ _) (pcase _ _) = no (λ ())
   decideρ Γ ρ (iget _ _ _) end = no (λ ())
   decideρ Γ ρ (iget _ _ _) (send _ _) = no (λ ())
   decideρ Γ ρ (iget _ _ _) (recv _ _) = no (λ ())
@@ -1598,6 +1974,7 @@ mutual
   decideρ Γ ρ (iget _ _ _) (isend _ _ _) = no (λ ())
   decideρ Γ ρ (iget _ _ _) (choose _ _) = no (λ ())
   decideρ Γ ρ (iget _ _ _) (branch _ _) = no (λ ())
+  decideρ Γ ρ (iget _ _ _) (pcase _ _) = no (λ ())
   decideρ Γ ρ (pick0 P) (choose S _) = at0 (decideρ Γ ρ P S)
   decideρ Γ ρ (pick0 _) end = no (λ ())
   decideρ Γ ρ (pick0 _) (send _ _) = no (λ ())
@@ -1609,6 +1986,7 @@ mutual
   decideρ Γ ρ (pick0 _) (isend _ _ _) = no (λ ())
   decideρ Γ ρ (pick0 _) (irecv _ _ _) = no (λ ())
   decideρ Γ ρ (pick0 _) (branch _ _) = no (λ ())
+  decideρ Γ ρ (pick0 _) (pcase _ _) = no (λ ())
   decideρ Γ ρ (pick1 P) (choose _ T) = at1 (decideρ Γ ρ P T)
   decideρ Γ ρ (pick1 _) end = no (λ ())
   decideρ Γ ρ (pick1 _) (send _ _) = no (λ ())
@@ -1620,6 +1998,7 @@ mutual
   decideρ Γ ρ (pick1 _) (isend _ _ _) = no (λ ())
   decideρ Γ ρ (pick1 _) (irecv _ _ _) = no (λ ())
   decideρ Γ ρ (pick1 _) (branch _ _) = no (λ ())
+  decideρ Γ ρ (pick1 _) (pcase _ _) = no (λ ())
   decideρ Γ ρ (cover P Q) (branch S T) = both-of (decideρ Γ ρ P S) (decideρ Γ ρ Q T)
   decideρ Γ ρ (cover _ _) end = no (λ ())
   decideρ Γ ρ (cover _ _) (send _ _) = no (λ ())
@@ -1631,18 +2010,135 @@ mutual
   decideρ Γ ρ (cover _ _) (isend _ _ _) = no (λ ())
   decideρ Γ ρ (cover _ _) (irecv _ _ _) = no (λ ())
   decideρ Γ ρ (cover _ _) (choose _ _) = no (λ ())
+  decideρ Γ ρ (cover _ _) (pcase _ _) = no (λ ())
   decideρ Γ ρ (mget A x ps) (recv B S) =
     on-mget (ty≟ A (applyTy ρ B)) (cover? A ps) (decideArms ((x , A) ∷ Γ) ρ ps S)
   decideρ Γ ρ (mget _ _ _) end = no (λ ())
   decideρ Γ ρ (mget _ _ _) (send _ _) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (dsend _ _ _) = no (λ ())
-  decideρ Γ ρ (mget _ _ _) (drecv _ _ _) = no (λ ())
+  decideρ Γ ρ (mget A x ps) (drecv y B (pcase (byVal z) arms)) with z ≟ y
+  ... | no′ z≢y = no (λ { (mget-val _ _ _ _) → z≢y refl })
+  ... | yes′ refl with ty≟ A (applyTy ρ B)
+  ... | no′ ¬eq = no (λ { (mget-val eq _ _ _) → ¬eq eq })
+  ... | yes′ refl with cover? A ps
+  ... | no′ nc = no (λ { (mget-val _ c _ _) → nc c })
+  ... | yes′ c with labelled A arms in lb
+  ... | false = no (λ { (mget-val _ _ p _) → true≢false (trans (sym p) lb) })
+  ... | true = on-at c lb (decideAt ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) arms ps)
+  decideρ Γ ρ (mget A x ps) (drecv y B (pcase (byRun f z R) arms)) with z ≟ y
+  ... | no′ z≢y = no (λ { (mget-run _ _ _ _ _ _) → z≢y refl })
+  ... | yes′ refl with ty≟ A (applyTy ρ B)
+  ... | no′ ¬eq = no (λ { (mget-run eq _ _ _ _ _) → ¬eq eq })
+  ... | yes′ refl with cover? A ps
+  ... | no′ nc = no (λ { (mget-run _ c _ _ _ _) → nc c })
+  ... | yes′ c with runReady f in rd
+  ... | false = no (λ { (mget-run _ _ p _ _ _) → true≢false (trans (sym p) rd) })
+  ... | true with labelled R arms in lb
+  ... | false = no (λ { (mget-run _ _ _ p _ _) → true≢false (trans (sym p) lb) })
+  ... | true with payCtors A in ep
+  ... | nothing = no (λ { (mget-run _ _ _ _ p _) → just≢nothing (trans (sym p) ep) })
+  ... | just cs = on-run c rd lb ep (decideRun ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) f A R arms cs ps)
+  decideρ Γ ρ (mget _ _ _) (drecv _ _ end) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (drecv _ _ (send _ _)) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (drecv _ _ (recv _ _)) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (drecv _ _ (dsend _ _ _)) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (drecv _ _ (drecv _ _ _)) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (drecv _ _ (esend _ _ _)) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (drecv _ _ (erecv _ _ _)) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (drecv _ _ (isend _ _ _)) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (drecv _ _ (irecv _ _ _)) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (drecv _ _ (choose _ _)) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (drecv _ _ (branch _ _)) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (esend _ _ _) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (erecv _ _ _) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (isend _ _ _) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (irecv _ _ _) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (choose _ _) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (branch _ _) = no (λ ())
+  decideρ Γ ρ (mget _ _ _) (pcase _ _) = no (λ ())
+
+  decideAt : (Γ : Ctx) (ρ : Idx) (arms : List (String × Proto)) (ps : List Proc) →
+    AnswerAt Γ ρ arms ps
+  decideAt Γ ρ [] [] = yes-at at-nil
+  decideAt Γ ρ ((c , S) ∷ as) (p ∷ ps) with decideρ Γ ρ p S
+  ... | no nd = no-at (λ { (at-cons d _) → nd d })
+  ... | yes d with decideAt Γ ρ as ps
+  ... | yes-at ds = yes-at (at-cons {c = c} d ds)
+  ... | no-at nd = no-at (λ { (at-cons _ ds) → nd ds })
+  decideAt Γ ρ [] (_ ∷ _) = no-at (λ ())
+  decideAt Γ ρ (_ ∷ _) [] = no-at (λ ())
+
+  decideRun : (Γ : Ctx) (ρ : Idx) (f : String) (A R : Ty) (arms : List (String × Proto))
+    (cs : List String) (ps : List Proc) → AnswerRun Γ ρ f A R arms cs ps
+  decideRun Γ ρ f A R arms [] [] = yes-cr run-nil
+  decideRun Γ ρ f A R arms (c ∷ cs) (p ∷ ps) with evalAt f A c R in er
+  ... | nothing = no-cr (λ { (run-cons q _ _ _ _) → just≢nothing (trans (sym q) er) })
+  ... | just r with valCtor r in ek
+  ... | nothing = no-cr (λ { (run-cons q k _ _ _) →
+        just≢nothing (trans (sym k) (trans (cong valCtor (just-inj (trans (sym q) er))) ek)) })
+  ... | just k with findArm k arms in ef
+  ... | nothing = no-cr (λ { (run-cons q kp sp _ _) →
+        just≢nothing (trans (sym sp)
+          (trans (cong (λ n → findArm n arms)
+            (just-inj (trans (sym kp)
+              (trans (cong valCtor (just-inj (trans (sym q) er))) ek))))
+            ef)) })
+  ... | just S with decideρ Γ ρ p S
+  ... | no nd = no-cr (λ { (run-cons q kp sp d _) →
+        nd (subst (λ T → Conformsρ Γ ρ p T)
+          (just-inj (trans (sym sp)
+            (trans (cong (λ n → findArm n arms)
+              (just-inj (trans (sym kp)
+                (trans (cong valCtor (just-inj (trans (sym q) er))) ek))))
+              ef)))
+          d) })
+  ... | yes d with decideRun Γ ρ f A R arms cs ps
+  ... | yes-cr ds = yes-cr (run-cons er ek ef d ds)
+  ... | no-cr nd = no-cr (λ { (run-cons _ _ _ _ ds) → nd ds })
+  decideRun _ _ _ _ _ _ [] (_ ∷ _) = no-cr (λ ())
+  decideRun _ _ _ _ _ _ (_ ∷ _) [] = no-cr (λ ())
+
+  sendBy : (Γ : Ctx) (ρ : Idx) {A : Ty} (y : String) (v : ValExpr A) (P : Proc)
+    (B : Ty) (S : Proto) → A ≡ applyTy ρ B →
+    Answerρ Γ ρ (put A v P) (dsend y B S)
+  sendBy Γ ρ {A} y v P B (pcase scrut arms) refl
+    with selectProto y v scrut arms in eq
+  ... | nothing = no (λ where
+        (dput-ok _ _ pl _) → plain-not pl
+        (dput-arm _ _ p _) → just≢nothing (trans (sym p) eq))
+  ... | just T with decideValExpr Γ v
+  ... | no′ nv = no (λ where
+        (dput-ok _ vok _ _) → nv vok
+        (dput-arm _ vok _ _) → nv vok)
+  ... | yes′ vok with decideρ Γ (bind y (ixOf A v) (shadow y ρ)) P T
+  ... | yes d = yes (dput-arm refl vok eq d)
+  ... | no nd = no (λ where
+        (dput-ok _ _ pl _) → plain-not pl
+        (dput-arm _ _ p d) →
+          nd (subst (λ S → Conformsρ Γ (bind y (ixOf A v) (shadow y ρ)) P S)
+                (just-inj (trans (sym p) eq)) d))
+  sendBy Γ ρ {A} y v P B end refl =
+    on-dput plain-end (decideValExpr Γ v) (decideρ Γ (bind y (ixOf A v) (shadow y ρ)) P end)
+  sendBy Γ ρ {A} y v P B (send C S) refl =
+    on-dput plain-send (decideValExpr Γ v) (decideρ Γ (bind y (ixOf A v) (shadow y ρ)) P (send C S))
+  sendBy Γ ρ {A} y v P B (recv C S) refl =
+    on-dput plain-recv (decideValExpr Γ v) (decideρ Γ (bind y (ixOf A v) (shadow y ρ)) P (recv C S))
+  sendBy Γ ρ {A} y v P B (dsend z C S) refl =
+    on-dput plain-dsend (decideValExpr Γ v) (decideρ Γ (bind y (ixOf A v) (shadow y ρ)) P (dsend z C S))
+  sendBy Γ ρ {A} y v P B (drecv z C S) refl =
+    on-dput plain-drecv (decideValExpr Γ v) (decideρ Γ (bind y (ixOf A v) (shadow y ρ)) P (drecv z C S))
+  sendBy Γ ρ {A} y v P B (esend z e S) refl =
+    on-dput plain-esend (decideValExpr Γ v) (decideρ Γ (bind y (ixOf A v) (shadow y ρ)) P (esend z e S))
+  sendBy Γ ρ {A} y v P B (erecv z e S) refl =
+    on-dput plain-erecv (decideValExpr Γ v) (decideρ Γ (bind y (ixOf A v) (shadow y ρ)) P (erecv z e S))
+  sendBy Γ ρ {A} y v P B (isend z S T) refl =
+    on-dput plain-isend (decideValExpr Γ v) (decideρ Γ (bind y (ixOf A v) (shadow y ρ)) P (isend z S T))
+  sendBy Γ ρ {A} y v P B (irecv z S T) refl =
+    on-dput plain-irecv (decideValExpr Γ v) (decideρ Γ (bind y (ixOf A v) (shadow y ρ)) P (irecv z S T))
+  sendBy Γ ρ {A} y v P B (choose S T) refl =
+    on-dput plain-choose (decideValExpr Γ v) (decideρ Γ (bind y (ixOf A v) (shadow y ρ)) P (choose S T))
+  sendBy Γ ρ {A} y v P B (branch S T) refl =
+    on-dput plain-branch (decideValExpr Γ v) (decideρ Γ (bind y (ixOf A v) (shadow y ρ)) P (branch S T))
 
 decide : (Γ : Ctx) (P : Proc) (S : Proto) → Answer Γ P S
 decide Γ P S = decideρ Γ none P S
@@ -1717,7 +2213,7 @@ sized-server-ok : Conforms [] sized-server sized
 sized-server-ok = dget-ok refl (put-ok refl (lit-ok refl) done-end)
 
 sized-client-ok : Conforms [] sized-client (dsend "n" nat (recv (vec nat (nvar "n")) end))
-sized-client-ok = dput-ok refl (lit-ok refl) (get-ok refl done-end)
+sized-client-ok = dput-ok refl (lit-ok refl) plain-recv (get-ok refl done-end)
 
 sized-server-decides : decide [] sized-server sized ≡ yes sized-server-ok
 sized-server-decides = refl
@@ -1732,7 +2228,7 @@ sized-bad : Proc
 sized-bad = put nat (lit two) (get (vec nat len-three) "_" done)
 
 sized-mismatch : ¬ Conforms [] sized-bad (dsend "n" nat (recv (vec nat (nvar "n")) end))
-sized-mismatch (dput-ok refl _ (get-ok () _))
+sized-mismatch (dput-ok refl _ _ (get-ok () _))
 
 bit-len : Proto
 bit-len = drecv "b" bit (send (vec nat (nvar "b")) end)
@@ -1797,7 +2293,7 @@ within = put nat (lit (num 8)) (put nat (lit (num 5)) done)
 
 within-ok : Conforms [] within granted
 within-ok =
-  dput-ok refl (lit-ok refl)
+  dput-ok refl (lit-ok refl) plain-esend
     (eput-ok (lit-ok refl) (owed (lit-le (s≤s (s≤s (s≤s (s≤s (s≤s z≤n))))))) done-end)
 
 within-decides : decide [] within granted ≡ yes within-ok
@@ -1809,7 +2305,7 @@ over = put nat (lit (num 8)) (put nat (lit (num 9)) done)
 
 over-refused : ¬ Conforms [] over granted
 over-refused
-  (dput-ok refl _ (eput-ok _ (owed (lit-le (s≤s (s≤s (s≤s (s≤s (s≤s (s≤s (s≤s (s≤s ())))))))))) _))
+  (dput-ok refl _ _ (eput-ok _ (owed (lit-le (s≤s (s≤s (s≤s (s≤s (s≤s (s≤s (s≤s (s≤s ())))))))))) _))
 
 over-decides : decide [] over granted ≡ no over-refused
 over-decides = refl
@@ -2495,6 +2991,7 @@ data QProto : Set where
   q-irecv  : String → QProto → QProto → QProto
   q-choose : QProto → QProto → QProto
   q-branch : QProto → QProto → QProto
+  q-case   : Scrut → List (String × QProto) → QProto
   q-call   : String → List SArg → QProto
 
 data SDecl : Set where
@@ -2617,8 +3114,24 @@ branchOf (finite p) (finite q) = finite (branch p q)
 branchOf (finite _) o = o
 branchOf o _ = o
 
+armFinite : List (String × Opened) → Maybe (List (String × Proto))
+armFinite [] = just []
+armFinite ((c , finite p) ∷ as) = bindM (armFinite as) (λ ps → just ((c , p) ∷ ps))
+armFinite (_ ∷ _) = nothing
+
+firstBad : List (String × Opened) → Opened
+firstBad [] = unknown "case"
+firstBad ((_ , finite _) ∷ as) = firstBad as
+firstBad ((_ , o) ∷ _) = o
+
+caseOf : Scrut → List (String × Opened) → Opened
+caseOf scrut as with armFinite as
+... | just ps = finite (pcase scrut ps)
+... | nothing = firstBad as
+
 mutual
   expand : List SDecl → List SDecl → String → Bool → QProto → Idx → Opened
+  expandArms : List SDecl → List SDecl → String → Bool → List (String × QProto) → Idx → List (String × Opened)
   expand _ _ _ _ q-end _ = finite end
   expand book Δ self _ (q-send A s) ρ =
     sendOf (applyTy ρ A) (expand book Δ self true s ρ)
@@ -2640,6 +3153,8 @@ mutual
     chooseOf (expand book Δ self true s ρ) (expand book Δ self true t ρ)
   expand book Δ self _ (q-branch s t) ρ =
     branchOf (expand book Δ self true s ρ) (expand book Δ self true t ρ)
+  expand book Δ self g (q-case scrut arms) ρ =
+    caseOf scrut (expandArms book Δ self g arms ρ)
   expand book Δ self g (q-call f as) ρ with evalSArgs ρ as | f ≟ self | g
   ... | argNo msg | _ | _ = badArg msg
   ... | argOk _ | yes′ _ | true = looping
@@ -2659,6 +3174,10 @@ mutual
     expand book Δ n false body (envOfS ps es)
   openHere (yes′ _) (no′ _) _ _ n _ _ _ _ = badArity n
   openHere (no′ _) _ book Δ _ _ _ f es = openName book Δ f es
+
+  expandArms _ _ _ _ [] _ = []
+  expandArms book Δ self g ((c , s) ∷ as) ρ =
+    (c , expand book Δ self g s ρ) ∷ expandArms book Δ self g as ρ
 
 -- The book is latest first. Opening starts at that book, so the tail
 -- of the matching declaration is everything declared before it.
@@ -2817,3 +3336,284 @@ sess-plus :
   openTop (sessFrames ∷ []) "frames" (saCall "plus" (saLit nzero ∷ saLit nzero ∷ []) ∷ [])
     ≡ badArg "plus"
 sess-plus = refl
+
+------------------------------------------------------------------------
+-- A protocol continues by the value just exchanged. The arms are the
+-- payload's constructors, in declaration order. A sender is checked
+-- on the arm that value selects. A receiver is checked on every arm.
+-- A run of the value selects the arm of the run's result instead.
+------------------------------------------------------------------------
+
+dataV : Val frameTy
+dataV = con "data" snil
+
+trailV : Val frameTy
+trailV = con "trailers" snil
+
+headV : Val frameTy
+headV = con "headers" snil
+
+frameArms : List (String × Proto)
+frameArms =
+  ("data" , send bit end) ∷
+  ("trailers" , send bit end) ∷
+  ("headers" , recv nat end) ∷ []
+
+frameCase : Proto
+frameCase = drecv "f" frameTy (pcase (byVal "f") frameArms)
+
+frameClientProto : Proto
+frameClientProto = dsend "f" frameTy (pcase (byVal "f") (
+  ("data" , recv bit end) ∷
+  ("trailers" , recv bit end) ∷
+  ("headers" , send nat end) ∷ []))
+
+frame-formed : TyOk [] frameTy
+frame-formed = dat-ok refl tys-nil
+  (ctors-cons flds-nil (ctors-cons flds-nil (ctors-cons flds-nil ctors-nil)))
+
+frame-wf : ProtoOk [] frameCase
+frame-wf = drecv-case frame-formed (ok-val refl
+  (arms-one (send-ok bit-ok end-ok)
+    (arms-one (send-ok bit-ok end-ok)
+      (arms-one (recv-ok nat-ok end-ok) arms-none))))
+
+frameServer : Proc
+frameServer = mget frameTy "f"
+  ( put bit (lit b0) done
+  ∷ put bit (lit b0) done
+  ∷ get nat "n" done
+  ∷ [])
+
+frame-server-ok : Conforms [] frameServer frameCase
+frame-server-ok = mget-val refl (dat-cov refl) refl
+  (at-cons (put-ok refl (lit-ok refl) done-end)
+    (at-cons (put-ok refl (lit-ok refl) done-end)
+      (at-cons (get-ok refl done-end) at-nil)))
+
+frame-server-decides : decide [] frameServer frameCase ≡ yes frame-server-ok
+frame-server-decides = refl
+
+-- Headers selects the third arm. The data arm is not checked.
+frameClient : Proc
+frameClient = put frameTy (lit headV) (put nat (lit zero) done)
+
+frame-client-ok : Conforms [] frameClient frameClientProto
+frame-client-ok = dput-arm refl (lit-ok refl) refl (put-ok refl (lit-ok refl) done-end)
+
+frame-client-decides : decide [] frameClient frameClientProto ≡ yes frame-client-ok
+frame-client-decides = refl
+
+-- Data selects the first arm, a receive of a bit.
+frameData : Proc
+frameData = put frameTy (lit dataV) (get bit "c" done)
+
+frame-data-ok : Conforms [] frameData frameClientProto
+frame-data-ok = dput-arm refl (lit-ok refl) refl (get-ok refl done-end)
+
+-- An in-flight frame continues as a bit, not as the headers nat.
+goawayForData : Proc
+goawayForData = put frameTy (lit dataV) (put nat (lit zero) done)
+
+goaway-for-data : ¬ Conforms [] goawayForData frameClientProto
+goaway-for-data (dput-ok _ _ () _)
+goaway-for-data (dput-arm {T = T} _ _ p d) = refuse (just-inj (trans (sym p) data-arm)) d
+  where
+  data-arm : selectProto "f" (lit dataV) (byVal "f")
+      (("data" , recv bit end) ∷ ("trailers" , recv bit end) ∷ ("headers" , send nat end) ∷ [])
+      ≡ just (recv bit end)
+  data-arm = refl
+  refuse : ∀ {T} → T ≡ recv bit end →
+    Conformsρ [] (bind "f" (ixOf frameTy (lit dataV)) (shadow "f" none))
+      (put nat (lit zero) done) T → ⊥
+  refuse refl ()
+
+-- The received name does not select an arm when the arms differ.
+splitArms : List (String × Proto)
+splitArms =
+  ("data" , end) ∷
+  ("trailers" , send bit end) ∷
+  ("headers" , end) ∷ []
+
+fwd-split : ¬ Conforms (("f" , frameTy) ∷ []) (put frameTy (var "f") done)
+  (dsend "f" frameTy (pcase (byVal "f") splitArms))
+fwd-split (dput-ok _ _ () _)
+fwd-split (dput-arm _ _ () _)
+
+-- Every arm is the same protocol, so the variable has one continuation.
+agreeArms : List (String × Proto)
+agreeArms = ("data" , end) ∷ ("trailers" , end) ∷ ("headers" , end) ∷ []
+
+agree-fwd : Conforms (("f" , frameTy) ∷ []) (put frameTy (var "f") done)
+  (dsend "f" frameTy (pcase (byVal "f") agreeArms))
+agree-fwd = dput-arm refl (var-ok here) refl done-end
+
+-- `lateFrame` is true on data and trailers, false on headers.
+lateArms : List (String × Proto)
+lateArms = ("true" , send bit end) ∷ ("false" , send nat end) ∷ []
+
+lateCase : Proto
+lateCase = drecv "f" frameTy (pcase (byRun "lateFrame" "f" boolTy) lateArms)
+
+late-wf : ProtoOk [] lateCase
+late-wf = drecv-case frame-formed (ok-run refl refl refl
+  (arms-one (send-ok bit-ok end-ok) (arms-one (send-ok nat-ok end-ok) arms-none)))
+
+lateServer : Proc
+lateServer = mget frameTy "f"
+  ( put bit (lit b0) done
+  ∷ put bit (lit b0) done
+  ∷ put nat (lit zero) done
+  ∷ [])
+
+late-server-ok : Conforms [] lateServer lateCase
+late-server-ok = mget-run refl (dat-cov refl) refl refl refl
+  (run-cons refl refl refl (put-ok refl (lit-ok refl) done-end)
+    (run-cons refl refl refl (put-ok refl (lit-ok refl) done-end)
+      (run-cons refl refl refl (put-ok refl (lit-ok refl) done-end) run-nil)))
+
+late-server-decides : decide [] lateServer lateCase ≡ yes late-server-ok
+late-server-decides = refl
+
+lateClientProto : Proto
+lateClientProto = dsend "f" frameTy (pcase (byRun "lateFrame" "f" boolTy) (
+  ("true" , recv bit end) ∷ ("false" , recv nat end) ∷ []))
+
+lateClient : Proc
+lateClient = put frameTy (lit headV) (get nat "n" done)
+
+late-client-ok : Conforms [] lateClient lateClientProto
+late-client-ok = dput-arm refl (lit-ok refl) refl (get-ok refl done-end)
+
+-- Sending a nat for an in-flight frame follows the true arm, which receives a bit.
+lateGoaway : Proc
+lateGoaway = mget frameTy "f"
+  ( put nat (lit zero) done
+  ∷ put bit (lit b0) done
+  ∷ put nat (lit zero) done
+  ∷ [])
+
+late-goaway : ¬ Conforms [] lateGoaway lateCase
+late-goaway (mget-run _ _ _ _ refl (run-cons refl refl refl (put-ok () _ _) _))
+
+-- The `just` arm reads a field. Probing passes none, so the receiver has no derivation.
+onJustCase : Proto
+onJustCase = drecv "m" maybeNat (pcase (byRun "onJust" "m" boolTy) (
+  ("true" , end) ∷ ("false" , end) ∷ []))
+
+onJust-wf : ProtoOk [] onJustCase
+onJust-wf = drecv-case
+  (dat-ok refl (tys-cons nat-ok tys-nil)
+    (ctors-cons flds-nil
+      (ctors-cons (flds-cons (ff-par refl nat-ok) flds-nil) ctors-nil)))
+  (ok-run refl refl refl (arms-one end-ok (arms-one end-ok arms-none)))
+
+onJust-recv : ¬ Conforms [] (mget maybeNat "m" (done ∷ done ∷ [])) onJustCase
+onJust-recv (mget-run _ _ _ _ refl (run-cons refl refl refl done-end (run-cons () _ _ _ _)))
+
+-- One arm sends evidence. The skeleton carries the nat and not the bound.
+evCase : Proto
+evCase = drecv "f" frameTy (pcase (byVal "f") (
+  ("data" , esend "d" (nlit (nsuc nzero)) end) ∷
+  ("trailers" , end) ∷
+  ("headers" , end) ∷ []))
+
+evServer : Proc
+evServer = mget frameTy "f" (put nat (lit zero) done ∷ done ∷ done ∷ [])
+
+ev-ok : Conforms [] evServer evCase
+ev-ok = mget-val refl (dat-cov refl) refl
+  (at-cons (eput-ok (lit-ok refl) (owed (lit-le z≤n)) done-end)
+    (at-cons done-end (at-cons done-end at-nil)))
+
+ev-skel : skel evServer ≡ hear frameTy "f" (pick (say (lit zero) finish ∷ finish ∷ finish ∷ []))
+ev-skel = refl
+
+-- A nat is not a scrutinee. The scrutinee is the binder, not an earlier name.
+-- A run that calls itself is not ready. An arm list is the constructors, no more and no fewer.
+natCase : Proto
+natCase = drecv "n" nat (pcase (byVal "n") (("zero" , end) ∷ []))
+
+nat-case-refused : ¬ ProtoOk [] natCase
+nat-case-refused (drecv-ok _ ())
+nat-case-refused (drecv-case _ (ok-val () _))
+
+earlyCase : Proto
+earlyCase = drecv "f" frameTy (pcase (byVal "g") frameArms)
+
+early-case-refused : ¬ ProtoOk [] earlyCase
+early-case-refused (drecv-ok _ ())
+early-case-refused (drecv-case _ ())
+
+loopCase : Proto
+loopCase = drecv "f" frameTy (pcase (byRun "loop" "f" boolTy) lateArms)
+
+loop-case-refused : ¬ ProtoOk [] loopCase
+loop-case-refused (drecv-ok _ ())
+loop-case-refused (drecv-case _ (ok-run () _ _ _))
+
+shortCase : Proto
+shortCase = drecv "f" frameTy (pcase (byVal "f") (("data" , end) ∷ []))
+
+short-case-refused : ¬ ProtoOk [] shortCase
+short-case-refused (drecv-ok _ ())
+short-case-refused (drecv-case _ (ok-val () _))
+
+extraCase : Proto
+extraCase = drecv "f" frameTy (pcase (byVal "f") (
+  ("data" , end) ∷ ("trailers" , end) ∷ ("headers" , end) ∷ ("pad" , end) ∷ []))
+
+extra-case-refused : ¬ ProtoOk [] extraCase
+extra-case-refused (drecv-ok _ ())
+extra-case-refused (drecv-case _ (ok-val () _))
+
+-- A bit is the other scrutinee. `b0` then `b1`.
+bitCase : Proto
+bitCase = drecv "b" bit (pcase (byVal "b") (("b0" , send nat end) ∷ ("b1" , end) ∷ []))
+
+bitServer : Proc
+bitServer = mget bit "b" (put nat (lit zero) done ∷ done ∷ [])
+
+bit-server-ok : Conforms [] bitServer bitCase
+bit-server-ok = mget-val refl bit-cov refl
+  (at-cons (put-ok refl (lit-ok refl) done-end) (at-cons done-end at-nil))
+
+bit-server-decides : decide [] bitServer bitCase ≡ yes bit-server-ok
+bit-server-decides = refl
+
+-- A call under the receive is guarded. The data arm opens `ack`.
+sessSrv : SDecl
+sessSrv = sdecl "srv" [] (q-drecv "f" frameTy (q-case (byVal "f") (
+  ("data" , q-call "ack" []) ∷
+  ("trailers" , q-end) ∷
+  ("headers" , q-recv nat q-end) ∷ [])))
+
+sess-srv :
+  openTop (sessSrv ∷ sessAck ∷ []) "srv" []
+    ≡ finite (drecv "f" frameTy (pcase (byVal "f") (
+        ("data" , send bit end) ∷
+        ("trailers" , end) ∷
+        ("headers" , recv nat end) ∷ [])))
+sess-srv = refl
+
+sessGate : SDecl
+sessGate = sdecl "gate" ("k" ∷ []) (q-drecv "b" bit (q-case (byVal "b") (
+  ("b0" , q-send (vec nat (nvar "k")) q-end) ∷
+  ("b1" , q-end) ∷ [])))
+
+sess-gate :
+  openTop (sessGate ∷ []) "gate" (saLit three ∷ [])
+    ≡ finite (drecv "b" bit (pcase (byVal "b") (
+        ("b0" , send (vec nat (nlit three)) end) ∷
+        ("b1" , end) ∷ [])))
+sess-gate = refl
+
+-- The self-call sits under the receive, so the case keeps the guard.
+sessLoopCase : SDecl
+sessLoopCase = sdecl "lc" [] (q-drecv "f" frameTy (q-case (byVal "f") (
+  ("data" , q-call "lc" []) ∷
+  ("trailers" , q-end) ∷
+  ("headers" , q-end) ∷ [])))
+
+sess-loop-case : openTop (sessLoopCase ∷ []) "lc" [] ≡ looping
+sess-loop-case = refl

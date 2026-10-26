@@ -16,7 +16,10 @@ defmodule Muro.Session do
   refused. `get` binds the received value to
   a named variable. `get (b : Bit) (match b P Q)` matches on that value.
   Each arm conforms to the one continuation, and the processes may differ:
-  the received value chooses which process runs. A declared data type has
+  the received value chooses which process runs. A `case` on that value
+  gives each constructor its own continuation. A `case` on a `run` of
+  the value gives each constructor the continuation of the run's result.
+  A declared data type has
   one arm per constructor, in declaration order. A dependent receive binds a name the
   continuation's payload may mention as a vector length. An evidence
   payload sends a nat at most a bound, a numeral or a nat bound
@@ -42,8 +45,8 @@ defmodule Muro.Session do
   The other end of a protocol. Mirrors `dual` in `agda/Muro/Dual.agda`.
 
   `send` swaps with `recv`. `choose` swaps with `branch`. The payload
-  type stays. The continuation dualises. `rec` stays `rec` and a
-  variable stays.
+  type stays. The continuation dualises. A `case` stays a `case` and
+  each arm dualises. `rec` stays `rec` and a variable stays.
   """
   def dual(:end), do: :end
   def dual({:send, a, s}), do: {:recv, a, dual(s)}
@@ -59,6 +62,10 @@ defmodule Muro.Session do
   def dual({:rec, x, s}), do: {:rec, x, dual(s)}
   def dual({:svar, x}), do: {:svar, x}
   def dual({:sjump, target, args}), do: {:sjump, flip_jump(target), args}
+
+  def dual({:case, scrut, arms}) do
+    {:case, scrut, Enum.map(arms, fn {c, s} -> {c, dual(s)} end)}
+  end
 
   defp flip_jump({:dual, name}), do: name
   defp flip_jump(name), do: {:dual, name}
@@ -402,7 +409,9 @@ defmodule Muro.Session do
   sits under an action of its own `rec`. A dependent action extends
   that scope with its binder. A free name is not a protocol.
   """
-  def proto_ok(proto, book \\ []), do: proto_at(proto, %{}, data_entries(book))
+  def proto_ok(proto, book \\ []) do
+    proto_at(proto, %{{:__book__, :book} => book}, data_entries(book))
+  end
 
   @doc """
   The declaration is well formed. A call of an earlier session checks
@@ -609,6 +618,52 @@ defmodule Muro.Session do
     end
   end
 
+  # `dput-arm`. The value selects one protocol arm. A variable continues
+  # only when every arm is that same protocol.
+  defp step(
+         {:put, ty, val, p} = proc,
+         {:dsend, y, sty, {:case, scrut, arms}} = proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book
+       ) do
+    expected = apply_ty(idx, sty)
+
+    case put_ok?(ty, val, expected, ctx, book) do
+      :yes ->
+        case select_sender(scrut, y, val, arms, ctx, book) do
+          {:ok, chosen} ->
+            keep(
+              descend(
+                p,
+                chosen,
+                ctx,
+                ext(idx, y, sent_val(val, ctx, book), expected),
+                penv,
+                senv,
+                seen,
+                fuel - 1,
+                book,
+                step_down(here_span(), 0)
+              )
+            )
+
+          {:error, msg} ->
+            refuse(proc, proto, msg)
+        end
+
+      :no ->
+        refuse(proc, proto, explain_no(ty, val, expected, ctx, book))
+
+      {:error, msg} ->
+        refuse(proc, proto, rewrite_run(msg))
+    end
+  end
+
   defp step(
          {:put, ty, val, p} = proc,
          {:dsend, y, sty, s} = proto,
@@ -679,6 +734,55 @@ defmodule Muro.Session do
       )
     else
       refuse(proc, proto)
+    end
+  end
+
+  # `mget-val` and `mget-run`. The process covers every constructor.
+  # Each arm conforms to the protocol that constructor selects.
+  defp step(
+         {:get, ty, name, {:match, mscrut, ps}} = proc,
+         {:drecv, y, sty, {:case, scrut, arms}} = proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book
+       ) do
+    expected = apply_ty(idx, sty)
+
+    cond do
+      ty != expected ->
+        refuse(proc, proto)
+
+      mscrut != name ->
+        {:error, step_at(step_down(here_span(), 0)), "match does not cover the received value"}
+
+      scrut_binder(scrut) != y ->
+        refuse(proc, proto, "a case is on the name just bound")
+
+      true ->
+        case zip_arms(scrut, expected, arms, ps, book) do
+          {:ok, pairs} ->
+            keep(
+              arms_paired(
+                pairs,
+                bind_ctx(ctx, name, expected),
+                rename_idx(idx, y, name),
+                penv,
+                senv,
+                seen,
+                fuel,
+                book,
+                step_down(here_span(), 0),
+                0
+              )
+            )
+
+          {:error, msg} ->
+            refuse(proc, proto, msg)
+        end
     end
   end
 
@@ -867,8 +971,9 @@ defmodule Muro.Session do
   # A match is the continuation of the `get` just taken. Each arm conforms
   # to that one protocol. The processes may differ: the received value
   # chooses which process runs, and it does not choose another protocol.
-  # The scrutinee is the received name. A nat, a pair, a record, a vector,
-  # or unit has no covering.
+  # A `case` protocol is the step above: each arm conforms to the protocol
+  # that constructor selects. The scrutinee is the received name. A nat,
+  # a pair, a record, a vector, or unit has no covering.
   @cover "match does not cover the received value"
 
   defp cont({:match, scrut, arms}, proto, name, ty, ctx, idx, penv, senv, seen, fuel, book, span) do
@@ -997,6 +1102,10 @@ defmodule Muro.Session do
   defp free_proto({:sjump, _, _}), do: MapSet.new()
   defp free_proto({:sess, _, _}), do: MapSet.new()
 
+  defp free_proto({:case, _, arms}) do
+    Enum.reduce(arms, MapSet.new(), fn {_, s}, acc -> MapSet.union(acc, free_proto(s)) end)
+  end
+
   defp put_ok?(:unknown, val, expected, ctx, book), do: answer(val, expected, ctx, book)
 
   defp put_ok?(ty, val, expected, ctx, book) do
@@ -1077,6 +1186,14 @@ defmodule Muro.Session do
   defp proto_at({:recv, ty, s}, ctx, book),
     do: with_ty(ty_ok(ty, ctx, book), proto_at(s, guard(ctx), book))
 
+  defp proto_at({:dsend, name, ty, {:case, scrut, arms}}, ctx, book) do
+    with_ty(ty_ok(ty, ctx, book), case_ok(name, ty, scrut, arms, ctx, book))
+  end
+
+  defp proto_at({:drecv, name, ty, {:case, scrut, arms}}, ctx, book) do
+    with_ty(ty_ok(ty, ctx, book), case_ok(name, ty, scrut, arms, ctx, book))
+  end
+
   defp proto_at({:dsend, name, ty, s}, ctx, book) do
     with_ty(ty_ok(ty, ctx, book), proto_at(s, guard(Map.put(ctx, name, ty)), book))
   end
@@ -1146,7 +1263,419 @@ defmodule Muro.Session do
     end
   end
 
+  defp proto_at({:case, _, _}, _ctx, _book),
+    do: {:error, "a case follows the value just exchanged"}
+
   defp proto_at(_, _ctx, _book), do: {:error, "ill-formed protocol"}
+
+  # A case is the continuation of the binder just written. Direct arms
+  # are that payload's constructors. A run's arms are the result's
+  # constructors. The payload itself is still a bit or declared data,
+  # so each of its constructors can be probed with no fields.
+  defp case_ok(name, ty, scrut, arms, ctx, book) do
+    ctx1 = guard(Map.put(ctx, name, ty))
+
+    case scrut do
+      {:name, ^name} ->
+        val_case(ty, arms, ctx1, book)
+
+      {:run, fname, ^name} ->
+        run_case(fname, ty, arms, ctx, ctx1, book)
+
+      {:name, _} ->
+        {:error, "a case is on the name just bound"}
+
+      {:run, _, _} ->
+        {:error, "a case is on the name just bound"}
+
+      _ ->
+        {:error, "a case follows the value just exchanged"}
+    end
+  end
+
+  defp val_case(ty, arms, ctx, book) do
+    case arm_labels(ty, book) do
+      {:ok, labels} ->
+        if labels == Enum.map(arms, fn {c, _} -> c end) do
+          arms_ok(arms, ctx, book)
+        else
+          {:error, "case arms do not match the constructors"}
+        end
+
+      :error ->
+        {:error, "a case is on a bit or a declared data type"}
+    end
+  end
+
+  defp run_case(fname, ty, arms, ctx, ctx1, book) do
+    source = Map.get(ctx, {:__book__, :book}, [])
+    prepared = prepare(source)
+
+    case run_view(fname, ty, prepared, book) do
+      {:ok, labels} ->
+        cond do
+          labels != Enum.map(arms, fn {c, _} -> c end) ->
+            {:error, "case arms do not match the constructors"}
+
+          arm_labels(ty, book) == :error ->
+            {:error, "a case is on a bit or a declared data type"}
+
+          true ->
+            arms_ok(arms, ctx1, book)
+        end
+
+      {:error, msg} ->
+        {:error, msg}
+    end
+  end
+
+  defp arms_ok([], _ctx, _book), do: :ok
+
+  defp arms_ok([{_, s} | rest], ctx, book) do
+    with_ty(proto_at(s, ctx, book), arms_ok(rest, ctx, book))
+  end
+
+  # One argument, the payload's type, a result that has constructors,
+  # a body in the computed fragment, and no call of this definition or
+  # of one declared later.
+  defp run_view(fname, payload, prepared, data_book) do
+    defs = run_defs(prepared)
+
+    case Enum.find_index(defs, &(&1.name == fname)) do
+      nil ->
+        {:error, "the run does not decide an arm"}
+
+      i ->
+        defn = Enum.at(defs, i)
+        prefix = Enum.take(defs, i)
+
+        case one_arg(defn) do
+          {:ok, domain, codomain, body} ->
+            cond do
+              not type_matches?(payload, domain, data_book) ->
+                {:error, "the run does not decide an arm"}
+
+              calls_out?(body, prefix, defs) ->
+                {:error, run_cycle(fname, body)}
+
+              head = outside_fragment(body) ->
+                {:error, "outside the computed fragment: #{head}"}
+
+              true ->
+                case result_ty(codomain, data_book) do
+                  {:ok, rty} ->
+                    case arm_labels(rty, data_book) do
+                      {:ok, labels} -> {:ok, labels}
+                      :error -> {:error, "a case is on a bit or a declared data type"}
+                    end
+
+                  :error ->
+                    {:error, "a case is on a bit or a declared data type"}
+                end
+            end
+
+          :error ->
+            {:error, "the run does not decide an arm"}
+        end
+    end
+  end
+
+  defp one_arg(%{type: {:pi, _, domain, _, codomain}, body: {:lam, _, _, _, body}}) do
+    if match?({:pi, _, _, _, _}, codomain) do
+      :error
+    else
+      {:ok, domain, codomain, body}
+    end
+  end
+
+  defp one_arg(_), do: :error
+
+  defp run_cycle(fname, body) do
+    if call_of?(body, fname),
+      do: "run definition calls itself",
+      else: "run definition declared later"
+  end
+
+  defp outside_fragment(:ze), do: nil
+  defp outside_fragment(:one), do: nil
+  defp outside_fragment({:var, i}) when is_integer(i), do: nil
+  defp outside_fragment({:def, name}) when is_binary(name), do: nil
+  defp outside_fragment({:su, t}), do: outside_fragment(t)
+  defp outside_fragment({:ann, t, _}), do: outside_fragment(t)
+  defp outside_fragment({:pair, a, b}), do: outside_fragment(a) || outside_fragment(b)
+  defp outside_fragment({:app, f, a}), do: outside_fragment(f) || outside_fragment(a)
+
+  defp outside_fragment({:mnat, e, _, z, s}) do
+    outside_fragment(e) || outside_fragment(z) || outside_fragment(s)
+  end
+
+  defp outside_fragment({:mdata, e, _, branches}) when is_list(branches) do
+    outside_fragment(e) || branch_fragment(branches)
+  end
+
+  defp outside_fragment(other), do: fragment_head(other)
+
+  defp branch_fragment(branches) do
+    Enum.find_value(branches, fn branch ->
+      case branch_shape(branch) do
+        {_, _, body} -> outside_fragment(body)
+        _ -> "match"
+      end
+    end)
+  end
+
+  defp fragment_head({:lam, _, _, _, _}), do: "λ"
+  defp fragment_head({:let, _, _, _, _}), do: "let"
+  defp fragment_head({:letp, _, _, _, _}), do: "let"
+  defp fragment_head(other) when is_atom(other), do: Atom.to_string(other)
+  defp fragment_head(other) when is_tuple(other), do: other |> elem(0) |> to_string()
+  defp fragment_head(_), do: "term"
+
+  defp type_matches?(:nat, :nat, _), do: true
+  defp type_matches?(:unit, :unit, _), do: true
+  defp type_matches?(:bit, {:def, "Bit"}, book), do: find_decl(book, "Bit") == nil
+  defp type_matches?(:unit, {:def, "Unit"}, book), do: find_decl(book, "Unit") == nil
+
+  defp type_matches?({:dat, name, args}, term, book) do
+    case type_spine(term, []) do
+      {:ok, ^name, targs} when length(args) == length(targs) ->
+        find_decl(book, name) != nil and
+          Enum.all?(Enum.zip(args, targs), fn {a, b} -> type_matches?(a, b, book) end)
+
+      _ ->
+        false
+    end
+  end
+
+  defp type_matches?(_, _, _), do: false
+
+  defp type_spine({:app, f, a}, acc), do: type_spine(f, [a | acc])
+  defp type_spine({:def, name}, acc) when is_binary(name), do: {:ok, name, acc}
+  defp type_spine(_, _), do: :error
+
+  defp result_ty(:nat, _), do: {:ok, :nat}
+  defp result_ty(:unit, _), do: {:ok, :unit}
+
+  defp result_ty({:def, "Bit"}, book) do
+    if find_decl(book, "Bit"), do: {:ok, {:dat, "Bit", []}}, else: {:ok, :bit}
+  end
+
+  defp result_ty({:def, "Unit"}, book) do
+    if find_decl(book, "Unit"), do: {:ok, {:dat, "Unit", []}}, else: {:ok, :unit}
+  end
+
+  defp result_ty({:def, name}, book) when is_binary(name) do
+    if find_decl(book, name), do: {:ok, {:dat, name, []}}, else: :error
+  end
+
+  defp result_ty({:app, _, _} = term, book) do
+    case type_spine(term, []) do
+      {:ok, name, args} ->
+        if find_decl(book, name) do
+          case result_list(args, book) do
+            {:ok, as} -> {:ok, {:dat, name, as}}
+            :error -> :error
+          end
+        else
+          :error
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp result_ty(_, _), do: :error
+
+  defp result_list(args, book) do
+    Enum.reduce_while(args, {:ok, []}, fn arg, {:ok, acc} ->
+      case result_ty(arg, book) do
+        {:ok, ty} -> {:cont, {:ok, acc ++ [ty]}}
+        :error -> {:halt, :error}
+      end
+    end)
+  end
+
+  defp arm_labels(:bit, _book), do: {:ok, ["b0", "b1"]}
+
+  defp arm_labels({:dat, name, _}, book) do
+    case ctor_names(book, name) do
+      [] -> :error
+      names -> {:ok, names}
+    end
+  end
+
+  defp arm_labels(_, _), do: :error
+
+  defp scrut_binder({:name, n}), do: n
+  defp scrut_binder({:run, _, n}), do: n
+  defp scrut_binder(_), do: nil
+
+  defp show_scrut({:name, n}), do: "#{n}"
+  defp show_scrut({:run, f, n}), do: "(#{f} #{n})"
+  defp show_scrut(_), do: "?"
+
+  @doc false
+  def chosen_arm(scrut, val, arms, book) do
+    book = if is_list(book), do: prepare(book), else: book
+    choose_arm(scrut, val, arms, book)
+  end
+
+  defp select_sender(scrut, binder, val, arms, ctx, book) do
+    if scrut_binder(scrut) != binder do
+      {:error, "a case is on the name just bound"}
+    else
+      case known_payload(val, ctx, book) do
+        {:ok, v} -> choose_arm(scrut, v, arms, book)
+        :unknown -> agree_arms(val, arms)
+        {:error, msg} -> {:error, rewrite_run(msg)}
+      end
+    end
+  end
+
+  defp known_payload(val, ctx, book) do
+    case reduce(val, ctx, book) do
+      {:error, msg} ->
+        {:error, msg}
+
+      {:ok, :miss} ->
+        :unknown
+
+      {:ok, v} ->
+        case canon(v, book) do
+          {:var, _} -> :unknown
+          other -> {:ok, other}
+        end
+    end
+  end
+
+  defp agree_arms(val, [{_, proto} | rest]) do
+    if Enum.all?(rest, fn {_, other} -> other == proto end) do
+      {:ok, proto}
+    else
+      {:error, "the value #{show_val(val)} does not select an arm"}
+    end
+  end
+
+  defp agree_arms(val, _) do
+    {:error, "the value #{show_val(val)} does not select an arm"}
+  end
+
+  defp choose_arm({:name, _}, val, arms, _book) do
+    case ctor_tag(val) do
+      nil -> {:error, "the value #{show_val(val)} does not select an arm"}
+      tag -> fetch_arm(tag, arms, "the value #{tag} does not select an arm")
+    end
+  end
+
+  defp choose_arm({:run, fname, _}, val, arms, book) do
+    case apply_run(fname, [val], book) do
+      {:ok, :miss} ->
+        {:error, "the run does not decide an arm"}
+
+      {:ok, result} ->
+        case ctor_tag(result) do
+          nil -> {:error, "the run does not decide an arm"}
+          tag -> fetch_arm(tag, arms, "the run does not decide an arm")
+        end
+
+      {:error, msg} ->
+        {:error, rewrite_run(msg)}
+    end
+  end
+
+  defp choose_arm(_, _, _, _), do: {:error, "a case follows the value just exchanged"}
+
+  defp fetch_arm(tag, arms, missing) do
+    case Enum.find(arms, fn {c, _} -> c == tag end) do
+      {_, proto} -> {:ok, proto}
+      nil -> {:error, missing}
+    end
+  end
+
+  defp apply_run(name, args, book), do: eval_call(name, args, book)
+
+  defp ctor_tag(:b0), do: "b0"
+  defp ctor_tag(:b1), do: "b1"
+  defp ctor_tag({:con, name, _}), do: cname(name)
+  defp ctor_tag(_), do: nil
+
+  defp zip_arms({:name, _}, ty, arms, ps, book) do
+    case arm_labels(ty, book) do
+      {:ok, labels} ->
+        got = Enum.map(arms, fn {c, _} -> c end)
+
+        cond do
+          labels != got ->
+            {:error, "case arms do not match the constructors"}
+
+          length(ps) != length(arms) ->
+            {:error, "match does not cover the received value"}
+
+          true ->
+            {:ok, Enum.zip(ps, Enum.map(arms, fn {_, s} -> s end))}
+        end
+
+      :error ->
+        {:error, "a case is on a bit or a declared data type"}
+    end
+  end
+
+  defp zip_arms({:run, fname, _}, ty, arms, ps, book) do
+    case arm_labels(ty, book) do
+      {:ok, ctors} when length(ctors) == length(ps) ->
+        zip_run(fname, ty, ctors, arms, ps, book, [])
+
+      {:ok, _} ->
+        {:error, "match does not cover the received value"}
+
+      :error ->
+        {:error, "a case is on a bit or a declared data type"}
+    end
+  end
+
+  defp zip_arms(_, _, _, _, _), do: {:error, "a case follows the value just exchanged"}
+
+  defp zip_run(_fname, _ty, [], _arms, [], _book, acc), do: {:ok, Enum.reverse(acc)}
+
+  defp zip_run(fname, ty, [c | cs], arms, [p | ps], book, acc) do
+    case apply_run(fname, [probe_of(ty, c)], book) do
+      {:ok, :miss} ->
+        {:error, "the run does not decide an arm"}
+
+      {:ok, result} ->
+        case ctor_tag(result) do
+          nil ->
+            {:error, "the run does not decide an arm"}
+
+          tag ->
+            case fetch_arm(tag, arms, "the run does not decide an arm") do
+              {:ok, proto} -> zip_run(fname, ty, cs, arms, ps, book, [{p, proto} | acc])
+              {:error, msg} -> {:error, msg}
+            end
+        end
+
+      {:error, msg} ->
+        {:error, rewrite_run(msg)}
+    end
+  end
+
+  defp zip_run(_, _, _, _, _, _, _), do: {:error, "match does not cover the received value"}
+
+  defp probe_of(:bit, "b0"), do: :b0
+  defp probe_of(:bit, "b1"), do: :b1
+  defp probe_of(_, c), do: {:con, c, []}
+
+  defp arms_paired([], _ctx, _idx, _penv, _senv, _seen, _fuel, _book, _span, _i), do: :ok
+
+  defp arms_paired([pair | pairs], ctx, idx, penv, senv, seen, fuel, book, span, i) do
+    {p, proto} = pair
+
+    case descend(p, proto, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(span, i)) do
+      :ok -> arms_paired(pairs, ctx, idx, penv, senv, seen, fuel, book, span, i + 1)
+      other -> other
+    end
+  end
 
   defp self_of(ctx) do
     Enum.find_value(ctx, fn
@@ -1732,6 +2261,11 @@ defmodule Muro.Session do
     end
   end
 
+  def show_proto({:case, scrut, arms}) do
+    body = Enum.map_join(arms, " ", fn {c, s} -> "| #{c} => #{show_proto(s)}" end)
+    "case #{show_scrut(scrut)} #{body}"
+  end
+
   def show_proto({:sess, name, args}) do
     case args do
       [] -> name
@@ -1949,6 +2483,19 @@ defmodule Muro.Session do
     {:ok, {:sjump, target, holes}, nums ++ lits}
   end
 
+  defp shape_go({:case, scrut, arms}, lits) do
+    Enum.reduce_while(arms, {:ok, [], lits}, fn {c, s}, {:ok, acc, lits} ->
+      case shape_go(s, lits) do
+        {:ok, shaped, lits} -> {:cont, {:ok, acc ++ [{c, shaped}], lits}}
+        :error -> {:halt, :error}
+      end
+    end)
+    |> case do
+      {:ok, shaped, lits} -> {:ok, {:case, scrut, shaped}, lits}
+      :error -> :error
+    end
+  end
+
   defp shape_go(_, _), do: :error
 
   defp hole_jump_args(args) do
@@ -2088,6 +2635,19 @@ defmodule Muro.Session do
 
   defp elab({:dual, ref}, st) do
     elab_dual(ref, st)
+  end
+
+  defp elab({:case, scrut, arms}, st) do
+    Enum.reduce_while(arms, {:ok, []}, fn {c, s}, {:ok, acc} ->
+      case elab(s, st) do
+        {:ok, body} -> {:cont, {:ok, acc ++ [{c, body}]}}
+        err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, arms} -> {:ok, {:case, scrut, arms}}
+      err -> err
+    end
   end
 
   defp elab(_, _), do: {:error, "ill-formed protocol"}
@@ -2783,6 +3343,9 @@ defmodule Muro.Session do
   def step_proto({:svar, name}), do: "#{name}"
   def step_proto({:sjump, _, _} = p), do: show_proto(p)
   def step_proto({:sess, _, _} = p), do: show_proto(p)
+  def step_proto({:case, {:name, n}, _}), do: "case #{n}"
+  def step_proto({:case, {:run, f, n}, _}), do: "case (#{f} #{n})"
+  def step_proto({:case, _, _}), do: "case"
   def step_proto(other), do: inspect(other)
 
   @doc false

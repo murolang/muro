@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.16.68
+
+A protocol may continue by the value just exchanged.
+
+```
+session server :=
+  recv (f : Frame) (case f
+    | bytes => send Ctl end
+    | trailers => send Ctl end
+    | headers => recv Body end)
+```
+
+Each constructor has its own continuation, in declaration order. The dual is `send` with the dual of each arm. A receiver covers every constructor, and each process arm follows the protocol arm of that constructor. A sender of a literal or a computed value is checked on the arm that value selects.
+
+A `run` of that value may choose the arm.
+
+```
+def late : run Π (f : Frame) → Bool :=
+  λ (f : Frame) →
+    match f motive (λ _ → Bool)
+      | bytes => true
+      | trailers => true
+      | headers => false
+
+session gate :=
+  recv (f : Frame) (case (late f)
+    | true => send Ctl end
+    | false => send Goaway end)
+```
+
+`late bytes` is `true`, so that arm sends `Ctl`. `late headers` is `false`, so that arm sends `Goaway`. The `run` is one argument, in the computed fragment, and it does not call itself or a later `run`. Each process arm is checked against what `late` returns for that constructor. The protocol stays spec. The process stays evidence. Nothing is added to the term language.
+
+A `case` on a nat, a pair, a record, a vector, or unit is refused, and so is a `case` on a name bound earlier. A missing arm, an extra arm, a `run` outside the computed fragment, and a recursive `run` are refused. A sender whose value is not known is refused unless every arm is the same protocol. A meeting of a value that is not known is refused.
+
+### Manual
+
+- Sessions: a protocol chosen by the received constructor, and a protocol chosen by a run of it.
+- Limits: those two forms are accepted. A case on an earlier name, on a nat, a pair, a record, a vector, or unit, a run outside the fragment or recursive, a missing or extra arm, and an unknown sender unless every arm agrees, stay refused. A meeting of an unknown value stays refused.
+- Grammar and Examples: the surface form.
+
+### Examples
+
+- `value-protocols.muro`: a constructor case, a `run` case, both meeting orders, `rec`, a session call, a parameter, an evidence arm, and a linear endpoint.
+
+### Emit
+
+- The OTP image is the process skeleton. The selected arm is the branch the process already takes. Evidence is erased. Other emitters are unchanged.
+
+### Package
+
+- Version 0.16.68.
+
 ## 0.16.67
 
 A session refusal names the step, and the line and column of that step.
