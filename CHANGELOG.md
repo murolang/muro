@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.16.69
+
+A meeting may name a buffer. The two processes then meet across one queue in each direction.
+
+```
+meet inflight : client with server buffer 1
+```
+
+A send waits when its queue holds that many messages. A receive takes the head of the other queue. Every interleaving allowed by the bound is checked: a receive never meets a head of the wrong type, label, or arm; both ends finish with both queues empty; and some step stays possible until then. The synchronous meeting, with no buffer, is unchanged. A synchronous meeting is this check at buffer 1. A larger bound is not proved. Buffer 0 is not the rendezvous.
+
+A server that still accepts a frame sent before its own message meets at buffer 1 and at buffer 2. A server that answers that frame with a further message is refused, and the refusal names the trace: who sent what, what each queue held, and why. A pair that both send first meets only with a buffer. A loop that would enqueue a successor of a received nat is `unbounded recursive payload`. A constant send and an echo of a received value are accepted. The OTP image was already a mailbox. This meeting is the check that matches that runtime. Other emitters are unchanged.
+
+### Manual
+
+- Sessions: a bounded buffer.
+- Limits: two parties and a bounded FIFO in each direction are accepted. An unbounded buffer, more than two participants, a transport that reorders, and a recursive payload outside a finite alphabet stay refused. A synchronous meeting is an asynchronous meeting at buffer 1.
+- Grammar and Examples: the surface form.
+
+### Examples
+
+- `async-meetings.muro`: a frame still in flight, both sides sending first, an evidence payload, a parameterised session, a constant loop, an echo, and a linear endpoint.
+
+### Package
+
+- Version 0.16.69.
+
 ## 0.16.68
 
 A protocol may continue by the value just exchanged.

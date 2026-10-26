@@ -32,6 +32,9 @@ import Muro.Session
 import Muro.Rec
 import Muro.Dual
 import Muro.Meet
+import Muro.Async
+import Muro.AsyncSync
+import Muro.AsyncRec
 import Muro.Talk
 import Muro.Seated
 import Muro.Held

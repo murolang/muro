@@ -684,7 +684,10 @@ defmodule Muro.Parser do
   defp meet_start?(s), do: meet_entry?(s)
 
   # meet wire : pong with peer
-  # `meet` and `with` are keywords only in this form.
+  # meet wire : pong with peer buffer 1
+  # `meet` and `with` are keywords only in this form. `buffer` is a
+  # keyword only here, and only with a numeral. Absent, the meeting is
+  # the rendezvous.
   defp parse_meet(s) do
     loc = here(s)
 
@@ -693,7 +696,8 @@ defmodule Muro.Parser do
          {:ok, rest} <- tok(skip(rest), ":"),
          {:ok, left, rest} <- ident(skip(rest)),
          {:ok, rest} <- kw(skip(rest), "with"),
-         {:ok, right, rest} <- ident(skip(rest)) do
+         {:ok, right, rest} <- ident(skip(rest)),
+         {:ok, buffer, rest} <- parse_buffer(skip(rest)) do
       {:ok,
        %{
          kind: :meet,
@@ -701,8 +705,24 @@ defmodule Muro.Parser do
          mode: :evidence,
          left: left,
          right: right,
+         buffer: buffer,
          loc: loc
        }, rest}
+    end
+  end
+
+  defp parse_buffer(s) do
+    if word_kw?(s, "buffer") do
+      rest = s |> after_kw("buffer") |> skip()
+
+      if number?(rest) do
+        {digits, rest} = take_digits(rest, "")
+        {:ok, String.to_integer(digits), rest}
+      else
+        {:error, err(rest, "buffer bound is a nat")}
+      end
+    else
+      {:ok, nil, s}
     end
   end
 
