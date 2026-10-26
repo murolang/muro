@@ -11,12 +11,14 @@
 -- meeting. The synchronous meeting stays the rendezvous in
 -- `Muro.Meet`. This checker is the bounded transport.
 --
--- A value carried in a queue selects a `mget` arm. Evidence is not
--- queued: the sender has already discharged it, and the message is
--- the payload. The queued value is resolved, so an echo selects the
--- arm of the value that was received. The length index is the
--- expression the sender wrote, which is the expression the
--- synchronous meeting instantiates.
+-- A value carried in a queue selects a `mget` arm. A bare arm is
+-- that continuation. A named arm is that continuation after the
+-- value's fields replace its binders. Evidence is not queued: the
+-- sender has already discharged it, and the message is the payload.
+-- The queued value is resolved, so an echo selects the arm of the
+-- value that was received. The length index is the expression the
+-- sender wrote, which is the expression the synchronous meeting
+-- instantiates.
 --
 -- Finite processes shrink at every step. The search recurses on that
 -- size. Zero is the empty process, not a fuel bound: a step from a
@@ -54,8 +56,14 @@ open import Muro.Meet using (ext)
 -- plus the size of the arms it still holds.
 ------------------------------------------------------------------------
 
+armSize : PArm → ℕ
 size : Proc → ℕ
-sizeArms : List Proc → ℕ
+sizeArms : List PArm → ℕ
+
+-- A bare arm and a named arm are the size of the process they store.
+-- Substituting fields does not change that size.
+armSize (bare p) = size p
+armSize (named _ _ p) = size p
 
 size done = nzero
 size stop = nzero
@@ -68,7 +76,7 @@ size (iget _ P Q) = nsuc (size P + size Q)
 size (mget _ _ ps) = nsuc (sizeArms ps)
 
 sizeArms [] = nzero
-sizeArms (P ∷ ps) = size P + sizeArms ps
+sizeArms (a ∷ ps) = armSize a + sizeArms ps
 
 ltSucL : (n : ℕ) (Q : Proc) → n + size Q < nsuc n + size Q
 ltSucL n Q = s≤s ≤-refl
@@ -93,7 +101,7 @@ ltCoverR : (P Q R : Proc) → size Q + size R < nsuc (size P + size Q) + size R
 ltCoverR P Q R =
   s≤s (leAddR (size Q) (size P + size Q) (size R) (m≤n+m (size Q) (size P)))
 
-ltArmL : (R : Proc) (ps : List Proc) (Q : Proc) → size R ≤ sizeArms ps →
+ltArmL : (R : Proc) (ps : List PArm) (Q : Proc) → size R ≤ sizeArms ps →
          size R + size Q < nsuc (sizeArms ps) + size Q
 ltArmL R ps Q le = s≤s (leAddR (size R) (sizeArms ps) (size Q) le)
 
@@ -101,13 +109,52 @@ shrinkArm : ∀ m r arms → r ≤ arms → m + r < m + nsuc arms
 shrinkArm nzero r arms le = s≤s le
 shrinkArm (nsuc m) r arms le = s≤s (shrinkArm m r arms le)
 
-ltArmR : (P R : Proc) (ps : List Proc) → size R ≤ sizeArms ps →
+ltArmR : (P R : Proc) (ps : List PArm) → size R ≤ sizeArms ps →
          size P + size R < size P + nsuc (sizeArms ps)
 ltArmR P R ps le = shrinkArm (size P) (size R) (sizeArms ps) le
 
-b1≤ : (P Q : Proc) → size Q ≤ sizeArms (P ∷ Q ∷ [])
-b1≤ P Q =
-  ≤-trans (m≤m+n (size Q) nzero) (m≤n+m (size Q + nzero) (size P))
+b1≤ : (a b : PArm) → armSize b ≤ sizeArms (a ∷ b ∷ [])
+b1≤ a b =
+  ≤-trans (m≤m+n (armSize b) nzero) (m≤n+m (armSize b + nzero) (armSize a))
+
+-- Field substitution replaces names with values. It does not add or
+-- drop an action, so the size the search recurses on is unchanged.
+mutual
+  size-subst : (e : FEnv) (p : Proc) → size (substProc e p) ≡ size p
+  size-arms-subst : (e : FEnv) (ps : List PArm) → sizeArms (substArms e ps) ≡ sizeArms ps
+
+  size-subst [] p = refl
+  size-subst e@(_ ∷ _) done = refl
+  size-subst e@(_ ∷ _) stop = refl
+  size-subst e@(_ ∷ _) (put _ _ P) rewrite size-subst e P = refl
+  size-subst e@(_ ∷ _) (get _ x P) rewrite size-subst (shadowF x e) P = refl
+  size-subst e@(_ ∷ _) (pick0 P) rewrite size-subst e P = refl
+  size-subst e@(_ ∷ _) (pick1 P) rewrite size-subst e P = refl
+  size-subst e@(_ ∷ _) (cover P Q) rewrite size-subst e P | size-subst e Q = refl
+  size-subst e@(_ ∷ _) (iget x P Q)
+    rewrite size-subst (shadowF x e) P | size-subst (shadowF x e) Q = refl
+  size-subst e@(_ ∷ _) (mget _ x ps) rewrite size-arms-subst (shadowF x e) ps = refl
+
+  size-arms-subst _ [] = refl
+  size-arms-subst e (bare p ∷ ps) rewrite size-subst e p | size-arms-subst e ps = refl
+  size-arms-subst e (named _ xs p ∷ ps)
+    rewrite size-subst (shadows xs e) p | size-arms-subst e ps = refl
+
+leSubst : (e : FEnv) (p : Proc) (ps : List PArm) →
+          size (substProc e p) ≤ size p + sizeArms ps
+leSubst e p ps rewrite size-subst e p = m≤m+n (size p) (sizeArms ps)
+
+-- The same clauses as `openNamed`. A matching constructor with one
+-- raw per binder returns that process after the fields replace the
+-- binders. The bound is the stored process's size.
+openHit : (k c : String) (xs : List String) (p : Proc) (sp : Spine) (ps : List PArm) →
+          Maybe (Σ Proc (λ R → size R ≤ size p + sizeArms ps))
+openHit k c xs p sp ps with k == c | rawSpine sp
+... | false | _ = nothing
+... | true | nothing = nothing
+... | true | just rs with lenEnv xs rs
+... | nothing = nothing
+... | just e = just (substProc e p , leSubst e p ps)
 
 ------------------------------------------------------------------------
 -- The arm a concrete value selects, together with the size bound the
@@ -115,27 +162,49 @@ b1≤ P Q =
 -- the value it returns.
 ------------------------------------------------------------------------
 
-findIn : String → List Ctor → (ps : List Proc) →
+findIn : String → Spine → List Ctor → (ps : List PArm) →
          Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
-findIn _ [] _ = nothing
-findIn _ (_ ∷ _) [] = nothing
-findIn name (ctor n _ ∷ cs) (P ∷ ps) with name == n
-... | true = just (P , m≤m+n (size P) (sizeArms ps))
-... | false = lift (findIn name cs ps)
+findIn _ _ [] _ = nothing
+findIn _ _ (_ ∷ _) [] = nothing
+findIn name sp (ctor n _ ∷ cs) (bare p ∷ ps) with name == n
+... | true = just (p , m≤m+n (size p) (sizeArms ps))
+... | false = lift (findIn name sp cs ps)
   where
   lift : Maybe (Σ Proc (λ R → size R ≤ sizeArms ps)) →
-         Maybe (Σ Proc (λ R → size R ≤ size P + sizeArms ps))
+         Maybe (Σ Proc (λ R → size R ≤ size p + sizeArms ps))
   lift nothing = nothing
-  lift (just (R , le)) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (size P)))
+  lift (just (R , le)) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (size p)))
+findIn name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) with name == n
+... | true = openHit k name xs p sp ps
+... | false = lift (findIn name sp cs ps)
+  where
+  lift : Maybe (Σ Proc (λ R → size R ≤ sizeArms ps)) →
+         Maybe (Σ Proc (λ R → size R ≤ size p + sizeArms ps))
+  lift nothing = nothing
+  lift (just (R , le)) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (size p)))
 
-armPick : (A : Ty) → Val A → (ps : List Proc) →
+armPick : (A : Ty) → Val A → (ps : List PArm) →
           Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
-armPick bit b0 (P ∷ Q ∷ []) = just (P , m≤m+n (size P) (sizeArms (Q ∷ [])))
-armPick bit b1 (P ∷ Q ∷ []) = just (Q , b1≤ P Q)
-armPick (dat d _) (con c _) ps = findIn c (ctorsOf d) ps
-armPick _ _ _ = nothing
+armPick bit b0 [] = nothing
+armPick bit b0 (_ ∷ []) = nothing
+armPick bit b0 (_ ∷ _ ∷ _ ∷ _) = nothing
+armPick bit b0 (bare p ∷ q ∷ []) = just (p , m≤m+n (size p) (sizeArms (q ∷ [])))
+armPick bit b0 (named _ [] p ∷ q ∷ []) = just (p , m≤m+n (size p) (sizeArms (q ∷ [])))
+armPick bit b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) = nothing
+armPick bit b1 [] = nothing
+armPick bit b1 (_ ∷ []) = nothing
+armPick bit b1 (_ ∷ _ ∷ _ ∷ _) = nothing
+armPick bit b1 (a ∷ bare q ∷ []) = just (q , b1≤ a (bare q))
+armPick bit b1 (a ∷ named c [] q ∷ []) = just (q , b1≤ a (named c [] q))
+armPick bit b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) = nothing
+armPick (dat d _) (con c sp) ps = findIn c sp (ctorsOf d) ps
+armPick nat _ _ = nothing
+armPick unit _ _ = nothing
+armPick (pair _ _) _ _ = nothing
+armPick (rec _) _ _ = nothing
+armPick (vec _ _) _ _ = nothing
 
-armExprPick : ∀ {A} → ValExpr A → (ps : List Proc) →
+armExprPick : ∀ {A} → ValExpr A → (ps : List PArm) →
               Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
 armExprPick v ps with known v
 ... | nothing = nothing
@@ -286,14 +355,14 @@ takeBit (pay w ca) with ty≟ w bit
 ... | just b1 = bb1 ca
 ... | nothing = bbad
 
-data TakeArm (ps : List Proc) : Set where
+data TakeArm (ps : List PArm) : Set where
   abad : TakeArm ps
   aarm : (R : Proc) → Carrier → size R ≤ sizeArms ps → TakeArm ps
 
-armOfCar : Carrier → (ps : List Proc) → Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
+armOfCar : Carrier → (ps : List PArm) → Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
 armOfCar (car _ _ ready) ps = armExprPick ready ps
 
-takeArm : Idx → Ty → (ps : List Proc) → Msg → TakeArm ps
+takeArm : Idx → Ty → (ps : List PArm) → Msg → TakeArm ps
 takeArm _ _ _ (lab _) = abad
 takeArm ρ A ps (pay w ca) with ty≟ (applyTy ρ A) w
 ... | no′ _ = abad
@@ -441,7 +510,7 @@ recvIgetR c x P Q eq with l2r c
   does (record c { rp = Q ; l2r = rest ; rv = bindV x ca (rv c) ; τ = extCar x ca (τ c) })
        (igR1 c x P Q eq)
 
-recvMgetL : (c : Conf) (A : Ty) (x : String) (ps : List Proc) →
+recvMgetL : (c : Conf) (A : Ty) (x : String) (ps : List PArm) →
             lp c ≡ mget A x ps → Act c
 recvMgetL c A x ps eq with r2l c
 ... | [] = waits
@@ -454,7 +523,7 @@ recvMgetL c A x ps eq with r2l c
   drop : lp c ≡ mget A x ps → size R ≤ sizeArms ps → size R + size (rp c) < measure c
   drop refl le = ltArmL R ps (rp c) le
 
-recvMgetR : (c : Conf) (A : Ty) (x : String) (ps : List Proc) →
+recvMgetR : (c : Conf) (A : Ty) (x : String) (ps : List PArm) →
             rp c ≡ mget A x ps → Act c
 recvMgetR c A x ps eq with l2r c
 ... | [] = waits
@@ -813,7 +882,7 @@ ex-choice : kind (check (init k1 (pick0 done) (cover done done))) ≡ is-yes
 ex-choice = refl
 
 ex-mget : kind (check (init k1 (put boolTy (lit trueV) done)
-                                 (mget boolTy "b" (done ∷ stop ∷ [])))) ≡ is-yes
+                                 (mget boolTy "b" (bare done ∷ bare stop ∷ [])))) ≡ is-yes
 ex-mget = refl
 
 ex-iget : kind (check (init k1 (put bit (lit b0) done) (iget "b" done stop))) ≡ is-yes
@@ -826,7 +895,7 @@ echoBack : Proc
 echoBack = get boolTy "b" (put boolTy (var "b") done)
 
 askBack : Proc
-askBack = put boolTy (lit trueV) (mget boolTy "b" (done ∷ stop ∷ []))
+askBack = put boolTy (lit trueV) (mget boolTy "b" (bare done ∷ bare stop ∷ []))
 
 ex-echo : kind (check (init k1 echoBack askBack)) ≡ is-yes
 ex-echo = refl

@@ -57,8 +57,9 @@ open import Muro.Session using
   ( nat; bit; boolTy; maybeBool
   ; ty≟; nexp≟; scrutEq
   ; Proc; done; stop; put; get; pick0; pick1; cover; iget; mget
+  ; PArm; bare; named
   ; lit; b0
-  ; effCall; bitTaker
+  ; effCall; bitTaker; fieldReply; twiceField
   ; pong
   ; byVal)
 open import Muro.Dual using (peer)
@@ -66,7 +67,7 @@ open import Muro.Rec using
   ( SExp; dualS
   ; end; send; recv; dsend; drecv; esend; erecv; isend; irecv; choose; branch
   ; pcase; svar; mu)
-open import Muro.Meet using (bitGiver) renaming (decide to meetDecide; yes to meetYes; no to meetNo)
+open import Muro.Meet using (bitGiver; fieldSender) renaming (decide to meetDecide; yes to meetYes; no to meetNo)
 
 ------------------------------------------------------------------------
 -- Affine is the default. Linear is exactly once. Both sit on the
@@ -285,9 +286,12 @@ mutual
   consume (iget _ P Q) = once (consume P) (consume Q)
   consume (mget _ _ ps) = arms ps
 
-  arms : List Proc → Use
+  -- A bare arm and a named arm consume the process they store.
+  -- A field is payload data, so binding it is not a use of the endpoint.
+  arms : List PArm → Use
   arms [] = U1
-  arms (p ∷ ps) = once (consume p) (arms ps)
+  arms (bare p ∷ ps) = once (consume p) (arms ps)
+  arms (named _ _ p ∷ ps) = once (consume p) (arms ps)
 
 meetProc : Mult → Proc → Proc → Result ⊤
 meetProc q P Q with meetDecide P Q
@@ -521,8 +525,16 @@ lin-computed = refl
 lin-match : meetProc lin bitTaker bitGiver ≡ ok tt
 lin-match = refl
 
-lin-match-stop : meetProc lin (mget bit "b" (done ∷ stop ∷ [])) (put bit (lit b0) done) ≡ fail "linear variable unused"
+lin-match-stop : meetProc lin (mget bit "b" (bare done ∷ bare stop ∷ [])) (put bit (lit b0) done) ≡ fail "linear variable unused"
 lin-match-stop = refl
+
+-- Each named arm consumes the endpoint once. The field it binds is
+-- not that endpoint, and sending the field twice does not spend it.
+lin-field : meetProc lin fieldSender fieldReply ≡ ok tt
+lin-field = refl
+
+lin-twice : consume twiceField ≡ U1
+lin-twice = refl
 
 -- A case protocol is an endpoint. Each direction is one use.
 valueProto : SExp

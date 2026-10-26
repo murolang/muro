@@ -40,7 +40,9 @@ defmodule Muro.Emit.Otp do
   def render(book, stem) when is_list(book) and is_binary(stem) do
     parent = module_name(stem)
     mods = modules(book)
-    {:ok, source(parent, mods, Session.payload_decls(book)) |> with_meetings(meetings(book))}
+    meets = meetings(book)
+    fragment = Session.run_fragment(book, run_names_in(mods, meets))
+    {:ok, source(parent, mods, Session.payload_decls(book), fragment) |> with_meetings(meets)}
   end
 
   defp modules(book) do
@@ -188,7 +190,26 @@ defmodule Muro.Emit.Otp do
     |> String.trim_trailing()
   end
 
-  defp source(parent, mods, decls) do
+  defp run_names_in(mods, meets) do
+    skels =
+      Enum.map(mods, fn {_mod, skel} -> skel end) ++
+        Enum.flat_map(meets, fn {_name, left, right} -> [left, right] end)
+
+    skels |> Enum.flat_map(&run_names/1) |> Enum.uniq()
+  end
+
+  defp run_names({:run, name, args}) when is_binary(name) and is_list(args) do
+    [name | Enum.flat_map(args, &run_names/1)]
+  end
+
+  defp run_names(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.flat_map(&run_names/1)
+
+  defp run_names(list) when is_list(list), do: Enum.flat_map(list, &run_names/1)
+  defp run_names(map) when is_map(map), do: map |> Map.values() |> Enum.flat_map(&run_names/1)
+  defp run_names(_), do: []
+
+  defp source(parent, mods, decls, fragment) do
     children = Enum.map_join(mods, "\n\n", &child(parent, &1))
 
     """
@@ -248,6 +269,7 @@ defmodule Muro.Emit.Otp do
           {:go, next} -> drive(next, %{st | wait: nil})
           {:bind, :_, _value, next} -> drive(next, %{st | wait: nil})
           {:bind, name, value, next} -> drive(next, %{st | wait: nil, bindings: Map.put(bindings, name, value)})
+          {:bind_fields, pairs, next} -> drive(next, %{st | wait: nil, bindings: store_all(bindings, pairs)})
           {:unexpected, value} -> {:stop, {:shutdown, {:unexpected, value}}, st}
         end
       end
@@ -295,16 +317,30 @@ defmodule Muro.Emit.Otp do
           {:bind, name, value, next} ->
             drive(next, %{st | wait: nil, queue: rest, bindings: Map.put(bindings, name, value)})
 
+          {:bind_fields, pairs, next} ->
+            drive(next, %{st | wait: nil, queue: rest, bindings: store_all(bindings, pairs)})
+
           {:unexpected, value} ->
             {:stop, {:shutdown, {:unexpected, value}}, st}
         end
       end
 
+      defp store_all(bindings, pairs) do
+        Enum.reduce(pairs, bindings, fn
+          {:_, _value}, acc -> acc
+          {name, value}, acc -> Map.put(acc, name, value)
+        end)
+      end
+
       defp step({:hear, ty, name, {:pick, arms}}, {:muro, _, value}) do
         if payload?(ty, value) do
           case pick_arm(ty, value, arms) do
-            {:ok, arm} -> {:bind, name, value, arm}
-            :error -> {:unexpected, value}
+            {:ok, next, extra} ->
+              pairs = if name == :_, do: extra, else: [{name, value} | extra]
+              {:bind_fields, pairs, next}
+
+            :error ->
+              {:unexpected, value}
           end
         else
           {:unexpected, value}
@@ -329,8 +365,9 @@ defmodule Muro.Emit.Otp do
       # `b0` is the first arm and `b1` the second. A declared data value
       # takes the arm of its constructor, in declaration order. The order
       # is a list: inspecting the constructor map sorts its keys.
-      defp pick_arm(:bit, :b0, [arm, _]), do: {:ok, arm}
-      defp pick_arm(:bit, :b1, [_, arm]), do: {:ok, arm}
+      # A named arm binds that constructor's fields. A positional arm does not.
+      defp pick_arm(:bit, :b0, [arm, _]), do: open_pick(arm, "b0", [])
+      defp pick_arm(:bit, :b1, [_, arm]), do: open_pick(arm, "b1", [])
 
       defp pick_arm({:dat, name, _}, value, arms) do
         case Map.get(data_decls(), name) do
@@ -341,7 +378,7 @@ defmodule Muro.Emit.Otp do
               i when is_integer(i) ->
                 case Enum.at(arms, i) do
                   nil -> :error
-                  arm -> {:ok, arm}
+                  arm -> open_pick(arm, tag, fields_of_runtime(value))
                 end
 
               _ ->
@@ -354,6 +391,26 @@ defmodule Muro.Emit.Otp do
       end
 
       defp pick_arm(_, _, _), do: :error
+
+      defp open_pick({:arm, ctor, binders, body}, expected, fields)
+           when is_binary(ctor) and is_list(binders) and is_list(fields) do
+        cond do
+          ctor != expected -> :error
+          length(binders) != length(fields) -> :error
+          true -> {:ok, body, Enum.zip(binders, fields)}
+        end
+      end
+
+      defp open_pick(arm, _expected, _fields), do: {:ok, arm, []}
+
+      defp fields_of_runtime(value) when is_atom(value), do: []
+
+      defp fields_of_runtime(value) when is_tuple(value) and tuple_size(value) >= 1 do
+        [_tag | fields] = Tuple.to_list(value)
+        fields
+      end
+
+      defp fields_of_runtime(_), do: []
 
       defp tag_of(value) when is_atom(value), do: Atom.to_string(value)
 
@@ -397,6 +454,8 @@ defmodule Muro.Emit.Otp do
       # tagged tuple. `{:par, i}` is a parameter of this declaration.
       # `{:self, args}` is this declaration. `{:dat, name, args}` is another.
       defp data_decls, do: #{inspect(decls, limit: :infinity)}
+
+      defp run_book, do: #{inspect(fragment, limit: :infinity, charlists: :as_lists)}
 
       defp dat_payload?(ctors, _dname, _args, value) when is_atom(value) do
         case Map.get(ctors, Atom.to_string(value)) do
@@ -487,6 +546,11 @@ defmodule Muro.Emit.Otp do
 
       defp substitute({:rep, n, val}, bindings) when is_integer(n) and n >= 0 do
         List.duplicate(substitute(val, bindings), n)
+      end
+
+      defp substitute({:run, name, args}, bindings) when is_binary(name) and is_list(args) do
+        args = Enum.map(args, &substitute(&1, bindings))
+        Muro.Session.eval_run(name, args, run_book())
       end
 
       defp substitute(tuple, bindings) when is_tuple(tuple) do

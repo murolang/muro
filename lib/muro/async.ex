@@ -38,7 +38,7 @@ defmodule Muro.Async do
   end
 
   def meets(p, q, book, k, left, right) when is_integer(k) and k >= 0 do
-    if cyclic_grow?(p) or cyclic_grow?(q) do
+    if cyclic_grow?(p, book) or cyclic_grow?(q, book) do
       {:error, "unbounded recursive payload"}
     else
       conf = %{
@@ -436,45 +436,66 @@ defmodule Muro.Async do
   # to its own `rec` has no finite alphabet. A bare name is an echo.
   # A closed literal stays in the alphabet. One step that does not jump
   # back is not this refusal.
-  defp cyclic_grow?(proc), do: grow_puts(proc, MapSet.new())
+  defp cyclic_grow?(proc, book), do: grow_puts(proc, MapSet.new(), book)
 
-  defp grow_puts(:done, _active), do: false
-  defp grow_puts(:stop, _active), do: false
+  defp grow_puts(:done, _active, _book), do: false
+  defp grow_puts(:stop, _active, _book), do: false
 
-  defp grow_puts({:put, _ty, val, cont}, active) do
-    (grow_val?(val, false) and reaches?(cont, active)) or grow_puts(cont, active)
+  defp grow_puts({:put, _ty, val, cont}, active, book) do
+    (grow_val?(val, false, book) and reaches?(cont, active)) or grow_puts(cont, active, book)
   end
 
-  defp grow_puts({:get, _ty, _name, cont}, active), do: grow_puts(cont, active)
-  defp grow_puts({:pick0, cont}, active), do: grow_puts(cont, active)
-  defp grow_puts({:pick1, cont}, active), do: grow_puts(cont, active)
+  defp grow_puts({:get, _ty, _name, cont}, active, book), do: grow_puts(cont, active, book)
+  defp grow_puts({:pick0, cont}, active, book), do: grow_puts(cont, active, book)
+  defp grow_puts({:pick1, cont}, active, book), do: grow_puts(cont, active, book)
 
-  defp grow_puts({:cover, p, q}, active), do: grow_puts(p, active) or grow_puts(q, active)
-
-  defp grow_puts({:iget, _name, p, q}, active), do: grow_puts(p, active) or grow_puts(q, active)
-
-  defp grow_puts({:match, _name, arms}, active), do: Enum.any?(arms, &grow_puts(&1, active))
-
-  defp grow_puts({:rec, name, body}, active), do: grow_puts(body, MapSet.put(active, name))
-
-  defp grow_puts({:call, _name}, _active), do: false
-
-  defp grow_val?({:var, _name}, under?), do: under?
-
-  defp grow_val?({:con, _name, args}, _under?), do: Enum.any?(args, &grow_val?(&1, true))
-
-  defp grow_val?({:tup, a, b}, _under?), do: grow_val?(a, true) or grow_val?(b, true)
-
-  defp grow_val?({:rec, fields}, _under?) when is_list(fields) do
-    Enum.any?(fields, fn {_name, val} -> grow_val?(val, true) end)
+  defp grow_puts({:cover, p, q}, active, book) do
+    grow_puts(p, active, book) or grow_puts(q, active, book)
   end
 
-  defp grow_val?({:rep, ix, elem}, _under?), do: grow_val?(ix, true) or grow_val?(elem, true)
+  defp grow_puts({:iget, _name, p, q}, active, book) do
+    grow_puts(p, active, book) or grow_puts(q, active, book)
+  end
 
-  defp grow_val?({:nat, _n}, _under?), do: false
-  defp grow_val?(:b0, _under?), do: false
-  defp grow_val?(:b1, _under?), do: false
-  defp grow_val?(:tt, _under?), do: false
+  defp grow_puts({:match, _name, arms}, active, book) do
+    Enum.any?(arms, &grow_puts(Muro.Session.arm_body(&1), active, book))
+  end
+
+  defp grow_puts({:rec, name, body}, active, book) do
+    grow_puts(body, MapSet.put(active, name), book)
+  end
+
+  defp grow_puts({:call, _name}, _active, _book), do: false
+
+  # A received name at the top of a put is an echo. Under a constructor it
+  # builds a larger payload each turn. A nullary constructor still written
+  # as a name is that constructor, not a received value. A run application
+  # is not a wrapping constructor: its result is the declared codomain.
+  defp grow_val?({:var, name}, under?, book) do
+    under? and not Muro.Session.nullary_ctor_name?(book, name)
+  end
+
+  defp grow_val?({:con, name, args}, under?, book) do
+    inner = if Muro.Session.run_name?(book, name), do: under?, else: true
+    Enum.any?(args, &grow_val?(&1, inner, book))
+  end
+
+  defp grow_val?({:tup, a, b}, _under?, book) do
+    grow_val?(a, true, book) or grow_val?(b, true, book)
+  end
+
+  defp grow_val?({:rec, fields}, _under?, book) when is_list(fields) do
+    Enum.any?(fields, fn {_name, val} -> grow_val?(val, true, book) end)
+  end
+
+  defp grow_val?({:rep, ix, elem}, _under?, book) do
+    grow_val?(ix, true, book) or grow_val?(elem, true, book)
+  end
+
+  defp grow_val?({:nat, _n}, _under?, _book), do: false
+  defp grow_val?(:b0, _under?, _book), do: false
+  defp grow_val?(:b1, _under?, _book), do: false
+  defp grow_val?(:tt, _under?, _book), do: false
 
   defp reaches?(:done, _active), do: false
   defp reaches?(:stop, _active), do: false
@@ -484,7 +505,10 @@ defmodule Muro.Async do
   defp reaches?({:pick1, cont}, active), do: reaches?(cont, active)
   defp reaches?({:cover, p, q}, active), do: reaches?(p, active) or reaches?(q, active)
   defp reaches?({:iget, _name, p, q}, active), do: reaches?(p, active) or reaches?(q, active)
-  defp reaches?({:match, _name, arms}, active), do: Enum.any?(arms, &reaches?(&1, active))
+
+  defp reaches?({:match, _name, arms}, active) do
+    Enum.any?(arms, &reaches?(Muro.Session.arm_body(&1), active))
+  end
 
   defp reaches?({:rec, name, body}, active), do: reaches?(body, MapSet.delete(active, name))
 

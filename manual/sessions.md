@@ -181,6 +181,38 @@ meet arm : taker with giver
 
 `b0` takes `pick0 done`. `b1` takes `pick1 (put 0 done)`. `get (b : Bool) (match b done done)` and `get (m : Maybe Nat) (match m done done)` cover `Bool` and `Maybe` the same way: `true` then `false`, `nothing` then `just`. A match that does not cover the received value is refused. `recv (b : Bool) on end end` is still refused: an indexed protocol is a bit, and the sender writes the literal.
 
+The arms may name the constructor and bind its fields. `| nothing =>` binds nothing. `| just b =>` binds one field, and the type is that field at the payload's arguments: `Maybe Bool` gives `b : Bool`. A tail of `List` is a `List`. The name is payload data, so it may be sent more than once, and a `%1` endpoint is still consumed once. `put b` sends the field. `put (grant b)` sends what that `run` returns. Conformance checks the declared type, because the field is not known yet. The meeting evaluates `grant` on the value that arrived, and an asynchronous meeting does the same. The form with no names, one process per constructor, stays. The field does not choose a protocol.
+
+```muro
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+data Maybe (A : Type) : Type where
+  nothing : Maybe A
+  just : A → Maybe A
+
+def grant : run Π (b : Bool) → Bool :=
+  λ (b : Bool) →
+    match b motive (λ _ → Bool)
+      | true => true
+      | false => false
+
+session ask := recv (Maybe Bool) (send Bool end)
+
+session ask-back := dual ask
+
+conform reply : ask :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => put false done
+      | just b => put (grant b) done)
+```
+
+`just true` meets `reply` as `true`. `nothing` meets it as `false`.
+
+`examples/field-bindings.muro`
+
 `examples/computed.muro`
 
 ## A protocol follows the received constructor

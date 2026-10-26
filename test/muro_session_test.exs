@@ -1695,6 +1695,181 @@ defmodule Muro.SessionTest do
            """) == :ok
   end
 
+  test "a received match binds the constructor's fields" do
+    path = "examples/field-bindings.muro"
+    assert Muro.check_file(path) == :ok
+    assert {:ok, book} = Parser.parse(File.read!(path))
+    assert Check.check_sig(book) == :ok
+
+    for {left, right} <- [{"reply", "asker"}, {"pass", "passer"}, {"rest", "rest-peer"}] do
+      l = Enum.find(book, &(&1.name == left))
+      r = Enum.find(book, &(&1.name == right))
+      assert Muro.Meet.meets(l.proc, r.proc, book) == :ok
+      assert Muro.Meet.meets(r.proc, l.proc, book) == :ok
+    end
+
+    assert check("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+
+           data Maybe (A : Type) : Type where
+             nothing : Maybe A
+             just : A → Maybe A
+
+           def grant : run Π (b : Bool) → Bool :=
+             λ (b : Bool) →
+               match b motive (λ _ → Bool)
+                 | true => true
+                 | false => false
+
+           session plain := recv (Maybe Bool) end
+           conform covered : plain := get (m : Maybe Bool) (match m done done)
+
+           session twice := recv (Maybe Bool) (send Bool (send Bool end))
+           session twice-back := dual twice
+           conform echo : twice :=
+             get (m : Maybe Bool)
+               (match m
+                 | nothing => put false (put false done)
+                 | just b => put b (put (grant b) done))
+           conform twice-peer : twice-back :=
+             put (just true) (get (k : Bool) (get (n : Bool) done))
+
+           session nest := recv Nat (recv (Maybe Bool) (send Bool end))
+           session nest-back := dual nest
+           conform shadow : nest :=
+             get (b : Nat)
+               (get (m : Maybe Bool)
+                 (match m
+                   | nothing => put false done
+                   | just b => put b done))
+           conform shadow-peer : nest-back :=
+             put 0 (put (just false) (get (k : Bool) done))
+           """) == :ok
+
+    assert {:ok, book} =
+             Parser.parse("""
+             data Bool : Type where
+               true : Bool
+               false : Bool
+
+             data Maybe (A : Type) : Type where
+               nothing : Maybe A
+               just : A → Maybe A
+
+             def grant : run Π (b : Bool) → Bool :=
+               λ (b : Bool) →
+                 match b motive (λ _ → Bool)
+                   | true => true
+                   | false => false
+
+             session twice := recv (Maybe Bool) (send Bool (send Bool end))
+             session twice-back := dual twice
+             conform echo : twice :=
+               get (m : Maybe Bool)
+                 (match m
+                   | nothing => put false (put false done)
+                   | just b => put b (put (grant b) done))
+             conform twice-peer : twice-back :=
+               put (just false) (get (k : Bool) (get (n : Bool) done))
+             meet twice-wire : echo with twice-peer
+             """)
+
+    echo = Enum.find(book, &(&1.name == "echo"))
+    peer = Enum.find(book, &(&1.name == "twice-peer"))
+    assert Muro.Meet.meets(echo.proc, peer.proc, book) == :ok
+    assert Muro.Meet.meets(peer.proc, echo.proc, book) == :ok
+  end
+
+  test "field bindings sit in rec, a session call, a case, and an evidence payload" do
+    src = """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data Maybe (A : Type) : Type where
+      nothing : Maybe A
+      just : A → Maybe A
+
+    def grant : run Π (b : Bool) → Bool :=
+      λ (b : Bool) →
+        match b motive (λ _ → Bool)
+          | true => true
+          | false => false
+
+    session flags := rec X. recv (Maybe Bool) (send Bool X)
+    session flags-back := dual flags
+    conform loop : flags :=
+      rec X. get (m : Maybe Bool)
+        (match m
+          | nothing => put false X
+          | just b => put (grant b) X)
+    conform hear : flags-back :=
+      rec Y. put (just true) (get (k : Bool) Y)
+    meet loop-wire : loop with hear
+    meet loop-swap : hear with loop
+
+    session ack (k : Nat) := send Nat end
+    session rest (k : Nat) := recv (Maybe Bool) (send (Bool) (ack k))
+    session rest0 := rest 0
+    session rest0-back := dual rest0
+    conform rested : rest0 :=
+      get (m : Maybe Bool)
+        (match m
+          | nothing => put false (put 0 done)
+          | just b => put (grant b) (put 0 done))
+    conform rest-peer : rest0-back :=
+      put (just false) (get (k : Bool) (get (n : Nat) done))
+    meet rest-wire : rested with rest-peer
+    meet rest-swap : rest-peer with rested
+
+    session routed :=
+      recv (m : Maybe Bool) (case m
+        | nothing => send Bool end
+        | just => send Bool end)
+    session routed-back := dual routed
+    conform server : routed :=
+      get (m : Maybe Bool)
+        (match m
+          | nothing => put false done
+          | just b => put (grant b) done)
+    conform none : routed-back := put nothing (get (k : Bool) done)
+    conform some : routed-back := put (just false) (get (k : Bool) done)
+    meet none-wire : server with none
+    meet some-wire : server with some
+
+    session owed := send (d : Nat) {d ≤ 1} (recv (Maybe Bool) (send Bool end))
+    session owed-back := dual owed
+    conform owed-reply : owed :=
+      put 0
+        (get (m : Maybe Bool)
+          (match m
+            | nothing => put false done
+            | just b => put (grant b) done))
+    conform owed-peer : owed-back :=
+      get (d : Nat) (put (just true) (get (k : Bool) done))
+    meet owed-wire : owed-reply with owed-peer
+    meet owed-swap : owed-peer with owed-reply
+    """
+
+    assert check(src) == :ok
+    assert {:ok, book} = Parser.parse(src)
+
+    for {left, right} <- [
+          {"loop", "hear"},
+          {"rested", "rest-peer"},
+          {"server", "none"},
+          {"server", "some"},
+          {"owed-reply", "owed-peer"}
+        ] do
+      l = Enum.find(book, &(&1.name == left))
+      r = Enum.find(book, &(&1.name == right))
+      assert Muro.Meet.meets(l.proc, r.proc, book) == :ok
+      assert Muro.Meet.meets(r.proc, l.proc, book) == :ok
+    end
+  end
+
   defp check(src) do
     assert {:ok, book} = Parser.parse(src)
     Check.check_sig(book)

@@ -506,6 +506,17 @@ defmodule Muro.MeetTest do
     assert Check.check_sig(book) == :ok
   end
 
+  test "a received field meets in both orders" do
+    assert {:ok, book} = Parser.parse(File.read!("examples/field-bindings.muro"))
+
+    for {left, right} <- [{"reply", "asker"}, {"pass", "passer"}, {"rest", "rest-peer"}] do
+      l = Enum.find(book, &(&1.name == left))
+      r = Enum.find(book, &(&1.name == right))
+      assert Meet.meets(l.proc, r.proc, book) == :ok
+      assert Meet.meets(r.proc, l.proc, book) == :ok
+    end
+  end
+
   defp check(src) do
     assert {:ok, book} = Parser.parse(src)
     Check.check_sig(book)

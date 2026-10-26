@@ -11,7 +11,8 @@
 -- arm of that same bit. `b0` meets the first arm. `b1` meets the
 -- second. A variable bit selects neither arm. A computed value meets
 -- a receive when the value it computes inhabits the payload. A match
--- on the received value meets the arm of that value. A value the
+-- on the received value meets the arm of that value. A named arm
+-- meets after the received fields replace its binders. A value the
 -- match does not cover has no derivation.
 --
 -- The meeting is evidence. One end conforms to the protocol. The
@@ -28,7 +29,7 @@ module Muro.Meet where
 open import Data.Bool.Base using (true; false)
 open import Data.Empty using (⊥)
 open import Data.List.Base using (List; []; _∷_)
-open import Data.Maybe.Base using (just; nothing)
+open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.String.Base using (String)
 open import Data.String.Properties using (_==_)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl; sym; trans; cong; subst)
@@ -223,15 +224,184 @@ on-b1-iget : ∀ {σ τ x P Q R} →
 on-b1-iget (yes m) = yes (b1-iget m)
 on-b1-iget (no nm) = no (λ { (b1-iget m) → nm m })
 
--- One meeting per arm, in order. The search builds these by recursion
--- on the arm list, so each call of `decideρ` is on an arm.
-data ArmAns (ans : Proc → Set) : List Proc → Set where
-  aa-nil  : ArmAns ans []
-  aa-cons : ∀ {R qs} → ans R → ArmAns ans qs → ArmAns ans (R ∷ qs)
+-- One meeting per arm, in order. A bare arm is its process. A named
+-- arm is that process after the received fields replace its binders.
+-- The search builds the meetings by recursion on the arm list.
 
-data Found (ans : Proc → Set) (cs : List Ctor) (c : String) (qs : List Proc) : Set where
-  got    : (R : Proc) → ans R → nthProc cs c qs ≡ just R → Found ans cs c qs
-  missed : nthProc cs c qs ≡ nothing → Found ans cs c qs
+substValN : ∀ {A} → List FEnv → ValExpr A → ValExpr A
+substValN [] v = v
+substValN (e ∷ es) v = substVal e (substValN es v)
+
+substN : List FEnv → Proc → Proc
+substN [] p = p
+substN (e ∷ es) p = substProc e (substN es p)
+
+shadowN : String → List FEnv → List FEnv
+shadowN _ [] = []
+shadowN x (e ∷ es) = shadowF x e ∷ shadowN x es
+
+shadowAll : List String → List FEnv → List FEnv
+shadowAll _ [] = []
+shadowAll xs (e ∷ es) = shadows xs e ∷ shadowAll xs es
+
+substArmsN : List FEnv → List PArm → List PArm
+substArmsN _ [] = []
+substArmsN es (bare p ∷ qs) = bare (substN es p) ∷ substArmsN es qs
+substArmsN es (named c xs p ∷ qs) =
+  named c xs (substN (shadowAll xs es) p) ∷ substArmsN es qs
+
+≡cons : {a b : PArm} → a ≡ b → {ps qs : List PArm} → ps ≡ qs → a ∷ ps ≡ b ∷ qs
+≡cons refl refl = refl
+
+≡mget : ∀ {A x ps qs} → ps ≡ qs → mget A x ps ≡ mget A x qs
+≡mget refl = refl
+
+shadowsNil : (xs : List String) → shadows xs [] ≡ []
+shadowsNil [] = refl
+shadowsNil (_ ∷ xs) = shadowsNil xs
+
+armsId : (ps : List PArm) → substArms [] ps ≡ ps
+armsId [] = refl
+armsId (bare _ ∷ ps) rewrite armsId ps = refl
+armsId (named _ xs _ ∷ ps) rewrite shadowsNil xs | armsId ps = refl
+
+armsIdN : (ps : List PArm) → substArmsN [] ps ≡ ps
+armsIdN [] = refl
+armsIdN (bare _ ∷ ps) rewrite armsIdN ps = refl
+armsIdN (named _ _ _ ∷ ps) rewrite armsIdN ps = refl
+
+pushArms : (e : FEnv) (es : List FEnv) (ps : List PArm) →
+  substArms e (substArmsN es ps) ≡ substArmsN (e ∷ es) ps
+pushArms _ _ [] = refl
+pushArms e es (bare p ∷ ps) =
+  ≡cons {bare (substProc e (substN es p))} {bare (substN (e ∷ es) p)}
+    refl (pushArms e es ps)
+pushArms e es (named c xs p ∷ ps) =
+  ≡cons
+    {named c xs (substProc (shadows xs e) (substN (shadowAll xs es) p))}
+    {named c xs (substN (shadowAll xs (e ∷ es)) p)}
+    refl (pushArms e es ps)
+
+subDone : (e : FEnv) → substProc e done ≡ done
+subDone [] = refl
+subDone (_ ∷ _) = refl
+
+subStop : (e : FEnv) → substProc e stop ≡ stop
+subStop [] = refl
+subStop (_ ∷ _) = refl
+
+subPut : ∀ {A} (e : FEnv) (v : ValExpr A) (P : Proc) →
+  substProc e (put A v P) ≡ put A (substVal e v) (substProc e P)
+subPut [] _ _ = refl
+subPut (_ ∷ _) _ _ = refl
+
+subGet : ∀ (e : FEnv) (A : Ty) (x : String) (P : Proc) →
+  substProc e (get A x P) ≡ get A x (substProc (shadowF x e) P)
+subGet [] _ _ _ = refl
+subGet (_ ∷ _) _ _ _ = refl
+
+subPick0 : ∀ (e : FEnv) (P : Proc) → substProc e (pick0 P) ≡ pick0 (substProc e P)
+subPick0 [] _ = refl
+subPick0 (_ ∷ _) _ = refl
+
+subPick1 : ∀ (e : FEnv) (P : Proc) → substProc e (pick1 P) ≡ pick1 (substProc e P)
+subPick1 [] _ = refl
+subPick1 (_ ∷ _) _ = refl
+
+subCover : ∀ (e : FEnv) (P Q : Proc) →
+  substProc e (cover P Q) ≡ cover (substProc e P) (substProc e Q)
+subCover [] _ _ = refl
+subCover (_ ∷ _) _ _ = refl
+
+subIget : ∀ (e : FEnv) (x : String) (P Q : Proc) →
+  substProc e (iget x P Q) ≡
+  iget x (substProc (shadowF x e) P) (substProc (shadowF x e) Q)
+subIget [] _ _ _ = refl
+subIget (_ ∷ _) _ _ _ = refl
+
+subMget : ∀ (e : FEnv) (A : Ty) (x : String) (ps : List PArm) →
+  substProc e (mget A x ps) ≡ mget A x (substArms (shadowF x e) ps)
+subMget [] _ _ ps = ≡mget (sym (armsId ps))
+subMget (_ ∷ _) _ _ _ = refl
+
+subNDone : (es : List FEnv) → substN es done ≡ done
+subNDone [] = refl
+subNDone (e ∷ es) rewrite subNDone es = subDone e
+
+subNStop : (es : List FEnv) → substN es stop ≡ stop
+subNStop [] = refl
+subNStop (e ∷ es) rewrite subNStop es = subStop e
+
+subNPut : ∀ {A} (es : List FEnv) (v : ValExpr A) (P : Proc) →
+  substN es (put A v P) ≡ put A (substValN es v) (substN es P)
+subNPut [] _ _ = refl
+subNPut (e ∷ es) v P rewrite subNPut es v P = subPut e (substValN es v) (substN es P)
+
+subNGet : ∀ (es : List FEnv) (A : Ty) (x : String) (P : Proc) →
+  substN es (get A x P) ≡ get A x (substN (shadowN x es) P)
+subNGet [] _ _ _ = refl
+subNGet (e ∷ es) A x P rewrite subNGet es A x P =
+  subGet e A x (substN (shadowN x es) P)
+
+subNPick0 : ∀ (es : List FEnv) (P : Proc) → substN es (pick0 P) ≡ pick0 (substN es P)
+subNPick0 [] _ = refl
+subNPick0 (e ∷ es) P rewrite subNPick0 es P = subPick0 e (substN es P)
+
+subNPick1 : ∀ (es : List FEnv) (P : Proc) → substN es (pick1 P) ≡ pick1 (substN es P)
+subNPick1 [] _ = refl
+subNPick1 (e ∷ es) P rewrite subNPick1 es P = subPick1 e (substN es P)
+
+subNCover : ∀ (es : List FEnv) (P Q : Proc) →
+  substN es (cover P Q) ≡ cover (substN es P) (substN es Q)
+subNCover [] _ _ = refl
+subNCover (e ∷ es) P Q rewrite subNCover es P Q =
+  subCover e (substN es P) (substN es Q)
+
+subNIget : ∀ (es : List FEnv) (x : String) (P Q : Proc) →
+  substN es (iget x P Q) ≡
+  iget x (substN (shadowN x es) P) (substN (shadowN x es) Q)
+subNIget [] _ _ _ = refl
+subNIget (e ∷ es) x P Q rewrite subNIget es x P Q =
+  subIget e x (substN (shadowN x es) P) (substN (shadowN x es) Q)
+
+subNMget : ∀ (es : List FEnv) (A : Ty) (x : String) (ps : List PArm) →
+  substN es (mget A x ps) ≡ mget A x (substArmsN (shadowN x es) ps)
+subNMget [] _ _ ps = ≡mget (sym (armsIdN ps))
+subNMget (e ∷ es) A x ps rewrite subNMget es A x ps =
+  trans (subMget e A x (substArmsN (shadowN x es) ps))
+        (≡mget (pushArms (shadowF x e) (shadowN x es) ps))
+
+-- The arm `openNamed` returns, so the equality a concrete value needs is `refl`.
+opened : Proc → Maybe FEnv → Maybe Proc
+opened _ nothing = nothing
+opened p (just e) = just (substProc e p)
+
+openView : String → String → List String → Spine → Maybe FEnv
+openView k c xs sp with k == c | rawSpine sp
+... | false | _ = nothing
+... | true | nothing = nothing
+... | true | just rs = lenEnv xs rs
+
+open-agree : (k c : String) (xs : List String) (p : Proc) (sp : Spine) →
+  openNamed k c xs p sp ≡ opened p (openView k c xs sp)
+open-agree k c xs p sp with k == c | rawSpine sp
+open-agree k c xs p sp | false | _ = refl
+open-agree k c xs p sp | true | nothing = refl
+open-agree k c xs p sp | true | just rs with lenEnv xs rs
+open-agree k c xs p sp | true | just rs | nothing = refl
+open-agree k c xs p sp | true | just rs | just _ = refl
+
+data ArmAns (ans : Proc → Set) : List PArm → Set where
+  aa-nil   : ArmAns ans []
+  aa-bare  : ∀ {p qs} → ans p → ArmAns ans qs → ArmAns ans (bare p ∷ qs)
+  aa-named : ∀ {c xs p qs} →
+    ((e : FEnv) → ans (substProc e p)) →
+    ArmAns ans qs →
+    ArmAns ans (named c xs p ∷ qs)
+
+data Found (ans : Proc → Set) (cs : List Ctor) (c : String) (sp : Spine) (qs : List PArm) : Set where
+  got    : (R : Proc) → ans R → nthProc cs c sp qs ≡ just R → Found ans cs c sp qs
+  missed : nthProc cs c sp qs ≡ nothing → Found ans cs c sp qs
 
 -- Remember the comparison `nthProc` makes. The proof is `refl` when
 -- the names are concrete, which is what a computed meeting needs.
@@ -241,18 +411,38 @@ data Reveal {A B : Set} (f : A → B) (x : A) (y : B) : Set where
 reveal : ∀ {A B : Set} (f : A → B) (x : A) → Reveal f x (f x)
 reveal _ _ = ≡is refl
 
-nthBoth : ∀ {ans} (cs : List Ctor) (c : String) (qs : List Proc) →
-  ArmAns ans qs → Found ans cs c qs
-nthBoth [] _ _ _ = missed refl
-nthBoth (_ ∷ _) _ [] _ = missed refl
-nthBoth (ctor n _ ∷ cs′) c (r ∷ qs) (aa-cons a as) with c == n | reveal (_==_ c) n
+namedHit : ∀ {ans} (k : String) (xs : List String) (p : Proc) (sp : Spine)
+  (cs′ : List Ctor) (c : String) (qs : List PArm) (n : String) (fs : List Fld) →
+  (c == n) ≡ true →
+  (e? : Maybe FEnv) →
+  openNamed k c xs p sp ≡ opened p e? →
+  ((e : FEnv) → ans (substProc e p)) →
+  Found ans (ctor n fs ∷ cs′) c sp (named k xs p ∷ qs)
+namedHit k xs p sp cs′ c qs n fs eqn nothing ag _ =
+  missed (trans (cong (λ b → pickCtor b (named k xs p) sp cs′ c qs) eqn) ag)
+namedHit k xs p sp cs′ c qs n fs eqn (just e) ag f =
+  got (substProc e p) (f e)
+    (trans (cong (λ b → pickCtor b (named k xs p) sp cs′ c qs) eqn) ag)
+
+nthBoth : ∀ {ans} (cs : List Ctor) (c : String) (sp : Spine) (qs : List PArm) →
+  ArmAns ans qs → Found ans cs c sp qs
+nthBoth [] _ _ _ _ = missed refl
+nthBoth (_ ∷ _) _ _ [] _ = missed refl
+nthBoth (ctor n _ ∷ cs′) c sp (bare r ∷ qs) (aa-bare a as) with c == n | reveal (_==_ c) n
 ... | true | ≡is eqn =
-  got r a (trans (cong (λ b → pickCtor b r cs′ c qs) eqn) refl)
-... | false | ≡is eqn with nthBoth cs′ c qs as
+  got r a (trans (cong (λ b → pickCtor b (bare r) sp cs′ c qs) eqn) refl)
+... | false | ≡is eqn with nthBoth cs′ c sp qs as
 ... | got R b pr =
-  got R b (trans (cong (λ b → pickCtor b r cs′ c qs) eqn) pr)
+  got R b (trans (cong (λ b → pickCtor b (bare r) sp cs′ c qs) eqn) pr)
 ... | missed pr =
-  missed (trans (cong (λ b → pickCtor b r cs′ c qs) eqn) pr)
+  missed (trans (cong (λ b → pickCtor b (bare r) sp cs′ c qs) eqn) pr)
+nthBoth (ctor n fs ∷ cs′) c sp (named k xs p ∷ qs) (aa-named f as) with c == n | reveal (_==_ c) n
+... | true | ≡is eqn = namedHit k xs p sp cs′ c qs n fs eqn (openView k c xs sp) (open-agree k c xs p sp) f
+... | false | ≡is eqn with nthBoth cs′ c sp qs as
+... | got R b pr =
+  got R b (trans (cong (λ b → pickCtor b (named k xs p) sp cs′ c qs) eqn) pr)
+... | missed pr =
+  missed (trans (cong (λ b → pickCtor b (named k xs p) sp cs′ c qs) eqn) pr)
 
 usePut : ∀ {σ τ A B v x ps R P} →
   applyTy σ A ≡ applyTy τ B →
@@ -287,30 +477,75 @@ noGround′ : ∀ {σ τ A B v x ps P} →
 noGround′ {ps = ps} geq (mget-put _ _ p _) =
   just≢nothing (trans (sym p) (cong (armStep ps) geq))
 
-selLit : ∀ {A} {v : ValExpr A} {u : Val A} {ps : List Proc} {R : Proc} →
+selLit : ∀ {A} {v : ValExpr A} {u : Val A} {ps : List PArm} {R : Proc} →
   ground v ≡ just u →
   armOf A u ps ≡ just R →
   armExpr v ps ≡ just R
 selLit {v = v} {ps = ps} geq aeq = trans (cong (armStep ps) geq) aeq
 
-missedLit : ∀ {A} {v : ValExpr A} {u : Val A} {ps : List Proc} →
+missedLit : ∀ {A} {v : ValExpr A} {u : Val A} {ps : List PArm} →
   ground v ≡ just u →
   armOf A u ps ≡ nothing →
   armExpr v ps ≡ nothing
 missedLit {v = v} {ps = ps} geq aeq = trans (cong (armStep ps) geq) aeq
+
+-- A bit literal selects one side. The other answer is not used.
+finishPutBit : ∀ {σ τ x P Q R} →
+  (w : ValExpr bit) →
+  Answerρ σ (ext x (lit b0) τ) P Q →
+  Answerρ σ (ext x (lit b1) τ) P R →
+  Answerρ σ τ (put bit w P) (iget x Q R)
+finishPutBit (lit b0) a _ = on-b0-iget a
+finishPutBit (lit b1) _ a = on-b1-iget a
+finishPutBit (var _) _ _ = no (λ ())
+finishPutBit (call _ _) _ _ = no (λ ())
+
+finishIgetBit : ∀ {σ τ x P Q R} →
+  (w : ValExpr bit) →
+  Answerρ (ext x (lit b0) σ) τ P R →
+  Answerρ (ext x (lit b1) σ) τ Q R →
+  Answerρ σ τ (iget x P Q) (put bit w R)
+finishIgetBit (lit b0) a _ = on-iget-b0 a
+finishIgetBit (lit b1) _ a = on-iget-b1 a
+finishIgetBit (var _) _ _ = no (λ ())
+finishIgetBit (call _ _) _ _ = no (λ ())
 
 takePut : ∀ {σ τ A B x P} (v : ValExpr A) →
   applyTy σ A ≡ applyTy τ B →
   sent v ≡ true →
   (w : Val A) →
   ground v ≡ just w →
-  (qs : List Proc) →
+  (qs : List PArm) →
   ArmAns (Answerρ σ (ext x v τ) P) qs →
   Answerρ σ τ (put A v P) (mget B x qs)
-takePut v eq fv b0 geq (p ∷ q ∷ []) (aa-cons a _) =
-  usePut eq fv (selLit {v = v} {ps = p ∷ q ∷ []} geq refl) a
-takePut v eq fv b1 geq (p ∷ q ∷ []) (aa-cons _ (aa-cons a _)) =
-  usePut eq fv (selLit {v = v} {ps = p ∷ q ∷ []} geq refl) a
+takePut v eq fv b0 geq (bare p ∷ q ∷ []) (aa-bare a _) =
+  usePut eq fv (selLit {v = v} {ps = bare p ∷ q ∷ []} geq refl) a
+takePut v eq fv b0 geq (named c [] p ∷ q ∷ []) (aa-named f _) =
+  usePut eq fv (selLit {v = v} {ps = named c [] p ∷ q ∷ []} geq refl) (f [])
+takePut v eq fv b0 geq (named c (y ∷ ys) p ∷ q ∷ []) (aa-named _ _) =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c (y ∷ ys) p ∷ q ∷ []} geq refl)) })
+takePut v eq fv b1 geq (bare p ∷ bare q ∷ []) (aa-bare _ (aa-bare a _)) =
+  usePut eq fv (selLit {v = v} {ps = bare p ∷ bare q ∷ []} geq refl) a
+takePut v eq fv b1 geq (bare p ∷ named c [] q ∷ []) (aa-bare _ (aa-named f _)) =
+  usePut eq fv (selLit {v = v} {ps = bare p ∷ named c [] q ∷ []} geq refl) (f [])
+takePut v eq fv b1 geq (bare p ∷ named c (y ∷ ys) q ∷ []) (aa-bare _ (aa-named _ _)) =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = bare p ∷ named c (y ∷ ys) q ∷ []} geq refl)) })
+takePut v eq fv b1 geq (named c [] p ∷ bare q ∷ []) (aa-named _ (aa-bare a _)) =
+  usePut eq fv (selLit {v = v} {ps = named c [] p ∷ bare q ∷ []} geq refl) a
+takePut v eq fv b1 geq (named c [] p ∷ named d [] q ∷ []) (aa-named _ (aa-named f _)) =
+  usePut eq fv (selLit {v = v} {ps = named c [] p ∷ named d [] q ∷ []} geq refl) (f [])
+takePut v eq fv b1 geq (named c [] p ∷ named d (y ∷ ys) q ∷ []) (aa-named _ (aa-named _ _)) =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c [] p ∷ named d (y ∷ ys) q ∷ []} geq refl)) })
+takePut v eq fv b1 geq (named c (z ∷ zs) p ∷ bare q ∷ []) (aa-named _ (aa-bare a _)) =
+  usePut eq fv (selLit {v = v} {ps = named c (z ∷ zs) p ∷ bare q ∷ []} geq refl) a
+takePut v eq fv b1 geq (named c (z ∷ zs) p ∷ named d [] q ∷ []) (aa-named _ (aa-named f _)) =
+  usePut eq fv (selLit {v = v} {ps = named c (z ∷ zs) p ∷ named d [] q ∷ []} geq refl) (f [])
+takePut v eq fv b1 geq (named c (z ∷ zs) p ∷ named d (y ∷ ys) q ∷ []) (aa-named _ (aa-named _ _)) =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c (z ∷ zs) p ∷ named d (y ∷ ys) q ∷ []} geq refl)) })
 takePut v eq fv b0 geq [] _ =
   no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
 takePut v eq fv b0 geq (p ∷ []) _ =
@@ -323,7 +558,7 @@ takePut v eq fv b1 geq (p ∷ []) _ =
   no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = p ∷ []} geq refl)) })
 takePut v eq fv b1 geq (p ∷ q ∷ r ∷ rs) _ =
   no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = p ∷ q ∷ r ∷ rs} geq refl)) })
-takePut v eq fv (con {d} c _) geq qs as′ with nthBoth (ctorsOf d) c qs as′
+takePut v eq fv (con {d} c sp) geq qs as′ with nthBoth (ctorsOf d) c sp qs as′
 ... | got R a pr = usePut eq fv (selLit {v = v} {ps = qs} geq pr) a
 ... | missed pr =
   no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq pr)) })
@@ -345,13 +580,37 @@ takeMget : ∀ {σ τ A B x P} (v : ValExpr B) →
   sent v ≡ true →
   (w : Val B) →
   ground v ≡ just w →
-  (qs : List Proc) →
+  (qs : List PArm) →
   ArmAns (λ R → Answerρ (ext x v σ) τ R P) qs →
   Answerρ σ τ (mget A x qs) (put B v P)
-takeMget v eq fv b0 geq (p ∷ q ∷ []) (aa-cons a _) =
-  useMget eq fv (selLit {v = v} {ps = p ∷ q ∷ []} geq refl) a
-takeMget v eq fv b1 geq (p ∷ q ∷ []) (aa-cons _ (aa-cons a _)) =
-  useMget eq fv (selLit {v = v} {ps = p ∷ q ∷ []} geq refl) a
+takeMget v eq fv b0 geq (bare p ∷ q ∷ []) (aa-bare a _) =
+  useMget eq fv (selLit {v = v} {ps = bare p ∷ q ∷ []} geq refl) a
+takeMget v eq fv b0 geq (named c [] p ∷ q ∷ []) (aa-named f _) =
+  useMget eq fv (selLit {v = v} {ps = named c [] p ∷ q ∷ []} geq refl) (f [])
+takeMget v eq fv b0 geq (named c (y ∷ ys) p ∷ q ∷ []) (aa-named _ _) =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c (y ∷ ys) p ∷ q ∷ []} geq refl)) })
+takeMget v eq fv b1 geq (bare p ∷ bare q ∷ []) (aa-bare _ (aa-bare a _)) =
+  useMget eq fv (selLit {v = v} {ps = bare p ∷ bare q ∷ []} geq refl) a
+takeMget v eq fv b1 geq (bare p ∷ named c [] q ∷ []) (aa-bare _ (aa-named f _)) =
+  useMget eq fv (selLit {v = v} {ps = bare p ∷ named c [] q ∷ []} geq refl) (f [])
+takeMget v eq fv b1 geq (bare p ∷ named c (y ∷ ys) q ∷ []) (aa-bare _ (aa-named _ _)) =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = bare p ∷ named c (y ∷ ys) q ∷ []} geq refl)) })
+takeMget v eq fv b1 geq (named c [] p ∷ bare q ∷ []) (aa-named _ (aa-bare a _)) =
+  useMget eq fv (selLit {v = v} {ps = named c [] p ∷ bare q ∷ []} geq refl) a
+takeMget v eq fv b1 geq (named c [] p ∷ named d [] q ∷ []) (aa-named _ (aa-named f _)) =
+  useMget eq fv (selLit {v = v} {ps = named c [] p ∷ named d [] q ∷ []} geq refl) (f [])
+takeMget v eq fv b1 geq (named c [] p ∷ named d (y ∷ ys) q ∷ []) (aa-named _ (aa-named _ _)) =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c [] p ∷ named d (y ∷ ys) q ∷ []} geq refl)) })
+takeMget v eq fv b1 geq (named c (z ∷ zs) p ∷ bare q ∷ []) (aa-named _ (aa-bare a _)) =
+  useMget eq fv (selLit {v = v} {ps = named c (z ∷ zs) p ∷ bare q ∷ []} geq refl) a
+takeMget v eq fv b1 geq (named c (z ∷ zs) p ∷ named d [] q ∷ []) (aa-named _ (aa-named f _)) =
+  useMget eq fv (selLit {v = v} {ps = named c (z ∷ zs) p ∷ named d [] q ∷ []} geq refl) (f [])
+takeMget v eq fv b1 geq (named c (z ∷ zs) p ∷ named d (y ∷ ys) q ∷ []) (aa-named _ (aa-named _ _)) =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c (z ∷ zs) p ∷ named d (y ∷ ys) q ∷ []} geq refl)) })
 takeMget v eq fv b0 geq [] _ =
   no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
 takeMget v eq fv b0 geq (p ∷ []) _ =
@@ -364,7 +623,7 @@ takeMget v eq fv b1 geq (p ∷ []) _ =
   no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = p ∷ []} geq refl)) })
 takeMget v eq fv b1 geq (p ∷ q ∷ r ∷ rs) _ =
   no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = p ∷ q ∷ r ∷ rs} geq refl)) })
-takeMget v eq fv (con {d} c _) geq qs as′ with nthBoth (ctorsOf d) c qs as′
+takeMget v eq fv (con {d} c sp) geq qs as′ with nthBoth (ctorsOf d) c sp qs as′
 ... | got R a pr = useMget eq fv (selLit {v = v} {ps = qs} geq pr) a
 ... | missed pr =
   no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq pr)) })
@@ -381,7 +640,7 @@ takeMget v eq fv (rec _) geq qs _ =
 takeMget v eq fv (rep _) geq qs _ =
   no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
 
-concludePut : ∀ {σ τ A B v x P} (ps : List Proc) →
+concludePut : ∀ {σ τ A B v x P} (ps : List PArm) →
   ArmAns (Answerρ σ (ext x v τ) P) ps →
   Answerρ σ τ (put A v P) (mget B x ps)
 concludePut {σ} {τ} {A} {B} {v} {x} {P} ps as
@@ -391,7 +650,7 @@ concludePut {σ} {τ} {A} {B} {v} {x} {P} ps as
 ... | yes′ _ | yes′ _ | nothing = no (noGround geq)
 ... | yes′ eq | yes′ fv | just u = takePut v eq fv u geq ps as
 
-concludeMget : ∀ {σ τ A B v x P} (ps : List Proc) →
+concludeMget : ∀ {σ τ A B v x P} (ps : List PArm) →
   ArmAns (λ R → Answerρ (ext x v σ) τ R P) ps →
   Answerρ σ τ (mget A x ps) (put B v P)
 concludeMget {σ} {τ} {A} {B} {v} {x} {P} ps as
@@ -401,121 +660,154 @@ concludeMget {σ} {τ} {A} {B} {v} {x} {P} ps as
 ... | yes′ _ | yes′ _ | nothing = no (noGround′ geq)
 ... | yes′ eq | yes′ fv | just u = takeMget v eq fv u geq ps as
 
-
 mutual
-  decideρ : (σ τ : Idx) (P Q : Proc) → Answerρ σ τ P Q
-  decideρ _ _ done done = yes done-done
-  decideρ _ _ done stop = no (λ ())
-  decideρ _ _ done (put _ _ _) = no (λ ())
-  decideρ _ _ done (get _ _ _) = no (λ ())
-  decideρ _ _ done (pick0 _) = no (λ ())
-  decideρ _ _ done (pick1 _) = no (λ ())
-  decideρ _ _ done (cover _ _) = no (λ ())
-  decideρ _ _ done (iget _ _ _) = no (λ ())
-  decideρ _ _ done (mget _ _ _) = no (λ ())
-  decideρ _ _ stop done = no (λ ())
-  decideρ _ _ stop stop = yes stop-stop
-  decideρ _ _ stop (put _ _ _) = no (λ ())
-  decideρ _ _ stop (get _ _ _) = no (λ ())
-  decideρ _ _ stop (pick0 _) = no (λ ())
-  decideρ _ _ stop (pick1 _) = no (λ ())
-  decideρ _ _ stop (cover _ _) = no (λ ())
-  decideρ _ _ stop (iget _ _ _) = no (λ ())
-  decideρ _ _ stop (mget _ _ _) = no (λ ())
-  decideρ σ τ (put A v P) (get B x Q) =
-    on-put-get (ty≟ (applyTy σ A) (applyTy τ B)) (sent? v) (decideρ σ (ext x v τ) P Q)
-  decideρ σ τ (put A v P) (mget B x ps) =
-    concludePut ps (armAns {σ} {ext x v τ} P ps)
-  decideρ _ _ (put _ _ _) done = no (λ ())
-  decideρ _ _ (put _ _ _) stop = no (λ ())
-  decideρ _ _ (put _ _ _) (put _ _ _) = no (λ ())
-  decideρ _ _ (put _ _ _) (pick0 _) = no (λ ())
-  decideρ _ _ (put _ _ _) (pick1 _) = no (λ ())
-  decideρ _ _ (put _ _ _) (cover _ _) = no (λ ())
-  decideρ σ τ (put bit (lit b0) P) (iget x Q _) = on-b0-iget (decideρ σ (ext x (lit b0) τ) P Q)
-  decideρ σ τ (put bit (lit b1) P) (iget x _ R) = on-b1-iget (decideρ σ (ext x (lit b1) τ) P R)
-  decideρ _ _ (put bit (var _) _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (put bit (call _ _) _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (put nat _ _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (put unit _ _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (put (pair _ _) _ _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (put (rec _) _ _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (put (vec _ _) _ _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (put (dat _ _) _ _) (iget _ _ _) = no (λ ())
-  decideρ σ τ (get A x P) (put B v Q) =
-    on-get-put (ty≟ (applyTy σ A) (applyTy τ B)) (sent? v) (decideρ (ext x v σ) τ P Q)
-  decideρ σ τ (mget A x ps) (put B v P) =
-    concludeMget ps (armFirst {ext x v σ} {τ} P ps)
-  decideρ _ _ (get _ _ _) done = no (λ ())
-  decideρ _ _ (get _ _ _) stop = no (λ ())
-  decideρ _ _ (get _ _ _) (get _ _ _) = no (λ ())
-  decideρ _ _ (get _ _ _) (pick0 _) = no (λ ())
-  decideρ _ _ (get _ _ _) (pick1 _) = no (λ ())
-  decideρ _ _ (get _ _ _) (cover _ _) = no (λ ())
-  decideρ _ _ (get _ _ _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (get _ _ _) (mget _ _ _) = no (λ ())
-  decideρ σ τ (pick0 P) (cover Q _) = pick0-yes (decideρ σ τ P Q)
-  decideρ _ _ (pick0 _) done = no (λ ())
-  decideρ _ _ (pick0 _) stop = no (λ ())
-  decideρ _ _ (pick0 _) (put _ _ _) = no (λ ())
-  decideρ _ _ (pick0 _) (get _ _ _) = no (λ ())
-  decideρ _ _ (pick0 _) (pick0 _) = no (λ ())
-  decideρ _ _ (pick0 _) (pick1 _) = no (λ ())
-  decideρ _ _ (pick0 _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (pick0 _) (mget _ _ _) = no (λ ())
-  decideρ σ τ (pick1 P) (cover _ R) = pick1-yes (decideρ σ τ P R)
-  decideρ _ _ (pick1 _) done = no (λ ())
-  decideρ _ _ (pick1 _) stop = no (λ ())
-  decideρ _ _ (pick1 _) (put _ _ _) = no (λ ())
-  decideρ _ _ (pick1 _) (get _ _ _) = no (λ ())
-  decideρ _ _ (pick1 _) (pick0 _) = no (λ ())
-  decideρ _ _ (pick1 _) (pick1 _) = no (λ ())
-  decideρ _ _ (pick1 _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (pick1 _) (mget _ _ _) = no (λ ())
-  decideρ σ τ (cover P _) (pick0 R) = cover0-yes (decideρ σ τ P R)
-  decideρ σ τ (cover _ Q) (pick1 R) = cover1-yes (decideρ σ τ Q R)
-  decideρ _ _ (cover _ _) done = no (λ ())
-  decideρ _ _ (cover _ _) stop = no (λ ())
-  decideρ _ _ (cover _ _) (put _ _ _) = no (λ ())
-  decideρ _ _ (cover _ _) (get _ _ _) = no (λ ())
-  decideρ _ _ (cover _ _) (cover _ _) = no (λ ())
-  decideρ _ _ (cover _ _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (cover _ _) (mget _ _ _) = no (λ ())
-  decideρ σ τ (iget x P Q) (put bit (lit b0) R) = on-iget-b0 (decideρ (ext x (lit b0) σ) τ P R)
-  decideρ σ τ (iget x P Q) (put bit (lit b1) R) = on-iget-b1 (decideρ (ext x (lit b1) σ) τ Q R)
-  decideρ _ _ (iget _ _ _) (put bit (var _) _) = no (λ ())
-  decideρ _ _ (iget _ _ _) (put bit (call _ _) _) = no (λ ())
-  decideρ _ _ (iget _ _ _) (put nat _ _) = no (λ ())
-  decideρ _ _ (iget _ _ _) (put unit _ _) = no (λ ())
-  decideρ _ _ (iget _ _ _) (put (pair _ _) _ _) = no (λ ())
-  decideρ _ _ (iget _ _ _) (put (rec _) _ _) = no (λ ())
-  decideρ _ _ (iget _ _ _) (put (vec _ _) _ _) = no (λ ())
-  decideρ _ _ (iget _ _ _) (put (dat _ _) _ _) = no (λ ())
-  decideρ _ _ (iget _ _ _) done = no (λ ())
-  decideρ _ _ (iget _ _ _) stop = no (λ ())
-  decideρ _ _ (iget _ _ _) (get _ _ _) = no (λ ())
-  decideρ _ _ (iget _ _ _) (pick0 _) = no (λ ())
-  decideρ _ _ (iget _ _ _) (pick1 _) = no (λ ())
-  decideρ _ _ (iget _ _ _) (cover _ _) = no (λ ())
-  decideρ _ _ (iget _ _ _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (iget _ _ _) (mget _ _ _) = no (λ ())
-  decideρ _ _ (mget _ _ _) done = no (λ ())
-  decideρ _ _ (mget _ _ _) stop = no (λ ())
-  decideρ _ _ (mget _ _ _) (get _ _ _) = no (λ ())
-  decideρ _ _ (mget _ _ _) (pick0 _) = no (λ ())
-  decideρ _ _ (mget _ _ _) (pick1 _) = no (λ ())
-  decideρ _ _ (mget _ _ _) (cover _ _) = no (λ ())
-  decideρ _ _ (mget _ _ _) (iget _ _ _) = no (λ ())
-  decideρ _ _ (mget _ _ _) (mget _ _ _) = no (λ ())
+  -- `ls` substitutes the left process and `rs` the right one, outermost
+  -- environment first. An empty list is the process as written.
+  meetN : (ls rs : List FEnv) (σ τ : Idx) (L R : Proc) →
+    Answerρ σ τ (substN ls L) (substN rs R)
 
-  -- Each arm is a subterm of the match, so the search is structural.
-  armAns : {ι κ : Idx} (P : Proc) (qs : List Proc) → ArmAns (Answerρ ι κ P) qs
-  armAns _ [] = aa-nil
-  armAns {ι} {κ} P (r ∷ qs) = aa-cons (decideρ ι κ P r) (armAns P qs)
+  armsR : (ls rs : List FEnv) (σ τ : Idx) (L : Proc) (qs : List PArm) →
+    ArmAns (λ S → Answerρ σ τ (substN ls L) S) (substArmsN rs qs)
 
-  armFirst : {ι κ : Idx} (P : Proc) (qs : List Proc) → ArmAns (λ R → Answerρ ι κ R P) qs
-  armFirst _ [] = aa-nil
-  armFirst {ι} {κ} P (r ∷ qs) = aa-cons (decideρ ι κ r P) (armFirst P qs)
+  armsL : (ls rs : List FEnv) (σ τ : Idx) (R : Proc) (qs : List PArm) →
+    ArmAns (λ S → Answerρ σ τ S (substN rs R)) (substArmsN ls qs)
+
+  meetN ls rs _ _ done done rewrite subNDone ls | subNDone rs = yes done-done
+  meetN ls rs _ _ done stop rewrite subNDone ls | subNStop rs = no (λ ())
+  meetN ls rs _ _ done (put A v P) rewrite subNDone ls | subNPut rs v P = no (λ ())
+  meetN ls rs _ _ done (get A x P) rewrite subNDone ls | subNGet rs A x P = no (λ ())
+  meetN ls rs _ _ done (pick0 P) rewrite subNDone ls | subNPick0 rs P = no (λ ())
+  meetN ls rs _ _ done (pick1 P) rewrite subNDone ls | subNPick1 rs P = no (λ ())
+  meetN ls rs _ _ done (cover P Q) rewrite subNDone ls | subNCover rs P Q = no (λ ())
+  meetN ls rs _ _ done (iget x P Q) rewrite subNDone ls | subNIget rs x P Q = no (λ ())
+  meetN ls rs _ _ done (mget A x ps) rewrite subNDone ls | subNMget rs A x ps = no (λ ())
+
+  meetN ls rs _ _ stop done rewrite subNStop ls | subNDone rs = no (λ ())
+  meetN ls rs _ _ stop stop rewrite subNStop ls | subNStop rs = yes stop-stop
+  meetN ls rs _ _ stop (put A v P) rewrite subNStop ls | subNPut rs v P = no (λ ())
+  meetN ls rs _ _ stop (get A x P) rewrite subNStop ls | subNGet rs A x P = no (λ ())
+  meetN ls rs _ _ stop (pick0 P) rewrite subNStop ls | subNPick0 rs P = no (λ ())
+  meetN ls rs _ _ stop (pick1 P) rewrite subNStop ls | subNPick1 rs P = no (λ ())
+  meetN ls rs _ _ stop (cover P Q) rewrite subNStop ls | subNCover rs P Q = no (λ ())
+  meetN ls rs _ _ stop (iget x P Q) rewrite subNStop ls | subNIget rs x P Q = no (λ ())
+  meetN ls rs _ _ stop (mget A x ps) rewrite subNStop ls | subNMget rs A x ps = no (λ ())
+
+  meetN ls rs σ τ (put A v P) (get B x Q) rewrite subNPut ls v P | subNGet rs B x Q =
+    on-put-get (ty≟ (applyTy σ A) (applyTy τ B)) (sent? (substValN ls v))
+      (meetN ls (shadowN x rs) σ (ext x (substValN ls v) τ) P Q)
+  meetN ls rs σ τ (put A v P) (mget B x ps) rewrite subNPut ls v P | subNMget rs B x ps =
+    concludePut (substArmsN (shadowN x rs) ps)
+      (armsR ls (shadowN x rs) σ (ext x (substValN ls v) τ) P ps)
+  meetN ls rs _ _ (put A v P) done rewrite subNPut ls v P | subNDone rs = no (λ ())
+  meetN ls rs _ _ (put A v P) stop rewrite subNPut ls v P | subNStop rs = no (λ ())
+  meetN ls rs _ _ (put A v P) (put B w Q) rewrite subNPut ls v P | subNPut rs w Q = no (λ ())
+  meetN ls rs _ _ (put A v P) (pick0 Q) rewrite subNPut ls v P | subNPick0 rs Q = no (λ ())
+  meetN ls rs _ _ (put A v P) (pick1 Q) rewrite subNPut ls v P | subNPick1 rs Q = no (λ ())
+  meetN ls rs _ _ (put A v P) (cover Q R) rewrite subNPut ls v P | subNCover rs Q R = no (λ ())
+  meetN ls rs σ τ (put bit v P) (iget x Q R) rewrite subNPut ls v P | subNIget rs x Q R =
+    finishPutBit (substValN ls v)
+      (meetN ls (shadowN x rs) σ (ext x (lit b0) τ) P Q)
+      (meetN ls (shadowN x rs) σ (ext x (lit b1) τ) P R)
+  meetN ls rs _ _ (put nat v P) (iget x Q R) rewrite subNPut ls v P | subNIget rs x Q R = no (λ ())
+  meetN ls rs _ _ (put unit v P) (iget x Q R) rewrite subNPut ls v P | subNIget rs x Q R = no (λ ())
+  meetN ls rs _ _ (put (pair A B) v P) (iget x Q R) rewrite subNPut ls v P | subNIget rs x Q R = no (λ ())
+  meetN ls rs _ _ (put (rec fs) v P) (iget x Q R) rewrite subNPut ls v P | subNIget rs x Q R = no (λ ())
+  meetN ls rs _ _ (put (vec A e) v P) (iget x Q R) rewrite subNPut ls v P | subNIget rs x Q R = no (λ ())
+  meetN ls rs _ _ (put (dat d as) v P) (iget x Q R) rewrite subNPut ls v P | subNIget rs x Q R = no (λ ())
+
+  meetN ls rs σ τ (get A x P) (put B v Q) rewrite subNGet ls A x P | subNPut rs v Q =
+    on-get-put (ty≟ (applyTy σ A) (applyTy τ B)) (sent? (substValN rs v))
+      (meetN (shadowN x ls) rs (ext x (substValN rs v) σ) τ P Q)
+  meetN ls rs _ _ (get A x P) done rewrite subNGet ls A x P | subNDone rs = no (λ ())
+  meetN ls rs _ _ (get A x P) stop rewrite subNGet ls A x P | subNStop rs = no (λ ())
+  meetN ls rs _ _ (get A x P) (get B y Q) rewrite subNGet ls A x P | subNGet rs B y Q = no (λ ())
+  meetN ls rs _ _ (get A x P) (pick0 Q) rewrite subNGet ls A x P | subNPick0 rs Q = no (λ ())
+  meetN ls rs _ _ (get A x P) (pick1 Q) rewrite subNGet ls A x P | subNPick1 rs Q = no (λ ())
+  meetN ls rs _ _ (get A x P) (cover Q R) rewrite subNGet ls A x P | subNCover rs Q R = no (λ ())
+  meetN ls rs _ _ (get A x P) (iget y Q R) rewrite subNGet ls A x P | subNIget rs y Q R = no (λ ())
+  meetN ls rs _ _ (get A x P) (mget B y ps) rewrite subNGet ls A x P | subNMget rs B y ps = no (λ ())
+
+  meetN ls rs σ τ (pick0 P) (cover Q R) rewrite subNPick0 ls P | subNCover rs Q R =
+    pick0-yes (meetN ls rs σ τ P Q)
+  meetN ls rs _ _ (pick0 P) done rewrite subNPick0 ls P | subNDone rs = no (λ ())
+  meetN ls rs _ _ (pick0 P) stop rewrite subNPick0 ls P | subNStop rs = no (λ ())
+  meetN ls rs _ _ (pick0 P) (put A v Q) rewrite subNPick0 ls P | subNPut rs v Q = no (λ ())
+  meetN ls rs _ _ (pick0 P) (get A x Q) rewrite subNPick0 ls P | subNGet rs A x Q = no (λ ())
+  meetN ls rs _ _ (pick0 P) (pick0 Q) rewrite subNPick0 ls P | subNPick0 rs Q = no (λ ())
+  meetN ls rs _ _ (pick0 P) (pick1 Q) rewrite subNPick0 ls P | subNPick1 rs Q = no (λ ())
+  meetN ls rs _ _ (pick0 P) (iget x Q R) rewrite subNPick0 ls P | subNIget rs x Q R = no (λ ())
+  meetN ls rs _ _ (pick0 P) (mget A x ps) rewrite subNPick0 ls P | subNMget rs A x ps = no (λ ())
+
+  meetN ls rs σ τ (pick1 P) (cover Q R) rewrite subNPick1 ls P | subNCover rs Q R =
+    pick1-yes (meetN ls rs σ τ P R)
+  meetN ls rs _ _ (pick1 P) done rewrite subNPick1 ls P | subNDone rs = no (λ ())
+  meetN ls rs _ _ (pick1 P) stop rewrite subNPick1 ls P | subNStop rs = no (λ ())
+  meetN ls rs _ _ (pick1 P) (put A v Q) rewrite subNPick1 ls P | subNPut rs v Q = no (λ ())
+  meetN ls rs _ _ (pick1 P) (get A x Q) rewrite subNPick1 ls P | subNGet rs A x Q = no (λ ())
+  meetN ls rs _ _ (pick1 P) (pick0 Q) rewrite subNPick1 ls P | subNPick0 rs Q = no (λ ())
+  meetN ls rs _ _ (pick1 P) (pick1 Q) rewrite subNPick1 ls P | subNPick1 rs Q = no (λ ())
+  meetN ls rs _ _ (pick1 P) (iget x Q R) rewrite subNPick1 ls P | subNIget rs x Q R = no (λ ())
+  meetN ls rs _ _ (pick1 P) (mget A x ps) rewrite subNPick1 ls P | subNMget rs A x ps = no (λ ())
+
+  meetN ls rs σ τ (cover P Q) (pick0 R) rewrite subNCover ls P Q | subNPick0 rs R =
+    cover0-yes (meetN ls rs σ τ P R)
+  meetN ls rs σ τ (cover P Q) (pick1 R) rewrite subNCover ls P Q | subNPick1 rs R =
+    cover1-yes (meetN ls rs σ τ Q R)
+  meetN ls rs _ _ (cover P Q) done rewrite subNCover ls P Q | subNDone rs = no (λ ())
+  meetN ls rs _ _ (cover P Q) stop rewrite subNCover ls P Q | subNStop rs = no (λ ())
+  meetN ls rs _ _ (cover P Q) (put A v R) rewrite subNCover ls P Q | subNPut rs v R = no (λ ())
+  meetN ls rs _ _ (cover P Q) (get A x R) rewrite subNCover ls P Q | subNGet rs A x R = no (λ ())
+  meetN ls rs _ _ (cover P Q) (cover R S) rewrite subNCover ls P Q | subNCover rs R S = no (λ ())
+  meetN ls rs _ _ (cover P Q) (iget x R S) rewrite subNCover ls P Q | subNIget rs x R S = no (λ ())
+  meetN ls rs _ _ (cover P Q) (mget A x ps) rewrite subNCover ls P Q | subNMget rs A x ps = no (λ ())
+
+  meetN ls rs σ τ (iget x P Q) (put bit v R) rewrite subNIget ls x P Q | subNPut rs v R =
+    finishIgetBit (substValN rs v)
+      (meetN (shadowN x ls) rs (ext x (lit b0) σ) τ P R)
+      (meetN (shadowN x ls) rs (ext x (lit b1) σ) τ Q R)
+  meetN ls rs _ _ (iget x P Q) (put nat v R) rewrite subNIget ls x P Q | subNPut rs v R = no (λ ())
+  meetN ls rs _ _ (iget x P Q) (put unit v R) rewrite subNIget ls x P Q | subNPut rs v R = no (λ ())
+  meetN ls rs _ _ (iget x P Q) (put (pair A B) v R) rewrite subNIget ls x P Q | subNPut rs v R = no (λ ())
+  meetN ls rs _ _ (iget x P Q) (put (rec fs) v R) rewrite subNIget ls x P Q | subNPut rs v R = no (λ ())
+  meetN ls rs _ _ (iget x P Q) (put (vec A e) v R) rewrite subNIget ls x P Q | subNPut rs v R = no (λ ())
+  meetN ls rs _ _ (iget x P Q) (put (dat d as) v R) rewrite subNIget ls x P Q | subNPut rs v R = no (λ ())
+  meetN ls rs _ _ (iget x P Q) done rewrite subNIget ls x P Q | subNDone rs = no (λ ())
+  meetN ls rs _ _ (iget x P Q) stop rewrite subNIget ls x P Q | subNStop rs = no (λ ())
+  meetN ls rs _ _ (iget x P Q) (get A y R) rewrite subNIget ls x P Q | subNGet rs A y R = no (λ ())
+  meetN ls rs _ _ (iget x P Q) (pick0 R) rewrite subNIget ls x P Q | subNPick0 rs R = no (λ ())
+  meetN ls rs _ _ (iget x P Q) (pick1 R) rewrite subNIget ls x P Q | subNPick1 rs R = no (λ ())
+  meetN ls rs _ _ (iget x P Q) (cover R S) rewrite subNIget ls x P Q | subNCover rs R S = no (λ ())
+  meetN ls rs _ _ (iget x P Q) (iget y R S) rewrite subNIget ls x P Q | subNIget rs y R S = no (λ ())
+  meetN ls rs _ _ (iget x P Q) (mget A y ps) rewrite subNIget ls x P Q | subNMget rs A y ps = no (λ ())
+
+  meetN ls rs σ τ (mget A x ps) (put B v P) rewrite subNMget ls A x ps | subNPut rs v P =
+    concludeMget (substArmsN (shadowN x ls) ps)
+      (armsL (shadowN x ls) rs (ext x (substValN rs v) σ) τ P ps)
+  meetN ls rs _ _ (mget A x ps) done rewrite subNMget ls A x ps | subNDone rs = no (λ ())
+  meetN ls rs _ _ (mget A x ps) stop rewrite subNMget ls A x ps | subNStop rs = no (λ ())
+  meetN ls rs _ _ (mget A x ps) (get B y Q) rewrite subNMget ls A x ps | subNGet rs B y Q = no (λ ())
+  meetN ls rs _ _ (mget A x ps) (pick0 Q) rewrite subNMget ls A x ps | subNPick0 rs Q = no (λ ())
+  meetN ls rs _ _ (mget A x ps) (pick1 Q) rewrite subNMget ls A x ps | subNPick1 rs Q = no (λ ())
+  meetN ls rs _ _ (mget A x ps) (cover Q R) rewrite subNMget ls A x ps | subNCover rs Q R = no (λ ())
+  meetN ls rs _ _ (mget A x ps) (iget y Q R) rewrite subNMget ls A x ps | subNIget rs y Q R = no (λ ())
+  meetN ls rs _ _ (mget A x ps) (mget B y qs) rewrite subNMget ls A x ps | subNMget rs B y qs = no (λ ())
+
+  armsR _ _ _ _ _ [] = aa-nil
+  armsR ls rs σ τ L (bare p ∷ qs) =
+    aa-bare (meetN ls rs σ τ L p) (armsR ls rs σ τ L qs)
+  armsR ls rs σ τ L (named _ xs p ∷ qs) =
+    aa-named (λ e → meetN ls (e ∷ shadowAll xs rs) σ τ L p)
+             (armsR ls rs σ τ L qs)
+
+  armsL _ _ _ _ _ [] = aa-nil
+  armsL ls rs σ τ R (bare p ∷ qs) =
+    aa-bare (meetN ls rs σ τ p R) (armsL ls rs σ τ R qs)
+  armsL ls rs σ τ R (named _ xs p ∷ qs) =
+    aa-named (λ e → meetN (e ∷ shadowAll xs ls) rs σ τ p R)
+             (armsL ls rs σ τ R qs)
+
+decideρ : (σ τ : Idx) (P Q : Proc) → Answerρ σ τ P Q
+decideρ σ τ P Q = meetN [] [] σ τ P Q
 
 decide : (P Q : Proc) → Answer P Q
 decide P Q = decideρ none none P Q
@@ -767,7 +1059,7 @@ eff-channel =
 
 -- `effective` computes `just true`, so the meeting takes the second arm.
 maybeSplit : Proc
-maybeSplit = mget maybeBool "m" (stop ∷ done ∷ [])
+maybeSplit = mget maybeBool "m" (bare stop ∷ bare done ∷ [])
 
 maybeSplit-ok : Conforms [] maybeSplit (recv maybeBool end)
 maybeSplit-ok =
@@ -833,21 +1125,21 @@ just-arm = put-mget refl refl refl done-done
 just-arm-decides : decide (put maybeNat (lit just0) done) optTaker ≡ yes just-arm
 just-arm-decides = refl
 
-not-short : ¬ Meets (put bit (lit b0) done) (mget bit "b" (done ∷ []))
+not-short : ¬ Meets (put bit (lit b0) done) (mget bit "b" (bare done ∷ []))
 not-short (put-mget _ _ () _)
 
-not-var-arm : ¬ Meets (put bit (var "b") done) (mget bit "b" (done ∷ done ∷ []))
+not-var-arm : ¬ Meets (put bit (var "b") done) (mget bit "b" (bare done ∷ bare done ∷ []))
 not-var-arm (put-mget _ _ () _)
 
-not-nat-arm : ¬ Meets (put nat (lit zero) done) (mget nat "n" (done ∷ done ∷ []))
+not-nat-arm : ¬ Meets (put nat (lit zero) done) (mget nat "n" (bare done ∷ bare done ∷ []))
 not-nat-arm (put-mget _ _ () _)
 
-not-bad-arm : ¬ Meets (put boolTy badCall done) (mget boolTy "b" (done ∷ done ∷ []))
+not-bad-arm : ¬ Meets (put boolTy badCall done) (mget boolTy "b" (bare done ∷ bare done ∷ []))
 not-bad-arm (put-mget _ () _ _)
 
 -- The arms differ, so the selected constructor is the arm that meets.
 boolSplit : Proc
-boolSplit = mget boolTy "b" (done ∷ stop ∷ [])
+boolSplit = mget boolTy "b" (bare done ∷ bare stop ∷ [])
 
 false-split : Meets (put boolTy (lit falseV) stop) boolSplit
 false-split = put-mget refl refl refl stop-stop
@@ -856,7 +1148,7 @@ false-split-decides : decide (put boolTy (lit falseV) stop) boolSplit ≡ yes fa
 false-split-decides = refl
 
 optSplit : Proc
-optSplit = mget maybeNat "m" (stop ∷ done ∷ [])
+optSplit = mget maybeNat "m" (bare stop ∷ bare done ∷ [])
 
 nothing-split : Meets (put maybeNat (lit nothingV) stop) optSplit
 nothing-split = put-mget refl refl refl stop-stop
@@ -869,6 +1161,48 @@ just-split = put-mget refl refl refl done-done
 
 just-split-decides : decide (put maybeNat (lit just0) done) optSplit ≡ yes just-split
 just-split-decides = refl
+
+------------------------------------------------------------------------
+-- A named arm reads the fields of the value it received. `just true`
+-- meets the arm that sends `grant true`. Forwarding the field sends
+-- that `Bool`. `cons 0 []` meets the arm that sends the tail `[]`.
+------------------------------------------------------------------------
+
+fieldSender : Proc
+fieldSender = put maybeBool (lit justTrue) (get boolTy "k" done)
+
+field-meet : Meets fieldSender fieldReply
+field-meet = put-mget refl refl refl (get-put refl refl done-done)
+
+field-meet-decides : decide fieldSender fieldReply ≡ yes field-meet
+field-meet-decides = refl
+
+field-meet-swap : decide fieldReply fieldSender ≡ yes (meets-sym field-meet)
+field-meet-swap = refl
+
+fwd-meet : Meets fieldSender fwdField
+fwd-meet = put-mget refl refl refl (get-put refl refl done-done)
+
+fwd-meet-decides : decide fieldSender fwdField ≡ yes fwd-meet
+fwd-meet-decides = refl
+
+nothingSender : Proc
+nothingSender = put maybeBool (lit nothingB) (get boolTy "k" done)
+
+nothing-meet : Meets nothingSender fieldReply
+nothing-meet = put-mget refl refl refl (get-put refl refl done-done)
+
+nothing-meet-decides : decide nothingSender fieldReply ≡ yes nothing-meet
+nothing-meet-decides = refl
+
+tailSender : Proc
+tailSender = put listNat (lit consV) (get listNat "ys" done)
+
+tail-meet : Meets tailSender tailPass
+tail-meet = put-mget refl refl refl (get-put refl refl done-done)
+
+tail-meet-decides : decide tailSender tailPass ≡ yes tail-meet
+tail-meet-decides = refl
 
 ------------------------------------------------------------------------
 -- A named session opens to its body. The meeting is the meeting of

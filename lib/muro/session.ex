@@ -94,11 +94,164 @@ defmodule Muro.Session do
   def answer(val, ty, ctx, book) when is_list(book), do: answer(val, ty, ctx, prepare(book))
 
   def answer(val, ty, ctx, %{decls: _, runs: _} = book) do
-    case reduce(val, ctx, book) do
-      {:error, _} = err -> err
-      {:ok, v} -> fits(v, ty, ctx, book)
+    cond do
+      # A run applied to a bound field is checked by the declared type.
+      # The field is not known until the meeting. A constructor of the
+      # value a `get` bound, such as `box n`, stays on the path below.
+      match?({:con, _, _}, val) and run_apply(val, book) != nil and mentions_field?(val, ctx) ->
+        typed_call(val, ty, ctx, book)
+
+      # A bound field sent as itself is the value-binding check below.
+      # A constructor of that field is not a value of the fragment.
+      mentions_field?(val, ctx) and not match?({:var, _}, val) ->
+        {:error, "outside the computed fragment"}
+
+      true ->
+        case reduce(val, ctx, book) do
+          {:error, _} = err -> err
+          {:ok, v} -> fits(v, ty, ctx, book)
+        end
     end
   end
+
+  # `call-ty`. The run is in scope and earlier than this check, its body
+  # stays in the computed fragment, the codomain is the payload, and each
+  # argument is a literal or a bound name of the parameter's type.
+  defp typed_call({:con, name, args} = val, ty, ctx, book) do
+    defs = run_defs(book)
+
+    case Enum.find_index(defs, &(&1.name == cname(name))) do
+      nil ->
+        {:error, "outside the computed fragment"}
+
+      i ->
+        defn = Enum.at(defs, i)
+        prefix = Enum.take(defs, i)
+        {doms, cod} = pi_chain(defn.type, [])
+
+        cond do
+          length(doms) != length(args) ->
+            {:error, "outside the computed fragment: partial application"}
+
+          true ->
+            case drop_lams(defn.body, length(args)) do
+              :error ->
+                {:error, "outside the computed fragment: partial application"}
+
+              {:ok, core} ->
+                cond do
+                  calls_out?(core, prefix, defs) ->
+                    {:error, run_cycle(cname(name), core)}
+
+                  head = outside_fragment(core) ->
+                    {:error, "outside the computed fragment: #{head}"}
+
+                  true ->
+                    case result_ty(cod, book) do
+                      {:ok, ^ty} ->
+                        args_typed(args, doms, ctx, book)
+
+                      _ ->
+                        {:error, inhabit(val, ty)}
+                    end
+                end
+            end
+        end
+    end
+  end
+
+  defp args_typed([], [], _ctx, _book), do: :yes
+
+  defp args_typed([arg | args], [dom | doms], ctx, book) do
+    case result_ty(dom, book) do
+      {:ok, expected} ->
+        case decide_arg(arg, expected, ctx, book) do
+          :ok -> args_typed(args, doms, ctx, book)
+          {:error, _} = err -> err
+        end
+
+      :error ->
+        {:error, "outside the computed fragment"}
+    end
+  end
+
+  defp decide_arg({:var, name}, expected, ctx, book) do
+    case Map.fetch(ctx, name) do
+      {:ok, ^expected} ->
+        :ok
+
+      {:ok, _} ->
+        {:error, inhabit({:var, name}, expected)}
+
+      :error ->
+        if literal_arg?({:var, name}, ctx, book) do
+          literal_decided({:var, name}, expected, ctx, book)
+        else
+          if run?(book, cname(name)) do
+            {:error, "argument is not a value"}
+          else
+            {:error, "unbound variable #{name}"}
+          end
+        end
+    end
+  end
+
+  defp decide_arg(arg, expected, ctx, book) do
+    if literal_arg?(arg, ctx, book) do
+      literal_decided(arg, expected, ctx, book)
+    else
+      {:error, "argument is not a value"}
+    end
+  end
+
+  defp literal_decided(arg, expected, ctx, book) do
+    case answer(arg, expected, ctx, book) do
+      :yes -> :ok
+      :no -> {:error, inhabit(arg, expected)}
+      {:error, msg} -> {:error, msg}
+    end
+  end
+
+  defp literal_arg?({:nat, n}, _ctx, _book) when is_integer(n) and n >= 0, do: true
+  defp literal_arg?(bit, _ctx, _book) when bit in [:b0, :b1, :tt], do: true
+
+  defp literal_arg?({:tup, a, b}, ctx, book),
+    do: literal_arg?(a, ctx, book) and literal_arg?(b, ctx, book)
+
+  defp literal_arg?({:rec, fields}, ctx, book) when is_list(fields) do
+    Enum.all?(fields, fn {_name, val} -> literal_arg?(val, ctx, book) end)
+  end
+
+  defp literal_arg?({:rep, ix, elem}, ctx, book) do
+    literal_arg?(ix, ctx, book) and literal_arg?(elem, ctx, book)
+  end
+
+  defp literal_arg?({:con, name, args}, ctx, book) do
+    not run?(book, name) and Enum.all?(args, &literal_arg?(&1, ctx, book))
+  end
+
+  defp literal_arg?({:var, name}, ctx, book) do
+    not Map.has_key?(ctx, name) and nullary_name?(book, name)
+  end
+
+  defp literal_arg?(_, _, _), do: false
+
+  # A field mark is the name a received constructor bound. A `get` clears it.
+  defp mentions_field?({:var, name}, ctx), do: Map.get(ctx, {:field, name}) == true
+  defp mentions_field?({:con, _, args}, ctx), do: Enum.any?(args, &mentions_field?(&1, ctx))
+  defp mentions_field?({:tup, a, b}, ctx), do: mentions_field?(a, ctx) or mentions_field?(b, ctx)
+
+  defp mentions_field?({:rec, fields}, ctx) when is_list(fields) do
+    Enum.any?(fields, fn {_name, val} -> mentions_field?(val, ctx) end)
+  end
+
+  defp mentions_field?({:rep, ix, elem}, ctx) do
+    mentions_field?(ix, ctx) or mentions_field?(elem, ctx)
+  end
+
+  defp mentions_field?(_, _), do: false
+
+  defp inhabit(val, ty), do: "computed value #{show_val(val)} does not inhabit #{show_pay(ty)}"
 
   @doc false
   def form(val, ctx, book) when is_list(book), do: form(val, ctx, prepare(book))
@@ -124,32 +277,104 @@ defmodule Muro.Session do
   @doc false
   def arm(ty, val, arms, book) when is_list(book), do: arm(ty, val, arms, prepare(book))
 
+  # A positional arm is that process. A named arm is that process after
+  # the value's fields replace its binders. A bare arm is not arity-checked.
   def arm(ty, val, arms, book) do
     val = canon(val, book)
 
-    case {ty, val, arms} do
-      {:bit, :b0, [p, _]} ->
-        {:ok, p}
+    case {ty, val} do
+      {:bit, :b0} ->
+        take_indexed(arms, 0, "b0", [])
 
-      {:bit, :b1, [_, q]} ->
-        {:ok, q}
+      {:bit, :b1} ->
+        take_indexed(arms, 1, "b1", [])
 
-      {{:dat, dname, _}, {:con, c, _}, _} ->
+      {{:dat, dname, _}, {:con, c, fields}} ->
         case Enum.find_index(ctor_names(book, dname), &(&1 == cname(c))) do
-          i when is_integer(i) ->
-            case Enum.at(arms, i) do
-              nil -> :error
-              p -> {:ok, p}
-            end
-
-          _ ->
-            :error
+          i when is_integer(i) -> take_indexed(arms, i, cname(c), fields)
+          _ -> :error
         end
 
       _ ->
         :error
     end
   end
+
+  @doc false
+  def arm_body({:arm, _, _, p}), do: p
+  def arm_body(p), do: p
+
+  defp take_indexed(arms, i, expected, fields) do
+    case Enum.at(arms, i) do
+      nil -> :error
+      arm -> take_arm(arm, expected, fields)
+    end
+  end
+
+  defp take_arm({:arm, ctor, binders, body}, expected, fields)
+       when is_binary(ctor) and is_list(binders) and is_list(fields) do
+    cond do
+      ctor != expected -> :error
+      length(binders) != length(fields) -> :error
+      true -> {:ok, subst_fields(binders, fields, body)}
+    end
+  end
+
+  defp take_arm(proc, _expected, _fields), do: {:ok, proc}
+
+  # Last binder wins, as with a nested `get`.
+  defp subst_fields(binders, fields, body) do
+    subst_p(body, Map.new(Enum.zip(binders, fields)))
+  end
+
+  defp subst_p({:put, ty, val, p}, env), do: {:put, ty, subst_v(val, env), subst_p(p, env)}
+
+  defp subst_p({:get, ty, name, p}, env) do
+    {:get, ty, name, subst_p(p, Map.delete(env, name))}
+  end
+
+  defp subst_p({:pick0, p}, env), do: {:pick0, subst_p(p, env)}
+  defp subst_p({:pick1, p}, env), do: {:pick1, subst_p(p, env)}
+  defp subst_p({:cover, p, q}, env), do: {:cover, subst_p(p, env), subst_p(q, env)}
+
+  defp subst_p({:iget, name, p, q}, env) do
+    env1 = Map.delete(env, name)
+    {:iget, name, subst_p(p, env1), subst_p(q, env1)}
+  end
+
+  defp subst_p({:match, name, arms}, env) do
+    env1 = Map.delete(env, name)
+    {:match, name, Enum.map(arms, &subst_arm(&1, env1))}
+  end
+
+  defp subst_p({:rec, name, body}, env), do: {:rec, name, subst_p(body, env)}
+  defp subst_p({:call, name}, _env), do: {:call, name}
+  defp subst_p(:done, _env), do: :done
+  defp subst_p(:stop, _env), do: :stop
+
+  defp subst_arm({:arm, c, xs, p}, env) do
+    env1 = Enum.reduce(xs, env, &Map.delete(&2, &1))
+    {:arm, c, xs, subst_p(p, env1)}
+  end
+
+  defp subst_arm(p, env), do: subst_p(p, env)
+
+  defp subst_v({:var, name}, env) do
+    case Map.fetch(env, name) do
+      {:ok, val} -> val
+      :error -> {:var, name}
+    end
+  end
+
+  defp subst_v({:con, name, args}, env), do: {:con, name, Enum.map(args, &subst_v(&1, env))}
+  defp subst_v({:tup, a, b}, env), do: {:tup, subst_v(a, env), subst_v(b, env)}
+
+  defp subst_v({:rec, fields}, env) when is_list(fields) do
+    {:rec, Enum.map(fields, fn {name, val} -> {name, subst_v(val, env)} end)}
+  end
+
+  defp subst_v({:rep, ix, elem}, env), do: {:rep, subst_v(ix, env), subst_v(elem, env)}
+  defp subst_v(val, _env), do: val
 
   @doc """
   Constructor field templates for the declarations that are payloads.
@@ -176,9 +401,12 @@ defmodule Muro.Session do
   defp skel_go({:pick1, p}), do: {:choose, :b1, skel_go(p)}
   defp skel_go({:cover, p, q}), do: {:offer, skel_go(p), skel_go(q)}
   defp skel_go({:iget, name, p, q}), do: {:index, name, skel_go(p), skel_go(q)}
-  defp skel_go({:match, _name, arms}), do: {:pick, Enum.map(arms, &skel_go/1)}
+  defp skel_go({:match, _name, arms}), do: {:pick, Enum.map(arms, &skel_arm/1)}
   defp skel_go({:rec, name, body}), do: {:loop, name, skel_go(body)}
   defp skel_go({:call, name}), do: {:jump, name}
+
+  defp skel_arm({:arm, c, xs, p}), do: {:arm, c, xs, skel_go(p)}
+  defp skel_arm(p), do: skel_go(p)
 
   defp carry_go(:done, _book, _ctx), do: :finish
   defp carry_go(:stop, _book, _ctx), do: :leave
@@ -204,11 +432,18 @@ defmodule Muro.Session do
   end
 
   defp carry_go({:match, _name, arms}, book, ctx) do
-    {:pick, Enum.map(arms, &carry_go(&1, book, ctx))}
+    {:pick, Enum.map(arms, &carry_arm(&1, book, ctx))}
   end
 
   defp carry_go({:rec, name, body}, book, ctx), do: {:loop, name, carry_go(body, book, ctx)}
   defp carry_go({:call, name}, _book, _ctx), do: {:jump, name}
+
+  defp carry_arm({:arm, c, xs, p}, book, ctx) do
+    ctx1 = Enum.reduce(xs, ctx, &carry_bind(&2, &1))
+    {:arm, c, xs, carry_go(p, book, ctx1)}
+  end
+
+  defp carry_arm(p, book, ctx), do: carry_go(p, book, ctx)
 
   defp carry_bind(ctx, :_), do: ctx
   defp carry_bind(ctx, name), do: Map.put(ctx, name, true)
@@ -235,13 +470,19 @@ defmodule Muro.Session do
   defp resolve_val({:con, name, args}, book, ctx) do
     args = Enum.map(args, &resolve_val(&1, book, ctx))
 
-    if run?(book, name) and Enum.all?(args, &closed?(&1, ctx, book)) do
-      case eval_call(name, args, book) do
-        {:ok, v} when v != :miss -> v
-        _ -> {:con, cname(name), args}
-      end
-    else
-      {:con, cname(name), args}
+    cond do
+      run?(book, name) and Enum.all?(args, &closed?(&1, ctx, book)) ->
+        case eval_call(name, args, book) do
+          {:ok, v} when v != :miss -> v
+          _ -> {:con, cname(name), args}
+        end
+
+      # An open field stays a variable. The server binds it on receive.
+      run?(book, name) and Enum.any?(args, &has_var?/1) ->
+        {:run, cname(name), args}
+
+      true ->
+        {:con, cname(name), args}
     end
   end
 
@@ -259,6 +500,18 @@ defmodule Muro.Session do
 
   defp resolve_val(val, _book, _ctx), do: val
 
+  defp has_var?({:var, _}), do: true
+  defp has_var?({:run, _, _}), do: true
+  defp has_var?({:con, _, args}), do: Enum.any?(args, &has_var?/1)
+  defp has_var?({:tup, a, b}), do: has_var?(a) or has_var?(b)
+
+  defp has_var?({:rec, fields}) when is_list(fields) do
+    Enum.any?(fields, fn {_name, val} -> has_var?(val) end)
+  end
+
+  defp has_var?({:rep, ix, elem}), do: has_var?(ix) or has_var?(elem)
+  defp has_var?(_), do: false
+
   @doc """
   The value as the OTP message carries it. A nat is an integer. A
   pair is a two-element tuple. A record is a map whose keys are the
@@ -269,6 +522,11 @@ defmodule Muro.Session do
   def runtime(bit) when bit in [:b0, :b1], do: bit
   def runtime(:tt), do: :tt
   def runtime({:var, name}), do: {:var, name}
+
+  def runtime({:run, name, args}) when is_binary(name) and is_list(args) do
+    {:run, name, Enum.map(args, &runtime/1)}
+  end
+
   def runtime({:tup, a, b}), do: {runtime(a), runtime(b)}
 
   def runtime({:rec, fields}) when is_list(fields) do
@@ -346,7 +604,7 @@ defmodule Muro.Session do
   defp finishes_all([]), do: :yes
 
   defp finishes_all([p | ps]) do
-    case finishes_go(p) do
+    case finishes_go(arm_body(p)) do
       :yes -> finishes_all(ps)
       :no -> :no
     end
@@ -776,7 +1034,8 @@ defmodule Muro.Session do
                 fuel,
                 book,
                 step_down(here_span(), 0),
-                0
+                0,
+                expected
               )
             )
 
@@ -985,7 +1244,20 @@ defmodule Muro.Session do
         {:error, step_at(span), @cover}
 
       true ->
-        arms_go(arms, proto, bind_ctx(ctx, name, ty), idx, penv, senv, seen, fuel, book, span, 0)
+        arms_go(
+          arms,
+          proto,
+          bind_ctx(ctx, name, ty),
+          ty,
+          idx,
+          penv,
+          senv,
+          seen,
+          fuel,
+          book,
+          span,
+          0
+        )
     end
   end
 
@@ -993,14 +1265,93 @@ defmodule Muro.Session do
     descend(p, proto, bind_ctx(ctx, name, ty), idx, penv, senv, seen, fuel - 1, book, span)
   end
 
-  defp arms_go([], _proto, _ctx, _idx, _penv, _senv, _seen, _fuel, _book, _span, _i), do: :ok
+  defp arms_go([], _proto, _ctx, _ty, _idx, _penv, _senv, _seen, _fuel, _book, _span, _i),
+    do: :ok
 
-  defp arms_go([p | ps], proto, ctx, idx, penv, senv, seen, fuel, book, span, i) do
-    case descend(p, proto, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(span, i)) do
-      :ok -> arms_go(ps, proto, ctx, idx, penv, senv, seen, fuel, book, span, i + 1)
-      other -> other
+  defp arms_go([arm | ps], proto, ctx, ty, idx, penv, senv, seen, fuel, book, span, i) do
+    case open_arm(arm, ctx, ty, i, book) do
+      {:ok, p, ctx1} ->
+        case descend(p, proto, ctx1, idx, penv, senv, seen, fuel - 1, book, step_down(span, i)) do
+          :ok ->
+            arms_go(ps, proto, ctx, ty, idx, penv, senv, seen, fuel, book, span, i + 1)
+
+          other ->
+            other
+        end
+
+      {:error, msg} ->
+        {:error, step_at(step_down(span, i)), msg}
     end
   end
+
+  # A positional arm keeps the received name. A named arm binds the fields
+  # of the constructor at this index, innermost last, over that name.
+  defp open_arm({:arm, ctor, binders, body}, ctx, ty, i, book)
+       when is_binary(ctor) and is_list(binders) do
+    case field_tys(ty, i, book) do
+      {:ok, expected, fields} ->
+        cond do
+          ctor != expected -> {:error, @cover}
+          length(binders) != length(fields) -> {:error, "wrong arity"}
+          true -> {:ok, body, bind_fields(ctx, binders, fields)}
+        end
+
+      :error ->
+        {:error, @cover}
+    end
+  end
+
+  defp open_arm(proc, ctx, _ty, _i, _book), do: {:ok, proc, ctx}
+
+  defp bind_fields(ctx, binders, tys) do
+    Enum.reduce(Enum.zip(binders, tys), ctx, fn {name, fty}, acc ->
+      bind_field(acc, name, fty)
+    end)
+  end
+
+  # The field mark is what `answer` reads. A later `get` of the same name
+  # clears it, so the innermost binding wins and a received nat stays a nat.
+  defp bind_field(ctx, name, ty) do
+    ctx
+    |> bind_ctx(name, ty)
+    |> Map.put({:field, name}, true)
+  end
+
+  defp field_tys(:bit, 0, _book), do: {:ok, "b0", []}
+  defp field_tys(:bit, 1, _book), do: {:ok, "b1", []}
+
+  defp field_tys({:dat, dname, _args} = ty, i, book) do
+    case Enum.at(ctor_names(book, dname), i) do
+      nil ->
+        :error
+
+      ctor ->
+        case fields_of_ctor(ty, ctor, book) do
+          {:ok, fields} -> {:ok, ctor, fields}
+          :error -> :error
+        end
+    end
+  end
+
+  defp field_tys(_, _, _), do: :error
+
+  defp fields_of_ctor(:bit, "b0", _book), do: {:ok, []}
+  defp fields_of_ctor(:bit, "b1", _book), do: {:ok, []}
+
+  defp fields_of_ctor({:dat, dname, args}, ctor, book) do
+    case find_decl(book, dname) do
+      nil ->
+        :error
+
+      d ->
+        case ctor_fields(d, ctor) do
+          {:ok, tmpls} -> {:ok, Enum.map(tmpls, &inst_field(&1, dname, args))}
+          :error -> :error
+        end
+    end
+  end
+
+  defp fields_of_ctor(_, _, _), do: :error
 
   # The binding is the `rec` term. A jump unfolds that term. The stack
   # is only the unwind, so a cycle here has no action under it.
@@ -1081,7 +1432,7 @@ defmodule Muro.Session do
   defp free_proc({:iget, _, p, q}), do: MapSet.union(free_proc(p), free_proc(q))
 
   defp free_proc({:match, _, arms}),
-    do: Enum.reduce(arms, MapSet.new(), &MapSet.union(free_proc(&1), &2))
+    do: Enum.reduce(arms, MapSet.new(), &MapSet.union(free_proc(arm_body(&1)), &2))
 
   defp free_proc({:call, name}), do: MapSet.new([name])
   defp free_proc({:rec, name, body}), do: MapSet.delete(free_proc(body), name)
@@ -1119,6 +1470,7 @@ defmodule Muro.Session do
   defp bind_ctx(ctx, name, ty) do
     ctx
     |> Map.put(name, ty)
+    |> Map.delete({:field, name})
     |> Map.update({:bound, name}, 1, &(&1 + 1))
   end
 
@@ -1390,6 +1742,10 @@ defmodule Muro.Session do
 
   defp one_arg(_), do: :error
 
+  # Parameter types, outermost first, then the codomain.
+  defp pi_chain({:pi, _, domain, _, cod}, acc), do: pi_chain(cod, acc ++ [domain])
+  defp pi_chain(cod, acc), do: {acc, cod}
+
   defp run_cycle(fname, body) do
     if call_of?(body, fname),
       do: "run definition calls itself",
@@ -1613,7 +1969,7 @@ defmodule Muro.Session do
             {:error, "match does not cover the received value"}
 
           true ->
-            {:ok, Enum.zip(ps, Enum.map(arms, fn {_, s} -> s end))}
+            {:ok, Enum.map(Enum.zip(ps, arms), fn {p, {c, s}} -> {p, c, s} end)}
         end
 
       :error ->
@@ -1650,7 +2006,7 @@ defmodule Muro.Session do
 
           tag ->
             case fetch_arm(tag, arms, "the run does not decide an arm") do
-              {:ok, proto} -> zip_run(fname, ty, cs, arms, ps, book, [{p, proto} | acc])
+              {:ok, proto} -> zip_run(fname, ty, cs, arms, ps, book, [{p, c, proto} | acc])
               {:error, msg} -> {:error, msg}
             end
         end
@@ -1666,16 +2022,62 @@ defmodule Muro.Session do
   defp probe_of(:bit, "b1"), do: :b1
   defp probe_of(_, c), do: {:con, c, []}
 
-  defp arms_paired([], _ctx, _idx, _penv, _senv, _seen, _fuel, _book, _span, _i), do: :ok
+  defp arms_paired([], _ctx, _idx, _penv, _senv, _seen, _fuel, _book, _span, _i, _ty),
+    do: :ok
 
-  defp arms_paired([pair | pairs], ctx, idx, penv, senv, seen, fuel, book, span, i) do
-    {p, proto} = pair
+  defp arms_paired([pair | pairs], ctx, idx, penv, senv, seen, fuel, book, span, i, ty) do
+    {p, ctor, proto} = pair
 
-    case descend(p, proto, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(span, i)) do
-      :ok -> arms_paired(pairs, ctx, idx, penv, senv, seen, fuel, book, span, i + 1)
-      other -> other
+    case open_named(p, ctor, ty, ctx, book) do
+      {:ok, body, ctx1} ->
+        case descend(
+               body,
+               proto,
+               ctx1,
+               idx,
+               penv,
+               senv,
+               seen,
+               fuel - 1,
+               book,
+               step_down(span, i)
+             ) do
+          :ok ->
+            arms_paired(pairs, ctx, idx, penv, senv, seen, fuel, book, span, i + 1, ty)
+
+          other ->
+            other
+        end
+
+      {:error, msg} ->
+        {:error, step_at(step_down(span, i)), msg}
     end
   end
+
+  # Fields come from the payload constructor. The protocol arm is the
+  # result of the case, and the probe still carries no fields.
+  defp open_named({:arm, ctor, binders, body}, expected, ty, ctx, book)
+       when is_binary(ctor) and is_list(binders) do
+    cond do
+      ctor != expected ->
+        {:error, @cover}
+
+      true ->
+        case fields_of_ctor(ty, expected, book) do
+          {:ok, fields} ->
+            if length(binders) == length(fields) do
+              {:ok, body, bind_fields(ctx, binders, fields)}
+            else
+              {:error, "wrong arity"}
+            end
+
+          :error ->
+            {:error, @cover}
+        end
+    end
+  end
+
+  defp open_named(proc, _expected, _ty, ctx, _book), do: {:ok, proc, ctx}
 
   defp self_of(ctx) do
     Enum.find_value(ctx, fn
@@ -1780,8 +2182,8 @@ defmodule Muro.Session do
   end
 
   defp proc_ok({:match, _, arms}, ctx) do
-    Enum.reduce_while(arms, :ok, fn p, :ok ->
-      case proc_ok(p, ctx) do
+    Enum.reduce_while(arms, :ok, fn arm, :ok ->
+      case proc_ok(arm_body(arm), ctx) do
         :ok -> {:cont, :ok}
         err -> {:halt, err}
       end
@@ -2186,11 +2588,23 @@ defmodule Muro.Session do
   end
 
   def show_proc({:match, name, arms}) do
-    "match #{name} #{Enum.map_join(arms, " ", &paren_proc/1)}"
+    if Enum.any?(arms, &match?({:arm, _, _, _}, &1)) do
+      "match #{name} #{Enum.map_join(arms, " ", &show_arm/1)}"
+    else
+      "match #{name} #{Enum.map_join(arms, " ", &paren_proc/1)}"
+    end
   end
 
   def show_proc({:rec, name, body}), do: "rec #{name}. #{show_proc(body)}"
   def show_proc({:call, name}), do: "#{name}"
+
+  defp show_arm({:arm, c, [], p}), do: "| #{c} => #{paren_proc(p)}"
+
+  defp show_arm({:arm, c, xs, p}) do
+    "| #{c} #{Enum.map_join(xs, " ", &to_string/1)} => #{paren_proc(p)}"
+  end
+
+  defp show_arm(p), do: paren_proc(p)
 
   defp show_val({:var, name}), do: "#{name}"
   defp show_val({:con, name, []}), do: "#{name}"
@@ -2324,6 +2738,55 @@ defmodule Muro.Session do
   defp prepare(book) when is_list(book) do
     %{decls: data_entries(book), runs: eval_book(book), entries: book}
   end
+
+  @doc false
+  def run_fragment(book, names) when is_list(names) do
+    prepared = if is_list(book), do: prepare(book), else: book
+    defs = run_defs(prepared)
+    keep = close_names(names, defs, MapSet.new())
+    runs = Enum.filter(defs, &MapSet.member?(keep, &1.name))
+    decls = if runs == [], do: [], else: decls(prepared)
+    %{decls: decls, runs: runs}
+  end
+
+  defp close_names([], _defs, acc), do: acc
+
+  defp close_names([name | rest], defs, acc) do
+    if MapSet.member?(acc, name) do
+      close_names(rest, defs, acc)
+    else
+      case Enum.find_index(defs, &(&1.name == name)) do
+        nil ->
+          close_names(rest, defs, acc)
+
+        i ->
+          defn = Enum.at(defs, i)
+          prefix = defs |> Enum.take(i) |> MapSet.new(& &1.name)
+
+          more =
+            defn.body
+            |> called_defs()
+            |> Enum.filter(&MapSet.member?(prefix, &1))
+
+          close_names(more ++ rest, defs, MapSet.put(acc, name))
+      end
+    end
+  end
+
+  defp called_defs({:def, name}) when is_binary(name), do: [name]
+
+  defp called_defs({:app, _, _} = term) do
+    case spine_term(term, []) do
+      {:ok, name, args} -> [name | Enum.flat_map(args, &called_defs/1)]
+      :error -> []
+    end
+  end
+
+  defp called_defs(term) when is_tuple(term),
+    do: term |> Tuple.to_list() |> Enum.flat_map(&called_defs/1)
+
+  defp called_defs(term) when is_list(term), do: Enum.flat_map(term, &called_defs/1)
+  defp called_defs(_), do: []
 
   defp decls(%{decls: decls}), do: decls
   defp decls(book) when is_list(book), do: book
@@ -2862,6 +3325,16 @@ defmodule Muro.Session do
     if named_term?(ty) or named_term?(body), do: Muro.Ast.def_to_db(d), else: {:ok, d}
   end
 
+  @doc false
+  def run_name?(book, name) when is_list(book), do: run_name?(prepare(book), name)
+  def run_name?(%{decls: _, runs: _} = book, name), do: run?(book, cname(name))
+
+  @doc false
+  def nullary_ctor_name?(book, name) when is_list(book),
+    do: nullary_ctor_name?(prepare(book), name)
+
+  def nullary_ctor_name?(%{decls: _, runs: _} = book, name), do: nullary_name?(book, name)
+
   defp run?(book, name) do
     Enum.any?(runs(book), &(&1.name == name and &1.mode == :run))
   end
@@ -2979,6 +3452,115 @@ defmodule Muro.Session do
   end
 
   defp closed?(_, _, _), do: false
+
+  @doc false
+  def eval_run(name, runtime_args, book) when is_list(book) do
+    eval_run(name, runtime_args, prepare(book))
+  end
+
+  def eval_run(name, runtime_args, %{decls: _, runs: _} = book) when is_list(runtime_args) do
+    defs = run_defs(book)
+
+    case Enum.find_index(defs, &(&1.name == name)) do
+      nil ->
+        {:run, name, runtime_args}
+
+      i ->
+        {doms, _cod} = pi_chain(Enum.at(defs, i).type, [])
+
+        if length(doms) != length(runtime_args) do
+          {:run, name, runtime_args}
+        else
+          case read_args(doms, runtime_args, book) do
+            {:ok, args} ->
+              case eval_call(name, args, book) do
+                {:ok, v} when v != :miss -> runtime(v)
+                _ -> {:run, name, runtime_args}
+              end
+
+            :error ->
+              {:run, name, runtime_args}
+          end
+        end
+    end
+  end
+
+  defp read_args(doms, values, book) do
+    Enum.reduce_while(Enum.zip(doms, values), {:ok, []}, fn {dom, value}, {:ok, acc} ->
+      case result_ty(dom, book) do
+        {:ok, ty} ->
+          case read_pay(ty, value, book) do
+            {:ok, arg} -> {:cont, {:ok, acc ++ [arg]}}
+            :error -> {:halt, :error}
+          end
+
+        :error ->
+          {:halt, :error}
+      end
+    end)
+  end
+
+  # The parameter type chooses the reading. A two-element tuple is a pair
+  # or a one-field constructor, and those are different types.
+  defp read_pay(:nat, n, _book) when is_integer(n) and n >= 0, do: {:ok, {:nat, n}}
+  defp read_pay(:bit, bit, _book) when bit in [:b0, :b1], do: {:ok, bit}
+  defp read_pay(:unit, :tt, _book), do: {:ok, :tt}
+
+  defp read_pay({:pair, a, b}, {x, y}, book) do
+    with {:ok, x} <- read_pay(a, x, book),
+         {:ok, y} <- read_pay(b, y, book) do
+      {:ok, {:tup, x, y}}
+    end
+  end
+
+  defp read_pay({:dat, dname, _args}, value, book) when is_atom(value) do
+    case find_decl(book, dname) do
+      nil ->
+        :error
+
+      d ->
+        case ctor_fields(d, Atom.to_string(value)) do
+          {:ok, []} -> {:ok, {:con, Atom.to_string(value), []}}
+          _ -> :error
+        end
+    end
+  end
+
+  defp read_pay({:dat, dname, args}, value, book)
+       when is_tuple(value) and tuple_size(value) >= 1 do
+    [tag | fields] = Tuple.to_list(value)
+
+    if is_atom(tag) do
+      label = Atom.to_string(tag)
+
+      case find_decl(book, dname) do
+        nil ->
+          :error
+
+        d ->
+          case ctor_fields(d, label) do
+            {:ok, tmpls} when length(tmpls) == length(fields) ->
+              read_ctor_fields(label, tmpls, fields, dname, args, book, [])
+
+            _ ->
+              :error
+          end
+      end
+    else
+      :error
+    end
+  end
+
+  defp read_pay(_, _, _), do: :error
+
+  defp read_ctor_fields(tag, [], [], _dname, _args, _book, acc), do: {:ok, {:con, tag, acc}}
+
+  defp read_ctor_fields(tag, [tmpl | tmpls], [value | values], dname, args, book, acc) do
+    case read_pay(inst_field(tmpl, dname, args), value, book) do
+      {:ok, field} -> read_ctor_fields(tag, tmpls, values, dname, args, book, acc ++ [field])
+      :error -> :error
+    end
+  end
 
   defp eval_call(name, args, book) do
     defs = run_defs(book)

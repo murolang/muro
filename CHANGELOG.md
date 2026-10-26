@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.16.70
+
+A match on the value a `get` just bound may bind the fields of its constructor.
+
+```
+conform reply : ask :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => put false done
+      | just b => put (grant b) done)
+```
+
+`b` has the field's type. `put b` sends it. `put (grant b)` is checked by the type `grant` declares, and the meeting evaluates `grant` on the field that arrived. The same check is the asynchronous meeting. A field does not choose a protocol. The positional match, one process per constructor, stays.
+
+A binder count other than the field count is `wrong arity`. An unbound name is `unbound variable`. `put (just b)` is `outside the computed fragment`. `put (grant (just b))` is `argument is not a value`. A match on another name is `match does not cover the received value`. A run that reads a field to choose an arm is `the run does not decide an arm`.
+
+### Manual
+
+- Sessions: a received match binds the constructor's fields.
+- Limits: named arms, a field sent as itself or as the argument of a run, and the meeting of that field are accepted. Wrong arity, an unbound field, a field read to choose a protocol, a match not on the received name, and a put argument outside the fragment stay refused.
+- Grammar and Examples: the surface form.
+
+### Examples
+
+- `field-bindings.muro`: a computed field, a field sent as itself, a list tail, and a refused arity.
+
+### Emit
+
+- The OTP image destructures the constructor and binds the field. A computed put sends the value the run returns. Evidence is erased. Other emitters are unchanged.
+
+### Package
+
+- Version 0.16.70.
+
 ## 0.16.69
 
 A meeting may name a buffer. The two processes then meet across one queue in each direction.
