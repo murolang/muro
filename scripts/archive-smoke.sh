@@ -238,6 +238,48 @@ cp "$root/examples/half_ok.muro" "$host/half_ok.muro"
     echo "mix muro.emit compiled the host" >&2
     exit 1
   fi
+
+  cat > muro.exs <<EOF
+[
+  muro: "${version}",
+  modules: [
+    {"half_ok.muro", Host.HalfOk, "lib/host/half_ok.ex"}
+  ]
+]
+EOF
+
+  set +e
+  host_gen=$(mix muro.gen 2>&1)
+  host_gen_status=$?
+  set -e
+  printf '%s\n' "$host_gen"
+  if [ "$host_gen_status" -ne 0 ]; then
+    echo "host mix muro.gen failed" >&2
+    exit 1
+  fi
+  have "$host_gen" "written lib/host/half_ok.ex" "host mix muro.gen"
+  test -s lib/host/half_ok.ex
+  grep -q "defmodule Host.HalfOk do" lib/host/half_ok.ex
+
+  set +e
+  host_gen_check=$(mix muro.gen --check 2>&1)
+  host_gen_check_status=$?
+  set -e
+  printf '%s\n' "$host_gen_check"
+  if [ "$host_gen_check_status" -ne 0 ] || [ "$host_gen_check" != "ok" ]; then
+    echo "host mix muro.gen --check did not print ok" >&2
+    exit 1
+  fi
+  case "${host_gen}${host_gen_check}" in
+    *"host application started"*)
+      echo "mix muro.gen started the host" >&2
+      exit 1
+      ;;
+  esac
+  if [ -e _build ]; then
+    echo "mix muro.gen compiled the host" >&2
+    exit 1
+  fi
 )
 
 # From an empty directory: init, generate, check, then the two drift failures.
