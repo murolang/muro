@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.16.71
+
+A match on a received pair or record binds its components.
+
+```
+conform pair-reply : pair-ping :=
+  get (p : Nat × Bit)
+    (match p
+      | (n, b) => put n done)
+
+conform rec-reply : rec-ping :=
+  get (r : { x : Nat, y : Bit })
+    (match r
+      | { x = a, y = c } => put c done)
+```
+
+`n` has the first component's type and `b` the second. `a` has `x`'s type and `c` has `y`'s. `put n` sends the component. `put (grant a)` is checked by the type `grant` declares, and the meeting evaluates `grant` on the component that arrived. The same check is the asynchronous meeting. A component does not choose a protocol. The positional match and a match on a declared data type stay.
+
+A missing field is `missing field`. An extra field is `extra field`. A duplicate field is `duplicate field`. A field out of order is `field out of order`. A binder count other than two is `wrong arity`. A constructor arm on a pair is `constructor arm on a pair`, and on a record is `constructor arm on a record`. A nested pattern is `a pattern is one level`. A nat, a vector, or unit as the scrutinee stays `match does not cover the received value`. A case on a pair, a record, or a component stays refused. A run that reads a component to choose an arm is `the run does not decide an arm`.
+
+### Manual
+
+- Sessions: a received pair and a received record bind their components.
+- Limits: one product arm on a received pair or record is accepted. A case on a pair, a record, or a component, a nested pattern, and a nat, vector, or unit scrutinee stay refused.
+
+### Examples
+
+- `pair-bindings.muro`: a pair and a record, both meeting orders, a `%1` endpoint, a computed component, a `rec` loop, and an asynchronous meeting at buffer 1.
+- `bad_pair_bindings.muro`: the refused arms.
+
+### Emit
+
+- The OTP image destructures the received tuple `{a, b}` and the received map by the keys fixed in the type. A computed put sends the value the run returns. Evidence is erased. Other emitters are unchanged.
+
+### Package
+
+- Version 0.16.71.
+
 ## 0.16.70
 
 A match on the value a `get` just bound may bind the fields of its constructor.

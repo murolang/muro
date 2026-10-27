@@ -680,6 +680,61 @@ defmodule Muro.EmitOtpTest do
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
   end
 
+  test "a product arm is the OTP receive, and the run is evaluated there" do
+    assert {:ok, src} = Emit.Otp.render(checked!("examples/pair-bindings.muro"), "pair-bindings")
+
+    assert src =~ "{:prod, {:pair, [:n, :b]}, {:say, {:var, :n}, :finish}}"
+    assert src =~ "{:prod, {:pair, [:a, :b]}, {:say, {:run, \"grant\", [var: :a]}, :finish}}"
+    assert src =~ "{:prod, {:rec, [{\"x\", :a}, {\"y\", :c}]}, {:say, {:var, :c}, :finish}}"
+    assert src =~ "defp pick_arm({:pair, _, _}, {a, b}, [{:prod, {:pair, [x, y]}, next}])"
+    assert src =~ "defp pick_arm({:rec, fields}, map, [{:prod, {:rec, bs}, next}])"
+    refute src =~ "≤"
+
+    Code.compile_string(src)
+
+    for fun <- [:pair_wire, :grant_wire, :rec_wire, :lin_wire, :shade_wire, :wrap_wire, :box_wire] do
+      {:ok, left, right, left_ref, right_ref} = pair(fun)
+      assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
+      assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
+    end
+
+    {:ok, pid, ref} = pair_one(:PairReply)
+    send(pid, {:muro, self(), {1, :b1}})
+    assert_receive {:muro, ^pid, 1}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = pair_one(:GrantReply)
+    send(pid, {:muro, self(), {true, :b0}})
+    assert_receive {:muro, ^pid, true}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = pair_one(:RecReply)
+    send(pid, {:muro, self(), %{"x" => 1, "y" => :b0}})
+    assert_receive {:muro, ^pid, :b0}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = pair_one(:LinReply)
+    send(pid, {:muro, self(), {2, :b1}})
+    assert_receive {:muro, ^pid, 2}
+    assert_receive {:muro, ^pid, 2}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = pair_one(:ShadeReply)
+    send(pid, {:muro, self(), {0, :b0}})
+    assert_receive {:muro, ^pid, :b0}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = pair_one(:WrapReply)
+    send(pid, {:muro, self(), {{1, :b1}, :b0}})
+    assert_receive {:muro, ^pid, {1, :b1}}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = pair_one(:BoxReply)
+    send(pid, {:muro, self(), %{"x" => {1, :b1}, "y" => :b0}})
+    assert_receive {:muro, ^pid, {1, :b1}}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+  end
+
   defp start(name, peer \\ self()) do
     apply(Module.concat("PingOtp", name), :start, [peer])
   end
@@ -698,6 +753,14 @@ defmodule Muro.EmitOtpTest do
 
   defp field_one(name) do
     apply(Module.concat("FieldBindingsOtp", name), :start, [self()])
+  end
+
+  defp pair(fun) do
+    apply(Module.concat(["PairBindingsOtp"]), fun, [])
+  end
+
+  defp pair_one(name) do
+    apply(Module.concat("PairBindingsOtp", name), :start, [self()])
   end
 
   defp computed(fun) do

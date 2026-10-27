@@ -215,6 +215,46 @@ conform reply : ask :=
 
 `examples/computed.muro`
 
+A received pair has one arm. `| (a, b) =>` binds `a` at the first component's type and `b` at the second. The component is payload data, the same way a bound constructor field is: it may be sent more than once, it is never linear, and the innermost binding wins. `put a` sends the component. `put (grant a)` is checked by the type `grant` declares, and the meeting evaluates `grant` on the value that arrived. A component that is itself a pair or a record is bound whole.
+
+```muro
+session pair-ping := recv (Nat × Bit) (send Nat end)
+
+session pair-pong := dual pair-ping
+
+conform pair-reply : pair-ping :=
+  get (p : Nat × Bit)
+    (match p
+      | (n, b) => put n done)
+
+conform pair-ask : pair-pong := put (1, b1) (get (k : Nat) done)
+
+meet pair-wire : pair-reply with pair-ask
+```
+
+`(1, b1)` meets `pair-reply` as `1`. `b` is the bit, and it is not sent.
+
+A received record has one arm. `| { f1 = a1, ..., fk = ak } =>` names every field once, in the order the type writes them. Each binder has that field's type. The same rules apply: the component is payload data, `put` sends it, and `put (grant a)` is the run the field bindings already check.
+
+```muro
+session rec-ping := recv { x : Nat, y : Bit } (send Bit end)
+
+session rec-pong := dual rec-ping
+
+conform rec-reply : rec-ping :=
+  get (r : { x : Nat, y : Bit })
+    (match r
+      | { x = a, y = c } => put c done)
+
+conform rec-ask : rec-pong := put { x = 1, y = b0 } (get (k : Bit) done)
+
+meet rec-wire : rec-reply with rec-ask
+```
+
+`{ x = 1, y = b0 }` meets `rec-reply` as `b0`. A missing field, an extra field, a duplicate field, a field out of order, a binder count other than two, and a constructor arm on a pair or a record are refused. A pattern does not open a component that is itself a pair or a record.
+
+`examples/pair-bindings.muro`
+
 ## A protocol follows the received constructor
 
 The continuation of the value just exchanged may be one protocol per constructor. The payload is a bit or a declared data type. The arms are that declaration's constructors, in declaration order, and each arm is a protocol. The dual writes `send` and dualises each arm. A receiver covers every constructor. Each process arm conforms to the protocol arm of that constructor. A sender of a literal, or of a value a `run` computes, is checked only on the arm that value selects.

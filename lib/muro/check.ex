@@ -2269,7 +2269,14 @@ defmodule Muro.Check do
     check_proc_vars(body, ctx1, book, span)
   end
 
+  defp check_arm_vars({:prod, _, _} = arm, ctx, book, span) do
+    ctx1 = Enum.reduce(Muro.Session.arm_binders(arm), ctx, &MapSet.put(&2, &1))
+    check_proc_vars(body_of(arm), ctx1, book, span)
+  end
+
   defp check_arm_vars(arm, ctx, book, span), do: check_proc_vars(arm, ctx, book, span)
+
+  defp body_of({:prod, _, body}), do: body
 
   # A bound name is in scope. An unbound name is in scope when it is a
   # constructor. Conformance then decides whether that constructor

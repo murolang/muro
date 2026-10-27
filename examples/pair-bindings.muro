@@ -1,0 +1,130 @@
+-- pair-bindings.muro — a match on a received pair or record binds its components.
+-- A component is payload data. A computed put is checked by type and evaluated at the meeting.
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+def grant : run Π (b : Bool) → Bool :=
+  λ (b : Bool) →
+    match b motive (λ _ → Bool)
+      | true => true
+      | false => false
+
+session pair-ping := recv (Nat × Bit) (send Nat end)
+
+session pair-pong := dual pair-ping
+
+conform pair-reply : pair-ping :=
+  get (p : Nat × Bit)
+    (match p
+      | (n, b) => put n done)
+
+conform pair-ask : pair-pong := put (1, b1) (get (k : Nat) done)
+
+meet pair-wire : pair-reply with pair-ask
+
+meet pair-swap : pair-ask with pair-reply
+
+meet pair-async : pair-reply with pair-ask buffer 1
+
+session grant-ping := recv (Bool × Bit) (send Bool end)
+
+session grant-pong := dual grant-ping
+
+conform grant-reply : grant-ping :=
+  get (p : Bool × Bit)
+    (match p
+      | (a, b) => put (grant a) done)
+
+conform grant-ask : grant-pong := put (true, b0) (get (k : Bool) done)
+
+meet grant-wire : grant-reply with grant-ask
+
+meet grant-swap : grant-ask with grant-reply
+
+session rec-ping := recv { x : Nat, y : Bit } (send Bit end)
+
+session rec-pong := dual rec-ping
+
+conform rec-reply : rec-ping :=
+  get (r : { x : Nat, y : Bit })
+    (match r
+      | { x = a, y = c } => put c done)
+
+conform rec-ask : rec-pong := put { x = 1, y = b0 } (get (k : Bit) done)
+
+meet rec-wire : rec-reply with rec-ask
+
+meet rec-swap : rec-ask with rec-reply
+
+session %1 lin-ping := recv (Nat × Bit) (send Nat (send Nat end))
+
+session lin-pong := dual lin-ping
+
+conform lin-reply : lin-ping :=
+  get (p : Nat × Bit)
+    (match p
+      | (n, b) => put n (put n done))
+
+conform lin-ask : lin-pong := put (2, b1) (get (k : Nat) (get (m : Nat) done))
+
+meet lin-wire : lin-reply with lin-ask
+
+meet lin-swap : lin-ask with lin-reply
+
+session shade := recv (Nat × Bit) (send Bit end)
+
+session shade-back := dual shade
+
+conform shade-reply : shade :=
+  get (p : Nat × Bit)
+    (match p
+      | (n, n) => put n done)
+
+conform shade-ask : shade-back := put (0, b0) (get (k : Bit) done)
+
+meet shade-wire : shade-reply with shade-ask
+
+session wrap := recv ((Nat × Bit) × Bit) (send (Nat × Bit) end)
+
+session wrap-back := dual wrap
+
+conform wrap-reply : wrap :=
+  get (p : (Nat × Bit) × Bit)
+    (match p
+      | (q, b) => put q done)
+
+conform wrap-ask : wrap-back := put ((1, b1), b0) (get (k : Nat × Bit) done)
+
+meet wrap-wire : wrap-reply with wrap-ask
+
+session box := recv { x : Nat × Bit, y : Bit } (send (Nat × Bit) end)
+
+session box-back := dual box
+
+conform box-reply : box :=
+  get (r : { x : Nat × Bit, y : Bit })
+    (match r
+      | { x = a, y = c } => put a done)
+
+conform box-ask : box-back :=
+  put { x = (1, b1), y = b0 } (get (k : Nat × Bit) done)
+
+meet box-wire : box-reply with box-ask
+
+session loop-ping := rec X. recv (Nat × Bit) (send Nat X)
+
+session loop-pong := dual loop-ping
+
+conform loop-reply : loop-ping :=
+  rec X. get (p : Nat × Bit)
+    (match p
+      | (n, b) => put n X)
+
+conform loop-ask : loop-pong :=
+  rec Y. put (0, b0) (get (k : Nat) Y)
+
+meet loop-wire : loop-reply with loop-ask buffer 1
+
+meet loop-swap : loop-ask with loop-reply buffer 1

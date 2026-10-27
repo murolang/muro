@@ -876,6 +876,38 @@ defmodule Muro.SessionErrorTest do
     assert msg =~ "misses bound"
   end
 
+  test "a product arm is refused when it does not bind the received value" do
+    assert {:error, msg} = Muro.check_file("examples/bad_pair_bindings.muro")
+    assert msg =~ "short: wrong arity"
+    assert msg =~ "extra-binders: wrong arity"
+    assert msg =~ "ctor-pair: constructor arm on a pair"
+    assert msg =~ "ctor-rec: constructor arm on a record"
+    assert msg =~ "missing: missing field"
+    assert msg =~ "extra-field: extra field"
+    assert msg =~ "duplicate: duplicate field"
+    assert msg =~ "order: field out of order"
+    assert msg =~ "wrong-type: put b done does not conform to send Nat end"
+    assert msg =~ "natty: match does not cover the received value"
+    assert msg =~ "united: match does not cover the received value"
+    assert msg =~ "vectored: match does not cover the received value"
+    assert msg =~ "on-pair: a case is on a bit or a declared data type"
+    assert msg =~ "on-rec: a case is on a bit or a declared data type"
+    assert msg =~ "on-comp: a case is on the name just bound"
+    assert msg =~ "peek: the run does not decide an arm"
+    assert msg =~ "other: match does not cover the received value"
+    assert msg =~ "abandoned: linear channel abandoned"
+
+    assert {:error, nest} =
+             Parser.parse("conform x : p := get (p : Nat) (match p | (q, (a, b)) => done)\n")
+
+    assert nest =~ "a pattern is one level"
+
+    assert {:error, nest} =
+             Parser.parse("conform x : p := get (r : Nat) (match r | { x = (a, b) } => done)\n")
+
+    assert nest =~ "a pattern is one level"
+  end
+
   defp check(src) do
     assert {:ok, book} = Parser.parse(src)
     Check.check_sig(book)

@@ -25,9 +25,9 @@ open import Data.Bool.Base using (Bool; true; false)
 open import Data.Empty using (⊥; ⊥-elim)
 open import Data.Nat.Base using (_≤_; _+_)
 open import Data.Nat.Properties using (≤-trans; m≤m+n; m≤n+m)
-open import Data.Product using (Σ; _,_; proj₁)
+open import Data.Product using (Σ; _×_; _,_; proj₁)
 open import Data.List.Base using (List; []; _∷_)
-open import Data.Maybe.Base using (just; nothing)
+open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.String.Base using (String)
 open import Data.String.Properties using (_==_)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym)
@@ -36,17 +36,20 @@ open import Relation.Nullary.Decidable.Core using () renaming (yes to yes′; no
 open import Muro.Session using (Proc; done; stop; put; get; pick0; pick1; cover
   ; iget; mget; Val; ValExpr; Ty; Idx; Ctor; ctor; nthProc
   ; armOf; armExpr; sent; sent?; applyTy; ty≟; known; lit; b0; b1; con; ctorsOf
-  ; evalExpr; var; call
+  ; evalExpr; var; call; tup
   ; nat; unit; bit; none; bind
-  ; pair; rec; vec; dat
-  ; Spine; PArm; bare; named; openNamed; rawSpine; lenEnv; substProc
-  ; fieldReply; fwdField; tailPass)
+  ; pair; rec; vec; dat; Row; FEnv
+  ; Spine; PArm; bare; named; prod; pPair; pRec; openNamed; openPair; openRec
+  ; rawSpine; lenEnv; substProc
+  ; fieldReply; fwdField; tailPass
+  ; pairGrant; pairReply; noteReply)
 open import Muro.Async
 open import Muro.Meet using (ext; Meetsρ; done-done; stop-stop; put-get; get-put
   ; pick0-cover; pick1-cover; cover-pick0; cover-pick1
   ; iget-b0; iget-b1; b0-iget; b1-iget; put-mget; mget-put
   ; meets-sym; fieldSender; field-meet; fwd-meet
-  ; nothingSender; nothing-meet; tailSender; tail-meet)
+  ; nothingSender; nothing-meet; tailSender; tail-meet
+  ; pairSender; pair-meet; natSender; nat-meet; recSender; rec-meet)
 
 ------------------------------------------------------------------------
 -- One enabled step. The other side waits, so the class is that step
@@ -130,6 +133,30 @@ find-spec name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) R eq | false
   with find-spec name sp cs ps R eq
 ... | le , eqf rewrite eqf =
   ≤-trans le (m≤n+m (sizeArms ps) (size p)) , refl
+find-spec name sp (ctor n _ ∷ cs) (prod _ p ∷ ps) R eq with name == n
+find-spec name sp (ctor n _ ∷ cs) (prod _ p ∷ ps) R () | true
+find-spec name sp (ctor n _ ∷ cs) (prod _ p ∷ ps) R eq | false
+  with find-spec name sp cs ps R eq
+... | le , eqf rewrite eqf =
+  ≤-trans le (m≤n+m (sizeArms ps) (size p)) , refl
+
+-- `armPick` on a product arm is `pickArm` of the same environment
+-- `armOf` fills. The size is the stored process.
+specPair : ∀ {X Y} (a : Val X) (b : Val Y) (x y : String) (p R : Proc) →
+  armOf (pair X Y) (tup a b) (prod (pPair x y) p ∷ []) ≡ just R →
+  Σ (size R ≤ sizeArms (prod (pPair x y) p ∷ []))
+    (λ le → armPick (pair X Y) (tup a b) (prod (pPair x y) p ∷ []) ≡ just (R , le))
+specPair a b x y p R eq with openPair x y a b
+specPair a b x y p R () | nothing
+specPair a b x y p .(substProc e p) refl | just e = leSubst e p [] , refl
+
+specRec : ∀ {fs} (row : Row fs) (bs : List (String × String)) (p R : Proc) →
+  armOf (rec fs) (rec row) (prod (pRec bs) p ∷ []) ≡ just R →
+  Σ (size R ≤ sizeArms (prod (pRec bs) p ∷ []))
+    (λ le → armPick (rec fs) (rec row) (prod (pRec bs) p ∷ []) ≡ just (R , le))
+specRec row bs p R eq with openRec bs row
+specRec row bs p R () | nothing
+specRec row bs p .(substProc e p) refl | just e = leSubst e p [] , refl
 
 armPick-spec : ∀ {A} (u : Val A) (ps : List PArm) (R : Proc) →
                armOf A u ps ≡ just R →
@@ -142,17 +169,31 @@ armPick-spec b0 (bare P ∷ Q ∷ []) .P refl =
 armPick-spec b0 (named _ [] P ∷ Q ∷ []) .P refl =
   m≤m+n (size P) (sizeArms (Q ∷ [])) , refl
 armPick-spec b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) _ ()
+armPick-spec b0 (prod _ _ ∷ _ ∷ []) _ ()
 armPick-spec b1 [] _ ()
 armPick-spec b1 (_ ∷ []) _ ()
 armPick-spec b1 (_ ∷ _ ∷ _ ∷ _) _ ()
 armPick-spec b1 (A ∷ bare Q ∷ []) .Q refl = b1≤ A (bare Q) , refl
 armPick-spec b1 (A ∷ named c [] Q ∷ []) .Q refl = b1≤ A (named c [] Q) , refl
 armPick-spec b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) _ ()
+armPick-spec b1 (_ ∷ prod _ _ ∷ []) _ ()
 armPick-spec {nat} _ _ _ ()
 armPick-spec {unit} _ _ _ ()
-armPick-spec {pair _ _} _ _ _ ()
-armPick-spec {rec _} _ _ _ ()
 armPick-spec {vec _ _} _ _ _ ()
+armPick-spec {pair _ _} (tup a b) (prod (pPair x y) p ∷ []) R eq =
+  specPair a b x y p R eq
+armPick-spec {pair _ _} (tup _ _) (prod (pRec _) _ ∷ []) _ ()
+armPick-spec {pair _ _} (tup _ _) (bare _ ∷ []) _ ()
+armPick-spec {pair _ _} (tup _ _) (named _ _ _ ∷ []) _ ()
+armPick-spec {pair _ _} (tup _ _) [] _ ()
+armPick-spec {pair _ _} (tup _ _) (_ ∷ _ ∷ _) _ ()
+armPick-spec {rec _} (rec row) (prod (pRec bs) p ∷ []) R eq =
+  specRec row bs p R eq
+armPick-spec {rec _} (rec _) (prod (pPair _ _) _ ∷ []) _ ()
+armPick-spec {rec _} (rec _) (bare _ ∷ []) _ ()
+armPick-spec {rec _} (rec _) (named _ _ _ ∷ []) _ ()
+armPick-spec {rec _} (rec _) [] _ ()
+armPick-spec {rec _} (rec _) (_ ∷ _ ∷ _) _ ()
 armPick-spec {dat d _} (con c sp) ps R eq = find-spec c sp (ctorsOf d) ps R eq
 
 ------------------------------------------------------------------------
@@ -409,3 +450,17 @@ nothing-async = meets-async [] [] nothing-meet
 
 tail-async : Safe (mk k1 tailSender tailPass [] [] [] [] none none)
 tail-async = meets-async [] [] tail-meet
+
+-- A product arm meets asynchronously. The queued tuple or record
+-- fills the binders, and a run in the arm is the value it computes.
+pair-async : Safe (mk k1 pairSender pairGrant [] [] [] [] none none)
+pair-async = meets-async [] [] pair-meet
+
+pair-async-swap : Safe (mk k1 pairGrant pairSender [] [] [] [] none none)
+pair-async-swap = meets-async [] [] (meets-sym pair-meet)
+
+nat-async : Safe (mk k1 natSender pairReply [] [] [] [] none none)
+nat-async = meets-async [] [] nat-meet
+
+rec-async : Safe (mk k1 recSender noteReply [] [] [] [] none none)
+rec-async = meets-async [] [] rec-meet
