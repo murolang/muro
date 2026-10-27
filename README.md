@@ -16,17 +16,23 @@ The language book is [`manual/`](manual/index.md). That is what [muro-lang.dev](
 
 ## Install
 
-[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.16.72. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
+[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.16.73. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ```elixir
 def deps do
   [
-    {:muro, "~> 0.16.72"}
+    {:muro, "~> 0.16.73"}
   ]
 end
 ```
 
-A clone is for changing the kernel. A `.muro` file is checked with `mix muro.check` from a project that depends on the package.
+`nx`, `makeup`, and `elixir_make` are optional. A project that depends on muro does not fetch them. Checking a book and emitting Elixir do not load them.
+
+The archive installs `mix muro.check` and `mix muro.emit` in any directory, with or without a `mix.exs`. Once 0.16.73 is on Hex: `mix archive.install hex muro`. Until that release, from a checkout: `mix archive.build && mix archive.install muro-0.16.73.ez`. From GitHub, Mix fetches the default branch and builds the archive: `mix archive.install github murolang/muro`.
+
+If a project depends on muro and the archive is also installed, Mix uses the project's copy. `mix muro --version` prints the copy that ran.
+
+A clone is for changing the kernel. A `.muro` file is checked with `mix muro.check`. `mix muro.emit path.muro` prints the Elixir module.
 
 ---
 

@@ -40,12 +40,15 @@ defmodule Mix.Tasks.Muro.Emit do
   of the same name. A `read cross` calls the scheme its endpoint
   names. A `stay` emits no call. The payload stays on the session.
   The BEAM runs the call. The proof stops at the move.
+
+  A NIF (`--backend c` on an exported `Nat` run) needs `elixir_make`.
+  Without it, the task stops and names the dependency to add.
   """
 
   @switches [backend: :string, node: :string]
 
   def run(args) do
-    Mix.Task.run("app.start")
+    Mix.Tasks.Muro.ensure_started()
 
     {opts, paths, invalid} = OptionParser.parse(args, strict: @switches)
 

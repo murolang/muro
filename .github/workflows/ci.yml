@@ -45,6 +45,7 @@ jobs:
       - run: mix compile --warnings-as-errors
       - run: mix test
       - run: mix muro.check
+      - run: bash scripts/archive-smoke.sh
 
   agda:
     name: Agda 2.8.0

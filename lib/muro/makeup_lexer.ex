@@ -7,13 +7,14 @@ defmodule Muro.MakeupLexer do
   (the landing site, ExDoc) style the tags.
 
   Registered as the language name `"muro"` and the extension `"muro"` when
-  the Muro application starts.
+  the Muro application starts and Makeup is loaded.
   """
 
-  @behaviour Makeup.Lexer
+  if Code.ensure_loaded?(Makeup.Lexer) do
+    @behaviour Makeup.Lexer
+  end
 
-  @impl true
-  @spec lex(String.t(), list()) :: [Makeup.Lexer.Types.token()]
+  @spec lex(String.t(), list()) :: [{atom(), map(), iodata()}]
   def lex(source, opts \\ []) when is_binary(source) do
     source
     |> tokens()
@@ -21,12 +22,10 @@ defmodule Muro.MakeupLexer do
     |> match_groups(opts[:group_prefix] || "")
   end
 
-  @impl true
   def root(source) when is_binary(source) do
     {:ok, lex(source, []), "", %{}, {1, 1}, byte_size(source)}
   end
 
-  @impl true
   def root_element(source) when is_binary(source) do
     case Muro.Lexer.tokenize(source) do
       [] ->
@@ -39,10 +38,8 @@ defmodule Muro.MakeupLexer do
     end
   end
 
-  @impl true
   def postprocess(tokens, _opts), do: tokens
 
-  @impl true
   def match_groups(tokens, _group_prefix), do: tokens
 
   defp tokens(source) do

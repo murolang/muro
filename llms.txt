@@ -33,6 +33,7 @@ Nothing is inferred: there are no implicits, unification, metavariables or tacti
 
 - [murolang/muro](https://github.com/murolang/muro): Source, README, CI (Elixir tests and `make agda`).
 - [muro on Hex](https://hex.pm/packages/muro): The Mix package; check files with `mix muro.check`.
+- Archive: `mix muro.check` and `mix muro.emit` in any directory. Once 0.16.73 is on Hex, `mix archive.install hex muro`. Until then, from a checkout: `mix archive.build && mix archive.install muro-0.16.73.ez`. From GitHub: `mix archive.install github murolang/muro` (fetches the default branch and builds it). A project that depends on muro uses that copy; `mix muro --version` prints the copy that ran. `mix muro.emit path.muro` prints the Elixir module.
 
 ## Optional
 
