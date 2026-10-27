@@ -36,10 +36,13 @@ mix test
 mix muro.check                              # whole book
 mix muro.check path.muro                    # one file
 mix muro.check --fuel 20000 path.muro       # after "out of fuel"
+mix muro --version                          # the copy that ran
 make agda                                   # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-Success line: `All terms check. Evidence never becomes a run.`
+The archive installs those tasks in any directory. Once 0.16.73 is on Hex: `mix archive.install hex muro`. Until then, from a checkout: `mix archive.build && mix archive.install muro-0.16.73.ez`. From GitHub: `mix archive.install github murolang/muro`. If a project depends on muro and the archive is also installed, Mix uses the project's copy.
+
+Success from `mix muro.check`: a `Muro v…` line, then `All terms check. Evidence never becomes a run.`
 
 ## Emit
 

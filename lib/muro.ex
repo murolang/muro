@@ -32,6 +32,7 @@ defmodule Muro do
 
   An exported run whose live arguments and result are `Nat` is also a NIF.
   `elixir_make` builds `priv/<name>.so`, and `<name>.ex` loads it.
+  Without `elixir_make`, that NIF is refused before any file is written.
   """
   def emit_c(path, opts \\ []) do
     stem = Path.basename(path, ".muro")
@@ -39,6 +40,7 @@ defmodule Muro do
 
     with {:ok, book} <- checked_book(path, opts),
          {:ok, header, source, sigs} <- Emit.C.prepare(book, stem) do
+      Emit.Nif.ensure_make!(sigs)
       h = Path.join(dir, stem <> ".h")
       c = Path.join(dir, stem <> ".c")
       File.write!(h, header)

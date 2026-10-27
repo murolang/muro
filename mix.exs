@@ -4,7 +4,7 @@ defmodule Muro.MixProject do
   def project do
     [
       app: :muro,
-      version: "0.16.72",
+      version: "0.16.73",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -27,9 +27,9 @@ defmodule Muro.MixProject do
 
   defp deps do
     [
-      {:nx, "~> 0.9"},
-      {:makeup, "~> 1.2"},
-      {:elixir_make, "~> 0.10", runtime: false}
+      {:nx, "~> 0.9", optional: true},
+      {:makeup, "~> 1.2", optional: true},
+      {:elixir_make, "~> 0.10", optional: true, runtime: false}
     ]
   end
 

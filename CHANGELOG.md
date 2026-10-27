@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.16.73
+
+`mix muro.check` and `mix muro.emit` run from an installed archive, in a directory that has no Mix project.
+
+`nx`, `makeup`, and `elixir_make` are optional. Checking a book and emitting Elixir do not load them. The Makeup lexer is registered when Makeup is loaded. `--backend c` writes C. A NIF is built only when `elixir_make` is available. Without it, the task stops before it writes a file and names the dependency to add: `{:elixir_make, "~> 0.10", runtime: false}`.
+
+`mix muro --version` and `mix muro -v` print `Muro v` and the version from the application spec. `mix muro` with no arguments prints that line and the muro tasks. `mix muro.check` prints the same version line, then `All terms check. Evidence never becomes a run.` on success. A refusal prints the version line, then the errors.
+
+When a project depends on muro and the archive is also installed, Mix uses the project's copy. The version line is the copy that ran.
+
+### Manual
+
+- Start and For agents: the archive install, the precedence rule, and the NIF dependency.
+
+### Package
+
+- From a checkout: `mix archive.build && mix archive.install muro-0.16.73.ez`. From GitHub: `mix archive.install github murolang/muro`. Once this release is on Hex: `mix archive.install hex muro`.
+- CI builds the archive, installs it into a temporary `MIX_ARCHIVES`, and runs the tasks from an empty directory (`scripts/archive-smoke.sh`).
+- Version 0.16.73.
+
 ## 0.16.72
 
 A run may read a field of the received value, and that field chooses the protocol.

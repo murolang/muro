@@ -15,12 +15,18 @@ defmodule Mix.Tasks.Muro.Check do
   `Muro.Check.default_fuel/0`). Running out is reported as an error, not
   as a type error; raise the fuel and check again. Every definition is
   checked, and every error is reported, in book order.
+
+  The first line is the version that checked the book (`Muro v` and the
+  version from the application spec). On success the next line is
+  `All terms check. Evidence never becomes a run.` A refusal prints the
+  errors after that version line.
   """
 
   @switches [fuel: :integer]
 
   def run(args) do
-    Mix.Task.run("app.start")
+    Mix.Tasks.Muro.ensure_started()
+    Mix.shell().info("Muro v#{Mix.Tasks.Muro.version()}")
 
     {opts, paths, invalid} = OptionParser.parse(args, strict: @switches)
 

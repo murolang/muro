@@ -21,13 +21,22 @@ defmodule Muro.Emit.Nif do
   Write the NIF sources next to the generated C and build `priv/<stem>.so`.
 
   Returns the new paths. An empty list means the book has no Nat entry.
+  A Nat entry needs `elixir_make`. Without it, this raises `Mix.Error`
+  and writes nothing.
   """
   def build(dir, stem, sigs) when is_binary(dir) and is_binary(stem) and is_list(sigs) do
+    build(dir, stem, sigs, elixir_make_available?())
+  end
+
+  @doc false
+  def build(dir, stem, sigs, available?)
+      when is_binary(dir) and is_binary(stem) and is_list(sigs) and is_boolean(available?) do
     case Enum.filter(sigs, &nat_export?/1) do
       [] ->
         []
 
       exports ->
+        require_elixir_make!(available?)
         entries = elixir_names(exports)
         File.write!(Path.join(dir, stem <> "_nif.h"), header(stem))
         File.write!(Path.join(dir, stem <> "_nif.c"), source(stem, entries))
@@ -50,6 +59,38 @@ defmodule Muro.Emit.Nif do
           Path.join(dir, stem <> ".ex"),
           Path.join(dir, Path.join("priv", stem <> ".so"))
         ]
+    end
+  end
+
+  @doc false
+  def elixir_make_available? do
+    Code.ensure_loaded?(ElixirMake.Compiler) and
+      function_exported?(ElixirMake.Compiler, :make, 2)
+  end
+
+  @doc false
+  def ensure_make!(sigs, available? \\ elixir_make_available?()) when is_list(sigs) do
+    if Enum.any?(sigs, &nat_export?/1) do
+      require_elixir_make!(available?)
+    else
+      :ok
+    end
+  end
+
+  @doc false
+  def require_elixir_make!(available? \\ elixir_make_available?()) do
+    if available? do
+      :ok
+    else
+      Mix.raise("""
+      --backend c builds a NIF with elixir_make, which is not available.
+
+      Add this to the project deps:
+
+          {:elixir_make, "~> 0.10", runtime: false}
+
+      Or run inside a project that depends on muro.
+      """)
     end
   end
 
