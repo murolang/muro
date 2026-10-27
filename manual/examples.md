@@ -286,6 +286,30 @@ session gate :=
 
 See [Sessions](sessions.md#a-protocol-follows-the-received-constructor).
 
+## field-choice.muro
+
+A run may read a field of the received value, and that field chooses the protocol.
+
+```
+def late : run Π (m : Maybe Bool) → Bool :=
+  λ (m : Maybe Bool) →
+    match m motive (λ _ → Bool)
+      | nothing => false
+      | just b => b
+
+conform gate-server : gate :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put rst done
+          | false => done)
+```
+
+`late nothing` ends. `late (just true)` sends `rst`. `late (just false)` ends. `put (just true)`, `put (just false)`, and `put nothing` meet `gate-server` in both orders, and the same meetings check with `buffer 1`. `late-hdr` reads the `Frame` inside `Hdr`. The same split sits under `rec`, in a session call, on a parameter, after evidence, and on a `%1` endpoint. A nat, a wildcard arm, a pair or a record as the case payload, and a process that does not cover the split are refused; that book is `bad_field_choice.muro`.
+
+See [Sessions](sessions.md#a-protocol-follows-a-run-of-the-value).
+
 ## async-meetings.muro
 
 Two processes meet across a bounded queue in each direction.

@@ -13,8 +13,9 @@
 -- a receive when the value it computes inhabits the payload. A match
 -- on the received value meets the arm of that value. A named arm
 -- meets after the received fields replace its binders. A product arm
--- meets after the received components replace its binders. A value
--- the match does not cover has no derivation.
+-- meets after the received components replace its binders. A fork
+-- cases on one bound field and meets the arm that field selects.
+-- A value the match does not cover has no derivation.
 --
 -- The meeting is evidence. One end conforms to the protocol. The
 -- other conforms to the other end of that protocol. A run term has
@@ -27,18 +28,18 @@
 
 module Muro.Meet where
 
-open import Data.Bool.Base using (true; false)
+open import Data.Bool.Base using (Bool; true; false)
 open import Data.Empty using (⊥)
-open import Data.List.Base using (List; []; _∷_)
-open import Data.Product using (_×_)
+open import Data.List.Base using (List; []; _∷_; _++_)
+open import Data.Product using (_×_; Σ; _,_)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.String.Base using (String)
-open import Data.String.Properties using (_==_)
+open import Data.String.Properties using (_==_; _≟_)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl; sym; trans; cong; subst)
 open import Relation.Nullary.Decidable.Core using (Dec) renaming (yes to yes′; no to no′)
 
 open import Muro.Base using (Mode; evid; run)
-open import Muro.Session hiding (¬_; Seat; no-run; ping; pong; Answer; Answerρ; yes; no; decide; decideρ)
+open import Muro.Session hiding (¬_; Seat; no-run; ping; pong; Answer; Answerρ; yes; no; decide; decideρ; opened)
 open import Muro.Dual using (dual; grant; grant-ok)
 
 ¬_ : Set → Set
@@ -253,6 +254,8 @@ substArmsN es (named c xs p ∷ qs) =
   named c xs (substN (shadowAll xs es) p) ∷ substArmsN es qs
 substArmsN es (prod pat p ∷ qs) =
   prod pat (substN (shadowAll (patBinders pat) es) p) ∷ substArmsN es qs
+substArmsN es (fork c xs y qs ∷ ps) =
+  fork c xs y (substArmsN (shadowAll xs es) qs) ∷ substArmsN es ps
 
 ≡cons : {a b : PArm} → a ≡ b → {ps qs : List PArm} → ps ≡ qs → a ∷ ps ≡ b ∷ qs
 ≡cons refl refl = refl
@@ -269,12 +272,14 @@ armsId [] = refl
 armsId (bare _ ∷ ps) rewrite armsId ps = refl
 armsId (named _ xs _ ∷ ps) rewrite shadowsNil xs | armsId ps = refl
 armsId (prod pat _ ∷ ps) rewrite shadowsNil (patBinders pat) | armsId ps = refl
+armsId (fork _ xs _ qs ∷ ps) rewrite shadowsNil xs | armsId qs | armsId ps = refl
 
 armsIdN : (ps : List PArm) → substArmsN [] ps ≡ ps
 armsIdN [] = refl
 armsIdN (bare _ ∷ ps) rewrite armsIdN ps = refl
 armsIdN (named _ _ _ ∷ ps) rewrite armsIdN ps = refl
 armsIdN (prod _ _ ∷ ps) rewrite armsIdN ps = refl
+armsIdN (fork _ _ _ qs ∷ ps) rewrite armsIdN qs | armsIdN ps = refl
 
 pushArms : (e : FEnv) (es : List FEnv) (ps : List PArm) →
   substArms e (substArmsN es ps) ≡ substArmsN (e ∷ es) ps
@@ -292,6 +297,12 @@ pushArms e es (prod pat p ∷ ps) =
     {prod pat (substProc (shadows (patBinders pat) e) (substN (shadowAll (patBinders pat) es) p))}
     {prod pat (substN (shadowAll (patBinders pat) (e ∷ es)) p)}
     refl (pushArms e es ps)
+pushArms e es (fork c xs y qs ∷ ps) =
+  ≡cons
+    {fork c xs y (substArms (shadows xs e) (substArmsN (shadowAll xs es) qs))}
+    {fork c xs y (substArmsN (shadowAll xs (e ∷ es)) qs)}
+    (cong (fork c xs y) (pushArms (shadows xs e) (shadowAll xs es) qs))
+    (pushArms e es ps)
 
 subDone : (e : FEnv) → substProc e done ≡ done
 subDone [] = refl
@@ -382,6 +393,28 @@ subNMget (e ∷ es) A x ps rewrite subNMget es A x ps =
   trans (subMget e A x (substArmsN (shadowN x es) ps))
         (≡mget (pushArms (shadowF x e) (shadowN x es) ps))
 
+-- `pre` is applied before `es`. A concrete prefix reduces to `refl`.
+substN-++ : (pre es : List FEnv) (p : Proc) →
+  substN (pre ++ es) p ≡ substN pre (substN es p)
+substN-++ [] _ p = refl
+substN-++ (e ∷ pre) es p rewrite substN-++ pre es p = refl
+
+-- Every index is explicit. An implicit solved inside `armsPre` does
+-- not unify with the one the meeting goal needs.
+shiftPre : (σ τ : Idx) (ls : List FEnv) (L : Proc)
+           (pre es : List FEnv) (p : Proc) →
+  Answerρ σ τ (substN ls L) (substN (pre ++ es) p) →
+  Answerρ σ τ (substN ls L) (substN pre (substN es p))
+shiftPre σ τ ls L pre es p m =
+  subst (λ r → Answerρ σ τ (substN ls L) r) (substN-++ pre es p) m
+
+shiftPreL : (σ τ : Idx) (rs : List FEnv) (R : Proc)
+            (pre es : List FEnv) (p : Proc) →
+  Answerρ σ τ (substN (pre ++ es) p) (substN rs R) →
+  Answerρ σ τ (substN pre (substN es p)) (substN rs R)
+shiftPreL σ τ rs R pre es p m =
+  subst (λ r → Answerρ σ τ r (substN rs R)) (substN-++ pre es p) m
+
 -- The arm `openNamed` returns, so the equality a concrete value needs is `refl`.
 opened : Proc → Maybe FEnv → Maybe Proc
 opened _ nothing = nothing
@@ -413,6 +446,10 @@ data ArmAns (ans : Proc → Set) : List PArm → Set where
     ((e : FEnv) → ans (substProc e p)) →
     ArmAns ans qs →
     ArmAns ans (prod pat p ∷ qs)
+  aa-fork  : ∀ {c xs y qs ps} →
+    ((e : FEnv) → ArmAns (λ R → ans (substProc e R)) qs) →
+    ArmAns ans ps →
+    ArmAns ans (fork c xs y qs ∷ ps)
 
 data Found (ans : Proc → Set) (cs : List Ctor) (c : String) (sp : Spine) (qs : List PArm) : Set where
   got    : (R : Proc) → ans R → nthProc cs c sp qs ≡ just R → Found ans cs c sp qs
@@ -438,6 +475,291 @@ namedHit k xs p sp cs′ c qs n fs eqn nothing ag _ =
 namedHit k xs p sp cs′ c qs n fs eqn (just e) ag f =
   got (substProc e p) (f e)
     (trans (cong (λ b → pickCtor b (named k xs p) sp cs′ c qs) eqn) ag)
+
+tailAns : ∀ {ans a ps} → ArmAns ans (a ∷ ps) → ArmAns ans ps
+tailAns (aa-bare _ as) = as
+tailAns (aa-named _ as) = as
+tailAns (aa-prod _ as) = as
+tailAns (aa-fork _ as) = as
+
+-- The process half of an answer. `openFork` returns that process.
+proj : ∀ {ans : Proc → Set} → Maybe (Σ Proc ans) → Maybe Proc
+proj nothing = nothing
+proj (just (R , _)) = just R
+
+-- Substitute the process `armAns` selected. The answer is already the
+-- outer one, so it is not substituted again.
+mapPick : (ans : Proc → Set) (e : FEnv) →
+         Maybe (Σ Proc (λ R → ans (substProc e R))) → Maybe (Σ Proc ans)
+mapPick _ _ nothing = nothing
+mapPick _ e (just (R , a)) = just (substProc e R , a)
+
+map-proj : (ans : Proc → Set) (e : FEnv)
+           (hit : Maybe (Σ Proc (λ R → ans (substProc e R)))) →
+           proj (mapPick ans e hit) ≡ bindM (proj hit) (λ p → just (substProc e p))
+map-proj _ _ nothing = refl
+map-proj _ _ (just (_ , _)) = refl
+
+-- The arm `armOf` returns, together with the answer stored for it.
+-- A fork reads one field and substitutes the outer fields into the
+-- arm that field selects.
+mutual
+  armAns : ∀ {ans} (A : Ty) (u : Val A) (qs : List PArm) →
+           ArmAns ans qs → Maybe (Σ Proc ans)
+  armAns bit b0 [] _ = nothing
+  armAns bit b0 (_ ∷ []) _ = nothing
+  armAns bit b0 (_ ∷ _ ∷ _ ∷ _) _ = nothing
+  armAns bit b0 (bare p ∷ _ ∷ []) (aa-bare a _) = just (p , a)
+  armAns bit b0 (named _ [] p ∷ _ ∷ []) (aa-named f _) = just (p , f [])
+  armAns bit b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) _ = nothing
+  armAns bit b0 (prod _ _ ∷ _ ∷ []) _ = nothing
+  armAns bit b0 (fork _ _ _ _ ∷ _ ∷ []) _ = nothing
+  armAns bit b1 [] _ = nothing
+  armAns bit b1 (_ ∷ []) _ = nothing
+  armAns bit b1 (_ ∷ _ ∷ _ ∷ _) _ = nothing
+  armAns bit b1 (_ ∷ bare q ∷ []) an with tailAns an
+  ... | aa-bare a _ = just (q , a)
+  armAns bit b1 (_ ∷ named _ [] q ∷ []) an with tailAns an
+  ... | aa-named f _ = just (q , f [])
+  armAns bit b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) _ = nothing
+  armAns bit b1 (_ ∷ prod _ _ ∷ []) _ = nothing
+  armAns bit b1 (_ ∷ fork _ _ _ _ ∷ []) _ = nothing
+  armAns nat _ _ _ = nothing
+  armAns unit _ _ _ = nothing
+  armAns (vec _ _) _ _ _ = nothing
+  armAns (pair _ _) (tup _ _) (_ ∷ _ ∷ _) _ = nothing
+  armAns (pair _ _) (tup _ _) [] _ = nothing
+  armAns (pair _ _) (tup a b) (prod (pPair x y) p ∷ []) (aa-prod f _)
+    with openPair x y a b
+  ... | nothing = nothing
+  ... | just e = just (substProc e p , f e)
+  armAns (pair _ _) (tup _ _) (prod (pRec _) _ ∷ []) _ = nothing
+  armAns (pair _ _) (tup _ _) (bare _ ∷ []) _ = nothing
+  armAns (pair _ _) (tup _ _) (named _ _ _ ∷ []) _ = nothing
+  armAns (pair _ _) (tup _ _) (fork _ _ _ _ ∷ []) _ = nothing
+  armAns (rec _) (rec _) (_ ∷ _ ∷ _) _ = nothing
+  armAns (rec _) (rec _) [] _ = nothing
+  armAns (rec _) (rec row) (prod (pRec bs) p ∷ []) (aa-prod f _)
+    with openRec bs row
+  ... | nothing = nothing
+  ... | just e = just (substProc e p , f e)
+  armAns (rec _) (rec _) (prod (pPair _ _) _ ∷ []) _ = nothing
+  armAns (rec _) (rec _) (bare _ ∷ []) _ = nothing
+  armAns (rec _) (rec _) (named _ _ _ ∷ []) _ = nothing
+  armAns (rec _) (rec _) (fork _ _ _ _ ∷ []) _ = nothing
+  armAns (dat d _) (con c sp) qs an = nthAns (ctorsOf d) c sp qs an
+
+  nthAns : ∀ {ans} (cs : List Ctor) (c : String) (sp : Spine) (qs : List PArm) →
+           ArmAns ans qs → Maybe (Σ Proc ans)
+  nthAns [] _ _ _ _ = nothing
+  nthAns (_ ∷ _) _ _ [] _ = nothing
+  nthAns (ctor n _ ∷ cs) c sp (bare p ∷ qs) (aa-bare a as) with c == n
+  ... | true = just (p , a)
+  ... | false = nthAns cs c sp qs as
+  nthAns (ctor n _ ∷ cs) c sp (named k xs p ∷ qs) (aa-named f as) with c == n
+  ... | false = nthAns cs c sp qs as
+  ... | true with openView k c xs sp
+  ... | nothing = nothing
+  ... | just e = just (substProc e p , f e)
+  nthAns (ctor n _ ∷ cs) c sp (prod _ _ ∷ qs) (aa-prod _ as) with c == n
+  ... | true = nothing
+  ... | false = nthAns cs c sp qs as
+  nthAns (ctor n _ ∷ cs) c sp (fork k xs y inner ∷ qs) (aa-fork g as) with c == n
+  ... | true = forkAns k c xs y inner sp g
+  ... | false = nthAns cs c sp qs as
+
+  forkAns : ∀ {ans} (k c : String) (xs : List String) (y : String)
+            (inner : List PArm) (sp : Spine) →
+            ((e : FEnv) → ArmAns (λ R → ans (substProc e R)) inner) →
+            Maybe (Σ Proc ans)
+  forkAns k c xs y inner sp g =
+    forkAt (k == c) (rawSpine sp) k c xs y inner sp g
+
+  forkAt : ∀ {ans} (b : Bool) (mr : Maybe (List Raw))
+           (k c : String) (xs : List String) (y : String)
+           (inner : List PArm) (sp : Spine) →
+           ((e : FEnv) → ArmAns (λ R → ans (substProc e R)) inner) →
+           Maybe (Σ Proc ans)
+  forkAt false _ _ _ _ _ _ _ _ = nothing
+  forkAt true nothing _ _ _ _ _ _ _ = nothing
+  forkAt true (just rs) _ _ xs y inner sp g =
+    forkEnv (lenEnv xs rs) xs y inner sp g
+
+  forkEnv : ∀ {ans} (me : Maybe FEnv) (xs : List String) (y : String)
+            (inner : List PArm) (sp : Spine) →
+            ((e : FEnv) → ArmAns (λ R → ans (substProc e R)) inner) →
+            Maybe (Σ Proc ans)
+  forkEnv nothing _ _ _ _ _ = nothing
+  forkEnv (just e) xs y inner sp g = seekAns xs y e inner sp (g e)
+
+  -- The answer in `an` is already the outer answer after this
+  -- field environment replaces the binders. The process is substituted
+  -- once; the answer is not.
+  pickAns : ∀ {ans A} (e : FEnv) (v : Val A) (qs : List PArm) →
+            ArmAns (λ R → ans (substProc e R)) qs → Maybe (Σ Proc ans)
+  pickAns {ans} e v qs an = mapPick ans e (armAns _ v qs an)
+
+  seekAns : ∀ {ans} (xs : List String) (y : String) (e : FEnv)
+            (qs : List PArm) (sp : Spine) →
+            ArmAns (λ R → ans (substProc e R)) qs → Maybe (Σ Proc ans)
+  seekAns [] _ _ _ _ _ = nothing
+  seekAns (_ ∷ _) _ _ _ snil _ = nothing
+  seekAns (x ∷ xs) y e qs (scons A v sp) an =
+    seekAnsAt A x xs y e qs v sp an (x ≟ y)
+
+  seekAnsAt : ∀ {ans} (A : Ty) (x : String) (xs : List String) (y : String)
+              (e : FEnv) (qs : List PArm) (v : Val A) (sp : Spine) →
+              ArmAns (λ R → ans (substProc e R)) qs →
+              Dec (x ≡ y) → Maybe (Σ Proc ans)
+  seekAnsAt _ _ xs y e qs _ sp an (no′ _) = seekAns xs y e qs sp an
+  seekAnsAt _ _ _ _ e qs v _ an (yes′ _) = pickAns e v qs an
+
+-- `armAns` agrees with `armOf`. The lemmas sit outside the evaluator
+-- so a constructor value unfolds `armAns` while the proof is checked.
+-- The comparisons are arguments, rewritten to constructors. A `with`
+-- would turn the answer predicate into a function of the scrutinee.
+mutual
+  arm-proj : ∀ {ans} (A : Ty) (u : Val A) (qs : List PArm) (an : ArmAns ans qs) →
+             proj (armAns A u qs an) ≡ armOf A u qs
+  arm-proj bit b0 [] _ = refl
+  arm-proj bit b0 (_ ∷ []) _ = refl
+  arm-proj bit b0 (_ ∷ _ ∷ _ ∷ _) _ = refl
+  arm-proj bit b0 (bare _ ∷ _ ∷ []) (aa-bare _ _) = refl
+  arm-proj bit b0 (named _ [] _ ∷ _ ∷ []) (aa-named _ _) = refl
+  arm-proj bit b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) _ = refl
+  arm-proj bit b0 (prod _ _ ∷ _ ∷ []) _ = refl
+  arm-proj bit b0 (fork _ _ _ _ ∷ _ ∷ []) _ = refl
+  arm-proj bit b1 [] _ = refl
+  arm-proj bit b1 (_ ∷ []) _ = refl
+  arm-proj bit b1 (_ ∷ _ ∷ _ ∷ _) _ = refl
+  arm-proj bit b1 (_ ∷ bare _ ∷ []) an with tailAns an
+  ... | aa-bare _ _ = refl
+  arm-proj bit b1 (_ ∷ named _ [] _ ∷ []) an with tailAns an
+  ... | aa-named _ _ = refl
+  arm-proj bit b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) _ = refl
+  arm-proj bit b1 (_ ∷ prod _ _ ∷ []) _ = refl
+  arm-proj bit b1 (_ ∷ fork _ _ _ _ ∷ []) _ = refl
+  arm-proj nat _ _ _ = refl
+  arm-proj unit _ _ _ = refl
+  arm-proj (vec _ _) _ _ _ = refl
+  arm-proj (pair _ _) (tup a b) (prod (pPair x y) p ∷ []) (aa-prod _ _)
+    with openPair x y a b
+  ... | nothing = refl
+  ... | just _ = refl
+  arm-proj (pair _ _) (tup _ _) (prod (pRec _) _ ∷ []) _ = refl
+  arm-proj (pair _ _) (tup _ _) (bare _ ∷ []) _ = refl
+  arm-proj (pair _ _) (tup _ _) (named _ _ _ ∷ []) _ = refl
+  arm-proj (pair _ _) (tup _ _) (fork _ _ _ _ ∷ []) _ = refl
+  arm-proj (pair _ _) (tup _ _) [] _ = refl
+  arm-proj (pair _ _) (tup _ _) (_ ∷ _ ∷ _) _ = refl
+  arm-proj (rec _) (rec row) (prod (pRec bs) p ∷ []) (aa-prod _ _)
+    with openRec bs row
+  ... | nothing = refl
+  ... | just _ = refl
+  arm-proj (rec _) (rec _) (prod (pPair _ _) _ ∷ []) _ = refl
+  arm-proj (rec _) (rec _) (bare _ ∷ []) _ = refl
+  arm-proj (rec _) (rec _) (named _ _ _ ∷ []) _ = refl
+  arm-proj (rec _) (rec _) (fork _ _ _ _ ∷ []) _ = refl
+  arm-proj (rec _) (rec _) [] _ = refl
+  arm-proj (rec _) (rec _) (_ ∷ _ ∷ _) _ = refl
+  arm-proj (dat d _) (con c sp) qs an = nth-proj (ctorsOf d) c sp qs an
+
+  nth-proj : ∀ {ans} (cs : List Ctor) (c : String) (sp : Spine) (qs : List PArm)
+             (an : ArmAns ans qs) →
+             proj (nthAns cs c sp qs an) ≡ nthProc cs c sp qs
+  nth-proj [] _ _ _ _ = refl
+  nth-proj (_ ∷ _) _ _ [] _ = refl
+  nth-proj (ctor n _ ∷ cs) c sp (bare _ ∷ qs) (aa-bare _ as) with c == n
+  ... | true = refl
+  ... | false = nth-proj cs c sp qs as
+  nth-proj (ctor n _ ∷ cs) c sp (named k xs p ∷ qs) (aa-named _ as) with c == n
+  ... | false = nth-proj cs c sp qs as
+  ... | true rewrite open-agree k c xs p sp with openView k c xs sp
+  ... | nothing = refl
+  ... | just _ = refl
+  nth-proj (ctor n _ ∷ cs) c sp (prod _ _ ∷ qs) (aa-prod _ as) with c == n
+  ... | true = refl
+  ... | false = nth-proj cs c sp qs as
+  nth-proj {ans} (ctor n _ ∷ cs) c sp (fork k xs y inner ∷ qs) (aa-fork g as) with c == n
+  ... | true = fork-agree ans k c xs y inner sp g
+  ... | false = nth-proj cs c sp qs as
+
+  -- `ans` is explicit. An implicit here is solved apart for each
+  -- mutually recursive clause, and those solutions do not unify.
+  fork-agree : (ans : Proc → Set) (k c : String) (xs : List String) (y : String)
+               (inner : List PArm) (sp : Spine)
+               (g : (e : FEnv) → ArmAns (λ R → ans (substProc e R)) inner) →
+               proj (forkAns k c xs y inner sp g) ≡ openFork k c xs y inner sp
+  fork-agree ans k c xs y inner sp g =
+    fork-at ans (k == c) (rawSpine sp) k c xs y inner sp g
+
+  fork-at : (ans : Proc → Set) (b : Bool) (mr : Maybe (List Raw))
+            (k c : String) (xs : List String) (y : String)
+            (inner : List PArm) (sp : Spine)
+            (g : (e : FEnv) → ArmAns (λ R → ans (substProc e R)) inner) →
+            proj (forkAt b mr k c xs y inner sp g) ≡ openAt b mr xs y inner sp
+  fork-at _ false _ _ _ _ _ _ _ _ = refl
+  fork-at _ true nothing _ _ _ _ _ _ _ = refl
+  fork-at ans true (just rs) _ _ xs y inner sp g =
+    fork-env ans (lenEnv xs rs) xs y inner sp g
+
+  fork-env : (ans : Proc → Set) (me : Maybe FEnv) (xs : List String) (y : String)
+             (inner : List PArm) (sp : Spine)
+             (g : (e : FEnv) → ArmAns (λ R → ans (substProc e R)) inner) →
+             proj (forkEnv me xs y inner sp g) ≡ openEnv me xs y inner sp
+  fork-env _ nothing _ _ _ _ _ = refl
+  fork-env ans (just e) xs y inner sp g = seek-agree ans xs y e inner sp (g e)
+
+  pick-agree : (ans : Proc → Set) {A : Ty} (e : FEnv) (v : Val A) (qs : List PArm)
+               (an : ArmAns (λ R → ans (substProc e R)) qs) →
+               proj (pickAns e v qs an) ≡
+               bindM (armOf A v qs) (λ p → just (substProc e p))
+  pick-agree ans {A} e v qs an =
+    trans (map-proj ans e (armAns A v qs an))
+          (cong (λ h → bindM h (λ p → just (substProc e p))) (arm-proj A v qs an))
+
+  seek-agree : (ans : Proc → Set) (xs : List String) (y : String) (e : FEnv)
+               (qs : List PArm) (sp : Spine)
+               (an : ArmAns (λ R → ans (substProc e R)) qs) →
+               proj (seekAns xs y e qs sp an) ≡ seek xs y e qs sp
+  seek-agree _ [] _ _ _ _ _ = refl
+  seek-agree _ (_ ∷ _) _ _ _ snil _ = refl
+  seek-agree ans (x ∷ xs) y e qs (scons A v sp) an =
+    seek-at ans A x xs y e qs v sp an (x ≟ y)
+
+  seek-at : (ans : Proc → Set) (A : Ty) (x : String) (xs : List String) (y : String)
+            (e : FEnv) (qs : List PArm) (v : Val A) (sp : Spine)
+            (an : ArmAns (λ R → ans (substProc e R)) qs)
+            (d : Dec (x ≡ y)) →
+            proj (seekAnsAt A x xs y e qs v sp an d) ≡
+            seekAt A x xs y e qs v sp d
+  seek-at ans _ _ xs y e qs _ sp an (no′ _) = seek-agree ans xs y e qs sp an
+  seek-at ans _ _ _ _ e qs v _ an (yes′ _) = pick-agree ans e v qs an
+
+-- A fork hits when `forkAns` returns the process `openFork` returns.
+hitFork : ∀ {ans} (k : String) (xs : List String) (y : String) (inner : List PArm)
+  (sp : Spine) (cs′ : List Ctor) (c : String) (qs : List PArm)
+  (n : String) (fs : List Fld) →
+  (g : (e : FEnv) → ArmAns (λ R → ans (substProc e R)) inner) →
+  (c == n) ≡ true →
+  (hit : Maybe (Σ Proc ans)) →
+  forkAns k c xs y inner sp g ≡ hit →
+  Found ans (ctor n fs ∷ cs′) c sp (fork k xs y inner ∷ qs)
+hitFork {ans} k xs y inner sp cs′ c qs n fs g eqn nothing eq =
+  missed (trans (cong (λ b → pickCtor b (fork k xs y inner) sp cs′ c qs) eqn)
+                (trans (sym (fork-agree ans k c xs y inner sp g)) (cong proj eq)))
+hitFork {ans} k xs y inner sp cs′ c qs n fs g eqn (just (R , a)) eq =
+  got R a (trans (cong (λ b → pickCtor b (fork k xs y inner) sp cs′ c qs) eqn)
+                 (trans (sym (fork-agree ans k c xs y inner sp g)) (cong proj eq)))
+
+forkHit : ∀ {ans} (k : String) (xs : List String) (y : String) (inner : List PArm)
+  (sp : Spine) (cs′ : List Ctor) (c : String) (qs : List PArm)
+  (n : String) (fs : List Fld) →
+  ((e : FEnv) → ArmAns (λ R → ans (substProc e R)) inner) →
+  (c == n) ≡ true →
+  Found ans (ctor n fs ∷ cs′) c sp (fork k xs y inner ∷ qs)
+forkHit k xs y inner sp cs′ c qs n fs g eqn =
+  hitFork k xs y inner sp cs′ c qs n fs g eqn (forkAns k c xs y inner sp g) refl
 
 nthBoth : ∀ {ans} (cs : List Ctor) (c : String) (sp : Spine) (qs : List PArm) →
   ArmAns ans qs → Found ans cs c sp qs
@@ -466,6 +788,14 @@ nthBoth (ctor n _ ∷ cs′) c sp (prod pat q ∷ qs) (aa-prod _ as) with c == n
   got R b (trans (cong (λ b → pickCtor b (prod pat q) sp cs′ c qs) eqn) pr)
 ... | missed pr =
   missed (trans (cong (λ b → pickCtor b (prod pat q) sp cs′ c qs) eqn) pr)
+nthBoth (ctor n fs ∷ cs′) c sp (fork k xs y inner ∷ qs) (aa-fork g as)
+  with c == n | reveal (_==_ c) n
+... | true | ≡is eqn = forkHit k xs y inner sp cs′ c qs n fs g eqn
+... | false | ≡is eqn with nthBoth cs′ c sp qs as
+... | got R b pr =
+  got R b (trans (cong (λ b → pickCtor b (fork k xs y inner) sp cs′ c qs) eqn) pr)
+... | missed pr =
+  missed (trans (cong (λ b → pickCtor b (fork k xs y inner) sp cs′ c qs) eqn) pr)
 
 usePut : ∀ {σ τ A B v x ps R P} →
   applyTy σ A ≡ applyTy τ B →
@@ -614,6 +944,9 @@ takePut v eq fv b0 geq (named c (y ∷ ys) p ∷ q ∷ []) (aa-named _ _) =
 takePut v eq fv b0 geq (prod pat r ∷ q ∷ []) _ =
   no (λ { (put-mget _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = prod pat r ∷ q ∷ []} geq refl)) })
+takePut v eq fv b0 geq (fork k xs y qs ∷ q ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = fork k xs y qs ∷ q ∷ []} geq refl)) })
 takePut v eq fv b1 geq (bare p ∷ bare q ∷ []) (aa-bare _ (aa-bare a _)) =
   usePut eq fv (selLit {v = v} {ps = bare p ∷ bare q ∷ []} geq refl) a
 takePut v eq fv b1 geq (bare p ∷ named c [] q ∷ []) (aa-bare _ (aa-named f _)) =
@@ -645,6 +978,19 @@ takePut v eq fv b1 geq (prod pat r ∷ named c (y ∷ ys) q ∷ []) _ =
 takePut v eq fv b1 geq (p ∷ prod pat r ∷ []) _ =
   no (λ { (put-mget _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = p ∷ prod pat r ∷ []} geq refl)) })
+takePut v eq fv b1 geq (fork k xs y r ∷ bare q ∷ []) (aa-fork _ (aa-bare a _)) =
+  usePut eq fv (selLit {v = v} {ps = fork k xs y r ∷ bare q ∷ []} geq refl) a
+takePut v eq fv b1 geq (fork k xs y r ∷ named c [] q ∷ []) (aa-fork _ (aa-named f _)) =
+  usePut eq fv (selLit {v = v} {ps = fork k xs y r ∷ named c [] q ∷ []} geq refl) (f [])
+takePut v eq fv b1 geq (fork k xs y r ∷ named c (z ∷ zs) q ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = fork k xs y r ∷ named c (z ∷ zs) q ∷ []} geq refl)) })
+takePut v eq fv b1 geq (fork k xs y r ∷ fork k′ xs′ y′ r′ ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = fork k xs y r ∷ fork k′ xs′ y′ r′ ∷ []} geq refl)) })
+takePut v eq fv b1 geq (p ∷ fork k xs y r ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = p ∷ fork k xs y r ∷ []} geq refl)) })
 takePut v eq fv b0 geq [] _ =
   no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
 takePut v eq fv b0 geq (p ∷ []) _ =
@@ -678,6 +1024,9 @@ takePut v eq fv (tup _ _) geq (bare q ∷ []) _ =
 takePut v eq fv (tup _ _) geq (named c xs q ∷ []) _ =
   no (λ { (put-mget _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c xs q ∷ []} geq refl)) })
+takePut v eq fv (tup _ _) geq (fork k xs y r ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = fork k xs y r ∷ []} geq refl)) })
 takePut v eq fv (tup _ _) geq [] _ =
   no (λ { (put-mget _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
@@ -695,6 +1044,9 @@ takePut v eq fv (rec _) geq (bare q ∷ []) _ =
 takePut v eq fv (rec _) geq (named c xs q ∷ []) _ =
   no (λ { (put-mget _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c xs q ∷ []} geq refl)) })
+takePut v eq fv (rec _) geq (fork k xs y r ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = fork k xs y r ∷ []} geq refl)) })
 takePut v eq fv (rec _) geq [] _ =
   no (λ { (put-mget _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
@@ -722,6 +1074,9 @@ takeMget v eq fv b0 geq (named c (y ∷ ys) p ∷ q ∷ []) (aa-named _ _) =
 takeMget v eq fv b0 geq (prod pat r ∷ q ∷ []) _ =
   no (λ { (mget-put _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = prod pat r ∷ q ∷ []} geq refl)) })
+takeMget v eq fv b0 geq (fork k xs y qs ∷ q ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = fork k xs y qs ∷ q ∷ []} geq refl)) })
 takeMget v eq fv b1 geq (bare p ∷ bare q ∷ []) (aa-bare _ (aa-bare a _)) =
   useMget eq fv (selLit {v = v} {ps = bare p ∷ bare q ∷ []} geq refl) a
 takeMget v eq fv b1 geq (bare p ∷ named c [] q ∷ []) (aa-bare _ (aa-named f _)) =
@@ -753,6 +1108,19 @@ takeMget v eq fv b1 geq (prod pat r ∷ named c (y ∷ ys) q ∷ []) _ =
 takeMget v eq fv b1 geq (p ∷ prod pat r ∷ []) _ =
   no (λ { (mget-put _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = p ∷ prod pat r ∷ []} geq refl)) })
+takeMget v eq fv b1 geq (fork k xs y r ∷ bare q ∷ []) (aa-fork _ (aa-bare a _)) =
+  useMget eq fv (selLit {v = v} {ps = fork k xs y r ∷ bare q ∷ []} geq refl) a
+takeMget v eq fv b1 geq (fork k xs y r ∷ named c [] q ∷ []) (aa-fork _ (aa-named f _)) =
+  useMget eq fv (selLit {v = v} {ps = fork k xs y r ∷ named c [] q ∷ []} geq refl) (f [])
+takeMget v eq fv b1 geq (fork k xs y r ∷ named c (z ∷ zs) q ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = fork k xs y r ∷ named c (z ∷ zs) q ∷ []} geq refl)) })
+takeMget v eq fv b1 geq (fork k xs y r ∷ fork k′ xs′ y′ r′ ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = fork k xs y r ∷ fork k′ xs′ y′ r′ ∷ []} geq refl)) })
+takeMget v eq fv b1 geq (p ∷ fork k xs y r ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = p ∷ fork k xs y r ∷ []} geq refl)) })
 takeMget v eq fv b0 geq [] _ =
   no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
 takeMget v eq fv b0 geq (p ∷ []) _ =
@@ -786,6 +1154,9 @@ takeMget v eq fv (tup _ _) geq (bare q ∷ []) _ =
 takeMget v eq fv (tup _ _) geq (named c xs q ∷ []) _ =
   no (λ { (mget-put _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c xs q ∷ []} geq refl)) })
+takeMget v eq fv (tup _ _) geq (fork k xs y r ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = fork k xs y r ∷ []} geq refl)) })
 takeMget v eq fv (tup _ _) geq [] _ =
   no (λ { (mget-put _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
@@ -803,6 +1174,9 @@ takeMget v eq fv (rec _) geq (bare q ∷ []) _ =
 takeMget v eq fv (rec _) geq (named c xs q ∷ []) _ =
   no (λ { (mget-put _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c xs q ∷ []} geq refl)) })
+takeMget v eq fv (rec _) geq (fork k xs y r ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = fork k xs y r ∷ []} geq refl)) })
 takeMget v eq fv (rec _) geq [] _ =
   no (λ { (mget-put _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
@@ -832,6 +1206,16 @@ concludeMget {σ} {τ} {A} {B} {v} {x} {P} ps as
 ... | yes′ _ | yes′ _ | nothing = no (noGround′ geq)
 ... | yes′ eq | yes′ fv | just u = takeMget v eq fv u geq ps as
 
+-- Move an answer across a predicate that agrees on every process.
+retarget : ∀ {ans1 ans2 ps} →
+  (∀ {R} → ans1 R → ans2 R) →
+  ArmAns ans1 ps → ArmAns ans2 ps
+retarget _ aa-nil = aa-nil
+retarget f (aa-bare a as) = aa-bare (f a) (retarget f as)
+retarget f (aa-named g as) = aa-named (λ e → f (g e)) (retarget f as)
+retarget f (aa-prod g as) = aa-prod (λ e → f (g e)) (retarget f as)
+retarget f (aa-fork g as) = aa-fork (λ e → retarget f (g e)) (retarget f as)
+
 mutual
   -- `ls` substitutes the left process and `rs` the right one, outermost
   -- environment first. An empty list is the process as written.
@@ -843,6 +1227,15 @@ mutual
 
   armsL : (ls rs : List FEnv) (σ τ : Idx) (R : Proc) (qs : List PArm) →
     ArmAns (λ S → Answerρ σ τ S (substN rs R)) (substArmsN ls qs)
+
+  -- `pre` substitutes the result and `es` substitutes the arm index.
+  -- A fork's field environment is `pre`, applied after the field the
+  -- inner arm binds, which is how `openFork` substitutes.
+  armsPre : (pre es ls : List FEnv) (σ τ : Idx) (L : Proc) (qs : List PArm) →
+    ArmAns (λ R → Answerρ σ τ (substN ls L) (substN pre R)) (substArmsN es qs)
+
+  armsPreL : (pre es rs : List FEnv) (σ τ : Idx) (R : Proc) (qs : List PArm) →
+    ArmAns (λ S → Answerρ σ τ (substN pre S) (substN rs R)) (substArmsN es qs)
 
   meetN ls rs _ _ done done rewrite subNDone ls | subNDone rs = yes done-done
   meetN ls rs _ _ done stop rewrite subNDone ls | subNStop rs = no (λ ())
@@ -973,6 +1366,29 @@ mutual
   armsR ls rs σ τ L (prod pat p ∷ qs) =
     aa-prod (λ e → meetN ls (e ∷ shadowAll (patBinders pat) rs) σ τ L p)
             (armsR ls rs σ τ L qs)
+  armsR ls rs σ τ L (fork _ xs _ qs ∷ ps) =
+    aa-fork (λ e → armsPre (e ∷ []) (shadowAll xs rs) ls σ τ L qs)
+            (armsR ls rs σ τ L ps)
+
+  armsPre _ _ _ _ _ _ [] = aa-nil
+  armsPre pre es ls σ τ L (bare p ∷ qs) =
+    aa-bare (shiftPre σ τ ls L pre es p (meetN ls (pre ++ es) σ τ L p))
+            (armsPre pre es ls σ τ L qs)
+  armsPre pre es ls σ τ L (named _ xs p ∷ qs) =
+    aa-named (λ e' →
+      shiftPre σ τ ls L pre (e' ∷ shadowAll xs es) p
+               (meetN ls (pre ++ (e' ∷ shadowAll xs es)) σ τ L p))
+             (armsPre pre es ls σ τ L qs)
+  armsPre pre es ls σ τ L (prod pat p ∷ qs) =
+    aa-prod (λ e' →
+      shiftPre σ τ ls L pre (e' ∷ shadowAll (patBinders pat) es) p
+               (meetN ls (pre ++ (e' ∷ shadowAll (patBinders pat) es)) σ τ L p))
+            (armsPre pre es ls σ τ L qs)
+  armsPre pre es ls σ τ L (fork _ xs _ inner ∷ ps) =
+    aa-fork (λ e' →
+      retarget (λ {R} m → shiftPre σ τ ls L pre (e' ∷ []) R m)
+               (armsPre (pre ++ (e' ∷ [])) (shadowAll xs es) ls σ τ L inner))
+            (armsPre pre es ls σ τ L ps)
 
   armsL _ _ _ _ _ [] = aa-nil
   armsL ls rs σ τ R (bare p ∷ qs) =
@@ -983,6 +1399,29 @@ mutual
   armsL ls rs σ τ R (prod pat p ∷ qs) =
     aa-prod (λ e → meetN (e ∷ shadowAll (patBinders pat) ls) rs σ τ p R)
             (armsL ls rs σ τ R qs)
+  armsL ls rs σ τ R (fork _ xs _ qs ∷ ps) =
+    aa-fork (λ e → armsPreL (e ∷ []) (shadowAll xs ls) rs σ τ R qs)
+            (armsL ls rs σ τ R ps)
+
+  armsPreL _ _ _ _ _ _ [] = aa-nil
+  armsPreL pre es rs σ τ R (bare p ∷ qs) =
+    aa-bare (shiftPreL σ τ rs R pre es p (meetN (pre ++ es) rs σ τ p R))
+            (armsPreL pre es rs σ τ R qs)
+  armsPreL pre es rs σ τ R (named _ xs p ∷ qs) =
+    aa-named (λ e' →
+      shiftPreL σ τ rs R pre (e' ∷ shadowAll xs es) p
+                (meetN (pre ++ (e' ∷ shadowAll xs es)) rs σ τ p R))
+             (armsPreL pre es rs σ τ R qs)
+  armsPreL pre es rs σ τ R (prod pat p ∷ qs) =
+    aa-prod (λ e' →
+      shiftPreL σ τ rs R pre (e' ∷ shadowAll (patBinders pat) es) p
+                (meetN (pre ++ (e' ∷ shadowAll (patBinders pat) es)) rs σ τ p R))
+            (armsPreL pre es rs σ τ R qs)
+  armsPreL pre es rs σ τ R (fork _ xs _ inner ∷ ps) =
+    aa-fork (λ e' →
+      retarget (λ {S} m → shiftPreL σ τ rs R pre (e' ∷ []) S m)
+               (armsPreL (pre ++ (e' ∷ [])) (shadowAll xs es) rs σ τ R inner))
+            (armsPreL pre es rs σ τ R ps)
 
 decideρ : (σ τ : Idx) (P Q : Proc) → Answerρ σ τ P Q
 decideρ σ τ P Q = meetN [] [] σ τ P Q
@@ -1372,6 +1811,35 @@ nothing-meet = put-mget refl refl refl (get-put refl refl done-done)
 
 nothing-meet-decides : decide nothingSender fieldReply ≡ yes nothing-meet
 nothing-meet-decides = refl
+
+-- `just true` follows the arm that sends `rst`. `just false` and
+-- `nothing` close. Either order meets.
+gate-true-meet : Meets gateTrue gateServer
+gate-true-meet = put-mget refl refl refl (get-put refl refl done-done)
+
+gate-true-decides : decide gateTrue gateServer ≡ yes gate-true-meet
+gate-true-decides = refl
+
+gate-true-swap : decide gateServer gateTrue ≡ yes (meets-sym gate-true-meet)
+gate-true-swap = refl
+
+gate-false-meet : Meets gateFalse gateServer
+gate-false-meet = put-mget refl refl refl done-done
+
+gate-false-decides : decide gateFalse gateServer ≡ yes gate-false-meet
+gate-false-decides = refl
+
+gate-false-swap : decide gateServer gateFalse ≡ yes (meets-sym gate-false-meet)
+gate-false-swap = refl
+
+gate-none-meet : Meets gateNone gateServer
+gate-none-meet = put-mget refl refl refl done-done
+
+gate-none-decides : decide gateNone gateServer ≡ yes gate-none-meet
+gate-none-decides = refl
+
+gate-none-swap : decide gateServer gateNone ≡ yes (meets-sym gate-none-meet)
+gate-none-swap = refl
 
 tailSender : Proc
 tailSender = put listNat (lit consV) (get listNat "ys" done)

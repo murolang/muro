@@ -32,7 +32,29 @@ defmodule Muro.EmitOtpTest do
             {"IndexedOtp", [:Server, :Client, :ClientOne, :Echo, :Ask, ""]},
             {"RecursiveOtp", [:Forever, :Sender, :Server, :Client, ""]},
             {"DataOtp", [:Up, :Down, :Some, :Take, :Echoer, :Ask, :Shadow, ""]},
-            {"FieldBindingsOtp", [:Reply, :Asker, :Pass, :Passer, :Rest, :RestPeer, ""]}
+            {"FieldBindingsOtp", [:Reply, :Asker, :Pass, :Passer, :Rest, :RestPeer, ""]},
+            {"FieldChoiceOtp",
+             [
+               :GateServer,
+               :PutTrue,
+               :PutFalse,
+               :PutNone,
+               :HdrServer,
+               :HdrBytes,
+               :HdrTrailers,
+               :WrapServer,
+               :WrapBytes,
+               :LoopServer,
+               :LoopClient,
+               :CalledServer,
+               :CalledClient,
+               :SizedServer,
+               :SizedClient,
+               :CountedServer,
+               :CountedClient,
+               :OnceServer,
+               ""
+             ]}
           ] do
         for name <- names do
           mod = if name == "", do: Module.concat([parent]), else: Module.concat(parent, name)
@@ -735,6 +757,68 @@ defmodule Muro.EmitOtpTest do
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
   end
 
+  test "a field the run reads is the OTP split, and the value is already on the message" do
+    assert {:ok, src} = Emit.Otp.render(checked!("examples/field-choice.muro"), "field-choice")
+
+    assert src =~
+             "{:arm, \"just\", [:b], {:split, :b, [{:arm, \"true\", [], {:say, :rst, :finish}}, {:arm, \"false\", [], :finish}]}}"
+
+    assert src =~
+             "{:arm, \"hdr\", [:f], {:split, :f, [{:arm, \"bytes\", [], {:say, :rst, :finish}}, {:arm, \"trailers\", [], :finish}, {:arm, \"headers\", [], :finish}]}}"
+
+    assert src =~ "{:pick, ["
+    refute src =~ "esend"
+    refute src =~ "≤"
+
+    Code.compile_string(src)
+
+    {:ok, left, right, left_ref, right_ref} = choice(:gate_true)
+    assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
+    assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
+
+    {:ok, left, right, left_ref, right_ref} = choice(:gate_true_swap)
+    assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
+    assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
+
+    {:ok, left, right, left_ref, right_ref} = choice(:gate_false)
+    assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
+    assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
+
+    {:ok, left, right, left_ref, right_ref} = choice(:gate_none)
+    assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
+    assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
+
+    {:ok, pid, ref} = choice_one(:GateServer)
+    send(pid, {:muro, self(), {:just, true}})
+    assert_receive {:muro, ^pid, :rst}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = choice_one(:GateServer)
+    send(pid, {:muro, self(), {:just, false}})
+    refute_receive {:muro, ^pid, _}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = choice_one(:GateServer)
+    send(pid, {:muro, self(), :nothing})
+    refute_receive {:muro, ^pid, _}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = choice_one(:HdrServer)
+    send(pid, {:muro, self(), {:hdr, :bytes}})
+    assert_receive {:muro, ^pid, :rst}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = choice_one(:WrapServer)
+    send(pid, {:muro, self(), {:wrap, {:hdr, :bytes}}})
+    assert_receive {:muro, ^pid, :rst}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+
+    {:ok, pid, ref} = choice_one(:WrapServer)
+    send(pid, {:muro, self(), {:wrap, {:hdr, :trailers}}})
+    refute_receive {:muro, ^pid, _}
+    assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+  end
+
   defp start(name, peer \\ self()) do
     apply(Module.concat("PingOtp", name), :start, [peer])
   end
@@ -745,6 +829,14 @@ defmodule Muro.EmitOtpTest do
 
   defp meet_one(name) do
     apply(Module.concat("MeetOtp", name), :start, [self()])
+  end
+
+  defp choice(fun) do
+    apply(Module.concat(["FieldChoiceOtp"]), fun, [])
+  end
+
+  defp choice_one(name) do
+    apply(Module.concat("FieldChoiceOtp", name), :start, [self()])
   end
 
   defp field(fun) do

@@ -1,0 +1,175 @@
+-- bad_field_choice.muro — a field the run reads does not choose an arm.
+-- mix muro.check refuses each of these. field-choice.muro is the legal form.
+-- A wildcard arm is refused at the run. A pair or a record is not a case payload.
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+data Maybe (A : Type) : Type where
+  nothing : Maybe A
+  just : A → Maybe A
+
+data Ctl : Type where
+  rst : Ctl
+
+data Two : Type where
+  two : Bool → Bool → Two
+
+data Nest : Type where
+  tip : Nest
+  nest : Nest → Nest
+
+def late : run Π (m : Maybe Bool) → Bool :=
+  λ (m : Maybe Bool) →
+    match m motive (λ _ → Bool)
+      | nothing => false
+      | just b => b
+
+def on-nat : run Π (m : Maybe Nat) → Bool :=
+  λ (m : Maybe Nat) →
+    match m motive (λ _ → Bool)
+      | nothing => false
+      | just n =>
+          match n motive (λ _ → Bool)
+            | 0 => false
+            | suc _ => true
+
+def tag : run Π (p : Bool × Bool) → Bool :=
+  λ (p : Bool × Bool) → true
+
+def open : run Π (m : Maybe Bool) → Π (k : Nat) → Bool :=
+  λ (m : Maybe Bool) → λ (k : Nat) → true
+
+def walk : run Π (t : Nest) → Bool :=
+  λ (t : Nest) →
+    match t motive (λ _ → Bool)
+      | tip => true
+      | nest u => walk u
+
+def early : run Π (m : Maybe Bool) → Bool :=
+  λ (m : Maybe Bool) → later
+
+def later : run Bool := true
+
+def dropped : run Π (m : Maybe Bool) → Bool :=
+  λ (m : Maybe Bool) → let (a, b) = (0, 0) in
+    match m motive (λ _ → Bool)
+      | nothing => false
+      | just k => k
+
+def counted : run Π (m : Maybe Bool) → Nat :=
+  λ (m : Maybe Bool) → 0
+
+def wild : run Π (m : Maybe Bool) → Bool :=
+  λ (m : Maybe Bool) →
+    match m motive (λ _ → Bool)
+      | _ => false
+      | just b => b
+
+def sibling : run Π (t : Two) → Bool :=
+  λ (t : Two) →
+    match t motive (λ _ → Bool)
+      | two a b =>
+          match a motive (λ _ → Bool)
+            | true => b
+            | false => false
+
+session gate :=
+  recv (m : Maybe Bool) (case (late m)
+    | true => send Ctl end
+    | false => end)
+
+session natty :=
+  recv (m : Maybe Nat) (case (on-nat m)
+    | true => end
+    | false => end)
+
+conform natty-server : natty :=
+  get (m : Maybe Nat)
+    (match m
+      | nothing => done
+      | just n => done)
+
+session peek :=
+  recv (p : Bool × Bool) (case (tag p)
+    | true => end
+    | false => end)
+
+session vectored :=
+  recv (v : Vec Nat 1) (case v
+    | true => end
+    | false => end)
+
+session paired :=
+  recv (p : Bool × Bool) (case p
+    | true => end
+    | false => end)
+
+session recorded :=
+  recv (r : { x : Bool, y : Bool }) (case r
+    | true => end
+    | false => end)
+
+session opened :=
+  recv (m : Maybe Bool) (case (open m)
+    | true => end
+    | false => end)
+
+session looped :=
+  recv (t : Nest) (case (walk t)
+    | true => end
+    | false => end)
+
+session sided :=
+  recv (t : Two) (case (sibling t)
+    | true => end
+    | false => end)
+
+conform sided-server : sided :=
+  get (t : Two)
+    (match t
+      | two a b => match a
+          | true => done
+          | false => done)
+
+session forwarded :=
+  recv (m : Maybe Bool) (case (early m)
+    | true => end
+    | false => end)
+
+session letcase :=
+  recv (m : Maybe Bool) (case (dropped m)
+    | true => end
+    | false => end)
+
+session early-name :=
+  recv (g : Maybe Bool) (recv (m : Maybe Bool) (case (late g)
+    | true => end
+    | false => end))
+
+session nat-result :=
+  recv (m : Maybe Bool) (case (counted m)
+    | true => end
+    | false => end)
+
+conform shape : gate :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => done)
+
+conform short : gate :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put rst done)
+
+conform order : gate :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | false => done
+          | true => put rst done)

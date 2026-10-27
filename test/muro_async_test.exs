@@ -321,6 +321,23 @@ defmodule Muro.AsyncTest do
     refute msg =~ "unbounded recursive payload"
   end
 
+  test "a field the run reads meets across a buffer" do
+    assert {:ok, book} = Parser.parse(File.read!("examples/field-choice.muro"))
+
+    for {left, right} <- [
+          {"gate-server", "put-true"},
+          {"gate-server", "put-false"},
+          {"gate-server", "put-none"},
+          {"hdr-server", "hdr-bytes"},
+          {"wrap-server", "wrap-bytes"}
+        ] do
+      l = Enum.find(book, &(&1.name == left))
+      r = Enum.find(book, &(&1.name == right))
+      assert Async.meets(l.proc, r.proc, book, 1) == :ok
+      assert Async.meets(r.proc, l.proc, book, 1) == :ok
+    end
+  end
+
   test "a received pair or record meets across a buffer" do
     assert {:ok, book} = Parser.parse(File.read!("examples/pair-bindings.muro"))
 

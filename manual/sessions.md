@@ -181,7 +181,7 @@ meet arm : taker with giver
 
 `b0` takes `pick0 done`. `b1` takes `pick1 (put 0 done)`. `get (b : Bool) (match b done done)` and `get (m : Maybe Nat) (match m done done)` cover `Bool` and `Maybe` the same way: `true` then `false`, `nothing` then `just`. A match that does not cover the received value is refused. `recv (b : Bool) on end end` is still refused: an indexed protocol is a bit, and the sender writes the literal.
 
-The arms may name the constructor and bind its fields. `| nothing =>` binds nothing. `| just b =>` binds one field, and the type is that field at the payload's arguments: `Maybe Bool` gives `b : Bool`. A tail of `List` is a `List`. The name is payload data, so it may be sent more than once, and a `%1` endpoint is still consumed once. `put b` sends the field. `put (grant b)` sends what that `run` returns. Conformance checks the declared type, because the field is not known yet. The meeting evaluates `grant` on the value that arrived, and an asynchronous meeting does the same. The form with no names, one process per constructor, stays. The field does not choose a protocol.
+The arms may name the constructor and bind its fields. `| nothing =>` binds nothing. `| just b =>` binds one field, and the type is that field at the payload's arguments: `Maybe Bool` gives `b : Bool`. A tail of `List` is a `List`. The name is payload data, so it may be sent more than once, and a `%1` endpoint is still consumed once. `put b` sends the field. `put (grant b)` sends what that `run` returns. Conformance checks the declared type, because the field is not known yet. The meeting evaluates `grant` on the value that arrived, and an asynchronous meeting does the same. The form with no names, one process per constructor, stays. A `run` that reads the field chooses the protocol, as the section on a run of the value describes.
 
 ```muro
 data Bool : Type where
@@ -276,7 +276,7 @@ conform open-headers : client := put headers (put chunk done)
 
 ## A protocol follows a run of the value
 
-The scrutinee may be a `run` applied to the value just bound. The `run` is one argument, the payload, and its body is the computed fragment: it does not call itself or a later `run`. The arms are the constructors of the result, in declaration order. A receiver still has one process arm per constructor of the payload. That arm is checked against the protocol the `run` returns for that constructor, probed with no fields.
+The scrutinee may be a `run` applied to the value just bound. The `run` is one argument, the payload, and its body is the computed fragment: it does not call itself or a later `run`. The arms are the constructors of the result, in declaration order. A receiver still has one process arm per constructor of the payload. A `run` that only matches the constructor is checked at that constructor.
 
 ```muro
 def late : run Π (f : Frame) → Bool :=
@@ -297,7 +297,36 @@ conform gate-server : gate :=
 
 `late bytes` and `late trailers` are `true`, so those arms send `Ctl`. `late headers` is `false`, so that arm sends `Goaway`. The same `case` may sit under `rec`, in a session call, and on a linear endpoint. Each arm of a linear endpoint consumes it once.
 
+A `run` may read a field of the payload. The field is splittable when its type is a bit or a declared data type, and each field that `run` reads under a constructor is splittable in the same way. The receiver still has one process arm per payload constructor. When every value of the fields the `run` reads selects the same protocol, that arm is that protocol. When they differ, the process cases on the bound field, and each of those arms is the protocol that value selects. A field the `run` binds and never inspects is not split. A meeting of a known value still evaluates the `run` on that value.
+
+```muro
+def late : run Π (m : Maybe Bool) → Bool :=
+  λ (m : Maybe Bool) →
+    match m motive (λ _ → Bool)
+      | nothing => false
+      | just b => b
+
+session gate :=
+  recv (m : Maybe Bool) (case (late m)
+    | true => send Ctl end
+    | false => end)
+
+session gate-back := dual gate
+
+conform gate-server : gate :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put rst done
+          | false => done)
+```
+
+`late nothing` is `false`, so that arm ends. `late (just true)` is `true`, so that arm sends `Ctl`. `late (just false)` is `false`, so that arm ends. `put (just true)`, `put (just false)`, and `put nothing` meet `gate-server` in both orders, and those meetings check with `buffer 1`.
+
 `examples/value-protocols.muro`
+
+`examples/field-choice.muro`
 
 ## Dependence
 

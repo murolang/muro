@@ -34,13 +34,17 @@
 -- bound, or on a run applied to that name. The arms are one protocol
 -- per constructor, in declaration order: of the payload, or of the
 -- run's result. A sender whose value is known is checked on the arm
--- that value selects. A receiver matches every constructor of the
--- payload, and each process arm conforms to the protocol arm that
--- constructor selects. Selecting an arm is the same evaluator. It
--- uses no fuel. A case that is not that continuation, a scrutinee
--- other than a bit or a declared data type, a run outside the
--- fragment, and a sender whose value is not known when the arms
--- differ, have no derivation.
+-- that value selects, by evaluating the run on the value. A receiver
+-- matches every constructor of the payload. A run that only
+-- distinguishes constructors selects one protocol per constructor. A
+-- run that reads a field of a bit or a declared data type selects one
+-- protocol for each value of the fields it reads, and the process
+-- covers that split by a case on the bound field. A field whose type
+-- is not a finite split, such as a nat, has no derivation. Selecting
+-- an arm is the same evaluator. It uses no fuel. A case that is not
+-- that continuation, a scrutinee other than a bit or a declared data
+-- type, a run outside the fragment, and a sender whose value is not
+-- known when the arms differ, have no derivation.
 --
 -- `send A S` sends a value of type A and continues as S. `recv A S`
 -- receives one. `drecv x A S` binds that value to `x`, and `S` may
@@ -86,7 +90,7 @@ open import Data.Bool.Base using (Bool; true; false; _∧_; _∨_)
 open import Data.Empty using (⊥)
 open import Data.List.Base using (List; []; _∷_; _++_; length)
 open import Data.Maybe.Base using (Maybe; just; nothing)
-open import Data.Nat.Base using (ℕ; _≤_; z≤n; s≤s) renaming (zero to nzero; suc to nsuc)
+open import Data.Nat.Base using (ℕ; _≤_; _+_; z≤n; s≤s) renaming (zero to nzero; suc to nsuc)
 open import Data.Nat.Properties using () renaming (_≟_ to _≟ℕ_; _≤?_ to _≤?ℕ_)
 open import Data.Product using (_×_; _,_; proj₁; proj₂)
 open import Data.Sum using (_⊎_; inj₁; inj₂)
@@ -478,15 +482,19 @@ mutual
 
   -- `bare` is the positional arm. `named` binds the constructor's fields.
   -- `prod` binds the components of a pair or the fields of a record.
+  -- `fork` is a named constructor arm whose continuation cases on one
+  -- bound field. The inner arms are that field's constructors.
   data PArm : Set where
     bare  : Proc → PArm
     named : String → List String → Proc → PArm
     prod  : Pat → Proc → PArm
+    fork  : String → List String → String → List PArm → PArm
 
 body : PArm → Proc
 body (bare p) = p
 body (named _ _ p) = p
 body (prod _ p) = p
+body (fork _ _ _ qs) = mget unit "f" qs
 
 -- The binders a product pattern introduces, first component first.
 seconds : List (String × String) → List String
@@ -505,6 +513,14 @@ nth : ∀ {A : Set} → List A → ℕ → Maybe A
 nth [] _ = nothing
 nth (x ∷ _) nzero = just x
 nth (_ ∷ xs) (nsuc n) = nth xs n
+
+-- The binder at a left-to-right index is the name the case splits on.
+hitName : (xs : List String) (i : ℕ) (y : String) → Dec (nth xs i ≡ just y)
+hitName xs i y with nth xs i
+... | nothing = no′ (λ ())
+... | just z with z ≟ y
+... | yes′ refl = yes′ refl
+... | no′ z≢y = no′ (λ eq → z≢y (just-inj eq))
 
 bindM : ∀ {A B : Set} → Maybe A → (A → Maybe B) → Maybe B
 bindM nothing _ = nothing
@@ -636,6 +652,9 @@ justBit = con "just" (scons bit b0 snil)
 justTrue : Val maybeBool
 justTrue = con "just" (scons boolTy trueV snil)
 
+justFalse : Val maybeBool
+justFalse = con "just" (scons boolTy falseV snil)
+
 itemDecl : Decl
 itemDecl = mkDecl "Item" nzero (ctor "self" [] ∷ ctor "other" [] ∷ [])
 
@@ -765,11 +784,21 @@ grantBody = rMatch (rVar nzero)
 grantRun : RDef
 grantRun = rdef "grant" (boolTy ∷ []) boolTy grantBody
 
+-- `lateBool nothing` is false. `lateBool (just b)` is `b`.
+lateBoolBody : RTm
+lateBoolBody = rMatch (rVar nzero)
+  ( arm "nothing" (rCon "false" [])
+  ∷ arm "just" (rVar nzero)
+  ∷ [])
+
+lateBoolRun : RDef
+lateBoolRun = rdef "lateBool" (maybeBool ∷ []) boolTy lateBoolBody
+
 -- Latest first. The tail of a definition is the earlier prefix.
 runs : List RDef
 runs =
-  grantRun ∷ onJustRun ∷ lateFrameRun ∷ plusRun ∷ loopRun ∷ lateRun ∷ sizeRun ∷ badRun
-    ∷ countRun ∷ effectiveRun ∷ markRun ∷ earlyRun ∷ []
+  lateBoolRun ∷ grantRun ∷ onJustRun ∷ lateFrameRun ∷ plusRun ∷ loopRun ∷ lateRun
+    ∷ sizeRun ∷ badRun ∷ countRun ∷ effectiveRun ∷ markRun ∷ earlyRun ∷ []
 
 -- Every call in the body names a definition in the prefix. The check
 -- walks the whole term, so a call in an arm that is not taken still
@@ -1239,8 +1268,10 @@ ixOf (dat _ _) _ = nlit nzero
 -- order. A known value is a literal or a call the evaluator returns.
 -- A variable is not known. A run is applied with that same evaluator,
 -- and the result is cast to the result type written on the scrutinee.
--- Probing a constructor passes no fields: an arm that reads a field
--- does not decide, and no field value is invented.
+-- A receiver probes each constructor. A field the run reads, whose
+-- type is a bit or a declared data type, is split into the values of
+-- that type. A field the run binds and does not read is not split. A
+-- field that is not a finite split does not decide an arm.
 ------------------------------------------------------------------------
 
 ctorNames : List Ctor → List String
@@ -1350,33 +1381,7 @@ zipVal [] [] = just []
 zipVal ((_ , S) ∷ as) (p ∷ ps) = bindM (zipVal as ps) (λ rs → just ((p , S) ∷ rs))
 zipVal _ _ = nothing
 
-zipRun : String → Ty → Ty → List (String × Proto) → List String → List Proc → Maybe (List (Proc × Proto))
-zipRun _ _ _ _ [] [] = just []
-zipRun f A R arms (c ∷ cs) (p ∷ ps) =
-  bindM (evalAt f A c R) (λ r →
-    bindM (valCtor r) (λ k →
-      bindM (findArm k arms) (λ S →
-        bindM (zipRun f A R arms cs ps) (λ rs → just ((p , S) ∷ rs)))))
-zipRun _ _ _ _ _ _ = nothing
-
--- Each process arm is paired with the protocol arm its constructor
--- selects. Direct case zips in declaration order. A computed case
--- evaluates the run at each constructor of the payload.
-zipCase : (A : Ty) → String → Scrut → List (String × Proto) → List Proc → Maybe (List (Proc × Proto))
-zipCase A y (byVal x) arms ps with x ≟ y
-... | no′ _ = nothing
-... | yes′ _ with labelled A arms
-... | false = nothing
-... | true = zipVal arms ps
-zipCase A y (byRun f x R) arms ps with x ≟ y
-... | no′ _ = nothing
-... | yes′ _ with labelled R arms
-... | false = nothing
-... | true with runReady f
-... | false = nothing
-... | true with payCtors A
-... | nothing = nothing
-... | just cs = zipRun f A R arms cs ps
+-- `zipRun` and `zipCase` follow `splitOf`, below.
 
 ------------------------------------------------------------------------
 -- The evidence a sent nat owes. The bound is a numeral, or a name the
@@ -1446,8 +1451,9 @@ plain-not ()
 -- constructor arm on a pair or a record, or the wrong number of arms
 -- does not cover. A case is the continuation of the dependent
 -- action that binds the scrutinee. The sender is checked on the
--- selected arm. The receiver is checked on every arm. The fields do
--- not choose the protocol arm.
+-- selected arm by evaluating the run on the value. The receiver is
+-- checked on every constructor. A field the run reads chooses the
+-- protocol arm when that field is a bit or a declared data type.
 fieldAt : List Ctor → ℕ → Decl → List Ty → Maybe (String × List Ty)
 fieldAt [] _ _ _ = nothing
 fieldAt (ctor n fs ∷ _) nzero d as =
@@ -1489,6 +1495,328 @@ fieldsNamed _ _ = nothing
 
 armCtxNamed : Ty → String → List String → Ctx → Maybe Ctx
 armCtxNamed A c xs Γ = bindM (fieldsNamed A c) (λ ts → extend xs ts Γ)
+
+-- The field a constructor binds at a left-to-right index.
+tyAt : Ty → String → ℕ → Maybe Ty
+tyAt A c i = bindM (fieldsNamed A c) (λ ts → nth ts i)
+
+------------------------------------------------------------------------
+-- The split a run induces on one payload constructor. `one` is a
+-- single protocol: every value of the fields the run reads selects
+-- that protocol, or the run reads none. `node` cases on one field.
+-- The index is that field, left to right, and the children are its
+-- constructors in declaration order. A node whose children are the
+-- same protocol collapses to `one`.
+------------------------------------------------------------------------
+
+data Split : Set where
+  flat : Proto → Split
+  node : ℕ → List (String × Split) → Split
+
+flat≢node : ∀ {S i ch} → flat S ≢ node i ch
+flat≢node ()
+
+node≢flat : ∀ {i ch S} → node i ch ≢ flat S
+node≢flat ()
+
+flat-inj : ∀ {S T} → flat S ≡ flat T → S ≡ T
+flat-inj refl = refl
+
+-- A bit or a declared data type has finitely many constructors. A nat,
+-- a pair, a record, a vector, or unit does not split.
+splittable : Ty → Bool
+splittable bit = true
+splittable (dat _ _) = true
+splittable nat = false
+splittable unit = false
+splittable (pair _ _) = false
+splittable (rec _) = false
+splittable (vec _ _) = false
+
+eqNat : ℕ → ℕ → Bool
+eqNat i j with i ≟ℕ j
+... | yes′ _ = true
+... | no′ _ = false
+
+-- `lo ≤ j` and `j < hi`. An empty range, `lo` equal to `hi`, holds of
+-- no index.
+inRange : ℕ → ℕ → ℕ → Bool
+inRange lo hi j with lo ≤?ℕ j
+... | no′ _ = false
+... | yes′ _ with hi ≤?ℕ j
+... | yes′ _ = false
+... | no′ _ = true
+
+mutual
+  anyVar : (ℕ → Bool) → RTm → Bool
+  anyVar _ (rNat _) = false
+  anyVar p (rSuc t) = anyVar p t
+  anyVar _ rBit0 = false
+  anyVar _ rBit1 = false
+  anyVar _ rUnit = false
+  anyVar p (rPair a b) = anyVar p a ∨ anyVar p b
+  anyVar p (rVar i) = p i
+  anyVar p (rCon _ ts) = anyVars p ts
+  anyVar p (rMatch t as) = anyVar p t ∨ anyArms p as
+  anyVar p (rMatchNat t z s) = anyVar p t ∨ anyVar p z ∨ anyVar p s
+  anyVar p (rCall _ ts) = anyVars p ts
+
+  anyVars : (ℕ → Bool) → List RTm → Bool
+  anyVars _ [] = false
+  anyVars p (t ∷ ts) = anyVar p t ∨ anyVars p ts
+
+  anyArms : (ℕ → Bool) → List Arm → Bool
+  anyArms _ [] = false
+  anyArms p (arm _ b ∷ as) = anyVar p b ∨ anyArms p as
+
+occursBetween : ℕ → ℕ → RTm → Bool
+occursBetween lo hi t = anyVar (inRange lo hi) t
+
+-- Left-to-right indices of the splittable fields the term reads.
+-- A read of a field that does not split is `nothing`.
+readIdxs : List Ty → RTm → Maybe (List ℕ)
+readIdxs tys t = readGo nzero tys
+  where
+  readGo : ℕ → List Ty → Maybe (List ℕ)
+  readGo _ [] = just []
+  readGo i (A ∷ ts) with anyVar (eqNat (length ts)) t
+  ... | false = readGo (nsuc i) ts
+  ... | true with splittable A
+  ... | false = nothing
+  ... | true = bindM (readGo (nsuc i) ts) (λ is → just (i ∷ is))
+
+-- A field other than `i` occurs. `i` is a left-to-right index.
+others : List Ty → ℕ → RTm → Bool
+others tys i t = othersGo nzero tys
+  where
+  othersGo : ℕ → List Ty → Bool
+  othersGo _ [] = false
+  othersGo j (A ∷ ts) with j ≟ℕ i
+  ... | yes′ _ = othersGo (nsuc j) ts
+  ... | no′ _ with anyVar (eqNat (length ts)) t
+  ... | true = true
+  ... | false = othersGo (nsuc j) ts
+
+-- The de Bruijn index `k` names the field whose tail has that length.
+lookupField : List Ty → ℕ → Maybe (ℕ × Ty)
+lookupField tys k = look nzero tys
+  where
+  look : ℕ → List Ty → Maybe (ℕ × Ty)
+  look _ [] = nothing
+  look i (A ∷ ts) with length ts ≟ℕ k
+  ... | yes′ _ = just (i , A)
+  ... | no′ _ = look (nsuc i) ts
+
+mutual
+  dummy : Ty → Raw
+  dummy nat = rawNat nzero
+  dummy bit = rawBit b0
+  dummy unit = rawUnit
+  dummy (pair A B) = rawPair (dummy A) (dummy B)
+  dummy (rec fs) = rawRec (dummyFields fs)
+  dummy (vec A _) = rawVec (dummy A)
+  dummy (dat _ _) = rawCon "•" []
+
+  dummyFields : Fields → List Raw
+  dummyFields noFields = []
+  dummyFields (named _ A fs) = dummy A ∷ dummyFields fs
+
+dummys : List Ty → List Raw
+dummys [] = []
+dummys (A ∷ ts) = dummy A ∷ dummys ts
+
+-- A constructor applied to unread fields. A bit is the literal the
+-- evaluator matches. A declared constructor carries a dummy per field.
+mkRaw : Ty → String → List Ty → Raw
+mkRaw bit "b0" _ = rawBit b0
+mkRaw bit "b1" _ = rawBit b1
+mkRaw bit _ _ = rawBit b0
+mkRaw _ c ts = rawCon c (dummys ts)
+
+setAt : List Raw → ℕ → Raw → List Raw
+setAt [] _ _ = []
+setAt (_ ∷ rs) nzero r = r ∷ rs
+setAt (x ∷ rs) (nsuc i) r = x ∷ setAt rs i r
+
+getF : Raw → ℕ → Maybe Raw
+getF (rawCon _ rs) i = nth rs i
+getF _ _ = nothing
+
+setField : Raw → ℕ → Raw → Raw
+setField (rawCon c rs) i r = rawCon c (setAt rs i r)
+setField v _ _ = v
+
+-- `path` is the fields already chosen, outermost first. `i` is the
+-- field of the constructor those choices reach.
+poke : Raw → List ℕ → ℕ → Raw → Raw
+poke host [] i r = setField host i r
+poke host (j ∷ js) i r with getF host j
+... | nothing = host
+... | just inner = setField host j (poke inner js i r)
+
+evalRaw : String → Raw → (R : Ty) → Maybe (Val R)
+evalRaw f r R = bindM (apply runs f (r ∷ [])) (cast R)
+
+-- The same evaluator as `evalVal`, on a raw value already in hand.
+eval-raw : ∀ {A} (f : String) (v : Val A) (r : Raw) (R : Ty) →
+  rawOf v ≡ just r → evalVal f v R ≡ evalRaw f r R
+eval-raw f v r R eq rewrite eq = refl
+
+protoAt : String → Raw → Ty → List (String × Proto) → Maybe Proto
+protoAt f r R arms =
+  bindM (evalRaw f r R) (λ v → bindM (valCtor v) (λ k → findArm k arms))
+
+agreeSplit : Proto → List (String × Split) → Maybe Proto
+agreeSplit S [] = just S
+agreeSplit S ((_ , flat T) ∷ ch) with protoEq S T
+... | true = agreeSplit S ch
+... | false = nothing
+agreeSplit _ ((_ , node _ _) ∷ _) = nothing
+
+-- Every child the same protocol is that protocol. An empty split, or
+-- a child that still cases, stays a node.
+collapse : ℕ → List (String × Split) → Split
+collapse i [] = node i []
+collapse i ((c , node j ch) ∷ rest) = node i ((c , node j ch) ∷ rest)
+collapse i ((c , flat S) ∷ rest) with agreeSplit S rest
+... | just T = flat T
+... | nothing = node i ((c , flat S) ∷ rest)
+
+armBody : List Arm → String → Maybe RTm
+armBody [] _ = nothing
+armBody (arm d b ∷ as) c with c == d
+... | true = just b
+... | false = armBody as c
+
+-- The arm of a match on the payload, which is de Bruijn 0.
+opened : RTm → String → Maybe RTm
+opened (rMatch (rVar k) as) c with k ≟ℕ nzero
+... | yes′ _ = armBody as c
+... | no′ _ = nothing
+opened _ _ = nothing
+
+-- Constructors of a field, in declaration order, each probed by the
+-- same evaluator. Indices that remain are split under the value just
+-- chosen. This does not walk the run term.
+mutual
+  enumCs : String → Ty → List (String × Proto) → List Ty → Raw → ℕ →
+           List ℕ → Ty → List String → Maybe (List (String × Split))
+  enumOr : String → Ty → List (String × Proto) → List Ty → Raw →
+           List ℕ → Maybe Split
+
+  enumCs _ _ _ _ _ _ _ _ [] = just []
+  enumCs f R arms tys host i is A (c ∷ cs) =
+    bindM (fieldsNamed A c) (λ ts →
+      bindM (enumOr f R arms tys (setField host i (mkRaw A c ts)) is) (λ s →
+        bindM (enumCs f R arms tys host i is A cs) (λ ch → just ((c , s) ∷ ch))))
+
+  enumOr f R arms _ host [] =
+    bindM (protoAt f host R arms) (λ S → just (flat S))
+  enumOr f R arms tys host (i ∷ is) =
+    bindM (nth tys i) (λ A →
+      bindM (payCtors A) (λ cs →
+        bindM (enumCs f R arms tys host i is A cs) (λ ch → just (collapse i ch))))
+
+-- An empty-field probe. A constant arm decides. An arm that reads a
+-- field does not, and `splitOf` uses the split below instead.
+plainProbe : String → Ty → String → Ty → List (String × Proto) → Maybe Split
+plainProbe f A c R arms =
+  bindM (evalAt f A c R) (λ r →
+    bindM (valCtor r) (λ k →
+      bindM (findArm k arms) (λ S → just (flat S))))
+
+-- `guard` follows the arm. A match on a splittable field becomes a
+-- node whose children are that field's constructors. Any other shape
+-- is the finite enumeration of the fields the arm reads, or one
+-- evaluation when it reads none. `lo` and `hi` are the shifted
+-- indices of fields already chosen; a read there does not decide.
+mutual
+  guard : String → Ty → List (String × Proto) → List Ty → List ℕ →
+          ℕ → ℕ → Raw → RTm → Maybe Split
+  guard f R arms tys path lo hi host (rMatch (rVar k) as)
+    with occursBetween lo hi (rMatch (rVar k) as)
+       | readIdxs tys (rMatch (rVar k) as)
+  ... | true | _ = nothing
+  ... | false | nothing = nothing
+  ... | false | just is =
+    onField (lookupField tys k) f R arms tys path host as is
+  guard f R arms tys path lo hi host t
+    with occursBetween lo hi t | readIdxs tys t
+  ... | true | _ = nothing
+  ... | false | nothing = nothing
+  ... | false | just is = enumOr f R arms tys host is
+
+  onField : Maybe (ℕ × Ty) → String → Ty → List (String × Proto) →
+            List Ty → List ℕ → Raw → List Arm → List ℕ → Maybe Split
+  onField nothing f R arms tys _ host _ is = enumOr f R arms tys host is
+  onField (just (i , A)) f R arms tys path host as _ with splittable A
+  ... | false = nothing
+  ... | true with payCtors A
+  ... | nothing = nothing
+  ... | just cs = bindM (kids f R arms tys path host i A cs as)
+                    (λ ch → just (collapse i ch))
+
+  kids : String → Ty → List (String × Proto) → List Ty → List ℕ →
+         Raw → ℕ → Ty → List String → List Arm → Maybe (List (String × Split))
+  kids _ _ _ _ _ _ _ _ [] [] = just []
+  kids f R arms tys path host i A (c ∷ cs) (arm d b ∷ as) with c == d
+  ... | false = nothing
+  ... | true with fieldsNamed A c
+  ... | nothing = nothing
+  ... | just ts =
+    bindM (descend f R arms tys path host i A c ts b) (λ s →
+      bindM (kids f R arms tys path host i A cs as) (λ ch → just ((c , s) ∷ ch)))
+  kids _ _ _ _ _ _ _ _ _ _ = nothing
+
+  descend : String → Ty → List (String × Proto) → List Ty → List ℕ →
+            Raw → ℕ → Ty → String → List Ty → RTm → Maybe Split
+  descend f R arms tys path host i A c [] b with others tys i b
+  ... | true = nothing
+  ... | false =
+    guard f R arms [] path nzero nzero (poke host path i (mkRaw A c [])) b
+  descend f R arms tys path host i A c ts@(_ ∷ _) b =
+    guard f R arms ts (path ++ (i ∷ [])) (length ts) (length ts + length tys)
+      (poke host path i (mkRaw A c ts)) b
+
+splitOf : String → Ty → String → Ty → List (String × Proto) → Maybe Split
+splitOf f A c R arms with findRun runs f
+... | nothing = nothing
+... | just (ts , _ , body , _) with length ts ≟ℕ (nsuc nzero)
+... | no′ _ = nothing
+... | yes′ _ with fieldsNamed A c
+... | nothing = nothing
+... | just tys with opened body c
+... | nothing = plainProbe f A c R arms
+... | just b = guard f R arms tys [] nzero nzero (mkRaw A c tys) b
+
+-- A uniform split pairs the process with that protocol. A split that
+-- still cases on a field is not a flat list of processes.
+zipRun : String → Ty → Ty → List (String × Proto) → List String → List Proc → Maybe (List (Proc × Proto))
+zipRun _ _ _ _ [] [] = just []
+zipRun f A R arms (c ∷ cs) (p ∷ ps) with splitOf f A c R arms
+... | just (flat S) = bindM (zipRun f A R arms cs ps) (λ rs → just ((p , S) ∷ rs))
+... | just (node _ _) = nothing
+... | nothing = nothing
+zipRun _ _ _ _ _ _ = nothing
+
+-- Each process arm is paired with the protocol arm its constructor
+-- selects. Direct case zips in declaration order. A computed case
+-- evaluates the run at each constructor of the payload.
+zipCase : (A : Ty) → String → Scrut → List (String × Proto) → List Proc → Maybe (List (Proc × Proto))
+zipCase A y (byVal x) arms ps with x ≟ y
+... | no′ _ = nothing
+... | yes′ _ with labelled A arms
+... | false = nothing
+... | true = zipVal arms ps
+zipCase A y (byRun f x R) arms ps with x ≟ y
+... | no′ _ = nothing
+... | yes′ _ with labelled R arms
+... | false = nothing
+... | true with runReady f
+... | false = nothing
+... | true with payCtors A
+... | nothing = nothing
+... | just cs = zipRun f A R arms cs ps
 
 -- The pattern's field names are the type's, in that order. The last
 -- binder is innermost, as `extend` places a constructor's fields.
@@ -1544,7 +1872,8 @@ mutual
 
   -- One process per protocol arm, in order. The process is a subterm
   -- of the match, so the check recurses on it. A named arm binds the
-  -- fields of that constructor. The protocol arm was chosen with no fields.
+  -- fields of that constructor. The protocol arm is the one written
+  -- for that constructor.
   data ArmsAt (Γ : Ctx) (ρ : Idx) (A : Ty) : List (String × Proto) → List PArm → Set where
     at-nil   : ArmsAt Γ ρ A [] []
     at-cons  : ∀ {c S as p ps} →
@@ -1557,27 +1886,53 @@ mutual
       ArmsAt Γ ρ A as ps →
       ArmsAt Γ ρ A ((c , S) ∷ as) (named c xs p ∷ ps)
 
-  -- A computed case. Each constructor of the payload is evaluated
-  -- with no fields, and the process arm conforms to the arm of that
-  -- result. A named process arm still binds the payload's fields.
+  -- The arms of a field the run reads. A uniform protocol is one
+  -- process. A nested split is a `fork` on that field.
+  data ForkArms (Γ : Ctx) (ρ : Idx) (B : Ty) :
+      List (String × Split) → List PArm → Set where
+    fork-nil   : ForkArms Γ ρ B [] []
+    fork-bare  : ∀ {c S ch p ps} →
+      Conformsρ Γ ρ p S →
+      ForkArms Γ ρ B ch ps →
+      ForkArms Γ ρ B ((c , flat S) ∷ ch) (bare p ∷ ps)
+    fork-named : ∀ {c S ch xs p Δ ps} →
+      armCtxNamed B c xs Γ ≡ just Δ →
+      Conformsρ Δ ρ p S →
+      ForkArms Γ ρ B ch ps →
+      ForkArms Γ ρ B ((c , flat S) ∷ ch) (named c xs p ∷ ps)
+    fork-nest  : ∀ {c xs y i ch2 qs Δ C ch ps} →
+      armCtxNamed B c xs Γ ≡ just Δ →
+      nth xs i ≡ just y →
+      tyAt B c i ≡ just C →
+      ForkArms Δ ρ C ch2 qs →
+      ForkArms Γ ρ B ch ps →
+      ForkArms Γ ρ B ((c , node i ch2) ∷ ch) (fork c xs y qs ∷ ps)
+
+  -- A computed case. Each constructor is probed on the fields the run
+  -- reads. `one` is a single continuation. `node` is a case on the
+  -- bound field. A named process arm still binds the payload's fields.
   data ArmsRun (Γ : Ctx) (ρ : Idx) (f : String) (A R : Ty)
       (arms : List (String × Proto)) : List String → List PArm → Set where
     run-nil   : ArmsRun Γ ρ f A R arms [] []
-    run-cons  : ∀ {c cs p ps r k S} →
-      evalAt f A c R ≡ just r →
-      valCtor r ≡ just k →
-      findArm k arms ≡ just S →
+    run-cons  : ∀ {c cs p ps S} →
+      splitOf f A c R arms ≡ just (flat S) →
       Conformsρ Γ ρ p S →
       ArmsRun Γ ρ f A R arms cs ps →
       ArmsRun Γ ρ f A R arms (c ∷ cs) (bare p ∷ ps)
-    run-named : ∀ {c cs xs p Δ ps r k S} →
-      evalAt f A c R ≡ just r →
-      valCtor r ≡ just k →
-      findArm k arms ≡ just S →
+    run-named : ∀ {c cs xs p Δ ps S} →
+      splitOf f A c R arms ≡ just (flat S) →
       armCtxNamed A c xs Γ ≡ just Δ →
       Conformsρ Δ ρ p S →
       ArmsRun Γ ρ f A R arms cs ps →
       ArmsRun Γ ρ f A R arms (c ∷ cs) (named c xs p ∷ ps)
+    run-fork  : ∀ {c cs xs y qs Δ i ch B ps} →
+      splitOf f A c R arms ≡ just (node i ch) →
+      armCtxNamed A c xs Γ ≡ just Δ →
+      nth xs i ≡ just y →
+      tyAt A c i ≡ just B →
+      ForkArms Δ ρ B ch qs →
+      ArmsRun Γ ρ f A R arms cs ps →
+      ArmsRun Γ ρ f A R arms (c ∷ cs) (fork c xs y qs ∷ ps)
 
   data Conformsρ (Γ : Ctx) (ρ : Idx) : Proc → Proto → Set where
     done-end : Conformsρ Γ ρ done end
@@ -1747,6 +2102,8 @@ mutual
     named c xs (substProc (shadows xs e) p) ∷ substArms e ps
   substArms e (prod pat p ∷ ps) =
     prod pat (substProc (shadows (patBinders pat) e) p) ∷ substArms e ps
+  substArms e (fork c xs y qs ∷ ps) =
+    fork c xs y (substArms (shadows xs e) qs) ∷ substArms e ps
 
 -- The constructor name matches and the binders match the spine.
 -- Otherwise the arm is not the one the value takes. The clauses are
@@ -1758,23 +2115,6 @@ openNamed k c xs p sp with k == c | rawSpine sp
 ... | true | just rs with lenEnv xs rs
 ... | nothing = nothing
 ... | just e = just (substProc e p)
-
--- `pickCtor` receives the Boolean comparison. `nthProc` makes it.
--- A meeting follows that same comparison, so the equality is the one
--- `pickCtor` computes. The false branch is the tail of the constructor list.
--- A bare arm is the stored process. A named arm is that process with
--- the value's fields substituted for its binders.
-mutual
-  pickCtor : Bool → PArm → Spine → List Ctor → String → List PArm → Maybe Proc
-  pickCtor true (bare p) _ _ _ _ = just p
-  pickCtor true (named k xs p) sp _ c _ = openNamed k c xs p sp
-  pickCtor true (prod _ _) _ _ _ _ = nothing
-  pickCtor false _ sp cs name ps = nthProc cs name sp ps
-
-  nthProc : List Ctor → String → Spine → List PArm → Maybe Proc
-  nthProc [] _ _ _ = nothing
-  nthProc (_ ∷ _) _ _ [] = nothing
-  nthProc (ctor n _ ∷ cs) c sp (a ∷ ps) = pickCtor (c == n) a sp cs c ps
 
 -- The two components, last binder innermost. A component that has no
 -- raw image does not open the arm.
@@ -1801,37 +2141,86 @@ fillArm : Proc → Maybe FEnv → Maybe Proc
 fillArm _ nothing = nothing
 fillArm p (just e) = just (substProc e p)
 
-armOf : (A : Ty) → Val A → List PArm → Maybe Proc
-armOf bit b0 [] = nothing
-armOf bit b0 (_ ∷ []) = nothing
-armOf bit b0 (_ ∷ _ ∷ _ ∷ _) = nothing
-armOf bit b0 (bare p ∷ _ ∷ []) = just p
-armOf bit b0 (named _ [] p ∷ _ ∷ []) = just p
-armOf bit b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) = nothing
-armOf bit b0 (prod _ _ ∷ _ ∷ []) = nothing
-armOf bit b1 [] = nothing
-armOf bit b1 (_ ∷ []) = nothing
-armOf bit b1 (_ ∷ _ ∷ _ ∷ _) = nothing
-armOf bit b1 (_ ∷ bare q ∷ []) = just q
-armOf bit b1 (_ ∷ named _ [] q ∷ []) = just q
-armOf bit b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) = nothing
-armOf bit b1 (_ ∷ prod _ _ ∷ []) = nothing
-armOf nat _ _ = nothing
-armOf unit _ _ = nothing
-armOf (vec _ _) _ _ = nothing
-armOf (pair _ _) (tup _ _) (_ ∷ _ ∷ _) = nothing
-armOf (pair _ _) (tup _ _) [] = nothing
-armOf (pair _ _) (tup a b) (prod (pPair x y) p ∷ []) = fillArm p (openPair x y a b)
-armOf (pair _ _) (tup _ _) (prod (pRec _) _ ∷ []) = nothing
-armOf (pair _ _) (tup _ _) (bare _ ∷ []) = nothing
-armOf (pair _ _) (tup _ _) (named _ _ _ ∷ []) = nothing
-armOf (rec _) (rec _) (_ ∷ _ ∷ _) = nothing
-armOf (rec _) (rec _) [] = nothing
-armOf (rec _) (rec row) (prod (pRec bs) p ∷ []) = fillArm p (openRec bs row)
-armOf (rec _) (rec _) (prod (pPair _ _) _ ∷ []) = nothing
-armOf (rec _) (rec _) (bare _ ∷ []) = nothing
-armOf (rec _) (rec _) (named _ _ _ ∷ []) = nothing
-armOf (dat d _) (con c sp) ps = nthProc (ctorsOf d) c sp ps
+-- `pickCtor` receives the Boolean comparison. `nthProc` makes it.
+-- A meeting follows that same comparison, so the equality is the one
+-- `pickCtor` computes. The false branch is the tail of the constructor list.
+-- A bare arm is the stored process. A named arm is that process with
+-- the value's fields substituted for its binders. A `fork` opens the
+-- same way, then cases on the named field and substitutes the outer
+-- fields into the arm that field selects.
+mutual
+  pickCtor : Bool → PArm → Spine → List Ctor → String → List PArm → Maybe Proc
+  pickCtor true (bare p) _ _ _ _ = just p
+  pickCtor true (named k xs p) sp _ c _ = openNamed k c xs p sp
+  pickCtor true (prod _ _) _ _ _ _ = nothing
+  pickCtor true (fork k xs y qs) sp _ c _ = openFork k c xs y qs sp
+  pickCtor false _ sp cs name ps = nthProc cs name sp ps
+
+  nthProc : List Ctor → String → Spine → List PArm → Maybe Proc
+  nthProc [] _ _ _ = nothing
+  nthProc (_ ∷ _) _ _ [] = nothing
+  nthProc (ctor n _ ∷ cs) c sp (a ∷ ps) = pickCtor (c == n) a sp cs c ps
+
+  openFork : String → String → List String → String → List PArm → Spine → Maybe Proc
+  openFork k c xs y qs sp = openAt (k == c) (rawSpine sp) xs y qs sp
+
+  -- The name comparison and the raw spine are arguments, so a proof
+  -- can match them without a `with`.
+  openAt : Bool → Maybe (List Raw) → List String → String → List PArm → Spine → Maybe Proc
+  openAt false _ _ _ _ _ = nothing
+  openAt true nothing _ _ _ _ = nothing
+  openAt true (just rs) xs y qs sp = openEnv (lenEnv xs rs) xs y qs sp
+
+  openEnv : Maybe FEnv → List String → String → List PArm → Spine → Maybe Proc
+  openEnv nothing _ _ _ _ = nothing
+  openEnv (just e) xs y qs sp = seek xs y e qs sp
+
+  seek : List String → String → FEnv → List PArm → Spine → Maybe Proc
+  seek [] _ _ _ _ = nothing
+  seek (_ ∷ _) _ _ _ snil = nothing
+  seek (x ∷ xs) y e qs (scons A v sp) = seekAt A x xs y e qs v sp (x ≟ y)
+
+  seekAt : (A : Ty) (x : String) (xs : List String) (y : String) (e : FEnv)
+           (qs : List PArm) (v : Val A) (sp : Spine) →
+           Dec (x ≡ y) → Maybe Proc
+  seekAt _ _ xs y e qs _ sp (no′ _) = seek xs y e qs sp
+  seekAt A _ _ _ e qs v _ (yes′ _) = bindM (armOf A v qs) (λ p → just (substProc e p))
+
+  armOf : (A : Ty) → Val A → List PArm → Maybe Proc
+  armOf bit b0 [] = nothing
+  armOf bit b0 (_ ∷ []) = nothing
+  armOf bit b0 (_ ∷ _ ∷ _ ∷ _) = nothing
+  armOf bit b0 (bare p ∷ _ ∷ []) = just p
+  armOf bit b0 (named _ [] p ∷ _ ∷ []) = just p
+  armOf bit b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) = nothing
+  armOf bit b0 (prod _ _ ∷ _ ∷ []) = nothing
+  armOf bit b0 (fork _ _ _ _ ∷ _ ∷ []) = nothing
+  armOf bit b1 [] = nothing
+  armOf bit b1 (_ ∷ []) = nothing
+  armOf bit b1 (_ ∷ _ ∷ _ ∷ _) = nothing
+  armOf bit b1 (_ ∷ bare q ∷ []) = just q
+  armOf bit b1 (_ ∷ named _ [] q ∷ []) = just q
+  armOf bit b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) = nothing
+  armOf bit b1 (_ ∷ prod _ _ ∷ []) = nothing
+  armOf bit b1 (_ ∷ fork _ _ _ _ ∷ []) = nothing
+  armOf nat _ _ = nothing
+  armOf unit _ _ = nothing
+  armOf (vec _ _) _ _ = nothing
+  armOf (pair _ _) (tup _ _) (_ ∷ _ ∷ _) = nothing
+  armOf (pair _ _) (tup _ _) [] = nothing
+  armOf (pair _ _) (tup a b) (prod (pPair x y) p ∷ []) = fillArm p (openPair x y a b)
+  armOf (pair _ _) (tup _ _) (prod (pRec _) _ ∷ []) = nothing
+  armOf (pair _ _) (tup _ _) (bare _ ∷ []) = nothing
+  armOf (pair _ _) (tup _ _) (named _ _ _ ∷ []) = nothing
+  armOf (pair _ _) (tup _ _) (fork _ _ _ _ ∷ []) = nothing
+  armOf (rec _) (rec _) (_ ∷ _ ∷ _) = nothing
+  armOf (rec _) (rec _) [] = nothing
+  armOf (rec _) (rec row) (prod (pRec bs) p ∷ []) = fillArm p (openRec bs row)
+  armOf (rec _) (rec _) (prod (pPair _ _) _ ∷ []) = nothing
+  armOf (rec _) (rec _) (bare _ ∷ []) = nothing
+  armOf (rec _) (rec _) (named _ _ _ ∷ []) = nothing
+  armOf (rec _) (rec _) (fork _ _ _ _ ∷ []) = nothing
+  armOf (dat d _) (con c sp) ps = nthProc (ctorsOf d) c sp ps
 
 -- One function for the value `ground` returns, so a meeting can
 -- follow that step by congruence. `nothing` selects no arm.
@@ -2292,6 +2681,11 @@ data AnswerRun (Γ : Ctx) (ρ : Idx) (f : String) (A R : Ty)
   yes-cr : ArmsRun Γ ρ f A R arms cs ps → AnswerRun Γ ρ f A R arms cs ps
   no-cr  : ¬ ArmsRun Γ ρ f A R arms cs ps → AnswerRun Γ ρ f A R arms cs ps
 
+data AnswerFork (Γ : Ctx) (ρ : Idx) (B : Ty)
+    (ch : List (String × Split)) (qs : List PArm) : Set where
+  yes-fk : ForkArms Γ ρ B ch qs → AnswerFork Γ ρ B ch qs
+  no-fk  : ¬ ForkArms Γ ρ B ch qs → AnswerFork Γ ρ B ch qs
+
 cover? : (A : Ty) (ps : List PArm) → Dec (Covered A ps)
 cover? bit [] = no′ (λ ())
 cover? bit (_ ∷ []) = no′ (λ ())
@@ -2303,6 +2697,7 @@ cover? (pair _ _) (prod (pPair _ _) _ ∷ []) = yes′ pair-cov
 cover? (pair _ _) (prod (pRec _) _ ∷ []) = no′ (λ ())
 cover? (pair _ _) (bare _ ∷ []) = no′ (λ ())
 cover? (pair _ _) (named _ _ _ ∷ []) = no′ (λ ())
+cover? (pair _ _) (fork _ _ _ _ ∷ []) = no′ (λ ())
 cover? (pair _ _) [] = no′ (λ ())
 cover? (pair _ _) (_ ∷ _ ∷ _) = no′ (λ ())
 cover? (rec fs) (prod (pRec bs) _ ∷ []) with fits? fs bs
@@ -2311,6 +2706,7 @@ cover? (rec fs) (prod (pRec bs) _ ∷ []) with fits? fs bs
 cover? (rec _) (prod (pPair _ _) _ ∷ []) = no′ (λ ())
 cover? (rec _) (bare _ ∷ []) = no′ (λ ())
 cover? (rec _) (named _ _ _ ∷ []) = no′ (λ ())
+cover? (rec _) (fork _ _ _ _ ∷ []) = no′ (λ ())
 cover? (rec _) [] = no′ (λ ())
 cover? (rec _) (_ ∷ _ ∷ _) = no′ (λ ())
 cover? (vec _ _) _ = no′ (λ ())
@@ -2353,6 +2749,17 @@ on-run {Γ} {ρ} {B} {x} {y} {f} {R} {ps} {arms} _ _ _ eq (no-cr nd) =
           ArmsRun ((x , applyTy ρ B) ∷ Γ) (renameIdx y x (shadow y ρ)) f (applyTy ρ B) R arms cs ps)
         (just-inj (trans (sym p) eq)) ds) })
 
+castFork : ∀ {ρ B C Δ Θ ch dh qs} →
+  Δ ≡ Θ → B ≡ C → ch ≡ dh →
+  ForkArms Δ ρ B ch qs → ForkArms Θ ρ C dh qs
+castFork refl refl refl fk = fk
+
+chOf : ∀ {i j ch dh} → node i ch ≡ node j dh → ch ≡ dh
+chOf refl = refl
+
+nodeIdx : ∀ {i j ch dh} → node i ch ≡ node j dh → i ≡ j
+nodeIdx refl = refl
+
 mutual
   decideArms : (Γ : Ctx) (ρ : Idx) (A : Ty) (i : ℕ) (ps : List PArm) (S : Proto) →
     AnswerArms Γ ρ A i ps S
@@ -2378,6 +2785,7 @@ mutual
   ... | yes d with decideArms Γ ρ A (nsuc i) ps S
   ... | yes-arms ds = yes-arms (arms-prod eq d ds)
   ... | no-arms nd = no-arms (λ { (arms-prod _ _ ds) → nd ds })
+  decideArms _ _ _ _ (fork _ _ _ _ ∷ _) _ = no-arms (λ ())
 
   decideρ : (Γ : Ctx) (ρ : Idx) (P : Proc) (S : Proto) → Answerρ Γ ρ P S
   decideρ Γ ρ done end = yes done-end
@@ -2541,65 +2949,98 @@ mutual
   ... | yes-at ds = yes-at (at-named ac d ds)
   ... | no-at nd = no-at (λ { (at-named _ _ ds) → nd ds })
   decideAt Γ ρ A (_ ∷ _) (prod _ _ ∷ _) = no-at (λ ())
+  decideAt Γ ρ A (_ ∷ _) (fork _ _ _ _ ∷ _) = no-at (λ ())
   decideAt Γ ρ A [] (_ ∷ _) = no-at (λ ())
   decideAt Γ ρ A (_ ∷ _) [] = no-at (λ ())
 
+  decideFork : (Γ : Ctx) (ρ : Idx) (B : Ty) (ch : List (String × Split))
+    (qs : List PArm) → AnswerFork Γ ρ B ch qs
+  decideFork _ _ _ [] [] = yes-fk fork-nil
+  decideFork _ _ _ [] (_ ∷ _) = no-fk (λ ())
+  decideFork _ _ _ (_ ∷ _) [] = no-fk (λ ())
+  decideFork Γ ρ B ((c , flat S) ∷ ch) (bare p ∷ ps) with decideρ Γ ρ p S
+  ... | no nd = no-fk (λ { (fork-bare d _) → nd d })
+  ... | yes d with decideFork Γ ρ B ch ps
+  ... | yes-fk ds = yes-fk (fork-bare d ds)
+  ... | no-fk nd = no-fk (λ { (fork-bare _ ds) → nd ds })
+  decideFork Γ ρ B ((c , flat S) ∷ ch) (named k xs p ∷ ps) with c ≟ k
+  ... | no′ c≢k = no-fk (λ { (fork-named _ _ _) → c≢k refl })
+  ... | yes′ refl with armCtxNamed B c xs Γ in ac
+  ... | nothing = no-fk (λ { (fork-named q _ _) → just≢nothing (trans (sym q) ac) })
+  ... | just Δ with decideρ Δ ρ p S
+  ... | no nd = no-fk (λ { (fork-named q d _) →
+        nd (subst (λ Θ → Conformsρ Θ ρ p S) (just-inj (trans (sym q) ac)) d) })
+  ... | yes d with decideFork Γ ρ B ch ps
+  ... | yes-fk ds = yes-fk (fork-named ac d ds)
+  ... | no-fk nd = no-fk (λ { (fork-named _ _ ds) → nd ds })
+  decideFork Γ ρ B ((c , node i ch2) ∷ ch) (fork k xs y qs ∷ ps) with c ≟ k
+  ... | no′ c≢k = no-fk (λ { (fork-nest _ _ _ _ _) → c≢k refl })
+  ... | yes′ refl with armCtxNamed B c xs Γ in ac
+  ... | nothing = no-fk (λ { (fork-nest q _ _ _ _) → just≢nothing (trans (sym q) ac) })
+  ... | just Δ with hitName xs i y
+  ... | no′ ¬hit = no-fk (λ { (fork-nest _ q _ _ _) → ¬hit q })
+  ... | yes′ ni with tyAt B c i in tb
+  ... | nothing = no-fk (λ { (fork-nest _ _ q _ _) → just≢nothing (trans (sym q) tb) })
+  ... | just C with decideFork Δ ρ C ch2 qs
+  ... | no-fk nd = no-fk (λ { (fork-nest {Δ = Δ′} {C = C′} ctx _ tq fk _) →
+        nd (castFork (just-inj (trans (sym ctx) ac)) (just-inj (trans (sym tq) tb)) refl fk) })
+  ... | yes-fk fk with decideFork Γ ρ B ch ps
+  ... | yes-fk ds = yes-fk (fork-nest ac ni tb fk ds)
+  ... | no-fk nd = no-fk (λ { (fork-nest _ _ _ _ ds) → nd ds })
+  decideFork _ _ _ (( _ , flat _) ∷ _) (fork _ _ _ _ ∷ _) = no-fk (λ ())
+  decideFork _ _ _ (( _ , node _ _) ∷ _) (bare _ ∷ _) = no-fk (λ ())
+  decideFork _ _ _ (( _ , node _ _) ∷ _) (named _ _ _ ∷ _) = no-fk (λ ())
+  decideFork _ _ _ (_ ∷ _) (prod _ _ ∷ _) = no-fk (λ ())
+
   decideRun : (Γ : Ctx) (ρ : Idx) (f : String) (A R : Ty) (arms : List (String × Proto))
     (cs : List String) (ps : List PArm) → AnswerRun Γ ρ f A R arms cs ps
-  decideRun Γ ρ f A R arms [] [] = yes-cr run-nil
-  decideRun Γ ρ f A R arms (c ∷ cs) (bare p ∷ ps) with evalAt f A c R in er
-  ... | nothing = no-cr (λ { (run-cons q _ _ _ _) → just≢nothing (trans (sym q) er) })
-  ... | just r with valCtor r in ek
-  ... | nothing = no-cr (λ { (run-cons q k _ _ _) →
-        just≢nothing (trans (sym k) (trans (cong valCtor (just-inj (trans (sym q) er))) ek)) })
-  ... | just k with findArm k arms in ef
-  ... | nothing = no-cr (λ { (run-cons q kp sp _ _) →
-        just≢nothing (trans (sym sp)
-          (trans (cong (λ n → findArm n arms)
-            (just-inj (trans (sym kp)
-              (trans (cong valCtor (just-inj (trans (sym q) er))) ek))))
-            ef)) })
-  ... | just S with decideρ Γ ρ p S
-  ... | no nd = no-cr (λ { (run-cons q kp sp d _) →
-        nd (subst (λ T → Conformsρ Γ ρ p T)
-          (just-inj (trans (sym sp)
-            (trans (cong (λ n → findArm n arms)
-              (just-inj (trans (sym kp)
-                (trans (cong valCtor (just-inj (trans (sym q) er))) ek))))
-              ef)))
-          d) })
+  decideRun _ _ _ _ _ _ [] [] = yes-cr run-nil
+  decideRun Γ ρ f A R arms (c ∷ cs) (bare p ∷ ps) with splitOf f A c R arms in sp
+  ... | nothing = no-cr (λ { (run-cons q _ _) → just≢nothing (trans (sym q) sp) })
+  ... | just (node _ _) = no-cr (λ { (run-cons q _ _) → flat≢node (just-inj (trans (sym q) sp)) })
+  ... | just (flat S) with decideρ Γ ρ p S
+  ... | no nd = no-cr (λ { (run-cons q d _) →
+        nd (subst (λ T → Conformsρ Γ ρ p T) (flat-inj (just-inj (trans (sym q) sp))) d) })
   ... | yes d with decideRun Γ ρ f A R arms cs ps
-  ... | yes-cr ds = yes-cr (run-cons er ek ef d ds)
-  ... | no-cr nd = no-cr (λ { (run-cons _ _ _ _ ds) → nd ds })
+  ... | yes-cr ds = yes-cr (run-cons sp d ds)
+  ... | no-cr nd = no-cr (λ { (run-cons _ _ ds) → nd ds })
   decideRun Γ ρ f A R arms (c ∷ cs) (named k xs p ∷ ps) with c ≟ k
-  ... | no′ c≢k = no-cr (λ { (run-named _ _ _ _ _ _) → c≢k refl })
-  ... | yes′ refl with evalAt f A c R in er
-  ... | nothing = no-cr (λ { (run-named q _ _ _ _ _) → just≢nothing (trans (sym q) er) })
-  ... | just r with valCtor r in ek
-  ... | nothing = no-cr (λ { (run-named q k′ _ _ _ _) →
-        just≢nothing (trans (sym k′) (trans (cong valCtor (just-inj (trans (sym q) er))) ek)) })
-  ... | just k′ with findArm k′ arms in ef
-  ... | nothing = no-cr (λ { (run-named q kp sp _ _ _) →
-        just≢nothing (trans (sym sp)
-          (trans (cong (λ n → findArm n arms)
-            (just-inj (trans (sym kp)
-              (trans (cong valCtor (just-inj (trans (sym q) er))) ek))))
-            ef)) })
-  ... | just S with armCtxNamed A c xs Γ in ac
-  ... | nothing = no-cr (λ { (run-named _ _ _ q _ _) → just≢nothing (trans (sym q) ac) })
+  ... | no′ c≢k = no-cr (λ { (run-named _ _ _ _) → c≢k refl })
+  ... | yes′ refl with splitOf f A c R arms in sp
+  ... | nothing = no-cr (λ { (run-named q _ _ _) → just≢nothing (trans (sym q) sp) })
+  ... | just (node _ _) = no-cr (λ { (run-named q _ _ _) → flat≢node (just-inj (trans (sym q) sp)) })
+  ... | just (flat S) with armCtxNamed A c xs Γ in ac
+  ... | nothing = no-cr (λ { (run-named _ q _ _) → just≢nothing (trans (sym q) ac) })
   ... | just Δ with decideρ Δ ρ p S
-  ... | no nd = no-cr (λ { (run-named {Δ = Δ′} q kp sp ctx d _) →
+  ... | no nd = no-cr (λ { (run-named {Δ = Δ′} q ctx d _) →
         nd (subst (λ Θ → Conformsρ Θ ρ p S) (just-inj (trans (sym ctx) ac))
-          (subst (λ T → Conformsρ Δ′ ρ p T)
-            (just-inj (trans (sym sp)
-              (trans (cong (λ n → findArm n arms)
-                (just-inj (trans (sym kp)
-                  (trans (cong valCtor (just-inj (trans (sym q) er))) ek))))
-                ef)))
-            d)) })
+          (subst (λ T → Conformsρ Δ′ ρ p T) (flat-inj (just-inj (trans (sym q) sp))) d)) })
   ... | yes d with decideRun Γ ρ f A R arms cs ps
-  ... | yes-cr ds = yes-cr (run-named er ek ef ac d ds)
-  ... | no-cr nd = no-cr (λ { (run-named _ _ _ _ _ ds) → nd ds })
+  ... | yes-cr ds = yes-cr (run-named sp ac d ds)
+  ... | no-cr nd = no-cr (λ { (run-named _ _ _ ds) → nd ds })
+  decideRun Γ ρ f A R arms (c ∷ cs) (fork k xs y qs ∷ ps) with c ≟ k
+  ... | no′ c≢k = no-cr (λ { (run-fork _ _ _ _ _ _) → c≢k refl })
+  ... | yes′ refl with splitOf f A c R arms in sp
+  ... | nothing = no-cr (λ { (run-fork q _ _ _ _ _) → just≢nothing (trans (sym q) sp) })
+  ... | just (flat _) = no-cr (λ { (run-fork q _ _ _ _ _) → node≢flat (just-inj (trans (sym q) sp)) })
+  ... | just (node i ch) with armCtxNamed A c xs Γ in ac
+  ... | nothing = no-cr (λ { (run-fork _ q _ _ _ _) → just≢nothing (trans (sym q) ac) })
+  ... | just Δ with hitName xs i y
+  ... | no′ ¬hit = no-cr (λ { (run-fork {i = i′} q _ p _ _ _) →
+        ¬hit (subst (λ n → nth xs n ≡ just y) (nodeIdx (just-inj (trans (sym q) sp))) p) })
+  ... | yes′ ni with tyAt A c i in tb
+  ... | nothing = no-cr (λ { (run-fork {i = i′} {B = B′} q _ _ p _ _) →
+        just≢nothing (trans (sym (subst (λ n → tyAt A c n ≡ just B′)
+                                    (nodeIdx (just-inj (trans (sym q) sp))) p)) tb) })
+  ... | just B with decideFork Δ ρ B ch qs
+  ... | no-fk nd = no-cr (λ { (run-fork {Δ = Δ′} {i = i′} {B = B′} q ctx _ tq fk _) →
+        nd (castFork (just-inj (trans (sym ctx) ac))
+             (just-inj (trans (sym (subst (λ n → tyAt A c n ≡ just B′)
+                                      (nodeIdx (just-inj (trans (sym q) sp))) tq)) tb))
+             (chOf (just-inj (trans (sym q) sp))) fk) })
+  ... | yes-fk fk with decideRun Γ ρ f A R arms cs ps
+  ... | yes-cr ds = yes-cr (run-fork sp ac ni tb fk ds)
+  ... | no-cr nd = no-cr (λ { (run-fork _ _ _ _ _ ds) → nd ds })
   decideRun _ _ _ _ _ _ (_ ∷ _) (prod _ _ ∷ _) = no-cr (λ ())
   decideRun _ _ _ _ _ _ [] (_ ∷ _) = no-cr (λ ())
   decideRun _ _ _ _ _ _ (_ ∷ _) [] = no-cr (λ ())
@@ -2957,6 +3398,7 @@ mutual
   skelAll (bare p ∷ ps) = skel p ∷ skelAll ps
   skelAll (named _ _ p ∷ ps) = skel p ∷ skelAll ps
   skelAll (prod _ p ∷ ps) = skel p ∷ skelAll ps
+  skelAll (fork _ _ _ qs ∷ ps) = pick (skelAll qs) ∷ skelAll ps
 
 pong-skel : skel pong ≡ hear nat "x" (say (lit one) finish)
 pong-skel = refl
@@ -3069,6 +3511,8 @@ mutual
   finishesAll (bare p ∷ ps) = step-all (finishes p) (finishesAll ps)
   finishesAll (named _ _ p ∷ ps) = step-all (finishes p) (finishesAll ps)
   finishesAll (prod _ p ∷ ps) = step-all (finishes p) (finishesAll ps)
+  finishesAll (fork _ _ _ qs ∷ ps) =
+    step-all (step-mget (finishesAll qs)) (finishesAll ps)
 
 pong-finishes : finishes pong ≡ ends (ends-get (ends-put ends-done))
 pong-finishes = refl
@@ -3163,6 +3607,8 @@ mutual
   ends-all {bare _ ∷ _} (ends-cons e es) = leave-cons (ends-no-leave e) (ends-all es)
   ends-all {named _ _ _ ∷ _} (ends-cons e es) = leave-cons (ends-no-leave e) (ends-all es)
   ends-all {prod _ _ ∷ _} (ends-cons e es) = leave-cons (ends-no-leave e) (ends-all es)
+  ends-all {fork _ _ _ _ ∷ _} (ends-cons (ends-mget e) es) =
+    leave-cons (pick-ok (ends-all e)) (ends-all es)
 
 ------------------------------------------------------------------------
 -- A declared data type is a payload. The constructors are the ones
@@ -4255,9 +4701,9 @@ lateServer = mget frameTy "f"
 
 late-server-ok : Conforms [] lateServer lateCase
 late-server-ok = mget-run refl (dat-cov refl) refl refl refl
-  (run-cons refl refl refl (put-ok refl (lit-ok refl) done-end)
-    (run-cons refl refl refl (put-ok refl (lit-ok refl) done-end)
-      (run-cons refl refl refl (put-ok refl (lit-ok refl) done-end) run-nil)))
+  (run-cons refl (put-ok refl (lit-ok refl) done-end)
+    (run-cons refl (put-ok refl (lit-ok refl) done-end)
+      (run-cons refl (put-ok refl (lit-ok refl) done-end) run-nil)))
 
 late-server-decides : decide [] lateServer lateCase ≡ yes late-server-ok
 late-server-decides = refl
@@ -4281,7 +4727,7 @@ lateGoaway = mget frameTy "f"
   ∷ [])
 
 late-goaway : ¬ Conforms [] lateGoaway lateCase
-late-goaway (mget-run _ _ _ _ refl (run-cons refl refl refl (put-ok () _ _) _))
+late-goaway (mget-run _ _ _ _ refl (run-cons refl (put-ok () _ _) _))
 
 -- The `just` arm reads a field. Probing passes none, so the receiver has no derivation.
 onJustCase : Proto
@@ -4296,7 +4742,83 @@ onJust-wf = drecv-case
   (ok-run refl refl refl (arms-one end-ok (arms-one end-ok arms-none)))
 
 onJust-recv : ¬ Conforms [] (mget maybeNat "m" (bare done ∷ bare done ∷ [])) onJustCase
-onJust-recv (mget-run _ _ _ _ refl (run-cons refl refl refl done-end (run-cons () _ _ _ _)))
+onJust-recv (mget-run _ _ _ _ refl (run-cons refl done-end (run-cons () _ _)))
+
+-- `lateBool` reads the field of `just`. `nothing` is false. `just b`
+-- is `b`. The receiver covers that split by a case on the bound field.
+ctlDecl : Decl
+ctlDecl = mkDecl "Ctl" nzero (ctor "rst" [] ∷ [])
+
+ctlTy : Ty
+ctlTy = dat ctlDecl []
+
+rstV : Val ctlTy
+rstV = con "rst" snil
+
+gateArms : List (String × Proto)
+gateArms = ("true" , send ctlTy end) ∷ ("false" , end) ∷ []
+
+gateProto : Proto
+gateProto = drecv "m" maybeBool (pcase (byRun "lateBool" "m" boolTy) gateArms)
+
+gateBack : Proto
+gateBack = dsend "m" maybeBool (pcase (byRun "lateBool" "m" boolTy) (
+  ("true" , recv ctlTy end) ∷ ("false" , end) ∷ []))
+
+gateServer : Proc
+gateServer = mget maybeBool "m"
+  ( named "nothing" [] done
+  ∷ fork "just" ("b" ∷ []) "b"
+      ( named "true" [] (put ctlTy (lit rstV) done)
+      ∷ named "false" [] done
+      ∷ [])
+  ∷ [])
+
+gateTrue : Proc
+gateTrue = put maybeBool (lit justTrue) (get ctlTy "c" done)
+
+gateFalse : Proc
+gateFalse = put maybeBool (lit justFalse) done
+
+gateNone : Proc
+gateNone = put maybeBool (lit nothingB) done
+
+lateBool-true : evalVal "lateBool" justTrue boolTy ≡ just trueV
+lateBool-true = refl
+
+lateBool-false : evalVal "lateBool" justFalse boolTy ≡ just falseV
+lateBool-false = refl
+
+lateBool-none : evalVal "lateBool" nothingB boolTy ≡ just falseV
+lateBool-none = refl
+
+split-just : splitOf "lateBool" maybeBool "just" boolTy gateArms
+  ≡ just (node nzero (("true" , flat (send ctlTy end)) ∷ ("false" , flat end) ∷ []))
+split-just = refl
+
+split-none : splitOf "lateBool" maybeBool "nothing" boolTy gateArms
+  ≡ just (flat end)
+split-none = refl
+
+gate-server-ok : Conforms [] gateServer gateProto
+gate-server-ok = mget-run refl (dat-cov refl) refl refl refl
+  (run-named refl refl done-end
+    (run-fork refl refl refl refl
+      (fork-named refl (put-ok refl (lit-ok refl) done-end)
+        (fork-named refl done-end fork-nil))
+      run-nil))
+
+gate-server-decides : decide [] gateServer gateProto ≡ yes gate-server-ok
+gate-server-decides = refl
+
+gate-true-ok : Conforms [] gateTrue gateBack
+gate-true-ok = dput-arm refl (lit-ok refl) refl (get-ok refl done-end)
+
+gate-false-ok : Conforms [] gateFalse gateBack
+gate-false-ok = dput-arm refl (lit-ok refl) refl done-end
+
+gate-none-ok : Conforms [] gateNone gateBack
+gate-none-ok = dput-arm refl (lit-ok refl) refl done-end
 
 -- One arm sends evidence. The skeleton carries the nat and not the bound.
 evCase : Proto

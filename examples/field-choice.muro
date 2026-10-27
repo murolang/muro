@@ -1,0 +1,245 @@
+-- field-choice.muro — a protocol follows a field the run reads.
+-- `late (just true)` sends Ctl. `late (just false)` and `late nothing` end.
+-- `late-hdr` reads the Frame inside Hdr. The same split sits under rec,
+-- in a session call, on a parameter, after evidence, and on a %1 endpoint.
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+data Maybe (A : Type) : Type where
+  nothing : Maybe A
+  just : A → Maybe A
+
+data Ctl : Type where
+  rst : Ctl
+
+data Frame : Type where
+  bytes : Frame
+  trailers : Frame
+  headers : Frame
+
+data Hdr : Type where
+  hdr : Frame → Hdr
+
+data Wrap : Type where
+  wrap : Hdr → Wrap
+
+def late : run Π (m : Maybe Bool) → Bool :=
+  λ (m : Maybe Bool) →
+    match m motive (λ _ → Bool)
+      | nothing => false
+      | just b => b
+
+def late-hdr : run Π (h : Hdr) → Bool :=
+  λ (h : Hdr) →
+    match h motive (λ _ → Bool)
+      | hdr f =>
+          match f motive (λ _ → Bool)
+            | bytes => true
+            | trailers => false
+            | headers => false
+
+def late-wrap : run Π (w : Wrap) → Bool :=
+  λ (w : Wrap) →
+    match w motive (λ _ → Bool)
+      | wrap h =>
+          match h motive (λ _ → Bool)
+            | hdr f =>
+                match f motive (λ _ → Bool)
+                  | bytes => true
+                  | trailers => false
+                  | headers => false
+
+session gate :=
+  recv (m : Maybe Bool) (case (late m)
+    | true => send Ctl end
+    | false => end)
+
+session gate-back := dual gate
+
+conform gate-server : gate :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put rst done
+          | false => done)
+
+conform put-true : gate-back := put (just true) (get (c : Ctl) done)
+
+conform put-false : gate-back := put (just false) done
+
+conform put-none : gate-back := put nothing done
+
+meet gate-true : gate-server with put-true
+
+meet gate-true-swap : put-true with gate-server
+
+meet gate-false : gate-server with put-false
+
+meet gate-false-swap : put-false with gate-server
+
+meet gate-none : gate-server with put-none
+
+meet gate-none-swap : put-none with gate-server
+
+meet gate-true-buf : gate-server with put-true buffer 1
+
+meet gate-true-buf-swap : put-true with gate-server buffer 1
+
+meet gate-false-buf : gate-server with put-false buffer 1
+
+meet gate-false-buf-swap : put-false with gate-server buffer 1
+
+meet gate-none-buf : gate-server with put-none buffer 1
+
+meet gate-none-buf-swap : put-none with gate-server buffer 1
+
+session hdr-gate :=
+  recv (h : Hdr) (case (late-hdr h)
+    | true => send Ctl end
+    | false => end)
+
+session hdr-back := dual hdr-gate
+
+conform hdr-server : hdr-gate :=
+  get (h : Hdr)
+    (match h
+      | hdr f => match f
+          | bytes => put rst done
+          | trailers => done
+          | headers => done)
+
+conform hdr-bytes : hdr-back := put (hdr bytes) (get (c : Ctl) done)
+
+conform hdr-trailers : hdr-back := put (hdr trailers) done
+
+meet hdr-wire : hdr-server with hdr-bytes
+
+meet hdr-swap : hdr-bytes with hdr-server
+
+meet hdr-buf : hdr-server with hdr-trailers buffer 1
+
+session wrap-gate :=
+  recv (w : Wrap) (case (late-wrap w)
+    | true => send Ctl end
+    | false => end)
+
+session wrap-back := dual wrap-gate
+
+conform wrap-server : wrap-gate :=
+  get (w : Wrap)
+    (match w
+      | wrap h => match h
+          | hdr f => match f
+              | bytes => put rst done
+              | trailers => done
+              | headers => done)
+
+conform wrap-bytes : wrap-back := put (wrap (hdr bytes)) (get (c : Ctl) done)
+
+meet wrap-wire : wrap-server with wrap-bytes
+
+meet wrap-swap : wrap-bytes with wrap-server
+
+session loop :=
+  rec X. recv (m : Maybe Bool) (case (late m)
+    | true => send Ctl X
+    | false => end)
+
+session loop-back := dual loop
+
+conform loop-server : loop :=
+  rec Y. get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put rst Y
+          | false => done)
+
+conform loop-client : loop-back := rec Z. put (just true) (get (c : Ctl) Z)
+
+meet loop-wire : loop-server with loop-client
+
+meet loop-swap : loop-client with loop-server
+
+session ack := send Ctl end
+
+session called :=
+  recv (m : Maybe Bool) (case (late m)
+    | true => ack
+    | false => end)
+
+session called-back := dual called
+
+conform called-server : called :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put rst done
+          | false => done)
+
+conform called-client : called-back := put (just true) (get (c : Ctl) done)
+
+meet called-wire : called-server with called-client
+
+meet called-swap : called-client with called-server
+
+session sized (k : Nat) :=
+  recv (m : Maybe Bool) (case (late m)
+    | true => send (Vec Nat k) end
+    | false => end)
+
+session sized3 := sized 3
+
+session sized3-back := dual sized3
+
+conform sized-server : sized3 :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put (rep 3 0) done
+          | false => done)
+
+conform sized-client : sized3-back := put (just true) (get (Vec Nat 3) done)
+
+meet sized-wire : sized-server with sized-client
+
+meet sized-swap : sized-client with sized-server
+
+session counted :=
+  recv (m : Maybe Bool) (case (late m)
+    | true => send (d : Nat) {d ≤ 1} end
+    | false => end)
+
+session counted-back := dual counted
+
+conform counted-server : counted :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put 0 done
+          | false => done)
+
+conform counted-client : counted-back := put (just true) (get (d : Nat) done)
+
+meet counted-wire : counted-server with counted-client
+
+meet counted-swap : counted-client with counted-server
+
+session %1 once :=
+  recv (m : Maybe Bool) (case (late m)
+    | true => send Ctl end
+    | false => end)
+
+conform once-server : once :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put rst done
+          | false => done)

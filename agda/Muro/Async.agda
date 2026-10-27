@@ -50,7 +50,7 @@ open import Relation.Binary.PropositionalEquality
 open import Relation.Nullary.Decidable.Core using (Dec)
   renaming (yes to yes′; no to no′)
 
-open import Muro.Session hiding (yes; no; pong)
+open import Muro.Session hiding (yes; no; pong; kids)
 open import Muro.Meet using (ext)
 
 ------------------------------------------------------------------------
@@ -67,6 +67,7 @@ sizeArms : List PArm → ℕ
 armSize (bare p) = size p
 armSize (named _ _ p) = size p
 armSize (prod _ p) = size p
+armSize (fork _ _ _ qs) = sizeArms qs
 
 size done = nzero
 size stop = nzero
@@ -144,10 +145,15 @@ mutual
     rewrite size-subst (shadows xs e) p | size-arms-subst e ps = refl
   size-arms-subst e (prod pat p ∷ ps)
     rewrite size-subst (shadows (patBinders pat) e) p | size-arms-subst e ps = refl
+  size-arms-subst e (fork _ xs _ qs ∷ ps)
+    rewrite size-arms-subst (shadows xs e) qs | size-arms-subst e ps = refl
 
 leSubst : (e : FEnv) (p : Proc) (ps : List PArm) →
           size (substProc e p) ≤ size p + sizeArms ps
 leSubst e p ps rewrite size-subst e p = m≤m+n (size p) (sizeArms ps)
+
+substLe : (e : FEnv) (p : Proc) → size (substProc e p) ≤ size p
+substLe e p rewrite size-subst e p = ≤-refl
 
 -- A product arm opens when the components have a raw image. The bound
 -- is the stored process: substitution does not change its size.
@@ -174,69 +180,110 @@ openHit k c xs p sp ps with k == c | rawSpine sp
 -- the value it returns.
 ------------------------------------------------------------------------
 
-findIn : String → Spine → List Ctor → (ps : List PArm) →
-         Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
-findIn _ _ [] _ = nothing
-findIn _ _ (_ ∷ _) [] = nothing
-findIn name sp (ctor n _ ∷ cs) (bare p ∷ ps) with name == n
-... | true = just (p , m≤m+n (size p) (sizeArms ps))
-... | false = lift (findIn name sp cs ps)
-  where
-  lift : Maybe (Σ Proc (λ R → size R ≤ sizeArms ps)) →
-         Maybe (Σ Proc (λ R → size R ≤ size p + sizeArms ps))
-  lift nothing = nothing
-  lift (just (R , le)) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (size p)))
-findIn name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) with name == n
-... | true = openHit k name xs p sp ps
-... | false = lift (findIn name sp cs ps)
-  where
-  lift : Maybe (Σ Proc (λ R → size R ≤ sizeArms ps)) →
-         Maybe (Σ Proc (λ R → size R ≤ size p + sizeArms ps))
-  lift nothing = nothing
-  lift (just (R , le)) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (size p)))
-findIn name sp (ctor n _ ∷ cs) (prod _ p ∷ ps) with name == n
-... | true = nothing
-... | false = lift (findIn name sp cs ps)
-  where
-  lift : Maybe (Σ Proc (λ R → size R ≤ sizeArms ps)) →
-         Maybe (Σ Proc (λ R → size R ≤ size p + sizeArms ps))
-  lift nothing = nothing
-  lift (just (R , le)) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (size p)))
+boundFork : (e : FEnv) (R : Proc) (qs ps : List PArm) →
+  size R ≤ sizeArms qs →
+  size (substProc e R) ≤ sizeArms qs + sizeArms ps
+boundFork e R qs ps le =
+  ≤-trans (substLe e R) (≤-trans le (m≤m+n (sizeArms qs) (sizeArms ps)))
 
-armPick : (A : Ty) → Val A → (ps : List PArm) →
-          Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
-armPick bit b0 [] = nothing
-armPick bit b0 (_ ∷ []) = nothing
-armPick bit b0 (_ ∷ _ ∷ _ ∷ _) = nothing
-armPick bit b0 (bare p ∷ q ∷ []) = just (p , m≤m+n (size p) (sizeArms (q ∷ [])))
-armPick bit b0 (named _ [] p ∷ q ∷ []) = just (p , m≤m+n (size p) (sizeArms (q ∷ [])))
-armPick bit b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) = nothing
-armPick bit b0 (prod _ _ ∷ _ ∷ []) = nothing
-armPick bit b1 [] = nothing
-armPick bit b1 (_ ∷ []) = nothing
-armPick bit b1 (_ ∷ _ ∷ _ ∷ _) = nothing
-armPick bit b1 (a ∷ bare q ∷ []) = just (q , b1≤ a (bare q))
-armPick bit b1 (a ∷ named c [] q ∷ []) = just (q , b1≤ a (named c [] q))
-armPick bit b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) = nothing
-armPick bit b1 (_ ∷ prod _ _ ∷ []) = nothing
-armPick (dat d _) (con c sp) ps = findIn c sp (ctorsOf d) ps
-armPick nat _ _ = nothing
-armPick unit _ _ = nothing
-armPick (vec _ _) _ _ = nothing
-armPick (pair _ _) (tup _ _) (_ ∷ _ ∷ _) = nothing
-armPick (pair _ _) (tup _ _) [] = nothing
-armPick (pair _ _) (tup a b) (prod (pPair x y) p ∷ []) =
-  pickArm (openPair x y a b) p []
-armPick (pair _ _) (tup _ _) (prod (pRec _) _ ∷ []) = nothing
-armPick (pair _ _) (tup _ _) (bare _ ∷ []) = nothing
-armPick (pair _ _) (tup _ _) (named _ _ _ ∷ []) = nothing
-armPick (rec _) (rec _) (_ ∷ _ ∷ _) = nothing
-armPick (rec _) (rec _) [] = nothing
-armPick (rec _) (rec row) (prod (pRec bs) p ∷ []) =
-  pickArm (openRec bs row) p []
-armPick (rec _) (rec _) (prod (pPair _ _) _ ∷ []) = nothing
-armPick (rec _) (rec _) (bare _ ∷ []) = nothing
-armPick (rec _) (rec _) (named _ _ _ ∷ []) = nothing
+mutual
+  findIn : String → Spine → List Ctor → (ps : List PArm) →
+           Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
+  findIn _ _ [] _ = nothing
+  findIn _ _ (_ ∷ _) [] = nothing
+  findIn name sp (ctor n _ ∷ cs) (bare p ∷ ps) with name == n
+  ... | true = just (p , m≤m+n (size p) (sizeArms ps))
+  ... | false = lift (findIn name sp cs ps)
+    where
+    lift : Maybe (Σ Proc (λ R → size R ≤ sizeArms ps)) →
+           Maybe (Σ Proc (λ R → size R ≤ size p + sizeArms ps))
+    lift nothing = nothing
+    lift (just (R , le)) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (size p)))
+  findIn name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) with name == n
+  ... | true = openHit k name xs p sp ps
+  ... | false = lift (findIn name sp cs ps)
+    where
+    lift : Maybe (Σ Proc (λ R → size R ≤ sizeArms ps)) →
+           Maybe (Σ Proc (λ R → size R ≤ size p + sizeArms ps))
+    lift nothing = nothing
+    lift (just (R , le)) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (size p)))
+  findIn name sp (ctor n _ ∷ cs) (prod _ p ∷ ps) with name == n
+  ... | true = nothing
+  ... | false = lift (findIn name sp cs ps)
+    where
+    lift : Maybe (Σ Proc (λ R → size R ≤ sizeArms ps)) →
+           Maybe (Σ Proc (λ R → size R ≤ size p + sizeArms ps))
+    lift nothing = nothing
+    lift (just (R , le)) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (size p)))
+  findIn name sp (ctor n _ ∷ cs) (fork k xs y qs ∷ ps) with name == n
+  ... | true = openForkHit k name xs y qs sp ps
+  ... | false = lift (findIn name sp cs ps)
+    where
+    lift : Maybe (Σ Proc (λ R → size R ≤ sizeArms ps)) →
+           Maybe (Σ Proc (λ R → size R ≤ sizeArms qs + sizeArms ps))
+    lift nothing = nothing
+    lift (just (R , le)) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (sizeArms qs)))
+
+  -- The same clauses as `openFork`. The bound is the inner arms.
+  openForkHit : (k c : String) (xs : List String) (y : String) (qs : List PArm)
+                (sp : Spine) (ps : List PArm) →
+                Maybe (Σ Proc (λ R → size R ≤ sizeArms qs + sizeArms ps))
+  openForkHit k c xs y qs sp ps with k == c | rawSpine sp
+  ... | false | _ = nothing
+  ... | true | nothing = nothing
+  ... | true | just rs with lenEnv xs rs
+  ... | nothing = nothing
+  ... | just e = seekHit xs y e qs sp ps
+
+  seekHit : (xs : List String) (y : String) (e : FEnv) (qs : List PArm)
+            (sp : Spine) (ps : List PArm) →
+            Maybe (Σ Proc (λ R → size R ≤ sizeArms qs + sizeArms ps))
+  seekHit [] _ _ _ _ _ = nothing
+  seekHit (_ ∷ _) _ _ _ snil _ = nothing
+  seekHit (x ∷ xs) y e qs (scons A v sp) ps with x ≟ y
+  ... | no′ _ = seekHit xs y e qs sp ps
+  ... | yes′ _ with armPick A v qs
+  ... | nothing = nothing
+  ... | just (R , le) = just (substProc e R , boundFork e R qs ps le)
+
+  armPick : (A : Ty) → Val A → (ps : List PArm) →
+            Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
+  armPick bit b0 [] = nothing
+  armPick bit b0 (_ ∷ []) = nothing
+  armPick bit b0 (_ ∷ _ ∷ _ ∷ _) = nothing
+  armPick bit b0 (bare p ∷ q ∷ []) = just (p , m≤m+n (size p) (sizeArms (q ∷ [])))
+  armPick bit b0 (named _ [] p ∷ q ∷ []) = just (p , m≤m+n (size p) (sizeArms (q ∷ [])))
+  armPick bit b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) = nothing
+  armPick bit b0 (prod _ _ ∷ _ ∷ []) = nothing
+  armPick bit b0 (fork _ _ _ _ ∷ _ ∷ []) = nothing
+  armPick bit b1 [] = nothing
+  armPick bit b1 (_ ∷ []) = nothing
+  armPick bit b1 (_ ∷ _ ∷ _ ∷ _) = nothing
+  armPick bit b1 (a ∷ bare q ∷ []) = just (q , b1≤ a (bare q))
+  armPick bit b1 (a ∷ named c [] q ∷ []) = just (q , b1≤ a (named c [] q))
+  armPick bit b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) = nothing
+  armPick bit b1 (_ ∷ prod _ _ ∷ []) = nothing
+  armPick bit b1 (_ ∷ fork _ _ _ _ ∷ []) = nothing
+  armPick (dat d _) (con c sp) ps = findIn c sp (ctorsOf d) ps
+  armPick nat _ _ = nothing
+  armPick unit _ _ = nothing
+  armPick (vec _ _) _ _ = nothing
+  armPick (pair _ _) (tup _ _) (_ ∷ _ ∷ _) = nothing
+  armPick (pair _ _) (tup _ _) [] = nothing
+  armPick (pair _ _) (tup a b) (prod (pPair x y) p ∷ []) =
+    pickArm (openPair x y a b) p []
+  armPick (pair _ _) (tup _ _) (prod (pRec _) _ ∷ []) = nothing
+  armPick (pair _ _) (tup _ _) (bare _ ∷ []) = nothing
+  armPick (pair _ _) (tup _ _) (named _ _ _ ∷ []) = nothing
+  armPick (pair _ _) (tup _ _) (fork _ _ _ _ ∷ []) = nothing
+  armPick (rec _) (rec _) (_ ∷ _ ∷ _) = nothing
+  armPick (rec _) (rec _) [] = nothing
+  armPick (rec _) (rec row) (prod (pRec bs) p ∷ []) =
+    pickArm (openRec bs row) p []
+  armPick (rec _) (rec _) (prod (pPair _ _) _ ∷ []) = nothing
+  armPick (rec _) (rec _) (bare _ ∷ []) = nothing
+  armPick (rec _) (rec _) (named _ _ _ ∷ []) = nothing
+  armPick (rec _) (rec _) (fork _ _ _ _ ∷ []) = nothing
 
 armExprPick : ∀ {A} → ValExpr A → (ps : List PArm) →
               Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
@@ -933,6 +980,24 @@ askBack = put boolTy (lit trueV) (mget boolTy "b" (bare done ∷ bare stop ∷ [
 
 ex-echo : kind (check (init k1 echoBack askBack)) ≡ is-yes
 ex-echo = refl
+
+ex-gate-true : kind (check (init k1 gateTrue gateServer)) ≡ is-yes
+ex-gate-true = refl
+
+ex-gate-true-swap : kind (check (init k1 gateServer gateTrue)) ≡ is-yes
+ex-gate-true-swap = refl
+
+ex-gate-false : kind (check (init k1 gateFalse gateServer)) ≡ is-yes
+ex-gate-false = refl
+
+ex-gate-false-swap : kind (check (init k1 gateServer gateFalse)) ≡ is-yes
+ex-gate-false-swap = refl
+
+ex-gate-none : kind (check (init k1 gateNone gateServer)) ≡ is-yes
+ex-gate-none = refl
+
+ex-gate-none-swap : kind (check (init k1 gateServer gateNone)) ≡ is-yes
+ex-gate-none-swap = refl
 
 pay-erases : mkPayL (init k1 done done) (lit zero) ≡
              pay nat (car nat (lit zero) (lit zero))
