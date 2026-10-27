@@ -366,8 +366,28 @@ defmodule Muro.Emit.Otp do
       # takes the arm of its constructor, in declaration order. The order
       # is a list: inspecting the constructor map sorts its keys.
       # A named arm binds that constructor's fields. A positional arm does not.
+      # A pair is the tuple `{a, b}`. A record is the map, read by the
+      # keys fixed in the type, in that order.
       defp pick_arm(:bit, :b0, [arm, _]), do: open_pick(arm, "b0", [])
       defp pick_arm(:bit, :b1, [_, arm]), do: open_pick(arm, "b1", [])
+
+      defp pick_arm({:pair, _, _}, {a, b}, [{:prod, {:pair, [x, y]}, next}])
+           when is_atom(x) and is_atom(y) do
+        {:ok, next, [{x, a}, {y, b}]}
+      end
+
+      defp pick_arm({:rec, fields}, map, [{:prod, {:rec, bs}, next}])
+           when is_list(fields) and is_map(map) and is_list(bs) do
+        keys = Enum.map(fields, fn {name, _} -> name end)
+        got = Enum.map(bs, fn {name, _} -> name end)
+
+        if keys == got and Enum.sort(Map.keys(map)) == Enum.sort(keys) do
+          pairs = Enum.map(bs, fn {field, binder} -> {binder, Map.fetch!(map, field)} end)
+          {:ok, next, pairs}
+        else
+          :error
+        end
+      end
 
       defp pick_arm({:dat, name, _}, value, arms) do
         case Map.get(data_decls(), name) do

@@ -105,8 +105,10 @@ defmodule Muro.Parser do
     end
   end
 
-  # A named arm is the process it stores. The `|` line is not a step of its own.
+  # A named arm is the process it stores. A product arm is the same.
+  # The `|` line is not a step of its own.
   defp take_span({:arm, _, _, p}, notes), do: take_span(p, notes)
+  defp take_span({:prod, _, p}, notes), do: take_span(p, notes)
 
   defp take_span(_, _), do: :error
 
@@ -1545,8 +1547,11 @@ defmodule Muro.Parser do
   # `match b P Q` is one process per constructor of the value `get` just
   # bound, in declaration order. A bit is `b0` then `b1`. The arms stop
   # before the next declaration.
-  # `| just b => P` names that constructor and binds its fields. The old
-  # positional form stays a list of processes.
+  # `| just b => P` names that constructor and binds its fields.
+  # `| (a, b) => P` binds the two components of a received pair.
+  # `| { f = a, ... } => P` binds the fields of a received record, in
+  # the order written. A pattern is one level. The old positional form
+  # stays a list of processes.
   defp parse_match(s, bound) do
     note(skip(s))
 
@@ -1595,22 +1600,141 @@ defmodule Muro.Parser do
     end
   end
 
+  # `| (a, b) =>` is a pair. `| { f = a } =>` is a record. Anything else
+  # is a constructor arm. A component that is itself a pattern is refused:
+  # the component is bound whole.
   defp parse_named_arms(s, acc, bound) do
-    with {:ok, cname, rest} <- ident(skip(s)),
-         {:ok, binders, rest} <- parse_proc_binders(skip(rest)),
-         {:ok, rest} <- tok(skip(rest), "=>"),
-         {:ok, body, rest} <- parse_proc(skip(rest), bound) do
-      binders = Enum.map(binders, &String.to_atom/1)
-      acc = [{:arm, cname, binders, body} | acc]
-      looked = skip(rest)
+    s = skip(s)
 
-      if has_prefix?(looked, "|") do
-        with {:ok, rest} <- tok(looked, "|") do
-          parse_named_arms(skip(rest), acc, bound)
+    cond do
+      has_prefix?(s, "(") ->
+        with {:ok, pat, rest} <- parse_pair_pat(s),
+             {:ok, body, rest} <- parse_arm_body(rest, bound) do
+          finish_named({:prod, pat, body}, rest, acc, bound)
         end
-      else
-        {:ok, Enum.reverse(acc), rest}
+
+      has_prefix?(s, "{") ->
+        with {:ok, pat, rest} <- parse_rec_pat(s),
+             {:ok, body, rest} <- parse_arm_body(rest, bound) do
+          finish_named({:prod, pat, body}, rest, acc, bound)
+        end
+
+      true ->
+        with {:ok, cname, rest} <- ident(s),
+             {:ok, binders, rest} <- parse_proc_binders(skip(rest)),
+             {:ok, body, rest} <- parse_arm_body(rest, bound) do
+          binders = Enum.map(binders, &String.to_atom/1)
+          finish_named({:arm, cname, binders, body}, rest, acc, bound)
+        end
+    end
+  end
+
+  defp parse_arm_body(s, bound) do
+    with {:ok, rest} <- tok(skip(s), "=>"),
+         {:ok, body, rest} <- parse_proc(skip(rest), bound) do
+      {:ok, body, rest}
+    end
+  end
+
+  defp finish_named(arm, rest, acc, bound) do
+    acc = [arm | acc]
+    looked = skip(rest)
+
+    if has_prefix?(looked, "|") do
+      with {:ok, rest} <- tok(looked, "|") do
+        parse_named_arms(skip(rest), acc, bound)
       end
+    else
+      {:ok, Enum.reverse(acc), rest}
+    end
+  end
+
+  # Exactly the names written. The checker refuses a count other than two.
+  defp parse_pair_pat(s) do
+    with {:ok, rest} <- tok(s, "(") do
+      parse_pair_names(skip(rest), [])
+    end
+  end
+
+  defp parse_pair_names(s, acc) do
+    s = skip(s)
+
+    cond do
+      has_prefix?(s, ")") ->
+        {:ok, {:pair, Enum.reverse(acc)}, after_kw(s, ")")}
+
+      has_prefix?(s, "(") or has_prefix?(s, "{") ->
+        {:error, err(s, "a pattern is one level")}
+
+      true ->
+        with {:ok, name, rest} <- pat_name(s) do
+          rest = skip(rest)
+
+          cond do
+            has_prefix?(rest, ",") ->
+              parse_pair_names(after_kw(rest, ","), [name | acc])
+
+            has_prefix?(rest, ")") ->
+              {:ok, {:pair, Enum.reverse([name | acc])}, after_kw(rest, ")")}
+
+            has_prefix?(rest, "(") or has_prefix?(rest, "{") ->
+              {:error, err(rest, "a pattern is one level")}
+
+            true ->
+              {:error, err(rest, "expected , or )")}
+          end
+        end
+    end
+  end
+
+  # Field name, then the binder. Duplicate fields are the checker's refusal.
+  defp parse_rec_pat(s) do
+    with {:ok, rest} <- tok(s, "{"),
+         {:ok, bs, rest} <- parse_rec_binds(skip(rest), []) do
+      {:ok, {:rec, bs}, rest}
+    end
+  end
+
+  defp parse_rec_binds(s, acc) do
+    s = skip(s)
+
+    if has_prefix?(s, "}") do
+      {:ok, Enum.reverse(acc), after_kw(s, "}")}
+    else
+      with {:ok, field, rest} <- ident(s),
+           {:ok, rest} <- field_eq(skip(rest)) do
+        rest = skip(rest)
+
+        cond do
+          has_prefix?(rest, "(") or has_prefix?(rest, "{") ->
+            {:error, err(rest, "a pattern is one level")}
+
+          true ->
+            with {:ok, binder, rest} <- pat_name(rest),
+                 {:ok, more, rest} <- field_sep(skip(rest)) do
+              pair = {field, binder}
+
+              case more do
+                :end -> {:ok, Enum.reverse([pair | acc]), rest}
+                :next -> parse_rec_binds(rest, [pair | acc])
+              end
+            end
+        end
+      end
+    end
+  end
+
+  defp pat_name(s) do
+    case ident(s) do
+      {:ok, name, rest} ->
+        if proc_word?(name) or reserved_session?(name) or decl_word?(name) do
+          {:error, err(s, "expected a name")}
+        else
+          {:ok, String.to_atom(name), rest}
+        end
+
+      _ ->
+        {:error, err(s, "expected a name")}
     end
   end
 
@@ -1673,11 +1797,37 @@ defmodule Muro.Parser do
     end
   end
 
+  # A component whose type is not known here (a constructor, a bound
+  # name) makes the whole pair or record unknown. The checker reads the
+  # value against the protocol type.
+  defp ann_pay(ty) do
+    if known_pay?(ty), do: ty, else: :unknown
+  end
+
+  defp known_pay?(:nat), do: true
+  defp known_pay?(:bit), do: true
+  defp known_pay?(:unit), do: true
+  defp known_pay?({:pair, a, b}), do: known_pay?(a) and known_pay?(b)
+
+  defp known_pay?({:rec, fields}) when is_list(fields),
+    do: Enum.all?(fields, fn {_, t} -> known_pay?(t) end)
+
+  defp known_pay?({:vec, elem, _}), do: known_pay?(elem)
+  defp known_pay?({:dat, _, _}), do: true
+  defp known_pay?(_), do: false
+
+  # `*` is the payload pair. `×` is the same operator.
+  defp pair_tok?(s), do: has_prefix?(s, "×") or (has_prefix?(s, "*") and not has_prefix?(s, "**"))
+
+  defp drop_pair(s) do
+    if has_prefix?(s, "×"), do: after_kw(s, "×"), else: after_kw(s, "*")
+  end
+
   defp parse_pay_rest(ty, s, bound) do
     s = skip(s)
 
-    if has_prefix?(s, "*") and not has_prefix?(s, "**") do
-      with {:ok, right, rest} <- parse_pay(after_kw(s, "*"), bound) do
+    if pair_tok?(s) do
+      with {:ok, right, rest} <- parse_pay(drop_pair(s), bound) do
         {:ok, {:pair, ty, right}, rest}
       end
     else
@@ -1986,7 +2136,7 @@ defmodule Muro.Parser do
         has_prefix?(rest, ",") ->
           with {:ok, {ty2, val2}, rest} <- parse_pval(after_kw(rest, ","), bound),
                {:ok, rest} <- tok(skip(rest), ")") do
-            {:ok, {{:pair, ty, ty2}, {:tup, val, val2}}, rest}
+            {:ok, {ann_pay({:pair, ty, ty2}), {:tup, val, val2}}, rest}
           end
 
         has_prefix?(rest, ")") ->
@@ -2003,7 +2153,7 @@ defmodule Muro.Parser do
          {:ok, fields, rest} <- parse_val_fields(skip(rest), [], bound) do
       tys = Enum.map(fields, fn {name, ty, _} -> {name, ty} end)
       vals = Enum.map(fields, fn {name, _, val} -> {name, val} end)
-      {:ok, {{:rec, tys}, {:rec, vals}}, rest}
+      {:ok, {ann_pay({:rec, tys}), {:rec, vals}}, rest}
     end
   end
 

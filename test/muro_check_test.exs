@@ -1809,6 +1809,18 @@ defmodule Muro.CheckTest do
     assert Mix.Tasks.Muro.Check.run(["examples/bisim.muro"]) == :ok
   end
 
+  test "mix muro.check accepts a product arm and refuses a bad one" do
+    assert Mix.Tasks.Muro.Check.run(["examples/pair-bindings.muro"]) == :ok
+
+    assert {:error, msg} = Muro.check_file("examples/bad_pair_bindings.muro")
+    assert msg =~ "constructor arm on a pair"
+    assert msg =~ "missing field"
+
+    assert_raise Mix.Error, ~r/constructor arm on a pair/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/bad_pair_bindings.muro"])
+    end
+  end
+
   test "a match on a two-field constructor reduces with both fields in place" do
     # The second field was substituted one variable too low, into whichever
     # binder came next: drop1 (cons y ys) reduced to zs, so the true equation

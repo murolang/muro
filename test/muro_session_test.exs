@@ -1870,6 +1870,28 @@ defmodule Muro.SessionTest do
     end
   end
 
+  test "a received pair or record binds its components" do
+    path = "examples/pair-bindings.muro"
+    assert Muro.check_file(path) == :ok
+    assert {:ok, book} = Parser.parse(File.read!(path))
+    assert Check.check_sig(book) == :ok
+
+    for {left, right} <- [
+          {"pair-reply", "pair-ask"},
+          {"grant-reply", "grant-ask"},
+          {"rec-reply", "rec-ask"},
+          {"lin-reply", "lin-ask"},
+          {"shade-reply", "shade-ask"},
+          {"wrap-reply", "wrap-ask"},
+          {"box-reply", "box-ask"}
+        ] do
+      l = Enum.find(book, &(&1.name == left))
+      r = Enum.find(book, &(&1.name == right))
+      assert Muro.Meet.meets(l.proc, r.proc, book) == :ok
+      assert Muro.Meet.meets(r.proc, l.proc, book) == :ok
+    end
+  end
+
   defp check(src) do
     assert {:ok, book} = Parser.parse(src)
     Check.check_sig(book)

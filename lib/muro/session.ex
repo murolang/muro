@@ -16,7 +16,10 @@ defmodule Muro.Session do
   refused. `get` binds the received value to
   a named variable. `get (b : Bit) (match b P Q)` matches on that value.
   Each arm conforms to the one continuation, and the processes may differ:
-  the received value chooses which process runs. A `case` on that value
+  the received value chooses which process runs. A received pair has one
+  arm `| (a, b) =>`, and a received record has one arm naming every field
+  in type order. A component is payload data, the same way a bound
+  constructor field is. A `case` on that value
   gives each constructor its own continuation. A `case` on a `run` of
   the value gives each constructor the continuation of the run's result.
   A declared data type has
@@ -272,6 +275,15 @@ defmodule Muro.Session do
     if names != [] and length(names) == length(arms), do: :ok, else: :error
   end
 
+  # One product arm. The field check is `product_cover`.
+  def covered?({:pair, _, _}, [{:prod, {:pair, [x, y]}, _}], _book)
+      when is_atom(x) and is_atom(y),
+      do: :ok
+
+  def covered?({:rec, fields}, [{:prod, {:rec, bs}, _}], _book)
+      when is_list(fields) and is_list(bs),
+      do: :ok
+
   def covered?(_, _, _), do: :error
 
   @doc false
@@ -279,21 +291,31 @@ defmodule Muro.Session do
 
   # A positional arm is that process. A named arm is that process after
   # the value's fields replace its binders. A bare arm is not arity-checked.
+  # A product arm is that process after the tuple or the record replaces
+  # its binders. The last binder wins.
   def arm(ty, val, arms, book) do
     val = canon(val, book)
 
-    case {ty, val} do
-      {:bit, :b0} ->
+    case {ty, val, arms} do
+      {:bit, :b0, _} ->
         take_indexed(arms, 0, "b0", [])
 
-      {:bit, :b1} ->
+      {:bit, :b1, _} ->
         take_indexed(arms, 1, "b1", [])
 
-      {{:dat, dname, _}, {:con, c, fields}} ->
+      {{:dat, dname, _}, {:con, c, fields}, _} ->
         case Enum.find_index(ctor_names(book, dname), &(&1 == cname(c))) do
           i when is_integer(i) -> take_indexed(arms, i, cname(c), fields)
           _ -> :error
         end
+
+      {{:pair, _, _}, {:tup, a, b}, [{:prod, {:pair, [x, y]}, body}]}
+      when is_atom(x) and is_atom(y) ->
+        {:ok, subst_fields([x, y], [a, b], body)}
+
+      {{:rec, fields}, {:rec, vals}, [{:prod, {:rec, bs}, body}]}
+      when is_list(fields) and is_list(vals) and is_list(bs) ->
+        fill_rec(fields, vals, bs, body)
 
       _ ->
         :error
@@ -302,7 +324,13 @@ defmodule Muro.Session do
 
   @doc false
   def arm_body({:arm, _, _, p}), do: p
+  def arm_body({:prod, _, p}), do: p
   def arm_body(p), do: p
+
+  @doc false
+  def arm_binders({:arm, _, xs, _}) when is_list(xs), do: xs
+  def arm_binders({:prod, pat, _}), do: pat_binders(pat)
+  def arm_binders(_), do: []
 
   defp take_indexed(arms, i, expected, fields) do
     case Enum.at(arms, i) do
@@ -320,7 +348,35 @@ defmodule Muro.Session do
     end
   end
 
+  defp take_arm({:prod, _, _}, _expected, _fields), do: :error
   defp take_arm(proc, _expected, _fields), do: {:ok, proc}
+
+  # The record's fields, in type order. A missing key does not open the arm.
+  defp fill_rec(fields, vals, bs, body) do
+    case rec_fit(fields, bs) do
+      :ok ->
+        pairs =
+          Enum.map(bs, fn {field, binder} ->
+            case List.keyfind(vals, field, 0) do
+              {_, val} -> {binder, val}
+              nil -> nil
+            end
+          end)
+
+        if Enum.any?(pairs, &is_nil/1) do
+          :error
+        else
+          {:ok, subst_p(body, Map.new(pairs))}
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp pat_binders({:pair, names}) when is_list(names), do: names
+  defp pat_binders({:rec, bs}) when is_list(bs), do: Enum.map(bs, fn {_, binder} -> binder end)
+  defp pat_binders(_), do: []
 
   # Last binder wins, as with a nested `get`.
   defp subst_fields(binders, fields, body) do
@@ -355,6 +411,11 @@ defmodule Muro.Session do
   defp subst_arm({:arm, c, xs, p}, env) do
     env1 = Enum.reduce(xs, env, &Map.delete(&2, &1))
     {:arm, c, xs, subst_p(p, env1)}
+  end
+
+  defp subst_arm({:prod, pat, p}, env) do
+    env1 = Enum.reduce(pat_binders(pat), env, &Map.delete(&2, &1))
+    {:prod, pat, subst_p(p, env1)}
   end
 
   defp subst_arm(p, env), do: subst_p(p, env)
@@ -406,6 +467,7 @@ defmodule Muro.Session do
   defp skel_go({:call, name}), do: {:jump, name}
 
   defp skel_arm({:arm, c, xs, p}), do: {:arm, c, xs, skel_go(p)}
+  defp skel_arm({:prod, pat, p}), do: {:prod, pat, skel_go(p)}
   defp skel_arm(p), do: skel_go(p)
 
   defp carry_go(:done, _book, _ctx), do: :finish
@@ -441,6 +503,11 @@ defmodule Muro.Session do
   defp carry_arm({:arm, c, xs, p}, book, ctx) do
     ctx1 = Enum.reduce(xs, ctx, &carry_bind(&2, &1))
     {:arm, c, xs, carry_go(p, book, ctx1)}
+  end
+
+  defp carry_arm({:prod, pat, p}, book, ctx) do
+    ctx1 = Enum.reduce(pat_binders(pat), ctx, &carry_bind(&2, &1))
+    {:prod, pat, carry_go(p, book, ctx1)}
   end
 
   defp carry_arm(p, book, ctx), do: carry_go(p, book, ctx)
@@ -1231,33 +1298,35 @@ defmodule Muro.Session do
   # to that one protocol. The processes may differ: the received value
   # chooses which process runs, and it does not choose another protocol.
   # A `case` protocol is the step above: each arm conforms to the protocol
-  # that constructor selects. The scrutinee is the received name. A nat,
-  # a pair, a record, a vector, or unit has no covering.
+  # that constructor selects. The scrutinee is the received name. A
+  # received pair or record has one product arm. A nat, a vector, or
+  # unit has no covering.
   @cover "match does not cover the received value"
 
   defp cont({:match, scrut, arms}, proto, name, ty, ctx, idx, penv, senv, seen, fuel, book, span) do
-    cond do
-      scrut != name ->
-        {:error, step_at(span), @cover}
+    if scrut != name do
+      {:error, step_at(span), @cover}
+    else
+      case explain_cover(ty, arms, book) do
+        :ok ->
+          arms_go(
+            arms,
+            proto,
+            bind_ctx(ctx, name, ty),
+            ty,
+            idx,
+            penv,
+            senv,
+            seen,
+            fuel,
+            book,
+            span,
+            0
+          )
 
-      covered?(ty, arms, book) != :ok ->
-        {:error, step_at(span), @cover}
-
-      true ->
-        arms_go(
-          arms,
-          proto,
-          bind_ctx(ctx, name, ty),
-          ty,
-          idx,
-          penv,
-          senv,
-          seen,
-          fuel,
-          book,
-          span,
-          0
-        )
+        {:error, msg} ->
+          {:error, step_at(span), msg}
+      end
     end
   end
 
@@ -1284,8 +1353,92 @@ defmodule Muro.Session do
     end
   end
 
+  # `:pass` is a bit or declared data, checked by `covered?`. A pair or a
+  # record has one product arm, and the refusal names the mismatch.
+  defp explain_cover(ty, arms, book) do
+    case product_cover(ty, arms) do
+      :pass -> if covered?(ty, arms, book) == :ok, do: :ok, else: {:error, @cover}
+      other -> other
+    end
+  end
+
+  defp product_cover({:pair, _, _}, arms), do: pair_cover(arms)
+  defp product_cover({:rec, fields}, arms), do: rec_cover(fields, arms)
+  defp product_cover(_, _), do: :pass
+
+  defp pair_cover([{:prod, {:pair, [x, y]}, _}]) when is_atom(x) and is_atom(y), do: :ok
+  defp pair_cover([{:prod, {:pair, _}, _}]), do: {:error, "wrong arity"}
+  defp pair_cover([{:arm, _, _, _}]), do: {:error, "constructor arm on a pair"}
+  defp pair_cover(_), do: {:error, @cover}
+
+  defp rec_cover(fields, [{:prod, {:rec, bs}, _}]) when is_list(bs) do
+    case rec_fit(fields, bs) do
+      :ok -> :ok
+      {:error, msg} -> {:error, msg}
+    end
+  end
+
+  defp rec_cover(_fields, [{:arm, _, _, _}]), do: {:error, "constructor arm on a record"}
+  defp rec_cover(_fields, _), do: {:error, @cover}
+
+  # Duplicate fields first. Then the names, lockstep with the type.
+  defp rec_fit(fields, bs) when is_list(fields) and is_list(bs) do
+    type_names = Enum.map(fields, fn {name, _} -> name end)
+    pat_names = Enum.map(bs, fn {name, _} -> name end)
+
+    if dup_name?(pat_names) do
+      {:error, "duplicate field"}
+    else
+      walk_fields(type_names, pat_names, type_names, pat_names)
+    end
+  end
+
+  defp rec_fit(_, _), do: {:error, @cover}
+
+  defp dup_name?(names) do
+    Enum.reduce_while(names, MapSet.new(), fn name, seen ->
+      if MapSet.member?(seen, name), do: {:halt, true}, else: {:cont, MapSet.put(seen, name)}
+    end) == true
+  end
+
+  defp walk_fields([], [], _all_t, _all_p), do: :ok
+  defp walk_fields([], [_ | _], _all_t, _all_p), do: {:error, "extra field"}
+  defp walk_fields([_ | _], [], _all_t, _all_p), do: {:error, "missing field"}
+
+  defp walk_fields([t | ts], [p | ps], all_t, all_p) do
+    cond do
+      t == p -> walk_fields(ts, ps, all_t, all_p)
+      p not in all_t -> {:error, "extra field"}
+      t not in all_p -> {:error, "missing field"}
+      true -> {:error, "field out of order"}
+    end
+  end
+
   # A positional arm keeps the received name. A named arm binds the fields
   # of the constructor at this index, innermost last, over that name.
+  # A product arm binds the components, last binder innermost.
+  defp open_arm({:prod, {:pair, [x, y]}, body}, ctx, {:pair, a, b}, _i, _book)
+       when is_atom(x) and is_atom(y) do
+    {:ok, body, bind_fields(ctx, [x, y], [a, b])}
+  end
+
+  defp open_arm({:prod, {:pair, _}, _body}, _ctx, {:pair, _, _}, _i, _book),
+    do: {:error, "wrong arity"}
+
+  defp open_arm({:prod, {:rec, bs}, body}, ctx, {:rec, fields}, _i, _book) when is_list(bs) do
+    case rec_fit(fields, bs) do
+      :ok ->
+        binders = Enum.map(bs, fn {_, binder} -> binder end)
+        tys = Enum.map(fields, fn {_, ty} -> ty end)
+        {:ok, body, bind_fields(ctx, binders, tys)}
+
+      {:error, msg} ->
+        {:error, msg}
+    end
+  end
+
+  defp open_arm({:prod, _, _}, _ctx, _ty, _i, _book), do: {:error, @cover}
+
   defp open_arm({:arm, ctor, binders, body}, ctx, ty, i, book)
        when is_binary(ctor) and is_list(binders) do
     case field_tys(ty, i, book) do
@@ -2588,7 +2741,7 @@ defmodule Muro.Session do
   end
 
   def show_proc({:match, name, arms}) do
-    if Enum.any?(arms, &match?({:arm, _, _, _}, &1)) do
+    if Enum.any?(arms, &(match?({:arm, _, _, _}, &1) or match?({:prod, _, _}, &1))) do
       "match #{name} #{Enum.map_join(arms, " ", &show_arm/1)}"
     else
       "match #{name} #{Enum.map_join(arms, " ", &paren_proc/1)}"
@@ -2602,6 +2755,15 @@ defmodule Muro.Session do
 
   defp show_arm({:arm, c, xs, p}) do
     "| #{c} #{Enum.map_join(xs, " ", &to_string/1)} => #{paren_proc(p)}"
+  end
+
+  defp show_arm({:prod, {:pair, names}, p}) do
+    "| (#{Enum.map_join(names, ", ", &to_string/1)}) => #{paren_proc(p)}"
+  end
+
+  defp show_arm({:prod, {:rec, bs}, p}) do
+    inner = Enum.map_join(bs, ", ", fn {field, binder} -> "#{field} = #{binder}" end)
+    "| {#{inner}} => #{paren_proc(p)}"
   end
 
   defp show_arm(p), do: paren_proc(p)
