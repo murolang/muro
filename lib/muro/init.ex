@@ -7,15 +7,13 @@ defmodule Muro.Init do
   `muro.exs`, or a `:muro` key already in `mix.exs`, is left untouched.
 
   `ci: :github` also writes `.github/workflows/muro.yml`. The job sets
-  up Elixir and OTP, installs this version of the archive, and runs
-  `mix muro.gen --check`. The install line is
+  up Elixir and OTP, installs this version of the archive from Hex, and
+  runs `mix muro.gen --check`. The install line is
 
-      mix archive.install github murolang/muro ref v<version> --force
+      mix archive.install hex muro <version> --force
 
-  `ref` is the pin Mix accepts for a GitHub archive. The ref is `v`
-  plus the version. This repository has no git tags; that ref is the
-  tag name for the pinned version. `--force` skips the install
-  question. The job does not install from Hex.
+  The version is the one in the manifest. `--force` skips the install
+  question.
 
   Init prints a note for the project's agent instructions. It does
   not write that file.
@@ -114,7 +112,7 @@ defmodule Muro.Init do
               otp-version: "#{@otp}"
 
           - name: Install the muro archive
-            run: mix archive.install github murolang/muro ref v#{version} --force
+            run: mix archive.install hex muro #{version} --force
 
           - name: Check generated modules
             run: mix muro.gen --check

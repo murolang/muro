@@ -15,13 +15,13 @@ Elixir via [mise](https://mise.jdx.dev/).
 
 The archive installs `mix muro`, `mix muro.check`, `mix muro.emit`, `mix muro.gen`, and `mix muro.init` in any directory, with or without a `mix.exs`.
 
-Once 0.16.75 is on Hex:
+Install it from Hex:
 
 ```
 mix archive.install hex muro
 ```
 
-Until that release, build the archive from a checkout and install that file:
+Alternatively, build the archive from a checkout and install that file:
 
 ```
 git clone https://github.com/murolang/muro.git

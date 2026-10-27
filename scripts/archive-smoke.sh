@@ -304,11 +304,11 @@ have "$gen2" "unchanged lib/smoke/before.ex" "second mix muro.gen"
 cmp lib/smoke/before.ex "$tmp/before.ex"
 
 workflow=$(cat .github/workflows/muro.yml)
-have "$workflow" "mix archive.install github murolang/muro ref v${version} --force" "workflow"
+have "$workflow" "mix archive.install hex muro ${version} --force" "workflow"
 have "$workflow" "mix muro.gen --check" "workflow"
 case "$workflow" in
-  *archive.install\ hex*)
-    echo "workflow installs from Hex" >&2
+  *archive.install\ github*)
+    echo "workflow installs from GitHub" >&2
     exit 1
     ;;
 esac

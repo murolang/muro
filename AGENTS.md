@@ -43,7 +43,7 @@ mix muro.gen --check                         # fail when a committed module and 
 make agda                                   # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-The archive installs those tasks in any directory. Once 0.16.75 is on Hex: `mix archive.install hex muro`. Until then, from a checkout: `mix archive.build && mix archive.install muro-0.16.75.ez`. From GitHub: `mix archive.install github murolang/muro`. A pinned version: `mix archive.install github murolang/muro ref v0.16.75`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks.
+The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.16.75`. From a checkout: `mix archive.build && mix archive.install muro-0.16.75.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks.
 
 Success from `mix muro.check`: a `Muro v…` line, then `All terms check. Evidence never becomes a run.`
 

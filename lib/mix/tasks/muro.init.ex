@@ -16,7 +16,7 @@ defmodule Mix.Tasks.Muro.Init do
 
   `--ci github` also writes `.github/workflows/muro.yml`. The job
   sets up Elixir and OTP, installs the archive at the pinned version
-  (`mix archive.install github murolang/muro ref v<version> --force`),
+  (`mix archive.install hex muro <version> --force`),
   and runs `mix muro.gen --check`. An existing workflow file is left
   in place.
 

@@ -133,13 +133,13 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.emit`, `mix muro.gen`, and `mix muro.init` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-Once 0.16.75 is on Hex:
+Install it from Hex:
 
 ```
 mix archive.install hex muro
 ```
 
-Until that release, from a checkout of this version:
+Alternatively, from a checkout of this version:
 
 ```
 mix deps.get
@@ -169,7 +169,7 @@ A project commits the Elixir `mix muro.gen` writes. The `.muro` file is the sour
 
 `muro.exs` at the project root, or a `:muro` key in `mix.exs`, names each book, the module, and the target path. `muro:` is the version the books are checked with. `mix muro.gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions.
 
-`mix muro.init` creates the manifest and `priv/muro/`. It prints a note to paste into the project's agent instructions. It does not write that file. `mix muro.init --ci github` also writes `.github/workflows/muro.yml`. The job installs the archive with `mix archive.install github murolang/muro ref v<version> --force` and runs `mix muro.gen --check`. This repository has no git tags. `ref` is the pin Mix accepts, and the ref is `v` plus the version.
+`mix muro.init` creates the manifest and `priv/muro/`. It prints a note to paste into the project's agent instructions. It does not write that file. `mix muro.init --ci github` also writes `.github/workflows/muro.yml`. The job installs the archive with `mix archive.install hex muro <version> --force`, with the version from the manifest, and runs `mix muro.gen --check`.
 
 The page is [Committed modules](gen.md).
 

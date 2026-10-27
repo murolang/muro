@@ -144,10 +144,10 @@ mix muro.init --ci github
 The job checks out the project, sets up Elixir 1.20.4 and OTP 29.1 (this repository's `mise.toml`), installs the archive, and runs `mix muro.gen --check`. The install line is:
 
 ```
-mix archive.install github murolang/muro ref v0.16.75 --force
+mix archive.install hex muro 0.16.75 --force
 ```
 
-`ref` is the pin Mix accepts for a GitHub archive. The ref is `v` plus the version in the manifest. This repository has no git tags. That ref is the tag name for the pinned version. `--force` skips the install question. The job does not install from Hex. `mix archive.install hex muro` is the form for a release that is on Hex. An install without `ref` fetches the default branch.
+The version is the one in the manifest, so the job installs the release that `muro:` names. `--force` skips the install question. The job does not install the checkout build or the GitHub form. `mix archive.install hex muro` without a version installs the latest release.
 
 The task prints a note to paste into the project's agent instructions (AGENTS.md or similar):
 

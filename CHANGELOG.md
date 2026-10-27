@@ -10,7 +10,7 @@ Each target starts with two comment lines: the Muro version, the book path relat
 
 The task checks every book before it writes. A failing book writes nothing. Formatting uses the project's `.formatter.exs` when that file exists. The bytes are the same across runs: no timestamps, paths relative to the project root with `/` separators, one trailing newline. An unchanged target is not rewritten.
 
-`mix muro.init --ci github` writes `.github/workflows/muro.yml`. The job sets up Elixir and OTP, installs the archive with `mix archive.install github murolang/muro ref v<version> --force`, and runs `mix muro.gen --check`. This repository has no git tags. `ref` is the pin Mix accepts, and the ref is `v` plus the version. The job does not install from Hex. Init prints a note for the project's agent instructions and does not write that file.
+`mix muro.init --ci github` writes `.github/workflows/muro.yml`. The job sets up Elixir and OTP, installs the archive with `mix archive.install hex muro <version> --force`, where the version is the one in the manifest, and runs `mix muro.gen --check`. Init prints a note for the project's agent instructions and does not write that file.
 
 ### Manual
 
@@ -19,6 +19,7 @@ The task checks every book before it writes. A failing book writes nothing. Form
 
 ### Package
 
+- muro 0.16.73 is on Hex. The install docs in the README, AGENTS.md, llms.txt, Start, and For agents lead with `mix archive.install hex muro`, with the checkout build and `mix archive.install github murolang/muro` as alternatives. The "once it is on Hex" wording is gone.
 - `scripts/archive-smoke.sh` goes from `mix muro.init --ci github` to a generated module, a clean `--check`, a hand-edited failure, and a stale failure.
 - Version 0.16.75.
 

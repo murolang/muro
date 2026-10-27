@@ -388,9 +388,9 @@ defmodule Muro.GenTest do
     assert source =~ "erlef/setup-beam@v1"
     assert source =~ ~s(elixir-version: "1.20.4")
     assert source =~ ~s(otp-version: "29.1")
-    assert source =~ "mix archive.install github murolang/muro ref v#{version} --force"
+    assert source =~ "mix archive.install hex muro #{version} --force"
     assert source =~ "mix muro.gen --check"
-    refute source =~ "archive.install hex"
+    refute source =~ "archive.install github"
 
     error =
       in_dir(dir, fn ->
