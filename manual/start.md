@@ -15,7 +15,7 @@ Elixir via [mise](https://mise.jdx.dev/).
 
 The archive installs `mix muro`, `mix muro.check`, and `mix muro.emit` in any directory, with or without a `mix.exs`.
 
-Once 0.16.73 is on Hex:
+Once 0.16.74 is on Hex:
 
 ```
 mix archive.install hex muro
@@ -29,7 +29,7 @@ cd muro
 mise install
 mix deps.get
 mix archive.build
-mix archive.install muro-0.16.73.ez
+mix archive.install muro-0.16.74.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -50,7 +50,9 @@ mix muro.emit path.muro
 
 `mix muro --version` prints `Muro v` and the version of the copy that ran. `mix muro` with no arguments prints that line and the muro tasks.
 
-If a project depends on muro and the archive is also installed, Mix uses the project's copy. The version line names that copy.
+Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. The version line names the copy that ran.
+
+A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks. Check and emit with `mix muro.check` and `mix muro.emit`.
 
 `mix muro.emit path.muro` prints the Elixir module. Save it with `mix muro.emit path.muro > path.ex`.
 
@@ -104,7 +106,7 @@ mix muro.check examples/plus.muro
 On success the shell prints the version that checked the book, then:
 
 ```
-Muro v0.16.73
+Muro v0.16.74
 All terms check. Evidence never becomes a run.
 ```
 

@@ -113,4 +113,129 @@ if [ -e half_ok.c ] || [ -e half_ok.h ] || [ -e half_ok_nif.c ]; then
   exit 1
 fi
 
+# A project that does not depend on muro keeps the archive. The host is
+# neither compiled nor started.
+host_parent="$tmp/host-parent"
+mkdir -p "$host_parent"
+(
+  cd "$host_parent"
+  mix new host --sup
+)
+
+host="$host_parent/host"
+app_file="$host/lib/host/application.ex"
+if [ ! -f "$app_file" ]; then
+  echo "missing $app_file" >&2
+  find "$host" -name '*.ex' >&2
+  exit 1
+fi
+
+app_patched="$tmp/host-application.ex"
+if ! awk '
+  inserted { print; next }
+  /def start\(_type, _args\) do/ {
+    print
+    print "    IO.puts(\"host application started\")"
+    inserted = 1
+    next
+  }
+  { print }
+  END {
+    if (!inserted) exit 2
+  }
+' "$app_file" >"$app_patched"; then
+  echo "could not patch start/2 in $app_file" >&2
+  exit 1
+fi
+mv "$app_patched" "$app_file"
+have "$(cat "$app_file")" 'IO.puts("host application started")' "host application.ex"
+
+cp "$root/examples/half_ok.muro" "$host/half_ok.muro"
+(
+  cd "$host"
+  unset MIX_BUILD_PATH
+  rm -rf _build
+
+  set +e
+  host_version=$(mix muro --version 2>&1)
+  host_version_status=$?
+  set -e
+  printf '%s\n' "$host_version"
+  if [ "$host_version_status" -ne 0 ]; then
+    echo "host mix muro --version failed" >&2
+    exit 1
+  fi
+  if [ "$host_version" != "Muro v${version}" ]; then
+    echo "expected Muro v${version} inside the host, got: ${host_version}" >&2
+    exit 1
+  fi
+  case "$host_version" in
+    *"host application started"*)
+      echo "mix muro --version started the host" >&2
+      exit 1
+      ;;
+  esac
+  if [ -e _build ]; then
+    echo "mix muro --version compiled the host" >&2
+    exit 1
+  fi
+
+  set +e
+  host_check=$(mix muro.check half_ok.muro 2>&1)
+  host_check_status=$?
+  set -e
+  printf '%s\n' "$host_check"
+  if [ "$host_check_status" -ne 0 ]; then
+    echo "host mix muro.check failed" >&2
+    exit 1
+  fi
+  have "$host_check" "Muro v${version}" "host mix muro.check"
+  have "$host_check" "All terms check. Evidence never becomes a run." "host mix muro.check"
+  case "$host_check" in
+    *"host application started"*)
+      echo "mix muro.check started the host" >&2
+      exit 1
+      ;;
+  esac
+  if [ -e _build ]; then
+    echo "mix muro.check compiled the host" >&2
+    exit 1
+  fi
+
+  set +e
+  mix muro.emit half_ok.muro >half_ok.ex 2>"$tmp/host-emit.err"
+  host_emit_status=$?
+  set -e
+  if [ "$host_emit_status" -ne 0 ]; then
+    echo "host mix muro.emit failed" >&2
+    cat half_ok.ex "$tmp/host-emit.err" >&2
+    exit 1
+  fi
+  host_emit_err=$(cat "$tmp/host-emit.err")
+  case "$host_emit_err" in
+    *"host application started"*)
+      echo "mix muro.emit started the host" >&2
+      exit 1
+      ;;
+  esac
+  case "$(cat half_ok.ex)" in
+    *"host application started"*)
+      echo "mix muro.emit started the host" >&2
+      exit 1
+      ;;
+  esac
+  test -s half_ok.ex
+  host_first=$(head -n 1 half_ok.ex)
+  if [ "$host_first" != "defmodule HalfOk do" ]; then
+    echo "expected half_ok.ex to start with the module, got: ${host_first}" >&2
+    exit 1
+  fi
+  grep -q "def plus" half_ok.ex
+  grep -q "def half" half_ok.ex
+  if [ -e _build ]; then
+    echo "mix muro.emit compiled the host" >&2
+    exit 1
+  fi
+)
+
 echo "archive smoke passed (${version})"
