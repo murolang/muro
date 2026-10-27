@@ -50,6 +50,36 @@ defmodule Muro.ArchiveTest do
     assert out =~ "Muro v#{version}"
   end
 
+  test "uses_muro? is true for this application and for a declared muro dep" do
+    assert Mix.Tasks.Muro.uses_muro?(app: :muro)
+    assert Mix.Tasks.Muro.uses_muro?(app: :muro, deps: [{:nx, "~> 0.9", optional: true}])
+
+    assert Mix.Tasks.Muro.uses_muro?(app: :host, deps: [{:muro, "~> 0.16"}])
+    assert Mix.Tasks.Muro.uses_muro?(app: :host, deps: [{:muro, path: "../muro"}])
+
+    assert Mix.Tasks.Muro.uses_muro?(
+             app: :host,
+             deps: [{:muro, git: "https://github.com/murolang/muro.git", tag: "v0.16.74"}]
+           )
+
+    assert Mix.Tasks.Muro.uses_muro?(app: :host, deps: [{:muro, "~> 0.16", only: :dev}])
+
+    assert Mix.Tasks.Muro.uses_muro?(
+             app: :host,
+             deps: [{:nx, "~> 0.9"}, {:muro, "~> 0.16", optional: true}]
+           )
+  end
+
+  test "uses_muro? is false when the project does not declare muro" do
+    refute Mix.Tasks.Muro.uses_muro?([])
+    refute Mix.Tasks.Muro.uses_muro?(app: :host)
+    refute Mix.Tasks.Muro.uses_muro?(app: :host, deps: [])
+    refute Mix.Tasks.Muro.uses_muro?(app: :host, deps: nil)
+    refute Mix.Tasks.Muro.uses_muro?(app: :host, deps: [{:nx, "~> 0.9"}])
+    refute Mix.Tasks.Muro.uses_muro?(app: :host, deps: [{:nx, "~> 0.9", only: :dev}])
+    refute Mix.Tasks.Muro.uses_muro?(app: :host, deps: [{:nx, path: "../nx"}])
+  end
+
   test "the makeup lexer is registered only when Makeup is loaded" do
     assert Muro.Application.register_makeup_lexer(false) == :skipped
     assert Muro.Application.register_makeup_lexer(true) == :registered
