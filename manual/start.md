@@ -50,7 +50,9 @@ mix muro.emit path.muro
 
 `mix muro --version` prints `Muro v` and the version of the copy that ran. `mix muro` with no arguments prints that line and the muro tasks.
 
-If a project depends on muro and the archive is also installed, Mix uses the project's copy. The version line names that copy.
+Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. The version line names the copy that ran.
+
+A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks. Check and emit with `mix muro.check` and `mix muro.emit`.
 
 `mix muro.emit path.muro` prints the Elixir module. Save it with `mix muro.emit path.muro > path.ex`.
 

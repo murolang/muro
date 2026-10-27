@@ -30,7 +30,7 @@ end
 
 The archive installs `mix muro.check`, `mix muro.emit`, `mix muro.gen`, and `mix muro.init` in any directory, with or without a `mix.exs`. Once 0.16.74 is on Hex: `mix archive.install hex muro`. Until that release, from a checkout: `mix archive.build && mix archive.install muro-0.16.74.ez`. From GitHub, Mix fetches the default branch and builds the archive: `mix archive.install github murolang/muro`. A pinned version uses `mix archive.install github murolang/muro ref v0.16.74`. See [Committed modules](manual/gen.md).
 
-If a project depends on muro and the archive is also installed, Mix uses the project's copy. `mix muro --version` prints the copy that ran.
+Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. `mix muro --version` prints the copy that ran. A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks.
 
 A clone is for changing the kernel. A `.muro` file is checked with `mix muro.check`. `mix muro.emit path.muro` prints the Elixir module.
 

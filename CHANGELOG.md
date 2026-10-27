@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.16.74
+## 0.16.75
 
 `mix muro.gen` writes the modules a project manifest names. `mix muro.gen --check` writes nothing and fails when a committed module and its book disagree. `mix muro.init` creates `muro.exs` and `priv/muro/`.
 
@@ -20,6 +20,24 @@ The task checks every book before it writes. A failing book writes nothing. Form
 ### Package
 
 - `scripts/archive-smoke.sh` goes from `mix muro.init --ci github` to a generated module, a clean `--check`, a hand-edited failure, and a stale failure.
+- Version 0.16.75.
+
+## 0.16.74
+
+`mix muro.check` and `mix muro.emit` use the installed archive inside a Mix project that does not depend on muro. The host is neither compiled nor started.
+
+Inside a project that depends on muro, the project's copy runs after `app.start`, as before. Outside a project, the archive's copy runs, as before. `Muro v` and the version name the copy that ran.
+
+A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks.
+
+### Manual
+
+- Start, For agents, and llms.txt: the archive inside a project that does not depend on muro, and the `mix run --no-start` limitation.
+
+### Package
+
+- From a checkout: `mix archive.build && mix archive.install muro-0.16.74.ez`. From GitHub: `mix archive.install github murolang/muro`. Once this release is on Hex: `mix archive.install hex muro`.
+- CI runs the archive outside a project and inside a `--sup` project that does not depend on muro (`scripts/archive-smoke.sh`).
 - Version 0.16.74.
 
 ## 0.16.73
