@@ -133,7 +133,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.emit`, `mix muro.gen`, and `mix muro.init` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-Once 0.16.74 is on Hex:
+Once 0.16.75 is on Hex:
 
 ```
 mix archive.install hex muro
@@ -144,7 +144,7 @@ Until that release, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.16.74.ez
+mix archive.install muro-0.16.75.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -190,7 +190,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then:
 
 ```
-Muro v0.16.74
+Muro v0.16.75
 All terms check. Evidence never becomes a run.
 ```
 

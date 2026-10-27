@@ -15,7 +15,7 @@ Elixir via [mise](https://mise.jdx.dev/).
 
 The archive installs `mix muro`, `mix muro.check`, `mix muro.emit`, `mix muro.gen`, and `mix muro.init` in any directory, with or without a `mix.exs`.
 
-Once 0.16.74 is on Hex:
+Once 0.16.75 is on Hex:
 
 ```
 mix archive.install hex muro
@@ -29,7 +29,7 @@ cd muro
 mise install
 mix deps.get
 mix archive.build
-mix archive.install muro-0.16.74.ez
+mix archive.install muro-0.16.75.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -108,7 +108,7 @@ mix muro.check examples/plus.muro
 On success the shell prints the version that checked the book, then:
 
 ```
-Muro v0.16.74
+Muro v0.16.75
 All terms check. Evidence never becomes a run.
 ```
 
