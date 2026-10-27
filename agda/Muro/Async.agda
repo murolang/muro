@@ -13,7 +13,9 @@
 --
 -- A value carried in a queue selects a `mget` arm. A bare arm is
 -- that continuation. A named arm is that continuation after the
--- value's fields replace its binders. Evidence is not queued: the
+-- value's fields replace its binders. A product arm is that
+-- continuation after the pair's components, or the record's fields,
+-- replace its binders. Evidence is not queued: the
 -- sender has already discharged it, and the message is the payload.
 -- The queued value is resolved, so an echo selects the arm of the
 -- value that was received. The length index is the expression the
@@ -60,10 +62,11 @@ armSize : PArm → ℕ
 size : Proc → ℕ
 sizeArms : List PArm → ℕ
 
--- A bare arm and a named arm are the size of the process they store.
--- Substituting fields does not change that size.
+-- A bare arm, a named arm, and a product arm are the size of the
+-- process they store. Substituting fields does not change that size.
 armSize (bare p) = size p
 armSize (named _ _ p) = size p
+armSize (prod _ p) = size p
 
 size done = nzero
 size stop = nzero
@@ -139,10 +142,19 @@ mutual
   size-arms-subst e (bare p ∷ ps) rewrite size-subst e p | size-arms-subst e ps = refl
   size-arms-subst e (named _ xs p ∷ ps)
     rewrite size-subst (shadows xs e) p | size-arms-subst e ps = refl
+  size-arms-subst e (prod pat p ∷ ps)
+    rewrite size-subst (shadows (patBinders pat) e) p | size-arms-subst e ps = refl
 
 leSubst : (e : FEnv) (p : Proc) (ps : List PArm) →
           size (substProc e p) ≤ size p + sizeArms ps
 leSubst e p ps rewrite size-subst e p = m≤m+n (size p) (sizeArms ps)
+
+-- A product arm opens when the components have a raw image. The bound
+-- is the stored process: substitution does not change its size.
+pickArm : Maybe FEnv → (p : Proc) → (ps : List PArm) →
+          Maybe (Σ Proc (λ R → size R ≤ size p + sizeArms ps))
+pickArm nothing _ _ = nothing
+pickArm (just e) p ps = just (substProc e p , leSubst e p ps)
 
 -- The same clauses as `openNamed`. A matching constructor with one
 -- raw per binder returns that process after the fields replace the
@@ -182,6 +194,14 @@ findIn name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) with name == n
          Maybe (Σ Proc (λ R → size R ≤ size p + sizeArms ps))
   lift nothing = nothing
   lift (just (R , le)) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (size p)))
+findIn name sp (ctor n _ ∷ cs) (prod _ p ∷ ps) with name == n
+... | true = nothing
+... | false = lift (findIn name sp cs ps)
+  where
+  lift : Maybe (Σ Proc (λ R → size R ≤ sizeArms ps)) →
+         Maybe (Σ Proc (λ R → size R ≤ size p + sizeArms ps))
+  lift nothing = nothing
+  lift (just (R , le)) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (size p)))
 
 armPick : (A : Ty) → Val A → (ps : List PArm) →
           Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
@@ -191,18 +211,32 @@ armPick bit b0 (_ ∷ _ ∷ _ ∷ _) = nothing
 armPick bit b0 (bare p ∷ q ∷ []) = just (p , m≤m+n (size p) (sizeArms (q ∷ [])))
 armPick bit b0 (named _ [] p ∷ q ∷ []) = just (p , m≤m+n (size p) (sizeArms (q ∷ [])))
 armPick bit b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) = nothing
+armPick bit b0 (prod _ _ ∷ _ ∷ []) = nothing
 armPick bit b1 [] = nothing
 armPick bit b1 (_ ∷ []) = nothing
 armPick bit b1 (_ ∷ _ ∷ _ ∷ _) = nothing
 armPick bit b1 (a ∷ bare q ∷ []) = just (q , b1≤ a (bare q))
 armPick bit b1 (a ∷ named c [] q ∷ []) = just (q , b1≤ a (named c [] q))
 armPick bit b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) = nothing
+armPick bit b1 (_ ∷ prod _ _ ∷ []) = nothing
 armPick (dat d _) (con c sp) ps = findIn c sp (ctorsOf d) ps
 armPick nat _ _ = nothing
 armPick unit _ _ = nothing
-armPick (pair _ _) _ _ = nothing
-armPick (rec _) _ _ = nothing
 armPick (vec _ _) _ _ = nothing
+armPick (pair _ _) (tup _ _) (_ ∷ _ ∷ _) = nothing
+armPick (pair _ _) (tup _ _) [] = nothing
+armPick (pair _ _) (tup a b) (prod (pPair x y) p ∷ []) =
+  pickArm (openPair x y a b) p []
+armPick (pair _ _) (tup _ _) (prod (pRec _) _ ∷ []) = nothing
+armPick (pair _ _) (tup _ _) (bare _ ∷ []) = nothing
+armPick (pair _ _) (tup _ _) (named _ _ _ ∷ []) = nothing
+armPick (rec _) (rec _) (_ ∷ _ ∷ _) = nothing
+armPick (rec _) (rec _) [] = nothing
+armPick (rec _) (rec row) (prod (pRec bs) p ∷ []) =
+  pickArm (openRec bs row) p []
+armPick (rec _) (rec _) (prod (pPair _ _) _ ∷ []) = nothing
+armPick (rec _) (rec _) (bare _ ∷ []) = nothing
+armPick (rec _) (rec _) (named _ _ _ ∷ []) = nothing
 
 armExprPick : ∀ {A} → ValExpr A → (ps : List PArm) →
               Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))

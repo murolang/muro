@@ -20,10 +20,14 @@
 -- value it just bound. The arms are the constructors of that
 -- payload, in order. A bare arm is that continuation. A named arm
 -- binds the fields of its constructor, and those names are payload
--- data in the arm. Each arm conforms to the one continuation, and
--- the processes may differ. The meeting selects the arm of the value
--- that was sent and reads the fields of that value. A match that does not
--- cover the received value has no derivation. An indexed bit is
+-- data in the arm. A received pair has one product arm, `(a, b)`,
+-- and a received record has one product arm naming every field in
+-- the order the type writes them. A component is payload data, the
+-- same way a constructor field is. Each arm conforms to the one
+-- continuation, and the processes may differ. The meeting selects
+-- the arm of the value that was sent and reads the fields of that
+-- value, or the components of the pair or the record. A match that
+-- does not cover the received value has no derivation. An indexed bit is
 -- still the literal the sender writes.
 --
 -- A dependent continuation may also be a `case` on the name just
@@ -442,14 +446,23 @@ protoMode = spec
 -- variable. The continuation may reference that variable. `mget`
 -- receives and matches that same name. The arms are one per
 -- constructor, `b0` then `b1` for a bit, and declaration order for
--- data. A bare arm carries no binders. A named arm names that
--- constructor and binds its fields, last name innermost. Each arm
--- conforms to the one continuation, and the processes may differ.
+-- data. A pair or a record has one product arm. A bare arm carries
+-- no binders. A named arm names that constructor and binds its
+-- fields, last name innermost. A product arm binds the two
+-- components, or every record field in type order, last name
+-- innermost. Each arm conforms to the one continuation, and the
+-- processes may differ.
 -- `pick0` and `pick1` are the process's choice. `cover` offers
 -- both branches. `iget x P Q` receives a bit, binds it to `x`, and
 -- offers both arms: `b0` continues as `P` and `b1` continues as `Q`.
 -- `stop` uses the channel no further.
 ------------------------------------------------------------------------
+
+-- A product pattern is one level. `pPair` binds the two components.
+-- `pRec` names each field and binds it. The field names are the type's.
+data Pat : Set where
+  pPair : String → String → Pat
+  pRec  : List (String × String) → Pat
 
 mutual
   data Proc : Set where
@@ -464,13 +477,25 @@ mutual
     mget  : (A : Ty) → String → List PArm → Proc
 
   -- `bare` is the positional arm. `named` binds the constructor's fields.
+  -- `prod` binds the components of a pair or the fields of a record.
   data PArm : Set where
     bare  : Proc → PArm
     named : String → List String → Proc → PArm
+    prod  : Pat → Proc → PArm
 
 body : PArm → Proc
 body (bare p) = p
 body (named _ _ p) = p
+body (prod _ p) = p
+
+-- The binders a product pattern introduces, first component first.
+seconds : List (String × String) → List String
+seconds [] = []
+seconds ((_ , b) ∷ bs) = b ∷ seconds bs
+
+patBinders : Pat → List String
+patBinders (pPair x y) = x ∷ y ∷ []
+patBinders (pRec bs) = seconds bs
 
 ------------------------------------------------------------------------
 -- A parameter index, or nothing when the index is past the arguments.
@@ -787,11 +812,13 @@ mutual
 ------------------------------------------------------------------------
 
 data Raw : Set where
-  rawNat : ℕ → Raw
-  rawBit : Val bit → Raw
+  rawNat  : ℕ → Raw
+  rawBit  : Val bit → Raw
   rawUnit : Raw
   rawPair : Raw → Raw → Raw
-  rawCon : String → List Raw → Raw
+  rawRec  : List Raw → Raw
+  rawVec  : Raw → Raw
+  rawCon  : String → List Raw → Raw
 
 Env : Set
 Env = List Raw
@@ -859,6 +886,8 @@ mutual
   matchArms Δ (_ ∷ as) env v@(rawNat _) = matchArms Δ as env v
   matchArms Δ (_ ∷ as) env v@rawUnit = matchArms Δ as env v
   matchArms Δ (_ ∷ as) env v@(rawPair _ _) = matchArms Δ as env v
+  matchArms Δ (_ ∷ as) env v@(rawRec _) = matchArms Δ as env v
+  matchArms Δ (_ ∷ as) env v@(rawVec _) = matchArms Δ as env v
 
   matchCon :
     {c d : String} → Dec (c ≡ d) → List RDef → List Arm → RTm →
@@ -891,8 +920,13 @@ mutual
   rawOf (tup a b) =
     bindM (rawOf a) (λ a′ → bindM (rawOf b) (λ b′ → just (rawPair a′ b′)))
   rawOf (con c sp) = bindM (rawSpine sp) (λ vs → just (rawCon c vs))
-  rawOf (rec _) = nothing
-  rawOf (rep _) = nothing
+  rawOf (rec row) = bindM (rawRow row) (λ rs → just (rawRec rs))
+  rawOf (rep v) = bindM (rawOf v) (λ r → just (rawVec r))
+
+  rawRow : ∀ {fs} → Row fs → Maybe (List Raw)
+  rawRow noRow = just []
+  rawRow (cell v row) =
+    bindM (rawOf v) (λ r → bindM (rawRow row) (λ rs → just (r ∷ rs)))
 
   rawSpine : Spine → Maybe (List Raw)
   rawSpine snil = just []
@@ -908,8 +942,16 @@ mutual
   cast unit rawUnit = just tt
   cast (pair A B) (rawPair a b) =
     bindM (cast A a) (λ a′ → bindM (cast B b) (λ b′ → just (tup a′ b′)))
+  cast (rec fs) (rawRec rs) = bindM (castRow fs rs) (λ row → just (rec row))
+  cast (vec A _) (rawVec r) = bindM (cast A r) (λ v → just (rep v))
   cast (dat d as) (rawCon c rs) = castFound d as c rs (findCtor (ctorsOf d) c)
   cast _ _ = nothing
+
+  castRow : (fs : Fields) → List Raw → Maybe (Row fs)
+  castRow noFields [] = just noRow
+  castRow (named _ A fs) (r ∷ rs) =
+    bindM (cast A r) (λ v → bindM (castRow fs rs) (λ row → just (cell v row)))
+  castRow _ _ = nothing
 
   castFound :
     (d : Decl) (as : List Ty) (c : String) (rs : List Raw) →
@@ -1398,8 +1440,11 @@ plain-not ()
 -- arm conforms to the same continuation. A bare arm sees only the
 -- received name. A named arm also sees that constructor's fields,
 -- instantiated at the payload's arguments, last binder innermost.
--- A nat, unit, a pair, a record, a vector, or the wrong number of
--- arms does not cover. A case is the continuation of the dependent
+-- A pair is covered by one product arm `(a, b)`. A record is covered
+-- by one product arm naming every field once, in the order the type
+-- writes them, last binder innermost. A nat, unit, a vector, a
+-- constructor arm on a pair or a record, or the wrong number of arms
+-- does not cover. A case is the continuation of the dependent
 -- action that binds the scrutinee. The sender is checked on the
 -- selected arm. The receiver is checked on every arm. The fields do
 -- not choose the protocol arm.
@@ -1445,10 +1490,40 @@ fieldsNamed _ _ = nothing
 armCtxNamed : Ty → String → List String → Ctx → Maybe Ctx
 armCtxNamed A c xs Γ = bindM (fieldsNamed A c) (λ ts → extend xs ts Γ)
 
+-- The pattern's field names are the type's, in that order. The last
+-- binder is innermost, as `extend` places a constructor's fields.
+bindRow : Fields → List (String × String) → Ctx → Maybe Ctx
+bindRow noFields [] Γ = just Γ
+bindRow (named n A fs) ((m , b) ∷ bs) Γ with n ≟ m
+... | yes′ _ = bindRow fs bs ((b , A) ∷ Γ)
+... | no′ _ = nothing
+bindRow _ _ _ = nothing
+
+prodCtx : Ty → Pat → Ctx → Maybe Ctx
+prodCtx (pair A B) (pPair x y) Γ = just ((y , B) ∷ (x , A) ∷ Γ)
+prodCtx (rec fs) (pRec bs) Γ = bindRow fs bs Γ
+prodCtx _ _ _ = nothing
+
+data Fits : Fields → List (String × String) → Set where
+  fits-nil  : Fits noFields []
+  fits-cons : ∀ {n A fs b bs} → Fits fs bs → Fits (named n A fs) ((n , b) ∷ bs)
+
+fits? : (fs : Fields) (bs : List (String × String)) → Dec (Fits fs bs)
+fits? noFields [] = yes′ fits-nil
+fits? noFields (_ ∷ _) = no′ (λ ())
+fits? (named _ _ _) [] = no′ (λ ())
+fits? (named n _ fs) ((m , _) ∷ bs) with n ≟ m
+... | no′ ¬eq = no′ (λ { (fits-cons _) → ¬eq refl })
+... | yes′ refl with fits? fs bs
+... | yes′ f = yes′ (fits-cons f)
+... | no′ ¬f = no′ (λ { (fits-cons f) → ¬f f })
+
 mutual
   data Covered : Ty → List PArm → Set where
-    bit-cov : ∀ {p q} → Covered bit (p ∷ q ∷ [])
-    dat-cov : ∀ {d as ps} → length ps ≡ length (ctorsOf d) → Covered (dat d as) ps
+    bit-cov  : ∀ {p q} → Covered bit (p ∷ q ∷ [])
+    dat-cov  : ∀ {d as ps} → length ps ≡ length (ctorsOf d) → Covered (dat d as) ps
+    pair-cov : ∀ {A B x y p} → Covered (pair A B) (prod (pPair x y) p ∷ [])
+    rec-cov  : ∀ {fs bs p} → Fits fs bs → Covered (rec fs) (prod (pRec bs) p ∷ [])
 
   data Arms (Γ : Ctx) (ρ : Idx) (A : Ty) : ℕ → List PArm → Proto → Set where
     arms-nil   : ∀ {i S} → Arms Γ ρ A i [] S
@@ -1461,6 +1536,11 @@ mutual
       Conformsρ Δ ρ p S →
       Arms Γ ρ A (nsuc i) ps S →
       Arms Γ ρ A i (named c xs p ∷ ps) S
+    arms-prod  : ∀ {i pat p Δ ps S} →
+      prodCtx A pat Γ ≡ just Δ →
+      Conformsρ Δ ρ p S →
+      Arms Γ ρ A (nsuc i) ps S →
+      Arms Γ ρ A i (prod pat p ∷ ps) S
 
   -- One process per protocol arm, in order. The process is a subterm
   -- of the match, so the check recurses on it. A named arm binds the
@@ -1569,6 +1649,7 @@ mutual
 
     -- The name is the one `mget` just bound. Each arm is that continuation.
     -- A named arm's context also holds the constructor's fields.
+    -- A product arm's context holds the components, last binder innermost.
     mget-ok : ∀ {A B x ps S} →
       A ≡ applyTy ρ B →
       Covered A ps →
@@ -1664,6 +1745,8 @@ mutual
   substArms e (bare p ∷ ps) = bare (substProc e p) ∷ substArms e ps
   substArms e (named c xs p ∷ ps) =
     named c xs (substProc (shadows xs e) p) ∷ substArms e ps
+  substArms e (prod pat p ∷ ps) =
+    prod pat (substProc (shadows (patBinders pat) e) p) ∷ substArms e ps
 
 -- The constructor name matches and the binders match the spine.
 -- Otherwise the arm is not the one the value takes. The clauses are
@@ -1685,12 +1768,38 @@ mutual
   pickCtor : Bool → PArm → Spine → List Ctor → String → List PArm → Maybe Proc
   pickCtor true (bare p) _ _ _ _ = just p
   pickCtor true (named k xs p) sp _ c _ = openNamed k c xs p sp
+  pickCtor true (prod _ _) _ _ _ _ = nothing
   pickCtor false _ sp cs name ps = nthProc cs name sp ps
 
   nthProc : List Ctor → String → Spine → List PArm → Maybe Proc
   nthProc [] _ _ _ = nothing
   nthProc (_ ∷ _) _ _ [] = nothing
   nthProc (ctor n _ ∷ cs) c sp (a ∷ ps) = pickCtor (c == n) a sp cs c ps
+
+-- The two components, last binder innermost. A component that has no
+-- raw image does not open the arm.
+openPair : ∀ {A B} → String → String → Val A → Val B → Maybe FEnv
+openPair x y a b with rawOf a | rawOf b
+... | just ra | just rb = lenEnv (x ∷ y ∷ []) (ra ∷ rb ∷ [])
+... | just _ | nothing = nothing
+... | nothing | _ = nothing
+
+-- The record's fields, in type order, last binder innermost. A field
+-- name the pattern does not write at that position does not open.
+openRec : ∀ {fs} → List (String × String) → Row fs → Maybe FEnv
+openRec [] noRow = just []
+openRec ((n , b) ∷ bs) (cell {n = m} v row) with n ≟ m
+... | no′ _ = nothing
+... | yes′ _ =
+  bindM (rawOf v) (λ r → bindM (openRec bs row) (λ e → just (e ++ ((b , r) ∷ []))))
+openRec [] (cell _ _) = nothing
+openRec (_ ∷ _) noRow = nothing
+
+-- The process after a product arm's binders are replaced. `nothing`
+-- is an arm the value does not open.
+fillArm : Proc → Maybe FEnv → Maybe Proc
+fillArm _ nothing = nothing
+fillArm p (just e) = just (substProc e p)
 
 armOf : (A : Ty) → Val A → List PArm → Maybe Proc
 armOf bit b0 [] = nothing
@@ -1699,17 +1808,29 @@ armOf bit b0 (_ ∷ _ ∷ _ ∷ _) = nothing
 armOf bit b0 (bare p ∷ _ ∷ []) = just p
 armOf bit b0 (named _ [] p ∷ _ ∷ []) = just p
 armOf bit b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) = nothing
+armOf bit b0 (prod _ _ ∷ _ ∷ []) = nothing
 armOf bit b1 [] = nothing
 armOf bit b1 (_ ∷ []) = nothing
 armOf bit b1 (_ ∷ _ ∷ _ ∷ _) = nothing
 armOf bit b1 (_ ∷ bare q ∷ []) = just q
 armOf bit b1 (_ ∷ named _ [] q ∷ []) = just q
 armOf bit b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) = nothing
+armOf bit b1 (_ ∷ prod _ _ ∷ []) = nothing
 armOf nat _ _ = nothing
 armOf unit _ _ = nothing
-armOf (pair _ _) _ _ = nothing
-armOf (rec _) _ _ = nothing
 armOf (vec _ _) _ _ = nothing
+armOf (pair _ _) (tup _ _) (_ ∷ _ ∷ _) = nothing
+armOf (pair _ _) (tup _ _) [] = nothing
+armOf (pair _ _) (tup a b) (prod (pPair x y) p ∷ []) = fillArm p (openPair x y a b)
+armOf (pair _ _) (tup _ _) (prod (pRec _) _ ∷ []) = nothing
+armOf (pair _ _) (tup _ _) (bare _ ∷ []) = nothing
+armOf (pair _ _) (tup _ _) (named _ _ _ ∷ []) = nothing
+armOf (rec _) (rec _) (_ ∷ _ ∷ _) = nothing
+armOf (rec _) (rec _) [] = nothing
+armOf (rec _) (rec row) (prod (pRec bs) p ∷ []) = fillArm p (openRec bs row)
+armOf (rec _) (rec _) (prod (pPair _ _) _ ∷ []) = nothing
+armOf (rec _) (rec _) (bare _ ∷ []) = nothing
+armOf (rec _) (rec _) (named _ _ _ ∷ []) = nothing
 armOf (dat d _) (con c sp) ps = nthProc (ctorsOf d) c sp ps
 
 -- One function for the value `ground` returns, so a meeting can
@@ -2178,8 +2299,20 @@ cover? bit (_ ∷ _ ∷ []) = yes′ bit-cov
 cover? bit (_ ∷ _ ∷ _ ∷ _) = no′ (λ ())
 cover? nat _ = no′ (λ ())
 cover? unit _ = no′ (λ ())
-cover? (pair _ _) _ = no′ (λ ())
-cover? (rec _) _ = no′ (λ ())
+cover? (pair _ _) (prod (pPair _ _) _ ∷ []) = yes′ pair-cov
+cover? (pair _ _) (prod (pRec _) _ ∷ []) = no′ (λ ())
+cover? (pair _ _) (bare _ ∷ []) = no′ (λ ())
+cover? (pair _ _) (named _ _ _ ∷ []) = no′ (λ ())
+cover? (pair _ _) [] = no′ (λ ())
+cover? (pair _ _) (_ ∷ _ ∷ _) = no′ (λ ())
+cover? (rec fs) (prod (pRec bs) _ ∷ []) with fits? fs bs
+... | yes′ f = yes′ (rec-cov f)
+... | no′ ¬f = no′ (λ { (rec-cov f) → ¬f f })
+cover? (rec _) (prod (pPair _ _) _ ∷ []) = no′ (λ ())
+cover? (rec _) (bare _ ∷ []) = no′ (λ ())
+cover? (rec _) (named _ _ _ ∷ []) = no′ (λ ())
+cover? (rec _) [] = no′ (λ ())
+cover? (rec _) (_ ∷ _ ∷ _) = no′ (λ ())
 cover? (vec _ _) _ = no′ (λ ())
 cover? (dat d _) ps with length ps ≟ℕ length (ctorsOf d)
 ... | yes′ eq = yes′ (dat-cov eq)
@@ -2237,6 +2370,14 @@ mutual
   ... | yes d with decideArms Γ ρ A (nsuc i) ps S
   ... | yes-arms ds = yes-arms (arms-named eq d ds)
   ... | no-arms nd = no-arms (λ { (arms-named _ _ ds) → nd ds })
+  decideArms Γ ρ A i (prod pat p ∷ ps) S with prodCtx A pat Γ in eq
+  ... | nothing = no-arms (λ { (arms-prod q _ _) → just≢nothing (trans (sym q) eq) })
+  ... | just Δ with decideρ Δ ρ p S
+  ... | no nd = no-arms (λ { (arms-prod q d _) →
+        nd (subst (λ Θ → Conformsρ Θ ρ p S) (just-inj (trans (sym q) eq)) d) })
+  ... | yes d with decideArms Γ ρ A (nsuc i) ps S
+  ... | yes-arms ds = yes-arms (arms-prod eq d ds)
+  ... | no-arms nd = no-arms (λ { (arms-prod _ _ ds) → nd ds })
 
   decideρ : (Γ : Ctx) (ρ : Idx) (P : Proc) (S : Proto) → Answerρ Γ ρ P S
   decideρ Γ ρ done end = yes done-end
@@ -2399,6 +2540,7 @@ mutual
   ... | yes d with decideAt Γ ρ A as ps
   ... | yes-at ds = yes-at (at-named ac d ds)
   ... | no-at nd = no-at (λ { (at-named _ _ ds) → nd ds })
+  decideAt Γ ρ A (_ ∷ _) (prod _ _ ∷ _) = no-at (λ ())
   decideAt Γ ρ A [] (_ ∷ _) = no-at (λ ())
   decideAt Γ ρ A (_ ∷ _) [] = no-at (λ ())
 
@@ -2458,6 +2600,7 @@ mutual
   ... | yes d with decideRun Γ ρ f A R arms cs ps
   ... | yes-cr ds = yes-cr (run-named er ek ef ac d ds)
   ... | no-cr nd = no-cr (λ { (run-named _ _ _ _ _ ds) → nd ds })
+  decideRun _ _ _ _ _ _ (_ ∷ _) (prod _ _ ∷ _) = no-cr (λ ())
   decideRun _ _ _ _ _ _ [] (_ ∷ _) = no-cr (λ ())
   decideRun _ _ _ _ _ _ (_ ∷ _) [] = no-cr (λ ())
 
@@ -2813,6 +2956,7 @@ mutual
   skelAll [] = []
   skelAll (bare p ∷ ps) = skel p ∷ skelAll ps
   skelAll (named _ _ p ∷ ps) = skel p ∷ skelAll ps
+  skelAll (prod _ p ∷ ps) = skel p ∷ skelAll ps
 
 pong-skel : skel pong ≡ hear nat "x" (say (lit one) finish)
 pong-skel = refl
@@ -2924,6 +3068,7 @@ mutual
   finishesAll [] = all-ends ends-nil
   finishesAll (bare p ∷ ps) = step-all (finishes p) (finishesAll ps)
   finishesAll (named _ _ p ∷ ps) = step-all (finishes p) (finishesAll ps)
+  finishesAll (prod _ p ∷ ps) = step-all (finishes p) (finishesAll ps)
 
 pong-finishes : finishes pong ≡ ends (ends-get (ends-put ends-done))
 pong-finishes = refl
@@ -3017,6 +3162,7 @@ mutual
   ends-all ends-nil = leave-nil
   ends-all {bare _ ∷ _} (ends-cons e es) = leave-cons (ends-no-leave e) (ends-all es)
   ends-all {named _ _ _ ∷ _} (ends-cons e es) = leave-cons (ends-no-leave e) (ends-all es)
+  ends-all {prod _ _ ∷ _} (ends-cons e es) = leave-cons (ends-no-leave e) (ends-all es)
 
 ------------------------------------------------------------------------
 -- A declared data type is a payload. The constructors are the ones
@@ -3430,6 +3576,138 @@ tail-cons :
       ∷ named "cons" ("n" ∷ "ys" ∷ []) (put listNat (var "ys") done) ∷ [])
     ≡ just (put listNat (lit nilV) done)
 tail-cons = refl
+
+------------------------------------------------------------------------
+-- A received pair or record binds its components. A component is
+-- payload data: the arm may send it, and may send the value a run
+-- computes from it. The innermost binding wins. A constructor arm
+-- does not cover a pair.
+------------------------------------------------------------------------
+
+pairNatBit : Ty
+pairNatBit = pair nat bit
+
+pairReply : Proc
+pairReply =
+  mget pairNatBit "p" (prod (pPair "n" "c") (put nat (var "n") done) ∷ [])
+
+n≢c : "n" ≢ "c"
+n≢c eq with "n" ≟ "c"
+... | no′ ¬eq = ¬eq eq
+
+pair-reply-ok : Conforms [] pairReply (recv pairNatBit (send nat end))
+pair-reply-ok =
+  mget-ok refl pair-cov
+    (arms-prod refl (put-ok refl (var-ok (there n≢c here)) done-end) arms-nil)
+
+pair-reply-decides : decide [] pairReply (recv pairNatBit (send nat end)) ≡ yes pair-reply-ok
+pair-reply-decides = refl
+
+pairBoolBit : Ty
+pairBoolBit = pair boolTy bit
+
+grantOnPair : ValExpr boolTy
+grantOnPair = call "grant" (varg boolTy (var "a") ∷ [])
+
+a≢c : "a" ≢ "c"
+a≢c eq with "a" ≟ "c"
+... | no′ ¬eq = ¬eq eq
+
+pairGrant : Proc
+pairGrant =
+  mget pairBoolBit "p" (prod (pPair "a" "c") (put boolTy grantOnPair done) ∷ [])
+
+pair-grant-ok : Conforms [] pairGrant (recv pairBoolBit (send boolTy end))
+pair-grant-ok =
+  mget-ok refl pair-cov
+    (arms-prod refl
+      (put-ok refl
+        (call-ty refl refl refl (args-cons (arg-var (there a≢c here)) args-nil))
+        done-end)
+      arms-nil)
+
+pair-grant-decides : decide [] pairGrant (recv pairBoolBit (send boolTy end)) ≡ yes pair-grant-ok
+pair-grant-decides = refl
+
+pair-grant-arm :
+  armOf pairBoolBit (tup trueV b0)
+    (prod (pPair "a" "c") (put boolTy grantOnPair done) ∷ [])
+    ≡ just (put boolTy (call "grant" (varg boolTy (lit trueV) ∷ [])) done)
+pair-grant-arm = refl
+
+pair-nat-arm :
+  armOf pairNatBit (tup zero b1)
+    (prod (pPair "n" "c") (put nat (var "n") done) ∷ [])
+    ≡ just (put nat (lit zero) done)
+pair-nat-arm = refl
+
+-- The second component hides the first when both binders are `n`.
+pair-shadow-arm :
+  armOf pairNatBit (tup zero b1)
+    (prod (pPair "n" "n") (put bit (var "n") done) ∷ [])
+    ≡ just (put bit (lit b1) done)
+pair-shadow-arm = refl
+
+noteTy : Ty
+noteTy = rec (named "x" nat (named "y" bit noFields))
+
+noteReply : Proc
+noteReply =
+  mget noteTy "r"
+    (prod (pRec (("x" , "a") ∷ ("y" , "c") ∷ [])) (put bit (var "c") done) ∷ [])
+
+note-ok : Conforms [] noteReply (recv noteTy (send bit end))
+note-ok =
+  mget-ok refl (rec-cov (fits-cons (fits-cons fits-nil)))
+    (arms-prod refl (put-ok refl (var-ok here) done-end) arms-nil)
+
+note-decides : decide [] noteReply (recv noteTy (send bit end)) ≡ yes note-ok
+note-decides = refl
+
+noteVal : Val noteTy
+noteVal = rec (cell zero (cell b1 noRow))
+
+note-arm :
+  armOf noteTy noteVal
+    (prod (pRec (("x" , "a") ∷ ("y" , "c") ∷ [])) (put bit (var "c") done) ∷ [])
+    ≡ just (put bit (lit b1) done)
+note-arm = refl
+
+-- A component that is itself a record is bound whole and sent whole.
+innerTy : Ty
+innerTy = rec (named "z" nat noFields)
+
+wrapTy : Ty
+wrapTy = pair innerTy bit
+
+innerVal : Val innerTy
+innerVal = rec (cell one noRow)
+
+wrap-arm :
+  armOf wrapTy (tup innerVal b0)
+    (prod (pPair "a" "c") (put innerTy (var "a") done) ∷ [])
+    ≡ just (put innerTy (lit innerVal) done)
+wrap-arm = refl
+
+twicePair : Proc
+twicePair =
+  mget pairNatBit "p"
+    (prod (pPair "n" "c") (put nat (var "n") (put nat (var "n") done)) ∷ [])
+
+twice-pair-ok : Conforms [] twicePair (recv pairNatBit (send nat (send nat end)))
+twice-pair-ok =
+  mget-ok refl pair-cov
+    (arms-prod refl
+      (put-ok refl (var-ok (there n≢c here))
+        (put-ok refl (var-ok (there n≢c here)) done-end))
+      arms-nil)
+
+-- A constructor arm does not cover a pair.
+ctorOnPair : Proc
+ctorOnPair = mget pairNatBit "p" (named "pair" ("n" ∷ "c" ∷ []) done ∷ [])
+
+ctor-on-pair : ¬ Conforms [] ctorOnPair (recv pairNatBit end)
+ctor-on-pair (mget-ok refl () _)
 
 -- Too few binders for `just`. A bare arm is not an arity check.
 shortJust : Proc

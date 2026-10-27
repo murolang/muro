@@ -321,6 +321,22 @@ defmodule Muro.AsyncTest do
     refute msg =~ "unbounded recursive payload"
   end
 
+  test "a received pair or record meets across a buffer" do
+    assert {:ok, book} = Parser.parse(File.read!("examples/pair-bindings.muro"))
+
+    for {left, right} <- [
+          {"pair-reply", "pair-ask"},
+          {"grant-reply", "grant-ask"},
+          {"rec-reply", "rec-ask"},
+          {"loop-reply", "loop-ask"}
+        ] do
+      l = Enum.find(book, &(&1.name == left))
+      r = Enum.find(book, &(&1.name == right))
+      assert Async.meets(l.proc, r.proc, book, 1) == :ok
+      assert Async.meets(r.proc, l.proc, book, 1) == :ok
+    end
+  end
+
   defp check(src) do
     assert {:ok, book} = Parser.parse(src)
     Check.check_sig(book)

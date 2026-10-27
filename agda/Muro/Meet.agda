@@ -12,8 +12,9 @@
 -- second. A variable bit selects neither arm. A computed value meets
 -- a receive when the value it computes inhabits the payload. A match
 -- on the received value meets the arm of that value. A named arm
--- meets after the received fields replace its binders. A value the
--- match does not cover has no derivation.
+-- meets after the received fields replace its binders. A product arm
+-- meets after the received components replace its binders. A value
+-- the match does not cover has no derivation.
 --
 -- The meeting is evidence. One end conforms to the protocol. The
 -- other conforms to the other end of that protocol. A run term has
@@ -29,6 +30,7 @@ module Muro.Meet where
 open import Data.Bool.Base using (true; false)
 open import Data.Empty using (⊥)
 open import Data.List.Base using (List; []; _∷_)
+open import Data.Product using (_×_)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.String.Base using (String)
 open import Data.String.Properties using (_==_)
@@ -249,6 +251,8 @@ substArmsN _ [] = []
 substArmsN es (bare p ∷ qs) = bare (substN es p) ∷ substArmsN es qs
 substArmsN es (named c xs p ∷ qs) =
   named c xs (substN (shadowAll xs es) p) ∷ substArmsN es qs
+substArmsN es (prod pat p ∷ qs) =
+  prod pat (substN (shadowAll (patBinders pat) es) p) ∷ substArmsN es qs
 
 ≡cons : {a b : PArm} → a ≡ b → {ps qs : List PArm} → ps ≡ qs → a ∷ ps ≡ b ∷ qs
 ≡cons refl refl = refl
@@ -264,11 +268,13 @@ armsId : (ps : List PArm) → substArms [] ps ≡ ps
 armsId [] = refl
 armsId (bare _ ∷ ps) rewrite armsId ps = refl
 armsId (named _ xs _ ∷ ps) rewrite shadowsNil xs | armsId ps = refl
+armsId (prod pat _ ∷ ps) rewrite shadowsNil (patBinders pat) | armsId ps = refl
 
 armsIdN : (ps : List PArm) → substArmsN [] ps ≡ ps
 armsIdN [] = refl
 armsIdN (bare _ ∷ ps) rewrite armsIdN ps = refl
 armsIdN (named _ _ _ ∷ ps) rewrite armsIdN ps = refl
+armsIdN (prod _ _ ∷ ps) rewrite armsIdN ps = refl
 
 pushArms : (e : FEnv) (es : List FEnv) (ps : List PArm) →
   substArms e (substArmsN es ps) ≡ substArmsN (e ∷ es) ps
@@ -280,6 +286,11 @@ pushArms e es (named c xs p ∷ ps) =
   ≡cons
     {named c xs (substProc (shadows xs e) (substN (shadowAll xs es) p))}
     {named c xs (substN (shadowAll xs (e ∷ es)) p)}
+    refl (pushArms e es ps)
+pushArms e es (prod pat p ∷ ps) =
+  ≡cons
+    {prod pat (substProc (shadows (patBinders pat) e) (substN (shadowAll (patBinders pat) es) p))}
+    {prod pat (substN (shadowAll (patBinders pat) (e ∷ es)) p)}
     refl (pushArms e es ps)
 
 subDone : (e : FEnv) → substProc e done ≡ done
@@ -398,6 +409,10 @@ data ArmAns (ans : Proc → Set) : List PArm → Set where
     ((e : FEnv) → ans (substProc e p)) →
     ArmAns ans qs →
     ArmAns ans (named c xs p ∷ qs)
+  aa-prod  : ∀ {pat p qs} →
+    ((e : FEnv) → ans (substProc e p)) →
+    ArmAns ans qs →
+    ArmAns ans (prod pat p ∷ qs)
 
 data Found (ans : Proc → Set) (cs : List Ctor) (c : String) (sp : Spine) (qs : List PArm) : Set where
   got    : (R : Proc) → ans R → nthProc cs c sp qs ≡ just R → Found ans cs c sp qs
@@ -443,6 +458,14 @@ nthBoth (ctor n fs ∷ cs′) c sp (named k xs p ∷ qs) (aa-named f as) with c 
   got R b (trans (cong (λ b → pickCtor b (named k xs p) sp cs′ c qs) eqn) pr)
 ... | missed pr =
   missed (trans (cong (λ b → pickCtor b (named k xs p) sp cs′ c qs) eqn) pr)
+nthBoth (ctor n _ ∷ cs′) c sp (prod pat q ∷ qs) (aa-prod _ as) with c == n | reveal (_==_ c) n
+... | true | ≡is eqn =
+  missed (trans (cong (λ b → pickCtor b (prod pat q) sp cs′ c qs) eqn) refl)
+... | false | ≡is eqn with nthBoth cs′ c sp qs as
+... | got R b pr =
+  got R b (trans (cong (λ b → pickCtor b (prod pat q) sp cs′ c qs) eqn) pr)
+... | missed pr =
+  missed (trans (cong (λ b → pickCtor b (prod pat q) sp cs′ c qs) eqn) pr)
 
 usePut : ∀ {σ τ A B v x ps R P} →
   applyTy σ A ≡ applyTy τ B →
@@ -510,6 +533,69 @@ finishIgetBit (lit b1) _ a = on-iget-b1 a
 finishIgetBit (var _) _ _ = no (λ ())
 finishIgetBit (call _ _) _ _ = no (λ ())
 
+-- `armOf` on a product arm is `fillArm` of the components. Case on
+-- that environment, so the equality the meeting needs is the one
+-- `fillArm` computes.
+onPairPut : ∀ {σ τ B x P X Y} (v : ValExpr (pair X Y)) →
+  applyTy σ (pair X Y) ≡ applyTy τ B →
+  sent v ≡ true →
+  (n y : String) (a : Val X) (b : Val Y) (p : Proc) (e? : Maybe FEnv) →
+  ground v ≡ just (tup a b) →
+  armOf (pair X Y) (tup a b) (prod (pPair n y) p ∷ []) ≡ fillArm p e? →
+  ((e : FEnv) → Answerρ σ (ext x v τ) P (substProc e p)) →
+  Answerρ σ τ (put (pair X Y) v P) (mget B x (prod (pPair n y) p ∷ []))
+onPairPut v eq fv n y a b p nothing geq aeq _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq)
+      (missedLit {v = v} {ps = prod (pPair n y) p ∷ []} geq aeq)) })
+onPairPut v eq fv n y a b p (just e) geq aeq f =
+  usePut eq fv (selLit {v = v} {ps = prod (pPair n y) p ∷ []} geq aeq) (f e)
+
+onPairMget : ∀ {σ τ A x P X Y} (v : ValExpr (pair X Y)) →
+  applyTy σ A ≡ applyTy τ (pair X Y) →
+  sent v ≡ true →
+  (n y : String) (a : Val X) (b : Val Y) (p : Proc) (e? : Maybe FEnv) →
+  ground v ≡ just (tup a b) →
+  armOf (pair X Y) (tup a b) (prod (pPair n y) p ∷ []) ≡ fillArm p e? →
+  ((e : FEnv) → Answerρ (ext x v σ) τ (substProc e p) P) →
+  Answerρ σ τ (mget A x (prod (pPair n y) p ∷ [])) (put (pair X Y) v P)
+onPairMget v eq fv n y a b p nothing geq aeq _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq)
+      (missedLit {v = v} {ps = prod (pPair n y) p ∷ []} geq aeq)) })
+onPairMget v eq fv n y a b p (just e) geq aeq f =
+  useMget eq fv (selLit {v = v} {ps = prod (pPair n y) p ∷ []} geq aeq) (f e)
+
+onRecPut : ∀ {σ τ B x P fs} (v : ValExpr (rec fs)) →
+  applyTy σ (rec fs) ≡ applyTy τ B →
+  sent v ≡ true →
+  (bs : List (String × String)) (row : Row fs) (p : Proc) (e? : Maybe FEnv) →
+  ground v ≡ just (rec row) →
+  armOf (rec fs) (rec row) (prod (pRec bs) p ∷ []) ≡ fillArm p e? →
+  ((e : FEnv) → Answerρ σ (ext x v τ) P (substProc e p)) →
+  Answerρ σ τ (put (rec fs) v P) (mget B x (prod (pRec bs) p ∷ []))
+onRecPut v eq fv bs row p nothing geq aeq _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq)
+      (missedLit {v = v} {ps = prod (pRec bs) p ∷ []} geq aeq)) })
+onRecPut v eq fv bs row p (just e) geq aeq f =
+  usePut eq fv (selLit {v = v} {ps = prod (pRec bs) p ∷ []} geq aeq) (f e)
+
+onRecMget : ∀ {σ τ A x P fs} (v : ValExpr (rec fs)) →
+  applyTy σ A ≡ applyTy τ (rec fs) →
+  sent v ≡ true →
+  (bs : List (String × String)) (row : Row fs) (p : Proc) (e? : Maybe FEnv) →
+  ground v ≡ just (rec row) →
+  armOf (rec fs) (rec row) (prod (pRec bs) p ∷ []) ≡ fillArm p e? →
+  ((e : FEnv) → Answerρ (ext x v σ) τ (substProc e p) P) →
+  Answerρ σ τ (mget A x (prod (pRec bs) p ∷ [])) (put (rec fs) v P)
+onRecMget v eq fv bs row p nothing geq aeq _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq)
+      (missedLit {v = v} {ps = prod (pRec bs) p ∷ []} geq aeq)) })
+onRecMget v eq fv bs row p (just e) geq aeq f =
+  useMget eq fv (selLit {v = v} {ps = prod (pRec bs) p ∷ []} geq aeq) (f e)
+
 takePut : ∀ {σ τ A B x P} (v : ValExpr A) →
   applyTy σ A ≡ applyTy τ B →
   sent v ≡ true →
@@ -525,6 +611,9 @@ takePut v eq fv b0 geq (named c [] p ∷ q ∷ []) (aa-named f _) =
 takePut v eq fv b0 geq (named c (y ∷ ys) p ∷ q ∷ []) (aa-named _ _) =
   no (λ { (put-mget _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c (y ∷ ys) p ∷ q ∷ []} geq refl)) })
+takePut v eq fv b0 geq (prod pat r ∷ q ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = prod pat r ∷ q ∷ []} geq refl)) })
 takePut v eq fv b1 geq (bare p ∷ bare q ∷ []) (aa-bare _ (aa-bare a _)) =
   usePut eq fv (selLit {v = v} {ps = bare p ∷ bare q ∷ []} geq refl) a
 takePut v eq fv b1 geq (bare p ∷ named c [] q ∷ []) (aa-bare _ (aa-named f _)) =
@@ -546,6 +635,16 @@ takePut v eq fv b1 geq (named c (z ∷ zs) p ∷ named d [] q ∷ []) (aa-named 
 takePut v eq fv b1 geq (named c (z ∷ zs) p ∷ named d (y ∷ ys) q ∷ []) (aa-named _ (aa-named _ _)) =
   no (λ { (put-mget _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c (z ∷ zs) p ∷ named d (y ∷ ys) q ∷ []} geq refl)) })
+takePut v eq fv b1 geq (prod pat r ∷ bare q ∷ []) (aa-prod _ (aa-bare a _)) =
+  usePut eq fv (selLit {v = v} {ps = prod pat r ∷ bare q ∷ []} geq refl) a
+takePut v eq fv b1 geq (prod pat r ∷ named c [] q ∷ []) (aa-prod _ (aa-named f _)) =
+  usePut eq fv (selLit {v = v} {ps = prod pat r ∷ named c [] q ∷ []} geq refl) (f [])
+takePut v eq fv b1 geq (prod pat r ∷ named c (y ∷ ys) q ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = prod pat r ∷ named c (y ∷ ys) q ∷ []} geq refl)) })
+takePut v eq fv b1 geq (p ∷ prod pat r ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = p ∷ prod pat r ∷ []} geq refl)) })
 takePut v eq fv b0 geq [] _ =
   no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
 takePut v eq fv b0 geq (p ∷ []) _ =
@@ -568,10 +667,40 @@ takePut v eq fv (suc _) geq qs _ =
   no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
 takePut v eq fv tt geq qs _ =
   no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
-takePut v eq fv (tup _ _) geq qs _ =
-  no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
-takePut v eq fv (rec _) geq qs _ =
-  no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
+takePut v eq fv (tup a b) geq (prod (pPair x y) p ∷ []) (aa-prod f _) =
+  onPairPut v eq fv x y a b p (openPair x y a b) geq refl f
+takePut v eq fv (tup _ _) geq (prod (pRec bs) q ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = prod (pRec bs) q ∷ []} geq refl)) })
+takePut v eq fv (tup _ _) geq (bare q ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = bare q ∷ []} geq refl)) })
+takePut v eq fv (tup _ _) geq (named c xs q ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c xs q ∷ []} geq refl)) })
+takePut v eq fv (tup _ _) geq [] _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
+takePut v eq fv (tup _ _) geq (q ∷ r ∷ rs) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = q ∷ r ∷ rs} geq refl)) })
+takePut v eq fv (rec row) geq (prod (pRec bs) p ∷ []) (aa-prod f _) =
+  onRecPut v eq fv bs row p (openRec bs row) geq refl f
+takePut v eq fv (rec _) geq (prod (pPair x y) q ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = prod (pPair x y) q ∷ []} geq refl)) })
+takePut v eq fv (rec _) geq (bare q ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = bare q ∷ []} geq refl)) })
+takePut v eq fv (rec _) geq (named c xs q ∷ []) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c xs q ∷ []} geq refl)) })
+takePut v eq fv (rec _) geq [] _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
+takePut v eq fv (rec _) geq (q ∷ r ∷ rs) _ =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = q ∷ r ∷ rs} geq refl)) })
 takePut v eq fv (rep _) geq qs _ =
   no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
 
@@ -590,6 +719,9 @@ takeMget v eq fv b0 geq (named c [] p ∷ q ∷ []) (aa-named f _) =
 takeMget v eq fv b0 geq (named c (y ∷ ys) p ∷ q ∷ []) (aa-named _ _) =
   no (λ { (mget-put _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c (y ∷ ys) p ∷ q ∷ []} geq refl)) })
+takeMget v eq fv b0 geq (prod pat r ∷ q ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = prod pat r ∷ q ∷ []} geq refl)) })
 takeMget v eq fv b1 geq (bare p ∷ bare q ∷ []) (aa-bare _ (aa-bare a _)) =
   useMget eq fv (selLit {v = v} {ps = bare p ∷ bare q ∷ []} geq refl) a
 takeMget v eq fv b1 geq (bare p ∷ named c [] q ∷ []) (aa-bare _ (aa-named f _)) =
@@ -611,6 +743,16 @@ takeMget v eq fv b1 geq (named c (z ∷ zs) p ∷ named d [] q ∷ []) (aa-named
 takeMget v eq fv b1 geq (named c (z ∷ zs) p ∷ named d (y ∷ ys) q ∷ []) (aa-named _ (aa-named _ _)) =
   no (λ { (mget-put _ _ neq _) →
     just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c (z ∷ zs) p ∷ named d (y ∷ ys) q ∷ []} geq refl)) })
+takeMget v eq fv b1 geq (prod pat r ∷ bare q ∷ []) (aa-prod _ (aa-bare a _)) =
+  useMget eq fv (selLit {v = v} {ps = prod pat r ∷ bare q ∷ []} geq refl) a
+takeMget v eq fv b1 geq (prod pat r ∷ named c [] q ∷ []) (aa-prod _ (aa-named f _)) =
+  useMget eq fv (selLit {v = v} {ps = prod pat r ∷ named c [] q ∷ []} geq refl) (f [])
+takeMget v eq fv b1 geq (prod pat r ∷ named c (y ∷ ys) q ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = prod pat r ∷ named c (y ∷ ys) q ∷ []} geq refl)) })
+takeMget v eq fv b1 geq (p ∷ prod pat r ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = p ∷ prod pat r ∷ []} geq refl)) })
 takeMget v eq fv b0 geq [] _ =
   no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
 takeMget v eq fv b0 geq (p ∷ []) _ =
@@ -633,10 +775,40 @@ takeMget v eq fv (suc _) geq qs _ =
   no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
 takeMget v eq fv tt geq qs _ =
   no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
-takeMget v eq fv (tup _ _) geq qs _ =
-  no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
-takeMget v eq fv (rec _) geq qs _ =
-  no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
+takeMget v eq fv (tup a b) geq (prod (pPair x y) p ∷ []) (aa-prod f _) =
+  onPairMget v eq fv x y a b p (openPair x y a b) geq refl f
+takeMget v eq fv (tup _ _) geq (prod (pRec bs) q ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = prod (pRec bs) q ∷ []} geq refl)) })
+takeMget v eq fv (tup _ _) geq (bare q ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = bare q ∷ []} geq refl)) })
+takeMget v eq fv (tup _ _) geq (named c xs q ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c xs q ∷ []} geq refl)) })
+takeMget v eq fv (tup _ _) geq [] _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
+takeMget v eq fv (tup _ _) geq (q ∷ r ∷ rs) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = q ∷ r ∷ rs} geq refl)) })
+takeMget v eq fv (rec row) geq (prod (pRec bs) p ∷ []) (aa-prod f _) =
+  onRecMget v eq fv bs row p (openRec bs row) geq refl f
+takeMget v eq fv (rec _) geq (prod (pPair x y) q ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = prod (pPair x y) q ∷ []} geq refl)) })
+takeMget v eq fv (rec _) geq (bare q ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = bare q ∷ []} geq refl)) })
+takeMget v eq fv (rec _) geq (named c xs q ∷ []) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = named c xs q ∷ []} geq refl)) })
+takeMget v eq fv (rec _) geq [] _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = []} geq refl)) })
+takeMget v eq fv (rec _) geq (q ∷ r ∷ rs) _ =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = q ∷ r ∷ rs} geq refl)) })
 takeMget v eq fv (rep _) geq qs _ =
   no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
 
@@ -798,6 +970,9 @@ mutual
   armsR ls rs σ τ L (named _ xs p ∷ qs) =
     aa-named (λ e → meetN ls (e ∷ shadowAll xs rs) σ τ L p)
              (armsR ls rs σ τ L qs)
+  armsR ls rs σ τ L (prod pat p ∷ qs) =
+    aa-prod (λ e → meetN ls (e ∷ shadowAll (patBinders pat) rs) σ τ L p)
+            (armsR ls rs σ τ L qs)
 
   armsL _ _ _ _ _ [] = aa-nil
   armsL ls rs σ τ R (bare p ∷ qs) =
@@ -805,6 +980,9 @@ mutual
   armsL ls rs σ τ R (named _ xs p ∷ qs) =
     aa-named (λ e → meetN (e ∷ shadowAll xs ls) rs σ τ p R)
              (armsL ls rs σ τ R qs)
+  armsL ls rs σ τ R (prod pat p ∷ qs) =
+    aa-prod (λ e → meetN (e ∷ shadowAll (patBinders pat) ls) rs σ τ p R)
+            (armsL ls rs σ τ R qs)
 
 decideρ : (σ τ : Idx) (P Q : Proc) → Answerρ σ τ P Q
 decideρ σ τ P Q = meetN [] [] σ τ P Q
@@ -1203,6 +1381,48 @@ tail-meet = put-mget refl refl refl (get-put refl refl done-done)
 
 tail-meet-decides : decide tailSender tailPass ≡ yes tail-meet
 tail-meet-decides = refl
+
+------------------------------------------------------------------------
+-- A product arm reads the components of the value it received.
+-- `grant a` on `true` meets the arm that sends `grant true`. The
+-- record's bit is the bit that was sent. Both orders meet.
+------------------------------------------------------------------------
+
+pairSender : Proc
+pairSender = put pairBoolBit (lit (tup trueV b0)) (get boolTy "k" done)
+
+pair-meet : Meets pairSender pairGrant
+pair-meet = put-mget refl refl refl (get-put refl refl done-done)
+
+pair-meet-decides : decide pairSender pairGrant ≡ yes pair-meet
+pair-meet-decides = refl
+
+pair-meet-swap : decide pairGrant pairSender ≡ yes (meets-sym pair-meet)
+pair-meet-swap = refl
+
+natSender : Proc
+natSender = put pairNatBit (lit (tup zero b1)) (get nat "k" done)
+
+nat-meet : Meets natSender pairReply
+nat-meet = put-mget refl refl refl (get-put refl refl done-done)
+
+nat-meet-decides : decide natSender pairReply ≡ yes nat-meet
+nat-meet-decides = refl
+
+nat-meet-swap : decide pairReply natSender ≡ yes (meets-sym nat-meet)
+nat-meet-swap = refl
+
+recSender : Proc
+recSender = put noteTy (lit noteVal) (get bit "k" done)
+
+rec-meet : Meets recSender noteReply
+rec-meet = put-mget refl refl refl (get-put refl refl done-done)
+
+rec-meet-decides : decide recSender noteReply ≡ yes rec-meet
+rec-meet-decides = refl
+
+rec-meet-swap : decide noteReply recSender ≡ yes (meets-sym rec-meet)
+rec-meet-swap = refl
 
 ------------------------------------------------------------------------
 -- A named session opens to its body. The meeting is the meeting of

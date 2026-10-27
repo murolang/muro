@@ -57,7 +57,8 @@ open import Muro.Session using
   ( nat; bit; boolTy; maybeBool
   ; ty≟; nexp≟; scrutEq
   ; Proc; done; stop; put; get; pick0; pick1; cover; iget; mget
-  ; PArm; bare; named
+  ; PArm; bare; named; prod
+  ; twicePair; pairReply
   ; lit; b0
   ; effCall; bitTaker; fieldReply; twiceField
   ; pong
@@ -67,7 +68,7 @@ open import Muro.Rec using
   ( SExp; dualS
   ; end; send; recv; dsend; drecv; esend; erecv; isend; irecv; choose; branch
   ; pcase; svar; mu)
-open import Muro.Meet using (bitGiver; fieldSender) renaming (decide to meetDecide; yes to meetYes; no to meetNo)
+open import Muro.Meet using (bitGiver; fieldSender; natSender) renaming (decide to meetDecide; yes to meetYes; no to meetNo)
 
 ------------------------------------------------------------------------
 -- Affine is the default. Linear is exactly once. Both sit on the
@@ -286,12 +287,14 @@ mutual
   consume (iget _ P Q) = once (consume P) (consume Q)
   consume (mget _ _ ps) = arms ps
 
-  -- A bare arm and a named arm consume the process they store.
-  -- A field is payload data, so binding it is not a use of the endpoint.
+  -- A bare arm, a named arm, and a product arm consume the process
+  -- they store. A field or a component is payload data, so binding it
+  -- is not a use of the endpoint.
   arms : List PArm → Use
   arms [] = U1
   arms (bare p ∷ ps) = once (consume p) (arms ps)
   arms (named _ _ p ∷ ps) = once (consume p) (arms ps)
+  arms (prod _ p ∷ ps) = once (consume p) (arms ps)
 
 meetProc : Mult → Proc → Proc → Result ⊤
 meetProc q P Q with meetDecide P Q
@@ -535,6 +538,14 @@ lin-field = refl
 
 lin-twice : consume twiceField ≡ U1
 lin-twice = refl
+
+-- A product arm consumes the endpoint once. Sending the component
+-- twice does not spend it.
+lin-pair : meetProc lin natSender pairReply ≡ ok tt
+lin-pair = refl
+
+lin-pair-twice : consume twicePair ≡ U1
+lin-pair-twice = refl
 
 -- A case protocol is an endpoint. Each direction is one use.
 valueProto : SExp
