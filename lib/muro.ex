@@ -19,6 +19,14 @@ defmodule Muro do
     with {:ok, _} <- Load.file(path, opts), do: :ok
   end
 
+  @doc """
+  Emit the `run` definitions of `path` as an Elixir module named `module`.
+
+  `module` is the name in the source (`MyApp.Billing.Rounding` is
+  `defmodule MyApp.Billing.Rounding`). It is not taken from the file
+  stem. `opts` is `fuel: n`, as in `check_file/2`. A book that does
+  not check returns `{:error, message}` and no module.
+  """
   def emit_file(path, module, opts \\ []) when is_atom(module) do
     with {:ok, book} <- checked_book(path, opts) do
       {:ok, Emit.emit_module(module, book)}

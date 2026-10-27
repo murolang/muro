@@ -58,6 +58,10 @@ pages:
     slug: emit
     title: Emit
     summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A cross is one call on a named node. Spec and evidence are omitted from a run.
+  - file: gen.md
+    slug: gen
+    title: Committed modules
+    summary: A manifest names each book, module, and target. mix muro.gen writes the module. mix muro.gen --check fails when the file and the book disagree.
   - file: grammar.md
     slug: grammar
     title: Grammar

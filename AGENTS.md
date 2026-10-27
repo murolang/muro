@@ -37,10 +37,13 @@ mix muro.check                              # whole book
 mix muro.check path.muro                    # one file
 mix muro.check --fuel 20000 path.muro       # after "out of fuel"
 mix muro --version                          # the copy that ran
+mix muro.init                               # muro.exs and priv/muro/
+mix muro.gen                                 # write the modules the manifest names
+mix muro.gen --check                         # fail when a committed module and its book disagree
 make agda                                   # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-The archive installs those tasks in any directory. Once 0.16.73 is on Hex: `mix archive.install hex muro`. Until then, from a checkout: `mix archive.build && mix archive.install muro-0.16.73.ez`. From GitHub: `mix archive.install github murolang/muro`. If a project depends on muro and the archive is also installed, Mix uses the project's copy.
+The archive installs those tasks in any directory. Once 0.16.74 is on Hex: `mix archive.install hex muro`. Until then, from a checkout: `mix archive.build && mix archive.install muro-0.16.74.ez`. From GitHub: `mix archive.install github murolang/muro`. A pinned version: `mix archive.install github murolang/muro ref v0.16.74`. If a project depends on muro and the archive is also installed, Mix uses the project's copy.
 
 Success from `mix muro.check`: a `Muro v…` line, then `All terms check. Evidence never becomes a run.`
 
@@ -64,6 +67,10 @@ mix muro.emit path.muro --backend asm       # <name>.s, Cortex-M0, Nat run
 
 The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` and `Tensor` are refused as `c:machine`. Unapplied lambdas, definitions passed as values and calls of local functions are refused as `c:lambda`, because C has no closures. A raw `ν`, `Always` or `~` inside a `run` is refused as `c:stream`. Allocation goes through `MURO_ALLOC`, which is `malloc` unless you define it. An exported run of `Nat` arguments and a `Nat` result is a NIF; that build defines `MURO_ALLOC` as one block and resets it when the call returns. The Rust backend prints the same image and refuses a term the C backend refuses. `rustc` translates that text. The Cortex-M backend prints the Nat fragment of that image. The assembler translates that text. See [Emit](manual/emit.md).
 
+## Committed modules
+
+`mix muro.gen` writes a module from a manifest (`muro.exs`, or a `:muro` key in `mix.exs`) into the path the manifest names. The module name is the manifest's alias, passed to `Muro.emit_file/3`. The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256. Do not edit that file by hand. The `.muro` file is the source. Run `mix muro.gen` after changing it. `mix muro.gen --check` fails when the committed file and the book disagree. `muro:` must equal the running version. `mix muro.init` creates the manifest and prints a note for the project's agent instructions. It does not write that file. See [Committed modules](manual/gen.md).
+
 ## Pitfalls seen in practice
 
 - **A multi-line `match` used as an argument needs parentheses.** Wrap the whole `match … | … => …` in `( … )`.
@@ -75,6 +82,6 @@ The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` a
 
 ## Manual
 
-[Start](manual/start.md) · [Marks](manual/marks.md) · [The wall](manual/wall.md) · [Terms](manual/language.md) · [Sessions](manual/sessions.md) · [Identity](manual/identity.md) · [Data](manual/data.md) · [Indexed data](manual/indexed.md) · [Streams](manual/streams.md) · [Either and Dec](manual/either.md) · [Machine numbers](manual/machine.md) · [Emit](manual/emit.md) · [Grammar](manual/grammar.md) · [Examples](manual/examples.md) · [CSHRL](manual/cshrl.md) · [For agents](manual/for-agents.md) · [Extending](manual/extending.md) · [Limits](manual/limits.md)
+[Start](manual/start.md) · [Marks](manual/marks.md) · [The wall](manual/wall.md) · [Terms](manual/language.md) · [Sessions](manual/sessions.md) · [Identity](manual/identity.md) · [Data](manual/data.md) · [Indexed data](manual/indexed.md) · [Streams](manual/streams.md) · [Either and Dec](manual/either.md) · [Machine numbers](manual/machine.md) · [Emit](manual/emit.md) · [Committed modules](manual/gen.md) · [Grammar](manual/grammar.md) · [Examples](manual/examples.md) · [CSHRL](manual/cshrl.md) · [For agents](manual/for-agents.md) · [Extending](manual/extending.md) · [Limits](manual/limits.md)
 
 Machine-readable index: [`manual/manifest.yml`](manual/manifest.yml). Canonical book: `examples/half_ok.muro`.

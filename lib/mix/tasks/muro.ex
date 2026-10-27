@@ -14,15 +14,20 @@ defmodule Mix.Tasks.Muro do
   that version. With no arguments, the same line is followed by the muro
   tasks on one line.
 
-  Inside a Mix project, `mix muro.check` and `mix muro.emit` start that
-  project's applications. Outside a project, they load and start `:muro`
-  from the installed archive.
+  Inside a Mix project, `mix muro.check`, `mix muro.emit`, `mix muro.gen`,
+  and `mix muro.init` start that project's applications. Outside a
+  project, they load and start `:muro` from the installed archive.
 
   When a project depends on muro and an archive is also installed, Mix
   uses the project's copy. This version line is the copy that ran.
   """
 
-  @tasks [Mix.Tasks.Muro.Check, Mix.Tasks.Muro.Emit]
+  @tasks [
+    Mix.Tasks.Muro.Check,
+    Mix.Tasks.Muro.Emit,
+    Mix.Tasks.Muro.Gen,
+    Mix.Tasks.Muro.Init
+  ]
 
   def run([]), do: report()
 

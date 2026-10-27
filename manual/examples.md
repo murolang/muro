@@ -1,7 +1,7 @@
 ---
 title: Examples
 slug: examples
-order: 15
+order: 16
 summary: Every file in examples/ and what it is for.
 ---
 

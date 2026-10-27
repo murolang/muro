@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.16.74
+
+`mix muro.gen` writes the modules a project manifest names. `mix muro.gen --check` writes nothing and fails when a committed module and its book disagree. `mix muro.init` creates `muro.exs` and `priv/muro/`.
+
+The manifest is `muro.exs` at the project root, evaluated as a keyword list, or a `:muro` key in `mix.exs`. If both exist, the task stops and names both. `muro:` is the version the books are checked with. `mix muro.gen` and `mix muro.gen --check` refuse to run when it differs from the running version, and the message names both. `fuel:` is optional. `modules:` lists `{book, module, target}`. The module name is that alias, passed to `Muro.emit_file/3`.
+
+Each target starts with two comment lines: the Muro version, the book path relative to the project root, the book sha256, and the body sha256, then the line that says to change the `.muro` file and run `mix muro.gen`. The book hash is the book together with every file it imports, in path order. The prelude is not in the hash. The body hash is everything after the header. Those two hashes separate a stale target (the book changed) from a hand-edited target (the book is unchanged and the body no longer matches). A missing target, a book that does not check, a target that differs from what its book emits, and a header that names a different Muro version are reported as their own messages. Each message names the target and the book.
+
+The task checks every book before it writes. A failing book writes nothing. Formatting uses the project's `.formatter.exs` when that file exists. The bytes are the same across runs: no timestamps, paths relative to the project root with `/` separators, one trailing newline. An unchanged target is not rewritten.
+
+`mix muro.init --ci github` writes `.github/workflows/muro.yml`. The job sets up Elixir and OTP, installs the archive with `mix archive.install github murolang/muro ref v<version> --force`, and runs `mix muro.gen --check`. This repository has no git tags. `ref` is the pin Mix accepts, and the ref is `v` plus the version. The job does not install from Hex. Init prints a note for the project's agent instructions and does not write that file.
+
+### Manual
+
+- Committed modules: the manifest, the header, the version pin, and the CI job.
+- Emit, Start, and For agents point at that page.
+
+### Package
+
+- `scripts/archive-smoke.sh` goes from `mix muro.init --ci github` to a generated module, a clean `--check`, a hand-edited failure, and a stale failure.
+- Version 0.16.74.
+
 ## 0.16.73
 
 `mix muro.check` and `mix muro.emit` run from an installed archive, in a directory that has no Mix project.

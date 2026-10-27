@@ -13,9 +13,9 @@ In brief: install the archive or clone the repo, write a `.muro` file against th
 
 Elixir via [mise](https://mise.jdx.dev/).
 
-The archive installs `mix muro`, `mix muro.check`, and `mix muro.emit` in any directory, with or without a `mix.exs`.
+The archive installs `mix muro`, `mix muro.check`, `mix muro.emit`, `mix muro.gen`, and `mix muro.init` in any directory, with or without a `mix.exs`.
 
-Once 0.16.73 is on Hex:
+Once 0.16.74 is on Hex:
 
 ```
 mix archive.install hex muro
@@ -29,7 +29,7 @@ cd muro
 mise install
 mix deps.get
 mix archive.build
-mix archive.install muro-0.16.73.ez
+mix archive.install muro-0.16.74.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -53,6 +53,8 @@ mix muro.emit path.muro
 If a project depends on muro and the archive is also installed, Mix uses the project's copy. The version line names that copy.
 
 `mix muro.emit path.muro` prints the Elixir module. Save it with `mix muro.emit path.muro > path.ex`.
+
+`mix muro.init` writes `muro.exs` and `priv/muro/`. `mix muro.gen` writes the modules that file names, under the paths it names, with the project's module names. `mix muro.gen --check` writes nothing and fails when a committed module and its book disagree. See [Committed modules](gen.md).
 
 `--backend c` writes C from the archive. A NIF needs `elixir_make`. Without it, the task stops and names the dependency to add:
 
@@ -104,7 +106,7 @@ mix muro.check examples/plus.muro
 On success the shell prints the version that checked the book, then:
 
 ```
-Muro v0.16.73
+Muro v0.16.74
 All terms check. Evidence never becomes a run.
 ```
 

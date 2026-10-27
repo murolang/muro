@@ -21,6 +21,7 @@ Nothing is inferred: there are no implicits, unification, metavariables or tacti
 - [Either and Dec](https://muro-lang.dev/docs/either): Disjoint union and decisions. Not LEM.
 - [Machine numbers](https://muro-lang.dev/docs/machine): I64, F32, Tensor, and Nx. Nat stays Peano.
 - [Emit](https://muro-lang.dev/docs/emit): What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A cross is one call on a named node. Spec and evidence are omitted from a run.
+- [Committed modules](https://muro-lang.dev/docs/gen): A manifest names each book, module, and target. `mix muro.gen` writes the module. `mix muro.gen --check` fails when the file and the book disagree.
 - [Limits](https://muro-lang.dev/docs/limits): What the language does not do. Facts about the checker, not a roadmap.
 
 ## Examples
@@ -33,7 +34,7 @@ Nothing is inferred: there are no implicits, unification, metavariables or tacti
 
 - [murolang/muro](https://github.com/murolang/muro): Source, README, CI (Elixir tests and `make agda`).
 - [muro on Hex](https://hex.pm/packages/muro): The Mix package; check files with `mix muro.check`.
-- Archive: `mix muro.check` and `mix muro.emit` in any directory. Once 0.16.73 is on Hex, `mix archive.install hex muro`. Until then, from a checkout: `mix archive.build && mix archive.install muro-0.16.73.ez`. From GitHub: `mix archive.install github murolang/muro` (fetches the default branch and builds it). A project that depends on muro uses that copy; `mix muro --version` prints the copy that ran. `mix muro.emit path.muro` prints the Elixir module.
+- Archive: `mix muro.check`, `mix muro.emit`, `mix muro.gen`, and `mix muro.init` in any directory. Once 0.16.74 is on Hex, `mix archive.install hex muro`. Until then, from a checkout: `mix archive.build && mix archive.install muro-0.16.74.ez`. From GitHub: `mix archive.install github murolang/muro` (fetches the default branch and builds it). A pinned version: `mix archive.install github murolang/muro ref v0.16.74`. A project that depends on muro uses that copy; `mix muro --version` prints the copy that ran. `mix muro.emit path.muro` prints the Elixir module. `mix muro.gen` writes the modules named by `muro.exs` (or a `:muro` key in `mix.exs`). `mix muro.gen --check` fails when a committed module and its book disagree. `mix muro.init` creates the manifest and `priv/muro/`.
 
 ## Optional
 
