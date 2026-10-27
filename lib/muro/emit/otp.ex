@@ -412,6 +412,29 @@ defmodule Muro.Emit.Otp do
 
       defp pick_arm(_, _, _), do: :error
 
+      defp open_pick({:arm, ctor, binders, {:split, name, arms}}, expected, fields)
+           when is_binary(ctor) and is_list(binders) and is_list(fields) and is_list(arms) do
+        cond do
+          ctor != expected ->
+            :error
+
+          length(binders) != length(fields) ->
+            :error
+
+          true ->
+            case List.keyfind(Enum.zip(binders, fields), name, 0) do
+              {^name, value} ->
+                case pick_split(value, arms) do
+                  {:ok, next, extra} -> {:ok, next, Enum.zip(binders, fields) ++ extra}
+                  :error -> :error
+                end
+
+              nil ->
+                :error
+            end
+        end
+      end
+
       defp open_pick({:arm, ctor, binders, body}, expected, fields)
            when is_binary(ctor) and is_list(binders) and is_list(fields) do
         cond do
@@ -422,6 +445,57 @@ defmodule Muro.Emit.Otp do
       end
 
       defp open_pick(arm, _expected, _fields), do: {:ok, arm, []}
+
+      # A named arm is that constructor. A positional arm is the
+      # declaration order of the value's tag, or `b0` then `b1`.
+      defp pick_split(value, arms) do
+        tag = tag_of(value)
+        fields = fields_of_runtime(value)
+
+        case named_index(arms, tag, 0) do
+          i when is_integer(i) ->
+            open_pick(Enum.at(arms, i), tag, fields)
+
+          _ ->
+            pick_positional(value, tag, fields, arms)
+        end
+      end
+
+      defp named_index([{:arm, c, _, _} | _], tag, i) when c == tag, do: i
+      defp named_index([_ | rest], tag, i), do: named_index(rest, tag, i + 1)
+      defp named_index([], _tag, _i), do: nil
+
+      defp pick_positional(:b0, _tag, _fields, [arm, _]), do: open_pick(arm, "b0", [])
+      defp pick_positional(:b1, _tag, _fields, [_, arm]), do: open_pick(arm, "b1", [])
+
+      defp pick_positional(_value, tag, fields, arms) do
+        case order_for(tag, length(arms)) do
+          order when is_list(order) ->
+            case Enum.find_index(order, &(&1 == tag)) do
+              i when is_integer(i) ->
+                case Enum.at(arms, i) do
+                  nil -> :error
+                  arm -> open_pick(arm, tag, fields)
+                end
+
+              _ ->
+                :error
+            end
+
+          _ ->
+            :error
+        end
+      end
+
+      defp order_for(tag, n) do
+        Enum.find_value(Map.values(data_decls()), fn
+          %{order: order} when is_list(order) ->
+            if length(order) == n and tag in order, do: order, else: nil
+
+          _ ->
+            nil
+        end)
+      end
 
       defp fields_of_runtime(value) when is_atom(value), do: []
 

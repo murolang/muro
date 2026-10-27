@@ -1693,6 +1693,54 @@ defmodule Muro.SessionTest do
            conform none : peek-back := put nothing (get Bool done)
            conform some : peek-back := put (just true) done
            """) == :ok
+
+    assert check("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+
+           data Maybe (A : Type) : Type where
+             nothing : Maybe A
+             just : A → Maybe A
+
+           def onJust : run Π (m : Maybe Bool) → Bool :=
+             λ (m : Maybe Bool) →
+               match m motive (λ _ → Bool)
+                 | nothing => false
+                 | just b => true
+
+           session peek :=
+             recv (m : Maybe Bool) (case (onJust m)
+               | true => end
+               | false => end)
+           conform flat : peek :=
+             get (m : Maybe Bool) (match m done done)
+           conform named : peek :=
+             get (m : Maybe Bool)
+               (match m
+                 | nothing => done
+                 | just b => done)
+           """) == :ok
+  end
+
+  test "field-choice.muro checks, and both meeting orders follow the field" do
+    path = "examples/field-choice.muro"
+    assert Muro.check_file(path) == :ok
+    assert {:ok, book} = Parser.parse(File.read!(path))
+    assert Check.check_sig(book) == :ok
+
+    for {left, right} <- [
+          {"gate-server", "put-true"},
+          {"gate-server", "put-false"},
+          {"gate-server", "put-none"},
+          {"hdr-server", "hdr-bytes"},
+          {"wrap-server", "wrap-bytes"}
+        ] do
+      l = Enum.find(book, &(&1.name == left))
+      r = Enum.find(book, &(&1.name == right))
+      assert Muro.Meet.meets(l.proc, r.proc, book) == :ok
+      assert Muro.Meet.meets(r.proc, l.proc, book) == :ok
+    end
   end
 
   test "a received match binds the constructor's fields" do

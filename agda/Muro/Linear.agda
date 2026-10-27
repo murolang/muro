@@ -57,7 +57,7 @@ open import Muro.Session using
   ( nat; bit; boolTy; maybeBool
   ; ty≟; nexp≟; scrutEq
   ; Proc; done; stop; put; get; pick0; pick1; cover; iget; mget
-  ; PArm; bare; named; prod
+  ; PArm; bare; named; prod; fork
   ; twicePair; pairReply
   ; lit; b0
   ; effCall; bitTaker; fieldReply; twiceField
@@ -295,6 +295,7 @@ mutual
   arms (bare p ∷ ps) = once (consume p) (arms ps)
   arms (named _ _ p ∷ ps) = once (consume p) (arms ps)
   arms (prod _ p ∷ ps) = once (consume p) (arms ps)
+  arms (fork _ _ _ qs ∷ ps) = once (arms qs) (arms ps)
 
 meetProc : Mult → Proc → Proc → Result ⊤
 meetProc q P Q with meetDecide P Q

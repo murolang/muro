@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.16.72
+
+A run may read a field of the received value, and that field chooses the protocol.
+
+```
+def late : run Π (m : Maybe Bool) → Bool :=
+  λ (m : Maybe Bool) →
+    match m motive (λ _ → Bool)
+      | nothing => false
+      | just b => b
+
+session gate :=
+  recv (m : Maybe Bool) (case (late m)
+    | true => send Ctl end
+    | false => end)
+
+conform gate-server : gate :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put rst done
+          | false => done)
+```
+
+`late nothing` ends. `late (just true)` sends `Ctl`. `late (just false)` ends. The receiver covers that split: one process arm per payload constructor, and, where the values of a field the run reads select different protocols, a case on the field just bound. A field the run binds and never inspects is not split. A known sender is still checked by evaluating the run on the value. Both meeting orders check, and so does `buffer 1`. The same split sits under `rec`, in a session call, on a parameter, after an evidence payload, and on a `%1` endpoint. A declared-data field, such as `hdr : Frame → Hdr`, is split the same way.
+
+A nat, a vector, a pair, or a record is not a finite split (`the run does not decide an arm`). A `_` wildcard arm in the run's match stays refused. A pair or a record as the case payload stays refused. An open term, a self-call (`run definition calls itself`), a later run (`run definition declared later`), a body outside the computed fragment (`outside the computed fragment: let`), a case on a name bound earlier (`a case is on the name just bound`), and a result that is not a bit or a declared data type (`a case is on a bit or a declared data type`) stay refused. A process that does not cover the split does not conform. A short or misaligned inner match is `match does not cover the received value`.
+
+### Manual
+
+- Sessions: a protocol follows a field the run reads.
+- Limits: a splittable field chooses the protocol. A nat, a vector, a pair, a record, a wildcard arm, and the existing run refusals stay refused.
+
+### Examples
+
+- `field-choice.muro`: `Maybe Bool`, a declared-data field, both meeting orders, `buffer 1`, `rec`, a session call, a parameter, evidence, and a `%1` endpoint.
+- `bad_field_choice.muro`: the refused runs and the processes that do not cover the split.
+
+### Emit
+
+- The OTP image resolves the nested match. The value is already on the message. `just true` sends `rst`. `just false` and `nothing` end. Other emitters are unchanged.
+
+### Package
+
+- Version 0.16.72.
+
 ## 0.16.71
 
 A match on a received pair or record binds its components.

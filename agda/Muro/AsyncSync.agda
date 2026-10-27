@@ -29,7 +29,7 @@ open import Data.Product using (Σ; _×_; _,_; proj₁)
 open import Data.List.Base using (List; []; _∷_)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.String.Base using (String)
-open import Data.String.Properties using (_==_)
+open import Data.String.Properties using (_==_; _≟_)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym)
 open import Relation.Nullary.Decidable.Core using () renaming (yes to yes′; no to no′)
 
@@ -39,17 +39,20 @@ open import Muro.Session using (Proc; done; stop; put; get; pick0; pick1; cover
   ; evalExpr; var; call; tup
   ; nat; unit; bit; none; bind
   ; pair; rec; vec; dat; Row; FEnv
-  ; Spine; PArm; bare; named; prod; pPair; pRec; openNamed; openPair; openRec
-  ; rawSpine; lenEnv; substProc
+  ; Spine; snil; scons; PArm; bare; named; prod; fork; pPair; pRec
+  ; openNamed; openPair; openRec
+  ; rawSpine; lenEnv; substProc; openFork; seek
   ; fieldReply; fwdField; tailPass
-  ; pairGrant; pairReply; noteReply)
+  ; pairGrant; pairReply; noteReply
+  ; gateTrue; gateFalse; gateNone; gateServer)
 open import Muro.Async
 open import Muro.Meet using (ext; Meetsρ; done-done; stop-stop; put-get; get-put
   ; pick0-cover; pick1-cover; cover-pick0; cover-pick1
   ; iget-b0; iget-b1; b0-iget; b1-iget; put-mget; mget-put
   ; meets-sym; fieldSender; field-meet; fwd-meet
   ; nothingSender; nothing-meet; tailSender; tail-meet
-  ; pairSender; pair-meet; natSender; nat-meet; recSender; rec-meet)
+  ; pairSender; pair-meet; natSender; nat-meet; recSender; rec-meet
+  ; gate-true-meet; gate-false-meet; gate-none-meet)
 
 ------------------------------------------------------------------------
 -- One enabled step. The other side waits, so the class is that step
@@ -113,33 +116,6 @@ open-spec k c xs p sp ps R () | true | just rs | nothing
 open-spec k c xs p sp ps .(substProc e p) refl | true | just rs | just e =
   leSubst e p ps , refl
 
-find-spec : (name : String) (sp : Spine) (cs : List Ctor) (ps : List PArm) (R : Proc) →
-            nthProc cs name sp ps ≡ just R →
-            Σ (size R ≤ sizeArms ps) (λ le → findIn name sp cs ps ≡ just (R , le))
-find-spec _ _ [] _ _ ()
-find-spec _ _ (_ ∷ _) [] _ ()
-find-spec name sp (ctor n _ ∷ cs) (bare P ∷ ps) R eq with name == n
-find-spec name sp (ctor n _ ∷ cs) (bare P ∷ ps) .P refl | true =
-  m≤m+n (size P) (sizeArms ps) , refl
-find-spec name sp (ctor n _ ∷ cs) (bare P ∷ ps) R eq | false
-  with find-spec name sp cs ps R eq
-... | le , eqf rewrite eqf =
-  ≤-trans le (m≤n+m (sizeArms ps) (size P)) , refl
-find-spec name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) R eq with name == n
-find-spec name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) R eq | true
-  with open-spec k name xs p sp ps R eq
-... | le , eqh rewrite eqh = le , refl
-find-spec name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) R eq | false
-  with find-spec name sp cs ps R eq
-... | le , eqf rewrite eqf =
-  ≤-trans le (m≤n+m (sizeArms ps) (size p)) , refl
-find-spec name sp (ctor n _ ∷ cs) (prod _ p ∷ ps) R eq with name == n
-find-spec name sp (ctor n _ ∷ cs) (prod _ p ∷ ps) R () | true
-find-spec name sp (ctor n _ ∷ cs) (prod _ p ∷ ps) R eq | false
-  with find-spec name sp cs ps R eq
-... | le , eqf rewrite eqf =
-  ≤-trans le (m≤n+m (sizeArms ps) (size p)) , refl
-
 -- `armPick` on a product arm is `pickArm` of the same environment
 -- `armOf` fills. The size is the stored process.
 specPair : ∀ {X Y} (a : Val X) (b : Val Y) (x y : String) (p R : Proc) →
@@ -158,43 +134,115 @@ specRec row bs p R eq with openRec bs row
 specRec row bs p R () | nothing
 specRec row bs p .(substProc e p) refl | just e = leSubst e p [] , refl
 
-armPick-spec : ∀ {A} (u : Val A) (ps : List PArm) (R : Proc) →
-               armOf A u ps ≡ just R →
-               Σ (size R ≤ sizeArms ps) (λ le → armPick A u ps ≡ just (R , le))
-armPick-spec b0 [] _ ()
-armPick-spec b0 (_ ∷ []) _ ()
-armPick-spec b0 (_ ∷ _ ∷ _ ∷ _) _ ()
-armPick-spec b0 (bare P ∷ Q ∷ []) .P refl =
-  m≤m+n (size P) (sizeArms (Q ∷ [])) , refl
-armPick-spec b0 (named _ [] P ∷ Q ∷ []) .P refl =
-  m≤m+n (size P) (sizeArms (Q ∷ [])) , refl
-armPick-spec b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) _ ()
-armPick-spec b0 (prod _ _ ∷ _ ∷ []) _ ()
-armPick-spec b1 [] _ ()
-armPick-spec b1 (_ ∷ []) _ ()
-armPick-spec b1 (_ ∷ _ ∷ _ ∷ _) _ ()
-armPick-spec b1 (A ∷ bare Q ∷ []) .Q refl = b1≤ A (bare Q) , refl
-armPick-spec b1 (A ∷ named c [] Q ∷ []) .Q refl = b1≤ A (named c [] Q) , refl
-armPick-spec b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) _ ()
-armPick-spec b1 (_ ∷ prod _ _ ∷ []) _ ()
-armPick-spec {nat} _ _ _ ()
-armPick-spec {unit} _ _ _ ()
-armPick-spec {vec _ _} _ _ _ ()
-armPick-spec {pair _ _} (tup a b) (prod (pPair x y) p ∷ []) R eq =
-  specPair a b x y p R eq
-armPick-spec {pair _ _} (tup _ _) (prod (pRec _) _ ∷ []) _ ()
-armPick-spec {pair _ _} (tup _ _) (bare _ ∷ []) _ ()
-armPick-spec {pair _ _} (tup _ _) (named _ _ _ ∷ []) _ ()
-armPick-spec {pair _ _} (tup _ _) [] _ ()
-armPick-spec {pair _ _} (tup _ _) (_ ∷ _ ∷ _) _ ()
-armPick-spec {rec _} (rec row) (prod (pRec bs) p ∷ []) R eq =
-  specRec row bs p R eq
-armPick-spec {rec _} (rec _) (prod (pPair _ _) _ ∷ []) _ ()
-armPick-spec {rec _} (rec _) (bare _ ∷ []) _ ()
-armPick-spec {rec _} (rec _) (named _ _ _ ∷ []) _ ()
-armPick-spec {rec _} (rec _) [] _ ()
-armPick-spec {rec _} (rec _) (_ ∷ _ ∷ _) _ ()
-armPick-spec {dat d _} (con c sp) ps R eq = find-spec c sp (ctorsOf d) ps R eq
+
+-- `openFork` and `seek` case on the comparison. `openForkHit` and
+-- `seekHit` abstract the same comparison, so the equality is `refl`.
+mutual
+  openFork-spec : (k c : String) (xs : List String) (y : String) (qs : List PArm)
+                  (sp : Spine) (ps : List PArm) (R : Proc) →
+                  openFork k c xs y qs sp ≡ just R →
+                  Σ (size R ≤ sizeArms qs + sizeArms ps)
+                    (λ le → openForkHit k c xs y qs sp ps ≡ just (R , le))
+  openFork-spec k c xs y qs sp ps R eq with k == c | rawSpine sp
+  openFork-spec k c xs y qs sp ps R () | false | _
+  openFork-spec k c xs y qs sp ps R () | true | nothing
+  openFork-spec k c xs y qs sp ps R eq | true | just rs with lenEnv xs rs
+  openFork-spec k c xs y qs sp ps R () | true | just rs | nothing
+  openFork-spec k c xs y qs sp ps R eq | true | just rs | just e =
+    seek-spec xs y e qs sp ps R eq
+
+  seek-spec : (xs : List String) (y : String) (e : FEnv) (qs : List PArm)
+              (sp : Spine) (ps : List PArm) (R : Proc) →
+              seek xs y e qs sp ≡ just R →
+              Σ (size R ≤ sizeArms qs + sizeArms ps)
+                (λ le → seekHit xs y e qs sp ps ≡ just (R , le))
+  seek-spec [] _ _ _ _ _ _ ()
+  seek-spec (_ ∷ _) _ _ _ snil _ _ ()
+  seek-spec (x ∷ xs) y e qs (scons A v sp) ps R eq with x ≟ y
+  seek-spec (x ∷ xs) y e qs (scons A v sp) ps R eq | no′ _ =
+    seek-spec xs y e qs sp ps R eq
+  seek-spec (x ∷ xs) y e qs (scons A v sp) ps R eq | yes′ _ with armOf A v qs in aeq
+  seek-spec (x ∷ xs) y e qs (scons A v sp) ps R () | yes′ _ | nothing
+  seek-spec (x ∷ xs) y e qs (scons A v sp) ps .(substProc e p) refl | yes′ _ | just p
+    with armPick-spec v qs p aeq
+  ... | le , eqA rewrite eqA = boundFork e p qs ps le , refl
+
+  find-spec : (name : String) (sp : Spine) (cs : List Ctor) (ps : List PArm) (R : Proc) →
+              nthProc cs name sp ps ≡ just R →
+              Σ (size R ≤ sizeArms ps) (λ le → findIn name sp cs ps ≡ just (R , le))
+  find-spec _ _ [] _ _ ()
+  find-spec _ _ (_ ∷ _) [] _ ()
+  find-spec name sp (ctor n _ ∷ cs) (bare P ∷ ps) R eq with name == n
+  find-spec name sp (ctor n _ ∷ cs) (bare P ∷ ps) .P refl | true =
+    m≤m+n (size P) (sizeArms ps) , refl
+  find-spec name sp (ctor n _ ∷ cs) (bare P ∷ ps) R eq | false
+    with find-spec name sp cs ps R eq
+  ... | le , eqf rewrite eqf =
+    ≤-trans le (m≤n+m (sizeArms ps) (size P)) , refl
+  find-spec name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) R eq with name == n
+  find-spec name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) R eq | true
+    with open-spec k name xs p sp ps R eq
+  ... | le , eqh rewrite eqh = le , refl
+  find-spec name sp (ctor n _ ∷ cs) (named k xs p ∷ ps) R eq | false
+    with find-spec name sp cs ps R eq
+  ... | le , eqf rewrite eqf =
+    ≤-trans le (m≤n+m (sizeArms ps) (size p)) , refl
+  find-spec name sp (ctor n _ ∷ cs) (prod _ p ∷ ps) R eq with name == n
+  find-spec name sp (ctor n _ ∷ cs) (prod _ p ∷ ps) R () | true
+  find-spec name sp (ctor n _ ∷ cs) (prod _ p ∷ ps) R eq | false
+    with find-spec name sp cs ps R eq
+  ... | le , eqf rewrite eqf =
+    ≤-trans le (m≤n+m (sizeArms ps) (size p)) , refl
+  find-spec name sp (ctor n _ ∷ cs) (fork k xs y qs ∷ ps) R eq with name == n
+  find-spec name sp (ctor n _ ∷ cs) (fork k xs y qs ∷ ps) R eq | true
+    with openFork-spec k name xs y qs sp ps R eq
+  ... | le , eqh rewrite eqh = le , refl
+  find-spec name sp (ctor n _ ∷ cs) (fork k xs y qs ∷ ps) R eq | false
+    with find-spec name sp cs ps R eq
+  ... | le , eqf rewrite eqf =
+    ≤-trans le (m≤n+m (sizeArms ps) (sizeArms qs)) , refl
+
+  armPick-spec : ∀ {A} (u : Val A) (ps : List PArm) (R : Proc) →
+                 armOf A u ps ≡ just R →
+                 Σ (size R ≤ sizeArms ps) (λ le → armPick A u ps ≡ just (R , le))
+  armPick-spec b0 [] _ ()
+  armPick-spec b0 (_ ∷ []) _ ()
+  armPick-spec b0 (_ ∷ _ ∷ _ ∷ _) _ ()
+  armPick-spec b0 (bare P ∷ Q ∷ []) .P refl =
+    m≤m+n (size P) (sizeArms (Q ∷ [])) , refl
+  armPick-spec b0 (named _ [] P ∷ Q ∷ []) .P refl =
+    m≤m+n (size P) (sizeArms (Q ∷ [])) , refl
+  armPick-spec b0 (named _ (_ ∷ _) _ ∷ _ ∷ []) _ ()
+  armPick-spec b0 (prod _ _ ∷ _ ∷ []) _ ()
+  armPick-spec b0 (fork _ _ _ _ ∷ _ ∷ []) _ ()
+  armPick-spec b1 [] _ ()
+  armPick-spec b1 (_ ∷ []) _ ()
+  armPick-spec b1 (_ ∷ _ ∷ _ ∷ _) _ ()
+  armPick-spec b1 (A ∷ bare Q ∷ []) .Q refl = b1≤ A (bare Q) , refl
+  armPick-spec b1 (A ∷ named c [] Q ∷ []) .Q refl = b1≤ A (named c [] Q) , refl
+  armPick-spec b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) _ ()
+  armPick-spec b1 (_ ∷ prod _ _ ∷ []) _ ()
+  armPick-spec b1 (_ ∷ fork _ _ _ _ ∷ []) _ ()
+  armPick-spec {nat} _ _ _ ()
+  armPick-spec {unit} _ _ _ ()
+  armPick-spec {vec _ _} _ _ _ ()
+  armPick-spec {pair _ _} (tup a b) (prod (pPair x y) p ∷ []) R eq =
+    specPair a b x y p R eq
+  armPick-spec {pair _ _} (tup _ _) (prod (pRec _) _ ∷ []) _ ()
+  armPick-spec {pair _ _} (tup _ _) (bare _ ∷ []) _ ()
+  armPick-spec {pair _ _} (tup _ _) (named _ _ _ ∷ []) _ ()
+  armPick-spec {pair _ _} (tup _ _) (fork _ _ _ _ ∷ []) _ ()
+  armPick-spec {pair _ _} (tup _ _) [] _ ()
+  armPick-spec {pair _ _} (tup _ _) (_ ∷ _ ∷ _) _ ()
+  armPick-spec {rec _} (rec row) (prod (pRec bs) p ∷ []) R eq =
+    specRec row bs p R eq
+  armPick-spec {rec _} (rec _) (prod (pPair _ _) _ ∷ []) _ ()
+  armPick-spec {rec _} (rec _) (bare _ ∷ []) _ ()
+  armPick-spec {rec _} (rec _) (named _ _ _ ∷ []) _ ()
+  armPick-spec {rec _} (rec _) (fork _ _ _ _ ∷ []) _ ()
+  armPick-spec {rec _} (rec _) [] _ ()
+  armPick-spec {rec _} (rec _) (_ ∷ _ ∷ _) _ ()
+  armPick-spec {dat d _} (con c sp) ps R eq = find-spec c sp (ctorsOf d) ps R eq
 
 ------------------------------------------------------------------------
 -- Buffer 1. `lv` and `rv` are the names already received. The
@@ -464,3 +512,24 @@ nat-async = meets-async [] [] nat-meet
 
 rec-async : Safe (mk k1 recSender noteReply [] [] [] [] none none)
 rec-async = meets-async [] [] rec-meet
+
+-- `just true` sends `rst`. `just false` and `nothing` close. The
+-- receiver cases on the field the run reads. Either order is the
+-- synchronous meeting at buffer 1.
+gate-true-async : Safe (mk k1 gateTrue gateServer [] [] [] [] none none)
+gate-true-async = meets-async [] [] gate-true-meet
+
+gate-true-async-swap : Safe (mk k1 gateServer gateTrue [] [] [] [] none none)
+gate-true-async-swap = meets-async [] [] (meets-sym gate-true-meet)
+
+gate-false-async : Safe (mk k1 gateFalse gateServer [] [] [] [] none none)
+gate-false-async = meets-async [] [] gate-false-meet
+
+gate-false-async-swap : Safe (mk k1 gateServer gateFalse [] [] [] [] none none)
+gate-false-async-swap = meets-async [] [] (meets-sym gate-false-meet)
+
+gate-none-async : Safe (mk k1 gateNone gateServer [] [] [] [] none none)
+gate-none-async = meets-async [] [] gate-none-meet
+
+gate-none-async-swap : Safe (mk k1 gateServer gateNone [] [] [] [] none none)
+gate-none-async-swap = meets-async [] [] (meets-sym gate-none-meet)

@@ -192,3 +192,9 @@ late-other = refl
 
 late-round : dual (dual lateCase) ≡ lateCase
 late-round = refl
+
+gate-other : dual gateProto ≡ gateBack
+gate-other = refl
+
+gate-round : dual (dual gateProto) ≡ gateProto
+gate-round = refl

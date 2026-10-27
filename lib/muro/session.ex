@@ -298,15 +298,24 @@ defmodule Muro.Session do
 
     case {ty, val, arms} do
       {:bit, :b0, _} ->
-        take_indexed(arms, 0, "b0", [])
+        take_indexed(arms, 0, "b0", [], [], book)
 
       {:bit, :b1, _} ->
-        take_indexed(arms, 1, "b1", [])
+        take_indexed(arms, 1, "b1", [], [], book)
 
-      {{:dat, dname, _}, {:con, c, fields}, _} ->
+      {{:dat, dname, _} = dty, {:con, c, fields}, _} ->
         case Enum.find_index(ctor_names(book, dname), &(&1 == cname(c))) do
-          i when is_integer(i) -> take_indexed(arms, i, cname(c), fields)
-          _ -> :error
+          i when is_integer(i) ->
+            ftys =
+              case fields_of_ctor(dty, cname(c), book) do
+                {:ok, ts} -> ts
+                :error -> []
+              end
+
+            take_indexed(arms, i, cname(c), fields, ftys, book)
+
+          _ ->
+            :error
         end
 
       {{:pair, _, _}, {:tup, a, b}, [{:prod, {:pair, [x, y]}, body}]}
@@ -332,14 +341,39 @@ defmodule Muro.Session do
   def arm_binders({:prod, pat, _}), do: pat_binders(pat)
   def arm_binders(_), do: []
 
-  defp take_indexed(arms, i, expected, fields) do
+  defp take_indexed(arms, i, expected, fields, ftys, book) do
     case Enum.at(arms, i) do
       nil -> :error
-      arm -> take_arm(arm, expected, fields)
+      arm -> take_arm(arm, expected, fields, ftys, book)
     end
   end
 
-  defp take_arm({:arm, ctor, binders, body}, expected, fields)
+  # A match on a bound field follows the value of that field. The leaf
+  # is the continuation. The other fields of this constructor stay in
+  # the leaf, and so does the field that was cased on.
+  defp take_arm({:arm, ctor, binders, {:match, name, inner}}, expected, fields, ftys, book)
+       when is_binary(ctor) and is_list(binders) and is_list(fields) and is_list(inner) do
+    cond do
+      ctor != expected ->
+        :error
+
+      length(binders) != length(fields) ->
+        :error
+
+      name not in binders ->
+        {:ok, subst_fields(binders, fields, {:match, name, inner})}
+
+      true ->
+        i = Enum.find_index(binders, &(&1 == name))
+
+        case arm(Enum.at(ftys, i), Enum.at(fields, i), inner, book) do
+          {:ok, leaf} -> {:ok, subst_fields(binders, fields, leaf)}
+          :error -> :error
+        end
+    end
+  end
+
+  defp take_arm({:arm, ctor, binders, body}, expected, fields, _ftys, _book)
        when is_binary(ctor) and is_list(binders) and is_list(fields) do
     cond do
       ctor != expected -> :error
@@ -348,8 +382,8 @@ defmodule Muro.Session do
     end
   end
 
-  defp take_arm({:prod, _, _}, _expected, _fields), do: :error
-  defp take_arm(proc, _expected, _fields), do: {:ok, proc}
+  defp take_arm({:prod, _, _}, _expected, _fields, _ftys, _book), do: :error
+  defp take_arm(proc, _expected, _fields, _ftys, _book), do: {:ok, proc}
 
   # The record's fields, in type order. A missing key does not open the arm.
   defp fill_rec(fields, vals, bs, body) do
@@ -466,6 +500,15 @@ defmodule Muro.Session do
   defp skel_go({:rec, name, body}), do: {:loop, name, skel_go(body)}
   defp skel_go({:call, name}), do: {:jump, name}
 
+  defp skel_arm({:arm, c, xs, {:match, name, inner}})
+       when is_list(xs) and is_list(inner) do
+    if name in xs do
+      {:arm, c, xs, {:split, name, Enum.map(inner, &skel_arm/1)}}
+    else
+      {:arm, c, xs, {:pick, Enum.map(inner, &skel_arm/1)}}
+    end
+  end
+
   defp skel_arm({:arm, c, xs, p}), do: {:arm, c, xs, skel_go(p)}
   defp skel_arm({:prod, pat, p}), do: {:prod, pat, skel_go(p)}
   defp skel_arm(p), do: skel_go(p)
@@ -499,6 +542,20 @@ defmodule Muro.Session do
 
   defp carry_go({:rec, name, body}, book, ctx), do: {:loop, name, carry_go(body, book, ctx)}
   defp carry_go({:call, name}, _book, _ctx), do: {:jump, name}
+
+  defp carry_arm({:arm, c, xs, {:match, name, inner}}, book, ctx)
+       when is_list(xs) and is_list(inner) do
+    ctx1 = Enum.reduce(xs, ctx, &carry_bind(&2, &1))
+
+    body =
+      if name in xs do
+        {:split, name, Enum.map(inner, &carry_arm(&1, book, ctx1))}
+      else
+        {:pick, Enum.map(inner, &carry_arm(&1, book, ctx1))}
+      end
+
+    {:arm, c, xs, body}
+  end
 
   defp carry_arm({:arm, c, xs, p}, book, ctx) do
     ctx1 = Enum.reduce(xs, ctx, &carry_bind(&2, &1))
@@ -1090,21 +1147,22 @@ defmodule Muro.Session do
       true ->
         case zip_arms(scrut, expected, arms, ps, book) do
           {:ok, pairs} ->
-            keep(
-              arms_paired(
-                pairs,
-                bind_ctx(ctx, name, expected),
-                rename_idx(idx, y, name),
-                penv,
-                senv,
-                seen,
-                fuel,
-                book,
-                step_down(here_span(), 0),
-                0,
-                expected
-              )
-            )
+            case arms_paired(
+                   pairs,
+                   bind_ctx(ctx, name, expected),
+                   rename_idx(idx, y, name),
+                   penv,
+                   senv,
+                   seen,
+                   fuel,
+                   book,
+                   step_down(here_span(), 0),
+                   0,
+                   expected
+                 ) do
+              {:shape} -> refuse(proc, proto)
+              other -> keep(other)
+            end
 
           {:error, msg} ->
             refuse(proc, proto, msg)
@@ -1775,8 +1833,8 @@ defmodule Muro.Session do
 
   # A case is the continuation of the binder just written. Direct arms
   # are that payload's constructors. A run's arms are the result's
-  # constructors. The payload itself is still a bit or declared data,
-  # so each of its constructors can be probed with no fields.
+  # constructors. The payload itself is still a bit or declared data.
+  # A run that reads a splittable field is split on the values it reads.
   defp case_ok(name, ty, scrut, arms, ctx, book) do
     ctx1 = guard(Map.put(ctx, name, ty))
 
@@ -2148,21 +2206,15 @@ defmodule Muro.Session do
   defp zip_run(_fname, _ty, [], _arms, [], _book, acc), do: {:ok, Enum.reverse(acc)}
 
   defp zip_run(fname, ty, [c | cs], arms, [p | ps], book, acc) do
-    case apply_run(fname, [probe_of(ty, c)], book) do
-      {:ok, :miss} ->
+    case split_of(fname, ty, c, arms, book) do
+      {:ok, {:flat, proto}} ->
+        zip_run(fname, ty, cs, arms, ps, book, [{:flat, p, c, proto} | acc])
+
+      {:ok, {:node, index, ch}} ->
+        zip_run(fname, ty, cs, arms, ps, book, [{:node, p, c, index, ch} | acc])
+
+      :no ->
         {:error, "the run does not decide an arm"}
-
-      {:ok, result} ->
-        case ctor_tag(result) do
-          nil ->
-            {:error, "the run does not decide an arm"}
-
-          tag ->
-            case fetch_arm(tag, arms, "the run does not decide an arm") do
-              {:ok, proto} -> zip_run(fname, ty, cs, arms, ps, book, [{p, c, proto} | acc])
-              {:error, msg} -> {:error, msg}
-            end
-        end
 
       {:error, msg} ->
         {:error, rewrite_run(msg)}
@@ -2175,26 +2227,411 @@ defmodule Muro.Session do
   defp probe_of(:bit, "b1"), do: :b1
   defp probe_of(_, c), do: {:con, c, []}
 
+  # A field is splittable when it is a bit or a declared data type.
+  # The split follows the run. A field the run binds and does not read
+  # is a dummy, and it is not a node. A nat, a vector, a pair, or a
+  # record is not a finite split.
+  defp splittable?(:bit), do: true
+  defp splittable?({:dat, _, _}), do: true
+  defp splittable?(_), do: false
+
+  defp pay_ctors(:bit, _book), do: ["b0", "b1"]
+
+  defp pay_ctors({:dat, name, _}, book) do
+    case ctor_names(book, name) do
+      [] -> nil
+      names -> names
+    end
+  end
+
+  defp pay_ctors(_, _), do: nil
+
+  defp any_var(p, {:var, i}) when is_integer(i), do: p.(i)
+  defp any_var(p, {:su, t}), do: any_var(p, t)
+  defp any_var(p, {:ann, t, _}), do: any_var(p, t)
+  defp any_var(p, {:pair, a, b}), do: any_var(p, a) or any_var(p, b)
+  defp any_var(p, {:app, f, a}), do: any_var(p, f) or any_var(p, a)
+  defp any_var(p, {:mnat, e, _, z, s}), do: any_var(p, e) or any_var(p, z) or any_var(p, s)
+
+  defp any_var(p, {:mnat, e, _, _, z, _, s}),
+    do: any_var(p, e) or any_var(p, z) or any_var(p, s)
+
+  defp any_var(p, {:mdata, e, _, branches}) when is_list(branches),
+    do: any_var(p, e) or any_arms(p, branches)
+
+  defp any_var(p, {:mdata, e, _, _, branches}) when is_list(branches),
+    do: any_var(p, e) or any_arms(p, branches)
+
+  defp any_var(_, _), do: false
+
+  defp any_arms(p, branches) do
+    Enum.any?(branches, fn branch ->
+      case branch_shape(branch) do
+        {_, _, body} -> any_var(p, body)
+        _ -> false
+      end
+    end)
+  end
+
+  defp in_range?(lo, hi, j), do: lo <= j and j < hi
+
+  defp occurs_between(lo, hi, term), do: any_var(&in_range?(lo, hi, &1), term)
+
+  defp read_idxs(tys, term), do: read_go(0, tys, term)
+
+  defp read_go(_i, [], _term), do: {:ok, []}
+
+  defp read_go(i, [a | ts], term) do
+    if any_var(&(&1 == length(ts)), term) do
+      if splittable?(a) do
+        case read_go(i + 1, ts, term) do
+          {:ok, is} -> {:ok, [i | is]}
+          :no -> :no
+        end
+      else
+        :no
+      end
+    else
+      read_go(i + 1, ts, term)
+    end
+  end
+
+  defp others(tys, i, term), do: others_go(0, tys, i, term)
+
+  defp others_go(_j, [], _i, _term), do: false
+  defp others_go(j, [_a | ts], i, term) when j == i, do: others_go(j + 1, ts, i, term)
+
+  defp others_go(j, [_a | ts], i, term) do
+    if any_var(&(&1 == length(ts)), term), do: true, else: others_go(j + 1, ts, i, term)
+  end
+
+  defp lookup_field(tys, k), do: look_field(0, tys, k)
+
+  defp look_field(_i, [], _k), do: nil
+
+  defp look_field(i, [a | ts], k) do
+    if length(ts) == k, do: {i, a}, else: look_field(i + 1, ts, k)
+  end
+
+  defp mk_val(:bit, "b0", _ftys, _book), do: :b0
+  defp mk_val(:bit, "b1", _ftys, _book), do: :b1
+  defp mk_val(:bit, _, _ftys, _book), do: :b0
+  defp mk_val(_ty, c, ftys, _book), do: {:con, c, Enum.map(ftys, &dummy_field/1)}
+
+  defp dummy_field(:nat), do: {:nat, 0}
+  defp dummy_field(:bit), do: :b0
+  defp dummy_field(:unit), do: :tt
+  defp dummy_field({:pair, a, b}), do: {:tup, dummy_field(a), dummy_field(b)}
+
+  defp dummy_field({:rec, fields}) when is_list(fields) do
+    {:rec, Enum.map(fields, fn {name, ty} -> {name, dummy_field(ty)} end)}
+  end
+
+  defp dummy_field({:vec, _, _}), do: []
+  defp dummy_field(_), do: {:con, "•", []}
+
+  defp set_field({:con, c, rs}, i, r) when is_list(rs), do: {:con, c, List.replace_at(rs, i, r)}
+  defp set_field(v, _i, _r), do: v
+
+  defp poke(host, [], i, r), do: set_field(host, i, r)
+
+  defp poke(host, [j | js], i, r) do
+    case field_at(host, j) do
+      nil -> host
+      inner -> set_field(host, j, poke(inner, js, i, r))
+    end
+  end
+
+  defp field_at({:con, _, rs}, i) when is_list(rs), do: Enum.at(rs, i)
+  defp field_at(_, _), do: nil
+
+  defp opened({:mdata, {:var, 0}, _, branches}, c) when is_list(branches) do
+    case find_branch(branches, c) do
+      {_, _, body} -> body
+      _ -> nil
+    end
+  end
+
+  defp opened({:mdata, {:var, 0}, _, _, branches}, c) when is_list(branches) do
+    opened({:mdata, {:var, 0}, nil, branches}, c)
+  end
+
+  defp opened(_, _), do: nil
+
+  defp split_of(fname, ty, ctor, arms, book) do
+    defs = run_defs(book)
+
+    case Enum.find_index(defs, &(&1.name == fname)) do
+      nil ->
+        :no
+
+      i ->
+        case one_arg(Enum.at(defs, i)) do
+          {:ok, _domain, _codomain, body} ->
+            case fields_of_ctor(ty, ctor, book) do
+              :error ->
+                :no
+
+              {:ok, ftys} ->
+                case opened(body, ctor) do
+                  nil -> plain_probe(fname, ty, ctor, arms, book)
+                  b -> guard(fname, arms, ftys, [], 0, 0, mk_val(ty, ctor, ftys, book), b, book)
+                end
+            end
+
+          :error ->
+            :no
+        end
+    end
+  end
+
+  defp plain_probe(fname, ty, ctor, arms, book) do
+    case apply_run(fname, [probe_of(ty, ctor)], book) do
+      {:ok, :miss} -> :no
+      {:ok, result} -> flat_result(result, arms)
+      {:error, msg} -> {:error, msg}
+    end
+  end
+
+  defp flat_result(result, arms) do
+    case ctor_tag(result) do
+      nil ->
+        :no
+
+      tag ->
+        case fetch_arm(tag, arms, "the run does not decide an arm") do
+          {:ok, proto} -> {:ok, {:flat, proto}}
+          {:error, _} -> :no
+        end
+    end
+  end
+
+  defp proto_at(fname, host, arms, book) do
+    case apply_run(fname, [host], book) do
+      {:ok, :miss} ->
+        :no
+
+      {:ok, result} ->
+        case ctor_tag(result) do
+          nil ->
+            :no
+
+          tag ->
+            case fetch_arm(tag, arms, "the run does not decide an arm") do
+              {:ok, proto} -> {:ok, proto}
+              {:error, _} -> :no
+            end
+        end
+
+      {:error, msg} ->
+        {:error, msg}
+    end
+  end
+
+  defp guard(fname, arms, tys, path, lo, hi, host, {:mdata, {:var, k}, _, branches} = term, book)
+       when is_integer(k) and is_list(branches) do
+    guard_at(fname, arms, tys, path, lo, hi, host, term, {:field, k, branches}, book)
+  end
+
+  defp guard(
+         fname,
+         arms,
+         tys,
+         path,
+         lo,
+         hi,
+         host,
+         {:mdata, {:var, k}, _, _, branches} = term,
+         book
+       )
+       when is_integer(k) and is_list(branches) do
+    guard_at(fname, arms, tys, path, lo, hi, host, term, {:field, k, branches}, book)
+  end
+
+  defp guard(fname, arms, tys, path, lo, hi, host, term, book) do
+    guard_at(fname, arms, tys, path, lo, hi, host, term, :term, book)
+  end
+
+  defp guard_at(fname, arms, tys, path, lo, hi, host, term, how, book) do
+    cond do
+      occurs_between(lo, hi, term) ->
+        :no
+
+      true ->
+        case read_idxs(tys, term) do
+          :no ->
+            :no
+
+          {:ok, is} ->
+            case how do
+              {:field, k, branches} ->
+                on_field(lookup_field(tys, k), fname, arms, tys, path, host, branches, is, book)
+
+              :term ->
+                enum_or(fname, arms, tys, host, is, book)
+            end
+        end
+    end
+  end
+
+  defp on_field(nil, fname, arms, tys, _path, host, _branches, is, book) do
+    enum_or(fname, arms, tys, host, is, book)
+  end
+
+  defp on_field({i, a}, fname, arms, tys, path, host, branches, _is, book) do
+    if splittable?(a) do
+      case pay_ctors(a, book) do
+        nil ->
+          :no
+
+        cs ->
+          case kids(fname, arms, tys, path, host, i, a, cs, branches, book) do
+            {:ok, ch} -> {:ok, collapse(i, ch)}
+            other -> other
+          end
+      end
+    else
+      :no
+    end
+  end
+
+  defp kids(_fname, _arms, _tys, _path, _host, _i, _a, [], [], _book), do: {:ok, []}
+
+  defp kids(fname, arms, tys, path, host, i, a, [c | cs], [branch | as], book) do
+    case branch_shape(branch) do
+      {d, _, b} ->
+        if cname(d) == c do
+          case fields_of_ctor(a, c, book) do
+            {:ok, ts} ->
+              case descend(fname, arms, tys, path, host, i, a, c, ts, b, book) do
+                {:ok, s} ->
+                  case kids(fname, arms, tys, path, host, i, a, cs, as, book) do
+                    {:ok, ch} -> {:ok, [{c, s} | ch]}
+                    other -> other
+                  end
+
+                other ->
+                  other
+              end
+
+            :error ->
+              :no
+          end
+        else
+          :no
+        end
+
+      _ ->
+        :no
+    end
+  end
+
+  defp kids(_, _, _, _, _, _, _, _, _, _), do: :no
+
+  defp descend(fname, arms, tys, path, host, i, a, c, [], b, book) do
+    if others(tys, i, b) do
+      :no
+    else
+      guard(fname, arms, [], path, 0, 0, poke(host, path, i, mk_val(a, c, [], book)), b, book)
+    end
+  end
+
+  defp descend(fname, arms, tys, path, host, i, a, c, ts, b, book) do
+    guard(
+      fname,
+      arms,
+      ts,
+      path ++ [i],
+      length(ts),
+      length(ts) + length(tys),
+      poke(host, path, i, mk_val(a, c, ts, book)),
+      b,
+      book
+    )
+  end
+
+  defp enum_or(fname, arms, _tys, host, [], book) do
+    case proto_at(fname, host, arms, book) do
+      {:ok, proto} -> {:ok, {:flat, proto}}
+      other -> other
+    end
+  end
+
+  defp enum_or(fname, arms, tys, host, [i | is], book) do
+    case Enum.at(tys, i) do
+      nil ->
+        :no
+
+      a ->
+        case pay_ctors(a, book) do
+          nil ->
+            :no
+
+          cs ->
+            case enum_cs(fname, arms, tys, host, i, is, a, cs, book) do
+              {:ok, ch} -> {:ok, collapse(i, ch)}
+              other -> other
+            end
+        end
+    end
+  end
+
+  defp enum_cs(_fname, _arms, _tys, _host, _i, _is, _a, [], _book), do: {:ok, []}
+
+  defp enum_cs(fname, arms, tys, host, i, is, a, [c | cs], book) do
+    case fields_of_ctor(a, c, book) do
+      {:ok, ts} ->
+        host1 = set_field(host, i, mk_val(a, c, ts, book))
+
+        case enum_or(fname, arms, tys, host1, is, book) do
+          {:ok, s} ->
+            case enum_cs(fname, arms, tys, host, i, is, a, cs, book) do
+              {:ok, ch} -> {:ok, [{c, s} | ch]}
+              other -> other
+            end
+
+          other ->
+            other
+        end
+
+      :error ->
+        :no
+    end
+  end
+
+  defp collapse(i, [{_c, {:flat, s}} | rest] = ch) do
+    case agree_split(s, rest) do
+      {:ok, _} -> {:flat, s}
+      :no -> {:node, i, ch}
+    end
+  end
+
+  defp collapse(i, ch), do: {:node, i, ch}
+
+  defp agree_split(s, []), do: {:ok, s}
+  defp agree_split(s, [{_, {:flat, t}} | ch]) when s == t, do: agree_split(s, ch)
+  defp agree_split(_s, [{_, {:flat, _t}} | _ch]), do: :no
+  defp agree_split(_s, [{_, {:node, _, _}} | _]), do: :no
+
   defp arms_paired([], _ctx, _idx, _penv, _senv, _seen, _fuel, _book, _span, _i, _ty),
     do: :ok
 
-  defp arms_paired([pair | pairs], ctx, idx, penv, senv, seen, fuel, book, span, i, ty) do
-    {p, ctor, proto} = pair
-
+  defp arms_paired(
+         [{:flat, p, ctor, proto} | pairs],
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book,
+         span,
+         i,
+         ty
+       ) do
     case open_named(p, ctor, ty, ctx, book) do
       {:ok, body, ctx1} ->
-        case descend(
-               body,
-               proto,
-               ctx1,
-               idx,
-               penv,
-               senv,
-               seen,
-               fuel - 1,
-               book,
-               step_down(span, i)
-             ) do
+        case descend(body, proto, ctx1, idx, penv, senv, seen, fuel - 1, book, step_down(span, i)) do
           :ok ->
             arms_paired(pairs, ctx, idx, penv, senv, seen, fuel, book, span, i + 1, ty)
 
@@ -2207,8 +2644,196 @@ defmodule Muro.Session do
     end
   end
 
+  defp arms_paired(
+         [{:node, p, ctor, index, children} | pairs],
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book,
+         span,
+         i,
+         ty
+       ) do
+    case cover_node(p, ctor, index, children, ty, ctx, book) do
+      {:ok, jobs} ->
+        case check_jobs(jobs, idx, penv, senv, seen, fuel, book, span, i) do
+          :ok ->
+            arms_paired(pairs, ctx, idx, penv, senv, seen, fuel, book, span, i + 1, ty)
+
+          other ->
+            other
+        end
+
+      {:shape} ->
+        {:shape}
+
+      {:error, msg} ->
+        {:error, step_at(step_down(span, i)), msg}
+    end
+  end
+
+  # A direct case is one protocol per constructor. It is the flat split.
+  defp arms_paired(
+         [{p, ctor, proto} | pairs],
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book,
+         span,
+         i,
+         ty
+       )
+       when is_binary(ctor) do
+    arms_paired(
+      [{:flat, p, ctor, proto} | pairs],
+      ctx,
+      idx,
+      penv,
+      senv,
+      seen,
+      fuel,
+      book,
+      span,
+      i,
+      ty
+    )
+  end
+
+  defp check_jobs([], _idx, _penv, _senv, _seen, _fuel, _book, _span, _i), do: :ok
+
+  defp check_jobs(
+         [{:check, body, proto, ctx1} | rest],
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book,
+         span,
+         i
+       ) do
+    case descend(body, proto, ctx1, idx, penv, senv, seen, fuel - 1, book, step_down(span, i)) do
+      :ok -> check_jobs(rest, idx, penv, senv, seen, fuel, book, span, i)
+      other -> other
+    end
+  end
+
+  # A node is a case on the field the run reads. A flat child is one
+  # process. A nested node is a case on the field that child binds.
+  defp cover_node({:arm, ctor, binders, {:match, y, inner}}, expected, i, children, ty, ctx, book)
+       when is_binary(ctor) and is_list(binders) and is_list(inner) do
+    cond do
+      ctor != expected ->
+        {:error, @cover}
+
+      true ->
+        case fields_of_ctor(ty, expected, book) do
+          {:ok, ftys} ->
+            cond do
+              length(binders) != length(ftys) ->
+                {:error, "wrong arity"}
+
+              Enum.at(binders, i) != y ->
+                {:shape}
+
+              true ->
+                case Enum.at(ftys, i) do
+                  fty when not is_nil(fty) ->
+                    if splittable?(fty) do
+                      pair_fork(children, inner, fty, bind_fields(ctx, binders, ftys), book)
+                    else
+                      {:shape}
+                    end
+
+                  _ ->
+                    {:shape}
+                end
+            end
+
+          :error ->
+            {:error, @cover}
+        end
+    end
+  end
+
+  defp cover_node({:arm, ctor, _, _}, expected, _, _, _, _, _)
+       when is_binary(ctor) and ctor != expected,
+       do: {:error, @cover}
+
+  defp cover_node(_, _, _, _, _, _, _), do: {:shape}
+
+  defp pair_fork([], [], _fty, _ctx, _book), do: {:ok, []}
+  defp pair_fork([], [_ | _], _fty, _ctx, _book), do: {:error, @cover}
+  defp pair_fork([_ | _], [], _fty, _ctx, _book), do: {:error, @cover}
+
+  defp pair_fork([{cname, {:flat, proto}} | ch], [p | ps], fty, ctx, book) do
+    case open_named(p, cname, fty, ctx, book) do
+      {:ok, body, ctx1} ->
+        case pair_fork(ch, ps, fty, ctx, book) do
+          {:ok, rest} -> {:ok, [{:check, body, proto, ctx1} | rest]}
+          other -> other
+        end
+
+      {:error, msg} ->
+        {:error, msg}
+    end
+  end
+
+  defp pair_fork([{cname, {:node, j, ch2}} | ch], [arm | ps], fty, ctx, book) do
+    case arm do
+      {:arm, c, xs, {:match, y, inner}}
+      when is_binary(c) and is_list(xs) and is_list(inner) ->
+        cond do
+          c != cname ->
+            {:error, @cover}
+
+          Enum.at(xs, j) != y ->
+            {:shape}
+
+          true ->
+            case fields_of_ctor(fty, cname, book) do
+              {:ok, ftys} ->
+                if length(xs) == length(ftys) do
+                  case Enum.at(ftys, j) do
+                    inner_ty when not is_nil(inner_ty) ->
+                      if splittable?(inner_ty) do
+                        ctx1 = bind_fields(ctx, xs, ftys)
+
+                        with {:ok, nested} <- pair_fork(ch2, inner, inner_ty, ctx1, book),
+                             {:ok, rest} <- pair_fork(ch, ps, fty, ctx, book) do
+                          {:ok, nested ++ rest}
+                        end
+                      else
+                        {:shape}
+                      end
+
+                    _ ->
+                      {:shape}
+                  end
+                else
+                  {:error, "wrong arity"}
+                end
+
+              :error ->
+                {:error, @cover}
+            end
+        end
+
+      _ ->
+        {:shape}
+    end
+  end
+
+  defp pair_fork(_, _, _, _, _), do: {:shape}
+
   # Fields come from the payload constructor. The protocol arm is the
-  # result of the case, and the probe still carries no fields.
+  # one the run selects for this constructor, or for the field it reads.
   defp open_named({:arm, ctor, binders, body}, expected, ty, ctx, book)
        when is_binary(ctor) and is_list(binders) do
     cond do

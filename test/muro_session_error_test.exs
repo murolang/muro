@@ -582,35 +582,6 @@ defmodule Muro.SessionErrorTest do
              """)
 
     assert msg =~ "letcase: outside the computed fragment: let"
-
-    assert {:error, msg} =
-             check("""
-             data Bool : Type where
-               true : Bool
-               false : Bool
-
-             data Maybe (A : Type) : Type where
-               nothing : Maybe A
-               just : A → Maybe A
-
-             def onJust : run Π (m : Maybe Bool) → Bool :=
-               λ (m : Maybe Bool) →
-                 match m motive (λ _ → Bool)
-                   | nothing => false
-                   | just b => true
-
-             session peek :=
-               recv (m : Maybe Bool) (case (onJust m)
-                 | true => end
-                 | false => end)
-             conform bad : peek :=
-               get (m : Maybe Bool) (match m done done)
-             """)
-
-    assert msg =~
-             "bad: get (m : (Maybe Bool)) (match m done done) does not conform to recv (m : Maybe Bool) (case (onJust m) | true => end | false => end): the run does not decide an arm"
-
-    refute msg =~ "peek:"
   end
 
   test "an unknown sender is refused unless every arm agrees, and the meeting stays refused" do
@@ -840,28 +811,6 @@ defmodule Muro.SessionErrorTest do
 
     assert {:error, msg} =
              check("""
-             #{prelude}
-             def onJust : run Π (m : Maybe Bool) → Bool :=
-               λ (m : Maybe Bool) →
-                 match m motive (λ _ → Bool)
-                   | nothing => false
-                   | just b => true
-
-             session peek :=
-               recv (m : Maybe Bool) (case (onJust m)
-                 | true => end
-                 | false => end)
-             conform bad : peek :=
-               get (m : Maybe Bool)
-                 (match m
-                   | nothing => done
-                   | just b => done)
-             """)
-
-    assert msg =~ "the run does not decide an arm"
-
-    assert {:error, msg} =
-             check("""
              data Box : Type where
                box : Π (n : Nat) →
                  Box
@@ -895,6 +844,31 @@ defmodule Muro.SessionErrorTest do
     assert msg =~ "on-comp: a case is on the name just bound"
     assert msg =~ "peek: the run does not decide an arm"
     assert msg =~ "other: match does not cover the received value"
+
+    assert {:error, field} = Muro.check_file("examples/bad_field_choice.muro")
+    assert field =~ "wild body: expected constructor nothing, got _"
+    assert field =~ "natty-server:"
+    assert field =~ "the run does not decide an arm"
+    assert field =~ "peek: the run does not decide an arm"
+    assert field =~ "vectored: a case is on a bit or a declared data type"
+    assert field =~ "paired: a case is on a bit or a declared data type"
+    assert field =~ "recorded: a case is on a bit or a declared data type"
+    assert field =~ "opened: the run does not decide an arm"
+    assert field =~ "looped: run definition calls itself"
+    assert field =~ "sided-server:"
+    assert field =~ "forwarded: run definition declared later"
+    assert field =~ "letcase: outside the computed fragment: let"
+    assert field =~ "early-name: a case is on the name just bound"
+    assert field =~ "nat-result: a case is on a bit or a declared data type"
+
+    shape =
+      "shape: get (m : (Maybe Bool)) (match m | nothing => done | just b => done) does not conform to recv (m : Maybe Bool) (case (late m) | true => send Ctl end | false => end)"
+
+    assert String.contains?(field, shape <> "\n")
+    refute String.contains?(field, shape <> ":")
+
+    assert field =~ "short: match does not cover the received value"
+    assert field =~ "order: match does not cover the received value"
     assert msg =~ "abandoned: linear channel abandoned"
 
     assert {:error, nest} =
