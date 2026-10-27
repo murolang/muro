@@ -1,7 +1,7 @@
 ---
 title: For agents
 slug: for-agents
-order: 17
+order: 18
 summary: Two jobs. Do not mix them. Commands and file map.
 ---
 
@@ -131,20 +131,20 @@ test/muro_check_test.exs
 
 ## Install
 
-`mix muro.check` and `mix muro.emit` run in any directory once the archive is installed, with or without a `mix.exs`.
+`mix muro.check`, `mix muro.emit`, `mix muro.gen`, and `mix muro.init` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-Once 0.16.74 is on Hex:
+Install it from Hex:
 
 ```
 mix archive.install hex muro
 ```
 
-Until that release, from a checkout of this version:
+Alternatively, from a checkout of this version:
 
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.16.74.ez
+mix archive.install muro-0.16.75.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -163,6 +163,16 @@ A script run with `mix run --no-start` does not see the archive. Archives are on
 
 `--backend c` writes C. Add `{:elixir_make, "~> 0.10", runtime: false}` to the project deps, or run the task inside a project that depends on muro. Without `elixir_make`, the task stops and names that dependency. `nx` and `makeup` are optional. Checking and emitting Elixir do not load them.
 
+## Committed modules
+
+A project commits the Elixir `mix muro.gen` writes. The `.muro` file is the source. Do not edit the generated file by hand. Change the `.muro` file and run `mix muro.gen`.
+
+`muro.exs` at the project root, or a `:muro` key in `mix.exs`, names each book, the module, and the target path. `muro:` is the version the books are checked with. `mix muro.gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions.
+
+`mix muro.init` creates the manifest and `priv/muro/`. It prints a note to paste into the project's agent instructions. It does not write that file. `mix muro.init --ci github` also writes `.github/workflows/muro.yml`. The job installs the archive with `mix archive.install hex muro <version> --force`, with the version from the manifest, and runs `mix muro.gen --check`.
+
+The page is [Committed modules](gen.md).
+
 ## Commands
 
 ```
@@ -171,13 +181,16 @@ mix test
 mix muro.check
 mix muro.check examples/half_ok.muro
 mix muro --version
+mix muro.init
+mix muro.gen
+mix muro.gen --check
 make agda          # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
 On success, `mix muro.check` prints the version that checked the book, then:
 
 ```
-Muro v0.16.74
+Muro v0.16.75
 All terms check. Evidence never becomes a run.
 ```
 

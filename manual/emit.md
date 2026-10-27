@@ -240,4 +240,6 @@ It does not type raw Elixir. A run emit omits spec and evidence. `--backend otp`
 
 If you want a book in the test suite, parse/check/emit it from `test/muro_check_test.exs`. The canonical book `Muro.Example.book/0` must stay in sync with `examples/half_ok.muro` and `agda/Muro/Example.agda`.
 
-Next: [Grammar](grammar.md).
+`mix muro.emit` prints a module. It does not choose a path under `lib/`, format with the project's `.formatter.exs`, or record which book the file came from. [Committed modules](gen.md) is that step.
+
+Next: [Committed modules](gen.md).

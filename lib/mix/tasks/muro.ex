@@ -20,15 +20,21 @@ defmodule Mix.Tasks.Muro do
   load and start `:muro` from the installed archive. The host is neither
   compiled nor started.
 
-  `mix muro.check` and `mix muro.emit` call `ensure_started/0` before
-  they run. A task added later calls it too, and follows the same rule.
+  `mix muro.check`, `mix muro.emit`, `mix muro.gen`, and `mix muro.init`
+  call `ensure_started/0` before they run. A task added later calls it
+  too, and follows the same rule.
   The version line is the copy that ran.
 
   A script run with `mix run --no-start` does not see the archive.
   Archives are on the code path for Mix tasks.
   """
 
-  @tasks [Mix.Tasks.Muro.Check, Mix.Tasks.Muro.Emit]
+  @tasks [
+    Mix.Tasks.Muro.Check,
+    Mix.Tasks.Muro.Emit,
+    Mix.Tasks.Muro.Gen,
+    Mix.Tasks.Muro.Init
+  ]
 
   def run([]), do: report()
 
