@@ -937,7 +937,11 @@ defmodule Muro.GenTest do
 
   defp in_dir(dir, fun), do: File.cd!(dir, fun)
 
-  defp capture(fun), do: ExUnit.CaptureIO.capture_io(fun)
+  defp capture(fun) do
+    fun
+    |> ExUnit.CaptureIO.capture_io()
+    |> String.replace(~r/^==> \S+\n/m, "")
+  end
 
   defp tmp_dir do
     dir = Path.join(System.tmp_dir!(), "muro_gen_#{System.unique_integer([:positive])}")
