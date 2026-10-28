@@ -13,10 +13,25 @@ defmodule Muro do
 
   The prelude is in scope behind the file. A name the file defines replaces
   the prelude's. `import "path"` loads that file, relative to this one, and
-  brings its declarations into scope.
+  brings its declarations into scope. `import "pkg:name/file.muro"` loads
+  that file from `muro_deps/`. `root:` is the project root; when it is
+  omitted, the nearest ancestor with `muro.exs` or `mix.exs` is used.
   """
   def check_file(path, opts \\ []) do
     with {:ok, _} <- Load.file(path, opts), do: :ok
+  end
+
+  @doc """
+  `conforms to <package> <version> (sha256 <hash>)` for each package
+  `path` loaded, in name order. The hash covers the package files this
+  book loaded, not the whole package. `{:ok, []}` when the book imports
+  no package. `{:error, message}` when the book does not check.
+  """
+  def conforms(path, opts \\ []) do
+    case Load.open(path, opts) do
+      {:ok, _book, lines} -> {:ok, lines}
+      {:error, _} = err -> err
+    end
   end
 
   @doc """
@@ -26,6 +41,8 @@ defmodule Muro do
   `defmodule MyApp.Billing.Rounding`). It is not taken from the file
   stem. `opts` is `fuel: n`, as in `check_file/2`. A book that does
   not check returns `{:error, message}` and no module.
+  Definitions imported from a package are inlined the same way as
+  definitions imported from a file.
   """
   def emit_file(path, module, opts \\ []) when is_atom(module) do
     with {:ok, book} <- checked_book(path, opts) do
@@ -51,7 +68,7 @@ defmodule Muro do
   def emit_exunit(path, module, opts \\ []) when is_atom(module) do
     fuel = Keyword.get(opts, :fuel, Muro.Check.default_fuel())
 
-    with {:ok, book} <- Load.file(path, fuel: fuel) do
+    with {:ok, book} <- Load.file(path, fuel: fuel, root: Keyword.get(opts, :root)) do
       Emit.ExUnitSuite.render(path, module, book, Keyword.put(opts, :fuel, fuel))
     end
   end

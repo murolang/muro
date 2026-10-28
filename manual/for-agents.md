@@ -133,7 +133,7 @@ test/muro_check_test.exs
 
 ## Install
 
-`mix muro.check`, `mix muro.emit`, `mix muro.gen`, and `mix muro.init` run in any directory once the archive is installed, with or without a `mix.exs`.
+`mix muro.check`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
 Install it from Hex:
 
@@ -146,7 +146,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.16.77.ez
+mix archive.install muro-0.16.78.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -173,7 +173,7 @@ A project commits the Elixir `mix muro.gen` writes. The `.muro` file is the sour
 
 `mix muro.init` creates the manifest and `priv/muro/`. It prints a note to paste into the project's agent instructions. It does not write that file. `mix muro.init --ci github` also writes `.github/workflows/muro.yml`. The job installs the archive with `mix archive.install hex muro <version> --force`, with the version from the manifest, and runs `mix muro.gen --check`.
 
-The page is [Committed modules](gen.md).
+The page is [Committed modules](gen.md). Package imports (`import "pkg:..."`, `muro_deps:`, `mix muro.deps.get`, `muro.lock`) are [Packages](packages.md).
 
 ## Commands
 
@@ -187,15 +187,18 @@ mix muro --version
 mix muro.init
 mix muro.gen
 mix muro.gen --check
+mix muro.deps.get  # fetch muro_deps/ and write muro.lock
 make agda          # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
 On success, `mix muro.check` prints the version that checked the book, then:
 
 ```
-Muro v0.16.77
+Muro v0.16.78
 All terms check. Evidence never becomes a run.
 ```
+
+A book that imports packages prints `conforms to <name> <version> (sha256 <hash>)` after that sentence, one line per package it loaded. A book that imports none, and `mix muro.check` with no path, print only those two lines.
 
 `Muro.Check.check_sig/2` returns `:ok` on a well-typed book, or `{:error, msg}` with every definition error in book order. `check_sig(book, fuel: n)` sets the fuel for each definition. Definitions are checked concurrently; the fuel is the bound, not a wall-clock timeout.
 

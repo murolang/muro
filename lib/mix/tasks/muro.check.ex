@@ -18,8 +18,11 @@ defmodule Mix.Tasks.Muro.Check do
 
   The first line is the version that checked the book (`Muro v` and the
   version from the application spec). On success the next line is
-  `All terms check. Evidence never becomes a run.` A refusal prints the
-  errors after that version line.
+  `All terms check. Evidence never becomes a run.` When the book imports
+  packages, one `conforms to <name> <version> (sha256 <hash>)` line
+  follows for each package it loaded. A book that imports no package,
+  and the built-in check with no path, print only those two lines.
+  A refusal prints the errors after the version line.
   """
 
   @switches [fuel: :integer]
@@ -43,13 +46,20 @@ defmodule Mix.Tasks.Muro.Check do
     result =
       case paths do
         [] -> Muro.Check.check_sig(Muro.Example.book(), fuel: fuel)
-        [path] -> Muro.check_file(path, fuel: fuel)
+        [path] -> Muro.conforms(path, fuel: fuel)
         _ -> Mix.raise("expected at most one path")
       end
 
     case result do
-      :ok -> Mix.shell().info("All terms check. Evidence never becomes a run.")
-      {:error, e} -> Mix.raise(e)
+      :ok ->
+        Mix.shell().info("All terms check. Evidence never becomes a run.")
+
+      {:ok, lines} ->
+        Mix.shell().info("All terms check. Evidence never becomes a run.")
+        Enum.each(lines, fn line -> Mix.shell().info(line) end)
+
+      {:error, e} ->
+        Mix.raise(e)
     end
   end
 end

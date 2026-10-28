@@ -17,7 +17,9 @@ defmodule Muro.ArchiveTest do
   test "mix muro lists the tasks on one line" do
     version = Mix.Tasks.Muro.version()
     out = capture_io(fn -> Mix.Tasks.Muro.run([]) end)
-    assert out == "Muro v#{version}\nmix muro.check  mix muro.emit  mix muro.gen  mix muro.init\n"
+
+    assert out ==
+             "Muro v#{version}\nmix muro.check  mix muro.emit  mix muro.gen  mix muro.init  mix muro.deps.get\n"
   end
 
   test "mix muro rejects unknown arguments" do
@@ -35,6 +37,23 @@ defmodule Muro.ArchiveTest do
     out = capture_io(fn -> assert Mix.Tasks.Muro.Check.run([path]) == :ok end)
 
     assert out =~ "Muro v#{version}\nAll terms check. Evidence never becomes a run.\n"
+  end
+
+  test "mix muro.check prints exactly two lines for a book without packages" do
+    version = Mix.Tasks.Muro.version()
+    dir = tmp_dir()
+    path = Path.join(dir, "z.muro")
+    File.write!(path, "def z : run Nat := 0\n")
+
+    out = capture_io(fn -> assert Mix.Tasks.Muro.Check.run([path]) == :ok end)
+
+    assert out == "Muro v#{version}\nAll terms check. Evidence never becomes a run.\n"
+  end
+
+  test "mix muro.check with no path prints exactly two lines" do
+    version = Mix.Tasks.Muro.version()
+    out = capture_io(fn -> assert Mix.Tasks.Muro.Check.run([]) == :ok end)
+    assert out == "Muro v#{version}\nAll terms check. Evidence never becomes a run.\n"
   end
 
   test "mix muro.check prints the version when the book is refused" do

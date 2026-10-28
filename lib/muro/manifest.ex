@@ -25,12 +25,21 @@ defmodule Muro.Manifest do
   is a missing book, a duplicate target, a module that is not an
   alias atom, an unknown option, an unknown kind, or `impl:` on an
   `:elixir` entry.
+
+  `muro_deps:` is optional. It is a keyword list of package names to
+  git or Hex specs. `mix muro.deps.get` fetches those packages.
+  `load/1` validates it with the other keys. `load_deps/1` validates
+  only that key, so a project that imports packages and does not
+  generate modules can omit `muro:` and `modules:`.
   """
 
-  defstruct [:version, :fuel, :modules, :source]
+  defstruct [:version, :fuel, :modules, :deps, :source]
 
-  @keys [:fuel, :modules, :muro]
+  @keys [:fuel, :modules, :muro, :muro_deps]
   @entry_opts [:kind, :impl]
+  @dep_name ~r/\A[a-z][a-z0-9_]*\z/
+  @hex_name ~r/\A[a-z][a-z0-9_-]*\z/
+  @git_opts [:ref, :root, :tag]
 
   @doc """
   Directory the tasks treat as the project root.
@@ -65,28 +74,76 @@ defmodule Muro.Manifest do
   problem found in the file.
   """
   def load(root) when is_binary(root) do
-    root = canonical(root)
-    exs = Path.join(root, "muro.exs")
-    has_exs = File.regular?(exs)
-
-    case mix_config(root) do
-      {:ok, _value} when has_exs ->
-        {:error, "muro.exs and the :muro key in mix.exs both define a manifest"}
-
-      {:ok, value} ->
-        with {:ok, manifest} <- validate(value, root) do
-          {:ok, %{manifest | source: :mix}}
-        end
-
-      :none when has_exs ->
-        with {:ok, term} <- eval_exs(exs),
-             {:ok, manifest} <- validate(term, root) do
-          {:ok, %{manifest | source: :muro_exs}}
-        end
+    case read_term(root) do
+      {:error, _} = err ->
+        err
 
       :none ->
         {:error, "no manifest: expected muro.exs or a :muro key in mix.exs"}
+
+      {:ok, term, source} ->
+        with {:ok, manifest} <- validate(term, root) do
+          {:ok, %{manifest | source: source}}
+        end
     end
+  end
+
+  @doc """
+  Load `muro_deps:` from the manifest at `root`.
+
+  Same location rules as `load/1`, including the error when `muro.exs`
+  and a `:muro` key both exist. Other keys are ignored. `{:ok, []}`
+  when there is no manifest or no `muro_deps:` key. The list is the
+  normalized dependency maps, sorted by name.
+  """
+  def load_deps(root) when is_binary(root) do
+    case read_term(root) do
+      :none ->
+        {:ok, []}
+
+      {:error, _} = err ->
+        err
+
+      {:ok, term, _source} ->
+        deps_only(term)
+    end
+  end
+
+  @doc """
+  Nearest ancestor of `path`, starting at its own directory, that
+  contains `muro.exs` or `mix.exs`. `nil` when none does.
+  """
+  def find_root(path) when is_binary(path) do
+    path = canonical(path)
+    start = if File.dir?(path), do: path, else: Path.dirname(path)
+    climb(start)
+  end
+
+  @doc """
+  `muro.exs` or `mix.exs` when that file is the manifest at `root`.
+  `nil` when neither file is present.
+  """
+  def manifest_name(root) when is_binary(root) do
+    root = canonical(root)
+
+    cond do
+      File.regular?(Path.join(root, "muro.exs")) -> "muro.exs"
+      File.regular?(Path.join(root, "mix.exs")) -> "mix.exs"
+      true -> nil
+    end
+  end
+
+  @doc false
+  def canonical(path) do
+    path
+    |> Path.expand()
+    |> Path.split()
+    |> resolve_links([], 32)
+    |> Enum.reverse()
+    |> then(fn
+      [] -> "/"
+      parts -> Path.join(parts)
+    end)
   end
 
   @doc """
@@ -101,9 +158,11 @@ defmodule Muro.Manifest do
       {version, errors} = take_version(term, errors)
       {fuel, errors} = take_fuel(term, errors)
       {modules, errors} = take_modules(term, root, errors)
+      {deps, errors} = take_deps(term, errors)
 
       if errors == [] do
-        {:ok, %__MODULE__{version: version, fuel: fuel, modules: modules, source: nil}}
+        {:ok,
+         %__MODULE__{version: version, fuel: fuel, modules: modules, deps: deps, source: nil}}
       else
         {:error, Enum.join(errors, "\n")}
       end
@@ -151,6 +210,63 @@ defmodule Muro.Manifest do
 
   @doc "Absolute path of a manifest target."
   def target_path(root, %{target: target}), do: Path.expand(target, root)
+
+  defp read_term(root) do
+    root = canonical(root)
+    exs = Path.join(root, "muro.exs")
+    has_exs = File.regular?(exs)
+
+    case mix_config(root) do
+      {:ok, _value} when has_exs ->
+        {:error, "muro.exs and the :muro key in mix.exs both define a manifest"}
+
+      {:ok, value} ->
+        {:ok, value, :mix}
+
+      :none when has_exs ->
+        case eval_exs(exs) do
+          {:ok, term} -> {:ok, term, :muro_exs}
+          {:error, _} = err -> err
+        end
+
+      :none ->
+        :none
+    end
+  end
+
+  defp deps_only(term) do
+    if Keyword.keyword?(term) do
+      case Keyword.fetch(term, :muro_deps) do
+        :error ->
+          {:ok, []}
+
+        {:ok, deps} ->
+          {deps, errors} = validate_deps(deps, [])
+
+          if errors == [] do
+            {:ok, deps}
+          else
+            {:error, Enum.join(errors, "\n")}
+          end
+      end
+    else
+      {:error, "manifest must be a keyword list, got: #{inspect(term)}"}
+    end
+  end
+
+  defp climb(dir) do
+    cond do
+      File.regular?(Path.join(dir, "muro.exs")) ->
+        dir
+
+      File.regular?(Path.join(dir, "mix.exs")) ->
+        dir
+
+      true ->
+        parent = Path.dirname(dir)
+        if parent == dir, do: nil, else: climb(parent)
+    end
+  end
 
   defp eval_exs(path) do
     try do
@@ -207,6 +323,258 @@ defmodule Muro.Manifest do
   end
 
   defp version_string?(_version), do: false
+
+  defp take_deps(term, errors) do
+    case Keyword.fetch(term, :muro_deps) do
+      :error -> {[], errors}
+      {:ok, deps} -> validate_deps(deps, errors)
+    end
+  end
+
+  defp validate_deps(deps, errors) when is_list(deps) do
+    if Keyword.keyword?(deps) do
+      errors = errors ++ duplicate_dep_errors(deps)
+
+      {entries, errors} =
+        Enum.reduce(deps, {[], errors}, fn {name, spec}, {entries, errors} ->
+          case validate_dep(name, spec) do
+            {:ok, dep} -> {entries ++ [dep], errors}
+            {:error, msg} -> {entries, errors ++ [msg]}
+          end
+        end)
+
+      {Enum.sort_by(entries, & &1.name), errors}
+    else
+      {[], errors ++ ["muro_deps must be a keyword list, got: #{inspect(deps)}"]}
+    end
+  end
+
+  defp validate_deps(deps, errors) do
+    {[], errors ++ ["muro_deps must be a keyword list, got: #{inspect(deps)}"]}
+  end
+
+  defp duplicate_dep_errors(deps) do
+    deps
+    |> Keyword.keys()
+    |> Enum.frequencies()
+    |> Enum.filter(fn {_name, count} -> count > 1 end)
+    |> Enum.map(fn {name, _count} -> name end)
+    |> Enum.sort()
+    |> Enum.map(fn name -> "muro_deps entry #{dep_label(name)}: duplicate name" end)
+  end
+
+  defp validate_dep(name, spec) do
+    with :ok <- validate_dep_name(name),
+         {:ok, dep} <- validate_spec(name, spec) do
+      {:ok, Map.put(dep, :name, Atom.to_string(name))}
+    end
+  end
+
+  defp validate_dep_name(name) when is_atom(name) do
+    text = Atom.to_string(name)
+
+    if Regex.match?(@dep_name, text) do
+      :ok
+    else
+      {:error, "muro_deps entry #{text}: name must match [a-z][a-z0-9_]*"}
+    end
+  end
+
+  defp validate_dep_name(name) do
+    {:error, "muro_deps entry #{inspect(name)}: name must be an atom matching [a-z][a-z0-9_]*"}
+  end
+
+  defp validate_spec(name, {:git, url, opts}) do
+    label = dep_label(name)
+
+    with :ok <- validate_url(label, url),
+         {:ok, pin, root} <- validate_git_opts(label, opts) do
+      {:ok, git_dep(url, pin, root)}
+    end
+  end
+
+  defp validate_spec(name, {:hex, package, requirement}) do
+    label = dep_label(name)
+
+    with :ok <- validate_hex_package(label, package),
+         :ok <- validate_requirement(label, requirement) do
+      {:ok,
+       %{
+         kind: :hex,
+         package: package,
+         requirement: requirement,
+         root: "priv/muro",
+         source: {:hex, package, requirement}
+       }}
+    end
+  end
+
+  defp validate_spec(name, other) do
+    {:error, "muro_deps entry #{dep_label(name)}: unknown source #{inspect(other)}"}
+  end
+
+  defp git_dep(url, {:tag, tag}, root) do
+    %{
+      kind: :git,
+      url: url,
+      pin: {:tag, tag},
+      root: root,
+      source: {:git, url, git_source_opts(tag: tag, root: root)}
+    }
+  end
+
+  defp git_dep(url, {:ref, ref}, root) do
+    %{
+      kind: :git,
+      url: url,
+      pin: {:ref, ref},
+      root: root,
+      source: {:git, url, git_source_opts(ref: ref, root: root)}
+    }
+  end
+
+  defp git_source_opts(tag: tag, root: "."), do: [tag: tag]
+  defp git_source_opts(tag: tag, root: root), do: [tag: tag, root: root]
+  defp git_source_opts(ref: ref, root: "."), do: [ref: ref]
+  defp git_source_opts(ref: ref, root: root), do: [ref: ref, root: root]
+
+  defp validate_git_opts(label, opts) when is_list(opts) do
+    if Keyword.keyword?(opts) do
+      unknown =
+        opts |> Keyword.keys() |> Enum.uniq() |> Enum.reject(&(&1 in @git_opts)) |> Enum.sort()
+
+      repeated =
+        opts
+        |> Keyword.keys()
+        |> Enum.frequencies()
+        |> Enum.filter(fn {_key, count} -> count > 1 end)
+        |> Enum.map(fn {key, _count} -> key end)
+        |> Enum.sort()
+
+      cond do
+        unknown != [] ->
+          {:error, "muro_deps entry #{label}: unknown option #{inspect(unknown)}"}
+
+        repeated != [] ->
+          {:error,
+           "muro_deps entry #{label}: repeats #{Enum.map_join(repeated, ", ", &inspect/1)}"}
+
+        Keyword.has_key?(opts, :tag) and Keyword.has_key?(opts, :ref) ->
+          {:error, "muro_deps entry #{label}: tag and ref are both set"}
+
+        Keyword.has_key?(opts, :tag) ->
+          with :ok <- validate_token(label, "tag", opts[:tag]),
+               {:ok, root} <- take_root(label, opts) do
+            {:ok, {:tag, opts[:tag]}, root}
+          end
+
+        Keyword.has_key?(opts, :ref) ->
+          with :ok <- validate_token(label, "ref", opts[:ref]),
+               {:ok, root} <- take_root(label, opts) do
+            {:ok, {:ref, opts[:ref]}, root}
+          end
+
+        true ->
+          {:error, "muro_deps entry #{label}: expected one of tag: or ref:"}
+      end
+    else
+      {:error, "muro_deps entry #{label}: options must be a keyword list, got: #{inspect(opts)}"}
+    end
+  end
+
+  defp validate_git_opts(label, opts) do
+    {:error, "muro_deps entry #{label}: options must be a keyword list, got: #{inspect(opts)}"}
+  end
+
+  defp validate_url(label, url) do
+    cond do
+      not is_binary(url) ->
+        {:error, "muro_deps entry #{label}: url must be a string, got: #{inspect(url)}"}
+
+      url == "" or String.contains?(url, "\n") or String.contains?(url, "\r") ->
+        {:error, "muro_deps entry #{label}: url must be a non-empty string without newlines"}
+
+      String.starts_with?(url, "-") ->
+        {:error, "muro_deps entry #{label}: url must not start with -"}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_token(label, field, value) do
+    if plain_token?(value) do
+      :ok
+    else
+      {:error,
+       "muro_deps entry #{label}: #{field} must be a non-empty string that does not start with -, got: #{inspect(value)}"}
+    end
+  end
+
+  defp take_root(label, opts) do
+    case Keyword.fetch(opts, :root) do
+      :error ->
+        {:ok, "."}
+
+      {:ok, root} ->
+        cond do
+          not plain_token?(root) ->
+            {:error,
+             "muro_deps entry #{label}: root must be a relative directory, got: #{inspect(root)}"}
+
+          Path.type(root) != :relative ->
+            {:error,
+             "muro_deps entry #{label}: root must be a relative directory, got: #{inspect(root)}"}
+
+          bad_root?(root) ->
+            {:error,
+             "muro_deps entry #{label}: root must not contain .. or an empty segment, got: #{inspect(root)}"}
+
+          true ->
+            {:ok, root}
+        end
+    end
+  end
+
+  defp plain_token?(value) when is_binary(value) do
+    value != "" and not String.contains?(value, "\n") and not String.contains?(value, "\r") and
+      not String.starts_with?(value, "-")
+  end
+
+  defp plain_token?(_value), do: false
+
+  defp bad_root?("."), do: false
+
+  defp bad_root?(root) do
+    String.contains?(root, "\\") or
+      Enum.any?(String.split(root, "/"), fn seg -> seg in ["", ".", ".."] end)
+  end
+
+  defp validate_hex_package(label, package) do
+    if is_binary(package) and Regex.match?(@hex_name, package) do
+      :ok
+    else
+      {:error,
+       "muro_deps entry #{label}: package name must match [a-z][a-z0-9_-]*, got: #{inspect(package)}"}
+    end
+  end
+
+  defp validate_requirement(label, requirement) do
+    cond do
+      not is_binary(requirement) or String.contains?(requirement, "\n") or
+          String.contains?(requirement, "\r") ->
+        {:error, "muro_deps entry #{label}: bad requirement #{inspect(requirement)}"}
+
+      true ->
+        case Version.parse_requirement(requirement) do
+          {:ok, _req} -> :ok
+          :error -> {:error, "muro_deps entry #{label}: bad requirement #{inspect(requirement)}"}
+        end
+    end
+  end
+
+  defp dep_label(name) when is_atom(name), do: Atom.to_string(name)
+  defp dep_label(name), do: inspect(name)
 
   defp take_fuel(term, errors) do
     case Keyword.fetch(term, :fuel) do
@@ -470,19 +838,7 @@ defmodule Muro.Manifest do
   # `/var` on macOS is a symlink to `/private/var`. Mix reports the
   # project file through the resolved path, and `System.tmp_dir/0`
   # does not. Compare and join through one form so both names are
-  # the same directory.
-  defp canonical(path) do
-    path
-    |> Path.expand()
-    |> Path.split()
-    |> resolve_links([], 32)
-    |> Enum.reverse()
-    |> then(fn
-      [] -> "/"
-      parts -> Path.join(parts)
-    end)
-  end
-
+  # the same directory. `canonical/1` is that form.
   defp resolve_links([], acc, _depth), do: acc
   defp resolve_links(parts, acc, 0), do: Enum.reverse(parts) ++ acc
 

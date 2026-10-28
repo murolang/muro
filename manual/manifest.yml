@@ -70,6 +70,10 @@ pages:
     slug: repr
     title: Host representations
     summary: A repr states the host shape of a data type. Emit writes strict decode and encode.
+  - file: packages.md
+    slug: packages
+    title: Packages
+    summary: Import a book from a git or Hex package at the version muro.lock records.
   - file: grammar.md
     slug: grammar
     title: Grammar

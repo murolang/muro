@@ -22,13 +22,19 @@ defmodule Mix.Tasks.Muro.Gen do
   printed per equation the suite cannot express. `--check` does not
   print those lines.
 
+  `muro_deps:` lists packages `import "pkg:..."` may load. `mix muro.gen`
+  does not fetch them. A book that imports a package carries one
+  `# Conforms to` header line per package, and the book hash includes
+  the package files under `muro_deps/`.
+
   `mix muro.gen` checks every listed book with that fuel before it
   writes. If any book fails, it prints each failure and writes
   nothing. Otherwise it formats each module with the project's
   `.formatter.exs` when that file exists, adds the header, and writes
   the target, creating directories. One line per target says `written`
-  or `unchanged`. An unchanged file is not rewritten. An ExUnit
-  target then lists each skipped equation.
+  or `unchanged`. A package-using target then prints each
+  `conforms to` line indented by two spaces. An ExUnit target then lists
+  each skipped equation. An unchanged file is not rewritten.
 
   `mix muro.gen --check` writes nothing. It exits non-zero and lists
   every problem: a book that does not check, a missing target, a stale

@@ -186,4 +186,4 @@ The host terms on both ends are maps, booleans, and integers. Nothing in the cal
 - Keeping the unknown keys of an `open` map.
 - Emitting a round-trip property test for a project's own reprs.
 
-Next: [Grammar](grammar.md).
+Next: [Packages](packages.md).
