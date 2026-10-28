@@ -32,7 +32,7 @@ The archive installs `mix muro.check`, `mix muro.emit`, `mix muro.gen`, `mix mur
 
 Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. `mix muro --version` prints the copy that ran. A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks.
 
-A clone is for changing the kernel. A `.muro` file is checked with `mix muro.check`. `mix muro.emit path.muro` prints the Elixir module.
+A clone is for changing the kernel. A `.muro` file is checked with `mix muro.check`. `mix muro.emit path.muro` prints the Elixir module. A `repr` declares the host shape of a data type, and that module then includes `decode_<type>/1` and `encode_<type>/1`. See [Host representations](manual/repr.md).
 
 ---
 
@@ -62,7 +62,7 @@ def plus : run Π (n : Nat) → Π (m : Nat) → Nat :=
 mix muro.check examples/your_file.muro
 ```
 
-A definition is in the book the moment `Parser.parse/1` returns it. The checker sees the whole book (forward references are allowed). Emit keeps only `run`.
+A definition is in the book the moment `Parser.parse/1` returns it. The checker sees the whole book (forward references are allowed). Emit keeps `run`. A `repr` becomes `decode_<type>/1` and `encode_<type>/1`. Spec and evidence are omitted.
 
 ---
 
@@ -75,6 +75,7 @@ A definition is in the book the moment `Parser.parse/1` returns it. The checker 
 | [Terms](manual/language.md) | Π, λ, match, quantities |
 | [Sessions](manual/sessions.md) | The protocol two processes follow |
 | [Grammar](manual/grammar.md) | What the parser implements |
+| [Host representations](manual/repr.md) | `repr`, strict decode and encode |
 | [Examples](manual/examples.md) | Every file in `examples/` |
 | [CSHRL](manual/cshrl.md) | A library on params, three environments, their agents |
 | [For agents](manual/for-agents.md) | Operational contract |

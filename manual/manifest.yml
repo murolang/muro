@@ -58,10 +58,18 @@ pages:
     slug: emit
     title: Emit
     summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A cross is one call on a named node. Spec and evidence are omitted from a run.
+  - file: exunit.md
+    slug: exunit
+    title: Closed equations as tests
+    summary: A book's closed equations become one ExUnit module. The tests call an implementation the host names. A skip is printed and recorded.
   - file: gen.md
     slug: gen
     title: Committed modules
     summary: A manifest names each book, module, and target. mix muro.gen writes the module. mix muro.gen --check fails when the file and the book disagree.
+  - file: repr.md
+    slug: repr
+    title: Host representations
+    summary: A repr states the host shape of a data type. Emit writes strict decode and encode.
   - file: packages.md
     slug: packages
     title: Packages

@@ -1,6 +1,6 @@
 # Muro
 
-> Muro is an explicit affine dependent type theory built for agents to write: the agent writes the program together with its types, motives and proofs, nothing is inferred, and `mix muro.check` accepts or rejects every definition. Definitions are tagged `spec`, `evidence` or `run`; a spec never becomes evidence and evidence never becomes a run. Proofs are erased, and only `run` terms are emitted. The default emitter is Elixir. `--backend c` writes C, `--backend rust` writes Rust, `--backend asm` writes Cortex-M assembly, and `--backend otp` writes a GenServer for a session. A closed `Nat` run is also a NIF. `--node` writes one call for a cross. Agda specifies the calculus and proves the checker sound on a fragment. Agda does not check the `.muro` file.
+> Muro is an explicit affine dependent type theory built for agents to write: the agent writes the program together with its types, motives and proofs, nothing is inferred, and `mix muro.check` accepts or rejects every definition. Definitions are tagged `spec`, `evidence` or `run`; a spec never becomes evidence and evidence never becomes a run. Proofs are erased, and only `run` terms are emitted. The default emitter is Elixir. `--backend c` writes C, `--backend rust` writes Rust, `--backend asm` writes Cortex-M assembly, and `--backend otp` writes a GenServer for a session. `--backend exunit` prints an ExUnit suite for the book's closed equations. A closed `Nat` run is also a NIF. `--node` writes one call for a cross. Agda specifies the calculus and proves the checker sound on a fragment. Agda does not check the `.muro` file.
 
 Nothing is inferred: there are no implicits, unification, metavariables or tactics, and every binder and motive is written out. A `?` always fails. Recursion in `run`, `evidence`, and `spec` must descend. Agents should read the For agents page first, and copy syntax from the files in `examples/` rather than writing it from memory. `out of fuel` is not acceptance; raise `--fuel` and check again.
 
@@ -21,7 +21,9 @@ Nothing is inferred: there are no implicits, unification, metavariables or tacti
 - [Either and Dec](https://muro-lang.dev/docs/either): Disjoint union and decisions. Not LEM.
 - [Machine numbers](https://muro-lang.dev/docs/machine): I64, F32, Tensor, and Nx. Nat stays Peano.
 - [Emit](https://muro-lang.dev/docs/emit): What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A cross is one call on a named node. Spec and evidence are omitted from a run.
+- [Closed equations as tests](https://muro-lang.dev/docs/exunit): A book's closed equations become one ExUnit module. The tests call an implementation the host names. A skip is printed and recorded.
 - [Committed modules](https://muro-lang.dev/docs/gen): A manifest names each book, module, and target. `mix muro.gen` writes the module. `mix muro.gen --check` fails when the file and the book disagree.
+- [Host representations](https://muro-lang.dev/docs/repr): A repr states the host shape of a data type. Emit writes strict decode and encode.
 - [Packages](https://muro-lang.dev/docs/packages): Import a book from a git or Hex package at the version `muro.lock` records. `mix muro.deps.get` fetches `muro_deps/` and writes the lock.
 - [Limits](https://muro-lang.dev/docs/limits): What the language does not do. Facts about the checker, not a roadmap.
 

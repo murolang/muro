@@ -51,6 +51,29 @@ defmodule Muro do
   end
 
   @doc """
+  Emit the closed equations of `path` as an ExUnit module named `module`.
+
+  `module` is the test module (`MyApp.RoundingTest`). The implementation
+  under test defaults to the name `mix muro.emit` would give the book,
+  unless `opts` sets `impl:`. `opts` also accepts `fuel:`, `root:`, and
+  `book:` (the path printed in test names; relative, `/` separators).
+
+  Returns `{:ok, %{source: source, skips: skips, tests: n}}`. `skips`
+  are the equations the suite lists and does not run. A book that does
+  not check returns `{:error, message}` and no module.
+
+  The bytes compare emitted shapes. Host data arrives with `repr` (#131),
+  in `Muro.Emit.emit_closed/2`.
+  """
+  def emit_exunit(path, module, opts \\ []) when is_atom(module) do
+    fuel = Keyword.get(opts, :fuel, Muro.Check.default_fuel())
+
+    with {:ok, book} <- Load.file(path, fuel: fuel, root: Keyword.get(opts, :root)) do
+      Emit.ExUnitSuite.render(path, module, book, Keyword.put(opts, :fuel, fuel))
+    end
+  end
+
+  @doc """
   Write `<name>.h` and `<name>.c` next to `path` for its run definitions.
   A `run` stream is a seed, an environment, and a step. Machine tensors
   are refused (`c:machine`).

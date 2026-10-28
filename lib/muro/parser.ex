@@ -222,6 +222,12 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      repr_start?(s) ->
+        case parse_repr(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
       seat_start?(s) ->
         case parse_seat(s) do
           {:ok, d, rest} -> parse_book(rest, [d | acc])
@@ -735,6 +741,237 @@ defmodule Muro.Parser do
   # The description is spec. `talk`, `over`, `say`, and `offer` are
   # keywords only in this form. A constructor `talk : Box` is not one.
   defp talk_start?(s), do: assign_entry?(s, "talk")
+
+  # `repr Name := …` is a host representation. `repr` is a keyword only
+  # in this form. A constructor `repr : Box` and `def repr` stay names.
+  defp repr_start?(s), do: assign_entry?(s, "repr")
+
+  defp parse_repr(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "repr"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, body, rest} <- parse_repr_body(skip(rest)) do
+      {:ok, %{kind: :repr, name: name, mode: :spec, body: body, loc: loc}, rest}
+    end
+  end
+
+  # A variant is `ctor => shape`. `nil => …` names the constructor `nil`.
+  # Anywhere else `nil` is the host nil.
+  defp parse_repr_body(s) do
+    if repr_variant_start?(s) do
+      parse_repr_choice(s, [])
+    else
+      parse_repr_shape(s)
+    end
+  end
+
+  defp repr_variant_start?(s) do
+    case ident(skip(s)) do
+      {:ok, _, rest} -> has_prefix?(skip(rest), "=>")
+      _ -> false
+    end
+  end
+
+  defp parse_repr_choice(s, acc) do
+    with {:ok, name, rest} <- ident(skip(s)),
+         {:ok, rest} <- tok(skip(rest), "=>"),
+         {:ok, shape, rest} <- parse_repr_shape(skip(rest)) do
+      acc = [{name, shape} | acc]
+      looked = skip(rest)
+
+      if has_prefix?(looked, "|") and not repr_boundary?(looked) do
+        with {:ok, rest} <- tok(looked, "|") do
+          parse_repr_choice(skip(rest), acc)
+        end
+      else
+        {:ok, {:choice, Enum.reverse(acc)}, rest}
+      end
+    end
+  end
+
+  defp parse_repr_shape(s) do
+    s = skip(s)
+
+    cond do
+      s == "" or repr_boundary?(s) ->
+        {:error, err(s, "expected a shape")}
+
+      word_kw?(s, "boolean") ->
+        {:ok, {:boolean}, after_kw(s, "boolean")}
+
+      word_kw?(s, "integer") ->
+        {:ok, {:integer}, after_kw(s, "integer")}
+
+      word_kw?(s, "nil") ->
+        {:ok, {nil}, after_kw(s, "nil")}
+
+      word_kw?(s, "list") ->
+        parse_repr_wrapped(s, "list", :list)
+
+      word_kw?(s, "optional") ->
+        parse_repr_wrapped(s, "optional", :optional)
+
+      word_kw?(s, "nullable") ->
+        parse_repr_wrapped(s, "nullable", :nullable)
+
+      word_kw?(s, "tuple") ->
+        parse_repr_tuple(s)
+
+      word_kw?(s, "map") ->
+        parse_repr_map(s)
+
+      atom_lit?(s) ->
+        with {:ok, {:atom, name}, rest} <- parse_atom_lit(s), do: {:ok, {:atom, name}, rest}
+
+      has_prefix?(s, "\"") ->
+        with {:ok, text, rest} <- parse_string(s), do: {:ok, {:string, text}, rest}
+
+      true ->
+        with {:ok, name, rest} <- ident(s), do: {:ok, {:ref, name}, rest}
+    end
+  end
+
+  defp parse_repr_wrapped(s, word, tag) do
+    rest = s |> after_kw(word) |> skip()
+
+    if repr_shape_start?(rest) do
+      with {:ok, shape, rest} <- parse_repr_shape(rest), do: {:ok, {tag, shape}, rest}
+    else
+      {:error, err(rest, "#{word} needs a shape")}
+    end
+  end
+
+  defp parse_repr_tuple(s) do
+    rest = s |> after_kw("tuple") |> skip()
+
+    if has_prefix?(rest, "{") do
+      with {:ok, rest} <- tok(rest, "{"),
+           {:ok, shapes, rest} <- parse_repr_shapes(skip(rest)),
+           {:ok, rest} <- tok(skip(rest), "}") do
+        {:ok, {:tuple, shapes}, rest}
+      end
+    else
+      {:error, err(rest, "tuple needs {")}
+    end
+  end
+
+  defp parse_repr_shapes(s) do
+    s = skip(s)
+
+    if has_prefix?(s, "}") do
+      {:ok, [], s}
+    else
+      with {:ok, shape, rest} <- parse_repr_shape(s) do
+        parse_repr_shape_tail(rest, [shape])
+      end
+    end
+  end
+
+  defp parse_repr_shape_tail(s, acc) do
+    s = skip(s)
+
+    if has_prefix?(s, ",") do
+      with {:ok, rest} <- tok(s, ","),
+           {:ok, shape, rest} <- parse_repr_shape(skip(rest)) do
+        parse_repr_shape_tail(rest, [shape | acc])
+      end
+    else
+      {:ok, Enum.reverse(acc), s}
+    end
+  end
+
+  defp parse_repr_map(s) do
+    rest = s |> after_kw("map") |> skip()
+
+    {open?, rest} =
+      if word_kw?(rest, "open") do
+        {true, rest |> after_kw("open") |> skip()}
+      else
+        {false, rest}
+      end
+
+    if has_prefix?(rest, "{") do
+      with {:ok, rest} <- tok(rest, "{"),
+           {:ok, entries, rest} <- parse_repr_entries(skip(rest)),
+           {:ok, rest} <- tok(skip(rest), "}") do
+        {:ok, {:map, open?, entries}, rest}
+      end
+    else
+      {:error, err(rest, "map needs {")}
+    end
+  end
+
+  defp parse_repr_entries(s) do
+    s = skip(s)
+
+    if has_prefix?(s, "}") do
+      {:ok, [], s}
+    else
+      with {:ok, key, rest} <- parse_repr_key(s),
+           {:ok, rest} <- tok(skip(rest), "=>"),
+           {:ok, shape, rest} <- parse_repr_shape(skip(rest)) do
+        parse_repr_entry_tail(rest, [{key, shape}])
+      end
+    end
+  end
+
+  defp parse_repr_entry_tail(s, acc) do
+    s = skip(s)
+
+    if has_prefix?(s, ",") do
+      with {:ok, rest} <- tok(s, ","),
+           {:ok, key, rest} <- parse_repr_key(skip(rest)),
+           {:ok, rest} <- tok(skip(rest), "=>"),
+           {:ok, shape, rest} <- parse_repr_shape(skip(rest)) do
+        parse_repr_entry_tail(rest, [{key, shape} | acc])
+      end
+    else
+      {:ok, Enum.reverse(acc), s}
+    end
+  end
+
+  defp parse_repr_key(s) do
+    s = skip(s)
+
+    cond do
+      atom_lit?(s) ->
+        <<":", rest::binary>> = s
+        {name, rest} = take_ident(rest, "")
+        {:ok, String.to_atom(name), rest}
+
+      has_prefix?(s, "\"") ->
+        parse_string(s)
+
+      true ->
+        {:error, err(s, "expected a string or atom key")}
+    end
+  end
+
+  defp repr_shape_start?(s) do
+    s = skip(s)
+
+    cond do
+      s == "" or repr_boundary?(s) -> false
+      word_kw?(s, "boolean") or word_kw?(s, "integer") or word_kw?(s, "nil") -> true
+      word_kw?(s, "list") or word_kw?(s, "optional") or word_kw?(s, "nullable") -> true
+      word_kw?(s, "tuple") or word_kw?(s, "map") -> true
+      atom_lit?(s) or has_prefix?(s, "\"") -> true
+      true -> match?(<<c, _::binary>> when c in ?a..?z or c in ?A..?Z or c == ?_, s)
+    end
+  end
+
+  # The next book entry ends a repr body. Shape words stay available as shapes.
+  defp repr_boundary?(s) do
+    s = skip(s)
+
+    word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
+      word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
+      nu_start?(s) or place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
+      endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or talk_start?(s) or
+      seat_start?(s) or link_start?(s) or repr_start?(s)
+  end
 
   defp parse_talk(s) do
     loc = here(s)
@@ -2262,7 +2499,7 @@ defmodule Muro.Parser do
         word_kw?(s, "session") or word_kw?(s, "conform") or nu_start?(s) or
         place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
         endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or talk_start?(s) or
-        seat_start?(s) or link_start?(s) ->
+        seat_start?(s) or link_start?(s) or repr_start?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
@@ -2456,7 +2693,7 @@ defmodule Muro.Parser do
       word_kw?(s, "where") or word_kw?(s, "motive") or word_kw?(s, "in") or
       nu_start?(s) or place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
       endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or talk_start?(s) or
-      seat_start?(s) or link_start?(s)
+      seat_start?(s) or link_start?(s) or repr_start?(s)
   end
 
   defp eatom_start?(s) do
@@ -2630,7 +2867,7 @@ defmodule Muro.Parser do
 
   # `session` and `conform` use `:=`, so ctor_decl_start? does not see
   # them. A new line that starts either form, or a place, scheme, move,
-  # endpoint, reading, meeting, talk, seat, or link entry, ends the
+  # endpoint, reading, meeting, talk, repr, seat, or link entry, ends the
   # constructor's type.
   defp session_line?(s, s0) do
     skipped = binary_part(s, 0, byte_size(s) - byte_size(s0))
@@ -2638,7 +2875,7 @@ defmodule Muro.Parser do
     String.contains?(skipped, "\n") and
       (session_start?(s0) or conform_start?(s0) or place_entry?(s0) or scheme_entry?(s0) or
          move_entry?(s0) or endpoint_entry?(s0) or read_entry?(s0) or meet_entry?(s0) or
-         talk_start?(s0) or seat_start?(s0) or link_start?(s0))
+         talk_start?(s0) or repr_start?(s0) or seat_start?(s0) or link_start?(s0))
   end
 
   defp starts_atom?(s) do

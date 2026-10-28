@@ -13,13 +13,18 @@ defmodule Muro.Manifest do
       when it equals the running version.
     * `fuel:` — optional positive integer. The default is
       `Muro.Check.default_fuel/0`, the fuel `mix muro.check` uses.
-    * `modules:` — required list of `{book_path, module, target_path}`.
-      Paths are relative to the project root. The module is an alias
-      atom (`MyApp.Billing.Rounding`).
+    * `modules:` — required list of `{book_path, module, target_path}`
+      or `{book_path, module, target_path, opts}`. Paths are relative
+      to the project root. The module is an alias atom
+      (`MyApp.Billing.Rounding`). A 3-tuple is an Elixir module.
+      `opts` is a keyword list: `kind: :elixir` (the default) or
+      `kind: :exunit`, and for `:exunit` an optional `impl:` alias,
+      the implementation the suite tests by default.
 
   A book or a target that leaves the project root is refused, and so
-  is a missing book, a duplicate target, or a module that is not an
-  alias atom.
+  is a missing book, a duplicate target, a module that is not an
+  alias atom, an unknown option, an unknown kind, or `impl:` on an
+  `:elixir` entry.
 
   `muro_deps:` is optional. It is a keyword list of package names to
   git or Hex specs. `mix muro.deps.get` fetches those packages.
@@ -31,6 +36,7 @@ defmodule Muro.Manifest do
   defstruct [:version, :fuel, :modules, :deps, :source]
 
   @keys [:fuel, :modules, :muro, :muro_deps]
+  @entry_opts [:kind, :impl]
   @dep_name ~r/\A[a-z][a-z0-9_]*\z/
   @hex_name ~r/\A[a-z][a-z0-9_-]*\z/
   @git_opts [:ref, :root, :tag]
@@ -610,22 +616,117 @@ defmodule Muro.Manifest do
   end
 
   defp validate_entry({book, module, target}, index, root, seen) do
+    finish_entry(book, module, target, [], index, root, seen)
+  end
+
+  defp validate_entry({book, module, target, opts}, index, root, seen) do
+    if Keyword.keyword?(opts) do
+      finish_entry(book, module, target, opts, index, root, seen)
+    else
+      bad_entry({book, module, target, opts}, index, seen)
+    end
+  end
+
+  defp validate_entry(other, index, _root, seen) do
+    bad_entry(other, index, seen)
+  end
+
+  defp bad_entry(other, index, seen) do
+    {nil, ["modules entry #{index} is not {book, module, target}: #{inspect(other)}"], seen}
+  end
+
+  defp finish_entry(book, module, target, opts, index, root, seen) do
     {book_rel, book_errors} = validate_book(book, index, root)
     {target_rel, target_errors, seen} = validate_target(target, index, root, seen)
     module_errors = validate_module(module, index)
+    opt_errors = option_errors(opts, index)
+    {kind, kind_errors} = take_kind(opts, index)
+    {impl, impl_errors} = take_impl(opts, kind, kind_errors == [], index)
 
-    errors = book_errors ++ module_errors ++ target_errors
+    errors =
+      book_errors ++ module_errors ++ target_errors ++ opt_errors ++ kind_errors ++ impl_errors
 
     entry =
-      if book_rel && target_rel && module_errors == [] do
-        %{book: book_rel, module: module, target: target_rel}
+      if book_rel && target_rel && errors == [] do
+        %{book: book_rel, module: module, target: target_rel, kind: kind, impl: impl}
       end
 
     {entry, errors, seen}
   end
 
-  defp validate_entry(other, index, _root, seen) do
-    {nil, ["modules entry #{index} is not {book, module, target}: #{inspect(other)}"], seen}
+  defp option_errors(opts, index) do
+    unknown =
+      opts
+      |> Keyword.keys()
+      |> Enum.uniq()
+      |> Enum.reject(&(&1 in @entry_opts))
+      |> Enum.sort()
+
+    repeated =
+      opts
+      |> Keyword.keys()
+      |> Enum.frequencies()
+      |> Enum.filter(fn {_key, count} -> count > 1 end)
+      |> Enum.map(fn {key, _count} -> key end)
+      |> Enum.sort()
+
+    unknown_opts(unknown, index) ++ repeated_opts(repeated, index)
+  end
+
+  defp unknown_opts([], _index), do: []
+
+  defp unknown_opts(keys, index) do
+    ["modules entry #{index}: unknown options #{inspect(keys)}"]
+  end
+
+  defp repeated_opts([], _index), do: []
+
+  defp repeated_opts(keys, index) do
+    ["modules entry #{index}: repeated options #{inspect(keys)}"]
+  end
+
+  defp take_kind(opts, index) do
+    case Keyword.fetch(opts, :kind) do
+      :error ->
+        {:elixir, []}
+
+      {:ok, kind} when kind in [:elixir, :exunit] ->
+        {kind, []}
+
+      {:ok, kind} ->
+        {:elixir, ["modules entry #{index}: unknown kind #{inspect(kind)}"]}
+    end
+  end
+
+  defp take_impl(opts, kind, kind_ok?, index) do
+    case Keyword.fetch(opts, :impl) do
+      :error ->
+        {nil, []}
+
+      {:ok, impl} ->
+        errors =
+          []
+          |> impl_kind_error(kind, kind_ok?, index)
+          |> impl_alias_error(impl, index)
+
+        if errors == [], do: {impl, []}, else: {nil, errors}
+    end
+  end
+
+  defp impl_kind_error(errors, :exunit, true, _index), do: errors
+
+  defp impl_kind_error(errors, _kind, true, index) do
+    errors ++ ["modules entry #{index}: impl: is only valid for kind: :exunit"]
+  end
+
+  defp impl_kind_error(errors, _kind, false, _index), do: errors
+
+  defp impl_alias_error(errors, impl, index) do
+    if alias_atom?(impl) do
+      errors
+    else
+      errors ++ ["modules entry #{index}: impl is not an alias atom, got: #{inspect(impl)}"]
+    end
   end
 
   defp validate_book(book, index, root) do

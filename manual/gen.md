@@ -1,7 +1,7 @@
 ---
 title: Committed modules
 slug: gen
-order: 14
+order: 15
 summary: A manifest names each book, module, and target. mix muro.gen writes the module. mix muro.gen --check fails when the file and the book disagree.
 ---
 
@@ -10,6 +10,8 @@ summary: A manifest names each book, module, and target. mix muro.gen writes the
 In brief: a project commits the Elixir a book emits. `muro.exs` names the module and the path. `mix muro.gen` checks every book, formats the module, and writes it. `mix muro.gen --check` writes nothing and fails when the committed file and the book disagree. The running Muro version must equal `muro:`.
 
 `mix muro.emit` prints a module. It does not choose a path under `lib/`, format with the project's `.formatter.exs`, or record which book the file came from. This page is that step.
+
+A `repr` is part of the committed module. `decode_<type>/1` and `encode_<type>/1` sit next to the run functions. Change the repr and `mix muro.gen --check` fails, because the book hash changed. See [Host representations](repr.md).
 
 ## Manifest
 
@@ -20,12 +22,14 @@ In brief: a project commits the Elixir a book emits. `muro.exs` names the module
   muro: "0.16.78",
   fuel: 2000,
   modules: [
-    {"priv/muro/rounding.muro", MyApp.Billing.Rounding, "lib/my_app/billing/rounding.ex"}
+    {"priv/muro/rounding.muro", MyApp.Billing.Rounding, "lib/my_app/billing/rounding.ex"},
+    {"priv/muro/rounding.muro", MyApp.Billing.RoundingTest, "test/rounding_test.exs",
+     [kind: :exunit, impl: MyApp.Billing.Rounding]}
   ]
 ]
 ```
 
-`muro:` is required. It is the version string the books are checked with. `fuel:` is optional. The default is the fuel `mix muro.check` uses (`Muro.Check.default_fuel/0`, 2000). `modules:` is required. It may be empty. Each entry is `{book_path, module, target_path}`.
+`muro:` is required. It is the version string the books are checked with. `fuel:` is optional. The default is the fuel `mix muro.check` uses (`Muro.Check.default_fuel/0`, 2000). `modules:` is required. It may be empty. Each entry is `{book_path, module, target_path}` or `{book_path, module, target_path, opts}`. A 3-tuple emits Elixir. `opts` is a keyword list: `kind: :elixir` (the default) or `kind: :exunit`, and for `:exunit` an optional `impl:` alias, the implementation the suite calls by default. Unknown options, an unknown kind, `impl:` on an Elixir entry, and an `impl` that is not an alias are errors, and the message names the entry index. The page for the suite is [Closed equations as tests](exunit.md).
 
 `muro_deps:` is optional. It names the git and Hex packages `import "pkg:..."` loads. `mix muro.deps.get` fetches them into `muro_deps/` and writes `muro.lock`. A project that only checks books can list `muro_deps:` without `muro:` or `modules:`; this task still requires those two. See [Packages](packages.md).
 
@@ -48,9 +52,17 @@ written lib/my_app/billing/rounding.ex
 unchanged lib/my_app/billing/rounding.ex
 ```
 
-A book that loaded packages prints each `conforms to` line under that target, indented by two spaces. An unchanged target is not rewritten. Its modification time stays.
+A book that loaded packages prints each `conforms to` line under that target, indented by two spaces. An ExUnit target prints one more line per skipped equation, after its `written` or `unchanged` line and after any `conforms to` lines:
 
-The module name is the manifest's alias. `Muro.emit_file/3` takes that atom as its second argument. The name is not the file stem.
+```
+skipped test/rounding_test.exs: step-ok (priv/muro/rounding.muro:8): step is run internal and is not exported
+```
+
+`--check` does not print those lines. The same lines are comments in the generated file, inside the body, so the body hash covers them. A book change that only alters the skipped set changes the book hash, and the stale message below reports it.
+
+An unchanged target is not rewritten. Its modification time stays.
+
+The module name is the manifest's alias. `Muro.emit_file/3` takes that atom as its second argument. An ExUnit entry passes the same atom to `Muro.emit_exunit/3` as the test module. The suite's default implementation is the book's file stem unless `impl:` names another. The alias itself is the name in the entry, whatever the file stem is.
 
 Formatting uses the project's `.formatter.exs` when that file exists (`Mix.Tasks.Format.formatter_for_file/2` with `root:` set to the project). Otherwise it uses `Code.format_string!/2`. The header is comments, so the formatter leaves it on its own lines. The file ends with one newline. There is no timestamp and no absolute path. Paths in the header use `/`.
 
@@ -167,4 +179,4 @@ It does not write that file.
 
 The three tasks run from the archive, with no Mix project, and inside a project that depends on muro. When a project depends on muro and the archive is also installed, Mix uses the project's copy.
 
-Next: [Packages](packages.md).
+Next: [Host representations](repr.md).

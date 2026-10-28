@@ -1,0 +1,71 @@
+-- repr.muro: host representations for input and output types
+data Bool : Type where
+  true  : Bool
+  false : Bool
+
+data Maybe (A : Type) : Type where
+  nothing : Maybe A
+  just    : A → Maybe A
+
+data Entry : Type where
+  entry : Nat → Maybe Bool → Entry
+
+data Shape : Type where
+  circle : Nat → Shape
+  square : Nat → Shape
+  empty  : Shape
+
+data Outcome : Type where
+  on     : Nat → Outcome
+  off    : Nat → Outcome
+  absent : Outcome
+
+repr Bool := boolean
+
+repr Entry := map { "id" => integer, "enabled" => optional Bool }
+
+repr Shape := circle => map { "kind" => "circle", "r" => integer }
+            | square => map { "kind" => "square", "side" => integer }
+            | empty  => nil
+
+repr Outcome := on => map { "status" => "on", "id" => integer }
+              | off => map { "status" => "off", "id" => integer }
+              | absent => nil
+
+def toggle : run Entry → Entry :=
+  λ (e : Entry) →
+    match e motive (λ _ → Entry)
+      | entry n b => entry n (flip b)
+
+def flip : run Maybe Bool → Maybe Bool :=
+  λ (m : Maybe Bool) →
+    match m motive (λ _ → Maybe Bool)
+      | nothing => nothing
+      | just bit =>
+          match bit motive (λ _ → Maybe Bool)
+            | true => just false
+            | false => just true
+
+def describe : run Entry → Outcome :=
+  λ (e : Entry) →
+    match e motive (λ _ → Outcome)
+      | entry n b =>
+          match b motive (λ _ → Outcome)
+            | nothing => absent
+            | just bit =>
+                match bit motive (λ _ → Outcome)
+                  | true => on n
+                  | false => off n
+
+def widen : run Shape → Shape :=
+  λ (s : Shape) →
+    match s motive (λ _ → Shape)
+      | circle r => circle (suc r)
+      | square n => square (suc n)
+      | empty => empty
+
+def toggle-on : evidence {toggle (entry (suc (suc (suc 0))) (just true)) ≡ entry (suc (suc (suc 0))) (just false) : Entry} :=
+  refl
+
+def describe-none : evidence {describe (entry 0 nothing) ≡ absent : Outcome} :=
+  refl

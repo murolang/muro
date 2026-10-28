@@ -441,6 +441,214 @@ EOF
       exit 1
     fi
   fi
+
+  rm -rf book.muro muro_deps muro.lock lib/host/shared_use.ex
+
+  cp "$root/examples/repr.muro" repr.muro
+
+  # Closed equations. Round is the file stem, so the suite's default
+  # implementation is the emitted module. RoundTest is the .exs mix test
+  # loads. RoundSuite is the .ex the compiler checks @behaviour against.
+  cat > round.muro <<'EOF'
+def round : run Π (n : Nat) → Nat :=
+  λ (n : Nat) → n
+
+def round-ok : evidence {round (suc 0) ≡ suc 0 : Nat} :=
+  refl
+
+def step : run internal Π (n : Nat) → Nat :=
+  λ (n : Nat) → suc n
+
+def step-ok : evidence {step 0 ≡ suc 0 : Nat} :=
+  refl
+EOF
+
+  cat > muro.exs <<EOF
+[
+  muro: "${version}",
+  modules: [
+    {"half_ok.muro", Host.HalfOk, "lib/host/half_ok.ex"},
+    {"repr.muro", Host.Repr, "lib/host/repr.ex"},
+    {"round.muro", Round, "lib/round.ex"},
+    {"round.muro", RoundTest, "test/round_test.exs", [kind: :exunit]},
+    {"round.muro", RoundSuite, "test/support/round_suite.ex", [kind: :exunit]}
+  ]
+]
+EOF
+
+  mix_patched="$tmp/host-mix.exs"
+  if ! awk '
+    {
+      lines[NR] = $0
+    }
+    /deps: deps\(\)/ && !done {
+      lines[NR] = "        elixirc_paths: elixirc_paths(Mix.env()),\n        deps: deps()"
+      done = 1
+    }
+    $0 == "end" { last = NR }
+    END {
+      if (!done || last == 0) exit 2
+      for (i = 1; i <= NR; i++) {
+        if (i == last) {
+          print "  defp elixirc_paths(:test), do: [\"lib\", \"test/support\"]"
+          print "  defp elixirc_paths(_), do: [\"lib\"]"
+          print ""
+        }
+        print lines[i]
+      }
+    }
+  ' mix.exs >"$mix_patched"; then
+    echo "could not patch elixirc_paths in mix.exs" >&2
+    exit 1
+  fi
+  mv "$mix_patched" mix.exs
+
+  mkdir -p test/support
+  cat > test/support/good_round.ex <<'EOF'
+defmodule GoodRound do
+  @behaviour RoundSuite.Behaviour
+  def round(n), do: n
+end
+EOF
+  cat > test/support/bad_round.ex <<'EOF'
+defmodule IncompleteRound do
+  @behaviour RoundSuite.Behaviour
+end
+EOF
+  cat > test/support/wrong_round.ex <<'EOF'
+defmodule BadRound do
+  def round(_), do: 0
+end
+EOF
+
+  set +e
+  host_exunit_gen=$(mix muro.gen 2>&1)
+  host_exunit_gen_status=$?
+  set -e
+  printf '%s\n' "$host_exunit_gen"
+  if [ "$host_exunit_gen_status" -ne 0 ]; then
+    echo "host mix muro.gen for the suite failed" >&2
+    exit 1
+  fi
+  have "$host_exunit_gen" "written lib/round.ex" "host exunit gen"
+  have "$host_exunit_gen" "written lib/host/repr.ex" "host exunit gen"
+  have "$host_exunit_gen" "written test/round_test.exs" "host exunit gen"
+  have "$host_exunit_gen" "written test/support/round_suite.ex" "host exunit gen"
+  have "$host_exunit_gen" "skipped test/round_test.exs: step-ok (round.muro:" "host exunit gen"
+  have "$host_exunit_gen" "step is run internal and is not exported" "host exunit gen"
+  test -s lib/round.ex
+  test -s test/round_test.exs
+  test -s test/support/round_suite.ex
+  if grep -F "$host" lib/round.ex test/round_test.exs test/support/round_suite.ex >/dev/null; then
+    echo "generated file contains an absolute path" >&2
+    exit 1
+  fi
+
+  set +e
+  host_exunit_check=$(mix muro.gen --check 2>&1)
+  host_exunit_check_status=$?
+  set -e
+  printf '%s\n' "$host_exunit_check"
+  if [ "$host_exunit_check_status" -ne 0 ] || [ "$host_exunit_check" != "ok" ]; then
+    echo "host mix muro.gen --check after the suite did not print ok" >&2
+    exit 1
+  fi
+  if [ -e _build ]; then
+    echo "mix muro.gen compiled the host" >&2
+    exit 1
+  fi
+
+  set +e
+  host_exunit_test=$(MIX_ENV=test mix test --trace 2>&1)
+  host_exunit_test_status=$?
+  set -e
+  printf '%s\n' "$host_exunit_test"
+  if [ "$host_exunit_test_status" -ne 0 ]; then
+    echo "host mix test did not pass the suite" >&2
+    exit 1
+  fi
+  have "$host_exunit_test" "round-ok (round.muro:" "host mix test"
+  if ! printf '%s\n' "$host_exunit_test" | grep -Eq '(^|[^0-9])0 failures|^Result: [0-9]+ passed'; then
+    echo "missing a passing summary in host mix test" >&2
+    exit 1
+  fi
+  if printf '%s\n' "$host_exunit_test" | grep -Eq '^Failed: |[1-9][0-9]* failures'; then
+    echo "host mix test reported failures" >&2
+    exit 1
+  fi
+  have "$host_exunit_test" "function round/1 required by behaviour RoundSuite.Behaviour is not implemented" "host mix test"
+  have "$host_exunit_test" "IncompleteRound" "host mix test"
+
+  cp test/test_helper.exs "$tmp/host-test-helper.exs"
+  cat >> test/test_helper.exs <<'EOF'
+Application.put_env(:muro, RoundTest, BadRound)
+EOF
+
+  set +e
+  host_exunit_bad=$(MIX_ENV=test mix test --trace 2>&1)
+  host_exunit_bad_status=$?
+  set -e
+  printf '%s\n' "$host_exunit_bad"
+  if [ "$host_exunit_bad_status" -eq 0 ]; then
+    echo "expected mix test to fail against BadRound" >&2
+    exit 1
+  fi
+  have "$host_exunit_bad" "round-ok (round.muro:" "wrong adapter"
+  mv "$tmp/host-test-helper.exs" test/test_helper.exs
+
+  test -s lib/host/repr.ex
+  grep -q "def decode_entry" lib/host/repr.ex
+  grep -q "def toggle" lib/host/repr.ex
+
+  set +e
+  repr_check=$(mix muro.gen --check 2>&1)
+  repr_check_status=$?
+  set -e
+  printf '%s\n' "$repr_check"
+  if [ "$repr_check_status" -ne 0 ] || [ "$repr_check" != "ok" ]; then
+    echo "host mix muro.gen --check did not print ok for repr.muro" >&2
+    exit 1
+  fi
+
+  cat > repr_call.exs <<'EOF'
+{:ok, v} = Host.Repr.decode_entry(%{"id" => 3, "enabled" => true})
+enc = Host.Repr.encode_entry(Host.Repr.toggle(v))
+bad = Host.Repr.decode_entry(%{"id" => 3, "enabled" => 1})
+IO.puts("REPR_ENC #{inspect(enc)}")
+IO.puts("REPR_BAD #{inspect(bad)}")
+EOF
+
+  set +e
+  repr_run=$(mix run repr_call.exs 2>&1)
+  repr_run_status=$?
+  set -e
+  printf '%s\n' "$repr_run"
+  if [ "$repr_run_status" -ne 0 ]; then
+    echo "host mix run of the repr codec failed" >&2
+    exit 1
+  fi
+  have "$repr_run" "REPR_ENC" "repr encode"
+  have "$repr_run" "\"id\" => 3" "repr encode id"
+  have "$repr_run" "\"enabled\" => false" "repr encode enabled"
+  have "$repr_run" "REPR_BAD {:error, {[\"enabled\"], {:not_boolean, 1}}}" "repr strict failure"
+
+  cat > bad_repr.muro <<'EOF'
+data E : Type where
+  a : E
+  b : E
+repr E := a => nil | b => nil
+EOF
+
+  set +e
+  bad_repr=$(mix muro.check bad_repr.muro 2>&1)
+  bad_repr_status=$?
+  set -e
+  printf '%s\n' "$bad_repr"
+  if [ "$bad_repr_status" -eq 0 ]; then
+    echo "expected mix muro.check to refuse an ambiguous repr" >&2
+    exit 1
+  fi
+  have "$bad_repr" "constructors a and b share a host shape (nil)" "ambiguous repr"
 )
 
 # From an empty directory: init, generate, check, then the two drift failures.
