@@ -91,7 +91,7 @@ lib/muro/place.ex       place / scheme / move, mirror of decide
 lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
 lib/muro/emit.ex        run → Elixir source
-lib/muro/repr.ex        a repr: check the host shape and emit decode/encode. Not a kernel term.
+lib/muro/repr.ex        a repr: check the host shape and emit decode/1, decode/2, and encode/2. Not a kernel term.
 lib/muro/emit/exunit.ex closed equations → one ExUnit module (`--backend exunit`, `kind: :exunit`)
 lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a meeting starts the two processes as each other's peer; a `rec` is a tail call on `drive` (`--backend otp`)
 lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
@@ -145,7 +145,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.17.0.ez
+mix archive.install muro-0.18.0.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -194,7 +194,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then:
 
 ```
-Muro v0.17.0
+Muro v0.18.0
 All terms check. Evidence never becomes a run.
 ```
 

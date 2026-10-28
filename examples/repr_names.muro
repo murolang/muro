@@ -1,0 +1,89 @@
+-- repr_names.muro: free-form names, a map keyed by those names, and a stated fallback.
+data Bool : Type where
+  true  : Bool
+  false : Bool
+
+data Maybe (A : Type) : Type where
+  nothing : Maybe A
+  just    : A → Maybe A
+
+data List (A : Type) : Type where
+  nil  : List A
+  cons : A → List A → List A
+
+data Key : Type where
+  wild  : Key
+  named : Nat → Key
+
+data Entry : Type where
+  entry : Key → Maybe Bool → Entry
+
+data Binding : Type where
+  binding : Key → List Entry → Binding
+
+data Template : Type where
+  template : List Binding → Template
+
+repr Key := wild => "*" | named => interned string
+
+repr Entry := map { "relation" => Key, "read" => optional (boolean else false) }
+
+repr Template := map_of Key => list Entry
+
+def plus : run Nat → Nat → Nat :=
+  λ (n : Nat) → λ (m : Nat) →
+    match n motive (λ _ → Nat)
+      | 0 => m
+      | suc k => suc (plus k m)
+
+def reads-off : run Template → Template :=
+  λ (t : Template) →
+    match t motive (λ _ → Template)
+      | template bs => template (offs bs)
+
+def offs : run List Binding → List Binding :=
+  λ (xs : List Binding) →
+    match xs motive (λ _ → List Binding)
+      | nil => nil
+      | cons b rest => cons (off-binding b) (offs rest)
+
+def off-binding : run Binding → Binding :=
+  λ (b : Binding) →
+    match b motive (λ _ → Binding)
+      | binding k es => binding k (off-entries es)
+
+def off-entries : run List Entry → List Entry :=
+  λ (xs : List Entry) →
+    match xs motive (λ _ → List Entry)
+      | nil => nil
+      | cons e rest => cons (off-entry e) (off-entries rest)
+
+def off-entry : run Entry → Entry :=
+  λ (e : Entry) →
+    match e motive (λ _ → Entry)
+      | entry k _ => entry k (just false)
+
+def count-entries : run Template → Nat :=
+  λ (t : Template) →
+    match t motive (λ _ → Nat)
+      | template bs => count-bindings bs
+
+def count-bindings : run List Binding → Nat :=
+  λ (xs : List Binding) →
+    match xs motive (λ _ → Nat)
+      | nil => 0
+      | cons b rest => plus (count-binding b) (count-bindings rest)
+
+def count-binding : run Binding → Nat :=
+  λ (b : Binding) →
+    match b motive (λ _ → Nat)
+      | binding _ es => count-list es
+
+def count-list : run List Entry → Nat :=
+  λ (xs : List Entry) →
+    match xs motive (λ _ → Nat)
+      | nil => 0
+      | cons _ rest => suc (count-list rest)
+
+def off-wild : evidence {reads-off (template (cons (binding wild (cons (entry wild (just true)) nil)) nil)) ≡ template (cons (binding wild (cons (entry wild (just false)) nil)) nil) : Template} :=
+  refl

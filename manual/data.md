@@ -141,6 +141,6 @@ Muro.Lists.length(Muro.Lists.ones2())
 # {:suc, {:suc, 0}}
 ```
 
-A `repr` states the host shape of a declared type and emits decode and encode. The type is still this inductive type. See [Host representations](repr.md).
+A `repr` states the host shape of a declared type and emits decode and encode. Decode returns `{:ok, value, table}`. The type is still this inductive type. See [Host representations](repr.md).
 
 Next: [Indexed data](indexed.md).

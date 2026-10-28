@@ -4,22 +4,25 @@ defmodule Muro.Repr do
 
   A `repr` is a spec-side, host-side declaration. It is not a kernel term,
   it has no Agda rule, and it never enters a run image. `check_entry/2` is
-  the contract `mix muro.check` enforces. `elixir/2` emits `decode_<type>/1`
-  and `encode_<type>/1` from the same analysis.
+  the contract `mix muro.check` enforces. `elixir/2` emits `decode_<type>/1`,
+  `decode_<type>/2`, and `encode_<type>/2` from the same analysis.
 
-  Decode is total and strict: the result is `{:ok, value}` or
-  `{:error, {path, reason}}`, and nothing the repr does not describe becomes
-  a default. Encode is for a value the book already proved; a term that is
-  not a value of the type raises `FunctionClauseError`.
+  Decode is total and strict: the result is `{:ok, value, table}` or
+  `{:error, {path, reason}}`. The table is the interned-name table, empty
+  when the book has no `interned string`. Encode takes that table. A term
+  that is not a value of the type raises `FunctionClauseError`. An index
+  the table does not have, a name a sibling constructor reserved, and a
+  duplicate map key raise `ArgumentError`.
 
   An ambiguous repr is refused here, at check time, and the message names
   both constructors. `integer` builds a Peano `Nat` with a tail call and
-  refuses an integer above `@muro_repr_nat_max` (1_000_000).
+  refuses an integer above `@muro_repr_nat_max` (1_000_000). The same guard
+  bounds how many interned names a table may hold.
   """
 
   alias Muro.{Emit, Print}
 
-  @shape_words ~w(boolean integer nil list optional nullable tuple map open)
+  @shape_words ~w(boolean integer nil list optional nullable tuple map open interned map_of else)
   @nat_max 1_000_000
 
   @helper_names %{
@@ -29,9 +32,19 @@ defmodule Muro.Repr do
     tag: ~w(muro_repr_tag),
     expect: ~w(muro_repr_expect),
     extra: ~w(muro_repr_no_extra),
-    optional: ~w(muro_repr_decode_optional muro_repr_put_optional),
+    optional:
+      ~w(muro_repr_decode_optional muro_repr_optional_present muro_repr_optional_value muro_repr_put_optional),
     nullable: ~w(muro_repr_decode_nullable muro_repr_encode_nullable),
-    list: ~w(muro_repr_list_decode muro_repr_list_pack muro_repr_list_encode)
+    list: ~w(muro_repr_list_decode muro_repr_list_walk muro_repr_list_pack muro_repr_list_encode),
+    table:
+      ~w(muro_repr_table_new muro_repr_table_names muro_repr_table_check muro_repr_table_from),
+    interned:
+      ~w(muro_repr_decode_interned muro_repr_intern_index muro_repr_encode_interned muro_repr_name_term muro_repr_name_index),
+    bin:
+      ~w(muro_repr_bin_from muro_repr_bin_digits muro_repr_bin_build muro_repr_bin_index muro_repr_bin_collect muro_repr_bin_fold),
+    map_of:
+      ~w(muro_repr_map_of_decode muro_repr_map_of_walk muro_repr_map_pack muro_repr_map_of_encode muro_repr_map_of_walk_enc muro_repr_map_put muro_repr_wire_order),
+    fallback: ~w(muro_repr_else)
   }
 
   @doc """
@@ -148,6 +161,7 @@ defmodule Muro.Repr do
     names =
       feats
       |> Enum.flat_map(fn feat -> Map.get(@helper_names, feat, []) end)
+      |> Kernel.++(@helper_names.table)
       |> MapSet.new()
 
     Enum.find(runs, fn {_src, em} -> MapSet.member?(names, em) end)
@@ -227,11 +241,14 @@ defmodule Muro.Repr do
   defp consumes?({nil}, _ctx, _seen), do: true
   defp consumes?({:atom, _}, _ctx, _seen), do: true
   defp consumes?({:string, _}, _ctx, _seen), do: true
+  defp consumes?({:interned}, _ctx, _seen), do: true
   defp consumes?({:list, _}, _ctx, _seen), do: true
   defp consumes?({:tuple, _}, _ctx, _seen), do: true
   defp consumes?({:map, _, _}, _ctx, _seen), do: true
+  defp consumes?({:map_of, _, _}, _ctx, _seen), do: true
   defp consumes?({:nullable, inner}, ctx, seen), do: consumes?(inner, ctx, seen)
   defp consumes?({:optional, inner}, ctx, seen), do: consumes?(inner, ctx, seen)
+  defp consumes?({:else, inner, _}, ctx, seen), do: consumes?(inner, ctx, seen)
 
   defp consumes?({:choice, variants}, ctx, seen) do
     Enum.all?(variants, fn {_, shape} -> consumes?(shape, ctx, seen) end)
@@ -267,6 +284,20 @@ defmodule Muro.Repr do
     end
   end
 
+  defp compile_body({:else, _, _}, _data, ctx) do
+    {:error, blame(ctx, "else is a component of a shape; it is not the whole repr")}
+  end
+
+  defp compile_body({:interned}, data, ctx) do
+    case data.ctors do
+      [ctor] ->
+        compile_single(ctor, {:interned}, ctx)
+
+      ctors ->
+        {:error, blame(ctx, interned_body_msg(data.name, length(ctors)))}
+    end
+  end
+
   defp compile_body({:choice, variants}, data, ctx) do
     known = Map.new(data.ctors, &{&1.name, &1})
     listed = Enum.map(variants, &elem(&1, 0))
@@ -286,7 +317,8 @@ defmodule Muro.Repr do
 
         with {:ok, arms} <- compile_arms(ordered, ctx),
              :ok <- disjoint_arms(ordered, ctx) do
-          {:ok, {:choice, arms}}
+          reserved = for {_, {:string, text}} <- variants, do: text
+          {:ok, {:choice, Enum.map(arms, &reserve_arm(&1, reserved))}}
         end
     end
   end
@@ -308,6 +340,16 @@ defmodule Muro.Repr do
         {:error, _} = err -> {:halt, err}
       end
     end)
+  end
+
+  defp reserve_arm({:unwrap, ctor, {:interned, kind, _}}, reserved) do
+    {:unwrap, ctor, {:interned, kind, reserved}}
+  end
+
+  defp reserve_arm(arm, _reserved), do: arm
+
+  defp interned_body_msg(name, n) do
+    "#{name} has #{n} constructors; interned string names a field, not the type. A name is Nat or a binary numeral type (a nullary constructor and two constructors that each take one field of the type itself)"
   end
 
   defp variant_shape(variants, name) do
@@ -342,6 +384,14 @@ defmodule Muro.Repr do
       true ->
         {:error, count_msg(ctx, ctor.name, length(fields), bind_count(components_of(shape)))}
     end
+  end
+
+  defp compile_ctor_shape(ctor, {:else, _, _}, ctx, _where) do
+    {:error,
+     blame(
+       ctx,
+       "constructor #{ctor.name}: else is a component of a shape; it is not the whole arm"
+     )}
   end
 
   defp compile_ctor_shape(ctor, shape, ctx, _where) do
@@ -501,6 +551,40 @@ defmodule Muro.Repr do
   defp suit({:integer}, :nat, _i, _ctx), do: {:ok, {:nat}}
   defp suit({:integer}, ty, i, ctx), do: outside(ctx, i, ty, "integer")
 
+  defp suit({:interned}, ty, i, ctx) do
+    cond do
+      ty == :nat ->
+        {:ok, {:interned, :nat, []}}
+
+      bin = binary_numeral(ty, ctx) ->
+        {:ok, {:interned, bin, []}}
+
+      true ->
+        {:error, blame(ctx, interned_field_msg(ctx, i, ty))}
+    end
+  end
+
+  defp suit({:map_of, key, val}, ty, i, ctx) do
+    case list_view(ty, ctx) do
+      {:ok, elem, nil_c, cons_c} ->
+        suit_map_of(key, val, elem, nil_c, cons_c, ty, i, ctx)
+
+      :no ->
+        {:error, blame(ctx, map_of_msg(ctx, i, ty))}
+    end
+  end
+
+  defp suit({:else, inner, fallback}, ty, i, ctx) do
+    if else_inner?(inner) do
+      with {:ok, codec} <- suit(inner, ty, i, ctx),
+           {:ok, term} <- fallback_term(fallback, ty, i, ctx) do
+        {:ok, {:else, codec, term}}
+      end
+    else
+      {:error, blame(ctx, else_pos_msg(ctx, i, inner))}
+    end
+  end
+
   defp suit({:boolean}, ty, i, ctx) do
     if bare_bool?(ty, ctx), do: {:ok, {:bool}}, else: outside(ctx, i, ty, "boolean")
   end
@@ -568,7 +652,7 @@ defmodule Muro.Repr do
       {:ok, elem, nothing, just} ->
         with {:ok, el} <- compile_field(inner, elem, i, %{ctx | in_map: false}),
              :ok <- nil_clash(inner, nothing_name(ty, ctx), ctx) do
-          {:ok, {:opt, nothing, just, el, :drop}}
+          {:ok, {:opt, nothing, just, el, opt_mode(el, :drop)}}
         end
 
       :no ->
@@ -586,7 +670,7 @@ defmodule Muro.Repr do
         {:error,
          blame(
            ctx,
-           "constructor #{ctx.ctor} field #{i} has type Atom; free-form strings and interned names are not supported; model the closed set as a type and give it a repr"
+           "constructor #{ctx.ctor} field #{i} has type Atom; model the closed set as a type and give it a repr, or intern a name as Nat or a binary numeral"
          )}
 
       vocabulary?(ty, ctx) ->
@@ -644,6 +728,199 @@ defmodule Muro.Repr do
       :ok
     end
   end
+
+  defp opt_mode({:else, _, _}, :drop), do: :pass
+  defp opt_mode(_el, mode), do: mode
+
+  defp else_inner?({:boolean}), do: true
+  defp else_inner?({:integer}), do: true
+  defp else_inner?({:ref, _}), do: true
+  defp else_inner?(_), do: false
+
+  defp else_pos_msg(ctx, i, inner) do
+    "constructor #{ctx.ctor} field #{i}: else follows boolean, integer, or a type with its own repr, not #{else_what(inner)}"
+  end
+
+  defp else_what({:list, _}), do: "list"
+  defp else_what({:optional, _}), do: "optional"
+  defp else_what({:nullable, _}), do: "nullable"
+  defp else_what({:tuple, _}), do: "tuple"
+  defp else_what({:map, _, _}), do: "map"
+  defp else_what({:map_of, _, _}), do: "map_of"
+  defp else_what({:interned}), do: "interned string"
+  defp else_what({:choice, _}), do: "a choice"
+  defp else_what({:else, _, _}), do: "else"
+  defp else_what(_), do: "that shape"
+
+  defp interned_field_msg(ctx, i, ty) do
+    "constructor #{ctx.ctor} field #{i} has type #{show_ty(ty)}, which does not suit interned string; a name is Nat or a binary numeral type (a nullary constructor and two constructors that each take one field of the type itself)"
+  end
+
+  defp map_of_msg(ctx, i, ty) do
+    "constructor #{ctx.ctor} field #{i} has type #{show_ty(ty)}, which does not suit map_of; map_of decodes a list of pairs or of a two-field record"
+  end
+
+  defp map_of_elem_msg(ctx, i, ty) do
+    "constructor #{ctx.ctor} field #{i} has type #{show_ty(ty)}; map_of needs a list of pairs or of a single-constructor record with two fields"
+  end
+
+  defp suit_map_of(key, val, elem, nil_c, cons_c, ty, i, ctx) do
+    case pair_view(elem, ctx) do
+      {:pair, kty, vty} ->
+        with {:ok, kc} <- compile_field(key, kty, i, %{ctx | in_map: false}),
+             {:ok, vc} <- compile_field(val, vty, i, %{ctx | in_map: false}) do
+          {:ok, {:map_of, kc, vc, {:pair, nil_c, cons_c}}}
+        end
+
+      {:record, ctor, kty, vty} ->
+        with {:ok, kc} <- compile_field(key, kty, i, %{ctx | in_map: false}),
+             {:ok, vc} <- compile_field(val, vty, i, %{ctx | in_map: false}) do
+          {:ok, {:map_of, kc, vc, {:record, ctor, nil_c, cons_c}}}
+        end
+
+      :no ->
+        {:error, blame(ctx, map_of_elem_msg(ctx, i, ty))}
+    end
+  end
+
+  defp pair_view({:prod, k, v}, _ctx), do: {:pair, k, v}
+
+  defp pair_view({:ty, name}, ctx) do
+    case find_data(ctx.book, name) do
+      %{params: [], ctors: [ctor]} = data ->
+        if Map.get(data, :indices, []) == [] do
+          case ctor_fields(data, ctor, ctx) do
+            [k, v] -> {:record, ctor_atom(ctor.name), k, v}
+            _ -> :no
+          end
+        else
+          :no
+        end
+
+      _ ->
+        :no
+    end
+  end
+
+  defp pair_view(_, _), do: :no
+
+  defp binary_numeral({:ty, name}, ctx) do
+    case find_data(ctx.book, name) do
+      %{params: [], ctors: [_, _, _] = ctors} = data ->
+        if Map.get(data, :indices, []) == [] do
+          classify_bin(data, ctors, ctx)
+        else
+          nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp binary_numeral(_, _), do: nil
+
+  defp classify_bin(data, ctors, ctx) do
+    self = {:ty, data.name}
+
+    {nullary, rest} =
+      Enum.split_with(ctors, fn c -> ctor_fields(data, c, ctx) == [] end)
+
+    case {nullary, rest} do
+      {[%{name: z}], [%{name: d1}, %{name: d2}]} ->
+        if ctor_fields(data, d1_ctor(ctors, d1), ctx) == [self] and
+             ctor_fields(data, d1_ctor(ctors, d2), ctx) == [self] do
+          {:bin, ctor_atom(z), ctor_atom(d1), ctor_atom(d2)}
+        else
+          nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp d1_ctor(ctors, name), do: Enum.find(ctors, &(&1.name == name))
+
+  defp fallback_term({:numeral, n}, :nat, _i, _ctx)
+       when is_integer(n) and n >= 0 and n <= @nat_max do
+    {:ok, {:num, n}}
+  end
+
+  defp fallback_term({:numeral, n}, :nat, i, ctx) do
+    {:error,
+     blame(ctx, "constructor #{ctx.ctor} field #{i}: #{n} is above the Nat guard #{@nat_max}")}
+  end
+
+  defp fallback_term({:numeral, _n}, ty, i, ctx) do
+    {:error,
+     blame(
+       ctx,
+       "constructor #{ctx.ctor} field #{i}: a numeral is a fallback for Nat, and this field has type #{show_ty(ty)}; nullary constructors are #{nullary_list(ty, ctx)}"
+     )}
+  end
+
+  defp fallback_term({:ctor, name}, ty, i, ctx) do
+    case find_fallback_ctor(ty, name, ctx) do
+      {:nullary, atom} ->
+        {:ok, {:atom, atom}}
+
+      :fields ->
+        {:error,
+         blame(
+           ctx,
+           "constructor #{ctx.ctor} field #{i}: #{name} takes fields; a fallback is a nullary constructor of #{show_ty(ty)} (#{nullary_list(ty, ctx)})"
+         )}
+
+      :missing ->
+        {:error,
+         blame(
+           ctx,
+           "constructor #{ctx.ctor} field #{i}: #{name} is not a nullary constructor of #{show_ty(ty)}; nullary constructors are #{nullary_list(ty, ctx)}"
+         )}
+    end
+  end
+
+  defp find_fallback_ctor(:nat, _name, _ctx), do: :missing
+
+  defp find_fallback_ctor({:ty, name}, ctor_name, ctx) do
+    case find_data(ctx.book, name) do
+      nil ->
+        :missing
+
+      data ->
+        case Enum.find(ctor_infos(data, ctx), &(&1.name == ctor_name)) do
+          %{fields: []} -> {:nullary, ctor_atom(ctor_name)}
+          %{fields: _} -> :fields
+          nil -> :missing
+        end
+    end
+  end
+
+  defp find_fallback_ctor(_, _, _), do: :missing
+
+  defp nullary_list(:nat, _ctx), do: "0"
+
+  defp nullary_list({:ty, name}, ctx) do
+    case find_data(ctx.book, name) do
+      nil ->
+        "none"
+
+      data ->
+        names =
+          data
+          |> ctor_infos(ctx)
+          |> Enum.filter(&(&1.fields == []))
+          |> Enum.map(& &1.name)
+
+        case names do
+          [] -> "none"
+          _ -> Enum.join(names, ", ")
+        end
+    end
+  end
+
+  defp nullary_list(_, _), do: "none"
 
   defp list_view({:app, {:ty, name}, elem}, ctx) do
     case find_data(ctx.book, name) do
@@ -759,7 +1036,10 @@ defmodule Muro.Repr do
   # -- ambiguity -------------------------------------------------------------
 
   defp disjoint_arms(ordered, ctx) do
-    case first_overlap(ordered, ctx) do
+    # An interned arm is every string except the literals sibling arms name.
+    reserved = for {_ctor, {:string, text}} <- ordered, do: text
+
+    case first_overlap(ordered, ctx, reserved) do
       nil ->
         :ok
 
@@ -772,15 +1052,24 @@ defmodule Muro.Repr do
     end
   end
 
-  defp first_overlap([], _ctx), do: nil
-  defp first_overlap([_], _ctx), do: nil
+  defp first_overlap([], _ctx, _reserved), do: nil
+  defp first_overlap([_], _ctx, _reserved), do: nil
 
-  defp first_overlap([{c1, s1} | rest], ctx) do
-    case Enum.find(rest, fn {_c2, s2} -> not disjoint?(s1, s2, ctx, MapSet.new()) end) do
-      nil -> first_overlap(rest, ctx)
+  defp first_overlap([{c1, s1} | rest], ctx, reserved) do
+    case Enum.find(rest, fn {_c2, s2} -> not arm_disjoint?(s1, s2, ctx, reserved) end) do
+      nil -> first_overlap(rest, ctx, reserved)
       {c2, _} -> {c1.name, s1, c2.name}
     end
   end
+
+  # Only a direct `interned string` arm loses the sibling literals. A name
+  # reached through a reference keeps the conservative overlap.
+  defp arm_disjoint?(s1, s2, ctx, reserved) do
+    disjoint?(reserve_shape(s1, reserved), reserve_shape(s2, reserved), ctx, MapSet.new())
+  end
+
+  defp reserve_shape({:interned}, reserved), do: {:interned, reserved}
+  defp reserve_shape(other, _reserved), do: other
 
   defp disjoint?(s1, s2, ctx, seen) do
     case {alts(s1, ctx, seen), alts(s2, ctx, seen)} do
@@ -834,6 +1123,15 @@ defmodule Muro.Repr do
           end
         end)
 
+      {{:interned, reserved}, {:string, s}} ->
+        s in reserved
+
+      {{:string, s}, {:interned, reserved}} ->
+        s in reserved
+
+      {{:interned, _}, {:interned, _}} ->
+        false
+
       {x, y} ->
         alt_class(x) != alt_class(y)
     end
@@ -844,10 +1142,12 @@ defmodule Muro.Repr do
 
   defp alt_class({:atom, _}), do: :atom
   defp alt_class({:string, _}), do: :string
+  defp alt_class({:interned, _}), do: :string
   defp alt_class(:integer), do: :integer
   defp alt_class(:list), do: :list
   defp alt_class({:tuple, _}), do: :tuple
   defp alt_class({:map, _, _}), do: :map
+  defp alt_class(:map_of), do: :map
   defp alt_class(_), do: :other
 
   defp alts({:boolean}, _ctx, seen), do: {:ok, [{:atom, "true"}, {:atom, "false"}], seen}
@@ -856,6 +1156,10 @@ defmodule Muro.Repr do
   defp alts({:atom, n}, _ctx, seen), do: {:ok, [{:atom, n}], seen}
   defp alts({:string, s}, _ctx, seen), do: {:ok, [{:string, s}], seen}
   defp alts({:list, _}, _ctx, seen), do: {:ok, [:list], seen}
+  defp alts({:interned}, _ctx, seen), do: {:ok, [{:interned, []}], seen}
+  defp alts({:interned, reserved}, _ctx, seen), do: {:ok, [{:interned, reserved}], seen}
+  defp alts({:map_of, _, _}, _ctx, seen), do: {:ok, [:map_of], seen}
+  defp alts({:else, inner, _}, ctx, seen), do: alts(inner, ctx, seen)
   defp alts({:tuple, ss}, _ctx, seen), do: {:ok, [{:tuple, ss}], seen}
 
   defp alts({:map, open?, entries}, _ctx, seen) do
@@ -877,10 +1181,16 @@ defmodule Muro.Repr do
   defp alts({:optional, s}, ctx, seen), do: alts(s, ctx, seen)
 
   defp alts({:choice, vs}, ctx, seen) do
+    reserved = for {_, {:string, text}} <- vs, do: text
+
     Enum.reduce_while(vs, {:ok, [], seen}, fn {_, shape}, {:ok, acc, seen1} ->
       case alts(shape, ctx, seen1) do
-        :unknown -> {:halt, :unknown}
-        {:ok, more, seen2} -> {:cont, {:ok, acc ++ more, seen2}}
+        :unknown ->
+          {:halt, :unknown}
+
+        {:ok, more, seen2} ->
+          more = if shape == {:interned}, do: tag_interned(more, reserved), else: more
+          {:cont, {:ok, acc ++ more, seen2}}
       end
     end)
   end
@@ -901,6 +1211,13 @@ defmodule Muro.Repr do
   end
 
   defp alts(_, _ctx, _seen), do: :unknown
+
+  defp tag_interned(alts, reserved) do
+    Enum.map(alts, fn
+      {:interned, _} -> {:interned, reserved}
+      other -> other
+    end)
+  end
 
   defp accepts_nil?(shape, ctx, seen) do
     case alts(shape, ctx, seen) do
@@ -955,6 +1272,15 @@ defmodule Muro.Repr do
 
       {:boolean} ->
         "boolean"
+
+      {:interned} ->
+        "interned string"
+
+      {:map_of, _, _} ->
+        "map"
+
+      {:else, inner, _} ->
+        describe(inner, ctx, seen)
 
       {:atom, n} ->
         ":" <> n
@@ -1203,7 +1529,7 @@ defmodule Muro.Repr do
   defp features(codec, acc) do
     case codec do
       {:nat} ->
-        MapSet.put(acc, :nat)
+        acc |> MapSet.put(:nat) |> MapSet.put(:decode_nat)
 
       {:bool} ->
         MapSet.put(acc, :bool)
@@ -1228,6 +1554,24 @@ defmodule Muro.Repr do
 
       {:opt, _, _, _, el, _} ->
         features(el, MapSet.put(acc, :optional))
+
+      {:interned, :nat, _} ->
+        acc |> MapSet.put(:nat) |> MapSet.put(:interned) |> MapSet.put(:interned_nat)
+
+      {:interned, {:bin, _, _, _}, _} ->
+        acc |> MapSet.put(:interned) |> MapSet.put(:bin)
+
+      {:map_of, key, val, _} ->
+        features(key, features(val, MapSet.put(acc, :map_of)))
+
+      {:else, inner, {:num, _}} ->
+        features(
+          inner,
+          acc |> MapSet.put(:fallback) |> MapSet.put(:fallback_nat) |> MapSet.put(:nat)
+        )
+
+      {:else, inner, _} ->
+        features(inner, MapSet.put(acc, :fallback))
 
       {:tuple, _, comps} ->
         Enum.reduce(comps, acc, fn
@@ -1289,38 +1633,49 @@ defmodule Muro.Repr do
     fun = snake(d.name)
     dec = "decode_" <> fun
     enc = "encode_" <> fun
+    priv = enc <> "_value"
 
     """
-    def #{dec}(value), do: #{dec}(value, [])
+    def #{dec}(value), do: #{dec}(value, muro_repr_table_new())
+
+    def #{dec}(value, table) do
+      table = muro_repr_table_check(table, #{inspect(dec)})
+      #{dec}(value, [], table)
+    end
 
     #{render_decode(dec, codec, plans)}
 
-    #{render_encode(enc, codec)}
+    def #{enc}(value, table) do
+      table = muro_repr_table_check(table, #{inspect(enc)})
+      #{priv}(value, table)
+    end
+
+    #{render_encode(priv, codec, enc)}
     """
     |> String.trim()
   end
 
   defp render_decode(name, {:bool}, _plans) do
-    "defp #{name}(value, path), do: muro_repr_decode_bool(value, path)"
+    "defp #{name}(value, path, table), do: muro_repr_decode_bool(value, path, table)"
   end
 
   defp render_decode(name, {:nat}, _plans) do
-    "defp #{name}(value, path), do: muro_repr_decode_nat(value, path)"
+    "defp #{name}(value, path, table), do: muro_repr_decode_nat(value, path, table)"
   end
 
   defp render_decode(name, {:const, lit, ctor}, _plans) do
     """
-    defp #{name}(#{inspect(lit)}, _path), do: {:ok, #{atom_src(ctor)}}
-    defp #{name}(value, path), do: {:error, {path, {:expected, #{inspect(lit)}, value}}}
+    defp #{name}(#{inspect(lit)}, _path, table), do: {:ok, #{atom_src(ctor)}, table}
+    defp #{name}(value, path, _table), do: {:error, {path, {:expected, #{inspect(lit)}, value}}}
     """
     |> String.trim()
   end
 
   defp render_decode(name, {:wrap, ctor, inner}, plans) do
     """
-    defp #{name}(value, path) do
-      case #{dec_expr(inner, "value", "path", plans)} do
-        {:ok, got} -> {:ok, {#{atom_src(ctor)}, got}}
+    defp #{name}(value, path, table) do
+      case #{dec_expr(inner, "value", "path", "table", plans)} do
+        {:ok, got, table} -> {:ok, {#{atom_src(ctor)}, got}, table}
         {:error, _} = err -> err
       end
     end
@@ -1332,26 +1687,26 @@ defmodule Muro.Repr do
     n = length(comps)
 
     """
-    defp #{name}(value, path) when is_tuple(value) and tuple_size(value) == #{n} do
+    defp #{name}(value, path, table) when is_tuple(value) and tuple_size(value) == #{n} do
       #{with_block(tuple_lines(comps, plans), ctor_term(ctor, comps))}
     end
 
-    defp #{name}(value, path) when is_tuple(value) do
+    defp #{name}(value, path, _table) when is_tuple(value) do
       {:error, {path, {:wrong_tuple_size, #{n}, value}}}
     end
 
-    defp #{name}(value, path), do: {:error, {path, {:not_tuple, value}}}
+    defp #{name}(value, path, _table), do: {:error, {path, {:not_tuple, value}}}
     """
     |> String.trim()
   end
 
   defp render_decode(name, {:map, open?, ctor, entries}, plans) do
     """
-    defp #{name}(value, path) when is_map(value) do
+    defp #{name}(value, path, table) when is_map(value) do
       #{with_block(map_lines(entries, open?, plans), ctor_term(ctor, entries))}
     end
 
-    defp #{name}(value, path), do: {:error, {path, {:not_map, value}}}
+    defp #{name}(value, path, _table), do: {:error, {path, {:not_map, value}}}
     """
     |> String.trim()
   end
@@ -1367,7 +1722,7 @@ defmodule Muro.Repr do
     names = Enum.map_join(arms, ", ", fn arm -> atom_src(arm_ctor(arm)) end)
 
     """
-    defp #{name}(value, path) do
+    defp #{name}(value, path, table) do
       cond do
         #{clauses}
 
@@ -1379,12 +1734,12 @@ defmodule Muro.Repr do
     |> String.trim()
   end
 
-  defp arm_body({:const, _lit, ctor}, _plans), do: "{:ok, #{atom_src(ctor)}}"
+  defp arm_body({:const, _lit, ctor}, _plans), do: "{:ok, #{atom_src(ctor)}, table}"
 
   defp arm_body({:unwrap, ctor, inner}, plans) do
     """
-    case #{dec_expr(inner, "value", "path", plans)} do
-      {:ok, got} -> {:ok, {#{atom_src(ctor)}, got}}
+    case #{dec_expr(inner, "value", "path", "table", plans)} do
+      {:ok, got, table} -> {:ok, {#{atom_src(ctor)}, got}, table}
       {:error, _} = err -> err
     end
     """
@@ -1411,6 +1766,15 @@ defmodule Muro.Repr do
 
       {:const, lit, _} ->
         "value == #{inspect(lit)}"
+
+      {:interned, _, reserved} ->
+        interned_guard(reserved)
+
+      {:map_of, _, _, _} ->
+        "is_map(value)"
+
+      {:else, inner, _} ->
+        class_guard(inner, plans, seen)
 
       {:call, fun} ->
         if MapSet.member?(seen, fun) do
@@ -1444,6 +1808,12 @@ defmodule Muro.Repr do
     end
   end
 
+  defp interned_guard(reserved) do
+    Enum.reduce(reserved, "is_binary(value)", fn lit, acc ->
+      acc <> " and value != #{inspect(lit)}"
+    end)
+  end
+
   defp tuple_guard(comps) do
     base = "is_tuple(value) and tuple_size(value) == #{length(comps)}"
 
@@ -1474,7 +1844,7 @@ defmodule Muro.Repr do
 
         {{:field, codec}, idx}, {lines, fi} ->
           line =
-            "{:ok, f#{fi}} <- #{dec_expr(codec, "elem(value, #{idx})", "path ++ [#{idx}]", plans)}"
+            "{:ok, f#{fi}, table} <- #{dec_expr(codec, "elem(value, #{idx})", "path ++ [#{idx}]", "table", plans)}"
 
           {[line | lines], fi + 1}
       end)
@@ -1493,15 +1863,13 @@ defmodule Muro.Repr do
           fetch = "{:ok, g#{fi}} <- muro_repr_fetch(value, path, #{inspect(key)})"
 
           dec =
-            "{:ok, f#{fi}} <- #{dec_expr(codec, "g#{fi}", "path ++ [#{inspect(key)}]", plans)}"
+            "{:ok, f#{fi}, table} <- #{dec_expr(codec, "g#{fi}", "path ++ [#{inspect(key)}]", "table", plans)}"
 
           {[dec, fetch | lines], [key | keys], fi + 1}
 
         {:opt, key, nothing, just, codec, mode}, {lines, keys, fi} ->
-          nil_ok = mode == nil
-
           line =
-            "{:ok, f#{fi}} <- muro_repr_decode_optional(value, path, #{inspect(key)}, #{fun2(codec, plans)}, #{atom_src(nothing)}, #{atom_src(just)}, #{nil_ok})"
+            "{:ok, f#{fi}, table} <- muro_repr_decode_optional(value, path, table, #{inspect(key)}, #{fun3(codec, plans)}, #{atom_src(nothing)}, #{atom_src(just)}, #{nil_mode_src(mode)})"
 
           {[line | lines], [key | keys], fi + 1}
       end)
@@ -1539,14 +1907,14 @@ defmodule Muro.Repr do
     end)
   end
 
-  defp with_block([], term), do: "{:ok, #{term}}"
+  defp with_block([], term), do: "{:ok, #{term}, table}"
 
   defp with_block(lines, term) do
     body = Enum.map_join(lines, ",\n", & &1)
 
     """
     with #{indent_rest(body)} do
-      {:ok, #{term}}
+      {:ok, #{term}, table}
     end
     """
     |> String.trim()
@@ -1558,80 +1926,154 @@ defmodule Muro.Repr do
     Enum.join([h | Enum.map(t, &("  " <> &1))], "\n")
   end
 
-  defp dec_expr({:nat}, src, path, _plans), do: "muro_repr_decode_nat(#{src}, #{path})"
-  defp dec_expr({:bool}, src, path, _plans), do: "muro_repr_decode_bool(#{src}, #{path})"
-  defp dec_expr({:call, fun}, src, path, _plans), do: "decode_#{fun}(#{src}, #{path})"
+  defp dec_expr({:nat}, src, path, table, _plans),
+    do: "muro_repr_decode_nat(#{src}, #{path}, #{table})"
 
-  defp dec_expr({:list, nil_c, cons, el}, src, path, plans) do
-    "muro_repr_list_decode(#{src}, #{path}, #{fun2(el, plans)}, #{atom_src(nil_c)}, #{atom_src(cons)})"
+  defp dec_expr({:bool}, src, path, table, _plans),
+    do: "muro_repr_decode_bool(#{src}, #{path}, #{table})"
+
+  defp dec_expr({:call, fun}, src, path, table, _plans),
+    do: "decode_#{fun}(#{src}, #{path}, #{table})"
+
+  defp dec_expr({:list, nil_c, cons, el}, src, path, table, plans) do
+    "muro_repr_list_decode(#{src}, #{path}, #{table}, #{fun3(el, plans)}, #{atom_src(nil_c)}, #{atom_src(cons)})"
   end
 
-  defp dec_expr({:nullable, nothing, just, inner}, src, path, plans) do
-    "muro_repr_decode_nullable(#{src}, #{path}, #{atom_src(nothing)}, #{atom_src(just)}, #{fun2(inner, plans)})"
+  defp dec_expr({:nullable, nothing, just, inner}, src, path, table, plans) do
+    "muro_repr_decode_nullable(#{src}, #{path}, #{table}, #{atom_src(nothing)}, #{atom_src(just)}, #{fun3(inner, plans)})"
   end
 
-  defp dec_expr({:wrap, ctor, inner}, src, path, plans) do
-    "case #{dec_expr(inner, src, path, plans)} do {:ok, got} -> {:ok, {#{atom_src(ctor)}, got}}; {:error, _} = err -> err end"
+  defp dec_expr({:interned, kind, reserved}, src, path, table, _plans) do
+    "muro_repr_decode_interned(#{src}, #{path}, #{table}, #{kind_src(kind)}, #{inspect(reserved)})"
   end
 
-  defp fun2(codec, plans) do
+  defp dec_expr({:map_of, key, val, mode}, src, path, table, plans) do
+    "muro_repr_map_of_decode(#{src}, #{path}, #{table}, #{fun3(key, plans)}, #{fun3(val, plans)}, #{map_pack_src(mode)})"
+  end
+
+  defp dec_expr({:else, inner, fb}, src, path, table, plans) do
+    "muro_repr_else(#{dec_expr(inner, src, path, table, plans)}, #{path}, #{table}, #{fallback_src(fb)})"
+  end
+
+  defp dec_expr({:wrap, ctor, inner}, src, path, table, plans) do
+    "case #{dec_expr(inner, src, path, table, plans)} do {:ok, got, table} -> {:ok, {#{atom_src(ctor)}, got}, table}; {:error, _} = err -> err end"
+  end
+
+  defp fun3(codec, plans) do
     case codec do
-      {:nat} -> "&muro_repr_decode_nat/2"
-      {:bool} -> "&muro_repr_decode_bool/2"
-      {:call, fun} -> "&decode_#{fun}/2"
-      _ -> "fn el, p -> #{dec_expr(codec, "el", "p", plans)} end"
+      {:nat} -> "&muro_repr_decode_nat/3"
+      {:bool} -> "&muro_repr_decode_bool/3"
+      {:call, fun} -> "&decode_#{fun}/3"
+      _ -> "fn el, p, t -> #{dec_expr(codec, "el", "p", "t", plans)} end"
     end
   end
 
-  defp render_encode(name, {:bool}), do: "def #{name}(value), do: muro_repr_encode_bool(value)"
-  defp render_encode(name, {:nat}), do: "def #{name}(value), do: muro_repr_encode_nat(value)"
+  defp kind_src(:nat), do: ":nat"
 
-  defp render_encode(name, {:const, lit, ctor}) do
-    "def #{name}(#{atom_src(ctor)}), do: #{inspect(lit)}"
+  defp kind_src({:bin, z, d1, d2}) do
+    "{#{atom_src(z)}, #{atom_src(d1)}, #{atom_src(d2)}}"
   end
 
-  defp render_encode(name, {:wrap, ctor, inner}) do
-    "def #{name}({#{atom_src(ctor)}, f0}), do: #{enc_expr(inner, "f0")}"
+  # The element builder is a closure, so a book that only uses pairs does not
+  # carry an unreachable record clause (and the other way round).
+  defp map_pack_src({:pair, nil_c, cons_c}) do
+    "fn k, v -> {k, v} end, #{atom_src(nil_c)}, #{atom_src(cons_c)}"
   end
 
-  defp render_encode(name, {:unwrap, ctor, inner}) do
-    "def #{name}({#{atom_src(ctor)}, f0}), do: #{enc_expr(inner, "f0")}"
+  defp map_pack_src({:record, ctor, nil_c, cons_c}) do
+    "fn k, v -> {#{atom_src(ctor)}, k, v} end, #{atom_src(nil_c)}, #{atom_src(cons_c)}"
   end
 
-  defp render_encode(name, {:tuple, ctor, comps}) do
-    n = field_slots(comps)
-    head = encode_head(ctor, n)
-    body = "{" <> Enum.map_join(tuple_enc(comps), ", ", & &1) <> "}"
-    "def #{name}(#{head}), do: #{body}"
+  defp map_split_src({:pair, nil_c, cons_c}) do
+    "fn {k, v} -> {k, v} end, #{atom_src(nil_c)}, #{atom_src(cons_c)}"
   end
 
-  defp render_encode(name, {:map, _open, ctor, entries}) do
-    n = field_slots(entries)
-    head = encode_head(ctor, n)
-    "def #{name}(#{head}) do\n#{indent_block(map_enc(entries), 2)}\nend"
+  defp map_split_src({:record, ctor, nil_c, cons_c}) do
+    "fn {#{atom_src(ctor)}, k, v} -> {k, v} end, #{atom_src(nil_c)}, #{atom_src(cons_c)}"
   end
 
-  defp render_encode(name, {:choice, arms}) do
+  defp fallback_src({:atom, atom}), do: atom_src(atom)
+  defp fallback_src({:num, n}), do: "muro_repr_nat_from(#{Integer.to_string(n)})"
+
+  defp nil_mode_src(nil), do: ":nothing"
+  defp nil_mode_src(:drop), do: ":error"
+  defp nil_mode_src(:pass), do: ":pass"
+
+  defp render_encode(name, {:bool}, _pub) do
+    "defp #{name}(value, _table), do: muro_repr_encode_bool(value)"
+  end
+
+  defp render_encode(name, {:nat}, _pub) do
+    "defp #{name}(value, _table), do: muro_repr_encode_nat(value)"
+  end
+
+  defp render_encode(name, {:const, lit, ctor}, _pub) do
+    "defp #{name}(#{atom_src(ctor)}, _table), do: #{inspect(lit)}"
+  end
+
+  defp render_encode(name, {:wrap, ctor, inner}, pub) do
+    "defp #{name}({#{atom_src(ctor)}, f0}, #{table_var(inner)}), do: #{enc_expr(inner, "f0", pub)}"
+  end
+
+  defp render_encode(name, {:unwrap, ctor, inner}, pub) do
+    "defp #{name}({#{atom_src(ctor)}, f0}, #{table_var(inner)}), do: #{enc_expr(inner, "f0", pub)}"
+  end
+
+  defp render_encode(name, {:tuple, ctor, comps}, pub) do
+    head = encode_head(ctor, field_slots(comps))
+    body = "{" <> Enum.map_join(tuple_enc(comps, pub), ", ", & &1) <> "}"
+    "defp #{name}(#{head}, #{table_var({:tuple, ctor, comps})}), do: #{body}"
+  end
+
+  defp render_encode(name, {:map, _open, ctor, entries}, pub) do
+    head = encode_head(ctor, field_slots(entries))
+
+    "defp #{name}(#{head}, #{table_var({:map, false, ctor, entries})}) do\n#{indent_block(map_enc(entries, pub), 2)}\nend"
+  end
+
+  defp render_encode(name, {:choice, arms}, pub) do
     Enum.map_join(arms, "\n\n", fn arm ->
-      render_encode_arm(name, arm)
+      render_encode_arm(name, arm, pub)
     end)
   end
 
-  defp render_encode_arm(name, {:const, lit, ctor}) do
-    "def #{name}(#{atom_src(ctor)}), do: #{inspect(lit)}"
+  defp render_encode_arm(name, {:const, lit, ctor}, _pub) do
+    "defp #{name}(#{atom_src(ctor)}, _table), do: #{inspect(lit)}"
   end
 
-  defp render_encode_arm(name, {:unwrap, ctor, inner}) do
-    "def #{name}({#{atom_src(ctor)}, f0}), do: #{enc_expr(inner, "f0")}"
+  defp render_encode_arm(name, {:unwrap, ctor, inner}, pub) do
+    "defp #{name}({#{atom_src(ctor)}, f0}, #{table_var(inner)}), do: #{enc_expr(inner, "f0", pub)}"
   end
 
-  defp render_encode_arm(name, {:tuple, ctor, comps}) do
-    render_encode(name, {:tuple, ctor, comps})
+  defp render_encode_arm(name, {:tuple, ctor, comps}, pub) do
+    render_encode(name, {:tuple, ctor, comps}, pub)
   end
 
-  defp render_encode_arm(name, {:map, open?, ctor, entries}) do
-    render_encode(name, {:map, open?, ctor, entries})
+  defp render_encode_arm(name, {:map, open?, ctor, entries}, pub) do
+    render_encode(name, {:map, open?, ctor, entries}, pub)
   end
+
+  defp table_var(codec) do
+    if reads_table?(codec), do: "table", else: "_table"
+  end
+
+  defp reads_table?({:interned, _, _}), do: true
+  defp reads_table?({:call, _}), do: true
+  defp reads_table?({:map_of, key, val, _}), do: reads_table?(key) or reads_table?(val)
+  defp reads_table?({:list, _, _, el}), do: reads_table?(el)
+  defp reads_table?({:nullable, _, _, el}), do: reads_table?(el)
+  defp reads_table?({:else, inner, _}), do: reads_table?(inner)
+  defp reads_table?({:wrap, _, el}), do: reads_table?(el)
+  defp reads_table?({:unwrap, _, el}), do: reads_table?(el)
+  defp reads_table?({:tuple, _, comps}), do: Enum.any?(comps, &reads_part?/1)
+  defp reads_table?({:map, _, _, entries}), do: Enum.any?(entries, &reads_part?/1)
+  defp reads_table?({:choice, arms}), do: Enum.any?(arms, &reads_table?/1)
+  defp reads_table?(_), do: false
+
+  defp reads_part?({:field, codec}), do: reads_table?(codec)
+  defp reads_part?({:field, _, codec}), do: reads_table?(codec)
+  defp reads_part?({:opt, _, _, _, codec, _}), do: reads_table?(codec)
+  defp reads_part?(_), do: false
 
   defp encode_head(ctor, 0), do: atom_src(ctor)
 
@@ -1640,27 +2082,27 @@ defmodule Muro.Repr do
     "{#{atom_src(ctor)}, #{vars}}"
   end
 
-  defp tuple_enc(comps) do
+  defp tuple_enc(comps, pub) do
     {exprs, _fi} =
       Enum.map_reduce(comps, 0, fn
         {:tag, lit}, fi -> {inspect(lit), fi}
-        {:field, codec}, fi -> {enc_expr(codec, "f#{fi}"), fi + 1}
+        {:field, codec}, fi -> {enc_expr(codec, "f#{fi}", pub), fi + 1}
       end)
 
     exprs
   end
 
-  defp map_enc(entries) do
+  defp map_enc(entries, pub) do
     {base, opts, _fi} =
       Enum.reduce(entries, {[], [], 0}, fn
         {:tag, key, lit}, {base, opts, fi} ->
           {[{key, inspect(lit)} | base], opts, fi}
 
         {:field, key, codec}, {base, opts, fi} ->
-          {[{key, enc_expr(codec, "f#{fi}")} | base], opts, fi + 1}
+          {[{key, enc_expr(codec, "f#{fi}", pub)} | base], opts, fi + 1}
 
         {:opt, key, nothing, just, codec, _mode}, {base, opts, fi} ->
-          opt = {key, nothing, just, "f#{fi}", enc_fun1(codec)}
+          opt = {key, nothing, just, "f#{fi}", enc_fun1(codec, pub)}
           {base, [opt | opts], fi + 1}
       end)
 
@@ -1682,28 +2124,39 @@ defmodule Muro.Repr do
     end
   end
 
-  defp enc_expr({:nat}, src), do: "muro_repr_encode_nat(#{src})"
-  defp enc_expr({:bool}, src), do: "muro_repr_encode_bool(#{src})"
-  defp enc_expr({:call, fun}, src), do: "encode_#{fun}(#{src})"
+  defp enc_expr({:nat}, src, _pub), do: "muro_repr_encode_nat(#{src})"
+  defp enc_expr({:bool}, src, _pub), do: "muro_repr_encode_bool(#{src})"
+  defp enc_expr({:call, fun}, src, _pub), do: "encode_#{fun}(#{src}, table)"
 
-  defp enc_expr({:list, nil_c, cons, el}, src) do
-    "muro_repr_list_encode(#{src}, #{atom_src(nil_c)}, #{atom_src(cons)}, #{enc_fun1(el)})"
+  defp enc_expr({:list, nil_c, cons, el}, src, pub) do
+    "muro_repr_list_encode(#{src}, #{atom_src(nil_c)}, #{atom_src(cons)}, #{enc_fun1(el, pub)})"
   end
 
-  defp enc_expr({:nullable, nothing, just, inner}, src) do
-    "muro_repr_encode_nullable(#{atom_src(nothing)}, #{atom_src(just)}, #{src}, #{enc_fun1(inner)})"
+  defp enc_expr({:nullable, nothing, just, inner}, src, pub) do
+    "muro_repr_encode_nullable(#{atom_src(nothing)}, #{atom_src(just)}, #{src}, #{enc_fun1(inner, pub)})"
   end
 
-  # A field codec is a call, a nat, a bool, a list, or a nullable.
+  defp enc_expr({:interned, kind, reserved}, src, pub) do
+    "muro_repr_encode_interned(#{src}, table, #{kind_src(kind)}, #{inspect(reserved)}, #{inspect(pub)})"
+  end
+
+  defp enc_expr({:map_of, key, val, mode}, src, pub) do
+    "muro_repr_map_of_encode(#{src}, #{map_split_src(mode)}, #{enc_fun1(key, pub)}, #{enc_fun1(val, pub)}, #{inspect(pub)})"
+  end
+
+  # Encode ignores the fallback. The wire value is the value that was decoded,
+  # not the unexpected host term the fallback replaced.
+  defp enc_expr({:else, inner, _}, src, pub), do: enc_expr(inner, src, pub)
+
   # A nested newtype is refused before render.
-  defp enc_expr({:wrap, _ctor, _inner}, _src) do
+  defp enc_expr({:wrap, _ctor, _inner}, _src, _pub) do
     raise "repr emit: nested newtype"
   end
 
-  defp enc_fun1({:nat}), do: "&muro_repr_encode_nat/1"
-  defp enc_fun1({:bool}), do: "&muro_repr_encode_bool/1"
-  defp enc_fun1({:call, fun}), do: "&encode_#{fun}/1"
-  defp enc_fun1(codec), do: "fn el -> #{enc_expr(codec, "el")} end"
+  defp enc_fun1({:nat}, _pub), do: "&muro_repr_encode_nat/1"
+  defp enc_fun1({:bool}, _pub), do: "&muro_repr_encode_bool/1"
+  defp enc_fun1({:call, fun}, _pub), do: "fn el -> encode_#{fun}(el, table) end"
+  defp enc_fun1(codec, pub), do: "fn el -> #{enc_expr(codec, "el", pub)} end"
 
   defp arm_ctor({:const, _, ctor}), do: ctor
   defp arm_ctor({:unwrap, ctor, _}), do: ctor
@@ -1731,8 +2184,10 @@ defmodule Muro.Repr do
 
   defp render_helpers(feats) do
     parts =
-      []
-      |> maybe(:nat, feats, nat_helpers())
+      [table_helpers()]
+      |> maybe_nat_max(feats)
+      |> maybe(:decode_nat, feats, decode_nat_helpers())
+      |> maybe(:nat, feats, nat_term_helpers())
       |> maybe(:bool, feats, bool_helpers())
       |> maybe(:fetch, feats, fetch_helper())
       |> maybe(:tag, feats, tag_helper())
@@ -1741,33 +2196,105 @@ defmodule Muro.Repr do
       |> maybe(:optional, feats, optional_helpers())
       |> maybe(:nullable, feats, nullable_helpers())
       |> maybe(:list, feats, list_helpers())
+      |> maybe(:interned, feats, interned_helpers(feats))
+      |> maybe(:bin, feats, bin_helpers())
+      |> maybe(:map_of, feats, map_of_helpers())
+      |> maybe(:fallback, feats, else_helpers(feats))
 
     Enum.join(parts, "\n\n")
+  end
+
+  # The guard is shared by `integer` and by interned names. A book that uses
+  # neither must not carry an unused attribute.
+  defp maybe_nat_max(acc, feats) do
+    if MapSet.member?(feats, :nat) or MapSet.member?(feats, :interned) do
+      acc ++ ["@muro_repr_nat_max #{inspect(@nat_max)}"]
+    else
+      acc
+    end
   end
 
   defp maybe(acc, feat, feats, src) do
     if MapSet.member?(feats, feat), do: acc ++ [String.trim(src)], else: acc
   end
 
-  defp nat_helpers do
+  defp table_helpers do
     """
-    @muro_repr_nat_max #{inspect(@nat_max)}
+    def muro_repr_table_new, do: %{by_name: %{}, by_index: %{}}
 
-    defp muro_repr_decode_nat(value, _path)
-         when is_integer(value) and value >= 0 and value <= @muro_repr_nat_max do
-      {:ok, muro_repr_nat_from(value)}
+    def muro_repr_table_new(names) when is_list(names) do
+      muro_repr_table_from(names, 0, %{}, %{})
     end
 
-    defp muro_repr_decode_nat(value, path) when is_integer(value) and value < 0 do
+    def muro_repr_table_new(other) do
+      raise ArgumentError, "muro_repr_table_new expects a list of binaries, got: " <> inspect(other)
+    end
+
+    defp muro_repr_table_from([], _i, by_name, by_index) do
+      %{by_name: by_name, by_index: by_index}
+    end
+
+    defp muro_repr_table_from([name | rest], i, by_name, by_index) when is_binary(name) do
+      if Map.has_key?(by_name, name) do
+        raise ArgumentError, "muro_repr_table_new duplicate name " <> inspect(name)
+      else
+        muro_repr_table_from(rest, i + 1, Map.put(by_name, name, i), Map.put(by_index, i, name))
+      end
+    end
+
+    defp muro_repr_table_from([other | _rest], _i, _by_name, _by_index) do
+      raise ArgumentError, "muro_repr_table_new expects a binary, got: " <> inspect(other)
+    end
+
+    def muro_repr_table_names(table) do
+      table = muro_repr_table_check(table, "muro_repr_table_names")
+      by_index = :erlang.map_get(:by_index, table)
+      by_index |> Map.keys() |> Enum.sort() |> Enum.map(&Map.fetch!(by_index, &1))
+    end
+
+    defp muro_repr_table_check(table, fun)
+         when is_map(table) and map_size(table) == 2 and is_map_key(table, :by_name) and
+                is_map_key(table, :by_index) do
+      by_name = :erlang.map_get(:by_name, table)
+      by_index = :erlang.map_get(:by_index, table)
+
+      if is_map(by_name) and is_map(by_index) do
+        table
+      else
+        raise ArgumentError, fun <> " table must be %{by_name: %{}, by_index: %{}}"
+      end
+    end
+
+    defp muro_repr_table_check(_table, fun) do
+      raise ArgumentError, fun <> " table must be %{by_name: %{}, by_index: %{}}"
+    end
+    """
+  end
+
+  # `decode_nat` exists only where an integer shape is decoded. An interned
+  # name still needs `nat_from` and `encode_nat`, and must not carry the
+  # unused decoder.
+  defp decode_nat_helpers do
+    """
+    defp muro_repr_decode_nat(value, _path, table)
+         when is_integer(value) and value >= 0 and value <= @muro_repr_nat_max do
+      {:ok, muro_repr_nat_from(value), table}
+    end
+
+    defp muro_repr_decode_nat(value, path, _table) when is_integer(value) and value < 0 do
       {:error, {path, {:negative_integer, value}}}
     end
 
-    defp muro_repr_decode_nat(value, path) when is_integer(value) do
+    defp muro_repr_decode_nat(value, path, _table) when is_integer(value) do
       {:error, {path, {:nat_too_large, value}}}
     end
 
-    defp muro_repr_decode_nat(value, path), do: {:error, {path, {:not_integer, value}}}
+    defp muro_repr_decode_nat(value, path, _table), do: {:error, {path, {:not_integer, value}}}
+    """
+  end
 
+  defp nat_term_helpers do
+    """
     defp muro_repr_nat_from(0), do: 0
 
     defp muro_repr_nat_from(n) when is_integer(n) and n > 0 do
@@ -1788,9 +2315,9 @@ defmodule Muro.Repr do
 
   defp bool_helpers do
     """
-    defp muro_repr_decode_bool(true, _path), do: {:ok, true}
-    defp muro_repr_decode_bool(false, _path), do: {:ok, false}
-    defp muro_repr_decode_bool(value, path), do: {:error, {path, {:not_boolean, value}}}
+    defp muro_repr_decode_bool(true, _path, table), do: {:ok, true, table}
+    defp muro_repr_decode_bool(false, _path, table), do: {:ok, false, table}
+    defp muro_repr_decode_bool(value, path, _table), do: {:error, {path, {:not_boolean, value}}}
 
     defp muro_repr_encode_bool(true), do: true
     defp muro_repr_encode_bool(false), do: false
@@ -1842,25 +2369,39 @@ defmodule Muro.Repr do
 
   defp optional_helpers do
     """
-    defp muro_repr_decode_optional(value, path, key, fun, nothing, just, nil_ok) do
+    defp muro_repr_decode_optional(value, path, table, key, fun, nothing, just, mode) do
       case Map.fetch(value, key) do
         :error ->
-          {:ok, nothing}
-
-        {:ok, nil} ->
-          if nil_ok do
-            {:ok, nothing}
-          else
-            {:error, {path ++ [key], {:nil_not_allowed, nil}}}
-          end
+          {:ok, nothing, table}
 
         {:ok, got} ->
-          case fun.(got, path ++ [key]) do
-            {:ok, inner} -> {:ok, {just, inner}}
-            {:error, _} = err -> err
-          end
+          muro_repr_optional_present(got, mode, fun, path, key, table, nothing, just)
       end
     end
+
+    # A present nil is `nothing` for `optional nullable`, an error for a plain
+    # `optional`, and a value of the inner shape when that shape has a fallback.
+    # The mode is a runtime atom, so the three answers stay in one body: a book
+    # that uses only one of them must not grow an unreachable clause.
+    defp muro_repr_optional_present(nil, mode, fun, path, key, table, nothing, just) do
+      cond do
+        mode == :nothing ->
+          {:ok, nothing, table}
+
+        mode == :error ->
+          {:error, {path ++ [key], {:nil_not_allowed, nil}}}
+
+        true ->
+          muro_repr_optional_value(fun.(nil, path ++ [key], table), just)
+      end
+    end
+
+    defp muro_repr_optional_present(got, _mode, fun, path, key, table, _nothing, just) do
+      muro_repr_optional_value(fun.(got, path ++ [key], table), just)
+    end
+
+    defp muro_repr_optional_value({:ok, inner, table}, just), do: {:ok, {just, inner}, table}
+    defp muro_repr_optional_value({:error, _} = err, _just), do: err
 
     defp muro_repr_put_optional(map, _key, nothing, _just, nothing, _fun), do: map
 
@@ -1872,11 +2413,11 @@ defmodule Muro.Repr do
 
   defp nullable_helpers do
     """
-    defp muro_repr_decode_nullable(nil, _path, nothing, _just, _fun), do: {:ok, nothing}
+    defp muro_repr_decode_nullable(nil, _path, table, nothing, _just, _fun), do: {:ok, nothing, table}
 
-    defp muro_repr_decode_nullable(value, path, _nothing, just, fun) do
-      case fun.(value, path) do
-        {:ok, inner} -> {:ok, {just, inner}}
+    defp muro_repr_decode_nullable(value, path, table, _nothing, just, fun) do
+      case fun.(value, path, table) do
+        {:ok, inner, table} -> {:ok, {just, inner}, table}
         {:error, _} = err -> err
       end
     end
@@ -1888,24 +2429,24 @@ defmodule Muro.Repr do
 
   defp list_helpers do
     """
-    defp muro_repr_list_decode(value, path, fun, nil_ctor, cons) do
-      case muro_repr_list_walk(value, path, 0, fun, []) do
-        {:ok, acc} -> {:ok, muro_repr_list_pack(acc, nil_ctor, cons)}
+    defp muro_repr_list_decode(value, path, table, fun, nil_ctor, cons) do
+      case muro_repr_list_walk(value, path, 0, table, fun, []) do
+        {:ok, acc, table} -> {:ok, muro_repr_list_pack(acc, nil_ctor, cons), table}
         :improper -> {:error, {path, {:not_list, value}}}
         {:error, _} = err -> err
       end
     end
 
-    defp muro_repr_list_walk([], _path, _i, _fun, acc), do: {:ok, acc}
+    defp muro_repr_list_walk([], _path, _i, table, _fun, acc), do: {:ok, acc, table}
 
-    defp muro_repr_list_walk([el | rest], path, i, fun, acc) do
-      case fun.(el, path ++ [i]) do
-        {:ok, got} -> muro_repr_list_walk(rest, path, i + 1, fun, [got | acc])
+    defp muro_repr_list_walk([el | rest], path, i, table, fun, acc) do
+      case fun.(el, path ++ [i], table) do
+        {:ok, got, table} -> muro_repr_list_walk(rest, path, i + 1, table, fun, [got | acc])
         {:error, _} = err -> err
       end
     end
 
-    defp muro_repr_list_walk(_value, _path, _i, _fun, _acc), do: :improper
+    defp muro_repr_list_walk(_value, _path, _i, _table, _fun, _acc), do: :improper
 
     defp muro_repr_list_pack(reversed, nil_ctor, cons) do
       Enum.reduce(reversed, nil_ctor, fn el, acc -> {cons, el, acc} end)
@@ -1920,6 +2461,257 @@ defmodule Muro.Repr do
     defp muro_repr_list_encode({cons, el, rest}, nil_ctor, cons, fun, acc) do
       muro_repr_list_encode(rest, nil_ctor, cons, fun, [fun.(el) | acc])
     end
+    """
+  end
+
+  # `name_term` / `name_index` grow a clause per numeral target the book uses.
+  # A Nat-only book must not mention the binary helpers, and the other way round.
+  defp interned_helpers(feats) do
+    nat? = MapSet.member?(feats, :interned_nat)
+    bin? = MapSet.member?(feats, :bin)
+
+    term =
+      Enum.join(
+        [
+          if(nat?, do: "defp muro_repr_name_term(i, :nat), do: muro_repr_nat_from(i)"),
+          if(bin?,
+            do: "defp muro_repr_name_term(i, {z, d1, d2}), do: muro_repr_bin_from(i, z, d1, d2)"
+          )
+        ]
+        |> Enum.reject(&is_nil/1),
+        "\n"
+      )
+
+    index =
+      Enum.join(
+        [
+          if(nat?, do: "defp muro_repr_name_index(term, :nat), do: muro_repr_encode_nat(term)"),
+          if(bin?,
+            do:
+              "defp muro_repr_name_index(term, {z, d1, d2}), do: muro_repr_bin_index(term, z, d1, d2)"
+          )
+        ]
+        |> Enum.reject(&is_nil/1),
+        "\n"
+      )
+
+    """
+    defp muro_repr_decode_interned(value, path, table, kind, reserved) do
+      if is_binary(value) and String.valid?(value) do
+        if value in reserved do
+          {:error, {path, {:not_string, value}}}
+        else
+          muro_repr_intern_index(value, path, table, kind)
+        end
+      else
+        {:error, {path, {:not_string, value}}}
+      end
+    end
+
+    defp muro_repr_intern_index(name, path, table, kind) do
+      by_name = :erlang.map_get(:by_name, table)
+      by_index = :erlang.map_get(:by_index, table)
+
+      case Map.fetch(by_name, name) do
+        {:ok, i} ->
+          {:ok, muro_repr_name_term(i, kind), table}
+
+        :error ->
+          i = map_size(by_name)
+
+          if i > @muro_repr_nat_max do
+            {:error, {path, {:too_many_names, @muro_repr_nat_max}}}
+          else
+            table = %{
+              by_name: Map.put(by_name, name, i),
+              by_index: Map.put(by_index, i, name)
+            }
+
+            {:ok, muro_repr_name_term(i, kind), table}
+          end
+      end
+    end
+
+    #{term}
+
+    #{index}
+
+    defp muro_repr_encode_interned(term, table, kind, reserved, fun) do
+      i = muro_repr_name_index(term, kind)
+      by_index = :erlang.map_get(:by_index, table)
+
+      case Map.fetch(by_index, i) do
+        :error ->
+          raise ArgumentError, fun <> ": no name for index " <> Integer.to_string(i)
+
+        {:ok, name} ->
+          if name in reserved do
+            raise ArgumentError,
+                  fun <> ": name " <> inspect(name) <> " is reserved by a sibling constructor"
+          else
+            name
+          end
+      end
+    end
+    """
+  end
+
+  defp bin_helpers do
+    """
+    defp muro_repr_bin_from(0, z, _d1, _d2), do: z
+
+    defp muro_repr_bin_from(i, z, d1, d2) when i > 0 do
+      # digits are innermost-first; build applies the head as the outer constructor.
+      muro_repr_bin_build(Enum.reverse(muro_repr_bin_digits(i, [])), z, d1, d2)
+    end
+
+    defp muro_repr_bin_digits(0, acc), do: acc
+
+    defp muro_repr_bin_digits(i, acc) when i > 0 and rem(i, 2) == 1 do
+      muro_repr_bin_digits(div(i - 1, 2), [:d1 | acc])
+    end
+
+    defp muro_repr_bin_digits(i, acc) when i > 0 do
+      muro_repr_bin_digits(div(i - 2, 2), [:d2 | acc])
+    end
+
+    defp muro_repr_bin_build([], z, _d1, _d2), do: z
+    defp muro_repr_bin_build([:d1 | rest], z, d1, d2), do: {d1, muro_repr_bin_build(rest, z, d1, d2)}
+    defp muro_repr_bin_build([:d2 | rest], z, d1, d2), do: {d2, muro_repr_bin_build(rest, z, d1, d2)}
+
+    defp muro_repr_bin_index(term, z, d1, d2) do
+      muro_repr_bin_fold(muro_repr_bin_collect(term, z, d1, d2, []), 0)
+    end
+
+    defp muro_repr_bin_collect(z, z, _d1, _d2, acc), do: acc
+
+    defp muro_repr_bin_collect({d1, inner}, z, d1, d2, acc) do
+      muro_repr_bin_collect(inner, z, d1, d2, [:d1 | acc])
+    end
+
+    defp muro_repr_bin_collect({d2, inner}, z, d1, d2, acc) do
+      muro_repr_bin_collect(inner, z, d1, d2, [:d2 | acc])
+    end
+
+    defp muro_repr_bin_fold([], acc), do: acc
+    defp muro_repr_bin_fold([:d1 | rest], acc), do: muro_repr_bin_fold(rest, acc * 2 + 1)
+    defp muro_repr_bin_fold([:d2 | rest], acc), do: muro_repr_bin_fold(rest, acc * 2 + 2)
+    """
+  end
+
+  defp map_of_helpers do
+    """
+    defp muro_repr_map_of_decode(value, path, table, key_fun, val_fun, elem_fun, nil_ctor, cons)
+         when is_map(value) do
+      pairs = Enum.sort_by(Map.to_list(value), fn {k, _} -> {k, is_float(k)} end)
+
+      case muro_repr_map_of_walk(pairs, path, table, key_fun, val_fun, elem_fun, %{}, []) do
+        {:ok, reversed, table} -> {:ok, muro_repr_map_pack(reversed, nil_ctor, cons), table}
+        {:error, _} = err -> err
+      end
+    end
+
+    defp muro_repr_map_of_decode(value, path, _table, _key_fun, _val_fun, _elem_fun, _nil_ctor, _cons) do
+      {:error, {path, {:not_map, value}}}
+    end
+
+    defp muro_repr_map_of_walk([], _path, table, _key_fun, _val_fun, _elem_fun, _seen, acc) do
+      {:ok, acc, table}
+    end
+
+    defp muro_repr_map_of_walk([{wk, wv} | rest], path, table, key_fun, val_fun, elem_fun, seen, acc) do
+      case key_fun.(wk, path ++ [{:key, wk}], table) do
+        {:error, _} = err ->
+          err
+
+        {:ok, mk, table} ->
+          case Map.fetch(seen, mk) do
+            {:ok, prev} ->
+              {a, b} = muro_repr_wire_order(prev, wk)
+              {:error, {path, {:keys_collide, a, b}}}
+
+            :error ->
+              case val_fun.(wv, path ++ [wk], table) do
+                {:error, _} = err ->
+                  err
+
+                {:ok, mv, table} ->
+                  muro_repr_map_of_walk(
+                    rest,
+                    path,
+                    table,
+                    key_fun,
+                    val_fun,
+                    elem_fun,
+                    Map.put(seen, mk, wk),
+                    [elem_fun.(mk, mv) | acc]
+                  )
+              end
+          end
+      end
+    end
+
+    defp muro_repr_map_pack(reversed, nil_ctor, cons) do
+      Enum.reduce(reversed, nil_ctor, fn el, acc -> {cons, el, acc} end)
+    end
+
+    defp muro_repr_wire_order(a, b) do
+      if {a, is_float(a)} <= {b, is_float(b)}, do: {a, b}, else: {b, a}
+    end
+
+    defp muro_repr_map_of_encode(value, split, nil_ctor, cons, key_fun, val_fun, fun) do
+      muro_repr_map_of_walk_enc(value, split, nil_ctor, cons, key_fun, val_fun, fun, %{})
+    end
+
+    defp muro_repr_map_of_walk_enc(nil_ctor, _split, nil_ctor, _cons, _key_fun, _val_fun, _fun, acc) do
+      acc
+    end
+
+    defp muro_repr_map_of_walk_enc({cons, el, rest}, split, nil_ctor, cons, key_fun, val_fun, fun, acc) do
+      {k, v} = split.(el)
+      muro_repr_map_of_walk_enc(
+        rest,
+        split,
+        nil_ctor,
+        cons,
+        key_fun,
+        val_fun,
+        fun,
+        muro_repr_map_put(acc, key_fun.(k), val_fun.(v), fun)
+      )
+    end
+
+    defp muro_repr_map_put(map, key, value, fun) do
+      if Map.has_key?(map, key) do
+        raise ArgumentError, fun <> ": duplicate map key " <> inspect(key)
+      else
+        Map.put(map, key, value)
+      end
+    end
+    """
+  end
+
+  # `{:nat_too_large, _}` is a clause only when a numeral fallback exists.
+  # A boolean fallback never produces that reason, and an unused clause is a warning.
+  defp else_helpers(feats) do
+    limit =
+      if MapSet.member?(feats, :fallback_nat) do
+        """
+        defp muro_repr_else({:error, {path, {:nat_too_large, _}}} = err, path, _incoming, _fallback),
+          do: err
+        """
+      else
+        ""
+      end
+
+    """
+    defp muro_repr_else({:ok, got, table}, _path, _incoming, _fallback), do: {:ok, got, table}
+
+    #{limit}
+    defp muro_repr_else({:error, {path, _reason}}, path, incoming, fallback),
+      do: {:ok, fallback, incoming}
+
+    defp muro_repr_else({:error, _} = err, _path, _incoming, _fallback), do: err
     """
   end
 end

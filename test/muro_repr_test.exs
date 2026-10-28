@@ -81,6 +81,71 @@ defmodule Muro.ReprTest do
              Parser.parse("repr Box := map { 1 => integer }\n")
 
     assert {:error, "1:17: list needs a shape"} = Parser.parse("repr Box := list\n")
+
+    assert {:error, "1:21: interned needs string"} = Parser.parse("repr Box := interned\n")
+    assert {:error, "1:22: interned needs string"} = Parser.parse("repr Box := interned name\n")
+    assert {:error, "1:19: map_of needs a shape"} = Parser.parse("repr Box := map_of\n")
+
+    assert {:error, "1:25: unexpected end of file, expected a fallback"} =
+             Parser.parse("repr Box := boolean else\n")
+
+    assert {:error, "1:21: unexpected end of file, expected )"} =
+             Parser.parse("repr Box := (boolean\n")
+  end
+
+  test "the new shapes parse, and parentheses add no node" do
+    assert {:ok, [repr]} =
+             Parser.parse("""
+             repr Demo := wild => "*" | named => interned string | nums => map_of integer => list boolean | flag => optional (boolean else false) | bare => (integer) | whole => list boolean else false | n => integer else 0
+             """)
+
+    assert repr.body ==
+             {:choice,
+              [
+                {"wild", {:string, "*"}},
+                {"named", {:interned}},
+                {"nums", {:map_of, {:integer}, {:list, {:boolean}}}},
+                {"flag", {:optional, {:else, {:boolean}, {:ctor, "false"}}}},
+                {"bare", {:integer}},
+                {"whole", {:else, {:list, {:boolean}}, {:ctor, "false"}}},
+                {"n", {:else, {:integer}, {:numeral, 0}}}
+              ]}
+
+    assert {:ok, [plain]} = Parser.parse("repr Demo := boolean\n")
+    assert {:ok, [paren]} = Parser.parse("repr Demo := (boolean)\n")
+    assert plain.body == paren.body
+  end
+
+  test "interned, map_of, and else stay names outside a repr" do
+    assert {:ok, [defn]} = Parser.parse("def else : run Nat := 0\n")
+    assert defn.name == "else"
+    assert :ok = Check.check_sig([defn])
+
+    src = """
+    data map_of : Type where
+      empty : map_of
+    data Box : Type where
+      interned : Box
+    def else : run Nat := 0
+    """
+
+    assert {:ok, [map_of, box, else_def]} = Parser.parse(src)
+    assert map_of.name == "map_of"
+    assert hd(map_of.ctors).name == "empty"
+    assert hd(box.ctors).name == "interned"
+    assert else_def.name == "else"
+    assert :ok = Check.check_sig([map_of, box, else_def])
+  end
+
+  test "else is a shape word inside a repr" do
+    assert error("""
+           data Box : Type where
+             box : Nat → Box
+           data else : Type where
+             c : else
+           repr else := nil
+           repr Box := else
+           """) == "6:1: repr Box: else is a shape word and cannot name a type"
   end
 
   test "duplicate repr names both lines" do
@@ -168,7 +233,7 @@ defmodule Muro.ReprTest do
              box : Atom → Box
            repr Box := tuple { integer }
            """) ==
-             "3:1: repr Box: constructor box field 0 has type Atom; free-form strings and interned names are not supported; model the closed set as a type and give it a repr"
+             "3:1: repr Box: constructor box field 0 has type Atom; model the closed set as a type and give it a repr, or intern a name as Nat or a binary numeral"
 
     assert error("""
            data Box : Type where
@@ -401,6 +466,15 @@ defmodule Muro.ReprTest do
            repr Nat := integer
            """) ==
              "4:1: repr Nat: muro_repr_decode_nat collides with run muro_repr_decode_nat"
+
+    assert error("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           def muro_repr_table_new : run Nat := 0
+           repr Bool := boolean
+           """) ==
+             "5:1: repr Bool: muro_repr_table_new collides with run muro_repr_table_new"
   end
 
   test "a book with no repr emits no codec" do
@@ -427,12 +501,13 @@ defmodule Muro.ReprTest do
 
   test "a host calls decode, the proved function, then encode" do
     mod = example()
-    assert {:ok, v} = mod.decode_entry(%{"id" => 3, "enabled" => true})
-    assert mod.encode_entry(mod.toggle(v)) == %{"id" => 3, "enabled" => false}
-    assert mod.encode_outcome(mod.describe(v)) == %{"status" => "on", "id" => 3}
+    assert {:ok, v, table} = mod.decode_entry(%{"id" => 3, "enabled" => true})
+    assert table == mod.muro_repr_table_new()
+    assert mod.encode_entry(mod.toggle(v), table) == %{"id" => 3, "enabled" => false}
+    assert mod.encode_outcome(mod.describe(v), table) == %{"status" => "on", "id" => 3}
 
-    assert {:ok, missing} = mod.decode_entry(%{"id" => 3})
-    assert mod.encode_outcome(mod.describe(missing)) == nil
+    assert {:ok, missing, table} = mod.decode_entry(%{"id" => 3})
+    assert mod.encode_outcome(mod.describe(missing), table) == nil
   end
 
   test "decode errors name the path and the value" do
@@ -473,7 +548,7 @@ defmodule Muro.ReprTest do
              {:error, {["r"], {:not_integer, 1.0}}}
 
     assert mod.decode_shape(%{"kind" => "circle"}) == {:error, {[], {:missing_key, "r"}}}
-    assert {:ok, :empty} = mod.decode_shape(nil)
+    assert {:ok, :empty, _table} = mod.decode_shape(nil)
   end
 
   test "list, tuple, tag, open, and nullable errors" do
@@ -502,7 +577,7 @@ defmodule Muro.ReprTest do
     assert mod.decode_nested(%{"in" => %{}}) == {:error, {["in"], {:missing_key, "n"}}}
     assert mod.decode_box(%{"xs" => [0, "a"]}) == {:error, {["xs", 1], {:not_integer, "a"}}}
 
-    assert {:ok, _} = mod.decode_open(%{"id" => 1, "z" => 9})
+    assert {:ok, _, _} = mod.decode_open(%{"id" => 1, "z" => 9})
     assert mod.decode_tree({1.0, nil, nil}) == {:error, {[0], {:not_integer, 1.0}}}
     assert mod.decode_tree({1, nil}) == {:error, {[], {:no_variant, [:leaf, :node], {1, nil}}}}
   end
@@ -510,68 +585,70 @@ defmodule Muro.ReprTest do
   test "round trip over the vocabulary" do
     mod = codec()
     :rand.seed(:exsss, {1, 2, 3})
+    table = mod.muro_repr_table_new()
 
     for _ <- 1..200 do
       host = Enum.random([true, false])
-      assert mod.encode_bool(host) == host
-      assert mod.decode_bool(host) == {:ok, host}
-      assert mod.decode_bool(mod.encode_bool(host)) == {:ok, host}
+      assert mod.encode_bool(host, table) == host
+      assert mod.decode_bool(host) == {:ok, host, table}
+      assert mod.decode_bool(mod.encode_bool(host, table)) == {:ok, host, table}
 
       n = :rand.uniform(21) - 1
-      assert mod.decode_nat(n) |> elem(1) |> then(&mod.encode_nat/1) == n
-      {:ok, nat} = mod.decode_nat(n)
-      assert mod.decode_nat(mod.encode_nat(nat)) == {:ok, nat}
+      {:ok, nat, table} = mod.decode_nat(n)
+      assert mod.encode_nat(nat, table) == n
+      assert mod.decode_nat(mod.encode_nat(nat, table)) == {:ok, nat, table}
 
-      assert mod.decode_tree(nil) == {:ok, :leaf}
-      assert mod.encode_tree(:leaf) == nil
+      assert mod.decode_tree(nil) == {:ok, :leaf, table}
+      assert mod.encode_tree(:leaf, table) == nil
 
       tag = Enum.random([:yes, :no])
       host = if tag == :yes, do: :yes, else: "no"
-      assert mod.decode_tags(host) == {:ok, tag}
-      assert mod.encode_tags(tag) == host
+      assert mod.decode_tags(host) == {:ok, tag, table}
+      assert mod.encode_tags(tag, table) == host
 
       {list_host, list_muro} = gen_list()
-      assert mod.decode_bag(list_host) == {:ok, list_muro}
-      assert mod.encode_bag(list_muro) == list_host
+      assert mod.decode_bag(list_host) == {:ok, list_muro, table}
+      assert mod.encode_bag(list_muro, table) == list_host
 
       {tuple_host, tuple_muro} = gen_pair()
-      assert mod.decode_pair(tuple_host) == {:ok, tuple_muro}
-      assert mod.encode_pair(tuple_muro) == tuple_host
+      assert mod.decode_pair(tuple_host) == {:ok, tuple_muro, table}
+      assert mod.encode_pair(tuple_muro, table) == tuple_host
 
       {row_host, row_muro} = gen_row()
-      assert mod.decode_row(row_host) == {:ok, row_muro}
-      assert mod.encode_row(row_muro) == row_host
-      assert mod.decode_row(mod.encode_row(row_muro)) == {:ok, row_muro}
+      assert mod.decode_row(row_host) == {:ok, row_muro, table}
+      assert mod.encode_row(row_muro, table) == row_host
+      assert mod.decode_row(mod.encode_row(row_muro, table)) == {:ok, row_muro, table}
 
       id = :rand.uniform(6) - 1
-      assert mod.decode_open(%{"id" => id}) == {:ok, {:open, peano(id)}}
-      assert mod.encode_open({:open, peano(id)}) == %{"id" => id}
+      assert mod.decode_open(%{"id" => id}) == {:ok, {:open, peano(id)}, table}
+      assert mod.encode_open({:open, peano(id)}, table) == %{"id" => id}
 
       {tree_host, tree_muro} = gen_tree(3)
-      assert mod.decode_tree(tree_host) == {:ok, tree_muro}
-      assert mod.encode_tree(tree_muro) == tree_host
-      assert mod.decode_tree(mod.encode_tree(tree_muro)) == {:ok, tree_muro}
+      assert mod.decode_tree(tree_host) == {:ok, tree_muro, table}
+      assert mod.encode_tree(tree_muro, table) == tree_host
+      assert mod.decode_tree(mod.encode_tree(tree_muro, table)) == {:ok, tree_muro, table}
 
       {shape_host, shape_muro} = gen_shape()
-      assert mod.decode_shape(shape_host) == {:ok, shape_muro}
-      assert mod.encode_shape(shape_muro) == shape_host
+      assert mod.decode_shape(shape_host) == {:ok, shape_muro, table}
+      assert mod.encode_shape(shape_muro, table) == shape_host
     end
   end
 
   test "open drops unknown keys, and optional nullable normalises nil" do
     mod = codec()
-    {:ok, v} = mod.decode_open(%{"id" => 4, "z" => 9})
-    assert mod.encode_open(v) == %{"id" => 4}
-    assert mod.decode_open(mod.encode_open(v)) == {:ok, v}
+    table = mod.muro_repr_table_new()
+    {:ok, v, ^table} = mod.decode_open(%{"id" => 4, "z" => 9})
+    assert mod.encode_open(v, table) == %{"id" => 4}
+    assert mod.decode_open(mod.encode_open(v, table)) == {:ok, v, table}
 
-    {:ok, missing} = mod.decode_soft(%{})
-    {:ok, present_nil} = mod.decode_soft(%{"flag" => nil})
+    {:ok, missing, ^table} = mod.decode_soft(%{})
+    {:ok, present_nil, ^table} = mod.decode_soft(%{"flag" => nil})
     assert missing == present_nil
-    assert mod.encode_soft(missing) == %{}
-    assert mod.encode_soft(present_nil) == %{}
-    {:ok, on} = mod.decode_soft(%{"flag" => true})
-    assert mod.encode_soft(on) == %{"flag" => true}
-    assert mod.decode_soft(mod.encode_soft(on)) == {:ok, on}
+    assert mod.encode_soft(missing, table) == %{}
+    assert mod.encode_soft(present_nil, table) == %{}
+    {:ok, on, ^table} = mod.decode_soft(%{"flag" => true})
+    assert mod.encode_soft(on, table) == %{"flag" => true}
+    assert mod.decode_soft(mod.encode_soft(on, table)) == {:ok, on, table}
   end
 
   test "a list of 100000 elements decodes" do
@@ -579,8 +656,9 @@ defmodule Muro.ReprTest do
     host = List.duplicate(0, 100_000)
 
     case mod.decode_bag(host) do
-      {:ok, v} ->
-        if mod.encode_bag(v) != host, do: flunk("encode did not return the 100000 host zeros")
+      {:ok, v, table} ->
+        if mod.encode_bag(v, table) != host,
+          do: flunk("encode did not return the 100000 host zeros")
 
       other ->
         flunk("decode of 100000 zeros failed: #{inspect(other, limit: 5)}")
@@ -630,6 +708,734 @@ defmodule Muro.ReprTest do
     assert Emit.Node.render(with_repr, "half_ok", :a) == Emit.Node.render(without, "half_ok", :a)
   end
 
+  test "interned string is refused unless the field is Nat or a binary numeral" do
+    name =
+      "which does not suit interned string; a name is Nat or a binary numeral type (a nullary constructor and two constructors that each take one field of the type itself)"
+
+    assert error("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           data Box : Type where
+             box : Bool → Box
+           repr Box := tuple { interned string }
+           """) == "6:1: repr Box: constructor box field 0 has type Bool, #{name}"
+
+    assert error("""
+           data Box : Type where
+             box : Atom → Box
+           repr Box := tuple { interned string }
+           """) == "3:1: repr Box: constructor box field 0 has type Atom, #{name}"
+
+    assert error("""
+           data Box : Type where
+             box : Unit → Box
+           repr Box := tuple { interned string }
+           """) == "3:1: repr Box: constructor box field 0 has type Unit, #{name}"
+
+    assert error("""
+           data List (A : Type) : Type where
+             nil : List A
+             cons : A → List A → List A
+           data Box : Type where
+             box : List Nat → Box
+           repr Box := tuple { interned string }
+           """) == "6:1: repr Box: constructor box field 0 has type List Nat, #{name}"
+
+    assert error("""
+           data Box : Type where
+             box : (Nat × Nat) → Box
+           repr Box := tuple { interned string }
+           """) == "3:1: repr Box: constructor box field 0 has type (Nat × Nat), #{name}"
+
+    assert error("""
+           data Maybe (A : Type) : Type where
+             nothing : Maybe A
+             just : A → Maybe A
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           data Box : Type where
+             box : Maybe Bool → Box
+           repr Box := tuple { interned string }
+           """) == "9:1: repr Box: constructor box field 0 has type Maybe Bool, #{name}"
+
+    assert error("""
+           data Tri : Type where
+             a : Tri
+             b : Nat → Tri
+             c : Tri → Tri
+           data Box : Type where
+             box : Tri → Box
+           repr Box := tuple { interned string }
+           """) == "7:1: repr Box: constructor box field 0 has type Tri, #{name}"
+
+    assert error("repr Nat := interned string\n") ==
+             "1:1: repr Nat: Nat is represented by integer"
+
+    assert error("""
+           data Bit : Type where
+             z : Bit
+             d1 : Bit → Bit
+             d2 : Bit → Bit
+           repr Bit := interned string
+           """) ==
+             "5:1: repr Bit: Bit has 3 constructors; interned string names a field, not the type. A name is Nat or a binary numeral type (a nullary constructor and two constructors that each take one field of the type itself)"
+  end
+
+  test "map_of is refused unless the field is a list of pairs or of a two-field record" do
+    assert error("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           data Box : Type where
+             box : Bool → Box
+           repr Box := map_of integer => boolean
+           """) ==
+             "6:1: repr Box: constructor box field 0 has type Bool, which does not suit map_of; map_of decodes a list of pairs or of a two-field record"
+
+    assert error("""
+           data List (A : Type) : Type where
+             nil : List A
+             cons : A → List A → List A
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           data Box : Type where
+             box : List Bool → Box
+           repr Box := map_of integer => boolean
+           """) ==
+             "9:1: repr Box: constructor box field 0 has type List Bool; map_of needs a list of pairs or of a single-constructor record with two fields"
+
+    assert error("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           data Pair : Type where
+             pair : Bool → Nat → Pair
+           data List (A : Type) : Type where
+             nil : List A
+             cons : A → List A → List A
+           data Box : Type where
+             box : List Pair → Box
+           repr Nat := integer
+           repr Box := map_of integer => boolean
+           """) ==
+             "12:1: repr Box: constructor box field 0 has type Bool, which does not suit integer"
+  end
+
+  test "else is refused except on a boolean, an integer, or a type with a repr" do
+    assert error("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           data Box : Type where
+             box : Bool → Box
+           repr Box := tuple { list boolean else false }
+           """) ==
+             "6:1: repr Box: constructor box field 0: else follows boolean, integer, or a type with its own repr, not list"
+
+    assert error("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           data Maybe (A : Type) : Type where
+             nothing : Maybe A
+             just : A → Maybe A
+           data Box : Type where
+             box : Maybe Bool → Box
+           repr Box := map { "b" => optional boolean else false }
+           """) ==
+             "9:1: repr Box: constructor box field 0: else follows boolean, integer, or a type with its own repr, not optional"
+
+    assert error("""
+           data List (A : Type) : Type where
+             nil : List A
+             cons : A → List A → List A
+           data Box : Type where
+             box : List Nat → Box
+           repr Box := tuple { map_of integer => boolean else false }
+           """) ==
+             "6:1: repr Box: constructor box field 0: else follows boolean, integer, or a type with its own repr, not map_of"
+
+    assert error("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           data Box : Type where
+             box : Bool → Box
+           repr Box := tuple { interned string else false }
+           """) ==
+             "6:1: repr Box: constructor box field 0: else follows boolean, integer, or a type with its own repr, not interned string"
+
+    assert error("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           data Box : Type where
+             box : Bool → Box
+           repr Box := tuple { boolean else false else true }
+           """) ==
+             "6:1: repr Box: constructor box field 0: else follows boolean, integer, or a type with its own repr, not else"
+
+    assert error("""
+           data Key : Type where
+             named : Nat → Key
+             wild : Key
+           repr Key := named => boolean else false | wild => "*"
+           """) ==
+             "4:1: repr Key: constructor named: else is a component of a shape; it is not the whole arm"
+
+    assert error("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           repr Bool := boolean else false
+           """) == "4:1: repr Bool: else is a component of a shape; it is not the whole repr"
+
+    assert error("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           data Box : Type where
+             box : Bool → Box
+           repr Box := tuple { boolean else missing }
+           """) ==
+             "6:1: repr Box: constructor box field 0: missing is not a nullary constructor of Bool; nullary constructors are true, false"
+
+    assert error("""
+           data Flag : Type where
+             no : Flag
+             yes : Nat → Flag
+           data Box : Type where
+             box : Flag → Box
+           repr Flag := no => nil | yes => integer
+           repr Box := tuple { Flag else yes }
+           """) ==
+             "7:1: repr Box: constructor box field 0: yes takes fields; a fallback is a nullary constructor of Flag (no)"
+
+    assert error("""
+           data Bool : Type where
+             true : Bool
+             false : Bool
+           data Box : Type where
+             box : Bool → Box
+           repr Box := tuple { boolean else 1 }
+           """) ==
+             "6:1: repr Box: constructor box field 0: a numeral is a fallback for Nat, and this field has type Bool; nullary constructors are true, false"
+
+    assert error("""
+           data Box : Type where
+             box : Nat → Box
+           repr Box := tuple { integer else 1000001 }
+           repr Nat := integer
+           """) ==
+             "3:1: repr Box: constructor box field 0: 1000001 is above the Nat guard 1000000"
+  end
+
+  test "two interned arms overlap, and a string reached through a reference still overlaps" do
+    assert error("""
+           data Key : Type where
+             a : Nat → Key
+             b : Nat → Key
+           repr Key := a => interned string | b => interned string
+           """) ==
+             "4:1: repr Key: constructors a and b share a host shape (interned string)"
+
+    assert error("""
+           data Other : Type where
+             other : Other
+           data Key : Type where
+             named : Nat → Key
+             lit : Other → Key
+           repr Other := "hello"
+           repr Key := named => interned string | lit => Other
+           """) ==
+             "7:1: repr Key: constructors named and lit share a host shape (interned string)"
+  end
+
+  test "decode and encode share one table shape" do
+    mod = codec()
+    empty = mod.muro_repr_table_new()
+    assert empty == %{by_name: %{}, by_index: %{}}
+    assert map_size(empty.by_name) == map_size(empty.by_index)
+
+    known = mod.muro_repr_table_new(["b", "a"])
+    assert known.by_name == %{"b" => 0, "a" => 1}
+    assert known.by_index == %{0 => "b", 1 => "a"}
+    assert mod.muro_repr_table_names(known) == ["b", "a"]
+
+    assert_raise ArgumentError, "muro_repr_table_new expects a list of binaries, got: :no", fn ->
+      mod.muro_repr_table_new(:no)
+    end
+
+    assert_raise ArgumentError, ~s(muro_repr_table_new duplicate name "a"), fn ->
+      mod.muro_repr_table_new(["a", "a"])
+    end
+
+    assert_raise ArgumentError, "muro_repr_table_new expects a binary, got: :a", fn ->
+      mod.muro_repr_table_new([:a])
+    end
+
+    raw = <<255>>
+    odd = mod.muro_repr_table_new([raw])
+    assert mod.muro_repr_table_names(odd) == [raw]
+
+    assert function_exported?(mod, :decode_bool, 1)
+    assert function_exported?(mod, :decode_bool, 2)
+    assert function_exported?(mod, :decode_nat, 1)
+    assert function_exported?(mod, :decode_nat, 2)
+    refute function_exported?(mod, :encode_bool, 1)
+    refute function_exported?(mod, :encode_nat, 1)
+    assert function_exported?(mod, :encode_bool, 2)
+    assert function_exported?(mod, :encode_nat, 2)
+    assert function_exported?(mod, :muro_repr_table_new, 0)
+    assert function_exported?(mod, :muro_repr_table_new, 1)
+    assert function_exported?(mod, :muro_repr_table_names, 1)
+
+    assert mod.decode_bool(true) == {:ok, true, empty}
+    assert mod.decode_bool(false, empty) == {:ok, false, empty}
+    assert mod.decode_nat(3) == {:ok, peano(3), empty}
+    assert mod.decode_nat(3, known) == {:ok, peano(3), known}
+    assert mod.encode_nat(peano(3), known) == 3
+    assert mod.encode_bool(false, empty) == false
+    assert mod.decode_bool(mod.encode_bool(true, empty), empty) == {:ok, true, empty}
+
+    for bad <- [
+          %{},
+          %{by_name: %{}},
+          %{by_name: [], by_index: %{}},
+          %{by_name: %{}, by_index: %{}, extra: 1},
+          nil
+        ] do
+      assert_raise ArgumentError,
+                   "decode_bool table must be %{by_name: %{}, by_index: %{}}",
+                   fn -> mod.decode_bool(true, bad) end
+
+      assert_raise ArgumentError,
+                   "encode_nat table must be %{by_name: %{}, by_index: %{}}",
+                   fn -> mod.encode_nat(0, bad) end
+    end
+
+    assert_raise ArgumentError,
+                 "muro_repr_table_names table must be %{by_name: %{}, by_index: %{}}",
+                 fn -> mod.muro_repr_table_names(%{}) end
+  end
+
+  test "a boolean repr emits the table helpers and no unused nat guard" do
+    book =
+      ok!("""
+      data Bool : Type where
+        true : Bool
+        false : Bool
+      repr Bool := boolean
+      """)
+
+    source = Emit.emit_module(ReprBoolOnly, book)
+    assert source =~ "def muro_repr_table_new"
+    assert source =~ "def muro_repr_table_names"
+    refute source =~ "@muro_repr_nat_max"
+    refute source =~ "muro_repr_decode_nat"
+    refute source =~ "muro_repr_else"
+    refute source =~ "muro_repr_map_of"
+    refute source =~ "muro_repr_decode_interned"
+    refute source =~ "muro_repr_bin_from"
+    mod = compile_source(source, ReprBoolOnly)
+    assert mod.decode_bool(true) == {:ok, true, mod.muro_repr_table_new()}
+    refute function_exported?(mod, :encode_bool, 1)
+  end
+
+  test "interned names keep one index and both numeral targets" do
+    mod = wide()
+    empty = mod.muro_repr_table_new()
+
+    assert mod.decode_key("*") == {:ok, :wild, empty}
+
+    assert mod.decode_key("*", mod.muro_repr_table_new(["auth"])) ==
+             {:ok, :wild, mod.muro_repr_table_new(["auth"])}
+
+    {:ok, {:named, 0}, table} = mod.decode_key("auth")
+    assert mod.muro_repr_table_names(table) == ["auth"]
+    assert mod.encode_key({:named, 0}, table) == "auth"
+    assert mod.encode_key(:wild, empty) == "*"
+
+    {:ok, :wild, same} = mod.decode_key("*", table)
+    assert same == table
+
+    bad = <<255>>
+    assert mod.decode_key(bad) == {:error, {[], {:not_string, bad}}}
+    assert mod.decode_key(nil) == {:error, {[], {:no_variant, [:named, :wild], nil}}}
+    assert mod.decode_wrap(nil) == {:error, {[], {:not_string, nil}}}
+    assert mod.decode_wrap(1) == {:error, {[], {:not_string, 1}}}
+    assert mod.decode_token(bad) == {:error, {[], {:not_string, bad}}}
+
+    {:ok, {:wrap, 0}, blank} = mod.decode_wrap("")
+    assert mod.muro_repr_table_names(blank) == [""]
+    assert mod.encode_wrap({:wrap, 0}, blank) == ""
+
+    assert_raise ArgumentError, "encode_wrap: no name for index 1", fn ->
+      mod.encode_wrap({:wrap, {:suc, 0}}, empty)
+    end
+
+    reserved = mod.muro_repr_table_new(["*"])
+
+    assert_raise ArgumentError,
+                 ~s(encode_key: name "*" is reserved by a sibling constructor),
+                 fn -> mod.encode_key({:named, 0}, reserved) end
+
+    labels = Enum.map(0..20, fn i -> "n" <> Integer.to_string(i) end)
+    {:ok, {:names, nat_list}, nat_table} = mod.decode_names(labels)
+    assert muro_list(nat_list) == Enum.map(0..20, &peano/1)
+    assert mod.muro_repr_table_names(nat_table) == labels
+    assert mod.encode_names({:names, nat_list}, nat_table) == labels
+
+    {:ok, {:codes, bit_list}, bit_table} = mod.decode_codes(labels)
+    assert muro_list(bit_list) == Enum.map(0..20, &bin_term/1)
+    assert bin_term(0) == :z
+    assert bin_term(1) == {:d1, :z}
+    assert bin_term(2) == {:d2, :z}
+    assert bin_term(4) == {:d2, {:d1, :z}}
+    assert mod.encode_codes({:codes, bit_list}, bit_table) == labels
+
+    preset = mod.muro_repr_table_new(["a", "b", "c", "d", "e"])
+    {:ok, {:token, term}, ^preset} = mod.decode_token("e", preset)
+    assert term == bin_term(4)
+    assert mod.encode_token({:token, term}, preset) == "e"
+
+    {:ok, _, seen} = mod.decode_names(["b", "a", "b"])
+    assert mod.muro_repr_table_names(seen) == ["b", "a"]
+
+    start = mod.muro_repr_table_new(["a"])
+    {:ok, _, kept} = mod.decode_names(["b", "a"], start)
+    assert mod.muro_repr_table_names(kept) == ["a", "b"]
+
+    {:ok, {:twin, 0, {:suc, 0}}, twin_table} = mod.decode_twin({"b", "a"})
+    assert mod.muro_repr_table_names(twin_table) == ["b", "a"]
+    assert mod.encode_twin({:twin, 0, {:suc, 0}}, twin_table) == {"b", "a"}
+
+    first = %{"a" => "second", "z" => "first"}
+    second = %{"z" => "first", "a" => "second"}
+    {:ok, rec1, t1} = mod.decode_rec(first)
+    {:ok, rec2, t2} = mod.decode_rec(second)
+    assert rec1 == {:rec, 0, {:suc, 0}}
+    assert rec1 == rec2
+    assert t1 == t2
+    assert mod.muro_repr_table_names(t1) == ["first", "second"]
+
+    {:ok, {:link, {:cons, {0, {:suc, 0}}, nil}}, link_table} = mod.decode_link(%{"b" => "a"})
+    assert mod.muro_repr_table_names(link_table) == ["b", "a"]
+
+    assert mod.decode_link(%{"b" => "a"}) == mod.decode_link(%{"b" => "a"})
+  end
+
+  test "a new name past the nat guard is too many names" do
+    mod = names_limit(2)
+    {:ok, _, table} = mod.decode_names(["a", "b", "c"])
+    assert mod.muro_repr_table_names(table) == ["a", "b", "c"]
+
+    assert mod.decode_names(["a", "b", "c", "d"]) ==
+             {:error, {[3], {:too_many_names, 2}}}
+  end
+
+  test "map_of sorts by host term order and refuses a colliding key" do
+    mod = wide()
+    empty = mod.muro_repr_table_new()
+
+    assert mod.decode_bag(:no) == {:error, {[], {:not_map, :no}}}
+    assert mod.decode_bag(nil) == {:error, {[], {:not_map, nil}}}
+    assert mod.decode_bag(%{}) == {:ok, {:bag, nil}, empty}
+    assert mod.encode_bag({:bag, nil}, empty) == %{}
+
+    assert mod.decode_bag(%{1.0 => true}) ==
+             {:error, {[{:key, 1.0}], {:not_integer, 1.0}}}
+
+    assert mod.decode_bag(%{1 => "x"}) == {:error, {[1], {:not_boolean, "x"}}}
+
+    {:ok, {:rows, {:cons, {:item, 0, true}, nil}}, ^empty} = mod.decode_rows(%{0 => true})
+    assert mod.encode_rows({:rows, {:cons, {:item, 0, true}, nil}}, empty) == %{0 => true}
+
+    {:ok, {:bag, {:cons, {0, false}, {:cons, {{:suc, 0}, true}, nil}}}, ^empty} =
+      mod.decode_bag(%{1 => true, 0 => false})
+
+    keys = Enum.to_list(0..40)
+
+    host_a = Enum.reduce(keys, %{}, fn k, acc -> Map.put(acc, k, rem(k, 2) == 0) end)
+
+    host_b =
+      Enum.reduce(Enum.reverse(keys), %{}, fn k, acc -> Map.put(acc, k, rem(k, 2) == 0) end)
+
+    {:ok, sorted_a, _} = mod.decode_bag(host_a)
+    {:ok, sorted_b, _} = mod.decode_bag(host_b)
+    assert sorted_a == sorted_b
+
+    assert Enum.map(muro_list(elem(sorted_a, 1)), fn {k, v} -> {mod.encode_nat(k, empty), v} end) ==
+             Enum.map(keys, fn k -> {k, rem(k, 2) == 0} end)
+
+    labels = Enum.map(1..40, fn i -> "k" <> Integer.to_string(i) end)
+    nat_a = Enum.reduce(labels, %{}, fn k, acc -> Map.put(acc, k, true) end)
+    nat_b = Enum.reduce(Enum.reverse(labels), %{}, fn k, acc -> Map.put(acc, k, true) end)
+    {:ok, nat_va, nat_ta} = mod.decode_nat_map(nat_a)
+    {:ok, nat_vb, nat_tb} = mod.decode_nat_map(nat_b)
+    assert nat_va == nat_vb
+    assert mod.muro_repr_table_names(nat_ta) == Enum.sort(labels)
+    assert nat_ta == nat_tb
+    assert mod.encode_nat_map(nat_va, nat_ta) == nat_a
+
+    {:ok, {:collide, collide_list}, _} = mod.decode_collide(%{1.0 => true, 1 => false})
+    assert muro_list(collide_list) == [{peano(1), false}, {0, true}]
+
+    assert mod.decode_collide(%{0 => true, 1.0 => false}) ==
+             {:error, {[], {:keys_collide, 0, 1.0}}}
+
+    duplicate = {:bag, {:cons, {0, true}, {:cons, {0, false}, nil}}}
+
+    assert_raise ArgumentError, "encode_bag: duplicate map key 0", fn ->
+      mod.encode_bag(duplicate, empty)
+    end
+
+    unsorted = {:bag, {:cons, {peano(2), true}, {:cons, {0, false}, nil}}}
+    encoded = mod.encode_bag(unsorted, empty)
+    assert encoded == %{2 => true, 0 => false}
+    {:ok, ordered, ^empty} = mod.decode_bag(encoded)
+    assert ordered == {:bag, {:cons, {0, false}, {:cons, {peano(2), true}, nil}}}
+    assert ordered != unsorted
+    assert mod.decode_bag(mod.encode_bag(ordered, empty), empty) == {:ok, ordered, empty}
+
+    :rand.seed(:exsss, {7, 8, 9})
+
+    for _ <- 1..40 do
+      n = :rand.uniform(6) - 1
+
+      host =
+        if n == 0 do
+          %{}
+        else
+          Map.new(Enum.map(1..n, fn _ -> {:rand.uniform(8) - 1, Enum.random([true, false])} end))
+        end
+
+      {:ok, v, table} = mod.decode_bag(host)
+      assert table == empty
+      assert mod.decode_bag(mod.encode_bag(v, table), table) == {:ok, v, table}
+    end
+  end
+
+  test "a fallback replaces only an error at its own position" do
+    mod = wide()
+    empty = mod.muro_repr_table_new()
+
+    assert mod.decode_fall({true}) == {:ok, {:fall, true}, empty}
+    assert mod.decode_fall({false}) == {:ok, {:fall, false}, empty}
+    assert mod.decode_fall({1}) == {:ok, {:fall, false}, empty}
+    assert mod.decode_fall({nil}) == {:ok, {:fall, false}, empty}
+    assert mod.decode_fall({"yes"}) == {:ok, {:fall, false}, empty}
+    assert mod.decode_fall({%{}}) == {:ok, {:fall, false}, empty}
+    assert mod.encode_fall({:fall, false}, empty) == {false}
+    assert mod.decode_fall(mod.encode_fall({:fall, false}, empty)) == {:ok, {:fall, false}, empty}
+
+    assert mod.decode_count({1}) == {:ok, {:count, {:suc, 0}}, empty}
+    assert mod.decode_count({0}) == {:ok, {:count, 0}, empty}
+    assert mod.decode_count({-1}) == {:ok, {:count, 0}, empty}
+    assert mod.decode_count({"x"}) == {:ok, {:count, 0}, empty}
+    assert mod.decode_count({nil}) == {:ok, {:count, 0}, empty}
+    assert mod.decode_count({1_000_001}) == {:error, {[0], {:nat_too_large, 1_000_001}}}
+    assert mod.encode_count({:count, 0}, empty) == {0}
+
+    assert mod.decode_need(%{}) == {:error, {[], {:missing_key, "b"}}}
+    assert mod.decode_need(%{"b" => 1}) == {:ok, {:need, false}, empty}
+    assert mod.decode_need(%{"b" => nil}) == {:ok, {:need, false}, empty}
+    assert mod.decode_need(%{"b" => "yes"}) == {:ok, {:need, false}, empty}
+    assert mod.decode_need(%{"b" => true}) == {:ok, {:need, true}, empty}
+
+    assert mod.decode_row(%{}) == {:ok, {:row, :nothing}, empty}
+    assert mod.decode_row(%{"b" => true}) == {:ok, {:row, {:just, true}}, empty}
+    assert mod.decode_row(%{"b" => false}) == {:ok, {:row, {:just, false}}, empty}
+    assert mod.decode_row(%{"b" => nil}) == {:ok, {:row, {:just, false}}, empty}
+    assert mod.decode_row(%{"b" => 1}) == {:ok, {:row, {:just, false}}, empty}
+    assert mod.decode_row(%{"b" => "yes"}) == {:ok, {:row, {:just, false}}, empty}
+    assert mod.encode_row({:row, {:just, false}}, empty) == %{"b" => false}
+    assert mod.encode_row({:row, :nothing}, empty) == %{}
+
+    assert mod.decode_row(mod.encode_row({:row, {:just, false}}, empty)) ==
+             {:ok, {:row, {:just, false}}, empty}
+
+    assert mod.decode_plain(%{}) == {:ok, {:plain, :nothing}, empty}
+    assert mod.decode_plain(%{"b" => nil}) == {:error, {["b"], {:nil_not_allowed, nil}}}
+    assert mod.decode_plain(%{"b" => 1}) == {:error, {["b"], {:not_boolean, 1}}}
+
+    assert mod.decode_soft(nil) == {:ok, {:soft, :nothing}, empty}
+    assert mod.decode_soft(true) == {:ok, {:soft, {:just, true}}, empty}
+    assert mod.decode_soft(false) == {:ok, {:soft, {:just, false}}, empty}
+    assert mod.decode_soft(1) == {:ok, {:soft, {:just, false}}, empty}
+    assert mod.decode_soft("yes") == {:ok, {:soft, {:just, false}}, empty}
+    assert mod.encode_soft({:soft, {:just, false}}, empty) == false
+    assert mod.encode_soft({:soft, :nothing}, empty) == nil
+
+    assert mod.decode_hold({nil}) == {:ok, {:hold, :no}, empty}
+    assert mod.decode_hold({1}) == {:ok, {:hold, :no}, empty}
+    assert mod.decode_hold({%{}}) == {:ok, {:hold, :no}, empty}
+    assert mod.decode_hold({%{"n" => 1, "z" => 2}}) == {:ok, {:hold, :no}, empty}
+    assert mod.decode_hold({%{"n" => "x"}}) == {:error, {[0, "n"], {:not_integer, "x"}}}
+
+    assert mod.decode_hold({%{"n" => 1_000_001}}) ==
+             {:error, {[0, "n"], {:nat_too_large, 1_000_001}}}
+
+    assert mod.decode_hold({%{"n" => 2}}) == {:ok, {:hold, {:yes, peano(2)}}, empty}
+    assert mod.encode_hold({:hold, :no}, empty) == {nil}
+    assert mod.encode_hold({:hold, {:yes, peano(2)}}, empty) == {%{"n" => 2}}
+  end
+
+  test "the names example decodes the issue wire" do
+    mod = names_example()
+    empty = mod.muro_repr_table_new()
+
+    wire = %{
+      "*" => [%{"relation" => "*", "read" => true}],
+      "auth" => [%{"relation" => "token", "read" => false}]
+    }
+
+    expected =
+      {:template,
+       {:cons, {:binding, :wild, {:cons, {:entry, :wild, {:just, true}}, nil}},
+        {:cons,
+         {:binding, {:named, 0}, {:cons, {:entry, {:named, {:suc, 0}}, {:just, false}}, nil}},
+         nil}}}
+
+    assert {:ok, got, table} = mod.decode_template(wire)
+    assert got == expected
+    assert mod.muro_repr_table_names(table) == ["auth", "token"]
+    assert table.by_name == %{"auth" => 0, "token" => 1}
+    assert table.by_index == %{0 => "auth", 1 => "token"}
+
+    off =
+      {:template,
+       {:cons, {:binding, :wild, {:cons, {:entry, :wild, {:just, false}}, nil}},
+        {:cons,
+         {:binding, {:named, 0}, {:cons, {:entry, {:named, {:suc, 0}}, {:just, false}}, nil}},
+         nil}}}
+
+    assert mod.reads_off(expected) == off
+    assert mod.count_entries(expected) == {:suc, {:suc, 0}}
+
+    assert mod.encode_template(off, table) == %{
+             "*" => [%{"relation" => "*", "read" => false}],
+             "auth" => [%{"relation" => "token", "read" => false}]
+           }
+
+    assert mod.encode_template(expected, table) == wire
+
+    assert mod.decode_template(mod.encode_template(expected, table), table) ==
+             {:ok, expected, table}
+
+    preset = mod.muro_repr_table_new(["token", "auth"])
+
+    preset_term =
+      {:template,
+       {:cons, {:binding, :wild, {:cons, {:entry, :wild, {:just, true}}, nil}},
+        {:cons,
+         {:binding, {:named, {:suc, 0}}, {:cons, {:entry, {:named, 0}, {:just, false}}, nil}},
+         nil}}}
+
+    assert mod.decode_template(wire, preset) == {:ok, preset_term, preset}
+    assert mod.muro_repr_table_names(preset) == ["token", "auth"]
+    assert mod.encode_template(preset_term, preset) == wire
+
+    for bad <- [1, nil, "yes"] do
+      flagged = %{"*" => [%{"relation" => "*", "read" => bad}]}
+
+      assert mod.decode_template(flagged) ==
+               {:ok,
+                {:template,
+                 {:cons, {:binding, :wild, {:cons, {:entry, :wild, {:just, false}}, nil}}, nil}},
+                empty}
+    end
+
+    missing = %{"*" => [%{"relation" => "*"}]}
+
+    assert mod.decode_template(missing) ==
+             {:ok,
+              {:template,
+               {:cons, {:binding, :wild, {:cons, {:entry, :wild, :nothing}, nil}}, nil}}, empty}
+
+    strict = strict_names()
+
+    assert strict.decode_template(%{"*" => [%{"relation" => "*", "read" => 1}]}) ==
+             {:error, {["*", 0, "read"], {:not_boolean, 1}}}
+
+    :rand.seed(:exsss, {4, 5, 6})
+
+    for _ <- 1..20 do
+      rels = ["*", "a", "b"]
+      nkeys = :rand.uniform(4) - 1
+
+      host =
+        if nkeys == 0 do
+          %{}
+        else
+          Map.new(1..nkeys, fn i ->
+            nent = :rand.uniform(3) - 1
+
+            entries =
+              if nent == 0 do
+                []
+              else
+                Enum.map(1..nent, fn _ ->
+                  %{
+                    "relation" => Enum.random(rels),
+                    "read" => Enum.random([true, false, 1, nil])
+                  }
+                end)
+              end
+
+            {"k#{i}", entries}
+          end)
+        end
+
+      case mod.decode_template(host) do
+        {:ok, v, got} ->
+          assert mod.decode_template(mod.encode_template(v, got), got) == {:ok, v, got}
+
+        other ->
+          flunk(inspect(other, limit: 8))
+      end
+    end
+  end
+
+  test "a few thousand pairs and five hundred names stay within the guard" do
+    mod = wide()
+    names = Enum.map(0..499, fn i -> "n" <> Integer.to_string(i) end)
+
+    case mod.decode_names(names) do
+      {:ok, v, table} ->
+        assert mod.muro_repr_table_names(table) == names
+        assert mod.encode_names(v, table) == names
+
+      other ->
+        flunk("500 names failed: #{inspect(other, limit: 5)}")
+    end
+
+    bits = Enum.map(0..2047, fn i -> "k" <> Integer.to_string(i) end)
+    host = Map.new(bits, &{&1, true})
+
+    case mod.decode_dict(host) do
+      {:ok, v, table} ->
+        if mod.encode_dict(v, table) != host, do: flunk("binary-numeral map did not round-trip")
+        assert mod.muro_repr_table_names(table) == Enum.sort(bits)
+
+      other ->
+        flunk("binary-numeral map failed: #{inspect(other, limit: 5)}")
+    end
+
+    ints = Map.new(0..1999, fn i -> {i, rem(i, 2) == 0} end)
+
+    case mod.decode_bag(ints) do
+      {:ok, v, table} ->
+        if mod.encode_bag(v, table) != ints, do: flunk("integer-key map did not round-trip")
+
+      other ->
+        flunk("integer-key map failed: #{inspect(other, limit: 5)}")
+    end
+  end
+
   test "decode of the example never raises" do
     mod = example()
 
@@ -637,7 +1443,7 @@ defmodule Muro.ReprTest do
       for fun <- [:decode_bool, :decode_entry, :decode_shape, :decode_outcome] do
         result = apply(mod, fun, [term])
 
-        assert match?({:ok, _}, result) or
+        assert match?({:ok, _, _}, result) or
                  match?({:error, {path, _}} when is_list(path), result)
       end
     end
@@ -738,7 +1544,19 @@ defmodule Muro.ReprTest do
 
   defp compile_source(source, mod) do
     Code.compiler_options(ignore_module_conflict: true)
-    [{^mod, _bin}] = Code.compile_string(source)
+
+    {compiled, diagnostics} =
+      Code.with_diagnostics(fn ->
+        Code.compile_string(source)
+      end)
+
+    warnings = for %{severity: :warning, message: message} <- diagnostics, do: message
+
+    if warnings != [] do
+      flunk("generated #{inspect(mod)} warned:\n" <> Enum.join(warnings, "\n"))
+    end
+
+    [{^mod, _bin}] = compiled
 
     on_exit(fn ->
       :code.purge(mod)
@@ -793,6 +1611,177 @@ defmodule Muro.ReprTest do
     ]
   end
 
+  defp names_example do
+    assert {:ok, source} = Muro.emit_file("examples/repr_names.muro", HostReprNames)
+    assert source =~ "def reads_off("
+    assert source =~ "def count_entries("
+    assert source =~ "def muro_repr_table_new"
+    assert source =~ "muro_repr_decode_interned"
+    assert source =~ "muro_repr_map_of_decode"
+    assert source =~ "muro_repr_else"
+    assert source =~ "@muro_repr_nat_max 1_000_000"
+    refute source =~ "muro_repr_bin_from"
+    compile_source(source, HostReprNames)
+  end
+
+  defp strict_names do
+    src =
+      File.read!("examples/repr_names.muro")
+      |> String.replace(
+        ~s|repr Entry := map { "relation" => Key, "read" => optional (boolean else false) }|,
+        ~s|repr Bool := boolean\nrepr Entry := map { "relation" => Key, "read" => optional Bool }|
+      )
+
+    compile_book(ok!(src), HostReprStrict)
+  end
+
+  defp wide, do: compile_book(ok!(wide_src()), ReprWide)
+
+  defp names_limit(max) do
+    book = ok!(names_limit_src())
+    source = Emit.emit_module(ReprNameLimit, book)
+    needle = "@muro_repr_nat_max 1_000_000"
+    assert source =~ needle
+
+    source =
+      String.replace(source, needle, "@muro_repr_nat_max #{Integer.to_string(max)}",
+        global: false
+      )
+
+    compile_source(source, ReprNameLimit)
+  end
+
+  defp wide_src do
+    """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data Maybe (A : Type) : Type where
+      nothing : Maybe A
+      just : A → Maybe A
+
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+
+    data Key : Type where
+      named : Nat → Key
+      wild : Key
+
+    data Wrap : Type where
+      wrap : Nat → Wrap
+
+    data Names : Type where
+      names : List Nat → Names
+
+    data Twin : Type where
+      twin : Nat → Nat → Twin
+
+    data Rec : Type where
+      rec : Nat → Nat → Rec
+
+    data Link : Type where
+      link : List (Nat × Nat) → Link
+
+    data Item : Type where
+      item : Nat → Bool → Item
+
+    data Rows : Type where
+      rows : List Item → Rows
+
+    data Bag : Type where
+      bag : List (Nat × Bool) → Bag
+
+    data NatMap : Type where
+      natmap : List (Nat × Bool) → NatMap
+
+    data Fall : Type where
+      fall : Bool → Fall
+
+    data Count : Type where
+      count : Nat → Count
+
+    data Flag : Type where
+      no : Flag
+      yes : Nat → Flag
+
+    data Hold : Type where
+      hold : Flag → Hold
+
+    data Row : Type where
+      row : Maybe Bool → Row
+
+    data Soft : Type where
+      soft : Maybe Bool → Soft
+
+    data Plain : Type where
+      plain : Maybe Bool → Plain
+
+    data Need : Type where
+      need : Bool → Need
+
+    data Collide : Type where
+      collide : List (Nat × Bool) → Collide
+
+    data Bit : Type where
+      d1 : Bit → Bit
+      z : Bit
+      d2 : Bit → Bit
+
+    data Token : Type where
+      token : Bit → Token
+
+    data Codes : Type where
+      codes : List Bit → Codes
+
+    data Dict : Type where
+      dict : List (Bit × Bool) → Dict
+
+    repr Bool := boolean
+    repr Nat := integer
+    repr Key := named => interned string | wild => "*"
+    repr Wrap := interned string
+    repr Names := list interned string
+    repr Twin := tuple { interned string, interned string }
+    repr Rec := map { "z" => interned string, "a" => interned string }
+    repr Link := map_of interned string => interned string
+    repr Rows := map_of integer => boolean
+    repr Bag := map_of integer => boolean
+    repr NatMap := map_of interned string => boolean
+    repr Fall := tuple { boolean else false }
+    repr Count := tuple { integer else 0 }
+    repr Flag := no => nil | yes => map { "n" => integer }
+    repr Hold := tuple { Flag else no }
+    repr Row := map { "b" => optional (boolean else false) }
+    repr Soft := nullable (boolean else false)
+    repr Plain := map { "b" => optional Bool }
+    repr Need := map { "b" => boolean else false }
+    repr Collide := map_of (integer else 0) => boolean
+    repr Token := interned string
+    repr Codes := list interned string
+    repr Dict := map_of interned string => boolean
+    """
+  end
+
+  defp names_limit_src do
+    """
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+    data Names : Type where
+      names : List Nat → Names
+    repr Names := list interned string
+    """
+  end
+
+  defp muro_list(nil), do: []
+  defp muro_list({:cons, el, rest}), do: [el | muro_list(rest)]
+
+  defp bin_term(0), do: :z
+  defp bin_term(i) when rem(i, 2) == 1, do: {:d1, bin_term(div(i - 1, 2))}
+  defp bin_term(i) when i > 0, do: {:d2, bin_term(div(i - 2, 2))}
+
   defp peano(n), do: peano(n, 0)
   defp peano(0, acc), do: acc
   defp peano(n, acc) when n > 0, do: peano(n - 1, {:suc, acc})
@@ -800,8 +1789,8 @@ defmodule Muro.ReprTest do
   # Compare the integer encode returns. Do not assert on the Peano term.
   defp assert_nat_integer(mod, n) when is_integer(n) and n >= 0 and n <= 10_000 do
     case mod.decode_nat(n) do
-      {:ok, v} ->
-        assert mod.encode_nat(v) == n
+      {:ok, v, table} ->
+        assert mod.encode_nat(v, table) == n
 
       other ->
         flunk("decode_nat(#{n}) failed: #{inspect(other, limit: 5)}")
@@ -811,7 +1800,7 @@ defmodule Muro.ReprTest do
   # A success is discarded. Inspecting `{:ok, nat}` is what exhausts memory.
   defp assert_nat_rejected(mod, value, path, reason, fun) do
     case apply(mod, fun, [value]) do
-      {:ok, _} ->
+      {:ok, _, _} ->
         flunk("#{fun} built a Nat from #{inspect(value, limit: 5)}")
 
       {:error, {^path, ^reason}} ->

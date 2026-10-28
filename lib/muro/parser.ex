@@ -791,7 +791,49 @@ defmodule Muro.Parser do
     end
   end
 
+  # `else` binds looser than `list`, `optional`, `nullable`, and `map_of`.
+  # `list boolean else false` is a fallback on the list. Parentheses put the
+  # fallback inside: `optional (boolean else false)`.
   defp parse_repr_shape(s) do
+    with {:ok, shape, rest} <- parse_repr_shape_tight(skip(s)) do
+      parse_repr_else(shape, rest)
+    end
+  end
+
+  defp parse_repr_else(shape, s) do
+    looked = skip(s)
+
+    if word_kw?(looked, "else") do
+      rest = looked |> after_kw("else") |> skip()
+
+      with {:ok, value, rest} <- parse_repr_fallback(rest) do
+        parse_repr_else({:else, shape, value}, rest)
+      end
+    else
+      {:ok, shape, s}
+    end
+  end
+
+  defp parse_repr_fallback(s) do
+    s = skip(s)
+
+    cond do
+      s == "" or repr_boundary?(s) or has_prefix?(s, "|") or has_prefix?(s, ",") or
+        has_prefix?(s, "}") or has_prefix?(s, ")") ->
+        {:error, err(s, "expected a fallback")}
+
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, {:numeral, String.to_integer(digits)}, rest}
+
+      true ->
+        with {:ok, name, rest} <- ident(s) do
+          {:ok, {:ctor, name}, rest}
+        end
+    end
+  end
+
+  defp parse_repr_shape_tight(s) do
     s = skip(s)
 
     cond do
@@ -807,6 +849,9 @@ defmodule Muro.Parser do
       word_kw?(s, "nil") ->
         {:ok, {nil}, after_kw(s, "nil")}
 
+      word_kw?(s, "interned") ->
+        parse_repr_interned(s)
+
       word_kw?(s, "list") ->
         parse_repr_wrapped(s, "list", :list)
 
@@ -819,8 +864,14 @@ defmodule Muro.Parser do
       word_kw?(s, "tuple") ->
         parse_repr_tuple(s)
 
+      word_kw?(s, "map_of") ->
+        parse_repr_map_of(s)
+
       word_kw?(s, "map") ->
         parse_repr_map(s)
+
+      has_prefix?(s, "(") ->
+        parse_repr_paren(s)
 
       atom_lit?(s) ->
         with {:ok, {:atom, name}, rest} <- parse_atom_lit(s), do: {:ok, {:atom, name}, rest}
@@ -833,11 +884,43 @@ defmodule Muro.Parser do
     end
   end
 
+  defp parse_repr_interned(s) do
+    rest = s |> after_kw("interned") |> skip()
+
+    if word_kw?(rest, "string") do
+      {:ok, {:interned}, after_kw(rest, "string")}
+    else
+      {:error, err(rest, "interned needs string")}
+    end
+  end
+
+  defp parse_repr_paren(s) do
+    with {:ok, rest} <- tok(s, "("),
+         {:ok, shape, rest} <- parse_repr_shape(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ")") do
+      {:ok, shape, rest}
+    end
+  end
+
+  defp parse_repr_map_of(s) do
+    rest = s |> after_kw("map_of") |> skip()
+
+    if repr_shape_start?(rest) do
+      with {:ok, key, rest} <- parse_repr_shape_tight(rest),
+           {:ok, rest} <- tok(skip(rest), "=>"),
+           {:ok, val, rest} <- parse_repr_shape_tight(skip(rest)) do
+        {:ok, {:map_of, key, val}, rest}
+      end
+    else
+      {:error, err(rest, "map_of needs a shape")}
+    end
+  end
+
   defp parse_repr_wrapped(s, word, tag) do
     rest = s |> after_kw(word) |> skip()
 
     if repr_shape_start?(rest) do
-      with {:ok, shape, rest} <- parse_repr_shape(rest), do: {:ok, {tag, shape}, rest}
+      with {:ok, shape, rest} <- parse_repr_shape_tight(rest), do: {:ok, {tag, shape}, rest}
     else
       {:error, err(rest, "#{word} needs a shape")}
     end
@@ -955,8 +1038,10 @@ defmodule Muro.Parser do
     cond do
       s == "" or repr_boundary?(s) -> false
       word_kw?(s, "boolean") or word_kw?(s, "integer") or word_kw?(s, "nil") -> true
+      word_kw?(s, "interned") or word_kw?(s, "map_of") -> true
       word_kw?(s, "list") or word_kw?(s, "optional") or word_kw?(s, "nullable") -> true
       word_kw?(s, "tuple") or word_kw?(s, "map") -> true
+      has_prefix?(s, "(") -> true
       atom_lit?(s) or has_prefix?(s, "\"") -> true
       true -> match?(<<c, _::binary>> when c in ?a..?z or c in ?A..?Z or c == ?_, s)
     end

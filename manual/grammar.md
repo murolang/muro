@@ -17,11 +17,15 @@ nu         ::= ("ν" | "nu") ident binder+ ":" "Type" "where" "uncons" ":" term
 data       ::= "data" ident binder* ":" telescope "where" (ident ":" term)+
 repr       ::= "repr" ident ":=" (rshape | rvariant ("|" rvariant)*)
 rvariant   ::= ident "=>" rshape         -- "nil =>" names the constructor nil
-rshape     ::= "boolean" | "integer" | "nil" | ":" ident | string
+rshape     ::= rtight ("else" (numeral | ident))*
+rtight     ::= "boolean" | "integer" | "nil" | ":" ident | string
+             | "interned" "string"
              | ident                     -- a type with its own repr, or Nat
-             | "list" rshape | "optional" rshape | "nullable" rshape
+             | "list" rtight | "optional" rtight | "nullable" rtight
+             | "map_of" rtight "=>" rtight
              | "tuple" "{" [rshape ("," rshape)*] "}"
              | "map" ["open"] "{" [rentry ("," rentry)*] "}"
+             | "(" rshape ")"
 rentry     ::= (string | ":" ident) "=>" rshape
 telescope  ::= "Type" | binder ("→" | "->") telescope | term ("→" | "->") "Type"
 talk       ::= "talk" ident ":=" talk-term
@@ -133,7 +137,7 @@ space      ::= [ \t\n\r] | comment
 
 Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an argument. Digits start atoms, so `| 0 =>` parses.
 
-A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are identifiers; `suc`, `refl`, `tt`, and `Nat` are not. `->` ends a word, so `Nat->Nat` is an arrow. Inside a `repr` body the words `boolean`, `integer`, `nil`, `list`, `optional`, `nullable`, `tuple`, `map`, and `open` are keywords. Outside that body they are identifiers. `nil =>` at the start of a variant names the constructor `nil`.
+A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are identifiers; `suc`, `refl`, `tt`, and `Nat` are not. `->` ends a word, so `Nat->Nat` is an arrow. Inside a `repr` body the words `boolean`, `integer`, `nil`, `list`, `optional`, `nullable`, `tuple`, `map`, `open`, `interned`, `map_of`, and `else` are keywords. `string` is a keyword only in `interned string`. `else` binds looser than `list`, `optional`, `nullable`, and `map_of`; parentheses group a shape. Outside that body they are identifiers, so `def else : run Nat := 0`, a constructor `interned`, and `data map_of` are definitions. `nil =>` at the start of a variant names the constructor `nil`.
 
 `end`, `send`, `recv`, `choose`, `branch`, `rec`, `case`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. `match` is a keyword in a process, where it chooses the next action, and in a term, where it is the eliminator. Parentheses group a nested protocol or process: `recv Nat (send Nat end)`. `send` and `recv` name one payload type and one continuation. `put` writes a value of that type. `get` names the type. `choose` and `branch` still name two protocols. `dual` is a keyword in `session name := dual name` and in an endpoint function (`dual s`). Outside those forms it is an identifier, so `def dual : run Nat := 0` is a definition. The mark on a dual session is the named session's mark when it is omitted. `seen` is a keyword in `session name := seen party with party in talk`. `with` there names the other party, and `in` names the description. Outside that form `seen` is an identifier, so `def seen : run Nat := 0` is a definition. `meet` and `with` are keywords in `meet name : left with right`. `meet` is also the keyword in an endpoint function (`meet s t`). `with` is also the keyword between the two parties of a `seen` session. Outside those forms they are identifiers, so `def meet : run Nat := 0` and `def with : run Nat := 0` are definitions.
 
