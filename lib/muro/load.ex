@@ -497,8 +497,8 @@ defmodule Muro.Load do
       :ok
     else
       {:error,
-       "#{pkg_display(name, rel)} changed since muro.lock (expected sha256 #{expected}), " <>
-         "found sha256 #{actual}; run mix muro.deps.get to fetch it again"}
+       "#{pkg_display(name, rel)} changed since muro.lock (expected sha256 #{expected}, " <>
+         "found sha256 #{actual}; run mix muro.deps.get to fetch it again)"}
     end
   end
 

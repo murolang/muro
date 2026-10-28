@@ -148,18 +148,21 @@ defmodule Muro.DepsTest do
 
     assert {:error, message} = Muro.check_file(book)
 
-    assert message =~
-             "muro_deps/shared/wire.muro changed since muro.lock (expected sha256 #{hash})"
+    actual = Muro.Hash.sha256(@wire <> "-- edited\n")
 
-    assert message =~ "found sha256"
-    assert message =~ "run mix muro.deps.get to fetch it again"
+    assert message =~
+             "muro_deps/shared/wire.muro changed since muro.lock (expected sha256 #{hash}, " <>
+               "found sha256 #{actual}; run mix muro.deps.get to fetch it again)"
+
     assert {:error, ^message} = Muro.emit_file(book, Muro.DepsHandEdit)
 
     out =
       capture_io(fn ->
-        assert_raise Mix.Error, ~r/changed since muro.lock \(expected sha256 #{hash}\)/, fn ->
-          Mix.Tasks.Muro.Check.run([book])
-        end
+        assert_raise Mix.Error,
+                     ~r/\(expected sha256 #{hash}, found sha256 #{actual}; run mix muro\.deps\.get to fetch it again\)$/,
+                     fn ->
+                       Mix.Tasks.Muro.Check.run([book])
+                     end
       end)
 
     assert out =~ "Muro v#{Mix.Tasks.Muro.version()}\n"
