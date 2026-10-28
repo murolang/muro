@@ -47,15 +47,81 @@ defmodule Muro.Emit do
     map
   end
 
-  def emit_module(module, book) when is_atom(module) do
-    runs = run_defs(book)
+  @doc """
+  Module name `mix muro.emit` gives a file: the stem, hyphens turned
+  into underscores, then camelized. `rounding.muro` is `Rounding`.
+  `half_ok.muro` is `HalfOk`.
+  """
+  def elixir_module(path) when is_binary(path) do
+    path
+    |> elixir_stem()
+    |> List.wrap()
+    |> Module.concat()
+  end
 
+  @doc """
+  Test module `mix muro.emit --backend exunit` prints for `path`.
+  The stem module plus `Test`: `rounding.muro` is `RoundingTest`.
+  The implementation under test stays `elixir_module/1`, so the two
+  modules can be compiled together.
+  """
+  def exunit_module(path) when is_binary(path) do
+    Module.concat([elixir_stem(path) <> "Test"])
+  end
+
+  defp elixir_stem(path) do
+    path
+    |> Path.basename(".muro")
+    |> String.replace("-", "_")
+    |> Macro.camelize()
+  end
+
+  @doc """
+  Source name to Elixir function name for every `run` definition,
+  using the same spelling and the same taken set as `emit_module/2`.
+  """
+  def elixir_names(book) when is_list(book) do
     taken =
-      if Enum.any?(runs, &term_has_toi64?(&1.body)),
+      if Enum.any?(run_defs(book), &term_has_toi64?(&1.body)),
         do: MapSet.new(["muro_nat_to_int"]),
         else: MapSet.new()
 
-    names = def_names(book, &elixir_base/1, taken)
+    def_names(book, &elixir_base/1, taken)
+  end
+
+  @doc """
+  Quantities of the Π binders of a named type, outer binder first.
+  `emit_module/2` drops the `:erased` ones from the Elixir arity.
+  """
+  def binder_qtys(type) do
+    case Ast.to_db(type) do
+      {:ok, ty} -> qty_spine(ty)
+      {:error, _message} -> []
+    end
+  end
+
+  @doc """
+  Render a closed de Bruijn value as the Elixir literal `emit_module/2`
+  builds: `0`, `{:suc, n}`, `:tt`, an atom, a constructor tuple, or a
+  pair.
+
+  `book` is the named book, so declared constructors are recognized.
+  Returns `{:ok, source}` or `{:error, reason}` where `reason` is
+  `:function`, `:stream`, `:machine`, `:open`, or `:shape`.
+
+  Host data (`repr`, issue #131) belongs in this function. Until that
+  exists, a caller compares these shapes.
+  """
+  def emit_closed(term, book) when is_list(book) do
+    case value_kind(term, book) do
+      :value -> {:ok, emit_db(term, 0, book, %{})}
+      reason -> {:error, reason}
+    end
+  end
+
+  def emit_module(module, book) when is_atom(module) do
+    runs = run_defs(book)
+    names = elixir_names(book)
     funs = runs |> Enum.map(&emit_def(&1, book, names)) |> Enum.join("\n\n")
 
     except =
@@ -460,6 +526,68 @@ defmodule Muro.Emit do
       %{kind: :data, ctors: cs} -> Enum.any?(cs, &(&1.name == name))
       _ -> false
     end)
+  end
+
+  # A value the suite can pass to `==`. Anything else is a skip reason.
+  # `repr` (#131) replaces this classification.
+  defp value_kind(:ze, _book), do: :value
+  defp value_kind(:one, _book), do: :value
+  defp value_kind({:atom, _name}, _book), do: :value
+  defp value_kind({:su, t}, book), do: value_kind(t, book)
+  defp value_kind({:ann, e, _ty}, book), do: value_kind(e, book)
+
+  defp value_kind({:pair, a, b}, book) do
+    case value_kind(a, book) do
+      :value -> value_kind(b, book)
+      reason -> reason
+    end
+  end
+
+  defp value_kind({:var, _i}, _book), do: :open
+
+  defp value_kind({:def, name}, book) do
+    if ctor_name?(book, name), do: :value, else: :open
+  end
+
+  defp value_kind({:lam, _q, _a, _x, _t}, _book), do: :function
+  defp value_kind({:unf, _s, _f}, _book), do: :stream
+  defp value_kind({:ucons, _s}, _book), do: :stream
+  defp value_kind({:nu, _f}, _book), do: :stream
+  defp value_kind({:bisim, _s, _t}, _book), do: :stream
+  defp value_kind({:toi64, _t}, _book), do: :machine
+  defp value_kind({:addi, _x, _y}, _book), do: :machine
+  defp value_kind({:muli, _x, _y}, _book), do: :machine
+  defp value_kind({:addt, _t, _u}, _book), do: :machine
+  defp value_kind({:packi, _x, _y}, _book), do: :machine
+  defp value_kind({:tensor, _d, _s}, _book), do: :machine
+  defp value_kind(:i64, _book), do: :machine
+  defp value_kind(:f32ty, _book), do: :machine
+
+  defp value_kind({:app, _, _} = term, book) do
+    {head, args} = spine(term, [])
+
+    case head do
+      {:def, name} ->
+        if ctor_name?(book, name) do
+          value_args(args, book)
+        else
+          :shape
+        end
+
+      _other ->
+        :shape
+    end
+  end
+
+  defp value_kind(_other, _book), do: :shape
+
+  defp value_args([], _book), do: :value
+
+  defp value_args([arg | rest], book) do
+    case value_kind(arg, book) do
+      :value -> value_args(rest, book)
+      reason -> reason
+    end
   end
 
   defp live_args(book, name, args, d, names) do

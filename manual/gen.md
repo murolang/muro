@@ -1,7 +1,7 @@
 ---
 title: Committed modules
 slug: gen
-order: 14
+order: 15
 summary: A manifest names each book, module, and target. mix muro.gen writes the module. mix muro.gen --check fails when the file and the book disagree.
 ---
 
@@ -22,12 +22,14 @@ A `repr` is part of the committed module. `decode_<type>/1` and `encode_<type>/1
   muro: "0.16.77",
   fuel: 2000,
   modules: [
-    {"priv/muro/rounding.muro", MyApp.Billing.Rounding, "lib/my_app/billing/rounding.ex"}
+    {"priv/muro/rounding.muro", MyApp.Billing.Rounding, "lib/my_app/billing/rounding.ex"},
+    {"priv/muro/rounding.muro", MyApp.Billing.RoundingTest, "test/rounding_test.exs",
+     [kind: :exunit, impl: MyApp.Billing.Rounding]}
   ]
 ]
 ```
 
-`muro:` is required. It is the version string the books are checked with. `fuel:` is optional. The default is the fuel `mix muro.check` uses (`Muro.Check.default_fuel/0`, 2000). `modules:` is required. It may be empty. Each entry is `{book_path, module, target_path}`.
+`muro:` is required. It is the version string the books are checked with. `fuel:` is optional. The default is the fuel `mix muro.check` uses (`Muro.Check.default_fuel/0`, 2000). `modules:` is required. It may be empty. Each entry is `{book_path, module, target_path}` or `{book_path, module, target_path, opts}`. A 3-tuple emits Elixir. `opts` is a keyword list: `kind: :elixir` (the default) or `kind: :exunit`, and for `:exunit` an optional `impl:` alias, the implementation the suite calls by default. Unknown options, an unknown kind, `impl:` on an Elixir entry, and an `impl` that is not an alias are errors, and the message names the entry index. The page for the suite is [Closed equations as tests](exunit.md).
 
 Paths are relative to the project root. A book or a target that leaves the project is refused, and so is a missing book, a target that is a directory, a duplicate target, or a module that is not an alias atom (`MyApp.Billing.Rounding`). `lib/./a.ex` and `lib/nested/../a.ex` are the same target. The errors name the entry.
 
@@ -48,9 +50,17 @@ written lib/my_app/billing/rounding.ex
 unchanged lib/my_app/billing/rounding.ex
 ```
 
+An ExUnit target prints one more line per skipped equation, after its `written` or `unchanged` line:
+
+```
+skipped test/rounding_test.exs: step-ok (priv/muro/rounding.muro:8): step is run internal and is not exported
+```
+
+`--check` does not print those lines. The same lines are comments in the generated file, inside the body, so the body hash covers them. A book change that only alters the skipped set changes the book hash, and the stale message below reports it.
+
 An unchanged target is not rewritten. Its modification time stays.
 
-The module name is the manifest's alias. `Muro.emit_file/3` takes that atom as its second argument. The name is not the file stem.
+The module name is the manifest's alias. `Muro.emit_file/3` takes that atom as its second argument. An ExUnit entry passes the same atom to `Muro.emit_exunit/3` as the test module. The suite's default implementation is the book's file stem unless `impl:` names another. The alias itself is the name in the entry, whatever the file stem is.
 
 Formatting uses the project's `.formatter.exs` when that file exists (`Mix.Tasks.Format.formatter_for_file/2` with `root:` set to the project). Otherwise it uses `Code.format_string!/2`. The header is comments, so the formatter leaves it on its own lines. The file ends with one newline. There is no timestamp and no absolute path. Paths in the header use `/`.
 

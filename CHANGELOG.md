@@ -22,6 +22,28 @@ Free-form strings and interned names are not supported. A `repr` names a declare
 - `examples/repr.muro` is the end-to-end book. `scripts/archive-smoke.sh` generates it inside a host and calls `decode_entry`, the run function, and `encode_entry`.
 - Version 0.16.77.
 
+## 0.16.76
+
+`mix muro.emit path.muro --backend exunit` prints one ExUnit module for the book's closed equations. `mix muro.gen` writes the same module when a manifest entry is `{book, module, target, [kind: :exunit]}`. `impl: An.Adapter` sets the implementation that suite calls by default. A 3-tuple still emits Elixir.
+
+A candidate is an `evidence` definition in that file whose type is an equation `{f a₁ … aₙ ≡ b : T}` and whose left-hand head is a name. Each candidate is one test or one skipped line. The test is named after the evidence definition and the book's file and line. It calls the implementation module. The default implementation is the file stem, the name the Elixir backend gives that file (`rounding.muro` is `Rounding`). The test module `mix muro.emit` prints is that name plus `Test`. In the manifest, `module` is the test module the entry names.
+
+The implementation is `Application.get_env(:muro, TestModule, DefaultImpl)`, read in `setup_all`. The key is the test module. A tuple key warns on Elixir 1.18. The same file defines `TestModule.Behaviour`, one `@callback` per `run` the tests call, each `term()`. A `test/*_test.exs` target is what `mix test` loads. An adapter compiled earlier warns that the behaviour does not exist. A target under `test/support/*.ex`, with that directory on `elixirc_paths` in the test env, is compiled with the adapter, and a missing callback warns. `test/test_helper.exs` registers that case with `ExUnit.Server.add_module/2` after `ExUnit.start()`. With no `*_test.exs` file, `mix test` prints `There are no tests to run`.
+
+Skipped equations are a comment block in the test module, covered by the body sha256. `mix muro.emit` prints each skip on standard error and then `N tests, M skipped`. `mix muro.gen` prints `skipped <target>: …` after the `written` or `unchanged` line. `--check` does not print those lines. A book change that only alters the skipped set changes the book hash, and `--check` reports the target stale.
+
+Comparisons use emitted shapes. Host data arrives with repr (#131). `Muro.Emit.emit_closed/2` is where that mapping hooks. Quantified evidence is outside the candidate set. Property tests from those are a later change.
+
+### Manual
+
+- Closed equations as tests: what is collected, the test name, the behaviour, both adapter layouts, the skip reasons, the manifest entry, and drift checking.
+- Emit, Committed modules, For agents, and the command lists point at that page.
+
+### Package
+
+- `scripts/archive-smoke.sh` generates a suite inside a host that does not depend on muro, runs the tests, checks an incomplete `@behaviour` adapter, and fails the suite against a wrong implementation.
+- Version 0.16.76.
+
 ## 0.16.75
 
 `mix muro.gen` writes the modules a project manifest names. `mix muro.gen --check` writes nothing and fails when a committed module and its book disagree. `mix muro.init` creates `muro.exs` and `priv/muro/`.

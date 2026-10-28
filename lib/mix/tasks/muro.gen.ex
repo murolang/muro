@@ -14,14 +14,21 @@ defmodule Mix.Tasks.Muro.Gen do
   `mix.exs`. If both exist, the task stops and names both. `muro:` is
   the version the books are checked with. It must equal the running
   Muro version. A mismatch is an error and names both versions.
-  `fuel:` is optional. `modules:` lists `{book, module, target}`.
+  `fuel:` is optional. `modules:` lists `{book, module, target}` or
+  `{book, module, target, opts}`. A 3-tuple emits Elixir. `opts` may
+  set `kind: :exunit` and, for that kind, `impl: An.Adapter`. An
+  ExUnit target is usually `test/<name>_test.exs`. After the
+  `written` or `unchanged` line, one `skipped <target>: …` line is
+  printed per equation the suite cannot express. `--check` does not
+  print those lines.
 
   `mix muro.gen` checks every listed book with that fuel before it
   writes. If any book fails, it prints each failure and writes
   nothing. Otherwise it formats each module with the project's
   `.formatter.exs` when that file exists, adds the header, and writes
   the target, creating directories. One line per target says `written`
-  or `unchanged`. An unchanged file is not rewritten.
+  or `unchanged`. An unchanged file is not rewritten. An ExUnit
+  target then lists each skipped equation.
 
   `mix muro.gen --check` writes nothing. It exits non-zero and lists
   every problem: a book that does not check, a missing target, a stale

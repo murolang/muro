@@ -38,6 +38,7 @@ mix muro.check path.muro                    # one file
 mix muro.check --fuel 20000 path.muro       # after "out of fuel"
 mix muro --version                          # the copy that ran
 mix muro.init                               # muro.exs and priv/muro/
+mix muro.emit path.muro --backend exunit       # ExUnit suite on stdout
 mix muro.gen                                 # write the modules the manifest names
 mix muro.gen --check                         # fail when a committed module and its book disagree
 make agda                                   # Job B only; needs vendor/agda-stdlib v2.3
@@ -53,6 +54,7 @@ Emit only after a successful check. Spec and evidence are omitted; erased argume
 
 ```
 mix muro.emit path.muro                     # Elixir (default); module name from the file stem
+mix muro.emit path.muro --backend exunit    # ExUnit suite on stdout; test module is the stem plus Test
 mix muro.emit path.muro --backend c         # <name>.h and <name>.c; a Nat run is also a NIF
 mix muro.emit path.muro --backend rust      # <name>.rs
 mix muro.emit path.muro --backend asm       # <name>.s, Cortex-M0, Nat run
@@ -66,6 +68,8 @@ mix muro.emit path.muro --backend asm       # <name>.s, Cortex-M0, Nat run
 ```
 
 A `repr` makes `mix muro.emit` also write `decode_<type>/1` and `encode_<type>/1`. See [Host representations](manual/repr.md).
+
+`--backend exunit` prints one test module for the book's closed equations. The tests call an implementation the host names. See [Closed equations as tests](manual/exunit.md).
 
 The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` and `Tensor` are refused as `c:machine`. Unapplied lambdas, definitions passed as values and calls of local functions are refused as `c:lambda`, because C has no closures. A raw `ν`, `Always` or `~` inside a `run` is refused as `c:stream`. Allocation goes through `MURO_ALLOC`, which is `malloc` unless you define it. An exported run of `Nat` arguments and a `Nat` result is a NIF; that build defines `MURO_ALLOC` as one block and resets it when the call returns. The Rust backend prints the same image and refuses a term the C backend refuses. `rustc` translates that text. The Cortex-M backend prints the Nat fragment of that image. The assembler translates that text. See [Emit](manual/emit.md).
 
@@ -84,6 +88,6 @@ The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` a
 
 ## Manual
 
-[Start](manual/start.md) · [Marks](manual/marks.md) · [The wall](manual/wall.md) · [Terms](manual/language.md) · [Sessions](manual/sessions.md) · [Identity](manual/identity.md) · [Data](manual/data.md) · [Indexed data](manual/indexed.md) · [Streams](manual/streams.md) · [Either and Dec](manual/either.md) · [Machine numbers](manual/machine.md) · [Emit](manual/emit.md) · [Committed modules](manual/gen.md) · [Host representations](manual/repr.md) · [Grammar](manual/grammar.md) · [Examples](manual/examples.md) · [CSHRL](manual/cshrl.md) · [For agents](manual/for-agents.md) · [Extending](manual/extending.md) · [Limits](manual/limits.md)
+[Start](manual/start.md) · [Marks](manual/marks.md) · [The wall](manual/wall.md) · [Terms](manual/language.md) · [Sessions](manual/sessions.md) · [Identity](manual/identity.md) · [Data](manual/data.md) · [Indexed data](manual/indexed.md) · [Streams](manual/streams.md) · [Either and Dec](manual/either.md) · [Machine numbers](manual/machine.md) · [Emit](manual/emit.md) · [Closed equations as tests](manual/exunit.md) · [Committed modules](manual/gen.md) · [Host representations](manual/repr.md) · [Grammar](manual/grammar.md) · [Examples](manual/examples.md) · [CSHRL](manual/cshrl.md) · [For agents](manual/for-agents.md) · [Extending](manual/extending.md) · [Limits](manual/limits.md)
 
 Machine-readable index: [`manual/manifest.yml`](manual/manifest.yml). Canonical book: `examples/half_ok.muro`.
