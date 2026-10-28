@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.Muro.Emit do
   use Mix.Task
 
-  @shortdoc "Emit run definitions as Elixir, C, Rust, or Cortex-M assembly, a session as OTP, or a cross as a call"
+  @shortdoc "Emit run definitions as Elixir, C, Rust, or Cortex-M assembly, a session as OTP, a cross as a call, or closed equations as ExUnit"
 
   @moduledoc """
   Emit the `run` definitions of a `.muro` file.
@@ -12,10 +12,20 @@ defmodule Mix.Tasks.Muro.Emit do
       mix muro.emit path.muro --backend rust
       mix muro.emit path.muro --backend asm
       mix muro.emit path.muro --backend otp
+      mix muro.emit path.muro --backend exunit
       mix muro.emit path.muro --node a
 
   The default backend is Elixir, the same text as `Muro.emit_file/3`.
   The module name is the file stem (`half_ok.muro` becomes `HalfOk`).
+
+  `--backend exunit` prints one ExUnit module for the book's closed
+  equations, the same text as `Muro.emit_exunit/3`. The test module is
+  the file stem plus `Test` (`rounding.muro` is `RoundingTest`). The
+  implementation it calls by default is the stem module (`Rounding`).
+  The suite reads `Application.get_env(:muro, TestModule, DefaultImpl)`
+  in `setup_all`. The key is the test module. Skipped equations are
+  listed on standard error, then a line `N tests, M skipped`. Standard
+  output is only the module. `--node` with this backend is refused.
 
   `--backend c` writes `<name>.h` and `<name>.c` next to the file and
   prints those paths. A `run` stream is emitted. Tensors are refused.
@@ -111,6 +121,21 @@ defmodule Mix.Tasks.Muro.Emit do
     end
   end
 
+  defp emit(path, "exunit", nil) do
+    case Muro.emit_exunit(path, Muro.Emit.exunit_module(path)) do
+      {:ok, %{source: src, skips: skips, tests: n}} ->
+        Enum.each(skips, fn skip ->
+          IO.puts(:stderr, "skipped #{skip.name} (#{skip.file}:#{skip.line}): #{skip.reason}")
+        end)
+
+        IO.puts(:stderr, "#{n} tests, #{length(skips)} skipped")
+        Mix.shell().info(src)
+
+      {:error, e} ->
+        Mix.raise(e)
+    end
+  end
+
   defp emit(_path, other, nil) do
     Mix.raise("unknown backend: #{other}")
   end
@@ -123,12 +148,5 @@ defmodule Mix.Tasks.Muro.Emit do
     end
   end
 
-  defp module_name(path) do
-    path
-    |> Path.basename(".muro")
-    |> String.replace("-", "_")
-    |> Macro.camelize()
-    |> List.wrap()
-    |> Module.concat()
-  end
+  defp module_name(path), do: Muro.Emit.elixir_module(path)
 end

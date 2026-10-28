@@ -40,6 +40,7 @@ mix muro.emit path.muro --backend c
 mix muro.emit path.muro --backend rust
 mix muro.emit path.muro --backend asm
 mix muro.emit path.muro --backend otp
+mix muro.emit path.muro --backend exunit
 mix muro.emit path.muro --node a
 ```
 
@@ -242,4 +243,10 @@ If you want a book in the test suite, parse/check/emit it from `test/muro_check_
 
 `mix muro.emit` prints a module. It does not choose a path under `lib/`, format with the project's `.formatter.exs`, or record which book the file came from. [Committed modules](gen.md) is that step.
 
-Next: [Committed modules](gen.md).
+## ExUnit
+
+`--backend exunit` prints one ExUnit module for the book's closed equations, the same text as `Muro.emit_exunit/3`. The test module is the file stem plus `Test` (`rounding.muro` prints `RoundingTest`). The implementation it calls by default is the stem (`Rounding`). Skipped equations go to standard error, then a line `N tests, M skipped`. Standard output is only the module. `--node` with this backend is refused.
+
+The tests call an implementation the host names. [Closed equations as tests](exunit.md) is the collection, the behaviour, the adapter, and the skip list. `mix muro.gen` writes the same suite when an entry sets `kind: :exunit`.
+
+Next: [Closed equations as tests](exunit.md).
