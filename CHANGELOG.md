@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.16.77
+
+A book declares how a data type is represented on the host. `repr Name := …` is a spec-side entry. It is not a kernel term. `mix muro.emit` writes `decode_<type>/1` and `encode_<type>/1` next to the run functions. `mix muro.gen` commits that codec with the module, and `mix muro.gen --check` reports a changed repr as a stale target.
+
+The vocabulary is `boolean`, `integer`, `nil`, an atom literal, a string literal, a type that has its own repr, `list`, `optional`, `nullable`, `tuple`, and `map`, including `open`. A sum is a choice, `ctor => shape | …`. Decode returns `{:ok, value}` or `{:error, {path, reason}}`. It is total and strict: a missing key is the nullary constructor only for `optional`, `nil` is an error unless the shape says `nullable`, and an extra key is an error unless the map says `open`. The reason names the path and the value that did not match.
+
+`mix muro.check` refuses an ambiguous repr and names the two constructors. Two shapes overlap when they can share a host value. A type name is replaced by the classes of that type's repr. Two open maps overlap, even when a required key holds different constants. An unknown or recursive case overlaps, so the checker refuses it. A cycle of bare names (`repr Loop := Loop`) is refused, because decoding would not consume the input.
+
+`integer` is a non-negative Elixir integer and a Peano `Nat`. Decode builds that term with a tail call, one `{:suc, _}` per unit, and refuses an integer above `@muro_repr_nat_max` (`1_000_000`) with `{:nat_too_large, v}`. Encode counts the chain with an accumulator. A binary Nat (#80) would remove the guard. This version does not add one.
+
+Free-form strings and interned names are not supported. A `repr` names a declared data type with no parameters and no indices, or `Nat`. A field that is a pair, `Unit`, `Atom`, a stream, a function, `I64`, `F32`, or a tensor is refused. The codec does not parse JSON, and it does not keep the unknown keys of an `open` map. This version does not emit a round-trip property test for a project's own reprs.
+
+### Manual
+
+- Host representations: the syntax, the vocabulary, strict decode, the ambiguity check, and the Nat guard.
+- Emit, Committed modules, Grammar, Data, Examples, For agents, and Extending point at that page.
+
+### Package
+
+- `examples/repr.muro` is the end-to-end book. `scripts/archive-smoke.sh` generates it inside a host and calls `decode_entry`, the run function, and `encode_entry`.
+- Version 0.16.77.
+
 ## 0.16.75
 
 `mix muro.gen` writes the modules a project manifest names. `mix muro.gen --check` writes nothing and fails when a committed module and its book disagree. `mix muro.init` creates `muro.exs` and `priv/muro/`.

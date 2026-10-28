@@ -4,7 +4,7 @@ defmodule Muro.Check do
   from `Muro.Check` (`⇒-var-run`, `⇐-refl`, …). There is no promotion.
   """
 
-  alias Muro.{Ast, Place, Print, Subst}
+  alias Muro.{Ast, Place, Print, Repr, Subst}
 
   # Default fuel. Fuel bounds reduction (whnf, conversion, isData, the
   # index-clash test); everything else is structural recursion on the
@@ -47,6 +47,10 @@ defmodule Muro.Check do
 
       %{kind: :talk} ->
         {:skip, "#{name} is a talk, not a definition"}
+
+      # The data type of the same name is the term. `:skip` would hide it.
+      %{kind: :repr} ->
+        {:error, "unknown definition #{name}"}
 
       %{kind: :seat} ->
         {:skip, "#{name} is a seat, not a definition"}
@@ -116,6 +120,7 @@ defmodule Muro.Check do
               :read,
               :meet,
               :talk,
+              :repr,
               :seat,
               :link,
               :relay,
@@ -2128,6 +2133,9 @@ defmodule Muro.Check do
     end
   end
 
+  # Host representation. No kernel term. `Muro.Repr` is the contract.
+  def check_def(book, %{kind: :repr} = d, _fuel), do: Repr.check_entry(book, d)
+
   def check_def(book, %{kind: :data} = d, fuel), do: check_data(book, d, fuel)
 
   # Muro.Linear. The function is evidence. A linear endpoint is used
@@ -2695,8 +2703,8 @@ defmodule Muro.Check do
   defp rec_mode?(mode), do: mode in [:run, :evidence, :spec]
 
   # A session, a conformance, a place, a scheme, a move, an endpoint, a
-  # reading, a meeting, a description, a seat, and a link have a mode
-  # and no term, so they are outside the descent block.
+  # reading, a meeting, a description, a repr, a seat, and a link have a
+  # mode and no term, so they are outside the descent block.
   defp rec_names(book) do
     for %{mode: mode, name: name} = d <- book,
         rec_mode?(mode),
@@ -2710,6 +2718,7 @@ defmodule Muro.Check do
           :read,
           :meet,
           :talk,
+          :repr,
           :seat,
           :link,
           :relay

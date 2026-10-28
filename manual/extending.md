@@ -1,7 +1,7 @@
 ---
 title: Extending the kernel
 slug: extending
-order: 19
+order: 20
 summary: How to change the type theory. Agda first, then Elixir.
 ---
 
@@ -24,6 +24,8 @@ In brief: this is Job B. If you only want a program, stop and go back to [Start]
 7. `mix test` and `mix muro.check`. A rule change gets a negative test: a book the old rule accepted and the new rule refuses.
 
 Do not add a third representation. Do not use raw HOAS (`Tm → Tm`) as inductive syntax.
+
+`repr` entries are host-side declarations checked by `Muro.Repr`, not part of the Agda calculus.
 
 `agda/Muro/IR.agda` is the closed `run` image after checking. It is not a source syntax: its constructors are not added to `Tm`. An atom there is a nullary constructor of one closed data declaration. `atom` and `matom` in that module are `ctor` and `mData` of that declaration, so they are inside `Tm`. An index outside the declaration is refused. Nothing in the IR builds an atom from a string. The Elixir backend prints that `Con` as a BEAM atom; the enumeration is closed, so the print does not create an atom the declaration did not name.
 

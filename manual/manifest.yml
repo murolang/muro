@@ -62,6 +62,10 @@ pages:
     slug: gen
     title: Committed modules
     summary: A manifest names each book, module, and target. mix muro.gen writes the module. mix muro.gen --check fails when the file and the book disagree.
+  - file: repr.md
+    slug: repr
+    title: Host representations
+    summary: A repr states the host shape of a data type. Emit writes strict decode and encode.
   - file: grammar.md
     slug: grammar
     title: Grammar

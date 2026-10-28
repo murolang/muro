@@ -1,7 +1,7 @@
 ---
 title: Examples
 slug: examples
-order: 16
+order: 17
 summary: Every file in examples/ and what it is for.
 ---
 
@@ -449,6 +449,12 @@ See [Terms](language.md).
 `Result E A` with constructors `ok` and `error`: a failing `run` function returns a sum, and the constructor names are the Elixir tags `{:ok, _}` / `{:error, _}`. `pred`, `orZero` (run); `pred-two` and `pred-zero` are `refl`.
 
 See [Emit](emit.md).
+
+## repr.muro
+
+Host representations for input and output types. `Bool` is `boolean`. `Entry` is a map with an optional `Maybe Bool`. `Shape` and `Outcome` are choices of tagged maps, and `empty` and `absent` are `nil`. `toggle`, `flip`, `describe`, and `widen` are run. `toggle-on` and `describe-none` are `refl`.
+
+`mix muro.emit examples/repr.muro` writes `decode_entry` and `encode_entry` next to `toggle`. A host calls decode, then the run function, then encode. See [Host representations](repr.md).
 
 ## nx_add.muro
 
