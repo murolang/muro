@@ -253,6 +253,10 @@ If you want a book in the test suite, parse/check/emit it from `test/muro_check_
 
 `--backend exunit` prints one ExUnit module for the book's closed equations, the same text as `Muro.emit_exunit/3`. The test module is the file stem plus `Test` (`rounding.muro` prints `RoundingTest`). The implementation it calls by default is the stem (`Rounding`). Skipped equations go to standard error, then a line `N tests, M skipped`. Standard output is only the module. `--node` with this backend is refused.
 
-The tests call an implementation the host names. [Closed equations as tests](exunit.md) is the collection, the behaviour, the adapter, and the skip list. `mix muro.gen` writes the same suite when an entry sets `kind: :exunit`.
+This is the one backend that accepts a file whose `param`s are not supplied. It checks them as assumptions. Elixir, C, Rust, assembly, OTP, and `--node` still refuse that file with `param <name> is supplied by a file that imports this one`.
+
+`--imports` is valid only with `--backend exunit`. It also collects the closed equations of the files the book imports directly. With any other backend it is an error: `--imports is only valid with --backend exunit`. Absent, the suite is this file only.
+
+The tests call an implementation the host names. [Closed equations as tests](exunit.md) is the collection, the behaviour, the adapter, param libraries, imported equations, and the skip list. `mix muro.gen` writes the same suite when an entry sets `kind: :exunit`. `imports: true` on that entry is `--imports`.
 
 Next: [Closed equations as tests](exunit.md).

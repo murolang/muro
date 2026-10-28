@@ -65,6 +65,17 @@ defmodule Muro.EmitExunitTest do
   @skips ~w(step-ok pred-ok via-proof mark-eq fun-eq erased-ok keep-eq i64-eq apply-eq)
   @ignored ~w(all-n zero-eq head-zeros)
 
+  @param_tests ~w(
+    nil-k0 nil-k1 a-k0 a-k1 b-k0 b-k1 sil-k0 sil-k1 sil-deep b-deep a-deep
+    golden-a-k0 ok-true same-nil
+  )
+
+  @open_param """
+  param p : run Nat
+  param p-is : evidence {p ≡ 0 : Nat}
+  def held : evidence {p ≡ 0 : Nat} := p-is
+  """
+
   test "closed equations become tests and the rest are skipped or ignored" do
     {dir, path} = book("round.muro", @book)
 
@@ -112,6 +123,23 @@ defmodule Muro.EmitExunitTest do
     assert {:ok, %{source: ^source}} = again
   end
 
+  test "a book without params keeps the 0.16.76 text apart from the test name" do
+    {dir, path} = book("round.muro", @book)
+
+    assert {:ok, %{source: source}} =
+             Muro.emit_exunit(path, RoundTest, root: dir, book: "round.muro")
+
+    legacy = to_legacy(source)
+
+    assert test_labels(legacy) ==
+             Enum.map(@tests, fn name -> "#{name} (round.muro:#{line_of(@book, name)})" end)
+
+    assert blank_strings(source) == blank_strings(legacy)
+    assert source =~ "#   step-ok (round.muro:"
+    assert source =~ "# Skipped: 9"
+    refute source =~ "round-ok (round.muro:"
+  end
+
   test "the suite passes on the emitted module and names each wrong answer" do
     {dir, path} = book("round.muro", @book)
 
@@ -144,6 +172,7 @@ defmodule Muro.EmitExunitTest do
 
     for name <- @tests do
       assert failed =~ label(name, @book)
+      assert failed =~ "round.muro:#{line_of(@book, name)} #{name}"
     end
   end
 
@@ -304,7 +333,7 @@ defmodule Muro.EmitExunitTest do
       )
 
     if status != 0, do: flunk(out)
-    assert out =~ "round-ok (round.muro:"
+    assert out =~ "round.muro round-ok"
     assert out =~ ~r/(^|[^0-9])0 failures|^Result: \d+ passed/m
     refute out =~ "There are no tests to run"
     assert out =~ "function round/1 required by behaviour RoundSuite.Behaviour is not implemented"
@@ -399,7 +428,289 @@ defmodule Muro.EmitExunitTest do
     assert source =~ "# Skipped: none"
   end
 
-  defp label(name, source), do: "#{name} (round.muro:#{line_of(source, name)})"
+  @tag timeout: 120_000
+  test "a param library is the suite every implementation runs" do
+    dir = tmp_dir()
+    write_conformance(dir)
+    lib = Path.join(dir, "conformance.muro")
+    impl = Path.join(dir, "impl.muro")
+    lib_src = File.read!(lib)
+
+    assert {:error, refused} = Muro.check_file(lib, root: dir)
+    assert refused =~ "param decide is supplied by a file that imports this one"
+
+    assert {:ok, %{source: source, skips: skips, tests: 14}} =
+             Muro.emit_exunit(lib, ConformanceTest, root: dir, book: "conformance.muro")
+
+    assert Enum.map(skips, & &1.name) ==
+             ~w(f-nil inside observe-eq hoist-eq ticks-eq widen-eq)
+
+    assert reasons(skips) == %{
+             "f-nil" => "calls param decide through f",
+             "inside" => "calls param decide inside a value",
+             "observe-eq" => "param observe takes a stream",
+             "hoist-eq" => "param hoist takes a function",
+             "ticks-eq" => "param ticks returns a stream",
+             "widen-eq" => "param widen arguments are not data"
+           }
+
+    assert callbacks_of(source) == ["decide", "ok"]
+    assert source =~ "@callback decide(term(), term()) :: term()"
+    assert source =~ "@callback ok() :: term()"
+    assert source =~ "@callbacks [decide: 2, ok: 0]"
+    refute source =~ "decide-is-rule"
+    refute source =~ "all-nil"
+
+    for name <- @param_tests do
+      line = line_of(lib_src, name)
+      assert source =~ "test \"conformance.muro #{name}\""
+      assert source =~ "\"conformance.muro:#{line} #{name}\""
+    end
+
+    assert source =~ "impl.decide(:k0, {:cons, :a, :nil}) == :true"
+    assert source =~ "impl.decide(:k0, :nil) == impl.decide(:k1, :nil)"
+    refute source =~ dir
+
+    {:ok, emitted} = Muro.emit_file(impl, Impl)
+    assert emitted =~ "def decide("
+    File.write!(Path.join(dir, "suite.ex"), source)
+    File.write!(Path.join(dir, "emitted.ex"), emitted)
+
+    passed = elixir!(dir, run_script("Application.put_env(:muro, ConformanceTest, Impl)\n"))
+    assert passed =~ "total: 14"
+    assert passed =~ "failures: 0"
+
+    hand = elixir!(dir, run_script(hand_adapter()))
+    assert hand =~ "failures: 0"
+
+    mutant = elixir!(dir, run_script(mutant_adapter()))
+    assert mutant =~ "total: 14"
+    assert mutant =~ "failures: 3"
+
+    failed =
+      Regex.scan(~r/\d+\) test (conformance\.muro \S+)/, mutant)
+      |> Enum.map(fn [_, name] -> name end)
+      |> Enum.sort()
+
+    assert failed == [
+             "conformance.muro sil-deep",
+             "conformance.muro sil-k0",
+             "conformance.muro sil-k1"
+           ]
+
+    for name <- ~w(sil-k0 sil-k1 sil-deep) do
+      assert mutant =~ "conformance.muro:#{line_of(lib_src, name)} #{name}"
+    end
+  end
+
+  test "imports collects direct equations and leaves today's suite alone when off" do
+    dir = tmp_dir()
+    write_conformance(dir)
+    impl = Path.join(dir, "impl.muro")
+    lib = Path.join(dir, "conformance.muro")
+
+    assert {:ok, %{tests: 0, skips: []}} =
+             Muro.emit_exunit(impl, ImplTest, root: dir, book: "impl.muro")
+
+    assert {:ok, %{source: imported, tests: 16, skips: skips}} =
+             Muro.emit_exunit(impl, ImplTest, root: dir, book: "impl.muro", imports: true)
+
+    labels = test_labels(imported)
+    assert hd(labels) == "conformance.muro nil-k0"
+    assert "conformance.muro golden-a-k0" in labels
+    assert "conformance.muro f-nil" in labels
+    assert "conformance.muro inside" in labels
+    refute Enum.any?(labels, &String.starts_with?(&1, "rule.muro "))
+    assert Enum.map(skips, & &1.file) |> Enum.uniq() == ["conformance.muro"]
+    assert length(skips) == 4
+
+    again = Muro.emit_exunit(impl, ImplTest, root: dir, book: "impl.muro", imports: true)
+    assert {:ok, %{source: ^imported}} = again
+
+    {:ok, emitted} = Muro.emit_file(impl, Impl)
+    File.write!(Path.join(dir, "suite.ex"), imported)
+    File.write!(Path.join(dir, "emitted.ex"), emitted)
+    passed = elixir!(dir, run_script(nil))
+    assert passed =~ "total: 16"
+    assert passed =~ "failures: 0"
+
+    assert {:ok, %{source: with_rule}} =
+             Muro.emit_exunit(lib, ConformanceTest,
+               root: dir,
+               book: "conformance.muro",
+               imports: true
+             )
+
+    rule_labels = test_labels(with_rule)
+    assert hd(rule_labels) == "conformance.muro nil-k0"
+    assert List.last(rule_labels) == "rule.muro rule-ok"
+    assert length(rule_labels) == 15
+  end
+
+  test "direct imports keep declaration order, once, and do not follow further" do
+    dir = tmp_dir()
+
+    write_book(dir, "d.muro", """
+    def d : run Nat := 0
+    def d-ok : evidence {d ≡ 0 : Nat} := refl
+    """)
+
+    write_book(dir, "right.muro", """
+    import "d.muro"
+    def r : run Nat := suc 0
+    def r-ok : evidence {r ≡ suc 0 : Nat} := refl
+    """)
+
+    write_book(dir, "left.muro", """
+    import "d.muro"
+    def l : run Nat := suc (suc 0)
+    def l-ok : evidence {l ≡ suc (suc 0) : Nat} := refl
+    """)
+
+    top =
+      write_book(dir, "top.muro", """
+      import "right.muro"
+      import "left.muro"
+      import "right.muro"
+      def t : run Nat := suc (suc (suc 0))
+      def t-ok : evidence {t ≡ suc (suc (suc 0)) : Nat} := refl
+      """)
+
+    assert {:ok, %{source: source, tests: 3, skips: []}} =
+             Muro.emit_exunit(top, TopTest, root: dir, book: "top.muro", imports: true)
+
+    assert test_labels(source) == ["top.muro t-ok", "right.muro r-ok", "left.muro l-ok"]
+    refute source =~ "d.muro"
+    refute source =~ dir
+
+    again = Muro.emit_exunit(top, TopTest, root: dir, book: "top.muro", imports: true)
+    assert {:ok, %{source: ^source}} = again
+  end
+
+  test "a package import is a direct import, named by its path under the root" do
+    dir = tmp_dir()
+    wire = "def wire : run Nat := 0\ndef wire-ok : evidence {wire ≡ 0 : Nat} := refl\n"
+    write_book(dir, "muro_deps/shared/wire.muro", wire)
+
+    use =
+      write_book(dir, "use.muro", """
+      import "pkg:shared/wire.muro"
+      def use : run Nat := wire
+      def use-ok : evidence {use ≡ suc 0 : Nat} := refl
+      """)
+
+    File.write!(Path.join(dir, "muro.exs"), """
+    [
+      muro: "#{Mix.Tasks.Muro.version()}",
+      muro_deps: [
+        shared: {:git, "https://example.com/shared.git", tag: "v1.0.0"}
+      ],
+      modules: []
+    ]
+    """)
+
+    write_lock(dir, %{"muro_deps/shared/wire.muro" => wire})
+
+    assert {:error, _} =
+             Muro.emit_exunit(use, UseTest, root: dir, book: "use.muro", imports: true)
+
+    write_book(dir, "use.muro", """
+    import "pkg:shared/wire.muro"
+    def use : run Nat := wire
+    def use-ok : evidence {use ≡ 0 : Nat} := refl
+    """)
+
+    assert {:ok, %{source: source, tests: 2, skips: []}} =
+             Muro.emit_exunit(use, UseTest, root: dir, book: "use.muro", imports: true)
+
+    assert test_labels(source) == ["use.muro use-ok", "muro_deps/shared/wire.muro wire-ok"]
+    refute source =~ "pkg:"
+    refute source =~ dir
+  end
+
+  test "every backend but exunit still refuses an unsupplied param" do
+    {dir, path} = book("lib.muro", @open_param)
+
+    assert {:error, message} = Muro.check_file(path)
+    assert message =~ "param p is supplied by a file that imports this one"
+
+    for call <- [
+          fn -> Muro.emit_file(path, Lib) end,
+          fn -> Muro.emit_c(path) end,
+          fn -> Muro.emit_rust(path) end,
+          fn -> Muro.emit_asm(path) end,
+          fn -> Muro.emit_otp(path) end,
+          fn -> Muro.emit_node(path, :a) end
+        ] do
+      assert {:error, refused} = call.()
+      assert refused =~ "param p is supplied by a file that imports this one"
+    end
+
+    assert {:ok, %{tests: 1, skips: [], source: source}} =
+             Muro.emit_exunit(path, LibTest, root: dir, book: "lib.muro")
+
+    assert source =~ "@callback p() :: term()"
+    assert source =~ "test \"lib.muro held\""
+    refute source =~ "@callback p_is"
+
+    for backend <- ["elixir", "c", "rust", "asm", "otp"] do
+      assert_raise Mix.Error, ~r/param p is supplied by a file that imports this one/, fn ->
+        Mix.Tasks.Muro.Emit.run([path, "--backend", backend])
+      end
+
+      assert_raise Mix.Error, ~r/--imports is only valid with --backend exunit/, fn ->
+        Mix.Tasks.Muro.Emit.run([path, "--backend", backend, "--imports"])
+      end
+    end
+
+    assert_raise Mix.Error, ~r/param p is supplied by a file that imports this one/, fn ->
+      Mix.Tasks.Muro.Emit.run([path])
+    end
+
+    assert_raise Mix.Error, ~r/param p is supplied by a file that imports this one/, fn ->
+      Mix.Tasks.Muro.Emit.run([path, "--node", "a"])
+    end
+
+    {stdout, stderr} = capture_emit([path, "--backend", "exunit"])
+    assert stdout =~ "defmodule LibTest do\n"
+    assert stderr =~ "1 tests, 0 skipped"
+
+    {same, other} = book("same.muro", "param p : run Nat\ndef p : run Nat := 0\n")
+    assert {:error, dup} = Muro.check_file(other)
+    assert dup =~ "duplicate name p"
+    refute dup =~ "is supplied by a file that imports this one"
+    _ = same
+
+    session = """
+    session ping := recv Nat (send Nat end)
+    param talk : run ping
+    """
+
+    {_dir, talk} = book("talk.muro", session)
+
+    assert {:error, sess} = Muro.emit_exunit(talk, TalkTest, book: "talk.muro")
+    assert sess =~ "ping is a session, not a definition"
+  end
+
+  defp label(name, _source), do: "round.muro #{name}"
+
+  # Put the 0.16.76 test name and assertion message back. Nothing else moves.
+  defp to_legacy(source) do
+    Regex.replace(
+      ~r/^( *)test "([^"\n]+) ([^"\n]+)", %\{impl: impl\} do\n( *)assert (.*), "\2:(\d+) \3"\n/m,
+      source,
+      fn _, indent, file, name, aindent, call, line ->
+        old = "#{name} (#{file}:#{line})"
+
+        """
+        #{indent}test #{inspect(old)}, %{impl: impl} do
+        #{aindent}assert #{call}, #{inspect(old)}
+        """
+      end
+    )
+  end
+
+  defp blank_strings(source), do: String.replace(source, ~r/"[^"\n]*"/, "\"\"")
 
   defp reasons(skips), do: Map.new(skips, fn skip -> {skip.name, skip.reason} end)
 
@@ -453,6 +764,217 @@ defmodule Muro.EmitExunitTest do
 
     assert_received {:stderr, stderr}
     {stdout, stderr}
+  end
+
+  defp callbacks_of(source) do
+    Regex.scan(~r/@callback ([A-Za-z0-9_]+)\(/, source)
+    |> Enum.map(fn [_, name] -> name end)
+  end
+
+  defp hand_adapter do
+    """
+    defmodule Hand do
+      @behaviour ConformanceTest.Behaviour
+      def decide(_k, :nil), do: true
+      def decide(_k, {:cons, :b, _}), do: false
+      def decide(_k, {:cons, :silence, _}), do: true
+      def decide(_k, {:cons, :a, _}), do: true
+      def ok, do: true
+    end
+    Application.put_env(:muro, ConformanceTest, Hand)
+    """
+  end
+
+  defp mutant_adapter do
+    """
+    defmodule Mutant do
+      @behaviour ConformanceTest.Behaviour
+      def decide(_k, :nil), do: true
+      def decide(_k, {:cons, :b, _}), do: false
+      def decide(_k, {:cons, :silence, _}), do: false
+      def decide(_k, _), do: true
+      def ok, do: true
+    end
+    Application.put_env(:muro, ConformanceTest, Mutant)
+    """
+  end
+
+  defp write_lock(dir, files) do
+    {:ok, deps} = Muro.Manifest.load_deps(dir)
+
+    packages =
+      Map.new(deps, fn dep ->
+        prefix = "muro_deps/" <> dep.name <> "/"
+
+        hashed =
+          files
+          |> Enum.filter(fn {rel, _bytes} -> String.starts_with?(rel, prefix) end)
+          |> Map.new(fn {rel, bytes} ->
+            {String.replace_prefix(rel, prefix, ""), Muro.Hash.sha256(bytes)}
+          end)
+
+        {dep.name,
+         %{
+           files: hashed,
+           resolved: {:git, String.duplicate("ab", 20)},
+           source: dep.source,
+           version: "1.0.0"
+         }}
+      end)
+
+    File.write!(Path.join(dir, "muro.lock"), Muro.Lock.encode(packages))
+  end
+
+  defp write_conformance(dir) do
+    write_book(dir, "rule.muro", """
+    data Key : Type where
+      k0 : Key
+      k1 : Key
+
+    data Item : Type where
+      a : Item
+      b : Item
+      silence : Item
+
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+
+    def not : run Π (b : Bool) → Bool :=
+      λ (b : Bool) →
+        match b motive (λ _ → Bool)
+          | true => false
+          | false => true
+
+    def rule : run Π (k : Key) → Π (t : List Item) → Bool :=
+      λ (k : Key) → λ (t : List Item) →
+        match t motive (λ _ → Bool)
+          | nil => true
+          | cons x _ =>
+            match x motive (λ _ → Bool)
+              | a => true
+              | b => false
+              | silence => true
+
+    def rule-ok : evidence {rule k0 nil ≡ true : Bool} := refl
+    """)
+
+    write_book(dir, "conformance.muro", """
+    import "rule.muro"
+
+    param decide : run Π (k : Key) → Π (t : List Item) → Bool
+    param decide-is-rule : evidence Π (k : Key) → Π (t : List Item) → {decide k t ≡ rule k t : Bool}
+
+    def golden-a : run List Item := cons a nil
+    def ok : run Bool := true
+
+    def nil-k0 : evidence {decide k0 nil ≡ true : Bool} :=
+      rewrite (decide-is-rule k0 nil) motive (λ z → {z ≡ true : Bool}) in refl
+    def nil-k1 : evidence {decide k1 nil ≡ true : Bool} :=
+      rewrite (decide-is-rule k1 nil) motive (λ z → {z ≡ true : Bool}) in refl
+    def a-k0 : evidence {decide k0 (cons a nil) ≡ true : Bool} :=
+      rewrite (decide-is-rule k0 (cons a nil)) motive (λ z → {z ≡ true : Bool}) in refl
+    def a-k1 : evidence {decide k1 (cons a nil) ≡ true : Bool} :=
+      rewrite (decide-is-rule k1 (cons a nil)) motive (λ z → {z ≡ true : Bool}) in refl
+    def b-k0 : evidence {decide k0 (cons b nil) ≡ false : Bool} :=
+      rewrite (decide-is-rule k0 (cons b nil)) motive (λ z → {z ≡ false : Bool}) in refl
+    def b-k1 : evidence {decide k1 (cons b nil) ≡ false : Bool} :=
+      rewrite (decide-is-rule k1 (cons b nil)) motive (λ z → {z ≡ false : Bool}) in refl
+    def sil-k0 : evidence {decide k0 (cons silence nil) ≡ true : Bool} :=
+      rewrite (decide-is-rule k0 (cons silence nil)) motive (λ z → {z ≡ true : Bool}) in refl
+    def sil-k1 : evidence {decide k1 (cons silence nil) ≡ true : Bool} :=
+      rewrite (decide-is-rule k1 (cons silence nil)) motive (λ z → {z ≡ true : Bool}) in refl
+    def sil-deep : evidence {decide k0 (cons silence (cons a nil)) ≡ true : Bool} :=
+      rewrite (decide-is-rule k0 (cons silence (cons a nil))) motive (λ z → {z ≡ true : Bool}) in refl
+    def b-deep : evidence {decide k0 (cons b (cons a nil)) ≡ false : Bool} :=
+      rewrite (decide-is-rule k0 (cons b (cons a nil))) motive (λ z → {z ≡ false : Bool}) in refl
+    def a-deep : evidence {decide k0 (cons a (cons silence nil)) ≡ true : Bool} :=
+      rewrite (decide-is-rule k0 (cons a (cons silence nil))) motive (λ z → {z ≡ true : Bool}) in refl
+    def golden-a-k0 : evidence {decide k0 golden-a ≡ true : Bool} :=
+      rewrite (decide-is-rule k0 golden-a) motive (λ z → {z ≡ true : Bool}) in refl
+
+    def ok-true : evidence {ok ≡ true : Bool} := refl
+
+    def all-nil : evidence Π (k : Key) → {decide k nil ≡ true : Bool} :=
+      λ (k : Key) →
+        rewrite (decide-is-rule k nil) motive (λ z → {z ≡ true : Bool}) in refl
+
+    def f : run Π (t : List Item) → Bool :=
+      λ (t : List Item) → not (decide k0 t)
+    def f-nil : evidence {f nil ≡ false : Bool} :=
+      rewrite (decide-is-rule k0 nil) motive (λ z → {not z ≡ false : Bool}) in refl
+
+    def idb : run Π (b : Bool) → Bool :=
+      λ (b : Bool) → b
+    def inside : evidence {idb (decide k0 nil) ≡ true : Bool} :=
+      rewrite (decide-is-rule k0 nil) motive (λ z → {idb z ≡ true : Bool}) in refl
+
+    param observe : run Π (s : Stream Nat) → Nat
+    def zeros : run Stream Nat :=
+      unfold 0 (λ (_ : Nat) → (0, 0))
+    param observe-holds : evidence Π (s : Stream Nat) → {observe s ≡ 0 : Nat}
+    def observe-eq : evidence {observe zeros ≡ 0 : Nat} := observe-holds zeros
+
+    param hoist : run Π (f : Π (b : Bool) → Bool) → Π (b : Bool) → Bool
+    param hoist-holds : evidence Π (b : Bool) → {hoist idb b ≡ b : Bool}
+    def hoist-eq : evidence {hoist idb true ≡ true : Bool} := hoist-holds true
+
+    param ticks : run Π (n : Nat) → Stream Nat
+    param ticks-holds : evidence Π (n : Nat) → {ticks n ≡ zeros : Stream Nat}
+    def ticks-eq : evidence {ticks 0 ≡ zeros : Stream Nat} := ticks-holds 0
+
+    param widen : run Π (x : I64) → I64
+    param widen-holds : evidence Π (x : I64) → {widen x ≡ x : I64}
+    def widen-eq : evidence {widen (toI64 0) ≡ toI64 0 : I64} := widen-holds (toI64 0)
+
+    param spare : run Π (n : Nat) → Nat
+
+    def same-nil : evidence {decide k0 nil ≡ decide k1 nil : Bool} :=
+      rewrite (decide-is-rule k0 nil) motive (λ z → {z ≡ decide k1 nil : Bool}) in
+      rewrite (decide-is-rule k1 nil) motive (λ z → {true ≡ z : Bool}) in
+      refl
+    """)
+
+    write_book(dir, "impl.muro", """
+    import "conformance.muro"
+
+    def decide : run Π (k : Key) → Π (t : List Item) → Bool :=
+      λ (k : Key) → λ (t : List Item) → rule k t
+
+    def decide-is-rule : evidence Π (k : Key) → Π (t : List Item) → {decide k t ≡ rule k t : Bool} :=
+      λ (k : Key) → λ (t : List Item) → refl
+
+    def observe : run Π (s : Stream Nat) → Nat :=
+      λ (_ : Stream Nat) → 0
+
+    def observe-holds : evidence Π (s : Stream Nat) → {observe s ≡ 0 : Nat} :=
+      λ (_ : Stream Nat) → refl
+
+    def hoist : run Π (f : Π (b : Bool) → Bool) → Π (b : Bool) → Bool :=
+      λ (f : Π (b : Bool) → Bool) → λ (b : Bool) → f b
+
+    def hoist-holds : evidence Π (b : Bool) → {hoist idb b ≡ b : Bool} :=
+      λ (b : Bool) → refl
+
+    def ticks : run Π (n : Nat) → Stream Nat :=
+      λ (_ : Nat) → zeros
+
+    def ticks-holds : evidence Π (n : Nat) → {ticks n ≡ zeros : Stream Nat} :=
+      λ (_ : Nat) → refl
+
+    def widen : run Π (x : I64) → I64 :=
+      λ (x : I64) → x
+
+    def widen-holds : evidence Π (x : I64) → {widen x ≡ x : I64} :=
+      λ (x : I64) → refl
+
+    def spare : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → n
+    """)
   end
 
   defp book(name, source) do

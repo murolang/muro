@@ -146,7 +146,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.16.78.ez
+mix archive.install muro-0.17.0.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -161,7 +161,7 @@ mix archive.install github murolang/muro
 
 A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks. Use `mix muro.check` and `mix muro.emit`.
 
-`mix muro.emit path.muro` prints the Elixir module. `mix muro.emit path.muro > path.ex` saves it. `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the book's closed equations. The page is [Closed equations as tests](exunit.md).
+`mix muro.emit path.muro` prints the Elixir module. `mix muro.emit path.muro > path.ex` saves it. `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the book's closed equations, including a library whose `param`s are not supplied. `--imports` with that backend also collects the files the book imports directly. The page is [Closed equations as tests](exunit.md).
 
 `--backend c` writes C. Add `{:elixir_make, "~> 0.10", runtime: false}` to the project deps, or run the task inside a project that depends on muro. Without `elixir_make`, the task stops and names that dependency. `nx` and `makeup` are optional. Checking and emitting Elixir do not load them.
 
@@ -169,7 +169,7 @@ A script run with `mix run --no-start` does not see the archive. Archives are on
 
 A project commits the Elixir `mix muro.gen` writes. The `.muro` file is the source. Do not edit the generated file by hand. Change the `.muro` file and run `mix muro.gen`.
 
-`muro.exs` at the project root, or a `:muro` key in `mix.exs`, names each book, the module, and the target path. An entry may add `[kind: :exunit, impl: Adapter]`. `muro:` is the version the books are checked with. `mix muro.gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions.
+`muro.exs` at the project root, or a `:muro` key in `mix.exs`, names each book, the module, and the target path. An entry may add `[kind: :exunit, impl: Adapter, imports: true]`. `imports:` is valid only on an exunit entry. `muro:` is the version the books are checked with. `mix muro.gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions.
 
 `mix muro.init` creates the manifest and `priv/muro/`. It prints a note to paste into the project's agent instructions. It does not write that file. `mix muro.init --ci github` also writes `.github/workflows/muro.yml`. The job installs the archive with `mix archive.install hex muro <version> --force`, with the version from the manifest, and runs `mix muro.gen --check`.
 
@@ -183,6 +183,7 @@ mix test
 mix muro.check
 mix muro.check examples/half_ok.muro
 mix muro.emit path.muro --backend exunit
+mix muro.emit path.muro --backend exunit --imports
 mix muro --version
 mix muro.init
 mix muro.gen
@@ -194,7 +195,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then:
 
 ```
-Muro v0.16.78
+Muro v0.17.0
 All terms check. Evidence never becomes a run.
 ```
 

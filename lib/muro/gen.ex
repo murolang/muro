@@ -254,7 +254,7 @@ defmodule Muro.Gen do
     path = Muro.Manifest.book_path(root, entry)
 
     with {:ok, source, skips} <- emit_entry(root, entry, fuel),
-         {:ok, lines} <- Muro.conforms(path, fuel: fuel, root: root) do
+         {:ok, lines} <- Muro.conforms(path, conform_opts(entry, root, fuel)) do
       file = settle(root, entry, version, format_elixir(source, entry.target, root), 3, lines)
 
       if coherent?(file, root, entry, version, lines) do
@@ -270,7 +270,12 @@ defmodule Muro.Gen do
 
     case Map.get(entry, :kind, :elixir) do
       :exunit ->
-        opts = [fuel: fuel, root: root, book: entry.book]
+        opts = [
+          fuel: fuel,
+          root: root,
+          book: entry.book,
+          imports: Map.get(entry, :imports, false)
+        ]
 
         opts =
           case Map.get(entry, :impl) do
@@ -359,7 +364,14 @@ defmodule Muro.Gen do
   end
 
   defp check_book(entry, root, fuel) do
-    Muro.check_file(Muro.Manifest.book_path(root, entry), fuel: fuel, root: root)
+    Muro.check_file(Muro.Manifest.book_path(root, entry), conform_opts(entry, root, fuel))
+  end
+
+  # An exunit entry may be a param library. The loader then checks the
+  # params as assumptions. An elixir entry never passes that option.
+  defp conform_opts(entry, root, fuel) do
+    opts = [fuel: fuel, root: root]
+    if Map.get(entry, :kind) == :exunit, do: Keyword.put(opts, :params, :open), else: opts
   end
 
   defp target_problems(entry, root, version, fuel, book_ok?) do

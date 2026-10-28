@@ -9,7 +9,7 @@ defmodule Muro.ManifestTest do
 
     File.write!(Path.join(dir, "muro.exs"), """
     [
-      muro: "0.16.78",
+      muro: "0.17.0",
       modules: [
         {"priv/muro/one.muro", MyApp.Billing.Rounding, "lib/my_app/billing/rounding.ex"}
       ]
@@ -17,7 +17,7 @@ defmodule Muro.ManifestTest do
     """)
 
     assert {:ok, manifest} = Muro.Manifest.load(dir)
-    assert manifest.version == "0.16.78"
+    assert manifest.version == "0.17.0"
     assert manifest.fuel == Muro.Check.default_fuel()
     assert manifest.source == :muro_exs
 
@@ -27,7 +27,8 @@ defmodule Muro.ManifestTest do
                module: MyApp.Billing.Rounding,
                target: "lib/my_app/billing/rounding.ex",
                kind: :elixir,
-               impl: nil
+               impl: nil,
+               imports: false
              }
            ]
   end
@@ -200,14 +201,16 @@ defmodule Muro.ManifestTest do
                module: MyApp.Round,
                target: "lib/round.ex",
                kind: :elixir,
-               impl: nil
+               impl: nil,
+               imports: false
              },
              %{
                book: "priv/muro/round.muro",
                module: MyApp.RoundTest,
                target: "test/round_test.exs",
                kind: :exunit,
-               impl: MyApp.Rounding
+               impl: MyApp.Rounding,
+               imports: false
              }
            ]
   end
@@ -261,6 +264,55 @@ defmodule Muro.ManifestTest do
              )
 
     assert not_opts =~ "modules entry 1 is not {book, module, target}"
+
+    assert {:error, on_elixir} =
+             Muro.Manifest.validate(
+               [
+                 muro: "1.0.0",
+                 modules: [{"ok.muro", One, "lib/one.ex", [kind: :elixir, imports: true]}]
+               ],
+               dir
+             )
+
+    assert on_elixir =~ "modules entry 1: imports: is only valid for kind: :exunit"
+
+    assert {:error, bad_bool} =
+             Muro.Manifest.validate(
+               [
+                 muro: "1.0.0",
+                 modules: [{"ok.muro", One, "lib/one.ex", [kind: :exunit, imports: :yes]}]
+               ],
+               dir
+             )
+
+    assert bad_bool =~ "modules entry 1: imports: must be a boolean, got: :yes"
+  end
+
+  test "imports: true is stored only on an exunit entry" do
+    dir = tmp_dir()
+    write_book(dir, "ok.muro")
+
+    assert {:ok, manifest} =
+             Muro.Manifest.validate(
+               [
+                 muro: "1.0.0",
+                 modules: [
+                   {"ok.muro", OneTest, "test/one_test.exs", [kind: :exunit, imports: true]}
+                 ]
+               ],
+               dir
+             )
+
+    assert manifest.modules == [
+             %{
+               book: "ok.muro",
+               module: OneTest,
+               target: "test/one_test.exs",
+               kind: :exunit,
+               impl: nil,
+               imports: true
+             }
+           ]
   end
 
   test "load_deps reads only muro_deps and returns an empty list when it is absent" do
@@ -348,11 +400,11 @@ defmodule Muro.ManifestTest do
   end
 
   test "version pin names both versions" do
-    assert Muro.Manifest.version_pin("0.16.78", "0.16.78") == :ok
+    assert Muro.Manifest.version_pin("0.17.0", "0.17.0") == :ok
 
-    assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.16.78")
+    assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.17.0")
     assert message =~ "manifest says 0.16.72"
-    assert message =~ "running 0.16.78"
+    assert message =~ "running 0.17.0"
   end
 
   test "root follows the working directory outside a Mix project" do

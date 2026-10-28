@@ -82,7 +82,7 @@ defmodule Muro.Emit do
   """
   def elixir_names(book) when is_list(book) do
     taken =
-      if Enum.any?(run_defs(book), &term_has_toi64?(&1.body)),
+      if Enum.any?(run_defs(book), &term_has_toi64?(Map.get(&1, :body))),
         do: MapSet.new(["muro_nat_to_int"]),
         else: MapSet.new()
 

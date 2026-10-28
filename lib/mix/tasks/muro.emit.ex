@@ -27,6 +27,12 @@ defmodule Mix.Tasks.Muro.Emit do
   listed on standard error, then a line `N tests, M skipped`. Standard
   output is only the module. `--node` with this backend is refused.
 
+  A file with `param`s is refused by every backend except `exunit`.
+  `--backend exunit` checks those params as assumptions and emits the
+  closed equations. `--imports` with `--backend exunit` also collects
+  the closed equations of the files this book imports directly. It is
+  an error with any other backend. Absent, the suite is this file only.
+
   `--backend c` writes `<name>.h` and `<name>.c` next to the file and
   prints those paths. A `run` stream is emitted. Tensors are refused.
   An exported `Nat` run is also a NIF.
@@ -55,7 +61,7 @@ defmodule Mix.Tasks.Muro.Emit do
   Without it, the task stops and names the dependency to add.
   """
 
-  @switches [backend: :string, node: :string]
+  @switches [backend: :string, node: :string, imports: :boolean]
 
   def run(args) do
     Mix.Tasks.Muro.ensure_started()
@@ -68,10 +74,41 @@ defmodule Mix.Tasks.Muro.Emit do
 
     backend = Keyword.get(opts, :backend, "elixir")
     node = Keyword.get(opts, :node)
+    imports? = Keyword.get(opts, :imports, false)
 
     case paths do
-      [path] -> emit(path, backend, node)
+      [path] -> emit(path, backend, node, imports?)
       _ -> Mix.raise("expected one path")
+    end
+  end
+
+  defp emit(path, backend, node, imports?) do
+    cond do
+      imports? and backend != "exunit" ->
+        Mix.raise("--imports is only valid with --backend exunit")
+
+      backend == "exunit" and is_nil(node) ->
+        emit_exunit(path, imports?)
+
+      true ->
+        emit(path, backend, node)
+    end
+  end
+
+  defp emit_exunit(path, imports?) do
+    opts = if imports?, do: [imports: true], else: []
+
+    case Muro.emit_exunit(path, Muro.Emit.exunit_module(path), opts) do
+      {:ok, %{source: src, skips: skips, tests: n}} ->
+        Enum.each(skips, fn skip ->
+          IO.puts(:stderr, "skipped #{skip.name} (#{skip.file}:#{skip.line}): #{skip.reason}")
+        end)
+
+        IO.puts(:stderr, "#{n} tests, #{length(skips)} skipped")
+        Mix.shell().info(src)
+
+      {:error, e} ->
+        Mix.raise(e)
     end
   end
 
@@ -118,21 +155,6 @@ defmodule Mix.Tasks.Muro.Emit do
     case Muro.emit_otp(path) do
       {:ok, files} -> Enum.each(files, fn path -> Mix.shell().info(path) end)
       {:error, e} -> Mix.raise(e)
-    end
-  end
-
-  defp emit(path, "exunit", nil) do
-    case Muro.emit_exunit(path, Muro.Emit.exunit_module(path)) do
-      {:ok, %{source: src, skips: skips, tests: n}} ->
-        Enum.each(skips, fn skip ->
-          IO.puts(:stderr, "skipped #{skip.name} (#{skip.file}:#{skip.line}): #{skip.reason}")
-        end)
-
-        IO.puts(:stderr, "#{n} tests, #{length(skips)} skipped")
-        Mix.shell().info(src)
-
-      {:error, e} ->
-        Mix.raise(e)
     end
   end
 

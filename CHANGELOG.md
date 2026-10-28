@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.17.0
+
+**Breaking:** Every ExUnit test is now named `"<file> <def-name>"` instead of `<name> (<file>:<line>)`. Regenerate suites with `mix muro.gen` and update any CI history, quarantine list, or `--only` / `--exclude` filter that matched the old names. The file and line are in the assertion message, `"<file>:<line> <def-name>"`, so a failure still names the equation and the line. The name has no line number, so a line shift does not change it. Skip comments and the `skipped` lines keep the 0.16.76 spelling, `name (file:line): reason`.
+
+`mix muro.emit path.muro --backend exunit` emits a library of `param`s. The library is checked with those params as assumptions (`params: :open`). Every other backend, `mix muro.check`, and a `kind: :elixir` manifest entry still refuse the file with `param <name> is supplied by a file that imports this one`. A `run` param at the head of a side becomes `impl.<name>(...)`. Its arguments are closed values, so a nullary library `run` such as `golden` is a literal. One `@callback` is generated per `run` param an emitted test calls, with the arity `Muro.Emit.binder_qtys/1` already gives that type, and the Elixir spelling `Muro.Emit.def_names/3` gives the name. An `evidence` param is not a callback. A param that only a skipped equation mentions is not a callback.
+
+A param call is emitted only at the head of a side, and only when the arguments are data. A higher-order argument is skipped as `param <name> takes a function`. A `Stream` argument or result is `takes a stream` or `returns a stream`. An argument that is not data, such as `I64`, is `param <name> arguments are not data`. A `run` param inside a value is `calls param <name> inside a value`. A library `run` whose evaluation reaches a param is `calls param <name> through <def>`. The adapter is not threaded through library code. A session name in a param type does not check (`<name> is a session, not a definition`); it is an error, not a skip. A spec alias is not unfolded, so a name that stands for a function and is not itself a Π is `arguments are not data` or `returns a value that is not data`.
+
+`imports: true` on a `kind: :exunit` entry, and `--imports` on `mix muro.emit --backend exunit`, also collects the closed equations of the files the book imports directly, in declaration order, once each. The book's own equations come first. Imports of those files are not followed. The default is off, and today's suites do not gain tests. `--imports` with any other backend is an error. `imports:` on a `kind: :elixir` entry is an error, and the message names the entry index. A `pkg:` import is a direct import. The test name uses the file path under the project root, such as `muro_deps/shared/wire.muro wire-ok`. The book hash already covers imported files, so `mix muro.gen --check` reports the suite stale when a direct import changes, whether or not the suite collects it.
+
+On a supplying book, `--imports` evaluates the library equations against the supplied definitions. An equation the library itself skips, because a `run` reaches a param, can be an ordinary test once that param reduces. The default implementation is the book's emitted module, which includes the supplied params, so the suite passes with no `Application.put_env`.
+
+A library whose `decide` reads a silence wildcard as `true` produced 14 tests. The emitted implementation and a hand-written adapter passed. An adapter that reads silence as `false` failed exactly `conformance.muro sil-k0`, `conformance.muro sil-k1`, and `conformance.muro sil-deep`, and each failure carried `conformance.muro:<line> <name>`.
+
+### Manual
+
+- Closed equations as tests: param libraries, imported equations, the new test name, and the new skip reasons.
+- Emit and Committed modules: `--imports`, and `imports:` on an exunit entry.
+- Terms: the exunit backend is the one path that checks an unsupplied param.
+
+### Package
+
+- `scripts/archive-smoke.sh` emits a param library inside a host, refuses the Elixir backend for that file, passes the suite against a hand-written adapter, and fails a mutant by equation name.
+- Version 0.17.0.
+
 ## 0.16.78
 
 `import "pkg:shared_wire/wire.muro"` loads a book from a package named in the manifest, at the version `muro.lock` records. `muro_deps:` is an optional key in `muro.exs` or the `:muro` key of `mix.exs`. A git spec is `{:git, url, tag: "v1.2.0"}` or `ref:`, with an optional `root:` directory. A Hex spec is `{:hex, "package_name", "~> 2.0"}`. Hex books live under `priv/muro/`.

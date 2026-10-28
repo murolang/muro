@@ -367,18 +367,29 @@ defmodule Muro.Ast do
   # Definitions, data types, and constructors are one name space
   # (`infer_def`). A second declaration with a name already used is a
   # different entry, and a match can then skip the branch it should check.
-  def book_to_db(book) do
+  @doc """
+  Convert a named book to de Bruijn.
+
+  `params: :closed` (the default) refuses a `param`: it is supplied by
+  a file that imports this one. `params: :open` keeps each param as an
+  assumption. Its type is converted and it has no body. Only the exunit
+  path passes `:open`.
+  """
+  def book_to_db(book, opts \\ []) when is_list(book) and is_list(opts) do
     with :ok <- unique_names(book) do
-      book_to_db_entries(book)
+      book_to_db_entries(book, Keyword.get(opts, :params, :closed))
     end
   end
 
-  defp book_to_db_entries(book) do
+  defp book_to_db_entries(book, params_mode) do
     Enum.reduce_while(book, {:ok, []}, fn d, {:ok, acc} ->
       result =
         cond do
           Map.get(d, :kind) == :import ->
             {:error, import_left(d)}
+
+          Map.get(d, :kind) == :param and params_mode == :open ->
+            param_to_db(d)
 
           Map.get(d, :kind) == :param ->
             {:error, param_left(d)}
@@ -454,6 +465,13 @@ defmodule Muro.Ast do
   end
 
   defp import_left(_), do: "import is resolved from a file"
+
+  defp param_to_db(%{type: ty} = d) do
+    case to_db(ty) do
+      {:ok, ty1} -> {:ok, %{d | type: ty1}}
+      err -> err
+    end
+  end
 
   defp param_left(d) do
     "#{Muro.Print.loc_prefix(Map.get(d, :loc))}param #{d.name} is supplied by a file that imports this one"

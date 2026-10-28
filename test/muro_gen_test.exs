@@ -692,6 +692,101 @@ defmodule Muro.GenTest do
     assert check_error(dir) =~ "stale target"
   end
 
+  test "an exunit entry emits a param library and imports stay in the book hash" do
+    dir = tmp_dir()
+    File.write!(Path.join(dir, ".formatter.exs"), "[inputs: [\"lib/**/*.ex\"]]\n")
+
+    lib = """
+    param p : run Nat
+    param p-is : evidence {p ≡ 0 : Nat}
+    def held : evidence {p ≡ 0 : Nat} := p-is
+    def n : run Nat := 0
+    def n-ok : evidence {n ≡ 0 : Nat} := refl
+    """
+
+    write_book(dir, "priv/muro/lib.muro", lib)
+
+    write_book(dir, "priv/muro/use.muro", """
+    import "lib.muro"
+    def p : run Nat := 0
+    def p-is : evidence {p ≡ 0 : Nat} := refl
+    """)
+
+    write_manifest(dir, [
+      {"priv/muro/lib.muro", LibTest, "test/lib_test.exs", [kind: :exunit]},
+      {"priv/muro/use.muro", UseTest, "test/use_test.exs", [kind: :exunit, imports: true]}
+    ])
+
+    output =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+      end)
+
+    assert output =~ "written test/lib_test.exs\n"
+    assert output =~ "written test/use_test.exs\n"
+
+    suite = File.read!(Path.join(dir, "test/lib_test.exs"))
+    assert {:ok, header} = Muro.Gen.parse_header(suite)
+    assert header.book == "priv/muro/lib.muro"
+    assert header.version == Mix.Tasks.Muro.version()
+    assert header.book_hash == Muro.Gen.book_hash(dir, "priv/muro/lib.muro")
+    assert suite =~ "test \"priv/muro/lib.muro held\""
+    assert suite =~ "@callback p() :: term()"
+    refute suite =~ dir
+
+    use = File.read!(Path.join(dir, "test/use_test.exs"))
+    assert use =~ "test \"priv/muro/lib.muro held\""
+    assert use =~ "test \"priv/muro/lib.muro n-ok\""
+    assert use =~ "test \"priv/muro/use.muro p-is\""
+
+    again =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+      end)
+
+    assert again =~ "unchanged test/lib_test.exs\n"
+    assert again =~ "unchanged test/use_test.exs\n"
+    assert File.read!(Path.join(dir, "test/lib_test.exs")) == suite
+
+    check =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run(["--check"]) end)
+      end)
+
+    assert check == "ok\n"
+
+    File.write!(
+      Path.join(dir, "test/lib_test.exs"),
+      String.replace(suite, "impl.p() == 0", "impl.p() == 1", global: false)
+    )
+
+    assert check_error(dir) =~ "hand-edited target"
+
+    File.write!(Path.join(dir, "test/lib_test.exs"), suite)
+    write_book(dir, "priv/muro/lib.muro", lib <> "\ndef spare : run Nat := 0\n")
+    assert check_error(dir) =~ "test/use_test.exs: stale target"
+    assert check_error(dir) =~ "test/lib_test.exs: stale target"
+  end
+
+  test "an elixir manifest entry still refuses an unsupplied param" do
+    dir = tmp_dir()
+
+    write_book(dir, "priv/muro/lib.muro", """
+    param p : run Nat
+    param p-is : evidence {p ≡ 0 : Nat}
+    def held : evidence {p ≡ 0 : Nat} := p-is
+    """)
+
+    write_manifest(dir, [
+      {"priv/muro/lib.muro", Lib, "lib/lib.ex"}
+    ])
+
+    message = check_error(dir)
+    assert message =~ "lib/lib.ex: priv/muro/lib.muro does not check"
+    assert message =~ "param p is supplied by a file that imports this one"
+    refute File.regular?(Path.join(dir, "lib/lib.ex"))
+  end
+
   test "a repr is part of the committed module" do
     dir = repr_project()
     version = Mix.Tasks.Muro.version()

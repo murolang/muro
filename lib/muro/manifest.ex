@@ -19,12 +19,16 @@ defmodule Muro.Manifest do
       (`MyApp.Billing.Rounding`). A 3-tuple is an Elixir module.
       `opts` is a keyword list: `kind: :elixir` (the default) or
       `kind: :exunit`, and for `:exunit` an optional `impl:` alias,
-      the implementation the suite tests by default.
+      the implementation the suite tests by default, and an optional
+      `imports:` boolean. `imports: true` collects closed equations
+      from the files that book imports directly. The default is
+      `false`. `imports:` on an `:elixir` entry is an error.
 
   A book or a target that leaves the project root is refused, and so
   is a missing book, a duplicate target, a module that is not an
-  alias atom, an unknown option, an unknown kind, or `impl:` on an
-  `:elixir` entry.
+  alias atom, an unknown option, an unknown kind, `impl:` on an
+  `:elixir` entry, or `imports:` on an `:elixir` entry. `imports:`
+  must be a boolean.
 
   `muro_deps:` is optional. It is a keyword list of package names to
   git or Hex specs. `mix muro.deps.get` fetches those packages.
@@ -36,7 +40,7 @@ defmodule Muro.Manifest do
   defstruct [:version, :fuel, :modules, :deps, :source]
 
   @keys [:fuel, :modules, :muro, :muro_deps]
-  @entry_opts [:kind, :impl]
+  @entry_opts [:kind, :impl, :imports]
   @dep_name ~r/\A[a-z][a-z0-9_]*\z/
   @hex_name ~r/\A[a-z][a-z0-9_-]*\z/
   @git_opts [:ref, :root, :tag]
@@ -642,13 +646,23 @@ defmodule Muro.Manifest do
     opt_errors = option_errors(opts, index)
     {kind, kind_errors} = take_kind(opts, index)
     {impl, impl_errors} = take_impl(opts, kind, kind_errors == [], index)
+    {imports, import_errors} = take_imports(opts, kind, kind_errors == [], index)
 
     errors =
-      book_errors ++ module_errors ++ target_errors ++ opt_errors ++ kind_errors ++ impl_errors
+      book_errors ++
+        module_errors ++
+        target_errors ++ opt_errors ++ kind_errors ++ impl_errors ++ import_errors
 
     entry =
       if book_rel && target_rel && errors == [] do
-        %{book: book_rel, module: module, target: target_rel, kind: kind, impl: impl}
+        %{
+          book: book_rel,
+          module: module,
+          target: target_rel,
+          kind: kind,
+          impl: impl,
+          imports: imports
+        }
       end
 
     {entry, errors, seen}
@@ -720,6 +734,35 @@ defmodule Muro.Manifest do
   end
 
   defp impl_kind_error(errors, _kind, false, _index), do: errors
+
+  defp take_imports(opts, kind, kind_ok?, index) do
+    case Keyword.fetch(opts, :imports) do
+      :error ->
+        {false, []}
+
+      {:ok, value} ->
+        errors =
+          []
+          |> import_kind_error(kind, kind_ok?, index)
+          |> import_bool_error(value, index)
+
+        if errors == [], do: {value, []}, else: {false, errors}
+    end
+  end
+
+  defp import_kind_error(errors, :exunit, true, _index), do: errors
+
+  defp import_kind_error(errors, _kind, true, index) do
+    errors ++ ["modules entry #{index}: imports: is only valid for kind: :exunit"]
+  end
+
+  defp import_kind_error(errors, _kind, false, _index), do: errors
+
+  defp import_bool_error(errors, value, _index) when is_boolean(value), do: errors
+
+  defp import_bool_error(errors, value, index) do
+    errors ++ ["modules entry #{index}: imports: must be a boolean, got: #{inspect(value)}"]
+  end
 
   defp impl_alias_error(errors, impl, index) do
     if alias_atom?(impl) do

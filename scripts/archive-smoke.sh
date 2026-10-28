@@ -567,7 +567,7 @@ EOF
     echo "host mix test did not pass the suite" >&2
     exit 1
   fi
-  have "$host_exunit_test" "round-ok (round.muro:" "host mix test"
+  have "$host_exunit_test" "round.muro round-ok" "host mix test"
   if ! printf '%s\n' "$host_exunit_test" | grep -Eq '(^|[^0-9])0 failures|^Result: [0-9]+ passed'; then
     echo "missing a passing summary in host mix test" >&2
     exit 1
@@ -593,7 +593,157 @@ EOF
     echo "expected mix test to fail against BadRound" >&2
     exit 1
   fi
-  have "$host_exunit_bad" "round-ok (round.muro:" "wrong adapter"
+  have "$host_exunit_bad" "round.muro round-ok" "wrong adapter"
+  mv "$tmp/host-test-helper.exs" test/test_helper.exs
+
+  # A param library is the suite. Elixir emit still refuses it. The
+  # exunit entry does not. The adapter is selected per test module.
+  cat > kit.muro <<'EOF'
+data Key : Type where
+  k0 : Key
+  k1 : Key
+
+data Answer : Type where
+  yes : Answer
+  no : Answer
+
+def rule : run Π (k : Key) → Answer :=
+  λ (k : Key) →
+    match k motive (λ _ → Answer)
+      | k0 => yes
+      | k1 => yes
+
+param decide : run Π (k : Key) → Answer
+param decide-is : evidence Π (k : Key) → {decide k ≡ rule k : Answer}
+
+def golden : run Key := k0
+
+def golden-k0 : evidence {decide golden ≡ yes : Answer} :=
+  rewrite (decide-is golden) motive (λ z → {z ≡ yes : Answer}) in refl
+
+def k0-yes : evidence {decide k0 ≡ yes : Answer} :=
+  rewrite (decide-is k0) motive (λ z → {z ≡ yes : Answer}) in refl
+
+def k1-yes : evidence {decide k1 ≡ yes : Answer} :=
+  rewrite (decide-is k1) motive (λ z → {z ≡ yes : Answer}) in refl
+
+def wrap : run Π (k : Key) → Answer :=
+  λ (k : Key) → decide k
+
+def through : evidence {wrap k0 ≡ yes : Answer} :=
+  rewrite (decide-is k0) motive (λ z → {z ≡ yes : Answer}) in refl
+EOF
+
+  set +e
+  kit_elixir=$(mix muro.emit kit.muro 2>&1)
+  kit_elixir_status=$?
+  set -e
+  printf '%s\n' "$kit_elixir"
+  if [ "$kit_elixir_status" -eq 0 ]; then
+    echo "expected mix muro.emit to refuse an unsupplied param library" >&2
+    exit 1
+  fi
+  have "$kit_elixir" "is supplied by a file that imports this one" "elixir emit of kit.muro"
+
+  cat > muro.exs <<EOF
+[
+  muro: "${version}",
+  modules: [
+    {"half_ok.muro", Host.HalfOk, "lib/host/half_ok.ex"},
+    {"repr.muro", Host.Repr, "lib/host/repr.ex"},
+    {"round.muro", Round, "lib/round.ex"},
+    {"round.muro", RoundTest, "test/round_test.exs", [kind: :exunit]},
+    {"round.muro", RoundSuite, "test/support/round_suite.ex", [kind: :exunit]},
+    {"kit.muro", KitTest, "test/kit_test.exs", [kind: :exunit]}
+  ]
+]
+EOF
+
+  set +e
+  kit_gen=$(mix muro.gen 2>&1)
+  kit_gen_status=$?
+  set -e
+  printf '%s\n' "$kit_gen"
+  if [ "$kit_gen_status" -ne 0 ]; then
+    echo "host mix muro.gen for the param library failed" >&2
+    exit 1
+  fi
+  have "$kit_gen" "written test/kit_test.exs" "kit gen"
+  have "$kit_gen" "skipped test/kit_test.exs: through (kit.muro:" "kit gen"
+  have "$kit_gen" "calls param decide through wrap" "kit gen"
+  test -s test/kit_test.exs
+  if grep -F "$host" test/kit_test.exs >/dev/null; then
+    echo "generated kit suite contains an absolute path" >&2
+    exit 1
+  fi
+
+  set +e
+  kit_check=$(mix muro.gen --check 2>&1)
+  kit_check_status=$?
+  set -e
+  printf '%s\n' "$kit_check"
+  if [ "$kit_check_status" -ne 0 ] || [ "$kit_check" != "ok" ]; then
+    echo "host mix muro.gen --check after the param library did not print ok" >&2
+    exit 1
+  fi
+
+  cat > test/support/good_kit.ex <<'EOF'
+defmodule GoodKit do
+  @behaviour KitTest.Behaviour
+
+  def decide(:k0), do: :yes
+  def decide(:k1), do: :yes
+end
+EOF
+  cat > test/support/bad_kit.ex <<'EOF'
+defmodule BadKit do
+  @behaviour KitTest.Behaviour
+
+  def decide(:k0), do: :no
+  def decide(:k1), do: :yes
+end
+EOF
+
+  cp test/test_helper.exs "$tmp/host-test-helper.exs"
+  cat >> test/test_helper.exs <<'EOF'
+Application.put_env(:muro, KitTest, GoodKit)
+EOF
+
+  set +e
+  kit_test=$(MIX_ENV=test mix test --trace 2>&1)
+  kit_test_status=$?
+  set -e
+  printf '%s\n' "$kit_test"
+  if [ "$kit_test_status" -ne 0 ]; then
+    echo "host mix test did not pass the param library" >&2
+    exit 1
+  fi
+  have "$kit_test" "kit.muro golden-k0" "kit mix test"
+  if ! printf '%s\n' "$kit_test" | grep -Eq '(^|[^0-9])0 failures|^Result: [0-9]+ passed'; then
+    echo "missing a passing summary in the param library mix test" >&2
+    exit 1
+  fi
+  if printf '%s\n' "$kit_test" | grep -Eq '^Failed: |[1-9][0-9]* failures'; then
+    echo "param library mix test reported failures" >&2
+    exit 1
+  fi
+
+  cp "$tmp/host-test-helper.exs" test/test_helper.exs
+  cat >> test/test_helper.exs <<'EOF'
+Application.put_env(:muro, KitTest, BadKit)
+EOF
+
+  set +e
+  kit_bad=$(MIX_ENV=test mix test --trace 2>&1)
+  kit_bad_status=$?
+  set -e
+  printf '%s\n' "$kit_bad"
+  if [ "$kit_bad_status" -eq 0 ]; then
+    echo "expected mix test to fail against BadKit" >&2
+    exit 1
+  fi
+  have "$kit_bad" "kit.muro golden-k0" "mutant adapter"
+  have "$kit_bad" "kit.muro:" "mutant adapter file and line"
   mv "$tmp/host-test-helper.exs" test/test_helper.exs
 
   test -s lib/host/repr.ex
