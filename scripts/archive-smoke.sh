@@ -77,6 +77,15 @@ fi
 grep -q "def plus" half_ok.ex
 grep -q "def half" half_ok.ex
 
+cp "$root/examples/meet.muro" "$work/meet.muro"
+mix muro.emit meet.muro --backend fsm > meet_fsm.ex
+test -s meet_fsm.ex
+fsm_first=$(head -n 1 meet_fsm.ex)
+if [ "$fsm_first" != "defmodule MeetFsm do" ]; then
+  echo "expected meet_fsm.ex to start with the module, got: ${fsm_first}" >&2
+  exit 1
+fi
+
 set +e
 mix muro.check bad_dup.muro >"$tmp/bad.out" 2>"$tmp/bad.err"
 bad_status=$?
@@ -281,6 +290,67 @@ EOF
     echo "mix muro.gen compiled the host" >&2
     exit 1
   fi
+
+  cp "$root/examples/meet.muro" meet.muro
+  cat > muro.exs <<EOF
+[
+  muro: "${version}",
+  modules: [
+    {"half_ok.muro", Host.HalfOk, "lib/host/half_ok.ex"},
+    {"meet.muro", Host.MeetFsm, "lib/host/meet_fsm.ex", [kind: :fsm]}
+  ]
+]
+EOF
+
+  set +e
+  host_fsm_gen=$(mix muro.gen 2>&1)
+  host_fsm_gen_status=$?
+  set -e
+  printf '%s\n' "$host_fsm_gen"
+  if [ "$host_fsm_gen_status" -ne 0 ]; then
+    echo "host fsm mix muro.gen failed" >&2
+    exit 1
+  fi
+  have "$host_fsm_gen" "written lib/host/meet_fsm.ex" "host fsm gen"
+  test -s lib/host/meet_fsm.ex
+  grep -q "defmodule Host.MeetFsm do" lib/host/meet_fsm.ex
+
+  set +e
+  host_fsm_check=$(mix muro.gen --check 2>&1)
+  host_fsm_check_status=$?
+  set -e
+  printf '%s\n' "$host_fsm_check"
+  if [ "$host_fsm_check_status" -ne 0 ] || [ "$host_fsm_check" != "ok" ]; then
+    echo "host fsm mix muro.gen --check did not print ok" >&2
+    exit 1
+  fi
+
+  cat > fsm_walk.exs <<'EOF'
+state = Host.MeetFsm.Ping.init()
+{:ok, state} = Host.MeetFsm.Ping.recv(state, 0)
+{:ok, state} = Host.MeetFsm.Ping.send(state, 1)
+IO.puts("done=#{Host.MeetFsm.Ping.done?(state)}")
+IO.inspect(Host.MeetFsm.Ping.recv(state, 9))
+EOF
+
+  set +e
+  host_fsm_run=$(mix run --no-start fsm_walk.exs 2>&1)
+  host_fsm_run_status=$?
+  set -e
+  printf '%s\n' "$host_fsm_run"
+  if [ "$host_fsm_run_status" -ne 0 ]; then
+    echo "host fsm walk failed" >&2
+    exit 1
+  fi
+  have "$host_fsm_run" "done=true" "fsm walk"
+  have "$host_fsm_run" "meet.muro:4 session ping: end" "fsm refusal"
+  case "$host_fsm_run" in
+    *"host application started"*)
+      echo "fsm walk started the host" >&2
+      exit 1
+      ;;
+  esac
+  rm -rf _build
 
   # CI has git. A checkout without git skips the package case.
   if ! command -v git >/dev/null 2>&1; then

@@ -9,7 +9,7 @@ defmodule Muro.ManifestTest do
 
     File.write!(Path.join(dir, "muro.exs"), """
     [
-      muro: "0.17.0",
+      muro: "0.18.1",
       modules: [
         {"priv/muro/one.muro", MyApp.Billing.Rounding, "lib/my_app/billing/rounding.ex"}
       ]
@@ -17,7 +17,7 @@ defmodule Muro.ManifestTest do
     """)
 
     assert {:ok, manifest} = Muro.Manifest.load(dir)
-    assert manifest.version == "0.17.0"
+    assert manifest.version == "0.18.1"
     assert manifest.fuel == Muro.Check.default_fuel()
     assert manifest.source == :muro_exs
 
@@ -399,12 +399,63 @@ defmodule Muro.ManifestTest do
     assert message =~ ":muro key in mix.exs"
   end
 
-  test "version pin names both versions" do
-    assert Muro.Manifest.version_pin("0.17.0", "0.17.0") == :ok
+  test "accepts a fsm entry and rejects impl and imports on it" do
+    dir = tmp_dir()
+    write_book(dir, "ok.muro")
 
-    assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.17.0")
+    assert {:ok, manifest} =
+             Muro.Manifest.validate(
+               [
+                 muro: "1.0.0",
+                 modules: [{"ok.muro", Host.OkFsm, "lib/ok_fsm.ex", [kind: :fsm]}]
+               ],
+               dir
+             )
+
+    assert manifest.modules == [
+             %{
+               book: "ok.muro",
+               module: Host.OkFsm,
+               target: "lib/ok_fsm.ex",
+               kind: :fsm,
+               impl: nil,
+               imports: false
+             }
+           ]
+
+    assert {:error, impl} =
+             Muro.Manifest.validate(
+               [
+                 muro: "1.0.0",
+                 modules: [
+                   {"ok.muro", Host.OkFsm, "lib/ok_fsm.ex", [kind: :fsm, impl: Host.Impl]}
+                 ]
+               ],
+               dir
+             )
+
+    assert impl =~ "modules entry 1: impl: is only valid for kind: :exunit"
+
+    assert {:error, imports} =
+             Muro.Manifest.validate(
+               [
+                 muro: "1.0.0",
+                 modules: [
+                   {"ok.muro", Host.OkFsm, "lib/ok_fsm.ex", [kind: :fsm, imports: true]}
+                 ]
+               ],
+               dir
+             )
+
+    assert imports =~ "modules entry 1: imports: is only valid for kind: :exunit"
+  end
+
+  test "version pin names both versions" do
+    assert Muro.Manifest.version_pin("0.18.1", "0.18.1") == :ok
+
+    assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.18.1")
     assert message =~ "manifest says 0.16.72"
-    assert message =~ "running 0.17.0"
+    assert message =~ "running 0.18.1"
   end
 
   test "root follows the working directory outside a Mix project" do

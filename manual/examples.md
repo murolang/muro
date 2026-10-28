@@ -84,6 +84,8 @@ meet wire : pong with peer
 
 `mix muro.emit examples/meet.muro --backend otp` writes `meet_otp.ex`. `MeetOtp.wire/0` starts `pong` and `peer` as each other's peer. `arm` starts the choice. `drop` starts both ends abandoning after `0`. `wrapped` carries the pair. `window_wire` sends `8` and then `8` back. The evidence is not in the message. Each server talks to one peer. `Pong.start/1` still takes a peer pid supplied by the caller. See [Emit](emit.md#otp).
 
+`mix muro.emit examples/meet.muro --backend fsm` prints `MeetFsm`. `MeetFsm.Ping` receives a nat and then sends one. See [State machines](fsm.md).
+
 A process whose session is not the other end, or a payload type the two processes do not share, is refused. Those books live in `test/muro_meet_test.exs`, so a program copies the form that checks.
 
 See [Terms](language.md#session).
@@ -103,6 +105,8 @@ meet wire : server with client
 `route` receives a bit. `b0` continues by sending a nat, and `b1` continues by receiving a nat. `client` sends `b0` and then receives that nat. `client-one` sends `b1` and then `0`. `wire` and `wire-one` are the evidence that each pair takes the same arm. `echo-bit` binds the bit and sends it back on either arm. `ask` sends `b1` and receives that bit. `on` and `kept` are the run definitions in the same file. `mix muro.emit examples/indexed.muro` emits them.
 
 `mix muro.emit examples/indexed.muro --backend otp` writes `indexed_otp.ex`. `IndexedOtp.wire/0` starts the two processes as each other's peer. The message is `{:muro, from, :b0}` or `{:muro, from, :b1}`. The server holds both arms. See [Emit](emit.md#otp).
+
+`mix muro.emit examples/indexed.muro --backend fsm` prints `IndexedFsm`. `IndexedFsm.Route` receives the bit and then takes that arm. See [State machines](fsm.md).
 
 A nat written as the index, a variable bit used to select an arm, a bit used as a vector length, or a dual whose arms are not dualised pointwise, is refused. Those books live in `test/muro_session_test.exs`, `test/muro_meet_test.exs`, and `test/muro_dual_test.exs`, so a program copies the form that checks.
 
@@ -127,6 +131,8 @@ meet wire : server with client
 `loop` receives a nat and sends it back, and then it is that protocol again. `loop-back` is `rec` of the dual. `echo` repeats when the bit is `b0` and ends when it is `b1`. `client` echoes one nat and then sends `b1`. `wire` is the evidence that both sides take the same arms. `kept` is the run definition in the same file. `mix muro.emit examples/recursive.muro` emits `kept`.
 
 `mix muro.emit examples/recursive.muro --backend otp` writes `recursive_otp.ex`. `RecursiveOtp.wire/0` starts the server and the client as each other's peer. Both finish with `:normal`. `Forever.start/1` is the loop that never finishes: each nat comes back, and the jump is a tail call. See [Emit](emit.md#otp).
+
+`mix muro.emit examples/recursive.muro --backend fsm` prints `RecursiveFsm`. `RecursiveFsm.Loop` repeats the same recv and send, and `done?` stays false. See [State machines](fsm.md).
 
 `rec X. X`, a free process variable, and `session %1` on a process that jumps are refused. A bare name in a protocol is a session call. Those books live in `test/muro_session_test.exs`, so a program copies the form that checks.
 

@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.Muro.Emit do
   use Mix.Task
 
-  @shortdoc "Emit run definitions as Elixir, C, Rust, or Cortex-M assembly, a session as OTP, a cross as a call, or closed equations as ExUnit"
+  @shortdoc "Emit run definitions as Elixir, C, Rust, or Cortex-M assembly, a session as OTP or a state machine, a cross as a call, or closed equations as ExUnit"
 
   @moduledoc """
   Emit the `run` definitions of a `.muro` file.
@@ -12,6 +12,7 @@ defmodule Mix.Tasks.Muro.Emit do
       mix muro.emit path.muro --backend rust
       mix muro.emit path.muro --backend asm
       mix muro.emit path.muro --backend otp
+      mix muro.emit path.muro --backend fsm
       mix muro.emit path.muro --backend exunit
       mix muro.emit path.muro --node a
 
@@ -49,6 +50,11 @@ defmodule Mix.Tasks.Muro.Emit do
   reading. The server talks to one peer. The message carries the
   value. The place stays on the reading. The BEAM runs that server.
   The proof stops at the conformance derivation.
+
+  `--backend fsm` prints one module on standard output. The module
+  name is the stem plus `Fsm` (`meet.muro` is `MeetFsm`). Each session
+  is a child module of pure functions. The host keeps the transport.
+  Nothing is written next to the book.
 
   `--node` writes `<stem>_node.ex` next to the file and prints that
   path. `place.muro` with `--node a` is `place_node.ex`. Each `cross`
@@ -154,6 +160,13 @@ defmodule Mix.Tasks.Muro.Emit do
   defp emit(path, "otp", nil) do
     case Muro.emit_otp(path) do
       {:ok, files} -> Enum.each(files, fn path -> Mix.shell().info(path) end)
+      {:error, e} -> Mix.raise(e)
+    end
+  end
+
+  defp emit(path, "fsm", nil) do
+    case Muro.emit_fsm(path, Muro.Emit.fsm_module(path)) do
+      {:ok, src} -> Mix.shell().info(src)
       {:error, e} -> Mix.raise(e)
     end
   end

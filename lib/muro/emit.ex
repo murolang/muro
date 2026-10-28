@@ -69,6 +69,48 @@ defmodule Muro.Emit do
     Module.concat([elixir_stem(path) <> "Test"])
   end
 
+  @doc """
+  Module name `mix muro.emit --backend fsm` gives a file.
+  The stem plus `Fsm`: `meet.muro` is `MeetFsm`.
+  """
+  def fsm_module(path) when is_binary(path) do
+    Module.concat([elixir_stem(path) <> "Fsm"])
+  end
+
+  @doc false
+  def emit_private_runs(book, wanted) when is_list(book) and is_list(wanted) do
+    names = elixir_names(book)
+    want = MapSet.new(wanted)
+
+    runs =
+      book
+      |> run_defs()
+      |> Enum.filter(&MapSet.member?(want, &1.name))
+
+    funs =
+      runs
+      |> Enum.map(&emit_def(Map.put(&1, :export, false), book, names))
+      |> Enum.join("\n\n")
+
+    except =
+      case kernel_clashes(runs, names) do
+        [] -> ""
+        clashes -> "import Kernel, except: #{inspect(clashes)}\n"
+      end
+
+    nat =
+      if Enum.any?(runs, &term_has_toi64?(&1.body)) do
+        """
+        defp muro_nat_to_int(0), do: 0
+        defp muro_nat_to_int({:suc, n}), do: 1 + muro_nat_to_int(n)
+        """
+      else
+        ""
+      end
+
+    String.trim(except <> "\n" <> funs <> "\n" <> nat)
+  end
+
   defp elixir_stem(path) do
     path
     |> Path.basename(".muro")
