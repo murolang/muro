@@ -62,13 +62,21 @@ defmodule Muro do
   are the equations the suite lists and does not run. A book that does
   not check returns `{:error, message}` and no module.
 
+  This is the one entry point that loads with `params: :open`. A `param`
+  nobody supplied is an assumption, so a library of params can be the
+  suite. Every other backend still refuses that library. `imports: true`
+  also collects closed equations from the files this book imports
+  directly. The default is `false`.
+
   The bytes compare emitted shapes. Host data arrives with `repr` (#131),
   in `Muro.Emit.emit_closed/2`.
   """
   def emit_exunit(path, module, opts \\ []) when is_atom(module) do
     fuel = Keyword.get(opts, :fuel, Muro.Check.default_fuel())
 
-    with {:ok, book} <- Load.file(path, fuel: fuel, root: Keyword.get(opts, :root)) do
+    load_opts = [fuel: fuel, root: Keyword.get(opts, :root), params: :open]
+
+    with {:ok, book} <- Load.file(path, load_opts) do
       Emit.ExUnitSuite.render(path, module, book, Keyword.put(opts, :fuel, fuel))
     end
   end

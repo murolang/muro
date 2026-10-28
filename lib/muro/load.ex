@@ -18,6 +18,12 @@ defmodule Muro.Load do
   that imports its file, with the same tag and a type that converts.
   A book with a param nobody supplied yet is checked where it is
   imported, and its params pass upward until one is supplied.
+
+  `params: :open` checks that book anyway. Each remaining param is an
+  assumption: it has a type and does not reduce. The default, and every
+  caller except the exunit entry points, is `params: :closed`, which
+  refuses a param nobody supplied. The message is
+  `param <name> is supplied by a file that imports this one`.
   """
 
   alias Muro.{Check, Parser, Prelude}
@@ -40,6 +46,9 @@ defmodule Muro.Load do
   @doc """
   `file/2`, and the `conforms to` lines for the packages the book
   loaded. `lines` is empty when the book imports no package.
+
+  `params: :open` allows a book whose params are still unsupplied and
+  checks them as assumptions. The default refuses that book.
   """
   def open(path, opts \\ []) when is_binary(path) do
     path = Path.expand(path)
@@ -47,13 +56,46 @@ defmodule Muro.Load do
 
     case resolve(path, [], opts, ctx) do
       {:ok, flat, ctx} ->
-        case all_supplied(flat, ctx) do
+        case all_supplied(flat, path, opts, ctx) do
           :ok -> {:ok, flat, conform_lines(ctx)}
           {:error, msg} -> {:error, note_packages(msg)}
         end
 
       {:error, msg} ->
         {:error, note_packages(msg)}
+    end
+  end
+
+  @doc """
+  Absolute paths of the files `path` imports directly, in declaration
+  order.
+
+  A path is listed once, the first time it appears. The book's own path
+  is not listed. Imports of those files are not followed. `{:error, msg}`
+  when `path` does not parse. This does not check the book.
+  """
+  def direct_imports(path, opts \\ []) when is_binary(path) do
+    path = Path.expand(path)
+    ctx = new_ctx(opts, path)
+
+    with {:ok, src} <- read(path, ctx),
+         {:ok, parsed} <- parse(src, path, ctx) do
+      paths =
+        parsed
+        |> Enum.filter(&(Map.get(&1, :kind) == :import))
+        |> Enum.map(&Map.put(&1, :file, path))
+        |> Enum.reduce([], fn imp, acc ->
+          case import_target(imp, ctx) do
+            {:ok, target} ->
+              target = Path.expand(target)
+              if target in acc, do: acc, else: acc ++ [target]
+
+            {:error, _} ->
+              acc
+          end
+        end)
+
+      {:ok, paths}
     end
   end
 
@@ -218,16 +260,40 @@ defmodule Muro.Load do
     |> Map.merge(%{name: "#{p.name} (param)", body: {:var, p.name}})
   end
 
-  defp all_supplied(flat, ctx) do
+  # `params: :open` checks the book with the remaining params as
+  # assumptions. Every other caller still refuses them, with the same
+  # message as before.
+  defp all_supplied(flat, path, opts, ctx) do
     case Enum.filter(flat, &param?/1) do
       [] ->
         :ok
 
       ps ->
-        {:error,
-         Enum.map_join(ps, "\n", fn p ->
-           "#{site(p, ctx)}param #{p.name} is supplied by a file that imports this one"
-         end)}
+        if Keyword.get(opts, :params) == :open do
+          check(flat, path, opts, ctx)
+        else
+          {:error,
+           Enum.map_join(ps, "\n", fn p ->
+             "#{site(p, ctx)}param #{p.name} is supplied by a file that imports this one"
+           end)}
+        end
+    end
+  end
+
+  defp import_target(imp, ctx) do
+    case classify_import(imp.path) do
+      {:pkg, name, rel} ->
+        if ctx.root == nil do
+          {:error, :no_root}
+        else
+          {:ok, Path.join([ctx.root, "muro_deps", name | String.split(rel, "/")])}
+        end
+
+      :relative ->
+        {:ok, Path.expand(imp.path, Path.dirname(imp.file))}
+
+      :bad ->
+        {:error, :bad}
     end
   end
 

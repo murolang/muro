@@ -492,6 +492,10 @@ defmodule Muro.Check do
 
   defp whnf(k, book, {:def, name}, unfold) do
     case lookup_def(book, name) do
+      # An open param is an assumption. It does not reduce.
+      {:ok, %{kind: :param}} ->
+        {:ok, {:def, name}}
+
       {:ok, %{mode: :run} = d} ->
         whnf(k - 1, book, d.body, unfold)
 
@@ -2142,6 +2146,15 @@ defmodule Muro.Check do
   # once. An affine endpoint is used at most once. The body is not a term.
   def check_def(book, %{kind: :relay} = d, _fuel), do: check_relay(book, d)
 
+  # An open param is an assumption: the type is checked, and there is no
+  # body to unfold. `params: :open` is the only way one reaches this clause.
+  def check_def(book, %{kind: :param, mode: mode, type: ty} = d, k) do
+    with :ok <- fail_at(d, "type", check_ty(k, book, empty_rec(), [], ty)),
+         :ok <- fail_at(d, "type", run_decl(k, book, mode, ty)) do
+      :ok
+    end
+  end
+
   def check_def(book, %{mode: mode, type: ty, body: body} = d, k) do
     with :ok <- fail_at(d, "type", check_ty(k, book, empty_rec(), [], ty)),
          :ok <- fail_at(d, "type", run_decl(k, book, mode, ty)),
@@ -2721,7 +2734,8 @@ defmodule Muro.Check do
           :repr,
           :seat,
           :link,
-          :relay
+          :relay,
+          :param
         ],
         do: name
   end
@@ -2932,8 +2946,12 @@ defmodule Muro.Check do
   """
   def check_sig(named_book, opts \\ []) do
     fuel = Keyword.get(opts, :fuel, @fuel)
+    # `params: :open` keeps unsupplied params as assumptions. The default
+    # refuses them. Only `Muro.Load` passes `:open`, and only when the
+    # exunit entry points asked for it.
+    db_opts = if Keyword.get(opts, :params) == :open, do: [params: :open], else: []
 
-    with {:ok, book} <- Ast.book_to_db(named_book) do
+    with {:ok, book} <- Ast.book_to_db(named_book, db_opts) do
       errors =
         book
         |> Task.async_stream(fn d -> check_def(book, d, fuel) end,
