@@ -401,13 +401,14 @@ EOF
     exit 1
   fi
   have "$host_exunit_test" "round-ok (round.muro:" "host mix test"
-  case "$host_exunit_test" in
-    *"0 failures"* | *"Result: 1 passed"*) ;;
-    *)
-      echo "missing a passing summary in host mix test" >&2
-      exit 1
-      ;;
-  esac
+  if ! printf '%s\n' "$host_exunit_test" | grep -Eq '(^|[^0-9])0 failures|^Result: [0-9]+ passed'; then
+    echo "missing a passing summary in host mix test" >&2
+    exit 1
+  fi
+  if printf '%s\n' "$host_exunit_test" | grep -Eq '^Failed: |[1-9][0-9]* failures'; then
+    echo "host mix test reported failures" >&2
+    exit 1
+  fi
   have "$host_exunit_test" "function round/1 required by behaviour RoundSuite.Behaviour is not implemented" "host mix test"
   have "$host_exunit_test" "IncompleteRound" "host mix test"
 

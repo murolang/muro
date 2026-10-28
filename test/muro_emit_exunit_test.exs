@@ -305,7 +305,7 @@ defmodule Muro.EmitExunitTest do
 
     if status != 0, do: flunk(out)
     assert out =~ "round-ok (round.muro:"
-    assert out =~ "0 failures" or out =~ "Result: 1 passed"
+    assert out =~ ~r/(^|[^0-9])0 failures|^Result: \d+ passed/m
     refute out =~ "There are no tests to run"
     assert out =~ "function round/1 required by behaviour RoundSuite.Behaviour is not implemented"
     assert out =~ "IncompleteRound"
