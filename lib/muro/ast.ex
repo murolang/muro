@@ -396,6 +396,7 @@ defmodule Muro.Ast do
             :read,
             :meet,
             :talk,
+            :repr,
             :seat,
             :link,
             :relay
@@ -429,6 +430,8 @@ defmodule Muro.Ast do
 
   defp entry_names(%{kind: :import}), do: []
   defp entry_names(%{kind: :move}), do: []
+  # A repr names the data type again. The data entry already owns that name.
+  defp entry_names(%{kind: :repr}), do: []
 
   defp entry_names(%{kind: :data, name: name, ctors: ctors}) do
     [name | Enum.map(ctors, & &1.name)]

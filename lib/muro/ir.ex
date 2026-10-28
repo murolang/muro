@@ -515,7 +515,7 @@ defmodule Muro.IR do
 
   defp find_def(book, name) do
     Enum.find(book, fn d ->
-      Map.get(d, :kind, :def) not in [:data, :relay] and Map.get(d, :name) == name and
+      Map.get(d, :kind, :def) not in [:data, :relay, :repr] and Map.get(d, :name) == name and
         Map.has_key?(d, :type)
     end)
   end

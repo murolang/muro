@@ -450,6 +450,12 @@ See [Terms](language.md).
 
 See [Emit](emit.md).
 
+## repr.muro
+
+Host representations for input and output types. `Bool` is `boolean`. `Entry` is a map with an optional `Maybe Bool`. `Shape` and `Outcome` are choices of tagged maps, and `empty` and `absent` are `nil`. `toggle`, `flip`, `describe`, and `widen` are run. `toggle-on` and `describe-none` are `refl`.
+
+`mix muro.emit examples/repr.muro` writes `decode_entry` and `encode_entry` next to `toggle`. A host calls decode, then the run function, then encode. See [Host representations](repr.md).
+
 ## nx_add.muro
 
 `I64` and `Tensor`. `doubled` is `[2, 4]` after `Nx.to_flat_list/1`. Nat stays Peano.

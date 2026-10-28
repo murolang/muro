@@ -235,6 +235,12 @@ A body with fewer λs than its type has Πs is applied to the binders it does no
 
 The C backend has no closures. An unapplied lambda, a definition passed as a value, and a call of a local function are refused there (`c:lambda`).
 
+## Host data
+
+A `repr` states the host shape of a data type. `mix muro.emit` then writes `decode_<type>/1` and `encode_<type>/1` in the same module as the run functions. Decode takes an Elixir term and returns `{:ok, value}` or `{:error, {path, reason}}`. Encode takes a value of the type and returns the host term. A book with no `repr` emits the same text as before. The other backends ignore a `repr`.
+
+The vocabulary, the strictness rules, and the Nat guard are [Host representations](repr.md).
+
 ## What emit is not
 
 It does not type raw Elixir. A run emit omits spec and evidence. `--backend otp` and `--node` are separate files, one for a conformance and one for a cross, and neither file is a run term. It does not turn a Stream that is only evidence into `Stream`. It does not use `Nx.Defn`.

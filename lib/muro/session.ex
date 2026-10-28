@@ -4098,6 +4098,7 @@ defmodule Muro.Session do
               :read,
               :meet,
               :talk,
+              :repr,
               :seat,
               :link,
               :relay,

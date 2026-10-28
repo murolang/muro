@@ -10,11 +10,19 @@ summary: The surface grammar lib/muro/parser.ex implements.
 In brief: this is the grammar `lib/muro/parser.ex` implements. ASCII aliases are in parentheses. If this page and the parser disagree, the parser is the implementation and this page is wrong.
 
 ```
-book       ::= (import | param | nu | data | talk | session | conform | place | scheme | move | endpoint | read | meet | seat | link | def)*
+book       ::= (import | param | nu | data | repr | talk | session | conform | place | scheme | move | endpoint | read | meet | seat | link | def)*
 import     ::= "import" string             -- a path, relative to this file
 param      ::= "param" ident ":" tag term  -- supplied by an importing file
 nu         ::= ("ν" | "nu") ident binder+ ":" "Type" "where" "uncons" ":" term
 data       ::= "data" ident binder* ":" telescope "where" (ident ":" term)+
+repr       ::= "repr" ident ":=" (rshape | rvariant ("|" rvariant)*)
+rvariant   ::= ident "=>" rshape         -- "nil =>" names the constructor nil
+rshape     ::= "boolean" | "integer" | "nil" | ":" ident | string
+             | ident                     -- a type with its own repr, or Nat
+             | "list" rshape | "optional" rshape | "nullable" rshape
+             | "tuple" "{" [rshape ("," rshape)*] "}"
+             | "map" ["open"] "{" [rentry ("," rentry)*] "}"
+rentry     ::= (string | ":" ident) "=>" rshape
 telescope  ::= "Type" | binder ("→" | "->") telescope | term ("→" | "->") "Type"
 talk       ::= "talk" ident ":=" talk-term
 talk-term  ::= "over" | "(" talk-term ")" | ident
@@ -125,7 +133,7 @@ space      ::= [ \t\n\r] | comment
 
 Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an argument. Digits start atoms, so `| 0 =>` parses.
 
-A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are identifiers; `suc`, `refl`, `tt`, and `Nat` are not. `->` ends a word, so `Nat->Nat` is an arrow.
+A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are identifiers; `suc`, `refl`, `tt`, and `Nat` are not. `->` ends a word, so `Nat->Nat` is an arrow. Inside a `repr` body the words `boolean`, `integer`, `nil`, `list`, `optional`, `nullable`, `tuple`, `map`, and `open` are keywords. Outside that body they are identifiers. `nil =>` at the start of a variant names the constructor `nil`.
 
 `end`, `send`, `recv`, `choose`, `branch`, `rec`, `case`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. `match` is a keyword in a process, where it chooses the next action, and in a term, where it is the eliminator. Parentheses group a nested protocol or process: `recv Nat (send Nat end)`. `send` and `recv` name one payload type and one continuation. `put` writes a value of that type. `get` names the type. `choose` and `branch` still name two protocols. `dual` is a keyword in `session name := dual name` and in an endpoint function (`dual s`). Outside those forms it is an identifier, so `def dual : run Nat := 0` is a definition. The mark on a dual session is the named session's mark when it is omitted. `seen` is a keyword in `session name := seen party with party in talk`. `with` there names the other party, and `in` names the description. Outside that form `seen` is an identifier, so `def seen : run Nat := 0` is a definition. `meet` and `with` are keywords in `meet name : left with right`. `meet` is also the keyword in an endpoint function (`meet s t`). `with` is also the keyword between the two parties of a `seen` session. Outside those forms they are identifiers, so `def meet : run Nat := 0` and `def with : run Nat := 0` are definitions.
 
@@ -143,7 +151,7 @@ Value binding: `get (k : Type) continuation` receives a value of that type and b
 
 An endpoint function has no mode tag. Its type starts with `(`. `(s : ping) ⊸ ping` is a linear arrow (`-o` is the same arrow). `(s : ping) → ping` is affine. `λ¹` (`lam1`) binds the endpoint linearly. `λ` (`lam`) binds it affinely. The arrow after `λ` may be `→` or `⊸`; the multiplicity is the lambda's. `done` is the meeting. `dual` and `meet` are keywords in that body: `dual s`, `meet s t`. `+`, `-`, and `%` on an endpoint binder are refused. The function is evidence. The named session may repeat, and its payload may be a declared data type. `dual` keeps `rec` and that payload. A following `def`, `session`, or `meet name :` is the next entry.
 
-Inside a `data` block each constructor declaration `ident ":" term` begins on its own line; that is how an application stops before the next constructor. On one line, `f x : Nat` inside `{ … }` is the application `f x` followed by the type. A following line that starts with `session` or `conform`, or with a `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `talk`, `seat`, or `link` entry, ends that type the same way. A constructor may be named `talk`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `seat`, or `link`: the entry forms are `talk name :=`, `place name :=`, `scheme name :=`, `move stay` or `move cross`, `endpoint name :=`, `read stay` or `read cross`, `meet name :`, `seat name :`, and `link name :`. `talk : Type`, `meet : Type`, `seat : Type`, and `link : Type` are constructors. `buffer` is a keyword only after the right-hand process of `meet name :`, and only with a numeral. `def buffer : run Nat := 0` is a definition.
+Inside a `data` block each constructor declaration `ident ":" term` begins on its own line; that is how an application stops before the next constructor. On one line, `f x : Nat` inside `{ … }` is the application `f x` followed by the type. A following line that starts with `session` or `conform`, or with a `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `talk`, `repr`, `seat`, or `link` entry, ends that type the same way. A constructor may be named `talk`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `repr`, `seat`, or `link`: the entry forms are `talk name :=`, `place name :=`, `scheme name :=`, `move stay` or `move cross`, `endpoint name :=`, `read stay` or `read cross`, `meet name :`, `repr name :=`, `seat name :`, and `link name :`. `talk : Type`, `meet : Type`, `repr : Box`, `seat : Type`, and `link : Type` are constructors. `buffer` is a keyword only after the right-hand process of `meet name :`, and only with a numeral. `def buffer : run Nat := 0` is a definition. `def repr : run Nat := 0` is a definition. The host shape of a data type is [Host representations](repr.md).
 
 A `ν` block has one destructor, `uncons`. `ν Stream (A : Type)` is checked for shape and dropped. Any other name declares a family: its binders are the indices, at least one, and the type of `uncons` must be the family applied to them in order, `→` the body ([Streams](streams.md#declared-families)).
 

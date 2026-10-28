@@ -214,6 +214,8 @@ defmodule Muro.Load do
   defp decl_names(%{kind: :import}), do: []
   defp decl_names(%{kind: :param}), do: []
   defp decl_names(%{kind: :move}), do: []
+  # Same name as the data type. Duplicate reprs are the checker's refusal.
+  defp decl_names(%{kind: :repr}), do: []
   defp decl_names(%{name: name}), do: [name]
 
   defp site(d) do

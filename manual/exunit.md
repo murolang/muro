@@ -231,7 +231,7 @@ A 3-tuple is still an Elixir module. An ExUnit entry adds a keyword list:
 
 ```elixir
 [
-  muro: "0.16.76",
+  muro: "0.16.77",
   modules: [
     {"priv/muro/rounding.muro", MyApp.Rounding, "lib/my_app/rounding.ex"},
     {"priv/muro/rounding.muro", MyApp.RoundingTest, "test/rounding_test.exs",

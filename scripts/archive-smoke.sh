@@ -281,6 +281,8 @@ EOF
     exit 1
   fi
 
+  cp "$root/examples/repr.muro" repr.muro
+
   # Closed equations. Round is the file stem, so the suite's default
   # implementation is the emitted module. RoundTest is the .exs mix test
   # loads. RoundSuite is the .ex the compiler checks @behaviour against.
@@ -303,6 +305,7 @@ EOF
   muro: "${version}",
   modules: [
     {"half_ok.muro", Host.HalfOk, "lib/host/half_ok.ex"},
+    {"repr.muro", Host.Repr, "lib/host/repr.ex"},
     {"round.muro", Round, "lib/round.ex"},
     {"round.muro", RoundTest, "test/round_test.exs", [kind: :exunit]},
     {"round.muro", RoundSuite, "test/support/round_suite.ex", [kind: :exunit]}
@@ -365,6 +368,7 @@ EOF
     exit 1
   fi
   have "$host_exunit_gen" "written lib/round.ex" "host exunit gen"
+  have "$host_exunit_gen" "written lib/host/repr.ex" "host exunit gen"
   have "$host_exunit_gen" "written test/round_test.exs" "host exunit gen"
   have "$host_exunit_gen" "written test/support/round_suite.ex" "host exunit gen"
   have "$host_exunit_gen" "skipped test/round_test.exs: step-ok (round.muro:" "host exunit gen"
@@ -428,6 +432,60 @@ EOF
   fi
   have "$host_exunit_bad" "round-ok (round.muro:" "wrong adapter"
   mv "$tmp/host-test-helper.exs" test/test_helper.exs
+
+  test -s lib/host/repr.ex
+  grep -q "def decode_entry" lib/host/repr.ex
+  grep -q "def toggle" lib/host/repr.ex
+
+  set +e
+  repr_check=$(mix muro.gen --check 2>&1)
+  repr_check_status=$?
+  set -e
+  printf '%s\n' "$repr_check"
+  if [ "$repr_check_status" -ne 0 ] || [ "$repr_check" != "ok" ]; then
+    echo "host mix muro.gen --check did not print ok for repr.muro" >&2
+    exit 1
+  fi
+
+  cat > repr_call.exs <<'EOF'
+{:ok, v} = Host.Repr.decode_entry(%{"id" => 3, "enabled" => true})
+enc = Host.Repr.encode_entry(Host.Repr.toggle(v))
+bad = Host.Repr.decode_entry(%{"id" => 3, "enabled" => 1})
+IO.puts("REPR_ENC #{inspect(enc)}")
+IO.puts("REPR_BAD #{inspect(bad)}")
+EOF
+
+  set +e
+  repr_run=$(mix run repr_call.exs 2>&1)
+  repr_run_status=$?
+  set -e
+  printf '%s\n' "$repr_run"
+  if [ "$repr_run_status" -ne 0 ]; then
+    echo "host mix run of the repr codec failed" >&2
+    exit 1
+  fi
+  have "$repr_run" "REPR_ENC" "repr encode"
+  have "$repr_run" "\"id\" => 3" "repr encode id"
+  have "$repr_run" "\"enabled\" => false" "repr encode enabled"
+  have "$repr_run" "REPR_BAD {:error, {[\"enabled\"], {:not_boolean, 1}}}" "repr strict failure"
+
+  cat > bad_repr.muro <<'EOF'
+data E : Type where
+  a : E
+  b : E
+repr E := a => nil | b => nil
+EOF
+
+  set +e
+  bad_repr=$(mix muro.check bad_repr.muro 2>&1)
+  bad_repr_status=$?
+  set -e
+  printf '%s\n' "$bad_repr"
+  if [ "$bad_repr_status" -eq 0 ]; then
+    echo "expected mix muro.check to refuse an ambiguous repr" >&2
+    exit 1
+  fi
+  have "$bad_repr" "constructors a and b share a host shape (nil)" "ambiguous repr"
 )
 
 # From an empty directory: init, generate, check, then the two drift failures.
