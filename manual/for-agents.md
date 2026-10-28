@@ -71,7 +71,6 @@ Users still only run Mix. If you are doing Job A, you are not doing Job B.
 | What is the language? | This manual, especially [Grammar](grammar.md) |
 | What does the parser accept? | `lib/muro/parser.ex` |
 | What does the checker accept? | `lib/muro/check.ex`, specified by `agda/Muro/Check.agda` |
-| If Agda and Elixir disagree? | Agda wins. Fix Elixir after the Agda clause exists. |
 | Is Agda a certificate for a `.muro` file? | No. `mix muro.check` is. |
 | Canonical book? | `examples/half_ok.muro` = `Muro.Example.book/0` = `agda/Muro/Example.agda` |
 

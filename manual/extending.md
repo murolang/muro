@@ -7,7 +7,7 @@ summary: How to change the type theory. Agda first, then Elixir.
 
 # Extending the kernel
 
-In brief: this is Job B. If you only want a program, stop and go back to [Start](start.md). Order is mandatory. If Agda and Elixir disagree, Agda wins.
+In brief: this is Job B. If you only want a program, stop and go back to [Start](start.md). Order is mandatory.
 
 ## Order
 

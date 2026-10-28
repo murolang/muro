@@ -26,7 +26,7 @@ Do not:
 
 ### Job B: change the type theory
 
-Follow [`manual/extending.md`](manual/extending.md). The order is mandatory: Agda syntax → subst → check → `make agda` → Elixir mirror → `mix test` and `mix muro.check`. If Agda and Elixir disagree, Agda wins. If you are doing Job A, you are not doing Job B.
+Follow [`manual/extending.md`](manual/extending.md). The order is mandatory: Agda syntax → subst → check → `make agda` → Elixir mirror → `mix test` and `mix muro.check`. If you are doing Job A, you are not doing Job B.
 
 ## Commands
 
