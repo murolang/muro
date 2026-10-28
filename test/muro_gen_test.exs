@@ -3,6 +3,17 @@ defmodule Muro.GenTest do
 
   @one "def one : run Nat := suc 0\n"
 
+  @round """
+  def round : run Π (n : Nat) → Nat :=
+    λ (n : Nat) → n
+  def round-ok : evidence {round (suc 0) ≡ suc 0 : Nat} :=
+    refl
+  def step : run internal Π (n : Nat) → Nat :=
+    λ (n : Nat) → suc n
+  def step-ok : evidence {step 0 ≡ suc 0 : Nat} :=
+    refl
+  """
+
   @plus """
   def plus : run Pi (n : Nat) -> Pi (m : Nat) -> Nat :=
     lam (n : Nat) -> lam (m : Nat) ->
@@ -506,6 +517,73 @@ defmodule Muro.GenTest do
     assert source =~ "from priv/muro/one.muro"
   end
 
+  test "an exunit target is hashed, skipped in the body, and drift-checked" do
+    dir = tmp_dir()
+    write_book(dir, "priv/muro/round.muro", @round)
+    File.write!(Path.join(dir, ".formatter.exs"), "[inputs: [\"lib/**/*.ex\"]]\n")
+
+    write_manifest(dir, [
+      {"priv/muro/round.muro", Round, "lib/round.ex"},
+      {"priv/muro/round.muro", RoundTest, "test/round_test.exs", [kind: :exunit]}
+    ])
+
+    output =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+      end)
+
+    assert output =~ "written lib/round.ex\n"
+    assert output =~ "written test/round_test.exs\n"
+    assert output =~ "skipped test/round_test.exs: step-ok (priv/muro/round.muro:"
+    assert output =~ "step is run internal and is not exported"
+
+    suite = File.read!(Path.join(dir, "test/round_test.exs"))
+    assert {:ok, header} = Muro.Gen.parse_header(suite)
+    assert header.book == "priv/muro/round.muro"
+    assert header.version == Mix.Tasks.Muro.version()
+    assert header.book_hash == Muro.Gen.book_hash(dir, "priv/muro/round.muro")
+    assert header.body_hash == Muro.Gen.body_hash(header.body)
+    assert header.body =~ "# Skipped: 1"
+    assert header.body =~ "step-ok (priv/muro/round.muro:"
+    assert header.body =~ "@muro_book #{inspect(header.book_hash)}"
+    assert suite =~ "defmodule RoundTest do\n"
+    assert suite =~ "defmodule RoundTest.Behaviour do\n"
+    refute suite =~ dir
+
+    formatted = suite |> Code.format_string!() |> IO.iodata_to_binary()
+    assert String.trim_trailing(formatted, "\n") <> "\n" == suite
+
+    again =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+      end)
+
+    assert again =~ "unchanged test/round_test.exs\n"
+    assert again =~ "skipped test/round_test.exs: step-ok"
+    assert File.read!(Path.join(dir, "test/round_test.exs")) == suite
+
+    check =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run(["--check"]) end)
+      end)
+
+    assert check == "ok\n"
+
+    edited = String.replace(suite, "{:suc, 0}", "0", global: false)
+    File.write!(Path.join(dir, "test/round_test.exs"), edited)
+    assert check_error(dir) =~ "hand-edited target"
+
+    File.write!(Path.join(dir, "test/round_test.exs"), suite)
+
+    write_book(
+      dir,
+      "priv/muro/round.muro",
+      @round <> "\ndef extra : evidence {step (suc 0) ≡ suc (suc 0) : Nat} := refl\n"
+    )
+
+    assert check_error(dir) =~ "stale target"
+  end
+
   defp generated do
     dir = project()
 
@@ -554,8 +632,12 @@ defmodule Muro.GenTest do
     version = Keyword.get(opts, :version, Mix.Tasks.Muro.version())
 
     entries =
-      Enum.map_join(modules, "\n", fn {book, module, target} ->
-        "    {#{inspect(book)}, #{inspect(module)}, #{inspect(target)}},"
+      Enum.map_join(modules, "\n", fn
+        {book, module, target} ->
+          "    {#{inspect(book)}, #{inspect(module)}, #{inspect(target)}},"
+
+        {book, module, target, opts} ->
+          "    {#{inspect(book)}, #{inspect(module)}, #{inspect(target)}, #{inspect(opts)}},"
       end)
 
     File.write!(Path.join(dir, "muro.exs"), """

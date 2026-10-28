@@ -9,7 +9,7 @@ defmodule Muro.ManifestTest do
 
     File.write!(Path.join(dir, "muro.exs"), """
     [
-      muro: "0.16.75",
+      muro: "0.16.76",
       modules: [
         {"priv/muro/one.muro", MyApp.Billing.Rounding, "lib/my_app/billing/rounding.ex"}
       ]
@@ -17,7 +17,7 @@ defmodule Muro.ManifestTest do
     """)
 
     assert {:ok, manifest} = Muro.Manifest.load(dir)
-    assert manifest.version == "0.16.75"
+    assert manifest.version == "0.16.76"
     assert manifest.fuel == Muro.Check.default_fuel()
     assert manifest.source == :muro_exs
 
@@ -25,7 +25,9 @@ defmodule Muro.ManifestTest do
              %{
                book: "priv/muro/one.muro",
                module: MyApp.Billing.Rounding,
-               target: "lib/my_app/billing/rounding.ex"
+               target: "lib/my_app/billing/rounding.ex",
+               kind: :elixir,
+               impl: nil
              }
            ]
   end
@@ -175,12 +177,98 @@ defmodule Muro.ManifestTest do
     assert message =~ "module is not an alias atom"
   end
 
-  test "version pin names both versions" do
-    assert Muro.Manifest.version_pin("0.16.75", "0.16.75") == :ok
+  test "accepts an exunit entry and its implementation module" do
+    dir = tmp_dir()
+    write_book(dir, "priv/muro/round.muro")
 
-    assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.16.75")
+    assert {:ok, manifest} =
+             Muro.Manifest.validate(
+               [
+                 muro: "1.0.0",
+                 modules: [
+                   {"priv/muro/round.muro", MyApp.Round, "lib/round.ex"},
+                   {"priv/muro/round.muro", MyApp.RoundTest, "test/round_test.exs",
+                    [kind: :exunit, impl: MyApp.Rounding]}
+                 ]
+               ],
+               dir
+             )
+
+    assert manifest.modules == [
+             %{
+               book: "priv/muro/round.muro",
+               module: MyApp.Round,
+               target: "lib/round.ex",
+               kind: :elixir,
+               impl: nil
+             },
+             %{
+               book: "priv/muro/round.muro",
+               module: MyApp.RoundTest,
+               target: "test/round_test.exs",
+               kind: :exunit,
+               impl: MyApp.Rounding
+             }
+           ]
+  end
+
+  test "rejects unknown entry options, an unknown kind, and impl on elixir" do
+    dir = tmp_dir()
+    write_book(dir, "ok.muro")
+
+    assert {:error, unknown} =
+             Muro.Manifest.validate(
+               [muro: "1.0.0", modules: [{"ok.muro", One, "lib/one.ex", [colour: :blue]}]],
+               dir
+             )
+
+    assert unknown =~ "modules entry 1: unknown options [:colour]"
+
+    assert {:error, kind} =
+             Muro.Manifest.validate(
+               [muro: "1.0.0", modules: [{"ok.muro", One, "lib/one.ex", [kind: :haskell]}]],
+               dir
+             )
+
+    assert kind =~ "modules entry 1: unknown kind :haskell"
+
+    assert {:error, impl_kind} =
+             Muro.Manifest.validate(
+               [
+                 muro: "1.0.0",
+                 modules: [{"ok.muro", One, "lib/one.ex", [kind: :elixir, impl: One]}]
+               ],
+               dir
+             )
+
+    assert impl_kind =~ "modules entry 1: impl: is only valid for kind: :exunit"
+
+    assert {:error, impl_atom} =
+             Muro.Manifest.validate(
+               [
+                 muro: "1.0.0",
+                 modules: [{"ok.muro", One, "lib/one.ex", [kind: :exunit, impl: :round]}]
+               ],
+               dir
+             )
+
+    assert impl_atom =~ "modules entry 1: impl is not an alias atom"
+
+    assert {:error, not_opts} =
+             Muro.Manifest.validate(
+               [muro: "1.0.0", modules: [{"ok.muro", One, "lib/one.ex", :exunit}]],
+               dir
+             )
+
+    assert not_opts =~ "modules entry 1 is not {book, module, target}"
+  end
+
+  test "version pin names both versions" do
+    assert Muro.Manifest.version_pin("0.16.76", "0.16.76") == :ok
+
+    assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.16.76")
     assert message =~ "manifest says 0.16.72"
-    assert message =~ "running 0.16.75"
+    assert message =~ "running 0.16.76"
   end
 
   test "root follows the working directory outside a Mix project" do
