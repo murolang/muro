@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.16.78
+
+`import "pkg:shared_wire/wire.muro"` loads a book from a package named in the manifest, at the version `muro.lock` records. `muro_deps:` is an optional key in `muro.exs` or the `:muro` key of `mix.exs`. A git spec is `{:git, url, tag: "v1.2.0"}` or `ref:`, with an optional `root:` directory. A Hex spec is `{:hex, "package_name", "~> 2.0"}`. Hex books live under `priv/muro/`.
+
+`mix muro.deps.get` fetches every package into `muro_deps/<name>/` and writes `muro.lock`. Only regular `.muro` files are copied. A failure leaves the directory and the lock unchanged. The lock is a sorted Elixir literal: a banner comment, then one map, packages by name, keys `files`, `resolved`, `source`, `version`, one line per file. File values are the lowercase hex sha256 of the bytes. The reader walks the quoted AST and does not evaluate the file.
+
+The checker hashes the bytes it parses. A file that differs from the lock is refused: `muro_deps/<name>/<path> changed since muro.lock (expected sha256 <lock>, found sha256 <actual>; run mix muro.deps.get to fetch it again)`. A missing lock, a package or file absent from the lock, a manifest spec that no longer matches, and a missing file each name the package and the file and say to run `mix muro.deps.get`. `mix muro.check` and `mix muro.gen` do not fetch and do not use the network.
+
+`mix muro.check path.muro` prints `conforms to <name> <version> (sha256 <hash>)` after the success sentence, one line per package the book loaded. The hash covers those files, not the rest of the package. A generated target carries the same text as `# Conforms to <name> <version> (sha256 <hash>).` between the first header line and `# Do not edit`. A book that imports no package keeps the two-line header. Package files are part of the book hash, at `muro_deps/<name>/<path>`.
+
+A `param` in a package book is supplied by the importing book, as across files. The same package path reached twice is loaded once. Two packages that declare the same name clash. A package that imports another package does not fetch it; the consumer lists that package.
+
+Git uses the `git` CLI. A tag or branch is a shallow clone. A commit is `git init`, `git fetch --depth 1`, and `git checkout --detach FETCH_HEAD`. If `git` is not on `PATH`, the task stops and the lock is unchanged. The version label drops one leading `v` from a tag when the rest starts with a digit. A ref is `<ref>@<7 hex chars>`, or those 7 chars when the ref is a commit.
+
+Hex does not use the Hex client. `:inets`, `:ssl`, and `:public_key` are started by the fetcher, not as extra applications of `:muro`. When Mix is loaded, the fetcher calls `Mix.ensure_application!/1` for those three first, because Mix removes other OTP applications from the code path. Releases come from `HEX_API_URL` (default `https://hex.pm/api`) and tarballs from `HEX_MIRROR` (default `https://repo.hex.pm`). The highest release matching the requirement is selected with `Version.match?/3` and `allow_pre: false`, so a pre-release matches only when the requirement itself contains one. A retired release is skipped when a non-retired match exists; otherwise the highest retired release is used. The outer `CHECKSUM` must be the sha256 of `VERSION <> metadata.config <> contents.tar.gz`, as hex or as the raw digest. The lock records the tarball sha256. Private repositories, organizations, and auth keys are not supported.
+
+### Manual
+
+- Packages: the manifest, the lock, the hash checks, `conforms to`, publishing, and what is not supported.
+- Terms, Committed modules, Start, and For agents link to that page.
+
+### Package
+
+- Commit `muro_deps/` and `muro.lock` for offline `mix muro.check` and `mix muro.gen --check`.
+- `scripts/archive-smoke.sh` fetches a local git package from the archive, checks the conforms line, refuses a hand edit, and reports a stale target after the tag moves.
+- Version 0.16.78.
+
 ## 0.16.75
 
 `mix muro.gen` writes the modules a project manifest names. `mix muro.gen --check` writes nothing and fails when a committed module and its book disagree. `mix muro.init` creates `muro.exs` and `priv/muro/`.

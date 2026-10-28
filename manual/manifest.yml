@@ -62,6 +62,10 @@ pages:
     slug: gen
     title: Committed modules
     summary: A manifest names each book, module, and target. mix muro.gen writes the module. mix muro.gen --check fails when the file and the book disagree.
+  - file: packages.md
+    slug: packages
+    title: Packages
+    summary: Import a book from a git or Hex package at the version muro.lock records.
   - file: grammar.md
     slug: grammar
     title: Grammar

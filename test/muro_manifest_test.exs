@@ -9,7 +9,7 @@ defmodule Muro.ManifestTest do
 
     File.write!(Path.join(dir, "muro.exs"), """
     [
-      muro: "0.16.75",
+      muro: "0.16.78",
       modules: [
         {"priv/muro/one.muro", MyApp.Billing.Rounding, "lib/my_app/billing/rounding.ex"}
       ]
@@ -17,7 +17,7 @@ defmodule Muro.ManifestTest do
     """)
 
     assert {:ok, manifest} = Muro.Manifest.load(dir)
-    assert manifest.version == "0.16.75"
+    assert manifest.version == "0.16.78"
     assert manifest.fuel == Muro.Check.default_fuel()
     assert manifest.source == :muro_exs
 
@@ -176,11 +176,95 @@ defmodule Muro.ManifestTest do
   end
 
   test "version pin names both versions" do
-    assert Muro.Manifest.version_pin("0.16.75", "0.16.75") == :ok
+    assert Muro.Manifest.version_pin("0.16.78", "0.16.78") == :ok
 
-    assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.16.75")
+    assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.16.78")
     assert message =~ "manifest says 0.16.72"
-    assert message =~ "running 0.16.75"
+    assert message =~ "running 0.16.78"
+  end
+
+  test "load_deps reads only muro_deps and returns an empty list when it is absent" do
+    dir = tmp_dir()
+
+    assert Muro.Manifest.load_deps(dir) == {:ok, []}
+
+    File.write!(Path.join(dir, "muro.exs"), "[\n  fuel: 3\n]\n")
+    assert Muro.Manifest.load_deps(dir) == {:ok, []}
+
+    File.write!(Path.join(dir, "muro.exs"), """
+    [
+      muro_deps: [
+        pricing: {:hex, "pricing_rules", "~> 2.0"},
+        shared_wire: {:git, "https://github.com/acme/shared-wire", tag: "v1.2.0", root: "priv/muro"}
+      ]
+    ]
+    """)
+
+    assert {:ok, [pricing, shared]} = Muro.Manifest.load_deps(dir)
+    assert pricing.name == "pricing"
+    assert pricing.kind == :hex
+    assert pricing.root == "priv/muro"
+    assert pricing.source == {:hex, "pricing_rules", "~> 2.0"}
+    assert shared.name == "shared_wire"
+    assert shared.pin == {:tag, "v1.2.0"}
+    assert shared.root == "priv/muro"
+
+    assert shared.source ==
+             {:git, "https://github.com/acme/shared-wire", [tag: "v1.2.0", root: "priv/muro"]}
+  end
+
+  test "load validates muro_deps and still requires muro and modules" do
+    dir = tmp_dir()
+    write_book(dir, "priv/muro/one.muro")
+
+    assert {:error, message} =
+             Muro.Manifest.validate([muro_deps: [shared: {:path, "x"}]], dir)
+
+    assert message =~ "muro_deps entry shared: unknown source"
+    assert message =~ "missing muro:"
+    assert message =~ "missing modules:"
+  end
+
+  test "muro_deps names the entry when the spec is refused" do
+    dir = tmp_dir()
+
+    refused = [
+      {[shared: {:git, "https://example.com/a", tag: "v1", ref: "main"}],
+       "tag and ref are both set"},
+      {[shared: {:git, "https://example.com/a", branch: "main"}], "unknown option"},
+      {[shared: {:git, "https://example.com/a", []}], "expected one of tag: or ref:"},
+      {[Shared: {:git, "https://example.com/a", tag: "v1"}], "name must match"},
+      {[shared: {:hex, "pricing_rules", "not a req"}], "requirement"},
+      {[shared: {:hex, "Pricing", "~> 1.0"}], "package"},
+      {[shared: {:git, "-https://example.com/a", tag: "v1"}], "url"},
+      {[shared: {:git, "https://example.com/a", tag: "v1", root: "../x"}], "root"},
+      {[
+         shared: {:git, "https://example.com/a", tag: "v1"},
+         shared: {:hex, "pricing_rules", "~> 1.0"}
+       ], "duplicate name"}
+    ]
+
+    Enum.each(refused, fn {deps, fragment} ->
+      assert {:error, message} = Muro.Manifest.validate([muro_deps: deps], dir)
+      assert message =~ "muro_deps entry"
+      assert message =~ fragment
+    end)
+  end
+
+  test "load_deps refuses muro.exs and a :muro key together" do
+    dir = tmp_dir()
+    version = Mix.Tasks.Muro.version()
+    File.write!(Path.join(dir, "muro.exs"), "[\n  muro_deps: []\n]\n")
+    File.write!(Path.join(dir, "mix.exs"), mix_project(:sample_deps_both, version, []))
+
+    message =
+      Mix.Project.in_project(:sample_deps_both, dir, fn _module ->
+        assert {:error, message} = Muro.Manifest.load_deps(dir)
+        message
+      end)
+
+    assert message =~ "muro.exs"
+    assert message =~ ":muro key in mix.exs"
   end
 
   test "root follows the working directory outside a Mix project" do

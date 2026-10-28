@@ -60,6 +60,7 @@ have "$list" "mix muro.check" "mix muro"
 have "$list" "mix muro.emit" "mix muro"
 have "$list" "mix muro.gen" "mix muro"
 have "$list" "mix muro.init" "mix muro"
+have "$list" "mix muro.deps.get" "mix muro"
 
 check_out=$(mix muro.check half_ok.muro)
 have "$check_out" "Muro v${version}" "mix muro.check half_ok.muro"
@@ -279,6 +280,166 @@ EOF
   if [ -e _build ]; then
     echo "mix muro.gen compiled the host" >&2
     exit 1
+  fi
+
+  # CI has git. A checkout without git skips the package case.
+  if ! command -v git >/dev/null 2>&1; then
+    echo "skip package import smoke: git is not on PATH"
+  else
+    shared_repo="$tmp/shared-pkg"
+    mkdir -p "$shared_repo"
+    (
+      cd "$shared_repo"
+      git -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c init.defaultBranch=main init
+      printf '%s\n' 'def shared : run Nat := 0' > shared.muro
+      git -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c init.defaultBranch=main add shared.muro
+      git -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c init.defaultBranch=main commit -m init
+      git -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c init.defaultBranch=main tag v1.0.0
+    )
+
+    printf '%s\n' 'import "pkg:shared/shared.muro"' 'def use : run Nat := shared' > book.muro
+    cat > muro.exs <<EOF
+[
+  muro: "${version}",
+  muro_deps: [
+    shared: {:git, "file://${shared_repo}", tag: "v1.0.0"}
+  ],
+  modules: [
+    {"book.muro", Host.SharedUse, "lib/host/shared_use.ex"}
+  ]
+]
+EOF
+
+    set +e
+    pkg_get=$(mix muro.deps.get 2>&1)
+    pkg_get_status=$?
+    set -e
+    printf '%s\n' "$pkg_get"
+    if [ "$pkg_get_status" -ne 0 ]; then
+      echo "host mix muro.deps.get failed" >&2
+      exit 1
+    fi
+    have "$pkg_get" "fetched shared 1.0.0" "mix muro.deps.get"
+    test -f muro.lock
+    test -f muro_deps/shared/shared.muro
+    case "$pkg_get" in
+      *"host application started"*)
+        echo "mix muro.deps.get started the host" >&2
+        exit 1
+        ;;
+    esac
+    if [ -e _build ]; then
+      echo "mix muro.deps.get compiled the host" >&2
+      exit 1
+    fi
+
+    set +e
+    pkg_check=$(mix muro.check book.muro 2>&1)
+    pkg_check_status=$?
+    set -e
+    printf '%s\n' "$pkg_check"
+    if [ "$pkg_check_status" -ne 0 ]; then
+      echo "host mix muro.check book.muro failed" >&2
+      exit 1
+    fi
+    have "$pkg_check" "conforms to shared 1.0.0 (sha256 " "mix muro.check book.muro"
+    case "$pkg_check" in
+      *"host application started"*)
+        echo "package mix muro.check started the host" >&2
+        exit 1
+        ;;
+    esac
+
+    set +e
+    pkg_gen=$(mix muro.gen 2>&1)
+    pkg_gen_status=$?
+    set -e
+    printf '%s\n' "$pkg_gen"
+    if [ "$pkg_gen_status" -ne 0 ]; then
+      echo "package mix muro.gen failed" >&2
+      exit 1
+    fi
+    test -s lib/host/shared_use.ex
+    grep -q "# Conforms to shared 1.0.0" lib/host/shared_use.ex
+    if grep -q "$tmp" lib/host/shared_use.ex || grep -q "$host" lib/host/shared_use.ex; then
+      echo "package target contains an absolute path" >&2
+      exit 1
+    fi
+
+    set +e
+    pkg_ok=$(mix muro.gen --check 2>&1)
+    pkg_ok_status=$?
+    set -e
+    printf '%s\n' "$pkg_ok"
+    if [ "$pkg_ok_status" -ne 0 ] || [ "$pkg_ok" != "ok" ]; then
+      echo "package mix muro.gen --check did not print ok" >&2
+      exit 1
+    fi
+
+    cp muro_deps/shared/shared.muro "$tmp/shared.muro.ok"
+    printf '\n-- edited\n' >> muro_deps/shared/shared.muro
+    set +e
+    pkg_bad=$(mix muro.check book.muro 2>&1)
+    pkg_bad_status=$?
+    set -e
+    printf '%s\n' "$pkg_bad"
+    if [ "$pkg_bad_status" -eq 0 ]; then
+      echo "expected mix muro.check to refuse a hand-edited package file" >&2
+      exit 1
+    fi
+    have "$pkg_bad" "changed since muro.lock" "hand-edited package file"
+    cp "$tmp/shared.muro.ok" muro_deps/shared/shared.muro
+
+    (
+      cd "$shared_repo"
+      printf '%s\n' 'def shared : run Nat := suc 0' > shared.muro
+      git -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c init.defaultBranch=main add shared.muro
+      git -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c init.defaultBranch=main commit -m next
+      git -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c init.defaultBranch=main tag v1.0.1
+    )
+    cat > muro.exs <<EOF
+[
+  muro: "${version}",
+  muro_deps: [
+    shared: {:git, "file://${shared_repo}", tag: "v1.0.1"}
+  ],
+  modules: [
+    {"book.muro", Host.SharedUse, "lib/host/shared_use.ex"}
+  ]
+]
+EOF
+
+    set +e
+    pkg_get2=$(mix muro.deps.get 2>&1)
+    pkg_get2_status=$?
+    set -e
+    printf '%s\n' "$pkg_get2"
+    if [ "$pkg_get2_status" -ne 0 ]; then
+      echo "host mix muro.deps.get after retag failed" >&2
+      exit 1
+    fi
+    have "$pkg_get2" "changed shared.muro" "mix muro.deps.get retag"
+
+    set +e
+    pkg_stale=$(mix muro.gen --check 2>&1)
+    pkg_stale_status=$?
+    set -e
+    printf '%s\n' "$pkg_stale"
+    if [ "$pkg_stale_status" -eq 0 ]; then
+      echo "expected mix muro.gen --check to fail stale after the package changed" >&2
+      exit 1
+    fi
+    have "$pkg_stale" "stale" "package mix muro.gen --check"
+    case "${pkg_get}${pkg_get2}${pkg_check}${pkg_gen}${pkg_ok}${pkg_bad}${pkg_stale}" in
+      *"host application started"*)
+        echo "package smoke started the host" >&2
+        exit 1
+        ;;
+    esac
+    if [ -e _build ]; then
+      echo "package smoke compiled the host" >&2
+      exit 1
+    fi
   fi
 )
 

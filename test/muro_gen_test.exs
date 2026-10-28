@@ -94,8 +94,10 @@ defmodule Muro.GenTest do
     refute String.ends_with?(content, "\n\n")
     refute content =~ Path.basename(dir)
     assert {:ok, header} = Muro.Gen.parse_header(content)
+    assert header.conforms == []
     assert header.book_hash == Muro.Gen.book_hash(dir, "priv/muro/one.muro")
     assert header.body_hash == Muro.Gen.body_hash(header.body)
+    refute content =~ "# Conforms to"
 
     {formatter, _opts} =
       Mix.Tasks.Format.formatter_for_file(target, root: dir)
@@ -506,6 +508,112 @@ defmodule Muro.GenTest do
     assert source =~ "from priv/muro/one.muro"
   end
 
+  test "a package file is in the book hash and the generated header" do
+    dir = tmp_dir()
+    wire = "def wire : run Nat := 0\n"
+    use = "import \"pkg:shared/wire.muro\"\ndef use : run Nat := wire\n"
+    write_book(dir, "use.muro", use)
+    write_book(dir, "muro_deps/shared/wire.muro", wire)
+
+    write_manifest(
+      dir,
+      [{"use.muro", MyApp.Pkg.Use, "lib/my_app/pkg/use.ex"}],
+      deps: "    shared: {:git, \"https://example.com/shared.git\", tag: \"v1.0.0\"}"
+    )
+
+    write_package_lock(dir, %{"muro_deps/shared/wire.muro" => wire})
+
+    expected =
+      Muro.Hash.files([
+        {"muro_deps/shared/wire.muro", wire},
+        {"use.muro", use}
+      ])
+
+    assert Muro.Gen.book_hash(dir, "use.muro") == expected
+    assert Muro.Gen.book_files(Path.join(dir, "use.muro")) |> length() == 2
+
+    File.rm_rf!(Path.join(dir, "muro_deps"))
+    assert Muro.Gen.book_hash(dir, "use.muro") == Muro.Hash.files([{"use.muro", use}])
+    write_book(dir, "muro_deps/shared/wire.muro", wire)
+    write_package_lock(dir, %{"muro_deps/shared/wire.muro" => wire})
+
+    output =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+      end)
+
+    target = Path.join(dir, "lib/my_app/pkg/use.ex")
+    content = File.read!(target)
+    assert {:ok, header} = Muro.Gen.parse_header(content)
+    assert [%{package: "shared", version: "1.0.0", sha256: sha}] = header.conforms
+    assert content =~ "# Conforms to shared 1.0.0 (sha256 #{sha}).\n"
+    assert output == "written lib/my_app/pkg/use.ex\n  conforms to shared 1.0.0 (sha256 #{sha})\n"
+
+    again =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+      end)
+
+    assert again ==
+             "unchanged lib/my_app/pkg/use.ex\n  conforms to shared 1.0.0 (sha256 #{sha})\n"
+
+    assert File.read!(target) == content
+
+    check_out =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run(["--check"]) end)
+      end)
+
+    assert check_out == "ok\n"
+
+    touched = wire <> "-- touch\n"
+    write_book(dir, "muro_deps/shared/wire.muro", touched)
+    message = check_error(dir)
+    assert message =~ "does not check"
+    assert message =~ "muro_deps/shared/wire.muro changed since muro.lock (expected sha256"
+
+    write_package_lock(dir, %{"muro_deps/shared/wire.muro" => touched})
+    message = check_error(dir)
+    assert message =~ "stale target"
+    refute message =~ "does not check"
+
+    in_dir(dir, fn ->
+      capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+    end)
+
+    edited = File.read!(target)
+    edited = String.replace(edited, "1.0.0", "9.9.9", global: false)
+    File.write!(target, edited)
+    message = check_error(dir)
+    assert message =~ "differs from what use.muro emits"
+  end
+
+  defp write_package_lock(dir, files) do
+    {:ok, deps} = Muro.Manifest.load_deps(dir)
+
+    packages =
+      Map.new(deps, fn dep ->
+        prefix = "muro_deps/" <> dep.name <> "/"
+
+        hashed =
+          files
+          |> Enum.filter(fn {rel, _bytes} -> String.starts_with?(rel, prefix) end)
+          |> Map.new(fn {rel, bytes} ->
+            {String.replace_prefix(rel, prefix, ""), Muro.Hash.sha256(bytes)}
+          end)
+
+        {dep.name,
+         %{
+           files: hashed,
+           resolved: {:git, String.duplicate("ab", 20)},
+           source: dep.source,
+           version: "1.0.0"
+         }}
+      end)
+
+    File.write!(Path.join(dir, "muro.lock"), Muro.Lock.encode(packages))
+  end
+
   defp generated do
     dir = project()
 
@@ -558,10 +666,16 @@ defmodule Muro.GenTest do
         "    {#{inspect(book)}, #{inspect(module)}, #{inspect(target)}},"
       end)
 
+    deps =
+      case Keyword.get(opts, :deps) do
+        nil -> ""
+        text -> "  muro_deps: [\n#{text}\n  ],\n"
+      end
+
     File.write!(Path.join(dir, "muro.exs"), """
     [
       muro: "#{version}",
-      modules: [
+    #{deps}  modules: [
     #{entries}
       ]
     ]

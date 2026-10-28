@@ -3,7 +3,10 @@
 _build/
 MAlonzo/
 dist/
+# Mix deps. The package fetcher lives in lib/muro/deps and is source.
 deps/
+!lib/muro/deps/
+!lib/muro/deps/**
 erl_crash.dump
 *.beam
 _build
