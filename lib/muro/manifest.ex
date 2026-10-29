@@ -35,6 +35,12 @@ defmodule Muro.Manifest do
   `load/1` validates it with the other keys. `load_deps/1` validates
   only that key, so a project that imports packages and does not
   generate modules can omit `muro:` and `modules:`.
+
+  A git spec is `{:git, url}` or `{:git, url, opts}`. `{:git, url}`
+  is normalized to `{:git, url, []}`. `opts` may set `tag:`, `ref:`,
+  or neither, and may set `root:`. Omitting both pins follows the
+  remote's default branch. `tag:` and `ref:` together is an error.
+  Any other key is an error, and the message names it.
   """
 
   defstruct [:version, :fuel, :modules, :deps, :source]
@@ -388,6 +394,10 @@ defmodule Muro.Manifest do
     {:error, "muro_deps entry #{inspect(name)}: name must be an atom matching [a-z][a-z0-9_]*"}
   end
 
+  defp validate_spec(name, {:git, url}) do
+    validate_spec(name, {:git, url, []})
+  end
+
   defp validate_spec(name, {:git, url, opts}) do
     label = dep_label(name)
 
@@ -417,6 +427,16 @@ defmodule Muro.Manifest do
     {:error, "muro_deps entry #{dep_label(name)}: unknown source #{inspect(other)}"}
   end
 
+  defp git_dep(url, :head, root) do
+    %{
+      kind: :git,
+      url: url,
+      pin: :head,
+      root: root,
+      source: {:git, url, git_source_opts(:head, root)}
+    }
+  end
+
   defp git_dep(url, {:tag, tag}, root) do
     %{
       kind: :git,
@@ -437,6 +457,8 @@ defmodule Muro.Manifest do
     }
   end
 
+  defp git_source_opts(:head, "."), do: []
+  defp git_source_opts(:head, root), do: [root: root]
   defp git_source_opts(tag: tag, root: "."), do: [tag: tag]
   defp git_source_opts(tag: tag, root: root), do: [tag: tag, root: root]
   defp git_source_opts(ref: ref, root: "."), do: [ref: ref]
@@ -479,7 +501,9 @@ defmodule Muro.Manifest do
           end
 
         true ->
-          {:error, "muro_deps entry #{label}: expected one of tag: or ref:"}
+          with {:ok, root} <- take_root(label, opts) do
+            {:ok, :head, root}
+          end
       end
     else
       {:error, "muro_deps entry #{label}: options must be a keyword list, got: #{inspect(opts)}"}
