@@ -235,11 +235,16 @@ defmodule Muro.Lock do
           plain_root?(root) ->
         {:ok, {:git, url, source_opts({:ref, ref}, root)}}
 
+      tag == nil and ref == nil and keys -- [:root] == [] and plain_root?(root) ->
+        {:ok, {:git, url, source_opts(:head, root)}}
+
       true ->
         :error
     end
   end
 
+  defp source_opts(:head, "."), do: []
+  defp source_opts(:head, root), do: [root: root]
   defp source_opts({:tag, tag}, "."), do: [tag: tag]
   defp source_opts({:tag, tag}, root), do: [tag: tag, root: root]
   defp source_opts({:ref, ref}, "."), do: [ref: ref]

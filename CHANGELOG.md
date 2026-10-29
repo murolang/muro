@@ -10,6 +10,20 @@
 
 - Version 0.18.4.
 
+## 0.18.3
+
+A git package may leave out both `tag:` and `ref:`. `{:git, url}` and `{:git, url, []}` are the same spec, and `{:git, url, root: "priv/muro"}` is that spec with a directory. The fetch is `git clone --depth 1` with no `--branch`, so the clone follows the remote's default branch, whatever that branch is named. The lock records the commit. `version` is `<branch>@<sha7>`, the same shape as a branch `ref:`, and the `conforms to` line uses it. The branch name is read from the clone. A remote whose HEAD names no branch is refused, and the message says to add `tag:` or `ref:`. `mix muro.deps.get` resolves the spec again on every run. `mix muro.check` and `mix muro.gen` still read only `muro.lock` and `muro_deps/`.
+
+`tag:` and `ref:` are unchanged, including the lock text. Naming both is still an error. An unknown option is still refused, and the message names the key.
+
+### Manual
+
+- Packages: the pin-free git spec, next to `tag:` and `ref:`.
+
+### Package
+
+- Version 0.18.3.
+
 ## 0.18.2
 
 An unfold step may mention its recursive block in the tail only as a call: a member of the block applied to arguments that do not mention the block, a pair of such tails, or a nested unfold whose seed, binder type and head do not mention the block and whose own tail is guarded. `tail p`, `snd (uncons p)`, and `let (a, b) = uncons p in b`, inside the definition of `p`, were accepted. Each forces `p`. With a stream that breaks the predicate at a later element, that acceptance was a closed `evidence Empty`. The checker refuses them with `unguarded recursive call`, reported as `<def> body: unguarded recursive call`. `head`, `match`, and `rewrite` on the block in a tail are the same refusal. A tail that is the block applied to block-free arguments, a pair of guarded tails, or a nested unfold with a guarded tail still checks. `examples/always.muro` is unchanged.
