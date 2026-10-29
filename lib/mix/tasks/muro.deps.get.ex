@@ -15,8 +15,8 @@ defmodule Mix.Tasks.Muro.Deps.Get do
 
   Git packages are cloned with the `git` CLI. Hex packages are
   downloaded from the public repository. There are no arguments: every
-  package is resolved again. A tag, a ref, or a requirement that moved
-  shows up as a lock diff.
+  package is resolved again. A tag, a ref, a pin-free git spec, or a
+  requirement that moved shows up as a lock diff.
 
   Packages are fetched into a temporary directory and checked before
   `muro_deps/` or `muro.lock` changes. A failure leaves both as they

@@ -28,7 +28,19 @@ A project that only checks books can list `muro_deps:` and omit `muro:` and `mod
 
 Names are atoms matching `[a-z][a-z0-9_]*`, and they are unique.
 
-A git spec is `{:git, url, opts}` with exactly one of `tag: "v1.2.0"` or `ref: "main"`. `ref` is a branch, a tag, or a commit. `root: "priv/muro"` is an optional relative directory inside the repository; the default is `"."`, the repository root. The url is a non-empty string with no newlines and does not start with `-`. `tag`, `ref`, and `root` do not start with `-`. `root` is relative and has no `..` or empty segment.
+A git spec is `{:git, url}` or `{:git, url, opts}`. `{:git, url}` means `{:git, url, []}`. `opts` may include `tag: "v1.2.0"`, `ref: "main"`, or neither, and it may include `root: "priv/muro"`. Leaving out both `tag:` and `ref:` follows the remote's default branch. `ref` is a branch, a tag, or a commit. Naming both `tag:` and `ref:` is an error. `root` is an optional relative directory inside the repository; the default is `"."`, the repository root. The url is a non-empty string with no newlines and does not start with `-`. `tag`, `ref`, and `root` do not start with `-`. `root` is relative and has no `..` or empty segment. Any other option is refused, and the message names the key.
+
+A default branch needs no name. Either of these follows it:
+
+```elixir
+shared_wire: {:git, "https://github.com/acme/shared-wire"}
+```
+
+```elixir
+shared_wire: {:git, "https://github.com/acme/shared-wire", root: "priv/muro"}
+```
+
+`{:git, url}` and `{:git, url, []}` are one dependency. The lock stores the normalized spec, so switching spelling is not a change. The spec floats with the default branch, the way a branch `ref:` floats with that branch: `mix muro.deps.get` resolves it again, and the lock pins the commit. `mix muro.check` and `mix muro.gen` do not resolve it again.
 
 A Hex spec is `{:hex, "package_name", "~> 2.0"}`. The requirement is what `Version.parse_requirement/1` accepts. A Hex package ships its books under `priv/muro/`. That directory is the package root, and it is not configurable.
 
@@ -57,9 +69,9 @@ A second run that resolves the same bytes prints `muro.lock unchanged` and no fi
 
 `mix muro.check` and `mix muro.gen` do not run this task. They do not use the network and they do not run `git`.
 
-Git packages are cloned with the `git` CLI. A tag or a branch is `git clone --depth 1 --branch <name> -- <url> <dir>`. A commit (7 to 40 hex digits) is `git init`, then `git fetch --depth 1 -- <url> <ref>`, then `git checkout --detach FETCH_HEAD`. `GIT_TERMINAL_PROMPT` is `0`. Arguments are not passed through a shell. No credentials are added beyond what git itself does. If `git` is not on `PATH`, the task stops and says `muro.lock` and `muro_deps/` are unchanged.
+Git packages are cloned with the `git` CLI. A tag or a branch is `git clone --depth 1 --branch <name> -- <url> <dir>`. A commit (7 to 40 hex digits) is `git init`, then `git fetch --depth 1 -- <url> <ref>`, then `git checkout --detach FETCH_HEAD`. A spec with no `tag:` and no `ref:` is `git clone --depth 1 -- <url> <dir>`, with no `--branch`, so git checks out the remote HEAD. The branch name is `git rev-parse --abbrev-ref HEAD` in that clone. When that prints `HEAD`, the clone is detached and the name is taken from `git ls-remote --symref <url> HEAD`. A remote that has no default branch fails with `muro_deps entry <name>: remote has no default branch; add tag: or ref:`. `GIT_TERMINAL_PROMPT` is `0`. Arguments are not passed through a shell. No credentials are added beyond what git itself does. If `git` is not on `PATH`, the task stops and says `muro.lock` and `muro_deps/` are unchanged.
 
-The version in the lock, and on the `conforms to` line, is the tag with one leading `v` removed when the rest starts with a digit (`v1.2.0` is `1.2.0`, `vlatest` stays `vlatest`). A `ref` is `<ref>@<first 7 hex chars of the commit>`, or those 7 chars when the ref is itself a commit.
+The version in the lock, and on the `conforms to` line, is the tag with one leading `v` removed when the rest starts with a digit (`v1.2.0` is `1.2.0`, `vlatest` stays `vlatest`). A `ref` is `<ref>@<first 7 hex chars of the commit>`, or those 7 chars when the ref is itself a commit. A pin-free spec uses the same shape as a branch ref: `<branch>@<first 7 hex chars>`, so the line reads `conforms to shared_wire main@0123abc (sha256 ...)`.
 
 Hex packages are downloaded without the Hex client. Releases come from `HEX_API_URL` (default `https://hex.pm/api`). The tarball comes from `HEX_MIRROR` (default `https://repo.hex.pm`). The request sends `accept` and a `user-agent`. HTTPS uses `verify_peer`, `:public_key.cacerts_get/0`, and the hostname check. A redirect to another host is refused. `:inets`, `:ssl`, and `:public_key` are started by the fetcher, not listed in `:muro`'s `extra_applications`. When Mix is loaded, the fetcher calls `Mix.ensure_application!/1` for those three first, because Mix removes other OTP applications from the code path.
 
@@ -97,7 +109,7 @@ Only `mix muro.deps.get` writes `muro.lock`. The file is one comment and one map
 }
 ```
 
-`source` is the normalized manifest spec. `files` values are the lowercase hex sha256 of each file's bytes. `resolved` for git is the full commit. `resolved` for Hex is the release and the tarball sha256.
+`source` is the normalized manifest spec. A pin-free git spec is stored as `{:git, url, []}`, or `{:git, url, [root: ...]}` when `root:` is set. `files` values are the lowercase hex sha256 of each file's bytes. `resolved` for git is the full commit. `resolved` for Hex is the release and the tarball sha256.
 
 The reader parses the file with `Code.string_to_quoted/2` and walks the AST. It accepts maps, lists, 2-tuples, 3-tuples, atoms, binaries, and integers. It does not evaluate the file. Anything else is an error that names `muro.lock` and says to run `mix muro.deps.get`.
 
@@ -144,7 +156,7 @@ A `param` in a package book works as it does across files. The importing book su
 conforms to shared_wire 1.2.0 (sha256 <hash>)
 ```
 
-The version is the lock's `version`. The hash covers the package files this book loaded, not the rest of the package. Each entry is `<name>/<path>`, a zero byte, the file bytes, and a zero byte, sorted by that key, then sha256 as lowercase hex. Two projects that load the same files at the same lock print the same line. A file the book does not import does not change it. A book that imports no package, and `mix muro.check` with no path, print only the version line and the success sentence.
+The version is the lock's `version`. For a pin-free git package the version is `<branch>@<sha7>`. The hash covers the package files this book loaded, not the rest of the package. Each entry is `<name>/<path>`, a zero byte, the file bytes, and a zero byte, sorted by that key, then sha256 as lowercase hex. Two projects that load the same files at the same lock print the same line. A file the book does not import does not change it. A book that imports no package, and `mix muro.check` with no path, print only the version line and the success sentence.
 
 `Muro.conforms/2` returns `{:ok, lines}`. `Muro.check_file/2` still returns `:ok` or `{:error, message}`.
 
@@ -186,6 +198,6 @@ Commit `muro_deps/` and `muro.lock`. `mix muro.check` and `mix muro.gen --check`
 
 ## What this does not do
 
-There is no registry of Muro packages. Git and Hex are the sources. Private Hex repositories, organizations, and auth keys are not supported. A package that imports another package does not fetch it: the consumer lists that package too. There is no solver across packages. Each spec is resolved on its own, again, every time `mix muro.deps.get` runs: a tag or a ref to the commit it points at now, a Hex requirement to the highest matching release.
+There is no registry of Muro packages. Git and Hex are the sources. Private Hex repositories, organizations, and auth keys are not supported. A package that imports another package does not fetch it: the consumer lists that package too. There is no solver across packages. Each spec is resolved on its own, again, every time `mix muro.deps.get` runs: a tag or a ref to the commit it points at now, a pin-free git spec to the current tip of the remote's default branch, a Hex requirement to the highest matching release.
 
 Next: [Grammar](grammar.md).

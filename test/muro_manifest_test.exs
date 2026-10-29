@@ -9,7 +9,7 @@ defmodule Muro.ManifestTest do
 
     File.write!(Path.join(dir, "muro.exs"), """
     [
-      muro: "0.18.2",
+      muro: "0.18.3",
       modules: [
         {"priv/muro/one.muro", MyApp.Billing.Rounding, "lib/my_app/billing/rounding.ex"}
       ]
@@ -17,7 +17,7 @@ defmodule Muro.ManifestTest do
     """)
 
     assert {:ok, manifest} = Muro.Manifest.load(dir)
-    assert manifest.version == "0.18.2"
+    assert manifest.version == "0.18.3"
     assert manifest.fuel == Muro.Check.default_fuel()
     assert manifest.source == :muro_exs
 
@@ -345,6 +345,41 @@ defmodule Muro.ManifestTest do
              {:git, "https://github.com/acme/shared-wire", [tag: "v1.2.0", root: "priv/muro"]}
   end
 
+  test "a pin-free git spec normalizes to an empty option list" do
+    dir = tmp_dir()
+    url = "https://github.com/acme/shared-wire"
+
+    File.write!(Path.join(dir, "muro.exs"), """
+    [
+      muro_deps: [
+        bare: {:git, #{inspect(url)}},
+        empty: {:git, #{inspect(url)}, []},
+        rooted: {:git, #{inspect(url)}, root: "priv/muro"},
+        dotted: {:git, #{inspect(url)}, root: "."},
+        tagged: {:git, #{inspect(url)}, root: "priv/muro", tag: "v1.2.0"},
+        referred: {:git, #{inspect(url)}, root: "priv/muro", ref: "topic"}
+      ]
+    ]
+    """)
+
+    assert {:ok, deps} = Muro.Manifest.load_deps(dir)
+    by_name = Map.new(deps, fn dep -> {dep.name, dep} end)
+
+    assert by_name["bare"].pin == :head
+    assert by_name["bare"].root == "."
+    assert by_name["bare"].source == {:git, url, []}
+    assert by_name["empty"].pin == :head
+    assert by_name["empty"].source == {:git, url, []}
+    assert by_name["dotted"].source == {:git, url, []}
+    assert by_name["rooted"].pin == :head
+    assert by_name["rooted"].root == "priv/muro"
+    assert by_name["rooted"].source == {:git, url, [root: "priv/muro"]}
+    assert by_name["tagged"].pin == {:tag, "v1.2.0"}
+    assert by_name["tagged"].source == {:git, url, [tag: "v1.2.0", root: "priv/muro"]}
+    assert by_name["referred"].pin == {:ref, "topic"}
+    assert by_name["referred"].source == {:git, url, [ref: "topic", root: "priv/muro"]}
+  end
+
   test "load validates muro_deps and still requires muro and modules" do
     dir = tmp_dir()
     write_book(dir, "priv/muro/one.muro")
@@ -364,7 +399,8 @@ defmodule Muro.ManifestTest do
       {[shared: {:git, "https://example.com/a", tag: "v1", ref: "main"}],
        "tag and ref are both set"},
       {[shared: {:git, "https://example.com/a", branch: "main"}], "unknown option"},
-      {[shared: {:git, "https://example.com/a", []}], "expected one of tag: or ref:"},
+      {[shared: {:git, "https://example.com/a", tga: "v1"}], "unknown option [:tga]"},
+      {[shared: {:git, "https://example.com/a", root: "../out"}], "root"},
       {[Shared: {:git, "https://example.com/a", tag: "v1"}], "name must match"},
       {[shared: {:hex, "pricing_rules", "not a req"}], "requirement"},
       {[shared: {:hex, "Pricing", "~> 1.0"}], "package"},
@@ -451,11 +487,11 @@ defmodule Muro.ManifestTest do
   end
 
   test "version pin names both versions" do
-    assert Muro.Manifest.version_pin("0.18.2", "0.18.2") == :ok
+    assert Muro.Manifest.version_pin("0.18.3", "0.18.3") == :ok
 
-    assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.18.2")
+    assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.18.3")
     assert message =~ "manifest says 0.16.72"
-    assert message =~ "running 0.18.2"
+    assert message =~ "running 0.18.3"
 
     assert Muro.Manifest.version_pin("0.18.0", "0.18.0") == :ok
 

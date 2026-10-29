@@ -26,6 +26,13 @@ defmodule Muro.DepsTest do
   import ExUnit.CaptureIO
   import Muro.DepsTest.Git
 
+  setup do
+    System.put_env("GIT_CONFIG_NOSYSTEM", "1")
+    System.put_env("GIT_CONFIG_GLOBAL", "/dev/null")
+    System.put_env("GIT_CONFIG_SYSTEM", "/dev/null")
+    :ok
+  end
+
   @wire "def wire : run Nat := 0\n"
   @wire2 "def wire : run Nat := suc 0\n"
   @banner "# muro.lock: written by mix muro.deps.get. Do not edit."
@@ -112,6 +119,63 @@ defmodule Muro.DepsTest do
     assert Muro.Deps.Git.version_label(%{pin: {:ref, "topic"}}, sha) == "topic@" <> short
     assert Muro.Deps.Git.version_label(%{pin: {:ref, sha}}, sha) == short
     assert Muro.Deps.Git.version_label(%{pin: {:ref, short}}, sha) == short
+    assert Muro.Deps.Git.version_label(%{pin: :head, branch: "trunk"}, sha) == "trunk@" <> short
+
+    assert Muro.Deps.Git.branch_from_symref("ref: refs/heads/trunk\tHEAD\n#{sha}\tHEAD\n") ==
+             {:ok, "trunk"}
+
+    assert Muro.Deps.Git.branch_from_symref("ref: refs/heads/feature/one\tHEAD\n") ==
+             {:ok, "feature/one"}
+
+    assert Muro.Deps.Git.branch_from_symref("#{sha}\tHEAD\n") == :error
+    assert Muro.Deps.Git.branch_from_symref("ref: refs/tags/v1\tHEAD\n") == :error
+  end
+
+  test "a pin-free git lock round-trips and a tag still precedes root" do
+    sha = String.duplicate("a", 40)
+    digest = String.duplicate("ab", 32)
+
+    swapped = """
+    #{@banner}
+    %{
+      "shared" => %{
+        files: %{
+          "wire.muro" => "#{digest}"
+        },
+        resolved: {:git, "#{sha}"},
+        source: {:git, "https://example.com/shared.git", [root: "priv/muro", tag: "v1.2.0"]},
+        version: "1.2.0"
+      }
+    }
+    """
+
+    assert {:ok, decoded} = Muro.Lock.decode(swapped)
+
+    assert decoded["shared"].source ==
+             {:git, "https://example.com/shared.git", [tag: "v1.2.0", root: "priv/muro"]}
+
+    pin_free = %{
+      "shared" => %{
+        decoded["shared"]
+        | source: {:git, "https://example.com/shared.git", []},
+          version: "trunk@aaaaaaa"
+      }
+    }
+
+    encoded = Muro.Lock.encode(pin_free)
+    assert encoded =~ "source: {:git, \"https://example.com/shared.git\", []}"
+    assert {:ok, ^pin_free} = Muro.Lock.decode(encoded)
+
+    rooted = %{
+      "shared" => %{
+        pin_free["shared"]
+        | source: {:git, "https://example.com/shared.git", [root: "priv/muro"]}
+      }
+    }
+
+    rooted_text = Muro.Lock.encode(rooted)
+    assert rooted_text =~ "[root: \"priv/muro\"]"
+    assert {:ok, ^rooted} = Muro.Lock.decode(rooted_text)
   end
 
   test "a missing git executable names PATH and says nothing was written" do
@@ -571,6 +635,173 @@ defmodule Muro.DepsTest do
     refute File.exists?(Path.join(link_dir, "muro.lock"))
   end
 
+  git_test "a pin-free spec follows a default branch that is not main" do
+    repo = init_repo(%{"wire.muro" => @wire}, "trunk")
+    sha = head_sha(repo)
+    short = String.slice(sha, 0, 7)
+    url = file_url(repo)
+    dir = tmp_dir()
+    write_pin_free(dir, "shared_wire", url, :bare)
+
+    book =
+      write_file(
+        dir,
+        "book.muro",
+        "import \"pkg:shared_wire/wire.muro\"\ndef use : run Nat := wire\n"
+      )
+
+    out = task_get!(dir)
+    assert out =~ "fetched shared_wire trunk@#{short} (1 file)"
+    assert out =~ "wrote muro.lock"
+
+    {:ok, lock} = Muro.Lock.decode(File.read!(Path.join(dir, "muro.lock")))
+    assert lock["shared_wire"].source == {:git, url, []}
+    assert lock["shared_wire"].resolved == {:git, sha}
+    assert lock["shared_wire"].version == "trunk@" <> short
+    assert File.read!(Path.join(dir, "muro_deps/shared_wire/wire.muro")) == @wire
+
+    assert {:ok, [line]} = Muro.conforms(book)
+    assert line =~ ~r/^conforms to shared_wire trunk@#{short} \(sha256 [0-9a-f]{64}\)$/
+
+    assert task_get!(dir) =~ "muro.lock unchanged"
+  end
+
+  git_test "a pin-free spec may name a root" do
+    repo =
+      init_repo(
+        %{"priv/muro/wire.muro" => @wire, "other.muro" => @wire2, "README" => "x"},
+        "trunk"
+      )
+
+    sha = head_sha(repo)
+    short = String.slice(sha, 0, 7)
+    url = file_url(repo)
+    dir = tmp_dir()
+    write_pin_free(dir, "shared_wire", url, {:root, "priv/muro"})
+
+    out = task_get!(dir)
+    assert out =~ "fetched shared_wire trunk@#{short} (1 file)"
+    assert File.read!(Path.join(dir, "muro_deps/shared_wire/wire.muro")) == @wire
+    refute File.exists?(Path.join(dir, "muro_deps/shared_wire/other.muro"))
+
+    {:ok, lock} = Muro.Lock.decode(File.read!(Path.join(dir, "muro.lock")))
+    assert lock["shared_wire"].source == {:git, url, [root: "priv/muro"]}
+    assert lock["shared_wire"].resolved == {:git, sha}
+    assert lock["shared_wire"].version == "trunk@" <> short
+  end
+
+  git_test "renaming the default branch is followed on the next deps.get" do
+    repo = init_repo(%{"wire.muro" => @wire}, "trunk")
+    sha = head_sha(repo)
+    short = String.slice(sha, 0, 7)
+    dir = tmp_dir()
+    write_pin_free(dir, "shared_wire", file_url(repo), :bare)
+    task_get!(dir)
+
+    git!(repo, ["branch", "-m", "trunk", "main"])
+    git!(repo, ["symbolic-ref", "HEAD", "refs/heads/main"])
+
+    out = task_get!(dir)
+    assert out =~ "fetched shared_wire main@#{short}"
+    assert out =~ "wrote muro.lock"
+    {:ok, lock} = Muro.Lock.decode(File.read!(Path.join(dir, "muro.lock")))
+    assert lock["shared_wire"].resolved == {:git, sha}
+    assert lock["shared_wire"].version == "main@" <> short
+    assert lock["shared_wire"].source == {:git, file_url(repo), []}
+  end
+
+  git_test "a new commit on the default branch moves the locked revision" do
+    repo = init_repo(%{"wire.muro" => @wire}, "trunk")
+    old = head_sha(repo)
+    dir = tmp_dir()
+    write_pin_free(dir, "shared_wire", file_url(repo), :bare)
+    task_get!(dir)
+
+    File.write!(Path.join(repo, "wire.muro"), @wire2)
+    git!(repo, ["add", "."])
+    git!(repo, ["commit", "-m", "move"])
+    sha = head_sha(repo)
+    short = String.slice(sha, 0, 7)
+    refute sha == old
+
+    out = task_get!(dir)
+    assert out =~ "fetched shared_wire trunk@#{short}"
+    assert out =~ "changed wire.muro"
+    {:ok, lock} = Muro.Lock.decode(File.read!(Path.join(dir, "muro.lock")))
+    assert lock["shared_wire"].resolved == {:git, sha}
+    assert lock["shared_wire"].version == "trunk@" <> short
+    assert File.read!(Path.join(dir, "muro_deps/shared_wire/wire.muro")) == @wire2
+  end
+
+  git_test "a remote whose HEAD points at a missing branch is refused" do
+    repo = init_repo(%{"wire.muro" => @wire}, "trunk")
+    git!(repo, ["symbolic-ref", "HEAD", "refs/heads/no-such"])
+    dir = tmp_dir()
+    write_pin_free(dir, "shared_wire", file_url(repo), :bare)
+
+    assert {:error, message} = Muro.Deps.get(dir)
+
+    assert String.starts_with?(
+             message,
+             "muro_deps entry shared_wire: remote has no default branch; add tag: or ref:"
+           )
+
+    assert message =~ "unchanged"
+    refute message =~ "HEAD@"
+    refute File.exists?(Path.join(dir, "muro.lock"))
+    refute File.dir?(Path.join(dir, "muro_deps/shared_wire"))
+  end
+
+  git_test "a detached remote HEAD with no branch name is refused" do
+    repo = init_repo(%{"wire.muro" => @wire})
+    parent = tmp_dir()
+    bare = Path.join(parent, "origin.git")
+    git!(parent, ["clone", "--bare", repo, bare])
+    branch = String.trim(git!(bare, ["rev-parse", "--abbrev-ref", "HEAD"]))
+    sha = String.trim(git!(bare, ["rev-parse", "HEAD"]))
+    git!(bare, ["update-ref", "--no-deref", "HEAD", sha])
+    git!(bare, ["update-ref", "-d", "refs/heads/" <> branch])
+
+    dir = tmp_dir()
+    write_pin_free(dir, "shared_wire", file_url(bare), :bare)
+    assert {:error, message} = Muro.Deps.get(dir)
+
+    assert String.starts_with?(
+             message,
+             "muro_deps entry shared_wire: remote has no default branch; add tag: or ref:"
+           )
+
+    refute message =~ "HEAD@"
+    refute File.exists?(Path.join(dir, "muro.lock"))
+  end
+
+  git_test "{:git, url} and {:git, url, []} are the same locked dependency" do
+    repo = init_repo(%{"wire.muro" => @wire}, "trunk")
+    url = file_url(repo)
+    dir = tmp_dir()
+    write_pin_free(dir, "shared_wire", url, :bare)
+
+    book =
+      write_file(
+        dir,
+        "book.muro",
+        "import \"pkg:shared_wire/wire.muro\"\ndef use : run Nat := wire\n"
+      )
+
+    task_get!(dir)
+    locked = File.read!(Path.join(dir, "muro.lock"))
+
+    write_pin_free(dir, "shared_wire", url, :empty)
+    assert Muro.check_file(book) == :ok
+    assert task_get!(dir) =~ "muro.lock unchanged"
+    assert File.read!(Path.join(dir, "muro.lock")) == locked
+
+    write_pin_free(dir, "shared_wire", url, :bare)
+    assert Muro.check_file(book) == :ok
+    assert task_get!(dir) =~ "muro.lock unchanged"
+    assert File.read!(Path.join(dir, "muro.lock")) == locked
+  end
+
   defp wire_line(text) do
     text
     |> String.split("\n")
@@ -631,6 +862,32 @@ defmodule Muro.DepsTest do
     """)
   end
 
+  defp write_pin_free(dir, name, url, :bare) do
+    write_raw_manifest(dir, name, "{:git, #{inspect(url)}}")
+  end
+
+  defp write_pin_free(dir, name, url, :empty) do
+    write_raw_manifest(dir, name, "{:git, #{inspect(url)}, []}")
+  end
+
+  defp write_pin_free(dir, name, url, {:root, root}) do
+    write_raw_manifest(dir, name, "{:git, #{inspect(url)}, root: #{inspect(root)}}")
+  end
+
+  defp write_raw_manifest(dir, name, spec) do
+    File.write!(Path.join(dir, "muro.exs"), """
+    [
+      muro_deps: [
+        #{name}: #{spec}
+      ]
+    ]
+    """)
+  end
+
+  defp head_sha(dir) do
+    String.trim(git!(dir, ["rev-parse", "HEAD"]))
+  end
+
   defp write_file(dir, rel, bytes) do
     path = Path.join(dir, rel)
     File.mkdir_p!(Path.dirname(path))
@@ -646,9 +903,13 @@ defmodule Muro.DepsTest do
     end)
   end
 
-  defp init_repo(files) do
+  defp init_repo(files, branch \\ nil) do
     dir = tmp_dir()
-    git!(dir, ["init"])
+    init = if branch, do: ["init", "-b", branch], else: ["init"]
+    git!(dir, init)
+    git!(dir, ["config", "user.name", "t"])
+    git!(dir, ["config", "user.email", "t@t"])
+    git!(dir, ["config", "init.defaultBranch", "main"])
     git!(dir, ["config", "core.autocrlf", "false"])
     git!(dir, ["config", "uploadpack.allowReachableSHA1InWant", "true"])
     git!(dir, ["config", "uploadpack.allowAnySHA1InWant", "true"])
@@ -682,7 +943,13 @@ defmodule Muro.DepsTest do
           | args
         ],
         cd: dir,
-        stderr_to_stdout: true
+        stderr_to_stdout: true,
+        env: [
+          {"GIT_CONFIG_NOSYSTEM", "1"},
+          {"GIT_CONFIG_GLOBAL", "/dev/null"},
+          {"GIT_CONFIG_SYSTEM", "/dev/null"},
+          {"GIT_TERMINAL_PROMPT", "0"}
+        ]
       )
 
     if status != 0 do
