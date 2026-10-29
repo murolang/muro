@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.18.4
+
+`mix muro.mutate path.muro` reports which evidence constrains each `run` definition. For every `run` and `run internal` definition in the file it builds type-preserving mutants, in a fixed order, and re-checks the definitions that mention the mutated name. Evidence, spec, data, and the prelude are left unchanged. A mutant the checker rejects is discarded and counted. A mutant whose body converts with the original, under `Muro.Check.conv/4` and the book's fuel, is `equivalent`. A mutant that makes a depending definition fail is `killed`, with that definition's name and location. A mutant the fuel cannot decide is `out_of_fuel`. A mutant that type-checks, whose conversion with the original fails within the fuel, and that leaves every re-checked definition checking, is `surviving`.
+
+`--only name` may be repeated. `--max-mutants-per-def N` caps candidates per definition (default 100). `--max-survivors N` exits 1 when more than `N` survive. `--json` prints the same report as one object. `--fuel` is the checker's fuel and applies to the original check. A book that does not check is refused with exit 2 and is not mutated. The text header records how many evidence definitions were re-checked. The manual page is [Mutation](manual/mutate.md).
+
+### Package
+
+- Version 0.18.4.
+
 ## 0.18.3
 
 A git package may leave out both `tag:` and `ref:`. `{:git, url}` and `{:git, url, []}` are the same spec, and `{:git, url, root: "priv/muro"}` is that spec with a directory. The fetch is `git clone --depth 1` with no `--branch`, so the clone follows the remote's default branch, whatever that branch is named. The lock records the commit. `version` is `<branch>@<sha7>`, the same shape as a branch `ref:`, and the `conforms to` line uses it. The branch name is read from the clone. A remote whose HEAD names no branch is refused, and the message says to add `tag:` or `ref:`. `mix muro.deps.get` resolves the spec again on every run. `mix muro.check` and `mix muro.gen` still read only `muro.lock` and `muro_deps/`.

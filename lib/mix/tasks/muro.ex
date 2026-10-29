@@ -20,8 +20,9 @@ defmodule Mix.Tasks.Muro do
   load and start `:muro` from the installed archive. The host is neither
   compiled nor started.
 
-  `mix muro.check`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`,
-  and `mix muro.deps.get` call `ensure_started/0` before they run.
+  `mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`,
+  `mix muro.init`, and `mix muro.deps.get` call `ensure_started/0` before
+  they run.
   A task added later calls it too, and follows the same rule.
   The version line is the copy that ran.
 
@@ -31,6 +32,7 @@ defmodule Mix.Tasks.Muro do
 
   @tasks [
     Mix.Tasks.Muro.Check,
+    Mix.Tasks.Muro.Mutate,
     Mix.Tasks.Muro.Emit,
     Mix.Tasks.Muro.Gen,
     Mix.Tasks.Muro.Init,

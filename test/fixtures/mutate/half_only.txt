@@ -1,0 +1,69 @@
+examples/half_ok.muro
+half: re-checked 1 of 5 evidence definitions
+killed: 5
+surviving: 1
+equivalent: 0
+out_of_fuel: 0
+discarded: 11 (type 7, termination 4)
+swap_arms: discarded type 2, termination 0
+replace_ctor: discarded type 3, termination 0
+replace_var: discarded type 2, termination 4
+replace_call: discarded type 0, termination 0
+replace_rec_arm: discarded type 0, termination 0
+swap_args: discarded type 0, termination 0
+half#1 swap_arms examples/half_ok.muro:21:5 discarded type
+  before: match n motive (λ x → Nat) | 0 => 0 | suc n => match n motive (λ x → Nat) | 0 => 0 | suc n => suc(half n)
+  after: match n motive (λ x → Nat) | 0 => match n1 motive (λ x → Nat) | 0 => 0 | suc n => suc(half n) | suc n => 0
+half#2 replace_rec_arm examples/half_ok.muro:21:5 killed
+  by half_ok at examples/half_ok.muro:37:1
+  before: match n motive (λ x → Nat) | 0 => 0 | suc n => match n motive (λ x → Nat) | 0 => 0 | suc n => suc(half n)
+  after: match n motive (λ x → Nat) | 0 => 0 | suc n => 0
+half#3 replace_var examples/half_ok.muro:21:11 discarded termination
+  before: n
+  after: 0
+half#4 replace_ctor examples/half_ok.muro:22:14 discarded type
+  before: 0
+  after: suc(n)
+half#5 replace_ctor examples/half_ok.muro:22:14 killed
+  by half_ok at examples/half_ok.muro:37:1
+  before: 0
+  after: suc(0)
+half#6 swap_arms examples/half_ok.muro:24:9 discarded type
+  before: match n1 motive (λ x → Nat) | 0 => 0 | suc n => suc(half n)
+  after: match n1 motive (λ x → Nat) | 0 => suc(half p) | suc n => 0
+half#7 replace_rec_arm examples/half_ok.muro:24:9 killed
+  by half_ok at examples/half_ok.muro:37:1
+  before: match n1 motive (λ x → Nat) | 0 => 0 | suc n => suc(half n)
+  after: match n1 motive (λ x → Nat) | 0 => 0 | suc n => 0
+half#8 replace_var examples/half_ok.muro:24:15 discarded type
+  before: n1
+  after: n
+half#9 replace_var examples/half_ok.muro:24:15 discarded termination
+  before: n1
+  after: 0
+half#10 replace_ctor examples/half_ok.muro:25:18 discarded type
+  before: 0
+  after: suc(n)
+half#11 replace_ctor examples/half_ok.muro:25:18 discarded type
+  before: 0
+  after: suc(n1)
+half#12 replace_ctor examples/half_ok.muro:25:18 surviving
+  before: 0
+  after: suc(0)
+half#13 replace_ctor examples/half_ok.muro:26:22 killed
+  by half_ok at examples/half_ok.muro:37:1
+  before: suc(half p)
+  after: 0
+half#14 replace_call examples/half_ok.muro:26:26 killed
+  by half_ok at examples/half_ok.muro:37:1
+  before: half p
+  after: pred p
+half#15 replace_var examples/half_ok.muro:26:31 discarded termination
+  before: p
+  after: n
+half#16 replace_var examples/half_ok.muro:26:31 discarded type
+  before: p
+  after: n1
+half#17 replace_var examples/half_ok.muro:26:31 discarded termination
+  before: p
+  after: 0

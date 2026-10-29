@@ -8,6 +8,9 @@ defmodule Muro.Parser do
   @src_key {__MODULE__, :src}
   @noting_key {__MODULE__, :noting_proc}
   @notes_key {__MODULE__, :proc_notes}
+  @span_key {__MODULE__, :span_on}
+  @span_stack {__MODULE__, :span_stack}
+  @span_bad {__MODULE__, :span_bad}
 
   def parse(src) when is_binary(src) do
     Process.put(@src_key, src)
@@ -35,6 +38,100 @@ defmodule Muro.Parser do
     src = Process.get(@src_key, "")
     Print.offset_to_loc(src, max(0, byte_size(src) - byte_size(rest)))
   end
+
+  # Source spans for one definition body, parallel to `Muro.Ast.children/1`.
+  # Off except while that body is parsed. A mismatch drops the span; the
+  # body itself is unchanged.
+  defp span_on?, do: Process.get(@span_key) == true
+
+  defp push_span(loc, n) when is_integer(n) do
+    if span_on?() do
+      stack = Process.get(@span_stack, [])
+
+      if length(stack) < n do
+        Process.put(@span_bad, true)
+        Process.put(@span_stack, [{loc, []} | stack])
+      else
+        {raw, rest} = Enum.split(stack, n)
+        Process.put(@span_stack, [{loc, Enum.reverse(raw)} | rest])
+      end
+    end
+
+    :ok
+  end
+
+  defp push_node(node) do
+    if span_on?(), do: Process.put(@span_stack, [node | Process.get(@span_stack, [])])
+    :ok
+  end
+
+  defp pop_span do
+    case Process.get(@span_stack, []) do
+      [top | rest] ->
+        Process.put(@span_stack, rest)
+        top
+
+      [] ->
+        Process.put(@span_bad, true)
+        {{1, 1}, []}
+    end
+  end
+
+  defp ok_leaf(loc, term, rest) do
+    push_span(loc, 0)
+    {:ok, term, rest}
+  end
+
+  defp ok_node(loc, term, n, rest) do
+    push_span(loc, n)
+    {:ok, term, rest}
+  end
+
+  defp without_span(fun) do
+    old = Process.get(@span_key)
+    Process.put(@span_key, false)
+
+    try do
+      fun.()
+    after
+      Process.put(@span_key, old)
+    end
+  end
+
+  defp parse_body_term(s) do
+    Process.put(@span_key, true)
+    Process.put(@span_stack, [])
+    Process.put(@span_bad, false)
+
+    try do
+      case parse_term(s, 0) do
+        {:ok, term, rest} ->
+          span =
+            case {Process.get(@span_bad), Process.get(@span_stack)} do
+              {false, [one]} -> if(span_match?(term, one), do: one, else: nil)
+              _ -> nil
+            end
+
+          {:ok, term, span, rest}
+
+        {:error, _} = err ->
+          err
+      end
+    after
+      Process.delete(@span_key)
+      Process.delete(@span_stack)
+      Process.delete(@span_bad)
+    end
+  end
+
+  defp span_match?(term, {_loc, kids}) do
+    cs = Muro.Ast.children(term)
+
+    length(cs) == length(kids) and
+      Enum.all?(Enum.zip(cs, kids), fn {c, k} -> span_match?(c, k) end)
+  end
+
+  defp span_match?(_, _), do: false
 
   # An error with nothing left names the last line of the file.
   defp err(rest, msg) do
@@ -2617,8 +2714,9 @@ defmodule Muro.Parser do
     with {:ok, tag, rest} <- parse_mode(s),
          {:ok, ty, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), ":="),
-         {:ok, body, rest} <- parse_term(skip(rest), 0) do
-      {:ok, Map.merge(%{name: name, type: ty, body: body, loc: loc}, tag), rest}
+         {:ok, body, span, rest} <- parse_body_term(skip(rest)) do
+      base = %{name: name, type: ty, body: body, loc: loc, body_span: span}
+      {:ok, Map.merge(base, tag), rest}
     end
   end
 
@@ -2842,54 +2940,74 @@ defmodule Muro.Parser do
 
   # Pratt-ish: apps are juxtaposition, arrows bind looser via Π/λ.
   defp parse_term(s, min_bp) do
-    with {:ok, left, rest} <- parse_atom(skip(s)) do
-      parse_infix(rest, left, min_bp)
+    s = skip(s)
+
+    with {:ok, left, rest} <- parse_atom(s) do
+      parse_infix(rest, left, min_bp, here(s))
     end
   end
 
-  defp parse_infix(s, left, min_bp) do
+  defp parse_infix(s, left, min_bp, start_loc) do
     s0 = skip(s)
 
     cond do
       arrow_tok?(s0) and min_bp <= 5 ->
         with {:ok, rest} <- eat_arrow(s0),
              {:ok, right, rest} <- parse_term(skip(rest), 5) do
-          parse_infix(rest, {:pi, :affine, left, "_", right}, min_bp)
+          push_span(start_loc, 2)
+          parse_infix(rest, {:pi, :affine, left, "_", right}, min_bp, start_loc)
         end
 
       times_tok?(s0) and min_bp <= 15 ->
         with {:ok, rest} <- eat_times(s0),
              {:ok, right, rest} <- parse_term(skip(rest), 16) do
-          parse_infix(rest, {:prod, left, right}, min_bp)
+          push_span(start_loc, 2)
+          parse_infix(rest, {:prod, left, right}, min_bp, start_loc)
         end
 
       sum_tok?(s0) and min_bp <= 12 ->
         with {:ok, rest} <- eat_sum(s0),
              {:ok, right, rest} <- parse_term(skip(rest), 13) do
-          parse_infix(rest, {:app, {:app, {:var, "Either"}, left}, right}, min_bp)
+          finish_bin_app(start_loc, here(s0), "Either", left, right, rest, min_bp)
         end
 
       cons_tok?(s0) and min_bp <= 18 ->
         with {:ok, rest} <- eat_cons(s0),
              {:ok, right, rest} <- parse_term(skip(rest), 18) do
-          parse_infix(rest, {:app, {:app, {:var, "cons"}, left}, right}, min_bp)
+          finish_bin_app(start_loc, here(s0), "cons", left, right, rest, min_bp)
         end
 
       bisim_tok?(s0) and min_bp <= 10 ->
         with {:ok, rest} <- eat_bisim(s0),
              {:ok, right, rest} <- parse_term(skip(rest), 11) do
-          parse_infix(rest, {:bisim, left, right}, min_bp)
+          push_span(start_loc, 2)
+          parse_infix(rest, {:bisim, left, right}, min_bp, start_loc)
         end
 
       starts_atom?(s0) and min_bp <= 20 and not ctor_decl_start?(s, s0) and
           not session_line?(s, s0) ->
         with {:ok, arg, rest} <- parse_atom(s0) do
-          parse_infix(rest, {:app, left, arg}, min_bp)
+          push_span(start_loc, 2)
+          parse_infix(rest, {:app, left, arg}, min_bp, start_loc)
         end
 
       true ->
         {:ok, left, s}
     end
+  end
+
+  # `A ⊎ B` and `A :: B` are applications of a name that is not written.
+  # The span tree matches that term: (head left) right.
+  defp finish_bin_app(start_loc, op_loc, head, left, right, rest, min_bp) do
+    if span_on?() do
+      right_s = pop_span()
+      left_s = pop_span()
+      var = {op_loc, []}
+      inner = {op_loc, [var, left_s]}
+      push_node({start_loc, [inner, right_s]})
+    end
+
+    parse_infix(rest, {:app, {:app, {:var, head}, left}, right}, min_bp, start_loc)
   end
 
   defp arrow_tok?(s) do
@@ -3006,19 +3124,19 @@ defmodule Muro.Parser do
         parse_atom_lit(s)
 
       word_kw?(s, "Atom") ->
-        {:ok, :atom, after_kw(s, "Atom")}
+        leaf(s, :atom, after_kw(s, "Atom"))
 
       word_kw?(s, "Type") ->
-        {:ok, :typ, after_kw(s, "Type")}
+        leaf(s, :typ, after_kw(s, "Type"))
 
       word_kw?(s, "Nat") ->
-        {:ok, :nat, after_kw(s, "Nat")}
+        leaf(s, :nat, after_kw(s, "Nat"))
 
       word_kw?(s, "I64") ->
-        {:ok, :i64, after_kw(s, "I64")}
+        leaf(s, :i64, after_kw(s, "I64"))
 
       word_kw?(s, "F32") ->
-        {:ok, :f32ty, after_kw(s, "F32")}
+        leaf(s, :f32ty, after_kw(s, "F32"))
 
       word_kw?(s, "Tensor") ->
         parse_binary(s, "Tensor", :tensor)
@@ -3039,28 +3157,28 @@ defmodule Muro.Parser do
         parse_binary(s, "packI", :packi)
 
       word_kw?(s, "Unit") ->
-        {:ok, :unit, after_kw(s, "Unit")}
+        leaf(s, :unit, after_kw(s, "Unit"))
 
       word_kw?(s, "Empty") ->
-        {:ok, :empty, after_kw(s, "Empty")}
+        leaf(s, :empty, after_kw(s, "Empty"))
 
       word_kw?(s, "refl") ->
-        {:ok, :rfl, after_kw(s, "refl")}
+        leaf(s, :rfl, after_kw(s, "refl"))
 
       word_kw?(s, "tt") ->
-        {:ok, :one, after_kw(s, "tt")}
+        leaf(s, :one, after_kw(s, "tt"))
 
       has_prefix?(s, "?") ->
-        {:ok, {:hole, here(s)}, after_kw(s, "?")}
+        leaf(s, {:hole, here(s)}, after_kw(s, "?"))
 
       has_prefix?(s, "0") ->
-        {:ok, :ze, after_kw(s, "0")}
+        leaf(s, :ze, after_kw(s, "0"))
 
       word_kw?(s, "suc") ->
         parse_suc(s)
 
       has_prefix?(s, "[]") ->
-        {:ok, {:var, "nil"}, after_kw(s, "[]")}
+        leaf(s, {:var, "nil"}, after_kw(s, "[]"))
 
       word_kw?(s, "Stream") ->
         parse_stream(s)
@@ -3082,24 +3200,16 @@ defmodule Muro.Parser do
 
       # fst / snd are sugar for let: fst t = let (a, b) = t in a.
       word_kw?(s, "fst") ->
-        with {:ok, e, rest} <- parse_unary_arg(s, "fst") do
-          {:ok, fst_sugar(e), rest}
-        end
+        parse_proj(s, "fst", :fst)
 
       word_kw?(s, "snd") ->
-        with {:ok, e, rest} <- parse_unary_arg(s, "snd") do
-          {:ok, snd_sugar(e), rest}
-        end
+        parse_proj(s, "snd", :snd)
 
       word_kw?(s, "head") ->
-        with {:ok, e, rest} <- parse_unary_arg(s, "head") do
-          {:ok, fst_sugar({:ucons, e}), rest}
-        end
+        parse_proj(s, "head", :head)
 
       word_kw?(s, "tail") ->
-        with {:ok, e, rest} <- parse_unary_arg(s, "tail") do
-          {:ok, snd_sugar({:ucons, e}), rest}
-        end
+        parse_proj(s, "tail", :tail)
 
       word_kw?(s, "Π") or word_kw?(s, "Pi") ->
         parse_pi(s)
@@ -3120,30 +3230,39 @@ defmodule Muro.Parser do
         parse_idt(s)
 
       first_char(s) == ?( ->
-        with {:ok, rest} <- tok(s, "("),
-             {:ok, t, rest} <- parse_term(skip(rest), 0) do
-          rest1 = skip(rest)
-
-          if has_prefix?(rest1, ",") do
-            with {:ok, rest} <- tok(rest1, ","),
-                 {:ok, u, rest} <- parse_term(skip(rest), 0),
-                 {:ok, rest} <- tok(skip(rest), ")") do
-              {:ok, {:pair, t, u}, rest}
-            end
-          else
-            with {:ok, rest} <- tok(rest1, ")") do
-              {:ok, t, rest}
-            end
-          end
-        end
+        parse_paren(s)
 
       true ->
         case ident(s) do
-          {:ok, name, rest} -> {:ok, {:var_or_def, name}, rest}
+          {:ok, name, rest} -> leaf(s, {:var_or_def, name}, rest)
           _ -> {:error, err(s, "expected term")}
         end
     end
     |> resolve_name()
+  end
+
+  defp leaf(s, term, rest), do: ok_leaf(here(s), term, rest)
+
+  # A parenthesis is not a node. A pair is.
+  defp parse_paren(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- tok(s, "("),
+         {:ok, t, rest} <- parse_term(skip(rest), 0) do
+      rest1 = skip(rest)
+
+      if has_prefix?(rest1, ",") do
+        with {:ok, rest} <- tok(rest1, ","),
+             {:ok, u, rest} <- parse_term(skip(rest), 0),
+             {:ok, rest} <- tok(skip(rest), ")") do
+          ok_node(loc, {:pair, t, u}, 2, rest)
+        end
+      else
+        with {:ok, rest} <- tok(rest1, ")") do
+          {:ok, t, rest}
+        end
+      end
+    end
   end
 
   defp resolve_name({:ok, {:var_or_def, name}, rest}) do
@@ -3156,6 +3275,8 @@ defmodule Muro.Parser do
   defp resolve_name(other), do: other
 
   defp parse_suc(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "suc") do
       rest = skip(rest)
 
@@ -3163,45 +3284,53 @@ defmodule Muro.Parser do
         with {:ok, rest} <- tok(rest, "("),
              {:ok, t, rest} <- parse_term(skip(rest), 0),
              {:ok, rest} <- tok(skip(rest), ")") do
-          {:ok, {:su, t}, rest}
+          ok_node(loc, {:su, t}, 1, rest)
         end
       else
         with {:ok, t, rest} <- parse_atom(rest) do
-          {:ok, {:su, t}, rest}
+          ok_node(loc, {:su, t}, 1, rest)
         end
       end
     end
   end
 
   defp parse_stream(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "Stream"),
          {:ok, a, rest} <- parse_atom(skip(rest)) do
-      {:ok, {:stream, a}, rest}
+      ok_node(loc, {:stream, a}, 1, rest)
     end
   end
 
   defp parse_always(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "Always"),
          {:ok, a, rest} <- parse_atom(skip(rest)),
          {:ok, p, rest} <- parse_atom(skip(rest)),
          {:ok, st, rest} <- parse_atom(skip(rest)) do
-      {:ok, {:always, a, p, st}, rest}
+      ok_node(loc, {:always, a, p, st}, 3, rest)
     end
   end
 
   defp parse_bisim(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "bisim"),
          {:ok, a, rest} <- parse_atom(skip(rest)),
          {:ok, b, rest} <- parse_atom(skip(rest)) do
-      {:ok, {:bisim, a, b}, rest}
+      ok_node(loc, {:bisim, a, b}, 2, rest)
     end
   end
 
   defp parse_unf(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "unfold"),
          {:ok, seed, rest} <- parse_atom(skip(rest)),
          {:ok, f, rest} <- parse_atom(skip(rest)) do
-      {:ok, {:unf, seed, f}, rest}
+      ok_node(loc, {:unf, seed, f}, 2, rest)
     end
   end
 
@@ -3210,16 +3339,20 @@ defmodule Muro.Parser do
   end
 
   defp parse_unary(s, w, tag) do
+    loc = here(skip(s))
+
     with {:ok, e, rest} <- parse_unary_arg(s, w) do
-      {:ok, {tag, e}, rest}
+      ok_node(loc, {tag, e}, 1, rest)
     end
   end
 
   defp parse_binary(s, w, tag) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, w),
          {:ok, a, rest} <- parse_atom(skip(rest)),
          {:ok, b, rest} <- parse_atom(skip(rest)) do
-      {:ok, {tag, a, b}, rest}
+      ok_node(loc, {tag, a, b}, 2, rest)
     end
   end
 
@@ -3228,6 +3361,31 @@ defmodule Muro.Parser do
          {:ok, e, rest} <- parse_atom(skip(rest)) do
       {:ok, e, rest}
     end
+  end
+
+  # fst/snd/head/tail are sugar. The span follows the term they become.
+  defp parse_proj(s, w, which) do
+    loc = here(skip(s))
+
+    with {:ok, e, rest} <- parse_unary_arg(s, w) do
+      case which do
+        :fst -> finish_let_sugar(loc, e, "a", fst_sugar(e), rest)
+        :snd -> finish_let_sugar(loc, e, "b", snd_sugar(e), rest)
+        :head -> finish_uncons_sugar(loc, e, "a", fst_sugar({:ucons, e}), rest)
+        :tail -> finish_uncons_sugar(loc, e, "b", snd_sugar({:ucons, e}), rest)
+      end
+    end
+  end
+
+  defp finish_let_sugar(loc, _e, _var, term, rest) do
+    push_span(loc, 0)
+    ok_node(loc, term, 2, rest)
+  end
+
+  defp finish_uncons_sugar(loc, _e, _var, term, rest) do
+    push_span(loc, 1)
+    push_span(loc, 0)
+    ok_node(loc, term, 2, rest)
   end
 
   defp parse_binder(s) do
@@ -3257,26 +3415,30 @@ defmodule Muro.Parser do
   defp parse_qty(s), do: {:ok, :affine, s}
 
   defp parse_pi(s) do
+    loc = here(skip(s))
     rest = s |> skip() |> eat_kw(["Π", "Pi"])
 
     with {:ok, {q, x, a}, rest} <- parse_binder(rest),
          {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
          {:ok, b, rest} <- parse_term(skip(rest), 0) do
-      {:ok, {:pi, q, a, x, b}, rest}
+      ok_node(loc, {:pi, q, a, x, b}, 2, rest)
     end
   end
 
   defp parse_lam(s) do
+    loc = here(skip(s))
     rest = s |> skip() |> eat_kw(["λ", "lam"])
 
     with {:ok, {q, x, a}, rest} <- parse_binder(rest),
          {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
          {:ok, t, rest} <- parse_term(skip(rest), 0) do
-      {:ok, {:lam, q, a, x, t}, rest}
+      ok_node(loc, {:lam, q, a, x, t}, 2, rest)
     end
   end
 
   defp parse_match(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "match"),
          {:ok, e, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- kw(skip(rest), "motive"),
@@ -3290,24 +3452,27 @@ defmodule Muro.Parser do
       rest = skip(rest)
 
       cond do
-        word_kw?(rest, "0") -> parse_mnat_cases(e, x, p, rest)
-        atom_lit?(rest) -> parse_matom_cases(e, x, p, rest)
-        true -> parse_mdata_cases(e, x, p, rest)
+        word_kw?(rest, "0") -> parse_mnat_cases(loc, e, x, p, rest)
+        atom_lit?(rest) -> parse_matom_cases(loc, e, x, p, rest)
+        true -> parse_mdata_cases(loc, e, x, p, rest)
       end
     end
   end
 
+  # `(x : A)` in a motive names x. A is not a child of the match.
   defp parse_motive_binder(s) do
     s = skip(s)
 
     if has_prefix?(s, "(") do
-      with {:ok, {_q, x, _a}, rest} <- parse_binder(s), do: {:ok, x, rest}
+      without_span(fn ->
+        with {:ok, {_q, x, _a}, rest} <- parse_binder(s), do: {:ok, x, rest}
+      end)
     else
       ident(s)
     end
   end
 
-  defp parse_mnat_cases(e, x, p, rest) do
+  defp parse_mnat_cases(loc, e, x, p, rest) do
     with {:ok, rest} <- kw(rest, "0"),
          {:ok, rest} <- tok(skip(rest), "=>"),
          {:ok, z, rest} <- parse_term(skip(rest), 0),
@@ -3316,7 +3481,7 @@ defmodule Muro.Parser do
          {:ok, y, rest} <- ident(skip(rest)),
          {:ok, rest} <- tok(skip(rest), "=>"),
          {:ok, sc, rest} <- parse_term(skip(rest), 0) do
-      {:ok, {:mnat, e, x, p, z, y, sc}, rest}
+      ok_node(loc, {:mnat, e, x, p, z, y, sc}, 4, rest)
     end
   end
 
@@ -3329,26 +3494,27 @@ defmodule Muro.Parser do
   end
 
   defp parse_atom_lit(s) do
-    <<":", rest::binary>> = skip(s)
+    s = skip(s)
+    <<":", rest::binary>> = s
 
     case rest do
       <<c, _::binary>> when c in ?a..?z or c in ?A..?Z or c == ?_ ->
         {name, rest} = take_ident(rest, "")
-        {:ok, {:atom, name}, rest}
+        leaf(s, {:atom, name}, rest)
 
       _ ->
         {:error, err(s, "expected atom")}
     end
   end
 
-  defp parse_matom_cases(e, x, p, rest) do
+  defp parse_matom_cases(loc, e, x, p, rest) do
     with {:ok, branches, rest} <- parse_matom_branches(rest, []) do
-      {:ok, {:matom, e, x, p, branches}, rest}
+      ok_node(loc, {:matom, e, x, p, branches}, 2 + length(branches), rest)
     end
   end
 
   defp parse_matom_branches(s, acc) do
-    with {:ok, {:atom, name}, rest} <- parse_atom_lit(skip(s)),
+    with {:ok, {:atom, name}, rest} <- without_span(fn -> parse_atom_lit(skip(s)) end),
          {:ok, rest} <- tok(skip(rest), "=>"),
          {:ok, body, rest} <- parse_term(skip(rest), 0) do
       acc = [{name, body} | acc]
@@ -3365,9 +3531,9 @@ defmodule Muro.Parser do
     end
   end
 
-  defp parse_mdata_cases(e, x, p, rest) do
+  defp parse_mdata_cases(loc, e, x, p, rest) do
     with {:ok, branches, rest} <- parse_mdata_branches(rest, []) do
-      {:ok, {:mdata, e, x, p, branches}, rest}
+      ok_node(loc, {:mdata, e, x, p, branches}, 2 + length(branches), rest)
     end
   end
 
@@ -3409,6 +3575,8 @@ defmodule Muro.Parser do
   end
 
   defp parse_memp(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "matchEmpty"),
          {:ok, e, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- kw(skip(rest), "motive"),
@@ -3418,11 +3586,13 @@ defmodule Muro.Parser do
          {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
          {:ok, p, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), ")") do
-      {:ok, {:memp, e, x, p}, rest}
+      ok_node(loc, {:memp, e, x, p}, 2, rest)
     end
   end
 
   defp parse_rwt(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "rewrite"),
          {:ok, eq, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- kw(skip(rest), "motive"),
@@ -3434,7 +3604,7 @@ defmodule Muro.Parser do
          {:ok, rest} <- tok(skip(rest), ")"),
          {:ok, rest} <- kw(skip(rest), "in"),
          {:ok, t, rest} <- parse_term(skip(rest), 0) do
-      {:ok, {:rwt, eq, x, p, t}, rest}
+      ok_node(loc, {:rwt, eq, x, p, t}, 3, rest)
     end
   end
 
@@ -3443,6 +3613,8 @@ defmodule Muro.Parser do
 
   # let (a, b) = e in t
   defp parse_letp(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "let"),
          {:ok, rest} <- tok(skip(rest), "("),
          {:ok, a, rest} <- ident(skip(rest)),
@@ -3453,11 +3625,14 @@ defmodule Muro.Parser do
          {:ok, e, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- kw(skip(rest), "in"),
          {:ok, t, rest} <- parse_term(skip(rest), 0) do
-      {:ok, {:letp, e, a, b, t}, rest}
+      ok_node(loc, {:letp, e, a, b, t}, 2, rest)
     end
   end
 
+  # Written `{a ≡ b : ty}`, stored with the type first.
   defp parse_idt(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- tok(s, "{"),
          {:ok, a, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- either_tok(skip(rest), ["≡", "=="]),
@@ -3465,8 +3640,20 @@ defmodule Muro.Parser do
          {:ok, rest} <- tok(skip(rest), ":"),
          {:ok, ty, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), "}") do
+      push_idt(loc)
       {:ok, {:idt, ty, a, b}, rest}
     end
+  end
+
+  defp push_idt(loc) do
+    if span_on?() do
+      ty = pop_span()
+      b = pop_span()
+      a = pop_span()
+      push_node({loc, [ty, a, b]})
+    end
+
+    :ok
   end
 
   defp eat_lam(s) do
