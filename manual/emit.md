@@ -242,7 +242,7 @@ The C backend has no closures. An unapplied lambda, a definition passed as a val
 
 ## Host data
 
-A `repr` states the host shape of a data type. `mix muro.emit` then writes `decode_<type>/1` and `encode_<type>/1` in the same module as the run functions. Decode takes an Elixir term and returns `{:ok, value}` or `{:error, {path, reason}}`. Encode takes a value of the type and returns the host term. A book with no `repr` emits the same text as before. The other backends ignore a `repr`.
+A `repr` states the host shape of a data type. `mix muro.emit` then writes `decode_<type>/1`, `decode_<type>/2`, and `encode_<type>/2` in the same module as the run functions. Decode takes an Elixir term and returns `{:ok, value, table}` or `{:error, {path, reason}}`. `decode_<type>/1` starts from an empty name table. `decode_<type>/2` starts from the table the host passes. Encode takes `(value, table)` and returns the host term. There is no arity-1 encode. A book with no `repr` emits the same text as before. The other backends ignore a `repr`.
 
 The vocabulary, the strictness rules, and the Nat guard are [Host representations](repr.md).
 

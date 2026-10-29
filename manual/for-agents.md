@@ -91,7 +91,7 @@ lib/muro/place.ex       place / scheme / move, mirror of decide
 lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
 lib/muro/emit.ex        run → Elixir source
-lib/muro/repr.ex        a repr: check the host shape and emit decode/encode. Not a kernel term.
+lib/muro/repr.ex        a repr: check the host shape and emit decode/1, decode/2, and encode/2. Not a kernel term.
 lib/muro/emit/exunit.ex closed equations → one ExUnit module (`--backend exunit`, `kind: :exunit`)
 lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a meeting starts the two processes as each other's peer; a `rec` is a tail call on `drive` (`--backend otp`)
 lib/muro/emit/fsm.ex    a session endpoint is a state machine; the transport stays with the host (`--backend fsm`, `kind: :fsm`)

@@ -69,7 +69,7 @@ pages:
   - file: repr.md
     slug: repr
     title: Host representations
-    summary: A repr states the host shape of a data type. Emit writes strict decode and encode.
+    summary: A repr states the host shape of a data type. Emit writes strict decode and encode, including interned names, maps keyed by data, and an opt-in fallback.
   - file: packages.md
     slug: packages
     title: Packages

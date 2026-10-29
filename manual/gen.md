@@ -11,7 +11,7 @@ In brief: a project commits the Elixir a book emits. `muro.exs` names the module
 
 `mix muro.emit` prints a module. It does not choose a path under `lib/`, format with the project's `.formatter.exs`, or record which book the file came from. This page is that step.
 
-A `repr` is part of the committed module. `decode_<type>/1` and `encode_<type>/1` sit next to the run functions. Change the repr and `mix muro.gen --check` fails, because the book hash changed. See [Host representations](repr.md).
+A `repr` is part of the committed module. `decode_<type>/1`, `decode_<type>/2`, and `encode_<type>/2` sit next to the run functions. Decode returns `{:ok, value, table}`. Encode takes that table. Change the repr and `mix muro.gen --check` fails, because the book hash changed. See [Host representations](repr.md).
 
 ## Manifest
 

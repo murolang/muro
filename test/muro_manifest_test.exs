@@ -456,6 +456,12 @@ defmodule Muro.ManifestTest do
     assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.18.1")
     assert message =~ "manifest says 0.16.72"
     assert message =~ "running 0.18.1"
+
+    assert Muro.Manifest.version_pin("0.18.0", "0.18.0") == :ok
+
+    assert {:error, earlier} = Muro.Manifest.version_pin("0.16.72", "0.18.0")
+    assert earlier =~ "manifest says 0.16.72"
+    assert earlier =~ "running 0.18.0"
   end
 
   test "root follows the working directory outside a Mix project" do

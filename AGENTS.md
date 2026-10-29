@@ -71,7 +71,7 @@ mix muro.emit path.muro --backend fsm       # one state machine per session, on 
 {:ok, files} = Muro.emit_asm("examples/your_file.muro")       # .s
 ```
 
-A `repr` makes `mix muro.emit` also write `decode_<type>/1` and `encode_<type>/1`. See [Host representations](manual/repr.md).
+A `repr` makes `mix muro.emit` also write `decode_<type>/1`, `decode_<type>/2`, and `encode_<type>/2`. Decode returns `{:ok, value, table}`. Encode takes that table. See [Host representations](manual/repr.md).
 
 `--backend exunit` prints one test module for the book's closed equations. A file of unsupplied `param`s is accepted only by this backend. `--imports` also collects the files that book imports directly, and it is an error with any other backend. The tests call an implementation the host names. See [Closed equations as tests](manual/exunit.md).
 

@@ -7,9 +7,10 @@ defmodule Muro.Emit do
   unfold body is `{head, next_seed}`. `uncons` is two replayable views
   (`Enum.take/2` + `Stream.drop/2`); affinity was already checked.
 
-  A `repr` is emitted as `decode_<type>/1` and `encode_<type>/1` by
-  `Muro.Repr`, from the same analysis the checker used. A book with no
-  `repr` emits the same module text as before.
+  A `repr` is emitted as `decode_<type>/1`, `decode_<type>/2`, and
+  `encode_<type>/2` by `Muro.Repr`, from the same analysis the checker
+  used. Decode returns `{:ok, value, table}`. Encode takes that table.
+  A book with no `repr` emits the same module text as before.
   """
 
   alias Muro.Ast

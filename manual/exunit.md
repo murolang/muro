@@ -309,7 +309,7 @@ A larger library, a `decide` of a key and a list whose silence and empty cases a
 ]
 ```
 
-`mix muro.emit impl.muro --backend exunit --imports` is the same collection. `--imports` with `--backend elixir`, or with `c`, `rust`, `asm`, `otp`, or `--node`, is an error. `imports:` on a `kind: :elixir` entry is an error and names the entry index (`modules entry 1: imports: is only valid for kind: :exunit`). A non-boolean is `imports: must be a boolean`.
+`mix muro.emit impl.muro --backend exunit --imports` is the same collection. `--imports` with `--backend elixir`, or with `c`, `rust`, `asm`, `otp`, `fsm`, or `--node`, is an error. `imports:` on a `kind: :elixir` entry is an error and names the entry index (`modules entry 1: imports: is only valid for kind: :exunit`). A non-boolean is `imports: must be a boolean`.
 
 A `pkg:` import is a direct import like any other. The test is named with the file under the project root, `muro_deps/shared/wire.muro wire-ok`, not with the `pkg:` spelling.
 
