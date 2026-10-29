@@ -97,7 +97,9 @@ lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a meeting 
 lib/muro/emit/fsm.ex    a session endpoint is a state machine; the transport stays with the host (`--backend fsm`, `kind: :fsm`)
 lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
 lib/muro/example.ex     same book as Agda
+lib/muro/mutate.ex      mutants of run definitions (`mix muro.mutate`)
 lib/mix/tasks/muro.check.ex
+lib/mix/tasks/muro.mutate.ex
 agda/Muro.agda          public re-export
 agda/Muro/Syntax.agda   Tm n (de Bruijn)
 agda/Muro/Subst.agda    wk, sub, inst
@@ -133,7 +135,7 @@ test/muro_check_test.exs
 
 ## Install
 
-`mix muro.check`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
+`mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
 Install it from Hex:
 
@@ -182,6 +184,7 @@ mix deps.get
 mix test
 mix muro.check
 mix muro.check examples/half_ok.muro
+mix muro.mutate examples/half_ok.muro --only half
 mix muro.emit path.muro --backend exunit
 mix muro.emit path.muro --backend exunit --imports
 mix muro --version

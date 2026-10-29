@@ -16,6 +16,33 @@ defmodule Muro.Check do
   @doc "The default fuel of `check_sig/2` and `check_def/3`."
   def default_fuel, do: @fuel
 
+  @doc """
+  Whether `msg` is the checker's out-of-fuel error.
+
+  Running out of fuel is not a type error and not a failed conversion.
+  """
+  def out_of_fuel?(msg) when is_binary(msg), do: String.contains?(msg, "out of fuel")
+
+  @doc """
+  Weak-head normal form, with the same fuelled reduction as checking.
+
+  `:all` unfolds every definition. `{:error, msg}` is out of fuel.
+  A stuck term is `{:ok, term}`.
+  """
+  def reduce(book, term, fuel \\ @fuel) when is_list(book) and is_integer(fuel) do
+    whnf(fuel, book, term, :all)
+  end
+
+  @doc """
+  The checker's conversion on two de Bruijn terms.
+
+  `:ok` means they convert within `fuel`. `{:error, msg}` means they do
+  not, or the checker ran out of fuel. `out_of_fuel?/1` tells those apart.
+  """
+  def conv(book, u, v, fuel \\ @fuel) when is_list(book) and is_integer(fuel) do
+    conv(fuel, book, [], u, v)
+  end
+
   # -- lookup ----------------------------------------------------------------
 
   defp lookup_def(book, name) do

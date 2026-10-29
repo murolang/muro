@@ -105,6 +105,43 @@ defmodule Muro.Ast do
 
   @type book :: [defn]
 
+  @doc """
+  Immediate subterms of a named term, in the order the parser records
+  source spans. Binder names are not terms. A leaf has none.
+  """
+  def children(t) do
+    case t do
+      {:su, a} -> [a]
+      {:stream, a} -> [a]
+      {:always, a, p, s} -> [a, p, s]
+      {:bisim, a, b} -> [a, b]
+      {:unf, a, b} -> [a, b]
+      {:ucons, a} -> [a]
+      {:pi, _, a, _, b} -> [a, b]
+      {:lam, _, a, _, b} -> [a, b]
+      {:app, a, b} -> [a, b]
+      {:prod, a, b} -> [a, b]
+      {:pair, a, b} -> [a, b]
+      {:letp, e, _, _, b} -> [e, b]
+      {:idt, ty, a, b} -> [ty, a, b]
+      {:rwt, e, _, p, b} -> [e, p, b]
+      {:ann, e, a} -> [e, a]
+      {:mnat, e, _, p, z, _, s} -> [e, p, z, s]
+      {:memp, e, _, p} -> [e, p]
+      {:munit, e, _, p, u} -> [e, p, u]
+      {:matom, e, _, p, bs} -> [e, p | Enum.map(bs, fn {_, b} -> b end)]
+      {:mdata, e, _, p, bs} -> [e, p | Enum.map(bs, fn {_, _, b} -> b end)]
+      {:tensor, a, b} -> [a, b]
+      {:addi, a, b} -> [a, b]
+      {:muli, a, b} -> [a, b]
+      {:addt, a, b} -> [a, b]
+      {:toi64, a} -> [a]
+      {:packi, a, b} -> [a, b]
+      {:nu, _, f} -> [f]
+      _ -> []
+    end
+  end
+
   def to_db(named, env \\ [])
 
   def to_db({:var, x}, env) do

@@ -13,7 +13,7 @@ In brief: install the archive or clone the repo, write a `.muro` file against th
 
 Elixir via [mise](https://mise.jdx.dev/).
 
-The archive installs `mix muro`, `mix muro.check`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` in any directory, with or without a `mix.exs`.
+The archive installs `mix muro`, `mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` in any directory, with or without a `mix.exs`.
 
 Install it from Hex:
 
@@ -45,6 +45,7 @@ Then, in any directory:
 ```
 mix muro --version
 mix muro.check path.muro
+mix muro.mutate path.muro
 mix muro.emit path.muro
 ```
 
