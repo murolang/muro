@@ -113,7 +113,7 @@ A bit index selects the first arm on `:b0` and the second on `:b1`. A `case` on 
 
 ## repr
 
-When the book has a `repr` for a payload type (#131), that type's host form is the repr. `send` and `recv` decode with the book's `decode_<type>/1`, then check the wire form above. A value the codec rejects is `:unexpected`. The third element names the type and its repr, for example `{:recv, {:repr, {:data, "Box", []}, "Box"}}`. The codec's own reason is not part of the error. A type with no `repr` stays on the wire form, and `{:box, 3}` is the value of `box : Nat → Box`.
+When the book has a `repr` for a payload type (#131), that type's host form is the repr. `send` and `recv` call the book's `decode_<type>/1`. That call returns `{:ok, value, table}`. The machine checks `value` against the wire form above and drops the table. A value the codec rejects is `:unexpected`. The third element names the type and its repr, for example `{:recv, {:repr, {:data, "Box", []}, "Box"}}`. The codec's own reason is not part of the error. A type with no `repr` stays on the wire form, and `{:box, 3}` is the value of `box : Nat → Box`.
 
 ## State
 

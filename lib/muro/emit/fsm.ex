@@ -1892,12 +1892,12 @@ defmodule Muro.Emit.Fsm do
     """
   end
 
-  # The only generated function that matches `{:ok, decoded}` is
-  # `muro_fsm_from_host/2`. A book with no repr leaves that function as
-  # the identity.
+  # The only generated function that matches decode's `{:ok, decoded, table}`
+  # is `muro_fsm_from_host/2`. A book with no repr leaves that function as
+  # the identity. The table is dropped: the machine checks the value.
   defp from_host([]) do
     """
-    # This is the only place that knows decode_<type>/1 returns {:ok, value}.
+    # This is the only place that knows decode_<type>/1 returns {:ok, value, table}.
     defp muro_fsm_from_host(_type, value), do: {:ok, value}
     """
   end
@@ -1912,7 +1912,7 @@ defmodule Muro.Emit.Fsm do
             """
             defp muro_fsm_from_host(:nat, value) do
               case #{fun}(value) do
-                {:ok, decoded} ->
+                {:ok, decoded, _table} ->
                   case muro_fsm_from_emitted(decoded, :nat) do
                     {:ok, wire} -> {:ok, wire}
                     _ -> :error
@@ -1928,7 +1928,7 @@ defmodule Muro.Emit.Fsm do
             """
             defp muro_fsm_from_host({:dat, #{inspect(name)}, []}, value) do
               case #{fun}(value) do
-                {:ok, decoded} ->
+                {:ok, decoded, _table} ->
                   case muro_fsm_from_emitted(decoded, {:dat, #{inspect(name)}, []}) do
                     {:ok, wire} -> {:ok, wire}
                     _ -> :error
@@ -1943,7 +1943,7 @@ defmodule Muro.Emit.Fsm do
       end)
 
     """
-    # This is the only place that knows decode_<type>/1 returns {:ok, value}.
+    # This is the only place that knows decode_<type>/1 returns {:ok, value, table}.
     #{Enum.join(clauses, "\n")}
     defp muro_fsm_from_host({:pair, a, b}, {x, y}) do
       case muro_fsm_from_host(a, x) do
