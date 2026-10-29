@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.18.2
+
+An unfold step may mention its recursive block in the tail only as a call: a member of the block applied to arguments that do not mention the block, a pair of such tails, or a nested unfold whose seed, binder type and head do not mention the block and whose own tail is guarded. `tail p`, `snd (uncons p)`, and `let (a, b) = uncons p in b`, inside the definition of `p`, were accepted. Each forces `p`. With a stream that breaks the predicate at a later element, that acceptance was a closed `evidence Empty`. The checker refuses them with `unguarded recursive call`, reported as `<def> body: unguarded recursive call`. `head`, `match`, and `rewrite` on the block in a tail are the same refusal. A tail that is the block applied to block-free arguments, a pair of guarded tails, or a nested unfold with a guarded tail still checks. `examples/always.muro` is unchanged.
+
+The same test is in the Agda checker. `GuardedTail` is that tail as an inductive relation, `guardedTail-reflects` says the boolean test reflects it, and `checkUnfold-guarded` says an unfold the checker accepts outside spec has, after whnf, a block-free head and a guarded tail. The judgment records the pair and does not recheck the guard, so productivity is still not an Agda theorem.
+
+### Manual
+
+- Streams: the tail rule, in words and in the rule form.
+- Limits: the guard, the two lemmas, and that productivity is still not a theorem.
+
+### Package
+
+- Version 0.18.2.
+
 ## 0.18.1
 
 `mix muro.emit path.muro --backend fsm` prints one module for the book's sessions. Each session is a child module, the stem plus `Fsm`, then the session name (`MeetFsm.Ping`). The module is pure: no process, no transport, and no dependency on Muro at run time. A host that already has an RPC, an HTTP exchange, a queue, or a websocket threads the state through `init`, `send`, and `recv`, and asks `done?` at the end.
