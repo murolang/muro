@@ -301,7 +301,7 @@ A larger library, a `decide` of a key and a list whose silence and empty cases a
 
 ```elixir
 [
-  muro: "0.18.3",
+  muro: "0.19.0",
   modules: [
     {"kit.muro", KitTest, "test/kit_test.exs", [kind: :exunit]},
     {"impl.muro", ImplTest, "test/impl_test.exs", [kind: :exunit, imports: true]}
@@ -368,7 +368,7 @@ A 3-tuple is still an Elixir module. An ExUnit entry adds a keyword list:
 
 ```elixir
 [
-  muro: "0.18.3",
+  muro: "0.19.0",
   modules: [
     {"priv/muro/rounding.muro", MyApp.Rounding, "lib/my_app/rounding.ex"},
     {"priv/muro/rounding.muro", MyApp.RoundingTest, "test/rounding_test.exs",

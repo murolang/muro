@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.19.0
+
+**Breaking:** An open-map decode that used to succeed when the host map carried a declared key in another form (atom vs string) now returns `{:error, {path, {:ambiguous_key, k}}}`. Callers that send such maps must send the declared form.
+
+`map open` still ignores a key that names no declared key, so metadata stays legal. It refuses a key that is not declared when that key names a declared key in the other host form: an atom whose `Atom.to_string` equals a declared string key, or a string equal to the name of a declared atom key. The error names the form that was not declared, including when both forms are present. Several collisions report the one whose declared key comes first in the repr, before any field value is decoded, so the result does not depend on map iteration. A nested open map reports the inner map's path. `S else v` does not replace this error. A closed `map` still returns `{:unexpected_key, k}`. `map_of` has no declared keys and is unchanged. Encoding is unchanged.
+
+### Manual
+
+- Host representations: the rule next to `map open`, the error, and that `map_of` is unaffected.
+
+### Package
+
+- Version 0.19.0.
+
 ## 0.18.3
 
 A git package may leave out both `tag:` and `ref:`. `{:git, url}` and `{:git, url, []}` are the same spec, and `{:git, url, root: "priv/muro"}` is that spec with a directory. The fetch is `git clone --depth 1` with no `--branch`, so the clone follows the remote's default branch, whatever that branch is named. The lock records the commit. `version` is `<branch>@<sha7>`, the same shape as a branch `ref:`, and the `conforms to` line uses it. The branch name is read from the clone. A remote whose HEAD names no branch is refused, and the message says to add `tag:` or `ref:`. `mix muro.deps.get` resolves the spec again on every run. `mix muro.check` and `mix muro.gen` still read only `muro.lock` and `muro_deps/`.

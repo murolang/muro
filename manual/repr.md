@@ -89,7 +89,13 @@ A single-constructor type with a bare shape (not a tuple, a map, or a choice) is
 
 A choice names every constructor of the type exactly once. A missing, unknown, or repeated constructor is refused, and the error names it.
 
-Map keys are the string or atom literals as written. A repeated key is refused. Without `open`, a key the repr does not list is `{:unexpected_key, key}`. With `open`, extra keys are ignored. They are not kept, so `decode(encode(v), table)` is still `{:ok, v, table}`.
+Map keys are the string or atom literals as written. A repeated key is refused. Without `open`, a key the repr does not list is `{:unexpected_key, key}`. With `open`, a key that names no declared key is ignored, whether it is an atom or a string. It is not kept, so `decode(encode(v), table)` is still `{:ok, v, table}`.
+
+An open map refuses a key that is not declared when that key names a declared key in the other host form. An atom is that form when `Atom.to_string` of the atom equals a declared string key. A string is that form when it equals the name of a declared atom key. The decoder compares those names with `Atom.to_string`. It does not build an atom from a string. The error is `{:error, {path, {:ambiguous_key, key}}}`, and `key` is the form that was not declared. `path` is the map's path, the same path `{:unexpected_key, key}` uses. A declared key that is also present in the other form is the same error.
+
+`map open { "read" => optional Bool }` decodes `%{"relation" => "x", :source => :preset}` and `%{"relation" => "x", "token_id" => 7}`, and ignores those extra keys. `%{"relation" => "x", :read => false}` is `{:error, {[], {:ambiguous_key, :read}}}`. So is a map that carries both `"read"` and `:read`. The mirror, a declared `:read` and a host key `"read"`, is `{:ambiguous_key, "read"}`. When both `"read"` and `:read` are declared keys, both are fields, and neither form is ambiguous.
+
+The check walks declared keys in the order written, before any field value is decoded. Several collisions report the one whose declared key comes first. A bad field does not hide the collision, and the host map's iteration order does not change the error. A nested open map, as a field or as a list element, reports that inner map's path. `S else v` does not replace `{:ambiguous_key, key}`: a fallback is a default, and this error is the key the sender wrote. `map_of` has no declared keys, so the rule does not apply to it. A closed `map { … }` is unchanged.
 
 ## Names and the table
 
@@ -156,7 +162,7 @@ A binary that is not valid UTF-8 still enters the interned arm, because it is a 
 
 `map_of K => V` is valid where the field type is list-like and the list's element is either a pair `K' × V'` or a declared single-constructor type with no parameters, no indices, and exactly two fields `K'` and `V'`. A pair element is `{k, v}`. A record element is `{ctor, k, v}`. The list is built with the list type's own constructors, as `list S` does. `K` and `V` are checked against `K'` and `V'` with the same rules as any other field shape. A list element of any other type is refused, and the message names the constructor, the field, and the type. A field that is not a list is refused the same way.
 
-The wire value is a map. A non-map is `{:not_map, v}` at the map's path. `%{}` is the empty list, and the empty list encodes as `%{}`.
+The wire value is a map. A non-map is `{:not_map, v}` at the map's path. `%{}` is the empty list, and the empty list encodes as `%{}`. `map_of` declares no keys. The open-map rule that refuses a key in the other host form does not apply. An atom and a string are two wire keys, and each is decoded as `K`.
 
 Key order is not part of the meaning. Decode produces the list sorted by the wire key in host term order: the order `Enum.sort_by(pairs, fn {k, _} -> {k, is_float(k)} end)` gives. Numbers come before atoms, then tuples, lists, and binaries. An integer sorts before the float that compares equal to it, so `1` comes before `1.0`. The order is never map iteration order. Inside one pair, decode visits the key first and then the value, and the table is threaded through both.
 
@@ -182,7 +188,7 @@ The fallback replaces an error whose path equals the position of that shape. It 
 | --- | --- | --- |
 | `boolean else v` | every present value that is not `true` or `false`, including `nil`, `1`, `"yes"`, and a map | — |
 | `integer else v`, or `Nat else v` | a present value that is not an integer, or a negative integer | `{:nat_too_large, v}` |
-| `Name else v` | a present value for which `decode_name` fails at its own root: a wrong host class, `{:no_variant, …}`, `{:expected, …}`, a missing or unexpected key of that type's map | an error whose path is deeper than that root |
+| `Name else v` | a present value for which `decode_name` fails at its own root: a wrong host class, `{:no_variant, …}`, `{:expected, …}`, a missing or unexpected key of that type's map | an error whose path is deeper than that root, and `{:ambiguous_key, key}` |
 | any `S else v` written as a map entry | — | the entry is absent: `{:missing_key, key}` |
 
 `optional (S else v)` does not change the missing-key rule. An absent key is still the nullary constructor. `optional (boolean else false)` decodes a missing key to `nothing`, `true` to `just true`, and every other present value, `nil` included, to `just false`. A present `nil` is routed to the inner shape only when that inner shape is an `else`. A present `nil` under a plain `optional S` stays `{:nil_not_allowed, nil}`.
@@ -197,7 +203,7 @@ The ambiguity check and the nil clash see the inner shape, not the fallback. Enc
 
 `decode_<type>/1` and `decode_<type>/2` return `{:ok, value, table}` or `{:error, {path, reason}}`. Decode does not raise for a value the repr rejects. A table that is not a table raises `ArgumentError` before decode looks at the value. `path` is a list of the keys as written and the zero-based list or tuple indices, from the root. `[]` is the root. A `map_of` key failure uses `{:key, wire_key}` as the step.
 
-The first error in a fixed order is the one returned: map keys in the order the repr lists them, then unexpected keys in Erlang term order, then list elements in order. A `map_of` walks keys in host term order.
+The first error in a fixed order is the one returned: for an open map, an ambiguous key, in declaration order, before any field; then map keys in the order the repr lists them; then unexpected keys of a closed map in Erlang term order; then list elements in order. A `map_of` walks keys in host term order.
 
 | Reason | When |
 | --- | --- |
@@ -213,6 +219,7 @@ The first error in a fixed order is the one returned: map keys in the order the 
 | `{:wrong_tuple_size, expected, v}` | a tuple of the wrong arity |
 | `{:missing_key, key}` | a required key is absent; the path is the map's path |
 | `{:unexpected_key, key}` | a key the repr does not list, and the map is not `open` |
+| `{:ambiguous_key, key}` | an open map has a key that is not declared and names a declared key in the other host form; `key` is that other form |
 | `{:keys_collide, a, b}` | two wire keys of a `map_of` decoded to one Muro key |
 | `{:nil_not_allowed, nil}` | `nil` where the shape is not nullable and has no fallback |
 | `{:expected, literal, v}` | a constant tag did not match |
@@ -235,7 +242,7 @@ Encode returns the host value directly. It does not return an `:ok` tuple. A ter
 | `optional nullable S` | the nullary constructor | the nullary constructor; encode omits the key | `{:unexpected_key, key}` |
 | `nullable S` | not a map entry by itself | the nullary constructor | — |
 | `nullable (S else v)` | not a map entry by itself | the nullary constructor; the fallback is not used | — |
-| `map open {…}` | as the entry says | as the entry says | ignored, not kept |
+| `map open {…}` | as the entry says | as the entry says | `{:ambiguous_key, key}` when the key names a declared key in the other form; any other extra key is ignored, not kept |
 
 `1` is not `true`. A missing key is not `false`. Both are errors unless the repr says otherwise.
 
