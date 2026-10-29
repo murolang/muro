@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.18.4
+
+`mix muro.mutate path.muro` reports which evidence constrains each `run` definition. For every `run` and `run internal` definition in the file it builds type-preserving mutants, in a fixed order, and re-checks the definitions that mention the mutated name. Evidence, spec, data, and the prelude are left unchanged. A mutant the checker rejects is discarded and counted. A mutant whose body converts with the original, under `Muro.Check.conv/4` and the book's fuel, is `equivalent`. A mutant that makes a depending definition fail is `killed`, with that definition's name and location. A mutant the fuel cannot decide is `out_of_fuel`. A mutant that type-checks, whose conversion with the original fails within the fuel, and that leaves every re-checked definition checking, is `surviving`.
+
+`--only name` may be repeated. `--max-mutants-per-def N` caps candidates per definition (default 100). `--max-survivors N` exits 1 when more than `N` survive. `--json` prints the same report as one object. `--fuel` is the checker's fuel and applies to the original check. A book that does not check is refused with exit 2 and is not mutated. The text header records how many evidence definitions were re-checked. The manual page is [Mutation](manual/mutate.md).
+
+### Package
+
+- Version 0.18.4.
+
 ## 0.18.2
 
 An unfold step may mention its recursive block in the tail only as a call: a member of the block applied to arguments that do not mention the block, a pair of such tails, or a nested unfold whose seed, binder type and head do not mention the block and whose own tail is guarded. `tail p`, `snd (uncons p)`, and `let (a, b) = uncons p in b`, inside the definition of `p`, were accepted. Each forces `p`. With a stream that breaks the predicate at a later element, that acceptance was a closed `evidence Empty`. The checker refuses them with `unguarded recursive call`, reported as `<def> body: unguarded recursive call`. `head`, `match`, and `rewrite` on the block in a tail are the same refusal. A tail that is the block applied to block-free arguments, a pair of guarded tails, or a nested unfold with a guarded tail still checks. `examples/always.muro` is unchanged.

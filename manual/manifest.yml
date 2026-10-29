@@ -102,3 +102,7 @@ pages:
     slug: fsm
     title: State machines
     summary: Each session endpoint is a pure state machine. The transport stays with the host.
+  - file: mutate.md
+    slug: mutate
+    title: Mutation
+    summary: mix muro.mutate reports which evidence fails when a run definition changes.
