@@ -146,7 +146,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.18.1.ez
+mix archive.install muro-0.18.2.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -195,7 +195,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then:
 
 ```
-Muro v0.18.1
+Muro v0.18.2
 All terms check. Evidence never becomes a run.
 ```
 

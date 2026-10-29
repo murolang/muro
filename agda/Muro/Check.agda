@@ -14,7 +14,7 @@ module Muro.Check where
 
 open import Data.Bool.Base
   using (Bool; true; false; _∧_; _∨_; not; if_then_else_)
-open import Data.Empty using (⊥)
+open import Data.Empty using (⊥; ⊥-elim)
 open import Data.Fin.Base using (Fin; zero; suc)
 open import Data.List.Base as List using (List; []; _∷_; length; take; drop)
 open import Data.Maybe.Base using (Maybe; just; nothing)
@@ -25,7 +25,7 @@ open import Data.String.Base using (String; _++_)
 open import Data.Unit.Base using (⊤; tt)
 open import Data.Vec.Base as Vec using (Vec; []; _∷_; lookup; map)
 open import Function.Base using (case_of_; _$_)
-open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
+open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl; sym; trans; cong)
 
 open import Muro.Base
 open import Muro.Syntax
@@ -57,8 +57,10 @@ record RecSt (n : ℕ) : Set where
     nextArg : Maybe ℕ        -- leading λs still to pass before that argument
     smaller : Vec Bool n
     recOk   : Vec Bool n
-    -- Set on the step of an indexed ν (Always, ~). In evidence, a
-    -- self-call there is the coinductive step and need not descend.
+    -- Descent exemption for the whole step of an indexed ν (Always, ~).
+    -- In evidence, a self-call there need not descend and may be
+    -- unapplied. Where the block may occur in the pair is the tail
+    -- guard in checkUnfold, not this flag.
     coind   : Bool
     block   : List ℕ         -- indices of the recursive block, including self
 
@@ -782,24 +784,232 @@ mutual
   hasSelfList _ []       = false
   hasSelfList s (t ∷ ts) = hasSelf s t ∨ hasSelfList s ts
 
--- On run/evid, unfold's λ-body must be a pair and the head must not
--- contain a self-call. spec skips the test.
+-- The tail of an unfold step may mention the block only as a call:
+-- a block member applied to arguments that do not mention the block,
+-- a pair of such tails, or a nested unfold whose seed, binder type
+-- and head do not mention the block and whose own tail is guarded.
+-- head, tail, uncons, let, match, and rewrite over the block force
+-- it, so they are not calls. Spec does not run the test.
+-- The coinductive flag exempts the step from descent. It does not
+-- place the block.
+
+data StepFun {n} : Tm n → Set where
+  sf-pair : (q : Qty) (A : Tm n) (h t : Tm (suc n)) → StepFun (lam q A (pair h t))
+  sf-rest : (f : Tm n) → StepFun f
+
+stepFun : ∀ {n} (f : Tm n) → StepFun f
+stepFun (lam q A (pair h t)) = sf-pair q A h t
+stepFun f                    = sf-rest f
+
+mutual
+  guardedCall : ∀ {n} → List ℕ → Tm n → Bool
+  guardedCall B (def i)    = elemℕ i B
+  guardedCall B (app f a)  = not (hasSelf B a) ∧ guardedCall B f
+  guardedCall B (pair a b) = guardedTail B a ∧ guardedTail B b
+  guardedCall B (unf s f)  = unfCall B s (stepFun f)
+  guardedCall _ _          = false
+
+  -- The view is the scrutinee, so a step reduces to its tail test and
+  -- every other function reduces to false.
+  unfCall : ∀ {n} (B : List ℕ) (s : Tm n) {f : Tm n} → StepFun f → Bool
+  unfCall B s (sf-pair _ A h t) =
+    not (hasSelf B s ∨ hasSelf B A ∨ hasSelf B h) ∧ guardedTail B t
+  unfCall _ _ (sf-rest _) = false
+
+  guardedTail : ∀ {n} → List ℕ → Tm n → Bool
+  guardedTail B t = not (hasSelf B t) ∨ guardedCall B t
+
+-- Inductive form of the boolean. A tail is guarded when the block is
+-- absent, or the term is one of the four call forms.
+data GuardedCall {n} (B : List ℕ) : Tm n → Set
+data GuardedTail {n} (B : List ℕ) : Tm n → Set
+
+data GuardedTail {n} B where
+  gt-absent : ∀ {t} → hasSelf B t ≡ false → GuardedTail B t
+  gt-call   : ∀ {t} → GuardedCall B t → GuardedTail B t
+
+data GuardedCall {n} B where
+  gc-def : ∀ {i} → elemℕ i B ≡ true → GuardedCall B (def i)
+  gc-app : ∀ {f a} → hasSelf B a ≡ false → GuardedCall B f → GuardedCall B (app f a)
+  gc-pair : ∀ {a b} → GuardedTail B a → GuardedTail B b → GuardedCall B (pair a b)
+  gc-unf : ∀ {s q A h t}
+    → hasSelf B s ≡ false → hasSelf B A ≡ false → hasSelf B h ≡ false
+    → GuardedTail B t
+    → GuardedCall B (unf s (lam q A (pair h t)))
+
+not-elim : ∀ {b} → not b ≡ true → b ≡ false
+not-elim {false} refl = refl
+not-elim {true}  ()
+
+not-elim-false : ∀ b → not b ≡ false → b ≡ true
+not-elim-false true  refl = refl
+not-elim-false false ()
+
+∧-true₂ : ∀ a b → a ∧ b ≡ true → a ≡ true × b ≡ true
+∧-true₂ true  b eq = refl , eq
+∧-true₂ false b ()
+
+∨-false₂ : ∀ a b → a ∨ b ≡ false → a ≡ false × b ≡ false
+∨-false₂ false false refl = refl , refl
+∨-false₂ true  _    ()
+∨-false₂ false true  ()
+
+boom : ∀ {b} → b ≡ false → b ≡ true → ⊥
+boom refl ()
+
+true≢false : true ≡ false → ⊥
+true≢false ()
+
+fail≢ok : ∀ {A : Set} {e : String} {a : A} → fail e ≡ ok a → ⊥
+fail≢ok ()
+
+-- false ∨ b reduces to b, so a false absence bit leaves the call test.
+toCall : ∀ {n} (B : List ℕ) (t : Tm n)
+  → not (hasSelf B t) ≡ false → guardedTail B t ≡ true → guardedCall B t ≡ true
+toCall B t nb eq = trans (cong (λ b → b ∨ guardedCall B t) (sym nb)) eq
+
+-- guardedCall is definitionally false. A true tail is then block-free,
+-- and the two equations cannot both hold.
+absent-only : ∀ {n} (B : List ℕ) (t : Tm n)
+  → not (hasSelf B t) ≡ false → guardedTail B t ≡ true
+  → guardedCall B t ≡ false → GuardedTail B t
+absent-only B t nb eq cf = ⊥-elim (boom cf (toCall B t nb eq))
+
+mutual
+  tail-ok : ∀ {n} (B : List ℕ) (t : Tm n) → guardedTail B t ≡ true → GuardedTail B t
+  tail-ok B t eq = tail-go B t (not (hasSelf B t)) refl eq
+
+  tail-go : ∀ {n} (B : List ℕ) (t : Tm n) (b : Bool)
+    → not (hasSelf B t) ≡ b → guardedTail B t ≡ true → GuardedTail B t
+  tail-go B t true nb _ = gt-absent (not-elim nb)
+  tail-go B (def i) false nb _ = gt-call (gc-def (not-elim-false (elemℕ i B) nb))
+  tail-go B (app f a) false nb eq =
+    let na , cf = ∧-true₂ (not (hasSelf B a)) (guardedCall B f) (toCall B (app f a) nb eq)
+    in gt-call (gc-app (not-elim na) (call-ok B f cf))
+  tail-go B (pair a b) false nb eq =
+    let ta , tb = ∧-true₂ (guardedTail B a) (guardedTail B b) (toCall B (pair a b) nb eq)
+    in gt-call (gc-pair (tail-ok B a ta) (tail-ok B b tb))
+  tail-go B (unf s f) false nb eq =
+    gt-call (unf-go B s f (stepFun f) refl (toCall B (unf s f) nb eq))
+  tail-go B (var x) false nb eq = absent-only B (var x) nb eq refl
+  tail-go B typ false nb eq = absent-only B typ nb eq refl
+  tail-go B (pi q A C) false nb eq = absent-only B (pi q A C) nb eq refl
+  tail-go B (lam q A t) false nb eq = absent-only B (lam q A t) nb eq refl
+  tail-go B nat false nb eq = absent-only B nat nb eq refl
+  tail-go B ze false nb eq = absent-only B ze nb eq refl
+  tail-go B (su t) false nb eq = absent-only B (su t) nb eq refl
+  tail-go B unit false nb eq = absent-only B unit nb eq refl
+  tail-go B one false nb eq = absent-only B one nb eq refl
+  tail-go B empty false nb eq = absent-only B empty nb eq refl
+  tail-go B (dty i) false nb eq = absent-only B (dty i) nb eq refl
+  tail-go B (ctor i j) false nb eq = absent-only B (ctor i j) nb eq refl
+  tail-go B (mData e P bs) false nb eq = absent-only B (mData e P bs) nb eq refl
+  tail-go B (mNat e P z s) false nb eq = absent-only B (mNat e P z s) nb eq refl
+  tail-go B (mEmp e P) false nb eq = absent-only B (mEmp e P) nb eq refl
+  tail-go B (mUnit e P u) false nb eq = absent-only B (mUnit e P u) nb eq refl
+  tail-go B (idt A a b) false nb eq = absent-only B (idt A a b) nb eq refl
+  tail-go B rfl false nb eq = absent-only B rfl nb eq refl
+  tail-go B (rwt e P t) false nb eq = absent-only B (rwt e P t) nb eq refl
+  tail-go B (ann e A) false nb eq = absent-only B (ann e A) nb eq refl
+  tail-go B (prod A C) false nb eq = absent-only B (prod A C) nb eq refl
+  tail-go B (letp e t) false nb eq = absent-only B (letp e t) nb eq refl
+  tail-go B (nu F) false nb eq = absent-only B (nu F) nb eq refl
+  tail-go B (ucons u) false nb eq = absent-only B (ucons u) nb eq refl
+  tail-go B i64 false nb eq = absent-only B i64 nb eq refl
+  tail-go B f32ty false nb eq = absent-only B f32ty nb eq refl
+  tail-go B (tensor d u) false nb eq = absent-only B (tensor d u) nb eq refl
+  tail-go B (addi x y) false nb eq = absent-only B (addi x y) nb eq refl
+  tail-go B (muli x y) false nb eq = absent-only B (muli x y) nb eq refl
+  tail-go B (addt t u) false nb eq = absent-only B (addt t u) nb eq refl
+  tail-go B (toi64 t) false nb eq = absent-only B (toi64 t) nb eq refl
+  tail-go B (packi x y) false nb eq = absent-only B (packi x y) nb eq refl
+
+  -- Carry the view as an argument so unfCall reduces on it.
+  unf-go : ∀ {n} (B : List ℕ) (s f : Tm n) (v : StepFun f)
+    → stepFun f ≡ v → guardedCall B (unf s f) ≡ true → GuardedCall B (unf s f)
+  unf-go B s f v rv eq = unf-go′ B s f v (trans (sym (cong (unfCall B s) rv)) eq)
+
+  unf-go′ : ∀ {n} (B : List ℕ) (s f : Tm n) (v : StepFun f)
+    → unfCall B s v ≡ true → GuardedCall B (unf s f)
+  unf-go′ B s .(lam q A (pair h t)) (sf-pair q A h t) eq =
+    let nf , tg = ∧-true₂ (not (hasSelf B s ∨ hasSelf B A ∨ hasSelf B h)) (guardedTail B t) eq
+        hs , rest = ∨-false₂ (hasSelf B s) (hasSelf B A ∨ hasSelf B h) (not-elim nf)
+        hA , hh = ∨-false₂ (hasSelf B A) (hasSelf B h) rest
+    in gc-unf hs hA hh (tail-ok B t tg)
+  unf-go′ _ _ _ (sf-rest _) eq = ⊥-elim (boom refl eq)
+
+  call-ok : ∀ {n} (B : List ℕ) (t : Tm n) → guardedCall B t ≡ true → GuardedCall B t
+  call-ok B (def i) eq = gc-def eq
+  call-ok B (app f a) eq =
+    let na , cf = ∧-true₂ (not (hasSelf B a)) (guardedCall B f) eq
+    in gc-app (not-elim na) (call-ok B f cf)
+  call-ok B (pair a b) eq =
+    let ta , tb = ∧-true₂ (guardedTail B a) (guardedTail B b) eq
+    in gc-pair (tail-ok B a ta) (tail-ok B b tb)
+  call-ok B (unf s f) eq = unf-go B s f (stepFun f) refl eq
+  call-ok _ (var _) eq = ⊥-elim (boom refl eq)
+  call-ok _ typ eq = ⊥-elim (boom refl eq)
+  call-ok _ (pi _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (lam _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ nat eq = ⊥-elim (boom refl eq)
+  call-ok _ ze eq = ⊥-elim (boom refl eq)
+  call-ok _ (su _) eq = ⊥-elim (boom refl eq)
+  call-ok _ unit eq = ⊥-elim (boom refl eq)
+  call-ok _ one eq = ⊥-elim (boom refl eq)
+  call-ok _ empty eq = ⊥-elim (boom refl eq)
+  call-ok _ (dty _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (ctor _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (mData _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (mNat _ _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (mEmp _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (mUnit _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (idt _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ rfl eq = ⊥-elim (boom refl eq)
+  call-ok _ (rwt _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (ann _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (prod _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (letp _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (nu _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (ucons _) eq = ⊥-elim (boom refl eq)
+  call-ok _ i64 eq = ⊥-elim (boom refl eq)
+  call-ok _ f32ty eq = ⊥-elim (boom refl eq)
+  call-ok _ (tensor _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (addi _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (muli _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (addt _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (toi64 _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (packi _ _) eq = ⊥-elim (boom refl eq)
+
+-- guardedTail B t ≡ true reflects GuardedTail B t.
+guardedTail-reflects : ∀ {n} (B : List ℕ) (t : Tm n) → guardedTail B t ≡ true → GuardedTail B t
+guardedTail-reflects = tail-ok
+
+-- true: the head mentions the block, or the tail is not guarded.
+unguarded : Bool → Result ⊤
+unguarded true  = fail "unguarded recursive call"
+unguarded false = ok tt
+
+unguarded-ok : ∀ b → unguarded b ≡ ok tt → b ≡ false
+unguarded-ok false refl = refl
+unguarded-ok true  ()
+
+-- Strip the step's lambdas and test the pair. Binder types of this
+-- outer step are not part of the guard; a nested unfold constrains
+-- its own seed, binder type, and head.
+guardedStep : ∀ {n} → List ℕ → Tm n → Result ⊤
+guardedStep B (lam _ _ t) = guardedStep B t
+guardedStep B (pair h t)  = unguarded (hasSelf B h ∨ not (guardedTail B t))
+guardedStep _ _           = fail "unfold body must be a pair"
+
+-- On run/evid, unfold's λ-body must be a pair, the head must not
+-- mention the block, and the tail must be guarded. spec skips the test.
 checkUnfold : ∀ {n} → ℕ → Sig → Mode → RecSt n → Tm n → Result ⊤
 checkUnfold _ _ spec _ _ = ok tt
-checkUnfold k σ _ rs f = whnf k σ f >>= go
-  where
-    go : ∀ {n} → Tm n → Result ⊤
-    go (lam _ _ t) = go t
-    go (pair h _)  =
-      if hasSelf (RecSt.block rs) h
-      then fail "unguarded recursive call"
-      else ok tt
-    go _ = fail "unfold body must be a pair"
+checkUnfold k σ _ rs f   = whnf k σ f >>= guardedStep (RecSt.block rs)
 
 -- On run/evid, a definition whose type reduces to a ν (bare, or a
--- family applied to any number of indices) is an unfold, or it does not
--- mention its own block: a call into the block is productive only as
--- the tail of an unfold step, where checkUnfold guards it.
+-- family applied to any number of indices) is an unfold whose step
+-- passes this same guard, or it does not mention its own block.
 isNuHead : ∀ {n} → Tm n → Bool
 isNuHead (nu _) = true
 isNuHead _      = false
@@ -811,11 +1021,78 @@ checkNu (suc k) σ blk m    T t = whnf (suc k) σ T >>= λ T′ → go T′ t
   where
     go : ∀ {n} → Tm n → Tm n → Result ⊤
     go (pi _ _ B) (lam _ _ u) = checkNu k σ blk m B u
-    go _          (unf _ _)   = ok tt
+    go _          (unf _ f)   = whnf (suc k) σ f >>= guardedStep blk
     go T′         u           =
       if isNuHead (proj₁ (apps T′)) ∧ hasSelf blk u
       then fail "ν value calls its own block outside an unfold"
       else ok tt
+
+-- What checkUnfold demands of a step, after whnf: lambdas over a pair
+-- whose head does not mention the block and whose tail is guarded.
+-- This is the shape of an accepted unfold. It is not productivity.
+data StepGuard {n} (B : List ℕ) : Tm n → Set where
+  sg-lam  : ∀ {q A t} → StepGuard B t → StepGuard B (lam q A t)
+  sg-pair : ∀ {h t} → hasSelf B h ≡ false → GuardedTail B t → StepGuard B (pair h t)
+
+data UnfoldGuard {n} (k : ℕ) (σ : Sig) (B : List ℕ) (f : Tm n) : Set where
+  unfold-guard : (f′ : Tm n) → whnf k σ f ≡ ok f′ → StepGuard B f′ → UnfoldGuard k σ B f
+
+guardedStep-ok : ∀ {n} (B : List ℕ) (t : Tm n) → guardedStep B t ≡ ok tt → StepGuard B t
+guardedStep-ok B (lam _ _ t) eq = sg-lam (guardedStep-ok B t eq)
+guardedStep-ok B (pair h t) eq =
+  let hs , ng = ∨-false₂ (hasSelf B h) (not (guardedTail B t))
+                  (unguarded-ok (hasSelf B h ∨ not (guardedTail B t)) eq)
+  in sg-pair hs (guardedTail-reflects B t (not-elim-false (guardedTail B t) ng))
+guardedStep-ok _ (var _) ()
+guardedStep-ok _ typ ()
+guardedStep-ok _ (pi _ _ _) ()
+guardedStep-ok _ (app _ _) ()
+guardedStep-ok _ nat ()
+guardedStep-ok _ ze ()
+guardedStep-ok _ (su _) ()
+guardedStep-ok _ unit ()
+guardedStep-ok _ one ()
+guardedStep-ok _ empty ()
+guardedStep-ok _ (dty _) ()
+guardedStep-ok _ (ctor _ _) ()
+guardedStep-ok _ (mData _ _ _) ()
+guardedStep-ok _ (mNat _ _ _ _) ()
+guardedStep-ok _ (mEmp _ _) ()
+guardedStep-ok _ (mUnit _ _ _) ()
+guardedStep-ok _ (idt _ _ _) ()
+guardedStep-ok _ rfl ()
+guardedStep-ok _ (rwt _ _ _) ()
+guardedStep-ok _ (def _) ()
+guardedStep-ok _ (ann _ _) ()
+guardedStep-ok _ (prod _ _) ()
+guardedStep-ok _ (letp _ _) ()
+guardedStep-ok _ (nu _) ()
+guardedStep-ok _ (unf _ _) ()
+guardedStep-ok _ (ucons _) ()
+guardedStep-ok _ i64 ()
+guardedStep-ok _ f32ty ()
+guardedStep-ok _ (tensor _ _) ()
+guardedStep-ok _ (addi _ _) ()
+guardedStep-ok _ (muli _ _) ()
+guardedStep-ok _ (addt _ _) ()
+guardedStep-ok _ (toi64 _) ()
+guardedStep-ok _ (packi _ _) ()
+
+unfold-from : ∀ {n} k σ (B : List ℕ) (f : Tm n)
+  → (whnf k σ f >>= guardedStep B) ≡ ok tt → UnfoldGuard k σ B f
+unfold-from k σ B f eq with whnf k σ f in weq
+... | fail _ = ⊥-elim (fail≢ok eq)
+... | ok f′  = unfold-guard f′ weq (guardedStep-ok B f′ eq)
+
+-- An unfold checkUnfold accepts outside spec has, after whnf, a
+-- block-free head and a guarded tail. ⊢ does not recheck this.
+checkUnfold-guarded : ∀ {n} k σ m (rs : RecSt n) (f : Tm n)
+  → eqMode m spec ≡ false
+  → checkUnfold k σ m rs f ≡ ok tt
+  → UnfoldGuard k σ (RecSt.block rs) f
+checkUnfold-guarded k σ spec rs f eq _   = ⊥-elim (true≢false eq)
+checkUnfold-guarded k σ run  rs f refl eq = unfold-from k σ (RecSt.block rs) f eq
+checkUnfold-guarded k σ evid rs f refl eq = unfold-from k σ (RecSt.block rs) f eq
 
 mutual
   occurs : ∀ {n} → Fin n → Tm n → Bool

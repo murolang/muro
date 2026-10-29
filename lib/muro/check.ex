@@ -972,6 +972,9 @@ defmodule Muro.Check do
     end
   end
 
+  # Descent exemption for the whole step of an indexed ν. In evidence a
+  # self-call there need not descend. Where the block may occur is
+  # guarded_tail?/2, not this flag.
   defp step_rec(rs, true), do: %{rs | guard: true}
   defp step_rec(rs, false), do: rs
 
@@ -1219,18 +1222,42 @@ defmodule Muro.Check do
 
   defp go_unfold({:lam, _, _, _, t}, self), do: go_unfold(t, self)
 
-  defp go_unfold({:pair, h, _}, self) do
-    if has_self?(self, h),
+  defp go_unfold({:pair, h, t}, self) do
+    if has_self?(self, h) or not guarded_tail?(self, t),
       do: {:error, "unguarded recursive call"},
       else: :ok
   end
 
   defp go_unfold(_, _), do: {:error, "unfold body must be a pair"}
 
+  # The tail may mention the block only as a call: a block member applied
+  # to arguments that do not mention the block, a pair of such tails, or a
+  # nested unfold whose seed, binder type and head do not mention the block
+  # and whose own tail is guarded. head, tail, uncons, let, match, and
+  # rewrite over the block force it instead of continuing it.
+  defp guarded_tail?(self, t) do
+    not has_self?(self, t) or guarded_call?(self, t)
+  end
+
+  defp guarded_call?(self, {:def, _} = d), do: has_self?(self, d)
+
+  defp guarded_call?(self, {:app, f, a}),
+    do: not has_self?(self, a) and guarded_call?(self, f)
+
+  defp guarded_call?(self, {:pair, a, b}),
+    do: guarded_tail?(self, a) and guarded_tail?(self, b)
+
+  defp guarded_call?(self, {:unf, s, {:lam, _, a, _, {:pair, h, t}}}) do
+    not (has_self?(self, s) or has_self?(self, a) or has_self?(self, h)) and
+      guarded_tail?(self, t)
+  end
+
+  defp guarded_call?(_, _), do: false
+
   # Agda's checkNu: on run/evidence, a definition whose type reduces to a
   # ν (bare, a family applied to any number of indices, or ~) is an
-  # unfold, or it does not mention its own block. A call into the block
-  # is productive only as the tail of an unfold step (check_unfold).
+  # unfold whose step passes the same tail guard, or it does not mention
+  # its own block. A call into the block is productive only as a guarded tail.
   defp check_nu(_k, _book, _block, :spec, _ty, _body), do: :ok
   defp check_nu(0, _book, _block, _mode, _ty, _body), do: {:error, @out_of_fuel}
 
@@ -1240,8 +1267,8 @@ defmodule Muro.Check do
         {{:pi, _, _, _, b}, {:lam, _, _, _, t}} ->
           check_nu(k - 1, book, block, mode, b, t)
 
-        {_, {:unf, _, _}} ->
-          :ok
+        {_, {:unf, _, f}} ->
+          check_unfold(k, book, mode, %{empty_rec() | block: block}, f)
 
         _ ->
           if nu_type?(ty1) and has_self?(block, body),

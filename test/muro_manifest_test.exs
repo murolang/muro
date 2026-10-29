@@ -9,7 +9,7 @@ defmodule Muro.ManifestTest do
 
     File.write!(Path.join(dir, "muro.exs"), """
     [
-      muro: "0.18.1",
+      muro: "0.18.2",
       modules: [
         {"priv/muro/one.muro", MyApp.Billing.Rounding, "lib/my_app/billing/rounding.ex"}
       ]
@@ -17,7 +17,7 @@ defmodule Muro.ManifestTest do
     """)
 
     assert {:ok, manifest} = Muro.Manifest.load(dir)
-    assert manifest.version == "0.18.1"
+    assert manifest.version == "0.18.2"
     assert manifest.fuel == Muro.Check.default_fuel()
     assert manifest.source == :muro_exs
 
@@ -451,11 +451,11 @@ defmodule Muro.ManifestTest do
   end
 
   test "version pin names both versions" do
-    assert Muro.Manifest.version_pin("0.18.1", "0.18.1") == :ok
+    assert Muro.Manifest.version_pin("0.18.2", "0.18.2") == :ok
 
-    assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.18.1")
+    assert {:error, message} = Muro.Manifest.version_pin("0.16.72", "0.18.2")
     assert message =~ "manifest says 0.16.72"
-    assert message =~ "running 0.18.1"
+    assert message =~ "running 0.18.2"
 
     assert Muro.Manifest.version_pin("0.18.0", "0.18.0") == :ok
 
