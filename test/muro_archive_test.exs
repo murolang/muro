@@ -19,7 +19,7 @@ defmodule Muro.ArchiveTest do
     out = capture_io(fn -> Mix.Tasks.Muro.run([]) end)
 
     assert out ==
-             "Muro v#{version}\nmix muro.check  mix muro.emit  mix muro.gen  mix muro.init  mix muro.deps.get\n"
+             "Muro v#{version}\nmix muro.check  mix muro.mutate  mix muro.emit  mix muro.gen  mix muro.init  mix muro.deps.get\n"
   end
 
   test "mix muro rejects unknown arguments" do
