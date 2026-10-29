@@ -721,6 +721,198 @@ defmodule Muro.CheckTest do
     assert msg =~ "unguarded recursive call"
   end
 
+  test "an unfold whose tail forces the block is refused" do
+    stream = """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+    """
+
+    alt = """
+    def s : run Stream Nat :=
+      unfold 0 (λ (+ k : Nat) → (k, match k motive (λ _ → Nat) | 0 => suc(0) | suc _ => 0))
+    """
+
+    for tl <- ["tail p", "snd (uncons p)", "let (a, b) = uncons p in b"] do
+      src =
+        stream <>
+          alt <>
+          """
+          def p : evidence Always Nat (λ (n : Nat) → {n ≡ 0 : Nat}) s :=
+            unfold tt (λ (_ : Unit) → (refl, #{tl}))
+          """
+
+      assert {:ok, book} = Parser.parse(src)
+      assert {:error, msg} = Check.check_sig(book)
+      assert msg =~ "p body: unguarded recursive call"
+    end
+
+    indexed =
+      stream <>
+        """
+        def natsFrom : run Π (n : Nat) → Stream Nat :=
+          λ (n : Nat) → unfold n (λ (+ k : Nat) → (k, suc k))
+        def p : evidence Π (n : Nat) → Always Nat (λ (m : Nat) → {m ≡ n : Nat}) (natsFrom n) :=
+          λ (n : Nat) → unfold tt (λ (_ : Unit) → (refl, tail (p n)))
+        """
+
+    assert {:ok, book} = Parser.parse(indexed)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "p body: unguarded recursive call"
+
+    # 0, 0, 1, 1, … so two guarded heads are true and the third is not.
+    # The nested tail skips that third obligation.
+    nested =
+      stream <>
+        """
+        def s : run Stream Nat :=
+          unfold 0 (λ (+ k : Nat) →
+            (match k motive (λ _ → Nat)
+               | 0 => 0
+               | suc j => match j motive (λ _ → Nat) | 0 => 0 | suc _ => suc(0),
+             match k motive (λ _ → Nat)
+               | 0 => suc(0)
+               | suc j => match j motive (λ _ → Nat) | 0 => suc(suc(0)) | suc _ => 0))
+        def p : evidence Always Nat (λ (n : Nat) → {n ≡ 0 : Nat}) s :=
+          unfold tt (λ (_ : Unit) → (refl, unfold tt (λ (_ : Unit) → (refl, tail (tail p)))))
+        """
+
+    assert {:ok, book} = Parser.parse(nested)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "p body: unguarded recursive call"
+
+    head =
+      stream <>
+        """
+        ν Same (s : Stream Nat) : Type where
+          uncons : Same s → {head s ≡ 0 : Nat} × {head s ≡ 0 : Nat}
+        def zeros : run Stream Nat := unfold 0 (λ (_ : Nat) → (0, 0))
+        def p : evidence Same zeros :=
+          unfold tt (λ (_ : Unit) → (refl, head p))
+        """
+
+    assert {:ok, book} = Parser.parse(head)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "p body: unguarded recursive call"
+
+    zeros = "def zeros : run Stream Nat := unfold 0 (λ (_ : Nat) → (0, 0))\n"
+    always = "Always Nat (λ (_ : Nat) → {0 ≡ 0 : Nat}) zeros"
+
+    match_tail =
+      stream <>
+        zeros <>
+        """
+        def p : evidence #{always} :=
+          unfold tt (λ (_ : Unit) → (refl, match 0 motive (λ _ → #{always}) | 0 => p | suc _ => p))
+        """
+
+    assert {:ok, book} = Parser.parse(match_tail)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "p body: unguarded recursive call"
+
+    rewrite_tail =
+      stream <>
+        zeros <>
+        """
+        def eq : evidence {0 ≡ 0 : Nat} := refl
+        def p : evidence #{always} :=
+          unfold tt (λ (_ : Unit) → (refl, rewrite eq motive (λ _ → #{always}) in p))
+        """
+
+    assert {:ok, book} = Parser.parse(rewrite_tail)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "p body: unguarded recursive call"
+  end
+
+  test "forcing the block is a guard failure, and the old controls stay type errors" do
+    stream = """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+    def s : run Stream Nat :=
+      unfold 0 (λ (+ k : Nat) → (k, match k motive (λ _ → Nat) | 0 => suc(0) | suc _ => 0))
+    """
+
+    # (refl, p) is a guarded tail and the wrong type: the predicate fails at suc(0).
+    src =
+      stream <>
+        """
+        def p : evidence Always Nat (λ (n : Nat) → {n ≡ 0 : Nat}) s :=
+          unfold tt (λ (_ : Unit) → (refl, p))
+        """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "cannot convert"
+    refute msg =~ "unguarded recursive call"
+
+    src =
+      stream <>
+        """
+        def one-eq-zero : evidence {suc(0) ≡ 0 : Nat} := refl
+        """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "cannot convert"
+    refute msg =~ "unguarded recursive call"
+
+    src =
+      stream <>
+        """
+        def bad : evidence Empty := tt
+        """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "cannot convert"
+    refute msg =~ "unguarded recursive call"
+  end
+
+  test "a guarded tail, a pair of them, and a nested unfold still check" do
+    stream = """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+    """
+
+    zeros = "def zeros : run Stream Nat := unfold 0 (λ (_ : Nat) → (0, 0))\n"
+
+    assert {:ok, book} = Parser.parse(File.read!("examples/always.muro"))
+    assert Check.check_sig(book) == :ok
+
+    fam =
+      stream <>
+        zeros <>
+        """
+        def p : evidence Π (n : Nat) → Always Nat (λ (_ : Nat) → {0 ≡ 0 : Nat}) zeros :=
+          λ (n : Nat) → unfold tt (λ (_ : Unit) → (refl, p (suc n)))
+        """
+
+    assert {:ok, book} = Parser.parse(fam)
+    assert Check.check_sig(book) == :ok
+
+    pair =
+      stream <>
+        """
+        ν Two (s : Stream Nat) : Type where
+          uncons : Two s → Unit × (Two (tail s) × Two (tail s))
+        #{zeros}
+        def two : evidence Two zeros := unfold tt (λ (_ : Unit) → (tt, (two, two)))
+        """
+
+    assert {:ok, book} = Parser.parse(pair)
+    assert Check.check_sig(book) == :ok
+
+    nested =
+      stream <>
+        zeros <>
+        """
+        def p : evidence Always Nat (λ (_ : Nat) → {0 ≡ 0 : Nat}) zeros :=
+          unfold tt (λ (_ : Unit) → (refl, unfold tt (λ (_ : Unit) → (refl, p))))
+        """
+
+    assert {:ok, book} = Parser.parse(nested)
+    assert Check.check_sig(book) == :ok
+  end
+
   test "a declared family unfold checks, and a stream tail wraps" do
     src = """
     ν Count (n : Nat) : Type where
