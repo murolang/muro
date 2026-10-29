@@ -911,6 +911,63 @@ defmodule Muro.GenTest do
     dir
   end
 
+  test "gen writes a fsm module, is stable, and reports stale and hand edits" do
+    dir = tmp_dir()
+    src = File.read!("examples/meet.muro")
+    write_book(dir, "priv/muro/meet.muro", src)
+
+    write_manifest(dir, [
+      {"priv/muro/meet.muro", Host.MeetFsm, "lib/host/meet_fsm.ex", [kind: :fsm]}
+    ])
+
+    output =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+      end)
+
+    assert output =~ "written lib/host/meet_fsm.ex\n"
+    target = Path.join(dir, "lib/host/meet_fsm.ex")
+    body = File.read!(target)
+    assert body =~ "defmodule Host.MeetFsm do\n"
+    assert body =~ "defmodule Ping do\n"
+    assert body =~ "priv/muro/meet.muro:"
+    refute body =~ Path.basename(dir)
+
+    again =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+      end)
+
+    assert again == "unchanged lib/host/meet_fsm.ex\n"
+
+    check =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run(["--check"]) end)
+      end)
+
+    assert check == "ok\n"
+
+    File.write!(Path.join(dir, "priv/muro/meet.muro"), src <> "\n")
+    stale = check_error(dir)
+    assert stale =~ "lib/host/meet_fsm.ex: stale target; priv/muro/meet.muro changed"
+    refute stale =~ "hand-edited target"
+
+    File.write!(Path.join(dir, "priv/muro/meet.muro"), src)
+
+    in_dir(dir, fn ->
+      capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+    end)
+
+    File.write!(
+      target,
+      String.replace(File.read!(target), "defmodule Ping do", "defmodule PingX do")
+    )
+
+    edited = check_error(dir)
+    assert edited =~ "lib/host/meet_fsm.ex: hand-edited target; priv/muro/meet.muro"
+    refute edited =~ "stale target"
+  end
+
   defp project do
     dir = tmp_dir()
     write_book(dir, "priv/muro/one.muro", @one)

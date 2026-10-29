@@ -98,3 +98,7 @@ pages:
     slug: limits
     title: Limits
     summary: What the language does not do. Facts about the checker, not a roadmap.
+  - file: fsm.md
+    slug: fsm
+    title: State machines
+    summary: Each session endpoint is a pure state machine. The transport stays with the host.

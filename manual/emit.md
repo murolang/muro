@@ -2,12 +2,12 @@
 title: Emit
 slug: emit
 order: 13
-summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A cross is one call on a named node. Spec and evidence are omitted from a run.
+summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A session endpoint is a state machine. A cross is one call on a named node. Spec and evidence are omitted from a run.
 ---
 
 # Emit
 
-In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--node` writes one call for each cross, on the node the flag names.
+In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--backend fsm` writes each session endpoint as a state machine and leaves the transport with the host. `--node` writes one call for each cross, on the node the flag names.
 
 ## From a file
 
@@ -40,6 +40,7 @@ mix muro.emit path.muro --backend c
 mix muro.emit path.muro --backend rust
 mix muro.emit path.muro --backend asm
 mix muro.emit path.muro --backend otp
+mix muro.emit path.muro --backend fsm
 mix muro.emit path.muro --backend exunit
 mix muro.emit path.muro --node a
 ```
@@ -125,6 +126,10 @@ That writes `examples/meet_otp.ex`. The module is `MeetOtp`. `meet wire : pong w
 `examples/indexed.muro` is the same image for a bit index. `IndexedOtp.wire/0` starts the server that offers both arms and the client that sends `:b0`. The server answers `1`. `wire_one` sends `:b1` and then `0`. `echo_wire` sends `:b1` and receives that same bit. The message is `{:muro, from, bit}`. A nat sent where the index is expected stops the server with `{:shutdown, {:unexpected, value}}`.
 
 `examples/recursive.muro` is the same image for a protocol that repeats. `RecursiveOtp.wire/0` starts the server that echoes a nat while the bit is `b0` and the client that sends `b0`, `1`, and then `b1`. Both finish with `:normal`. The skeleton of the loop is `{:loop, name, body}` and the jump is `{:jump, name}`. `drive` stores the body and a jump calls `drive` on that body. The call is in tail position. `Forever` is `rec X. get (n : Nat) (put n X)`. It does not finish. A caller sends a nat and receives that nat, then sends another.
+
+## Fsm
+
+`--backend fsm` prints one module on standard output. It does not write a file. `meet.muro` is `MeetFsm`, and `session ping` is `MeetFsm.Ping`. `init`, `send`, `recv`, and `done?` step that end. The host sends the message on its own transport. The wire form is the one this OTP section names: a nat is an integer, a bit is `:b0` or `:b1`, unit is `:tt`, a pair is a tuple, a record is a map, a vector is a list, a choice is `{:pick, :b0}` or `{:pick, :b1}`. An evidence payload is still the nat alone, and the machine also checks the bound. The OTP image does not. See [State machines](fsm.md).
 
 ## Node
 
@@ -237,7 +242,7 @@ The C backend has no closures. An unapplied lambda, a definition passed as a val
 
 ## Host data
 
-A `repr` states the host shape of a data type. `mix muro.emit` then writes `decode_<type>/1`, `decode_<type>/2`, and `encode_<type>/2` in the same module as the run functions. Decode takes an Elixir term and returns `{:ok, value, table}` or `{:error, {path, reason}}`. `decode_<type>/1` starts from an empty name table. `decode_<type>/2` starts from the table the host passes. Encode takes `(value, table)` and returns the host term. There is no arity-1 encode. A book with no `repr` emits the same text as before. The other backends ignore a `repr`.
+A `repr` states the host shape of a data type. `mix muro.emit` then writes `decode_<type>/1`, `decode_<type>/2`, and `encode_<type>/2` in the same module as the run functions. Decode takes an Elixir term and returns `{:ok, value, table}` or `{:error, {path, reason}}`. `decode_<type>/1` starts from an empty name table. `decode_<type>/2` starts from the table the host passes. Encode takes `(value, table)` and returns the host term. There is no arity-1 encode. A book with no `repr` emits the same text as before. `--backend fsm` calls `decode_<type>/1` for a payload that has a `repr` and drops the table. The other backends ignore a `repr`.
 
 The vocabulary, the strictness rules, and the Nat guard are [Host representations](repr.md).
 

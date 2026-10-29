@@ -47,6 +47,8 @@ meet wire : pong with peer
 
 The meeting is evidence. It is not a run term. A run definition has no seat. The OTP image is the only runtime that can produce the event of exchanging the payload and stopping `:normal` when the parties sit at different places. Other emitters do not implement the meeting.
 
+`mix muro.emit path.muro --backend fsm` prints each end as a state machine the host steps itself. The transport stays with the host. See [State machines](fsm.md).
+
 Places are where the parties sit. When the places are the same, the meeting stays. When the places differ, the meeting crosses once. The boundary is the seating. The payload stays on the session.
 
 ```mermaid

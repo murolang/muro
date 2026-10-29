@@ -89,7 +89,8 @@ defmodule Muro.Emit.ExUnitSuite do
     end
   end
 
-  defp display_book(path, opts) do
+  @doc false
+  def display_book(path, opts) do
     case Keyword.get(opts, :book) do
       book when is_binary(book) ->
         book
@@ -143,7 +144,8 @@ defmodule Muro.Emit.ExUnitSuite do
   # The loader canonicalizes a package root (`/var` is `/private/var` on
   # macOS). Compare and display both sides the same way, so a test name
   # stays `muro_deps/name/file.muro` and never an absolute path.
-  defp display_for(d, ctx) do
+  @doc false
+  def display_for(d, ctx) do
     if same_file?(d.file, ctx.path) do
       ctx.display
     else

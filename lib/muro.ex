@@ -138,6 +138,22 @@ defmodule Muro do
   end
 
   @doc """
+  Elixir source for each session of `path`, as a pure state machine.
+
+  `module` is the parent (`MeetFsm`). One child module per session is
+  the API. Nothing is written next to the book: a manifest entry needs
+  the source as a string. `opts` is `fuel:`, `root:`, and `book:` (the
+  label printed in a step). A book that does not check returns
+  `{:error, message}`. A library of unsupplied `param`s is refused,
+  as for `emit_file/3`.
+  """
+  def emit_fsm(path, module, opts \\ []) when is_atom(module) do
+    with {:ok, book} <- checked_book(path, opts) do
+      Emit.Fsm.render(book, path, module, opts)
+    end
+  end
+
+  @doc """
   Write `<stem>_otp.ex` next to `path`. Each conforming process is a
   GenServer that talks to one peer pid. A `read` is that same
   process. The place stays on the reading. The BEAM runs that

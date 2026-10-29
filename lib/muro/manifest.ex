@@ -17,8 +17,8 @@ defmodule Muro.Manifest do
       or `{book_path, module, target_path, opts}`. Paths are relative
       to the project root. The module is an alias atom
       (`MyApp.Billing.Rounding`). A 3-tuple is an Elixir module.
-      `opts` is a keyword list: `kind: :elixir` (the default) or
-      `kind: :exunit`, and for `:exunit` an optional `impl:` alias,
+      `opts` is a keyword list: `kind: :elixir` (the default),
+      `kind: :exunit`, or `kind: :fsm`, and for `:exunit` an optional `impl:` alias,
       the implementation the suite tests by default, and an optional
       `imports:` boolean. `imports: true` collects closed equations
       from the files that book imports directly. The default is
@@ -704,7 +704,7 @@ defmodule Muro.Manifest do
       :error ->
         {:elixir, []}
 
-      {:ok, kind} when kind in [:elixir, :exunit] ->
+      {:ok, kind} when kind in [:elixir, :exunit, :fsm] ->
         {kind, []}
 
       {:ok, kind} ->

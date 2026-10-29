@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.18.1
+
+`mix muro.emit path.muro --backend fsm` prints one module for the book's sessions. Each session is a child module, the stem plus `Fsm`, then the session name (`MeetFsm.Ping`). The module is pure: no process, no transport, and no dependency on Muro at run time. A host that already has an RPC, an HTTP exchange, a queue, or a websocket threads the state through `init`, `send`, and `recv`, and asks `done?` at the end.
+
+`send/2` and `recv/2` return `{:ok, state}` or `{:error, {:unexpected, step, expected, value}}`. `value` is the host's value, unchanged. `step` names the action in the source protocol, for example `examples/meet.muro:6 session back: first send Nat`. `expected/1` is `:done`, `{:send, type}`, `{:recv, type}`, `{:send_pick, [:b0, :b1]}`, or `{:recv_pick, [:b0, :b1]}`. A choice is `{:pick, :b0}` or `{:pick, :b1}`. A bit index is the bit itself.
+
+`check_trace/1` accepts a prefix of one end's exchange. A log may be cut short, and a `rec` protocol never reaches `end`. `check_trace(trace, complete: true)` also requires the protocol to be at `end`. A session with parameters takes those nats as `init` arguments, and `check_trace/2` takes `args:`.
+
+The wire form is the one the OTP image carries. A nat is an integer, a bit is `:b0` or `:b1`, unit is `:tt`, a pair is a tuple, a record is a map, a vector is a list of the length the type says, and a constructor is an atom or a tagged tuple. An evidence payload is that nat, and the machine also checks the bound the evidence stands for. A nat above the bound is refused. The OTP image checks only that the value is a nat. When the book has a `repr` (#131) for a payload type, that type's host form is the repr: `decode_<type>/1` returns `{:ok, value, table}`, the value is checked, and the table is dropped. A value the codec rejects is `:unexpected`.
+
+The machine takes the same arm a meeting would: a bit index, the constructor just exchanged, or a `run` of that value. The run is the emitted function. A nat above 100_000 is refused at that call, before a Peano term is built. State is opaque. Hosts store it and compare it with `==`.
+
+A book with no session is refused. A protocol the machine cannot evaluate, including a talk, an unevaluable bound or length, and a `run` it cannot call, is refused at emit time and names the session. Nothing is emitted for part of the book. `--node` and `--imports` with this backend are refused. The OTP backend is unchanged. One module is one session.
+
+`kind: :fsm` in a manifest writes the same module. `impl:` and `imports:` on that entry are errors.
+
+### Manual
+
+- State machines: the API of one end, the wire form, evidence bounds, `repr` payloads, and what emit refuses.
+- Emit, Sessions, Committed modules, Examples, and For agents point at that page.
+
+### Package
+
+- `scripts/archive-smoke.sh` generates `examples/meet.muro` as `kind: :fsm` inside a host and walks one end.
+- Version 0.18.1.
+
 ## 0.18.0
 
 **Breaking:** Every `decode_<type>` now returns `{:ok, value, table}` instead of `{:ok, value}`. Match the three-tuple, and keep the table to encode. Every `encode_<type>` now takes `(value, table)`, and the arity-1 form is gone, so regenerate every committed module with `mix muro.gen` and update each caller. A book that uses no names gets an empty table and needs only the mechanical change.

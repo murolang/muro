@@ -29,7 +29,7 @@ cd muro
 mise install
 mix deps.get
 mix archive.build
-mix archive.install muro-0.18.0.ez
+mix archive.install muro-0.18.1.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -108,7 +108,7 @@ mix muro.check examples/plus.muro
 On success the shell prints the version that checked the book, then:
 
 ```
-Muro v0.18.0
+Muro v0.18.1
 All terms check. Evidence never becomes a run.
 ```
 

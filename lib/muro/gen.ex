@@ -30,6 +30,7 @@ defmodule Muro.Gen do
 
   The module name is the manifest's alias. An `:elixir` entry calls
   `Muro.emit_file/3`. An `:exunit` entry calls `Muro.emit_exunit/3`.
+  A `:fsm` entry calls `Muro.emit_fsm/3`.
   The bytes are formatted with the project's `.formatter.exs` when
   that file exists (`Mix.Tasks.Format.formatter_for_file/2`), and with
   `Code.format_string!/2` otherwise. `.ex` and `.exs` are formatted
@@ -285,6 +286,12 @@ defmodule Muro.Gen do
 
         case Muro.emit_exunit(path, entry.module, opts) do
           {:ok, %{source: source, skips: skips}} -> {:ok, source, skips}
+          {:error, message} -> {:error, message}
+        end
+
+      :fsm ->
+        case Muro.emit_fsm(path, entry.module, fuel: fuel, root: root, book: entry.book) do
+          {:ok, source} -> {:ok, source, []}
           {:error, message} -> {:error, message}
         end
 

@@ -640,7 +640,8 @@ defmodule Muro.EmitExunitTest do
           fn -> Muro.emit_rust(path) end,
           fn -> Muro.emit_asm(path) end,
           fn -> Muro.emit_otp(path) end,
-          fn -> Muro.emit_node(path, :a) end
+          fn -> Muro.emit_node(path, :a) end,
+          fn -> Muro.emit_fsm(path, LibFsm) end
         ] do
       assert {:error, refused} = call.()
       assert refused =~ "param p is supplied by a file that imports this one"
@@ -653,7 +654,7 @@ defmodule Muro.EmitExunitTest do
     assert source =~ "test \"lib.muro held\""
     refute source =~ "@callback p_is"
 
-    for backend <- ["elixir", "c", "rust", "asm", "otp"] do
+    for backend <- ["elixir", "c", "rust", "asm", "otp", "fsm"] do
       assert_raise Mix.Error, ~r/param p is supplied by a file that imports this one/, fn ->
         Mix.Tasks.Muro.Emit.run([path, "--backend", backend])
       end
