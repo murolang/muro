@@ -495,7 +495,14 @@ defmodule Muro.ReprTest do
     assert source =~ "def decode_shape("
     assert source =~ "@muro_repr_nat_max 1_000_000"
 
-    out = capture_io(fn -> Mix.Tasks.Muro.Emit.run(["examples/repr.muro"]) end)
+    # Mix.Shell.IO.info prints "==> muro" the first time the shell is used
+    # after another project has taken it. Dep compilation does that, and
+    # which test runs first decides whether this capture sees the line.
+    out =
+      fn -> Mix.Tasks.Muro.Emit.run(["examples/repr.muro"]) end
+      |> capture_io()
+      |> String.replace(~r/^==> \S+\n/m, "")
+
     assert String.trim_trailing(out) == String.trim_trailing(source)
   end
 
