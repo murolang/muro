@@ -12,7 +12,8 @@ defmodule Muro.Repr do
   when the book has no `interned string`. Encode takes that table. A term
   that is not a value of the type raises `FunctionClauseError`. An index
   the table does not have, a name a sibling constructor reserved, and a
-  duplicate map key raise `ArgumentError`.
+  duplicate map key raise `ArgumentError`. An open map refuses a key that
+  names a declared key in the other host form (`{:ambiguous_key, key}`).
 
   An ambiguous repr is refused here, at check time, and the message names
   both constructors. `integer` builds a Peano `Nat` with a tail call and
@@ -32,6 +33,7 @@ defmodule Muro.Repr do
     tag: ~w(muro_repr_tag),
     expect: ~w(muro_repr_expect),
     extra: ~w(muro_repr_no_extra),
+    ambiguous: ~w(muro_repr_ambiguous muro_repr_atom_index muro_repr_ambiguous_key),
     optional:
       ~w(muro_repr_decode_optional muro_repr_optional_present muro_repr_optional_value muro_repr_put_optional),
     nullable: ~w(muro_repr_decode_nullable muro_repr_encode_nullable),
@@ -1580,7 +1582,12 @@ defmodule Muro.Repr do
         end)
 
       {:map, open?, _, entries} ->
-        acc = if open?, do: acc, else: MapSet.put(acc, :extra)
+        acc =
+          cond do
+            open? and entries != [] -> MapSet.put(acc, :ambiguous)
+            not open? -> MapSet.put(acc, :extra)
+            true -> acc
+          end
 
         Enum.reduce(entries, acc, fn
           {:tag, _, _}, a -> MapSet.put(a, :tag)
@@ -1875,16 +1882,24 @@ defmodule Muro.Repr do
       end)
 
     lines = Enum.reverse(lines)
+    keys = Enum.reverse(keys)
 
-    lines =
-      if open? do
-        lines
-      else
-        key_list = keys |> Enum.reverse() |> Enum.map_join(", ", &inspect/1)
-        lines ++ [":ok <- muro_repr_no_extra(value, path, [#{key_list}])"]
+    # Ambiguous keys are decided before any field runs, so a bad field
+    # cannot hide a collision and map iteration cannot choose the error.
+    if open? do
+      case keys do
+        [] -> lines
+        _ -> [ambiguous_call(keys) | lines]
       end
+    else
+      key_list = Enum.map_join(keys, ", ", &inspect/1)
+      lines ++ [":ok <- muro_repr_no_extra(value, path, [#{key_list}])"]
+    end
+  end
 
-    lines
+  defp ambiguous_call(keys) do
+    key_list = Enum.map_join(keys, ", ", &inspect/1)
+    ":ok <- muro_repr_ambiguous(value, path, [#{key_list}])"
   end
 
   defp ctor_term(ctor, parts) do
@@ -2193,6 +2208,7 @@ defmodule Muro.Repr do
       |> maybe(:tag, feats, tag_helper())
       |> maybe(:expect, feats, expect_helper())
       |> maybe(:extra, feats, extra_helper())
+      |> maybe(:ambiguous, feats, ambiguous_helper())
       |> maybe(:optional, feats, optional_helpers())
       |> maybe(:nullable, feats, nullable_helpers())
       |> maybe(:list, feats, list_helpers())
@@ -2362,6 +2378,57 @@ defmodule Muro.Repr do
       case extra do
         [] -> :ok
         [key | _] -> {:error, {path, {:unexpected_key, key}}}
+      end
+    end
+    """
+  end
+
+  # Declaration order, not map order. Atom names are compared with
+  # Atom.to_string. The host key is never turned into an atom.
+  defp ambiguous_helper do
+    """
+    defp muro_repr_ambiguous(value, path, keys) do
+      atoms = muro_repr_atom_index(Map.keys(value), %{})
+
+      case muro_repr_ambiguous_key(keys, atoms, value, keys) do
+        nil -> :ok
+        key -> {:error, {path, {:ambiguous_key, key}}}
+      end
+    end
+
+    defp muro_repr_atom_index([], acc), do: acc
+
+    defp muro_repr_atom_index([key | rest], acc) when is_atom(key) do
+      muro_repr_atom_index(rest, Map.put(acc, Atom.to_string(key), key))
+    end
+
+    defp muro_repr_atom_index([_key | rest], acc) do
+      muro_repr_atom_index(rest, acc)
+    end
+
+    defp muro_repr_ambiguous_key([], _atoms, _value, _keys), do: nil
+
+    defp muro_repr_ambiguous_key([key | rest], atoms, value, keys) when is_binary(key) do
+      case Map.fetch(atoms, key) do
+        {:ok, atom} ->
+          if atom in keys do
+            muro_repr_ambiguous_key(rest, atoms, value, keys)
+          else
+            atom
+          end
+
+        :error ->
+          muro_repr_ambiguous_key(rest, atoms, value, keys)
+      end
+    end
+
+    defp muro_repr_ambiguous_key([key | rest], atoms, value, keys) when is_atom(key) do
+      name = Atom.to_string(key)
+
+      if Map.has_key?(value, name) and name not in keys do
+        name
+      else
+        muro_repr_ambiguous_key(rest, atoms, value, keys)
       end
     end
     """
@@ -2693,6 +2760,8 @@ defmodule Muro.Repr do
 
   # `{:nat_too_large, _}` is a clause only when a numeral fallback exists.
   # A boolean fallback never produces that reason, and an unused clause is a warning.
+  # `{:ambiguous_key, _}` is the same: only an open map produces it, and a
+  # fallback must not turn that collision into a default.
   defp else_helpers(feats) do
     limit =
       if MapSet.member?(feats, :fallback_nat) do
@@ -2704,10 +2773,21 @@ defmodule Muro.Repr do
         ""
       end
 
+    ambiguous =
+      if MapSet.member?(feats, :ambiguous) do
+        """
+        defp muro_repr_else({:error, {_path, {:ambiguous_key, _}}} = err, _at, _incoming, _fallback),
+          do: err
+        """
+      else
+        ""
+      end
+
     """
     defp muro_repr_else({:ok, got, table}, _path, _incoming, _fallback), do: {:ok, got, table}
 
     #{limit}
+    #{ambiguous}
     defp muro_repr_else({:error, {path, _reason}}, path, incoming, fallback),
       do: {:ok, fallback, incoming}
 

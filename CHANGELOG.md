@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.19.0
+
+**Breaking:** An open-map decode that used to succeed when the host map carried a declared key in another form (atom vs string) now returns `{:error, {path, {:ambiguous_key, k}}}`. Callers that send such maps must send the declared form.
+
+`map open` still ignores a key that names no declared key, so metadata stays legal. It refuses a key that is not declared when that key names a declared key in the other host form: an atom whose `Atom.to_string` equals a declared string key, or a string equal to the name of a declared atom key. The error names the form that was not declared, including when both forms are present. Several collisions report the one whose declared key comes first in the repr, before any field value is decoded, so the result does not depend on map iteration. A nested open map reports the inner map's path. `S else v` does not replace this error. A closed `map` still returns `{:unexpected_key, k}`. `map_of` has no declared keys and is unchanged. Encoding is unchanged.
+
+### Manual
+
+- Host representations: the rule next to `map open`, the error, and that `map_of` is unaffected.
+
+### Package
+
+- Version 0.19.0.
+
 ## 0.18.4
 
 `mix muro.mutate path.muro` reports which evidence constrains each `run` definition. For every `run` and `run internal` definition in the file it builds type-preserving mutants, in a fixed order, and re-checks the definitions that mention the mutated name. Evidence, spec, data, and the prelude are left unchanged. A mutant the checker rejects is discarded and counted. A mutant whose body converts with the original, under `Muro.Check.conv/4` and the book's fuel, is `equivalent`. A mutant that makes a depending definition fail is `killed`, with that definition's name and location. A mutant the fuel cannot decide is `out_of_fuel`. A mutant that type-checks, whose conversion with the original fails within the fuel, and that leaves every re-checked definition checking, is `surviving`.

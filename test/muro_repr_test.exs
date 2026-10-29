@@ -495,7 +495,14 @@ defmodule Muro.ReprTest do
     assert source =~ "def decode_shape("
     assert source =~ "@muro_repr_nat_max 1_000_000"
 
-    out = capture_io(fn -> Mix.Tasks.Muro.Emit.run(["examples/repr.muro"]) end)
+    # Mix.Shell.IO.info prints "==> muro" the first time the shell is used
+    # after another project has taken it. Dep compilation does that, and
+    # which test runs first decides whether this capture sees the line.
+    out =
+      fn -> Mix.Tasks.Muro.Emit.run(["examples/repr.muro"]) end
+      |> capture_io()
+      |> String.replace(~r/^==> \S+\n/m, "")
+
     assert String.trim_trailing(out) == String.trim_trailing(source)
   end
 
@@ -649,6 +656,251 @@ defmodule Muro.ReprTest do
     {:ok, on, ^table} = mod.decode_soft(%{"flag" => true})
     assert mod.encode_soft(on, table) == %{"flag" => true}
     assert mod.decode_soft(mod.encode_soft(on, table)) == {:ok, on, table}
+  end
+
+  test "an open map refuses a key that names a declared key in the other form" do
+    {mod, source} = ambig_mod(ReprAmbig)
+    refute source =~ "String.to_atom"
+    assert source =~ "muro_repr_ambiguous"
+    assert source =~ "muro_repr_no_extra"
+    assert source =~ "defp muro_repr_else({:error, {_path, {:ambiguous_key, _}}} = err"
+
+    assert source =~
+             ~r/muro_repr_ambiguous\(value, path, \[\s*"read",\s*"write",\s*"admin"\s*\]\)/
+
+    assert source =~ ~r/muro_repr_ambiguous\(value, path, \[\s*:write,\s*:read\s*\]\)/
+
+    assert mod.decode_grant(%{"relation" => "x", :read => false}) ==
+             {:error, {[], {:ambiguous_key, :read}}}
+
+    assert {:ok, {:grant, :nothing}, table} =
+             mod.decode_grant(%{"relation" => "x", :source => :preset})
+
+    assert mod.encode_grant({:grant, :nothing}, table) == %{}
+
+    assert {:ok, {:grant, :nothing}, table} =
+             mod.decode_grant(%{"relation" => "x", "token_id" => 7})
+
+    assert mod.encode_grant({:grant, :nothing}, table) == %{}
+
+    assert mod.decode_grant(%{"relation" => "x", "read" => false, :read => true}) ==
+             {:error, {[], {:ambiguous_key, :read}}}
+
+    assert mod.decode_grant(%{"read" => 1, :read => false}) ==
+             {:error, {[], {:ambiguous_key, :read}}}
+
+    assert {:ok, {:grant, {:just, false}}, table} =
+             mod.decode_grant(%{"read" => false, "token_id" => 7, :source => :preset, 1 => 2})
+
+    assert mod.encode_grant({:grant, {:just, false}}, table) == %{"read" => false}
+
+    assert mod.decode_atom_grant(%{"relation" => "x", "read" => false}) ==
+             {:error, {[], {:ambiguous_key, "read"}}}
+
+    assert mod.decode_atom_grant(%{:read => false, "read" => true, "relation" => "x"}) ==
+             {:error, {[], {:ambiguous_key, "read"}}}
+
+    assert {:ok, {:atom_grant, {:just, false}}, table} =
+             mod.decode_atom_grant(%{:read => false, "token_id" => 7, :source => :preset})
+
+    assert mod.encode_atom_grant({:atom_grant, {:just, false}}, table) == %{:read => false}
+
+    assert {:ok, {:both, true, false}, table} =
+             mod.decode_both(%{"read" => true, :read => false, "token_id" => 7})
+
+    assert mod.encode_both({:both, true, false}, table) == %{"read" => true, :read => false}
+
+    assert {:ok, {:tag, true}, _} =
+             mod.decode_tag(%{
+               "kind" => "circle",
+               "ok" => true,
+               "token_id" => 7,
+               :source => :preset
+             })
+
+    assert mod.decode_tag(%{"kind" => "circle", "ok" => true, :kind => "circle"}) ==
+             {:error, {[], {:ambiguous_key, :kind}}}
+
+    assert mod.decode_tag(%{:kind => "circle"}) == {:error, {[], {:ambiguous_key, :kind}}}
+
+    assert mod.decode_tag(%{"kind" => "square", "ok" => true, :source => :preset}) ==
+             {:error, {["kind"], {:expected, "circle", "square"}}}
+
+    assert {:ok, {:atom_tag, true}, _} =
+             mod.decode_atom_tag(%{:kind => :yes, :ok => true, "token_id" => 7})
+
+    assert mod.decode_atom_tag(%{:kind => :yes, :ok => true, "kind" => "x"}) ==
+             {:error, {[], {:ambiguous_key, "kind"}}}
+
+    assert mod.decode_atom_tag(%{"kind" => :yes}) == {:error, {[], {:ambiguous_key, "kind"}}}
+
+    assert mod.decode_hold({%{:read => false}}) == {:error, {[0], {:ambiguous_key, :read}}}
+    assert {:ok, {:hold, :node_none}, _} = mod.decode_hold({1})
+
+    assert mod.decode_hold({%{"read" => 1}}) ==
+             {:error, {[0, "read"], {:not_boolean, 1}}}
+  end
+
+  test "several ambiguous keys report the first declared key, in any map order" do
+    {mod, _source} = ambig_mod(ReprAmbigOrder)
+    collisions = [{:admin, false}, {:write, false}, {:read, false}]
+
+    results =
+      Enum.map([:strings_first, :collisions_first, :rev, :middle], fn order ->
+        mod.decode_many(padded(collisions, order))
+      end)
+
+    assert results == List.duplicate({:error, {[], {:ambiguous_key, :read}}}, 4)
+
+    later = [{:admin, true}, {:write, false}]
+
+    assert mod.decode_many(padded(later, :strings_first)) ==
+             {:error, {[], {:ambiguous_key, :write}}}
+
+    assert mod.decode_many(padded(later, :rev)) == {:error, {[], {:ambiguous_key, :write}}}
+
+    strings = [{"read", false}, {"write", true}]
+
+    assert mod.decode_atom_many(padded(strings, :collisions_first)) ==
+             {:error, {[], {:ambiguous_key, "write"}}}
+
+    assert mod.decode_atom_many(padded(strings, :rev)) ==
+             {:error, {[], {:ambiguous_key, "write"}}}
+
+    assert mod.decode_atom_many(padded([{"read", false}], :middle)) ==
+             {:error, {[], {:ambiguous_key, "read"}}}
+
+    assert {:ok, {:many, :nothing, {:just, false}, :nothing}, _} =
+             mod.decode_many(%{"write" => false, :source => :preset, "token_id" => 7})
+  end
+
+  test "a nested open map reports the ambiguous key at the inner path" do
+    {mod, _source} = ambig_mod(ReprAmbigNest)
+    inner = padded([{:read, false}], :middle)
+
+    assert mod.decode_parent(%{"child" => inner, "token_id" => 7}) ==
+             {:error, {["child"], {:ambiguous_key, :read}}}
+
+    assert mod.decode_grand(%{"parent" => %{"child" => %{"relation" => "x", :read => false}}}) ==
+             {:error, {["parent", "child"], {:ambiguous_key, :read}}}
+
+    assert mod.decode_grand(%{
+             :parent => 1,
+             "parent" => %{"child" => %{:read => false}}
+           }) == {:error, {[], {:ambiguous_key, :parent}}}
+
+    assert mod.decode_kids([%{"read" => false}, %{:read => true, "token_id" => 7}]) ==
+             {:error, {[1], {:ambiguous_key, :read}}}
+
+    assert mod.decode_kids([%{:read => false}, %{"read" => true}]) ==
+             {:error, {[0], {:ambiguous_key, :read}}}
+
+    assert {:ok, {:kids, {:cons, {:child, {:just, false}}, nil}}, _} =
+             mod.decode_kids([%{"read" => false, :source => :preset}])
+  end
+
+  test "a closed map and map_of do not use the ambiguous-key rule" do
+    {mod, _source} = ambig_mod(ReprAmbigClosed)
+
+    assert mod.decode_closed(%{"read" => false, :read => true, "relation" => "x"}) ==
+             {:error, {[], {:unexpected_key, :read}}}
+
+    assert mod.decode_closed(%{"read" => 1, :read => false}) ==
+             {:error, {["read"], {:not_boolean, 1}}}
+
+    assert mod.decode_closed(%{"read" => true, "relation" => "x"}) ==
+             {:error, {[], {:unexpected_key, "relation"}}}
+
+    assert {:ok, {:closed, {:just, true}}, table} = mod.decode_closed(%{"read" => true})
+    assert mod.encode_closed({:closed, {:just, true}}, table) == %{"read" => true}
+
+    assert mod.decode_bag(%{0 => true, :read => false}) ==
+             {:error, {[{:key, :read}], {:not_integer, :read}}}
+
+    assert mod.decode_bag(%{0 => true, "read" => false}) ==
+             {:error, {[{:key, "read"}], {:not_integer, "read"}}}
+
+    assert mod.decode_bag(%{:read => false, "read" => true}) ==
+             {:error, {[{:key, :read}], {:not_integer, :read}}}
+
+    assert {:ok, {:bag, {:cons, {0, true}, nil}}, table} = mod.decode_bag(%{0 => true})
+    assert mod.encode_bag({:bag, {:cons, {0, true}, nil}}, table) == %{0 => true}
+  end
+
+  test "the emitted decoder and the in-process module agree on the same inputs" do
+    {direct, _source} = ambig_mod(ReprAmbigDirect)
+    path = Path.join(System.tmp_dir!(), "muro_ambig_#{System.unique_integer([:positive])}.muro")
+    File.write!(path, ambig_src())
+    on_exit(fn -> File.rm(path) end)
+    emitted = compile_file(path, ReprAmbigEmitted)
+
+    inputs = [
+      %{"relation" => "x", :read => false},
+      %{"relation" => "x", :source => :preset},
+      %{"relation" => "x", "token_id" => 7},
+      %{"relation" => "x", "read" => false, :read => true},
+      %{"read" => false},
+      %{"read" => true, "token_id" => 7, :source => :preset},
+      %{"read" => 1},
+      %{"read" => 1, :read => false},
+      %{},
+      %{"read" => false, 1 => 2, {:a, :b} => 3},
+      padded([{:read, false}], :strings_first),
+      padded([{:read, false}, {:other, 1}], :rev)
+    ]
+
+    Enum.each(inputs, fn input ->
+      direct_grant = direct.decode_grant(input)
+      direct_choice = direct.decode_choice_grant(input)
+      assert direct_grant == emitted.decode_grant(input)
+      assert direct_choice == emitted.decode_choice_grant(input)
+
+      assert direct.decode_parent(%{"child" => input}) ==
+               emitted.decode_parent(%{"child" => input})
+
+      assert same_arm(direct_grant, direct_choice)
+    end)
+  end
+
+  test "only the maps that need them emit the extra-key helpers" do
+    {_mod, open_source} =
+      ambig_shape(
+        ReprAmbigOpenOnly,
+        """
+        data Bool : Type where
+          true : Bool
+          false : Bool
+
+        data Grant : Type where
+          grant : Bool → Grant
+
+        repr Bool := boolean
+        repr Grant := map open { "read" => Bool }
+        """
+      )
+
+    assert open_source =~ "muro_repr_ambiguous"
+    refute open_source =~ "muro_repr_no_extra"
+
+    {_mod, closed_source} =
+      ambig_shape(
+        ReprAmbigClosedOnly,
+        """
+        data Bool : Type where
+          true : Bool
+          false : Bool
+
+        data Grant : Type where
+          grant : Bool → Grant
+
+        repr Bool := boolean
+        repr Grant := map { "read" => Bool }
+        """
+      )
+
+    assert closed_source =~ "muro_repr_no_extra"
+    refute closed_source =~ "muro_repr_ambiguous"
+    refute closed_source =~ "ambiguous_key"
   end
 
   test "a list of 100000 elements decodes" do
@@ -1447,6 +1699,132 @@ defmodule Muro.ReprTest do
                  match?({:error, {path, _}} when is_list(path), result)
       end
     end
+  end
+
+  # Forty-odd atoms, none of them a declared key in the ambiguous-key book.
+  # The sigil builds them at compile time, so the test does not call String.to_atom.
+  @pad_atoms ~w(aa ab ac ad ae af ag ah ai aj ak al am an ao ap aq ar as at au av aw ax ay az ba bb bc bd be bf bg bh bi bj bk bl bm bn bo)a
+
+  # The choice arm and the top-level map call the same decoder lines. Their
+  # constructors differ because a book cannot repeat a name.
+  defp same_arm({:ok, {:grant, payload}, table}, {:ok, {:choice_grant, payload}, table}),
+    do: true
+
+  defp same_arm({:error, err}, {:error, err}), do: true
+
+  defp same_arm(left, right) do
+    flunk("grant and its choice arm disagree:\n#{inspect(left)}\n#{inspect(right)}")
+  end
+
+  defp ambig_mod(mod) do
+    book = ok!(ambig_src())
+    source = Emit.emit_module(mod, book)
+    {compile_source(source, mod), source}
+  end
+
+  defp ambig_shape(mod, src) do
+    book = ok!(src)
+    source = Emit.emit_module(mod, book)
+    {compile_source(source, mod), source}
+  end
+
+  defp padded(collisions, order) do
+    strings = for i <- 0..40, do: {"p#{i}", 0}
+    atoms = for atom <- @pad_atoms, do: {atom, 0}
+
+    pairs =
+      case order do
+        :strings_first -> strings ++ atoms ++ collisions
+        :collisions_first -> collisions ++ strings ++ atoms
+        :rev -> Enum.reverse(atoms) ++ Enum.reverse(strings) ++ Enum.reverse(collisions)
+        :middle -> strings ++ collisions ++ atoms
+      end
+
+    Enum.reduce(pairs, %{}, fn {k, v}, acc -> Map.put(acc, k, v) end)
+  end
+
+  defp ambig_src do
+    """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data Maybe (A : Type) : Type where
+      nothing : Maybe A
+      just : A → Maybe A
+
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+
+    data Grant : Type where
+      grant : Maybe Bool → Grant
+
+    data ChoiceGrant : Type where
+      choice_grant : Maybe Bool → ChoiceGrant
+      choice_none : ChoiceGrant
+
+    data AtomGrant : Type where
+      atom_grant : Maybe Bool → AtomGrant
+
+    data Both : Type where
+      both : Bool → Bool → Both
+
+    data Many : Type where
+      many : Maybe Bool → Maybe Bool → Maybe Bool → Many
+
+    data AtomMany : Type where
+      atom_many : Maybe Bool → Maybe Bool → AtomMany
+
+    data Child : Type where
+      child : Maybe Bool → Child
+
+    data Parent : Type where
+      parent : Child → Parent
+
+    data Grand : Type where
+      grand : Parent → Grand
+
+    data Kids : Type where
+      kids : List Child → Kids
+
+    data Closed : Type where
+      closed : Maybe Bool → Closed
+
+    data Bag : Type where
+      bag : List (Nat × Bool) → Bag
+
+    data Tag : Type where
+      tag : Bool → Tag
+
+    data AtomTag : Type where
+      atom_tag : Bool → AtomTag
+
+    data Node : Type where
+      node_grant : Maybe Bool → Node
+      node_none : Node
+
+    data Hold : Type where
+      hold : Node → Hold
+
+    repr Bool := boolean
+    repr Grant := map open { "read" => optional Bool }
+    repr ChoiceGrant := choice_grant => map open { "read" => optional Bool } | choice_none => nil
+    repr AtomGrant := map open { :read => optional Bool }
+    repr Both := map open { "read" => Bool, :read => Bool }
+    repr Many := map open { "read" => optional Bool, "write" => optional Bool, "admin" => optional Bool }
+    repr AtomMany := map open { :write => optional Bool, :read => optional Bool }
+    repr Child := map open { "read" => optional Bool }
+    repr Parent := map open { "child" => Child }
+    repr Grand := map open { "parent" => Parent }
+    repr Kids := list Child
+    repr Closed := map { "read" => optional Bool }
+    repr Bag := map_of integer => boolean
+    repr Tag := map open { "kind" => "circle", "ok" => Bool }
+    repr AtomTag := map open { :kind => :yes, :ok => Bool }
+    repr Node := node_grant => map open { "read" => optional Bool } | node_none => nil
+    repr Hold := tuple { Node else node_none }
+    """
   end
 
   defp example do
