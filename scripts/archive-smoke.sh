@@ -445,6 +445,7 @@ EOF
   rm -rf book.muro muro_deps muro.lock lib/host/shared_use.ex
 
   cp "$root/examples/repr.muro" repr.muro
+  cp "$root/examples/repr_names.muro" repr_names.muro
 
   # Closed equations. Round is the file stem, so the suite's default
   # implementation is the emitted module. RoundTest is the .exs mix test
@@ -469,6 +470,7 @@ EOF
   modules: [
     {"half_ok.muro", Host.HalfOk, "lib/host/half_ok.ex"},
     {"repr.muro", Host.Repr, "lib/host/repr.ex"},
+    {"repr_names.muro", Host.ReprNames, "lib/host/repr_names.ex"},
     {"round.muro", Round, "lib/round.ex"},
     {"round.muro", RoundTest, "test/round_test.exs", [kind: :exunit]},
     {"round.muro", RoundSuite, "test/support/round_suite.ex", [kind: :exunit]}
@@ -532,6 +534,7 @@ EOF
   fi
   have "$host_exunit_gen" "written lib/round.ex" "host exunit gen"
   have "$host_exunit_gen" "written lib/host/repr.ex" "host exunit gen"
+  have "$host_exunit_gen" "written lib/host/repr_names.ex" "host exunit gen"
   have "$host_exunit_gen" "written test/round_test.exs" "host exunit gen"
   have "$host_exunit_gen" "written test/support/round_suite.ex" "host exunit gen"
   have "$host_exunit_gen" "skipped test/round_test.exs: step-ok (round.muro:" "host exunit gen"
@@ -651,6 +654,7 @@ EOF
   modules: [
     {"half_ok.muro", Host.HalfOk, "lib/host/half_ok.ex"},
     {"repr.muro", Host.Repr, "lib/host/repr.ex"},
+    {"repr_names.muro", Host.ReprNames, "lib/host/repr_names.ex"},
     {"round.muro", Round, "lib/round.ex"},
     {"round.muro", RoundTest, "test/round_test.exs", [kind: :exunit]},
     {"round.muro", RoundSuite, "test/support/round_suite.ex", [kind: :exunit]},
@@ -747,8 +751,11 @@ EOF
   mv "$tmp/host-test-helper.exs" test/test_helper.exs
 
   test -s lib/host/repr.ex
+  test -s lib/host/repr_names.ex
   grep -q "def decode_entry" lib/host/repr.ex
   grep -q "def toggle" lib/host/repr.ex
+  grep -q "def decode_template" lib/host/repr_names.ex
+  grep -q "def muro_repr_table_new" lib/host/repr_names.ex
 
   set +e
   repr_check=$(mix muro.gen --check 2>&1)
@@ -761,8 +768,8 @@ EOF
   fi
 
   cat > repr_call.exs <<'EOF'
-{:ok, v} = Host.Repr.decode_entry(%{"id" => 3, "enabled" => true})
-enc = Host.Repr.encode_entry(Host.Repr.toggle(v))
+{:ok, v, table} = Host.Repr.decode_entry(%{"id" => 3, "enabled" => true})
+enc = Host.Repr.encode_entry(Host.Repr.toggle(v), table)
 bad = Host.Repr.decode_entry(%{"id" => 3, "enabled" => 1})
 IO.puts("REPR_ENC #{inspect(enc)}")
 IO.puts("REPR_BAD #{inspect(bad)}")
@@ -781,6 +788,34 @@ EOF
   have "$repr_run" "\"id\" => 3" "repr encode id"
   have "$repr_run" "\"enabled\" => false" "repr encode enabled"
   have "$repr_run" "REPR_BAD {:error, {[\"enabled\"], {:not_boolean, 1}}}" "repr strict failure"
+
+  cat > repr_names_call.exs <<'EOF'
+wire = %{
+  "*" => [%{"relation" => "*", "read" => true}],
+  "auth" => [%{"relation" => "token", "read" => false}]
+}
+{:ok, v, table} = Host.ReprNames.decode_template(wire)
+IO.puts("NAMES #{inspect(Host.ReprNames.muro_repr_table_names(table))}")
+IO.puts("NAMES_ENC #{inspect(Host.ReprNames.encode_template(v, table))}")
+IO.puts("NAMES_OFF #{inspect(Host.ReprNames.encode_template(Host.ReprNames.reads_off(v), table))}")
+IO.puts("NAMES_COUNT #{inspect(Host.ReprNames.count_entries(v))}")
+EOF
+
+  set +e
+  names_run=$(mix run repr_names_call.exs 2>&1)
+  names_run_status=$?
+  set -e
+  printf '%s\n' "$names_run"
+  if [ "$names_run_status" -ne 0 ]; then
+    echo "host mix run of the names codec failed" >&2
+    exit 1
+  fi
+  have "$names_run" 'NAMES ["auth", "token"]' "repr names table"
+  have "$names_run" '"relation" => "*"' "repr names wild relation"
+  have "$names_run" '"relation" => "token"' "repr names token relation"
+  have "$names_run" '"read" => true' "repr names read true"
+  have "$names_run" '"read" => false' "repr names read false"
+  have "$names_run" 'NAMES_COUNT {:suc, {:suc, 0}}' "repr names count"
 
   cat > bad_repr.muro <<'EOF'
 data E : Type where

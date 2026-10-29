@@ -454,7 +454,13 @@ See [Emit](emit.md).
 
 Host representations for input and output types. `Bool` is `boolean`. `Entry` is a map with an optional `Maybe Bool`. `Shape` and `Outcome` are choices of tagged maps, and `empty` and `absent` are `nil`. `toggle`, `flip`, `describe`, and `widen` are run. `toggle-on` and `describe-none` are `refl`.
 
-`mix muro.emit examples/repr.muro` writes `decode_entry` and `encode_entry` next to `toggle`. A host calls decode, then the run function, then encode. See [Host representations](repr.md).
+`mix muro.emit examples/repr.muro` writes `decode_entry` and `encode_entry` next to `toggle`. Decode returns `{:ok, value, table}`. Encode takes that table. A host calls decode, then the run function, then encode. See [Host representations](repr.md).
+
+## repr_names.muro
+
+Free-form names, a map keyed by those names, and a stated fallback. `Key` is `wild` for `"*"` and `named` of an interned `Nat` otherwise. `Entry` maps `"relation"` to a `Key` and `"read"` to `optional (boolean else false)`. `Template` is a one-field newtype, and its repr is `map_of Key => list Entry`. `reads-off` sets every flag to `just false`. `count-entries` counts the entries. `off-wild` is `refl`.
+
+See [Host representations](repr.md).
 
 ## nx_add.muro
 

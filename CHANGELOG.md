@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.18.0
+
+**Breaking:** Every `decode_<type>` now returns `{:ok, value, table}` instead of `{:ok, value}`. Match the three-tuple, and keep the table to encode. Every `encode_<type>` now takes `(value, table)`, and the arity-1 form is gone, so regenerate every committed module with `mix muro.gen` and update each caller. A book that uses no names gets an empty table and needs only the mechanical change.
+
+This extends the host representation from #131. `interned string` maps a UTF-8 binary, of any length including empty, to an index in one table shared by the whole decode. The target is `Nat`, built as the same Peano term `integer` builds, or a binary-numeral type recognised by shape: a declared type with no parameters and no indices, one nullary constructor in any declaration position, and two unary constructors of the type itself, in declaration order. The index is the bijective base-2 numeral, so every index has one term and every term has one index. Any other target is refused at `mix muro.check`, and the message names the constructor, the field, the type, and those two targets. `repr Nat := interned string` stays `Nat is represented by integer`. A whole-body `interned string` on a type with more than one constructor is refused: a name is a field.
+
+The table hosts may rely on is `%{by_name: %{binary => index}, by_index: %{index => binary}}`, dense from 0, each map the inverse of the other. It is built only with `muro_repr_table_new/0`, `muro_repr_table_new/1` (distinct binaries; the position is the index), and read back with `muro_repr_table_names/1`. Those names are on the helper collision list. A table that does not have this shape raises `ArgumentError` naming the function. `decode_<type>/1` starts empty. `decode_<type>/2` starts from the table the host passes, so a name it already knows keeps its index. The table grows in first-seen order, and that order is the repr's traversal, not map iteration: fixed keys in the order written, lists in element order, a `map_of` in sorted wire-key order, and inside one pair the key before the value. A failed decode returns no table. A new index above `@muro_repr_nat_max` is `{:too_many_names, max}`. Encode looks the index up and never extends the table. A missing index, or a name reserved by a sibling string literal, raises `ArgumentError`.
+
+An `interned string` arm of a choice accepts every string except the string literals sibling arms of that same choice name directly, whatever the declaration order. Two such arms overlap. A string reached only through a type reference is not reserved, and the arms overlap. A binary that is not valid UTF-8 is `{:not_string, v}`. A non-binary that matches no arm stays `{:no_variant, names, v}`.
+
+`map_of K => V` decodes a map into a list of pairs or of a two-field record. The list is sorted by the wire key in host term order (`{key, is_float(key)}`), so `1` comes before `1.0` and the order does not change after 32 keys. A key failure is at `{:key, wire_key}`. A value failure is at `wire_key`. Two wire keys that decode to one Muro key are `{:keys_collide, a, b}` at the map, with the wire keys in that order. It is an error, not a merge. Encode raises `ArgumentError` on a duplicate wire key and names the key. `decode(encode(v), table)` equals `v` only when the list was already sorted that way. A non-map is `{:not_map, v}`. `%{}` is the empty list.
+
+`S else v` is an opt-in fallback. Strict stays the default. `else` binds looser than `list`, `optional`, `nullable`, and `map_of`, and parentheses are that shape. It may follow only `boolean`, `integer`, or a type with its own repr, and only inside a component, not as a whole repr or a whole choice arm. The value is a nullary constructor of the field, or a `Nat` numeral at most the guard. It replaces an error reported at the position of that shape: a present non-boolean, a present non-integer or a negative integer, or a named type that fails at its own root. It does not replace a missing map key, an error deeper inside, or `{:nat_too_large, v}`. `optional (boolean else false)` decodes a missing key to `nothing` and every other present value, `nil` included, to `just false`. A present `nil` under a plain `optional` stays `{:nil_not_allowed, nil}`. `nullable` still takes `nil` as the nullary constructor before the fallback. Encode ignores the fallback, so encode of a decoded fallback is not the original wire value. The ambiguity check sees the inner shape.
+
+There is no arity-1 encode, including in a book with no names. A later `interned string` must not change what callers write. `flatten` of `%{k => [v1, v2]}` is not supported. A book states the item as a record of key and value. The codec does not parse JSON and does not keep the unknown keys of an `open` map.
+
+### Manual
+
+- Host representations: the table, `interned string`, `map_of`, `else`, and the new error reasons.
+- Emit, Committed modules, Grammar, Data, Examples, and For agents follow the new return shape.
+
+### Package
+
+- `examples/repr_names.muro` decodes a map keyed by free-form names, with `"read"` falling back to `false`.
+- `scripts/archive-smoke.sh` calls `decode_entry` and `encode_entry` with the table, and runs the names book inside the host.
+- Version 0.18.0.
+
 ## 0.17.0
 
 **Breaking:** Every ExUnit test is now named `"<file> <def-name>"` instead of `<name> (<file>:<line>)`. Regenerate suites with `mix muro.gen` and update any CI history, quarantine list, or `--only` / `--exclude` filter that matched the old names. The file and line are in the assertion message, `"<file>:<line> <def-name>"`, so a failure still names the equation and the line. The name has no line number, so a line shift does not change it. Skip comments and the `skipped` lines keep the 0.16.76 spelling, `name (file:line): reason`.

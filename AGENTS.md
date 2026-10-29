@@ -46,7 +46,7 @@ mix muro.deps.get                            # fetch muro_deps/ and write muro.l
 make agda                                   # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.17.0`. From a checkout: `mix archive.build && mix archive.install muro-0.17.0.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks.
+The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.18.0`. From a checkout: `mix archive.build && mix archive.install muro-0.18.0.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks.
 
 Success from `mix muro.check`: a `Muro v…` line, then `All terms check. Evidence never becomes a run.` A book that imports packages then prints one `conforms to <name> <version> (sha256 <hash>)` line per package. See [Packages](manual/packages.md).
 
@@ -69,7 +69,7 @@ mix muro.emit path.muro --backend asm       # <name>.s, Cortex-M0, Nat run
 {:ok, files} = Muro.emit_asm("examples/your_file.muro")       # .s
 ```
 
-A `repr` makes `mix muro.emit` also write `decode_<type>/1` and `encode_<type>/1`. See [Host representations](manual/repr.md).
+A `repr` makes `mix muro.emit` also write `decode_<type>/1`, `decode_<type>/2`, and `encode_<type>/2`. Decode returns `{:ok, value, table}`. Encode takes that table. See [Host representations](manual/repr.md).
 
 `--backend exunit` prints one test module for the book's closed equations. A file of unsupplied `param`s is accepted only by this backend. `--imports` also collects the files that book imports directly, and it is an error with any other backend. The tests call an implementation the host names. See [Closed equations as tests](manual/exunit.md).
 
