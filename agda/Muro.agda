@@ -27,6 +27,7 @@ import Muro.Tag
 import Muro.Soundness.Conv
 import Muro.Soundness.Views
 import Muro.Soundness
+import Muro.Productive
 import Muro.IR
 import Muro.Session
 import Muro.Rec
