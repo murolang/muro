@@ -27,11 +27,12 @@ Kernel identity on `F32` and on `Tensor F32 S` is refused. Machine floats are no
 
 Conversion, in order:
 
-1. Syntactic equality.
-2. Stuck-definition congruence, when the first argument is not constructor-headed: the same definition at convertible arguments.
-3. Weak head normal form, then compare again. This also follows a congruence whose arguments differ, since a definition may match on a later argument: `g Nat (suc 0) k` and `g Nat 0 k` convert when `g` matches on its second argument and both reduce to `k`.
+1. Syntactic equality. This does not spend fuel.
+2. The same definition applied to arguments: the arguments are compared. If they convert, the applications convert. If that comparison runs out of fuel, conversion stops.
+3. One unfolding, when the arguments do not convert and this definition is not already unfolding. A re-entry of that definition unfolds only when the match it reduces to fires on a constructor. Otherwise the application is neutral, and the argument mismatch stands. Two stuck calls that differ in an argument the unfolding does not erase fail here, at any fuel.
+4. Otherwise weak head normal form, then compare again. A definition that matches on a later argument still converts: `g Nat (suc 0) k` and `g Nat 0 k` differ in an argument, one unfolding matches on the second argument, and both sides reduce to `k`. A definition that ignores an argument converts the same way, because one unfolding makes the bodies identical.
 
-Fuel bounds reduction (`@fuel 2000` in Elixir, `mix muro.check --fuel N` to change it). Infer and check recurse on the term; they do not spend that fuel. Running out is the error `out of fuel`, not a failed conversion.
+Fuel is one budget for the argument comparison and the unfolding that follows it (`@fuel 2000` in Elixir, `mix muro.check --fuel N` to change it). Infer and check recurse on the term; they do not spend that fuel. Running out is the error `out of fuel`, and it means the budget was spent. It is not a failed conversion.
 
 So this evidence checks, after `zeros` is a productive unfold whose head is `0`:
 

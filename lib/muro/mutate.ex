@@ -44,7 +44,12 @@ defmodule Muro.Mutate do
     * `:max_mutants_per_def` — cap per definition (default #{@default_max}).
     * `:max_survivors` — `nil` (default) does not limit survivors.
     * `:fuel` — the checker's fuel (default `Muro.Check.default_fuel/0`).
+      The equivalence probe uses a quarter of it (at least 1, and less
+      than `:fuel` when `:fuel` is greater than 1). The re-check uses
+      `:fuel`.
     * `:concurrency` — how many mutants are classified at once.
+    * `:on_mutant` — called with each classified mutant, in enumeration
+      order. The default does nothing.
     * `:root` — passed to `Muro.Load.file/2`.
 
   `{:ok, report}` when the book checks and survivors are within the limit.
@@ -72,7 +77,8 @@ defmodule Muro.Mutate do
           {ms, infos ++ [info]}
         end)
 
-      judged = judge_all(List.flatten(raw), db, fuel, conc)
+      on_mutant = Keyword.get(opts, :on_mutant, fn _ -> :ok end)
+      judged = judge_all(List.flatten(raw), db, fuel, conc, on_mutant)
       report = pack(path, judged, defs)
 
       if is_integer(max_s) and report.summary.surviving > max_s do
@@ -1274,7 +1280,7 @@ defmodule Muro.Mutate do
 
   # -- classify ---------------------------------------------------------------
 
-  defp judge_all(mutants, db, fuel, conc) do
+  defp judge_all(mutants, db, fuel, conc, on_mutant) do
     mutants
     |> Task.async_stream(&classify(&1, db, fuel),
       ordered: true,
@@ -1282,8 +1288,12 @@ defmodule Muro.Mutate do
       max_concurrency: max(conc, 1)
     )
     |> Enum.map(fn
-      {:ok, m} -> m
-      {:exit, reason} -> exit(reason)
+      {:ok, m} ->
+        on_mutant.(m)
+        m
+
+      {:exit, reason} ->
+        exit(reason)
     end)
   end
 
@@ -1305,7 +1315,9 @@ defmodule Muro.Mutate do
         end
 
       :ok ->
-        if equivalent?(db, orig.body, m.db_body, fuel) do
+        # The probe is a fraction of the re-check fuel. Out of fuel here is
+        # not equivalence, so the mutant is re-checked at the full fuel.
+        if equivalent?(db, orig.body, m.db_body, probe_fuel(fuel)) do
           finish(m, "equivalent", nil, [])
         else
           recheck(m, book, fuel)
@@ -1338,6 +1350,11 @@ defmodule Muro.Mutate do
         finish(m, "surviving", nil, [])
     end
   end
+
+  # A quarter of the re-check fuel, and at least 1. Strictly smaller whenever
+  # the re-check has room to be.
+  defp probe_fuel(fuel) when fuel <= 1, do: fuel
+  defp probe_fuel(fuel), do: max(div(fuel, 4), 1)
 
   # Stock conversion treats match branches by constructor position. When that
   # fails for a reason other than fuel, pair branches by constructor and ask

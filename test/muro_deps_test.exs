@@ -235,9 +235,9 @@ defmodule Muro.DepsTest do
     assert Muro.check_file(book) == :ok
 
     ok =
-      capture_io(fn ->
-        assert Mix.Tasks.Muro.Check.run([book]) == :ok
-      end)
+      fn -> assert Mix.Tasks.Muro.Check.run([book]) == :ok end
+      |> capture_io()
+      |> String.replace(~r/^==> \S+\n/m, "")
 
     assert ok ==
              "Muro v#{Mix.Tasks.Muro.version()}\nAll terms check. Evidence never becomes a run.\n#{line}\n"
@@ -895,12 +895,17 @@ defmodule Muro.DepsTest do
     path
   end
 
+  # Mix.Shell.IO.info prints "==> muro" the first time the shell is used
+  # after another project has taken it. Which test runs first decides
+  # whether this capture sees the line, so it is dropped here.
   defp task_get!(dir) do
-    capture_io(fn ->
+    fn ->
       File.cd!(dir, fn ->
         Mix.Tasks.Muro.Deps.Get.run([])
       end)
-    end)
+    end
+    |> capture_io()
+    |> String.replace(~r/^==> \S+\n/m, "")
   end
 
   defp init_repo(files, branch \\ nil) do
