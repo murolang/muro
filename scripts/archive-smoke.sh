@@ -1057,7 +1057,9 @@ hex_archives="$tmp/hex-archives"
 mkdir -p "$hex_dir" "$hex_app" "$hex_archives"
 (
   cd "$root"
-  mix hex.build --output "$tmp/muro-${version}.tar"
+  # The smoke installs the archive into an empty MIX_ARCHIVES. Hex lives
+  # in the default archives, and hex.build needs it to load the project.
+  env -u MIX_ARCHIVES mix hex.build --output "$tmp/muro-${version}.tar"
 )
 tar -xzf "$tmp/muro-${version}.tar" -C "$hex_dir"
 # A Hex tarball is CHECKSUM, VERSION, metadata.config, and contents.tar.gz.
@@ -1093,6 +1095,7 @@ EOF
 (
   cd "$hex_app"
   unset MIX_BUILD_PATH
+  unset MIX_ARCHIVES
   mix deps.get
   mix compile
   block=$(mix run -e 'IO.write(Muro.Skills.block(nil))')
