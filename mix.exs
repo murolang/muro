@@ -114,6 +114,11 @@ defmodule Muro.MixProject do
       Mix.raise("Burrito's is_prod/1 changed; the prod wrap could not be applied")
     end
 
+    Code.ensure_loaded!(Burrito.Builder.Step)
+    Code.ensure_loaded!(Burrito.Builder.Target)
+    Code.ensure_loaded!(Burrito.Builder.Context)
+    Code.ensure_loaded!(Burrito.Builder.Log)
+
     previous = Code.get_compiler_option(:ignore_module_conflict)
     Code.put_compiler_option(:ignore_module_conflict, true)
 
