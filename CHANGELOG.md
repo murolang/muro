@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.19.3
+
+A `temporal` declaration states `always`, `eventually`, or `leads_to` of one buffered meeting. The meeting stays its own entry. The declaration is evidence, the emitters skip it, and `--fuel` does not change its verdict. `mix muro.check` prints `temporal <name>: holds in <n> reachable states` after the version line. A book with no temporal declaration prints what it printed before.
+
+The formula is decided on the configurations reachable from the start. `Decide.check-sound` and `Decide.check-complete` say the decision accepts exactly when every infinite run satisfies the formula. A refusal is an infinite run that misses it. A finished configuration stutters. `solo-bounded` bounds a stretch of one side by the room in its queues, and `every-run-fair` says a run that never finishes takes both sides infinitely often, so the grammar has no fairness clause. The source fragment elaborates to the compiled process (`elab` of the echo and the spin, by `refl`) and the two starts agree (`init-sim`). The step-by-step correspondence and the transfer of satisfaction to source configurations are not theorems. The statements and the refusals are in [Limits](manual/limits.md). The page is [Temporal](manual/temporal.md). The book is `examples/temporal.muro`.
+
+### Manual
+
+- Temporal, Sessions, Grammar, Limits, Extending, Examples.
+
+### Package
+
+- Version 0.19.3.
+
 ## 0.19.1
 
 Outside spec, a seed that mentions the block is refused when the head or the tail of the step reads the seed binder. The refusal is `<name> productivity: unguarded recursive call`. A seed neither component reads stays accepted, including a descending call discarded before the step whose tail is a guarded call. A block-free seed may occur in the head or in the tail.
