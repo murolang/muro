@@ -483,3 +483,110 @@ nestOk = fromDefs (
 
 nest-ok-checks : checkSig! nestOk ≡ ok tt
 nest-ok-checks = refl
+
+-- The head computes the seed binder. occℕ sees it under the match,
+-- the annotation, the unit match, the rewrite, and the empty motive.
+-- Each tail is the block call, so the next head is that call.
+matchHeadS : Tm 0
+matchHeadS =
+  lam reuse nat
+    (unf (var zero)
+      (lam affine nat
+        (pair (mNat (var zero) nat ze (su (var zero)))
+              (app (def 0) (var (suc zero))))))
+
+matchHeadBook : Sig
+matchHeadBook = fromDefs (
+  mkDef "f" run (pi affine nat nat) mutualBadF ∷
+  mkDef "s" run (pi reuse nat (stream nat)) matchHeadS ∷
+  [])
+
+match-head-refused : checkSig! matchHeadBook ≡ fail "s productivity: unguarded recursive call"
+match-head-refused = refl
+
+annHeadS : Tm 0
+annHeadS =
+  lam reuse nat
+    (unf (var zero)
+      (lam affine nat
+        (pair (ann (var zero) nat)
+              (app (def 0) (var (suc zero))))))
+
+annHeadBook : Sig
+annHeadBook = fromDefs (
+  mkDef "f" run (pi affine nat nat) mutualBadF ∷
+  mkDef "s" run (pi reuse nat (stream nat)) annHeadS ∷
+  [])
+
+ann-head-refused : checkSig! annHeadBook ≡ fail "s productivity: unguarded recursive call"
+ann-head-refused = refl
+
+unitHeadS : Tm 0
+unitHeadS =
+  lam reuse nat
+    (unf (var zero)
+      (lam affine nat
+        (pair (mUnit one nat (var zero))
+              (app (def 0) (var (suc zero))))))
+
+unitHeadBook : Sig
+unitHeadBook = fromDefs (
+  mkDef "f" run (pi affine nat nat) mutualBadF ∷
+  mkDef "s" run (pi reuse nat (stream nat)) unitHeadS ∷
+  [])
+
+unit-head-refused : checkSig! unitHeadBook ≡ fail "s productivity: unguarded recursive call"
+unit-head-refused = refl
+
+-- eq is def 0, f is def 1, s is def 2. The rewritten head is still k.
+rwtF : Tm 0
+rwtF =
+  lam affine nat
+    (mNat (var zero) nat ze
+      (fstTm (ucons (app (def 2) (var zero)))))
+
+rwtS : Tm 0
+rwtS =
+  lam reuse nat
+    (unf (var zero)
+      (lam affine nat
+        (pair (rwt (def 0) nat (var zero))
+              (app (def 1) (var (suc zero))))))
+
+rwtBook : Sig
+rwtBook = fromDefs (
+  mkDef "eq" evid (idt nat ze ze) rfl ∷
+  mkDef "f" run (pi affine nat nat) rwtF ∷
+  mkDef "s" run (pi reuse nat (stream nat)) rwtS ∷
+  [])
+
+rwt-head-refused : checkSig! rwtBook ≡ fail "s productivity: unguarded recursive call"
+rwt-head-refused = refl
+
+-- The motive mentions k and reduces to Nat. e is reuse, so both the
+-- head and the tail may name it. f is def 0 and s is def 1.
+empF : Tm 0
+empF =
+  lam reuse empty
+    (lam affine nat
+      (mNat (var zero) nat ze
+        (fstTm (ucons (app (app (def 1) (var (suc (suc zero)))) (var zero))))))
+
+empS : Tm 0
+empS =
+  lam reuse empty
+    (lam reuse nat
+      (unf (var zero)
+        (lam affine nat
+          (pair (mEmp (var (suc (suc zero)))
+                   (app (lam affine nat nat) (var (suc zero))))
+                (app (app (def 0) (var (suc (suc zero)))) (var (suc zero)))))))
+
+empBook : Sig
+empBook = fromDefs (
+  mkDef "f" run (pi reuse empty (pi affine nat nat)) empF ∷
+  mkDef "s" run (pi reuse empty (pi reuse nat (stream nat))) empS ∷
+  [])
+
+emp-head-refused : checkSig! empBook ≡ fail "s productivity: unguarded recursive call"
+emp-head-refused = refl

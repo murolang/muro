@@ -2,7 +2,7 @@
 
 ## 0.20.0
 
-**Breaking:** A bare stream unfold whose head reads the seed binder and whose tail mentions the block is refused, wherever that unfold occurs in the body: under a pair, an application, a match, a λ, or another unfold. The tail of a bare stream is the next seed, so that mention is the next head. The error is `<name> productivity: unguarded recursive call`.
+**Breaking:** A bare stream unfold whose head reads the seed binder and whose tail mentions the block is refused, wherever that unfold occurs in the body: under a pair, an application, a match, a λ, or another unfold. The tail of a bare stream is the next seed, so that mention is the next head. The error is `<name> productivity: unguarded recursive call`. The head reads the binder when the binder occurs in it. A match, an annotation, a unit match, a rewrite, or an empty motive does not hide that occurrence.
 
 Rewrite: a head that ignores the binder, `(0, f n)`, or a tail that does not mention the block, `(k, suc k)` or `(0, 0)`, as in `examples/nats.muro` and `examples/zeros.muro`. A declared family is unchanged. Its tail is the next proof, and a head that reads the binder may call the block. `accepted-productive` observes those nested unfolds: `Seen` follows every subterm the productivity walk enters.
 

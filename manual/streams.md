@@ -42,7 +42,7 @@ guardedTail B t  =  B ∉ t
 
 A call is a block member applied to arguments that do not mention the block. A pair of guarded tails is guarded, and so is a nested `unfold` whose seed, binder type and head do not mention the block and whose own tail is guarded. `head`, `tail`, `uncons`, `let`, `match`, and `rewrite` on the block in the tail are refused (`unguarded recursive call`): `unfold tt (λ (_ : Unit) → (refl, tail p))` forces `p` instead of continuing it. Spec does not run this check.
 
-On a bare stream the tail is the next seed. An unfold whose head reads the seed binder and whose tail mentions the block is refused at every such unfold in the body, not only the one left after the leading λs. `(0, unfold n (λ (k : Nat) → (k, f n)))` is the same refusal as the bare unfold. A head that ignores the binder, `(0, f n)`, stays accepted. A declared family stays accepted: its tail is the next proof.
+On a bare stream the tail is the next seed. An unfold whose head reads the seed binder and whose tail mentions the block is refused at every such unfold in the body, not only the one left after the leading λs. `(0, unfold n (λ (k : Nat) → (k, f n)))` is the same refusal as the bare unfold. The head reads the binder when the binder occurs in it, including under a match, an annotation, a unit match, a rewrite, or an empty motive. A head that ignores the binder, `(0, f n)`, stays accepted. A declared family stays accepted: its tail is the next proof.
 
 A definition whose type is a ν need not be an `unfold` itself: `def nats : run Stream Nat := tabulate ident` checks. Such a body may not call its own block; a call into the block is productive only as a guarded tail of an unfold step, so `def s : run Stream Nat := s` is refused.
 

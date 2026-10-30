@@ -968,6 +968,66 @@ defmodule Muro.CheckTest do
     assert Check.check_sig(book) == :ok
   end
 
+  test "a computed Nat match in the head is refused when it reads the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) →
+        unfold n (λ (k : Nat) →
+          (match k motive (λ _ → Nat) | 0 => 0 | suc j => suc j, f n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "an annotation in the head is refused when it reads the seed" do
+    assert {:ok, book} = Parser.parse(stream_head_src())
+    book = wrap_s_head(book, &{:ann, &1, :nat})
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a unit match in the head is refused when it reads the seed" do
+    assert {:ok, book} = Parser.parse(stream_head_src())
+    book = wrap_s_head(book, &{:munit, :one, "_", :nat, &1})
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a rewrite in the head is refused when it reads the seed" do
+    src = """
+    def eq : evidence {0 ≡ 0 : Nat} := refl
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) →
+        unfold n (λ (k : Nat) → (rewrite eq motive (λ _ → Nat) in k, f n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "an empty motive in the head is refused when it reads the seed" do
+    src = """
+    def f : run Π (+ e : Empty) → Π (n : Nat) → Nat :=
+      λ (+ e : Empty) → λ (n : Nat) →
+        match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s e m)
+    def s : run Π (+ e : Empty) → Π (+ n : Nat) → Stream Nat :=
+      λ (+ e : Empty) → λ (+ n : Nat) →
+        unfold n (λ (k : Nat) →
+          (matchEmpty e motive (λ _ → (λ (_ : Nat) → Nat) k), f e n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
   test "a stream tail that mentions the block is accepted when the head ignores the seed" do
     src = """
     def f : run Π (n : Nat) → Nat :=
@@ -2795,6 +2855,26 @@ defmodule Muro.CheckTest do
   end
 
   # The module exists only after Code.eval_string, so a literal remote call warns.
+  # Head is the seed binder. Annotation and unit match are kernel forms.
+  defp stream_head_src do
+    """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) → unfold n (λ (k : Nat) → (k, f n))
+    """
+  end
+
+  defp wrap_s_head(book, wrap) do
+    Enum.map(book, fn
+      %{name: "s", body: {:lam, q, a, x, {:unf, seed, {:lam, q1, s, y, {:pair, h, t}}}}} = d ->
+        %{d | body: {:lam, q, a, x, {:unf, seed, {:lam, q1, s, y, {:pair, wrap.(h), t}}}}}
+
+      d ->
+        d
+    end)
+  end
+
   defp call(mod, fun, args), do: apply(Module.concat(Muro, mod), fun, args)
 
   defp find_book(cons_arm, tail) do

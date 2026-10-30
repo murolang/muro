@@ -1324,6 +1324,7 @@ defmodule Muro.Check do
 
   defp has_self?(_, _), do: false
 
+  # Same shifts as occℕ. A missing constructor is a clause error, not false.
   defp occurs?(x, {:var, y}), do: x == y
   defp occurs?(x, {:pi, _, a, _, b}), do: occurs?(x, a) or occurs?(x + 1, b)
   defp occurs?(x, {:lam, _, a, _, t}), do: occurs?(x, a) or occurs?(x + 1, t)
@@ -1339,21 +1340,45 @@ defmodule Muro.Check do
     occurs?(x, e) or occurs?(x + 1, p) or Enum.any?(bs, fn {_, b} -> occurs?(x, b) end)
   end
 
+  # occℕList stays at i because each Agda branch is a telescope of λs.
+  # The stored branch is that body, already shifted by its field binders.
   defp occurs?(x, {:mdata, e, p, bs}) do
     occurs?(x, e) or occurs?(x + 1, p) or
       Enum.any?(bs, fn {_, ar, b} -> occurs?(x + ar, b) end)
   end
 
+  defp occurs?(x, {:mnat, e, p, z, s}),
+    do: occurs?(x, e) or occurs?(x + 1, p) or occurs?(x, z) or occurs?(x + 1, s)
+
+  defp occurs?(x, {:memp, e, p}), do: occurs?(x, e) or occurs?(x + 1, p)
+
+  defp occurs?(x, {:munit, e, p, u}),
+    do: occurs?(x, e) or occurs?(x + 1, p) or occurs?(x, u)
+
   defp occurs?(x, {:unf, s, f}), do: occurs?(x, s) or occurs?(x, f)
   defp occurs?(x, {:ucons, s}), do: occurs?(x, s)
   defp occurs?(x, {:idt, a, b, c}), do: occurs?(x, a) or occurs?(x, b) or occurs?(x, c)
+  defp occurs?(x, {:rwt, e, p, t}), do: occurs?(x, e) or occurs?(x + 1, p) or occurs?(x, t)
+  defp occurs?(x, {:ann, e, a}), do: occurs?(x, e) or occurs?(x, a)
   defp occurs?(x, {:tensor, d, s}), do: occurs?(x, d) or occurs?(x, s)
   defp occurs?(x, {:addi, a, b}), do: occurs?(x, a) or occurs?(x, b)
   defp occurs?(x, {:muli, a, b}), do: occurs?(x, a) or occurs?(x, b)
   defp occurs?(x, {:addt, t, u}), do: occurs?(x, t) or occurs?(x, u)
   defp occurs?(x, {:toi64, t}), do: occurs?(x, t)
   defp occurs?(x, {:packi, a, b}), do: occurs?(x, a) or occurs?(x, b)
-  defp occurs?(_, _), do: false
+  defp occurs?(_x, :typ), do: false
+  defp occurs?(_x, :nat), do: false
+  defp occurs?(_x, :ze), do: false
+  defp occurs?(_x, :unit), do: false
+  defp occurs?(_x, :one), do: false
+  defp occurs?(_x, :empty), do: false
+  defp occurs?(_x, :rfl), do: false
+  defp occurs?(_x, {:def, _}), do: false
+  defp occurs?(_x, :i64), do: false
+  defp occurs?(_x, :f32ty), do: false
+  defp occurs?(_x, :atom), do: false
+  defp occurs?(_x, {:atom, _}), do: false
+  defp occurs?(_x, {:hole, _}), do: false
 
   defp spos?(_x, {:var, _}), do: true
   defp spos?(x, {:prod, a, b}), do: spos?(x, a) and spos?(x, b)
