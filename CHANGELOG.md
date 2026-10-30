@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.19.4
+
+`S else v` in a generated repr no longer emits a `muro_repr_else/4` clause that Elixir 1.19 and later report as never used. A book with an open map and a fallback whose shape cannot return `{:ambiguous_key, key}`, such as `optional (boolean else false)`, compiles with `--warnings-as-errors`. The fallback still replaces an error at its own position. It still does not replace `{:ambiguous_key, key}`. A numeral fallback still does not replace `{:nat_too_large, v}`.
+
+### Package
+
+- Version 0.19.4.
+
 ## 0.19.1
 
 Outside spec, a seed that mentions the block is refused when the head or the tail of the step reads the seed binder. The refusal is `<name> productivity: unguarded recursive call`. A seed neither component reads stays accepted, including a descending call discarded before the step whose tail is a guarded call. A block-free seed may occur in the head or in the tail.
