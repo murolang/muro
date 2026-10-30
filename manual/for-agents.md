@@ -167,7 +167,7 @@ A script run with `mix run --no-start` does not see the archive. Archives are on
 
 `mix muro.emit path.muro` prints the Elixir module. `mix muro.emit path.muro > path.ex` saves it. `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the book's closed equations, including a library whose `param`s are not supplied. `--imports` with that backend also collects the files the book imports directly. The page is [Closed equations as tests](exunit.md).
 
-`--backend c` writes C. Add `{:elixir_make, "~> 0.10", runtime: false}` to the project deps, or run the task inside a project that depends on muro. Without `elixir_make`, the task stops and names that dependency. `nx` and `makeup` are optional. Checking and emitting Elixir do not load them.
+`--backend c` writes C. The Mix task builds a NIF when the working directory is the loaded Mix project. Add `{:elixir_make, "~> 0.10", runtime: false}` to the project deps, or run the task inside a project that depends on muro. Without `elixir_make`, that NIF stops and names the dependency. Outside the loaded project the task writes the `.h` and the `.c` only, and so does the executable. `nx` and `makeup` are optional. Checking and emitting Elixir do not load them.
 
 ## Committed modules
 

@@ -142,6 +142,51 @@ defmodule Muro.CliTest do
     assert File.read!(Path.join(dir, "half.h")) == File.read!(Path.join(inside, "half.h"))
   end
 
+  test "mix muro.emit outside the loaded project does not build a NIF" do
+    dir = System.tmp_dir!() |> Path.join("muro_cli_nif_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    path = Path.join(dir, "half.muro")
+    File.cp!("examples/half_ok.muro", path)
+
+    parent = self()
+
+    out =
+      capture_io(fn ->
+        err =
+          capture_io(:stderr, fn ->
+            File.cd!(dir, fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+          end)
+
+        send(parent, {:err, err})
+      end)
+
+    assert_received {:err, err}
+    assert err == ""
+    refute out =~ "elixir_make"
+    assert File.regular?(Path.join(dir, "half.h"))
+    assert File.regular?(Path.join(dir, "half.c"))
+
+    for extra <- ["half_nif.h", "half_nif.c", "half.mk", "half.ex", "priv/half.so"] do
+      refute File.exists?(Path.join(dir, extra)), "wrote #{extra}"
+    end
+
+    root = File.cwd!()
+    nif_dir = Path.join(root, "cli_nif_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(nif_dir)
+    on_exit(fn -> File.rm_rf!(nif_dir) end)
+    nif_book = Path.join(nif_dir, "half.muro")
+    File.cp!("examples/half_ok.muro", nif_book)
+
+    capture_io(fn ->
+      File.cd!(root, fn -> Mix.Tasks.Muro.Emit.run([nif_book, "--backend", "c"]) end)
+    end)
+
+    assert File.regular?(Path.join(nif_dir, "half_nif.c"))
+    assert File.regular?(Path.join(nif_dir, "half.ex"))
+    assert File.regular?(Path.join(nif_dir, "priv/half.so"))
+  end
+
   test "gen and gen --check match mix muro.gen" do
     left = elixir_project()
     right = elixir_project()

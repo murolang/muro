@@ -63,12 +63,15 @@ defmodule Mix.Tasks.Muro.Emit do
   names. A `stay` emits no call. The payload stays on the session.
   The BEAM runs the call. The proof stops at the move.
 
-  A NIF (`--backend c` on an exported `Nat` run) needs `elixir_make`.
-  Without it, the task stops and names the dependency to add.
+  A NIF (`--backend c` on an exported `Nat` run) is built when the
+  working directory is the loaded Mix project. It needs `elixir_make`.
+  Without it, the task stops and names the dependency to add. Outside
+  that directory the task writes the `.h` and the `.c` only, the same
+  files as the executable.
   """
 
   def run(args) do
     Mix.Tasks.Muro.ensure_started()
-    Muro.CLI.Output.mix(Muro.CLI.Emit.run(args, nif: :force))
+    Muro.CLI.Output.mix(Muro.CLI.Emit.run(args))
   end
 end
