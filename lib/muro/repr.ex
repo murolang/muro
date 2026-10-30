@@ -2758,26 +2758,24 @@ defmodule Muro.Repr do
     """
   end
 
-  # `{:nat_too_large, _}` is a clause only when a numeral fallback exists.
-  # A boolean fallback never produces that reason, and an unused clause is a warning.
-  # `{:ambiguous_key, _}` is the same: only an open map produces it, and a
-  # fallback must not turn that collision into a default.
+  # One `{:error, {path, reason}}` clause. The reason is decided in the body.
+  #
+  # A head that matches only `{:ambiguous_key, _}` is unused when every call
+  # site is a shape that cannot return it (`boolean else v`, `integer else v`),
+  # and Elixir ≥ 1.19 reports that clause. An open map elsewhere in the book
+  # does not make the head live: the domain is the call sites of this helper.
+  # The manual rule stays a body decision, so the clause is not dead whatever
+  # those fallbacks are.
+  #
+  # `{:nat_too_large, _}` is the same kind of decision. It is kept only when
+  # the book has a numeral fallback. Without one, that reason at this path is
+  # replaced, including when a named type's own decode returns it at its root.
   defp else_helpers(feats) do
-    limit =
+    nat =
       if MapSet.member?(feats, :fallback_nat) do
         """
-        defp muro_repr_else({:error, {path, {:nat_too_large, _}}} = err, path, _incoming, _fallback),
-          do: err
-        """
-      else
-        ""
-      end
-
-    ambiguous =
-      if MapSet.member?(feats, :ambiguous) do
-        """
-        defp muro_repr_else({:error, {_path, {:ambiguous_key, _}}} = err, _at, _incoming, _fallback),
-          do: err
+        {:nat_too_large, _} ->
+          err
         """
       else
         ""
@@ -2786,12 +2784,15 @@ defmodule Muro.Repr do
     """
     defp muro_repr_else({:ok, got, table}, _path, _incoming, _fallback), do: {:ok, got, table}
 
-    #{limit}
-    #{ambiguous}
-    defp muro_repr_else({:error, {path, _reason}}, path, incoming, fallback),
-      do: {:ok, fallback, incoming}
-
-    defp muro_repr_else({:error, _} = err, _path, _incoming, _fallback), do: err
+    defp muro_repr_else({:error, {path, reason}} = err, at, incoming, fallback) do
+      case reason do
+        {:ambiguous_key, _} ->
+          err
+        #{nat}
+        _ ->
+          if path === at, do: {:ok, fallback, incoming}, else: err
+      end
+    end
     """
   end
 end

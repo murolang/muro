@@ -663,7 +663,9 @@ defmodule Muro.ReprTest do
     refute source =~ "String.to_atom"
     assert source =~ "muro_repr_ambiguous"
     assert source =~ "muro_repr_no_extra"
-    assert source =~ "defp muro_repr_else({:error, {_path, {:ambiguous_key, _}}} = err"
+    assert source =~ "defp muro_repr_else({:error, {path, reason}} = err, at, incoming, fallback)"
+    assert source =~ "{:ambiguous_key, _} ->"
+    refute source =~ "defp muro_repr_else({:error, {_path, {:ambiguous_key, _}}}"
 
     assert source =~
              ~r/muro_repr_ambiguous\(value, path, \[\s*"read",\s*"write",\s*"admin"\s*\]\)/
@@ -1492,6 +1494,21 @@ defmodule Muro.ReprTest do
     assert mod.decode_count({1_000_001}) == {:error, {[0], {:nat_too_large, 1_000_001}}}
     assert mod.encode_count({:count, 0}, empty) == {0}
 
+    # A numeral fallback anywhere in the book keeps `{:nat_too_large, _}`.
+    # A named fallback, in a book with no numeral fallback, replaces that
+    # reason when it is reported at the fallback's own path.
+    named = compile_book(ok!(named_nat_src()), ReprElseNamed)
+    assert named.decode_hold({1_000_001}) == {:ok, {:hold, :zero}, empty}
+    assert named.decode_hold({-1}) == {:ok, {:hold, :zero}, empty}
+    assert {:ok, {:hold, {:count, two}}, ^empty} = named.decode_hold({2})
+    assert named.encode_hold({:hold, {:count, two}}, empty) == {2}
+
+    kept = compile_book(ok!(named_nat_src() <> numeral_box_src()), ReprElseKept)
+    assert kept.decode_hold({1_000_001}) == {:error, {[0], {:nat_too_large, 1_000_001}}}
+    assert kept.decode_box({1_000_001}) == {:error, {[0], {:nat_too_large, 1_000_001}}}
+    assert kept.decode_box({-1}) == {:ok, {:box, 0}, empty}
+    assert kept.decode_hold({2}) == {:ok, {:hold, {:count, two}}, empty}
+
     assert mod.decode_need(%{}) == {:error, {[], {:missing_key, "b"}}}
     assert mod.decode_need(%{"b" => 1}) == {:ok, {:need, false}, empty}
     assert mod.decode_need(%{"b" => nil}) == {:ok, {:need, false}, empty}
@@ -1650,6 +1667,64 @@ defmodule Muro.ReprTest do
           flunk(inspect(other, limit: 8))
       end
     end
+  end
+
+  # `examples/repr_names.muro` with Entry opened. That book emits
+  # `muro_repr_else/4` for `boolean else false` beside an open map.
+  # Elixir ≥ 1.19 reports a head matching only `{:ambiguous_key, _}` as
+  # never used. `compile_source/2` refuses the warning, as
+  # `--warnings-as-errors` does.
+  test "an open entry with boolean else compiles when warnings are errors" do
+    src =
+      File.read!("examples/repr_names.muro")
+      |> String.replace(
+        ~s|repr Entry := map { "relation" => Key, "read" => optional (boolean else false) }|,
+        ~s|repr Entry := map open { "relation" => Key, "read" => optional (boolean else false) }|
+      )
+
+    book = ok!(src)
+    source = Emit.emit_module(ReprElseOpen, book)
+    mod = compile_source(source, ReprElseOpen)
+    refute source =~ "defp muro_repr_else({:error, {_path, {:ambiguous_key, _}}}"
+    assert source =~ "defp muro_repr_else({:error, {path, reason}} = err, at, incoming, fallback)"
+    assert source =~ "{:ambiguous_key, _} ->"
+    empty = mod.muro_repr_table_new()
+
+    assert mod.decode_entry(%{"relation" => "*", "read" => true}) ==
+             {:ok, {:entry, :wild, {:just, true}}, empty}
+
+    assert mod.decode_entry(%{"relation" => "*", "read" => false}) ==
+             {:ok, {:entry, :wild, {:just, false}}, empty}
+
+    for bad <- [1, nil, "yes", %{}] do
+      assert mod.decode_entry(%{"relation" => "*", "read" => bad}) ==
+               {:ok, {:entry, :wild, {:just, false}}, empty}
+    end
+
+    assert mod.decode_entry(%{"relation" => "*"}) ==
+             {:ok, {:entry, :wild, :nothing}, empty}
+
+    assert mod.decode_entry(%{"relation" => "*", :read => false}) ==
+             {:error, {[], {:ambiguous_key, :read}}}
+
+    assert mod.decode_entry(%{"relation" => "*", "read" => true, :read => false}) ==
+             {:error, {[], {:ambiguous_key, :read}}}
+
+    assert mod.decode_entry(%{"relation" => "*", "read" => 1, :source => :preset}) ==
+             {:ok, {:entry, :wild, {:just, false}}, empty}
+
+    assert mod.decode_template(%{"*" => [%{"relation" => "*", "read" => 1}]}) ==
+             {:ok,
+              {:template,
+               {:cons, {:binding, :wild, {:cons, {:entry, :wild, {:just, false}}, nil}}, nil}},
+              empty}
+
+    assert mod.decode_template(%{"*" => [%{"relation" => "*", :read => false}]}) ==
+             {:error, {["*", 0], {:ambiguous_key, :read}}}
+
+    assert mod.decode_template(%{
+             "*" => [%{"relation" => "*", "read" => false, :read => true, "token_id" => 7}]
+           }) == {:error, {["*", 0], {:ambiguous_key, :read}}}
   end
 
   test "a few thousand pairs and five hundred names stay within the guard" do
@@ -2139,6 +2214,29 @@ defmodule Muro.ReprTest do
     repr Token := interned string
     repr Codes := list interned string
     repr Dict := map_of interned string => boolean
+    """
+  end
+
+  defp named_nat_src do
+    """
+    data Count : Type where
+      count : Nat → Count
+      zero : Count
+
+    data Hold : Type where
+      hold : Count → Hold
+
+    repr Count := count => integer | zero => nil
+    repr Hold := tuple { Count else zero }
+    """
+  end
+
+  defp numeral_box_src do
+    """
+    data Box : Type where
+      box : Nat → Box
+
+    repr Box := tuple { integer else 0 }
     """
   end
 
