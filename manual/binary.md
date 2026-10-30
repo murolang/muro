@@ -92,7 +92,7 @@ tag = "v1"
 
 `book` and `target` are required. Paths are relative to the project root. A book or a target outside the project is refused, a missing book is refused, and a duplicate target is refused. The errors name the entry index, as they do for `muro.exs`.
 
-`module` is an alias string (`"MyApp.Billing.Rounding"`). It is required for `elixir`, `fsm`, and `exunit`. A `c`, `rust`, or `asm` entry omits it. The `c` target ends with `.c`, and the header is written beside it with the same stem (`src/rounding.c` also reserves `src/rounding.h`). The `rust` target ends with `.rs`. The `asm` target ends with `.s`. A wrong suffix is `modules entry N: target for kind :rust must end with .rs`.
+`module` is an alias string (`"MyApp.Billing.Rounding"`). It is required for `elixir`, `fsm`, and `exunit`. A `c`, `rust`, or `asm` entry omits it. The `c` target ends with `.c`, and the header is written beside it with the same stem (`src/rounding.c` also reserves `src/rounding.h`). That path is checked as a target before generation, including when it is already a directory. The error names the entry index. The `rust` target ends with `.rs`. The `asm` target ends with `.s`. A wrong suffix is `modules entry N: target for kind :rust must end with .rs`.
 
 `muro_deps` is the same set of packages as `muro_deps:` in `muro.exs`. Each name is a table:
 

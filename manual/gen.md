@@ -37,13 +37,13 @@ A `c`, `rust`, or `asm` entry may omit the module. The target ends with `.c`, `.
 {"muro/rounding.muro", "src/rounding.rs", [kind: :rust]}
 ```
 
-A `:c` target also writes the header beside it (`src/rounding.c` writes `src/rounding.h`). The source's `#include` names that header (`rounding.h`), the target stem, including when the book is `muro/half.muro`. That header is a target for `mix muro.gen --check`. These three kinds are not formatted. The body hash is the sha256 of the emitter's text. The comment mark is `// ` for C and Rust, including the `.h`, and `@ ` for Cortex-M assembly. The words of the header are the ones below.
+A `:c` target also writes the header beside it (`src/rounding.c` writes `src/rounding.h`). The source's `#include` names that header (`rounding.h`), the target stem, including when the book is `muro/half.muro`. That header is checked as a target before anything is written, including when the path is already a directory. The error names the entry index. It is also a target for `mix muro.gen --check`. These three kinds are not formatted. The body hash is the sha256 of the emitter's text. The comment mark is `// ` for C and Rust, including the `.h`, and `@ ` for Cortex-M assembly. The words of the header are the ones below.
 
 A project without `mix.exs` uses `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`. The keys mean the same thing. `backend` there is the default kind. The page is [The executable](binary.md).
 
 `muro_deps:` is optional. It names the git and Hex packages `import "pkg:..."` loads. `mix muro.deps.get` fetches them into `muro_deps/` and writes `muro.lock`. A project that only checks books can list `muro_deps:` without `muro:` or `modules:`; this task still requires those two. See [Packages](packages.md).
 
-Paths are relative to the project root. A book or a target that leaves the project is refused, and so is a missing book, a target that is a directory, a duplicate target, or a module that is not an alias atom (`MyApp.Billing.Rounding`). `lib/./a.ex` and `lib/nested/../a.ex` are the same target. The errors name the entry.
+Paths are relative to the project root. A book or a target that leaves the project is refused, and so is a missing book, a target that is a directory, a duplicate target, or a module that is not an alias atom (`MyApp.Billing.Rounding`). The `.h` derived from a C target gets the same checks. `lib/./a.ex` and `lib/nested/../a.ex` are the same target. The errors name the entry.
 
 With no Mix project, the root is the working directory. Inside a Mix project, the root is the directory of `mix.exs` when the working directory is that project or a subdirectory.
 

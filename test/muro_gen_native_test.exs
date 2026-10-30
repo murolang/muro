@@ -62,6 +62,34 @@ defmodule Muro.GenNativeTest do
     end
   end
 
+  test "a derived c header that is a directory is refused before anything is written" do
+    dir = tmp()
+    version = Mix.Tasks.Muro.version()
+    File.mkdir_p!(Path.join(dir, "muro"))
+    File.cp!("examples/half_ok.muro", Path.join(dir, "muro/half.muro"))
+    File.mkdir_p!(Path.join(dir, "src/rounding.h"))
+    File.write!(Path.join(dir, "src/rounding.h/keep"), "leave me\n")
+
+    File.write!(Path.join(dir, "muro.toml"), """
+    muro = "#{version}"
+    backend = "c"
+
+    [[modules]]
+    book = "muro/half.muro"
+    target = "src/rounding.c"
+    """)
+
+    error =
+      in_dir(dir, fn ->
+        assert_raise Mix.Error, fn -> Mix.Tasks.Muro.Gen.run([]) end
+      end)
+
+    assert error.message =~ "modules entry 1: target is a directory: src/rounding.h"
+    refute File.regular?(Path.join(dir, "src/rounding.c"))
+    assert File.dir?(Path.join(dir, "src/rounding.h"))
+    assert File.read!(Path.join(dir, "src/rounding.h/keep")) == "leave me\n"
+  end
+
   test "a muro.toml rust target is written by muro gen" do
     dir = tmp()
     version = Mix.Tasks.Muro.version()

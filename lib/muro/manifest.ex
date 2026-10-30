@@ -37,8 +37,9 @@ defmodule Muro.Manifest do
   `module` is required for `:elixir`, `:fsm`, and `:exunit`. A
   `:c`, `:rust`, or `:asm` entry may omit it. The target then ends
   with `.c`, `.rs`, or `.s`. A `:c` target also reserves the `.h`
-  written beside it, and that path is a duplicate when another
-  entry names it. `backend` on a TOML manifest is the default kind
+  written beside it. That path is checked as a target before
+  generation: a directory is refused, and it is a duplicate when
+  another entry names it. `backend` on a TOML manifest is the default kind
   for entries that omit one. `muro.exs` still defaults a missing
   kind to `:elixir`.
 
@@ -738,7 +739,7 @@ defmodule Muro.Manifest do
       |> Enum.with_index(1)
       |> Enum.reduce({[], errors, %{}}, fn {entry, index}, {entries, errors, seen} ->
         {entry, entry_errors, seen} = validate_entry(entry, index, root, seen)
-        {seen, header_errors} = reserve_header(entry, index, seen)
+        {seen, header_errors} = reserve_header(entry, index, root, seen)
         entries = if entry == nil, do: entries, else: entries ++ [entry]
         {entries, errors ++ entry_errors ++ header_errors, seen}
       end)
@@ -988,19 +989,18 @@ defmodule Muro.Manifest do
     end
   end
 
-  defp reserve_header(nil, _index, seen), do: {seen, []}
+  defp reserve_header(nil, _index, _root, seen), do: {seen, []}
 
-  defp reserve_header(%{kind: :c, target: rel}, index, seen) do
+  # The `.h` beside a `:c` target is an output. Duplicate detection
+  # alone accepts a path that is already a directory, and generation
+  # then writes the `.c` before `File.write!` fails on the header.
+  defp reserve_header(%{kind: :c, target: rel}, index, root, seen) do
     header = Path.rootname(rel) <> ".h"
-
-    if Map.has_key?(seen, header) do
-      {seen, ["duplicate target #{header} (modules entries #{seen[header]} and #{index})"]}
-    else
-      {Map.put(seen, header, index), []}
-    end
+    {_header, errors, seen} = validate_target(header, index, root, seen)
+    {seen, errors}
   end
 
-  defp reserve_header(_entry, _index, seen), do: {seen, []}
+  defp reserve_header(_entry, _index, _root, seen), do: {seen, []}
 
   defp alias_atom?(module) when is_atom(module) do
     Macro.classify_atom(module) == :alias and
