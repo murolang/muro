@@ -357,10 +357,9 @@ defmodule Muro.GenTest do
 
     assert output =~ "created muro.exs"
     assert output =~ "created priv/muro/"
-    assert output =~ "AGENTS.md or similar"
 
     assert output =~
-             "Generated files are not edited by hand. The .muro file is the source. Run mix muro.gen after changing it."
+             "Run `muro skills add` to write the commands for this project into AGENTS.md."
 
     refute File.exists?(Path.join(dir, "AGENTS.md"))
     assert File.dir?(Path.join(dir, "priv/muro"))
