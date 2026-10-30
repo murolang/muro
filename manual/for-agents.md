@@ -15,7 +15,7 @@ In brief: two jobs. Do not mix them. This page is the operational contract. Huma
 
 - Write a `.muro` file against [Grammar](grammar.md).
 - Put new programs in `examples/` unless asked otherwise.
-- Check with `mix muro.check path.muro`. If the answer is `out of fuel`, the checker gave up reducing; it is not a type error. Retry with `mix muro.check --fuel 20000 path.muro`.
+- Check with `mix muro.check path.muro`. If the answer is `out of fuel`, the checker gave up reducing; it is not a type error. Retry with `mix muro.check --fuel 20000 path.muro`. A `cannot convert` failure is definite: raising the fuel does not change it. Two stuck calls of one definition that differ in an argument the unfolding does not erase fail that way at every fuel.
 - Read every error. The checker reports each definition that fails, in book order, separated by a blank line. Parse and check errors start with `line:col`. Conversion prints surface types (`Fin n`, not `#0`). A `?` prints `expected` and `context`; fill it.
 - Copy syntax from `examples/`, not from memory.
 - Keep every binder typed. Write every motive.
@@ -148,7 +148,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.19.1.ez
+mix archive.install muro-0.19.2.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -198,7 +198,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then:
 
 ```
-Muro v0.19.1
+Muro v0.19.2
 All terms check. Evidence never becomes a run.
 ```
 
