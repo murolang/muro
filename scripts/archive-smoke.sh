@@ -1061,7 +1061,7 @@ mkdir -p "$hex_dir" "$hex_app" "$hex_archives"
   # in the default archives, and hex.build needs it to load the project.
   env -u MIX_ARCHIVES mix hex.build --output "$tmp/muro-${version}.tar"
 )
-tar -xzf "$tmp/muro-${version}.tar" -C "$hex_dir"
+tar -xf "$tmp/muro-${version}.tar" -C "$hex_dir"
 # A Hex tarball is CHECKSUM, VERSION, metadata.config, and contents.tar.gz.
 pkg="$hex_dir/src"
 mkdir -p "$pkg"
