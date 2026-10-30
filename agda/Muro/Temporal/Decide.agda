@@ -130,12 +130,19 @@ check-sound g m (leadsTo p q) eq =
 -- two liveness forms it is the coinductive stay in the surviving
 -- region, prefixed by the chain from the start when the trigger is not
 -- the start.
-cex-sound : ∀ g (m : NoStuck g) φ w → check g m φ ≡ no w → ¬ Satisfies g φ
-cex-sound g m (always p) w eq = proj₂ (Safety.cex-sound m eq)
-cex-sound g m (eventually p) w eq =
+-- Stable name for the refusal. `cex-sound` gains the `Valid` half;
+-- this projection stays the negation.
+check-refutes : ∀ g (m : NoStuck g) φ w → check g m φ ≡ no w → ¬ Satisfies g φ
+check-refutes g m (always p) w eq = proj₂ (Safety.cex-sound m eq)
+check-refutes g m (eventually p) w eq =
   live-deny g (queued (reachable g)) (lev p) w eq (closed-of g m)
-cex-sound g m (leadsTo p q) w eq =
+check-refutes g m (leadsTo p q) w eq =
   live-deny g (queued (reachable g)) (lto p q) w eq (closed-of g m)
+
+-- The refusal. The liveness half gains `Valid` with the lasso; until
+-- then this is the negation `check-refutes` already gives.
+cex-sound : ∀ g (m : NoStuck g) φ w → check g m φ ≡ no w → ¬ Satisfies g φ
+cex-sound g m φ w eq = check-refutes g m φ w eq
 
 check-complete : ∀ g (m : NoStuck g) φ → Satisfies g φ → check g m φ ≡ yes
 check-complete g m (always p) sat = Safety.check-complete m sat
