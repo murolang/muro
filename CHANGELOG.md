@@ -2,9 +2,9 @@
 
 ## 0.19.1
 
-An unfold whose head reads the seed binder is refused, outside spec, unless that seed does not mention the block. The refusal is `<name> productivity: unguarded recursive call`. A seed that mentions the block only in a term the head does not read stays accepted, including a descending call discarded before the step whose tail is a guarded call.
+Outside spec, a seed that mentions the block is refused when the head or the tail of the step reads the seed binder. The refusal is `<name> productivity: unguarded recursive call`. A seed neither component reads stays accepted, including a descending call discarded before the step whose tail is a guarded call. A block-free seed may occur in the head or in the tail.
 
-`agda/Muro/Productive.agda` proves that a guarded tail unrolls to every finite depth (`guarded-unrolls`) and that the observations `obs-stream` and `obs-fam` read a block-free head at every depth, under the hypotheses in that module. `checkSig-nu` extracts the productivity check from an accepted signature. Closure of `component`, a stream call tail, a seed that occurs only in the tail, `checkSig-guarded`, normalisation of the head, and termination by descent stay open. ⊢ is unchanged.
+`agda/Muro/Productive.agda` proves that a guarded tail unrolls to every finite depth (`guarded-unrolls`) and that the observations `obs-stream` and `obs-fam` read a block-free head at every depth, under the hypotheses in that module. `checkSig-nu` extracts the productivity check from an accepted signature. `checkSig-guarded` reads that check: every syntactic unfold in an accepted run or evidence body has the guard and the seed fact (`AllUnf`), and a one-λ pair yields `HeadSeed` and `SeedCovered` (`unfFacts`). `SeedCovered` is the tail not reading the seed, the head reading it, or the seed not mentioning the block. Closure of `component` (`BlockClosed`), a stream call tail, normalisation of the head, and termination by descent stay open. ⊢ is unchanged.
 
 ### Manual
 
