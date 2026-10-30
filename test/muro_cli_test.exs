@@ -296,6 +296,20 @@ defmodule Muro.CliTest do
     refute text =~ "hex.publish"
   end
 
+  test "the release is created only after the smoke job succeeds" do
+    text = File.read!(".github/workflows/release.yml")
+    [built, smoked] = String.split(text, ~r/^  smoke:/m, parts: 2)
+    refute built =~ "gh release"
+
+    [smoke, published] = String.split(smoked, ~r/^  release:/m, parts: 2)
+    refute smoke =~ "gh release"
+    assert published =~ ~r/needs:\s*(\[\s*)?smoke/
+    assert published =~ "gh release create"
+    assert published =~ "gh release upload"
+    assert published =~ "--clobber"
+    assert published =~ "actions/download-artifact"
+  end
+
   defp assert_same(fun, argv, cd \\ nil) do
     compare(fun, argv, cd)
   end

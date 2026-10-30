@@ -28,7 +28,7 @@ The Linux binaries are built against musl, so one file runs on glibc and on Alpi
 mise use -g github:murolang/muro@0.19.6
 ```
 
-`mise install muro` from the mise registry follows once the assets exist. A tag `v*` builds the four files and attaches them to the GitHub release. The Hex package's dependencies are unchanged. Burrito builds the executable and is not a runtime dependency of the package.
+`mise install muro` from the mise registry follows once the assets exist. A tag `v*` builds the four files, then smokes the Linux binary in a container with no Elixir and no Erlang. The assets are attached to the GitHub release only after that smoke succeeds. A failed smoke publishes nothing. The Hex package's dependencies are unchanged. Burrito builds the executable and is not a runtime dependency of the package.
 
 ```
 muro --version
