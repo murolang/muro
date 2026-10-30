@@ -9,10 +9,13 @@ defmodule Muro.Toml do
   message names the file and the line. The reader does not guess.
 
   A `Cargo.toml` is not a muro document. Tables other than
-  `[package.metadata.muro]` and its children are skipped. Skipping
-  is string-aware, so a `[` inside a Cargo string is not a table.
-  The muro table itself is read with the same subset. A construct
-  the subset does not include is refused there too.
+  `[package.metadata.muro]` and its children are skipped. A header
+  there may use a basic or literal string, as in
+  `[target.'cfg(unix)'.dependencies]` or
+  `[target."x86_64-pc-windows-msvc".dependencies]`. Skipping tracks
+  strings, arrays, and inline tables, so a `[` inside one of those
+  is not a table. The muro table itself is read with the same subset.
+  A construct the subset does not include is refused there too.
 
   Dotted keys (`a.b = 1`), inline tables, literal strings, multiline
   strings, floats, datetimes, and non-empty arrays are outside the
@@ -103,7 +106,8 @@ defmodule Muro.Toml do
       {:at, i, line} ->
         cond do
           at(bin, i) == ?[ ->
-            with {:ok, parts, array?, i, line} <- header(bin, i, len, line),
+            with {:ok, parts, array?, i, line} <-
+                   header(bin, i, len, line, not capturing?(state)),
                  {:ok, state} <- open_header(state, parts, array?, line),
                  {:ok, i, line} <- expect_eol(bin, i, len, line) do
               items(bin, i, len, line, state)
@@ -184,7 +188,7 @@ defmodule Muro.Toml do
     end
   end
 
-  defp header(bin, i, len, line) do
+  defp header(bin, i, len, line, relaxed?) do
     {array?, i} =
       if i + 1 < len and at(bin, i + 1) == ?[ do
         {true, i + 2}
@@ -193,21 +197,21 @@ defmodule Muro.Toml do
       end
 
     with {:ok, i, line} <- skip_spaces(bin, i, len, line),
-         {:ok, parts, i, line} <- header_keys(bin, i, len, line, []),
+         {:ok, parts, i, line} <- header_keys(bin, i, len, line, relaxed?, []),
          {:ok, i, line} <- skip_spaces(bin, i, len, line),
          {:ok, i} <- close_header(bin, i, len, line, array?) do
       {:ok, parts, array?, i, line}
     end
   end
 
-  defp header_keys(bin, i, len, line, acc) do
-    with {:ok, part, i, line} <- header_key(bin, i, len, line) do
+  defp header_keys(bin, i, len, line, relaxed?, acc) do
+    with {:ok, part, i, line} <- header_key(bin, i, len, line, relaxed?) do
       acc = acc ++ [part]
 
       with {:ok, i, line} <- skip_spaces(bin, i, len, line) do
         if i < len and at(bin, i) == ?. do
           with {:ok, i, line} <- skip_spaces(bin, i + 1, len, line) do
-            header_keys(bin, i, len, line, acc)
+            header_keys(bin, i, len, line, relaxed?, acc)
           end
         else
           {:ok, acc, i, line}
@@ -216,12 +220,40 @@ defmodule Muro.Toml do
     end
   end
 
-  defp header_key(bin, i, len, line) do
+  # Outside the muro table a Cargo header may quote a key. Inside it,
+  # and in `muro.toml`, a key is a bare name or a basic string.
+  defp header_key(bin, i, len, line, relaxed?) do
     cond do
-      i >= len -> {:error, line, "unterminated table header"}
-      at(bin, i) == ?" -> basic_string(bin, i + 1, len, line, [])
-      bare?(at(bin, i)) -> bare(bin, i, len, line, [])
-      true -> {:error, line, "expected a table name"}
+      i >= len ->
+        {:error, line, "unterminated table header"}
+
+      at(bin, i) == ?" and not multiline?(bin, i, ?") ->
+        basic_string(bin, i + 1, len, line, [])
+
+      relaxed? and at(bin, i) == ?' and not multiline?(bin, i, ?') ->
+        literal_key(bin, i + 1, len, line, [])
+
+      bare?(at(bin, i)) ->
+        bare(bin, i, len, line, [])
+
+      true ->
+        {:error, line, "expected a table name"}
+    end
+  end
+
+  defp literal_key(bin, i, len, line, acc) do
+    cond do
+      i >= len ->
+        {:error, line, "unterminated string"}
+
+      at(bin, i) == ?' ->
+        {:ok, IO.iodata_to_binary(acc), i + 1, line}
+
+      at(bin, i) == ?\n or at(bin, i) == ?\r ->
+        {:error, line, "newline in a literal string"}
+
+      true ->
+        literal_key(bin, i + 1, len, line, [acc, at(bin, i)])
     end
   end
 
@@ -647,45 +679,74 @@ defmodule Muro.Toml do
     if i < len and at(bin, i) in [?\s, ?\t], do: skip_inline(bin, i + 1, len), else: i
   end
 
+  # A statement outside the muro table ends at a newline only when no
+  # array or inline table is open. A `[` on a later line of either is
+  # still that value, not the next header.
   defp skip_statement(bin, i, len, line) do
+    skip_outside(bin, i, len, line, 0, 0)
+  end
+
+  defp skip_outside(bin, i, len, line, arrays, braces) do
     cond do
       i >= len ->
         {:ok, i, line}
 
-      at(bin, i) in [?\n] ->
-        {:ok, i, line}
-
       at(bin, i) == ?\r and i + 1 < len and at(bin, i + 1) == ?\n ->
-        {:ok, i, line}
+        if arrays == 0 and braces == 0 do
+          {:ok, i, line}
+        else
+          skip_outside(bin, i + 2, len, line + 1, arrays, braces)
+        end
 
       at(bin, i) == ?\r ->
         {:error, line, "bare carriage return"}
 
+      at(bin, i) == ?\n ->
+        if arrays == 0 and braces == 0 do
+          {:ok, i, line}
+        else
+          skip_outside(bin, i + 1, len, line + 1, arrays, braces)
+        end
+
       at(bin, i) == ?# ->
-        rest_of_comment(bin, i, len, line)
+        with {:ok, i, line} <- rest_of_comment(bin, i, len, line) do
+          skip_outside(bin, i, len, line, arrays, braces)
+        end
 
       at(bin, i) == ?" and multiline?(bin, i, ?") ->
         with {:ok, i, line} <- skip_multi(bin, i + 3, len, line, ?") do
-          skip_statement(bin, i, len, line)
+          skip_outside(bin, i, len, line, arrays, braces)
         end
 
       at(bin, i) == ?" ->
         with {:ok, i, line} <- skip_basic(bin, i + 1, len, line) do
-          skip_statement(bin, i, len, line)
+          skip_outside(bin, i, len, line, arrays, braces)
         end
 
       at(bin, i) == ?' and multiline?(bin, i, ?') ->
         with {:ok, i, line} <- skip_multi(bin, i + 3, len, line, ?') do
-          skip_statement(bin, i, len, line)
+          skip_outside(bin, i, len, line, arrays, braces)
         end
 
       at(bin, i) == ?' ->
         with {:ok, i, line} <- skip_literal(bin, i + 1, len, line) do
-          skip_statement(bin, i, len, line)
+          skip_outside(bin, i, len, line, arrays, braces)
         end
 
+      at(bin, i) == ?[ ->
+        skip_outside(bin, i + 1, len, line, arrays + 1, braces)
+
+      at(bin, i) == ?] ->
+        skip_outside(bin, i + 1, len, line, max(arrays - 1, 0), braces)
+
+      at(bin, i) == ?{ ->
+        skip_outside(bin, i + 1, len, line, arrays, braces + 1)
+
+      at(bin, i) == ?} ->
+        skip_outside(bin, i + 1, len, line, arrays, max(braces - 1, 0))
+
       true ->
-        skip_statement(bin, i + 1, len, line)
+        skip_outside(bin, i + 1, len, line, arrays, braces)
     end
   end
 
@@ -709,6 +770,31 @@ defmodule Muro.Toml do
       at(bin, i) == ?' -> {:ok, i + 1, line}
       at(bin, i) == ?\n -> {:error, line, "newline in a literal string"}
       true -> skip_literal(bin, i + 1, len, line)
+    end
+  end
+
+  defp skip_multi(bin, i, len, line, ?" = quote) do
+    cond do
+      i >= len ->
+        {:error, line, "unterminated string"}
+
+      at(bin, i) == ?\\ and i + 2 < len and at(bin, i + 1) == ?\r and at(bin, i + 2) == ?\n ->
+        skip_multi(bin, i + 3, len, line + 1, quote)
+
+      at(bin, i) == ?\\ and i + 1 < len and at(bin, i + 1) == ?\n ->
+        skip_multi(bin, i + 2, len, line + 1, quote)
+
+      at(bin, i) == ?\\ and i + 1 < len ->
+        skip_multi(bin, i + 2, len, line, quote)
+
+      at(bin, i) == ?\n ->
+        skip_multi(bin, i + 1, len, line + 1, quote)
+
+      at(bin, i) == quote and multiline?(bin, i, quote) ->
+        {:ok, i + 3, line}
+
+      true ->
+        skip_multi(bin, i + 1, len, line, quote)
     end
   end
 

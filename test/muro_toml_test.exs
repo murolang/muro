@@ -214,6 +214,86 @@ defmodule Muro.TomlTest do
     assert three =~ "all define a manifest"
   end
 
+  test "quoted Cargo headers and their multiline values are skipped" do
+    dir = tmp()
+    version = Mix.Tasks.Muro.version()
+
+    text = """
+    [package]
+    name = "demo"
+    version = "0.1.0"
+
+    [target.'cfg(unix)'.dependencies]
+    libc = "0.2"
+    note = '''
+    [package.metadata.muro]
+    muro = "not-this"
+    '''
+    flags = [
+      "[also not a header]",
+      "one",
+    [package.metadata.muro]
+    muro = "not-this"
+    modules = []
+    ]
+
+    [target."x86_64-pc-windows-msvc".dependencies]
+    windows-sys = { version = "0.52", features = [
+      "Win32_Foundation",
+    ] }
+
+    [package.metadata.muro]
+    muro = "#{version}"
+    backend = "rust"
+    modules = []
+    """
+
+    File.write!(Path.join(dir, "Cargo.toml"), text)
+    assert Muro.Toml.cargo_metadata?(text)
+    assert {:ok, manifest} = Muro.Manifest.load(dir)
+    assert manifest.source == :cargo
+    assert manifest.backend == :rust
+    assert manifest.modules == []
+  end
+
+  test "the muro table still refuses a literal string and a quoted header" do
+    dir = tmp()
+
+    assert {:error, literal} =
+             load(dir, """
+             muro = "0.0.1"
+             name = 'nope'
+             modules = []
+             """)
+
+    assert literal =~ "literal strings are not supported"
+
+    assert {:error, header} =
+             load(dir, """
+             muro = "0.0.1"
+             modules = []
+
+             ['quoted']
+             """)
+
+    assert header =~ "expected a table name"
+
+    cargo = tmp()
+    version = Mix.Tasks.Muro.version()
+
+    File.write!(Path.join(cargo, "Cargo.toml"), """
+    [package.metadata.muro]
+    muro = "#{version}"
+    modules = []
+
+    [package.metadata.muro.'child']
+    x = 1
+    """)
+
+    assert {:error, child} = Muro.Manifest.load(cargo)
+    assert child =~ "expected a table name"
+  end
+
   test "a Cargo.toml without the muro table is not a manifest root" do
     dir = tmp()
 
