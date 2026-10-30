@@ -9,7 +9,7 @@ defmodule Muro.Temporal do
   | `levels/4` | the breadth-first loop inside `reachable` |
   | `decide_nostuck/2` | `Muro.Temporal.Graph.decide-nostuck` |
   | `worklist/2` | `Muro.Temporal.Live.prune` (`firstZero` / `outs`) |
-  | `lasso/3` | `Muro.Temporal.Live.loop-of` (`walk`, `cut`) |
+  | `lasso/3` | `Muro.Temporal.Live.loop-of` (`tour-of`, `walkC`, `cutC`) |
   | `check/4` | `Muro.Temporal.Decide.check` |
   | `holds?/3` | `Muro.Temporal.⟦_⟧` |
 
@@ -90,6 +90,7 @@ defmodule Muro.Temporal do
 
   @doc """
   Transcribes `Live.loop-of`. `{stem, loop}` are steps `{who, src, dest}`.
+  `leads_to` puts the breadth-first parent trace in front of that pair.
   """
   def lasso(g, z, conf) do
     walk(g, MapSet.new(z), conf, MapSet.new(), conf, [])

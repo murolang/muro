@@ -688,6 +688,177 @@ walk g Z hn c m seen ch end (acc rec) = onSeen (elemB c seen) refl
          (rec (unseen-drop c Z seen (mem-elem m) fr))
 
 ------------------------------------------------------------------------
+-- The same walk, keeping the chain. `Pref` says the repeated
+-- configuration already occurs on it, with a nonempty suffix back to
+-- the present end. `Cover` says every configuration on the chain is
+-- still in the region.
+------------------------------------------------------------------------
+
+data Pref {g : Graph} (l : RConf) :
+          {a : RConf} {xs : List (Who × RConf)} → Chain g a xs → Set where
+  pf-here : ∀ {w d ys} {st : Step g l w d} {rest : Chain g d ys} →
+            Pref l (c-cons st rest)
+  pf-there : ∀ {a w d xs} {st : Step g a w d} {rest : Chain g d xs} →
+             Pref l rest → Pref l (c-cons st rest)
+
+data Cover (Z : List RConf) {g : Graph} :
+           {a : RConf} {xs : List (Who × RConf)} → Chain g a xs → Set where
+  cv-nil : ∀ {c} → Mem c Z → Cover Z (c-nil {c = c})
+  cv-cons : ∀ {a w d xs} {st : Step g a w d} {rest : Chain g d xs} →
+            Mem a Z → Cover Z rest → Cover Z (c-cons st rest)
+
+cover-head : ∀ {g a xs Z} {ch : Chain g a xs} → Cover Z ch → Mem a Z
+cover-head (cv-nil m) = m
+cover-head (cv-cons m _) = m
+
+cover-snoc : ∀ {g a xs Z w d} (ch : Chain g a xs) (st : Step g (End ch) w d) →
+             Cover Z ch → Mem d Z → Cover Z (snocC ch st)
+cover-snoc c-nil st (cv-nil m) md = cv-cons m (cv-nil md)
+cover-snoc (c-cons s rest) st (cv-cons m cr) md =
+  cv-cons m (cover-snoc rest st cr md)
+
+pref-end : ∀ {g a xs w d} (ch : Chain g a xs) (st : Step g (End ch) w d) →
+           Pref (End ch) (snocC ch st)
+pref-end c-nil st = pf-here
+pref-end (c-cons s rest) st = pf-there (pref-end rest st)
+
+pref-mono : ∀ {g a xs l w d} {ch : Chain g a xs} (st : Step g (End ch) w d) →
+            Pref l ch → Pref l (snocC ch st)
+pref-mono st pf-here = pf-here
+pref-mono st (pf-there p) = pf-there (pref-mono st p)
+
+data Bag {g : Graph} {a : RConf} {xs : List (Who × RConf)}
+         (ch : Chain g a xs) : List RConf → Set where
+  bnil : Bag ch []
+  bcons : ∀ {c cs} → Pref c ch → Bag ch cs → Bag ch (c ∷ cs)
+
+bag-mono : ∀ {g a xs w d seen} {ch : Chain g a xs}
+           (st : Step g (End ch) w d) →
+           Bag ch seen → Bag (snocC ch st) seen
+bag-mono st bnil = bnil
+bag-mono st (bcons p bg) = bcons (pref-mono st p) (bag-mono st bg)
+
+bag-add : ∀ {g a xs w d seen} (ch : Chain g a xs) (st : Step g (End ch) w d) →
+          Bag ch seen → Bag (snocC ch st) (End ch ∷ seen)
+bag-add ch st bg = bcons (pref-end ch st) (bag-mono st bg)
+
+bag-mem : ∀ {g a xs c seen} {ch : Chain g a xs} →
+          Mem c seen → Bag ch seen → Pref c ch
+bag-mem (m-here p) (bcons pr _) = subst (λ z → Pref z _) (sym p) pr
+bag-mem (m-there m) (bcons _ bg) = bag-mem m bg
+
+record Cycle (g : Graph) (Z : List RConf) (a l : RConf) : Set where
+  constructor mkCy
+  field
+    stem loop : List (Who × RConf)
+    chS : Chain g a stem
+    eS : End chS ≡ l
+    chL : Chain g l loop
+    eL : End chL ≡ l
+    ne : Σ (Who × RConf) (λ wd → Σ (List (Who × RConf)) (λ ys → loop ≡ wd ∷ ys))
+    cvS : Cover Z chS
+    cvL : Cover Z chL
+
+-- The first mark is the loop entry. The suffix of the chain is the
+-- cycle, and it is nonempty because the mark was stored when the
+-- configuration was left.
+cutC : ∀ {g a xs Z} (l : RConf) (ch : Chain g a xs) →
+       End ch ≡ l → Pref l ch → Cover Z ch → Cycle g Z a l
+cutC l c-nil _ () _
+cutC {xs = (w , d) ∷ ys} l (c-cons st rest) end pf-here cv =
+  mkCy [] ((w , d) ∷ ys) c-nil refl (c-cons st rest) end
+       ((w , d) , ys , refl) (cv-nil (cover-head cv)) cv
+cutC {Z = Z} l (c-cons {w = w} {d = d} st rest) end (pf-there pr) (cv-cons m cr) =
+  let s = cutC l rest end pr cr
+  in mkCy ((w , d) ∷ Cycle.stem s) (Cycle.loop s)
+          (c-cons st (Cycle.chS s)) (Cycle.eS s)
+          (Cycle.chL s) (Cycle.eL s) (Cycle.ne s)
+          (cv-cons m (Cycle.cvS s)) (Cycle.cvL s)
+
+Tour : Graph → List RConf → RConf → Set
+Tour g Z a = Σ RConf (λ l → Cycle g Z a l)
+
+walkC : (g : Graph) (Z : List RConf) (hn : HasNext g Z)
+        (c : RConf) (m : Mem c Z) (seen : List RConf)
+        {a : RConf} {xs : List (Who × RConf)} (ch : Chain g a xs) →
+        End ch ≡ c → Cover Z ch → Bag ch seen →
+        Acc _<_ (unseen Z seen) → Tour g Z a
+walkC g Z hn c m seen {a = a} ch end cv bg (acc rec) = onSeen (elemB c seen) refl
+  where
+  onSeen : (b : Bool) → elemB c seen ≡ b → Tour g Z a
+  onSeen true eq = c , cutC c ch end (bag-mem (find c seen eq) bg) cv
+  onSeen false fr =
+    let wd = proj₁ (hn c m)
+        st = proj₁ (proj₂ (hn c m))
+        md = proj₂ (proj₂ (hn c m))
+        w = proj₁ wd
+        d = proj₂ wd
+        stepped = subst (λ z → Step g z w d) (sym end) st
+        ch′ = snocC ch stepped
+        bg′ = subst (λ z → Bag ch′ (z ∷ seen)) end (bag-add ch stepped bg)
+    in walkC g Z hn d md (c ∷ seen) ch′ (end-snoc ch stepped)
+         (cover-snoc ch stepped cv md) bg′
+         (rec (unseen-drop c Z seen (mem-elem m) fr))
+
+tour-of : (g : Graph) (Z : List RConf) (ho : HasOut g Z) (c : RConf) (m : Mem c Z) →
+          Tour g Z c
+tour-of g Z ho c m =
+  walkC g Z (seal ho) c m [] (c-nil {c = c}) refl (cv-nil m) bnil
+        (<-wellFounded-fast (unseen Z []))
+
+-- Play a nonempty cycle forever. `suf` is the part still ahead. When it
+-- runs out, the first step of `full` is taken again. Both chains end at
+-- the entry, so the configuration the suffix runs out on is that entry.
+replay : ∀ {g l a ys xs} (suf : Chain g a ys) → End suf ≡ l →
+         (full : Chain g l xs) → End full ≡ l →
+         Σ (Who × RConf) (λ wd → Σ (List (Who × RConf)) (λ zs → xs ≡ wd ∷ zs)) →
+         Path
+head (replay {a = a} _ _ _ _ _) = a
+tail (replay (c-cons _ rest) endS full endF ne) = replay rest endS full endF ne
+tail (replay c-nil endS (c-cons st rest) endF ne) =
+  replay rest endF (c-cons st rest) endF ne
+tail (replay c-nil _ c-nil _ (_ , _ , ()))
+
+replay-run : ∀ {g l a ys xs} (suf : Chain g a ys) (endS : End suf ≡ l)
+             (full : Chain g l xs) (endF : End full ≡ l)
+             (ne : Σ (Who × RConf) (λ wd → Σ (List (Who × RConf)) (λ zs → xs ≡ wd ∷ zs))) →
+             IsRun g (replay suf endS full endF ne)
+step (replay-run (c-cons {w = w} st rest) endS full endF ne) = w , st
+rest (replay-run (c-cons _ rest) endS full endF ne) =
+  replay-run rest endS full endF ne
+step (replay-run {g = g} c-nil endS (c-cons {w = w} {d = d} st rest) endF ne) =
+  w , subst (λ z → Step g z w d) (sym endS) st
+rest (replay-run c-nil endS (c-cons st rest) endF ne) =
+  replay-run rest endF (c-cons st rest) endF ne
+step (replay-run c-nil _ c-nil _ (_ , _ , ()))
+rest (replay-run c-nil _ c-nil _ (_ , _ , ()))
+
+spin : ∀ {g l xs} (ch : Chain g l xs) (end : End ch ≡ l)
+       (ne : Σ (Who × RConf) (λ wd → Σ (List (Who × RConf)) (λ zs → xs ≡ wd ∷ zs))) →
+       Path
+spin ch end ne = replay ch end ch end ne
+
+spin-run : ∀ {g l xs} (ch : Chain g l xs) (end : End ch ≡ l)
+           (ne : Σ (Who × RConf) (λ wd → Σ (List (Who × RConf)) (λ zs → xs ≡ wd ∷ zs))) →
+           IsRun g (spin ch end ne)
+spin-run ch end ne = replay-run ch end ch end ne
+
+-- The recorded stem, then the recorded cycle. The head is the stem's start.
+open-path : ∀ {g Z a l} → Cycle g Z a l → Path
+open-path cy =
+  follow (Cycle.chS cy) (spin (Cycle.chL cy) (Cycle.eL cy) (Cycle.ne cy))
+
+open-head : ∀ {g Z a l} (cy : Cycle g Z a l) → head (open-path cy) ≡ a
+open-head cy =
+  follow-head (Cycle.chS cy) (spin (Cycle.chL cy) (Cycle.eL cy) (Cycle.ne cy))
+    (Cycle.eS cy) refl
+
+open-run : ∀ {g Z a l} (cy : Cycle g Z a l) → IsRun g (open-path cy)
+open-run cy =
+  follow-run (Cycle.chS cy) (spin (Cycle.chL cy) (Cycle.eL cy) (Cycle.ne cy))
+    (Cycle.eS cy) (spin-run (Cycle.chL cy) (Cycle.eL cy) (Cycle.ne cy))
+
+------------------------------------------------------------------------
 -- A run that stays in `Z` never meets a proposition that fails on `Z`.
 ------------------------------------------------------------------------
 
@@ -719,6 +890,55 @@ ev-denied : ∀ {g p Z} (hn : HasNext g Z) →
 ev-denied {g} {p} {Z} hn m all sat =
   no-hit {g} {p} (stay-out {g} {p} {Z} hn (init g) m all)
     (sat (zpath g Z hn (init g) m) refl (zrun g Z hn (init g) m))
+
+cover-rest : ∀ {g Z a w d xs} {st : Step g a w d} {rest : Chain g d xs} →
+             Cover Z (c-cons st rest) → Cover Z rest
+cover-rest (cv-cons _ cr) = cr
+
+-- Every configuration of the recorded cycle is in `Z`, and so is every
+-- configuration of the stem in front of it.
+replay-miss : ∀ {g p l a ys xs Z}
+              (suf : Chain g a ys) (endS : End suf ≡ l)
+              (full : Chain g l xs) (endF : End full ≡ l)
+              (ne : Σ (Who × RConf) (λ wd → Σ (List (Who × RConf)) (λ zs → xs ≡ wd ∷ zs))) →
+              Cover Z suf → Cover Z full →
+              (∀ {x} → Mem x Z → ⟦ g ⟧ p x ≡ false) →
+              Globally (Fails g p) (replay suf endS full endF ne)
+now (replay-miss {g = g} {p = p} suf _ _ _ _ cvS _ all) = all (cover-head cvS)
+later (replay-miss {g = g} {p = p} (c-cons _ rest) endS full endF ne (cv-cons _ cr) cvF all) =
+  replay-miss {g} {p} rest endS full endF ne cr cvF all
+later (replay-miss {g = g} {p = p} c-nil _ (c-cons st rest) endF ne _ cvF all) =
+  replay-miss {g} {p} rest endF (c-cons st rest) endF ne (cover-rest cvF) cvF all
+later (replay-miss c-nil _ c-nil _ (_ , _ , ()) _ _ _)
+
+spin-miss : ∀ {g p l xs Z} (ch : Chain g l xs) (end : End ch ≡ l)
+            (ne : Σ (Who × RConf) (λ wd → Σ (List (Who × RConf)) (λ zs → xs ≡ wd ∷ zs))) →
+            Cover Z ch →
+            (∀ {x} → Mem x Z → ⟦ g ⟧ p x ≡ false) →
+            Globally (Fails g p) (spin ch end ne)
+spin-miss {g} {p} ch end ne cv all =
+  replay-miss {g} {p} ch end ch end ne cv cv all
+
+follow-miss : ∀ {g p a xs Z} (ch : Chain g a xs) (π : Path) →
+              Cover Z ch → End ch ≡ head π →
+              Globally (Fails g p) π →
+              (∀ {x} → Mem x Z → ⟦ g ⟧ p x ≡ false) →
+              Globally (Fails g p) (follow ch π)
+now (follow-miss {g = g} {p = p} c-nil _ (cv-nil m) end _ all) =
+  subst (λ z → ⟦ g ⟧ p z ≡ false) end (all m)
+now (follow-miss {g = g} {p = p} (c-cons _ _) _ cv _ _ all) = all (cover-head cv)
+later (follow-miss {g = g} {p = p} c-nil _ _ _ gl _) = later {P = Fails g p} gl
+later (follow-miss {g = g} {p = p} (c-cons _ rest) π (cv-cons _ cr) end gl all) =
+  follow-miss {g} {p} rest π cr end gl all
+
+open-miss : ∀ {g p Z a l} (cy : Cycle g Z a l) →
+            (∀ {x} → Mem x Z → ⟦ g ⟧ p x ≡ false) →
+            Globally (Fails g p) (open-path cy)
+open-miss {g} {p} cy all =
+  follow-miss {g} {p} (Cycle.chS cy) (spin (Cycle.chL cy) (Cycle.eL cy) (Cycle.ne cy))
+    (Cycle.cvS cy) (Cycle.eS cy)
+    (spin-miss {g} {p} (Cycle.chL cy) (Cycle.eL cy) (Cycle.ne cy) (Cycle.cvL cy) all)
+    all
 
 ------------------------------------------------------------------------
 -- `eventually` fails when the start survives in the region that avoids
@@ -991,10 +1211,12 @@ data LiveF : Set where
   lto : StateProp → StateProp → LiveF
 
 -- Stem and loop of the first-successor walk from a survivor.
+-- The lists are the chains `tour-of` keeps.
 loop-of : (g : Graph) (Z : List RConf) (ho : HasOut g Z) (c : RConf) (m : Mem c Z) →
           List (Who × RConf) × List (Who × RConf)
 loop-of g Z ho c m =
-  walk g Z (seal ho) c m [] c-nil refl (<-wellFounded-fast (unseen Z []))
+  let cy = proj₂ (tour-of g Z ho c m)
+  in Cycle.stem cy , Cycle.loop cy
 
 answerEv : (g : Graph) (Z : List RConf) (ho : HasOut g Z) (b : Bool) →
            elemB (init g) Z ≡ b → Answer
@@ -1003,15 +1225,16 @@ answerEv g Z ho true eq =
   let stem , lp = loop-of g Z ho (init g) (find (init g) Z eq)
   in no (lasso [] stem lp)
 
-answerTo : (g : Graph) (Z : List RConf) (ho : HasOut g Z) (hit : Maybe RConf) → Answer
-answerTo g Z ho nothing = yes
-answerTo g Z ho (just c) = onIn (elemB c Z) refl
+answerTo : (g : Graph) (Z : List RConf) (ho : HasOut g Z) (hit : Maybe RConf) →
+           List (Who × RConf) → Answer
+answerTo g Z ho nothing _ = yes
+answerTo g Z ho (just c) pre = onIn (elemB c Z) refl
   where
   onIn : (b : Bool) → elemB c Z ≡ b → Answer
   onIn false _ = yes
   onIn true eq =
     let stem , lp = loop-of g Z ho c (find c Z eq)
-    in no (lasso [] stem lp)
+    in no (lasso pre stem lp)
 
 embed : LiveF → Formula
 embed (lev p) = eventually p
@@ -1023,11 +1246,35 @@ yes-skip ()
 no-skip : ∀ {A : Set} {w} → no w ≡ yes → A
 no-skip ()
 
+-- The lasso `checkLive` stores, together with the run obtained by
+-- prefixing its chains onto the cycle played forever.
+data Witness (g : Graph) : LiveF → Cex → Set where
+  wit-ev : ∀ {p l stem loop} →
+           (chS : Chain g (init g) stem) → End chS ≡ l →
+           (chL : Chain g l loop) → End chL ≡ l →
+           Σ (Who × RConf) (λ wd → Σ (List (Who × RConf)) (λ ys → loop ≡ wd ∷ ys)) →
+           (π : Path) → head π ≡ init g → IsRun g π →
+           ¬ Holds g (eventually p) π →
+           Witness g (lev p) (lasso [] stem loop)
+  wit-to : ∀ {p q c l xs stem loop} →
+           (pre : Chain g (init g) xs) → End pre ≡ c →
+           ⟦ g ⟧ p c ≡ true →
+           (chS : Chain g c stem) → End chS ≡ l →
+           (chL : Chain g l loop) → End chL ≡ l →
+           Σ (Who × RConf) (λ wd → Σ (List (Who × RConf)) (λ ys → loop ≡ wd ∷ ys)) →
+           (π : Path) → head π ≡ init g → IsRun g π →
+           ¬ Holds g (leadsTo p q) π →
+           Witness g (lto p q) (lasso xs stem loop)
+
+miss : ∀ {g φ w} → Witness g φ w → ¬ Satisfies g (embed φ)
+miss (wit-ev _ _ _ _ _ π hd rn bad) sat = bad (sat π hd rn)
+miss (wit-to _ _ _ _ _ _ _ _ π hd rn bad) sat = bad (sat π hd rn)
+
 Judged : Graph → List RConf → LiveF → Set
 Judged g cs φ =
   Σ Answer (λ a →
     (a ≡ yes → Closed g cs → Satisfies g (embed φ)) ×
-    (∀ {w} → a ≡ no w → Closed g cs → ¬ Satisfies g (embed φ)))
+    (∀ {w} → a ≡ no w → Closed g cs → Witness g φ w))
 
 packEv : (g : Graph) (p : StateProp) (cs Z : List RConf) →
          HasOut g Z → Sub Z (avoid g p cs) → Rem g (avoid g p cs) Z →
@@ -1037,56 +1284,78 @@ packEv g p cs Z ho sub rem false eq =
   yes , (λ _ cl π hd rn → ev-run g p cs Z cl rem eq π hd rn) , yes-skip
 packEv g p cs Z ho sub rem true eq = no w , no-skip , refuse
   where
-  stem = proj₁ (loop-of g Z ho (init g) (find (init g) Z eq))
-  lp = proj₂ (loop-of g Z ho (init g) (find (init g) Z eq))
-  w = lasso [] stem lp
-  refuse : ∀ {w′} → no w ≡ no w′ → Closed g cs → ¬ Satisfies g (eventually p)
+  cy = proj₂ (tour-of g Z ho (init g) (find (init g) Z eq))
+  w = lasso [] (Cycle.stem cy) (Cycle.loop cy)
+  π = open-path cy
+  refuse : ∀ {w′} → no w ≡ no w′ → Closed g cs → Witness g (lev p) w′
   refuse refl _ =
-    ev-denied {g} {p} {Z} (seal {g} {Z} ho) (find (init g) Z eq)
-      (region-no {g} {p} {cs} {Z} sub)
+    wit-ev (Cycle.chS cy) (Cycle.eS cy) (Cycle.chL cy) (Cycle.eL cy) (Cycle.ne cy)
+      π (open-head cy) (open-run cy)
+      (no-hit {g} {p} (open-miss {g} {p} cy (region-no {g} {p} {cs} {Z} sub)))
 
 packTo : (g : Graph) (p q : StateProp) (cs Z : List RConf) →
          HasOut g Z → Sub Z (avoid g q cs) → Rem g (avoid g q cs) Z →
          (hit : Maybe RConf) → trigger g p q Z cs ≡ hit →
+         Closed g cs →
          Judged g cs (lto p q)
-packTo g p q cs Z ho sub rem nothing eq =
+packTo g p q cs Z ho sub rem nothing eq _ =
   yes , (λ _ cl π hd rn →
            let mH = subst (λ z → Mem z cs) (sym hd) (hasInit cl)
            in to-glob g p q cs Z cl rem
                 (λ {x} mx pt → trigger-none g p q Z cs x eq mx pt)
                 π rn mH) , yes-skip
-packTo g p q cs Z ho sub rem (just c) eq = no w , no-skip , refuse
+packTo g p q cs Z ho sub rem (just c) eq cl0 = no w , no-skip , refuse
   where
+  pt = proj₁ (trigger-yes g p q Z cs c eq)
   ez = proj₁ (proj₂ (trigger-yes g p q Z cs c eq))
-  stem = proj₁ (loop-of g Z ho c (find c Z ez))
-  lp = proj₂ (loop-of g Z ho c (find c Z ez))
-  w = lasso [] stem lp
-  refuse : ∀ {w′} → no w ≡ no w′ → Closed g cs → ¬ Satisfies g (leadsTo p q)
-  refuse refl cl = to-denied g p q cs Z c ho sub eq cl
+  mem = proj₂ (proj₂ (trigger-yes g p q Z cs c eq))
+  cy = proj₂ (tour-of g Z ho c (find c Z ez))
+  sp = spine cl0 mem
+  pre = proj₁ (proj₂ sp)
+  endPre = proj₂ (proj₂ sp)
+  inner = open-path cy
+  hdI = open-head cy
+  link = trans endPre (sym hdI)
+  whole = follow pre inner
+  w = lasso (proj₁ sp) (Cycle.stem cy) (Cycle.loop cy)
+  ¬q = no-hit {g} {q} (open-miss {g} {p = q} cy (region-no {g} {p = q} {cs} {Z} sub))
+  ¬inner = not-now {g} {p} {q} {π = inner}
+             (λ imp → ¬q (imp (subst (λ z → ⟦ g ⟧ p z ≡ true) (sym hdI) pt)))
+  refuse : ∀ {w′} → no w ≡ no w′ → Closed g cs → Witness g (lto p q) w′
+  refuse refl _ =
+    wit-to pre endPre pt (Cycle.chS cy) (Cycle.eS cy)
+      (Cycle.chL cy) (Cycle.eL cy) (Cycle.ne cy)
+      whole (follow-head pre inner endPre hdI)
+      (follow-run pre inner link (open-run cy))
+      (prefix-fail {g} {p} {q} pre inner link ¬inner)
 
-outcome : (g : Graph) (cs : List RConf) (φ : LiveF) → Judged g cs φ
-outcome g cs (lev p) =
+outcome : (g : Graph) (cs : List RConf) (φ : LiveF) → Closed g cs → Judged g cs φ
+outcome g cs (lev p) _ =
   let G = avoid g p cs
       _ , Z , ho , sub , rem = prune g G (<-wellFounded-fast (length G))
   in packEv g p cs Z ho sub rem (elemB (init g) Z) refl
-outcome g cs (lto p q) =
+outcome g cs (lto p q) cl =
   let G = avoid g q cs
       _ , Z , ho , sub , rem = prune g G (<-wellFounded-fast (length G))
-  in packTo g p q cs Z ho sub rem (trigger g p q Z cs) refl
+  in packTo g p q cs Z ho sub rem (trigger g p q Z cs) refl cl
 
-checkLive : Graph → List RConf → LiveF → Answer
-checkLive g cs φ = proj₁ (outcome g cs φ)
+checkLive : (g : Graph) (cs : List RConf) (φ : LiveF) → Closed g cs → Answer
+checkLive g cs φ cl = proj₁ (outcome g cs φ cl)
 
-live-sound : ∀ g cs φ → checkLive g cs φ ≡ yes → Closed g cs →
+live-sound : ∀ g cs φ (cl : Closed g cs) → checkLive g cs φ cl ≡ yes →
              Satisfies g (embed φ)
-live-sound g cs φ eq cl = proj₁ (proj₂ (outcome g cs φ)) eq cl
+live-sound g cs φ cl eq = proj₁ (proj₂ (outcome g cs φ cl)) eq cl
 
-live-deny : ∀ g cs φ w → checkLive g cs φ ≡ no w → Closed g cs →
+live-witness : ∀ g cs φ w (cl : Closed g cs) → checkLive g cs φ cl ≡ no w →
+               Witness g φ w
+live-witness g cs φ w cl eq = proj₂ (proj₂ (outcome g cs φ cl)) {w} eq cl
+
+live-deny : ∀ g cs φ w (cl : Closed g cs) → checkLive g cs φ cl ≡ no w →
             ¬ Satisfies g (embed φ)
-live-deny g cs φ w eq cl = proj₂ (proj₂ (outcome g cs φ)) {w} eq cl
+live-deny g cs φ w cl eq = miss (live-witness g cs φ w cl eq)
 
-live-complete : ∀ g cs φ → Closed g cs → Satisfies g (embed φ) →
-                checkLive g cs φ ≡ yes
-live-complete g cs φ cl sat with outcome g cs φ
+live-complete : ∀ g cs φ (cl : Closed g cs) → Satisfies g (embed φ) →
+                checkLive g cs φ cl ≡ yes
+live-complete g cs φ cl sat with outcome g cs φ cl
 ... | yes , _ , _ = refl
-... | no _ , _ , deny = ⊥-elim (deny refl cl sat)
+... | no _ , _ , deny = ⊥-elim (miss (deny refl cl) sat)

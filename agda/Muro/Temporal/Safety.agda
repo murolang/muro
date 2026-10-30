@@ -225,14 +225,21 @@ unroll {g} {p} {c} m path bad reach =
 data Valid (g : Graph) : Formula → Cex → Set where
   v-fin : ∀ {p c xs} → PathTo g (init g) c xs → ⟦ g ⟧ p c ≡ false →
           Valid g (always p) (finite xs)
-  v-ev : ∀ {p c ys zs} →
-         PathTo g (init g) c ys →
-         PathTo g c c zs → ⟦ g ⟧ p c ≡ false →
+  -- `ys` reaches the loop entry from the start. `zs` is a nonempty
+  -- cycle on that entry. `eventually` has an empty prefix.
+  v-ev : ∀ {p l ys zs} →
+         PathTo g (init g) l ys →
+         PathTo g l l zs →
+         Σ (Who × RConf) (λ wd → Σ (List (Who × RConf)) (λ ys → zs ≡ wd ∷ ys)) →
          Valid g (eventually p) (lasso [] ys zs)
-  v-to : ∀ {p q c xs ys zs} →
+  -- `xs` is the path to the trigger, `ys` the walk from there to the
+  -- loop entry, and `zs` a nonempty cycle on that entry.
+  v-to : ∀ {p q c l xs ys zs} →
          PathTo g (init g) c xs →
-         PathTo g c c (ys ++ zs) →
-         ⟦ g ⟧ p c ≡ true → ⟦ g ⟧ q c ≡ false →
+         PathTo g c l ys →
+         PathTo g l l zs →
+         Σ (Who × RConf) (λ wd → Σ (List (Who × RConf)) (λ ys → zs ≡ wd ∷ ys)) →
+         ⟦ g ⟧ p c ≡ true →
          Valid g (leadsTo p q) (lasso xs ys zs)
 
 ------------------------------------------------------------------------

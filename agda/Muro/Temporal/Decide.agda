@@ -42,13 +42,14 @@ open import Muro.Temporal.Graph
         )
 open import Muro.Temporal.Live
   using ( Mem; find; mem-elem
-        ; Chain; c-nil; End; snocC; end-snoc
+        ; Chain; c-nil; c-cons; End; snocC; end-snoc
         ; Closed; hasInit; shut; spine
         ; LiveF; lev; lto; embed
-        ; checkLive; live-sound; live-deny; live-complete
+        ; checkLive; live-sound; live-complete
+        ; Witness; wit-ev; wit-to; live-witness; miss
         )
 import Muro.Temporal.Safety as Safety
-open Safety using (goL-kid; goR-kid)
+open Safety using (goL-kid; goR-kid; Valid; v-ev; v-to)
 
 ¬_ : Set → Set
 ¬ A = A → ⊥
@@ -115,34 +116,59 @@ spine (closed-of g m) mem = along g mem
 
 check : (g : Graph) → NoStuck g → Formula → Answer
 check g m (always p) = Safety.check g m p
-check g m (eventually p) = checkLive g (queued (reachable g)) (lev p)
-check g m (leadsTo p q) = checkLive g (queued (reachable g)) (lto p q)
+check g m (eventually p) =
+  checkLive g (queued (reachable g)) (lev p) (closed-of g m)
+check g m (leadsTo p q) =
+  checkLive g (queued (reachable g)) (lto p q) (closed-of g m)
 
 check-sound : ∀ g (m : NoStuck g) φ → check g m φ ≡ yes → Satisfies g φ
 check-sound g m (always p) eq = Safety.check-sound m eq
 check-sound g m (eventually p) eq =
-  live-sound g (queued (reachable g)) (lev p) eq (closed-of g m)
+  live-sound g (queued (reachable g)) (lev p) (closed-of g m) eq
 check-sound g m (leadsTo p q) eq =
-  live-sound g (queued (reachable g)) (lto p q) eq (closed-of g m)
+  live-sound g (queued (reachable g)) (lto p q) (closed-of g m) eq
+
+-- A `Chain` is a `PathTo` with the steps stored oldest first.
+pt-front : ∀ {g a b c w xs} → Step g a w b → PathTo g b c xs →
+           PathTo g a c ((w , b) ∷ xs)
+pt-front st pt-here = pt-snoc pt-here st
+pt-front st (pt-snoc pre step) = pt-snoc (pt-front st pre) step
+
+chain→pt : ∀ {g a xs} (ch : Chain g a xs) → PathTo g a (End ch) xs
+chain→pt c-nil = pt-here
+chain→pt (c-cons {w = w} {d = d} st rest) = pt-front st (chain→pt rest)
+
+ev-of : ∀ {g p w} → Witness g (lev p) w → Valid g (eventually p) w
+ev-of {g} (wit-ev {l = l} {stem = stem} {loop = loop} chS eS chL eL ne _ _ _ _) =
+  v-ev (subst (λ z → PathTo g (init g) z stem) eS (chain→pt chS))
+       (subst (λ z → PathTo g l z loop) eL (chain→pt chL))
+       ne
+
+to-of : ∀ {g p q w} → Witness g (lto p q) w → Valid g (leadsTo p q) w
+to-of {g} (wit-to {c = c} {l = l} {xs = xs} {stem = stem} {loop = loop}
+            pre endP ok chS eS chL eL ne _ _ _ _) =
+  v-to (subst (λ z → PathTo g (init g) z xs) endP (chain→pt pre))
+       (subst (λ z → PathTo g c z stem) eS (chain→pt chS))
+       (subst (λ z → PathTo g l z loop) eL (chain→pt chL))
+       ne ok
 
 -- A refusal is an infinite run that misses the formula. For `always`
 -- that run is the breadth-first path extended by `run-exists`. For the
--- two liveness forms it is the coinductive stay in the surviving
--- region, prefixed by the chain from the start when the trigger is not
--- the start.
--- Stable name for the refusal. `cex-sound` gains the `Valid` half;
--- this projection stays the negation.
-check-refutes : ∀ g (m : NoStuck g) φ w → check g m φ ≡ no w → ¬ Satisfies g φ
-check-refutes g m (always p) w eq = proj₂ (Safety.cex-sound m eq)
-check-refutes g m (eventually p) w eq =
-  live-deny g (queued (reachable g)) (lev p) w eq (closed-of g m)
-check-refutes g m (leadsTo p q) w eq =
-  live-deny g (queued (reachable g)) (lto p q) w eq (closed-of g m)
+-- two liveness forms it is the recorded cycle, unrolled from the start:
+-- the breadth-first parent chain up to the trigger, the stem, then the
+-- cycle played forever.
+cex-sound : ∀ g (m : NoStuck g) φ w → check g m φ ≡ no w →
+            Valid g φ w × ¬ Satisfies g φ
+cex-sound g m (always p) w eq = Safety.cex-sound m eq
+cex-sound g m (eventually p) w eq =
+  let wit = live-witness g (queued (reachable g)) (lev p) w (closed-of g m) eq
+  in ev-of wit , miss wit
+cex-sound g m (leadsTo p q) w eq =
+  let wit = live-witness g (queued (reachable g)) (lto p q) w (closed-of g m) eq
+  in to-of wit , miss wit
 
--- The refusal. The liveness half gains `Valid` with the lasso; until
--- then this is the negation `check-refutes` already gives.
-cex-sound : ∀ g (m : NoStuck g) φ w → check g m φ ≡ no w → ¬ Satisfies g φ
-cex-sound g m φ w eq = check-refutes g m φ w eq
+check-refutes : ∀ g (m : NoStuck g) φ w → check g m φ ≡ no w → ¬ Satisfies g φ
+check-refutes g m φ w eq = proj₂ (cex-sound g m φ w eq)
 
 check-complete : ∀ g (m : NoStuck g) φ → Satisfies g φ → check g m φ ≡ yes
 check-complete g m (always p) sat = Safety.check-complete m sat
