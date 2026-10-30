@@ -18,7 +18,8 @@ open import Data.Empty using (⊥; ⊥-elim)
 open import Data.Fin.Base using (Fin; zero; suc; toℕ)
 open import Data.List.Base as List using (List; []; _∷_; length; take; drop)
 open import Data.Maybe.Base using (Maybe; just; nothing)
-open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _<ᵇ_; _+_)
+open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _<ᵇ_; _+_; _≤_; _<_; z≤n; s≤s)
+open import Data.Nat.Induction using (<-wellFounded; Acc; acc)
 open import Data.Nat.Show using (show)
 open import Data.Product.Base using (_×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String; _++_)
@@ -2221,42 +2222,95 @@ recMode run  = true
 recMode evid = true
 recMode spec = true
 
-keepRec : Sig → List ℕ → List ℕ
-keepRec _ []       = []
-keepRec σ (j ∷ js) with lookupDef σ j
-... | ok d    = if recMode (Def.dmode d) then j ∷ keepRec σ js else keepRec σ js
-... | fail _  = keepRec σ js
+mutual
+  keepRec : Sig → List ℕ → List ℕ
+  keepRec _ []       = []
+  keepRec σ (j ∷ js) = keepStep σ j js (lookupDef σ j)
+
+  keepStep : Sig → ℕ → List ℕ → Result Def → List ℕ
+  keepStep σ j js (ok d) =
+    if recMode (Def.dmode d) then j ∷ keepRec σ js else keepRec σ js
+  keepStep σ _ js (fail _) = keepRec σ js
+
+edgeOf : Sig → Result Def → List ℕ
+edgeOf _ (fail _) = []
+edgeOf σ (ok d)   =
+  if recMode (Def.dmode d) then keepRec σ (mentions (Def.dbody d)) else []
 
 edge : Sig → ℕ → List ℕ
-edge σ i with lookupDef σ i
-... | fail _ = []
-... | ok d   = if recMode (Def.dmode d) then keepRec σ (mentions (Def.dbody d)) else []
+edge σ i = edgeOf σ (lookupDef σ i)
 
+-- Drop the first occurrence of i. The search measure is the length of
+-- the nodes still to visit, so removing a member that is present
+-- decreases it.
+removeℕ : ℕ → List ℕ → List ℕ
+removeℕ _ []       = []
+removeℕ i (x ∷ xs) = if i ≡ᵇ x then xs else x ∷ removeℕ i xs
+
+≤-reflℕ : ∀ {n} → n ≤ n
+≤-reflℕ {zero}  = z≤n
+≤-reflℕ {suc n} = s≤s ≤-reflℕ
+
+removeℕ-len : ∀ i xs → elemℕ i xs ≡ true → length (removeℕ i xs) < length xs
+removeℕ-len i [] ()
+removeℕ-len i (x ∷ xs) eq with i ≡ᵇ x | eq
+... | true  | _   = s≤s ≤-reflℕ
+... | false | eq′ = s≤s (removeℕ-len i xs eq′)
+
+-- n-1 down to 0. Every index a definition can look up sits here, and
+-- the length is the number of definitions.
+downFrom : ℕ → List ℕ
+downFrom zero    = []
+downFrom (suc n) = n ∷ downFrom n
+
+downFrom-len : ∀ n → length (downFrom n) ≡ n
+downFrom-len zero    = refl
+downFrom-len (suc n) = cong suc (downFrom-len n)
+
+-- Reachability over the finite definition set. No fuel: the recursion
+-- is well-founded on the length of the nodes not yet expanded. cur ≡ tgt
+-- is asked before membership, so a node reaches itself even outside the
+-- set. A node already expanded is absent from rest and is not expanded
+-- again, which is the visited set of the fuel-bounded search.
+-- reachOn is the expansion step, split out so a proof can case on the
+-- booleans and still reduce.
 mutual
-  reachGo : Sig → ℕ → ℕ → ℕ → List ℕ → Bool
-  reachGo _ zero _ _ _ = false
-  reachGo σ (suc f) tgt cur vis =
-    if cur ≡ᵇ tgt then true
-    else if elemℕ cur vis then false
-    else reachAny σ f tgt (edge σ cur) (cur ∷ vis)
+  reachOn :
+    (σ : Sig) (tgt cur : ℕ) (rest : List ℕ)
+    → (e : Bool) → elemℕ cur rest ≡ e
+    → (∀ {y} → y < length rest → Acc _<_ y)
+    → Bool
+  reachOn _ _   _   _     false _   _   = false
+  reachOn σ tgt cur rest  true  elm rec =
+    reachEdges σ tgt (edge σ cur) (removeℕ cur rest)
+      (rec (removeℕ-len cur rest elm))
 
-  reachAny : Sig → ℕ → ℕ → List ℕ → List ℕ → Bool
-  reachAny _ _ _ [] _ = false
-  reachAny σ f tgt (x ∷ xs) vis = reachGo σ f tgt x vis ∨ reachAny σ f tgt xs vis
+  reachAt : (σ : Sig) (tgt cur : ℕ) (rest : List ℕ) → Acc _<_ (length rest) → Bool
+  reachAt σ tgt cur rest (acc rec) =
+    if cur ≡ᵇ tgt then true
+    else reachOn σ tgt cur rest (elemℕ cur rest) refl rec
+
+  reachEdges : (σ : Sig) (tgt : ℕ) (xs rest′ : List ℕ) → Acc _<_ (length rest′) → Bool
+  reachEdges _ _ []       _     _ = false
+  reachEdges σ tgt (x ∷ xs) rest′ a =
+    reachAt σ tgt x rest′ a ∨ reachEdges σ tgt xs rest′ a
 
 reaches : Sig → ℕ → ℕ → Bool
-reaches σ src tgt = reachGo σ (suc (length (Sig.defs σ))) tgt src []
+reaches σ src tgt =
+  reachAt σ tgt src (downFrom (length (Sig.defs σ)))
+    (<-wellFounded (length (downFrom (length (Sig.defs σ)))))
 
--- Indices j such that i and j reach each other. i reaches i, so a
--- run, evidence, or spec definition is always in its own block.
+-- Indices j such that i and j reach each other, walking the definition
+-- list from index j. i reaches i, so a run, evidence, or spec
+-- definition is always in its own block.
+compGo : Sig → ℕ → ℕ → List Def → List ℕ
+compGo _ _ _ []       = []
+compGo σ i j (_ ∷ ds) =
+  let rest = compGo σ i (suc j) ds in
+  if reaches σ i j ∧ reaches σ j i then j ∷ rest else rest
+
 component : Sig → ℕ → List ℕ
-component σ i = go 0 (Sig.defs σ)
-  where
-    go : ℕ → List Def → List ℕ
-    go _ []       = []
-    go j (_ ∷ ds) =
-      let rest = go (suc j) ds in
-      if reaches σ i j ∧ reaches σ j i then j ∷ rest else rest
+component σ i = compGo σ i 0 (Sig.defs σ)
 
 argsOf : Sig → ℕ → List ℕ
 argsOf σ i with lookupDef σ i
