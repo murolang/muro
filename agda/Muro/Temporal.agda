@@ -21,7 +21,7 @@ module Muro.Temporal where
 open import Data.Bool.Base using (Bool; true; false; not; _∧_)
 open import Data.Empty using (⊥; ⊥-elim)
 open import Data.List.Base using (List; []; _∷_; _++_; map; filterᵇ; length)
-open import Data.List.Relation.Unary.Any using (Any; here)
+open import Data.List.Relation.Unary.Any using (Any; here; there)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_)
 open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂; ∃; ∃-syntax)
@@ -638,6 +638,47 @@ firstStep {g} {c} {k} {ks} eqv =
     not-go (_ ∷ _) [] false _ _ _ ()
     not-go (_ ∷ _) (_ ∷ _) true _ _ _ ()
     not-go (_ ∷ _) (_ ∷ _) false _ _ _ ()
+
+-- A child of `view` is a real step. `VFinal` and `VBad` have none.
+nil-any : ∀ {A : Set} {P : A → Set} → Any P [] → ⊥
+nil-any ()
+
+kid-step : ∀ {g c d} → Any (_≡_ d) (kidsV (view g c)) →
+           Σ Who (λ w → Step g c w d)
+kid-step {g} {c} {d} mem =
+  go (reactL g c) (reactR g c) refl refl mem
+  where
+  go : (la ra : Act) → reactL g c ≡ la → reactR g c ≡ ra →
+       Any (_≡_ d) (kidsV (view g c)) →
+       Σ Who (λ w → Step g c w d)
+  go (AGo k) (AGo e) eqL eqR mem rewrite eqL | eqR with mem
+  ... | here refl = lside , stepL eqL
+  ... | there (here refl) = rside , stepR eqR
+  ... | there (there ())
+  go (AGo k) AWait eqL eqR mem rewrite eqL | eqR with mem
+  ... | here refl = lside , stepL eqL
+  ... | there ()
+  go AWait (AGo e) eqL eqR mem rewrite eqL | eqR with mem
+  ... | here refl = rside , stepR eqR
+  ... | there ()
+  go (ABad _) _ eqL _ mem rewrite eqL = ⊥-elim (nil-any mem)
+  go (AGo _) (ABad _) eqL eqR mem rewrite eqL | eqR = ⊥-elim (nil-any mem)
+  go AWait (ABad _) eqL eqR mem rewrite eqL | eqR = ⊥-elim (nil-any mem)
+  go AWait AWait eqL eqR mem rewrite eqL | eqR =
+    idle-empty (l2rOf c) (r2lOf c) (halted g c) refl refl refl mem
+    where
+    idle-empty : (lq rq : List Tok) (hz : Bool)
+               → (e1 : l2rOf c ≡ lq) (e2 : r2lOf c ≡ rq) (e3 : halted g c ≡ hz)
+               → Any (_≡_ d) (kidsV (onIdle g c lq rq hz e1 e2 e3)) →
+                 Σ Who (λ w → Step g c w d)
+    idle-empty [] [] true _ _ _ ()
+    idle-empty [] [] false _ _ _ ()
+    idle-empty [] (_ ∷ _) true _ _ _ ()
+    idle-empty [] (_ ∷ _) false _ _ _ ()
+    idle-empty (_ ∷ _) [] true _ _ _ ()
+    idle-empty (_ ∷ _) [] false _ _ _ ()
+    idle-empty (_ ∷ _) (_ ∷ _) true _ _ _ ()
+    idle-empty (_ ∷ _) (_ ∷ _) false _ _ _ ()
 
 -- Append one view-step to a path from the start. `Reach` is built from
 -- the start, so the new step goes on the end.

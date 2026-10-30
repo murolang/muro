@@ -47,6 +47,7 @@ open import Muro.AsyncRec
         ; l2rOf; r2lOf; ilOf; irOf; elOf; erOf; halted
         ; findA; nthA; slotVal; fits; setNth; conOf; armTo
         ; init
+        ; Reach
         )
 open Graph
 open import Muro.Temporal
@@ -55,8 +56,9 @@ open import Muro.Temporal
         ; Path; head; tail
         ; IsRun; step; rest
         ; Eventually; hereE; thereE
-        ; NoStuck
         )
+open import Muro.Temporal.Graph using (reached-wf; Wf)
+open Wf using (l2r≤; r2l≤)
 
 ------------------------------------------------------------------------
 -- Φ. Left sends into l2r and receives from r2l. Right is the swap.
@@ -95,14 +97,15 @@ length-snoc (_ ∷ xs) t = cong suc (length-snoc xs t)
 ∸-≤ (suc a) zero = ≤-refl
 ∸-≤ (suc a) (suc b) = ≤-trans (∸-≤ a b) (n≤1+n a)
 
--- Reachable queues are at most `cap`, so Φ is at most twice the buffer.
-phiL-bound : ∀ {g c} → length (l2rOf c) ≤ cap g → length (r2lOf c) ≤ cap g →
-             phiL g c ≤ cap g + cap g
-phiL-bound {g} {c} _ rq = +-mono-≤ (∸-≤ (cap g) (length (l2rOf c))) rq
+-- A configuration reachable from the start is well formed, so both
+-- queues have length at most `cap`, and Φ is at most twice the buffer.
+phiL-bound : ∀ {g c} → Reach g (init g) c → phiL g c ≤ cap g + cap g
+phiL-bound {g} {c} r =
+  +-mono-≤ (∸-≤ (cap g) (length (l2rOf c))) (r2l≤ (reached-wf r))
 
-phiR-bound : ∀ {g c} → length (l2rOf c) ≤ cap g → length (r2lOf c) ≤ cap g →
-             phiR g c ≤ cap g + cap g
-phiR-bound {g} {c} lq _ = +-mono-≤ (∸-≤ (cap g) (length (r2lOf c))) lq
+phiR-bound : ∀ {g c} → Reach g (init g) c → phiR g c ≤ cap g + cap g
+phiR-bound {g} {c} r =
+  +-mono-≤ (∸-≤ (cap g) (length (r2lOf c))) (l2r≤ (reached-wf r))
 
 ------------------------------------------------------------------------
 -- One step spends one unit of Φ. A send that fits lengthens the
@@ -571,17 +574,16 @@ later (recR π r nf) =
   where f = forceR π r nf
 
 -- A run that never finishes takes the left process infinitely often
--- and the right process infinitely often. `NoStuck` and the start
--- hypothesis are the meeting the corollary is about; the bound itself
--- is the one-sided stretch, and it holds of every run.
-every-run-fair : ∀ {g π} → NoStuck g → IsRun g π → head π ≡ init g →
-                 NotFinal g π → Recurs g lside π × Recurs g rside π
-every-run-fair _ r _ nf = recL _ r nf , recR _ r nf
+-- and the right process infinitely often. The bound is the one-sided
+-- stretch, which is read off the run itself.
+every-run-fair : ∀ {g π} → IsRun g π → NotFinal g π →
+                 Recurs g lside π × Recurs g rside π
+every-run-fair r nf = recL _ r nf , recR _ r nf
 
 -- The spec's sum, under double negation. Choosing a side now would
 -- decide an unbounded question about the run.
-fair-sum : ∀ {g π} → NoStuck g → IsRun g π → head π ≡ init g →
+fair-sum : ∀ {g π} → IsRun g π →
            ((Eventually (λ σ → Final g (head σ)) π ⊎
              (Recurs g lside π × Recurs g rside π)) → ⊥) → ⊥
-fair-sum {g} {π} m r hd neg =
-  neg (inj₂ (every-run-fair m r hd (λ ev → neg (inj₁ ev))))
+fair-sum {g} {π} r neg =
+  neg (inj₂ (every-run-fair r (λ ev → neg (inj₁ ev))))

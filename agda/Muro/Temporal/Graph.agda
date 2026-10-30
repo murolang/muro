@@ -74,6 +74,8 @@ open import Muro.Temporal
         )
   public
 
+open import Muro.Temporal using () renaming (kid-step to view-kid)
+
 ------------------------------------------------------------------------
 -- A pointer may land on a continuation stored in the table, which can
 -- sit one past the last block a jump names. `ptrBound` is that range.
@@ -870,6 +872,19 @@ wf-step : ∀ {g c who d} → Wf g c → Step g c who d → Wf g d
 wf-step w (stepL eq) = wf-stepL w eq
 wf-step w (stepR eq) = wf-stepR w eq
 wf-step w (finish _ _ _) = w
+
+-- A child of `view` stays well formed, and so does every configuration
+-- reachable from a well-formed one. The start is well formed, so every
+-- configuration reachable from it has queues of length at most `cap`.
+wf-kid : ∀ {g c d} → Wf g c → Any (_≡_ d) (kidsV (view g c)) → Wf g d
+wf-kid w mem = wf-step w (proj₂ (view-kid mem))
+
+wf-along : ∀ {g a c} → Wf g a → Reach g a c → Wf g c
+wf-along w rhere = w
+wf-along w (rstep mem later) = wf-along (wf-kid w mem) later
+
+reached-wf : ∀ {g c} → Reach g (init g) c → Wf g c
+reached-wf {g} r = wf-along (wf-init g) r
 
 ------------------------------------------------------------------------
 -- Breadth-first reachability.
