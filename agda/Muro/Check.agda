@@ -994,11 +994,17 @@ unguarded-ok : ∀ b → unguarded b ≡ ok tt → b ≡ false
 unguarded-ok false refl = refl
 unguarded-ok true  ()
 
--- Strip the step's lambdas and test the pair. Binder types of this
--- outer step are not part of the guard; a nested unfold constrains
--- its own seed, binder type, and head.
+-- One λ, then a pair. A further λ is not a pair: the unfold applies
+-- the step to one seed, and the body of that λ is checked as the
+-- product. Binder types of this outer step are not part of the guard;
+-- a nested unfold constrains its own seed, binder type, and head.
+-- A bare pair does not bind the seed.
+pairStep : ∀ {n} → List ℕ → Tm n → Result ⊤
+pairStep B (pair h t) = unguarded (hasSelf B h ∨ not (guardedTail B t))
+pairStep _ _          = fail "unfold body must be a pair"
+
 guardedStep : ∀ {n} → List ℕ → Tm n → Result ⊤
-guardedStep B (lam _ _ t) = guardedStep B t
+guardedStep B (lam _ _ t) = pairStep B t
 guardedStep B (pair h t)  = unguarded (hasSelf B h ∨ not (guardedTail B t))
 guardedStep _ _           = fail "unfold body must be a pair"
 
@@ -1101,6 +1107,23 @@ checkUnfold : ∀ {n} → ℕ → Sig → Mode → RecSt n → Tm n → Result �
 checkUnfold _ _ spec _ _ = ok tt
 checkUnfold k σ _ rs f   = whnf k σ f >>= guardedStep (RecSt.block rs)
 
+-- A bare ν is a stream when it is ν X. A × X and A does not mention X.
+-- Declared families are applications, not this shape: their unfold is
+-- the instantiated pair, and uncons reads that pair.
+lamForm : ∀ {n} → Tm n → Bool
+lamForm (nu (prod B (var zero))) with strengthen B
+... | ok _    = true
+... | fail _  = false
+lamForm _ = false
+
+-- The seed binder of the one λ occurs in the head, and the tail
+-- mentions the block. On a bare stream that tail is the next seed, so
+-- the next head is that mention. A family is not this test: lamForm is
+-- false, and the tail is the next proof, not the next seed.
+streamReads : ∀ {n} → List ℕ → Tm n → Bool
+streamReads B (lam _ _ (pair h t)) = occℕ 0 h ∧ hasSelf B t
+streamReads _ _                    = false
+
 -- On run/evid, a definition whose type reduces to a ν (bare, or a
 -- family applied to any number of indices) is an unfold whose step
 -- passes this same guard, or it does not mention its own block.
@@ -1117,7 +1140,10 @@ checkNu (suc k) σ blk m    T t =
   where
     go : ∀ {n} → Tm n → Tm n → Result ⊤
     go (pi _ _ B) (lam _ _ u) = checkNu k σ blk m B u
-    go _          (unf _ f)   = whnf (suc k) σ f >>= guardedStep blk
+    go T′         (unf _ f)   =
+      whnf (suc k) σ f >>= λ f′ →
+        guardedStep blk f′ >>
+        unguarded (lamForm T′ ∧ streamReads blk f′)
     go T′         u           =
       if isNuHead (proj₁ (apps T′)) ∧ hasSelf blk u
       then fail "ν value calls its own block outside an unfold"
@@ -1137,8 +1163,49 @@ data StepGuard {n} (B : List ℕ) : Tm n → Set where
 data UnfoldGuard {n} (k : ℕ) (σ : Sig) (B : List ℕ) (f : Tm n) : Set where
   unfold-guard : (f′ : Tm n) → whnf k σ f ≡ ok f′ → StepGuard B f′ → UnfoldGuard k σ B f
 
+pairStep-ok : ∀ {n} (B : List ℕ) (t : Tm n) → pairStep B t ≡ ok tt → StepGuard B t
+pairStep-ok B (pair h t) eq =
+  let hs , ng = ∨-false₂ (hasSelf B h) (not (guardedTail B t))
+                  (unguarded-ok (hasSelf B h ∨ not (guardedTail B t)) eq)
+  in sg-pair hs (guardedTail-reflects B t (not-elim-false (guardedTail B t) ng))
+pairStep-ok _ (var _) ()
+pairStep-ok _ typ ()
+pairStep-ok _ (pi _ _ _) ()
+pairStep-ok _ (lam _ _ _) ()
+pairStep-ok _ (app _ _) ()
+pairStep-ok _ nat ()
+pairStep-ok _ ze ()
+pairStep-ok _ (su _) ()
+pairStep-ok _ unit ()
+pairStep-ok _ one ()
+pairStep-ok _ empty ()
+pairStep-ok _ (dty _) ()
+pairStep-ok _ (ctor _ _) ()
+pairStep-ok _ (mData _ _ _) ()
+pairStep-ok _ (mNat _ _ _ _) ()
+pairStep-ok _ (mEmp _ _) ()
+pairStep-ok _ (mUnit _ _ _) ()
+pairStep-ok _ (idt _ _ _) ()
+pairStep-ok _ rfl ()
+pairStep-ok _ (rwt _ _ _) ()
+pairStep-ok _ (def _) ()
+pairStep-ok _ (ann _ _) ()
+pairStep-ok _ (prod _ _) ()
+pairStep-ok _ (letp _ _) ()
+pairStep-ok _ (nu _) ()
+pairStep-ok _ (unf _ _) ()
+pairStep-ok _ (ucons _) ()
+pairStep-ok _ i64 ()
+pairStep-ok _ f32ty ()
+pairStep-ok _ (tensor _ _) ()
+pairStep-ok _ (addi _ _) ()
+pairStep-ok _ (muli _ _) ()
+pairStep-ok _ (addt _ _) ()
+pairStep-ok _ (toi64 _) ()
+pairStep-ok _ (packi _ _) ()
+
 guardedStep-ok : ∀ {n} (B : List ℕ) (t : Tm n) → guardedStep B t ≡ ok tt → StepGuard B t
-guardedStep-ok B (lam _ _ t) eq = sg-lam (guardedStep-ok B t eq)
+guardedStep-ok B (lam _ _ t) eq = sg-lam (pairStep-ok B t eq)
 guardedStep-ok B (pair h t) eq =
   let hs , ng = ∨-false₂ (hasSelf B h) (not (guardedTail B t))
                   (unguarded-ok (hasSelf B h ∨ not (guardedTail B t)) eq)
@@ -1575,15 +1642,6 @@ nuBodyProd : ∀ {n} → Tm n → Bool
 nuBodyProd (lam _ _ t) = nuBodyProd t
 nuBodyProd (prod _ _)  = true
 nuBodyProd _           = false
-
--- A bare ν is a stream when it is ν X. A × X and A does not mention X.
--- Declared families are applications, not this shape: their unfold is
--- the instantiated pair, and uncons reads that pair.
-lamForm : ∀ {n} → Tm n → Bool
-lamForm (nu (prod B (var zero))) with strengthen B
-... | ok _    = true
-... | fail _  = false
-lamForm _ = false
 
 applyFam : ∀ {n} → Tm n → List (Tm n) → Tm n
 applyFam t []             = t

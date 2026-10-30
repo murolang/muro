@@ -901,6 +901,56 @@ defmodule Muro.CheckTest do
     assert msg =~ "s productivity: unguarded recursive call"
   end
 
+  test "a stream tail that mentions the block is refused when the head reads the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) → unfold n (λ (k : Nat) → (k, f n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a stream tail that mentions the block is accepted when the head ignores the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) → unfold n (λ (k : Nat) → (0, f n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "an unfold whose step is a definition is accepted when the head ignores the seed" do
+    src = """
+    def step : run Π (k : Nat) → Nat × Nat :=
+      λ (k : Nat) → (0, suc k)
+    def s : run Stream Nat := unfold 0 step
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a family whose head reads the seed may call the block" do
+    src = """
+    ν F (n : Nat) : Type where
+      uncons : F n → Nat × F n
+    def s : evidence Π (+ n : Nat) → F n :=
+      λ (+ n : Nat) → unfold n (λ (k : Nat) → (k, f n))
+    def f : evidence Π (+ n : Nat) → F n :=
+      λ (+ n : Nat) → unfold n (λ (k : Nat) → (k, s n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
   test "a seed the head does not read may mention the block" do
     src = """
     ν Stream (A : Type) : Type where

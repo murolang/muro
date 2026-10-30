@@ -347,3 +347,59 @@ famCallBook = fromDefs (
 
 fam-call-checks : checkSig! famCallBook ≡ ok tt
 fam-call-checks = refl
+
+-- A stream step whose head is the seed binder and whose tail mentions
+-- the block. The next seed is that mention, and the next head is it.
+-- f returns Nat, so the tail is a seed, and f is earlier, so the same
+-- argument descends.
+mutualBadF : Tm 0
+mutualBadF =
+  lam affine nat
+    (mNat (var zero) nat ze
+      (fstTm (ucons (app (def 1) (var zero)))))
+
+mutualBadS : Tm 0
+mutualBadS =
+  lam reuse nat
+    (unf (var zero)
+      (lam affine nat (pair (var zero) (app (def 0) (var (suc zero))))))
+
+mutualBad : Sig
+mutualBad = fromDefs (
+  mkDef "f" run (pi affine nat nat) mutualBadF ∷
+  mkDef "s" run (pi reuse nat (stream nat)) mutualBadS ∷
+  [])
+
+mutual-bad-refused : checkSig! mutualBad ≡ fail "s productivity: unguarded recursive call"
+mutual-bad-refused = refl
+
+-- The same block, with a head that ignores the binder. The next head
+-- is 0, which does not mention the block.
+mutualOkS : Tm 0
+mutualOkS =
+  lam reuse nat
+    (unf (var zero)
+      (lam affine nat (pair ze (app (def 0) (var (suc zero))))))
+
+mutualOk : Sig
+mutualOk = fromDefs (
+  mkDef "f" run (pi affine nat nat) mutualBadF ∷
+  mkDef "s" run (pi reuse nat (stream nat)) mutualOkS ∷
+  [])
+
+mutual-ok-checks : checkSig! mutualOk ≡ ok tt
+mutual-ok-checks = refl
+
+-- The step is a definition. whnf of it is one λ around a pair whose
+-- head does not read the seed.
+stepTm : Tm 0
+stepTm = lam affine nat (pair ze (su (var zero)))
+
+stepBook : Sig
+stepBook = fromDefs (
+  mkDef "step" run (pi affine nat (prod nat nat)) stepTm ∷
+  mkDef "s" run (stream nat) (unf ze (def 0)) ∷
+  [])
+
+step-checks : checkSig! stepBook ≡ ok tt
+step-checks = refl

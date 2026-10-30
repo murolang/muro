@@ -1247,7 +1247,9 @@ defmodule Muro.Check do
     with {:ok, f1} <- whnf(k, book, f), do: go_unfold(f1, block_of(rs))
   end
 
-  defp go_unfold({:lam, _, _, _, t}, self), do: go_unfold(t, self)
+  # One λ, then a pair. The unfold applies the step to one seed.
+  defp go_unfold({:lam, _, _, _, {:pair, _, _} = p}, self), do: go_unfold(p, self)
+  defp go_unfold({:lam, _, _, _, _}, _), do: {:error, "unfold body must be a pair"}
 
   defp go_unfold({:pair, h, t}, self) do
     if has_self?(self, h) or not guarded_tail?(self, t),
@@ -1256,6 +1258,24 @@ defmodule Muro.Check do
   end
 
   defp go_unfold(_, _), do: {:error, "unfold body must be a pair"}
+
+  # Bare ν (Stream), not an applied family. A does not mention the binder.
+  defp bare_nu?({:nu, {:prod, b, {:var, 0}}}), do: not occurs?(0, b)
+  defp bare_nu?(_), do: false
+
+  # The seed binder occurs in the head and the tail mentions the block.
+  # On a stream that tail is the next seed, so the next head is the mention.
+  # One λ: guardedStep has already rejected a further λ.
+  defp stream_reads(block, {:lam, _, _, _, {:pair, h, t}}),
+    do: occurs?(0, h) and has_self?(block, t)
+
+  defp stream_reads(_, _), do: false
+
+  defp stream_tail(ty, block, step) do
+    if bare_nu?(ty) and stream_reads(block, step),
+      do: {:error, "unguarded recursive call"},
+      else: :ok
+  end
 
   # The tail may mention the block only as a call: a block member applied
   # to arguments that do not mention the block, a pair of such tails, or a
@@ -1380,8 +1400,10 @@ defmodule Muro.Check do
         {{:pi, _, _, _, b}, {:lam, _, _, _, t}} ->
           check_nu(k - 1, book, block, mode, b, t)
 
-        {_, {:unf, _, f}} ->
-          check_unfold(k, book, mode, %{empty_rec() | block: block}, f)
+        {ty1, {:unf, _, f}} ->
+          with {:ok, f1} <- whnf(k, book, f),
+               :ok <- go_unfold(f1, block),
+               do: stream_tail(ty1, block, f1)
 
         _ ->
           if nu_type?(ty1) and has_self?(block, body),
