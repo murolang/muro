@@ -162,13 +162,51 @@ allNext g S (c₀ ∷ cs) eq c m = onDec (zero? g S c₀) eq c m
 -- I1. The surviving count is the length of the recomputed successor
 -- list. Recomputing it is the decrement: every edge into a removed
 -- configuration disappears, and no count is stored that could go
--- below zero. I2. `firstZero` returns a member of the region if and
--- only if its count is zero, and it returns the first such member.
+-- below zero.
 cnt : Graph → List RConf → RConf → ℕ
 cnt g S c = length (outs g S c)
 
-cnt-zero : ∀ {g S c} → outs g S c ≡ [] → cnt g S c ≡ zero
-cnt-zero eq = cong length eq
+-- I1. `cnt c` is the number of edges from `c` that still land in `S`.
+I1 : ∀ g S c → cnt g S c ≡ length (outs g S c)
+I1 _ _ _ = refl
+
+-- I2. `firstZero` returns nothing exactly when every successor list is
+-- nonempty, and it returns the first configuration whose list is
+-- empty. By `I1` that configuration has count zero. `dispatch` takes
+-- the head as soon as `zero?` says the list is empty, and `Rem` records
+-- that emptiness, so a pop never subtracts from a positive count.
+I2-miss : ∀ g S cs → (∀ {c} → Mem c cs → outs g S c ≢ []) →
+          firstZero g S cs ≡ nothing
+I2-miss g S [] _ = refl
+I2-miss g S (c ∷ cs) all = on (zero? g S c) refl
+  where
+  on : (d : Dec (outs g S c ≡ [])) → zero? g S c ≡ d →
+       firstZero g S (c ∷ cs) ≡ nothing
+  on (yesD eq) _ = ⊥-elim (all (m-here refl) eq)
+  on (noD _) eqz rewrite eqz =
+    cong raise (I2-miss g S cs (λ m → all (m-there m)))
+
+I2-hit : ∀ g S cs → Σ RConf (λ c → Mem c cs × outs g S c ≡ []) →
+         Σ RConf (λ c → Σ (Mem c cs) (λ m → Σ (outs g S c ≡ []) (λ eq →
+           firstZero g S cs ≡ just (c , m , eq))))
+I2-hit g S [] (_ , () , _)
+I2-hit g S (c ∷ cs) (d , m-here p , zeq) with p
+... | refl = on (zero? g S c) refl
+  where
+  on : (dec : Dec (outs g S c ≡ [])) → zero? g S c ≡ dec →
+       Σ RConf (λ x → Σ (Mem x (c ∷ cs)) (λ m → Σ (outs g S x ≡ []) (λ eq →
+         firstZero g S (c ∷ cs) ≡ just (x , m , eq))))
+  on (yesD eq) eqz rewrite eqz = c , m-here refl , eq , refl
+  on (noD np) _ = ⊥-elim (np zeq)
+I2-hit g S (c ∷ cs) (d , m-there m , zeq) = on (zero? g S c) refl
+  where
+  on : (dec : Dec (outs g S c ≡ [])) → zero? g S c ≡ dec →
+       Σ RConf (λ x → Σ (Mem x (c ∷ cs)) (λ md → Σ (outs g S x ≡ []) (λ eq →
+         firstZero g S (c ∷ cs) ≡ just (x , md , eq))))
+  on (yesD eq) eqz rewrite eqz = c , m-here refl , eq , refl
+  on (noD _) eqz rewrite eqz =
+    let x , mx , eq , hit = I2-hit g S cs (d , m , zeq)
+    in x , m-there mx , eq , cong raise hit
 
 -- `Z` is what survives, and every survivor was already in `S`.
 Sub : List RConf → List RConf → Set
