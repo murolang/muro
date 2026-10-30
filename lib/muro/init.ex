@@ -137,7 +137,8 @@ defmodule Muro.Init do
   and `priv/muro/`, a Cargo project gets `muro.toml` and `muro/`
   (or `[package.metadata.muro]` with `cargo_metadata: true`), a
   C project gets `muro.toml` and `muro/`, and anything else gets a
-  minimal `muro.toml` and `muro/`. `backend` overrides the example.
+  minimal `muro.toml` and `muro/`. `backend` overrides the example
+  and is stored as the manifest's top-level backend.
   An existing manifest is left in place, wherever it lives:
   `muro.exs`, `muro.toml`, or `[package.metadata.muro]`. The
   return is `{:ok, lines, note}`, `{:diff, text}`, or
@@ -152,6 +153,7 @@ defmodule Muro.Init do
     ci = Keyword.get(opts, :ci)
     cargo? = Keyword.get(opts, :cargo_metadata, false)
     override = Keyword.get(opts, :backend)
+    explicit? = not is_nil(override)
     detected = detect(root)
     backend = override || detected.backend
 
@@ -163,7 +165,7 @@ defmodule Muro.Init do
         {:error, "unknown --ci #{ci}; expected github"}
 
       true ->
-        place(root, version, detected.kind, backend, ci, cargo?)
+        place(root, version, detected.kind, backend, ci, cargo?, explicit?)
     end
   end
 
@@ -280,26 +282,26 @@ defmodule Muro.Init do
     detect(Path.expand(root)).backend
   end
 
-  defp place(root, version, kind, backend, ci, cargo?) do
+  defp place(root, version, kind, backend, ci, cargo?, explicit?) do
     case located(root, kind, cargo?) do
       nil ->
-        write_new(root, version, kind, backend, ci, cargo?)
+        write_new(root, version, kind, backend, ci, cargo?, explicit?)
 
       {:file, rel, current} ->
-        {:diff, diff(rel, current, proposed_for(rel, version, backend))}
+        {:diff, diff(rel, current, proposed_for(rel, version, backend, explicit?))}
 
       {:cargo, current} ->
         {:diff, diff("Cargo.toml", current, proposed_cargo(current, version, backend))}
     end
   end
 
-  defp write_new(root, version, kind, backend, ci, cargo?) do
+  defp write_new(root, version, kind, backend, ci, cargo?, explicit?) do
     workflow = Path.join(root, ".github/workflows/muro.yml")
 
     if ci == :github and File.regular?(workflow) do
       {:error, "refusing to overwrite .github/workflows/muro.yml"}
     else
-      lines = write_manifest(root, version, kind, backend, cargo?)
+      lines = write_manifest(root, version, kind, backend, cargo?, explicit?)
 
       lines =
         if ci == :github do
@@ -314,19 +316,13 @@ defmodule Muro.Init do
     end
   end
 
-  defp write_manifest(root, version, :mix, backend, _cargo?) do
+  defp write_manifest(root, version, :mix, backend, _cargo?, explicit?) do
     File.mkdir_p!(Path.join(root, "priv/muro"))
-
-    source =
-      if backend in [nil, :elixir],
-        do: manifest_source(version),
-        else: exs_source(version, backend)
-
-    File.write!(Path.join(root, "muro.exs"), source)
+    File.write!(Path.join(root, "muro.exs"), mix_source(version, backend, explicit?))
     ["created muro.exs", "created priv/muro/"]
   end
 
-  defp write_manifest(root, version, :cargo, backend, true) do
+  defp write_manifest(root, version, :cargo, backend, true, _explicit?) do
     path = Path.join(root, "Cargo.toml")
     current = File.read!(path)
     File.write!(path, append_block(current, cargo_block(version, backend)))
@@ -334,17 +330,27 @@ defmodule Muro.Init do
     ["updated Cargo.toml", "created muro/"]
   end
 
-  defp write_manifest(root, version, _kind, backend, _cargo?) do
+  defp write_manifest(root, version, _kind, backend, _cargo?, _explicit?) do
     File.mkdir_p!(Path.join(root, "muro"))
     File.write!(Path.join(root, "muro.toml"), toml_source(version, backend))
     ["created muro.toml", "created muro/"]
   end
 
-  defp proposed_for("muro.exs", version, backend) do
-    if backend in [nil, :elixir], do: manifest_source(version), else: exs_source(version, backend)
+  # A Mix project with no override keeps the historical `muro.exs`, which
+  # omits `backend`. `--backend`, including `--backend elixir`, stores the key.
+  defp mix_source(version, backend, explicit?) do
+    if explicit? or backend not in [nil, :elixir] do
+      exs_source(version, backend)
+    else
+      manifest_source(version)
+    end
   end
 
-  defp proposed_for("muro.toml", version, backend), do: toml_source(version, backend)
+  defp proposed_for("muro.exs", version, backend, explicit?) do
+    mix_source(version, backend, explicit?)
+  end
+
+  defp proposed_for("muro.toml", version, backend, _explicit?), do: toml_source(version, backend)
 
   defp proposed_cargo(current, version, backend) do
     block = cargo_block(version, backend)
@@ -441,6 +447,7 @@ defmodule Muro.Init do
     """
     [
       muro: "#{version}",
+      backend: :#{backend},
       modules: [
         #{entry}
       ]

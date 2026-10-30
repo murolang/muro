@@ -142,7 +142,7 @@ The header is the same two lines and the same hashes as an Elixir target. A C so
 | `CMakeLists.txt`, `meson.build`, or a `Makefile`, and neither `mix.exs` nor `Cargo.toml` | `muro.toml` and `muro/` | c |
 | none of these | `muro.toml` with `modules = []`, and `muro/` | none |
 
-`--backend asm` overrides the detected backend. It does not change which file is written. There is no detection of embedded projects. `--backend` accepts `elixir`, `c`, `rust`, `asm`, `fsm`, or `exunit`.
+`--backend asm` overrides the detected backend and stores it as the manifest's top-level `backend`, so `muro skills add` and later commands use `asm`. On `muro.exs` the key is `backend: :asm`. On `muro.toml` and `[package.metadata.muro]` it is `backend = "asm"`. `--backend elixir` stores that key too. Without `--backend`, a Mix project still omits it. The flag does not change which file is written. There is no detection of embedded projects. `--backend` accepts `elixir`, `c`, `rust`, `asm`, `fsm`, or `exunit`.
 
 `--cargo-metadata` on a directory with `Cargo.toml` appends `[package.metadata.muro]` and writes `muro/`. It does not write `muro.toml`. Without a `Cargo.toml` it exits 1 and writes nothing.
 

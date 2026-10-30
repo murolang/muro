@@ -81,6 +81,36 @@ defmodule Muro.InitBinTest do
     assert File.read!(Path.join(forced, "muro.exs")) =~ "kind: :asm"
   end
 
+  test "init --backend is stored and skills add uses it" do
+    version = Mix.Tasks.Muro.version()
+
+    mix = tmp()
+    File.write!(Path.join(mix, "mix.exs"), mix_exs())
+    assert cli(mix, ["init", "--backend", "asm"]) =~ "created muro.exs\n"
+    source = File.read!(Path.join(mix, "muro.exs"))
+    assert source =~ "backend: :asm,"
+    assert {:ok, manifest} = Muro.Manifest.load(mix)
+    assert manifest.backend == :asm
+
+    assert {:ok, _} = Muro.Skills.add(mix)
+    agents = File.read!(Path.join(mix, "AGENTS.md"))
+    assert agents =~ "muro emit path.muro --backend asm\n"
+    refute agents =~ "--backend elixir"
+
+    again = cli(mix, ["init", "--backend", "asm"])
+    assert again =~ "--- a/muro.exs\n"
+    refute again =~ "-  backend: :asm"
+    assert File.read!(Path.join(mix, "muro.exs")) == source
+
+    elixir = tmp()
+    File.write!(Path.join(elixir, "mix.exs"), mix_exs())
+    assert cli(elixir, ["init", "--backend", "elixir"]) =~ "created muro.exs\n"
+    elixir_source = File.read!(Path.join(elixir, "muro.exs"))
+    assert elixir_source =~ "backend: :elixir,"
+    assert {:ok, %{backend: :elixir}} = Muro.Manifest.load(elixir)
+    assert elixir_source != Muro.Init.manifest_source(version)
+  end
+
   test "init diffs an existing manifest instead of writing a second one" do
     version = Mix.Tasks.Muro.version()
 
