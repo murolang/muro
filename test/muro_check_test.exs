@@ -2640,6 +2640,63 @@ defmodule Muro.CheckTest do
     assert msg =~ "ν"
   end
 
+  test "a false equation of two stuck recursive calls is a conversion failure" do
+    assert {:ok, false_book} =
+             Parser.parse(find_book("or (find k xs) (eq-key k x)", false_tail()))
+
+    for fuel <- [60, Check.default_fuel()] do
+      assert {:error, msg} = Check.check_sig(false_book, fuel: fuel)
+      assert msg =~ "cannot convert"
+      assert msg =~ "wild"
+      assert msg =~ "named"
+      refute Check.out_of_fuel?(msg)
+    end
+
+    assert {:ok, swapped} =
+             Parser.parse(find_book("or (eq-key k x) (find k xs)", false_tail()))
+
+    assert {:error, swapped_msg} = Check.check_sig(swapped, fuel: 60)
+    assert swapped_msg =~ "cannot convert"
+    assert swapped_msg =~ "true"
+    assert swapped_msg =~ "false"
+    refute Check.out_of_fuel?(swapped_msg)
+
+    assert {:ok, true_book} = Parser.parse(find_book("or (find k xs) (eq-key k x)", true_tail()))
+    assert Check.check_sig(true_book) == :ok
+
+    # One unfolding erases an argument the body does not use.
+    assert {:ok, drop} = Parser.parse(drop_src())
+    assert Check.check_sig(drop) == :ok
+
+    # The match is on a later argument, and both arms are the same.
+    assert {:ok, later} = Parser.parse(later_src())
+    assert Check.check_sig(later) == :ok
+
+    # The scrutinee is a constructor, so the match fires and both sides are false.
+    assert {:ok, on_nil} = Parser.parse(find_book("or (find k xs) (eq-key k x)", nil_tail()))
+    assert Check.check_sig(on_nil) == :ok
+  end
+
+  test "a stuck false equation takes the same number of steps at every fuel" do
+    assert {:ok, named} = Parser.parse(find_book("or (find k xs) (eq-key k x)", false_tail()))
+    assert {:ok, db} = Ast.book_to_db(named)
+    defn = Enum.find(db, &(&1.name == "wild-is-named"))
+
+    counts =
+      for fuel <- [40, 60, Check.default_fuel()] do
+        {result, steps} =
+          Check.with_conv_steps(fn -> Check.check_def(db, defn, fuel) end)
+
+        assert {:error, msg} = result
+        assert msg =~ "cannot convert"
+        refute Check.out_of_fuel?(msg)
+        steps
+      end
+
+    assert match?([n, n, n], counts)
+    assert hd(counts) < 10_000
+  end
+
   test "CSHRL checks in every environment, and its agents run" do
     assert {:error, msg} = Muro.check_file("examples/cshrl/lib/core.muro")
     assert msg =~ "is supplied by a file that imports this one"
@@ -2685,4 +2742,92 @@ defmodule Muro.CheckTest do
 
   # The module exists only after Code.eval_string, so a literal remote call warns.
   defp call(mod, fun, args), do: apply(Module.concat(Muro, mod), fun, args)
+
+  defp find_book(cons_arm, tail) do
+    """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+    data Key : Type where
+      wild : Key
+      named : Nat → Key
+
+    def eq-nat : run Π (a : Nat) → Π (b : Nat) → Bool :=
+      λ (a : Nat) → λ (b : Nat) →
+        match a motive (λ _ → Bool)
+          | 0 => (match b motive (λ _ → Bool) | 0 => true | suc _ => false)
+          | suc p => (match b motive (λ _ → Bool) | 0 => false | suc q => eq-nat p q)
+
+    def eq-key : run Π (k : Key) → Π (j : Key) → Bool :=
+      λ (k : Key) → λ (j : Key) →
+        match k motive (λ _ → Bool)
+          | wild => (match j motive (λ _ → Bool) | wild => true | named _ => false)
+          | named n => (match j motive (λ _ → Bool) | wild => false | named m => eq-nat n m)
+
+    def or : run Π (a : Bool) → Π (b : Bool) → Bool :=
+      λ (a : Bool) → λ (b : Bool) → match a motive (λ _ → Bool) | true => true | false => b
+
+    def find : run Π (+ k : Key) → Π (t : List Key) → Bool :=
+      λ (+ k : Key) → λ (t : List Key) →
+        match t motive (λ _ → Bool)
+          | nil => false
+          | cons x xs => #{cons_arm}
+    #{tail}
+    """
+  end
+
+  defp false_tail do
+    """
+    def wild-is-named : evidence Π (t : List Key) → {find wild t ≡ find (named 0) t : Bool} :=
+      λ (t : List Key) → refl
+    """
+  end
+
+  defp true_tail do
+    """
+    def g : run Π (+ k : Key) → Π (t : List Key) → Bool :=
+      λ (+ k : Key) → λ (t : List Key) → find k t
+
+    def g-is-find : evidence Π (k : Key) → Π (t : List Key) → {g k t ≡ find k t : Bool} :=
+      λ (k : Key) → λ (t : List Key) → refl
+    def same-key : evidence Π (t : List Key) → {find wild t ≡ find wild t : Bool} :=
+      λ (t : List Key) → refl
+    """
+  end
+
+  defp nil_tail do
+    """
+    def find-nil : evidence {find wild nil ≡ find (named 0) nil : Bool} := refl
+    """
+  end
+
+  defp drop_src do
+    """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+    def drop : run Π (b : Bool) → Π (n : Nat) → Nat :=
+      λ (b : Bool) → λ (n : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => 0
+          | suc m => suc (drop true m)
+    def drop-ignores : evidence Π (n : Nat) → {drop true n ≡ drop false n : Nat} :=
+      λ (n : Nat) → refl
+    """
+  end
+
+  defp later_src do
+    """
+    def g : run Π (A : Type) → Π (n : Nat) → Π (k : Nat) → Nat :=
+      λ (A : Type) → λ (n : Nat) → λ (k : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => k
+          | suc _ => k
+    def g-later : evidence Π (A : Type) → Π (k : Nat) → {g A suc(0) k ≡ g A 0 k : Nat} :=
+      λ (A : Type) → λ (k : Nat) → refl
+    """
+  end
 end

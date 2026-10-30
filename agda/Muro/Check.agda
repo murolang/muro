@@ -24,6 +24,7 @@ open import Data.Nat.Induction using (<-wellFounded; Acc; acc)
 open import Data.Nat.Show using (show)
 open import Data.Product.Base using (_×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String; _++_)
+open import Data.String.Properties using (_==_)
 open import Data.Unit.Base using (⊤; tt)
 open import Data.Vec.Base as Vec using (Vec; []; _∷_; lookup; map)
 open import Function.Base using (case_of_; _$_)
@@ -335,94 +336,133 @@ mutual
   synEqD (packi x y)    (packi x′ y′)  = synEq x x′ ∧ synEq y y′
   synEqD _              _              = false
 
-ctorHead : ∀ {n} → Tm n → Bool
-ctorHead t with proj₁ (apps t)
-... | ze       = true
-... | su _     = true
-... | one      = true
-... | ctor _ _ = true
-... | _        = false
+-- Definitions whose unfolding is already in progress.
+inSeen : ℕ → List ℕ → Bool
+inSeen _ []       = false
+inSeen i (j ∷ js) = (i ≡ᵇ j) ∨ inSeen i js
+
+-- An eliminator whnf did not ι-reduce. The match did not fire.
+stuckForm : ∀ {n} → Tm n → Bool
+stuckForm (mData _ _ _)   = true
+stuckForm (mNat _ _ _ _)  = true
+stuckForm (mEmp _ _)      = true
+stuckForm (mUnit _ _ _)   = true
+stuckForm (letp _ _)      = true
+stuckForm (ucons _)       = true
+stuckForm _               = false
+
+isOOF : String → Bool
+isOOF e = e == outOfFuel
+
+-- The second alternative runs only on a definite failure. Out of fuel
+-- is not retried: the predecessor fuel is the whole budget of this call.
+_orFuel_ : Result ⊤ → Result ⊤ → Result ⊤
+ok tt  orFuel _ = ok tt
+fail e orFuel r = if isOOF e then fail e else r
+
+infixr 2 _orFuel_
 
 mutual
-  convArgs : ∀ {n} → ℕ → Sig → List (Tm n) → List (Tm n) → Result ⊤
-  convArgs k σ []       []       = ok tt
-  convArgs k σ (a ∷ as) (b ∷ bs) = conv k σ a b >> convArgs k σ as bs
-  convArgs _ _ _        _        = fail "conv: spine length mismatch"
+  convArgs : ∀ {n} → List ℕ → ℕ → Sig → List (Tm n) → List (Tm n) → Result ⊤
+  convArgs _    _ _ []       []       = ok tt
+  convArgs seen k σ (a ∷ as) (b ∷ bs) = convGo k σ seen a b >> convArgs seen k σ as bs
+  convArgs _    _ _ _        _        = fail "conv: spine length mismatch"
 
+  -- Each conversion starts with nothing unfolding.
   conv : ∀ {n} → ℕ → Sig → Tm n → Tm n → Result ⊤
-  conv zero    _ _ _ = fail outOfFuel
-  conv (suc k) σ u v =
+  conv k σ u v = convGo k σ [] u v
+
+  convGo : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
+  convGo zero    _ _    _ _ = fail outOfFuel
+  convGo (suc k) σ seen u v =
     if synEq u v then ok tt
-    else convStuck k σ u v (defArgs u) (defArgs v)
+    else convStuck k σ seen u v (defArgs u) (defArgs v)
 
-  -- Two applications of the same def to arguments that are not
-  -- constructor-headed are compared argumentwise before unfolding
-  -- (otherwise a recursive def is unfolded just to compare a call with
-  -- itself). Arguments that differ do not decide it: the def may match
-  -- on a later argument, so both sides are unfolded and compared.
-  convStuck : ∀ {n} → ℕ → Sig → Tm n → Tm n
+  -- Same definition, applied. Arguments are compared first (congruence).
+  -- A definite mismatch unfolds once. While that unfolding is in
+  -- progress, a re-entry unfolds only when the match fires; otherwise
+  -- the argument mismatch stands. Fuel on the two alternatives is the
+  -- predecessor: Agda's checker decreases on that predecessor, and the
+  -- seen guard keeps a stuck re-entry from unfolding again.
+  convStuck : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n
     → Maybe (ℕ × Tm n × List (Tm n)) → Maybe (ℕ × Tm n × List (Tm n)) → Result ⊤
-  convStuck k σ u v (just (i , a , as)) (just (j , b , bs)) =
-    if (i ≡ᵇ j) ∧ not (ctorHead a) ∧ not (ctorHead b)
-    then ((conv k σ a b >> convArgs k σ as bs) orElse convWhnf k σ u v)
-    else convWhnf k σ u v
-  convStuck k σ u v _ _ = convWhnf k σ u v
+  convStuck k σ seen u v (just (i , a , as)) (just (j , b , bs)) =
+    if i ≡ᵇ j
+    then (convGo k σ seen a b >> convArgs seen k σ as bs) orFuel
+         (if inSeen i seen then convProgress k σ seen u v
+          else convWhnf k σ (i ∷ seen) u v)
+    else convWhnf k σ seen u v
+  convStuck k σ seen u v _ _ = convWhnf k σ seen u v
 
-  convWhnf : ∀ {n} → ℕ → Sig → Tm n → Tm n → Result ⊤
-  convWhnf k σ u v = whnf k σ u >>= λ u′ → whnf k σ v >>= λ v′ → convN k σ u′ v′
+  -- whnf has ι-reduced a constructor. Two stuck eliminators did not
+  -- fire, so the applications stay neutral.
+  convProgress : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
+  convProgress k σ seen u v with whnf k σ u
+  ... | fail e = fail e
+  ... | ok u′ with whnf k σ v
+  ...   | fail e = fail e
+  ...   | ok v′ =
+    if synEq u′ v′ then ok tt
+    else if stuckForm u′ ∧ stuckForm v′
+         then fail ("cannot convert " ++ showTm u′ ++ " ≁ " ++ showTm v′)
+         else convN k σ seen u′ v′
+
+  convWhnf : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
+  convWhnf k σ seen u v = whnf k σ u >>= λ u′ → whnf k σ v >>= λ v′ → convN k σ seen u′ v′
 
   -- Tags are compared first (Muro.Tag); convND only has to handle terms
   -- of the same shape.
-  convN : ∀ {n} → ℕ → Sig → Tm n → Tm n → Result ⊤
-  convN k σ u v =
-    if tmTag u ≡ᵇ tmTag v then convND k σ u v
+  convN : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
+  convN k σ seen u v =
+    if tmTag u ≡ᵇ tmTag v then convND k σ seen u v
     else fail ("cannot convert " ++ showTm u ++ " ≁ " ++ showTm v)
 
-  convND : ∀ {n} → ℕ → Sig → Tm n → Tm n → Result ⊤
-  convND k σ typ           typ           = ok tt
-  convND k σ nat           nat           = ok tt
-  convND k σ unit          unit          = ok tt
-  convND k σ empty         empty         = ok tt
-  convND k σ (dty i)       (dty j)       = guard "data index mismatch" (i ≡ᵇ j)
-  convND k σ (ctor i j)    (ctor i′ j′)  =
+  convND : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
+  convND _ _ _    typ           typ           = ok tt
+  convND _ _ _    nat           nat           = ok tt
+  convND _ _ _    unit          unit          = ok tt
+  convND _ _ _    empty         empty         = ok tt
+  convND _ _ _    (dty i)       (dty j)       = guard "data index mismatch" (i ≡ᵇ j)
+  convND _ _ _    (ctor i j)    (ctor i′ j′)  =
     guard "constructor mismatch" ((i ≡ᵇ i′) ∧ (j ≡ᵇ j′))
-  convND k σ (mData e P bs) (mData e′ P′ bs′) =
-    conv k σ e e′ >> conv k σ P P′ >> convArgs k σ bs bs′
-  convND k σ ze            ze            = ok tt
-  convND k σ one           one           = ok tt
-  convND k σ rfl           rfl           = ok tt
-  convND k σ (su a)        (su b)        = conv k σ a b
-  convND k σ (var i)       (var j)       = guard ("var " ++ showTm (var i) ++ " ≠ " ++ showTm (var j)) (eqFin i j)
-  convND k σ (def i)       (def j)       = guard ("def " ++ showDef i ++ " ≠ " ++ showDef j) (i ≡ᵇ j)
-  convND k σ (pi q A B)    (pi q′ A′ B′) =
-    guard "Π quantity mismatch" (eqQty q q′) >> conv k σ A A′ >> conv k σ B B′
-  convND k σ (lam q A t)   (lam q′ A′ t′) =
-    guard "λ quantity mismatch" (eqQty q q′) >> conv k σ A A′ >> conv k σ t t′
-  convND k σ (app f a)     (app g b)     = conv k σ f g >> conv k σ a b
-  convND k σ (idt A a b)   (idt A′ a′ b′) = conv k σ A A′ >> conv k σ a a′ >> conv k σ b b′
-  convND k σ (mNat e P z s) (mNat e′ P′ z′ s′) =
-    conv k σ e e′ >> conv k σ P P′ >> conv k σ z z′ >> conv k σ s s′
-  convND k σ (mEmp e P)    (mEmp e′ P′)  = conv k σ e e′ >> conv k σ P P′
-  convND k σ (mUnit e P u) (mUnit e′ P′ u′) =
-    conv k σ e e′ >> conv k σ P P′ >> conv k σ u u′
-  convND k σ (rwt e P t)   (rwt e′ P′ t′) =
-    conv k σ e e′ >> conv k σ P P′ >> conv k σ t t′
-  convND k σ (ann e A)     (ann e′ A′)   = conv k σ e e′ >> conv k σ A A′
-  convND k σ (prod A B)    (prod A′ B′)  = conv k σ A A′ >> conv k σ B B′
-  convND k σ (pair a b)    (pair a′ b′)  = conv k σ a a′ >> conv k σ b b′
-  convND k σ (letp e t)    (letp e′ t′)  = conv k σ e e′ >> conv k σ t t′
-  convND k σ (nu F)        (nu F′)       = conv k σ F F′
-  convND k σ (unf s f)     (unf s′ f′)   = conv k σ s s′ >> conv k σ f f′
-  convND k σ (ucons s)     (ucons s′)    = conv k σ s s′
-  convND k σ i64           i64           = ok tt
-  convND k σ f32ty         f32ty         = ok tt
-  convND k σ (tensor d s)  (tensor d′ s′) = conv k σ d d′ >> conv k σ s s′
-  convND k σ (addi x y)    (addi x′ y′)  = conv k σ x x′ >> conv k σ y y′
-  convND k σ (muli x y)    (muli x′ y′)  = conv k σ x x′ >> conv k σ y y′
-  convND k σ (addt t u)    (addt t′ u′)  = conv k σ t t′ >> conv k σ u u′
-  convND k σ (toi64 t)     (toi64 t′)    = conv k σ t t′
-  convND k σ (packi x y)   (packi x′ y′) = conv k σ x x′ >> conv k σ y y′
-  convND _ _ u            v             =
+  convND k σ seen (mData e P bs) (mData e′ P′ bs′) =
+    convGo k σ seen e e′ >> convGo k σ seen P P′ >> convArgs seen k σ bs bs′
+  convND _ _ _    ze            ze            = ok tt
+  convND _ _ _    one           one           = ok tt
+  convND _ _ _    rfl           rfl           = ok tt
+  convND k σ seen (su a)        (su b)        = convGo k σ seen a b
+  convND _ _ _    (var i)       (var j)       = guard ("var " ++ showTm (var i) ++ " ≠ " ++ showTm (var j)) (eqFin i j)
+  convND _ _ _    (def i)       (def j)       = guard ("def " ++ showDef i ++ " ≠ " ++ showDef j) (i ≡ᵇ j)
+  convND k σ seen (pi q A B)    (pi q′ A′ B′) =
+    guard "Π quantity mismatch" (eqQty q q′) >> convGo k σ seen A A′ >> convGo k σ seen B B′
+  convND k σ seen (lam q A t)   (lam q′ A′ t′) =
+    guard "λ quantity mismatch" (eqQty q q′) >> convGo k σ seen A A′ >> convGo k σ seen t t′
+  convND k σ seen (app f a)     (app g b)     = convGo k σ seen f g >> convGo k σ seen a b
+  convND k σ seen (idt A a b)   (idt A′ a′ b′) =
+    convGo k σ seen A A′ >> convGo k σ seen a a′ >> convGo k σ seen b b′
+  convND k σ seen (mNat e P z s) (mNat e′ P′ z′ s′) =
+    convGo k σ seen e e′ >> convGo k σ seen P P′ >> convGo k σ seen z z′ >> convGo k σ seen s s′
+  convND k σ seen (mEmp e P)    (mEmp e′ P′)  = convGo k σ seen e e′ >> convGo k σ seen P P′
+  convND k σ seen (mUnit e P u) (mUnit e′ P′ u′) =
+    convGo k σ seen e e′ >> convGo k σ seen P P′ >> convGo k σ seen u u′
+  convND k σ seen (rwt e P t)   (rwt e′ P′ t′) =
+    convGo k σ seen e e′ >> convGo k σ seen P P′ >> convGo k σ seen t t′
+  convND k σ seen (ann e A)     (ann e′ A′)   = convGo k σ seen e e′ >> convGo k σ seen A A′
+  convND k σ seen (prod A B)    (prod A′ B′)  = convGo k σ seen A A′ >> convGo k σ seen B B′
+  convND k σ seen (pair a b)    (pair a′ b′)  = convGo k σ seen a a′ >> convGo k σ seen b b′
+  convND k σ seen (letp e t)    (letp e′ t′)  = convGo k σ seen e e′ >> convGo k σ seen t t′
+  convND k σ seen (nu F)        (nu F′)       = convGo k σ seen F F′
+  convND k σ seen (unf s f)     (unf s′ f′)   = convGo k σ seen s s′ >> convGo k σ seen f f′
+  convND k σ seen (ucons s)     (ucons s′)    = convGo k σ seen s s′
+  convND _ _ _    i64           i64           = ok tt
+  convND _ _ _    f32ty         f32ty         = ok tt
+  convND k σ seen (tensor d s)  (tensor d′ s′) = convGo k σ seen d d′ >> convGo k σ seen s s′
+  convND k σ seen (addi x y)    (addi x′ y′)  = convGo k σ seen x x′ >> convGo k σ seen y y′
+  convND k σ seen (muli x y)    (muli x′ y′)  = convGo k σ seen x x′ >> convGo k σ seen y y′
+  convND k σ seen (addt t u)    (addt t′ u′)  = convGo k σ seen t t′ >> convGo k σ seen u u′
+  convND k σ seen (toi64 t)     (toi64 t′)    = convGo k σ seen t t′
+  convND k σ seen (packi x y)   (packi x′ y′) = convGo k σ seen x x′ >> convGo k σ seen y y′
+  convND _ _ _    u             v             =
     fail ("cannot convert " ++ showTm u ++ " ≁ " ++ showTm v)
 
 ------------------------------------------------------------------------
