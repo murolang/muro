@@ -15,7 +15,7 @@ module Muro.Check where
 open import Data.Bool.Base
   using (Bool; true; false; _∧_; _∨_; not; if_then_else_)
 open import Data.Empty using (⊥; ⊥-elim)
-open import Data.Fin.Base using (Fin; zero; suc)
+open import Data.Fin.Base using (Fin; zero; suc; toℕ)
 open import Data.List.Base as List using (List; []; _∷_; length; take; drop)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _<ᵇ_; _+_)
@@ -1001,6 +1001,99 @@ guardedStep B (lam _ _ t) = guardedStep B t
 guardedStep B (pair h t)  = unguarded (hasSelf B h ∨ not (guardedTail B t))
 guardedStep _ _           = fail "unfold body must be a pair"
 
+-- occℕ i t: de Bruijn variable i occurs free in t. The same walk as
+-- `occurs`, indexed by ℕ so a seed binder can be counted while the
+-- lambdas of a step are stripped.
+mutual
+  occℕ : ∀ {n} → ℕ → Tm n → Bool
+  occℕ i (var x)        = i ≡ᵇ toℕ x
+  occℕ i (pi _ A B)     = occℕ i A ∨ occℕ (suc i) B
+  occℕ i (lam _ A t)    = occℕ i A ∨ occℕ (suc i) t
+  occℕ i (app f a)      = occℕ i f ∨ occℕ i a
+  occℕ i (su t)         = occℕ i t
+  occℕ i (mData e P bs) = occℕ i e ∨ occℕ (suc i) P ∨ occℕList i bs
+  occℕ i (mNat e P z s) = occℕ i e ∨ occℕ (suc i) P ∨ occℕ i z ∨ occℕ (suc i) s
+  occℕ i (mEmp e P)     = occℕ i e ∨ occℕ (suc i) P
+  occℕ i (mUnit e P u)  = occℕ i e ∨ occℕ (suc i) P ∨ occℕ i u
+  occℕ i (idt A a b)    = occℕ i A ∨ occℕ i a ∨ occℕ i b
+  occℕ i (rwt e P t)    = occℕ i e ∨ occℕ (suc i) P ∨ occℕ i t
+  occℕ i (ann e A)      = occℕ i e ∨ occℕ i A
+  occℕ i (prod A B)     = occℕ i A ∨ occℕ i B
+  occℕ i (pair a b)     = occℕ i a ∨ occℕ i b
+  occℕ i (letp e t)     = occℕ i e ∨ occℕ (suc (suc i)) t
+  occℕ i (nu F)         = occℕ (suc i) F
+  occℕ i (unf s f)      = occℕ i s ∨ occℕ i f
+  occℕ i (ucons s)      = occℕ i s
+  occℕ i (tensor d s)   = occℕ i d ∨ occℕ i s
+  occℕ i (addi a b)     = occℕ i a ∨ occℕ i b
+  occℕ i (muli a b)     = occℕ i a ∨ occℕ i b
+  occℕ i (addt t u)     = occℕ i t ∨ occℕ i u
+  occℕ i (toi64 t)      = occℕ i t
+  occℕ i (packi a b)    = occℕ i a ∨ occℕ i b
+  occℕ _ _              = false
+
+  occℕList : ∀ {n} → ℕ → List (Tm n) → Bool
+  occℕList _ []       = false
+  occℕList i (t ∷ ts) = occℕ i t ∨ occℕList i ts
+
+-- nothing: the step has not bound the seed (a bare pair does not
+-- instantiate it). just i: the seed is variable i. The first λ binds
+-- it at 0; each further λ shifts it. The binder is read when it occurs
+-- in the head or in the tail. A seed that mentions the block may occur
+-- in neither: the observed head cannot be that mention, and the tail
+-- is not instantiated with it. A block-free seed may occur in either.
+seedFlows : ∀ {n} → Maybe ℕ → Tm n → Bool
+seedFlows nothing  (lam _ _ t) = seedFlows (just 0) t
+seedFlows (just i) (lam _ _ t) = seedFlows (just (suc i)) t
+seedFlows (just i) (pair h t)  = occℕ i h ∨ occℕ i t
+seedFlows _        _           = false
+
+-- Outside spec, an unfold whose head or tail reads the seed must be
+-- seeded by a term that does not mention the block. The walk is the
+-- whole body: checkUnfold never receives the seed, and the three unf
+-- clauses of check′/infer′ are quoted by Soundness. A seed neither
+-- component reads is not constrained, so a descending call discarded
+-- before the step stays accepted. The same walk runs guardedStep on
+-- every syntactic unfold, so acceptance is the guard as well as the
+-- seed fact.
+seedGuard : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
+seedGuard k σ B s f =
+  whnf k σ f >>= λ f′ → unguarded (seedFlows nothing f′ ∧ hasSelf B s)
+
+mutual
+  seedWalk : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Result ⊤
+  seedWalk k σ B (unf s f)      =
+    seedGuard k σ B s f >>
+    (whnf k σ f >>= guardedStep B) >>
+    seedWalk k σ B s >> seedWalk k σ B f
+  seedWalk k σ B (app f a)      = seedWalk k σ B f >> seedWalk k σ B a
+  seedWalk k σ B (su t)         = seedWalk k σ B t
+  seedWalk k σ B (lam _ A t)    = seedWalk k σ B A >> seedWalk k σ B t
+  seedWalk k σ B (pi _ A B′)    = seedWalk k σ B A >> seedWalk k σ B B′
+  seedWalk k σ B (mData e P bs) = seedWalk k σ B e >> seedWalk k σ B P >> seedWalkList k σ B bs
+  seedWalk k σ B (mNat e P z s) = seedWalk k σ B e >> seedWalk k σ B P >> seedWalk k σ B z >> seedWalk k σ B s
+  seedWalk k σ B (mEmp e P)     = seedWalk k σ B e >> seedWalk k σ B P
+  seedWalk k σ B (mUnit e P u)  = seedWalk k σ B e >> seedWalk k σ B P >> seedWalk k σ B u
+  seedWalk k σ B (idt A a b)    = seedWalk k σ B A >> seedWalk k σ B a >> seedWalk k σ B b
+  seedWalk k σ B (rwt e P t)    = seedWalk k σ B e >> seedWalk k σ B P >> seedWalk k σ B t
+  seedWalk k σ B (ann e A)      = seedWalk k σ B e >> seedWalk k σ B A
+  seedWalk k σ B (prod A B′)    = seedWalk k σ B A >> seedWalk k σ B B′
+  seedWalk k σ B (pair a b)     = seedWalk k σ B a >> seedWalk k σ B b
+  seedWalk k σ B (letp e t)     = seedWalk k σ B e >> seedWalk k σ B t
+  seedWalk k σ B (nu F)         = seedWalk k σ B F
+  seedWalk k σ B (ucons u)      = seedWalk k σ B u
+  seedWalk k σ B (tensor d u)   = seedWalk k σ B d >> seedWalk k σ B u
+  seedWalk k σ B (addi x y)     = seedWalk k σ B x >> seedWalk k σ B y
+  seedWalk k σ B (muli x y)     = seedWalk k σ B x >> seedWalk k σ B y
+  seedWalk k σ B (addt t u)     = seedWalk k σ B t >> seedWalk k σ B u
+  seedWalk k σ B (toi64 t)      = seedWalk k σ B t
+  seedWalk k σ B (packi x y)    = seedWalk k σ B x >> seedWalk k σ B y
+  seedWalk _ _ _ _              = ok tt
+
+  seedWalkList : ∀ {n} → ℕ → Sig → List ℕ → List (Tm n) → Result ⊤
+  seedWalkList _ _ _ []       = ok tt
+  seedWalkList k σ B (t ∷ ts) = seedWalk k σ B t >> seedWalkList k σ B ts
+
 -- On run/evid, unfold's λ-body must be a pair, the head must not
 -- mention the block, and the tail must be guarded. spec skips the test.
 checkUnfold : ∀ {n} → ℕ → Sig → Mode → RecSt n → Tm n → Result ⊤
@@ -1017,7 +1110,9 @@ isNuHead _      = false
 checkNu : ∀ {n} → ℕ → Sig → List ℕ → Mode → Tm n → Tm n → Result ⊤
 checkNu _       _ _   spec _ _ = ok tt
 checkNu zero    _ _   _    _ _ = fail outOfFuel
-checkNu (suc k) σ blk m    T t = whnf (suc k) σ T >>= λ T′ → go T′ t
+checkNu (suc k) σ blk m    T t =
+  seedWalk (suc k) σ blk t >>
+  whnf (suc k) σ T >>= λ T′ → go T′ t
   where
     go : ∀ {n} → Tm n → Tm n → Result ⊤
     go (pi _ _ B) (lam _ _ u) = checkNu k σ blk m B u
@@ -1029,7 +1124,11 @@ checkNu (suc k) σ blk m    T t = whnf (suc k) σ T >>= λ T′ → go T′ t
 
 -- What checkUnfold demands of a step, after whnf: lambdas over a pair
 -- whose head does not mention the block and whose tail is guarded.
--- This is the shape of an accepted unfold. It is not productivity.
+-- This is the shape of an accepted unfold. That an observation to any
+-- finite depth reads a block-free head is Muro.Productive.
+-- checkSig-guarded reads this guard, and the seed fact, off seedWalk:
+-- the seed binder may occur in the head or the tail only when the seed
+-- does not mention the block.
 data StepGuard {n} (B : List ℕ) : Tm n → Set where
   sg-lam  : ∀ {q A t} → StepGuard B t → StepGuard B (lam q A t)
   sg-pair : ∀ {h t} → hasSelf B h ≡ false → GuardedTail B t → StepGuard B (pair h t)

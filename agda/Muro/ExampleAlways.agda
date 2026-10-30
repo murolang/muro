@@ -120,6 +120,8 @@ nested-form-ok : guardedTail (0 ∷ []) nested-ok ≡ true
 nested-form-ok = refl
 
 ------------------------------------------------------------------------
+-- tail p is not a guarded tail: snd (uncons p) forces the block, so
+-- GuardedTail fails for the tail of p (Theorem A).
 -- The attack. s is 0, 1, 0, 1, …. p's tail is p's own tail.
 -- Disc, one-eq-zero and bad are the rest of the closed Empty proof.
 ------------------------------------------------------------------------
@@ -145,6 +147,8 @@ oneZero = fstTm (ucons (sndTm (ucons (def 2))))
 badTm : Tm 0
 badTm = rwt (def 3) (app (def 1) (var zero)) one
 
+-- snd (uncons p) is not GuardedTail: it mentions the block and it is
+-- not one of the four call forms, so Theorem A's GuardedTail fails.
 tailBook : Sig
 tailBook = fromDefs (
   mkDef "s"           run  (stream nat)         sTm     ∷
@@ -160,6 +164,8 @@ tail-refused = refl
 tail-fails : isFail (checkSig! tailBook) ≡ true
 tail-fails rewrite tail-refused = refl
 
+-- tail (p n) is not a guarded call: the argument is block-free, but
+-- snd (uncons (p n)) is not one of the four call forms (Theorem A).
 -- tail (p n), with natsFrom as the stream.
 natsFromTm : Tm 0
 natsFromTm =
@@ -188,6 +194,8 @@ idxBook = fromDefs (
 idx-fails : isFail (checkSig! idxBook) ≡ true
 idx-fails = refl
 
+-- The inner unfold's tail is tail (tail p), which is not GuardedTail,
+-- so gc-unf does not hold (Theorem A).
 -- Nested unfold whose tail is tail (tail p).
 nestBook : Sig
 nestBook = fromDefs (
@@ -221,6 +229,8 @@ sameOkBook = fromDefs (
 same-ok-checks : checkSig! sameOkBook ≡ ok tt
 same-ok-checks = refl
 
+-- head p in the tail is not a guarded call: fst (uncons p) forces the
+-- block, so GuardedTail fails (Theorem A).
 sameBadBook : Sig
 sameBadBook = fromDefs (
   mkDef "zeros" run (stream nat) zerosTm ∷
@@ -242,6 +252,45 @@ selfBook = fromDefs (
 
 self-fails : isFail (checkSig! selfBook) ≡ true
 self-fails = refl
+
+-- The seed is head (s m). It mentions s, and the step's head is the
+-- seed binder, so the observed head would be that call. HeadSeed fails
+-- (Theorem A): the binder occurs in the head and hasSelf of the seed
+-- is true. A seed that mentions the block only in a term the head does
+-- not read is not this book.
+seedTm : Tm 0
+seedTm =
+  lam affine nat
+    (unf (mNat (var zero) nat ze
+            (fstTm (ucons (app (def 0) (var zero)))))
+         (lam affine nat (pair (var zero) ze)))
+
+seedBook : Sig
+seedBook = fromDefs (
+  mkDef "s" run (pi affine nat (stream nat)) seedTm ∷ [])
+
+seed-refused : checkSig! seedBook ≡ fail "s productivity: unguarded recursive call"
+seed-refused = refl
+
+-- The seed mentions the block, the head does not read the binder, and
+-- the tail does. Instantiating the tail copies that mention into the
+-- next seed. SeedCovered fails on all three disjuncts: the tail reads
+-- the binder, the head does not, and hasSelf of the seed is true.
+-- The same call discarded before the step, with a tail that does not
+-- read the binder, is not this book.
+tailSeedTm : Tm 0
+tailSeedTm =
+  lam affine nat
+    (unf (mNat (var zero) nat ze
+            (fstTm (ucons (app (def 0) (var zero)))))
+         (lam affine nat (pair ze (var zero))))
+
+tailSeedBook : Sig
+tailSeedBook = fromDefs (
+  mkDef "s" run (pi affine nat (stream nat)) tailSeedTm ∷ [])
+
+tailSeed-refused : checkSig! tailSeedBook ≡ fail "s productivity: unguarded recursive call"
+tailSeed-refused = refl
 
 oneZeroBook : Sig
 oneZeroBook = fromDefs (

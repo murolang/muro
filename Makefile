@@ -12,6 +12,8 @@ AFLAGS := --no-libraries -i agda -i vendor/agda-stdlib/src --warning=noUnsupport
 # `--guardedness`, which `--safe` allows, so a repeating protocol is
 # a guarded coinductive definition. `Muro.Linear` imports `Muro.Rec`.
 # Check is structurally recursive on the term, with fuel only where it reduces.
+# Productive is the observation theorem for an accepted unfold. It is --safe
+# and is not imported by Check or Soundness.
 .PHONY: agda agda-safe agda-all agda-soundness agda-syntax agda-check elixir clean
 
 agda: agda-safe agda-all
@@ -37,6 +39,7 @@ agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Frag.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Tag.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Check.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Productive.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Soundness.agda
 
 agda-soundness:

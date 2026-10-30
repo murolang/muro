@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.19.1
+
+Outside spec, a seed that mentions the block is refused when the head or the tail of the step reads the seed binder. The refusal is `<name> productivity: unguarded recursive call`. A seed neither component reads stays accepted, including a descending call discarded before the step whose tail is a guarded call. A block-free seed may occur in the head or in the tail.
+
+`agda/Muro/Productive.agda` proves that a guarded tail unrolls to every finite depth (`guarded-unrolls`) and that the observations `obs-stream` and `obs-fam` read a block-free head at every depth, under the hypotheses in that module. `checkSig-nu` extracts the productivity check from an accepted signature. `checkSig-guarded` reads that check: every syntactic unfold in an accepted run or evidence body has the guard and the seed fact (`AllUnf`), and a one-λ pair yields `HeadSeed` and `SeedCovered` (`unfFacts`). `SeedCovered` is the tail not reading the seed, the head reading it, or the seed not mentioning the block. Closure of `component` (`BlockClosed`), a stream call tail, normalisation of the head, and termination by descent stay open. ⊢ is unchanged.
+
+### Manual
+
+- Streams and Limits: the theorem, the seed rule, and what is still not a theorem.
+
+### Package
+
+- Version 0.19.1.
+
 ## 0.19.0
 
 **Breaking:** An open-map decode that used to succeed when the host map carried a declared key in another form (atom vs string) now returns `{:error, {path, {:ambiguous_key, k}}}`. Callers that send such maps must send the declared form.
