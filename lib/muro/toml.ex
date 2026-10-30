@@ -12,10 +12,12 @@ defmodule Muro.Toml do
   `[package.metadata.muro]` and its children are skipped. A header
   there may use a basic or literal string, as in
   `[target.'cfg(unix)'.dependencies]` or
-  `[target."x86_64-pc-windows-msvc".dependencies]`. Skipping tracks
-  strings, arrays, and inline tables, so a `[` inside one of those
-  is not a table. The muro table itself is read with the same subset.
-  A construct the subset does not include is refused there too.
+  `[target."x86_64-pc-windows-msvc".dependencies]`. The quote form
+  follows that header's own namespace, including when the header
+  comes immediately after the muro table. Skipping tracks strings,
+  arrays, and inline tables, so a `[` inside one of those is not a
+  table. The muro table itself is read with the same subset. A
+  construct the subset does not include is refused there too.
 
   Dotted keys (`a.b = 1`), inline tables, literal strings, multiline
   strings, floats, datetimes, and non-empty arrays are outside the
@@ -106,8 +108,7 @@ defmodule Muro.Toml do
       {:at, i, line} ->
         cond do
           at(bin, i) == ?[ ->
-            with {:ok, parts, array?, i, line} <-
-                   header(bin, i, len, line, not capturing?(state)),
+            with {:ok, parts, array?, i, line} <- header(bin, i, len, line, state),
                  {:ok, state} <- open_header(state, parts, array?, line),
                  {:ok, i, line} <- expect_eol(bin, i, len, line) do
               items(bin, i, len, line, state)
@@ -188,7 +189,11 @@ defmodule Muro.Toml do
     end
   end
 
-  defp header(bin, i, len, line, relaxed?) do
+  # A Cargo header may contain a literal key. Whether that key is
+  # legal is this header's namespace, not the table being left:
+  # `[target.'cfg(unix)'.dependencies]` is outside
+  # `[package.metadata.muro]` even when it is the next header.
+  defp header(bin, i, len, line, state) do
     {array?, i} =
       if i + 1 < len and at(bin, i + 1) == ?[ do
         {true, i + 2}
@@ -196,17 +201,35 @@ defmodule Muro.Toml do
         {false, i + 1}
       end
 
+    relaxed? = state.kind == :cargo
+
     with {:ok, i, line} <- skip_spaces(bin, i, len, line),
-         {:ok, parts, i, line} <- header_keys(bin, i, len, line, relaxed?, []),
+         {:ok, tagged, i, line} <- header_keys(bin, i, len, line, relaxed?, []),
+         {:ok, parts} <- quoted_header(tagged, line, state),
          {:ok, i, line} <- skip_spaces(bin, i, len, line),
          {:ok, i} <- close_header(bin, i, len, line, array?) do
       {:ok, parts, array?, i, line}
     end
   end
 
+  defp quoted_header(tagged, line, %{kind: :cargo}) do
+    parts = Enum.map(tagged, fn {part, _literal?} -> part end)
+
+    if Enum.any?(tagged, fn {_part, literal?} -> literal? end) and
+         match?({:inside, _rel}, cargo_relative(parts)) do
+      {:error, line, "expected a table name"}
+    else
+      {:ok, parts}
+    end
+  end
+
+  defp quoted_header(tagged, _line, _state) do
+    {:ok, Enum.map(tagged, fn {part, _literal?} -> part end)}
+  end
+
   defp header_keys(bin, i, len, line, relaxed?, acc) do
-    with {:ok, part, i, line} <- header_key(bin, i, len, line, relaxed?) do
-      acc = acc ++ [part]
+    with {:ok, part, literal?, i, line} <- header_key(bin, i, len, line, relaxed?) do
+      acc = acc ++ [{part, literal?}]
 
       with {:ok, i, line} <- skip_spaces(bin, i, len, line) do
         if i < len and at(bin, i) == ?. do
@@ -220,21 +243,28 @@ defmodule Muro.Toml do
     end
   end
 
-  # Outside the muro table a Cargo header may quote a key. Inside it,
-  # and in `muro.toml`, a key is a bare name or a basic string.
+  # Outside `[package.metadata.muro]` a Cargo header may quote a key
+  # with a literal string. Inside that table, and in `muro.toml`, a
+  # key is a bare name or a basic string.
   defp header_key(bin, i, len, line, relaxed?) do
     cond do
       i >= len ->
         {:error, line, "unterminated table header"}
 
       at(bin, i) == ?" and not multiline?(bin, i, ?") ->
-        basic_string(bin, i + 1, len, line, [])
+        with {:ok, text, i, line} <- basic_string(bin, i + 1, len, line, []) do
+          {:ok, text, false, i, line}
+        end
 
       relaxed? and at(bin, i) == ?' and not multiline?(bin, i, ?') ->
-        literal_key(bin, i + 1, len, line, [])
+        with {:ok, text, i, line} <- literal_key(bin, i + 1, len, line, []) do
+          {:ok, text, true, i, line}
+        end
 
       bare?(at(bin, i)) ->
-        bare(bin, i, len, line, [])
+        with {:ok, text, i, line} <- bare(bin, i, len, line, []) do
+          {:ok, text, false, i, line}
+        end
 
       true ->
         {:error, line, "expected a table name"}

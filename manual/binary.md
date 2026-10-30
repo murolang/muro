@@ -117,7 +117,7 @@ The reader accepts tables, arrays of tables, basic strings, integers, booleans, 
 
 A construct outside that subset is refused. The message names the file and the line. The reader does not guess. Dotted keys in an assignment (`a.b = 1`), inline tables, literal strings, multiline strings, floats, datetimes, and non-empty arrays are refused.
 
-In a `Cargo.toml`, tables other than `[package.metadata.muro]` and its children are skipped. A header there may quote a key with a basic or literal string, including `[target.'cfg(unix)'.dependencies]` and `[target."x86_64-pc-windows-msvc".dependencies]`. Skipping follows strings, multi-line strings, arrays, and inline tables, so a `[` inside any of those is not a table. The muro table is read with the same subset: a literal string, a quoted header key of that form, and every other construct the subset does not include are refused there. A `Cargo.toml` with no `[package.metadata.muro]` is not a manifest.
+In a `Cargo.toml`, tables other than `[package.metadata.muro]` and its children are skipped. A header there may quote a key with a basic or literal string, including `[target.'cfg(unix)'.dependencies]` and `[target."x86_64-pc-windows-msvc".dependencies]`. The quote form follows the header being opened, so that target table is skipped when it comes immediately after `[package.metadata.muro]`. Skipping follows strings, multi-line strings, arrays, and inline tables, so a `[` inside any of those is not a table. The muro table is read with the same subset: a literal string, a quoted header key of that form, and every other construct the subset does not include are refused there. A `Cargo.toml` with no `[package.metadata.muro]` is not a manifest.
 
 ## gen
 

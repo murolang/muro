@@ -256,6 +256,32 @@ defmodule Muro.TomlTest do
     assert manifest.modules == []
   end
 
+  test "a literal-quoted Cargo header after the muro table is skipped" do
+    dir = tmp()
+    version = Mix.Tasks.Muro.version()
+
+    File.write!(Path.join(dir, "Cargo.toml"), """
+    [package]
+    name = "demo"
+    version = "0.1.0"
+
+    [package.metadata.muro]
+    muro = "#{version}"
+    backend = "rust"
+    modules = []
+    [target.'cfg(unix)'.dependencies]
+    libc = "0.2"
+
+    [target."x86_64-pc-windows-msvc".dependencies]
+    windows-sys = "0.52"
+    """)
+
+    assert {:ok, manifest} = Muro.Manifest.load(dir)
+    assert manifest.source == :cargo
+    assert manifest.backend == :rust
+    assert manifest.modules == []
+  end
+
   test "the muro table still refuses a literal string and a quoted header" do
     dir = tmp()
 
