@@ -56,11 +56,11 @@ defmodule Mix.Tasks.Muro.Check do
 
     case result do
       :ok ->
-        Enum.each(Muro.Check.temporal_lines(), &Mix.shell().info/1)
+        Enum.each(Muro.Check.temporal_lines(), fn line -> Mix.shell().info(line) end)
         Mix.shell().info("All terms check. Evidence never becomes a run.")
 
       {:ok, lines} ->
-        Enum.each(Muro.Check.temporal_lines(), &Mix.shell().info/1)
+        Enum.each(Muro.Check.temporal_lines(), fn line -> Mix.shell().info(line) end)
         Mix.shell().info("All terms check. Evidence never becomes a run.")
         Enum.each(lines, fn line -> Mix.shell().info(line) end)
 
