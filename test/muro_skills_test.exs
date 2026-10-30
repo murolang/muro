@@ -102,6 +102,44 @@ defmodule Muro.SkillsTest do
     assert File.read!(path) == appended
   end
 
+  test "mixed line endings keep the bytes outside the block" do
+    dir = tmp()
+    path = Path.join(dir, "AGENTS.md")
+
+    File.write!(
+      path,
+      "Keep this line.\n<!-- muro:begin -->\r\nold\r\n<!-- muro:end -->\r\nAfter.\n"
+    )
+
+    assert {:ok, _} = Muro.Skills.add(dir)
+    updated = File.read!(path)
+    assert String.starts_with?(updated, "Keep this line.\n<!-- muro:begin -->\r\n")
+    assert String.ends_with?(updated, "<!-- muro:end -->\r\nAfter.\n")
+    assert updated =~ "muro check\r\n"
+    refute updated =~ "old\r\n"
+    refute updated =~ "Keep this line.\r\n"
+    refute updated =~ "After.\r\n"
+
+    assert {:ok, _} = Muro.Skills.add(dir)
+    assert File.read!(path) == updated
+  end
+
+  test "a closing marker at EOF without a newline is preserved" do
+    dir = tmp()
+    path = Path.join(dir, "AGENTS.md")
+    File.write!(path, "<!-- muro:begin -->\nold\n<!-- muro:end -->")
+
+    assert {:ok, _} = Muro.Skills.add(dir)
+    updated = File.read!(path)
+    assert String.starts_with?(updated, "<!-- muro:begin -->\n")
+    assert String.ends_with?(updated, "\n<!-- muro:end -->")
+    refute String.ends_with?(updated, "<!-- muro:end -->\n")
+    refute updated =~ "old\n"
+
+    assert {:ok, _} = Muro.Skills.add(dir)
+    assert File.read!(path) == updated
+  end
+
   test "unbalanced markers name the line and write nothing" do
     dir = tmp()
     agents = Path.join(dir, "AGENTS.md")

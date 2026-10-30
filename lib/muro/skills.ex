@@ -6,9 +6,11 @@ defmodule Muro.Skills do
   `<!-- muro:begin -->` and `<!-- muro:end -->`, read at compile
   time. A marker counts only when it is the whole line, with an
   optional trailing carriage return. A mention inside a sentence
-  is left alone. A rerun replaces the text between those markers
-  and nothing else, and keeps the file's line endings. `CLAUDE.md`
-  is updated only when it already exists.
+  is left alone. A rerun replaces the text between those markers.
+  The prefix, the suffix, and both marker lines stay byte for
+  byte, including a closing marker with no final newline. The new
+  body uses the block's line ending. `CLAUDE.md` is updated only
+  when it already exists.
   """
 
   @source Path.expand("../../manual/for-agents.md", __DIR__)
@@ -167,27 +169,67 @@ defmodule Muro.Skills do
   end
 
   defp marker_lines(text, marker) do
-    {lines, _trailing?} = logical_lines(text)
-
-    lines
+    text
+    |> raw_lines()
     |> Enum.with_index(1)
-    |> Enum.flat_map(fn {line, number} ->
+    |> Enum.flat_map(fn {{line, _ending}, number} ->
       if line == marker, do: [number], else: []
     end)
   end
 
+  # Rejoining the file would rewrite every line with one ending.
+  # An LF prose line before a CRLF block would become CRLF, and a
+  # closing marker at EOF with no newline would gain one. Keep the
+  # prefix, both marker lines, and the suffix as they were read.
+  # Only the body between the markers is new, in the opening
+  # marker's line ending.
   defp replace(text, wrapped, begin_line, end_line) do
-    ending = line_ending(text)
-    {lines, trailing?} = logical_lines(text)
+    lines = raw_lines(text)
     prefix = Enum.take(lines, begin_line - 1)
+    opener = Enum.at(lines, begin_line - 1)
+    closer = Enum.at(lines, end_line - 1)
     suffix = Enum.drop(lines, end_line)
 
-    block_lines =
-      wrapped
-      |> String.trim_trailing("\n")
-      |> String.split("\n")
+    [
+      render_lines(prefix),
+      render_line(opener),
+      replacement_body(wrapped, block_ending(opener)),
+      render_line(closer),
+      render_lines(suffix)
+    ]
+    |> IO.iodata_to_binary()
+  end
 
-    join_lines(prefix ++ block_lines ++ suffix, ending, trailing? or suffix == [])
+  defp replacement_body(wrapped, ending) do
+    wrapped
+    |> String.trim_trailing("\n")
+    |> String.split("\n")
+    |> Enum.drop(1)
+    |> Enum.drop(-1)
+    |> Enum.map(&[&1, ending])
+  end
+
+  defp block_ending({_line, "\r\n"}), do: "\r\n"
+  defp block_ending({_line, _ending}), do: "\n"
+
+  defp render_lines(lines), do: Enum.map(lines, &render_line/1)
+  defp render_line({line, ending}), do: [line, ending]
+
+  defp raw_lines(text), do: raw_lines(text, [])
+
+  defp raw_lines(<<>>, acc), do: Enum.reverse(acc)
+
+  defp raw_lines(text, acc) do
+    case :binary.match(text, ["\r\n", "\n"]) do
+      {pos, len} ->
+        line = binary_part(text, 0, pos)
+        ending = binary_part(text, pos, len)
+        rest = binary_part(text, pos + len, byte_size(text) - pos - len)
+        raw_lines(rest, [{line, ending} | acc])
+
+      :nomatch ->
+        Enum.reverse([{text, ""} | acc])
+    end
   end
 
   defp append("", wrapped), do: wrapped
@@ -205,27 +247,4 @@ defmodule Muro.Skills do
 
   defp transcode(text, "\n"), do: text
   defp transcode(text, "\r\n"), do: String.replace(text, "\n", "\r\n")
-
-  defp logical_lines(text) do
-    trailing? = String.ends_with?(text, "\n")
-
-    lines =
-      text
-      |> String.split("\n")
-      |> Enum.map(&String.trim_trailing(&1, "\r"))
-
-    lines =
-      if trailing? and lines != [] and List.last(lines) == "" do
-        Enum.drop(lines, -1)
-      else
-        lines
-      end
-
-    {lines, trailing?}
-  end
-
-  defp join_lines(lines, ending, trailing?) do
-    body = Enum.join(lines, ending)
-    if trailing?, do: body <> ending, else: body
-  end
 end
