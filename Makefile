@@ -7,7 +7,7 @@ AFLAGS := --no-libraries -i agda -i vendor/agda-stdlib/src --warning=noUnsupport
 # soundness proof Soundness (with Soundness.Conv, Soundness.Views),
 # what they import (Base, Syntax, Subst, SubstLemmas, Env), Async,
 # AsyncSync, AsyncRec, Temporal (Source, Bridge, Graph, Safety, Live,
-# Fair, Decide), and the examples — is checked under --safe: no postulates,
+# Fair, Decide, Search, Sound, Examples), and the examples — is checked under --safe: no postulates,
 # no TERMINATING, no --type-in-type. `Muro.agda`, `Muro.Rec`, `Muro.Linear`,
 # and `Muro.Temporal` also pass `--guardedness`, which `--safe` allows.
 # A repeating protocol, and an infinite run of a buffered meeting, are
@@ -37,6 +37,9 @@ agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Live.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Fair.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Decide.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Search.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Sound.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Examples.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Talk.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Seated.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Held.agda

@@ -45,6 +45,9 @@ import Muro.Temporal.Safety
 import Muro.Temporal.Live
 import Muro.Temporal.Fair
 import Muro.Temporal.Decide
+import Muro.Temporal.Search
+import Muro.Temporal.Sound
+import Muro.Temporal.Examples
 import Muro.Talk
 import Muro.Seated
 import Muro.Held

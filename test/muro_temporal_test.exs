@@ -72,6 +72,28 @@ defmodule Muro.TemporalTest do
              "ends: eventually (hear-server done) fails in spin-wire (spin-client : spin, hear-server : hear) after spin-client put bytes, hear-server arm bytes; then forever: spin-client put bytes, hear-server arm bytes"
   end
 
+  test "spin reaches 4 states" do
+    src = """
+    data Frame : Type where
+      bytes : Frame
+      trailers : Frame
+      headers : Frame
+    session spin := rec X. send Frame X
+    session hear :=
+      rec Y. recv (f : Frame) (case f
+        | bytes => Y
+        | trailers => end
+        | headers => end)
+    conform spin-client : spin := rec X. put bytes X
+    conform hear-server : hear := rec Y. get (f : Frame) (match f Y done done)
+    meet spin-wire : spin-client with hear-server buffer 1
+    temporal counted : spin-wire := always true
+    """
+
+    assert check(src) == :ok
+    assert Check.temporal_lines() == ["temporal counted: holds in 4 reachable states"]
+  end
+
   test "inflight constructor case holds" do
     src =
       File.read!("examples/async-meetings.muro") <>
@@ -81,8 +103,7 @@ defmodule Muro.TemporalTest do
         """
 
     assert check(src) == :ok
-    assert [line] = Check.temporal_lines()
-    assert line =~ ~r/^temporal ctl-seen: holds in [1-9][0-9]* reachable states$/
+    assert Check.temporal_lines() == ["temporal ctl-seen: holds in 9 reachable states"]
   end
 
   test "fuel does not change a temporal verdict" do
