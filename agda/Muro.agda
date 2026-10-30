@@ -3,8 +3,9 @@
 -- Elixir checks it, Agda specifies it, only run terms run.
 ------------------------------------------------------------------------
 
--- `Muro.Rec` is coinductive. `--guardedness` is infective, and it
--- is allowed under `--safe`. `Muro.Linear` imports `Muro.Rec`.
+-- `Muro.Rec` and `Muro.Temporal` are coinductive. `--guardedness`
+-- is infective, and it is allowed under `--safe`. `Muro.Linear`
+-- imports `Muro.Rec`. The temporal modules import `Muro.Temporal`.
 {-# OPTIONS --safe --guardedness #-}
 module Muro where
 
@@ -36,6 +37,14 @@ import Muro.Meet
 import Muro.Async
 import Muro.AsyncSync
 import Muro.AsyncRec
+import Muro.Temporal
+import Muro.Temporal.Source
+import Muro.Temporal.Bridge
+import Muro.Temporal.Graph
+import Muro.Temporal.Safety
+import Muro.Temporal.Live
+import Muro.Temporal.Fair
+import Muro.Temporal.Decide
 import Muro.Talk
 import Muro.Seated
 import Muro.Held
