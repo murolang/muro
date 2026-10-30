@@ -87,6 +87,16 @@ defmodule Muro.SkillsTest do
     assert File.read!(agents) == ""
   end
 
+  test "the hex package ships the agent manual the compiler reads" do
+    files = Keyword.fetch!(Mix.Project.config()[:package], :files)
+    assert "manual/for-agents.md" in files
+
+    source = Path.expand("../../manual/for-agents.md", Path.join(File.cwd!(), "lib/muro"))
+    assert File.regular?(source)
+    assert File.read!(source) =~ "<!-- muro:begin -->"
+    assert Muro.Skills.block(nil) =~ "<!-- muro:begin -->"
+  end
+
   test "the commands follow the manifest backend" do
     dir = tmp()
     version = Mix.Tasks.Muro.version()

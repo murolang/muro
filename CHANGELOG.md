@@ -2,7 +2,7 @@
 
 ## 0.19.6
 
-A self-contained `muro` executable checks, emits, and commits modules on a machine with no Elixir and no Erlang. It carries its own Erlang runtime. `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`, is the manifest where there is no `mix.exs`. `muro gen` writes C, Rust, and Cortex-M assembly as well as Elixir. A C target's source includes the header written beside it, named from the target stem. `muro init` reads the directory and writes one manifest. An existing manifest at `muro.exs`, `muro.toml`, or `[package.metadata.muro]` is left in place; init prints a diff in that file's format and does not create a second one. `muro skills add` writes the agent block into `AGENTS.md`. The Mix tasks stay and call the same functions. The Hex package gains no runtime dependency.
+A self-contained `muro` executable checks, emits, and commits modules on a machine with no Elixir and no Erlang. It carries its own Erlang runtime. `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`, is the manifest where there is no `mix.exs`. `muro gen` writes C, Rust, and Cortex-M assembly as well as Elixir. A C target's source includes the header written beside it, named from the target stem. `muro init` reads the directory and writes one manifest. An existing manifest at `muro.exs`, `muro.toml`, or `[package.metadata.muro]` is left in place; init prints a diff in that file's format and does not create a second one. `muro skills add` writes the agent block into `AGENTS.md`. The block is read from `manual/for-agents.md`, and that file is in the Hex package. The Mix tasks stay and call the same functions. The Hex package gains no runtime dependency.
 
 ### Manual
 

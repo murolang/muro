@@ -75,7 +75,7 @@ defmodule Muro.MixProject do
         "GitHub" => "https://github.com/murolang/muro",
         "Site" => "https://muro-lang.dev"
       },
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md)
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md manual/for-agents.md)
     ]
   end
 end

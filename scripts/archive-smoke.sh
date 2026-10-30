@@ -1010,4 +1010,73 @@ case "$stale_all" in
     ;;
 esac
 
+# The published package must compile. manual/for-agents.md is read
+# while compiling Muro.Skills, so a tarball that omits it fails here.
+hex_dir="$tmp/hex-unpacked"
+hex_app="$tmp/hex-app"
+hex_archives="$tmp/hex-archives"
+mkdir -p "$hex_dir" "$hex_app" "$hex_archives"
+(
+  cd "$root"
+  mix hex.build --output "$tmp/muro-${version}.tar"
+)
+tar -xzf "$tmp/muro-${version}.tar" -C "$hex_dir"
+# A Hex tarball is CHECKSUM, VERSION, metadata.config, and contents.tar.gz.
+pkg="$hex_dir/src"
+mkdir -p "$pkg"
+tar -xzf "$hex_dir/contents.tar.gz" -C "$pkg"
+test -f "$pkg/manual/for-agents.md"
+test -f "$pkg/lib/muro/skills.ex"
+if grep -q burrito "$hex_dir/metadata.config"; then
+  echo "the hex package lists burrito" >&2
+  exit 1
+fi
+
+cat >"$hex_app/mix.exs" <<EOF
+defmodule HexApp.MixProject do
+  use Mix.Project
+
+  def project do
+    [
+      app: :hex_app,
+      version: "0.1.0",
+      elixir: "~> 1.15",
+      deps: [{:muro, path: "${pkg}"}]
+    ]
+  end
+
+  def application do
+    [extra_applications: [:logger]]
+  end
+end
+EOF
+
+(
+  cd "$hex_app"
+  unset MIX_BUILD_PATH
+  mix deps.get
+  mix compile
+  block=$(mix run -e 'IO.write(Muro.Skills.block(nil))')
+  printf '%s\n' "$block"
+  have "$block" "<!-- muro:begin -->" "packaged skills block"
+  have "$block" "<!-- muro:end -->" "packaged skills block"
+  have "$block" "muro check" "packaged skills block"
+  # Archive the beams compiled from the package, not the checkout.
+  mix archive.build -i "_build/${MIX_ENV}/lib/muro" -o "$hex_archives/muro-${version}.ez"
+)
+
+MIX_ARCHIVES="$hex_archives" mix archive.install --force "$hex_archives/muro-${version}.ez"
+
+hex_work="$tmp/hex-work"
+mkdir -p "$hex_work"
+(
+  cd "$hex_work"
+  got=$(MIX_ARCHIVES="$hex_archives" mix muro --version)
+  printf '%s\n' "$got"
+  if [ "$got" != "Muro v${version}" ]; then
+    echo "expected Muro v${version} from the packaged archive, got: ${got}" >&2
+    exit 1
+  fi
+)
+
 echo "archive smoke passed (${version})"
