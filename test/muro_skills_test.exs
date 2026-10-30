@@ -59,6 +59,49 @@ defmodule Muro.SkillsTest do
     assert File.read!(Path.join(dir, "CLAUDE.md")) == claude
   end
 
+  test "an inline marker is prose, and CRLF markers stay whole lines" do
+    dir = tmp()
+    path = Path.join(dir, "AGENTS.md")
+
+    File.write!(path, """
+    See <!-- muro:begin --> in this sentence.
+    <!-- muro:begin -->
+    old instructions
+    <!-- muro:end -->
+    keep this
+    """)
+
+    assert {:ok, _} = Muro.Skills.add(dir)
+    replaced = File.read!(path)
+    assert String.starts_with?(replaced, "See <!-- muro:begin --> in this sentence.\n")
+    assert replaced =~ "<!-- muro:begin -->\n"
+    assert replaced =~ "<!-- muro:end -->\nkeep this\n"
+    refute replaced =~ "old instructions"
+
+    crlf =
+      "notes\r\n<!-- muro:begin -->\r\nold\r\n<!-- muro:end -->\r\nkeep\r\n"
+
+    File.write!(path, crlf)
+    assert {:ok, _} = Muro.Skills.add(dir)
+    updated = File.read!(path)
+    assert String.starts_with?(updated, "notes\r\n<!-- muro:begin -->\r\n")
+    assert updated =~ "<!-- muro:end -->\r\nkeep\r\n"
+    refute updated =~ "old\r\n"
+    refute String.replace(updated, "\r\n", "") =~ "\n"
+
+    File.write!(path, "one\r\n<!-- muro:begin -->\r\nno end\r\n")
+    assert {:error, "AGENTS.md:2: unbalanced muro marker"} = Muro.Skills.add(dir)
+    assert File.read!(path) == "one\r\n<!-- muro:begin -->\r\nno end\r\n"
+
+    File.write!(path, "Keep\r\nthis\r\n")
+    assert {:ok, _} = Muro.Skills.add(dir)
+    appended = File.read!(path)
+    assert String.starts_with?(appended, "Keep\r\nthis\r\n<!-- muro:begin -->\r\n")
+    refute String.replace(appended, "\r\n", "") =~ "\n"
+    assert {:ok, _} = Muro.Skills.add(dir)
+    assert File.read!(path) == appended
+  end
+
   test "unbalanced markers name the line and write nothing" do
     dir = tmp()
     agents = Path.join(dir, "AGENTS.md")

@@ -4,8 +4,11 @@ defmodule Muro.Skills do
 
   The wording comes from `manual/for-agents.md` between
   `<!-- muro:begin -->` and `<!-- muro:end -->`, read at compile
-  time. A rerun replaces the text between those markers and nothing
-  else. `CLAUDE.md` is updated only when it already exists.
+  time. A marker counts only when it is the whole line, with an
+  optional trailing carriage return. A mention inside a sentence
+  is left alone. A rerun replaces the text between those markers
+  and nothing else, and keeps the file's line endings. `CLAUDE.md`
+  is updated only when it already exists.
   """
 
   @source Path.expand("../../manual/for-agents.md", __DIR__)
@@ -127,8 +130,8 @@ defmodule Muro.Skills do
       :append ->
         {:ok, append(text, wrapped)}
 
-      {:replace, _begin_line, _end_line} ->
-        {:ok, replace(text, wrapped)}
+      {:replace, begin_line, end_line} ->
+        {:ok, replace(text, wrapped, begin_line, end_line)}
 
       {:error, line} ->
         {:error, "#{name}:#{line}: unbalanced muro marker"}
@@ -164,24 +167,65 @@ defmodule Muro.Skills do
   end
 
   defp marker_lines(text, marker) do
-    text
-    |> String.split("\n")
+    {lines, _trailing?} = logical_lines(text)
+
+    lines
     |> Enum.with_index(1)
     |> Enum.flat_map(fn {line, number} ->
       if line == marker, do: [number], else: []
     end)
   end
 
-  defp replace(text, wrapped) do
-    [before, rest] = String.split(text, @begin, parts: 2)
-    [_old, after_] = String.split(rest, @close, parts: 2)
-    after_ = String.replace_prefix(after_, "\n", "")
-    before <> wrapped <> after_
+  defp replace(text, wrapped, begin_line, end_line) do
+    ending = line_ending(text)
+    {lines, trailing?} = logical_lines(text)
+    prefix = Enum.take(lines, begin_line - 1)
+    suffix = Enum.drop(lines, end_line)
+
+    block_lines =
+      wrapped
+      |> String.trim_trailing("\n")
+      |> String.split("\n")
+
+    join_lines(prefix ++ block_lines ++ suffix, ending, trailing? or suffix == [])
   end
 
   defp append("", wrapped), do: wrapped
 
   defp append(text, wrapped) do
-    if String.ends_with?(text, "\n"), do: text <> wrapped, else: text <> "\n" <> wrapped
+    ending = line_ending(text)
+    wrapped = transcode(wrapped, ending)
+
+    if String.ends_with?(text, "\n"), do: text <> wrapped, else: text <> ending <> wrapped
+  end
+
+  defp line_ending(text) do
+    if String.contains?(text, "\r\n"), do: "\r\n", else: "\n"
+  end
+
+  defp transcode(text, "\n"), do: text
+  defp transcode(text, "\r\n"), do: String.replace(text, "\n", "\r\n")
+
+  defp logical_lines(text) do
+    trailing? = String.ends_with?(text, "\n")
+
+    lines =
+      text
+      |> String.split("\n")
+      |> Enum.map(&String.trim_trailing(&1, "\r"))
+
+    lines =
+      if trailing? and lines != [] and List.last(lines) == "" do
+        Enum.drop(lines, -1)
+      else
+        lines
+      end
+
+    {lines, trailing?}
+  end
+
+  defp join_lines(lines, ending, trailing?) do
+    body = Enum.join(lines, ending)
+    if trailing?, do: body <> ending, else: body
   end
 end

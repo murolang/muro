@@ -173,7 +173,7 @@ A script run with `mix run --no-start` does not see the archive. Archives are on
 
 A project commits the modules `muro gen` writes. The `.muro` file is the source. Do not edit the generated file by hand. Change the `.muro` file and run `muro gen`.
 
-`muro skills add` writes this block into `AGENTS.md`, and into `CLAUDE.md` when that file already exists. The command lines and the example anchor are filled from the project. The markers are part of the block.
+`muro skills add` writes this block into `AGENTS.md`, and into `CLAUDE.md` when that file already exists. The command lines and the example anchor are filled from the project. The markers are part of the block. Each marker is a whole line. A trailing carriage return is allowed. An inline mention is left as prose. The file's line endings stay.
 
 <!-- muro:begin -->
 Muro has two jobs: spec and evidence. `run` is what is emitted.
