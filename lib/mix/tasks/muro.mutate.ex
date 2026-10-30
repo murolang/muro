@@ -18,9 +18,12 @@ defmodule Mix.Tasks.Muro.Mutate do
   caps candidates per definition (default
   `Muro.Mutate.default_max_mutants/0`, and `0` reports none).
   `--max-survivors N` exits 1 when more than `N` mutants survive.
-  Omitting it does not limit survivors. `--fuel` is the checker's fuel,
-  the same bound `mix muro.check` uses, and it applies to the original
-  check. `--json` prints the report as one JSON object.
+  Omitting it does not limit survivors. `--fuel` is the checker's fuel
+  for the original check and for every re-check. The equivalence probe
+  uses a quarter of it (at least 1, and less than `--fuel` when `--fuel`
+  is greater than 1). `--json` prints the report as one JSON object.
+  Each classified mutant prints `<id> <operator> <outcome>` on standard
+  error as it is classified. A run with no mutants prints none.
 
   Outcomes are `killed`, `surviving`, `equivalent`, `out_of_fuel`, and
   `discarded`. A mutant that converts with the original body is
@@ -72,7 +75,10 @@ defmodule Mix.Tasks.Muro.Mutate do
       only: Keyword.get_values(opts, :only),
       fuel: fuel,
       max_mutants_per_def: max_m,
-      max_survivors: max_s
+      max_survivors: max_s,
+      on_mutant: fn m ->
+        IO.puts(:stderr, "#{m.id} #{m.operator} #{m.outcome}")
+      end
     ]
 
     case Muro.Mutate.report(path, report_opts) do

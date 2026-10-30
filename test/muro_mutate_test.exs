@@ -199,8 +199,22 @@ defmodule Muro.MutateTest do
     quiet = write!("quiet.muro", deps_src())
     {quiet_out, quiet_err, quiet_code} = run_task(["--only", "a", "--max-survivors", "0", quiet])
     assert quiet_code == :ok
-    assert quiet_err == ""
+    assert quiet_err =~ "a#1 replace_ctor killed\n"
+    refute quiet_err =~ "survivors exceed"
     assert quiet_out =~ "surviving: 0\n"
+  end
+
+  test "replacing a passed-along key with a different constructor is killed" do
+    path = write!("find.muro", find_true_src())
+    {:ok, report} = Muro.Mutate.report(path, only: ["g"], concurrency: 1)
+
+    mutant =
+      Enum.find(report.mutants, fn mutant ->
+        mutant.operator == "replace_var" and mutant.before == "k" and mutant.after == "wild"
+      end)
+
+    assert mutant.outcome == "killed"
+    assert Enum.any?(mutant.killed_by, &(&1.name == "g-is-find"))
   end
 
   test "a book that does not check exits 2 and is not mutated" do
@@ -369,4 +383,47 @@ defmodule Muro.MutateTest do
 
   defp numeral(0), do: "0"
   defp numeral(k) when k > 0, do: "suc(#{numeral(k - 1)})"
+
+  defp find_true_src do
+    """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+    data Key : Type where
+      wild : Key
+      named : Nat → Key
+
+    def eq-nat : run Π (a : Nat) → Π (b : Nat) → Bool :=
+      λ (a : Nat) → λ (b : Nat) →
+        match a motive (λ _ → Bool)
+          | 0 => (match b motive (λ _ → Bool) | 0 => true | suc _ => false)
+          | suc p => (match b motive (λ _ → Bool) | 0 => false | suc q => eq-nat p q)
+
+    def eq-key : run Π (k : Key) → Π (j : Key) → Bool :=
+      λ (k : Key) → λ (j : Key) →
+        match k motive (λ _ → Bool)
+          | wild => (match j motive (λ _ → Bool) | wild => true | named _ => false)
+          | named n => (match j motive (λ _ → Bool) | wild => false | named m => eq-nat n m)
+
+    def or : run Π (a : Bool) → Π (b : Bool) → Bool :=
+      λ (a : Bool) → λ (b : Bool) → match a motive (λ _ → Bool) | true => true | false => b
+
+    def find : run Π (+ k : Key) → Π (t : List Key) → Bool :=
+      λ (+ k : Key) → λ (t : List Key) →
+        match t motive (λ _ → Bool)
+          | nil => false
+          | cons x xs => or (find k xs) (eq-key k x)
+
+    def g : run Π (+ k : Key) → Π (t : List Key) → Bool :=
+      λ (+ k : Key) → λ (t : List Key) → find k t
+
+    def g-is-find : evidence Π (k : Key) → Π (t : List Key) → {g k t ≡ find k t : Bool} :=
+      λ (k : Key) → λ (t : List Key) → refl
+    def same-key : evidence Π (t : List Key) → {find wild t ≡ find wild t : Bool} :=
+      λ (t : List Key) → refl
+    """
+  end
 end
