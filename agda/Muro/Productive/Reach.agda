@@ -1010,3 +1010,36 @@ component-closed : ∀ σ i a b
   → elemℕ b (component σ i) ≡ true
 component-closed σ i a b ia mb rb =
   component-step σ i a b (lookupDef σ b) refl ia mb rb
+
+-- Two members of one component reach each other, so they agree on which
+-- indices are mutually reachable. compGo walks the signature in order,
+-- and the boolean at each index is that agreement, so the lists are equal.
+reach-class : ∀ σ i j k
+  → reaches σ i j ≡ true → reaches σ j i ≡ true
+  → (reaches σ i k ∧ reaches σ k i) ≡ (reaches σ j k ∧ reaches σ k j)
+reach-class σ i j k rij rji =
+  bool-same
+    (λ p →
+      let ik , ki = ∧-true₂ (reaches σ i k) (reaches σ k i) p
+      in ∧-intro (reaches-trans σ j i k rji ik)
+                 (reaches-trans σ k i j ki rij))
+    (λ p →
+      let jk , kj = ∧-true₂ (reaches σ j k) (reaches σ k j) p
+      in ∧-intro (reaches-trans σ i j k rij jk)
+                 (reaches-trans σ k j i kj rji))
+
+compGo-same : ∀ σ i j k ds
+  → reaches σ i j ≡ true → reaches σ j i ≡ true
+  → compGo σ i k ds ≡ compGo σ j k ds
+compGo-same σ i j k [] _ _ = refl
+compGo-same σ i j k (_ ∷ ds) rij rji
+  rewrite reach-class σ i j k rij rji =
+  cong (λ rest → if reaches σ j k ∧ reaches σ k j then k ∷ rest else rest)
+       (compGo-same σ i j (suc k) ds rij rji)
+
+component-same : ∀ σ i j
+  → elemℕ j (component σ i) ≡ true
+  → component σ j ≡ component σ i
+component-same σ i j el =
+  let rij , rji = compGo-elim σ i j 0 (Sig.defs σ) el
+  in sym (compGo-same σ i j 0 (Sig.defs σ) rij rji)

@@ -13,12 +13,13 @@
 module Muro.Check where
 
 open import Data.Bool.Base
-  using (Bool; true; false; _∧_; _∨_; not; if_then_else_)
+  using (Bool; true; false; _∧_; _∨_; not; if_then_else_; T)
 open import Data.Empty using (⊥; ⊥-elim)
 open import Data.Fin.Base using (Fin; zero; suc; toℕ)
 open import Data.List.Base as List using (List; []; _∷_; length; take; drop)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _<ᵇ_; _+_; _≤_; _<_; z≤n; s≤s)
+open import Data.Nat.Properties using (≡ᵇ⇒≡)
 open import Data.Nat.Induction using (<-wellFounded; Acc; acc)
 open import Data.Nat.Show using (show)
 open import Data.Product.Base using (_×_; _,_; proj₁; proj₂)
@@ -26,7 +27,7 @@ open import Data.String.Base using (String; _++_)
 open import Data.Unit.Base using (⊤; tt)
 open import Data.Vec.Base as Vec using (Vec; []; _∷_; lookup; map)
 open import Function.Base using (case_of_; _$_)
-open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl; sym; trans; cong)
+open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl; sym; trans; cong; subst)
 
 open import Muro.Base
 open import Muro.Syntax
@@ -131,6 +132,13 @@ nthQty _          _       = fail "recursive-call spine longer than Π telescope"
 outOfFuel : String
 outOfFuel = "out of fuel (the checker gave up reducing; raise the fuel)"
 
+-- uncons (unfold (a, b) (λ _ → v)) reads the pair. Any other seed is
+-- stuck, and the clause is split so a seed that is already a constructor
+-- reduces without waiting on the pair pattern.
+idStep : ∀ {n} → Tm n → Qty → Tm n → Result (Tm n)
+idStep (pair a b) q A = ok (pair a (unf b (lam q A (var zero))))
+idStep s          q A = ok (ucons (unf s (lam q A (var zero))))
+
 mutual
   whnf : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n)
   whnf zero    _ _ = fail outOfFuel
@@ -166,8 +174,7 @@ mutual
   uconsWhnf _ _ (unf s (pair h t)) = ok (pair h t)
   uconsWhnf _ _ (unf s (lam q A (pair h t))) =
     ok (pair (inst h s) (unf (inst t s) (lam q A (pair h t))))
-  uconsWhnf _ _ (unf (pair a b) (lam q A (var zero))) =
-    ok (pair a (unf b (lam q A (var zero))))
+  uconsWhnf _ _ (unf s (lam q A (var zero))) = idStep s q A
   uconsWhnf _ _ e = ok (ucons e)
 
   dataWhnf : ∀ {n} → ℕ → Sig → Tm n → Tm (suc n) → List (Tm n) → Result (Tm n)
@@ -864,6 +871,15 @@ true≢false ()
 fail≢ok : ∀ {A : Set} {e : String} {a : A} → fail e ≡ ok a → ⊥
 fail≢ok ()
 
+ok≢fail : ∀ {A : Set} {a : A} {e : String} → ok a ≡ fail e → ⊥
+ok≢fail ()
+
+ok-inj : ∀ {A : Set} {x y : A} → ok x ≡ ok y → x ≡ y
+ok-inj refl = refl
+
+≡ᵇ-≡ : ∀ m n → (m ≡ᵇ n) ≡ true → m ≡ n
+≡ᵇ-≡ m n eq = ≡ᵇ⇒≡ m n (subst T (sym eq) tt)
+
 -- false ∨ b reduces to b, so a false absence bit leaves the call test.
 toCall : ∀ {n} (B : List ℕ) (t : Tm n)
   → not (hasSelf B t) ≡ false → guardedTail B t ≡ true → guardedCall B t ≡ true
@@ -1131,10 +1147,66 @@ isNuHead : ∀ {n} → Tm n → Bool
 isNuHead (nu _) = true
 isNuHead _      = false
 
+-- Run and evidence are checked. A spec definition is not: checkNu of
+-- spec returns without walking. A component of a run or evidence
+-- definition is therefore only run and evidence. Acceptance of the
+-- signature already keeps a spec body from naming a run, and a run
+-- body from naming a spec; this refuses the component that would make
+-- an observation open a body the walk did not see.
+specAt : Sig → ℕ → Bool
+specAt σ i with lookupDef σ i
+... | ok d   = eqMode (Def.dmode d) spec
+... | fail _ = false
+
+anySpec : Sig → List ℕ → Bool
+anySpec _ []       = false
+anySpec σ (i ∷ is) = specAt σ i ∨ anySpec σ is
+
+membersRun : Sig → List ℕ → Result ⊤
+membersRun σ js =
+  if anySpec σ js then fail "spec definition in a productive component" else ok tt
+
+members-false : ∀ σ js → membersRun σ js ≡ ok tt → anySpec σ js ≡ false
+members-false σ js eq with anySpec σ js
+... | false = refl
+... | true  = ⊥-elim (fail≢ok eq)
+
+anySpec-at : ∀ σ j js
+  → anySpec σ js ≡ false → elemℕ j js ≡ true → specAt σ j ≡ false
+anySpec-at _ _ [] _ ()
+anySpec-at σ j (i ∷ is) eq el =
+  let hi , ti = ∨-false₂ (specAt σ i) (anySpec σ is) eq
+  in at (j ≡ᵇ i) refl el hi ti
+  where
+  at : (b : Bool) → (j ≡ᵇ i) ≡ b → elemℕ j (i ∷ is) ≡ true
+     → specAt σ i ≡ false → anySpec σ is ≡ false → specAt σ j ≡ false
+  at true  beq _ hi _ =
+    subst (λ z → specAt σ z ≡ false) (sym (≡ᵇ-≡ j i beq)) hi
+  at false beq el _ ti rewrite beq = anySpec-at σ j is ti el
+
+specAt-mode : ∀ σ j d
+  → specAt σ j ≡ false → lookupDef σ j ≡ ok d
+  → eqMode (Def.dmode d) spec ≡ false
+specAt-mode σ j d eq lk rewrite lk = eq
+
+membersRun-spec : ∀ σ j (d : Def) js
+  → membersRun σ js ≡ ok tt
+  → elemℕ j js ≡ true
+  → lookupDef σ j ≡ ok d
+  → eqMode (Def.dmode d) spec ≡ false
+membersRun-spec σ j d js eq el lk =
+  specAt-mode σ j d (anySpec-at σ j js (members-false σ js eq) el) lk
+
+mode-not-spec : ∀ m → eqMode m spec ≡ false → m ≡ spec → ⊥
+mode-not-spec spec eq _ = true≢false eq
+mode-not-spec run  _  ()
+mode-not-spec evid _  ()
+
 checkNu : ∀ {n} → ℕ → Sig → List ℕ → Mode → Tm n → Tm n → Result ⊤
 checkNu _       _ _   spec _ _ = ok tt
 checkNu zero    _ _   _    _ _ = fail outOfFuel
 checkNu (suc k) σ blk m    T t =
+  membersRun σ blk >>
   seedWalk (suc k) σ blk t >>
   whnf (suc k) σ T >>= λ T′ → go T′ t
   where

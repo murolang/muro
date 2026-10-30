@@ -1385,6 +1385,20 @@ defmodule Muro.Check do
     with :ok <- seed_walk(k, book, block, t), do: seed_walk_list(k, book, block, ts)
   end
 
+  # Agda's membersRun. spec is not walked, so a run or evidence component
+  # that contains one is refused before the seed walk.
+  defp members_run(book, block) do
+    Enum.reduce_while(block, :ok, fn name, :ok ->
+      case lookup_def(book, name) do
+        {:ok, %{mode: :spec}} ->
+          {:halt, {:error, "spec definition in a productive component"}}
+
+        _ ->
+          {:cont, :ok}
+      end
+    end)
+  end
+
   # Agda's checkNu: on run/evidence, a definition whose type reduces to a
   # ν (bare, a family applied to any number of indices, or ~) is an
   # unfold whose step passes the same tail guard, or it does not mention
@@ -1394,7 +1408,8 @@ defmodule Muro.Check do
   defp check_nu(0, _book, _block, _mode, _ty, _body), do: {:error, @out_of_fuel}
 
   defp check_nu(k, book, block, mode, ty, body) do
-    with :ok <- seed_walk(k, book, block, body),
+    with :ok <- members_run(book, block),
+         :ok <- seed_walk(k, book, block, body),
          {:ok, ty1} <- whnf(k, book, ty) do
       case {ty1, body} do
         {{:pi, _, _, _, b}, {:lam, _, _, _, t}} ->
