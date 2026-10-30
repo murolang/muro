@@ -61,7 +61,9 @@ defmodule Muro.MixProject do
             ssl: :load,
             inets: :load
           ],
-          steps: [:assemble, &burrito_wrap/1],
+          # The CLI starts only when this release's sys.config sets
+          # `:release_cli`. `__BURRITO` is every Burrito executable.
+          steps: [:assemble, &mark_muro_release/1, &burrito_wrap/1],
           burrito: [
             targets: [
               macos_aarch64: [os: :darwin, cpu: :aarch64],
@@ -75,6 +77,14 @@ defmodule Muro.MixProject do
     else
       []
     end
+  end
+
+  defp mark_muro_release(release) do
+    release.version_path
+    |> Path.join("sys.config")
+    |> Muro.Application.write_release_marker()
+
+    release
   end
 
   defp burrito_wrap(release) do
