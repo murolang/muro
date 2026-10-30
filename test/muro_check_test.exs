@@ -884,6 +884,23 @@ defmodule Muro.CheckTest do
     assert msg =~ "s productivity: unguarded recursive call"
   end
 
+  test "a seed the tail reads is refused when it mentions the block" do
+    src = """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+    def s : run Π (n : Nat) → Stream Nat :=
+      λ (n : Nat) →
+        unfold (match n motive (λ _ → Nat)
+                  | 0 => 0
+                  | suc m => head (s m))
+          (λ (k : Nat) → (0, k))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
   test "a seed the head does not read may mention the block" do
     src = """
     ν Stream (A : Type) : Type where

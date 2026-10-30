@@ -1038,28 +1038,34 @@ mutual
 
 -- nothing: the step has not bound the seed (a bare pair does not
 -- instantiate it). just i: the seed is variable i. The first λ binds
--- it at 0; each further λ shifts it. Only the head of the pair is
--- read: a seed that the head does not mention cannot appear in an
--- observed head, even when the seed term mentions the block.
+-- it at 0; each further λ shifts it. The binder is read when it occurs
+-- in the head or in the tail. A seed that mentions the block may occur
+-- in neither: the observed head cannot be that mention, and the tail
+-- is not instantiated with it. A block-free seed may occur in either.
 seedFlows : ∀ {n} → Maybe ℕ → Tm n → Bool
 seedFlows nothing  (lam _ _ t) = seedFlows (just 0) t
 seedFlows (just i) (lam _ _ t) = seedFlows (just (suc i)) t
-seedFlows (just i) (pair h _)  = occℕ i h
+seedFlows (just i) (pair h t)  = occℕ i h ∨ occℕ i t
 seedFlows _        _           = false
 
--- Outside spec, an unfold whose head reads the seed must be seeded by
--- a term that does not mention the block. The walk is the whole body:
--- checkUnfold never receives the seed, and the three unf clauses of
--- check′/infer′ are quoted by Soundness. A seed the head does not read
--- is not constrained, so a descending call discarded before the step
--- stays accepted.
+-- Outside spec, an unfold whose head or tail reads the seed must be
+-- seeded by a term that does not mention the block. The walk is the
+-- whole body: checkUnfold never receives the seed, and the three unf
+-- clauses of check′/infer′ are quoted by Soundness. A seed neither
+-- component reads is not constrained, so a descending call discarded
+-- before the step stays accepted. The same walk runs guardedStep on
+-- every syntactic unfold, so acceptance is the guard as well as the
+-- seed fact.
 seedGuard : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
 seedGuard k σ B s f =
   whnf k σ f >>= λ f′ → unguarded (seedFlows nothing f′ ∧ hasSelf B s)
 
 mutual
   seedWalk : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Result ⊤
-  seedWalk k σ B (unf s f)      = seedGuard k σ B s f >> seedWalk k σ B s >> seedWalk k σ B f
+  seedWalk k σ B (unf s f)      =
+    seedGuard k σ B s f >>
+    (whnf k σ f >>= guardedStep B) >>
+    seedWalk k σ B s >> seedWalk k σ B f
   seedWalk k σ B (app f a)      = seedWalk k σ B f >> seedWalk k σ B a
   seedWalk k σ B (su t)         = seedWalk k σ B t
   seedWalk k σ B (lam _ A t)    = seedWalk k σ B A >> seedWalk k σ B t
@@ -1119,9 +1125,10 @@ checkNu (suc k) σ blk m    T t =
 -- What checkUnfold demands of a step, after whnf: lambdas over a pair
 -- whose head does not mention the block and whose tail is guarded.
 -- This is the shape of an accepted unfold. That an observation to any
--- finite depth reads a block-free head is Muro.Productive. The seed
--- is not this test: checkNu's seedWalk demands a block-free seed when
--- the seed binder occurs in the head.
+-- finite depth reads a block-free head is Muro.Productive.
+-- checkSig-guarded reads this guard, and the seed fact, off seedWalk:
+-- the seed binder may occur in the head or the tail only when the seed
+-- does not mention the block.
 data StepGuard {n} (B : List ℕ) : Tm n → Set where
   sg-lam  : ∀ {q A t} → StepGuard B t → StepGuard B (lam q A t)
   sg-pair : ∀ {h t} → hasSelf B h ≡ false → GuardedTail B t → StepGuard B (pair h t)

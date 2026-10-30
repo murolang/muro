@@ -1283,12 +1283,13 @@ defmodule Muro.Check do
 
   # The seed binder's index after the lambdas `go_unfold` strips.
   # nil: no binder yet (a bare pair does not instantiate the seed).
-  # Only the head is read. A seed the head does not mention cannot
-  # appear in an observed head, so a descending call discarded before
-  # the step stays accepted.
+  # The binder is read when it occurs in the head or the tail. A seed
+  # that mentions the block may occur in neither, so a descending call
+  # discarded before the step stays accepted. A block-free seed may
+  # occur in either component.
   defp seed_flows(nil, {:lam, _, _, _, t}), do: seed_flows(0, t)
   defp seed_flows(i, {:lam, _, _, _, t}) when is_integer(i), do: seed_flows(i + 1, t)
-  defp seed_flows(i, {:pair, h, _}) when is_integer(i), do: occurs?(i, h)
+  defp seed_flows(i, {:pair, h, t}) when is_integer(i), do: occurs?(i, h) or occurs?(i, t)
   defp seed_flows(_, _), do: false
 
   defp seed_guard(k, book, block, seed, step) do
@@ -1300,8 +1301,12 @@ defmodule Muro.Check do
   end
 
   # Whole body: check_unfold never receives the seed. Spec skips the walk.
+  # Every syntactic unfold is guarded here as well, so the productivity
+  # tag is the same shape check_unfold demands of a step.
   defp seed_walk(k, book, block, {:unf, s, f}) do
     with :ok <- seed_guard(k, book, block, s, f),
+         {:ok, f1} <- whnf(k, book, f),
+         :ok <- go_unfold(f1, block),
          :ok <- seed_walk(k, book, block, s),
          do: seed_walk(k, book, block, f)
   end

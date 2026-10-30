@@ -272,6 +272,26 @@ seedBook = fromDefs (
 seed-refused : checkSig! seedBook ≡ fail "s productivity: unguarded recursive call"
 seed-refused = refl
 
+-- The seed mentions the block, the head does not read the binder, and
+-- the tail does. Instantiating the tail copies that mention into the
+-- next seed. SeedCovered fails on all three disjuncts: the tail reads
+-- the binder, the head does not, and hasSelf of the seed is true.
+-- The same call discarded before the step, with a tail that does not
+-- read the binder, is not this book.
+tailSeedTm : Tm 0
+tailSeedTm =
+  lam affine nat
+    (unf (mNat (var zero) nat ze
+            (fstTm (ucons (app (def 0) (var zero)))))
+         (lam affine nat (pair ze (var zero))))
+
+tailSeedBook : Sig
+tailSeedBook = fromDefs (
+  mkDef "s" run (pi affine nat (stream nat)) tailSeedTm ∷ [])
+
+tailSeed-refused : checkSig! tailSeedBook ≡ fail "s productivity: unguarded recursive call"
+tailSeed-refused = refl
+
 oneZeroBook : Sig
 oneZeroBook = fromDefs (
   mkDef "one-eq-zero" evid (idt nat (su ze) ze) rfl ∷ [])
