@@ -71,7 +71,7 @@ defmodule Muro.CLI do
     muro init [--ci github] [--backend BACKEND] [--cargo-metadata]
     muro skills add
     muro deps.get
-    muro mutate path.muro [--only NAME] [--json] [--fuel N]
+    muro mutate path.muro [--only NAME] [--json] [--fuel N] [--max-mutants-per-def N] [--max-survivors N]
     muro --version
     """
   end

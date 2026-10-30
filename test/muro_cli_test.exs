@@ -176,6 +176,108 @@ defmodule Muro.CliTest do
     assert File.dir?(Path.join(right, "priv/muro"))
   end
 
+  test "mutate matches mix muro.mutate, including caps, progress, and exit codes" do
+    half = "examples/half_ok.muro"
+
+    none =
+      compare(
+        fn ->
+          Mix.Tasks.Muro.Mutate.run(["--only", "half", "--max-mutants-per-def", "0", half])
+        end,
+        ["mutate", "--only", "half", "--max-mutants-per-def", "0", half]
+      )
+
+    assert none.code == 0
+    assert none.stderr == ""
+    assert none.stdout =~ "half: re-checked 1 of 5 evidence definitions\n"
+    refute none.stdout =~ "half#1"
+
+    json =
+      compare(
+        fn ->
+          Mix.Tasks.Muro.Mutate.run([
+            "--only",
+            "half",
+            "--max-mutants-per-def",
+            "0",
+            "--json",
+            half
+          ])
+        end,
+        ["mutate", "--only", "half", "--max-mutants-per-def", "0", "--json", half]
+      )
+
+    assert json.code == 0
+    assert json.stderr == ""
+    version = Mix.Tasks.Muro.version()
+
+    assert String.starts_with?(
+             json.stdout,
+             ~s({"book":"#{half}","version":"#{version}","summary":{"killed":0,"surviving":0,"equivalent":0,"out_of_fuel":0,"discarded":0},"mutants":[]}\n)
+           )
+
+    quiet = write_book("quiet.muro", quiet_src())
+
+    killed =
+      compare(
+        fn ->
+          Mix.Tasks.Muro.Mutate.run([
+            "--only",
+            "a",
+            "--max-survivors",
+            "0",
+            "--fuel",
+            "200",
+            quiet
+          ])
+        end,
+        ["mutate", "--only", "a", "--max-survivors", "0", "--fuel", "200", quiet]
+      )
+
+    assert killed.code == 0
+    assert killed.stderr =~ "a#1 replace_ctor killed\n"
+    refute killed.stderr =~ "survivors exceed"
+    assert killed.stdout =~ "surviving: 0\n"
+
+    weak = write_book("weak.muro", weak_src())
+
+    over =
+      compare(
+        fn -> Mix.Tasks.Muro.Mutate.run(["--max-survivors", "0", weak]) end,
+        ["mutate", "--max-survivors", "0", weak]
+      )
+
+    assert over.code == 1
+    assert over.stdout =~ "surviving: 1\n"
+    assert String.ends_with?(over.stderr, "1 survivors exceed --max-survivors 0\n")
+    assert over.stderr =~ ~r/not#\d+ \S+ (killed|surviving|equivalent|out_of_fuel|discarded)\n/
+
+    bad = write_book("bad.muro", "def z : run Nat := true\n")
+
+    refused =
+      compare(
+        fn -> Mix.Tasks.Muro.Mutate.run(["--json", bad]) end,
+        ["mutate", "--json", bad]
+      )
+
+    assert refused.code == 2
+    assert refused.stdout == "Muro v#{version}\n"
+    assert refused.stderr =~ "refusing to mutate a book that does not check\n"
+    refute refused.stdout =~ "{"
+    refute refused.stderr =~ "{"
+
+    for args <- [
+          ["--nope", half],
+          [],
+          ["--fuel", "0", half],
+          ["--max-mutants-per-def", "-1", half],
+          ["--max-survivors", "-1", half],
+          ["--only", "half_ok", half]
+        ] do
+      compare(fn -> Mix.Tasks.Muro.Mutate.run(args) end, ["mutate" | args])
+    end
+  end
+
   test "the release workflow builds the four assets and smokes the Linux binary" do
     text = File.read!(".github/workflows/release.yml")
     assert text =~ "tags:"
@@ -195,6 +297,10 @@ defmodule Muro.CliTest do
   end
 
   defp assert_same(fun, argv, cd \\ nil) do
+    compare(fun, argv, cd)
+  end
+
+  defp compare(fun, argv, cd \\ nil) do
     mix = capture_task(fun)
     cli = if cd, do: File.cd!(cd, fn -> capture_cli(argv) end), else: capture_cli(argv)
 
@@ -207,6 +313,8 @@ defmodule Muro.CliTest do
     else
       assert cli.stderr == mix.stderr
     end
+
+    cli
   end
 
   defp capture_task(fun) do
@@ -305,6 +413,40 @@ defmodule Muro.CliTest do
     """)
 
     dir
+  end
+
+  defp write_book(name, src) do
+    dir = Path.join(System.tmp_dir!(), "muro_cli_mut_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    path = Path.join(dir, name)
+    File.write!(path, src)
+    path
+  end
+
+  defp quiet_src do
+    """
+    def a : run Nat := 0
+    def b : run Nat := 0
+    def a_ok : evidence {a ≡ 0 : Nat} := refl
+    def b_ok : evidence {b ≡ 0 : Nat} := refl
+    """
+  end
+
+  defp weak_src do
+    """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    def not : run Π (b : Bool) → Bool :=
+      λ (b : Bool) →
+        match b motive (λ _ → Bool)
+          | true => false
+          | false => true
+
+    def not_true : evidence {not true ≡ false : Bool} := refl
+    """
   end
 
   defp mix_project do

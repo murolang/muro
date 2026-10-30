@@ -38,9 +38,27 @@ defmodule Muro.Check do
 
   `:ok` means they convert within `fuel`. `{:error, msg}` means they do
   not, or the checker ran out of fuel. `out_of_fuel?/1` tells those apart.
+
+  A definition applied to arguments is unfolded when that unfolding
+  makes progress. While the same application is already being unfolded
+  and the match it reduces to does not fire, it is neutral: the
+  arguments are compared, and a difference the one unfolding does not
+  erase is a conversion failure. Fuel is one budget for that comparison
+  and the unfolding that follows it.
   """
   def conv(book, u, v, fuel \\ @fuel) when is_list(book) and is_integer(fuel) do
     conv(fuel, book, [], u, v)
+  end
+
+  @doc false
+  def with_conv_steps(fun) when is_function(fun, 0) do
+    Process.put(:muro_conv_steps, 0)
+
+    try do
+      {fun.(), Process.get(:muro_conv_steps)}
+    after
+      Process.delete(:muro_conv_steps)
+    end
   end
 
   # -- lookup ----------------------------------------------------------------
@@ -378,16 +396,6 @@ defmodule Muro.Check do
   defp apps(t), do: apps(t, [])
   defp apps({:app, f, a}, acc), do: apps(f, [a | acc])
   defp apps(f, acc), do: {f, acc}
-
-  defp ctor_head_book?(book, t) do
-    case elem(apps(t), 0) do
-      :ze -> true
-      {:su, _} -> true
-      :one -> true
-      {:def, n} -> ctor_name?(book, n)
-      _ -> false
-    end
-  end
 
   @no_descent "recursive call does not descend on a smaller argument"
 
@@ -753,167 +761,292 @@ defmodule Muro.Check do
   defp run_ty_n(_book, _), do: false
 
   # -- conversion ------------------------------------------------------------
+  #
+  # Fuel left by a call is the depth it did not use. Each subterm of one
+  # weak-head form is given the same depth (a wide term keeps the budget
+  # a single spine used to have). The two alternatives of a stuck
+  # definition share it: argument comparison spends some, and the one
+  # unfolding that follows a failure gets what remains. A second copy is
+  # never started, so the work grows with the fuel.
+  #
+  # `seen` is the definitions whose unfolding is in progress. A recursive
+  # application is unfolded when the match it reduces to can fire. While
+  # it is in `seen`, that match did not fire, so the application is
+  # neutral and only its arguments are compared. One unfolding is still
+  # tried before that, which is what makes an argument the body does not
+  # use convertible (`drop b n := match n ...` with `b` absent). A
+  # difference that unfolding does not erase is a conversion failure.
+  # Running out of fuel is only the budget reaching zero.
 
   defp syn_eq(a, b), do: a == b
 
-  defp conv(0, _, _, _, _), do: {:error, @out_of_fuel}
-
-  defp conv(k, book, names, u, v) do
-    if syn_eq(u, v) do
-      :ok
-    else
-      stuck_cong(k, book, names, u, v)
+  defp step do
+    case Process.get(:muro_conv_steps) do
+      n when is_integer(n) -> Process.put(:muro_conv_steps, n + 1)
+      _ -> :ok
     end
   end
 
-  # The same def at arguments that are not constructor-headed: compare the
-  # arguments first. Arguments that differ do not decide it, since the def
-  # may match on a later argument; both sides are then unfolded.
-  defp stuck_cong(k, book, names, u, v) do
+  defp conv(k, book, names, u, v) do
+    case conv_f(k, book, names, u, v, []) do
+      {:ok, _} -> :ok
+      {:error, msg, _} -> {:error, msg}
+    end
+  end
+
+  defp conv_f(k, _book, _names, _u, _v, _seen) when k <= 0 do
+    step()
+    {:error, @out_of_fuel, 0}
+  end
+
+  defp conv_f(k, book, names, u, v, seen) do
+    step()
+
+    if syn_eq(u, v) do
+      {:ok, k}
+    else
+      stuck_f(k, book, names, u, v, seen)
+    end
+  end
+
+  defp stuck_f(k, book, names, u, v, seen) do
     case {apps(u), apps(v)} do
-      {{{:def, i}, [a | as]}, {{:def, j}, [b | bs]}} ->
-        if i == j and not ctor_head_book?(book, a) and not ctor_head_book?(book, b) do
-          with :ok <- conv(k - 1, book, names, a, b),
-               :ok <- conv_args(k - 1, book, names, as, bs) do
-            :ok
-          else
-            _ -> conv_whnf(k - 1, book, names, u, v)
-          end
-        else
-          conv_whnf(k - 1, book, names, u, v)
+      {{{:def, i}, [_ | _] = as}, {{:def, i}, [_ | _] = bs}} ->
+        # Arguments first, at the fuel this alternative has. Success is
+        # congruence. Out of fuel stops here: the unfolding is not started
+        # on a spent budget. A definite mismatch unfolds once, with `i`
+        # recorded so a stuck re-entry does not unfold again.
+        case conv_args_f(k - 1, book, names, as, bs, seen) do
+          {:ok, k1} ->
+            {:ok, k1}
+
+          {:error, msg, k1} ->
+            cond do
+              k1 <= 0 ->
+                {:error, @out_of_fuel, 0}
+
+              out_of_fuel?(msg) ->
+                {:error, msg, k1}
+
+              i in seen ->
+                # The one unfolding is already in progress. Unfold again
+                # only when the match fires; otherwise the mismatch stands.
+                stuck_progress(k1, book, names, u, v, seen, msg)
+
+              true ->
+                conv_whnf_f(k1, book, names, u, v, [i | seen])
+            end
         end
 
       _ ->
-        conv_whnf(k - 1, book, names, u, v)
+        conv_whnf_f(k - 1, book, names, u, v, seen)
     end
   end
 
-  defp conv_whnf(k, book, names, u, v) do
+  # `whnf` has already ι-reduced a constructor scrutinee, so a remaining
+  # eliminator did not fire. The two applications are neutral.
+  defp stuck_progress(k, book, names, u, v, seen, clash) do
+    case {whnf(k, book, u), whnf(k, book, v)} do
+      {{:ok, u1}, {:ok, v1}} ->
+        cond do
+          syn_eq(u1, v1) ->
+            {:ok, k}
+
+          stuck_form?(u1) and stuck_form?(v1) ->
+            {:error, clash, k}
+
+          true ->
+            conv_n(k, book, names, u1, v1, seen)
+        end
+
+      {{:error, msg}, _} ->
+        {:error, msg, 0}
+
+      {_, {:error, msg}} ->
+        {:error, msg, 0}
+    end
+  end
+
+  defp stuck_form?({:mdata, _, _, _}), do: true
+  defp stuck_form?({:mnat, _, _, _, _}), do: true
+  defp stuck_form?({:memp, _, _}), do: true
+  defp stuck_form?({:munit, _, _, _}), do: true
+  defp stuck_form?({:matom, _, _, _}), do: true
+  defp stuck_form?({:letp, _, _}), do: true
+  defp stuck_form?({:ucons, _}), do: true
+  defp stuck_form?(_), do: false
+
+  defp conv_whnf_f(k, _book, _names, _u, _v, _seen) when k <= 0,
+    do: {:error, @out_of_fuel, 0}
+
+  defp conv_whnf_f(k, book, names, u, v, seen) do
     with {:ok, u1} <- whnf(k, book, u),
-         {:ok, v1} <- whnf(k, book, v),
-         do: conv_n(k, book, names, u1, v1)
-  end
-
-  defp conv_args(_k, _book, _names, [], []), do: :ok
-  defp conv_args(_k, _book, _names, _, []), do: {:error, "conv: spine length mismatch"}
-  defp conv_args(_k, _book, _names, [], _), do: {:error, "conv: spine length mismatch"}
-
-  defp conv_args(k, book, names, [a | as], [b | bs]) do
-    with :ok <- conv(k, book, names, a, b), do: conv_args(k, book, names, as, bs)
-  end
-
-  defp conv_n(_k, _book, _names, a, b) when a == b, do: :ok
-  defp conv_n(k, book, names, {:su, a}, {:su, b}), do: conv(k, book, names, a, b)
-  defp conv_n(_k, _book, _names, {:var, i}, {:var, j}) when i == j, do: :ok
-
-  defp conv_n(k, book, names, {:pi, q, a, x, b}, {:pi, q, a1, _, b1}) do
-    with :ok <- conv(k, book, names, a, a1), do: conv(k, book, [x | names], b, b1)
-  end
-
-  defp conv_n(k, book, names, {:lam, q, a, x, t}, {:lam, q, a1, _, t1}) do
-    with :ok <- conv(k, book, names, a, a1), do: conv(k, book, [x | names], t, t1)
-  end
-
-  defp conv_n(k, book, names, {:app, f, a}, {:app, g, b}) do
-    with :ok <- conv(k, book, names, f, g), do: conv(k, book, names, a, b)
-  end
-
-  defp conv_n(k, book, names, {:idt, a, x, y}, {:idt, a1, x1, y1}) do
-    with :ok <- conv(k, book, names, a, a1),
-         :ok <- conv(k, book, names, x, x1),
-         do: conv(k, book, names, y, y1)
-  end
-
-  defp conv_n(k, book, names, {:mnat, e, p, z, s}, {:mnat, e1, p1, z1, s1}) do
-    with :ok <- conv(k, book, names, e, e1),
-         :ok <- conv(k, book, names, p, p1),
-         :ok <- conv(k, book, names, z, z1),
-         do: conv(k, book, names, s, s1)
-  end
-
-  defp conv_n(k, book, names, {:memp, e, p}, {:memp, e1, p1}) do
-    with :ok <- conv(k, book, names, e, e1), do: conv(k, book, names, p, p1)
-  end
-
-  defp conv_n(k, book, names, {:munit, e, p, u}, {:munit, e1, p1, u1}) do
-    with :ok <- conv(k, book, names, e, e1),
-         :ok <- conv(k, book, names, p, p1),
-         do: conv(k, book, names, u, u1)
-  end
-
-  defp conv_n(k, book, names, {:rwt, e, p, t}, {:rwt, e1, p1, t1}) do
-    with :ok <- conv(k, book, names, e, e1),
-         :ok <- conv(k, book, names, p, p1),
-         do: conv(k, book, names, t, t1)
-  end
-
-  defp conv_n(k, book, names, {:ann, e, a}, {:ann, e1, a1}) do
-    with :ok <- conv(k, book, names, e, e1), do: conv(k, book, names, a, a1)
-  end
-
-  defp conv_n(k, book, names, {:prod, a, b}, {:prod, a1, b1}) do
-    with :ok <- conv(k, book, names, a, a1), do: conv(k, book, names, b, b1)
-  end
-
-  defp conv_n(k, book, names, {:pair, a, b}, {:pair, a1, b1}) do
-    with :ok <- conv(k, book, names, a, a1), do: conv(k, book, names, b, b1)
-  end
-
-  defp conv_n(k, book, names, {:letp, e, t}, {:letp, e1, t1}) do
-    with :ok <- conv(k, book, names, e, e1), do: conv(k, book, ["b", "a" | names], t, t1)
-  end
-
-  defp conv_n(k, book, names, {:nu, f}, {:nu, f1}), do: conv(k, book, names, f, f1)
-
-  defp conv_n(k, book, names, {:bisim, s, t}, {:bisim, s1, t1}) do
-    with :ok <- conv(k, book, names, s, s1), do: conv(k, book, names, t, t1)
-  end
-
-  defp conv_n(k, book, names, {:unf, s, f}, {:unf, s1, f1}) do
-    with :ok <- conv(k, book, names, s, s1), do: conv(k, book, names, f, f1)
-  end
-
-  defp conv_n(k, book, names, {:ucons, s}, {:ucons, s1}), do: conv(k, book, names, s, s1)
-
-  defp conv_n(k, book, names, {:tensor, d, s}, {:tensor, d1, s1}) do
-    with :ok <- conv(k, book, names, d, d1), do: conv(k, book, names, s, s1)
-  end
-
-  defp conv_n(k, book, names, {:addi, x, y}, {:addi, x1, y1}) do
-    with :ok <- conv(k, book, names, x, x1), do: conv(k, book, names, y, y1)
-  end
-
-  defp conv_n(k, book, names, {:muli, x, y}, {:muli, x1, y1}) do
-    with :ok <- conv(k, book, names, x, x1), do: conv(k, book, names, y, y1)
-  end
-
-  defp conv_n(k, book, names, {:addt, t, u}, {:addt, t1, u1}) do
-    with :ok <- conv(k, book, names, t, t1), do: conv(k, book, names, u, u1)
-  end
-
-  defp conv_n(k, book, names, {:toi64, t}, {:toi64, t1}), do: conv(k, book, names, t, t1)
-
-  defp conv_n(k, book, names, {:packi, x, y}, {:packi, x1, y1}) do
-    with :ok <- conv(k, book, names, x, x1), do: conv(k, book, names, y, y1)
-  end
-
-  defp conv_n(k, book, names, {:mdata, e, p, bs}, {:mdata, e1, p1, bs1}) do
-    with :ok <- conv(k, book, names, e, e1),
-         :ok <- conv(k, book, names, p, p1) do
-      conv_mdata_bs(k, book, names, bs, bs1)
+         {:ok, v1} <- whnf(k, book, v) do
+      conv_n(k, book, names, u1, v1, seen)
+    else
+      {:error, msg} -> {:error, msg, 0}
     end
   end
 
-  defp conv_n(_k, _book, names, u, v),
-    do: {:error, "cannot convert #{Print.term(u, names)} ≁ #{Print.term(v, names)}"}
-
-  defp conv_mdata_bs(_k, _book, _names, [], []), do: :ok
-
-  defp conv_mdata_bs(k, book, names, [{n, ar, b} | bs], [{n, ar, b1} | bs1]) do
-    with :ok <- conv(k, book, names, b, b1), do: conv_mdata_bs(k, book, names, bs, bs1)
+  defp conv_args_f(k, book, names, as, bs, seen) do
+    conv_args_f(k, k, book, names, as, bs, seen)
   end
 
-  defp conv_mdata_bs(_, _, _, _, _), do: {:error, "match branches do not convert"}
+  defp conv_args_f(kmin, _k, _book, _names, [], [], _seen), do: {:ok, kmin}
+
+  defp conv_args_f(_kmin, k, _book, _names, _, [], _seen),
+    do: {:error, "conv: spine length mismatch", k}
+
+  defp conv_args_f(_kmin, k, _book, _names, [], _, _seen),
+    do: {:error, "conv: spine length mismatch", k}
+
+  defp conv_args_f(kmin, k, book, names, [a | as], [b | bs], seen) do
+    case conv_f(k, book, names, a, b, seen) do
+      {:ok, k1} -> conv_args_f(min(kmin, k1), k, book, names, as, bs, seen)
+      {:error, msg, k1} -> {:error, msg, min(kmin, k1)}
+    end
+  end
+
+  # Each component is given `k`, not what its sibling left. The value
+  # returned is the least leftover, so a caller that shares fuel sees
+  # the deepest component.
+  defp conv_all(k, calls) do
+    Enum.reduce_while(calls, {:ok, k}, fn call, {:ok, kmin} ->
+      case call.() do
+        {:ok, k1} -> {:cont, {:ok, min(kmin, k1)}}
+        {:error, msg, k1} -> {:halt, {:error, msg, min(kmin, k1)}}
+      end
+    end)
+  end
+
+  defp at(k, book, names, u, v, seen), do: fn -> conv_f(k, book, names, u, v, seen) end
+
+  defp conv_n(k, _book, _names, a, a, _seen), do: {:ok, k}
+  defp conv_n(k, book, names, {:su, a}, {:su, b}, seen), do: conv_f(k, book, names, a, b, seen)
+  defp conv_n(k, _book, _names, {:var, i}, {:var, i}, _seen), do: {:ok, k}
+
+  defp conv_n(k, book, names, {:pi, q, a, x, b}, {:pi, q, a1, _, b1}, seen) do
+    conv_all(k, [at(k, book, names, a, a1, seen), at(k, book, [x | names], b, b1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:lam, q, a, x, t}, {:lam, q, a1, _, t1}, seen) do
+    conv_all(k, [at(k, book, names, a, a1, seen), at(k, book, [x | names], t, t1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:app, f, a}, {:app, g, b}, seen) do
+    conv_all(k, [at(k, book, names, f, g, seen), at(k, book, names, a, b, seen)])
+  end
+
+  defp conv_n(k, book, names, {:idt, a, x, y}, {:idt, a1, x1, y1}, seen) do
+    conv_all(k, [
+      at(k, book, names, a, a1, seen),
+      at(k, book, names, x, x1, seen),
+      at(k, book, names, y, y1, seen)
+    ])
+  end
+
+  defp conv_n(k, book, names, {:mnat, e, p, z, s}, {:mnat, e1, p1, z1, s1}, seen) do
+    conv_all(k, [
+      at(k, book, names, e, e1, seen),
+      at(k, book, names, p, p1, seen),
+      at(k, book, names, z, z1, seen),
+      at(k, book, names, s, s1, seen)
+    ])
+  end
+
+  defp conv_n(k, book, names, {:memp, e, p}, {:memp, e1, p1}, seen) do
+    conv_all(k, [at(k, book, names, e, e1, seen), at(k, book, names, p, p1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:munit, e, p, u}, {:munit, e1, p1, u1}, seen) do
+    conv_all(k, [
+      at(k, book, names, e, e1, seen),
+      at(k, book, names, p, p1, seen),
+      at(k, book, names, u, u1, seen)
+    ])
+  end
+
+  defp conv_n(k, book, names, {:rwt, e, p, t}, {:rwt, e1, p1, t1}, seen) do
+    conv_all(k, [
+      at(k, book, names, e, e1, seen),
+      at(k, book, names, p, p1, seen),
+      at(k, book, names, t, t1, seen)
+    ])
+  end
+
+  defp conv_n(k, book, names, {:ann, e, a}, {:ann, e1, a1}, seen) do
+    conv_all(k, [at(k, book, names, e, e1, seen), at(k, book, names, a, a1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:prod, a, b}, {:prod, a1, b1}, seen) do
+    conv_all(k, [at(k, book, names, a, a1, seen), at(k, book, names, b, b1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:pair, a, b}, {:pair, a1, b1}, seen) do
+    conv_all(k, [at(k, book, names, a, a1, seen), at(k, book, names, b, b1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:letp, e, t}, {:letp, e1, t1}, seen) do
+    conv_all(k, [at(k, book, names, e, e1, seen), at(k, book, ["b", "a" | names], t, t1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:nu, f}, {:nu, f1}, seen), do: conv_f(k, book, names, f, f1, seen)
+
+  defp conv_n(k, book, names, {:bisim, s, t}, {:bisim, s1, t1}, seen) do
+    conv_all(k, [at(k, book, names, s, s1, seen), at(k, book, names, t, t1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:unf, s, f}, {:unf, s1, f1}, seen) do
+    conv_all(k, [at(k, book, names, s, s1, seen), at(k, book, names, f, f1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:ucons, s}, {:ucons, s1}, seen),
+    do: conv_f(k, book, names, s, s1, seen)
+
+  defp conv_n(k, book, names, {:tensor, d, s}, {:tensor, d1, s1}, seen) do
+    conv_all(k, [at(k, book, names, d, d1, seen), at(k, book, names, s, s1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:addi, x, y}, {:addi, x1, y1}, seen) do
+    conv_all(k, [at(k, book, names, x, x1, seen), at(k, book, names, y, y1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:muli, x, y}, {:muli, x1, y1}, seen) do
+    conv_all(k, [at(k, book, names, x, x1, seen), at(k, book, names, y, y1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:addt, t, u}, {:addt, t1, u1}, seen) do
+    conv_all(k, [at(k, book, names, t, t1, seen), at(k, book, names, u, u1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:toi64, t}, {:toi64, t1}, seen),
+    do: conv_f(k, book, names, t, t1, seen)
+
+  defp conv_n(k, book, names, {:packi, x, y}, {:packi, x1, y1}, seen) do
+    conv_all(k, [at(k, book, names, x, x1, seen), at(k, book, names, y, y1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:mdata, e, p, bs}, {:mdata, e1, p1, bs1}, seen) do
+    case conv_all(k, [at(k, book, names, e, e1, seen), at(k, book, names, p, p1, seen)]) do
+      {:ok, k1} -> conv_mdata_bs(k, k1, book, names, bs, bs1, seen)
+      err -> err
+    end
+  end
+
+  defp conv_n(k, _book, names, u, v, _seen),
+    do: {:error, "cannot convert #{Print.term(u, names)} ≁ #{Print.term(v, names)}", k}
+
+  defp conv_mdata_bs(_k, kmin, _book, _names, [], [], _seen), do: {:ok, kmin}
+
+  defp conv_mdata_bs(k, kmin, book, names, [{n, ar, b} | bs], [{n, ar, b1} | bs1], seen) do
+    case conv_f(k, book, names, b, b1, seen) do
+      {:ok, k1} -> conv_mdata_bs(k, min(kmin, k1), book, names, bs, bs1, seen)
+      {:error, msg, k1} -> {:error, msg, min(kmin, k1)}
+    end
+  end
+
+  defp conv_mdata_bs(_k, kmin, _, _, _, _, _),
+    do: {:error, "match branches do not convert", kmin}
 
   defp view_pi(k, book, t, names) do
     case whnf(k, book, t) do

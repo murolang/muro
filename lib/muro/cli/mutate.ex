@@ -46,7 +46,10 @@ defmodule Muro.CLI.Mutate do
       only: Keyword.get_values(opts, :only),
       fuel: fuel,
       max_mutants_per_def: max_m,
-      max_survivors: max_s
+      max_survivors: max_s,
+      # During classification, before the report, so the Mix task and the
+      # executable print the same progress line.
+      on_mutant: &progress/1
     ]
 
     case Muro.Mutate.report(path, report_opts) do
@@ -78,5 +81,9 @@ defmodule Muro.CLI.Mutate do
 
   defp survivor_line(report, max_s) do
     "#{report.summary.surviving} survivors exceed --max-survivors #{max_s}"
+  end
+
+  defp progress(mutant) do
+    IO.puts(:stderr, "#{mutant.id} #{mutant.operator} #{mutant.outcome}")
   end
 end

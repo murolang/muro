@@ -13,6 +13,26 @@ A self-contained `muro` executable checks, emits, and commits modules on a machi
 
 - Version 0.19.6.
 
+## 0.19.5
+
+A false equation between two stuck calls of the same definition is a conversion failure. The checker used to unfold both calls, miss the clash, and report `out of fuel`, and the work doubled for every two units of fuel.
+
+A definition applied to arguments unfolds only when that unfolding makes progress: the match it reduces to fires on a constructor. The arguments are compared first. If they convert, the applications convert. If that comparison runs out of fuel, conversion stops. A definite mismatch unfolds once. While that unfolding is already in progress and the match does not fire, the application is neutral and the argument mismatch stands, so the failure is the same at every fuel. Fuel is one budget shared by the argument comparison and that unfolding. `out of fuel` means that budget was spent.
+
+A definition that ignores an argument, and one that matches on a later argument and reduces both sides to the same term, still converts after that one unfolding.
+
+`mix muro.mutate` compares a mutant with the original at a quarter of `--fuel` (at least 1, and less than `--fuel` when `--fuel` is greater than 1) and re-checks depending definitions at the full fuel. Each mutant prints `<id> <operator> <outcome>` on standard error as it is classified. A mutant that changes a passed-along argument and makes a theorem false is `killed`.
+
+### Manual
+
+- Identity, Limits, and Extending: when a definition unfolds, and that fuel is one budget.
+- Mutation: the equivalence probe and the progress line.
+- For agents: a `cannot convert` failure is not fixed by raising the fuel.
+
+### Package
+
+- Version 0.19.5.
+
 ## 0.19.4
 
 `S else v` in a generated repr no longer emits a `muro_repr_else/4` clause that Elixir 1.19 and later report as never used. A book with an open map and a fallback whose shape cannot return `{:ambiguous_key, key}`, such as `optional (boolean else false)`, compiles with `--warnings-as-errors`. The fallback still replaces an error at its own position. It still does not replace `{:ambiguous_key, key}`. A numeral fallback still does not replace `{:nat_too_large, v}`.

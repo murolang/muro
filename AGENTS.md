@@ -90,7 +90,7 @@ The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` a
 - **`match` branches must follow the order the constructors were declared in.**
 - **Erased guards cannot rule out `run` branches.** An `evidence`/erased argument does not make a branch of a `run` term unreachable. Encode the invariant in a run-mode indexed type instead (see [Indexed data](manual/indexed.md)).
 - **`Nat` is unary (Peano), so large constants are slow** to check and to run. Use `I64` where machine numbers fit (see [Machine numbers](manual/machine.md)).
-- **`out of fuel` is not acceptance, and it is not a type error.** The checker gave up reducing. Raise `--fuel` and check again.
+- **`out of fuel` is not acceptance, and it is not a type error.** The checker gave up reducing. Raise `--fuel` and check again. A `cannot convert` failure is definite: two stuck calls of one definition that differ in an argument the unfolding does not erase fail that way at every fuel.
 
 ## Manual
 

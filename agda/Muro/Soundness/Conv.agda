@@ -16,6 +16,7 @@
 module Muro.Soundness.Conv where
 
 open import Data.Bool.Base using (Bool; true; false; _∧_; not; if_then_else_; T)
+open import Data.String.Base using (String)
 open import Data.Empty using (⊥; ⊥-elim)
 open import Data.Fin.Base using (Fin; zero; suc)
 open import Data.List.Base using (List; []; _∷_; _++_)
@@ -37,8 +38,8 @@ open import Muro.Frag
 open import Muro.Reduction
 open import Muro.Convert hiding (≈-map; ≈-ucons)
 open import Muro.Check
-  using (whnf; uconsWhnf; dataWhnf; synEq; synEqD; synEqList; conv; convStuck; convWhnf; convN; convND;
-         convArgs; eqFin; ctorHead)
+  using (whnf; uconsWhnf; dataWhnf; synEq; synEqD; synEqList; conv; convGo; convStuck; convProgress;
+         convWhnf; convN; convND; convArgs; eqFin; inSeen; isOOF; stuckForm; _orFuel_)
 
 ------------------------------------------------------------------------
 -- Results.
@@ -774,118 +775,167 @@ synEqD-sound (packi a b) (packi a′ b′) sh-packi sh-packi eq with ∧-true eq
 
 conv-sound : ∀ k σ {n} {u v : Tm n} → FragSig σ → Frag u → Frag v
   → conv k σ u v ≡ ok tt → σ ⊢[ spec ] u ≈ v
-convArgs-sound : ∀ k σ {n} {us vs : List (Tm n)} → FragSig σ → FragL us → FragL vs
-  → convArgs k σ us vs ≡ ok tt → σ ⊢[ spec ] us ≈L vs
-convStuck-sound : ∀ k σ {n} {u v : Tm n} → FragSig σ → Frag u → Frag v
+convGo-sound : ∀ k σ seen {n} {u v : Tm n} → FragSig σ → Frag u → Frag v
+  → convGo k σ seen u v ≡ ok tt → σ ⊢[ spec ] u ≈ v
+convArgs-sound : ∀ seen k σ {n} {us vs : List (Tm n)} → FragSig σ → FragL us → FragL vs
+  → convArgs seen k σ us vs ≡ ok tt → σ ⊢[ spec ] us ≈L vs
+convStuck-sound : ∀ k σ seen {n} {u v : Tm n} → FragSig σ → Frag u → Frag v
   → ∀ du dv → defArgs u ≡ du → defArgs v ≡ dv
-  → convStuck k σ u v du dv ≡ ok tt → σ ⊢[ spec ] u ≈ v
-convN-sound : ∀ k σ {n} {u v : Tm n} → FragSig σ → Frag u → Frag v
-  → convN k σ u v ≡ ok tt → σ ⊢[ spec ] u ≈ v
-convND-sound : ∀ k σ {n} {t} {u v : Tm n} → TmShape t u → TmShape t v
+  → convStuck k σ seen u v du dv ≡ ok tt → σ ⊢[ spec ] u ≈ v
+convProgress-sound : ∀ k σ seen {n} {u v : Tm n} → FragSig σ → Frag u → Frag v
+  → convProgress k σ seen u v ≡ ok tt → σ ⊢[ spec ] u ≈ v
+-- A definite argument failure. Out of fuel is not an `ok`. Otherwise
+-- the re-entry is neutral unless the match fires.
+stuckRetry : ∀ k σ seen {n} {u v : Tm n} (i : ℕ) (e : String)
   → FragSig σ → Frag u → Frag v
-  → convND k σ u v ≡ ok tt → σ ⊢[ spec ] u ≈ v
+  → ((fail e orFuel
+       (if inSeen i seen then convProgress k σ seen u v
+        else convWhnf k σ (i ∷ seen) u v))
+     ≡ ok tt)
+  → σ ⊢[ spec ] u ≈ v
+convN-sound : ∀ k σ seen {n} {u v : Tm n} → FragSig σ → Frag u → Frag v
+  → convN k σ seen u v ≡ ok tt → σ ⊢[ spec ] u ≈ v
+convND-sound : ∀ k σ seen {n} {t} {u v : Tm n} → TmShape t u → TmShape t v
+  → FragSig σ → Frag u → Frag v
+  → convND k σ seen u v ≡ ok tt → σ ⊢[ spec ] u ≈ v
 
-conv-sound (suc k) σ {u = u} {v} fs Fu Fv eq with synEq u v in seq
+-- `seen` records which definitions are already unfolding. It does not
+-- change ≈: an `ok` is still congruence of a spine, or conversion of
+-- the weak-head forms.
+conv-sound k σ fs Fu Fv eq = convGo-sound k σ [] fs Fu Fv eq
+
+convGo-sound zero    σ seen fs Fu Fv eq = ⊥-elim (fail≢ok eq)
+convGo-sound (suc k) σ seen {u = u} {v} fs Fu Fv eq with synEq u v in seq
 ... | true with synEq-sound u v seq
 ...   | refl = ≈-refl
-conv-sound (suc k) σ fs Fu Fv eq | false = convStuck-sound k σ fs Fu Fv _ _ refl refl eq
+convGo-sound (suc k) σ seen fs Fu Fv eq | false =
+  convStuck-sound k σ seen fs Fu Fv _ _ refl refl eq
 
-convArgs-sound k σ fs fl-[] fl-[] _ = ≈L-[]
-convArgs-sound k σ fs (fl-∷ Fa Fas) (fl-∷ Fb Fbs) eq with >>-ok eq
-... | (_ , ca) , cas = ≈L-∷ (conv-sound k σ fs Fa Fb ca) (convArgs-sound k σ fs Fas Fbs cas)
+convArgs-sound seen k σ fs fl-[] fl-[] _ = ≈L-[]
+convArgs-sound seen k σ fs fl-[] (fl-∷ _ _) eq = ⊥-elim (fail≢ok eq)
+convArgs-sound seen k σ fs (fl-∷ _ _) fl-[] eq = ⊥-elim (fail≢ok eq)
+convArgs-sound seen k σ fs (fl-∷ Fa Fas) (fl-∷ Fb Fbs) eq with >>-ok eq
+... | (_ , ca) , cas =
+  ≈L-∷ (convGo-sound k σ seen fs Fa Fb ca) (convArgs-sound seen k σ fs Fas Fbs cas)
 
 -- The fallback: whnf both sides and compare.
-convWhnf-sound : ∀ k σ {n} {u v : Tm n} → FragSig σ → Frag u → Frag v
-  → convWhnf k σ u v ≡ ok tt → σ ⊢[ spec ] u ≈ v
-convWhnf-sound k σ {u = u} {v} fs Fu Fv eq with whnf k σ u in ueq
+convWhnf-sound : ∀ k σ seen {n} {u v : Tm n} → FragSig σ → Frag u → Frag v
+  → convWhnf k σ seen u v ≡ ok tt → σ ⊢[ spec ] u ≈ v
+convWhnf-sound k σ seen {u = u} {v} fs Fu Fv eq with whnf k σ u in ueq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok u′ with whnf k σ v in veq
 ...   | fail _ = ⊥-elim (fail≢ok eq)
 ...   | ok v′ =
   ≈-trans (whnf-≈ k σ fs Fu ueq)
-  (≈-trans (convN-sound k σ fs (whnf-Frag k σ fs Fu ueq) (whnf-Frag k σ fs Fv veq) eq)
+  (≈-trans (convN-sound k σ seen fs (whnf-Frag k σ fs Fu ueq) (whnf-Frag k σ fs Fv veq) eq)
            (≈-sym (whnf-≈ k σ fs Fv veq)))
 
-convStuck-sound k σ {u = u} {v} fs Fu Fv (just (i , a , as)) (just (j , b , bs)) du dv eq
-  with (i ≡ᵇ j) ∧ not (ctorHead a) ∧ not (ctorHead b) in ceq
-... | false = convWhnf-sound k σ fs Fu Fv eq
-... | true with conv k σ a b >> convArgs k σ as bs in aeq
-...   | fail _ = convWhnf-sound k σ fs Fu Fv eq
-...   | ok _ with ≡ᵇ-sound {i} {j} (proj₁ (∧-true {i ≡ᵇ j} ceq)) | defArgs-just du | defArgs-just dv | >>-ok aeq
+-- A re-entry that ι-reduces is the whnf comparison. Identical reducts
+-- are ≈. Two stuck eliminators are not an `ok` (the argument mismatch
+-- stands), so that branch is absurd here.
+convProgress-sound k σ seen {u = u} {v} fs Fu Fv eq with whnf k σ u in ueq
+... | fail _ = ⊥-elim (fail≢ok eq)
+... | ok u′ with whnf k σ v in veq
+...   | fail _ = ⊥-elim (fail≢ok eq)
+...   | ok v′ with synEq u′ v′ in seq
+...     | true =
+  -- synEq of the reducts, so one unfolding erased the difference.
+  ≈-trans (whnf-≈ k σ fs Fu ueq)
+    (≈-trans (subst (λ z → σ ⊢[ spec ] u′ ≈ z) (synEq-sound u′ v′ seq) ≈-refl)
+             (≈-sym (whnf-≈ k σ fs Fv veq)))
+...     | false with stuckForm u′ ∧ stuckForm v′
+...       | true = ⊥-elim (fail≢ok eq)
+...       | false =
+  ≈-trans (whnf-≈ k σ fs Fu ueq)
+  (≈-trans (convN-sound k σ seen fs (whnf-Frag k σ fs Fu ueq) (whnf-Frag k σ fs Fv veq) eq)
+           (≈-sym (whnf-≈ k σ fs Fv veq)))
+
+convStuck-sound k σ seen {u = u} {v} fs Fu Fv (just (i , a , as)) (just (j , b , bs)) du dv eq
+  with i ≡ᵇ j in ij
+... | false = convWhnf-sound k σ seen fs Fu Fv eq
+... | true with convGo k σ seen a b >> convArgs seen k σ as bs in aeq
+...   | fail e = stuckRetry k σ seen i e fs Fu Fv eq
+...   | ok _ with ≡ᵇ-sound {i} {j} ij | defArgs-just du | defArgs-just dv | >>-ok aeq
 ...     | refl | spu | spv | (_ , ca) , cas with Frag-Spine spu Fu | Frag-Spine spv Fv
 ...       | _ , fl-∷ Fa Fas | _ , fl-∷ Fb Fbs =
   subst₂ (λ x y → σ ⊢[ spec ] x ≈ y) (sym (Spine-≡ spu)) (sym (Spine-≡ spv))
     (≈-appsFrom {f = def i} ≈-refl
-      (≈L-∷ (conv-sound k σ fs Fa Fb ca) (convArgs-sound k σ fs Fas Fbs cas)))
-convStuck-sound k σ fs Fu Fv (just _) nothing _ _ eq = convWhnf-sound k σ fs Fu Fv eq
-convStuck-sound k σ fs Fu Fv nothing _ _ _ eq = convWhnf-sound k σ fs Fu Fv eq
+      (≈L-∷ (convGo-sound k σ seen fs Fa Fb ca) (convArgs-sound seen k σ fs Fas Fbs cas)))
+convStuck-sound k σ seen fs Fu Fv (just _) nothing _ _ eq = convWhnf-sound k σ seen fs Fu Fv eq
+convStuck-sound k σ seen fs Fu Fv nothing _ _ _ eq = convWhnf-sound k σ seen fs Fu Fv eq
 
-convN-sound k σ {u = u} {v} fs Fu Fv eq with tmTag u ≡ᵇ tmTag v in teq
-... | true = convND-sound k σ (shape u) (subst (λ x → TmShape x v) (sym (≡ᵇ-sound teq)) (shape v)) fs Fu Fv eq
+stuckRetry k σ seen {u = u} {v} i e fs Fu Fv eq with isOOF e
+... | true = ⊥-elim (fail≢ok eq)
+... | false with inSeen i seen
+...   | true = convProgress-sound k σ seen fs Fu Fv eq
+...   | false = convWhnf-sound k σ (i ∷ seen) fs Fu Fv eq
+
+convN-sound k σ seen {u = u} {v} fs Fu Fv eq with tmTag u ≡ᵇ tmTag v in teq
+... | true = convND-sound k σ seen (shape u) (subst (λ x → TmShape x v) (sym (≡ᵇ-sound teq)) (shape v)) fs Fu Fv eq
 ... | false = ⊥-elim (fail≢ok eq)
 
-convND-sound k σ (sh-var {x}) (sh-var {y}) fs _ _ eq with eqFin-sound x y (guard-ok eq)
+convND-sound k σ seen (sh-var {x}) (sh-var {y}) fs _ _ eq with eqFin-sound x y (guard-ok eq)
 ... | refl = ≈-refl
-convND-sound k σ sh-typ sh-typ fs _ _ _ = ≈-refl
-convND-sound k σ (sh-pi {q}) (sh-pi {q′}) fs (f-pi FA FB) (f-pi FA′ FB′) eq with >>-ok₂ eq
+convND-sound k σ seen sh-typ sh-typ fs _ _ _ = ≈-refl
+convND-sound k σ seen (sh-pi {q}) (sh-pi {q′}) fs (f-pi FA FB) (f-pi FA′ FB′) eq with >>-ok₂ eq
 ... | (_ , g) , (_ , cA) , cB with eqQty-sound q q′ (guard-ok g)
-...   | refl = ≈-pi (conv-sound k σ fs FA FA′ cA) (conv-sound k σ fs FB FB′ cB)
-convND-sound k σ (sh-lam {q}) (sh-lam {q′}) fs (f-lam FA Ft) (f-lam FA′ Ft′) eq with >>-ok₂ eq
+...   | refl = ≈-pi (convGo-sound k σ seen fs FA FA′ cA) (convGo-sound k σ seen fs FB FB′ cB)
+convND-sound k σ seen (sh-lam {q}) (sh-lam {q′}) fs (f-lam FA Ft) (f-lam FA′ Ft′) eq with >>-ok₂ eq
 ... | (_ , g) , (_ , cA) , ct with eqQty-sound q q′ (guard-ok g)
-...   | refl = ≈-lam (conv-sound k σ fs FA FA′ cA) (conv-sound k σ fs Ft Ft′ ct)
-convND-sound k σ sh-app sh-app fs (f-app Ff Fa) (f-app Fg Fb) eq with >>-ok eq
-... | (_ , cf) , ca = ≈-app (conv-sound k σ fs Ff Fg cf) (conv-sound k σ fs Fa Fb ca)
-convND-sound k σ sh-nat sh-nat fs _ _ _ = ≈-refl
-convND-sound k σ sh-ze sh-ze fs _ _ _ = ≈-refl
-convND-sound k σ sh-su sh-su fs (f-su Fa) (f-su Fb) eq = ≈-su (conv-sound k σ fs Fa Fb eq)
-convND-sound k σ sh-unit sh-unit fs _ _ _ = ≈-refl
-convND-sound k σ sh-one sh-one fs _ _ _ = ≈-refl
-convND-sound k σ sh-empty sh-empty fs _ _ _ = ≈-refl
-convND-sound k σ (sh-dty {i}) (sh-dty {j}) fs _ _ eq with ≡ᵇ-sound {i} {j} (guard-ok eq)
+...   | refl = ≈-lam (convGo-sound k σ seen fs FA FA′ cA) (convGo-sound k σ seen fs Ft Ft′ ct)
+convND-sound k σ seen sh-app sh-app fs (f-app Ff Fa) (f-app Fg Fb) eq with >>-ok eq
+... | (_ , cf) , ca = ≈-app (convGo-sound k σ seen fs Ff Fg cf) (convGo-sound k σ seen fs Fa Fb ca)
+convND-sound k σ seen sh-nat sh-nat fs _ _ _ = ≈-refl
+convND-sound k σ seen sh-ze sh-ze fs _ _ _ = ≈-refl
+convND-sound k σ seen sh-su sh-su fs (f-su Fa) (f-su Fb) eq = ≈-su (convGo-sound k σ seen fs Fa Fb eq)
+convND-sound k σ seen sh-unit sh-unit fs _ _ _ = ≈-refl
+convND-sound k σ seen sh-one sh-one fs _ _ _ = ≈-refl
+convND-sound k σ seen sh-empty sh-empty fs _ _ _ = ≈-refl
+convND-sound k σ seen (sh-dty {i}) (sh-dty {j}) fs _ _ eq with ≡ᵇ-sound {i} {j} (guard-ok eq)
 ... | refl = ≈-refl
-convND-sound k σ (sh-ctor {i} {j}) (sh-ctor {i′} {j′}) fs _ _ eq with ∧-true (guard-ok eq)
+convND-sound k σ seen (sh-ctor {i} {j}) (sh-ctor {i′} {j′}) fs _ _ eq with ∧-true (guard-ok eq)
 ... | ei , ej with ≡ᵇ-sound {i} {i′} ei | ≡ᵇ-sound {j} {j′} ej
 ...   | refl | refl = ≈-refl
-convND-sound k σ sh-mData sh-mData fs (f-mData Fe FP Fbs) (f-mData Fe′ FP′ Fbs′) eq with >>-ok₂ eq
+convND-sound k σ seen sh-mData sh-mData fs (f-mData Fe FP Fbs) (f-mData Fe′ FP′ Fbs′) eq with >>-ok₂ eq
 ... | (_ , ce) , (_ , cP) , cbs =
-  ≈-mData (conv-sound k σ fs Fe Fe′ ce) (conv-sound k σ fs FP FP′ cP) (convArgs-sound k σ fs Fbs Fbs′ cbs)
-convND-sound k σ sh-mNat sh-mNat fs (f-mNat Fe FP Fz Fs) (f-mNat Fe′ FP′ Fz′ Fs′) eq with >>-ok₃ eq
+  ≈-mData (convGo-sound k σ seen fs Fe Fe′ ce) (convGo-sound k σ seen fs FP FP′ cP) (convArgs-sound seen k σ fs Fbs Fbs′ cbs)
+convND-sound k σ seen sh-mNat sh-mNat fs (f-mNat Fe FP Fz Fs) (f-mNat Fe′ FP′ Fz′ Fs′) eq with >>-ok₃ eq
 ... | (_ , ce) , (_ , cP) , (_ , cz) , cs =
-  ≈-mNat (conv-sound k σ fs Fe Fe′ ce) (conv-sound k σ fs FP FP′ cP)
-         (conv-sound k σ fs Fz Fz′ cz) (conv-sound k σ fs Fs Fs′ cs)
-convND-sound k σ sh-mEmp sh-mEmp fs (f-mEmp Fe FP) (f-mEmp Fe′ FP′) eq with >>-ok eq
-... | (_ , ce) , cP = ≈-mEmp (conv-sound k σ fs Fe Fe′ ce) (conv-sound k σ fs FP FP′ cP)
-convND-sound k σ sh-mUnit sh-mUnit fs (f-mUnit Fe FP Fu) (f-mUnit Fe′ FP′ Fu′) eq with >>-ok₂ eq
+  ≈-mNat (convGo-sound k σ seen fs Fe Fe′ ce) (convGo-sound k σ seen fs FP FP′ cP)
+         (convGo-sound k σ seen fs Fz Fz′ cz) (convGo-sound k σ seen fs Fs Fs′ cs)
+convND-sound k σ seen sh-mEmp sh-mEmp fs (f-mEmp Fe FP) (f-mEmp Fe′ FP′) eq with >>-ok eq
+... | (_ , ce) , cP = ≈-mEmp (convGo-sound k σ seen fs Fe Fe′ ce) (convGo-sound k σ seen fs FP FP′ cP)
+convND-sound k σ seen sh-mUnit sh-mUnit fs (f-mUnit Fe FP Fu) (f-mUnit Fe′ FP′ Fu′) eq with >>-ok₂ eq
 ... | (_ , ce) , (_ , cP) , cu =
-  ≈-mUnit (conv-sound k σ fs Fe Fe′ ce) (conv-sound k σ fs FP FP′ cP) (conv-sound k σ fs Fu Fu′ cu)
-convND-sound k σ sh-idt sh-idt fs (f-idt FA Fa Fb) (f-idt FA′ Fa′ Fb′) eq with >>-ok₂ eq
+  ≈-mUnit (convGo-sound k σ seen fs Fe Fe′ ce) (convGo-sound k σ seen fs FP FP′ cP) (convGo-sound k σ seen fs Fu Fu′ cu)
+convND-sound k σ seen sh-idt sh-idt fs (f-idt FA Fa Fb) (f-idt FA′ Fa′ Fb′) eq with >>-ok₂ eq
 ... | (_ , cA) , (_ , ca) , cb =
-  ≈-idt (conv-sound k σ fs FA FA′ cA) (conv-sound k σ fs Fa Fa′ ca) (conv-sound k σ fs Fb Fb′ cb)
-convND-sound k σ sh-rfl sh-rfl fs _ _ _ = ≈-refl
-convND-sound k σ sh-rwt sh-rwt fs (f-rwt Fe FP Ft) (f-rwt Fe′ FP′ Ft′) eq with >>-ok₂ eq
+  ≈-idt (convGo-sound k σ seen fs FA FA′ cA) (convGo-sound k σ seen fs Fa Fa′ ca) (convGo-sound k σ seen fs Fb Fb′ cb)
+convND-sound k σ seen sh-rfl sh-rfl fs _ _ _ = ≈-refl
+convND-sound k σ seen sh-rwt sh-rwt fs (f-rwt Fe FP Ft) (f-rwt Fe′ FP′ Ft′) eq with >>-ok₂ eq
 ... | (_ , ce) , (_ , cP) , ct =
-  ≈-rwt (conv-sound k σ fs Fe Fe′ ce) (conv-sound k σ fs FP FP′ cP) (conv-sound k σ fs Ft Ft′ ct)
-convND-sound k σ (sh-def {i}) (sh-def {j}) fs _ _ eq with ≡ᵇ-sound {i} {j} (guard-ok eq)
+  ≈-rwt (convGo-sound k σ seen fs Fe Fe′ ce) (convGo-sound k σ seen fs FP FP′ cP) (convGo-sound k σ seen fs Ft Ft′ ct)
+convND-sound k σ seen (sh-def {i}) (sh-def {j}) fs _ _ eq with ≡ᵇ-sound {i} {j} (guard-ok eq)
 ... | refl = ≈-refl
-convND-sound k σ sh-ann sh-ann fs (f-ann Fe FA) (f-ann Fe′ FA′) eq with >>-ok eq
-... | (_ , ce) , cA = ≈-ann (conv-sound k σ fs Fe Fe′ ce) (conv-sound k σ fs FA FA′ cA)
-convND-sound k σ sh-prod sh-prod fs (f-prod FA FB) (f-prod FA′ FB′) eq with >>-ok eq
-... | (_ , cA) , cB = ≈-prod (conv-sound k σ fs FA FA′ cA) (conv-sound k σ fs FB FB′ cB)
-convND-sound k σ sh-pair sh-pair fs (f-pair Fa Fb) (f-pair Fa′ Fb′) eq with >>-ok eq
-... | (_ , ca) , cb = ≈-pair (conv-sound k σ fs Fa Fa′ ca) (conv-sound k σ fs Fb Fb′ cb)
-convND-sound k σ sh-letp sh-letp fs (f-letp Fe Ft) (f-letp Fe′ Ft′) eq with >>-ok eq
-... | (_ , ce) , ct = ≈-letp (conv-sound k σ fs Fe Fe′ ce) (conv-sound k σ fs Ft Ft′ ct)
-convND-sound k σ sh-nu sh-nu fs (f-nu F) (f-nu F′) eq =
-  ≈-nu (conv-sound k σ fs F F′ eq)
-convND-sound k σ sh-unf sh-unf fs (f-unf Fs Ff _) (f-unf Fs′ Ff′ _) eq with >>-ok eq
-... | (_ , cs) , cf = ≈-unf (conv-sound k σ fs Fs Fs′ cs) (conv-sound k σ fs Ff Ff′ cf)
-convND-sound k σ sh-ucons sh-ucons fs (f-ucons Fs) (f-ucons Fs′) eq =
-  ≈-ucons (conv-sound k σ fs Fs Fs′ eq)
-convND-sound k σ sh-i64 sh-i64 fs () _ _
-convND-sound k σ sh-f32ty sh-f32ty fs () _ _
-convND-sound k σ sh-tensor sh-tensor fs () _ _
-convND-sound k σ sh-addi sh-addi fs () _ _
-convND-sound k σ sh-muli sh-muli fs () _ _
-convND-sound k σ sh-addt sh-addt fs () _ _
-convND-sound k σ sh-toi64 sh-toi64 fs () _ _
-convND-sound k σ sh-packi sh-packi fs () _ _
+convND-sound k σ seen sh-ann sh-ann fs (f-ann Fe FA) (f-ann Fe′ FA′) eq with >>-ok eq
+... | (_ , ce) , cA = ≈-ann (convGo-sound k σ seen fs Fe Fe′ ce) (convGo-sound k σ seen fs FA FA′ cA)
+convND-sound k σ seen sh-prod sh-prod fs (f-prod FA FB) (f-prod FA′ FB′) eq with >>-ok eq
+... | (_ , cA) , cB = ≈-prod (convGo-sound k σ seen fs FA FA′ cA) (convGo-sound k σ seen fs FB FB′ cB)
+convND-sound k σ seen sh-pair sh-pair fs (f-pair Fa Fb) (f-pair Fa′ Fb′) eq with >>-ok eq
+... | (_ , ca) , cb = ≈-pair (convGo-sound k σ seen fs Fa Fa′ ca) (convGo-sound k σ seen fs Fb Fb′ cb)
+convND-sound k σ seen sh-letp sh-letp fs (f-letp Fe Ft) (f-letp Fe′ Ft′) eq with >>-ok eq
+... | (_ , ce) , ct = ≈-letp (convGo-sound k σ seen fs Fe Fe′ ce) (convGo-sound k σ seen fs Ft Ft′ ct)
+convND-sound k σ seen sh-nu sh-nu fs (f-nu F) (f-nu F′) eq =
+  ≈-nu (convGo-sound k σ seen fs F F′ eq)
+convND-sound k σ seen sh-unf sh-unf fs (f-unf Fs Ff _) (f-unf Fs′ Ff′ _) eq with >>-ok eq
+... | (_ , cs) , cf = ≈-unf (convGo-sound k σ seen fs Fs Fs′ cs) (convGo-sound k σ seen fs Ff Ff′ cf)
+convND-sound k σ seen sh-ucons sh-ucons fs (f-ucons Fs) (f-ucons Fs′) eq =
+  ≈-ucons (convGo-sound k σ seen fs Fs Fs′ eq)
+convND-sound k σ seen sh-i64 sh-i64 fs () _ _
+convND-sound k σ seen sh-f32ty sh-f32ty fs () _ _
+convND-sound k σ seen sh-tensor sh-tensor fs () _ _
+convND-sound k σ seen sh-addi sh-addi fs () _ _
+convND-sound k σ seen sh-muli sh-muli fs () _ _
+convND-sound k σ seen sh-addt sh-addt fs () _ _
+convND-sound k σ seen sh-toi64 sh-toi64 fs () _ _
+convND-sound k σ seen sh-packi sh-packi fs () _ _

@@ -26,7 +26,7 @@ Each mutant is classified with `Muro.Check`, the same checker `mix muro.check` r
 | Outcome | Meaning |
 | --- | --- |
 | `killed` | A re-checked definition fails, and the failure is a real error. `killed_by` names each one, in book order, with its location. |
-| `equivalent` | The mutant body and the original body convert, as closed terms, within the fuel. |
+| `equivalent` | The mutant body and the original body convert, as closed terms, within the probe fuel. |
 | `surviving` | The mutant type-checks, conversion with the original fails within the fuel, and every re-checked definition checks. |
 | `out_of_fuel` | The checker gave up reducing. The summary counts this on its own. |
 | `discarded` | The mutant is rejected. The text report splits `type` and `termination`. JSON records `discarded`. |
@@ -37,9 +37,9 @@ Fuel exhaustion while checking the mutant itself, or while re-checking a dependi
 
 ## Equivalence by conversion
 
-Before the book is re-checked, the two closed bodies are compared with `Muro.Check.conv/4` against the original book, so a recursive name still unfolds to the original. `:ok` is `equivalent`, and the depending definitions are not re-checked.
+Before the book is re-checked, the two closed bodies are compared with `Muro.Check.conv/4` against the original book, so a recursive name still unfolds to the original. That probe uses a quarter of `--fuel`, at least 1, and strictly less than `--fuel` when `--fuel` is greater than 1. `:ok` is `equivalent`, and the depending definitions are not re-checked.
 
-When that comparison runs out of fuel, the mutant stays eligible to be killed or to survive. The fallback below stays unused. When conversion fails for another reason, branches are paired by constructor name and arity, and conversion is asked again on the paired bodies, including under lambdas and applications. A body-only arm swap keeps each constructor in its original position, so the first comparison decides two arms that compute the same value (`plus 0 0` and `0`).
+When the probe runs out of fuel, the mutant is not equivalent. It is re-checked at the full `--fuel`, and it may then be killed, surviving, or `out_of_fuel`. The fallback below stays unused on an out-of-fuel probe. When conversion fails for another reason, branches are paired by constructor name and arity, and conversion is asked again on the paired bodies, including under lambdas and applications. A body-only arm swap keeps each constructor in its original position, so the first comparison decides two arms that compute the same value (`plus 0 0` and `0`).
 
 ## What is re-checked
 
@@ -56,6 +56,8 @@ half: re-checked 1 of 5 evidence definitions
 ## Operators
 
 Candidates are enumerated in a fixed order: file order of `run` definitions, then a pre-order walk of the body, then the operators at that node in the order below. The id is `<name>#<n>`, starting at 1 for each definition, and a discarded mutant keeps its number. The same file produces the same text and the same JSON. Mutants are classified concurrently. The order of the report is the enumeration order.
+
+As each mutant is classified, the command prints one line on standard error, `<id> <operator> <outcome>`, in that same order. The text report and the JSON object are printed when the run finishes. A run that builds no mutants prints no such line.
 
 A candidate whose body is the original body is skipped. `--max-mutants-per-def` stops the enumeration at `N` candidates (default 100, and `0` is allowed). The default is `Muro.Mutate.default_max_mutants/0`.
 
@@ -75,7 +77,7 @@ A mutant that does not type-check as the original did is discarded and counted o
 | `--only name` | Mutate this `run` definition. Repeat the flag for more than one. The report stays in file order. |
 | `--max-mutants-per-def N` | Stop after `N` candidates of each definition. Default 100. `0` prints the header and no mutants. |
 | `--max-survivors N` | After the report, exit 1 when more than `N` mutants survive. Omitted, survivors do not change the exit code. |
-| `--fuel N` | The checker's fuel for the original check and for every mutant. Default `Muro.Check.default_fuel/0` (2000). |
+| `--fuel N` | The checker's fuel for the original check and for every re-check. Default `Muro.Check.default_fuel/0` (2000). The equivalence probe uses a quarter of `N` (at least 1, and less than `N` when `N` is greater than 1). |
 | `--json` | Print the JSON object below. The text header is omitted. |
 
 Exit `0` means the book checked and survivors are within the limit. Exit `1` means survivors exceed `--max-survivors`. The report is printed first, and the error line is `N survivors exceed --max-survivors M`. Exit `2` means the original book does not check. The version line and the checker errors are printed, then `refusing to mutate a book that does not check`. `--json` does not change that refusal. An unknown flag, a missing path, a non-positive `--fuel`, a negative cap, or an `--only` name that is not a `run` definition in the file raises, which is exit 1 from Mix.
