@@ -171,6 +171,20 @@ defmodule Muro.TemporalTest do
     assert msg =~ "t: payload outside the temporal fragment"
   end
 
+  test "an echo of a repeated binder is refused" do
+    assert {:error, msg} =
+             check("""
+             session dup := rec X. recv Nat (recv Nat (send Nat X))
+             session back := rec Y. send Nat (send Nat (recv Nat Y))
+             conform dup-a : dup := rec X. get (n : Nat) (get (n : Nat) (put n X))
+             conform dup-b : back := rec Y. put 0 (put 1 (get (m : Nat) Y))
+             meet dup-wire : dup-a with dup-b buffer 1
+             temporal t : dup-wire := always true
+             """)
+
+    assert msg =~ "t: echo of a repeated binder"
+  end
+
   test "refusals name the offending formula" do
     assert {:error, msg} = Parser.parse("temporal t : wire := always (always true)\n")
     assert msg =~ "nested temporal operator"

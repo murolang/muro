@@ -18,7 +18,7 @@ defmodule Muro.Temporal.Elab do
   Transcribes `Bridge.elab`. `{:ok, proc}` or `{:error, message}`.
   """
   def elab(proc, book) when is_list(book) do
-    elab(proc, book, MapSet.new())
+    elab(proc, book, MapSet.new(), binders(proc))
   end
 
   @doc """
@@ -28,17 +28,17 @@ defmodule Muro.Temporal.Elab do
     match?({:ok, _}, elab(proc, book))
   end
 
-  defp elab(:done, _book, _scope), do: {:ok, :done}
-  defp elab(:stop, _book, _scope), do: {:ok, :stop}
-  defp elab({:call, name}, _book, _scope), do: {:ok, {:var, name}}
+  defp elab(:done, _book, _scope, _names), do: {:ok, :done}
+  defp elab(:stop, _book, _scope, _names), do: {:ok, :stop}
+  defp elab({:call, name}, _book, _scope, _names), do: {:ok, {:var, name}}
 
-  defp elab({:rec, name, body}, book, scope) do
-    with {:ok, body} <- elab(body, book, scope), do: {:ok, {:mu, name, body}}
+  defp elab({:rec, name, body}, book, scope, names) do
+    with {:ok, body} <- elab(body, book, scope, names), do: {:ok, {:mu, name, body}}
   end
 
-  defp elab({:put, _ty, val, body}, book, scope) do
-    with {:ok, body} <- elab(body, book, scope) do
-      case classify(val, book, scope) do
+  defp elab({:put, _ty, val, body}, book, scope, names) do
+    with {:ok, body} <- elab(body, book, scope, names) do
+      case classify(val, book, scope, names) do
         {:atom, atom, show} -> {:ok, {:put, atom, show, body}}
         {:echo, name} -> {:ok, {:echo, name, "put #{name}", body}}
         {:error, _} = err -> err
@@ -46,48 +46,48 @@ defmodule Muro.Temporal.Elab do
     end
   end
 
-  defp elab({:get, ty, name, {:match, scrut, arms}}, book, scope) do
+  defp elab({:get, ty, name, {:match, scrut, arms}}, book, scope, names) do
     if scrut == name do
-      elab_get_match(ty, name, arms, book, scope)
+      elab_get_match(ty, name, arms, book, scope, names)
     else
       {:error, @fragment}
     end
   end
 
-  defp elab({:get, ty, name, body}, book, scope) do
+  defp elab({:get, ty, name, body}, book, scope, names) do
     with :ok <- atomic_type(book, ty),
-         {:ok, body} <- elab(body, book, bind(scope, name)) do
+         {:ok, body} <- elab(body, book, bind(scope, name), names) do
       {:ok, {:get, tag_of(ty), name, ty, get_show(name, ty), body}}
     end
   end
 
-  defp elab({:iget, name, p, q}, book, scope) do
+  defp elab({:iget, name, p, q}, book, scope, names) do
     scope = bind(scope, name)
 
-    with {:ok, p} <- elab(p, book, scope),
-         {:ok, q} <- elab(q, book, scope) do
+    with {:ok, p} <- elab(p, book, scope, names),
+         {:ok, q} <- elab(q, book, scope, names) do
       {:ok, {:iget, name, :bit, get_show(name, :bit), p, q}}
     end
   end
 
-  defp elab({:pick0, body}, book, scope) do
-    with {:ok, body} <- elab(body, book, scope), do: {:ok, {:pick0, "pick0", body}}
+  defp elab({:pick0, body}, book, scope, names) do
+    with {:ok, body} <- elab(body, book, scope, names), do: {:ok, {:pick0, "pick0", body}}
   end
 
-  defp elab({:pick1, body}, book, scope) do
-    with {:ok, body} <- elab(body, book, scope), do: {:ok, {:pick1, "pick1", body}}
+  defp elab({:pick1, body}, book, scope, names) do
+    with {:ok, body} <- elab(body, book, scope, names), do: {:ok, {:pick1, "pick1", body}}
   end
 
-  defp elab({:cover, p, q}, book, scope) do
-    with {:ok, p} <- elab(p, book, scope),
-         {:ok, q} <- elab(q, book, scope) do
+  defp elab({:cover, p, q}, book, scope, names) do
+    with {:ok, p} <- elab(p, book, scope, names),
+         {:ok, q} <- elab(q, book, scope, names) do
       {:ok, {:cover, "cover", p, q}}
     end
   end
 
-  defp elab(_other, _book, _scope), do: {:error, @fragment}
+  defp elab(_other, _book, _scope, _names), do: {:error, @fragment}
 
-  defp elab_get_match(ty, name, arms, book, scope) do
+  defp elab_get_match(ty, name, arms, book, scope, names) do
     with :ok <- atomic_type(book, ty) do
       scope = bind(scope, name)
       show = get_show(name, ty)
@@ -95,14 +95,14 @@ defmodule Muro.Temporal.Elab do
       case ty do
         :bit ->
           with {:ok, p, q} <- bit_arms(arms),
-               {:ok, p} <- elab(p, book, scope),
-               {:ok, q} <- elab(q, book, scope) do
+               {:ok, p} <- elab(p, book, scope, names),
+               {:ok, q} <- elab(q, book, scope, names) do
             {:ok, {:iget, name, :bit, show, p, q}}
           end
 
         {:dat, dname, _} ->
           with {:ok, pairs} <- data_arms(book, dname, arms),
-               {:ok, pairs} <- elab_pairs(pairs, book, scope) do
+               {:ok, pairs} <- elab_pairs(pairs, book, scope, names) do
             {:ok, {:mget, {:dat, dname}, name, ty, show, pairs}}
           end
 
@@ -112,9 +112,9 @@ defmodule Muro.Temporal.Elab do
     end
   end
 
-  defp elab_pairs(pairs, book, scope) do
+  defp elab_pairs(pairs, book, scope, names) do
     Enum.reduce_while(pairs, {:ok, []}, fn {ctor, proc}, {:ok, acc} ->
-      case elab(proc, book, scope) do
+      case elab(proc, book, scope, names) do
         {:ok, proc} -> {:cont, {:ok, acc ++ [{ctor, proc}]}}
         {:error, _} = err -> {:halt, err}
       end
@@ -181,14 +181,17 @@ defmodule Muro.Temporal.Elab do
     end)
   end
 
-  defp classify({:nat, n}, _book, _scope) when is_integer(n),
+  defp classify({:nat, n}, _book, _scope, _names) when is_integer(n),
     do: {:atom, {:nat, n}, "put #{n}"}
 
-  defp classify(:b0, _book, _scope), do: {:atom, {:bit, false}, "put b0"}
-  defp classify(:b1, _book, _scope), do: {:atom, {:bit, true}, "put b1"}
+  defp classify(:b0, _book, _scope, _names), do: {:atom, {:bit, false}, "put b0"}
+  defp classify(:b1, _book, _scope, _names), do: {:atom, {:bit, true}, "put b1"}
 
-  defp classify({:var, name}, book, scope) do
+  defp classify({:var, name}, book, scope, names) do
     cond do
+      MapSet.member?(scope, name) and Enum.count(names, &(&1 == name)) != 1 ->
+        {:error, "echo of a repeated binder"}
+
       MapSet.member?(scope, name) ->
         {:echo, name}
 
@@ -200,9 +203,9 @@ defmodule Muro.Temporal.Elab do
     end
   end
 
-  defp classify({:con, _name, [_ | _]}, _book, _scope), do: {:error, @fragment}
+  defp classify({:con, _name, [_ | _]}, _book, _scope, _names), do: {:error, @fragment}
 
-  defp classify({:con, name, []}, book, _scope) do
+  defp classify({:con, name, []}, book, _scope, _names) do
     if nullary_ctor?(book, name) do
       {:atom, {:con, to_string(name)}, "put #{name}"}
     else
@@ -210,7 +213,41 @@ defmodule Muro.Temporal.Elab do
     end
   end
 
-  defp classify(_other, _book, _scope), do: {:error, @fragment}
+  defp classify(_other, _book, _scope, _names), do: {:error, @fragment}
+
+  defp binders(proc), do: Enum.reverse(binders(proc, []))
+
+  defp binders(:done, acc), do: acc
+  defp binders(:stop, acc), do: acc
+  defp binders({:call, _}, acc), do: acc
+  defp binders({:rec, _, body}, acc), do: binders(body, acc)
+  defp binders({:put, _, _, body}, acc), do: binders(body, acc)
+
+  defp binders({:get, _, name, {:match, _, arms}}, acc),
+    do: binders_arms(arms, cons_name(name, acc))
+
+  defp binders({:get, _, name, body}, acc), do: binders(body, cons_name(name, acc))
+
+  defp binders({:iget, name, p, q}, acc) do
+    acc = binders(p, cons_name(name, acc))
+    binders(q, acc)
+  end
+
+  defp binders({:pick0, body}, acc), do: binders(body, acc)
+  defp binders({:pick1, body}, acc), do: binders(body, acc)
+  defp binders({:cover, p, q}, acc), do: binders(q, binders(p, acc))
+  defp binders(_, acc), do: acc
+
+  defp binders_arms(arms, acc) do
+    Enum.reduce(arms, acc, fn
+      {:arm, _, _, body}, acc -> binders(body, acc)
+      {:prod, _, _}, acc -> acc
+      body, acc -> binders(body, acc)
+    end)
+  end
+
+  defp cons_name(:_, acc), do: acc
+  defp cons_name(name, acc), do: [name | acc]
 
   defp atomic_type(_book, :nat), do: :ok
   defp atomic_type(_book, :bit), do: :ok

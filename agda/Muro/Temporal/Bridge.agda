@@ -34,8 +34,9 @@ open import Data.Empty using (⊥)
 open import Data.List.Base using (List; []; _∷_)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc)
-open import Data.Product using (_×_; _,_; proj₁; proj₂)
+open import Data.Product using (_×_; _,_; proj₁; proj₂; Σ)
 open import Data.String.Base using (String)
+open import Data.String.Properties using (_==_)
 open import Relation.Binary.PropositionalEquality
   using (_≡_; _≢_; refl; sym; trans; inspect; [_])
 open import Relation.Nullary.Decidable.Core using (Dec)
@@ -48,7 +49,7 @@ open import Muro.AsyncRec
         ; rcover; riget; rmget; rmu; rvar
         ; Block; bDone; bPut; bGet; bEcho; bMget
         ; COut; cok; cfail; Fault
-        ; compile; materialise; alphabet
+        ; compile; materialise; alphabet; elemS
         ; Graph; gr; init; lookB; replicate
         ; loopL; loopR; cross
         )
@@ -134,6 +135,47 @@ fragArm abad = false
 fragArms [] = true
 fragArms (a ∷ as) = fragArm a ∧ fragArms as
 
+------------------------------------------------------------------------
+-- An echo names one binder. Two bindings of the same name make the
+-- source lookup and the compiled slot disagree, so `frag?` refuses it.
+------------------------------------------------------------------------
+
+occ : String → List String → ℕ
+occ x [] = zero
+occ x (y ∷ ys) with x == y
+... | true = suc (occ x ys)
+... | false = occ x ys
+
+once : String → List String → Bool
+once x ys with occ x ys
+... | suc zero = true
+... | zero = false
+... | suc (suc _) = false
+
+echoHere : List String → List String → Pay → Bool
+echoHere ns scope (pEcho x) = once x ns ∧ elemS x scope
+echoHere _ _ _ = true
+
+echoOk : List String → List String → SProc → Bool
+echoOkArms : List String → List String → List Arm → Bool
+
+echoOk ns scope sdone = true
+echoOk ns scope sstop = true
+echoOk ns scope sout = true
+echoOk ns scope (sput a p) = echoHere ns scope a ∧ echoOk ns scope p
+echoOk ns scope (sget _ x p) = echoOk ns (x ∷ scope) p
+echoOk ns scope (spick0 p) = echoOk ns scope p
+echoOk ns scope (spick1 p) = echoOk ns scope p
+echoOk ns scope (scover p q) = echoOk ns scope p ∧ echoOk ns scope q
+echoOk ns scope (siget x p q) = echoOk ns (x ∷ scope) p ∧ echoOk ns (x ∷ scope) q
+echoOk ns scope (smget _ x as) = echoOkArms ns (x ∷ scope) as
+echoOk ns scope (smu _ p) = echoOk ns scope p
+echoOk ns scope (svar _) = true
+
+echoOkArms _ _ [] = true
+echoOkArms ns scope (abad ∷ as) = echoOkArms ns scope as
+echoOkArms ns scope (aok _ p ∷ as) = echoOk ns scope p ∧ echoOkArms ns scope as
+
 ∧-left : ∀ {a b} → a ∧ b ≡ true → a ≡ true
 ∧-left {true} _ = refl
 ∧-left {false} ()
@@ -202,10 +244,21 @@ mutual
   arms-complete farms0 = refl
   arms-complete (farms1 fa fas) rewrite arm-complete fa | arms-complete fas = refl
 
-frag? : (P : SProc) → Dec (Frag P)
-frag? P with fragB P | inspect fragB P
-... | true | [ eq ] = yes′ (frag-sound P eq)
-... | false | [ eq ] = no′ (λ fp → true≢false (trans (sym (frag-complete fp)) eq))
+∧-intro : ∀ {a b} → a ≡ true → b ≡ true → (a ∧ b) ≡ true
+∧-intro {true} {true} _ _ = refl
+∧-intro {true} {false} _ ()
+∧-intro {false} {_} () _
+
+-- A process is accepted when it is in the fragment and every echo
+-- names exactly one binder of that process.
+frag? : (P : SProc) → Dec (Σ (Frag P) (λ _ → echoOk (bnames P) [] P ≡ true))
+frag? P with fragB P ∧ echoOk (bnames P) [] P | inspect (λ P → fragB P ∧ echoOk (bnames P) [] P) P
+... | true | [ eq ] = yes′ (frag-sound P (∧-left eq) , ∧-right eq)
+... | false | [ eq ] = no′ (refuse eq)
+  where
+  refuse : (fragB P ∧ echoOk (bnames P) [] P) ≡ false →
+           Σ (Frag P) (λ _ → echoOk (bnames P) [] P ≡ true) → ⊥
+  refuse eq (fp , ok) = true≢false (trans (sym (∧-intro (frag-complete fp) ok)) eq)
 
 ------------------------------------------------------------------------
 -- Outside the fragment: the payload forms the alphabet does not hold.
@@ -272,6 +325,12 @@ echoAF = fmu (fput (fnat zero) (fget fvar))
 
 echoBF : Frag src-echoB
 echoBF = fmu (fget (fput (fecho "n") fvar))
+
+echo-plain : echoOk (bnames src-echoB) [] src-echoB ≡ true
+echo-plain = refl
+
+spin-plain : echoOk (bnames src-spinR) [] src-spinR ≡ true
+spin-plain = refl
 
 spinLF : Frag src-spinL
 spinLF = fmu (fput (fcon "bytes") fvar)
