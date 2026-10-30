@@ -403,3 +403,83 @@ stepBook = fromDefs (
 
 step-checks : checkSig! stepBook ≡ ok tt
 step-checks = refl
+
+-- The unfold sits under a pair, so the outer term is not an unfold.
+-- The head reads the seed and the tail is the block call. f reads the
+-- second component of s, which is that stream.
+nestF : Tm 0
+nestF =
+  lam affine nat
+    (mNat (var zero) nat ze
+      (fstTm (ucons (sndTm (app (def 1) (var zero))))))
+
+nestS : Tm 0
+nestS =
+  lam reuse nat
+    (pair ze
+      (unf (var zero)
+        (lam affine nat (pair (var zero) (app (def 0) (var (suc zero)))))))
+
+prodBook : Sig
+prodBook = fromDefs (
+  mkDef "f" run (pi affine nat nat) nestF ∷
+  mkDef "s" run (pi reuse nat (prod nat (stream nat))) nestS ∷
+  [])
+
+prod-refused : checkSig! prodBook ≡ fail "s productivity: unguarded recursive call"
+prod-refused = refl
+
+-- The same unfold, under an application. s returns the stream itself,
+-- so f reads its head.
+appS : Tm 0
+appS =
+  lam reuse nat
+    (app (lam affine (wk (stream nat)) (var zero))
+      (unf (var zero)
+        (lam affine nat (pair (var zero) (app (def 0) (var (suc zero)))))))
+
+appBook : Sig
+appBook = fromDefs (
+  mkDef "f" run (pi affine nat nat) mutualBadF ∷
+  mkDef "s" run (pi reuse nat (stream nat)) appS ∷
+  [])
+
+app-refused : checkSig! appBook ≡ fail "s productivity: unguarded recursive call"
+app-refused = refl
+
+-- The same unfold, under both branches of a match.
+matchS : Tm 0
+matchS =
+  lam reuse nat
+    (mNat (var zero) (wk (wk (stream nat)))
+      (unf (var zero)
+        (lam affine nat (pair (var zero) (app (def 0) (var (suc zero))))))
+      (unf (var (suc zero))
+        (lam affine nat (pair (var zero) (app (def 0) (var (suc (suc zero))))))))
+
+matchBook : Sig
+matchBook = fromDefs (
+  mkDef "f" run (pi affine nat nat) mutualBadF ∷
+  mkDef "s" run (pi reuse nat (stream nat)) matchS ∷
+  [])
+
+match-refused : checkSig! matchBook ≡ fail "s productivity: unguarded recursive call"
+match-refused = refl
+
+-- Nested under a pair, and still accepted: the head ignores the binder.
+-- The tail mentions the block, and the next head is 0.
+nestOkS : Tm 0
+nestOkS =
+  lam reuse nat
+    (pair ze
+      (unf (var zero)
+        (lam affine nat (pair ze (app (def 0) (var (suc zero)))))))
+
+nestOk : Sig
+nestOk = fromDefs (
+  mkDef "f" run (pi affine nat nat) nestF ∷
+  mkDef "s" run (pi reuse nat (prod nat (stream nat))) nestOkS ∷
+  [])
+
+nest-ok-checks : checkSig! nestOk ≡ ok tt
+nest-ok-checks = refl

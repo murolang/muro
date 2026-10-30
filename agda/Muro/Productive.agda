@@ -11,7 +11,11 @@
 --   guarded-unrolls: a guarded tail unrolls to every depth, given Bodies.
 --   accepted-productive. The only hypothesis is checkSig k σ ≡ ok tt.
 --   For a definition that looks up and is not spec, every finite depth
---   has a Seen of the body on its component:
+--   has a Seen of the body on its component. Seen follows every subterm
+--   the productivity walk enters, including an unfold nested under a
+--   pair, an application, a match, a λ, or another unfold:
+--     an unfold is seen-nest: the stream or family observation of that
+--     unfold, together with Seen of its seed and of its step;
 --     a stream, and a family whose head does not receive a
 --     block-mentioning tail, is Obs (each head is block-free; the next
 --     subject is the same step at the next seed, including when the
@@ -19,8 +23,11 @@
 --     a family whose head reads the seed is Unrolls (the instantiated
 --     head is block-free and the tail continues under the guard, at
 --     every depth, including a block-free tail and a pair tail);
---     a λ is observed at every block-free argument;
---     a term that is not an unfold stops.
+--     a bare stream whose head reads the seed and whose tail mentions
+--     the block is refused wherever the unfold sits, so it has no Seen;
+--     a binder is observed at every block-free instantiation of its
+--     body, and its domain is Seen;
+--     a leaf that cannot contain an unfold stops.
 --   BlockClosed of the component is component-is-closed, from the
 --   fuel-free reachability. Bodies is that closure plus a BodyShape for
 --   every member, read off checkNu. A spec definition is not walked.
@@ -2152,14 +2159,14 @@ checkDef-open : ∀ k σ i →
        runDecl k σ (Def.dmode d) (Def.dtype d)) >>
     tag (Def.dname d ++s " body") (checkBody k σ i d) >>
     tag (Def.dname d ++s " productivity")
-      (checkNu k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d)) >>
+      (checkNu k σ (component σ i) Vec.[] (Def.dmode d) (Def.dtype d) (Def.dbody d)) >>
     ok tt)
 checkDef-open _ _ _ = refl
 
 checkDef-nu : (k : ℕ) (σ : Sig) (i : ℕ) {d : Def}
   → lookupDef σ i ≡ ok d
   → checkDef k σ i ≡ ok tt
-  → checkNu k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d) ≡ ok tt
+  → checkNu k σ (component σ i) Vec.[] (Def.dmode d) (Def.dtype d) (Def.dbody d) ≡ ok tt
 checkDef-nu k σ i {d} leq eq =
   takeNu (subst opened leq (subst (λ z → z ≡ ok tt) (sym (checkDef-open k σ i)) eq))
   where
@@ -2171,20 +2178,20 @@ checkDef-nu k σ i {d} leq eq =
          runDecl k σ (Def.dmode d′) (Def.dtype d′)) >>
       tag (Def.dname d′ ++s " body") (checkBody k σ i d′) >>
       tag (Def.dname d′ ++s " productivity")
-        (checkNu k σ (component σ i) (Def.dmode d′) (Def.dtype d′) (Def.dbody d′)) >>
+        (checkNu k σ (component σ i) Vec.[] (Def.dmode d′) (Def.dtype d′) (Def.dbody d′)) >>
       ok tt) ≡ ok tt
   Ty = tag (Def.dname d ++s " type")
          (checkTy k σ emptyRec Vec.[] (Def.dtype d) >>
           runDecl k σ (Def.dmode d) (Def.dtype d))
   Bd = tag (Def.dname d ++s " body") (checkBody k σ i d)
   Nu = tag (Def.dname d ++s " productivity")
-         (checkNu k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d))
+         (checkNu k σ (component σ i) Vec.[] (Def.dmode d) (Def.dtype d) (Def.dbody d))
 
   -- tag does not reduce until its result is ok or fail, so >>-ok cannot
   -- split this chain. Each with matches the result, and `in` keeps the
   -- equality to the term that was split.
   takeNu : opened (ok d)
-         → checkNu k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d) ≡ ok tt
+         → checkNu k σ (component σ i) Vec.[] (Def.dmode d) (Def.dtype d) (Def.dbody d) ≡ ok tt
   takeNu eq′ = peelNu (peelMid (peelOuter eq′))
     where
     peelOuter : ((((Ty >> Bd) >> Nu) >> ok tt) ≡ ok tt) → (((Ty >> Bd) >> Nu) ≡ ok tt)
@@ -2198,8 +2205,8 @@ checkDef-nu k σ i {d} leq eq =
     ... | ok _   = eq
 
     peelNu : (Nu ≡ ok tt)
-           → checkNu k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d) ≡ ok tt
-    peelNu eq with checkNu k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d)
+           → checkNu k σ (component σ i) Vec.[] (Def.dmode d) (Def.dtype d) (Def.dbody d) ≡ ok tt
+    peelNu eq with checkNu k σ (component σ i) Vec.[] (Def.dmode d) (Def.dtype d) (Def.dbody d)
     ... | fail _ = ⊥-elim (fail≢ok eq)
     ... | ok tt  = refl
 
@@ -2209,7 +2216,7 @@ checkSig-nu : (k : ℕ) (σ : Sig) (i : ℕ) {d : Def}
   → checkSig k σ ≡ ok tt
   → lookupDef σ i ≡ ok d
   → (Def.dmode d ≡ spec → ⊥)
-  → checkNu k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d) ≡ ok tt
+  → checkNu k σ (component σ i) Vec.[] (Def.dmode d) (Def.dtype d) (Def.dbody d) ≡ ok tt
 checkSig-nu k σ i eq leq _ =
   checkDef-nu k σ i leq
     (checkDefs-at k σ 0 (Sig.defs σ)
@@ -2299,125 +2306,162 @@ takeUnf k σ B s f seq geq with whnf k σ f
   unguarded-ok (seedFlows nothing f′ ∧ hasSelf B s) seq
 
 mutual
-  seedWalk-all : ∀ {n} k σ B (t : Tm n) → seedWalk k σ B t ≡ ok tt → AllUnf k σ B t
+  -- Γ and the mode are the ones seedWalk walked under. bareTail's ok is
+  -- not stored: the walk equation already says it returned ok, and a bare
+  -- stream whose head reads the seed is refused there.
+  seedWalk-all : ∀ {n} k σ B (Γ : Ctx n) m (t : Tm n)
+    → seedWalk k σ B Γ m t ≡ ok tt → AllUnf k σ B t
   -- seedGuard reduces to whnf, a Result (Tm _), so the chain cannot be
   -- split by unifying with >> of two Result ⊤. Open the clause and
   -- case on each result, as checkDef-nu does for tags.
-  seedWalk-all k σ B (unf s f) eq =
+  seedWalk-all k σ B Γ m (unf s f) eq =
     fromOpen (subst (λ z → z ≡ ok tt) unf-open eq)
     where
-    unf-open : seedWalk k σ B (unf s f) ≡
-        (((seedGuard k σ B s f >> (whnf k σ f >>= guardedStep B))
-           >> seedWalk k σ B s) >> seedWalk k σ B f)
+    unf-open : seedWalk k σ B Γ m (unf s f) ≡
+        ((((seedGuard k σ B s f >> (whnf k σ f >>= guardedStep B))
+           >> bareTail k σ B Γ m s f)
+           >> seedWalk k σ B Γ m s) >> seedWalk k σ B Γ m f)
     unf-open = refl
     SG = seedGuard k σ B s f
     GS = whnf k σ f >>= guardedStep B
-    WS = seedWalk k σ B s
-    WF = seedWalk k σ B f
-    fromOpen : (((SG >> GS) >> WS) >> WF) ≡ ok tt → AllUnf k σ B (unf s f)
-    fromOpen eq with (SG >> GS) >> WS in eWS
+    BT = bareTail k σ B Γ m s f
+    WS = seedWalk k σ B Γ m s
+    WF = seedWalk k σ B Γ m f
+    fromOpen : ((((SG >> GS) >> BT) >> WS) >> WF) ≡ ok tt → AllUnf k σ B (unf s f)
+    fromOpen eq with ((SG >> GS) >> BT) >> WS in eWS
     ... | fail _ = ⊥-elim (fail≢ok eq)
-    ... | ok tt with SG >> GS in eGS
+    ... | ok tt with (SG >> GS) >> BT in eBT
     ... | fail _ = ⊥-elim (fail≢ok eWS)
+    ... | ok tt with SG >> GS in eGS
+    ... | fail _ = ⊥-elim (fail≢ok eBT)
     ... | ok tt with SG in eSG
     ... | fail _ = ⊥-elim (fail≢ok eGS)
     ... | ok tt =
       let f′ , weq , geq , sg , bit = takeUnf k σ B s f eSG eGS
-      in f′ , weq , geq , sg , bit , seedWalk-all k σ B s eWS , seedWalk-all k σ B f eq
-  seedWalk-all k σ B (app f a) eq =
-    let ef , ea = split>> eq in seedWalk-all k σ B f ef , seedWalk-all k σ B a ea
-  seedWalk-all k σ B (su t) eq = seedWalk-all k σ B t eq
-  seedWalk-all k σ B (lam _ A t) eq =
-    let eA , et = split>> eq in seedWalk-all k σ B A eA , seedWalk-all k σ B t et
-  seedWalk-all k σ B (pi _ A C) eq =
-    let eA , eC = split>> eq in seedWalk-all k σ B A eA , seedWalk-all k σ B C eC
-  seedWalk-all k σ B (mData e P bs) eq =
-    let eep , ebs = split>> {r = seedWalk k σ B e >> seedWalk k σ B P} eq
-        ee , eP = split>> {r = seedWalk k σ B e} eep
-    in seedWalk-all k σ B e ee , seedWalk-all k σ B P eP , seedWalkList-all k σ B bs ebs
-  seedWalk-all k σ B (mNat e P z s) eq =
-    let e3 , es = split>> {r = (seedWalk k σ B e >> seedWalk k σ B P) >> seedWalk k σ B z} eq
-        eep , ez = split>> {r = seedWalk k σ B e >> seedWalk k σ B P} e3
-        ee , eP = split>> {r = seedWalk k σ B e} eep
-    in seedWalk-all k σ B e ee , seedWalk-all k σ B P eP
-     , seedWalk-all k σ B z ez , seedWalk-all k σ B s es
-  seedWalk-all k σ B (mEmp e P) eq =
-    let ee , eP = split>> eq in seedWalk-all k σ B e ee , seedWalk-all k σ B P eP
-  seedWalk-all k σ B (mUnit e P u) eq =
-    let eep , eu = split>> {r = seedWalk k σ B e >> seedWalk k σ B P} eq
-        ee , eP = split>> {r = seedWalk k σ B e} eep
-    in seedWalk-all k σ B e ee , seedWalk-all k σ B P eP , seedWalk-all k σ B u eu
-  seedWalk-all k σ B (idt A a b) eq =
-    let eAa , eb = split>> {r = seedWalk k σ B A >> seedWalk k σ B a} eq
-        eA , ea = split>> {r = seedWalk k σ B A} eAa
-    in seedWalk-all k σ B A eA , seedWalk-all k σ B a ea , seedWalk-all k σ B b eb
-  seedWalk-all k σ B (rwt e P t) eq =
-    let eep , et = split>> {r = seedWalk k σ B e >> seedWalk k σ B P} eq
-        ee , eP = split>> {r = seedWalk k σ B e} eep
-    in seedWalk-all k σ B e ee , seedWalk-all k σ B P eP , seedWalk-all k σ B t et
-  seedWalk-all k σ B (ann e A) eq =
-    let ee , eA = split>> eq in seedWalk-all k σ B e ee , seedWalk-all k σ B A eA
-  seedWalk-all k σ B (prod A C) eq =
-    let eA , eC = split>> eq in seedWalk-all k σ B A eA , seedWalk-all k σ B C eC
-  seedWalk-all k σ B (pair a b) eq =
-    let ea , eb = split>> eq in seedWalk-all k σ B a ea , seedWalk-all k σ B b eb
-  seedWalk-all k σ B (letp e t) eq =
-    let ee , et = split>> eq in seedWalk-all k σ B e ee , seedWalk-all k σ B t et
-  seedWalk-all k σ B (nu F) eq = seedWalk-all k σ B F eq
-  seedWalk-all k σ B (ucons u) eq = seedWalk-all k σ B u eq
-  seedWalk-all k σ B (tensor d u) eq =
-    let ed , eu = split>> eq in seedWalk-all k σ B d ed , seedWalk-all k σ B u eu
-  seedWalk-all k σ B (addi x y) eq =
-    let ex , ey = split>> eq in seedWalk-all k σ B x ex , seedWalk-all k σ B y ey
-  seedWalk-all k σ B (muli x y) eq =
-    let ex , ey = split>> eq in seedWalk-all k σ B x ex , seedWalk-all k σ B y ey
-  seedWalk-all k σ B (addt x y) eq =
-    let ex , ey = split>> eq in seedWalk-all k σ B x ex , seedWalk-all k σ B y ey
-  seedWalk-all k σ B (toi64 t) eq = seedWalk-all k σ B t eq
-  seedWalk-all k σ B (packi x y) eq =
-    let ex , ey = split>> eq in seedWalk-all k σ B x ex , seedWalk-all k σ B y ey
-  seedWalk-all _ _ _ (var _) _ = tt
-  seedWalk-all _ _ _ typ _ = tt
-  seedWalk-all _ _ _ nat _ = tt
-  seedWalk-all _ _ _ ze _ = tt
-  seedWalk-all _ _ _ unit _ = tt
-  seedWalk-all _ _ _ one _ = tt
-  seedWalk-all _ _ _ empty _ = tt
-  seedWalk-all _ _ _ (dty _) _ = tt
-  seedWalk-all _ _ _ (ctor _ _) _ = tt
-  seedWalk-all _ _ _ rfl _ = tt
-  seedWalk-all _ _ _ (def _) _ = tt
-  seedWalk-all _ _ _ i64 _ = tt
-  seedWalk-all _ _ _ f32ty _ = tt
+      in f′ , weq , geq , sg , bit
+       , seedWalk-all k σ B Γ m s eWS , seedWalk-all k σ B Γ m f eq
+  seedWalk-all k σ B Γ m (app f a) eq =
+    let ef , ea = split>> eq
+    in seedWalk-all k σ B Γ m f ef , seedWalk-all k σ B Γ m a ea
+  seedWalk-all k σ B Γ m (su t) eq = seedWalk-all k σ B Γ m t eq
+  seedWalk-all k σ B Γ m (lam q A t) eq =
+    let eA , et = split>> eq
+    in seedWalk-all k σ B Γ m A eA , seedWalk-all k σ B (ext Γ q A) m t et
+  seedWalk-all k σ B Γ m (pi q A C) eq =
+    let eA , eC = split>> eq
+    in seedWalk-all k σ B Γ m A eA , seedWalk-all k σ B (ext Γ q A) m C eC
+  seedWalk-all k σ B Γ m (mData e P bs) eq =
+    let eep , ebs = split>> {r = seedWalk k σ B Γ m e >> seedWalk k σ B (mDataΓ k σ Γ m e) m P} eq
+        ee , eP = split>> {r = seedWalk k σ B Γ m e} eep
+    in seedWalk-all k σ B Γ m e ee
+     , seedWalk-all k σ B (mDataΓ k σ Γ m e) m P eP
+     , seedWalkList-all k σ B Γ m bs ebs
+  seedWalk-all k σ B Γ m (mNat e P z s) eq =
+    let e3 , es = split>> {r = (seedWalk k σ B Γ m e >> seedWalk k σ B (ext Γ affine nat) m P) >> seedWalk k σ B Γ m z} eq
+        eep , ez = split>> {r = seedWalk k σ B Γ m e >> seedWalk k σ B (ext Γ affine nat) m P} e3
+        ee , eP = split>> {r = seedWalk k σ B Γ m e} eep
+    in seedWalk-all k σ B Γ m e ee
+     , seedWalk-all k σ B (ext Γ affine nat) m P eP
+     , seedWalk-all k σ B Γ m z ez
+     , seedWalk-all k σ B (ext Γ (predQty Γ e) nat) m s es
+  seedWalk-all k σ B Γ m (mEmp e P) eq =
+    let ee , eP = split>> eq
+    in seedWalk-all k σ B Γ m e ee , seedWalk-all k σ B (ext Γ affine empty) m P eP
+  seedWalk-all k σ B Γ m (mUnit e P u) eq =
+    let eep , eu = split>> {r = seedWalk k σ B Γ m e >> seedWalk k σ B (ext Γ affine unit) m P} eq
+        ee , eP = split>> {r = seedWalk k σ B Γ m e} eep
+    in seedWalk-all k σ B Γ m e ee
+     , seedWalk-all k σ B (ext Γ affine unit) m P eP
+     , seedWalk-all k σ B Γ m u eu
+  seedWalk-all k σ B Γ m (idt A a b) eq =
+    let eAa , eb = split>> {r = seedWalk k σ B Γ m A >> seedWalk k σ B Γ m a} eq
+        eA , ea = split>> {r = seedWalk k σ B Γ m A} eAa
+    in seedWalk-all k σ B Γ m A eA
+     , seedWalk-all k σ B Γ m a ea
+     , seedWalk-all k σ B Γ m b eb
+  seedWalk-all k σ B Γ m (rwt e P t) eq =
+    let eep , et = split>> {r = seedWalk k σ B Γ m e >> seedWalk k σ B (rwtΓ k σ Γ m e) m P} eq
+        ee , eP = split>> {r = seedWalk k σ B Γ m e} eep
+    in seedWalk-all k σ B Γ m e ee
+     , seedWalk-all k σ B (rwtΓ k σ Γ m e) m P eP
+     , seedWalk-all k σ B Γ m t et
+  seedWalk-all k σ B Γ m (ann e A) eq =
+    let ee , eA = split>> eq
+    in seedWalk-all k σ B Γ m e ee , seedWalk-all k σ B Γ m A eA
+  seedWalk-all k σ B Γ m (prod A C) eq =
+    let eA , eC = split>> eq
+    in seedWalk-all k σ B Γ m A eA , seedWalk-all k σ B Γ m C eC
+  seedWalk-all k σ B Γ m (pair a b) eq =
+    let ea , eb = split>> eq
+    in seedWalk-all k σ B Γ m a ea , seedWalk-all k σ B Γ m b eb
+  seedWalk-all k σ B Γ m (letp e t) eq =
+    let ee , et = split>> eq
+    in seedWalk-all k σ B Γ m e ee , seedWalk-all k σ B (letΓ k σ Γ m e) m t et
+  seedWalk-all k σ B Γ m (nu F) eq = seedWalk-all k σ B (nuΓ Γ F) m F eq
+  seedWalk-all k σ B Γ m (ucons u) eq = seedWalk-all k σ B Γ m u eq
+  seedWalk-all k σ B Γ m (tensor d u) eq =
+    let ed , eu = split>> eq
+    in seedWalk-all k σ B Γ m d ed , seedWalk-all k σ B Γ m u eu
+  seedWalk-all k σ B Γ m (addi x y) eq =
+    let ex , ey = split>> eq
+    in seedWalk-all k σ B Γ m x ex , seedWalk-all k σ B Γ m y ey
+  seedWalk-all k σ B Γ m (muli x y) eq =
+    let ex , ey = split>> eq
+    in seedWalk-all k σ B Γ m x ex , seedWalk-all k σ B Γ m y ey
+  seedWalk-all k σ B Γ m (addt x y) eq =
+    let ex , ey = split>> eq
+    in seedWalk-all k σ B Γ m x ex , seedWalk-all k σ B Γ m y ey
+  seedWalk-all k σ B Γ m (toi64 t) eq = seedWalk-all k σ B Γ m t eq
+  seedWalk-all k σ B Γ m (packi x y) eq =
+    let ex , ey = split>> eq
+    in seedWalk-all k σ B Γ m x ex , seedWalk-all k σ B Γ m y ey
+  seedWalk-all _ _ _ _ _ (var _) _ = tt
+  seedWalk-all _ _ _ _ _ typ _ = tt
+  seedWalk-all _ _ _ _ _ nat _ = tt
+  seedWalk-all _ _ _ _ _ ze _ = tt
+  seedWalk-all _ _ _ _ _ unit _ = tt
+  seedWalk-all _ _ _ _ _ one _ = tt
+  seedWalk-all _ _ _ _ _ empty _ = tt
+  seedWalk-all _ _ _ _ _ (dty _) _ = tt
+  seedWalk-all _ _ _ _ _ (ctor _ _) _ = tt
+  seedWalk-all _ _ _ _ _ rfl _ = tt
+  seedWalk-all _ _ _ _ _ (def _) _ = tt
+  seedWalk-all _ _ _ _ _ i64 _ = tt
+  seedWalk-all _ _ _ _ _ f32ty _ = tt
 
-  seedWalkList-all : ∀ {n} k σ B (ts : List (Tm n))
-    → seedWalkList k σ B ts ≡ ok tt → AllUnfList k σ B ts
-  seedWalkList-all _ _ _ [] _ = tt
-  seedWalkList-all k σ B (t ∷ ts) eq =
+  seedWalkList-all : ∀ {n} k σ B (Γ : Ctx n) m (ts : List (Tm n))
+    → seedWalkList k σ B Γ m ts ≡ ok tt → AllUnfList k σ B ts
+  seedWalkList-all _ _ _ _ _ [] _ = tt
+  seedWalkList-all k σ B Γ m (t ∷ ts) eq =
     let et , ets = split>> eq
-    in seedWalk-all k σ B t et , seedWalkList-all k σ B ts ets
+    in seedWalk-all k σ B Γ m t et , seedWalkList-all k σ B Γ m ts ets
 
 -- checkNu of a run or evidence body runs seedWalk before anything else.
-nu-seeds : ∀ {n} k σ B m (T t : Tm n)
-  → checkNu k σ B m T t ≡ ok tt
+-- The context is the one checkNu was given. A closed definition starts
+-- at the empty context.
+nu-seeds : ∀ {n} k σ B (Γ : Ctx n) m (T t : Tm n)
+  → checkNu k σ B Γ m T t ≡ ok tt
   → (m ≡ spec → ⊥)
   → AllUnf k σ B t
-nu-seeds _ _ _ spec _ _ _ no = ⊥-elim (no refl)
-nu-seeds zero _ _ run _ _ eq _ = ⊥-elim (fail≢ok eq)
-nu-seeds zero _ _ evid _ _ eq _ = ⊥-elim (fail≢ok eq)
-nu-seeds (suc k) σ B run T t eq _ = seedWalk-all (suc k) σ B t (walk-of eq)
+nu-seeds _ _ _ _ spec _ _ _ no = ⊥-elim (no refl)
+nu-seeds zero _ _ _ run _ _ eq _ = ⊥-elim (fail≢ok eq)
+nu-seeds zero _ _ _ evid _ _ eq _ = ⊥-elim (fail≢ok eq)
+nu-seeds (suc k) σ B Γ run T t eq _ = seedWalk-all (suc k) σ B Γ run t (walk-of eq)
   where
-  -- checkNu is (seedWalk >> whnf) >>= go. The whnf result is a term,
-  -- so this is not a >> of two Result ⊤. The walk is the left result.
-  walk-of : checkNu (suc k) σ B run T t ≡ ok tt → seedWalk (suc k) σ B t ≡ ok tt
-  walk-of eq with membersRun σ B | seedWalk (suc k) σ B t
+  -- checkNu is (membersRun >> seedWalk) >> (whnf >>= go). The whnf
+  -- result is a term, so this is not a >> of two Result ⊤. The walk
+  -- is the left result, at Γ.
+  walk-of : checkNu (suc k) σ B Γ run T t ≡ ok tt
+          → seedWalk (suc k) σ B Γ run t ≡ ok tt
+  walk-of eq with membersRun σ B | seedWalk (suc k) σ B Γ run t
   ... | fail _ | _      = ⊥-elim (fail≢ok eq)
   ... | ok tt  | fail _ = ⊥-elim (fail≢ok eq)
   ... | ok tt  | ok tt  = refl
-nu-seeds (suc k) σ B evid T t eq _ = seedWalk-all (suc k) σ B t (walk-of eq)
+nu-seeds (suc k) σ B Γ evid T t eq _ = seedWalk-all (suc k) σ B Γ evid t (walk-of eq)
   where
-  walk-of : checkNu (suc k) σ B evid T t ≡ ok tt → seedWalk (suc k) σ B t ≡ ok tt
-  walk-of eq with membersRun σ B | seedWalk (suc k) σ B t
+  walk-of : checkNu (suc k) σ B Γ evid T t ≡ ok tt
+          → seedWalk (suc k) σ B Γ evid t ≡ ok tt
+  walk-of eq with membersRun σ B | seedWalk (suc k) σ B Γ evid t
   ... | fail _ | _      = ⊥-elim (fail≢ok eq)
   ... | ok tt  | fail _ = ⊥-elim (fail≢ok eq)
   ... | ok tt  | ok tt  = refl
@@ -2430,7 +2474,7 @@ checkSig-guarded : (k : ℕ) (σ : Sig) (i : ℕ) {d : Def}
   → (Def.dmode d ≡ spec → ⊥)
   → AllUnf k σ (component σ i) (Def.dbody d)
 checkSig-guarded k σ i {d} eq leq ns =
-  nu-seeds k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d)
+  nu-seeds k σ (component σ i) Vec.[] (Def.dmode d) (Def.dtype d) (Def.dbody d)
     (checkSig-nu k σ i eq leq ns) ns
 
 -- The body of a λ. natsFrom is a λ whose body is the unfold.
@@ -2798,25 +2842,105 @@ shapeOf _ σ B (packi x y) _ = shape-rest {σ} B (packi x y) refl
 -- walked; a run or evidence component that contains a spec is refused
 -- by membersRun, so opening a call never reaches a body the walk missed.
 --
--- Streams, and families whose head does not receive the block, are Obs
--- at spec. whnf unfolds every definition, so the step reduction is the
--- spec-mode one whnf-red returns. Families whose head reads the seed
--- are Unrolls: the instantiated head is block-free and the tail
--- continues under the guard. A λ is observed at every block-free
--- argument. Acceptance checks the open body; an argument that mentions
--- the block is not a seed the checker validated. A term that is not an
--- unfold stops. Normalising a block-free head (Empty-evid) and
--- termination of the descent check are not this theorem.
+-- see-term follows AllUnf, so an unfold under a pair, an application,
+-- a match, a λ, or another unfold is observed, not stopped at the
+-- surrounding constructor. observe is only the shape of an unfold the
+-- walk accepted. Streams, and families whose head does not receive the
+-- block, are Obs at spec. whnf unfolds every definition, so the step
+-- reduction is the spec-mode one whnf-red returns. Families whose head
+-- reads the seed are Unrolls: the instantiated head is block-free and
+-- the tail continues under the guard. A bare stream with that step is
+-- refused by bareTail, so it never has an AllUnf. A binder is observed
+-- at every block-free instantiation. Acceptance checks the open body;
+-- an argument that mentions the block is not a seed the checker
+-- validated. A leaf stops. Normalising a block-free head (Empty-evid)
+-- and termination of the descent check are not this theorem.
 ------------------------------------------------------------------------
 
-data Seen (σ : Sig) (B : List ℕ) : ℕ → Tm 0 → Set where
-  seen-obs     : ∀ {d t} → Obs σ spec B false d t → Seen σ B d t
-  seen-unrolls : ∀ {d t} → Unrolls σ B d t → Seen σ B d t
-  seen-free    : ∀ {d t} → hasSelf B t ≡ false → Seen σ B d t
-  seen-lam     : ∀ {d q A t}
-    → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst t a))
-    → Seen σ B d (lam q A t)
-  seen-stop    : ∀ {d t} → unfoldBody t ≡ false → Seen σ B d t
+mutual
+  data Seen (σ : Sig) (B : List ℕ) : ℕ → Tm 0 → Set where
+    seen-obs     : ∀ {d t} → Obs σ spec B false d t → Seen σ B d t
+    seen-unrolls : ∀ {d t} → Unrolls σ B d t → Seen σ B d t
+    seen-free    : ∀ {d t} → hasSelf B t ≡ false → Seen σ B d t
+    seen-lam     : ∀ {d q A t}
+      → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst t a))
+      → Seen σ B d (lam q A t)
+    seen-stop    : ∀ {d t} → unfoldBody t ≡ false → Seen σ B d t
+    -- The unfold's own observation, and Seen of the seed and the step.
+    seen-nest : ∀ {d s f}
+      → Seen σ B d (unf s f)
+      → Seen σ B d s
+      → Seen σ B d f
+      → Seen σ B d (unf s f)
+    seen-bind : ∀ {d q A t}
+      → Seen σ B d A
+      → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst t a))
+      → Seen σ B d (lam q A t)
+    seen-pi : ∀ {d q A C}
+      → Seen σ B d A
+      → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst C a))
+      → Seen σ B d (pi q A C)
+    seen-app : ∀ {d f a}
+      → Seen σ B d f → Seen σ B d a → Seen σ B d (app f a)
+    seen-su : ∀ {d t} → Seen σ B d t → Seen σ B d (su t)
+    seen-pair : ∀ {d a b}
+      → Seen σ B d a → Seen σ B d b → Seen σ B d (pair a b)
+    seen-prod : ∀ {d A C}
+      → Seen σ B d A → Seen σ B d C → Seen σ B d (prod A C)
+    seen-letp : ∀ {d e t}
+      → Seen σ B d e
+      → (∀ a b → hasSelf B a ≡ false → hasSelf B b ≡ false
+           → Seen σ B d (inst₂ t a b))
+      → Seen σ B d (letp e t)
+    seen-nu : ∀ {d F}
+      → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst F a))
+      → Seen σ B d (nu F)
+    seen-mnat : ∀ {d e P z s}
+      → Seen σ B d e
+      → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst P a))
+      → Seen σ B d z
+      → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst s a))
+      → Seen σ B d (mNat e P z s)
+    seen-munit : ∀ {d e P u}
+      → Seen σ B d e
+      → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst P a))
+      → Seen σ B d u
+      → Seen σ B d (mUnit e P u)
+    seen-memp : ∀ {d e P}
+      → Seen σ B d e
+      → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst P a))
+      → Seen σ B d (mEmp e P)
+    seen-mdata : ∀ {d e P bs}
+      → Seen σ B d e
+      → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst P a))
+      → SeenList σ B d bs
+      → Seen σ B d (mData e P bs)
+    seen-rwt : ∀ {d e P t}
+      → Seen σ B d e
+      → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst P a))
+      → Seen σ B d t
+      → Seen σ B d (rwt e P t)
+    seen-ann : ∀ {d e A}
+      → Seen σ B d e → Seen σ B d A → Seen σ B d (ann e A)
+    seen-idt : ∀ {d A a b}
+      → Seen σ B d A → Seen σ B d a → Seen σ B d b → Seen σ B d (idt A a b)
+    seen-ucons : ∀ {d u} → Seen σ B d u → Seen σ B d (ucons u)
+    seen-tensor : ∀ {d x u}
+      → Seen σ B d x → Seen σ B d u → Seen σ B d (tensor x u)
+    seen-addi : ∀ {d x y}
+      → Seen σ B d x → Seen σ B d y → Seen σ B d (addi x y)
+    seen-muli : ∀ {d x y}
+      → Seen σ B d x → Seen σ B d y → Seen σ B d (muli x y)
+    seen-addt : ∀ {d t u}
+      → Seen σ B d t → Seen σ B d u → Seen σ B d (addt t u)
+    seen-toi64 : ∀ {d t} → Seen σ B d t → Seen σ B d (toi64 t)
+    seen-packi : ∀ {d x y}
+      → Seen σ B d x → Seen σ B d y → Seen σ B d (packi x y)
+
+  data SeenList (σ : Sig) (B : List ℕ) : ℕ → List (Tm 0) → Set where
+    seen-nil  : ∀ {d} → SeenList σ B d []
+    seen-cons : ∀ {d t ts}
+      → Seen σ B d t → SeenList σ B d ts → SeenList σ B d (t ∷ ts)
 
 extend : ∀ {n} → (Fin n → Tm 0) → Tm 0 → Fin (suc n) → Tm 0
 extend ρ a zero    = a
@@ -2829,6 +2953,14 @@ extend-hs : ∀ {n} (B : List ℕ) (ρ : Fin n → Tm 0) (a : Tm 0)
 extend-hs _ _ _ _  ha zero    = ha
 extend-hs _ ρ _ hf _  (suc y) = hf y
 
+extend-hs₂ : ∀ {n} (B : List ℕ) (ρ : Fin n → Tm 0) (a b : Tm 0)
+  → (∀ x → hasSelf B (ρ x) ≡ false)
+  → hasSelf B a ≡ false
+  → hasSelf B b ≡ false
+  → ∀ y → hasSelf B (extend (extend ρ a) b y) ≡ false
+extend-hs₂ B ρ a b hf ha hb =
+  extend-hs B (extend ρ a) b (extend-hs B ρ a hf ha) hb
+
 extend-lifts : ∀ {n} (ρ : Fin n → Tm 0) (a : Tm 0)
   → (λ x → sub (instσ a) (lifts ρ x)) ≗ extend ρ a
 extend-lifts _ a zero = refl
@@ -2840,6 +2972,28 @@ sub-extend : ∀ {n} (ρ : Fin n → Tm 0) (a : Tm 0) (t : Tm (suc n))
   → sub (extend ρ a) t ≡ inst (sub (lifts ρ) t) a
 sub-extend ρ a t =
   sym (trans (sub-sub (instσ a) (lifts ρ) t) (sub-ext (extend-lifts ρ a) t))
+
+-- Two binders at once. var 0 is the second component, var 1 the first,
+-- matching inst₂ and the substitution letp builds.
+letp-open : ∀ {n} (ρ : Fin n → Tm 0) (a b : Tm 0) (t : Tm (suc (suc n)))
+  → sub (extend (extend ρ a) b) t ≡ inst₂ (sub (lifts (lifts ρ)) t) a b
+letp-open {n} ρ a b t =
+  trans (sub-ext (λ i → sym (comp≡ i)) t) (sym open≡)
+  where
+  comp : Fin (suc (suc n)) → Tm 0
+  comp i = sub (instσ a) (sub (instσ (wk b)) (lifts (lifts ρ) i))
+
+  comp≡ : ∀ i → comp i ≡ extend (extend ρ a) b i
+  comp≡ zero          = inst-wk b a
+  comp≡ (suc zero)    = refl
+  comp≡ (suc (suc i)) =
+    trans (cong (sub (instσ a)) (inst-wk (wk (ρ i)) (wk b))) (inst-wk (ρ i) a)
+
+  open≡ : inst₂ (sub (lifts (lifts ρ)) t) a b ≡ sub comp t
+  open≡ =
+    trans (sub-sub (instσ a) (instσ (wk b)) (sub (lifts (lifts ρ)) t))
+      (trans (sub-sub (λ x → sub (instσ a) (instσ (wk b) x)) (lifts (lifts ρ)) t)
+        (sub-ext (λ i → sym (sub-sub (instσ a) (instσ (wk b)) (lifts (lifts ρ) i))) t))
 
 closed-free : ∀ (B : List ℕ) (x : Fin 0) → hasSelf B (var x) ≡ false
 closed-free _ ()
@@ -2894,8 +3048,8 @@ see-other _ _ (packi _ _) _ _ _ _ = seen-stop refl
 -- streamReads false: the next seed is not fed to a head that would read
 -- a block mention, so the same step is observed at every depth.
 -- streamReads true: the head reads the seed and the tail mentions the
--- block. Acceptance allows that only off a bare stream, and the tail is
--- the next family value.
+-- block. A bare stream with that step is refused, so an accepted unfold
+-- recorded here is a family: the tail is the next family value.
 see-red : ∀ {σ B s step q A h t}
   → Bodies σ B
   → σ ⊢[ spec ] step ⇛* lam q A (pair h t)
@@ -2950,22 +3104,134 @@ observe {σ} {B = B} _ (sh-rpair {h = h} red hh _) ρ hf d =
 observe {σ} {B = B} _ (sh-other {t = t} p) ρ hf d =
   see-other σ B t p ρ hf d
 
-nu-members : ∀ {n} k σ B m (T t : Tm n)
-  → checkNu k σ B m T t ≡ ok tt
+-- One binder, opened at a block-free argument. sub-extend is the
+-- equation between the extended substitution and inst.
+open1 : ∀ {n} (σ : Sig) (B : List ℕ) (k : ℕ) (t : Tm (suc n))
+  → Bodies σ B
+  → AllUnf k σ B t
+  → (ρ : Fin n → Tm 0)
+  → (∀ x → hasSelf B (ρ x) ≡ false)
+  → ∀ d a → hasSelf B a ≡ false → Seen σ B d (inst (sub (lifts ρ) t) a)
+
+-- Seen of every subterm AllUnf records. The recursion is on that
+-- record, which follows the term. observe is called only on an unfold,
+-- and the shape it reads does not call back here.
+see-term : ∀ {n} k (σ : Sig) (B : List ℕ) (t : Tm n)
+  → Bodies σ B
+  → AllUnf k σ B t
+  → (ρ : Fin n → Tm 0)
+  → (∀ x → hasSelf B (ρ x) ≡ false)
+  → ∀ d → Seen σ B d (sub ρ t)
+see-list : ∀ {n} k (σ : Sig) (B : List ℕ) (ts : List (Tm n))
+  → Bodies σ B
+  → AllUnfList k σ B ts
+  → (ρ : Fin n → Tm 0)
+  → (∀ x → hasSelf B (ρ x) ≡ false)
+  → ∀ d → SeenList σ B d (subList ρ ts)
+
+see-term k σ B (unf s f) bod (u@(_ , _ , _ , _ , _ , as , af)) ρ hf d =
+  seen-nest
+    (observe bod (shapeOf k σ B (unf s f) u) ρ hf d)
+    (see-term k σ B s bod as ρ hf d)
+    (see-term k σ B f bod af ρ hf d)
+see-term k σ B (app f a) bod (uf , ua) ρ hf d =
+  seen-app (see-term k σ B f bod uf ρ hf d) (see-term k σ B a bod ua ρ hf d)
+see-term k σ B (su t) bod ut ρ hf d = seen-su (see-term k σ B t bod ut ρ hf d)
+see-term k σ B (lam q A t) bod (uA , ut) ρ hf d =
+  seen-bind (see-term k σ B A bod uA ρ hf d)
+    (open1 σ B k t bod ut ρ hf d)
+see-term k σ B (pi q A C) bod (uA , uC) ρ hf d =
+  seen-pi (see-term k σ B A bod uA ρ hf d)
+    (open1 σ B k C bod uC ρ hf d)
+see-term k σ B (mData e P bs) bod (ue , uP , ubs) ρ hf d =
+  seen-mdata (see-term k σ B e bod ue ρ hf d)
+    (open1 σ B k P bod uP ρ hf d)
+    (see-list k σ B bs bod ubs ρ hf d)
+see-term k σ B (mNat e P z s) bod (ue , uP , uz , us) ρ hf d =
+  seen-mnat (see-term k σ B e bod ue ρ hf d)
+    (open1 σ B k P bod uP ρ hf d)
+    (see-term k σ B z bod uz ρ hf d)
+    (open1 σ B k s bod us ρ hf d)
+see-term k σ B (mEmp e P) bod (ue , uP) ρ hf d =
+  seen-memp (see-term k σ B e bod ue ρ hf d) (open1 σ B k P bod uP ρ hf d)
+see-term k σ B (mUnit e P u) bod (ue , uP , uu) ρ hf d =
+  seen-munit (see-term k σ B e bod ue ρ hf d)
+    (open1 σ B k P bod uP ρ hf d)
+    (see-term k σ B u bod uu ρ hf d)
+see-term k σ B (idt A a b) bod (uA , ua , ub) ρ hf d =
+  seen-idt (see-term k σ B A bod uA ρ hf d)
+    (see-term k σ B a bod ua ρ hf d)
+    (see-term k σ B b bod ub ρ hf d)
+see-term k σ B (rwt e P t) bod (ue , uP , ut) ρ hf d =
+  seen-rwt (see-term k σ B e bod ue ρ hf d)
+    (open1 σ B k P bod uP ρ hf d)
+    (see-term k σ B t bod ut ρ hf d)
+see-term k σ B (ann e A) bod (ue , uA) ρ hf d =
+  seen-ann (see-term k σ B e bod ue ρ hf d) (see-term k σ B A bod uA ρ hf d)
+see-term k σ B (prod A C) bod (uA , uC) ρ hf d =
+  seen-prod (see-term k σ B A bod uA ρ hf d) (see-term k σ B C bod uC ρ hf d)
+see-term k σ B (pair a b) bod (ua , ub) ρ hf d =
+  seen-pair (see-term k σ B a bod ua ρ hf d) (see-term k σ B b bod ub ρ hf d)
+see-term k σ B (letp e t) bod (ue , ut) ρ hf d =
+  seen-letp (see-term k σ B e bod ue ρ hf d)
+    (λ a b ha hb →
+      subst (Seen σ B d) (letp-open ρ a b t)
+        (see-term k σ B t bod ut (extend (extend ρ a) b)
+          (extend-hs₂ B ρ a b hf ha hb) d))
+see-term k σ B (nu F) bod uF ρ hf d =
+  seen-nu (open1 σ B k F bod uF ρ hf d)
+see-term k σ B (ucons u) bod uu ρ hf d =
+  seen-ucons (see-term k σ B u bod uu ρ hf d)
+see-term k σ B (tensor x u) bod (ux , uu) ρ hf d =
+  seen-tensor (see-term k σ B x bod ux ρ hf d) (see-term k σ B u bod uu ρ hf d)
+see-term k σ B (addi x y) bod (ux , uy) ρ hf d =
+  seen-addi (see-term k σ B x bod ux ρ hf d) (see-term k σ B y bod uy ρ hf d)
+see-term k σ B (muli x y) bod (ux , uy) ρ hf d =
+  seen-muli (see-term k σ B x bod ux ρ hf d) (see-term k σ B y bod uy ρ hf d)
+see-term k σ B (addt x y) bod (ux , uy) ρ hf d =
+  seen-addt (see-term k σ B x bod ux ρ hf d) (see-term k σ B y bod uy ρ hf d)
+see-term k σ B (toi64 t) bod ut ρ hf d =
+  seen-toi64 (see-term k σ B t bod ut ρ hf d)
+see-term k σ B (packi x y) bod (ux , uy) ρ hf d =
+  seen-packi (see-term k σ B x bod ux ρ hf d) (see-term k σ B y bod uy ρ hf d)
+see-term _ _ _ (var x) _ _ ρ hf _ = seen-free (hf x)
+see-term _ _ _ typ _ _ _ _ _ = seen-stop refl
+see-term _ _ _ nat _ _ _ _ _ = seen-stop refl
+see-term _ _ _ ze _ _ _ _ _ = seen-stop refl
+see-term _ _ _ unit _ _ _ _ _ = seen-stop refl
+see-term _ _ _ one _ _ _ _ _ = seen-stop refl
+see-term _ _ _ empty _ _ _ _ _ = seen-stop refl
+see-term _ _ _ (dty _) _ _ _ _ _ = seen-stop refl
+see-term _ _ _ (ctor _ _) _ _ _ _ _ = seen-stop refl
+see-term _ _ _ rfl _ _ _ _ _ = seen-stop refl
+see-term _ _ _ (def _) _ _ _ _ _ = seen-stop refl
+see-term _ _ _ i64 _ _ _ _ _ = seen-stop refl
+see-term _ _ _ f32ty _ _ _ _ _ = seen-stop refl
+
+see-list _ _ _ [] _ _ _ _ _ = seen-nil
+see-list k σ B (t ∷ ts) bod (ut , uts) ρ hf d =
+  seen-cons (see-term k σ B t bod ut ρ hf d) (see-list k σ B ts bod uts ρ hf d)
+
+open1 σ B k t bod u ρ hf d a ha =
+  subst (Seen σ B d) (sub-extend ρ a t)
+    (see-term k σ B t bod u (extend ρ a) (extend-hs B ρ a hf ha) d)
+
+nu-members : ∀ {n} k σ B (Γ : Ctx n) m (T t : Tm n)
+  → checkNu k σ B Γ m T t ≡ ok tt
   → (m ≡ spec → ⊥)
   → membersRun σ B ≡ ok tt
-nu-members _ _ _ spec _ _ _ no = ⊥-elim (no refl)
-nu-members zero _ _ run  _ _ eq _ = ⊥-elim (fail≢ok eq)
-nu-members zero _ _ evid _ _ eq _ = ⊥-elim (fail≢ok eq)
-nu-members (suc k) σ B run  T t eq _ = take-run eq
+nu-members _ _ _ _ spec _ _ _ no = ⊥-elim (no refl)
+nu-members zero _ _ _ run  _ _ eq _ = ⊥-elim (fail≢ok eq)
+nu-members zero _ _ _ evid _ _ eq _ = ⊥-elim (fail≢ok eq)
+nu-members (suc k) σ B Γ run  T t eq _ = take-run eq
   where
-  take-run : checkNu (suc k) σ B run T t ≡ ok tt → membersRun σ B ≡ ok tt
+  take-run : checkNu (suc k) σ B Γ run T t ≡ ok tt → membersRun σ B ≡ ok tt
   take-run eq′ with membersRun σ B
   ... | ok tt  = refl
   ... | fail _ = ⊥-elim (fail≢ok eq′)
-nu-members (suc k) σ B evid T t eq _ = take-evid eq
+nu-members (suc k) σ B Γ evid T t eq _ = take-evid eq
   where
-  take-evid : checkNu (suc k) σ B evid T t ≡ ok tt → membersRun σ B ≡ ok tt
+  take-evid : checkNu (suc k) σ B Γ evid T t ≡ ok tt → membersRun σ B ≡ ok tt
   take-evid eq′ with membersRun σ B
   ... | ok tt  = refl
   ... | fail _ = ⊥-elim (fail≢ok eq′)
@@ -2981,7 +3247,7 @@ member-shape k σ i d0 j eq lk0 ns el = d , lj , moved
   jd = lookup-member σ i j el
   d  = proj₁ jd
   lj = proj₂ jd
-  membersOk = nu-members k σ (component σ i) (Def.dmode d0) (Def.dtype d0) (Def.dbody d0)
+  membersOk = nu-members k σ (component σ i) Vec.[] (Def.dmode d0) (Def.dtype d0) (Def.dbody d0)
                 (checkSig-nu k σ i eq lk0 ns) ns
   nsj = mode-not-spec (Def.dmode d)
           (membersRun-spec σ j d (component σ i) membersOk el lj)
@@ -3006,8 +3272,8 @@ accepted-productive : ∀ k σ
   → ∀ d → Seen σ (component σ i) d (Def.dbody dfn)
 accepted-productive k σ eq i {dfn} lk ns d =
   subst (λ z → Seen σ (component σ i) d z) (sub-var (Def.dbody dfn))
-    (observe (bodies-of k σ i dfn eq lk ns)
-      (shapeOf k σ (component σ i) (Def.dbody dfn)
-        (checkSig-guarded k σ i eq lk ns))
+    (see-term k σ (component σ i) (Def.dbody dfn)
+      (bodies-of k σ i dfn eq lk ns)
+      (checkSig-guarded k σ i eq lk ns)
       var (closed-free (component σ i)) d)
 

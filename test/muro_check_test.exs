@@ -914,6 +914,60 @@ defmodule Muro.CheckTest do
     assert msg =~ "s productivity: unguarded recursive call"
   end
 
+  test "a bare stream nested under a pair is refused when the head reads the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (snd (s m))
+    def s : run Π (+ n : Nat) → Nat × Stream Nat :=
+      λ (+ n : Nat) → (0, unfold n (λ (k : Nat) → (k, f n)))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a bare stream nested under an application is refused when the head reads the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) → (λ (u : Stream Nat) → u) (unfold n (λ (k : Nat) → (k, f n)))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a bare stream nested under a match is refused when the head reads the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) →
+        match n motive (λ _ → Stream Nat)
+          | 0 => unfold n (λ (k : Nat) → (k, f n))
+          | suc _ => unfold n (λ (k : Nat) → (k, f n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a bare stream nested under a pair is accepted when the head ignores the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (snd (s m))
+    def s : run Π (+ n : Nat) → Nat × Stream Nat :=
+      λ (+ n : Nat) → (0, unfold n (λ (k : Nat) → (0, f n)))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
   test "a stream tail that mentions the block is accepted when the head ignores the seed" do
     src = """
     def f : run Π (n : Nat) → Nat :=
