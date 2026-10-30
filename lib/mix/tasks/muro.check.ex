@@ -25,41 +25,8 @@ defmodule Mix.Tasks.Muro.Check do
   A refusal prints the errors after the version line.
   """
 
-  @switches [fuel: :integer]
-
   def run(args) do
     Mix.Tasks.Muro.ensure_started()
-    Mix.shell().info("Muro v#{Mix.Tasks.Muro.version()}")
-
-    {opts, paths, invalid} = OptionParser.parse(args, strict: @switches)
-
-    if invalid != [] do
-      Mix.raise("unknown option: #{inspect(invalid)}")
-    end
-
-    fuel = Keyword.get(opts, :fuel, Muro.Check.default_fuel())
-
-    if fuel <= 0 do
-      Mix.raise("--fuel must be a positive integer")
-    end
-
-    result =
-      case paths do
-        [] -> Muro.Check.check_sig(Muro.Example.book(), fuel: fuel)
-        [path] -> Muro.conforms(path, fuel: fuel)
-        _ -> Mix.raise("expected at most one path")
-      end
-
-    case result do
-      :ok ->
-        Mix.shell().info("All terms check. Evidence never becomes a run.")
-
-      {:ok, lines} ->
-        Mix.shell().info("All terms check. Evidence never becomes a run.")
-        Enum.each(lines, fn line -> Mix.shell().info(line) end)
-
-      {:error, e} ->
-        Mix.raise(e)
-    end
+    Muro.CLI.Output.mix(Muro.CLI.Check.run(args))
   end
 end
