@@ -37,7 +37,7 @@ A `c`, `rust`, or `asm` entry may omit the module. The target ends with `.c`, `.
 {"muro/rounding.muro", "src/rounding.rs", [kind: :rust]}
 ```
 
-A `:c` target also writes the header beside it (`src/rounding.c` writes `src/rounding.h`). That header is a target for `mix muro.gen --check`. These three kinds are not formatted. The body hash is the sha256 of the emitter's text. The comment mark is `// ` for C and Rust, including the `.h`, and `@ ` for Cortex-M assembly. The words of the header are the ones below.
+A `:c` target also writes the header beside it (`src/rounding.c` writes `src/rounding.h`). The source's `#include` names that header (`rounding.h`), the target stem, including when the book is `muro/half.muro`. That header is a target for `mix muro.gen --check`. These three kinds are not formatted. The body hash is the sha256 of the emitter's text. The comment mark is `// ` for C and Rust, including the `.h`, and `@ ` for Cortex-M assembly. The words of the header are the ones below.
 
 A project without `mix.exs` uses `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`. The keys mean the same thing. `backend` there is the default kind. The page is [The executable](binary.md).
 

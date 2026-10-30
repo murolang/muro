@@ -60,7 +60,7 @@ The executable never compiles a host application and never starts one. That hold
 
 `mix muro.emit path.muro --backend c` writes the same `.h` and `.c`. When the working directory is the loaded Mix project, it also writes the NIF through `elixir_make`. The C bytes are the same in both cases. A project that wants the NIF adds `{:elixir_make, "~> 0.10", runtime: false}` and runs the Mix task. See [Emit](emit.md).
 
-`muro gen` with `kind: :c` writes the `.c` target and the `.h` beside it. It does not build a NIF.
+`muro gen` with `kind: :c` writes the `.c` target and the `.h` beside it. The source includes that header by the target stem (`src/rounding.c` from `muro/half.muro` includes `rounding.h`). It does not build a NIF.
 
 ## muro.toml
 
@@ -129,7 +129,7 @@ In a `Cargo.toml`, tables other than `[package.metadata.muro]` and its children 
 
 A missing `kind:` in `muro.exs` is still `:elixir`.
 
-The header is the same two lines and the same hashes as an Elixir target. The comment mark is `// ` for C and Rust, including the `.h`, and `@ ` for Cortex-M assembly. Formatting is left alone for these three kinds, so the body hash is the sha256 of the emitter's text. `muro gen --check` reports a missing, stale, hand-edited, or differing target, or a header that names another version, with the same messages it uses for Elixir. The `.h` beside a C target is checked the same way. See [Committed modules](gen.md).
+The header is the same two lines and the same hashes as an Elixir target. A C source includes the header written beside the target, so `src/rounding.c` from book `muro/half.muro` includes `rounding.h`. The comment mark is `// ` for C and Rust, including the `.h`, and `@ ` for Cortex-M assembly. Formatting is left alone for these three kinds, so the body hash is the sha256 of the emitter's text. `muro gen --check` reports a missing, stale, hand-edited, or differing target, or a header that names another version, with the same messages it uses for Elixir. The `.h` beside a C target is checked the same way. See [Committed modules](gen.md).
 
 ## init
 

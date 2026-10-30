@@ -321,7 +321,11 @@ defmodule Muro.Gen do
     end
   end
 
-  defp native_parts(entry, :c, book, stem) do
+  defp native_parts(entry, :c, book, _stem) do
+    # The header is named from the target (`src/rounding.c` writes
+    # `rounding.h`). The book's stem would include a different file.
+    stem = entry.target |> Path.rootname() |> Path.basename()
+
     case Muro.Emit.C.prepare(book, stem) do
       {:ok, header, source, _sigs} ->
         {:ok, [{entry.target, source}, {header_rel(entry.target), header}]}

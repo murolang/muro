@@ -25,6 +25,43 @@ defmodule Muro.GenNativeTest do
              "lib/half.h: header says Muro 0.0.1, running #{Mix.Tasks.Muro.version()}, from priv/muro/half.muro"
   end
 
+  test "a c target includes the header written beside the target" do
+    dir = tmp()
+    version = Mix.Tasks.Muro.version()
+    File.mkdir_p!(Path.join(dir, "muro"))
+    File.cp!("examples/half_ok.muro", Path.join(dir, "muro/half.muro"))
+
+    File.write!(Path.join(dir, "muro.toml"), """
+    muro = "#{version}"
+    backend = "c"
+
+    [[modules]]
+    book = "muro/half.muro"
+    target = "src/rounding.c"
+    """)
+
+    out = cli!(dir, ["gen"])
+    assert out =~ "written src/rounding.c\n"
+    assert out =~ "written src/rounding.h\n"
+
+    source = File.read!(Path.join(dir, "src/rounding.c"))
+    header = File.read!(Path.join(dir, "src/rounding.h"))
+    assert source =~ ~s|#include "rounding.h"|
+    refute source =~ ~s|#include "half.h"|
+    assert header =~ "muro_nat *half(muro_nat *n);"
+
+    if System.find_executable("cc") do
+      {result, status} =
+        System.cmd("cc", ["-c", "src/rounding.c", "-o", "rounding.o"],
+          cd: dir,
+          stderr_to_stdout: true
+        )
+
+      assert status == 0, result
+      assert File.regular?(Path.join(dir, "rounding.o"))
+    end
+  end
+
   test "a muro.toml rust target is written by muro gen" do
     dir = tmp()
     version = Mix.Tasks.Muro.version()
