@@ -198,7 +198,7 @@ Generated files are not edited by hand. The .muro file is the source. Run mix mu
 Run `muro skills add` to write the commands for this project into AGENTS.md.
 ```
 
-It does not write that file. `muro skills add` does. `muro init` writes the manifest for the directory it finds, and when that manifest already exists it prints a diff and exits 0. See [The executable](binary.md).
+It does not write that file. `muro skills add` does. `muro init` writes the manifest for the directory it finds. When `muro.exs`, `muro.toml`, or `[package.metadata.muro]` already exists, it prints a diff of that file and exits 0. It does not write a second manifest. See [The executable](binary.md).
 
 The three tasks run from the archive, with no Mix project, and inside a project that depends on muro. When a project depends on muro and the archive is also installed, Mix uses the project's copy.
 

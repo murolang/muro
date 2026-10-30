@@ -81,6 +81,48 @@ defmodule Muro.InitBinTest do
     assert File.read!(Path.join(forced, "muro.exs")) =~ "kind: :asm"
   end
 
+  test "init diffs an existing manifest instead of writing a second one" do
+    version = Mix.Tasks.Muro.version()
+
+    cargo = tmp()
+    File.write!(Path.join(cargo, "Cargo.toml"), cargo_toml())
+    assert cli(cargo, ["init"]) =~ "created muro.toml\n"
+    toml = File.read!(Path.join(cargo, "muro.toml"))
+    cargo_before = File.read!(Path.join(cargo, "Cargo.toml"))
+    again = cli(cargo, ["init", "--cargo-metadata"])
+    assert again =~ "--- a/muro.toml\n"
+    assert again =~ "+++ b/muro.toml\n"
+    assert File.read!(Path.join(cargo, "muro.toml")) == toml
+    assert File.read!(Path.join(cargo, "Cargo.toml")) == cargo_before
+    refute cargo_before =~ "[package.metadata.muro]"
+
+    meta = tmp()
+    File.write!(Path.join(meta, "Cargo.toml"), cargo_toml())
+    assert cli(meta, ["init", "--cargo-metadata"]) =~ "updated Cargo.toml\n"
+    meta_before = File.read!(Path.join(meta, "Cargo.toml"))
+    plain = cli(meta, ["init"])
+    assert plain =~ "--- a/Cargo.toml\n"
+    assert plain =~ "+++ b/Cargo.toml\n"
+    refute File.exists?(Path.join(meta, "muro.toml"))
+    assert File.read!(Path.join(meta, "Cargo.toml")) == meta_before
+
+    mix = tmp()
+    File.write!(Path.join(mix, "mix.exs"), mix_exs())
+
+    File.write!(Path.join(mix, "muro.toml"), """
+    muro = "#{version}"
+    modules = []
+    """)
+
+    toml_before = File.read!(Path.join(mix, "muro.toml"))
+    mix_diff = cli(mix, ["init"])
+    assert mix_diff =~ "--- a/muro.toml\n"
+    assert mix_diff =~ "+++ b/muro.toml\n"
+    refute File.exists?(Path.join(mix, "muro.exs"))
+    refute File.dir?(Path.join(mix, "priv/muro"))
+    assert File.read!(Path.join(mix, "muro.toml")) == toml_before
+  end
+
   test "init --ci github writes the binary workflow and refuses to replace one" do
     dir = tmp()
     version = Mix.Tasks.Muro.version()

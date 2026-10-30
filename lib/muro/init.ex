@@ -138,8 +138,11 @@ defmodule Muro.Init do
   (or `[package.metadata.muro]` with `cargo_metadata: true`), a
   C project gets `muro.toml` and `muro/`, and anything else gets a
   minimal `muro.toml` and `muro/`. `backend` overrides the example.
-  An existing manifest is left in place. The return is
-  `{:ok, lines, note}`, `{:diff, text}`, or `{:error, message}`.
+  An existing manifest is left in place, wherever it lives:
+  `muro.exs`, `muro.toml`, or `[package.metadata.muro]`. The
+  return is `{:ok, lines, note}`, `{:diff, text}`, or
+  `{:error, message}`. The diff is the existing file, in that
+  file's format. A second manifest is not created.
   """
   def scaffold(root, version, opts \\ [])
 
@@ -278,17 +281,15 @@ defmodule Muro.Init do
   end
 
   defp place(root, version, kind, backend, ci, cargo?) do
-    case existing(root, kind, cargo?) do
+    case located(root, kind, cargo?) do
       nil ->
         write_new(root, version, kind, backend, ci, cargo?)
 
       {:file, rel, current} ->
-        proposed = proposed_file(version, kind, backend, cargo?)
-        {:diff, diff(rel, current, proposed)}
+        {:diff, diff(rel, current, proposed_for(rel, version, backend))}
 
       {:cargo, current} ->
-        proposed = proposed_cargo(current, version, backend)
-        {:diff, diff("Cargo.toml", current, proposed)}
+        {:diff, diff("Cargo.toml", current, proposed_cargo(current, version, backend))}
     end
   end
 
@@ -339,11 +340,11 @@ defmodule Muro.Init do
     ["created muro.toml", "created muro/"]
   end
 
-  defp proposed_file(version, :mix, backend, _cargo?) do
+  defp proposed_for("muro.exs", version, backend) do
     if backend in [nil, :elixir], do: manifest_source(version), else: exs_source(version, backend)
   end
 
-  defp proposed_file(version, _kind, backend, _cargo?), do: toml_source(version, backend)
+  defp proposed_for("muro.toml", version, backend), do: toml_source(version, backend)
 
   defp proposed_cargo(current, version, backend) do
     block = cargo_block(version, backend)
@@ -355,22 +356,43 @@ defmodule Muro.Init do
     end
   end
 
-  defp existing(root, :mix, _cargo?) do
-    path = Path.join(root, "muro.exs")
-    if File.regular?(path), do: {:file, "muro.exs", File.read!(path)}, else: nil
+  # The file this invocation would write, if that file is already a
+  # manifest. Otherwise any manifest already in the directory. Writing
+  # when another location is occupied would leave two.
+  defp located(root, kind, cargo?) do
+    case destination(root, kind, cargo?) do
+      nil -> other_manifest(root)
+      found -> found
+    end
   end
 
-  defp existing(root, :cargo, true) do
+  defp destination(root, :mix, _cargo?), do: file_existing(root, "muro.exs")
+
+  defp destination(root, :cargo, true) do
+    cargo_manifest(root)
+  end
+
+  defp destination(root, :cargo, false), do: file_existing(root, "muro.toml")
+  defp destination(root, _kind, _cargo?), do: file_existing(root, "muro.toml")
+
+  defp other_manifest(root) do
+    cond do
+      found = file_existing(root, "muro.exs") -> found
+      found = file_existing(root, "muro.toml") -> found
+      true -> cargo_manifest(root)
+    end
+  end
+
+  defp cargo_manifest(root) do
     path = Path.join(root, "Cargo.toml")
-    text = File.read!(path)
-    if Muro.Toml.cargo_metadata?(text), do: {:cargo, text}, else: nil
-  end
 
-  defp existing(root, :cargo, false) do
-    file_existing(root, "muro.toml")
+    if File.regular?(path) do
+      text = File.read!(path)
+      if Muro.Toml.cargo_metadata?(text), do: {:cargo, text}, else: nil
+    else
+      nil
+    end
   end
-
-  defp existing(root, _kind, _cargo?), do: file_existing(root, "muro.toml")
 
   defp file_existing(root, rel) do
     path = Path.join(root, rel)

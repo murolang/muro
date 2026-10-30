@@ -146,7 +146,7 @@ The header is the same two lines and the same hashes as an Elixir target. A C so
 
 `--cargo-metadata` on a directory with `Cargo.toml` appends `[package.metadata.muro]` and writes `muro/`. It does not write `muro.toml`. Without a `Cargo.toml` it exits 1 and writes nothing.
 
-`muro init` never overwrites. When the manifest is already there, the file stays as it is, the command prints a unified diff against what it would have written, and it exits 0.
+`muro init` never overwrites and never writes a second manifest. Before it writes, it looks for `muro.exs`, `muro.toml`, and `[package.metadata.muro]` in `Cargo.toml`. When any of those is already a manifest, every file stays as it is. The command prints a unified diff of that manifest in its own format, against what init would write in that same format, and exits 0. `muro init` followed by `muro init --cargo-metadata` does not append a Cargo table beside `muro.toml`. A Mix directory that already has `muro.toml` does not gain `muro.exs`.
 
 `mix muro.init` still refuses to overwrite `muro.exs` or a `:muro` key. It prints a note. The note says generated files are not edited by hand, and it points at `muro skills add`.
 
