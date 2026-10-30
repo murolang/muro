@@ -28,87 +28,8 @@ defmodule Mix.Tasks.Muro.Mutate do
   is `manual/mutate.md`.
   """
 
-  @switches [
-    only: :keep,
-    json: :boolean,
-    fuel: :integer,
-    max_mutants_per_def: :integer,
-    max_survivors: :integer
-  ]
-
   def run(args) do
     Mix.Tasks.Muro.ensure_started()
-    {opts, paths, invalid} = OptionParser.parse(args, strict: @switches)
-
-    if invalid != [] do
-      Mix.raise("unknown option: #{inspect(invalid)}")
-    end
-
-    path =
-      case paths do
-        [path] -> path
-        _ -> Mix.raise("expected one path")
-      end
-
-    fuel = Keyword.get(opts, :fuel, Muro.Check.default_fuel())
-
-    if fuel <= 0 do
-      Mix.raise("--fuel must be a positive integer")
-    end
-
-    max_m = Keyword.get(opts, :max_mutants_per_def, Muro.Mutate.default_max_mutants())
-
-    if max_m < 0 do
-      Mix.raise("--max-mutants-per-def must be a non-negative integer")
-    end
-
-    max_s = Keyword.get(opts, :max_survivors)
-
-    if is_integer(max_s) and max_s < 0 do
-      Mix.raise("--max-survivors must be a non-negative integer")
-    end
-
-    report_opts = [
-      only: Keyword.get_values(opts, :only),
-      fuel: fuel,
-      max_mutants_per_def: max_m,
-      max_survivors: max_s
-    ]
-
-    case Muro.Mutate.report(path, report_opts) do
-      {:ok, report} ->
-        emit(report, opts)
-
-      {:error, :survivors, report} ->
-        emit(report, opts)
-        Mix.shell().error(survivor_line(report, max_s))
-        exit({:shutdown, 1})
-
-      {:error, :book, msg} ->
-        Mix.shell().info("Muro v#{Mix.Tasks.Muro.version()}")
-        Mix.shell().error(msg)
-        Mix.shell().error("refusing to mutate a book that does not check")
-        exit({:shutdown, 2})
-
-      {:error, :only, msg} ->
-        Mix.raise(msg)
-    end
-  end
-
-  defp emit(report, opts) do
-    text =
-      if Keyword.get(opts, :json, false) do
-        Muro.Mutate.render_json(report)
-      else
-        Muro.Mutate.render(report)
-      end
-
-    text
-    |> String.trim_trailing("\n")
-    |> Mix.shell().info()
-  end
-
-  defp survivor_line(report, max_s) do
-    "#{report.summary.surviving} survivors exceed --max-survivors #{max_s}"
+    Muro.CLI.Output.mix(Muro.CLI.Mutate.run(args))
   end
 end
