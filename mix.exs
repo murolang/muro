@@ -47,7 +47,20 @@ defmodule Muro.MixProject do
           # archives. Muro.Application starts Mix's servers in the
           # executable so Mix.Project.get/0 can run. No host project is
           # loaded, so that call stays nil.
-          applications: [mix: :load],
+          #
+          # The fetcher starts :public_key, :ssl, and :inets. They are
+          # loaded here, with :crypto and :asn1, so `muro deps.get` can
+          # start them on a machine with no Erlang. They are not started
+          # with the release, they are not extra applications of :muro,
+          # and they are not dependencies of the Hex package.
+          applications: [
+            mix: :load,
+            asn1: :load,
+            crypto: :load,
+            public_key: :load,
+            ssl: :load,
+            inets: :load
+          ],
           steps: [:assemble, &burrito_wrap/1],
           burrito: [
             targets: [
@@ -65,7 +78,52 @@ defmodule Muro.MixProject do
   end
 
   defp burrito_wrap(release) do
+    force_prod_wrap()
     Burrito.wrap(release)
+  end
+
+  # Burrito compiles is_prod/1 against Mix.env(), which is :burrito
+  # while this release is built, so the wrapper stays a debug build and
+  # prints "Unpacked File" on every run. Recompile that step in memory.
+  # A target marked debug stays debug. deps/burrito is not modified.
+  defp force_prod_wrap do
+    path = Path.join(__DIR__, "deps/burrito/lib/steps/build/pack_and_build.ex")
+    source = File.read!(path)
+
+    needle =
+      """
+        defp is_prod(%Target{debug?: debug?}) do
+          cond do
+            debug? -> "0"
+            Mix.env() == :prod -> "1"
+            true -> "0"
+          end
+        end
+      """
+      |> String.trim_trailing("\n")
+
+    replacement =
+      """
+        defp is_prod(%Target{debug?: debug?}) do
+          if debug?, do: "0", else: "1"
+        end
+      """
+      |> String.trim_trailing("\n")
+
+    unless String.contains?(source, needle) do
+      Mix.raise("Burrito's is_prod/1 changed; the prod wrap could not be applied")
+    end
+
+    previous = Code.get_compiler_option(:ignore_module_conflict)
+    Code.put_compiler_option(:ignore_module_conflict, true)
+
+    try do
+      Code.compile_string(String.replace(source, needle, replacement), path)
+    after
+      Code.put_compiler_option(:ignore_module_conflict, previous)
+    end
+
+    :ok
   end
 
   defp package do
