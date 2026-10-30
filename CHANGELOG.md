@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.0
+
+**Breaking:** A bare stream unfold whose head reads the seed binder and whose tail mentions the block is refused. The tail of a bare stream is the next seed, so that mention is the next head. The error is `<name> productivity: unguarded recursive call`.
+
+Rewrite: a head that ignores the binder, `(0, f n)`, or a tail that does not mention the block, `(k, suc k)` or `(0, 0)`, as in `examples/nats.muro` and `examples/zeros.muro`. A declared family is unchanged. Its tail is the next proof, and a head that reads the binder may call the block.
+
+`accepted-productive` in `agda/Muro/Productive.agda` says that if `checkSig` accepts the signature, every run or evidence definition is observable at every finite depth. Each head is block-free and the observation does not re-enter the block. A λ is observed at every block-free argument. The block is the definition's component. Closure of that component follows from the fuel-free reachability, with no fuel. Normalisation of a block-free head (`Empty-evid`) and termination of an accepted block by the descent check are separate theorems.
+
+### Manual
+
+- Streams and Limits: the theorem.
+
+### Package
+
+- Version 0.20.0.
+
 ## 0.19.4
 
 `S else v` in a generated repr no longer emits a `muro_repr_else/4` clause that Elixir 1.19 and later report as never used. A book with an open map and a fallback whose shape cannot return `{:ambiguous_key, key}`, such as `optional (boolean else false)`, compiles with `--warnings-as-errors`. The fallback still replaces an error at its own position. It still does not replace `{:ambiguous_key, key}`. A numeral fallback still does not replace `{:nat_too_large, v}`.
