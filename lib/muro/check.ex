@@ -72,6 +72,9 @@ defmodule Muro.Check do
       %{kind: :meet} ->
         {:skip, "#{name} is a meeting, not a definition"}
 
+      %{kind: :temporal} ->
+        {:skip, "#{name} is a temporal declaration, not a definition"}
+
       %{kind: :talk} ->
         {:skip, "#{name} is a talk, not a definition"}
 
@@ -146,6 +149,7 @@ defmodule Muro.Check do
               :endpoint,
               :read,
               :meet,
+              :temporal,
               :talk,
               :repr,
               :seat,
@@ -2277,6 +2281,18 @@ defmodule Muro.Check do
     end
   end
 
+  # A temporal declaration is evidence about a meeting that has already
+  # been checked. Fuel does not reduce a formula, so it is passed only
+  # to the meeting this declaration names.
+  def check_def(book, %{kind: :temporal, name: name} = d, fuel) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    case Muro.Temporal.judge(book, d, fuel) do
+      {:ok, n} -> {:note, "temporal #{name}: holds in #{n} reachable states"}
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
   # Host representation. No kernel term. `Muro.Repr` is the contract.
   def check_def(book, %{kind: :repr} = d, _fuel), do: Repr.check_entry(book, d)
 
@@ -2870,6 +2886,7 @@ defmodule Muro.Check do
           :endpoint,
           :read,
           :meet,
+          :temporal,
           :talk,
           :repr,
           :seat,
@@ -3076,6 +3093,15 @@ defmodule Muro.Check do
     end
   end
 
+  @temporal_key {__MODULE__, :temporal_lines}
+
+  @doc """
+  Success lines of the temporal declarations in the book just checked,
+  in book order. Empty when that check was refused, or when the book
+  has no temporal declaration.
+  """
+  def temporal_lines, do: Process.get(@temporal_key, [])
+
   @doc """
   Check a named book. Options: `fuel: n` (default `default_fuel/0`).
 
@@ -3083,8 +3109,10 @@ defmodule Muro.Check do
   with that same fuel. `:ok` means every definition checked. `{:error, msg}`
   is every failure, in book order, separated by a blank line. Fuel is the
   only bound; a definition is not cut off by a wall-clock timeout.
+  A temporal declaration that holds adds one line to `temporal_lines/0`.
   """
   def check_sig(named_book, opts \\ []) do
+    Process.delete(@temporal_key)
     fuel = Keyword.get(opts, :fuel, @fuel)
     # `params: :open` keeps unsupplied params as assumptions. The default
     # refuses them. Only `Muro.Load` passes `:open`, and only when the
@@ -3092,21 +3120,27 @@ defmodule Muro.Check do
     db_opts = if Keyword.get(opts, :params) == :open, do: [params: :open], else: []
 
     with {:ok, book} <- Ast.book_to_db(named_book, db_opts) do
-      errors =
+      outcomes =
         book
         |> Task.async_stream(fn d -> check_def(book, d, fuel) end,
           ordered: true,
           timeout: :infinity
         )
-        |> Enum.flat_map(fn
-          {:ok, :ok} -> []
-          {:ok, {:error, msg}} -> [msg]
+        |> Enum.map(fn
+          {:ok, result} -> result
           {:exit, reason} -> exit(reason)
         end)
 
+      errors = for {:error, msg} <- outcomes, do: msg
+      notes = for {:note, line} <- outcomes, do: line
+
       case errors do
-        [] -> :ok
-        msgs -> {:error, Enum.join(msgs, "\n\n")}
+        [] ->
+          if notes != [], do: Process.put(@temporal_key, notes)
+          :ok
+
+        msgs ->
+          {:error, Enum.join(msgs, "\n\n")}
       end
     end
   end
