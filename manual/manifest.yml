@@ -66,6 +66,10 @@ pages:
     slug: gen
     title: Committed modules
     summary: A manifest names each book, module, and target. mix muro.gen writes the module. mix muro.gen --check fails when the file and the book disagree.
+  - file: binary.md
+    slug: binary
+    title: The executable
+    summary: The self-contained muro binary, muro.toml, gen for C, Rust, and assembly, init, and muro skills add.
   - file: repr.md
     slug: repr
     title: Host representations

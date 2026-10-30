@@ -13,7 +13,7 @@ A path import is enough inside one repository. It is not enough when two program
 
 ## Manifest
 
-`muro_deps:` lives in the same manifest as [`mix muro.gen`](gen.md): `muro.exs` at the project root, or the `:muro` key in `mix.exs`. If both exist, loading stops and names both.
+`muro_deps:` lives in the same manifest as [`mix muro.gen`](gen.md): `muro.exs` at the project root, the `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`. If more than one of these defines a manifest, loading stops and names each of them. The TOML shape is [The executable](binary.md).
 
 A project that only checks books can list `muro_deps:` and omit `muro:` and `modules:`. `mix muro.gen` still requires those two keys.
 

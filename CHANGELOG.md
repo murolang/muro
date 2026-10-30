@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.19.6
+
+A self-contained `muro` executable checks, emits, and commits modules on a machine with no Elixir and no Erlang. It carries its own Erlang runtime. `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`, is the manifest where there is no `mix.exs`. `muro gen` writes C, Rust, and Cortex-M assembly as well as Elixir. `muro init` reads the directory and writes one manifest. `muro skills add` writes the agent block into `AGENTS.md`. The Mix tasks stay and call the same functions. The Hex package gains no runtime dependency.
+
+### Manual
+
+- The executable: the binary, `muro.toml`, the TOML subset, init, and `muro skills add`.
+- Start, Committed modules, and For agents: the path without Mix.
+
+### Package
+
+- Version 0.19.6.
+
 ## 0.19.4
 
 `S else v` in a generated repr no longer emits a `muro_repr_else/4` clause that Elixir 1.19 and later report as never used. A book with an open map and a fallback whose shape cannot return `{:ambiguous_key, key}`, such as `optional (boolean else false)`, compiles with `--warnings-as-errors`. The fallback still replaces an error at its own position. It still does not replace `{:ambiguous_key, key}`. A numeral fallback still does not replace `{:nat_too_large, v}`.
