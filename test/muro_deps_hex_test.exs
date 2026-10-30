@@ -272,4 +272,27 @@ defmodule Muro.DepsHexTest do
     on_exit(fn -> File.rm_rf!(dir) end)
     dir
   end
+
+  test "an OTP application beside the release copy of muro is loaded" do
+    lib = :code.lib_dir(:muro) |> List.to_string() |> Path.dirname()
+    app_dir = Path.join(lib, "muro_http_fixture-0.0.1")
+    ebin = Path.join(app_dir, "ebin")
+    File.mkdir_p!(ebin)
+
+    on_exit(fn ->
+      Application.unload(:muro_http_fixture)
+      File.rm_rf!(app_dir)
+    end)
+
+    File.write!(Path.join(ebin, "muro_http_fixture.app"), """
+    {application, muro_http_fixture, [
+      {vsn, "0.0.1"},
+      {modules, []},
+      {applications, [kernel, stdlib]}
+    ]}.
+    """)
+
+    assert :ok = Muro.Deps.Hex.Http.ensure_otp([:muro_http_fixture])
+    assert :code.lib_dir(:muro_http_fixture) != {:error, :bad_name}
+  end
 end

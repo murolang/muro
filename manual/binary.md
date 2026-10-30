@@ -54,7 +54,7 @@ Each command takes the same flags as its Mix task and prints the same lines. Whe
 
 The executable never compiles a host application and never starts one. That holds outside a Mix project and inside one. A suite that calls an `impl:` keeps using `mix muro.*`, because that suite needs the host compiled. The executable does not load a Mix project, so a lone `:muro` key in `mix.exs` is not a manifest for it. Write `muro.exs` or `muro.toml`. `muro init` in a directory with `mix.exs` writes `muro.exs`.
 
-`muro deps.get` fetches Hex packages over HTTPS. The executable ships `:public_key`, `:ssl`, `:inets`, `:crypto`, and `:asn1` loaded and not started. The fetcher starts them. They are not extra applications of `:muro`, and they are not dependencies of the Hex package.
+`muro deps.get` fetches Hex packages over HTTPS. The executable ships `:public_key`, `:ssl`, `:inets`, `:crypto`, and `:asn1` loaded and not started. The fetcher starts them. Mix records the code path before the boot script loads those applications, so the fetcher loads the copies beside `:muro` in the release. They are not extra applications of `:muro`, and they are not dependencies of the Hex package.
 
 ## C
 
