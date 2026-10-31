@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  binaries:
+    name: Self-contained binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: jdx/mise-action@v4
+
+      - name: Install zig 0.15.2 and xz
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y xz-utils
+          case "$(uname -m)" in
+            x86_64) zarch=x86_64 ;;
+            aarch64|arm64) zarch=aarch64 ;;
+            *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
+          esac
+          url="https://ziglang.org/download/0.15.2/zig-${zarch}-linux-0.15.2.tar.xz"
+          curl -fsSL -o /tmp/zig.tar.xz "$url"
+          tar -xJf /tmp/zig.tar.xz -C /tmp
+          echo "/tmp/zig-${zarch}-linux-0.15.2" >> "$GITHUB_PATH"
+          "/tmp/zig-${zarch}-linux-0.15.2/zig" version
+
+      - name: Fetch the release dependencies
+        run: MIX_ENV=burrito mix deps.get
+
+      - name: Build the four targets
+        run: MIX_ENV=burrito mix release
+
+      - name: Name the assets
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^[[:space:]]*version: "\([^"]*\)".*/\1/p' mix.exs | head -1)
+          mkdir -p dist
+          name_one() {
+            src="$1"
+            dest="muro-${version}-$2"
+            test -f "$src"
+            cp "$src" "dist/${dest}"
+            chmod 0755 "dist/${dest}"
+            (cd dist && sha256sum "${dest}" > "${dest}.sha256")
+          }
+          name_one burrito_out/muro_macos_aarch64 macos-aarch64
+          name_one burrito_out/muro_macos_x86_64 macos-x86_64
+          name_one burrito_out/muro_linux_x86_64 linux-x86_64
+          name_one burrito_out/muro_linux_aarch64 linux-aarch64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: muro-binaries
+          path: dist/*
+
+  smoke:
+    name: Smoke the Linux x86_64 binary
+    needs: binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: muro-binaries
+          path: dist
+
+      - name: Run in a container with no Elixir
+        run: |
+          set -euo pipefail
+          test -f dist/muro-*-linux-x86_64
+          docker run --rm -v "$PWD/dist:/opt:ro" ubuntu:24.04 /bin/bash -c '
+            set -euo pipefail
+            if command -v elixir >/dev/null || command -v erl >/dev/null; then
+              echo "the smoke container has Elixir or Erlang" >&2
+              exit 1
+            fi
+            bin=$(echo /opt/muro-*-linux-x86_64)
+            cp "$bin" /tmp/muro
+            chmod 0755 /tmp/muro
+            /tmp/muro --version
+            /tmp/muro check
+            printf "%s\n" "def one : run Nat := 0" > /tmp/one.muro
+            /tmp/muro emit /tmp/one.muro --backend rust
+            test -f /tmp/one.rs
+          '
+
+  release:
+    name: Publish the GitHub release
+    needs: smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: muro-binaries
+          path: dist
+
+      - name: Attach the assets to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^[[:space:]]*version: "\([^"]*\)".*/\1/p' mix.exs | head -1)
+          tag="v${version}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "$tag" --notes "Muro ${version}"
+          fi
+          gh release upload "$tag" dist/* --clobber

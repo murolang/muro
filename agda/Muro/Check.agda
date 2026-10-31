@@ -13,12 +13,14 @@
 module Muro.Check where
 
 open import Data.Bool.Base
-  using (Bool; true; false; _∧_; _∨_; not; if_then_else_)
+  using (Bool; true; false; _∧_; _∨_; not; if_then_else_; T)
 open import Data.Empty using (⊥; ⊥-elim)
 open import Data.Fin.Base using (Fin; zero; suc; toℕ)
 open import Data.List.Base as List using (List; []; _∷_; length; take; drop)
 open import Data.Maybe.Base using (Maybe; just; nothing)
-open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _<ᵇ_; _+_)
+open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _<ᵇ_; _+_; _≤_; _<_; z≤n; s≤s)
+open import Data.Nat.Properties using (≡ᵇ⇒≡)
+open import Data.Nat.Induction using (<-wellFounded; Acc; acc)
 open import Data.Nat.Show using (show)
 open import Data.Product.Base using (_×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String; _++_)
@@ -26,7 +28,7 @@ open import Data.String.Properties using (_==_)
 open import Data.Unit.Base using (⊤; tt)
 open import Data.Vec.Base as Vec using (Vec; []; _∷_; lookup; map)
 open import Function.Base using (case_of_; _$_)
-open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl; sym; trans; cong)
+open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl; sym; trans; cong; subst)
 
 open import Muro.Base
 open import Muro.Syntax
@@ -131,6 +133,13 @@ nthQty _          _       = fail "recursive-call spine longer than Π telescope"
 outOfFuel : String
 outOfFuel = "out of fuel (the checker gave up reducing; raise the fuel)"
 
+-- uncons (unfold (a, b) (λ _ → v)) reads the pair. Any other seed is
+-- stuck, and the clause is split so a seed that is already a constructor
+-- reduces without waiting on the pair pattern.
+idStep : ∀ {n} → Tm n → Qty → Tm n → Result (Tm n)
+idStep (pair a b) q A = ok (pair a (unf b (lam q A (var zero))))
+idStep s          q A = ok (ucons (unf s (lam q A (var zero))))
+
 mutual
   whnf : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n)
   whnf zero    _ _ = fail outOfFuel
@@ -166,8 +175,7 @@ mutual
   uconsWhnf _ _ (unf s (pair h t)) = ok (pair h t)
   uconsWhnf _ _ (unf s (lam q A (pair h t))) =
     ok (pair (inst h s) (unf (inst t s) (lam q A (pair h t))))
-  uconsWhnf _ _ (unf (pair a b) (lam q A (var zero))) =
-    ok (pair a (unf b (lam q A (var zero))))
+  uconsWhnf _ _ (unf s (lam q A (var zero))) = idStep s q A
   uconsWhnf _ _ e = ok (ucons e)
 
   dataWhnf : ∀ {n} → ℕ → Sig → Tm n → Tm (suc n) → List (Tm n) → Result (Tm n)
@@ -903,6 +911,15 @@ true≢false ()
 fail≢ok : ∀ {A : Set} {e : String} {a : A} → fail e ≡ ok a → ⊥
 fail≢ok ()
 
+ok≢fail : ∀ {A : Set} {a : A} {e : String} → ok a ≡ fail e → ⊥
+ok≢fail ()
+
+ok-inj : ∀ {A : Set} {x y : A} → ok x ≡ ok y → x ≡ y
+ok-inj refl = refl
+
+≡ᵇ-≡ : ∀ m n → (m ≡ᵇ n) ≡ true → m ≡ n
+≡ᵇ-≡ m n eq = ≡ᵇ⇒≡ m n (subst T (sym eq) tt)
+
 -- false ∨ b reduces to b, so a false absence bit leaves the call test.
 toCall : ∀ {n} (B : List ℕ) (t : Tm n)
   → not (hasSelf B t) ≡ false → guardedTail B t ≡ true → guardedCall B t ≡ true
@@ -1033,11 +1050,17 @@ unguarded-ok : ∀ b → unguarded b ≡ ok tt → b ≡ false
 unguarded-ok false refl = refl
 unguarded-ok true  ()
 
--- Strip the step's lambdas and test the pair. Binder types of this
--- outer step are not part of the guard; a nested unfold constrains
--- its own seed, binder type, and head.
+-- One λ, then a pair. A further λ is not a pair: the unfold applies
+-- the step to one seed, and the body of that λ is checked as the
+-- product. Binder types of this outer step are not part of the guard;
+-- a nested unfold constrains its own seed, binder type, and head.
+-- A bare pair does not bind the seed.
+pairStep : ∀ {n} → List ℕ → Tm n → Result ⊤
+pairStep B (pair h t) = unguarded (hasSelf B h ∨ not (guardedTail B t))
+pairStep _ _          = fail "unfold body must be a pair"
+
 guardedStep : ∀ {n} → List ℕ → Tm n → Result ⊤
-guardedStep B (lam _ _ t) = guardedStep B t
+guardedStep B (lam _ _ t) = pairStep B t
 guardedStep B (pair h t)  = unguarded (hasSelf B h ∨ not (guardedTail B t))
 guardedStep _ _           = fail "unfold body must be a pair"
 
@@ -1100,45 +1123,32 @@ seedGuard : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result �
 seedGuard k σ B s f =
   whnf k σ f >>= λ f′ → unguarded (seedFlows nothing f′ ∧ hasSelf B s)
 
-mutual
-  seedWalk : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Result ⊤
-  seedWalk k σ B (unf s f)      =
-    seedGuard k σ B s f >>
-    (whnf k σ f >>= guardedStep B) >>
-    seedWalk k σ B s >> seedWalk k σ B f
-  seedWalk k σ B (app f a)      = seedWalk k σ B f >> seedWalk k σ B a
-  seedWalk k σ B (su t)         = seedWalk k σ B t
-  seedWalk k σ B (lam _ A t)    = seedWalk k σ B A >> seedWalk k σ B t
-  seedWalk k σ B (pi _ A B′)    = seedWalk k σ B A >> seedWalk k σ B B′
-  seedWalk k σ B (mData e P bs) = seedWalk k σ B e >> seedWalk k σ B P >> seedWalkList k σ B bs
-  seedWalk k σ B (mNat e P z s) = seedWalk k σ B e >> seedWalk k σ B P >> seedWalk k σ B z >> seedWalk k σ B s
-  seedWalk k σ B (mEmp e P)     = seedWalk k σ B e >> seedWalk k σ B P
-  seedWalk k σ B (mUnit e P u)  = seedWalk k σ B e >> seedWalk k σ B P >> seedWalk k σ B u
-  seedWalk k σ B (idt A a b)    = seedWalk k σ B A >> seedWalk k σ B a >> seedWalk k σ B b
-  seedWalk k σ B (rwt e P t)    = seedWalk k σ B e >> seedWalk k σ B P >> seedWalk k σ B t
-  seedWalk k σ B (ann e A)      = seedWalk k σ B e >> seedWalk k σ B A
-  seedWalk k σ B (prod A B′)    = seedWalk k σ B A >> seedWalk k σ B B′
-  seedWalk k σ B (pair a b)     = seedWalk k σ B a >> seedWalk k σ B b
-  seedWalk k σ B (letp e t)     = seedWalk k σ B e >> seedWalk k σ B t
-  seedWalk k σ B (nu F)         = seedWalk k σ B F
-  seedWalk k σ B (ucons u)      = seedWalk k σ B u
-  seedWalk k σ B (tensor d u)   = seedWalk k σ B d >> seedWalk k σ B u
-  seedWalk k σ B (addi x y)     = seedWalk k σ B x >> seedWalk k σ B y
-  seedWalk k σ B (muli x y)     = seedWalk k σ B x >> seedWalk k σ B y
-  seedWalk k σ B (addt t u)     = seedWalk k σ B t >> seedWalk k σ B u
-  seedWalk k σ B (toi64 t)      = seedWalk k σ B t
-  seedWalk k σ B (packi x y)    = seedWalk k σ B x >> seedWalk k σ B y
-  seedWalk _ _ _ _              = ok tt
-
-  seedWalkList : ∀ {n} → ℕ → Sig → List ℕ → List (Tm n) → Result ⊤
-  seedWalkList _ _ _ []       = ok tt
-  seedWalkList k σ B (t ∷ ts) = seedWalk k σ B t >> seedWalkList k σ B ts
+-- seedWalk and checkNu are defined after infer. The bare-stream test
+-- asks infer whether the unfold's tail converts with its seed, and
+-- infer does not call the walk.
 
 -- On run/evid, unfold's λ-body must be a pair, the head must not
 -- mention the block, and the tail must be guarded. spec skips the test.
 checkUnfold : ∀ {n} → ℕ → Sig → Mode → RecSt n → Tm n → Result ⊤
 checkUnfold _ _ spec _ _ = ok tt
 checkUnfold k σ _ rs f   = whnf k σ f >>= guardedStep (RecSt.block rs)
+
+-- A bare ν is a stream when it is ν X. A × X and A does not mention X.
+-- Declared families are applications, not this shape: their unfold is
+-- the instantiated pair, and uncons reads that pair.
+lamForm : ∀ {n} → Tm n → Bool
+lamForm (nu (prod B (var zero))) with strengthen B
+... | ok _    = true
+... | fail _  = false
+lamForm _ = false
+
+-- The seed binder of the one λ occurs in the head, and the tail
+-- mentions the block. On a bare stream that tail is the next seed, so
+-- the next head is that mention. A family is not this test: lamForm is
+-- false, and the tail is the next proof, not the next seed.
+streamReads : ∀ {n} → List ℕ → Tm n → Bool
+streamReads B (lam _ _ (pair h t)) = occℕ 0 h ∧ hasSelf B t
+streamReads _ _                    = false
 
 -- On run/evid, a definition whose type reduces to a ν (bare, or a
 -- family applied to any number of indices) is an unfold whose step
@@ -1147,20 +1157,62 @@ isNuHead : ∀ {n} → Tm n → Bool
 isNuHead (nu _) = true
 isNuHead _      = false
 
-checkNu : ∀ {n} → ℕ → Sig → List ℕ → Mode → Tm n → Tm n → Result ⊤
-checkNu _       _ _   spec _ _ = ok tt
-checkNu zero    _ _   _    _ _ = fail outOfFuel
-checkNu (suc k) σ blk m    T t =
-  seedWalk (suc k) σ blk t >>
-  whnf (suc k) σ T >>= λ T′ → go T′ t
+-- Run and evidence are checked. A spec definition is not: checkNu of
+-- spec returns without walking. A component of a run or evidence
+-- definition is therefore only run and evidence. Acceptance of the
+-- signature already keeps a spec body from naming a run, and a run
+-- body from naming a spec; this refuses the component that would make
+-- an observation open a body the walk did not see.
+specAt : Sig → ℕ → Bool
+specAt σ i with lookupDef σ i
+... | ok d   = eqMode (Def.dmode d) spec
+... | fail _ = false
+
+anySpec : Sig → List ℕ → Bool
+anySpec _ []       = false
+anySpec σ (i ∷ is) = specAt σ i ∨ anySpec σ is
+
+membersRun : Sig → List ℕ → Result ⊤
+membersRun σ js =
+  if anySpec σ js then fail "spec definition in a productive component" else ok tt
+
+members-false : ∀ σ js → membersRun σ js ≡ ok tt → anySpec σ js ≡ false
+members-false σ js eq with anySpec σ js
+... | false = refl
+... | true  = ⊥-elim (fail≢ok eq)
+
+anySpec-at : ∀ σ j js
+  → anySpec σ js ≡ false → elemℕ j js ≡ true → specAt σ j ≡ false
+anySpec-at _ _ [] _ ()
+anySpec-at σ j (i ∷ is) eq el =
+  let hi , ti = ∨-false₂ (specAt σ i) (anySpec σ is) eq
+  in at (j ≡ᵇ i) refl el hi ti
   where
-    go : ∀ {n} → Tm n → Tm n → Result ⊤
-    go (pi _ _ B) (lam _ _ u) = checkNu k σ blk m B u
-    go _          (unf _ f)   = whnf (suc k) σ f >>= guardedStep blk
-    go T′         u           =
-      if isNuHead (proj₁ (apps T′)) ∧ hasSelf blk u
-      then fail "ν value calls its own block outside an unfold"
-      else ok tt
+  at : (b : Bool) → (j ≡ᵇ i) ≡ b → elemℕ j (i ∷ is) ≡ true
+     → specAt σ i ≡ false → anySpec σ is ≡ false → specAt σ j ≡ false
+  at true  beq _ hi _ =
+    subst (λ z → specAt σ z ≡ false) (sym (≡ᵇ-≡ j i beq)) hi
+  at false beq el _ ti rewrite beq = anySpec-at σ j is ti el
+
+specAt-mode : ∀ σ j d
+  → specAt σ j ≡ false → lookupDef σ j ≡ ok d
+  → eqMode (Def.dmode d) spec ≡ false
+specAt-mode σ j d eq lk rewrite lk = eq
+
+membersRun-spec : ∀ σ j (d : Def) js
+  → membersRun σ js ≡ ok tt
+  → elemℕ j js ≡ true
+  → lookupDef σ j ≡ ok d
+  → eqMode (Def.dmode d) spec ≡ false
+membersRun-spec σ j d js eq el lk =
+  specAt-mode σ j d (anySpec-at σ j js (members-false σ js eq) el) lk
+
+mode-not-spec : ∀ m → eqMode m spec ≡ false → m ≡ spec → ⊥
+mode-not-spec spec eq _ = true≢false eq
+mode-not-spec run  _  ()
+mode-not-spec evid _  ()
+
+-- checkNu is defined with seedWalk, after infer.
 
 -- What checkUnfold demands of a step, after whnf: lambdas over a pair
 -- whose head does not mention the block and whose tail is guarded.
@@ -1176,8 +1228,49 @@ data StepGuard {n} (B : List ℕ) : Tm n → Set where
 data UnfoldGuard {n} (k : ℕ) (σ : Sig) (B : List ℕ) (f : Tm n) : Set where
   unfold-guard : (f′ : Tm n) → whnf k σ f ≡ ok f′ → StepGuard B f′ → UnfoldGuard k σ B f
 
+pairStep-ok : ∀ {n} (B : List ℕ) (t : Tm n) → pairStep B t ≡ ok tt → StepGuard B t
+pairStep-ok B (pair h t) eq =
+  let hs , ng = ∨-false₂ (hasSelf B h) (not (guardedTail B t))
+                  (unguarded-ok (hasSelf B h ∨ not (guardedTail B t)) eq)
+  in sg-pair hs (guardedTail-reflects B t (not-elim-false (guardedTail B t) ng))
+pairStep-ok _ (var _) ()
+pairStep-ok _ typ ()
+pairStep-ok _ (pi _ _ _) ()
+pairStep-ok _ (lam _ _ _) ()
+pairStep-ok _ (app _ _) ()
+pairStep-ok _ nat ()
+pairStep-ok _ ze ()
+pairStep-ok _ (su _) ()
+pairStep-ok _ unit ()
+pairStep-ok _ one ()
+pairStep-ok _ empty ()
+pairStep-ok _ (dty _) ()
+pairStep-ok _ (ctor _ _) ()
+pairStep-ok _ (mData _ _ _) ()
+pairStep-ok _ (mNat _ _ _ _) ()
+pairStep-ok _ (mEmp _ _) ()
+pairStep-ok _ (mUnit _ _ _) ()
+pairStep-ok _ (idt _ _ _) ()
+pairStep-ok _ rfl ()
+pairStep-ok _ (rwt _ _ _) ()
+pairStep-ok _ (def _) ()
+pairStep-ok _ (ann _ _) ()
+pairStep-ok _ (prod _ _) ()
+pairStep-ok _ (letp _ _) ()
+pairStep-ok _ (nu _) ()
+pairStep-ok _ (unf _ _) ()
+pairStep-ok _ (ucons _) ()
+pairStep-ok _ i64 ()
+pairStep-ok _ f32ty ()
+pairStep-ok _ (tensor _ _) ()
+pairStep-ok _ (addi _ _) ()
+pairStep-ok _ (muli _ _) ()
+pairStep-ok _ (addt _ _) ()
+pairStep-ok _ (toi64 _) ()
+pairStep-ok _ (packi _ _) ()
+
 guardedStep-ok : ∀ {n} (B : List ℕ) (t : Tm n) → guardedStep B t ≡ ok tt → StepGuard B t
-guardedStep-ok B (lam _ _ t) eq = sg-lam (guardedStep-ok B t eq)
+guardedStep-ok B (lam _ _ t) eq = sg-lam (pairStep-ok B t eq)
 guardedStep-ok B (pair h t) eq =
   let hs , ng = ∨-false₂ (hasSelf B h) (not (guardedTail B t))
                   (unguarded-ok (hasSelf B h ∨ not (guardedTail B t)) eq)
@@ -1614,15 +1707,6 @@ nuBodyProd : ∀ {n} → Tm n → Bool
 nuBodyProd (lam _ _ t) = nuBodyProd t
 nuBodyProd (prod _ _)  = true
 nuBodyProd _           = false
-
--- A bare ν is a stream when it is ν X. A × X and A does not mention X.
--- Declared families are applications, not this shape: their unfold is
--- the instantiated pair, and uncons reads that pair.
-lamForm : ∀ {n} → Tm n → Bool
-lamForm (nu (prod B (var zero))) with strengthen B
-... | ok _    = true
-... | fail _  = false
-lamForm _ = false
 
 applyFam : ∀ {n} → Tm n → List (Tm n) → Tm n
 applyFam t []             = t
@@ -2164,6 +2248,154 @@ mutual
   checkAgainst k σ rs Γ m e A _ _ = inferConv k σ rs Γ m e A
 
 ------------------------------------------------------------------------
+-- Productivity walk. One traversal of the body. At every syntactic
+-- unfold it runs the seed guard and guardedStep, then, when infer
+-- accepts the unfold, the bare-stream test. Infer succeeds only when
+-- the tail's type converts with the seed's, which is a bare stream.
+-- A family or a bisimulation fails that conversion, so the test does
+-- not apply. The neutral recursion state imposes no descent: a guarded
+-- tail that names the block still infers. The context starts empty on
+-- a closed definition and extends at each binder the term binds.
+------------------------------------------------------------------------
+
+falses : ∀ n → Vec Bool n
+falses zero    = []
+falses (suc n) = false ∷ falses n
+
+neutralRec : ∀ {n} → RecSt n
+neutralRec {n} = recst nothing [] nothing (falses n) (falses n) false []
+
+bareTail : ∀ {n} → ℕ → Sig → List ℕ → Ctx n → Mode → Tm n → Tm n → Result ⊤
+bareTail {n} k σ B Γ m s f = go (infer k σ neutralRec Γ m (unf s f))
+  where
+  go : Result (Tm n × UseVec n) → Result ⊤
+  go (fail _) = ok tt
+  go (ok _)   = whnf k σ f >>= λ f′ → unguarded (streamReads B f′)
+
+-- Binder types for the walk. A failed infer is not a productivity
+-- verdict: the binder falls back to Type, and an unfold that needed
+-- the real type is not reported as a bare stream.
+letΓ : ∀ {n} → ℕ → Sig → Ctx n → Mode → Tm n → Ctx (suc (suc n))
+letΓ {n} k σ Γ m e = onE (infer k σ neutralRec Γ m e)
+  where
+  onP : Result (Tm n × Tm n) → Ctx (suc (suc n))
+  onP (fail _)     = ext (ext Γ affine typ) affine (wk typ)
+  onP (ok (A , B)) = ext (ext Γ affine A) affine (wk B)
+  onE : Result (Tm n × UseVec n) → Ctx (suc (suc n))
+  onE (fail _)     = ext (ext Γ affine typ) affine (wk typ)
+  onE (ok (E , _)) = onP (viewProd k σ E)
+
+nuΓ : ∀ {n} → Ctx n → Tm (suc n) → Ctx (suc n)
+nuΓ {n} Γ F = onK (nuKind F)
+  where
+  onK : Result (Tm n) → Ctx (suc n)
+  onK (fail _) = ext Γ affine typ
+  onK (ok K)   = ext Γ affine K
+
+rwtΓ : ∀ {n} → ℕ → Sig → Ctx n → Mode → Tm n → Ctx (suc n)
+rwtΓ {n} k σ Γ m eq = onE (infer k σ neutralRec Γ (rwtMode m) eq)
+  where
+  onI : Result (Tm n × Tm n × Tm n) → Ctx (suc n)
+  onI (fail _)         = ext Γ affine typ
+  onI (ok (A , _ , _)) = ext Γ affine A
+  onE : Result (Tm n × UseVec n) → Ctx (suc n)
+  onE (fail _)      = ext Γ affine typ
+  onE (ok (et , _)) = onI (viewId k σ et)
+
+-- checkMotive's first binder: the scrutinee's type, or the first index.
+mDataΓ : ∀ {n} → ℕ → Sig → Ctx n → Mode → Tm n → Ctx (suc n)
+mDataΓ {n} k σ Γ m e = onE (infer k σ neutralRec Γ m e)
+  where
+  onI : ℕ → List (Tm n) → List (Qty × Tm 0) → Ctx (suc n)
+  onI di params []            = ext Γ affine (appsFrom (dty di) params)
+  onI _  _      ((q , T) ∷ _) = ext Γ q (closed T)
+  onL : ℕ → List (Tm n) → Result DataDecl → Ctx (suc n)
+  onL _ _ (fail _)     = ext Γ affine typ
+  onL di params (ok d) = onI di params (DataDecl.idxs d)
+  onD : Result (ℕ × List (Tm n) × List (Tm n)) → Ctx (suc n)
+  onD (fail _)               = ext Γ affine typ
+  onD (ok (di , params , _)) = onL di params (lookupData σ di)
+  onE : Result (Tm n × UseVec n) → Ctx (suc n)
+  onE (fail _)      = ext Γ affine typ
+  onE (ok (et , _)) = onD (viewData k σ et)
+
+mutual
+  seedWalk : ∀ {n} → ℕ → Sig → List ℕ → Ctx n → Mode → Tm n → Result ⊤
+  seedWalk k σ B Γ m (unf s f) =
+    seedGuard k σ B s f >>
+    (whnf k σ f >>= guardedStep B) >>
+    bareTail k σ B Γ m s f >>
+    seedWalk k σ B Γ m s >> seedWalk k σ B Γ m f
+  seedWalk k σ B Γ m (app f a)      = seedWalk k σ B Γ m f >> seedWalk k σ B Γ m a
+  seedWalk k σ B Γ m (su t)         = seedWalk k σ B Γ m t
+  seedWalk k σ B Γ m (lam q A t)    =
+    seedWalk k σ B Γ m A >> seedWalk k σ B (ext Γ q A) m t
+  seedWalk k σ B Γ m (pi q A B′)    =
+    seedWalk k σ B Γ m A >> seedWalk k σ B (ext Γ q A) m B′
+  seedWalk k σ B Γ m (mData e P bs) =
+    seedWalk k σ B Γ m e >>
+    seedWalk k σ B (mDataΓ k σ Γ m e) m P >>
+    seedWalkList k σ B Γ m bs
+  seedWalk k σ B Γ m (mNat e P z s) =
+    seedWalk k σ B Γ m e >>
+    seedWalk k σ B (ext Γ affine nat) m P >>
+    seedWalk k σ B Γ m z >>
+    seedWalk k σ B (ext Γ (predQty Γ e) nat) m s
+  seedWalk k σ B Γ m (mEmp e P) =
+    seedWalk k σ B Γ m e >> seedWalk k σ B (ext Γ affine empty) m P
+  seedWalk k σ B Γ m (mUnit e P u) =
+    seedWalk k σ B Γ m e >>
+    seedWalk k σ B (ext Γ affine unit) m P >>
+    seedWalk k σ B Γ m u
+  seedWalk k σ B Γ m (idt A a b) =
+    seedWalk k σ B Γ m A >> seedWalk k σ B Γ m a >> seedWalk k σ B Γ m b
+  seedWalk k σ B Γ m (rwt e P t) =
+    seedWalk k σ B Γ m e >>
+    seedWalk k σ B (rwtΓ k σ Γ m e) m P >>
+    seedWalk k σ B Γ m t
+  seedWalk k σ B Γ m (ann e A)   = seedWalk k σ B Γ m e >> seedWalk k σ B Γ m A
+  seedWalk k σ B Γ m (prod A B′) = seedWalk k σ B Γ m A >> seedWalk k σ B Γ m B′
+  seedWalk k σ B Γ m (pair a b)  = seedWalk k σ B Γ m a >> seedWalk k σ B Γ m b
+  seedWalk k σ B Γ m (letp e t)  =
+    seedWalk k σ B Γ m e >> seedWalk k σ B (letΓ k σ Γ m e) m t
+  seedWalk k σ B Γ m (nu F)      = seedWalk k σ B (nuΓ Γ F) m F
+  seedWalk k σ B Γ m (ucons u)   = seedWalk k σ B Γ m u
+  seedWalk k σ B Γ m (tensor d u) = seedWalk k σ B Γ m d >> seedWalk k σ B Γ m u
+  seedWalk k σ B Γ m (addi x y)  = seedWalk k σ B Γ m x >> seedWalk k σ B Γ m y
+  seedWalk k σ B Γ m (muli x y)  = seedWalk k σ B Γ m x >> seedWalk k σ B Γ m y
+  seedWalk k σ B Γ m (addt t u)  = seedWalk k σ B Γ m t >> seedWalk k σ B Γ m u
+  seedWalk k σ B Γ m (toi64 t)   = seedWalk k σ B Γ m t
+  seedWalk k σ B Γ m (packi x y) = seedWalk k σ B Γ m x >> seedWalk k σ B Γ m y
+  seedWalk _ _ _ _ _ _           = ok tt
+
+  seedWalkList : ∀ {n} → ℕ → Sig → List ℕ → Ctx n → Mode → List (Tm n) → Result ⊤
+  seedWalkList _ _ _ _ _ []       = ok tt
+  seedWalkList k σ B Γ m (t ∷ ts) = seedWalk k σ B Γ m t >> seedWalkList k σ B Γ m ts
+
+-- On run/evid, a definition whose type reduces to a ν is an unfold
+-- whose step passes guardedStep, or it does not mention its block.
+-- The bare-stream test is seedWalk's, at every unfold, not only the
+-- one left after the leading λs.
+checkNu : ∀ {n} → ℕ → Sig → List ℕ → Ctx n → Mode → Tm n → Tm n → Result ⊤
+checkNu _       _ _   _ spec _ _ = ok tt
+checkNu zero    _ _   _ _    _ _ = fail outOfFuel
+checkNu {n} (suc k) σ blk Γ m    T t =
+  membersRun σ blk >>
+  seedWalk (suc k) σ blk Γ m t >>
+  whnf (suc k) σ T >>= λ T′ → go T′ t
+  where
+    -- The open body is walked at the λ's own binder, the context
+    -- seedWalk uses when it enters that λ. A recursive call at the
+    -- outer context would not typecheck for an open term.
+    go : Tm n → Tm n → Result ⊤
+    go (pi _ _ B) (lam q A u) = checkNu k σ blk (ext Γ q A) m B u
+    go _          (unf _ f)   = whnf (suc k) σ f >>= guardedStep blk
+    go T′         u           =
+      if isNuHead (proj₁ (apps T′)) ∧ hasSelf blk u
+      then fail "ν value calls its own block outside an unfold"
+      else ok tt
+
+------------------------------------------------------------------------
 -- Check a whole signature. Run and evidence definitions that reach
 -- each other are one block, and each member descends on an argument of
 -- its own. Spec is not a logic: it is not in the block, and it is not
@@ -2261,42 +2493,95 @@ recMode run  = true
 recMode evid = true
 recMode spec = true
 
-keepRec : Sig → List ℕ → List ℕ
-keepRec _ []       = []
-keepRec σ (j ∷ js) with lookupDef σ j
-... | ok d    = if recMode (Def.dmode d) then j ∷ keepRec σ js else keepRec σ js
-... | fail _  = keepRec σ js
+mutual
+  keepRec : Sig → List ℕ → List ℕ
+  keepRec _ []       = []
+  keepRec σ (j ∷ js) = keepStep σ j js (lookupDef σ j)
+
+  keepStep : Sig → ℕ → List ℕ → Result Def → List ℕ
+  keepStep σ j js (ok d) =
+    if recMode (Def.dmode d) then j ∷ keepRec σ js else keepRec σ js
+  keepStep σ _ js (fail _) = keepRec σ js
+
+edgeOf : Sig → Result Def → List ℕ
+edgeOf _ (fail _) = []
+edgeOf σ (ok d)   =
+  if recMode (Def.dmode d) then keepRec σ (mentions (Def.dbody d)) else []
 
 edge : Sig → ℕ → List ℕ
-edge σ i with lookupDef σ i
-... | fail _ = []
-... | ok d   = if recMode (Def.dmode d) then keepRec σ (mentions (Def.dbody d)) else []
+edge σ i = edgeOf σ (lookupDef σ i)
 
+-- Drop the first occurrence of i. The search measure is the length of
+-- the nodes still to visit, so removing a member that is present
+-- decreases it.
+removeℕ : ℕ → List ℕ → List ℕ
+removeℕ _ []       = []
+removeℕ i (x ∷ xs) = if i ≡ᵇ x then xs else x ∷ removeℕ i xs
+
+≤-reflℕ : ∀ {n} → n ≤ n
+≤-reflℕ {zero}  = z≤n
+≤-reflℕ {suc n} = s≤s ≤-reflℕ
+
+removeℕ-len : ∀ i xs → elemℕ i xs ≡ true → length (removeℕ i xs) < length xs
+removeℕ-len i [] ()
+removeℕ-len i (x ∷ xs) eq with i ≡ᵇ x | eq
+... | true  | _   = s≤s ≤-reflℕ
+... | false | eq′ = s≤s (removeℕ-len i xs eq′)
+
+-- n-1 down to 0. Every index a definition can look up sits here, and
+-- the length is the number of definitions.
+downFrom : ℕ → List ℕ
+downFrom zero    = []
+downFrom (suc n) = n ∷ downFrom n
+
+downFrom-len : ∀ n → length (downFrom n) ≡ n
+downFrom-len zero    = refl
+downFrom-len (suc n) = cong suc (downFrom-len n)
+
+-- Reachability over the finite definition set. No fuel: the recursion
+-- is well-founded on the length of the nodes not yet expanded. cur ≡ tgt
+-- is asked before membership, so a node reaches itself even outside the
+-- set. A node already expanded is absent from rest and is not expanded
+-- again, which is the visited set of the fuel-bounded search.
+-- reachOn is the expansion step, split out so a proof can case on the
+-- booleans and still reduce.
 mutual
-  reachGo : Sig → ℕ → ℕ → ℕ → List ℕ → Bool
-  reachGo _ zero _ _ _ = false
-  reachGo σ (suc f) tgt cur vis =
-    if cur ≡ᵇ tgt then true
-    else if elemℕ cur vis then false
-    else reachAny σ f tgt (edge σ cur) (cur ∷ vis)
+  reachOn :
+    (σ : Sig) (tgt cur : ℕ) (rest : List ℕ)
+    → (e : Bool) → elemℕ cur rest ≡ e
+    → (∀ {y} → y < length rest → Acc _<_ y)
+    → Bool
+  reachOn _ _   _   _     false _   _   = false
+  reachOn σ tgt cur rest  true  elm rec =
+    reachEdges σ tgt (edge σ cur) (removeℕ cur rest)
+      (rec (removeℕ-len cur rest elm))
 
-  reachAny : Sig → ℕ → ℕ → List ℕ → List ℕ → Bool
-  reachAny _ _ _ [] _ = false
-  reachAny σ f tgt (x ∷ xs) vis = reachGo σ f tgt x vis ∨ reachAny σ f tgt xs vis
+  reachAt : (σ : Sig) (tgt cur : ℕ) (rest : List ℕ) → Acc _<_ (length rest) → Bool
+  reachAt σ tgt cur rest (acc rec) =
+    if cur ≡ᵇ tgt then true
+    else reachOn σ tgt cur rest (elemℕ cur rest) refl rec
+
+  reachEdges : (σ : Sig) (tgt : ℕ) (xs rest′ : List ℕ) → Acc _<_ (length rest′) → Bool
+  reachEdges _ _ []       _     _ = false
+  reachEdges σ tgt (x ∷ xs) rest′ a =
+    reachAt σ tgt x rest′ a ∨ reachEdges σ tgt xs rest′ a
 
 reaches : Sig → ℕ → ℕ → Bool
-reaches σ src tgt = reachGo σ (suc (length (Sig.defs σ))) tgt src []
+reaches σ src tgt =
+  reachAt σ tgt src (downFrom (length (Sig.defs σ)))
+    (<-wellFounded (length (downFrom (length (Sig.defs σ)))))
 
--- Indices j such that i and j reach each other. i reaches i, so a
--- run, evidence, or spec definition is always in its own block.
+-- Indices j such that i and j reach each other, walking the definition
+-- list from index j. i reaches i, so a run, evidence, or spec
+-- definition is always in its own block.
+compGo : Sig → ℕ → ℕ → List Def → List ℕ
+compGo _ _ _ []       = []
+compGo σ i j (_ ∷ ds) =
+  let rest = compGo σ i (suc j) ds in
+  if reaches σ i j ∧ reaches σ j i then j ∷ rest else rest
+
 component : Sig → ℕ → List ℕ
-component σ i = go 0 (Sig.defs σ)
-  where
-    go : ℕ → List Def → List ℕ
-    go _ []       = []
-    go j (_ ∷ ds) =
-      let rest = go (suc j) ds in
-      if reaches σ i j ∧ reaches σ j i then j ∷ rest else rest
+component σ i = compGo σ i 0 (Sig.defs σ)
 
 argsOf : Sig → ℕ → List ℕ
 argsOf σ i with lookupDef σ i
@@ -2420,7 +2705,7 @@ checkDef k σ i =
       (checkTy k σ emptyRec [] (Def.dtype d) >> runDecl k σ (Def.dmode d) (Def.dtype d)) >>
   tag (Def.dname d ++ " body") (checkBody k σ i d) >>
   tag (Def.dname d ++ " productivity")
-      (checkNu k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d)) >>
+      (checkNu k σ (component σ i) [] (Def.dmode d) (Def.dtype d) (Def.dbody d)) >>
   ok tt
 
 checkDefs : ℕ → Sig → ℕ → List Def → Result ⊤

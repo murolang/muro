@@ -13,7 +13,7 @@ A path import is enough inside one repository. It is not enough when two program
 
 ## Manifest
 
-`muro_deps:` lives in the same manifest as [`mix muro.gen`](gen.md): `muro.exs` at the project root, or the `:muro` key in `mix.exs`. If both exist, loading stops and names both.
+`muro_deps:` lives in the same manifest as [`mix muro.gen`](gen.md): `muro.exs` at the project root, the `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`. If more than one of these defines a manifest, loading stops and names each of them. The TOML shape is [The executable](binary.md).
 
 A project that only checks books can list `muro_deps:` and omit `muro:` and `modules:`. `mix muro.gen` still requires those two keys.
 
@@ -73,7 +73,7 @@ Git packages are cloned with the `git` CLI. A tag or a branch is `git clone --de
 
 The version in the lock, and on the `conforms to` line, is the tag with one leading `v` removed when the rest starts with a digit (`v1.2.0` is `1.2.0`, `vlatest` stays `vlatest`). A `ref` is `<ref>@<first 7 hex chars of the commit>`, or those 7 chars when the ref is itself a commit. A pin-free spec uses the same shape as a branch ref: `<branch>@<first 7 hex chars>`, so the line reads `conforms to shared_wire main@0123abc (sha256 ...)`.
 
-Hex packages are downloaded without the Hex client. Releases come from `HEX_API_URL` (default `https://hex.pm/api`). The tarball comes from `HEX_MIRROR` (default `https://repo.hex.pm`). The request sends `accept` and a `user-agent`. HTTPS uses `verify_peer`, `:public_key.cacerts_get/0`, and the hostname check. A redirect to another host is refused. `:inets`, `:ssl`, and `:public_key` are started by the fetcher, not listed in `:muro`'s `extra_applications`. When Mix is loaded, the fetcher calls `Mix.ensure_application!/1` for those three first, because Mix removes other OTP applications from the code path.
+Hex packages are downloaded without the Hex client. Releases come from `HEX_API_URL` (default `https://hex.pm/api`). The tarball comes from `HEX_MIRROR` (default `https://repo.hex.pm`). The request sends `accept` and a `user-agent`. HTTPS uses `verify_peer`, `:public_key.cacerts_get/0`, and the hostname check. A redirect to another host is refused. `:inets`, `:ssl`, and `:public_key` are started by the fetcher, not listed in `:muro`'s `extra_applications`. When Mix is loaded, the fetcher calls `Mix.ensure_application!/1` for those three, plus `:crypto` and `:asn1`, first, because Mix removes other OTP applications from the code path. The self-contained executable ships those five in the release as `:load`. Mix records the code path when the executable starts, before the boot script loads them, so a miss loads the copy in the release library beside `:muro`. They are not dependencies of the Hex package.
 
 The highest release matching the requirement is selected with `Version.match?/3` and `allow_pre: false`. A pre-release is eligible only when the requirement itself contains a pre-release, so `~> 2.0` does not select `2.1.0-rc.1`, and `~> 2.1.0-rc` can. A release whose `retirement` field is a JSON object is skipped when another matching release is not retired. When every match is retired, the highest retired release is used.
 

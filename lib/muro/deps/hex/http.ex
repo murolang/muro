@@ -10,7 +10,10 @@ defmodule Muro.Deps.Hex.Http do
   `:inets`, `:ssl`, and `:public_key` are started here, not as
   extra applications of `:muro`. Mix removes other OTP applications
   from the code path, so this module calls `Mix.ensure_application!/1`
-  for those three before starting them when Mix is loaded.
+  for those three, plus `:crypto` and `:asn1`, before starting them
+  when Mix is loaded. In the executable Mix records the code path
+  before the boot script loads those applications, so a miss loads
+  the copy that sits in the release library beside `:muro`.
 
   No authorization header is sent. A 401 is reported as an
   unsupported private repository.
@@ -43,7 +46,7 @@ defmodule Muro.Deps.Hex.Http do
   end
 
   defp ensure_http do
-    with :ok <- ensure_mix_apps([:public_key, :ssl, :inets]),
+    with :ok <- ensure_mix_apps([:asn1, :crypto, :public_key, :ssl, :inets]),
          {:ok, _} <- Application.ensure_all_started(:public_key),
          {:ok, _} <- Application.ensure_all_started(:ssl),
          {:ok, _} <- Application.ensure_all_started(:inets) do
@@ -56,14 +59,56 @@ defmodule Muro.Deps.Hex.Http do
   # Mix (since 1.15) drops OTP applications that are not in
   # extra_applications. Put them back on the code path. A release
   # that does not load Mix already has the applications it shipped.
+  #
+  # In the executable, Mix.State records the code path when muro
+  # starts, which is before the boot script reaches these `:load`
+  # applications. Mix.ensure_application!/1 then cannot see them.
+  # They sit in the release lib beside `:muro`, so load that copy.
+  @doc false
+  def ensure_otp(apps) when is_list(apps), do: ensure_mix_apps(apps)
+
   defp ensure_mix_apps(apps) do
     if Code.ensure_loaded?(Mix) and function_exported?(Mix, :ensure_application!, 1) do
-      Enum.each(apps, &Mix.ensure_application!/1)
+      Enum.each(apps, &ensure_mix_app/1)
     end
 
     :ok
   rescue
     error -> {:error, Exception.message(error)}
+  end
+
+  defp ensure_mix_app(app) do
+    Mix.ensure_application!(app)
+  rescue
+    error ->
+      case release_ebin(app) do
+        nil ->
+          reraise(error, __STACKTRACE__)
+
+        ebin ->
+          Code.prepend_path(ebin)
+
+          case Application.load(app) do
+            :ok -> :ok
+            {:error, {:already_loaded, _}} -> :ok
+            {:error, reason} -> raise "could not load #{app} (#{inspect(reason)})"
+          end
+      end
+  end
+
+  defp release_ebin(app) do
+    case :code.lib_dir(:muro) do
+      path when is_list(path) ->
+        lib = path |> List.to_string() |> Path.dirname()
+
+        case Path.wildcard(Path.join(lib, "#{app}-*/ebin")) do
+          [ebin | _] -> ebin
+          [] -> nil
+        end
+
+      _ ->
+        nil
+    end
   end
 
   defp request(url, accept, left) do

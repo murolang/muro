@@ -20,43 +20,14 @@ defmodule Mix.Tasks.Muro.Init do
   and runs `mix muro.gen --check`. An existing workflow file is left
   in place.
 
-  The task prints a note to paste into the project's agent
-  instructions (AGENTS.md or similar): generated files are not edited
-  by hand, the `.muro` file is the source, and `mix muro.gen` is how
-  the module is updated. It does not write that file.
+  The task prints a note. `muro skills add` writes the commands for
+  this project into `AGENTS.md`. The task does not write that file.
 
   The manifest and the workflow are documented in `Muro.Init`.
   """
 
-  @switches [ci: :string]
-
   def run(args) do
     Mix.Tasks.Muro.ensure_started()
-
-    {opts, rest, invalid} = OptionParser.parse(args, strict: @switches)
-
-    if invalid != [] do
-      Mix.raise("unknown option: #{inspect(invalid)}")
-    end
-
-    if rest != [] do
-      Mix.raise("usage: mix muro.init [--ci github]")
-    end
-
-    ci =
-      case Keyword.get(opts, :ci) do
-        nil -> nil
-        "github" -> :github
-        other -> Mix.raise("unknown --ci #{other}; expected github")
-      end
-
-    case Muro.Init.write(Muro.Manifest.root(), Mix.Tasks.Muro.version(), ci) do
-      {:ok, lines, note} ->
-        Enum.each(lines, fn line -> Mix.shell().info(line) end)
-        Mix.shell().info(String.trim_trailing(note))
-
-      {:error, message} ->
-        Mix.raise(message)
-    end
+    Muro.CLI.Output.mix(Muro.CLI.Init.run_mix(args))
   end
 end

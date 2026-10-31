@@ -36,16 +36,6 @@ defmodule Mix.Tasks.Muro.Deps.Get do
 
   def run(args) do
     Mix.Tasks.Muro.ensure_started()
-
-    {_opts, rest, invalid} = OptionParser.parse(args, strict: [])
-
-    if invalid != [] or rest != [] do
-      Mix.raise("usage: mix muro.deps.get")
-    end
-
-    case Muro.Deps.get(Muro.Manifest.root()) do
-      {:ok, lines} -> Enum.each(lines, fn line -> Mix.shell().info(line) end)
-      {:error, message} -> Mix.raise(message)
-    end
+    Muro.CLI.Output.mix(Muro.CLI.Deps.run(args))
   end
 end

@@ -103,24 +103,29 @@ set +e
 mix muro.emit half_ok.muro --backend c >"$tmp/c.out" 2>"$tmp/c.err"
 c_status=$?
 set -e
-if [ "$c_status" -eq 0 ]; then
-  echo "expected --backend c to fail without elixir_make" >&2
+if [ "$c_status" -ne 0 ]; then
+  echo "expected --backend c outside a Mix project to write the C files" >&2
   cat "$tmp/c.out" "$tmp/c.err" >&2
   exit 1
 fi
 c_all=$(cat "$tmp/c.out" "$tmp/c.err")
-have "$c_all" '{:elixir_make, "~> 0.10", runtime: false}' "backend c"
 case "$c_all" in
-  *UndefinedFunctionError*)
-    echo "backend c raised UndefinedFunctionError" >&2
+  *elixir_make*)
+    echo "backend c outside a project mentioned elixir_make" >&2
     printf '%s\n' "$c_all" >&2
     exit 1
     ;;
 esac
-
-# The Elixir module is already in half_ok.ex. A refused NIF writes no C.
-if [ -e half_ok.c ] || [ -e half_ok.h ] || [ -e half_ok_nif.c ]; then
-  echo "backend c wrote files after refusing the NIF" >&2
+test -s half_ok.h
+test -s half_ok.c
+# The Elixir module from the earlier emit stays. A NIF would replace it.
+if [ "$(head -n 1 half_ok.ex)" != "defmodule HalfOk do" ]; then
+  echo "backend c outside a project replaced the Elixir module" >&2
+  exit 1
+fi
+grep -q "def half" half_ok.ex
+if [ -e half_ok_nif.c ] || [ -e half_ok_nif.h ] || [ -e half_ok.mk ] || [ -e priv/half_ok.so ]; then
+  echo "backend c outside a project wrote a NIF" >&2
   ls -la >&2
   exit 1
 fi
@@ -246,6 +251,40 @@ cp "$root/examples/half_ok.muro" "$host/half_ok.muro"
   grep -q "def half" half_ok.ex
   if [ -e _build ]; then
     echo "mix muro.emit compiled the host" >&2
+    exit 1
+  fi
+
+  # The host is a loaded Mix project and does not depend on elixir_make,
+  # so the NIF is refused and no C is written.
+  set +e
+  mix muro.emit half_ok.muro --backend c >"$tmp/host-c.out" 2>"$tmp/host-c.err"
+  host_c_status=$?
+  set -e
+  if [ "$host_c_status" -eq 0 ]; then
+    echo "expected host --backend c to fail without elixir_make" >&2
+    cat "$tmp/host-c.out" "$tmp/host-c.err" >&2
+    exit 1
+  fi
+  host_c_all=$(cat "$tmp/host-c.out" "$tmp/host-c.err")
+  have "$host_c_all" '{:elixir_make, "~> 0.10", runtime: false}' "host backend c"
+  case "$host_c_all" in
+    *UndefinedFunctionError*|*host\ application\ started*)
+      echo "host backend c raised or started the host" >&2
+      printf '%s\n' "$host_c_all" >&2
+      exit 1
+      ;;
+  esac
+  if [ -e half_ok.c ] || [ -e half_ok.h ] || [ -e half_ok_nif.c ] || [ -e half_ok.mk ]; then
+    echo "host backend c wrote C after refusing the NIF" >&2
+    ls -la >&2
+    exit 1
+  fi
+  if [ "$(head -n 1 half_ok.ex)" != "defmodule HalfOk do" ]; then
+    echo "host backend c replaced the Elixir module" >&2
+    exit 1
+  fi
+  if [ -e _build ]; then
+    echo "mix muro.emit --backend c compiled the host" >&2
     exit 1
   fi
 
@@ -1009,5 +1048,77 @@ case "$stale_all" in
     exit 1
     ;;
 esac
+
+# The published package must compile. manual/for-agents.md is read
+# while compiling Muro.Skills, so a tarball that omits it fails here.
+hex_dir="$tmp/hex-unpacked"
+hex_app="$tmp/hex-app"
+hex_archives="$tmp/hex-archives"
+mkdir -p "$hex_dir" "$hex_app" "$hex_archives"
+(
+  cd "$root"
+  # The smoke installs the archive into an empty MIX_ARCHIVES. Hex lives
+  # in the default archives, and hex.build needs it to load the project.
+  env -u MIX_ARCHIVES mix hex.build --output "$tmp/muro-${version}.tar"
+)
+tar -xf "$tmp/muro-${version}.tar" -C "$hex_dir"
+# A Hex tarball is CHECKSUM, VERSION, metadata.config, and contents.tar.gz.
+pkg="$hex_dir/src"
+mkdir -p "$pkg"
+tar -xzf "$hex_dir/contents.tar.gz" -C "$pkg"
+test -f "$pkg/manual/for-agents.md"
+test -f "$pkg/lib/muro/skills.ex"
+if grep -q burrito "$hex_dir/metadata.config"; then
+  echo "the hex package lists burrito" >&2
+  exit 1
+fi
+
+cat >"$hex_app/mix.exs" <<EOF
+defmodule HexApp.MixProject do
+  use Mix.Project
+
+  def project do
+    [
+      app: :hex_app,
+      version: "0.1.0",
+      elixir: "~> 1.15",
+      deps: [{:muro, path: "${pkg}"}]
+    ]
+  end
+
+  def application do
+    [extra_applications: [:logger]]
+  end
+end
+EOF
+
+(
+  cd "$hex_app"
+  unset MIX_BUILD_PATH
+  unset MIX_ARCHIVES
+  mix deps.get
+  mix compile
+  block=$(mix run -e 'IO.write(Muro.Skills.block(nil))')
+  printf '%s\n' "$block"
+  have "$block" "<!-- muro:begin -->" "packaged skills block"
+  have "$block" "<!-- muro:end -->" "packaged skills block"
+  have "$block" "muro check" "packaged skills block"
+  # Archive the beams compiled from the package, not the checkout.
+  mix archive.build -i "_build/${MIX_ENV}/lib/muro" -o "$hex_archives/muro-${version}.ez"
+)
+
+MIX_ARCHIVES="$hex_archives" mix archive.install --force "$hex_archives/muro-${version}.ez"
+
+hex_work="$tmp/hex-work"
+mkdir -p "$hex_work"
+(
+  cd "$hex_work"
+  got=$(MIX_ARCHIVES="$hex_archives" mix muro --version)
+  printf '%s\n' "$got"
+  if [ "$got" != "Muro v${version}" ]; then
+    echo "expected Muro v${version} from the packaged archive, got: ${got}" >&2
+    exit 1
+  fi
+)
 
 echo "archive smoke passed (${version})"

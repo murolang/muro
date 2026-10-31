@@ -105,6 +105,35 @@ defmodule Muro.ArchiveTest do
     assert {:ok, {Muro.MakeupLexer, []}} = Makeup.Registry.fetch_lexer_by_name("muro")
   end
 
+  test "ensure_mix_servers leaves the loaded Mix project in place" do
+    project = Mix.Project.get()
+    assert Muro.Application.ensure_mix_servers() == :ok
+    assert Mix.Project.get() == project
+  end
+
+  test "application start with __BURRITO set but without the muro release marker does not run the CLI" do
+    System.put_env("__BURRITO", "1")
+    Application.delete_env(:muro, :release_cli)
+
+    on_exit(fn ->
+      System.delete_env("__BURRITO")
+      Application.delete_env(:muro, :release_cli)
+    end)
+
+    refute Muro.Application.release_cli?()
+    Application.put_env(:muro, :release_cli, true)
+    assert Muro.Application.release_cli?()
+    Application.delete_env(:muro, :release_cli)
+
+    output =
+      capture_io(fn ->
+        assert {:error, {:already_started, pid}} = Muro.Application.start(:normal, [])
+        assert is_pid(pid)
+      end)
+
+    assert output == ""
+  end
+
   test "a NIF is refused when elixir_make is absent" do
     assert Muro.Emit.Nif.elixir_make_available?()
     assert Muro.Emit.Nif.require_elixir_make!() == :ok
