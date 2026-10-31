@@ -28,7 +28,9 @@ open import Muro.Temporal.Pic using (_∈_; root-at)
 open import Muro.Temporal.Source
   using ( SProc; SConf; abs; Pay; pEcho; W; EnvI; EnvP; addPend; lookupI; walk; findS; asAtom
         ; smu; Bound; b-here; b-there
-        ; Focus; f-put; Unfold; u-put; u-mu; u-var )
+        ; Focus; f-put; f-done; f-stop; f-get; f-pick0; f-pick1; f-cover; f-iget; f-mget
+        ; Unfold; u-put; u-mu; u-var; u-done; u-stop; u-get; u-pick0; u-pick1
+        ; u-cover; u-iget; u-mget )
   renaming (snoc to ssnoc)
 open SConf
 open import Muro.Temporal using (Step; stepL; lside)
@@ -159,6 +161,135 @@ echo-env : ∀ {bs i s env ρ ρ′ p} (eq : ρ ≡ ρ′) (cur : Cursor bs i s 
            Cursor.echoNs (subst (λ e → Cursor bs i s env e p) eq cur) ≡
            Cursor.echoNs cur
 echo-env refl _ = refl
+
+-- The place an unfold reaches, with the bag the walk was read under.
+record Stop (bs : List (ℕ × Block)) (ns : List String) (n s : ℕ)
+            (base : EnvI) (ρ′ : EnvP) (pend′ : List String) (f : Focus) : Set where
+  constructor atAct
+  field
+    pend suf : List String
+    env : EnvP
+    ρi : EnvI
+    bg : Bag bs ns n s base ρi pend suf env
+    proc : SProc
+    pl : Place proc
+    cv : CovP pl bs
+    lk : Link pl
+    hs : Hosts (Bag.tab bg) pl
+    at : At suf pl
+    ens : EchoNs ns pl
+    al : Align suf pl
+    ix : n ≡ headIx pl
+    ss : s ≡ slotOf pl
+    sn : Ext (envOf pl) ρi
+    unf : Unfold env pend proc ρ′ pend′ f
+
+-- A leaf unfold does not move the bag. `ρ′` and `pend′` are its `env` and `pend`.
+land : ∀ {bs ns n s base ρi pend suf env proc f} →
+       (bg : Bag bs ns n s base ρi pend suf env) →
+       (pl : Place proc) → CovP pl bs → Link pl → Hosts (Bag.tab bg) pl →
+       At suf pl → EchoNs ns pl → Align suf pl →
+       n ≡ headIx pl → s ≡ slotOf pl → Ext (envOf pl) ρi →
+       Unfold env pend proc env pend f →
+       Stop bs ns n s base env pend f
+land bg pl cv lk hs at ens al ix ss sn unf =
+  atAct _ _ _ _ bg _ pl cv lk hs at ens al ix ss sn unf
+
+-- Peel a mu and follow a jump. Stop at the action, the halt, or the end.
+descend : ∀ {bs ns n s base ρi pend suf env proc ρ′ pend′ f}
+            (bg : Bag bs ns n s base ρi pend suf env) →
+          (pl : Place proc) → CovP pl bs → Link pl → Hosts (Bag.tab bg) pl →
+          At suf pl → EchoNs ns pl → Align suf pl →
+          n ≡ headIx pl → s ≡ slotOf pl → Ext (envOf pl) ρi →
+          Unfold env pend proc ρ′ pend′ f →
+          Stop bs ns n s base ρ′ pend′ f
+descend {n = n} {s = s} {base = base} {ρi = ρi} {pend = pend} {suf = suf}
+        {env = env}
+        bg (p-mu {p = q} x pl) (cp-mu cv) (lk-mu lk) (hs-mu inn eq hs)
+        (at-mu miss atI) (en-mu ensI) (al-mu alI) ix ss sn (u-mu u) =
+  descend bg′ pl cv lk hs atI ensI alI ix ss sn′ u
+  where
+  ixE = ix-eq inn (ls bg) eq ix
+  slE = sl-eq inn (ls bg) eq ss
+  sn′ = ext-front {x = x} {i = n} {s = s} {ρ0 = envOf pl} {ρ = ρi}
+          sn (inj₁ miss)
+  pinX = runtime-pin {x = x} {ρ = ρi} {n = n} {s = s}
+           inn ixE slE (nd bg) (sy bg)
+  covX = cov-cons {x = x} {i = n} {s = s} {suf = suf} {ρ = ρi}
+           {i0 = n} {s0 = s} (pin bg) pinX
+  kn′ = kn1 {i = n} {s0 = s} {suf = suf} {pl = p-mu x pl}
+          inn eq ixE slE (at-mu miss atI) (en-mu ensI) (al-mu alI)
+          sn′ covX (kn bg)
+  bg′ = bag (tab bg) (ct bg) (ls bg)
+          (td1 inn (td bg))
+          (sy1 {i = n} {s = s} inn ixE slE (sy bg))
+          kn′ (nd bg)
+          (cong ((x , n , s) ∷_) (run bg))
+          (cov-mu {x = x} {suf = suf} {got = pend} {base = base} {n = n} {s = s}
+             (cvd bg))
+          (cov-push {x = x} {suf = suf} {ρ = ρi} {n = n} {s = s} (pin bg))
+
+descend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
+        {pend = pend} {env = env}
+        bg (p-jump x iJ sJ ρJ) cp-jump (lk-jump look) hs-jump atJ en-jump
+        al-jump ix ss sn (u-var {body = body} b u) =
+  descend bgJ (Found.pl f)
+    (cov-cast-pl (Found.peq f) (cov-of (ct bg) (Found.m f)))
+    (link-cast (Found.peq f) (link-of (Found.m f)))
+    (hosts-cast (Found.peq f) (hosts-of (ls bg) (Found.m f)))
+    (Found.at f) (Found.ens f) (Found.al f)
+    n≡head s≡slot (Found.ext f) u
+  where
+  hit = sn x iJ sJ look
+  got = sync-hit (sy bg) hit
+  mQ = proj₁ (proj₂ got)
+  ixQ = proj₁ (proj₂ (proj₂ got))
+  slQ = proj₂ (proj₂ (proj₂ got))
+  f : Found ns (tab bg) x body ρi
+  f = kn-find {ns = ns} {x = x} {P = body} {tab = tab bg} {env = env} {ρ = ρi}
+        (kn bg) b (nd bg)
+  sm = same-slot (Found.m f) mQ (nd bg)
+  ixQ≡n = trans ixQ (sym ix)
+  ixF≡n = trans (proj₁ sm) ixQ≡n
+  n≡head = trans (sym ixF≡n)
+             (trans (ix-head (ls bg) (Found.m f)) (cong headIx (Found.peq f)))
+  i≡n : Found.i f ≡ n
+  i≡n = trans (sym (Found.ix≡ f)) ixF≡n
+  slQ≡s = trans slQ (sym ss)
+  slF≡s = trans (proj₂ sm) slQ≡s
+  s≡slot = trans (sym slF≡s)
+             (trans (slot-head (ls bg) (Found.m f)) (cong slotOf (Found.peq f)))
+  s0≡s : Found.s0 f ≡ s
+  s0≡s = trans (sym (Found.sl≡ f)) slF≡s
+  pinJ : Covered (Found.suf f) [] ρi n s
+  pinJ = cov-cast {suf = Found.suf f} {got = []} {base = ρi}
+           {i = Found.i f} {s = Found.s0 f} {n = n} {s′ = s}
+           i≡n s0≡s (Found.cov f)
+  pinAdd = subst (λ e → Covered (Found.suf f) [] e n s) (run bg) pinJ
+  cvdJ = cov-pull {suf = Found.suf f} {pend = pend} {base = base} {n = n} {s = s}
+           pinAdd
+  bgJ = bag (tab bg) (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
+          (run bg) cvdJ pinJ
+
+descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-done =
+  land bg pl cv lk hs at ens al ix ss sn u-done
+descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-stop =
+  land bg pl cv lk hs at ens al ix ss sn u-stop
+descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-put =
+  land bg pl cv lk hs at ens al ix ss sn u-put
+descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-get =
+  land bg pl cv lk hs at ens al ix ss sn u-get
+descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-pick0 =
+  land bg pl cv lk hs at ens al ix ss sn u-pick0
+descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-pick1 =
+  land bg pl cv lk hs at ens al ix ss sn u-pick1
+descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-cover =
+  land bg pl cv lk hs at ens al ix ss sn u-cover
+descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-iget =
+  land bg pl cv lk hs at ens al ix ss sn u-iget
+descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-mget =
+  land bg pl cv lk hs at ens al ix ss sn u-mget
+descend _ (p-act _ (r-mu _) _ _ _) _ () _ _ _ _ _ _ _
 
 -- Peel and jump, then read the send. The cursor at the end is the
 -- continuation, indexed at the counters the walk gave it.
