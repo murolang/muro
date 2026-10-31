@@ -1,0 +1,949 @@
+------------------------------------------------------------------------
+-- A fragment process denotes the blocks `compile` allocates.
+--
+-- `denote` follows `agree`: the same counters, the same environment
+-- extension, the same echo slot. It also keeps the place a jump returns
+-- to and the coverage of every block on the list `compile` returns.
+-- A `smu` allocates nothing. Its name is entered in the table only when
+-- the body reaches an action, at that action's index and slot.
+------------------------------------------------------------------------
+
+{-# OPTIONS --safe --guardedness #-}
+
+module Muro.Temporal.Denote where
+
+open import Data.Bool.Base using (Bool; true; false)
+open import Data.List.Base using (List; []; _∷_; _++_; length)
+open import Data.Maybe.Base using (just; nothing)
+open import Data.Nat.Base using (ℕ; zero; suc; _+_)
+open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
+open import Data.String.Base using (String)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym)
+
+open import Muro.AsyncRec
+  using ( Atom; aNat; aBit; aCon; Tag
+        ; RProc; rpick0; rpick1; rcover; riget; rmget; rvar
+        ; Block; bDone; bStop; bPut; bEcho; bPick0; bPick1; bGet; bCover; bIget; bMget
+        ; COut; cok; cfail; Fault; fUnguarded; fFree
+        ; compile; compileArms; addNames; lookupN; elemS
+        ; REnv; VEnv )
+open import Muro.Temporal.Bridge
+  using ( Frag; FragPay; FragArm; FragArms
+        ; fdone; fstop; fput; fget; fpick0; fpick1; fcover; figet; fmget; fmu; fvar
+        ; fnat; fbit; fcon; fecho; farm; farms0; farms1
+        ; elab; elabArms; echoOk; echoOkArms; ∧-left; ∧-right
+        ; echoAF )
+open import Muro.Temporal.Source
+  using ( Pay; pNat; pBit; pCon; pEcho
+        ; Arm; aok; SProc; sdone; sstop; sput; sget; spick0; spick1
+        ; scover; siget; smget; smu; svar
+        ; W; mkW; EnvI; addPend; lookupI; walk; walkArms; findS; asAtom
+        ; bnames; bnamesArms
+        ; src-echoA )
+open W
+open import Muro.Temporal.Pic
+  using ( Ord; o0; o1; ord-cat; _∈_; here; there; +-idr; ents
+        ; ERel; er0; add-rel; Seen; seen-no; seen-yes; lookup-rel
+        ; EchoRel; echo-empty; echo-extend )
+open import Muro.Temporal.Agree
+  using ( get-slot; get-names; split-left; split-right; cat-slot; shift-end; sum-len
+        ; iget-p-ns; iget-q-ns; iget-q-slot; iget-end
+        ; echoA-ok; root-ns )
+open import Muro.Temporal.Den
+
+------------------------------------------------------------------------
+-- Moving coverage onto the list a parent allocates.
+------------------------------------------------------------------------
+
+under : ∀ {xs} {k : ℕ} {blk b : Block} {i : ℕ} →
+        (i , b) ∈ xs → (i , b) ∈ ((k , blk) ∷ xs)
+under m = there m
+
+onˡ : ∀ {bs1 bs2} {k : ℕ} {blk b : Block} {i : ℕ} →
+      (i , b) ∈ bs1 → (i , b) ∈ ((k , blk) ∷ (bs1 ++ bs2))
+onˡ m = there (∈++ˡ m)
+
+onʳ : ∀ {bs1 bs2} {k : ℕ} {blk b : Block} {i : ℕ} →
+      (i , b) ∈ bs2 → (i , b) ∈ ((k , blk) ∷ (bs1 ++ bs2))
+onʳ {bs1} m = there (∈++ʳ {xs = bs1} m)
+
+inˡ : ∀ {bs1 bs2} {i : ℕ} {b : Block} → (i , b) ∈ bs1 → (i , b) ∈ (bs1 ++ bs2)
+inˡ m = ∈++ˡ m
+
+inʳ : ∀ {bs1 bs2} {i : ℕ} {b : Block} → (i , b) ∈ bs2 → (i , b) ∈ (bs1 ++ bs2)
+inʳ {bs1} m = ∈++ʳ {xs = bs1} m
+
+appendT : Table → Table → Table
+appendT t0 u = u
+appendT (t1 x i s0 ρ pl t) u = t1 x i s0 ρ pl (appendT t u)
+
+appendC : ∀ {t u bs} → CovT t bs → CovT u bs → CovT (appendT t u) bs
+appendC ct0 cu = cu
+appendC (ct1 c ct) cu = ct1 c (appendC ct cu)
+
+-- Bind `x` at the action `pl` reaches. A bare jump allocates no block,
+-- so it contributes no table entry.
+cons-bind : ∀ {P bs} (x : String) (ρ : EnvI) (pl : Place P) (c : CovP pl bs)
+            (tab : Table) (ct : CovT tab bs) → Σ Table (λ t → CovT t bs)
+cons-bind {bs = bs} x ρ pl c tab ct = go pl c
+  where
+  go : ∀ {Q} (ql : Place Q) → CovP ql bs → Σ Table (λ t → CovT t bs)
+  go (p-jump _ _ _ _) cp-jump = tab , ct
+  go (p-act _ _ _ _ _) (cp-act _) =
+    t1 x (headIx pl) (slotOf pl) ρ pl tab , ct1 c ct
+  go (p-mu _ inner) (cp-mu c2) = go inner c2
+
+bit-atom : ∀ b → asAtom (pBit b) ≡ just (aBit b)
+bit-atom false = refl
+bit-atom true = refl
+
+------------------------------------------------------------------------
+-- What `denote` returns. `Yes` is a successful `walk` and `compile`,
+-- together with the place and the table.
+------------------------------------------------------------------------
+
+record Yes (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
+           (renv : REnv) (venv : VEnv) (n slot : ℕ) : Set where
+  constructor yesB
+  field
+    w : W
+    bs : List (ℕ × Block)
+    wk : walk pend ρ P n slot ≡ just w
+    cmp : compile (elab P fp) pend renv venv slot n ≡
+            cok (entry w) (next w) (slotN w) bs
+    od : Ord n (next w) bs
+    end : slotN w ≡ slot + length (bnames P)
+    pl : Place P
+    tab : Table
+    cv : CovP pl bs
+    ct : CovT tab bs
+    hd : headIx pl ≡ entry w
+    sl : slotOf pl ≡ atSlot w
+    ev : envOf pl ≡ ρ
+
+record No (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
+          (renv : REnv) (venv : VEnv) (n slot : ℕ) : Set where
+  constructor noB
+  field
+    fault : Fault
+    wk : walk pend ρ P n slot ≡ nothing
+    cmp : compile (elab P fp) pend renv venv slot n ≡ cfail fault
+
+data Built (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
+           (renv : REnv) (venv : VEnv) (n slot : ℕ) : Set where
+  ok : Yes P fp pend ρ renv venv n slot → Built P fp pend ρ renv venv n slot
+  bad : No P fp pend ρ renv venv n slot → Built P fp pend ρ renv venv n slot
+
+record YesA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
+            (venv : VEnv) (n slot : ℕ) : Set where
+  constructor yesA
+  field
+    ws : List (String × W)
+    n2 s2 : ℕ
+    bs : List (ℕ × Block)
+    wk : walkArms [] ρ as n slot ≡ just (ws , n2 , s2)
+    cmp : compileArms (elabArms as fas) renv venv slot n ≡
+            (cok n2 n2 s2 [] , ents ws , bs)
+    od : Ord n n2 bs
+    end : s2 ≡ slot + length (bnamesArms as)
+    dests : ArmPs as ws
+    tab : Table
+    cv : CovA dests bs
+    ct : CovT tab bs
+
+record NoA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
+           (venv : VEnv) (n slot : ℕ) : Set where
+  constructor noA
+  field
+    fault : Fault
+    wk : walkArms [] ρ as n slot ≡ nothing
+    cmp : compileArms (elabArms as fas) renv venv slot n ≡ (cfail fault , [] , [])
+
+data BuiltA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
+            (venv : VEnv) (n slot : ℕ) : Set where
+  okA : YesA as fas ρ renv venv n slot → BuiltA as fas ρ renv venv n slot
+  badA : NoA as fas ρ renv venv n slot → BuiltA as fas ρ renv venv n slot
+
+------------------------------------------------------------------------
+-- One parent block in front of a child's place.
+------------------------------------------------------------------------
+
+finish-put :
+  ∀ {a atom p fp pend ρ renv venv n slot}
+  (fq : Frag (sput a p))
+  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot) →
+  asAtom a ≡ just atom →
+  walk pend ρ (sput a p) n slot ≡
+    just (mkW n slot (next (Yes.w y)) (slotN (Yes.w y))) →
+  compile (elab (sput a p) fq) pend renv venv slot n ≡
+    cok n (next (Yes.w y)) (slotN (Yes.w y))
+      ((n , bPut atom (entry (Yes.w y))) ∷ Yes.bs y) →
+  Yes (sput a p) fq pend ρ renv venv n slot
+finish-put {a} {atom} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y aeq wk cmp =
+  yesB (mkW n slot (next (Yes.w y)) (slotN (Yes.w y)))
+       ((n , bPut atom (entry (Yes.w y))) ∷ Yes.bs y)
+       wk cmp (o1 (Yes.od y)) (Yes.end y)
+       (p-act (d-put n slot a atom (entry (Yes.w y)) p ρw (Yes.w y) aeq
+                 (Yes.wk y) refl (Yes.pl y))
+              r-put n slot ρ)
+       (Yes.tab y)
+       (cp-act (c-put here (covP-lift under (Yes.cv y))))
+       (covT-lift under (Yes.ct y))
+       refl refl refl
+  where
+  ρw = addPend pend n slot ρ
+
+finish-echo :
+  ∀ {x p fp pend ρ renv venv ns n slot sX}
+  (fq : Frag (sput (pEcho x) p))
+  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot) →
+  lookupN x venv ≡ just sX →
+  findS x ns ≡ just sX →
+  walk pend ρ (sput (pEcho x) p) n slot ≡
+    just (mkW n slot (next (Yes.w y)) (slotN (Yes.w y))) →
+  compile (elab (sput (pEcho x) p) fq) pend renv venv slot n ≡
+    cok n (next (Yes.w y)) (slotN (Yes.w y))
+      ((n , bEcho sX (entry (Yes.w y))) ∷ Yes.bs y) →
+  Yes (sput (pEcho x) p) fq pend ρ renv venv n slot
+finish-echo {x} {p} {fp} {pend} {ρ} {renv} {venv} {ns} {n} {slot} {sX} fq y lk fd wk cmp =
+  yesB (mkW n slot (next (Yes.w y)) (slotN (Yes.w y)))
+       ((n , bEcho sX (entry (Yes.w y))) ∷ Yes.bs y)
+       wk cmp (o1 (Yes.od y)) (Yes.end y)
+       (p-act (d-echo n slot x ns sX (entry (Yes.w y)) p ρw (Yes.w y) fd
+                 (Yes.wk y) refl (Yes.pl y))
+              r-echo n slot ρ)
+       (Yes.tab y)
+       (cp-act (c-echo here (covP-lift under (Yes.cv y))))
+       (covT-lift under (Yes.ct y))
+       refl refl refl
+  where
+  ρw = addPend pend n slot ρ
+
+finish-pick0 :
+  ∀ {p fp pend ρ renv venv n slot}
+  (fq : Frag (spick0 p))
+  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot) →
+  walk pend ρ (spick0 p) n slot ≡
+    just (mkW n slot (next (Yes.w y)) (slotN (Yes.w y))) →
+  compile (elab (spick0 p) fq) pend renv venv slot n ≡
+    cok n (next (Yes.w y)) (slotN (Yes.w y))
+      ((n , bPick0 (entry (Yes.w y))) ∷ Yes.bs y) →
+  Yes (spick0 p) fq pend ρ renv venv n slot
+finish-pick0 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
+  yesB (mkW n slot (next (Yes.w y)) (slotN (Yes.w y)))
+       ((n , bPick0 (entry (Yes.w y))) ∷ Yes.bs y)
+       wk cmp (o1 (Yes.od y)) (Yes.end y)
+       (p-act (d-pick0 n slot (entry (Yes.w y)) p ρw (Yes.w y)
+                 (Yes.wk y) refl (Yes.pl y))
+              r-pick0 n slot ρ)
+       (Yes.tab y)
+       (cp-act (c-pick0 here (covP-lift under (Yes.cv y))))
+       (covT-lift under (Yes.ct y))
+       refl refl refl
+  where
+  ρw = addPend pend n slot ρ
+
+finish-pick1 :
+  ∀ {p fp pend ρ renv venv n slot}
+  (fq : Frag (spick1 p))
+  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot) →
+  walk pend ρ (spick1 p) n slot ≡
+    just (mkW n slot (next (Yes.w y)) (slotN (Yes.w y))) →
+  compile (elab (spick1 p) fq) pend renv venv slot n ≡
+    cok n (next (Yes.w y)) (slotN (Yes.w y))
+      ((n , bPick1 (entry (Yes.w y))) ∷ Yes.bs y) →
+  Yes (spick1 p) fq pend ρ renv venv n slot
+finish-pick1 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
+  yesB (mkW n slot (next (Yes.w y)) (slotN (Yes.w y)))
+       ((n , bPick1 (entry (Yes.w y))) ∷ Yes.bs y)
+       wk cmp (o1 (Yes.od y)) (Yes.end y)
+       (p-act (d-pick1 n slot (entry (Yes.w y)) p ρw (Yes.w y)
+                 (Yes.wk y) refl (Yes.pl y))
+              r-pick1 n slot ρ)
+       (Yes.tab y)
+       (cp-act (c-pick1 here (covP-lift under (Yes.cv y))))
+       (covT-lift under (Yes.ct y))
+       refl refl refl
+  where
+  ρw = addPend pend n slot ρ
+
+finish-get :
+  ∀ {t x p fp pend ρ renv venv n slot}
+  (fq : Frag (sget t x p))
+  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv)
+         ((x , slot) ∷ venv) (suc n) (suc slot)) →
+  walk pend ρ (sget t x p) n slot ≡
+    just (mkW n slot (next (Yes.w y)) (slotN (Yes.w y))) →
+  compile (elab (sget t x p) fq) pend renv venv slot n ≡
+    cok n (next (Yes.w y)) (slotN (Yes.w y))
+      ((n , bGet t slot (entry (Yes.w y))) ∷ Yes.bs y) →
+  Yes (sget t x p) fq pend ρ renv venv n slot
+finish-get {t} {x} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
+  yesB (mkW n slot (next (Yes.w y)) (slotN (Yes.w y)))
+       ((n , bGet t slot (entry (Yes.w y))) ∷ Yes.bs y)
+       wk cmp (o1 (Yes.od y))
+       (shift-end {slot} {slotN (Yes.w y)} {length (bnames p)} (Yes.end y))
+       (p-act (d-get n slot t x (entry (Yes.w y)) p ρw (Yes.w y)
+                 (Yes.wk y) refl (Yes.pl y))
+              r-get n slot ρ)
+       (Yes.tab y)
+       (cp-act (c-get here (covP-lift under (Yes.cv y))))
+       (covT-lift under (Yes.ct y))
+       refl refl refl
+  where
+  ρw = addPend pend n slot ρ
+
+------------------------------------------------------------------------
+-- `walk` and `compile` of the forms whose lemmas are not in `Den`.
+------------------------------------------------------------------------
+
+spick0-walk : ∀ {pend ρ p n s w} →
+              walk [] (addPend pend n s ρ) p (suc n) s ≡ just w →
+              walk pend ρ (spick0 p) n s ≡ just (mkW n s (next w) (slotN w))
+spick0-walk eq rewrite eq = refl
+
+spick0-miss : ∀ {pend ρ p n s} →
+              walk [] (addPend pend n s ρ) p (suc n) s ≡ nothing →
+              walk pend ρ (spick0 p) n s ≡ nothing
+spick0-miss eq rewrite eq = refl
+
+pick0-cmp : ∀ {pend renv venv slot n q e nxt slot' bs} →
+            compile q [] (addNames pend n renv) venv slot (suc n) ≡
+              cok e nxt slot' bs →
+            compile (rpick0 q) pend renv venv slot n ≡
+              cok n nxt slot' ((n , bPick0 e) ∷ bs)
+pick0-cmp eq rewrite eq = refl
+
+pick0-miss : ∀ {pend renv venv slot n q f} →
+             compile q [] (addNames pend n renv) venv slot (suc n) ≡ cfail f →
+             compile (rpick0 q) pend renv venv slot n ≡ cfail f
+pick0-miss eq rewrite eq = refl
+
+spick1-walk : ∀ {pend ρ p n s w} →
+              walk [] (addPend pend n s ρ) p (suc n) s ≡ just w →
+              walk pend ρ (spick1 p) n s ≡ just (mkW n s (next w) (slotN w))
+spick1-walk eq rewrite eq = refl
+
+spick1-miss : ∀ {pend ρ p n s} →
+              walk [] (addPend pend n s ρ) p (suc n) s ≡ nothing →
+              walk pend ρ (spick1 p) n s ≡ nothing
+spick1-miss eq rewrite eq = refl
+
+pick1-cmp : ∀ {pend renv venv slot n q e nxt slot' bs} →
+            compile q [] (addNames pend n renv) venv slot (suc n) ≡
+              cok e nxt slot' bs →
+            compile (rpick1 q) pend renv venv slot n ≡
+              cok n nxt slot' ((n , bPick1 e) ∷ bs)
+pick1-cmp eq rewrite eq = refl
+
+pick1-miss : ∀ {pend renv venv slot n q f} →
+             compile q [] (addNames pend n renv) venv slot (suc n) ≡ cfail f →
+             compile (rpick1 q) pend renv venv slot n ≡ cfail f
+pick1-miss eq rewrite eq = refl
+
+cover-walk-bad : ∀ {pend ρ p q n s} →
+                 walk [] (addPend pend n s ρ) p (suc n) s ≡ nothing →
+                 walk pend ρ (scover p q) n s ≡ nothing
+cover-walk-bad eq rewrite eq = refl
+
+cover-cmp-bad : ∀ {pend renv venv slot n q1 q2 f} →
+                compile q1 [] (addNames pend n renv) venv slot (suc n) ≡ cfail f →
+                compile (rcover q1 q2) pend renv venv slot n ≡ cfail f
+cover-cmp-bad eq rewrite eq = refl
+
+cover-walk-miss : ∀ {pend ρ p q n s w} →
+                  walk [] (addPend pend n s ρ) p (suc n) s ≡ just w →
+                  walk [] (addPend pend n s ρ) q (next w) (slotN w) ≡ nothing →
+                  walk pend ρ (scover p q) n s ≡ nothing
+cover-walk-miss eq1 eq2 rewrite eq1 | eq2 = refl
+
+cover-cmp-miss : ∀ {pend renv venv slot n q1 q2 e nxt slot' bs f} →
+                 compile q1 [] (addNames pend n renv) venv slot (suc n) ≡
+                   cok e nxt slot' bs →
+                 compile q2 [] (addNames pend n renv) venv slot' nxt ≡ cfail f →
+                 compile (rcover q1 q2) pend renv venv slot n ≡ cfail f
+cover-cmp-miss eq1 eq2 rewrite eq1 | eq2 = refl
+
+cover-walk-hit : ∀ {pend ρ p q n s w1 w2} →
+                 walk [] (addPend pend n s ρ) p (suc n) s ≡ just w1 →
+                 walk [] (addPend pend n s ρ) q (next w1) (slotN w1) ≡ just w2 →
+                 walk pend ρ (scover p q) n s ≡
+                   just (mkW n s (next w2) (slotN w2))
+cover-walk-hit eq1 eq2 rewrite eq1 | eq2 = refl
+
+cover-cmp-hit : ∀ {pend renv venv slot n q1 q2 e1 nxt1 slot1 bs1 e2 nxt2 slot2 bs2} →
+                compile q1 [] (addNames pend n renv) venv slot (suc n) ≡
+                  cok e1 nxt1 slot1 bs1 →
+                compile q2 [] (addNames pend n renv) venv slot1 nxt1 ≡
+                  cok e2 nxt2 slot2 bs2 →
+                compile (rcover q1 q2) pend renv venv slot n ≡
+                  cok n nxt2 slot2 ((n , bCover e1 e2) ∷ bs1 ++ bs2)
+cover-cmp-hit eq1 eq2 rewrite eq1 | eq2 = refl
+
+iget-walk-bad : ∀ {pend ρ x p q n s} →
+                walk [] (addPend pend n s ρ) p (suc n) (suc s) ≡ nothing →
+                walk pend ρ (siget x p q) n s ≡ nothing
+iget-walk-bad eq rewrite eq = refl
+
+iget-cmp-bad : ∀ {pend renv venv slot n x q1 q2 f} →
+               compile q1 [] (addNames pend n renv) ((x , slot) ∷ venv) (suc slot) (suc n) ≡
+                 cfail f →
+               compile (riget x q1 q2) pend renv venv slot n ≡ cfail f
+iget-cmp-bad eq rewrite eq = refl
+
+iget-walk-miss : ∀ {pend ρ x p q n s w} →
+                 walk [] (addPend pend n s ρ) p (suc n) (suc s) ≡ just w →
+                 walk [] (addPend pend n s ρ) q (next w) (slotN w) ≡ nothing →
+                 walk pend ρ (siget x p q) n s ≡ nothing
+iget-walk-miss eq1 eq2 rewrite eq1 | eq2 = refl
+
+iget-cmp-miss : ∀ {pend renv venv slot n x q1 q2 e nxt slot' bs f} →
+                compile q1 [] (addNames pend n renv) ((x , slot) ∷ venv) (suc slot) (suc n) ≡
+                  cok e nxt slot' bs →
+                compile q2 [] (addNames pend n renv) ((x , slot) ∷ venv) slot' nxt ≡ cfail f →
+                compile (riget x q1 q2) pend renv venv slot n ≡ cfail f
+iget-cmp-miss eq1 eq2 rewrite eq1 | eq2 = refl
+
+iget-walk-hit : ∀ {pend ρ x p q n s w1 w2} →
+                walk [] (addPend pend n s ρ) p (suc n) (suc s) ≡ just w1 →
+                walk [] (addPend pend n s ρ) q (next w1) (slotN w1) ≡ just w2 →
+                walk pend ρ (siget x p q) n s ≡
+                  just (mkW n s (next w2) (slotN w2))
+iget-walk-hit eq1 eq2 rewrite eq1 | eq2 = refl
+
+iget-cmp-hit : ∀ {pend renv venv slot n x q1 q2 e1 nxt1 slot1 bs1 e2 nxt2 slot2 bs2} →
+               compile q1 [] (addNames pend n renv) ((x , slot) ∷ venv) (suc slot) (suc n) ≡
+                 cok e1 nxt1 slot1 bs1 →
+               compile q2 [] (addNames pend n renv) ((x , slot) ∷ venv) slot1 nxt1 ≡
+                 cok e2 nxt2 slot2 bs2 →
+               compile (riget x q1 q2) pend renv venv slot n ≡
+                 cok n nxt2 slot2 ((n , bIget slot e1 e2) ∷ bs1 ++ bs2)
+iget-cmp-hit eq1 eq2 rewrite eq1 | eq2 = refl
+
+arm-walk-bad : ∀ {ρ y p as n s} →
+               walk [] ρ p n s ≡ nothing →
+               walkArms [] ρ (aok y p ∷ as) n s ≡ nothing
+arm-walk-bad eq rewrite eq = refl
+
+arm-cmp-bad : ∀ {renv venv slot n y q rest f} →
+              compile q [] renv venv slot n ≡ cfail f →
+              compileArms ((y , q) ∷ rest) renv venv slot n ≡ (cfail f , [] , [])
+arm-cmp-bad eq rewrite eq = refl
+
+arm-walk-miss : ∀ {ρ y p as n s w} →
+                walk [] ρ p n s ≡ just w →
+                walkArms [] ρ as (next w) (slotN w) ≡ nothing →
+                walkArms [] ρ (aok y p ∷ as) n s ≡ nothing
+arm-walk-miss eq1 eq2 rewrite eq1 | eq2 = refl
+
+arm-cmp-miss : ∀ {renv venv slot n y q rest e nxt slot1 bs1 f} →
+               compile q [] renv venv slot n ≡ cok e nxt slot1 bs1 →
+               compileArms rest renv venv slot1 nxt ≡ (cfail f , [] , []) →
+               compileArms ((y , q) ∷ rest) renv venv slot n ≡ (cfail f , [] , [])
+arm-cmp-miss eq1 eq2 rewrite eq1 | eq2 = refl
+
+arm-walk-hit : ∀ {ρ y p as n s w ws n2 s2} →
+               walk [] ρ p n s ≡ just w →
+               walkArms [] ρ as (next w) (slotN w) ≡ just (ws , n2 , s2) →
+               walkArms [] ρ (aok y p ∷ as) n s ≡ just ((y , w) ∷ ws , n2 , s2)
+arm-walk-hit eq1 eq2 rewrite eq1 | eq2 = refl
+
+arm-cmp-hit : ∀ {renv venv slot n y q rest e nxt slot1 bs1 n2 s2 named bs2} →
+              compile q [] renv venv slot n ≡ cok e nxt slot1 bs1 →
+              compileArms rest renv venv slot1 nxt ≡ (cok n2 n2 s2 [] , named , bs2) →
+              compileArms ((y , q) ∷ rest) renv venv slot n ≡
+                (cok n2 n2 s2 [] , (y , e) ∷ named , bs1 ++ bs2)
+arm-cmp-hit eq1 eq2 rewrite eq1 | eq2 = refl
+
+mget-walk-bad : ∀ {pend ρ t x as n s} →
+                walkArms [] (addPend pend n s ρ) as (suc n) (suc s) ≡ nothing →
+                walk pend ρ (smget t x as) n s ≡ nothing
+mget-walk-bad eq rewrite eq = refl
+
+mget-cmp-bad : ∀ {pend renv venv slot n t x qs f} →
+               compileArms qs (addNames pend n renv) ((x , slot) ∷ venv) (suc slot) (suc n) ≡
+                 (cfail f , [] , []) →
+               compile (rmget t x qs) pend renv venv slot n ≡ cfail f
+mget-cmp-bad eq rewrite eq = refl
+
+mget-walk-hit : ∀ {pend ρ t x as n s ws n2 s2} →
+                walkArms [] (addPend pend n s ρ) as (suc n) (suc s) ≡ just (ws , n2 , s2) →
+                walk pend ρ (smget t x as) n s ≡ just (mkW n s n2 s2)
+mget-walk-hit eq rewrite eq = refl
+
+mget-cmp-hit : ∀ {pend renv venv slot n t x qs n2 s2 named bs} →
+               compileArms qs (addNames pend n renv) ((x , slot) ∷ venv) (suc slot) (suc n) ≡
+                 (cok n2 n2 s2 [] , named , bs) →
+               compile (rmget t x qs) pend renv venv slot n ≡
+                 cok n n2 s2 ((n , bMget t slot named) ∷ bs)
+mget-cmp-hit eq rewrite eq = refl
+
+var-walk-ung : ∀ {pend ρ y n s} → elemS y pend ≡ true →
+               walk pend ρ (svar y) n s ≡ nothing
+var-walk-ung eq rewrite eq = refl
+
+var-cmp-ung : ∀ {pend renv venv slot n y} → elemS y pend ≡ true →
+              compile (rvar y) pend renv venv slot n ≡ cfail fUnguarded
+var-cmp-ung eq rewrite eq = refl
+
+var-walk-no : ∀ {pend ρ y n s} → elemS y pend ≡ false → lookupI y ρ ≡ nothing →
+              walk pend ρ (svar y) n s ≡ nothing
+var-walk-no eqe eql rewrite eqe | eql = refl
+
+var-cmp-no : ∀ {pend renv venv slot n y} → elemS y pend ≡ false →
+             lookupN y renv ≡ nothing →
+             compile (rvar y) pend renv venv slot n ≡ cfail fFree
+var-cmp-no eqe eql rewrite eqe | eql = refl
+
+var-walk-yes : ∀ {pend ρ y n s i s0} → elemS y pend ≡ false →
+               lookupI y ρ ≡ just (i , s0) →
+               walk pend ρ (svar y) n s ≡ just (mkW i s0 n s)
+var-walk-yes eqe eql rewrite eqe | eql = refl
+
+var-cmp-yes : ∀ {pend renv venv slot n y i} → elemS y pend ≡ false →
+              lookupN y renv ≡ just i →
+              compile (rvar y) pend renv venv slot n ≡ cok i n slot []
+var-cmp-yes eqe eql rewrite eqe | eql = refl
+
+------------------------------------------------------------------------
+-- The denotation. Structural on the process and on the arm list.
+------------------------------------------------------------------------
+
+mutual
+  denote : (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI) (renv : REnv)
+           (venv : VEnv) (ns scope pre post : List String) (n slot : ℕ) →
+           ERel ρ renv → EchoRel venv ns scope →
+           echoOk ns scope P ≡ true →
+           slot ≡ length pre →
+           ns ≡ pre ++ bnames P ++ post →
+           Built P fp pend ρ renv venv n slot
+
+  denote sdone fdone pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    ok (yesB (mkW n slot (suc n) slot) ((n , bDone) ∷ []) refl refl (o1 o0)
+          (sym (+-idr slot))
+          (p-act (d-done n) r-done n slot ρ) t0 (cp-act (c-done here)) ct0 refl refl refl)
+  denote sstop fstop pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    ok (yesB (mkW n slot (suc n) slot) ((n , bStop) ∷ []) refl refl (o1 o0)
+          (sym (+-idr slot))
+          (p-act (d-stop n) r-stop n slot ρ) t0 (cp-act (c-stop here)) ct0 refl refl refl)
+
+  denote (sput .(pNat a) p) (fput (fnat a) fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
+          ns scope pre post (suc n) slot (add-rel pend n slot rel) er (∧-right eok) seq nseq)
+    where
+    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot →
+         Built (sput (pNat a) p) (fput (fnat a) fp) pend ρ renv venv n slot
+    on (bad (noB f wk cmp)) =
+      bad (noB f
+        (sput-miss {pend = pend} {ρ = ρ} {a = pNat a} {p = p} {n = n} {s = slot} wk)
+        (put-miss {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                  {q = elab p fp} {atom = aNat a} {f = f} cmp))
+    on (ok y) =
+      ok (finish-put (fput (fnat a) fp) y refl
+        (sput-walk {pend = pend} {ρ = ρ} {a = pNat a} {p = p} {n = n} {s = slot}
+                   {w = Yes.w y} (Yes.wk y))
+        (put-cmp {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                 {q = elab p fp} {atom = aNat a}
+                 {e = entry (Yes.w y)} {next = next (Yes.w y)}
+                 {slot' = slotN (Yes.w y)} {bs = Yes.bs y} (Yes.cmp y)))
+
+  denote (sput .(pBit b) p) (fput (fbit b) fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
+          ns scope pre post (suc n) slot (add-rel pend n slot rel) er (∧-right eok) seq nseq)
+    where
+    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot →
+         Built (sput (pBit b) p) (fput (fbit b) fp) pend ρ renv venv n slot
+    on (bad (noB f wk cmp)) =
+      bad (noB f
+        (sput-miss {pend = pend} {ρ = ρ} {a = pBit b} {p = p} {n = n} {s = slot} wk)
+        (put-miss {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                  {q = elab p fp} {atom = aBit b} {f = f} cmp))
+    on (ok y) =
+      ok (finish-put (fput (fbit b) fp) y (bit-atom b)
+        (sput-walk {pend = pend} {ρ = ρ} {a = pBit b} {p = p} {n = n} {s = slot}
+                   {w = Yes.w y} (Yes.wk y))
+        (put-cmp {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                 {q = elab p fp} {atom = aBit b}
+                 {e = entry (Yes.w y)} {next = next (Yes.w y)}
+                 {slot' = slotN (Yes.w y)} {bs = Yes.bs y} (Yes.cmp y)))
+
+  denote (sput .(pCon y) p) (fput (fcon y) fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
+          ns scope pre post (suc n) slot (add-rel pend n slot rel) er (∧-right eok) seq nseq)
+    where
+    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot →
+         Built (sput (pCon y) p) (fput (fcon y) fp) pend ρ renv venv n slot
+    on (bad (noB f wk cmp)) =
+      bad (noB f
+        (sput-miss {pend = pend} {ρ = ρ} {a = pCon y} {p = p} {n = n} {s = slot} wk)
+        (put-miss {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                  {q = elab p fp} {atom = aCon y} {f = f} cmp))
+    on (ok yb) =
+      ok (finish-put (fput (fcon y) fp) yb refl
+        (sput-walk {pend = pend} {ρ = ρ} {a = pCon y} {p = p} {n = n} {s = slot}
+                   {w = Yes.w yb} (Yes.wk yb))
+        (put-cmp {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                 {q = elab p fp} {atom = aCon y}
+                 {e = entry (Yes.w yb)} {next = next (Yes.w yb)}
+                 {slot' = slotN (Yes.w yb)} {bs = Yes.bs yb} (Yes.cmp yb)))
+
+  denote (sput .(pEcho x) p) (fput (fecho x) fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    on heard
+       (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
+          ns scope pre post (suc n) slot (add-rel pend n slot rel) er (∧-right eok) seq nseq)
+    where
+    scopeOk = ∧-left eok
+    heard : Σ ℕ (λ sX → lookupN x venv ≡ just sX × findS x ns ≡ just sX)
+    heard = er x (∧-right scopeOk) (∧-left scopeOk)
+    on : Σ ℕ (λ sX → lookupN x venv ≡ just sX × findS x ns ≡ just sX) →
+         Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot →
+         Built (sput (pEcho x) p) (fput (fecho x) fp) pend ρ renv venv n slot
+    on (sX , lk , fd) (bad (noB f wk cmp)) =
+      bad (noB f
+        (sput-miss {pend = pend} {ρ = ρ} {a = pEcho x} {p = p} {n = n} {s = slot} wk)
+        (echo-miss {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                   {x = x} {sX = sX} {q = elab p fp} {f = f} lk cmp))
+    on (sX , lk , fd) (ok y) =
+      ok (finish-echo {ns = ns} (fput (fecho x) fp) y lk fd
+        (sput-walk {pend = pend} {ρ = ρ} {a = pEcho x} {p = p} {n = n} {s = slot}
+                   {w = Yes.w y} (Yes.wk y))
+        (echo-cmp {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                  {x = x} {sX = sX} {q = elab p fp}
+                  {e = entry (Yes.w y)} {next = next (Yes.w y)}
+                  {slot' = slotN (Yes.w y)} {bs = Yes.bs y} lk (Yes.cmp y)))
+
+  denote (sget t x p) (fget fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) ((x , slot) ∷ venv)
+          ns (x ∷ scope) (pre ++ (x ∷ [])) post (suc n) (suc slot)
+          (add-rel pend n slot rel)
+          (echo-extend pre (bnames p ++ post) x slot er nseq seq)
+          eok (get-slot pre x slot seq) (get-names pre x (bnames p) post nseq))
+    where
+    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv)
+               ((x , slot) ∷ venv) (suc n) (suc slot) →
+         Built (sget t x p) (fget fp) pend ρ renv venv n slot
+    on (bad (noB f wk cmp)) =
+      bad (noB f
+        (sget-miss {pend = pend} {ρ = ρ} {t = t} {x = x} {p = p} {n = n} {s = slot} wk)
+        (get-miss {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                  {t = t} {x = x} {q = elab p fp} {f = f} cmp))
+    on (ok y) =
+      ok (finish-get (fget fp) y
+        (sget-walk {pend = pend} {ρ = ρ} {t = t} {x = x} {p = p} {n = n} {s = slot}
+                   {w = Yes.w y} (Yes.wk y))
+        (get-cmp {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                 {t = t} {x = x} {q = elab p fp}
+                 {e = entry (Yes.w y)} {next = next (Yes.w y)}
+                 {slot' = slotN (Yes.w y)} {bs = Yes.bs y} (Yes.cmp y)))
+
+  denote (spick0 p) (fpick0 fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
+          ns scope pre post (suc n) slot (add-rel pend n slot rel) er eok seq nseq)
+    where
+    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot →
+         Built (spick0 p) (fpick0 fp) pend ρ renv venv n slot
+    on (bad (noB f wk cmp)) =
+      bad (noB f
+        (spick0-miss {pend = pend} {ρ = ρ} {p = p} {n = n} {s = slot} wk)
+        (pick0-miss {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                    {q = elab p fp} {f = f} cmp))
+    on (ok y) =
+      ok (finish-pick0 (fpick0 fp) y
+        (spick0-walk {pend = pend} {ρ = ρ} {p = p} {n = n} {s = slot}
+                     {w = Yes.w y} (Yes.wk y))
+        (pick0-cmp {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                   {q = elab p fp} {e = entry (Yes.w y)} {nxt = next (Yes.w y)}
+                   {slot' = slotN (Yes.w y)} {bs = Yes.bs y} (Yes.cmp y)))
+
+  denote (spick1 p) (fpick1 fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
+          ns scope pre post (suc n) slot (add-rel pend n slot rel) er eok seq nseq)
+    where
+    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot →
+         Built (spick1 p) (fpick1 fp) pend ρ renv venv n slot
+    on (bad (noB f wk cmp)) =
+      bad (noB f
+        (spick1-miss {pend = pend} {ρ = ρ} {p = p} {n = n} {s = slot} wk)
+        (pick1-miss {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                    {q = elab p fp} {f = f} cmp))
+    on (ok y) =
+      ok (finish-pick1 (fpick1 fp) y
+        (spick1-walk {pend = pend} {ρ = ρ} {p = p} {n = n} {s = slot}
+                     {w = Yes.w y} (Yes.wk y))
+        (pick1-cmp {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                   {q = elab p fp} {e = entry (Yes.w y)} {nxt = next (Yes.w y)}
+                   {slot' = slotN (Yes.w y)} {bs = Yes.bs y} (Yes.cmp y)))
+
+  denote (scover p q) (fcover fp fq) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    onL (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
+           ns scope pre (bnames q ++ post) (suc n) slot
+           (add-rel pend n slot rel) er (∧-left eok) seq
+           (split-left pre (bnames p) (bnames q) post nseq))
+    where
+    ρw = addPend pend n slot ρ
+    renw = addNames pend n renv
+    onL : Built p fp [] ρw renw venv (suc n) slot →
+          Built (scover p q) (fcover fp fq) pend ρ renv venv n slot
+    onL (bad (noB f wk cmp)) =
+      bad (noB f
+        (cover-walk-bad {pend = pend} {ρ = ρ} {p = p} {q = q} {n = n} {s = slot} wk)
+        (cover-cmp-bad {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                       {q1 = elab p fp} {q2 = elab q fq} {f = f} cmp))
+    onL (ok y1) =
+      onR y1 (denote q fq [] ρw renw venv ns scope (pre ++ bnames p) post
+                (next (Yes.w y1)) (slotN (Yes.w y1))
+                (add-rel pend n slot rel) er (∧-right eok)
+                (cat-slot pre (bnames p) (Yes.end y1) seq)
+                (split-right pre (bnames p) (bnames q) post nseq))
+      where
+      onR : (y1 : Yes p fp [] ρw renw venv (suc n) slot) →
+            Built q fq [] ρw renw venv (next (Yes.w y1)) (slotN (Yes.w y1)) →
+            Built (scover p q) (fcover fp fq) pend ρ renv venv n slot
+      onR y1 (bad (noB f wk cmp)) =
+        bad (noB f
+          (cover-walk-miss {pend = pend} {ρ = ρ} {p = p} {q = q} {n = n} {s = slot}
+                           {w = Yes.w y1} (Yes.wk y1) wk)
+          (cover-cmp-miss {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                          {q1 = elab p fp} {q2 = elab q fq}
+                          {e = entry (Yes.w y1)} {nxt = next (Yes.w y1)}
+                          {slot' = slotN (Yes.w y1)} {bs = Yes.bs y1} {f = f}
+                          (Yes.cmp y1) cmp))
+      onR y1 (ok y2) =
+        ok (yesB (mkW n slot (next (Yes.w y2)) (slotN (Yes.w y2)))
+              ((n , bCover (entry (Yes.w y1)) (entry (Yes.w y2))) ∷
+                (Yes.bs y1 ++ Yes.bs y2))
+              (cover-walk-hit {pend = pend} {ρ = ρ} {p = p} {q = q} {n = n} {s = slot}
+                              {w1 = Yes.w y1} {w2 = Yes.w y2}
+                              (Yes.wk y1) (Yes.wk y2))
+              (cover-cmp-hit {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                             {q1 = elab p fp} {q2 = elab q fq}
+                             {e1 = entry (Yes.w y1)} {nxt1 = next (Yes.w y1)}
+                             {slot1 = slotN (Yes.w y1)} {bs1 = Yes.bs y1}
+                             {e2 = entry (Yes.w y2)} {nxt2 = next (Yes.w y2)}
+                             {slot2 = slotN (Yes.w y2)} {bs2 = Yes.bs y2}
+                             (Yes.cmp y1) (Yes.cmp y2))
+              (o1 (ord-cat (Yes.od y1) (Yes.od y2)))
+              (sum-len (bnames p) (bnames q) (Yes.end y1) (Yes.end y2))
+              (p-act (d-cover n slot (entry (Yes.w y1)) (entry (Yes.w y2)) p q ρw
+                        (Yes.w y1) (Yes.w y2) (Yes.wk y1) refl (Yes.wk y2) refl
+                        (Yes.pl y1) (Yes.pl y2))
+                     r-cover n slot ρ)
+              (appendT (Yes.tab y1) (Yes.tab y2))
+              (cp-act (c-cover here (covP-lift onˡ (Yes.cv y1))
+                                 (covP-lift (onʳ {bs1 = Yes.bs y1}) (Yes.cv y2))))
+              (appendC (covT-lift onˡ (Yes.ct y1))
+                       (covT-lift (onʳ {bs1 = Yes.bs y1}) (Yes.ct y2)))
+              refl refl refl)
+
+  denote (siget x p q) (figet fp fq) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    onL (denote p fp [] ρw renw venvX ns scopeX preX (bnames q ++ post) (suc n) (suc slot)
+           (add-rel pend n slot rel) erX (∧-left eok)
+           (get-slot pre x slot seq)
+           (iget-p-ns pre x (bnames p) (bnames q) post nseq))
+    where
+    ρw = addPend pend n slot ρ
+    renw = addNames pend n renv
+    venvX = (x , slot) ∷ venv
+    scopeX = x ∷ scope
+    preX = pre ++ (x ∷ [])
+    erX = echo-extend pre ((bnames p ++ bnames q) ++ post) x slot er nseq seq
+    onL : Built p fp [] ρw renw venvX (suc n) (suc slot) →
+          Built (siget x p q) (figet fp fq) pend ρ renv venv n slot
+    onL (bad (noB f wk cmp)) =
+      bad (noB f
+        (iget-walk-bad {pend = pend} {ρ = ρ} {x = x} {p = p} {q = q} {n = n} {s = slot} wk)
+        (iget-cmp-bad {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                      {x = x} {q1 = elab p fp} {q2 = elab q fq} {f = f} cmp))
+    onL (ok y1) =
+      onR y1 (denote q fq [] ρw renw venvX ns scopeX (pre ++ (x ∷ bnames p)) post
+                (next (Yes.w y1)) (slotN (Yes.w y1))
+                (add-rel pend n slot rel) erX (∧-right eok)
+                (iget-q-slot pre x (bnames p) (Yes.end y1) seq)
+                (iget-q-ns pre x (bnames p) (bnames q) post nseq))
+      where
+      onR : (y1 : Yes p fp [] ρw renw venvX (suc n) (suc slot)) →
+            Built q fq [] ρw renw venvX (next (Yes.w y1)) (slotN (Yes.w y1)) →
+            Built (siget x p q) (figet fp fq) pend ρ renv venv n slot
+      onR y1 (bad (noB f wk cmp)) =
+        bad (noB f
+          (iget-walk-miss {pend = pend} {ρ = ρ} {x = x} {p = p} {q = q} {n = n} {s = slot}
+                          {w = Yes.w y1} (Yes.wk y1) wk)
+          (iget-cmp-miss {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                         {x = x} {q1 = elab p fp} {q2 = elab q fq}
+                         {e = entry (Yes.w y1)} {nxt = next (Yes.w y1)}
+                         {slot' = slotN (Yes.w y1)} {bs = Yes.bs y1} {f = f}
+                         (Yes.cmp y1) cmp))
+      onR y1 (ok y2) =
+        ok (yesB (mkW n slot (next (Yes.w y2)) (slotN (Yes.w y2)))
+              ((n , bIget slot (entry (Yes.w y1)) (entry (Yes.w y2))) ∷
+                (Yes.bs y1 ++ Yes.bs y2))
+              (iget-walk-hit {pend = pend} {ρ = ρ} {x = x} {p = p} {q = q} {n = n} {s = slot}
+                             {w1 = Yes.w y1} {w2 = Yes.w y2}
+                             (Yes.wk y1) (Yes.wk y2))
+              (iget-cmp-hit {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                            {x = x} {q1 = elab p fp} {q2 = elab q fq}
+                            {e1 = entry (Yes.w y1)} {nxt1 = next (Yes.w y1)}
+                            {slot1 = slotN (Yes.w y1)} {bs1 = Yes.bs y1}
+                            {e2 = entry (Yes.w y2)} {nxt2 = next (Yes.w y2)}
+                            {slot2 = slotN (Yes.w y2)} {bs2 = Yes.bs y2}
+                            (Yes.cmp y1) (Yes.cmp y2))
+              (o1 (ord-cat (Yes.od y1) (Yes.od y2)))
+              (iget-end (bnames p) (bnames q) (Yes.end y1) (Yes.end y2))
+              (p-act (d-iget n slot x (entry (Yes.w y1)) (entry (Yes.w y2)) p q ρw
+                        (Yes.w y1) (Yes.w y2) (Yes.wk y1) refl (Yes.wk y2) refl
+                        (Yes.pl y1) (Yes.pl y2))
+                     r-iget n slot ρ)
+              (appendT (Yes.tab y1) (Yes.tab y2))
+              (cp-act (c-iget here (covP-lift onˡ (Yes.cv y1))
+                                (covP-lift (onʳ {bs1 = Yes.bs y1}) (Yes.cv y2))))
+              (appendC (covT-lift onˡ (Yes.ct y1))
+                       (covT-lift (onʳ {bs1 = Yes.bs y1}) (Yes.ct y2)))
+              refl refl refl)
+
+  denote (smget t x as) (fmget fas) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    on (denoteArms as fas (addPend pend n slot ρ) (addNames pend n renv) ((x , slot) ∷ venv)
+          ns (x ∷ scope) (pre ++ (x ∷ [])) post (suc n) (suc slot)
+          (add-rel pend n slot rel)
+          (echo-extend pre (bnamesArms as ++ post) x slot er nseq seq)
+          eok (get-slot pre x slot seq) (get-names pre x (bnamesArms as) post nseq))
+    where
+    on : BuiltA as fas (addPend pend n slot ρ) (addNames pend n renv) ((x , slot) ∷ venv)
+               (suc n) (suc slot) →
+         Built (smget t x as) (fmget fas) pend ρ renv venv n slot
+    on (badA (noA f wk cmp)) =
+      bad (noB f
+        (mget-walk-bad {pend = pend} {ρ = ρ} {t = t} {x = x} {as = as} {n = n} {s = slot} wk)
+        (mget-cmp-bad {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                      {t = t} {x = x} {qs = elabArms as fas} {f = f} cmp))
+    on (okA y) =
+      ok (yesB (mkW n slot (YesA.n2 y) (YesA.s2 y))
+            ((n , bMget t slot (ents (YesA.ws y))) ∷ YesA.bs y)
+            (mget-walk-hit {pend = pend} {ρ = ρ} {t = t} {x = x} {as = as} {n = n} {s = slot}
+                           {ws = YesA.ws y} {n2 = YesA.n2 y} {s2 = YesA.s2 y} (YesA.wk y))
+            (mget-cmp-hit {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                          {t = t} {x = x} {qs = elabArms as fas}
+                          {n2 = YesA.n2 y} {s2 = YesA.s2 y}
+                          {named = ents (YesA.ws y)} {bs = YesA.bs y} (YesA.cmp y))
+            (o1 (YesA.od y))
+            (shift-end {slot} {YesA.s2 y} {length (bnamesArms as)} (YesA.end y))
+            (p-act (d-mget n slot t x (ents (YesA.ws y)) as
+                      (addPend pend n slot ρ) (YesA.ws y) (YesA.n2 y) (YesA.s2 y)
+                      (YesA.wk y) refl (YesA.dests y))
+                   r-mget n slot ρ)
+            (YesA.tab y)
+            (cp-act (c-mget here (covA-lift under (YesA.cv y))))
+            (covT-lift under (YesA.ct y))
+            refl refl refl)
+
+  denote (smu x p) (fmu fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    seal (denote p fp (x ∷ pend) ρ renv venv ns scope pre post n slot rel er eok seq nseq)
+    where
+    seal : Built p fp (x ∷ pend) ρ renv venv n slot →
+           Built (smu x p) (fmu fp) pend ρ renv venv n slot
+    seal (bad (noB f wk cmp)) = bad (noB f wk cmp)
+    seal (ok y) =
+      place (cons-bind x ρ (p-mu x (Yes.pl y)) (cp-mu (Yes.cv y)) (Yes.tab y) (Yes.ct y))
+      where
+      place : Σ Table (λ t → CovT t (Yes.bs y)) →
+              Built (smu x p) (fmu fp) pend ρ renv venv n slot
+      place (tab , ct) =
+        ok (yesB (Yes.w y) (Yes.bs y) (Yes.wk y) (Yes.cmp y) (Yes.od y) (Yes.end y)
+              (p-mu x (Yes.pl y)) tab (cp-mu (Yes.cv y)) ct
+              (Yes.hd y) (Yes.sl y) (Yes.ev y))
+
+  denote (svar y) fvar pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    var-go (lookup-rel y rel) (elemS y pend) refl
+    where
+    var-go : Seen ρ renv y → (b : Bool) → elemS y pend ≡ b →
+             Built (svar y) fvar pend ρ renv venv n slot
+    var-go _ true eq =
+      bad (noB fUnguarded
+        (var-walk-ung {pend = pend} {ρ = ρ} {y = y} {n = n} {s = slot} eq)
+        (var-cmp-ung {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n} {y = y} eq))
+    var-go (seen-no eqi eqn) false eq =
+      bad (noB fFree
+        (var-walk-no {pend = pend} {ρ = ρ} {y = y} {n = n} {s = slot} eq eqi)
+        (var-cmp-no {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n} {y = y} eq eqn))
+    var-go (seen-yes i s0 eqi eqn) false eq =
+      ok (yesB (mkW i s0 n slot) []
+            (var-walk-yes {pend = pend} {ρ = ρ} {y = y} {n = n} {s = slot} {i = i} {s0 = s0} eq eqi)
+            (var-cmp-yes {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
+                         {y = y} {i = i} eq eqn)
+            o0 (sym (+-idr slot)) (p-jump y i s0 ρ) t0 cp-jump ct0 refl refl refl)
+
+  denoteArms : (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv) (venv : VEnv)
+               (ns scope pre post : List String) (n slot : ℕ) →
+               ERel ρ renv → EchoRel venv ns scope →
+               echoOkArms ns scope as ≡ true →
+               slot ≡ length pre →
+               ns ≡ pre ++ bnamesArms as ++ post →
+               BuiltA as fas ρ renv venv n slot
+
+  denoteArms [] farms0 ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    okA (yesA [] n slot [] refl refl o0 (sym (+-idr slot)) ap0 t0 ca0 ct0)
+
+  denoteArms (aok y p ∷ as) (farms1 (farm fp) fas) ρ renv venv ns scope pre post n slot rel er eok seq nseq =
+    on (denote p fp [] ρ renv venv ns scope pre (bnamesArms as ++ post) n slot rel er
+          (∧-left eok) seq
+          (split-left pre (bnames p) (bnamesArms as) post nseq))
+    where
+    on : Built p fp [] ρ renv venv n slot →
+         BuiltA (aok y p ∷ as) (farms1 (farm fp) fas) ρ renv venv n slot
+    on (bad (noB f wk cmp)) =
+      badA (noA f
+        (arm-walk-bad {ρ = ρ} {y = y} {p = p} {as = as} {n = n} {s = slot} wk)
+        (arm-cmp-bad {renv = renv} {venv = venv} {slot = slot} {n = n} {y = y}
+                     {q = elab p fp} {rest = elabArms as fas} {f = f} cmp))
+    on (ok yb) =
+      more yb (denoteArms as fas ρ renv venv ns scope (pre ++ bnames p) post
+                 (next (Yes.w yb)) (slotN (Yes.w yb)) rel er (∧-right eok)
+                 (cat-slot pre (bnames p) (Yes.end yb) seq)
+                 (split-right pre (bnames p) (bnamesArms as) post nseq))
+      where
+      more : (yb : Yes p fp [] ρ renv venv n slot) →
+             BuiltA as fas ρ renv venv (next (Yes.w yb)) (slotN (Yes.w yb)) →
+             BuiltA (aok y p ∷ as) (farms1 (farm fp) fas) ρ renv venv n slot
+      more yb (badA (noA f wk cmp)) =
+        badA (noA f
+          (arm-walk-miss {ρ = ρ} {y = y} {p = p} {as = as} {n = n} {s = slot}
+                         {w = Yes.w yb} (Yes.wk yb) wk)
+          (arm-cmp-miss {renv = renv} {venv = venv} {slot = slot} {n = n} {y = y}
+                        {q = elab p fp} {rest = elabArms as fas}
+                        {e = entry (Yes.w yb)} {nxt = next (Yes.w yb)}
+                        {slot1 = slotN (Yes.w yb)} {bs1 = Yes.bs yb} {f = f}
+                        (Yes.cmp yb) cmp))
+      more yb (okA ya) =
+        okA (yesA ((y , Yes.w yb) ∷ YesA.ws ya)
+               (YesA.n2 ya) (YesA.s2 ya) (Yes.bs yb ++ YesA.bs ya)
+               (arm-walk-hit {ρ = ρ} {y = y} {p = p} {as = as} {n = n} {s = slot}
+                             {w = Yes.w yb} {ws = YesA.ws ya} {n2 = YesA.n2 ya} {s2 = YesA.s2 ya}
+                             (Yes.wk yb) (YesA.wk ya))
+               (arm-cmp-hit {renv = renv} {venv = venv} {slot = slot} {n = n} {y = y}
+                            {q = elab p fp} {rest = elabArms as fas}
+                            {e = entry (Yes.w yb)} {nxt = next (Yes.w yb)}
+                            {slot1 = slotN (Yes.w yb)} {bs1 = Yes.bs yb}
+                            {n2 = YesA.n2 ya} {s2 = YesA.s2 ya}
+                            {named = ents (YesA.ws ya)} {bs2 = YesA.bs ya}
+                            (Yes.cmp yb) (YesA.cmp ya))
+               (ord-cat (Yes.od yb) (YesA.od ya))
+               (sum-len (bnames p) (bnamesArms as) (Yes.end yb) (YesA.end ya))
+               (ap1 (Yes.pl yb) (YesA.dests ya))
+               (appendT (Yes.tab yb) (YesA.tab ya))
+               (ca1 (covP-lift inˡ (Yes.cv yb))
+                    (covA-lift (inʳ {bs1 = Yes.bs yb}) (YesA.cv ya)))
+               (appendC (covT-lift inˡ (Yes.ct yb))
+                        (covT-lift (inʳ {bs1 = Yes.bs yb}) (YesA.ct ya))))
+
+------------------------------------------------------------------------
+-- The echo denotes, and so does a process that only halts.
+------------------------------------------------------------------------
+
+done-built : Built sdone fdone [] [] [] [] zero zero
+done-built =
+  denote sdone fdone [] [] [] [] [] [] [] [] zero zero
+    er0 (echo-empty [] []) refl refl refl
+
+echo-built : Built src-echoA echoAF [] [] [] [] zero zero
+echo-built =
+  denote src-echoA echoAF [] [] [] [] (bnames src-echoA) [] [] [] zero zero
+    er0 (echo-empty [] (bnames src-echoA)) echoA-ok refl (root-ns src-echoA)
