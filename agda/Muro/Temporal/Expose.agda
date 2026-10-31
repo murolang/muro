@@ -24,7 +24,7 @@ open import Muro.AsyncRec
 open import Muro.Temporal.Bridge using (distinct)
 open import Muro.Temporal.Pic using (_∈_)
 open import Muro.Temporal.Source
-  using ( SProc; Pay; pEcho; W; EnvI; EnvP; addPend; lookupI; walk; asAtom
+  using ( SProc; Pay; pEcho; W; EnvI; EnvP; addPend; lookupI; walk; findS; asAtom
         ; smu; Bound; b-here; b-there
         ; Focus; f-put; Unfold; u-put; u-mu; u-var )
 open W
@@ -45,7 +45,7 @@ open import Muro.Temporal.Run
   using ( Cursor; Ext; Covered; Sync; sy1; Tied; td1; Knew; kn1
         ; ext-pend; cov-mu; cov-push; cov-cons; cov-pull; cov-cast
         ; runtime-pin; ext-front; kn-find; Found; kn-sync; kn-tied
-        ; same-slot; sync-hit )
+        ; same-slot; sync-hit; walk-ext )
 open import Muro.Temporal.Sim using (ix-eq; sl-eq)
 
 ------------------------------------------------------------------------
@@ -119,13 +119,21 @@ data Send (bs : List (ℕ × Block)) (ns : List String) (n s : ℕ) (base : EnvI
   sent : (atom : Atom) (j : ℕ) (w : W) →
          asAtom a ≡ just atom → entry w ≡ j →
          (n , bPut atom j) ∈ bs →
+         walk [] (addPend pend′ n s base) p (suc n) s ≡ just w →
          Cursor bs (entry w) (atSlot w) ρ′ (addPend pend′ n s base) p →
          Send bs ns n s base ρ′ pend′ a p
   echoed : (x : String) (sX j : ℕ) (w : W) →
-           a ≡ pEcho x → entry w ≡ j →
+           a ≡ pEcho x → findS x ns ≡ just sX → entry w ≡ j →
            (n , bEcho sX j) ∈ bs →
+           walk [] (addPend pend′ n s base) p (suc n) s ≡ just w →
            Cursor bs (entry w) (atSlot w) ρ′ (addPend pend′ n s base) p →
            Send bs ns n s base ρ′ pend′ a p
+
+-- The continuation walk does not depend on which of two equal counters it starts at.
+walk-idx : ∀ {ρ p n n′ s s′ w} → n ≡ n′ → s ≡ s′ →
+           walk [] ρ p (suc n′) s′ ≡ just w →
+           walk [] ρ p (suc n) s ≡ just w
+walk-idx refl refl eq = eq
 
 link-cast : ∀ {P : SProc} {pl pl′ : Place P} → pl ≡ pl′ → Link pl → Link pl′
 link-cast refl lk = lk
@@ -226,13 +234,19 @@ openSend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
          (en-put ensD)
          (al-put eqρ destAl)
          ix ss sn u-put =
-  sent atom j w aeq ej memN cur
+  sent atom j w aeq ej memN wkRun cur
   where
   en = trans ix eqi
   es = trans ss eqs
   memN = subst (λ i → (i , bPut atom j) ∈ bs) (sym en) mem
   extW = ext-leaf suf pend n s nD sD ρden base ρw ρi suf
            en es refl eqρ (run bg) sn (cvd bg)
+  wkI : walk [] ρi p (suc nD) sD ≡ just w
+  wkI = walk-ext [] ρw ρi p (suc nD) sD w extW wk
+  wkN : walk [] ρi p (suc n) s ≡ just w
+  wkN = walk-idx {ρ = ρi} {p = p} {n = n} {n′ = nD} {s = s} {s′ = sD} {w = w}
+          en es wkI
+  wkRun = subst (λ e → walk [] e p (suc n) s ≡ just w) (run bg) wkN
   snD = subst (λ e → Ext e ρi) (sym de) extW
   cur0 = arrive {ns = ns} {tab = tab bg} dest w (ct bg) (ls bg)
            (td bg) (sy bg) (kn bg) (nd bg)
@@ -250,13 +264,20 @@ openSend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
          (en-echo ns≡ ensD)
          (al-echo eqρ destAl)
          ix ss sn u-put =
-  echoed x sX j w refl ej memN cur
+  echoed x sX j w refl fdN ej memN wkRun cur
   where
   en = trans ix eqi
   es = trans ss eqs
+  fdN = subst (λ z → findS x z ≡ just sX) (sym ns≡) fd
   memN = subst (λ i → (i , bEcho sX j) ∈ bs) (sym en) mem
   extW = ext-leaf suf pend n s nD sD ρden base ρw ρi suf
            en es refl eqρ (run bg) sn (cvd bg)
+  wkI : walk [] ρi p (suc nD) sD ≡ just w
+  wkI = walk-ext [] ρw ρi p (suc nD) sD w extW wk
+  wkN : walk [] ρi p (suc n) s ≡ just w
+  wkN = walk-idx {ρ = ρi} {p = p} {n = n} {n′ = nD} {s = s} {s′ = sD} {w = w}
+          en es wkI
+  wkRun = subst (λ e → walk [] e p (suc n) s ≡ just w) (run bg) wkN
   snD = subst (λ e → Ext e ρi) (sym de) extW
   cur0 = arrive {ns = ns} {tab = tab bg} dest w (ct bg) (ls bg)
            (td bg) (sy bg) (kn bg) (nd bg)
