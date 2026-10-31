@@ -46,7 +46,7 @@ open import Muro.Temporal.Pic
 open import Muro.Temporal.Agree using (root-ns)
 open import Muro.Temporal.Den
   using ( Place; Table; t0; t1; Link; Links; CovP; CovT; headIx; slotOf; envOf
-        ; InTab; in-here; in-there; Hosts; At
+        ; InTab; in-here; in-there; Hosts; At; EchoNs
         ; place-of; link-of; ix-of; slot-at; tnames )
 open import Muro.Temporal.Denote
   using ( denote; Yes; No; noB; Built; ok; bad )
@@ -174,22 +174,23 @@ cov-nil _ ()
 
 -- What a step has already learned about each binder in scope.
 -- The denoted place, its pending names, and the counters are the table's.
-data Knew (tab : Table) : EnvP → EnvI → Set where
-  kn0 : Knew tab [] []
+data Knew (ns : List String) (tab : Table) : EnvP → EnvI → Set where
+  kn0 : Knew ns tab [] []
   kn1 : ∀ {x P env ρ i s0 suf} {pl : Place P} →
         (m : InTab x P tab) →
         place-of m ≡ pl →
         ix-of m ≡ i →
         slot-at m ≡ s0 →
         At suf pl →
+        EchoNs ns pl →
         Ext (envOf pl) ((x , i , s0) ∷ ρ) →
         Covered suf [] ((x , i , s0) ∷ ρ) i s0 →
-        Knew tab env ρ →
-        Knew tab ((x , P) ∷ env) ((x , i , s0) ∷ ρ)
+        Knew ns tab env ρ →
+        Knew ns tab ((x , P) ∷ env) ((x , i , s0) ∷ ρ)
 
-kn-tied : ∀ {tab env ρ} → Knew tab env ρ → Tied tab env
+kn-tied : ∀ {ns tab env ρ} → Knew ns tab env ρ → Tied tab env
 kn-tied kn0 = td0
-kn-tied (kn1 m _ _ _ _ _ _ k) = td1 m (kn-tied k)
+kn-tied (kn1 m _ _ _ _ _ _ _ k) = td1 m (kn-tied k)
 
 record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
               (envP : EnvP) (envI : EnvI) (proc : SProc) : Set where
@@ -203,7 +204,9 @@ record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
     hs : Hosts tab pl
     td : Tied tab envP
     sy : Sync tab envP envI
-    kn : Knew tab envP envI
+    echoNs : List String
+    kn : Knew echoNs tab envP envI
+    ens : EchoNs echoNs pl
     ix : idx ≡ headIx pl
     ss : slot ≡ slotOf pl
     sn : Ext (envOf pl) envI
@@ -224,15 +227,17 @@ record Hold (g : Graph) (c : SConf) : Set where
     κ : SConf.cap c ≡ Graph.cap g
     leftC : Cursor bsL (il c) (slotL c) (envPL c) (envIL c) (left c)
     rightC : Cursor bsR (ir c) (slotR c) (envPR c) (envIR c) (right c)
+    nmL : namesL c ≡ Cursor.echoNs leftC
+    nmR : namesR c ≡ Cursor.echoNs rightC
 
 gfail≢gok : ∀ {f g} → gfail f ≡ gok g → ⊥
 gfail≢gok ()
 
-ev-nil : ∀ {R fr} (y : Yes R fr [] [] [] [] zero zero) →
+ev-nil : ∀ {R fr} (y : Yes R fr [] [] [] [] zero zero (bnames R)) →
          envOf (Yes.pl y) ≡ []
 ev-nil y = Yes.ev y
 
-root-sn : ∀ {R fr} (y : Yes R fr [] [] [] [] zero zero) →
+root-sn : ∀ {R fr} (y : Yes R fr [] [] [] [] zero zero (bnames R)) →
           EnvEq (envOf (Yes.pl y)) []
 root-sn y = env-cast (ev-nil y)
 
@@ -282,13 +287,13 @@ init-hold k P Q fp fq eokP eokQ muP muQ g c eqg eqc =
   nd-cast : ∀ {xs ys} → xs ≡ ys → distinct ys ≡ true → distinct xs ≡ true
   nd-cast refl eq = eq
 
-  cursor : ∀ {R fr bs} (y : Yes R fr [] [] [] [] zero zero) →
+  cursor : ∀ {R fr bs} (y : Yes R fr [] [] [] [] zero zero (bnames R)) →
            Yes.bs y ≡ bs →
            ∀ idx → idx ≡ entry (Yes.w y) →
            atSlot (Yes.w y) ≡ zero →
            distinct (mus R) ≡ true →
            Cursor bs idx zero [] [] R
-  cursor y bs≡ idx ix≡ slot0 mu =
+  cursor {R} y bs≡ idx ix≡ slot0 mu =
     record
       { pl = Yes.pl y
       ; cv = covP-cast bs≡ (Yes.cv y)
@@ -299,7 +304,9 @@ init-hold k P Q fp fq eokP eokQ muP muQ g c eqg eqc =
       ; hs = Yes.hs y
       ; td = td0
       ; sy = sy0
+      ; echoNs = bnames R
       ; kn = kn0
+      ; ens = Yes.ens y
       ; ix = trans ix≡ (sym (Yes.hd y))
       ; ss = sym (trans (Yes.sl y) slot0)
       ; sn = ext-eq {ρ0 = envOf (Yes.pl y)} {ρ = []} (root-sn y)
@@ -307,8 +314,8 @@ init-hold k P Q fp fq eokP eokQ muP muQ g c eqg eqc =
       ; nd = nd-cast (Yes.tn y) mu
       }
 
-  open-pack : (yL : Yes P fp [] [] [] [] zero zero)
-              (yR : Yes Q fq [] [] [] [] zero zero)
+  open-pack : (yL : Yes P fp [] [] [] [] zero zero (bnames P))
+              (yR : Yes Q fq [] [] [] [] zero zero (bnames Q))
               (oL oR : COut) →
               oL ≡ cok (entry (Yes.w yL)) (next (Yes.w yL))
                        (slotN (Yes.w yL)) (Yes.bs yL) →
@@ -335,12 +342,14 @@ init-hold k P Q fp fq eokP eokQ muP muQ g c eqg eqc =
                   (atSlot0 [] P (Yes.w yL) (Yes.wk yL)) muP
       ; rightC = cursor yR (sym bsR≡) eR eR≡
                    (atSlot0 [] Q (Yes.w yR) (Yes.wk yR)) muQ
+      ; nmL = refl
+      ; nmR = refl
       }
   open-pack _ _ (cfail _) _ () _ _ _
   open-pack _ _ (cok _ _ _ _) (cfail _) _ () _ _
 
-  body : Built P fp [] [] [] [] zero zero →
-         Built Q fq [] [] [] [] zero zero →
+  body : Built P fp [] [] [] [] zero zero (bnames P) →
+         Built Q fq [] [] [] [] zero zero (bnames Q) →
          Hold g c
   body (bad (noB _ _ cmp)) _ =
     ⊥-elim (lost (compiled P fp) cmp (compiled Q fq) eqg)
@@ -1045,9 +1054,9 @@ runtime-pin {x} {ρ = ρ} {n = n} {s = s} m ix≡ sl≡ nd sy = go (lookupI x ρ
 -- counters are the table's.
 ------------------------------------------------------------------------
 
-kn-sync : ∀ {tab env ρ} → Knew tab env ρ → Sync tab env ρ
+kn-sync : ∀ {ns tab env ρ} → Knew ns tab env ρ → Sync tab env ρ
 kn-sync kn0 = sy0
-kn-sync (kn1 m _ ix≡ sl≡ _ _ _ k) = sy1 m ix≡ sl≡ (kn-sync k)
+kn-sync (kn1 m _ ix≡ sl≡ _ _ _ _ k) = sy1 m ix≡ sl≡ (kn-sync k)
 
 only-base : ∀ {y base i s} →
             (elemS y [] ≡ true ⊎ lookupI y base ≡ just (i , s)) →
@@ -1128,7 +1137,7 @@ den-pin {x} {pl = pl} {i = i} {s = s} ext sy m ix≡ sl≡ nd =
          (trans (sym ix≡) (trans (proj₁ sm) ix0))
          (trans (sym sl≡) (trans (proj₂ sm) sl0))))))
 
-record Found (tab : Table) (x : String) (P : SProc) (ρ : EnvI) : Set where
+record Found (ns : List String) (tab : Table) (x : String) (P : SProc) (ρ : EnvI) : Set where
   field
     m : InTab x P tab
     pl : Place P
@@ -1138,17 +1147,19 @@ record Found (tab : Table) (x : String) (P : SProc) (ρ : EnvI) : Set where
     sl≡ : slot-at m ≡ s0
     suf : List String
     at : At suf pl
+    ens : EchoNs ns pl
     ext : Ext (envOf pl) ρ
     cov : Covered suf [] ρ i s0
 
-kn-find : ∀ {x P tab env ρ} (k : Knew tab env ρ) →
+kn-find : ∀ {ns x P tab env ρ} (k : Knew ns tab env ρ) →
           Bound x P env → distinct (tnames tab) ≡ true →
-          Found tab x P ρ
-kn-find {x} (kn1 {i = i} {s0 = s0} {suf = suf} {pl = pl} m peq ix≡ sl≡ at ext cov _) b-here _ =
+          Found ns tab x P ρ
+kn-find {x} (kn1 {i = i} {s0 = s0} {suf = suf} {pl = pl} m peq ix≡ sl≡ at ens ext cov _) b-here _ =
   record
     { m = m ; pl = pl ; peq = peq ; i = i ; s0 = s0
-    ; ix≡ = ix≡ ; sl≡ = sl≡ ; suf = suf ; at = at ; ext = ext ; cov = cov }
-kn-find {x} (kn1 {x = y} {ρ = tail} {i = i} {s0 = s0} {pl = plF} mF _ ixF slF _ _ _ k) (b-there b) nd =
+    ; ix≡ = ix≡ ; sl≡ = sl≡ ; suf = suf ; at = at ; ens = ens
+    ; ext = ext ; cov = cov }
+kn-find {x} (kn1 {x = y} {ρ = tail} {i = i} {s0 = s0} {pl = plF} mF _ ixF slF _ _ _ _ k) (b-there b) nd =
   let f = kn-find k b nd
       pinD = den-pin {x = y} {pl = Found.pl f} {ρ = tail} {i = i} {s = s0}
                (Found.ext f) (kn-sync k) mF ixF slF nd
@@ -1157,7 +1168,7 @@ kn-find {x} (kn1 {x = y} {ρ = tail} {i = i} {s0 = s0} {pl = plF} mF _ ixF slF _
     { m = Found.m f ; pl = Found.pl f ; peq = Found.peq f
     ; i = Found.i f ; s0 = Found.s0 f
     ; ix≡ = Found.ix≡ f ; sl≡ = Found.sl≡ f
-    ; suf = Found.suf f ; at = Found.at f
+    ; suf = Found.suf f ; at = Found.at f ; ens = Found.ens f
     ; ext = ext-front {x = y} {i = i} {s = s0}
               {ρ0 = envOf (Found.pl f)} {ρ = tail} (Found.ext f) pinD
     ; cov = cov-cons {x = y} {i = i} {s = s0} {suf = Found.suf f}

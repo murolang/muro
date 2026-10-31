@@ -315,6 +315,61 @@ data AtA where
          At [] pl → AtA rest →
          AtA (ap1 {y} {p} {as} {w} {ws} {ρ} pl hd sl ev rest)
 
+-- Every echo under a place reads the name list `denote` was given.
+-- The root call uses `bnames`, which is the list the source configuration
+-- keeps in `namesL` and `namesR`.
+data EchoNs (ns : List String) : {P : SProc} → Place P → Set
+data EchoNsA (ns : List String) : {ρ : EnvI} {as : List Arm} {ws : List (String × W)} →
+                                  ArmPs ρ as ws → Set
+
+data EchoNs ns where
+  en-mu : ∀ {x p} {pl : Place p} → EchoNs ns pl → EchoNs ns (p-mu x pl)
+  en-jump : ∀ {x i s ρ} → EchoNs ns (p-jump x i s ρ)
+  en-done : ∀ {n i s ρ} → EchoNs ns (p-act (d-done n) r-done i s ρ)
+  en-stop : ∀ {n i s ρ} → EchoNs ns (p-act (d-stop n) r-stop i s ρ)
+  en-put : ∀ {n s a atom j p ρw w aeq wk ej dest dh ds de i0 s0 ρ} →
+           EchoNs ns dest →
+           EchoNs ns (p-act (d-put n s a atom j p ρw w aeq wk ej dest dh ds de)
+                            r-put i0 s0 ρ)
+  en-echo : ∀ {n s x nsE sX j p ρw w fd wk ej dest dh ds de i0 s0 ρ} →
+            ns ≡ nsE → EchoNs ns dest →
+            EchoNs ns (p-act (d-echo n s x nsE sX j p ρw w fd wk ej dest dh ds de)
+                             r-echo i0 s0 ρ)
+  en-pick0 : ∀ {n s j p ρw w wk ej dest dh ds de i0 s0 ρ} →
+             EchoNs ns dest →
+             EchoNs ns (p-act (d-pick0 n s j p ρw w wk ej dest dh ds de)
+                              r-pick0 i0 s0 ρ)
+  en-pick1 : ∀ {n s j p ρw w wk ej dest dh ds de i0 s0 ρ} →
+             EchoNs ns dest →
+             EchoNs ns (p-act (d-pick1 n s j p ρw w wk ej dest dh ds de)
+                              r-pick1 i0 s0 ρ)
+  en-get : ∀ {n s t x j p ρw w wk ej dest dh ds de i0 s0 ρ} →
+           EchoNs ns dest →
+           EchoNs ns (p-act (d-get n s t x j p ρw w wk ej dest dh ds de)
+                            r-get i0 s0 ρ)
+  en-cover : ∀ {n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀
+               i0 s0 ρ} →
+             EchoNs ns dp → EchoNs ns dq →
+             EchoNs ns (p-act (d-cover n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq
+                                      hp sp ep hq sq eq₀)
+                             r-cover i0 s0 ρ)
+  en-iget : ∀ {n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀
+              i0 s0 ρ} →
+            EchoNs ns dp → EchoNs ns dq →
+            EchoNs ns (p-act (d-iget n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq
+                                     hp sp ep hq sq eq₀)
+                            r-iget i0 s0 ρ)
+  en-mget : ∀ {n s t x named as ρw ws n2 s2 wk en dests i0 s0 ρ} →
+            EchoNsA ns dests →
+            EchoNs ns (p-act (d-mget n s t x named as ρw ws n2 s2 wk en dests)
+                             r-mget i0 s0 ρ)
+
+data EchoNsA ns where
+  ea0 : ∀ {ρ} → EchoNsA ns (ap0 {ρ})
+  ea1 : ∀ {ρ y p as w ws pl hd sl ev rest} →
+        EchoNs ns pl → EchoNsA ns rest →
+        EchoNsA ns (ap1 {y} {p} {as} {w} {ws} {ρ} pl hd sl ev rest)
+
 -- The place a recursion binder denotes, found in the table.
 data InTab (x : String) (P : SProc) : Table → Set where
   in-here : ∀ {i s0 ρ pl tab} →

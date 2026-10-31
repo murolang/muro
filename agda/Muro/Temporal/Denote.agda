@@ -118,7 +118,7 @@ bit-atom true = refl
 ------------------------------------------------------------------------
 
 record Yes (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
-           (renv : REnv) (venv : VEnv) (n slot : ℕ) : Set where
+           (renv : REnv) (venv : VEnv) (n slot : ℕ) (ns : List String) : Set where
   constructor yesB
   field
     w : W
@@ -140,6 +140,7 @@ record Yes (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
     hs : Hosts tab pl
     at : At pend pl
     tn : tnames tab ≡ mus P
+    ens : EchoNs ns pl
 
 record No (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
           (renv : REnv) (venv : VEnv) (n slot : ℕ) : Set where
@@ -150,12 +151,12 @@ record No (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
     cmp : compile (elab P fp) pend renv venv slot n ≡ cfail fault
 
 data Built (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
-           (renv : REnv) (venv : VEnv) (n slot : ℕ) : Set where
-  ok : Yes P fp pend ρ renv venv n slot → Built P fp pend ρ renv venv n slot
-  bad : No P fp pend ρ renv venv n slot → Built P fp pend ρ renv venv n slot
+           (renv : REnv) (venv : VEnv) (n slot : ℕ) (ns : List String) : Set where
+  ok : Yes P fp pend ρ renv venv n slot ns → Built P fp pend ρ renv venv n slot ns
+  bad : No P fp pend ρ renv venv n slot → Built P fp pend ρ renv venv n slot ns
 
 record YesA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
-            (venv : VEnv) (n slot : ℕ) : Set where
+            (venv : VEnv) (n slot : ℕ) (ns : List String) : Set where
   constructor yesA
   field
     ws : List (String × W)
@@ -175,6 +176,7 @@ record YesA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
     hsa : HostsA tab dests
     ata : AtA dests
     tn : tnames tab ≡ musArms as
+    eaa : EchoNsA ns dests
 
 record NoA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
            (venv : VEnv) (n slot : ℕ) : Set where
@@ -185,25 +187,25 @@ record NoA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
     cmp : compileArms (elabArms as fas) renv venv slot n ≡ (cfail fault , [] , [])
 
 data BuiltA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
-            (venv : VEnv) (n slot : ℕ) : Set where
-  okA : YesA as fas ρ renv venv n slot → BuiltA as fas ρ renv venv n slot
-  badA : NoA as fas ρ renv venv n slot → BuiltA as fas ρ renv venv n slot
+            (venv : VEnv) (n slot : ℕ) (ns : List String) : Set where
+  okA : YesA as fas ρ renv venv n slot ns → BuiltA as fas ρ renv venv n slot ns
+  badA : NoA as fas ρ renv venv n slot → BuiltA as fas ρ renv venv n slot ns
 
 ------------------------------------------------------------------------
 -- One parent block in front of a child's place.
 ------------------------------------------------------------------------
 
 finish-put :
-  ∀ {a atom p fp pend ρ renv venv n slot}
+  ∀ {a atom p fp pend ρ renv venv n slot ns}
   (fq : Frag (sput a p))
-  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot) →
+  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot ns) →
   asAtom a ≡ just atom →
   walk pend ρ (sput a p) n slot ≡
     just (mkW n slot (next (Yes.w y)) (slotN (Yes.w y))) →
   compile (elab (sput a p) fq) pend renv venv slot n ≡
     cok n (next (Yes.w y)) (slotN (Yes.w y))
       ((n , bPut atom (entry (Yes.w y))) ∷ Yes.bs y) →
-  Yes (sput a p) fq pend ρ renv venv n slot
+  Yes (sput a p) fq pend ρ renv venv n slot ns
 finish-put {a} {atom} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y aeq wk cmp =
   yesB (mkW n slot (next (Yes.w y)) (slotN (Yes.w y)))
        ((n , bPut atom (entry (Yes.w y))) ∷ Yes.bs y)
@@ -220,13 +222,14 @@ finish-put {a} {atom} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y aeq wk 
        (hs-put (Yes.hs y))
        (at-put refl (Yes.at y))
        (Yes.tn y)
+       (en-put (Yes.ens y))
   where
   ρw = addPend pend n slot ρ
 
 finish-echo :
   ∀ {x p fp pend ρ renv venv ns n slot sX}
   (fq : Frag (sput (pEcho x) p))
-  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot) →
+  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot ns) →
   lookupN x venv ≡ just sX →
   findS x ns ≡ just sX →
   walk pend ρ (sput (pEcho x) p) n slot ≡
@@ -234,7 +237,7 @@ finish-echo :
   compile (elab (sput (pEcho x) p) fq) pend renv venv slot n ≡
     cok n (next (Yes.w y)) (slotN (Yes.w y))
       ((n , bEcho sX (entry (Yes.w y))) ∷ Yes.bs y) →
-  Yes (sput (pEcho x) p) fq pend ρ renv venv n slot
+  Yes (sput (pEcho x) p) fq pend ρ renv venv n slot ns
 finish-echo {x} {p} {fp} {pend} {ρ} {renv} {venv} {ns} {n} {slot} {sX} fq y lk fd wk cmp =
   yesB (mkW n slot (next (Yes.w y)) (slotN (Yes.w y)))
        ((n , bEcho sX (entry (Yes.w y))) ∷ Yes.bs y)
@@ -251,19 +254,20 @@ finish-echo {x} {p} {fp} {pend} {ρ} {renv} {venv} {ns} {n} {slot} {sX} fq y lk 
        (hs-echo (Yes.hs y))
        (at-echo refl (Yes.at y))
        (Yes.tn y)
+       (en-echo refl (Yes.ens y))
   where
   ρw = addPend pend n slot ρ
 
 finish-pick0 :
-  ∀ {p fp pend ρ renv venv n slot}
+  ∀ {p fp pend ρ renv venv n slot ns}
   (fq : Frag (spick0 p))
-  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot) →
+  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot ns) →
   walk pend ρ (spick0 p) n slot ≡
     just (mkW n slot (next (Yes.w y)) (slotN (Yes.w y))) →
   compile (elab (spick0 p) fq) pend renv venv slot n ≡
     cok n (next (Yes.w y)) (slotN (Yes.w y))
       ((n , bPick0 (entry (Yes.w y))) ∷ Yes.bs y) →
-  Yes (spick0 p) fq pend ρ renv venv n slot
+  Yes (spick0 p) fq pend ρ renv venv n slot ns
 finish-pick0 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
   yesB (mkW n slot (next (Yes.w y)) (slotN (Yes.w y)))
        ((n , bPick0 (entry (Yes.w y))) ∷ Yes.bs y)
@@ -280,19 +284,20 @@ finish-pick0 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        (hs-pick0 (Yes.hs y))
        (at-pick0 refl (Yes.at y))
        (Yes.tn y)
+       (en-pick0 (Yes.ens y))
   where
   ρw = addPend pend n slot ρ
 
 finish-pick1 :
-  ∀ {p fp pend ρ renv venv n slot}
+  ∀ {p fp pend ρ renv venv n slot ns}
   (fq : Frag (spick1 p))
-  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot) →
+  (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot ns) →
   walk pend ρ (spick1 p) n slot ≡
     just (mkW n slot (next (Yes.w y)) (slotN (Yes.w y))) →
   compile (elab (spick1 p) fq) pend renv venv slot n ≡
     cok n (next (Yes.w y)) (slotN (Yes.w y))
       ((n , bPick1 (entry (Yes.w y))) ∷ Yes.bs y) →
-  Yes (spick1 p) fq pend ρ renv venv n slot
+  Yes (spick1 p) fq pend ρ renv venv n slot ns
 finish-pick1 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
   yesB (mkW n slot (next (Yes.w y)) (slotN (Yes.w y)))
        ((n , bPick1 (entry (Yes.w y))) ∷ Yes.bs y)
@@ -309,20 +314,21 @@ finish-pick1 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        (hs-pick1 (Yes.hs y))
        (at-pick1 refl (Yes.at y))
        (Yes.tn y)
+       (en-pick1 (Yes.ens y))
   where
   ρw = addPend pend n slot ρ
 
 finish-get :
-  ∀ {t x p fp pend ρ renv venv n slot}
+  ∀ {t x p fp pend ρ renv venv n slot ns}
   (fq : Frag (sget t x p))
   (y : Yes p fp [] (addPend pend n slot ρ) (addNames pend n renv)
-         ((x , slot) ∷ venv) (suc n) (suc slot)) →
+         ((x , slot) ∷ venv) (suc n) (suc slot) ns) →
   walk pend ρ (sget t x p) n slot ≡
     just (mkW n slot (next (Yes.w y)) (slotN (Yes.w y))) →
   compile (elab (sget t x p) fq) pend renv venv slot n ≡
     cok n (next (Yes.w y)) (slotN (Yes.w y))
       ((n , bGet t slot (entry (Yes.w y))) ∷ Yes.bs y) →
-  Yes (sget t x p) fq pend ρ renv venv n slot
+  Yes (sget t x p) fq pend ρ renv venv n slot ns
 finish-get {t} {x} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
   yesB (mkW n slot (next (Yes.w y)) (slotN (Yes.w y)))
        ((n , bGet t slot (entry (Yes.w y))) ∷ Yes.bs y)
@@ -340,6 +346,7 @@ finish-get {t} {x} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        (hs-get (Yes.hs y))
        (at-get refl (Yes.at y))
        (Yes.tn y)
+       (en-get (Yes.ens y))
   where
   ρw = addPend pend n slot ρ
 
@@ -790,9 +797,9 @@ side-b pre ms1 ms2 eq =
   in dis→ (pre ++ ms1) l , dis→ (pre ++ ms2) r
 
 -- The body's environment is the environment the mu was denoted under.
-pin-of : ∀ {p fp renv venv n slot} {x : String} {pend : List String}
+pin-of : ∀ {p fp renv venv n slot ns} {x : String} {pend : List String}
            {ρ : EnvI} {ms : List String} →
-         (y : Yes p fp (x ∷ pend) ρ renv venv n slot) →
+         (y : Yes p fp (x ∷ pend) ρ renv venv n slot ns) →
          distinct (namesI ρ ++ (pend ++ (x ∷ ms))) ≡ true →
          lookupI x (envOf (Yes.pl y)) ≡ nothing
 pin-of {x = x} {pend = pend} {ρ = ρ} {ms = ms} y eq rewrite Yes.ev y =
@@ -820,25 +827,25 @@ mutual
            slot ≡ length pre →
            ns ≡ pre ++ bnames P ++ post →
            distinct (namesI ρ ++ (pend ++ mus P)) ≡ true →
-           Built P fp pend ρ renv venv n slot
+           Built P fp pend ρ renv venv n slot ns
 
   denote sdone fdone pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     ok (yesB (mkW n slot (suc n) slot) ((n , bDone) ∷ []) refl refl (o1 o0)
           (sym (+-idr slot))
           (p-act (d-done n) r-done n slot ρ) t0 (cp-act (c-done here)) ct0 refl refl refl
-          (lk-done refl) ls0 hs-done at-done refl)
+          (lk-done refl) ls0 hs-done at-done refl en-done)
   denote sstop fstop pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     ok (yesB (mkW n slot (suc n) slot) ((n , bStop) ∷ []) refl refl (o1 o0)
           (sym (+-idr slot))
           (p-act (d-stop n) r-stop n slot ρ) t0 (cp-act (c-stop here)) ct0 refl refl refl
-          (lk-stop refl) ls0 hs-stop at-stop refl)
+          (lk-stop refl) ls0 hs-stop at-stop refl en-stop)
 
   denote (sput .(pNat a) p) (fput (fnat a) fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
           ns scope pre post (suc n) slot (add-rel pend n slot rel) er (∧-right eok) seq nseq (cont-sep pend n slot ρ (mus p) sep))
     where
-    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot →
-         Built (sput (pNat a) p) (fput (fnat a) fp) pend ρ renv venv n slot
+    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot ns →
+         Built (sput (pNat a) p) (fput (fnat a) fp) pend ρ renv venv n slot ns
     on (bad (noB f wk cmp)) =
       bad (noB f
         (sput-miss {pend = pend} {ρ = ρ} {a = pNat a} {p = p} {n = n} {s = slot} wk)
@@ -857,8 +864,8 @@ mutual
     on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
           ns scope pre post (suc n) slot (add-rel pend n slot rel) er (∧-right eok) seq nseq (cont-sep pend n slot ρ (mus p) sep))
     where
-    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot →
-         Built (sput (pBit b) p) (fput (fbit b) fp) pend ρ renv venv n slot
+    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot ns →
+         Built (sput (pBit b) p) (fput (fbit b) fp) pend ρ renv venv n slot ns
     on (bad (noB f wk cmp)) =
       bad (noB f
         (sput-miss {pend = pend} {ρ = ρ} {a = pBit b} {p = p} {n = n} {s = slot} wk)
@@ -877,8 +884,8 @@ mutual
     on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
           ns scope pre post (suc n) slot (add-rel pend n slot rel) er (∧-right eok) seq nseq (cont-sep pend n slot ρ (mus p) sep))
     where
-    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot →
-         Built (sput (pCon y) p) (fput (fcon y) fp) pend ρ renv venv n slot
+    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot ns →
+         Built (sput (pCon y) p) (fput (fcon y) fp) pend ρ renv venv n slot ns
     on (bad (noB f wk cmp)) =
       bad (noB f
         (sput-miss {pend = pend} {ρ = ρ} {a = pCon y} {p = p} {n = n} {s = slot} wk)
@@ -902,8 +909,8 @@ mutual
     heard : Σ ℕ (λ sX → lookupN x venv ≡ just sX × findS x ns ≡ just sX)
     heard = er x (∧-right scopeOk) (∧-left scopeOk)
     on : Σ ℕ (λ sX → lookupN x venv ≡ just sX × findS x ns ≡ just sX) →
-         Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot →
-         Built (sput (pEcho x) p) (fput (fecho x) fp) pend ρ renv venv n slot
+         Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot ns →
+         Built (sput (pEcho x) p) (fput (fecho x) fp) pend ρ renv venv n slot ns
     on (sX , lk , fd) (bad (noB f wk cmp)) =
       bad (noB f
         (sput-miss {pend = pend} {ρ = ρ} {a = pEcho x} {p = p} {n = n} {s = slot} wk)
@@ -927,8 +934,8 @@ mutual
           (cont-sep pend n slot ρ (mus p) sep))
     where
     on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv)
-               ((x , slot) ∷ venv) (suc n) (suc slot) →
-         Built (sget t x p) (fget fp) pend ρ renv venv n slot
+               ((x , slot) ∷ venv) (suc n) (suc slot) ns →
+         Built (sget t x p) (fget fp) pend ρ renv venv n slot ns
     on (bad (noB f wk cmp)) =
       bad (noB f
         (sget-miss {pend = pend} {ρ = ρ} {t = t} {x = x} {p = p} {n = n} {s = slot} wk)
@@ -947,8 +954,8 @@ mutual
     on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
           ns scope pre post (suc n) slot (add-rel pend n slot rel) er eok seq nseq (cont-sep pend n slot ρ (mus p) sep))
     where
-    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot →
-         Built (spick0 p) (fpick0 fp) pend ρ renv venv n slot
+    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot ns →
+         Built (spick0 p) (fpick0 fp) pend ρ renv venv n slot ns
     on (bad (noB f wk cmp)) =
       bad (noB f
         (spick0-miss {pend = pend} {ρ = ρ} {p = p} {n = n} {s = slot} wk)
@@ -966,8 +973,8 @@ mutual
     on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
           ns scope pre post (suc n) slot (add-rel pend n slot rel) er eok seq nseq (cont-sep pend n slot ρ (mus p) sep))
     where
-    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot →
-         Built (spick1 p) (fpick1 fp) pend ρ renv venv n slot
+    on : Built p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv (suc n) slot ns →
+         Built (spick1 p) (fpick1 fp) pend ρ renv venv n slot ns
     on (bad (noB f wk cmp)) =
       bad (noB f
         (spick1-miss {pend = pend} {ρ = ρ} {p = p} {n = n} {s = slot} wk)
@@ -993,8 +1000,8 @@ mutual
     sepW = cont-sep pend n slot ρ (mus p ++ mus q) sep
     sepL = proj₁ (side-b (namesI ρw) (mus p) (mus q) sepW)
     sepR = proj₂ (side-b (namesI ρw) (mus p) (mus q) sepW)
-    onL : Built p fp [] ρw renw venv (suc n) slot →
-          Built (scover p q) (fcover fp fq) pend ρ renv venv n slot
+    onL : Built p fp [] ρw renw venv (suc n) slot ns →
+          Built (scover p q) (fcover fp fq) pend ρ renv venv n slot ns
     onL (bad (noB f wk cmp)) =
       bad (noB f
         (cover-walk-bad {pend = pend} {ρ = ρ} {p = p} {q = q} {n = n} {s = slot} wk)
@@ -1008,9 +1015,9 @@ mutual
                 (split-right pre (bnames p) (bnames q) post nseq)
                 sepR)
       where
-      onR : (y1 : Yes p fp [] ρw renw venv (suc n) slot) →
-            Built q fq [] ρw renw venv (next (Yes.w y1)) (slotN (Yes.w y1)) →
-            Built (scover p q) (fcover fp fq) pend ρ renv venv n slot
+      onR : (y1 : Yes p fp [] ρw renw venv (suc n) slot ns) →
+            Built q fq [] ρw renw venv (next (Yes.w y1)) (slotN (Yes.w y1)) ns →
+            Built (scover p q) (fcover fp fq) pend ρ renv venv n slot ns
       onR y1 (bad (noB f wk cmp)) =
         bad (noB f
           (cover-walk-miss {pend = pend} {ρ = ρ} {p = p} {q = q} {n = n} {s = slot}
@@ -1052,7 +1059,8 @@ mutual
               (appendL (Yes.ls y1) (Yes.ls y2))
               (hs-cover (hosts-appendˡ (Yes.hs y1)) (hosts-appendʳ (Yes.hs y2)))
               (at-cover refl (Yes.at y1) (Yes.at y2))
-              (names-join {t = Yes.tab y1} {u = Yes.tab y2} (Yes.tn y1) (Yes.tn y2)))
+              (names-join {t = Yes.tab y1} {u = Yes.tab y2} (Yes.tn y1) (Yes.tn y2))
+              (en-cover (Yes.ens y1) (Yes.ens y2)))
 
   denote (siget x p q) (figet fp fq) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     onL (denote p fp [] ρw renw venvX ns scopeX preX (bnames q ++ post) (suc n) (suc slot)
@@ -1070,8 +1078,8 @@ mutual
     sepW = cont-sep pend n slot ρ (mus p ++ mus q) sep
     sepL = proj₁ (side-b (namesI ρw) (mus p) (mus q) sepW)
     sepR = proj₂ (side-b (namesI ρw) (mus p) (mus q) sepW)
-    onL : Built p fp [] ρw renw venvX (suc n) (suc slot) →
-          Built (siget x p q) (figet fp fq) pend ρ renv venv n slot
+    onL : Built p fp [] ρw renw venvX (suc n) (suc slot) ns →
+          Built (siget x p q) (figet fp fq) pend ρ renv venv n slot ns
     onL (bad (noB f wk cmp)) =
       bad (noB f
         (iget-walk-bad {pend = pend} {ρ = ρ} {x = x} {p = p} {q = q} {n = n} {s = slot} wk)
@@ -1085,9 +1093,9 @@ mutual
                 (iget-q-ns pre x (bnames p) (bnames q) post nseq)
                 sepR)
       where
-      onR : (y1 : Yes p fp [] ρw renw venvX (suc n) (suc slot)) →
-            Built q fq [] ρw renw venvX (next (Yes.w y1)) (slotN (Yes.w y1)) →
-            Built (siget x p q) (figet fp fq) pend ρ renv venv n slot
+      onR : (y1 : Yes p fp [] ρw renw venvX (suc n) (suc slot) ns) →
+            Built q fq [] ρw renw venvX (next (Yes.w y1)) (slotN (Yes.w y1)) ns →
+            Built (siget x p q) (figet fp fq) pend ρ renv venv n slot ns
       onR y1 (bad (noB f wk cmp)) =
         bad (noB f
           (iget-walk-miss {pend = pend} {ρ = ρ} {x = x} {p = p} {q = q} {n = n} {s = slot}
@@ -1129,7 +1137,8 @@ mutual
               (appendL (Yes.ls y1) (Yes.ls y2))
               (hs-iget (hosts-appendˡ (Yes.hs y1)) (hosts-appendʳ (Yes.hs y2)))
               (at-iget refl (Yes.at y1) (Yes.at y2))
-              (names-join {t = Yes.tab y1} {u = Yes.tab y2} (Yes.tn y1) (Yes.tn y2)))
+              (names-join {t = Yes.tab y1} {u = Yes.tab y2} (Yes.tn y1) (Yes.tn y2))
+              (en-iget (Yes.ens y1) (Yes.ens y2)))
 
   denote (smget t x as) (fmget fas) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     on (denoteArms as fas (addPend pend n slot ρ) (addNames pend n renv) ((x , slot) ∷ venv)
@@ -1140,8 +1149,8 @@ mutual
           (cont-sep pend n slot ρ (musArms as) sep))
     where
     on : BuiltA as fas (addPend pend n slot ρ) (addNames pend n renv) ((x , slot) ∷ venv)
-               (suc n) (suc slot) →
-         Built (smget t x as) (fmget fas) pend ρ renv venv n slot
+               (suc n) (suc slot) ns →
+         Built (smget t x as) (fmget fas) pend ρ renv venv n slot ns
     on (badA (noA f wk cmp)) =
       bad (noB f
         (mget-walk-bad {pend = pend} {ρ = ρ} {t = t} {x = x} {as = as} {n = n} {s = slot} wk)
@@ -1170,14 +1179,15 @@ mutual
             (YesA.ls y)
             (hs-mget (YesA.hsa y))
             (at-mget refl (YesA.ata y))
-            (YesA.tn y))
+            (YesA.tn y)
+            (en-mget (YesA.eaa y)))
 
   denote (smu x p) (fmu fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     seal (denote p fp (x ∷ pend) ρ renv venv ns scope pre post n slot rel er eok seq nseq
             (mu-sep ρ pend x (mus p) sep))
     where
-    seal : Built p fp (x ∷ pend) ρ renv venv n slot →
-           Built (smu x p) (fmu fp) pend ρ renv venv n slot
+    seal : Built p fp (x ∷ pend) ρ renv venv n slot ns →
+           Built (smu x p) (fmu fp) pend ρ renv venv n slot ns
     seal (bad (noB f wk cmp)) = bad (noB f wk cmp)
     seal (ok y) =
       place (cons-bind x ρ pl0 (cp-mu (Yes.cv y)) (Yes.tab y) (Yes.ct y)
@@ -1187,7 +1197,7 @@ mutual
       hs0 = hs-mu (in-here (lk-mu (Yes.lk y))) refl (hosts-there (Yes.hs y))
       at0 = at-mu (pin-of {ms = mus p} y sep) (Yes.at y)
       place : BoundAt x ρ (p-mu x (Yes.pl y)) (Yes.bs y) (Yes.tab y) →
-              Built (smu x p) (fmu fp) pend ρ renv venv n slot
+              Built (smu x p) (fmu fp) pend ρ renv venv n slot ns
       place (tab , ct , ls , eq) rewrite eq =
         ok (yesB (Yes.w y) (Yes.bs y) (Yes.wk y) (Yes.cmp y) (Yes.od y) (Yes.end y)
               (p-mu x (Yes.pl y))
@@ -1198,13 +1208,14 @@ mutual
               (lk-mu (Yes.lk y)) ls
               (hs-mu (in-here (lk-mu (Yes.lk y))) refl (hosts-there (Yes.hs y)))
               at0
-              (cong (x ∷_) (Yes.tn y)))
+              (cong (x ∷_) (Yes.tn y))
+              (en-mu (Yes.ens y)))
 
   denote (svar y) fvar pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     var-go (lookup-rel y rel) (elemS y pend) refl
     where
     var-go : Seen ρ renv y → (b : Bool) → elemS y pend ≡ b →
-             Built (svar y) fvar pend ρ renv venv n slot
+             Built (svar y) fvar pend ρ renv venv n slot ns
     var-go _ true eq =
       bad (noB fUnguarded
         (var-walk-ung {pend = pend} {ρ = ρ} {y = y} {n = n} {s = slot} eq)
@@ -1219,7 +1230,7 @@ mutual
             (var-cmp-yes {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
                          {y = y} {i = i} eq eqn)
             o0 (sym (+-idr slot)) (p-jump y i s0 ρ) t0 cp-jump ct0 refl refl refl
-            (lk-jump eqi) ls0 hs-jump at-jump refl)
+            (lk-jump eqi) ls0 hs-jump at-jump refl en-jump)
 
   denoteArms : (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv) (venv : VEnv)
                (ns scope pre post : List String) (n slot : ℕ) →
@@ -1228,11 +1239,11 @@ mutual
                slot ≡ length pre →
                ns ≡ pre ++ bnamesArms as ++ post →
                distinct (namesI ρ ++ musArms as) ≡ true →
-               BuiltA as fas ρ renv venv n slot
+               BuiltA as fas ρ renv venv n slot ns
 
   denoteArms [] farms0 ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     okA (yesA [] n slot [] refl refl o0 (sym (+-idr slot)) (ap0 {ρ = ρ}) t0 ca0 ct0
-           la0 ls0 ha0 ata0 refl)
+           la0 ls0 ha0 ata0 refl ea0)
 
   denoteArms (aok y p ∷ as) (farms1 (farm fp) fas) ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     on (denote p fp [] ρ renv venv ns scope pre (bnamesArms as ++ post) n slot rel er
@@ -1242,8 +1253,8 @@ mutual
     where
     sepP = proj₁ (side-b (namesI ρ) (mus p) (musArms as) sep)
     sepA = proj₂ (side-b (namesI ρ) (mus p) (musArms as) sep)
-    on : Built p fp [] ρ renv venv n slot →
-         BuiltA (aok y p ∷ as) (farms1 (farm fp) fas) ρ renv venv n slot
+    on : Built p fp [] ρ renv venv n slot ns →
+         BuiltA (aok y p ∷ as) (farms1 (farm fp) fas) ρ renv venv n slot ns
     on (bad (noB f wk cmp)) =
       badA (noA f
         (arm-walk-bad {ρ = ρ} {y = y} {p = p} {as = as} {n = n} {s = slot} wk)
@@ -1256,9 +1267,9 @@ mutual
                  (split-right pre (bnames p) (bnamesArms as) post nseq)
                  sepA)
       where
-      more : (yb : Yes p fp [] ρ renv venv n slot) →
-             BuiltA as fas ρ renv venv (next (Yes.w yb)) (slotN (Yes.w yb)) →
-             BuiltA (aok y p ∷ as) (farms1 (farm fp) fas) ρ renv venv n slot
+      more : (yb : Yes p fp [] ρ renv venv n slot ns) →
+             BuiltA as fas ρ renv venv (next (Yes.w yb)) (slotN (Yes.w yb)) ns →
+             BuiltA (aok y p ∷ as) (farms1 (farm fp) fas) ρ renv venv n slot ns
       more yb (badA (noA f wk cmp)) =
         badA (noA f
           (arm-walk-miss {ρ = ρ} {y = y} {p = p} {as = as} {n = n} {s = slot}
@@ -1293,18 +1304,19 @@ mutual
                (appendL (Yes.ls yb) (YesA.ls ya))
                (ha1 (hosts-appendˡ (Yes.hs yb)) (hostsA-appendʳ (YesA.hsa ya)))
                (ata1 (Yes.at yb) (YesA.ata ya))
-               (names-join {t = Yes.tab yb} {u = YesA.tab ya} (Yes.tn yb) (YesA.tn ya)))
+               (names-join {t = Yes.tab yb} {u = YesA.tab ya} (Yes.tn yb) (YesA.tn ya))
+               (ea1 (Yes.ens yb) (YesA.eaa ya)))
 
 ------------------------------------------------------------------------
 -- The echo denotes, and so does a process that only halts.
 ------------------------------------------------------------------------
 
-done-built : Built sdone fdone [] [] [] [] zero zero
+done-built : Built sdone fdone [] [] [] [] zero zero []
 done-built =
   denote sdone fdone [] [] [] [] [] [] [] [] zero zero
     er0 (echo-empty [] []) refl refl refl refl
 
-echo-built : Built src-echoA echoAF [] [] [] [] zero zero
+echo-built : Built src-echoA echoAF [] [] [] [] zero zero (bnames src-echoA)
 echo-built =
   denote src-echoA echoAF [] [] [] [] (bnames src-echoA) [] [] [] zero zero
     er0 (echo-empty [] (bnames src-echoA)) echoA-ok refl (root-ns src-echoA) echo-mu
