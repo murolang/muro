@@ -16,6 +16,7 @@ open import Data.Nat.Base using (ℕ; zero; suc)
 open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String)
 open import Data.String.Properties using (_==_)
+open import Data.Sum.Base using (_⊎_; inj₁; inj₂)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans; cong)
 
 open import Muro.AsyncRec
@@ -39,7 +40,7 @@ open SConf
 open W
 
 open import Muro.Temporal.Pic
-  using (Ord; ERel; er0; EchoRel; echo-empty; EnvEq)
+  using (Ord; ERel; er0; EchoRel; echo-empty; EnvEq; outside; ==-refl)
 open import Muro.Temporal.Agree using (root-ns)
 open import Muro.Temporal.Den
   using ( Place; Table; t1; Link; Links; CovP; CovT; headIx; slotOf; envOf
@@ -331,6 +332,130 @@ lookup-in (x ∷ xs) n s ρ y eq = go (y == x) refl eq
        lookupI y ((x , n , s) ∷ addPend xs n s ρ) ≡ just (n , s)
   go true eqy _ rewrite eqy = refl
   go false eqy eq2 rewrite eqy = lookup-in xs n s ρ y eq2
+
+-- The denoted pending list and the runtime pending list may differ.
+-- A hit on the denoted side is still a hit on the runtime side when
+-- every denoted name is either pending at run time or already bound
+-- there, and every runtime name is new or bound at the same counters.
+Fresh : List String → EnvI → ℕ → ℕ → Set
+Fresh got ρ n s =
+  ∀ y → elemS y got ≡ true →
+        lookupI y ρ ≡ nothing ⊎ lookupI y ρ ≡ just (n , s)
+
+Covered : List String → List String → EnvI → ℕ → ℕ → Set
+Covered suf got base n s =
+  ∀ y → elemS y suf ≡ true →
+        elemS y got ≡ true ⊎ lookupI y base ≡ just (n , s)
+
+elem-yes : ∀ {y x xs} → (y == x) ≡ true → elemS y (x ∷ xs) ≡ true
+elem-yes eq rewrite eq = refl
+
+elem-cons : ∀ {y x xs} → elemS y xs ≡ true → elemS y (x ∷ xs) ≡ true
+elem-cons {y} {x} {xs} eq = go (y == x) refl
+  where
+  go : (b : Bool) → (y == x) ≡ b → elemS y (x ∷ xs) ≡ true
+  go true eqy rewrite eqy = refl
+  go false eqy rewrite eqy = eq
+
+ext-trans : ∀ {ρ1 ρ2 ρ3} → Ext ρ1 ρ2 → Ext ρ2 ρ3 → Ext ρ1 ρ3
+ext-trans a b x i s p = b x i s (a x i s p)
+
+ext-miss : ∀ {y ρ dom} → Ext ρ dom →
+           lookupI y dom ≡ nothing → lookupI y ρ ≡ nothing
+ext-miss {y} {ρ} ext eq = go (lookupI y ρ) refl
+  where
+  go : (m : Maybe (ℕ × ℕ)) → lookupI y ρ ≡ m → lookupI y ρ ≡ nothing
+  go nothing p = p
+  go (just (i , s)) p = ⊥-elim (nothing≢just (trans (sym eq) (ext y i s p)))
+
+pin-use : ∀ {y ρ n s i s1} →
+          lookupI y ρ ≡ nothing ⊎ lookupI y ρ ≡ just (n , s) →
+          lookupI y ρ ≡ just (i , s1) →
+          (n , s) ≡ (i , s1)
+pin-use (inj₁ no) eq = ⊥-elim (nothing≢just (trans (sym no) eq))
+pin-use (inj₂ yes) eq = just-inj (trans (sym yes) eq)
+
+bind-hit : ∀ got n s base y →
+           elemS y got ≡ true ⊎ lookupI y base ≡ just (n , s) →
+           lookupI y (addPend got n s base) ≡ just (n , s)
+bind-hit got n s base y (inj₁ inn) = lookup-in got n s base y inn
+bind-hit got n s base y (inj₂ eq) = go (elemS y got) refl
+  where
+  go : (b : Bool) → elemS y got ≡ b →
+       lookupI y (addPend got n s base) ≡ just (n , s)
+  go true inn = lookup-in got n s base y inn
+  go false out = trans (sym (outside got n s base y out)) eq
+
+grow-hit : ∀ y x got n s base i s1 →
+           (y == x) ≡ true →
+           (n , s) ≡ (i , s1) →
+           lookupI y ((x , n , s) ∷ addPend got n s base) ≡ just (i , s1)
+grow-hit y x got n s base i s1 eqy e rewrite eqy | e = refl
+
+fresh-tail : ∀ {x got ρ n s} →
+             (∀ y → elemS y (x ∷ got) ≡ true →
+                    lookupI y ρ ≡ nothing ⊎ lookupI y ρ ≡ just (n , s)) →
+             Fresh got ρ n s
+fresh-tail {x} fr y inn = fr y (elem-cons {y} {x} inn)
+
+-- Adding runtime names keeps a denoted hit when those names do not
+-- shadow it at different counters.
+ext-grow : ∀ got n s ρ base → Ext ρ base → Fresh got ρ n s →
+           Ext ρ (addPend got n s base)
+ext-grow [] n s ρ base ext fr = ext
+ext-grow (x ∷ got) n s ρ base ext fr y i s1 eq = go (y == x) refl
+  where
+  go : (b : Bool) → (y == x) ≡ b →
+       lookupI y (addPend (x ∷ got) n s base) ≡ just (i , s1)
+  go true eqy =
+    grow-hit y x got n s base i s1 eqy
+      (pin-use {y = y} {ρ = ρ} {n = n} {s = s} {i = i} {s1 = s1}
+         (fr y (elem-yes {y = y} {x = x} {xs = got} eqy)) eq)
+  go false eqy =
+    trans (lookup-skip eqy)
+      (ext-grow got n s ρ base ext
+         (fresh-tail {x = x} {got = got} {ρ = ρ} {n = n} {s = s} fr)
+         y i s1 eq)
+
+cov-tail : ∀ {x suf got base n s} →
+           Covered (x ∷ suf) got base n s → Covered suf got base n s
+cov-tail {x} cov y inn = cov y (elem-cons {y} {x} inn)
+
+head-pin : ∀ {y x suf n s ρ i s1} →
+           (y == x) ≡ true →
+           lookupI y ((x , n , s) ∷ addPend suf n s ρ) ≡ just (i , s1) →
+           (n , s) ≡ (i , s1)
+head-pin eqy eq rewrite eqy = just-inj eq
+
+both-hit : ∀ y got n s base i s1 →
+           (n , s) ≡ (i , s1) →
+           elemS y got ≡ true ⊎ lookupI y base ≡ just (n , s) →
+           lookupI y (addPend got n s base) ≡ just (i , s1)
+both-hit y got n s base i s1 e mem rewrite sym e = bind-hit got n s base y mem
+
+-- `suf` is the pending list the action was denoted under. `got` is the
+-- pending list the source step unfolded. The two lists share counters.
+ext-both : ∀ suf got n s ρ base →
+           Ext ρ base →
+           Covered suf got base n s →
+           Fresh got ρ n s →
+           Ext (addPend suf n s ρ) (addPend got n s base)
+ext-both [] got n s ρ base ext cov fr = ext-grow got n s ρ base ext fr
+ext-both (x ∷ suf) got n s ρ base ext cov fr y i s1 eq = step (y == x) refl eq
+  where
+  step : (b : Bool) → (y == x) ≡ b →
+         lookupI y (addPend (x ∷ suf) n s ρ) ≡ just (i , s1) →
+         lookupI y (addPend got n s base) ≡ just (i , s1)
+  step true eqy eq2 =
+    both-hit y got n s base i s1
+      (head-pin {y = y} {x = x} {suf = suf} {n = n} {s = s} {ρ = ρ}
+         {i = i} {s1 = s1} eqy eq2)
+      (cov y (elem-yes {y = y} {x = x} {xs = suf} eqy))
+  step false eqy eq2 =
+    ext-both suf got n s ρ base ext
+      (cov-tail {x = x} {suf = suf} {got = got} {base = base} {n = n} {s = s} cov)
+      fr y i s1
+      (trans (sym (lookup-skip eqy)) eq2)
 
 ------------------------------------------------------------------------
 -- `walk` returns the same continuation when every denoted hit agrees.
