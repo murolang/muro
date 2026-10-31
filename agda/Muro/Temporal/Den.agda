@@ -258,6 +258,60 @@ data LinkA where
         Link pl → LinkA rest →
         LinkA (ap1 {y} {p} {as} {w} {ws} {ρ} pl hd sl ev rest)
 
+-- The pending names an action was denoted under. A `smu` pushes its
+-- binder. A continuation was denoted with an empty pending list.
+data At : List String → {P : SProc} → Place P → Set
+data AtA : {ρ : EnvI} {as : List Arm} {ws : List (String × W)} →
+           ArmPs ρ as ws → Set
+
+data At where
+  at-mu : ∀ {x suf p} {pl : Place p} → At (x ∷ suf) pl → At suf (p-mu x pl)
+  at-jump : ∀ {suf x i s0 ρ} → At suf (p-jump x i s0 ρ)
+  at-done : ∀ {suf n i s0 ρ} → At suf (p-act (d-done n) r-done i s0 ρ)
+  at-stop : ∀ {suf n i s0 ρ} → At suf (p-act (d-stop n) r-stop i s0 ρ)
+  at-put : ∀ {n s a atom j p ρw w aeq wk ej dest dh ds de i0 s0 ρ pend suf} →
+           pend ≡ suf → At [] dest →
+           At suf (p-act (d-put n s a atom j p ρw w aeq wk ej dest dh ds de)
+                         r-put i0 s0 ρ)
+  at-echo : ∀ {n s x ns sX j p ρw w fd wk ej dest dh ds de i0 s0 ρ pend suf} →
+            pend ≡ suf → At [] dest →
+            At suf (p-act (d-echo n s x ns sX j p ρw w fd wk ej dest dh ds de)
+                          r-echo i0 s0 ρ)
+  at-pick0 : ∀ {n s j p ρw w wk ej dest dh ds de i0 s0 ρ pend suf} →
+             pend ≡ suf → At [] dest →
+             At suf (p-act (d-pick0 n s j p ρw w wk ej dest dh ds de)
+                           r-pick0 i0 s0 ρ)
+  at-pick1 : ∀ {n s j p ρw w wk ej dest dh ds de i0 s0 ρ pend suf} →
+             pend ≡ suf → At [] dest →
+             At suf (p-act (d-pick1 n s j p ρw w wk ej dest dh ds de)
+                           r-pick1 i0 s0 ρ)
+  at-get : ∀ {n s t x j p ρw w wk ej dest dh ds de i0 s0 ρ pend suf} →
+           pend ≡ suf → At [] dest →
+           At suf (p-act (d-get n s t x j p ρw w wk ej dest dh ds de)
+                         r-get i0 s0 ρ)
+  at-cover : ∀ {n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀
+               i0 s0 ρ pend suf} →
+             pend ≡ suf → At [] dp → At [] dq →
+             At suf (p-act (d-cover n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq
+                                    hp sp ep hq sq eq₀)
+                           r-cover i0 s0 ρ)
+  at-iget : ∀ {n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀
+              i0 s0 ρ pend suf} →
+            pend ≡ suf → At [] dp → At [] dq →
+            At suf (p-act (d-iget n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq
+                                   hp sp ep hq sq eq₀)
+                          r-iget i0 s0 ρ)
+  at-mget : ∀ {n s t x named as ρw ws n2 s2 wk en dests i0 s0 ρ pend suf} →
+            pend ≡ suf → AtA dests →
+            At suf (p-act (d-mget n s t x named as ρw ws n2 s2 wk en dests)
+                          r-mget i0 s0 ρ)
+
+data AtA where
+  ata0 : ∀ {ρ} → AtA (ap0 {ρ})
+  ata1 : ∀ {ρ y p as w ws pl hd sl ev rest} →
+         At [] pl → AtA rest →
+         AtA (ap1 {y} {p} {as} {w} {ws} {ρ} pl hd sl ev rest)
+
 -- The place a recursion binder denotes, found in the table.
 data InTab (x : String) (P : SProc) : Table → Set where
   in-here : ∀ {i s0 ρ pl tab} →
@@ -321,9 +375,10 @@ data HostsA where
 
 data Links : Table → Set where
   ls0 : Links t0
-  ls1 : ∀ {P x i s0 ρ pl tab} →
+  ls1 : ∀ {P x i s0 ρ pl tab suf} →
         Link pl → headIx pl ≡ i → slotOf pl ≡ s0 →
         Hosts (t1 {P} x i s0 ρ pl tab) pl →
+        At suf pl →
         Links tab →
         Links (t1 {P} x i s0 ρ pl tab)
 
@@ -448,21 +503,27 @@ slot-at (in-there m) = slot-at m
 
 ix-head : ∀ {x P tab} (ls : Links tab) (m : InTab x P tab) →
           ix-of m ≡ headIx (place-of m)
-ix-head (ls1 _ eq _ _ _) (in-here _) = sym eq
-ix-head (ls1 _ _ _ _ ls) (in-there m) = ix-head ls m
+ix-head (ls1 _ eq _ _ _ _) (in-here _) = sym eq
+ix-head (ls1 _ _ _ _ _ ls) (in-there m) = ix-head ls m
 ix-head ls0 ()
 
 slot-head : ∀ {x P tab} (ls : Links tab) (m : InTab x P tab) →
             slot-at m ≡ slotOf (place-of m)
-slot-head (ls1 _ _ eq _ _) (in-here _) = sym eq
-slot-head (ls1 _ _ _ _ ls) (in-there m) = slot-head ls m
+slot-head (ls1 _ _ eq _ _ _) (in-here _) = sym eq
+slot-head (ls1 _ _ _ _ _ ls) (in-there m) = slot-head ls m
 slot-head ls0 ()
 
 hosts-of : ∀ {x P tab} (ls : Links tab) (m : InTab x P tab) →
            Hosts tab (place-of m)
-hosts-of (ls1 _ _ _ hs _) (in-here _) = hs
-hosts-of (ls1 _ _ _ _ ls) (in-there m) = hosts-there (hosts-of ls m)
+hosts-of (ls1 _ _ _ hs _ _) (in-here _) = hs
+hosts-of (ls1 _ _ _ _ _ ls) (in-there m) = hosts-there (hosts-of ls m)
 hosts-of ls0 ()
+
+at-of : ∀ {x P tab} (ls : Links tab) (m : InTab x P tab) →
+        Σ (List String) (λ suf → At suf (place-of m))
+at-of (ls1 {suf = suf} _ _ _ _ at _) (in-here _) = suf , at
+at-of (ls1 _ _ _ _ _ ls) (in-there m) = at-of ls m
+at-of ls0 ()
 
 data Cov : Den → List (ℕ × Block) → Set
 data CovP : {P : SProc} → Place P → List (ℕ × Block) → Set

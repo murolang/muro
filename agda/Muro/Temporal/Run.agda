@@ -43,7 +43,7 @@ open import Muro.Temporal.Pic
 open import Muro.Temporal.Agree using (root-ns)
 open import Muro.Temporal.Den
   using ( Place; Table; t1; Link; Links; CovP; CovT; headIx; slotOf; envOf
-        ; InTab; in-here; in-there; Hosts
+        ; InTab; in-here; in-there; Hosts; At
         ; place-of; link-of; ix-of; slot-at )
 open import Muro.Temporal.Denote
   using ( denote; Yes; No; noB; Built; ok; bad )
@@ -166,6 +166,7 @@ record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
     ix : idx ≡ headIx pl
     ss : slot ≡ slotOf pl
     sn : Ext (envOf pl) envI
+    at : At [] pl
 
 record Hold (g : Graph) (c : SConf) : Set where
   field
@@ -253,6 +254,7 @@ init-hold k P Q fp fq eokP eokQ g c eqg eqc =
       ; ix = trans ix≡ (sym (Yes.hd y))
       ; ss = sym (trans (Yes.sl y) slot0)
       ; sn = ext-eq {ρ0 = envOf (Yes.pl y)} {ρ = []} (root-sn y)
+      ; at = Yes.at y
       }
 
   open-pack : (yL : Yes P fp [] [] [] [] zero zero)
