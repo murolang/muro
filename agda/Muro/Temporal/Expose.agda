@@ -8,7 +8,7 @@
 
 module Muro.Temporal.Expose where
 
-open import Data.Bool.Base using (true)
+open import Data.Bool.Base using (true; false)
 open import Data.Empty using (⊥; ⊥-elim)
 open import Data.List.Base using (List; []; _∷_; length)
 open import Data.Maybe.Base using (just)
@@ -22,33 +22,36 @@ open import Relation.Binary.PropositionalEquality
 open import Muro.AsyncRec
   using ( Atom; Block; bPut; bEcho; Tok; pay; snoc; Graph
         ; RConf; rc; Act; AGo; findA; lookB; materialise; reactL
-        ; room; slotVal )
+        ; room; slotVal; bPick0; bPick1; lab )
 open import Muro.Temporal.Bridge using (distinct)
 open import Muro.Temporal.Pic using (_∈_; root-at)
 open import Muro.Temporal.Source
   using ( SProc; SConf; abs; Pay; pEcho; W; EnvI; EnvP; addPend; lookupI; walk; findS; asAtom
-        ; smu; Bound; b-here; b-there
+        ; smu; sdone; sstop; sput; sget; spick0; spick1; scover; siget; smget
+        ; Bound; b-here; b-there
         ; Focus; f-put; f-done; f-stop; f-get; f-pick0; f-pick1; f-cover; f-iget; f-mget
         ; Unfold; u-put; u-mu; u-var; u-done; u-stop; u-get; u-pick0; u-pick1
         ; u-cover; u-iget; u-mget )
   renaming (snoc to ssnoc)
 open SConf
 open import Muro.Temporal using (Step; stepL; lside)
-open import Muro.Temporal.Fire using (react-put; react-echo; room-yes; snoc≡)
+open import Muro.Temporal.Fire
+  using (react-put; react-echo; react-pick0; react-pick1; room-yes; snoc≡)
 open W
 open import Muro.Temporal.Den
-  using ( Place; p-mu; p-act; p-jump; Den; d-put; d-echo; Table; Link; Links
-        ; lk-mu; lk-jump; lk-put; lk-echo
-        ; At; at-mu; at-put; at-echo
+  using ( Place; p-mu; p-act; p-jump; Den; d-put; d-echo; d-pick0; d-pick1
+        ; Table; Link; Links
+        ; lk-mu; lk-jump; lk-put; lk-echo; lk-pick0; lk-pick1
+        ; At; at-mu; at-put; at-echo; at-pick0; at-pick1
         ; CovP; cp-mu; cp-act; cp-jump; CovT
-        ; c-put; c-echo
-        ; Hosts; hs-mu; hs-put; hs-echo; hs-jump
-        ; EchoNs; en-mu; en-put; en-echo; en-jump
-        ; Align; al-mu; al-jump; al-put; al-echo
+        ; c-put; c-echo; c-pick0; c-pick1
+        ; Hosts; hs-mu; hs-put; hs-echo; hs-jump; hs-pick0; hs-pick1
+        ; EchoNs; en-mu; en-put; en-echo; en-jump; en-pick0; en-pick1
+        ; Align; al-mu; al-jump; al-put; al-echo; al-pick0; al-pick1
         ; headIx; slotOf; envOf
         ; InTab; place-of; link-of; ix-of; slot-at
         ; ix-head; slot-head; hosts-of; cov-of; tnames
-        ; Recipe; r-put; r-echo; r-mu )
+        ; Recipe; r-put; r-echo; r-pick0; r-pick1; r-mu )
 open import Muro.Temporal.Run
   using ( Cursor; Ext; Covered; Sync; sy1; Tied; td1; Knew; kn1
         ; ext-pend; cov-mu; cov-push; cov-cons; cov-pull; cov-cast
@@ -162,15 +165,67 @@ echo-env : ∀ {bs i s env ρ ρ′ p} (eq : ρ ≡ ρ′) (cur : Cursor bs i s 
            Cursor.echoNs cur
 echo-env refl _ = refl
 
+-- The continuation a one-arm action walked, in the runtime environment.
+record Gone (bs : List (ℕ × Block)) (ns : List String) (n sW : ℕ)
+            (env : EnvP) (ρRun : EnvI) (p : SProc) (w : W) : Set where
+  constructor gone
+  field
+    wk : walk [] ρRun p (suc n) sW ≡ just w
+    cur : Cursor bs (entry w) (atSlot w) env ρRun p
+    nse : Cursor.echoNs cur ≡ ns
+
+sendCont : ∀ {bs ns n s base ρi pend suf env p nD sD sW sW′ ρden ρw w}
+             {dest : Place p} →
+           (bg : Bag bs ns n s base ρi pend suf env) →
+           n ≡ nD → s ≡ sD → sW ≡ sW′ →
+           ρw ≡ addPend suf nD sD ρden →
+           Ext ρden ρi →
+           Covered suf pend base n s →
+           walk [] ρw p (suc nD) sW′ ≡ just w →
+           headIx dest ≡ entry w → slotOf dest ≡ atSlot w → envOf dest ≡ ρw →
+           CovP dest bs → Link dest → Hosts (Bag.tab bg) dest →
+           At [] dest → EchoNs ns dest → Align [] dest →
+           Gone bs ns n sW env (addPend pend n s base) p w
+sendCont {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
+         {pend = pend} {suf = suf} {env = env} {p = p} {nD = nD} {sD = sD}
+         {sW = sW} {sW′ = sW′} {ρden = ρden} {ρw = ρw} {w = w} {dest = dest}
+         bg en es eW eqρ sn cvd wk dh ds de cv lk hs at ens al =
+  gone wkRun cur (echo-env (run bg) cur0)
+  where
+  extW = ext-leaf suf pend n s nD sD ρden base ρw ρi suf
+           en es refl eqρ (run bg) sn cvd
+  wkI : walk [] ρi p (suc nD) sW′ ≡ just w
+  wkI = walk-ext [] ρw ρi p (suc nD) sW′ w extW wk
+  wkN : walk [] ρi p (suc n) sW ≡ just w
+  wkN = walk-idx {ρ = ρi} {p = p} {n = n} {n′ = nD} {s = sW} {s′ = sW′} {w = w}
+          en eW wkI
+  wkRun = subst (λ e → walk [] e p (suc n) sW ≡ just w) (run bg) wkN
+  snD = subst (λ e → Ext e ρi) (sym de) extW
+  cur0 = arrive {ns = ns} {tab = tab bg} dest w (ct bg) (ls bg)
+           (td bg) (sy bg) (kn bg) (nd bg)
+           dh ds cv lk hs at ens al snD
+  cur = subst (λ e → Cursor bs (entry w) (atSlot w) env e p) (run bg) cur0
+
+-- A focus that is already an action or a halt. Peels and jumps are not leaves.
+data Leaf : Focus → SProc → Set where
+  lf-done : Leaf f-done sdone
+  lf-stop : Leaf f-stop sstop
+  lf-put : ∀ {a p} → Leaf (f-put a p) (sput a p)
+  lf-get : ∀ {t x p} → Leaf (f-get t x p) (sget t x p)
+  lf-pick0 : ∀ {p} → Leaf (f-pick0 p) (spick0 p)
+  lf-pick1 : ∀ {p} → Leaf (f-pick1 p) (spick1 p)
+  lf-cover : ∀ {p q} → Leaf (f-cover p q) (scover p q)
+  lf-iget : ∀ {x p q} → Leaf (f-iget x p q) (siget x p q)
+  lf-mget : ∀ {t x as} → Leaf (f-mget t x as) (smget t x as)
+
 -- The place an unfold reaches, with the bag the walk was read under.
 record Stop (bs : List (ℕ × Block)) (ns : List String) (n s : ℕ)
             (base : EnvI) (ρ′ : EnvP) (pend′ : List String) (f : Focus) : Set where
   constructor atAct
   field
-    pend suf : List String
-    env : EnvP
+    suf : List String
     ρi : EnvI
-    bg : Bag bs ns n s base ρi pend suf env
+    bg : Bag bs ns n s base ρi pend′ suf ρ′
     proc : SProc
     pl : Place proc
     cv : CovP pl bs
@@ -182,7 +237,7 @@ record Stop (bs : List (ℕ × Block)) (ns : List String) (n s : ℕ)
     ix : n ≡ headIx pl
     ss : s ≡ slotOf pl
     sn : Ext (envOf pl) ρi
-    unf : Unfold env pend proc ρ′ pend′ f
+    lf : Leaf f proc
 
 -- A leaf unfold does not move the bag. `ρ′` and `pend′` are its `env` and `pend`.
 land : ∀ {bs ns n s base ρi pend suf env proc f} →
@@ -190,10 +245,10 @@ land : ∀ {bs ns n s base ρi pend suf env proc f} →
        (pl : Place proc) → CovP pl bs → Link pl → Hosts (Bag.tab bg) pl →
        At suf pl → EchoNs ns pl → Align suf pl →
        n ≡ headIx pl → s ≡ slotOf pl → Ext (envOf pl) ρi →
-       Unfold env pend proc env pend f →
+       Leaf f proc →
        Stop bs ns n s base env pend f
-land bg pl cv lk hs at ens al ix ss sn unf =
-  atAct _ _ _ _ bg _ pl cv lk hs at ens al ix ss sn unf
+land {ρi = ρi} {suf = suf} bg pl cv lk hs at ens al ix ss sn lf =
+  atAct suf ρi bg _ pl cv lk hs at ens al ix ss sn lf
 
 -- Peel a mu and follow a jump. Stop at the action, the halt, or the end.
 descend : ∀ {bs ns n s base ρi pend suf env proc ρ′ pend′ f}
@@ -272,23 +327,23 @@ descend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
           (run bg) cvdJ pinJ
 
 descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-done =
-  land bg pl cv lk hs at ens al ix ss sn u-done
+  land bg pl cv lk hs at ens al ix ss sn lf-done
 descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-stop =
-  land bg pl cv lk hs at ens al ix ss sn u-stop
+  land bg pl cv lk hs at ens al ix ss sn lf-stop
 descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-put =
-  land bg pl cv lk hs at ens al ix ss sn u-put
+  land bg pl cv lk hs at ens al ix ss sn lf-put
 descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-get =
-  land bg pl cv lk hs at ens al ix ss sn u-get
+  land bg pl cv lk hs at ens al ix ss sn lf-get
 descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-pick0 =
-  land bg pl cv lk hs at ens al ix ss sn u-pick0
+  land bg pl cv lk hs at ens al ix ss sn lf-pick0
 descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-pick1 =
-  land bg pl cv lk hs at ens al ix ss sn u-pick1
+  land bg pl cv lk hs at ens al ix ss sn lf-pick1
 descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-cover =
-  land bg pl cv lk hs at ens al ix ss sn u-cover
+  land bg pl cv lk hs at ens al ix ss sn lf-cover
 descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-iget =
-  land bg pl cv lk hs at ens al ix ss sn u-iget
+  land bg pl cv lk hs at ens al ix ss sn lf-iget
 descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-mget =
-  land bg pl cv lk hs at ens al ix ss sn u-mget
+  land bg pl cv lk hs at ens al ix ss sn lf-mget
 descend _ (p-act _ (r-mu _) _ _ _) _ () _ _ _ _ _ _ _
 
 -- Peel and jump, then read the send. The cursor at the end is the
@@ -442,13 +497,16 @@ ns-keep : ∀ {bs env ρ p} {w w′ : W} (eq : w ≡ w′)
             ≡ Cursor.echoNs cur
 ns-keep refl _ = refl
 
--- The configuration a left put steps to. `ssnoc` is the source queue.
-afterPut : SConf → SProc → EnvP → List String → ℕ → W → SConf
-afterPut c p ρ′ pend′ k w =
+-- The configuration a left send steps to. `ssnoc` is the source queue.
+afterTok : SConf → SProc → EnvP → List String → Tok → W → SConf
+afterTok c p ρ′ pend′ t w =
   record c { left = p ; il = entry w ; slotL = atSlot w
-           ; l2r = ssnoc (l2r c) (pay k)
+           ; l2r = ssnoc (l2r c) t
            ; envPL = ρ′
            ; envIL = addPend pend′ (il c) (slotL c) (envIL c) }
+
+afterPut : SConf → SProc → EnvP → List String → ℕ → W → SConf
+afterPut c p ρ′ pend′ k w = afterTok c p ρ′ pend′ (pay k) w
 
 -- The left cursor, read at the counters the configuration is standing on.
 leftBag : ∀ {g} {c : SConf} (h : Hold g c) →
@@ -482,20 +540,20 @@ find≡ : ∀ x xs ys → xs ≡ ys → findS x xs ≡ findS x ys
 find≡ _ _ _ refl = refl
 
 -- Once the block has run, the continuation cursor is the next `Hold`.
-closeL : ∀ {g c p ρ′ pend′ k j w wS} (h : Hold g c) →
-         reactL g (abs c) ≡
-           AGo (rc j (ir c) (snoc (l2r c) (pay k)) (r2l c) (el c) (er c)) →
-         entry wS ≡ j →
-         walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
-              (suc (il c)) (slotL c) ≡ just wS →
-         walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
-              (suc (il c)) (slotL c) ≡ just w →
-         (cur : Cursor (Hold.bsL h) (entry wS) (atSlot wS) ρ′
-                       (addPend pend′ (il c) (slotL c) (envIL c)) p) →
-         Cursor.echoNs cur ≡ Cursor.echoNs (Hold.leftC h) →
-         Step g (abs c) lside (abs (afterPut c p ρ′ pend′ k w)) ×
-         Hold g (afterPut c p ρ′ pend′ k w)
-closeL {g} {c} {p} {ρ′} {pend′} {k} {j} {w} {wS} h reacted ej wkS wk cur nse =
+closeTok : ∀ {g c p ρ′ pend′ j w wS} (t : Tok) (h : Hold g c) →
+           reactL g (abs c) ≡
+             AGo (rc j (ir c) (snoc (l2r c) t) (r2l c) (el c) (er c)) →
+           entry wS ≡ j →
+           walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+                (suc (il c)) (slotL c) ≡ just wS →
+           walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+                (suc (il c)) (slotL c) ≡ just w →
+           (cur : Cursor (Hold.bsL h) (entry wS) (atSlot wS) ρ′
+                         (addPend pend′ (il c) (slotL c) (envIL c)) p) →
+           Cursor.echoNs cur ≡ Cursor.echoNs (Hold.leftC h) →
+           Step g (abs c) lside (abs (afterTok c p ρ′ pend′ t w)) ×
+           Hold g (afterTok c p ρ′ pend′ t w)
+closeTok {g} {c} {p} {ρ′} {pend′} {j} {w} {wS} t h reacted ej wkS wk cur nse =
   stepL moved , record
     { nL = Hold.nL h ; bsL = Hold.bsL h ; odL = Hold.odL h ; cL = Hold.cL h
     ; nR = Hold.nR h ; bsR = Hold.bsR h ; odR = Hold.odR h ; cR = Hold.cR h
@@ -509,17 +567,33 @@ closeL {g} {c} {p} {ρ′} {pend′} {k} {j} {w} {wS} h reacted ej wkS wk cur ns
   j≡ : j ≡ entry w
   j≡ = trans (sym ej) (cong entry weq)
   atJ : reactL g (abs c) ≡
-        AGo (rc (entry w) (ir c) (snoc (l2r c) (pay k)) (r2l c) (el c) (er c))
+        AGo (rc (entry w) (ir c) (snoc (l2r c) t) (r2l c) (el c) (er c))
   atJ = subst (λ i → reactL g (abs c) ≡
-                 AGo (rc i (ir c) (snoc (l2r c) (pay k)) (r2l c) (el c) (er c)))
+                 AGo (rc i (ir c) (snoc (l2r c) t) (r2l c) (el c) (er c)))
           j≡ reacted
-  moved : reactL g (abs c) ≡ AGo (abs (afterPut c p ρ′ pend′ k w))
+  moved : reactL g (abs c) ≡ AGo (abs (afterTok c p ρ′ pend′ t w))
   moved = subst (λ q → reactL g (abs c) ≡
                    AGo (rc (entry w) (ir c) q (r2l c) (el c) (er c)))
-            (sym (snoc≡ (l2r c) (pay k))) atJ
+            (sym (snoc≡ (l2r c) t)) atJ
   curW = subst (λ z → Cursor (Hold.bsL h) (entry z) (atSlot z) ρ′
                         (addPend pend′ (il c) (slotL c) (envIL c)) p)
            weq cur
+
+closeL : ∀ {g c p ρ′ pend′ k j w wS} (h : Hold g c) →
+         reactL g (abs c) ≡
+           AGo (rc j (ir c) (snoc (l2r c) (pay k)) (r2l c) (el c) (er c)) →
+         entry wS ≡ j →
+         walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+              (suc (il c)) (slotL c) ≡ just wS →
+         walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+              (suc (il c)) (slotL c) ≡ just w →
+         (cur : Cursor (Hold.bsL h) (entry wS) (atSlot wS) ρ′
+                       (addPend pend′ (il c) (slotL c) (envIL c)) p) →
+         Cursor.echoNs cur ≡ Cursor.echoNs (Hold.leftC h) →
+         Step g (abs c) lside (abs (afterPut c p ρ′ pend′ k w)) ×
+         Hold g (afterPut c p ρ′ pend′ k w)
+closeL {k = k} h reacted ej wkS wk cur nse =
+  closeTok (pay k) h reacted ej wkS wk cur nse
 
 -- The left cursor, unfolded to the send its place denotes.
 leftSend : ∀ {g c a p ρ′ pend′} (h : Hold g c) →
@@ -530,6 +604,17 @@ leftSend {c = c} h unf =
   openSend (leftBag h) (Cursor.pl lc) (Cursor.cv lc) (Cursor.lk lc)
            (Cursor.hs lc) (Cursor.at lc) (Cursor.ens lc) (Cursor.al lc)
            (Cursor.ix lc) (Cursor.ss lc) (Cursor.sn lc) unf
+  where lc = Hold.leftC h
+
+-- The same cursor, stopped at whatever action the unfold reaches.
+leftStop : ∀ {g c ρ′ pend′ f} (h : Hold g c) →
+           Unfold (envPL c) [] (left c) ρ′ pend′ f →
+           Stop (Hold.bsL h) (Cursor.echoNs (Hold.leftC h))
+                (il c) (slotL c) (envIL c) ρ′ pend′ f
+leftStop {c = c} h unf =
+  descend (leftBag h) (Cursor.pl lc) (Cursor.cv lc) (Cursor.lk lc)
+          (Cursor.hs lc) (Cursor.at lc) (Cursor.ens lc) (Cursor.al lc)
+          (Cursor.ix lc) (Cursor.ss lc) (Cursor.sn lc) unf
   where lc = Hold.leftC h
 
 ------------------------------------------------------------------------
@@ -597,3 +682,93 @@ echo-fwd {g} {c} {x} {p} {ρ′} {pend′} {i} {k} {w} h unf eqN eqS le wk =
     slotG = subst (λ z → slotVal (el c) z ≡ just k) i≡ eqS
     reacted = react-echo g (il c) (ir c) (l2r c) (r2l c) (el c) (er c)
                 sX k j slotG (roomL h le) (seenL h mem)
+
+------------------------------------------------------------------------
+-- A source pick writes a boolean and continues at the walked block.
+------------------------------------------------------------------------
+
+pick0-use : ∀ {g c p ρ′ pend′ w} (h : Hold g c) →
+            length (l2r c) < cap c →
+            walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+                 (suc (il c)) (slotL c) ≡ just w →
+            Stop (Hold.bsL h) (Cursor.echoNs (Hold.leftC h))
+                 (il c) (slotL c) (envIL c) ρ′ pend′ (f-pick0 p) →
+            Step g (abs c) lside (abs (afterTok c p ρ′ pend′ (lab false) w)) ×
+            Hold g (afterTok c p ρ′ pend′ (lab false) w)
+pick0-use {g} {c} {p} {ρ′} {pend′} {w} h le wk
+  (atAct suf ρi bg _
+     (p-act (d-pick0 nD sD j .p ρw wD wkD ej dest dh ds de)
+            r-pick0 i0 s0 ρden)
+     (cp-act (c-pick0 mem cvD))
+     (lk-pick0 eqi eqs _ lkD)
+     (hs-pick0 hsD)
+     (at-pick0 _ atD)
+     (en-pick0 ensD)
+     (al-pick0 eqρ destAl)
+     ix ss sn lf-pick0) =
+  closeTok (lab false) h reacted ej (Gone.wk go) wk (Gone.cur go) (Gone.nse go)
+  where
+  en = trans ix eqi
+  es = trans ss eqs
+  go = sendCont {bs = Hold.bsL h} {ns = Cursor.echoNs (Hold.leftC h)}
+         {n = il c} {s = slotL c} {base = envIL c} {ρi = ρi}
+         {pend = pend′} {suf = suf} {env = ρ′} {p = p}
+         {nD = nD} {sD = sD} {sW = slotL c} {sW′ = sD}
+         {ρden = ρden} {ρw = ρw} {w = wD} {dest = dest}
+         bg en es es eqρ sn (cvd bg) wkD dh ds de cvD lkD hsD atD ensD destAl
+  memN : (il c , bPick0 j) ∈ Hold.bsL h
+  memN = subst (λ i → (i , bPick0 j) ∈ Hold.bsL h) (sym en) mem
+  reacted = react-pick0 g (il c) (ir c) (l2r c) (r2l c) (el c) (er c)
+              j (roomL h le) (seenL h memN)
+
+pick0-fwd : ∀ {g c p ρ′ pend′ w} (h : Hold g c) →
+            Unfold (envPL c) [] (left c) ρ′ pend′ (f-pick0 p) →
+            length (l2r c) < cap c →
+            walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+                 (suc (il c)) (slotL c) ≡ just w →
+            Step g (abs c) lside (abs (afterTok c p ρ′ pend′ (lab false) w)) ×
+            Hold g (afterTok c p ρ′ pend′ (lab false) w)
+pick0-fwd h unf le wk = pick0-use h le wk (leftStop h unf)
+
+pick1-use : ∀ {g c p ρ′ pend′ w} (h : Hold g c) →
+            length (l2r c) < cap c →
+            walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+                 (suc (il c)) (slotL c) ≡ just w →
+            Stop (Hold.bsL h) (Cursor.echoNs (Hold.leftC h))
+                 (il c) (slotL c) (envIL c) ρ′ pend′ (f-pick1 p) →
+            Step g (abs c) lside (abs (afterTok c p ρ′ pend′ (lab true) w)) ×
+            Hold g (afterTok c p ρ′ pend′ (lab true) w)
+pick1-use {g} {c} {p} {ρ′} {pend′} {w} h le wk
+  (atAct suf ρi bg _
+     (p-act (d-pick1 nD sD j .p ρw wD wkD ej dest dh ds de)
+            r-pick1 i0 s0 ρden)
+     (cp-act (c-pick1 mem cvD))
+     (lk-pick1 eqi eqs _ lkD)
+     (hs-pick1 hsD)
+     (at-pick1 _ atD)
+     (en-pick1 ensD)
+     (al-pick1 eqρ destAl)
+     ix ss sn lf-pick1) =
+  closeTok (lab true) h reacted ej (Gone.wk go) wk (Gone.cur go) (Gone.nse go)
+  where
+  en = trans ix eqi
+  es = trans ss eqs
+  go = sendCont {bs = Hold.bsL h} {ns = Cursor.echoNs (Hold.leftC h)}
+         {n = il c} {s = slotL c} {base = envIL c} {ρi = ρi}
+         {pend = pend′} {suf = suf} {env = ρ′} {p = p}
+         {nD = nD} {sD = sD} {sW = slotL c} {sW′ = sD}
+         {ρden = ρden} {ρw = ρw} {w = wD} {dest = dest}
+         bg en es es eqρ sn (cvd bg) wkD dh ds de cvD lkD hsD atD ensD destAl
+  memN : (il c , bPick1 j) ∈ Hold.bsL h
+  memN = subst (λ i → (i , bPick1 j) ∈ Hold.bsL h) (sym en) mem
+  reacted = react-pick1 g (il c) (ir c) (l2r c) (r2l c) (el c) (er c)
+              j (roomL h le) (seenL h memN)
+
+pick1-fwd : ∀ {g c p ρ′ pend′ w} (h : Hold g c) →
+            Unfold (envPL c) [] (left c) ρ′ pend′ (f-pick1 p) →
+            length (l2r c) < cap c →
+            walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+                 (suc (il c)) (slotL c) ≡ just w →
+            Step g (abs c) lside (abs (afterTok c p ρ′ pend′ (lab true) w)) ×
+            Hold g (afterTok c p ρ′ pend′ (lab true) w)
+pick1-fwd h unf le wk = pick1-use h le wk (leftStop h unf)
