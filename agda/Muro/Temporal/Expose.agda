@@ -27,6 +27,7 @@ open import Muro.AsyncRec
         ; bDone; bStop; isHalt
         ; lab; setNth; nthA; fits; conOf; armTo )
 open import Muro.Temporal.Bridge using (distinct)
+open import Muro.Temporal.Nest using (Ts)
 open import Muro.Temporal.Pic using (_∈_; root-at; ents)
 open import Muro.Temporal.Source
   using ( SProc; SConf; abs; Pay; pEcho; Arm; aok; abad; W; EnvI; EnvP; addPend; lookupI
@@ -124,12 +125,14 @@ arrive : ∀ {bs ns tab env ρi p} (dest : Place p) (w : W) →
          CovP dest bs → Link dest → Hosts tab dest →
          At [] dest → EchoNs ns dest → Align [] dest →
          Ext (envOf dest) ρi →
+         Ts [] [] [] tab →
          Cursor bs (entry w) (atSlot w) env ρi p
-arrive {ns = ns} {tab = tab} dest w ct ls td sy kn nd dh ds cv lk hs at ens al sn =
+arrive {ns = ns} {tab = tab} dest w ct ls td sy kn nd dh ds cv lk hs at ens al sn ts =
   record
     { pl = dest ; cv = cv ; tab = tab ; ct = ct ; lk = lk ; ls = ls
     ; hs = hs ; td = td ; sy = sy ; echoNs = ns ; kn = kn ; ens = ens
-    ; al = al ; ix = sym dh ; ss = sym ds ; sn = sn ; at = at ; nd = nd }
+    ; al = al ; ix = sym dh ; ss = sym ds ; sn = sn ; at = at ; nd = nd
+    ; ts = ts }
 
 -- The cursor's fields that a peel or a jump does not match on.
 record Bag (bs : List (ℕ × Block)) (ns : List String) (n s : ℕ)
@@ -147,6 +150,7 @@ record Bag (bs : List (ℕ × Block)) (ns : List String) (n s : ℕ)
     run : ρi ≡ addPend pend n s base
     cvd : Covered suf pend base n s
     pin : Covered suf [] ρi n s
+    ts : Ts [] [] [] tab
 
 open Bag
 
@@ -229,7 +233,7 @@ sendCont {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
   snD = subst (λ e → Ext e ρi) (sym de) extW
   cur0 = arrive {ns = ns} {tab = tab bg} dest w (ct bg) (ls bg)
            (td bg) (sy bg) (kn bg) (nd bg)
-           dh ds cv lk hs at ens al snD
+           dh ds cv lk hs at ens al snD (ts bg)
   cur = subst (λ e → Cursor bs (entry w) (atSlot w) env e p) (run bg) cur0
 
 -- A focus that is already an action or a halt. Peels and jumps are not leaves.
@@ -309,6 +313,7 @@ descend {n = n} {s = s} {base = base} {ρi = ρi} {pend = pend} {suf = suf}
           (cov-mu {x = x} {suf = suf} {got = pend} {base = base} {n = n} {s = s}
              (cvd bg))
           (cov-push {x = x} {suf = suf} {ρ = ρi} {n = n} {s = s} (pin bg))
+          (ts bg)
 
 descend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
         {pend = pend} {env = env}
@@ -350,7 +355,7 @@ descend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
   cvdJ = cov-pull {suf = Found.suf f} {pend = pend} {base = base} {n = n} {s = s}
            pinAdd
   bgJ = bag (tab bg) (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
-          (run bg) cvdJ pinJ
+          (run bg) cvdJ pinJ (ts bg)
 
 descend bg pl@(p-act _ _ _ _ _) cv lk hs at ens al ix ss sn u-done =
   land bg pl cv lk hs at ens al ix ss sn lf-done
@@ -406,6 +411,7 @@ openSend {n = n} {s = s} {base = base} {ρi = ρi} {pend = pend} {suf = suf}
           (cov-mu {x = x} {suf = suf} {got = pend} {base = base} {n = n} {s = s}
              (cvd bg))
           (cov-push {x = x} {suf = suf} {ρ = ρi} {n = n} {s = s} (pin bg))
+          (ts bg)
 
 openSend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
          {pend = pend} {env = env}
@@ -447,7 +453,7 @@ openSend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
   cvdJ = cov-pull {suf = Found.suf f} {pend = pend} {base = base} {n = n} {s = s}
            pinAdd
   bgJ = bag (tab bg) (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
-          (run bg) cvdJ pinJ
+          (run bg) cvdJ pinJ (ts bg)
 
 openSend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
          {pend = pend} {suf = suf} {env = env}
@@ -476,7 +482,7 @@ openSend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
   snD = subst (λ e → Ext e ρi) (sym de) extW
   cur0 = arrive {ns = ns} {tab = tab bg} dest w (ct bg) (ls bg)
            (td bg) (sy bg) (kn bg) (nd bg)
-           dh ds cvD lkD hsD atD ensD destAl snD
+           dh ds cvD lkD hsD atD ensD destAl snD (ts bg)
   cur = subst (λ e → Cursor bs (entry w) (atSlot w) env e p) (run bg) cur0
 
 openSend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
@@ -507,7 +513,7 @@ openSend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
   snD = subst (λ e → Ext e ρi) (sym de) extW
   cur0 = arrive {ns = ns} {tab = tab bg} dest w (ct bg) (ls bg)
            (td bg) (sy bg) (kn bg) (nd bg)
-           dh ds cvD lkD hsD atD ensD destAl snD
+           dh ds cvD lkD hsD atD ensD destAl snD (ts bg)
   cur = subst (λ e → Cursor bs (entry w) (atSlot w) env e p) (run bg) cur0
 
 openSend _ (p-act _ (r-mu _) _ _ _) _ () _ _ _ _ _ _ _ _
@@ -546,6 +552,7 @@ leftBag {c = c} h =
       refl
       (cov-id {xs = []} {base = envIL c} {n = il c} {s = slotL c})
       (cov-id {xs = []} {base = envIL c} {n = il c} {s = slotL c})
+      (Cursor.ts lc)
   where lc = Hold.leftC h
 
 -- The block at the left cursor is the block `lookB` returns.
@@ -1030,7 +1037,7 @@ cover1-use {g} {c} {p} {q} {ρ′} {pend′} {rest} {w1} {w2} h qeq wk1 wk2
   snD = subst (λ e → Ext e ρi) (sym deQ) extW
   cur0 = arrive {ns = Cursor.echoNs (Hold.leftC h)} {tab = tab bg} dq w2D
            (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
-           hq sq cvQ lkQ hsQ atQ ensQ alQ snD
+           hq sq cvQ lkQ hsQ atQ ensQ alQ snD (ts bg)
   cur = subst (λ e → Cursor (Hold.bsL h) (entry w2D) (atSlot w2D) ρ′ e q)
           (run bg) cur0
   memN : (il c , bCover i j) ∈ Hold.bsL h
@@ -1155,7 +1162,7 @@ iget1-use {g} {c} {x} {p} {q} {ρ′} {pend′} {k} {rest} {w1} {w2} h qeq eqA w
   snD = subst (λ e → Ext e ρi) (sym deQ) extW
   cur0 = arrive {ns = Cursor.echoNs (Hold.leftC h)} {tab = tab bg} dq w2D
            (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
-           hq sq cvQ lkQ hsQ atQ ensQ alQ snD
+           hq sq cvQ lkQ hsQ atQ ensQ alQ snD (ts bg)
   cur = subst (λ e → Cursor (Hold.bsL h) (entry w2D) (atSlot w2D) ρ′ e q)
           (run bg) cur0
   memI = subst (λ z → (z , bIget sD i j) ∈ Hold.bsL h) (sym en) mem
@@ -1477,7 +1484,7 @@ mget-use {g} {c} {t} {x} {as} {ρ′} {pend′} {k} {rest} {a} {name} {w} {p}
   cur0 = arrive {ns = Cursor.echoNs (Hold.leftC h)} {tab = tab bg}
            (Pick.pl pk) w (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
            (Pick.hd pk) (Pick.sl pk) (Pick.cv pk) (Pick.lk pk) (Pick.hs pk)
-           (Pick.at pk) (Pick.ens pk) (Pick.al pk) snD
+           (Pick.at pk) (Pick.ens pk) (Pick.al pk) snD (ts bg)
   cur = subst (λ e → Cursor (Hold.bsL h) (entry w) (atSlot w) ρ′ e p)
           (run bg) cur0
   memI = subst (λ z → (z , bMget t sD named) ∈ Hold.bsL h) (sym en) mem
@@ -1539,6 +1546,7 @@ rightBag {c = c} h =
       refl
       (cov-id {xs = []} {base = envIR c} {n = ir c} {s = slotR c})
       (cov-id {xs = []} {base = envIR c} {n = ir c} {s = slotR c})
+      (Cursor.ts rcur)
   where rcur = Hold.rightC h
 
 seenR : ∀ {g c b} (h : Hold g c) → (ir c , b) ∈ Hold.bsR h →
@@ -1996,7 +2004,7 @@ coverR1-use {g} {c} {p} {q} {ρ′} {pend′} {rest} {w1} {w2} h qeq wk1 wk2
   snD = subst (λ e → Ext e ρi) (sym deQ) extW
   cur0 = arrive {ns = Cursor.echoNs (Hold.rightC h)} {tab = tab bg} dq w2D
            (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
-           hq sq cvQ lkQ hsQ atQ ensQ alQ snD
+           hq sq cvQ lkQ hsQ atQ ensQ alQ snD (ts bg)
   cur = subst (λ e → Cursor (Hold.bsR h) (entry w2D) (atSlot w2D) ρ′ e q)
           (run bg) cur0
   memN : (ir c , bCover i j) ∈ Hold.bsR h
@@ -2115,7 +2123,7 @@ igetR1-use {g} {c} {x} {p} {q} {ρ′} {pend′} {k} {rest} {w1} {w2} h qeq eqA 
   snD = subst (λ e → Ext e ρi) (sym deQ) extW
   cur0 = arrive {ns = Cursor.echoNs (Hold.rightC h)} {tab = tab bg} dq w2D
            (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
-           hq sq cvQ lkQ hsQ atQ ensQ alQ snD
+           hq sq cvQ lkQ hsQ atQ ensQ alQ snD (ts bg)
   cur = subst (λ e → Cursor (Hold.bsR h) (entry w2D) (atSlot w2D) ρ′ e q)
           (run bg) cur0
   memI = subst (λ z → (z , bIget sD i j) ∈ Hold.bsR h) (sym en) mem
@@ -2186,7 +2194,7 @@ mgetR-use {g} {c} {t} {x} {as} {ρ′} {pend′} {k} {rest} {a} {name} {w} {p}
   cur0 = arrive {ns = Cursor.echoNs (Hold.rightC h)} {tab = tab bg}
            (Pick.pl pk) w (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
            (Pick.hd pk) (Pick.sl pk) (Pick.cv pk) (Pick.lk pk) (Pick.hs pk)
-           (Pick.at pk) (Pick.ens pk) (Pick.al pk) snD
+           (Pick.at pk) (Pick.ens pk) (Pick.al pk) snD (ts bg)
   cur = subst (λ e → Cursor (Hold.bsR h) (entry w) (atSlot w) ρ′ e p)
           (run bg) cur0
   memI = subst (λ z → (z , bMget t sD named) ∈ Hold.bsR h) (sym en) mem

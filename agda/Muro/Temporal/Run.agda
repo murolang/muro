@@ -50,6 +50,7 @@ open import Muro.Temporal.Den
         ; place-of; link-of; ix-of; slot-at; tnames )
 open import Muro.Temporal.Denote
   using ( denote; Yes; No; noB; Built; ok; bad )
+open import Muro.Temporal.Nest using (Ts)
 
 nothing≢just : ∀ {A : Set} {x : A} → nothing ≡ just x → ⊥
 nothing≢just ()
@@ -214,6 +215,7 @@ record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
     sn : Ext (envOf pl) envI
     at : At [] pl
     nd : distinct (tnames tab) ≡ true
+    ts : Ts [] [] [] tab
 
 record Hold (g : Graph) (c : SConf) : Set where
   field
@@ -315,6 +317,7 @@ init-hold k P Q fp fq eokP eokQ muP muQ g c eqg eqc =
       ; sn = ext-eq {ρ0 = envOf (Yes.pl y)} {ρ = []} (root-sn y)
       ; at = Yes.at y
       ; nd = nd-cast (Yes.tn y) mu
+      ; ts = Yes.ts y
       }
 
   open-pack : (yL : Yes P fp [] [] [] [] zero zero (bnames P))
