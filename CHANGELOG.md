@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.0
+
+**Breaking:** A bare stream unfold whose head reads the seed binder and whose tail mentions the block is refused, wherever that unfold occurs in the body: under a pair, an application, a match, a λ, or another unfold. The tail of a bare stream is the next seed, so that mention is the next head. The error is `<name> productivity: unguarded recursive call`. The head reads the binder when the binder occurs in it. A match, an annotation, a unit match, a rewrite, or an empty motive does not hide that occurrence.
+
+Rewrite: a head that ignores the binder, `(0, f n)`, or a tail that does not mention the block, `(k, suc k)` or `(0, 0)`, as in `examples/nats.muro` and `examples/zeros.muro`. A declared family is unchanged. Its tail is the next proof, and a head that reads the binder may call the block. `accepted-productive` observes those nested unfolds: `Seen` follows every subterm the productivity walk enters.
+
+`accepted-productive` in `agda/Muro/Productive.agda` says that if `checkSig` accepts the signature, every run or evidence definition is observable at every finite depth. Each head is block-free and the observation does not re-enter the block. A λ is observed at every block-free argument. The block is the definition's component. Closure of that component follows from the fuel-free reachability, with no fuel. Normalisation of a block-free head (`Empty-evid`) and termination of an accepted block by the descent check are separate theorems.
+
+### Manual
+
+- Streams and Limits: the theorem.
+
+### Package
+
+- Version 0.20.0.
+
 ## 0.19.7
 
 `muro` with no arguments, `muro --help`, `muro -h`, and `muro help` print the same usage and exit 0. The page names the version, every command and what it does, the global flags, a short getting-started flow, examples, and where the manifest lives: `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`. `muro help <command>` and `muro <command> --help` print that command's arguments, flags, defaults, examples, and exit codes, and do not run the command. An unknown command or flag names itself on standard error, then the one-line usage and `run muro --help`. A usage error or a hint from the executable names `muro init`, `muro gen`, or `muro deps.get`, not the Mix task. The overview prints an em dash. If mise says `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false`, then `mise use -g github:murolang/muro@VERSION`. The Mix tasks are unchanged.

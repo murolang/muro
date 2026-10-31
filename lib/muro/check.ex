@@ -1324,6 +1324,7 @@ defmodule Muro.Check do
 
   defp has_self?(_, _), do: false
 
+  # Same shifts as occℕ. A missing constructor is a clause error, not false.
   defp occurs?(x, {:var, y}), do: x == y
   defp occurs?(x, {:pi, _, a, _, b}), do: occurs?(x, a) or occurs?(x + 1, b)
   defp occurs?(x, {:lam, _, a, _, t}), do: occurs?(x, a) or occurs?(x + 1, t)
@@ -1339,21 +1340,45 @@ defmodule Muro.Check do
     occurs?(x, e) or occurs?(x + 1, p) or Enum.any?(bs, fn {_, b} -> occurs?(x, b) end)
   end
 
+  # occℕList stays at i because each Agda branch is a telescope of λs.
+  # The stored branch is that body, already shifted by its field binders.
   defp occurs?(x, {:mdata, e, p, bs}) do
     occurs?(x, e) or occurs?(x + 1, p) or
       Enum.any?(bs, fn {_, ar, b} -> occurs?(x + ar, b) end)
   end
 
+  defp occurs?(x, {:mnat, e, p, z, s}),
+    do: occurs?(x, e) or occurs?(x + 1, p) or occurs?(x, z) or occurs?(x + 1, s)
+
+  defp occurs?(x, {:memp, e, p}), do: occurs?(x, e) or occurs?(x + 1, p)
+
+  defp occurs?(x, {:munit, e, p, u}),
+    do: occurs?(x, e) or occurs?(x + 1, p) or occurs?(x, u)
+
   defp occurs?(x, {:unf, s, f}), do: occurs?(x, s) or occurs?(x, f)
   defp occurs?(x, {:ucons, s}), do: occurs?(x, s)
   defp occurs?(x, {:idt, a, b, c}), do: occurs?(x, a) or occurs?(x, b) or occurs?(x, c)
+  defp occurs?(x, {:rwt, e, p, t}), do: occurs?(x, e) or occurs?(x + 1, p) or occurs?(x, t)
+  defp occurs?(x, {:ann, e, a}), do: occurs?(x, e) or occurs?(x, a)
   defp occurs?(x, {:tensor, d, s}), do: occurs?(x, d) or occurs?(x, s)
   defp occurs?(x, {:addi, a, b}), do: occurs?(x, a) or occurs?(x, b)
   defp occurs?(x, {:muli, a, b}), do: occurs?(x, a) or occurs?(x, b)
   defp occurs?(x, {:addt, t, u}), do: occurs?(x, t) or occurs?(x, u)
   defp occurs?(x, {:toi64, t}), do: occurs?(x, t)
   defp occurs?(x, {:packi, a, b}), do: occurs?(x, a) or occurs?(x, b)
-  defp occurs?(_, _), do: false
+  defp occurs?(_x, :typ), do: false
+  defp occurs?(_x, :nat), do: false
+  defp occurs?(_x, :ze), do: false
+  defp occurs?(_x, :unit), do: false
+  defp occurs?(_x, :one), do: false
+  defp occurs?(_x, :empty), do: false
+  defp occurs?(_x, :rfl), do: false
+  defp occurs?(_x, {:def, _}), do: false
+  defp occurs?(_x, :i64), do: false
+  defp occurs?(_x, :f32ty), do: false
+  defp occurs?(_x, :atom), do: false
+  defp occurs?(_x, {:atom, _}), do: false
+  defp occurs?(_x, {:hole, _}), do: false
 
   defp spos?(_x, {:var, _}), do: true
   defp spos?(x, {:prod, a, b}), do: spos?(x, a) and spos?(x, b)
@@ -1380,7 +1405,9 @@ defmodule Muro.Check do
     with {:ok, f1} <- whnf(k, book, f), do: go_unfold(f1, block_of(rs))
   end
 
-  defp go_unfold({:lam, _, _, _, t}, self), do: go_unfold(t, self)
+  # One λ, then a pair. The unfold applies the step to one seed.
+  defp go_unfold({:lam, _, _, _, {:pair, _, _} = p}, self), do: go_unfold(p, self)
+  defp go_unfold({:lam, _, _, _, _}, _), do: {:error, "unfold body must be a pair"}
 
   defp go_unfold({:pair, h, t}, self) do
     if has_self?(self, h) or not guarded_tail?(self, t),
@@ -1389,6 +1416,51 @@ defmodule Muro.Check do
   end
 
   defp go_unfold(_, _), do: {:error, "unfold body must be a pair"}
+
+  # The seed binder occurs in the head and the tail mentions the block.
+  # On a stream that tail is the next seed, so the next head is the mention.
+  # One λ: guardedStep has already rejected a further λ.
+  defp stream_reads(block, {:lam, _, _, _, {:pair, h, t}}),
+    do: occurs?(0, h) and has_self?(block, t)
+
+  defp stream_reads(_, _), do: false
+
+  # No descent and no block. Infer then decides whether an unfold is a
+  # bare stream, without refusing a guarded tail that names the block.
+  defp neutral_rec(gamma) do
+    n = length(gamma)
+    falses = List.duplicate(false, n)
+
+    %{
+      self: nil,
+      poss: %{},
+      order: %{},
+      next_arg: nil,
+      smaller: falses,
+      rec_ok: falses,
+      names: [],
+      guard: false,
+      block: MapSet.new()
+    }
+  end
+
+  # Infer succeeds only for a bare stream: the tail's type converts with
+  # the seed's. A family, a bisimulation, or a term this walk does not
+  # type fails infer, and the stream test does not apply. The vectors
+  # match the context so a lookup in infer does not read past them.
+  defp bare_tail(k, book, block, gamma, mode, s, f) do
+    case infer(k, book, neutral_rec(gamma), gamma, mode, {:unf, s, f}) do
+      {:error, _} ->
+        :ok
+
+      {:ok, _} ->
+        with {:ok, f1} <- whnf(k, book, f) do
+          if stream_reads(block, f1),
+            do: {:error, "unguarded recursive call"},
+            else: :ok
+        end
+    end
+  end
 
   # The tail may mention the block only as a call: a block member applied
   # to arguments that do not mention the block, a pair of such tails, or a
@@ -1434,87 +1506,226 @@ defmodule Muro.Check do
   end
 
   # Whole body: check_unfold never receives the seed. Spec skips the walk.
-  # Every syntactic unfold is guarded here as well, so the productivity
-  # tag is the same shape check_unfold demands of a step.
-  defp seed_walk(k, book, block, {:unf, s, f}) do
+  # Every syntactic unfold is guarded here, and a typed bare stream is
+  # refused when its head reads the seed and its tail mentions the block.
+  # One traversal covers a pair, an application, a match, a λ, and an
+  # unfold inside another unfold. The context is the one the body was
+  # typed in, starting from [] on a closed definition.
+  defp seed_walk(k, book, block, gamma, mode, {:unf, s, f}) do
     with :ok <- seed_guard(k, book, block, s, f),
          {:ok, f1} <- whnf(k, book, f),
          :ok <- go_unfold(f1, block),
-         :ok <- seed_walk(k, book, block, s),
-         do: seed_walk(k, book, block, f)
+         :ok <- bare_tail(k, book, block, gamma, mode, s, f),
+         :ok <- seed_walk(k, book, block, gamma, mode, s),
+         do: seed_walk(k, book, block, gamma, mode, f)
   end
 
-  defp seed_walk(k, book, block, {:app, f, a}),
-    do: with_both(k, book, block, f, a)
+  defp seed_walk(k, book, block, gamma, mode, {:app, f, a}),
+    do: with_both(k, book, block, gamma, mode, f, a)
 
-  defp seed_walk(k, book, block, {:su, t}), do: seed_walk(k, book, block, t)
-  defp seed_walk(k, book, block, {:lam, _, a, _, t}), do: with_both(k, book, block, a, t)
-  defp seed_walk(k, book, block, {:pi, _, a, _, b}), do: with_both(k, book, block, a, b)
-  defp seed_walk(k, book, block, {:prod, a, b}), do: with_both(k, book, block, a, b)
-  defp seed_walk(k, book, block, {:pair, a, b}), do: with_both(k, book, block, a, b)
-  defp seed_walk(k, book, block, {:letp, e, t}), do: with_both(k, book, block, e, t)
-  defp seed_walk(k, book, block, {:nu, f}), do: seed_walk(k, book, block, f)
-  defp seed_walk(k, book, block, {:bisim, s, t}), do: with_both(k, book, block, s, t)
-  defp seed_walk(k, book, block, {:ann, e, a}), do: with_both(k, book, block, e, a)
-  defp seed_walk(k, book, block, {:idt, a, x, y}), do: seed_walk_list(k, book, block, [a, x, y])
-  defp seed_walk(k, book, block, {:rwt, e, p, t}), do: seed_walk_list(k, book, block, [e, p, t])
-  defp seed_walk(k, book, block, {:ucons, s}), do: seed_walk(k, book, block, s)
-  defp seed_walk(k, book, block, {:tensor, d, s}), do: with_both(k, book, block, d, s)
-  defp seed_walk(k, book, block, {:addi, x, y}), do: with_both(k, book, block, x, y)
-  defp seed_walk(k, book, block, {:muli, x, y}), do: with_both(k, book, block, x, y)
-  defp seed_walk(k, book, block, {:addt, t, u}), do: with_both(k, book, block, t, u)
-  defp seed_walk(k, book, block, {:toi64, t}), do: seed_walk(k, book, block, t)
-  defp seed_walk(k, book, block, {:packi, x, y}), do: with_both(k, book, block, x, y)
+  defp seed_walk(k, book, block, gamma, mode, {:su, t}),
+    do: seed_walk(k, book, block, gamma, mode, t)
 
-  defp seed_walk(k, book, block, {:matom, e, p, bs}) do
-    with :ok <- seed_walk(k, book, block, e),
-         :ok <- seed_walk(k, book, block, p),
-         do: seed_walk_list(k, book, block, Enum.map(bs, fn {_, b} -> b end))
+  defp seed_walk(k, book, block, gamma, mode, {:lam, q, a, _, t}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, a),
+         do: seed_walk(k, book, block, ext(gamma, q, a), mode, t)
   end
 
-  defp seed_walk(k, book, block, {:mdata, e, p, bs}) do
-    with :ok <- seed_walk(k, book, block, e),
-         :ok <- seed_walk(k, book, block, p),
-         do: seed_walk_list(k, book, block, Enum.map(bs, fn {_, _, b} -> b end))
+  defp seed_walk(k, book, block, gamma, mode, {:pi, q, a, _, b}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, a),
+         do: seed_walk(k, book, block, ext(gamma, q, a), mode, b)
   end
 
-  defp seed_walk(k, book, block, {:mnat, e, p, z, s}),
-    do: seed_walk_list(k, book, block, [e, p, z, s])
+  defp seed_walk(k, book, block, gamma, mode, {:prod, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
 
-  defp seed_walk(k, book, block, {:memp, e, p}), do: with_both(k, book, block, e, p)
+  defp seed_walk(k, book, block, gamma, mode, {:pair, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
 
-  defp seed_walk(k, book, block, {:munit, e, p, u}),
-    do: seed_walk_list(k, book, block, [e, p, u])
-
-  defp seed_walk(_k, _book, _block, _), do: :ok
-
-  defp with_both(k, book, block, a, b) do
-    with :ok <- seed_walk(k, book, block, a), do: seed_walk(k, book, block, b)
+  defp seed_walk(k, book, block, gamma, mode, {:letp, e, t}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         do: seed_walk(k, book, block, let_gamma(k, book, gamma, mode, e), mode, t)
   end
 
-  defp seed_walk_list(_k, _book, _block, []), do: :ok
+  defp seed_walk(k, book, block, gamma, mode, {:nu, f}),
+    do: seed_walk(k, book, block, nu_gamma(gamma, f), mode, f)
 
-  defp seed_walk_list(k, book, block, [t | ts]) do
-    with :ok <- seed_walk(k, book, block, t), do: seed_walk_list(k, book, block, ts)
+  defp seed_walk(k, book, block, gamma, mode, {:bisim, s, t}),
+    do: with_both(k, book, block, gamma, mode, s, t)
+
+  defp seed_walk(k, book, block, gamma, mode, {:ann, e, a}),
+    do: with_both(k, book, block, gamma, mode, e, a)
+
+  defp seed_walk(k, book, block, gamma, mode, {:idt, a, x, y}),
+    do: seed_walk_list(k, book, block, gamma, mode, [a, x, y])
+
+  defp seed_walk(k, book, block, gamma, mode, {:rwt, e, p, t}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         :ok <- seed_walk(k, book, block, rwt_gamma(k, book, gamma, mode, e), mode, p),
+         do: seed_walk(k, book, block, gamma, mode, t)
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:ucons, s}),
+    do: seed_walk(k, book, block, gamma, mode, s)
+
+  defp seed_walk(k, book, block, gamma, mode, {:tensor, d, s}),
+    do: with_both(k, book, block, gamma, mode, d, s)
+
+  defp seed_walk(k, book, block, gamma, mode, {:addi, x, y}),
+    do: with_both(k, book, block, gamma, mode, x, y)
+
+  defp seed_walk(k, book, block, gamma, mode, {:muli, x, y}),
+    do: with_both(k, book, block, gamma, mode, x, y)
+
+  defp seed_walk(k, book, block, gamma, mode, {:addt, t, u}),
+    do: with_both(k, book, block, gamma, mode, t, u)
+
+  defp seed_walk(k, book, block, gamma, mode, {:toi64, t}),
+    do: seed_walk(k, book, block, gamma, mode, t)
+
+  defp seed_walk(k, book, block, gamma, mode, {:packi, x, y}),
+    do: with_both(k, book, block, gamma, mode, x, y)
+
+  defp seed_walk(k, book, block, gamma, mode, {:matom, e, p, bs}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         :ok <- seed_walk(k, book, block, ext(gamma, :affine, :atom), mode, p),
+         do: seed_walk_list(k, book, block, gamma, mode, Enum.map(bs, fn {_, b} -> b end))
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:mdata, e, p, bs}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         :ok <- seed_walk(k, book, block, mdata_gamma(k, book, gamma, mode, e), mode, p),
+         do: seed_walk_list(k, book, block, gamma, mode, Enum.map(bs, fn {_, _, b} -> b end))
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:mnat, e, p, z, s}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         :ok <- seed_walk(k, book, block, ext(gamma, :affine, :nat), mode, p),
+         :ok <- seed_walk(k, book, block, gamma, mode, z),
+         do: seed_walk(k, book, block, ext(gamma, pred_qty(gamma, e), :nat), mode, s)
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:memp, e, p}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         do: seed_walk(k, book, block, ext(gamma, :affine, :empty), mode, p)
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:munit, e, p, u}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         :ok <- seed_walk(k, book, block, ext(gamma, :affine, :unit), mode, p),
+         do: seed_walk(k, book, block, gamma, mode, u)
+  end
+
+  defp seed_walk(_k, _book, _block, _gamma, _mode, _), do: :ok
+
+  # The two components, when the scrutinee infers as a product. A failure
+  # here is not a productivity verdict: the binder types fall back to Type,
+  # and an unfold that needed them is not reported as a bare stream.
+  defp let_gamma(k, book, gamma, mode, e) do
+    rs = neutral_rec(gamma)
+
+    case infer(k, book, rs, gamma, mode, e) do
+      {:ok, {ety, _}} ->
+        case view_prod(k, book, ety, names_of(rs, gamma)) do
+          {:ok, {a, b}} -> ext(ext(gamma, :affine, a), :affine, Subst.wk(b))
+          _ -> ext(ext(gamma, :affine, :typ), :affine, Subst.wk(:typ))
+        end
+
+      _ ->
+        ext(ext(gamma, :affine, :typ), :affine, Subst.wk(:typ))
+    end
+  end
+
+  defp nu_gamma(gamma, f) do
+    case nu_kind(f) do
+      {:ok, kind} -> ext(gamma, :affine, kind)
+      _ -> ext(gamma, :affine, :typ)
+    end
+  end
+
+  defp rwt_gamma(k, book, gamma, mode, eq) do
+    rs = neutral_rec(gamma)
+    rmode = if mode == :spec, do: :spec, else: :evidence
+
+    case infer(k, book, rs, gamma, rmode, eq) do
+      {:ok, {et, _}} ->
+        case view_id(k, book, et, names_of(rs, gamma)) do
+          {:ok, {a, _, _}} -> ext(gamma, :affine, a)
+          _ -> ext(gamma, :affine, :typ)
+        end
+
+      _ ->
+        ext(gamma, :affine, :typ)
+    end
+  end
+
+  # checkMotive's first binder: the scrutinee's type, or the first index.
+  defp mdata_gamma(k, book, gamma, mode, e) do
+    rs = neutral_rec(gamma)
+
+    case infer(k, book, rs, gamma, mode, e) do
+      {:ok, {et, _}} ->
+        case view_data(k, book, et, names_of(rs, gamma)) do
+          {:ok, {d, dname, params, _idxs}} ->
+            case Map.get(d, :indices, []) do
+              [] -> ext(gamma, :affine, Subst.apps_from({:def, dname}, params))
+              [{q, _x, t} | _] -> ext(gamma, q, t)
+            end
+
+          _ ->
+            ext(gamma, :affine, :typ)
+        end
+
+      _ ->
+        ext(gamma, :affine, :typ)
+    end
+  end
+
+  defp with_both(k, book, block, gamma, mode, a, b) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, a),
+         do: seed_walk(k, book, block, gamma, mode, b)
+  end
+
+  defp seed_walk_list(_k, _book, _block, _gamma, _mode, []), do: :ok
+
+  defp seed_walk_list(k, book, block, gamma, mode, [t | ts]) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, t),
+         do: seed_walk_list(k, book, block, gamma, mode, ts)
+  end
+
+  # Agda's membersRun. spec is not walked, so a run or evidence component
+  # that contains one is refused before the seed walk.
+  defp members_run(book, block) do
+    Enum.reduce_while(block, :ok, fn name, :ok ->
+      case lookup_def(book, name) do
+        {:ok, %{mode: :spec}} ->
+          {:halt, {:error, "spec definition in a productive component"}}
+
+        _ ->
+          {:cont, :ok}
+      end
+    end)
   end
 
   # Agda's checkNu: on run/evidence, a definition whose type reduces to a
   # ν (bare, a family applied to any number of indices, or ~) is an
   # unfold whose step passes the same tail guard, or it does not mention
   # its own block. A call into the block is productive only as a guarded tail.
-  # The seed walk runs first, under this same productivity tag.
+  # The seed walk runs first, under this same productivity tag, and it is
+  # the only place the bare-stream tail test runs.
   defp check_nu(_k, _book, _block, :spec, _ty, _body), do: :ok
   defp check_nu(0, _book, _block, _mode, _ty, _body), do: {:error, @out_of_fuel}
 
   defp check_nu(k, book, block, mode, ty, body) do
-    with :ok <- seed_walk(k, book, block, body),
+    with :ok <- members_run(book, block),
+         :ok <- seed_walk(k, book, block, [], mode, body),
          {:ok, ty1} <- whnf(k, book, ty) do
       case {ty1, body} do
         {{:pi, _, _, _, b}, {:lam, _, _, _, t}} ->
           check_nu(k - 1, book, block, mode, b, t)
 
-        {_, {:unf, _, f}} ->
-          check_unfold(k, book, mode, %{empty_rec() | block: block}, f)
+        {_ty1, {:unf, _, f}} ->
+          with {:ok, f1} <- whnf(k, book, f), do: go_unfold(f1, block)
 
         _ ->
           if nu_type?(ty1) and has_self?(block, body),

@@ -49,7 +49,7 @@ mix muro.deps.get                            # fetch muro_deps/ and write muro.l
 make agda                                   # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.19.7`. From a checkout: `mix archive.build && mix archive.install muro-0.19.7.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks. A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.19.7`. See [The executable](manual/binary.md).
+The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.20.0`. From a checkout: `mix archive.build && mix archive.install muro-0.20.0.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks. A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.20.0`. See [The executable](manual/binary.md).
 
 Success from `mix muro.check`: a `Muro v…` line, then `All terms check. Evidence never becomes a run.` A book that imports packages then prints one `conforms to <name> <version> (sha256 <hash>)` line per package. See [Packages](manual/packages.md).
 
@@ -90,7 +90,7 @@ The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` a
 - **`match` branches must follow the order the constructors were declared in.**
 - **Erased guards cannot rule out `run` branches.** An `evidence`/erased argument does not make a branch of a `run` term unreachable. Encode the invariant in a run-mode indexed type instead (see [Indexed data](manual/indexed.md)).
 - **`Nat` is unary (Peano), so large constants are slow** to check and to run. Use `I64` where machine numbers fit (see [Machine numbers](manual/machine.md)).
-- **`out of fuel` is not acceptance, and it is not a type error.** The checker gave up reducing. Raise `--fuel` and check again. A `cannot convert` failure is definite: two stuck calls of one definition that differ in an argument the unfolding does not erase fail that way at every fuel.
+- **`out of fuel` is not acceptance, and it is not a type error.** The checker gave up reducing. Raise `--fuel` and check again.
 
 ## Manual
 
