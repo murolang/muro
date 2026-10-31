@@ -55,6 +55,9 @@ open import Muro.Temporal.Agree
         ; iget-p-ns; iget-q-ns; iget-q-slot; iget-end
         ; echoA-ok; root-ns )
 open import Muro.Temporal.Den
+open import Muro.Temporal.Nest
+  using ( namesI; Spp; spp-leaf; spp-mu; spp-jump
+        ; Ts; ts0; repend-ts; sealT; append-ts; lookup-here )
 
 ------------------------------------------------------------------------
 -- Moving coverage onto the list a parent allocates.
@@ -142,6 +145,8 @@ record Yes (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
     tn : tnames tab ≡ mus P
     ens : EchoNs ns pl
     al : Align pend pl
+    spp : Spp (namesI ρ) pl
+    ts : Ts (namesI ρ) pend [] tab
 
 record No (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
           (renv : REnv) (venv : VEnv) (n slot : ℕ) : Set where
@@ -179,6 +184,7 @@ record YesA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
     tn : tnames tab ≡ musArms as
     eaa : EchoNsA ns dests
     ala : AlignA dests
+    ts : Ts (namesI ρ) [] [] tab
 
 record NoA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
            (venv : VEnv) (n slot : ℕ) : Set where
@@ -226,6 +232,8 @@ finish-put {a} {atom} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y aeq wk 
        (Yes.tn y)
        (en-put (Yes.ens y))
        (al-put refl (Yes.al y))
+       spp-leaf
+       (repend-ts pend n slot ρ (Yes.ts y))
   where
   ρw = addPend pend n slot ρ
 
@@ -259,6 +267,8 @@ finish-echo {x} {p} {fp} {pend} {ρ} {renv} {venv} {ns} {n} {slot} {sX} fq y lk 
        (Yes.tn y)
        (en-echo refl (Yes.ens y))
        (al-echo refl (Yes.al y))
+       spp-leaf
+       (repend-ts pend n slot ρ (Yes.ts y))
   where
   ρw = addPend pend n slot ρ
 
@@ -290,6 +300,8 @@ finish-pick0 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        (Yes.tn y)
        (en-pick0 (Yes.ens y))
        (al-pick0 refl (Yes.al y))
+       spp-leaf
+       (repend-ts pend n slot ρ (Yes.ts y))
   where
   ρw = addPend pend n slot ρ
 
@@ -321,6 +333,8 @@ finish-pick1 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        (Yes.tn y)
        (en-pick1 (Yes.ens y))
        (al-pick1 refl (Yes.al y))
+       spp-leaf
+       (repend-ts pend n slot ρ (Yes.ts y))
   where
   ρw = addPend pend n slot ρ
 
@@ -354,6 +368,8 @@ finish-get {t} {x} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        (Yes.tn y)
        (en-get (Yes.ens y))
        (al-get refl (Yes.al y))
+       spp-leaf
+       (repend-ts pend n slot ρ (Yes.ts y))
   where
   ρw = addPend pend n slot ρ
 
@@ -574,10 +590,6 @@ var-cmp-yes eqe eql rewrite eqe | eql = refl
 -- says the pending names, the environment, and the binders still to
 -- come are pairwise distinct, so peeling one cannot shadow another.
 ------------------------------------------------------------------------
-
-namesI : EnvI → List String
-namesI [] = []
-namesI ((x , _ , _) ∷ ρ) = x ∷ namesI ρ
 
 names-add : ∀ xs n s ρ → namesI (addPend xs n s ρ) ≡ xs ++ namesI ρ
 names-add [] n s ρ = refl
@@ -840,12 +852,14 @@ mutual
     ok (yesB (mkW n slot (suc n) slot) ((n , bDone) ∷ []) refl refl (o1 o0)
           (sym (+-idr slot))
           (p-act (d-done n) r-done n slot ρ) t0 (cp-act (c-done here)) ct0 refl refl refl
-          (lk-done refl) ls0 hs-done at-done refl en-done al-done)
+          (lk-done refl) ls0 hs-done at-done refl en-done al-done
+          spp-leaf ts0)
   denote sstop fstop pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     ok (yesB (mkW n slot (suc n) slot) ((n , bStop) ∷ []) refl refl (o1 o0)
           (sym (+-idr slot))
           (p-act (d-stop n) r-stop n slot ρ) t0 (cp-act (c-stop here)) ct0 refl refl refl
-          (lk-stop refl) ls0 hs-stop at-stop refl en-stop al-stop)
+          (lk-stop refl) ls0 hs-stop at-stop refl en-stop al-stop
+          spp-leaf ts0)
 
   denote (sput .(pNat a) p) (fput (fnat a) fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
@@ -1068,7 +1082,10 @@ mutual
               (at-cover refl (Yes.at y1) (Yes.at y2))
               (names-join {t = Yes.tab y1} {u = Yes.tab y2} (Yes.tn y1) (Yes.tn y2))
               (en-cover (Yes.ens y1) (Yes.ens y2))
-              (al-cover refl (Yes.al y1) (Yes.al y2)))
+              (al-cover refl (Yes.al y1) (Yes.al y2))
+              spp-leaf
+              (append-ts (repend-ts pend n slot ρ (Yes.ts y1))
+                         (repend-ts pend n slot ρ (Yes.ts y2))))
 
   denote (siget x p q) (figet fp fq) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     onL (denote p fp [] ρw renw venvX ns scopeX preX (bnames q ++ post) (suc n) (suc slot)
@@ -1147,7 +1164,10 @@ mutual
               (at-iget refl (Yes.at y1) (Yes.at y2))
               (names-join {t = Yes.tab y1} {u = Yes.tab y2} (Yes.tn y1) (Yes.tn y2))
               (en-iget (Yes.ens y1) (Yes.ens y2))
-              (al-iget refl (Yes.al y1) (Yes.al y2)))
+              (al-iget refl (Yes.al y1) (Yes.al y2))
+              spp-leaf
+              (append-ts (repend-ts pend n slot ρ (Yes.ts y1))
+                         (repend-ts pend n slot ρ (Yes.ts y2))))
 
   denote (smget t x as) (fmget fas) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     on (denoteArms as fas (addPend pend n slot ρ) (addNames pend n renv) ((x , slot) ∷ venv)
@@ -1190,7 +1210,9 @@ mutual
             (at-mget refl (YesA.ata y))
             (YesA.tn y)
             (en-mget (YesA.eaa y))
-            (al-mget refl (YesA.ala y)))
+            (al-mget refl (YesA.ala y))
+            spp-leaf
+            (repend-ts pend n slot ρ (YesA.ts y)))
 
   denote (smu x p) (fmu fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     seal (denote p fp (x ∷ pend) ρ renv venv ns scope pre post n slot rel er eok seq nseq
@@ -1220,7 +1242,12 @@ mutual
               at0
               (cong (x ∷_) (Yes.tn y))
               (en-mu (Yes.ens y))
-              (al-mu (Yes.al y)))
+              (al-mu (Yes.al y))
+              (spp-mu (Yes.spp y))
+              (sealT {i = headIx (p-mu x (Yes.pl y))}
+                     {s = slotOf (p-mu x (Yes.pl y))}
+                     {ρ = ρ}
+                     (Yes.spp y) (Yes.ts y)))
 
   denote (svar y) fvar pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     var-go (lookup-rel y rel) (elemS y pend) refl
@@ -1241,7 +1268,8 @@ mutual
             (var-cmp-yes {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
                          {y = y} {i = i} eq eqn)
             o0 (sym (+-idr slot)) (p-jump y i s0 ρ) t0 cp-jump ct0 refl refl refl
-            (lk-jump eqi) ls0 hs-jump at-jump refl en-jump al-jump)
+            (lk-jump eqi) ls0 hs-jump at-jump refl en-jump al-jump
+            (spp-jump (lookup-here eqi)) ts0)
 
   denoteArms : (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv) (venv : VEnv)
                (ns scope pre post : List String) (n slot : ℕ) →
@@ -1254,7 +1282,7 @@ mutual
 
   denoteArms [] farms0 ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     okA (yesA [] n slot [] refl refl o0 (sym (+-idr slot)) (ap0 {ρ = ρ}) t0 ca0 ct0
-           la0 ls0 ha0 ata0 refl ea0 aa0)
+           la0 ls0 ha0 ata0 refl ea0 aa0 ts0)
 
   denoteArms (aok y p ∷ as) (farms1 (farm fp) fas) ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     on (denote p fp [] ρ renv venv ns scope pre (bnamesArms as ++ post) n slot rel er
@@ -1317,7 +1345,8 @@ mutual
                (ata1 (Yes.at yb) (YesA.ata ya))
                (names-join {t = Yes.tab yb} {u = YesA.tab ya} (Yes.tn yb) (YesA.tn ya))
                (ea1 (Yes.ens yb) (YesA.eaa ya))
-               (aa1 (Yes.al yb) (YesA.ala ya)))
+               (aa1 (Yes.al yb) (YesA.ala ya))
+               (append-ts (Yes.ts yb) (YesA.ts ya)))
 
 ------------------------------------------------------------------------
 -- The echo denotes, and so does a process that only halts.
