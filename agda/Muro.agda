@@ -48,6 +48,7 @@ import Muro.Temporal.Den
 import Muro.Temporal.Denote
 import Muro.Temporal.Nest
 import Muro.Temporal.Reveal
+import Muro.Temporal.Chase
 import Muro.Temporal.Expose
 import Muro.Temporal.Back
 import Muro.Temporal.Graph
