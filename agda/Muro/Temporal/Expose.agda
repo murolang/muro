@@ -10,9 +10,9 @@ module Muro.Temporal.Expose where
 
 open import Data.Bool.Base using (true)
 open import Data.Empty using (⊥; ⊥-elim)
-open import Data.List.Base using (List; []; _∷_)
+open import Data.List.Base using (List; []; _∷_; length)
 open import Data.Maybe.Base using (just)
-open import Data.Nat.Base using (ℕ; suc)
+open import Data.Nat.Base using (ℕ; zero; suc; _<_)
 open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String)
 open import Data.Sum.Base using (_⊎_; inj₁; inj₂)
@@ -20,13 +20,18 @@ open import Relation.Binary.PropositionalEquality
   using (_≡_; refl; sym; trans; cong; subst)
 
 open import Muro.AsyncRec
-  using (Atom; Block; bPut; bEcho)
+  using ( Atom; Block; bPut; bEcho; Tok; pay; snoc; Graph
+        ; RConf; rc; Act; AGo; findA; lookB; materialise; reactL )
 open import Muro.Temporal.Bridge using (distinct)
-open import Muro.Temporal.Pic using (_∈_)
+open import Muro.Temporal.Pic using (_∈_; root-at)
 open import Muro.Temporal.Source
-  using ( SProc; Pay; pEcho; W; EnvI; EnvP; addPend; lookupI; walk; findS; asAtom
+  using ( SProc; SConf; abs; Pay; pEcho; W; EnvI; EnvP; addPend; lookupI; walk; findS; asAtom
         ; smu; Bound; b-here; b-there
         ; Focus; f-put; Unfold; u-put; u-mu; u-var )
+  renaming (snoc to ssnoc)
+open SConf
+open import Muro.Temporal using (Step; stepL; lside)
+open import Muro.Temporal.Fire using (react-put; room-yes; snoc≡)
 open W
 open import Muro.Temporal.Den
   using ( Place; p-mu; p-act; p-jump; Den; d-put; d-echo; Table; Link; Links
@@ -44,8 +49,8 @@ open import Muro.Temporal.Den
 open import Muro.Temporal.Run
   using ( Cursor; Ext; Covered; Sync; sy1; Tied; td1; Knew; kn1
         ; ext-pend; cov-mu; cov-push; cov-cons; cov-pull; cov-cast
-        ; runtime-pin; ext-front; kn-find; Found; kn-sync; kn-tied
-        ; same-slot; sync-hit; walk-ext )
+        ; cov-id; runtime-pin; ext-front; kn-find; Found; kn-sync; kn-tied
+        ; same-slot; sync-hit; walk-ext; just-inj; Hold )
 open import Muro.Temporal.Sim using (ix-eq; sl-eq)
 
 ------------------------------------------------------------------------
@@ -120,13 +125,15 @@ data Send (bs : List (ℕ × Block)) (ns : List String) (n s : ℕ) (base : EnvI
          asAtom a ≡ just atom → entry w ≡ j →
          (n , bPut atom j) ∈ bs →
          walk [] (addPend pend′ n s base) p (suc n) s ≡ just w →
-         Cursor bs (entry w) (atSlot w) ρ′ (addPend pend′ n s base) p →
+         (cur : Cursor bs (entry w) (atSlot w) ρ′ (addPend pend′ n s base) p) →
+         Cursor.echoNs cur ≡ ns →
          Send bs ns n s base ρ′ pend′ a p
   echoed : (x : String) (sX j : ℕ) (w : W) →
            a ≡ pEcho x → findS x ns ≡ just sX → entry w ≡ j →
            (n , bEcho sX j) ∈ bs →
            walk [] (addPend pend′ n s base) p (suc n) s ≡ just w →
-           Cursor bs (entry w) (atSlot w) ρ′ (addPend pend′ n s base) p →
+           (cur : Cursor bs (entry w) (atSlot w) ρ′ (addPend pend′ n s base) p) →
+           Cursor.echoNs cur ≡ ns →
            Send bs ns n s base ρ′ pend′ a p
 
 -- The continuation walk does not depend on which of two equal counters it starts at.
@@ -145,6 +152,12 @@ hosts-cast refl hs = hs
 cov-cast-pl : ∀ {P} {bs : List (ℕ × Block)} {pl pl′ : Place P} →
               pl ≡ pl′ → CovP pl bs → CovP pl′ bs
 cov-cast-pl refl cv = cv
+
+-- Substituting the cursor's runtime environment keeps its echo names.
+echo-env : ∀ {bs i s env ρ ρ′ p} (eq : ρ ≡ ρ′) (cur : Cursor bs i s env ρ p) →
+           Cursor.echoNs (subst (λ e → Cursor bs i s env e p) eq cur) ≡
+           Cursor.echoNs cur
+echo-env refl _ = refl
 
 -- Peel and jump, then read the send. The cursor at the end is the
 -- continuation, indexed at the counters the walk gave it.
@@ -234,7 +247,7 @@ openSend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
          (en-put ensD)
          (al-put eqρ destAl)
          ix ss sn u-put =
-  sent atom j w aeq ej memN wkRun cur
+  sent atom j w aeq ej memN wkRun cur (echo-env (run bg) cur0)
   where
   en = trans ix eqi
   es = trans ss eqs
@@ -264,7 +277,7 @@ openSend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
          (en-echo ns≡ ensD)
          (al-echo eqρ destAl)
          ix ss sn u-put =
-  echoed x sX j w refl fdN ej memN wkRun cur
+  echoed x sX j w refl fdN ej memN wkRun cur (echo-env (run bg) cur0)
   where
   en = trans ix eqi
   es = trans ss eqs
@@ -285,3 +298,104 @@ openSend {bs = bs} {ns = ns} {n = n} {s = s} {base = base} {ρi = ρi}
   cur = subst (λ e → Cursor bs (entry w) (atSlot w) env e p) (run bg) cur0
 
 openSend _ (p-act _ (r-mu _) _ _ _) _ () _ _ _ _ _ _ _ _
+
+------------------------------------------------------------------------
+-- A cursor's echo names survive a substitution of the walk it sits on.
+------------------------------------------------------------------------
+
+ns-keep : ∀ {bs env ρ p} {w w′ : W} (eq : w ≡ w′)
+          (cur : Cursor bs (entry w) (atSlot w) env ρ p) →
+          Cursor.echoNs
+            (subst (λ z → Cursor bs (entry z) (atSlot z) env ρ p) eq cur)
+            ≡ Cursor.echoNs cur
+ns-keep refl _ = refl
+
+-- The configuration a left put steps to. `ssnoc` is the source queue.
+afterPut : SConf → SProc → EnvP → List String → ℕ → W → SConf
+afterPut c p ρ′ pend′ k w =
+  record c { left = p ; il = entry w ; slotL = atSlot w
+           ; l2r = ssnoc (l2r c) (pay k)
+           ; envPL = ρ′
+           ; envIL = addPend pend′ (il c) (slotL c) (envIL c) }
+
+-- The left cursor, read at the counters the configuration is standing on.
+leftBag : ∀ {g} {c : SConf} (h : Hold g c) →
+          Bag (Hold.bsL h) (Cursor.echoNs (Hold.leftC h))
+              (il c) (slotL c) (envIL c) (envIL c) [] [] (envPL c)
+leftBag {c = c} h =
+  bag {bs = Hold.bsL h} {ns = Cursor.echoNs lc} {n = il c} {s = slotL c}
+      {base = envIL c} {ρi = envIL c} {pend = []} {suf = []} {env = envPL c}
+      (Cursor.tab lc) (Cursor.ct lc) (Cursor.ls lc)
+      (Cursor.td lc) (Cursor.sy lc) (Cursor.kn lc) (Cursor.nd lc)
+      refl
+      (cov-id {xs = []} {base = envIL c} {n = il c} {s = slotL c})
+      (cov-id {xs = []} {base = envIL c} {n = il c} {s = slotL c})
+  where lc = Hold.leftC h
+
+------------------------------------------------------------------------
+-- A source put is the block `openSend` read, run by `react-put`.
+------------------------------------------------------------------------
+
+put-fwd : ∀ {g c a p ρ′ pend′ atom k w} (h : Hold g c) →
+          Unfold (envPL c) [] (left c) ρ′ pend′ (f-put a p) →
+          asAtom a ≡ just atom →
+          findA atom (alpha c) ≡ just k →
+          length (l2r c) < cap c →
+          walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+               (suc (il c)) (slotL c) ≡ just w →
+          Step g (abs c) lside (abs (afterPut c p ρ′ pend′ k w)) ×
+          Hold g (afterPut c p ρ′ pend′ k w)
+put-fwd {g} {c} {a} {p} {ρ′} {pend′} {atom} {k} {w} h unf aq eqF le wk =
+  use (openSend (leftBag h) (Cursor.pl lc) (Cursor.cv lc) (Cursor.lk lc)
+                (Cursor.hs lc) (Cursor.at lc) (Cursor.ens lc) (Cursor.al lc)
+                (Cursor.ix lc) (Cursor.ss lc) (Cursor.sn lc) unf)
+      aq
+  where
+  lc = Hold.leftC h
+  use : Send (Hold.bsL h) (Cursor.echoNs lc) (il c) (slotL c) (envIL c)
+             ρ′ pend′ a p →
+        asAtom a ≡ just atom →
+        Step g (abs c) lside (abs (afterPut c p ρ′ pend′ k w)) ×
+        Hold g (afterPut c p ρ′ pend′ k w)
+  use (echoed _ _ _ _ refl _ _ _ _ _ _) ()
+  use (sent atomS j wS aeq ej mem wkS cur nse) aq′ =
+    stepL moved , record
+      { nL = Hold.nL h ; bsL = Hold.bsL h ; odL = Hold.odL h ; cL = Hold.cL h
+      ; nR = Hold.nR h ; bsR = Hold.bsR h ; odR = Hold.odR h ; cR = Hold.cR h
+      ; α = Hold.α h ; κ = Hold.κ h
+      ; leftC = curW ; rightC = Hold.rightC h
+      ; nmL = trans (Hold.nmL h) (trans (sym nse) (sym (ns-keep weq cur)))
+      ; nmR = Hold.nmR h }
+    where
+    atom≡ : atomS ≡ atom
+    atom≡ = just-inj (trans (sym aeq) aq′)
+    memA : (il c , bPut atom j) ∈ Hold.bsL h
+    memA = subst (λ z → (il c , bPut z j) ∈ Hold.bsL h) atom≡ mem
+    look0 : lookB (materialise (Hold.nL h) zero (Hold.bsL h)) (il c) ≡
+            just (bPut atom j)
+    look0 = root-at (Hold.odL h) memA
+    look : lookB (Graph.codeL g) (il c) ≡ just (bPut atom j)
+    look = subst (λ code → lookB code (il c) ≡ just (bPut atom j))
+             (sym (Hold.cL h)) look0
+    findG : findA atom (Graph.alpha g) ≡ just k
+    findG = subst (λ al → findA atom al ≡ just k) (Hold.α h) eqF
+    leG : length (l2r c) < Graph.cap g
+    leG = subst (λ n → length (l2r c) < n) (Hold.κ h) le
+    reacted = react-put g (il c) (ir c) (l2r c) (r2l c) (el c) (er c)
+                atom k j findG (room-yes (Graph.cap g) (l2r c) leG) look
+    weq : wS ≡ w
+    weq = just-inj (trans (sym wkS) wk)
+    j≡ : j ≡ entry w
+    j≡ = trans (sym ej) (cong entry weq)
+    atJ : reactL g (abs c) ≡
+          AGo (rc (entry w) (ir c) (snoc (l2r c) (pay k)) (r2l c) (el c) (er c))
+    atJ = subst (λ i → reactL g (abs c) ≡
+                   AGo (rc i (ir c) (snoc (l2r c) (pay k)) (r2l c) (el c) (er c)))
+            j≡ reacted
+    moved : reactL g (abs c) ≡ AGo (abs (afterPut c p ρ′ pend′ k w))
+    moved = subst (λ q → reactL g (abs c) ≡
+                     AGo (rc (entry w) (ir c) q (r2l c) (el c) (er c)))
+              (sym (snoc≡ (l2r c) (pay k))) atJ
+    curW = subst (λ z → Cursor (Hold.bsL h) (entry z) (atSlot z) ρ′
+                          (addPend pend′ (il c) (slotL c) (envIL c)) p)
+             weq cur
