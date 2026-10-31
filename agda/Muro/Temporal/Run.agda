@@ -15,7 +15,8 @@ open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc)
 open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String)
-open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans)
+open import Data.String.Properties using (_==_)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; trans; cong)
 
 open import Muro.AsyncRec
   using ( Atom; Tok; Block; COut; cok; cfail; Fault
@@ -31,6 +32,7 @@ open import Muro.Temporal.Source
         ; walk; walkArms
         ; sdone; sstop; sout; sput; sget; spick0; spick1
         ; scover; siget; smget; smu; svar
+        ; Arm; aok; abad
         ; bnames; abs
         ; Bound; b-here; b-there )
 open SConf
@@ -138,6 +140,17 @@ resolve (td1 inn _) b-here = inn
 resolve (td1 _ rest) (b-there b) = resolve rest b
 resolve td0 ()
 
+-- A runtime environment may bind names the denoted one does not.
+-- Every name the denoted environment does bind is bound the same way.
+Ext : EnvI → EnvI → Set
+Ext ρ0 ρ = ∀ x i s → lookupI x ρ0 ≡ just (i , s) → lookupI x ρ ≡ just (i , s)
+
+ext-eq : ∀ {ρ0 ρ} → EnvEq ρ0 ρ → Ext ρ0 ρ
+ext-eq eq x i s p = trans (sym (eq x)) p
+
+ext-refl : ∀ ρ → Ext ρ ρ
+ext-refl ρ x i s eq = eq
+
 record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
               (envP : EnvP) (envI : EnvI) (proc : SProc) : Set where
   field
@@ -152,7 +165,7 @@ record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
     sy : Sync tab envP envI
     ix : idx ≡ headIx pl
     ss : slot ≡ slotOf pl
-    sn : EnvEq (envOf pl) envI
+    sn : Ext (envOf pl) envI
 
 record Hold (g : Graph) (c : SConf) : Set where
   field
@@ -239,7 +252,7 @@ init-hold k P Q fp fq eokP eokQ g c eqg eqc =
       ; sy = sy0
       ; ix = trans ix≡ (sym (Yes.hd y))
       ; ss = sym (trans (Yes.sl y) slot0)
-      ; sn = root-sn y
+      ; sn = ext-eq {ρ0 = envOf (Yes.pl y)} {ρ = []} (root-sn y)
       }
 
   open-pack : (yL : Yes P fp [] [] [] [] zero zero)
@@ -284,3 +297,333 @@ init-hold k P Q fp fq eokP eokQ g c eqg eqc =
   body (ok yL) (ok yR) =
     open-pack yL yR (compiled P fp) (compiled Q fq)
       (Yes.cmp yL) (Yes.cmp yR) eqg eqc
+
+just-inj : ∀ {A : Set} {x y : A} → just x ≡ just y → x ≡ y
+just-inj refl = refl
+
+lookup-skip : ∀ {y x i s ρ} → (y == x) ≡ false →
+              lookupI y ((x , i , s) ∷ ρ) ≡ lookupI y ρ
+lookup-skip eq rewrite eq = refl
+
+-- Pushing the same names keeps the hits that were already there.
+ext-add : ∀ xs n s ρ0 ρ → Ext ρ0 ρ →
+          Ext (addPend xs n s ρ0) (addPend xs n s ρ)
+ext-add [] n s ρ0 ρ ext = ext
+ext-add (x ∷ xs) n s ρ0 ρ ext y i s1 eq = go (y == x) refl eq
+  where
+  go : (b : Bool) → (y == x) ≡ b →
+       lookupI y ((x , n , s) ∷ addPend xs n s ρ0) ≡ just (i , s1) →
+       lookupI y ((x , n , s) ∷ addPend xs n s ρ) ≡ just (i , s1)
+  go true eqy eq2 rewrite eqy | just-inj eq2 = refl
+  go false eqy eq2 =
+    trans (lookup-skip eqy)
+      (ext-add xs n s ρ0 ρ ext y i s1 (trans (sym (lookup-skip eqy)) eq2))
+
+-- A name in the pending list is bound at the counters `addPend` writes.
+lookup-in : ∀ xs n s ρ y → elemS y xs ≡ true →
+            lookupI y (addPend xs n s ρ) ≡ just (n , s)
+lookup-in [] n s ρ y ()
+lookup-in (x ∷ xs) n s ρ y eq = go (y == x) refl eq
+  where
+  go : (b : Bool) → (y == x) ≡ b → elemS y (x ∷ xs) ≡ true →
+       lookupI y ((x , n , s) ∷ addPend xs n s ρ) ≡ just (n , s)
+  go true eqy _ rewrite eqy = refl
+  go false eqy eq2 rewrite eqy = lookup-in xs n s ρ y eq2
+
+------------------------------------------------------------------------
+-- `walk` returns the same continuation when every denoted hit agrees.
+------------------------------------------------------------------------
+
+var-ung : ∀ {pend ρ y n s w} →
+         elemS y pend ≡ true →
+         walk pend ρ (svar y) n s ≡ just w → ⊥
+var-ung eqe eq rewrite eqe = nothing≢just eq
+
+var-miss : ∀ {pend ρ y n s w} →
+           elemS y pend ≡ false →
+           lookupI y ρ ≡ nothing →
+           walk pend ρ (svar y) n s ≡ just w → ⊥
+var-miss eqe eql eq rewrite eqe | eql = nothing≢just eq
+
+var-w : ∀ pend ρ y n s i s0 w →
+        elemS y pend ≡ false →
+        lookupI y ρ ≡ just (i , s0) →
+        walk pend ρ (svar y) n s ≡ just w →
+        w ≡ mkW i s0 n s
+var-w pend ρ y n s i s0 w eqe eql eq rewrite eqe | eql = sym (just-inj eq)
+
+var-hit : ∀ pend ρ y n s w →
+          walk pend ρ (svar y) n s ≡ just w →
+          Σ ℕ (λ i → Σ ℕ (λ s0 →
+            elemS y pend ≡ false × lookupI y ρ ≡ just (i , s0) ×
+            w ≡ mkW i s0 n s))
+var-hit pend ρ y n s w eq = go (elemS y pend) refl
+  where
+  go : (b : Bool) → elemS y pend ≡ b →
+       Σ ℕ (λ i → Σ ℕ (λ s0 →
+         elemS y pend ≡ false × lookupI y ρ ≡ just (i , s0) ×
+         w ≡ mkW i s0 n s))
+  go true eqe = ⊥-elim (var-ung {pend} {ρ} {y} {n} {s} {w} eqe eq)
+  go false eqe = go2 (lookupI y ρ) refl
+    where
+    go2 : (m : Maybe (ℕ × ℕ)) → lookupI y ρ ≡ m →
+          Σ ℕ (λ i → Σ ℕ (λ s0 →
+            elemS y pend ≡ false × lookupI y ρ ≡ just (i , s0) ×
+            w ≡ mkW i s0 n s))
+    go2 nothing eql = ⊥-elim (var-miss {pend} {ρ} {y} {n} {s} {w} eqe eql eq)
+    go2 (just (i , s0)) eql =
+      i , s0 , eqe , eql , var-w pend ρ y n s i s0 w eqe eql eq
+
+var-ext : ∀ pend ρ0 ρ y n s w → Ext ρ0 ρ →
+          walk pend ρ0 (svar y) n s ≡ just w →
+          walk pend ρ (svar y) n s ≡ just w
+var-ext pend ρ0 ρ y n s w ext eq
+  with var-hit pend ρ0 y n s w eq
+... | i , s0 , eqe , eql , w≡ = same eqe eql (ext y i s0 eql) w≡
+  where
+  same : elemS y pend ≡ false →
+         lookupI y ρ0 ≡ just (i , s0) →
+         lookupI y ρ ≡ just (i , s0) →
+         w ≡ mkW i s0 n s →
+         walk pend ρ (svar y) n s ≡ just w
+  same eqe eql eql' w≡ rewrite eqe | eql | eql' | w≡ = refl
+
+sput-shape : ∀ {pend ρ a p n s wb w} →
+             walk [] (addPend pend n s ρ) p (suc n) s ≡ just wb →
+             walk pend ρ (sput a p) n s ≡ just w →
+             w ≡ mkW n s (next wb) (slotN wb)
+sput-shape eqb eq rewrite eqb = sym (just-inj eq)
+
+sput-move : ∀ {pend ρ a p n s wb} →
+            walk [] (addPend pend n s ρ) p (suc n) s ≡ just wb →
+            walk pend ρ (sput a p) n s ≡ just (mkW n s (next wb) (slotN wb))
+sput-move eq rewrite eq = refl
+
+sget-shape : ∀ {pend ρ t x p n s wb w} →
+             walk [] (addPend pend n s ρ) p (suc n) (suc s) ≡ just wb →
+             walk pend ρ (sget t x p) n s ≡ just w →
+             w ≡ mkW n s (next wb) (slotN wb)
+sget-shape eqb eq rewrite eqb = sym (just-inj eq)
+
+sget-move : ∀ {pend ρ t x p n s wb} →
+            walk [] (addPend pend n s ρ) p (suc n) (suc s) ≡ just wb →
+            walk pend ρ (sget t x p) n s ≡ just (mkW n s (next wb) (slotN wb))
+sget-move eq rewrite eq = refl
+
+spick-shape : ∀ {pend ρ p n s wb w} →
+              walk [] (addPend pend n s ρ) p (suc n) s ≡ just wb →
+              walk pend ρ (spick0 p) n s ≡ just w →
+              w ≡ mkW n s (next wb) (slotN wb)
+spick-shape eqb eq rewrite eqb = sym (just-inj eq)
+
+spick0-move : ∀ {pend ρ p n s wb} →
+              walk [] (addPend pend n s ρ) p (suc n) s ≡ just wb →
+              walk pend ρ (spick0 p) n s ≡ just (mkW n s (next wb) (slotN wb))
+spick0-move eq rewrite eq = refl
+
+spick1-shape : ∀ {pend ρ p n s wb w} →
+               walk [] (addPend pend n s ρ) p (suc n) s ≡ just wb →
+               walk pend ρ (spick1 p) n s ≡ just w →
+               w ≡ mkW n s (next wb) (slotN wb)
+spick1-shape eqb eq rewrite eqb = sym (just-inj eq)
+
+spick1-move : ∀ {pend ρ p n s wb} →
+              walk [] (addPend pend n s ρ) p (suc n) s ≡ just wb →
+              walk pend ρ (spick1 p) n s ≡ just (mkW n s (next wb) (slotN wb))
+spick1-move eq rewrite eq = refl
+
+scover-shape : ∀ {pend ρ p q n s w1 w2 w} →
+               walk [] (addPend pend n s ρ) p (suc n) s ≡ just w1 →
+               walk [] (addPend pend n s ρ) q (next w1) (slotN w1) ≡ just w2 →
+               walk pend ρ (scover p q) n s ≡ just w →
+               w ≡ mkW n s (next w2) (slotN w2)
+scover-shape eq1 eq2 eq rewrite eq1 | eq2 = sym (just-inj eq)
+
+scover-move : ∀ {pend ρ p q n s w1 w2} →
+              walk [] (addPend pend n s ρ) p (suc n) s ≡ just w1 →
+              walk [] (addPend pend n s ρ) q (next w1) (slotN w1) ≡ just w2 →
+              walk pend ρ (scover p q) n s ≡ just (mkW n s (next w2) (slotN w2))
+scover-move eq1 eq2 rewrite eq1 | eq2 = refl
+
+siget-shape : ∀ {pend ρ x p q n s w1 w2 w} →
+              walk [] (addPend pend n s ρ) p (suc n) (suc s) ≡ just w1 →
+              walk [] (addPend pend n s ρ) q (next w1) (slotN w1) ≡ just w2 →
+              walk pend ρ (siget x p q) n s ≡ just w →
+              w ≡ mkW n s (next w2) (slotN w2)
+siget-shape eq1 eq2 eq rewrite eq1 | eq2 = sym (just-inj eq)
+
+siget-move : ∀ {pend ρ x p q n s w1 w2} →
+             walk [] (addPend pend n s ρ) p (suc n) (suc s) ≡ just w1 →
+             walk [] (addPend pend n s ρ) q (next w1) (slotN w1) ≡ just w2 →
+             walk pend ρ (siget x p q) n s ≡ just (mkW n s (next w2) (slotN w2))
+siget-move eq1 eq2 rewrite eq1 | eq2 = refl
+
+smget-shape : ∀ {pend ρ t x as n s ws n2 s2 w} →
+              walkArms [] (addPend pend n s ρ) as (suc n) (suc s) ≡ just (ws , n2 , s2) →
+              walk pend ρ (smget t x as) n s ≡ just w →
+              w ≡ mkW n s n2 s2
+smget-shape eqa eq rewrite eqa = sym (just-inj eq)
+
+smget-move : ∀ {pend ρ t x as n s ws n2 s2} →
+             walkArms [] (addPend pend n s ρ) as (suc n) (suc s) ≡ just (ws , n2 , s2) →
+             walk pend ρ (smget t x as) n s ≡ just (mkW n s n2 s2)
+smget-move eq rewrite eq = refl
+
+arm-shape : ∀ {pend ρ y p as n s w ws n2 s2 r} →
+            walk pend ρ p n s ≡ just w →
+            walkArms pend ρ as (next w) (slotN w) ≡ just (ws , n2 , s2) →
+            walkArms pend ρ (aok y p ∷ as) n s ≡ just r →
+            r ≡ ((y , w) ∷ ws , n2 , s2)
+arm-shape eqw eqa eq rewrite eqw | eqa = sym (just-inj eq)
+
+arm-move : ∀ {pend ρ y p as n s w ws n2 s2} →
+           walk pend ρ p n s ≡ just w →
+           walkArms pend ρ as (next w) (slotN w) ≡ just (ws , n2 , s2) →
+           walkArms pend ρ (aok y p ∷ as) n s ≡
+             just ((y , w) ∷ ws , n2 , s2)
+arm-move eqw eqa rewrite eqw | eqa = refl
+
+mutual
+  arms-ext : ∀ pend ρ0 ρ as n s r → Ext ρ0 ρ →
+             walkArms pend ρ0 as n s ≡ just r →
+             walkArms pend ρ as n s ≡ just r
+  arms-ext pend ρ0 ρ [] n s r ext refl = refl
+  arms-ext pend ρ0 ρ (abad ∷ _) n s r ext eq = ⊥-elim (nothing≢just eq)
+  arms-ext pend ρ0 ρ (aok y p ∷ as) n s r ext eq =
+    arm1 (walk pend ρ0 p n s) refl
+    where
+    arm1 : (m : Maybe W) → walk pend ρ0 p n s ≡ m →
+           walkArms pend ρ (aok y p ∷ as) n s ≡ just r
+    arm1 nothing eqw rewrite eqw = ⊥-elim (nothing≢just eq)
+    arm1 (just w) eqw = arm2 (walkArms pend ρ0 as (next w) (slotN w)) refl
+      where
+      arm2 : (m : Maybe (List (String × W) × ℕ × ℕ)) →
+             walkArms pend ρ0 as (next w) (slotN w) ≡ m →
+             walkArms pend ρ (aok y p ∷ as) n s ≡ just r
+      arm2 nothing eqa rewrite eqw | eqa = ⊥-elim (nothing≢just eq)
+      arm2 (just (ws , n2 , s2)) eqa =
+        let eqw' = walk-ext pend ρ0 ρ p n s w ext eqw
+            eqa' = arms-ext pend ρ0 ρ as (next w) (slotN w) (ws , n2 , s2) ext eqa
+            r≡ : r ≡ ((y , w) ∷ ws , n2 , s2)
+            r≡ = arm-shape {pend} {ρ0} {y} {p} {as} {n} {s} {w} {ws} {n2} {s2} {r} eqw eqa eq
+        in trans (arm-move {pend} {ρ} {y} {p} {as} {n} {s} {w} {ws} {n2} {s2} eqw' eqa')
+             (cong just (sym r≡))
+
+  walk-ext : ∀ pend ρ0 ρ P n s w → Ext ρ0 ρ →
+             walk pend ρ0 P n s ≡ just w →
+             walk pend ρ P n s ≡ just w
+  walk-ext pend ρ0 ρ (smu x p) n s w ext eq =
+    walk-ext (x ∷ pend) ρ0 ρ p n s w ext eq
+  walk-ext pend ρ0 ρ (svar y) n s w ext eq =
+    var-ext pend ρ0 ρ y n s w ext eq
+  walk-ext pend ρ0 ρ sdone n s w ext eq = eq
+  walk-ext pend ρ0 ρ sstop n s w ext eq = eq
+  walk-ext pend ρ0 ρ sout n s w ext eq = ⊥-elim (nothing≢just eq)
+  walk-ext pend ρ0 ρ (sput a p) n s w ext eq =
+    put1 (walk [] (addPend pend n s ρ0) p (suc n) s) refl
+    where
+    put1 : (m : Maybe W) →
+           walk [] (addPend pend n s ρ0) p (suc n) s ≡ m →
+           walk pend ρ (sput a p) n s ≡ just w
+    put1 nothing eqb rewrite eqb = ⊥-elim (nothing≢just eq)
+    put1 (just wb) eqb =
+      let eqb' = walk-ext [] (addPend pend n s ρ0) (addPend pend n s ρ)
+                   p (suc n) s wb (ext-add pend n s ρ0 ρ ext) eqb
+          w≡ = sput-shape {pend} {ρ0} {a} {p} {n} {s} {wb} {w} eqb eq
+      in trans (sput-move {pend} {ρ} {a} {p} {n} {s} {wb} eqb') (cong just (sym w≡))
+  walk-ext pend ρ0 ρ (sget t x p) n s w ext eq =
+    get1 (walk [] (addPend pend n s ρ0) p (suc n) (suc s)) refl
+    where
+    get1 : (m : Maybe W) →
+           walk [] (addPend pend n s ρ0) p (suc n) (suc s) ≡ m →
+           walk pend ρ (sget t x p) n s ≡ just w
+    get1 nothing eqb rewrite eqb = ⊥-elim (nothing≢just eq)
+    get1 (just wb) eqb =
+      let eqb' = walk-ext [] (addPend pend n s ρ0) (addPend pend n s ρ)
+                   p (suc n) (suc s) wb (ext-add pend n s ρ0 ρ ext) eqb
+          w≡ = sget-shape {pend} {ρ0} {t} {x} {p} {n} {s} {wb} {w} eqb eq
+      in trans (sget-move {pend} {ρ} {t} {x} {p} {n} {s} {wb} eqb') (cong just (sym w≡))
+  walk-ext pend ρ0 ρ (spick0 p) n s w ext eq =
+    pk (walk [] (addPend pend n s ρ0) p (suc n) s) refl
+    where
+    pk : (m : Maybe W) →
+         walk [] (addPend pend n s ρ0) p (suc n) s ≡ m →
+         walk pend ρ (spick0 p) n s ≡ just w
+    pk nothing eqb rewrite eqb = ⊥-elim (nothing≢just eq)
+    pk (just wb) eqb =
+      let eqb' = walk-ext [] (addPend pend n s ρ0) (addPend pend n s ρ)
+                   p (suc n) s wb (ext-add pend n s ρ0 ρ ext) eqb
+          w≡ = spick-shape {pend} {ρ0} {p} {n} {s} {wb} {w} eqb eq
+      in trans (spick0-move {pend} {ρ} {p} {n} {s} {wb} eqb') (cong just (sym w≡))
+  walk-ext pend ρ0 ρ (spick1 p) n s w ext eq =
+    pk (walk [] (addPend pend n s ρ0) p (suc n) s) refl
+    where
+    pk : (m : Maybe W) →
+         walk [] (addPend pend n s ρ0) p (suc n) s ≡ m →
+         walk pend ρ (spick1 p) n s ≡ just w
+    pk nothing eqb rewrite eqb = ⊥-elim (nothing≢just eq)
+    pk (just wb) eqb =
+      let eqb' = walk-ext [] (addPend pend n s ρ0) (addPend pend n s ρ)
+                   p (suc n) s wb (ext-add pend n s ρ0 ρ ext) eqb
+          w≡ = spick1-shape {pend} {ρ0} {p} {n} {s} {wb} {w} eqb eq
+      in trans (spick1-move {pend} {ρ} {p} {n} {s} {wb} eqb') (cong just (sym w≡))
+  walk-ext pend ρ0 ρ (scover p q) n s w ext eq =
+    cv1 (walk [] (addPend pend n s ρ0) p (suc n) s) refl
+    where
+    cv1 : (m : Maybe W) →
+          walk [] (addPend pend n s ρ0) p (suc n) s ≡ m →
+          walk pend ρ (scover p q) n s ≡ just w
+    cv1 nothing eq1 rewrite eq1 = ⊥-elim (nothing≢just eq)
+    cv1 (just w1) eq1 =
+      cv2 (walk [] (addPend pend n s ρ0) q (next w1) (slotN w1)) refl
+      where
+      cv2 : (m : Maybe W) →
+            walk [] (addPend pend n s ρ0) q (next w1) (slotN w1) ≡ m →
+            walk pend ρ (scover p q) n s ≡ just w
+      cv2 nothing eq2 rewrite eq1 | eq2 = ⊥-elim (nothing≢just eq)
+      cv2 (just w2) eq2 =
+        let extw = ext-add pend n s ρ0 ρ ext
+            eq1' = walk-ext [] (addPend pend n s ρ0) (addPend pend n s ρ)
+                     p (suc n) s w1 extw eq1
+            eq2' = walk-ext [] (addPend pend n s ρ0) (addPend pend n s ρ)
+                     q (next w1) (slotN w1) w2 extw eq2
+            w≡ = scover-shape {pend} {ρ0} {p} {q} {n} {s} {w1} {w2} {w} eq1 eq2 eq
+        in trans (scover-move {pend} {ρ} {p} {q} {n} {s} {w1} {w2} eq1' eq2')
+             (cong just (sym w≡))
+  walk-ext pend ρ0 ρ (siget x p q) n s w ext eq =
+    ig1 (walk [] (addPend pend n s ρ0) p (suc n) (suc s)) refl
+    where
+    ig1 : (m : Maybe W) →
+          walk [] (addPend pend n s ρ0) p (suc n) (suc s) ≡ m →
+          walk pend ρ (siget x p q) n s ≡ just w
+    ig1 nothing eq1 rewrite eq1 = ⊥-elim (nothing≢just eq)
+    ig1 (just w1) eq1 =
+      ig2 (walk [] (addPend pend n s ρ0) q (next w1) (slotN w1)) refl
+      where
+      ig2 : (m : Maybe W) →
+            walk [] (addPend pend n s ρ0) q (next w1) (slotN w1) ≡ m →
+            walk pend ρ (siget x p q) n s ≡ just w
+      ig2 nothing eq2 rewrite eq1 | eq2 = ⊥-elim (nothing≢just eq)
+      ig2 (just w2) eq2 =
+        let extw = ext-add pend n s ρ0 ρ ext
+            eq1' = walk-ext [] (addPend pend n s ρ0) (addPend pend n s ρ)
+                     p (suc n) (suc s) w1 extw eq1
+            eq2' = walk-ext [] (addPend pend n s ρ0) (addPend pend n s ρ)
+                     q (next w1) (slotN w1) w2 extw eq2
+            w≡ = siget-shape {pend} {ρ0} {x} {p} {q} {n} {s} {w1} {w2} {w} eq1 eq2 eq
+        in trans (siget-move {pend} {ρ} {x} {p} {q} {n} {s} {w1} {w2} eq1' eq2')
+             (cong just (sym w≡))
+  walk-ext pend ρ0 ρ (smget t x as) n s w ext eq =
+    mg (walkArms [] (addPend pend n s ρ0) as (suc n) (suc s)) refl
+    where
+    mg : (m : Maybe (List (String × W) × ℕ × ℕ)) →
+         walkArms [] (addPend pend n s ρ0) as (suc n) (suc s) ≡ m →
+         walk pend ρ (smget t x as) n s ≡ just w
+    mg nothing eqa rewrite eqa = ⊥-elim (nothing≢just eq)
+    mg (just (ws , n2 , s2)) eqa =
+      let eqa' = arms-ext [] (addPend pend n s ρ0) (addPend pend n s ρ)
+                   as (suc n) (suc s) (ws , n2 , s2)
+                   (ext-add pend n s ρ0 ρ ext) eqa
+          w≡ = smget-shape {pend} {ρ0} {t} {x} {as} {n} {s} {ws} {n2} {s2} {w} eqa eq
+      in trans (smget-move {pend} {ρ} {t} {x} {as} {n} {s} {ws} {n2} {s2} eqa')
+             (cong just (sym w≡))
