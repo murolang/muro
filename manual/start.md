@@ -48,6 +48,8 @@ muro --version
 muro check path.muro
 ```
 
+If mise reports `No versions found` or a 404 from `mise-versions.jdx.dev`, its version mirror does not list the release yet. `mise settings set use_versions_host false` makes it ask GitHub directly.
+
 The commands match the Mix tasks. `muro.toml` is the manifest. The page is [The executable](binary.md).
 
 Then, in any directory:
