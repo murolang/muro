@@ -22,7 +22,7 @@ open import Relation.Binary.PropositionalEquality
 open import Muro.AsyncRec
   using ( Atom; Block; bPut; bEcho; Tok; pay; snoc; Graph
         ; RConf; rc; Act; AGo; findA; lookB; materialise; reactL
-        ; room; slotVal; bPick0; bPick1; lab )
+        ; room; slotVal; bPick0; bPick1; bGet; lab; setNth; nthA; fits )
 open import Muro.Temporal.Bridge using (distinct)
 open import Muro.Temporal.Pic using (_∈_; root-at)
 open import Muro.Temporal.Source
@@ -36,22 +36,23 @@ open import Muro.Temporal.Source
 open SConf
 open import Muro.Temporal using (Step; stepL; lside)
 open import Muro.Temporal.Fire
-  using (react-put; react-echo; react-pick0; react-pick1; room-yes; snoc≡)
+  using ( react-put; react-echo; react-pick0; react-pick1; react-get
+        ; room-yes; snoc≡ )
 open W
 open import Muro.Temporal.Den
   using ( Place; p-mu; p-act; p-jump; Den; d-put; d-echo; d-pick0; d-pick1
-        ; Table; Link; Links
-        ; lk-mu; lk-jump; lk-put; lk-echo; lk-pick0; lk-pick1
-        ; At; at-mu; at-put; at-echo; at-pick0; at-pick1
+        ; d-get; Table; Link; Links
+        ; lk-mu; lk-jump; lk-put; lk-echo; lk-pick0; lk-pick1; lk-get
+        ; At; at-mu; at-put; at-echo; at-pick0; at-pick1; at-get
         ; CovP; cp-mu; cp-act; cp-jump; CovT
-        ; c-put; c-echo; c-pick0; c-pick1
-        ; Hosts; hs-mu; hs-put; hs-echo; hs-jump; hs-pick0; hs-pick1
-        ; EchoNs; en-mu; en-put; en-echo; en-jump; en-pick0; en-pick1
-        ; Align; al-mu; al-jump; al-put; al-echo; al-pick0; al-pick1
+        ; c-put; c-echo; c-pick0; c-pick1; c-get
+        ; Hosts; hs-mu; hs-put; hs-echo; hs-jump; hs-pick0; hs-pick1; hs-get
+        ; EchoNs; en-mu; en-put; en-echo; en-jump; en-pick0; en-pick1; en-get
+        ; Align; al-mu; al-jump; al-put; al-echo; al-pick0; al-pick1; al-get
         ; headIx; slotOf; envOf
         ; InTab; place-of; link-of; ix-of; slot-at
         ; ix-head; slot-head; hosts-of; cov-of; tnames
-        ; Recipe; r-put; r-echo; r-pick0; r-pick1; r-mu )
+        ; Recipe; r-put; r-echo; r-pick0; r-pick1; r-get; r-mu )
 open import Muro.Temporal.Run
   using ( Cursor; Ext; Covered; Sync; sy1; Tied; td1; Knew; kn1
         ; ext-pend; cov-mu; cov-push; cov-cons; cov-pull; cov-cast
@@ -772,3 +773,104 @@ pick1-fwd : ∀ {g c p ρ′ pend′ w} (h : Hold g c) →
             Step g (abs c) lside (abs (afterTok c p ρ′ pend′ (lab true) w)) ×
             Hold g (afterTok c p ρ′ pend′ (lab true) w)
 pick1-fwd h unf le wk = pick1-use h le wk (leftStop h unf)
+
+------------------------------------------------------------------------
+-- A source get pops one payload and stores it in the named slot.
+------------------------------------------------------------------------
+
+afterGet : SConf → SProc → EnvP → List String → List Tok → ℕ → W → SConf
+afterGet c p ρ′ pend′ rest k w =
+  record c { left = p ; il = entry w ; slotL = atSlot w
+           ; r2l = rest ; el = setNth (slotL c) (suc k) (el c)
+           ; envPL = ρ′
+           ; envIL = addPend pend′ (il c) (slotL c) (envIL c) }
+
+closeGet : ∀ {g c p ρ′ pend′ k rest j w wS} (h : Hold g c) →
+           reactL g (abs c) ≡
+             AGo (rc j (ir c) (l2r c) rest (setNth (slotL c) (suc k) (el c)) (er c)) →
+           entry wS ≡ j →
+           walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+                (suc (il c)) (suc (slotL c)) ≡ just wS →
+           walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+                (suc (il c)) (suc (slotL c)) ≡ just w →
+           (cur : Cursor (Hold.bsL h) (entry wS) (atSlot wS) ρ′
+                         (addPend pend′ (il c) (slotL c) (envIL c)) p) →
+           Cursor.echoNs cur ≡ Cursor.echoNs (Hold.leftC h) →
+           Step g (abs c) lside (abs (afterGet c p ρ′ pend′ rest k w)) ×
+           Hold g (afterGet c p ρ′ pend′ rest k w)
+closeGet {g} {c} {p} {ρ′} {pend′} {k} {rest} {j} {w} {wS} h reacted ej wkS wk cur nse =
+  stepL moved , record
+    { nL = Hold.nL h ; bsL = Hold.bsL h ; odL = Hold.odL h ; cL = Hold.cL h
+    ; nR = Hold.nR h ; bsR = Hold.bsR h ; odR = Hold.odR h ; cR = Hold.cR h
+    ; α = Hold.α h ; κ = Hold.κ h
+    ; leftC = curW ; rightC = Hold.rightC h
+    ; nmL = trans (Hold.nmL h) (trans (sym nse) (sym (ns-keep weq cur)))
+    ; nmR = Hold.nmR h }
+  where
+  weq : wS ≡ w
+  weq = just-inj (trans (sym wkS) wk)
+  j≡ : j ≡ entry w
+  j≡ = trans (sym ej) (cong entry weq)
+  moved : reactL g (abs c) ≡ AGo (abs (afterGet c p ρ′ pend′ rest k w))
+  moved = subst (λ i → reactL g (abs c) ≡
+                   AGo (rc i (ir c) (l2r c) rest
+                          (setNth (slotL c) (suc k) (el c)) (er c)))
+            j≡ reacted
+  curW = subst (λ z → Cursor (Hold.bsL h) (entry z) (atSlot z) ρ′
+                        (addPend pend′ (il c) (slotL c) (envIL c)) p)
+           weq cur
+
+get-use : ∀ {g c t x p ρ′ pend′ k rest a w} (h : Hold g c) →
+          r2l c ≡ pay k ∷ rest →
+          nthA (alpha c) k ≡ just a →
+          fits t a ≡ true →
+          walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+               (suc (il c)) (suc (slotL c)) ≡ just w →
+          Stop (Hold.bsL h) (Cursor.echoNs (Hold.leftC h))
+               (il c) (slotL c) (envIL c) ρ′ pend′ (f-get t x p) →
+          Step g (abs c) lside (abs (afterGet c p ρ′ pend′ rest k w)) ×
+          Hold g (afterGet c p ρ′ pend′ rest k w)
+get-use {g} {c} {t} {x} {p} {ρ′} {pend′} {k} {rest} {a} {w} h qeq eqA eqF wk
+  (atAct suf ρi bg _
+     (p-act (d-get nD sD .t .x j .p ρw wD wkD ej dest dh ds de)
+            r-get i0 s0 ρden)
+     (cp-act (c-get mem cvD))
+     (lk-get eqi eqs _ lkD)
+     (hs-get hsD)
+     (at-get _ atD)
+     (en-get ensD)
+     (al-get eqρ destAl)
+     ix ss sn lf-get) =
+  closeGet h reacted ej (Gone.wk go) wk (Gone.cur go) (Gone.nse go)
+  where
+  en = trans ix eqi
+  es = trans ss eqs
+  go = sendCont {bs = Hold.bsL h} {ns = Cursor.echoNs (Hold.leftC h)}
+         {n = il c} {s = slotL c} {base = envIL c} {ρi = ρi}
+         {pend = pend′} {suf = suf} {env = ρ′} {p = p}
+         {nD = nD} {sD = sD} {sW = suc (slotL c)} {sW′ = suc sD}
+         {ρden = ρden} {ρw = ρw} {w = wD} {dest = dest}
+         bg en es (cong suc es) eqρ sn (cvd bg) wkD dh ds de
+         cvD lkD hsD atD ensD destAl
+  memI = subst (λ i → (i , bGet t sD j) ∈ Hold.bsL h) (sym en) mem
+  memN : (il c , bGet t (slotL c) j) ∈ Hold.bsL h
+  memN = subst (λ z → (il c , bGet t z j) ∈ Hold.bsL h) (sym es) memI
+  nthG : nthA (Graph.alpha g) k ≡ just a
+  nthG = subst (λ al → nthA al k ≡ just a) (Hold.α h) eqA
+  got = react-get g (il c) (ir c) (l2r c) k rest (el c) (er c)
+          t (slotL c) a j refl nthG eqF (seenL h memN)
+  reacted = subst (λ q → reactL g (rc (il c) (ir c) (l2r c) q (el c) (er c)) ≡
+                     AGo (rc j (ir c) (l2r c) rest
+                            (setNth (slotL c) (suc k) (el c)) (er c)))
+              (sym qeq) got
+
+get-fwd : ∀ {g c t x p ρ′ pend′ k rest a w} (h : Hold g c) →
+          Unfold (envPL c) [] (left c) ρ′ pend′ (f-get t x p) →
+          r2l c ≡ pay k ∷ rest →
+          nthA (alpha c) k ≡ just a →
+          fits t a ≡ true →
+          walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+               (suc (il c)) (suc (slotL c)) ≡ just w →
+          Step g (abs c) lside (abs (afterGet c p ρ′ pend′ rest k w)) ×
+          Hold g (afterGet c p ρ′ pend′ rest k w)
+get-fwd h unf qeq eqA eqF wk = get-use h qeq eqA eqF wk (leftStop h unf)
