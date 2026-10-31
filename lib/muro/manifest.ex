@@ -3,9 +3,12 @@ defmodule Muro.Manifest do
   The project manifest for `mix muro.gen`.
 
   A manifest is `muro.exs` at the project root, evaluated with
-  `Code.eval_file/1` as a keyword list, or a `:muro` key in the
-  `mix.exs` project config when that Mix project is the root.
-  If both define a manifest, loading stops and names both.
+  `Code.eval_file/1` as a keyword list, a `:muro` key in the
+  `mix.exs` project config when that Mix project is the root,
+  `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`.
+  `muro.toml` is the manifest for a project without `mix.exs`.
+  The TOML subset is `Muro.Toml`. If more than one of these defines
+  a manifest, loading stops and names each of them.
 
   Keys:
 
@@ -18,7 +21,8 @@ defmodule Muro.Manifest do
       to the project root. The module is an alias atom
       (`MyApp.Billing.Rounding`). A 3-tuple is an Elixir module.
       `opts` is a keyword list: `kind: :elixir` (the default),
-      `kind: :exunit`, or `kind: :fsm`, and for `:exunit` an optional `impl:` alias,
+      `kind: :exunit`, `kind: :fsm`, `kind: :c`, `kind: :rust`, or
+      `kind: :asm`, and for `:exunit` an optional `impl:` alias,
       the implementation the suite tests by default, and an optional
       `imports:` boolean. `imports: true` collects closed equations
       from the files that book imports directly. The default is
@@ -27,8 +31,17 @@ defmodule Muro.Manifest do
   A book or a target that leaves the project root is refused, and so
   is a missing book, a duplicate target, a module that is not an
   alias atom, an unknown option, an unknown kind, `impl:` on an
-  `:elixir` entry, or `imports:` on an `:elixir` entry. `imports:`
-  must be a boolean.
+  entry that is not `:exunit`, or `imports:` on an entry that is
+  not `:exunit`. `imports:` must be a boolean.
+
+  `module` is required for `:elixir`, `:fsm`, and `:exunit`. A
+  `:c`, `:rust`, or `:asm` entry may omit it. The target then ends
+  with `.c`, `.rs`, or `.s`. A `:c` target also reserves the `.h`
+  written beside it. That path is checked as a target before
+  generation: a directory is refused, and it is a duplicate when
+  another entry names it. `backend` on a TOML manifest is the default kind
+  for entries that omit one. `muro.exs` still defaults a missing
+  kind to `:elixir`.
 
   `muro_deps:` is optional. It is a keyword list of package names to
   git or Hex specs. `mix muro.deps.get` fetches those packages.
@@ -43,9 +56,9 @@ defmodule Muro.Manifest do
   Any other key is an error, and the message names it.
   """
 
-  defstruct [:version, :fuel, :modules, :deps, :source]
+  defstruct [:version, :fuel, :modules, :deps, :source, backend: nil]
 
-  @keys [:fuel, :modules, :muro, :muro_deps]
+  @keys [:backend, :fuel, :modules, :muro, :muro_deps]
   @entry_opts [:kind, :impl, :imports]
   @dep_name ~r/\A[a-z][a-z0-9_]*\z/
   @hex_name ~r/\A[a-z][a-z0-9_-]*\z/
@@ -89,7 +102,8 @@ defmodule Muro.Manifest do
         err
 
       :none ->
-        {:error, "no manifest: expected muro.exs or a :muro key in mix.exs"}
+        {:error,
+         "no manifest: expected muro.exs, muro.toml, [package.metadata.muro] in Cargo.toml, or a :muro key in mix.exs"}
 
       {:ok, term, source} ->
         with {:ok, manifest} <- validate(term, root) do
@@ -121,7 +135,8 @@ defmodule Muro.Manifest do
 
   @doc """
   Nearest ancestor of `path`, starting at its own directory, that
-  contains `muro.exs` or `mix.exs`. `nil` when none does.
+  contains `muro.exs`, `mix.exs`, `muro.toml`, or a `Cargo.toml`
+  with `[package.metadata.muro]`. `nil` when none does.
   """
   def find_root(path) when is_binary(path) do
     path = canonical(path)
@@ -130,8 +145,8 @@ defmodule Muro.Manifest do
   end
 
   @doc """
-  `muro.exs` or `mix.exs` when that file is the manifest at `root`.
-  `nil` when neither file is present.
+  `muro.exs`, `mix.exs`, `muro.toml`, or `Cargo.toml` when that file
+  is the manifest at `root`. `nil` when none of them is present.
   """
   def manifest_name(root) when is_binary(root) do
     root = canonical(root)
@@ -139,6 +154,8 @@ defmodule Muro.Manifest do
     cond do
       File.regular?(Path.join(root, "muro.exs")) -> "muro.exs"
       File.regular?(Path.join(root, "mix.exs")) -> "mix.exs"
+      File.regular?(Path.join(root, "muro.toml")) -> "muro.toml"
+      cargo_metadata_root?(root) -> "Cargo.toml"
       true -> nil
     end
   end
@@ -167,12 +184,20 @@ defmodule Muro.Manifest do
       errors = key_errors(term)
       {version, errors} = take_version(term, errors)
       {fuel, errors} = take_fuel(term, errors)
+      {backend, errors} = take_backend(term, errors)
       {modules, errors} = take_modules(term, root, errors)
       {deps, errors} = take_deps(term, errors)
 
       if errors == [] do
         {:ok,
-         %__MODULE__{version: version, fuel: fuel, modules: modules, deps: deps, source: nil}}
+         %__MODULE__{
+           version: version,
+           fuel: fuel,
+           backend: backend,
+           modules: modules,
+           deps: deps,
+           source: nil
+         }}
       else
         {:error, Enum.join(errors, "\n")}
       end
@@ -223,24 +248,74 @@ defmodule Muro.Manifest do
 
   defp read_term(root) do
     root = canonical(root)
-    exs = Path.join(root, "muro.exs")
-    has_exs = File.regular?(exs)
 
-    case mix_config(root) do
-      {:ok, _value} when has_exs ->
-        {:error, "muro.exs and the :muro key in mix.exs both define a manifest"}
+    case present_labels(root) do
+      [] ->
+        :none
 
-      {:ok, value} ->
-        {:ok, value, :mix}
+      [label] ->
+        load_one(label, root)
 
-      :none when has_exs ->
-        case eval_exs(exs) do
-          {:ok, term} -> {:ok, term, :muro_exs}
+      labels ->
+        {:error, both_message(labels)}
+    end
+  end
+
+  defp present_labels(root) do
+    []
+    |> label_if(File.regular?(Path.join(root, "muro.exs")), "muro.exs")
+    |> label_if(match?({:ok, _value}, mix_config(root)), "the :muro key in mix.exs")
+    |> label_if(File.regular?(Path.join(root, "muro.toml")), "muro.toml")
+    |> label_if(cargo_metadata_root?(root), "[package.metadata.muro] in Cargo.toml")
+  end
+
+  defp label_if(labels, true, label), do: labels ++ [label]
+  defp label_if(labels, false, _label), do: labels
+
+  defp both_message([left, right]) do
+    "#{left} and #{right} both define a manifest"
+  end
+
+  defp both_message(labels) do
+    Enum.join(labels, ", ") <> " all define a manifest"
+  end
+
+  defp load_one("muro.exs", root) do
+    case eval_exs(Path.join(root, "muro.exs")) do
+      {:ok, term} -> {:ok, term, :muro_exs}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp load_one("the :muro key in mix.exs", root) do
+    {:ok, value} = mix_config(root)
+    {:ok, value, :mix}
+  end
+
+  defp load_one("muro.toml", root) do
+    case File.read(Path.join(root, "muro.toml")) do
+      {:ok, text} ->
+        case Muro.Toml.parse_muro(text, "muro.toml") do
+          {:ok, term} -> {:ok, term, :muro_toml}
           {:error, _} = err -> err
         end
 
-      :none ->
-        :none
+      {:error, reason} ->
+        {:error, "muro.toml could not be read: #{inspect(reason)}"}
+    end
+  end
+
+  defp load_one("[package.metadata.muro] in Cargo.toml", root) do
+    case File.read(Path.join(root, "Cargo.toml")) do
+      {:ok, text} ->
+        case Muro.Toml.parse_cargo_metadata(text, "Cargo.toml") do
+          {:ok, term} -> {:ok, term, :cargo}
+          :none -> {:error, "Cargo.toml has no [package.metadata.muro] table"}
+          {:error, _} = err -> err
+        end
+
+      {:error, reason} ->
+        {:error, "Cargo.toml could not be read: #{inspect(reason)}"}
     end
   end
 
@@ -272,10 +347,21 @@ defmodule Muro.Manifest do
       File.regular?(Path.join(dir, "mix.exs")) ->
         dir
 
+      File.regular?(Path.join(dir, "muro.toml")) ->
+        dir
+
+      cargo_metadata_root?(dir) ->
+        dir
+
       true ->
         parent = Path.dirname(dir)
         if parent == dir, do: nil, else: climb(parent)
     end
+  end
+
+  defp cargo_metadata_root?(dir) do
+    path = Path.join(dir, "Cargo.toml")
+    File.regular?(path) and Muro.Toml.cargo_metadata?(File.read!(path))
   end
 
   defp eval_exs(path) do
@@ -604,6 +690,23 @@ defmodule Muro.Manifest do
   defp dep_label(name) when is_atom(name), do: Atom.to_string(name)
   defp dep_label(name), do: inspect(name)
 
+  defp take_backend(term, errors) do
+    case Keyword.fetch(term, :backend) do
+      :error ->
+        {nil, errors}
+
+      {:ok, backend} when backend in [:elixir, :c, :rust, :asm, :fsm, :exunit] ->
+        {backend, errors}
+
+      {:ok, backend} ->
+        {nil,
+         errors ++
+           [
+             "manifest backend: must be elixir, c, rust, asm, fsm, or exunit, got: #{inspect(backend)}"
+           ]}
+    end
+  end
+
   defp take_fuel(term, errors) do
     case Keyword.fetch(term, :fuel) do
       :error ->
@@ -636,11 +739,21 @@ defmodule Muro.Manifest do
       |> Enum.with_index(1)
       |> Enum.reduce({[], errors, %{}}, fn {entry, index}, {entries, errors, seen} ->
         {entry, entry_errors, seen} = validate_entry(entry, index, root, seen)
+        {seen, header_errors} = reserve_header(entry, index, root, seen)
         entries = if entry == nil, do: entries, else: entries ++ [entry]
-        {entries, errors ++ entry_errors, seen}
+        {entries, errors ++ entry_errors ++ header_errors, seen}
       end)
 
     {entries, errors}
+  end
+
+  defp validate_entry({book, target, opts}, index, root, seen)
+       when is_binary(target) and is_list(opts) do
+    if Keyword.keyword?(opts) do
+      finish_entry(book, nil, target, opts, index, root, seen)
+    else
+      bad_entry({book, target, opts}, index, seen)
+    end
   end
 
   defp validate_entry({book, module, target}, index, root, seen) do
@@ -666,16 +779,24 @@ defmodule Muro.Manifest do
   defp finish_entry(book, module, target, opts, index, root, seen) do
     {book_rel, book_errors} = validate_book(book, index, root)
     {target_rel, target_errors, seen} = validate_target(target, index, root, seen)
-    module_errors = validate_module(module, index)
     opt_errors = option_errors(opts, index)
     {kind, kind_errors} = take_kind(opts, index)
+    module_errors = validate_module(module, index, kind)
     {impl, impl_errors} = take_impl(opts, kind, kind_errors == [], index)
     {imports, import_errors} = take_imports(opts, kind, kind_errors == [], index)
+
+    ext_errors =
+      if is_binary(target_rel) and kind_errors == [] do
+        extension_errors(kind, target_rel, index)
+      else
+        []
+      end
 
     errors =
       book_errors ++
         module_errors ++
-        target_errors ++ opt_errors ++ kind_errors ++ impl_errors ++ import_errors
+        target_errors ++
+        opt_errors ++ kind_errors ++ impl_errors ++ import_errors ++ ext_errors
 
     entry =
       if book_rel && target_rel && errors == [] do
@@ -728,7 +849,7 @@ defmodule Muro.Manifest do
       :error ->
         {:elixir, []}
 
-      {:ok, kind} when kind in [:elixir, :exunit, :fsm] ->
+      {:ok, kind} when kind in [:elixir, :exunit, :fsm, :c, :rust, :asm] ->
         {kind, []}
 
       {:ok, kind} ->
@@ -843,13 +964,43 @@ defmodule Muro.Manifest do
     end
   end
 
-  defp validate_module(module, index) do
+  defp validate_module(nil, _index, kind) when kind in [:c, :rust, :asm], do: []
+
+  defp validate_module(module, index, _kind) do
     if alias_atom?(module) do
       []
     else
       ["modules entry #{index}: module is not an alias atom, got: #{inspect(module)}"]
     end
   end
+
+  defp extension_errors(:c, rel, index), do: extension_errors(rel, ".c", :c, index)
+  defp extension_errors(:rust, rel, index), do: extension_errors(rel, ".rs", :rust, index)
+  defp extension_errors(:asm, rel, index), do: extension_errors(rel, ".s", :asm, index)
+  defp extension_errors(_kind, _rel, _index), do: []
+
+  defp extension_errors(rel, suffix, kind, index) do
+    if String.ends_with?(rel, suffix) do
+      []
+    else
+      [
+        "modules entry #{index}: target for kind #{inspect(kind)} must end with #{suffix}, got: #{inspect(rel)}"
+      ]
+    end
+  end
+
+  defp reserve_header(nil, _index, _root, seen), do: {seen, []}
+
+  # The `.h` beside a `:c` target is an output. Duplicate detection
+  # alone accepts a path that is already a directory, and generation
+  # then writes the `.c` before `File.write!` fails on the header.
+  defp reserve_header(%{kind: :c, target: rel}, index, root, seen) do
+    header = Path.rootname(rel) <> ".h"
+    {_header, errors, seen} = validate_target(header, index, root, seen)
+    {seen, errors}
+  end
+
+  defp reserve_header(_entry, _index, _root, seen), do: {seen, []}
 
   defp alias_atom?(module) when is_atom(module) do
     Macro.classify_atom(module) == :alias and

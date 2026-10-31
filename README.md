@@ -30,6 +30,8 @@ end
 
 The archive installs `mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` in any directory, with or without a `mix.exs`. Install it from Hex: `mix archive.install hex muro`. A pinned version uses `mix archive.install hex muro 0.20.0`. From a checkout: `mix archive.build && mix archive.install muro-0.20.0.ez`. From GitHub, Mix fetches the default branch and builds the archive: `mix archive.install github murolang/muro`. See [Committed modules](manual/gen.md).
 
+A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.20.0`. It carries its own Erlang runtime. `muro check`, `muro emit`, and `muro gen` are the same commands. The manifest is `muro.toml`. See [The executable](manual/binary.md).
+
 Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. `mix muro --version` prints the copy that ran. A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks.
 
 A clone is for changing the kernel. A `.muro` file is checked with `mix muro.check`. `mix muro.emit path.muro` prints the Elixir module. A `repr` declares the host shape of a data type, and that module then includes `decode_<type>/1`, `decode_<type>/2`, and `encode_<type>/2`. Decode returns `{:ok, value, table}`. See [Host representations](manual/repr.md).
@@ -71,6 +73,7 @@ A definition is in the book the moment `Parser.parse/1` returns it. The checker 
 | Page | For |
 | --- | --- |
 | [Start](manual/start.md) | Install, first file, emit |
+| [The executable](manual/binary.md) | Self-contained `muro`, `muro.toml`, init, `muro skills add` |
 | [The wall](manual/wall.md) | spec / evidence / run |
 | [Terms](manual/language.md) | Π, λ, match, quantities |
 | [Sessions](manual/sessions.md) | The protocol two processes follow |

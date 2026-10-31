@@ -40,6 +40,16 @@ mix archive.install github murolang/muro
 
 `mix archive.install` asks before it writes. `--force` skips the question.
 
+A project that does not have Elixir installs the self-contained executable. It carries its own Erlang runtime:
+
+```
+mise use -g github:murolang/muro@0.20.0
+muro --version
+muro check path.muro
+```
+
+The commands match the Mix tasks. `muro.toml` is the manifest. The page is [The executable](binary.md).
+
 Then, in any directory:
 
 ```
@@ -57,9 +67,9 @@ A script run with `mix run --no-start` does not see the archive. Archives are on
 
 `mix muro.emit path.muro` prints the Elixir module. Save it with `mix muro.emit path.muro > path.ex`.
 
-`mix muro.init` writes `muro.exs` and `priv/muro/`. `mix muro.gen` writes the modules that file names, under the paths it names, with the project's module names. `mix muro.gen --check` writes nothing and fails when a committed module and its book disagree. See [Committed modules](gen.md). `mix muro.deps.get` fetches the packages in `muro_deps:` and writes `muro.lock`. See [Packages](packages.md).
+`mix muro.init` writes `muro.exs` and `priv/muro/`, and prints a note that points at `muro skills add`. `muro init` writes the manifest the directory calls for (`muro.exs` or `muro.toml`). `mix muro.gen` writes the modules that file names, under the paths it names, with the project's module names, including C, Rust, and Cortex-M assembly. `mix muro.gen --check` writes nothing and fails when a committed module and its book disagree. See [Committed modules](gen.md) and [The executable](binary.md). `mix muro.deps.get` fetches the packages in `muro_deps:` and writes `muro.lock`. See [Packages](packages.md).
 
-`--backend c` writes C from the archive. A NIF needs `elixir_make`. Without it, the task stops and names the dependency to add:
+`--backend c` writes C from the archive. A NIF needs `elixir_make`, and the Mix task writes it when the working directory is that loaded Mix project. Outside that directory the Mix task writes the `.h` and the `.c` only, and so does the self-contained executable. Neither mentions `elixir_make`. Without `elixir_make`, the NIF stops and names the dependency to add:
 
 ```
 {:elixir_make, "~> 0.10", runtime: false}

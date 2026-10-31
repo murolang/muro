@@ -49,7 +49,7 @@ mix muro.deps.get                            # fetch muro_deps/ and write muro.l
 make agda                                   # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.20.0`. From a checkout: `mix archive.build && mix archive.install muro-0.20.0.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks.
+The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.20.0`. From a checkout: `mix archive.build && mix archive.install muro-0.20.0.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks. A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.20.0`. See [The executable](manual/binary.md).
 
 Success from `mix muro.check`: a `Muro v…` line, then `All terms check. Evidence never becomes a run.` A book that imports packages then prints one `conforms to <name> <version> (sha256 <hash>)` line per package. See [Packages](manual/packages.md).
 
@@ -81,7 +81,7 @@ The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` a
 
 ## Committed modules
 
-`mix muro.gen` writes a module from a manifest (`muro.exs`, or a `:muro` key in `mix.exs`) into the path the manifest names. The module name is the manifest's alias, passed to `Muro.emit_file/3`. The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256. Do not edit that file by hand. The `.muro` file is the source. Run `mix muro.gen` after changing it. `mix muro.gen --check` fails when the committed file and the book disagree. `muro:` must equal the running version. `mix muro.init` creates the manifest and prints a note for the project's agent instructions. It does not write that file. See [Committed modules](manual/gen.md).
+`mix muro.gen` writes a module from a manifest (`muro.exs`, a `:muro` key in `mix.exs`, or `muro.toml`) into the path the manifest names. The module name is the manifest's alias, passed to `Muro.emit_file/3`. C, Rust, and assembly entries name a target and no module. The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256. Do not edit that file by hand. The `.muro` file is the source. Run `mix muro.gen` after changing it. `mix muro.gen --check` fails when the committed file and the book disagree. `muro:` must equal the running version. `mix muro.init` creates the manifest and prints a note that points at `muro skills add`. It does not write that file. See [Committed modules](manual/gen.md).
 
 ## Pitfalls seen in practice
 
@@ -94,6 +94,6 @@ The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` a
 
 ## Manual
 
-[Start](manual/start.md) · [Marks](manual/marks.md) · [The wall](manual/wall.md) · [Terms](manual/language.md) · [Sessions](manual/sessions.md) · [Identity](manual/identity.md) · [Data](manual/data.md) · [Indexed data](manual/indexed.md) · [Streams](manual/streams.md) · [Either and Dec](manual/either.md) · [Machine numbers](manual/machine.md) · [Emit](manual/emit.md) · [State machines](manual/fsm.md) · [Mutation](manual/mutate.md) · [Closed equations as tests](manual/exunit.md) · [Committed modules](manual/gen.md) · [Host representations](manual/repr.md) · [Packages](manual/packages.md) · [Grammar](manual/grammar.md) · [Examples](manual/examples.md) · [CSHRL](manual/cshrl.md) · [For agents](manual/for-agents.md) · [Extending](manual/extending.md) · [Limits](manual/limits.md)
+[Start](manual/start.md) · [Marks](manual/marks.md) · [The wall](manual/wall.md) · [Terms](manual/language.md) · [Sessions](manual/sessions.md) · [Identity](manual/identity.md) · [Data](manual/data.md) · [Indexed data](manual/indexed.md) · [Streams](manual/streams.md) · [Either and Dec](manual/either.md) · [Machine numbers](manual/machine.md) · [Emit](manual/emit.md) · [State machines](manual/fsm.md) · [Mutation](manual/mutate.md) · [Closed equations as tests](manual/exunit.md) · [Committed modules](manual/gen.md) · [The executable](manual/binary.md) · [Host representations](manual/repr.md) · [Packages](manual/packages.md) · [Grammar](manual/grammar.md) · [Examples](manual/examples.md) · [CSHRL](manual/cshrl.md) · [For agents](manual/for-agents.md) · [Extending](manual/extending.md) · [Limits](manual/limits.md)
 
 Machine-readable index: [`manual/manifest.yml`](manual/manifest.yml). Canonical book: `examples/half_ok.muro`.

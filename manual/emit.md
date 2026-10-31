@@ -81,7 +81,7 @@ arena_at = 0;
 
 ## A Nat run is a NIF
 
-An exported run whose live arguments and result are `Nat` is a NIF entry. `--backend c` writes `<stem>_nif.h`, `<stem>_nif.c`, `<stem>.mk`, and `<stem>.ex` beside the C, and `elixir_make` runs that makefile. The library is `priv/<stem>.so`. The module is the camelized stem (`half_ok.muro` is `HalfOk`). `HalfOk.half(4)` is the integer `2`, and `HalfOk.plus(2, 3)` is `5`.
+An exported run whose live arguments and result are `Nat` is a NIF entry. When the working directory is the loaded Mix project, `--backend c` writes `<stem>_nif.h`, `<stem>_nif.c`, `<stem>.mk`, and `<stem>.ex` beside the C, and `elixir_make` runs that makefile. The library is `priv/<stem>.so`. The module is the camelized stem (`half_ok.muro` is `HalfOk`). `HalfOk.half(4)` is the integer `2`, and `HalfOk.plus(2, 3)` is `5`. Outside that directory, and in the self-contained executable, the same command writes the `.h` and the `.c` only.
 
 The entry builds the tagged struct and reads it back. An argument that is not a non-negative integer fitting in 64 bits is a bad argument, and so is a result that does not fit. Allocation goes through `MURO_ALLOC`, defined as one block for the call. The call copies the integer out and resets the block, so the next call reuses it. Two calls do not share the cursor.
 

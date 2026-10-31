@@ -16,8 +16,11 @@ defmodule Mix.Tasks.Muro.Gen do
   Muro version. A mismatch is an error and names both versions.
   `fuel:` is optional. `modules:` lists `{book, module, target}` or
   `{book, module, target, opts}`. A 3-tuple emits Elixir. `opts` may
-  set `kind: :exunit` or `kind: :fsm`, and for `:exunit`, `impl: An.Adapter` and
-  `imports: true`. `imports:` is a boolean, default `false`, and is
+  set `kind: :exunit`, `kind: :fsm`, `kind: :c`, `kind: :rust`, or
+  `kind: :asm`, and for `:exunit`, `impl: An.Adapter` and
+  `imports: true`. A `:c`, `:rust`, or `:asm` entry may omit the
+  module (`{book, target, [kind: :c]}`). `:c` also writes the `.h`
+  beside the `.c`. `imports:` is a boolean, default `false`, and is
   valid only for `:exunit`. `imports: true` also collects the closed
   equations of the files that book imports directly. An ExUnit target
   is usually `test/<name>_test.exs`. After the `written` or
@@ -52,54 +55,8 @@ defmodule Mix.Tasks.Muro.Gen do
   `Muro.Gen` and `Muro.Manifest`.
   """
 
-  @switches [check: :boolean]
-
   def run(args) do
     Mix.Tasks.Muro.ensure_started()
-
-    {opts, rest, invalid} = OptionParser.parse(args, strict: @switches)
-
-    if invalid != [] do
-      Mix.raise("unknown option: #{inspect(invalid)}")
-    end
-
-    if rest != [] do
-      Mix.raise("usage: mix muro.gen [--check]")
-    end
-
-    root = Muro.Manifest.root()
-
-    manifest =
-      case Muro.Manifest.load(root) do
-        {:ok, manifest} -> manifest
-        {:error, message} -> Mix.raise(message)
-      end
-
-    running = Mix.Tasks.Muro.version()
-
-    case Muro.Manifest.version_pin(manifest.version, running) do
-      :ok -> :ok
-      {:error, message} -> Mix.raise(message)
-    end
-
-    if opts[:check] do
-      run_check(manifest, root, running)
-    else
-      run_generate(manifest, root, running)
-    end
-  end
-
-  defp run_check(manifest, root, running) do
-    case Muro.Gen.check(manifest, root, running) do
-      :ok -> Mix.shell().info("ok")
-      {:error, message} -> Mix.raise(message)
-    end
-  end
-
-  defp run_generate(manifest, root, running) do
-    case Muro.Gen.generate(manifest, root, running) do
-      {:ok, lines} -> Enum.each(lines, fn line -> Mix.shell().info(line) end)
-      {:error, message} -> Mix.raise(message)
-    end
+    Muro.CLI.Output.mix(Muro.CLI.Gen.run(args))
   end
 end
