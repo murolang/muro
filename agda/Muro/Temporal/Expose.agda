@@ -24,6 +24,7 @@ open import Muro.AsyncRec
   using ( Atom; Block; bPut; bEcho; Tok; pay; snoc; Graph
         ; RConf; rc; Act; AGo; findA; lookB; materialise; reactL
         ; room; slotVal; bPick0; bPick1; bGet; bCover; bIget; bMget; aBit
+        ; bDone; bStop; isHalt
         ; lab; setNth; nthA; fits; conOf; armTo )
 open import Muro.Temporal.Bridge using (distinct)
 open import Muro.Temporal.Pic using (_∈_; root-at; ents)
@@ -33,26 +34,29 @@ open import Muro.Temporal.Source
         ; smu; sdone; sstop; sput; sget; spick0; spick1; scover; siget; smget
         ; Bound; b-here; b-there
         ; Focus; f-put; f-done; f-stop; f-get; f-pick0; f-pick1; f-cover; f-iget; f-mget
+        ; HaltF; h-done; h-stop
         ; Unfold; u-put; u-mu; u-var; u-done; u-stop; u-get; u-pick0; u-pick1
         ; u-cover; u-iget; u-mget )
   renaming (snoc to ssnoc)
 open SConf
-open import Muro.Temporal using (Step; stepL; lside)
+open import Muro.Temporal using (Step; stepL; stepR; finish; lside; rside; fin)
 open import Muro.Temporal.Fire
   using ( react-put; react-echo; react-pick0; react-pick1; react-get
         ; react-cover0; react-cover1; react-iget0; react-iget1; react-mget
+        ; halt-of; isHalt-done; isHalt-stop
         ; room-yes; snoc≡ )
 open W
 open import Muro.Temporal.Den
   using ( Place; p-mu; p-act; p-jump; Den; d-put; d-echo; d-pick0; d-pick1
-        ; d-get; d-cover; d-iget; d-mget; Table; Link; Links; LinkA; la0; la1
+        ; d-done; d-stop; d-get; d-cover; d-iget; d-mget
+        ; Table; Link; Links; LinkA; la0; la1
         ; ArmPs; ap0; ap1
-        ; lk-mu; lk-jump; lk-put; lk-echo; lk-pick0; lk-pick1; lk-get; lk-cover; lk-iget
-        ; lk-mget
+        ; lk-mu; lk-jump; lk-done; lk-stop; lk-put; lk-echo; lk-pick0; lk-pick1
+        ; lk-get; lk-cover; lk-iget; lk-mget
         ; At; AtA; ata0; ata1
         ; at-mu; at-put; at-echo; at-pick0; at-pick1; at-get; at-cover; at-iget; at-mget
         ; CovP; cp-mu; cp-act; cp-jump; CovT; CovA; ca0; ca1
-        ; c-put; c-echo; c-pick0; c-pick1; c-get; c-cover; c-iget; c-mget
+        ; c-done; c-stop; c-put; c-echo; c-pick0; c-pick1; c-get; c-cover; c-iget; c-mget
         ; Hosts; HostsA; ha0; ha1
         ; hs-mu; hs-put; hs-echo; hs-jump; hs-pick0; hs-pick1; hs-get
         ; hs-cover; hs-iget; hs-mget
@@ -65,7 +69,8 @@ open import Muro.Temporal.Den
         ; headIx; slotOf; envOf
         ; InTab; place-of; link-of; ix-of; slot-at
         ; ix-head; slot-head; hosts-of; cov-of; tnames
-        ; Recipe; r-put; r-echo; r-pick0; r-pick1; r-get; r-cover; r-iget; r-mget; r-mu )
+        ; Recipe; r-done; r-stop; r-put; r-echo; r-pick0; r-pick1; r-get
+        ; r-cover; r-iget; r-mget; r-mu )
 open import Muro.Temporal.Run
   using ( Cursor; Ext; Covered; Sync; sy1; Tied; td1; Knew; kn1
         ; ext-pend; cov-mu; cov-push; cov-cons; cov-pull; cov-cast
@@ -1493,3 +1498,70 @@ mget-fwd : ∀ {g c t x as ρ′ pend′ k rest a name w p} (h : Hold g c) →
            Step g (abs c) lside (abs (afterGet c p ρ′ pend′ rest k w)) ×
            Hold g (afterGet c p ρ′ pend′ rest k w)
 mget-fwd h unf qeq eqA eqF eqC ago = mget-use h qeq eqA eqF eqC ago (leftStop h unf)
+
+------------------------------------------------------------------------
+-- A halted focus is the halted block its place denotes.
+------------------------------------------------------------------------
+
+haltBlock : ∀ {bs ns n s base ρ′ pend′ f} →
+            Stop bs ns n s base ρ′ pend′ f → HaltF f →
+            Σ Block (λ b → (n , b) ∈ bs × isHalt b ≡ true)
+haltBlock (atAct _ _ _ _
+            (p-act (d-done nD) r-done i0 _ _)
+            (cp-act (c-done mem))
+            (lk-done eqi)
+            _ _ _ _
+            ix _ _ lf-done) h-done =
+  bDone , subst (λ z → (z , bDone) ∈ _) (sym (trans ix eqi)) mem , isHalt-done
+haltBlock (atAct _ _ _ _
+            (p-act (d-stop nD) r-stop i0 _ _)
+            (cp-act (c-stop mem))
+            (lk-stop eqi)
+            _ _ _ _
+            ix _ _ lf-stop) h-stop =
+  bStop , subst (λ z → (z , bStop) ∈ _) (sym (trans ix eqi)) mem , isHalt-stop
+
+rightBag : ∀ {g} {c : SConf} (h : Hold g c) →
+           Bag (Hold.bsR h) (Cursor.echoNs (Hold.rightC h))
+               (ir c) (slotR c) (envIR c) (envIR c) [] [] (envPR c)
+rightBag {c = c} h =
+  bag {bs = Hold.bsR h} {ns = Cursor.echoNs rcur} {n = ir c} {s = slotR c}
+      {base = envIR c} {ρi = envIR c} {pend = []} {suf = []} {env = envPR c}
+      (Cursor.tab rcur) (Cursor.ct rcur) (Cursor.ls rcur)
+      (Cursor.td rcur) (Cursor.sy rcur) (Cursor.kn rcur) (Cursor.nd rcur)
+      refl
+      (cov-id {xs = []} {base = envIR c} {n = ir c} {s = slotR c})
+      (cov-id {xs = []} {base = envIR c} {n = ir c} {s = slotR c})
+  where rcur = Hold.rightC h
+
+seenR : ∀ {g c b} (h : Hold g c) → (ir c , b) ∈ Hold.bsR h →
+        lookB (Graph.codeR g) (ir c) ≡ just b
+seenR {c = c} {b = b} h mem =
+  subst (λ code → lookB code (ir c) ≡ just b) (sym (Hold.cR h))
+    (root-at (Hold.odR h) mem)
+
+rightStop : ∀ {g c ρ′ pend′ f} (h : Hold g c) →
+            Unfold (envPR c) [] (right c) ρ′ pend′ f →
+            Stop (Hold.bsR h) (Cursor.echoNs (Hold.rightC h))
+                 (ir c) (slotR c) (envIR c) ρ′ pend′ f
+rightStop {c = c} h unf =
+  descend (rightBag h) (Cursor.pl rcur) (Cursor.cv rcur) (Cursor.lk rcur)
+          (Cursor.hs rcur) (Cursor.at rcur) (Cursor.ens rcur) (Cursor.al rcur)
+          (Cursor.ix rcur) (Cursor.ss rcur) (Cursor.sn rcur) unf
+  where rcur = Hold.rightC h
+
+-- Both source sides halted, both queues empty: the graph stutters.
+fin-fwd : ∀ {g c ρL pendL ρR pendR fL fR} (h : Hold g c) →
+          Unfold (envPL c) [] (left c) ρL pendL fL → HaltF fL →
+          Unfold (envPR c) [] (right c) ρR pendR fR → HaltF fR →
+          l2r c ≡ [] →
+          r2l c ≡ [] →
+          Step g (abs c) fin (abs c) × Hold g c
+fin-fwd {g} {c} h unL hfL unR hfR eqL eqR =
+  finish eqL eqR halted , h
+  where
+  L = haltBlock (leftStop h unL) hfL
+  R = haltBlock (rightStop h unR) hfR
+  halted = halt-of g (il c) (ir c) (l2r c) (r2l c) (el c) (er c)
+             (proj₁ L) (proj₁ R) (proj₂ (proj₂ L)) (proj₂ (proj₂ R))
+             (seenL h (proj₁ (proj₂ L))) (seenR h (proj₁ (proj₂ R)))
