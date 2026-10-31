@@ -137,7 +137,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.19.6`. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, and `muro mutate`. The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.19.7`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, and `muro mutate`. The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -150,7 +150,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.19.6.ez
+mix archive.install muro-0.19.7.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -216,7 +216,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then:
 
 ```
-Muro v0.19.6
+Muro v0.19.7
 All terms check. Evidence never becomes a run.
 ```
 

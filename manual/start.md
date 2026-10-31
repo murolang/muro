@@ -29,7 +29,7 @@ cd muro
 mise install
 mix deps.get
 mix archive.build
-mix archive.install muro-0.19.6.ez
+mix archive.install muro-0.19.7.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -43,10 +43,12 @@ mix archive.install github murolang/muro
 A project that does not have Elixir installs the self-contained executable. It carries its own Erlang runtime:
 
 ```
-mise use -g github:murolang/muro@0.19.6
+mise use -g github:murolang/muro@0.19.7
 muro --version
 muro check path.muro
 ```
+
+If mise reports `No versions found` or a 404 from `mise-versions.jdx.dev`, its version mirror does not list the release yet. `mise settings set use_versions_host false` makes it ask GitHub directly.
 
 The commands match the Mix tasks. `muro.toml` is the manifest. The page is [The executable](binary.md).
 
@@ -119,7 +121,7 @@ mix muro.check examples/plus.muro
 On success the shell prints the version that checked the book, then:
 
 ```
-Muro v0.19.6
+Muro v0.19.7
 All terms check. Evidence never becomes a run.
 ```
 

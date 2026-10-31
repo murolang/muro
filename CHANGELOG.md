@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.19.7
+
+`muro` with no arguments, `muro --help`, `muro -h`, and `muro help` print the same usage and exit 0. The page names the version, every command and what it does, the global flags, a short getting-started flow, examples, and where the manifest lives: `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`. `muro help <command>` and `muro <command> --help` print that command's arguments, flags, defaults, examples, and exit codes, and do not run the command. An unknown command or flag names itself on standard error, then the one-line usage and `run muro --help`. A usage error or a hint from the executable names `muro init`, `muro gen`, or `muro deps.get`, not the Mix task. The overview prints an em dash. If mise says `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false`, then `mise use -g github:murolang/muro@VERSION`. The Mix tasks are unchanged.
+
+### Manual
+
+- Start, For agents, and The executable: the mise version mirror, and the usage the executable prints.
+
+### Package
+
+- Version 0.19.7.
+
 ## 0.19.6
 
 A self-contained `muro` executable checks, emits, and commits modules on a machine with no Elixir and no Erlang. It carries its own Erlang runtime. `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`, is the manifest where there is no `mix.exs`. `muro gen` writes C, Rust, and Cortex-M assembly as well as Elixir. A C target's source includes the header written beside it, named from the target stem. `muro init` reads the directory and writes one manifest. An existing manifest at `muro.exs`, `muro.toml`, or `[package.metadata.muro]` is left in place; init prints a diff in that file's format and does not create a second one. `muro skills add` writes the agent block into `AGENTS.md`. The block is read from `manual/for-agents.md`, and that file is in the Hex package. The markers are whole lines, including a trailing carriage return, and an inline mention is left alone. The file's line endings stay. A tag builds the four binaries and smokes the Linux one before any asset is attached to the GitHub release. A failed smoke publishes nothing. `mix muro.emit --backend c` builds a NIF only when the working directory is the loaded Mix project. Outside that directory it writes the `.h` and the `.c`, the same files as the executable. `muro init --backend` stores that backend as the manifest's top-level `backend`, including `backend: :elixir` in `muro.exs`. Without the flag, a Mix project still omits the key. A `Cargo.toml` header outside `[package.metadata.muro]` may quote a key (`[target.'cfg(unix)'.dependencies]`, `[target."x86_64-pc-windows-msvc".dependencies]`). The reader skips that table, including a multi-line string or array, and still reads the muro table with the restricted subset. The executable loads `:public_key`, `:ssl`, `:inets`, `:crypto`, and `:asn1` so `muro deps.get` can open HTTPS where no Erlang is installed. Mix records the code path before that boot step, so the fetcher loads the copies that sit beside `:muro` in the release. They are not Hex dependencies. The wrap is a production build, so the executable does not print unpack debug lines. The Mix tasks stay and call the same functions. The Hex package gains no runtime dependency.
