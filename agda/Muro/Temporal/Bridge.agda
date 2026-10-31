@@ -13,13 +13,18 @@
 -- the process the compiled graph already uses. `block-of` for those
 -- processes is the block `lookB` reads, by computation.
 --
--- Not proved in this module: a step of the source corresponds to a
--- step of the graph (`sim-fwd`, `sim-bwd`), final configurations
--- correspond (`final-iff`), the finite `Muro.Async` meeting embeds
--- (`inj-sim`, `safe→nostuck`), source safety is the graph's `NoStuck`
--- (`source-safe-iff`), and satisfaction transfers (`transfer`).
--- The objects those statements quantify over are `SConf`, `_⟶ₛ_`,
--- `abs`, `graphOf`, and `SourceSatisfies`.
+-- `sim-fwd`, in `Muro.Temporal.Expose`, says a source step is the
+-- graph step on `abs`. `bwd-put`, in `Muro.Temporal.Back`, reads a
+-- graph step on a left put back as that source put when the place is
+-- already the put and nothing is pending. `spine`, in
+-- `Muro.Temporal.Reveal`, peels a `smu` and stops at a jump.
+--
+-- Not proved: the backward direction for an arbitrary step
+-- (`sim-bwd`), final configurations (`final-iff`), the finite
+-- `Muro.Async` embedding (`inj-sim`, `safe→nostuck`), source safety
+-- as `NoStuck` (`source-safe-iff`), and satisfaction transferring
+-- (`transfer`). The objects those statements quantify over are
+-- `SConf`, `_⟶ₛ_`, `abs`, `graphOf`, and `SourceSatisfies`.
 --
 -- Importing `Muro.Temporal.Source` requires `--guardedness`. The
 -- option is infective.
@@ -515,7 +520,8 @@ ex-block-cross = refl
 ------------------------------------------------------------------------
 -- A source run satisfies a formula when the projected run does.
 -- `transfer` would be the equivalence with `Satisfies`. It is not
--- proved: it needs the step correspondence above.
+-- proved. `sim-fwd` is one direction of the step correspondence, and
+-- the backward direction is not a theorem.
 ------------------------------------------------------------------------
 
 absPath : SPath → Path

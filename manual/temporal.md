@@ -122,4 +122,6 @@ The count is the number of distinct configurations reachable from the start of t
 
 Emit of a book is unchanged by appending a declaration whose meeting checks. Elixir, the state-machine backend, C, Rust, and assembly print the same programs. The ExUnit backend embeds the book hash in `@muro_book`, so that one line changes with the book bytes and the suite body does not. A committed module's header records the same hash, and `mix muro.gen --check` reports the target stale until `mix muro.gen` rewrites the header. That is the rule for any edit of a book.
 
+`Decide.check` accepts exactly when every infinite run from the start satisfies the formula, and a refusal is a run that misses it. A source step is a step of that graph (`sim-fwd`). A graph step on a left put whose place is already that put is that source put (`bwd-put`). Reading an arbitrary graph step back as the source step, and transferring the verdict onto the source meeting, are not theorems.
+
 The propositions, the refusals, and the theorems are listed in [Limits](limits.md). The grammar is in [Grammar](grammar.md).

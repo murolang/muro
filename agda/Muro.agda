@@ -46,6 +46,9 @@ import Muro.Temporal.Ordinal
 import Muro.Temporal.Fire
 import Muro.Temporal.Den
 import Muro.Temporal.Denote
+import Muro.Temporal.Reveal
+import Muro.Temporal.Expose
+import Muro.Temporal.Back
 import Muro.Temporal.Graph
 import Muro.Temporal.Safety
 import Muro.Temporal.Live
