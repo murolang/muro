@@ -27,7 +27,7 @@ open import Muro.AsyncRec using (module Graph)
 open Graph
 
 open import Muro.Temporal.Bridge
-  using ( Frag; echoOk; graphOf; initS; pack; compiled; gok; gfail; elab )
+  using ( Frag; echoOk; muOk; graphOf; initS; pack; compiled; gok; gfail; elab )
 open import Muro.Temporal.Source
   using ( SProc; SConf; sc; W; mkW; EnvI; EnvP; addPend; lookupI
         ; walk; walkArms
@@ -204,15 +204,17 @@ root-sn y = env-cast (ev-nil y)
 init-hold : ∀ k (P Q : SProc) (fp : Frag P) (fq : Frag Q) →
             echoOk (bnames P) [] P ≡ true →
             echoOk (bnames Q) [] Q ≡ true →
+            muOk P ≡ true →
+            muOk Q ≡ true →
             ∀ g c →
             graphOf k P Q fp fq ≡ gok g →
             initS k P Q fp fq ≡ just c →
             Hold g c
-init-hold k P Q fp fq eokP eokQ g c eqg eqc =
+init-hold k P Q fp fq eokP eokQ muP muQ g c eqg eqc =
   body (denote P fp [] [] [] [] (bnames P) [] [] [] zero zero
-          er0 (echo-empty [] (bnames P)) eokP refl (root-ns P))
+          er0 (echo-empty [] (bnames P)) eokP refl (root-ns P) muP)
        (denote Q fq [] [] [] [] (bnames Q) [] [] [] zero zero
-          er0 (echo-empty [] (bnames Q)) eokQ refl (root-ns Q))
+          er0 (echo-empty [] (bnames Q)) eokQ refl (root-ns Q) muQ)
   where
   -- `compiled` does not unfold while a pattern is unified, so the
   -- output is an argument and the equality is matched as `refl`.

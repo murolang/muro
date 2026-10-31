@@ -259,13 +259,16 @@ data LinkA where
         LinkA (ap1 {y} {p} {as} {w} {ws} {ρ} pl hd sl ev rest)
 
 -- The pending names an action was denoted under. A `smu` pushes its
--- binder. A continuation was denoted with an empty pending list.
+-- binder, which is absent from the environment of the place it peels.
+-- A continuation was denoted with an empty pending list.
 data At : List String → {P : SProc} → Place P → Set
 data AtA : {ρ : EnvI} {as : List Arm} {ws : List (String × W)} →
            ArmPs ρ as ws → Set
 
 data At where
-  at-mu : ∀ {x suf p} {pl : Place p} → At (x ∷ suf) pl → At suf (p-mu x pl)
+  at-mu : ∀ {x suf p} {pl : Place p} →
+          lookupI x (envOf pl) ≡ nothing →
+          At (x ∷ suf) pl → At suf (p-mu x pl)
   at-jump : ∀ {suf x i s0 ρ} → At suf (p-jump x i s0 ρ)
   at-done : ∀ {suf n i s0 ρ} → At suf (p-act (d-done n) r-done i s0 ρ)
   at-stop : ∀ {suf n i s0 ρ} → At suf (p-act (d-stop n) r-stop i s0 ρ)
