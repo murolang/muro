@@ -141,6 +141,7 @@ record Yes (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
     at : At pend pl
     tn : tnames tab ≡ mus P
     ens : EchoNs ns pl
+    al : Align pend pl
 
 record No (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
           (renv : REnv) (venv : VEnv) (n slot : ℕ) : Set where
@@ -177,6 +178,7 @@ record YesA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
     ata : AtA dests
     tn : tnames tab ≡ musArms as
     eaa : EchoNsA ns dests
+    ala : AlignA dests
 
 record NoA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
            (venv : VEnv) (n slot : ℕ) : Set where
@@ -223,6 +225,7 @@ finish-put {a} {atom} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y aeq wk 
        (at-put refl (Yes.at y))
        (Yes.tn y)
        (en-put (Yes.ens y))
+       (al-put refl (Yes.al y))
   where
   ρw = addPend pend n slot ρ
 
@@ -255,6 +258,7 @@ finish-echo {x} {p} {fp} {pend} {ρ} {renv} {venv} {ns} {n} {slot} {sX} fq y lk 
        (at-echo refl (Yes.at y))
        (Yes.tn y)
        (en-echo refl (Yes.ens y))
+       (al-echo refl (Yes.al y))
   where
   ρw = addPend pend n slot ρ
 
@@ -285,6 +289,7 @@ finish-pick0 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        (at-pick0 refl (Yes.at y))
        (Yes.tn y)
        (en-pick0 (Yes.ens y))
+       (al-pick0 refl (Yes.al y))
   where
   ρw = addPend pend n slot ρ
 
@@ -315,6 +320,7 @@ finish-pick1 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        (at-pick1 refl (Yes.at y))
        (Yes.tn y)
        (en-pick1 (Yes.ens y))
+       (al-pick1 refl (Yes.al y))
   where
   ρw = addPend pend n slot ρ
 
@@ -347,6 +353,7 @@ finish-get {t} {x} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        (at-get refl (Yes.at y))
        (Yes.tn y)
        (en-get (Yes.ens y))
+       (al-get refl (Yes.al y))
   where
   ρw = addPend pend n slot ρ
 
@@ -833,12 +840,12 @@ mutual
     ok (yesB (mkW n slot (suc n) slot) ((n , bDone) ∷ []) refl refl (o1 o0)
           (sym (+-idr slot))
           (p-act (d-done n) r-done n slot ρ) t0 (cp-act (c-done here)) ct0 refl refl refl
-          (lk-done refl) ls0 hs-done at-done refl en-done)
+          (lk-done refl) ls0 hs-done at-done refl en-done al-done)
   denote sstop fstop pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     ok (yesB (mkW n slot (suc n) slot) ((n , bStop) ∷ []) refl refl (o1 o0)
           (sym (+-idr slot))
           (p-act (d-stop n) r-stop n slot ρ) t0 (cp-act (c-stop here)) ct0 refl refl refl
-          (lk-stop refl) ls0 hs-stop at-stop refl en-stop)
+          (lk-stop refl) ls0 hs-stop at-stop refl en-stop al-stop)
 
   denote (sput .(pNat a) p) (fput (fnat a) fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
@@ -1060,7 +1067,8 @@ mutual
               (hs-cover (hosts-appendˡ (Yes.hs y1)) (hosts-appendʳ (Yes.hs y2)))
               (at-cover refl (Yes.at y1) (Yes.at y2))
               (names-join {t = Yes.tab y1} {u = Yes.tab y2} (Yes.tn y1) (Yes.tn y2))
-              (en-cover (Yes.ens y1) (Yes.ens y2)))
+              (en-cover (Yes.ens y1) (Yes.ens y2))
+              (al-cover refl (Yes.al y1) (Yes.al y2)))
 
   denote (siget x p q) (figet fp fq) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     onL (denote p fp [] ρw renw venvX ns scopeX preX (bnames q ++ post) (suc n) (suc slot)
@@ -1138,7 +1146,8 @@ mutual
               (hs-iget (hosts-appendˡ (Yes.hs y1)) (hosts-appendʳ (Yes.hs y2)))
               (at-iget refl (Yes.at y1) (Yes.at y2))
               (names-join {t = Yes.tab y1} {u = Yes.tab y2} (Yes.tn y1) (Yes.tn y2))
-              (en-iget (Yes.ens y1) (Yes.ens y2)))
+              (en-iget (Yes.ens y1) (Yes.ens y2))
+              (al-iget refl (Yes.al y1) (Yes.al y2)))
 
   denote (smget t x as) (fmget fas) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     on (denoteArms as fas (addPend pend n slot ρ) (addNames pend n renv) ((x , slot) ∷ venv)
@@ -1180,7 +1189,8 @@ mutual
             (hs-mget (YesA.hsa y))
             (at-mget refl (YesA.ata y))
             (YesA.tn y)
-            (en-mget (YesA.eaa y)))
+            (en-mget (YesA.eaa y))
+            (al-mget refl (YesA.ala y)))
 
   denote (smu x p) (fmu fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     seal (denote p fp (x ∷ pend) ρ renv venv ns scope pre post n slot rel er eok seq nseq
@@ -1209,7 +1219,8 @@ mutual
               (hs-mu (in-here (lk-mu (Yes.lk y))) refl (hosts-there (Yes.hs y)))
               at0
               (cong (x ∷_) (Yes.tn y))
-              (en-mu (Yes.ens y)))
+              (en-mu (Yes.ens y))
+              (al-mu (Yes.al y)))
 
   denote (svar y) fvar pend ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     var-go (lookup-rel y rel) (elemS y pend) refl
@@ -1230,7 +1241,7 @@ mutual
             (var-cmp-yes {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
                          {y = y} {i = i} eq eqn)
             o0 (sym (+-idr slot)) (p-jump y i s0 ρ) t0 cp-jump ct0 refl refl refl
-            (lk-jump eqi) ls0 hs-jump at-jump refl en-jump)
+            (lk-jump eqi) ls0 hs-jump at-jump refl en-jump al-jump)
 
   denoteArms : (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv) (venv : VEnv)
                (ns scope pre post : List String) (n slot : ℕ) →
@@ -1243,7 +1254,7 @@ mutual
 
   denoteArms [] farms0 ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     okA (yesA [] n slot [] refl refl o0 (sym (+-idr slot)) (ap0 {ρ = ρ}) t0 ca0 ct0
-           la0 ls0 ha0 ata0 refl ea0)
+           la0 ls0 ha0 ata0 refl ea0 aa0)
 
   denoteArms (aok y p ∷ as) (farms1 (farm fp) fas) ρ renv venv ns scope pre post n slot rel er eok seq nseq sep =
     on (denote p fp [] ρ renv venv ns scope pre (bnamesArms as ++ post) n slot rel er
@@ -1305,7 +1316,8 @@ mutual
                (ha1 (hosts-appendˡ (Yes.hs yb)) (hostsA-appendʳ (YesA.hsa ya)))
                (ata1 (Yes.at yb) (YesA.ata ya))
                (names-join {t = Yes.tab yb} {u = YesA.tab ya} (Yes.tn yb) (YesA.tn ya))
-               (ea1 (Yes.ens yb) (YesA.eaa ya)))
+               (ea1 (Yes.ens yb) (YesA.eaa ya))
+               (aa1 (Yes.al yb) (YesA.ala ya)))
 
 ------------------------------------------------------------------------
 -- The echo denotes, and so does a process that only halts.

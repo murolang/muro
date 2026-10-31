@@ -315,6 +315,62 @@ data AtA where
          At [] pl → AtA rest →
          AtA (ap1 {y} {p} {as} {w} {ws} {ρ} pl hd sl ev rest)
 
+-- The pending list of an action is the list its continuation was walked
+-- under. `Link` and `At` each store a copy. This family stores one copy,
+-- so the continuation environment is `addPend` of the list the place carries.
+data Align : List String → {P : SProc} → Place P → Set
+data AlignA : {ρ : EnvI} {as : List Arm} {ws : List (String × W)} →
+              ArmPs ρ as ws → Set
+
+data Align where
+  al-mu : ∀ {x p suf} {pl : Place p} →
+          Align (x ∷ suf) pl → Align suf (p-mu x pl)
+  al-jump : ∀ {suf x i s ρ} → Align suf (p-jump x i s ρ)
+  al-done : ∀ {suf n i s ρ} → Align suf (p-act (d-done n) r-done i s ρ)
+  al-stop : ∀ {suf n i s ρ} → Align suf (p-act (d-stop n) r-stop i s ρ)
+  al-put : ∀ {n s a atom j p ρw w aeq wk ej dest dh ds de i0 s0 ρ suf} →
+           ρw ≡ addPend suf n s ρ → Align [] dest →
+           Align suf (p-act (d-put n s a atom j p ρw w aeq wk ej dest dh ds de)
+                            r-put i0 s0 ρ)
+  al-echo : ∀ {n s x ns sX j p ρw w fd wk ej dest dh ds de i0 s0 ρ suf} →
+            ρw ≡ addPend suf n s ρ → Align [] dest →
+            Align suf (p-act (d-echo n s x ns sX j p ρw w fd wk ej dest dh ds de)
+                             r-echo i0 s0 ρ)
+  al-pick0 : ∀ {n s j p ρw w wk ej dest dh ds de i0 s0 ρ suf} →
+             ρw ≡ addPend suf n s ρ → Align [] dest →
+             Align suf (p-act (d-pick0 n s j p ρw w wk ej dest dh ds de)
+                              r-pick0 i0 s0 ρ)
+  al-pick1 : ∀ {n s j p ρw w wk ej dest dh ds de i0 s0 ρ suf} →
+             ρw ≡ addPend suf n s ρ → Align [] dest →
+             Align suf (p-act (d-pick1 n s j p ρw w wk ej dest dh ds de)
+                              r-pick1 i0 s0 ρ)
+  al-get : ∀ {n s t x j p ρw w wk ej dest dh ds de i0 s0 ρ suf} →
+           ρw ≡ addPend suf n s ρ → Align [] dest →
+           Align suf (p-act (d-get n s t x j p ρw w wk ej dest dh ds de)
+                            r-get i0 s0 ρ)
+  al-cover : ∀ {n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀
+               i0 s0 ρ suf} →
+             ρw ≡ addPend suf n s ρ → Align [] dp → Align [] dq →
+             Align suf (p-act (d-cover n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq
+                                      hp sp ep hq sq eq₀)
+                             r-cover i0 s0 ρ)
+  al-iget : ∀ {n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀
+              i0 s0 ρ suf} →
+            ρw ≡ addPend suf n s ρ → Align [] dp → Align [] dq →
+            Align suf (p-act (d-iget n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq
+                                     hp sp ep hq sq eq₀)
+                            r-iget i0 s0 ρ)
+  al-mget : ∀ {n s t x named as ρw ws n2 s2 wk en dests i0 s0 ρ suf} →
+            ρw ≡ addPend suf n s ρ → AlignA dests →
+            Align suf (p-act (d-mget n s t x named as ρw ws n2 s2 wk en dests)
+                             r-mget i0 s0 ρ)
+
+data AlignA where
+  aa0 : ∀ {ρ} → AlignA (ap0 {ρ})
+  aa1 : ∀ {ρ y p as w ws pl hd sl ev rest} →
+        Align [] pl → AlignA rest →
+        AlignA (ap1 {y} {p} {as} {w} {ws} {ρ} pl hd sl ev rest)
+
 -- Every echo under a place reads the name list `denote` was given.
 -- The root call uses `bnames`, which is the list the source configuration
 -- keeps in `namesL` and `namesR`.

@@ -46,7 +46,7 @@ open import Muro.Temporal.Pic
 open import Muro.Temporal.Agree using (root-ns)
 open import Muro.Temporal.Den
   using ( Place; Table; t0; t1; Link; Links; CovP; CovT; headIx; slotOf; envOf
-        ; InTab; in-here; in-there; Hosts; At; EchoNs
+        ; InTab; in-here; in-there; Hosts; At; EchoNs; Align
         ; place-of; link-of; ix-of; slot-at; tnames )
 open import Muro.Temporal.Denote
   using ( denote; Yes; No; noB; Built; ok; bad )
@@ -183,6 +183,7 @@ data Knew (ns : List String) (tab : Table) : EnvP → EnvI → Set where
         slot-at m ≡ s0 →
         At suf pl →
         EchoNs ns pl →
+        Align suf pl →
         Ext (envOf pl) ((x , i , s0) ∷ ρ) →
         Covered suf [] ((x , i , s0) ∷ ρ) i s0 →
         Knew ns tab env ρ →
@@ -190,7 +191,7 @@ data Knew (ns : List String) (tab : Table) : EnvP → EnvI → Set where
 
 kn-tied : ∀ {ns tab env ρ} → Knew ns tab env ρ → Tied tab env
 kn-tied kn0 = td0
-kn-tied (kn1 m _ _ _ _ _ _ _ k) = td1 m (kn-tied k)
+kn-tied (kn1 m _ _ _ _ _ _ _ _ k) = td1 m (kn-tied k)
 
 record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
               (envP : EnvP) (envI : EnvI) (proc : SProc) : Set where
@@ -207,6 +208,7 @@ record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
     echoNs : List String
     kn : Knew echoNs tab envP envI
     ens : EchoNs echoNs pl
+    al : Align [] pl
     ix : idx ≡ headIx pl
     ss : slot ≡ slotOf pl
     sn : Ext (envOf pl) envI
@@ -307,6 +309,7 @@ init-hold k P Q fp fq eokP eokQ muP muQ g c eqg eqc =
       ; echoNs = bnames R
       ; kn = kn0
       ; ens = Yes.ens y
+      ; al = Yes.al y
       ; ix = trans ix≡ (sym (Yes.hd y))
       ; ss = sym (trans (Yes.sl y) slot0)
       ; sn = ext-eq {ρ0 = envOf (Yes.pl y)} {ρ = []} (root-sn y)
@@ -1056,7 +1059,7 @@ runtime-pin {x} {ρ = ρ} {n = n} {s = s} m ix≡ sl≡ nd sy = go (lookupI x ρ
 
 kn-sync : ∀ {ns tab env ρ} → Knew ns tab env ρ → Sync tab env ρ
 kn-sync kn0 = sy0
-kn-sync (kn1 m _ ix≡ sl≡ _ _ _ _ k) = sy1 m ix≡ sl≡ (kn-sync k)
+kn-sync (kn1 m _ ix≡ sl≡ _ _ _ _ _ k) = sy1 m ix≡ sl≡ (kn-sync k)
 
 only-base : ∀ {y base i s} →
             (elemS y [] ≡ true ⊎ lookupI y base ≡ just (i , s)) →
@@ -1148,18 +1151,19 @@ record Found (ns : List String) (tab : Table) (x : String) (P : SProc) (ρ : Env
     suf : List String
     at : At suf pl
     ens : EchoNs ns pl
+    al : Align suf pl
     ext : Ext (envOf pl) ρ
     cov : Covered suf [] ρ i s0
 
 kn-find : ∀ {ns x P tab env ρ} (k : Knew ns tab env ρ) →
           Bound x P env → distinct (tnames tab) ≡ true →
           Found ns tab x P ρ
-kn-find {x} (kn1 {i = i} {s0 = s0} {suf = suf} {pl = pl} m peq ix≡ sl≡ at ens ext cov _) b-here _ =
+kn-find {x} (kn1 {i = i} {s0 = s0} {suf = suf} {pl = pl} m peq ix≡ sl≡ at ens al ext cov _) b-here _ =
   record
     { m = m ; pl = pl ; peq = peq ; i = i ; s0 = s0
-    ; ix≡ = ix≡ ; sl≡ = sl≡ ; suf = suf ; at = at ; ens = ens
+    ; ix≡ = ix≡ ; sl≡ = sl≡ ; suf = suf ; at = at ; ens = ens ; al = al
     ; ext = ext ; cov = cov }
-kn-find {x} (kn1 {x = y} {ρ = tail} {i = i} {s0 = s0} {pl = plF} mF _ ixF slF _ _ _ _ k) (b-there b) nd =
+kn-find {x} (kn1 {x = y} {ρ = tail} {i = i} {s0 = s0} {pl = plF} mF _ ixF slF _ _ _ _ _ k) (b-there b) nd =
   let f = kn-find k b nd
       pinD = den-pin {x = y} {pl = Found.pl f} {ρ = tail} {i = i} {s = s0}
                (Found.ext f) (kn-sync k) mF ixF slF nd
@@ -1168,7 +1172,7 @@ kn-find {x} (kn1 {x = y} {ρ = tail} {i = i} {s0 = s0} {pl = plF} mF _ ixF slF _
     { m = Found.m f ; pl = Found.pl f ; peq = Found.peq f
     ; i = Found.i f ; s0 = Found.s0 f
     ; ix≡ = Found.ix≡ f ; sl≡ = Found.sl≡ f
-    ; suf = Found.suf f ; at = Found.at f ; ens = Found.ens f
+    ; suf = Found.suf f ; at = Found.at f ; ens = Found.ens f ; al = Found.al f
     ; ext = ext-front {x = y} {i = i} {s = s0}
               {ρ0 = envOf (Found.pl f)} {ρ = tail} (Found.ext f) pinD
     ; cov = cov-cons {x = y} {i = i} {s = s0} {suf = Found.suf f}
