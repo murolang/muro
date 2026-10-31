@@ -66,7 +66,7 @@ defmodule Muro.CLI do
           {"deps.get", "Fetch muro_deps and write muro.lock."},
           {[
              "mutate path.muro [--only NAME] [--json] [--fuel N]",
-             "[--max-mutants-per-def N] [--max-survivors N]"
+             "    [--max-mutants-per-def N] [--max-survivors N]"
            ], "Change run definitions and report which evidence still holds."}
         ])
       ),
@@ -100,7 +100,7 @@ defmodule Muro.CLI do
         "GLOBAL OPTIONS",
         Muro.CLI.Text.kv([
           {"-h, --help", "Show this text and exit 0."},
-          {"-v, --version", "Print Muro v and the version, then exit 0."}
+          {"-v, --version", "Print the version, then exit 0."}
         ])
       ),
       Muro.CLI.Text.section(
@@ -119,7 +119,7 @@ defmodule Muro.CLI do
           "https://muro-lang.dev/docs",
           "https://muro-lang.dev/llms.txt",
           "https://muro-lang.dev/docs/wall",
-          "manual/binary.md",
+          "https://muro-lang.dev/docs/binary",
           "muro help <command>"
         ])
       )

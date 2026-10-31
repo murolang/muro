@@ -88,7 +88,7 @@ defmodule Muro.CliHelpTest do
     assert text =~ "muro.toml"
     assert text =~ "[package.metadata.muro]"
     assert text =~ "Cargo.toml"
-    assert text =~ "manual/binary.md"
+    assert text =~ "https://muro-lang.dev/docs/binary"
     assert text =~ "https://muro-lang.dev"
     assert text =~ "https://muro-lang.dev/docs/for-agents"
     assert text =~ "https://muro-lang.dev/docs/examples"
