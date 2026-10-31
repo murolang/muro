@@ -53,6 +53,7 @@ import Muro.Temporal.Expose
 import Muro.Temporal.Back
 import Muro.Temporal.Invert
 import Muro.Temporal.Follow
+import Muro.Temporal.Carry
 import Muro.Temporal.Graph
 import Muro.Temporal.Safety
 import Muro.Temporal.Live
