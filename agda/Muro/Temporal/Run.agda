@@ -154,6 +154,43 @@ ext-eq eq x i s p = trans (sym (eq x)) p
 ext-refl : ∀ ρ → Ext ρ ρ
 ext-refl ρ x i s eq = eq
 
+-- Names unfolded in one step are new, or already bound at these counters.
+Fresh : List String → EnvI → ℕ → ℕ → Set
+Fresh got ρ n s =
+  ∀ y → elemS y got ≡ true →
+        lookupI y ρ ≡ nothing ⊎ lookupI y ρ ≡ just (n , s)
+
+-- A denoted pending name is either unfolded now or already bound here.
+Covered : List String → List String → EnvI → ℕ → ℕ → Set
+Covered suf got base n s =
+  ∀ y → elemS y suf ≡ true →
+        elemS y got ≡ true ⊎ lookupI y base ≡ just (n , s)
+
+fr-nil : ∀ {ρ n s} → Fresh [] ρ n s
+fr-nil _ ()
+
+cov-nil : ∀ {got base n s} → Covered [] got base n s
+cov-nil _ ()
+
+-- What a step has already learned about each binder in scope.
+-- The denoted place, its pending names, and the counters are the table's.
+data Knew (tab : Table) : EnvP → EnvI → Set where
+  kn0 : Knew tab [] []
+  kn1 : ∀ {x P env ρ i s0 suf} {pl : Place P} →
+        (m : InTab x P tab) →
+        place-of m ≡ pl →
+        ix-of m ≡ i →
+        slot-at m ≡ s0 →
+        At suf pl →
+        Ext (envOf pl) ((x , i , s0) ∷ ρ) →
+        Covered suf [] ((x , i , s0) ∷ ρ) i s0 →
+        Knew tab env ρ →
+        Knew tab ((x , P) ∷ env) ((x , i , s0) ∷ ρ)
+
+kn-tied : ∀ {tab env ρ} → Knew tab env ρ → Tied tab env
+kn-tied kn0 = td0
+kn-tied (kn1 m _ _ _ _ _ _ k) = td1 m (kn-tied k)
+
 record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
               (envP : EnvP) (envI : EnvI) (proc : SProc) : Set where
   field
@@ -166,6 +203,7 @@ record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
     hs : Hosts tab pl
     td : Tied tab envP
     sy : Sync tab envP envI
+    kn : Knew tab envP envI
     ix : idx ≡ headIx pl
     ss : slot ≡ slotOf pl
     sn : Ext (envOf pl) envI
@@ -261,6 +299,7 @@ init-hold k P Q fp fq eokP eokQ muP muQ g c eqg eqc =
       ; hs = Yes.hs y
       ; td = td0
       ; sy = sy0
+      ; kn = kn0
       ; ix = trans ix≡ (sym (Yes.hd y))
       ; ss = sym (trans (Yes.sl y) slot0)
       ; sn = ext-eq {ρ0 = envOf (Yes.pl y)} {ρ = []} (root-sn y)
@@ -343,19 +382,7 @@ lookup-in (x ∷ xs) n s ρ y eq = go (y == x) refl eq
   go true eqy _ rewrite eqy = refl
   go false eqy eq2 rewrite eqy = lookup-in xs n s ρ y eq2
 
--- The denoted pending list and the runtime pending list may differ.
--- A hit on the denoted side is still a hit on the runtime side when
--- every denoted name is either pending at run time or already bound
--- there, and every runtime name is new or bound at the same counters.
-Fresh : List String → EnvI → ℕ → ℕ → Set
-Fresh got ρ n s =
-  ∀ y → elemS y got ≡ true →
-        lookupI y ρ ≡ nothing ⊎ lookupI y ρ ≡ just (n , s)
-
-Covered : List String → List String → EnvI → ℕ → ℕ → Set
-Covered suf got base n s =
-  ∀ y → elemS y suf ≡ true →
-        elemS y got ≡ true ⊎ lookupI y base ≡ just (n , s)
+-- `Fresh` and `Covered` are defined with `Knew`, above.
 
 elem-yes : ∀ {y x xs} → (y == x) ≡ true → elemS y (x ∷ xs) ≡ true
 elem-yes eq rewrite eq = refl
@@ -853,6 +880,18 @@ same-slot m n eq =
   let p = pair (just-inj (trans (sym (in-found m eq)) (in-found n eq)))
   in proj₁ p , proj₂ p
 
+-- One table, one process for a name.
+unique : ∀ {x P Q tab} (m : InTab x P tab) (n : InTab x Q tab) →
+         distinct (tnames tab) ≡ true → P ≡ Q
+unique (in-here _) (in-here _) _ = refl
+unique {x = x} (in-here _) (in-there {tab = tab} n) eq =
+  ⊥-elim (true≢false (trans (sym (∧-left eq))
+           (fresh-occ x (tnames tab) (occurs n))))
+unique {x = x} (in-there {tab = tab} m) (in-here _) eq =
+  ⊥-elim (true≢false (trans (sym (∧-left eq))
+           (fresh-occ x (tnames tab) (occurs m))))
+unique (in-there m) (in-there n) eq = unique m n (∧-right eq)
+
 sync-take : ∀ {x y j s0 ρ i s} →
             (x == y) ≡ true →
             lookupI x ((y , j , s0) ∷ ρ) ≡ just (i , s) →
@@ -910,3 +949,128 @@ runtime-pin {x} {ρ = ρ} {n = n} {s = s} m ix≡ sl≡ nd sy = go (lookupI x ρ
         sm = same-slot m n0 nd
     in inj₂ (trans p (cong just (sym (both (trans (sym ix≡) (trans (proj₁ sm) ix0))
                                                  (trans (sym sl≡) (trans (proj₂ sm) sl0))))))
+
+------------------------------------------------------------------------
+-- A binder recorded in `Knew` is still recorded after later bindings
+-- are pushed in front of it. Pushing a name does not move a hit whose
+-- counters are the table's.
+------------------------------------------------------------------------
+
+kn-sync : ∀ {tab env ρ} → Knew tab env ρ → Sync tab env ρ
+kn-sync kn0 = sy0
+kn-sync (kn1 m _ ix≡ sl≡ _ _ _ k) = sy1 m ix≡ sl≡ (kn-sync k)
+
+only-base : ∀ {y base i s} →
+            (elemS y [] ≡ true ⊎ lookupI y base ≡ just (i , s)) →
+            lookupI y base ≡ just (i , s)
+only-base (inj₁ ())
+only-base (inj₂ eq) = eq
+
+move-lookup : ∀ {y x ρ b} → (y == x) ≡ true → lookupI x ρ ≡ b → lookupI y ρ ≡ b
+move-lookup {y} {x} {ρ} {b} eqy e = go (==-sound eqy) e
+  where
+  go : y ≡ x → lookupI x ρ ≡ b → lookupI y ρ ≡ b
+  go refl e = e
+
+-- The front binding agrees with a denoted hit on the same name.
+front-yes : ∀ {y x i s ρ0 ρ j s1} →
+            (y == x) ≡ true →
+            (lookupI x ρ0 ≡ nothing ⊎ lookupI x ρ0 ≡ just (i , s)) →
+            lookupI y ρ0 ≡ just (j , s1) →
+            lookupI y ((x , i , s) ∷ ρ) ≡ just (j , s1)
+front-yes {y} {x} {i} {s} {ρ0} {ρ} {j} {s1} eqy pin eq =
+  grow-hit y x [] i s ρ j s1 eqy
+    (pin-use {y = y} {ρ = ρ0} {n = i} {s = s} {i = j} {s1 = s1}
+       (move-sum eqy pin) eq)
+  where
+  move-sum : (y == x) ≡ true →
+             (lookupI x ρ0 ≡ nothing ⊎ lookupI x ρ0 ≡ just (i , s)) →
+             (lookupI y ρ0 ≡ nothing ⊎ lookupI y ρ0 ≡ just (i , s))
+  move-sum eqz (inj₁ no) =
+    inj₁ (move-lookup {y = y} {x = x} {ρ = ρ0} {b = nothing} eqz no)
+  move-sum eqz (inj₂ yes) =
+    inj₂ (move-lookup {y = y} {x = x} {ρ = ρ0} {b = just (i , s)} eqz yes)
+
+ext-front : ∀ {x i s ρ0 ρ} →
+            Ext ρ0 ρ →
+            (lookupI x ρ0 ≡ nothing ⊎ lookupI x ρ0 ≡ just (i , s)) →
+            Ext ρ0 ((x , i , s) ∷ ρ)
+ext-front {x} {i} {s} {ρ0} ext pin y j s1 eq = go (y == x) refl
+  where
+  go : (b : Bool) → (y == x) ≡ b →
+       lookupI y ((x , i , s) ∷ _) ≡ just (j , s1)
+  go true eqy = front-yes {y = y} {x = x} {i = i} {s = s} {ρ0 = ρ0}
+                  {j = j} {s1 = s1} eqy pin eq
+  go false eqy rewrite eqy = ext y j s1 eq
+
+cov-cons : ∀ {x i s suf ρ i0 s0} →
+           Covered suf [] ρ i0 s0 →
+           (lookupI x ρ ≡ nothing ⊎ lookupI x ρ ≡ just (i , s)) →
+           Covered suf [] ((x , i , s) ∷ ρ) i0 s0
+cov-cons {x} {i} {s} {ρ = ρ} {i0 = i0} {s0 = s0} cov pin y inn =
+  inj₂ (body (y == x) refl
+         (only-base {y = y} {base = ρ} {i = i0} {s = s0} (cov y inn)))
+  where
+  body : (b : Bool) → (y == x) ≡ b →
+         lookupI y ρ ≡ just (i0 , s0) →
+         lookupI y ((x , i , s) ∷ ρ) ≡ just (i0 , s0)
+  body true eqy eq = front-yes {y = y} {x = x} {i = i} {s = s} {ρ0 = ρ}
+                       {j = i0} {s1 = s0} eqy pin eq
+  body false eqy eq rewrite eqy = eq
+
+-- A denoted hit on the front name is that name's table entry.
+den-pin : ∀ {x Q} {P : SProc} {pl : Place P} {ρ tab env i s} →
+          Ext (envOf pl) ρ →
+          Sync tab env ρ →
+          (m : InTab x Q tab) →
+          ix-of m ≡ i → slot-at m ≡ s →
+          distinct (tnames tab) ≡ true →
+          lookupI x (envOf pl) ≡ nothing ⊎ lookupI x (envOf pl) ≡ just (i , s)
+den-pin {x} {pl = pl} {i = i} {s = s} ext sy m ix≡ sl≡ nd =
+  go (lookupI x (envOf pl)) refl
+  where
+  go : (b : Maybe (ℕ × ℕ)) → lookupI x (envOf pl) ≡ b →
+       lookupI x (envOf pl) ≡ nothing ⊎ lookupI x (envOf pl) ≡ just (i , s)
+  go nothing p = inj₁ p
+  go (just (j , s1)) p =
+    let Q , n0 , ix0 , sl0 = sync-hit sy (ext x j s1 p)
+        sm = same-slot m n0 nd
+    in inj₂ (trans p (cong just (sym (both
+         (trans (sym ix≡) (trans (proj₁ sm) ix0))
+         (trans (sym sl≡) (trans (proj₂ sm) sl0))))))
+
+record Found (tab : Table) (x : String) (P : SProc) (ρ : EnvI) : Set where
+  field
+    m : InTab x P tab
+    pl : Place P
+    peq : place-of m ≡ pl
+    i s0 : ℕ
+    ix≡ : ix-of m ≡ i
+    sl≡ : slot-at m ≡ s0
+    suf : List String
+    at : At suf pl
+    ext : Ext (envOf pl) ρ
+    cov : Covered suf [] ρ i s0
+
+kn-find : ∀ {x P tab env ρ} (k : Knew tab env ρ) →
+          Bound x P env → distinct (tnames tab) ≡ true →
+          Found tab x P ρ
+kn-find {x} (kn1 {i = i} {s0 = s0} {suf = suf} {pl = pl} m peq ix≡ sl≡ at ext cov _) b-here _ =
+  record
+    { m = m ; pl = pl ; peq = peq ; i = i ; s0 = s0
+    ; ix≡ = ix≡ ; sl≡ = sl≡ ; suf = suf ; at = at ; ext = ext ; cov = cov }
+kn-find {x} (kn1 {x = y} {ρ = tail} {i = i} {s0 = s0} {pl = plF} mF _ ixF slF _ _ _ k) (b-there b) nd =
+  let f = kn-find k b nd
+      pinD = den-pin {x = y} {pl = Found.pl f} {ρ = tail} {i = i} {s = s0}
+               (Found.ext f) (kn-sync k) mF ixF slF nd
+      pinR = runtime-pin {x = y} {ρ = tail} {n = i} {s = s0} mF ixF slF nd (kn-sync k)
+  in record
+    { m = Found.m f ; pl = Found.pl f ; peq = Found.peq f
+    ; i = Found.i f ; s0 = Found.s0 f
+    ; ix≡ = Found.ix≡ f ; sl≡ = Found.sl≡ f
+    ; suf = Found.suf f ; at = Found.at f
+    ; ext = ext-front {x = y} {i = i} {s = s0}
+              {ρ0 = envOf (Found.pl f)} {ρ = tail} (Found.ext f) pinD
+    ; cov = cov-cons {x = y} {i = i} {s = s0} {suf = Found.suf f}
+              {ρ = tail} {i0 = Found.i f} {s0 = Found.s0 f} (Found.cov f) pinR }
+kn-find kn0 () _
