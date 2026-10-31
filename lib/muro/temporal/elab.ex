@@ -9,7 +9,9 @@ defmodule Muro.Temporal.Elab do
 
   A payload is a nat literal, a bit, a nullary constructor, or the echo of a
   binder in scope. A pair, a record, a vector, a fielded constructor, and a
-  computed `put` are `payload outside the temporal fragment`.
+  computed `put` are `payload outside the temporal fragment`. A `rec` whose
+  name is also bound by another `rec` in the same process is
+  `mu of a repeated binder`.
   """
 
   @fragment "payload outside the temporal fragment"
@@ -18,7 +20,11 @@ defmodule Muro.Temporal.Elab do
   Transcribes `Bridge.elab`. `{:ok, proc}` or `{:error, message}`.
   """
   def elab(proc, book) when is_list(book) do
-    elab(proc, book, MapSet.new(), binders(proc))
+    if unique_mus?(proc) do
+      elab(proc, book, MapSet.new(), binders(proc))
+    else
+      {:error, "mu of a repeated binder"}
+    end
   end
 
   @doc """
@@ -216,6 +222,31 @@ defmodule Muro.Temporal.Elab do
   defp classify(_other, _book, _scope, _names), do: {:error, @fragment}
 
   defp binders(proc), do: Enum.reverse(binders(proc, []))
+
+  defp unique_mus?(proc) do
+    names = mu_names(proc, [])
+    names == Enum.uniq(names)
+  end
+
+  defp mu_names({:rec, name, body}, acc), do: mu_names(body, [name | acc])
+  defp mu_names({:put, _, _, body}, acc), do: mu_names(body, acc)
+  defp mu_names({:get, _, _, {:match, _, arms}}, acc), do: mu_names_arms(arms, acc)
+  defp mu_names({:get, _, _, body}, acc), do: mu_names(body, acc)
+  defp mu_names({:iget, _, p, q}, acc), do: mu_names(q, mu_names(p, acc))
+  defp mu_names({:pick0, body}, acc), do: mu_names(body, acc)
+  defp mu_names({:pick1, body}, acc), do: mu_names(body, acc)
+  defp mu_names({:cover, p, q}, acc), do: mu_names(q, mu_names(p, acc))
+  defp mu_names(:done, acc), do: acc
+  defp mu_names(:stop, acc), do: acc
+  defp mu_names({:call, _}, acc), do: acc
+  defp mu_names(_, acc), do: acc
+
+  defp mu_names_arms(arms, acc) do
+    Enum.reduce(arms, acc, fn
+      {:arm, _, _, body}, acc -> mu_names(body, acc)
+      body, acc -> mu_names(body, acc)
+    end)
+  end
 
   defp binders(:done, acc), do: acc
   defp binders(:stop, acc), do: acc

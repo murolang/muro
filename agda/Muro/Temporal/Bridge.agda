@@ -31,7 +31,7 @@ module Muro.Temporal.Bridge where
 
 open import Data.Bool.Base using (Bool; true; false; _∧_)
 open import Data.Empty using (⊥)
-open import Data.List.Base using (List; []; _∷_)
+open import Data.List.Base using (List; []; _∷_; _++_)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc)
 open import Data.Product using (_×_; _,_; proj₁; proj₂; Σ)
@@ -176,6 +176,42 @@ echoOkArms _ _ [] = true
 echoOkArms ns scope (abad ∷ as) = echoOkArms ns scope as
 echoOkArms ns scope (aok _ p ∷ as) = echoOk ns scope p ∧ echoOkArms ns scope as
 
+-- A repeated `smu` binder is refused. Re-entering the outer binder would
+-- otherwise see the inner one, and the compiled jump would not be the
+-- jump the source walk takes.
+mus : SProc → List String
+musArms : List Arm → List String
+
+mus sdone = []
+mus sstop = []
+mus sout = []
+mus (sput _ p) = mus p
+mus (sget _ _ p) = mus p
+mus (spick0 p) = mus p
+mus (spick1 p) = mus p
+mus (scover p q) = mus p ++ mus q
+mus (siget _ p q) = mus p ++ mus q
+mus (smget _ _ as) = musArms as
+mus (smu x p) = x ∷ mus p
+mus (svar _) = []
+
+musArms [] = []
+musArms (abad ∷ as) = musArms as
+musArms (aok _ p ∷ as) = mus p ++ musArms as
+
+fresh : String → List String → Bool
+fresh _ [] = true
+fresh x (y ∷ ys) with x == y
+... | true = false
+... | false = fresh x ys
+
+distinct : List String → Bool
+distinct [] = true
+distinct (x ∷ xs) = fresh x xs ∧ distinct xs
+
+muOk : SProc → Bool
+muOk P = distinct (mus P)
+
 ∧-left : ∀ {a b} → a ∧ b ≡ true → a ≡ true
 ∧-left {true} _ = refl
 ∧-left {false} ()
@@ -249,16 +285,28 @@ mutual
 ∧-intro {true} {false} _ ()
 ∧-intro {false} {_} () _
 
--- A process is accepted when it is in the fragment and every echo
--- names exactly one binder of that process.
-frag? : (P : SProc) → Dec (Σ (Frag P) (λ _ → echoOk (bnames P) [] P ≡ true))
-frag? P with fragB P ∧ echoOk (bnames P) [] P | inspect (λ P → fragB P ∧ echoOk (bnames P) [] P) P
-... | true | [ eq ] = yes′ (frag-sound P (∧-left eq) , ∧-right eq)
-... | false | [ eq ] = no′ (refuse eq)
+-- A process is accepted when it is in the fragment, every echo names
+-- exactly one binder, and every `smu` binder is used once.
+open? : SProc → Bool
+open? P = (fragB P ∧ echoOk (bnames P) [] P) ∧ muOk P
+
+frag? : (P : SProc) →
+        Dec (Σ (Frag P) (λ _ → echoOk (bnames P) [] P ≡ true × muOk P ≡ true))
+frag? P = go (fragB P) (echoOk (bnames P) [] P) (muOk P) refl refl refl
   where
-  refuse : (fragB P ∧ echoOk (bnames P) [] P) ≡ false →
-           Σ (Frag P) (λ _ → echoOk (bnames P) [] P ≡ true) → ⊥
-  refuse eq (fp , ok) = true≢false (trans (sym (∧-intro (frag-complete fp) ok)) eq)
+  Accept = Σ (Frag P) (λ _ → echoOk (bnames P) [] P ≡ true × muOk P ≡ true)
+  go : (a b c : Bool) → fragB P ≡ a → echoOk (bnames P) [] P ≡ b → muOk P ≡ c →
+       Dec Accept
+  go true true true eqf eqe eqm = yes′ (frag-sound P eqf , eqe , eqm)
+  go false _ _ eqf _ _ = no′ λ { (fp , _) → true≢false (trans (sym (frag-complete fp)) eqf) }
+  go true false _ _ eqe _ = no′ λ { (_ , eok , _) → true≢false (trans (sym eok) eqe) }
+  go true true false _ _ eqm = no′ λ { (_ , _ , mok) → true≢false (trans (sym mok) eqm) }
+
+echo-mu : muOk src-echoA ≡ true
+echo-mu = refl
+
+spin-mu : muOk src-spinR ≡ true
+spin-mu = refl
 
 ------------------------------------------------------------------------
 -- Outside the fragment: the payload forms the alphabet does not hold.
