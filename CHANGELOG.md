@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.1
+
+A received nat whose bound is a numeral `w` splits into `0` … `w`. A direct `case` writes those arms in order. A `run` that reads the nat is evaluated at each value, and the protocol arm is the constructor it returns. The process still covers every numeral. A `run` of that nat and one declared data payload is the product of the splits. The judgment also counts a bit. `Bit` is a payload, not a term, so a `run` in a file does not take it. A sender of a literal or a computed numeral is checked on the arm that value selects. A meeting, including `buffer 1`, runs the arm of the value that arrived. The arm label is the decimal spelling, so `| 0 =>` is zero and `| 00 =>` is not.
+
+An unbounded nat, a bound that is a name, a `_` wildcard, a pair, a record, a vector, and unit stay refused. A second bounded nat and a run of three or more factors stay `the run does not decide an arm`. A constructor field still carries no bound.
+
+`in-split` and `split-bound` in `agda/Muro/Session.agda` say every value in `0 … w` is in the split and every member is within the bound. `enum-size` says a run's split has the product of the factor widths, with no fuel. `val-sound` and `rows-at` say a covering process conforms on every value the bound admits. `bound-recv-decides` is that decision for bound `1`. `meet-agrees` in `agda/Muro/Meet.agda` says the meeting of a literal numeral takes that arm.
+
+### Manual
+
+- Sessions, Limits, and Grammar: a numeral bound is a finite split. `examples/bounded-split.muro`.
+
+### Package
+
+- Version 0.20.1.
+
 ## 0.20.0
 
 **Breaking:** A bare stream unfold whose head reads the seed binder and whose tail mentions the block is refused, wherever that unfold occurs in the body: under a pair, an application, a match, a λ, or another unfold. The tail of a bare stream is the next seed, so that mention is the next head. The error is `<name> productivity: unguarded recursive call`. The head reads the binder when the binder occurs in it. A match, an annotation, a unit match, a rewrite, or an empty motive does not hide that occurrence.

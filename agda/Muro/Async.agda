@@ -41,6 +41,7 @@ open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (_+_; _≤_; _<_; z≤n; s≤s)
   renaming (ℕ to ℕ; zero to nzero; suc to nsuc)
 open import Data.Nat.Properties using (≤-pred; ≤-trans; ≤-refl; m≤m+n; m≤n+m; _<?_)
+open import Data.Nat.Show using (show)
 open import Data.Product using (Σ; _×_; _,_; proj₁)
 open import Data.Sum.Base using (_⊎_; inj₁; inj₂)
 open import Data.String.Base using (String)
@@ -186,6 +187,21 @@ boundFork : (e : FEnv) (R : Proc) (qs ps : List PArm) →
 boundFork e R qs ps le =
   ≤-trans (substLe e R) (≤-trans le (m≤m+n (sizeArms qs) (sizeArms ps)))
 
+-- The same walk as `natGo`. The bound is the size of the selected arm.
+pickNat : Val nat → (ps : List PArm) → ℕ → Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
+pickNat zero [] _ = nothing
+pickNat zero (bare p ∷ ps) _ = just (p , m≤m+n (size p) (sizeArms ps))
+pickNat zero (named c [] p ∷ ps) i with c == show i
+... | true = just (p , m≤m+n (size p) (sizeArms ps))
+... | false = nothing
+pickNat zero (named _ (_ ∷ _) _ ∷ _) _ = nothing
+pickNat zero (prod _ _ ∷ _) _ = nothing
+pickNat zero (fork _ _ _ _ ∷ _) _ = nothing
+pickNat (suc _) [] _ = nothing
+pickNat (suc v) (q ∷ ps) i with pickNat v ps (nsuc i)
+... | nothing = nothing
+... | just (R , le) = just (R , ≤-trans le (m≤n+m (sizeArms ps) (armSize q)))
+
 mutual
   findIn : String → Spine → List Ctor → (ps : List PArm) →
            Maybe (Σ Proc (λ R → size R ≤ sizeArms ps))
@@ -265,7 +281,7 @@ mutual
   armPick bit b1 (_ ∷ prod _ _ ∷ []) = nothing
   armPick bit b1 (_ ∷ fork _ _ _ _ ∷ []) = nothing
   armPick (dat d _) (con c sp) ps = findIn c sp (ctorsOf d) ps
-  armPick nat _ _ = nothing
+  armPick nat v ps = pickNat v ps nzero
   armPick unit _ _ = nothing
   armPick (vec _ _) _ _ = nothing
   armPick (pair _ _) (tup _ _) (_ ∷ _ ∷ _) = nothing

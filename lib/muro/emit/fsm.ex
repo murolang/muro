@@ -586,6 +586,11 @@ defmodule Muro.Emit.Fsm do
 
   defp rec_hits?(_, _, _), do: true
 
+  # A run of more than one field is not an emitted call.
+  defp call_ok({:run, fname, _last, earlier}, ctx) when is_list(earlier) do
+    {:error, blame(ctx, "cannot call run #{fname}")}
+  end
+
   defp call_ok({:run, fname, scrut}, ctx) do
     case Map.get(ctx.bound, scrut) do
       nil ->
@@ -1394,6 +1399,7 @@ defmodule Muro.Emit.Fsm do
       scrut_name =
         case scrut do
           {:name, n} -> n
+          {:run, _, _, earlier} when is_list(earlier) -> nil
           {:run, _, n} -> n
           _ -> nil
         end
@@ -1421,6 +1427,8 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_select({:name, name}, _host, _ty, arms, st) do
       muro_fsm_by_tag(muro_fsm_tag(Map.get(st.e, name)), arms)
     end
+
+    defp muro_fsm_select({:run, _, _, earlier}, _, _, _, _) when is_list(earlier), do: :error
 
     defp muro_fsm_select({:run, fname, name}, _host, ty, arms, st) do
       ty = muro_fsm_subst(ty, st.e)

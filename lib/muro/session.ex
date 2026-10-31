@@ -22,6 +22,10 @@ defmodule Muro.Session do
   constructor field is. A `case` on that value
   gives each constructor its own continuation. A `case` on a `run` of
   the value gives each constructor the continuation of the run's result.
+  A nat at most a numeral `w` splits into `0` … `w`. A direct `case`
+  writes those numerals in order. A `run` of that nat is evaluated at
+  each of them, and a `run` of that nat and one bit or declared data
+  payload is their product.
   A declared data type has
   one arm per constructor, in declaration order. A dependent receive binds a name the
   continuation's payload may mention as a vector length. An evidence
@@ -302,6 +306,9 @@ defmodule Muro.Session do
 
       {:bit, :b1, _} ->
         take_indexed(arms, 1, "b1", [], [], book)
+
+      {:nat, {:nat, n}, _} when is_integer(n) and n >= 0 ->
+        take_indexed(arms, n, Integer.to_string(n), [], [], book)
 
       {{:dat, dname, _} = dty, {:con, c, fields}, _} ->
         case Enum.find_index(ctor_names(book, dname), &(&1 == cname(c))) do
@@ -1000,6 +1007,22 @@ defmodule Muro.Session do
     end
   end
 
+  # A lone put does not select an arm of a split. The product is
+  # decided on the evidence send that carried the bounded nat.
+  defp step(
+         {:put, _, _, _} = proc,
+         {:dsend, _, _, {:case, {:run, _, _, _}, _}} = proto,
+         _ctx,
+         _idx,
+         _penv,
+         _senv,
+         _seen,
+         _fuel,
+         _book
+       ) do
+    refuse(proc, proto)
+  end
+
   # `dput-arm`. The value selects one protocol arm. A variable continues
   # only when every arm is that same protocol.
   defp step(
@@ -1145,27 +1168,49 @@ defmodule Muro.Session do
         refuse(proc, proto, "a case is on the name just bound")
 
       true ->
-        case zip_arms(scrut, expected, arms, ps, book) do
-          {:ok, pairs} ->
-            case arms_paired(
-                   pairs,
-                   bind_ctx(ctx, name, expected),
-                   rename_idx(idx, y, name),
-                   penv,
-                   senv,
-                   seen,
-                   fuel,
-                   book,
-                   step_down(here_span(), 0),
-                   0,
-                   expected
-                 ) do
-              {:shape} -> refuse(proc, proto)
-              other -> keep(other)
-            end
+        case scrut do
+          {:run, fname, _, earlier} when is_list(earlier) ->
+            prod_recv(
+              fname,
+              earlier,
+              expected,
+              ps,
+              arms,
+              name,
+              proc,
+              proto,
+              ctx,
+              idx,
+              penv,
+              senv,
+              seen,
+              fuel,
+              book
+            )
 
-          {:error, msg} ->
-            refuse(proc, proto, msg)
+          _ ->
+            case zip_arms(scrut, expected, arms, ps, book) do
+              {:ok, pairs} ->
+                case arms_paired(
+                       pairs,
+                       bind_ctx(ctx, name, expected),
+                       rename_idx(idx, y, name),
+                       penv,
+                       senv,
+                       seen,
+                       fuel,
+                       book,
+                       step_down(here_span(), 0),
+                       0,
+                       expected
+                     ) do
+                  {:shape} -> refuse(proc, proto)
+                  other -> keep(other)
+                end
+
+              {:error, msg} ->
+                refuse(proc, proto, msg)
+            end
         end
     end
   end
@@ -1202,6 +1247,110 @@ defmodule Muro.Session do
       )
     else
       refuse(proc, proto)
+    end
+  end
+
+  # `send-prod` and `send-pbit`. The bounded nat and the next payload
+  # together select the arm. `stop` still abandons before that payload.
+  defp step(
+         {:put, nty, val, p} = proc,
+         {:esend, _y, {:lit, w},
+          {:dsend, z, sty, {:case, {:run, fname, last, earlier}, arms}} = inner} =
+           proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book
+       )
+       when is_integer(w) and w >= 0 and is_list(earlier) do
+    case owed_nat(nty, val, {:lit, w}, proc, proto, ctx, book) do
+      {:ok, _got} ->
+        case {p, last, earlier} do
+          {{:put, ty, u, q}, ^z, [_nat]} ->
+            prod_send(
+              val,
+              w,
+              fname,
+              ty,
+              u,
+              q,
+              sty,
+              arms,
+              proc,
+              proto,
+              ctx,
+              idx,
+              penv,
+              senv,
+              seen,
+              fuel,
+              book
+            )
+
+          _ ->
+            keep(
+              descend(
+                p,
+                inner,
+                ctx,
+                idx,
+                penv,
+                senv,
+                seen,
+                fuel - 1,
+                book,
+                step_down(here_span(), 0)
+              )
+            )
+        end
+
+      other ->
+        other
+    end
+  end
+
+  # `send-val` and `send-run`. The numeral, or the run of it, selects
+  # one arm. The continuation is checked against that arm.
+  defp step(
+         {:put, nty, val, p} = proc,
+         {:esend, y, {:lit, w}, {:case, scrut, arms}} = proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book
+       )
+       when is_integer(w) and w >= 0 do
+    case owed_nat(nty, val, {:lit, w}, proc, proto, ctx, book) do
+      {:ok, got} ->
+        case pick_nat(scrut, y, val, got, w, arms, ctx, book) do
+          {:ok, chosen} ->
+            keep(
+              descend(
+                p,
+                chosen,
+                ctx,
+                idx,
+                penv,
+                senv,
+                seen,
+                fuel - 1,
+                book,
+                step_down(here_span(), 0)
+              )
+            )
+
+          {:error, msg} ->
+            refuse(proc, proto, msg)
+        end
+
+      other ->
+        other
     end
   end
 
@@ -1253,6 +1402,48 @@ defmodule Muro.Session do
       {:error, msg} ->
         refuse(proc, proto, rewrite_run(msg))
     end
+  end
+
+  # `eget-val` and `eget-run`. The process arms are the numerals
+  # `0` … `w`. Each one conforms to the protocol that numeral selects.
+  defp step(
+         {:get, :nat, name, {:match, mscrut, ps}} = proc,
+         {:erecv, y, {:lit, w}, {:case, scrut, arms}} = proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book
+       )
+       when is_integer(w) and w >= 0 do
+    if mscrut != name do
+      {:error, step_at(step_down(here_span(), 0)), "match does not cover the received value"}
+    else
+      nat_recv(scrut, y, w, name, ps, arms, proc, proto, ctx, idx, penv, senv, seen, fuel, book)
+    end
+  end
+
+  # A numeral bound is in scope for a later split. The name is still
+  # not a vector length: the window is stored beside the context.
+  defp step(
+         {:get, :nat, name, p},
+         {:erecv, y, {:lit, w}, s},
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book
+       )
+       when is_integer(w) and w >= 0 do
+    ctx1 = Map.put(ctx, {:win, y}, w)
+
+    keep(
+      cont(p, s, name, :nat, ctx1, idx, penv, senv, seen, fuel, book, step_down(here_span(), 0))
+    )
   end
 
   # `eget-ok`. The receiver binds a nat and owes nothing.
@@ -1765,6 +1956,20 @@ defmodule Muro.Session do
     with_ty(ty_ok(ty, ctx, book), proto_at(s, guard(Map.put(ctx, name, ty)), book))
   end
 
+  # A numeral bound splits. The arms are checked in this scope: the
+  # nat is not a length. A bound that is a name does not split.
+  defp proto_at({:esend, name, {:lit, w}, s}, ctx, book) when is_integer(w) and w >= 0,
+    do: nat_proto(name, w, s, ctx, book)
+
+  defp proto_at({:erecv, name, {:lit, w}, s}, ctx, book) when is_integer(w) and w >= 0,
+    do: nat_proto(name, w, s, ctx, book)
+
+  defp proto_at({:esend, _, _, {:case, _, _}}, _ctx, _book),
+    do: {:error, "a case is on a bit or a declared data type"}
+
+  defp proto_at({:erecv, _, _, {:case, _, _}}, _ctx, _book),
+    do: {:error, "a case is on a bit or a declared data type"}
+
   # The name of an evidence payload is in scope in its bound only.
   defp proto_at({:esend, _name, e, s}, ctx, book),
     do: with_ty(bound_ok(e, ctx), proto_at(s, guard(ctx), book))
@@ -1845,10 +2050,16 @@ defmodule Muro.Session do
       {:run, fname, ^name} ->
         run_case(fname, ty, arms, ctx, ctx1, book)
 
+      {:run, _, ^name, _} ->
+        {:error, "the run does not decide an arm"}
+
       {:name, _} ->
         {:error, "a case is on the name just bound"}
 
       {:run, _, _} ->
+        {:error, "a case is on the name just bound"}
+
+      {:run, _, _, _} ->
         {:error, "a case is on the name just bound"}
 
       _ ->
@@ -1952,6 +2163,731 @@ defmodule Muro.Session do
   end
 
   defp one_arg(_), do: :error
+
+  # A numeral bound. Direct arms are `0` … `w`. A one-argument run is
+  # evaluated at each of those numerals. A run of this nat and the next
+  # declared data payload is their product. Three or more factors are
+  # not a split. The nat is not entered as a length.
+  defp nat_proto(name, w, {:case, scrut, arms}, ctx, book) do
+    case scrut do
+      {:name, ^name} ->
+        if nat_arms(w) == Enum.map(arms, fn {c, _} -> c end) do
+          arms_ok(arms, guard(ctx), book)
+        else
+          {:error, "case arms do not match the constructors"}
+        end
+
+      {:run, fname, ^name} ->
+        nat_run_proto(fname, w, arms, ctx, book)
+
+      {:run, _, ^name, _} ->
+        {:error, "the run does not decide an arm"}
+
+      {:name, _} ->
+        {:error, "a case is on the name just bound"}
+
+      {:run, _, _} ->
+        {:error, "a case is on the name just bound"}
+
+      {:run, _, _, _} ->
+        {:error, "a case is on the name just bound"}
+
+      _ ->
+        {:error, "a case follows the value just exchanged"}
+    end
+  end
+
+  defp nat_proto(name, w, {tag, b, ty, {:case, scrut, arms}}, ctx, book)
+       when tag in [:dsend, :drecv] do
+    cond do
+      match?({:run, _, ^b, [^name]}, scrut) ->
+        {:run, fname, _, _} = scrut
+        product_proto(ty, fname, w, arms, ctx, book)
+
+      match?({:run, _, ^b, _}, scrut) ->
+        {:error, "the run does not decide an arm"}
+
+      true ->
+        ctx1 = guard(Map.put(ctx, {:win, name}, w))
+        proto_at({tag, b, ty, {:case, scrut, arms}}, ctx1, book)
+    end
+  end
+
+  defp nat_proto(name, w, s, ctx, book) do
+    proto_at(s, guard(Map.put(ctx, {:win, name}, w)), book)
+  end
+
+  defp nat_run_proto(fname, w, arms, ctx, book) do
+    prepared = run_book(ctx, book)
+
+    case run_view(fname, :nat, prepared, book) do
+      {:ok, labels} ->
+        cond do
+          labels != Enum.map(arms, fn {c, _} -> c end) ->
+            {:error, "case arms do not match the constructors"}
+
+          true ->
+            case nat_rows(fname, arms, w, prepared) do
+              {:ok, rows} when length(rows) == w + 1 ->
+                arms_ok(arms, guard(ctx), book)
+
+              {:error, msg} ->
+                {:error, rewrite_run(msg)}
+
+              _ ->
+                {:error, "the run does not decide an arm"}
+            end
+        end
+
+      {:error, msg} ->
+        {:error, msg}
+    end
+  end
+
+  defp product_proto(ty, fname, w, arms, ctx, book) do
+    prepared = run_book(ctx, book)
+
+    # `payCtors` is a bit or a declared data type. The product tag carries
+    # those constructor names either way.
+    case pay_ctors(ty, book) do
+      cs when is_list(cs) and cs != [] ->
+        case ty_ok(ty, ctx, book) do
+          {:error, msg} ->
+            {:error, msg}
+
+          :ok ->
+            case two_ready(fname, ty, prepared, book) do
+              {:error, msg} ->
+                {:error, msg}
+
+              {:ok, labels} ->
+                cond do
+                  labels != Enum.map(arms, fn {c, _} -> c end) ->
+                    {:error, "case arms do not match the constructors"}
+
+                  true ->
+                    case prod_grid(w, ty, fname, arms, prepared) do
+                      {:ok, _} ->
+                        arms_ok(arms, guard(ctx), book)
+
+                      {:error, msg} ->
+                        {:error, rewrite_run(msg)}
+
+                      :no ->
+                        {:error, "the run does not decide an arm"}
+                    end
+                end
+            end
+        end
+
+      _ ->
+        {:error, "a case is on a bit or a declared data type"}
+    end
+  end
+
+  defp run_book(ctx, book) do
+    case Map.get(ctx, {:__book__, :book}) do
+      source when is_list(source) -> prepare(source)
+      _ -> book
+    end
+  end
+
+  defp two_ready(fname, payload, prepared, data_book) do
+    defs = run_defs(prepared)
+
+    case Enum.find_index(defs, &(&1.name == fname)) do
+      nil ->
+        {:error, "the run does not decide an arm"}
+
+      i ->
+        defn = Enum.at(defs, i)
+        prefix = Enum.take(defs, i)
+
+        case two_arg(defn) do
+          {:ok, d1, d2, cod, body} ->
+            cond do
+              not type_matches?(:nat, d1, data_book) ->
+                {:error, "the run does not decide an arm"}
+
+              not type_matches?(payload, d2, data_book) ->
+                {:error, "the run does not decide an arm"}
+
+              calls_out?(body, prefix, defs) ->
+                {:error, run_cycle(fname, body)}
+
+              head = outside_fragment(body) ->
+                {:error, "outside the computed fragment: #{head}"}
+
+              true ->
+                case result_ty(cod, data_book) do
+                  {:ok, rty} ->
+                    case arm_labels(rty, data_book) do
+                      {:ok, labels} -> {:ok, labels}
+                      :error -> {:error, "a case is on a bit or a declared data type"}
+                    end
+
+                  :error ->
+                    {:error, "a case is on a bit or a declared data type"}
+                end
+            end
+
+          :error ->
+            {:error, "the run does not decide an arm"}
+        end
+    end
+  end
+
+  defp two_arg(%{
+         type: {:pi, _, d1, _, {:pi, _, d2, _, cod}},
+         body: {:lam, _, _, _, {:lam, _, _, _, body}}
+       }) do
+    if match?({:pi, _, _, _, _}, cod), do: :error, else: {:ok, d1, d2, cod, body}
+  end
+
+  defp two_arg(_), do: :error
+
+  defp nat_arms(w) when is_integer(w) and w >= 0, do: Enum.map(0..w, &Integer.to_string/1)
+
+  defp nat_rows(fname, arms, w, book) do
+    Enum.reduce_while(0..w, {:ok, []}, fn i, {:ok, acc} ->
+      case eval_split(fname, [{:nat, i}], arms, book) do
+        {:ok, proto} -> {:cont, {:ok, acc ++ [{Integer.to_string(i), proto}]}}
+        other -> {:halt, other}
+      end
+    end)
+  end
+
+  defp prod_grid(w, ty, fname, arms, book) do
+    case pay_ctors(ty, book) do
+      cs when is_list(cs) and cs != [] ->
+        Enum.reduce_while(cs, {:ok, []}, fn c, {:ok, cols} ->
+          case col_from(w, ty, c, fname, arms, book) do
+            {:ok, col} -> {:cont, {:ok, cols ++ [col]}}
+            other -> {:halt, other}
+          end
+        end)
+
+      _ ->
+        :no
+    end
+  end
+
+  defp col_from(w, ty, c, fname, arms, book) do
+    second = probe_of(ty, c)
+
+    Enum.reduce_while(0..w, {:ok, []}, fn i, {:ok, rows} ->
+      case eval_split(fname, [{:nat, i}, second], arms, book) do
+        {:ok, proto} -> {:cont, {:ok, rows ++ [{Integer.to_string(i), proto}]}}
+        other -> {:halt, other}
+      end
+    end)
+  end
+
+  defp eval_split(fname, args, arms, book) do
+    case apply_run(fname, args, book) do
+      {:ok, :miss} ->
+        :no
+
+      {:ok, result} ->
+        case ctor_tag(result) do
+          nil ->
+            :no
+
+          tag ->
+            case fetch_arm(tag, arms, "the run does not decide an arm") do
+              {:ok, proto} -> {:ok, proto}
+              {:error, _} -> :no
+            end
+        end
+
+      {:error, msg} ->
+        {:error, msg}
+    end
+  end
+
+  defp same_proto([]), do: :no
+
+  defp same_proto([{_, proto} | rest]) do
+    if Enum.all?(rest, fn {_, other} -> other == proto end), do: {:ok, proto}, else: :no
+  end
+
+  defp owed_nat(nty, val, bound, proc, proto, ctx, book) do
+    case put_ok?(nty, val, :nat, ctx, book) do
+      :yes ->
+        case reduce(val, ctx, book) do
+          {:ok, got} ->
+            if owed?(got, bound, ctx) do
+              {:ok, got}
+            else
+              refuse(proc, proto, bound_reason(val, got, bound, book))
+            end
+
+          {:error, msg} ->
+            refuse(proc, proto, rewrite_run(msg))
+        end
+
+      :no ->
+        refuse(proc, proto, explain_no(nty, val, :nat, ctx, book))
+
+      {:error, msg} ->
+        refuse(proc, proto, rewrite_run(msg))
+    end
+  end
+
+  defp pick_nat({:name, y}, y, val, got, w, arms, ctx, book),
+    do: pick_shown(val, got, w, arms, ctx, book)
+
+  defp pick_nat({:run, fname, y}, y, val, got, w, arms, _ctx, book),
+    do: pick_run_arm(val, got, w, fname, arms, book)
+
+  defp pick_nat({:run, _, y, _}, y, _val, _got, _w, _arms, _ctx, _book),
+    do: {:error, "the run does not decide an arm"}
+
+  defp pick_nat({:name, _}, _y, _val, _got, _w, _arms, _ctx, _book),
+    do: {:error, "a case is on the name just bound"}
+
+  defp pick_nat({:run, _, _}, _y, _val, _got, _w, _arms, _ctx, _book),
+    do: {:error, "a case is on the name just bound"}
+
+  defp pick_nat({:run, _, _, _}, _y, _val, _got, _w, _arms, _ctx, _book),
+    do: {:error, "a case is on the name just bound"}
+
+  defp pick_nat(_, _, _, _, _, _, _, _),
+    do: {:error, "a case follows the value just exchanged"}
+
+  defp pick_shown(val, got, w, arms, ctx, book) do
+    cond do
+      nat_arms(w) != Enum.map(arms, fn {c, _} -> c end) ->
+        {:error, "the value #{show_val(val)} does not select an arm"}
+
+      match?({:var, _}, got) ->
+        agree_arms(val, arms)
+
+      match?({:nat, n} when is_integer(n) and n <= w, got) ->
+        {:nat, n} = got
+        fetch_arm(Integer.to_string(n), arms, "the value #{n} does not select an arm")
+
+      match?({:nat, n} when is_integer(n), got) ->
+        {:nat, n} = got
+        {:error, "the value #{n} does not select an arm"}
+
+      true ->
+        case known_payload(val, ctx, book) do
+          :unknown ->
+            agree_arms(val, arms)
+
+          {:ok, {:nat, n}} when is_integer(n) and n <= w ->
+            fetch_arm(Integer.to_string(n), arms, "the value #{n} does not select an arm")
+
+          {:ok, other} ->
+            {:error, "the value #{show_val(other)} does not select an arm"}
+
+          {:error, msg} ->
+            {:error, rewrite_run(msg)}
+        end
+    end
+  end
+
+  defp pick_run_arm(val, got, w, fname, arms, book) do
+    case run_view(fname, :nat, book, book) do
+      {:error, msg} ->
+        {:error, msg}
+
+      {:ok, labels} ->
+        cond do
+          labels != Enum.map(arms, fn {c, _} -> c end) ->
+            {:error, "case arms do not match the constructors"}
+
+          match?({:var, _}, got) ->
+            agree_arms(val, arms)
+
+          match?({:nat, n} when is_integer(n) and n <= w, got) ->
+            {:nat, n} = got
+
+            case eval_split(fname, [{:nat, n}], arms, book) do
+              {:ok, proto} -> {:ok, proto}
+              {:error, msg} -> {:error, rewrite_run(msg)}
+              :no -> {:error, "the run does not decide an arm"}
+            end
+
+          true ->
+            {:error, "the value #{show_val(got)} does not select an arm"}
+        end
+    end
+  end
+
+  defp prod_send(
+         val,
+         w,
+         fname,
+         ty,
+         u,
+         q,
+         sty,
+         arms,
+         proc,
+         proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book
+       ) do
+    expected = apply_ty(idx, sty)
+
+    case put_ok?(ty, u, expected, ctx, book) do
+      :yes ->
+        case pick_prod(val, u, w, fname, expected, arms, ctx, book) do
+          {:ok, chosen} ->
+            keep(
+              descend(
+                q,
+                chosen,
+                ctx,
+                idx,
+                penv,
+                senv,
+                seen,
+                fuel - 1,
+                book,
+                step_down(here_span(), 0)
+              )
+            )
+
+          {:error, msg} ->
+            refuse(proc, proto, msg)
+
+          :no ->
+            refuse(proc, proto, "the run does not decide an arm")
+        end
+
+      :no ->
+        refuse(proc, proto, explain_no(ty, u, expected, ctx, book))
+
+      {:error, msg} ->
+        refuse(proc, proto, rewrite_run(msg))
+    end
+  end
+
+  defp pick_prod(nat_val, pay_val, w, fname, ty, arms, ctx, book) do
+    case two_ready(fname, ty, book, book) do
+      {:error, msg} ->
+        {:error, msg}
+
+      {:ok, labels} ->
+        cond do
+          labels != Enum.map(arms, fn {c, _} -> c end) ->
+            {:error, "case arms do not match the constructors"}
+
+          true ->
+            case {known_payload(nat_val, ctx, book), known_payload(pay_val, ctx, book)} do
+              {:unknown, _} ->
+                agree_arms(nat_val, arms)
+
+              {_, :unknown} ->
+                agree_arms(pay_val, arms)
+
+              {{:ok, {:nat, n}}, {:ok, raw}} when is_integer(n) and n <= w ->
+                case raw_pay(ty, raw) do
+                  {:ok, arg} -> eval_split(fname, [{:nat, n}, arg], arms, book)
+                  :no -> :no
+                end
+
+              {{:ok, {:nat, n}}, _} when is_integer(n) ->
+                {:error, "the value #{n} does not select an arm"}
+
+              _ ->
+                {:error, "the value #{show_val(pay_val)} does not select an arm"}
+            end
+        end
+    end
+  end
+
+  defp raw_pay(:bit, :b0), do: {:ok, :b0}
+  defp raw_pay(:bit, :b1), do: {:ok, :b1}
+  defp raw_pay({:dat, _, _}, {:con, _, _} = val), do: {:ok, val}
+  defp raw_pay(_, _), do: :no
+
+  defp nat_recv(scrut, y, w, name, ps, arms, proc, proto, ctx, idx, penv, senv, seen, fuel, book) do
+    ctx1 = bind_ctx(ctx, name, :nat)
+    span = here_span()
+
+    case scrut do
+      {:name, ^y} ->
+        if nat_arms(w) == Enum.map(arms, fn {c, _} -> c end) do
+          cov_nat(ps, arms, ctx1, idx, penv, senv, seen, fuel, book, span)
+        else
+          refuse(proc, proto, "case arms do not match the constructors")
+        end
+
+      {:run, fname, ^y} ->
+        case run_view(fname, :nat, book, book) do
+          {:ok, labels} ->
+            cond do
+              labels != Enum.map(arms, fn {c, _} -> c end) ->
+                refuse(proc, proto, "case arms do not match the constructors")
+
+              true ->
+                case nat_rows(fname, arms, w, book) do
+                  {:ok, rows} ->
+                    cov_nat(ps, rows, ctx1, idx, penv, senv, seen, fuel, book, span)
+
+                  {:error, msg} ->
+                    refuse(proc, proto, rewrite_run(msg))
+
+                  :no ->
+                    refuse(proc, proto, "the run does not decide an arm")
+                end
+            end
+
+          {:error, msg} ->
+            refuse(proc, proto, msg)
+        end
+
+      {:run, _, ^y, _} ->
+        refuse(proc, proto, "the run does not decide an arm")
+
+      {:name, _} ->
+        refuse(proc, proto, "a case is on the name just bound")
+
+      {:run, _, _} ->
+        refuse(proc, proto, "a case is on the name just bound")
+
+      {:run, _, _, _} ->
+        refuse(proc, proto, "a case is on the name just bound")
+
+      _ ->
+        refuse(proc, proto, "a case follows the value just exchanged")
+    end
+  end
+
+  defp prod_recv(
+         fname,
+         earlier,
+         ty,
+         ps,
+         arms,
+         name,
+         proc,
+         proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book
+       ) do
+    case earlier do
+      [nat] ->
+        case Map.get(ctx, {:win, nat}) do
+          w when is_integer(w) and w >= 0 ->
+            prod_cover(
+              fname,
+              nat,
+              w,
+              ty,
+              ps,
+              arms,
+              name,
+              proc,
+              proto,
+              ctx,
+              idx,
+              penv,
+              senv,
+              seen,
+              fuel,
+              book
+            )
+
+          _ ->
+            refuse(proc, proto, "the run does not decide an arm")
+        end
+
+      _ ->
+        refuse(proc, proto, "the run does not decide an arm")
+    end
+  end
+
+  defp prod_cover(
+         fname,
+         nat,
+         w,
+         ty,
+         ps,
+         arms,
+         name,
+         proc,
+         proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book
+       ) do
+    case two_ready(fname, ty, book, book) do
+      {:error, msg} ->
+        refuse(proc, proto, msg)
+
+      {:ok, labels} ->
+        cond do
+          labels != Enum.map(arms, fn {c, _} -> c end) ->
+            refuse(proc, proto, "case arms do not match the constructors")
+
+          true ->
+            case prod_grid(w, ty, fname, arms, book) do
+              {:ok, grid} ->
+                cover_columns(
+                  ps,
+                  pay_ctors(ty, book),
+                  grid,
+                  nat,
+                  bind_ctx(ctx, name, ty),
+                  idx,
+                  penv,
+                  senv,
+                  seen,
+                  fuel,
+                  book,
+                  here_span(),
+                  ty
+                )
+
+              {:error, msg} ->
+                refuse(proc, proto, rewrite_run(msg))
+
+              :no ->
+                refuse(proc, proto, "the run does not decide an arm")
+            end
+        end
+    end
+  end
+
+  defp cover_columns([], [], [], _nat, _ctx, _idx, _penv, _senv, _seen, _fuel, _book, _span, _ty),
+    do: :ok
+
+  defp cover_columns(
+         [p | ps],
+         [c | cs],
+         [rows | grid],
+         nat,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book,
+         span,
+         ty
+       ) do
+    case open_named(p, c, ty, ctx, book) do
+      {:ok, body, ctx1} ->
+        case cell_at(body, rows, nat, ctx1, idx, penv, senv, seen, fuel, book, span) do
+          :ok ->
+            cover_columns(ps, cs, grid, nat, ctx, idx, penv, senv, seen, fuel, book, span, ty)
+
+          other ->
+            other
+        end
+
+      {:error, msg} ->
+        {:error, step_at(span), msg}
+    end
+  end
+
+  defp cover_columns(_, _, _, _, _, _, _, _, _, _, _, span, _),
+    do: {:error, step_at(span), "match does not cover the received value"}
+
+  defp cell_at(
+         {:match, scrut, arms} = proc,
+         rows,
+         nat,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book,
+         span
+       ) do
+    if scrut == nat do
+      case cov_nat(arms, rows, ctx, idx, penv, senv, seen, fuel, book, span) do
+        :ok ->
+          :ok
+
+        err ->
+          case same_proto(rows) do
+            {:ok, proto} ->
+              descend(proc, proto, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(span, 0))
+
+            :no ->
+              err
+          end
+      end
+    else
+      cell_one(proc, rows, ctx, idx, penv, senv, seen, fuel, book, span)
+    end
+  end
+
+  defp cell_at(proc, rows, _nat, ctx, idx, penv, senv, seen, fuel, book, span) do
+    cell_one(proc, rows, ctx, idx, penv, senv, seen, fuel, book, span)
+  end
+
+  defp cell_one(proc, rows, ctx, idx, penv, senv, seen, fuel, book, span) do
+    case same_proto(rows) do
+      {:ok, proto} ->
+        descend(proc, proto, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(span, 0))
+
+      :no ->
+        {:error, step_at(span), "match does not cover the received value"}
+    end
+  end
+
+  defp cov_nat([], [], _ctx, _idx, _penv, _senv, _seen, _fuel, _book, _span), do: :ok
+
+  defp cov_nat([p | ps], [{lab, proto} | rows], ctx, idx, penv, senv, seen, fuel, book, span) do
+    case nat_body(p, lab) do
+      {:ok, body} ->
+        case descend(body, proto, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(span, 0)) do
+          :ok -> cov_nat(ps, rows, ctx, idx, penv, senv, seen, fuel, book, span)
+          other -> other
+        end
+
+      :error ->
+        {:error, step_at(span), "match does not cover the received value"}
+    end
+  end
+
+  defp cov_nat(_, _, _, _, _, _, _, _, _, span),
+    do: {:error, step_at(span), "match does not cover the received value"}
+
+  defp nat_body({:arm, lab, [], body}, lab), do: {:ok, body}
+  defp nat_body({:arm, _, _, _}, _), do: :error
+  defp nat_body({:prod, _, _}, _), do: :error
+  defp nat_body(body, _lab), do: {:ok, body}
+
+  defp run_select(fname, args, arms, book) do
+    case apply_run(fname, args, book) do
+      {:ok, :miss} ->
+        {:error, "the run does not decide an arm"}
+
+      {:ok, result} ->
+        case ctor_tag(result) do
+          nil -> {:error, "the run does not decide an arm"}
+          tag -> fetch_arm(tag, arms, "the run does not decide an arm")
+        end
+
+      {:error, msg} ->
+        {:error, rewrite_run(msg)}
+    end
+  end
 
   # Parameter types, outermost first, then the codomain.
   defp pi_chain({:pi, _, domain, _, cod}, acc), do: pi_chain(cod, acc ++ [domain])
@@ -2076,10 +3012,17 @@ defmodule Muro.Session do
 
   defp scrut_binder({:name, n}), do: n
   defp scrut_binder({:run, _, n}), do: n
+  defp scrut_binder({:run, _, n, _}), do: n
   defp scrut_binder(_), do: nil
 
   defp show_scrut({:name, n}), do: "#{n}"
   defp show_scrut({:run, f, n}), do: "(#{f} #{n})"
+
+  defp show_scrut({:run, f, n, earlier}) when is_list(earlier) do
+    args = Enum.map_join(earlier ++ [n], " ", &to_string/1)
+    "(#{f} #{args})"
+  end
+
   defp show_scrut(_), do: "?"
 
   @doc false
@@ -2128,10 +3071,32 @@ defmodule Muro.Session do
     {:error, "the value #{show_val(val)} does not select an arm"}
   end
 
+  defp choose_arm({:name, _}, {:nat, n}, arms, _book) when is_integer(n) and n >= 0 do
+    fetch_arm(Integer.to_string(n), arms, "the value #{n} does not select an arm")
+  end
+
   defp choose_arm({:name, _}, val, arms, _book) do
     case ctor_tag(val) do
       nil -> {:error, "the value #{show_val(val)} does not select an arm"}
       tag -> fetch_arm(tag, arms, "the value #{tag} does not select an arm")
+    end
+  end
+
+  defp choose_arm({:run, fname, _last, earlier}, val, arms, book) when is_list(earlier) do
+    idx = Process.get({__MODULE__, :meet_idx}, %{})
+
+    prev =
+      Enum.map(earlier, fn name ->
+        case Map.get(idx, name) do
+          {:lit, n} when is_integer(n) and n >= 0 -> {:nat, n}
+          _ -> nil
+        end
+      end)
+
+    if Enum.any?(prev, &is_nil/1) do
+      {:error, "the run does not decide an arm"}
+    else
+      run_select(fname, prev ++ [val], arms, book)
     end
   end
 
@@ -4715,6 +5680,11 @@ defmodule Muro.Session do
   def step_proto({:sess, _, _} = p), do: show_proto(p)
   def step_proto({:case, {:name, n}, _}), do: "case #{n}"
   def step_proto({:case, {:run, f, n}, _}), do: "case (#{f} #{n})"
+
+  def step_proto({:case, {:run, f, n, earlier}, _}) when is_list(earlier) do
+    "case #{show_scrut({:run, f, n, earlier})}"
+  end
+
   def step_proto({:case, _, _}), do: "case"
   def step_proto(other), do: inspect(other)
 
