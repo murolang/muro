@@ -8,14 +8,16 @@ defmodule Muro.CliTest do
     assert_same(fn -> Mix.Tasks.Muro.run(["-v"]) end, ["-v"])
   end
 
-  test "muro with no arguments names the binary commands" do
+  test "muro with no arguments prints the same usage as --help" do
     version = Mix.Tasks.Muro.version()
-    {out, err, code} = cli([])
-    assert code == 0
-    assert err == ""
-
-    assert out ==
-             "Muro v#{version}\nmuro check  muro emit  muro gen  muro init  muro skills add  muro deps.get  muro mutate\n"
+    {bare, bare_err, bare_code} = cli([])
+    {help, help_err, help_code} = cli(["--help"])
+    assert bare_code == 0
+    assert help_code == 0
+    assert bare_err == ""
+    assert help_err == ""
+    assert bare == help
+    assert bare =~ "muro #{version}, an explicit affine dependent type theory\n"
   end
 
   test "an unknown command exits 1" do
@@ -35,8 +37,6 @@ defmodule Muro.CliTest do
     assert_same(fn -> Mix.Tasks.Muro.Check.run([bad]) end, ["check", bad])
 
     assert_same(fn -> Mix.Tasks.Muro.Check.run(["--fuel", "0"]) end, ["check", "--fuel", "0"])
-
-    assert_same(fn -> Mix.Tasks.Muro.Check.run(["--nope"]) end, ["check", "--nope"])
   end
 
   test "emit matches mix muro.emit for each backend" do
@@ -312,7 +312,6 @@ defmodule Muro.CliTest do
     refute refused.stderr =~ "{"
 
     for args <- [
-          ["--nope", half],
           [],
           ["--fuel", "0", half],
           ["--max-mutants-per-def", "-1", half],

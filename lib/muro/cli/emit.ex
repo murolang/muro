@@ -1,12 +1,95 @@
 defmodule Muro.CLI.Emit do
   @moduledoc false
 
-  @switches [backend: :string, node: :string, imports: :boolean]
+  @doc false
+  def switches, do: Enum.map(options(), &{&1.name, &1.type})
+
+  @doc false
+  def options do
+    [
+      %{
+        name: :backend,
+        type: :string,
+        value: "NAME",
+        default: "elixir",
+        doc:
+          "Which emitter to run. Spec and evidence are omitted. The executable writes no NIF: c is the header and the source only.",
+        lines: [
+          "elixir  one module on standard output",
+          "c       <stem>.h and <stem>.c beside the book",
+          "rust    <stem>.rs beside the book",
+          "asm     <stem>.s, Thumb for Cortex-M0",
+          "otp     <stem>_otp.ex, a GenServer per process",
+          "fsm     one state-machine module on standard output",
+          "exunit  one ExUnit module for the closed equations"
+        ]
+      },
+      %{
+        name: :node,
+        type: :string,
+        value: "NAME",
+        default: "none",
+        doc:
+          "With the elixir backend, write <stem>_node.ex beside the book: one call for each cross, registered on that node. A stay emits no call. Other backends refuse the flag."
+      },
+      %{
+        name: :imports,
+        type: :boolean,
+        default: "false",
+        doc:
+          "With --backend exunit, also collect the closed equations of the files this book imports directly. It is an error with any other backend. Absent, the suite is this file only."
+      }
+    ]
+  end
+
+  @doc false
+  def help do
+    Muro.CLI.Text.page([
+      Muro.CLI.Text.prose("""
+      muro emit reads one .muro file, checks it, and emits run definitions. Spec and evidence are omitted. elixir, the default, prints one module on standard output and writes no file. c, rust, and asm write a file beside the book and print that path. The executable does not load a Mix project, so c writes the .h and the .c only and does not build a NIF. otp writes a GenServer for each conforming process. fsm prints a state machine and leaves the transport with the host. exunit prints one ExUnit module for the book's closed equations. Nothing here is a proof that the host translation is the book. The proof stops at the run image.
+      """),
+      Muro.CLI.Text.section(
+        "USAGE",
+        Muro.CLI.Text.pre(["muro emit path.muro [--backend NAME] [--node NAME] [--imports]"])
+      ),
+      Muro.CLI.Text.section(
+        "ARGUMENTS",
+        Muro.CLI.Text.arguments([
+          {"path.muro", "Required. The book to emit."}
+        ])
+      ),
+      Muro.CLI.Text.section("OPTIONS", Muro.CLI.Text.options(options())),
+      Muro.CLI.Text.section(
+        "EXAMPLES",
+        Muro.CLI.Text.examples(
+          [
+            {"muro emit book.muro", "Print the Elixir module."},
+            {"muro emit book.muro --backend rust", "Write book.rs beside the book."},
+            {"muro emit book.muro --backend c", "Write book.h and book.c. No NIF."},
+            {"muro emit book.muro --backend exunit", "Print an ExUnit module."}
+          ],
+          "\n\n"
+        )
+      ),
+      Muro.CLI.Text.section(
+        "EXIT CODES",
+        Muro.CLI.Text.exits([
+          {"0", "The module or the files were emitted."},
+          {"1",
+           "The book does not check, the backend is unknown, the path is missing or not exactly one, or a flag does not apply."}
+        ])
+      ),
+      Muro.CLI.Text.section(
+        "LEARN MORE",
+        Muro.CLI.Text.pre(["https://muro-lang.dev/docs/emit"])
+      )
+    ])
+  end
 
   @doc false
   def run(args, opts \\ []) do
     nif = Keyword.get(opts, :nif, :auto)
-    {parsed, paths, invalid} = OptionParser.parse(args, strict: @switches)
+    {parsed, paths, invalid} = OptionParser.parse(args, strict: switches())
 
     cond do
       invalid != [] ->

@@ -28,6 +28,13 @@ The Linux binaries are built against musl, so one file runs on glibc and on Alpi
 mise use -g github:murolang/muro@0.20.0
 ```
 
+If mise reports `No versions found` or a 404 from `mise-versions.jdx.dev`, its version mirror does not list the release yet. Turn the mirror off and ask GitHub directly:
+
+```
+mise settings set use_versions_host false
+mise use -g github:murolang/muro@0.20.0
+```
+
 `mise install muro` from the mise registry follows once the assets exist. A tag `v*` builds the four files, then smokes the Linux binary in a container with no Elixir and no Erlang. The assets are attached to the GitHub release only after that smoke succeeds. A failed smoke publishes nothing. The Hex package's dependencies are unchanged. Burrito builds the executable and is not a runtime dependency of the package.
 
 ```
