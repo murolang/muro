@@ -902,7 +902,7 @@ mutual
                (Yes.ls y) (lk-mu (Yes.lk y)) hs0 at0)
       where
       pl0 = p-mu x (Yes.pl y)
-      hs0 = hs-mu (in-here (lk-mu (Yes.lk y))) (hosts-there (Yes.hs y))
+      hs0 = hs-mu (in-here (lk-mu (Yes.lk y))) refl (hosts-there (Yes.hs y))
       at0 = at-mu (Yes.at y)
       place : BoundAt x ρ (p-mu x (Yes.pl y)) (Yes.bs y) (Yes.tab y) →
               Built (smu x p) (fmu fp) pend ρ renv venv n slot
@@ -914,7 +914,7 @@ mutual
               (cp-mu (Yes.cv y)) ct
               (Yes.hd y) (Yes.sl y) (Yes.ev y)
               (lk-mu (Yes.lk y)) ls
-              (hs-mu (in-here (lk-mu (Yes.lk y))) (hosts-there (Yes.hs y)))
+              (hs-mu (in-here (lk-mu (Yes.lk y))) refl (hosts-there (Yes.hs y)))
               at0)
 
   denote (svar y) fvar pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =

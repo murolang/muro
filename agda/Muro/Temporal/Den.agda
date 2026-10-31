@@ -319,6 +319,10 @@ data InTab (x : String) (P : SProc) : Table → Set where
   in-there : ∀ {Q y i s0 ρ pl tab} →
              InTab x P tab → InTab x P (t1 {Q} y i s0 ρ pl tab)
 
+place-of : ∀ {x P tab} → InTab x P tab → Place P
+place-of (in-here {pl = pl} _) = pl
+place-of (in-there m) = place-of m
+
 -- Every place under `pl` that a jump can return to is in `tab`.
 data Hosts : Table → {P : SProc} → Place P → Set
 data HostsA : {ρ : EnvI} {as : List Arm} {ws : List (String × W)} →
@@ -364,8 +368,9 @@ data Hosts where
             HostsA tab dests →
             Hosts tab (p-act (d-mget n s t x named as ρw ws n2 s2 wk en dests)
                              r-mget i0 s0 ρ)
-  hs-mu : ∀ {x p tab} {pl : Place p} →
-          InTab x (smu x p) tab → Hosts tab pl → Hosts tab (p-mu x pl)
+  hs-mu : ∀ {x p tab} {pl : Place p} (inn : InTab x (smu x p) tab) →
+          place-of inn ≡ p-mu x pl →
+          Hosts tab pl → Hosts tab (p-mu x pl)
 
 data HostsA where
   ha0 : ∀ {ρ tab} → HostsA {ρ} tab (ap0 {ρ})
@@ -407,6 +412,16 @@ in-appendˡ (in-there m) = in-there (in-appendˡ m)
 in-appendʳ {t = t0} m = m
 in-appendʳ {t = t1 _ _ _ _ _ t} m = in-there (in-appendʳ {t = t} m)
 
+place-appendˡ : ∀ {x P t u} (m : InTab x P t) →
+                place-of (in-appendˡ {u = u} m) ≡ place-of m
+place-appendˡ (in-here _) = refl
+place-appendˡ (in-there m) = place-appendˡ m
+
+place-appendʳ : ∀ {x P t u} (m : InTab x P u) →
+                place-of (in-appendʳ {t = t} m) ≡ place-of m
+place-appendʳ {t = t0} m = refl
+place-appendʳ {t = t1 _ _ _ _ _ t} m = place-appendʳ {t = t} m
+
 hosts-there hs-jump = hs-jump
 hosts-there hs-done = hs-done
 hosts-there hs-stop = hs-stop
@@ -418,7 +433,7 @@ hosts-there (hs-get h) = hs-get (hosts-there h)
 hosts-there (hs-cover hp hq) = hs-cover (hosts-there hp) (hosts-there hq)
 hosts-there (hs-iget hp hq) = hs-iget (hosts-there hp) (hosts-there hq)
 hosts-there (hs-mget h) = hs-mget (hostsA-there h)
-hosts-there (hs-mu inn h) = hs-mu (in-there inn) (hosts-there h)
+hosts-there (hs-mu inn eq h) = hs-mu (in-there inn) eq (hosts-there h)
 
 hostsA-there ha0 = ha0
 hostsA-there (ha1 h hs) = ha1 (hosts-there h) (hostsA-there hs)
@@ -434,7 +449,10 @@ hosts-appendˡ (hs-get h) = hs-get (hosts-appendˡ h)
 hosts-appendˡ (hs-cover hp hq) = hs-cover (hosts-appendˡ hp) (hosts-appendˡ hq)
 hosts-appendˡ (hs-iget hp hq) = hs-iget (hosts-appendˡ hp) (hosts-appendˡ hq)
 hosts-appendˡ (hs-mget h) = hs-mget (hostsA-appendˡ h)
-hosts-appendˡ (hs-mu inn h) = hs-mu (in-appendˡ inn) (hosts-appendˡ h)
+hosts-appendˡ {t = t} {u = u} (hs-mu inn eq h) =
+  hs-mu (in-appendˡ {t = t} {u = u} inn)
+        (trans (place-appendˡ {t = t} {u = u} inn) eq)
+        (hosts-appendˡ {t = t} {u = u} h)
 
 hosts-appendʳ hs-jump = hs-jump
 hosts-appendʳ hs-done = hs-done
@@ -447,7 +465,10 @@ hosts-appendʳ (hs-get h) = hs-get (hosts-appendʳ h)
 hosts-appendʳ (hs-cover hp hq) = hs-cover (hosts-appendʳ hp) (hosts-appendʳ hq)
 hosts-appendʳ (hs-iget hp hq) = hs-iget (hosts-appendʳ hp) (hosts-appendʳ hq)
 hosts-appendʳ (hs-mget h) = hs-mget (hostsA-appendʳ h)
-hosts-appendʳ (hs-mu inn h) = hs-mu (in-appendʳ inn) (hosts-appendʳ h)
+hosts-appendʳ {t = t} (hs-mu inn eq h) =
+  hs-mu (in-appendʳ {t = t} inn)
+        (trans (place-appendʳ {t = t} inn) eq)
+        (hosts-appendʳ {t = t} h)
 
 hostsA-appendˡ ha0 = ha0
 hostsA-appendˡ (ha1 h hs) = ha1 (hosts-appendˡ h) (hostsA-appendˡ hs)
@@ -461,6 +482,12 @@ in-grow : ∀ {x P Q y i s0 ρ ql tail u} →
           InTab x P (t1 {Q} y i s0 ρ ql (appendT tail u))
 in-grow (in-here lk) = in-here lk
 in-grow (in-there m) = in-there (in-appendˡ m)
+
+place-grow : ∀ {x P Q y i s0 ρ ql tail u}
+             (m : InTab x P (t1 {Q} y i s0 ρ ql tail)) →
+             place-of (in-grow {u = u} m) ≡ place-of m
+place-grow (in-here _) = refl
+place-grow (in-there m) = place-appendˡ m
 
 hosts-grow : ∀ {P} {pl : Place P} {Q y i s0 ρ} {ql : Place Q} {tail u} →
              Hosts (t1 {Q} y i s0 ρ ql tail) pl →
@@ -480,14 +507,11 @@ hosts-grow (hs-get h) = hs-get (hosts-grow h)
 hosts-grow (hs-cover hp hq) = hs-cover (hosts-grow hp) (hosts-grow hq)
 hosts-grow (hs-iget hp hq) = hs-iget (hosts-grow hp) (hosts-grow hq)
 hosts-grow (hs-mget h) = hs-mget (hostsA-grow h)
-hosts-grow (hs-mu inn h) = hs-mu (in-grow inn) (hosts-grow h)
+hosts-grow (hs-mu inn eq h) =
+  hs-mu (in-grow inn) (trans (place-grow inn) eq) (hosts-grow h)
 
 hostsA-grow ha0 = ha0
 hostsA-grow (ha1 h hs) = ha1 (hosts-grow h) (hostsA-grow hs)
-
-place-of : ∀ {x P tab} → InTab x P tab → Place P
-place-of (in-here {pl = pl} _) = pl
-place-of (in-there m) = place-of m
 
 link-of : ∀ {x P tab} (m : InTab x P tab) → Link (place-of m)
 link-of (in-here lk) = lk
