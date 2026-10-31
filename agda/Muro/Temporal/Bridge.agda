@@ -18,13 +18,29 @@
 -- graph step on a left put back as that source put when the place is
 -- already the put and nothing is pending. `spine`, in
 -- `Muro.Temporal.Reveal`, peels a `smu` and stops at a jump.
+-- `Muro.Temporal.Chase` follows that jump to the `mu` it names.
+-- `readL` and `readR` in `Muro.Temporal.Follow` agree with `abs`.
 --
--- Not proved: the backward direction for an arbitrary step
--- (`sim-bwd`), final configurations (`final-iff`), the finite
--- `Muro.Async` embedding (`inj-sim`, `safe→nostuck`), source safety
--- as `NoStuck` (`source-safe-iff`), and satisfaction transferring
--- (`transfer`). The objects those statements quantify over are
--- `SConf`, `_⟶ₛ_`, `abs`, `graphOf`, and `SourceSatisfies`.
+-- Under a cursor `Hold`, `sim-bwd` reads a graph step other than the
+-- stutter as the source step, and `final-iff` in `Muro.Temporal.Carry`
+-- says the source configuration is final exactly when `abs` of it is.
+-- `SourceSafe` is weaker than `NoStuck`: one side can step beside a
+-- fault, and `merge` returns `VBad`. `source-safe-iff` in
+-- `Muro.Temporal.Span` uses `SourceShape` (every source-reachable view
+-- is `Shape`) and equates that with `NoStuck` under `graphOf ≡ gok`,
+-- `echoOk`, and `muOk`. `transfer` there equates `Satisfies` with
+-- `SourceSatisfies` for `always`, `eventually`, and `leads_to`.
+-- `check-yes` and `check-no` say `Decide.check` accepts exactly when
+-- the source meeting satisfies the formula. `cex-source` reads a
+-- refusal as a source run. Those statements quantify over `SConf`,
+-- `_⟶ₛ_`, `abs`, `graphOf`, and `SourceSatisfies`. `sim-bwd` takes
+-- the `Hold`, not a bare configuration: the cursor is what ties the
+-- graph step to the source process.
+--
+-- Not proved: the finite `Muro.Async` embedding (`inj-sim`,
+-- `safe→nostuck`). An `Async.Conf` step updates a typed message, a
+-- value environment, and an index context. No proved relation sends
+-- that step to a source step of `inj`.
 --
 -- Importing `Muro.Temporal.Source` requires `--guardedness`. The
 -- option is infective.
@@ -519,9 +535,10 @@ ex-block-cross = refl
 
 ------------------------------------------------------------------------
 -- A source run satisfies a formula when the projected run does.
--- `transfer` would be the equivalence with `Satisfies`. It is not
--- proved. `sim-fwd` is one direction of the step correspondence, and
--- the backward direction is not a theorem.
+-- `transfer`, `check-yes`, `check-no`, and `cex-source` in
+-- `Muro.Temporal.Span` are that equivalence and both directions of
+-- `Decide.check`. They start from `init-hold`, so they take `echoOk`
+-- and `muOk` on top of `graphOf ≡ gok`. `sim-bwd` is the backward step.
 ------------------------------------------------------------------------
 
 absPath : SPath → Path

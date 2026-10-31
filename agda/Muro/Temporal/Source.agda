@@ -462,6 +462,10 @@ CanFinish c = Σ EnvP (λ ρL → Σ (List String) (λ pendL → Σ Focus (λ fL
 SourceSafe : SConf → Set
 SourceSafe c0 = ∀ {c} → SReach c0 c → CanFinish c ⊎ Σ SConf (λ d → c ⟶ₛ d)
 
+-- Weaker than `NoStuck`. A step on one side beside a fault on the
+-- other is allowed here, and `merge` returns `VBad`, which is not
+-- `Shape`. `source-safe-iff` uses `SourceShape` in `Muro.Temporal.Span`.
+
 record SPath : Set where
   coinductive
   field
