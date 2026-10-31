@@ -8,21 +8,22 @@ module Muro.Temporal.Sim where
 
 open import Data.Bool.Base using (Bool; true)
 open import Data.Nat.Base using (ℕ)
-open import Data.List.Base using (List; _∷_)
+open import Data.List.Base using (List; []; _∷_; _++_)
 open import Data.Product using (Σ; _×_; _,_)
 open import Data.String.Base using (String)
 open import Relation.Binary.PropositionalEquality using (_≡_; sym; trans; cong)
 
 open import Muro.AsyncRec using (Block)
 open import Muro.Temporal.Bridge using (distinct)
-open import Muro.Temporal.Source using (SProc; smu; EnvI; EnvP)
+open import Muro.Temporal.Source using (SProc; smu; EnvI; EnvP; addPend)
 open import Muro.Temporal.Den
   using ( Place; p-mu; p-act; Table; Link; lk-mu; At; at-mu
         ; CovP; cp-mu; Hosts; hs-mu; Links
         ; headIx; slotOf; envOf; ix-of; slot-at; ix-head; slot-head
         ; place-of; tnames; Recipe; r-mu; InTab )
 open import Muro.Temporal.Run
-  using ( Sync; Ext; Fresh; Covered; fresh-mu; cov-mu; runtime-pin )
+  using ( Sync; sy0; sy1; Tied; td0; td1
+        ; Ext; Fresh; Covered; fresh-mu; cov-mu; runtime-pin )
 
 record Peeled (bs : List (ℕ × Block)) (tab : Table) (n s : ℕ) (base : EnvI)
               (x : String) (suf got : List String) (p : SProc) : Set where
@@ -78,3 +79,25 @@ peel-mu {n = n} {s = s} {base = base} {suf = suf} {got = got} {x = x}
             fr
     }
 peel-mu (p-act _ (r-mu _) _ _ _) _ () _ _ _ _ _ _ _ _ _ _
+
+-- Names peeled in one unfold, each bound at the action's counters.
+data Pref (tab : Table) (n s : ℕ) : List String → EnvP → Set where
+  pf0 : Pref tab n s [] []
+  pf1 : ∀ {x p pend env} (m : InTab x (smu x p) tab) →
+        ix-of m ≡ n → slot-at m ≡ s →
+        Pref tab n s pend env →
+        Pref tab n s (x ∷ pend) ((x , smu x p) ∷ env)
+
+-- The peeled prefix sits in front of the environment the step started from.
+tied-pref : ∀ {tab n s pend env base} →
+            Pref tab n s pend env → Tied tab base →
+            Tied tab (env ++ base)
+tied-pref pf0 td = td
+tied-pref (pf1 m _ _ pf) td = td1 m (tied-pref pf td)
+
+sync-pref : ∀ {tab n s pend env baseE baseI} →
+            Pref tab n s pend env → Sync tab baseE baseI →
+            Sync tab (env ++ baseE) (addPend pend n s baseI)
+sync-pref pf0 sy = sy
+sync-pref {n = n} {s = s} (pf1 m ix≡ sl≡ pf) sy =
+  sy1 {i = n} {s = s} m ix≡ sl≡ (sync-pref pf sy)
