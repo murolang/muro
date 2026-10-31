@@ -258,12 +258,6 @@ data LinkA where
         Link pl → LinkA rest →
         LinkA (ap1 {y} {p} {as} {w} {ws} {ρ} pl hd sl ev rest)
 
-data Links : Table → Set where
-  ls0 : Links t0
-  ls1 : ∀ {P x i s0 ρ pl tab} →
-        Link pl → headIx pl ≡ i → slotOf pl ≡ s0 → Links tab →
-        Links (t1 {P} x i s0 ρ pl tab)
-
 -- The place a recursion binder denotes, found in the table.
 data InTab (x : String) (P : SProc) : Table → Set where
   in-here : ∀ {i s0 ρ pl tab} →
@@ -324,6 +318,14 @@ data HostsA where
   ha1 : ∀ {tab ρ y p as w ws pl hd sl ev rest} →
         Hosts tab pl → HostsA tab rest →
         HostsA tab (ap1 {y} {p} {as} {w} {ws} {ρ} pl hd sl ev rest)
+
+data Links : Table → Set where
+  ls0 : Links t0
+  ls1 : ∀ {P x i s0 ρ pl tab} →
+        Link pl → headIx pl ≡ i → slotOf pl ≡ s0 →
+        Hosts (t1 {P} x i s0 ρ pl tab) pl →
+        Links tab →
+        Links (t1 {P} x i s0 ρ pl tab)
 
 appendT : Table → Table → Table
 appendT t0 u = u
@@ -397,6 +399,70 @@ hostsA-appendˡ (ha1 h hs) = ha1 (hosts-appendˡ h) (hostsA-appendˡ hs)
 
 hostsA-appendʳ ha0 = ha0
 hostsA-appendʳ (ha1 h hs) = ha1 (hosts-appendʳ h) (hostsA-appendʳ hs)
+
+-- Appending to the tail of a table entry keeps the places it hosts.
+in-grow : ∀ {x P Q y i s0 ρ ql tail u} →
+          InTab x P (t1 {Q} y i s0 ρ ql tail) →
+          InTab x P (t1 {Q} y i s0 ρ ql (appendT tail u))
+in-grow (in-here lk) = in-here lk
+in-grow (in-there m) = in-there (in-appendˡ m)
+
+hosts-grow : ∀ {P} {pl : Place P} {Q y i s0 ρ} {ql : Place Q} {tail u} →
+             Hosts (t1 {Q} y i s0 ρ ql tail) pl →
+             Hosts (t1 {Q} y i s0 ρ ql (appendT tail u)) pl
+hostsA-grow : ∀ {Q y i s0 ρ ql tail u ρa as ws} {ps : ArmPs ρa as ws} →
+              HostsA (t1 {Q} y i s0 ρ ql tail) ps →
+              HostsA (t1 {Q} y i s0 ρ ql (appendT tail u)) ps
+
+hosts-grow hs-jump = hs-jump
+hosts-grow hs-done = hs-done
+hosts-grow hs-stop = hs-stop
+hosts-grow (hs-put h) = hs-put (hosts-grow h)
+hosts-grow (hs-echo h) = hs-echo (hosts-grow h)
+hosts-grow (hs-pick0 h) = hs-pick0 (hosts-grow h)
+hosts-grow (hs-pick1 h) = hs-pick1 (hosts-grow h)
+hosts-grow (hs-get h) = hs-get (hosts-grow h)
+hosts-grow (hs-cover hp hq) = hs-cover (hosts-grow hp) (hosts-grow hq)
+hosts-grow (hs-iget hp hq) = hs-iget (hosts-grow hp) (hosts-grow hq)
+hosts-grow (hs-mget h) = hs-mget (hostsA-grow h)
+hosts-grow (hs-mu inn h) = hs-mu (in-grow inn) (hosts-grow h)
+
+hostsA-grow ha0 = ha0
+hostsA-grow (ha1 h hs) = ha1 (hosts-grow h) (hostsA-grow hs)
+
+place-of : ∀ {x P tab} → InTab x P tab → Place P
+place-of (in-here {pl = pl} _) = pl
+place-of (in-there m) = place-of m
+
+link-of : ∀ {x P tab} (m : InTab x P tab) → Link (place-of m)
+link-of (in-here lk) = lk
+link-of (in-there m) = link-of m
+
+ix-of : ∀ {x P tab} → InTab x P tab → ℕ
+ix-of (in-here {i = i} _) = i
+ix-of (in-there m) = ix-of m
+
+slot-at : ∀ {x P tab} → InTab x P tab → ℕ
+slot-at (in-here {s0 = s} _) = s
+slot-at (in-there m) = slot-at m
+
+ix-head : ∀ {x P tab} (ls : Links tab) (m : InTab x P tab) →
+          ix-of m ≡ headIx (place-of m)
+ix-head (ls1 _ eq _ _ _) (in-here _) = sym eq
+ix-head (ls1 _ _ _ _ ls) (in-there m) = ix-head ls m
+ix-head ls0 ()
+
+slot-head : ∀ {x P tab} (ls : Links tab) (m : InTab x P tab) →
+            slot-at m ≡ slotOf (place-of m)
+slot-head (ls1 _ _ eq _ _) (in-here _) = sym eq
+slot-head (ls1 _ _ _ _ ls) (in-there m) = slot-head ls m
+slot-head ls0 ()
+
+hosts-of : ∀ {x P tab} (ls : Links tab) (m : InTab x P tab) →
+           Hosts tab (place-of m)
+hosts-of (ls1 _ _ _ hs _) (in-here _) = hs
+hosts-of (ls1 _ _ _ _ ls) (in-there m) = hosts-there (hosts-of ls m)
+hosts-of ls0 ()
 
 data Cov : Den → List (ℕ × Block) → Set
 data CovP : {P : SProc} → Place P → List (ℕ × Block) → Set
@@ -482,6 +548,12 @@ covT-lift : ∀ {tab xs ys} →
             CovT tab xs → CovT tab ys
 covT-lift f ct0 = ct0
 covT-lift f (ct1 c ct) = ct1 (covP-lift f c) (covT-lift f ct)
+
+cov-of : ∀ {x P tab bs} (ct : CovT tab bs) (m : InTab x P tab) →
+         CovP (place-of m) bs
+cov-of (ct1 c _) (in-here _) = c
+cov-of (ct1 _ ct) (in-there m) = cov-of ct m
+cov-of ct0 ()
 
 ------------------------------------------------------------------------
 -- `walk` and `compile` of a compound, from the body's result.

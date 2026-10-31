@@ -79,7 +79,7 @@ appendC (ct1 c ct) cu = ct1 c (appendC ct cu)
 
 appendL : ∀ {t u} → Links t → Links u → Links (appendT t u)
 appendL ls0 lu = lu
-appendL (ls1 l ix s ls) lu = ls1 l ix s (appendL ls lu)
+appendL (ls1 l ix s hs ls) lu = ls1 l ix s (hosts-grow hs) (appendL ls lu)
 
 -- Bind `x` at the place `pl` reaches. A jump allocates no block, and the
 -- binder is recorded anyway: a later step unfolds it. The equality says
@@ -91,11 +91,12 @@ BoundAt {P} x ρ pl bs tab =
 
 cons-bind : ∀ {P bs} (x : String) (ρ : EnvI) (pl : Place P) (c : CovP pl bs)
             (tab : Table) (ct : CovT tab bs) (ls : Links tab) (lk : Link pl) →
+            Hosts (t1 {P} x (headIx pl) (slotOf pl) ρ pl tab) pl →
             BoundAt x ρ pl bs tab
-cons-bind {bs = bs} x ρ pl c tab ct ls lk = go pl c
+cons-bind {bs = bs} x ρ pl c tab ct ls lk hs = go pl c
   where
   add : BoundAt x ρ pl bs tab
-  add = t1 x (headIx pl) (slotOf pl) ρ pl tab , ct1 c ct , ls1 lk refl refl ls , refl
+  add = t1 x (headIx pl) (slotOf pl) ρ pl tab , ct1 c ct , ls1 lk refl refl hs ls , refl
   go : ∀ {Q} (ql : Place Q) → CovP ql bs → BoundAt x ρ pl bs tab
   go (p-jump _ _ _ _) _ = add
   go (p-act _ _ _ _ _) _ = add
@@ -886,9 +887,11 @@ mutual
            Built (smu x p) (fmu fp) pend ρ renv venv n slot
     seal (bad (noB f wk cmp)) = bad (noB f wk cmp)
     seal (ok y) =
-      place (cons-bind x ρ (p-mu x (Yes.pl y)) (cp-mu (Yes.cv y)) (Yes.tab y) (Yes.ct y)
-               (Yes.ls y) (lk-mu (Yes.lk y)))
+      place (cons-bind x ρ pl0 (cp-mu (Yes.cv y)) (Yes.tab y) (Yes.ct y)
+               (Yes.ls y) (lk-mu (Yes.lk y)) hs0)
       where
+      pl0 = p-mu x (Yes.pl y)
+      hs0 = hs-mu (in-here (lk-mu (Yes.lk y))) (hosts-there (Yes.hs y))
       place : BoundAt x ρ (p-mu x (Yes.pl y)) (Yes.bs y) (Yes.tab y) →
               Built (smu x p) (fmu fp) pend ρ renv venv n slot
       place (tab , ct , ls , eq) rewrite eq =
