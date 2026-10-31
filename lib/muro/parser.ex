@@ -1429,12 +1429,18 @@ defmodule Muro.Parser do
     if has_prefix?(s, "(") do
       with {:ok, rest} <- tok(s, "("),
            {:ok, fname, rest} <- ident(skip(rest)),
-           {:ok, arg, rest} <- ident(skip(rest)),
+           {:ok, args, rest} <- parse_scrut_args(skip(rest), []),
            {:ok, rest} <- tok(skip(rest), ")") do
-        if reserved_session?(fname) or reserved_session?(arg) do
-          {:error, err(s, "expected a name")}
-        else
-          {:ok, {:run, fname, String.to_atom(arg)}, rest}
+        cond do
+          args == [] or reserved_session?(fname) or Enum.any?(args, &reserved_session?/1) ->
+            {:error, err(s, "expected a name")}
+
+          length(args) == 1 ->
+            {:ok, {:run, fname, String.to_atom(hd(args))}, rest}
+
+          true ->
+            atoms = Enum.map(args, &String.to_atom/1)
+            {:ok, {:run, fname, List.last(atoms), Enum.drop(atoms, -1)}, rest}
         end
       end
     else
@@ -1448,8 +1454,25 @@ defmodule Muro.Parser do
     end
   end
 
+  defp parse_scrut_args(s, acc) do
+    s = skip(s)
+
+    cond do
+      has_prefix?(s, ")") ->
+        {:ok, Enum.reverse(acc), s}
+
+      ident_start?(s) ->
+        with {:ok, name, rest} <- ident(s) do
+          parse_scrut_args(rest, [name | acc])
+        end
+
+      true ->
+        {:error, err(s, "expected a name")}
+    end
+  end
+
   defp parse_case_arms(s, acc, bound) do
-    with {:ok, cname, rest} <- ident(skip(s)),
+    with {:ok, cname, rest} <- arm_label(skip(s)),
          {:ok, rest} <- tok(skip(rest), "=>"),
          {:ok, proto, rest} <- parse_proto(skip(rest), bound) do
       acc = [{cname, proto} | acc]
@@ -2038,6 +2061,13 @@ defmodule Muro.Parser do
           finish_named({:prod, pat, body}, rest, acc, bound)
         end
 
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+
+        with {:ok, body, rest} <- parse_arm_body(rest, bound) do
+          finish_named({:arm, digits, [], body}, rest, acc, bound)
+        end
+
       true ->
         with {:ok, cname, rest} <- ident(s),
              {:ok, binders, rest} <- parse_proc_binders(skip(rest)),
@@ -2045,6 +2075,20 @@ defmodule Muro.Parser do
           binders = Enum.map(binders, &String.to_atom/1)
           finish_named({:arm, cname, binders, body}, rest, acc, bound)
         end
+    end
+  end
+
+  # A session arm label is a constructor or the decimal spelling of a
+  # numeral. `| 0 =>` keeps the digits that were written, so `| 00 =>`
+  # is the label `"00"`.
+  defp arm_label(s) do
+    cond do
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, digits, rest}
+
+      true ->
+        ident(s)
     end
   end
 

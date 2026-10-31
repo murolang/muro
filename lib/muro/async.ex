@@ -230,8 +230,14 @@ defmodule Muro.Async do
       {:ok, recv_ty, orig, ready} ->
         case Muro.Session.arm(recv_ty, ready, arms, conf.book) do
           {:ok, arm} ->
-            conf = commit_recv(conf, side, arm, rest, name, recv_ty, orig, ready)
-            {:go, conf, "#{side_name(conf, side)} arm #{arm_label(ready)}"}
+            case open_nat_match(arm, venv_of(conf, side), conf.book) do
+              {:ok, arm} ->
+                conf = commit_recv(conf, side, arm, rest, name, recv_ty, orig, ready)
+                {:go, conf, "#{side_name(conf, side)} arm #{arm_label(ready)}"}
+
+              :error ->
+                {:bad, @cover}
+            end
 
           :error ->
             {:bad, {:recv, side, msg}}
@@ -393,8 +399,26 @@ defmodule Muro.Async do
 
   defp arm_label(:b0), do: "b0"
   defp arm_label(:b1), do: "b1"
+  defp arm_label({:nat, n}) when is_integer(n), do: Integer.to_string(n)
   defp arm_label({:con, name, _}), do: "#{name}"
   defp arm_label(other), do: Muro.Session.show_value(other)
+
+  # A match on a nat already stored on this side is the arm that
+  # numeral selects. The value just received is bound after this.
+  defp open_nat_match({:match, name, arms}, env, book) do
+    case Map.get(env, name) do
+      {:nat, n} when is_integer(n) and n >= 0 ->
+        case Muro.Session.arm(:nat, {:nat, n}, arms, book) do
+          {:ok, leaf} -> open_nat_match(leaf, env, book)
+          :error -> :error
+        end
+
+      _ ->
+        {:ok, {:match, name, arms}}
+    end
+  end
+
+  defp open_nat_match(proc, _env, _book), do: {:ok, proc}
 
   defp render(msg, _conf, _trace) when is_binary(msg), do: msg
 
