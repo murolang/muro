@@ -31,7 +31,8 @@ open import Muro.Temporal.Source
         ; walk; walkArms
         ; sdone; sstop; sout; sput; sget; spick0; spick1
         ; scover; siget; smget; smu; svar
-        ; bnames; abs )
+        ; bnames; abs
+        ; Bound; b-here; b-there )
 open SConf
 open W
 
@@ -40,7 +41,8 @@ open import Muro.Temporal.Pic
 open import Muro.Temporal.Agree using (root-ns)
 open import Muro.Temporal.Den
   using ( Place; Table; t1; Link; Links; CovP; CovT; headIx; slotOf; envOf
-        ; InTab; Hosts )
+        ; InTab; in-here; in-there; Hosts
+        ; place-of; link-of; ix-of; slot-at )
 open import Muro.Temporal.Denote
   using ( denote; Yes; No; noB; Built; ok; bad )
 
@@ -123,6 +125,19 @@ data Tied : Table → EnvP → Set where
   td1 : ∀ {x P tab ρ} → InTab x P tab → Tied tab ρ →
         Tied tab ((x , P) ∷ ρ)
 
+-- The process environment and the index environment name the same
+-- binders, and each index is the table entry's index.
+data Sync : Table → EnvP → EnvI → Set where
+  sy0 : ∀ {tab} → Sync tab [] []
+  sy1 : ∀ {tab x P i s env ρ} (m : InTab x P tab) →
+        ix-of m ≡ i → slot-at m ≡ s → Sync tab env ρ →
+        Sync tab ((x , P) ∷ env) ((x , i , s) ∷ ρ)
+
+resolve : ∀ {x P tab env} → Tied tab env → Bound x P env → InTab x P tab
+resolve (td1 inn _) b-here = inn
+resolve (td1 _ rest) (b-there b) = resolve rest b
+resolve td0 ()
+
 record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
               (envP : EnvP) (envI : EnvI) (proc : SProc) : Set where
   field
@@ -134,6 +149,7 @@ record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
     ls : Links tab
     hs : Hosts tab pl
     td : Tied tab envP
+    sy : Sync tab envP envI
     ix : idx ≡ headIx pl
     ss : slot ≡ slotOf pl
     sn : EnvEq (envOf pl) envI
@@ -220,6 +236,7 @@ init-hold k P Q fp fq eokP eokQ g c eqg eqc =
       ; ls = Yes.ls y
       ; hs = Yes.hs y
       ; td = td0
+      ; sy = sy0
       ; ix = trans ix≡ (sym (Yes.hd y))
       ; ss = sym (trans (Yes.sl y) slot0)
       ; sn = root-sn y
