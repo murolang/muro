@@ -197,6 +197,72 @@ mutual
   envOf (p-act _ _ _ _ ρ) = ρ
   envOf (p-jump _ _ _ ρ) = ρ
 
+------------------------------------------------------------------------
+-- The equations `denote` used, kept on the place so a later step can
+-- read them. `i ≡ n` is the block index. `s0 ≡ s` is the slot the
+-- action was walked at. `ρw ≡ addPend pend n s ρ` is the environment
+-- the continuation was walked in.
+------------------------------------------------------------------------
+
+data Link : {P : SProc} → Place P → Set
+data LinkA : {ρ : EnvI} {as : List Arm} {ws : List (String × W)} →
+             ArmPs ρ as ws → Set
+
+data Link where
+  lk-mu : ∀ {x p} {pl : Place p} → Link pl → Link (p-mu x pl)
+  lk-jump : ∀ {x i s0 ρ} → Link (p-jump x i s0 ρ)
+  lk-done : ∀ {n i s0 ρ} → i ≡ n → Link (p-act (d-done n) r-done i s0 ρ)
+  lk-stop : ∀ {n i s0 ρ} → i ≡ n → Link (p-act (d-stop n) r-stop i s0 ρ)
+  lk-put : ∀ {n s a atom j p ρw w aeq wk ej dest dh ds de i0 s0 ρ pend} →
+           i0 ≡ n → s0 ≡ s → ρw ≡ addPend pend n s ρ → Link dest →
+           Link (p-act (d-put n s a atom j p ρw w aeq wk ej dest dh ds de)
+                       r-put i0 s0 ρ)
+  lk-echo : ∀ {n s x ns sX j p ρw w fd wk ej dest dh ds de i0 s0 ρ pend} →
+            i0 ≡ n → s0 ≡ s → ρw ≡ addPend pend n s ρ → Link dest →
+            Link (p-act (d-echo n s x ns sX j p ρw w fd wk ej dest dh ds de)
+                        r-echo i0 s0 ρ)
+  lk-pick0 : ∀ {n s j p ρw w wk ej dest dh ds de i0 s0 ρ pend} →
+             i0 ≡ n → s0 ≡ s → ρw ≡ addPend pend n s ρ → Link dest →
+             Link (p-act (d-pick0 n s j p ρw w wk ej dest dh ds de)
+                         r-pick0 i0 s0 ρ)
+  lk-pick1 : ∀ {n s j p ρw w wk ej dest dh ds de i0 s0 ρ pend} →
+             i0 ≡ n → s0 ≡ s → ρw ≡ addPend pend n s ρ → Link dest →
+             Link (p-act (d-pick1 n s j p ρw w wk ej dest dh ds de)
+                         r-pick1 i0 s0 ρ)
+  lk-get : ∀ {n s t x j p ρw w wk ej dest dh ds de i0 s0 ρ pend} →
+           i0 ≡ n → s0 ≡ s → ρw ≡ addPend pend n s ρ → Link dest →
+           Link (p-act (d-get n s t x j p ρw w wk ej dest dh ds de)
+                       r-get i0 s0 ρ)
+  lk-cover : ∀ {n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀
+               i0 s0 ρ pend} →
+             i0 ≡ n → s0 ≡ s → ρw ≡ addPend pend n s ρ →
+             Link dp → Link dq →
+             Link (p-act (d-cover n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq
+                                  hp sp ep hq sq eq₀)
+                         r-cover i0 s0 ρ)
+  lk-iget : ∀ {n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀
+              i0 s0 ρ pend} →
+            i0 ≡ n → s0 ≡ s → ρw ≡ addPend pend n s ρ →
+            Link dp → Link dq →
+            Link (p-act (d-iget n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq
+                                 hp sp ep hq sq eq₀)
+                        r-iget i0 s0 ρ)
+  lk-mget : ∀ {n s t x named as ρw ws n2 s2 wk en dests i0 s0 ρ pend} →
+            i0 ≡ n → s0 ≡ s → ρw ≡ addPend pend n s ρ → LinkA dests →
+            Link (p-act (d-mget n s t x named as ρw ws n2 s2 wk en dests)
+                        r-mget i0 s0 ρ)
+
+data LinkA where
+  la0 : ∀ {ρ} → LinkA (ap0 {ρ})
+  la1 : ∀ {ρ y p as w ws pl hd sl ev rest} →
+        Link pl → LinkA rest →
+        LinkA (ap1 {y} {p} {as} {w} {ws} {ρ} pl hd sl ev rest)
+
+data Links : Table → Set where
+  ls0 : Links t0
+  ls1 : ∀ {P x i s0 ρ pl tab} →
+        Link pl → Links tab → Links (t1 {P} x i s0 ρ pl tab)
+
 data Cov : Den → List (ℕ × Block) → Set
 data CovP : {P : SProc} → Place P → List (ℕ × Block) → Set
 data CovA : {ρ : EnvI} {as : List Arm} {ws : List (String × W)} →
