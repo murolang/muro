@@ -5,7 +5,11 @@
 -- cover, iget, mget) plus `smu` and `svar`, the repetition forms.
 -- `inj` sends a finite process here. A payload outside this layer
 -- (a pair, a record, a vector, a fielded constructor, a computed
--- put, unit) is `pOut`, `sout`, or `abad`.
+-- put, unit, a nullary constructor that does not inhabit its
+-- declaration) is `pOut`, `sout`, or `abad`. A bare `mget` arm has
+-- no constructor name, and an arm list that is not the declaration's
+-- constructors in order is `sout`: the graph matches the name, so
+-- those forms are not the injected process.
 --
 -- A step is one side's action. A jump is not its own step: unfolding
 -- `smu` / `svar` is part of the action, and the continuation index is
@@ -542,7 +546,9 @@ payVal S.tt = pOut
 payVal (S.tup _ _) = pOut
 payVal (S.rec _) = pOut
 payVal (S.rep _) = pOut
-payVal (S.con s S.snil) = pCon s
+payVal (S.con {d} {as} s S.snil) with S.fits (S.con {d} {as} s S.snil)
+... | true = pCon s
+... | false = pOut
 payVal (S.con _ (S.scons _ _ _)) = pOut
 
 payOf : ∀ {A} → S.ValExpr A → Pay
@@ -550,25 +556,32 @@ payOf (S.lit v) = payVal v
 payOf (S.var x) = pEcho x
 payOf (S.call _ _) = pOut
 
-mutual
-  injArm : S.PArm → Arm
-  injArm (S.bare p) = aok "arm" (inj p)
-  injArm (S.named s [] p) = aok s (inj p)
-  injArm (S.named _ (_ ∷ _) _) = abad
-  injArm (S.prod _ _) = abad
-  injArm (S.fork _ _ _ _) = abad
+-- Constructors of a payload, or none when the type is not a declaration.
+ctorsTy : S.Ty → List S.Ctor
+ctorsTy (S.dat d _) = S.ctorsOf d
+ctorsTy _ = []
 
-  injArms : List S.PArm → List Arm
-  injArms [] = []
-  injArms (a ∷ as) = injArm a ∷ injArms as
+-- Arm `k` against constructor `n`, in order. A bare arm, a fielded
+-- arm, or a different name is not the list the graph matches.
+mutual
+  matchArms : List S.Ctor → List S.PArm → Maybe (List Arm)
+  matchArms [] [] = just []
+  matchArms (S.ctor n _ ∷ cs) (S.named k [] p ∷ ps) with n == k
+  ... | false = nothing
+  ... | true with matchArms cs ps
+  ... | nothing = nothing
+  ... | just bs = just (aok k (inj p) ∷ bs)
+  matchArms _ _ = nothing
 
   injGot : Maybe Tag → String → S.Proc → SProc
   injGot (just t) x p = sget t x (inj p)
   injGot nothing _ _ = sout
 
-  injMatched : Maybe Tag → String → List S.PArm → SProc
-  injMatched (just t) x as = smget t x (injArms as)
-  injMatched nothing _ _ = sout
+  injMatched : Maybe Tag → List S.Ctor → String → List S.PArm → SProc
+  injMatched nothing _ _ _ = sout
+  injMatched (just t) cs x as with matchArms cs as
+  ... | nothing = sout
+  ... | just bs = smget t x bs
 
   inj : S.Proc → SProc
   inj S.done = sdone
@@ -579,7 +592,15 @@ mutual
   inj (S.pick1 p) = spick1 (inj p)
   inj (S.cover p q) = scover (inj p) (inj q)
   inj (S.iget x p q) = siget x (inj p) (inj q)
-  inj (S.mget A x as) = injMatched (goodGet A) x as
+  inj (S.mget A x as) = injMatched (goodGet A) (ctorsTy A) x as
+
+-- A constructor the declaration does not have is not a payload.
+bad-con : payOf (S.lit (S.con {S.boolDecl} {[]} "nope" S.snil)) ≡ pOut
+bad-con = refl
+
+-- A bare arm does not name a constructor, so the injection refuses it.
+bare-mget : inj (S.mget S.nat "x" (S.bare S.done ∷ [])) ≡ sout
+bare-mget = refl
 
 ------------------------------------------------------------------------
 -- The processes the compiled examples use, written as source.
