@@ -40,6 +40,12 @@ import Muro.AsyncRec
 import Muro.Temporal
 import Muro.Temporal.Source
 import Muro.Temporal.Bridge
+import Muro.Temporal.Pic
+import Muro.Temporal.Agree
+import Muro.Temporal.Ordinal
+import Muro.Temporal.Fire
+import Muro.Temporal.Den
+import Muro.Temporal.Denote
 import Muro.Temporal.Graph
 import Muro.Temporal.Safety
 import Muro.Temporal.Live
