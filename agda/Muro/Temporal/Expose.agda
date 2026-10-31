@@ -8,13 +8,14 @@
 
 module Muro.Temporal.Expose where
 
-open import Data.Bool.Base using (true; false)
+open import Data.Bool.Base using (Bool; true; false)
 open import Data.Empty using (⊥; ⊥-elim)
 open import Data.List.Base using (List; []; _∷_; length)
-open import Data.Maybe.Base using (just)
+open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc; _<_)
 open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String)
+open import Data.String.Properties using (_==_)
 open import Data.Sum.Base using (_⊎_; inj₁; inj₂)
 open import Relation.Binary.PropositionalEquality
   using (_≡_; refl; sym; trans; cong; subst)
@@ -22,12 +23,13 @@ open import Relation.Binary.PropositionalEquality
 open import Muro.AsyncRec
   using ( Atom; Block; bPut; bEcho; Tok; pay; snoc; Graph
         ; RConf; rc; Act; AGo; findA; lookB; materialise; reactL
-        ; room; slotVal; bPick0; bPick1; bGet; bCover; bIget; aBit
-        ; lab; setNth; nthA; fits )
+        ; room; slotVal; bPick0; bPick1; bGet; bCover; bIget; bMget; aBit
+        ; lab; setNth; nthA; fits; conOf; armTo )
 open import Muro.Temporal.Bridge using (distinct)
-open import Muro.Temporal.Pic using (_∈_; root-at)
+open import Muro.Temporal.Pic using (_∈_; root-at; ents)
 open import Muro.Temporal.Source
-  using ( SProc; SConf; abs; Pay; pEcho; W; EnvI; EnvP; addPend; lookupI; walk; findS; asAtom
+  using ( SProc; SConf; abs; Pay; pEcho; Arm; aok; abad; W; EnvI; EnvP; addPend; lookupI
+        ; walk; walkArms; armGo; findS; asAtom
         ; smu; sdone; sstop; sput; sget; spick0; spick1; scover; siget; smget
         ; Bound; b-here; b-there
         ; Focus; f-put; f-done; f-stop; f-get; f-pick0; f-pick1; f-cover; f-iget; f-mget
@@ -38,26 +40,32 @@ open SConf
 open import Muro.Temporal using (Step; stepL; lside)
 open import Muro.Temporal.Fire
   using ( react-put; react-echo; react-pick0; react-pick1; react-get
-        ; react-cover0; react-cover1; react-iget0; react-iget1
+        ; react-cover0; react-cover1; react-iget0; react-iget1; react-mget
         ; room-yes; snoc≡ )
 open W
 open import Muro.Temporal.Den
   using ( Place; p-mu; p-act; p-jump; Den; d-put; d-echo; d-pick0; d-pick1
-        ; d-get; d-cover; d-iget; Table; Link; Links
+        ; d-get; d-cover; d-iget; d-mget; Table; Link; Links; LinkA; la0; la1
+        ; ArmPs; ap0; ap1
         ; lk-mu; lk-jump; lk-put; lk-echo; lk-pick0; lk-pick1; lk-get; lk-cover; lk-iget
-        ; At; at-mu; at-put; at-echo; at-pick0; at-pick1; at-get; at-cover; at-iget
-        ; CovP; cp-mu; cp-act; cp-jump; CovT
-        ; c-put; c-echo; c-pick0; c-pick1; c-get; c-cover; c-iget
-        ; Hosts; hs-mu; hs-put; hs-echo; hs-jump; hs-pick0; hs-pick1; hs-get
-        ; hs-cover; hs-iget
-        ; EchoNs; en-mu; en-put; en-echo; en-jump; en-pick0; en-pick1; en-get
-        ; en-cover; en-iget
-        ; Align; al-mu; al-jump; al-put; al-echo; al-pick0; al-pick1; al-get
-        ; al-cover; al-iget
+        ; lk-mget
+        ; At; AtA; ata0; ata1
+        ; at-mu; at-put; at-echo; at-pick0; at-pick1; at-get; at-cover; at-iget; at-mget
+        ; CovP; cp-mu; cp-act; cp-jump; CovT; CovA; ca0; ca1
+        ; c-put; c-echo; c-pick0; c-pick1; c-get; c-cover; c-iget; c-mget
+        ; Hosts; HostsA; ha0; ha1
+        ; hs-mu; hs-put; hs-echo; hs-jump; hs-pick0; hs-pick1; hs-get
+        ; hs-cover; hs-iget; hs-mget
+        ; EchoNs; EchoNsA; ea0; ea1
+        ; en-mu; en-put; en-echo; en-jump; en-pick0; en-pick1; en-get
+        ; en-cover; en-iget; en-mget
+        ; Align; AlignA; aa0; aa1
+        ; al-mu; al-jump; al-put; al-echo; al-pick0; al-pick1; al-get
+        ; al-cover; al-iget; al-mget
         ; headIx; slotOf; envOf
         ; InTab; place-of; link-of; ix-of; slot-at
         ; ix-head; slot-head; hosts-of; cov-of; tnames
-        ; Recipe; r-put; r-echo; r-pick0; r-pick1; r-get; r-cover; r-iget; r-mu )
+        ; Recipe; r-put; r-echo; r-pick0; r-pick1; r-get; r-cover; r-iget; r-mget; r-mu )
 open import Muro.Temporal.Run
   using ( Cursor; Ext; Covered; Sync; sy1; Tied; td1; Knew; kn1
         ; ext-pend; cov-mu; cov-push; cov-cons; cov-pull; cov-cast
@@ -1162,3 +1170,326 @@ iget1-fwd : ∀ {g c x p q ρ′ pend′ k rest w1 w2} (h : Hold g c) →
             Step g (abs c) lside (abs (afterGet c q ρ′ pend′ rest k w2)) ×
             Hold g (afterGet c q ρ′ pend′ rest k w2)
 iget1-fwd h unf qeq eqA wk1 wk2 = iget1-use h qeq eqA wk1 wk2 (leftStop h unf)
+
+------------------------------------------------------------------------
+-- A source constructor receive stores the payload and takes that arm.
+------------------------------------------------------------------------
+
+nothing≢just : ∀ {A : Set} {x : A} → nothing ≡ just x → ⊥
+nothing≢just ()
+
+pairˡ : ∀ {A B : Set} {a c : A} {b d : B} → (a , b) ≡ (c , d) → a ≡ c
+pairˡ refl = refl
+
+pairʳ : ∀ {A B : Set} {a c : A} {b d : B} → (a , b) ≡ (c , d) → b ≡ d
+pairʳ refl = refl
+
+consˡ : ∀ {A : Set} {x y : A} {xs ys : List A} → x ∷ xs ≡ y ∷ ys → x ≡ y
+consˡ refl = refl
+
+consʳ : ∀ {A : Set} {x y : A} {xs ys : List A} → x ∷ xs ≡ y ∷ ys → xs ≡ ys
+consʳ refl = refl
+
+armGo-take : ∀ {ρ name y p as n s w} →
+             walk [] ρ p n s ≡ just w →
+             (name == y) ≡ true →
+             armGo ρ name (aok y p ∷ as) n s ≡ just (w , p)
+armGo-take eqw eq rewrite eqw | eq = refl
+
+armGo-skip : ∀ {ρ name y p as n s w} →
+             walk [] ρ p n s ≡ just w →
+             (name == y) ≡ false →
+             armGo ρ name (aok y p ∷ as) n s ≡ armGo ρ name as (next w) (slotN w)
+armGo-skip eqw eq rewrite eqw | eq = refl
+
+armTo-take : ∀ {name y j rest} →
+             (name == y) ≡ true →
+             armTo name ((y , j) ∷ rest) ≡ just j
+armTo-take eq rewrite eq = refl
+
+armTo-skip : ∀ {name y j rest} →
+             (name == y) ≡ false →
+             armTo name ((y , j) ∷ rest) ≡ armTo name rest
+armTo-skip eq rewrite eq = refl
+
+arms-nowalk : ∀ {ρ y p as n s} →
+              walk [] ρ p n s ≡ nothing →
+              walkArms [] ρ (aok y p ∷ as) n s ≡ nothing
+arms-nowalk eq rewrite eq = refl
+
+arms-notail : ∀ {ρ y p as n s w} →
+              walk [] ρ p n s ≡ just w →
+              walkArms [] ρ as (next w) (slotN w) ≡ nothing →
+              walkArms [] ρ (aok y p ∷ as) n s ≡ nothing
+arms-notail eqw eqa rewrite eqw | eqa = refl
+
+arms-head : ∀ {ρ y p as n s w ws n2 s2} →
+            walk [] ρ p n s ≡ just w →
+            walkArms [] ρ as (next w) (slotN w) ≡ just (ws , n2 , s2) →
+            walkArms [] ρ (aok y p ∷ as) n s ≡ just ((y , w) ∷ ws , n2 , s2)
+arms-head eqw eqa rewrite eqw | eqa = refl
+
+-- A walk that succeeds on every arm succeeds the same way on a larger
+-- environment, so the arm `armGo` picks is the same arm.
+armGo-agree : ∀ {ρ0 ρ name} (as : List Arm) {ws n s n2 s2 w p} →
+              Ext ρ0 ρ →
+              walkArms [] ρ0 as n s ≡ just (ws , n2 , s2) →
+              armGo ρ name as n s ≡ just (w , p) →
+              armGo ρ0 name as n s ≡ just (w , p)
+armGo-agree [] _ _ hit = ⊥-elim (nothing≢just hit)
+armGo-agree (abad ∷ _) _ wk _ = ⊥-elim (nothing≢just wk)
+armGo-agree {ρ0 = ρ0} {ρ = ρ} {name = name} (aok y q ∷ as)
+            {n = n} {s = s} {w = w} {p = p} ext wk hit =
+  onW (walk [] ρ0 q n s) refl
+  where
+  onN : (w0 : W) → walk [] ρ0 q n s ≡ just w0 →
+        {wsT : List (String × W)} {n2T s2T : ℕ} →
+        walkArms [] ρ0 as (next w0) (slotN w0) ≡ just (wsT , n2T , s2T) →
+        (b : Bool) → (name == y) ≡ b →
+        armGo ρ0 name (aok y q ∷ as) n s ≡ just (w , p)
+  onN w0 eqw eqa true eqb =
+    let wkρ = walk-ext [] ρ0 ρ q n s w0 ext eqw
+        here0 = armGo-take {ρ = ρ0} {name = name} {y = y} {p = q} {as = as}
+                  {n = n} {s = s} {w = w0} eqw eqb
+        here1 = armGo-take {ρ = ρ} {name = name} {y = y} {p = q} {as = as}
+                  {n = n} {s = s} {w = w0} wkρ eqb
+    in trans here0 (trans (sym here1) hit)
+  onN w0 eqw eqa false eqb =
+    let wkρ = walk-ext [] ρ0 ρ q n s w0 ext eqw
+        skip0 = armGo-skip {ρ = ρ0} {name = name} {y = y} {p = q} {as = as}
+                  {n = n} {s = s} {w = w0} eqw eqb
+        skip1 = armGo-skip {ρ = ρ} {name = name} {y = y} {p = q} {as = as}
+                  {n = n} {s = s} {w = w0} wkρ eqb
+    in trans skip0
+         (armGo-agree {ρ0 = ρ0} {ρ = ρ} {name = name} as
+            {n = next w0} {s = slotN w0} {w = w} {p = p}
+            ext eqa (trans (sym skip1) hit))
+
+  onA : (w0 : W) → walk [] ρ0 q n s ≡ just w0 →
+        (m : Maybe (List (String × W) × ℕ × ℕ)) →
+        walkArms [] ρ0 as (next w0) (slotN w0) ≡ m →
+        armGo ρ0 name (aok y q ∷ as) n s ≡ just (w , p)
+  onA w0 eqw nothing eqa =
+    ⊥-elim (nothing≢just
+      (trans (sym (arms-notail {ρ = ρ0} {y = y} {p = q} {as = as}
+                    {n = n} {s = s} {w = w0} eqw eqa)) wk))
+  onA w0 eqw (just (wsT , n2T , s2T)) eqa =
+    onN w0 eqw eqa (name == y) refl
+
+  onW : (m : Maybe W) → walk [] ρ0 q n s ≡ m →
+        armGo ρ0 name (aok y q ∷ as) n s ≡ just (w , p)
+  onW nothing eqw =
+    ⊥-elim (nothing≢just
+      (trans (sym (arms-nowalk {ρ = ρ0} {y = y} {p = q} {as = as}
+                    {n = n} {s = s} eqw)) wk))
+  onW (just w0) eqw = onA w0 eqw (walkArms [] ρ0 as (next w0) (slotN w0)) refl
+
+ix-proc : ∀ {p q} (eq : p ≡ q) (pl : Place p) →
+          headIx (subst Place eq pl) ≡ headIx pl
+ix-proc refl _ = refl
+
+sl-proc : ∀ {p q} (eq : p ≡ q) (pl : Place p) →
+          slotOf (subst Place eq pl) ≡ slotOf pl
+sl-proc refl _ = refl
+
+ev-proc : ∀ {p q} (eq : p ≡ q) (pl : Place p) →
+          envOf (subst Place eq pl) ≡ envOf pl
+ev-proc refl _ = refl
+
+lk-proc : ∀ {p q} (eq : p ≡ q) (pl : Place p) →
+          Link pl → Link (subst Place eq pl)
+lk-proc refl _ lk = lk
+
+hs-proc : ∀ {p q tab} (eq : p ≡ q) (pl : Place p) →
+          Hosts tab pl → Hosts tab (subst Place eq pl)
+hs-proc refl _ hs = hs
+
+at-proc : ∀ {p q} (eq : p ≡ q) (pl : Place p) →
+          At [] pl → At [] (subst Place eq pl)
+at-proc refl _ at = at
+
+ens-proc : ∀ {p q ns} (eq : p ≡ q) (pl : Place p) →
+           EchoNs ns pl → EchoNs ns (subst Place eq pl)
+ens-proc refl _ e = e
+
+al-proc : ∀ {p q} (eq : p ≡ q) (pl : Place p) →
+          Align [] pl → Align [] (subst Place eq pl)
+al-proc refl _ al = al
+
+cv-proc : ∀ {p q bs} (eq : p ≡ q) (pl : Place p) →
+          CovP pl bs → CovP (subst Place eq pl) bs
+cv-proc refl _ cv = cv
+
+-- The arm whose name is the received constructor.
+record Pick (bs : List (ℕ × Block)) (ns : List String) (tab : Table)
+            (ρ : EnvI) (name : String) (w : W) (p : SProc)
+            (ws : List (String × W)) : Set where
+  constructor picked
+  field
+    pl : Place p
+    hd : headIx pl ≡ entry w
+    sl : slotOf pl ≡ atSlot w
+    ev : envOf pl ≡ ρ
+    cv : CovP pl bs
+    lk : Link pl
+    hs : Hosts tab pl
+    at : At [] pl
+    ens : EchoNs ns pl
+    al : Align [] pl
+    n0 : ℕ
+    s0 : ℕ
+    wk : walk [] ρ p n0 s0 ≡ just w
+    aj : armTo name (ents ws) ≡ just (entry w)
+
+armPick : ∀ {bs ns tab ρ name as ws n s n2 s2 w p} →
+          (ps : ArmPs ρ as ws) →
+          LinkA ps → HostsA tab ps → AtA ps → EchoNsA ns ps →
+          AlignA ps → CovA ps bs →
+          walkArms [] ρ as n s ≡ just (ws , n2 , s2) →
+          armGo ρ name as n s ≡ just (w , p) →
+          Pick bs ns tab ρ name w p ws
+armPick ap0 la0 ha0 ata0 ea0 aa0 ca0 _ hit = ⊥-elim (nothing≢just hit)
+armPick {bs = bs} {ns = ns} {tab = tab} {ρ = ρ} {name = name}
+        {n = n} {s = s} {w = w} {p = p}
+        (ap1 {y = y} {p = proc} {as = asT} {w = wA} {ws = wsT}
+             pl hd0 sl0 ev0 rest)
+        (la1 lkP lkR) (ha1 hsP hsR) (ata1 atP atR) (ea1 enP enR)
+        (aa1 alP alR) (ca1 cvP cvR) wk hit =
+  onW (walk [] ρ proc n s) refl
+  where
+  onN : (wGot : W) → walk [] ρ proc n s ≡ just wGot →
+        (wsGot : List (String × W)) (n2G s2G : ℕ) →
+        walkArms [] ρ asT (next wGot) (slotN wGot) ≡ just (wsGot , n2G , s2G) →
+        (b : Bool) → (name == y) ≡ b →
+        Pick bs ns tab ρ name w p ((y , wA) ∷ wsT)
+  onN wGot eqw wsGot n2G s2G eqa true eqb =
+    let head = arms-head {ρ = ρ} {y = y} {p = proc} {as = asT} {n = n} {s = s}
+                 {w = wGot} {ws = wsGot} {n2 = n2G} {s2 = s2G} eqw eqa
+        took = armGo-take {ρ = ρ} {name = name} {y = y} {p = proc} {as = asT}
+                 {n = n} {s = s} {w = wGot} eqw eqb
+        packed = just-inj (trans (sym head) wk)
+        wGot≡ = pairʳ (consˡ (pairˡ packed))
+        wp = just-inj (trans (sym took) hit)
+        w≡ = pairˡ wp
+        p≡ = pairʳ wp
+        plP = subst Place p≡ pl
+        same = trans (sym wGot≡) w≡
+        hdP = trans (ix-proc p≡ pl) (trans hd0 (cong entry same))
+        slP = trans (sl-proc p≡ pl) (trans sl0 (cong atSlot same))
+        evP = trans (ev-proc p≡ pl) ev0
+        wk1 = subst (λ z → walk [] ρ proc n s ≡ just z) w≡ eqw
+        wkP = subst (λ q → walk [] ρ q n s ≡ just w) p≡ wk1
+        ajP = trans (armTo-take eqb) (cong just (cong entry same))
+    in picked plP hdP slP evP (cv-proc p≡ pl cvP) (lk-proc p≡ pl lkP)
+              (hs-proc p≡ pl hsP) (at-proc p≡ pl atP) (ens-proc p≡ pl enP)
+              (al-proc p≡ pl alP) n s wkP ajP
+  onN wGot eqw wsGot n2G s2G eqa false eqb =
+    let head = arms-head {ρ = ρ} {y = y} {p = proc} {as = asT} {n = n} {s = s}
+                 {w = wGot} {ws = wsGot} {n2 = n2G} {s2 = s2G} eqw eqa
+        skip = armGo-skip {ρ = ρ} {name = name} {y = y} {p = proc} {as = asT}
+                 {n = n} {s = s} {w = wGot} eqw eqb
+        packed = just-inj (trans (sym head) wk)
+        ws≡ = consʳ (pairˡ packed)
+        eqaT = subst (λ zs →
+                 walkArms [] ρ asT (next wGot) (slotN wGot) ≡
+                   just (zs , n2G , s2G))
+                 ws≡ eqa
+        hitT = trans (sym skip) hit
+        rec = armPick rest lkR hsR atR enR alR cvR eqaT hitT
+    in picked (Pick.pl rec) (Pick.hd rec) (Pick.sl rec) (Pick.ev rec)
+              (Pick.cv rec) (Pick.lk rec) (Pick.hs rec) (Pick.at rec)
+              (Pick.ens rec) (Pick.al rec) (Pick.n0 rec) (Pick.s0 rec)
+              (Pick.wk rec) (trans (armTo-skip eqb) (Pick.aj rec))
+
+  onA : (wGot : W) → walk [] ρ proc n s ≡ just wGot →
+        (m : Maybe (List (String × W) × ℕ × ℕ)) →
+        walkArms [] ρ asT (next wGot) (slotN wGot) ≡ m →
+        Pick bs ns tab ρ name w p ((y , wA) ∷ wsT)
+  onA wGot eqw nothing eqa =
+    ⊥-elim (nothing≢just
+      (trans (sym (arms-notail {ρ = ρ} {y = y} {p = proc} {as = asT}
+                    {n = n} {s = s} {w = wGot} eqw eqa)) wk))
+  onA wGot eqw (just (wsGot , n2G , s2G)) eqa =
+    onN wGot eqw wsGot n2G s2G eqa (name == y) refl
+
+  onW : (m : Maybe W) → walk [] ρ proc n s ≡ m →
+        Pick bs ns tab ρ name w p ((y , wA) ∷ wsT)
+  onW nothing eqw =
+    ⊥-elim (nothing≢just
+      (trans (sym (arms-nowalk {ρ = ρ} {y = y} {p = proc} {as = asT}
+                    {n = n} {s = s} eqw)) wk))
+  onW (just wGot) eqw =
+    onA wGot eqw (walkArms [] ρ asT (next wGot) (slotN wGot)) refl
+
+mget-use : ∀ {g c t x as ρ′ pend′ k rest a name w p} (h : Hold g c) →
+           r2l c ≡ pay k ∷ rest →
+           nthA (alpha c) k ≡ just a →
+           fits t a ≡ true →
+           conOf a ≡ just name →
+           armGo (addPend pend′ (il c) (slotL c) (envIL c)) name as
+                 (suc (il c)) (suc (slotL c)) ≡ just (w , p) →
+           Stop (Hold.bsL h) (Cursor.echoNs (Hold.leftC h))
+                (il c) (slotL c) (envIL c) ρ′ pend′ (f-mget t x as) →
+           Step g (abs c) lside (abs (afterGet c p ρ′ pend′ rest k w)) ×
+           Hold g (afterGet c p ρ′ pend′ rest k w)
+mget-use {g} {c} {t} {x} {as} {ρ′} {pend′} {k} {rest} {a} {name} {w} {p}
+         h qeq eqA eqF eqC ago
+  (atAct suf ρi bg _
+     (p-act (d-mget nD sD .t .x named .as ρw ws n2 s2 wkD enW dests)
+            r-mget i0 s0 ρden)
+     (cp-act (c-mget mem cvA))
+     (lk-mget eqi eqs _ lkA)
+     (hs-mget hsA)
+     (at-mget _ atA)
+     (en-mget enA)
+     (al-mget eqρ alA)
+     ix ss sn lf-mget) =
+  closeGet h reacted refl wkRun wkRun cur (echo-env (run bg) cur0)
+  where
+  en = trans ix eqi
+  es = trans ss eqs
+  extW = ext-leaf suf pend′ (il c) (slotL c) nD sD ρden (envIL c) ρw ρi suf
+           en es refl eqρ (run bg) sn (cvd bg)
+  wk1 = subst (λ z → walkArms [] ρw as (suc z) (suc sD) ≡ just (ws , n2 , s2))
+          (sym en) wkD
+  wkC = subst (λ z → walkArms [] ρw as (suc (il c)) (suc z) ≡ just (ws , n2 , s2))
+          (sym es) wk1
+  agoI = subst (λ e → armGo e name as (suc (il c)) (suc (slotL c)) ≡ just (w , p))
+           (sym (run bg)) ago
+  hitD = armGo-agree as extW wkC agoI
+  pk = armPick dests lkA hsA atA enA alA cvA wkC hitD
+  wkI = walk-ext [] ρw ρi p (Pick.n0 pk) (Pick.s0 pk) w extW (Pick.wk pk)
+  wkRun = subst (λ e → walk [] e p (Pick.n0 pk) (Pick.s0 pk) ≡ just w)
+            (run bg) wkI
+  snD = subst (λ e → Ext e ρi) (sym (Pick.ev pk)) extW
+  cur0 = arrive {ns = Cursor.echoNs (Hold.leftC h)} {tab = tab bg}
+           (Pick.pl pk) w (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
+           (Pick.hd pk) (Pick.sl pk) (Pick.cv pk) (Pick.lk pk) (Pick.hs pk)
+           (Pick.at pk) (Pick.ens pk) (Pick.al pk) snD
+  cur = subst (λ e → Cursor (Hold.bsL h) (entry w) (atSlot w) ρ′ e p)
+          (run bg) cur0
+  memI = subst (λ z → (z , bMget t sD named) ∈ Hold.bsL h) (sym en) mem
+  memN : (il c , bMget t (slotL c) named) ∈ Hold.bsL h
+  memN = subst (λ z → (il c , bMget t z named) ∈ Hold.bsL h) (sym es) memI
+  nthG : nthA (Graph.alpha g) k ≡ just a
+  nthG = subst (λ al → nthA al k ≡ just a) (Hold.α h) eqA
+  toN = subst (λ xs → armTo name xs ≡ just (entry w)) enW (Pick.aj pk)
+  got = react-mget g (il c) (ir c) (l2r c) k rest (el c) (er c)
+          t (slotL c) named a name (entry w) nthG eqF eqC toN (seenL h memN)
+  reacted = subst (λ queue →
+              reactL g (rc (il c) (ir c) (l2r c) queue (el c) (er c)) ≡
+                AGo (rc (entry w) (ir c) (l2r c) rest
+                       (setNth (slotL c) (suc k) (el c)) (er c)))
+              (sym qeq) got
+
+mget-fwd : ∀ {g c t x as ρ′ pend′ k rest a name w p} (h : Hold g c) →
+           Unfold (envPL c) [] (left c) ρ′ pend′ (f-mget t x as) →
+           r2l c ≡ pay k ∷ rest →
+           nthA (alpha c) k ≡ just a →
+           fits t a ≡ true →
+           conOf a ≡ just name →
+           armGo (addPend pend′ (il c) (slotL c) (envIL c)) name as
+                 (suc (il c)) (suc (slotL c)) ≡ just (w , p) →
+           Step g (abs c) lside (abs (afterGet c p ρ′ pend′ rest k w)) ×
+           Hold g (afterGet c p ρ′ pend′ rest k w)
+mget-fwd h unf qeq eqA eqF eqC ago = mget-use h qeq eqA eqF eqC ago (leftStop h unf)
