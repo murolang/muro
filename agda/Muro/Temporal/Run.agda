@@ -394,6 +394,12 @@ elem-cons {y} {x} {xs} eq = go (y == x) refl
   go true eqy rewrite eqy = refl
   go false eqy rewrite eqy = eq
 
+elem-tail : ∀ {y x xs} → (y == x) ≡ false →
+            elemS y (x ∷ xs) ≡ true → elemS y xs ≡ true
+elem-tail {y} {x} eq p with y == x
+... | false = p
+... | true = ⊥-elim (true≢false eq)
+
 ext-trans : ∀ {ρ1 ρ2 ρ3} → Ext ρ1 ρ2 → Ext ρ2 ρ3 → Ext ρ1 ρ3
 ext-trans a b x i s p = b x i s (a x i s p)
 
@@ -529,6 +535,89 @@ ext-both (x ∷ suf) got n s ρ base ext cov fr y i s1 eq = step (y == x) refl e
       (cov-tail {x = x} {suf = suf} {got = got} {base = base} {n = n} {s = s} cov)
       fr y i s1
       (trans (sym (lookup-skip eqy)) eq2)
+
+-- The denoted pending names are already bound in the runtime this step
+-- unfolded into. Binding them on the denoted side does not move a hit.
+ext-pend : ∀ suf got n s ρ base →
+           Ext ρ (addPend got n s base) →
+           Covered suf got base n s →
+           Ext (addPend suf n s ρ) (addPend got n s base)
+ext-pend [] got n s ρ base ext cov = ext
+ext-pend (x ∷ suf) got n s ρ base ext cov y i s1 eq = step (y == x) refl eq
+  where
+  step : (b : Bool) → (y == x) ≡ b →
+         lookupI y (addPend (x ∷ suf) n s ρ) ≡ just (i , s1) →
+         lookupI y (addPend got n s base) ≡ just (i , s1)
+  step true eqy eq2 =
+    both-hit y got n s base i s1
+      (head-pin {y = y} {x = x} {suf = suf} {n = n} {s = s} {ρ = ρ}
+         {i = i} {s1 = s1} eqy eq2)
+      (cov y (elem-yes {y = y} {x = x} {xs = suf} eqy))
+  step false eqy eq2 =
+    ext-pend suf got n s ρ base ext
+      (cov-tail {x = x} {suf = suf} {got = got} {base = base} {n = n} {s = s} cov)
+      y i s1
+      (trans (sym (lookup-skip eqy)) eq2)
+
+cov-id : ∀ {xs base n s} → Covered xs xs base n s
+cov-id y inn = inj₁ inn
+
+cov-cast : ∀ {suf got base i s n s′} →
+           i ≡ n → s ≡ s′ →
+           Covered suf got base i s → Covered suf got base n s′
+cov-cast refl refl cov = cov
+
+-- A lookup past `addPend` is either one of the peeled names or a hit
+-- that was already in the base environment.
+split-add : ∀ pend n s base y i s1 →
+            lookupI y (addPend pend n s base) ≡ just (i , s1) →
+            elemS y pend ≡ true ⊎ lookupI y base ≡ just (i , s1)
+split-add pend n s base y i s1 eq = go (elemS y pend) refl
+  where
+  go : (b : Bool) → elemS y pend ≡ b →
+       elemS y pend ≡ true ⊎ lookupI y base ≡ just (i , s1)
+  go true p = inj₁ p
+  go false p = inj₂ (trans (outside pend n s base y p) eq)
+
+-- Names covered in the extended runtime are covered by the peeled
+-- prefix or by the environment the step started from.
+cov-pull : ∀ {suf pend base n s} →
+           Covered suf [] (addPend pend n s base) n s →
+           Covered suf pend base n s
+cov-pull {pend = pend} {base = base} {n = n} {s = s} cov y inn =
+  body (cov y inn)
+  where
+  body : elemS y [] ≡ true ⊎
+         lookupI y (addPend pend n s base) ≡ just (n , s) →
+         elemS y pend ≡ true ⊎ lookupI y base ≡ just (n , s)
+  body (inj₁ ())
+  body (inj₂ eq) = split-add pend n s base y n s eq
+
+-- Peeling `x` at these counters covers `x` and keeps the old names.
+cov-push : ∀ {x suf ρ n s} →
+           Covered suf [] ρ n s →
+           Covered (x ∷ suf) [] ((x , n , s) ∷ ρ) n s
+cov-push {x = x} {suf = suf} {ρ = ρ} {n = n} {s = s} cov y inn =
+  go (y == x) refl
+  where
+  front : (y == x) ≡ true →
+          lookupI y ((x , n , s) ∷ ρ) ≡ just (n , s)
+  front eqy rewrite eqy = refl
+  keep : (y == x) ≡ false →
+         lookupI y ρ ≡ just (n , s) →
+         lookupI y ((x , n , s) ∷ ρ) ≡ just (n , s)
+  keep eqy eq rewrite eqy = eq
+  old : (y == x) ≡ false → lookupI y ρ ≡ just (n , s)
+  old eqy = hit (cov y (elem-tail {y = y} {x = x} {xs = suf} eqy inn))
+    where
+    hit : elemS y [] ≡ true ⊎ lookupI y ρ ≡ just (n , s) →
+          lookupI y ρ ≡ just (n , s)
+    hit (inj₁ ())
+    hit (inj₂ eq) = eq
+  go : (b : Bool) → (y == x) ≡ b →
+       elemS y [] ≡ true ⊎ lookupI y ((x , n , s) ∷ ρ) ≡ just (n , s)
+  go true eqy = inj₂ (front eqy)
+  go false eqy = inj₂ (keep eqy (old eqy))
 
 ------------------------------------------------------------------------
 -- `walk` returns the same continuation when every denoted hit agrees.
