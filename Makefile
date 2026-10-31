@@ -44,6 +44,7 @@ agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Chase.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Expose.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Back.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Invert.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Graph.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Safety.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Live.agda

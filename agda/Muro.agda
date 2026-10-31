@@ -51,6 +51,7 @@ import Muro.Temporal.Reveal
 import Muro.Temporal.Chase
 import Muro.Temporal.Expose
 import Muro.Temporal.Back
+import Muro.Temporal.Invert
 import Muro.Temporal.Graph
 import Muro.Temporal.Safety
 import Muro.Temporal.Live
