@@ -27,7 +27,7 @@ open import Muro.AsyncRec using (module Graph)
 open Graph
 
 open import Muro.Temporal.Bridge
-  using ( Frag; echoOk; muOk; graphOf; initS; pack; compiled; gok; gfail; elab )
+  using ( Frag; echoOk; muOk; mus; distinct; graphOf; initS; pack; compiled; gok; gfail; elab )
 open import Muro.Temporal.Source
   using ( SProc; SConf; sc; W; mkW; EnvI; EnvP; addPend; lookupI
         ; walk; walkArms
@@ -45,7 +45,7 @@ open import Muro.Temporal.Agree using (root-ns)
 open import Muro.Temporal.Den
   using ( Place; Table; t1; Link; Links; CovP; CovT; headIx; slotOf; envOf
         ; InTab; in-here; in-there; Hosts; At
-        ; place-of; link-of; ix-of; slot-at )
+        ; place-of; link-of; ix-of; slot-at; tnames )
 open import Muro.Temporal.Denote
   using ( denote; Yes; No; noB; Built; ok; bad )
 
@@ -168,6 +168,7 @@ record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
     ss : slot ≡ slotOf pl
     sn : Ext (envOf pl) envI
     at : At [] pl
+    nd : distinct (tnames tab) ≡ true
 
 record Hold (g : Graph) (c : SConf) : Set where
   field
@@ -238,12 +239,16 @@ init-hold k P Q fp fq eokP eokQ muP muQ g c eqg eqc =
   ct-cast : ∀ {tab xs ys} → xs ≡ ys → CovT tab xs → CovT tab ys
   ct-cast refl ct = ct
 
+  nd-cast : ∀ {xs ys} → xs ≡ ys → distinct ys ≡ true → distinct xs ≡ true
+  nd-cast refl eq = eq
+
   cursor : ∀ {R fr bs} (y : Yes R fr [] [] [] [] zero zero) →
            Yes.bs y ≡ bs →
            ∀ idx → idx ≡ entry (Yes.w y) →
            atSlot (Yes.w y) ≡ zero →
+           distinct (mus R) ≡ true →
            Cursor bs idx zero [] [] R
-  cursor y bs≡ idx ix≡ slot0 =
+  cursor y bs≡ idx ix≡ slot0 mu =
     record
       { pl = Yes.pl y
       ; cv = covP-cast bs≡ (Yes.cv y)
@@ -258,6 +263,7 @@ init-hold k P Q fp fq eokP eokQ muP muQ g c eqg eqc =
       ; ss = sym (trans (Yes.sl y) slot0)
       ; sn = ext-eq {ρ0 = envOf (Yes.pl y)} {ρ = []} (root-sn y)
       ; at = Yes.at y
+      ; nd = nd-cast (Yes.tn y) mu
       }
 
   open-pack : (yL : Yes P fp [] [] [] [] zero zero)
@@ -285,9 +291,9 @@ init-hold k P Q fp fq eokP eokQ muP muQ g c eqg eqc =
       ; α = refl
       ; κ = refl
       ; leftC = cursor yL (sym bsL≡) eL eL≡
-                  (atSlot0 [] P (Yes.w yL) (Yes.wk yL))
+                  (atSlot0 [] P (Yes.w yL) (Yes.wk yL)) muP
       ; rightC = cursor yR (sym bsR≡) eR eR≡
-                   (atSlot0 [] Q (Yes.w yR) (Yes.wk yR))
+                   (atSlot0 [] Q (Yes.w yR) (Yes.wk yR)) muQ
       }
   open-pack _ _ (cfail _) _ () _ _ _
   open-pack _ _ (cok _ _ _ _) (cfail _) _ () _ _

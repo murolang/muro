@@ -394,6 +394,15 @@ appendT : Table → Table → Table
 appendT t0 u = u
 appendT (t1 x i s0 ρ pl t) u = t1 x i s0 ρ pl (appendT t u)
 
+-- The binders entered in a table, front to back.
+tnames : Table → List String
+tnames t0 = []
+tnames (t1 x _ _ _ _ t) = x ∷ tnames t
+
+tnames-append : ∀ t u → tnames (appendT t u) ≡ tnames t ++ tnames u
+tnames-append t0 u = refl
+tnames-append (t1 x _ _ _ _ t) u = cong (x ∷_) (tnames-append t u)
+
 in-appendˡ : ∀ {x P t u} → InTab x P t → InTab x P (appendT t u)
 in-appendʳ : ∀ {x P t u} → InTab x P u → InTab x P (appendT t u)
 
