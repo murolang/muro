@@ -2,6 +2,83 @@ defmodule Muro.CLI.Init do
   @moduledoc false
 
   @doc false
+  def switches, do: Enum.map(options(), &{&1.name, &1.type})
+
+  @doc false
+  def options do
+    [
+      %{
+        name: :ci,
+        type: :string,
+        value: "github",
+        default: "none",
+        doc:
+          "Also write .github/workflows/muro.yml when that file is absent. The only value is github. The job installs this version of the executable and runs muro gen --check. An existing workflow file is left in place. When the manifest is new and the workflow file exists, init exits 1 and names the file."
+      },
+      %{
+        name: :backend,
+        type: :string,
+        value: "NAME",
+        default: "the backend this directory selects",
+        doc:
+          "Store this backend on the manifest. It does not change which file is written. The value is elixir, c, rust, asm, fsm, or exunit. Without the flag, a Mix project omits the key."
+      },
+      %{
+        name: :cargo_metadata,
+        type: :boolean,
+        default: "false",
+        doc:
+          "On a directory with Cargo.toml, append [package.metadata.muro] and write muro/. It does not write muro.toml. Without a Cargo.toml it exits 1 and writes nothing."
+      }
+    ]
+  end
+
+  @doc false
+  def help do
+    Muro.CLI.Text.page([
+      Muro.CLI.Text.prose("""
+      muro init looks at the working directory and writes one manifest, pinned to the running version, plus one commented example entry. mix.exs gets muro.exs and priv/muro/. Cargo.toml gets muro.toml and muro/, with Rust as the backend. A CMakeLists.txt, meson.build, or Makefile, and neither mix.exs nor Cargo.toml, gets muro.toml and muro/ for C. Anything else gets muro.toml with modules = [] and muro/. An existing manifest at muro.exs, muro.toml, or [package.metadata.muro] is left in place. Init prints a diff of that file and exits 0. It does not write a second manifest, and it does not write AGENTS.md. It prints a note that points at muro skills add.
+      """),
+      Muro.CLI.Text.section(
+        "USAGE",
+        Muro.CLI.Text.pre(["muro init [--ci github] [--backend NAME] [--cargo-metadata]"])
+      ),
+      Muro.CLI.Text.section(
+        "ARGUMENTS",
+        Muro.CLI.Text.arguments([
+          {"none", "init reads the working directory. It takes no path."}
+        ])
+      ),
+      Muro.CLI.Text.section("OPTIONS", Muro.CLI.Text.options(options())),
+      Muro.CLI.Text.section(
+        "EXAMPLES",
+        Muro.CLI.Text.examples(
+          [
+            {"muro init", "In a Cargo project, write muro.toml and muro/."},
+            {"muro init --backend asm", "Store asm as the manifest backend."},
+            {"muro init --cargo-metadata", "Append [package.metadata.muro] to Cargo.toml."},
+            {"muro init --ci github", "Also write .github/workflows/muro.yml."}
+          ],
+          "\n\n"
+        )
+      ),
+      Muro.CLI.Text.section(
+        "EXIT CODES",
+        Muro.CLI.Text.exits([
+          {"0",
+           "The manifest was created, or an existing manifest was left in place and a diff was printed."},
+          {"1",
+           "The flag value is unknown, --cargo-metadata has no Cargo.toml, or the workflow file already exists while the manifest is new."}
+        ])
+      ),
+      Muro.CLI.Text.section(
+        "LEARN MORE",
+        Muro.CLI.Text.pre(["https://muro-lang.dev/docs/binary"])
+      )
+    ])
+  end
+
+  @doc false
   def run_mix(args) do
     {opts, rest, invalid} = OptionParser.parse(args, strict: [ci: :string])
 
@@ -28,8 +105,7 @@ defmodule Muro.CLI.Init do
 
   @doc false
   def run(args) do
-    switches = [ci: :string, backend: :string, cargo_metadata: :boolean]
-    {opts, rest, invalid} = OptionParser.parse(args, strict: switches)
+    {opts, rest, invalid} = OptionParser.parse(args, strict: switches())
 
     cond do
       invalid != [] ->
