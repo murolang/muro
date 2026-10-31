@@ -83,6 +83,9 @@ mutual
             (wk : walk [] ρw p (suc n) s ≡ just w)
             (ej : entry w ≡ j)
             (dest : Place p)
+            (dh : headIx dest ≡ entry w)
+            (ds : slotOf dest ≡ atSlot w)
+            (de : envOf dest ≡ ρw)
             → Den
     d-echo : (n s : ℕ) (x : String) (ns : List String) (sX j : ℕ) (p : SProc)
              (ρw : EnvI) (w : W)
@@ -90,36 +93,54 @@ mutual
              (wk : walk [] ρw p (suc n) s ≡ just w)
              (ej : entry w ≡ j)
              (dest : Place p)
+             (dh : headIx dest ≡ entry w)
+             (ds : slotOf dest ≡ atSlot w)
+             (de : envOf dest ≡ ρw)
              → Den
     d-pick0 : (n s j : ℕ) (p : SProc) (ρw : EnvI) (w : W)
               (wk : walk [] ρw p (suc n) s ≡ just w)
-              (ej : entry w ≡ j) (dest : Place p) → Den
+              (ej : entry w ≡ j) (dest : Place p)
+              (dh : headIx dest ≡ entry w)
+              (ds : slotOf dest ≡ atSlot w)
+              (de : envOf dest ≡ ρw) → Den
     d-pick1 : (n s j : ℕ) (p : SProc) (ρw : EnvI) (w : W)
               (wk : walk [] ρw p (suc n) s ≡ just w)
-              (ej : entry w ≡ j) (dest : Place p) → Den
+              (ej : entry w ≡ j) (dest : Place p)
+              (dh : headIx dest ≡ entry w)
+              (ds : slotOf dest ≡ atSlot w)
+              (de : envOf dest ≡ ρw) → Den
     d-get : (n s : ℕ) (t : Tag) (x : String) (j : ℕ) (p : SProc)
             (ρw : EnvI) (w : W)
             (wk : walk [] ρw p (suc n) (suc s) ≡ just w)
-            (ej : entry w ≡ j) (dest : Place p) → Den
+            (ej : entry w ≡ j) (dest : Place p)
+            (dh : headIx dest ≡ entry w)
+            (ds : slotOf dest ≡ atSlot w)
+            (de : envOf dest ≡ ρw) → Den
     d-cover : (n s i j : ℕ) (p q : SProc) (ρw : EnvI) (w1 w2 : W)
               (wk1 : walk [] ρw p (suc n) s ≡ just w1)
               (ei : entry w1 ≡ i)
               (wk2 : walk [] ρw q (next w1) (slotN w1) ≡ just w2)
               (ej : entry w2 ≡ j)
-              (dp : Place p) (dq : Place q) → Den
+              (dp : Place p) (dq : Place q)
+              (hp : headIx dp ≡ entry w1) (sp : slotOf dp ≡ atSlot w1) (ep : envOf dp ≡ ρw)
+              (hq : headIx dq ≡ entry w2) (sq : slotOf dq ≡ atSlot w2) (eq : envOf dq ≡ ρw)
+              → Den
     d-iget : (n s : ℕ) (x : String) (i j : ℕ) (p q : SProc) (ρw : EnvI)
              (w1 w2 : W)
              (wk1 : walk [] ρw p (suc n) (suc s) ≡ just w1)
              (ei : entry w1 ≡ i)
              (wk2 : walk [] ρw q (next w1) (slotN w1) ≡ just w2)
              (ej : entry w2 ≡ j)
-             (dp : Place p) (dq : Place q) → Den
+             (dp : Place p) (dq : Place q)
+             (hp : headIx dp ≡ entry w1) (sp : slotOf dp ≡ atSlot w1) (ep : envOf dp ≡ ρw)
+             (hq : headIx dq ≡ entry w2) (sq : slotOf dq ≡ atSlot w2) (eq : envOf dq ≡ ρw)
+             → Den
     d-mget : (n s : ℕ) (t : Tag) (x : String)
              (named : List (String × ℕ)) (arms : List Arm) (ρw : EnvI)
              (ws : List (String × W)) (n2 s2 : ℕ)
              (wk : walkArms [] ρw arms (suc n) (suc s) ≡ just (ws , n2 , s2))
              (en : ents ws ≡ named)
-             (dests : ArmPs arms ws)
+             (dests : ArmPs ρw arms ws)
              → Den
 
   data Place : SProc → Set where
@@ -130,20 +151,22 @@ mutual
   data Recipe : Den → SProc → Set where
     r-done : ∀ {n} → Recipe (d-done n) sdone
     r-stop : ∀ {n} → Recipe (d-stop n) sstop
-    r-put : ∀ {n s a atom j p ρw w aeq wk ej dest} →
-            Recipe (d-put n s a atom j p ρw w aeq wk ej dest) (sput a p)
-    r-echo : ∀ {n s x ns sX j p ρw w fd wk ej dest} →
-             Recipe (d-echo n s x ns sX j p ρw w fd wk ej dest) (sput (pEcho x) p)
-    r-pick0 : ∀ {n s j p ρw w wk ej dest} →
-              Recipe (d-pick0 n s j p ρw w wk ej dest) (spick0 p)
-    r-pick1 : ∀ {n s j p ρw w wk ej dest} →
-              Recipe (d-pick1 n s j p ρw w wk ej dest) (spick1 p)
-    r-get : ∀ {n s t x j p ρw w wk ej dest} →
-            Recipe (d-get n s t x j p ρw w wk ej dest) (sget t x p)
-    r-cover : ∀ {n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq} →
-              Recipe (d-cover n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq) (scover p q)
-    r-iget : ∀ {n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq} →
-             Recipe (d-iget n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq) (siget x p q)
+    r-put : ∀ {n s a atom j p ρw w aeq wk ej dest dh ds de} →
+            Recipe (d-put n s a atom j p ρw w aeq wk ej dest dh ds de) (sput a p)
+    r-echo : ∀ {n s x ns sX j p ρw w fd wk ej dest dh ds de} →
+             Recipe (d-echo n s x ns sX j p ρw w fd wk ej dest dh ds de) (sput (pEcho x) p)
+    r-pick0 : ∀ {n s j p ρw w wk ej dest dh ds de} →
+              Recipe (d-pick0 n s j p ρw w wk ej dest dh ds de) (spick0 p)
+    r-pick1 : ∀ {n s j p ρw w wk ej dest dh ds de} →
+              Recipe (d-pick1 n s j p ρw w wk ej dest dh ds de) (spick1 p)
+    r-get : ∀ {n s t x j p ρw w wk ej dest dh ds de} →
+            Recipe (d-get n s t x j p ρw w wk ej dest dh ds de) (sget t x p)
+    r-cover : ∀ {n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀} →
+              Recipe (d-cover n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀)
+                     (scover p q)
+    r-iget : ∀ {n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀} →
+             Recipe (d-iget n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀)
+                    (siget x p q)
     r-mget : ∀ {n s t x named as ρw ws n2 s2 wk en dests} →
              Recipe (d-mget n s t x named as ρw ws n2 s2 wk en dests) (smget t x as)
     r-mu : ∀ {d x p} → Recipe d p → Recipe d (smu x p)
@@ -152,41 +175,58 @@ mutual
     t0 : Table
     t1 : ∀ {P} (x : String) (i s0 : ℕ) (ρ : EnvI) (pl : Place P) → Table → Table
 
-  data ArmPs : List Arm → List (String × W) → Set where
-    ap0 : ArmPs [] []
-    ap1 : ∀ {y p as w ws} → Place p → ArmPs as ws →
-          ArmPs (aok y p ∷ as) ((y , w) ∷ ws)
+  data ArmPs (ρ : EnvI) : List Arm → List (String × W) → Set where
+    ap0 : ArmPs ρ [] []
+    ap1 : ∀ {y p as w ws} (pl : Place p) →
+          headIx pl ≡ entry w → slotOf pl ≡ atSlot w → envOf pl ≡ ρ →
+          ArmPs ρ as ws →
+          ArmPs ρ (aok y p ∷ as) ((y , w) ∷ ws)
+
+  headIx : ∀ {P} → Place P → ℕ
+  headIx (p-mu _ pl) = headIx pl
+  headIx (p-act _ _ i _ _) = i
+  headIx (p-jump _ i _ _) = i
+
+  slotOf : ∀ {P} → Place P → ℕ
+  slotOf (p-mu _ pl) = slotOf pl
+  slotOf (p-act _ _ _ s _) = s
+  slotOf (p-jump _ _ s _) = s
+
+  envOf : ∀ {P} → Place P → EnvI
+  envOf (p-mu _ pl) = envOf pl
+  envOf (p-act _ _ _ _ ρ) = ρ
+  envOf (p-jump _ _ _ ρ) = ρ
 
 data Cov : Den → List (ℕ × Block) → Set
 data CovP : {P : SProc} → Place P → List (ℕ × Block) → Set
-data CovA : {as : List Arm} {ws : List (String × W)} →
-            ArmPs as ws → List (ℕ × Block) → Set
+data CovA : {ρ : EnvI} {as : List Arm} {ws : List (String × W)} →
+            ArmPs ρ as ws → List (ℕ × Block) → Set
 data CovT : Table → List (ℕ × Block) → Set
 
 data Cov where
   c-done : ∀ {n bs} → (n , bDone) ∈ bs → Cov (d-done n) bs
   c-stop : ∀ {n bs} → (n , bStop) ∈ bs → Cov (d-stop n) bs
-  c-put : ∀ {n s a atom j p ρw w aeq wk ej dest bs} →
+  c-put : ∀ {n s a atom j p ρw w aeq wk ej dest dh ds de bs} →
           (n , bPut atom j) ∈ bs → CovP dest bs →
-          Cov (d-put n s a atom j p ρw w aeq wk ej dest) bs
-  c-echo : ∀ {n s x ns sX j p ρw w fd wk ej dest bs} →
+          Cov (d-put n s a atom j p ρw w aeq wk ej dest dh ds de) bs
+  c-echo : ∀ {n s x ns sX j p ρw w fd wk ej dest dh ds de bs} →
            (n , bEcho sX j) ∈ bs → CovP dest bs →
-           Cov (d-echo n s x ns sX j p ρw w fd wk ej dest) bs
-  c-pick0 : ∀ {n s j p ρw w wk ej dest bs} →
+           Cov (d-echo n s x ns sX j p ρw w fd wk ej dest dh ds de) bs
+  c-pick0 : ∀ {n s j p ρw w wk ej dest dh ds de bs} →
             (n , bPick0 j) ∈ bs → CovP dest bs →
-            Cov (d-pick0 n s j p ρw w wk ej dest) bs
-  c-pick1 : ∀ {n s j p ρw w wk ej dest bs} →
+            Cov (d-pick0 n s j p ρw w wk ej dest dh ds de) bs
+  c-pick1 : ∀ {n s j p ρw w wk ej dest dh ds de bs} →
             (n , bPick1 j) ∈ bs → CovP dest bs →
-            Cov (d-pick1 n s j p ρw w wk ej dest) bs
-  c-get : ∀ {n s t x j p ρw w wk ej dest bs} →
+            Cov (d-pick1 n s j p ρw w wk ej dest dh ds de) bs
+  c-get : ∀ {n s t x j p ρw w wk ej dest dh ds de bs} →
           (n , bGet t s j) ∈ bs → CovP dest bs →
-          Cov (d-get n s t x j p ρw w wk ej dest) bs
-  c-cover : ∀ {n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq bs} →
+          Cov (d-get n s t x j p ρw w wk ej dest dh ds de) bs
+  c-cover : ∀ {n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀ bs} →
             (n , bCover i j) ∈ bs → CovP dp bs → CovP dq bs →
-            Cov (d-cover n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq) bs
-  c-iget : ∀ {n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq bs} →
+            Cov (d-cover n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀) bs
+  c-iget : ∀ {n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀ bs} →
            (n , bIget s i j) ∈ bs → CovP dp bs → CovP dq bs →
-           Cov (d-iget n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq) bs
+           Cov (d-iget n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀) bs
   c-mget : ∀ {n s t x named as ρw ws n2 s2 wk en dests bs} →
            (n , bMget t s named) ∈ bs → CovA dests bs →
            Cov (d-mget n s t x named as ρw ws n2 s2 wk en dests) bs
@@ -197,10 +237,10 @@ data CovP where
   cp-jump : ∀ {x i s0 ρ bs} → CovP (p-jump x i s0 ρ) bs
 
 data CovA where
-  ca0 : ∀ {bs} → CovA ap0 bs
-  ca1 : ∀ {y p as w ws pl rest bs} →
+  ca0 : ∀ {ρ bs} → CovA (ap0 {ρ}) bs
+  ca1 : ∀ {ρ y p as w ws pl hd sl ev rest bs} →
         CovP pl bs → CovA rest bs →
-        CovA (ap1 {y} {p} {as} {w} {ws} pl rest) bs
+        CovA (ap1 {y} {p} {as} {w} {ws} {ρ} pl hd sl ev rest) bs
 
 data CovT where
   ct0 : ∀ {bs} → CovT t0 bs
@@ -230,7 +270,7 @@ mutual
   covP-lift f (cp-act c) = cp-act (cov-lift f c)
   covP-lift f cp-jump = cp-jump
 
-  covA-lift : ∀ {as ws} {ps : ArmPs as ws} {xs ys} →
+  covA-lift : ∀ {ρ as ws} {ps : ArmPs ρ as ws} {xs ys} →
               (∀ {i b} → (i , b) ∈ xs → (i , b) ∈ ys) →
               CovA ps xs → CovA ps ys
   covA-lift f ca0 = ca0
@@ -241,21 +281,6 @@ covT-lift : ∀ {tab xs ys} →
             CovT tab xs → CovT tab ys
 covT-lift f ct0 = ct0
 covT-lift f (ct1 c ct) = ct1 (covP-lift f c) (covT-lift f ct)
-
-headIx : ∀ {P} → Place P → ℕ
-headIx (p-mu _ pl) = headIx pl
-headIx (p-act _ _ i _ _) = i
-headIx (p-jump _ i _ _) = i
-
-slotOf : ∀ {P} → Place P → ℕ
-slotOf (p-mu _ pl) = slotOf pl
-slotOf (p-act _ _ _ s _) = s
-slotOf (p-jump _ _ s _) = s
-
-envOf : ∀ {P} → Place P → EnvI
-envOf (p-mu _ pl) = envOf pl
-envOf (p-act _ _ _ _ ρ) = ρ
-envOf (p-jump _ _ _ ρ) = ρ
 
 ------------------------------------------------------------------------
 -- `walk` and `compile` of a compound, from the body's result.

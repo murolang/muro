@@ -146,7 +146,7 @@ record YesA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
             (cok n2 n2 s2 [] , ents ws , bs)
     od : Ord n n2 bs
     end : s2 ≡ slot + length (bnamesArms as)
-    dests : ArmPs as ws
+    dests : ArmPs ρ as ws
     tab : Table
     cv : CovA dests bs
     ct : CovT tab bs
@@ -184,7 +184,7 @@ finish-put {a} {atom} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y aeq wk 
        ((n , bPut atom (entry (Yes.w y))) ∷ Yes.bs y)
        wk cmp (o1 (Yes.od y)) (Yes.end y)
        (p-act (d-put n slot a atom (entry (Yes.w y)) p ρw (Yes.w y) aeq
-                 (Yes.wk y) refl (Yes.pl y))
+                 (Yes.wk y) refl (Yes.pl y) (Yes.hd y) (Yes.sl y) (Yes.ev y))
               r-put n slot ρ)
        (Yes.tab y)
        (cp-act (c-put here (covP-lift under (Yes.cv y))))
@@ -210,7 +210,7 @@ finish-echo {x} {p} {fp} {pend} {ρ} {renv} {venv} {ns} {n} {slot} {sX} fq y lk 
        ((n , bEcho sX (entry (Yes.w y))) ∷ Yes.bs y)
        wk cmp (o1 (Yes.od y)) (Yes.end y)
        (p-act (d-echo n slot x ns sX (entry (Yes.w y)) p ρw (Yes.w y) fd
-                 (Yes.wk y) refl (Yes.pl y))
+                 (Yes.wk y) refl (Yes.pl y) (Yes.hd y) (Yes.sl y) (Yes.ev y))
               r-echo n slot ρ)
        (Yes.tab y)
        (cp-act (c-echo here (covP-lift under (Yes.cv y))))
@@ -234,7 +234,7 @@ finish-pick0 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        ((n , bPick0 (entry (Yes.w y))) ∷ Yes.bs y)
        wk cmp (o1 (Yes.od y)) (Yes.end y)
        (p-act (d-pick0 n slot (entry (Yes.w y)) p ρw (Yes.w y)
-                 (Yes.wk y) refl (Yes.pl y))
+                 (Yes.wk y) refl (Yes.pl y) (Yes.hd y) (Yes.sl y) (Yes.ev y))
               r-pick0 n slot ρ)
        (Yes.tab y)
        (cp-act (c-pick0 here (covP-lift under (Yes.cv y))))
@@ -258,7 +258,7 @@ finish-pick1 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        ((n , bPick1 (entry (Yes.w y))) ∷ Yes.bs y)
        wk cmp (o1 (Yes.od y)) (Yes.end y)
        (p-act (d-pick1 n slot (entry (Yes.w y)) p ρw (Yes.w y)
-                 (Yes.wk y) refl (Yes.pl y))
+                 (Yes.wk y) refl (Yes.pl y) (Yes.hd y) (Yes.sl y) (Yes.ev y))
               r-pick1 n slot ρ)
        (Yes.tab y)
        (cp-act (c-pick1 here (covP-lift under (Yes.cv y))))
@@ -284,7 +284,7 @@ finish-get {t} {x} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        wk cmp (o1 (Yes.od y))
        (shift-end {slot} {slotN (Yes.w y)} {length (bnames p)} (Yes.end y))
        (p-act (d-get n slot t x (entry (Yes.w y)) p ρw (Yes.w y)
-                 (Yes.wk y) refl (Yes.pl y))
+                 (Yes.wk y) refl (Yes.pl y) (Yes.hd y) (Yes.sl y) (Yes.ev y))
               r-get n slot ρ)
        (Yes.tab y)
        (cp-act (c-get here (covP-lift under (Yes.cv y))))
@@ -726,7 +726,9 @@ mutual
               (sum-len (bnames p) (bnames q) (Yes.end y1) (Yes.end y2))
               (p-act (d-cover n slot (entry (Yes.w y1)) (entry (Yes.w y2)) p q ρw
                         (Yes.w y1) (Yes.w y2) (Yes.wk y1) refl (Yes.wk y2) refl
-                        (Yes.pl y1) (Yes.pl y2))
+                        (Yes.pl y1) (Yes.pl y2)
+                        (Yes.hd y1) (Yes.sl y1) (Yes.ev y1)
+                        (Yes.hd y2) (Yes.sl y2) (Yes.ev y2))
                      r-cover n slot ρ)
               (appendT (Yes.tab y1) (Yes.tab y2))
               (cp-act (c-cover here (covP-lift onˡ (Yes.cv y1))
@@ -791,7 +793,9 @@ mutual
               (iget-end (bnames p) (bnames q) (Yes.end y1) (Yes.end y2))
               (p-act (d-iget n slot x (entry (Yes.w y1)) (entry (Yes.w y2)) p q ρw
                         (Yes.w y1) (Yes.w y2) (Yes.wk y1) refl (Yes.wk y2) refl
-                        (Yes.pl y1) (Yes.pl y2))
+                        (Yes.pl y1) (Yes.pl y2)
+                        (Yes.hd y1) (Yes.sl y1) (Yes.ev y1)
+                        (Yes.hd y2) (Yes.sl y2) (Yes.ev y2))
                      r-iget n slot ρ)
               (appendT (Yes.tab y1) (Yes.tab y2))
               (cp-act (c-iget here (covP-lift onˡ (Yes.cv y1))
@@ -880,7 +884,7 @@ mutual
                BuiltA as fas ρ renv venv n slot
 
   denoteArms [] farms0 ρ renv venv ns scope pre post n slot rel er eok seq nseq =
-    okA (yesA [] n slot [] refl refl o0 (sym (+-idr slot)) ap0 t0 ca0 ct0)
+    okA (yesA [] n slot [] refl refl o0 (sym (+-idr slot)) (ap0 {ρ = ρ}) t0 ca0 ct0)
 
   denoteArms (aok y p ∷ as) (farms1 (farm fp) fas) ρ renv venv ns scope pre post n slot rel er eok seq nseq =
     on (denote p fp [] ρ renv venv ns scope pre (bnamesArms as ++ post) n slot rel er
@@ -927,7 +931,7 @@ mutual
                             (Yes.cmp yb) (YesA.cmp ya))
                (ord-cat (Yes.od yb) (YesA.od ya))
                (sum-len (bnames p) (bnamesArms as) (Yes.end yb) (YesA.end ya))
-               (ap1 (Yes.pl yb) (YesA.dests ya))
+               (ap1 (Yes.pl yb) (Yes.hd yb) (Yes.sl yb) (Yes.ev yb) (YesA.dests ya))
                (appendT (Yes.tab yb) (YesA.tab ya))
                (ca1 (covP-lift inˡ (Yes.cv yb))
                     (covA-lift (inʳ {bs1 = Yes.bs yb}) (YesA.cv ya)))

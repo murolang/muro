@@ -336,6 +336,48 @@ add-eq (x ∷ xs) n s {ρ1} {ρ2} eq y = go (y == x) refl
   go true eqy rewrite eqy = refl
   go false eqy rewrite eqy = add-eq xs n s {ρ1} {ρ2} eq y
 
+true≢false : true ≡ false → ⊥
+true≢false ()
+
+-- A name outside `xs` is not bound by `addPend`.
+outside : ∀ xs n s ρ y → elemS y xs ≡ false →
+          lookupI y ρ ≡ lookupI y (addPend xs n s ρ)
+outside [] n s ρ y eq = refl
+outside (x ∷ xs) n s ρ y eq with y == x
+... | true = ⊥-elim (true≢false eq)
+... | false = outside xs n s ρ y eq
+
+-- Pushing `xs` hides every name in `xs`, so the two environments need
+-- only agree on the names `xs` does not bind.
+pad : ∀ xs n s ρ1 ρ2 y →
+      (elemS y xs ≡ false → lookupI y ρ1 ≡ lookupI y ρ2) →
+      lookupI y (addPend xs n s ρ1) ≡ lookupI y (addPend xs n s ρ2)
+pad [] n s ρ1 ρ2 y eq = eq refl
+pad (x ∷ xs) n s ρ1 ρ2 y eq with y == x
+... | true = refl
+... | false = pad xs n s ρ1 ρ2 y eq
+
+-- One more copy of the same pending names does not change a lookup.
+shadow : ∀ xs n s ρ →
+         EnvEq (addPend xs n s ρ) (addPend xs n s (addPend xs n s ρ))
+shadow xs n s ρ y = pad xs n s ρ (addPend xs n s ρ) y (outside xs n s ρ y)
+
+masked : List String → EnvI → EnvI → Set
+masked xs ρ0 ρ = ∀ n s → EnvEq (addPend xs n s ρ0) (addPend xs n s ρ)
+
+masked-refl : ∀ xs ρ → masked xs ρ ρ
+masked-refl xs ρ n s y = refl
+
+masked-eq : ∀ xs {ρ0 ρ} → EnvEq ρ0 ρ → masked xs ρ0 ρ
+masked-eq xs eq n s = add-eq xs n s eq
+
+masked-sym : ∀ xs {ρ0 ρ} → masked xs ρ0 ρ → masked xs ρ ρ0
+masked-sym xs eq n s y = sym (eq n s y)
+
+masked-shadow : ∀ xs n0 s0 ρ →
+                masked xs (addPend xs n0 s0 ρ) (addPend xs n0 s0 (addPend xs n0 s0 ρ))
+masked-shadow xs n0 s0 ρ n s = add-eq xs n s (shadow xs n0 s0 ρ)
+
 var-true : ∀ n s (y : String) pend ρ1 ρ2 → elemS y pend ≡ true →
            walk pend ρ1 (svar y) n s ≡ walk pend ρ2 (svar y) n s
 var-true n s y pend ρ1 ρ2 eq rewrite eq = refl
