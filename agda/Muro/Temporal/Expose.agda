@@ -21,7 +21,8 @@ open import Relation.Binary.PropositionalEquality
 
 open import Muro.AsyncRec
   using ( Atom; Block; bPut; bEcho; Tok; pay; snoc; Graph
-        ; RConf; rc; Act; AGo; findA; lookB; materialise; reactL )
+        ; RConf; rc; Act; AGo; findA; lookB; materialise; reactL
+        ; room; slotVal )
 open import Muro.Temporal.Bridge using (distinct)
 open import Muro.Temporal.Pic using (_∈_; root-at)
 open import Muro.Temporal.Source
@@ -31,7 +32,7 @@ open import Muro.Temporal.Source
   renaming (snoc to ssnoc)
 open SConf
 open import Muro.Temporal using (Step; stepL; lside)
-open import Muro.Temporal.Fire using (react-put; room-yes; snoc≡)
+open import Muro.Temporal.Fire using (react-put; react-echo; room-yes; snoc≡)
 open W
 open import Muro.Temporal.Den
   using ( Place; p-mu; p-act; p-jump; Den; d-put; d-echo; Table; Link; Links
@@ -332,6 +333,74 @@ leftBag {c = c} h =
       (cov-id {xs = []} {base = envIL c} {n = il c} {s = slotL c})
   where lc = Hold.leftC h
 
+-- The block at the left cursor is the block `lookB` returns.
+seenL : ∀ {g c b} (h : Hold g c) → (il c , b) ∈ Hold.bsL h →
+        lookB (Graph.codeL g) (il c) ≡ just b
+seenL {c = c} {b = b} h mem =
+  subst (λ code → lookB code (il c) ≡ just b) (sym (Hold.cL h))
+    (root-at (Hold.odL h) mem)
+
+-- The source queue bound is the graph's `room` test.
+roomL : ∀ {g c} (h : Hold g c) → length (l2r c) < cap c →
+        room (Graph.cap g) (l2r c) ≡ true
+roomL {g} {c} h le =
+  room-yes (Graph.cap g) (l2r c)
+    (subst (λ n → length (l2r c) < n) (Hold.κ h) le)
+
+find≡ : ∀ x xs ys → xs ≡ ys → findS x xs ≡ findS x ys
+find≡ _ _ _ refl = refl
+
+-- Once the block has run, the continuation cursor is the next `Hold`.
+closeL : ∀ {g c p ρ′ pend′ k j w wS} (h : Hold g c) →
+         reactL g (abs c) ≡
+           AGo (rc j (ir c) (snoc (l2r c) (pay k)) (r2l c) (el c) (er c)) →
+         entry wS ≡ j →
+         walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+              (suc (il c)) (slotL c) ≡ just wS →
+         walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+              (suc (il c)) (slotL c) ≡ just w →
+         (cur : Cursor (Hold.bsL h) (entry wS) (atSlot wS) ρ′
+                       (addPend pend′ (il c) (slotL c) (envIL c)) p) →
+         Cursor.echoNs cur ≡ Cursor.echoNs (Hold.leftC h) →
+         Step g (abs c) lside (abs (afterPut c p ρ′ pend′ k w)) ×
+         Hold g (afterPut c p ρ′ pend′ k w)
+closeL {g} {c} {p} {ρ′} {pend′} {k} {j} {w} {wS} h reacted ej wkS wk cur nse =
+  stepL moved , record
+    { nL = Hold.nL h ; bsL = Hold.bsL h ; odL = Hold.odL h ; cL = Hold.cL h
+    ; nR = Hold.nR h ; bsR = Hold.bsR h ; odR = Hold.odR h ; cR = Hold.cR h
+    ; α = Hold.α h ; κ = Hold.κ h
+    ; leftC = curW ; rightC = Hold.rightC h
+    ; nmL = trans (Hold.nmL h) (trans (sym nse) (sym (ns-keep weq cur)))
+    ; nmR = Hold.nmR h }
+  where
+  weq : wS ≡ w
+  weq = just-inj (trans (sym wkS) wk)
+  j≡ : j ≡ entry w
+  j≡ = trans (sym ej) (cong entry weq)
+  atJ : reactL g (abs c) ≡
+        AGo (rc (entry w) (ir c) (snoc (l2r c) (pay k)) (r2l c) (el c) (er c))
+  atJ = subst (λ i → reactL g (abs c) ≡
+                 AGo (rc i (ir c) (snoc (l2r c) (pay k)) (r2l c) (el c) (er c)))
+          j≡ reacted
+  moved : reactL g (abs c) ≡ AGo (abs (afterPut c p ρ′ pend′ k w))
+  moved = subst (λ q → reactL g (abs c) ≡
+                   AGo (rc (entry w) (ir c) q (r2l c) (el c) (er c)))
+            (sym (snoc≡ (l2r c) (pay k))) atJ
+  curW = subst (λ z → Cursor (Hold.bsL h) (entry z) (atSlot z) ρ′
+                        (addPend pend′ (il c) (slotL c) (envIL c)) p)
+           weq cur
+
+-- The left cursor, unfolded to the send its place denotes.
+leftSend : ∀ {g c a p ρ′ pend′} (h : Hold g c) →
+           Unfold (envPL c) [] (left c) ρ′ pend′ (f-put a p) →
+           Send (Hold.bsL h) (Cursor.echoNs (Hold.leftC h))
+                (il c) (slotL c) (envIL c) ρ′ pend′ a p
+leftSend {c = c} h unf =
+  openSend (leftBag h) (Cursor.pl lc) (Cursor.cv lc) (Cursor.lk lc)
+           (Cursor.hs lc) (Cursor.at lc) (Cursor.ens lc) (Cursor.al lc)
+           (Cursor.ix lc) (Cursor.ss lc) (Cursor.sn lc) unf
+  where lc = Hold.leftC h
+
 ------------------------------------------------------------------------
 -- A source put is the block `openSend` read, run by `react-put`.
 ------------------------------------------------------------------------
@@ -346,56 +415,54 @@ put-fwd : ∀ {g c a p ρ′ pend′ atom k w} (h : Hold g c) →
           Step g (abs c) lside (abs (afterPut c p ρ′ pend′ k w)) ×
           Hold g (afterPut c p ρ′ pend′ k w)
 put-fwd {g} {c} {a} {p} {ρ′} {pend′} {atom} {k} {w} h unf aq eqF le wk =
-  use (openSend (leftBag h) (Cursor.pl lc) (Cursor.cv lc) (Cursor.lk lc)
-                (Cursor.hs lc) (Cursor.at lc) (Cursor.ens lc) (Cursor.al lc)
-                (Cursor.ix lc) (Cursor.ss lc) (Cursor.sn lc) unf)
-      aq
+  use (leftSend h unf) aq
   where
-  lc = Hold.leftC h
-  use : Send (Hold.bsL h) (Cursor.echoNs lc) (il c) (slotL c) (envIL c)
-             ρ′ pend′ a p →
+  use : Send (Hold.bsL h) (Cursor.echoNs (Hold.leftC h)) (il c) (slotL c)
+             (envIL c) ρ′ pend′ a p →
         asAtom a ≡ just atom →
         Step g (abs c) lside (abs (afterPut c p ρ′ pend′ k w)) ×
         Hold g (afterPut c p ρ′ pend′ k w)
   use (echoed _ _ _ _ refl _ _ _ _ _ _) ()
   use (sent atomS j wS aeq ej mem wkS cur nse) aq′ =
-    stepL moved , record
-      { nL = Hold.nL h ; bsL = Hold.bsL h ; odL = Hold.odL h ; cL = Hold.cL h
-      ; nR = Hold.nR h ; bsR = Hold.bsR h ; odR = Hold.odR h ; cR = Hold.cR h
-      ; α = Hold.α h ; κ = Hold.κ h
-      ; leftC = curW ; rightC = Hold.rightC h
-      ; nmL = trans (Hold.nmL h) (trans (sym nse) (sym (ns-keep weq cur)))
-      ; nmR = Hold.nmR h }
+    closeL h reacted ej wkS wk cur nse
     where
     atom≡ : atomS ≡ atom
     atom≡ = just-inj (trans (sym aeq) aq′)
     memA : (il c , bPut atom j) ∈ Hold.bsL h
     memA = subst (λ z → (il c , bPut z j) ∈ Hold.bsL h) atom≡ mem
-    look0 : lookB (materialise (Hold.nL h) zero (Hold.bsL h)) (il c) ≡
-            just (bPut atom j)
-    look0 = root-at (Hold.odL h) memA
-    look : lookB (Graph.codeL g) (il c) ≡ just (bPut atom j)
-    look = subst (λ code → lookB code (il c) ≡ just (bPut atom j))
-             (sym (Hold.cL h)) look0
     findG : findA atom (Graph.alpha g) ≡ just k
     findG = subst (λ al → findA atom al ≡ just k) (Hold.α h) eqF
-    leG : length (l2r c) < Graph.cap g
-    leG = subst (λ n → length (l2r c) < n) (Hold.κ h) le
     reacted = react-put g (il c) (ir c) (l2r c) (r2l c) (el c) (er c)
-                atom k j findG (room-yes (Graph.cap g) (l2r c) leG) look
-    weq : wS ≡ w
-    weq = just-inj (trans (sym wkS) wk)
-    j≡ : j ≡ entry w
-    j≡ = trans (sym ej) (cong entry weq)
-    atJ : reactL g (abs c) ≡
-          AGo (rc (entry w) (ir c) (snoc (l2r c) (pay k)) (r2l c) (el c) (er c))
-    atJ = subst (λ i → reactL g (abs c) ≡
-                   AGo (rc i (ir c) (snoc (l2r c) (pay k)) (r2l c) (el c) (er c)))
-            j≡ reacted
-    moved : reactL g (abs c) ≡ AGo (abs (afterPut c p ρ′ pend′ k w))
-    moved = subst (λ q → reactL g (abs c) ≡
-                     AGo (rc (entry w) (ir c) q (r2l c) (el c) (er c)))
-              (sym (snoc≡ (l2r c) (pay k))) atJ
-    curW = subst (λ z → Cursor (Hold.bsL h) (entry z) (atSlot z) ρ′
-                          (addPend pend′ (il c) (slotL c) (envIL c)) p)
-             weq cur
+                atom k j findG (roomL h le) (seenL h memA)
+
+------------------------------------------------------------------------
+-- A source echo is the same step, with the value taken from a slot.
+------------------------------------------------------------------------
+
+echo-fwd : ∀ {g c x p ρ′ pend′ i k w} (h : Hold g c) →
+           Unfold (envPL c) [] (left c) ρ′ pend′ (f-put (pEcho x) p) →
+           findS x (namesL c) ≡ just i →
+           slotVal (el c) i ≡ just k →
+           length (l2r c) < cap c →
+           walk [] (addPend pend′ (il c) (slotL c) (envIL c)) p
+                (suc (il c)) (slotL c) ≡ just w →
+           Step g (abs c) lside (abs (afterPut c p ρ′ pend′ k w)) ×
+           Hold g (afterPut c p ρ′ pend′ k w)
+echo-fwd {g} {c} {x} {p} {ρ′} {pend′} {i} {k} {w} h unf eqN eqS le wk =
+  use (leftSend h unf)
+  where
+  use : Send (Hold.bsL h) (Cursor.echoNs (Hold.leftC h)) (il c) (slotL c)
+             (envIL c) ρ′ pend′ (pEcho x) p →
+        Step g (abs c) lside (abs (afterPut c p ρ′ pend′ k w)) ×
+        Hold g (afterPut c p ρ′ pend′ k w)
+  use (sent _ _ _ () _ _ _ _ _)
+  use (echoed .x sX j wS refl fd ej mem wkS cur nse) =
+    closeL h reacted ej wkS wk cur nse
+    where
+    i≡ : i ≡ sX
+    i≡ = just-inj (trans (sym eqN)
+           (trans (find≡ x (namesL c) (Cursor.echoNs (Hold.leftC h)) (Hold.nmL h)) fd))
+    slotG : slotVal (el c) sX ≡ just k
+    slotG = subst (λ z → slotVal (el c) z ≡ just k) i≡ eqS
+    reacted = react-echo g (il c) (ir c) (l2r c) (r2l c) (el c) (er c)
+                sX k j slotG (roomL h le) (seenL h mem)
