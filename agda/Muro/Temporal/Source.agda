@@ -9,7 +9,12 @@
 -- declaration) is `pOut`, `sout`, or `abad`. A bare `mget` arm has
 -- no constructor name, and an arm list that is not the declaration's
 -- constructors in order is `sout`: the graph matches the name, so
--- those forms are not the injected process.
+-- those forms are not the injected process. An echo whose variable
+-- type is not the binder's type is `pOut`: the graph sends the slot,
+-- and a different type would send another value. A `get` or a payload
+-- whose type mentions an index variable is `sout` or `pOut`, because
+-- applying the index context can make two source types meet on the
+-- wire while the variable's type still differs from the binder.
 --
 -- A step is one side's action. A jump is not its own step: unfolding
 -- `smu` / `svar` is part of the action, and the continuation index is
@@ -35,6 +40,8 @@ open import Data.Sum.Base using (_⊎_; inj₁; inj₂)
 open import Data.String.Base using (String)
 open import Data.String.Properties using (_==_)
 open import Relation.Binary.PropositionalEquality using (_≡_; refl)
+open import Relation.Nullary.Decidable.Core using ()
+  renaming (yes to yes′; no to no′)
 
 open import Muro.AsyncRec
   using ( Atom; aNat; aBit; aCon
@@ -556,43 +563,96 @@ payOf (S.lit v) = payVal v
 payOf (S.var x) = pEcho x
 payOf (S.call _ _) = pOut
 
+-- An index variable is not yet a number. `applyTy` substitutes it, so
+-- two types can agree on the wire and still differ as binders.
+closedN : S.NExp → Bool
+closedN (S.nlit _) = true
+closedN (S.nvar _) = false
+
+mutual
+  closedTy : S.Ty → Bool
+  closedTy S.nat = true
+  closedTy S.bit = true
+  closedTy S.unit = true
+  closedTy (S.pair A B) = closedTy A ∧ closedTy B
+  closedTy (S.rec fs) = closedFs fs
+  closedTy (S.vec A e) = closedTy A ∧ closedN e
+  closedTy (S.dat _ as) = closedTs as
+
+  closedFs : S.Fields → Bool
+  closedFs S.noFields = true
+  closedFs (S.named _ A fs) = closedTy A ∧ closedFs fs
+
+  closedTs : List S.Ty → Bool
+  closedTs [] = true
+  closedTs (A ∷ as) = closedTy A ∧ closedTs as
+
+-- The type the nearest binder gave this name.
+lookupTy : String → List (String × S.Ty) → Maybe S.Ty
+lookupTy _ [] = nothing
+lookupTy x ((y , A) ∷ Γ) with x == y
+... | true = just A
+... | false = lookupTy x Γ
+
+-- A literal keeps `payVal`. A variable is an echo only when its type
+-- is the binder's type. A call is outside the fragment.
+payClosed : List (String × S.Ty) → {A : S.Ty} → S.ValExpr A → Pay
+payClosed _ (S.lit v) = payVal v
+payClosed Γ (S.var {A} x) with lookupTy x Γ
+... | nothing = pOut
+... | just B with S.ty≟ A B
+... | yes′ _ = pEcho x
+... | no′ _ = pOut
+payClosed _ (S.call _ _) = pOut
+
+-- An index variable in the type is refused before the payload is read.
+payIn : List (String × S.Ty) → {A : S.Ty} → S.ValExpr A → Pay
+payIn Γ {A} e with closedTy A
+... | false = pOut
+... | true = payClosed Γ e
+
 -- Constructors of a payload, or none when the type is not a declaration.
 ctorsTy : S.Ty → List S.Ctor
 ctorsTy (S.dat d _) = S.ctorsOf d
 ctorsTy _ = []
 
 -- Arm `k` against constructor `n`, in order. A bare arm, a fielded
--- arm, or a different name is not the list the graph matches.
+-- arm, or a different name is not the list the graph matches. The
+-- environment is the binders already in scope, most recent first.
 mutual
-  matchArms : List S.Ctor → List S.PArm → Maybe (List Arm)
-  matchArms [] [] = just []
-  matchArms (S.ctor n _ ∷ cs) (S.named k [] p ∷ ps) with n == k
+  matchArms : List (String × S.Ty) → List S.Ctor → List S.PArm → Maybe (List Arm)
+  matchArms _ [] [] = just []
+  matchArms Γ (S.ctor n _ ∷ cs) (S.named k [] p ∷ ps) with n == k
   ... | false = nothing
-  ... | true with matchArms cs ps
+  ... | true with matchArms Γ cs ps
   ... | nothing = nothing
-  ... | just bs = just (aok k (inj p) ∷ bs)
-  matchArms _ _ = nothing
+  ... | just bs = just (aok k (go Γ p) ∷ bs)
+  matchArms _ _ _ = nothing
 
-  injGot : Maybe Tag → String → S.Proc → SProc
-  injGot (just t) x p = sget t x (inj p)
-  injGot nothing _ _ = sout
-
-  injMatched : Maybe Tag → List S.Ctor → String → List S.PArm → SProc
-  injMatched nothing _ _ _ = sout
-  injMatched (just t) cs x as with matchArms cs as
+  go : List (String × S.Ty) → S.Proc → SProc
+  go _ S.done = sdone
+  go _ S.stop = sstop
+  go Γ (S.put _ e p) = sput (payIn Γ e) (go Γ p)
+  go Γ (S.get A x p) with closedTy A
+  ... | false = sout
+  ... | true with goodGet A
+  ... | nothing = sout
+  ... | just t = sget t x (go ((x , A) ∷ Γ) p)
+  go Γ (S.pick0 p) = spick0 (go Γ p)
+  go Γ (S.pick1 p) = spick1 (go Γ p)
+  go Γ (S.cover p q) = scover (go Γ p) (go Γ q)
+  go Γ (S.iget x p q) =
+    siget x (go ((x , S.bit) ∷ Γ) p) (go ((x , S.bit) ∷ Γ) q)
+  go Γ (S.mget A x as) with closedTy A
+  ... | false = sout
+  ... | true with goodGet A
+  ... | nothing = sout
+  ... | just t with matchArms ((x , A) ∷ Γ) (ctorsTy A) as
   ... | nothing = sout
   ... | just bs = smget t x bs
 
-  inj : S.Proc → SProc
-  inj S.done = sdone
-  inj S.stop = sstop
-  inj (S.put _ e p) = sput (payOf e) (inj p)
-  inj (S.get A x p) = injGot (goodGet A) x p
-  inj (S.pick0 p) = spick0 (inj p)
-  inj (S.pick1 p) = spick1 (inj p)
-  inj (S.cover p q) = scover (inj p) (inj q)
-  inj (S.iget x p q) = siget x (inj p) (inj q)
-  inj (S.mget A x as) = injMatched (goodGet A) (ctorsTy A) x as
+inj : S.Proc → SProc
+inj P = go [] P
 
 -- A constructor the declaration does not have is not a payload.
 bad-con : payOf (S.lit (S.con {S.boolDecl} {[]} "nope" S.snil)) ≡ pOut
@@ -601,6 +661,24 @@ bad-con = refl
 -- A bare arm does not name a constructor, so the injection refuses it.
 bare-mget : inj (S.mget S.nat "x" (S.bare S.done ∷ [])) ≡ sout
 bare-mget = refl
+
+-- The variable's type is bit and the binder's type is nat.
+ill-echo : inj (S.get S.nat "x" (S.put S.bit (S.var {S.bit} "x") S.done))
+         ≡ sget tagNat "x" (sput pOut sdone)
+ill-echo = refl
+
+-- The same name at the binder's type is an echo.
+ok-echo : inj (S.get S.nat "x" (S.put S.nat (S.var {S.nat} "x") S.done))
+        ≡ sget tagNat "x" (sput (pEcho "x") sdone)
+ok-echo = refl
+
+-- An index variable is not a closed payload type.
+open-get : inj (S.get (S.vec S.nat (S.nvar "n")) "x" S.done) ≡ sout
+open-get = refl
+
+open-put : inj (S.put (S.vec S.nat (S.nvar "n")) (S.lit (S.rep S.zero)) S.done)
+         ≡ sput pOut sdone
+open-put = refl
 
 ------------------------------------------------------------------------
 -- The processes the compiled examples use, written as source.
