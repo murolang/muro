@@ -12,13 +12,16 @@
 
 module Muro.Temporal.Denote where
 
-open import Data.Bool.Base using (Bool; true; false)
+open import Data.Bool.Base using (Bool; true; false; _∧_)
+open import Data.Empty using (⊥-elim)
 open import Data.List.Base using (List; []; _∷_; _++_; length)
 open import Data.Maybe.Base using (just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc; _+_)
 open import Data.Product using (Σ; _×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String)
-open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym)
+open import Data.String.Properties using (_==_; _≟_)
+open import Relation.Nullary using (yes; no)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; cong)
 
 open import Muro.AsyncRec
   using ( Atom; aNat; aBit; aCon; Tag
@@ -32,6 +35,7 @@ open import Muro.Temporal.Bridge
         ; fdone; fstop; fput; fget; fpick0; fpick1; fcover; figet; fmget; fmu; fvar
         ; fnat; fbit; fcon; fecho; farm; farms0; farms1
         ; elab; elabArms; echoOk; echoOkArms; ∧-left; ∧-right
+        ; mus; musArms; distinct; fresh; muOk
         ; echoAF )
 open import Muro.Temporal.Source
   using ( Pay; pNat; pBit; pCon; pEcho
@@ -44,7 +48,8 @@ open W
 open import Muro.Temporal.Pic
   using ( Ord; o0; o1; ord-cat; _∈_; here; there; +-idr; ents
         ; ERel; er0; add-rel; Seen; seen-no; seen-yes; lookup-rel
-        ; EchoRel; echo-empty; echo-extend )
+        ; EchoRel; echo-empty; echo-extend
+        ; true≢false; ++assoc )
 open import Muro.Temporal.Agree
   using ( get-slot; get-names; split-left; split-right; cat-slot; shift-end; sum-len
         ; iget-p-ns; iget-q-ns; iget-q-slot; iget-end
@@ -542,6 +547,196 @@ var-cmp-yes : ∀ {pend renv venv slot n y i} → elemS y pend ≡ false →
               lookupN y renv ≡ just i →
               compile (rvar y) pend renv venv slot n ≡ cok i n slot []
 var-cmp-yes eqe eql rewrite eqe | eql = refl
+
+------------------------------------------------------------------------
+-- A binder is not in the environment it was denoted under. `muOk`
+-- says the pending names, the environment, and the binders still to
+-- come are pairwise distinct, so peeling one cannot shadow another.
+------------------------------------------------------------------------
+
+namesI : EnvI → List String
+namesI [] = []
+namesI ((x , _ , _) ∷ ρ) = x ∷ namesI ρ
+
+names-add : ∀ xs n s ρ → namesI (addPend xs n s ρ) ≡ xs ++ namesI ρ
+names-add [] n s ρ = refl
+names-add (x ∷ xs) n s ρ = cong (x ∷_) (names-add xs n s ρ)
+
+miss-names : ∀ ρ y → elemS y (namesI ρ) ≡ false → lookupI y ρ ≡ nothing
+miss-names [] y eq = refl
+miss-names ((x , i , s) ∷ ρ) y eq = go (y == x) refl eq
+  where
+  go : (b : Bool) → (y == x) ≡ b → elemS y (x ∷ namesI ρ) ≡ false →
+       lookupI y ((x , i , s) ∷ ρ) ≡ nothing
+  go true eqy eq2 rewrite eqy = ⊥-elim (true≢false eq2)
+  go false eqy eq2 rewrite eqy = miss-names ρ y eq2
+
+data AllFresh (x : String) : List String → Set where
+  af0 : AllFresh x []
+  af1 : ∀ {y ys} → (x == y) ≡ false → AllFresh x ys → AllFresh x (y ∷ ys)
+
+data Dis : List String → Set where
+  d0 : Dis []
+  d1 : ∀ {x xs} → AllFresh x xs → Dis xs → Dis (x ∷ xs)
+
+fresh→ : ∀ x xs → fresh x xs ≡ true → AllFresh x xs
+fresh→ x [] eq = af0
+fresh→ x (y ∷ ys) eq = go (x == y) refl eq
+  where
+  go : (b : Bool) → (x == y) ≡ b → fresh x (y ∷ ys) ≡ true → AllFresh x (y ∷ ys)
+  go true eqy eq2 rewrite eqy = ⊥-elim (true≢false (sym eq2))
+  go false eqy eq2 rewrite eqy = af1 eqy (fresh→ x ys eq2)
+
+dis← : ∀ xs → distinct xs ≡ true → Dis xs
+dis← [] eq = d0
+dis← (x ∷ xs) eq = d1 (fresh→ x xs (∧-left eq)) (dis← xs (∧-right eq))
+
+fresh← : ∀ {x xs} → AllFresh x xs → fresh x xs ≡ true
+fresh← af0 = refl
+fresh← {x} (af1 {y} {ys} eq f) rewrite eq = fresh← {x} {ys} f
+
+dis→ : ∀ xs → Dis xs → distinct xs ≡ true
+dis→ [] d0 = refl
+dis→ (x ∷ xs) (d1 f d) rewrite fresh← f | dis→ xs d = refl
+
+==-sym : ∀ x y → (x == y) ≡ (y == x)
+==-sym x y with x ≟ y | y ≟ x
+... | yes _ | yes _ = refl
+... | yes p | no ¬q = ⊥-elim (¬q (sym p))
+... | no ¬p | yes q = ⊥-elim (¬p (sym q))
+... | no _ | no _ = refl
+
+data Cross : List String → List String → Set where
+  cr0 : ∀ {ys} → Cross [] ys
+  cr1 : ∀ {x xs ys} → AllFresh x ys → Cross xs ys → Cross (x ∷ xs) ys
+
+af-split : ∀ {x} xs ys → AllFresh x (xs ++ ys) → AllFresh x xs × AllFresh x ys
+af-split [] ys f = af0 , f
+af-split (z ∷ xs) ys (af1 eq f) =
+  let fl , fr = af-split xs ys f in af1 eq fl , fr
+
+af-join : ∀ {x xs ys} → AllFresh x xs → AllFresh x ys → AllFresh x (xs ++ ys)
+af-join af0 g = g
+af-join (af1 eq f) g = af1 eq (af-join f g)
+
+af-tail : ∀ {x y ys} → AllFresh x (y ∷ ys) → AllFresh x ys
+af-tail (af1 _ f) = f
+
+fresh-one : ∀ {x y ys} → AllFresh x (y ∷ ys) → (y == x) ≡ false
+fresh-one {x} {y} (af1 eq _) rewrite ==-sym x y = eq
+
+col : ∀ xs {y ys} → Cross xs (y ∷ ys) → AllFresh y xs
+col [] _ = af0
+col (x ∷ xs) (cr1 f cr) = af1 (fresh-one f) (col xs cr)
+
+cross-tail : ∀ xs {y ys} → Cross xs (y ∷ ys) → Cross xs ys
+cross-tail [] cr0 = cr0
+cross-tail (x ∷ xs) (cr1 f cr) = cr1 (af-tail f) (cross-tail xs cr)
+
+cross-sym : ∀ xs ys → Cross xs ys → Cross ys xs
+cross-sym xs [] cr = cr0
+cross-sym xs (y ∷ ys) cr =
+  cr1 (col xs cr) (cross-sym xs ys (cross-tail xs cr))
+
+cross-left : ∀ xs ys zs → Cross xs (ys ++ zs) → Cross xs ys
+cross-left [] ys zs cr = cr0
+cross-left (x ∷ xs) ys zs (cr1 f cr) =
+  cr1 (proj₁ (af-split ys zs f)) (cross-left xs ys zs cr)
+
+cross-right : ∀ xs ys zs → Cross xs (ys ++ zs) → Cross xs zs
+cross-right [] ys zs cr = cr0
+cross-right (x ∷ xs) ys zs (cr1 f cr) =
+  cr1 (proj₂ (af-split ys zs f)) (cross-right xs ys zs cr)
+
+cross-cat : ∀ xs ys zs → Cross xs zs → Cross ys zs → Cross (xs ++ ys) zs
+cross-cat [] ys zs cx cy = cy
+cross-cat (x ∷ xs) ys zs (cr1 f cx) cy =
+  cr1 f (cross-cat xs ys zs cx cy)
+
+dis-split : ∀ xs ys → Dis (xs ++ ys) → Dis xs × Dis ys × Cross xs ys
+dis-split [] ys d = d0 , d , cr0
+dis-split (x ∷ xs) ys (d1 f d) =
+  let dx , dy , cr = dis-split xs ys d
+      fl , fr = af-split xs ys f
+  in d1 fl dx , dy , cr1 fr cr
+
+dis-join : ∀ xs ys → Dis xs → Dis ys → Cross xs ys → Dis (xs ++ ys)
+dis-join [] ys dx dy cr = dy
+dis-join (x ∷ xs) ys (d1 f dx) dy (cr1 fy cr) =
+  d1 (af-join f fy) (dis-join xs ys dx dy cr)
+
+sep-cont : ∀ ρ pend ms →
+           Dis (namesI ρ ++ (pend ++ ms)) →
+           Dis ((pend ++ namesI ρ) ++ ms)
+sep-cont ρ pend ms d =
+  let a , bc , cab = dis-split (namesI ρ) (pend ++ ms) d
+      b , c , cbc = dis-split pend ms bc
+      cabB = cross-left (namesI ρ) pend ms cab
+      cabC = cross-right (namesI ρ) pend ms cab
+      ba = cross-sym (namesI ρ) pend cabB
+  in dis-join (pend ++ namesI ρ) ms
+       (dis-join pend (namesI ρ) b a ba) c
+       (cross-cat pend (namesI ρ) ms cbc cabC)
+
+sep-cont-b : ∀ ρ pend ms →
+             distinct (namesI ρ ++ (pend ++ ms)) ≡ true →
+             distinct ((pend ++ namesI ρ) ++ ms) ≡ true
+sep-cont-b ρ pend ms eq =
+  dis→ ((pend ++ namesI ρ) ++ ms)
+       (sep-cont ρ pend ms (dis← (namesI ρ ++ (pend ++ ms)) eq))
+
+rot-eq : ∀ {a x} B C → AllFresh a (B ++ (x ∷ C)) → (a == x) ≡ false
+rot-eq [] C (af1 eq _) = eq
+rot-eq (b ∷ B) C (af1 _ f) = rot-eq B C f
+
+rot-rest : ∀ {a x} B C → AllFresh a (B ++ (x ∷ C)) → AllFresh a (B ++ C)
+rot-rest [] C (af1 _ f) = f
+rot-rest (b ∷ B) C (af1 eq f) = af1 eq (rot-rest B C f)
+
+af-rot : ∀ {a x} B C → AllFresh a (B ++ (x ∷ C)) → AllFresh a (x ∷ (B ++ C))
+af-rot B C f = af1 (rot-eq B C f) (rot-rest B C f)
+
+cross-rot : ∀ A {x} B C → Cross A (B ++ (x ∷ C)) → Cross A (x ∷ (B ++ C))
+cross-rot [] B C cr = cr0
+cross-rot (a ∷ A) {x} B C (cr1 f cr) =
+  cr1 (af-rot {x = x} B C f) (cross-rot A {x} B C cr)
+
+bubble : ∀ A B C x →
+         Dis (A ++ (B ++ (x ∷ C))) →
+         Dis (A ++ (x ∷ (B ++ C)))
+bubble A B C x d =
+  let a , rest , car = dis-split A (B ++ (x ∷ C)) d
+      b , xc , cb = dis-split B (x ∷ C) rest
+      fx = af-of xc
+      dc = tail-of xc
+      xb = col B cb
+      bc = cross-tail B cb
+      body = d1 (af-join xb fx) (dis-join B C b dc bc)
+      cross = cross-rot A B C car
+  in dis-join A (x ∷ (B ++ C)) a body cross
+  where
+  af-of : Dis (x ∷ C) → AllFresh x C
+  af-of (d1 f _) = f
+  tail-of : Dis (x ∷ C) → Dis C
+  tail-of (d1 _ dC) = dC
+
+sep-mu-b : ∀ ρ pend x ms →
+           distinct (namesI ρ ++ (pend ++ (x ∷ ms))) ≡ true →
+           distinct (namesI ρ ++ (x ∷ (pend ++ ms))) ≡ true
+sep-mu-b ρ pend x ms eq =
+  dis→ (namesI ρ ++ (x ∷ (pend ++ ms)))
+       (bubble (namesI ρ) pend ms x
+         (dis← (namesI ρ ++ (pend ++ (x ∷ ms))) eq))
+
+sep-side : ∀ pre ms1 ms2 →
+           Dis (pre ++ (ms1 ++ ms2)) →
+           Dis (pre ++ ms1) × Dis (pre ++ ms2)
+sep-side pre ms1 ms2 d =
+  let p , both , cp = dis-split pre (ms1 ++ ms2) d
+      m1 , m2 , _ = dis-split ms1 ms2 both
+      c1 = cross-left pre ms1 ms2 cp
+      c2 = cross-right pre ms1 ms2 cp
+  in dis-join pre ms1 p m1 c1 , dis-join pre ms2 p m2 c2
 
 ------------------------------------------------------------------------
 -- The denotation. Structural on the process and on the arm list.
