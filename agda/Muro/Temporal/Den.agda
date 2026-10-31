@@ -263,6 +263,140 @@ data Links : Table → Set where
   ls1 : ∀ {P x i s0 ρ pl tab} →
         Link pl → Links tab → Links (t1 {P} x i s0 ρ pl tab)
 
+-- The place a recursion binder denotes, found in the table.
+data InTab (x : String) (P : SProc) : Table → Set where
+  in-here : ∀ {i s0 ρ pl tab} →
+            Link pl → InTab x P (t1 {P} x i s0 ρ pl tab)
+  in-there : ∀ {Q y i s0 ρ pl tab} →
+             InTab x P tab → InTab x P (t1 {Q} y i s0 ρ pl tab)
+
+-- Every place under `pl` that a jump can return to is in `tab`.
+data Hosts : Table → {P : SProc} → Place P → Set
+data HostsA : {ρ : EnvI} {as : List Arm} {ws : List (String × W)} →
+              Table → ArmPs ρ as ws → Set
+
+data Hosts where
+  hs-jump : ∀ {tab x i s0 ρ} → Hosts tab (p-jump x i s0 ρ)
+  hs-done : ∀ {tab n i s0 ρ} → Hosts tab (p-act (d-done n) r-done i s0 ρ)
+  hs-stop : ∀ {tab n i s0 ρ} → Hosts tab (p-act (d-stop n) r-stop i s0 ρ)
+  hs-put : ∀ {n s a atom j p ρw w aeq wk ej dest dh ds de i0 s0 ρ tab} →
+           Hosts tab dest →
+           Hosts tab (p-act (d-put n s a atom j p ρw w aeq wk ej dest dh ds de)
+                            r-put i0 s0 ρ)
+  hs-echo : ∀ {n s x ns sX j p ρw w fd wk ej dest dh ds de i0 s0 ρ tab} →
+            Hosts tab dest →
+            Hosts tab (p-act (d-echo n s x ns sX j p ρw w fd wk ej dest dh ds de)
+                             r-echo i0 s0 ρ)
+  hs-pick0 : ∀ {n s j p ρw w wk ej dest dh ds de i0 s0 ρ tab} →
+             Hosts tab dest →
+             Hosts tab (p-act (d-pick0 n s j p ρw w wk ej dest dh ds de)
+                              r-pick0 i0 s0 ρ)
+  hs-pick1 : ∀ {n s j p ρw w wk ej dest dh ds de i0 s0 ρ tab} →
+             Hosts tab dest →
+             Hosts tab (p-act (d-pick1 n s j p ρw w wk ej dest dh ds de)
+                              r-pick1 i0 s0 ρ)
+  hs-get : ∀ {n s t x j p ρw w wk ej dest dh ds de i0 s0 ρ tab} →
+           Hosts tab dest →
+           Hosts tab (p-act (d-get n s t x j p ρw w wk ej dest dh ds de)
+                            r-get i0 s0 ρ)
+  hs-cover : ∀ {n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀
+               i0 s0 ρ tab} →
+             Hosts tab dp → Hosts tab dq →
+             Hosts tab (p-act (d-cover n s i j p q ρw w1 w2 wk1 ei wk2 ej dp dq
+                                      hp sp ep hq sq eq₀)
+                             r-cover i0 s0 ρ)
+  hs-iget : ∀ {n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq hp sp ep hq sq eq₀
+              i0 s0 ρ tab} →
+            Hosts tab dp → Hosts tab dq →
+            Hosts tab (p-act (d-iget n s x i j p q ρw w1 w2 wk1 ei wk2 ej dp dq
+                                     hp sp ep hq sq eq₀)
+                            r-iget i0 s0 ρ)
+  hs-mget : ∀ {n s t x named as ρw ws n2 s2 wk en dests i0 s0 ρ tab} →
+            HostsA tab dests →
+            Hosts tab (p-act (d-mget n s t x named as ρw ws n2 s2 wk en dests)
+                             r-mget i0 s0 ρ)
+  hs-mu : ∀ {x p tab} {pl : Place p} →
+          InTab x (smu x p) tab → Hosts tab pl → Hosts tab (p-mu x pl)
+
+data HostsA where
+  ha0 : ∀ {ρ tab} → HostsA {ρ} tab (ap0 {ρ})
+  ha1 : ∀ {tab ρ y p as w ws pl hd sl ev rest} →
+        Hosts tab pl → HostsA tab rest →
+        HostsA tab (ap1 {y} {p} {as} {w} {ws} {ρ} pl hd sl ev rest)
+
+appendT : Table → Table → Table
+appendT t0 u = u
+appendT (t1 x i s0 ρ pl t) u = t1 x i s0 ρ pl (appendT t u)
+
+in-appendˡ : ∀ {x P t u} → InTab x P t → InTab x P (appendT t u)
+in-appendʳ : ∀ {x P t u} → InTab x P u → InTab x P (appendT t u)
+
+hosts-there : ∀ {P} {pl : Place P} {Q y i s0 ρ} {ql : Place Q} {tab} →
+              Hosts tab pl → Hosts (t1 {Q} y i s0 ρ ql tab) pl
+hostsA-there : ∀ {tab ρ as ws} {ps : ArmPs ρ as ws} {Q y i s0 ρ₀} {ql : Place Q} →
+               HostsA tab ps → HostsA (t1 {Q} y i s0 ρ₀ ql tab) ps
+
+hosts-appendˡ : ∀ {P} {pl : Place P} {t u} → Hosts t pl → Hosts (appendT t u) pl
+hosts-appendʳ : ∀ {P} {pl : Place P} {t u} → Hosts u pl → Hosts (appendT t u) pl
+hostsA-appendˡ : ∀ {t u ρ as ws} {ps : ArmPs ρ as ws} →
+                 HostsA t ps → HostsA (appendT t u) ps
+hostsA-appendʳ : ∀ {t u ρ as ws} {ps : ArmPs ρ as ws} →
+                 HostsA u ps → HostsA (appendT t u) ps
+
+in-appendˡ (in-here lk) = in-here lk
+in-appendˡ (in-there m) = in-there (in-appendˡ m)
+
+in-appendʳ {t = t0} m = m
+in-appendʳ {t = t1 _ _ _ _ _ t} m = in-there (in-appendʳ {t = t} m)
+
+hosts-there hs-jump = hs-jump
+hosts-there hs-done = hs-done
+hosts-there hs-stop = hs-stop
+hosts-there (hs-put h) = hs-put (hosts-there h)
+hosts-there (hs-echo h) = hs-echo (hosts-there h)
+hosts-there (hs-pick0 h) = hs-pick0 (hosts-there h)
+hosts-there (hs-pick1 h) = hs-pick1 (hosts-there h)
+hosts-there (hs-get h) = hs-get (hosts-there h)
+hosts-there (hs-cover hp hq) = hs-cover (hosts-there hp) (hosts-there hq)
+hosts-there (hs-iget hp hq) = hs-iget (hosts-there hp) (hosts-there hq)
+hosts-there (hs-mget h) = hs-mget (hostsA-there h)
+hosts-there (hs-mu inn h) = hs-mu (in-there inn) (hosts-there h)
+
+hostsA-there ha0 = ha0
+hostsA-there (ha1 h hs) = ha1 (hosts-there h) (hostsA-there hs)
+
+hosts-appendˡ hs-jump = hs-jump
+hosts-appendˡ hs-done = hs-done
+hosts-appendˡ hs-stop = hs-stop
+hosts-appendˡ (hs-put h) = hs-put (hosts-appendˡ h)
+hosts-appendˡ (hs-echo h) = hs-echo (hosts-appendˡ h)
+hosts-appendˡ (hs-pick0 h) = hs-pick0 (hosts-appendˡ h)
+hosts-appendˡ (hs-pick1 h) = hs-pick1 (hosts-appendˡ h)
+hosts-appendˡ (hs-get h) = hs-get (hosts-appendˡ h)
+hosts-appendˡ (hs-cover hp hq) = hs-cover (hosts-appendˡ hp) (hosts-appendˡ hq)
+hosts-appendˡ (hs-iget hp hq) = hs-iget (hosts-appendˡ hp) (hosts-appendˡ hq)
+hosts-appendˡ (hs-mget h) = hs-mget (hostsA-appendˡ h)
+hosts-appendˡ (hs-mu inn h) = hs-mu (in-appendˡ inn) (hosts-appendˡ h)
+
+hosts-appendʳ hs-jump = hs-jump
+hosts-appendʳ hs-done = hs-done
+hosts-appendʳ hs-stop = hs-stop
+hosts-appendʳ (hs-put h) = hs-put (hosts-appendʳ h)
+hosts-appendʳ (hs-echo h) = hs-echo (hosts-appendʳ h)
+hosts-appendʳ (hs-pick0 h) = hs-pick0 (hosts-appendʳ h)
+hosts-appendʳ (hs-pick1 h) = hs-pick1 (hosts-appendʳ h)
+hosts-appendʳ (hs-get h) = hs-get (hosts-appendʳ h)
+hosts-appendʳ (hs-cover hp hq) = hs-cover (hosts-appendʳ hp) (hosts-appendʳ hq)
+hosts-appendʳ (hs-iget hp hq) = hs-iget (hosts-appendʳ hp) (hosts-appendʳ hq)
+hosts-appendʳ (hs-mget h) = hs-mget (hostsA-appendʳ h)
+hosts-appendʳ (hs-mu inn h) = hs-mu (in-appendʳ inn) (hosts-appendʳ h)
+
+hostsA-appendˡ ha0 = ha0
+hostsA-appendˡ (ha1 h hs) = ha1 (hosts-appendˡ h) (hostsA-appendˡ hs)
+
+hostsA-appendʳ ha0 = ha0
+hostsA-appendʳ (ha1 h hs) = ha1 (hosts-appendʳ h) (hostsA-appendʳ hs)
+
 data Cov : Den → List (ℕ × Block) → Set
 data CovP : {P : SProc} → Place P → List (ℕ × Block) → Set
 data CovA : {ρ : EnvI} {as : List Arm} {ws : List (String × W)} →

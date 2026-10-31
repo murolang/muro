@@ -4,8 +4,8 @@
 -- `denote` follows `agree`: the same counters, the same environment
 -- extension, the same echo slot. It also keeps the place a jump returns
 -- to and the coverage of every block on the list `compile` returns.
--- A `smu` allocates nothing. Its name is entered in the table only when
--- the body reaches an action, at that action's index and slot.
+-- A `smu` allocates nothing. Its name is entered in the table at the
+-- place it reaches, including a place that jumps onward.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe --guardedness #-}
@@ -73,10 +73,6 @@ inˡ m = ∈++ˡ m
 inʳ : ∀ {bs1 bs2} {i : ℕ} {b : Block} → (i , b) ∈ bs2 → (i , b) ∈ (bs1 ++ bs2)
 inʳ {bs1} m = ∈++ʳ {xs = bs1} m
 
-appendT : Table → Table → Table
-appendT t0 u = u
-appendT (t1 x i s0 ρ pl t) u = t1 x i s0 ρ pl (appendT t u)
-
 appendC : ∀ {t u bs} → CovT t bs → CovT u bs → CovT (appendT t u) bs
 appendC ct0 cu = cu
 appendC (ct1 c ct) cu = ct1 c (appendC ct cu)
@@ -85,17 +81,24 @@ appendL : ∀ {t u} → Links t → Links u → Links (appendT t u)
 appendL ls0 lu = lu
 appendL (ls1 l ls) lu = ls1 l (appendL ls lu)
 
--- Bind `x` at the action `pl` reaches. A bare jump allocates no block,
--- so it contributes no table entry.
+-- Bind `x` at the place `pl` reaches. A jump allocates no block, and the
+-- binder is recorded anyway: a later step unfolds it. The equality says
+-- the new table is that one entry in front of the table the body returned.
+BoundAt : ∀ {P} → String → EnvI → Place P → List (ℕ × Block) → Table → Set
+BoundAt {P} x ρ pl bs tab =
+  Σ Table (λ t → CovT t bs × Links t ×
+            t ≡ t1 {P} x (headIx pl) (slotOf pl) ρ pl tab)
+
 cons-bind : ∀ {P bs} (x : String) (ρ : EnvI) (pl : Place P) (c : CovP pl bs)
             (tab : Table) (ct : CovT tab bs) (ls : Links tab) (lk : Link pl) →
-            Σ Table (λ t → CovT t bs × Links t)
+            BoundAt x ρ pl bs tab
 cons-bind {bs = bs} x ρ pl c tab ct ls lk = go pl c
   where
-  go : ∀ {Q} (ql : Place Q) → CovP ql bs → Σ Table (λ t → CovT t bs × Links t)
-  go (p-jump _ _ _ _) cp-jump = tab , ct , ls
-  go (p-act _ _ _ _ _) (cp-act _) =
-    t1 x (headIx pl) (slotOf pl) ρ pl tab , ct1 c ct , ls1 lk ls
+  add : BoundAt x ρ pl bs tab
+  add = t1 x (headIx pl) (slotOf pl) ρ pl tab , ct1 c ct , ls1 lk ls , refl
+  go : ∀ {Q} (ql : Place Q) → CovP ql bs → BoundAt x ρ pl bs tab
+  go (p-jump _ _ _ _) _ = add
+  go (p-act _ _ _ _ _) _ = add
   go (p-mu _ inner) (cp-mu c2) = go inner c2
 
 bit-atom : ∀ b → asAtom (pBit b) ≡ just (aBit b)
@@ -127,6 +130,7 @@ record Yes (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
     ev : envOf pl ≡ ρ
     lk : Link pl
     ls : Links tab
+    hs : Hosts tab pl
 
 record No (P : SProc) (fp : Frag P) (pend : List String) (ρ : EnvI)
           (renv : REnv) (venv : VEnv) (n slot : ℕ) : Set where
@@ -159,6 +163,7 @@ record YesA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
     ct : CovT tab bs
     lka : LinkA dests
     ls : Links tab
+    hsa : HostsA tab dests
 
 record NoA (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv)
            (venv : VEnv) (n slot : ℕ) : Set where
@@ -201,6 +206,7 @@ finish-put {a} {atom} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y aeq wk 
        refl refl refl
        (lk-put refl refl refl (Yes.lk y))
        (Yes.ls y)
+       (hs-put (Yes.hs y))
   where
   ρw = addPend pend n slot ρ
 
@@ -229,6 +235,7 @@ finish-echo {x} {p} {fp} {pend} {ρ} {renv} {venv} {ns} {n} {slot} {sX} fq y lk 
        refl refl refl
        (lk-echo refl refl refl (Yes.lk y))
        (Yes.ls y)
+       (hs-echo (Yes.hs y))
   where
   ρw = addPend pend n slot ρ
 
@@ -255,6 +262,7 @@ finish-pick0 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        refl refl refl
        (lk-pick0 refl refl refl (Yes.lk y))
        (Yes.ls y)
+       (hs-pick0 (Yes.hs y))
   where
   ρw = addPend pend n slot ρ
 
@@ -281,6 +289,7 @@ finish-pick1 {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        refl refl refl
        (lk-pick1 refl refl refl (Yes.lk y))
        (Yes.ls y)
+       (hs-pick1 (Yes.hs y))
   where
   ρw = addPend pend n slot ρ
 
@@ -309,6 +318,7 @@ finish-get {t} {x} {p} {fp} {pend} {ρ} {renv} {venv} {n} {slot} fq y wk cmp =
        refl refl refl
        (lk-get refl refl refl (Yes.lk y))
        (Yes.ls y)
+       (hs-get (Yes.hs y))
   where
   ρw = addPend pend n slot ρ
 
@@ -541,12 +551,12 @@ mutual
     ok (yesB (mkW n slot (suc n) slot) ((n , bDone) ∷ []) refl refl (o1 o0)
           (sym (+-idr slot))
           (p-act (d-done n) r-done n slot ρ) t0 (cp-act (c-done here)) ct0 refl refl refl
-          (lk-done refl) ls0)
+          (lk-done refl) ls0 hs-done)
   denote sstop fstop pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
     ok (yesB (mkW n slot (suc n) slot) ((n , bStop) ∷ []) refl refl (o1 o0)
           (sym (+-idr slot))
           (p-act (d-stop n) r-stop n slot ρ) t0 (cp-act (c-stop here)) ct0 refl refl refl
-          (lk-stop refl) ls0)
+          (lk-stop refl) ls0 hs-stop)
 
   denote (sput .(pNat a) p) (fput (fnat a) fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
     on (denote p fp [] (addPend pend n slot ρ) (addNames pend n renv) venv
@@ -758,7 +768,8 @@ mutual
                        (covT-lift (onʳ {bs1 = Yes.bs y1}) (Yes.ct y2)))
               refl refl refl
               (lk-cover refl refl refl (Yes.lk y1) (Yes.lk y2))
-              (appendL (Yes.ls y1) (Yes.ls y2)))
+              (appendL (Yes.ls y1) (Yes.ls y2))
+              (hs-cover (hosts-appendˡ (Yes.hs y1)) (hosts-appendʳ (Yes.hs y2))))
 
   denote (siget x p q) (figet fp fq) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
     onL (denote p fp [] ρw renw venvX ns scopeX preX (bnames q ++ post) (suc n) (suc slot)
@@ -827,7 +838,8 @@ mutual
                        (covT-lift (onʳ {bs1 = Yes.bs y1}) (Yes.ct y2)))
               refl refl refl
               (lk-iget refl refl refl (Yes.lk y1) (Yes.lk y2))
-              (appendL (Yes.ls y1) (Yes.ls y2)))
+              (appendL (Yes.ls y1) (Yes.ls y2))
+              (hs-iget (hosts-appendˡ (Yes.hs y1)) (hosts-appendʳ (Yes.hs y2))))
 
   denote (smget t x as) (fmget fas) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
     on (denoteArms as fas (addPend pend n slot ρ) (addNames pend n renv) ((x , slot) ∷ venv)
@@ -864,7 +876,8 @@ mutual
             (covT-lift under (YesA.ct y))
             refl refl refl
             (lk-mget refl refl refl (YesA.lka y))
-            (YesA.ls y))
+            (YesA.ls y)
+            (hs-mget (YesA.hsa y)))
 
   denote (smu x p) (fmu fp) pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
     seal (denote p fp (x ∷ pend) ρ renv venv ns scope pre post n slot rel er eok seq nseq)
@@ -876,13 +889,17 @@ mutual
       place (cons-bind x ρ (p-mu x (Yes.pl y)) (cp-mu (Yes.cv y)) (Yes.tab y) (Yes.ct y)
                (Yes.ls y) (lk-mu (Yes.lk y)))
       where
-      place : Σ Table (λ t → CovT t (Yes.bs y) × Links t) →
+      place : BoundAt x ρ (p-mu x (Yes.pl y)) (Yes.bs y) (Yes.tab y) →
               Built (smu x p) (fmu fp) pend ρ renv venv n slot
-      place (tab , ct , ls) =
+      place (tab , ct , ls , eq) rewrite eq =
         ok (yesB (Yes.w y) (Yes.bs y) (Yes.wk y) (Yes.cmp y) (Yes.od y) (Yes.end y)
-              (p-mu x (Yes.pl y)) tab (cp-mu (Yes.cv y)) ct
+              (p-mu x (Yes.pl y))
+              (t1 x (headIx (p-mu x (Yes.pl y))) (slotOf (p-mu x (Yes.pl y))) ρ
+                  (p-mu x (Yes.pl y)) (Yes.tab y))
+              (cp-mu (Yes.cv y)) ct
               (Yes.hd y) (Yes.sl y) (Yes.ev y)
-              (lk-mu (Yes.lk y)) ls)
+              (lk-mu (Yes.lk y)) ls
+              (hs-mu (in-here (lk-mu (Yes.lk y))) (hosts-there (Yes.hs y))))
 
   denote (svar y) fvar pend ρ renv venv ns scope pre post n slot rel er eok seq nseq =
     var-go (lookup-rel y rel) (elemS y pend) refl
@@ -903,7 +920,7 @@ mutual
             (var-cmp-yes {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
                          {y = y} {i = i} eq eqn)
             o0 (sym (+-idr slot)) (p-jump y i s0 ρ) t0 cp-jump ct0 refl refl refl
-            lk-jump ls0)
+            lk-jump ls0 hs-jump)
 
   denoteArms : (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv) (venv : VEnv)
                (ns scope pre post : List String) (n slot : ℕ) →
@@ -915,7 +932,7 @@ mutual
 
   denoteArms [] farms0 ρ renv venv ns scope pre post n slot rel er eok seq nseq =
     okA (yesA [] n slot [] refl refl o0 (sym (+-idr slot)) (ap0 {ρ = ρ}) t0 ca0 ct0
-           la0 ls0)
+           la0 ls0 ha0)
 
   denoteArms (aok y p ∷ as) (farms1 (farm fp) fas) ρ renv venv ns scope pre post n slot rel er eok seq nseq =
     on (denote p fp [] ρ renv venv ns scope pre (bnamesArms as ++ post) n slot rel er
@@ -969,7 +986,8 @@ mutual
                (appendC (covT-lift inˡ (Yes.ct yb))
                         (covT-lift (inʳ {bs1 = Yes.bs yb}) (YesA.ct ya)))
                (la1 (Yes.lk yb) (YesA.lka ya))
-               (appendL (Yes.ls yb) (YesA.ls ya)))
+               (appendL (Yes.ls yb) (YesA.ls ya))
+               (ha1 (hosts-appendˡ (Yes.hs yb)) (hostsA-appendʳ (YesA.hsa ya))))
 
 ------------------------------------------------------------------------
 -- The echo denotes, and so does a process that only halts.

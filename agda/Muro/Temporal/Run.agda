@@ -39,7 +39,8 @@ open import Muro.Temporal.Pic
   using (Ord; ERel; er0; EchoRel; echo-empty)
 open import Muro.Temporal.Agree using (root-ns)
 open import Muro.Temporal.Den
-  using ( Place; Table; t1; Link; Links; CovP; CovT; headIx; slotOf; envOf )
+  using ( Place; Table; t1; Link; Links; CovP; CovT; headIx; slotOf; envOf
+        ; InTab; Hosts )
 open import Muro.Temporal.Denote
   using ( denote; Yes; No; noB; Built; ok; bad )
 
@@ -125,12 +126,6 @@ seen-refl ρ y v eq = eq
 seen-cast : ∀ {ρ0 ρ1} → ρ0 ≡ ρ1 → Seen ρ0 ρ1
 seen-cast {ρ0} refl = seen-refl ρ0
 
-data InTab (x : String) (P : SProc) : Table → Set where
-  in-here : ∀ {i s0 ρ pl tab} →
-            Link pl → InTab x P (t1 {P} x i s0 ρ pl tab)
-  in-there : ∀ {Q y i s0 ρ pl tab} →
-             InTab x P tab → InTab x P (t1 {Q} y i s0 ρ pl tab)
-
 data Tied : Table → EnvP → Set where
   td0 : ∀ {tab} → Tied tab []
   td1 : ∀ {x P tab ρ} → InTab x P tab → Tied tab ρ →
@@ -145,6 +140,7 @@ record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
     ct : CovT tab bs
     lk : Link pl
     ls : Links tab
+    hs : Hosts tab pl
     td : Tied tab envP
     ix : idx ≡ headIx pl
     ss : slot ≡ slotOf pl
@@ -230,6 +226,7 @@ init-hold k P Q fp fq eokP eokQ g c eqg eqc =
       ; ct = ct-cast bs≡ (Yes.ct y)
       ; lk = Yes.lk y
       ; ls = Yes.ls y
+      ; hs = Yes.hs y
       ; td = td0
       ; ix = trans ix≡ (sym (Yes.hd y))
       ; ss = sym (trans (Yes.sl y) slot0)
