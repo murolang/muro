@@ -210,7 +210,7 @@ data LinkA : {ρ : EnvI} {as : List Arm} {ws : List (String × W)} →
 
 data Link where
   lk-mu : ∀ {x p} {pl : Place p} → Link pl → Link (p-mu x pl)
-  lk-jump : ∀ {x i s0 ρ} → Link (p-jump x i s0 ρ)
+  lk-jump : ∀ {x i s0 ρ} → lookupI x ρ ≡ just (i , s0) → Link (p-jump x i s0 ρ)
   lk-done : ∀ {n i s0 ρ} → i ≡ n → Link (p-act (d-done n) r-done i s0 ρ)
   lk-stop : ∀ {n i s0 ρ} → i ≡ n → Link (p-act (d-stop n) r-stop i s0 ρ)
   lk-put : ∀ {n s a atom j p ρw w aeq wk ej dest dh ds de i0 s0 ρ pend} →
@@ -261,7 +261,8 @@ data LinkA where
 data Links : Table → Set where
   ls0 : Links t0
   ls1 : ∀ {P x i s0 ρ pl tab} →
-        Link pl → Links tab → Links (t1 {P} x i s0 ρ pl tab)
+        Link pl → headIx pl ≡ i → slotOf pl ≡ s0 → Links tab →
+        Links (t1 {P} x i s0 ρ pl tab)
 
 -- The place a recursion binder denotes, found in the table.
 data InTab (x : String) (P : SProc) : Table → Set where

@@ -36,7 +36,7 @@ open SConf
 open W
 
 open import Muro.Temporal.Pic
-  using (Ord; ERel; er0; EchoRel; echo-empty)
+  using (Ord; ERel; er0; EchoRel; echo-empty; EnvEq)
 open import Muro.Temporal.Agree using (root-ns)
 open import Muro.Temporal.Den
   using ( Place; Table; t1; Link; Links; CovP; CovT; headIx; slotOf; envOf
@@ -113,18 +113,10 @@ atSlot0 pend (smget t x as) w eq with walkArms [] (addPend pend zero zero []) as
 -- time. The table holds the place each recursion binder denotes.
 ------------------------------------------------------------------------
 
-Seen : EnvI → EnvI → Set
-Seen ρ0 ρ1 = ∀ (y : String) (v : ℕ × ℕ) →
-             lookupI y ρ0 ≡ just v → lookupI y ρ1 ≡ just v
-
-seen-refl : ∀ ρ → Seen ρ ρ
-seen-refl ρ y v eq = eq
-
--- Transport along an environment equality. Inhabiting `Seen` by a
--- second proof makes `lookupI` reduce on `[]` before the meta is
--- solved, so the proof is the reflexivity after `refl`.
-seen-cast : ∀ {ρ0 ρ1} → ρ0 ≡ ρ1 → Seen ρ0 ρ1
-seen-cast {ρ0} refl = seen-refl ρ0
+-- Transport along an environment equality. The proof is reflexivity
+-- after `refl`, so `lookupI` is not asked to unify a concrete `[]`.
+env-cast : ∀ {ρ0 ρ1} → ρ0 ≡ ρ1 → EnvEq ρ0 ρ1
+env-cast {ρ0} refl _ = refl
 
 data Tied : Table → EnvP → Set where
   td0 : ∀ {tab} → Tied tab []
@@ -144,7 +136,7 @@ record Cursor (bs : List (ℕ × Block)) (idx slot : ℕ)
     td : Tied tab envP
     ix : idx ≡ headIx pl
     ss : slot ≡ slotOf pl
-    sn : Seen (envOf pl) envI
+    sn : EnvEq (envOf pl) envI
 
 record Hold (g : Graph) (c : SConf) : Set where
   field
@@ -169,8 +161,8 @@ ev-nil : ∀ {R fr} (y : Yes R fr [] [] [] [] zero zero) →
 ev-nil y = Yes.ev y
 
 root-sn : ∀ {R fr} (y : Yes R fr [] [] [] [] zero zero) →
-          Seen (envOf (Yes.pl y)) []
-root-sn y = seen-cast (ev-nil y)
+          EnvEq (envOf (Yes.pl y)) []
+root-sn y = env-cast (ev-nil y)
 
 ------------------------------------------------------------------------
 -- Both sides denoted under the root echo hypothesis. The packed graph

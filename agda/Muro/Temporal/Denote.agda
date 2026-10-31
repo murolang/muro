@@ -79,7 +79,7 @@ appendC (ct1 c ct) cu = ct1 c (appendC ct cu)
 
 appendL : ∀ {t u} → Links t → Links u → Links (appendT t u)
 appendL ls0 lu = lu
-appendL (ls1 l ls) lu = ls1 l (appendL ls lu)
+appendL (ls1 l ix s ls) lu = ls1 l ix s (appendL ls lu)
 
 -- Bind `x` at the place `pl` reaches. A jump allocates no block, and the
 -- binder is recorded anyway: a later step unfolds it. The equality says
@@ -95,7 +95,7 @@ cons-bind : ∀ {P bs} (x : String) (ρ : EnvI) (pl : Place P) (c : CovP pl bs)
 cons-bind {bs = bs} x ρ pl c tab ct ls lk = go pl c
   where
   add : BoundAt x ρ pl bs tab
-  add = t1 x (headIx pl) (slotOf pl) ρ pl tab , ct1 c ct , ls1 lk ls , refl
+  add = t1 x (headIx pl) (slotOf pl) ρ pl tab , ct1 c ct , ls1 lk refl refl ls , refl
   go : ∀ {Q} (ql : Place Q) → CovP ql bs → BoundAt x ρ pl bs tab
   go (p-jump _ _ _ _) _ = add
   go (p-act _ _ _ _ _) _ = add
@@ -920,7 +920,7 @@ mutual
             (var-cmp-yes {pend = pend} {renv = renv} {venv = venv} {slot = slot} {n = n}
                          {y = y} {i = i} eq eqn)
             o0 (sym (+-idr slot)) (p-jump y i s0 ρ) t0 cp-jump ct0 refl refl refl
-            lk-jump ls0 hs-jump)
+            (lk-jump eqi) ls0 hs-jump)
 
   denoteArms : (as : List Arm) (fas : FragArms as) (ρ : EnvI) (renv : REnv) (venv : VEnv)
                (ns scope pre post : List String) (n slot : ℕ) →
