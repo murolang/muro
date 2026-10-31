@@ -36,10 +36,15 @@ open import Muro.Temporal.Source
         ; Focus; f-put; f-done; f-stop; f-get; f-pick0; f-pick1; f-cover; f-iget; f-mget
         ; HaltF; h-done; h-stop
         ; Unfold; u-put; u-mu; u-var; u-done; u-stop; u-get; u-pick0; u-pick1
-        ; u-cover; u-iget; u-mget )
-  renaming (snoc to ssnoc)
+        ; u-cover; u-iget; u-mget
+        ; _⟶ₛ_
+        ; put-l; echo-l; pick0-l; pick1-l; get-l; cover0-l; cover1-l
+        ; iget0-l; iget1-l; mget-l
+        ; put-r; echo-r; pick0-r; pick1-r; get-r; cover0-r; cover1-r
+        ; iget0-r; iget1-r; mget-r )
+  renaming (snoc to ssnoc; finish to sfinish)
 open SConf
-open import Muro.Temporal using (Step; stepL; stepR; finish; lside; rside; fin)
+open import Muro.Temporal using (Step; stepL; stepR; finish; Who; lside; rside; fin)
 open import Muro.Temporal.Fire
   using ( react-put; react-echo; react-pick0; react-pick1; react-get
         ; react-cover0; react-cover1; react-iget0; react-iget1; react-mget
@@ -2208,3 +2213,31 @@ mgetR-fwd : ∀ {g c t x as ρ′ pend′ k rest a name w p} (h : Hold g c) →
             Step g (abs c) rside (abs (afterGetR c p ρ′ pend′ rest k w)) ×
             Hold g (afterGetR c p ρ′ pend′ rest k w)
 mgetR-fwd h unf qeq eqA eqF eqC ago = mgetR-use h qeq eqA eqF eqC ago (rightStop h unf)
+
+------------------------------------------------------------------------
+-- Every source step is the graph step of the block it denotes.
+------------------------------------------------------------------------
+
+sim-fwd : ∀ {g c c′} → Hold g c → c ⟶ₛ c′ →
+          Σ Who (λ w → Step g (abs c) w (abs c′) × Hold g c′)
+sim-fwd h (put-l unf aq eqF le wk) = lside , put-fwd h unf aq eqF le wk
+sim-fwd h (echo-l unf eqN eqS le wk) = lside , echo-fwd h unf eqN eqS le wk
+sim-fwd h (pick0-l unf le wk) = lside , pick0-fwd h unf le wk
+sim-fwd h (pick1-l unf le wk) = lside , pick1-fwd h unf le wk
+sim-fwd h (get-l unf qeq eqA eqF wk) = lside , get-fwd h unf qeq eqA eqF wk
+sim-fwd h (cover0-l unf qeq wk) = lside , cover0-fwd h unf qeq wk
+sim-fwd h (cover1-l unf qeq wk1 wk2) = lside , cover1-fwd h unf qeq wk1 wk2
+sim-fwd h (iget0-l unf qeq eqA wk) = lside , iget0-fwd h unf qeq eqA wk
+sim-fwd h (iget1-l unf qeq eqA wk1 wk2) = lside , iget1-fwd h unf qeq eqA wk1 wk2
+sim-fwd h (mget-l unf qeq eqA eqF eqC ago) = lside , mget-fwd h unf qeq eqA eqF eqC ago
+sim-fwd h (put-r unf aq eqF le wk) = rside , putR-fwd h unf aq eqF le wk
+sim-fwd h (echo-r unf eqN eqS le wk) = rside , echoR-fwd h unf eqN eqS le wk
+sim-fwd h (pick0-r unf le wk) = rside , pickR0-fwd h unf le wk
+sim-fwd h (pick1-r unf le wk) = rside , pickR1-fwd h unf le wk
+sim-fwd h (get-r unf qeq eqA eqF wk) = rside , getR-fwd h unf qeq eqA eqF wk
+sim-fwd h (cover0-r unf qeq wk) = rside , coverR0-fwd h unf qeq wk
+sim-fwd h (cover1-r unf qeq wk1 wk2) = rside , coverR1-fwd h unf qeq wk1 wk2
+sim-fwd h (iget0-r unf qeq eqA wk) = rside , igetR0-fwd h unf qeq eqA wk
+sim-fwd h (iget1-r unf qeq eqA wk1 wk2) = rside , igetR1-fwd h unf qeq eqA wk1 wk2
+sim-fwd h (mget-r unf qeq eqA eqF eqC ago) = rside , mgetR-fwd h unf qeq eqA eqF eqC ago
+sim-fwd h (sfinish unL hfL unR hfR eqL eqR) = fin , fin-fwd h unL hfL unR hfR eqL eqR
