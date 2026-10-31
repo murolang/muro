@@ -27,7 +27,8 @@ open import Muro.AsyncRec using (module Graph)
 open Graph
 
 open import Muro.Temporal.Bridge
-  using ( Frag; echoOk; muOk; mus; distinct; graphOf; initS; pack; compiled; gok; gfail; elab )
+  using ( Frag; echoOk; muOk; mus; distinct; fresh; ∧-left; ∧-right
+        ; graphOf; initS; pack; compiled; gok; gfail; elab )
 open import Muro.Temporal.Source
   using ( SProc; SConf; sc; W; mkW; EnvI; EnvP; addPend; lookupI
         ; walk; walkArms
@@ -40,10 +41,11 @@ open SConf
 open W
 
 open import Muro.Temporal.Pic
-  using (Ord; ERel; er0; EchoRel; echo-empty; EnvEq; outside; ==-refl; ==-sound)
+  using (Ord; ERel; er0; EchoRel; echo-empty; EnvEq; outside; ==-refl; ==-sound
+        ; true≢false)
 open import Muro.Temporal.Agree using (root-ns)
 open import Muro.Temporal.Den
-  using ( Place; Table; t1; Link; Links; CovP; CovT; headIx; slotOf; envOf
+  using ( Place; Table; t0; t1; Link; Links; CovP; CovT; headIx; slotOf; envOf
         ; InTab; in-here; in-there; Hosts; At
         ; place-of; link-of; ix-of; slot-at; tnames )
 open import Muro.Temporal.Denote
@@ -798,3 +800,113 @@ mutual
           w≡ = smget-shape {pend} {ρ0} {t} {x} {as} {n} {s} {ws} {n2} {s2} {w} eqa eq
       in trans (smget-move {pend} {ρ} {t} {x} {as} {n} {s} {ws} {n2} {s2} eqa')
              (cong just (sym w≡))
+
+------------------------------------------------------------------------
+-- One entry per binder. A runtime hit is that entry's counters.
+------------------------------------------------------------------------
+
+pair : ∀ {a b c d : ℕ} → (a , b) ≡ (c , d) → a ≡ c × b ≡ d
+pair refl = refl , refl
+
+fresh-occ : ∀ x ys → elemS x ys ≡ true → fresh x ys ≡ false
+fresh-occ x [] ()
+fresh-occ x (y ∷ ys) eq = go (x == y) refl eq
+  where
+  go : (b : Bool) → (x == y) ≡ b → elemS x (y ∷ ys) ≡ true →
+       fresh x (y ∷ ys) ≡ false
+  go true eqy _ rewrite eqy = refl
+  go false eqy eq2 rewrite eqy = fresh-occ x ys eq2
+
+occurs : ∀ {x P tab} (m : InTab x P tab) → elemS x (tnames tab) ≡ true
+occurs {x = x} (in-here _) rewrite ==-refl x = refl
+occurs {x} (in-there {y = y} {tab = tab} m) =
+  elem-cons {y = x} {x = y} {xs = tnames tab} (occurs m)
+
+found : String → Table → Maybe (ℕ × ℕ)
+found x t0 = nothing
+found x (t1 y i s _ _ t) with x == y
+... | true = just (i , s)
+... | false = found x t
+
+in-found : ∀ {x P tab} (m : InTab x P tab) →
+           distinct (tnames tab) ≡ true →
+           found x tab ≡ just (ix-of m , slot-at m)
+in-found {x = x} (in-here {i = i} {s0 = s} _) _ rewrite ==-refl x = refl
+in-found {x} (in-there {y = y} {i = i} {s0 = s0} {ρ = ρ} {pl = pl} {tab = tab} m) eq =
+  step (x == y) refl
+  where
+  step : (b : Bool) → (x == y) ≡ b →
+         found x (t1 y i s0 ρ pl tab) ≡ just (ix-of m , slot-at m)
+  step true eqy = ⊥-elim (true≢false (trans (sym (∧-left eq)) (miss eqy)))
+    where
+    miss : (x == y) ≡ true → fresh y (tnames tab) ≡ false
+    miss eqy = go (==-sound eqy)
+      where
+      go : x ≡ y → fresh y (tnames tab) ≡ false
+      go refl = fresh-occ x (tnames tab) (occurs m)
+  step false eqy rewrite eqy = in-found m (∧-right eq)
+
+same-slot : ∀ {x P Q tab} (m : InTab x P tab) (n : InTab x Q tab) →
+            distinct (tnames tab) ≡ true →
+            ix-of m ≡ ix-of n × slot-at m ≡ slot-at n
+same-slot m n eq =
+  let p = pair (just-inj (trans (sym (in-found m eq)) (in-found n eq)))
+  in proj₁ p , proj₂ p
+
+sync-take : ∀ {x y j s0 ρ i s} →
+            (x == y) ≡ true →
+            lookupI x ((y , j , s0) ∷ ρ) ≡ just (i , s) →
+            (j , s0) ≡ (i , s)
+sync-take eqy eq2 rewrite eqy = just-inj eq2
+
+sync-drop : ∀ {x y j s0 ρ i s} →
+            (x == y) ≡ false →
+            lookupI x ((y , j , s0) ∷ ρ) ≡ just (i , s) →
+            lookupI x ρ ≡ just (i , s)
+sync-drop eqy eq2 rewrite eqy = eq2
+
+sync-yes : ∀ {x y P tab j s0 i s} →
+          (m : InTab y P tab) → ix-of m ≡ j → slot-at m ≡ s0 →
+          x ≡ y → (j , s0) ≡ (i , s) →
+          Σ SProc (λ Q → Σ (InTab x Q tab) (λ n → ix-of n ≡ i × slot-at n ≡ s))
+sync-yes {P = P} m ix≡ sl≡ refl refl = P , m , ix≡ , sl≡
+
+sync-hit : ∀ {x tab env ρ i s} →
+           Sync tab env ρ →
+           lookupI x ρ ≡ just (i , s) →
+           Σ SProc (λ P → Σ (InTab x P tab) (λ m → ix-of m ≡ i × slot-at m ≡ s))
+sync-hit sy0 eq = ⊥-elim (nothing≢just eq)
+sync-hit {x} {i = i} {s = s} (sy1 {x = y} {P = P} {i = j} {s = s0} m ix≡ sl≡ rest) eq =
+  split (x == y) refl eq
+  where
+  split : (b : Bool) → (x == y) ≡ b →
+          lookupI x ((y , j , s0) ∷ _) ≡ just (i , s) →
+          Σ SProc (λ Q → Σ (InTab x Q _) (λ n → ix-of n ≡ i × slot-at n ≡ s))
+  split true eqy eq2 =
+    sync-yes {x = x} {y = y} {j = j} {s0 = s0} {i = i} {s = s} m ix≡ sl≡
+      (==-sound eqy)
+      (sync-take {x = x} {y = y} {j = j} {s0 = s0} {i = i} {s = s} eqy eq2)
+  split false eqy eq2 =
+    sync-hit rest (sync-drop {x = x} {y = y} {j = j} {s0 = s0} {i = i} {s = s} eqy eq2)
+
+both : ∀ {a c b d : ℕ} → a ≡ c → b ≡ d → (a , b) ≡ (c , d)
+both refl refl = refl
+
+-- The binder at this entry is absent from the runtime environment, or
+-- already bound at these counters. A second entry would repeat its name.
+runtime-pin : ∀ {x P tab env ρ n s} →
+              (m : InTab x P tab) →
+              ix-of m ≡ n → slot-at m ≡ s →
+              distinct (tnames tab) ≡ true →
+              Sync tab env ρ →
+              lookupI x ρ ≡ nothing ⊎ lookupI x ρ ≡ just (n , s)
+runtime-pin {x} {ρ = ρ} {n = n} {s = s} m ix≡ sl≡ nd sy = go (lookupI x ρ) refl
+  where
+  go : (b : Maybe (ℕ × ℕ)) → lookupI x ρ ≡ b →
+       lookupI x ρ ≡ nothing ⊎ lookupI x ρ ≡ just (n , s)
+  go nothing p = inj₁ p
+  go (just (i , s1)) p =
+    let Q , n0 , ix0 , sl0 = sync-hit sy p
+        sm = same-slot m n0 nd
+    in inj₂ (trans p (cong just (sym (both (trans (sym ix≡) (trans (proj₁ sm) ix0))
+                                                 (trans (sym sl≡) (trans (proj₂ sm) sl0))))))
