@@ -44,7 +44,8 @@ open import Muro.Temporal.Fire
   using ( react-put; react-echo; react-pick0; react-pick1; react-get
         ; react-cover0; react-cover1; react-iget0; react-iget1; react-mget
         ; halt-of; isHalt-done; isHalt-stop
-        ; reactR-put; reactR-echo
+        ; reactR-put; reactR-echo; reactR-pick0; reactR-pick1; reactR-get
+        ; reactR-cover0; reactR-cover1; reactR-iget0; reactR-iget1; reactR-mget
         ; room-yes; snoc≡ )
 open W
 open import Muro.Temporal.Den
@@ -1680,3 +1681,530 @@ echoR-fwd {g} {c} {x} {p} {ρ′} {pend′} {i} {k} {w} h unf eqN eqS le wk =
     slotG = subst (λ z → slotVal (er c) z ≡ just k) i≡ eqS
     reacted = reactR-echo g (il c) (ir c) (l2r c) (r2l c) (el c) (er c)
                 sX k j slotG (roomR h le) (seenR h mem)
+
+pickR0-use : ∀ {g c p ρ′ pend′ w} (h : Hold g c) →
+             length (r2l c) < cap c →
+             walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                  (suc (ir c)) (slotR c) ≡ just w →
+             Stop (Hold.bsR h) (Cursor.echoNs (Hold.rightC h))
+                  (ir c) (slotR c) (envIR c) ρ′ pend′ (f-pick0 p) →
+             Step g (abs c) rside (abs (afterR c p ρ′ pend′ (lab false) w)) ×
+             Hold g (afterR c p ρ′ pend′ (lab false) w)
+pickR0-use {g} {c} {p} {ρ′} {pend′} {w} h le wk
+  (atAct suf ρi bg _
+     (p-act (d-pick0 nD sD j .p ρw wD wkD ej dest dh ds de)
+            r-pick0 i0 s0 ρden)
+     (cp-act (c-pick0 mem cvD))
+     (lk-pick0 eqi eqs _ lkD)
+     (hs-pick0 hsD)
+     (at-pick0 _ atD)
+     (en-pick0 ensD)
+     (al-pick0 eqρ destAl)
+     ix ss sn lf-pick0) =
+  closeR (lab false) h reacted ej (Gone.wk go) wk (Gone.cur go) (Gone.nse go)
+  where
+  en = trans ix eqi
+  es = trans ss eqs
+  go = sendCont {bs = Hold.bsR h} {ns = Cursor.echoNs (Hold.rightC h)}
+         {n = ir c} {s = slotR c} {base = envIR c} {ρi = ρi}
+         {pend = pend′} {suf = suf} {env = ρ′} {p = p}
+         {nD = nD} {sD = sD} {sW = slotR c} {sW′ = sD}
+         {ρden = ρden} {ρw = ρw} {w = wD} {dest = dest}
+         bg en es es eqρ sn (cvd bg) wkD dh ds de cvD lkD hsD atD ensD destAl
+  memN : (ir c , bPick0 j) ∈ Hold.bsR h
+  memN = subst (λ i → (i , bPick0 j) ∈ Hold.bsR h) (sym en) mem
+  reacted = reactR-pick0 g (il c) (ir c) (l2r c) (r2l c) (el c) (er c)
+              j (roomR h le) (seenR h memN)
+
+pickR0-fwd : ∀ {g c p ρ′ pend′ w} (h : Hold g c) →
+             Unfold (envPR c) [] (right c) ρ′ pend′ (f-pick0 p) →
+             length (r2l c) < cap c →
+             walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                  (suc (ir c)) (slotR c) ≡ just w →
+             Step g (abs c) rside (abs (afterR c p ρ′ pend′ (lab false) w)) ×
+             Hold g (afterR c p ρ′ pend′ (lab false) w)
+pickR0-fwd h unf le wk = pickR0-use h le wk (rightStop h unf)
+
+pickR1-use : ∀ {g c p ρ′ pend′ w} (h : Hold g c) →
+             length (r2l c) < cap c →
+             walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                  (suc (ir c)) (slotR c) ≡ just w →
+             Stop (Hold.bsR h) (Cursor.echoNs (Hold.rightC h))
+                  (ir c) (slotR c) (envIR c) ρ′ pend′ (f-pick1 p) →
+             Step g (abs c) rside (abs (afterR c p ρ′ pend′ (lab true) w)) ×
+             Hold g (afterR c p ρ′ pend′ (lab true) w)
+pickR1-use {g} {c} {p} {ρ′} {pend′} {w} h le wk
+  (atAct suf ρi bg _
+     (p-act (d-pick1 nD sD j .p ρw wD wkD ej dest dh ds de)
+            r-pick1 i0 s0 ρden)
+     (cp-act (c-pick1 mem cvD))
+     (lk-pick1 eqi eqs _ lkD)
+     (hs-pick1 hsD)
+     (at-pick1 _ atD)
+     (en-pick1 ensD)
+     (al-pick1 eqρ destAl)
+     ix ss sn lf-pick1) =
+  closeR (lab true) h reacted ej (Gone.wk go) wk (Gone.cur go) (Gone.nse go)
+  where
+  en = trans ix eqi
+  es = trans ss eqs
+  go = sendCont {bs = Hold.bsR h} {ns = Cursor.echoNs (Hold.rightC h)}
+         {n = ir c} {s = slotR c} {base = envIR c} {ρi = ρi}
+         {pend = pend′} {suf = suf} {env = ρ′} {p = p}
+         {nD = nD} {sD = sD} {sW = slotR c} {sW′ = sD}
+         {ρden = ρden} {ρw = ρw} {w = wD} {dest = dest}
+         bg en es es eqρ sn (cvd bg) wkD dh ds de cvD lkD hsD atD ensD destAl
+  memN : (ir c , bPick1 j) ∈ Hold.bsR h
+  memN = subst (λ i → (i , bPick1 j) ∈ Hold.bsR h) (sym en) mem
+  reacted = reactR-pick1 g (il c) (ir c) (l2r c) (r2l c) (el c) (er c)
+              j (roomR h le) (seenR h memN)
+
+pickR1-fwd : ∀ {g c p ρ′ pend′ w} (h : Hold g c) →
+             Unfold (envPR c) [] (right c) ρ′ pend′ (f-pick1 p) →
+             length (r2l c) < cap c →
+             walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                  (suc (ir c)) (slotR c) ≡ just w →
+             Step g (abs c) rside (abs (afterR c p ρ′ pend′ (lab true) w)) ×
+             Hold g (afterR c p ρ′ pend′ (lab true) w)
+pickR1-fwd h unf le wk = pickR1-use h le wk (rightStop h unf)
+
+------------------------------------------------------------------------
+-- A source receive on the right pops `l2r`.
+------------------------------------------------------------------------
+
+afterGetR : SConf → SProc → EnvP → List String → List Tok → ℕ → W → SConf
+afterGetR c p ρ′ pend′ rest k w =
+  record c { right = p ; ir = entry w ; slotR = atSlot w
+           ; l2r = rest ; er = setNth (slotR c) (suc k) (er c)
+           ; envPR = ρ′
+           ; envIR = addPend pend′ (ir c) (slotR c) (envIR c) }
+
+closeGetR : ∀ {g c p ρ′ pend′ k rest j w wS n0 s0} (h : Hold g c) →
+            reactR g (abs c) ≡
+              AGo (rc (il c) j rest (r2l c) (el c)
+                     (setNth (slotR c) (suc k) (er c))) →
+            entry wS ≡ j →
+            walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p n0 s0 ≡ just wS →
+            walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p n0 s0 ≡ just w →
+            (cur : Cursor (Hold.bsR h) (entry wS) (atSlot wS) ρ′
+                          (addPend pend′ (ir c) (slotR c) (envIR c)) p) →
+            Cursor.echoNs cur ≡ Cursor.echoNs (Hold.rightC h) →
+            Step g (abs c) rside (abs (afterGetR c p ρ′ pend′ rest k w)) ×
+            Hold g (afterGetR c p ρ′ pend′ rest k w)
+closeGetR {g} {c} {p} {ρ′} {pend′} {k} {rest} {j} {w} {wS} h reacted ej wkS wk cur nse =
+  stepR moved , record
+    { nL = Hold.nL h ; bsL = Hold.bsL h ; odL = Hold.odL h ; cL = Hold.cL h
+    ; nR = Hold.nR h ; bsR = Hold.bsR h ; odR = Hold.odR h ; cR = Hold.cR h
+    ; α = Hold.α h ; κ = Hold.κ h
+    ; leftC = Hold.leftC h ; rightC = curW
+    ; nmL = Hold.nmL h
+    ; nmR = trans (Hold.nmR h) (trans (sym nse) (sym (ns-keep weq cur))) }
+  where
+  weq : wS ≡ w
+  weq = just-inj (trans (sym wkS) wk)
+  moved = subst (λ i → reactR g (abs c) ≡
+                   AGo (rc (il c) i rest (r2l c) (el c)
+                          (setNth (slotR c) (suc k) (er c))))
+            (trans (sym ej) (cong entry weq)) reacted
+  curW = subst (λ z → Cursor (Hold.bsR h) (entry z) (atSlot z) ρ′
+                        (addPend pend′ (ir c) (slotR c) (envIR c)) p)
+           weq cur
+
+afterPopR : SConf → SProc → EnvP → List String → List Tok → W → SConf
+afterPopR c proc ρ′ pend′ rest w =
+  record c { right = proc ; ir = entry w ; slotR = atSlot w
+           ; l2r = rest
+           ; envPR = ρ′
+           ; envIR = addPend pend′ (ir c) (slotR c) (envIR c) }
+
+closePopR : ∀ {g c proc ρ′ pend′ rest j w wS n0 s0} (h : Hold g c) →
+            reactR g (abs c) ≡
+              AGo (rc (il c) j rest (r2l c) (el c) (er c)) →
+            entry wS ≡ j →
+            walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) proc n0 s0 ≡ just wS →
+            walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) proc n0 s0 ≡ just w →
+            (cur : Cursor (Hold.bsR h) (entry wS) (atSlot wS) ρ′
+                          (addPend pend′ (ir c) (slotR c) (envIR c)) proc) →
+            Cursor.echoNs cur ≡ Cursor.echoNs (Hold.rightC h) →
+            Step g (abs c) rside (abs (afterPopR c proc ρ′ pend′ rest w)) ×
+            Hold g (afterPopR c proc ρ′ pend′ rest w)
+closePopR {g} {c} {proc} {ρ′} {pend′} {rest} {j} {w} {wS} h reacted ej wkS wk cur nse =
+  stepR moved , record
+    { nL = Hold.nL h ; bsL = Hold.bsL h ; odL = Hold.odL h ; cL = Hold.cL h
+    ; nR = Hold.nR h ; bsR = Hold.bsR h ; odR = Hold.odR h ; cR = Hold.cR h
+    ; α = Hold.α h ; κ = Hold.κ h
+    ; leftC = Hold.leftC h ; rightC = curW
+    ; nmL = Hold.nmL h
+    ; nmR = trans (Hold.nmR h) (trans (sym nse) (sym (ns-keep weq cur))) }
+  where
+  weq : wS ≡ w
+  weq = just-inj (trans (sym wkS) wk)
+  moved = subst (λ i → reactR g (abs c) ≡
+                   AGo (rc (il c) i rest (r2l c) (el c) (er c)))
+            (trans (sym ej) (cong entry weq)) reacted
+  curW = subst (λ z → Cursor (Hold.bsR h) (entry z) (atSlot z) ρ′
+                        (addPend pend′ (ir c) (slotR c) (envIR c)) proc)
+           weq cur
+
+getR-use : ∀ {g c t x p ρ′ pend′ k rest a w} (h : Hold g c) →
+           l2r c ≡ pay k ∷ rest →
+           nthA (alpha c) k ≡ just a →
+           fits t a ≡ true →
+           walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                (suc (ir c)) (suc (slotR c)) ≡ just w →
+           Stop (Hold.bsR h) (Cursor.echoNs (Hold.rightC h))
+                (ir c) (slotR c) (envIR c) ρ′ pend′ (f-get t x p) →
+           Step g (abs c) rside (abs (afterGetR c p ρ′ pend′ rest k w)) ×
+           Hold g (afterGetR c p ρ′ pend′ rest k w)
+getR-use {g} {c} {t} {x} {p} {ρ′} {pend′} {k} {rest} {a} {w} h qeq eqA eqF wk
+  (atAct suf ρi bg _
+     (p-act (d-get nD sD .t .x j .p ρw wD wkD ej dest dh ds de)
+            r-get i0 s0 ρden)
+     (cp-act (c-get mem cvD))
+     (lk-get eqi eqs _ lkD)
+     (hs-get hsD)
+     (at-get _ atD)
+     (en-get ensD)
+     (al-get eqρ destAl)
+     ix ss sn lf-get) =
+  closeGetR h reacted ej (Gone.wk go) wk (Gone.cur go) (Gone.nse go)
+  where
+  en = trans ix eqi
+  es = trans ss eqs
+  go = sendCont {bs = Hold.bsR h} {ns = Cursor.echoNs (Hold.rightC h)}
+         {n = ir c} {s = slotR c} {base = envIR c} {ρi = ρi}
+         {pend = pend′} {suf = suf} {env = ρ′} {p = p}
+         {nD = nD} {sD = sD} {sW = suc (slotR c)} {sW′ = suc sD}
+         {ρden = ρden} {ρw = ρw} {w = wD} {dest = dest}
+         bg en es (cong suc es) eqρ sn (cvd bg) wkD dh ds de
+         cvD lkD hsD atD ensD destAl
+  memI = subst (λ i → (i , bGet t sD j) ∈ Hold.bsR h) (sym en) mem
+  memN : (ir c , bGet t (slotR c) j) ∈ Hold.bsR h
+  memN = subst (λ z → (ir c , bGet t z j) ∈ Hold.bsR h) (sym es) memI
+  nthG = subst (λ al → nthA al k ≡ just a) (Hold.α h) eqA
+  got = reactR-get g (il c) (ir c) k rest (r2l c) (el c) (er c)
+          t (slotR c) a j nthG eqF (seenR h memN)
+  reacted = subst (λ queue →
+              reactR g (rc (il c) (ir c) queue (r2l c) (el c) (er c)) ≡
+                AGo (rc (il c) j rest (r2l c) (el c)
+                       (setNth (slotR c) (suc k) (er c))))
+              (sym qeq) got
+
+getR-fwd : ∀ {g c t x p ρ′ pend′ k rest a w} (h : Hold g c) →
+           Unfold (envPR c) [] (right c) ρ′ pend′ (f-get t x p) →
+           l2r c ≡ pay k ∷ rest →
+           nthA (alpha c) k ≡ just a →
+           fits t a ≡ true →
+           walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                (suc (ir c)) (suc (slotR c)) ≡ just w →
+           Step g (abs c) rside (abs (afterGetR c p ρ′ pend′ rest k w)) ×
+           Hold g (afterGetR c p ρ′ pend′ rest k w)
+getR-fwd h unf qeq eqA eqF wk = getR-use h qeq eqA eqF wk (rightStop h unf)
+
+coverR0-use : ∀ {g c p q ρ′ pend′ rest w} (h : Hold g c) →
+              l2r c ≡ lab false ∷ rest →
+              walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                   (suc (ir c)) (slotR c) ≡ just w →
+              Stop (Hold.bsR h) (Cursor.echoNs (Hold.rightC h))
+                   (ir c) (slotR c) (envIR c) ρ′ pend′ (f-cover p q) →
+              Step g (abs c) rside (abs (afterPopR c p ρ′ pend′ rest w)) ×
+              Hold g (afterPopR c p ρ′ pend′ rest w)
+coverR0-use {g} {c} {p} {q} {ρ′} {pend′} {rest} {w} h qeq wk
+  (atAct suf ρi bg _
+     (p-act (d-cover nD sD i j .p .q ρw w1 w2 wk1 ei wk2 ej
+                     dp dq hp sp deP hq sq deQ)
+            r-cover i0 s0 ρden)
+     (cp-act (c-cover mem cvP cvQ))
+     (lk-cover eqi eqs _ lkP lkQ)
+     (hs-cover hsP hsQ)
+     (at-cover _ atP atQ)
+     (en-cover ensP ensQ)
+     (al-cover eqρ alP alQ)
+     ix ss sn lf-cover) =
+  closePopR h reacted ei (Gone.wk go) wk (Gone.cur go) (Gone.nse go)
+  where
+  en = trans ix eqi
+  es = trans ss eqs
+  go = sendCont {bs = Hold.bsR h} {ns = Cursor.echoNs (Hold.rightC h)}
+         {n = ir c} {s = slotR c} {base = envIR c} {ρi = ρi}
+         {pend = pend′} {suf = suf} {env = ρ′} {p = p}
+         {nD = nD} {sD = sD} {sW = slotR c} {sW′ = sD}
+         {ρden = ρden} {ρw = ρw} {w = w1} {dest = dp}
+         bg en es es eqρ sn (cvd bg) wk1 hp sp deP
+         cvP lkP hsP atP ensP alP
+  memN : (ir c , bCover i j) ∈ Hold.bsR h
+  memN = subst (λ z → (z , bCover i j) ∈ Hold.bsR h) (sym en) mem
+  got = reactR-cover0 g (il c) (ir c) rest (r2l c) (el c) (er c) i j (seenR h memN)
+  reacted = subst (λ queue →
+              reactR g (rc (il c) (ir c) queue (r2l c) (el c) (er c)) ≡
+                AGo (rc (il c) i rest (r2l c) (el c) (er c)))
+              (sym qeq) got
+
+coverR0-fwd : ∀ {g c p q ρ′ pend′ rest w} (h : Hold g c) →
+              Unfold (envPR c) [] (right c) ρ′ pend′ (f-cover p q) →
+              l2r c ≡ lab false ∷ rest →
+              walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                   (suc (ir c)) (slotR c) ≡ just w →
+              Step g (abs c) rside (abs (afterPopR c p ρ′ pend′ rest w)) ×
+              Hold g (afterPopR c p ρ′ pend′ rest w)
+coverR0-fwd h unf qeq wk = coverR0-use h qeq wk (rightStop h unf)
+
+coverR1-use : ∀ {g c p q ρ′ pend′ rest w1 w2} (h : Hold g c) →
+              l2r c ≡ lab true ∷ rest →
+              walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                   (suc (ir c)) (slotR c) ≡ just w1 →
+              walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) q
+                   (next w1) (slotN w1) ≡ just w2 →
+              Stop (Hold.bsR h) (Cursor.echoNs (Hold.rightC h))
+                   (ir c) (slotR c) (envIR c) ρ′ pend′ (f-cover p q) →
+              Step g (abs c) rside (abs (afterPopR c q ρ′ pend′ rest w2)) ×
+              Hold g (afterPopR c q ρ′ pend′ rest w2)
+coverR1-use {g} {c} {p} {q} {ρ′} {pend′} {rest} {w1} {w2} h qeq wk1 wk2
+  (atAct suf ρi bg _
+     (p-act (d-cover nD sD i j .p .q ρw w1D w2D wk1D ei wk2D ej
+                     dp dq hp sp deP hq sq deQ)
+            r-cover i0 s0 ρden)
+     (cp-act (c-cover mem cvP cvQ))
+     (lk-cover eqi eqs _ lkP lkQ)
+     (hs-cover hsP hsQ)
+     (at-cover _ atP atQ)
+     (en-cover ensP ensQ)
+     (al-cover eqρ alP alQ)
+     ix ss sn lf-cover) =
+  closePopR h reacted ej wk2Run wk2 cur (echo-env (run bg) cur0)
+  where
+  en = trans ix eqi
+  es = trans ss eqs
+  go = sendCont {bs = Hold.bsR h} {ns = Cursor.echoNs (Hold.rightC h)}
+         {n = ir c} {s = slotR c} {base = envIR c} {ρi = ρi}
+         {pend = pend′} {suf = suf} {env = ρ′} {p = p}
+         {nD = nD} {sD = sD} {sW = slotR c} {sW′ = sD}
+         {ρden = ρden} {ρw = ρw} {w = w1D} {dest = dp}
+         bg en es es eqρ sn (cvd bg) wk1D hp sp deP
+         cvP lkP hsP atP ensP alP
+  same = just-inj (trans (sym (Gone.wk go)) wk1)
+  extW = ext-leaf suf pend′ (ir c) (slotR c) nD sD ρden (envIR c) ρw ρi suf
+           en es refl eqρ (run bg) sn (cvd bg)
+  wkI = walk-ext [] ρw ρi q (next w1D) (slotN w1D) w2D extW wk2D
+  wkAt = subst (λ z → walk [] ρi q (next z) (slotN z) ≡ just w2D) same wkI
+  wk2Run = subst (λ e → walk [] e q (next w1) (slotN w1) ≡ just w2D) (run bg) wkAt
+  snD = subst (λ e → Ext e ρi) (sym deQ) extW
+  cur0 = arrive {ns = Cursor.echoNs (Hold.rightC h)} {tab = tab bg} dq w2D
+           (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
+           hq sq cvQ lkQ hsQ atQ ensQ alQ snD
+  cur = subst (λ e → Cursor (Hold.bsR h) (entry w2D) (atSlot w2D) ρ′ e q)
+          (run bg) cur0
+  memN : (ir c , bCover i j) ∈ Hold.bsR h
+  memN = subst (λ z → (z , bCover i j) ∈ Hold.bsR h) (sym en) mem
+  got = reactR-cover1 g (il c) (ir c) rest (r2l c) (el c) (er c) i j (seenR h memN)
+  reacted = subst (λ queue →
+              reactR g (rc (il c) (ir c) queue (r2l c) (el c) (er c)) ≡
+                AGo (rc (il c) j rest (r2l c) (el c) (er c)))
+              (sym qeq) got
+
+coverR1-fwd : ∀ {g c p q ρ′ pend′ rest w1 w2} (h : Hold g c) →
+              Unfold (envPR c) [] (right c) ρ′ pend′ (f-cover p q) →
+              l2r c ≡ lab true ∷ rest →
+              walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                   (suc (ir c)) (slotR c) ≡ just w1 →
+              walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) q
+                   (next w1) (slotN w1) ≡ just w2 →
+              Step g (abs c) rside (abs (afterPopR c q ρ′ pend′ rest w2)) ×
+              Hold g (afterPopR c q ρ′ pend′ rest w2)
+coverR1-fwd h unf qeq wk1 wk2 = coverR1-use h qeq wk1 wk2 (rightStop h unf)
+
+igetR0-use : ∀ {g c x p q ρ′ pend′ k rest w} (h : Hold g c) →
+             l2r c ≡ pay k ∷ rest →
+             nthA (alpha c) k ≡ just (aBit false) →
+             walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                  (suc (ir c)) (suc (slotR c)) ≡ just w →
+             Stop (Hold.bsR h) (Cursor.echoNs (Hold.rightC h))
+                  (ir c) (slotR c) (envIR c) ρ′ pend′ (f-iget x p q) →
+             Step g (abs c) rside (abs (afterGetR c p ρ′ pend′ rest k w)) ×
+             Hold g (afterGetR c p ρ′ pend′ rest k w)
+igetR0-use {g} {c} {x} {p} {q} {ρ′} {pend′} {k} {rest} {w} h qeq eqA wk
+  (atAct suf ρi bg _
+     (p-act (d-iget nD sD .x i j .p .q ρw w1D w2D wk1D ei wk2D ej
+                    dp dq hp sp deP hq sq deQ)
+            r-iget i0 s0 ρden)
+     (cp-act (c-iget mem cvP cvQ))
+     (lk-iget eqi eqs _ lkP lkQ)
+     (hs-iget hsP hsQ)
+     (at-iget _ atP atQ)
+     (en-iget ensP ensQ)
+     (al-iget eqρ alP alQ)
+     ix ss sn lf-iget) =
+  closeGetR h reacted ei (Gone.wk go) wk (Gone.cur go) (Gone.nse go)
+  where
+  en = trans ix eqi
+  es = trans ss eqs
+  go = sendCont {bs = Hold.bsR h} {ns = Cursor.echoNs (Hold.rightC h)}
+         {n = ir c} {s = slotR c} {base = envIR c} {ρi = ρi}
+         {pend = pend′} {suf = suf} {env = ρ′} {p = p}
+         {nD = nD} {sD = sD} {sW = suc (slotR c)} {sW′ = suc sD}
+         {ρden = ρden} {ρw = ρw} {w = w1D} {dest = dp}
+         bg en es (cong suc es) eqρ sn (cvd bg) wk1D hp sp deP
+         cvP lkP hsP atP ensP alP
+  memI = subst (λ z → (z , bIget sD i j) ∈ Hold.bsR h) (sym en) mem
+  memN : (ir c , bIget (slotR c) i j) ∈ Hold.bsR h
+  memN = subst (λ z → (ir c , bIget z i j) ∈ Hold.bsR h) (sym es) memI
+  nthG = subst (λ al → nthA al k ≡ just (aBit false)) (Hold.α h) eqA
+  got = reactR-iget0 g (il c) (ir c) k rest (r2l c) (el c) (er c)
+          (slotR c) i j nthG (seenR h memN)
+  reacted = subst (λ queue →
+              reactR g (rc (il c) (ir c) queue (r2l c) (el c) (er c)) ≡
+                AGo (rc (il c) i rest (r2l c) (el c)
+                       (setNth (slotR c) (suc k) (er c))))
+              (sym qeq) got
+
+igetR0-fwd : ∀ {g c x p q ρ′ pend′ k rest w} (h : Hold g c) →
+             Unfold (envPR c) [] (right c) ρ′ pend′ (f-iget x p q) →
+             l2r c ≡ pay k ∷ rest →
+             nthA (alpha c) k ≡ just (aBit false) →
+             walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                  (suc (ir c)) (suc (slotR c)) ≡ just w →
+             Step g (abs c) rside (abs (afterGetR c p ρ′ pend′ rest k w)) ×
+             Hold g (afterGetR c p ρ′ pend′ rest k w)
+igetR0-fwd h unf qeq eqA wk = igetR0-use h qeq eqA wk (rightStop h unf)
+
+igetR1-use : ∀ {g c x p q ρ′ pend′ k rest w1 w2} (h : Hold g c) →
+             l2r c ≡ pay k ∷ rest →
+             nthA (alpha c) k ≡ just (aBit true) →
+             walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                  (suc (ir c)) (suc (slotR c)) ≡ just w1 →
+             walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) q
+                  (next w1) (slotN w1) ≡ just w2 →
+             Stop (Hold.bsR h) (Cursor.echoNs (Hold.rightC h))
+                  (ir c) (slotR c) (envIR c) ρ′ pend′ (f-iget x p q) →
+             Step g (abs c) rside (abs (afterGetR c q ρ′ pend′ rest k w2)) ×
+             Hold g (afterGetR c q ρ′ pend′ rest k w2)
+igetR1-use {g} {c} {x} {p} {q} {ρ′} {pend′} {k} {rest} {w1} {w2} h qeq eqA wk1 wk2
+  (atAct suf ρi bg _
+     (p-act (d-iget nD sD .x i j .p .q ρw w1D w2D wk1D ei wk2D ej
+                    dp dq hp sp deP hq sq deQ)
+            r-iget i0 s0 ρden)
+     (cp-act (c-iget mem cvP cvQ))
+     (lk-iget eqi eqs _ lkP lkQ)
+     (hs-iget hsP hsQ)
+     (at-iget _ atP atQ)
+     (en-iget ensP ensQ)
+     (al-iget eqρ alP alQ)
+     ix ss sn lf-iget) =
+  closeGetR h reacted ej wk2Run wk2 cur (echo-env (run bg) cur0)
+  where
+  en = trans ix eqi
+  es = trans ss eqs
+  go = sendCont {bs = Hold.bsR h} {ns = Cursor.echoNs (Hold.rightC h)}
+         {n = ir c} {s = slotR c} {base = envIR c} {ρi = ρi}
+         {pend = pend′} {suf = suf} {env = ρ′} {p = p}
+         {nD = nD} {sD = sD} {sW = suc (slotR c)} {sW′ = suc sD}
+         {ρden = ρden} {ρw = ρw} {w = w1D} {dest = dp}
+         bg en es (cong suc es) eqρ sn (cvd bg) wk1D hp sp deP
+         cvP lkP hsP atP ensP alP
+  same = just-inj (trans (sym (Gone.wk go)) wk1)
+  extW = ext-leaf suf pend′ (ir c) (slotR c) nD sD ρden (envIR c) ρw ρi suf
+           en es refl eqρ (run bg) sn (cvd bg)
+  wkI = walk-ext [] ρw ρi q (next w1D) (slotN w1D) w2D extW wk2D
+  wkAt = subst (λ z → walk [] ρi q (next z) (slotN z) ≡ just w2D) same wkI
+  wk2Run = subst (λ e → walk [] e q (next w1) (slotN w1) ≡ just w2D) (run bg) wkAt
+  snD = subst (λ e → Ext e ρi) (sym deQ) extW
+  cur0 = arrive {ns = Cursor.echoNs (Hold.rightC h)} {tab = tab bg} dq w2D
+           (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
+           hq sq cvQ lkQ hsQ atQ ensQ alQ snD
+  cur = subst (λ e → Cursor (Hold.bsR h) (entry w2D) (atSlot w2D) ρ′ e q)
+          (run bg) cur0
+  memI = subst (λ z → (z , bIget sD i j) ∈ Hold.bsR h) (sym en) mem
+  memN : (ir c , bIget (slotR c) i j) ∈ Hold.bsR h
+  memN = subst (λ z → (ir c , bIget z i j) ∈ Hold.bsR h) (sym es) memI
+  nthG = subst (λ al → nthA al k ≡ just (aBit true)) (Hold.α h) eqA
+  got = reactR-iget1 g (il c) (ir c) k rest (r2l c) (el c) (er c)
+          (slotR c) i j nthG (seenR h memN)
+  reacted = subst (λ queue →
+              reactR g (rc (il c) (ir c) queue (r2l c) (el c) (er c)) ≡
+                AGo (rc (il c) j rest (r2l c) (el c)
+                       (setNth (slotR c) (suc k) (er c))))
+              (sym qeq) got
+
+igetR1-fwd : ∀ {g c x p q ρ′ pend′ k rest w1 w2} (h : Hold g c) →
+             Unfold (envPR c) [] (right c) ρ′ pend′ (f-iget x p q) →
+             l2r c ≡ pay k ∷ rest →
+             nthA (alpha c) k ≡ just (aBit true) →
+             walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) p
+                  (suc (ir c)) (suc (slotR c)) ≡ just w1 →
+             walk [] (addPend pend′ (ir c) (slotR c) (envIR c)) q
+                  (next w1) (slotN w1) ≡ just w2 →
+             Step g (abs c) rside (abs (afterGetR c q ρ′ pend′ rest k w2)) ×
+             Hold g (afterGetR c q ρ′ pend′ rest k w2)
+igetR1-fwd h unf qeq eqA wk1 wk2 = igetR1-use h qeq eqA wk1 wk2 (rightStop h unf)
+
+mgetR-use : ∀ {g c t x as ρ′ pend′ k rest a name w p} (h : Hold g c) →
+            l2r c ≡ pay k ∷ rest →
+            nthA (alpha c) k ≡ just a →
+            fits t a ≡ true →
+            conOf a ≡ just name →
+            armGo (addPend pend′ (ir c) (slotR c) (envIR c)) name as
+                  (suc (ir c)) (suc (slotR c)) ≡ just (w , p) →
+            Stop (Hold.bsR h) (Cursor.echoNs (Hold.rightC h))
+                 (ir c) (slotR c) (envIR c) ρ′ pend′ (f-mget t x as) →
+            Step g (abs c) rside (abs (afterGetR c p ρ′ pend′ rest k w)) ×
+            Hold g (afterGetR c p ρ′ pend′ rest k w)
+mgetR-use {g} {c} {t} {x} {as} {ρ′} {pend′} {k} {rest} {a} {name} {w} {p}
+          h qeq eqA eqF eqC ago
+  (atAct suf ρi bg _
+     (p-act (d-mget nD sD .t .x named .as ρw ws n2 s2 wkD enW dests)
+            r-mget i0 s0 ρden)
+     (cp-act (c-mget mem cvA))
+     (lk-mget eqi eqs _ lkA)
+     (hs-mget hsA)
+     (at-mget _ atA)
+     (en-mget enA)
+     (al-mget eqρ alA)
+     ix ss sn lf-mget) =
+  closeGetR h reacted refl wkRun wkRun cur (echo-env (run bg) cur0)
+  where
+  en = trans ix eqi
+  es = trans ss eqs
+  extW = ext-leaf suf pend′ (ir c) (slotR c) nD sD ρden (envIR c) ρw ρi suf
+           en es refl eqρ (run bg) sn (cvd bg)
+  wk1 = subst (λ z → walkArms [] ρw as (suc z) (suc sD) ≡ just (ws , n2 , s2))
+          (sym en) wkD
+  wkC = subst (λ z → walkArms [] ρw as (suc (ir c)) (suc z) ≡ just (ws , n2 , s2))
+          (sym es) wk1
+  agoI = subst (λ e → armGo e name as (suc (ir c)) (suc (slotR c)) ≡ just (w , p))
+           (sym (run bg)) ago
+  hitD = armGo-agree as extW wkC agoI
+  pk = armPick dests lkA hsA atA enA alA cvA wkC hitD
+  wkI = walk-ext [] ρw ρi p (Pick.n0 pk) (Pick.s0 pk) w extW (Pick.wk pk)
+  wkRun = subst (λ e → walk [] e p (Pick.n0 pk) (Pick.s0 pk) ≡ just w)
+            (run bg) wkI
+  snD = subst (λ e → Ext e ρi) (sym (Pick.ev pk)) extW
+  cur0 = arrive {ns = Cursor.echoNs (Hold.rightC h)} {tab = tab bg}
+           (Pick.pl pk) w (ct bg) (ls bg) (td bg) (sy bg) (kn bg) (nd bg)
+           (Pick.hd pk) (Pick.sl pk) (Pick.cv pk) (Pick.lk pk) (Pick.hs pk)
+           (Pick.at pk) (Pick.ens pk) (Pick.al pk) snD
+  cur = subst (λ e → Cursor (Hold.bsR h) (entry w) (atSlot w) ρ′ e p)
+          (run bg) cur0
+  memI = subst (λ z → (z , bMget t sD named) ∈ Hold.bsR h) (sym en) mem
+  memN : (ir c , bMget t (slotR c) named) ∈ Hold.bsR h
+  memN = subst (λ z → (ir c , bMget t z named) ∈ Hold.bsR h) (sym es) memI
+  nthG = subst (λ al → nthA al k ≡ just a) (Hold.α h) eqA
+  toN = subst (λ xs → armTo name xs ≡ just (entry w)) enW (Pick.aj pk)
+  got = reactR-mget g (il c) (ir c) k rest (r2l c) (el c) (er c)
+          t (slotR c) named a name (entry w) nthG eqF eqC toN (seenR h memN)
+  reacted = subst (λ queue →
+              reactR g (rc (il c) (ir c) queue (r2l c) (el c) (er c)) ≡
+                AGo (rc (il c) (entry w) rest (r2l c) (el c)
+                       (setNth (slotR c) (suc k) (er c))))
+              (sym qeq) got
+
+mgetR-fwd : ∀ {g c t x as ρ′ pend′ k rest a name w p} (h : Hold g c) →
+            Unfold (envPR c) [] (right c) ρ′ pend′ (f-mget t x as) →
+            l2r c ≡ pay k ∷ rest →
+            nthA (alpha c) k ≡ just a →
+            fits t a ≡ true →
+            conOf a ≡ just name →
+            armGo (addPend pend′ (ir c) (slotR c) (envIR c)) name as
+                  (suc (ir c)) (suc (slotR c)) ≡ just (w , p) →
+            Step g (abs c) rside (abs (afterGetR c p ρ′ pend′ rest k w)) ×
+            Hold g (afterGetR c p ρ′ pend′ rest k w)
+mgetR-fwd h unf qeq eqA eqF eqC ago = mgetR-use h qeq eqA eqF eqC ago (rightStop h unf)
