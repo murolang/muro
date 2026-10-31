@@ -2,7 +2,7 @@
 
 ## 0.19.7
 
-`muro` with no arguments, `muro --help`, `muro -h`, and `muro help` print the same usage and exit 0. The page names the version, every command and what it does, the global flags, a short getting-started flow, examples, and where the manifest lives: `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`. `muro help <command>` and `muro <command> --help` print that command's arguments, flags, defaults, examples, and exit codes, and do not run the command. An unknown command or flag names itself on standard error, then the one-line usage and `run muro --help`. The overview prints an em dash. If mise says `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false`, then `mise use -g github:murolang/muro@VERSION`. The Mix tasks are unchanged.
+`muro` with no arguments, `muro --help`, `muro -h`, and `muro help` print the same usage and exit 0. The page names the version, every command and what it does, the global flags, a short getting-started flow, examples, and where the manifest lives: `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`. `muro help <command>` and `muro <command> --help` print that command's arguments, flags, defaults, examples, and exit codes, and do not run the command. An unknown command or flag names itself on standard error, then the one-line usage and `run muro --help`. A usage error or a hint from the executable names `muro init`, `muro gen`, or `muro deps.get`, not the Mix task. The overview prints an em dash. If mise says `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false`, then `mise use -g github:murolang/muro@VERSION`. The Mix tasks are unchanged.
 
 ### Manual
 

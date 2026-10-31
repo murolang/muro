@@ -112,7 +112,7 @@ defmodule Muro.CLI.Init do
         {:raise, "", "unknown option: #{inspect(invalid)}"}
 
       rest != [] ->
-        {:raise, "", "usage: mix muro.init [--ci github]"}
+        {:raise, "", "usage: muro init [--ci github] [--backend NAME] [--cargo-metadata]"}
 
       true ->
         with {:ok, ci} <- ci_value(Keyword.get(opts, :ci)),

@@ -13,10 +13,10 @@ defmodule Muro.CLI do
     previous = unicode_on()
 
     try do
-      args |> dispatch() |> present()
+      args |> dispatch() |> named() |> present()
     rescue
       error in Mix.Error ->
-        IO.write(:stderr, ensure_nl(error.message))
+        IO.write(:stderr, ensure_nl(executable_names(error.message)))
         1
     after
       unicode_restore(previous)
@@ -213,6 +213,14 @@ defmodule Muro.CLI do
 
   defp flag_name({name, _value}) when is_binary(name), do: name
   defp flag_name(name) when is_binary(name), do: name
+
+  defp named({:raise, stdout, message}), do: {:raise, stdout, executable_names(message)}
+  defp named(result), do: result
+
+  @doc false
+  def executable_names(message) do
+    Regex.replace(~r/\bmix muro\.(deps\.get|gen|init|check|emit|mutate)\b/, message, "muro \\1")
+  end
 
   defp hint(label), do: label <> "\n" <> @usage_line <> "\nrun muro --help"
 

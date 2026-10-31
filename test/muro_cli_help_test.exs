@@ -227,6 +227,29 @@ defmodule Muro.CliHelpTest do
     end
   end
 
+  test "a usage error from the executable names the executable" do
+    for {args, usage} <- [
+          {["init", "extra"],
+           "usage: muro init [--ci github] [--backend NAME] [--cargo-metadata]"},
+          {["gen", "extra"], "usage: muro gen [--check]"},
+          {["deps.get", "extra"], "usage: muro deps.get"}
+        ] do
+      {out, err, code} = cli(args)
+      assert code == 1
+      assert out == ""
+      assert err =~ usage
+      refute err =~ "mix muro"
+    end
+  end
+
+  test "messages that name a Mix task name the executable command instead" do
+    assert Muro.CLI.executable_names("no muro.lock; run mix muro.deps.get") ==
+             "no muro.lock; run muro deps.get"
+
+    assert Muro.CLI.executable_names("run mix muro.gen.") == "run muro gen."
+    assert Muro.CLI.executable_names("mix muro --help") == "mix muro --help"
+  end
+
   test "mix muro --help does not print the executable usage" do
     assert_raise Mix.Error, ~r/usage: mix muro \[--version\]/, fn ->
       Mix.Tasks.Muro.run(["--help"])
