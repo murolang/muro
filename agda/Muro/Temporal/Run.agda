@@ -40,7 +40,7 @@ open SConf
 open W
 
 open import Muro.Temporal.Pic
-  using (Ord; ERel; er0; EchoRel; echo-empty; EnvEq; outside; ==-refl)
+  using (Ord; ERel; er0; EchoRel; echo-empty; EnvEq; outside; ==-refl; ==-sound)
 open import Muro.Temporal.Agree using (root-ns)
 open import Muro.Temporal.Den
   using ( Place; Table; t1; Link; Links; CovP; CovT; headIx; slotOf; envOf
@@ -432,6 +432,42 @@ both-hit : ∀ y got n s base i s1 →
            elemS y got ≡ true ⊎ lookupI y base ≡ just (n , s) →
            lookupI y (addPend got n s base) ≡ just (i , s1)
 both-hit y got n s base i s1 e mem rewrite sym e = bind-hit got n s base y mem
+
+fresh-lift : ∀ {got ρ dom n s} →
+             Ext ρ dom → Fresh got dom n s → Fresh got ρ n s
+fresh-lift {got} {ρ} {dom} {n} {s} ext fr y inn = go (lookupI y ρ) refl
+  where
+  go : (m : Maybe (ℕ × ℕ)) → lookupI y ρ ≡ m →
+       lookupI y ρ ≡ nothing ⊎ lookupI y ρ ≡ just (n , s)
+  go nothing p = inj₁ p
+  go (just (i , s1)) p = inj₂ (same (fr y inn) (ext y i s1 p) p)
+    where
+    same : lookupI y dom ≡ nothing ⊎ lookupI y dom ≡ just (n , s) →
+           lookupI y dom ≡ just (i , s1) →
+           lookupI y ρ ≡ just (i , s1) →
+           lookupI y ρ ≡ just (n , s)
+    same (inj₁ no) hit _ = ⊥-elim (nothing≢just (trans (sym no) hit))
+    same (inj₂ yes) hit q rewrite sym (just-inj (trans (sym yes) hit)) = q
+
+cov-mu : ∀ {x suf got base n s} →
+         Covered suf got base n s →
+         Covered (x ∷ suf) (x ∷ got) base n s
+cov-mu {x} {suf} {got} {base} {n} {s} cov y inn = go (y == x) refl inn
+  where
+  go : (b : Bool) → (y == x) ≡ b → elemS y (x ∷ suf) ≡ true →
+       elemS y (x ∷ got) ≡ true ⊎ lookupI y base ≡ just (n , s)
+  go true eqy _ rewrite eqy = inj₁ refl
+  go false eqy inn′ rewrite eqy = cov y inn′
+
+fresh-mu : ∀ {x got ρ n s} →
+           lookupI x ρ ≡ nothing ⊎ lookupI x ρ ≡ just (n , s) →
+           Fresh got ρ n s → Fresh (x ∷ got) ρ n s
+fresh-mu {x} {got} {ρ} {n} {s} pin fr y inn = go (y == x) refl
+  where
+  go : (b : Bool) → (y == x) ≡ b →
+       lookupI y ρ ≡ nothing ⊎ lookupI y ρ ≡ just (n , s)
+  go true eqy rewrite ==-sound eqy = pin
+  go false eqy rewrite eqy = fr y inn
 
 -- `suf` is the pending list the action was denoted under. `got` is the
 -- pending list the source step unfolded. The two lists share counters.
