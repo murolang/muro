@@ -7,8 +7,8 @@ defmodule Muro.EmitRustTest do
     dir = tmp_dir()
     File.cp!("examples/half_ok.muro", Path.join(dir, "half_rs.muro"))
     source = File.read!(emit_rust!(dir, "half_rs"))
-    assert source =~ "pub fn half(n: Nat) -> Nat"
-    assert source =~ "pub fn plus(n: Nat, m: Nat) -> Nat"
+    assert source =~ "pub fn half(n: muro__Nat) -> muro__Nat"
+    assert source =~ "pub fn plus(n: muro__Nat, m: muro__Nat) -> muro__Nat"
     refute source =~ "IsEven"
     refute source =~ "fn half_ok"
 
@@ -30,10 +30,10 @@ defmodule Muro.EmitRustTest do
         dir,
         """
         fn main() {
-            let h = half_rs::muro_to_u64(&half_rs::half(half_rs::muro_from_u64(4)));
-            let p = half_rs::muro_to_u64(&half_rs::plus(
-                half_rs::muro_from_u64(2),
-                half_rs::muro_from_u64(3),
+            let h = half_rs::muro__to_u64(&half_rs::half(half_rs::muro__from_u64(4)));
+            let p = half_rs::muro__to_u64(&half_rs::plus(
+                half_rs::muro__from_u64(2),
+                half_rs::muro__from_u64(3),
             ));
             println!("{h} {p}");
         }
@@ -78,14 +78,14 @@ defmodule Muro.EmitRustTest do
         dir,
         """
         fn main() {
-            let z = streams::zeros();
-            let zh = streams::muro_to_u64(&streams::hd(z.clone()));
-            let zs = streams::muro_to_u64(&streams::second(z));
-            let ns = streams::natsFrom(streams::muro_from_u64(0));
-            let nh = streams::muro_to_u64(&streams::hd(ns.clone()));
-            let n2 = streams::muro_to_u64(&streams::second(ns));
-            let pr = streams::prefix(streams::muro_from_u64(2));
-            let ph = streams::muro_to_u64(&streams::hd(pr));
+            let z = streams::zzeros();
+            let zh = streams::muro__to_u64(&streams::hd(z.clone()));
+            let zs = streams::muro__to_u64(&streams::second(z));
+            let ns = streams::natsFrom(streams::muro__from_u64(0));
+            let nh = streams::muro__to_u64(&streams::hd(ns.clone()));
+            let n2 = streams::muro__to_u64(&streams::second(ns));
+            let pr = streams::prefix(streams::muro__from_u64(2));
+            let ph = streams::muro__to_u64(&streams::hd(pr));
             println!("{zh} {zs} {nh} {n2} {ph}");
         }
         """,
@@ -127,9 +127,9 @@ defmodule Muro.EmitRustTest do
         dir,
         """
         fn main() {
-            let n = list::muro_to_u64(&list::length(list::ones2()));
-            let a = sorted::muro_to_u64(&sorted::first());
-            let b = sorted::muro_to_u64(&sorted::second());
+            let n = list::muro__to_u64(&list::length(list::ones2()));
+            let a = sorted::muro__to_u64(&sorted::first());
+            let b = sorted::muro__to_u64(&sorted::second());
             println!("{n} {a} {b}");
         }
         """,
@@ -176,14 +176,14 @@ defmodule Muro.EmitRustTest do
         dir,
         """
         fn main() {
-            let z = kw::muro_to_u64(&kw::zero());
-            let o = kw::muro_to_u64(&kw::one());
-            let id = apply_lam::muro_to_u64(&apply_lam::id(apply_lam::muro_from_u64(3)));
-            let snd = apply_lam::muro_to_u64(&apply_lam::snd(
-                apply_lam::muro_from_u64(1),
-                apply_lam::muro_from_u64(2),
+            let z = kw::muro__to_u64(&kw::zzero());
+            let o = kw::muro__to_u64(&kw::one());
+            let id = apply_lam::muro__to_u64(&apply_lam::id(apply_lam::muro__from_u64(3)));
+            let snd = apply_lam::muro__to_u64(&apply_lam::snd(
+                apply_lam::muro__from_u64(1),
+                apply_lam::muro__from_u64(2),
             ));
-            let keep = apply_lam::muro_to_u64(&apply_lam::keep(apply_lam::muro_from_u64(5)));
+            let keep = apply_lam::muro__to_u64(&apply_lam::keep(apply_lam::muro__from_u64(5)));
             println!("{z} {o} {id} {snd} {keep}");
         }
         """,
@@ -210,8 +210,8 @@ defmodule Muro.EmitRustTest do
     """)
 
     source = File.read!(emit_rust!(dir, "step0"))
-    assert source =~ "pub fn step0() -> Nat"
-    assert source =~ "fn muro_step_0("
+    assert source =~ "pub fn step0() -> muro__Nat"
+    assert source =~ "fn muro__step_0("
     refute source =~ "fn step0_2("
 
     out =
@@ -219,9 +219,9 @@ defmodule Muro.EmitRustTest do
         dir,
         """
         fn main() {
-            let n = step0::muro_to_u64(&step0::step0());
-            let z = step0::hd(step0::zeros());
-            println!("{} {}", n, step0::muro_to_u64(&z));
+            let n = step0::muro__to_u64(&step0::step0());
+            let z = step0::hd(step0::zzeros());
+            println!("{} {}", n, step0::muro__to_u64(&z));
         }
         """,
         ["step0"]
@@ -253,9 +253,9 @@ defmodule Muro.EmitRustTest do
     """)
 
     source = File.read!(emit_rust!(dir, "clash"))
-    assert source =~ "pub fn step0(n: Nat) -> Nat"
-    assert source =~ "fn muro_step_0("
-    assert source =~ "pub fn muro_muro_step_0() -> Nat"
+    assert source =~ "pub fn step0(n: muro__Nat) -> muro__Nat"
+    assert source =~ "fn muro__step_0("
+    assert source =~ "pub fn murozustepzu0() -> muro__Nat"
     refute source =~ "fn step0_2("
 
     out =
@@ -263,10 +263,10 @@ defmodule Muro.EmitRustTest do
         dir,
         """
         fn main() {
-            let n = clash::muro_to_u64(&clash::step0(clash::muro_from_u64(1)));
-            let z = clash::muro_to_u64(&clash::hd(clash::zeros()));
-            let s = clash::muro_to_u64(&clash::muro_muro_step_0());
-            let v = clash::muro_to_u64(&clash::id(clash::muro_from_u64(3)));
+            let n = clash::muro__to_u64(&clash::step0(clash::muro__from_u64(1)));
+            let z = clash::muro__to_u64(&clash::hd(clash::zzeros()));
+            let s = clash::muro__to_u64(&clash::murozustepzu0());
+            let v = clash::muro__to_u64(&clash::id(clash::muro__from_u64(3)));
             println!("{n} {z} {s} {v}");
         }
         """,
@@ -307,20 +307,20 @@ defmodule Muro.EmitRustTest do
     """)
 
     source = File.read!(emit_rust!(dir, "alias_apply"))
-    assert source =~ "let r = muro_zero();"
-    assert source =~ "let x = muro_erase(());"
-    refute source =~ "let r = muro_erase(());"
+    assert source =~ "let r = muro__zero();"
+    assert source =~ "let zu = muro__erase(());"
+    refute source =~ "let r = muro__erase(());"
 
     out =
       run_rust!(
         dir,
         """
         fn main() {
-            let one = alias_apply::muro_to_u64(&alias_apply::one());
-            let three = alias_apply::muro_to_u64(&alias_apply::three());
-            let right = alias_apply::muro_to_u64(&alias_apply::right());
-            let hd0 = alias_apply::muro_to_u64(&alias_apply::hd0());
-            let live = alias_apply::muro_to_u64(&alias_apply::live());
+            let one = alias_apply::muro__to_u64(&alias_apply::one());
+            let three = alias_apply::muro__to_u64(&alias_apply::three());
+            let right = alias_apply::muro__to_u64(&alias_apply::right());
+            let hd0 = alias_apply::muro__to_u64(&alias_apply::hd0());
+            let live = alias_apply::muro__to_u64(&alias_apply::live());
             println!("{one} {three} {right} {hd0} {live}");
         }
         """,
@@ -348,14 +348,14 @@ defmodule Muro.EmitRustTest do
         dir,
         """
         fn main() {
-            let p = shadow::muro_to_u64(&shadow::pick(
-                shadow::muro_from_u64(1),
-                shadow::muro_from_u64(2),
+            let p = shadow::muro__to_u64(&shadow::pick(
+                shadow::muro__from_u64(1),
+                shadow::muro__from_u64(2),
             ));
-            let t = shadow::muro_to_u64(&shadow::third(
-                shadow::muro_from_u64(1),
-                shadow::muro_from_u64(2),
-                shadow::muro_from_u64(3),
+            let t = shadow::muro__to_u64(&shadow::third(
+                shadow::muro__from_u64(1),
+                shadow::muro__from_u64(2),
+                shadow::muro__from_u64(3),
             ));
             println!("{p} {t}");
         }
@@ -382,9 +382,9 @@ defmodule Muro.EmitRustTest do
         dir,
         """
         fn main() {
-            let two = alias_nat::muro_to_u64(&alias_nat::muro_reveal(alias_nat::two()));
-            let n = alias_nat::muro_to_u64(&alias_nat::muro_reveal(alias_nat::inc(
-                alias_nat::muro_erase(alias_nat::muro_from_u64(4)),
+            let two = alias_nat::muro__to_u64(&alias_nat::muro__reveal(alias_nat::two()));
+            let n = alias_nat::muro__to_u64(&alias_nat::muro__reveal(alias_nat::inc(
+                alias_nat::muro__erase(alias_nat::muro__from_u64(4)),
             )));
             println!("{two} {n}");
         }
@@ -413,8 +413,8 @@ defmodule Muro.EmitRustTest do
         dir,
         """
         fn main() {
-            let fst = alias_pair::muro_to_u64(&alias_pair::left());
-            let snd = alias_pair::muro_to_u64(&alias_pair::right());
+            let fst = alias_pair::muro__to_u64(&alias_pair::left());
+            let snd = alias_pair::muro__to_u64(&alias_pair::right());
             println!("{fst} {snd}");
         }
         """,
@@ -467,10 +467,10 @@ defmodule Muro.EmitRustTest do
         dir,
         """
         fn main() {
-            let z = alias_stream::muro_to_u64(&alias_stream::hd(alias_stream::zeros()));
-            let n = alias_stream::muro_to_u64(&alias_stream::n1());
-            let t = alias_stream::muro_to_u64(&alias_stream::fromTrue());
-            let f = alias_stream::muro_to_u64(&alias_stream::fromFalse());
+            let z = alias_stream::muro__to_u64(&alias_stream::hd(alias_stream::zzeros()));
+            let n = alias_stream::muro__to_u64(&alias_stream::n1());
+            let t = alias_stream::muro__to_u64(&alias_stream::fromTrue());
+            let f = alias_stream::muro__to_u64(&alias_stream::fromFalse());
             println!("{z} {n} {t} {f}");
         }
         """,
@@ -502,7 +502,7 @@ defmodule Muro.EmitRustTest do
         dir,
         """
         fn main() {
-            let n = alias_match::muro_to_u64(&alias_match::muro_reveal(alias_match::one()));
+            let n = alias_match::muro__to_u64(&alias_match::muro__reveal(alias_match::one()));
             println!("{n}");
         }
         """,
@@ -516,8 +516,8 @@ defmodule Muro.EmitRustTest do
     dir = tmp_dir()
     File.cp!("examples/internal_ok.muro", Path.join(dir, "internal_ok.muro"))
     source = File.read!(emit_rust!(dir, "internal_ok"))
-    assert source =~ "pub fn inc(n: Nat) -> Nat"
-    assert source =~ "fn step(n: Nat) -> Nat"
+    assert source =~ "pub fn inc(n: muro__Nat) -> muro__Nat"
+    assert source =~ "fn step(n: muro__Nat) -> muro__Nat"
     refute source =~ "pub fn step"
 
     out =
@@ -525,7 +525,7 @@ defmodule Muro.EmitRustTest do
         dir,
         """
         fn main() {
-            println!("{}", internal_ok::muro_to_u64(&internal_ok::inc(internal_ok::muro_from_u64(4))));
+            println!("{}", internal_ok::muro__to_u64(&internal_ok::inc(internal_ok::muro__from_u64(4))));
         }
         """,
         ["internal_ok"]
@@ -563,6 +563,157 @@ defmodule Muro.EmitRustTest do
     end
 
     refute File.exists?(Path.join(dir, "lam.rs"))
+  end
+
+  test "muro_step, muro-step, and three unfolds are different functions" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "steps.muro"), """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def s0 : run Stream Nat :=
+      unfold 0 (λ (_ : Nat) → (0, 0))
+
+    def s1 : run Stream Nat :=
+      unfold 0 (λ (_ : Nat) → (suc 0, 0))
+
+    def s2 : run Stream Nat :=
+      unfold 0 (λ (_ : Nat) → (suc (suc 0), 0))
+
+    def hd : run Π (s : Stream Nat) → Nat :=
+      λ (s : Stream Nat) → head s
+
+    def muro_step : run Nat := 0
+    def muro-step : run Nat := suc 0
+    """)
+
+    source = File.read!(emit_rust!(dir, "steps"))
+    bare = Muro.Emit.Rust.source_id("muro_step")
+    dashed = Muro.Emit.Rust.source_id("muro-step")
+    steps = step_fns(source)
+    assert bare != dashed
+    refute String.contains?(bare, "__")
+    refute String.contains?(dashed, "__")
+    assert length(steps) == 3
+    refute bare in steps
+    refute dashed in steps
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            assert_eq!(steps::muro__to_u64(&steps::#{bare}()), 0);
+            assert_eq!(steps::muro__to_u64(&steps::#{dashed}()), 1);
+            assert_eq!(steps::muro__to_u64(&steps::hd(steps::s0())), 0);
+            assert_eq!(steps::muro__to_u64(&steps::hd(steps::s1())), 1);
+            assert_eq!(steps::muro__to_u64(&steps::hd(steps::s2())), 2);
+        }
+        """,
+        ["steps"]
+      )
+
+    assert out == ""
+  end
+
+  test "a-b, a_b, and a_b_2 are three functions" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "inj.muro"), """
+    def a-b : run Nat := 0
+    def a_b : run Nat := suc 0
+    def a_b_2 : run Nat := suc (suc 0)
+    def call : run Nat := a_b
+    """)
+
+    source = File.read!(emit_rust!(dir, "inj"))
+    [ab, a_b, a_b_2] = ids = Enum.map(~w(a-b a_b a_b_2), &Muro.Emit.Rust.source_id/1)
+    assert length(Enum.uniq(ids)) == 3
+    Enum.each(ids, fn id -> refute String.contains?(id, "__") end)
+    Enum.each(ids, fn id -> assert source =~ "pub fn #{id}(" end)
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            assert_eq!(inj::muro__to_u64(&inj::#{ab}()), 0);
+            assert_eq!(inj::muro__to_u64(&inj::#{a_b}()), 1);
+            assert_eq!(inj::muro__to_u64(&inj::#{a_b_2}()), 2);
+            assert_eq!(inj::muro__to_u64(&inj::call()), 1);
+        }
+        """,
+        ["inj"]
+      )
+
+    assert out == ""
+  end
+
+  test "a source run spelled like each generated name stays apart from it" do
+    dir = tmp_dir()
+    samples = Enum.uniq(Muro.Emit.Rust.generated_samples())
+    File.write!(Path.join(dir, "forms.muro"), forms_book(samples))
+    source = File.read!(emit_rust!(dir, "forms"))
+    assert source =~ "fn muro__step_0("
+
+    checks =
+      samples
+      |> Enum.with_index()
+      |> Enum.map_join("\n", fn {name, i} ->
+        id = Muro.Emit.Rust.source_id(name)
+        refute id == name
+        refute String.contains?(id, "__")
+        assert source =~ "pub fn #{id}("
+        "assert_eq!(forms::muro__to_u64(&forms::#{id}()), #{i});"
+      end)
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            assert_eq!(forms::muro__to_u64(&forms::muro__from_u64(4)), 4);
+            assert_eq!(forms::muro__to_u64(&forms::hd(forms::flow())), 0);
+        #{checks}
+        }
+        """,
+        ["forms"]
+      )
+
+    assert out == ""
+  end
+
+  defp forms_book(samples) do
+    runs =
+      samples
+      |> Enum.with_index()
+      |> Enum.map_join("\n", fn {name, i} ->
+        "def #{name} : run Nat := #{peano(i)}"
+      end)
+
+    """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def flow : run Stream Nat :=
+      unfold 0 (λ (_ : Nat) → (0, 0))
+
+    def hd : run Π (s : Stream Nat) → Nat :=
+      λ (s : Stream Nat) → head s
+
+    #{runs}
+    """
+  end
+
+  defp peano(0), do: "0"
+  defp peano(n), do: "suc (" <> peano(n - 1) <> ")"
+
+  defp step_fns(source) do
+    ~r/fn (muro__step_\d+)\(/
+    |> Regex.scan(source)
+    |> Enum.map(fn [_, name] -> name end)
+    |> Enum.uniq()
   end
 
   defp emit_rust!(dir, name) do
