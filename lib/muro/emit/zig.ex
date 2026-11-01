@@ -419,8 +419,10 @@ defmodule Muro.Emit.Zig do
       env1 = [{b, rb, lb}, {a, ra, la} | env]
 
       with {:ok, {blines, bex, blay, beff, st}} <- emit_tm(body, env1, st) do
+        shown = coerce(force(eex, eeff), elay, pair_view(elay), st)
+
         binds =
-          ["const #{s} = #{force(eex, eeff)};"] ++
+          ["const #{s} = #{shown};"] ++
             maybe_bind(a, ra, "#{s}.fst", la, body, st) ++
             maybe_bind(b, rb, "#{s}.snd", lb, body, st)
 
@@ -728,6 +730,9 @@ defmodule Muro.Emit.Zig do
 
   defp pair_halves({:pair, a, b}), do: {a, b}
   defp pair_halves(_), do: {:opaque, :opaque}
+
+  defp pair_view({:pair, _, _} = lay), do: lay
+  defp pair_view(_), do: {:pair, :opaque, :opaque}
 
   defp uncons_lay({:stream, s}), do: {:pair, :opaque, {:stream, s}}
   defp uncons_lay(_), do: {:pair, :opaque, :opaque}

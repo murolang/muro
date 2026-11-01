@@ -455,6 +455,39 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "swap reveals a pair whose type is an alias" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "alias_pair.muro"), """
+    def R : spec Type := Nat
+    def Pair : spec Type := Nat × R
+    def swap : run Π (p : Pair) → Pair := λ (p : Pair) → let (a, b) = p in (b, a)
+    def swapped : run Pair := swap (0, suc 0)
+    """)
+
+    emit_zig!(dir, "alias_pair")
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("alias_pair.zig");
+
+    test "swap" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const out = m.muro_reveal(m.Pair, try m.swapped(a));
+        const fst = m.muro_reveal(m.Nat, out.fst);
+        const snd = m.muro_reveal(m.Nat, out.snd);
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(fst));
+        try std.testing.expectEqual(@as(u64, 0), m.muro_to_u64(snd));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   defp emit_zig!(dir, name) do
     path = Path.join(dir, "#{name}.muro")
     out = capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "zig"]) end)

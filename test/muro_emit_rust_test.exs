@@ -294,6 +294,35 @@ defmodule Muro.EmitRustTest do
     assert out == "2 5\n"
   end
 
+  test "swap reveals a pair whose type is an alias" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "alias_pair.muro"), """
+    def R : spec Type := Nat
+    def Pair : spec Type := Nat × R
+    def swap : run Π (p : Pair) → Pair := λ (p : Pair) → let (a, b) = p in (b, a)
+    def left : run Nat := let (a, b) = swap (0, suc 0) in a
+    def right : run Nat := let (a, b) = swap (0, suc 0) in b
+    """)
+
+    emit_rust!(dir, "alias_pair")
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            let fst = alias_pair::muro_to_u64(&alias_pair::left());
+            let snd = alias_pair::muro_to_u64(&alias_pair::right());
+            println!("{fst} {snd}");
+        }
+        """,
+        ["alias_pair"]
+      )
+
+    assert out == "1 0\n"
+  end
+
   test "run internal is private and the examples that C accepts compile" do
     dir = tmp_dir()
     File.cp!("examples/internal_ok.muro", Path.join(dir, "internal_ok.muro"))

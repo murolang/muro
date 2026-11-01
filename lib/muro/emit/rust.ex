@@ -272,7 +272,7 @@ defmodule Muro.Emit.Rust do
         lines =
           elines ++
             [
-              "let #{s} = #{eex};",
+              "let #{s} = #{as_pair(eex, elay, st)};",
               bind_half(ra, "#{s}.0", la, st),
               bind_half(rb, "#{s}.1", lb, st)
             ] ++ blines
@@ -516,6 +516,9 @@ defmodule Muro.Emit.Rust do
 
   defp pair_halves({:pair, a, b}), do: {a, b}
   defp pair_halves(_), do: {:opaque, :opaque}
+
+  defp as_pair(ex, {:pair, _, _}, _st), do: ex
+  defp as_pair(ex, from, st), do: coerce(ex, from, {:pair, :opaque, :opaque}, st)
 
   defp uncons_lay({:stream, s}), do: {:pair, :opaque, {:stream, s}}
   defp uncons_lay(_), do: {:pair, :opaque, :opaque}
