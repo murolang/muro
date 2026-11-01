@@ -323,6 +323,62 @@ defmodule Muro.EmitRustTest do
     assert out == "1 0\n"
   end
 
+  test "a stream alias and a joined stream are read as streams" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "alias_stream.muro"), """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def S : spec Type := Stream Nat
+
+    def zeros : run S :=
+      unfold 0 (λ (_ : Nat) → (0, 0))
+
+    def hd : run Π (s : S) → Nat :=
+      λ (s : S) → head s
+
+    def nats : run Π (n : Nat) → S :=
+      λ (n : Nat) → unfold n (λ (+ k : Nat) → (k, suc k))
+
+    def n1 : run Nat := head (tail (nats 0))
+
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    def pick : run Π (b : Bool) → Nat :=
+      λ (b : Bool) →
+        head (
+          match b motive (λ _ → Stream Nat)
+            | true => unfold 0 (λ (_ : Nat) → (0, 0))
+            | false => unfold tt (λ (_ : Unit) → (suc 0, tt))
+        )
+
+    def fromTrue : run Nat := pick true
+    def fromFalse : run Nat := pick false
+    """)
+
+    emit_rust!(dir, "alias_stream")
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            let z = alias_stream::muro_to_u64(&alias_stream::hd(alias_stream::zeros()));
+            let n = alias_stream::muro_to_u64(&alias_stream::n1());
+            let t = alias_stream::muro_to_u64(&alias_stream::fromTrue());
+            let f = alias_stream::muro_to_u64(&alias_stream::fromFalse());
+            println!("{z} {n} {t} {f}");
+        }
+        """,
+        ["alias_stream"]
+      )
+
+    assert out == "0 1 0 1\n"
+  end
+
   test "run internal is private and the examples that C accepts compile" do
     dir = tmp_dir()
     File.cp!("examples/internal_ok.muro", Path.join(dir, "internal_ok.muro"))

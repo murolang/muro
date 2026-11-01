@@ -438,8 +438,10 @@ defmodule Muro.Emit.Zig do
       {p, st} = local(st, "muro_p")
       {t, st} = local(st, "muro_t")
 
+      shown = coerce(force(ex, eff), elay, stream_view(elay), st)
+
       more = [
-        "const #{s} = #{force(ex, eff)};",
+        "const #{s} = #{shown};",
         "const #{p} = try #{s}.step(allocator, #{s}.env, #{s}.seed);",
         "const #{t} = try muro_stream_new(allocator, #{p}.snd, #{s}.env, #{s}.step);"
       ]
@@ -733,6 +735,9 @@ defmodule Muro.Emit.Zig do
 
   defp pair_view({:pair, _, _} = lay), do: lay
   defp pair_view(_), do: {:pair, :opaque, :opaque}
+
+  defp stream_view({:stream, _} = lay), do: lay
+  defp stream_view(_), do: {:stream, :opaque}
 
   defp uncons_lay({:stream, s}), do: {:pair, :opaque, {:stream, s}}
   defp uncons_lay(_), do: {:pair, :opaque, :opaque}

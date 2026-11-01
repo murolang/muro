@@ -289,7 +289,7 @@ defmodule Muro.Emit.Rust do
       {t, st} = local(st, "muro_t")
 
       more = [
-        "let #{s} = #{ex};",
+        "let #{s} = #{as_stream(ex, elay, st)};",
         "let #{p} = (#{s}.step)(#{s}.seed.clone());",
         "let #{t} = Stream { seed: #{p}.1.clone(), step: #{s}.step.clone() };"
       ]
@@ -519,6 +519,9 @@ defmodule Muro.Emit.Rust do
 
   defp as_pair(ex, {:pair, _, _}, _st), do: ex
   defp as_pair(ex, from, st), do: coerce(ex, from, {:pair, :opaque, :opaque}, st)
+
+  defp as_stream(ex, {:stream, _}, _st), do: ex
+  defp as_stream(ex, from, st), do: coerce(ex, from, {:stream, :opaque}, st)
 
   defp uncons_lay({:stream, s}), do: {:pair, :opaque, {:stream, s}}
   defp uncons_lay(_), do: {:pair, :opaque, :opaque}

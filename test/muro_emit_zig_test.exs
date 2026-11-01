@@ -488,6 +488,65 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "a stream alias and a joined stream are read as streams" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "alias_stream.muro"), """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def S : spec Type := Stream Nat
+
+    def zeros : run S :=
+      unfold 0 (λ (_ : Nat) → (0, 0))
+
+    def hd : run Π (s : S) → Nat :=
+      λ (s : S) → head s
+
+    def nats : run Π (n : Nat) → S :=
+      λ (n : Nat) → unfold n (λ (+ k : Nat) → (k, suc k))
+
+    def n1 : run Nat := head (tail (nats 0))
+
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    def pick : run Π (b : Bool) → Nat :=
+      λ (b : Bool) →
+        head (
+          match b motive (λ _ → Stream Nat)
+            | true => unfold 0 (λ (_ : Nat) → (0, 0))
+            | false => unfold tt (λ (_ : Unit) → (suc 0, tt))
+        )
+
+    def fromTrue : run Nat := pick true
+    def fromFalse : run Nat := pick false
+    """)
+
+    emit_zig!(dir, "alias_stream")
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("alias_stream.zig");
+
+    test "stream alias" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const z = try m.zeros(a);
+        try std.testing.expectEqual(@as(u64, 0), m.muro_to_u64(try m.hd(a, m.muro_erase(z))));
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(try m.n1(a)));
+        try std.testing.expectEqual(@as(u64, 0), m.muro_to_u64(try m.fromTrue(a)));
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(try m.fromFalse(a)));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   defp emit_zig!(dir, name) do
     path = Path.join(dir, "#{name}.muro")
     out = capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "zig"]) end)
