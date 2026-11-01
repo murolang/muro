@@ -1016,7 +1016,7 @@ defmodule Muro.Emit.C do
       nat_struct(),
       unit_struct(),
       atom_enum(book),
-      stream_typedef(sigs),
+      stream_typedef(sigs, book),
       data_structs(book),
       prototypes(sigs),
       "#endif"
@@ -1038,7 +1038,7 @@ defmodule Muro.Emit.C do
       nat_helpers(),
       unit_helpers(),
       pair_helpers(runs),
-      stream_helpers(runs, exports_stream?(sigs)),
+      stream_helpers(runs, stream_declared?(sigs, book)),
       data_ctors(book),
       internals,
       Enum.join(extras, "\n\n"),
@@ -1193,13 +1193,33 @@ defmodule Muro.Emit.C do
 
   defp stream_ty?(ty), do: String.starts_with?(ty, "muro_stream ")
 
-  defp stream_typedef(sigs) do
-    if exports_stream?(sigs), do: "typedef struct muro_stream muro_stream;", else: ""
+  # A data field typed `muro_stream *` needs the typedef even when no
+  # signature exports a stream. The .c completes the struct only when a
+  # run uses one, and must not repeat the typedef.
+  defp stream_declared?(sigs, book) do
+    exports_stream?(sigs) or data_field_stream?(book)
   end
 
-  defp stream_helpers(runs, exported?) do
+  defp data_field_stream?(book) do
+    Enum.any?(data_defs(book), fn d ->
+      Enum.any?(d.ctors, fn ctor ->
+        {pis, _} = telescope(ctor.type)
+
+        Enum.any?(pis, fn
+          {:erased, _, _} -> false
+          {_, a, _} -> String.starts_with?(ctype(a, book), "muro_stream ")
+        end)
+      end)
+    end)
+  end
+
+  defp stream_typedef(sigs, book) do
+    if stream_declared?(sigs, book), do: "typedef struct muro_stream muro_stream;", else: ""
+  end
+
+  defp stream_helpers(runs, declared?) do
     if mentions?(runs, &stream_form?/1) do
-      decl = if exported?, do: "", else: "typedef struct muro_stream muro_stream;"
+      decl = if declared?, do: "", else: "typedef struct muro_stream muro_stream;"
 
       """
       #{decl}

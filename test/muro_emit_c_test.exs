@@ -518,6 +518,34 @@ defmodule Muro.EmitCTest do
     cc!(dir, "collide.c", "collide.o")
   end
 
+  test "a data field of a stream declares muro_stream" do
+    dir = tmp_dir()
+    path = Path.join(dir, "box.muro")
+
+    File.write!(path, """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    data Box : Type where
+      pair : (Nat × Nat) → Box
+      strm : Stream Nat → Box
+
+    def zero : run Nat := 0
+
+    def hidden : run internal Stream Nat :=
+      unfold 0 (λ (_ : Nat) → (0, 0))
+    """)
+
+    capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
+    header = File.read!(Path.join(dir, "box.h"))
+    source = File.read!(Path.join(dir, "box.c"))
+    assert header =~ "typedef struct muro_stream muro_stream;"
+    assert header =~ "muro_stream *"
+    refute source =~ "typedef struct muro_stream muro_stream;"
+    assert source =~ "struct muro_stream {"
+    cc!(dir, "box.c", "box.o")
+  end
+
   defp tmp_dir do
     dir = Path.join(System.tmp_dir!(), "muro_c_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)

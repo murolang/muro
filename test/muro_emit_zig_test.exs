@@ -547,6 +547,42 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "a data field of a pair or a stream declares that runtime" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "box.muro"), """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    data Box : Type where
+      pair : (Nat × Nat) → Box
+      both : (Nat × Stream Nat) → Box
+      strm : Stream Nat → Box
+
+    def zero : run Nat := 0
+    """)
+
+    source = File.read!(emit_zig!(dir, "box"))
+    assert source =~ "pub const Pair = struct"
+    assert source =~ "pub const Stream = struct"
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("box.zig");
+
+    test "zero" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        try std.testing.expectEqual(@as(u64, 0), m.muro_to_u64(try m.zero(a)));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   defp emit_zig!(dir, name) do
     path = Path.join(dir, "#{name}.muro")
     out = capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "zig"]) end)
