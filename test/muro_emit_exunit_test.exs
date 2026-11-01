@@ -764,7 +764,10 @@ defmodule Muro.EmitExunitTest do
       end)
 
     assert_received {:stderr, stderr}
-    {stdout, stderr}
+    # Mix.Shell.IO.info prints "==> muro" the first time the shell is used
+    # after another project has taken it. Which test runs first decides
+    # whether this capture sees the line, so it is dropped here.
+    {String.replace(stdout, ~r/^==> \S+\n/m, ""), stderr}
   end
 
   defp callbacks_of(source) do
