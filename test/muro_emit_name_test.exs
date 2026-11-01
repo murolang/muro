@@ -115,12 +115,58 @@ defmodule Muro.EmitNameTest do
     assert Name.decode("Z") == :error
     assert Name.decode("zn12") == :error
     assert Name.decode("znXXXX") == :error
+    assert Name.decode("zn03bb") == :error
     assert Name.decode("zz") == {:ok, "z"}
     assert Name.decode("zu") == {:ok, "_"}
     assert Name.decode("zd") == {:ok, "-"}
     assert Name.decode("zq") == {:ok, "'"}
-    assert Name.decode("zn03bb") == {:ok, "λ"}
-    assert Name.decode("zn03BB") == {:ok, "λ"}
+    assert Name.decode("zn0003bb") == {:ok, "λ"}
+    assert Name.decode("zn0003BB") == {:ok, "λ"}
+  end
+
+  test "a scalar escape is six digits, and decode is its inverse" do
+    ffff = <<0xFFFF::utf8>>
+    one = <<0x10000::utf8>>
+    ten = <<0x10FFFF::utf8>>
+    thousand = <<0x1000::utf8>>
+
+    assert Name.encode(ffff) == "zn00ffff"
+    assert Name.encode(one) == "zn010000"
+    assert Name.encode(ten) == "zn10ffff"
+    assert Name.encode("λ") == "zn0003bb"
+    assert Name.encode(one) != Name.encode(thousand <> "0")
+    assert Name.encode("zn010000") == "zzn010000"
+    assert Name.encode("zn010000") != Name.encode(one)
+
+    for name <- ["", "muro__iszdon", "zn", "zn1234", "zn010000", ffff, one, ten, "λ0", "λ" <> "0"] do
+      assert Name.decode(Name.encode(name)) == {:ok, name}
+      assert Name.encode(elem(Name.decode(Name.encode(name)), 1)) == Name.encode(name)
+    end
+
+    assert Name.decode("zn00d800") == :error
+    assert Name.decode("zn00DFFF") == :error
+    assert Name.decode("zn110000") == :error
+    assert Name.decode("zn0003bb0") == {:ok, "λ0"}
+  end
+
+  test "encode is injective on short strings drawn from the escape alphabet" do
+    wide = ["a", "z", "Z", "n", "u", "d", "q", "0", "f", "_", "-", "'", "λ", <<0x10000::utf8>>]
+    narrow = ["z", "n", "0", "u", "d", "q", "Z", "_"]
+    strings = Enum.uniq(sweep(wide, 2) ++ sweep(narrow, 3))
+
+    encoded = Map.new(strings, &{&1, Name.encode(&1)})
+    assert map_size(encoded) == length(strings)
+    assert length(Enum.uniq(Map.values(encoded))) == length(strings)
+
+    for name <- strings do
+      assert Name.decode(Name.encode(name)) == {:ok, name}
+    end
+  end
+
+  defp sweep(alphabet, max) do
+    Enum.reduce(1..max, [""], fn _, acc ->
+      acc ++ for prefix <- acc, char <- alphabet, do: prefix <> char
+    end)
   end
 
   defp width?(encoded), do: String.match?(encoded, ~r/^[iu][0-9]+$/)

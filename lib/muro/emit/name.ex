@@ -39,7 +39,9 @@ defmodule Muro.Emit.Name do
   It is not this spelling.
 
   `decode/1` inverts `encode/1` on that image: `decode(encode(name))` is
-  `{:ok, name}`. Any other string is `:error`.
+  `{:ok, name}`. `encode/1` is injective on every binary, not only the
+  source alphabet. A scalar outside that alphabet is `zn` and six hex
+  digits. A string that is not that image is `:error`.
 
   `spell/3` then `claim/2` is injective on distinct source names. `encode/1`
   is injective, and `_k` sits outside its image, so `spell/3` is injective.
@@ -54,7 +56,18 @@ defmodule Muro.Emit.Name do
   @marker "__"
 
   @doc """
-  Injective encoding of a source identifier. The result has no underscore.
+  Injective encoding of any binary. The result has no underscore.
+
+  The encoding is a concatenation of a prefix code. One-byte codes are
+  `0-9`, `a-y`, and `A-Y`. They do not start with `z` or `Z`. Two-byte
+  codes are `zz`, `ZZ`, `zu`, `zd`, and `zq`. They differ in the second
+  byte from each other and from `zn`. `zn` is followed by exactly six
+  hex digits. Six digits name every scalar in `0..0x10FFFF`, and no
+  scalar needs a seventh digit, so the padding cannot spill into the
+  next code. Different characters have different codes, and no code is
+  a prefix of another, so different strings have different encodings.
+  `decode/1` reads those same codes. A binary is a sequence of scalars,
+  so this covers every string `encode/1` accepts.
   """
   def encode(name) when is_binary(name) do
     name
@@ -65,9 +78,11 @@ defmodule Muro.Emit.Name do
   @doc """
   Inverse of `encode/1` on its image.
 
-  `decode(encode(name))` is `{:ok, name}`. Any other string is `:error`,
-  including a lone `z`, a short hex run, or a bad hex digit. Hex digits
-  may be upper or lower case.
+  `decode(encode(name))` is `{:ok, name}`, and `encode/1` of that name
+  is the original string. `encode/1` writes lowercase hex. A `zn` code
+  may also be read in uppercase. A lone `z`, a hex run that is not six
+  digits, a bad hex digit, a surrogate, or a code point above
+  `U+10FFFF` is `:error`.
   """
   def decode(encoded) when is_binary(encoded) do
     case decode_chars(encoded, []) do
@@ -180,10 +195,13 @@ defmodule Muro.Emit.Name do
   defp decode_chars(<<"zd", rest::binary>>, acc), do: decode_chars(rest, [?- | acc])
   defp decode_chars(<<"zq", rest::binary>>, acc), do: decode_chars(rest, [?' | acc])
 
-  defp decode_chars(<<"zn", hex::binary-size(4), rest::binary>>, acc) do
+  defp decode_chars(<<"zn", hex::binary-size(6), rest::binary>>, acc) do
     case Integer.parse(hex, 16) do
-      {cp, ""} -> decode_chars(rest, [cp | acc])
-      _ -> :error
+      {cp, ""} ->
+        if scalar?(cp), do: decode_chars(rest, [cp | acc]), else: :error
+
+      _ ->
+        :error
     end
   end
 
@@ -202,11 +220,14 @@ defmodule Muro.Emit.Name do
 
   defp encode_char(c) when c in ?0..?9 or c in ?a..?y or c in ?A..?Y, do: <<c>>
 
-  # Outside the source alphabet. Four hex digits keep the encoding
-  # prefix-free and free of underscores.
-  defp encode_char(c) when is_integer(c) and c >= 0 do
-    "zn" <> (c |> Integer.to_string(16) |> String.pad_leading(4, "0"))
+  # One self-delimiting code for every Unicode scalar. Six lowercase
+  # hex digits, never fewer and never more. See `encode/1`.
+  defp encode_char(c) when c in 0..0xD7FF or c in 0xE000..0x10FFFF do
+    "zn" <> (c |> Integer.to_string(16) |> String.downcase() |> String.pad_leading(6, "0"))
   end
+
+  defp scalar?(cp) when cp in 0..0xD7FF or cp in 0xE000..0x10FFFF, do: true
+  defp scalar?(_cp), do: false
 
   defp check_tag(tag) do
     if String.match?(tag, ~r/^[A-Za-z][A-Za-z0-9_]*$/) and not String.contains?(tag, @marker) and
