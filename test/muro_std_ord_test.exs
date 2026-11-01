@@ -50,7 +50,8 @@ defmodule Muro.StdOrdTest do
   defp c_fast!(dir, path) do
     assert {:ok, [header, source]} = Muro.emit_c(path, nif: false)
     c = File.read!(source)
-    refute c =~ "lex_step(compare("
+    # lex-step is evidence. The second comparison is the eq arm of compare-lex.
+    refute c =~ "#{Muro.Emit.C.source_id("lex-step")}(compare("
     assert c =~ "compare(b, d);"
     assert File.regular?(header)
 
@@ -73,8 +74,10 @@ defmodule Muro.StdOrdTest do
   defp rust_fast!(dir, path) do
     assert {:ok, [rs]} = Muro.emit_rust(path)
     rust = File.read!(rs)
-    refute rust =~ "lex_step(compare("
-    assert rust =~ "OrderingNode::Eq => compare(b.clone(), d.clone())"
+    node = Muro.Emit.Name.gen("node_#{Muro.Emit.Rust.source_id("Ordering")}")
+    eq = Muro.Emit.Rust.source_id("eq")
+    refute rust =~ "#{Muro.Emit.Rust.source_id("lex-step")}(compare("
+    assert rust =~ "#{node}::#{eq} => compare(b.clone(), d.clone())"
 
     File.write!(Path.join(dir, "main.rs"), rust_main())
 
@@ -149,6 +152,11 @@ defmodule Muro.StdOrdTest do
   end
 
   defp c_main do
+    nat = Muro.Emit.Name.gen("nat")
+    tag = Muro.Emit.Name.gen("field_tag")
+    suc = Muro.Emit.Name.gen("field_suc")
+    fun = Muro.Emit.C.source_id("lex-tag")
+
     """
     #include "lex_probe.h"
 
@@ -156,26 +164,26 @@ defmodule Muro.StdOrdTest do
     #include <stdlib.h>
     #include <time.h>
 
-    static muro_nat *from_u32(unsigned n) {
-      muro_nat *p = malloc(sizeof *p);
+    static #{nat} *from_u32(unsigned n) {
+      #{nat} *p = malloc(sizeof *p);
       if (p == 0) abort();
-      p->tag = 0;
-      p->suc = 0;
+      p->#{tag} = 0;
+      p->#{suc} = 0;
       while (n > 0) {
-        muro_nat *s = malloc(sizeof *s);
+        #{nat} *s = malloc(sizeof *s);
         if (s == 0) abort();
-        s->tag = 1;
-        s->suc = p;
+        s->#{tag} = 1;
+        s->#{suc} = p;
         p = s;
         n--;
       }
       return p;
     }
 
-    static unsigned to_u(muro_nat *n) {
+    static unsigned to_u(#{nat} *n) {
       unsigned k = 0;
-      while (n->tag == 1) {
-        n = n->suc;
+      while (n->#{tag} == 1) {
+        n = n->#{suc};
         k++;
       }
       return k;
@@ -190,23 +198,23 @@ defmodule Muro.StdOrdTest do
     }
 
     int main(void) {
-      muro_nat *z = from_u32(0);
-      muro_nat *one = from_u32(1);
-      muro_nat *two = from_u32(2);
-      muro_nat *five = from_u32(5);
+      #{nat} *z = from_u32(0);
+      #{nat} *one = from_u32(1);
+      #{nat} *two = from_u32(2);
+      #{nat} *five = from_u32(5);
       int bad = 0;
-      bad |= expect("eq", to_u(lex_tag(z, z, z, z)), 1);
-      bad |= expect("gt-second", to_u(lex_tag(z, one, z, z)), 2);
-      bad |= expect("lt-second", to_u(lex_tag(z, z, z, one)), 0);
-      bad |= expect("first-gt", to_u(lex_tag(one, z, z, five)), 2);
-      bad |= expect("eq-then-lt", to_u(lex_tag(two, z, two, one)), 0);
-      bad |= expect("eq-eq", to_u(lex_tag(two, one, two, one)), 1);
+      bad |= expect("eq", to_u(#{fun}(z, z, z, z)), 1);
+      bad |= expect("gt-second", to_u(#{fun}(z, one, z, z)), 2);
+      bad |= expect("lt-second", to_u(#{fun}(z, z, z, one)), 0);
+      bad |= expect("first-gt", to_u(#{fun}(one, z, z, five)), 2);
+      bad |= expect("eq-then-lt", to_u(#{fun}(two, z, two, one)), 0);
+      bad |= expect("eq-eq", to_u(#{fun}(two, one, two, one)), 1);
 
-      muro_nat *h1 = from_u32(#{@c_huge});
-      muro_nat *h2 = from_u32(#{@c_huge});
+      #{nat} *h1 = from_u32(#{@c_huge});
+      #{nat} *h2 = from_u32(#{@c_huge});
       struct timespec a, b;
       clock_gettime(CLOCK_MONOTONIC, &a);
-      unsigned tag = to_u(lex_tag(z, h1, one, h2));
+      unsigned tag = to_u(#{fun}(z, h1, one, h2));
       clock_gettime(CLOCK_MONOTONIC, &b);
       double ms = (b.tv_sec - a.tv_sec) * 1000.0 + (b.tv_nsec - a.tv_nsec) / 1e6;
       bad |= expect("huge-lt", tag, 0);
@@ -221,16 +229,20 @@ defmodule Muro.StdOrdTest do
   end
 
   defp rust_main do
+    from = Muro.Emit.Name.gen("from_u64")
+    to = Muro.Emit.Name.gen("to_u64")
+    fun = Muro.Emit.Rust.source_id("lex-tag")
+
     """
     use std::process::exit;
     use std::time::Instant;
 
     fn tag(a: u64, b: u64, c: u64, d: u64) -> u64 {
-        lex_probe::muro_to_u64(&lex_probe::lex_tag(
-            lex_probe::muro_from_u64(a),
-            lex_probe::muro_from_u64(b),
-            lex_probe::muro_from_u64(c),
-            lex_probe::muro_from_u64(d),
+        lex_probe::#{to}(&lex_probe::#{fun}(
+            lex_probe::#{from}(a),
+            lex_probe::#{from}(b),
+            lex_probe::#{from}(c),
+            lex_probe::#{from}(d),
         ))
     }
 
@@ -252,13 +264,13 @@ defmodule Muro.StdOrdTest do
         ok &= expect("eq-then-lt", tag(2, 0, 2, 1), 0);
         ok &= expect("eq-eq", tag(2, 1, 2, 1), 1);
 
-        let h1 = lex_probe::muro_from_u64(#{@rust_huge});
-        let h2 = lex_probe::muro_from_u64(#{@rust_huge});
+        let h1 = lex_probe::#{from}(#{@rust_huge});
+        let h2 = lex_probe::#{from}(#{@rust_huge});
         let start = Instant::now();
-        let huge = lex_probe::muro_to_u64(&lex_probe::lex_tag(
-            lex_probe::muro_from_u64(0),
+        let huge = lex_probe::#{to}(&lex_probe::#{fun}(
+            lex_probe::#{from}(0),
             h1,
-            lex_probe::muro_from_u64(1),
+            lex_probe::#{from}(1),
             h2,
         ));
         let ms = start.elapsed().as_secs_f64() * 1000.0;
