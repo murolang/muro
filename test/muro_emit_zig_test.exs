@@ -424,6 +424,37 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "suc reveals an argument whose type is an alias of Nat" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "alias_nat.muro"), """
+    def R : spec Type := Nat
+    def inc : run Π (r : R) → R := λ (r : R) → suc r
+    def two : run R := inc (inc 0)
+    """)
+
+    emit_zig!(dir, "alias_nat")
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("alias_nat.zig");
+
+    test "alias nat" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const two = m.muro_reveal(m.Nat, try m.two(a));
+        try std.testing.expectEqual(@as(u64, 2), m.muro_to_u64(two));
+        const n = m.muro_reveal(m.Nat, try m.inc(a, m.muro_erase(try m.muro_from_u64(a, 4))));
+        try std.testing.expectEqual(@as(u64, 5), m.muro_to_u64(n));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   defp emit_zig!(dir, name) do
     path = Path.join(dir, "#{name}.muro")
     out = capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "zig"]) end)

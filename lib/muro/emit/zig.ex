@@ -295,9 +295,10 @@ defmodule Muro.Emit.Zig do
   defp emit_tm(:abort, _env, st), do: {:ok, {[], "std.posix.abort()", :never, :pure, st}}
 
   defp emit_tm({:su, u}, env, st) do
-    with {:ok, {lines, ex, _lay, eff, st}} <- emit_tm(u, env, st) do
+    with {:ok, {lines, ex, lay, eff, st}} <- emit_tm(u, env, st) do
       {lines, ex, eff, st} = materialize(lines, ex, eff, st)
-      {:ok, {lines, "muro_suc(allocator, #{force(ex, eff)})", :nat, :fail, st}}
+      arg = coerce(force(ex, eff), lay, :nat, st)
+      {:ok, {lines, "muro_suc(allocator, #{arg})", :nat, :fail, st}}
     end
   end
 

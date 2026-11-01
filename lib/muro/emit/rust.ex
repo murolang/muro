@@ -168,8 +168,8 @@ defmodule Muro.Emit.Rust do
   defp emit_tm(:abort, _env, st), do: {:ok, {[], "std::process::abort()", :never, st}}
 
   defp emit_tm({:su, u}, env, st) do
-    with {:ok, {lines, ex, _lay, st}} <- emit_tm(u, env, st) do
-      {:ok, {lines, "muro_suc(#{ex})", :nat, st}}
+    with {:ok, {lines, ex, lay, st}} <- emit_tm(u, env, st) do
+      {:ok, {lines, "muro_suc(#{coerce(ex, lay, :nat, st)})", :nat, st}}
     end
   end
 

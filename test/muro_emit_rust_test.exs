@@ -265,6 +265,35 @@ defmodule Muro.EmitRustTest do
     assert out == "2 3\n"
   end
 
+  test "suc reveals an argument whose type is an alias of Nat" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "alias_nat.muro"), """
+    def R : spec Type := Nat
+    def inc : run Π (r : R) → R := λ (r : R) → suc r
+    def two : run R := inc (inc 0)
+    """)
+
+    emit_rust!(dir, "alias_nat")
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            let two = alias_nat::muro_to_u64(&alias_nat::muro_reveal(alias_nat::two()));
+            let n = alias_nat::muro_to_u64(&alias_nat::muro_reveal(alias_nat::inc(
+                alias_nat::muro_erase(alias_nat::muro_from_u64(4)),
+            )));
+            println!("{two} {n}");
+        }
+        """,
+        ["alias_nat"]
+      )
+
+    assert out == "2 5\n"
+  end
+
   test "run internal is private and the examples that C accepts compile" do
     dir = tmp_dir()
     File.cp!("examples/internal_ok.muro", Path.join(dir, "internal_ok.muro"))
