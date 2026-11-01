@@ -15,11 +15,16 @@ defmodule Muro.Emit.C do
   local. An unapplied lambda, and a call of a local function, are
   `c:lambda`.
 
-  Allocations call `MURO_ALLOC`, which is `malloc` unless the caller
+  Allocations call `muro__ALLOC`, which is `malloc` unless the caller
   defines it. A constructor with no fields is a static object and does not.
+
+  Identifiers come from `Muro.Emit.Name`. A source name is spelled there.
+  A helper, a step, a constructor argument, and a temporary are generated
+  there. The two spellings share no identifier.
   """
 
   alias Muro.{Ast, Emit, IR}
+  alias Muro.Emit.Name
 
   # Keywords through C23, including the underscore spellings. `bool`,
   # `true`, and `false` are also the `<stdbool.h>` macros.
@@ -63,11 +68,71 @@ defmodule Muro.Emit.C do
     delete error
   ) |> MapSet.new()
 
-  @reserved ~w(
-    muro_nat muro_unit muro_pair muro_zero muro_suc muro_tt muro_nat_new muro_mk_pair
-    muro_stream muro_stream_new muro_envp muro_seedp muro_ep
-    muro_nif_alloc muro_nif_reset muro_nif_lock muro_nif_chunks muro_nif_of muro_nif_read
-  ) |> MapSet.new()
+  @forbidden MapSet.union(@c_keywords, @host_names)
+
+  @doc false
+  def source_id(name) when is_binary(name), do: spell(name)
+
+  @doc false
+  def generated_samples do
+    tags = ~w(
+      nat unit pair stream atom
+      zero suc tt nat_new mk_pair stream_new
+      ALLOC tt_obj
+      field_tag field_suc field_fst field_snd field_step field_seed field_env
+      as unused
+      envp seedp ep p n s
+    )
+
+    Enum.map(tags, &Name.gen/1) ++
+      [
+        Name.gen("step", 0),
+        Name.gen("env", 0),
+        Name.gen("ep", 0),
+        Name.gen("f", 0),
+        Name.gen("s", 0),
+        Name.gen("t", 0),
+        Name.gen("obj_List_nil")
+      ]
+  end
+
+  defp spell(name), do: Name.spell(name, @forbidden)
+  defp g(tag), do: Name.gen(tag)
+  defp g(tag, n) when is_integer(n), do: Name.gen(tag, n)
+  defp claim(base, used), do: Name.claim(base, used)
+
+  defp nat_ptr, do: g("nat") <> " *"
+  defp unit_ptr, do: g("unit") <> " *"
+  defp pair_ptr, do: g("pair") <> " *"
+  defp stream_ptr, do: g("stream") <> " *"
+  defp atom_ty, do: g("atom") <> " "
+
+  # Struct spellings, then atoms, then constructor functions. A run is
+  # claimed after those, so a shared C namespace suffixes inside one
+  # space. Generated names are not in this set: they already contain `__`.
+  defp name_map(book) do
+    {structs, taken} =
+      Enum.reduce(data_defs(book), {%{}, MapSet.new()}, fn d, {map, used} ->
+        {rn, used} = claim(spell(d.name), used)
+        {Map.put(map, d.name, rn), used}
+      end)
+
+    {atoms, taken} =
+      Enum.reduce(Ast.atoms(book), {%{}, taken}, fn name, {map, used} ->
+        {rn, used} = claim(spell(name), used)
+        {Map.put(map, name, rn), used}
+      end)
+
+    {ctors, taken} =
+      Enum.reduce(data_defs(book), {%{}, taken}, fn d, {map, used} ->
+        Enum.reduce(d.ctors, {map, used}, fn c, {map, used} ->
+          {rn, used} = claim(spell(c.name), used)
+          {Map.put(map, {d.name, c.name}, rn), used}
+        end)
+      end)
+
+    %{structs: structs, atoms: atoms, ctors: ctors, taken: taken}
+  end
 
   @doc """
   Render `book` as `{header, source}` for a file stem such as `half_ok`.
@@ -91,11 +156,14 @@ defmodule Muro.Emit.C do
   def prepare(book, stem) when is_list(book) and is_binary(stem) do
     case IR.elaborate(book) do
       {:ok, funs} ->
-        case compile_funs(funs, book) do
+        nm = name_map(book)
+
+        case compile_funs(funs, book, nm) do
           {:ok, sigs, texts, extras} ->
             runs = Emit.run_defs(book)
 
-            {:ok, header(book, sigs, stem), source(book, runs, sigs, texts, extras, stem), sigs}
+            {:ok, header(book, sigs, stem, nm), source(book, runs, sigs, texts, extras, stem, nm),
+             sigs}
 
           {:error, _} = err ->
             err
@@ -106,15 +174,15 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp compile_funs(funs, book) do
+  defp compile_funs(funs, book, nm) do
     runs = Emit.run_defs(book)
 
     with {:ok, groups, step_map} <- Emit.partition_funs(funs, runs) do
-      names = Emit.def_names(book, &c_name/1, ctor_fun_names(book))
+      names = Emit.def_names(book, &spell/1, nm.taken)
       by_name = Map.new(groups, fn {fun, _} -> {fun.name, fun} end)
 
       Enum.reduce_while(groups, {:ok, [], [], []}, fn {fun, _steps}, {:ok, sigs, texts, extras} ->
-        case compile_fun(fun, book, names, by_name, step_map) do
+        case compile_fun(fun, book, names, by_name, step_map, nm) do
           {:ok, sig, text, extra} ->
             {:cont, {:ok, sigs ++ [sig], texts ++ [text], extras ++ extra}}
 
@@ -125,10 +193,12 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp compile_fun(fun, book, names, by_name, step_map) do
+  defp compile_fun(fun, book, names, by_name, step_map, nm) do
+    file_used = MapSet.union(nm.taken, MapSet.new(Map.values(names)))
+
     {bound, _} =
-      Enum.map_reduce(fun.params, MapSet.new(), fn {pname, lay}, used ->
-        {c, used} = fresh(c_name(pname), used)
+      Enum.map_reduce(fun.params, file_used, fn {pname, lay}, used ->
+        {c, used} = claim(spell(pname), used)
         {{pname, c, lay}, used}
       end)
 
@@ -141,6 +211,9 @@ defmodule Muro.Emit.C do
 
     env = Enum.reduce(bound, [], fn {n, c, lay}, env -> [{n, c, lay} | env] end)
 
+    base_used =
+      Enum.reduce(bound, file_used, fn {_n, c, _lay}, used -> MapSet.put(used, c) end)
+
     st = %{
       t: 0,
       s: 0,
@@ -150,7 +223,10 @@ defmodule Muro.Emit.C do
       book: book,
       funs: by_name,
       steps_by_name: step_map,
-      arm_used: MapSet.new()
+      nm: nm,
+      file_used: file_used,
+      base_used: base_used,
+      arm_used: base_used
     }
 
     with {:ok, {pre, expr, _lay, st}} <- emit_ir(fun.body, env, st, sig.ret) do
@@ -163,15 +239,6 @@ defmodule Muro.Emit.C do
 
       {:ok, sig, "#{decl(sig)} {\n#{body}\n}", st.envs ++ st.steps}
     end
-  end
-
-  defp ctor_fun_names(book) do
-    book
-    |> Enum.flat_map(fn
-      %{kind: :data, ctors: cs} -> Enum.map(cs, &c_name(&1.name))
-      _ -> []
-    end)
-    |> MapSet.new()
   end
 
   defp decl(sig) do
@@ -196,12 +263,12 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir(:ze, _env, st, _expect), do: {:ok, {"", "muro_zero()", :nat, st}}
-  defp emit_ir(:tt, _env, st, _expect), do: {:ok, {"", "muro_tt()", :unit, st}}
+  defp emit_ir(:ze, _env, st, _expect), do: {:ok, {"", "#{g("zero")}()", :nat, st}}
+  defp emit_ir(:tt, _env, st, _expect), do: {:ok, {"", "#{g("tt")}()", :unit, st}}
 
   defp emit_ir({:su, u}, env, st, _expect) do
-    with {:ok, {pre, ex, _lay, st}} <- emit_ir(u, env, st, "muro_nat *") do
-      {:ok, {pre, "muro_suc(#{ex})", :nat, st}}
+    with {:ok, {pre, ex, _lay, st}} <- emit_ir(u, env, st, nat_ptr()) do
+      {:ok, {pre, "#{g("suc")}(#{ex})", :nat, st}}
     end
   end
 
@@ -213,20 +280,21 @@ defmodule Muro.Emit.C do
   end
 
   defp emit_ir({:con, "Atom", name, []}, _env, st, _expect) do
-    {:ok, {"", atom_c(name, st.book), {:data, "Atom"}, st}}
+    {:ok, {"", atom_c(name, st.nm), {:data, "Atom"}, st}}
   end
 
   defp emit_ir({:con, dname, cname, args}, env, st, _expect) do
     with {:ok, {pres, exprs, st}} <- emit_args(args, con_ctypes(st.book, cname), env, st) do
-      {:ok, {squash(pres), "#{c_name(cname)}(#{Enum.join(exprs, ", ")})", {:data, dname}, st}}
+      fun = Map.fetch!(st.nm.ctors, {dname, cname})
+      {:ok, {squash(pres), "#{fun}(#{Enum.join(exprs, ", ")})", {:data, dname}, st}}
     end
   end
 
-  # An erased constructor field. `0`, not `muro_zero()`. A zero passed
+  # An erased constructor field. `0`, not a Nat zero. A zero passed
   # under a spec alias is bound at the argument's layout, so this clause
   # does not see it.
   defp emit_ir({:let, name, :opaque, :ze, body}, env, st, expect) do
-    {c, used} = fresh(c_name(name), st.arm_used)
+    {c, used} = claim(spell(name), st.arm_used)
     st = %{st | arm_used: used}
 
     with {:ok, {pre, ex, lay, st}} <- emit_ir(body, [{name, c, :opaque} | env], st, expect) do
@@ -260,15 +328,16 @@ defmodule Muro.Emit.C do
   defp emit_ir({:pair, a, b}, env, st, _expect) do
     with {:ok, {pre, ea, la, st}} <- emit_ir(a, env, st, "void *"),
          {:ok, {pre2, eb, lb, st}} <- emit_ir(b, env, st, "void *") do
-      {:ok, {squash([pre, pre2]), "muro_mk_pair(#{ea}, #{eb})", {:pair, la, lb}, st}}
+      {:ok, {squash([pre, pre2]), "#{g("mk_pair")}(#{ea}, #{eb})", {:pair, la, lb}, st}}
     end
   end
 
   defp emit_ir({:letp, a, b, e, body}, env, st, expect) do
-    with {:ok, {pre, ex, elay, st}} <- emit_ir(e, env, st, "muro_pair *") do
+    with {:ok, {pre, ex, elay, st}} <- emit_ir(e, env, st, pair_ptr()) do
       {sname, st} = news(st)
-      {ca, used} = fresh(c_name(a), MapSet.new())
-      {cb, _} = fresh(c_name(b), used)
+      {ca, used} = claim(spell(a), st.arm_used)
+      {cb, used} = claim(spell(b), used)
+      st = %{st | arm_used: used}
       {la, lb} = pair_halves(elay)
       env1 = [{b, cb, lb}, {a, ca, la} | env]
 
@@ -276,9 +345,9 @@ defmodule Muro.Emit.C do
         stmt =
           squash([
             pre,
-            "muro_pair *#{sname} = #{ex};",
-            "void *#{ca} = #{sname}->fst;",
-            "void *#{cb} = #{sname}->snd;",
+            "#{pair_ptr()}#{sname} = #{ex};",
+            "void *#{ca} = #{sname}->#{g("field_fst")};",
+            "void *#{cb} = #{sname}->#{g("field_snd")};",
             pre2
           ])
 
@@ -288,7 +357,7 @@ defmodule Muro.Emit.C do
   end
 
   defp emit_ir({:uncons, e}, env, st, _expect) do
-    with {:ok, {pre, ex, elay, st}} <- emit_ir(e, env, st, "muro_stream *") do
+    with {:ok, {pre, ex, elay, st}} <- emit_ir(e, env, st, stream_ptr()) do
       {sname, st} = news(st)
       {pname, st} = news(st)
       {hname, st} = news(st)
@@ -298,13 +367,13 @@ defmodule Muro.Emit.C do
       stmt =
         squash([
           "#{stream_ptr()}#{sname} = #{ex};",
-          "muro_pair *#{pname} = #{sname}->step(#{sname}->env, #{sname}->seed);",
-          "void *#{hname} = #{pname}->fst;",
-          "void *#{nname} = #{pname}->snd;",
-          "#{stream_ptr()}#{tname} = muro_stream_new(#{nname}, #{sname}->env, #{sname}->step);"
+          "#{pair_ptr()}#{pname} = #{sname}->#{g("field_step")}(#{sname}->#{g("field_env")}, #{sname}->#{g("field_seed")});",
+          "void *#{hname} = #{pname}->#{g("field_fst")};",
+          "void *#{nname} = #{pname}->#{g("field_snd")};",
+          "#{stream_ptr()}#{tname} = #{g("stream_new")}(#{nname}, #{sname}->#{g("field_env")}, #{sname}->#{g("field_step")});"
         ])
 
-      {:ok, {squash([pre, stmt]), "muro_mk_pair(#{hname}, #{tname})", uncons_lay(elay), st}}
+      {:ok, {squash([pre, stmt]), "#{g("mk_pair")}(#{hname}, #{tname})", uncons_lay(elay), st}}
     end
   end
 
@@ -321,7 +390,7 @@ defmodule Muro.Emit.C do
         saved = st.arm_used
 
         with {:ok, {src, st}} <- emit_step_fun(step, slots, seed_p, id, env_ty, st) do
-          expr = "muro_stream_new(#{seed_ex}, #{env_ex}, muro_step_#{id})"
+          expr = "#{g("stream_new")}(#{seed_ex}, #{env_ex}, #{g("step", id)})"
           st = %{st | steps: st.steps ++ [src], arm_used: saved}
 
           {:ok,
@@ -366,19 +435,20 @@ defmodule Muro.Emit.C do
     types ++ List.duplicate("void *", max(n - length(types), 0))
   end
 
-  defp scrut_ty(:nat, _book), do: "muro_nat *"
-  defp scrut_ty(:atom, _book), do: "muro_atom "
+  defp scrut_ty(:nat, _book), do: nat_ptr()
+  defp scrut_ty(:atom, _book), do: atom_ty()
   defp scrut_ty({:data, name}, _book), do: struct_ptr(name)
   defp scrut_ty(_, _book), do: "void *"
 
   defp emit_switch(:nat, pre, ex, [{:arm, "zero", [], z}, {:arm, "suc", [y], s}], env, st, expect) do
     {sname, st} = news(st)
     {tname, st} = newt(st)
-    st = %{st | arm_used: MapSet.new()}
+    st = %{st | arm_used: st.base_used}
 
     with {:ok, {zpre, zex, _lay, st}} <- emit_ir(z, env, st, expect) do
-      yname = c_name(y)
-      st = %{st | arm_used: MapSet.new([yname])}
+      st = %{st | arm_used: st.base_used}
+      {yname, used} = claim(spell(y), st.arm_used)
+      st = %{st | arm_used: used}
 
       with {:ok, {spre, sex, _lay, st}} <- emit_ir(s, [{y, yname, :nat} | env], st, expect) do
         stmt =
@@ -386,15 +456,15 @@ defmodule Muro.Emit.C do
             pre,
             "#{expect}#{tname} = 0;",
             "{",
-            "muro_nat *#{sname} = #{ex};",
-            "switch (#{sname}->tag) {",
+            "#{nat_ptr()}#{sname} = #{ex};",
+            "switch (#{sname}->#{g("field_tag")}) {",
             "case 0: {",
             zpre,
             "#{tname} = #{zex};",
             "break;",
             "}",
             "case 1: {",
-            "muro_nat *#{yname} = #{sname}->suc;",
+            "#{nat_ptr()}#{yname} = #{sname}->#{g("field_suc")};",
             spre,
             "#{tname} = #{sex};",
             "break;",
@@ -422,7 +492,7 @@ defmodule Muro.Emit.C do
           pre,
           "#{expect}#{tname} = 0;",
           "{",
-          "muro_atom #{sname} = #{ex};",
+          "#{atom_ty()}#{sname} = #{ex};",
           "switch (#{sname}) {",
           cases,
           "default: {",
@@ -453,7 +523,7 @@ defmodule Muro.Emit.C do
               "#{expect}#{tname} = 0;",
               "{",
               "#{ptr}#{sname} = #{ex};",
-              "switch (#{sname}->tag) {",
+              "switch (#{sname}->#{g("field_tag")}) {",
               cases,
               "default: {",
               "/* unreachable */",
@@ -472,12 +542,12 @@ defmodule Muro.Emit.C do
 
   defp emit_atom_arms(arms, tname, env, st, expect) do
     emit_arm_list(arms, st, fn {:arm, name, _bs, body}, st ->
-      st = %{st | arm_used: MapSet.new()}
+      st = %{st | arm_used: st.base_used}
 
       with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env, st, expect) do
         text =
           squash([
-            "case #{atom_c(name, st.book)}: {",
+            "case #{atom_c(name, st.nm)}: {",
             pre,
             "#{tname} = #{ex};",
             "break;",
@@ -516,13 +586,13 @@ defmodule Muro.Emit.C do
     if ctor == nil or tag == nil or length(fields) != length(binders) do
       {:error, "c:unsupported"}
     else
-      member = c_name(cname)
+      member = spell(cname)
 
       {decls, env1, used} =
         Enum.zip(binders, fields)
-        |> Enum.reduce({[], env, MapSet.new()}, fn {bname, {ty, lay, k}}, {decls, env, used} ->
-          {c, used} = fresh(c_name(bname), used)
-          decl = "#{ty}#{c} = #{sname}->as.#{member}.f#{k};"
+        |> Enum.reduce({[], env, st.base_used}, fn {bname, {ty, lay, k}}, {decls, env, used} ->
+          {c, used} = claim(spell(bname), used)
+          decl = "#{ty}#{c} = #{sname}->#{g("as")}.#{member}.#{g("f", k)};"
           {decls ++ [decl], [{bname, c, lay} | env], used}
         end)
 
@@ -582,7 +652,7 @@ defmodule Muro.Emit.C do
       caps
       |> Enum.zip(lays)
       |> Enum.map_reduce(MapSet.new(), fn {{name, tm}, lay}, used ->
-        {field, used} = fresh(c_name(name), used)
+        {field, used} = claim(spell(name), used)
         {{name, field, tm, lay}, used}
       end)
 
@@ -605,8 +675,8 @@ defmodule Muro.Emit.C do
   defp alloc_env([], _outers, _id, st), do: {nil, "", "0", st}
 
   defp alloc_env(slots, outers, id, st) do
-    env_ty = "muro_env_#{id}"
-    var = "muro_ep#{id}"
+    env_ty = g("env", id)
+    var = g("ep", id)
     fields = Enum.map_join(slots, "\n", fn {_n, field, _tm, _lay} -> "  void *#{field};" end)
     typedef = "typedef struct {\n#{fields}\n} #{env_ty};"
 
@@ -615,40 +685,52 @@ defmodule Muro.Emit.C do
         "#{var}->#{field} = #{outer};"
       end)
 
-    pre = "#{env_ty} *#{var} = MURO_ALLOC(sizeof *#{var});\nif (#{var} == 0) abort();\n#{assigns}"
+    pre =
+      "#{env_ty} *#{var} = #{g("ALLOC")}(sizeof *#{var});\nif (#{var} == 0) abort();\n#{assigns}"
+
     {env_ty, pre, var, %{st | envs: st.envs ++ [typedef]}}
   end
 
   defp emit_step_fun(step, slots, seed_p, id, env_ty, st) do
+    ep = g("ep")
+    envp = g("envp")
+    seedp = g("seedp")
+    saved_base = st.base_used
+
     cap_env =
       Enum.reduce(Enum.reverse(slots), [], fn {name, field, _tm, lay}, env ->
-        [{name, "muro_ep->#{field}", lay} | env]
+        [{name, "#{ep}->#{field}", lay} | env]
       end)
 
-    {seed_line, env} =
+    scope =
+      st.file_used
+      |> MapSet.put(ep)
+      |> MapSet.put(envp)
+      |> MapSet.put(seedp)
+      |> MapSet.union(MapSet.new(Enum.map(slots, &elem(&1, 1))))
+
+    {seed_line, env, step_base} =
       case seed_p do
         nil ->
-          {"  (void)muro_seedp;", cap_env}
+          {"  (void)#{seedp};", cap_env, scope}
 
         {sname, slay} ->
-          used =
-            MapSet.new(["muro_ep", "muro_envp", "muro_seedp" | Enum.map(slots, &elem(&1, 1))])
-
-          {local, _} = fresh(c_name(sname), used)
-          line = "  #{ctype(slay, st.book)}#{local} = muro_seedp;"
-          {line, [{sname, local, slay} | cap_env]}
+          {local, used} = claim(spell(sname), scope)
+          line = "  #{ctype(slay, st.book)}#{local} = #{seedp};"
+          {line, [{sname, local, slay} | cap_env], used}
       end
 
     env_line =
       if slots == [] do
-        "  (void)muro_envp;"
+        "  (void)#{envp};"
       else
-        "  #{env_ty} *muro_ep = muro_envp;"
+        "  #{env_ty} *#{ep} = #{envp};"
       end
 
-    st = %{st | arm_used: MapSet.new()}
+    st = %{st | arm_used: step_base, base_used: step_base}
 
-    with {:ok, {pre, expr, _lay, st}} <- emit_ir(step.body, env, st, "muro_pair *") do
+    with {:ok, {pre, expr, _lay, st}} <- emit_ir(step.body, env, st, pair_ptr()) do
+      st = %{st | base_used: saved_base, arm_used: saved_base}
       {:ok, {step_text(id, env_line <> "\n" <> seed_line, pre, expr), st}}
     end
   end
@@ -661,7 +743,7 @@ defmodule Muro.Emit.C do
         indent(pre, 2) <> "\n  return #{expr};"
       end
 
-    "static muro_pair *muro_step_#{id}(void *muro_envp, void *muro_seedp) {\n" <>
+    "static #{pair_ptr()}#{g("step", id)}(void *#{g("envp")}, void *#{g("seedp")}) {\n" <>
       bind <> "\n" <> ret <> "\n}"
   end
 
@@ -880,20 +962,20 @@ defmodule Muro.Emit.C do
   defp uses?(t, name) when is_list(t), do: Enum.any?(t, &uses?(&1, name))
   defp uses?(_, _), do: false
 
-  defp news(st), do: {"muro_s#{st.s}", %{st | s: st.s + 1}}
-  defp newt(st), do: {"muro_t#{st.t}", %{st | t: st.t + 1}}
+  defp news(st), do: {g("s", st.s), %{st | s: st.s + 1}}
+  defp newt(st), do: {g("t", st.t), %{st | t: st.t + 1}}
 
-  defp ctype(:atom, _book), do: "muro_atom "
-  defp ctype(:nat, _book), do: "muro_nat *"
-  defp ctype(:unit, _book), do: "muro_unit *"
-  defp ctype({:stream, _}, _book), do: "muro_stream *"
+  defp ctype(:atom, _book), do: atom_ty()
+  defp ctype(:nat, _book), do: nat_ptr()
+  defp ctype(:unit, _book), do: unit_ptr()
+  defp ctype({:stream, _}, _book), do: stream_ptr()
 
   defp ctype({:var, name}, book) do
     if data?(book, name), do: struct_ptr(name), else: "void *"
   end
 
   defp ctype({:app, f, _a}, book), do: ctype(f, book)
-  defp ctype({:data, "Atom"}, _book), do: "muro_atom "
+  defp ctype({:data, "Atom"}, _book), do: atom_ty()
   defp ctype({:data, name}, _book), do: struct_ptr(name)
   defp ctype(_, _book), do: "void *"
 
@@ -903,49 +985,11 @@ defmodule Muro.Emit.C do
 
   defp struct_ptr(name), do: struct_name(name) <> " *"
 
-  defp struct_name(name) do
-    base = "muro_" <> (safe(name) |> String.downcase())
+  # Claimed first, against an empty set. `spell/1` is injective, so the
+  # struct spelling is the source spelling.
+  defp struct_name(name), do: spell(name)
 
-    if base in ~w(muro_nat muro_unit muro_pair) do
-      "muro_ty_" <> String.downcase(safe(name))
-    else
-      base
-    end
-  end
-
-  defp ename(st, name), do: Map.get(st.names, name, c_name(name))
-
-  defp c_name(name) do
-    n = safe(name)
-
-    cond do
-      n == "" or n == "_" -> "x"
-      String.match?(n, ~r/^[0-9]/) -> "muro_" <> n
-      MapSet.member?(@c_keywords, n) -> "muro_" <> n
-      MapSet.member?(@host_names, n) -> "muro_" <> n
-      MapSet.member?(@reserved, n) -> "muro_" <> n
-      String.starts_with?(n, "_") -> "muro_" <> n
-      String.match?(n, ~r/^muro_[st][0-9]+$/) -> "muro_" <> n
-      String.match?(n, ~r/^muro_step_[0-9]+$/) -> "muro_" <> n
-      true -> n
-    end
-  end
-
-  defp safe(name) do
-    name
-    |> String.replace("-", "_")
-    |> String.replace("'", "_")
-  end
-
-  defp fresh(base, used) do
-    name = if MapSet.member?(used, base), do: bump(base, 2, used), else: base
-    {name, MapSet.put(used, name)}
-  end
-
-  defp bump(base, i, used) do
-    n = "#{base}_#{i}"
-    if MapSet.member?(used, n), do: bump(base, i + 1, used), else: n
-  end
+  defp ename(st, name), do: Map.get(st.names, name, spell(name))
 
   defp squash(parts) do
     parts
@@ -963,18 +1007,18 @@ defmodule Muro.Emit.C do
     s |> String.split("\n") |> Enum.map_join("\n", &(pad <> &1))
   end
 
-  defp header(book, sigs, stem) do
-    g = guard(stem)
+  defp header(book, sigs, stem, nm) do
+    guard = guard(stem)
 
     parts = [
       "/* generated by muro — do not edit */",
-      "#ifndef #{g}",
-      "#define #{g}",
+      "#ifndef #{guard}",
+      "#define #{guard}",
       "#include <stdint.h>",
       alloc_macro(),
       nat_struct(),
       unit_struct(),
-      atom_enum(book),
+      atom_enum(book, nm),
       stream_typedef(sigs, book),
       data_structs(book),
       prototypes(sigs),
@@ -984,7 +1028,7 @@ defmodule Muro.Emit.C do
     join_parts(parts)
   end
 
-  defp source(book, runs, sigs, funs, extras, stem) do
+  defp source(book, runs, sigs, funs, extras, stem, nm) do
     internals =
       sigs
       |> Enum.reject(& &1.export)
@@ -998,7 +1042,7 @@ defmodule Muro.Emit.C do
       unit_helpers(),
       pair_helpers(runs),
       stream_helpers(runs, stream_declared?(sigs, book)),
-      data_ctors(book),
+      data_ctors(book, nm),
       internals,
       Enum.join(extras, "\n\n"),
       Enum.join(funs, "\n\n")
@@ -1020,110 +1064,121 @@ defmodule Muro.Emit.C do
     |> Enum.map_join("\n", &"#{decl(&1)};")
   end
 
-  defp guard(stem) do
-    body =
-      stem
-      |> String.upcase()
-      |> String.replace(~r/[^A-Z0-9]/, "_")
+  # `encode/1` has no underscore, so the tag cannot contain `__`.
+  defp guard(stem), do: g("H_" <> Name.encode(stem))
 
-    "MURO_#{body}_H"
-  end
-
-  defp atom_enum(book) do
+  defp atom_enum(book, nm) do
     case Ast.atoms(book) do
       [] ->
         ""
 
       names ->
-        consts = Enum.map_join(names, ",\n  ", &atom_c(&1, book))
+        consts = Enum.map_join(names, ",\n  ", &atom_c(&1, nm))
 
         """
         typedef enum {
           #{consts}
-        } muro_atom;
+        } #{g("atom")};
         """
         |> String.trim()
     end
   end
 
-  # First spelling in the file keeps MURO_ASC. A later spelling that
-  # sanitizes to the same identifier is bumped, as other C names are.
-  defp atom_c(name, book) do
-    Map.fetch!(atom_names(book), name)
-  end
-
-  defp atom_names(book) do
-    {map, _used} =
-      Enum.reduce(Ast.atoms(book), {%{}, MapSet.new()}, fn name, {map, used} ->
-        {c, used} = fresh("MURO_" <> (name |> safe() |> String.upcase()), used)
-        {Map.put(map, name, c), used}
-      end)
-
-    map
-  end
+  defp atom_c(name, nm), do: Map.fetch!(nm.atoms, name)
 
   defp alloc_macro do
+    alloc = g("ALLOC")
+
     """
-    #ifndef MURO_ALLOC
-    #define MURO_ALLOC(n) malloc(n)
+    #ifndef #{alloc}
+    #define #{alloc}(n) malloc(n)
     #endif
     """
     |> String.trim()
   end
 
   defp nat_struct do
+    nat = g("nat")
+    tag = g("field_tag")
+    suc = g("field_suc")
+
     """
-    typedef struct muro_nat muro_nat;
-    struct muro_nat { uint8_t tag; muro_nat *suc; }; /* 0 = zero, 1 = suc */
+    typedef struct #{nat} #{nat};
+    struct #{nat} { uint8_t #{tag}; #{nat} *#{suc}; }; /* 0 = zero, 1 = suc */
     """
     |> String.trim()
   end
 
   defp unit_struct do
+    unit = g("unit")
+    tag = g("field_tag")
+
     """
-    typedef struct muro_unit muro_unit;
-    struct muro_unit { uint8_t tag; };
+    typedef struct #{unit} #{unit};
+    struct #{unit} { uint8_t #{tag}; };
     """
     |> String.trim()
   end
 
   defp nat_helpers do
+    nat = g("nat")
+    new = g("nat_new")
+    p = g("p")
+    n = g("n")
+    tag = g("field_tag")
+    sucf = g("field_suc")
+    alloc = g("ALLOC")
+    zero = g("zero")
+    suc = g("suc")
+
     """
-    static muro_nat *muro_nat_new(uint8_t tag, muro_nat *suc) {
-      muro_nat *p = MURO_ALLOC(sizeof *p);
-      if (p == 0) abort();
-      p->tag = tag;
-      p->suc = suc;
-      return p;
+    static #{nat} *#{new}(uint8_t #{tag}, #{nat} *#{n}) {
+      #{nat} *#{p} = #{alloc}(sizeof *#{p});
+      if (#{p} == 0) abort();
+      #{p}->#{tag} = #{tag};
+      #{p}->#{sucf} = #{n};
+      return #{p};
     }
 
-    static muro_nat *muro_zero(void) { return muro_nat_new(0, 0); }
+    static #{nat} *#{zero}(void) { return #{new}(0, 0); }
 
-    static muro_nat *muro_suc(muro_nat *n) { return muro_nat_new(1, n); }
+    static #{nat} *#{suc}(#{nat} *#{n}) { return #{new}(1, #{n}); }
     """
     |> String.trim()
   end
 
   defp unit_helpers do
-    """
-    static muro_unit muro_tt_obj = {0};
+    unit = g("unit")
+    obj = g("tt_obj")
+    tt = g("tt")
 
-    static muro_unit *muro_tt(void) { return &muro_tt_obj; }
+    """
+    static #{unit} #{obj} = {0};
+
+    static #{unit} *#{tt}(void) { return &#{obj}; }
     """
     |> String.trim()
   end
 
   defp pair_helpers(runs) do
     if mentions?(runs, &pair_form?/1) or mentions?(runs, &stream_form?/1) do
-      """
-      typedef struct muro_pair_s { void *fst; void *snd; } muro_pair;
+      pair = g("pair")
+      fst = g("field_fst")
+      snd = g("field_snd")
+      p = g("p")
+      alloc = g("ALLOC")
+      mk = g("mk_pair")
 
-      static muro_pair *muro_mk_pair(void *fst, void *snd) {
-        muro_pair *p = MURO_ALLOC(sizeof *p);
-        if (p == 0) abort();
-        p->fst = fst;
-        p->snd = snd;
-        return p;
+      """
+      typedef struct #{pair} #{pair};
+      struct #{pair} { void *#{fst}; void *#{snd}; };
+
+      static #{pair} *#{mk}(void *#{fst}, void *#{snd}) {
+        #{pair} *#{p} = #{alloc}(sizeof *#{p});
+        if (#{p} == 0) abort();
+        #{p}->#{fst} = #{fst};
+        #{p}->#{snd} = #{snd};
+        return #{p};
       }
       """
       |> String.trim()
@@ -1141,8 +1196,6 @@ defmodule Muro.Emit.C do
   defp stream_form?({:ucons, _}), do: true
   defp stream_form?(_), do: false
 
-  defp stream_ptr, do: "muro_stream *"
-
   defp exports_stream?(sigs) do
     Enum.any?(sigs, fn sig ->
       sig.export and
@@ -1150,9 +1203,9 @@ defmodule Muro.Emit.C do
     end)
   end
 
-  defp stream_ty?(ty), do: String.starts_with?(ty, "muro_stream ")
+  defp stream_ty?(ty), do: String.starts_with?(ty, g("stream") <> " ")
 
-  # A data field typed `muro_stream *` needs the typedef even when no
+  # A data field typed as a stream needs the typedef even when no
   # signature exports a stream. The .c completes the struct only when a
   # run uses one, and must not repeat the typedef.
   defp stream_declared?(sigs, book) do
@@ -1166,35 +1219,44 @@ defmodule Muro.Emit.C do
 
         Enum.any?(pis, fn
           {:erased, _, _} -> false
-          {_, a, _} -> String.starts_with?(ctype(a, book), "muro_stream ")
+          {_, a, _} -> stream_ty?(ctype(a, book))
         end)
       end)
     end)
   end
 
   defp stream_typedef(sigs, book) do
-    if stream_declared?(sigs, book), do: "typedef struct muro_stream muro_stream;", else: ""
+    stream = g("stream")
+    if stream_declared?(sigs, book), do: "typedef struct #{stream} #{stream};", else: ""
   end
 
   defp stream_helpers(runs, declared?) do
     if mentions?(runs, &stream_form?/1) do
-      decl = if declared?, do: "", else: "typedef struct muro_stream muro_stream;"
+      stream = g("stream")
+      seed = g("field_seed")
+      env = g("field_env")
+      step = g("field_step")
+      pair = g("pair")
+      new = g("stream_new")
+      p = g("p")
+      alloc = g("ALLOC")
+      decl = if declared?, do: "", else: "typedef struct #{stream} #{stream};"
 
       """
       #{decl}
-      struct muro_stream {
-        void *seed;
-        void *env;
-        muro_pair *(*step)(void *env, void *seed);
+      struct #{stream} {
+        void *#{seed};
+        void *#{env};
+        #{pair} *(*#{step})(void *, void *);
       };
 
-      static muro_stream *muro_stream_new(void *seed, void *env, muro_pair *(*step)(void *env, void *seed)) {
-        muro_stream *p = MURO_ALLOC(sizeof *p);
-        if (p == 0) abort();
-        p->seed = seed;
-        p->env = env;
-        p->step = step;
-        return p;
+      static #{stream} *#{new}(void *#{seed}, void *#{env}, #{pair} *(*#{step})(void *, void *)) {
+        #{stream} *#{p} = #{alloc}(sizeof *#{p});
+        if (#{p} == 0) abort();
+        #{p}->#{seed} = #{seed};
+        #{p}->#{env} = #{env};
+        #{p}->#{step} = #{step};
+        return #{p};
       }
       """
       |> String.trim()
@@ -1235,6 +1297,9 @@ defmodule Muro.Emit.C do
 
   defp struct_src(d, book) do
     name = struct_name(d.name)
+    tagf = g("field_tag")
+    asf = g("as")
+    unused = g("unused")
 
     members =
       d.ctors
@@ -1246,7 +1311,7 @@ defmodule Muro.Emit.C do
           pis
           |> Enum.reject(fn {q, _, _} -> q == :erased end)
           |> Enum.with_index()
-          |> Enum.map(fn {{_, a, _}, k} -> "    #{ctype(a, book)}f#{k};" end)
+          |> Enum.map(fn {{_, a, _}, k} -> "    #{ctype(a, book)}#{g("f", k)};" end)
 
         {tag, ctor.name, fs}
       end)
@@ -1258,42 +1323,37 @@ defmodule Muro.Emit.C do
         if fs == [] do
           []
         else
-          ["    struct {\n#{Enum.join(fs, "\n")}\n    } #{c_name(cname)};"]
+          ["    struct {\n#{Enum.join(fs, "\n")}\n    } #{spell(cname)};"]
         end
       end)
 
-    union_body = Enum.join(["    char unused;" | union_members], "\n")
+    union_body = Enum.join(["    char #{unused};" | union_members], "\n")
 
     """
     struct #{name} {
-      uint8_t tag; /* #{comment} */
+      uint8_t #{tagf}; /* #{comment} */
       union {
     #{union_body}
-      } as;
+      } #{asf};
     };
     """
     |> String.trim()
   end
 
-  defp data_ctors(book) do
-    {chunks, _} =
-      book
-      |> data_defs()
-      |> Enum.flat_map(fn d ->
-        d.ctors
-        |> Enum.with_index()
-        |> Enum.map(fn {ctor, tag} -> {d, ctor, tag} end)
-      end)
-      |> Enum.map_reduce(MapSet.new(), fn {d, ctor, tag}, used ->
-        ctor_fun(d, ctor, tag, book, used)
-      end)
-
-    Enum.join(chunks, "\n\n")
+  defp data_ctors(book, nm) do
+    book
+    |> data_defs()
+    |> Enum.flat_map(fn d ->
+      d.ctors
+      |> Enum.with_index()
+      |> Enum.map(fn {ctor, tag} -> ctor_fun(d, ctor, tag, book, nm) end)
+    end)
+    |> Enum.join("\n\n")
   end
 
-  # A constructor with no runtime fields has one value. Share it, as `tt`
-  # does. `struct_name/1` already includes the `muro_` prefix.
-  defp ctor_fun(d, ctor, tag, book, used) do
+  # A constructor with no runtime fields has one value. Share it, as `tt` does.
+  # The object name is generated, so a source spelling cannot be it.
+  defp ctor_fun(d, ctor, tag, book, nm) do
     {pis, _} = telescope(ctor.type)
 
     fields =
@@ -1304,45 +1364,46 @@ defmodule Muro.Emit.C do
 
     {params, _} =
       Enum.map_reduce(fields, MapSet.new(), fn {ty, x, k}, used ->
-        base = if x == "_", do: "f#{k}", else: c_name(x)
-        {cname, used} = fresh(base, used)
+        base = if x == "_", do: g("f", k), else: spell(x)
+        {cname, used} = claim(base, used)
         {{ty, cname, k}, used}
       end)
 
     ptr = struct_ptr(d.name)
-    fun = c_name(ctor.name)
+    fun = Map.fetch!(nm.ctors, {d.name, ctor.name})
+    member = spell(ctor.name)
+    p = g("p")
+    alloc = g("ALLOC")
+    tagf = g("field_tag")
+    asf = g("as")
 
     if params == [] do
-      {obj, used} = fresh(struct_name(d.name) <> "_" <> safe(ctor.name) <> "_obj", used)
+      obj = g("obj_" <> spell(d.name) <> "_" <> spell(ctor.name))
 
-      text = """
+      """
       static #{struct_name(d.name)} #{obj} = {#{tag}};
 
       static #{ptr}#{fun}(void) { return &#{obj}; }
       """
-
-      {String.trim(text), used}
+      |> String.trim()
     else
-      member = fun
-
       assigns =
         Enum.map_join(params, "\n", fn {_ty, cname, k} ->
-          "  p->as.#{member}.f#{k} = #{cname};"
+          "  #{p}->#{asf}.#{member}.#{g("f", k)} = #{cname};"
         end)
 
       args = Enum.map_join(params, ", ", fn {ty, n, _} -> "#{ty}#{n}" end)
 
-      text = """
+      """
       static #{ptr}#{fun}(#{args}) {
-        #{ptr}p = MURO_ALLOC(sizeof *p);
-        if (p == 0) abort();
-        p->tag = #{tag};
+        #{ptr}#{p} = #{alloc}(sizeof *#{p});
+        if (#{p} == 0) abort();
+        #{p}->#{tagf} = #{tag};
       #{assigns}
-        return p;
+        return #{p};
       }
       """
-
-      {String.trim(text), used}
+      |> String.trim()
     end
   end
 

@@ -48,7 +48,7 @@ defmodule Muro.GenNativeTest do
     header = File.read!(Path.join(dir, "src/rounding.h"))
     assert source =~ ~s|#include "rounding.h"|
     refute source =~ ~s|#include "half.h"|
-    assert header =~ "muro_nat *half(muro_nat *n);"
+    assert header =~ "muro__nat *half(muro__nat *n);"
 
     if System.find_executable("cc") do
       {result, status} =
