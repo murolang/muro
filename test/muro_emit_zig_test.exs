@@ -506,6 +506,43 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "a pair binder hidden by a later one is discarded" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "shadow_pair.muro"), """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def nats : run Stream Nat :=
+      unfold 0 (λ (+ n : Nat) → (n, suc n))
+
+    def second : run Nat := let (x, x) = (0, suc 0) in x
+    def first : run Nat := let (x, y) = (0, suc 0) in x
+    def next : run Nat := let (x, x) = uncons nats in head x
+    """)
+
+    emit_zig!(dir, "shadow_pair")
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("shadow_pair.zig");
+
+    test "shadowed pair" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(try m.second(a)));
+        try std.testing.expectEqual(@as(u64, 0), m.muro_to_u64(try m.first(a)));
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(try m.next(a)));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   zig_test "a shadowed parameter resolves to the inner binding" do
     dir = tmp_dir()
 

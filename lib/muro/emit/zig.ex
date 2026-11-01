@@ -200,7 +200,7 @@ defmodule Muro.Emit.Zig do
   defp bind_caps(body, caps, later, info, st) do
     used? =
       Enum.with_index(caps, fn {name, _lay}, i ->
-        param_used?(body, name, Enum.drop(caps, i + 1) ++ later)
+        binder_used?(body, name, Enum.drop(caps, i + 1) ++ later)
       end)
 
     if Enum.any?(used?) do
@@ -229,7 +229,7 @@ defmodule Muro.Emit.Zig do
   defp bind_seed(_body, [], st), do: {["_ = seed;"], [], st}
 
   defp bind_seed(body, [{name, lay} | rest], st) do
-    if param_used?(body, name, rest) do
+    if binder_used?(body, name, rest) do
       {rn, st} = local(st, zig_base(name))
 
       line =
@@ -388,8 +388,8 @@ defmodule Muro.Emit.Zig do
 
         binds =
           ["const #{s} = #{shown};"] ++
-            maybe_bind(a, ra, "#{s}.fst", la, body, st) ++
-            maybe_bind(b, rb, "#{s}.snd", lb, body, st)
+            maybe_bind(a, ra, "#{s}.fst", la, body, [b], st) ++
+            maybe_bind(b, rb, "#{s}.snd", lb, body, [], st)
 
         {:ok, {elines ++ binds ++ blines, bex, blay, beff, st}}
       end
@@ -726,9 +726,9 @@ defmodule Muro.Emit.Zig do
     end
   end
 
-  defp maybe_bind(src, rn, slot, lay, body, st) do
+  defp maybe_bind(src, rn, slot, lay, body, later, st) do
     line = "const #{rn} = #{bind_half(slot, lay, st)};"
-    if uses?(body, src), do: [line], else: [line, "_ = #{rn};"]
+    if binder_used?(body, src, later), do: [line], else: [line, "_ = #{rn};"]
   end
 
   defp bind_half(slot, :opaque, _st), do: slot
@@ -885,22 +885,22 @@ defmodule Muro.Emit.Zig do
     params
     |> Enum.with_index()
     |> Enum.reduce(lines, fn {{src, rn, _lay}, i}, lines ->
-      if param_used?(body, src, Enum.drop(params, i + 1)),
+      if binder_used?(body, src, Enum.drop(params, i + 1)),
         do: lines,
         else: lines ++ ["_ = #{rn};"]
     end)
   end
 
-  # A later parameter of the same source name hides this one for the whole body.
-  defp param_used?(body, name, later) do
-    shadowed? =
-      Enum.any?(later, fn
-        {n, _, _} -> n == name
-        {n, _} -> n == name
-      end)
-
-    not shadowed? and uses?(body, name)
+  # A later binder of the same source name hides this one. `later` holds
+  # the names still to come, as binaries or `{name, ...}` tuples.
+  defp binder_used?(body, name, later) do
+    not Enum.any?(later, &same_binder?(&1, name)) and uses?(body, name)
   end
+
+  defp same_binder?(n, name) when is_binary(n), do: n == name
+  defp same_binder?({n, _, _}, name), do: n == name
+  defp same_binder?({n, _}, name), do: n == name
+  defp same_binder?(_, _), do: false
 
   defp mentions_alloc?(tm, st) do
     case tm do
