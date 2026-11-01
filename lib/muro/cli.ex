@@ -43,7 +43,7 @@ defmodule Muro.CLI do
     Muro.CLI.Text.page([
       "muro #{version}, an explicit affine dependent type theory\n\n" <>
         Muro.CLI.Text.prose("""
-        muro checks a book of definitions, then emits verified code to Elixir/OTP, C, Rust, or Cortex-M assembly from one source. A spec never becomes evidence, and evidence never becomes a run \u{2014} only run terms are emitted. The executable carries its own Erlang runtime and does not compile or start a host application.
+        muro checks a book of definitions, then emits verified code to Elixir/OTP, C, Rust, Zig, or Cortex-M assembly from one source. A spec never becomes evidence, and evidence never becomes a run \u{2014} only run terms are emitted. The executable carries its own Erlang runtime and does not compile or start a host application.
         """),
       Muro.CLI.Text.section(
         "USAGE",
@@ -58,7 +58,7 @@ defmodule Muro.CLI do
           {"check [path.muro] [--fuel N]",
            "Type-check a book, or the built-in book when the path is omitted."},
           {"emit path.muro [--backend NAME] [--node NAME] [--imports]",
-           "Emit run code: elixir, c, rust, asm, otp, fsm, or exunit."},
+           "Emit run code: elixir, c, rust, zig, asm, otp, fsm, or exunit."},
           {"gen [--check]", "Write the modules the manifest names. --check only compares."},
           {"init [--ci github] [--backend NAME] [--cargo-metadata]",
            "Write the one manifest this directory calls for."},

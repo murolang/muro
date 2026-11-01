@@ -126,6 +126,22 @@ defmodule Muro do
   end
 
   @doc """
+  Write `<name>.zig` next to `path` for its run definitions.
+  `zig` translates that file. The proof stops at the run image.
+  """
+  def emit_zig(path, opts \\ []) do
+    stem = Path.basename(path, ".muro")
+    dir = Path.dirname(path)
+
+    with {:ok, book} <- checked_book(path, opts),
+         {:ok, source} <- Emit.Zig.render(book, stem) do
+      file = Path.join(dir, stem <> ".zig")
+      File.write!(file, source)
+      {:ok, [file]}
+    end
+  end
+
+  @doc """
   Write `<name>.s` next to `path` for a closed Nat run.
   The assembler translates that file. The proof stops at the run image.
   """

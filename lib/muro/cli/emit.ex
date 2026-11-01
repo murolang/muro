@@ -18,6 +18,7 @@ defmodule Muro.CLI.Emit do
           "elixir  one module on standard output",
           "c       <stem>.h and <stem>.c beside the book",
           "rust    <stem>.rs beside the book",
+          "zig     <stem>.zig beside the book",
           "asm     <stem>.s, Thumb for Cortex-M0",
           "otp     <stem>_otp.ex, a GenServer per process",
           "fsm     one state-machine module on standard output",
@@ -46,7 +47,7 @@ defmodule Muro.CLI.Emit do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro emit reads one .muro file, checks it, and emits run definitions. Spec and evidence are omitted. elixir, the default, prints one module on standard output and writes no file. c, rust, and asm write a file beside the book and print that path. The executable does not load a Mix project, so c writes the .h and the .c only and does not build a NIF. otp writes a GenServer for each conforming process. fsm prints a state machine and leaves the transport with the host. exunit prints one ExUnit module for the book's closed equations. Nothing here is a proof that the host translation is the book. The proof stops at the run image.
+      muro emit reads one .muro file, checks it, and emits run definitions. Spec and evidence are omitted. elixir, the default, prints one module on standard output and writes no file. c, rust, zig, and asm write a file beside the book and print that path. The executable does not load a Mix project, so c writes the .h and the .c only and does not build a NIF. otp writes a GenServer for each conforming process. fsm prints a state machine and leaves the transport with the host. exunit prints one ExUnit module for the book's closed equations. Nothing here is a proof that the host translation is the book. The proof stops at the run image.
       """),
       Muro.CLI.Text.section(
         "USAGE",
@@ -65,6 +66,7 @@ defmodule Muro.CLI.Emit do
           [
             {"muro emit book.muro", "Print the Elixir module."},
             {"muro emit book.muro --backend rust", "Write book.rs beside the book."},
+            {"muro emit book.muro --backend zig", "Write book.zig beside the book."},
             {"muro emit book.muro --backend c", "Write book.h and book.c. No NIF."},
             {"muro emit book.muro --backend exunit", "Print an ExUnit module."}
           ],
@@ -170,6 +172,10 @@ defmodule Muro.CLI.Emit do
 
   defp dispatch(path, "rust", nil, _nif) do
     files(Muro.emit_rust(path))
+  end
+
+  defp dispatch(path, "zig", nil, _nif) do
+    files(Muro.emit_zig(path))
   end
 
   defp dispatch(path, "asm", nil, _nif) do
