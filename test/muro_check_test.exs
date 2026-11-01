@@ -144,11 +144,8 @@ defmodule Muro.CheckTest do
   end
 
   test "higher_order.muro: a definition passed as a value or partially applied is a closure" do
-    src = File.read!("examples/higher_order.muro")
-    assert {:ok, book} = Parser.parse(src)
-    assert Check.check_sig(book) == :ok
-
-    out = Emit.emit_module(Muro.HigherOrder, book)
+    assert Muro.check_file("examples/higher_order.muro") == :ok
+    assert {:ok, out} = Muro.emit_file("examples/higher_order.muro", Muro.HigherOrder)
     refute out =~ "ident()"
     refute out =~ "add2-ok"
     Code.eval_string(out)
@@ -1177,11 +1174,8 @@ defmodule Muro.CheckTest do
   end
 
   test "list.muro checks; evidence is not emitted; length runs" do
-    src = File.read!("examples/list.muro")
-    assert {:ok, book} = Parser.parse(src)
-    assert Check.check_sig(book) == :ok
-
-    out = Emit.emit_module(Muro.Lists, book)
+    assert Muro.check_file("examples/list.muro") == :ok
+    assert {:ok, out} = Muro.emit_file("examples/list.muro", Muro.Lists)
     assert out =~ ~r/\bdef length\b/
     assert out =~ ~r/\bdef ones2\b/
     refute out =~ "length-ones2"
@@ -1190,11 +1184,8 @@ defmodule Muro.CheckTest do
   end
 
   test "maybe.muro checks; fromMaybe runs" do
-    src = File.read!("examples/maybe.muro")
-    assert {:ok, book} = Parser.parse(src)
-    assert Check.check_sig(book) == :ok
-
-    out = Emit.emit_module(Muro.MaybeEx, book)
+    assert Muro.check_file("examples/maybe.muro") == :ok
+    assert {:ok, out} = Muro.emit_file("examples/maybe.muro", Muro.MaybeEx)
     assert out =~ ~r/\bdef fromMaybe\b/
     refute out =~ "fromJust1"
     Code.eval_string(out)
@@ -1617,8 +1608,7 @@ defmodule Muro.CheckTest do
   end
 
   test "non-descending Maybe recursion fails" do
-    src = File.read!("examples/maybe.muro")
-    assert {:ok, book} = Parser.parse(src)
+    assert {:ok, book} = Muro.Load.file("examples/maybe.muro")
 
     bad = %{
       name: "loop",
@@ -1655,8 +1645,7 @@ defmodule Muro.CheckTest do
   end
 
   test "non-descending list recursion fails" do
-    src = File.read!("examples/list.muro")
-    assert {:ok, book} = Parser.parse(src)
+    assert {:ok, book} = Muro.Load.file("examples/list.muro")
 
     bad = %{
       name: "badlen",
@@ -2246,7 +2235,7 @@ defmodule Muro.CheckTest do
     sort_src = File.read!("examples/sort.muro")
     refute sort_src =~ "data List"
     assert {:ok, sort_book} = Parser.parse(sort_src)
-    assert Enum.any?(sort_book, &(&1[:kind] == :import and &1.path == "list.muro"))
+    assert Enum.any?(sort_book, &(&1[:kind] == :import and &1.path == "std:list.muro"))
     refute Enum.any?(sort_book, &(&1[:kind] == :data and &1.name == "List"))
 
     assert {:ok, ex} = Muro.emit_file("examples/sort.muro", Sort)

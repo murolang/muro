@@ -78,6 +78,10 @@ pages:
     slug: packages
     title: Packages
     summary: Import a book from a git or Hex package at the version muro.lock records.
+  - file: library.md
+    slug: library
+    title: Library
+    summary: The ordinary library, imported as std:. Bool, Le, List, Maybe, and comparison.
   - file: grammar.md
     slug: grammar
     title: Grammar

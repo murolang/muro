@@ -17,15 +17,18 @@ defmodule Muro.Gen do
   The book hash is the lowercase hex sha256 of one concatenation.
   The files are the book and every file it imports, directly or
   through another import, including `pkg:` imports under
-  `muro_deps/`. Each path is included once; a cycle includes each
-  file once. A file that does not parse contributes its own bytes
-  and no further imports. A missing import is omitted. The prelude
-  is not part of the hash, and neither is `muro.lock`: the version
-  pin covers the checker and the emitter, and the conforms line
-  covers the package version. Paths are relative to the project
-  root, with `/` separators, sorted lexicographically. An import
-  outside the project is a `..` path from that root. A package file
-  is `muro_deps/<name>/<path>`. Each file contributes its relative
+  `muro_deps/` and `std:` books. Each path is included once; a cycle
+  includes each file once. A file that does not parse contributes its
+  own bytes and no further imports. A missing import is omitted. The
+  prelude is not part of the hash, and neither is `muro.lock`: the
+  version pin covers the checker, the emitter, the prelude, and the
+  standard library, and the conforms line covers the package version. A
+  `std:` book is still hashed, under `std/<file>`, so the hash does
+  not depend on where the compiler is installed and changes when that
+  book changes. Paths are relative to the project root, with `/`
+  separators, sorted lexicographically. An import outside the project
+  is a `..` path from that root. A package file is
+  `muro_deps/<name>/<path>`. Each file contributes its relative
   path, a zero byte, its bytes, and a zero byte.
 
   The module name is the manifest's alias. An `:elixir` entry calls
@@ -172,8 +175,18 @@ defmodule Muro.Gen do
 
     absolute
     |> files_under(root)
-    |> Enum.map(fn file -> {relative_slash(root, file), File.read!(file)} end)
+    |> Enum.map(&hash_entry(&1, root))
     |> Muro.Hash.files()
+  end
+
+  # A library id is not on disk. Its hash path is `std/<file>`.
+  defp hash_entry("std:" <> name, _root) do
+    {:ok, bytes} = Muro.Std.source(name)
+    {"std/" <> name, bytes}
+  end
+
+  defp hash_entry(file, root) do
+    {relative_slash(root, file), File.read!(file)}
   end
 
   @doc """
@@ -578,6 +591,24 @@ defmodule Muro.Gen do
     String.trim_trailing(binary, "\n") <> "\n"
   end
 
+  defp walk("std:" <> name = id, seen, acc, root) do
+    cond do
+      MapSet.member?(seen, id) ->
+        {acc, seen}
+
+      true ->
+        case Muro.Std.source(name) do
+          :error ->
+            {acc, seen}
+
+          {:ok, bytes} ->
+            seen = MapSet.put(seen, id)
+            acc = [id | acc]
+            follow_source(id, bytes, seen, acc, root)
+        end
+    end
+  end
+
   defp walk(path, seen, acc, root) do
     cond do
       MapSet.member?(seen, path) ->
@@ -595,24 +626,25 @@ defmodule Muro.Gen do
 
   defp follow_imports(path, seen, acc, root) do
     case File.read(path) do
-      {:ok, source} ->
-        case Muro.Parser.parse(source) do
-          {:ok, book} ->
-            Enum.reduce(import_paths(book, path, root), {acc, seen}, fn next, {acc, seen} ->
-              walk(next, seen, acc, root)
-            end)
+      {:ok, source} -> follow_source(path, source, seen, acc, root)
+      {:error, _reason} -> {acc, seen}
+    end
+  end
 
-          {:error, _message} ->
-            {acc, seen}
-        end
+  defp follow_source(path, source, seen, acc, root) do
+    case Muro.Parser.parse(source) do
+      {:ok, book} ->
+        Enum.reduce(import_paths(book, path, root), {acc, seen}, fn next, {acc, seen} ->
+          walk(next, seen, acc, root)
+        end)
 
-      {:error, _reason} ->
+      {:error, _message} ->
         {acc, seen}
     end
   end
 
   defp import_paths(book, path, root) do
-    dir = Path.dirname(path)
+    dir = if Muro.Std.std_id?(path), do: path, else: Path.dirname(path)
 
     Enum.flat_map(book, fn entry ->
       case entry do
@@ -621,8 +653,18 @@ defmodule Muro.Gen do
             {:pkg, name, pkg_path} when is_binary(root) ->
               [Path.join([root, "muro_deps", name | String.split(pkg_path, "/")])]
 
+            {:std, name} ->
+              [Muro.Std.id(name)]
+
             :relative ->
-              [Path.expand(rel, dir)]
+              if Muro.Std.std_id?(path) do
+                case Muro.Std.relative(path, rel) do
+                  {:ok, name} -> [Muro.Std.id(name)]
+                  :escape -> []
+                end
+              else
+                [Path.expand(rel, dir)]
+              end
 
             _other ->
               []

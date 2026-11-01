@@ -90,6 +90,9 @@ lib/muro/talk.ex        one description of an exchange, mirror of seen
 lib/muro/place.ex       place / scheme / move, mirror of decide
 lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
+lib/muro/load.ex        import: a relative path, pkg:, and std:
+lib/muro/std.ex         the ordinary library, embedded at compile time
+lib/muro/std/*.muro     bool, le, list, maybe, ord
 lib/muro/emit.ex        run → Elixir source
 lib/muro/repr.ex        a repr: check the host shape and emit decode/1, decode/2, and encode/2. Not a kernel term.
 lib/muro/emit/exunit.ex closed equations → one ExUnit module (`--backend exunit`, `kind: :exunit`)
@@ -137,7 +140,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.20.1`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, and `muro mutate`. The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.20.3`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, and `muro mutate`. The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -150,7 +153,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.20.1.ez
+mix archive.install muro-0.20.3.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -193,7 +196,7 @@ Nearest example: manual/examples.md#{{example}}.
 
 `mix muro.init` creates `muro.exs` and `priv/muro/`. It prints a note that points at `muro skills add`. It does not write `AGENTS.md`. `muro init --backend` stores that backend as the manifest's top-level `backend`. `muro init` writes the one manifest the directory calls for. If `muro.exs`, `muro.toml`, or `[package.metadata.muro]` is already present, it prints a diff of that file in its own format and leaves every file as it is. `mix muro.init --ci github` writes `.github/workflows/muro.yml`. The job installs the archive with `mix archive.install hex muro <version> --force`, with the version from the manifest, and runs `mix muro.gen --check`. `muro init --ci github` installs the executable and runs `muro gen --check`.
 
-The page is [Committed modules](gen.md). Package imports (`import "pkg:..."`, `muro_deps:`, `mix muro.deps.get`, `muro.lock`) are [Packages](packages.md).
+The page is [Committed modules](gen.md). Package imports (`import "pkg:..."`, `muro_deps:`, `mix muro.deps.get`, `muro.lock`) are [Packages](packages.md). The ordinary library is `import "std:file.muro"` ([Library](library.md)). It is compiled into the compiler. It is not the prelude, and it is not a package.
 
 ## Commands
 
@@ -216,7 +219,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then:
 
 ```
-Muro v0.20.1
+Muro v0.20.3
 All terms check. Evidence never becomes a run.
 ```
 

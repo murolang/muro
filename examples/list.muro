@@ -1,16 +1,2 @@
--- list.muro — List A, nil, cons; List A is Data iff A is.
-data List (A : Type) : Type where
-  nil  : List A
-  cons : A → List A → List A
-
-def length : run Π (- A : Type) → Π (xs : List A) → Nat :=
-  λ (- A : Type) → λ (xs : List A) →
-    match xs motive (λ _ → Nat)
-      | nil => 0
-      | cons _ as => suc (length A as)
-
-def ones2 : run List Nat :=
-  cons (suc 0) (cons (suc 0) nil)
-
-def length-ones2 : evidence {length Nat ones2 ≡ suc (suc 0) : Nat} :=
-  refl
+-- list.muro — List, length, membership, and lookup, from the standard library.
+import "std:list.muro"

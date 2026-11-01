@@ -14,8 +14,10 @@ defmodule Muro do
   The prelude is in scope behind the file. A name the file defines replaces
   the prelude's. `import "path"` loads that file, relative to this one, and
   brings its declarations into scope. `import "pkg:name/file.muro"` loads
-  that file from `muro_deps/`. `root:` is the project root; when it is
-  omitted, the nearest ancestor with `muro.exs` or `mix.exs` is used.
+  that file from `muro_deps/`. `import "std:file.muro"` loads a book of the
+  ordinary library compiled into the compiler. `root:` is the project root;
+  when it is omitted, the nearest ancestor with `muro.exs` or `mix.exs` is
+  used.
   """
   def check_file(path, opts \\ []) do
     with {:ok, _} <- Load.file(path, opts), do: :ok
