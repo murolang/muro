@@ -583,6 +583,93 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "a source name that a helper binds is prefixed" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "helpers.muro"), """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    data Box : Type where
+      mk : Nat → Box
+      two : Nat → Nat → Box
+      hold : (Nat × Nat) → Box
+      flow : Stream Nat → Box
+
+    def n : run Nat := 0
+    def a0 : run Nat := suc n
+    def p : run Nat := suc a0
+    def k : run Nat := suc p
+    def i : run Nat := suc k
+    def cur : run Nat := suc i
+    def T : run Nat := suc cur
+    def fst : run Nat := n
+    def snd : run Nat := a0
+    def step : run Nat := p
+
+    def id : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → n
+
+    def got : run Nat := id n
+    def boxed : run Box := two n a0
+    """)
+
+    source = File.read!(emit_zig!(dir, "helpers"))
+
+    for fun <- ~w(n a0 p k i cur T fst snd step) do
+      refute source =~ ~r/(?<![\w])fn #{fun}\(/
+      assert source =~ "fn muro_#{fun}("
+    end
+
+    assert source =~ "pub fn id(allocator: std.mem.Allocator, n: *const Nat) !*const Nat"
+
+    assert source =~
+             "fn two(allocator: std.mem.Allocator, a0: *const Nat, a1: *const Nat) !*const Box"
+
+    File.write!(Path.join(dir, "ctor.muro"), """
+    data Box : Type where
+      a0 : Nat → Nat → Box
+
+    def zero : run Nat := 0
+    def box : run Box := a0 0 (suc 0)
+    """)
+
+    ctor = File.read!(emit_zig!(dir, "ctor"))
+    refute ctor =~ ~r/(?<![\w])fn a0\(/
+    assert ctor =~ "fn muro_a0(allocator: std.mem.Allocator, a0: *const Nat, a1: *const Nat)"
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("helpers.zig");
+    const c = @import("ctor.zig");
+
+    test "renamed bindings" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        try std.testing.expectEqual(@as(u64, 0), m.muro_to_u64(try m.muro_n(a)));
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(try m.muro_a0(a)));
+        try std.testing.expectEqual(@as(u64, 2), m.muro_to_u64(try m.muro_p(a)));
+        try std.testing.expectEqual(@as(u64, 3), m.muro_to_u64(try m.muro_k(a)));
+        try std.testing.expectEqual(@as(u64, 4), m.muro_to_u64(try m.muro_i(a)));
+        try std.testing.expectEqual(@as(u64, 5), m.muro_to_u64(try m.muro_cur(a)));
+        try std.testing.expectEqual(@as(u64, 6), m.muro_to_u64(try m.muro_T(a)));
+        try std.testing.expectEqual(@as(u64, 0), m.muro_to_u64(try m.muro_fst(a)));
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(try m.muro_snd(a)));
+        try std.testing.expectEqual(@as(u64, 2), m.muro_to_u64(try m.muro_step(a)));
+        try std.testing.expectEqual(@as(u64, 0), m.muro_to_u64(try m.got(a)));
+        try std.testing.expect(std.meta.activeTag((try m.boxed(a)).*) == .two);
+        try std.testing.expectEqual(@as(u64, 0), c.muro_to_u64(try c.zero(a)));
+        try std.testing.expect(std.meta.activeTag((try c.box(a)).*) == .a0);
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   defp emit_zig!(dir, name) do
     path = Path.join(dir, "#{name}.muro")
     out = capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "zig"]) end)
