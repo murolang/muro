@@ -14,7 +14,11 @@
 -- and a different type would send another value. A `get` or a payload
 -- whose type mentions an index variable is `sout` or `pOut`, because
 -- applying the index context can make two source types meet on the
--- wire while the variable's type still differs from the binder.
+-- wire while the variable's type still differs from the binder. A
+-- second binding of a name already in scope is `sout`. A name that
+-- occurs twice anywhere in the process, including the two branches of
+-- a cover or the arms of an `mget`, is `sout` as well: the graph keeps
+-- the first slot and the typed step keeps the latest value.
 --
 -- A step is one side's action. A jump is not its own step: unfolding
 -- `smu` / `svar` is part of the action, and the continuation index is
@@ -113,6 +117,34 @@ lookupI x ((y , i , s) ∷ rest) with x == y
 ... | true = just (i , s)
 ... | false = lookupI x rest
 
+-- Ordinary functions, not `with`, so a caller that already knows the
+-- continuation walk can read the counters of the compound process.
+walkCont : ℕ → ℕ → Maybe W → Maybe W
+walkCont _ _ nothing = nothing
+walkCont n s (just w) = just (mkW n s (next w) (slotN w))
+
+walkEnd : ℕ → ℕ → W → Maybe W → Maybe W
+walkEnd _ _ _ nothing = nothing
+walkEnd n s _ (just w2) = just (mkW n s (next w2) (slotN w2))
+
+walkTwo : ℕ → ℕ → Maybe W → (W → Maybe W) → Maybe W
+walkTwo _ _ nothing _ = nothing
+walkTwo n s (just w1) k = walkEnd n s w1 (k w1)
+
+walkM : ℕ → ℕ → Maybe (List (String × W) × ℕ × ℕ) → Maybe W
+walkM _ _ nothing = nothing
+walkM n s (just (_ , n2 , s2)) = just (mkW n s n2 s2)
+
+consArm : String → W → Maybe (List (String × W) × ℕ × ℕ) →
+          Maybe (List (String × W) × ℕ × ℕ)
+consArm _ _ nothing = nothing
+consArm y w (just (ws , n2 , s2)) = just ((y , w) ∷ ws , n2 , s2)
+
+walkArm : String → Maybe W → (W → Maybe (List (String × W) × ℕ × ℕ)) →
+          Maybe (List (String × W) × ℕ × ℕ)
+walkArm _ nothing _ = nothing
+walkArm y (just w) k = consArm y w (k w)
+
 mutual
   walk : List String → EnvI → SProc → ℕ → ℕ → Maybe W
   walk pend ρ (smu x p) n s = walk (x ∷ pend) ρ p n s
@@ -124,40 +156,29 @@ mutual
   walk _ _ sdone n s = just (mkW n s (suc n) s)
   walk _ _ sstop n s = just (mkW n s (suc n) s)
   walk _ _ sout _ _ = nothing
-  walk pend ρ (sput _ p) n s with walk [] (addPend pend n s ρ) p (suc n) s
-  ... | nothing = nothing
-  ... | just w = just (mkW n s (next w) (slotN w))
-  walk pend ρ (sget _ _ p) n s with walk [] (addPend pend n s ρ) p (suc n) (suc s)
-  ... | nothing = nothing
-  ... | just w = just (mkW n s (next w) (slotN w))
-  walk pend ρ (spick0 p) n s with walk [] (addPend pend n s ρ) p (suc n) s
-  ... | nothing = nothing
-  ... | just w = just (mkW n s (next w) (slotN w))
-  walk pend ρ (spick1 p) n s with walk [] (addPend pend n s ρ) p (suc n) s
-  ... | nothing = nothing
-  ... | just w = just (mkW n s (next w) (slotN w))
-  walk pend ρ (scover p q) n s with walk [] (addPend pend n s ρ) p (suc n) s
-  ... | nothing = nothing
-  ... | just w1 with walk [] (addPend pend n s ρ) q (next w1) (slotN w1)
-  ... | nothing = nothing
-  ... | just w2 = just (mkW n s (next w2) (slotN w2))
-  walk pend ρ (siget _ p q) n s with walk [] (addPend pend n s ρ) p (suc n) (suc s)
-  ... | nothing = nothing
-  ... | just w1 with walk [] (addPend pend n s ρ) q (next w1) (slotN w1)
-  ... | nothing = nothing
-  ... | just w2 = just (mkW n s (next w2) (slotN w2))
-  walk pend ρ (smget _ _ as) n s with walkArms [] (addPend pend n s ρ) as (suc n) (suc s)
-  ... | nothing = nothing
-  ... | just (_ , n2 , s2) = just (mkW n s n2 s2)
+  walk pend ρ (sput _ p) n s =
+    walkCont n s (walk [] (addPend pend n s ρ) p (suc n) s)
+  walk pend ρ (sget _ _ p) n s =
+    walkCont n s (walk [] (addPend pend n s ρ) p (suc n) (suc s))
+  walk pend ρ (spick0 p) n s =
+    walkCont n s (walk [] (addPend pend n s ρ) p (suc n) s)
+  walk pend ρ (spick1 p) n s =
+    walkCont n s (walk [] (addPend pend n s ρ) p (suc n) s)
+  walk pend ρ (scover p q) n s =
+    walkTwo n s (walk [] (addPend pend n s ρ) p (suc n) s)
+      (λ w1 → walk [] (addPend pend n s ρ) q (next w1) (slotN w1))
+  walk pend ρ (siget _ p q) n s =
+    walkTwo n s (walk [] (addPend pend n s ρ) p (suc n) (suc s))
+      (λ w1 → walk [] (addPend pend n s ρ) q (next w1) (slotN w1))
+  walk pend ρ (smget _ _ as) n s =
+    walkM n s (walkArms [] (addPend pend n s ρ) as (suc n) (suc s))
 
   walkArms : List String → EnvI → List Arm → ℕ → ℕ → Maybe (List (String × W) × ℕ × ℕ)
   walkArms _ _ [] n s = just ([] , n , s)
   walkArms _ _ (abad ∷ _) _ _ = nothing
-  walkArms pend ρ (aok y p ∷ as) n s with walk pend ρ p n s
-  ... | nothing = nothing
-  ... | just w with walkArms pend ρ as (next w) (slotN w)
-  ... | nothing = nothing
-  ... | just (ws , n2 , s2) = just ((y , w) ∷ ws , n2 , s2)
+  walkArms pend ρ (aok y p ∷ as) n s =
+    walkArm y (walk pend ρ p n s)
+      (λ w → walkArms pend ρ as (next w) (slotN w))
 
 -- The arm named `y`, compiled from counter `(n, s)` across `as`.
 armGo : EnvI → String → List Arm → ℕ → ℕ → Maybe (W × SProc)
@@ -476,6 +497,8 @@ SourceSafe c0 = ∀ {c} → SReach c0 c → CanFinish c ⊎ Σ SConf (λ d → c
 -- Weaker than `NoStuck`. A step on one side beside a fault on the
 -- other is allowed here, and `merge` returns `VBad`, which is not
 -- `Shape`. `source-safe-iff` uses `SourceShape` in `Muro.Temporal.Span`.
+-- The finite embedding is `Muro.Temporal.Finite`: `inj-fwd`,
+-- `inj-bwd`, and `safe→nostuck`.
 
 record SPath : Set where
   coinductive
@@ -619,14 +642,26 @@ ctorsTy _ = []
 -- Arm `k` against constructor `n`, in order. A bare arm, a fielded
 -- arm, or a different name is not the list the graph matches. The
 -- environment is the binders already in scope, most recent first.
+-- `armHit` is an ordinary function, not a `with`, so a caller that
+-- has matched the name test can still read the arm it built.
+-- True when `x` is not already bound. The graph's first slot and the
+-- typed environment's latest value are the same binding only then.
+newName : String → List (String × S.Ty) → Bool
+newName _ [] = true
+newName x ((y , _) ∷ Γ) with x == y
+... | true = false
+... | false = newName x Γ
+
+armHit : Bool → String → Maybe (List Arm) → SProc → Maybe (List Arm)
+armHit false _ _ _ = nothing
+armHit true _ nothing _ = nothing
+armHit true k (just bs) p = just (aok k p ∷ bs)
+
 mutual
   matchArms : List (String × S.Ty) → List S.Ctor → List S.PArm → Maybe (List Arm)
   matchArms _ [] [] = just []
-  matchArms Γ (S.ctor n _ ∷ cs) (S.named k [] p ∷ ps) with n == k
-  ... | false = nothing
-  ... | true with matchArms Γ cs ps
-  ... | nothing = nothing
-  ... | just bs = just (aok k (go Γ p) ∷ bs)
+  matchArms Γ (S.ctor n _ ∷ cs) (S.named k [] p ∷ ps) =
+    armHit (n == k) k (matchArms Γ cs ps) (go Γ p)
   matchArms _ _ _ = nothing
 
   go : List (String × S.Ty) → S.Proc → SProc
@@ -637,22 +672,50 @@ mutual
   ... | false = sout
   ... | true with goodGet A
   ... | nothing = sout
-  ... | just t = sget t x (go ((x , A) ∷ Γ) p)
+  ... | just t with newName x Γ
+  ... | false = sout
+  ... | true = sget t x (go ((x , A) ∷ Γ) p)
   go Γ (S.pick0 p) = spick0 (go Γ p)
   go Γ (S.pick1 p) = spick1 (go Γ p)
   go Γ (S.cover p q) = scover (go Γ p) (go Γ q)
-  go Γ (S.iget x p q) =
+  go Γ (S.iget x p q) with newName x Γ
+  ... | false = sout
+  ... | true =
     siget x (go ((x , S.bit) ∷ Γ) p) (go ((x , S.bit) ∷ Γ) q)
   go Γ (S.mget A x as) with closedTy A
   ... | false = sout
   ... | true with goodGet A
   ... | nothing = sout
-  ... | just t with matchArms ((x , A) ∷ Γ) (ctorsTy A) as
+  ... | just t with newName x Γ
+  ... | false = sout
+  ... | true with matchArms ((x , A) ∷ Γ) (ctorsTy A) as
   ... | nothing = sout
   ... | just bs = smget t x bs
 
+-- `freshN` and `distinctN` are the name-list forms of `newName`. They
+-- live here because the injection cannot import `Bridge`.
+freshN : String → List String → Bool
+freshN _ [] = true
+freshN x (y ∷ ys) with x == y
+... | true = false
+... | false = freshN x ys
+
+distinctN : List String → Bool
+distinctN [] = true
+distinctN (x ∷ xs) = freshN x xs ∧ distinctN xs
+
+keep : Bool → SProc → SProc
+keep true p = p
+keep false _ = sout
+
 inj : S.Proc → SProc
-inj P = go [] P
+inj P = keep (distinctN (bnames (go [] P))) (go [] P)
+
+inj-go : ∀ P → distinctN (bnames (go [] P)) ≡ true → inj P ≡ go [] P
+inj-go P eq rewrite eq = refl
+
+inj-sout : ∀ P → distinctN (bnames (go [] P)) ≡ false → inj P ≡ sout
+inj-sout P eq rewrite eq = refl
 
 -- A constructor the declaration does not have is not a payload.
 bad-con : payOf (S.lit (S.con {S.boolDecl} {[]} "nope" S.snil)) ≡ pOut
@@ -675,6 +738,17 @@ ok-echo = refl
 -- An index variable is not a closed payload type.
 open-get : inj (S.get (S.vec S.nat (S.nvar "n")) "x" S.done) ≡ sout
 open-get = refl
+
+-- The inner binding repeats `x`, so the injection stops there.
+reget : inj (S.get S.nat "x" (S.get S.nat "x" S.done))
+      ≡ sget tagNat "x" sout
+reget = refl
+
+-- The two branches bind the same name. Neither is in the other's scope,
+-- and the injection still refuses the process.
+re-cover : inj (S.cover (S.get S.nat "x" S.done) (S.get S.nat "x" S.done))
+         ≡ sout
+re-cover = refl
 
 open-put : inj (S.put (S.vec S.nat (S.nvar "n")) (S.lit (S.rep S.zero)) S.done)
          ≡ sput pOut sdone
