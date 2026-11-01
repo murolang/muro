@@ -1,13 +1,2 @@
--- maybe.muro — non-indexed data: Maybe, fromMaybe, a small evidence.
-data Maybe (A : Type) : Type where
-  nothing : Maybe A
-  just    : A → Maybe A
-
-def fromMaybe : run Π (-A : Type) → Π (d : A) → Π (m : Maybe A) → A :=
-  λ (-A : Type) → λ (d : A) → λ (m : Maybe A) →
-    match m motive (λ _ → A)
-      | nothing => d
-      | just a  => a
-
-def fromJust1 : evidence {fromMaybe Nat 0 (just (suc 0)) ≡ suc 0 : Nat} :=
-  refl
+-- maybe.muro — Maybe and fromMaybe, from the standard library.
+import "std:maybe.muro"

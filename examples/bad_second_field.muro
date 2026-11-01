@@ -1,9 +1,7 @@
 -- bad_second_field.muro — the second field of cons is ys, not the next
 -- variable in scope. mix muro.check refuses this false equation.
 -- second_field.muro is the true one.
-data List (A : Type) : Type where
-  nil  : List A
-  cons : A → List A → List A
+import "std:list.muro"
 
 def drop1 : run Π (xs : List Nat) → List Nat :=
   λ (xs : List Nat) →
