@@ -45,9 +45,7 @@ defmodule Muro.Emit.Otp do
     fragment = Session.run_fragment(book, run_names_in(mods, meets))
     decls = Session.payload_decls(book)
 
-    {:ok,
-     source(parent, mods, decls, fragment, host_clauses(book), ctor_atom_map(decls))
-     |> with_meetings(meets)}
+    {:ok, source(parent, mods, decls, fragment, host_clauses(book)) |> with_meetings(meets)}
   end
 
   defp modules(book) do
@@ -66,8 +64,8 @@ defmodule Muro.Emit.Otp do
   # A meeting names the peer. Both processes exist before either is told
   # to go, and each is monitored by the other from that moment.
   defp meetings(book) do
-    # These are arity 0 in the same module as a meeting.
-    taken0 = MapSet.new(["data_decls", "run_book"])
+    # A meeting is `def name/0` beside every function this template defines.
+    taken0 = Muro.Emit.Helpers.otp()
 
     {funs, _} =
       book
@@ -211,22 +209,17 @@ defmodule Muro.Emit.Otp do
         ~s|defp muro_host(#{inspect(name)}), do: #{inspect(String.to_atom(host))}|
       end)
 
-    Enum.join(clauses ++ ["defp muro_host(_name), do: nil"], "\n")
+    Enum.join(clauses ++ [host_fallback()], "\n")
   end
 
-  # Mapped atom string → source constructor. Identity spellings are omitted.
-  defp ctor_atom_map(decls) do
-    decls
-    |> Map.values()
-    |> Enum.flat_map(fn %{ctors: ctors} -> Map.keys(ctors) end)
-    |> Enum.flat_map(fn name ->
-      mapped = Muro.Emit.elixir_atom_name(name)
-      if mapped == name, do: [], else: [{mapped, name}]
-    end)
-    |> Map.new()
+  defp host_fallback do
+    """
+    defp muro_host(_name), do: nil
+    """
+    |> String.trim()
   end
 
-  defp source(parent, mods, decls, fragment, hosts, ctor_atoms) do
+  defp source(parent, mods, decls, fragment, hosts) do
     children = Enum.map_join(mods, "\n\n", &child(parent, &1))
 
     """
@@ -408,8 +401,8 @@ defmodule Muro.Emit.Otp do
 
       defp pick_arm({:dat, name, _}, value, arms) do
         case Map.get(data_decls(), name) do
-          %{order: order} ->
-            tag = tag_of(value)
+          %{order: order, ctors: ctors} ->
+            tag = tag_of(ctors, value)
 
             case Enum.find_index(order, &(&1 == tag)) do
               i when is_integer(i) ->
@@ -466,7 +459,7 @@ defmodule Muro.Emit.Otp do
       # A named arm is that constructor. A positional arm is the
       # declaration order of the value's tag, or `b0` then `b1`.
       defp pick_split(value, arms) do
-        tag = tag_of(value)
+        tag = split_tag(value, length(arms))
         fields = fields_of_runtime(value)
 
         case named_index(arms, tag, 0) do
@@ -514,6 +507,40 @@ defmodule Muro.Emit.Otp do
         end)
       end
 
+      # The declaration is not named on a nested split. Each declaration
+      # resolves the host label on its own constructors.
+      defp split_tag(value, n) do
+        raw = raw_tag(value)
+
+        found =
+          if is_binary(raw) do
+            Enum.find_value(Map.values(data_decls()), fn
+              %{order: order, ctors: ctors} when is_list(order) and is_map(ctors) ->
+                case Muro.Emit.source_ctor(Map.keys(ctors), raw) do
+                  {:ok, name} ->
+                    if length(order) == n and name in order, do: name, else: nil
+
+                  :error ->
+                    nil
+                end
+
+              _ ->
+                nil
+            end)
+          end
+
+        found || raw || ""
+      end
+
+      defp raw_tag(value) when is_atom(value), do: Atom.to_string(value)
+
+      defp raw_tag(value) when is_tuple(value) and tuple_size(value) >= 1 do
+        tag = elem(value, 0)
+        if is_atom(tag), do: Atom.to_string(tag)
+      end
+
+      defp raw_tag(_), do: nil
+
       defp fields_of_runtime(value) when is_atom(value), do: []
 
       defp fields_of_runtime(value) when is_tuple(value) and tuple_size(value) >= 1 do
@@ -523,14 +550,14 @@ defmodule Muro.Emit.Otp do
 
       defp fields_of_runtime(_), do: []
 
-      defp tag_of(value) when is_atom(value), do: ctor_source(value)
+      defp tag_of(ctors, value) when is_atom(value), do: ctor_source(ctors, value)
 
-      defp tag_of(value) when is_tuple(value) and tuple_size(value) >= 1 do
+      defp tag_of(ctors, value) when is_tuple(value) and tuple_size(value) >= 1 do
         tag = elem(value, 0)
-        if is_atom(tag), do: ctor_source(tag), else: ""
+        if is_atom(tag), do: ctor_source(ctors, tag), else: ""
       end
 
-      defp tag_of(_), do: ""
+      defp tag_of(_ctors, _), do: ""
 
       defp payload?(:nat, n) when is_integer(n) and n >= 0, do: true
       defp payload?(:bit, bit) when bit in [:b0, :b1], do: true
@@ -568,14 +595,17 @@ defmodule Muro.Emit.Otp do
 
       defp run_book, do: #{inspect(fragment, limit: :infinity, charlists: :as_lists)}
 
-      defp ctor_atoms, do: #{inspect(ctor_atoms, limit: :infinity)}
+      defp ctor_source(ctors, tag) when is_atom(tag) do
+        names = if is_map(ctors), do: Map.keys(ctors), else: []
 
-      defp ctor_source(tag) when is_atom(tag) do
-        Map.get(ctor_atoms(), Atom.to_string(tag), Atom.to_string(tag))
+        case Muro.Emit.source_ctor(names, Atom.to_string(tag)) do
+          {:ok, name} -> name
+          :error -> Atom.to_string(tag)
+        end
       end
 
       defp dat_payload?(ctors, _dname, _args, value) when is_atom(value) do
-        case Map.get(ctors, ctor_source(value)) do
+        case Map.get(ctors, ctor_source(ctors, value)) do
           [] -> true
           _ -> false
         end
@@ -585,7 +615,7 @@ defmodule Muro.Emit.Otp do
         [tag | fields] = Tuple.to_list(value)
 
         if is_atom(tag) do
-          case Map.get(ctors, ctor_source(tag)) do
+          case Map.get(ctors, ctor_source(ctors, tag)) do
             tmpl when is_list(tmpl) and length(tmpl) == length(fields) ->
               Enum.zip(tmpl, fields)
               |> Enum.all?(fn {field, got} -> payload?(inst_pay(field, dname, args), got) end)

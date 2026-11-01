@@ -150,6 +150,11 @@ defmodule Muro.Emit.Nif do
     """
   end
 
+  @doc false
+  def elixir_module(stem, entries) when is_binary(stem) and is_list(entries) do
+    elixir(stem, entries)
+  end
+
   defp elixir(stem, entries) do
     funs =
       Enum.map_join(entries, "\n", fn {sig, name} ->

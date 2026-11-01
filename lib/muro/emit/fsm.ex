@@ -8,30 +8,11 @@ defmodule Muro.Emit.Fsm do
 
   alias Muro.{Ast, Emit, Session}
 
-  # Fixed functions of the interpreter. A run with one of these names takes
-  # a suffix in `Emit.elixir_names/1`, on every backend, because these
-  # clauses share the module with the private runs. `muro_fsm_done?` is
-  # absent: `elixir_base/1` never writes `?`.
-  @reserved ~w(
-    muro_fsm_act muro_fsm_arm muro_fsm_at muro_fsm_bound_desc muro_fsm_by_tag
-    muro_fsm_call muro_fsm_comm_dir muro_fsm_continue muro_fsm_dat muro_fsm_decls
-    muro_fsm_desc muro_fsm_dir_ty muro_fsm_duals muro_fsm_emit_dat
-    muro_fsm_emit_fields muro_fsm_emit_list muro_fsm_emit_rec muro_fsm_end
-    muro_fsm_ends muro_fsm_enter muro_fsm_evidence muro_fsm_expect
-    muro_fsm_expect_ty muro_fsm_expected muro_fsm_expose muro_fsm_from_emitted
-    muro_fsm_from_host muro_fsm_host muro_fsm_host_dat muro_fsm_host_fields
-    muro_fsm_host_list muro_fsm_host_rec muro_fsm_index muro_fsm_init
-    muro_fsm_inst muro_fsm_ix muro_fsm_nat_args muro_fsm_nats muro_fsm_open
-    muro_fsm_pack muro_fsm_payload muro_fsm_payload_step muro_fsm_peano
-    muro_fsm_pick muro_fsm_prep muro_fsm_quiet muro_fsm_reprs muro_fsm_result_tag
-    muro_fsm_safe_to_source muro_fsm_select muro_fsm_source_to_safe muro_fsm_step
-    muro_fsm_subst muro_fsm_subst_ix muro_fsm_tag muro_fsm_take muro_fsm_templates
-    muro_fsm_to_emitted muro_fsm_trace muro_fsm_unemit muro_fsm_unemit_list
-    muro_fsm_unemit_rec muro_fsm_vals muro_fsm_walk muro_fsm_wire_fields
-  )
-
+  # Private runs share this module with the interpreter. The reserved
+  # names are every function and attribute the template defines, read
+  # from the template text. The child endpoint is a nested module.
   @doc false
-  def reserved_funs, do: MapSet.new(@reserved)
+  def reserved_funs, do: Muro.Emit.Helpers.fsm()
 
   @doc """
   Elixir source for `module`, one child per session of `book`.
@@ -1453,8 +1434,8 @@ defmodule Muro.Emit.Fsm do
 
     # The arm is the constructor of the wire value just stored under the
     # scrutinee, or of the run applied to that value.
-    defp muro_fsm_select({:name, name}, _host, _ty, arms, st) do
-      muro_fsm_by_tag(muro_fsm_tag(Map.get(st.e, name)), arms)
+    defp muro_fsm_select({:name, name}, _host, ty, arms, st) do
+      muro_fsm_by_tag(muro_fsm_result_tag(Map.get(st.e, name), ty), arms)
     end
 
     defp muro_fsm_select({:run, _, _, earlier}, _, _, _, _) when is_list(earlier), do: :error
@@ -1624,28 +1605,30 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_payload?(_, _), do: false
 
     defp muro_fsm_dat?(ctors, _name, _args, value) when is_atom(value) do
-      case Map.get(ctors, Atom.to_string(value)) do
-        [] -> true
-        _ -> false
+      case muro_fsm_source_tag(ctors, value) do
+        nil -> false
+        tag -> Map.get(ctors, tag) == []
       end
     end
 
     defp muro_fsm_dat?(ctors, dname, args, value) when is_tuple(value) and tuple_size(value) >= 1 do
-      [tag | fields] = Tuple.to_list(value)
+      fields = muro_fsm_wire_fields(value)
 
-      if is_atom(tag) do
-        case Map.get(ctors, Atom.to_string(tag)) do
-          tmpl when is_list(tmpl) and length(tmpl) == length(fields) ->
-            Enum.zip(tmpl, fields)
-            |> Enum.all?(fn {field, got} ->
-              muro_fsm_payload?(muro_fsm_inst(field, dname, args), got)
-            end)
+      case muro_fsm_source_tag(ctors, value) do
+        nil ->
+          false
 
-          _ ->
-            false
-        end
-      else
-        false
+        tag ->
+          case Map.get(ctors, tag) do
+            tmpl when is_list(tmpl) and length(tmpl) == length(fields) ->
+              Enum.zip(tmpl, fields)
+              |> Enum.all?(fn {field, got} ->
+                muro_fsm_payload?(muro_fsm_inst(field, dname, args), got)
+              end)
+
+            _ ->
+              false
+          end
       end
     end
 
@@ -1775,7 +1758,7 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_emit_dat(value, name, args) do
       case Map.get(muro_fsm_decls(), name) do
         %{ctors: ctors} ->
-          tag = muro_fsm_tag(value)
+          tag = muro_fsm_source_tag(ctors, value)
           fields = muro_fsm_wire_fields(value)
 
           case tag && Map.get(ctors, tag) do
@@ -1841,6 +1824,26 @@ defmodule Muro.Emit.Fsm do
 
     defp muro_fsm_tag(_), do: nil
 
+    # The safe map is `elixir_atom_name` for constructors whose host atom
+    # differs from the source name. A spelling match counts only when that
+    # constructor is in this declaration. Otherwise the wire atom is the
+    # source name itself. A bit such as `b0` is not in the map, so it stays.
+    defp muro_fsm_source_tag(ctors, value) when is_map(ctors) do
+      case muro_fsm_tag(value) do
+        nil ->
+          nil
+
+        raw ->
+          mapped = Map.get(muro_fsm_safe_to_source(), raw, raw)
+
+          cond do
+            Map.has_key?(ctors, mapped) -> mapped
+            Map.has_key?(ctors, raw) -> raw
+            true -> nil
+          end
+      end
+    end
+
     defp muro_fsm_wire_fields(value) when is_atom(value), do: []
 
     defp muro_fsm_wire_fields(value) when is_tuple(value) and tuple_size(value) >= 1 do
@@ -1849,6 +1852,15 @@ defmodule Muro.Emit.Fsm do
     end
 
     defp muro_fsm_wire_fields(_), do: []
+
+    defp muro_fsm_result_tag(value, {:dat, name, _args}) when is_binary(name) do
+      case Map.get(muro_fsm_decls(), name) do
+        %{ctors: ctors} when is_map(ctors) -> muro_fsm_source_tag(ctors, value)
+        _ -> muro_fsm_result_tag(value)
+      end
+    end
+
+    defp muro_fsm_result_tag(value, _ty), do: muro_fsm_result_tag(value)
 
     defp muro_fsm_result_tag(value) do
       case muro_fsm_tag(value) do
@@ -2030,7 +2042,7 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_host_dat(name, args, value) do
       case Map.get(muro_fsm_decls(), name) do
         %{ctors: ctors} ->
-          tag = muro_fsm_tag(value)
+          tag = muro_fsm_source_tag(ctors, value)
           fields = muro_fsm_wire_fields(value)
 
           case tag && Map.get(ctors, tag) do
@@ -2101,8 +2113,7 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_from_emitted(value, {:dat, name, args}, _) when is_list(args) do
       case Map.get(muro_fsm_decls(), name) do
         %{ctors: ctors} ->
-          raw = muro_fsm_tag(value)
-          tag = raw && Map.get(muro_fsm_safe_to_source(), raw, raw)
+          tag = muro_fsm_source_tag(ctors, value)
           fields = muro_fsm_wire_fields(value)
 
           case tag && Map.get(ctors, tag) do
@@ -2153,6 +2164,25 @@ defmodule Muro.Emit.Fsm do
     """
   end
 
+  # `to` is source constructor → host atom, and `from` is the inverse.
+  # Both are `elixir_atom_name/1`. A pair is stored only when the two
+  # spellings differ, so an unescaped constructor is the identity.
+  defp safe_maps(decls) do
+    pairs =
+      Enum.flat_map(decls, fn {_name, %{ctors: ctors}} ->
+        Enum.flat_map(ctors, fn {ctor, _fields} ->
+          safe = Emit.elixir_atom_name(ctor)
+
+          if safe == ctor, do: [], else: [{ctor, safe}]
+        end)
+      end)
+
+    %{
+      to: Map.new(pairs),
+      from: Map.new(pairs, fn {ctor, safe} -> {safe, ctor} end)
+    }
+  end
+
   defp calls(st, names) do
     clauses =
       st.results
@@ -2162,22 +2192,14 @@ defmodule Muro.Emit.Fsm do
         "defp muro_fsm_call(#{inspect(fname)}, arg), do: #{fun}(arg)"
       end)
 
-    Enum.join(clauses ++ ["defp muro_fsm_call(_fname, _arg), do: :error"], "\n")
+    Enum.join(clauses ++ [call_fallback()], "\n")
   end
 
-  defp safe_maps(decls) do
-    pairs =
-      Enum.flat_map(decls, fn {_name, %{ctors: ctors}} ->
-        Enum.flat_map(ctors, fn {ctor, _fields} ->
-          safe = Emit.elixir_atom_name(ctor)
-          if safe == ctor, do: [], else: [{ctor, safe}]
-        end)
-      end)
-
-    %{
-      to: Map.new(pairs),
-      from: Map.new(pairs, fn {ctor, safe} -> {safe, ctor} end)
-    }
+  defp call_fallback do
+    """
+    defp muro_fsm_call(_fname, _arg), do: :error
+    """
+    |> String.trim()
   end
 
   defp snake(name), do: Muro.Repr.snake_ident(name)
@@ -2191,7 +2213,14 @@ defmodule Muro.Emit.Fsm do
         "defp muro_fsm_host(#{inspect(name)}), do: #{inspect(String.to_atom(host))}"
       end)
 
-    Enum.join(clauses ++ ["defp muro_fsm_host(_name), do: nil"], "\n")
+    Enum.join(clauses ++ [host_fallback()], "\n")
+  end
+
+  defp host_fallback do
+    """
+    defp muro_fsm_host(_name), do: nil
+    """
+    |> String.trim()
   end
 
   defp lit(term) do
@@ -2240,7 +2269,10 @@ defmodule Muro.Emit.Fsm do
   end
 
   defp init_fun(parent, key, []) do
-    "def init, do: #{parent}.muro_fsm_init(#{inspect(key)}, [])"
+    """
+    def init, do: #{parent}.muro_fsm_init(#{inspect(key)}, [])
+    """
+    |> String.trim()
   end
 
   defp init_fun(parent, key, params) do

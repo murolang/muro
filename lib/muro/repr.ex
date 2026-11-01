@@ -2222,10 +2222,17 @@ defmodule Muro.Repr do
   # neither must not carry an unused attribute.
   defp maybe_nat_max(acc, feats) do
     if MapSet.member?(feats, :nat) or MapSet.member?(feats, :interned) do
-      acc ++ ["@muro_repr_nat_max #{inspect(@nat_max)}"]
+      acc ++ [nat_max_attr()]
     else
       acc
     end
+  end
+
+  defp nat_max_attr do
+    """
+    @muro_repr_nat_max #{inspect(@nat_max)}
+    """
+    |> String.trim()
   end
 
   defp maybe(acc, feat, feats, src) do
@@ -2531,6 +2538,34 @@ defmodule Muro.Repr do
 
   # `name_term` / `name_index` grow a clause per numeral target the book uses.
   # A Nat-only book must not mention the binary helpers, and the other way round.
+  defp name_term_nat do
+    """
+    defp muro_repr_name_term(i, :nat), do: muro_repr_nat_from(i)
+    """
+    |> String.trim()
+  end
+
+  defp name_term_bin do
+    """
+    defp muro_repr_name_term(i, {z, d1, d2}), do: muro_repr_bin_from(i, z, d1, d2)
+    """
+    |> String.trim()
+  end
+
+  defp name_index_nat do
+    """
+    defp muro_repr_name_index(term, :nat), do: muro_repr_encode_nat(term)
+    """
+    |> String.trim()
+  end
+
+  defp name_index_bin do
+    """
+    defp muro_repr_name_index(term, {z, d1, d2}), do: muro_repr_bin_index(term, z, d1, d2)
+    """
+    |> String.trim()
+  end
+
   defp interned_helpers(feats) do
     nat? = MapSet.member?(feats, :interned_nat)
     bin? = MapSet.member?(feats, :bin)
@@ -2538,10 +2573,8 @@ defmodule Muro.Repr do
     term =
       Enum.join(
         [
-          if(nat?, do: "defp muro_repr_name_term(i, :nat), do: muro_repr_nat_from(i)"),
-          if(bin?,
-            do: "defp muro_repr_name_term(i, {z, d1, d2}), do: muro_repr_bin_from(i, z, d1, d2)"
-          )
+          if(nat?, do: name_term_nat()),
+          if(bin?, do: name_term_bin())
         ]
         |> Enum.reject(&is_nil/1),
         "\n"
@@ -2550,11 +2583,8 @@ defmodule Muro.Repr do
     index =
       Enum.join(
         [
-          if(nat?, do: "defp muro_repr_name_index(term, :nat), do: muro_repr_encode_nat(term)"),
-          if(bin?,
-            do:
-              "defp muro_repr_name_index(term, {z, d1, d2}), do: muro_repr_bin_index(term, z, d1, d2)"
-          )
+          if(nat?, do: name_index_nat()),
+          if(bin?, do: name_index_bin())
         ]
         |> Enum.reject(&is_nil/1),
         "\n"

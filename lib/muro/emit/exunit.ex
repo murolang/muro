@@ -689,11 +689,20 @@ defmodule Muro.Emit.ExUnitSuite do
     Enum.join(lines, "\n") <> "\n"
   end
 
-  defp callbacks_attr([]), do: "@callbacks []"
+  defp callbacks_attr([]) do
+    """
+    @callbacks []
+    """
+    |> String.trim()
+  end
 
   defp callbacks_attr(callbacks) do
     inner = Enum.map_join(callbacks, ", ", fn {name, arity} -> "#{name}: #{arity}" end)
-    "@callbacks [#{inner}]"
+
+    """
+    @callbacks [#{inner}]
+    """
+    |> String.trim()
   end
 
   defp skip_block([]), do: "  # Skipped: none"

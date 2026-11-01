@@ -29,7 +29,7 @@ defmodule Muro.Emit.Node do
     {funs, _} =
       book
       |> Enum.filter(&cross?/1)
-      |> Enum.reduce({[], MapSet.new(["node"])}, fn entry, {acc, used} ->
+      |> Enum.reduce({[], Muro.Emit.Helpers.node()}, fn entry, {acc, used} ->
         scheme = scheme_of(entry, book)
         {fname, used} = Muro.Emit.Name.claim(fun_name(scheme, entry.place), used)
         {[{fname, scheme} | acc], used}

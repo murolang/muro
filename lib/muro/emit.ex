@@ -158,20 +158,11 @@ defmodule Muro.Emit do
   The spelling is `elixir_base/1`. Every run is claimed, in book order,
   before a backend drops internal or non-`Nat` runs. `taken` is the
   host functions that share a module with those runs: the NIF loader,
-  the FSM interpreter, and `muro_nat_to_int` when a body calls `toI64`.
+  the FSM interpreter, `muro_nat_to_int`, and the repr helpers.
   Elixir, NIF, OTP, FSM, and ExUnit all read this map.
   """
   def elixir_names(book) when is_list(book) do
-    taken =
-      MapSet.new(["muro_nif_load"])
-      |> MapSet.union(Muro.Emit.Fsm.reserved_funs())
-
-    taken =
-      if Enum.any?(run_defs(book), &term_has_toi64?(Map.get(&1, :body))),
-        do: MapSet.put(taken, "muro_nat_to_int"),
-        else: taken
-
-    def_names(book, &elixir_base/1, taken)
+    def_names(book, &elixir_base/1, Muro.Emit.Helpers.runs())
   end
 
   @doc """
@@ -760,6 +751,37 @@ defmodule Muro.Emit do
       name
     else
       elixir_base(name)
+    end
+  end
+
+  @doc """
+  Inverse of `elixir_base/1` and of `elixir_atom_name/1`.
+
+  A spelling that begins with `muro__` is `Name.decode/1` of the rest.
+  Any other spelling is itself. `Name.encode/1` writes no underscore, so
+  the prefix splits in one place. `elixir_source(elixir_base(name))` and
+  `elixir_source(elixir_atom_name(name))` are `{:ok, name}`.
+  """
+  def elixir_source("muro__" <> rest), do: Name.decode(rest)
+  def elixir_source(spelling) when is_binary(spelling), do: {:ok, spelling}
+
+  @doc """
+  Source constructor named by a host label, or `:error`.
+
+  `names` are the source constructors of one declaration. A label equal
+  to `elixir_atom_name/1` of one of them is that constructor. A label
+  that is itself one of those names is that constructor: the wire
+  spelling. When both apply, the spelling match wins.
+  """
+  def source_ctor(names, label) when is_binary(label) do
+    set = if is_struct(names, MapSet), do: names, else: MapSet.new(names)
+
+    case Enum.find(set, fn name -> elixir_atom_name(name) == label end) do
+      name when is_binary(name) ->
+        {:ok, name}
+
+      nil ->
+        if MapSet.member?(set, label), do: {:ok, label}, else: :error
     end
   end
 

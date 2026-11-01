@@ -38,6 +38,9 @@ defmodule Muro.Emit.Name do
   An Elixir host name is `Muro.Emit.elixir_base/1` of the source name.
   It is not this spelling.
 
+  `decode/1` inverts `encode/1` on that image: `decode(encode(name))` is
+  `{:ok, name}`. Any other string is `:error`.
+
   `spell/3` then `claim/2` is injective on distinct source names. `encode/1`
   is injective, and `_k` sits outside its image, so `spell/3` is injective.
   A claimed suffix is `_` plus digits. No spelling is of that form: an
@@ -57,6 +60,20 @@ defmodule Muro.Emit.Name do
     name
     |> String.to_charlist()
     |> Enum.map_join(&encode_char/1)
+  end
+
+  @doc """
+  Inverse of `encode/1` on its image.
+
+  `decode(encode(name))` is `{:ok, name}`. Any other string is `:error`,
+  including a lone `z`, a short hex run, or a bad hex digit. Hex digits
+  may be upper or lower case.
+  """
+  def decode(encoded) when is_binary(encoded) do
+    case decode_chars(encoded, []) do
+      {:ok, cps} -> {:ok, cps |> Enum.reverse() |> List.to_string()}
+      :error -> :error
+    end
   end
 
   @doc """
@@ -155,6 +172,27 @@ defmodule Muro.Emit.Name do
   those that contain `__`.
   """
   def generated?(name) when is_binary(name), do: String.contains?(name, @marker)
+
+  defp decode_chars(<<>>, acc), do: {:ok, acc}
+  defp decode_chars(<<"zz", rest::binary>>, acc), do: decode_chars(rest, [?z | acc])
+  defp decode_chars(<<"ZZ", rest::binary>>, acc), do: decode_chars(rest, [?Z | acc])
+  defp decode_chars(<<"zu", rest::binary>>, acc), do: decode_chars(rest, [?_ | acc])
+  defp decode_chars(<<"zd", rest::binary>>, acc), do: decode_chars(rest, [?- | acc])
+  defp decode_chars(<<"zq", rest::binary>>, acc), do: decode_chars(rest, [?' | acc])
+
+  defp decode_chars(<<"zn", hex::binary-size(4), rest::binary>>, acc) do
+    case Integer.parse(hex, 16) do
+      {cp, ""} -> decode_chars(rest, [cp | acc])
+      _ -> :error
+    end
+  end
+
+  defp decode_chars(<<c, rest::binary>>, acc)
+       when c in ?0..?9 or c in ?a..?y or c in ?A..?Y do
+    decode_chars(rest, [c | acc])
+  end
+
+  defp decode_chars(<<_::binary>>, _acc), do: :error
 
   defp encode_char(?z), do: "zz"
   defp encode_char(?Z), do: "ZZ"

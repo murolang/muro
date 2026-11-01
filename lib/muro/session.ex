@@ -5274,8 +5274,8 @@ defmodule Muro.Session do
         :error
 
       d ->
-        case ctor_fields(d, Atom.to_string(value)) do
-          {:ok, []} -> {:ok, {:con, Atom.to_string(value), []}}
+        case read_tag(d, Atom.to_string(value)) do
+          {:ok, name, []} -> {:ok, {:con, name, []}}
           _ -> :error
         end
     end
@@ -5286,16 +5286,14 @@ defmodule Muro.Session do
     [tag | fields] = Tuple.to_list(value)
 
     if is_atom(tag) do
-      label = Atom.to_string(tag)
-
       case find_decl(book, dname) do
         nil ->
           :error
 
         d ->
-          case ctor_fields(d, label) do
-            {:ok, tmpls} when length(tmpls) == length(fields) ->
-              read_ctor_fields(label, tmpls, fields, dname, args, book, [])
+          case read_tag(d, Atom.to_string(tag)) do
+            {:ok, name, tmpls} when length(tmpls) == length(fields) ->
+              read_ctor_fields(name, tmpls, fields, dname, args, book, [])
 
             _ ->
               :error
@@ -5307,6 +5305,21 @@ defmodule Muro.Session do
   end
 
   defp read_pay(_, _, _), do: :error
+
+  # The host label is the emitted atom or the wire source name. The
+  # selected declaration's constructors are the only table.
+  defp read_tag(d, label) when is_binary(label) do
+    case decl_templates(d) do
+      {:ok, {_name, %{ctors: ctors}}} ->
+        case Muro.Emit.source_ctor(Map.keys(ctors), label) do
+          {:ok, name} -> {:ok, name, Map.fetch!(ctors, name)}
+          :error -> :error
+        end
+
+      :error ->
+        :error
+    end
+  end
 
   defp read_ctor_fields(tag, [], [], _dname, _args, _book, acc), do: {:ok, {:con, tag, acc}}
 
