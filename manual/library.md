@@ -68,7 +68,7 @@ Evidence: `fromMaybe-nothing`, `fromMaybe-just`, `isJust-nothing`, `isJust-just`
 
 `compare` is `run` on `Nat`. `CompareAt m n o` says what that result means: `lt` is `Le (suc m) n`, `eq` is `{m ≡ n : Nat}`, and `gt` is `Le (suc n) m`. `compare-sound` inhabits `CompareAt m n (compare m n)`. `lift-compare` carries a result at `p` and `q` to their successors, and the `eq` arm uses `cong` from the prelude.
 
-`compare-lex` is `run` on `Nat × Nat`. The first components are compared first. `lex-step` is `run internal`: the first ordering wins, unless it is `eq`, in which case the second decides. `LexAt` says what that pair result means, given the ordering of the first components, and `lex-sound` inhabits it. `LexSide` and `LexGt` are the two sides of that statement. Each of them matches the ordering already in hand.
+`compare-lex` is `run` on `Nat × Nat`. The first components are compared first. The second components are compared only when that ordering is `eq`. `lex-step` is evidence: the first ordering wins, unless it is `eq`, in which case the second decides. `compare-lex` inlines that match, so the second comparison is not an argument of a call. `LexAt` says what that pair result means, given the ordering of the first components, and `lex-sound` inhabits it. `LexSide` and `LexGt` are the two sides of that statement. Each of them matches the ordering already in hand.
 
 ## Examples
 

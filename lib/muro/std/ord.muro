@@ -50,7 +50,9 @@ def compare-sound : evidence Π (m : Nat) → Π (n : Nat) → CompareAt m n (co
             | suc q => lift-compare p q (compare p q) (compare-sound p q)
 
 -- The first ordering wins, unless it is eq, in which case the second decides.
-def lex-step : run internal Π (o1 : Ordering) → Π (o2 : Ordering) → Ordering :=
+-- Evidence, not a run: compare-lex inlines the same match. A run would be a
+-- strict call, and the second ordering would be evaluated on every branch.
+def lex-step : evidence Π (o1 : Ordering) → Π (o2 : Ordering) → Ordering :=
   λ (o1 : Ordering) → λ (o2 : Ordering) →
     match o1 motive (λ _ → Ordering)
       | lt => lt
@@ -58,11 +60,17 @@ def lex-step : run internal Π (o1 : Ordering) → Π (o2 : Ordering) → Orderi
       | gt => gt
 
 -- Lexicographic comparison of pairs. The first components are compared first.
+-- The second components are compared only when that ordering is eq.
+-- lex-step (compare a c) (compare b d) would walk b and d on a strict backend
+-- even when the first ordering is lt or gt and that result is discarded.
 def compare-lex : run Π (p : Nat × Nat) → Π (q : Nat × Nat) → Ordering :=
   λ (p : Nat × Nat) → λ (q : Nat × Nat) →
     let (a, b) = p in
     let (c, d) = q in
-    lex-step (compare a c) (compare b d)
+    match (compare a c) motive (λ _ → Ordering)
+      | lt => lt
+      | eq => compare b d
+      | gt => gt
 
 -- The first ordering was lt, so the pair result is about that side.
 def LexSide : spec Π (a : Nat) → Π (b : Nat) → Π (c : Nat) → Π (d : Nat) →

@@ -4,7 +4,7 @@
 
 The ordinary library is five checked books compiled into the compiler: `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, and `ord.muro`. `import "std:list.muro"` loads that copy. The same bytes are used from a Hex package, from the self-contained executable, and from a checkout. A missing name lists the books. A path that leaves the library is refused. A book reached twice joins once. A relative import inside a library book stays in the library.
 
-`Le` is ≤ on `Nat`, with reflexivity, transitivity, and `max` with its monotonicity lemmas. `List` has membership and lookup. `Bool` has `not`, `and`, and `or`. `Maybe` has `fromMaybe`, `isJust`, and `isNothing`. `Ordering` compares `Nat`, sound against `Le`, and pairs compare lexicographically. `examples/list.muro` and `examples/maybe.muro` import those books. `examples/sort.muro` imports `std:list.muro`.
+`Le` is ≤ on `Nat`, with reflexivity, transitivity, and `max` with its monotonicity lemmas. `List` has membership and lookup. `Bool` has `not`, `and`, and `or`. `Maybe` has `fromMaybe`, `isJust`, and `isNothing`. `Ordering` compares `Nat`, sound against `Le`, and pairs compare lexicographically. The second components of a pair are compared only when the first ordering is `eq`. `examples/list.muro` and `examples/maybe.muro` import those books. `examples/sort.muro` imports `std:list.muro`.
 
 The book hash includes an imported library book as `std/<file>`. The prelude stays out of the hash. The version pin covers the checker, the emitter, the prelude, and this library.
 
