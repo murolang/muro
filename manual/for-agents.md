@@ -137,7 +137,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.20.1`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, and `muro mutate`. The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.20.2`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, and `muro mutate`. The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -150,7 +150,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.20.1.ez
+mix archive.install muro-0.20.2.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -166,6 +166,8 @@ mix archive.install github murolang/muro
 A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks. Use `mix muro.check` and `mix muro.emit`.
 
 `mix muro.emit path.muro` prints the Elixir module. `mix muro.emit path.muro > path.ex` saves it. `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the book's closed equations, including a library whose `param`s are not supplied. `--imports` with that backend also collects the files the book imports directly. The page is [Closed equations as tests](exunit.md).
+
+`--backend zig` writes `<name>.zig` next to the file. `zig` translates it. The proof stops at the run image.
 
 `--backend c` writes C. The Mix task builds a NIF when the working directory is the loaded Mix project. Add `{:elixir_make, "~> 0.10", runtime: false}` to the project deps, or run the task inside a project that depends on muro. Without `elixir_make`, that NIF stops and names the dependency. Outside the loaded project the task writes the `.h` and the `.c` only, and so does the executable. `nx` and `makeup` are optional. Checking and emitting Elixir do not load them.
 
@@ -189,7 +191,7 @@ Generated files are not edited by hand.
 Nearest example: manual/examples.md#{{example}}.
 <!-- muro:end -->
 
-`muro.exs` at the project root, a `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml` names each book and the target path. Elixir, fsm, and exunit entries also name the module. An entry may add `[kind: :exunit, impl: Adapter, imports: true]`, or `[kind: :c]`, `[kind: :rust]`, or `[kind: :asm]`. `imports:` is valid only on an exunit entry. `muro:` is the version the books are checked with. `muro gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions.
+`muro.exs` at the project root, a `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml` names each book and the target path. Elixir, fsm, and exunit entries also name the module. An entry may add `[kind: :exunit, impl: Adapter, imports: true]`, or `[kind: :c]`, `[kind: :rust]`, `[kind: :zig]`, or `[kind: :asm]`. `imports:` is valid only on an exunit entry. `muro:` is the version the books are checked with. `muro gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions.
 
 `mix muro.init` creates `muro.exs` and `priv/muro/`. It prints a note that points at `muro skills add`. It does not write `AGENTS.md`. `muro init --backend` stores that backend as the manifest's top-level `backend`. `muro init` writes the one manifest the directory calls for. If `muro.exs`, `muro.toml`, or `[package.metadata.muro]` is already present, it prints a diff of that file in its own format and leaves every file as it is. `mix muro.init --ci github` writes `.github/workflows/muro.yml`. The job installs the archive with `mix archive.install hex muro <version> --force`, with the version from the manifest, and runs `mix muro.gen --check`. `muro init --ci github` installs the executable and runs `muro gen --check`.
 
@@ -216,7 +218,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then:
 
 ```
-Muro v0.20.1
+Muro v0.20.2
 All terms check. Evidence never becomes a run.
 ```
 

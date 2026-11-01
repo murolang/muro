@@ -2,12 +2,12 @@
 title: Emit
 slug: emit
 order: 13
-summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A session endpoint is a state machine. A cross is one call on a named node. Spec and evidence are omitted from a run.
+summary: What becomes Elixir. C, Rust, and Zig print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A session endpoint is a state machine. A cross is one call on a named node. Spec and evidence are omitted from a run.
 ---
 
 # Emit
 
-In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--backend fsm` writes each session endpoint as a state machine and leaves the transport with the host. `--node` writes one call for each cross, on the node the flag names.
+In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend zig` writes that same closed run as Zig. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--backend fsm` writes each session endpoint as a state machine and leaves the transport with the host. `--node` writes one call for each cross, on the node the flag names.
 
 ## From a file
 
@@ -38,6 +38,7 @@ mix muro.emit path.muro
 mix muro.emit path.muro --backend elixir
 mix muro.emit path.muro --backend c
 mix muro.emit path.muro --backend rust
+mix muro.emit path.muro --backend zig
 mix muro.emit path.muro --backend asm
 mix muro.emit path.muro --backend otp
 mix muro.emit path.muro --backend fsm
@@ -92,6 +93,14 @@ The entry builds the tagged struct and reads it back. An argument that is not a 
 `--backend rust` writes `<name>.rs` next to the file and prints that path. It prints the same closed run as the C backend. `run internal` is a private function. `Nat` is `Zero` or `Suc`. An atom is one variant of a closed enum. A stream is a seed and a step. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. A term the C backend refuses is refused here, with the same reason.
 
 `rustc` translates this text. `cc` translates the C. CompCert is the high-assurance C translator. Neither is the proof. The proof stops at the run image.
+
+## Zig
+
+`--backend zig` writes `<name>.zig` next to the file and prints that path. It prints the same closed run as the C backend. `run internal` is a private function. `Nat` and user data are tagged unions. A fieldless constructor is one static value. `match` is `switch`. A stream is a seed, an environment, and a step. A lambda applied on the spot is a local. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. A term the C backend refuses is refused here, with the same reason.
+
+A function that allocates takes `allocator: std.mem.Allocator` first and returns an error union. The caller can pass an `std.heap.ArenaAllocator` and reset it. `muro_from_u64` builds a `Nat`. `muro_to_u64` reads one back. A Zig keyword, a primitive type name, `std`, or a name of this runtime is prefixed with `muro_`. A spelling that is already taken gains a numeric suffix.
+
+The text is Zig 0.15. `zig` translates it. The proof stops at the run image.
 
 ## Cortex-M
 
@@ -258,7 +267,7 @@ If you want a book in the test suite, parse/check/emit it from `test/muro_check_
 
 `--backend exunit` prints one ExUnit module for the book's closed equations, the same text as `Muro.emit_exunit/3`. The test module is the file stem plus `Test` (`rounding.muro` prints `RoundingTest`). The implementation it calls by default is the stem (`Rounding`). Skipped equations go to standard error, then a line `N tests, M skipped`. Standard output is only the module. `--node` with this backend is refused.
 
-This is the one backend that accepts a file whose `param`s are not supplied. It checks them as assumptions. Elixir, C, Rust, assembly, OTP, and `--node` still refuse that file with `param <name> is supplied by a file that imports this one`.
+This is the one backend that accepts a file whose `param`s are not supplied. It checks them as assumptions. Elixir, C, Rust, Zig, assembly, OTP, and `--node` still refuse that file with `param <name> is supplied by a file that imports this one`.
 
 `--imports` is valid only with `--backend exunit`. It also collects the closed equations of the files the book imports directly. With any other backend it is an error: `--imports is only valid with --backend exunit`. Absent, the suite is this file only.
 

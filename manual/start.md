@@ -29,7 +29,7 @@ cd muro
 mise install
 mix deps.get
 mix archive.build
-mix archive.install muro-0.20.1.ez
+mix archive.install muro-0.20.2.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -43,7 +43,7 @@ mix archive.install github murolang/muro
 A project that does not have Elixir installs the self-contained executable. It carries its own Erlang runtime:
 
 ```
-mise use -g github:murolang/muro@0.20.1
+mise use -g github:murolang/muro@0.20.2
 muro --version
 muro check path.muro
 ```
@@ -69,7 +69,7 @@ A script run with `mix run --no-start` does not see the archive. Archives are on
 
 `mix muro.emit path.muro` prints the Elixir module. Save it with `mix muro.emit path.muro > path.ex`.
 
-`mix muro.init` writes `muro.exs` and `priv/muro/`, and prints a note that points at `muro skills add`. `muro init` writes the manifest the directory calls for (`muro.exs` or `muro.toml`). `mix muro.gen` writes the modules that file names, under the paths it names, with the project's module names, including C, Rust, and Cortex-M assembly. `mix muro.gen --check` writes nothing and fails when a committed module and its book disagree. See [Committed modules](gen.md) and [The executable](binary.md). `mix muro.deps.get` fetches the packages in `muro_deps:` and writes `muro.lock`. See [Packages](packages.md).
+`mix muro.init` writes `muro.exs` and `priv/muro/`, and prints a note that points at `muro skills add`. `muro init` writes the manifest the directory calls for (`muro.exs` or `muro.toml`). `mix muro.gen` writes the modules that file names, under the paths it names, with the project's module names, including C, Rust, Zig, and Cortex-M assembly. `mix muro.gen --check` writes nothing and fails when a committed module and its book disagree. See [Committed modules](gen.md) and [The executable](binary.md). `mix muro.deps.get` fetches the packages in `muro_deps:` and writes `muro.lock`. See [Packages](packages.md).
 
 `--backend c` writes C from the archive. A NIF needs `elixir_make`, and the Mix task writes it when the working directory is that loaded Mix project. Outside that directory the Mix task writes the `.h` and the `.c` only, and so does the self-contained executable. Neither mentions `elixir_make`. Without `elixir_make`, the NIF stops and names the dependency to add:
 
@@ -121,7 +121,7 @@ mix muro.check examples/plus.muro
 On success the shell prints the version that checked the book, then:
 
 ```
-Muro v0.20.1
+Muro v0.20.2
 All terms check. Evidence never becomes a run.
 ```
 

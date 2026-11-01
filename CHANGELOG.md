@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.2
+
+`--backend zig` writes `<name>.zig` next to the book and prints that path. It prints the same closed run as the C and Rust backends: `run` and `run internal`, `Nat`, `Unit`, user data including indexed data, `match`, and streams. A lambda applied on the spot is a local. Erased arguments are dropped. Spec and evidence are omitted. `Nat` and user data are tagged unions. A fieldless constructor is one static value. `match` is `switch`. A stream is a seed, an environment, and a step. `run internal` is a private function. A function that allocates takes `allocator: std.mem.Allocator` first and returns an error union, so the caller can pass an `std.heap.ArenaAllocator` and reset it. `muro_from_u64` builds a `Nat` and `muro_to_u64` reads it back. A term the C backend refuses is refused here, with the same reason. The text is Zig 0.15. `zig` translates it. The proof stops at the run image.
+
+### Manual
+
+- Emit: the Zig file.
+
+### Package
+
+- Version 0.20.2.
+
 ## 0.20.1
 
 A received nat whose bound is a numeral `w` splits into `0` … `w`. A direct `case` writes those arms in order. A `run` that reads the nat is evaluated at each value, and the protocol arm is the constructor it returns. The process still covers every numeral. A `run` of that nat and one declared data payload is the product of the splits. The judgment also counts a bit. `Bit` is a payload, not a term, so a `run` in a file does not take it. A sender of a literal or a computed numeral is checked on the arm that value selects. A meeting, including `buffer 1`, runs the arm of the value that arrived. The arm label is the decimal spelling, so `| 0 =>` is zero and `| 00 =>` is not.

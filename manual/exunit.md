@@ -301,7 +301,7 @@ A larger library, a `decide` of a key and a list whose silence and empty cases a
 
 ```elixir
 [
-  muro: "0.20.1",
+  muro: "0.20.2",
   modules: [
     {"kit.muro", KitTest, "test/kit_test.exs", [kind: :exunit]},
     {"impl.muro", ImplTest, "test/impl_test.exs", [kind: :exunit, imports: true]}
@@ -309,7 +309,7 @@ A larger library, a `decide` of a key and a list whose silence and empty cases a
 ]
 ```
 
-`mix muro.emit impl.muro --backend exunit --imports` is the same collection. `--imports` with `--backend elixir`, or with `c`, `rust`, `asm`, `otp`, `fsm`, or `--node`, is an error. `imports:` on a `kind: :elixir` entry is an error and names the entry index (`modules entry 1: imports: is only valid for kind: :exunit`). A non-boolean is `imports: must be a boolean`.
+`mix muro.emit impl.muro --backend exunit --imports` is the same collection. `--imports` with `--backend elixir`, or with `c`, `rust`, `zig`, `asm`, `otp`, `fsm`, or `--node`, is an error. `imports:` on a `kind: :elixir` entry is an error and names the entry index (`modules entry 1: imports: is only valid for kind: :exunit`). A non-boolean is `imports: must be a boolean`.
 
 A `pkg:` import is a direct import like any other. The test is named with the file under the project root, `muro_deps/shared/wire.muro wire-ok`, not with the `pkg:` spelling.
 
@@ -368,7 +368,7 @@ A 3-tuple is still an Elixir module. An ExUnit entry adds a keyword list:
 
 ```elixir
 [
-  muro: "0.20.1",
+  muro: "0.20.2",
   modules: [
     {"priv/muro/rounding.muro", MyApp.Rounding, "lib/my_app/rounding.ex"},
     {"priv/muro/rounding.muro", MyApp.RoundingTest, "test/rounding_test.exs",

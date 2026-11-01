@@ -38,7 +38,7 @@ See [The wall](wall.md), [Terms](language.md), [Identity](identity.md).
 
 ## ping.muro
 
-An affine session. The protocol is spec. The process is evidence. The Elixir, C, Rust, and assembly emitters omit it. `--backend otp` writes a GenServer for each process.
+An affine session. The protocol is spec. The process is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit it. `--backend otp` writes a GenServer for each process.
 
 ```
 session ping := recv Nat (send Nat end)
@@ -334,7 +334,7 @@ See [Sessions](sessions.md#a-bounded-buffer).
 
 ## place.muro
 
-A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, and assembly emitters omit all three. `--node` writes one call for each cross.
+A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit all three. `--node` writes one call for each cross.
 
 ```
 place home := ambient
@@ -363,7 +363,7 @@ See [Terms](language.md#place) and [Emit](emit.md#node).
 
 ## located.muro
 
-A session read at a place. The endpoint is spec. The reading is evidence. The Elixir, C, Rust, and assembly emitters omit both. A run definition has no seat.
+A session read at a place. The endpoint is spec. The reading is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit both. A run definition has no seat.
 
 ```
 endpoint ping-home := ping at local

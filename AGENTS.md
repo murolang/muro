@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Muro is an explicit affine dependent type theory built for agents to write. As the agent, you carry the formal verification: every type, motive and proof step is written out and nothing is inferred, so the checker either accepts your file or names each failing definition. A spec never becomes evidence. Evidence never becomes a run. Only `run` terms are emitted, as Elixir (BEAM), as C, as Rust, or as Cortex-M assembly, from the same source.
+Muro is an explicit affine dependent type theory built for agents to write. As the agent, you carry the formal verification: every type, motive and proof step is written out and nothing is inferred, so the checker either accepts your file or names each failing definition. A spec never becomes evidence. Evidence never becomes a run. Only `run` terms are emitted, as Elixir (BEAM), as C, as Rust, as Zig, or as Cortex-M assembly, from the same source.
 
 The canonical contract is [`manual/for-agents.md`](manual/for-agents.md). If this file and that page ever disagree, that page wins.
 
@@ -49,7 +49,7 @@ mix muro.deps.get                            # fetch muro_deps/ and write muro.l
 make agda                                   # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.20.1`. From a checkout: `mix archive.build && mix archive.install muro-0.20.1.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks. A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.20.1`. See [The executable](manual/binary.md).
+The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.20.2`. From a checkout: `mix archive.build && mix archive.install muro-0.20.2.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks. A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.20.2`. See [The executable](manual/binary.md).
 
 Success from `mix muro.check`: a `Muro v…` line, then `All terms check. Evidence never becomes a run.` A book that imports packages then prints one `conforms to <name> <version> (sha256 <hash>)` line per package. See [Packages](manual/packages.md).
 
@@ -62,6 +62,7 @@ mix muro.emit path.muro                     # Elixir (default); module name from
 mix muro.emit path.muro --backend exunit    # ExUnit suite on stdout; test module is the stem plus Test
 mix muro.emit path.muro --backend c         # <name>.h and <name>.c; a Nat run is also a NIF
 mix muro.emit path.muro --backend rust      # <name>.rs
+mix muro.emit path.muro --backend zig       # <name>.zig
 mix muro.emit path.muro --backend asm       # <name>.s, Cortex-M0, Nat run
 mix muro.emit path.muro --backend fsm       # one state machine per session, on stdout
 ```
@@ -70,6 +71,7 @@ mix muro.emit path.muro --backend fsm       # one state machine per session, on 
 {:ok, src} = Muro.emit_file("examples/your_file.muro", Foo)   # Elixir source
 {:ok, files} = Muro.emit_c("examples/your_file.muro")         # .h and .c, then the Nat NIF paths
 {:ok, files} = Muro.emit_rust("examples/your_file.muro")      # .rs
+{:ok, files} = Muro.emit_zig("examples/your_file.muro")       # .zig
 {:ok, files} = Muro.emit_asm("examples/your_file.muro")       # .s
 ```
 
@@ -77,11 +79,11 @@ A `repr` makes `mix muro.emit` also write `decode_<type>/1`, `decode_<type>/2`, 
 
 `--backend exunit` prints one test module for the book's closed equations. A file of unsupplied `param`s is accepted only by this backend. `--imports` also collects the files that book imports directly, and it is an error with any other backend. The tests call an implementation the host names. See [Closed equations as tests](manual/exunit.md).
 
-The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` and `Tensor` are refused as `c:machine`. Unapplied lambdas, definitions passed as values and calls of local functions are refused as `c:lambda`, because C has no closures. A raw `ν`, `Always` or `~` inside a `run` is refused as `c:stream`. Allocation goes through `MURO_ALLOC`, which is `malloc` unless you define it. An exported run of `Nat` arguments and a `Nat` result is a NIF; that build defines `MURO_ALLOC` as one block and resets it when the call returns. The Rust backend prints the same image and refuses a term the C backend refuses. `rustc` translates that text. The Cortex-M backend prints the Nat fragment of that image. The assembler translates that text. See [Emit](manual/emit.md).
+The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` and `Tensor` are refused as `c:machine`. Unapplied lambdas, definitions passed as values and calls of local functions are refused as `c:lambda`, because C has no closures. A raw `ν`, `Always` or `~` inside a `run` is refused as `c:stream`. Allocation goes through `MURO_ALLOC`, which is `malloc` unless you define it. An exported run of `Nat` arguments and a `Nat` result is a NIF; that build defines `MURO_ALLOC` as one block and resets it when the call returns. The Rust backend prints the same image and refuses a term the C backend refuses. `rustc` translates that text. The Zig backend prints that same image and refuses a term the C backend refuses. A function that allocates takes an allocator first and returns an error union. `zig` translates that text. The Cortex-M backend prints the Nat fragment of that image. The assembler translates that text. See [Emit](manual/emit.md).
 
 ## Committed modules
 
-`mix muro.gen` writes a module from a manifest (`muro.exs`, a `:muro` key in `mix.exs`, or `muro.toml`) into the path the manifest names. The module name is the manifest's alias, passed to `Muro.emit_file/3`. C, Rust, and assembly entries name a target and no module. The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256. Do not edit that file by hand. The `.muro` file is the source. Run `mix muro.gen` after changing it. `mix muro.gen --check` fails when the committed file and the book disagree. `muro:` must equal the running version. `mix muro.init` creates the manifest and prints a note that points at `muro skills add`. It does not write that file. See [Committed modules](manual/gen.md).
+`mix muro.gen` writes a module from a manifest (`muro.exs`, a `:muro` key in `mix.exs`, or `muro.toml`) into the path the manifest names. The module name is the manifest's alias, passed to `Muro.emit_file/3`. C, Rust, Zig, and assembly entries name a target and no module. The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256. Do not edit that file by hand. The `.muro` file is the source. Run `mix muro.gen` after changing it. `mix muro.gen --check` fails when the committed file and the book disagree. `muro:` must equal the running version. `mix muro.init` creates the manifest and prints a note that points at `muro skills add`. It does not write that file. See [Committed modules](manual/gen.md).
 
 ## Pitfalls seen in practice
 

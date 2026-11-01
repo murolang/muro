@@ -10,27 +10,27 @@
 
 An explicit affine dependent type theory. Elixir parses, checks, and emits `.muro`. Only run terms become running code. Users do not need Agda.
 
-Muro is built for agents to write. The agent carries the load of formal verification: every type, motive and proof step is written out and nothing is inferred, so `mix muro.check` either accepts what it wrote or names each definition that fails. Proofs are checked, then erased. Only `run` terms are emitted: as Elixir for the BEAM, as C with `mix muro.emit --backend c`, as Rust with `mix muro.emit --backend rust`, or as Cortex-M assembly with `mix muro.emit --backend asm`, from the same source. The checker's soundness is proved in Agda for a fragment of the calculus (see [Limits](manual/limits.md)); it is not a proof about every program.
+Muro is built for agents to write. The agent carries the load of formal verification: every type, motive and proof step is written out and nothing is inferred, so `mix muro.check` either accepts what it wrote or names each definition that fails. Proofs are checked, then erased. Only `run` terms are emitted: as Elixir for the BEAM, as C with `mix muro.emit --backend c`, as Rust with `mix muro.emit --backend rust`, as Zig with `mix muro.emit --backend zig`, or as Cortex-M assembly with `mix muro.emit --backend asm`, from the same source. The checker's soundness is proved in Agda for a fragment of the calculus (see [Limits](manual/limits.md)); it is not a proof about every program.
 
 The language book is [`manual/`](manual/index.md). That is what [muro-lang.dev](https://muro-lang.dev) will render. It is not ExDoc. Elixir API docs, when added, stay on `@moduledoc` / `mix docs`. Agda in `agda/Muro/` is a third layer: the rules of the calculus, not a certificate that a `.muro` file is correct.
 
 ## Install
 
-[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.20.1. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
+[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.20.2. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ```elixir
 def deps do
   [
-    {:muro, "~> 0.20.1"}
+    {:muro, "~> 0.20.2"}
   ]
 end
 ```
 
 `nx`, `makeup`, and `elixir_make` are optional. A project that depends on muro does not fetch them. Checking a book and emitting Elixir do not load them.
 
-The archive installs `mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` in any directory, with or without a `mix.exs`. Install it from Hex: `mix archive.install hex muro`. A pinned version uses `mix archive.install hex muro 0.20.1`. From a checkout: `mix archive.build && mix archive.install muro-0.20.1.ez`. From GitHub, Mix fetches the default branch and builds the archive: `mix archive.install github murolang/muro`. See [Committed modules](manual/gen.md).
+The archive installs `mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` in any directory, with or without a `mix.exs`. Install it from Hex: `mix archive.install hex muro`. A pinned version uses `mix archive.install hex muro 0.20.2`. From a checkout: `mix archive.build && mix archive.install muro-0.20.2.ez`. From GitHub, Mix fetches the default branch and builds the archive: `mix archive.install github murolang/muro`. See [Committed modules](manual/gen.md).
 
-A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.20.1`. It carries its own Erlang runtime. `muro check`, `muro emit`, and `muro gen` are the same commands. The manifest is `muro.toml`. See [The executable](manual/binary.md).
+A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.20.2`. It carries its own Erlang runtime. `muro check`, `muro emit`, and `muro gen` are the same commands. The manifest is `muro.toml`. See [The executable](manual/binary.md).
 
 Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. `mix muro --version` prints the copy that ran. A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks.
 
