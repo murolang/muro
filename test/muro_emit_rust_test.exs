@@ -193,6 +193,42 @@ defmodule Muro.EmitRustTest do
     assert out == "0 1 4 2 5\n"
   end
 
+  test "a source run named step0 stays a Nat beside the unfold step" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "step0.muro"), """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def step0 : run Nat := suc 0
+
+    def zeros : run Stream Nat :=
+      unfold 0 (λ (_ : Nat) → (0, 0))
+
+    def hd : run Π (s : Stream Nat) → Nat :=
+      λ (s : Stream Nat) → head s
+    """)
+
+    source = File.read!(emit_rust!(dir, "step0"))
+    assert source =~ "pub fn step0() -> Nat"
+    assert source =~ "fn step0_2("
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            let n = step0::muro_to_u64(&step0::step0());
+            let z = step0::hd(step0::zeros());
+            println!("{} {}", n, step0::muro_to_u64(&z));
+        }
+        """,
+        ["step0"]
+      )
+
+    assert out == "1 0\n"
+  end
+
   test "run internal is private and the examples that C accepts compile" do
     dir = tmp_dir()
     File.cp!("examples/internal_ok.muro", Path.join(dir, "internal_ok.muro"))

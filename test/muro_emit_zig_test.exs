@@ -349,6 +349,46 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "a source run named step0 stays a Nat beside the unfold step" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "step0.muro"), """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def step0 : run Nat := suc 0
+
+    def zeros : run Stream Nat :=
+      unfold 0 (λ (_ : Nat) → (0, 0))
+
+    def hd : run Π (s : Stream Nat) → Nat :=
+      λ (s : Stream Nat) → head s
+    """)
+
+    source = File.read!(emit_zig!(dir, "step0"))
+    assert source =~ "pub fn step0(allocator: std.mem.Allocator) !*const Nat"
+    assert source =~ "fn step0_2("
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("step0.zig");
+
+    test "step0" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(try m.step0(a)));
+        const z = try m.zeros(a);
+        try std.testing.expectEqual(@as(u64, 0), m.muro_to_u64(try m.hd(a, z)));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   defp emit_zig!(dir, name) do
     path = Path.join(dir, "#{name}.muro")
     out = capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "zig"]) end)
