@@ -1930,8 +1930,7 @@ defmodule Muro.Emit.Fsm do
     # One host decode, at this boundary. The result is a source tag.
     # `muro_fsm_payload?` and `muro_fsm_to_emitted` read that tag and do
     # not decode it again.
-    defp muro_fsm_admit(:nat, n) when is_integer(n) and n >= 0, do: {:ok, n}
-    defp muro_fsm_admit(:nat, _), do: :error
+    #{admit_nat(reprs)}
     defp muro_fsm_admit(:bit, bit) when bit in [:b0, :b1], do: {:ok, bit}
     defp muro_fsm_admit(:bit, _), do: :error
     defp muro_fsm_admit(:unit, :tt), do: {:ok, :tt}
@@ -2032,6 +2031,21 @@ defmodule Muro.Emit.Fsm do
   # The only generated function that matches decode's `{:ok, decoded, table}`
   # is `muro_fsm_from_host/2`. A book with no repr still decodes a host
   # tag once, in `muro_fsm_admit`. The table is dropped.
+  #
+  # When Nat has a repr, `from_host` handles `:nat` and does not call
+  # `admit` with it. Emitting those clauses anyway is a dead clause on
+  # Elixir 1.20.
+  defp admit_nat(reprs) do
+    if "Nat" in reprs do
+      ""
+    else
+      """
+      defp muro_fsm_admit(:nat, n) when is_integer(n) and n >= 0, do: {:ok, n}
+      defp muro_fsm_admit(:nat, _), do: :error
+      """
+    end
+  end
+
   defp from_host([]) do
     """
     defp muro_fsm_from_host(ty, value), do: muro_fsm_admit(ty, value)
