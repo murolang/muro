@@ -229,6 +229,42 @@ defmodule Muro.EmitRustTest do
     assert out == "1 0\n"
   end
 
+  test "a shadowed parameter resolves to the inner binding" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "shadow.muro"), """
+    def pick : run Π (x : Nat) → Π (x : Nat) → Nat :=
+      λ (x : Nat) → λ (x : Nat) → x
+
+    def third : run Π (x : Nat) → Π (y : Nat) → Π (x : Nat) → Nat :=
+      λ (x : Nat) → λ (y : Nat) → λ (x : Nat) → x
+    """)
+
+    emit_rust!(dir, "shadow")
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            let p = shadow::muro_to_u64(&shadow::pick(
+                shadow::muro_from_u64(1),
+                shadow::muro_from_u64(2),
+            ));
+            let t = shadow::muro_to_u64(&shadow::third(
+                shadow::muro_from_u64(1),
+                shadow::muro_from_u64(2),
+                shadow::muro_from_u64(3),
+            ));
+            println!("{p} {t}");
+        }
+        """,
+        ["shadow"]
+      )
+
+    assert out == "2 3\n"
+  end
+
   test "run internal is private and the examples that C accepts compile" do
     dir = tmp_dir()
     File.cp!("examples/internal_ok.muro", Path.join(dir, "internal_ok.muro"))

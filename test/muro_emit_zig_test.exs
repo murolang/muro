@@ -389,6 +389,41 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "a shadowed parameter resolves to the inner binding" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "shadow.muro"), """
+    def pick : run Π (x : Nat) → Π (x : Nat) → Nat :=
+      λ (x : Nat) → λ (x : Nat) → x
+
+    def third : run Π (x : Nat) → Π (y : Nat) → Π (x : Nat) → Nat :=
+      λ (x : Nat) → λ (y : Nat) → λ (x : Nat) → x
+    """)
+
+    emit_zig!(dir, "shadow")
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("shadow.zig");
+
+    test "shadow" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const one = try m.muro_from_u64(a, 1);
+        const two = try m.muro_from_u64(a, 2);
+        const three = try m.muro_from_u64(a, 3);
+
+        try std.testing.expectEqual(@as(u64, 2), m.muro_to_u64(try m.pick(a, one, two)));
+        try std.testing.expectEqual(@as(u64, 3), m.muro_to_u64(try m.third(a, one, two, three)));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   defp emit_zig!(dir, name) do
     path = Path.join(dir, "#{name}.muro")
     out = capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "zig"]) end)

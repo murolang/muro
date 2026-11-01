@@ -175,7 +175,7 @@ defmodule Muro.Emit.Zig do
         {acc ++ [{pname, rn, lay}], used}
       end)
 
-    env = Enum.map(params, fn {src, rn, lay} -> {src, rn, lay} end)
+    env = Enum.reduce(params, [], fn {src, rn, lay}, env -> [{src, rn, lay} | env] end)
     st = Map.merge(st0, %{n: 0, blk: 0, used: used})
 
     with {:ok, {lines, ex, lay, eff, _st}} <- emit_tm(fun.body, env, st) do
@@ -228,15 +228,18 @@ defmodule Muro.Emit.Zig do
   end
 
   defp step_prologue(body, caps, seed_params, info, st) do
-    {cap_lines, cap_env, st} = bind_caps(body, caps, info, st)
+    {cap_lines, cap_env, st} = bind_caps(body, caps, seed_params, info, st)
     {seed_lines, seed_env, st} = bind_seed(body, seed_params, st)
     {cap_lines ++ seed_lines, seed_env ++ cap_env, st}
   end
 
-  defp bind_caps(_body, [], _info, st), do: {["_ = env;"], [], st}
+  defp bind_caps(_body, [], _later, _info, st), do: {["_ = env;"], [], st}
 
-  defp bind_caps(body, caps, info, st) do
-    used? = Enum.map(caps, fn {name, _lay} -> uses?(body, name) end)
+  defp bind_caps(body, caps, later, info, st) do
+    used? =
+      Enum.with_index(caps, fn {name, _lay}, i ->
+        param_used?(body, name, Enum.drop(caps, i + 1) ++ later)
+      end)
 
     if Enum.any?(used?) do
       {e, st} = local(st, "muro_e")
@@ -263,8 +266,8 @@ defmodule Muro.Emit.Zig do
 
   defp bind_seed(_body, [], st), do: {["_ = seed;"], [], st}
 
-  defp bind_seed(body, [{name, lay}], st) do
-    if uses?(body, name) do
+  defp bind_seed(body, [{name, lay} | rest], st) do
+    if param_used?(body, name, rest) do
       {rn, st} = local(st, zig_base(name))
 
       line =
@@ -852,9 +855,24 @@ defmodule Muro.Emit.Zig do
   end
 
   defp param_discards(lines, params, body) do
-    Enum.reduce(params, lines, fn {src, rn, _lay}, lines ->
-      if uses?(body, src), do: lines, else: lines ++ ["_ = #{rn};"]
+    params
+    |> Enum.with_index()
+    |> Enum.reduce(lines, fn {{src, rn, _lay}, i}, lines ->
+      if param_used?(body, src, Enum.drop(params, i + 1)),
+        do: lines,
+        else: lines ++ ["_ = #{rn};"]
     end)
+  end
+
+  # A later parameter of the same source name hides this one for the whole body.
+  defp param_used?(body, name, later) do
+    shadowed? =
+      Enum.any?(later, fn
+        {n, _, _} -> n == name
+        {n, _} -> n == name
+      end)
+
+    not shadowed? and uses?(body, name)
   end
 
   defp mentions_alloc?(tm, st) do

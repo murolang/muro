@@ -135,7 +135,7 @@ defmodule Muro.Emit.Rust do
         {acc ++ [{pname, rn, lay}], used}
       end)
 
-    env = Enum.map(params, fn {src, rn, lay} -> {src, rn, lay} end)
+    env = Enum.reduce(params, [], fn {src, rn, lay}, env -> [{src, rn, lay} | env] end)
     st = Map.merge(st0, %{n: 0, used: used})
 
     with {:ok, {lines, expr, lay, _st}} <- emit_tm(fun.body, env, st) do
