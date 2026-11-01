@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.2
+## 0.20.4
 
 A `temporal` declaration states `always`, `eventually`, or `leads_to` of one buffered meeting. The meeting stays its own entry. The declaration is evidence, the emitters skip it, and `--fuel` does not change its verdict. `mix muro.check` prints `temporal <name>: holds in <n> reachable states` after the version line. A book with no temporal declaration prints what it printed before.
 
@@ -12,7 +12,7 @@ The formula is decided on the configurations reachable from the start. `Decide.c
 
 ### Package
 
-- Version 0.20.2.
+- Version 0.20.4.
 
 ## 0.20.1
 

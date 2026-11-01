@@ -29,7 +29,7 @@ cd muro
 mise install
 mix deps.get
 mix archive.build
-mix archive.install muro-0.20.2.ez
+mix archive.install muro-0.20.4.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -43,7 +43,7 @@ mix archive.install github murolang/muro
 A project that does not have Elixir installs the self-contained executable. It carries its own Erlang runtime:
 
 ```
-mise use -g github:murolang/muro@0.20.2
+mise use -g github:murolang/muro@0.20.4
 muro --version
 muro check path.muro
 ```
@@ -121,7 +121,7 @@ mix muro.check examples/plus.muro
 On success the shell prints the version that checked the book, then:
 
 ```
-Muro v0.20.2
+Muro v0.20.4
 All terms check. Evidence never becomes a run.
 ```
 
