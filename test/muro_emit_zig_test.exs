@@ -670,6 +670,41 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "a Nat match on an alias reveals the pointer" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "alias_match.muro"), """
+    def R : spec Type := Nat
+
+    def pred : run Π (r : R) → R :=
+      λ (r : R) →
+        match r motive (λ _ → R)
+          | 0 => 0
+          | suc p => p
+
+    def one : run R := pred (suc (suc 0))
+    """)
+
+    emit_zig!(dir, "alias_match")
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("alias_match.zig");
+
+    test "alias match" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const one = m.muro_reveal(m.Nat, try m.one(a));
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(one));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   defp emit_zig!(dir, name) do
     path = Path.join(dir, "#{name}.muro")
     out = capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "zig"]) end)

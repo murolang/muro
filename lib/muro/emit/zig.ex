@@ -500,8 +500,10 @@ defmodule Muro.Emit.Zig do
   defp emit_tm({:match, scrut, arms}, env, st) do
     with {:ok, {lines, ex, lay, eff, st}} <- emit_tm(scrut, env, st) do
       {lines, ex, st} = as_name(lines, ex, eff, st)
+      kind = match_kind(lay, arms, st.book)
+      ex = shown_scrut(ex, lay, kind, st)
 
-      with {:ok, expr, rlay, st} <- emit_match(lay, ex, arms, env, st) do
+      with {:ok, expr, rlay, st} <- emit_match(scrut_lay(kind), ex, arms, env, st) do
         {:ok, {lines, expr, rlay, :pure, st}}
       end
     end
@@ -607,6 +609,55 @@ defmodule Muro.Emit.Zig do
   end
 
   defp emit_match(_lay, _ex, _arms, _env, _st), do: {:error, "c:unsupported"}
+
+  # An alias is :opaque. The arms still say Nat, Atom, or a data type,
+  # the same way the C emitter's match_kind does. Reveal before the switch.
+  defp match_kind(:nat, _arms, _book), do: :nat
+  defp match_kind({:data, "Atom"}, _arms, _book), do: :atom
+  defp match_kind({:data, name}, _arms, _book), do: {:data, name}
+  defp match_kind(_lay, [{:arm, "zero", [], _}, {:arm, "suc", [_], _}], _book), do: :nat
+
+  defp match_kind(_lay, arms, book) do
+    cond do
+      atom_arms?(arms, book) -> :atom
+      name = ctor_data(arms, book) -> {:data, name}
+      true -> :unknown
+    end
+  end
+
+  defp atom_arms?(arms, book) do
+    atoms = Ast.atoms(book)
+
+    atoms != [] and
+      Enum.all?(arms, fn
+        {:arm, name, [], _} -> name in atoms
+        _ -> false
+      end)
+  end
+
+  defp ctor_data([{:arm, cname, _, _} | _], book) do
+    case data_of_ctor(book, cname) do
+      %{name: name} -> name
+      _ -> nil
+    end
+  end
+
+  defp ctor_data(_, _), do: nil
+
+  defp data_of_ctor(book, name) do
+    Enum.find(book, fn
+      %{kind: :data, ctors: cs} -> Enum.any?(cs, &(&1.name == name))
+      _ -> false
+    end)
+  end
+
+  defp scrut_lay(:nat), do: :nat
+  defp scrut_lay(:atom), do: {:data, "Atom"}
+  defp scrut_lay({:data, _} = lay), do: lay
+  defp scrut_lay(:unknown), do: :unknown
+
+  defp shown_scrut(ex, _lay, :unknown, _st), do: ex
+  defp shown_scrut(ex, lay, kind, st), do: coerce(ex, lay, scrut_lay(kind), st)
 
   defp suc_pattern(y, body, env, st) do
     if uses?(body, y) do

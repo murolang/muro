@@ -379,6 +379,38 @@ defmodule Muro.EmitRustTest do
     assert out == "0 1 0 1\n"
   end
 
+  test "a Nat match on an alias reveals the pointer" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "alias_match.muro"), """
+    def R : spec Type := Nat
+
+    def pred : run Π (r : R) → R :=
+      λ (r : R) →
+        match r motive (λ _ → R)
+          | 0 => 0
+          | suc p => p
+
+    def one : run R := pred (suc (suc 0))
+    """)
+
+    emit_rust!(dir, "alias_match")
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            let n = alias_match::muro_to_u64(&alias_match::muro_reveal(alias_match::one()));
+            println!("{n}");
+        }
+        """,
+        ["alias_match"]
+      )
+
+    assert out == "1\n"
+  end
+
   test "run internal is private and the examples that C accepts compile" do
     dir = tmp_dir()
     File.cp!("examples/internal_ok.muro", Path.join(dir, "internal_ok.muro"))

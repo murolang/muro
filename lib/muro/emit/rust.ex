@@ -330,9 +330,13 @@ defmodule Muro.Emit.Rust do
   end
 
   defp emit_tm({:match, scrut, arms}, env, st) do
-    with {:ok, {lines, ex, lay, st}} <- emit_tm(scrut, env, st),
-         {:ok, expr, rlay, st} <- emit_match(lay, ex, arms, env, st) do
-      {:ok, {lines, expr, rlay, st}}
+    with {:ok, {lines, ex, lay, st}} <- emit_tm(scrut, env, st) do
+      kind = match_kind(lay, arms, st.book)
+      ex = shown_scrut(ex, lay, kind, st)
+
+      with {:ok, expr, rlay, st} <- emit_match(scrut_lay(kind), ex, arms, env, st) do
+        {:ok, {lines, expr, rlay, st}}
+      end
     end
   end
 
@@ -425,6 +429,55 @@ defmodule Muro.Emit.Rust do
   end
 
   defp emit_match(_lay, _ex, _arms, _env, _st), do: {:error, "c:unsupported"}
+
+  # An alias is Erased. The arms still say Nat, Atom, or a data type,
+  # the same way the C emitter's match_kind does. Reveal before the match.
+  defp match_kind(:nat, _arms, _book), do: :nat
+  defp match_kind({:data, "Atom"}, _arms, _book), do: :atom
+  defp match_kind({:data, name}, _arms, _book), do: {:data, name}
+  defp match_kind(_lay, [{:arm, "zero", [], _}, {:arm, "suc", [_], _}], _book), do: :nat
+
+  defp match_kind(_lay, arms, book) do
+    cond do
+      atom_arms?(arms, book) -> :atom
+      name = ctor_data(arms, book) -> {:data, name}
+      true -> :unknown
+    end
+  end
+
+  defp atom_arms?(arms, book) do
+    atoms = Ast.atoms(book)
+
+    atoms != [] and
+      Enum.all?(arms, fn
+        {:arm, name, [], _} -> name in atoms
+        _ -> false
+      end)
+  end
+
+  defp ctor_data([{:arm, cname, _, _} | _], book) do
+    case data_of_ctor(book, cname) do
+      %{name: name} -> name
+      _ -> nil
+    end
+  end
+
+  defp ctor_data(_, _), do: nil
+
+  defp data_of_ctor(book, name) do
+    Enum.find(book, fn
+      %{kind: :data, ctors: cs} -> Enum.any?(cs, &(&1.name == name))
+      _ -> false
+    end)
+  end
+
+  defp scrut_lay(:nat), do: :nat
+  defp scrut_lay(:atom), do: {:data, "Atom"}
+  defp scrut_lay({:data, _} = lay), do: lay
+  defp scrut_lay(:unknown), do: :unknown
+
+  defp shown_scrut(ex, _lay, :unknown, _st), do: ex
+  defp shown_scrut(ex, lay, kind, st), do: coerce(ex, lay, scrut_lay(kind), st)
 
   defp arm_expr(body, env, st) do
     with {:ok, {lines, expr, lay, st}} <- emit_tm(body, env, st) do
