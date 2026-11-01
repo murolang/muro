@@ -98,7 +98,7 @@ The entry builds the tagged struct and reads it back. An argument that is not a 
 
 `--backend zig` writes `<name>.zig` next to the file and prints that path. It prints the same closed run as the C backend. `run internal` is a private function. `Nat` and user data are tagged unions. A fieldless constructor is one static value. `match` is `switch`. A stream is a seed, an environment, and a step. A lambda applied on the spot is a local. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. A term the C backend refuses is refused here, with the same reason.
 
-A function that allocates takes `allocator: std.mem.Allocator` first and returns an error union. The caller can pass an `std.heap.ArenaAllocator` and reset it. `muro_from_u64` builds a `Nat`. `muro_to_u64` reads one back. A Zig keyword, a primitive type name, `std`, or a name of this runtime is prefixed with `muro_`. A spelling that is already taken gains a numeric suffix. A generated stream step is `muro_step_` plus its number. A source name of that form is prefixed instead, so it cannot take the step.
+A function that allocates takes `allocator: std.mem.Allocator` first and returns an error union. The caller can pass an `std.heap.ArenaAllocator` and reset it. `muro_from_u64` builds a `Nat`. `muro_to_u64` reads one back. A Zig keyword, a primitive type name, `std`, or a name of this runtime is prefixed with `muro_`. A spelling that is already taken gains a numeric suffix. A generated stream step is `muro_step_` plus its number. A source name of that form is prefixed instead, so it cannot take the step. A binder hidden by a later binder in the same pattern is discarded.
 
 The text is Zig 0.15. `zig` translates it. The proof stops at the run image.
 

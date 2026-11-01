@@ -543,6 +543,54 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "a constructor binder hidden by a later one is discarded" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "shadow_ctor.muro"), """
+    data Pair : Type where
+      mkPair : Nat → Nat → Pair
+
+    data Triple : Type where
+      mk3 : Nat → Nat → Nat → Triple
+
+    def p : run Pair := mkPair 0 (suc 0)
+    def t : run Triple := mk3 0 (suc 0) (suc (suc 0))
+
+    def second : run Nat :=
+      match p motive (λ _ → Nat)
+        | mkPair x x => x
+
+    def last : run Nat :=
+      match t motive (λ _ → Nat)
+        | mk3 x x x => x
+
+    def middle : run Nat :=
+      match t motive (λ _ → Nat)
+        | mk3 x y x => y
+    """)
+
+    emit_zig!(dir, "shadow_ctor")
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("shadow_ctor.zig");
+
+    test "shadowed constructor" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(try m.second(a)));
+        try std.testing.expectEqual(@as(u64, 2), m.muro_to_u64(try m.last(a)));
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(try m.middle(a)));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   zig_test "a shadowed parameter resolves to the inner binding" do
     dir = tmp_dir()
 

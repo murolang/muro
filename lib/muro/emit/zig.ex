@@ -618,7 +618,7 @@ defmodule Muro.Emit.Zig do
   defp shown_scrut(ex, lay, kind, st), do: coerce(ex, lay, scrut_lay(kind), st)
 
   defp suc_pattern(y, body, env, st) do
-    if uses?(body, y) do
+    if binder_used?(body, y, []) do
       {rn, st} = local(st, zig_base(y))
       {:ok, ".suc => |#{rn}| ", [], [{y, rn, :nat} | env], st}
     else
@@ -631,7 +631,7 @@ defmodule Muro.Emit.Zig do
   end
 
   defp arm_pattern(variant, [lay], [bname], body, env, st) do
-    if uses?(body, bname) do
+    if binder_used?(body, bname, []) do
       {rn, st} = local(st, zig_base(bname))
       {".#{variant} => |#{rn}| ", [], [{bname, rn, lay} | env], st}
     else
@@ -640,7 +640,10 @@ defmodule Muro.Emit.Zig do
   end
 
   defp arm_pattern(variant, fields, binders, body, env, st) do
-    used? = Enum.map(binders, &uses?(body, &1))
+    used? =
+      Enum.with_index(binders, fn bname, i ->
+        binder_used?(body, bname, Enum.drop(binders, i + 1))
+      end)
 
     if Enum.any?(used?) do
       {pay, st} = local(st, "muro_p")
