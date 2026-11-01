@@ -761,6 +761,11 @@ defmodule Muro.Emit do
   Any other spelling is itself. `Name.encode/1` writes no underscore, so
   the prefix splits in one place. `elixir_source(elixir_base(name))` and
   `elixir_source(elixir_atom_name(name))` are `{:ok, name}`.
+
+  This is the spelling inverse, not a lookup among one declaration's
+  constructors. `elixir_source("muro__iszdon")` is `{:ok, "is-on"}` even
+  when a constructor is named `muro__iszdon`. `source_ctor/2` is that
+  lookup, and it is the only place a host label becomes a constructor.
   """
   def elixir_source("muro__" <> rest), do: Name.decode(rest)
   def elixir_source(spelling) when is_binary(spelling), do: {:ok, spelling}
@@ -770,8 +775,10 @@ defmodule Muro.Emit do
 
   `names` are the source constructors of one declaration. A label equal
   to `elixir_atom_name/1` of one of them is that constructor. A label
-  that is itself one of those names is that constructor: the wire
-  spelling. When both apply, the spelling match wins.
+  that is itself one of those names is that constructor. When both
+  apply, the host atom wins: the label `muro__iszdon` is `is-on` when
+  that declaration has both. The decoded name is the source constructor.
+  Callers do not decode it again.
   """
   def source_ctor(names, label) when is_binary(label) do
     set = if is_struct(names, MapSet), do: names, else: MapSet.new(names)

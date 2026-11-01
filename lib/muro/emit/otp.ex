@@ -456,9 +456,44 @@ defmodule Muro.Emit.Otp do
 
       defp open_pick(arm, _expected, _fields), do: {:ok, arm, []}
 
-      # A named arm is that constructor. A positional arm is the
-      # declaration order of the value's tag, or `b0` then `b1`.
+      # A named split names its own constructors. The host label is
+      # decoded once against those names. A positional split does not
+      # name a declaration, so it keeps the arity fallback.
       defp pick_split(value, arms) do
+        if named_arms(arms) do
+          pick_named(value, arms)
+        else
+          pick_positional_split(value, arms)
+        end
+      end
+
+      defp named_arms([{:arm, ctor, _, _} | rest]) when is_binary(ctor), do: named_arms(rest)
+      defp named_arms([]), do: true
+      defp named_arms(_), do: false
+
+      defp pick_named(value, arms) do
+        names = for {:arm, ctor, _, _} <- arms, do: ctor
+        fields = fields_of_runtime(value)
+
+        case raw_tag(value) do
+          raw when is_binary(raw) ->
+            case Muro.Emit.source_ctor(names, raw) do
+              {:ok, tag} ->
+                case named_index(arms, tag, 0) do
+                  i when is_integer(i) -> open_pick(Enum.at(arms, i), tag, fields)
+                  _ -> :error
+                end
+
+              :error ->
+                :error
+            end
+
+          _ ->
+            :error
+        end
+      end
+
+      defp pick_positional_split(value, arms) do
         tag = split_tag(value, length(arms))
         fields = fields_of_runtime(value)
 
@@ -507,8 +542,9 @@ defmodule Muro.Emit.Otp do
         end)
       end
 
-      # The declaration is not named on a nested split. Each declaration
-      # resolves the host label on its own constructors.
+      # Positional fallback only. A named split does not reach this.
+      # The declaration is not named, so the host label is resolved
+      # against each declaration of this constructor count.
       defp split_tag(value, n) do
         raw = raw_tag(value)
 
@@ -595,6 +631,7 @@ defmodule Muro.Emit.Otp do
 
       defp run_book, do: #{inspect(fragment, limit: :infinity, charlists: :as_lists)}
 
+      # One decode of the host atom against this declaration's constructors.
       defp ctor_source(ctors, tag) when is_atom(tag) do
         names = if is_map(ctors), do: Map.keys(ctors), else: []
 

@@ -5306,8 +5306,8 @@ defmodule Muro.Session do
 
   defp read_pay(_, _, _), do: :error
 
-  # The host label is the emitted atom or the wire source name. The
-  # selected declaration's constructors are the only table.
+  # One decode of the host label, against this declaration only.
+  # The result is the source constructor. Callers do not decode it again.
   defp read_tag(d, label) when is_binary(label) do
     case decl_templates(d) do
       {:ok, {_name, %{ctors: ctors}}} ->
