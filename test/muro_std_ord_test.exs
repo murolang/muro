@@ -29,18 +29,19 @@ defmodule Muro.StdOrdTest do
     refute source =~ "lex_step(compare("
     assert source =~ ":eq -> compare("
     [{^mod, _bin}] = Code.compile_string(source)
+    lex = String.to_atom(Muro.Emit.elixir_base("lex-tag"))
 
-    assert apply(mod, :lex_tag, [n(0), n(0), n(0), n(0)]) == n(1)
-    assert apply(mod, :lex_tag, [n(0), n(1), n(0), n(0)]) == n(2)
-    assert apply(mod, :lex_tag, [n(0), n(0), n(0), n(1)]) == n(0)
-    assert apply(mod, :lex_tag, [n(1), n(0), n(0), n(5)]) == n(2)
-    assert apply(mod, :lex_tag, [n(2), n(0), n(2), n(1)]) == n(0)
-    assert apply(mod, :lex_tag, [n(2), n(1), n(2), n(1)]) == n(1)
+    assert apply(mod, lex, [n(0), n(0), n(0), n(0)]) == n(1)
+    assert apply(mod, lex, [n(0), n(1), n(0), n(0)]) == n(2)
+    assert apply(mod, lex, [n(0), n(0), n(0), n(1)]) == n(0)
+    assert apply(mod, lex, [n(1), n(0), n(0), n(5)]) == n(2)
+    assert apply(mod, lex, [n(2), n(0), n(2), n(1)]) == n(0)
+    assert apply(mod, lex, [n(2), n(1), n(2), n(1)]) == n(1)
 
     left = n(@elixir_huge)
     right = n(@elixir_huge)
     before = reductions()
-    {us, tag} = :timer.tc(fn -> apply(mod, :lex_tag, [n(0), left, n(1), right]) end)
+    {us, tag} = :timer.tc(fn -> apply(mod, lex, [n(0), left, n(1), right]) end)
     spent = reductions() - before
     assert tag == n(0)
     assert us < @fast_us, "elixir walked the tails in #{us} us"

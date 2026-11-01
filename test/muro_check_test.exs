@@ -155,7 +155,7 @@ defmodule Muro.CheckTest do
     assert call("HigherOrder", :add2, []) ==
              {:cons, {:suc, {:suc, 0}}, {:cons, {:suc, {:suc, {:suc, 0}}}, nil}}
 
-    assert call("HigherOrder", :len_one, []) == {:suc, 0}
+    assert call("HigherOrder", String.to_atom(Emit.elixir_base("len-one")), []) == {:suc, 0}
     assert call("HigherOrder", :adder, [{:suc, 0}, {:suc, 0}]) == {:suc, {:suc, 0}}
   end
 
@@ -623,7 +623,7 @@ defmodule Muro.CheckTest do
 
     out = Emit.emit_module(Muro.BisimEx, book)
     assert out =~ ~r/\bdef zeros\b/
-    assert out =~ ~r/\bdef zeros_\b/
+    assert out =~ ~r/\bdef #{Emit.elixir_base("zeros'")}\b/
     assert out =~ ~r/\bdef natsFrom\b/
     refute out =~ "zeros-bisim"
     refute out =~ "nats_tail_bisim"
@@ -2830,15 +2830,19 @@ defmodule Muro.CheckTest do
     assert take.("CshrlTwo", :episode, :start, 3) == [go: 1, go: 1, go: 1]
 
     load.("examples/cshrl/envs/binary_sacrifice.muro", "CshrlSac")
-    assert take.("CshrlSac", :episode, :start, 3) == [go_trap: 1, go_paradise: 0, go_paradise: 0]
+    trap = String.to_atom(Emit.elixir_atom_name("go-trap"))
+    paradise = String.to_atom(Emit.elixir_atom_name("go-paradise"))
+    successor = String.to_atom(Emit.elixir_base("successor-episode"))
 
-    assert take.("CshrlSac", :successor_episode, :start, 3) ==
-             [go_paradise: 0, go_paradise: 1, go_paradise: 1]
+    assert take.("CshrlSac", :episode, :start, 3) == [{trap, 1}, {paradise, 0}, {paradise, 0}]
+
+    assert take.("CshrlSac", successor, :start, 3) ==
+             [{paradise, 0}, {paradise, 1}, {paradise, 1}]
 
     load.("examples/cshrl/envs/skill_investment.muro", "CshrlSkill")
     assert take.("CshrlSkill", :episode, :novice, 3) == [work: 1, work: 1, work: 1]
 
-    assert take.("CshrlSkill", :successor_episode, :novice, 5) ==
+    assert take.("CshrlSkill", successor, :novice, 5) ==
              [train: 0, train: 0, train: 0, work: 5, work: 5]
 
     assert call("CshrlSkill", :value, [:novice]) |> Enum.take(5) |> Enum.map(&nat.(nat, &1)) ==
