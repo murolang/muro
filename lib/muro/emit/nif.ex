@@ -7,9 +7,9 @@ defmodule Muro.Emit.Nif do
   reuses it. `elixir_make` runs the makefile. A run that is not that shape
   stays in the C file and is not an entry. `run internal` is not an entry.
 
-  The C symbol is internal. The Elixir function is the source name, spelled
-  with `Muro.Emit.elixir_base/1` and then claimed. The loader `muro_nif_load`
-  is claimed first. The stub calls the C symbol.
+  The C symbol is internal. The Elixir function is `sig.elixir`, the name
+  `Muro.Emit.elixir_names/1` claimed for every run before this filter.
+  The loader `muro_nif_load` is in that taken set. The stub calls the C symbol.
   """
 
   alias Muro.Emit.Name
@@ -36,7 +36,7 @@ defmodule Muro.Emit.Nif do
 
       exports ->
         require_elixir_make!(available?)
-        entries = elixir_names(exports)
+        entries = Enum.map(exports, fn sig -> {sig, Map.fetch!(sig, :elixir)} end)
         File.write!(Path.join(dir, stem <> "_nif.h"), header(stem))
         File.write!(Path.join(dir, stem <> "_nif.c"), source(stem, entries))
         File.write!(Path.join(dir, stem <> ".mk"), makefile(stem))
@@ -98,20 +98,6 @@ defmodule Muro.Emit.Nif do
   end
 
   defp nat_export?(_), do: false
-
-  defp elixir_names(exports) do
-    # The loader occupies this name. A Nat run that would spell the same takes a suffix.
-    {rev, _} =
-      Enum.reduce(exports, {[], MapSet.new(["muro_nif_load"])}, fn sig, {acc, used} ->
-        {name, used} = claim(Muro.Emit.elixir_base(sig.source), used)
-        {[{sig, name} | acc], used}
-      end)
-
-    Enum.reverse(rev)
-  end
-
-  # The numeric tail is `Name.claim/2`. The spelling is the source name.
-  defp claim(base, used), do: Name.claim(base, used)
 
   defp module_name(stem) do
     stem

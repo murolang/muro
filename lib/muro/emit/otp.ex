@@ -31,6 +31,7 @@ defmodule Muro.Emit.Otp do
   derivation. `run` is not emitted here.
   """
 
+  alias Muro.Emit.Name
   alias Muro.Session
 
   @doc """
@@ -42,19 +43,20 @@ defmodule Muro.Emit.Otp do
     mods = modules(book)
     meets = meetings(book)
     fragment = Session.run_fragment(book, run_names_in(mods, meets))
-    {:ok, source(parent, mods, Session.payload_decls(book), fragment) |> with_meetings(meets)}
+    decls = Session.payload_decls(book)
+
+    {:ok,
+     source(parent, mods, decls, fragment, host_clauses(book), ctor_atom_map(decls))
+     |> with_meetings(meets)}
   end
 
   defp modules(book) do
-    {mods, _} =
-      book
-      |> Enum.filter(&process?/1)
-      |> Enum.reduce({[], MapSet.new()}, fn %{name: name, proc: proc}, {acc, used} ->
-        {mod, used} = claim(camel(name), used)
-        {[{mod, Session.carry(proc, book)} | acc], used}
-      end)
+    procs = Enum.filter(book, &process?/1)
+    aliases = Muro.Emit.elixir_modules(Enum.map(procs, & &1.name))
 
-    Enum.reverse(mods)
+    Enum.map(procs, fn %{name: name, proc: proc} ->
+      {Map.fetch!(aliases, name), Session.carry(proc, book)}
+    end)
   end
 
   defp process?(%{kind: :conform, proc: proc}) when not is_nil(proc), do: true
@@ -64,12 +66,14 @@ defmodule Muro.Emit.Otp do
   # A meeting names the peer. Both processes exist before either is told
   # to go, and each is monitored by the other from that moment.
   defp meetings(book) do
+    # These are arity 0 in the same module as a meeting.
+    taken0 = MapSet.new(["data_decls", "run_book"])
+
     {funs, _} =
       book
       |> Enum.filter(&match?(%{kind: :meet}, &1))
-      |> Enum.reduce({[], MapSet.new()}, fn %{name: name, left: left, right: right},
-                                            {acc, used} ->
-        {fname, used} = claim(fun_base(name), used)
+      |> Enum.reduce({[], taken0}, fn %{name: name, left: left, right: right}, {acc, used} ->
+        {fname, used} = Name.claim(Muro.Emit.elixir_base(name), used)
         {[{fname, skel_of(book, left), skel_of(book, right)} | acc], used}
       end)
 
@@ -88,17 +92,6 @@ defmodule Muro.Emit.Otp do
       end)
 
     Session.carry(proc, book)
-  end
-
-  # `end`, `do`, and the other reserved words are not function names.
-  defp fun_base(name) do
-    base = String.replace(name, "-", "_")
-
-    if base in ~w(end do else catch rescue after fn when and or not in) do
-      "muro_#{base}"
-    else
-      base
-    end
   end
 
   defp with_meetings(src, []), do: src
@@ -209,7 +202,31 @@ defmodule Muro.Emit.Otp do
   defp run_names(map) when is_map(map), do: map |> Map.values() |> Enum.flat_map(&run_names/1)
   defp run_names(_), do: []
 
-  defp source(parent, mods, decls, fragment) do
+  defp host_clauses(book) do
+    names = Muro.Emit.elixir_names(book)
+
+    clauses =
+      Enum.map(Muro.Emit.run_defs(book), fn %{name: name} ->
+        host = Map.fetch!(names, name)
+        ~s|defp muro_host(#{inspect(name)}), do: #{inspect(String.to_atom(host))}|
+      end)
+
+    Enum.join(clauses ++ ["defp muro_host(_name), do: nil"], "\n")
+  end
+
+  # Mapped atom string → source constructor. Identity spellings are omitted.
+  defp ctor_atom_map(decls) do
+    decls
+    |> Map.values()
+    |> Enum.flat_map(fn %{ctors: ctors} -> Map.keys(ctors) end)
+    |> Enum.flat_map(fn name ->
+      mapped = Muro.Emit.elixir_atom_name(name)
+      if mapped == name, do: [], else: [{mapped, name}]
+    end)
+    |> Map.new()
+  end
+
+  defp source(parent, mods, decls, fragment, hosts, ctor_atoms) do
     children = Enum.map_join(mods, "\n\n", &child(parent, &1))
 
     """
@@ -506,11 +523,11 @@ defmodule Muro.Emit.Otp do
 
       defp fields_of_runtime(_), do: []
 
-      defp tag_of(value) when is_atom(value), do: Atom.to_string(value)
+      defp tag_of(value) when is_atom(value), do: ctor_source(value)
 
       defp tag_of(value) when is_tuple(value) and tuple_size(value) >= 1 do
         tag = elem(value, 0)
-        if is_atom(tag), do: Atom.to_string(tag), else: ""
+        if is_atom(tag), do: ctor_source(tag), else: ""
       end
 
       defp tag_of(_), do: ""
@@ -551,8 +568,14 @@ defmodule Muro.Emit.Otp do
 
       defp run_book, do: #{inspect(fragment, limit: :infinity, charlists: :as_lists)}
 
+      defp ctor_atoms, do: #{inspect(ctor_atoms, limit: :infinity)}
+
+      defp ctor_source(tag) when is_atom(tag) do
+        Map.get(ctor_atoms(), Atom.to_string(tag), Atom.to_string(tag))
+      end
+
       defp dat_payload?(ctors, _dname, _args, value) when is_atom(value) do
-        case Map.get(ctors, Atom.to_string(value)) do
+        case Map.get(ctors, ctor_source(value)) do
           [] -> true
           _ -> false
         end
@@ -562,7 +585,7 @@ defmodule Muro.Emit.Otp do
         [tag | fields] = Tuple.to_list(value)
 
         if is_atom(tag) do
-          case Map.get(ctors, Atom.to_string(tag)) do
+          case Map.get(ctors, ctor_source(tag)) do
             tmpl when is_list(tmpl) and length(tmpl) == length(fields) ->
               Enum.zip(tmpl, fields)
               |> Enum.all?(fn {field, got} -> payload?(inst_pay(field, dname, args), got) end)
@@ -644,6 +667,7 @@ defmodule Muro.Emit.Otp do
 
       defp substitute({:run, name, args}, bindings) when is_binary(name) and is_list(args) do
         args = Enum.map(args, &substitute(&1, bindings))
+        _ = muro_host(name)
         Muro.Session.eval_run(name, args, run_book())
       end
 
@@ -660,6 +684,8 @@ defmodule Muro.Emit.Otp do
       end
 
       defp substitute(value, _bindings), do: value
+
+    #{indent(hosts, 2)}
 
     #{indent(children, 2)}
     end
@@ -681,23 +707,6 @@ defmodule Muro.Emit.Otp do
     |> String.replace("-", "_")
     |> Macro.camelize()
     |> Kernel.<>("Otp")
-  end
-
-  defp camel(name) do
-    name
-    |> String.replace("-", "_")
-    |> Macro.camelize()
-  end
-
-  defp claim(base, used) do
-    name = if MapSet.member?(used, base), do: bump(base, 2, used), else: base
-    {name, MapSet.put(used, name)}
-  end
-
-  defp bump(base, i, used) do
-    name = "#{base}#{i}"
-
-    if MapSet.member?(used, name), do: bump(base, i + 1, used), else: name
   end
 
   defp indent(code, n) do

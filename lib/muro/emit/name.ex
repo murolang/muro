@@ -35,8 +35,8 @@ defmodule Muro.Emit.Name do
   the whole scope, then adds the chosen spelling. A caller does not
   pass a smaller set. `see/2` records a generated identifier that is
   already visible. The C, Rust, and Zig symbol stays in this module.
-  A host export, such as an Elixir NIF, is the source name, mapped by
-  that binding. It is not the symbol.
+  An Elixir host name is `Muro.Emit.elixir_base/1` of the source name.
+  It is not this spelling.
 
   `spell/3` then `claim/2` is injective on distinct source names. `encode/1`
   is injective, and `_k` sits outside its image, so `spell/3` is injective.

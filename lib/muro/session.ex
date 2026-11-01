@@ -670,10 +670,12 @@ defmodule Muro.Session do
 
   def runtime({:rep, {:var, name}, val}), do: {:rep, {:var, name}, runtime(val)}
 
-  def runtime({:con, name, []}) when is_binary(name), do: String.to_atom(name)
+  def runtime({:con, name, []}) when is_binary(name) do
+    String.to_atom(Muro.Emit.elixir_atom_name(name))
+  end
 
   def runtime({:con, name, args}) when is_binary(name) and is_list(args) do
-    List.to_tuple([String.to_atom(name) | Enum.map(args, &runtime/1)])
+    List.to_tuple([String.to_atom(Muro.Emit.elixir_atom_name(name)) | Enum.map(args, &runtime/1)])
   end
 
   @doc """

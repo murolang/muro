@@ -8,6 +8,31 @@ defmodule Muro.Emit.Fsm do
 
   alias Muro.{Ast, Emit, Session}
 
+  # Fixed functions of the interpreter. A run with one of these names takes
+  # a suffix in `Emit.elixir_names/1`, on every backend, because these
+  # clauses share the module with the private runs. `muro_fsm_done?` is
+  # absent: `elixir_base/1` never writes `?`.
+  @reserved ~w(
+    muro_fsm_act muro_fsm_arm muro_fsm_at muro_fsm_bound_desc muro_fsm_by_tag
+    muro_fsm_call muro_fsm_comm_dir muro_fsm_continue muro_fsm_dat muro_fsm_decls
+    muro_fsm_desc muro_fsm_dir_ty muro_fsm_duals muro_fsm_emit_dat
+    muro_fsm_emit_fields muro_fsm_emit_list muro_fsm_emit_rec muro_fsm_end
+    muro_fsm_ends muro_fsm_enter muro_fsm_evidence muro_fsm_expect
+    muro_fsm_expect_ty muro_fsm_expected muro_fsm_expose muro_fsm_from_emitted
+    muro_fsm_from_host muro_fsm_host muro_fsm_host_dat muro_fsm_host_fields
+    muro_fsm_host_list muro_fsm_host_rec muro_fsm_index muro_fsm_init
+    muro_fsm_inst muro_fsm_ix muro_fsm_nat_args muro_fsm_nats muro_fsm_open
+    muro_fsm_pack muro_fsm_payload muro_fsm_payload_step muro_fsm_peano
+    muro_fsm_pick muro_fsm_prep muro_fsm_quiet muro_fsm_reprs muro_fsm_result_tag
+    muro_fsm_safe_to_source muro_fsm_select muro_fsm_source_to_safe muro_fsm_step
+    muro_fsm_subst muro_fsm_subst_ix muro_fsm_tag muro_fsm_take muro_fsm_templates
+    muro_fsm_to_emitted muro_fsm_trace muro_fsm_unemit muro_fsm_unemit_list
+    muro_fsm_unemit_rec muro_fsm_vals muro_fsm_walk muro_fsm_wire_fields
+  )
+
+  @doc false
+  def reserved_funs, do: MapSet.new(@reserved)
+
   @doc """
   Elixir source for `module`, one child per session of `book`.
 
@@ -927,6 +952,8 @@ defmodule Muro.Emit.Fsm do
 
       #{indent(interpreter(module, st, names, reprs, duals), 2)}
 
+      #{indent(hosts(book), 2)}
+
       #{indent(children(module, st), 2)}
       end
       """
@@ -1070,6 +1097,8 @@ defmodule Muro.Emit.Fsm do
 
     @doc false
     def muro_fsm_init(key, args) do
+      _ = muro_fsm_host(key)
+
       case muro_fsm_nats(key, args) do
         :ok ->
           {params, proto} = Map.fetch!(muro_fsm_templates(), key)
@@ -2140,7 +2169,7 @@ defmodule Muro.Emit.Fsm do
     pairs =
       Enum.flat_map(decls, fn {_name, %{ctors: ctors}} ->
         Enum.flat_map(ctors, fn {ctor, _fields} ->
-          safe = ctor |> String.replace("-", "_") |> String.replace("'", "_")
+          safe = Emit.elixir_atom_name(ctor)
           if safe == ctor, do: [], else: [{ctor, safe}]
         end)
       end)
@@ -2151,12 +2180,18 @@ defmodule Muro.Emit.Fsm do
     }
   end
 
-  defp snake(name) do
-    name
-    |> String.replace("-", "_")
-    |> String.replace("'", "_")
-    |> String.replace(~r/([a-z0-9])([A-Z])/, "\\1_\\2")
-    |> String.downcase()
+  defp snake(name), do: Muro.Repr.snake_ident(name)
+
+  defp hosts(book) do
+    names = Emit.elixir_names(book)
+
+    clauses =
+      Enum.map(Emit.run_defs(book), fn %{name: name} ->
+        host = Map.fetch!(names, name)
+        "defp muro_fsm_host(#{inspect(name)}), do: #{inspect(String.to_atom(host))}"
+      end)
+
+    Enum.join(clauses ++ ["defp muro_fsm_host(_name), do: nil"], "\n")
   end
 
   defp lit(term) do
@@ -2165,13 +2200,13 @@ defmodule Muro.Emit.Fsm do
 
   defp children(module, st) do
     parent = inspect(module)
+    aliases = Emit.elixir_modules(Enum.map(st.sessions, & &1.name))
 
-    {mods, _} =
-      Enum.reduce(st.sessions, {[], MapSet.new()}, fn sess, {acc, used} ->
-        base = sess.name |> String.replace("-", "_") |> Macro.camelize()
-        {camel, used} = claim(base, used)
+    mods =
+      Enum.map(st.sessions, fn sess ->
+        camel = Map.fetch!(aliases, sess.name)
         entry = Map.fetch!(st.opened, sess.name)
-        {acc ++ [child(parent, camel, sess.name, entry.params)], used}
+        child(parent, camel, sess.name, entry.params)
       end)
 
     Enum.join(mods, "\n\n")
@@ -2262,16 +2297,6 @@ defmodule Muro.Emit.Fsm do
       end
     end
     """
-  end
-
-  defp claim(base, used) do
-    name = if MapSet.member?(used, base), do: bump(base, 2, used), else: base
-    {name, MapSet.put(used, name)}
-  end
-
-  defp bump(base, i, used) do
-    name = "#{base}#{i}"
-    if MapSet.member?(used, name), do: bump(base, i + 1, used), else: name
   end
 
   defp indent(code, n) do

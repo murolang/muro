@@ -1583,8 +1583,10 @@ defmodule Muro.ReprTest do
          {:binding, {:named, 0}, {:cons, {:entry, {:named, {:suc, 0}}, {:just, false}}, nil}},
          nil}}}
 
-    assert mod.reads_off(expected) == off
-    assert mod.count_entries(expected) == {:suc, {:suc, 0}}
+    reads_off = String.to_atom(Emit.elixir_base("reads-off"))
+    count_entries = String.to_atom(Emit.elixir_base("count-entries"))
+    assert apply(mod, reads_off, [expected]) == off
+    assert apply(mod, count_entries, [expected]) == {:suc, {:suc, 0}}
 
     assert mod.encode_template(off, table) == %{
              "*" => [%{"relation" => "*", "read" => false}],
@@ -2067,8 +2069,8 @@ defmodule Muro.ReprTest do
 
   defp names_example do
     assert {:ok, source} = Muro.emit_file("examples/repr_names.muro", HostReprNames)
-    assert source =~ "def reads_off("
-    assert source =~ "def count_entries("
+    assert source =~ "def #{Emit.elixir_base("reads-off")}("
+    assert source =~ "def #{Emit.elixir_base("count-entries")}("
     assert source =~ "def muro_repr_table_new"
     assert source =~ "muro_repr_decode_interned"
     assert source =~ "muro_repr_map_of_decode"

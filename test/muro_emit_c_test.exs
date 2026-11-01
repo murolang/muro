@@ -102,26 +102,31 @@ defmodule Muro.EmitCTest do
     under = Muro.Emit.C.source_id("foo_bar")
     read = Muro.Emit.C.source_id("read")
 
+    bar = Muro.Emit.elixir_base("foo-bar")
+    conj = Muro.Emit.elixir_base("and")
+    assert ex =~ "def #{bar}, do:"
     assert ex =~ "def foo_bar, do:"
-    assert ex =~ "def foo_bar_2, do:"
     assert ex =~ "def answer, do:"
-    assert ex =~ "def muro_and, do:"
+    assert ex =~ "def #{conj}, do:"
     assert ex =~ "def read, do:"
+    refute ex =~ "def foo_bar_2"
+    refute ex =~ "def #{dash}"
     refute ex =~ "foozubar"
-    refute ex =~ "foozdbar"
     refute ex =~ "def and,"
 
     assert source =~ "#{dash}("
     assert source =~ "#{under}("
     assert source =~ "#{read}("
+    assert nif =~ ~s|"#{bar}", 0,|
     assert nif =~ ~s|"foo_bar", 0,|
-    assert nif =~ ~s|"foo_bar_2", 0,|
-    assert nif =~ ~s|"muro_and", 0,|
+    assert nif =~ ~s|"#{conj}", 0,|
     assert nif =~ ~s|"read", 0,|
     assert nif =~ "#{dash}("
     assert nif =~ "#{under}("
     assert nif =~ "#{read}("
+    refute nif =~ ~s|"foo_bar_2"|
     refute nif =~ ~s|"foozubar"|
+    refute nif =~ ~s|"#{dash}"|
     refute nif =~ ~s|"#{read}"|
 
     on_exit(fn ->
@@ -131,12 +136,13 @@ defmodule Muro.EmitCTest do
 
     Code.compile_file(Path.join(dir, "names.ex"))
     call = fn name -> apply(:"Elixir.Names", name, []) end
-    assert call.(:foo_bar) == 0
-    assert call.(:foo_bar_2) == 1
+    assert call.(String.to_atom(bar)) == 0
+    assert call.(:foo_bar) == 1
     assert call.(:answer) == 1
-    assert call.(:muro_and) == 2
+    assert call.(String.to_atom(conj)) == 2
     assert call.(:read) == 3
     assert_raise UndefinedFunctionError, fn -> call.(:foozubar) end
+    assert_raise UndefinedFunctionError, fn -> call.(:foo_bar_2) end
   end
 
   test "a run Stream compiles as a seed and a step, and Elixir still uses Stream.unfold" do

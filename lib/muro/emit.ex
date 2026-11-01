@@ -153,16 +153,41 @@ defmodule Muro.Emit do
   end
 
   @doc """
-  Source name to Elixir function name for every `run` definition,
-  using the same spelling and the same taken set as `emit_module/2`.
+  Source name to Elixir function name for every `run` definition.
+
+  The spelling is `elixir_base/1`. Every run is claimed, in book order,
+  before a backend drops internal or non-`Nat` runs. `taken` is the
+  host functions that share a module with those runs: the NIF loader,
+  the FSM interpreter, and `muro_nat_to_int` when a body calls `toI64`.
+  Elixir, NIF, OTP, FSM, and ExUnit all read this map.
   """
   def elixir_names(book) when is_list(book) do
     taken =
+      MapSet.new(["muro_nif_load"])
+      |> MapSet.union(Muro.Emit.Fsm.reserved_funs())
+
+    taken =
       if Enum.any?(run_defs(book), &term_has_toi64?(Map.get(&1, :body))),
-        do: MapSet.new(["muro_nat_to_int"]),
-        else: MapSet.new()
+        do: MapSet.put(taken, "muro_nat_to_int"),
+        else: taken
 
     def_names(book, &elixir_base/1, taken)
+  end
+
+  @doc """
+  Module alias of each source name, claimed in list order.
+
+  `Macro.camelize/1` is not injective (`a_1b` and `a1b` both become
+  `A1b`). The later name takes `_2`.
+  """
+  def elixir_modules(names) when is_list(names) do
+    {map, _} =
+      Enum.reduce(names, {%{}, MapSet.new()}, fn name, {map, used} ->
+        {mod, used} = Name.claim(elixir_alias(name), used)
+        {Map.put(map, name, mod), used}
+      end)
+
+    map
   end
 
   @doc """
@@ -493,18 +518,19 @@ defmodule Muro.Emit do
 
   defp emit_ctor(name, args, d, book, names) do
     xs = Enum.map(args, &emit_db(&1, d, book, names))
+    atom = elixir_atom(name)
 
     case xs do
-      [] -> ":#{safe(name)}"
-      _ -> "{:#{safe(name)}, #{Enum.join(xs, ", ")}}"
+      [] -> atom
+      _ -> "{#{atom}, #{Enum.join(xs, ", ")}}"
     end
   end
 
-  defp emit_ctor_pat(name, 0, _d, _body, _book), do: ":#{safe(name)}"
+  defp emit_ctor_pat(name, 0, _d, _body, _book), do: elixir_atom(name)
 
   defp emit_ctor_pat(name, ar, d, body, book) do
     vars = Enum.map(0..(ar - 1), fn i -> bound_name(body, ar - 1 - i, d + i, book) end)
-    "{:#{safe(name)}, #{Enum.join(vars, ", ")}}"
+    "{#{elixir_atom(name)}, #{Enum.join(vars, ", ")}}"
   end
 
   # A binder the emitted term never mentions is `_`, so eval does not warn.
@@ -691,22 +717,73 @@ defmodule Muro.Emit do
   defp spine({:app, f, a}, acc), do: spine(f, [a | acc])
   defp spine(h, acc), do: {h, acc}
 
-  defp elixir_atom(name) do
-    if String.match?(name, ~r/^[A-Za-z_][A-Za-z0-9_@]*$/),
-      do: ":#{name}",
-      else: ":#{inspect(name)}"
+  defp elixir_atom(name), do: ":" <> elixir_atom_name(name)
+
+  # Injective on binaries. A kept name matches `^[a-z_][A-Za-z0-9_]*$`,
+  # contains no `__`, and is not reserved, and it is returned unchanged.
+  # Every other name is `muro__` plus `Name.encode/1`. The two images are
+  # disjoint: a kept name has no `__`, and the escape contains `__` only
+  # as that prefix, because `encode/1` writes no underscore. `encode/1`
+  # is injective, so the escape is injective. The identity is injective
+  # on the kept set, and each source name takes exactly one branch. The
+  # result matches `^[a-z_][A-Za-z0-9_]*$`, so it is a function name.
+  # `?` and `!` are not kept: a claim suffix would follow them (`foo?_2`),
+  # which Elixir rejects. `foo_bar` is kept. `Bit` and `foo-bar` are not,
+  # so they do not fold onto `bit` and `foo_bar`.
+  @doc """
+  Injective Elixir function name of one source identifier.
+
+  `foo_bar`, `fromMaybe`, and `muro_and` stay themselves. An uppercase
+  first letter, a leading digit, `?` or `!`, a hyphen, a quote, Unicode,
+  a reserved word, or a name that already contains `__` becomes `muro__`
+  plus `Muro.Emit.Name.encode/1`.
+  """
+  def elixir_base(name) when is_binary(name) do
+    if kept_function?(name) and not MapSet.member?(@elixir_reserved, name) do
+      name
+    else
+      "muro__" <> Name.encode(name)
+    end
   end
 
-  defp safe(name) do
-    name
-    |> String.replace("-", "_")
-    |> String.replace("'", "_")
+  @doc """
+  Atom spelling of a source constructor or tag.
+
+  A valid unquoted atom with no `__` stays itself, so `:true`, `:Bit`,
+  `:just`, and `:nil` stay. Anything else uses `elixir_base/1`. That
+  image contains `__`, which a kept atom does not, so the two branches
+  are disjoint. A function still uses `elixir_base/1` only: the atom
+  `:and` and the function `muro__and` are different spellings.
+  """
+  def elixir_atom_name(name) when is_binary(name) do
+    if String.match?(name, ~r/^[A-Za-z_][A-Za-z0-9_]*[?!]?$/) and not String.contains?(name, "__") do
+      name
+    else
+      elixir_base(name)
+    end
   end
 
-  @doc false
-  def elixir_base(name) do
-    n = safe(name)
-    if MapSet.member?(@elixir_reserved, n), do: "muro_" <> n, else: n
+  @doc """
+  Module alias of one source name.
+
+  A snake name matching `^[a-z][a-z0-9]*(_[a-z0-9]+)*$` is camelized, so
+  `pong` is `Pong` and `foo_bar` is `FooBar`. Every other spelling is
+  `M` plus `elixir_base/1`. Camelizing an escape would collide:
+  `muro__and` and `muro_and` both become `MuroAnd`, and `_foo` becomes
+  `Foo`.
+  """
+  def elixir_alias(name) when is_binary(name) do
+    base = elixir_base(name)
+
+    if String.match?(base, ~r/^[a-z][a-z0-9]*(_[a-z0-9]+)*$/) do
+      Macro.camelize(base)
+    else
+      "M" <> base
+    end
+  end
+
+  defp kept_function?(name) do
+    String.match?(name, ~r/^[a-z_][A-Za-z0-9_]*$/) and not String.contains?(name, "__")
   end
 
   defp ename(names, name), do: Map.fetch!(names, name)

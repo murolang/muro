@@ -57,12 +57,12 @@ defmodule Muro.EmitFsmTest do
         path == "examples/meet.muro" ->
           assert mods["ping"] == Module.concat(parent, Ping)
           assert mods["back"] == Module.concat(parent, Back)
-          assert mods["grant-end"] == Module.concat(parent, GrantEnd)
+          assert mods["grant-end"] == Module.concat(parent, Emit.elixir_alias("grant-end"))
           assert byte_index(src, "defmodule Ping do") < byte_index(src, "defmodule Back do")
 
         path == "examples/indexed.muro" ->
           assert mods["route"] == Module.concat(parent, Route)
-          assert mods["echo-bit"] == Module.concat(parent, EchoBit)
+          assert mods["echo-bit"] == Module.concat(parent, Emit.elixir_alias("echo-bit"))
 
         true ->
           assert mods["loop"] == Module.concat(parent, Loop)
@@ -597,23 +597,17 @@ defmodule Muro.EmitFsmTest do
   end
 
   defp children(parent, book) do
-    book
-    |> Enum.filter(&(Map.get(&1, :kind) == :session))
-    |> Enum.reduce({%{}, MapSet.new()}, fn sess, {acc, used} ->
-      base = sess.name |> String.replace("-", "_") |> Macro.camelize()
-      camel = if MapSet.member?(used, base), do: bump(base, 2, used), else: base
-      {Map.put(acc, sess.name, Module.concat(parent, camel)), MapSet.put(used, camel)}
-    end)
-    |> elem(0)
+    names =
+      book
+      |> Enum.filter(&(Map.get(&1, :kind) == :session))
+      |> Enum.map(& &1.name)
+
+    names
+    |> Muro.Emit.elixir_modules()
+    |> Map.new(fn {name, camel} -> {name, Module.concat(parent, camel)} end)
   end
 
-  defp bump(base, i, used) do
-    name = "#{base}#{i}"
-    if MapSet.member?(used, name), do: bump(base, i + 1, used), else: name
-  end
-
-  defp child(parent, name),
-    do: Module.concat(parent, name |> String.replace("-", "_") |> Macro.camelize())
+  defp child(parent, name), do: Module.concat(parent, Muro.Emit.elixir_alias(name))
 
   defp byte_index(src, needle) do
     {pos, _} = :binary.match(src, needle)

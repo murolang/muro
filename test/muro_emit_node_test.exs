@@ -77,7 +77,7 @@ defmodule Muro.EmitNodeTest do
 
     assert {:ok, src} = Emit.Node.render(checked!(path), "twice", :a)
     assert String.contains?(src, "def cross_local_at_away(")
-    assert String.contains?(src, "def cross_local_at_away2(")
+    assert String.contains?(src, "def cross_local_at_away_2(")
     assert call_count(src) == 2
   end
 
@@ -129,8 +129,8 @@ defmodule Muro.EmitNodeTest do
     src = File.read!(file)
     assert String.contains?(src, "defmodule LocatedNode do")
     assert String.contains?(src, "def cross_local_at_away(timeout \\\\ 5000)")
-    assert String.contains?(src, "def cross_local_at_away2(")
-    assert String.contains?(src, "def cross_local_at_away3(")
+    assert String.contains?(src, "def cross_local_at_away_2(")
+    assert String.contains?(src, "def cross_local_at_away_3(")
     assert String.contains?(src, "dest = {:local, @node}")
     assert String.contains?(src, "GenServer.call(dest, {:muro_read, \"local\"}, timeout)")
     assert String.contains?(src, "The payload stays on the session.")
@@ -189,7 +189,7 @@ defmodule Muro.EmitNodeTest do
 
     assert {:ok, src} = Emit.Node.render(checked!(path), "both", :a)
     assert String.contains?(src, "def cross_local_at_away(")
-    assert String.contains?(src, "def cross_local_at_away2(")
+    assert String.contains?(src, "def cross_local_at_away_2(")
     assert call_count(src) == 2
   end
 
@@ -243,8 +243,8 @@ defmodule Muro.EmitNodeTest do
 
     {:ok, pid} = GenServer.start(ReadServer, nil, name: :local)
     assert apply(LocatedNode, :cross_local_at_away, [200]) == :ok
-    assert apply(LocatedNode, :cross_local_at_away2, [200]) == :ok
-    assert apply(LocatedNode, :cross_local_at_away3, [200]) == :ok
+    assert apply(LocatedNode, :cross_local_at_away_2, [200]) == :ok
+    assert apply(LocatedNode, :cross_local_at_away_3, [200]) == :ok
 
     ref = Process.monitor(pid)
     Process.exit(pid, :kill)

@@ -169,19 +169,7 @@ defmodule Muro.Repr do
     Enum.find(runs, fn {_src, em} -> MapSet.member?(names, em) end)
   end
 
-  defp run_names(book) do
-    taken =
-      if Enum.any?(book, fn d -> Map.get(d, :mode) == :run and has_toi64?(Map.get(d, :body)) end),
-        do: MapSet.new(["muro_nat_to_int"]),
-        else: MapSet.new()
-
-    Emit.def_names(book, &Emit.elixir_base/1, taken)
-  end
-
-  defp has_toi64?({:toi64, _}), do: true
-  defp has_toi64?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&has_toi64?/1)
-  defp has_toi64?(t) when is_list(t), do: Enum.any?(t, &has_toi64?/1)
-  defp has_toi64?(_), do: false
+  defp run_names(book), do: Emit.elixir_names(book)
 
   # -- compile ---------------------------------------------------------------
 
@@ -1507,20 +1495,30 @@ defmodule Muro.Repr do
 
   defp hd_field([ty | _]), do: ty
 
-  defp ctor_atom(name) do
-    name
-    |> String.replace("-", "_")
-    |> String.replace("'", "_")
-    |> String.to_atom()
+  defp ctor_atom(name), do: String.to_atom(Emit.elixir_atom_name(name))
+
+  # `Entry` stays `entry`, so `decode_entry` stays. Two types that still
+  # snake together keep colliding in `collide/4`. A suffix that would be
+  # an invalid function name, or that contains `__`, uses `elixir_base/1`.
+  @doc false
+  def snake_ident(name) when is_binary(name) do
+    raw =
+      name
+      |> String.replace("-", "_")
+      |> String.replace("'", "_")
+      |> String.replace(~r/([a-z0-9])([A-Z])/, "\\1_\\2")
+      |> String.downcase()
+
+    fun = "decode_" <> raw
+
+    if String.match?(fun, ~r/^[a-z_][A-Za-z0-9_]*$/) and not String.contains?(fun, "__") do
+      raw
+    else
+      Emit.elixir_base(name)
+    end
   end
 
-  defp snake(name) do
-    name
-    |> String.replace("-", "_")
-    |> String.replace("'", "_")
-    |> String.replace(~r/([a-z0-9])([A-Z])/, "\\1_\\2")
-    |> String.downcase()
-  end
+  defp snake(name), do: snake_ident(name)
 
   defp blame(%{entry: d}, msg), do: blame(d, msg)
 

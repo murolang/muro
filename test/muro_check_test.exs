@@ -2532,13 +2532,16 @@ defmodule Muro.CheckTest do
     assert {:ok, book} = Parser.parse(src)
     assert :ok = Check.check_sig(book)
     out = Emit.emit_module(Muro.Collide, book)
+    bar = Emit.elixir_base("foo-bar")
+    assert out =~ "def #{bar} do"
     assert out =~ "def foo_bar do"
-    assert out =~ "def foo_bar_2 do"
-    assert out =~ "foo_bar_2()"
+    assert out =~ "foo_bar()"
+    refute out =~ "#{bar}()"
+    refute out =~ "def foo_bar_2"
     Code.eval_string(out)
     assert call("Collide", :answer, []) == {:suc, 0}
-    assert call("Collide", :foo_bar, []) == 0
-    assert call("Collide", :foo_bar_2, []) == {:suc, 0}
+    assert call("Collide", :foo_bar, []) == {:suc, 0}
+    assert call("Collide", String.to_atom(bar), []) == 0
   end
 
   test "a definition named like an Elixir reserved word emits a compilable module" do
@@ -2552,9 +2555,10 @@ defmodule Muro.CheckTest do
       assert :ok = Check.check_sig(book)
       mod = Module.concat(Muro, "Reserved#{word}")
       out = Emit.emit_module(mod, book)
-      assert out =~ "def muro_#{word}("
+      assert out =~ "def #{Emit.elixir_base(word)}("
+      assert out =~ "def #{Emit.elixir_base("use-#{word}")}"
       Code.eval_string(out)
-      assert apply(mod, :"use_#{word}", []) == 0
+      assert apply(mod, String.to_atom(Emit.elixir_base("use-#{word}")), []) == 0
     end
   end
 
