@@ -49,6 +49,7 @@ defmodule Muro.IRTest do
              %{
                name: "step0",
                export: false,
+               generated: true,
                params: [{"k", :nat}],
                ret: {:pair, :nat, :nat},
                body: {:pair, {:var, "k"}, {:su, {:var, "k"}}}

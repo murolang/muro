@@ -68,7 +68,7 @@ defmodule Muro.EmitZigTest do
     assert zeros =~ "const muro_no_env: u8 = 0;"
 
     assert zeros =~
-             "fn step0(allocator: std.mem.Allocator, env: *const anyopaque, seed: *const anyopaque)"
+             "fn muro_step_0(allocator: std.mem.Allocator, env: *const anyopaque, seed: *const anyopaque)"
 
     refute zeros =~ "head-zeros"
     refute zeros =~ "Always"
@@ -367,7 +367,8 @@ defmodule Muro.EmitZigTest do
 
     source = File.read!(emit_zig!(dir, "step0"))
     assert source =~ "pub fn step0(allocator: std.mem.Allocator) !*const Nat"
-    assert source =~ "fn step0_2("
+    assert source =~ "fn muro_step_0("
+    refute source =~ "fn step0_2("
 
     File.write!(Path.join(dir, "check.zig"), """
     const std = @import("std");
@@ -381,6 +382,66 @@ defmodule Muro.EmitZigTest do
         try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(try m.step0(a)));
         const z = try m.zeros(a);
         try std.testing.expectEqual(@as(u64, 0), m.muro_to_u64(try m.hd(a, z)));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
+  zig_test "an unfold step stays apart from a source run with the same binders" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "clash.muro"), """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def zeros : run Stream Nat :=
+      unfold 0 (λ (n : Nat) → (0, n))
+
+    def step0 : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → suc n
+
+    def hd : run Π (s : Stream Nat) → Nat :=
+      λ (s : Stream Nat) → head s
+
+    def muro_step_0 : run Nat := suc (suc 0)
+
+    def id : run Π (muro_step_0 : Nat) → Nat :=
+      λ (muro_step_0 : Nat) → muro_step_0
+
+    def z : run Nat := hd zeros
+    def two : run Nat := step0 (suc 0)
+    def via : run Nat := id (suc (suc (suc 0)))
+    """)
+
+    source = File.read!(emit_zig!(dir, "clash"))
+    assert source =~ "pub fn step0(allocator: std.mem.Allocator, n: *const Nat) !*const Nat"
+
+    assert source =~
+             "fn muro_step_0(allocator: std.mem.Allocator, env: *const anyopaque, seed: *const anyopaque)"
+
+    assert source =~ "pub fn muro_muro_step_0(allocator: std.mem.Allocator) !*const Nat"
+    # The source run already claimed `muro_muro_step_0`, so the parameter
+    # takes the next spelling in that prefixed namespace.
+    assert source =~ "muro_muro_step_0_2: *const Nat"
+    refute source =~ "muro_step_0:"
+    refute source =~ "fn step0_2("
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("clash.zig");
+
+    test "step namespace" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        try std.testing.expectEqual(@as(u64, 0), m.muro_to_u64(try m.z(a)));
+        try std.testing.expectEqual(@as(u64, 2), m.muro_to_u64(try m.two(a)));
+        try std.testing.expectEqual(@as(u64, 2), m.muro_to_u64(try m.muro_muro_step_0(a)));
+        try std.testing.expectEqual(@as(u64, 3), m.muro_to_u64(try m.via(a)));
     }
     """)
 

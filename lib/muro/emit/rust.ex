@@ -33,7 +33,7 @@ defmodule Muro.Emit.Rust do
   end
 
   defp compile(book, funs, _stem) do
-    with {:ok, groups, step_map} <- partition(funs, Emit.run_defs(book)) do
+    with {:ok, groups, step_map} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
       compile_book(book, funs, groups, step_map)
     end
   end
@@ -74,50 +74,6 @@ defmodule Muro.Emit.Rust do
       {:ok, join(parts)}
     end
   end
-
-  # User functions follow the book. A generated step is `step` plus the
-  # counter, spliced after the function that closed it. A later definition
-  # with that same source name stays a user function.
-  defp partition(funs, runs), do: partition(funs, runs, [], %{})
-  defp partition([], [], groups, map), do: {:ok, Enum.reverse(groups), map}
-
-  defp partition([%{name: name} = fun | rest], [%{name: name} | ds], groups, map) do
-    {steps, rest} = take_steps(rest, ds)
-    map = Enum.reduce(steps, map, &Map.put(&2, &1.name, &1))
-    partition(rest, ds, [{fun, steps} | groups], map)
-  end
-
-  defp partition(_funs, _runs, _groups, _map), do: {:error, "c:unsupported"}
-
-  defp take_steps(funs, []), do: {funs, []}
-
-  defp take_steps([fun | rest] = funs, [d | _] = ds) do
-    if generated_step?(fun, d) do
-      {more, rest} = take_steps(rest, ds)
-      {[fun | more], rest}
-    else
-      {[], funs}
-    end
-  end
-
-  defp take_steps([], _ds), do: {[], []}
-
-  defp generated_step?(fun, %{name: name} = d) do
-    step_fun?(fun) and not (fun.name == name and param_names(fun) == live_param_names(d))
-  end
-
-  defp step_fun?(%{name: name, export: false}), do: String.match?(name, ~r/^step\d+$/)
-  defp step_fun?(_), do: false
-
-  defp param_names(fun), do: Enum.map(fun.params, fn {n, _} -> n end)
-
-  defp live_param_names(%{type: ty, body: body}), do: live_names(ty, body)
-
-  defp live_names({:pi, q, _, _, b}, {:lam, q2, _, name, body}) do
-    if q == :erased or q2 == :erased, do: live_names(b, body), else: [name | live_names(b, body)]
-  end
-
-  defp live_names(_, _), do: []
 
   defp emit_funs(funs, st0) do
     Enum.reduce_while(funs, {:ok, []}, fn fun, {:ok, acc} ->
@@ -686,11 +642,16 @@ defmodule Muro.Emit.Rust do
     {names, MapSet.union(taken, MapSet.new(Map.values(names)))}
   end
 
+  # `muro_step_N` is not a spelling `rust_base/1` will give a source name.
   defp name_steps(steps, taken) do
     Enum.reduce(steps, {%{}, taken}, fn fun, {map, used} ->
-      {rn, used} = claim(rust_base(fun.name), used)
-      {Map.put(map, fun.name, rn), used}
+      rn = step_symbol(fun.name)
+      {Map.put(map, fun.name, rn), MapSet.put(used, rn)}
     end)
+  end
+
+  defp step_symbol("step" <> n) do
+    if String.match?(n, ~r/^[0-9]+$/), do: "muro_step_" <> n, else: "muro_step"
   end
 
   defp ctor_fn_names(book) do
@@ -898,6 +859,7 @@ defmodule Muro.Emit.Rust do
       String.starts_with?(n, "_") -> "muro_" <> n
       String.match?(n, ~r/^muro_s[0-9]+$/) -> "muro_" <> n
       String.match?(n, ~r/^muro_[pct][0-9]+$/) -> "muro_" <> n
+      String.match?(n, ~r/^muro_step_[0-9]+$/) -> "muro_" <> n
       true -> n
     end
   end

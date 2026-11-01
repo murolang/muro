@@ -546,6 +546,76 @@ defmodule Muro.EmitCTest do
     cc!(dir, "box.c", "box.o")
   end
 
+  test "an unfold step stays apart from a source run with the same binders" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "clash.muro"), """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def zeros : run Stream Nat :=
+      unfold 0 (λ (n : Nat) → (0, n))
+
+    def step0 : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → suc n
+
+    def hd : run Π (s : Stream Nat) → Nat :=
+      λ (s : Stream Nat) → head s
+
+    def muro_step_0 : run Nat := suc (suc 0)
+
+    def id : run Π (muro_step_0 : Nat) → Nat :=
+      λ (muro_step_0 : Nat) → muro_step_0
+
+    def z : run Nat := hd zeros
+    def two : run Nat := step0 (suc 0)
+    def via : run Nat := id (suc (suc (suc 0)))
+    """)
+
+    capture_io(fn ->
+      Mix.Tasks.Muro.Emit.run([Path.join(dir, "clash.muro"), "--backend", "c"])
+    end)
+
+    source = File.read!(Path.join(dir, "clash.c"))
+    header = File.read!(Path.join(dir, "clash.h"))
+    assert header =~ "muro_nat *step0(muro_nat *n);"
+    assert header =~ "muro_nat *muro_muro_step_0(void);"
+    assert source =~ "static muro_pair *muro_step_0(void *muro_envp, void *muro_seedp)"
+    assert source =~ "muro_stream_new(muro_zero(), 0, muro_step_0)"
+    refute source =~ "static void *step0("
+
+    File.write!(Path.join(dir, "main.c"), """
+    #include "clash.h"
+
+    static int nats(muro_nat *n) {
+      int k = 0;
+      while (n->tag == 1) {
+        n = n->suc;
+        k++;
+      }
+      return k;
+    }
+
+    int main(void) {
+      if (nats(z()) != 0) return 1;
+      if (nats(two()) != 2) return 2;
+      if (nats(muro_muro_step_0()) != 2) return 3;
+      if (nats(via()) != 3) return 4;
+      return 0;
+    }
+    """)
+
+    cc!(dir, "clash.c", "clash.o")
+    cc!(dir, "main.c", "main.o")
+
+    {link, status} =
+      System.cmd("cc", ~w(clash.o main.o -o clash_bin), cd: dir, stderr_to_stdout: true)
+
+    assert status == 0, link
+    {out, status} = System.cmd(Path.join(dir, "clash_bin"), [], stderr_to_stdout: true)
+    assert status == 0, out
+  end
+
   defp tmp_dir do
     dir = Path.join(System.tmp_dir!(), "muro_c_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)

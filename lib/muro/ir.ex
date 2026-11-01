@@ -294,9 +294,12 @@ defmodule Muro.IR do
       id = ee.k
 
       with {:ok, be} <- elab(st, body, seed_ctx(q, name, dlay, ctx), id + 1) do
+        # `generated` is provenance. The name `stepN` is not: a source
+        # run may be called `stepN` and take the same binders.
         step = %{
           name: "step#{id}",
           export: false,
+          generated: true,
           params: cap_params(caps) ++ seed_param(q, name, dlay),
           ret: be.lay,
           body: be.tm

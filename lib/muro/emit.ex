@@ -31,6 +31,38 @@ defmodule Muro.Emit do
   end
 
   @doc """
+  Group each elaborated run with the unfold steps it closed.
+
+  A generated step has `generated: true`. It follows the run that
+  closed it. A source name, including `step0`, and a parameter list
+  that matches the step are still that run. The two are not told
+  apart by spelling.
+  """
+  def partition_funs(funs, runs) when is_list(funs) and is_list(runs) do
+    partition_funs(funs, runs, [], %{})
+  end
+
+  defp partition_funs([], [], groups, map), do: {:ok, Enum.reverse(groups), map}
+
+  defp partition_funs([%{generated: true} | _], _runs, _groups, _map),
+    do: {:error, "c:unsupported"}
+
+  defp partition_funs([%{name: name} = fun | rest], [%{name: name} | ds], groups, map) do
+    {steps, rest} = take_generated(rest)
+    map = Enum.reduce(steps, map, &Map.put(&2, &1.name, &1))
+    partition_funs(rest, ds, [{fun, steps} | groups], map)
+  end
+
+  defp partition_funs(_funs, _runs, _groups, _map), do: {:error, "c:unsupported"}
+
+  defp take_generated([%{generated: true} = fun | rest]) do
+    {more, rest} = take_generated(rest)
+    {[fun | more], rest}
+  end
+
+  defp take_generated(funs), do: {[], funs}
+
+  @doc """
   Source name to emitted name for each run definition, in book order.
 
   `spell` turns a source name into the backend's base spelling. The first

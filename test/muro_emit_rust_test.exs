@@ -211,7 +211,8 @@ defmodule Muro.EmitRustTest do
 
     source = File.read!(emit_rust!(dir, "step0"))
     assert source =~ "pub fn step0() -> Nat"
-    assert source =~ "fn step0_2("
+    assert source =~ "fn muro_step_0("
+    refute source =~ "fn step0_2("
 
     out =
       run_rust!(
@@ -227,6 +228,52 @@ defmodule Muro.EmitRustTest do
       )
 
     assert out == "1 0\n"
+  end
+
+  test "an unfold step stays apart from a source run with the same binders" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "clash.muro"), """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def zeros : run Stream Nat :=
+      unfold 0 (λ (n : Nat) → (0, n))
+
+    def step0 : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → suc n
+
+    def hd : run Π (s : Stream Nat) → Nat :=
+      λ (s : Stream Nat) → head s
+
+    def muro_step_0 : run Nat := suc (suc 0)
+
+    def id : run Π (muro_step_0 : Nat) → Nat :=
+      λ (muro_step_0 : Nat) → muro_step_0
+    """)
+
+    source = File.read!(emit_rust!(dir, "clash"))
+    assert source =~ "pub fn step0(n: Nat) -> Nat"
+    assert source =~ "fn muro_step_0("
+    assert source =~ "pub fn muro_muro_step_0() -> Nat"
+    refute source =~ "fn step0_2("
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            let n = clash::muro_to_u64(&clash::step0(clash::muro_from_u64(1)));
+            let z = clash::muro_to_u64(&clash::hd(clash::zeros()));
+            let s = clash::muro_to_u64(&clash::muro_muro_step_0());
+            let v = clash::muro_to_u64(&clash::id(clash::muro_from_u64(3)));
+            println!("{n} {z} {s} {v}");
+        }
+        """,
+        ["clash"]
+      )
+
+    assert out == "2 0 2 3\n"
   end
 
   test "a shadowed parameter resolves to the inner binding" do
