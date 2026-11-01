@@ -1,9 +1,9 @@
 defmodule Muro.GenNativeTest do
   use ExUnit.Case, async: false
 
-  @kinds [:c, :rust, :asm]
+  @kinds [:c, :rust, :zig, :asm]
 
-  test "c, rust, and asm targets round-trip through gen and gen --check" do
+  test "c, rust, zig, and asm targets round-trip through gen and gen --check" do
     Enum.each(@kinds, &round_trip/1)
   end
 
@@ -204,6 +204,7 @@ defmodule Muro.GenNativeTest do
       case kind do
         :c -> ~s|{"priv/muro/half.muro", "lib/half.c", [kind: :c]}|
         :rust -> ~s|{"priv/muro/half.muro", "lib/half.rs", [kind: :rust]}|
+        :zig -> ~s|{"priv/muro/half.muro", "lib/half.zig", [kind: :zig]}|
         :asm -> ~s|{"priv/muro/half.muro", "lib/half.s", [kind: :asm]}|
       end
 
@@ -221,6 +222,7 @@ defmodule Muro.GenNativeTest do
 
   defp target(:c), do: "lib/half.c"
   defp target(:rust), do: "lib/half.rs"
+  defp target(:zig), do: "lib/half.zig"
   defp target(:asm), do: "lib/half.s"
 
   defp generate!(dir) do

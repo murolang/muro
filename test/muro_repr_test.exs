@@ -957,6 +957,7 @@ defmodule Muro.ReprTest do
 
     assert Emit.C.prepare(with_repr, "half_ok") == Emit.C.prepare(without, "half_ok")
     assert Emit.Rust.render(with_repr, "half_ok") == Emit.Rust.render(without, "half_ok")
+    assert Emit.Zig.render(with_repr, "half_ok") == Emit.Zig.render(without, "half_ok")
     assert Emit.Asm.render(with_repr, "half_ok") == Emit.Asm.render(without, "half_ok")
     assert Emit.Otp.render(with_repr, "half_ok") == Emit.Otp.render(without, "half_ok")
     assert Emit.Node.render(with_repr, "half_ok", :a) == Emit.Node.render(without, "half_ok", :a)
