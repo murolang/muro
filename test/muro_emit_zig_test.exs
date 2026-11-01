@@ -450,6 +450,62 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "a spec alias keeps the argument layout when a lambda is applied" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "alias_apply.muro"), """
+    def R : spec Type := Nat
+    def P : spec Type := Nat × Nat
+
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def S : spec Type := Stream Nat
+
+    def zeros : run Stream Nat :=
+      unfold 0 (λ (n : Nat) → (0, n))
+
+    data Box : Type where
+      mk : Π (- e : Nat) → Nat → Box
+
+    def one : run Nat := (λ (r : R) → suc r) 0
+    def three : run Nat := (λ (r : R) → suc r) (suc (suc 0))
+    def right : run Nat := (λ (p : P) → let (a, b) = p in b) (0, suc 0)
+    def hd0 : run Nat := (λ (s : S) → head s) zeros
+
+    def boxed : run Box := mk (suc 0) (suc (suc 0))
+
+    def live : run Nat :=
+      match boxed motive (λ _ → Nat)
+        | mk _ n => n
+    """)
+
+    source = File.read!(emit_zig!(dir, "alias_apply"))
+    assert source =~ "const r = muro_zero();"
+    refute source =~ "muro_erase(muro_tt())"
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("alias_apply.zig");
+
+    test "alias application" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(try m.one(a)));
+        try std.testing.expectEqual(@as(u64, 3), m.muro_to_u64(try m.three(a)));
+        try std.testing.expectEqual(@as(u64, 1), m.muro_to_u64(try m.right(a)));
+        try std.testing.expectEqual(@as(u64, 0), m.muro_to_u64(try m.hd0(a)));
+        try std.testing.expectEqual(@as(u64, 2), m.muro_to_u64(try m.live(a)));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   zig_test "a shadowed parameter resolves to the inner binding" do
     dir = tmp_dir()
 

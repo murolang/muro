@@ -110,10 +110,20 @@ defmodule Muro.IR do
 
   defp apply(st, {:lam, _q, dom, name, body}, [{arg, actx} | rest], ctx, k) do
     with {:ok, lay} <- layout_of(st, dom),
-         {:ok, ae} <- elab(st, arg, actx, k),
-         {:ok, be} <- apply(st, body, rest, [{:live, name, lay} | ctx], ae.k) do
-      {:ok,
-       %{tm: {:let, name, lay, ae.tm, be.tm}, lay: be.lay, steps: ae.steps ++ be.steps, k: be.k}}
+         {:ok, ae} <- elab(st, arg, actx, k) do
+      # A spec alias is opaque here. The argument keeps its own layout,
+      # so a zero is a Nat and not the erased-field placeholder.
+      blay = bind_layout(lay, ae.lay)
+
+      with {:ok, be} <- apply(st, body, rest, [{:live, name, blay} | ctx], ae.k) do
+        {:ok,
+         %{
+           tm: {:let, name, blay, ae.tm, be.tm},
+           lay: be.lay,
+           steps: ae.steps ++ be.steps,
+           k: be.k
+         }}
+      end
     end
   end
 
@@ -129,6 +139,9 @@ defmodule Muro.IR do
       reason -> {:error, reason}
     end
   end
+
+  defp bind_layout(:opaque, lay), do: lay
+  defp bind_layout(lay, _arg), do: lay
 
   defp apply_name(st, name, [], ctx, k) do
     case lookup(ctx, name) do

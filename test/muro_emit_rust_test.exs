@@ -276,6 +276,60 @@ defmodule Muro.EmitRustTest do
     assert out == "2 0 2 3\n"
   end
 
+  test "a spec alias keeps the argument layout when a lambda is applied" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "alias_apply.muro"), """
+    def R : spec Type := Nat
+    def P : spec Type := Nat × Nat
+
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def S : spec Type := Stream Nat
+
+    def zeros : run Stream Nat :=
+      unfold 0 (λ (n : Nat) → (0, n))
+
+    data Box : Type where
+      mk : Π (- e : Nat) → Nat → Box
+
+    def one : run Nat := (λ (r : R) → suc r) 0
+    def three : run Nat := (λ (r : R) → suc r) (suc (suc 0))
+    def right : run Nat := (λ (p : P) → let (a, b) = p in b) (0, suc 0)
+    def hd0 : run Nat := (λ (s : S) → head s) zeros
+
+    def boxed : run Box := mk (suc 0) (suc (suc 0))
+
+    def live : run Nat :=
+      match boxed motive (λ _ → Nat)
+        | mk _ n => n
+    """)
+
+    source = File.read!(emit_rust!(dir, "alias_apply"))
+    assert source =~ "let r = muro_zero();"
+    assert source =~ "let x = muro_erase(());"
+    refute source =~ "let r = muro_erase(());"
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            let one = alias_apply::muro_to_u64(&alias_apply::one());
+            let three = alias_apply::muro_to_u64(&alias_apply::three());
+            let right = alias_apply::muro_to_u64(&alias_apply::right());
+            let hd0 = alias_apply::muro_to_u64(&alias_apply::hd0());
+            let live = alias_apply::muro_to_u64(&alias_apply::live());
+            println!("{one} {three} {right} {hd0} {live}");
+        }
+        """,
+        ["alias_apply"]
+      )
+
+    assert out == "1 3 1 0 2\n"
+  end
+
   test "a shadowed parameter resolves to the inner binding" do
     dir = tmp_dir()
 

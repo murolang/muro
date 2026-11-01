@@ -616,6 +616,76 @@ defmodule Muro.EmitCTest do
     assert status == 0, out
   end
 
+  test "a spec alias keeps the argument layout when a lambda is applied" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "alias_apply.muro"), """
+    def R : spec Type := Nat
+    def P : spec Type := Nat × Nat
+
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def S : spec Type := Stream Nat
+
+    def zeros : run Stream Nat :=
+      unfold 0 (λ (n : Nat) → (0, n))
+
+    data Box : Type where
+      mk : Π (- e : Nat) → Nat → Box
+
+    def one : run Nat := (λ (r : R) → suc r) 0
+    def three : run Nat := (λ (r : R) → suc r) (suc (suc 0))
+    def right : run Nat := (λ (p : P) → let (a, b) = p in b) (0, suc 0)
+    def hd0 : run Nat := (λ (s : S) → head s) zeros
+
+    def boxed : run Box := mk (suc 0) (suc (suc 0))
+
+    def live : run Nat :=
+      match boxed motive (λ _ → Nat)
+        | mk _ n => n
+    """)
+
+    capture_io(fn ->
+      Mix.Tasks.Muro.Emit.run([Path.join(dir, "alias_apply.muro"), "--backend", "c"])
+    end)
+
+    source = File.read!(Path.join(dir, "alias_apply.c"))
+    refute source =~ "void *r = 0;"
+
+    File.write!(Path.join(dir, "main.c"), """
+    #include "alias_apply.h"
+
+    static int nats(muro_nat *n) {
+      int k = 0;
+      while (n->tag == 1) {
+        n = n->suc;
+        k++;
+      }
+      return k;
+    }
+
+    int main(void) {
+      if (nats(one()) != 1) return 1;
+      if (nats(three()) != 3) return 2;
+      if (nats(right()) != 1) return 3;
+      if (nats(hd0()) != 0) return 4;
+      if (nats(live()) != 2) return 5;
+      return 0;
+    }
+    """)
+
+    cc!(dir, "alias_apply.c", "alias_apply.o")
+    cc!(dir, "main.c", "main.o")
+
+    {link, status} =
+      System.cmd("cc", ~w(alias_apply.o main.o -o alias_bin), cd: dir, stderr_to_stdout: true)
+
+    assert status == 0, link
+    {out, status} = System.cmd(Path.join(dir, "alias_bin"), [], stderr_to_stdout: true)
+    assert status == 0, out
+  end
+
   defp tmp_dir do
     dir = Path.join(System.tmp_dir!(), "muro_c_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)

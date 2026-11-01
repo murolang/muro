@@ -222,7 +222,9 @@ defmodule Muro.Emit.C do
     end
   end
 
-  # An erased constructor field. `0`, not `muro_zero()`.
+  # An erased constructor field. `0`, not `muro_zero()`. A zero passed
+  # under a spec alias is bound at the argument's layout, so this clause
+  # does not see it.
   defp emit_ir({:let, name, :opaque, :ze, body}, env, st, expect) do
     {c, used} = fresh(c_name(name), st.arm_used)
     st = %{st | arm_used: used}
