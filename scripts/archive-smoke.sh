@@ -914,8 +914,8 @@ wire = %{
 {:ok, v, table} = Host.ReprNames.decode_template(wire)
 IO.puts("NAMES #{inspect(Host.ReprNames.muro_repr_table_names(table))}")
 IO.puts("NAMES_ENC #{inspect(Host.ReprNames.encode_template(v, table))}")
-IO.puts("NAMES_OFF #{inspect(Host.ReprNames.encode_template(Host.ReprNames.reads_off(v), table))}")
-IO.puts("NAMES_COUNT #{inspect(Host.ReprNames.count_entries(v))}")
+IO.puts("NAMES_OFF #{inspect(Host.ReprNames.encode_template(Host.ReprNames.muro__readszdoff(v), table))}")
+IO.puts("NAMES_COUNT #{inspect(Host.ReprNames.muro__countzdentries(v))}")
 EOF
 
   set +e
