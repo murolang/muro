@@ -270,7 +270,7 @@ An interned name whose target is `Nat` builds the same Peano term, so the same g
 
 ## In a host
 
-`<type>` is the type name in snake case. `Entry` is `entry`. `HttpRequest` is `http_request`. `-` and `'` become `_`. The functions are public. A name that collides with a run, with another type's snake case, or with a codec helper is refused, and the error names both. The table helpers (`muro_repr_table_new`, `muro_repr_table_names`, and the private helpers they use) are on that list in every repr, including a book that interns nothing.
+`<type>` is the type name in snake case. `Entry` is `entry`. `HttpRequest` is `http_request`. `-` and `'` become `_`. A snake form that is not a function name, or that contains `__`, uses the Elixir function spelling instead. The functions are public. A name that collides with a run, with another type's snake case, or with a codec helper is refused, and the error names both. The table helpers (`muro_repr_table_new`, `muro_repr_table_names`, and the private helpers they use) are on that list in every repr, including a book that interns nothing.
 
 Reprs from imported books are emitted in book order, the same way runs from imports are. A book with no repr emits the same module text as before. A feature's private helpers are emitted only when the book uses that feature, so a boolean repr does not carry the Nat guard or the name decoder.
 

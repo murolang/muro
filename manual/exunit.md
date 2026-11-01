@@ -41,9 +41,9 @@ The name is `"<file> <def-name>"`: the book path as the suite renders it, one sp
 
 0.16.76 named the test `"<name> (<file>:<line>)"` and used that same string as the message. The name changed in 0.17.0 so a line shift does not change a CI history, a quarantine list, or an `--only` / `--exclude` filter. Regenerate the suite with `mix muro.gen`. The line stays in the message. The skip comment and the `skipped` line keep the 0.16.76 spelling, `name (file:line): reason`. The name is built in one place from the equation's origin, which today is that file.
 
-The function name is the spelling `Muro.Emit.def_names/3` gives the Elixir backend, with the same taken set. The arity is the number of non-erased binders of `f`. The assertion calls `impl.f(args)` or `impl.f()`. It does not call a hard-coded emitted module.
+The function name is the spelling `Muro.Emit.elixir_names/1` gives that run, the same name the Elixir, NIF, OTP, and FSM outputs use. The arity is the number of non-erased binders of `f`. The assertion calls `impl.f(args)` or `impl.f()`. It does not call a hard-coded emitted module.
 
-`f` from the file stem `rounding` is `round` when the Muro name is `round`. Reserved words and hyphenated names follow the Elixir backend.
+`f` from the file stem `rounding` is `round` when the Muro name is `round`. A reserved word or a hyphenated name is the same `muro__` spelling the Elixir backend emits.
 
 ## The implementation
 
