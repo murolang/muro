@@ -80,6 +80,65 @@ defmodule Muro.EmitCTest do
     assert_raise ArgumentError, fn -> plus.(:no, 1) end
   end
 
+  test "a NIF exports the source name and calls the C symbol" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "names.muro"), """
+    def foo-bar : run Nat := 0
+    def foo_bar : run Nat := suc 0
+    def answer : run Nat := foo_bar
+    def and : run Nat := suc (suc 0)
+    def read : run Nat := suc (suc (suc 0))
+    """)
+
+    capture_io(fn ->
+      Mix.Tasks.Muro.Emit.run([Path.join(dir, "names.muro"), "--backend", "c"])
+    end)
+
+    ex = File.read!(Path.join(dir, "names.ex"))
+    nif = File.read!(Path.join(dir, "names_nif.c"))
+    source = File.read!(Path.join(dir, "names.c"))
+    dash = Muro.Emit.C.source_id("foo-bar")
+    under = Muro.Emit.C.source_id("foo_bar")
+    read = Muro.Emit.C.source_id("read")
+
+    assert ex =~ "def foo_bar, do:"
+    assert ex =~ "def foo_bar_2, do:"
+    assert ex =~ "def answer, do:"
+    assert ex =~ "def muro_and, do:"
+    assert ex =~ "def read, do:"
+    refute ex =~ "foozubar"
+    refute ex =~ "foozdbar"
+    refute ex =~ "def and,"
+
+    assert source =~ "#{dash}("
+    assert source =~ "#{under}("
+    assert source =~ "#{read}("
+    assert nif =~ ~s|"foo_bar", 0,|
+    assert nif =~ ~s|"foo_bar_2", 0,|
+    assert nif =~ ~s|"muro_and", 0,|
+    assert nif =~ ~s|"read", 0,|
+    assert nif =~ "#{dash}("
+    assert nif =~ "#{under}("
+    assert nif =~ "#{read}("
+    refute nif =~ ~s|"foozubar"|
+    refute nif =~ ~s|"#{read}"|
+
+    on_exit(fn ->
+      :code.purge(Names)
+      :code.delete(Names)
+    end)
+
+    Code.compile_file(Path.join(dir, "names.ex"))
+    call = fn name -> apply(:"Elixir.Names", name, []) end
+    assert call.(:foo_bar) == 0
+    assert call.(:foo_bar_2) == 1
+    assert call.(:answer) == 1
+    assert call.(:muro_and) == 2
+    assert call.(:read) == 3
+    assert_raise UndefinedFunctionError, fn -> call.(:foozubar) end
+  end
+
   test "a run Stream compiles as a seed and a step, and Elixir still uses Stream.unfold" do
     dir = tmp_dir()
 

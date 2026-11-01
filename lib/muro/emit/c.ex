@@ -207,6 +207,7 @@ defmodule Muro.Emit.C do
 
     sig = %{
       name: Map.fetch!(names, fun.name),
+      source: fun.name,
       export: fun.export,
       params: for({_n, c, lay} <- bound, do: {ctype(lay, book), c}),
       ret: ctype(fun.ret, book)

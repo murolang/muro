@@ -7,19 +7,12 @@ defmodule Muro.Emit.Nif do
   reuses it. `elixir_make` runs the makefile. A run that is not that shape
   stays in the C file and is not an entry. `run internal` is not an entry.
 
-  C identifiers in this file come from `Muro.Emit.Name`, the same split the
-  C emitter uses. The Elixir loader `muro_nif_load` is an Elixir function,
-  not one of those identifiers.
+  The C symbol is internal. The Elixir function is the source name, spelled
+  with `Muro.Emit.elixir_base/1` and then claimed. The loader `muro_nif_load`
+  is claimed first. The stub calls the C symbol.
   """
 
   alias Muro.Emit.Name
-
-  # Same words `Muro.Emit` refuses as Elixir function names.
-  @elixir_reserved ~w(
-    true false nil
-    when and or not in
-    fn do end catch rescue after else
-  ) |> MapSet.new()
 
   @nat Name.gen("nat") <> " *"
 
@@ -110,23 +103,14 @@ defmodule Muro.Emit.Nif do
     # The loader occupies this name. A Nat run that would spell the same takes a suffix.
     {rev, _} =
       Enum.reduce(exports, {[], MapSet.new(["muro_nif_load"])}, fn sig, {acc, used} ->
-        {name, used} = claim(elixir_base(sig.name), used)
+        {name, used} = claim(Muro.Emit.elixir_base(sig.source), used)
         {[{sig, name} | acc], used}
       end)
 
     Enum.reverse(rev)
   end
 
-  defp elixir_base(c_name) do
-    if String.match?(c_name, ~r/^[a-z_][A-Za-z0-9_]*$/) and c_name not in @elixir_reserved do
-      c_name
-    else
-      "muro_" <> c_name
-    end
-  end
-
-  # Elixir function names. The numeric tail is `Name.claim/2`. The spelling
-  # itself is not in the C identifier split.
+  # The numeric tail is `Name.claim/2`. The spelling is the source name.
   defp claim(base, used), do: Name.claim(base, used)
 
   defp module_name(stem) do
