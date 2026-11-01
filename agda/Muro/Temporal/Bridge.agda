@@ -37,10 +37,21 @@
 -- the `Hold`, not a bare configuration: the cursor is what ties the
 -- graph step to the source process.
 --
--- Not proved: the finite `Muro.Async` embedding (`inj-sim`,
--- `safe→nostuck`). An `Async.Conf` step updates a typed message, a
--- value environment, and an index context. No proved relation sends
--- that step to a source step of `inj`.
+-- `inj-fwd` and `inj-bwd` in `Muro.Temporal.Finite` are the two
+-- directions of one embedded step. `Embed` relates an `Async.Conf`,
+-- including its typed messages, value environments, and index
+-- contexts, to the source configuration `inj` builds. `inj-fwd`
+-- sends an async step to a graph step. `inj-bwd` reads a graph step
+-- other than the stutter back as an async step, and it takes `Safe`:
+-- a payload received as another declaration is a graph step and a
+-- bad reception. `init-embed` is that relation at the start.
+-- `safe→nostuck` says that under `graphOf ≡ gok`, `initS`, and
+-- `echoOk`, a safe finite meeting is `NoStuck`. `muOk` of `inj`
+-- holds whenever `Frag` does. `inj` is `sout` or `pOut` for a bare
+-- arm, an arm list other than the declaration, a constructor the
+-- declaration does not inhabit, an ill-typed echo, an open index, a
+-- second binding of a name already in scope, or a name that occurs
+-- twice anywhere in the process.
 --
 -- Importing `Muro.Temporal.Source` requires `--guardedness`. The
 -- option is infective.
