@@ -30,7 +30,7 @@ jobs:
 
       - uses: mlugg/setup-zig@v2.2.1
         with:
-          version: 0.15.1
+          version: 0.15.2
 
       - uses: jdx/mise-action@v4
 
