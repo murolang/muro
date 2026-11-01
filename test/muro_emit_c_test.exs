@@ -945,6 +945,66 @@ defmodule Muro.EmitCTest do
     assert out == "2 3 1 1 2\n"
   end
 
+  test "a primitive name and a stdint name stay off the runtime spellings" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "prim.muro"), """
+    data bool : Type where
+      yes : bool
+
+    data int : Type where
+      i : Nat → int
+
+    data char : Type where
+      ch : char
+
+    data uint8_t : Type where
+      u8 : uint8_t
+
+    def built : run int := i (suc (suc 0))
+
+    def answer : run Nat :=
+      match built motive (λ _ → Nat)
+        | i k => k
+    """)
+
+    capture_io(fn ->
+      Mix.Tasks.Muro.Emit.run([Path.join(dir, "prim.muro"), "--backend", "c"])
+    end)
+
+    header = File.read!(Path.join(dir, "prim.h"))
+    source = File.read!(Path.join(dir, "prim.c"))
+    assert header =~ "uint8_t muro__field_tag;"
+    assert header =~ "typedef struct bool_k bool_k;"
+    assert header =~ "typedef struct int_k int_k;"
+    assert header =~ "typedef struct char_k char_k;"
+    assert header =~ "typedef struct uint8zut uint8zut;"
+    refute source =~ "uint8zut_k"
+    refute header =~ "struct uint8_t "
+
+    out =
+      link_run!(dir, "prim", """
+      #include "prim.h"
+      #include <stdio.h>
+
+      static int nats(muro__nat *n) {
+        int k = 0;
+        while (n->muro__field_tag == 1) {
+          n = n->muro__field_suc;
+          k++;
+        }
+        return k;
+      }
+
+      int main(void) {
+        printf("%d\\n", nats(answer()));
+        return 0;
+      }
+      """)
+
+    assert out == "2\n"
+  end
+
   defp forms_book(samples) do
     runs =
       samples

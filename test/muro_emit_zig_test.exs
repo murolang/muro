@@ -1144,6 +1144,61 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "a primitive name stays off the runtime integer" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "prim.muro"), """
+    data u64 : Type where
+      mk : u64
+
+    data bool : Type where
+      yes : bool
+
+    data type : Type where
+      t : type
+
+    data anyopaque : Type where
+      o : anyopaque
+
+    def two : run Nat := suc (suc 0)
+    """)
+
+    source = File.read!(emit_zig!(dir, "prim"))
+    assert source =~ "pub const u64_k = union(enum)"
+    assert source =~ "pub const bool_k = union(enum)"
+    assert source =~ "pub const type_k = union(enum)"
+    assert source =~ "pub const anyopaque_k = union(enum)"
+    assert source =~ "muro__k: u64"
+    refute source =~ "pub const u64 = union(enum)"
+
+    File.write!(Path.join(dir, "num.muro"), """
+    def u64 : run Nat := suc (suc 0)
+    """)
+
+    num = File.read!(emit_zig!(dir, "num"))
+    assert num =~ "pub fn u64_k(muro__allocator: muro__std.mem.Allocator) !*const muro__Nat"
+    refute num =~ "fn u64("
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("prim.zig");
+    const n = @import("num.zig");
+
+    test "primitives stay in scope" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        try std.testing.expectEqual(@as(u64, 4), m.muro__to_u64(try m.muro__from_u64(a, 4)));
+        try std.testing.expectEqual(@as(u64, 2), m.muro__to_u64(try m.two(a)));
+        try std.testing.expectEqual(@as(u64, 2), n.muro__to_u64(try n.u64_k(a)));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   defp forms_book(samples) do
     runs =
       samples

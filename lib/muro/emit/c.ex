@@ -41,7 +41,9 @@ defmodule Muro.Emit.C do
 
   # Typedefs from `<stdint.h>`, which the header includes, and functions
   # from stdio, stdlib, string, and unistd. `delete` is a C++ keyword.
-  # `error` is the GNU `error` function. A name outside this set is unchanged.
+  # `error` is the GNU `error` function. `spell/3` matches the encoding,
+  # which has no underscore, so a source `uint8_t` is `uint8zut` and does
+  # not spell the typedef. A name outside this set is unchanged.
   @host_names ~w(
     int8_t int16_t int32_t int64_t uint8_t uint16_t uint32_t uint64_t
     int_least8_t int_least16_t int_least32_t int_least64_t

@@ -23,7 +23,20 @@ defmodule Muro.Emit.Rust do
     gen
   ) |> MapSet.new()
 
-  @forbidden @rust_keywords
+  # Primitive types. A `struct` of one of these names shadows the primitive
+  # in the type namespace, which is where `muro__from_u64` reads `u64`.
+  @primitives ~w(
+    bool char str
+    i8 i16 i32 i64 i128 isize
+    u8 u16 u32 u64 u128 usize
+    f16 f32 f64 f128
+  ) |> MapSet.new()
+
+  # Prelude names the runtime spells. Derives and `dyn Fn` are written
+  # with a full path; reserving the name keeps a source struct off them.
+  @prelude ~w(Clone Copy PartialEq Eq Fn) |> MapSet.new()
+
+  @forbidden @rust_keywords |> MapSet.union(@primitives) |> MapSet.union(@prelude)
 
   @doc false
   def source_id(name) when is_binary(name), do: spell(name)
@@ -760,9 +773,9 @@ defmodule Muro.Emit.Rust do
         end)
 
       """
-      #[derive(Clone)]
+      #[derive(::std::clone::Clone)]
       pub struct #{type}(::std::rc::Rc<#{node}>);
-      #[derive(Clone)]
+      #[derive(::std::clone::Clone)]
       enum #{node} {
       #{variants_txt}
       }
@@ -779,7 +792,7 @@ defmodule Muro.Emit.Rust do
     vars = Enum.map_join(atoms, "\n", fn {_name, v} -> "    #{v}," end)
 
     """
-    #[derive(Clone, Copy, PartialEq, Eq)]
+    #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::cmp::Eq)]
     pub enum #{g("Atom")} {
     #{vars}
     }
@@ -809,7 +822,7 @@ defmodule Muro.Emit.Rust do
     p = g("p")
 
     """
-    #[derive(Clone)]
+    #[derive(::std::clone::Clone)]
     pub struct #{erased}(::std::rc::Rc<dyn ::std::any::Any>);
 
     pub fn #{g("erase")}<T: 'static>(#{x}: T) -> #{erased} {
@@ -826,9 +839,9 @@ defmodule Muro.Emit.Rust do
         }
     }
 
-    #[derive(Clone)]
+    #[derive(::std::clone::Clone)]
     pub struct #{nat}(::std::rc::Rc<#{node}>);
-    #[derive(Clone)]
+    #[derive(::std::clone::Clone)]
     enum #{node} {
         #{zero},
         #{suc}(#{nat}),
@@ -842,7 +855,7 @@ defmodule Muro.Emit.Rust do
         #{nat}(::std::rc::Rc::new(#{node}::#{suc}(#{n})))
     }
 
-    pub fn #{g("from_u64")}(mut #{k}: u64) -> #{nat} {
+    pub fn #{g("from_u64")}(mut #{k}: ::std::primitive::u64) -> #{nat} {
         let mut #{n} = #{g("zero")}();
         while #{k} > 0 {
             #{n} = #{g("suc")}(#{n});
@@ -851,7 +864,7 @@ defmodule Muro.Emit.Rust do
         #{n}
     }
 
-    pub fn #{g("to_u64")}(#{n}: &#{nat}) -> u64 {
+    pub fn #{g("to_u64")}(#{n}: &#{nat}) -> ::std::primitive::u64 {
         let mut #{k} = 0u64;
         let mut #{n} = #{n}.clone();
         loop {
@@ -865,16 +878,16 @@ defmodule Muro.Emit.Rust do
         }
     }
 
-    #[derive(Clone, Copy)]
+    #[derive(::std::clone::Clone, ::std::marker::Copy)]
     pub struct #{unit};
 
-    #[derive(Clone)]
+    #[derive(::std::clone::Clone)]
     pub struct #{pair}(#{erased}, #{erased});
 
-    #[derive(Clone)]
+    #[derive(::std::clone::Clone)]
     pub struct #{stream} {
         #{g("field_seed")}: #{erased},
-        #{g("field_step")}: ::std::rc::Rc<dyn Fn(#{erased}) -> #{pair}>,
+        #{g("field_step")}: ::std::rc::Rc<dyn ::std::ops::Fn(#{erased}) -> #{pair}>,
     }
     """
     |> String.trim()

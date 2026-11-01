@@ -746,6 +746,64 @@ defmodule Muro.EmitRustTest do
     assert out == "2 3 1 1 2\n"
   end
 
+  test "a primitive and a prelude name stay off the runtime types" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "prim.muro"), """
+    data u64 : Type where
+      mk : Nat → u64
+
+    data Clone : Type where
+      hold : Clone
+
+    data Fn : Type where
+      fun : Fn
+
+    def built : run u64 := mk (suc (suc (suc (suc 0))))
+
+    def answer : run Nat :=
+      match built motive (λ _ → Nat)
+        | mk k => k
+
+    def two : run Nat := suc (suc 0)
+    """)
+
+    source = File.read!(emit_rust!(dir, "prim"))
+    assert source =~ "pub struct u64_k("
+    assert source =~ "pub struct Clone_k("
+    assert source =~ "pub struct Fn_k("
+    assert source =~ "::std::primitive::u64"
+    assert source =~ "dyn ::std::ops::Fn("
+    assert source =~ "#[derive(::std::clone::Clone)]"
+    refute source =~ "pub struct u64("
+    refute source =~ "dyn Fn("
+
+    File.write!(Path.join(dir, "num.muro"), """
+    def u64 : run Nat := suc (suc 0)
+    """)
+
+    num = File.read!(emit_rust!(dir, "num"))
+    assert num =~ "pub fn u64_k() -> muro__Nat"
+    refute num =~ "fn u64("
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            let n = prim::muro__to_u64(&prim::muro__from_u64(4));
+            let answer = prim::muro__to_u64(&prim::answer());
+            let two = prim::muro__to_u64(&prim::two());
+            let named = num::muro__to_u64(&num::u64_k());
+            println!("{n} {answer} {two} {named}");
+        }
+        """,
+        ["prim", "num"]
+      )
+
+    assert out == "4 4 2 2\n"
+  end
+
   defp forms_book(samples) do
     runs =
       samples
