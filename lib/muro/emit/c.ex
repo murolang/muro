@@ -20,7 +20,8 @@ defmodule Muro.Emit.C do
 
   Identifiers come from `Muro.Emit.Name`. A source name is spelled there.
   A helper, a step, a constructor argument, and a temporary are generated
-  there. The two spellings share no identifier.
+  there. The two spellings share no identifier. A binder is claimed there
+  against every name visible in its scope, including type names.
   """
 
   alias Muro.{Ast, Emit, IR}
@@ -194,12 +195,12 @@ defmodule Muro.Emit.C do
   end
 
   defp compile_fun(fun, book, names, by_name, step_map, nm) do
-    file_used = MapSet.union(nm.taken, MapSet.new(Map.values(names)))
+    file_scope = file_scope(nm, MapSet.new(Map.values(names)))
 
-    {bound, _} =
-      Enum.map_reduce(fun.params, file_used, fn {pname, lay}, used ->
-        {c, used} = claim(spell(pname), used)
-        {{pname, c, lay}, used}
+    {bound, scope} =
+      Enum.map_reduce(fun.params, file_scope, fn {pname, lay}, scope ->
+        {c, scope} = Name.bind(spell(pname), scope)
+        {{pname, c, lay}, scope}
       end)
 
     sig = %{
@@ -211,9 +212,6 @@ defmodule Muro.Emit.C do
 
     env = Enum.reduce(bound, [], fn {n, c, lay}, env -> [{n, c, lay} | env] end)
 
-    base_used =
-      Enum.reduce(bound, file_used, fn {_n, c, _lay}, used -> MapSet.put(used, c) end)
-
     st = %{
       t: 0,
       s: 0,
@@ -224,9 +222,9 @@ defmodule Muro.Emit.C do
       funs: by_name,
       steps_by_name: step_map,
       nm: nm,
-      file_used: file_used,
-      base_used: base_used,
-      arm_used: base_used
+      file_scope: file_scope,
+      base_scope: scope,
+      scope: scope
     }
 
     with {:ok, {pre, expr, _lay, st}} <- emit_ir(fun.body, env, st, sig.ret) do
@@ -294,8 +292,8 @@ defmodule Muro.Emit.C do
   # under a spec alias is bound at the argument's layout, so this clause
   # does not see it.
   defp emit_ir({:let, name, :opaque, :ze, body}, env, st, expect) do
-    {c, used} = claim(spell(name), st.arm_used)
-    st = %{st | arm_used: used}
+    {c, scope} = Name.bind(spell(name), st.scope)
+    st = %{st | scope: scope}
 
     with {:ok, {pre, ex, lay, st}} <- emit_ir(body, [{name, c, :opaque} | env], st, expect) do
       {:ok, {squash(["void *#{c} = 0;", pre]), ex, lay, st}}
@@ -335,9 +333,9 @@ defmodule Muro.Emit.C do
   defp emit_ir({:letp, a, b, e, body}, env, st, expect) do
     with {:ok, {pre, ex, elay, st}} <- emit_ir(e, env, st, pair_ptr()) do
       {sname, st} = news(st)
-      {ca, used} = claim(spell(a), st.arm_used)
-      {cb, used} = claim(spell(b), used)
-      st = %{st | arm_used: used}
+      {ca, scope} = Name.bind(spell(a), st.scope)
+      {cb, scope} = Name.bind(spell(b), scope)
+      st = %{st | scope: scope}
       {la, lb} = pair_halves(elay)
       env1 = [{b, cb, lb}, {a, ca, la} | env]
 
@@ -383,15 +381,15 @@ defmodule Muro.Emit.C do
          {:ok, {pre, seed_ex, seed_lay, st}} <-
            emit_ir(seed, env, st, ctype(lay_of(seed, env, st), st.book)) do
       id = step_id(step_name)
-      slots = capture_slots(caps, cap_ps)
+      slots = capture_slots(caps, cap_ps, st.file_scope)
 
       with {:ok, {cpre, outers, st}} <- emit_outers(slots, env, st) do
         {env_ty, env_src, env_ex, st} = alloc_env(slots, outers, id, st)
-        saved = st.arm_used
+        saved = st.scope
 
         with {:ok, {src, st}} <- emit_step_fun(step, slots, seed_p, id, env_ty, st) do
           expr = "#{g("stream_new")}(#{seed_ex}, #{env_ex}, #{g("step", id)})"
-          st = %{st | steps: st.steps ++ [src], arm_used: saved}
+          st = %{st | steps: st.steps ++ [src], scope: saved}
 
           {:ok,
            {squash([pre, cpre, env_src]), expr, {:stream, seed_domain(seed_p, seed_lay)}, st}}
@@ -443,12 +441,12 @@ defmodule Muro.Emit.C do
   defp emit_switch(:nat, pre, ex, [{:arm, "zero", [], z}, {:arm, "suc", [y], s}], env, st, expect) do
     {sname, st} = news(st)
     {tname, st} = newt(st)
-    st = %{st | arm_used: st.base_used}
+    st = %{st | scope: st.base_scope}
 
     with {:ok, {zpre, zex, _lay, st}} <- emit_ir(z, env, st, expect) do
-      st = %{st | arm_used: st.base_used}
-      {yname, used} = claim(spell(y), st.arm_used)
-      st = %{st | arm_used: used}
+      st = %{st | scope: st.base_scope}
+      {yname, scope} = Name.bind(spell(y), st.scope)
+      st = %{st | scope: scope}
 
       with {:ok, {spre, sex, _lay, st}} <- emit_ir(s, [{y, yname, :nat} | env], st, expect) do
         stmt =
@@ -542,7 +540,7 @@ defmodule Muro.Emit.C do
 
   defp emit_atom_arms(arms, tname, env, st, expect) do
     emit_arm_list(arms, st, fn {:arm, name, _bs, body}, st ->
-      st = %{st | arm_used: st.base_used}
+      st = %{st | scope: st.base_scope}
 
       with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env, st, expect) do
         text =
@@ -588,15 +586,15 @@ defmodule Muro.Emit.C do
     else
       member = spell(cname)
 
-      {decls, env1, used} =
+      {decls, env1, scope} =
         Enum.zip(binders, fields)
-        |> Enum.reduce({[], env, st.base_used}, fn {bname, {ty, lay, k}}, {decls, env, used} ->
-          {c, used} = claim(spell(bname), used)
+        |> Enum.reduce({[], env, st.base_scope}, fn {bname, {ty, lay, k}}, {decls, env, scope} ->
+          {c, scope} = Name.bind(spell(bname), scope)
           decl = "#{ty}#{c} = #{sname}->#{g("as")}.#{member}.#{g("f", k)};"
-          {decls ++ [decl], [{bname, c, lay} | env], used}
+          {decls ++ [decl], [{bname, c, lay} | env], scope}
         end)
 
-      st = %{st | arm_used: used}
+      st = %{st | scope: scope}
 
       with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env1, st, expect) do
         text =
@@ -645,15 +643,17 @@ defmodule Muro.Emit.C do
   defp seed_domain(nil, lay), do: lay
   defp seed_domain({_name, lay}, _lay), do: lay
 
-  defp capture_slots(caps, cap_ps) do
+  # A capture field shares the struct, not the parameter namespace. Claim
+  # it against the file, so a field stays `n` when the arm parameter is `n`.
+  defp capture_slots(caps, cap_ps, file_scope) do
     lays = Enum.map(cap_ps, fn {_n, lay} -> lay end)
 
     {slots, _} =
       caps
       |> Enum.zip(lays)
-      |> Enum.map_reduce(MapSet.new(), fn {{name, tm}, lay}, used ->
-        {field, used} = claim(spell(name), used)
-        {{name, field, tm, lay}, used}
+      |> Enum.map_reduce(file_scope, fn {{name, tm}, lay}, scope ->
+        {field, scope} = Name.bind(spell(name), scope)
+        {{name, field, tm, lay}, scope}
       end)
 
     slots
@@ -695,29 +695,26 @@ defmodule Muro.Emit.C do
     ep = g("ep")
     envp = g("envp")
     seedp = g("seedp")
-    saved_base = st.base_used
+    saved_base = st.base_scope
 
     cap_env =
       Enum.reduce(Enum.reverse(slots), [], fn {name, field, _tm, lay}, env ->
         [{name, "#{ep}->#{field}", lay} | env]
       end)
 
-    scope =
-      st.file_used
-      |> MapSet.put(ep)
-      |> MapSet.put(envp)
-      |> MapSet.put(seedp)
-      |> MapSet.union(MapSet.new(Enum.map(slots, &elem(&1, 1))))
+    visible =
+      [ep, envp, seedp | Enum.map(slots, &elem(&1, 1))]
+      |> Enum.reduce(st.file_scope, &Name.see(&2, &1))
 
     {seed_line, env, step_base} =
       case seed_p do
         nil ->
-          {"  (void)#{seedp};", cap_env, scope}
+          {"  (void)#{seedp};", cap_env, visible}
 
         {sname, slay} ->
-          {local, used} = claim(spell(sname), scope)
+          {local, visible} = Name.bind(spell(sname), visible)
           line = "  #{ctype(slay, st.book)}#{local} = #{seedp};"
-          {line, [{sname, local, slay} | cap_env], used}
+          {line, [{sname, local, slay} | cap_env], visible}
       end
 
     env_line =
@@ -727,10 +724,10 @@ defmodule Muro.Emit.C do
         "  #{env_ty} *#{ep} = #{envp};"
       end
 
-    st = %{st | arm_used: step_base, base_used: step_base}
+    st = %{st | scope: step_base, base_scope: step_base}
 
     with {:ok, {pre, expr, _lay, st}} <- emit_ir(step.body, env, st, pair_ptr()) do
-      st = %{st | base_used: saved_base, arm_used: saved_base}
+      st = %{st | base_scope: saved_base, scope: saved_base}
       {:ok, {step_text(id, env_line <> "\n" <> seed_line, pre, expr), st}}
     end
   end
@@ -1042,7 +1039,7 @@ defmodule Muro.Emit.C do
       unit_helpers(),
       pair_helpers(runs),
       stream_helpers(runs, stream_declared?(sigs, book)),
-      data_ctors(book, nm),
+      data_ctors(book, nm, sigs),
       internals,
       Enum.join(extras, "\n\n"),
       Enum.join(funs, "\n\n")
@@ -1340,20 +1337,26 @@ defmodule Muro.Emit.C do
     |> String.trim()
   end
 
-  defp data_ctors(book, nm) do
+  defp data_ctors(book, nm, sigs) do
+    visible = file_scope(nm, MapSet.new(Enum.map(sigs, & &1.name)))
+
     book
     |> data_defs()
     |> Enum.flat_map(fn d ->
       d.ctors
       |> Enum.with_index()
-      |> Enum.map(fn {ctor, tag} -> ctor_fun(d, ctor, tag, book, nm) end)
+      |> Enum.map(fn {ctor, tag} -> ctor_fun(d, ctor, tag, book, nm, visible) end)
     end)
     |> Enum.join("\n\n")
   end
 
+  defp file_scope(nm, extra) do
+    Name.open(MapSet.union(nm.taken, extra))
+  end
+
   # A constructor with no runtime fields has one value. Share it, as `tt` does.
   # The object name is generated, so a source spelling cannot be it.
-  defp ctor_fun(d, ctor, tag, book, nm) do
+  defp ctor_fun(d, ctor, tag, book, nm, file_scope) do
     {pis, _} = telescope(ctor.type)
 
     fields =
@@ -1363,10 +1366,10 @@ defmodule Muro.Emit.C do
       |> Enum.map(fn {{_, a, x}, k} -> {ctype(a, book), x, k} end)
 
     {params, _} =
-      Enum.map_reduce(fields, MapSet.new(), fn {ty, x, k}, used ->
+      Enum.map_reduce(fields, file_scope, fn {ty, x, k}, scope ->
         base = if x == "_", do: g("f", k), else: spell(x)
-        {cname, used} = claim(base, used)
-        {{ty, cname, k}, used}
+        {cname, scope} = Name.bind(base, scope)
+        {{ty, cname, k}, scope}
       end)
 
     ptr = struct_ptr(d.name)

@@ -1076,6 +1076,74 @@ defmodule Muro.EmitZigTest do
     assert out =~ "All 1 tests passed."
   end
 
+  zig_test "a binder is claimed against type names visible in its scope" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "hide.muro"), """
+    data Box : Type where
+      mk : Π (Box : Nat) → R
+
+    def R : spec Type := Box
+
+    def pack : run Π (n : Nat) → Box :=
+      λ (n : Nat) → mk n
+
+    def wrap : run Π (Box : Nat) → Nat :=
+      λ (Box : Nat) → suc Box
+
+    def nest : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → (λ (Box : Nat) → Box) n
+
+    def held : run Π (n : Nat) → Nat :=
+      λ (n : Nat) →
+        match (pack n) motive (λ _ → Nat)
+          | mk Box => Box
+
+    def opened : run Nat :=
+      let (Box, k) = (suc 0, suc (suc 0)) in Box
+
+    def answer : run Nat :=
+      match (pack (suc (suc 0))) motive (λ _ → Nat)
+        | mk k => k
+
+    def nested : run Nat := nest (suc (suc (suc 0)))
+    def bumped : run Nat := wrap (suc 0)
+    def one : run Nat := held (suc 0)
+    """)
+
+    source = File.read!(emit_zig!(dir, "hide"))
+
+    assert source =~
+             "fn mk(muro__allocator: muro__std.mem.Allocator, muro__a_0: *const muro__Nat) !*const Box"
+
+    assert source =~
+             "pub fn wrap(muro__allocator: muro__std.mem.Allocator, Box_2: *const muro__Nat) !*const muro__Nat"
+
+    assert source =~ "const Box_0 = n;"
+    assert source =~ ".mk => |Box_1| Box_1,"
+    refute source =~ "Box_2: *const Box"
+
+    File.write!(Path.join(dir, "check.zig"), """
+    const std = @import("std");
+    const m = @import("hide.zig");
+
+    test "binders see type names" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const a = arena.allocator();
+        try std.testing.expectEqual(@as(u64, 2), m.muro__to_u64(try m.answer(a)));
+        try std.testing.expectEqual(@as(u64, 3), m.muro__to_u64(try m.nested(a)));
+        try std.testing.expectEqual(@as(u64, 1), m.muro__to_u64(try m.one(a)));
+        try std.testing.expectEqual(@as(u64, 1), m.muro__to_u64(try m.opened(a)));
+        try std.testing.expectEqual(@as(u64, 2), m.muro__to_u64(try m.bumped(a)));
+    }
+    """)
+
+    {out, status} = System.cmd(zig!(), ["test", "check.zig"], cd: dir, stderr_to_stdout: true)
+    assert status == 0, out
+    assert out =~ "All 1 tests passed."
+  end
+
   defp forms_book(samples) do
     runs =
       samples

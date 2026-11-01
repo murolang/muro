@@ -1,3 +1,8 @@
+defmodule Muro.Emit.Name.Scope do
+  @moduledoc false
+  defstruct [:names]
+end
+
 defmodule Muro.Emit.Name do
   @moduledoc """
   Identifiers for the C, Rust, and Zig emitters.
@@ -23,6 +28,15 @@ defmodule Muro.Emit.Name do
   The two sets are disjoint. A source-derived name has no `__`, and a
   generated name has `__`, including after either side is suffixed.
   Suffixing one space cannot enter the other.
+
+  A binder is chosen with `bind/2` or `bind_n/3` on a scope from
+  `open/1`. That scope is every identifier already visible where the
+  binder is introduced, including type names. `bind/2` claims against
+  the whole scope, then adds the chosen spelling. A caller does not
+  pass a smaller set. `see/2` records a generated identifier that is
+  already visible. The C, Rust, and Zig symbol stays in this module.
+  A host export, such as an Elixir NIF, is the source name, mapped by
+  that binding. It is not the symbol.
 
   `spell/3` then `claim/2` is injective on distinct source names. `encode/1`
   is injective, and `_k` sits outside its image, so `spell/3` is injective.
@@ -97,6 +111,43 @@ defmodule Muro.Emit.Name do
     else
       {candidate, MapSet.put(used, candidate)}
     end
+  end
+
+  @doc """
+  A scope of identifiers a binder must not take.
+
+  `visible` is everything already in scope, including type names.
+  """
+  def open(visible) when is_struct(visible, MapSet) do
+    %__MODULE__.Scope{names: visible}
+  end
+
+  @doc """
+  Claim `base` against every name in `scope`, then add the spelling.
+
+  This is the only way a binder is chosen. The type names opened into
+  the scope stay visible to every later binder.
+  """
+  def bind(base, %__MODULE__.Scope{names: names} = scope) when is_binary(base) do
+    {chosen, names} = claim(base, names)
+    {chosen, %{scope | names: names}}
+  end
+
+  @doc """
+  `bind/2` with `claim_n/3` as the suffix counter.
+  """
+  def bind_n(base, n, %__MODULE__.Scope{names: names} = scope)
+      when is_binary(base) and is_integer(n) and n >= 0 do
+    {chosen, names} = claim_n(base, n, names)
+    {chosen, %{scope | names: names}}
+  end
+
+  @doc """
+  Record an identifier that is already visible, such as a generated
+  parameter the emitter chose before the binders.
+  """
+  def see(%__MODULE__.Scope{names: names} = scope, name) when is_binary(name) do
+    %{scope | names: MapSet.put(names, name)}
   end
 
   @doc """

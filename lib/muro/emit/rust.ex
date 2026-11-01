@@ -8,7 +8,8 @@ defmodule Muro.Emit.Rust do
 
   Identifiers come from `Muro.Emit.Name`. A source name is spelled there.
   A helper, a step, a constructor argument, and a temporary are generated
-  there. The two spellings share no identifier.
+  there. The two spellings share no identifier. A binder is claimed there
+  against every name visible in its scope, including type names.
   """
 
   alias Muro.{Ast, Emit, IR}
@@ -43,7 +44,6 @@ defmodule Muro.Emit.Rust do
   defp g(tag), do: Name.gen(tag)
   defp g(tag, n), do: Name.gen(tag, n)
   defp claim(base, used), do: Name.claim(base, used)
-  defp claim_n(base, n, used), do: Name.claim_n(base, n, used)
 
   @doc """
   Render `book` as one Rust source file for a stem such as `half_ok`.
@@ -70,7 +70,8 @@ defmodule Muro.Emit.Rust do
     variants = variant_names(book)
     atoms = atom_variants(book)
     {names, taken} = names_of(book, taken, spell)
-    {step_names, _} = name_steps(steps, taken)
+    {step_names, taken} = name_steps(steps, taken)
+    file_scope = Name.open(taken)
 
     st0 = %{
       book: book,
@@ -82,7 +83,8 @@ defmodule Muro.Emit.Rust do
       types: types,
       ctor_fns: ctor_fns,
       variants: variants,
-      atoms: atoms
+      atoms: atoms,
+      file_scope: file_scope
     }
 
     with {:ok, fns} <- emit_funs(funs, st0) do
@@ -91,7 +93,7 @@ defmodule Muro.Emit.Rust do
         "#![allow(dead_code, unused_variables, non_snake_case, non_camel_case_types, unused_parens)]",
         runtime(),
         atom_enum(atoms),
-        data_items(book, types, variants, ctor_fns),
+        data_items(book, types, variants, ctor_fns, file_scope),
         Enum.join(fns, "\n\n")
       ]
 
@@ -109,14 +111,14 @@ defmodule Muro.Emit.Rust do
   end
 
   defp emit_fun(fun, st0) do
-    {params, used} =
-      Enum.reduce(fun.params, {[], MapSet.new()}, fn {pname, lay}, {acc, used} ->
-        {rn, used} = claim(spell(pname), used)
-        {acc ++ [{pname, rn, lay}], used}
+    {params, scope} =
+      Enum.reduce(fun.params, {[], st0.file_scope}, fn {pname, lay}, {acc, scope} ->
+        {rn, scope} = Name.bind(spell(pname), scope)
+        {acc ++ [{pname, rn, lay}], scope}
       end)
 
     env = Enum.reduce(params, [], fn {src, rn, lay}, env -> [{src, rn, lay} | env] end)
-    st = Map.merge(st0, %{n: 0, used: used})
+    st = Map.merge(st0, %{n: 0, scope: scope})
 
     with {:ok, {lines, expr, lay, _st}} <- emit_tm(fun.body, env, st) do
       args =
@@ -628,8 +630,8 @@ defmodule Muro.Emit.Rust do
 
   defp local(st, base) do
     base = if base in [nil, ""], do: g("s"), else: base
-    {name, used} = claim_n(base, st.n, st.used)
-    {name, %{st | n: st.n + 1, used: used}}
+    {name, scope} = Name.bind_n(base, st.n, st.scope)
+    {name, %{st | n: st.n + 1, scope: scope}}
   end
 
   defp fn_body(lines, expr) do
@@ -711,7 +713,7 @@ defmodule Muro.Emit.Rust do
 
   defp node_name(dname, st), do: g("node_" <> Map.fetch!(st.types, dname))
 
-  defp data_items(book, types, variants, ctor_fns) do
+  defp data_items(book, types, variants, ctor_fns, file_scope) do
     Enum.map_join(data_decls(book), "\n\n", fn d ->
       type = Map.fetch!(types, d.name)
       node = g("node_" <> type)
@@ -735,18 +737,22 @@ defmodule Muro.Emit.Rust do
           v = Map.fetch!(variants, {d.name, c.name})
           fields = ctor_fields(book, c.name)
 
-          args =
+          {bound, _} =
             fields
             |> Enum.with_index()
-            |> Enum.map_join(", ", fn {lay, i} ->
-              "#{g("a", i)}: #{rty(lay, %{types: types})}"
+            |> Enum.map_reduce(file_scope, fn {lay, i}, scope ->
+              {rn, scope} = Name.bind(g("a", i), scope)
+              {{rn, lay}, scope}
             end)
+
+          args =
+            Enum.map_join(bound, ", ", fn {rn, lay} -> "#{rn}: #{rty(lay, %{types: types})}" end)
 
           build =
             if fields == [] do
               "#{node}::#{v}"
             else
-              inner = Enum.map_join(0..(length(fields) - 1), ", ", &"#{g("a", &1)}")
+              inner = Enum.map_join(bound, ", ", fn {rn, _lay} -> rn end)
               "#{node}::#{v}(#{inner})"
             end
 

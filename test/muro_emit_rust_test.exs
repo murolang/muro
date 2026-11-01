@@ -684,6 +684,68 @@ defmodule Muro.EmitRustTest do
     assert out == ""
   end
 
+  test "a binder is claimed against type names visible in its scope" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "hide.muro"), """
+    data Box : Type where
+      mk : Π (Box : Nat) → R
+
+    def R : spec Type := Box
+
+    def pack : run Π (n : Nat) → Box :=
+      λ (n : Nat) → mk n
+
+    def wrap : run Π (Box : Nat) → Nat :=
+      λ (Box : Nat) → suc Box
+
+    def nest : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → (λ (Box : Nat) → Box) n
+
+    def held : run Π (n : Nat) → Nat :=
+      λ (n : Nat) →
+        match (pack n) motive (λ _ → Nat)
+          | mk Box => Box
+
+    def opened : run Nat :=
+      let (Box, k) = (suc 0, suc (suc 0)) in Box
+
+    def answer : run Nat :=
+      match (pack (suc (suc 0))) motive (λ _ → Nat)
+        | mk k => k
+
+    def nested : run Nat := nest (suc (suc (suc 0)))
+    def bumped : run Nat := wrap (suc 0)
+    def one : run Nat := held (suc 0)
+    """)
+
+    source = File.read!(emit_rust!(dir, "hide"))
+    assert source =~ "pub struct Box("
+    assert source =~ "fn mk(muro__a_0: muro__Nat) -> Box"
+    assert source =~ "pub fn wrap(Box_2: muro__Nat) -> muro__Nat"
+    assert source =~ "let Box_0 = n.clone();"
+    assert source =~ "muro__node_Box::mk(Box_0) => Box_0.clone()"
+    refute source =~ "pub fn wrap(Box:"
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            let answer = hide::muro__to_u64(&hide::answer());
+            let nested = hide::muro__to_u64(&hide::nested());
+            let one = hide::muro__to_u64(&hide::one());
+            let opened = hide::muro__to_u64(&hide::opened());
+            let bumped = hide::muro__to_u64(&hide::bumped());
+            println!("{answer} {nested} {one} {opened} {bumped}");
+        }
+        """,
+        ["hide"]
+      )
+
+    assert out == "2 3 1 1 2\n"
+  end
+
   defp forms_book(samples) do
     runs =
       samples

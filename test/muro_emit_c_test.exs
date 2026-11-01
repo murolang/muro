@@ -871,6 +871,80 @@ defmodule Muro.EmitCTest do
     """)
   end
 
+  test "a binder is claimed against type names visible in its scope" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "hide.muro"), """
+    data Box : Type where
+      mk : Π (Box : Nat) → R
+
+    def R : spec Type := Box
+
+    def pack : run Π (n : Nat) → Box :=
+      λ (n : Nat) → mk n
+
+    def wrap : run Π (Box : Nat) → Nat :=
+      λ (Box : Nat) → suc Box
+
+    def nest : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → (λ (Box : Nat) → Box) n
+
+    def held : run Π (n : Nat) → Nat :=
+      λ (n : Nat) →
+        match (pack n) motive (λ _ → Nat)
+          | mk Box => Box
+
+    def opened : run Nat :=
+      let (Box, k) = (suc 0, suc (suc 0)) in Box
+
+    def answer : run Nat :=
+      match (pack (suc (suc 0))) motive (λ _ → Nat)
+        | mk k => k
+
+    def nested : run Nat := nest (suc (suc (suc 0)))
+    def bumped : run Nat := wrap (suc 0)
+    def one : run Nat := held (suc 0)
+    """)
+
+    capture_io(fn ->
+      Mix.Tasks.Muro.Emit.run([Path.join(dir, "hide.muro"), "--backend", "c"])
+    end)
+
+    header = File.read!(Path.join(dir, "hide.h"))
+    source = File.read!(Path.join(dir, "hide.c"))
+    assert header =~ "typedef struct Box Box;"
+    assert source =~ "static Box *mk(muro__nat *Box_2)"
+    assert source =~ "Box *muro__p = muro__ALLOC(sizeof *muro__p);"
+    assert source =~ "muro__nat *wrap(muro__nat *Box_2)"
+    assert source =~ "muro__nat *Box_2 = muro__s_0->muro__as.mk.muro__f_0;"
+    assert source =~ "void *Box_2 = muro__s_0->muro__field_fst;"
+    assert source =~ "muro__nat *muro__s_0 = n;"
+    refute source =~ "muro__nat *Box)"
+
+    out =
+      link_run!(dir, "hide", """
+      #include "hide.h"
+      #include <stdio.h>
+
+      static int nats(muro__nat *n) {
+        int k = 0;
+        while (n->muro__field_tag == 1) {
+          n = n->muro__field_suc;
+          k++;
+        }
+        return k;
+      }
+
+      int main(void) {
+        printf("%d %d %d %d %d\\n",
+          nats(answer()), nats(nested()), nats(one()), nats(opened()), nats(bumped()));
+        return 0;
+      }
+      """)
+
+    assert out == "2 3 1 1 2\n"
+  end
+
   defp forms_book(samples) do
     runs =
       samples

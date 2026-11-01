@@ -13,7 +13,8 @@ defmodule Muro.Emit.Zig do
 
   Identifiers come from `Muro.Emit.Name`. A source name is spelled there.
   A helper, a step, a constructor argument, and a temporary are generated
-  there. The two spellings share no identifier.
+  there. The two spellings share no identifier. A binder is claimed there
+  against every name visible in its scope, including type names.
   """
 
   alias Muro.{Ast, Emit, IR}
@@ -81,7 +82,6 @@ defmodule Muro.Emit.Zig do
   defp alloc_ty, do: "#{stdn()}.mem.Allocator"
 
   defp claim(base, used), do: Name.claim(base, used)
-  defp claim_n(base, n, used), do: Name.claim_n(base, n, used)
 
   @doc """
   Render `book` as one Zig source file for a stem such as `half_ok`.
@@ -163,16 +163,16 @@ defmodule Muro.Emit.Zig do
   end
 
   defp emit_run(fun, st0) do
-    used0 = MapSet.put(st0.globals, al())
+    scope0 = st0.globals |> Name.open() |> Name.see(al())
 
-    {params, used} =
-      Enum.reduce(fun.params, {[], used0}, fn {pname, lay}, {acc, used} ->
-        {rn, used} = claim(spell(pname), used)
-        {acc ++ [{pname, rn, lay}], used}
+    {params, scope} =
+      Enum.reduce(fun.params, {[], scope0}, fn {pname, lay}, {acc, scope} ->
+        {rn, scope} = Name.bind(spell(pname), scope)
+        {acc ++ [{pname, rn, lay}], scope}
       end)
 
     env = Enum.reduce(params, [], fn {src, rn, lay}, env -> [{src, rn, lay} | env] end)
-    st = Map.merge(st0, %{n: 0, blk: 0, used: used})
+    st = Map.merge(st0, %{n: 0, blk: 0, scope: scope})
 
     with {:ok, {lines, ex, lay, eff, _st}} <- emit_tm(fun.body, env, st) do
       args =
@@ -201,13 +201,14 @@ defmodule Muro.Emit.Zig do
     if length(seed_params) > 1 do
       {:error, "c:unsupported"}
     else
-      used0 =
+      scope0 =
         st0.globals
-        |> MapSet.put(al())
-        |> MapSet.put(g("env"))
-        |> MapSet.put(g("seed"))
+        |> Name.open()
+        |> Name.see(al())
+        |> Name.see(g("env"))
+        |> Name.see(g("seed"))
 
-      st = Map.merge(st0, %{n: 0, blk: 0, used: used0})
+      st = Map.merge(st0, %{n: 0, blk: 0, scope: scope0})
       {pro, env, st} = step_prologue(fun.body, caps, seed_params, info, st)
 
       with {:ok, {lines, ex, lay, eff, st}} <- emit_tm(fun.body, env, st) do
@@ -895,13 +896,13 @@ defmodule Muro.Emit.Zig do
 
   defp local(st, base) do
     base = if base in [nil, ""], do: g("s"), else: base
-    {name, used} = claim_n(base, st.n, st.used)
-    {name, %{st | n: st.n + 1, used: used}}
+    {name, scope} = Name.bind_n(base, st.n, st.scope)
+    {name, %{st | n: st.n + 1, scope: scope}}
   end
 
   defp fresh_label(st) do
-    {name, used} = claim(g("blk", st.blk), st.used)
-    {name, %{st | blk: st.blk + 1, used: used}}
+    {name, scope} = Name.bind(g("blk", st.blk), st.scope)
+    {name, %{st | blk: st.blk + 1, scope: scope}}
   end
 
   defp alloc_discard(lines, body, st) do
@@ -1195,22 +1196,30 @@ defmodule Muro.Emit.Zig do
       """
       |> String.trim()
     else
+      scope = Name.open(st.globals) |> Name.see(al())
+
+      {bound, _} =
+        Enum.map_reduce(Enum.with_index(fields), scope, fn {lay, i}, scope ->
+          {rn, scope} = Name.bind(g("a", i), scope)
+          {{rn, lay}, scope}
+        end)
+
       args =
         ["#{al()}: #{alloc_ty()}"] ++
-          Enum.map(Enum.with_index(fields), fn {lay, i} ->
-            "#{g("a", i)}: #{pty(lay, st)}"
-          end)
+          Enum.map(bound, fn {rn, lay} -> "#{rn}: #{pty(lay, st)}" end)
 
       build =
-        if length(fields) == 1 do
-          ".#{v} = #{g("a", 0)}"
-        else
-          inner =
-            Enum.map_join(0..(length(fields) - 1), ", ", fn i ->
-              ".#{g("f", i)} = #{g("a", i)}"
-            end)
+        case bound do
+          [{rn, _lay}] ->
+            ".#{v} = #{rn}"
 
-          ".#{v} = .{ #{inner} }"
+          _ ->
+            inner =
+              bound
+              |> Enum.with_index()
+              |> Enum.map_join(", ", fn {{rn, _lay}, i} -> ".#{g("f", i)} = #{rn}" end)
+
+            ".#{v} = .{ #{inner} }"
         end
 
       """

@@ -69,5 +69,20 @@ defmodule Muro.EmitNameTest do
     refute "muro__step_2" in source_ids
   end
 
+  test "a binder is claimed against every visible name, including types" do
+    scope = Name.open(MapSet.new(["Box", "mk"]))
+    {param, scope} = Name.bind("Box", scope)
+    assert param == "Box_2"
+    {again, scope} = Name.bind("Box", scope)
+    assert again == "Box_3"
+    {local, scope} = Name.bind_n("mk", 0, scope)
+    assert local == "mk_0"
+    {fresh, _} = Name.bind("n", scope)
+    assert fresh == "n"
+
+    seen = Name.see(Name.open(MapSet.new()), "muro__ep")
+    assert Name.bind("muro__ep", seen) |> elem(0) == "muro__ep_2"
+  end
+
   defp width?(encoded), do: String.match?(encoded, ~r/^[iu][0-9]+$/)
 end
