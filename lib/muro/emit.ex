@@ -14,6 +14,7 @@ defmodule Muro.Emit do
   """
 
   alias Muro.Ast
+  alias Muro.Emit.Name
 
   # Words the Elixir parser rejects as function names (`syntax error before: do`).
   @elixir_reserved ~w(
@@ -710,15 +711,9 @@ defmodule Muro.Emit do
 
   defp ename(names, name), do: Map.fetch!(names, name)
 
-  defp claim(base, used) do
-    name = if MapSet.member?(used, base), do: bump(base, 2, used), else: base
-    {name, MapSet.put(used, name)}
-  end
-
-  defp bump(base, i, used) do
-    n = "#{base}_#{i}"
-    if MapSet.member?(used, n), do: bump(base, i + 1, used), else: n
-  end
+  # Same suffix as the C, Rust, and Zig emitters. Elixir spellings are
+  # not in those two spaces; only the numeric tail is shared.
+  defp claim(base, used), do: Name.claim(base, used)
 
   defp term_has_toi64?({:toi64, _}), do: true
 
