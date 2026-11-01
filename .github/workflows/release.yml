@@ -92,6 +92,8 @@ jobs:
             printf "%s\n" "def one : run Nat := 0" > /tmp/one.muro
             /tmp/muro emit /tmp/one.muro --backend rust
             test -f /tmp/one.rs
+            printf "%s\n" 'import "std:bool.muro"' 'def n : run Bool := not false' > /tmp/use_std.muro
+            /tmp/muro check /tmp/use_std.muro
           '
 
   release:

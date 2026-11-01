@@ -21,7 +21,7 @@ If you want to write a program today, start at [Start](start.md), then [Marks](m
 
 If you are an agent (or you are pairing with one), read [For agents](for-agents.md) first. There are two jobs. Do not mix them.
 
-If you already write `.muro` and need a fact, use [Grammar](grammar.md) and [Examples](examples.md).
+If you already write `.muro` and need a fact, use [Grammar](grammar.md) and [Examples](examples.md). The ordinary library is [Library](library.md): `import "std:list.muro"`.
 
 If you want to change the calculus itself, stop. That is a different job: [Extending the kernel](extending.md).
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.3
+
+The ordinary library is five checked books compiled into the compiler: `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, and `ord.muro`. `import "std:list.muro"` loads that copy. The same bytes are used from a Hex package, from the self-contained executable, and from a checkout. A missing name lists the books. A path that leaves the library is refused. A book reached twice joins once. A relative import inside a library book stays in the library.
+
+`Le` is ≤ on `Nat`, with reflexivity, transitivity, and `max` with its monotonicity lemmas. `List` has membership and lookup. `Bool` has `not`, `and`, and `or`. `Maybe` has `fromMaybe`, `isJust`, and `isNothing`. `Ordering` compares `Nat`, sound against `Le`, and pairs compare lexicographically. `examples/list.muro` and `examples/maybe.muro` import those books. `examples/sort.muro` imports `std:list.muro`.
+
+The book hash includes an imported library book as `std/<file>`. The prelude stays out of the hash. The version pin covers the checker, the emitter, the prelude, and this library.
+
+### Manual
+
+- Library: each book and what it provides. Terms, Packages, Grammar, and the `muro check` help name `std:`.
+
+### Package
+
+- Version 0.20.3.
+
 ## 0.20.1
 
 A received nat whose bound is a numeral `w` splits into `0` … `w`. A direct `case` writes those arms in order. A `run` that reads the nat is evaluated at each value, and the protocol arm is the constructor it returns. The process still covers every numeral. A `run` of that nat and one declared data payload is the product of the splits. The judgment also counts a bit. `Bit` is a payload, not a term, so a `run` in a file does not take it. A sender of a literal or a computed numeral is checked on the arm that value selects. A meeting, including `buffer 1`, runs the arm of the value that arrived. The arm label is the decimal spelling, so `| 0 =>` is zero and `| 00 =>` is not.
