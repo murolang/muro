@@ -60,6 +60,7 @@ import Muro.Temporal.Live
 import Muro.Temporal.Fair
 import Muro.Temporal.Decide
 import Muro.Temporal.Span
+import Muro.Temporal.Finite
 import Muro.Temporal.Search
 import Muro.Temporal.Sound
 import Muro.Temporal.Examples

@@ -53,6 +53,7 @@ agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Fair.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Decide.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Span.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Finite.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Search.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Sound.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Temporal/Examples.agda
