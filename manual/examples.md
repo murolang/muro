@@ -404,7 +404,7 @@ A productive `run` Stream of zeros. `head-zeros` is `{head zeros ≡ 0 : Nat}` b
 
 ## higher_order.muro
 
-A `run` definition as a value. `map` and `tabulate` take a `+` function; `tabulate ident` passes a definition, `map (plus 2)` a partial application, and `measure (length Nat)` a partial application whose given argument is erased. The emitted code passes curried closures ([Emit](emit.md#functions-as-values)); C emit refuses it (`c:lambda`).
+A `run` definition as a value. It imports `std:list.muro`. `map` and `tabulate` take a `+` function; `tabulate ident` passes a definition, `map (plus 2)` a partial application, and `measure (length Nat)` a partial application of the library `length` whose given argument is erased. The emitted code passes curried closures ([Emit](emit.md#functions-as-values)); C emit refuses it (`c:lambda`).
 
 ## dominance.muro
 
@@ -424,11 +424,11 @@ See [Either and Dec](either.md).
 
 ## list.muro
 
-`List A`, `nil` / `cons`, `length`, `ones2`. `List A` is Data iff `A` is. `length-ones2` is `refl`.
+Imports `std:list.muro` and declares nothing of its own. `List`, membership, `length`, `lookup`, and `ones2` live in the library ([Library](library.md)). `length-ones2` is `refl`.
 
 ## maybe.muro
 
-`Maybe`, `fromMaybe`, `fromJust1`. Erased type argument.
+Imports `std:maybe.muro` and declares nothing of its own. `Maybe`, `fromMaybe`, `isJust`, and `isNothing` live in the library. `fromJust1` is `refl`. The type argument is erased.
 
 ## even_odd.muro
 

@@ -16,6 +16,13 @@ defmodule Mix.Tasks.Muro.Check do
   as a type error; raise the fuel and check again. Every definition is
   checked, and every error is reported, in book order.
 
+  `import "std:file.muro"` loads a book of the ordinary library compiled
+  into this copy of muro. The same bytes are used from a Hex install,
+  from the self-contained executable, and from a checkout. A missing
+  name lists the books. A path that leaves the library is refused.
+  `import "pkg:name/file.muro"` loads a package file. A relative path
+  is relative to the importing file. A file reached twice joins once.
+
   The first line is the version that checked the book (`Muro v` and the
   version from the application spec). On success the next line is
   `All terms check. Evidence never becomes a run.` When the book imports

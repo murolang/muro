@@ -8,7 +8,7 @@ defmodule Muro.CLI.Deps do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro deps.get reads muro_deps from the manifest and fetches each package into muro_deps/<name>/. It writes muro.lock. It takes no package names: every package is resolved again. Git packages are cloned with git. Hex packages are downloaded over HTTPS. With no packages it prints "nothing to fetch" and removes packages the previous lock named. A failure leaves muro.lock and muro_deps/ as they were. muro check and muro gen do not fetch and do not use the network. A project with no manifest has nothing to fetch.
+      muro deps.get reads muro_deps from the manifest and fetches each package into muro_deps/<name>/. It writes muro.lock. It takes no package names: every package is resolved again. Git packages are cloned with git. Hex packages are downloaded over HTTPS. With no packages it prints "nothing to fetch" and removes packages the previous lock named. A failure leaves muro.lock and muro_deps/ as they were. muro check and muro gen do not fetch and do not use the network. A project with no manifest has nothing to fetch. import "std:file.muro" is the ordinary library compiled into the executable. deps.get does not fetch it.
       """),
       Muro.CLI.Text.section("USAGE", Muro.CLI.Text.pre(["muro deps.get"])),
       Muro.CLI.Text.section(

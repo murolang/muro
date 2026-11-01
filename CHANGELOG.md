@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.2
+## 0.20.4
 
 `--backend zig` writes `<name>.zig` next to the book and prints that path. It prints the same closed run as the C and Rust backends: `run` and `run internal`, `Nat`, `Unit`, user data including indexed data, `match`, and streams. A lambda applied on the spot is a local. Erased arguments are dropped. Spec and evidence are omitted. `Nat` and user data are tagged unions. A fieldless constructor is one static value. `match` is `switch`. A stream is a seed, an environment, and a step. `run internal` is a private function. A function that allocates takes `muro__allocator: muro__std.mem.Allocator` first and returns an error union, so the caller can pass a `muro__std.heap.ArenaAllocator` and reset it. `muro__from_u64` builds a `Nat` and `muro__to_u64` reads it back. A spec alias is revealed where the text reads a `Nat`, a pair, or a stream. Every identifier in the C, Rust, and Zig text is either a source spelling or a generated name. A source spelling is an injective encoding of the source identifier. It gains `_k` when that encoding is a keyword, a primitive, or a host name, and a numeric suffix when the spelling is already taken. It contains no `__`. A generated name, a helper, a step, a constructor argument, or a temporary, is `muro__` plus a tag and always contains `__`, including after a suffix. `muro_step` and `muro-step` stay apart from `muro__step_2`. `a-b`, `a_b`, and `a_b_2` stay three identifiers. C allocation is `muro__ALLOC`. A lambda applied on the spot binds an argument of a spec alias at that argument's layout, so a zero stays a Nat. A pattern binder hidden by a later binder of the same name is discarded. A binder is claimed against every name visible in its scope, including type names. Rust reserves primitive types and the prelude names its runtime uses, and it names `u64` as `::std::primitive::u64`. Zig reserves its keywords and primitives, including `u64`, `bool`, `type`, and `anyopaque`. A source `uint8_t` encodes to `uint8zut`, so it does not spell the C typedef. A NIF's Elixir name is the source name. The C symbol it calls is the spelling. A term the C backend refuses is refused here, with the same reason. The text is Zig 0.15. `zig` translates it. The proof stops at the run image.
 
@@ -10,7 +10,23 @@
 
 ### Package
 
-- Version 0.20.2.
+- Version 0.20.4.
+
+## 0.20.3
+
+The ordinary library is five checked books compiled into the compiler: `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, and `ord.muro`. `import "std:list.muro"` loads that copy. The same bytes are used from a Hex package, from the self-contained executable, and from a checkout. A missing name lists the books. A path that leaves the library is refused. A book reached twice joins once. A relative import inside a library book stays in the library.
+
+`Le` is ≤ on `Nat`, with reflexivity, transitivity, and `max` with its monotonicity lemmas. `List` has membership and lookup. `Bool` has `not`, `and`, and `or`. `Maybe` has `fromMaybe`, `isJust`, and `isNothing`. `Ordering` compares `Nat`, sound against `Le`, and pairs compare lexicographically. The second components of a pair are compared only when the first ordering is `eq`. `examples/list.muro` and `examples/maybe.muro` import those books. `examples/sort.muro` imports `std:list.muro`.
+
+The book hash includes an imported library book as `std/<file>`. The prelude stays out of the hash. The version pin covers the checker, the emitter, the prelude, and this library.
+
+### Manual
+
+- Library: each book and what it provides. Terms, Packages, Grammar, and the `muro check` help name `std:`.
+
+### Package
+
+- Version 0.20.3.
 
 ## 0.20.1
 

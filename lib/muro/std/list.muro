@@ -1,0 +1,91 @@
+-- list.muro — List, length, membership, and lookup.
+-- A relative import stays inside the standard library.
+import "maybe.muro"
+
+data List (A : Type) : Type where
+  nil  : List A
+  cons : A → List A → List A
+
+-- A proof that the head matches, or a proof that the tail has the element.
+data Or (A : Type) (B : Type) : Type where
+  yes : A → Or A B
+  no  : B → Or A B
+
+-- x occurs in xs. Empty at nil. At cons, the head matches or the tail does.
+def Elem : spec Π (-A : Type) → Π (x : A) → Π (xs : List A) → Type :=
+  λ (-A : Type) → λ (x : A) → λ (xs : List A) →
+    match xs motive (λ _ → Type)
+      | nil => Empty
+      | cons y ys => Or {x ≡ y : A} (Elem A x ys)
+
+def length : run Π (-A : Type) → Π (xs : List A) → Nat :=
+  λ (-A : Type) → λ (xs : List A) →
+    match xs motive (λ _ → Nat)
+      | nil => 0
+      | cons _ as => suc (length A as)
+
+-- The element at n, or nothing when n runs past the end.
+-- The index is the second argument. Recursion is on the list.
+def lookup : run Π (-A : Type) → Π (n : Nat) → Π (xs : List A) → Maybe A :=
+  λ (-A : Type) → λ (n : Nat) → λ (xs : List A) →
+    match xs motive (λ _ → Maybe A)
+      | nil => nothing
+      | cons x rest =>
+          (match n motive (λ _ → Maybe A)
+            | 0 => just x
+            | suc n1 => lookup A n1 rest)
+
+def ones2 : run List Nat :=
+  cons (suc 0) (cons (suc 0) nil)
+
+def length-ones2 : evidence {length Nat ones2 ≡ suc (suc 0) : Nat} :=
+  refl
+
+def length-nil : evidence Π (-A : Type) → {length A nil ≡ 0 : Nat} :=
+  λ (-A : Type) → refl
+
+def length-cons : evidence Π (-A : Type) → Π (x : A) → Π (xs : List A) →
+                           {length A (cons x xs) ≡ suc (length A xs) : Nat} :=
+  λ (-A : Type) → λ (x : A) → λ (xs : List A) → refl
+
+def lookup-nil : evidence Π (-A : Type) → Π (n : Nat) →
+                          {lookup A n nil ≡ nothing : Maybe A} :=
+  λ (-A : Type) → λ (n : Nat) → refl
+
+def lookup-zero : evidence Π (-A : Type) → Π (x : A) → Π (xs : List A) →
+                           {lookup A 0 (cons x xs) ≡ just x : Maybe A} :=
+  λ (-A : Type) → λ (x : A) → λ (xs : List A) → refl
+
+def lookup-suc : evidence Π (-A : Type) → Π (n : Nat) → Π (x : A) → Π (xs : List A) →
+                          {lookup A (suc n) (cons x xs) ≡ lookup A n xs : Maybe A} :=
+  λ (-A : Type) → λ (n : Nat) → λ (x : A) → λ (xs : List A) → refl
+
+-- The head is a member of the cons cell.
+def elem-here : evidence Π (-A : Type) → Π (x : A) → Π (xs : List A) →
+                         Elem A x (cons x xs) :=
+  λ (-A : Type) → λ (x : A) → λ (xs : List A) → yes refl
+
+-- A member of the tail is a member of the cons cell.
+def elem-there : evidence Π (-A : Type) → Π (x : A) → Π (y : A) → Π (xs : List A) →
+                          Π (e : Elem A x xs) → Elem A x (cons y xs) :=
+  λ (-A : Type) → λ (x : A) → λ (y : A) → λ (xs : List A) → λ (e : Elem A x xs) →
+    no e
+
+-- Nothing is a member of nil. The type computes to Empty.
+def elem-nil : evidence Π (-A : Type) → Π (x : A) → Π (e : Elem A x nil) → Empty :=
+  λ (-A : Type) → λ (x : A) → λ (e : Elem A x nil) → e
+
+-- A non-empty list has length at least one. Membership rules out nil.
+def elem-length : evidence Π (-A : Type) → Π (x : A) → Π (xs : List A) →
+                           Π (e : Elem A x xs) → Le-list (length A xs) :=
+  λ (-A : Type) → λ (x : A) → λ (xs : List A) → λ (e : Elem A x xs) →
+    (match xs motive (λ (ys : List A) → Π (_ : Elem A x ys) → Le-list (length A ys))
+      | nil => λ (e0 : Elem A x nil) → matchEmpty e0 motive (λ _ → Le-list 0)
+      | cons y ys => λ (_ : Elem A x (cons y ys)) → tt) e
+
+-- Unit when the length is at least one. Kept here so list does not import le.
+def Le-list : spec Π (n : Nat) → Type :=
+  λ (n : Nat) →
+    match n motive (λ _ → Type)
+      | 0 => Empty
+      | suc _ => Unit

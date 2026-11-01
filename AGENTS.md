@@ -14,6 +14,7 @@ Do:
 - Type every binder. Write every motive.
 - Use only the tags `run`, `run internal`, `spec` and `evidence`.
 - `pred`, `plus`, `inj-suc`, `plus_suc`, `sym` and `cong` are already in scope (`lib/muro/prelude.muro`). If you redefine one, your definition replaces it, and any prelude definition that refers to it is dropped.
+- The ordinary library is `import "std:<file>.muro"` ([Library](manual/library.md)). Do not copy `List`, `Maybe`, or `Bool` into a new file, and do not add those names to the prelude.
 - Use `?` only while a term is unfinished. A hole always fails, and it prints `expected` and `context` for you to fill.
 - Read every error. Parse and check errors start with `line:col`, and the failing definitions are listed in book order.
 - For a library with `param` entries, check it through a file that supplies the params (see [Params](manual/language.md#params)).
@@ -49,7 +50,7 @@ mix muro.deps.get                            # fetch muro_deps/ and write muro.l
 make agda                                   # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.20.2`. From a checkout: `mix archive.build && mix archive.install muro-0.20.2.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks. A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.20.2`. See [The executable](manual/binary.md).
+The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.20.4`. From a checkout: `mix archive.build && mix archive.install muro-0.20.4.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks. A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.20.4`. See [The executable](manual/binary.md).
 
 Success from `mix muro.check`: a `Muro v…` line, then `All terms check. Evidence never becomes a run.` A book that imports packages then prints one `conforms to <name> <version> (sha256 <hash>)` line per package. See [Packages](manual/packages.md).
 
@@ -96,6 +97,6 @@ The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` a
 
 ## Manual
 
-[Start](manual/start.md) · [Marks](manual/marks.md) · [The wall](manual/wall.md) · [Terms](manual/language.md) · [Sessions](manual/sessions.md) · [Identity](manual/identity.md) · [Data](manual/data.md) · [Indexed data](manual/indexed.md) · [Streams](manual/streams.md) · [Either and Dec](manual/either.md) · [Machine numbers](manual/machine.md) · [Emit](manual/emit.md) · [State machines](manual/fsm.md) · [Mutation](manual/mutate.md) · [Closed equations as tests](manual/exunit.md) · [Committed modules](manual/gen.md) · [The executable](manual/binary.md) · [Host representations](manual/repr.md) · [Packages](manual/packages.md) · [Grammar](manual/grammar.md) · [Examples](manual/examples.md) · [CSHRL](manual/cshrl.md) · [For agents](manual/for-agents.md) · [Extending](manual/extending.md) · [Limits](manual/limits.md)
+[Start](manual/start.md) · [Marks](manual/marks.md) · [The wall](manual/wall.md) · [Terms](manual/language.md) · [Sessions](manual/sessions.md) · [Identity](manual/identity.md) · [Data](manual/data.md) · [Indexed data](manual/indexed.md) · [Streams](manual/streams.md) · [Either and Dec](manual/either.md) · [Machine numbers](manual/machine.md) · [Emit](manual/emit.md) · [State machines](manual/fsm.md) · [Mutation](manual/mutate.md) · [Closed equations as tests](manual/exunit.md) · [Committed modules](manual/gen.md) · [The executable](manual/binary.md) · [Host representations](manual/repr.md) · [Packages](manual/packages.md) · [Library](manual/library.md) · [Grammar](manual/grammar.md) · [Examples](manual/examples.md) · [CSHRL](manual/cshrl.md) · [For agents](manual/for-agents.md) · [Extending](manual/extending.md) · [Limits](manual/limits.md)
 
 Machine-readable index: [`manual/manifest.yml`](manual/manifest.yml). Canonical book: `examples/half_ok.muro`.
