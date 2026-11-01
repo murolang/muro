@@ -84,5 +84,44 @@ defmodule Muro.EmitNameTest do
     assert Name.bind("muro__ep", seen) |> elem(0) == "muro__ep_2"
   end
 
+  test "decode inverts encode, including escapes" do
+    samples = [
+      "is-on",
+      "hold-it",
+      "muro__iszdon",
+      "a_b_2",
+      "foo-bar",
+      "n'",
+      "λ",
+      "?",
+      "Bit",
+      "and",
+      "end",
+      "true",
+      "foo?",
+      "1foo",
+      "zz",
+      "Z",
+      "_",
+      "a__b",
+      ""
+    ]
+
+    for name <- samples do
+      assert Name.decode(Name.encode(name)) == {:ok, name}
+    end
+
+    assert Name.decode("z") == :error
+    assert Name.decode("Z") == :error
+    assert Name.decode("zn12") == :error
+    assert Name.decode("znXXXX") == :error
+    assert Name.decode("zz") == {:ok, "z"}
+    assert Name.decode("zu") == {:ok, "_"}
+    assert Name.decode("zd") == {:ok, "-"}
+    assert Name.decode("zq") == {:ok, "'"}
+    assert Name.decode("zn03bb") == {:ok, "λ"}
+    assert Name.decode("zn03BB") == {:ok, "λ"}
+  end
+
   defp width?(encoded), do: String.match?(encoded, ~r/^[iu][0-9]+$/)
 end

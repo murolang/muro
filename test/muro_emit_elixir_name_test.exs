@@ -224,6 +224,53 @@ defmodule Muro.EmitElixirNameTest do
     assert out =~ "failures: 0"
   end
 
+  test "elixir_source inverts both spellings, and source_ctor is that inverse" do
+    samples = [
+      "is-on",
+      "hold-it",
+      "muro__iszdon",
+      "a_b_2",
+      "foo-bar",
+      "n'",
+      "λ",
+      "?",
+      "Bit",
+      "and",
+      "end",
+      "true",
+      "foo?",
+      "1foo",
+      "zz",
+      "Z",
+      "_",
+      "a__b",
+      ""
+    ]
+
+    for name <- samples do
+      assert Emit.elixir_source(Emit.elixir_base(name)) == {:ok, name}
+      assert Emit.elixir_source(Emit.elixir_atom_name(name)) == {:ok, name}
+    end
+
+    assert Emit.elixir_atom_name("is-on") == "muro__iszdon"
+    assert Emit.elixir_atom_name("hold-it") == "muro__holdzdit"
+    assert Emit.elixir_source("muro__iszdon") == {:ok, "is-on"}
+    assert Emit.elixir_source("just") == {:ok, "just"}
+
+    assert Emit.source_ctor(["is-on", "is-off"], "muro__iszdon") == {:ok, "is-on"}
+    assert Emit.source_ctor(["just"], "just") == {:ok, "just"}
+    assert Emit.source_ctor(["is-on"], "is-on") == {:ok, "is-on"}
+    assert Emit.source_ctor(["muro__iszdon"], "muro__iszdon") == {:ok, "muro__iszdon"}
+    assert Emit.source_ctor(["is-on", "muro__iszdon"], "muro__iszdon") == {:ok, "is-on"}
+
+    long = Emit.elixir_atom_name("muro__iszdon")
+    assert Emit.source_ctor(["muro__iszdon"], long) == {:ok, "muro__iszdon"}
+    assert Emit.source_ctor(["is-on"], long) == :error
+    assert Emit.source_ctor(["just"], "muro__iszdon") == :error
+    assert Emit.source_ctor(["nothing"], "nothing") == {:ok, "nothing"}
+    assert Emit.source_ctor(MapSet.new(["is-on"]), "muro__iszdon") == {:ok, "is-on"}
+  end
+
   defp tmp! do
     dir = Path.join(System.tmp_dir!(), "muro_elixir_name_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
