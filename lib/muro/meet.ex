@@ -94,6 +94,13 @@ defmodule Muro.Meet do
   defp advance_head({:drecv, _, _, s}, {:arm, _}), do: s
   defp advance_head({:send, _, s}, {:arm, _}), do: s
   defp advance_head({:recv, _, s}, {:arm, _}), do: s
+
+  defp advance_head({:esend, _, _, {:case, scrut, arms}}, {:arm, val}),
+    do: enter_case(scrut, val, arms)
+
+  defp advance_head({:erecv, _, _, {:case, scrut, arms}}, {:arm, val}),
+    do: enter_case(scrut, val, arms)
+
   defp advance_head({:esend, _, _, s}, {:arm, _}), do: s
   defp advance_head({:erecv, _, _, s}, {:arm, _}), do: s
   defp advance_head({:send, _, s}, :put), do: s
@@ -682,25 +689,38 @@ defmodule Muro.Meet do
               :yes ->
                 case Muro.Session.arm(send_ty, v, arms, book) do
                   {:ok, arm} ->
-                    took(["get #{gname}", "arm #{arm_name(v)}"], {:arm, v})
+                    case open_nat_match(arm, ridx, book) do
+                      {:ok, arm} ->
+                        Process.put({Muro.Session, :meet_idx}, ridx)
 
-                    advance_arm(
-                      orient,
-                      cont,
-                      arm,
-                      gname,
-                      v,
-                      send_ty,
-                      sctx,
-                      rctx,
-                      sidx,
-                      ridx,
-                      penv,
-                      qenv,
-                      seen,
-                      fuel,
-                      book
-                    )
+                        try do
+                          took(["get #{gname}", "arm #{arm_name(v)}"], {:arm, v})
+                        after
+                          Process.delete({Muro.Session, :meet_idx})
+                        end
+
+                        advance_arm(
+                          orient,
+                          cont,
+                          arm,
+                          gname,
+                          v,
+                          send_ty,
+                          sctx,
+                          rctx,
+                          sidx,
+                          ridx,
+                          penv,
+                          qenv,
+                          seen,
+                          fuel,
+                          book
+                        )
+
+                      :error ->
+                        why(@cover)
+                        {:no, left, right}
+                    end
 
                   :error ->
                     why("the value #{Muro.Session.show_value(v)} does not select an arm")
@@ -722,8 +742,34 @@ defmodule Muro.Meet do
 
   defp arm_name(:b0), do: "b0"
   defp arm_name(:b1), do: "b1"
+  defp arm_name({:nat, n}) when is_integer(n), do: Integer.to_string(n)
   defp arm_name({:con, name, _}), do: name
   defp arm_name(other), do: Muro.Session.show_value(other)
+
+  # A match on a nat already in the receiver index is the arm that
+  # numeral selects. The value just exchanged is not in the index yet.
+  defp open_nat_match({:match, name, arms}, idx, book) do
+    case nat_at(idx, name) do
+      {:nat, n} ->
+        case Muro.Session.arm(:nat, {:nat, n}, arms, book) do
+          {:ok, leaf} -> open_nat_match(leaf, idx, book)
+          :error -> :error
+        end
+
+      _ ->
+        {:ok, {:match, name, arms}}
+    end
+  end
+
+  defp open_nat_match(proc, _idx, _book), do: {:ok, proc}
+
+  defp nat_at(idx, name) do
+    case Map.get(idx, name) do
+      {:lit, n} when is_integer(n) and n >= 0 -> {:nat, n}
+      {:nat, n} when is_integer(n) and n >= 0 -> {:nat, n}
+      _ -> nil
+    end
+  end
 
   defp advance_arm(
          :put_first,

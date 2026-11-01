@@ -31,6 +31,8 @@ module Muro.Meet where
 open import Data.Bool.Base using (Bool; true; false)
 open import Data.Empty using (⊥)
 open import Data.List.Base using (List; []; _∷_; _++_)
+open import Data.Nat.Base using (ℕ) renaming (zero to nzero; suc to nsuc)
+open import Data.Nat.Show using (show)
 open import Data.Product using (_×_; Σ; _,_)
 open import Data.Maybe.Base using (Maybe; just; nothing)
 open import Data.String.Base using (String)
@@ -482,10 +484,38 @@ tailAns (aa-named _ as) = as
 tailAns (aa-prod _ as) = as
 tailAns (aa-fork _ as) = as
 
+-- The answer stored on the arm `natGo` selects. The index starts at
+-- zero and steps with the value, the same way `natGo` does.
+natAns : ∀ {ans} (v : Val nat) (qs : List PArm) (i : ℕ) → ArmAns ans qs → Maybe (Σ Proc ans)
+natAns zero [] _ _ = nothing
+natAns zero (bare p ∷ _) _ (aa-bare a _) = just (p , a)
+natAns zero (named c [] p ∷ _) i (aa-named f _) with c == show i
+... | true = just (p , f [])
+... | false = nothing
+natAns zero (named _ (_ ∷ _) _ ∷ _) _ _ = nothing
+natAns zero (prod _ _ ∷ _) _ _ = nothing
+natAns zero (fork _ _ _ _ ∷ _) _ _ = nothing
+natAns (suc _) [] _ _ = nothing
+natAns (suc v) (_ ∷ ps) i an = natAns v ps (nsuc i) (tailAns an)
+
 -- The process half of an answer. `openFork` returns that process.
 proj : ∀ {ans : Proc → Set} → Maybe (Σ Proc ans) → Maybe Proc
 proj nothing = nothing
 proj (just (R , _)) = just R
+
+-- `proj (natAns …)` is `natGo`. The name test is the same Boolean.
+nat-proj : ∀ {ans} (v : Val nat) (qs : List PArm) (i : ℕ) (an : ArmAns ans qs) →
+           proj (natAns v qs i an) ≡ natGo v qs i
+nat-proj zero [] _ _ = refl
+nat-proj zero (bare _ ∷ _) _ (aa-bare _ _) = refl
+nat-proj zero (named c [] _ ∷ _) i (aa-named _ _) with c == show i
+... | true = refl
+... | false = refl
+nat-proj zero (named _ (_ ∷ _) _ ∷ _) _ _ = refl
+nat-proj zero (prod _ _ ∷ _) _ _ = refl
+nat-proj zero (fork _ _ _ _ ∷ _) _ _ = refl
+nat-proj (suc _) [] _ _ = refl
+nat-proj (suc v) (_ ∷ ps) i an = nat-proj v ps (nsuc i) (tailAns an)
 
 -- Substitute the process `armAns` selected. The answer is already the
 -- outer one, so it is not substituted again.
@@ -524,7 +554,7 @@ mutual
   armAns bit b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) _ = nothing
   armAns bit b1 (_ ∷ prod _ _ ∷ []) _ = nothing
   armAns bit b1 (_ ∷ fork _ _ _ _ ∷ []) _ = nothing
-  armAns nat _ _ _ = nothing
+  armAns nat v qs an = natAns v qs nzero an
   armAns unit _ _ _ = nothing
   armAns (vec _ _) _ _ _ = nothing
   armAns (pair _ _) (tup _ _) (_ ∷ _ ∷ _) _ = nothing
@@ -639,7 +669,7 @@ mutual
   arm-proj bit b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) _ = refl
   arm-proj bit b1 (_ ∷ prod _ _ ∷ []) _ = refl
   arm-proj bit b1 (_ ∷ fork _ _ _ _ ∷ []) _ = refl
-  arm-proj nat _ _ _ = refl
+  arm-proj nat v qs an = nat-proj v qs nzero an
   arm-proj unit _ _ _ = refl
   arm-proj (vec _ _) _ _ _ = refl
   arm-proj (pair _ _) (tup a b) (prod (pPair x y) p ∷ []) (aa-prod _ _)
@@ -926,6 +956,43 @@ onRecMget v eq fv bs row p nothing geq aeq _ =
 onRecMget v eq fv bs row p (just e) geq aeq f =
   useMget eq fv (selLit {v = v} {ps = prod (pRec bs) p ∷ []} geq aeq) (f e)
 
+data NatHit (ans : Proc → Set) (v : Val nat) (qs : List PArm) : Set where
+  nhit  : (R : Proc) → ans R → natGo v qs nzero ≡ just R → NatHit ans v qs
+  nmiss : natGo v qs nzero ≡ nothing → NatHit ans v qs
+
+natFound : ∀ {ans} (v : Val nat) (qs : List PArm) → ArmAns ans qs → NatHit ans v qs
+natFound v qs an with natAns v qs nzero an | nat-proj v qs nzero an
+... | just (R , a) | eq = nhit R a (sym eq)
+... | nothing | eq = nmiss (sym eq)
+
+takeNat : ∀ {σ τ B x P} (v : ValExpr nat) →
+  applyTy σ nat ≡ applyTy τ B →
+  sent v ≡ true →
+  (w : Val nat) →
+  ground v ≡ just w →
+  (qs : List PArm) →
+  ArmAns (Answerρ σ (ext x v τ) P) qs →
+  Answerρ σ τ (put nat v P) (mget B x qs)
+takeNat v eq fv w geq qs an with natFound w qs an
+... | nhit R a pr = usePut eq fv (selLit {v = v} {ps = qs} geq pr) a
+... | nmiss pr =
+  no (λ { (put-mget _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq pr)) })
+
+takeNat′ : ∀ {σ τ A x P} (v : ValExpr nat) →
+  applyTy σ A ≡ applyTy τ nat →
+  sent v ≡ true →
+  (w : Val nat) →
+  ground v ≡ just w →
+  (qs : List PArm) →
+  ArmAns (λ R → Answerρ (ext x v σ) τ R P) qs →
+  Answerρ σ τ (mget A x qs) (put nat v P)
+takeNat′ v eq fv w geq qs an with natFound w qs an
+... | nhit R a pr = useMget eq fv (selLit {v = v} {ps = qs} geq pr) a
+... | nmiss pr =
+  no (λ { (mget-put _ _ neq _) →
+    just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq pr)) })
+
 takePut : ∀ {σ τ A B x P} (v : ValExpr A) →
   applyTy σ A ≡ applyTy τ B →
   sent v ≡ true →
@@ -1007,10 +1074,8 @@ takePut v eq fv (con {d} c sp) geq qs as′ with nthBoth (ctorsOf d) c sp qs as�
 ... | got R a pr = usePut eq fv (selLit {v = v} {ps = qs} geq pr) a
 ... | missed pr =
   no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq pr)) })
-takePut v eq fv zero geq qs _ =
-  no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
-takePut v eq fv (suc _) geq qs _ =
-  no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
+takePut v eq fv zero geq qs an = takeNat v eq fv zero geq qs an
+takePut v eq fv (suc n) geq qs an = takeNat v eq fv (suc n) geq qs an
 takePut v eq fv tt geq qs _ =
   no (λ { (put-mget _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
 takePut v eq fv (tup a b) geq (prod (pPair x y) p ∷ []) (aa-prod f _) =
@@ -1137,10 +1202,8 @@ takeMget v eq fv (con {d} c sp) geq qs as′ with nthBoth (ctorsOf d) c sp qs as
 ... | got R a pr = useMget eq fv (selLit {v = v} {ps = qs} geq pr) a
 ... | missed pr =
   no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq pr)) })
-takeMget v eq fv zero geq qs _ =
-  no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
-takeMget v eq fv (suc _) geq qs _ =
-  no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
+takeMget v eq fv zero geq qs an = takeNat′ v eq fv zero geq qs an
+takeMget v eq fv (suc n) geq qs an = takeNat′ v eq fv (suc n) geq qs an
 takeMget v eq fv tt geq qs _ =
   no (λ { (mget-put _ _ neq _) → just≢nothing (trans (sym neq) (missedLit {v = v} {ps = qs} geq refl)) })
 takeMget v eq fv (tup a b) geq (prod (pPair x y) p ∷ []) (aa-prod f _) =
@@ -1748,8 +1811,22 @@ not-short (put-mget _ _ () _)
 not-var-arm : ¬ Meets (put bit (var "b") done) (mget bit "b" (bare done ∷ bare done ∷ []))
 not-var-arm (put-mget _ _ () _)
 
-not-nat-arm : ¬ Meets (put nat (lit zero) done) (mget nat "n" (bare done ∷ bare done ∷ []))
-not-nat-arm (put-mget _ _ () _)
+-- Zero selects the first bare arm. The meeting runs that arm.
+nat-arm : Meets (put nat (lit zero) done) (mget nat "n" (bare done ∷ bare done ∷ []))
+nat-arm = put-mget refl refl refl done-done
+
+-- A numeral selects one arm of the split. The meeting runs that arm.
+-- The continuation meets in the index extended by the value that arrived.
+meet-agrees : ∀ {k x ps R P} →
+  armOf nat (num k) ps ≡ just R →
+  Meetsρ none (ext x (lit (num k)) none) P R →
+  Meets (put nat (lit (num k)) P) (mget nat x ps)
+meet-agrees {k = k} eq m = put-mget refl (num-fits k) eq m
+
+-- A value past the arms selects nothing.
+not-nat-arm : ¬ Meets (put nat (lit (suc (suc zero))) done) (mget nat "n" (bare done ∷ []))
+not-nat-arm (put-mget _ _ neq _) =
+  just≢nothing (trans (sym neq) (missedLit {v = lit (suc (suc zero))} {ps = bare done ∷ []} refl refl))
 
 not-bad-arm : ¬ Meets (put boolTy badCall done) (mget boolTy "b" (bare done ∷ bare done ∷ []))
 not-bad-arm (put-mget _ () _ _)

@@ -23,8 +23,9 @@ module Muro.AsyncSync where
 
 open import Data.Bool.Base using (Bool; true; false)
 open import Data.Empty using (⊥; ⊥-elim)
-open import Data.Nat.Base using (_≤_; _+_)
+open import Data.Nat.Base using (ℕ; _≤_; _+_) renaming (zero to nzero; suc to nsuc)
 open import Data.Nat.Properties using (≤-trans; m≤m+n; m≤n+m)
+open import Data.Nat.Show using (show)
 open import Data.Product using (Σ; _×_; _,_; proj₁)
 open import Data.List.Base using (List; []; _∷_)
 open import Data.Maybe.Base using (Maybe; just; nothing)
@@ -36,7 +37,7 @@ open import Relation.Nullary.Decidable.Core using () renaming (yes to yes′; no
 open import Muro.Session using (Proc; done; stop; put; get; pick0; pick1; cover
   ; iget; mget; Val; ValExpr; Ty; Idx; Ctor; ctor; nthProc
   ; armOf; armExpr; sent; sent?; applyTy; ty≟; known; lit; b0; b1; con; ctorsOf
-  ; evalExpr; var; call; tup
+  ; evalExpr; var; call; tup; natGo; zero; suc
   ; nat; unit; bit; none; bind
   ; pair; rec; vec; dat; Row; FEnv
   ; Spine; snil; scons; PArm; bare; named; prod; fork; pPair; pRec
@@ -137,6 +138,23 @@ specRec row bs p .(substProc e p) refl | just e = leSubst e p [] , refl
 
 -- `openFork` and `seek` case on the comparison. `openForkHit` and
 -- `seekHit` abstract the same comparison, so the equality is `refl`.
+-- `pickNat` returns the arm `natGo` selects, with the size bound.
+pick-spec : (v : Val nat) (ps : List PArm) (i : ℕ) (R : Proc) →
+            natGo v ps i ≡ just R →
+            Σ (size R ≤ sizeArms ps) (λ le → pickNat v ps i ≡ just (R , le))
+pick-spec zero [] _ _ ()
+pick-spec zero (bare p ∷ ps) _ .p refl = m≤m+n (size p) (sizeArms ps) , refl
+pick-spec zero (named c [] p ∷ ps) i R eq with c == show i
+pick-spec zero (named c [] p ∷ ps) i .p refl | true =
+  m≤m+n (size p) (sizeArms ps) , refl
+pick-spec zero (named c [] p ∷ ps) i R () | false
+pick-spec zero (named _ (_ ∷ _) _ ∷ _) _ _ ()
+pick-spec zero (prod _ _ ∷ _) _ _ ()
+pick-spec zero (fork _ _ _ _ ∷ _) _ _ ()
+pick-spec (suc _) [] _ _ ()
+pick-spec (suc v) (q ∷ ps) i R eq with pick-spec v ps (nsuc i) R eq
+... | le , p rewrite p = ≤-trans le (m≤n+m (sizeArms ps) (armSize q)) , refl
+
 mutual
   openFork-spec : (k c : String) (xs : List String) (y : String) (qs : List PArm)
                   (sp : Spine) (ps : List PArm) (R : Proc) →
@@ -223,7 +241,7 @@ mutual
   armPick-spec b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) _ ()
   armPick-spec b1 (_ ∷ prod _ _ ∷ []) _ ()
   armPick-spec b1 (_ ∷ fork _ _ _ _ ∷ []) _ ()
-  armPick-spec {nat} _ _ _ ()
+  armPick-spec {nat} v ps R eq = pick-spec v ps nzero R eq
   armPick-spec {unit} _ _ _ ()
   armPick-spec {vec _ _} _ _ _ ()
   armPick-spec {pair _ _} (tup a b) (prod (pPair x y) p ∷ []) R eq =

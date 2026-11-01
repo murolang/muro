@@ -39,12 +39,20 @@
 -- distinguishes constructors selects one protocol per constructor. A
 -- run that reads a field of a bit or a declared data type selects one
 -- protocol for each value of the fields it reads, and the process
--- covers that split by a case on the bound field. A field whose type
--- is not a finite split, such as a nat, has no derivation. Selecting
--- an arm is the same evaluator. It uses no fuel. A case that is not
--- that continuation, a scrutinee other than a bit or a declared data
--- type, a run outside the fragment, and a sender whose value is not
--- known when the arms differ, have no derivation.
+-- covers that split by a case on the bound field. A received nat whose
+-- bound is a numeral `w` is a finite split into `0` … `w`. A direct
+-- case writes those numerals in order. A run that reads the nat is
+-- evaluated at each of them, and the arm is the constructor it
+-- returns. A run that reads that nat and one bit or declared data
+-- payload is evaluated on their product. The length of a run's split
+-- is the product of the widths of the factors it reads, with no fuel
+-- and no budget. A derivation here is one bounded nat, or that nat
+-- with one such payload. Three or more factors are not a derivation.
+-- A nat with no numeral bound, a bound that is a name, a pair, a
+-- record, a vector, and unit do not split. Selecting an arm is the
+-- same evaluator. A case that is not that continuation, a run outside
+-- the fragment, and a sender whose value is not known when the arms
+-- differ, have no derivation.
 --
 -- `send A S` sends a value of type A and continues as S. `recv A S`
 -- receives one. `drecv x A S` binds that value to `x`, and `S` may
@@ -57,10 +65,11 @@
 -- conformance derivation, not of the process, so `skel` does not
 -- carry it. `isend x S T` sends a bit. `b0` continues as `S` and
 -- `b1` continues as `T`. `irecv x S T` receives that bit and binds
--- it. The two arms are the index. A nat does not choose an arm, and
--- a variable bit does not select one: the sender writes `b0` or
--- `b1`. `choose` and `branch` select an arm by a label, not by a
--- payload. Two processes meet when the sent type is the type the
+-- it. The two arms are the index. An unbounded nat does not choose
+-- an arm, and a variable bit does not select one: the sender writes
+-- `b0` or `b1`. A numeral bound does. `choose` and `branch` select
+-- an arm by a label, not by a payload. Two processes meet when the
+-- sent type is the type the
 -- continuation expects, the value inhabits that type, and an index
 -- meets the arm of that same bit.
 --
@@ -87,11 +96,13 @@
 module Muro.Session where
 
 open import Data.Bool.Base using (Bool; true; false; _∧_; _∨_)
-open import Data.Empty using (⊥)
-open import Data.List.Base using (List; []; _∷_; _++_; length)
+open import Data.Empty using (⊥; ⊥-elim)
+open import Data.List.Base using (List; []; _∷_; _++_; length; map)
+open import Data.List.Properties using (length-++; length-map)
 open import Data.Maybe.Base using (Maybe; just; nothing)
-open import Data.Nat.Base using (ℕ; _≤_; _+_; z≤n; s≤s) renaming (zero to nzero; suc to nsuc)
-open import Data.Nat.Properties using () renaming (_≟_ to _≟ℕ_; _≤?_ to _≤?ℕ_)
+open import Data.Nat.Base using (ℕ; _≤_; _+_; _*_; z≤n; s≤s) renaming (zero to nzero; suc to nsuc)
+open import Data.Nat.Properties using (≤-pred; +-identityʳ; +-suc) renaming (_≟_ to _≟ℕ_; _≤?_ to _≤?ℕ_)
+open import Data.Nat.Show using (show)
 open import Data.Product using (_×_; _,_; proj₁; proj₂)
 open import Data.Sum using (_⊎_; inj₁; inj₂)
 open import Data.String.Base using (String)
@@ -417,12 +428,22 @@ mutual
 -- continuations, one for each value. Choice is a separate arm.
 -- `pcase` is that continuation chosen by the value just bound:
 -- `byVal` matches the payload's constructors, `byRun` matches the
--- constructors of the run's result. The name is the binder.
+-- constructors of the run's result. `bySplit` matches that result on
+-- the product of the factors the run reads. The last tag is the
+-- binder. Earlier tags are finite splits already in scope. A bounded
+-- nat is `tagNat`. A bit is `tagBit`. A declared data type is
+-- `tagDat`, with its constructors in declaration order.
 ------------------------------------------------------------------------
+
+data Tag : Set where
+  tagNat : String → ℕ → Tag
+  tagBit : String → Tag
+  tagDat : String → List String → Tag
 
 data Scrut : Set where
   byVal : String → Scrut
   byRun : String → String → Ty → Scrut
+  bySplit : String → List Tag → Ty → Scrut
 
 data Proto : Set where
   end    : Proto
@@ -1210,9 +1231,31 @@ eqN e f with nexp≟ e f
 ... | yes′ _ = true
 ... | no′ _ = false
 
+eqℕ : ℕ → ℕ → Bool
+eqℕ m n with m ≟ℕ n
+... | yes′ _ = true
+... | no′ _ = false
+
+strsEq : List String → List String → Bool
+strsEq [] [] = true
+strsEq (x ∷ xs) (y ∷ ys) = (x == y) ∧ strsEq xs ys
+strsEq _ _ = false
+
+tagEq : Tag → Tag → Bool
+tagEq (tagNat x m) (tagNat y n) = (x == y) ∧ eqℕ m n
+tagEq (tagBit x) (tagBit y) = x == y
+tagEq (tagDat x cs) (tagDat y ds) = (x == y) ∧ strsEq cs ds
+tagEq _ _ = false
+
+tagsEq : List Tag → List Tag → Bool
+tagsEq [] [] = true
+tagsEq (t ∷ ts) (u ∷ us) = tagEq t u ∧ tagsEq ts us
+tagsEq _ _ = false
+
 scrutEq : Scrut → Scrut → Bool
 scrutEq (byVal x) (byVal y) = x == y
 scrutEq (byRun f x R) (byRun g y S) = (f == g) ∧ (x == y) ∧ eqTy R S
+scrutEq (bySplit f ts R) (bySplit g us S) = (f == g) ∧ tagsEq ts us ∧ eqTy R S
 scrutEq _ _ = false
 
 -- Syntactic equality of protocols. A sender whose value is not known
@@ -1291,6 +1334,117 @@ namesEq : List String → List String → Bool
 namesEq [] [] = true
 namesEq (x ∷ xs) (y ∷ ys) = (x == y) ∧ namesEq xs ys
 namesEq _ _ = false
+
+------------------------------------------------------------------------
+-- The numerals `0` … `w`. `natFrom n i` is `show i` through
+-- `show (i + n − 1)`. There is no fuel and no budget: the recursion
+-- is structural on the count. A bounded nat of bound `w` is this list
+-- at `0`. A run's split is the cartesian product of one such list per
+-- factor it reads. The length of that product is the product of the
+-- widths, and that equality is `enum-size`.
+------------------------------------------------------------------------
+
+natFrom : ℕ → ℕ → List String
+natFrom nzero _ = []
+natFrom (nsuc k) i = show i ∷ natFrom k (nsuc i)
+
+natArms : ℕ → List String
+natArms w = natFrom (nsuc w) nzero
+
+natFrom-len : ∀ n i → length (natFrom n i) ≡ n
+natFrom-len nzero _ = refl
+natFrom-len (nsuc k) i = cong nsuc (natFrom-len k (nsuc i))
+
+natArms-len : ∀ w → length (natArms w) ≡ nsuc w
+natArms-len w = natFrom-len (nsuc w) nzero
+
+-- `k` below `n` is the label `show (i + k)`.
+nth-from : ∀ n i k → nsuc k ≤ n → nth (natFrom n i) k ≡ just (show (i + k))
+nth-from nzero _ _ ()
+nth-from (nsuc n) i nzero (s≤s _) rewrite +-identityʳ i = refl
+nth-from (nsuc n) i (nsuc k) (s≤s lt) rewrite +-suc i k = nth-from n (nsuc i) k lt
+
+-- Every value in `0` … `w` occurs, at that index.
+in-split : ∀ k w → k ≤ w → nth (natArms w) k ≡ just (show k)
+in-split k w le = nth-from (nsuc w) nzero k (s≤s le)
+
+nth-len : ∀ {A : Set} (xs : List A) k {x} → nth xs k ≡ just x → nsuc k ≤ length xs
+nth-len [] _ ()
+nth-len (_ ∷ _) nzero refl = s≤s z≤n
+nth-len (_ ∷ xs) (nsuc k) eq = s≤s (nth-len xs k eq)
+
+-- Every member of the split is an index within the bound.
+split-bound : ∀ k w {s} → nth (natArms w) k ≡ just s → k ≤ w
+split-bound k w eq =
+  ≤-pred (subst (λ n → nsuc k ≤ n) (natArms-len w) (nth-len (natArms w) k eq))
+
+-- One factor of a run split. A bounded nat contributes `w + 1` labels.
+-- A bit contributes two. A declared data type contributes its constructors.
+data Factor : Set where
+  facNat  : ℕ → Factor
+  facBit  : Factor
+  facTags : List String → Factor
+
+facWidth : Factor → ℕ
+facWidth (facNat w) = nsuc w
+facWidth facBit = 2
+facWidth (facTags cs) = length cs
+
+labelsOf : Factor → List String
+labelsOf (facNat w) = natArms w
+labelsOf facBit = "b0" ∷ "b1" ∷ []
+labelsOf (facTags cs) = cs
+
+labels-width : ∀ f → length (labelsOf f) ≡ facWidth f
+labels-width (facNat w) = natArms-len w
+labels-width facBit = refl
+labels-width (facTags _) = refl
+
+prodNs : List ℕ → ℕ
+prodNs [] = nsuc nzero
+prodNs (n ∷ ns) = n * prodNs ns
+
+joinLabs : List String → List (List String) → List (List String)
+joinLabs [] _ = []
+joinLabs (x ∷ xs) ys = map (λ t → x ∷ t) ys ++ joinLabs xs ys
+
+join-len : ∀ xs ys → length (joinLabs xs ys) ≡ length xs * length ys
+join-len [] _ = refl
+join-len (x ∷ xs) ys
+  rewrite length-++ (map (λ t → x ∷ t) ys) {ys = joinLabs xs ys}
+        | length-map (λ t → x ∷ t) ys
+        | join-len xs ys = refl
+
+cart : List (List String) → List (List String)
+cart [] = [] ∷ []
+cart (xs ∷ xss) = joinLabs xs (cart xss)
+
+cart-len : ∀ xss → length (cart xss) ≡ prodNs (map length xss)
+cart-len [] = refl
+cart-len (xs ∷ xss) rewrite join-len xs (cart xss) | cart-len xss = refl
+
+map-width : ∀ fs → map length (map labelsOf fs) ≡ map facWidth fs
+map-width [] = refl
+map-width (f ∷ fs) rewrite labels-width f | map-width fs = refl
+
+enumFac : List Factor → List (List String)
+enumFac fs = cart (map labelsOf fs)
+
+-- The split of a run has exactly the product of the widths of the
+-- factors it reads. The product is computed from those factors.
+-- There is no limit, fuel, or budget on the count.
+enum-size : ∀ fs → length (enumFac fs) ≡ prodNs (map facWidth fs)
+enum-size fs rewrite cart-len (map labelsOf fs) | map-width fs = refl
+
+*-one : ∀ n → n * nsuc nzero ≡ n
+*-one nzero = refl
+*-one (nsuc n) rewrite *-one n = refl
+
+-- A bounded nat and one payload. The split has `(w + 1)` times the
+-- number of constructors, which is the product of those two widths.
+prod-card : ∀ w cs →
+  length (enumFac (facNat w ∷ facTags cs ∷ [])) ≡ nsuc w * length cs
+prod-card w cs rewrite enum-size (facNat w ∷ facTags cs ∷ []) | *-one (length cs) = refl
 
 labelled : Ty → List (String × Proto) → Bool
 labelled A arms with payCtors A
@@ -1375,6 +1529,7 @@ selectProto {A} y v (byRun f x R) arms with x ≟ y
 ... | just r with valCtor r
 ... | nothing = nothing
 ... | just c = findArm c arms
+selectProto _ _ (bySplit _ _ _) _ = nothing
 
 zipVal : List (String × Proto) → List Proc → Maybe (List (Proc × Proto))
 zipVal [] [] = just []
@@ -1384,6 +1539,114 @@ zipVal _ _ = nothing
 -- `zipRun` and `zipCase` follow `splitOf`, below.
 
 ------------------------------------------------------------------------
+-- A run is ready at an arity when that definition has that many
+-- arguments and every call in its body names an earlier definition.
+readyN : ℕ → String → Bool
+readyN n f = readyAt runs f
+  where
+  readyAt : List RDef → String → Bool
+  readyAt [] _ = false
+  readyAt (rdef g ts _ body ∷ Δ) h with h ≟ g
+  ... | no′ _ = readyAt Δ h
+  ... | yes′ _ with length ts ≟ℕ n
+  ... | no′ _ = false
+  ... | yes′ _ = callsBefore Δ body
+
+-- The protocol a run returns on these raw arguments, when the result
+-- is a constructor written in the arms.
+evalSplit : String → List Raw → Ty → List (String × Proto) → Maybe Proto
+evalSplit f rs R arms =
+  bindM (apply runs f rs) (λ r →
+    bindM (cast R r) (λ v →
+      bindM (valCtor v) (λ k → findArm k arms)))
+
+-- A known nat at most `w` selects the arm named by its decimal.
+-- An unknown nat selects the common arm, when every arm is that arm.
+pickShown : ValExpr nat → ℕ → List (String × Proto) → Maybe Proto
+pickShown v w arms with namesEq (natArms w) (armNames arms)
+... | false = nothing
+... | true with known v
+... | nothing = sameArms arms
+... | just u with toℕ u ≤?ℕ w
+... | no′ _ = nothing
+... | yes′ _ = findArm (show (toℕ u)) arms
+
+pickRun : ValExpr nat → ℕ → String → Ty → List (String × Proto) → Maybe Proto
+pickRun v w f R arms with readyN (nsuc nzero) f
+... | false = nothing
+... | true with labelled R arms
+... | false = nothing
+... | true with known v
+... | nothing = sameArms arms
+... | just u with toℕ u ≤?ℕ w
+... | no′ _ = nothing
+... | yes′ _ = evalSplit f (rawNat (toℕ u) ∷ []) R arms
+
+payRaw : Ty → String → Raw
+payRaw bit "b0" = rawBit b0
+payRaw bit "b1" = rawBit b1
+payRaw bit _ = rawBit b0
+payRaw _ c = rawCon c []
+
+-- The second value is the payload just sent. The first is the bounded
+-- nat already in hand. Both are known, and the nat is at most `w`.
+pickProd : ∀ {A} → ValExpr nat → ValExpr A → ℕ → String → Ty →
+           List (String × Proto) → Maybe Proto
+pickProd v u w f R arms with readyN (nsuc (nsuc nzero)) f
+... | false = nothing
+... | true with labelled R arms
+... | false = nothing
+... | true with known v
+... | nothing = sameArms arms
+... | just n with toℕ n ≤?ℕ w
+... | no′ _ = nothing
+... | yes′ _ with known u
+... | nothing = sameArms arms
+... | just b with rawOf b
+... | nothing = nothing
+... | just r = evalSplit f (rawNat (toℕ n) ∷ r ∷ []) R arms
+
+-- `rowFrom n i` is the protocol at `i`, then `i + 1`, for `n` values.
+rowFrom : String → Ty → List (String × Proto) → ℕ → ℕ → Maybe (List (String × Proto))
+rowFrom _ _ _ _ nzero = just []
+rowFrom f R arms i (nsuc k) =
+  bindM (evalSplit f (rawNat i ∷ []) R arms) (λ S →
+    bindM (rowFrom f R arms (nsuc i) k) (λ rest → just ((show i , S) ∷ rest)))
+
+natRows : String → Ty → List (String × Proto) → ℕ → Maybe (List (String × Proto))
+natRows f R arms w = rowFrom f R arms nzero (nsuc w)
+
+colFrom : String → Raw → Ty → List (String × Proto) → ℕ → ℕ → Maybe (List (String × Proto))
+colFrom _ _ _ _ _ nzero = just []
+colFrom f second R arms i (nsuc k) =
+  bindM (evalSplit f (rawNat i ∷ second ∷ []) R arms) (λ S →
+    bindM (colFrom f second R arms (nsuc i) k) (λ rest → just ((show i , S) ∷ rest)))
+
+colsFrom : String → Ty → List String → Ty → List (String × Proto) → ℕ →
+           Maybe (List (List (String × Proto)))
+colsFrom _ _ [] _ _ _ = just []
+colsFrom f A (c ∷ cs) R arms w =
+  bindM (colFrom f (payRaw A c) R arms nzero (nsuc w)) (λ col →
+    bindM (colsFrom f A cs R arms w) (λ rest → just (col ∷ rest)))
+
+-- One column per constructor of the payload, and in each column one
+-- row per numeral `0` … `w`. Nothing when any tuple selects no arm.
+prodGrid : ℕ → Ty → String → Ty → List (String × Proto) →
+           Maybe (List (List (String × Proto)))
+prodGrid w A f R arms with payCtors A
+... | nothing = nothing
+... | just cs = colsFrom f A cs R arms w
+
+nthProto : List (String × Proto) → ℕ → Maybe Proto
+nthProto [] _ = nothing
+nthProto ((_ , S) ∷ _) nzero = just S
+nthProto (_ ∷ as) (nsuc k) = nthProto as k
+
+nthRow : List (String × Proto) → ℕ → Maybe (String × Proto)
+nthRow [] _ = nothing
+nthRow (row ∷ _) nzero = just row
+nthRow (_ ∷ rows) (nsuc k) = nthRow rows k
+
 -- The evidence a sent nat owes. The bound is a numeral, or a name the
 -- substitution resolves. A protocol name it does not resolve has no
 -- bound. A numeral is at most a numeral by `≤`. Zero is at most a
@@ -1491,6 +1754,9 @@ fieldsNamed bit "b0" = just []
 fieldsNamed bit "b1" = just []
 fieldsNamed bit _ = nothing
 fieldsNamed (dat d as) c = fieldLookup (ctorsOf d) c d as
+-- A numeral arm of a nat binds nothing. The range is the bound, not a
+-- constructor list, so `payCtors` stays nothing for nat.
+fieldsNamed nat _ = just []
 fieldsNamed _ _ = nothing
 
 armCtxNamed : Ty → String → List String → Ctx → Maybe Ctx
@@ -1817,6 +2083,7 @@ zipCase A y (byRun f x R) arms ps with x ≟ y
 ... | true with payCtors A
 ... | nothing = nothing
 ... | just cs = zipRun f A R arms cs ps
+zipCase _ _ (bySplit _ _ _) _ _ = nothing
 
 -- The pattern's field names are the type's, in that order. The last
 -- binder is innermost, as `extend` places a constructor's fields.
@@ -1934,6 +2201,82 @@ mutual
       ArmsRun Γ ρ f A R arms cs ps →
       ArmsRun Γ ρ f A R arms (c ∷ cs) (fork c xs y qs ∷ ps)
 
+  -- One process per numeral of a bounded nat. A bare arm is that
+  -- process. A named arm binds nothing and its name is the row's label.
+  data CovNat (Γ : Ctx) (ρ : Idx) : List (String × Proto) → List PArm → Set where
+    cn-nil   : CovNat Γ ρ [] []
+    cn-bare  : ∀ {c S rows p ps} →
+      Conformsρ Γ ρ p S →
+      CovNat Γ ρ rows ps →
+      CovNat Γ ρ ((c , S) ∷ rows) (bare p ∷ ps)
+    cn-named : ∀ {c S rows p ps} →
+      Conformsρ Γ ρ p S →
+      CovNat Γ ρ rows ps →
+      CovNat Γ ρ ((c , S) ∷ rows) (named c [] p ∷ ps)
+
+  -- A column is one process when every numeral selects the same
+  -- protocol, or a match on the bounded nat otherwise.
+  data Cell (Γ : Ctx) (ρ : Idx) (x : String) : List (String × Proto) → Proc → Set where
+    cell-one : ∀ {rows p S} →
+      sameArms rows ≡ just S →
+      Conformsρ Γ ρ p S →
+      Cell Γ ρ x rows p
+    cell-nat : ∀ {rows qs} →
+      CovNat Γ ρ rows qs →
+      Cell Γ ρ x rows (mget nat x qs)
+
+  -- The payload's constructors, outer, and the numerals of the earlier
+  -- nat, inner. Named arms bind the constructor's fields.
+  data ProdCov (Γ : Ctx) (ρ : Idx) (A : Ty) (x : String) (w : ℕ) :
+      List String → List (List (String × Proto)) → List PArm → Set where
+    pc-nil : ProdCov Γ ρ A x w [] [] []
+    pc-bare : ∀ {c cs rows grid p ps} →
+      Cell Γ ρ x rows p →
+      ProdCov Γ ρ A x w cs grid ps →
+      ProdCov Γ ρ A x w (c ∷ cs) (rows ∷ grid) (bare p ∷ ps)
+    pc-named : ∀ {c cs rows grid xs p Δ ps} →
+      armCtxNamed A c xs Γ ≡ just Δ →
+      Cell Δ ρ x rows p →
+      ProdCov Γ ρ A x w cs grid ps →
+      ProdCov Γ ρ A x w (c ∷ cs) (rows ∷ grid) (named c xs p ∷ ps)
+
+  -- The continuation of an evidence send. A plain continuation is the
+  -- protocol written after the nat. A case continues as the arm the
+  -- value selects. A following send of a splittable payload continues
+  -- as the arm the pair of values selects.
+  data SendCont (Γ : Ctx) (ρ : Idx) (v : ValExpr nat) : Proc → NExp → Proto → Set where
+    send-plain : ∀ {P e S} →
+      Plain S →
+      Conformsρ Γ ρ P S →
+      SendCont Γ ρ v P e S
+    send-val : ∀ {P y w arms T} →
+      pickShown v w arms ≡ just T →
+      Conformsρ Γ ρ P T →
+      SendCont Γ ρ v P (nlit w) (pcase (byVal y) arms)
+    send-run : ∀ {P y w f R arms T} →
+      readyN (nsuc nzero) f ≡ true →
+      labelled R arms ≡ true →
+      pickRun v w f R arms ≡ just T →
+      Conformsρ Γ ρ P T →
+      SendCont Γ ρ v P (nlit w) (pcase (byRun f y R) arms)
+    send-prod : ∀ {w y z A B u Q f R arms cs T} →
+      A ≡ applyTy ρ B →
+      payCtors A ≡ just cs →
+      readyN (nsuc (nsuc nzero)) f ≡ true →
+      labelled R arms ≡ true →
+      pickProd v u w f R arms ≡ just T →
+      Conformsρ Γ ρ Q T →
+      SendCont Γ ρ v (put A u Q) (nlit w)
+        (dsend z B (pcase (bySplit f (tagNat y w ∷ tagDat z cs ∷ []) R) arms))
+    send-pbit : ∀ {w y z B u Q f R arms T} →
+      bit ≡ applyTy ρ B →
+      readyN (nsuc (nsuc nzero)) f ≡ true →
+      labelled R arms ≡ true →
+      pickProd v u w f R arms ≡ just T →
+      Conformsρ Γ ρ Q T →
+      SendCont Γ ρ v (put bit u Q) (nlit w)
+        (dsend z B (pcase (bySplit f (tagNat y w ∷ tagBit z ∷ []) R) arms))
+
   data Conformsρ (Γ : Ctx) (ρ : Idx) : Proc → Proto → Set where
     done-end : Conformsρ Γ ρ done end
 
@@ -1974,7 +2317,7 @@ mutual
     eput-ok : ∀ {y e v P S} →
       ValExprOk Γ v →
       Owed Γ v (resolve ρ e) →
-      Conformsρ Γ ρ P S →
+      SendCont Γ ρ v P e S →
       Conformsρ Γ ρ (put nat v P) (esend y e S)
 
     eget-ok : ∀ {y e x P S} →
@@ -2027,6 +2370,44 @@ mutual
       payCtors A ≡ just cs →
       ArmsRun ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) f A R arms cs ps →
       Conformsρ Γ ρ (mget A x ps) (drecv y B (pcase (byRun f y R) arms))
+
+    -- A numeral bound splits into `0` … `w`. The arms are those
+    -- numerals, in order. Each process arm conforms to that protocol.
+    eget-val : ∀ {x y w ps arms} →
+      namesEq (natArms w) (armNames arms) ≡ true →
+      ArmsAt ((x , nat) ∷ Γ) ρ nat arms ps →
+      Conformsρ Γ ρ (mget nat x ps) (erecv y (nlit w) (pcase (byVal y) arms))
+
+    -- The run is evaluated at every numeral. The process arm for that
+    -- numeral conforms to the protocol the run returns.
+    eget-run : ∀ {x y w f R ps arms rows} →
+      readyN (nsuc nzero) f ≡ true →
+      labelled R arms ≡ true →
+      natRows f R arms w ≡ just rows →
+      CovNat ((x , nat) ∷ Γ) ρ rows ps →
+      Conformsρ Γ ρ (mget nat x ps) (erecv y (nlit w) (pcase (byRun f y R) arms))
+
+    -- The payload just received is a bit or a declared data type, and
+    -- an earlier nat is bounded by a numeral. The process covers the
+    -- product: one arm per constructor, and under it one arm per numeral
+    -- unless every numeral selects the same protocol.
+    mget-prod : ∀ {A B x y d w f R ps arms cs grid} →
+      A ≡ applyTy ρ B →
+      payCtors A ≡ just cs →
+      readyN (nsuc (nsuc nzero)) f ≡ true →
+      labelled R arms ≡ true →
+      prodGrid w A f R arms ≡ just grid →
+      ProdCov ((x , A) ∷ Γ) ρ A d w cs grid ps →
+      Conformsρ Γ ρ (mget A x ps)
+        (drecv y B (pcase (bySplit f (tagNat d w ∷ tagDat y cs ∷ []) R) arms))
+
+    mget-pbit : ∀ {x y d w f R ps arms grid} →
+      readyN (nsuc (nsuc nzero)) f ≡ true →
+      labelled R arms ≡ true →
+      prodGrid w bit f R arms ≡ just grid →
+      ProdCov ((x , bit) ∷ Γ) ρ bit d w ("b0" ∷ "b1" ∷ []) grid ps →
+      Conformsρ Γ ρ (mget bit x ps)
+        (drecv y bit (pcase (bySplit f (tagNat d w ∷ tagBit y ∷ []) R) arms))
 
 Conforms : Ctx → Proc → Proto → Set
 Conforms Γ P S = Conformsρ Γ none P S
@@ -2141,6 +2522,38 @@ fillArm : Proc → Maybe FEnv → Maybe Proc
 fillArm _ nothing = nothing
 fillArm p (just e) = just (substProc e p)
 
+-- A nat selects the arm at its index. Zero takes the head. A successor
+-- takes the tail, one step per successor. A bare arm is that process.
+-- A named arm is that process when its name is the decimal of the
+-- index and it binds nothing. A product arm, a fork, or a name that
+-- is not that decimal selects nothing. The bound is not an argument:
+-- an index past the arms selects nothing, and the protocol checker
+-- requires the arms to be exactly `0` … `w`.
+hitName? : Bool → Proc → Maybe Proc
+hitName? true p = just p
+hitName? false _ = nothing
+
+natGo : Val nat → List PArm → ℕ → Maybe Proc
+natGo zero [] _ = nothing
+natGo zero (bare p ∷ _) _ = just p
+natGo zero (named c [] p ∷ _) i = hitName? (c == show i) p
+natGo zero (named _ (_ ∷ _) _ ∷ _) _ = nothing
+natGo zero (prod _ _ ∷ _) _ = nothing
+natGo zero (fork _ _ _ _ ∷ _) _ = nothing
+natGo (suc _) [] _ = nothing
+natGo (suc v) (_ ∷ ps) i = natGo v ps (nsuc i)
+
+-- The same walk on a numeral, so a covering proof can induct on it.
+armGo : ℕ → List PArm → ℕ → Maybe Proc
+armGo nzero [] _ = nothing
+armGo nzero (bare p ∷ _) _ = just p
+armGo nzero (named c [] p ∷ _) i = hitName? (c == show i) p
+armGo nzero (named _ (_ ∷ _) _ ∷ _) _ = nothing
+armGo nzero (prod _ _ ∷ _) _ = nothing
+armGo nzero (fork _ _ _ _ ∷ _) _ = nothing
+armGo (nsuc _) [] _ = nothing
+armGo (nsuc k) (_ ∷ ps) i = armGo k ps (nsuc i)
+
 -- `pickCtor` receives the Boolean comparison. `nthProc` makes it.
 -- A meeting follows that same comparison, so the equality is the one
 -- `pickCtor` computes. The false branch is the tail of the constructor list.
@@ -2203,7 +2616,7 @@ mutual
   armOf bit b1 (_ ∷ named _ (_ ∷ _) _ ∷ []) = nothing
   armOf bit b1 (_ ∷ prod _ _ ∷ []) = nothing
   armOf bit b1 (_ ∷ fork _ _ _ _ ∷ []) = nothing
-  armOf nat _ _ = nothing
+  armOf nat v ps = natGo v ps nzero
   armOf unit _ _ = nothing
   armOf (vec _ _) _ _ = nothing
   armOf (pair _ _) (tup _ _) (_ ∷ _ ∷ _) = nothing
@@ -2327,6 +2740,55 @@ mutual
     -- The name of an evidence payload is in scope in its bound only.
     esend-ok  : ∀ {Γ x e S} → NExpOk Γ e → ProtoOk Γ S → ProtoOk Γ (esend x e S)
     erecv-ok  : ∀ {Γ x e S} → NExpOk Γ e → ProtoOk Γ S → ProtoOk Γ (erecv x e S)
+    -- A numeral bound. The arms are `0` … `w`, and each arm is a
+    -- protocol in the same scope: the nat is not a length.
+    esend-val : ∀ {Γ x w arms} →
+      namesEq (natArms w) (armNames arms) ≡ true →
+      ArmsOk Γ arms →
+      ProtoOk Γ (esend x (nlit w) (pcase (byVal x) arms))
+    erecv-val : ∀ {Γ x w arms} →
+      namesEq (natArms w) (armNames arms) ≡ true →
+      ArmsOk Γ arms →
+      ProtoOk Γ (erecv x (nlit w) (pcase (byVal x) arms))
+    -- The run is ready at one nat argument. Every numeral `0` … `w`
+    -- evaluates to a constructor of the result, and the arms are those
+    -- constructors. The length of that split is `w + 1`.
+    esend-run : ∀ {Γ x w f R arms rows} →
+      readyN (nsuc nzero) f ≡ true →
+      labelled R arms ≡ true →
+      natRows f R arms w ≡ just rows →
+      length rows ≡ nsuc w →
+      ArmsOk Γ arms →
+      ProtoOk Γ (esend x (nlit w) (pcase (byRun f x R) arms))
+    erecv-run : ∀ {Γ x w f R arms rows} →
+      readyN (nsuc nzero) f ≡ true →
+      labelled R arms ≡ true →
+      natRows f R arms w ≡ just rows →
+      length rows ≡ nsuc w →
+      ArmsOk Γ arms →
+      ProtoOk Γ (erecv x (nlit w) (pcase (byRun f x R) arms))
+    -- The product of a numeral-bounded nat and a splittable payload.
+    -- The length premise is the product of the widths.
+    esend-prod : ∀ {Γ d w b A f R arms cs grid} →
+      TyOk Γ A →
+      payCtors A ≡ just cs →
+      readyN (nsuc (nsuc nzero)) f ≡ true →
+      labelled R arms ≡ true →
+      prodGrid w A f R arms ≡ just grid →
+      length (enumFac (facNat w ∷ facTags cs ∷ [])) ≡ nsuc w * length cs →
+      ArmsOk Γ arms →
+      ProtoOk Γ (esend d (nlit w)
+        (dsend b A (pcase (bySplit f (tagNat d w ∷ tagDat b cs ∷ []) R) arms)))
+    erecv-prod : ∀ {Γ d w b A f R arms cs grid} →
+      TyOk Γ A →
+      payCtors A ≡ just cs →
+      readyN (nsuc (nsuc nzero)) f ≡ true →
+      labelled R arms ≡ true →
+      prodGrid w A f R arms ≡ just grid →
+      length (enumFac (facNat w ∷ facTags cs ∷ [])) ≡ nsuc w * length cs →
+      ArmsOk Γ arms →
+      ProtoOk Γ (erecv d (nlit w)
+        (drecv b A (pcase (bySplit f (tagNat d w ∷ tagDat b cs ∷ []) R) arms)))
     -- The binder is a bit in both arms, so a length that names it is refused.
     isend-ok  : ∀ {Γ x S T} → ProtoOk ((x , bit) ∷ Γ) S → ProtoOk ((x , bit) ∷ Γ) T → ProtoOk Γ (isend x S T)
     irecv-ok  : ∀ {Γ x S T} → ProtoOk ((x , bit) ∷ Γ) S → ProtoOk ((x , bit) ∷ Γ) T → ProtoOk Γ (irecv x S T)
@@ -2620,11 +3082,15 @@ owed? Γ v (just e) with le? Γ v e
 ... | yes′ l = yes′ (owed l)
 ... | no′ nl = no′ (λ { (owed l) → nl l })
 
+data AnswerSend (Γ : Ctx) (ρ : Idx) (v : ValExpr nat) (P : Proc) (e : NExp) (S : Proto) : Set where
+  yes-send : SendCont Γ ρ v P e S → AnswerSend Γ ρ v P e S
+  no-send  : ¬ SendCont Γ ρ v P e S → AnswerSend Γ ρ v P e S
+
 on-eput : ∀ {Γ ρ y e v P S} →
-  Dec (ValExprOk Γ v) → Dec (Owed Γ v (resolve ρ e)) → Answerρ Γ ρ P S →
+  Dec (ValExprOk Γ v) → Dec (Owed Γ v (resolve ρ e)) → AnswerSend Γ ρ v P e S →
   Answerρ Γ ρ (put nat v P) (esend y e S)
-on-eput (yes′ vok) (yes′ ow) (yes d) = yes (eput-ok vok ow d)
-on-eput (yes′ _) (yes′ _) (no nd) = no (λ { (eput-ok _ _ d) → nd d })
+on-eput (yes′ vok) (yes′ ow) (yes-send s) = yes (eput-ok vok ow s)
+on-eput (yes′ _) (yes′ _) (no-send ns) = no (λ { (eput-ok _ _ s) → ns s })
 on-eput (yes′ _) (no′ nw) _ = no (λ { (eput-ok _ ow _) → nw ow })
 on-eput (no′ nvok) _ _ = no (λ { (eput-ok vok _ _) → nvok vok })
 
@@ -2685,6 +3151,29 @@ data AnswerFork (Γ : Ctx) (ρ : Idx) (B : Ty)
     (ch : List (String × Split)) (qs : List PArm) : Set where
   yes-fk : ForkArms Γ ρ B ch qs → AnswerFork Γ ρ B ch qs
   no-fk  : ¬ ForkArms Γ ρ B ch qs → AnswerFork Γ ρ B ch qs
+
+data AnswerCov (Γ : Ctx) (ρ : Idx) (rows : List (String × Proto)) (ps : List PArm) : Set where
+  yes-cov : CovNat Γ ρ rows ps → AnswerCov Γ ρ rows ps
+  no-cov  : ¬ CovNat Γ ρ rows ps → AnswerCov Γ ρ rows ps
+
+data AnswerCell (Γ : Ctx) (ρ : Idx) (x : String) (rows : List (String × Proto)) (P : Proc) : Set where
+  yes-cell : Cell Γ ρ x rows P → AnswerCell Γ ρ x rows P
+  no-cell  : ¬ Cell Γ ρ x rows P → AnswerCell Γ ρ x rows P
+
+data AnswerProd (Γ : Ctx) (ρ : Idx) (A : Ty) (x : String) (w : ℕ)
+    (cs : List String) (grid : List (List (String × Proto))) (ps : List PArm) : Set where
+  yes-pc : ProdCov Γ ρ A x w cs grid ps → AnswerProd Γ ρ A x w cs grid ps
+  no-pc  : ¬ ProdCov Γ ρ A x w cs grid ps → AnswerProd Γ ρ A x w cs grid ps
+
+list≟ : (xs ys : List String) → Dec (xs ≡ ys)
+list≟ [] [] = yes′ refl
+list≟ [] (_ ∷ _) = no′ (λ ())
+list≟ (_ ∷ _) [] = no′ (λ ())
+list≟ (x ∷ xs) (y ∷ ys) with x ≟ y
+... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
+... | yes′ refl with list≟ xs ys
+... | yes′ eq = yes′ (cong (x ∷_) eq)
+... | no′ ¬eq = no′ (λ { refl → ¬eq refl })
 
 cover? : (A : Ty) (ps : List PArm) → Dec (Covered A ps)
 cover? bit [] = no′ (λ ())
@@ -2760,6 +3249,120 @@ chOf refl = refl
 nodeIdx : ∀ {i j ch dh} → node i ch ≡ node j dh → i ≡ j
 nodeIdx refl = refl
 
+-- The product is decided before any recursive call. One `with` on this
+-- view keeps the arm list a subterm of the `mget`.
+data RecvView (Γ : Ctx) (ρ : Idx) (A : Ty) (x : String) (ps : List PArm)
+              (y : String) (B : Ty) (f : String) (tags : List Tag)
+              (R : Ty) (arms : List (String × Proto)) : Set where
+  rv-data : (d : String) (w : ℕ) (cs : List String) (grid : List (List (String × Proto))) →
+      tags ≡ (tagNat d w ∷ tagDat y cs ∷ []) →
+      A ≡ applyTy ρ B →
+      payCtors A ≡ just cs →
+      readyN (nsuc (nsuc nzero)) f ≡ true →
+      labelled R arms ≡ true →
+      prodGrid w A f R arms ≡ just grid →
+      RecvView Γ ρ A x ps y B f tags R arms
+  rv-bit : (d : String) (w : ℕ) (grid : List (List (String × Proto))) →
+      tags ≡ (tagNat d w ∷ tagBit y ∷ []) →
+      A ≡ bit →
+      B ≡ bit →
+      readyN (nsuc (nsuc nzero)) f ≡ true →
+      labelled R arms ≡ true →
+      prodGrid w bit f R arms ≡ just grid →
+      RecvView Γ ρ A x ps y B f tags R arms
+  rv-no : (¬ Conformsρ Γ ρ (mget A x ps)
+             (drecv y B (pcase (bySplit f tags R) arms))) →
+      RecvView Γ ρ A x ps y B f tags R arms
+
+dataView : (Γ : Ctx) (ρ : Idx) (A : Ty) (x : String) (ps : List PArm)
+    (y : String) (B : Ty) (f : String) (R : Ty) (arms : List (String × Proto))
+    (d : String) (w : ℕ) (z : String) (cs : List String) →
+    RecvView Γ ρ A x ps y B f (tagNat d w ∷ tagDat z cs ∷ []) R arms
+dataView Γ ρ A x ps y B f R arms d w z cs with z ≟ y
+... | no′ z≢y = rv-no (λ { (mget-prod _ _ _ _ _ _) → z≢y refl })
+... | yes′ refl with ty≟ A (applyTy ρ B)
+... | no′ ¬eq = rv-no (λ { (mget-prod eq _ _ _ _ _) → ¬eq eq })
+... | yes′ refl with payCtors A in ep
+... | nothing = rv-no (λ { (mget-prod _ p _ _ _ _) → just≢nothing (trans (sym p) ep) })
+... | just ds with list≟ ds cs
+... | no′ ¬cs = rv-no (λ { (mget-prod _ p _ _ _ _) → ¬cs (just-inj (trans (sym ep) p)) })
+... | yes′ refl with readyN (nsuc (nsuc nzero)) f in rd
+... | false = rv-no (λ { (mget-prod _ _ p _ _ _) → true≢false (trans (sym p) rd) })
+... | true with labelled R arms in lb
+... | false = rv-no (λ { (mget-prod _ _ _ p _ _) → true≢false (trans (sym p) lb) })
+... | true with prodGrid w A f R arms in pg
+... | nothing = rv-no (λ { (mget-prod _ _ _ _ p _) → just≢nothing (trans (sym p) pg) })
+... | just grid = rv-data d w cs grid refl refl ep rd lb pg
+
+bitView : (Γ : Ctx) (ρ : Idx) (A : Ty) (x : String) (ps : List PArm)
+    (y : String) (B : Ty) (f : String) (R : Ty) (arms : List (String × Proto))
+    (d : String) (w : ℕ) (z : String) →
+    RecvView Γ ρ A x ps y B f (tagNat d w ∷ tagBit z ∷ []) R arms
+bitView Γ ρ A x ps y B f R arms d w z with z ≟ y
+... | no′ z≢y = rv-no (λ { (mget-pbit _ _ _ _) → z≢y refl })
+... | yes′ refl with ty≟ A bit
+... | no′ ¬eq = rv-no (λ { (mget-pbit _ _ _ _) → ¬eq refl })
+... | yes′ refl with ty≟ B bit
+... | no′ ¬eq = rv-no (λ { (mget-pbit _ _ _ _) → ¬eq refl })
+... | yes′ refl with readyN (nsuc (nsuc nzero)) f in rd
+... | false = rv-no (λ { (mget-pbit p _ _ _) → true≢false (trans (sym p) rd) })
+... | true with labelled R arms in lb
+... | false = rv-no (λ { (mget-pbit _ p _ _) → true≢false (trans (sym p) lb) })
+... | true with prodGrid w bit f R arms in pg
+... | nothing = rv-no (λ { (mget-pbit _ _ p _) → just≢nothing (trans (sym p) pg) })
+... | just grid = rv-bit d w grid refl refl refl rd lb pg
+
+recvView : (Γ : Ctx) (ρ : Idx) (A : Ty) (x : String) (ps : List PArm)
+    (y : String) (B : Ty) (f : String) (tags : List Tag)
+    (R : Ty) (arms : List (String × Proto)) →
+    RecvView Γ ρ A x ps y B f tags R arms
+recvView Γ ρ A x ps y B f [] R arms = rv-no (λ ())
+recvView Γ ρ A x ps y B f (_ ∷ []) R arms = rv-no (λ ())
+recvView Γ ρ A x ps y B f (tagBit _ ∷ _ ∷ _) R arms = rv-no (λ ())
+recvView Γ ρ A x ps y B f (tagDat _ _ ∷ _ ∷ _) R arms = rv-no (λ ())
+recvView Γ ρ A x ps y B f (tagNat _ _ ∷ tagNat _ _ ∷ _) R arms = rv-no (λ ())
+recvView Γ ρ A x ps y B f (tagNat d w ∷ tagDat z cs ∷ []) R arms =
+  dataView Γ ρ A x ps y B f R arms d w z cs
+recvView Γ ρ A x ps y B f (tagNat _ _ ∷ tagDat _ _ ∷ _ ∷ _) R arms = rv-no (λ ())
+recvView Γ ρ A x ps y B f (tagNat d w ∷ tagBit z ∷ []) R arms =
+  bitView Γ ρ A x ps y B f R arms d w z
+recvView Γ ρ A x ps y B f (tagNat _ _ ∷ tagBit _ ∷ _ ∷ _) R arms = rv-no (λ ())
+
+data NameView (A : Ty) (c : String) (xs : List String) (Γ : Ctx) (k : String) : Set where
+  nv-neq  : c ≢ k → NameView A c xs Γ k
+  nv-none : armCtxNamed A c xs Γ ≡ nothing → c ≡ k → NameView A c xs Γ k
+  nv-just : (Δ : Ctx) → armCtxNamed A c xs Γ ≡ just Δ → c ≡ k → NameView A c xs Γ k
+
+nameView : (A : Ty) (c k : String) (xs : List String) (Γ : Ctx) → NameView A c xs Γ k
+nameView A c k xs Γ with c ≟ k
+... | no′ neq = nv-neq neq
+... | yes′ refl with armCtxNamed A c xs Γ in ac
+... | nothing = nv-none ac refl
+... | just Δ = nv-just Δ ac refl
+
+useOne : ∀ {Γ ρ x rows p S} →
+  (∀ {qs} → p ≢ mget nat x qs) →
+  sameArms rows ≡ just S →
+  Answerρ Γ ρ p S →
+  AnswerCell Γ ρ x rows p
+useOne away sa (yes d) = yes-cell (cell-one sa d)
+useOne {Γ = Γ} {ρ = ρ} {p = p} away sa (no nd) = no-cell (λ where
+  (cell-one q e) →
+    nd (subst (λ T → Conformsρ Γ ρ p T) (just-inj (trans (sym q) sa)) e)
+  (cell-nat _) → away refl)
+
+useAns : ∀ {Γ ρ x rows p S qs} →
+  ¬ CovNat Γ ρ rows qs →
+  sameArms rows ≡ just S →
+  p ≡ mget nat x qs →
+  Answerρ Γ ρ p S →
+  AnswerCell Γ ρ x rows p
+useAns nc sa refl (yes d) = yes-cell (cell-one sa d)
+useAns {Γ = Γ} {ρ = ρ} {p = p} nc sa refl (no nd) = no-cell (λ where
+  (cell-nat cov) → nc cov
+  (cell-one q e) →
+    nd (subst (λ T → Conformsρ Γ ρ p T) (just-inj (trans (sym q) sa)) e))
+
 mutual
   decideArms : (Γ : Ctx) (ρ : Idx) (A : Ty) (i : ℕ) (ps : List PArm) (S : Proto) →
     AnswerArms Γ ρ A i ps S
@@ -2806,7 +3409,7 @@ mutual
   ... | yes′ refl = sendBy Γ ρ y v P B S refl
   ... | no′ ¬eq = no (λ d → ¬eq (dput-type d))
   decideρ Γ ρ (put A v P) (esend y e S) with ty≟ A nat
-  ... | yes′ refl = on-eput (decideValExpr Γ v) (owed? Γ v (resolve ρ e)) (decideρ Γ ρ P S)
+  ... | yes′ refl = on-eput (decideValExpr Γ v) (owed? Γ v (resolve ρ e)) (decideSend Γ ρ v e P S)
   ... | no′ ¬eq = no (λ { (eput-ok _ _ _) → ¬eq refl })
   decideρ Γ ρ (put A v P) (isend y S T) with ty≟ A bit
   ... | yes′ refl = isend-bit v (decideρ Γ (shadow y ρ) P S) (decideρ Γ (shadow y ρ) P T)
@@ -2911,6 +3514,13 @@ mutual
   ... | true with payCtors A in ep
   ... | nothing = no (λ { (mget-run _ _ _ _ p _) → just≢nothing (trans (sym p) ep) })
   ... | just cs = on-run c rd lb ep (decideRun ((x , A) ∷ Γ) (renameIdx y x (shadow y ρ)) f A R arms cs ps)
+  decideρ Γ ρ (mget A x ps) (drecv y B (pcase (bySplit f tags R) arms))
+    with recvView Γ ρ A x ps y B f tags R arms
+  ... | rv-no ¬c = no ¬c
+  ... | rv-data d w cs grid refl eq ep rd lb pg =
+      finishProd eq ep rd lb pg (decideProd ((x , A) ∷ Γ) ρ A d w cs grid ps)
+  ... | rv-bit d w grid refl refl refl rd lb pg =
+      finishBit rd lb pg (decideProd ((x , bit) ∷ Γ) ρ bit d w ("b0" ∷ "b1" ∷ []) grid ps)
   decideρ Γ ρ (mget _ _ _) (drecv _ _ end) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (drecv _ _ (send _ _)) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (drecv _ _ (recv _ _)) = no (λ ())
@@ -2923,7 +3533,7 @@ mutual
   decideρ Γ ρ (mget _ _ _) (drecv _ _ (choose _ _)) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (drecv _ _ (branch _ _)) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (esend _ _ _) = no (λ ())
-  decideρ Γ ρ (mget _ _ _) (erecv _ _ _) = no (λ ())
+  decideρ Γ ρ (mget A x ps) (erecv y e S) = decideENat Γ ρ A x ps y e S
   decideρ Γ ρ (mget _ _ _) (isend _ _ _) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (irecv _ _ _) = no (λ ())
   decideρ Γ ρ (mget _ _ _) (choose _ _) = no (λ ())
@@ -3044,6 +3654,491 @@ mutual
   decideRun _ _ _ _ _ _ (_ ∷ _) (prod _ _ ∷ _) = no-cr (λ ())
   decideRun _ _ _ _ _ _ [] (_ ∷ _) = no-cr (λ ())
   decideRun _ _ _ _ _ _ (_ ∷ _) [] = no-cr (λ ())
+
+  finishVal : ∀ {Γ ρ x y w ps arms} →
+    namesEq (natArms w) (armNames arms) ≡ true →
+    AnswerAt ((x , nat) ∷ Γ) ρ nat arms ps →
+    Answerρ Γ ρ (mget nat x ps) (erecv y (nlit w) (pcase (byVal y) arms))
+  finishVal eq (yes-at ds) = yes (eget-val eq ds)
+  finishVal _ (no-at nd) = no (λ { (eget-val _ ds) → nd ds })
+
+  finishRun : ∀ {Γ ρ x y w f R ps arms rows} →
+    readyN (nsuc nzero) f ≡ true →
+    labelled R arms ≡ true →
+    natRows f R arms w ≡ just rows →
+    AnswerCov ((x , nat) ∷ Γ) ρ rows ps →
+    Answerρ Γ ρ (mget nat x ps) (erecv y (nlit w) (pcase (byRun f y R) arms))
+  finishRun rd lb eq (yes-cov c) = yes (eget-run rd lb eq c)
+  finishRun {Γ} {ρ} {x} {ps = ps} rd lb eq (no-cov nc) =
+    no (λ { (eget-run _ _ p c) →
+      nc (subst (λ rs → CovNat ((x , nat) ∷ Γ) ρ rs ps) (just-inj (trans (sym p) eq)) c) })
+
+  decideCov : (Γ : Ctx) (ρ : Idx) (rows : List (String × Proto)) (ps : List PArm) →
+    AnswerCov Γ ρ rows ps
+  decideCov Γ ρ [] [] = yes-cov cn-nil
+  decideCov _ _ [] (_ ∷ _) = no-cov (λ ())
+  decideCov _ _ (_ ∷ _) [] = no-cov (λ ())
+  decideCov Γ ρ ((c , S) ∷ rows) (bare p ∷ ps) with decideρ Γ ρ p S
+  ... | no nd = no-cov (λ { (cn-bare d _) → nd d })
+  ... | yes d with decideCov Γ ρ rows ps
+  ... | yes-cov ds = yes-cov (cn-bare d ds)
+  ... | no-cov nd = no-cov (λ { (cn-bare _ ds) → nd ds })
+  decideCov Γ ρ ((c , S) ∷ rows) (named k [] p ∷ ps) with c ≟ k
+  ... | no′ c≢k = no-cov (λ { (cn-named _ _) → c≢k refl })
+  ... | yes′ refl with decideρ Γ ρ p S
+  ... | no nd = no-cov (λ { (cn-named d _) → nd d })
+  ... | yes d with decideCov Γ ρ rows ps
+  ... | yes-cov ds = yes-cov (cn-named d ds)
+  ... | no-cov nd = no-cov (λ { (cn-named _ ds) → nd ds })
+  decideCov _ _ (_ ∷ _) (named _ (_ ∷ _) _ ∷ _) = no-cov (λ ())
+  decideCov _ _ (_ ∷ _) (prod _ _ ∷ _) = no-cov (λ ())
+  decideCov _ _ (_ ∷ _) (fork _ _ _ _ ∷ _) = no-cov (λ ())
+
+  mgetName : ∀ {A B x y ps qs} → mget A x ps ≡ mget B y qs → x ≡ y
+  mgetName refl = refl
+
+  mgetTy : ∀ {A B x y ps qs} → mget A x ps ≡ mget B y qs → A ≡ B
+  mgetTy refl = refl
+
+  -- The arm is a match on this bounded nat, or it is not.
+  data NatMatch (x : String) : Proc → Set where
+    is-here : ∀ {qs} → NatMatch x (mget nat x qs)
+    is-away : ∀ {P} → (∀ {qs} → P ≢ mget nat x qs) → NatMatch x P
+
+  natMatch : (x : String) (P : Proc) → NatMatch x P
+  natMatch _ done = is-away (λ ())
+  natMatch _ stop = is-away (λ ())
+  natMatch _ (put _ _ _) = is-away (λ ())
+  natMatch _ (get _ _ _) = is-away (λ ())
+  natMatch _ (pick0 _) = is-away (λ ())
+  natMatch _ (pick1 _) = is-away (λ ())
+  natMatch _ (cover _ _) = is-away (λ ())
+  natMatch _ (iget _ _ _) = is-away (λ ())
+  natMatch x (mget A y qs) with ty≟ A nat
+  ... | no′ ¬nat = is-away (λ eq → ¬nat (mgetTy eq))
+  ... | yes′ refl with x ≟ y
+  ... | no′ y≢x = is-away (λ eq → y≢x (mgetName (sym eq)))
+  ... | yes′ refl = is-here
+
+  finishOne : (Γ : Ctx) (ρ : Idx) (x : String) (rows : List (String × Proto))
+      (p : Proc) → (∀ {qs} → p ≢ mget nat x qs) →
+      (m : Maybe Proto) → sameArms rows ≡ m → AnswerCell Γ ρ x rows p
+  finishOne Γ ρ x rows p away nothing sa = no-cell (λ where
+    (cell-one q _) → just≢nothing (trans (sym q) sa)
+    (cell-nat _) → away refl)
+  finishOne Γ ρ x rows p away (just S) sa = useOne away sa (decideρ Γ ρ p S)
+
+  finishCol : (Γ : Ctx) (ρ : Idx) (x : String) (rows : List (String × Proto))
+      (p : Proc) (qs : List PArm) → p ≡ mget nat x qs →
+      AnswerCov Γ ρ rows qs → (m : Maybe Proto) → sameArms rows ≡ m →
+      AnswerCell Γ ρ x rows p
+  finishCol _ _ _ _ _ _ refl (yes-cov cov) _ _ = yes-cell (cell-nat cov)
+  finishCol _ _ _ _ _ _ refl (no-cov nc) nothing sa = no-cell (λ where
+    (cell-nat cov) → nc cov
+    (cell-one q _) → just≢nothing (trans (sym q) sa))
+  finishCol Γ ρ x rows p qs refl (no-cov nc) (just S) sa =
+    useAns nc sa refl (decideρ Γ ρ p S)
+
+  colOne : (Γ : Ctx) (ρ : Idx) (x : String) (rows : List (String × Proto))
+      (p : Proc) → (∀ {qs} → p ≢ mget nat x qs) → AnswerCell Γ ρ x rows p
+  colOne Γ ρ x rows p away = finishOne Γ ρ x rows p away (sameArms rows) refl
+
+  colNat : (Γ : Ctx) (ρ : Idx) (x : String) (rows : List (String × Proto))
+      (p : Proc) (qs : List PArm) → p ≡ mget nat x qs → AnswerCell Γ ρ x rows p
+  colNat Γ ρ x rows p qs eq =
+    finishCol Γ ρ x rows p qs eq (decideCov Γ ρ rows qs) (sameArms rows) refl
+
+  pickCell : (Γ : Ctx) (ρ : Idx) (x : String) (rows : List (String × Proto))
+      (p : Proc) → NatMatch x p → AnswerCell Γ ρ x rows p
+  pickCell Γ ρ x rows p (is-away away) = colOne Γ ρ x rows p away
+  pickCell Γ ρ x rows .(mget nat x qs) (is-here {qs = qs}) =
+    colNat Γ ρ x rows (mget nat x qs) qs refl
+
+  useBare : ∀ {Γ ρ A x w c cs rows grid p ps} →
+    AnswerCell Γ ρ x rows p →
+    AnswerProd Γ ρ A x w cs grid ps →
+    AnswerProd Γ ρ A x w (c ∷ cs) (rows ∷ grid) (bare p ∷ ps)
+  useBare (no-cell nc) _ = no-pc (λ { (pc-bare cl _) → nc cl })
+  useBare (yes-cell cl) (yes-pc rest) = yes-pc (pc-bare cl rest)
+  useBare (yes-cell _) (no-pc nr) = no-pc (λ { (pc-bare _ rest) → nr rest })
+
+  useNamed : ∀ {Γ ρ A x w c cs rows grid xs p Δ ps} →
+    armCtxNamed A c xs Γ ≡ just Δ →
+    AnswerCell Δ ρ x rows p →
+    AnswerProd Γ ρ A x w cs grid ps →
+    AnswerProd Γ ρ A x w (c ∷ cs) (rows ∷ grid) (named c xs p ∷ ps)
+  useNamed {ρ = ρ} {x = x} {rows = rows} {p = p} ac (no-cell nc) _ =
+    no-pc (λ { (pc-named q cl _) →
+      nc (subst (λ Θ → Cell Θ ρ x rows p) (just-inj (trans (sym q) ac)) cl) })
+  useNamed ac (yes-cell cl) (yes-pc rest) = yes-pc (pc-named ac cl rest)
+  useNamed _ (yes-cell _) (no-pc nr) = no-pc (λ { (pc-named _ _ rest) → nr rest })
+
+  decideProd : (Γ : Ctx) (ρ : Idx) (A : Ty) (x : String) (w : ℕ)
+    (cs : List String) (grid : List (List (String × Proto))) (ps : List PArm) →
+    AnswerProd Γ ρ A x w cs grid ps
+  decideProd _ _ _ _ _ [] [] [] = yes-pc pc-nil
+  decideProd _ _ _ _ _ [] (_ ∷ _) _ = no-pc (λ ())
+  decideProd _ _ _ _ _ [] [] (_ ∷ _) = no-pc (λ ())
+  decideProd _ _ _ _ _ (_ ∷ _) [] _ = no-pc (λ ())
+  decideProd _ _ _ _ _ (_ ∷ _) (_ ∷ _) [] = no-pc (λ ())
+  decideProd Γ ρ A x w (c ∷ cs) (rows ∷ grid) (bare p ∷ ps) =
+    useBare (pickCell Γ ρ x rows p (natMatch x p)) (decideProd Γ ρ A x w cs grid ps)
+  decideProd Γ ρ A x w (c ∷ cs) (rows ∷ grid) (named k xs p ∷ ps) with nameView A c k xs Γ
+  ... | nv-neq neq = no-pc (λ { (pc-named _ _ _) → neq refl })
+  ... | nv-none ac refl = no-pc (λ { (pc-named q _ _) → just≢nothing (trans (sym q) ac) })
+  ... | nv-just Δ ac refl =
+      useNamed ac (pickCell Δ ρ x rows p (natMatch x p)) (decideProd Γ ρ A x w cs grid ps)
+  decideProd _ _ _ _ _ (_ ∷ _) (_ ∷ _) (prod _ _ ∷ _) = no-pc (λ ())
+  decideProd _ _ _ _ _ (_ ∷ _) (_ ∷ _) (fork _ _ _ _ ∷ _) = no-pc (λ ())
+
+  finishProd : ∀ {Γ ρ A B x y d w f R ps arms cs grid} →
+    A ≡ applyTy ρ B →
+    payCtors A ≡ just cs →
+    readyN (nsuc (nsuc nzero)) f ≡ true →
+    labelled R arms ≡ true →
+    prodGrid w A f R arms ≡ just grid →
+    AnswerProd ((x , A) ∷ Γ) ρ A d w cs grid ps →
+    Answerρ Γ ρ (mget A x ps)
+      (drecv y B (pcase (bySplit f (tagNat d w ∷ tagDat y cs ∷ []) R) arms))
+  finishProd eq ep rd lb pg (yes-pc cov) = yes (mget-prod eq ep rd lb pg cov)
+  finishProd {Γ} {ρ} {A} {x = x} {d = d} {w = w} {ps = ps} {cs = cs} eq ep rd lb pg (no-pc np) =
+    no (λ { (mget-prod _ _ _ _ p cov) →
+      np (subst (λ g → ProdCov ((x , A) ∷ Γ) ρ A d w cs g ps)
+            (just-inj (trans (sym p) pg)) cov) })
+
+  finishBit : ∀ {Γ ρ x y d w f R ps arms grid} →
+    readyN (nsuc (nsuc nzero)) f ≡ true →
+    labelled R arms ≡ true →
+    prodGrid w bit f R arms ≡ just grid →
+    AnswerProd ((x , bit) ∷ Γ) ρ bit d w ("b0" ∷ "b1" ∷ []) grid ps →
+    Answerρ Γ ρ (mget bit x ps)
+      (drecv y bit (pcase (bySplit f (tagNat d w ∷ tagBit y ∷ []) R) arms))
+  finishBit rd lb pg (yes-pc cov) = yes (mget-pbit rd lb pg cov)
+  finishBit {Γ} {ρ} {x} {d = d} {w = w} {ps = ps} rd lb pg (no-pc np) =
+    no (λ { (mget-pbit _ _ p cov) →
+      np (subst (λ g → ProdCov ((x , bit) ∷ Γ) ρ bit d w ("b0" ∷ "b1" ∷ []) g ps)
+            (just-inj (trans (sym p) pg)) cov) })
+
+  decideENat : (Γ : Ctx) (ρ : Idx) (A : Ty) (x : String) (ps : List PArm)
+    (y : String) (e : NExp) (S : Proto) →
+    Answerρ Γ ρ (mget A x ps) (erecv y e S)
+  decideENat Γ ρ A x ps y (nlit w) (pcase (byVal z) arms) with z ≟ y
+  ... | no′ z≢y = no (λ { (eget-val _ _) → z≢y refl })
+  ... | yes′ refl with ty≟ A nat
+  ... | no′ ¬eq = no (λ { (eget-val _ _) → ¬eq refl })
+  ... | yes′ refl with namesEq (natArms w) (armNames arms) in ne
+  ... | false = no (λ { (eget-val p _) → true≢false (trans (sym p) ne) })
+  ... | true = finishVal ne (decideAt ((x , nat) ∷ Γ) ρ nat arms ps)
+  decideENat Γ ρ A x ps y (nlit w) (pcase (byRun f z R) arms) with z ≟ y
+  ... | no′ z≢y = no (λ { (eget-run _ _ _ _) → z≢y refl })
+  ... | yes′ refl with ty≟ A nat
+  ... | no′ ¬eq = no (λ { (eget-run _ _ _ _) → ¬eq refl })
+  ... | yes′ refl with readyN (nsuc nzero) f in rd
+  ... | false = no (λ { (eget-run p _ _ _) → true≢false (trans (sym p) rd) })
+  ... | true with labelled R arms in lb
+  ... | false = no (λ { (eget-run _ p _ _) → true≢false (trans (sym p) lb) })
+  ... | true with natRows f R arms w in nr
+  ... | nothing = no (λ { (eget-run _ _ p _) → just≢nothing (trans (sym p) nr) })
+  ... | just rows = finishRun rd lb nr (decideCov ((x , nat) ∷ Γ) ρ rows ps)
+  decideENat _ _ _ _ _ _ (nlit _) (pcase (bySplit _ _ _) _) = no (λ ())
+  decideENat _ _ _ _ _ _ (nlit _) end = no (λ ())
+  decideENat _ _ _ _ _ _ (nlit _) (send _ _) = no (λ ())
+  decideENat _ _ _ _ _ _ (nlit _) (recv _ _) = no (λ ())
+  decideENat _ _ _ _ _ _ (nlit _) (dsend _ _ _) = no (λ ())
+  decideENat _ _ _ _ _ _ (nlit _) (drecv _ _ _) = no (λ ())
+  decideENat _ _ _ _ _ _ (nlit _) (esend _ _ _) = no (λ ())
+  decideENat _ _ _ _ _ _ (nlit _) (erecv _ _ _) = no (λ ())
+  decideENat _ _ _ _ _ _ (nlit _) (isend _ _ _) = no (λ ())
+  decideENat _ _ _ _ _ _ (nlit _) (irecv _ _ _) = no (λ ())
+  decideENat _ _ _ _ _ _ (nlit _) (choose _ _) = no (λ ())
+  decideENat _ _ _ _ _ _ (nlit _) (branch _ _) = no (λ ())
+  decideENat _ _ _ _ _ _ (nvar _) _ = no (λ ())
+
+  -- A put does not conform to a dependent send whose continuation is a
+  -- split. The case is not a plain protocol, and `bySplit` selects nothing.
+  no-split-put : ∀ {Γ ρ A u Q z B f tags R arms} →
+    ¬ Conformsρ Γ ρ (put A u Q) (dsend z B (pcase (bySplit f tags R) arms))
+  no-split-put (dput-ok _ _ pl _) = plain-not pl
+  no-split-put (dput-arm _ _ p _) = just≢nothing (sym p)
+
+  prodSend : (Γ : Ctx) (ρ : Idx) (v : ValExpr nat) (w : ℕ)
+      (A : Ty) (u : ValExpr A) (Q : Proc) (z : String) (B : Ty)
+      (y : String) (n : ℕ) (b : String) (cs : List String)
+      (f : String) (R : Ty) (arms : List (String × Proto)) →
+      AnswerSend Γ ρ v (put A u Q) (nlit w)
+        (dsend z B (pcase (bySplit f (tagNat y n ∷ tagDat b cs ∷ []) R) arms))
+  prodSend Γ ρ v w A u Q z B y n b cs f R arms with b ≟ z
+  ... | no′ b≢z = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-prod _ _ _ _ _ _) → b≢z refl)
+  ... | yes′ refl with w ≟ℕ n
+  ... | no′ w≢n = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-prod _ _ _ _ _ _) → w≢n refl)
+  ... | yes′ refl with ty≟ A (applyTy ρ B)
+  ... | no′ ¬eq = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-prod eq _ _ _ _ _) → ¬eq eq)
+  ... | yes′ refl with payCtors A in ep
+  ... | nothing = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-prod _ p _ _ _ _) → just≢nothing (trans (sym p) ep))
+  ... | just ds with list≟ ds cs
+  ... | no′ ¬cs = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-prod _ p _ _ _ _) → ¬cs (just-inj (trans (sym ep) p)))
+  ... | yes′ refl with readyN (nsuc (nsuc nzero)) f in rd
+  ... | false = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-prod _ _ p _ _ _) → true≢false (trans (sym p) rd))
+  ... | true with labelled R arms in lb
+  ... | false = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-prod _ _ _ p _ _) → true≢false (trans (sym p) lb))
+  ... | true with pickProd v u w f R arms in pk
+  ... | nothing = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-prod _ _ _ _ p _) → just≢nothing (trans (sym p) pk))
+  ... | just T with decideρ Γ ρ Q T
+  ... | no nd = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-prod _ _ _ _ p leaf) →
+          nd (subst (λ S → Conformsρ Γ ρ Q S) (just-inj (trans (sym p) pk)) leaf))
+  ... | yes d = yes-send (send-prod refl ep rd lb pk d)
+
+  splitBit : (Γ : Ctx) (ρ : Idx) (v : ValExpr nat) (w : ℕ)
+      (A : Ty) (u : ValExpr A) (Q : Proc) (z : String) (B : Ty)
+      (y : String) (n : ℕ) (b : String)
+      (f : String) (R : Ty) (arms : List (String × Proto)) →
+      AnswerSend Γ ρ v (put A u Q) (nlit w)
+        (dsend z B (pcase (bySplit f (tagNat y n ∷ tagBit b ∷ []) R) arms))
+  splitBit Γ ρ v w A u Q z B y n b f R arms with b ≟ z
+  ... | no′ b≢z = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-pbit _ _ _ _ _) → b≢z refl)
+  ... | yes′ refl with w ≟ℕ n
+  ... | no′ w≢n = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-pbit _ _ _ _ _) → w≢n refl)
+  ... | yes′ refl with ty≟ A bit
+  ... | no′ ¬A = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-pbit _ _ _ _ _) → ¬A refl)
+  ... | yes′ refl with ty≟ (applyTy ρ B) bit
+  ... | no′ ¬B = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-pbit eq _ _ _ _) → ¬B (sym eq))
+  ... | yes′ Beq with readyN (nsuc (nsuc nzero)) f in rd
+  ... | false = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-pbit _ p _ _ _) → true≢false (trans (sym p) rd))
+  ... | true with labelled R arms in lb
+  ... | false = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-pbit _ _ p _ _) → true≢false (trans (sym p) lb))
+  ... | true with pickProd v u w f R arms in pk
+  ... | nothing = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-pbit _ _ _ p _) → just≢nothing (trans (sym p) pk))
+  ... | just T with decideρ Γ ρ Q T
+  ... | no nd = no-send (λ where
+        (send-plain _ c) → no-split-put c
+        (send-pbit _ _ _ p leaf) →
+          nd (subst (λ S → Conformsρ Γ ρ Q S) (just-inj (trans (sym p) pk)) leaf))
+  ... | yes d = yes-send (send-pbit (sym Beq) rd lb pk d)
+
+  -- Tag lists that are not one bounded nat followed by the payload.
+  data Boring : List Tag → Set where
+    b-nil  : Boring []
+    b-one  : ∀ {t} → Boring (t ∷ [])
+    b-bit  : ∀ {x ts} → Boring (tagBit x ∷ ts)
+    b-dat  : ∀ {x cs ts} → Boring (tagDat x cs ∷ ts)
+    b-nn   : ∀ {a n b m ts} → Boring (tagNat a n ∷ tagNat b m ∷ ts)
+    b-nd   : ∀ {a n x cs t ts} → Boring (tagNat a n ∷ tagDat x cs ∷ t ∷ ts)
+    b-nb   : ∀ {a n x t ts} → Boring (tagNat a n ∷ tagBit x ∷ t ∷ ts)
+
+  data Bore : List Tag → Set where
+    bored     : ∀ {ts} → Boring ts → Bore ts
+    data-prod : ∀ {y n b cs} → Bore (tagNat y n ∷ tagDat b cs ∷ [])
+    bit-prod  : ∀ {y n b} → Bore (tagNat y n ∷ tagBit b ∷ [])
+
+  bore : (ts : List Tag) → Bore ts
+  bore [] = bored b-nil
+  bore (t ∷ []) = bored (b-one {t = t})
+  bore (tagBit x ∷ t ∷ ts) = bored (b-bit {x = x} {ts = t ∷ ts})
+  bore (tagDat x cs ∷ t ∷ ts) = bored (b-dat {x = x} {cs = cs} {ts = t ∷ ts})
+  bore (tagNat a n ∷ tagNat b m ∷ ts) = bored (b-nn {a = a} {n = n} {b = b} {m = m} {ts = ts})
+  bore (tagNat y n ∷ tagDat b cs ∷ []) = data-prod {y = y} {n = n} {b = b} {cs = cs}
+  bore (tagNat a n ∷ tagDat x cs ∷ t ∷ ts) = bored (b-nd {a = a} {n = n} {x = x} {cs = cs} {t = t} {ts = ts})
+  bore (tagNat y n ∷ tagBit b ∷ []) = bit-prod {y = y} {n = n} {b = b}
+  bore (tagNat a n ∷ tagBit x ∷ t ∷ ts) = bored (b-nb {a = a} {n = n} {x = x} {t = t} {ts = ts})
+
+  tagPlain : ∀ {Γ ρ v w A u Q z B f ts R arms} →
+    Boring ts →
+    Answerρ Γ ρ (put A u Q) (dsend z B (pcase (bySplit f ts R) arms)) →
+    AnswerSend Γ ρ v (put A u Q) (nlit w)
+      (dsend z B (pcase (bySplit f ts R) arms))
+  tagPlain b-nil (yes d) = yes-send (send-plain plain-dsend d)
+  tagPlain b-nil (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  tagPlain b-one (yes d) = yes-send (send-plain plain-dsend d)
+  tagPlain b-one (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  tagPlain b-bit (yes d) = yes-send (send-plain plain-dsend d)
+  tagPlain b-bit (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  tagPlain b-dat (yes d) = yes-send (send-plain plain-dsend d)
+  tagPlain b-dat (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  tagPlain b-nn (yes d) = yes-send (send-plain plain-dsend d)
+  tagPlain b-nn (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  tagPlain b-nd (yes d) = yes-send (send-plain plain-dsend d)
+  tagPlain b-nd (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  tagPlain b-nb (yes d) = yes-send (send-plain plain-dsend d)
+  tagPlain b-nb (no nd) = no-send (λ { (send-plain _ c) → nd c })
+
+  splitAns : (Γ : Ctx) (ρ : Idx) (v : ValExpr nat) (e : NExp) (P : Proc)
+      (z : String) (C : Ty) (f : String) (ts : List Tag) (R : Ty)
+      (arms : List (String × Proto)) →
+      Answerρ Γ ρ P (dsend z C (pcase (bySplit f ts R) arms)) →
+      AnswerSend Γ ρ v P e (dsend z C (pcase (bySplit f ts R) arms))
+  splitAns Γ ρ v (nvar _) P z C f ts R arms (yes d) = yes-send (send-plain plain-dsend d)
+  splitAns Γ ρ v (nvar _) P z C f ts R arms (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  splitAns Γ ρ v (nlit _) done z C f ts R arms (yes d) = yes-send (send-plain plain-dsend d)
+  splitAns Γ ρ v (nlit _) done z C f ts R arms (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  splitAns Γ ρ v (nlit _) stop z C f ts R arms (yes d) = yes-send (send-plain plain-dsend d)
+  splitAns Γ ρ v (nlit _) stop z C f ts R arms (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  splitAns Γ ρ v (nlit _) (get _ _ _) z C f ts R arms (yes d) = yes-send (send-plain plain-dsend d)
+  splitAns Γ ρ v (nlit _) (get _ _ _) z C f ts R arms (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  splitAns Γ ρ v (nlit _) (pick0 _) z C f ts R arms (yes d) = yes-send (send-plain plain-dsend d)
+  splitAns Γ ρ v (nlit _) (pick0 _) z C f ts R arms (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  splitAns Γ ρ v (nlit _) (pick1 _) z C f ts R arms (yes d) = yes-send (send-plain plain-dsend d)
+  splitAns Γ ρ v (nlit _) (pick1 _) z C f ts R arms (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  splitAns Γ ρ v (nlit _) (cover _ _) z C f ts R arms (yes d) = yes-send (send-plain plain-dsend d)
+  splitAns Γ ρ v (nlit _) (cover _ _) z C f ts R arms (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  splitAns Γ ρ v (nlit _) (iget _ _ _) z C f ts R arms (yes d) = yes-send (send-plain plain-dsend d)
+  splitAns Γ ρ v (nlit _) (iget _ _ _) z C f ts R arms (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  splitAns Γ ρ v (nlit _) (mget _ _ _) z C f ts R arms (yes d) = yes-send (send-plain plain-dsend d)
+  splitAns Γ ρ v (nlit _) (mget _ _ _) z C f ts R arms (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  splitAns Γ ρ v (nlit w) (put A u Q) z C f ts R arms ans with bore ts
+  ... | bored b = tagPlain b ans
+  ... | data-prod {y = y} {n = n} {b = b} {cs = cs} =
+        prodSend Γ ρ v w A u Q z C y n b cs f R arms
+  ... | bit-prod {y = y} {n = n} {b = b} =
+        splitBit Γ ρ v w A u Q z C y n b f R arms
+
+  dsendAns : (Γ : Ctx) (ρ : Idx) (v : ValExpr nat) (e : NExp) (P : Proc)
+      (z : String) (C : Ty) (S : Proto) →
+      Answerρ Γ ρ P (dsend z C S) →
+      AnswerSend Γ ρ v P e (dsend z C S)
+  dsendAns _ _ _ _ _ _ _ end (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ end (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns _ _ _ _ _ _ _ (send _ _) (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ (send _ _) (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns _ _ _ _ _ _ _ (recv _ _) (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ (recv _ _) (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns _ _ _ _ _ _ _ (dsend _ _ _) (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ (dsend _ _ _) (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns _ _ _ _ _ _ _ (drecv _ _ _) (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ (drecv _ _ _) (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns _ _ _ _ _ _ _ (esend _ _ _) (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ (esend _ _ _) (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns _ _ _ _ _ _ _ (erecv _ _ _) (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ (erecv _ _ _) (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns _ _ _ _ _ _ _ (isend _ _ _) (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ (isend _ _ _) (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns _ _ _ _ _ _ _ (irecv _ _ _) (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ (irecv _ _ _) (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns _ _ _ _ _ _ _ (choose _ _) (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ (choose _ _) (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns _ _ _ _ _ _ _ (branch _ _) (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ (branch _ _) (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns _ _ _ _ _ _ _ (pcase (byVal _) _) (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ (pcase (byVal _) _) (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns _ _ _ _ _ _ _ (pcase (byRun _ _ _) _) (yes d) = yes-send (send-plain plain-dsend d)
+  dsendAns _ _ _ _ _ _ _ (pcase (byRun _ _ _) _) (no nd) = no-send (λ { (send-plain _ c) → nd c })
+  dsendAns Γ ρ v e P z C (pcase (bySplit f ts R) arms) ans =
+    splitAns Γ ρ v e P z C f ts R arms ans
+
+  plainEnd : ∀ {Γ ρ v e P} → Answerρ Γ ρ P end → AnswerSend Γ ρ v P e end
+  plainEnd (yes d) = yes-send (send-plain plain-end d)
+  plainEnd (no nd) = no-send (λ { (send-plain _ c) → nd c })
+
+  plainSend : ∀ {Γ ρ v e P A S} → Answerρ Γ ρ P (send A S) → AnswerSend Γ ρ v P e (send A S)
+  plainSend (yes d) = yes-send (send-plain plain-send d)
+  plainSend (no nd) = no-send (λ { (send-plain _ c) → nd c })
+
+  plainRecv : ∀ {Γ ρ v e P A S} → Answerρ Γ ρ P (recv A S) → AnswerSend Γ ρ v P e (recv A S)
+  plainRecv (yes d) = yes-send (send-plain plain-recv d)
+  plainRecv (no nd) = no-send (λ { (send-plain _ c) → nd c })
+
+  plainDrecv : ∀ {Γ ρ v e P y A S} → Answerρ Γ ρ P (drecv y A S) → AnswerSend Γ ρ v P e (drecv y A S)
+  plainDrecv (yes d) = yes-send (send-plain plain-drecv d)
+  plainDrecv (no nd) = no-send (λ { (send-plain _ c) → nd c })
+
+  plainEsend : ∀ {Γ ρ v e P y g S} → Answerρ Γ ρ P (esend y g S) → AnswerSend Γ ρ v P e (esend y g S)
+  plainEsend (yes d) = yes-send (send-plain plain-esend d)
+  plainEsend (no nd) = no-send (λ { (send-plain _ c) → nd c })
+
+  plainErecv : ∀ {Γ ρ v e P y g S} → Answerρ Γ ρ P (erecv y g S) → AnswerSend Γ ρ v P e (erecv y g S)
+  plainErecv (yes d) = yes-send (send-plain plain-erecv d)
+  plainErecv (no nd) = no-send (λ { (send-plain _ c) → nd c })
+
+  plainIsend : ∀ {Γ ρ v e P y S T} → Answerρ Γ ρ P (isend y S T) → AnswerSend Γ ρ v P e (isend y S T)
+  plainIsend (yes d) = yes-send (send-plain plain-isend d)
+  plainIsend (no nd) = no-send (λ { (send-plain _ c) → nd c })
+
+  plainIrecv : ∀ {Γ ρ v e P y S T} → Answerρ Γ ρ P (irecv y S T) → AnswerSend Γ ρ v P e (irecv y S T)
+  plainIrecv (yes d) = yes-send (send-plain plain-irecv d)
+  plainIrecv (no nd) = no-send (λ { (send-plain _ c) → nd c })
+
+  plainChoose : ∀ {Γ ρ v e P S T} → Answerρ Γ ρ P (choose S T) → AnswerSend Γ ρ v P e (choose S T)
+  plainChoose (yes d) = yes-send (send-plain plain-choose d)
+  plainChoose (no nd) = no-send (λ { (send-plain _ c) → nd c })
+
+  plainBranch : ∀ {Γ ρ v e P S T} → Answerρ Γ ρ P (branch S T) → AnswerSend Γ ρ v P e (branch S T)
+  plainBranch (yes d) = yes-send (send-plain plain-branch d)
+  plainBranch (no nd) = no-send (λ { (send-plain _ c) → nd c })
+
+  decideSend : (Γ : Ctx) (ρ : Idx) (v : ValExpr nat) (e : NExp) (P : Proc) (S : Proto) →
+    AnswerSend Γ ρ v P e S
+  decideSend Γ ρ v (nlit w) P (pcase (byVal y) arms) with pickShown v w arms in pk
+  ... | nothing = no-send (λ where
+        (send-plain pl _) → plain-not pl
+        (send-val p _) → just≢nothing (trans (sym p) pk))
+  ... | just T with decideρ Γ ρ P T
+  ... | yes d = yes-send (send-val pk d)
+  ... | no nd = no-send (λ where
+        (send-plain pl _) → plain-not pl
+        (send-val p c) →
+          nd (subst (λ S → Conformsρ Γ ρ P S) (just-inj (trans (sym p) pk)) c))
+  decideSend Γ ρ v (nlit w) P (pcase (byRun f y R) arms) with readyN (nsuc nzero) f in rd
+  ... | false = no-send (λ where
+        (send-plain pl _) → plain-not pl
+        (send-run p _ _ _) → true≢false (trans (sym p) rd))
+  ... | true with labelled R arms in lb
+  ... | false = no-send (λ where
+        (send-plain pl _) → plain-not pl
+        (send-run _ p _ _) → true≢false (trans (sym p) lb))
+  ... | true with pickRun v w f R arms in pk
+  ... | nothing = no-send (λ where
+        (send-plain pl _) → plain-not pl
+        (send-run _ _ p _) → just≢nothing (trans (sym p) pk))
+  ... | just T with decideρ Γ ρ P T
+  ... | yes d = yes-send (send-run rd lb pk d)
+  ... | no nd = no-send (λ where
+        (send-plain pl _) → plain-not pl
+        (send-run _ _ p c) →
+          nd (subst (λ S → Conformsρ Γ ρ P S) (just-inj (trans (sym p) pk)) c))
+  decideSend Γ ρ v (nvar _) P (pcase _ _) = no-send (λ { (send-plain pl _) → plain-not pl })
+  decideSend Γ ρ v (nlit _) P (pcase (bySplit _ _ _) _) = no-send (λ { (send-plain pl _) → plain-not pl })
+  decideSend Γ ρ v e P end = plainEnd (decideρ Γ ρ P end)
+  decideSend Γ ρ v e P (send A S) = plainSend (decideρ Γ ρ P (send A S))
+  decideSend Γ ρ v e P (recv A S) = plainRecv (decideρ Γ ρ P (recv A S))
+  decideSend Γ ρ v e P (dsend z C S) = dsendAns Γ ρ v e P z C S (decideρ Γ ρ P (dsend z C S))
+  decideSend Γ ρ v e P (drecv y A S) = plainDrecv (decideρ Γ ρ P (drecv y A S))
+  decideSend Γ ρ v e P (esend y g S) = plainEsend (decideρ Γ ρ P (esend y g S))
+  decideSend Γ ρ v e P (erecv y g S) = plainErecv (decideρ Γ ρ P (erecv y g S))
+  decideSend Γ ρ v e P (isend y S T) = plainIsend (decideρ Γ ρ P (isend y S T))
+  decideSend Γ ρ v e P (irecv y S T) = plainIrecv (decideρ Γ ρ P (irecv y S T))
+  decideSend Γ ρ v e P (choose S T) = plainChoose (decideρ Γ ρ P (choose S T))
+  decideSend Γ ρ v e P (branch S T) = plainBranch (decideρ Γ ρ P (branch S T))
 
   sendBy : (Γ : Ctx) (ρ : Idx) {A : Ty} (y : String) (v : ValExpr A) (P : Proc)
     (B : Ty) (S : Proto) → A ≡ applyTy ρ B →
@@ -3195,6 +4290,89 @@ num : ℕ → Val nat
 num nzero = zero
 num (nsuc n) = suc (num n)
 
+num-fits : ∀ k → fits (num k) ≡ true
+num-fits nzero = refl
+num-fits (nsuc k) = num-fits k
+
+==-refl : ∀ s → (s == s) ≡ true
+==-refl s with s ≟ s
+... | yes′ refl = refl
+... | no′ ¬eq = ⊥-elim (¬eq refl)
+
+-- `armGo` is the covering walk. `natGo` is the walk a meeting takes.
+armGo-num : ∀ k ps i → armGo k ps i ≡ natGo (num k) ps i
+armGo-num nzero [] _ = refl
+armGo-num nzero (bare _ ∷ _) _ = refl
+armGo-num nzero (named _ [] _ ∷ _) _ = refl
+armGo-num nzero (named _ (_ ∷ _) _ ∷ _) _ = refl
+armGo-num nzero (prod _ _ ∷ _) _ = refl
+armGo-num nzero (fork _ _ _ _ ∷ _) _ = refl
+armGo-num (nsuc _) [] _ = refl
+armGo-num (nsuc k) (_ ∷ ps) i = armGo-num k ps (nsuc i)
+
+-- A process that covers the numeral arms conforms at every numeral
+-- whose label is the arm it selects. `i` is the index the walk has
+-- already passed.
+val-sound : ∀ {Γ ρ} k i (arms : List (String × Proto)) (ps : List PArm) {S p} →
+  ArmsAt Γ ρ nat arms ps →
+  nth arms k ≡ just (show (i + k) , S) →
+  armGo k ps i ≡ just p →
+  Conformsρ Γ ρ p S
+val-sound _ _ [] _ _ () _
+val-sound _ _ (_ ∷ _) [] () _ _
+val-sound _ _ (_ ∷ _) (prod _ _ ∷ _) () _ _
+val-sound _ _ (_ ∷ _) (fork _ _ _ _ ∷ _) () _ _
+val-sound nzero i ((._ , S) ∷ _) (bare p ∷ _) (at-cons d _) refl refl = d
+val-sound {Γ} {ρ} nzero i ((c , S) ∷ _) (named .c [] p ∷ _) (at-named ac d _) eq ag
+  rewrite +-identityʳ i with eq
+... | refl rewrite ==-refl c =
+    subst (λ q → Conformsρ Γ ρ q S) (just-inj ag)
+      (subst (λ Θ → Conformsρ Θ ρ p S) (sym (just-inj ac)) d)
+val-sound nzero _ (_ ∷ _) (named _ (_ ∷ _) _ ∷ _) _ _ ()
+val-sound (nsuc k) i (_ ∷ as) (_ ∷ ps) (at-cons _ rest) eq ag
+  rewrite +-suc i k = val-sound k (nsuc i) as ps rest eq ag
+val-sound (nsuc k) i (_ ∷ as) (_ ∷ ps) (at-named _ _ rest) eq ag
+  rewrite +-suc i k = val-sound k (nsuc i) as ps rest eq ag
+
+-- The same fact for the rows a run returns. A named row binds nothing.
+rows-at : ∀ {Γ ρ} k i (rows : List (String × Proto)) (ps : List PArm) {S p} →
+  CovNat Γ ρ rows ps →
+  nth rows k ≡ just (show (i + k) , S) →
+  armGo k ps i ≡ just p →
+  Conformsρ Γ ρ p S
+rows-at _ _ [] _ _ () _
+rows-at _ _ (_ ∷ _) [] () _ _
+rows-at _ _ (_ ∷ _) (prod _ _ ∷ _) () _ _
+rows-at _ _ (_ ∷ _) (fork _ _ _ _ ∷ _) () _ _
+rows-at _ _ (_ ∷ _) (named _ (_ ∷ _) _ ∷ _) () _ _
+rows-at nzero i ((._ , S) ∷ _) (bare p ∷ _) (cn-bare d _) refl refl = d
+rows-at {Γ} {ρ} nzero i ((c , S) ∷ _) (named .c [] p ∷ _) (cn-named d _) eq ag
+  rewrite +-identityʳ i with eq
+... | refl rewrite ==-refl c = subst (λ q → Conformsρ Γ ρ q S) (just-inj ag) d
+rows-at (nsuc k) i (_ ∷ rows) (_ ∷ ps) (cn-bare _ rest) eq ag
+  rewrite +-suc i k = rows-at k (nsuc i) rows ps rest eq ag
+rows-at (nsuc k) i (_ ∷ rows) (_ ∷ ps) (cn-named _ rest) eq ag
+  rewrite +-suc i k = rows-at k (nsuc i) rows ps rest eq ag
+
+-- Bound `1`. Arms `0` then `1`. The receiver covers both.
+bound1 : Proto
+bound1 = erecv "d" (nlit (nsuc nzero)) (pcase (byVal "d")
+  (("0" , end) ∷ ("1" , send nat end) ∷ []))
+
+boundRecv : Proc
+boundRecv = mget nat "d" (bare done ∷ bare (put nat (lit zero) done) ∷ [])
+
+bound1-wf : ProtoOk [] bound1
+bound1-wf = erecv-val refl
+  (arms-one end-ok (arms-one (send-ok nat-ok end-ok) arms-none))
+
+bound-recv-ok : Conforms [] boundRecv bound1
+bound-recv-ok = eget-val refl
+  (at-cons done-end (at-cons (put-ok refl (lit-ok refl) done-end) at-nil))
+
+bound-recv-decides : decide [] boundRecv bound1 ≡ yes bound-recv-ok
+bound-recv-decides = refl
+
 window : Proto
 window = drecv "w" nat (esend "d" (nvar "w") end)
 
@@ -3209,7 +4387,7 @@ full : Proc
 full = get nat "w" (put nat (var "w") done)
 
 full-ok : Conforms [] full window
-full-ok = dget-ok refl (eput-ok (var-ok here) (owed (same-le (first gone))) done-end)
+full-ok = dget-ok refl (eput-ok (var-ok here) (owed (same-le (first gone))) (send-plain plain-end done-end))
 
 full-decides : decide [] full window ≡ yes full-ok
 full-decides = refl
@@ -3218,7 +4396,7 @@ empty : Proc
 empty = get nat "w" (put nat (lit zero) done)
 
 empty-ok : Conforms [] empty window
-empty-ok = dget-ok refl (eput-ok (lit-ok refl) (owed zero-le) done-end)
+empty-ok = dget-ok refl (eput-ok (lit-ok refl) (owed zero-le) (send-plain plain-end done-end))
 
 empty-decides : decide [] empty window ≡ yes empty-ok
 empty-decides = refl
@@ -3241,7 +4419,7 @@ within = put nat (lit (num 8)) (put nat (lit (num 5)) done)
 within-ok : Conforms [] within granted
 within-ok =
   dput-ok refl (lit-ok refl) plain-esend
-    (eput-ok (lit-ok refl) (owed (lit-le (s≤s (s≤s (s≤s (s≤s (s≤s z≤n))))))) done-end)
+    (eput-ok (lit-ok refl) (owed (lit-le (s≤s (s≤s (s≤s (s≤s (s≤s z≤n))))))) (send-plain plain-end done-end))
 
 within-decides : decide [] within granted ≡ yes within-ok
 within-decides = refl
@@ -3262,7 +4440,7 @@ frame : Proto
 frame = esend "d" (nlit 16384) end
 
 frame-ok : Conforms [] (put nat (lit zero) done) frame
-frame-ok = eput-ok (lit-ok refl) (owed (lit-le z≤n)) done-end
+frame-ok = eput-ok (lit-ok refl) (owed (lit-le z≤n)) (send-plain plain-end done-end)
 
 -- A second `w` hides the window. The bound still names the first.
 stale-proto : Proto
@@ -3804,7 +4982,7 @@ size-le : Le [] sizeSelf (nlit (nsuc nzero))
 size-le = call-le size-self-eval (lit-le z≤n)
 
 size-under : Conforms [] (put nat sizeSelf done) sizeCap
-size-under = eput-ok (call-ok size-self-eval refl) (owed size-le) done-end
+size-under = eput-ok (call-ok size-self-eval refl) (owed size-le) (send-plain plain-end done-end)
 
 two≰one : nsuc (nsuc nzero) ≤ nsuc nzero → ⊥
 two≰one (s≤s ())
@@ -4832,7 +6010,7 @@ evServer = mget frameTy "f" (bare (put nat (lit zero) done) ∷ bare done ∷ ba
 
 ev-ok : Conforms [] evServer evCase
 ev-ok = mget-val refl (dat-cov refl) refl
-  (at-cons (eput-ok (lit-ok refl) (owed (lit-le z≤n)) done-end)
+  (at-cons (eput-ok (lit-ok refl) (owed (lit-le z≤n)) (send-plain plain-end done-end))
     (at-cons done-end (at-cons done-end at-nil)))
 
 ev-skel : skel evServer ≡ hear frameTy "f" (pick (say (lit zero) finish ∷ finish ∷ finish ∷ []))

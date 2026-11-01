@@ -360,6 +360,49 @@ The server receives a window and sends data within it. The process writes the na
 
 The meeting compares the nats. The evidence is in each conformance, so a process without it is refused at its `conform`. The OTP image sends `{:muro, from, d}`. The evidence is not in the message.
 
+## A numeral bound
+
+A received nat whose bound is a numeral `w` has the values `0` … `w`. A `case` on that name writes one protocol per value, in that order. The label is the decimal spelling, so `| 0 =>` is zero and `| 00 =>` is not that arm. A `run` of the nat is evaluated at each value. The protocol arms are the constructors the `run` returns, and the process still has one arm per numeral. A `run` of the nat and one declared data payload is the product of those splits: `w + 1` times the number of constructors. `Bit` is a payload, not a term, so a `run` written in a file does not take `Bit`. The judgment also counts a bit, `b0` then `b1`, when the run's domain is that payload. Under an arm whose numerals select different protocols, it matches the nat by the name the protocol bound. Parentheses close that match when another constructor arm follows. A sender of a literal, or of a numeral a `run` computes, is checked on the arm that value selects. A meeting, including one written `buffer 1`, runs the arm of the value that arrived.
+
+```muro
+session direct :=
+  recv (d : Nat) {d ≤ 2} (case d
+    | 0 => send Ctl end
+    | 1 => send Nat end
+    | 2 => end)
+
+conform direct-server : direct :=
+  get (d : Nat) (match d
+    | 0 => put rst done
+    | 1 => put 0 done
+    | 2 => done)
+```
+
+`gate` below returns `false` at `0` and `true` at every successor, so `put 0` ends and `put 1` sends `Ctl`. `put two` does the same when `two` is `suc (suc 0)`.
+
+```muro
+session gated :=
+  recv (d : Nat) {d ≤ 2} (case (gate d)
+    | true => send Ctl end
+    | false => end)
+```
+
+`mix` reads the nat and a `Bool`. `true` at `0` sends `Ctl`. `true` at `1` ends. `false` ends at both. The `true` column is the match on `d`. Dropping `| 1 =>` does not conform.
+
+```muro
+session mixed :=
+  recv (d : Nat) {d ≤ 1} (
+    recv (b : Bool) (case (mix d b)
+      | true => send Ctl end
+      | false => end))
+```
+
+The length of a run's split is the product of the widths of the factors it reads. `enum-size` in `agda/Muro/Session.agda` states that for any factor list, with no fuel and no budget. `prod-card` is the product for one bounded nat and one constructor list. The derivation the checker builds is one bounded nat (`erecv-val`, `erecv-run`), or that nat with one bit or declared data payload (`erecv-prod`). `in-split` and `split-bound` say every value in `0 … w` is in the split and every member is within the bound. `val-sound` and `rows-at` say a process that covers the split conforms on the arm its value selects. `bound-recv-decides` is that decision for bound `1`. `meet-agrees` in `agda/Muro/Meet.agda` says the meeting of a literal numeral takes that arm.
+
+A nat with no bound does not split, and neither does a bound that is a name: `recv (w : Nat) (recv (d : Nat) {d ≤ w} (case d …))` is `a case is on a bit or a declared data type`, because `w` is not known until it arrives. A second bounded nat, and a run of three or more factors, stay `the run does not decide an arm`. A `_` wildcard arm is `case arms do not match the constructors`. A pair, a record, a vector, and unit stay refused. A constructor field carries no bound, so a nat inside a declared data type is not this split. `put 3` against `{d ≤ 2}` misses the bound.
+
+`examples/bounded-split.muro`
+
 ## Index
 
 A received bit selects one of two written continuations. The arm is the index. `b0` takes the first arm and `b1` takes the second. The sender writes the literal. A variable bit does not select an arm.
@@ -382,7 +425,7 @@ The bound bit is a bit. A vector length may not mention it. Inside an arm the pr
 
 The OTP image sends `{:muro, from, :b0}` or `{:muro, from, :b1}`. The receiver's skeleton holds both arms. The message is the bit.
 
-A nat does not choose the next action, so `recv (n : Nat) on end end` is refused. `get Bit on done done` is refused, because the bit is bound. `put b` against `send (c : Bit) on …` is refused: the sender writes `b0` or `b1`. A protocol whose arms are not dualised pointwise is not the other end. `choose` stays a label.
+`on` does not take a nat, so `recv (n : Nat) on end end` is refused. A nat at most a numeral chooses an arm by `case`, under [A numeral bound](#a-numeral-bound). `get Bit on done done` is refused, because the bit is bound. `put b` against `send (c : Bit) on …` is refused: the sender writes `b0` or `b1`. A protocol whose arms are not dualised pointwise is not the other end. `choose` stays a label.
 
 `examples/indexed.muro`
 

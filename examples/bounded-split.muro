@@ -1,0 +1,152 @@
+-- bounded-split.muro — a nat at most a numeral chooses the next arm.
+-- `0` … `w` are the arms. A run of that nat is evaluated at each one.
+-- A run of that nat and one declared data payload is their product.
+-- The match on the nat is parenthesized when another constructor arm follows.
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+data Ctl : Type where
+  rst : Ctl
+
+def gate : run Π (d : Nat) → Bool :=
+  λ (d : Nat) →
+    match d motive (λ _ → Bool)
+      | 0 => false
+      | suc _ => true
+
+def mix : run Π (d : Nat) → Π (b : Bool) → Bool :=
+  λ (d : Nat) → λ (b : Bool) →
+    match b motive (λ _ → Bool)
+      | true =>
+          match d motive (λ _ → Bool)
+            | 0 => true
+            | suc _ => false
+      | false => false
+
+def two : run Nat := suc (suc 0)
+
+session direct :=
+  recv (d : Nat) {d ≤ 2} (case d
+    | 0 => send Ctl end
+    | 1 => send Nat end
+    | 2 => end)
+
+session direct-back := dual direct
+
+conform direct-server : direct :=
+  get (d : Nat) (match d
+    | 0 => put rst done
+    | 1 => put 0 done
+    | 2 => done)
+
+conform direct-bare : direct :=
+  get (d : Nat) (match d
+    put rst done
+    put 0 done
+    done)
+
+conform direct-0 : direct-back := put 0 (get (c : Ctl) done)
+
+conform direct-1 : direct-back := put 1 (get (n : Nat) done)
+
+conform direct-2 : direct-back := put 2 done
+
+meet wire-direct-0 : direct-server with direct-0
+
+meet wire-direct-0-swap : direct-0 with direct-server
+
+meet wire-direct-1 : direct-server with direct-1
+
+meet wire-direct-2 : direct-server with direct-2
+
+meet wire-direct-0-buf : direct-server with direct-0 buffer 1
+
+meet wire-direct-0-buf-swap : direct-0 with direct-server buffer 1
+
+meet wire-direct-2-buf : direct-server with direct-2 buffer 1
+
+meet wire-direct-2-buf-swap : direct-2 with direct-server buffer 1
+
+session gated :=
+  recv (d : Nat) {d ≤ 2} (case (gate d)
+    | true => send Ctl end
+    | false => end)
+
+session gated-back := dual gated
+
+conform gated-server : gated :=
+  get (d : Nat) (match d
+    | 0 => done
+    | 1 => put rst done
+    | 2 => put rst done)
+
+conform gated-0 : gated-back := put 0 done
+
+conform gated-1 : gated-back := put 1 (get (c : Ctl) done)
+
+conform gated-two : gated-back := put two (get (c : Ctl) done)
+
+meet wire-gated-0 : gated-server with gated-0
+
+meet wire-gated-1 : gated-server with gated-1
+
+meet wire-gated-two : gated-server with gated-two
+
+meet wire-gated-1-buf : gated-server with gated-1 buffer 1
+
+meet wire-gated-1-buf-swap : gated-1 with gated-server buffer 1
+
+meet wire-gated-two-buf : gated-server with gated-two buffer 1
+
+meet wire-gated-two-buf-swap : gated-two with gated-server buffer 1
+
+session mixed :=
+  recv (d : Nat) {d ≤ 1} (
+    recv (b : Bool) (case (mix d b)
+      | true => send Ctl end
+      | false => end))
+
+session mixed-back := dual mixed
+
+conform mixed-server : mixed :=
+  get (d : Nat) (
+    get (b : Bool) (
+      match b
+        | true => (match d
+            | 0 => put rst done
+            | 1 => done)
+        | false => (match d
+            | 0 => done
+            | 1 => done)))
+
+conform mix-t0 : mixed-back := put 0 (put true (get (c : Ctl) done))
+
+conform mix-t1 : mixed-back := put 1 (put true done)
+
+conform mix-f0 : mixed-back := put 0 (put false done)
+
+conform mix-f1 : mixed-back := put 1 (put false done)
+
+meet wire-mix-t0 : mixed-server with mix-t0
+
+meet wire-mix-t0-swap : mix-t0 with mixed-server
+
+meet wire-mix-t1 : mixed-server with mix-t1
+
+meet wire-mix-f0 : mixed-server with mix-f0
+
+meet wire-mix-f1 : mixed-server with mix-f1
+
+meet wire-mix-t0-buf : mixed-server with mix-t0 buffer 1
+
+meet wire-mix-t0-buf-swap : mix-t0 with mixed-server buffer 1
+
+meet wire-mix-t1-buf : mixed-server with mix-t1 buffer 1
+
+meet wire-mix-t1-buf-swap : mix-t1 with mixed-server buffer 1
+
+meet wire-mix-f0-buf : mixed-server with mix-f0 buffer 1
+
+meet wire-mix-f1-buf-swap : mix-f1 with mixed-server buffer 1
