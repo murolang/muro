@@ -10,7 +10,7 @@ config :muro_visor, MuroVisor.Endpoint,
   render_errors: [formats: [html: MuroVisor.ErrorHTML], layout: false],
   pubsub_server: MuroVisor.PubSub,
   live_view: [signing_salt: "visorsalt"],
-  check_origin: false,
+  check_origin: ["//127.0.0.1", "//localhost"],
   server: false
 
 import_config "#{config_env()}.exs"
