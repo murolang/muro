@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.5
+## 0.20.7
 
 A meeting's explored configurations are data. The same walk that accepts the meeting records each state, the transition that reached it, and the source location of the step. Moving one process step and asking again returns the refusal and that step's location as data. `Muro.Explore.graph/1` draws one node for each spec, evidence, and run, one edge for each use, and hangs those configurations on the session the meeting belongs to.
 
@@ -14,7 +14,7 @@ A meeting's explored configurations are data. The same walk that accepts the mee
 
 ### Package
 
-- Version 0.20.5.
+- Version 0.20.7.
 
 ## 0.20.6
 

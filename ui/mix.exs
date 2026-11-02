@@ -48,16 +48,16 @@ defmodule MuroVisor.MixProject do
   def muro_dependency(argv, checkout_exists, muro_path) do
     cond do
       publishing?(argv) ->
-        {:muro, "~> 0.20.5"}
+        {:muro, "~> 0.20.7"}
 
       is_binary(muro_path) and muro_path != "" ->
-        {:muro, "~> 0.20.5", path: muro_path, override: true}
+        {:muro, "~> 0.20.7", path: muro_path, override: true}
 
       checkout_exists ->
-        {:muro, "~> 0.20.5", path: Path.expand("..", __DIR__), override: true}
+        {:muro, "~> 0.20.7", path: Path.expand("..", __DIR__), override: true}
 
       true ->
-        {:muro, "~> 0.20.5"}
+        {:muro, "~> 0.20.7"}
     end
   end
 
