@@ -25,6 +25,8 @@ defmodule Muro.Emit do
 
   @doc """
   Run definitions in book order. Data, spec, and evidence are omitted.
+  A temporal declaration has mode evidence, so it is omitted here and in
+  every backend that reads this list, including Zig.
   `run internal` stays in the list; its `export` flag is false.
   """
   def run_defs(book) when is_list(book) do

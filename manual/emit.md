@@ -7,7 +7,7 @@ summary: What becomes Elixir. C, Rust, and Zig print the closed run. A Nat run i
 
 # Emit
 
-In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend zig` writes that same closed run as Zig. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--backend fsm` writes each session endpoint as a state machine and leaves the transport with the host. `--node` writes one call for each cross, on the node the flag names.
+In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. A `temporal` declaration is evidence about one meeting, so the Zig backend omits it with the others. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend zig` writes that same closed run as Zig. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--backend fsm` writes each session endpoint as a state machine and leaves the transport with the host. `--node` writes one call for each cross, on the node the flag names.
 
 ## From a file
 

@@ -381,6 +381,7 @@ defmodule Muro.TemporalTest do
     assert {:ok, fsm} = Muro.emit_fsm(path, :BookFsm)
     assert {:ok, c_paths} = Muro.emit_c(path)
     assert {:ok, rust_paths} = Muro.emit_rust(path)
+    assert {:ok, zig_paths} = Muro.emit_zig(path)
     assert {:ok, asm_paths} = Muro.emit_asm(path)
 
     %{
@@ -389,6 +390,7 @@ defmodule Muro.TemporalTest do
       fsm: fsm,
       c: bodies(c_paths),
       rust: bodies(rust_paths),
+      zig: bodies(zig_paths),
       asm: bodies(asm_paths)
     }
   end
