@@ -134,6 +134,11 @@ defmodule MuroVisor.LayoutTest do
     assert page =~ "paint-order: stroke fill"
     refute page =~ "0.75"
 
+    assert page =~ "svg rect.cluster-frame { fill: #fafaf9; stroke: #d6d3d1; stroke-width: 1px; }"
+
+    assert page =~
+             "svg .edge-dual { stroke: #1e3a8a; stroke-width: 1.5px; stroke-dasharray: 8 5; }"
+
     assert page =~ "svg g:focus, svg g:focus-visible { outline: none; }"
     assert page =~ "svg g:focus-visible > path.edge"
     assert page =~ "path.edge.selected + text"
@@ -182,11 +187,33 @@ defmodule MuroVisor.LayoutTest do
     assert_no_collinear_overlap(once.edges ++ trans_edges, label)
     assert_track_spacing(once.edges ++ trans_edges, layout_boxes(once), label)
     assert_distinct_ports(once.nodes, once.edges, label)
+    assert_badges_clear(once, label)
 
     for node <- once.nodes, meet <- node.meetings do
       assert_distinct_ports(meet.children, meet.transitions, label)
     end
   end
+
+  defp assert_badges_clear(picture, label) do
+    badges =
+      for edge <- picture.edges, Map.has_key?(edge, :bw) do
+        %{x: edge.bx, y: edge.by, w: edge.bw, h: edge.bh, id: edge.id}
+      end
+
+    nodes = Enum.map(picture.nodes, &%{x: &1.x, y: &1.y, w: &1.w, h: &1.h, id: &1.id})
+
+    for {a, i} <- Enum.with_index(badges), {b, j} <- Enum.with_index(badges), i < j do
+      refute overlap?(inflate(a, 1), b), "#{label} badges #{a.id} and #{b.id} overlap"
+    end
+
+    for badge <- badges, node <- nodes do
+      refute overlap?(inflate(badge, 1), node),
+             "#{label} badge #{badge.id} overlaps #{node.id}"
+    end
+  end
+
+  defp inflate(box, n),
+    do: %{box | x: box.x - n, y: box.y - n, w: box.w + 2 * n, h: box.h + 2 * n}
 
   defp assert_no_overlap(boxes, label) do
     for {a, i} <- Enum.with_index(boxes), {b, j} <- Enum.with_index(boxes), i < j do

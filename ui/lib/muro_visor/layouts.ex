@@ -50,8 +50,10 @@ defmodule MuroVisor.Layouts do
           svg .edge { stroke: #78716c; fill: none; }
           svg .edge-meet { stroke: #c2410c; stroke-width: 1.75px; }
           svg .edge-step { stroke: #57534e; stroke-width: 1.5px; }
-          svg .edge-dual { stroke: #1e3a8a; stroke-width: 1.5px; stroke-dasharray: 6 4; }
+          svg .edge-dual { stroke: #1e3a8a; stroke-width: 1.5px; stroke-dasharray: 8 5; }
           svg .edge-def { stroke: #a8a29e; stroke-width: 1.25px; stroke-dasharray: 1 4; }
+          svg rect.cluster-frame { fill: #fafaf9; stroke: #d6d3d1; stroke-width: 1px; }
+          svg text.cluster-title { font-weight: 600; fill: #44403c; }
           svg rect.count-badge { fill: #fff; stroke: #44403c; }
           svg text.count-badge { font-size: 12px; fill: #1c1917; }
           svg g.selected > rect.node,

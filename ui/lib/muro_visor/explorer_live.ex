@@ -136,6 +136,17 @@ defmodule MuroVisor.ExplorerLive do
             preserveAspectRatio="xMidYMid meet"
             viewBox={"0 0 #{@picture.width} #{@picture.height}"}
           >
+            <g :for={cluster <- @picture.clusters} class="cluster" data-cluster={cluster.name}>
+              <rect
+                class="cluster-frame"
+                x={cluster.x}
+                y={cluster.y}
+                width={cluster.w}
+                height={cluster.h}
+                rx="6"
+              />
+              <text class="cluster-title" x={cluster.x + 8} y={cluster.y + 14}>{cluster.name}</text>
+            </g>
             <g
               :for={node <- @picture.nodes}
               id={control(:node, node.id)}

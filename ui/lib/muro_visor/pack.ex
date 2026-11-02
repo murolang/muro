@@ -2,15 +2,18 @@ defmodule MuroVisor.Pack do
   @moduledoc false
 
   # One cluster per base session, then a grid that fills a wide pane.
-  # Session nodes sit on the left. Everything else in the cluster is one
-  # column on the right, so a step or a dual is a short line inside the
-  # cluster instead of a run across the book.
+  # Session nodes sit on the left and share one width. Evidence and meetings
+  # sit in one column on the right, also one width, so an arc leaves the
+  # column instead of crossing a wider box. A meet or a dual between
+  # neighbours keeps a 24px run. A step track stays 8px clear of the session.
 
   @pad 8
   @gap 4
+  @min_run 24
   @track 8
+  @clear 8
   @simple_h 24
-  @channel 16
+  @channel 32
   @grid_gap 12
   @grid_pad 12
 
@@ -49,7 +52,7 @@ defmodule MuroVisor.Pack do
     frame(nodes, drawn) |> Map.put(:name, name)
   end
 
-  def arrange([], _cross, _score), do: {[], [], @grid_pad * 2, @grid_pad * 2}
+  def arrange([], _cross, _score), do: {[], [], [], @grid_pad * 2, @grid_pad * 2}
 
   def arrange(pictures, cross, score) do
     {_score, placed, width, height} =
@@ -77,6 +80,12 @@ defmodule MuroVisor.Pack do
         Enum.map(picture.edges, &shift_edge(&1, dx, dy))
       end)
 
+    clusters =
+      Enum.map(placed, fn {picture, dx, dy} ->
+        frame = picture.frame
+        %{frame | x: frame.x + dx, y: frame.y + dy}
+      end)
+
     by_id = Map.new(nodes, &{&1.id, &1})
 
     foreign =
@@ -84,7 +93,7 @@ defmodule MuroVisor.Pack do
         Map.has_key?(by_id, edge.from) and Map.has_key?(by_id, edge.to)
       end)
 
-    {nodes, edges ++ route_cross(foreign, by_id, occupied(edges)), width, height}
+    {nodes, edges ++ route_cross(foreign, by_id, occupied(edges)), clusters, width, height}
   end
 
   defp members(base, nodes, edges, assigned) do
@@ -129,13 +138,15 @@ defmodule MuroVisor.Pack do
   defp order_right(nodes), do: nodes
 
   defp place(left, right, edges) do
-    left = Enum.map(left, &prepare_side(&1, :left, edges, left, right))
-    right = Enum.map(right, &prepare_side(&1, :right, edges, left, right))
+    left = left |> Enum.map(&prepare_side(&1, :left, edges, left, right)) |> uniform()
+    right = right |> Enum.map(&prepare_side(&1, :right, edges, left, right)) |> uniform()
     left_w = column_w(left)
-    {right, _y} = place_column(right, @pad + left_w + @channel, @pad, @gap)
+    right_gaps = pair_gaps(right, edges)
+    {right, _y} = place_column(right, @pad + left_w + @channel, @pad, right_gaps)
     right_h = stack_span(right)
-    left = fit_left(left, right_h)
-    {left, _} = place_column(left, @pad, @pad, @gap)
+    left_gaps = pair_gaps(left, edges)
+    left = fit_left(left, right_h, left_gaps)
+    {left, _} = place_column(left, @pad, @pad, left_gaps)
     extra = channel_extra(left ++ right, edges)
     right = Enum.map(right, fn node -> %{node | x: node.x + extra} end)
     left ++ right
@@ -200,9 +211,32 @@ defmodule MuroVisor.Pack do
     nodes |> Enum.map(& &1.w) |> Enum.max()
   end
 
-  defp place_column(nodes, x, y, gap) do
-    Enum.map_reduce(nodes, y, fn node, y ->
-      {%{node | x: x, y: y}, y + node.h + gap}
+  defp uniform([]), do: []
+
+  defp uniform(nodes) do
+    width = column_w(nodes)
+    Enum.map(nodes, &%{&1 | w: width})
+  end
+
+  # Neighbours joined by an edge open up so the run between them is visible.
+  # A pair with no edge stays packed.
+  defp pair_gaps(nodes, edges) do
+    nodes
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.map(fn [a, b] ->
+      if linked?(a.id, b.id, edges), do: @min_run, else: @gap
+    end)
+  end
+
+  defp linked?(a, b, edges) do
+    Enum.any?(edges, fn edge ->
+      (edge.from == a and edge.to == b) or (edge.from == b and edge.to == a)
+    end)
+  end
+
+  defp place_column(nodes, x, y, gaps) do
+    Enum.map_reduce(Enum.with_index(nodes), y, fn {node, i}, y ->
+      {%{node | x: x, y: y}, y + node.h + Enum.at(gaps, i, 0)}
     end)
   end
 
@@ -215,12 +249,14 @@ defmodule MuroVisor.Pack do
   end
 
   # The base session grows so the right column's ports land on it.
-  defp fit_left([], _right_h), do: []
+  defp fit_left([], _right_h, _gaps), do: []
 
-  defp fit_left([base | rest], right_h) do
+  defp fit_left([base | rest], right_h, gaps) do
     rest_h =
-      Enum.reduce(rest, 0, fn node, h ->
-        h + @gap + node.h
+      rest
+      |> Enum.with_index()
+      |> Enum.reduce(0, fn {node, i}, h ->
+        h + Enum.at(gaps, i, @gap) + node.h
       end)
 
     base_h = max(base.h, right_h - rest_h)
@@ -230,8 +266,15 @@ defmodule MuroVisor.Pack do
   defp channel_extra(nodes, edges) do
     by_id = Map.new(nodes, &{&1.id, &1})
     elbows = Enum.count(edges, &elbow?(&1, by_id))
-    need = if elbows <= 1, do: @channel, else: 8 + elbows * @track
-    max(need - @channel, 0)
+
+    need =
+      if elbows == 0 do
+        @channel
+      else
+        @clear + max(elbows - 1, 0) * @track + @clear
+      end
+
+    max(max(need, @channel) - @channel, 0)
   end
 
   defp elbow?(edge, by_id) do
@@ -298,7 +341,7 @@ defmodule MuroVisor.Pack do
     {right, left} = if a.side == :right, do: {a, b}, else: {b, a}
     y1 = right.y + div(right.h, 2)
     y2 = left.y + port_y(left, edge.id, :right, groups)
-    track = column_right(by_id, :left) + 4 + i * @track
+    track = column_right(by_id, :left) + @clear + i * @track
     x_l = left.x + left.w
     x_r = right.x
 
@@ -314,9 +357,8 @@ defmodule MuroVisor.Pack do
 
   defp column_edge(edge, a, b, groups, by_id) do
     {upper, lower} = if a.y <= b.y, do: {a, b}, else: {b, a}
-    adjacent = lower.y <= upper.y + upper.h + @gap + 1
 
-    if adjacent do
+    if beside?(upper, lower) do
       x = shared_x(upper, lower, edge.id, groups)
       points = [{x, upper.y + upper.h}, {x, lower.y}]
       points = if a.y <= b.y, do: points, else: Enum.reverse(points)
@@ -357,8 +399,14 @@ defmodule MuroVisor.Pack do
     |> Enum.max(fn -> 0 end)
   end
 
-  defp outer_x(right_edge, _left_x, 1, i), do: right_edge + 4 + i * @track
-  defp outer_x(_right_edge, left_x, _, i), do: left_x - 4 - i * @track
+  defp outer_x(right_edge, _left_x, 1, i), do: right_edge + @clear + i * @track
+  defp outer_x(_right_edge, left_x, _, i), do: left_x - @clear - i * @track
+
+  # A 24px neighbour run is still one straight connector. Anything taller has
+  # a node between the ends and bows out.
+  defp beside?(upper, lower) do
+    lower.y <= upper.y + upper.h + @min_run + 1
+  end
 
   defp port_y(node, edge_id, side, groups) do
     ids = ports_on(node, side, groups)
@@ -464,9 +512,8 @@ defmodule MuroVisor.Pack do
 
         true ->
           {upper, lower} = if a.y <= b.y, do: {a, b}, else: {b, a}
-          adjacent = lower.y <= upper.y + upper.h + @gap + 1
 
-          if adjacent do
+          if beside?(upper, lower) do
             acc
             |> push_port(upper.id, :bottom, edge.id)
             |> push_port(lower.id, :top, edge.id)

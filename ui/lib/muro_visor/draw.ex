@@ -30,14 +30,17 @@ defmodule MuroVisor.Draw do
   @state_h 32
   @state_port 24
   @meet_gap 4
+  # Room for the cluster title above its nodes, inside the frame.
+  @title_band 16
 
   @doc """
   Positions for the book graph.
 
   A book of sessions is one cluster per base session, packed into a grid.
-  Other books keep a layered layout. The same book always yields the same
-  coordinates. Fit scales that picture to the pane, and stops at the
-  scale where a #{@label_px}px label is still #{@min_label_px}px.
+  Each cluster is a framed region titled with the session name. Other books
+  keep a layered layout. The same book always yields the same coordinates.
+  Fit scales that picture to the pane, and stops at the scale where a
+  #{@label_px}px label is still #{@min_label_px}px.
   """
   def layout(%{nodes: nodes, edges: edges}) do
     edges = fold_steps(edges)
@@ -118,18 +121,39 @@ defmodule MuroVisor.Draw do
             Pack.cluster(%{name: group.name, nodes: group.nodes, edges: local})
           end
 
-        Map.put(picture, :name, group.name)
+        picture
+        |> Map.put(:name, group.name)
+        |> frame_cluster()
       end)
 
-    {nodes, edges, width, height} =
+    {nodes, edges, clusters, width, height} =
       Pack.arrange(pictures, cross, &raw_scale(&1, &2, @pane_w, @pane_h))
 
-    %{width: width, height: height, nodes: nodes, edges: edges}
+    %{width: width, height: height, nodes: nodes, edges: edges, clusters: clusters}
+  end
+
+  # The title occupies a band inside the frame, clear of the nodes.
+  defp frame_cluster(picture) do
+    height = picture.height + @title_band
+
+    picture
+    |> Map.put(:nodes, Enum.map(picture.nodes, &shift_node(&1, 0, @title_band)))
+    |> Map.put(:edges, Enum.map(picture.edges, &shift_edge(&1, 0, @title_band)))
+    |> Map.put(:height, height)
+    |> Map.put(:frame, %{
+      name: picture.name || "other",
+      x: 0,
+      y: 0,
+      w: picture.width,
+      h: height
+    })
   end
 
   defp finish(picture) do
-    edges = seat_badges(picture.edges, picture.nodes)
-    framed(picture.nodes, edges)
+    clusters = Map.get(picture, :clusters, [])
+    edges = seat_badges(picture.edges, picture.nodes, clusters)
+    picture = Map.put(picture, :clusters, clusters)
+    lift(%{picture | edges: edges})
   end
 
   # One step edge per conform and session, however many spine steps use it.
@@ -1262,7 +1286,7 @@ defmodule MuroVisor.Draw do
 
   defp lift(picture) do
     pad = prof(:pad, @pad)
-    pts = extent_points(picture.nodes, picture.edges)
+    pts = picture_points(picture)
     min_x = pts |> Enum.map(&elem(&1, 0)) |> Enum.min(fn -> pad end)
     min_y = pts |> Enum.map(&elem(&1, 1)) |> Enum.min(fn -> pad end)
     dx = max(0, pad - min_x)
@@ -1275,11 +1299,26 @@ defmodule MuroVisor.Draw do
         shift_picture(picture, dx, dy)
       end
 
-    Map.merge(picture, bounds(picture.nodes, picture.edges))
+    Map.merge(picture, size_of(picture))
   end
 
-  defp framed(nodes, edges) do
-    lift(%{width: 0, height: 0, nodes: nodes, edges: edges})
+  defp size_of(picture) do
+    pad = prof(:pad, @pad)
+    pts = picture_points(picture)
+    max_x = pts |> Enum.map(&elem(&1, 0)) |> Enum.max(fn -> pad end)
+    max_y = pts |> Enum.map(&elem(&1, 1)) |> Enum.max(fn -> pad end)
+    %{width: max(max_x + pad, pad * 2), height: max(max_y + pad, pad * 2)}
+  end
+
+  defp picture_points(picture) do
+    extent_points(picture.nodes, picture.edges) ++
+      frame_points(Map.get(picture, :clusters, []))
+  end
+
+  defp frame_points(clusters) do
+    Enum.flat_map(clusters, fn cluster ->
+      [{cluster.x, cluster.y}, {cluster.x + cluster.w, cluster.y + cluster.h}]
+    end)
   end
 
   defp extent_points(nodes, edges) do
@@ -1462,52 +1501,185 @@ defmodule MuroVisor.Draw do
     }
   end
 
-  defp seat_badges(edges, nodes) do
-    Enum.map(edges, fn edge ->
-      if Map.get(edge, :count, 1) > 1, do: put_badge(edge, nodes), else: edge
-    end)
+  # A count sits beside the middle of its edge. If that pill would touch a
+  # node, a title, or another count, it walks along the edge until it is clear.
+  defp seat_badges(edges, nodes, clusters) do
+    base =
+      Enum.map(nodes, fn node -> %{x: node.x, y: node.y, w: node.w, h: node.h} end) ++
+        Enum.map(clusters, &title_obstacle/1)
+
+    {edges, _placed} =
+      Enum.map_reduce(edges, [], fn edge, placed ->
+        if Map.get(edge, :count, 1) > 1 do
+          edge = put_badge(edge, base ++ placed)
+          {edge, [badge_rect(edge) | placed]}
+        else
+          {edge, placed}
+        end
+      end)
+
+    edges
   end
 
-  defp put_badge(edge, nodes) do
+  defp title_obstacle(%{name: name, x: x, y: y}) do
+    %{x: x + 8, y: y + 1, w: text_w(name), h: 14}
+  end
+
+  defp put_badge(edge, obstacles) do
     text = Integer.to_string(edge.count)
     w = text_w(text) + 8
     h = 16
 
-    {x, y} =
-      case longest_horizontal(edge.d) do
-        {x1, y, x2} -> {div(x1 + x2, 2), y}
-        nil -> path_midpoint(edge.d)
-      end
-
-    bx = x - div(w, 2)
-    above = %{x: bx, y: y - h - 6, w: w, h: h}
-    below = %{x: bx, y: y + 6, w: w, h: h}
-
     box =
-      if overlaps_any?(above, nodes) and not overlaps_any?(below, nodes) do
-        below
-      else
-        above
-      end
+      Enum.find_value(badge_spots(edge.d), fn {x, y, nx, ny} ->
+        rect = %{x: x + nx - div(w, 2), y: y + ny - div(h, 2), w: w, h: h}
+        if badge_clear?(rect, obstacles), do: rect
+      end) || badge_fallback(edge, w, h)
 
-    Map.merge(edge, %{bx: box.x, by: box.y, bw: w, bh: h, tx: box.x + div(w, 2), ty: box.y + 12})
+    Map.merge(edge, %{
+      bx: box.x,
+      by: box.y,
+      bw: box.w,
+      bh: box.h,
+      tx: box.x + div(box.w, 2),
+      ty: box.y + 12
+    })
   end
 
-  defp overlaps_any?(box, nodes) do
-    Enum.any?(nodes, fn node ->
-      boxes_overlap?(box, %{x: node.x, y: node.y, w: node.w, h: node.h})
+  defp badge_rect(edge), do: %{x: edge.bx, y: edge.by, w: edge.bw, h: edge.bh}
+
+  defp badge_fallback(edge, w, h) do
+    {x, y} = path_midpoint(edge.d)
+    %{x: x - div(w, 2), y: y - h - 6, w: w, h: h}
+  end
+
+  # Two pixels of air, so a pill that only touches a box still counts as a hit.
+  defp badge_clear?(rect, obstacles) do
+    Enum.all?(obstacles, &(not near?(rect, &1)))
+  end
+
+  defp near?(a, b) do
+    a.x < b.x + b.w + 2 and b.x < a.x + a.w + 2 and a.y < b.y + b.h + 2 and
+      b.y < a.y + a.h + 2
+  end
+
+  defp badge_spots(d) do
+    samples = path_samples(d, 4)
+
+    ordered =
+      case samples do
+        [] ->
+          []
+
+        _ ->
+          mid = div(List.last(samples).dist, 2)
+
+          Enum.sort_by(samples, fn sample ->
+            {abs(sample.dist - mid), sample.dist}
+          end)
+      end
+
+    Enum.flat_map(ordered, fn sample ->
+      Enum.map([12, -12, 20, -20, 28, -28], fn off ->
+        {nx, ny} = perp_offset(sample.dx, sample.dy, off)
+        {sample.x, sample.y, nx, ny}
+      end)
     end)
   end
 
-  defp shift_picture(picture, dx, dy) do
-    %{
-      picture
-      | width: picture.width + dx,
-        height: picture.height + dy,
-        nodes: Enum.map(picture.nodes, &shift_node(&1, dx, dy)),
-        edges: Enum.map(picture.edges, &shift_edge(&1, dx, dy))
-    }
+  defp perp_offset(dx, dy, off) do
+    len = :math.sqrt(dx * dx + dy * dy)
+    len = if len < 1.0e-6, do: 1.0, else: len
+    {round(-dy / len * off), round(dx / len * off)}
   end
+
+  defp path_samples(d, step) do
+    case flatten_path(d) do
+      [] ->
+        []
+
+      [point] ->
+        [%{x: elem(point, 0), y: elem(point, 1), dist: 0, dx: 1.0, dy: 0.0}]
+
+      points ->
+        walk_samples(points, step)
+    end
+  end
+
+  defp walk_samples(points, step) do
+    {_prev, _dist, acc} =
+      Enum.reduce(tl(points), {hd(points), 0.0, []}, fn nxt, {{x1, y1}, dist, acc} ->
+        {x2, y2} = nxt
+        len = :math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))
+        dx = if len < 1.0e-6, do: 1.0, else: (x2 - x1) / len
+        dy = if len < 1.0e-6, do: 0.0, else: (y2 - y1) / len
+        count = max(trunc(len / step), 1)
+
+        samples =
+          Enum.map(0..count, fn i ->
+            t = min(i * step, len)
+
+            %{
+              x: round(x1 + dx * t),
+              y: round(y1 + dy * t),
+              dist: round(dist + t),
+              dx: dx,
+              dy: dy
+            }
+          end)
+
+        {nxt, dist + len, acc ++ samples}
+      end)
+
+    Enum.uniq_by(acc, fn sample -> {sample.x, sample.y} end)
+  end
+
+  defp flatten_path(d) do
+    tokens = Regex.scan(~r/[MLC]|-?\d+/, d) |> Enum.map(&hd/1)
+    decode_path(tokens, [])
+  end
+
+  defp decode_path([], acc), do: Enum.reverse(acc)
+  defp decode_path(["M", x, y | rest], acc), do: decode_path(rest, [{num(x), num(y)} | acc])
+  defp decode_path(["L", x, y | rest], acc), do: decode_path(rest, [{num(x), num(y)} | acc])
+
+  defp decode_path(["C", x1, y1, x2, y2, x, y | rest], [p0 | _] = acc) do
+    p1 = {num(x1), num(y1)}
+    p2 = {num(x2), num(y2)}
+    p3 = {num(x), num(y)}
+
+    extra =
+      1..4
+      |> Enum.map(fn i -> cubic(p0, p1, p2, p3, i / 4) end)
+      |> Enum.reverse()
+
+    decode_path(rest, extra ++ acc)
+  end
+
+  defp decode_path([_token | rest], acc), do: decode_path(rest, acc)
+
+  defp cubic({x0, y0}, {x1, y1}, {x2, y2}, {x3, y3}, t) do
+    u = 1 - t
+
+    x = u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3
+    y = u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3
+    {round(x), round(y)}
+  end
+
+  defp num(token), do: String.to_integer(token)
+
+  defp shift_picture(picture, dx, dy) do
+    picture
+    |> Map.update!(:width, &(&1 + dx))
+    |> Map.update!(:height, &(&1 + dy))
+    |> Map.update!(:nodes, fn nodes -> Enum.map(nodes, &shift_node(&1, dx, dy)) end)
+    |> Map.update!(:edges, fn edges -> Enum.map(edges, &shift_edge(&1, dx, dy)) end)
+    |> Map.update(:clusters, [], fn clusters ->
+      Enum.map(clusters, &shift_cluster(&1, dx, dy))
+    end)
+  end
+
+  defp shift_cluster(cluster, dx, dy), do: %{cluster | x: cluster.x + dx, y: cluster.y + dy}
 
   defp shift_node(node, dx, dy), do: %{node | x: node.x + dx, y: node.y + dy}
 
