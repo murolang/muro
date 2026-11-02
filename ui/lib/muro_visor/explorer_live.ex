@@ -16,7 +16,7 @@ defmodule MuroVisor.ExplorerLive do
           |> assign(:book, open.book)
           |> assign(:graph, graph)
           |> assign(:picture, MuroVisor.Draw.layout(graph))
-          |> assign(:catalog, MuroVisor.Meetings.catalog(open.book, graph))
+          |> assign(:catalog, MuroVisor.Meetings.catalog(open.book, graph, open.path))
           |> assign(:backend, :otp)
           |> assign(:outline, MuroVisor.Outline.render(open.book, open.path, :otp))
           |> assign(:detail, MuroVisor.Detail.empty())
@@ -110,13 +110,17 @@ defmodule MuroVisor.ExplorerLive do
         <label for="zoom-100">100%</label>
         <input type="radio" name="zoom" id="zoom-150" />
         <label for="zoom-150">150%</label>
+        <ul :if={@picture.legend != []} id="edge-legend">
+          <li :for={kind <- @picture.legend} data-kind={kind}>{kind}</li>
+        </ul>
         <div class="graph-scroll">
           <svg
             id="book-graph"
             xmlns="http://www.w3.org/2000/svg"
             width={@picture.width}
             height={@picture.height}
-            style={"--native-width: #{@picture.width}px"}
+            style={"--native-width: #{@picture.width}px; --native-height: #{@picture.height}px"}
+            preserveAspectRatio="xMidYMid meet"
             viewBox={"0 0 #{@picture.width} #{@picture.height}"}
           >
             <g
@@ -181,7 +185,7 @@ defmodule MuroVisor.ExplorerLive do
                     stroke="#78716c"
                     stroke-width="1.25"
                   />
-                  <text x={t.lx} y={t.ly}>{t.label}</text>
+                  <text :if={t.label != ""} class="edge-label" x={t.lx} y={t.ly}>{t.label}</text>
                 </g>
               </g>
             </g>
@@ -203,7 +207,9 @@ defmodule MuroVisor.ExplorerLive do
                 d={edge.d}
                 stroke-width="1.5"
               />
-              <text x={edge.lx} y={edge.ly}>{edge.label}</text>
+              <text :if={edge.label != ""} class="edge-label" x={edge.lx} y={edge.ly}>
+                {edge.label}
+              </text>
             </g>
           </svg>
         </div>
@@ -214,58 +220,7 @@ defmodule MuroVisor.ExplorerLive do
           <.link id="view-all" patch="/?view=all">All definitions</.link>
         </nav>
         <p :if={@missing} id="meeting-missing">no such meeting</p>
-        <div :if={@focus} id="sequence" class="sequence" data-meet={@focus.name}>
-          <div class="seq-grid seq-head">
-            <div
-              id="lane-left"
-              class="lane"
-              data-party={@focus.left}
-              data-session={@focus.left_session}
-            >
-              <strong>{@focus.left}</strong>
-              <span>{@focus.left_session}</span>
-            </div>
-            <div></div>
-            <div
-              id="lane-right"
-              class="lane"
-              data-party={@focus.right}
-              data-session={@focus.right_session}
-            >
-              <strong>{@focus.right}</strong>
-              <span>{@focus.right_session}</span>
-            </div>
-          </div>
-          <div
-            :for={row <- @focus.rows}
-            id={"seq-#{row.index}"}
-            class={["seq-row", row.kind == :terminal && "terminal", row.loop && "loop"]}
-            data-kind={row.kind}
-            data-from={row.from}
-            data-to={row.to}
-            data-label={row.label}
-            data-branch={row.branch}
-            data-loop={row.loop && "true"}
-          >
-            <div :if={row.kind == :terminal} class="terminal-label">{row.label}</div>
-            <div :if={row.kind != :terminal} class="seq-grid">
-              <div class="life"></div>
-              <div class={[
-                "msg",
-                row.to_side == :left && "to-left",
-                row.to_side == :right && "to-right"
-              ]}>
-                <span :if={row.to_side == :left} class="glyph">←</span>
-                <span class="shaft"></span>
-                <span class="label">{row.label}</span>
-                <span :if={row.branch} class="branch">/ {row.branch}</span>
-                <span :if={row.loop} class="loop">loop</span>
-                <span :if={row.to_side == :right} class="glyph">→</span>
-              </div>
-              <div class="life"></div>
-            </div>
-          </div>
-        </div>
+        <MuroVisor.Sequence.sequence :if={@focus} meet={@focus} />
         <div :if={is_nil(@focus)} id="meeting-picker" class="picker">
           <p :if={@catalog.groups == []}>This book has no meetings.</p>
           <section
@@ -274,26 +229,35 @@ defmodule MuroVisor.ExplorerLive do
             class="group"
             data-session={group.base}
           >
-            <h2>{group.base}</h2>
-            <.link
-              :for={meet <- group.meetings}
-              id={"meet-#{meet.dom}"}
-              class="meet-row"
-              patch={meet.href}
-              data-meet={meet.name}
-              data-left={meet.left}
-              data-right={meet.right}
-              data-base={meet.base}
-              data-steps={meet.steps}
-              data-evidence={meet.evidence}
-            >
-              <span class="name">{meet.name}</span>
-              <span class="parties">{meet.left} with {meet.right}</span>
-              <span class="base">{meet.base}</span>
-              <span class="steps">{meet.steps}</span>
-              <span :if={meet.buffer} class="buffer">buffer {meet.buffer}</span>
-              <span :if={meet.evidence != ""} class="evidence">{meet.evidence}</span>
-            </.link>
+            <h2 class="session-head">
+              <span class="session-name">{group.base}</span>: <code>{group.spec}</code>
+            </h2>
+            <div class="sheet" role="table">
+              <div class="sheet-head" role="row">
+                <span>meeting</span>
+                <span>parties</span>
+                <span>steps</span>
+                <span>evidence</span>
+              </div>
+              <.link
+                :for={meet <- group.meetings}
+                id={"meet-#{meet.dom}"}
+                class="meet-row"
+                role="row"
+                patch={meet.href}
+                data-meet={meet.name}
+                data-left={meet.left}
+                data-right={meet.right}
+                data-base={meet.base}
+                data-steps={meet.steps}
+                data-evidence={meet.evidence}
+              >
+                <span class="name">{meet.name}</span>
+                <span class="parties">{meet.left} ⇄ {meet.right}</span>
+                <span class="steps">{meet.steps}</span>
+                <span class="evidence">{meet.evidence}</span>
+              </.link>
+            </div>
           </section>
         </div>
       </div>
@@ -307,37 +271,23 @@ defmodule MuroVisor.ExplorerLive do
           <p :if={@focus.dual_name} id="context-dual-name">{@focus.dual_name}</p>
           <pre id="context-dual">{@focus.dual}</pre>
           <h2>Conforms</h2>
-          <button
-            :if={@focus.left_select}
-            id={"conform-#{@focus.left_dom}"}
-            type="button"
-            phx-click="select"
-            phx-value-id={@focus.left_select}
-          >
-            {@focus.left}<span class="loc">{@focus.left_loc}</span>
-          </button>
-          <button
-            :if={@focus.right_select}
-            id={"conform-#{@focus.right_dom}"}
-            type="button"
-            phx-click="select"
-            phx-value-id={@focus.right_select}
-          >
-            {@focus.right}<span class="loc">{@focus.right_loc}</span>
-          </button>
+          {conform_button(@focus.left_select, @focus.left_dom, @focus.left, @focus.left_loc)}
+          {conform_button(@focus.right_select, @focus.right_dom, @focus.right, @focus.right_loc)}
         </section>
         <p :if={@focus} id="outline-for">meeting: {@focus.name}</p>
-        <h2>Detail</h2>
-        <p id="detail-title">{@detail.title}</p>
-        <p id="detail-loc">{@detail.loc}</p>
-        <p id="detail-refusal-kind">{@detail.kind}</p>
+        <section :if={@detail.title != ""} id="detail">
+          <h2>Detail</h2>
+          <p id="detail-title">{@detail.title}</p>
+          <p id="detail-loc">{@detail.loc}</p>
+          <p id="detail-refusal-kind">{@detail.kind}</p>
+        </section>
         <h2>Outline</h2>
         <pre :if={!is_map(@outline)} id="outline">{@outline}</pre>
         <section :if={is_map(@outline)} id="outline">
-          {"backend: #{@backend}\n"}
+          <h2 id="outline-backend">{@backend}</h2>
           <details id="outline-names" open>
             <summary>names</summary>
-            <pre>{"names: #{@outline.names}\n"}</pre>
+            <pre>{"names: #{@outline.names}"}</pre>
           </details>
           <details id="outline-signatures">
             <summary>signatures</summary>
@@ -355,6 +305,22 @@ defmodule MuroVisor.ExplorerLive do
       </aside>
     </main>
     """
+  end
+
+  defp conform_button(nil, _dom, _name, _loc), do: nil
+
+  defp conform_button(select, dom, name, loc) do
+    {:safe,
+     ~s(<button id="conform-#{escape(dom)}" type="button" phx-click="select" phx-value-id="#{escape(select)}">#{escape(name)}<span class="loc">#{escape(loc)}</span></button>)}
+  end
+
+  defp escape(value) do
+    value
+    |> to_string()
+    |> String.replace("&", "&amp;")
+    |> String.replace("<", "&lt;")
+    |> String.replace(">", "&gt;")
+    |> String.replace("\"", "&quot;")
   end
 
   defp activate?(%{"key" => key}), do: key in ["Enter", " ", "Space", "Spacebar"]

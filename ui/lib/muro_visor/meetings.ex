@@ -7,23 +7,26 @@ defmodule MuroVisor.Meetings do
   # are `MuroVisor.Sequence` over the configuration graph stored on the
   # meeting. Evidence is an `{d ≤ w}` bound on that session.
 
-  def catalog(nil, _graph), do: %{meetings: [], groups: []}
+  def catalog(book, graph, path \\ nil)
 
-  def catalog(book, %{nodes: nodes}) when is_list(book) do
+  def catalog(nil, _graph, _path), do: %{meetings: [], groups: []}
+
+  def catalog(book, %{nodes: nodes}, path) when is_list(book) do
     meetings =
       book
       |> Enum.filter(&(Map.get(&1, :kind) == :meet))
-      |> Enum.map(&meeting(&1, book, nodes))
+      |> Enum.map(&meeting(&1, book, nodes, path))
 
     %{meetings: meetings, groups: groups(meetings)}
   end
 
-  def catalog(_book, _graph), do: %{meetings: [], groups: []}
+  def catalog(_book, _graph, _path), do: %{meetings: [], groups: []}
 
-  defp meeting(meet, book, nodes) do
+  defp meeting(meet, book, nodes, path) do
     base = base_name(meet, book)
-    {spec, dual} = protocols(book, base)
-    rows = rows_for(meet)
+    proto = opened_proto(book, base)
+    {spec, dual} = protocols(book, base, proto)
+    rows = meet |> rows_for() |> MuroVisor.Sequence.annotate(proto)
     evidence = evidence(book, base)
 
     %{
@@ -43,8 +46,8 @@ defmodule MuroVisor.Meetings do
       dual_name: dual_name(book, base),
       checked: true,
       buffer: Map.get(meet, :buffer),
-      left_loc: loc(find_name(book, meet.left)),
-      right_loc: loc(find_name(book, meet.right)),
+      left_loc: loc(find_name(book, meet.left), path),
+      right_loc: loc(find_name(book, meet.right), path),
       left_select: select_id(nodes, meet.left),
       right_select: select_id(nodes, meet.right),
       base_select: select_id(nodes, base),
@@ -58,10 +61,13 @@ defmodule MuroVisor.Meetings do
     |> Enum.map(& &1.base)
     |> Enum.uniq()
     |> Enum.map(fn base ->
+      rows = Enum.filter(meetings, &(&1.base == base))
+
       %{
         base: base,
         dom: Name.encode(base),
-        meetings: Enum.filter(meetings, &(&1.base == base))
+        spec: rows |> List.first() |> then(&(&1 && &1.spec)) || "",
+        meetings: rows
       }
     end)
   end
@@ -94,16 +100,21 @@ defmodule MuroVisor.Meetings do
     end
   end
 
-  defp protocols(book, base) do
+  defp opened_proto(book, base) do
     case Muro.Check.open_session(book, base) do
-      {:ok, %{proto: proto}} ->
-        {Muro.Session.show_proto(proto), Muro.Session.show_proto(Muro.Session.dual(proto))}
+      {:ok, %{proto: proto}} -> proto
+      _ -> nil
+    end
+  end
 
-      _ ->
-        case find_name(book, base) do
-          %{proto: proto} -> {declared(proto), declared(proto)}
-          _ -> {"", ""}
-        end
+  defp protocols(_book, _base, proto) when not is_nil(proto) do
+    {Muro.Session.show_proto(proto), Muro.Session.show_proto(Muro.Session.dual(proto))}
+  end
+
+  defp protocols(book, base, _proto) do
+    case find_name(book, base) do
+      %{proto: proto} -> {declared(proto), declared(proto)}
+      _ -> {"", ""}
     end
   end
 
@@ -179,13 +190,26 @@ defmodule MuroVisor.Meetings do
     end
   end
 
-  defp loc(%{file: file, loc: {line, col}})
+  defp loc(%{file: file, loc: {line, col}}, path)
        when is_binary(file) and is_integer(line) and is_integer(col) do
-    "#{file}:#{line}:#{col}"
+    "#{relative_file(file, path)}:#{line}:#{col}"
   end
 
-  defp loc(%{loc: {line, col}}) when is_integer(line) and is_integer(col), do: "#{line}:#{col}"
-  defp loc(_other), do: ""
+  defp loc(%{loc: {line, col}}, _path) when is_integer(line) and is_integer(col),
+    do: "#{line}:#{col}"
+
+  defp loc(_other, _path), do: ""
+
+  defp relative_file(file, path) when is_binary(path) and path != "" do
+    if String.contains?(file, ":") do
+      Path.basename(file)
+    else
+      dir = path |> Path.expand() |> Path.dirname()
+      file |> Path.expand() |> Path.relative_to(dir)
+    end
+  end
+
+  defp relative_file(file, _path), do: Path.basename(file)
 
   defp session_name(%{session: name}) when is_binary(name), do: name
   defp session_name(%{session: {:sess, name, _}}) when is_binary(name), do: name

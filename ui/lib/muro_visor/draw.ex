@@ -8,6 +8,7 @@ defmodule MuroVisor.Draw do
   @rank_gap 88
   @grid_gap 64
   @track 16
+  @min_track 6
   @gutter 12
   @pitch 16
   @inset 6
@@ -29,10 +30,30 @@ defmodule MuroVisor.Draw do
   yields the same coordinates.
   """
   def layout(%{nodes: nodes, edges: edges}) do
+    legend = legend(edges)
     prepared = Enum.map(nodes, &prepare/1)
-    picture = place(prepared, book_edges(edges))
+    picture = place(prepared, book_edges(edges, legend))
     nodes = Enum.map(picture.nodes, &mount_meetings/1)
-    %{picture | nodes: nodes}
+    picture |> Map.put(:nodes, nodes) |> Map.put(:legend, legend)
+  end
+
+  # A kind whose every edge carries that same label is named once, in
+  # the legend, instead of on each edge.
+  defp legend(edges) do
+    edges
+    |> Enum.reduce([], fn edge, kinds ->
+      use = to_string(edge.use)
+      if use in kinds, do: kinds, else: kinds ++ [use]
+    end)
+    |> Enum.filter(fn use ->
+      labels =
+        edges
+        |> Enum.filter(&(to_string(&1.use) == use))
+        |> Enum.map(&to_string(&1.use))
+        |> Enum.uniq()
+
+      labels == [use]
+    end)
   end
 
   defp prepare(node) do
@@ -134,14 +155,16 @@ defmodule MuroVisor.Draw do
     %{node | meetings: meetings}
   end
 
-  defp book_edges(edges) do
+  defp book_edges(edges, legend) do
     Enum.map(edges, fn edge ->
+      use = to_string(edge.use)
+
       %{
         id: edge.id,
         from: edge.from,
         to: edge.to,
-        label: to_string(edge.use),
-        use: to_string(edge.use),
+        label: if(use in legend, do: "", else: use),
+        use: use,
         d: "",
         lx: 0,
         ly: 0
@@ -436,7 +459,7 @@ defmodule MuroVisor.Draw do
 
   defp dummy_step(:spread, _n), do: @track
   defp dummy_step(:compact, n) when n <= 1, do: @track
-  defp dummy_step(:compact, n), do: max(min(@track, div(140, n)), 1)
+  defp dummy_step(:compact, n), do: max(min(@track, div(140, n)), @min_track)
 
   # The strip beside a rank holds same-rank edges. The rest of the gap is
   # the channel, wide enough for one track per edge that crosses it.
@@ -540,11 +563,16 @@ defmodule MuroVisor.Draw do
   defp disjoint_shift([], _prev), do: 0
 
   defp disjoint_shift(ys, prev) do
-    limit = max(Enum.max(prev) - Enum.min(ys) + 1, 0)
+    limit =
+      max(Enum.max(prev) - Enum.min(ys) + @min_track * max(MapSet.size(prev), 1), @min_track)
 
     Enum.find(0..limit, limit, fn k ->
-      Enum.all?(ys, &(not MapSet.member?(prev, &1 + k)))
+      Enum.all?(ys, &clear?(&1 + k, prev))
     end)
+  end
+
+  defp clear?(y, prev) do
+    not Enum.any?(prev, fn p -> abs(p - y) < @min_track end)
   end
 
   defp apply_rank_shifts(placed, shifts, order) do
@@ -910,43 +938,101 @@ defmodule MuroVisor.Draw do
 
   defp separate_labels(edges, nodes) do
     Enum.reduce(edges, [], fn edge, placed ->
-      placed ++ [seat_label(edge, nodes, placed)]
+      placed ++ [seat_label(edge, nodes, placed, edges)]
     end)
   end
 
-  defp seat_label(edge, nodes, placed) do
+  defp seat_label(edge, nodes, placed, edges) do
     {x, y} = label_anchor(edge)
-    nudge_label(edge, x, y, nodes, placed, 0)
+    nudge_label(edge, x, y, nodes, placed, edges, 0)
   end
 
+  # The label sits on this edge's own track, beside the stroke, not on
+  # the midpoint where another edge crosses.
   defp label_anchor(%{d: d, lx: lx, ly: ly}) do
-    if String.contains?(d, " C "), do: {lx, ly}, else: path_midpoint(d)
+    if String.contains?(d, " C "), do: {lx, ly}, else: track_point(d)
   end
 
-  defp nudge_label(edge, x, y, _nodes, _placed, n) when n > 48 do
+  defp track_point(d) do
+    segs =
+      d
+      |> path_pairs()
+      |> then(fn pts -> Enum.zip(pts, tl(pts)) end)
+      |> Enum.reject(fn {a, b} -> a == b end)
+
+    vertical = Enum.filter(segs, fn {{x1, _y1}, {x2, _y2}} -> x1 == x2 end)
+
+    chosen =
+      cond do
+        vertical != [] -> Enum.max_by(vertical, fn {a, b} -> manhattan(a, b) end)
+        segs != [] -> Enum.max_by(segs, fn {a, b} -> manhattan(a, b) end)
+        true -> nil
+      end
+
+    case chosen do
+      nil ->
+        path_midpoint(d)
+
+      {{x, y1}, {x, y2}} ->
+        {x + 8, div(y1 + y2, 2)}
+
+      {{x1, y1}, {x2, y2}} ->
+        {div(x1 + x2, 2), min(y1, y2) - 10}
+    end
+  end
+
+  defp nudge_label(edge, x, y, _nodes, _placed, _edges, n) when n > 48 do
     %{edge | lx: x, ly: max(y, 12)}
   end
 
-  defp nudge_label(edge, x, y, nodes, placed, n) do
+  defp nudge_label(edge, x, y, nodes, placed, edges, n) do
     {dx, dy} = spiral_at(n)
     candidate = %{edge | lx: x + dx, ly: max(y + dy, 12)}
 
-    if label_clash?(candidate, nodes, placed) do
-      nudge_label(edge, x, y, nodes, placed, n + 1)
+    if label_clash?(candidate, nodes, placed, edges) do
+      nudge_label(edge, x, y, nodes, placed, edges, n + 1)
     else
       candidate
     end
   end
 
-  defp label_clash?(%{label: ""}, _nodes, _placed), do: false
+  defp label_clash?(%{label: ""}, _nodes, _placed, _edges), do: false
 
-  defp label_clash?(edge, nodes, placed) do
+  defp label_clash?(edge, nodes, placed, edges) do
     box = label_box(edge)
 
     Enum.any?(placed, fn other ->
       other.label != "" and boxes_overlap?(label_box(other), box)
-    end) or Enum.any?(nodes, &boxes_overlap?(box, &1))
+    end) or Enum.any?(nodes, &boxes_overlap?(box, &1)) or hits_other?(box, edge, edges)
   end
+
+  defp hits_other?(box, edge, edges) do
+    Enum.any?(edges, fn other ->
+      other.id != edge.id and hits_box?(box, other.d)
+    end)
+  end
+
+  defp hits_box?(box, d) do
+    d
+    |> path_pairs()
+    |> then(fn pts -> Enum.zip(pts, tl(pts)) end)
+    |> Enum.any?(fn {{x1, y1}, {x2, y2}} ->
+      cond do
+        x1 == x2 ->
+          x1 >= box.x and x1 <= box.x + box.w and
+            ranges_overlap?(min(y1, y2), max(y1, y2), box.y, box.y + box.h)
+
+        y1 == y2 ->
+          y1 >= box.y and y1 <= box.y + box.h and
+            ranges_overlap?(min(x1, x2), max(x1, x2), box.x, box.x + box.w)
+
+        true ->
+          false
+      end
+    end)
+  end
+
+  defp ranges_overlap?(a1, a2, b1, b2), do: max(a1, b1) < min(a2, b2)
 
   defp spiral_at(0), do: {0, 0}
 

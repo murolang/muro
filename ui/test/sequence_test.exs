@@ -52,6 +52,7 @@ defmodule MuroVisor.SequenceTest do
 
     arm = meeting(catalog, "arm")
     assert arm.steps == 1
+    assert hd(arm.rows).arity == 2
 
     assert steps(arm) == [
              {:choice, "taker", "giver", "pick0", "0", false},
@@ -68,6 +69,9 @@ defmodule MuroVisor.SequenceTest do
              {:send, "window-server", "window-client", "w", nil, false},
              {:terminal, nil, nil, "done", nil, false}
            ]
+
+    assert Enum.at(window.rows, 0).evidence == nil
+    assert Enum.at(window.rows, 1).evidence == "w ⊢ d ≤ w"
 
     assert Enum.at(meeting(catalog, "sized-wire").rows, 1).label == "rep n 0"
     assert hd(meeting(catalog, "wrapped").rows).label == "(b0, {x = 0, y = 0})"
@@ -102,6 +106,32 @@ defmodule MuroVisor.SequenceTest do
     assert Enum.at(arm1.rows, 0).label == "b1"
     assert Enum.at(arm1.rows, 1).label == "pick1"
     assert Enum.at(arm1.rows, 1).branch == "1"
+    assert Enum.at(arm1.rows, 1).arity == 2
+  end
+
+  test "arrows share the two lifelines and a choice names its arity", %{catalog: catalog} do
+    for name <- ~w(wire echo-wire arm drop wrapped far-wrap sized-wire window-wire) do
+      drawn = MuroVisor.Sequence.diagram(meeting(catalog, name))
+      assert drawn.right_x - drawn.left_x == 420
+      assert drawn.right_x - drawn.left_x <= 420
+
+      for step <- drawn.steps, step.kind != :terminal do
+        assert Enum.sort([step.x1, step.x2]) == Enum.sort([drawn.left_x, drawn.right_x])
+        assert step.y1 == step.y2
+        assert step.label_x == div(drawn.left_x + drawn.right_x, 2)
+      end
+    end
+
+    arm = MuroVisor.Sequence.diagram(meeting(catalog, "arm"))
+    choice = Enum.find(arm.steps, &(&1.kind == :choice))
+    assert choice.choice.text == "chooses branch 0 of 2"
+    assert choice.arrow_label == "0"
+    assert choice.number == 1
+
+    window = MuroVisor.Sequence.diagram(meeting(catalog, "window-wire"))
+    discharged = Enum.find(window.steps, &(&1.evidence == "w ⊢ d ≤ w"))
+    assert discharged.label == "w"
+    assert discharged.number == 2
   end
 
   defp catalog(name) do

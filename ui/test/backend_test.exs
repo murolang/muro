@@ -40,7 +40,8 @@ defmodule MuroVisor.BackendTest do
     assert Map.keys(seen) |> Enum.sort() == Enum.sort(@backends)
     assert seen.otp =~ "handle_info"
     refute seen.c =~ "handle_info"
-    assert seen.fsm =~ "backend: fsm"
+    assert text_of(render(view), "#outline-backend") == "otp"
+    refute seen.fsm =~ "backend:"
     refute seen.fsm == seen.otp
   end
 
@@ -81,7 +82,8 @@ defmodule MuroVisor.BackendTest do
   defp assert_outline(html, book, path, backend) do
     assert {:ok, outline} = emitted(book, path, backend)
     text = text_of(html, "#outline")
-    assert text =~ "backend: #{backend}\n"
+    assert text_of(html, "#outline-backend") == to_string(backend)
+    refute text =~ "backend:"
     assert text =~ "names: #{Enum.join(outline.names, ", ")}"
 
     for sig <- outline.signatures do

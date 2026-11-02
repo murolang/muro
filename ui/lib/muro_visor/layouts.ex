@@ -31,15 +31,18 @@ defmodule MuroVisor.Layouts do
           main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 16px; padding: 16px; align-items: start; }
           .graph-pane { min-width: 0; }
           .zoom { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
-          .graph-scroll { overflow: auto; max-height: calc(100vh - 140px); border: 1px solid #e7e5e4; background: #fff; }
-          #zoom-fit:checked ~ .graph-scroll svg { width: max(100%, calc(var(--native-width) * 0.75)); height: auto; }
-          #zoom-100:checked ~ .graph-scroll svg { width: var(--native-width); height: auto; }
-          #zoom-150:checked ~ .graph-scroll svg { width: calc(var(--native-width) * 1.5); height: auto; }
+          .graph-scroll { overflow: auto; height: calc(100vh - 140px); border: 1px solid #e7e5e4; background: #fff; }
+          #edge-legend { display: flex; gap: 14px; list-style: none; margin: 0 0 8px; padding: 0; font-size: 13px; }
+          #edge-legend li::before { content: ""; display: inline-block; width: 18px; height: 0; border-top: 2px solid #44403c; margin-right: 6px; vertical-align: middle; }
+          #zoom-fit:checked ~ .graph-scroll svg { width: 100%; height: 100%; }
+          #zoom-100:checked ~ .graph-scroll svg { width: var(--native-width); height: var(--native-height); }
+          #zoom-150:checked ~ .graph-scroll svg { width: calc(var(--native-width) * 1.5); height: calc(var(--native-height) * 1.5); }
           aside.side { min-width: 0; }
           button { font: inherit; padding: 4px 10px; }
-          #outline { white-space: pre-wrap; font: 12px/1.4 ui-monospace, monospace; }
-          #outline, #outline pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
-          #outline details { margin: 4px 0; }
+          #outline { font: 12px/1.35 ui-monospace, monospace; max-width: 100%; }
+          #outline h2 { margin: 0 0 8px; font: 600 14px/1.3 ui-sans-serif, sans-serif; }
+          #outline pre { white-space: pre-wrap; overflow-wrap: normal; word-break: normal; max-width: 100%; margin: 0; }
+          #outline details { margin: 0; }
           #outline summary { cursor: pointer; }
           svg .node { fill: #fff; stroke: #44403c; }
           svg .compound { fill: #f5f5f4; }
@@ -51,7 +54,8 @@ defmodule MuroVisor.Layouts do
           svg path.edge.selected + text { fill: #b45309; }
           svg path.transition.selected { stroke: #b45309; stroke-width: 2.5px; }
           svg path.transition.selected + text { fill: #b45309; }
-          svg text { font: 12px ui-sans-serif, sans-serif; }
+          svg text { font: 12px ui-sans-serif, sans-serif; fill: #1c1917; stroke: none; }
+          svg text.edge-label { stroke: #fff; stroke-width: 4px; paint-order: stroke fill; stroke-linejoin: round; }
           svg g:focus, svg g:focus-visible { outline: none; }
           svg g:focus-visible > rect.node,
           svg g:focus-visible > rect.compound { stroke: #b45309; stroke-width: 2.5px; }
@@ -66,24 +70,27 @@ defmodule MuroVisor.Layouts do
           .views { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
           .views a { color: inherit; }
           .views a.current { font-weight: 600; }
-          .meeting-pane, .sequence, .picker { max-width: 100%; overflow-x: hidden; }
-          .seq-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr); }
-          .seq-grid > * { min-width: 0; }
-          .lane { text-align: center; padding: 8px 4px; overflow-wrap: anywhere; }
-          .lane strong, .lane span { display: block; }
-          .life { background: linear-gradient(#44403c, #44403c) center / 2px 100% no-repeat; }
-          .msg { display: flex; align-items: center; gap: 6px; padding: 10px 4px; min-width: 0; }
-          .msg .label, .msg .branch, .msg .loop { overflow-wrap: anywhere; }
-          .shaft { flex: 1 1 0; border-top: 2px solid #44403c; min-width: 0; }
-          .seq-row.terminal { text-align: center; padding: 8px 4px; overflow-wrap: anywhere; }
-          .group { margin: 0 0 16px; }
-          .group h2 { margin: 0 0 4px; font-size: 14px; }
-          .meet-row { display: block; padding: 6px 0; color: inherit; overflow-wrap: anywhere; }
-          .meet-row span { margin-right: 8px; }
-          #context { margin-bottom: 16px; overflow-wrap: anywhere; }
-          #context pre, #context button { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
-          #context button { display: block; text-align: left; margin: 4px 0; }
-          #context .loc { display: block; font: 12px/1.4 ui-monospace, monospace; }
+          .meeting-pane, .sequence-wrap, .picker { max-width: 100%; overflow-x: hidden; }
+          .sequence-wrap { display: flex; justify-content: center; }
+          .sequence { max-width: 100%; height: auto; }
+          .sequence text { font-family: ui-sans-serif, sans-serif; fill: #1c1917; stroke: none; }
+          .sequence .lane-name, .sequence .arrow-label, .sequence .choice-note, .sequence .term-label, .sequence .step-no { font-size: 14px; }
+          .sequence .lane-session, .sequence .evidence-badge, .sequence .loop-note { font-size: 13px; fill: #44403c; }
+          .sequence .step-no { fill: #57534e; }
+          .group { margin: 0 0 20px; }
+          .session-head { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+          .session-head code { font: 13px/1.4 ui-monospace, monospace; font-weight: 500; }
+          .sheet-head, .meet-row { display: grid; grid-template-columns: minmax(7em, 1.1fr) minmax(10em, 1.6fr) 4.5em minmax(6em, 1fr); gap: 12px; align-items: baseline; padding: 7px 8px; }
+          .sheet-head { font-size: 12px; color: #57534e; border-bottom: 1px solid #e7e5e4; }
+          .meet-row { color: inherit; text-decoration: none; border-bottom: 1px solid #f5f5f4; }
+          .meet-row:hover { background: #f5f5f4; }
+          .meet-row .name { text-decoration: underline; }
+          #context { margin-bottom: 16px; }
+          #context pre { white-space: pre-wrap; overflow-wrap: normal; word-break: normal; max-width: 100%; margin: 0 0 8px; font: 13px/1.4 ui-monospace, monospace; }
+          #context button { display: block; text-align: left; margin: 4px 0; white-space: normal; max-width: 100%; }
+          #context .loc { display: block; font: 12px/1.4 ui-monospace, monospace; white-space: nowrap; }
+          #detail { margin-bottom: 16px; }
+          #detail h2, #context h2, .side > h2 { margin: 12px 0 4px; font-size: 14px; }
           .badge { display: inline-block; border: 1px solid #44403c; padding: 0 6px; }
           @media (max-width: 800px) {
             main { grid-template-columns: 1fr; }

@@ -23,7 +23,8 @@ defmodule MuroVisor.MeetingViewTest do
     assert wire["data-base"] == "ping"
     assert wire["data-steps"] == "2"
     assert wire["data-evidence"] == ""
-    assert row_text(html, "wire") =~ "pong with peer"
+    assert row_text(html, "wire") =~ "pong ⇄ peer"
+    assert text_of(html, ~s(section[data-session="ping"] code)) =~ "recv Nat (send Nat end)"
 
     window = row(html, "window-wire")
     assert window["data-steps"] == "2"
@@ -50,11 +51,15 @@ defmodule MuroVisor.MeetingViewTest do
 
     {:ok, arm, html} = live(conn, "/?meet=arm")
     assert steps(html) == arm_steps()
-    assert text_of(html, "#sequence") =~ "pick0"
+    assert text_of(html, "#sequence") =~ "chooses branch 0 of 2"
     assert text_of(html, "#sequence") =~ "0"
+    assert html =~ ~s(data-arity="2")
+    assert_on_lifelines(html)
 
     {:ok, window, html} = live(conn, "/?meet=window-wire")
     assert steps(html) == window_steps()
+    assert text_of(html, "#sequence .evidence-badge") == "w ⊢ d ≤ w"
+    assert_on_lifelines(html)
 
     for view <- [echo, arm, window] do
       assert render(view) =~ "id=\"sequence\""
@@ -76,8 +81,9 @@ defmodule MuroVisor.MeetingViewTest do
 
     pong = Enum.find(book(), &(&1.name == "pong"))
     {line, col} = pong.loc
-    assert text_of(html, "#conform-pong") =~ "pong"
-    assert text_of(html, "#conform-pong") =~ "#{pong.file}:#{line}:#{col}"
+    refute html =~ "<h2>Detail</h2>"
+    assert text_of(html, "#conform-pong") == "pongmeet.muro:#{line}:#{col}"
+    refute text_of(html, "#conform-pong") =~ pong.file
 
     view |> element("#conform-pong") |> render_click()
     clicked = render(view)
@@ -96,7 +102,8 @@ defmodule MuroVisor.MeetingViewTest do
     assert {:ok, stamp} = MuroVisor.Book.open(path)
     counter = count_checks()
     {:ok, view, html} = live(conn, "/?meet=wire")
-    assert text_of(html, "#outline") =~ "backend: otp\n"
+    assert text_of(html, "#outline-backend") == "otp"
+    refute text_of(html, "#outline") =~ "backend:"
     assert text_of(html, "#outline-for") == "meeting: wire"
     assert text_of(html, "#book-stamp") =~ to_string(stamp)
     assert checks(counter) == 0
@@ -107,7 +114,8 @@ defmodule MuroVisor.MeetingViewTest do
         view |> element("#backend-#{backend}") |> render_click()
         html = render(view)
         text = text_of(html, "#outline")
-        assert text =~ "backend: #{backend}\n"
+        assert text_of(html, "#outline-backend") == "#{backend}"
+        refute text =~ "backend:"
         assert text_of(html, "#outline-for") == "meeting: wire"
         assert text_of(html, "#book-stamp") =~ to_string(stamp)
         assert steps(html) == wire_steps()
@@ -143,12 +151,19 @@ defmodule MuroVisor.MeetingViewTest do
     assert render(view) =~ "id=\"meeting-picker\""
 
     page = html_response(get(conn, "/?meet=sized-wire"), 200)
-    assert page =~ ".meeting-pane, .sequence, .picker { max-width: 100%; overflow-x: hidden; }"
-    assert page =~ "overflow-wrap: anywhere"
+
+    assert page =~
+             ".meeting-pane, .sequence-wrap, .picker { max-width: 100%; overflow-x: hidden; }"
+
+    assert page =~ "overflow-wrap: normal"
+    refute page =~ "overflow-wrap: anywhere"
     assert page =~ "minmax(0, 1fr)"
+    assert page =~ "font-size: 14px"
+    assert page =~ "justify-content: center"
     refute page =~ "id=\"book-graph\""
     assert page =~ "rep n 0"
     refute page =~ ~r/\bwidth="\d{4,}"/
+    assert_on_lifelines(page)
   end
 
   test "other books that meet render a sequence", %{conn: conn} do
@@ -165,7 +180,7 @@ defmodule MuroVisor.MeetingViewTest do
       assert html =~ "id=\"lane-left\""
       assert html =~ "id=\"lane-right\""
       assert text_of(html, "#meeting-checked") == "checked"
-      assert text_of(html, "#outline") =~ "backend: otp"
+      assert text_of(html, "#outline-backend") == "otp"
 
       rows = steps(html)
 
@@ -222,6 +237,56 @@ defmodule MuroVisor.MeetingViewTest do
         attr(row, "data-branch")
       }
     end)
+  end
+
+  defp assert_on_lifelines(html) do
+    doc = parse(html)
+    [left, right] = Floki.find(doc, "#sequence line.lifeline")
+    lx = attr(left, "x1")
+    rx = attr(right, "x1")
+    assert attr(left, "x2") == lx
+    assert attr(right, "x2") == rx
+    assert attr(left, "y2") == attr(right, "y2")
+    assert String.to_integer(attr(left, "y2")) > String.to_integer(attr(left, "y1"))
+    assert abs(String.to_integer(rx) - String.to_integer(lx)) == 420
+    assert html =~ ~r/markerunits="strokeWidth"/i
+
+    arrows = Floki.find(doc, "#sequence line.arrow")
+    assert arrows != []
+    ends = Enum.sort([lx, rx])
+
+    for arrow <- arrows do
+      assert Enum.sort([attr(arrow, "x1"), attr(arrow, "x2")]) == ends
+      assert attr(arrow, "y1") == attr(arrow, "y2")
+      assert attr(arrow, "marker-end") == "url(#seq-arrow)"
+    end
+
+    mid = Integer.to_string(div(String.to_integer(lx) + String.to_integer(rx), 2))
+
+    for label <- Floki.find(doc, "#sequence text.arrow-label") do
+      assert attr(label, "text-anchor") == "middle"
+      assert attr(label, "x") == mid
+    end
+
+    numbers = doc |> Floki.find("#sequence text.step-no") |> Enum.map(&Floki.text/1)
+    assert numbers == Enum.map(1..length(numbers), &Integer.to_string/1)
+
+    life_bot = attr(left, "y2")
+    boxes = Floki.find(doc, "#sequence g.lane-box rect")
+    assert length(boxes) == 4
+    assert Enum.count(boxes, &(attr(&1, "y") == life_bot)) == 2
+
+    for term <- Floki.find(doc, "#sequence g.terminal") do
+      marks = Floki.find(term, "rect.term-mark")
+      assert length(marks) == 2
+
+      centres =
+        Enum.map(marks, fn mark ->
+          String.to_integer(attr(mark, "x")) + div(String.to_integer(attr(mark, "width")), 2)
+        end)
+
+      assert Enum.sort(centres) == Enum.sort([String.to_integer(lx), String.to_integer(rx)])
+    end
   end
 
   defp row(html, name) do
