@@ -59,6 +59,10 @@ defmodule MuroVisor.MeetingViewTest do
     {:ok, window, html} = live(conn, "/?meet=window-wire")
     assert steps(html) == window_steps()
     assert text_of(html, "#sequence .evidence-badge") == "w ⊢ d ≤ w"
+    assert html =~ "evidence-pill"
+    fills = html |> parse() |> Floki.attribute("#sequence text.step-no", "fill")
+    assert fills != []
+    assert Enum.uniq(fills) == ["#1c1917"]
     assert_on_lifelines(html)
 
     for view <- [echo, arm, window] do

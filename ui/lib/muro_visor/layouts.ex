@@ -31,12 +31,13 @@ defmodule MuroVisor.Layouts do
           main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 16px; padding: 16px; align-items: start; }
           .graph-pane { min-width: 0; }
           .zoom { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
-          .graph-scroll { overflow: auto; height: calc(100vh - 140px); border: 1px solid #e7e5e4; background: #fff; }
-          #edge-legend { display: flex; gap: 14px; list-style: none; margin: 0 0 8px; padding: 0; font-size: 13px; }
-          #edge-legend li::before { content: ""; display: inline-block; width: 18px; height: 0; border-top: 2px solid #44403c; margin-right: 6px; vertical-align: middle; }
-          #zoom-fit:checked ~ .graph-scroll svg { width: 100%; height: 100%; }
-          #zoom-100:checked ~ .graph-scroll svg { width: var(--native-width); height: var(--native-height); }
-          #zoom-150:checked ~ .graph-scroll svg { width: calc(var(--native-width) * 1.5); height: calc(var(--native-height) * 1.5); }
+          .graph-scroll { container-type: size; overflow: auto; height: calc(100vh - 140px); border: 1px solid #e7e5e4; background: #fff; }
+          #edge-legend { display: flex; gap: 14px; align-items: center; list-style: none; margin: 0 0 8px; padding: 0; font-size: 13px; }
+          #edge-legend li { display: flex; align-items: center; gap: 6px; }
+          #edge-legend svg { display: block; }
+          #zoom-fit:checked ~ .graph-scroll svg#book-graph { width: max(calc(var(--native-width) * 11 / 12), min(calc(100cqw - 24px), calc((100cqh - 24px) * var(--native-width) / var(--native-height)))); height: auto; aspect-ratio: var(--native-width) / var(--native-height); }
+          #zoom-100:checked ~ .graph-scroll svg#book-graph { width: var(--native-width); height: var(--native-height); max-width: none; max-height: none; aspect-ratio: auto; }
+          #zoom-150:checked ~ .graph-scroll svg#book-graph { width: calc(var(--native-width) * 1.5); height: calc(var(--native-height) * 1.5); max-width: none; max-height: none; aspect-ratio: auto; }
           aside.side { min-width: 0; }
           button { font: inherit; padding: 4px 10px; }
           #outline { font: 12px/1.35 ui-monospace, monospace; max-width: 100%; }
@@ -47,6 +48,12 @@ defmodule MuroVisor.Layouts do
           svg .node { fill: #fff; stroke: #44403c; }
           svg .compound { fill: #f5f5f4; }
           svg .edge { stroke: #78716c; fill: none; }
+          svg .edge-meet { stroke: #c2410c; stroke-width: 1.75px; }
+          svg .edge-step { stroke: #57534e; stroke-width: 1.5px; }
+          svg .edge-dual { stroke: #1e3a8a; stroke-width: 1.5px; stroke-dasharray: 6 4; }
+          svg .edge-def { stroke: #a8a29e; stroke-width: 1.25px; stroke-dasharray: 1 4; }
+          svg rect.count-badge { fill: #fff; stroke: #44403c; }
+          svg text.count-badge { font-size: 12px; fill: #1c1917; }
           svg g.selected > rect.node,
           svg g.selected > rect.compound,
           svg rect.selected { stroke: #b45309; stroke-width: 2.5px; }
@@ -75,8 +82,10 @@ defmodule MuroVisor.Layouts do
           .sequence { max-width: 100%; height: auto; }
           .sequence text { font-family: ui-sans-serif, sans-serif; fill: #1c1917; stroke: none; }
           .sequence .lane-name, .sequence .arrow-label, .sequence .choice-note, .sequence .term-label, .sequence .step-no { font-size: 14px; }
-          .sequence .lane-session, .sequence .evidence-badge, .sequence .loop-note { font-size: 13px; fill: #44403c; }
-          .sequence .step-no { fill: #57534e; }
+          .sequence .lane-session, .sequence .loop-note { font-size: 13px; fill: #44403c; }
+          .sequence .step-no { fill: #1c1917; stroke: #fafaf9; stroke-width: 3px; paint-order: stroke fill; }
+          .sequence .evidence-pill { fill: #fff; stroke: #44403c; stroke-width: 1px; }
+          .sequence .evidence-badge { font-size: 12px; fill: #1c1917; }
           .group { margin: 0 0 20px; }
           .session-head { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
           .session-head code { font: 13px/1.4 ui-monospace, monospace; font-weight: 500; }

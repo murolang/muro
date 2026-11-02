@@ -80,6 +80,14 @@ defmodule MuroVisor.ExplorerLive do
     end
   end
 
+  def handle_event("open-meet", %{"name" => name} = params, socket) do
+    if activate?(params) and is_binary(name) and name != "" do
+      {:noreply, push_patch(socket, to: "/?meet=#{URI.encode_www_form(name)}")}
+    else
+      {:noreply, socket}
+    end
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
@@ -111,7 +119,12 @@ defmodule MuroVisor.ExplorerLive do
         <input type="radio" name="zoom" id="zoom-150" />
         <label for="zoom-150">150%</label>
         <ul :if={@picture.legend != []} id="edge-legend">
-          <li :for={kind <- @picture.legend} data-kind={kind}>{kind}</li>
+          <li :for={kind <- @picture.legend} data-kind={kind}>
+            <svg width="28" height="10" aria-hidden="true">
+              <line class={"edge edge-#{kind}"} x1="0" y1="5" x2="28" y2="5" />
+            </svg>
+            <span>{kind}</span>
+          </li>
         </ul>
         <div class="graph-scroll">
           <svg
@@ -130,11 +143,13 @@ defmodule MuroVisor.ExplorerLive do
               data-kind={node.kind}
               data-mode={node.mode}
               data-name={node.name}
+              data-cluster={Map.get(node, :cluster)}
               tabindex="0"
               role="button"
-              phx-click="select"
-              phx-keydown="select"
+              phx-click={click_event(node)}
+              phx-keydown={click_event(node)}
               phx-value-id={control(:node, node.id)}
+              phx-value-name={node.bare}
             >
               <rect class={node.class} x={node.x} y={node.y} width={node.w} height={node.h} />
               <text x={node.x + 8} y={node.y + 18}>{node.name}</text>
@@ -143,6 +158,11 @@ defmodule MuroVisor.ExplorerLive do
                 id={"meeting-#{meet.id}"}
                 class="compound"
                 data-meeting={meet.name}
+                tabindex="0"
+                role="link"
+                phx-click="open-meet"
+                phx-keydown="open-meet"
+                phx-value-name={meet.name}
               >
                 <rect class="compound" x={meet.x} y={meet.y} width={meet.w} height={meet.h} />
                 <text x={meet.x + 6} y={meet.y + 14}>{meet.name}</text>
@@ -195,6 +215,7 @@ defmodule MuroVisor.ExplorerLive do
               data-from={edge.from}
               data-to={edge.to}
               data-use={edge.use}
+              data-count={edge.count}
               tabindex="0"
               role="button"
               phx-click="select"
@@ -203,12 +224,30 @@ defmodule MuroVisor.ExplorerLive do
             >
               <path d={edge.d} fill="none" stroke="#44403c" stroke-opacity="0" stroke-width="12" />
               <path
-                class={["edge", picked?(@selected, :edge, edge.id) && "selected"]}
+                class={["edge", "edge-#{edge.use}", picked?(@selected, :edge, edge.id) && "selected"]}
                 d={edge.d}
                 stroke-width="1.5"
               />
               <text :if={edge.label != ""} class="edge-label" x={edge.lx} y={edge.ly}>
                 {edge.label}
+              </text>
+              <rect
+                :if={edge.count > 1}
+                class="count-badge"
+                x={edge.bx}
+                y={edge.by}
+                width={edge.bw}
+                height={edge.bh}
+                rx="3"
+              />
+              <text
+                :if={edge.count > 1}
+                class="count-badge"
+                x={edge.tx}
+                y={edge.ty}
+                text-anchor="middle"
+              >
+                {edge.count}
               </text>
             </g>
           </svg>
@@ -325,6 +364,9 @@ defmodule MuroVisor.ExplorerLive do
 
   defp activate?(%{"key" => key}), do: key in ["Enter", " ", "Space", "Spacebar"]
   defp activate?(_params), do: true
+
+  defp click_event(%{kind: "meet"}), do: "open-meet"
+  defp click_event(_node), do: "select"
 
   defp control(kind, id), do: MuroVisor.Detail.dom_id(kind, id)
   defp picked?(selected, kind, id), do: selected == control(kind, id)

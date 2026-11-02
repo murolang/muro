@@ -132,6 +132,15 @@ defmodule MuroVisor.SequenceTest do
     discharged = Enum.find(window.steps, &(&1.evidence == "w ⊢ d ≤ w"))
     assert discharged.label == "w"
     assert discharged.number == 2
+    label_right = discharged.label_x + div(8, 2)
+    assert discharged.badge.x >= label_right + 8
+
+    label_box = %{x: discharged.label_x - 4, y: discharged.label_y - 12, w: 8, h: 14}
+    refute boxes_overlap?(label_box, discharged.badge)
+  end
+
+  defp boxes_overlap?(a, b) do
+    a.x < b.x + b.w and b.x < a.x + a.w and a.y < b.y + b.h and b.y < a.y + a.h
   end
 
   defp catalog(name) do

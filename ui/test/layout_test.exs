@@ -116,7 +116,14 @@ defmodule MuroVisor.LayoutTest do
 
     assert page =~ ~s(id="zoom-fit")
     assert page =~ "checked"
-    assert page =~ "#zoom-fit:checked ~ .graph-scroll svg { width: 100%; height: 100%; }"
+    assert page =~ "#zoom-fit:checked ~ .graph-scroll svg#book-graph"
+    assert page =~ "calc(var(--native-width) * 11 / 12)"
+    assert page =~ "100cqw - 24px"
+    assert page =~ "100cqh - 24px"
+    assert page =~ "aspect-ratio: var(--native-width) / var(--native-height)"
+    assert page =~ "#zoom-100:checked ~ .graph-scroll svg#book-graph"
+    assert page =~ "#zoom-150:checked ~ .graph-scroll svg#book-graph"
+    assert page =~ "aspect-ratio: auto"
     assert page =~ ~s(preserveAspectRatio="xMidYMid meet")
     assert page =~ "--native-height:"
     assert page =~ "font: 12px"

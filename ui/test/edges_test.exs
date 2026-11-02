@@ -73,14 +73,15 @@ defmodule MuroVisor.EdgesTest do
 
   defp assert_edges(html, graph) do
     dom = use_edges(html)
+    drawn_edges = MuroVisor.Draw.layout(graph).edges
 
-    assert Enum.map(dom, & &1.id) == Enum.map(graph.edges, &("edge-" <> &1.id))
+    assert Enum.map(dom, & &1.id) == Enum.map(drawn_edges, &("edge-" <> &1.id))
 
-    for edge <- graph.edges do
+    for edge <- drawn_edges do
       drawn = Enum.find(dom, &(&1.id == "edge-#{edge.id}"))
       assert drawn.from == edge.from
       assert drawn.to == edge.to
-      assert drawn.use == to_string(edge.use)
+      assert drawn.use == edge.use
     end
   end
 end

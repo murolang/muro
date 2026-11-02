@@ -83,7 +83,12 @@ defmodule MuroVisor.Sequence do
           data-arity={step.arity}
           data-evidence={step.evidence}
         >
-          {text_at(step.number, class: "step-no", x: @d.number_x, y: step.number_y)}
+          {text_at(step.number,
+            class: "step-no",
+            x: @d.number_x,
+            y: step.number_y,
+            fill: "#1c1917"
+          )}
           <line
             :if={step.kind != :terminal}
             class="arrow"
@@ -101,10 +106,20 @@ defmodule MuroVisor.Sequence do
             y: step.label_y,
             "text-anchor": "middle"
           )}
-          {text_at(step.evidence,
+          <rect
+            :for={badge <- badge_list(step.badge)}
+            class="evidence-pill"
+            x={badge.x}
+            y={badge.y}
+            width={badge.w}
+            height={badge.h}
+            rx="8"
+          />
+          {text_at(badge_text(step.badge),
             class: "evidence-badge",
             x: step.badge_x,
             y: step.badge_y,
+            fill: "#1c1917",
             "text-anchor": "middle"
           )}
           {text_at(step.loop && "loop", class: "loop-note", x: step.loop_x, y: step.loop_y)}
@@ -545,6 +560,7 @@ defmodule MuroVisor.Sequence do
     from_left = row.from == left_name
     {x1, x2} = if from_left, do: {left_x, right_x}, else: {right_x, left_x}
     shown = arrow_label(row)
+    badge = badge_geom(row.evidence, mid, label_y, text_w(shown))
 
     step = %{
       index: row.index,
@@ -566,9 +582,10 @@ defmodule MuroVisor.Sequence do
       label_x: mid,
       label_y: label_y,
       arrow_label: if(row.kind == :terminal, do: nil, else: shown),
-      badge_x: mid,
-      badge_y: label_y - 16,
-      loop_x: mid + div(text_w(shown), 2) + 8,
+      badge: badge,
+      badge_x: if(badge, do: badge.tx, else: mid),
+      badge_y: if(badge, do: badge.ty, else: label_y - 16),
+      loop_x: loop_x(mid, text_w(shown), badge),
       loop_y: label_y,
       choice: choice_mark(row, from_left, left_x, right_x, arrow_y),
       marks: if(row.kind == :terminal, do: term_marks(left_x, right_x, arrow_y), else: []),
@@ -580,6 +597,26 @@ defmodule MuroVisor.Sequence do
 
   defp arrow_label(%{kind: :choice, branch: branch}) when is_binary(branch), do: branch
   defp arrow_label(%{label: label}), do: label
+
+  defp badge_geom(text, mid, label_y, label_w) when is_binary(text) and text != "" do
+    w = text_w(text) + 16
+    h = 20
+    x = mid + div(label_w, 2) + 14
+    y = label_y - 16
+
+    %{text: text, x: x, y: y, w: w, h: h, tx: x + div(w, 2), ty: y + 14}
+  end
+
+  defp badge_geom(_text, _mid, _label_y, _label_w), do: nil
+
+  defp badge_list(nil), do: []
+  defp badge_list(badge), do: [badge]
+
+  defp badge_text(nil), do: nil
+  defp badge_text(badge), do: badge.text
+
+  defp loop_x(mid, label_w, nil), do: mid + div(label_w, 2) + 8
+  defp loop_x(_mid, _label_w, badge), do: badge.x + badge.w + 8
 
   defp choice_mark(%{kind: :choice, branch: branch, arity: arity}, from_left, left_x, right_x, y)
        when is_binary(branch) and is_integer(arity) do
