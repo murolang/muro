@@ -110,3 +110,40 @@ jobs:
       # Same flags as `make agda`: --no-libraries so extra .agda-lib files
       # shipped with the stdlib checkout (tests, docs) are not loaded.
       - run: make agda
+
+  visor:
+    name: muro_visor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.18.4"
+            otp: "27.2"
+          - elixir: "1.20.4"
+            otp: "28.1"
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ui/deps
+            ui/_build
+          key: visor-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('ui/mix.lock', 'mix.lock', 'mix.exs') }}
+          restore-keys: |
+            visor-${{ matrix.otp }}-${{ matrix.elixir }}-
+
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix test

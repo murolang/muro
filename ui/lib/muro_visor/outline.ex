@@ -1,0 +1,51 @@
+defmodule MuroVisor.Outline do
+  @moduledoc false
+
+  @doc """
+  The outline of `backend` for a book already loaded.
+
+  This calls `Muro.Emit.outline/3` on `Muro.Prelude.for_emit/1`. It does
+  not load the file again and it does not write source.
+  """
+  def render(nil, _path, _backend), do: ""
+
+  def render(book, path, backend) when is_list(book) and is_binary(path) do
+    emit = Muro.Prelude.for_emit(book)
+
+    case fetch(emit, path, backend) do
+      {:ok, outline} -> format(backend, outline)
+      {:error, msg} when is_binary(msg) -> msg
+      {:error, other} -> inspect(other)
+    end
+  end
+
+  defp fetch(book, path, :fsm), do: Muro.Emit.outline(:fsm, book, path)
+
+  defp fetch(book, path, backend) do
+    stem =
+      path
+      |> Path.basename()
+      |> String.trim_trailing(".muro")
+      |> String.replace("-", "_")
+
+    Muro.Emit.outline(backend, book, stem)
+  end
+
+  defp format(backend, outline) do
+    sigs =
+      Enum.map_join(outline.signatures, "\n", fn sig ->
+        params = sig |> Map.get(:params, []) |> Enum.map_join(", ", &param/1)
+        "#{sig.name}(#{params}) #{inspect(sig.layout)}"
+      end)
+
+    """
+    backend: #{backend}
+    names: #{Enum.join(outline.names, ", ")}
+    #{sigs}
+    #{Enum.join(outline.clauses, "\n")}
+    """
+  end
+
+  defp param(name) when is_binary(name), do: name
+  defp param(other), do: inspect(other)
+end
