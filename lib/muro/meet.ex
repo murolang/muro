@@ -835,19 +835,17 @@ defmodule Muro.Meet do
           {:ok, v} ->
             case Muro.Session.answer(v, send_ty, ground(sctx, sidx), book) do
               :yes ->
-                case Muro.Session.arm(send_ty, v, arms, book) do
-                  {:ok, arm} ->
-                    picked = arm_index(arms, arm)
-
-                    case open_nat_match(arm, ridx, book) do
-                      {:ok, arm} ->
+                case Muro.Session.arm_at(send_ty, v, arms, book) do
+                  {:ok, arm, path} ->
+                    case open_nat_match(arm, ridx, book, path) do
+                      {:ok, arm, path} ->
                         Process.put({Muro.Session, :meet_idx}, ridx)
 
                         try do
                           took(
                             ["get #{gname}", "arm #{arm_name(v)}"],
                             {:arm, v},
-                            match_downs(orient, picked)
+                            match_downs(orient, path)
                           )
                         after
                           Process.delete({Muro.Session, :meet_idx})
@@ -894,12 +892,8 @@ defmodule Muro.Meet do
     end
   end
 
-  defp match_downs(:put_first, i), do: {0, {:into, i}}
-  defp match_downs(:get_first, i), do: {{:into, i}, 0}
-
-  defp arm_index(arms, chosen) do
-    Enum.find_index(arms, &(Muro.Session.arm_body(&1) == chosen)) || 0
-  end
+  defp match_downs(:put_first, path), do: {0, {:into, path}}
+  defp match_downs(:get_first, path), do: {{:into, path}, 0}
 
   defp arm_name(:b0), do: "b0"
   defp arm_name(:b1), do: "b1"
@@ -909,20 +903,20 @@ defmodule Muro.Meet do
 
   # A match on a nat already in the receiver index is the arm that
   # numeral selects. The value just exchanged is not in the index yet.
-  defp open_nat_match({:match, name, arms}, idx, book) do
+  defp open_nat_match({:match, name, arms}, idx, book, path) do
     case nat_at(idx, name) do
       {:nat, n} ->
-        case Muro.Session.arm(:nat, {:nat, n}, arms, book) do
-          {:ok, leaf} -> open_nat_match(leaf, idx, book)
+        case Muro.Session.arm_at(:nat, {:nat, n}, arms, book) do
+          {:ok, leaf, more} -> open_nat_match(leaf, idx, book, path ++ more)
           :error -> :error
         end
 
       _ ->
-        {:ok, {:match, name, arms}}
+        {:ok, {:match, name, arms}, path}
     end
   end
 
-  defp open_nat_match(proc, _idx, _book), do: {:ok, proc}
+  defp open_nat_match(proc, _idx, _book, path), do: {:ok, proc, path}
 
   defp nat_at(idx, name) do
     case Map.get(idx, name) do

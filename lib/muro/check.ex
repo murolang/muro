@@ -2613,9 +2613,11 @@ defmodule Muro.Check do
          :ok <- guard_sits(book, lp, left),
          :ok <- guard_sits(book, rp, right),
          {:ok, l} <- process_session(book, lp),
-         {:ok, r} <- process_session(book, rp),
-         :ok <- meet_ends(book, l, r, left, right, Map.get(d, :buffer)) do
-      :ok
+         {:ok, r} <- process_session(book, rp) do
+      case meet_ends(book, l, r, left, right, Map.get(d, :buffer)) do
+        {:ok, graph} -> {:graph, name, l.session, graph}
+        {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+      end
     else
       {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
     end
@@ -2655,12 +2657,18 @@ defmodule Muro.Check do
 
   defp meet_ends(book, l, r, _left, _right, nil) do
     with :ok <- other_end(l.proto, r.proto) do
-      Muro.Meet.meets(l.proc, r.proc, book, l.proto)
+      case Muro.Meet.graph(l.proc, r.proc, book, l.proto, {l.steps, r.steps}) do
+        {:ok, graph} -> {:ok, graph}
+        {{:error, msg}, _graph} -> {:error, msg}
+      end
     end
   end
 
   defp meet_ends(book, l, r, left, right, k) when is_integer(k) do
-    Muro.Async.meets(l.proc, r.proc, book, k, left, right)
+    case Muro.Async.recorded(l.proc, r.proc, book, k, left, right, {l.steps, r.steps}) do
+      {:ok, graph} -> {:ok, graph}
+      {:error, msg, _graph} -> {:error, msg}
+    end
   end
 
   # The meeting is not a second report of a process that already failed.
@@ -2974,12 +2982,15 @@ defmodule Muro.Check do
 
   defp resolve_dual_target(_book, _, _), do: {:error, "unknown session"}
 
-  defp open_session(book, name) when is_binary(name),
+  @doc false
+  def open_session(book, name) when is_binary(name),
     do: resolve_session(book, name, MapSet.new())
 
-  defp open_session(book, {:sess, name, args}) do
+  def open_session(book, {:sess, name, args}) do
     Muro.Session.open_applied(book, name, args)
   end
+
+  def open_session(_book, _other), do: {:error, "unknown session"}
 
   # Names expand before `seen`. Two names of one body are one description.
   # The stack is the talks currently being expanded, not the dual walk.
@@ -3119,16 +3130,30 @@ defmodule Muro.Check do
     end
   end
 
-  defp process_session(book, %{kind: :conform, session: sname, proc: proc}) do
+  defp process_session(book, %{kind: :conform, name: name, session: sname, proc: proc} = d) do
     with {:ok, session} <- open_session(book, sname) do
-      {:ok, %{proc: proc, proto: session.proto}}
+      {:ok,
+       %{
+         name: name,
+         proc: proc,
+         proto: session.proto,
+         steps: Map.get(d, :steps),
+         session: session.name
+       }}
     end
   end
 
-  defp process_session(book, %{kind: :read, endpoint: ename, proc: proc}) do
+  defp process_session(book, %{kind: :read, name: name, endpoint: ename, proc: proc} = d) do
     with {:ok, endpoint} <- fetch_endpoint(book, ename),
-         {:ok, session} <- fetch_session(book, endpoint.session) do
-      {:ok, %{proc: proc, proto: session.proto}}
+         {:ok, session} <- open_session(book, endpoint.session) do
+      {:ok,
+       %{
+         name: name,
+         proc: proc,
+         proto: session.proto,
+         steps: Map.get(d, :steps),
+         session: session.name
+       }}
     end
   end
 
@@ -3420,6 +3445,35 @@ defmodule Muro.Check do
     end
   end
 
+  @graphs_key {__MODULE__, :meeting_graphs}
+
+  @doc false
+  def begin_meeting_graphs, do: Process.put(@graphs_key, %{})
+
+  @doc false
+  def take_meeting_graphs do
+    graphs = Process.get(@graphs_key, %{})
+    Process.delete(@graphs_key)
+    graphs
+  end
+
+  @doc false
+  def stamp_meeting_graphs(book, graphs) when is_list(book) and is_map(graphs) do
+    Enum.map(book, fn
+      %{kind: :meet, name: name} = d ->
+        case Map.get(graphs, name) do
+          {session, g} when is_binary(session) and is_map(g) ->
+            Map.merge(d, %{graph: g, session: session})
+
+          _ ->
+            d
+        end
+
+      d ->
+        d
+    end)
+  end
+
   @doc false
   def check_hook(fun) when is_function(fun, 0) do
     :persistent_term.put({__MODULE__, :hook}, fun)
@@ -3455,21 +3509,31 @@ defmodule Muro.Check do
     db_opts = if Keyword.get(opts, :params) == :open, do: [params: :open], else: []
 
     with {:ok, book} <- Ast.book_to_db(named_book, db_opts) do
-      errors =
+      outcomes =
         book
         |> Task.async_stream(fn d -> check_def(book, d, fuel) end,
           ordered: true,
           timeout: :infinity
         )
-        |> Enum.flat_map(fn
-          {:ok, :ok} -> []
-          {:ok, {:error, msg}} -> [msg]
-          {:exit, reason} -> exit(reason)
-        end)
+        |> Enum.to_list()
+
+      exits = for {:exit, reason} <- outcomes, do: reason
+
+      if exits != [] do
+        exit(hd(exits))
+      end
+
+      errors = for {:ok, {:error, msg}} <- outcomes, do: msg
 
       case errors do
-        [] -> :ok
-        msgs -> {:error, Enum.join(msgs, "\n\n")}
+        [] ->
+          graphs = for {:ok, {:graph, name, session, g}} <- outcomes, do: {name, {session, g}}
+          prev = Process.get(@graphs_key, %{})
+          Process.put(@graphs_key, Map.merge(prev, Map.new(graphs)))
+          :ok
+
+        msgs ->
+          {:error, Enum.join(msgs, "\n\n")}
       end
     end
   end

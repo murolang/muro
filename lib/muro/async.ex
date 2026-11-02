@@ -62,9 +62,18 @@ defmodule Muro.Async do
 
   def graph(p, q, book, k, left, right, spans)
       when is_integer(k) and k >= 0 and is_tuple(spans) do
-    case run(p, q, book, k, left, right, spans) do
+    case recorded(p, q, book, k, left, right, spans) do
       {:ok, graph} -> graph
-      {{:error, _msg}, graph} -> graph
+      {:error, _msg, graph} -> graph
+    end
+  end
+
+  @doc false
+  def recorded(p, q, book, k, left, right, spans)
+      when is_integer(k) and k >= 0 and is_tuple(spans) do
+    case run(p, q, book, k, left, right, spans) do
+      {:ok, graph} -> {:ok, graph}
+      {{:error, msg}, graph} -> {:error, msg, graph}
     end
   end
 
@@ -325,13 +334,12 @@ defmodule Muro.Async do
         {:bad, {:recv, side, msg}}
 
       {:ok, recv_ty, orig, ready} ->
-        case Muro.Session.arm(recv_ty, ready, arms, conf.book) do
-          {:ok, arm} ->
-            case open_nat_match(arm, venv_of(conf, side), conf.book) do
-              {:ok, arm} ->
+        case Muro.Session.arm_at(recv_ty, ready, arms, conf.book) do
+          {:ok, arm, path} ->
+            case open_nat_match(arm, venv_of(conf, side), conf.book, path) do
+              {:ok, arm, path} ->
                 conf = commit_recv(conf, side, arm, rest, name, recv_ty, orig, ready)
-                picked = Enum.find_index(arms, &(Muro.Session.arm_body(&1) == arm)) || 0
-                {:go, conf, "#{side_name(conf, side)} arm #{arm_label(ready)}", {:into, picked}}
+                {:go, conf, "#{side_name(conf, side)} arm #{arm_label(ready)}", {:into, path}}
 
               :error ->
                 {:bad, @cover}
@@ -535,20 +543,20 @@ defmodule Muro.Async do
 
   # A match on a nat already stored on this side is the arm that
   # numeral selects. The value just received is bound after this.
-  defp open_nat_match({:match, name, arms}, env, book) do
+  defp open_nat_match({:match, name, arms}, env, book, path) do
     case Map.get(env, name) do
       {:nat, n} when is_integer(n) and n >= 0 ->
-        case Muro.Session.arm(:nat, {:nat, n}, arms, book) do
-          {:ok, leaf} -> open_nat_match(leaf, env, book)
+        case Muro.Session.arm_at(:nat, {:nat, n}, arms, book) do
+          {:ok, leaf, more} -> open_nat_match(leaf, env, book, path ++ more)
           :error -> :error
         end
 
       _ ->
-        {:ok, {:match, name, arms}}
+        {:ok, {:match, name, arms}, path}
     end
   end
 
-  defp open_nat_match(proc, _env, _book), do: {:ok, proc}
+  defp open_nat_match(proc, _env, _book, path), do: {:ok, proc, path}
 
   defp render(msg, _conf, _trace) when is_binary(msg), do: msg
 
