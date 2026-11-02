@@ -45,10 +45,24 @@ defmodule MuroVisor.Detail do
     end
   end
 
-  defp title(%{use: :step, step: step, proc: proc}), do: "step #{step} #{proc}"
+  defp title(%{use: :step, step: step, proc: proc}) when is_integer(step),
+    do: "step #{step} #{proc}"
+
+  defp title(%{use: :step, step: step, proc: proc}), do: "step #{inspect(step)} #{proc}"
   defp title(%{use: use}), do: to_string(use)
 
   defp refusal_kind(%{kind: :not_a_step}), do: "no refusal"
+
+  defp refusal_kind(%{kind: :refused, proc: proc, proto: proto} = refusal)
+       when not is_nil(proc) and not is_nil(proto) do
+    text =
+      "refused: #{Muro.Session.show_proc(proc)} does not conform to #{Muro.Session.show_proto(proto)}"
+
+    case Map.get(refusal, :reason) do
+      reason when is_binary(reason) and reason != "" -> text <> ": #{reason}"
+      _ -> text
+    end
+  end
 
   defp refusal_kind(%{kind: kind, reason: reason}) when is_binary(reason) and reason != "",
     do: "#{kind}: #{reason}"

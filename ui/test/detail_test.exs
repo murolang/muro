@@ -33,11 +33,24 @@ defmodule MuroVisor.DetailTest do
 
     refused = Enum.find(graph.edges, &(&1.use == :step and &1.proc == "pong" and &1.step == 1))
     assert_edge(view, graph, loaded, refused)
-    assert shown_kind(Muro.Explore.out_of_order(loaded, refused)) == "refused"
+    diagnosis = text_of(render(view), "#detail-refusal-kind")
+    refusal = Muro.Explore.out_of_order(loaded, refused)
+    assert diagnosis =~ "does not conform"
+    assert diagnosis =~ Muro.Session.show_proc(refusal.proc)
+    assert diagnosis =~ Muro.Session.show_proto(refusal.proto)
 
     stuck = Enum.find(graph.edges, &(&1.use == :step and &1.proc == "pong" and &1.step == 0))
     assert_edge(view, graph, loaded, stuck)
     assert shown_kind(Muro.Explore.out_of_order(loaded, stuck)) == "immovable"
+
+    nested =
+      Enum.find(
+        graph.edges,
+        &(&1.use == :step and &1.proc == "giver" and match?({:down, _, _}, &1.step))
+      )
+
+    assert nested
+    assert_edge(view, graph, loaded, nested)
 
     for use <- [:meet, :dual] do
       edge = Enum.find(graph.edges, &(&1.use == use))
@@ -53,6 +66,19 @@ defmodule MuroVisor.DetailTest do
     assert edge
     assert_edge(view, graph, loaded, edge)
     assert text_of(render(view), "#detail-refusal-kind") == "no refusal"
+  end
+
+  test "a configuration location names each participant's file", %{conn: conn} do
+    view = open_book(conn, example("meet.muro"))
+    graph = Muro.Explore.graph(book())
+    node = Enum.find(graph.nodes, &(&1.children != []))
+    child = hd(node.children)
+
+    view |> element("#node-#{child.id}") |> render_click()
+    loc = text_of(render(view), "#detail-loc")
+    assert loc =~ "left "
+    assert loc =~ "right "
+    assert loc =~ "meet.muro"
   end
 
   defp assert_node(view, defn) do
@@ -86,10 +112,24 @@ defmodule MuroVisor.DetailTest do
     end
   end
 
-  defp edge_title(%{use: :step, step: step, proc: proc}), do: "step #{step} #{proc}"
+  defp edge_title(%{use: :step, step: step, proc: proc}) when is_integer(step),
+    do: "step #{step} #{proc}"
+
+  defp edge_title(%{use: :step, step: step, proc: proc}), do: "step #{inspect(step)} #{proc}"
   defp edge_title(%{use: use}), do: to_string(use)
 
   defp shown_kind(%{kind: :not_a_step}), do: "no refusal"
+
+  defp shown_kind(%{kind: :refused, proc: proc, proto: proto} = refusal)
+       when not is_nil(proc) and not is_nil(proto) do
+    text =
+      "refused: #{Muro.Session.show_proc(proc)} does not conform to #{Muro.Session.show_proto(proto)}"
+
+    case Map.get(refusal, :reason) do
+      reason when is_binary(reason) and reason != "" -> text <> ": #{reason}"
+      _ -> text
+    end
+  end
 
   defp shown_kind(%{kind: kind, reason: reason}) when is_binary(reason) and reason != "",
     do: "#{kind}: #{reason}"
