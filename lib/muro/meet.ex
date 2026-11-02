@@ -26,29 +26,78 @@ defmodule Muro.Meet do
   @proto_key {__MODULE__, :proto}
   @why_key {__MODULE__, :why}
   @book_key {__MODULE__, :book}
+  @lspan_key {__MODULE__, :lspan}
+  @rspan_key {__MODULE__, :rspan}
+  @lps_key {__MODULE__, :lps}
+  @rps_key {__MODULE__, :rps}
+  @graph_key {__MODULE__, :graph}
+  @here_key {__MODULE__, :here}
+  @pending_key {__MODULE__, :pending}
 
   def meets(p, q, book \\ [], proto \\ nil) do
+    {verdict, _graph} = walk_pair(p, q, book, proto, {nil, nil})
+    verdict
+  end
+
+  @doc """
+  The configurations `meets/4` walks, and the transitions it took.
+
+  `spans` is `{left_steps, right_steps}`. A span is not part of the
+  pair the search remembers, so the verdict is the one `meets/4`
+  returns. States carry the source location of each exposed head.
+  `go/3` does not record a graph: a caller that steps the pair itself
+  gets the same `:ok` or `{:no, _, _}` it did before.
+  """
+  def graph(p, q, book \\ [], proto \\ nil, spans \\ {nil, nil}) do
+    walk_pair(p, q, book, proto, spans)
+  end
+
+  defp walk_pair(p, q, book, proto, {lspan, rspan}) do
     Process.put(@path_key, [])
     Process.put(@proto_key, proto)
     Process.put(@book_key, book)
     Process.delete(@why_key)
+    Process.put(@lspan_key, lspan)
+    Process.put(@rspan_key, rspan)
+    Process.put(@lps_key, %{})
+    Process.put(@rps_key, %{})
+    Process.put(@graph_key, %{states: [], transitions: [], next: 0, index: %{}})
+    Process.put(@here_key, nil)
+    Process.delete(@pending_key)
 
     try do
-      case go(p, q, book) do
-        :ok ->
-          :ok
+      result = go(p, q, book)
 
-        {:no, a, b} ->
-          {:error, diverged(a, b)}
+      verdict =
+        case result do
+          :ok -> :ok
+          {:no, a, b} -> {:error, diverged(a, b)}
+          {:error, msg} -> {:error, msg}
+        end
 
-        {:error, msg} ->
-          {:error, msg}
-      end
+      {verdict, publish_graph()}
     after
       Process.delete(@path_key)
       Process.delete(@proto_key)
       Process.delete(@why_key)
       Process.delete(@book_key)
+      Process.delete(@lspan_key)
+      Process.delete(@rspan_key)
+      Process.delete(@lps_key)
+      Process.delete(@rps_key)
+      Process.delete(@graph_key)
+      Process.delete(@here_key)
+      Process.delete(@pending_key)
+    end
+  end
+
+  defp publish_graph do
+    case Process.get(@graph_key) do
+      nil ->
+        %{states: [], transitions: []}
+
+      g ->
+        %{states: g.states, transitions: g.transitions}
     end
   end
 
@@ -71,9 +120,106 @@ defmodule Muro.Meet do
     end
   end
 
-  defp took(labels, proto_step) do
-    Process.put(@path_key, Process.get(@path_key, []) ++ List.wrap(labels))
+  defp took(labels, proto_step, downs \\ {0, 0}) do
+    labels = List.wrap(labels)
+    Process.put(@path_key, Process.get(@path_key, []) ++ labels)
     Process.put(@proto_key, advance_proto(Process.get(@proto_key), proto_step))
+    record_step(labels, downs)
+  end
+
+  # The pending transition closes when the next configuration is
+  # entered, including a configuration already seen. Recording stays
+  # off when `go/3` is called on its own.
+  defp record_step(labels, downs) do
+    case Process.get(@graph_key) do
+      g when is_map(g) -> record_step_on(labels, downs)
+      _ -> :ok
+    end
+  end
+
+  defp record_step_on(labels, {ld, rd}) do
+    Process.put(@pending_key, %{
+      from: Process.get(@here_key),
+      label: labels,
+      loc: %{left: side_at(@lspan_key, ld), right: side_at(@rspan_key, rd)}
+    })
+
+    Process.put(@lspan_key, Muro.Session.shift_span(Process.get(@lspan_key), ld))
+    Process.put(@rspan_key, Muro.Session.shift_span(Process.get(@rspan_key), rd))
+  end
+
+  defp side_at(_key, :none), do: nil
+  defp side_at(key, _), do: Muro.Session.step_at(Process.get(key))
+
+  defp align_spans(p, q, penv, qenv) do
+    case Process.get(@graph_key) do
+      g when is_map(g) ->
+        {lspan, lps} =
+          Muro.Session.expose_span(p, Process.get(@lspan_key), penv, Process.get(@lps_key) || %{})
+
+        {rspan, rps} =
+          Muro.Session.expose_span(q, Process.get(@rspan_key), qenv, Process.get(@rps_key) || %{})
+
+        Process.put(@lspan_key, lspan)
+        Process.put(@rspan_key, rspan)
+        Process.put(@lps_key, lps)
+        Process.put(@rps_key, rps)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp note_state(p, q, pk, qk) do
+    case Process.get(@graph_key) do
+      g when is_map(g) ->
+        key = {p, pk, q, qk}
+
+        {g, id} =
+          case Map.get(g.index, key) do
+            nil ->
+              id = g.next
+
+              st = %{
+                id: id,
+                left: p,
+                right: q,
+                loc: %{
+                  left: Muro.Session.step_at(Process.get(@lspan_key)),
+                  right: Muro.Session.step_at(Process.get(@rspan_key))
+                }
+              }
+
+              g = %{
+                g
+                | next: id + 1,
+                  index: Map.put(g.index, key, id),
+                  states: g.states ++ [st]
+              }
+
+              {g, id}
+
+            id ->
+              {g, id}
+          end
+
+        g =
+          case Process.get(@pending_key) do
+            nil ->
+              g
+
+            pend ->
+              trans = %{from: pend.from, to: id, label: pend.label, loc: pend.loc, side: :both}
+              %{g | transitions: g.transitions ++ [trans]}
+          end
+
+        Process.put(@graph_key, g)
+        Process.put(@here_key, id)
+        Process.delete(@pending_key)
+
+      _ ->
+        :ok
+    end
   end
 
   defp why(nil), do: :ok
@@ -149,14 +295,16 @@ defmodule Muro.Meet do
   # The value indices stay inside one pass. They are not part of the
   # pair, so a nat bound in the loop does not have to be the same nat
   # on the next arrival at the head.
-  defp advance(p, q, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
+  defp advance(p0, q0, lp, rq, li, ri, penv0, qenv0, seen, fuel, book) do
     if fuel <= 0 do
       {:error, "out of fuel"}
     else
-      with {:ok, p, penv} <- Muro.Session.unwind_proc(p, penv),
-           {:ok, q, qenv} <- Muro.Session.unwind_proc(q, qenv),
+      with {:ok, p, penv} <- Muro.Session.unwind_proc(p0, penv0),
+           {:ok, q, qenv} <- Muro.Session.unwind_proc(q0, qenv0),
            {:ok, pk} <- Muro.Session.project_proc(penv, p),
            {:ok, qk} <- Muro.Session.project_proc(qenv, q) do
+        align_spans(p0, q0, penv0, qenv0)
+        note_state(p, q, pk, qk)
         key = {p, pk, q, qk}
 
         if MapSet.member?(seen, key) do
@@ -483,7 +631,7 @@ defmodule Muro.Meet do
          fuel,
          book
        ) do
-    took(["get #{name}", "arm b1"], {:get, :b1})
+    took(["get #{name}", "arm b1"], {:get, :b1}, {1, 0})
 
     keep(
       advance(
@@ -547,7 +695,7 @@ defmodule Muro.Meet do
          fuel,
          book
        ) do
-    took(["get #{name}", "arm b1"], {:put, :b1})
+    took(["get #{name}", "arm b1"], {:put, :b1}, {0, 1})
 
     keep(
       advance(
@@ -573,7 +721,7 @@ defmodule Muro.Meet do
   end
 
   defp step({:pick1, p}, {:cover, _, r}, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
-    took("arm pick1", :pick1)
+    took("arm pick1", :pick1, {0, 1})
     keep(advance(p, r, lp, rq, li, ri, penv, qenv, seen, fuel - 1, book))
   end
 
@@ -583,7 +731,7 @@ defmodule Muro.Meet do
   end
 
   defp step({:cover, _, q}, {:pick1, r}, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
-    took("arm pick1", :cover1)
+    took("arm pick1", :cover1, {1, 0})
     keep(advance(q, r, lp, rq, li, ri, penv, qenv, seen, fuel - 1, book))
   end
 
@@ -687,14 +835,18 @@ defmodule Muro.Meet do
           {:ok, v} ->
             case Muro.Session.answer(v, send_ty, ground(sctx, sidx), book) do
               :yes ->
-                case Muro.Session.arm(send_ty, v, arms, book) do
-                  {:ok, arm} ->
-                    case open_nat_match(arm, ridx, book) do
-                      {:ok, arm} ->
+                case Muro.Session.arm_at(send_ty, v, arms, book) do
+                  {:ok, arm, path} ->
+                    case open_nat_match(arm, ridx, book, path) do
+                      {:ok, arm, path} ->
                         Process.put({Muro.Session, :meet_idx}, ridx)
 
                         try do
-                          took(["get #{gname}", "arm #{arm_name(v)}"], {:arm, v})
+                          took(
+                            ["get #{gname}", "arm #{arm_name(v)}"],
+                            {:arm, v},
+                            match_downs(orient, path)
+                          )
                         after
                           Process.delete({Muro.Session, :meet_idx})
                         end
@@ -740,6 +892,9 @@ defmodule Muro.Meet do
     end
   end
 
+  defp match_downs(:put_first, path), do: {0, {:into, path}}
+  defp match_downs(:get_first, path), do: {{:into, path}, 0}
+
   defp arm_name(:b0), do: "b0"
   defp arm_name(:b1), do: "b1"
   defp arm_name({:nat, n}) when is_integer(n), do: Integer.to_string(n)
@@ -748,20 +903,20 @@ defmodule Muro.Meet do
 
   # A match on a nat already in the receiver index is the arm that
   # numeral selects. The value just exchanged is not in the index yet.
-  defp open_nat_match({:match, name, arms}, idx, book) do
+  defp open_nat_match({:match, name, arms}, idx, book, path) do
     case nat_at(idx, name) do
       {:nat, n} ->
-        case Muro.Session.arm(:nat, {:nat, n}, arms, book) do
-          {:ok, leaf} -> open_nat_match(leaf, idx, book)
+        case Muro.Session.arm_at(:nat, {:nat, n}, arms, book) do
+          {:ok, leaf, more} -> open_nat_match(leaf, idx, book, path ++ more)
           :error -> :error
         end
 
       _ ->
-        {:ok, {:match, name, arms}}
+        {:ok, {:match, name, arms}, path}
     end
   end
 
-  defp open_nat_match(proc, _idx, _book), do: {:ok, proc}
+  defp open_nat_match(proc, _idx, _book, path), do: {:ok, proc, path}
 
   defp nat_at(idx, name) do
     case Map.get(idx, name) do

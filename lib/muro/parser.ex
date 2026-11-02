@@ -3218,10 +3218,18 @@ defmodule Muro.Parser do
 
   defp parse_tagged_def(loc, name, s) do
     with {:ok, tag, rest} <- parse_mode(s),
-         {:ok, ty, rest} <- parse_term(skip(rest), 0),
+         {:ok, ty, type_span, rest} <- parse_body_term(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":="),
          {:ok, body, span, rest} <- parse_body_term(skip(rest)) do
-      base = %{name: name, type: ty, body: body, loc: loc, body_span: span}
+      base = %{
+        name: name,
+        type: ty,
+        body: body,
+        loc: loc,
+        type_span: type_span,
+        body_span: span
+      }
+
       {:ok, Map.merge(base, tag), rest}
     end
   end

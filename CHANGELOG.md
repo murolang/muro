@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.7
+
+A meeting's explored configurations are data. The same walk that accepts the meeting records each state, the transition that reached it, and the source location of the step. Moving one process step and asking again returns the refusal and that step's location as data. `Muro.Explore.graph/1` draws one node for each spec, evidence, and run, one edge for each use, and hangs those configurations on the session the meeting belongs to.
+
+`Muro.Emit.outline/3` returns the names, signatures, layouts, and clauses of the OTP, FSM, C, Rust, and Zig emitters without writing source. Each outline is built from that emitter's own intermediate form. C, Rust, and Zig read the `Muro.IR` image they emit from. Names come from `Muro.Emit.Name` and `Muro.Emit.elixir_names/1`.
+
+`muro ui path.muro` prints how to install `muro_visor` and open the book, with a link to this manual. The compiler does not start the explorer. The compiler and the release binaries do not depend on Phoenix. `muro_visor` 0.1.0 is its own package.
+
+### Manual
+
+- Visual explorer: the book as a graph, the backend outlines, and how to install `muro_visor`.
+
+### Package
+
+- Version 0.20.7.
+
 ## 0.20.6
 
 A `temporal` declaration states `always`, `eventually`, or `leads_to` of one buffered meeting. The meeting stays its own entry. A book check explores each meeting once. Every temporal declaration of that meeting reads the recorded outcome, including the configuration graph. A meeting that does not check is skipped. The declaration is evidence. The emitters skip it, including the Zig backend, and `--fuel` does not change its verdict. `mix muro.check` prints `temporal <name>: holds in <n> reachable states` after the version line. A book with no temporal declaration prints what it printed before.

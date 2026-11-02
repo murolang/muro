@@ -150,6 +150,59 @@ defmodule Muro.Emit.C do
   end
 
   @doc """
+  Names, signatures, layouts, and clause heads of the C file `render/2`
+  writes. The signatures are the ones `compile_fun/6` builds for each
+  run. No source is written.
+  """
+  def outline(book, stem) when is_list(book) and is_binary(stem) do
+    case IR.elaborate(book) do
+      {:ok, funs} ->
+        nm = name_map(book)
+
+        with {:ok, sigs, _texts, _extras} <- compile_funs(funs, book, nm),
+             {:ok, groups, _} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
+          {:ok, c_outline(book, sigs, groups)}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp c_outline(book, sigs, groups) do
+    user = Enum.map(groups, fn {fun, _} -> fun end)
+
+    signatures =
+      Enum.zip(sigs, user)
+      |> Enum.map(fn {sig, fun} ->
+        %{
+          source: fun.name,
+          name: sig.name,
+          layout: fun.ret,
+          param_layouts: Enum.map(fun.params, fn {_n, lay} -> lay end),
+          params: Enum.map(sig.params, fn {_ty, cname} -> cname end),
+          ret: sig.ret,
+          export: sig.export
+        }
+      end)
+
+    names =
+      signatures
+      |> Enum.flat_map(fn sig -> [sig.name | sig.params] end)
+      |> Enum.uniq()
+
+    %{
+      names: names,
+      elixir: Emit.elixir_names(book),
+      signatures: signatures,
+      layouts:
+        Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}) ++
+          data_layouts(book),
+      clauses: Enum.map(sigs, &decl/1)
+    }
+  end
+
+  @doc """
   `render/2` plus the signature of each run, in book order.
 
   A signature is `%{name, export, params, ret}`. `name` is the C spelling.
@@ -1415,5 +1468,19 @@ defmodule Muro.Emit.C do
 
   defp data_defs(book) do
     Enum.filter(book, &(Map.get(&1, :kind) == :data))
+  end
+
+  defp data_layouts(book) do
+    Enum.map(data_defs(book), fn d ->
+      ctors =
+        d.ctors
+        |> Enum.with_index()
+        |> Enum.map(fn {ctor, tag} ->
+          fields = Enum.map(live_fields(ctor, book), fn {_ctype, lay, _k} -> lay end)
+          %{name: ctor.name, tag: tag, fields: fields}
+        end)
+
+      %{name: d.name, layout: {:data, d.name}, constructors: ctors}
+    end)
   end
 end

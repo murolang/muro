@@ -10,10 +10,11 @@ defmodule Muro.CliHelpTest do
     Muro.CLI.Init,
     Muro.CLI.Skills,
     Muro.CLI.Deps,
-    Muro.CLI.Mutate
+    Muro.CLI.Mutate,
+    Muro.CLI.Ui
   ]
 
-  @commands ["check", "emit", "gen", "init", "skills", "deps.get", "mutate"]
+  @commands ["check", "emit", "gen", "init", "skills", "deps.get", "mutate", "ui"]
 
   @doc_urls [
     "https://muro-lang.dev",
@@ -27,6 +28,7 @@ defmodule Muro.CliHelpTest do
     "https://muro-lang.dev/docs/emit",
     "https://muro-lang.dev/docs/gen",
     "https://muro-lang.dev/docs/mutate",
+    "https://muro-lang.dev/docs/explorer",
     "https://muro-lang.dev/docs/packages",
     "https://muro-lang.dev/docs/library",
     "https://muro-lang.dev/docs/examples",
@@ -49,7 +51,7 @@ defmodule Muro.CliHelpTest do
     refute first =~ "\e["
 
     lines = first |> String.trim_trailing("\n") |> String.split("\n")
-    assert length(lines) in 50..70
+    assert length(lines) in 50..80
 
     for line <- lines do
       assert String.length(line) <= 80, "usage line longer than 80: #{line}"
@@ -59,7 +61,7 @@ defmodule Muro.CliHelpTest do
   test "help names the commands, the manifest, and where to read next" do
     text = Muro.CLI.usage_text()
 
-    for command <- ["check", "emit", "gen", "init", "skills add", "deps.get", "mutate"] do
+    for command <- ["check", "emit", "gen", "init", "skills add", "deps.get", "mutate", "ui"] do
       assert text =~ command
     end
 
@@ -222,6 +224,7 @@ defmodule Muro.CliHelpTest do
           {["skills", "--nope"], "--nope"},
           {["deps.get", "--nope"], "--nope"},
           {["mutate", "--nope"], "--nope"},
+          {["ui", "--nope"], "--nope"},
           {["check", "--fuel"], "--fuel"}
         ] do
       {out, err, code} = cli(args)
@@ -244,6 +247,71 @@ defmodule Muro.CliHelpTest do
       assert err =~ usage
       refute err =~ "mix muro"
     end
+  end
+
+  test "muro ui names an ipv4 address, a bracketed ipv6 address, and a hostname" do
+    urls = [
+      "http://127.0.0.1:4017/",
+      "http://[::1]:4017/",
+      "http://localhost:4017/"
+    ]
+
+    {:ok, out, ""} = Muro.CLI.Ui.run(["book.muro"])
+    help = Muro.CLI.Ui.help()
+
+    pages = [
+      out,
+      help,
+      File.read!("manual/explorer.md"),
+      File.read!("ui/README.md"),
+      File.read!("ui/CHANGELOG.md"),
+      File.read!("ui/lib/mix/tasks/muro.ui.ex"),
+      File.read!("ui/lib/muro_visor.ex")
+    ]
+
+    for page <- pages, url <- urls do
+      assert page =~ url
+      refute page =~ "http://::1:"
+    end
+  end
+
+  test "muro ui prints how to install muro_visor and does not start the explorer" do
+    {out, err, code} = cli(["ui", "book.muro"])
+    assert code == 0
+    assert err == ""
+    assert out =~ "{:muro_visor, \"~> 0.1.0\"}"
+    assert out =~ "mix deps.get"
+    assert out =~ "mix muro.ui 'book.muro'"
+    refute out =~ "mix muro.ui book.muro\n"
+    refute out =~ "archive.install"
+    assert out =~ "https://muro-lang.dev/docs/explorer"
+    assert out =~ "does not start the explorer"
+    refute out =~ "Phoenix"
+
+    {out, err, code} = cli(["ui"])
+    assert code == 1
+    assert out == ""
+    assert err =~ "usage: muro ui path.muro"
+  end
+
+  test "muro ui resolves the checkout path before changing directory" do
+    {:ok, out, ""} = Muro.CLI.Ui.run(["examples/meet.muro"])
+    abs = Path.expand("examples/meet.muro")
+    assert out =~ "    mix muro.ui 'examples/meet.muro'\n"
+    assert out =~ "cd ui && mix deps.get && mix muro.ui '#{abs}'"
+    refute out =~ "cd ui && mix deps.get && mix muro.ui examples/meet.muro"
+    refute out =~ "mix muro.ui examples/meet.muro\n"
+
+    {:ok, spaced, ""} = Muro.CLI.Ui.run(["my book.muro"])
+    assert spaced =~ "    mix muro.ui 'my book.muro'\n"
+    assert spaced =~ "mix muro.ui '#{Path.expand("my book.muro")}'"
+    refute spaced =~ "mix muro.ui my book.muro"
+
+    {:ok, quoted, ""} = Muro.CLI.Ui.run(["it's.muro"])
+    assert quoted =~ "    mix muro.ui 'it'\\''s.muro'\n"
+    escaped = String.replace(Path.expand("it's.muro"), "'", "'\\''")
+    assert quoted =~ "mix muro.ui '#{escaped}'"
+    refute quoted =~ "mix muro.ui it's.muro"
   end
 
   test "messages that name a Mix task name the executable command instead" do

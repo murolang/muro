@@ -41,6 +41,7 @@ defmodule Muro.Temporal do
           case Muro.Check.check_def(book, meet, fuel) do
             :ok -> :ok
             {:note, _} -> :ok
+            {:graph, _, _, _} -> :ok
             {:error, _} -> :unchecked
           end
       end
@@ -56,9 +57,11 @@ defmodule Muro.Temporal do
 
   def prepare(_book, name, :unchecked), do: {:error, "skipped because #{name} does not check"}
 
-  # The meeting check has already been recorded. This builds that
-  # meeting's configuration graph once: the reachable configurations,
-  # their breadth-first parents, and the successor table.
+  # The meeting check has already been recorded, including the source
+  # configuration graph the explorer draws. This builds the compiled
+  # configuration graph once: the reachable configurations, their
+  # breadth-first parents, and the successor table. Declarations of
+  # this meeting share that result.
   def prepare(book, name, :ok) do
     with {:ok, meet} <- fetch_meet(book, name),
          :ok <- needs_buffer(meet),

@@ -1306,7 +1306,13 @@ defmodule Muro.Mutate do
     mutant_def = %{orig | body: m.db_body}
     book = List.replace_at(db, m.index, mutant_def)
 
-    case Check.check_def(book, mutant_def, fuel) do
+    checked =
+      case Check.check_def(book, mutant_def, fuel) do
+        {:graph, _, _, _} -> :ok
+        other -> other
+      end
+
+    case checked do
       {:error, msg} ->
         cond do
           Check.out_of_fuel?(msg) -> finish(m, "out_of_fuel", nil, [])
@@ -1332,6 +1338,7 @@ defmodule Muro.Mutate do
 
         case Check.check_def(book, d, fuel) do
           :ok -> []
+          {:graph, _, _, _} -> []
           {:error, msg} -> [{dep, msg}]
         end
       end)

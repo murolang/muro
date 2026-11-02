@@ -291,13 +291,23 @@ defmodule Muro.Session do
   def covered?(_, _, _), do: :error
 
   @doc false
-  def arm(ty, val, arms, book) when is_list(book), do: arm(ty, val, arms, prepare(book))
+  def arm(ty, val, arms, book) do
+    case arm_at(ty, val, arms, book) do
+      {:ok, body, _path} -> {:ok, body}
+      :error -> :error
+    end
+  end
+
+  @doc false
+  def arm_at(ty, val, arms, book) when is_list(book), do: arm_at(ty, val, arms, prepare(book))
 
   # A positional arm is that process. A named arm is that process after
   # the value's fields replace its binders. A bare arm is not arity-checked.
   # A product arm is that process after the tuple or the record replaces
-  # its binders. The last binder wins.
-  def arm(ty, val, arms, book) do
+  # its binders. The last binder wins. The path is the source arm, then
+  # each nested match the value opened. Body equality is not the path:
+  # two arms can share a body, and a nested match substitutes the leaf.
+  def arm_at(ty, val, arms, book) do
     val = canon(val, book)
 
     case {ty, val, arms} do
@@ -327,11 +337,14 @@ defmodule Muro.Session do
 
       {{:pair, _, _}, {:tup, a, b}, [{:prod, {:pair, [x, y]}, body}]}
       when is_atom(x) and is_atom(y) ->
-        {:ok, subst_fields([x, y], [a, b], body)}
+        {:ok, subst_fields([x, y], [a, b], body), [0]}
 
       {{:rec, fields}, {:rec, vals}, [{:prod, {:rec, bs}, body}]}
       when is_list(fields) and is_list(vals) and is_list(bs) ->
-        fill_rec(fields, vals, bs, body)
+        case fill_rec(fields, vals, bs, body) do
+          {:ok, body} -> {:ok, body, [0]}
+          :error -> :error
+        end
 
       _ ->
         :error
@@ -350,8 +363,14 @@ defmodule Muro.Session do
 
   defp take_indexed(arms, i, expected, fields, ftys, book) do
     case Enum.at(arms, i) do
-      nil -> :error
-      arm -> take_arm(arm, expected, fields, ftys, book)
+      nil ->
+        :error
+
+      arm ->
+        case take_arm(arm, expected, fields, ftys, book) do
+          {:ok, body, rest} -> {:ok, body, [i | rest]}
+          :error -> :error
+        end
     end
   end
 
@@ -368,13 +387,13 @@ defmodule Muro.Session do
         :error
 
       name not in binders ->
-        {:ok, subst_fields(binders, fields, {:match, name, inner})}
+        {:ok, subst_fields(binders, fields, {:match, name, inner}), []}
 
       true ->
         i = Enum.find_index(binders, &(&1 == name))
 
-        case arm(Enum.at(ftys, i), Enum.at(fields, i), inner, book) do
-          {:ok, leaf} -> {:ok, subst_fields(binders, fields, leaf)}
+        case arm_at(Enum.at(ftys, i), Enum.at(fields, i), inner, book) do
+          {:ok, leaf, path} -> {:ok, subst_fields(binders, fields, leaf), path}
           :error -> :error
         end
     end
@@ -385,12 +404,12 @@ defmodule Muro.Session do
     cond do
       ctor != expected -> :error
       length(binders) != length(fields) -> :error
-      true -> {:ok, subst_fields(binders, fields, body)}
+      true -> {:ok, subst_fields(binders, fields, body), []}
     end
   end
 
   defp take_arm({:prod, _, _}, _expected, _fields, _ftys, _book), do: :error
-  defp take_arm(proc, _expected, _fields, _ftys, _book), do: {:ok, proc}
+  defp take_arm(proc, _expected, _fields, _ftys, _book), do: {:ok, proc, []}
 
   # The record's fields, in type order. A missing key does not open the arm.
   defp fill_rec(fields, vals, bs, body) do
@@ -764,31 +783,352 @@ defmodule Muro.Session do
 
   @doc false
   def conform_at(proc, proto, book, steps) do
+    case judge(proc, proto, book, steps) do
+      :ok ->
+        :ok
+
+      {:no, p, s} ->
+        {:error, nil, blame(p, s, nil)}
+
+      {:no, p, s, reason, at} ->
+        {:error, at, blame(p, s, reason)}
+
+      {:error, msg} ->
+        {:error, nil, msg}
+
+      {:error, at, msg} ->
+        {:error, at, msg}
+    end
+  end
+
+  @doc """
+  Re-check `proc` against `proto` after moving the step at `index` one
+  place earlier. The result is the refusal as data. `index` 0 has no
+  earlier place. A step that is not a send, a receive, or a choice, or
+  a neighbour that is not one either, is `:immovable`.
+
+  `:still_conforms` means the moved process still conforms. `:refused`
+  is the pair `decide` returns `no` for, with the source location of
+  that step. `:error` is a check that did not return a pair.
+  """
+  def out_of_order(proc, proto, book, steps, index) when is_integer(index) and index >= 0 do
+    case move_earlier(proc, steps, index) do
+      {:immovable, loc} ->
+        pack(:immovable, loc, nil, nil, nil, index)
+
+      {:ok, proc2, steps2, loc} ->
+        judge_moved(proc2, proto, book, steps2, loc, index)
+    end
+  end
+
+  @doc false
+  def out_of_order(proc, proto, book, steps, {:down, index, path})
+      when is_integer(index) and index >= 0 and is_list(path) do
+    items = pieces(proc, steps)
+    address = {:down, index, path}
+
+    case Enum.at(items, index) do
+      {:rest, nested, span, wrappers} ->
+        case move_path(nested, span, path) do
+          {:ok, nested2, span2, loc} ->
+            replaced = List.replace_at(items, index, {:rest, nested2, span2, wrappers})
+            {proc2, steps2} = rebuild_chain(replaced)
+            judge_moved(proc2, proto, book, steps2, loc, address)
+
+          {:immovable, loc} ->
+            pack(:immovable, loc, nil, nil, nil, address)
+        end
+
+      item ->
+        loc = if item, do: piece_at(item), else: nil
+        pack(:immovable, loc, nil, nil, nil, address)
+    end
+  end
+
+  @doc false
+  def spine(proc, steps), do: linearize(proc, steps)
+
+  defp judge(proc, proto, book, steps) do
     Process.put(@span_key, steps)
     Process.put(@pspans_key, %{})
 
     try do
-      case go(proc, proto, %{}, %{}, %{}, %{}, MapSet.new(), @conform_fuel, prepare(book)) do
-        :ok ->
-          :ok
-
-        {:no, p, s} ->
-          {:error, nil, blame(p, s, nil)}
-
-        {:no, p, s, reason, at} ->
-          {:error, at, blame(p, s, reason)}
-
-        {:error, msg} ->
-          {:error, nil, msg}
-
-        {:error, at, msg} ->
-          {:error, at, msg}
-      end
+      go(proc, proto, %{}, %{}, %{}, %{}, MapSet.new(), @conform_fuel, prepare(book))
     after
       Process.delete(@span_key)
       Process.delete(@pspans_key)
     end
   end
+
+  defp judge_moved(proc, proto, book, steps, loc, index) do
+    case judge(proc, proto, book, steps) do
+      :ok ->
+        pack(:still_conforms, loc, nil, nil, nil, index)
+
+      {:no, p, s} ->
+        pack(:refused, loc, p, s, nil, index)
+
+      {:no, p, s, reason, at} ->
+        pack(:refused, at || loc, p, s, reason, index)
+
+      {:error, at, msg} when is_binary(msg) ->
+        pack(:error, at || loc, nil, nil, msg, index)
+
+      {:error, msg} ->
+        pack(:error, loc, nil, nil, msg, index)
+    end
+  end
+
+  defp pack(kind, loc, proc, proto, reason, index) do
+    %{kind: kind, loc: loc, proc: proc, proto: proto, reason: reason, index: index}
+  end
+
+  # Pieces keep the `rec` wrappers `linearize/2` drops. An index still
+  # counts the same actions. A swap stays inside one wrapper stack, and
+  # the rebuilt process puts those wrappers back.
+  defp pieces(proc, span), do: pieces(proc, span, [])
+
+  defp pieces({:rec, name, body}, span, wrappers) do
+    pieces(body, step_down(span, 0), wrappers ++ [{:rec, name, step_at(span)}])
+  end
+
+  defp pieces({:put, ty, val, cont}, span, wrappers) do
+    [
+      {:act, :put, {ty, val}, step_at(span), wrappers}
+      | pieces(cont, step_down(span, 0), wrappers)
+    ]
+  end
+
+  defp pieces({:get, ty, name, cont}, span, wrappers) do
+    [
+      {:act, :get, {ty, name}, step_at(span), wrappers}
+      | pieces(cont, step_down(span, 0), wrappers)
+    ]
+  end
+
+  defp pieces({:pick0, cont}, span, wrappers) do
+    [{:act, :pick0, {}, step_at(span), wrappers} | pieces(cont, step_down(span, 0), wrappers)]
+  end
+
+  defp pieces({:pick1, cont}, span, wrappers) do
+    [{:act, :pick1, {}, step_at(span), wrappers} | pieces(cont, step_down(span, 0), wrappers)]
+  end
+
+  defp pieces(other, span, wrappers), do: [{:rest, other, span, wrappers}]
+
+  defp move_earlier(proc, span, index) do
+    items = pieces(proc, span)
+    earlier = Enum.at(items, index - 1)
+    moved = Enum.at(items, index)
+    loc = if moved, do: piece_at(moved), else: nil
+
+    cond do
+      index < 1 or index >= length(items) ->
+        {:immovable, loc}
+
+      not (piece_swappable?(earlier) and piece_swappable?(moved) and
+               wraps(earlier) == wraps(moved)) ->
+        {:immovable, loc}
+
+      true ->
+        {proc2, span2} = rebuild_chain(swap_at(items, index))
+        {:ok, proc2, span2, loc}
+    end
+  end
+
+  # `path` is the address under a spine rest: a branch index, then a
+  # local index in that branch, then the same shape again for a nested
+  # branch. `rec` is not an address. The integer after an arm index is
+  # that arm's own sequence index, even when the arm opens on a branch.
+  defp move_path(_proc, _span, []), do: {:immovable, nil}
+
+  defp move_path({:rec, name, body}, span, path) do
+    case move_path(body, step_down(span, 0), path) do
+      {:ok, body2, span2, loc} ->
+        {:ok, {:rec, name, body2}, %{at: step_at(span), down: [span2]}, loc}
+
+      other ->
+        other
+    end
+  end
+
+  defp move_path({:cover, p, q}, span, [i | rest]) when i in [0, 1] do
+    child = if i == 0, do: p, else: q
+
+    case move_sequence(child, step_down(span, i), rest) do
+      {:ok, child2, cspan, loc} ->
+        proc = if i == 0, do: {:cover, child2, q}, else: {:cover, p, child2}
+        {:ok, proc, put_down(span, i, cspan), loc}
+
+      other ->
+        other
+    end
+  end
+
+  defp move_path({:iget, name, p, q}, span, [i | rest]) when i in [0, 1] do
+    child = if i == 0, do: p, else: q
+
+    case move_sequence(child, step_down(span, i), rest) do
+      {:ok, child2, cspan, loc} ->
+        proc = if i == 0, do: {:iget, name, child2, q}, else: {:iget, name, p, child2}
+        {:ok, proc, put_down(span, i, cspan), loc}
+
+      other ->
+        other
+    end
+  end
+
+  defp move_path({:match, scrut, arms}, span, [i | rest]) when is_integer(i) do
+    case Enum.at(arms, i) do
+      nil ->
+        {:immovable, nil}
+
+      arm ->
+        case move_sequence(arm_body(arm), step_down(span, i), rest) do
+          {:ok, body2, bspan, loc} ->
+            arms2 = List.replace_at(arms, i, put_arm_body(arm, body2))
+            {:ok, {:match, scrut, arms2}, put_down(span, i, bspan), loc}
+
+          other ->
+            other
+        end
+    end
+  end
+
+  defp move_path(proc, span, path), do: move_sequence(proc, span, path)
+
+  defp move_sequence(_proc, _span, []), do: {:immovable, nil}
+
+  defp move_sequence(proc, span, [k]) when is_integer(k), do: move_earlier(proc, span, k)
+
+  defp move_sequence(proc, span, [k | rest]) when is_integer(k) do
+    items = pieces(proc, span)
+
+    case Enum.at(items, k) do
+      {:rest, nested, nspan, wrappers} ->
+        case move_path(nested, nspan, rest) do
+          {:ok, nested2, nspan2, loc} ->
+            replaced = List.replace_at(items, k, {:rest, nested2, nspan2, wrappers})
+            {proc2, span2} = rebuild_chain(replaced)
+            {:ok, proc2, span2, loc}
+
+          other ->
+            other
+        end
+
+      _ ->
+        {:immovable, nil}
+    end
+  end
+
+  defp move_sequence(_proc, _span, _path), do: {:immovable, nil}
+
+  defp piece_swappable?({:act, kind, _, _, _}) when kind in [:put, :get, :pick0, :pick1], do: true
+  defp piece_swappable?(_), do: false
+
+  defp wraps({:act, _, _, _, w}), do: w
+  defp wraps({:rest, _, _, w}), do: w
+
+  defp piece_at({:act, _, _, at, _}), do: at
+  defp piece_at({:rest, _, span, _}), do: step_at(span)
+
+  defp swap_at(items, index) do
+    a = Enum.at(items, index - 1)
+    b = Enum.at(items, index)
+    items |> List.replace_at(index - 1, b) |> List.replace_at(index, a)
+  end
+
+  defp put_down(%{at: at, down: ds}, i, child) when is_list(ds) and is_integer(i) do
+    %{at: at, down: List.replace_at(ds, i, child)}
+  end
+
+  defp put_down(_span, _i, child), do: child
+
+  defp put_arm_body({:arm, c, xs, _}, body), do: {:arm, c, xs, body}
+  defp put_arm_body({:prod, pat, _}, body), do: {:prod, pat, body}
+  defp put_arm_body(_arm, body), do: body
+
+  defp rebuild_chain([{:rest, proc, span, []}]), do: {proc, span}
+
+  defp rebuild_chain([{:act, kind, data, at, []} | rest]) do
+    {cont, cspan} = rebuild_chain(rest)
+    {act_proc(kind, data, cont), %{at: at, down: [cspan]}}
+  end
+
+  defp rebuild_chain([head | _] = all) do
+    w = wraps(head)
+    {group, tail} = Enum.split_while(all, &(wraps(&1) == w))
+    peeled = Enum.map(group, &clear_wrap/1)
+
+    {body, bspan} =
+      if tail == [] do
+        rebuild_chain(peeled)
+      else
+        # `tail` still carries `w`. Wrapping it again would shadow the
+        # outer binder with a second copy of the same `rec`.
+        stripped = Enum.map(tail, &strip_wrap(&1, w))
+        {cont, cspan} = rebuild_chain(stripped)
+        rebuild_onto(peeled, cont, cspan)
+      end
+
+    wrap_recs(body, bspan, w)
+  end
+
+  defp strip_wrap(item, prefix) do
+    kept =
+      if List.starts_with?(wraps(item), prefix) do
+        Enum.drop(wraps(item), length(prefix))
+      else
+        wraps(item)
+      end
+
+    case item do
+      {:act, k, d, at, _} -> {:act, k, d, at, kept}
+      {:rest, p, s, _} -> {:rest, p, s, kept}
+    end
+  end
+
+  defp rebuild_onto([], cont, cspan), do: {cont, cspan}
+
+  defp rebuild_onto([{:act, kind, data, at, []} | rest], cont, cspan) do
+    {inner, ispan} = rebuild_onto(rest, cont, cspan)
+    {act_proc(kind, data, inner), %{at: at, down: [ispan]}}
+  end
+
+  defp clear_wrap({:act, k, d, at, _}), do: {:act, k, d, at, []}
+  defp clear_wrap({:rest, p, s, _}), do: {:rest, p, s, []}
+
+  defp act_proc(:put, {ty, val}, cont), do: {:put, ty, val, cont}
+  defp act_proc(:get, {ty, name}, cont), do: {:get, ty, name, cont}
+  defp act_proc(:pick0, {}, cont), do: {:pick0, cont}
+  defp act_proc(:pick1, {}, cont), do: {:pick1, cont}
+
+  defp wrap_recs(proc, span, []), do: {proc, span}
+
+  defp wrap_recs(proc, span, [{:rec, name, at} | rest]) do
+    {inner, ispan} = wrap_recs(proc, span, rest)
+    {{:rec, name, inner}, %{at: at, down: [ispan]}}
+  end
+
+  defp linearize({:put, ty, val, cont}, span) do
+    [{:put, ty, val, step_at(span)} | linearize(cont, step_down(span, 0))]
+  end
+
+  defp linearize({:get, ty, name, cont}, span) do
+    [{:get, ty, name, step_at(span)} | linearize(cont, step_down(span, 0))]
+  end
+
+  defp linearize({:pick0, cont}, span) do
+    [{:pick0, step_at(span)} | linearize(cont, step_down(span, 0))]
+  end
+
+  defp linearize({:pick1, cont}, span) do
+    [{:pick1, step_at(span)} | linearize(cont, step_down(span, 0))]
+  end
+
+  defp linearize({:rec, _, body}, span), do: linearize(body, step_down(span, 0))
+
+  defp linearize(other, span), do: [{:rest, other, span}]
 
   defp blame(p, s, nil), do: "#{show_proc(p)} does not conform to #{show_proto(s)}"
   defp blame(p, s, reason), do: "#{show_proc(p)} does not conform to #{show_proto(s)}: #{reason}"
@@ -5662,6 +6002,67 @@ defmodule Muro.Session do
   def step_down(nil, _), do: nil
   def step_down(%{down: ds}, i) when is_list(ds), do: Enum.at(ds, i)
   def step_down(_, _), do: nil
+
+  @doc false
+  def shift_span(span, {:into, i}) when is_integer(i) do
+    span |> step_down(0) |> step_down(i)
+  end
+
+  def shift_span(span, {:into, path}) when is_list(path) do
+    Enum.reduce(path, step_down(span, 0), fn i, span -> step_down(span, i) end)
+  end
+
+  def shift_span(span, i) when is_integer(i), do: step_down(span, i)
+  def shift_span(span, _), do: span
+
+  @doc """
+  The span of the head `unwind_proc` exposes.
+
+  A `rec` steps into its body. A `call` steps into the body of the
+  `rec` that bound the name, using `pspans` recorded on the way in.
+  The returned span is that head. `pspans` keeps every `rec` seen, so
+  a later jump finds it. The stored span is not replaced by the caller:
+  chasing again from the same `rec` would step past it.
+  """
+  def expose_span(proc, span, env \\ %{}, pspans \\ %{}) do
+    expose_span(proc, span, env, pspans, MapSet.new())
+  end
+
+  defp expose_span({:rec, name, body} = term, span, env, pspans, stack) do
+    if MapSet.member?(stack, term) do
+      {span, pspans}
+    else
+      expose_span(
+        body,
+        step_down(span, 0),
+        Map.put(env, name, term),
+        Map.put(pspans, name, span),
+        MapSet.put(stack, term)
+      )
+    end
+  end
+
+  defp expose_span({:call, name}, span, env, pspans, stack) do
+    case Map.get(env, name) do
+      {:rec, _, body} = term ->
+        if MapSet.member?(stack, term) do
+          {span, pspans}
+        else
+          expose_span(
+            body,
+            step_down(Map.get(pspans, name), 0),
+            env,
+            pspans,
+            MapSet.put(stack, term)
+          )
+        end
+
+      _ ->
+        {span, pspans}
+    end
+  end
+
+  defp expose_span(_proc, span, _env, pspans, _stack), do: {span, pspans}
 
   @doc false
   def step_proc(:done), do: "done"

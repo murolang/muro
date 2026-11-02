@@ -23,6 +23,24 @@ defmodule Muro.Emit.Fsm do
   separators, so the text does not depend on the working directory.
   """
   def render(book, path, module, opts \\ []) when is_list(book) and is_atom(module) do
+    case plan(book, path, opts) do
+      {:ok, st} -> {:ok, source(module, book, st)}
+      {:error, _} = err -> err
+    end
+  end
+
+  @doc """
+  Names, signatures, layouts, and clause heads of the state machine
+  `render/4` writes. The clauses are the strings `child/4` places in
+  each nested module, taken from the opened sessions. No source is written.
+  """
+  def outline(book, path, module, opts \\ []) when is_list(book) and is_atom(module) do
+    with {:ok, st} <- plan(book, path, opts) do
+      {:ok, fsm_outline(module, book, st)}
+    end
+  end
+
+  defp plan(book, path, opts) do
     label = book_label(path, opts)
 
     case Enum.filter(book, &(Map.get(&1, :kind) == :session)) do
@@ -43,11 +61,61 @@ defmodule Muro.Emit.Fsm do
           label: label
         }
 
-        case open_all(sessions, st) do
-          {:ok, st} -> {:ok, source(module, book, st)}
-          {:error, _} = err -> err
-        end
+        open_all(sessions, st)
     end
+  end
+
+  defp fsm_outline(module, book, st) do
+    aliases = Emit.elixir_modules(Enum.map(st.sessions, & &1.name))
+
+    signatures =
+      Enum.map(st.sessions, fn sess ->
+        entry = Map.fetch!(st.opened, sess.name)
+
+        %{
+          source: sess.name,
+          name: Map.fetch!(aliases, sess.name),
+          layout: entry.proto,
+          param_layouts: entry.params,
+          params: Enum.map(entry.params, &to_string/1),
+          ret: entry.end_step,
+          export: true
+        }
+      end)
+
+    clauses =
+      Enum.flat_map(st.sessions, fn sess ->
+        camel = Map.fetch!(aliases, sess.name)
+        entry = Map.fetch!(st.opened, sess.name)
+        key = sess.name
+
+        init =
+          if entry.params == [] do
+            ["muro_fsm_init(#{inspect(key)}, [])"]
+          else
+            []
+          end
+
+        [
+          "defmodule #{camel} do",
+          "def unquote(:send)(state, value)",
+          "muro_fsm_step(#{inspect(key)}, :send, state, value)",
+          "def recv(state, value)",
+          "muro_fsm_step(#{inspect(key)}, :recv, state, value)",
+          "muro_fsm_done?(#{inspect(key)}, state)",
+          "muro_fsm_expected(#{inspect(key)}, state)",
+          entry.end_step
+        ] ++ init
+      end)
+
+    %{
+      names: [inspect(module) | Map.values(aliases)] |> Enum.uniq(),
+      elixir: Emit.elixir_names(book),
+      signatures: signatures,
+      layouts:
+        Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}),
+      clauses: clauses
+    }
   end
 
   defp book_label(path, opts) do

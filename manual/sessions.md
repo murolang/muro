@@ -574,3 +574,5 @@ A refusal names the step and the position of that step. The line and column are 
 ```
 
 A meeting names the first step where the two processes disagree, the path that got there, and the protocol both were checked against. `diverged after put 0, get b, arm b1: left: put goaway; right: get (f : Frame); protocol: recv Frame end` is that step: the left process puts `goaway` and the right process gets a `Frame`. A meeting whose participant failed its own conform is not run. The report says `skipped because bad does not conform`, and the conform is the diagnosis.
+
+The configurations a meeting proved are the ones that walk recorded. [Visual explorer](explorer.md) draws them inside the session, with one node per definition and one edge per use. `muro ui path.muro` prints how to open that view. It does not start it.

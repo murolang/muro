@@ -76,7 +76,7 @@ defmodule Muro.ReleaseTest do
     File.chmod!(Path.join(stub_dir, "docker"), 0o755)
     dist = Path.join(dir, "dist")
     File.mkdir_p!(dist)
-    File.write!(Path.join(dist, "muro-0.20.6-linux-x86_64"), "bin")
+    File.write!(Path.join(dist, "muro-0.20.7-linux-x86_64"), "bin")
     host = Path.join(dir, "smoke.sh")
     File.write!(host, smoke)
 
@@ -136,6 +136,13 @@ defmodule Muro.ReleaseTest do
     {liar_out, liar_status} = System.cmd("bash", [script, liar], stderr_to_stdout: true)
     assert liar_status != 0
     assert liar_out =~ "std smoke did not accept use_std.muro"
+  end
+
+  test "the hex package does not ship the explorer" do
+    files = Muro.MixProject.project()[:package][:files]
+    refute Enum.any?(files, &String.starts_with?(&1, "ui"))
+    refute "ui" in files
+    refute Enum.any?(files, &(&1 == "ui" or String.starts_with?(&1, "ui/")))
   end
 
   defp checker_shim(dir) do

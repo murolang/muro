@@ -1,0 +1,7 @@
+def peer-echo : run Nat := 0
+
+def muro__look : run Nat := 0
+
+def muro__a-b : run Nat := peer-echo
+
+def it's : run Nat := muro__look

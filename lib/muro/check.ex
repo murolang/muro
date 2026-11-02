@@ -2620,9 +2620,11 @@ defmodule Muro.Check do
          :ok <- guard_sits(book, lp, left),
          :ok <- guard_sits(book, rp, right),
          {:ok, l} <- process_session(book, lp),
-         {:ok, r} <- process_session(book, rp),
-         :ok <- meet_ends(book, l, r, left, right, Map.get(d, :buffer)) do
-      :ok
+         {:ok, r} <- process_session(book, rp) do
+      case meet_ends(book, l, r, left, right, Map.get(d, :buffer)) do
+        {:ok, graph} -> {:graph, name, l.session, graph}
+        {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+      end
     else
       {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
     end
@@ -2679,12 +2681,18 @@ defmodule Muro.Check do
 
   defp meet_ends(book, l, r, _left, _right, nil) do
     with :ok <- other_end(l.proto, r.proto) do
-      Muro.Meet.meets(l.proc, r.proc, book, l.proto)
+      case Muro.Meet.graph(l.proc, r.proc, book, l.proto, {l.steps, r.steps}) do
+        {:ok, graph} -> {:ok, graph}
+        {{:error, msg}, _graph} -> {:error, msg}
+      end
     end
   end
 
   defp meet_ends(book, l, r, left, right, k) when is_integer(k) do
-    Muro.Async.meets(l.proc, r.proc, book, k, left, right)
+    case Muro.Async.recorded(l.proc, r.proc, book, k, left, right, {l.steps, r.steps}) do
+      {:ok, graph} -> {:ok, graph}
+      {:error, msg, _graph} -> {:error, msg}
+    end
   end
 
   # The meeting is not a second report of a process that already failed.
@@ -2998,12 +3006,15 @@ defmodule Muro.Check do
 
   defp resolve_dual_target(_book, _, _), do: {:error, "unknown session"}
 
-  defp open_session(book, name) when is_binary(name),
+  @doc false
+  def open_session(book, name) when is_binary(name),
     do: resolve_session(book, name, MapSet.new())
 
-  defp open_session(book, {:sess, name, args}) do
+  def open_session(book, {:sess, name, args}) do
     Muro.Session.open_applied(book, name, args)
   end
+
+  def open_session(_book, _other), do: {:error, "unknown session"}
 
   # Names expand before `seen`. Two names of one body are one description.
   # The stack is the talks currently being expanded, not the dual walk.
@@ -3143,16 +3154,30 @@ defmodule Muro.Check do
     end
   end
 
-  defp process_session(book, %{kind: :conform, session: sname, proc: proc}) do
+  defp process_session(book, %{kind: :conform, name: name, session: sname, proc: proc} = d) do
     with {:ok, session} <- open_session(book, sname) do
-      {:ok, %{proc: proc, proto: session.proto}}
+      {:ok,
+       %{
+         name: name,
+         proc: proc,
+         proto: session.proto,
+         steps: Map.get(d, :steps),
+         session: session.name
+       }}
     end
   end
 
-  defp process_session(book, %{kind: :read, endpoint: ename, proc: proc}) do
+  defp process_session(book, %{kind: :read, name: name, endpoint: ename, proc: proc} = d) do
     with {:ok, endpoint} <- fetch_endpoint(book, ename),
-         {:ok, session} <- fetch_session(book, endpoint.session) do
-      {:ok, %{proc: proc, proto: session.proto}}
+         {:ok, session} <- open_session(book, endpoint.session) do
+      {:ok,
+       %{
+         name: name,
+         proc: proc,
+         proto: session.proto,
+         steps: Map.get(d, :steps),
+         session: session.name
+       }}
     end
   end
 
@@ -3445,7 +3470,53 @@ defmodule Muro.Check do
     end
   end
 
+  @graphs_key {__MODULE__, :meeting_graphs}
   @temporal_key {__MODULE__, :temporal_lines}
+
+  @doc false
+  def begin_meeting_graphs, do: Process.put(@graphs_key, %{})
+
+  @doc false
+  def take_meeting_graphs do
+    graphs = Process.get(@graphs_key, %{})
+    Process.delete(@graphs_key)
+    graphs
+  end
+
+  @doc false
+  def stamp_meeting_graphs(book, graphs) when is_list(book) and is_map(graphs) do
+    Enum.map(book, fn
+      %{kind: :meet, name: name} = d ->
+        case Map.get(graphs, name) do
+          {session, g} when is_binary(session) and is_map(g) ->
+            Map.merge(d, %{graph: g, session: session})
+
+          _ ->
+            d
+        end
+
+      d ->
+        d
+    end)
+  end
+
+  @doc false
+  def check_hook(fun) when is_function(fun, 0) do
+    :persistent_term.put({__MODULE__, :hook}, fun)
+    :ok
+  end
+
+  def check_hook(nil) do
+    :persistent_term.erase({__MODULE__, :hook})
+    :ok
+  end
+
+  defp note_check do
+    case :persistent_term.get({__MODULE__, :hook}, nil) do
+      fun when is_function(fun, 0) -> fun.()
+      _ -> :ok
+    end
+  end
 
   @doc """
   Success lines of the temporal declarations in the book just checked,
@@ -3464,13 +3535,15 @@ defmodule Muro.Check do
   is not cut off by a wall-clock timeout.
   A temporal declaration that holds adds one line to `temporal_lines/0`.
 
-  Each meeting is checked once. Its outcome is recorded, and when a
-  temporal declaration names it the configuration graph is explored
-  once and recorded beside that outcome. Meeting results, temporal
-  judgments, and their diagnostics all read those records. A meeting
-  that does not check is skipped, and its graph is not explored.
+  Each meeting is checked once. That walk records the source
+  configuration graph the explorer draws, and it is not run again for
+  the drawing. When a temporal declaration names the meeting, the
+  compiled configuration graph is explored once and shared by every
+  declaration of that meeting. A meeting that does not check is
+  skipped, and its compiled graph is not explored.
   """
   def check_sig(named_book, opts \\ []) do
+    note_check()
     Process.delete(@temporal_key)
     fuel = Keyword.get(opts, :fuel, @fuel)
     # `params: :open` keeps unsupplied params as assumptions. The default
@@ -3506,6 +3579,9 @@ defmodule Muro.Check do
 
       case errors do
         [] ->
+          graphs = for {:graph, name, session, g} <- outcomes, do: {name, {session, g}}
+          prev = Process.get(@graphs_key, %{})
+          Process.put(@graphs_key, Map.merge(prev, Map.new(graphs)))
           if notes != [], do: Process.put(@temporal_key, notes)
           :ok
 
@@ -3547,6 +3623,7 @@ defmodule Muro.Check do
       :absent -> :absent
       :ok -> :ok
       {:note, _} -> :ok
+      {:graph, _, _, _} -> :ok
       {:error, _} -> :unchecked
     end
   end

@@ -66,7 +66,7 @@ defmodule Muro.Load do
     case resolve(path, [], opts, ctx) do
       {:ok, flat, ctx} ->
         case all_supplied(flat, path, opts, ctx) do
-          :ok -> {:ok, flat, conform_lines(ctx)}
+          {:ok, flat} -> {:ok, flat, conform_lines(ctx)}
           {:error, msg} -> {:error, note_packages(msg)}
         end
 
@@ -155,8 +155,8 @@ defmodule Muro.Load do
            {:ok, parsed} <- parse(src, path, ctx),
            {:ok, flat, ctx} <- inline(parsed, path, stack, opts, ctx),
            {:ok, {flat, checks}, ctx} <- supply(flat, ctx),
-           :ok <- check_supplied(flat, checks, path, opts, ctx) do
-        {:ok, flat, ctx}
+           {:ok, graphs} <- check_supplied(flat, checks, path, opts, ctx) do
+        {:ok, Check.stamp_meeting_graphs(flat, graphs), ctx}
       end
     else
       {:error, "missing file #{display(path, ctx)}"}
@@ -172,8 +172,8 @@ defmodule Muro.Load do
          {:ok, parsed} <- parse(bytes, path, ctx),
          {:ok, flat, ctx} <- inline(parsed, path, stack, opts, ctx),
          {:ok, {flat, checks}, ctx} <- supply(flat, ctx),
-         :ok <- check_supplied(flat, checks, path, opts, ctx) do
-      {:ok, flat, remember(ctx, path, name, rel, bytes)}
+         {:ok, graphs} <- check_supplied(flat, checks, path, opts, ctx) do
+      {:ok, Check.stamp_meeting_graphs(flat, graphs), remember(ctx, path, name, rel, bytes)}
     end
   end
 
@@ -230,7 +230,7 @@ defmodule Muro.Load do
   # A book with a param nobody supplied yet is checked where it is
   # imported, once its params are definitions.
   defp check_supplied(flat, checks, path, opts, ctx) do
-    if Enum.any?(flat, &param?/1), do: :ok, else: check(flat ++ checks, path, opts, ctx)
+    if Enum.any?(flat, &param?/1), do: {:ok, %{}}, else: check(flat ++ checks, path, opts, ctx)
   end
 
   defp param?(d), do: Map.get(d, :kind) == :param
@@ -288,11 +288,14 @@ defmodule Muro.Load do
   defp all_supplied(flat, path, opts, ctx) do
     case Enum.filter(flat, &param?/1) do
       [] ->
-        :ok
+        {:ok, flat}
 
       ps ->
         if Keyword.get(opts, :params) == :open do
-          check(flat, path, opts, ctx)
+          case check(flat, path, opts, ctx) do
+            {:ok, graphs} -> {:ok, Check.stamp_meeting_graphs(flat, graphs)}
+            {:error, _} = err -> err
+          end
         else
           {:error,
            Enum.map_join(ps, "\n", fn p ->
@@ -355,10 +358,15 @@ defmodule Muro.Load do
 
   defp check(book, path, opts, ctx) do
     book = Enum.map(book, &relocate(&1, path, ctx))
+    Check.begin_meeting_graphs()
 
     case Check.check_sig(Prelude.for_check(book), opts) do
-      :ok -> :ok
-      {:error, msg} -> {:error, prefix_locs(msg, path, ctx)}
+      :ok ->
+        {:ok, Check.take_meeting_graphs()}
+
+      {:error, msg} ->
+        Check.take_meeting_graphs()
+        {:error, prefix_locs(msg, path, ctx)}
     end
   end
 
@@ -445,8 +453,8 @@ defmodule Muro.Load do
     with {:ok, parsed} <- parse(bytes, id, ctx),
          {:ok, flat, ctx} <- inline(parsed, id, stack, opts, ctx),
          {:ok, {flat, checks}, ctx} <- supply(flat, ctx),
-         :ok <- check_supplied(flat, checks, id, opts, ctx) do
-      {:ok, flat, ctx}
+         {:ok, graphs} <- check_supplied(flat, checks, id, opts, ctx) do
+      {:ok, Check.stamp_meeting_graphs(flat, graphs), ctx}
     end
   end
 

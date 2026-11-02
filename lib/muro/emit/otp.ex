@@ -48,6 +48,79 @@ defmodule Muro.Emit.Otp do
     {:ok, source(parent, mods, decls, fragment, host_clauses(book)) |> with_meetings(meets)}
   end
 
+  @doc """
+  The GenServer outline `render/2` draws from: module names, skeletons,
+  mailbox, and the `handle_info` / `handle_call` clauses. The names are
+  `module_name/1`, `Muro.Emit.elixir_modules/1`, and `Name.claim/2` on
+  `Muro.Emit.elixir_base/1`. No source is written.
+  """
+  def outline(book, stem) when is_list(book) and is_binary(stem) do
+    parent = module_name(stem)
+    mods = modules(book)
+    meets = meetings(book)
+    hosts = host_clauses(book)
+
+    names =
+      [parent | Enum.map(mods, &elem(&1, 0))] ++ Enum.map(meets, &elem(&1, 0))
+
+    clauses =
+      [
+        "use GenServer",
+        "def start(skel, peer) when is_pid(peer)",
+        "def init({skel, peer})",
+        "def handle_info(:muro_go, %{skel: skel} = st)",
+        "def handle_info({:muro, from, _value} = msg, %{peer: peer} = st)",
+        "queue: []"
+      ] ++
+        host_lines(hosts) ++
+        Enum.flat_map(mods, fn {name, skel} ->
+          ["defmodule #{name} do", "#{parent}.start(#{inspect(skel)}, peer)"]
+        end) ++ meeting_clauses(meets)
+
+    signatures =
+      Enum.map(mods, fn {name, skel} ->
+        %{
+          source: name,
+          name: name,
+          layout: skel,
+          param_layouts: [],
+          params: ["peer"],
+          ret: "skel",
+          export: true
+        }
+      end)
+
+    {:ok,
+     %{
+       names: Enum.uniq(names),
+       elixir: Muro.Emit.elixir_names(book),
+       signatures: signatures,
+       layouts: Enum.map(mods, fn {name, skel} -> %{name: name, layout: skel} end),
+       clauses: clauses
+     }}
+  end
+
+  defp host_lines(hosts) do
+    hosts
+    |> String.split("\n")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp meeting_clauses([]) do
+    []
+  end
+
+  defp meeting_clauses(meets) do
+    [
+      "def handle_call({:muro_peer, peer}, _from, %{peer: nil} = st)",
+      "def init({skel, :open})"
+    ] ++
+      Enum.flat_map(meets, fn {name, left, right} ->
+        ["def #{name} do", "exchange(#{inspect(left)}, #{inspect(right)})"]
+      end)
+  end
+
   defp modules(book) do
     procs = Enum.filter(book, &process?/1)
     aliases = Muro.Emit.elixir_modules(Enum.map(procs, & &1.name))

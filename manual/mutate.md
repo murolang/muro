@@ -87,7 +87,7 @@ Exit `0` means the book checked and survivors are within the limit. Exit `1` mea
 ```json
 {
   "book": "examples/half_ok.muro",
-  "version": "0.20.6",
+  "version": "0.20.7",
   "summary": {
     "killed": 5,
     "surviving": 1,

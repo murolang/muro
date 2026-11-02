@@ -3,7 +3,7 @@ defmodule Muro.TemporalTest do
 
   import ExUnit.CaptureIO
 
-  alias Muro.{Check, Parser}
+  alias Muro.{Ast, Check, Explore, Parser}
 
   @echo """
   session echo := rec X. send Nat (recv Nat X)
@@ -210,6 +210,30 @@ defmodule Muro.TemporalTest do
              graph: "echo-wire",
              graph: "spin-wire"
            ]
+  end
+
+  test "the explorer draws the source graph recorded on the meeting check" do
+    assert {:ok, parsed} = Parser.parse(@echo)
+    assert {:ok, db} = Ast.book_to_db(parsed)
+
+    events =
+      explorations(fn ->
+        assert Check.check_sig(parsed) == :ok
+        assert length(Check.temporal_lines()) == 3
+      end)
+
+    assert events == [meeting: "echo-wire", graph: "echo-wire"]
+
+    graphs = Check.take_meeting_graphs()
+    assert {session, recorded} = Map.fetch!(graphs, "echo-wire")
+    assert is_binary(session)
+    assert recorded.states != []
+
+    sentinel = %{id: -1, left: "sentinel", right: "sentinel", loc: %{left: nil, right: nil}}
+    forged = %{recorded | states: [sentinel | recorded.states]}
+    stamped = Check.stamp_meeting_graphs(db, %{"echo-wire" => {session, forged}})
+    node = Enum.find(Explore.graph(stamped).nodes, &(&1.name == session))
+    assert Enum.any?(node.children, &(&1.left == "sentinel"))
   end
 
   test "a vector payload is outside the fragment" do
