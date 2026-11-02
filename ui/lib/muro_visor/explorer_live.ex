@@ -5,40 +5,58 @@ defmodule MuroVisor.ExplorerLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    case MuroVisor.Book.current() do
-      {:ok, open} ->
-        graph = Muro.Explore.graph(open.book)
+    socket =
+      case MuroVisor.Book.current() do
+        {:ok, open} ->
+          graph = Muro.Explore.graph(open.book)
 
-        {:ok,
-         socket
-         |> assign(:stamp, open.stamp)
-         |> assign(:path, open.path)
-         |> assign(:book, open.book)
-         |> assign(:graph, graph)
-         |> assign(:picture, MuroVisor.Draw.layout(graph))
-         |> assign(:backend, :otp)
-         |> assign(:outline, MuroVisor.Outline.render(open.book, open.path, :otp))
-         |> assign(:detail, MuroVisor.Detail.empty())
-         |> assign(:selected, nil)
-         |> assign(:error, nil)}
+          socket
+          |> assign(:stamp, open.stamp)
+          |> assign(:path, open.path)
+          |> assign(:book, open.book)
+          |> assign(:graph, graph)
+          |> assign(:picture, MuroVisor.Draw.layout(graph))
+          |> assign(:catalog, MuroVisor.Meetings.catalog(open.book, graph))
+          |> assign(:backend, :otp)
+          |> assign(:outline, MuroVisor.Outline.render(open.book, open.path, :otp))
+          |> assign(:detail, MuroVisor.Detail.empty())
+          |> assign(:selected, nil)
+          |> assign(:error, nil)
 
-      {:error, msg} ->
-        empty = %{nodes: [], edges: []}
+        {:error, msg} ->
+          empty = %{nodes: [], edges: []}
 
-        {:ok,
-         assign(socket,
-           stamp: nil,
-           path: nil,
-           book: nil,
-           graph: empty,
-           picture: MuroVisor.Draw.layout(empty),
-           backend: :otp,
-           outline: "",
-           detail: MuroVisor.Detail.empty(),
-           selected: nil,
-           error: msg
-         )}
-    end
+          assign(socket,
+            stamp: nil,
+            path: nil,
+            book: nil,
+            graph: empty,
+            picture: MuroVisor.Draw.layout(empty),
+            catalog: MuroVisor.Meetings.catalog(nil, empty),
+            backend: :otp,
+            outline: "",
+            detail: MuroVisor.Detail.empty(),
+            selected: nil,
+            error: msg
+          )
+      end
+
+    {:ok, assign(socket, screen: :picker, focus: nil, missing: false)}
+  end
+
+  @impl true
+  def handle_params(params, _uri, socket) do
+    {screen, name} = screen(params)
+
+    focus =
+      if screen == :meet do
+        Enum.find(socket.assigns.catalog.meetings, &(&1.name == name))
+      end
+
+    {screen, missing} =
+      if screen == :meet and is_nil(focus), do: {:picker, true}, else: {screen, false}
+
+    {:noreply, assign(socket, screen: screen, focus: focus, missing: missing)}
   end
 
   @impl true
@@ -81,7 +99,11 @@ defmodule MuroVisor.ExplorerLive do
     </header>
     <p :if={@error} id="book-error">{@error}</p>
     <main>
-      <div class="graph-pane">
+      <div :if={@screen == :all} class="graph-pane">
+        <nav class="views">
+          <.link id="view-meetings" patch="/">Meetings</.link>
+          <.link id="view-all" class="current" patch="/?view=all">All definitions</.link>
+        </nav>
         <input type="radio" name="zoom" id="zoom-fit" checked />
         <label for="zoom-fit">fit</label>
         <input type="radio" name="zoom" id="zoom-100" />
@@ -186,7 +208,125 @@ defmodule MuroVisor.ExplorerLive do
           </svg>
         </div>
       </div>
+      <div :if={@screen != :all} class="graph-pane meeting-pane">
+        <nav class="views">
+          <.link id="view-meetings" class="current" patch="/">Meetings</.link>
+          <.link id="view-all" patch="/?view=all">All definitions</.link>
+        </nav>
+        <p :if={@missing} id="meeting-missing">no such meeting</p>
+        <div :if={@focus} id="sequence" class="sequence" data-meet={@focus.name}>
+          <div class="seq-grid seq-head">
+            <div
+              id="lane-left"
+              class="lane"
+              data-party={@focus.left}
+              data-session={@focus.left_session}
+            >
+              <strong>{@focus.left}</strong>
+              <span>{@focus.left_session}</span>
+            </div>
+            <div></div>
+            <div
+              id="lane-right"
+              class="lane"
+              data-party={@focus.right}
+              data-session={@focus.right_session}
+            >
+              <strong>{@focus.right}</strong>
+              <span>{@focus.right_session}</span>
+            </div>
+          </div>
+          <div
+            :for={row <- @focus.rows}
+            id={"seq-#{row.index}"}
+            class={["seq-row", row.kind == :terminal && "terminal", row.loop && "loop"]}
+            data-kind={row.kind}
+            data-from={row.from}
+            data-to={row.to}
+            data-label={row.label}
+            data-branch={row.branch}
+            data-loop={row.loop && "true"}
+          >
+            <div :if={row.kind == :terminal} class="terminal-label">{row.label}</div>
+            <div :if={row.kind != :terminal} class="seq-grid">
+              <div class="life"></div>
+              <div class={[
+                "msg",
+                row.to_side == :left && "to-left",
+                row.to_side == :right && "to-right"
+              ]}>
+                <span :if={row.to_side == :left} class="glyph">←</span>
+                <span class="shaft"></span>
+                <span class="label">{row.label}</span>
+                <span :if={row.branch} class="branch">/ {row.branch}</span>
+                <span :if={row.loop} class="loop">loop</span>
+                <span :if={row.to_side == :right} class="glyph">→</span>
+              </div>
+              <div class="life"></div>
+            </div>
+          </div>
+        </div>
+        <div :if={is_nil(@focus)} id="meeting-picker" class="picker">
+          <p :if={@catalog.groups == []}>This book has no meetings.</p>
+          <section
+            :for={group <- @catalog.groups}
+            id={"group-#{group.dom}"}
+            class="group"
+            data-session={group.base}
+          >
+            <h2>{group.base}</h2>
+            <.link
+              :for={meet <- group.meetings}
+              id={"meet-#{meet.dom}"}
+              class="meet-row"
+              patch={meet.href}
+              data-meet={meet.name}
+              data-left={meet.left}
+              data-right={meet.right}
+              data-base={meet.base}
+              data-steps={meet.steps}
+              data-evidence={meet.evidence}
+            >
+              <span class="name">{meet.name}</span>
+              <span class="parties">{meet.left} with {meet.right}</span>
+              <span class="base">{meet.base}</span>
+              <span class="steps">{meet.steps}</span>
+              <span :if={meet.buffer} class="buffer">buffer {meet.buffer}</span>
+              <span :if={meet.evidence != ""} class="evidence">{meet.evidence}</span>
+            </.link>
+          </section>
+        </div>
+      </div>
       <aside class="side">
+        <section :if={@focus} id="context">
+          <p id="meeting-checked" class="badge">checked</p>
+          <h2>Session</h2>
+          <p id="context-session">{@focus.base}</p>
+          <pre id="context-spec">{@focus.spec}</pre>
+          <h2>Dual</h2>
+          <p :if={@focus.dual_name} id="context-dual-name">{@focus.dual_name}</p>
+          <pre id="context-dual">{@focus.dual}</pre>
+          <h2>Conforms</h2>
+          <button
+            :if={@focus.left_select}
+            id={"conform-#{@focus.left_dom}"}
+            type="button"
+            phx-click="select"
+            phx-value-id={@focus.left_select}
+          >
+            {@focus.left}<span class="loc">{@focus.left_loc}</span>
+          </button>
+          <button
+            :if={@focus.right_select}
+            id={"conform-#{@focus.right_dom}"}
+            type="button"
+            phx-click="select"
+            phx-value-id={@focus.right_select}
+          >
+            {@focus.right}<span class="loc">{@focus.right_loc}</span>
+          </button>
+        </section>
+        <p :if={@focus} id="outline-for">meeting: {@focus.name}</p>
         <h2>Detail</h2>
         <p id="detail-title">{@detail.title}</p>
         <p id="detail-loc">{@detail.loc}</p>
@@ -232,4 +372,8 @@ defmodule MuroVisor.ExplorerLive do
   defp backend("rust"), do: :rust
   defp backend("zig"), do: :zig
   defp backend(_other), do: nil
+
+  defp screen(%{"meet" => name}) when is_binary(name) and name != "", do: {:meet, name}
+  defp screen(%{"view" => "all"}), do: {:all, nil}
+  defp screen(_params), do: {:picker, nil}
 end

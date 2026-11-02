@@ -63,6 +63,28 @@ defmodule MuroVisor.Layouts do
           }
           svg g:focus-visible > path.edge + text,
           svg g:focus-visible > path.transition + text { fill: #b45309; }
+          .views { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+          .views a { color: inherit; }
+          .views a.current { font-weight: 600; }
+          .meeting-pane, .sequence, .picker { max-width: 100%; overflow-x: hidden; }
+          .seq-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr); }
+          .seq-grid > * { min-width: 0; }
+          .lane { text-align: center; padding: 8px 4px; overflow-wrap: anywhere; }
+          .lane strong, .lane span { display: block; }
+          .life { background: linear-gradient(#44403c, #44403c) center / 2px 100% no-repeat; }
+          .msg { display: flex; align-items: center; gap: 6px; padding: 10px 4px; min-width: 0; }
+          .msg .label, .msg .branch, .msg .loop { overflow-wrap: anywhere; }
+          .shaft { flex: 1 1 0; border-top: 2px solid #44403c; min-width: 0; }
+          .seq-row.terminal { text-align: center; padding: 8px 4px; overflow-wrap: anywhere; }
+          .group { margin: 0 0 16px; }
+          .group h2 { margin: 0 0 4px; font-size: 14px; }
+          .meet-row { display: block; padding: 6px 0; color: inherit; overflow-wrap: anywhere; }
+          .meet-row span { margin-right: 8px; }
+          #context { margin-bottom: 16px; overflow-wrap: anywhere; }
+          #context pre, #context button { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
+          #context button { display: block; text-align: left; margin: 4px 0; }
+          #context .loc { display: block; font: 12px/1.4 ui-monospace, monospace; }
+          .badge { display: inline-block; border: 1px solid #44403c; padding: 0 6px; }
           @media (max-width: 800px) {
             main { grid-template-columns: 1fr; }
           }

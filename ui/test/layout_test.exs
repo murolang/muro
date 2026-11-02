@@ -110,8 +110,8 @@ defmodule MuroVisor.LayoutTest do
     assert html =~ "id=\"zoom-150\""
   end
 
-  test "the default view keeps labels readable and focus is not a box", %{conn: conn} do
-    page = html_response(get(conn, "/"), 200)
+  test "the definitions view keeps labels readable and focus is not a box", %{conn: conn} do
+    page = html_response(get(conn, "/?view=all"), 200)
 
     assert page =~ ~s(id="zoom-fit")
     assert page =~ "checked"

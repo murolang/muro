@@ -12,7 +12,7 @@ defmodule MuroVisor.RenderTest do
       assert well_formed!(svg)
       assert svg_source(render(view)) == svg
 
-      {:ok, again, _} = live(build_conn(), "/")
+      {:ok, again, _} = live(build_conn(), "/?view=all")
       assert svg_source(render(again)) == svg
       assert_ids(html, book())
     end
@@ -54,7 +54,7 @@ defmodule MuroVisor.RenderTest do
     }
 
     assert {:ok, _stamp} = MuroVisor.Book.remember(loaded ++ [extra], path)
-    {:ok, view, _html} = live(conn, "/")
+    {:ok, view, _html} = live(conn, "/?view=all")
     html = render(view)
     id = Muro.Emit.Name.encode(@unicode)
     assert id == "zn0003bbzn00003cmurozuzuzn00540dzn00003e"
