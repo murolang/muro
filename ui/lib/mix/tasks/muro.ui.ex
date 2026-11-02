@@ -13,18 +13,6 @@ defmodule Mix.Tasks.Muro.Ui do
   first. Outside a project, the task installs that package and starts it.
   """
 
-  @defaults [
-    url: [host: "127.0.0.1"],
-    adapter: Bandit.PhoenixAdapter,
-    http: [ip: {127, 0, 0, 1}, port: 4017],
-    secret_key_base: String.duplicate("v", 64),
-    render_errors: [formats: [html: MuroVisor.ErrorHTML], layout: false],
-    pubsub_server: MuroVisor.PubSub,
-    live_view: [signing_salt: "visorsalt"],
-    check_origin: ["//127.0.0.1", "//localhost"],
-    server: false
-  ]
-
   @impl Mix.Task
   def run(args) do
     case boot(args) do
@@ -51,11 +39,7 @@ defmodule Mix.Tasks.Muro.Ui do
   def boot(_args), do: {:error, "usage: mix muro.ui path.muro"}
 
   @doc false
-  def ensure_config! do
-    current = Application.get_env(:muro_visor, MuroVisor.Endpoint, [])
-    Application.put_env(:muro_visor, MuroVisor.Endpoint, Keyword.merge(@defaults, current))
-    :ok
-  end
+  def ensure_config!, do: MuroVisor.install_endpoint!()
 
   defp ensure_runtime! do
     cond do

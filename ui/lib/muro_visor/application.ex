@@ -5,6 +5,10 @@ defmodule MuroVisor.Application do
 
   @impl true
   def start(_type, _args) do
+    # Config files and an installed package merge :http shallowly. Restore
+    # the loopback address before the endpoint binds.
+    MuroVisor.install_endpoint!()
+
     children = [
       {Phoenix.PubSub, name: MuroVisor.PubSub},
       MuroVisor.Endpoint

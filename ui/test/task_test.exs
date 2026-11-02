@@ -104,6 +104,42 @@ defmodule MuroVisor.TaskTest do
     assert config[:check_origin] == ["//127.0.0.1", "//localhost"]
   end
 
+  test "a port-only http override still binds to loopback" do
+    saved = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
+
+    on_exit(fn ->
+      Application.put_env(:muro_visor, MuroVisor.Endpoint, saved)
+    end)
+
+    explicit = MuroVisor.merge_endpoint(http: [ip: {10, 0, 0, 1}, port: 4040])
+    assert get_in(explicit, [:http, :ip]) == {10, 0, 0, 1}
+    assert get_in(explicit, [:http, :port]) == 4040
+
+    for name <- ["config.exs", "test.exs"] do
+      src = File.read!(Path.expand("../config/#{name}", __DIR__))
+      assert src =~ "{127, 0, 0, 1}", "#{name} drops the loopback address"
+    end
+
+    # A later config file does Keyword.merge, so this is all that remains of :http.
+    Application.put_env(:muro_visor, MuroVisor.Endpoint, http: [port: 0])
+    assert :ok = Mix.Tasks.Muro.Ui.ensure_config!()
+
+    config = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
+    assert get_in(config, [:http, :ip]) == {127, 0, 0, 1}
+    assert get_in(config, [:http, :port]) == 0
+    assert MuroVisor.url() == "http://127.0.0.1:0/"
+
+    Application.put_env(:muro_visor, MuroVisor.Endpoint, Keyword.put(config, :server, true))
+    restart!()
+
+    assert {:ok, {{127, 0, 0, 1}, port}} =
+             Bandit.PhoenixAdapter.server_info(MuroVisor.Endpoint, :http)
+
+    assert is_integer(port) and port > 0
+    assert {:ok, sock} = :gen_tcp.connect({127, 0, 0, 1}, port, [], 2_000)
+    :gen_tcp.close(sock)
+  end
+
   defp mix_ui(args) do
     System.cmd("mix", ["muro.ui" | args],
       cd: Path.expand("..", __DIR__),
@@ -126,6 +162,11 @@ defmodule MuroVisor.TaskTest do
       {:error, :closed} -> acc
       {:error, reason} -> flunk("recv #{inspect(reason)} after #{byte_size(acc)} bytes")
     end
+  end
+
+  defp restart! do
+    :ok = Supervisor.terminate_child(MuroVisor.Supervisor, MuroVisor.Endpoint)
+    {:ok, _pid} = Supervisor.restart_child(MuroVisor.Supervisor, MuroVisor.Endpoint)
   end
 
   defp silence do
