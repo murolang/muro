@@ -68,37 +68,92 @@ defmodule Muro.Emit.Rust do
     end
   end
 
-  defp compile(book, funs, _stem) do
-    with {:ok, groups, step_map} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
-      compile_book(book, funs, groups, step_map)
+  @doc """
+  Names, signatures, layouts, and clause heads of the Rust file
+  `render/2` writes. Each head is the one `fun_open/2` places in front
+  of that run's body. No source is written.
+  """
+  def outline(book, _stem) when is_list(book) do
+    case IR.elaborate(book) do
+      {:ok, funs} ->
+        with {:ok, st0, groups} <- image(book, funs) do
+          user = Enum.map(groups, fn {fun, _} -> fun end)
+
+          signatures =
+            Enum.map(user, fn fun ->
+              {head, _env, st, params} = fun_open(fun, st0)
+
+              %{
+                source: fun.name,
+                name: emitted_name(fun, st),
+                layout: fun.ret,
+                param_layouts: Enum.map(fun.params, fn {_n, lay} -> lay end),
+                params: Enum.map(params, fn {_src, rn, _lay} -> rn end),
+                ret: rty(fun.ret, st),
+                export: fun.export,
+                head: head
+              }
+            end)
+
+          {:ok,
+           %{
+             names: signatures |> Enum.flat_map(fn sig -> [sig.name | sig.params] end) |> Enum.uniq(),
+             elixir: Emit.elixir_names(book),
+             signatures: Enum.map(signatures, &Map.delete(&1, :head)),
+             layouts:
+               Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}),
+             clauses: Enum.map(signatures, & &1.head)
+           }}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  defp compile_book(book, funs, groups, step_map) do
-    user_funs = Enum.map(groups, fn {fun, _} -> fun end)
-    steps = Enum.flat_map(groups, fn {_fun, ss} -> ss end)
-    spell = &spell/1
-    {types, taken} = type_names(book, MapSet.new(), spell)
-    {ctor_fns, taken} = ctor_fn_names(book, taken, spell)
-    variants = variant_names(book)
-    atoms = atom_variants(book)
-    {names, taken} = names_of(book, taken, spell)
-    {step_names, taken} = name_steps(steps, taken)
-    file_scope = Name.open(taken)
+  defp compile(book, funs, _stem) do
+    with {:ok, st0, _groups} <- image(book, funs) do
+      compile_book(book, funs, st0)
+    end
+  end
 
-    st0 = %{
-      book: book,
-      names: names,
-      step_names: step_names,
-      funs: Map.new(user_funs, &{&1.name, &1}),
-      steps: step_map,
-      step_ids: MapSet.new(steps),
-      types: types,
-      ctor_fns: ctor_fns,
-      variants: variants,
-      atoms: atoms,
-      file_scope: file_scope
-    }
+  defp image(book, funs) do
+    with {:ok, groups, step_map} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
+      user_funs = Enum.map(groups, fn {fun, _} -> fun end)
+      steps = Enum.flat_map(groups, fn {_fun, ss} -> ss end)
+      spell = &spell/1
+      {types, taken} = type_names(book, MapSet.new(), spell)
+      {ctor_fns, taken} = ctor_fn_names(book, taken, spell)
+      variants = variant_names(book)
+      atoms = atom_variants(book)
+      {names, taken} = names_of(book, taken, spell)
+      {step_names, taken} = name_steps(steps, taken)
+      file_scope = Name.open(taken)
+
+      st0 = %{
+        book: book,
+        names: names,
+        step_names: step_names,
+        funs: Map.new(user_funs, &{&1.name, &1}),
+        steps: step_map,
+        step_ids: MapSet.new(steps),
+        types: types,
+        ctor_fns: ctor_fns,
+        variants: variants,
+        atoms: atoms,
+        file_scope: file_scope
+      }
+
+      {:ok, st0, groups}
+    end
+  end
+
+  defp compile_book(book, funs, st0) do
+    types = st0.types
+    variants = st0.variants
+    ctor_fns = st0.ctor_fns
+    atoms = st0.atoms
+    file_scope = st0.file_scope
 
     with {:ok, fns} <- emit_funs(funs, st0) do
       parts = [
@@ -124,6 +179,15 @@ defmodule Muro.Emit.Rust do
   end
 
   defp emit_fun(fun, st0) do
+    {head, env, st, _params} = fun_open(fun, st0)
+
+    with {:ok, {lines, expr, lay, _st}} <- emit_tm(fun.body, env, st) do
+      body = fn_body(lines, coerce(expr, lay, fun.ret, st))
+      {:ok, "#{head} {\n#{body}\n}"}
+    end
+  end
+
+  defp fun_open(fun, st0) do
     {params, scope} =
       Enum.reduce(fun.params, {[], st0.file_scope}, fn {pname, lay}, {acc, scope} ->
         {rn, scope} = Name.bind(spell(pname), scope)
@@ -132,18 +196,11 @@ defmodule Muro.Emit.Rust do
 
     env = Enum.reduce(params, [], fn {src, rn, lay}, env -> [{src, rn, lay} | env] end)
     st = Map.merge(st0, %{n: 0, scope: scope})
-
-    with {:ok, {lines, expr, lay, _st}} <- emit_tm(fun.body, env, st) do
-      args =
-        Enum.map_join(params, ", ", fn {_src, rn, lay} -> "#{rn}: #{rty(lay, st)}" end)
-
-      vis = if fun.export, do: "pub ", else: ""
-      ret = rty(fun.ret, st)
-      body = fn_body(lines, coerce(expr, lay, fun.ret, st))
-      name = emitted_name(fun, st)
-
-      {:ok, "#{vis}fn #{name}(#{args}) -> #{ret} {\n#{body}\n}"}
-    end
+    args = Enum.map_join(params, ", ", fn {_src, rn, lay} -> "#{rn}: #{rty(lay, st)}" end)
+    vis = if fun.export, do: "pub ", else: ""
+    ret = rty(fun.ret, st)
+    name = emitted_name(fun, st)
+    {"#{vis}fn #{name}(#{args}) -> #{ret}", env, st, params}
   end
 
   defp emitted_name(fun, st) do
