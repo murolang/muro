@@ -59,11 +59,11 @@ defmodule Muro.CLI.Ui do
   defp instructions(path) do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro_visor draws this book. This command does not start the explorer. Install the package, then open the book with its Mix task.
+      muro_visor draws this book. This command does not start the explorer. Add muro_visor to a Mix project, then open the book with its Mix task.
       """),
       Muro.CLI.Text.section(
         "INSTALL",
-        Muro.CLI.Text.pre(["mix archive.install hex muro_visor"])
+        Muro.CLI.Text.pre(["{:muro_visor, \"~> 0.1.0\"}", "mix deps.get"])
       ),
       Muro.CLI.Text.section("OPEN", Muro.CLI.Text.pre(["mix muro.ui #{path}"])),
       Muro.CLI.Text.section(

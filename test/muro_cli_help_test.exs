@@ -253,8 +253,10 @@ defmodule Muro.CliHelpTest do
     {out, err, code} = cli(["ui", "book.muro"])
     assert code == 0
     assert err == ""
-    assert out =~ "mix archive.install hex muro_visor"
+    assert out =~ "{:muro_visor, \"~> 0.1.0\"}"
+    assert out =~ "mix deps.get"
     assert out =~ "mix muro.ui book.muro"
+    refute out =~ "archive.install"
     assert out =~ "https://muro-lang.dev/docs/explorer"
     assert out =~ "does not start the explorer"
     refute out =~ "Phoenix"

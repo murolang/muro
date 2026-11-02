@@ -70,6 +70,40 @@ defmodule MuroVisor.TaskTest do
     assert refused()
   end
 
+  test "missing endpoint config is filled and the visor application serves the book" do
+    path = example("half_ok.muro")
+    saved = Application.get_env(:muro_visor, MuroVisor.Endpoint)
+
+    on_exit(fn ->
+      Application.put_env(:muro_visor, MuroVisor.Endpoint, saved)
+    end)
+
+    Application.delete_env(:muro_visor, MuroVisor.Endpoint)
+    Application.put_env(:muro_visor, :ui_hold, false)
+    Application.put_env(:muro_visor, :browser_open, fn _url -> :ok end)
+
+    Mix.Tasks.Muro.Ui.run([path])
+
+    config = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
+    assert get_in(config, [:http, :port]) == 4017
+    assert config[:check_origin] == ["//127.0.0.1", "//localhost"]
+    assert Enum.any?(Application.started_applications(), &match?({:muro_visor, _, _}, &1))
+    assert {:ok, %{book: loaded}} = MuroVisor.Book.current()
+    assert Enum.any?(loaded, &(&1.name == "plus"))
+
+    body = get(4017)
+    assert body =~ "200"
+    assert body =~ "_csrf_token"
+  end
+
+  test "existing endpoint settings keep their port" do
+    before = get_in(Application.fetch_env!(:muro_visor, MuroVisor.Endpoint), [:http, :port])
+    assert :ok = Mix.Tasks.Muro.Ui.ensure_config!()
+    config = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
+    assert get_in(config, [:http, :port]) == before
+    assert config[:check_origin] == ["//127.0.0.1", "//localhost"]
+  end
+
   defp mix_ui(args) do
     System.cmd("mix", ["muro.ui" | args],
       cd: Path.expand("..", __DIR__),
