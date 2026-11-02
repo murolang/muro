@@ -114,6 +114,11 @@ defmodule Muro.AsyncTest do
     assert Meet.meets(cross, cross) == {:error, "diverged: left: put 1; right: put 1"}
     assert Async.meets(cross, cross, [], 1) == :ok
 
+    graph = Async.graph(cross, cross, [], 1)
+    keys = Enum.map(graph.transitions, &{&1.from, &1.to, &1.label, &1.side})
+    assert keys == Enum.uniq(keys)
+    assert length(graph.transitions) <= length(graph.states) * 2
+
     assert Async.meets(cross, cross, [], 0) ==
              {:error, "deadlock: left: put 1; right: put 1; l2r: []; r2l: []"}
 

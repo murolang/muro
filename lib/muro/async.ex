@@ -111,30 +111,51 @@ defmodule Muro.Async do
     end
   end
 
-  defp empty_acc, do: %{states: [], transitions: [], next: 0, index: %{}}
+  defp empty_acc do
+    %{
+      states: [],
+      transitions: [],
+      next: 0,
+      index: %{},
+      expanded: MapSet.new(),
+      seen_trans: MapSet.new()
+    }
+  end
 
   defp publish(g), do: %{states: g.states, transitions: g.transitions}
 
+  # `seen` is the path, so a cycle stops. `expanded` is the whole search:
+  # a state reached by another schedule is not expanded again, and its
+  # outgoing transitions are not recorded twice. Each key is expanded at
+  # most once.
   defp explore(conf, seen, trace, g) do
     key = seen_key(conf)
 
-    if MapSet.member?(seen, key) do
-      {:ok, g}
-    else
-      {g, here} = ensure_state(g, conf)
+    cond do
+      MapSet.member?(seen, key) ->
+        {:ok, g}
 
-      case classify(conf) do
-        :final ->
-          {:ok, g}
+      MapSet.member?(g.expanded, key) ->
+        {:ok, g}
 
-        {:bad, reason} ->
-          {{:error, render(reason, conf, trace)}, g}
+      true ->
+        {g, here} = ensure_state(g, conf)
+        g = mark_expanded(g, key)
 
-        {:go, kids} ->
-          walk(kids, MapSet.put(seen, key), trace, g, here)
-      end
+        case classify(conf) do
+          :final ->
+            {:ok, g}
+
+          {:bad, reason} ->
+            {{:error, render(reason, conf, trace)}, g}
+
+          {:go, kids} ->
+            walk(kids, MapSet.put(seen, key), trace, g, here)
+        end
     end
   end
+
+  defp mark_expanded(g, key), do: %{g | expanded: MapSet.put(g.expanded, key)}
 
   defp walk([], _seen, _trace, g, _here), do: {:ok, g}
 
@@ -193,7 +214,13 @@ defmodule Muro.Async do
       side: meta.side
     }
 
-    %{g | transitions: g.transitions ++ [trans]}
+    key = {trans.from, trans.to, trans.label, trans.side, trans.loc}
+
+    if MapSet.member?(g.seen_trans, key) do
+      g
+    else
+      %{g | transitions: g.transitions ++ [trans], seen_trans: MapSet.put(g.seen_trans, key)}
+    end
   end
 
   defp seen_key(conf) do
