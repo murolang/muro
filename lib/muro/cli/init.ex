@@ -21,7 +21,7 @@ defmodule Muro.CLI.Init do
         value: "NAME",
         default: "the backend this directory selects",
         doc:
-          "Store this backend on the manifest. It does not change which file is written. The value is elixir, c, rust, asm, fsm, or exunit. Without the flag, a Mix project omits the key."
+          "Store this backend on the manifest. It does not change which file is written. The value is elixir, c, rust, zig, asm, fsm, or exunit. Without the flag, a Mix project omits the key."
       },
       %{
         name: :cargo_metadata,
@@ -144,7 +144,7 @@ defmodule Muro.CLI.Init do
 
   defp backend_value(nil), do: {:ok, nil}
 
-  defp backend_value(name) when name in ~w(elixir c rust asm fsm exunit) do
+  defp backend_value(name) when name in ~w(elixir c rust zig asm fsm exunit) do
     {:ok, String.to_atom(name)}
   end
 

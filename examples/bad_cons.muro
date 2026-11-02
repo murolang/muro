@@ -1,8 +1,6 @@
 -- bad_cons.muro — cons has two fields. One binder and three binders are both wrong.
 -- mix muro.check refuses both matches. list.muro is the legal cons.
-data List (A : Type) : Type where
-  nil  : List A
-  cons : A → List A → List A
+import "std:list.muro"
 
 def one : run Π (xs : List Nat) → Nat :=
   λ (xs : List Nat) →

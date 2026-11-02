@@ -66,6 +66,14 @@ check_out=$(mix muro.check half_ok.muro)
 have "$check_out" "Muro v${version}" "mix muro.check half_ok.muro"
 have "$check_out" "All terms check. Evidence never becomes a run." "mix muro.check half_ok.muro"
 
+cat >"$work/use_std.muro" <<'EOF'
+import "std:bool.muro"
+def n : run Bool := not false
+EOF
+std_out=$(mix muro.check use_std.muro)
+have "$std_out" "Muro v${version}" "mix muro.check use_std.muro"
+have "$std_out" "All terms check. Evidence never becomes a run." "mix muro.check use_std.muro"
+
 # The Elixir backend prints the module. Save that text and check it.
 mix muro.emit half_ok.muro > half_ok.ex
 test -s half_ok.ex
@@ -906,8 +914,8 @@ wire = %{
 {:ok, v, table} = Host.ReprNames.decode_template(wire)
 IO.puts("NAMES #{inspect(Host.ReprNames.muro_repr_table_names(table))}")
 IO.puts("NAMES_ENC #{inspect(Host.ReprNames.encode_template(v, table))}")
-IO.puts("NAMES_OFF #{inspect(Host.ReprNames.encode_template(Host.ReprNames.reads_off(v), table))}")
-IO.puts("NAMES_COUNT #{inspect(Host.ReprNames.count_entries(v))}")
+IO.puts("NAMES_OFF #{inspect(Host.ReprNames.encode_template(Host.ReprNames.muro__readszdoff(v), table))}")
+IO.puts("NAMES_COUNT #{inspect(Host.ReprNames.muro__countzdentries(v))}")
 EOF
 
   set +e
@@ -1119,6 +1127,13 @@ mkdir -p "$hex_work"
     echo "expected Muro v${version} from the packaged archive, got: ${got}" >&2
     exit 1
   fi
+  cat > use_std.muro <<'EOF'
+import "std:bool.muro"
+def n : run Bool := not false
+EOF
+  std_out=$(MIX_ARCHIVES="$hex_archives" mix muro.check use_std.muro)
+  printf '%s\n' "$std_out"
+  have "$std_out" "All terms check. Evidence never becomes a run." "packaged archive std import"
 )
 
 echo "archive smoke passed (${version})"

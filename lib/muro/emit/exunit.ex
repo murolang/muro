@@ -146,20 +146,29 @@ defmodule Muro.Emit.ExUnitSuite do
   # stays `muro_deps/name/file.muro` and never an absolute path.
   @doc false
   def display_for(d, ctx) do
-    if same_file?(d.file, ctx.path) do
-      ctx.display
-    else
-      rel = Gen.relative_path(canon(ctx.root), canon(d.file))
+    cond do
+      Muro.Std.std_id?(d.file) ->
+        d.file
 
-      if String.starts_with?(rel, "..") or String.starts_with?(rel, "/") do
-        Path.basename(d.file)
-      else
-        rel
-      end
+      same_file?(d.file, ctx.path) ->
+        ctx.display
+
+      true ->
+        rel = Gen.relative_path(canon(ctx.root), canon(d.file))
+
+        if String.starts_with?(rel, "..") or String.starts_with?(rel, "/") do
+          Path.basename(d.file)
+        else
+          rel
+        end
     end
   end
 
-  defp same_file?(a, b), do: canon(a) == canon(b)
+  # A library id is compared as written. Expanding it would invent a
+  # file named `std:le.muro` in the working directory.
+  defp same_file?(a, b) do
+    if Muro.Std.std_id?(a) or Muro.Std.std_id?(b), do: a == b, else: canon(a) == canon(b)
+  end
 
   defp canon(path), do: Muro.Manifest.canonical(path)
 
@@ -680,11 +689,20 @@ defmodule Muro.Emit.ExUnitSuite do
     Enum.join(lines, "\n") <> "\n"
   end
 
-  defp callbacks_attr([]), do: "@callbacks []"
+  defp callbacks_attr([]) do
+    """
+    @callbacks []
+    """
+    |> String.trim()
+  end
 
   defp callbacks_attr(callbacks) do
     inner = Enum.map_join(callbacks, ", ", fn {name, arity} -> "#{name}: #{arity}" end)
-    "@callbacks [#{inner}]"
+
+    """
+    @callbacks [#{inner}]
+    """
+    |> String.trim()
   end
 
   defp skip_block([]), do: "  # Skipped: none"

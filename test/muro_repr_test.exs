@@ -441,7 +441,7 @@ defmodule Muro.ReprTest do
              "4:1: repr Shape: constructors circle and square share a host shape (map with \"kind\" => \"circle\")"
   end
 
-  test "decode and encode names that collide are refused" do
+  test "decode and encode names that collide are refused, and a reserved helper is claimed" do
     assert error("""
            data Entry : Type where
              entry : Nat → Entry
@@ -459,22 +459,38 @@ defmodule Muro.ReprTest do
            """) ==
              "5:1: repr HttpRequest: decode_http_request collides with repr Http_request\n\n6:1: repr Http_request: decode_http_request collides with repr HttpRequest"
 
-    assert error("""
-           data NatBox : Type where
-             natBox : Nat → NatBox
-           def muro_repr_decode_nat : run Nat := 0
-           repr Nat := integer
-           """) ==
-             "4:1: repr Nat: muro_repr_decode_nat collides with run muro_repr_decode_nat"
+    # A run whose source name is a repr helper is claimed to `_2`.
+    # The helper keeps its name, and the module compiles.
+    nat_book =
+      ok!("""
+      data NatBox : Type where
+        natBox : Nat → NatBox
+      def muro_repr_decode_nat : run Nat := 0
+      repr Nat := integer
+      """)
 
-    assert error("""
-           data Bool : Type where
-             true : Bool
-             false : Bool
-           def muro_repr_table_new : run Nat := 0
-           repr Bool := boolean
-           """) ==
-             "5:1: repr Bool: muro_repr_table_new collides with run muro_repr_table_new"
+    assert Emit.elixir_names(nat_book)["muro_repr_decode_nat"] == "muro_repr_decode_nat_2"
+    nat_src = Emit.emit_module(NatReserve, nat_book)
+    assert nat_src =~ "def muro_repr_decode_nat_2 do"
+    assert nat_src =~ "defp muro_repr_decode_nat("
+    compile_source(nat_src, NatReserve)
+    assert apply(NatReserve, :muro_repr_decode_nat_2, []) == 0
+
+    bool_book =
+      ok!("""
+      data Bool : Type where
+        true : Bool
+        false : Bool
+      def muro_repr_table_new : run Nat := 0
+      repr Bool := boolean
+      """)
+
+    assert Emit.elixir_names(bool_book)["muro_repr_table_new"] == "muro_repr_table_new_2"
+    bool_src = Emit.emit_module(BoolReserve, bool_book)
+    assert bool_src =~ "def muro_repr_table_new_2 do"
+    assert bool_src =~ "def muro_repr_table_new, do:"
+    compile_source(bool_src, BoolReserve)
+    assert apply(BoolReserve, :muro_repr_table_new_2, []) == 0
   end
 
   test "a book with no repr emits no codec" do
@@ -957,6 +973,7 @@ defmodule Muro.ReprTest do
 
     assert Emit.C.prepare(with_repr, "half_ok") == Emit.C.prepare(without, "half_ok")
     assert Emit.Rust.render(with_repr, "half_ok") == Emit.Rust.render(without, "half_ok")
+    assert Emit.Zig.render(with_repr, "half_ok") == Emit.Zig.render(without, "half_ok")
     assert Emit.Asm.render(with_repr, "half_ok") == Emit.Asm.render(without, "half_ok")
     assert Emit.Otp.render(with_repr, "half_ok") == Emit.Otp.render(without, "half_ok")
     assert Emit.Node.render(with_repr, "half_ok", :a) == Emit.Node.render(without, "half_ok", :a)
@@ -1582,8 +1599,10 @@ defmodule Muro.ReprTest do
          {:binding, {:named, 0}, {:cons, {:entry, {:named, {:suc, 0}}, {:just, false}}, nil}},
          nil}}}
 
-    assert mod.reads_off(expected) == off
-    assert mod.count_entries(expected) == {:suc, {:suc, 0}}
+    reads_off = String.to_atom(Emit.elixir_base("reads-off"))
+    count_entries = String.to_atom(Emit.elixir_base("count-entries"))
+    assert apply(mod, reads_off, [expected]) == off
+    assert apply(mod, count_entries, [expected]) == {:suc, {:suc, 0}}
 
     assert mod.encode_template(off, table) == %{
              "*" => [%{"relation" => "*", "read" => false}],
@@ -2066,8 +2085,8 @@ defmodule Muro.ReprTest do
 
   defp names_example do
     assert {:ok, source} = Muro.emit_file("examples/repr_names.muro", HostReprNames)
-    assert source =~ "def reads_off("
-    assert source =~ "def count_entries("
+    assert source =~ "def #{Emit.elixir_base("reads-off")}("
+    assert source =~ "def #{Emit.elixir_base("count-entries")}("
     assert source =~ "def muro_repr_table_new"
     assert source =~ "muro_repr_decode_interned"
     assert source =~ "muro_repr_map_of_decode"

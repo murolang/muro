@@ -149,7 +149,7 @@ defmodule Muro.ArchiveTest do
     assert err.message =~ "project that depends on muro"
 
     dir = tmp_dir()
-    sig = %{export: true, name: "half", ret: "muro_nat *", params: []}
+    sig = %{export: true, name: "half", ret: "muro__nat *", params: []}
 
     assert_raise Mix.Error, ~r/elixir_make/, fn ->
       Muro.Emit.Nif.ensure_make!([sig], false)

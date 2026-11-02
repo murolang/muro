@@ -11,7 +11,7 @@ In brief: this is the grammar `lib/muro/parser.ex` implements. ASCII aliases are
 
 ```
 book       ::= (import | param | nu | data | repr | talk | session | conform | place | scheme | move | endpoint | read | meet | seat | link | def)*
-import     ::= "import" string             -- a path, relative to this file
+import     ::= "import" string             -- relative, "pkg:…", or "std:…"
 param      ::= "param" ident ":" tag term  -- supplied by an importing file
 nu         ::= ("ν" | "nu") ident binder+ ":" "Type" "where" "uncons" ":" term
 data       ::= "data" ident binder* ":" telescope "where" (ident ":" term)+

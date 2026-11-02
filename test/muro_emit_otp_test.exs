@@ -6,58 +6,29 @@ defmodule Muro.EmitOtpTest do
   setup do
     on_exit(fn ->
       for {parent, names} <- [
-            {"PingOtp", [:Pong, :LeftOpen, :Untouched, :Chosen, :Both, :PongDone, :OpenStop, ""]},
+            {"PingOtp", ~w(pong left-open untouched chosen both pong-done open-stop) ++ [""]},
             {"LocatedOtp",
-             [:Pong, :PongAway, :PongPoly, :PongPolyAway, :PongDone, :LeftOpen, ""]},
-            {"BothOtp", [:Pong, :PongHome, ""]},
+             ~w(pong pong-away pong-poly pong-poly-away pong-done left-open) ++ [""]},
+            {"BothOtp", ~w(pong pong-home) ++ [""]},
             {"MeetOtp",
-             [
-               :Pong,
-               :Peer,
-               :Taker,
-               :Giver,
-               :Left,
-               :Right,
-               :Here,
-               :There,
-               :Far,
-               :SizedServer,
-               :SizedClient,
-               :Echo,
-               :PeerEcho,
-               :WindowServer,
-               :WindowClient,
-               ""
-             ]},
-            {"IndexedOtp", [:Server, :Client, :ClientOne, :Echo, :Ask, ""]},
-            {"RecursiveOtp", [:Forever, :Sender, :Server, :Client, ""]},
-            {"DataOtp", [:Up, :Down, :Some, :Take, :Echoer, :Ask, :Shadow, ""]},
-            {"FieldBindingsOtp", [:Reply, :Asker, :Pass, :Passer, :Rest, :RestPeer, ""]},
+             ~w(pong peer taker giver left right here there far sized-server sized-client echo peer-echo window-server window-client) ++
+               [""]},
+            {"IndexedOtp", ~w(server client client-one echo ask) ++ [""]},
+            {"RecursiveOtp", ~w(forever sender server client) ++ [""]},
+            {"DataOtp", ~w(up down some take echoer ask shadow) ++ [""]},
+            {"FieldBindingsOtp", ~w(reply asker pass passer rest rest-peer) ++ [""]},
             {"FieldChoiceOtp",
-             [
-               :GateServer,
-               :PutTrue,
-               :PutFalse,
-               :PutNone,
-               :HdrServer,
-               :HdrBytes,
-               :HdrTrailers,
-               :WrapServer,
-               :WrapBytes,
-               :LoopServer,
-               :LoopClient,
-               :CalledServer,
-               :CalledClient,
-               :SizedServer,
-               :SizedClient,
-               :CountedServer,
-               :CountedClient,
-               :OnceServer,
-               ""
-             ]}
+             ~w(gate-server put-true put-false put-none hdr-server hdr-bytes hdr-trailers wrap-server wrap-bytes loop-server loop-client called-server called-client sized-server sized-client counted-server counted-client once-server) ++
+               [""]}
           ] do
         for name <- names do
-          mod = if name == "", do: Module.concat([parent]), else: Module.concat(parent, name)
+          mod =
+            if name == "" do
+              Module.concat([parent])
+            else
+              Module.concat(parent, Emit.elixir_alias(name))
+            end
+
           :code.purge(mod)
           :code.delete(mod)
         end
@@ -118,7 +89,7 @@ defmodule Muro.EmitOtpTest do
     refute File.exists?(Path.join(dir, "bad_otp.ex"))
   end
 
-  test "a run beside a session is not in the OTP file" do
+  test "a run beside a session is named, and its body is not a function" do
     dir = tmp!()
     path = Path.join(dir, "mixed.muro")
 
@@ -130,8 +101,10 @@ defmodule Muro.EmitOtpTest do
 
     assert {:ok, [file]} = Muro.emit_otp(path)
     src = File.read!(file)
-    assert src =~ "defmodule DoneIt do"
-    refute src =~ "def z"
+    assert src =~ "defmodule #{Emit.elixir_alias("done-it")} do"
+    assert src =~ ~s|defp muro_host("z"), do: :z|
+    refute src =~ "def z do"
+    refute src =~ "def z("
   end
 
   test "a reading is the same server" do
@@ -145,11 +118,11 @@ defmodule Muro.EmitOtpTest do
     src = File.read!(file)
     assert src =~ "defmodule LocatedOtp do"
     assert src =~ "defmodule Pong do"
-    assert src =~ "defmodule PongAway do"
-    assert src =~ "defmodule PongPoly do"
-    assert src =~ "defmodule PongPolyAway do"
-    assert src =~ "defmodule PongDone do"
-    assert src =~ "defmodule LeftOpen do"
+    assert src =~ "defmodule #{Emit.elixir_alias("pong-away")} do"
+    assert src =~ "defmodule #{Emit.elixir_alias("pong-poly")} do"
+    assert src =~ "defmodule #{Emit.elixir_alias("pong-poly-away")} do"
+    assert src =~ "defmodule #{Emit.elixir_alias("pong-done")} do"
+    assert src =~ "defmodule #{Emit.elixir_alias("left-open")} do"
     assert src =~ "{:hear, :nat, :_, {:say, 1, :finish}}"
     assert src =~ "{:say, 0, :leave}"
     assert src =~ "The server talks to one peer."
@@ -195,18 +168,18 @@ defmodule Muro.EmitOtpTest do
     assert_receive {:muro, ^pid, 1}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, server, client, server_ref, client_ref} = meet(:sized_wire)
+    {:ok, server, client, server_ref, client_ref} = meet(host_fun("sized-wire"))
     assert_receive {:DOWN, ^server_ref, :process, ^server, :normal}
     assert_receive {:DOWN, ^client_ref, :process, ^client, :normal}
 
-    {:ok, server, client, server_ref, client_ref} = meet(:window_wire)
+    {:ok, server, client, server_ref, client_ref} = meet(host_fun("window-wire"))
     assert_receive {:DOWN, ^server_ref, :process, ^server, :normal}
     assert_receive {:DOWN, ^client_ref, :process, ^client, :normal}
   end
 
   test "an evidence payload carries the nat alone" do
     assert {:ok, src} = Emit.Otp.render(checked!("examples/meet.muro"), "meet")
-    assert src =~ "def window_wire do"
+    assert src =~ "def #{Emit.elixir_base("window-wire")} do"
     assert src =~ "{:hear, :nat, :w, {:say, {:var, :w}, :finish}}"
     assert src =~ "{:say, 8, {:hear, :nat, :d, :finish}}"
     refute src =~ "esend"
@@ -216,13 +189,13 @@ defmodule Muro.EmitOtpTest do
     Code.compile_string(src)
 
     # The window arrives as a nat, and the data goes back as that nat.
-    {:ok, pid, ref} = meet_one(:WindowServer)
+    {:ok, pid, ref} = meet_one(host_mod("window-server"))
     send(pid, {:muro, self(), 8})
     assert_receive {:muro, ^pid, 8}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
     # The client sends the window and receives the data as one nat.
-    {:ok, pid, ref} = meet_one(:WindowClient)
+    {:ok, pid, ref} = meet_one(host_mod("window-client"))
     assert_receive {:muro, ^pid, 8}
     send(pid, {:muro, self(), 5})
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
@@ -231,8 +204,8 @@ defmodule Muro.EmitOtpTest do
   test "a bit index carries the bit alone" do
     assert {:ok, src} = Emit.Otp.render(checked!("examples/indexed.muro"), "indexed")
     assert src =~ "def wire do"
-    assert src =~ "def wire_one do"
-    assert src =~ "def echo_wire do"
+    assert src =~ "def #{Emit.elixir_base("wire-one")} do"
+    assert src =~ "def #{Emit.elixir_base("echo-wire")} do"
     assert src =~ "{:index, :b, {:say, 1, :finish}, {:hear, :nat, :n, :finish}}"
     assert src =~ "{:say, :b0, {:hear, :nat, :m, :finish}}"
     assert src =~ "{:say, :b1, {:say, 0, :finish}}"
@@ -247,11 +220,11 @@ defmodule Muro.EmitOtpTest do
     assert_receive {:DOWN, ^server_ref, :process, ^server, :normal}
     assert_receive {:DOWN, ^client_ref, :process, ^client, :normal}
 
-    {:ok, server, client, server_ref, client_ref} = indexed(:wire_one)
+    {:ok, server, client, server_ref, client_ref} = indexed(host_fun("wire-one"))
     assert_receive {:DOWN, ^server_ref, :process, ^server, :normal}
     assert_receive {:DOWN, ^client_ref, :process, ^client, :normal}
 
-    {:ok, echo, ask, echo_ref, ask_ref} = indexed(:echo_wire)
+    {:ok, echo, ask, echo_ref, ask_ref} = indexed(host_fun("echo-wire"))
     assert_receive {:DOWN, ^echo_ref, :process, ^echo, :normal}
     assert_receive {:DOWN, ^ask_ref, :process, ^ask, :normal}
 
@@ -336,9 +309,11 @@ defmodule Muro.EmitOtpTest do
 
     assert {:ok, src} = Emit.Otp.render(checked!(path), "read-meet")
     assert src =~ "def wire do"
+    assert src =~ "def #{Emit.elixir_base("a-b")} do"
     assert src =~ "def a_b do"
-    assert src =~ "def a_b2 do"
-    assert src =~ "def muro_end do"
+    refute src =~ "def a_b_2 do"
+    refute src =~ "def a_b2 do"
+    assert src =~ "def #{Emit.elixir_base("end")} do"
     assert src =~ "{:hear, :nat, :_, {:say, 1, :finish}}"
     assert src =~ "{:say, 1, {:hear, :nat, :_, :finish}}"
   end
@@ -358,7 +333,7 @@ defmodule Muro.EmitOtpTest do
 
     assert {:ok, src} = Emit.Otp.render(checked!(path), "both")
     assert src =~ "defmodule Pong do"
-    assert src =~ "defmodule PongHome do"
+    assert src =~ "defmodule #{Emit.elixir_alias("pong-home")} do"
     assert length(String.split(src, "{:hear, :nat, :_, {:say, 1, :finish}}")) == 3
   end
 
@@ -389,12 +364,12 @@ defmodule Muro.EmitOtpTest do
     assert_receive {:muro, ^pid, 1}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, away, away_ref} = located(:PongAway)
+    {:ok, away, away_ref} = located(host_mod("pong-away"))
     send(away, {:muro, self(), 0})
     assert_receive {:muro, ^away, 1}
     assert_receive {:DOWN, ^away_ref, :process, ^away, :normal}
 
-    {:ok, open, open_ref} = located(:LeftOpen)
+    {:ok, open, open_ref} = located(host_mod("left-open"))
     assert_receive {:muro, ^open, 0}
     assert_receive {:DOWN, ^open_ref, :process, ^open, {:shutdown, :abandon}}
   end
@@ -441,7 +416,7 @@ defmodule Muro.EmitOtpTest do
   end
 
   defp left_open do
-    {:ok, pid, ref} = start(:LeftOpen)
+    {:ok, pid, ref} = start(host_mod("left-open"))
     assert_receive {:muro, ^pid, 0}
     assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :abandon}}
   end
@@ -459,14 +434,14 @@ defmodule Muro.EmitOtpTest do
   end
 
   defp pong_done do
-    {:ok, pid, ref} = start(:PongDone)
+    {:ok, pid, ref} = start(host_mod("pong-done"))
     send(pid, {:muro, self(), 0})
     assert_receive {:muro, ^pid, 1}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
   end
 
   defp open_stop do
-    {:ok, pid, ref} = start(:OpenStop)
+    {:ok, pid, ref} = start(host_mod("open-stop"))
     assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :abandon}}
     refute_received {:muro, ^pid, _}
   end
@@ -528,11 +503,11 @@ defmodule Muro.EmitOtpTest do
 
     Code.compile_string(otp)
 
-    {:ok, left, right, left_ref, right_ref} = data(:flag_wire)
+    {:ok, left, right, left_ref, right_ref} = data(host_fun("flag-wire"))
     assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
 
-    {:ok, left, right, left_ref, right_ref} = data(:opt_wire)
+    {:ok, left, right, left_ref, right_ref} = data(host_fun("opt-wire"))
     assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
 
@@ -568,12 +543,13 @@ defmodule Muro.EmitOtpTest do
     assert src =~ "{:say, {:just, true}, :finish}"
     assert src =~ "{:loop, :X, {:say, {:just, true}, {:jump, :X}}}"
     assert src =~ "{:pick, ["
-    refute src =~ "effective"
+    refute src =~ ~s/{:run, "effective"/
+    refute src =~ "def effective"
     refute src =~ "esend"
 
     Code.compile_string(src)
 
-    {:ok, left, right, left_ref, right_ref} = computed(:reply_wire)
+    {:ok, left, right, left_ref, right_ref} = computed(host_fun("reply-wire"))
     assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
 
@@ -598,31 +574,31 @@ defmodule Muro.EmitOtpTest do
     assert_receive {:muro, ^pid, 0}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = computed_one(:FlagTaker)
+    {:ok, pid, ref} = computed_one(host_mod("flag-taker"))
     send(pid, {:muro, self(), true})
     assert_receive {:muro_pick, ^pid, :b0}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
     refute_received {:muro, ^pid, _}
 
-    {:ok, pid, ref} = computed_one(:FlagTaker)
+    {:ok, pid, ref} = computed_one(host_mod("flag-taker"))
     send(pid, {:muro, self(), false})
     assert_receive {:muro_pick, ^pid, :b1}
     assert_receive {:muro, ^pid, 1}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = computed_one(:FlagTaker)
+    {:ok, pid, ref} = computed_one(host_mod("flag-taker"))
     send(pid, {:muro, self(), :nothing})
     assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, {:unexpected, :nothing}}}
 
-    {:ok, pid, ref} = computed_one(:OptTaker)
+    {:ok, pid, ref} = computed_one(host_mod("opt-taker"))
     send(pid, {:muro, self(), :nothing})
     assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :abandon}}
 
-    {:ok, pid, ref} = computed_one(:OptTaker)
+    {:ok, pid, ref} = computed_one(host_mod("opt-taker"))
     send(pid, {:muro, self(), {:just, 0}})
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = computed_one(:OptTaker)
+    {:ok, pid, ref} = computed_one(host_mod("opt-taker"))
     send(pid, {:muro, self(), true})
     assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, {:unexpected, true}}}
   end
@@ -642,7 +618,8 @@ defmodule Muro.EmitOtpTest do
 
     assert src =~ "{:say, :headers, {:say, :chunk, :finish}}"
     refute src =~ "≤"
-    refute src =~ "late"
+    refute src =~ ~s/{:run, "late"/
+    refute src =~ "def late"
 
     Code.compile_string(src)
   end
@@ -659,15 +636,15 @@ defmodule Muro.EmitOtpTest do
 
     Code.compile_string(src)
 
-    {:ok, left, right, left_ref, right_ref} = field(:reply_wire)
+    {:ok, left, right, left_ref, right_ref} = field(host_fun("reply-wire"))
     assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
 
-    {:ok, left, right, left_ref, right_ref} = field(:pass_wire)
+    {:ok, left, right, left_ref, right_ref} = field(host_fun("pass-wire"))
     assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
 
-    {:ok, left, right, left_ref, right_ref} = field(:tail_wire)
+    {:ok, left, right, left_ref, right_ref} = field(host_fun("tail-wire"))
     assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
 
@@ -714,44 +691,44 @@ defmodule Muro.EmitOtpTest do
 
     Code.compile_string(src)
 
-    for fun <- [:pair_wire, :grant_wire, :rec_wire, :lin_wire, :shade_wire, :wrap_wire, :box_wire] do
-      {:ok, left, right, left_ref, right_ref} = pair(fun)
+    for name <- ~w(pair-wire grant-wire rec-wire lin-wire shade-wire wrap-wire box-wire) do
+      {:ok, left, right, left_ref, right_ref} = pair(host_fun(name))
       assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
       assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
     end
 
-    {:ok, pid, ref} = pair_one(:PairReply)
+    {:ok, pid, ref} = pair_one(host_mod("pair-reply"))
     send(pid, {:muro, self(), {1, :b1}})
     assert_receive {:muro, ^pid, 1}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = pair_one(:GrantReply)
+    {:ok, pid, ref} = pair_one(host_mod("grant-reply"))
     send(pid, {:muro, self(), {true, :b0}})
     assert_receive {:muro, ^pid, true}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = pair_one(:RecReply)
+    {:ok, pid, ref} = pair_one(host_mod("rec-reply"))
     send(pid, {:muro, self(), %{"x" => 1, "y" => :b0}})
     assert_receive {:muro, ^pid, :b0}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = pair_one(:LinReply)
+    {:ok, pid, ref} = pair_one(host_mod("lin-reply"))
     send(pid, {:muro, self(), {2, :b1}})
     assert_receive {:muro, ^pid, 2}
     assert_receive {:muro, ^pid, 2}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = pair_one(:ShadeReply)
+    {:ok, pid, ref} = pair_one(host_mod("shade-reply"))
     send(pid, {:muro, self(), {0, :b0}})
     assert_receive {:muro, ^pid, :b0}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = pair_one(:WrapReply)
+    {:ok, pid, ref} = pair_one(host_mod("wrap-reply"))
     send(pid, {:muro, self(), {{1, :b1}, :b0}})
     assert_receive {:muro, ^pid, {1, :b1}}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = pair_one(:BoxReply)
+    {:ok, pid, ref} = pair_one(host_mod("box-reply"))
     send(pid, {:muro, self(), %{"x" => {1, :b1}, "y" => :b0}})
     assert_receive {:muro, ^pid, {1, :b1}}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
@@ -772,48 +749,48 @@ defmodule Muro.EmitOtpTest do
 
     Code.compile_string(src)
 
-    {:ok, left, right, left_ref, right_ref} = choice(:gate_true)
+    {:ok, left, right, left_ref, right_ref} = choice(host_fun("gate-true"))
     assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
 
-    {:ok, left, right, left_ref, right_ref} = choice(:gate_true_swap)
+    {:ok, left, right, left_ref, right_ref} = choice(host_fun("gate-true-swap"))
     assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
 
-    {:ok, left, right, left_ref, right_ref} = choice(:gate_false)
+    {:ok, left, right, left_ref, right_ref} = choice(host_fun("gate-false"))
     assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
 
-    {:ok, left, right, left_ref, right_ref} = choice(:gate_none)
+    {:ok, left, right, left_ref, right_ref} = choice(host_fun("gate-none"))
     assert_receive {:DOWN, ^left_ref, :process, ^left, :normal}
     assert_receive {:DOWN, ^right_ref, :process, ^right, :normal}
 
-    {:ok, pid, ref} = choice_one(:GateServer)
+    {:ok, pid, ref} = choice_one(host_mod("gate-server"))
     send(pid, {:muro, self(), {:just, true}})
     assert_receive {:muro, ^pid, :rst}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = choice_one(:GateServer)
+    {:ok, pid, ref} = choice_one(host_mod("gate-server"))
     send(pid, {:muro, self(), {:just, false}})
     refute_receive {:muro, ^pid, _}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = choice_one(:GateServer)
+    {:ok, pid, ref} = choice_one(host_mod("gate-server"))
     send(pid, {:muro, self(), :nothing})
     refute_receive {:muro, ^pid, _}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = choice_one(:HdrServer)
+    {:ok, pid, ref} = choice_one(host_mod("hdr-server"))
     send(pid, {:muro, self(), {:hdr, :bytes}})
     assert_receive {:muro, ^pid, :rst}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = choice_one(:WrapServer)
+    {:ok, pid, ref} = choice_one(host_mod("wrap-server"))
     send(pid, {:muro, self(), {:wrap, {:hdr, :bytes}}})
     assert_receive {:muro, ^pid, :rst}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
-    {:ok, pid, ref} = choice_one(:WrapServer)
+    {:ok, pid, ref} = choice_one(host_mod("wrap-server"))
     send(pid, {:muro, self(), {:wrap, {:hdr, :trailers}}})
     refute_receive {:muro, ^pid, _}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
@@ -902,4 +879,7 @@ defmodule Muro.EmitOtpTest do
     {:ok, book} = Muro.Load.file(path)
     Muro.Prelude.for_emit(book)
   end
+
+  defp host_fun(name), do: String.to_atom(Emit.elixir_base(name))
+  defp host_mod(name), do: String.to_atom(Emit.elixir_alias(name))
 end

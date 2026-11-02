@@ -150,4 +150,4 @@ The refusal is the whole module. A book that does not check is refused by the ch
 
 `impl:` and `imports:` on a `:fsm` entry are errors, and the message names the entry index. They remain valid only for `kind: :exunit`. The header, the hashes, `written` / `unchanged`, `--check`, a stale book, and a hand edit are the same as for the other kinds.
 
-The child of `session ping` is `Host.MeetFsm.Ping`. A hyphen in the session name becomes a capital (`grant-end` is `GrantEnd`). Two sessions that camelize to the same name are `Ping` and `Ping2`.
+The child of `session ping` is `Host.MeetFsm.Ping`. A session name whose function spelling is plain snake case (lowercase words of letters and digits joined by single underscores) camelizes: `ping` is `Ping` and `foo_bar` is `FooBar`. Any other name is `M` plus the function spelling (`grant-end` is `Mmuro__grantzdend`). Two sessions that camelize to the same name are `Ping` and `Ping_2`.

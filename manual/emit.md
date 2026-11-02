@@ -2,12 +2,12 @@
 title: Emit
 slug: emit
 order: 13
-summary: What becomes Elixir. C and Rust print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A session endpoint is a state machine. A cross is one call on a named node. Spec and evidence are omitted from a run.
+summary: What becomes Elixir. C, Rust, and Zig print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A session endpoint is a state machine. A cross is one call on a named node. Spec and evidence are omitted from a run.
 ---
 
 # Emit
 
-In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--backend fsm` writes each session endpoint as a state machine and leaves the transport with the host. `--node` writes one call for each cross, on the node the flag names.
+In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend zig` writes that same closed run as Zig. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--backend fsm` writes each session endpoint as a state machine and leaves the transport with the host. `--node` writes one call for each cross, on the node the flag names.
 
 ## From a file
 
@@ -38,6 +38,7 @@ mix muro.emit path.muro
 mix muro.emit path.muro --backend elixir
 mix muro.emit path.muro --backend c
 mix muro.emit path.muro --backend rust
+mix muro.emit path.muro --backend zig
 mix muro.emit path.muro --backend asm
 mix muro.emit path.muro --backend otp
 mix muro.emit path.muro --backend fsm
@@ -45,9 +46,9 @@ mix muro.emit path.muro --backend exunit
 mix muro.emit path.muro --node a
 ```
 
-`--backend c` writes `<name>.h` and `<name>.c` next to the file and prints those paths. It emits `run` and `run internal` only. `run internal` is `static`. Erased arguments are dropped. `Nat` is a tagged struct (`0` is zero, `1` is `suc`) with constructors `muro_zero` and `muro_suc`. `Unit` and user `data`, indexed data included, are a tag plus fields. `match` is a `switch`. A constructor with no fields is one static object, the way `tt` is `muro_tt_obj`, and its function returns that address. A constructor with fields allocates through `MURO_ALLOC`. A name that is a C keyword through C23, a typedef from `<stdint.h>`, or a common function from the C library and POSIX (`true`, `read`, `malloc`) is prefixed with `muro_`. Any other name is emitted as spelled. A definition whose spelling is already taken, by an earlier definition or by a constructor function, gains a numeric suffix (`foo_bar_2`).
+`--backend c` writes `<name>.h` and `<name>.c` next to the file and prints those paths. It emits `run` and `run internal` only. `run internal` is `static`. Erased arguments are dropped. `Nat` is a tagged struct (`0` is zero, `1` is `suc`) with constructors `muro__zero` and `muro__suc`. `Unit` and user `data`, indexed data included, are a tag plus fields. `match` is a `switch`. A constructor with no fields is one static object, and its function returns that address. A constructor with fields allocates through `muro__ALLOC`. Every identifier is either a source spelling or a generated name. A source spelling is an injective encoding of the source identifier: `z` and `Z` are doubled, `_` is `zu`, `-` is `zd`, and `'` is `zq`. It gains `_k` when that encoding is a C keyword through C23, a typedef from `<stdint.h>` or `<stdbool.h>`, or a common function from the C library and POSIX (`true`, `read`, `malloc`). The encoding has no underscore, so a source `uint8_t` is `uint8zut` and does not spell the typedef. A spelling that is already taken, by an earlier definition or by a constructor function, gains a numeric suffix. A binder is claimed against every name visible in its scope, including type names. A source spelling contains no `__`. A helper, a step, a constructor argument, and a temporary are `muro__` plus a tag, so they always contain `__`. `a-b`, `a_b`, and `a_b_2` stay three functions. That spelling is the C, Rust, or Zig symbol. A host export is the source name: the Elixir NIF maps it the same way as the Elixir backend and calls the symbol.
 
-A `run` stream is a struct: the seed, an environment for values the step closes over, and a function pointer for the step. `unfold n (λ k → (k, suc k))` is `muro_stream_new` of `n` and that step. `uncons` calls the step and returns the head together with a new struct for the tail. The original seed stays in place, as `Enum.take` plus `Stream.drop` does on the Elixir backend. `examples/zeros.muro` and `examples/nats.muro` are the drivers. `Always` and `~` are evidence, so they are omitted. A lambda applied on the spot is a local: the argument is evaluated once and the body uses it. An unapplied lambda, and a call of a local function, are refused (`c:lambda`).
+A `run` stream is a struct: the seed, an environment for values the step closes over, and a function pointer for the step. `unfold n (λ k → (k, suc k))` is `muro__stream_new` of `n` and that step. `uncons` calls the step and returns the head together with a new struct for the tail. The original seed stays in place, as `Enum.take` plus `Stream.drop` does on the Elixir backend. `examples/zeros.muro` and `examples/nats.muro` are the drivers. `Always` and `~` are evidence, so they are omitted. A lambda applied on the spot is a local: the argument is evaluated once and the body uses it. An unapplied lambda, and a call of a local function, are refused (`c:lambda`).
 
 A run whose type or body mentions `I64`, `F32`, or `Tensor` is refused (`c:machine`) and still emits on the Elixir backend. A raw `ν`, `Always`, or `~` inside a `run` is refused (`c:stream`).
 
@@ -55,26 +56,26 @@ The header is shaped like this:
 
 ```
 /* generated by muro — do not edit */
-#ifndef MURO_HALF_OK_H
-#define MURO_HALF_OK_H
+#ifndef muro__H_halfzuok
+#define muro__H_halfzuok
 #include <stdint.h>
-#ifndef MURO_ALLOC
-#define MURO_ALLOC(n) malloc(n)
+#ifndef muro__ALLOC
+#define muro__ALLOC(n) malloc(n)
 #endif
-typedef struct muro_nat muro_nat;
-struct muro_nat { uint8_t tag; muro_nat *suc; }; /* 0 = zero, 1 = suc */
-muro_nat *half(muro_nat *n);
+typedef struct muro__nat muro__nat;
+struct muro__nat { uint8_t muro__field_tag; muro__nat *muro__field_suc; }; /* 0 = zero, 1 = suc */
+muro__nat *half(muro__nat *n);
 #endif
 ```
 
-`MURO_ALLOC` is `malloc` unless you define it before the generated file is compiled. Every allocating constructor calls it, and so do `muro_nat_new`, `muro_mk_pair`, and a stream's environment. A fieldless constructor is a static object and does not. The pointer a function returns points into that storage. Read or copy it, then set the cursor back to the start. The next call reuses the block. The static objects stay where they are.
+`muro__ALLOC` is `malloc` unless you define it before the generated file is compiled. Every allocating constructor calls it, and so do `muro__nat_new`, `muro__mk_pair`, and a stream's environment. A fieldless constructor is a static object and does not. The pointer a function returns points into that storage. Read or copy it, then set the cursor back to the start. The next call reuses the block. The static objects stay where they are.
 
 ```
-#define MURO_ALLOC(n) arena_alloc(n)
+#define muro__ALLOC(n) arena_alloc(n)
 ```
 
 ```
-muro_nat *n = two();
+muro__nat *n = two();
 /* copy what you need from n */
 arena_at = 0;
 ```
@@ -83,15 +84,23 @@ arena_at = 0;
 
 An exported run whose live arguments and result are `Nat` is a NIF entry. When the working directory is the loaded Mix project, `--backend c` writes `<stem>_nif.h`, `<stem>_nif.c`, `<stem>.mk`, and `<stem>.ex` beside the C, and `elixir_make` runs that makefile. The library is `priv/<stem>.so`. The module is the camelized stem (`half_ok.muro` is `HalfOk`). `HalfOk.half(4)` is the integer `2`, and `HalfOk.plus(2, 3)` is `5`. Outside that directory, and in the self-contained executable, the same command writes the `.h` and the `.c` only.
 
-The entry builds the tagged struct and reads it back. An argument that is not a non-negative integer fitting in 64 bits is a bad argument, and so is a result that does not fit. Allocation goes through `MURO_ALLOC`, defined as one block for the call. The call copies the integer out and resets the block, so the next call reuses it. Two calls do not share the cursor.
+The entry builds the tagged struct and reads it back. An argument that is not a non-negative integer fitting in 64 bits is a bad argument, and so is a result that does not fit. Allocation goes through `muro__ALLOC`, defined as one block for the call. The call copies the integer out and resets the block, so the next call reuses it. Two calls do not share the cursor.
 
-`run internal` stays `static` and is not an entry. A run whose argument or result is not `Nat` stays in the C file and is not an entry. A file with no Nat entry writes the `.h` and the `.c` only. A definition that spells `muro_nif_alloc` takes the `muro_` prefix, as the other runtime names do. `cc` translates the C. The proof stops at the run image.
+`run internal` stays `static` and is not an entry. A run whose argument or result is not `Nat` stays in the C file and is not an entry. A file with no Nat entry writes the `.h` and the `.c` only. The allocator in that unit is the generated name `muro__nif_alloc`. A source spelling has no `__`, so it cannot take that name. The Elixir loader stays `muro_nif_load`. The Elixir function is the name every Elixir-facing backend uses for that run. A name that is already a function name stays itself, so `foo_bar` is `foo_bar/0` and `read` is `read/0`. Anything else is `muro__` plus the encoding: `Bit` is `muro__Bit/0`, `foo-bar` is `muro__foozdbar/0`, and `and` is `muro__and/0`. `foo-bar` does not take `foo_bar`. The name is claimed for every run, in book order, before internal and non-`Nat` runs are dropped, so the suffix does not depend on which runs the NIF keeps. A run named `muro_nif_load` is `muro_nif_load_2`. The C symbol is still the spelling, so `read` calls `read_k`. The stub calls that symbol. `cc` translates the C. The proof stops at the run image.
 
 ## Rust
 
-`--backend rust` writes `<name>.rs` next to the file and prints that path. It prints the same closed run as the C backend. `run internal` is a private function. `Nat` is `Zero` or `Suc`. An atom is one variant of a closed enum. A stream is a seed and a step. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. A term the C backend refuses is refused here, with the same reason.
+`--backend rust` writes `<name>.rs` next to the file and prints that path. It prints the same closed run as the C backend. `run internal` is a private function. `muro__Nat` is `muro__tag_zero` or `muro__tag_suc`. An atom is one variant of a closed enum. A stream is a seed and a step. `muro__from_u64` builds a `Nat` and `muro__to_u64` reads it back. Identifiers use the same split as the C text: a source spelling contains no `__`, and a helper, a step, a constructor argument, or a temporary always contains `__`. A binder is claimed against every name visible in its scope, including type names. Rust reserves primitive types and the prelude names its runtime uses (`Clone`, `Copy`, `PartialEq`, `Eq`, `Fn`). It names `u64` as `::std::primitive::u64`, and it writes derives and `dyn Fn` with a full path. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. A term the C backend refuses is refused here, with the same reason.
 
 `rustc` translates this text. `cc` translates the C. CompCert is the high-assurance C translator. Neither is the proof. The proof stops at the run image.
+
+## Zig
+
+`--backend zig` writes `<name>.zig` next to the file and prints that path. It prints the same closed run as the C backend. `run internal` is a private function. `Nat` and user data are tagged unions. A fieldless constructor is one static value. `match` is `switch`. A stream is a seed, an environment, and a step. A lambda applied on the spot is a local. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. A term the C backend refuses is refused here, with the same reason.
+
+A function that allocates takes `muro__allocator: muro__std.mem.Allocator` first and returns an error union. The caller can pass a `muro__std.heap.ArenaAllocator` and reset it. `muro__from_u64` builds a `Nat`. `muro__to_u64` reads one back. Identifiers use the same split as the C text. A source spelling contains no `__`. It gains `_k` when the encoding is a Zig keyword, a primitive such as `u64`, `bool`, `type`, or `anyopaque`, or a width such as `u8`, and a numeric suffix when that spelling is already taken. Zig has no path for a primitive, so the spelling is what keeps `u64` in scope. A binder is claimed against every name visible in its scope, including type names. A helper, a step, a constructor argument, or a temporary is `muro__` plus a tag, so a suffix cannot move it into the source spellings. A binder hidden by a later binder in the same pattern is discarded.
+
+The text is Zig 0.15. `zig` translates it. The proof stops at the run image.
 
 ## Cortex-M
 
@@ -113,7 +122,7 @@ A `read` is the same process. The actions are the reading's process, and the chi
 mix muro.emit examples/located.muro --backend otp
 ```
 
-That writes `examples/located_otp.ex`. The module is `LocatedOtp`. `read stay pong : ping-home at home` is `LocatedOtp.Pong.start/1`, and `read cross pong-away : ping-home at away` is `LocatedOtp.PongAway.start/1`. Both take the peer pid. Both receive a nat and send `1`, then stop with `:normal`. `pong-poly`, `pong-poly-away`, and `pong-done` are that same exchange. `left-open` sends `0` and stops with `{:shutdown, :abandon}`. `Pong` stays at `home` and `PongAway` crosses at `away`. The server talks to one peer either way. The boundary is the call `--node` writes.
+That writes `examples/located_otp.ex`. The module is `LocatedOtp`. `read stay pong : ping-home at home` is `LocatedOtp.Pong.start/1`, and `read cross pong-away : ping-home at away` is `LocatedOtp.Mmuro__pongzdaway.start/1`. Both take the peer pid. Both receive a nat and send `1`, then stop with `:normal`. `pong-poly`, `pong-poly-away`, and `pong-done` are that same exchange, as `Mmuro__pongzdpoly`, `Mmuro__pongzdpolyzdaway`, and `Mmuro__pongzddone`. `left-open` is `Mmuro__leftzdopen`. It sends `0` and stops with `{:shutdown, :abandon}`. `Pong` stays at `home` and `Mmuro__pongzdaway` crosses at `away`. A process name whose function spelling is plain snake case (lowercase words of letters and digits joined by single underscores) camelizes, so `pong` is `Pong` and `foo_bar` is `FooBar`. Any other name is `M` plus the function spelling, so a hyphen does not fold onto another module. The server talks to one peer either way. The boundary is the call `--node` writes.
 
 A meeting starts the two processes it names as each other's peer. Both are running before either takes its first action.
 
@@ -123,7 +132,7 @@ mix muro.emit examples/meet.muro --backend otp
 
 That writes `examples/meet_otp.ex`. The module is `MeetOtp`. `meet wire : pong with peer` is `MeetOtp.wire/0`. It returns `{:ok, left, right, left_ref, right_ref}`. `left` runs `pong` and `right` runs `peer`. Each ref is a monitor of that server, installed before the first action. Both servers of `wire` finish with `:normal`. `arm` is the choice, and both servers finish with `:normal`. `drop` is both ends abandoning after `0`, and both stop with `{:shutdown, :abandon}`. `wrapped` sends `(b0, {x = 0, y = 0})`, which the peer receives as a tuple whose second element is a map with keys `x` and `y`, and both servers finish with `:normal`. `Pong.start/1` still takes a peer pid supplied by the caller. The payload stays on the session. The place stays the call `--node` writes.
 
-`examples/indexed.muro` is the same image for a bit index. `IndexedOtp.wire/0` starts the server that offers both arms and the client that sends `:b0`. The server answers `1`. `wire_one` sends `:b1` and then `0`. `echo_wire` sends `:b1` and receives that same bit. The message is `{:muro, from, bit}`. A nat sent where the index is expected stops the server with `{:shutdown, {:unexpected, value}}`.
+`examples/indexed.muro` is the same image for a bit index. `IndexedOtp.wire/0` starts the server that offers both arms and the client that sends `:b0`. The server answers `1`. `muro__wirezdone` sends `:b1` and then `0`. `muro__echozdwire` sends `:b1` and receives that same bit. The message is `{:muro, from, bit}`. A nat sent where the index is expected stops the server with `{:shutdown, {:unexpected, value}}`.
 
 `examples/recursive.muro` is the same image for a protocol that repeats. `RecursiveOtp.wire/0` starts the server that echoes a nat while the bit is `b0` and the client that sends `b0`, `1`, and then `b1`. Both finish with `:normal`. The skeleton of the loop is `{:loop, name, body}` and the jump is `{:jump, name}`. `drive` stores the body and a jump calls `drive` on that body. The call is in tail position. `Forever` is `rec X. get (n : Nat) (put n X)`. It does not finish. A caller sends a nat and receives that nat, then sends another.
 
@@ -143,7 +152,7 @@ That writes `examples/place_node.ex`. The module is `PlaceNode`. The flag is a B
 
 `place away := node a` is what the checker reads. `away` is the place, and `a` is the node in that declaration. The flag is what the generated call addresses. This example spells that node `a` in the declaration and in the flag.
 
-`place.muro` has one cross, `move cross local : away`. It is the function `PlaceNode.cross_local_at_away/1`. `local` is the scheme and `away` is the place, and both names are in the function. A second cross of that scheme at that place is `cross_local_at_away2`. A hyphen in either name becomes an underscore in the function. The name registered on the node is the scheme as an atom. For this cross that atom is `:local`. A hyphen in the scheme stays in the atom.
+`place.muro` has one cross, `move cross local : away`. It is the function `PlaceNode.cross_local_at_away/1`. `local` is the scheme and `away` is the place, and both names are in the function. A second cross of that scheme at that place is `cross_local_at_away_2`. A scheme or a place that is not a plain lowercase name, or that already contains `_at_`, is not joined that way: the function is the Elixir spelling of a length-prefixed pair, so two different pairs do not share a name. The name registered on the node is the scheme as an atom when that scheme is already an atom (`:local`). A hyphenated scheme uses the same Elixir spelling as a function. The message stays `{:muro_read, scheme}` with the source string.
 
 `cross_local_at_away` takes a timeout in milliseconds. The default is 5000, so `PlaceNode.cross_local_at_away()` uses that. The destination is `{:local, :a}`: a process registered as `:local` on the node `:a`. That process handles `{:muro_read, "local"}`, the read of the scheme. The function monitors the destination, and then calls:
 
@@ -161,7 +170,7 @@ A `read cross` is the same call. The scheme is the one the endpoint names, and t
 mix muro.emit examples/located.muro --node a
 ```
 
-That writes `examples/located_node.ex`. The module is `LocatedNode`. `read cross pong-away : ping-home at away` is `LocatedNode.cross_local_at_away/1`, because `ping-home` names `local`. `pong-done` and `left-open` also read `local` at `away`, so they are `cross_local_at_away2` and `cross_local_at_away3`. Each one monitors `:local` on `:a` and calls with `{:muro_read, "local"}`. `read stay pong` writes no function. A reading of `poly` writes no function either: `poly` stays at `home` and at `away`.
+That writes `examples/located_node.ex`. The module is `LocatedNode`. `read cross pong-away : ping-home at away` is `LocatedNode.cross_local_at_away/1`, because `ping-home` names `local`. `pong-done` and `left-open` also read `local` at `away`, so they are `cross_local_at_away_2` and `cross_local_at_away_3`. Each one monitors `:local` on `:a` and calls with `{:muro_read, "local"}`. `read stay pong` writes no function. A reading of `poly` writes no function either: `poly` stays at `home` and at `away`.
 
 `kept` is a `run` definition in the same file. `mix muro.emit examples/place.muro` emits it. The place, the scheme, and the move are omitted there, as they are from every run emitter. `mix muro.emit examples/located.muro` emits `kept` the same way. The endpoint and the reading are omitted there.
 
@@ -226,7 +235,7 @@ becomes something like `def length(xs)`. The type argument is gone. In Muro you 
 
 A run definition with the name and live arity of a `Kernel` function or macro (`length/1`, `max/2`, `min/2`, `div/2`) is excluded from the module's `import Kernel`, so the call means the definition: `import Kernel, except: [max: 2]`.
 
-`-` and `'` in a name become `_`. An Elixir reserved word (`and`, `or`, `nil`, `fn`, and the rest of that list) is prefixed with `muro_`. Two source names that spell the same way stay two functions: the later one takes the suffix, so `foo-bar` is `foo_bar` and `foo_bar` is `foo_bar_2`, and a call uses the name of the definition it names.
+A name that matches `^[a-z_][A-Za-z0-9_]*$`, contains no `__`, and is not an Elixir reserved word stays itself. `foo_bar`, `fromMaybe`, and `muro_and` stay. Every other name is `muro__` plus `Muro.Emit.Name.encode/1`. The encoding writes no underscore, so the escape contains `__` only as that prefix, and the two images are disjoint. `encode/1` is injective, so this spelling is injective: `Bit` is `muro__Bit` and does not become `bit`, `foo-bar` is `muro__foozdbar` and does not become `foo_bar`, and `and` is `muro__and`. `?` and `!` are escaped, because a claim suffix after them is not a function name. The name of a run is claimed for every run in the book, in book order, before a backend drops internal or non-`Nat` runs. Elixir, NIF, OTP, FSM, and ExUnit read that one map. A meeting uses the same spelling (`window-wire` is `muro__windowzdwire`). A constructor atom that is already a valid atom stays (`:Bit`, `:just`, `:nil`); any other constructor uses this spelling. A module alias camelizes a plain snake name (`pong` is `Pong`, `foo_bar` is `FooBar`). Every other alias is `M` plus the function spelling (`grant-end` is `Mmuro__grantzdend`). Two aliases that camelize to one name are `A1b` and `A1b_2`.
 
 ## Functions as values
 
@@ -258,7 +267,7 @@ If you want a book in the test suite, parse/check/emit it from `test/muro_check_
 
 `--backend exunit` prints one ExUnit module for the book's closed equations, the same text as `Muro.emit_exunit/3`. The test module is the file stem plus `Test` (`rounding.muro` prints `RoundingTest`). The implementation it calls by default is the stem (`Rounding`). Skipped equations go to standard error, then a line `N tests, M skipped`. Standard output is only the module. `--node` with this backend is refused.
 
-This is the one backend that accepts a file whose `param`s are not supplied. It checks them as assumptions. Elixir, C, Rust, assembly, OTP, and `--node` still refuse that file with `param <name> is supplied by a file that imports this one`.
+This is the one backend that accepts a file whose `param`s are not supplied. It checks them as assumptions. Elixir, C, Rust, Zig, assembly, OTP, and `--node` still refuse that file with `param <name> is supplied by a file that imports this one`.
 
 `--imports` is valid only with `--backend exunit`. It also collects the closed equations of the files the book imports directly. With any other backend it is an error: `--imports is only valid with --backend exunit`. Absent, the suite is this file only.
 

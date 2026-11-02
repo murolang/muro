@@ -90,6 +90,9 @@ lib/muro/talk.ex        one description of an exchange, mirror of seen
 lib/muro/place.ex       place / scheme / move, mirror of decide
 lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
+lib/muro/load.ex        import: a relative path, pkg:, and std:
+lib/muro/std.ex         the ordinary library, embedded at compile time
+lib/muro/std/*.muro     bool, le, list, maybe, ord
 lib/muro/emit.ex        run → Elixir source
 lib/muro/repr.ex        a repr: check the host shape and emit decode/1, decode/2, and encode/2. Not a kernel term.
 lib/muro/emit/exunit.ex closed equations → one ExUnit module (`--backend exunit`, `kind: :exunit`)
@@ -167,6 +170,8 @@ A script run with `mix run --no-start` does not see the archive. Archives are on
 
 `mix muro.emit path.muro` prints the Elixir module. `mix muro.emit path.muro > path.ex` saves it. `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the book's closed equations, including a library whose `param`s are not supplied. `--imports` with that backend also collects the files the book imports directly. The page is [Closed equations as tests](exunit.md).
 
+`--backend zig` writes `<name>.zig` next to the file. `zig` translates it. The proof stops at the run image.
+
 `--backend c` writes C. The Mix task builds a NIF when the working directory is the loaded Mix project. Add `{:elixir_make, "~> 0.10", runtime: false}` to the project deps, or run the task inside a project that depends on muro. Without `elixir_make`, that NIF stops and names the dependency. Outside the loaded project the task writes the `.h` and the `.c` only, and so does the executable. `nx` and `makeup` are optional. Checking and emitting Elixir do not load them.
 
 ## Committed modules
@@ -189,11 +194,11 @@ Generated files are not edited by hand.
 Nearest example: manual/examples.md#{{example}}.
 <!-- muro:end -->
 
-`muro.exs` at the project root, a `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml` names each book and the target path. Elixir, fsm, and exunit entries also name the module. An entry may add `[kind: :exunit, impl: Adapter, imports: true]`, or `[kind: :c]`, `[kind: :rust]`, or `[kind: :asm]`. `imports:` is valid only on an exunit entry. `muro:` is the version the books are checked with. `muro gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions.
+`muro.exs` at the project root, a `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml` names each book and the target path. Elixir, fsm, and exunit entries also name the module. An entry may add `[kind: :exunit, impl: Adapter, imports: true]`, or `[kind: :c]`, `[kind: :rust]`, `[kind: :zig]`, or `[kind: :asm]`. `imports:` is valid only on an exunit entry. `muro:` is the version the books are checked with. `muro gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions.
 
 `mix muro.init` creates `muro.exs` and `priv/muro/`. It prints a note that points at `muro skills add`. It does not write `AGENTS.md`. `muro init --backend` stores that backend as the manifest's top-level `backend`. `muro init` writes the one manifest the directory calls for. If `muro.exs`, `muro.toml`, or `[package.metadata.muro]` is already present, it prints a diff of that file in its own format and leaves every file as it is. `mix muro.init --ci github` writes `.github/workflows/muro.yml`. The job installs the archive with `mix archive.install hex muro <version> --force`, with the version from the manifest, and runs `mix muro.gen --check`. `muro init --ci github` installs the executable and runs `muro gen --check`.
 
-The page is [Committed modules](gen.md). Package imports (`import "pkg:..."`, `muro_deps:`, `mix muro.deps.get`, `muro.lock`) are [Packages](packages.md).
+The page is [Committed modules](gen.md). Package imports (`import "pkg:..."`, `muro_deps:`, `mix muro.deps.get`, `muro.lock`) are [Packages](packages.md). The ordinary library is `import "std:file.muro"` ([Library](library.md)). It is compiled into the compiler. It is not the prelude, and it is not a package.
 
 ## Commands
 

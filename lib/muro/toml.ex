@@ -25,7 +25,7 @@ defmodule Muro.Toml do
   `[[package.metadata.muro.modules]]`).
   """
 
-  @backends ~w(elixir c rust asm fsm exunit)
+  @backends ~w(elixir c rust zig asm fsm exunit)
   @dep_name ~r/\A[a-z][a-z0-9_]*\z/
 
   @doc """

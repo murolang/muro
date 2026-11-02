@@ -69,6 +69,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@v5
+
       - uses: actions/download-artifact@v4
         with:
           name: muro-binaries
@@ -78,21 +80,25 @@ jobs:
         run: |
           set -euo pipefail
           test -f dist/muro-*-linux-x86_64
-          docker run --rm -v "$PWD/dist:/opt:ro" ubuntu:24.04 /bin/bash -c '
-            set -euo pipefail
-            if command -v elixir >/dev/null || command -v erl >/dev/null; then
-              echo "the smoke container has Elixir or Erlang" >&2
-              exit 1
-            fi
-            bin=$(echo /opt/muro-*-linux-x86_64)
-            cp "$bin" /tmp/muro
-            chmod 0755 /tmp/muro
-            /tmp/muro --version
-            /tmp/muro check
-            printf "%s\n" "def one : run Nat := 0" > /tmp/one.muro
-            /tmp/muro emit /tmp/one.muro --backend rust
-            test -f /tmp/one.rs
-          '
+          docker run --rm -i \
+            -v "$PWD/dist:/opt:ro" \
+            -v "$PWD/scripts/release-std-smoke.sh:/release-std-smoke.sh:ro" \
+            ubuntu:24.04 /bin/bash -s <<'SCRIPT'
+          set -euo pipefail
+          if command -v elixir >/dev/null || command -v erl >/dev/null; then
+            echo "the smoke container has Elixir or Erlang" >&2
+            exit 1
+          fi
+          bin=$(echo /opt/muro-*-linux-x86_64)
+          cp "$bin" /tmp/muro
+          chmod 0755 /tmp/muro
+          /tmp/muro --version
+          /tmp/muro check
+          printf '%s\n' 'def one : run Nat := 0' > /tmp/one.muro
+          /tmp/muro emit /tmp/one.muro --backend rust
+          test -f /tmp/one.rs
+          bash /release-std-smoke.sh /tmp/muro
+          SCRIPT
 
   release:
     name: Publish the GitHub release

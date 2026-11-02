@@ -36,6 +36,12 @@ defmodule Muro.CLI.Check do
       ),
       Muro.CLI.Text.section("OPTIONS", Muro.CLI.Text.options(options())),
       Muro.CLI.Text.section(
+        "IMPORTS",
+        Muro.CLI.Text.prose("""
+        import "std:file.muro" loads a book of the ordinary library compiled into this executable. The same bytes are used from a Hex install, from this binary, and from a checkout. A name that is not one of those books is an error, and the message lists them. A path with .., or any path that leaves the library, is refused. import "pkg:name/file.muro" loads a package file. A relative path is relative to the importing file. A file reached twice joins once.
+        """)
+      ),
+      Muro.CLI.Text.section(
         "EXAMPLES",
         Muro.CLI.Text.examples(
           [
@@ -59,6 +65,8 @@ defmodule Muro.CLI.Check do
         Muro.CLI.Text.pre([
           "https://muro-lang.dev/docs/start",
           "https://muro-lang.dev/docs/language",
+          "https://muro-lang.dev/docs/library",
+          "https://muro-lang.dev/docs/packages",
           "https://muro-lang.dev/docs/grammar"
         ])
       )

@@ -14,6 +14,15 @@ defmodule Muro.Load do
   hashed once and must match `muro.lock`. This module does not fetch
   and does not run git.
 
+  `import "std:file.muro"` loads that book from `Muro.Std`, the copy
+  compiled into the compiler. The id is `std:file.muro`, not a
+  filesystem path, so the same import works from a Hex install, a
+  Burrito binary, and this repo. A relative import inside a library
+  book stays in the library. `..`, or a path that leaves the library,
+  is refused. An unknown name is refused and the message lists
+  `Muro.Std.names/0`. A library book reached by more than one import
+  joins once, as a file does.
+
   A `param` is supplied by the declaration of the same name in the book
   that imports its file, with the same tag and a type that converts.
   A book with a param nobody supplied yet is checked where it is
@@ -26,7 +35,7 @@ defmodule Muro.Load do
   `param <name> is supplied by a file that imports this one`.
   """
 
-  alias Muro.{Check, Parser, Prelude}
+  alias Muro.{Check, Parser, Prelude, Std}
 
   @dep_name ~r/\A[a-z][a-z0-9_]*\z/
 
@@ -87,7 +96,7 @@ defmodule Muro.Load do
         |> Enum.reduce([], fn imp, acc ->
           case import_target(imp, ctx) do
             {:ok, target} ->
-              target = Path.expand(target)
+              target = canon_target(target)
               if target in acc, do: acc, else: acc ++ [target]
 
             {:error, _} ->
@@ -100,8 +109,21 @@ defmodule Muro.Load do
   end
 
   @doc false
+  def classify_import("std:" <> rest) do
+    case Std.classify(rest) do
+      {:ok, name} -> {:std, name}
+      :escape -> :std_escape
+    end
+  end
+
   def classify_import("pkg:" <> rest), do: classify_pkg(rest)
   def classify_import(path) when is_binary(path), do: :relative
+
+  # A library id is not a filesystem path. Expanding it would look for
+  # a file named `std:le.muro` in the working directory.
+  defp canon_target(path) do
+    if Std.std_id?(path), do: path, else: Path.expand(path)
+  end
 
   defp new_ctx(opts, path) do
     looked = if File.dir?(path), do: path, else: Path.dirname(path)
@@ -289,8 +311,21 @@ defmodule Muro.Load do
           {:ok, Path.join([ctx.root, "muro_deps", name | String.split(rel, "/")])}
         end
 
+      {:std, name} ->
+        {:ok, Std.id(name)}
+
+      :std_escape ->
+        {:error, :bad}
+
       :relative ->
-        {:ok, Path.expand(imp.path, Path.dirname(imp.file))}
+        if Std.std_id?(imp.file) do
+          case Std.relative(imp.file, imp.path) do
+            {:ok, name} -> {:ok, Std.id(name)}
+            :escape -> {:error, :bad}
+          end
+        else
+          {:ok, Path.expand(imp.path, Path.dirname(imp.file))}
+        end
 
       :bad ->
         {:error, :bad}
@@ -360,17 +395,68 @@ defmodule Muro.Load do
       {:pkg, name, rel} ->
         resolve_pkg(imp, name, rel, stack, opts, ctx)
 
+      {:std, name} ->
+        resolve_std(imp, name, stack, opts, ctx)
+
+      :std_escape ->
+        {:error, leaves_stdlib(imp, ctx)}
+
       :bad ->
         {:error, "#{site(imp, ctx)}bad package import \"#{imp.path}\""}
 
       :relative ->
-        full = Path.expand(imp.path, Path.dirname(imp.file))
+        if Std.std_id?(imp.file) do
+          case Std.relative(imp.file, imp.path) do
+            {:ok, name} -> resolve_std(imp, name, stack, opts, ctx)
+            :escape -> {:error, leaves_stdlib(imp, ctx)}
+          end
+        else
+          full = Path.expand(imp.path, Path.dirname(imp.file))
 
-        case stays_in_package(imp, full, ctx) do
-          :ok -> resolve(full, stack, opts, ctx)
-          {:error, _} = err -> err
+          case stays_in_package(imp, full, ctx) do
+            :ok -> resolve(full, stack, opts, ctx)
+            {:error, _} = err -> err
+          end
         end
     end
+  end
+
+  # The book is the embedded source. Its file id is `std:<name>`, which
+  # is what a nested import, a cycle, and a second import all see.
+  defp resolve_std(imp, name, stack, opts, ctx) do
+    id = Std.id(name)
+
+    cond do
+      id in stack ->
+        {:error, cycle(stack, id, ctx)}
+
+      true ->
+        case Std.source(name) do
+          :error ->
+            {:error, unknown_std(imp, name, ctx)}
+
+          {:ok, bytes} ->
+            load_embedded(id, bytes, stack, opts, ctx)
+        end
+    end
+  end
+
+  defp load_embedded(id, bytes, stack, opts, ctx) do
+    with {:ok, parsed} <- parse(bytes, id, ctx),
+         {:ok, flat, ctx} <- inline(parsed, id, stack, opts, ctx),
+         {:ok, {flat, checks}, ctx} <- supply(flat, ctx),
+         :ok <- check_supplied(flat, checks, id, opts, ctx) do
+      {:ok, flat, ctx}
+    end
+  end
+
+  defp unknown_std(imp, name, ctx) do
+    books = Enum.join(Std.names(), ", ")
+    "#{site(imp, ctx)}unknown standard library book \"#{name}\"\navailable books: #{books}"
+  end
+
+  defp leaves_stdlib(imp, ctx) do
+    "#{site(imp, ctx)}import \"#{imp.path}\" leaves the standard library"
   end
 
   defp resolve_pkg(imp, name, rel, stack, opts, ctx) do
@@ -664,6 +750,8 @@ defmodule Muro.Load do
     file = display(path, ctx)
     Regex.replace(~r/^(\d+:\d+:)/m, msg, "#{file}:\\1")
   end
+
+  defp display("std:" <> _ = id, _ctx), do: id
 
   defp display(path, ctx) do
     case package_identity(path, ctx) do

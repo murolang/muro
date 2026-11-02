@@ -431,6 +431,7 @@ defmodule Muro.Init do
 
   defp example_paths(:c), do: {"src/rounding.c", nil}
   defp example_paths(:rust), do: {"src/rounding.rs", nil}
+  defp example_paths(:zig), do: {"src/rounding.zig", nil}
   defp example_paths(:asm), do: {"src/rounding.s", nil}
   defp example_paths(nil), do: {"src/rounding.rs", nil}
 

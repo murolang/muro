@@ -638,6 +638,7 @@ defmodule Muro.EmitExunitTest do
           fn -> Muro.emit_file(path, Lib) end,
           fn -> Muro.emit_c(path) end,
           fn -> Muro.emit_rust(path) end,
+          fn -> Muro.emit_zig(path) end,
           fn -> Muro.emit_asm(path) end,
           fn -> Muro.emit_otp(path) end,
           fn -> Muro.emit_node(path, :a) end,
@@ -654,7 +655,7 @@ defmodule Muro.EmitExunitTest do
     assert source =~ "test \"lib.muro held\""
     refute source =~ "@callback p_is"
 
-    for backend <- ["elixir", "c", "rust", "asm", "otp", "fsm"] do
+    for backend <- ["elixir", "c", "rust", "zig", "asm", "otp", "fsm"] do
       assert_raise Mix.Error, ~r/param p is supplied by a file that imports this one/, fn ->
         Mix.Tasks.Muro.Emit.run([path, "--backend", backend])
       end
@@ -764,7 +765,10 @@ defmodule Muro.EmitExunitTest do
       end)
 
     assert_received {:stderr, stderr}
-    {stdout, stderr}
+    # Mix.Shell.IO.info prints "==> muro" the first time the shell is used
+    # after another project has taken it. Which test runs first decides
+    # whether this capture sees the line, so it is dropped here.
+    {String.replace(stdout, ~r/^==> \S+\n/m, ""), stderr}
   end
 
   defp callbacks_of(source) do

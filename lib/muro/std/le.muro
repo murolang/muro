@@ -1,0 +1,96 @@
+-- le.muro — ≤ on Nat, and max.
+-- Le m n computes: Unit when m ≤ n, Empty otherwise.
+-- A closed inequality is tt. A false one is eliminated with matchEmpty.
+
+def Le : spec Π (m : Nat) → Π (n : Nat) → Type :=
+  λ (m : Nat) → λ (n : Nat) →
+    match m motive (λ _ → Type)
+      | 0 => Unit
+      | suc m1 =>
+          (match n motive (λ _ → Type)
+            | 0 => Empty
+            | suc n1 => Le m1 n1)
+
+def le-refl : evidence Π (n : Nat) → Le n n :=
+  λ (n : Nat) →
+    match n motive (λ (x : Nat) → Le x x)
+      | 0 => tt
+      | suc m => le-refl m
+
+def le-trans : evidence Π (a : Nat) → Π (b : Nat) → Π (c : Nat) →
+                        Π (ab : Le a b) → Π (bc : Le b c) → Le a c :=
+  λ (a : Nat) →
+    match a motive (λ (x : Nat) → Π (b : Nat) → Π (c : Nat) → Π (ab : Le x b) → Π (bc : Le b c) → Le x c)
+      | 0 => λ (b : Nat) → λ (c : Nat) → λ (ab : Le 0 b) → λ (bc : Le b c) → tt
+      | suc a1 => λ (b : Nat) →
+          match b motive (λ (y : Nat) → Π (c : Nat) → Π (ab : Le (suc a1) y) → Π (bc : Le y c) → Le (suc a1) c)
+            | 0 => λ (c : Nat) → λ (ab : Empty) → λ (bc : Le 0 c) →
+                matchEmpty ab motive (λ _ → Le (suc a1) c)
+            | suc b1 => λ (c : Nat) →
+                match c motive (λ (z : Nat) → Π (ab : Le a1 b1) → Π (bc : Le (suc b1) z) → Le (suc a1) z)
+                  | 0 => λ (ab : Le a1 b1) → λ (bc : Empty) →
+                      matchEmpty bc motive (λ _ → Empty)
+                  | suc c1 => λ (ab : Le a1 b1) → λ (bc : Le b1 c1) → le-trans a1 b1 c1 ab bc
+
+-- The larger of the two numbers. Each argument is used once.
+def max : run Π (m : Nat) → Π (n : Nat) → Nat :=
+  λ (m : Nat) → λ (n : Nat) →
+    match m motive (λ _ → Nat)
+      | 0 => n
+      | suc p =>
+          (match n motive (λ _ → Nat)
+            | 0 => suc p
+            | suc q => suc (max p q))
+
+-- m ≤ max m n.
+def le-max-left : evidence Π (m : Nat) → Π (n : Nat) → Le m (max m n) :=
+  λ (m : Nat) →
+    match m motive (λ (x : Nat) → Π (n : Nat) → Le x (max x n))
+      | 0 => λ (n : Nat) → tt
+      | suc p => λ (n : Nat) →
+          match n motive (λ (y : Nat) → Le (suc p) (max (suc p) y))
+            | 0 => le-refl p
+            | suc q => le-max-left p q
+
+-- n ≤ max m n.
+def le-max-right : evidence Π (m : Nat) → Π (n : Nat) → Le n (max m n) :=
+  λ (m : Nat) →
+    match m motive (λ (x : Nat) → Π (n : Nat) → Le n (max x n))
+      | 0 => λ (n : Nat) → le-refl n
+      | suc p => λ (n : Nat) →
+          match n motive (λ (y : Nat) → Le y (max (suc p) y))
+            | 0 => tt
+            | suc q => le-max-right p q
+
+-- max is monotone in its first argument.
+def max-mono-left : evidence Π (m : Nat) → Π (k : Nat) → Π (n : Nat) →
+                             Π (mk : Le m k) → Le (max m n) (max k n) :=
+  λ (m : Nat) →
+    match m motive (λ (x : Nat) → Π (k : Nat) → Π (n : Nat) → Π (mk : Le x k) → Le (max x n) (max k n))
+      | 0 => λ (k : Nat) → λ (n : Nat) → λ (mk : Le 0 k) → le-max-right k n
+      | suc p => λ (k : Nat) →
+          match k motive (λ (y : Nat) → Π (n : Nat) → Π (mk : Le (suc p) y) → Le (max (suc p) n) (max y n))
+            | 0 => λ (n : Nat) → λ (mk : Empty) →
+                matchEmpty mk motive (λ _ → Le (max (suc p) n) n)
+            | suc q => λ (n : Nat) →
+                match n motive (λ (z : Nat) → Π (mk : Le p q) → Le (max (suc p) z) (max (suc q) z))
+                  | 0 => λ (mk : Le p q) → mk
+                  | suc r => λ (mk : Le p q) → max-mono-left p q r mk
+
+-- max is monotone in its second argument.
+def max-mono-right : evidence Π (m : Nat) → Π (n : Nat) → Π (k : Nat) →
+                              Π (nk : Le n k) → Le (max m n) (max m k) :=
+  λ (m : Nat) →
+    match m motive (λ (x : Nat) → Π (n : Nat) → Π (k : Nat) → Π (nk : Le n k) → Le (max x n) (max x k))
+      | 0 => λ (n : Nat) → λ (k : Nat) → λ (nk : Le n k) → nk
+      | suc p => λ (n : Nat) →
+          match n motive (λ (y : Nat) → Π (k : Nat) → Π (nk : Le y k) → Le (max (suc p) y) (max (suc p) k))
+            | 0 => λ (k : Nat) →
+                match k motive (λ (z : Nat) → Π (nk : Le 0 z) → Le (suc p) (max (suc p) z))
+                  | 0 => λ (nk : Le 0 0) → le-refl p
+                  | suc q => λ (nk : Le 0 (suc q)) → le-max-left p q
+            | suc q => λ (k : Nat) →
+                match k motive (λ (z : Nat) → Π (nk : Le (suc q) z) → Le (suc (max p q)) (max (suc p) z))
+                  | 0 => λ (nk : Empty) →
+                      matchEmpty nk motive (λ _ → Le (suc (max p q)) (suc p))
+                  | suc r => λ (nk : Le q r) → max-mono-right p q r nk

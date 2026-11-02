@@ -144,11 +144,8 @@ defmodule Muro.CheckTest do
   end
 
   test "higher_order.muro: a definition passed as a value or partially applied is a closure" do
-    src = File.read!("examples/higher_order.muro")
-    assert {:ok, book} = Parser.parse(src)
-    assert Check.check_sig(book) == :ok
-
-    out = Emit.emit_module(Muro.HigherOrder, book)
+    assert Muro.check_file("examples/higher_order.muro") == :ok
+    assert {:ok, out} = Muro.emit_file("examples/higher_order.muro", Muro.HigherOrder)
     refute out =~ "ident()"
     refute out =~ "add2-ok"
     Code.eval_string(out)
@@ -158,7 +155,7 @@ defmodule Muro.CheckTest do
     assert call("HigherOrder", :add2, []) ==
              {:cons, {:suc, {:suc, 0}}, {:cons, {:suc, {:suc, {:suc, 0}}}, nil}}
 
-    assert call("HigherOrder", :len_one, []) == {:suc, 0}
+    assert call("HigherOrder", String.to_atom(Emit.elixir_base("len-one")), []) == {:suc, 0}
     assert call("HigherOrder", :adder, [{:suc, 0}, {:suc, 0}]) == {:suc, {:suc, 0}}
   end
 
@@ -626,7 +623,7 @@ defmodule Muro.CheckTest do
 
     out = Emit.emit_module(Muro.BisimEx, book)
     assert out =~ ~r/\bdef zeros\b/
-    assert out =~ ~r/\bdef zeros_\b/
+    assert out =~ ~r/\bdef #{Emit.elixir_base("zeros'")}\b/
     assert out =~ ~r/\bdef natsFrom\b/
     refute out =~ "zeros-bisim"
     refute out =~ "nats_tail_bisim"
@@ -1177,11 +1174,8 @@ defmodule Muro.CheckTest do
   end
 
   test "list.muro checks; evidence is not emitted; length runs" do
-    src = File.read!("examples/list.muro")
-    assert {:ok, book} = Parser.parse(src)
-    assert Check.check_sig(book) == :ok
-
-    out = Emit.emit_module(Muro.Lists, book)
+    assert Muro.check_file("examples/list.muro") == :ok
+    assert {:ok, out} = Muro.emit_file("examples/list.muro", Muro.Lists)
     assert out =~ ~r/\bdef length\b/
     assert out =~ ~r/\bdef ones2\b/
     refute out =~ "length-ones2"
@@ -1190,11 +1184,8 @@ defmodule Muro.CheckTest do
   end
 
   test "maybe.muro checks; fromMaybe runs" do
-    src = File.read!("examples/maybe.muro")
-    assert {:ok, book} = Parser.parse(src)
-    assert Check.check_sig(book) == :ok
-
-    out = Emit.emit_module(Muro.MaybeEx, book)
+    assert Muro.check_file("examples/maybe.muro") == :ok
+    assert {:ok, out} = Muro.emit_file("examples/maybe.muro", Muro.MaybeEx)
     assert out =~ ~r/\bdef fromMaybe\b/
     refute out =~ "fromJust1"
     Code.eval_string(out)
@@ -1617,8 +1608,7 @@ defmodule Muro.CheckTest do
   end
 
   test "non-descending Maybe recursion fails" do
-    src = File.read!("examples/maybe.muro")
-    assert {:ok, book} = Parser.parse(src)
+    assert {:ok, book} = Muro.Load.file("examples/maybe.muro")
 
     bad = %{
       name: "loop",
@@ -1655,8 +1645,7 @@ defmodule Muro.CheckTest do
   end
 
   test "non-descending list recursion fails" do
-    src = File.read!("examples/list.muro")
-    assert {:ok, book} = Parser.parse(src)
+    assert {:ok, book} = Muro.Load.file("examples/list.muro")
 
     bad = %{
       name: "badlen",
@@ -2246,7 +2235,7 @@ defmodule Muro.CheckTest do
     sort_src = File.read!("examples/sort.muro")
     refute sort_src =~ "data List"
     assert {:ok, sort_book} = Parser.parse(sort_src)
-    assert Enum.any?(sort_book, &(&1[:kind] == :import and &1.path == "list.muro"))
+    assert Enum.any?(sort_book, &(&1[:kind] == :import and &1.path == "std:list.muro"))
     refute Enum.any?(sort_book, &(&1[:kind] == :data and &1.name == "List"))
 
     assert {:ok, ex} = Muro.emit_file("examples/sort.muro", Sort)
@@ -2543,13 +2532,16 @@ defmodule Muro.CheckTest do
     assert {:ok, book} = Parser.parse(src)
     assert :ok = Check.check_sig(book)
     out = Emit.emit_module(Muro.Collide, book)
+    bar = Emit.elixir_base("foo-bar")
+    assert out =~ "def #{bar} do"
     assert out =~ "def foo_bar do"
-    assert out =~ "def foo_bar_2 do"
-    assert out =~ "foo_bar_2()"
+    assert out =~ "foo_bar()"
+    refute out =~ "#{bar}()"
+    refute out =~ "def foo_bar_2"
     Code.eval_string(out)
     assert call("Collide", :answer, []) == {:suc, 0}
-    assert call("Collide", :foo_bar, []) == 0
-    assert call("Collide", :foo_bar_2, []) == {:suc, 0}
+    assert call("Collide", :foo_bar, []) == {:suc, 0}
+    assert call("Collide", String.to_atom(bar), []) == 0
   end
 
   test "a definition named like an Elixir reserved word emits a compilable module" do
@@ -2563,9 +2555,10 @@ defmodule Muro.CheckTest do
       assert :ok = Check.check_sig(book)
       mod = Module.concat(Muro, "Reserved#{word}")
       out = Emit.emit_module(mod, book)
-      assert out =~ "def muro_#{word}("
+      assert out =~ "def #{Emit.elixir_base(word)}("
+      assert out =~ "def #{Emit.elixir_base("use-#{word}")}"
       Code.eval_string(out)
-      assert apply(mod, :"use_#{word}", []) == 0
+      assert apply(mod, String.to_atom(Emit.elixir_base("use-#{word}")), []) == 0
     end
   end
 
@@ -2837,15 +2830,19 @@ defmodule Muro.CheckTest do
     assert take.("CshrlTwo", :episode, :start, 3) == [go: 1, go: 1, go: 1]
 
     load.("examples/cshrl/envs/binary_sacrifice.muro", "CshrlSac")
-    assert take.("CshrlSac", :episode, :start, 3) == [go_trap: 1, go_paradise: 0, go_paradise: 0]
+    trap = String.to_atom(Emit.elixir_atom_name("go-trap"))
+    paradise = String.to_atom(Emit.elixir_atom_name("go-paradise"))
+    successor = String.to_atom(Emit.elixir_base("successor-episode"))
 
-    assert take.("CshrlSac", :successor_episode, :start, 3) ==
-             [go_paradise: 0, go_paradise: 1, go_paradise: 1]
+    assert take.("CshrlSac", :episode, :start, 3) == [{trap, 1}, {paradise, 0}, {paradise, 0}]
+
+    assert take.("CshrlSac", successor, :start, 3) ==
+             [{paradise, 0}, {paradise, 1}, {paradise, 1}]
 
     load.("examples/cshrl/envs/skill_investment.muro", "CshrlSkill")
     assert take.("CshrlSkill", :episode, :novice, 3) == [work: 1, work: 1, work: 1]
 
-    assert take.("CshrlSkill", :successor_episode, :novice, 5) ==
+    assert take.("CshrlSkill", successor, :novice, 5) ==
              [train: 0, train: 0, train: 0, work: 5, work: 5]
 
     assert call("CshrlSkill", :value, [:novice]) |> Enum.take(5) |> Enum.map(&nat.(nat, &1)) ==

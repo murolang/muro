@@ -11,6 +11,8 @@ A path import is enough inside one repository. It is not enough when two program
 
 `import "pkg:shared_wire/wire.muro"` loads that file from a package named in the manifest, at the version `muro.lock` records. The checker refuses the book when the file's bytes differ from the lock.
 
+`import "std:list.muro"` is not this. It loads a book compiled into the compiler. There is no manifest entry and no lock line. See [Library](library.md).
+
 ## Manifest
 
 `muro_deps:` lives in the same manifest as [`mix muro.gen`](gen.md): `muro.exs` at the project root, the `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`. If more than one of these defines a manifest, loading stops and names each of them. The TOML shape is [The executable](binary.md).

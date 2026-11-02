@@ -24,12 +24,14 @@ defmodule Muro.Emit.Node do
   end
 
   defp functions(book) do
+    # `node/0` shares this module. A cross never spells it, and the claim
+    # keeps a later escape from taking it.
     {funs, _} =
       book
       |> Enum.filter(&cross?/1)
-      |> Enum.reduce({[], MapSet.new()}, fn entry, {acc, used} ->
+      |> Enum.reduce({[], Muro.Emit.Helpers.node()}, fn entry, {acc, used} ->
         scheme = scheme_of(entry, book)
-        {fname, used} = claim(fun_name(scheme, entry.place), used)
+        {fname, used} = Muro.Emit.Name.claim(fun_name(scheme, entry.place), used)
         {[{fname, scheme} | acc], used}
       end)
 
@@ -72,7 +74,7 @@ defmodule Muro.Emit.Node do
   end
 
   defp call_fun(fname, scheme) do
-    name = inspect(String.to_atom(scheme))
+    name = inspect(String.to_atom(Muro.Emit.elixir_atom_name(scheme)))
     msg = inspect({:muro_read, scheme})
 
     """
@@ -106,23 +108,30 @@ defmodule Muro.Emit.Node do
     |> Kernel.<>("Node")
   end
 
-  defp fun_name(scheme, place), do: "cross_#{slug(scheme)}_at_#{slug(place)}"
-
-  defp slug(name) do
-    name
-    |> String.replace("-", "_")
-    |> String.replace(~r/[^A-Za-z0-9_]/, "_")
+  # Both sides kept, neither containing `_at_`, and the join free of `__`:
+  # `cross_local_at_away`. The readable join is ambiguous when `_at_` sits
+  # inside a side (`local_at_away` at `x` versus `local` at `away_at_x`),
+  # so those pairs, and any side `elixir_base/1` would escape, use
+  # `elixir_base/1` of a length-prefixed encoding. That encoding is
+  # injective in the pair, and `elixir_base/1` is injective, so distinct
+  # pairs get distinct bases. A repeated pair takes `Name.claim/2`
+  # (`cross_local_at_away_2`).
+  defp fun_name(scheme, place) do
+    if plain_side?(scheme) and plain_side?(place) and not String.contains?(scheme, "_at_") and
+         not String.contains?(place, "_at_") do
+      base = "cross_#{scheme}_at_#{place}"
+      if String.contains?(base, "__"), do: escaped_pair(scheme, place), else: base
+    else
+      escaped_pair(scheme, place)
+    end
   end
 
-  defp claim(base, used) do
-    name = if MapSet.member?(used, base), do: bump(base, 2, used), else: base
-    {name, MapSet.put(used, name)}
+  defp plain_side?(name) do
+    String.match?(name, ~r/^[a-z_][a-z0-9_]*$/) and not String.contains?(name, "__")
   end
 
-  defp bump(base, i, used) do
-    name = "#{base}#{i}"
-
-    if MapSet.member?(used, name), do: bump(base, i + 1, used), else: name
+  defp escaped_pair(scheme, place) do
+    Muro.Emit.elixir_base("#{byte_size(scheme)}.#{scheme}/#{byte_size(place)}.#{place}")
   end
 
   defp indent(code, n) do

@@ -138,9 +138,11 @@ The checker sees the whole book, so a `read` may name an endpoint declared later
 
 ## Import
 
-`import "list.muro"` names a file. The path is relative to the importing file, and the string is the whole path. The file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A file reached by two imports, directly or through another file, is loaded once. A cycle of imports is an error. `examples/sort.muro` imports `list.muro` and does not declare `List`.
+`import "list.muro"` names a file. The path is relative to the importing file, and the string is the whole path. The file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A file reached by two imports, directly or through another file, is loaded once. A cycle of imports is an error. `examples/sort.muro` imports `std:list.muro` and does not declare `List`.
 
-`import "pkg:shared_wire/wire.muro"` loads a file from a package named in the manifest, at the version `muro.lock` records. A file that differs from the lock is refused. See [Packages](packages.md).
+`import "std:list.muro"` loads a book of the ordinary library compiled into the compiler. The id is `std:list.muro`, not a path on disk, so the same import works from a Hex package, from the self-contained executable, and from this repository. The books are `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, and `ord.muro`. A name that is not one of them is an error at the import, and the message lists the books. `..`, a leading `/`, a backslash, or any path that leaves the library is refused. A relative import inside a library book stays in the library. A library book reached twice joins once. See [Library](library.md).
+
+`import "pkg:shared_wire/wire.muro"` loads a file from a package named in the manifest, at the version `muro.lock` records. A file that differs from the lock is refused. See [Packages](packages.md). `std:` is not a package and is not fetched.
 
 ## Params
 

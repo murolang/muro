@@ -31,6 +31,7 @@ defmodule Muro.Emit.Otp do
   derivation. `run` is not emitted here.
   """
 
+  alias Muro.Emit.Name
   alias Muro.Session
 
   @doc """
@@ -42,19 +43,18 @@ defmodule Muro.Emit.Otp do
     mods = modules(book)
     meets = meetings(book)
     fragment = Session.run_fragment(book, run_names_in(mods, meets))
-    {:ok, source(parent, mods, Session.payload_decls(book), fragment) |> with_meetings(meets)}
+    decls = Session.payload_decls(book)
+
+    {:ok, source(parent, mods, decls, fragment, host_clauses(book)) |> with_meetings(meets)}
   end
 
   defp modules(book) do
-    {mods, _} =
-      book
-      |> Enum.filter(&process?/1)
-      |> Enum.reduce({[], MapSet.new()}, fn %{name: name, proc: proc}, {acc, used} ->
-        {mod, used} = claim(camel(name), used)
-        {[{mod, Session.carry(proc, book)} | acc], used}
-      end)
+    procs = Enum.filter(book, &process?/1)
+    aliases = Muro.Emit.elixir_modules(Enum.map(procs, & &1.name))
 
-    Enum.reverse(mods)
+    Enum.map(procs, fn %{name: name, proc: proc} ->
+      {Map.fetch!(aliases, name), Session.carry(proc, book)}
+    end)
   end
 
   defp process?(%{kind: :conform, proc: proc}) when not is_nil(proc), do: true
@@ -64,12 +64,14 @@ defmodule Muro.Emit.Otp do
   # A meeting names the peer. Both processes exist before either is told
   # to go, and each is monitored by the other from that moment.
   defp meetings(book) do
+    # A meeting is `def name/0` beside every function this template defines.
+    taken0 = Muro.Emit.Helpers.otp()
+
     {funs, _} =
       book
       |> Enum.filter(&match?(%{kind: :meet}, &1))
-      |> Enum.reduce({[], MapSet.new()}, fn %{name: name, left: left, right: right},
-                                            {acc, used} ->
-        {fname, used} = claim(fun_base(name), used)
+      |> Enum.reduce({[], taken0}, fn %{name: name, left: left, right: right}, {acc, used} ->
+        {fname, used} = Name.claim(Muro.Emit.elixir_base(name), used)
         {[{fname, skel_of(book, left), skel_of(book, right)} | acc], used}
       end)
 
@@ -88,17 +90,6 @@ defmodule Muro.Emit.Otp do
       end)
 
     Session.carry(proc, book)
-  end
-
-  # `end`, `do`, and the other reserved words are not function names.
-  defp fun_base(name) do
-    base = String.replace(name, "-", "_")
-
-    if base in ~w(end do else catch rescue after fn when and or not in) do
-      "muro_#{base}"
-    else
-      base
-    end
   end
 
   defp with_meetings(src, []), do: src
@@ -209,7 +200,26 @@ defmodule Muro.Emit.Otp do
   defp run_names(map) when is_map(map), do: map |> Map.values() |> Enum.flat_map(&run_names/1)
   defp run_names(_), do: []
 
-  defp source(parent, mods, decls, fragment) do
+  defp host_clauses(book) do
+    names = Muro.Emit.elixir_names(book)
+
+    clauses =
+      Enum.map(Muro.Emit.run_defs(book), fn %{name: name} ->
+        host = Map.fetch!(names, name)
+        ~s|defp muro_host(#{inspect(name)}), do: #{inspect(String.to_atom(host))}|
+      end)
+
+    Enum.join(clauses ++ [host_fallback()], "\n")
+  end
+
+  defp host_fallback do
+    """
+    defp muro_host(_name), do: nil
+    """
+    |> String.trim()
+  end
+
+  defp source(parent, mods, decls, fragment, hosts) do
     children = Enum.map_join(mods, "\n\n", &child(parent, &1))
 
     """
@@ -391,8 +401,8 @@ defmodule Muro.Emit.Otp do
 
       defp pick_arm({:dat, name, _}, value, arms) do
         case Map.get(data_decls(), name) do
-          %{order: order} ->
-            tag = tag_of(value)
+          %{order: order, ctors: ctors} ->
+            tag = tag_of(ctors, value)
 
             case Enum.find_index(order, &(&1 == tag)) do
               i when is_integer(i) ->
@@ -446,10 +456,45 @@ defmodule Muro.Emit.Otp do
 
       defp open_pick(arm, _expected, _fields), do: {:ok, arm, []}
 
-      # A named arm is that constructor. A positional arm is the
-      # declaration order of the value's tag, or `b0` then `b1`.
+      # A named split names its own constructors. The host label is
+      # decoded once against those names. A positional split does not
+      # name a declaration, so it keeps the arity fallback.
       defp pick_split(value, arms) do
-        tag = tag_of(value)
+        if named_arms(arms) do
+          pick_named(value, arms)
+        else
+          pick_positional_split(value, arms)
+        end
+      end
+
+      defp named_arms([{:arm, ctor, _, _} | rest]) when is_binary(ctor), do: named_arms(rest)
+      defp named_arms([]), do: true
+      defp named_arms(_), do: false
+
+      defp pick_named(value, arms) do
+        names = for {:arm, ctor, _, _} <- arms, do: ctor
+        fields = fields_of_runtime(value)
+
+        case raw_tag(value) do
+          raw when is_binary(raw) ->
+            case Muro.Emit.source_ctor(names, raw) do
+              {:ok, tag} ->
+                case named_index(arms, tag, 0) do
+                  i when is_integer(i) -> open_pick(Enum.at(arms, i), tag, fields)
+                  _ -> :error
+                end
+
+              :error ->
+                :error
+            end
+
+          _ ->
+            :error
+        end
+      end
+
+      defp pick_positional_split(value, arms) do
+        tag = split_tag(value, length(arms))
         fields = fields_of_runtime(value)
 
         case named_index(arms, tag, 0) do
@@ -497,6 +542,41 @@ defmodule Muro.Emit.Otp do
         end)
       end
 
+      # Positional fallback only. A named split does not reach this.
+      # The declaration is not named, so the host label is resolved
+      # against each declaration of this constructor count.
+      defp split_tag(value, n) do
+        raw = raw_tag(value)
+
+        found =
+          if is_binary(raw) do
+            Enum.find_value(Map.values(data_decls()), fn
+              %{order: order, ctors: ctors} when is_list(order) and is_map(ctors) ->
+                case Muro.Emit.source_ctor(Map.keys(ctors), raw) do
+                  {:ok, name} ->
+                    if length(order) == n and name in order, do: name, else: nil
+
+                  :error ->
+                    nil
+                end
+
+              _ ->
+                nil
+            end)
+          end
+
+        found || raw || ""
+      end
+
+      defp raw_tag(value) when is_atom(value), do: Atom.to_string(value)
+
+      defp raw_tag(value) when is_tuple(value) and tuple_size(value) >= 1 do
+        tag = elem(value, 0)
+        if is_atom(tag), do: Atom.to_string(tag)
+      end
+
+      defp raw_tag(_), do: nil
+
       defp fields_of_runtime(value) when is_atom(value), do: []
 
       defp fields_of_runtime(value) when is_tuple(value) and tuple_size(value) >= 1 do
@@ -506,14 +586,14 @@ defmodule Muro.Emit.Otp do
 
       defp fields_of_runtime(_), do: []
 
-      defp tag_of(value) when is_atom(value), do: Atom.to_string(value)
+      defp tag_of(ctors, value) when is_atom(value), do: ctor_source(ctors, value)
 
-      defp tag_of(value) when is_tuple(value) and tuple_size(value) >= 1 do
+      defp tag_of(ctors, value) when is_tuple(value) and tuple_size(value) >= 1 do
         tag = elem(value, 0)
-        if is_atom(tag), do: Atom.to_string(tag), else: ""
+        if is_atom(tag), do: ctor_source(ctors, tag), else: ""
       end
 
-      defp tag_of(_), do: ""
+      defp tag_of(_ctors, _), do: ""
 
       defp payload?(:nat, n) when is_integer(n) and n >= 0, do: true
       defp payload?(:bit, bit) when bit in [:b0, :b1], do: true
@@ -551,8 +631,18 @@ defmodule Muro.Emit.Otp do
 
       defp run_book, do: #{inspect(fragment, limit: :infinity, charlists: :as_lists)}
 
+      # One decode of the host atom against this declaration's constructors.
+      defp ctor_source(ctors, tag) when is_atom(tag) do
+        names = if is_map(ctors), do: Map.keys(ctors), else: []
+
+        case Muro.Emit.source_ctor(names, Atom.to_string(tag)) do
+          {:ok, name} -> name
+          :error -> Atom.to_string(tag)
+        end
+      end
+
       defp dat_payload?(ctors, _dname, _args, value) when is_atom(value) do
-        case Map.get(ctors, Atom.to_string(value)) do
+        case Map.get(ctors, ctor_source(ctors, value)) do
           [] -> true
           _ -> false
         end
@@ -562,7 +652,7 @@ defmodule Muro.Emit.Otp do
         [tag | fields] = Tuple.to_list(value)
 
         if is_atom(tag) do
-          case Map.get(ctors, Atom.to_string(tag)) do
+          case Map.get(ctors, ctor_source(ctors, tag)) do
             tmpl when is_list(tmpl) and length(tmpl) == length(fields) ->
               Enum.zip(tmpl, fields)
               |> Enum.all?(fn {field, got} -> payload?(inst_pay(field, dname, args), got) end)
@@ -644,6 +734,7 @@ defmodule Muro.Emit.Otp do
 
       defp substitute({:run, name, args}, bindings) when is_binary(name) and is_list(args) do
         args = Enum.map(args, &substitute(&1, bindings))
+        _ = muro_host(name)
         Muro.Session.eval_run(name, args, run_book())
       end
 
@@ -660,6 +751,8 @@ defmodule Muro.Emit.Otp do
       end
 
       defp substitute(value, _bindings), do: value
+
+    #{indent(hosts, 2)}
 
     #{indent(children, 2)}
     end
@@ -681,23 +774,6 @@ defmodule Muro.Emit.Otp do
     |> String.replace("-", "_")
     |> Macro.camelize()
     |> Kernel.<>("Otp")
-  end
-
-  defp camel(name) do
-    name
-    |> String.replace("-", "_")
-    |> Macro.camelize()
-  end
-
-  defp claim(base, used) do
-    name = if MapSet.member?(used, base), do: bump(base, 2, used), else: base
-    {name, MapSet.put(used, name)}
-  end
-
-  defp bump(base, i, used) do
-    name = "#{base}#{i}"
-
-    if MapSet.member?(used, name), do: bump(base, i + 1, used), else: name
   end
 
   defp indent(code, n) do

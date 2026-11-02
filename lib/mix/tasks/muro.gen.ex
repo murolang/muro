@@ -16,9 +16,9 @@ defmodule Mix.Tasks.Muro.Gen do
   Muro version. A mismatch is an error and names both versions.
   `fuel:` is optional. `modules:` lists `{book, module, target}` or
   `{book, module, target, opts}`. A 3-tuple emits Elixir. `opts` may
-  set `kind: :exunit`, `kind: :fsm`, `kind: :c`, `kind: :rust`, or
-  `kind: :asm`, and for `:exunit`, `impl: An.Adapter` and
-  `imports: true`. A `:c`, `:rust`, or `:asm` entry may omit the
+  set `kind: :exunit`, `kind: :fsm`, `kind: :c`, `kind: :rust`,
+  `kind: :zig`, or `kind: :asm`, and for `:exunit`, `impl: An.Adapter` and
+  `imports: true`. A `:c`, `:rust`, `:zig`, or `:asm` entry may omit the
   module (`{book, target, [kind: :c]}`). `:c` also writes the `.h`
   beside the `.c`. `imports:` is a boolean, default `false`, and is
   valid only for `:exunit`. `imports: true` also collects the closed

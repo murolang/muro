@@ -1,0 +1,79 @@
+-- bool.muro — Bool, the boolean operations, and their equations.
+
+data Bool : Type where
+  true  : Bool
+  false : Bool
+
+def not : run Π (b : Bool) → Bool :=
+  λ (b : Bool) →
+    match b motive (λ _ → Bool)
+      | true => false
+      | false => true
+
+def and : run Π (a : Bool) → Π (b : Bool) → Bool :=
+  λ (a : Bool) → λ (b : Bool) →
+    match a motive (λ _ → Bool)
+      | true => b
+      | false => false
+
+def or : run Π (a : Bool) → Π (b : Bool) → Bool :=
+  λ (a : Bool) → λ (b : Bool) →
+    match a motive (λ _ → Bool)
+      | true => true
+      | false => b
+
+def not-not : evidence Π (b : Bool) → {not (not b) ≡ b : Bool} :=
+  λ (b : Bool) →
+    match b motive (λ (x : Bool) → {not (not x) ≡ x : Bool})
+      | true => refl
+      | false => refl
+
+def and-true : evidence Π (b : Bool) → {and true b ≡ b : Bool} :=
+  λ (b : Bool) → refl
+
+def and-false : evidence Π (b : Bool) → {and false b ≡ false : Bool} :=
+  λ (b : Bool) → refl
+
+def or-true : evidence Π (b : Bool) → {or true b ≡ true : Bool} :=
+  λ (b : Bool) → refl
+
+def or-false : evidence Π (b : Bool) → {or false b ≡ b : Bool} :=
+  λ (b : Bool) → refl
+
+def and-comm : evidence Π (a : Bool) → Π (b : Bool) → {and a b ≡ and b a : Bool} :=
+  λ (a : Bool) → λ (b : Bool) →
+    match a motive (λ (x : Bool) → {and x b ≡ and b x : Bool})
+      | true =>
+          (match b motive (λ (y : Bool) → {and true y ≡ and y true : Bool})
+            | true => refl
+            | false => refl)
+      | false =>
+          (match b motive (λ (y : Bool) → {and false y ≡ and y false : Bool})
+            | true => refl
+            | false => refl)
+
+def or-comm : evidence Π (a : Bool) → Π (b : Bool) → {or a b ≡ or b a : Bool} :=
+  λ (a : Bool) → λ (b : Bool) →
+    match a motive (λ (x : Bool) → {or x b ≡ or b x : Bool})
+      | true =>
+          (match b motive (λ (y : Bool) → {or true y ≡ or y true : Bool})
+            | true => refl
+            | false => refl)
+      | false =>
+          (match b motive (λ (y : Bool) → {or false y ≡ or y false : Bool})
+            | true => refl
+            | false => refl)
+
+-- not (and a b) ≡ or (not a) (not b).
+def not-and : evidence Π (a : Bool) → Π (b : Bool) →
+                       {not (and a b) ≡ or (not a) (not b) : Bool} :=
+  λ (a : Bool) → λ (b : Bool) →
+    match a motive (λ (x : Bool) → {not (and x b) ≡ or (not x) (not b) : Bool})
+      | true =>
+          (match b motive (λ (y : Bool) → {not (and true y) ≡ or false (not y) : Bool})
+            | true => refl
+            | false => refl)
+      | false =>
+          (match b motive (λ (y : Bool) → {not (and false y) ≡ or true (not y) : Bool})
+            | true => refl
+            | false => refl)

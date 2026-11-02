@@ -49,6 +49,7 @@ defmodule Muro.IRTest do
              %{
                name: "step0",
                export: false,
+               generated: true,
                params: [{"k", :nat}],
                ret: {:pair, :nat, :nat},
                body: {:pair, {:var, "k"}, {:su, {:var, "k"}}}
@@ -58,7 +59,9 @@ defmodule Muro.IRTest do
 
   test "list stores cons fields and drops the erased parameter" do
     assert {:ok, funs} = Muro.IR.elaborate_file("examples/list.muro")
-    assert Enum.map(funs, & &1.name) == ["length", "ones2"]
+    names = Enum.map(funs, & &1.name)
+    assert "length" in names
+    assert "ones2" in names
 
     length = Enum.find(funs, &(&1.name == "length"))
     assert length.params == [{"xs", {:data, "List"}}]
