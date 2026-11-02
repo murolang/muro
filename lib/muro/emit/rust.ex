@@ -97,11 +97,15 @@ defmodule Muro.Emit.Rust do
 
           {:ok,
            %{
-             names: signatures |> Enum.flat_map(fn sig -> [sig.name | sig.params] end) |> Enum.uniq(),
+             names:
+               signatures |> Enum.flat_map(fn sig -> [sig.name | sig.params] end) |> Enum.uniq(),
              elixir: Emit.elixir_names(book),
              signatures: Enum.map(signatures, &Map.delete(&1, :head)),
              layouts:
-               Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}),
+               Enum.map(
+                 signatures,
+                 &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}
+               ),
              clauses: Enum.map(signatures, & &1.head)
            }}
         end

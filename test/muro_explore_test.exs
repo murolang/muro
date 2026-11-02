@@ -13,10 +13,17 @@ defmodule Muro.ExploreTest do
     pong = proc(book, "pong")
     peer = proc(book, "peer")
     assert Meet.meets(pong, peer, book) == :ok
-    assert {:ok, graph} = Meet.graph(pong, peer, book, nil, {steps(book, "pong"), steps(book, "peer")})
+
+    assert {:ok, graph} =
+             Meet.graph(pong, peer, book, nil, {steps(book, "pong"), steps(book, "peer")})
 
     assert graph.states != []
-    assert Enum.all?(graph.states, &match?(%{id: id, loc: %{left: _, right: _}} when is_integer(id), &1))
+
+    assert Enum.all?(
+             graph.states,
+             &match?(%{id: id, loc: %{left: _, right: _}} when is_integer(id), &1)
+           )
+
     assert Enum.all?(graph.transitions, fn t ->
              is_integer(t.from) and is_integer(t.to) and is_list(t.label) and is_map(t.loc)
            end)
@@ -24,7 +31,9 @@ defmodule Muro.ExploreTest do
     assert hd(graph.transitions).loc.left != nil or hd(graph.transitions).loc.right != nil
   end
 
-  test "the explored book draws definitions, uses, and the session's configurations", %{book: book} do
+  test "the explored book draws definitions, uses, and the session's configurations", %{
+    book: book
+  } do
     g = Explore.graph(book)
     ping = find_node(g, "ping")
     assert ping.kind == :session
@@ -67,7 +76,18 @@ defmodule Muro.ExploreTest do
     left = proc(book, "client")
     right = proc(book, "server")
     assert Meet.meets(left, right, book) == :ok or Async.meets(left, right, book, 1) == :ok
-    graph = Async.graph(left, right, book, 1, "client", "server", {steps(book, "client"), steps(book, "server")})
+
+    graph =
+      Async.graph(
+        left,
+        right,
+        book,
+        1,
+        "client",
+        "server",
+        {steps(book, "client"), steps(book, "server")}
+      )
+
     assert length(graph.states) >= 2
     assert graph.transitions != []
   end

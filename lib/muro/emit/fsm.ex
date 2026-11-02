@@ -112,7 +112,8 @@ defmodule Muro.Emit.Fsm do
       names: [inspect(module) | Map.values(aliases)] |> Enum.uniq(),
       elixir: Emit.elixir_names(book),
       signatures: signatures,
-      layouts: Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}),
+      layouts:
+        Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}),
       clauses: clauses
     }
   end
