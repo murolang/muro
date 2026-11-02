@@ -25,7 +25,8 @@ defmodule MuroVisor.Layouts do
           })
         </script>
         <style>
-          body { font: 14px/1.4 ui-sans-serif, sans-serif; margin: 0; color: #1c1917; background: #fafaf9; }
+          html, body { max-width: 100%; }
+          body { font: 14px/1.4 ui-sans-serif, sans-serif; margin: 0; color: #1c1917; background: #fafaf9; overflow-x: hidden; }
           header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid #e7e5e4; }
           main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 16px; padding: 16px; align-items: start; }
           .graph-pane { min-width: 0; }
@@ -37,11 +38,16 @@ defmodule MuroVisor.Layouts do
           aside.side { min-width: 0; }
           button { font: inherit; padding: 4px 10px; }
           #outline { white-space: pre-wrap; font: 12px/1.4 ui-monospace, monospace; }
+          #outline, #outline pre { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
           #outline details { margin: 4px 0; }
           #outline summary { cursor: pointer; }
           svg .node { fill: #fff; stroke: #44403c; }
           svg .compound { fill: #f5f5f4; }
           svg .edge { stroke: #78716c; fill: none; }
+          svg g.selected > rect.node,
+          svg g.selected > rect.compound,
+          svg rect.selected { stroke: #b45309; stroke-width: 2.5px; }
+          svg path.edge.selected { stroke: #b45309; stroke-width: 2.5px; }
           svg text { font: 12px ui-sans-serif, sans-serif; }
           svg g:focus { outline: 2px solid #b45309; }
           @media (max-width: 800px) {

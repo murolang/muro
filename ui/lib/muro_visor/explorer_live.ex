@@ -19,6 +19,7 @@ defmodule MuroVisor.ExplorerLive do
          |> assign(:backend, :otp)
          |> assign(:outline, MuroVisor.Outline.render(open.book, open.path, :otp))
          |> assign(:detail, MuroVisor.Detail.empty())
+         |> assign(:selected, nil)
          |> assign(:error, nil)}
 
       {:error, msg} ->
@@ -34,6 +35,7 @@ defmodule MuroVisor.ExplorerLive do
            backend: :otp,
            outline: "",
            detail: MuroVisor.Detail.empty(),
+           selected: nil,
            error: msg
          )}
     end
@@ -54,7 +56,7 @@ defmodule MuroVisor.ExplorerLive do
   def handle_event("select", %{"id" => id} = params, socket) do
     if activate?(params) do
       detail = MuroVisor.Detail.lookup(socket.assigns.graph, socket.assigns.book, id)
-      {:noreply, assign(socket, :detail, detail)}
+      {:noreply, assign(socket, detail: detail, selected: id)}
     else
       {:noreply, socket}
     end
@@ -98,7 +100,7 @@ defmodule MuroVisor.ExplorerLive do
             <g
               :for={node <- @picture.nodes}
               id={"node-#{node.id}"}
-              class={node.class}
+              class={[node.class, @selected == node.id && "selected"]}
               data-kind={node.kind}
               data-mode={node.mode}
               data-name={node.name}
@@ -121,6 +123,7 @@ defmodule MuroVisor.ExplorerLive do
                 <g
                   :for={child <- meet.children}
                   id={"node-#{child.id}"}
+                  class={@selected == child.id && "selected"}
                   data-state={child.state}
                   tabindex="0"
                   role="button"
@@ -128,7 +131,13 @@ defmodule MuroVisor.ExplorerLive do
                   phx-keydown="select"
                   phx-value-id={child.id}
                 >
-                  <rect x={child.x} y={child.y} width={child.w} height={child.h} class="node" />
+                  <rect
+                    x={child.x}
+                    y={child.y}
+                    width={child.w}
+                    height={child.h}
+                    class={["node", @selected == child.id && "selected"]}
+                  />
                   <text x={child.x + 6} y={child.y + 16}>{child.label}</text>
                 </g>
                 <g
@@ -156,7 +165,11 @@ defmodule MuroVisor.ExplorerLive do
               phx-value-id={edge.id}
             >
               <path d={edge.d} fill="none" stroke="#44403c" stroke-opacity="0" stroke-width="12" />
-              <path class="edge" d={edge.d} stroke-width="1.5" />
+              <path
+                class={["edge", @selected == edge.id && "selected"]}
+                d={edge.d}
+                stroke-width="1.5"
+              />
               <text x={edge.lx} y={edge.ly}>{edge.label}</text>
             </g>
           </svg>

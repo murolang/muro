@@ -8,6 +8,7 @@ defmodule MuroVisor.Draw do
   @rank_gap 88
   @grid_gap 64
   @channel 14
+  @bend 4
   @pitch 16
   @inset 6
   @loop 22
@@ -15,14 +16,15 @@ defmodule MuroVisor.Draw do
   @header 22
   @char 7
   @label_h 14
-  @sweeps 4
+  @sweeps 8
 
   @doc """
   Layered positions for the book graph.
 
   Nodes sit in ranks along use edges. A rank is a column, and a book
-  with no use edges wraps into a wide grid. Each edge has its own
-  path. The same book always yields the same coordinates.
+  with no use edges wraps into a wide grid. A long edge bends once in
+  each rank it crosses, and each hop stays in the gap between two
+  adjacent columns. The same book always yields the same coordinates.
   """
   def layout(%{nodes: nodes, edges: edges}) do
     prepared = Enum.map(nodes, &prepare/1)
@@ -207,70 +209,395 @@ defmodule MuroVisor.Draw do
     placed = Enum.map(nodes, &Map.fetch!(positions, &1.id))
     by_id = Map.new(placed, &{&1.id, &1})
     routed = Enum.map(edges, &route_self(&1, by_id, ports))
-    routed = separate_labels(routed)
+    routed = separate_labels(routed, placed)
     Map.merge(bounds(placed, routed), %{nodes: placed, edges: routed})
   end
 
   defp columns(nodes, edges, rank) do
-    ports = port_lists(edges, rank)
+    hops = expand_hops(edges, rank)
+    rank = put_bends(rank, hops)
+    ports = port_lists(hop_edges(hops) ++ Enum.filter(edges, &(&1.from == &1.to)), rank)
     nodes = Enum.map(nodes, &grow(&1, ports_of(ports, &1.id)))
-    by_rank = order_ranks(nodes, edges, rank)
-    demand = channel_demand(edges, rank)
-    {placed, gaps} = assign_columns(by_rank, demand, edges)
-    by_id = Map.new(placed, &{&1.id, &1})
-    gutter = gutter_top(placed)
-
-    routed =
-      edges
-      |> Enum.map_reduce({gaps, 0}, fn edge, {gaps, gi} ->
-        {drawn, gaps, gi} = route(edge, by_id, rank, ports, gaps, gutter, gi)
-        {drawn, {gaps, gi}}
-      end)
-      |> elem(0)
-
-    routed = separate_labels(routed)
-    order = Map.new(Enum.with_index(nodes), fn {node, i} -> {node.id, i} end)
-    placed = Enum.sort_by(placed, &Map.fetch!(order, &1.id))
+    order = order_layers(nodes, hops, rank)
+    {placed, cols, ys} = place_columns(order, Map.new(nodes, &{&1.id, &1}), hops, edges)
+    routed = route_edges(edges, hops, Map.new(placed, &{&1.id, &1}), ports, cols, ys)
+    routed = separate_labels(routed, placed)
+    index = Map.new(Enum.with_index(nodes), fn {node, i} -> {node.id, i} end)
+    placed = Enum.sort_by(placed, &Map.fetch!(index, &1.id))
     Map.merge(bounds(placed, routed), %{nodes: placed, edges: routed})
   end
 
-  defp assign_columns(by_rank, demand, edges) do
-    ranks = by_rank |> Map.keys() |> Enum.sort()
+  # One hop per adjacent pair of ranks. A rank in between is a bend, not
+  # a drawn node. The bend takes its own row in that column, so two long
+  # edges never share the line they use to cross it.
+  defp expand_hops(edges, rank) do
+    Enum.flat_map(edges, fn edge ->
+      case orient(edge, rank) do
+        :self ->
+          []
 
-    Enum.reduce(ranks, {[], %{}, @pad}, fn r, {acc, gaps, x} ->
-      col = Map.fetch!(by_rank, r)
-      width = col |> Enum.map(& &1.w) |> Enum.max()
-      labels = labels_for(edges, r)
-      gap_w = gap_width(Map.get(demand, r, {0, 0}), labels)
+        _ ->
+          r1 = Map.fetch!(rank, edge.from)
+          r2 = Map.fetch!(rank, edge.to)
 
-      {col_nodes, _} =
-        Enum.map_reduce(col, @pad, fn node, y ->
-          loops = loop_count(node.id, edges) * @loop_band
-          y = y + loops
-          {%{node | x: x, y: y}, y + node.h + @node_gap}
-        end)
+          if r1 == r2 do
+            [%{id: edge.id, seq: 0, from: edge.from, to: edge.to, fr: r1, tr: r2}]
+          else
+            step = if r1 < r2, do: 1, else: -1
+            ranks = Enum.to_list(r1..r2//step)
+            mids = ranks |> tl() |> Enum.drop(-1)
+            points = [edge.from | Enum.map(mids, &{:bend, edge.id, &1})] ++ [edge.to]
 
-      gaps = Map.put(gaps, r, %{x0: x + width, next_left: 0, next_right: 0, w: gap_w})
-      {acc ++ col_nodes, gaps, x + width + gap_w}
+            points
+            |> Enum.zip(tl(points))
+            |> Enum.zip(Enum.zip(ranks, tl(ranks)))
+            |> Enum.with_index()
+            |> Enum.map(fn {{{a, b}, {ra, rb}}, i} ->
+              %{id: edge.id, seq: i, from: a, to: b, fr: ra, tr: rb}
+            end)
+          end
+      end
     end)
-    |> then(fn {placed, gaps, _x} -> {placed, gaps} end)
   end
 
-  defp route(edge, by_id, rank, ports, gaps, gutter, gi) do
-    case orient(edge, rank) do
-      :self ->
-        {route_self(edge, by_id, ports), gaps, gi}
+  defp hop_edges(hops), do: Enum.map(hops, &%{id: &1.id, from: &1.from, to: &1.to})
 
-      :forward ->
-        forward(edge, by_id, rank, ports, gaps, gutter, gi)
+  defp put_bends(rank, hops) do
+    Enum.reduce(hops, rank, fn hop, rank ->
+      rank |> maybe_bend(hop.from) |> maybe_bend(hop.to)
+    end)
+  end
 
-      :back ->
-        backward(edge, by_id, rank, ports, gaps, gutter, gi)
+  defp maybe_bend(rank, {:bend, _, r} = id), do: Map.put(rank, id, r)
+  defp maybe_bend(rank, _), do: rank
 
-      :same ->
-        same_rank(edge, by_id, rank, ports, gaps, gi)
+  defp order_layers(nodes, hops, rank) do
+    ids =
+      nodes
+      |> Enum.group_by(&Map.fetch!(rank, &1.id))
+      |> Map.new(fn {r, ns} -> {r, ns |> Enum.map(& &1.id) |> Enum.sort()} end)
+
+    bends =
+      hops
+      |> Enum.flat_map(fn hop -> [hop.from, hop.to] end)
+      |> Enum.filter(&bend?/1)
+      |> Enum.uniq()
+
+    ids =
+      Enum.reduce(bends, ids, fn {:bend, _, r} = id, ids ->
+        Map.update(ids, r, [id], fn list ->
+          if id in list, do: list, else: list ++ [id]
+        end)
+      end)
+
+    dag = hop_dag(hops)
+    preds = Enum.group_by(dag, &elem(&1, 1), &elem(&1, 0))
+
+    seeded =
+      Map.new(ids, fn {r, list} ->
+        {reals, bends} = Enum.split_with(list, &(not bend?(&1)))
+        {r, seed_ids(Enum.sort(reals), Enum.sort(bends), preds)}
+      end)
+
+    bary_sweeps(seeded, dag)
+  end
+
+  defp seed_ids(reals, bends, preds) do
+    Enum.reduce(bends, reals, fn id, acc ->
+      pred = preds |> Map.get(id, []) |> Enum.find(&(&1 in acc))
+
+      case pred && Enum.find_index(acc, &(&1 == pred)) do
+        i when is_integer(i) -> List.insert_at(acc, i + 1, id)
+        _ -> acc ++ [id]
+      end
+    end)
+  end
+
+  defp hop_dag(hops) do
+    hops
+    |> Enum.flat_map(fn hop ->
+      cond do
+        hop.fr + 1 == hop.tr -> [{hop.from, hop.to}]
+        hop.tr + 1 == hop.fr -> [{hop.to, hop.from}]
+        true -> []
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  defp bend?({:bend, _, _}), do: true
+  defp bend?(_), do: false
+
+  defp place_columns(order, by_id, hops, edges) do
+    lanes = gap_lanes(hops)
+    same = same_counts(hops)
+    ranks = order |> Map.keys() |> Enum.sort()
+
+    Enum.reduce(ranks, {[], %{}, %{}, @pad}, fn r, {acc, cols, ys, x} ->
+      ids = Map.fetch!(order, r)
+      reals = Enum.reject(ids, &bend?/1)
+      width = reals |> Enum.map(&Map.fetch!(by_id, &1).w) |> Enum.max(fn -> 1 end)
+      {col_nodes, ys, bottom} = stack_column(reals, bend_gaps(ids), by_id, edges, ys, x)
+
+      # Same-rank channels sit on the left of the gap. Each cross-rank hop
+      # then takes a private jog on both sides, so the gap has to hold all
+      # three strips or later hops would share a vertical.
+      ncross = Map.get(lanes, r, 0)
+      nsame = Map.get(same, r, 0)
+      gap = max(@rank_gap, 12 + (nsame + 2 * ncross) * @channel)
+      cols = Map.put(cols, r, %{left: x, right: x + width, bottom: bottom})
+      {acc ++ col_nodes, cols, ys, x + width + gap}
+    end)
+    |> then(fn {placed, cols, ys, _x} -> {placed, cols, ys} end)
+  end
+
+  # Bends that the ordering puts above the first node, or below the last,
+  # move into the nearest gap between nodes. Their rows then sit inside
+  # the column's node box, and each bend still has its own y.
+  defp bend_gaps(ids) do
+    {gaps, n} =
+      Enum.reduce(ids, {%{}, 0}, fn id, {gaps, gi} ->
+        if bend?(id) do
+          {Map.update(gaps, gi, [id], &(&1 ++ [id])), gi}
+        else
+          {gaps, gi + 1}
+        end
+      end)
+
+    tuck_bends(gaps, n)
+  end
+
+  defp tuck_bends(gaps, n) when n >= 2 do
+    lead = Map.get(gaps, 0, [])
+    trail = Map.get(gaps, n, [])
+
+    gaps
+    |> Map.delete(0)
+    |> Map.delete(n)
+    |> Map.update(1, lead, &(lead ++ &1))
+    |> Map.update(n - 1, trail, &(&1 ++ trail))
+  end
+
+  defp tuck_bends(gaps, _n), do: gaps
+
+  defp stack_column(reals, gaps, by_id, edges, ys, x) do
+    {ys, y} = drop_bends(Map.get(gaps, 0, []), ys, @pad)
+
+    {nodes, ys, y} =
+      reals
+      |> Enum.with_index()
+      |> Enum.reduce({[], ys, y}, fn {id, i}, {nodes, ys, y} ->
+        node = Map.fetch!(by_id, id)
+        y = y + loop_count(node.id, edges) * @loop_band
+        node = %{node | x: x, y: y}
+        y = y + node.h
+        gap_y = y + div(@node_gap, 2)
+        {ys, y} = drop_bends(Map.get(gaps, i + 1, []), ys, gap_y)
+        {[node | nodes], ys, max(y, node.y + node.h + @node_gap)}
+      end)
+
+    {Enum.reverse(nodes), ys, y}
+  end
+
+  defp drop_bends(ids, ys, y) do
+    Enum.reduce(ids, {ys, y}, fn id, {ys, y} ->
+      {Map.put(ys, id, y), y + @bend}
+    end)
+  end
+
+  defp gap_lanes(hops) do
+    hops
+    |> Enum.filter(&(&1.fr != &1.tr))
+    |> Enum.reduce(%{}, fn hop, acc ->
+      Map.update(acc, min(hop.fr, hop.tr), 1, &(&1 + 1))
+    end)
+  end
+
+  defp same_counts(hops) do
+    hops
+    |> Enum.filter(&(&1.fr == &1.tr))
+    |> Enum.reduce(%{}, fn hop, acc -> Map.update(acc, hop.fr, 1, &(&1 + 1)) end)
+  end
+
+  defp route_edges(edges, hops, by_id, ports, cols, ys) do
+    grouped = Enum.group_by(hops, & &1.id)
+    lanes = lane_index(hops)
+    sames = same_index(hops)
+    rails = assign_rails(hops, by_id, ports, cols, ys)
+    same_n = same_counts(hops)
+
+    Enum.map(edges, fn edge ->
+      case Map.get(grouped, edge.id) do
+        nil ->
+          route_self(edge, by_id, ports)
+
+        hs ->
+          points =
+            hs
+            |> Enum.sort_by(& &1.seq)
+            |> Enum.flat_map(&hop_points(&1, by_id, ports, cols, ys, lanes, sames, rails, same_n))
+            |> drop_dupes()
+
+          polyline(edge, points, 0, 0)
+      end
+    end)
+  end
+
+  # One vertical lane per cross-rank hop in a gap. Same-rank hops get their
+  # own lanes so a fan-out beside one column does not push a long edge aside.
+  defp lane_index(hops) do
+    hops
+    |> Enum.filter(&(&1.fr != &1.tr))
+    |> Enum.group_by(fn hop -> min(hop.fr, hop.tr) end)
+    |> Enum.flat_map(fn {_gap, group} -> index_group(group) end)
+    |> Map.new()
+  end
+
+  defp same_index(hops) do
+    hops
+    |> Enum.filter(&(&1.fr == &1.tr))
+    |> Enum.group_by(& &1.fr)
+    |> Enum.flat_map(fn {_rank, group} -> index_group(group) end)
+    |> Map.new()
+  end
+
+  defp index_group(group) do
+    group
+    |> Enum.sort_by(&{&1.id, &1.seq})
+    |> Enum.with_index()
+    |> Enum.map(fn {hop, i} -> {{hop.id, hop.seq}, i} end)
+  end
+
+  # The crossing of a hop runs at its own y. That y is not a port y in the
+  # same gap, so a stub that leaves a node cannot lie on another edge's rail.
+  defp assign_rails(hops, by_id, ports, cols, ys) do
+    hops
+    |> Enum.group_by(fn hop -> min(hop.fr, hop.tr) end)
+    |> Enum.flat_map(fn {_gap, group} ->
+      used =
+        group
+        |> Enum.flat_map(fn hop ->
+          {sy, ty} = hop_ys(hop, by_id, ports, cols, ys)
+          [sy, ty]
+        end)
+        |> MapSet.new()
+
+      group
+      |> Enum.filter(&(&1.fr != &1.tr))
+      |> Enum.sort_by(&{&1.id, &1.seq})
+      |> Enum.reduce({%{}, used}, fn hop, {acc, used} ->
+        {sy, ty} = hop_ys(hop, by_id, ports, cols, ys)
+        y = free_rail(div(sy + ty, 2), used)
+        {Map.put(acc, {hop.id, hop.seq}, y), MapSet.put(used, y)}
+      end)
+      |> elem(0)
+      |> Map.to_list()
+    end)
+    |> Map.new()
+  end
+
+  defp hop_ys(hop, by_id, ports, cols, ys) do
+    if hop.fr == hop.tr do
+      from = Map.fetch!(by_id, hop.from)
+      to = Map.fetch!(by_id, hop.to)
+      {_, sy} = port_at(from, ports, :right, hop.id, 0)
+      {_, ty} = port_at(to, ports, :right, hop.id, 0)
+      {sy, ty}
+    else
+      {_, sy} = start_point(hop, by_id, ports, cols, ys)
+      {_, ty, _} = stop_point(hop, by_id, ports, cols, ys)
+      {sy, ty}
     end
   end
+
+  # `used` is finite, so some offset is free. The search steps outward by one.
+  defp free_rail(mid, used) do
+    0
+    |> Stream.iterate(&(&1 + 1))
+    |> Enum.find_value(fn n ->
+      y = mid + rail_offset(n)
+      if MapSet.member?(used, y), do: nil, else: y
+    end)
+  end
+
+  defp rail_offset(0), do: 0
+
+  defp rail_offset(n) do
+    k = div(n + 1, 2)
+    if rem(n, 2) == 1, do: k, else: -k
+  end
+
+  defp hop_points(hop, by_id, ports, cols, ys, lanes, sames, rails, same_n) do
+    if hop.fr == hop.tr do
+      from = Map.fetch!(by_id, hop.from)
+      to = Map.fetch!(by_id, hop.to)
+      {sx, sy} = port_at(from, ports, :right, hop.id, 0)
+      {tx, ty} = port_at(to, ports, :right, hop.id, 0)
+      lane = Map.get(sames, {hop.id, hop.seq}, 0)
+      cx = cols[hop.fr].right + 4 + lane * @channel
+      [sx, sy, cx, sy, cx, ty, tx, ty]
+    else
+      {sx, sy} = start_point(hop, by_id, ports, cols, ys)
+      {tx, ty, extra} = stop_point(hop, by_id, ports, cols, ys)
+      lane = Map.get(lanes, {hop.id, hop.seq}, 0)
+      rail = Map.fetch!(rails, {hop.id, hop.seq})
+      {jx1, jx2} = jog_xs(hop, cols, lane, Map.get(same_n, min(hop.fr, hop.tr), 0))
+      [sx, sy, jx1, sy, jx1, rail, jx2, rail, jx2, ty, tx, ty] ++ extra
+    end
+  end
+
+  # Left jog clears any same-rank channel. Right jog mirrors it, so the two
+  # verticals of one hop never share an x with another hop in the gap.
+  defp jog_xs(hop, cols, lane, same_count) do
+    gap_l = cols[min(hop.fr, hop.tr)].right
+    gap_r = cols[max(hop.fr, hop.tr)].left
+    near = gap_l + 4 + same_count * @channel + lane * @channel
+    far = gap_r - 4 - lane * @channel
+    if hop.fr < hop.tr, do: {near, far}, else: {far, near}
+  end
+
+  defp start_point(hop, by_id, ports, cols, ys) do
+    cond do
+      bend?(hop.from) and hop.fr < hop.tr ->
+        {cols[hop.fr].right, Map.fetch!(ys, hop.from)}
+
+      bend?(hop.from) ->
+        {cols[hop.fr].left, Map.fetch!(ys, hop.from)}
+
+      hop.fr < hop.tr ->
+        port_at(Map.fetch!(by_id, hop.from), ports, :right, hop.id, 0)
+
+      true ->
+        port_at(Map.fetch!(by_id, hop.from), ports, :left, hop.id, 0)
+    end
+  end
+
+  defp stop_point(hop, by_id, ports, cols, ys) do
+    cond do
+      bend?(hop.to) and hop.fr < hop.tr ->
+        y = Map.fetch!(ys, hop.to)
+        col = cols[hop.tr]
+        {col.left, y, [col.right, y]}
+
+      bend?(hop.to) ->
+        y = Map.fetch!(ys, hop.to)
+        col = cols[hop.tr]
+        {col.right, y, [col.left, y]}
+
+      hop.fr < hop.tr ->
+        {x, y} = port_at(Map.fetch!(by_id, hop.to), ports, :left, hop.id, 0)
+        {x, y, []}
+
+      true ->
+        {x, y} = port_at(Map.fetch!(by_id, hop.to), ports, :right, hop.id, 0)
+        {x, y, []}
+    end
+  end
+
+  defp drop_dupes([x, y | rest]), do: drop_dupes(rest, x, y, [y, x])
+  defp drop_dupes([], _x, _y, acc), do: Enum.reverse(acc)
+  defp drop_dupes([x, y | rest], x, y, acc), do: drop_dupes(rest, x, y, acc)
+  defp drop_dupes([x, y | rest], _px, _py, acc), do: drop_dupes(rest, x, y, [y, x | acc])
 
   defp route_self(edge, by_id, ports) do
     node = Map.fetch!(by_id, edge.from)
@@ -288,92 +615,12 @@ defmodule MuroVisor.Draw do
     }
   end
 
-  defp forward(edge, by_id, rank, ports, gaps, gutter, gi) do
-    from = Map.fetch!(by_id, edge.from)
-    to = Map.fetch!(by_id, edge.to)
-    r1 = Map.fetch!(rank, edge.from)
-    r2 = Map.fetch!(rank, edge.to)
-    {sx, sy} = port_at(from, ports, :right, edge.id, 0)
-    {tx, ty} = port_at(to, ports, :left, edge.id, 0)
-
-    # Stubs stay on opposite sides of the gap. The crossbar is a private
-    # lane below the nodes, so two edges never share a horizontal.
-    gy = gutter + gi * (@label_h + 6)
-
-    {c1, c2, gaps} =
-      if r2 == r1 + 1 do
-        {c1, gaps} = take_left(gaps, r1)
-        {c2, gaps} = take_right(gaps, r1)
-        {c1, c2, gaps}
-      else
-        {c1, gaps} = take_left(gaps, r1)
-        {c2, gaps} = take_right(gaps, r2 - 1)
-        {c1, c2, gaps}
-      end
-
-    drawn =
-      polyline(edge, [sx, sy, c1, sy, c1, gy, c2, gy, c2, ty, tx, ty], min(c1, c2) + 4, gy - 2)
-
-    {drawn, gaps, gi + 1}
-  end
-
-  defp backward(edge, by_id, rank, ports, gaps, gutter, gi) do
-    from = Map.fetch!(by_id, edge.from)
-    to = Map.fetch!(by_id, edge.to)
-    r1 = Map.fetch!(rank, edge.from)
-    r2 = Map.fetch!(rank, edge.to)
-    {sx, sy} = port_at(from, ports, :left, edge.id, 0)
-    {tx, ty} = port_at(to, ports, :right, edge.id, 0)
-    gy = gutter + gi * (@label_h + 6)
-
-    {c1, c2, gaps} =
-      if r1 == r2 + 1 do
-        {c1, gaps} = take_right(gaps, r2)
-        {c2, gaps} = take_left(gaps, r2)
-        {c1, c2, gaps}
-      else
-        {c1, gaps} = take_right(gaps, r1 - 1)
-        {c2, gaps} = take_left(gaps, r2)
-        {c1, c2, gaps}
-      end
-
-    drawn =
-      polyline(edge, [sx, sy, c1, sy, c1, gy, c2, gy, c2, ty, tx, ty], min(c1, c2) + 4, gy - 2)
-
-    {drawn, gaps, gi + 1}
-  end
-
-  defp same_rank(edge, by_id, rank, ports, gaps, gi) do
-    from = Map.fetch!(by_id, edge.from)
-    to = Map.fetch!(by_id, edge.to)
-    r = Map.fetch!(rank, edge.from)
-    {sx, sy} = port_at(from, ports, :right, edge.id, 0)
-    {tx, ty} = port_at(to, ports, :right, edge.id, 0)
-    {cx, gaps} = take_left(gaps, r)
-    drawn = polyline(edge, [sx, sy, cx, sy, cx, ty, tx, ty], cx + 4, mid(sy, ty))
-    {drawn, gaps, gi}
-  end
-
   defp polyline(edge, points, lx, ly) do
     [x, y | rest] = points
     legs = rest |> Enum.chunk_every(2) |> Enum.map_join(fn [px, py] -> " L #{px} #{py}" end)
     d = "M #{x} #{y}" <> legs
 
     %{edge | d: d, lx: lx, ly: max(ly, 12)}
-  end
-
-  # Left channels sit beside the source column. Right channels sit beside
-  # the destination column. The two zones do not meet.
-  defp take_left(gaps, r) do
-    g = Map.fetch!(gaps, r)
-    x = g.x0 + 8 + g.next_left * @channel
-    {x, put_in(gaps[r].next_left, g.next_left + 1)}
-  end
-
-  defp take_right(gaps, r) do
-    g = Map.fetch!(gaps, r)
-    x = g.x0 + g.w - 8 - g.next_right * @channel
-    {x, put_in(gaps[r].next_right, g.next_right + 1)}
   end
 
   defp port_at(node, ports, side, edge_id, nth) do
@@ -436,97 +683,6 @@ defmodule MuroVisor.Draw do
         else: max(node.w, 2 * @inset + (top - 1) * @pitch)
 
     %{node | w: w, h: h}
-  end
-
-  defp bump(map, key, :left) do
-    Map.update(map, key, {1, 0}, fn {left, right} -> {left + 1, right} end)
-  end
-
-  defp bump(map, key, :right) do
-    Map.update(map, key, {0, 1}, fn {left, right} -> {left, right + 1} end)
-  end
-
-  defp channel_demand(edges, rank) do
-    Enum.reduce(edges, %{}, fn edge, acc ->
-      case orient(edge, rank) do
-        :self ->
-          acc
-
-        :forward ->
-          r1 = Map.fetch!(rank, edge.from)
-          r2 = Map.fetch!(rank, edge.to)
-
-          if r2 == r1 + 1 do
-            acc |> bump(r1, :left) |> bump(r1, :right)
-          else
-            acc |> bump(r1, :left) |> bump(r2 - 1, :right)
-          end
-
-        :back ->
-          r1 = Map.fetch!(rank, edge.from)
-          r2 = Map.fetch!(rank, edge.to)
-
-          if r1 == r2 + 1 do
-            acc |> bump(r2, :right) |> bump(r2, :left)
-          else
-            acc |> bump(r1 - 1, :right) |> bump(r2, :left)
-          end
-
-        :same ->
-          bump(acc, Map.fetch!(rank, edge.from), :left)
-      end
-    end)
-  end
-
-  defp labels_for(edges, gap) do
-    # Every non-self edge can put its label in a gap. Size every gap for
-    # the longest label so a late channel still has room.
-    edges
-    |> Enum.reject(&(&1.from == &1.to))
-    |> Enum.map(& &1.label)
-    |> then(fn labels -> if gap < 0, do: [], else: labels end)
-  end
-
-  defp gap_width({0, 0}, _labels), do: @pad
-
-  defp gap_width({left, right}, labels) do
-    label_w = labels |> Enum.map(&text_w/1) |> Enum.max(fn -> 0 end)
-    max(@rank_gap, 24 + (left + right) * @channel + label_w)
-  end
-
-  defp order_ranks(nodes, edges, rank) do
-    grouped = Enum.group_by(nodes, &Map.fetch!(rank, &1.id))
-
-    ids =
-      Map.new(grouped, fn {r, ns} ->
-        {r, ns |> Enum.sort_by(& &1.id) |> Enum.map(& &1.id)}
-      end)
-
-    dag = adjacent_dag(edges, rank)
-    ordered = bary_sweeps(ids, dag)
-
-    Map.new(ordered, fn {r, layer} ->
-      by_id = Map.new(grouped[r], &{&1.id, &1})
-      {r, Enum.map(layer, &Map.fetch!(by_id, &1))}
-    end)
-  end
-
-  defp adjacent_dag(edges, rank) do
-    pairs =
-      edges |> Enum.reject(&(&1.from == &1.to)) |> Enum.map(&{&1.from, &1.to}) |> Enum.uniq()
-
-    {_seen, rev} =
-      walk(Enum.map(pairs, &elem(&1, 0)) ++ Enum.map(pairs, &elem(&1, 1)), adj(pairs))
-
-    Enum.flat_map(pairs, fn {a, b} = edge ->
-      {s, t} = if MapSet.member?(rev, edge), do: {b, a}, else: {a, b}
-
-      if Map.get(rank, t) == Map.get(rank, s) + 1 do
-        [{s, t}]
-      else
-        []
-      end
-    end)
   end
 
   defp bary_sweeps(order, dag) do
@@ -667,33 +823,102 @@ defmodule MuroVisor.Draw do
     |> Kernel.||(0)
   end
 
-  defp gutter_top(nodes) do
-    nodes |> Enum.map(fn n -> n.y + n.h end) |> Enum.max(fn -> @pad end) |> Kernel.+(@pad)
-  end
-
-  defp separate_labels(edges) do
+  defp separate_labels(edges, nodes) do
     Enum.reduce(edges, [], fn edge, placed ->
-      placed ++ [nudge(edge, placed, 0)]
+      placed ++ [seat_label(edge, nodes, placed)]
     end)
   end
 
-  defp nudge(edge, _placed, n) when n > 100, do: %{edge | lx: edge.lx + 8}
+  defp seat_label(edge, nodes, placed) do
+    {x, y} = label_anchor(edge)
+    nudge_label(edge, x, y, nodes, placed, 0)
+  end
 
-  defp nudge(edge, placed, n) do
-    box = label_box(edge)
+  defp label_anchor(%{d: d, lx: lx, ly: ly}) do
+    if String.contains?(d, " C "), do: {lx, ly}, else: path_midpoint(d)
+  end
 
-    clash =
-      edge.label != "" and
-        Enum.any?(placed, fn other ->
-          other.label != "" and boxes_overlap?(label_box(other), box)
-        end)
+  defp nudge_label(edge, x, y, _nodes, _placed, n) when n > 48 do
+    %{edge | lx: x, ly: max(y, 12)}
+  end
 
-    if clash do
-      nudge(%{edge | ly: edge.ly + @label_h + 2}, placed, n + 1)
+  defp nudge_label(edge, x, y, nodes, placed, n) do
+    {dx, dy} = spiral_at(n)
+    candidate = %{edge | lx: x + dx, ly: max(y + dy, 12)}
+
+    if label_clash?(candidate, nodes, placed) do
+      nudge_label(edge, x, y, nodes, placed, n + 1)
     else
-      edge
+      candidate
     end
   end
+
+  defp label_clash?(%{label: ""}, _nodes, _placed), do: false
+
+  defp label_clash?(edge, nodes, placed) do
+    box = label_box(edge)
+
+    Enum.any?(placed, fn other ->
+      other.label != "" and boxes_overlap?(label_box(other), box)
+    end) or Enum.any?(nodes, &boxes_overlap?(box, &1))
+  end
+
+  defp spiral_at(0), do: {0, 0}
+
+  defp spiral_at(n) do
+    ring = div(n - 1, 8) + 1
+
+    {dx, dy} =
+      Enum.at(
+        [{1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}, {0, -1}, {1, -1}],
+        rem(n - 1, 8)
+      )
+
+    {dx * ring * 8, dy * ring * 8}
+  end
+
+  defp path_midpoint(d) do
+    pts = path_pairs(d)
+
+    case pts do
+      [] ->
+        {0, 0}
+
+      [p] ->
+        p
+
+      _ ->
+        segs = Enum.zip(pts, tl(pts))
+        total = Enum.reduce(segs, 0, fn {a, b}, n -> n + manhattan(a, b) end)
+        walk_mid(segs, div(total, 2))
+    end
+  end
+
+  defp walk_mid([], {x, y}), do: {x, y}
+
+  defp walk_mid([{{x1, y1}, {x2, y2}} | rest], left) do
+    d = manhattan({x1, y1}, {x2, y2})
+
+    cond do
+      d == 0 and rest == [] ->
+        {x2, y2}
+
+      d == 0 ->
+        walk_mid(rest, left)
+
+      left <= d or rest == [] ->
+        if x1 == x2 do
+          {x1, y1 + div((y2 - y1) * left, d)}
+        else
+          {x1 + div((x2 - x1) * left, d), y1}
+        end
+
+      true ->
+        walk_mid(rest, left - d)
+    end
+  end
+
+  defp manhattan({x1, y1}, {x2, y2}), do: abs(x2 - x1) + abs(y2 - y1)
 
   defp label_box(%{label: label, lx: lx, ly: ly}) do
     %{x: lx, y: ly - 12, w: text_w(label), h: @label_h}
@@ -793,8 +1018,6 @@ defmodule MuroVisor.Draw do
       _ -> []
     end)
   end
-
-  defp mid(a, b), do: div(a + b, 2) + 4
 
   defp text_w(text), do: max(String.length(to_string(text)), 1) * @char
 

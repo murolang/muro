@@ -81,11 +81,18 @@ defmodule MuroVisor.LayoutTest do
 
     clicked = view |> element("##{node.id}") |> render_click()
     assert text_of(clicked, "#detail-title") == "pong"
+    assert attr_class(clicked, "##{node.id}") =~ "selected"
 
     edge = hd(use_edges(html))
     assert edge_path(html, edge.id) != nil
     keyed = view |> element("##{edge.id}") |> render_keydown(%{"key" => " "})
     assert text_of(keyed, "#detail-title") != ""
+    assert attr_class(keyed, "##{edge.id} path.edge") =~ "selected"
+
+    page = html_response(get(conn, "/"), 200)
+    assert page =~ "overflow-wrap: anywhere"
+    assert page =~ "overflow-x: hidden"
+    assert page =~ "#outline pre"
 
     child = hd(Enum.find(graph.nodes, &(&1.children != [])).children)
     view |> element("#node-#{child.id}") |> render_keydown(%{"key" => "Enter"})
@@ -115,6 +122,12 @@ defmodule MuroVisor.LayoutTest do
     for edge <- once.edges do
       assert_endpoints(edge.d, Map.fetch!(by_id, edge.from), Map.fetch!(by_id, edge.to), label)
       assert_label(edge, once, label)
+    end
+
+    assert_within_layers(once, label)
+
+    for node <- once.nodes, meet <- node.meetings do
+      assert_within_layers(%{nodes: meet.children, edges: meet.transitions}, label)
     end
 
     for node <- once.nodes, meet <- node.meetings do
@@ -178,6 +191,85 @@ defmodule MuroVisor.LayoutTest do
     assert box.y >= 0, name
     assert box.x + box.w <= picture.width, "#{name} clips #{label}"
     assert box.y + box.h <= picture.height, "#{name} clips #{label}"
+  end
+
+  defp assert_within_layers(%{nodes: nodes, edges: edges}, label) when nodes != [] do
+    layers = layers_of(nodes)
+
+    index =
+      Map.new(nodes, fn node ->
+        {node.id, layer_index(layers, node)}
+      end)
+
+    for edge <- edges,
+        edge.from != edge.to,
+        Map.has_key?(index, edge.from),
+        Map.has_key?(index, edge.to) do
+      lo = min(index[edge.from], index[edge.to])
+      hi = max(index[edge.from], index[edge.to])
+      box = layers |> Enum.slice(lo..hi) |> union_boxes() |> expand_box(160)
+
+      for {{x1, y1}, {x2, y2}} <- segments(edge.d) do
+        assert in_box?(x1, y1, box),
+               "#{label} #{edge.id} leaves its layers at #{x1},#{y1}"
+
+        assert in_box?(x2, y2, box),
+               "#{label} #{edge.id} leaves its layers at #{x2},#{y2}"
+      end
+    end
+  end
+
+  defp assert_within_layers(_picture, _label), do: :ok
+
+  defp layers_of(nodes) do
+    nodes
+    |> Enum.group_by(& &1.x)
+    |> Enum.sort_by(fn {x, _} -> x end)
+    |> Enum.map(fn {_x, group} -> box_of(group) end)
+  end
+
+  defp layer_index(layers, node) do
+    case Enum.find_index(layers, fn box ->
+           node.x >= box.x and node.x + node.w <= box.x + box.w and node.y >= box.y and
+             node.y + node.h <= box.y + box.h
+         end) do
+      nil -> flunk("no layer contains #{node.id}")
+      index -> index
+    end
+  end
+
+  defp box_of(nodes) do
+    x = Enum.min(Enum.map(nodes, & &1.x))
+    y = Enum.min(Enum.map(nodes, & &1.y))
+    right = Enum.max(Enum.map(nodes, &(&1.x + &1.w)))
+    bottom = Enum.max(Enum.map(nodes, &(&1.y + &1.h)))
+    %{x: x, y: y, w: right - x, h: bottom - y}
+  end
+
+  defp union_boxes([box]), do: box
+
+  defp union_boxes(boxes) do
+    x = Enum.min(Enum.map(boxes, & &1.x))
+    y = Enum.min(Enum.map(boxes, & &1.y))
+    right = Enum.max(Enum.map(boxes, &(&1.x + &1.w)))
+    bottom = Enum.max(Enum.map(boxes, &(&1.y + &1.h)))
+    %{x: x, y: y, w: right - x, h: bottom - y}
+  end
+
+  defp expand_box(box, margin) do
+    %{x: box.x - margin, y: box.y - margin, w: box.w + 2 * margin, h: box.h + 2 * margin}
+  end
+
+  defp in_box?(x, y, box) do
+    x >= box.x and y >= box.y and x <= box.x + box.w and y <= box.y + box.h
+  end
+
+  defp attr_class(html, selector) do
+    html
+    |> parse()
+    |> Floki.attribute(selector, "class")
+    |> List.first()
+    |> to_string()
   end
 
   defp assert_distinct_paths(paths, label) do
