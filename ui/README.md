@@ -4,12 +4,15 @@ A read-only visual explorer for one checked muro book. Version 0.1.0. It is its 
 
 The compiler does not start this application, and the muro release binaries do not depend on Phoenix. `muro ui path.muro` prints these install steps and links to [the explorer page](https://muro-lang.dev/docs/explorer).
 
+Add the package to a Mix project, then open a book:
+
 ```
-mix archive.install hex muro_visor
+{:muro_visor, "~> 0.1.0"}
+mix deps.get
 mix muro.ui path.muro
 ```
 
-From this checkout the dependency is a path override of the repository root:
+A published package depends on `muro ~> 0.20.5`. This checkout, and CI, build against the repository instead. From this checkout:
 
 ```
 cd ui
@@ -17,7 +20,7 @@ mix deps.get
 mix muro.ui ../examples/meet.muro
 ```
 
-The page draws one node for each spec, evidence, and run, and one edge for each use. A session is a compound node whose children are the configurations the meeting proved. A backend switch (OTP, FSM, C, Rust, Zig) redraws the outline from `Muro.Emit.outline/3` and does not check the book again. A click shows the source location. An edge also shows the refusal for taking that step out of order.
+The page listens on port 4017 and connects its LiveView over `/live`. It draws one node for each spec, evidence, and run, placed in ranks along the use edges, and each edge has its own path. A session is a compound node. Each meeting lays out its configurations inside that box, with a labelled transition between them. The graph pane scrolls and zooms, and Detail and Outline sit beside it. The outline's names, signatures, layouts, and clauses are separate sections. A backend switch (OTP, FSM, C, Rust, Zig) redraws the outline from `Muro.Emit.outline/3` and does not check the book again. C, Rust, and Zig layouts include constructor tags and fields. A click or a key selects a node, an edge, or a configuration and shows its source location. An edge also shows the refusal for taking that step out of order, including the process and the protocol.
 
 Nothing here emits code or writes the book. Tests need only Elixir: the page is server-rendered SVG, and the LiveView client scripts are the ones Phoenix already ships. There is no Node toolchain.
 
