@@ -8,6 +8,7 @@ defmodule MuroVisor.ConnCase do
       import Plug.Conn
       import Phoenix.ConnTest
       import Phoenix.LiveViewTest
+      import MuroVisor.View
 
       @endpoint MuroVisor.Endpoint
     end

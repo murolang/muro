@@ -35,13 +35,21 @@ defmodule MuroVisor.Outline do
     sigs =
       Enum.map_join(outline.signatures, "\n", fn sig ->
         params = sig |> Map.get(:params, []) |> Enum.map_join(", ", &param/1)
-        "#{sig.name}(#{params}) #{inspect(sig.layout)}"
+        lays = Map.get(sig, :param_layouts, [])
+        "#{sig.name}(#{params}) #{inspect(sig.layout)} #{inspect(lays)}"
+      end)
+
+    layouts =
+      Enum.map_join(outline.layouts, "\n", fn lay ->
+        "#{Map.get(lay, :name)} #{inspect(Map.get(lay, :layout))}"
       end)
 
     """
     backend: #{backend}
     names: #{Enum.join(outline.names, ", ")}
     #{sigs}
+    layouts:
+    #{layouts}
     #{Enum.join(outline.clauses, "\n")}
     """
   end

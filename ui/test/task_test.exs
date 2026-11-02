@@ -1,0 +1,118 @@
+defmodule MuroVisor.TaskTest do
+  use MuroVisor.ConnCase, async: false
+
+  @moduletag timeout: 180_000
+
+  setup do
+    on_exit(&silence/0)
+    silence()
+    :ok
+  end
+
+  test "no path is a usage error and a non-zero exit" do
+    {output, status} = mix_ui([])
+    assert status != 0
+    assert output =~ "usage: mix muro.ui path.muro"
+    assert refused()
+  end
+
+  test "a missing file names itself and exits non-zero" do
+    missing = Path.join(System.tmp_dir!(), "no-such-muro-book.muro")
+    File.rm(missing)
+    {output, status} = mix_ui([missing])
+    assert status != 0
+    assert output =~ "no such book: #{missing}"
+    assert refused()
+  end
+
+  test "a book that fails to check exits non-zero with the checker message" do
+    path =
+      write_book("""
+      session choice := choose end (send Nat end)
+      session offered := dual choice
+      conform taker : choice :=
+        pick1 stop
+      conform giver : offered :=
+        cover done (get Nat done)
+      meet arm : taker with giver
+      """)
+
+    assert {:error, msg} = Muro.Load.file(path)
+    {output, status} = mix_ui([path])
+    assert status != 0
+    assert output =~ msg
+    assert output =~ "diverged"
+    assert refused()
+  end
+
+  test "a good path starts the endpoint, opens the book, and leaves no listener" do
+    path = example("half_ok.muro")
+    before = File.read!(path)
+    parent = self()
+
+    Application.put_env(:muro_visor, :ui_hold, false)
+    Application.put_env(:muro_visor, :browser_open, fn url -> send(parent, {:opened, url}) end)
+
+    Mix.Tasks.Muro.Ui.run([path])
+
+    assert_receive {:opened, url}
+    assert url == MuroVisor.url()
+    assert {:ok, %{book: loaded}} = MuroVisor.Book.current()
+    assert Enum.any?(loaded, &(&1.name == "plus"))
+
+    body = get(URI.parse(url).port)
+    assert body =~ "200"
+    assert body =~ "muro visor"
+    assert body =~ "plus"
+    assert File.read!(path) == before
+
+    silence()
+    assert refused()
+  end
+
+  defp mix_ui(args) do
+    System.cmd("mix", ["muro.ui" | args],
+      cd: Path.expand("..", __DIR__),
+      stderr_to_stdout: true,
+      env: [{"MIX_ENV", "test"}]
+    )
+  end
+
+  defp get(port) do
+    {:ok, sock} =
+      :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false], 2_000)
+
+    :ok = :gen_tcp.send(sock, "GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+    recv(sock, "")
+  end
+
+  defp recv(sock, acc) do
+    case :gen_tcp.recv(sock, 0, 2_000) do
+      {:ok, bin} -> recv(sock, acc <> bin)
+      {:error, :closed} -> acc
+      {:error, reason} -> flunk("recv #{inspect(reason)} after #{byte_size(acc)} bytes")
+    end
+  end
+
+  defp silence do
+    Application.delete_env(:muro_visor, :ui_hold)
+    Application.delete_env(:muro_visor, :browser_open)
+    config = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
+    Application.put_env(:muro_visor, MuroVisor.Endpoint, Keyword.put(config, :server, false))
+
+    if Process.whereis(MuroVisor.Endpoint) do
+      :ok = Supervisor.terminate_child(MuroVisor.Supervisor, MuroVisor.Endpoint)
+      {:ok, _pid} = Supervisor.restart_child(MuroVisor.Supervisor, MuroVisor.Endpoint)
+    end
+  end
+
+  defp refused do
+    port =
+      :muro_visor
+      |> Application.fetch_env!(MuroVisor.Endpoint)
+      |> Keyword.fetch!(:http)
+      |> Keyword.fetch!(:port)
+
+    match?({:error, :econnrefused}, :gen_tcp.connect({127, 0, 0, 1}, port, [], 200))
+  end
+end

@@ -85,6 +85,9 @@ defmodule MuroVisor.ExplorerLive do
         <g
           :for={edge <- @picture.edges}
           id={"edge-#{edge.id}"}
+          data-from={edge.from}
+          data-to={edge.to}
+          data-use={edge.use}
           phx-click="select"
           phx-value-id={edge.id}
         >
@@ -94,19 +97,42 @@ defmodule MuroVisor.ExplorerLive do
           :for={node <- @picture.nodes}
           id={"node-#{node.id}"}
           class={node.class}
+          data-kind={node.kind}
+          data-mode={node.mode}
+          data-name={node.name}
           phx-click="select"
           phx-value-id={node.id}
         >
           <rect class={node.class} x={node.x} y={node.y} width={node.w} height={node.h} />
           <text x={node.x + 8} y={node.y + 18}>{node.name}</text>
           <g
-            :for={child <- node.children}
-            id={"node-#{child.id}"}
-            phx-click="select"
-            phx-value-id={child.id}
+            :for={meet <- node.meetings}
+            id={"meeting-#{meet.id}"}
+            class="compound"
+            data-meeting={meet.name}
           >
-            <rect x={child.x} y={child.y} width={child.w} height={child.h} class="node" />
-            <text x={child.x + 6} y={child.y + 16}>{child.label}</text>
+            <rect class="compound" x={meet.x} y={meet.y} width={meet.w} height={meet.h} />
+            <text x={meet.x + 6} y={meet.y + 14}>{meet.name}</text>
+            <g
+              :for={child <- meet.children}
+              id={"node-#{child.id}"}
+              data-state={child.state}
+              phx-click="select"
+              phx-value-id={child.id}
+            >
+              <rect x={child.x} y={child.y} width={child.w} height={child.h} class="node" />
+              <text x={child.x + 6} y={child.y + 16}>{child.label}</text>
+            </g>
+            <g
+              :for={t <- meet.transitions}
+              id={"trans-#{t.id}"}
+              data-from={t.from}
+              data-to={t.to}
+              data-label={t.label}
+            >
+              <path d={t.d} fill="none" stroke="#78716c" stroke-width="1.25" />
+              <text x={t.lx} y={t.ly}>{t.label}</text>
+            </g>
           </g>
         </g>
       </svg>

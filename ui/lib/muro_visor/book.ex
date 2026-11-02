@@ -14,26 +14,34 @@ defmodule MuroVisor.Book do
 
     cond do
       not File.regular?(path) ->
-        {:error, "no such book: #{path}"}
+        remember_error("no such book: #{path}")
 
       true ->
         case Muro.Load.file(path) do
-          {:ok, book} ->
-            stamp = System.unique_integer([:positive])
-            :persistent_term.put(@key, %{book: book, path: path, stamp: stamp})
-            {:ok, stamp}
-
-          {:error, msg} ->
-            {:error, msg}
+          {:ok, book} -> remember(book, path)
+          {:error, msg} -> remember_error(msg)
         end
     end
+  end
+
+  @doc false
+  def remember(book, path) when is_list(book) and is_binary(path) do
+    stamp = System.unique_integer([:positive])
+    :persistent_term.put(@key, %{book: book, path: path, stamp: stamp})
+    {:ok, stamp}
   end
 
   @doc "The book `open/1` stored, or an error when none is open."
   def current do
     case :persistent_term.get(@key, nil) do
       nil -> {:error, "no book is open"}
+      {:error, msg} when is_binary(msg) -> {:error, msg}
       open -> {:ok, open}
     end
+  end
+
+  defp remember_error(msg) do
+    :persistent_term.put(@key, {:error, msg})
+    {:error, msg}
   end
 end
