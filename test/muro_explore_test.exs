@@ -192,11 +192,18 @@ defmodule Muro.ExploreTest do
 
   test "the check hook counts check_sig and an outline does not check" do
     parent = self()
-    assert :ok = Muro.Check.check_hook(fn -> send(parent, :checked) end)
+
+    # One persistent term for the whole VM. Other tests check at the same
+    # time, on their own processes. Only this process is watching.
+    assert :ok =
+             Muro.Check.check_hook(fn ->
+               if Process.get(:muro_check_watch), do: send(parent, :checked)
+             end)
 
     on_exit(fn -> Muro.Check.check_hook(nil) end)
 
     path = Path.expand("examples/half_ok.muro", File.cwd!())
+    Process.put(:muro_check_watch, true)
     assert {:ok, book} = Load.file(path)
     assert_receive :checked
 
