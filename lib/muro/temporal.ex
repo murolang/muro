@@ -8,16 +8,16 @@ defmodule Muro.Temporal do
   | `reachable/1` | `Muro.Temporal.Graph.reachable` |
   | `levels/4` | the breadth-first loop inside `reachable` |
   | `decide_nostuck/2` | `Muro.Temporal.Graph.decide-nostuck` |
-  | `worklist/2` | `Muro.Temporal.Live.prune` (`firstZero` / `outs`) |
+  | `worklist/2`, `prune/2` | `Muro.Temporal.Live.prune` (the zero out-degree queue) |
   | `lasso/3` | `Muro.Temporal.Live.loop-of` (`tour-of`, `walkC`, `cutC`) |
-  | `check/4` | `Muro.Temporal.Decide.check` |
+  | `check/5` | `Muro.Temporal.Decide.check` |
   | `holds?/3` | `Muro.Temporal.⟦_⟧` |
 
   The search records a parent for every configuration it enqueues, so the
-  path it reports is the breadth-first one. Liveness pops the first
-  configuration in list order whose surviving successors are empty.
-  `lasso` always takes the first successor that is still in the surviving
-  set. A finished configuration stutters, so it is not popped.
+  path it reports is the breadth-first one. Liveness removes every
+  configuration whose surviving out-degree is zero. That set is `Z` from
+  `Muro.Temporal.Live`. `lasso` takes the first successor that is still
+  in `Z`. A finished configuration stutters, so it is not removed.
   """
 
   alias Muro.Temporal.{Compile, Elab, Graph}
@@ -39,14 +39,38 @@ defmodule Muro.Temporal do
          {cs, parents} = reachable(g),
          :ok <- nostuck(g, cs),
          {:ok, formulas} <- expand(book, g, formula) do
+      edges = Map.new(cs, fn conf -> {conf, Graph.edges(g, conf)} end)
+
       case Enum.find_value(formulas, fn f ->
-             case check(g, parents, cs, f) do
+             case check(g, parents, cs, edges, f) do
                :yes -> nil
                {:no, msg} -> {:no, msg}
              end
            end) do
         nil -> {:ok, length(cs)}
         {:no, msg} -> {:error, msg}
+      end
+    end
+  end
+
+  @doc false
+  def prepare(_book, name, :absent), do: {:error, "unknown meeting #{name}"}
+
+  def prepare(_book, name, :unchecked), do: {:error, "skipped because #{name} does not check"}
+
+  # The meeting check has already been recorded. This builds that
+  # meeting's configuration graph once: the reachable configurations,
+  # their breadth-first parents, and the successor table.
+  def prepare(book, name, :ok) do
+    with {:ok, meet} <- fetch_meet(book, name),
+         :ok <- needs_buffer(meet),
+         {:ok, g} <- build(book, meet) do
+      {cs, parents} = reachable(g)
+      edges = Map.new(cs, fn conf -> {conf, Graph.edges(g, conf)} end)
+
+      case nostuck(g, cs) do
+        :ok -> {:ok, %{g: g, cs: cs, parents: parents, edges: edges}}
+        {:error, _} = err -> err
       end
     end
   end
@@ -64,71 +88,150 @@ defmodule Muro.Temporal do
   end
 
   @doc """
-  Transcribes `Live.prune`. The region is a list; membership is equality.
+  Transcribes `Live.prune`. `Z` is `prune/2` of the region's edges.
   """
-  def worklist(g, region) do
-    case first_zero(g, region, region) do
-      nil -> region
-      conf -> worklist(g, List.delete(region, conf))
-    end
+  def worklist(g, region) when is_list(region) do
+    succ = Map.new(region, fn conf -> {conf, Graph.edges(g, conf)} end)
+    prune(region, succ)
   end
 
+  # O(V + E), where V is `length(nodes)` and E is the number of edges in
+  # `succ` that land inside `nodes`. This is `Z` from `Muro.Temporal.Live`.
+  #
+  # `Live` states the algorithm above `prune`: a configuration is removed
+  # when it has no successor left in the region; removing it deletes every
+  # edge into it; the queue is exactly the configurations whose surviving
+  # successor list is empty; a finished configuration stutters, so that
+  # self-edge keeps it. The measure there is the length of the surviving
+  # list, and there is no fuel. The Agda function recomputes `outs` at
+  # each pop, which keeps the proof free of a stored count. The set that
+  # remains does not depend on that recomputation.
+  #
+  # The membership set, the predecessor lists, and the out-degrees are
+  # built once from `succ`. A configuration starts on the queue when its
+  # degree is zero, and a predecessor is queued when the last edge into a
+  # removed configuration drops its degree to zero. Each configuration is
+  # queued at most once and each edge decrements one degree, so the pass
+  # is linear. Each pop deletes the configuration from the surviving set,
+  # which is the well-founded measure. Pop order does not change `Z`: it
+  # is the greatest subset in which every configuration still has a
+  # successor, the greatest fixed point of deleting a zero-degree
+  # configuration. That is also the set of configurations that can reach
+  # a cycle in the region, so there is no separate SCC pass. `lasso`
+  # reads this set, not the order of pops.
   @doc """
-  Transcribes `Live.firstZero`.
-  """
-  def first_zero(g, region, []), do: first_zero_end(g, region)
+  The surviving subset of `nodes`, in the original order.
 
-  def first_zero(g, region, [conf | rest]) do
-    if Graph.outs(g, region, conf) == [] do
-      conf
+  `succ` maps a node to its successors. An entry is a destination or a
+  `{who, dest}` edge. Destinations outside `nodes` are ignored.
+  """
+  def prune(nodes, succ) when is_list(nodes) and is_map(succ) do
+    member = MapSet.new(nodes)
+
+    {degree, preds} =
+      Enum.reduce(nodes, {%{}, %{}}, fn node, {degree, preds} ->
+        outs =
+          succ
+          |> Map.get(node, [])
+          |> Enum.map(&dest/1)
+          |> Enum.filter(&MapSet.member?(member, &1))
+
+        degree = Map.put(degree, node, length(outs))
+
+        preds =
+          Enum.reduce(outs, preds, fn target, preds ->
+            Map.update(preds, target, [node], &[node | &1])
+          end)
+
+        {degree, preds}
+      end)
+
+    queue = Enum.filter(nodes, &(Map.get(degree, &1, 0) == 0))
+    alive = drop_zeros(queue, [], degree, preds, member)
+    Enum.filter(nodes, &MapSet.member?(alive, &1))
+  end
+
+  defp drop_zeros([], [], _degree, _preds, alive), do: alive
+
+  defp drop_zeros([], back, degree, preds, alive) do
+    drop_zeros(:lists.reverse(back), [], degree, preds, alive)
+  end
+
+  defp drop_zeros([node | rest], back, degree, preds, alive) do
+    if MapSet.member?(alive, node) do
+      alive = MapSet.delete(alive, node)
+
+      {degree, back} =
+        Enum.reduce(Map.get(preds, node, []), {degree, back}, fn pred, {degree, back} ->
+          if MapSet.member?(alive, pred) do
+            left = Map.get(degree, pred, 0) - 1
+            degree = Map.put(degree, pred, left)
+            back = if left == 0, do: [pred | back], else: back
+            {degree, back}
+          else
+            {degree, back}
+          end
+        end)
+
+      drop_zeros(rest, back, degree, preds, alive)
     else
-      first_zero(g, region, rest)
+      drop_zeros(rest, back, degree, preds, alive)
     end
   end
 
-  defp first_zero_end(_g, _region), do: nil
+  defp dest({:lside, dest}), do: dest
+  defp dest({:rside, dest}), do: dest
+  defp dest({:fin, dest}), do: dest
+  defp dest(dest), do: dest
 
   @doc """
   Transcribes `Live.loop-of`. `{stem, loop}` are steps `{who, src, dest}`.
   `leads_to` puts the breadth-first parent trace in front of that pair.
   """
-  def lasso(g, z, conf) do
-    walk(g, MapSet.new(z), conf, MapSet.new(), conf, [])
+  def lasso(g, z, conf) when is_list(z) do
+    edges = Map.new(z, fn c -> {c, Graph.edges(g, c)} end)
+    run_lasso(edges, z, conf)
+  end
+
+  defp run_lasso(edges, z, conf) do
+    walk(edges, MapSet.new(z), conf, MapSet.new(), conf, [])
   end
 
   @doc """
   Transcribes `Decide.check` for one elaborated formula.
   `formula` is `%{kind: :always | :eventually | :leads_to, src: ast, prop: resolved}`.
   """
-  def check(g, parents, confs, %{kind: :always, src: src, prop: prop}) do
+  def check(g, parents, confs, _edges, %{kind: :always, src: src, prop: prop}) do
     case Enum.find(confs, fn conf -> not holds?(g, prop, conf) end) do
       nil -> :yes
       conf -> {:no, safety_msg(g, src, trace(parents, conf), conf)}
     end
   end
 
-  def check(g, _parents, confs, %{kind: :eventually, src: src, prop: prop}) do
+  def check(g, _parents, confs, edges, %{kind: :eventually, src: src, prop: prop}) do
     region = Enum.filter(confs, fn conf -> not holds?(g, prop, conf) end)
-    z = worklist(g, region)
+    z = prune(region, edges)
+    zset = MapSet.new(z)
 
-    if Enum.member?(z, Graph.init(g)) do
-      {stem, loop} = lasso(g, z, Graph.init(g))
+    if MapSet.member?(zset, Graph.init(g)) do
+      {stem, loop} = run_lasso(edges, z, Graph.init(g))
       {:no, live_msg(g, {:eventually, src}, [], stem, loop)}
     else
       :yes
     end
   end
 
-  def check(g, parents, confs, %{kind: :leads_to, src: {p, q}, prop: {rp, rq}}) do
+  def check(g, parents, confs, edges, %{kind: :leads_to, src: {p, q}, prop: {rp, rq}}) do
     region = Enum.filter(confs, fn conf -> not holds?(g, rq, conf) end)
-    z = worklist(g, region)
+    z = prune(region, edges)
+    zset = MapSet.new(z)
 
-    case Enum.find(confs, fn conf -> holds?(g, rp, conf) and Enum.member?(z, conf) end) do
+    case Enum.find(confs, fn conf -> holds?(g, rp, conf) and MapSet.member?(zset, conf) end) do
       nil ->
         :yes
 
       conf ->
-        {stem, loop} = lasso(g, z, conf)
+        {stem, loop} = run_lasso(edges, z, conf)
         {:no, live_msg(g, {:leads_to, p, q}, trace(parents, conf), stem, loop)}
     end
   end
@@ -195,17 +298,19 @@ defmodule Muro.Temporal do
     end
   end
 
-  defp enqueue(_g, _conf, [], queue, seen, parents), do: {queue, seen, parents}
+  # The back list is reversed. Cons is O(1), and the list is reversed
+  # once when it becomes the front, so each successor is charged once.
+  defp enqueue(_g, _conf, [], back, seen, parents), do: {back, seen, parents}
 
-  defp enqueue(g, conf, [{who, dest} | rest], queue, seen, parents) do
+  defp enqueue(g, conf, [{who, dest} | rest], back, seen, parents) do
     if MapSet.member?(seen, dest) do
-      enqueue(g, conf, rest, queue, seen, parents)
+      enqueue(g, conf, rest, back, seen, parents)
     else
       enqueue(
         g,
         conf,
         rest,
-        queue ++ [dest],
+        [dest | back],
         MapSet.put(seen, dest),
         Map.put(parents, dest, {who, conf})
       )
@@ -215,18 +320,29 @@ defmodule Muro.Temporal do
   @doc """
   One frontier of `reachable`. The queue is popped from the front and new
   configurations are appended, left successor before right.
+
+  O(V + E). Each configuration is enqueued at most once. The two lists
+  are a queue: the front is popped and successors are consed onto the
+  back. That is the breadth-first order of `Muro.Temporal.Search`.
+  The recursion is well-founded on the configurations not yet seen.
   """
-  def levels(g, queue, seen, parents), do: levels(g, queue, seen, parents, [])
+  def levels(g, queue, seen, parents) when is_list(queue) do
+    drain(g, queue, [], seen, parents, [])
+  end
 
-  def levels(g, queue, seen, parents, acc) do
-    case queue do
-      [] ->
-        {Enum.reverse(acc), parents}
+  def levels(g, queue, seen, parents, acc) when is_list(queue) and is_list(acc) do
+    drain(g, queue, [], seen, parents, acc)
+  end
 
-      [conf | rest] ->
-        {rest, seen, parents} = enqueue(g, conf, Graph.steps_of(g, conf), rest, seen, parents)
-        levels(g, rest, seen, parents, [conf | acc])
-    end
+  defp drain(_g, [], [], _seen, parents, acc), do: {Enum.reverse(acc), parents}
+
+  defp drain(g, [], back, seen, parents, acc) do
+    drain(g, :lists.reverse(back), [], seen, parents, acc)
+  end
+
+  defp drain(g, [conf | front], back, seen, parents, acc) do
+    {back, seen, parents} = enqueue(g, conf, Graph.steps_of(g, conf), back, seen, parents)
+    drain(g, front, back, seen, parents, [conf | acc])
   end
 
   @doc """
@@ -238,27 +354,40 @@ defmodule Muro.Temporal do
     levels(g, [start], MapSet.new([start]), %{}, [])
   end
 
-  defp walk(g, zset, conf, seen, origin, steps) do
+  defp walk(edges, zset, conf, seen, origin, steps) do
     if MapSet.member?(seen, conf) do
-      cut(conf, origin, steps)
+      cut(conf, origin, :lists.reverse(steps))
     else
-      case Graph.outs(g, zset, conf) do
-        [{who, dest} | _] ->
-          walk(g, zset, dest, MapSet.put(seen, conf), origin, steps ++ [{who, conf, dest}])
+      case first_out(edges, zset, conf) do
+        {who, dest} ->
+          walk(edges, zset, dest, MapSet.put(seen, conf), origin, [{who, conf, dest} | steps])
 
-        [] ->
+        nil ->
           {[], []}
       end
     end
   end
 
-  defp cut(target, pos, steps) when target == pos, do: {[], steps}
-  defp cut(_target, _pos, []), do: {[], []}
-
-  defp cut(target, _pos, [{_who, _src, dest} = step | rest]) do
-    {stem, loop} = cut(target, dest, rest)
-    {[step | stem], loop}
+  defp first_out(edges, zset, conf) do
+    Enum.find(Map.get(edges, conf, []), fn
+      {who, dest} when who in [:lside, :rside, :fin] -> MapSet.member?(zset, dest)
+      _ -> false
+    end)
   end
+
+  # The edge that first arrives on the repeated configuration is the last
+  # step of the stem. The steps after it are the loop. A repeat of the
+  # origin is a loop with an empty stem.
+  defp cut(target, origin, steps) when target == origin, do: {[], steps}
+  defp cut(target, _origin, steps), do: split_at(target, steps, [])
+
+  defp split_at(_target, [], acc), do: {Enum.reverse(acc), []}
+
+  defp split_at(target, [{_who, _src, dest} = step | rest], acc) when dest == target do
+    {Enum.reverse([step | acc]), rest}
+  end
+
+  defp split_at(target, [step | rest], acc), do: split_at(target, rest, [step | acc])
 
   defp trace(parents, conf), do: trace(parents, conf, [])
 

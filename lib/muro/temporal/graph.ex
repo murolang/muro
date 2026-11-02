@@ -81,6 +81,9 @@ defmodule Muro.Temporal.Graph do
     Enum.filter(edges(g, conf), fn {_who, dest} -> MapSet.member?(region, dest) end)
   end
 
+  # One membership set for this call. A scan must pass the set it already
+  # holds. Pruning does not call this per configuration: it keeps the set,
+  # the predecessor lists, and the out-degrees (`Muro.Temporal.prune/2`).
   def outs(g, region, conf) when is_list(region) do
     outs(g, MapSet.new(region), conf)
   end
