@@ -16,7 +16,7 @@
 --                    corollary of Muro.Typing.pres;
 --   Empty-evid-from  normalisation of closed evidence gives: no closed
 --                    evidence of Empty. The hypothesis is an argument
---                    of the lemma. Nothing is postulated.
+--                    of the lemma. No axiom is added.
 --
 -- Not proved: Empty-evid itself. What is missing is exactly the
 -- hypothesis of Empty-evid-from: normalisation of closed evidence
@@ -695,7 +695,7 @@ preservation : ∀ {e e′} →
 preservation D s = pres WfSig-empty D s
 
 ------------------------------------------------------------------------
--- The remaining obligation, as a hypothesis. Not postulated.
+-- The remaining obligation, as a hypothesis. It is not an axiom.
 ------------------------------------------------------------------------
 
 -- Normalisation: closed evidence at Empty reaches a normal form.

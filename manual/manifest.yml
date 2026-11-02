@@ -30,6 +30,10 @@ pages:
     slug: sessions
     title: Sessions
     summary: A session is the protocol two processes follow.
+  - file: temporal.md
+    slug: temporal
+    title: Temporal
+    summary: always, eventually, and leads_to on one buffered meeting.
   - file: identity.md
     slug: identity
     title: Identity

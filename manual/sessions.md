@@ -559,7 +559,7 @@ A meeting may name a buffer. `meet inflight : client with server buffer 1` check
 meet inflight : client with server buffer 1
 ```
 
-`examples/async-meetings.muro` is the worked book.
+`examples/async-meetings.muro` is the worked book. A `temporal` declaration states `always`, `eventually`, or `leads_to` of one such meeting. The meeting is still checked here. The declaration is [Temporal](temporal.md), and the worked book is `examples/temporal.muro`.
 
 ## Where a check fails
 

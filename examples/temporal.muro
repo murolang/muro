@@ -1,0 +1,60 @@
+-- temporal.muro — one linear-time property of one buffered meeting.
+-- The meeting is checked on its own. The declaration decides the
+-- formula on the configurations reachable from that meeting.
+
+data Frame : Type where
+  bytes : Frame
+  trailers : Frame
+  headers : Frame
+
+data Ctl : Type where
+  rst : Ctl
+
+session out-frames := send Frame (send Frame (recv Ctl end))
+
+conform client : out-frames :=
+  put headers (put trailers (get (c : Ctl) done))
+
+session tolerate :=
+  recv (f : Frame) (case f
+    | bytes => send Ctl (recv (g : Frame) (case g
+        | bytes => end
+        | trailers => end
+        | headers => end))
+    | trailers => send Ctl (recv (g : Frame) (case g
+        | bytes => end
+        | trailers => end
+        | headers => end))
+    | headers => send Ctl (recv (g : Frame) (case g
+        | bytes => end
+        | trailers => end
+        | headers => end)))
+
+conform server : tolerate :=
+  get (f : Frame) (match f
+    (put rst (get (g : Frame) (match g done done done)))
+    (put rst (get (g : Frame) (match g done done done)))
+    (put rst (get (g : Frame) (match g done done done))))
+
+meet inflight : client with server buffer 1
+
+session echo := rec X. send Nat (recv Nat X)
+
+session echo-back := rec Y. recv Nat (send Nat Y)
+
+conform echo-a : echo := rec X. put 0 (get (m : Nat) X)
+
+conform echo-b : echo-back := rec Y. get (n : Nat) (put n Y)
+
+meet echo-wire : echo-a with echo-b buffer 1
+
+temporal echo-returns-zero : echo-wire :=
+  always (echo-b at first put implies echo-b has n = 0)
+
+temporal echo-answers : echo-wire := eventually (echo-a has m = 0)
+
+temporal echo-answered : echo-wire :=
+  (inbox echo-b head 0) leads_to (inbox echo-a head 0)
+
+temporal ctl-seen : inflight :=
+  always (client done implies client has c is rst)

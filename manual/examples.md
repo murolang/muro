@@ -332,6 +332,22 @@ meet crossed : ping-a with ping-b buffer 1
 
 See [Sessions](sessions.md#a-bounded-buffer).
 
+## temporal.muro
+
+Four declarations on meetings from `async-meetings.muro`. `echo-wire` has eight reachable configurations. Each echo declaration holds in those eight. `inflight` has nine, and `ctl-seen` holds in those nine.
+
+```
+temporal echo-returns-zero : echo-wire :=
+  always (echo-b at first put implies echo-b has n = 0)
+temporal echo-answers : echo-wire := eventually (echo-a has m = 0)
+temporal echo-answered : echo-wire :=
+  (inbox echo-b head 0) leads_to (inbox echo-a head 0)
+temporal ctl-seen : inflight :=
+  always (client done implies client has c is rst)
+```
+
+See [Temporal](temporal.md).
+
 ## place.muro
 
 A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit all three. `--node` writes one call for each cross.

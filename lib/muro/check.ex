@@ -90,6 +90,9 @@ defmodule Muro.Check do
       %{kind: :meet} ->
         {:skip, "#{name} is a meeting, not a definition"}
 
+      %{kind: :temporal} ->
+        {:skip, "#{name} is a temporal declaration, not a definition"}
+
       %{kind: :talk} ->
         {:skip, "#{name} is a talk, not a definition"}
 
@@ -164,6 +167,7 @@ defmodule Muro.Check do
               :endpoint,
               :read,
               :meet,
+              :temporal,
               :talk,
               :repr,
               :seat,
@@ -2606,6 +2610,9 @@ defmodule Muro.Check do
   # processes across two queues of that length. Those protocols need not
   # be dual. Each side still has to conform.
   def check_def(book, %{kind: :meet, name: name, left: left, right: right} = d, _fuel) do
+    # One entry per book check. A temporal declaration reads the outcome
+    # recorded from this call and does not enter here again.
+    Muro.Explore.note(:meeting, name)
     loc = Print.loc_prefix(Map.get(d, :loc))
 
     with {:ok, lp} <- fetch_process(book, left),
@@ -2619,6 +2626,14 @@ defmodule Muro.Check do
     else
       {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
     end
+  end
+
+  # Standalone check of one temporal declaration. It checks the named
+  # meeting once, then decides the formula. `check_sig/2` does not use
+  # this clause: the meeting was already checked, and the declaration
+  # reads that recorded outcome. Fuel does not reduce a formula.
+  def check_def(book, %{kind: :temporal} = d, fuel) do
+    temporal_report(d, Muro.Temporal.judge(book, d, fuel))
   end
 
   # Host representation. No kernel term. `Muro.Repr` is the contract.
@@ -2650,6 +2665,15 @@ defmodule Muro.Check do
              check_nu(k, book, MapSet.put(component(book, d.name), d.name), mode, ty, body)
            ) do
       :ok
+    end
+  end
+
+  defp temporal_report(%{name: name} = d, result) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    case result do
+      {:ok, n} -> {:note, "temporal #{name}: holds in #{n} reachable states"}
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
     end
   end
 
@@ -3214,6 +3238,7 @@ defmodule Muro.Check do
           :endpoint,
           :read,
           :meet,
+          :temporal,
           :talk,
           :repr,
           :seat,
@@ -3420,15 +3445,33 @@ defmodule Muro.Check do
     end
   end
 
+  @temporal_key {__MODULE__, :temporal_lines}
+
+  @doc """
+  Success lines of the temporal declarations in the book just checked,
+  in book order. Empty when that check was refused, or when the book
+  has no temporal declaration.
+  """
+  def temporal_lines, do: Process.get(@temporal_key, [])
+
   @doc """
   Check a named book. Options: `fuel: n` (default `default_fuel/0`).
 
-  Each definition is checked against the whole book, on its own process,
-  with that same fuel. `:ok` means every definition checked. `{:error, msg}`
-  is every failure, in book order, separated by a blank line. Fuel is the
-  only bound; a definition is not cut off by a wall-clock timeout.
+  Each definition other than a temporal declaration is checked against
+  the whole book, on its own process, with that same fuel. `:ok` means
+  every definition checked. `{:error, msg}` is every failure, in book
+  order, separated by a blank line. Fuel is the only bound; a definition
+  is not cut off by a wall-clock timeout.
+  A temporal declaration that holds adds one line to `temporal_lines/0`.
+
+  Each meeting is checked once. Its outcome is recorded, and when a
+  temporal declaration names it the configuration graph is explored
+  once and recorded beside that outcome. Meeting results, temporal
+  judgments, and their diagnostics all read those records. A meeting
+  that does not check is skipped, and its graph is not explored.
   """
   def check_sig(named_book, opts \\ []) do
+    Process.delete(@temporal_key)
     fuel = Keyword.get(opts, :fuel, @fuel)
     # `params: :open` keeps unsupplied params as assumptions. The default
     # refuses them. Only `Muro.Load` passes `:open`, and only when the
@@ -3436,22 +3479,75 @@ defmodule Muro.Check do
     db_opts = if Keyword.get(opts, :params) == :open, do: [params: :open], else: []
 
     with {:ok, book} <- Ast.book_to_db(named_book, db_opts) do
-      errors =
-        book
-        |> Task.async_stream(fn d -> check_def(book, d, fuel) end,
+      indexed = Enum.with_index(book)
+      {temps, defs} = Enum.split_with(indexed, fn {d, _} -> match?(%{kind: :temporal}, d) end)
+
+      def_slots =
+        defs
+        |> Task.async_stream(fn {d, i} -> {i, check_def(book, d, fuel)} end,
           ordered: true,
           timeout: :infinity
         )
-        |> Enum.flat_map(fn
-          {:ok, :ok} -> []
-          {:ok, {:error, msg}} -> [msg]
+        |> Enum.map(fn
+          {:ok, slot} -> slot
           {:exit, reason} -> exit(reason)
         end)
 
+      meetings = recorded_meetings(defs, def_slots)
+      temp_slots = temporal_slots(book, temps, meetings)
+
+      outcomes =
+        (def_slots ++ temp_slots)
+        |> Enum.sort_by(&elem(&1, 0))
+        |> Enum.map(&elem(&1, 1))
+
+      errors = for {:error, msg} <- outcomes, do: msg
+      notes = for {:note, line} <- outcomes, do: line
+
       case errors do
-        [] -> :ok
-        msgs -> {:error, Enum.join(msgs, "\n\n")}
+        [] ->
+          if notes != [], do: Process.put(@temporal_key, notes)
+          :ok
+
+        msgs ->
+          {:error, Enum.join(msgs, "\n\n")}
       end
+    end
+  end
+
+  defp recorded_meetings(defs, def_slots) do
+    defs
+    |> Enum.zip(def_slots)
+    |> Enum.flat_map(fn
+      {{%{kind: :meet, name: name}, _i}, {_j, outcome}} -> [{name, outcome}]
+      _ -> []
+    end)
+    |> Map.new()
+  end
+
+  defp temporal_slots(_book, [], _meetings), do: []
+
+  defp temporal_slots(book, temps, meetings) do
+    prepared =
+      temps
+      |> Enum.map(fn {%{meeting: meeting}, _i} -> meeting end)
+      |> Enum.uniq()
+      |> Map.new(fn name ->
+        {name, Muro.Temporal.prepare(book, name, recorded_status(meetings, name))}
+      end)
+
+    Enum.map(temps, fn {d, i} ->
+      {i,
+       temporal_report(d, Muro.Temporal.judge_prepared(book, d, Map.fetch!(prepared, d.meeting)))}
+    end)
+  end
+
+  defp recorded_status(meetings, name) do
+    case Map.get(meetings, name, :absent) do
+      :absent -> :absent
+      :ok -> :ok
+      {:note, _} -> :ok
+      {:error, _} -> :unchecked
     end
   end
 

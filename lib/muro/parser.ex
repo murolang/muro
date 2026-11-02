@@ -313,6 +313,12 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      temporal_start?(s) ->
+        case parse_temporal(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
       talk_start?(s) ->
         case parse_talk(s) do
           {:ok, d, rest} -> parse_book(rest, [d | acc])
@@ -791,6 +797,9 @@ defmodule Muro.Parser do
 
   defp meet_start?(s), do: meet_entry?(s)
 
+  # `temporal name :` is an entry. `def temporal` and `temporal : Box` are not.
+  defp temporal_start?(s), do: temporal_entry?(s)
+
   # meet wire : pong with peer
   # meet wire : pong with peer buffer 1
   # `meet` and `with` are keywords only in this form. `buffer` is a
@@ -831,6 +840,456 @@ defmodule Muro.Parser do
       end
     else
       {:ok, nil, s}
+    end
+  end
+
+  # temporal echo-answered : echo-wire := (inbox echo-b head 0) leads_to (inbox echo-a head 0)
+  # `temporal` is a keyword only as `temporal name :`. Inside the entry,
+  # `always`, `eventually`, `leads_to`, and the proposition words are
+  # keywords. `always (P implies eventually Q)` is `P leads_to Q`.
+  defp parse_temporal(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "temporal"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, meeting, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, formula, rest} <- parse_formula(skip(rest)) do
+      {:ok,
+       %{
+         kind: :temporal,
+         name: name,
+         mode: :evidence,
+         meeting: meeting,
+         formula: formula,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  defp parse_formula(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "forall") ->
+        parse_forall(s)
+
+      word_kw?(s, "always") ->
+        parse_t_always(s)
+
+      word_kw?(s, "eventually") ->
+        with {:ok, rest} <- kw(s, "eventually"),
+             {:ok, p, rest} <- parse_prop(skip(rest)) do
+          {:ok, {:eventually, p}, rest}
+        end
+
+      nested_temporal?(s) ->
+        {:error, err(s, "nested temporal operator")}
+
+      true ->
+        with {:ok, p, rest} <- parse_prop(s) do
+          rest = skip(rest)
+
+          if word_kw?(rest, "leads_to") do
+            with {:ok, rest} <- kw(rest, "leads_to"),
+                 {:ok, q, rest} <- parse_prop(skip(rest)) do
+              {:ok, {:leads_to, p, q}, rest}
+            end
+          else
+            {:error, err(rest, "expected leads_to")}
+          end
+        end
+    end
+  end
+
+  defp parse_forall(s) do
+    with {:ok, rest} <- kw(s, "forall"),
+         {:ok, rest} <- tok(skip(rest), "("),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, ty, rest} <- parse_pay(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ")"),
+         {:ok, rest} <- tok(skip(rest), "."),
+         {:ok, formula, rest} <- parse_formula(skip(rest)) do
+      {:ok, {:forall, name, ty, formula}, rest}
+    end
+  end
+
+  defp parse_t_always(s) do
+    with {:ok, rest} <- kw(s, "always") do
+      rest = skip(rest)
+
+      if has_prefix?(rest, "(") do
+        case parse_t_always_paren(rest) do
+          {:sugar, p, q, rest} -> {:ok, {:leads_to, p, q}, rest}
+          {:prop, p, rest} -> {:ok, {:always, p}, rest}
+          {:error, _} = err -> err
+        end
+      else
+        with {:ok, p, rest} <- parse_prop(rest) do
+          {:ok, {:always, p}, rest}
+        end
+      end
+    end
+  end
+
+  # `always (P implies eventually Q)` stops the left proposition before
+  # `implies eventually`. Any other `eventually` inside a proposition is
+  # a nested operator.
+  defp parse_t_always_paren(s) do
+    with {:ok, rest} <- tok(s, "(") do
+      case parse_imp(skip(rest), true) do
+        {:stop, p, at} ->
+          with {:ok, rest} <- kw(at, "implies"),
+               {:ok, rest} <- kw(skip(rest), "eventually"),
+               {:ok, q, rest} <- parse_prop(skip(rest)),
+               {:ok, rest} <- tok(skip(rest), ")") do
+            {:sugar, p, q, rest}
+          end
+
+        {:ok, p, rest} ->
+          with {:ok, rest} <- tok(skip(rest), ")") do
+            {:prop, p, rest}
+          end
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  defp parse_prop(s), do: parse_imp(s, false)
+
+  defp parse_imp(s, stop?) do
+    case parse_or(s) do
+      {:ok, left, rest} ->
+        rest = skip(rest)
+
+        if word_kw?(rest, "implies") do
+          after_imp = rest |> after_kw("implies") |> skip()
+
+          cond do
+            stop? and word_kw?(after_imp, "eventually") ->
+              {:stop, left, rest}
+
+            nested_temporal?(after_imp) ->
+              {:error, err(after_imp, "nested temporal operator")}
+
+            true ->
+              case parse_imp(after_imp, stop?) do
+                {:ok, right, rest} -> {:ok, {:imp, left, right}, rest}
+                {:stop, right, at} -> {:stop, {:imp, left, right}, at}
+                {:error, _} = err -> err
+              end
+          end
+        else
+          {:ok, left, rest}
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp parse_or(s) do
+    with {:ok, left, rest} <- parse_and(s) do
+      parse_or_rest(left, rest)
+    end
+  end
+
+  defp parse_or_rest(left, s) do
+    s = skip(s)
+
+    if word_kw?(s, "or") do
+      with {:ok, rest} <- kw(s, "or"),
+           {:ok, right, rest} <- parse_and(skip(rest)) do
+        parse_or_rest({:or, left, right}, rest)
+      end
+    else
+      {:ok, left, s}
+    end
+  end
+
+  defp parse_and(s) do
+    with {:ok, left, rest} <- parse_not_prop(s) do
+      parse_and_rest(left, rest)
+    end
+  end
+
+  defp parse_and_rest(left, s) do
+    s = skip(s)
+
+    if word_kw?(s, "and") do
+      with {:ok, rest} <- kw(s, "and"),
+           {:ok, right, rest} <- parse_not_prop(skip(rest)) do
+        parse_and_rest({:and, left, right}, rest)
+      end
+    else
+      {:ok, left, s}
+    end
+  end
+
+  defp parse_not_prop(s) do
+    s = skip(s)
+
+    if word_kw?(s, "not") do
+      with {:ok, rest} <- kw(s, "not"),
+           {:ok, p, rest} <- parse_not_prop(skip(rest)) do
+        {:ok, {:not, p}, rest}
+      end
+    else
+      parse_atom_prop(s)
+    end
+  end
+
+  defp parse_atom_prop(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "true") ->
+        {:ok, true, after_kw(s, "true")}
+
+      word_kw?(s, "false") ->
+        {:ok, false, after_kw(s, "false")}
+
+      word_kw?(s, "inbox") ->
+        parse_inbox(s)
+
+      nested_temporal?(s) ->
+        {:error, err(s, "nested temporal operator")}
+
+      has_prefix?(s, "(") ->
+        parse_paren(s, &parse_prop/1)
+
+      ident_start?(s) ->
+        parse_role_atom(s)
+
+      true ->
+        {:error, err(s, "expected a state proposition")}
+    end
+  end
+
+  defp nested_temporal?(s) do
+    word_kw?(s, "always") or word_kw?(s, "eventually") or word_kw?(s, "leads_to") or
+      word_kw?(s, "forall")
+  end
+
+  defp parse_inbox(s) do
+    with {:ok, rest} <- kw(s, "inbox"),
+         {:ok, role, rest} <- ident(skip(rest)) do
+      rest = skip(rest)
+
+      cond do
+        word_kw?(rest, "is") ->
+          rest = rest |> after_kw("is") |> skip()
+
+          cond do
+            word_kw?(rest, "empty") -> {:ok, {:empty, role}, after_kw(rest, "empty")}
+            word_kw?(rest, "full") -> {:ok, {:full, role}, after_kw(rest, "full")}
+            true -> {:error, err(rest, "expected empty or full")}
+          end
+
+        word_kw?(rest, "head") ->
+          with {:ok, val, rest} <- parse_tval(skip(after_kw(rest, "head"))) do
+            {:ok, {:head, role, val}, rest}
+          end
+
+        true ->
+          {:error, err(rest, "expected is or head")}
+      end
+    end
+  end
+
+  defp parse_role_atom(s) do
+    with {:ok, role, rest} <- ident(s) do
+      rest = skip(rest)
+
+      cond do
+        word_kw?(rest, "done") ->
+          {:ok, {:done, role}, after_kw(rest, "done")}
+
+        word_kw?(rest, "stopped") ->
+          {:ok, {:stopped, role}, after_kw(rest, "stopped")}
+
+        word_kw?(rest, "at") ->
+          parse_at(role, after_kw(rest, "at"))
+
+        word_kw?(rest, "has") ->
+          parse_has(role, after_kw(rest, "has"))
+
+        true ->
+          {:error, err(rest, "expected done, stopped, at, or has")}
+      end
+    end
+  end
+
+  defp parse_at(role, s) do
+    with {:ok, n, rest} <- parse_ordinal(skip(s)),
+         {:ok, verb, rest} <- parse_verb(skip(rest)) do
+      {:ok, {:at, role, n, verb}, rest}
+    end
+  end
+
+  defp parse_ordinal(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "first") ->
+        {:ok, 1, after_kw(s, "first")}
+
+      word_kw?(s, "second") ->
+        {:ok, 2, after_kw(s, "second")}
+
+      word_kw?(s, "third") ->
+        {:ok, 3, after_kw(s, "third")}
+
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        n = String.to_integer(digits)
+        suf = ordinal_suffix(n)
+
+        if word_kw?(rest, suf) do
+          {:ok, n, after_kw(rest, suf)}
+        else
+          {:error, err(s, "expected an ordinal")}
+        end
+
+      true ->
+        {:error, err(s, "expected an ordinal")}
+    end
+  end
+
+  defp ordinal_suffix(n) when rem(n, 100) in 11..13, do: "th"
+
+  defp ordinal_suffix(n) do
+    case rem(n, 10) do
+      1 -> "st"
+      2 -> "nd"
+      3 -> "rd"
+      _ -> "th"
+    end
+  end
+
+  defp parse_verb(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "put") -> {:ok, :put, after_kw(s, "put")}
+      word_kw?(s, "get") -> {:ok, :get, after_kw(s, "get")}
+      word_kw?(s, "pick0") -> {:ok, :pick0, after_kw(s, "pick0")}
+      word_kw?(s, "pick1") -> {:ok, :pick1, after_kw(s, "pick1")}
+      word_kw?(s, "cover") -> {:ok, :cover, after_kw(s, "cover")}
+      true -> {:error, err(s, "expected put, get, pick0, pick1, or cover")}
+    end
+  end
+
+  defp parse_has(role, s) do
+    with {:ok, name, rest} <- ident(skip(s)) do
+      rest = skip(rest)
+
+      cond do
+        has_prefix?(rest, "<=") or has_prefix?(rest, "≤") or has_prefix?(rest, "<") ->
+          parse_has_cmp(role, name, rest)
+
+        word_kw?(rest, "is") ->
+          with {:ok, ctor, rest} <- ident(skip(after_kw(rest, "is"))) do
+            {:ok, {:is, role, name, ctor}, rest}
+          end
+
+        has_prefix?(rest, "=") ->
+          parse_has_eq(role, name, after_kw(rest, "="))
+
+        true ->
+          {:ok, {:bound, role, name}, rest}
+      end
+    end
+  end
+
+  defp parse_has_cmp(role, name, s) do
+    s = skip(s)
+
+    {tag, rest} =
+      cond do
+        has_prefix?(s, "<=") -> {:le, after_kw(s, "<=")}
+        has_prefix?(s, "≤") -> {:le, after_kw(s, "≤")}
+        true -> {:lt, after_kw(s, "<")}
+      end
+
+    with {:ok, n, rest} <- parse_numeral(rest) do
+      {:ok, {tag, role, name, n}, rest}
+    end
+  end
+
+  defp parse_has_eq(role, name, s) do
+    case try_eq2(skip(s)) do
+      {:ok, role2, name2, rest} ->
+        {:ok, {:eq2, role, name, role2, name2}, rest}
+
+      :no ->
+        with {:ok, val, rest} <- parse_tval(s) do
+          {:ok, {:eq, role, name, val}, rest}
+        end
+    end
+  end
+
+  defp try_eq2(s) do
+    case ident(s) do
+      {:ok, role2, rest} ->
+        rest = skip(rest)
+
+        if word_kw?(rest, "has") do
+          case ident(skip(after_kw(rest, "has"))) do
+            {:ok, name2, rest} -> {:ok, role2, name2, rest}
+            _ -> :no
+          end
+        else
+          :no
+        end
+
+      _ ->
+        :no
+    end
+  end
+
+  defp parse_numeral(s) do
+    s = skip(s)
+
+    if number?(s) do
+      {digits, rest} = take_digits(s, "")
+      {:ok, String.to_integer(digits), rest}
+    else
+      {:error, err(s, "expected a numeral")}
+    end
+  end
+
+  defp parse_tval(s) do
+    s = skip(s)
+
+    cond do
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, {:nat, String.to_integer(digits)}, rest}
+
+      word_kw?(s, "b0") ->
+        {:ok, :b0, after_kw(s, "b0")}
+
+      word_kw?(s, "b1") ->
+        {:ok, :b1, after_kw(s, "b1")}
+
+      word_kw?(s, "pick0") ->
+        {:ok, :pick0, after_kw(s, "pick0")}
+
+      word_kw?(s, "pick1") ->
+        {:ok, :pick1, after_kw(s, "pick1")}
+
+      ident_start?(s) ->
+        with {:ok, name, rest} <- ident(s) do
+          {:ok, {:var, name}, rest}
+        end
+
+      true ->
+        {:error, err(s, "expected a value")}
     end
   end
 
@@ -1151,8 +1610,8 @@ defmodule Muro.Parser do
     word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
       word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
       nu_start?(s) or place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
-      endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or talk_start?(s) or
-      seat_start?(s) or link_start?(s) or repr_start?(s)
+      endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
+      talk_start?(s) or seat_start?(s) or link_start?(s) or repr_start?(s)
   end
 
   defp parse_talk(s) do
@@ -1310,6 +1769,9 @@ defmodule Muro.Parser do
       false
     end
   end
+
+  # A temporal declaration is `temporal name :`. A constructor `temporal : Box` is not one.
+  defp temporal_entry?(s), do: colon_entry?(s, "temporal")
 
   # A meeting is `meet name :`. A constructor `meet : Box` is not one.
   defp meet_entry?(s) do
@@ -2724,8 +3186,8 @@ defmodule Muro.Parser do
       word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
         word_kw?(s, "session") or word_kw?(s, "conform") or nu_start?(s) or
         place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
-        endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or talk_start?(s) or
-        seat_start?(s) or link_start?(s) or repr_start?(s) ->
+        endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
+        talk_start?(s) or seat_start?(s) or link_start?(s) or repr_start?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
@@ -2919,8 +3381,8 @@ defmodule Muro.Parser do
       word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
       word_kw?(s, "where") or word_kw?(s, "motive") or word_kw?(s, "in") or
       nu_start?(s) or place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
-      endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or talk_start?(s) or
-      seat_start?(s) or link_start?(s) or repr_start?(s)
+      endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
+      talk_start?(s) or seat_start?(s) or link_start?(s) or repr_start?(s)
   end
 
   defp eatom_start?(s) do
@@ -3114,15 +3576,16 @@ defmodule Muro.Parser do
 
   # `session` and `conform` use `:=`, so ctor_decl_start? does not see
   # them. A new line that starts either form, or a place, scheme, move,
-  # endpoint, reading, meeting, talk, repr, seat, or link entry, ends the
-  # constructor's type.
+  # endpoint, reading, meeting, temporal declaration, talk, repr, seat, or
+  # link entry, ends the constructor's type. `temporal name :` is that line.
   defp session_line?(s, s0) do
     skipped = binary_part(s, 0, byte_size(s) - byte_size(s0))
 
     String.contains?(skipped, "\n") and
       (session_start?(s0) or conform_start?(s0) or place_entry?(s0) or scheme_entry?(s0) or
          move_entry?(s0) or endpoint_entry?(s0) or read_entry?(s0) or meet_entry?(s0) or
-         talk_start?(s0) or repr_start?(s0) or seat_start?(s0) or link_start?(s0))
+         temporal_entry?(s0) or talk_start?(s0) or repr_start?(s0) or seat_start?(s0) or
+         link_start?(s0))
   end
 
   defp starts_atom?(s) do

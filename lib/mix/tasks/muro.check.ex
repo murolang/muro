@@ -24,8 +24,12 @@ defmodule Mix.Tasks.Muro.Check do
   is relative to the importing file. A file reached twice joins once.
 
   The first line is the version that checked the book (`Muro v` and the
-  version from the application spec). On success the next line is
-  `All terms check. Evidence never becomes a run.` When the book imports
+  version from the application spec). Each temporal declaration that
+  holds then prints `temporal <name>: holds in <n> reachable states`.
+  On success the next line is
+  `All terms check. Evidence never becomes a run.` A book with no
+  temporal declaration prints that line immediately after the version.
+  When the book imports
   packages, one `conforms to <name> <version> (sha256 <hash>)` line
   follows for each package it loaded. A book that imports no package,
   and the built-in check with no path, print only those two lines.
