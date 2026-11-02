@@ -60,7 +60,8 @@ defmodule MuroVisor.TaskTest do
     assert {:ok, %{book: loaded}} = MuroVisor.Book.current()
     assert Enum.any?(loaded, &(&1.name == "plus"))
 
-    body = get(URI.parse(url).port)
+    port = bound_port!()
+    body = get(port)
     assert body =~ "200"
     assert body =~ "muro visor"
     assert body =~ "plus"
@@ -68,6 +69,7 @@ defmodule MuroVisor.TaskTest do
 
     silence()
     assert refused()
+    assert {:error, :econnrefused} = :gen_tcp.connect({127, 0, 0, 1}, port, [], 200)
   end
 
   test "missing endpoint config is filled and the visor application serves the book" do
@@ -79,21 +81,54 @@ defmodule MuroVisor.TaskTest do
     end)
 
     Application.delete_env(:muro_visor, MuroVisor.Endpoint)
+    assert :ok = Mix.Tasks.Muro.Ui.ensure_config!()
+
+    filled = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
+    assert get_in(filled, [:http, :port]) == 4017
+    assert filled[:check_origin] == ["//127.0.0.1", "//localhost"]
+
+    # The default port is 4017. Serve on an ephemeral port so a visor
+    # that is already listening there cannot fail this test.
+    http = filled |> Keyword.fetch!(:http) |> Keyword.put(:port, 0)
+    Application.put_env(:muro_visor, MuroVisor.Endpoint, Keyword.put(filled, :http, http))
     Application.put_env(:muro_visor, :ui_hold, false)
     Application.put_env(:muro_visor, :browser_open, fn _url -> :ok end)
 
     Mix.Tasks.Muro.Ui.run([path])
 
     config = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
-    assert get_in(config, [:http, :port]) == 4017
     assert config[:check_origin] == ["//127.0.0.1", "//localhost"]
     assert Enum.any?(Application.started_applications(), &match?({:muro_visor, _, _}, &1))
     assert {:ok, %{book: loaded}} = MuroVisor.Book.current()
     assert Enum.any?(loaded, &(&1.name == "plus"))
 
-    body = get(4017)
+    body = get(bound_port!())
     assert body =~ "200"
     assert body =~ "_csrf_token"
+  end
+
+  test "a failed bind leaves the shared endpoint up" do
+    {:ok, sock} = :gen_tcp.listen(0, [:binary, ip: {127, 0, 0, 1}, active: false])
+    {:ok, held} = :inet.port(sock)
+    saved = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
+
+    on_exit(fn ->
+      :gen_tcp.close(sock)
+      Application.put_env(:muro_visor, MuroVisor.Endpoint, saved)
+    end)
+
+    http = saved |> Keyword.fetch!(:http) |> Keyword.put(:port, held)
+    Application.put_env(:muro_visor, MuroVisor.Endpoint, Keyword.put(saved, :http, http))
+    Application.put_env(:muro_visor, :ui_hold, false)
+    Application.put_env(:muro_visor, :browser_open, fn _url -> :ok end)
+
+    assert_raise Mix.Error, ~r/explorer did not listen/, fn ->
+      Mix.Tasks.Muro.Ui.run([example("half_ok.muro")])
+    end
+
+    assert is_pid(Process.whereis(MuroVisor.Endpoint))
+    assert refused()
+    assert html_response(get(build_conn(), "/"), 200) =~ "muro visor"
   end
 
   test "existing endpoint settings keep their port" do
@@ -132,10 +167,7 @@ defmodule MuroVisor.TaskTest do
     Application.put_env(:muro_visor, MuroVisor.Endpoint, Keyword.put(config, :server, true))
     restart!()
 
-    assert {:ok, {{127, 0, 0, 1}, port}} =
-             Bandit.PhoenixAdapter.server_info(MuroVisor.Endpoint, :http)
-
-    assert is_integer(port) and port > 0
+    port = bound_port!()
     assert {:ok, sock} = :gen_tcp.connect({127, 0, 0, 1}, port, [], 2_000)
     :gen_tcp.close(sock)
   end
@@ -220,28 +252,41 @@ defmodule MuroVisor.TaskTest do
 
   defp restart! do
     :ok = Supervisor.terminate_child(MuroVisor.Supervisor, MuroVisor.Endpoint)
-    {:ok, _pid} = Supervisor.restart_child(MuroVisor.Supervisor, MuroVisor.Endpoint)
+
+    case Supervisor.restart_child(MuroVisor.Supervisor, MuroVisor.Endpoint) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, reason} ->
+        MuroVisor.TestEndpoint.quiet!()
+        flunk("endpoint did not listen: #{inspect(reason)}")
+    end
   end
 
   defp silence do
     Application.delete_env(:muro_visor, :ui_hold)
     Application.delete_env(:muro_visor, :browser_open)
-    config = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
-    Application.put_env(:muro_visor, MuroVisor.Endpoint, Keyword.put(config, :server, false))
-
-    if Process.whereis(MuroVisor.Endpoint) do
-      :ok = Supervisor.terminate_child(MuroVisor.Supervisor, MuroVisor.Endpoint)
-      {:ok, _pid} = Supervisor.restart_child(MuroVisor.Supervisor, MuroVisor.Endpoint)
-    end
+    MuroVisor.TestEndpoint.quiet!()
   end
 
-  defp refused do
-    port =
-      :muro_visor
-      |> Application.fetch_env!(MuroVisor.Endpoint)
-      |> Keyword.fetch!(:http)
-      |> Keyword.fetch!(:port)
+  defp bound_port! do
+    assert {:ok, {{127, 0, 0, 1}, port}} =
+             Bandit.PhoenixAdapter.server_info(MuroVisor.Endpoint, :http)
 
-    match?({:error, :econnrefused}, :gen_tcp.connect({127, 0, 0, 1}, port, [], 200))
+    assert is_integer(port) and port > 0
+    port
+  end
+
+  # The endpoint is not listening. This does not connect to a fixed port:
+  # the suite's configured port is ephemeral, and another process may
+  # already hold the user-facing default.
+  defp refused do
+    case Process.whereis(MuroVisor.Endpoint) do
+      pid when is_pid(pid) ->
+        match?({:error, _}, Bandit.PhoenixAdapter.server_info(MuroVisor.Endpoint, :http))
+
+      _ ->
+        false
+    end
   end
 end

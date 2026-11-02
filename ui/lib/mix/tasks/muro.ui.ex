@@ -73,28 +73,50 @@ defmodule Mix.Tasks.Muro.Ui do
   end
 
   defp start! do
-    config = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
-    Application.put_env(:muro_visor, MuroVisor.Endpoint, Keyword.put(config, :server, true))
+    previous = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
+    Application.put_env(:muro_visor, MuroVisor.Endpoint, Keyword.put(previous, :server, true))
 
     case Application.ensure_all_started(:muro_visor) do
       {:ok, _} ->
         :ok
 
       {:error, reason} ->
+        Application.put_env(:muro_visor, MuroVisor.Endpoint, previous)
         Mix.raise("explorer did not start: #{inspect(reason)}")
     end
 
-    cond do
-      not is_pid(Process.whereis(MuroVisor.Endpoint)) ->
-        Mix.raise("explorer did not listen: endpoint missing")
+    if not is_pid(Process.whereis(MuroVisor.Endpoint)) do
+      Mix.raise("explorer did not listen: endpoint missing")
+    end
 
-      true ->
-        :ok = Supervisor.terminate_child(MuroVisor.Supervisor, MuroVisor.Endpoint)
+    restart_listener!(previous)
+  end
 
-        case Supervisor.restart_child(MuroVisor.Supervisor, MuroVisor.Endpoint) do
-          {:ok, _pid} -> :ok
-          {:error, reason} -> Mix.raise("explorer did not listen: #{inspect(reason)}")
-        end
+  # Drop the running child and start it with the config `start!/0` just
+  # wrote. A failed bind puts the previous child back. Tests share this
+  # endpoint, and a terminated child fails later LiveView tests.
+  defp restart_listener!(previous) do
+    :ok = Supervisor.terminate_child(MuroVisor.Supervisor, MuroVisor.Endpoint)
+
+    case Supervisor.restart_child(MuroVisor.Supervisor, MuroVisor.Endpoint) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, reason} ->
+        Application.put_env(:muro_visor, MuroVisor.Endpoint, previous)
+        restore_listener!(reason)
+    end
+  end
+
+  defp restore_listener!(reason) do
+    case Supervisor.restart_child(MuroVisor.Supervisor, MuroVisor.Endpoint) do
+      {:ok, _pid} ->
+        Mix.raise("explorer did not listen: #{inspect(reason)}")
+
+      {:error, restore} ->
+        Mix.raise(
+          "explorer did not listen: #{inspect(reason)}; endpoint was not restored: #{inspect(restore)}"
+        )
     end
   end
 
