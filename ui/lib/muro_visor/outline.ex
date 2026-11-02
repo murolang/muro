@@ -31,7 +31,7 @@ defmodule MuroVisor.Outline do
     Muro.Emit.outline(backend, book, stem)
   end
 
-  defp format(backend, outline) do
+  defp format(_backend, outline) do
     sigs =
       Enum.map_join(outline.signatures, "\n", fn sig ->
         params = sig |> Map.get(:params, []) |> Enum.map_join(", ", &param/1)
@@ -41,17 +41,28 @@ defmodule MuroVisor.Outline do
 
     layouts =
       Enum.map_join(outline.layouts, "\n", fn lay ->
-        "#{Map.get(lay, :name)} #{inspect(Map.get(lay, :layout))}"
+        base = "#{Map.get(lay, :name)} #{inspect(Map.get(lay, :layout))}"
+
+        case Map.get(lay, :constructors) do
+          ctors when is_list(ctors) and ctors != [] ->
+            extra =
+              Enum.map_join(ctors, " ", fn c ->
+                "#{c.name}##{c.tag}#{inspect(c.fields)}"
+              end)
+
+            base <> " " <> extra
+
+          _ ->
+            base
+        end
       end)
 
-    """
-    backend: #{backend}
-    names: #{Enum.join(outline.names, ", ")}
-    #{sigs}
-    layouts:
-    #{layouts}
-    #{Enum.join(outline.clauses, "\n")}
-    """
+    %{
+      names: Enum.join(outline.names, ", "),
+      signatures: sigs,
+      layouts: layouts,
+      clauses: Enum.join(outline.clauses, "\n")
+    }
   end
 
   defp param(name) when is_binary(name), do: name
