@@ -95,7 +95,7 @@ defmodule MuroVisor.LayoutTest do
     assert page =~ "#outline pre"
 
     child = hd(Enum.find(graph.nodes, &(&1.children != [])).children)
-    view |> element("#node-#{child.id}") |> render_keydown(%{"key" => "Enter"})
+    view |> element("#configuration-#{child.id}") |> render_keydown(%{"key" => "Enter"})
     assert text_of(render(view), "#detail-loc") =~ "meet.muro"
 
     for edge <- use_edges(render(view)) do

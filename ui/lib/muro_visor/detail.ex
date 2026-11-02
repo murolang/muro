@@ -3,19 +3,70 @@ defmodule MuroVisor.Detail do
 
   def empty, do: %{title: "", loc: "", kind: ""}
 
+  @kinds [:configuration, :transition, :node, :edge]
+
   @doc """
-  Source location for a node, a configuration, or an edge.
+  DOM id and selection value for one control.
+
+  The kind is part of the value. `Name.encode("e0")` is `"e0"`, and the
+  first use edge is also `"e0"`, so the raw ids collide.
+  """
+  def dom_id(kind, id) when kind in @kinds and is_binary(id) do
+    Atom.to_string(kind) <> "-" <> id
+  end
+
+  @doc """
+  Source location for one namespaced control id.
+
+  The prefix selects the list. A node, an edge, a configuration, and a
+  transition are never looked up in each other's lists.
 
   An edge is re-checked with `Muro.Explore.out_of_order/2`. The kind is
   that refusal. A use that cannot be moved says `no refusal`. A node
   has no refusal.
   """
   def lookup(%{nodes: nodes, edges: edges}, book, id) when is_binary(id) do
-    cond do
-      node = Enum.find(nodes, &(&1.id == id)) ->
-        %{title: node.name, loc: show_at(node.file, node.loc), kind: ""}
+    case split(id) do
+      {:node, raw} ->
+        node_detail(nodes, raw)
 
-      edge = Enum.find(edges, &(&1.id == id)) ->
+      {:edge, raw} ->
+        edge_detail(nodes, edges, book, raw)
+
+      {:configuration, raw} ->
+        configuration_detail(nodes, raw)
+
+      {:transition, raw} ->
+        transition_detail(nodes, raw)
+
+      :error ->
+        empty()
+    end
+  end
+
+  defp split(id) do
+    Enum.find_value(@kinds, fn kind ->
+      prefix = Atom.to_string(kind) <> "-"
+
+      if String.starts_with?(id, prefix) do
+        {kind, String.replace_prefix(id, prefix, "")}
+      end
+    end) || :error
+  end
+
+  defp node_detail(nodes, id) do
+    case Enum.find(nodes, &(&1.id == id)) do
+      nil -> empty()
+      node -> %{title: node.name, loc: show_at(node.file, node.loc), kind: ""}
+    end
+  end
+
+  defp edge_detail(nodes, edges, book, id) do
+    case Enum.find(edges, &(&1.id == id)) do
+      nil ->
+        empty()
+
+      edge ->
         refusal = Muro.Explore.out_of_order(book, edge)
 
         %{
@@ -23,12 +74,20 @@ defmodule MuroVisor.Detail do
           loc: show_at(file_of(nodes, edge.from), Map.get(refusal, :loc) || edge.loc),
           kind: refusal_kind(refusal)
         }
+    end
+  end
 
-      child = find_child(nodes, id) ->
-        %{title: child.meeting, loc: show(child.loc), kind: ""}
+  defp configuration_detail(nodes, id) do
+    case find_child(nodes, id) do
+      nil -> empty()
+      child -> %{title: child.meeting, loc: show(child.loc), kind: ""}
+    end
+  end
 
-      true ->
-        empty()
+  defp transition_detail(nodes, id) do
+    case find_transition(nodes, id) do
+      nil -> empty()
+      t -> %{title: transition_title(t), loc: show(Map.get(t, :loc)), kind: ""}
     end
   end
 
@@ -37,6 +96,17 @@ defmodule MuroVisor.Detail do
       Enum.find(node.children, &(&1.id == id))
     end)
   end
+
+  defp find_transition(nodes, id) do
+    Enum.find_value(nodes, fn node ->
+      Enum.find(Map.get(node, :transitions, []), &(&1.id == id))
+    end)
+  end
+
+  defp transition_title(%{label: label}) when is_list(label), do: Enum.join(label, " ")
+  defp transition_title(%{label: label}) when is_binary(label), do: label
+  defp transition_title(%{meeting: meeting}) when is_binary(meeting), do: meeting
+  defp transition_title(_other), do: ""
 
   defp file_of(nodes, id) do
     case Enum.find(nodes, &(&1.id == id)) do

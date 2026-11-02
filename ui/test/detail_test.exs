@@ -68,17 +68,56 @@ defmodule MuroVisor.DetailTest do
     assert text_of(render(view), "#detail-refusal-kind") == "no refusal"
   end
 
+  test "a node named e0 and the use edge e0 select separately", %{conn: conn} do
+    path =
+      write_book("""
+      def e0 : run Nat := 0
+
+      def user : run Nat := e0
+      """)
+
+    view = open_book(conn, path)
+    graph = Muro.Explore.graph(book())
+    node = Enum.find(graph.nodes, &(&1.name == "e0"))
+    edge = Enum.find(graph.edges, &(&1.use == :def and &1.to == node.id))
+    assert node.id == "e0"
+    assert edge.id == "e0"
+    assert Muro.Emit.Name.encode("e0") == "e0"
+
+    html = view |> element("#edge-#{edge.id}") |> render_click()
+    assert text_of(html, "#detail-title") == "def"
+    assert text_of(html, "#detail-refusal-kind") == "no refusal"
+    assert class_of(html, "#edge-#{edge.id} path.edge") =~ "selected"
+    refute class_of(html, "#node-#{node.id}") =~ "selected"
+    assert [_one] = parse(html) |> Floki.find("path.edge.selected")
+    user = Enum.find(graph.nodes, &(&1.name == "user"))
+    refute class_of(html, "#node-#{user.id}") =~ "selected"
+
+    html = view |> element("#node-#{node.id}") |> render_click()
+    assert text_of(html, "#detail-title") == "e0"
+    assert class_of(html, "#node-#{node.id}") =~ "selected"
+    refute class_of(html, "#edge-#{edge.id} path.edge") =~ "selected"
+  end
+
   test "a configuration location names each participant's file", %{conn: conn} do
     view = open_book(conn, example("meet.muro"))
     graph = Muro.Explore.graph(book())
     node = Enum.find(graph.nodes, &(&1.children != []))
     child = hd(node.children)
 
-    view |> element("#node-#{child.id}") |> render_click()
+    view |> element("#configuration-#{child.id}") |> render_click()
     loc = text_of(render(view), "#detail-loc")
     assert loc =~ "left "
     assert loc =~ "right "
     assert loc =~ "meet.muro"
+  end
+
+  defp class_of(html, selector) do
+    html
+    |> parse()
+    |> Floki.attribute(selector, "class")
+    |> List.first()
+    |> to_string()
   end
 
   defp assert_node(view, defn) do

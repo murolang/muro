@@ -86,7 +86,9 @@ defmodule MuroVisor.SessionTest do
       prefix = "cfg-#{Muro.Emit.Name.encode(session)}-#{Muro.Emit.Name.encode(meet.name)}"
 
       assert group.children |> Enum.map(& &1.id) ==
-               Enum.map(walked.states, &"node-#{prefix}-#{&1.id}")
+               Enum.map(walked.states, &"configuration-#{prefix}-#{&1.id}")
+
+      assert Enum.all?(group.transitions, &String.starts_with?(&1.id, "transition-"))
 
       assert group.children |> Enum.map(& &1.state) ==
                Enum.map(walked.states, &Integer.to_string(&1.id))

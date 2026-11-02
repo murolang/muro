@@ -99,8 +99,8 @@ defmodule MuroVisor.ExplorerLive do
           >
             <g
               :for={node <- @picture.nodes}
-              id={"node-#{node.id}"}
-              class={[node.class, @selected == node.id && "selected"]}
+              id={control(:node, node.id)}
+              class={[node.class, picked?(@selected, :node, node.id) && "selected"]}
               data-kind={node.kind}
               data-mode={node.mode}
               data-name={node.name}
@@ -108,7 +108,7 @@ defmodule MuroVisor.ExplorerLive do
               role="button"
               phx-click="select"
               phx-keydown="select"
-              phx-value-id={node.id}
+              phx-value-id={control(:node, node.id)}
             >
               <rect class={node.class} x={node.x} y={node.y} width={node.w} height={node.h} />
               <text x={node.x + 8} y={node.y + 18}>{node.name}</text>
@@ -122,39 +122,50 @@ defmodule MuroVisor.ExplorerLive do
                 <text x={meet.x + 6} y={meet.y + 14}>{meet.name}</text>
                 <g
                   :for={child <- meet.children}
-                  id={"node-#{child.id}"}
-                  class={@selected == child.id && "selected"}
+                  id={control(:configuration, child.id)}
+                  class={picked?(@selected, :configuration, child.id) && "selected"}
                   data-state={child.state}
                   tabindex="0"
                   role="button"
                   phx-click="select"
                   phx-keydown="select"
-                  phx-value-id={child.id}
+                  phx-value-id={control(:configuration, child.id)}
                 >
                   <rect
                     x={child.x}
                     y={child.y}
                     width={child.w}
                     height={child.h}
-                    class={["node", @selected == child.id && "selected"]}
+                    class={["node", picked?(@selected, :configuration, child.id) && "selected"]}
                   />
                   <text x={child.x + 6} y={child.y + 16}>{child.label}</text>
                 </g>
                 <g
                   :for={t <- meet.transitions}
-                  id={"trans-#{t.id}"}
+                  id={control(:transition, t.id)}
                   data-from={t.from}
                   data-to={t.to}
                   data-label={t.label}
+                  tabindex="0"
+                  role="button"
+                  phx-click="select"
+                  phx-keydown="select"
+                  phx-value-id={control(:transition, t.id)}
                 >
-                  <path d={t.d} fill="none" stroke="#78716c" stroke-width="1.25" />
+                  <path
+                    class={["transition", picked?(@selected, :transition, t.id) && "selected"]}
+                    d={t.d}
+                    fill="none"
+                    stroke="#78716c"
+                    stroke-width="1.25"
+                  />
                   <text x={t.lx} y={t.ly}>{t.label}</text>
                 </g>
               </g>
             </g>
             <g
               :for={edge <- @picture.edges}
-              id={"edge-#{edge.id}"}
+              id={control(:edge, edge.id)}
               data-from={edge.from}
               data-to={edge.to}
               data-use={edge.use}
@@ -162,11 +173,11 @@ defmodule MuroVisor.ExplorerLive do
               role="button"
               phx-click="select"
               phx-keydown="select"
-              phx-value-id={edge.id}
+              phx-value-id={control(:edge, edge.id)}
             >
               <path d={edge.d} fill="none" stroke="#44403c" stroke-opacity="0" stroke-width="12" />
               <path
-                class={["edge", @selected == edge.id && "selected"]}
+                class={["edge", picked?(@selected, :edge, edge.id) && "selected"]}
                 d={edge.d}
                 stroke-width="1.5"
               />
@@ -208,6 +219,9 @@ defmodule MuroVisor.ExplorerLive do
 
   defp activate?(%{"key" => key}), do: key in ["Enter", " ", "Space", "Spacebar"]
   defp activate?(_params), do: true
+
+  defp control(kind, id), do: MuroVisor.Detail.dom_id(kind, id)
+  defp picked?(selected, kind, id), do: selected == control(kind, id)
 
   defp path_label(nil), do: ""
   defp path_label(path), do: Path.basename(path)

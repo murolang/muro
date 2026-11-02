@@ -20,7 +20,7 @@ defmodule MuroVisor.ReadonlyTest do
     end
 
     for node <- graph.nodes, child <- node.children do
-      view |> element("#node-#{child.id}") |> render_click()
+      view |> element("#configuration-#{child.id}") |> render_click()
     end
 
     for backend <- ~w(fsm c rust zig otp c fsm zig rust otp) do

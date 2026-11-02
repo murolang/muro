@@ -819,10 +819,14 @@ defmodule Muro.Explore do
 
         ts =
           ts ++
-            Enum.map(graph.transitions, fn t ->
+            Enum.map(Enum.with_index(graph.transitions), fn {t, i} ->
+              from = "#{prefix}-#{t.from}"
+              to = "#{prefix}-#{t.to}"
+
               %{
-                from: "#{prefix}-#{t.from}",
-                to: "#{prefix}-#{t.to}",
+                id: "#{i}-#{from}-#{to}",
+                from: from,
+                to: to,
                 label: t.label,
                 loc: qualify(t.loc, lf, rf),
                 side: Map.get(t, :side),

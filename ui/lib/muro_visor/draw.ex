@@ -93,7 +93,7 @@ defmodule MuroVisor.Draw do
     edges =
       Enum.map(Enum.with_index(transitions), fn {t, i} ->
         %{
-          id: "#{i}-#{t.from}-#{t.to}",
+          id: transition_id(t, i),
           from: t.from,
           to: t.to,
           label: text_label(t.label),
@@ -1108,6 +1108,9 @@ defmodule MuroVisor.Draw do
 
   defp text_label(list) when is_list(list), do: Enum.join(list, " ")
   defp text_label(other), do: to_string(other)
+
+  defp transition_id(%{id: id}, _index) when is_binary(id), do: id
+  defp transition_id(t, index), do: "#{index}-#{t.from}-#{t.to}"
 
   defp state_id(child) do
     child.id |> String.split("-") |> List.last()
