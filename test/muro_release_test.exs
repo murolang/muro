@@ -138,6 +138,13 @@ defmodule Muro.ReleaseTest do
     assert liar_out =~ "std smoke did not accept use_std.muro"
   end
 
+  test "the hex package does not ship the explorer" do
+    files = Muro.MixProject.project()[:package][:files]
+    refute Enum.any?(files, &String.starts_with?(&1, "ui"))
+    refute "ui" in files
+    refute Enum.any?(files, &(&1 == "ui" or String.starts_with?(&1, "ui/")))
+  end
+
   defp checker_shim(dir) do
     path = Path.join(dir, "muro")
     ebin = ebin_args()

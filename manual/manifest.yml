@@ -114,3 +114,7 @@ pages:
     slug: mutate
     title: Mutation
     summary: mix muro.mutate reports which evidence fails when a run definition changes.
+  - file: explorer.md
+    slug: explorer
+    title: Visual explorer
+    summary: muro_visor draws a checked book. The compiler does not start it.

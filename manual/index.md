@@ -23,6 +23,8 @@ If you are an agent (or you are pairing with one), read [For agents](for-agents.
 
 If you already write `.muro` and need a fact, use [Grammar](grammar.md) and [Examples](examples.md). The ordinary library is [Library](library.md): `import "std:list.muro"`.
 
+To see a book as a graph, read [Visual explorer](explorer.md). `muro ui path.muro` prints how to open it.
+
 If you want to change the calculus itself, stop. That is a different job: [Extending the kernel](extending.md).
 
 ## Three layers of documentation
