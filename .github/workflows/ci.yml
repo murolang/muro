@@ -146,14 +146,20 @@ jobs:
           elixir-version: ${{ matrix.elixir }}
           otp-version: ${{ matrix.otp }}
 
+      # ui/_build holds the compiled path dependency. A prefix restore
+      # brought muro.app 0.20.5 into a 0.20.7 checkout, and Mix then
+      # refused to compile. The key covers the parent sources, and a
+      # miss does not restore another key. The path build is dropped
+      # either way, so a hit cannot supply a stale muro.app.
       - uses: actions/cache@v5
         with:
           path: |
             ui/deps
             ui/_build
-          key: visor-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('ui/mix.lock', 'mix.lock', 'mix.exs') }}
-          restore-keys: |
-            visor-${{ matrix.otp }}-${{ matrix.elixir }}-
+          key: visor-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('ui/mix.lock', 'ui/mix.exs', 'ui/lib/**/*.ex', 'mix.lock', 'mix.exs', 'lib/**/*.ex', 'lib/**/*.muro') }}
+
+      - name: Drop the cached path dependency
+        run: rm -rf _build/*/lib/muro
 
       - run: mix deps.get
       - run: mix format --check-formatted

@@ -2,6 +2,8 @@ defmodule MuroVisor.MixProject do
   use Mix.Project
 
   def project do
+    discard_stale_checkout()
+
     [
       app: :muro_visor,
       version: "0.1.0",
@@ -42,6 +44,70 @@ defmodule MuroVisor.MixProject do
       {:mint, "~> 1.6", only: :test},
       {:mint_web_socket, "~> 1.0", only: :test}
     ]
+  end
+
+  # A path build whose muro.app version is not this checkout's mix.exs
+  # version makes Mix stop before it recompiles. Drop that build so the
+  # next command compiles the sources that are on disk.
+  @doc false
+  def discard_stale_muro_build(build_root, version)
+      when is_binary(build_root) and is_binary(version) do
+    build_root
+    |> Path.join("*/lib/muro")
+    |> Path.wildcard()
+    |> Enum.each(fn dir ->
+      app = Path.join(dir, "ebin/muro.app")
+
+      case app_vsn(app) do
+        vsn when is_binary(vsn) and vsn != version -> File.rm_rf!(dir)
+        _ -> :ok
+      end
+    end)
+
+    :ok
+  end
+
+  defp discard_stale_checkout do
+    checkout = File.regular?(Path.expand("../lib/muro.ex", __DIR__))
+
+    if checkout and not publishing?(System.argv()) do
+      case parent_version() do
+        version when is_binary(version) ->
+          root = System.get_env("MIX_BUILD_PATH") || Path.expand("_build", __DIR__)
+          discard_stale_muro_build(root, version)
+
+        _ ->
+          :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  defp parent_version do
+    case File.read(Path.expand("../mix.exs", __DIR__)) do
+      {:ok, src} ->
+        case Regex.run(~r/version:\s*"([^"]+)"/, src) do
+          [_, version] -> version
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp app_vsn(path) do
+    case File.read(path) do
+      {:ok, src} ->
+        case Regex.run(~r/\{vsn,\s*"([^"]+)"\}/, src) do
+          [_, vsn] -> vsn
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
   end
 
   @doc false
