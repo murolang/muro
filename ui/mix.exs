@@ -28,14 +28,41 @@ defmodule MuroVisor.MixProject do
 
   defp deps do
     [
-      {:muro, "~> 0.20.5", path: "..", override: true},
+      muro_dependency(
+        System.argv(),
+        File.regular?(Path.expand("../lib/muro.ex", __DIR__)),
+        System.get_env("MURO_PATH")
+      ),
       {:phoenix, "~> 1.7.14"},
       {:phoenix_live_view, "~> 1.0.0"},
       {:phoenix_html, "~> 4.1"},
       {:bandit, "~> 1.5"},
       {:jason, "~> 1.4"},
-      {:floki, ">= 0.30.0", only: :test}
+      {:floki, ">= 0.30.0", only: :test},
+      {:mint, "~> 1.6", only: :test},
+      {:mint_web_socket, "~> 1.0", only: :test}
     ]
+  end
+
+  @doc false
+  def muro_dependency(argv, checkout_exists, muro_path) do
+    cond do
+      publishing?(argv) ->
+        {:muro, "~> 0.20.5"}
+
+      is_binary(muro_path) and muro_path != "" ->
+        {:muro, "~> 0.20.5", path: muro_path, override: true}
+
+      checkout_exists ->
+        {:muro, "~> 0.20.5", path: Path.expand("..", __DIR__), override: true}
+
+      true ->
+        {:muro, "~> 0.20.5"}
+    end
+  end
+
+  defp publishing?(argv) do
+    Enum.any?(argv, &(&1 in ["hex.publish", "hex.build"]))
   end
 
   defp package do
