@@ -23,11 +23,8 @@ defmodule MuroVisor.Book do
             :persistent_term.put(@key, %{book: book, path: path, stamp: stamp})
             {:ok, stamp}
 
-          {:error, msg} when is_binary(msg) ->
-            {:error, msg}
-
           {:error, msg} ->
-            {:error, inspect(msg)}
+            {:error, msg}
         end
     end
   end
