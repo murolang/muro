@@ -105,7 +105,7 @@ defmodule Muro.Emit.Rust do
                Enum.map(
                  signatures,
                  &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}
-               ),
+               ) ++ data_layouts(book),
              clauses: Enum.map(signatures, & &1.head)
            }}
         end
@@ -646,6 +646,21 @@ defmodule Muro.Emit.Rust do
   defp rty({:stream, _}, _st), do: g("Stream")
   defp rty({:data, "Atom"}, _st), do: g("Atom")
   defp rty({:data, name}, st), do: Map.fetch!(st.types, name)
+
+  defp data_layouts(book) do
+    book
+    |> Enum.filter(&(Map.get(&1, :kind) == :data))
+    |> Enum.map(fn d ->
+      ctors =
+        d.ctors
+        |> Enum.with_index()
+        |> Enum.map(fn {ctor, tag} ->
+          %{name: ctor.name, tag: tag, fields: ctor_fields(book, ctor.name)}
+        end)
+
+      %{name: d.name, layout: {:data, d.name}, constructors: ctors}
+    end)
+  end
 
   defp ctor_fields(book, cname) do
     case find_ctor(book, cname) do

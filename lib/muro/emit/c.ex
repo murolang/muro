@@ -196,7 +196,8 @@ defmodule Muro.Emit.C do
       elixir: Emit.elixir_names(book),
       signatures: signatures,
       layouts:
-        Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}),
+        Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}) ++
+          data_layouts(book),
       clauses: Enum.map(sigs, &decl/1)
     }
   end
@@ -1467,5 +1468,19 @@ defmodule Muro.Emit.C do
 
   defp data_defs(book) do
     Enum.filter(book, &(Map.get(&1, :kind) == :data))
+  end
+
+  defp data_layouts(book) do
+    Enum.map(data_defs(book), fn d ->
+      ctors =
+        d.ctors
+        |> Enum.with_index()
+        |> Enum.map(fn {ctor, tag} ->
+          fields = Enum.map(live_fields(ctor, book), fn {_ctype, lay, _k} -> lay end)
+          %{name: ctor.name, tag: tag, fields: fields}
+        end)
+
+      %{name: d.name, layout: {:data, d.name}, constructors: ctors}
+    end)
   end
 end

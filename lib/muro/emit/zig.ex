@@ -135,7 +135,7 @@ defmodule Muro.Emit.Zig do
                Enum.map(
                  signatures,
                  &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}
-               ),
+               ) ++ data_layouts(book),
              clauses: Enum.map(signatures, & &1.head) ++ step_clauses
            }}
         end
@@ -877,6 +877,27 @@ defmodule Muro.Emit.Zig do
   defp zty({:stream, _}, _st), do: g("Stream")
   defp zty({:data, "Atom"}, _st), do: g("Atom")
   defp zty({:data, name}, st), do: Map.fetch!(st.types, name)
+
+  defp data_layouts(book) do
+    book
+    |> Enum.filter(&(Map.get(&1, :kind) == :data))
+    |> Enum.map(fn d ->
+      ctors =
+        d.ctors
+        |> Enum.with_index()
+        |> Enum.map(fn {ctor, tag} ->
+          fields =
+            case ctor_fields(book, d.name, ctor.name) do
+              {:ok, fs} -> fs
+              :error -> []
+            end
+
+          %{name: ctor.name, tag: tag, fields: fields}
+        end)
+
+      %{name: d.name, layout: {:data, d.name}, constructors: ctors}
+    end)
+  end
 
   defp ctor_fields(book, dname, cname) do
     case find_data(book, dname) do
