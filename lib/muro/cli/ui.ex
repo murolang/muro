@@ -57,6 +57,7 @@ defmodule Muro.CLI.Ui do
   end
 
   defp instructions(path) do
+    quoted = shell_quote(path)
     checkout = shell_quote(Path.expand(path))
 
     Muro.CLI.Text.page([
@@ -67,7 +68,7 @@ defmodule Muro.CLI.Ui do
         "INSTALL",
         Muro.CLI.Text.pre(["{:muro_visor, \"~> 0.1.0\"}", "mix deps.get"])
       ),
-      Muro.CLI.Text.section("OPEN", Muro.CLI.Text.pre(["mix muro.ui #{path}"])),
+      Muro.CLI.Text.section("OPEN", Muro.CLI.Text.pre(["mix muro.ui #{quoted}"])),
       Muro.CLI.Text.section(
         "FROM A CHECKOUT",
         Muro.CLI.Text.pre(["cd ui && mix deps.get && mix muro.ui #{checkout}"])
