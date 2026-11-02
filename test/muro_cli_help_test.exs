@@ -267,6 +267,21 @@ defmodule Muro.CliHelpTest do
     assert err =~ "usage: muro ui path.muro"
   end
 
+  test "muro ui resolves the checkout path before changing directory" do
+    {:ok, out, ""} = Muro.CLI.Ui.run(["examples/meet.muro"])
+    abs = Path.expand("examples/meet.muro")
+    assert out =~ "cd ui && mix deps.get && mix muro.ui '#{abs}'"
+    refute out =~ "cd ui && mix deps.get && mix muro.ui examples/meet.muro"
+    assert out =~ "mix muro.ui examples/meet.muro"
+
+    {:ok, spaced, ""} = Muro.CLI.Ui.run(["my book.muro"])
+    assert spaced =~ "mix muro.ui '#{Path.expand("my book.muro")}'"
+
+    {:ok, quoted, ""} = Muro.CLI.Ui.run(["it's.muro"])
+    escaped = String.replace(Path.expand("it's.muro"), "'", "'\\''")
+    assert quoted =~ "mix muro.ui '#{escaped}'"
+  end
+
   test "messages that name a Mix task name the executable command instead" do
     assert Muro.CLI.executable_names("no muro.lock; run mix muro.deps.get") ==
              "no muro.lock; run muro deps.get"

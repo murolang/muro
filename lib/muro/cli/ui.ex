@@ -57,6 +57,8 @@ defmodule Muro.CLI.Ui do
   end
 
   defp instructions(path) do
+    checkout = shell_quote(Path.expand(path))
+
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
       muro_visor draws this book. This command does not start the explorer. Add muro_visor to a Mix project, then open the book with its Mix task.
@@ -68,12 +70,16 @@ defmodule Muro.CLI.Ui do
       Muro.CLI.Text.section("OPEN", Muro.CLI.Text.pre(["mix muro.ui #{path}"])),
       Muro.CLI.Text.section(
         "FROM A CHECKOUT",
-        Muro.CLI.Text.pre(["cd ui && mix deps.get && mix muro.ui #{path}"])
+        Muro.CLI.Text.pre(["cd ui && mix deps.get && mix muro.ui #{checkout}"])
       ),
       Muro.CLI.Text.section(
         "LEARN MORE",
         Muro.CLI.Text.pre(["https://muro-lang.dev/docs/explorer"])
       )
     ])
+  end
+
+  defp shell_quote(path) do
+    "'" <> String.replace(path, "'", "'\\''") <> "'"
   end
 end
