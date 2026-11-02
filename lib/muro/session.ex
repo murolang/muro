@@ -5382,6 +5382,7 @@ defmodule Muro.Session do
               :endpoint,
               :read,
               :meet,
+              :temporal,
               :talk,
               :repr,
               :seat,

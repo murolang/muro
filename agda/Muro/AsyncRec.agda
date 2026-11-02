@@ -219,6 +219,12 @@ materialise : ℕ → ℕ → List (ℕ × Block) → List Block
 materialise zero i bs = []
 materialise (suc r) i bs = findB i bs ∷ materialise r (suc i) bs
 
+-- The arm indices of a `bMget`, in source order. Named so a proof that
+-- `armTo` returns one of them can induct on the same list `conts` uses.
+contsArms : List (String × ℕ) → List ℕ
+contsArms [] = []
+contsArms (( _ , j) ∷ rest) = j ∷ contsArms rest
+
 conts : Block → List ℕ
 conts bDone = []
 conts bStop = []
@@ -230,11 +236,7 @@ conts (bPick0 j) = j ∷ []
 conts (bPick1 j) = j ∷ []
 conts (bCover i j) = i ∷ j ∷ []
 conts (bIget _ i j) = i ∷ j ∷ []
-conts (bMget _ _ as) = map₂ as
-  where
-  map₂ : List (String × ℕ) → List ℕ
-  map₂ [] = []
-  map₂ (( _ , j) ∷ rest) = j ∷ map₂ rest
+conts (bMget _ _ as) = contsArms as
 
 isGrow : Block → Bool
 isGrow (bGrow _ _) = true
@@ -394,14 +396,16 @@ nthA [] _ = nothing
 nthA (a ∷ _) zero = just a
 nthA (_ ∷ as) (suc n) = nthA as n
 
+-- The index is the position in the alphabet. `findA` starts at zero.
+-- `findGo` is the same walk, named so a proof can induct on it.
+findGo : ℕ → Atom → List Atom → Maybe ℕ
+findGo i a [] = nothing
+findGo i a (x ∷ xs) with eqA a x
+... | true = just i
+... | false = findGo (suc i) a xs
+
 findA : Atom → List Atom → Maybe ℕ
-findA a as = go zero as
-  where
-  go : ℕ → List Atom → Maybe ℕ
-  go i [] = nothing
-  go i (x ∷ xs) with eqA a x
-  ... | true = just i
-  ... | false = go (suc i) xs
+findA a as = findGo zero a as
 
 fits : Tag → Atom → Bool
 fits tagNat (aNat _) = true
@@ -611,15 +615,23 @@ onR g c (bCover i j) = onR-cover g c i j
 onR g c (bIget s i j) = onR-iget g c s i j
 onR g c (bMget t s arms) = onR-mget g c t s arms
 
+-- `reactL′` and `halted′` case on the block the table returned. They are
+-- ordinary functions of that result, not `with`-functions: a proof may
+-- rewrite the lookup and the step still reduces. The result is the one
+-- the `with` form computed.
+reactL′ : Graph → RConf → Maybe Block → Act
+reactL′ g c nothing = AWait
+reactL′ g c (just b) = onL g c b
+
 reactL : Graph → RConf → Act
-reactL g c with lookB (codeL g) (ilOf c)
-... | nothing = AWait
-... | just b = onL g c b
+reactL g c = reactL′ g c (lookB (codeL g) (ilOf c))
+
+reactR′ : Graph → RConf → Maybe Block → Act
+reactR′ g c nothing = AWait
+reactR′ g c (just b) = onR g c b
 
 reactR : Graph → RConf → Act
-reactR g c with lookB (codeR g) (irOf c)
-... | nothing = AWait
-... | just b = onR g c b
+reactR g c = reactR′ g c (lookB (codeR g) (irOf c))
 
 andb : Bool → Bool → Bool
 andb true b = b
@@ -630,12 +642,15 @@ isHalt bDone = true
 isHalt bStop = true
 isHalt _ = false
 
+halted′ : Maybe Block → Maybe Block → Bool
+halted′ (just bl) (just br) = andb (isHalt bl) (isHalt br)
+halted′ (just _) nothing = false
+halted′ nothing (just _) = false
+halted′ nothing nothing = false
+
 halted : Graph → RConf → Bool
-halted g (rc il ir _ _ _ _) with lookB (codeL g) il | lookB (codeR g) ir
-... | just bl | just br = andb (isHalt bl) (isHalt br)
-... | just _ | nothing = false
-... | nothing | just _ = false
-... | nothing | nothing = false
+halted g (rc il ir _ _ _ _) =
+  halted′ (lookB (codeL g) il) (lookB (codeR g) ir)
 
 ------------------------------------------------------------------------
 -- A view is final, a fault, or a nonempty list of steps. Left is
@@ -649,19 +664,21 @@ data View (g : Graph) (c : RConf) : Set where
   VBad : Fault → View g c
   VGo : RConf → List RConf → View g c
 
+-- Top-level so a proof can pass `true` for the halted bit and obtain
+-- `VFinal` without rewriting under `halted`. Same eight clauses as before.
+onIdle : (g : Graph) (c : RConf) (lq rq : List Tok) (h : Bool) →
+         l2rOf c ≡ lq → r2lOf c ≡ rq → halted g c ≡ h → View g c
+onIdle g c [] [] true eqL eqR eqH = VFinal eqL eqR eqH
+onIdle g c [] [] false _ _ _ = VBad fDead
+onIdle g c [] (_ ∷ _) true _ _ _ = VBad fOrphan
+onIdle g c [] (_ ∷ _) false _ _ _ = VBad fDead
+onIdle g c (_ ∷ _) [] true _ _ _ = VBad fOrphan
+onIdle g c (_ ∷ _) [] false _ _ _ = VBad fDead
+onIdle g c (_ ∷ _) (_ ∷ _) true _ _ _ = VBad fOrphan
+onIdle g c (_ ∷ _) (_ ∷ _) false _ _ _ = VBad fDead
+
 idle : (g : Graph) (c : RConf) → View g c
-idle g c = on (l2rOf c) (r2lOf c) (halted g c) refl refl refl
-  where
-  on : (lq rq : List Tok) (h : Bool) →
-       l2rOf c ≡ lq → r2lOf c ≡ rq → halted g c ≡ h → View g c
-  on [] [] true eqL eqR eqH = VFinal eqL eqR eqH
-  on [] [] false _ _ _ = VBad fDead
-  on [] (_ ∷ _) true _ _ _ = VBad fOrphan
-  on [] (_ ∷ _) false _ _ _ = VBad fDead
-  on (_ ∷ _) [] true _ _ _ = VBad fOrphan
-  on (_ ∷ _) [] false _ _ _ = VBad fDead
-  on (_ ∷ _) (_ ∷ _) true _ _ _ = VBad fOrphan
-  on (_ ∷ _) (_ ∷ _) false _ _ _ = VBad fDead
+idle g c = onIdle g c (l2rOf c) (r2lOf c) (halted g c) refl refl refl
 
 merge : (g : Graph) (c : RConf) → Act → Act → View g c
 merge g c (ABad f) _ = VBad f

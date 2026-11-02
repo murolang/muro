@@ -21,7 +21,7 @@ If you want to write a program today, start at [Start](start.md), then [Marks](m
 
 If you are an agent (or you are pairing with one), read [For agents](for-agents.md) first. There are two jobs. Do not mix them.
 
-If you already write `.muro` and need a fact, use [Grammar](grammar.md) and [Examples](examples.md). The ordinary library is [Library](library.md): `import "std:list.muro"`.
+If you already write `.muro` and need a fact, use [Grammar](grammar.md) and [Examples](examples.md). The ordinary library is [Library](library.md): `import "std:list.muro"`. A linear-time property of a buffered meeting is [Temporal](temporal.md).
 
 To see a book as a graph, read [Visual explorer](explorer.md). `muro ui path.muro` prints how to open it.
 

@@ -443,6 +443,7 @@ defmodule Muro.Ast do
             :endpoint,
             :read,
             :meet,
+            :temporal,
             :talk,
             :repr,
             :seat,

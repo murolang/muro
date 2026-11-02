@@ -22,7 +22,7 @@ defmodule Muro.CLI.Check do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro check type-checks one .muro file, or the built-in book when no path is given. It reads that file and the prelude. It writes nothing. On success it prints the version, then "All terms check. Evidence never becomes a run." A book that imports packages then prints one "conforms to" line per package. A refusal prints the version and every failing definition, in book order. out of fuel means the checker stopped reducing. It is not acceptance. Copy syntax from the examples rather than writing it from memory.
+      muro check type-checks one .muro file, or the built-in book when no path is given. It reads that file and the prelude. It writes nothing. On success it prints the version, then one line per temporal declaration that holds, then "All terms check. Evidence never becomes a run." A book with no temporal declaration prints the success sentence immediately after the version. A book that imports packages then prints one "conforms to" line per package. A refusal prints the version and every failing definition, in book order. out of fuel means the checker stopped reducing. It is not acceptance. Copy syntax from the examples rather than writing it from memory.
       """),
       Muro.CLI.Text.section(
         "USAGE",
@@ -104,11 +104,11 @@ defmodule Muro.CLI.Check do
   end
 
   defp finish(:ok, version) do
-    {:ok, version <> success(), ""}
+    {:ok, version <> temporal() <> success(), ""}
   end
 
   defp finish({:ok, lines}, version) do
-    {:ok, version <> success() <> Muro.CLI.join_lines(lines), ""}
+    {:ok, version <> temporal() <> success() <> Muro.CLI.join_lines(lines), ""}
   end
 
   defp finish({:error, message}, version) do
@@ -116,4 +116,11 @@ defmodule Muro.CLI.Check do
   end
 
   defp success, do: "All terms check. Evidence never becomes a run.\n"
+
+  # Muro.Temporal lines, in book order. Empty when the book has none.
+  defp temporal do
+    Muro.Check.temporal_lines()
+    |> Enum.map(&(&1 <> "\n"))
+    |> Enum.join()
+  end
 end

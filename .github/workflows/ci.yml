@@ -62,6 +62,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # The swap file and the restored agda/_build cache need room the
+      # hosted image does not leave free. Remove preinstalled toolchains
+      # this job never uses before anything else writes to disk.
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
+
       # Extract outside the repo: the tarball's `agda` binary collides with
       # the `agda/` source directory (tar exits 2). agda-setup-action@v1
       # unpacks in cwd and hits the same clash.
