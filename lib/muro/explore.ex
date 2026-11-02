@@ -12,6 +12,7 @@ defmodule Muro.Explore do
   """
 
   alias Muro.{Async, Ast, Meet, Session}
+  alias Muro.Emit.Name
 
   @doc """
   Nodes, edges, and the configurations attached to each session.
@@ -76,11 +77,10 @@ defmodule Muro.Explore do
 
   defp nodes(book) do
     book
-    |> Enum.filter(&node?(&1))
-    |> Enum.with_index()
-    |> Enum.map(fn {d, i} ->
+    |> Enum.filter(&node?/1)
+    |> Enum.map(fn d ->
       %{
-        id: "d#{i}",
+        id: Name.encode(d.name),
         name: d.name,
         mode: d.mode,
         kind: Map.get(d, :kind, :def),
@@ -223,59 +223,131 @@ defmodule Muro.Explore do
         acc
 
       to ->
-        spine_edges(Session.spine(proc, Map.get(d, :steps)), from, to, d.name, acc)
+        names = MapSet.new(Map.keys(by_name))
+
+        spine_edges(
+          Session.spine(proc, Map.get(d, :steps)),
+          from,
+          to,
+          d.name,
+          names,
+          by_name,
+          acc
+        )
     end
   end
 
   defp step_edges(_, _, _, acc), do: acc
 
-  defp spine_edges(items, from, to, proc_name, acc) do
-    Enum.reduce(Enum.with_index(items), acc, fn {item, i}, acc ->
-      acc = use_edge(acc, from, to, item_loc(item), i, proc_name, :step)
+  defp spine_edges(items, from, to, proc_name, names, by_name, acc) do
+    {acc, _} =
+      Enum.reduce(Enum.with_index(items), {acc, MapSet.new()}, fn {item, i}, {acc, bound} ->
+        acc = use_edge(acc, from, to, item_loc(item), i, proc_name, :step)
 
-      case item do
-        {:put, _, val, _} -> val_uses(val, MapSet.new(), from, acc)
-        {:rest, proc, span} -> nested_steps(proc, span, MapSet.new(), from, to, proc_name, acc)
-        _ -> acc
-      end
-    end)
+        case item do
+          {:put, _, val, _} ->
+            {val_uses(val, bound, from, item_loc(item), names, by_name, acc), bound}
+
+          {:get, _, name, _} ->
+            {acc, bind(bound, name)}
+
+          {:rest, proc, span} ->
+            {nested_steps(proc, span, bound, from, to, proc_name, names, by_name, acc), bound}
+
+          _ ->
+            {acc, bound}
+        end
+      end)
+
+    acc
   end
 
-  defp nested_steps({:put, _, val, cont}, span, bound, from, to, proc_name, acc) do
+  defp nested_steps({:put, _, val, cont}, span, bound, from, to, proc_name, names, by_name, acc) do
+    at = Session.step_at(span)
+    acc = use_edge(acc, from, to, at, nil, proc_name, :step)
+    acc = val_uses(val, bound, from, at, names, by_name, acc)
+
+    nested_steps(
+      cont,
+      Session.step_down(span, 0),
+      bound,
+      from,
+      to,
+      proc_name,
+      names,
+      by_name,
+      acc
+    )
+  end
+
+  defp nested_steps({:get, _, name, cont}, span, bound, from, to, proc_name, names, by_name, acc) do
     acc = use_edge(acc, from, to, Session.step_at(span), nil, proc_name, :step)
-    acc = val_uses(val, bound, from, acc)
-    nested_steps(cont, Session.step_down(span, 0), bound, from, to, proc_name, acc)
+
+    nested_steps(
+      cont,
+      Session.step_down(span, 0),
+      bind(bound, name),
+      from,
+      to,
+      proc_name,
+      names,
+      by_name,
+      acc
+    )
   end
 
-  defp nested_steps({:get, _, name, cont}, span, bound, from, to, proc_name, acc) do
+  defp nested_steps({:pick0, cont}, span, bound, from, to, proc_name, names, by_name, acc) do
     acc = use_edge(acc, from, to, Session.step_at(span), nil, proc_name, :step)
-    nested_steps(cont, Session.step_down(span, 0), bind(bound, name), from, to, proc_name, acc)
+
+    nested_steps(
+      cont,
+      Session.step_down(span, 0),
+      bound,
+      from,
+      to,
+      proc_name,
+      names,
+      by_name,
+      acc
+    )
   end
 
-  defp nested_steps({:pick0, cont}, span, bound, from, to, proc_name, acc) do
+  defp nested_steps({:pick1, cont}, span, bound, from, to, proc_name, names, by_name, acc) do
     acc = use_edge(acc, from, to, Session.step_at(span), nil, proc_name, :step)
-    nested_steps(cont, Session.step_down(span, 0), bound, from, to, proc_name, acc)
+
+    nested_steps(
+      cont,
+      Session.step_down(span, 0),
+      bound,
+      from,
+      to,
+      proc_name,
+      names,
+      by_name,
+      acc
+    )
   end
 
-  defp nested_steps({:pick1, cont}, span, bound, from, to, proc_name, acc) do
+  defp nested_steps({:cover, p, q}, span, bound, from, to, proc_name, names, by_name, acc) do
     acc = use_edge(acc, from, to, Session.step_at(span), nil, proc_name, :step)
-    nested_steps(cont, Session.step_down(span, 0), bound, from, to, proc_name, acc)
+
+    acc =
+      nested_steps(p, Session.step_down(span, 0), bound, from, to, proc_name, names, by_name, acc)
+
+    nested_steps(q, Session.step_down(span, 1), bound, from, to, proc_name, names, by_name, acc)
   end
 
-  defp nested_steps({:cover, p, q}, span, bound, from, to, proc_name, acc) do
-    acc = use_edge(acc, from, to, Session.step_at(span), nil, proc_name, :step)
-    acc = nested_steps(p, Session.step_down(span, 0), bound, from, to, proc_name, acc)
-    nested_steps(q, Session.step_down(span, 1), bound, from, to, proc_name, acc)
-  end
-
-  defp nested_steps({:iget, name, p, q}, span, bound, from, to, proc_name, acc) do
+  defp nested_steps({:iget, name, p, q}, span, bound, from, to, proc_name, names, by_name, acc) do
     acc = use_edge(acc, from, to, Session.step_at(span), nil, proc_name, :step)
     bound = bind(bound, name)
-    acc = nested_steps(p, Session.step_down(span, 0), bound, from, to, proc_name, acc)
-    nested_steps(q, Session.step_down(span, 1), bound, from, to, proc_name, acc)
+
+    acc =
+      nested_steps(p, Session.step_down(span, 0), bound, from, to, proc_name, names, by_name, acc)
+
+    nested_steps(q, Session.step_down(span, 1), bound, from, to, proc_name, names, by_name, acc)
   end
 
-  defp nested_steps({:match, _, arms}, span, bound, from, to, proc_name, acc) do
+  defp nested_steps({:match, _, arms}, span, bound, from, to, proc_name, names, by_name, acc) do
     acc = use_edge(acc, from, to, Session.step_at(span), nil, proc_name, :step)
 
     arms
@@ -288,23 +360,74 @@ defmodule Muro.Explore do
         from,
         to,
         proc_name,
+        names,
+        by_name,
         acc
       )
     end)
   end
 
-  defp nested_steps({:rec, _, body}, span, bound, from, to, proc_name, acc) do
-    nested_steps(body, Session.step_down(span, 0), bound, from, to, proc_name, acc)
+  defp nested_steps({:rec, _, body}, span, bound, from, to, proc_name, names, by_name, acc) do
+    nested_steps(
+      body,
+      Session.step_down(span, 0),
+      bound,
+      from,
+      to,
+      proc_name,
+      names,
+      by_name,
+      acc
+    )
   end
 
-  defp nested_steps(_, _, _, _, _, _, acc), do: acc
+  defp nested_steps(_, _, _, _, _, _, _, _, acc), do: acc
 
-  # Values carried by a step. A bound name is the `get` that received it.
-  # The linear spine's binders are not in scope for a later `put` of a
-  # book definition: a free name is a use. Binders along the spine are
-  # applied by `val_uses/4` only for the value at that step. Nested
-  # steps thread the binder.
-  defp val_uses(_val, _bound, _from, acc), do: acc
+  # A free name in a sent value is a use of that definition. A name bound
+  # by an earlier `get` on this spine is the received value, not a definition.
+  defp val_uses(val, bound, from, loc, names, by_name, acc) do
+    walk_val(val, bound, from, loc, names, by_name, acc)
+  end
+
+  defp walk_val({:var, name}, bound, from, loc, names, by_name, acc) do
+    case val_name(name) do
+      bin when is_binary(bin) and bin not in [""] ->
+        if blocked?(bound, bin) or not MapSet.member?(names, bin) do
+          acc
+        else
+          use_edge(acc, from, Map.fetch!(by_name, bin), loc, nil, nil, :def)
+        end
+
+      _ ->
+        acc
+    end
+  end
+
+  defp walk_val(term, bound, from, loc, names, by_name, acc) when is_tuple(term) do
+    term
+    |> Tuple.to_list()
+    |> Enum.reduce(acc, &walk_val(&1, bound, from, loc, names, by_name, &2))
+  end
+
+  defp walk_val(term, bound, from, loc, names, by_name, acc) when is_list(term) do
+    Enum.reduce(term, acc, &walk_val(&1, bound, from, loc, names, by_name, &2))
+  end
+
+  defp walk_val(_, _, _, _, _, _, acc), do: acc
+
+  defp val_name(name) when is_binary(name), do: name
+  defp val_name(name) when is_atom(name) and not is_nil(name), do: Atom.to_string(name)
+  defp val_name(_), do: nil
+
+  defp blocked?(bound, name) do
+    MapSet.member?(bound, name) or MapSet.member?(bound, atom_name(name))
+  end
+
+  defp atom_name(name) do
+    String.to_existing_atom(name)
+  rescue
+    ArgumentError -> nil
+  end
 
   defp meet_edges(%{kind: :meet, left: left, right: right, loc: loc}, from, by_name, acc) do
     acc = party_edge(acc, from, left, by_name, loc)
@@ -400,7 +523,7 @@ defmodule Muro.Explore do
     {children, transitions} =
       Enum.reduce(meetings, {[], []}, fn meet, {cs, ts} ->
         graph = meeting_graph(book, meet)
-        prefix = "cfg-#{name}-#{meet.name}"
+        prefix = "cfg-" <> Name.encode(name) <> "-" <> Name.encode(meet.name)
 
         cs = cs ++ Enum.map(graph.states, &child(&1, prefix, meet.name))
 
@@ -427,7 +550,7 @@ defmodule Muro.Explore do
 
   defp child(st, prefix, meeting) do
     %{
-      id: "#{prefix}-#{st.id}",
+      id: prefix <> "-" <> Integer.to_string(st.id),
       left: st.left,
       right: st.right,
       l2r: Map.get(st, :l2r, []),

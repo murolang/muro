@@ -3420,6 +3420,24 @@ defmodule Muro.Check do
     end
   end
 
+  @doc false
+  def check_hook(fun) when is_function(fun, 0) do
+    :persistent_term.put({__MODULE__, :hook}, fun)
+    :ok
+  end
+
+  def check_hook(nil) do
+    :persistent_term.erase({__MODULE__, :hook})
+    :ok
+  end
+
+  defp note_check do
+    case :persistent_term.get({__MODULE__, :hook}, nil) do
+      fun when is_function(fun, 0) -> fun.()
+      _ -> :ok
+    end
+  end
+
   @doc """
   Check a named book. Options: `fuel: n` (default `default_fuel/0`).
 
@@ -3429,6 +3447,7 @@ defmodule Muro.Check do
   only bound; a definition is not cut off by a wall-clock timeout.
   """
   def check_sig(named_book, opts \\ []) do
+    note_check()
     fuel = Keyword.get(opts, :fuel, @fuel)
     # `params: :open` keeps unsupplied params as assumptions. The default
     # refuses them. Only `Muro.Load` passes `:open`, and only when the

@@ -48,7 +48,8 @@ defmodule MuroVisor.ExplorerTest do
 
     graph = Muro.Explore.graph(elem(MuroVisor.Book.current(), 1).book)
     assert graph.nodes != []
-    assert has_element?(view, "#node-d0")
+    node = hd(graph.nodes)
+    assert has_element?(view, "#node-#{node.id}")
 
     for edge <- graph.edges do
       assert has_element?(view, "#edge-#{edge.id}")
@@ -67,7 +68,7 @@ defmodule MuroVisor.ExplorerTest do
       assert view |> element("#outline") |> render() =~ "backend: #{name}"
     end
 
-    view |> element("#node-d0") |> render_click()
+    view |> element("#node-#{node.id}") |> render_click()
     loc = view |> element("#detail-loc") |> render()
     assert loc =~ ":"
     refute view |> element("#detail-refusal-kind") |> render() =~ "refused"
