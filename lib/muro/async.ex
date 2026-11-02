@@ -38,8 +38,39 @@ defmodule Muro.Async do
   end
 
   def meets(p, q, book, k, left, right) when is_integer(k) and k >= 0 do
+    case run(p, q, book, k, left, right, {nil, nil}) do
+      {:ok, _graph} -> :ok
+      {{:error, msg}, _graph} -> {:error, msg}
+    end
+  end
+
+  @doc """
+  The configuration graph of the same search `meets/4` runs.
+
+  `spans` is `{left_steps, right_steps}`. A span is not part of the
+  configuration, so a cycle is the same meeting `meets/4` already
+  reports. An unbounded recursive payload is refused before the search
+  and the graph is empty. A fault keeps the states the search entered.
+  """
+  def graph(p, q, book, k) when is_integer(k) and k >= 0 do
+    graph(p, q, book, k, "left", "right")
+  end
+
+  def graph(p, q, book, k, left, right) when is_integer(k) and k >= 0 do
+    graph(p, q, book, k, left, right, {nil, nil})
+  end
+
+  def graph(p, q, book, k, left, right, spans)
+      when is_integer(k) and k >= 0 and is_tuple(spans) do
+    case run(p, q, book, k, left, right, spans) do
+      {:ok, graph} -> graph
+      {{:error, _msg}, graph} -> graph
+    end
+  end
+
+  defp run(p, q, book, k, left, right, {lspan, rspan}) do
     if cyclic_grow?(p, book) or cyclic_grow?(q, book) do
-      {:error, "unbounded recursive payload"}
+      {{:error, "unbounded recursive payload"}, %{states: [], transitions: []}}
     else
       conf = %{
         k: k,
@@ -57,39 +88,103 @@ defmodule Muro.Async do
         re: %{},
         book: book,
         left: left,
-        right: right
+        right: right,
+        lspan: lspan,
+        rspan: rspan,
+        lps: %{},
+        rps: %{}
       }
 
-      explore(conf, MapSet.new(), [])
-    end
-  end
-
-  defp explore(conf, seen, trace) do
-    key = seen_key(conf)
-
-    if MapSet.member?(seen, key) do
-      :ok
-    else
-      case classify(conf) do
-        :final ->
-          :ok
-
-        {:bad, reason} ->
-          {:error, render(reason, conf, trace)}
-
-        {:go, kids} ->
-          walk(kids, MapSet.put(seen, key), trace)
+      case explore(conf, MapSet.new(), [], empty_acc()) do
+        {:ok, g} -> {:ok, publish(g)}
+        {{:error, msg}, g} -> {{:error, msg}, publish(g)}
       end
     end
   end
 
-  defp walk([], _seen, _trace), do: :ok
+  defp empty_acc, do: %{states: [], transitions: [], next: 0, index: %{}}
 
-  defp walk([{conf, label} | rest], seen, trace) do
-    case explore(conf, seen, trace ++ [label]) do
-      :ok -> walk(rest, seen, trace)
-      {:error, _} = err -> err
+  defp publish(g), do: %{states: g.states, transitions: g.transitions}
+
+  defp explore(conf, seen, trace, g) do
+    key = seen_key(conf)
+
+    if MapSet.member?(seen, key) do
+      {:ok, g}
+    else
+      {g, here} = ensure_state(g, conf)
+
+      case classify(conf) do
+        :final ->
+          {:ok, g}
+
+        {:bad, reason} ->
+          {{:error, render(reason, conf, trace)}, g}
+
+        {:go, kids} ->
+          walk(kids, MapSet.put(seen, key), trace, g, here)
+      end
     end
+  end
+
+  defp walk([], _seen, _trace, g, _here), do: {:ok, g}
+
+  defp walk([{conf, label, meta} | rest], seen, trace, g, here) do
+    {g, dest} = ensure_state(g, conf)
+    g = add_trans(g, here, dest, label, meta)
+
+    case explore(conf, seen, trace ++ [label], g) do
+      {:ok, g} -> walk(rest, seen, trace, g, here)
+      {{:error, _}, _} = err -> err
+    end
+  end
+
+  defp ensure_state(g, conf) do
+    key = seen_key(conf)
+
+    case Map.get(g.index, key) do
+      nil ->
+        id = g.next
+
+        st = %{
+          id: id,
+          left: conf.lp,
+          right: conf.rp,
+          l2r: conf.l2r,
+          r2l: conf.r2l,
+          loc: state_loc(conf)
+        }
+
+        g = %{
+          g
+          | next: id + 1,
+            index: Map.put(g.index, key, id),
+            states: g.states ++ [st]
+        }
+
+        {g, id}
+
+      id ->
+        {g, id}
+    end
+  end
+
+  defp state_loc(conf) do
+    {lspan, _} = Muro.Session.expose_span(conf.lp, conf.lspan, conf.le, conf.lps)
+    {rspan, _} = Muro.Session.expose_span(conf.rp, conf.rspan, conf.re, conf.rps)
+    %{left: Muro.Session.step_at(lspan), right: Muro.Session.step_at(rspan)}
+  end
+
+  defp add_trans(g, from, to, label, meta) do
+    trans = %{
+      from: from,
+      to: to,
+      label: List.wrap(label),
+      loc: meta.loc,
+      side: meta.side
+    }
+
+    %{g | transitions: g.transitions ++ [trans]}
   end
 
   defp seen_key(conf) do
@@ -102,10 +197,11 @@ defmodule Muro.Async do
   defp merge({:bad, reason}, _right, _conf), do: {:bad, reason}
   defp merge(_left, {:bad, reason}, _conf), do: {:bad, reason}
 
-  defp merge({:go, c1, lab1}, {:go, c2, lab2}, _conf), do: {:go, [{c1, lab1}, {c2, lab2}]}
+  defp merge({:go, c1, lab1, m1}, {:go, c2, lab2, m2}, _conf),
+    do: {:go, [{c1, lab1, m1}, {c2, lab2, m2}]}
 
-  defp merge({:go, c, lab}, :wait, _conf), do: {:go, [{c, lab}]}
-  defp merge(:wait, {:go, c, lab}, _conf), do: {:go, [{c, lab}]}
+  defp merge({:go, c, lab, meta}, :wait, _conf), do: {:go, [{c, lab, meta}]}
+  defp merge(:wait, {:go, c, lab, meta}, _conf), do: {:go, [{c, lab, meta}]}
   defp merge(:wait, :wait, conf), do: idle(conf)
 
   defp idle(conf) do
@@ -138,7 +234,8 @@ defmodule Muro.Async do
       {:ok, head, env2} ->
         case act(put_env(conf, side, env2), side, head) do
           :wait -> :wait
-          other -> other
+          {:bad, _} = bad -> bad
+          {:go, child, label, index} -> finish_go(conf, child, side, label, index)
         end
     end
   end
@@ -153,7 +250,7 @@ defmodule Muro.Async do
 
         {:ok, sty, orig, ready} ->
           label = "#{side_name(conf, side)} put #{Muro.Session.show_value(ready)}"
-          {:go, enqueue(conf, side, cont, {:pay, sty, orig, ready}), label}
+          {:go, enqueue(conf, side, cont, {:pay, sty, orig, ready}), label, 0}
       end
     end
   end
@@ -184,7 +281,7 @@ defmodule Muro.Async do
 
           {:ok, recv_ty, orig, ready} ->
             conf = commit_recv(conf, side, cont, rest, name, recv_ty, orig, ready)
-            {:go, conf, "#{side_name(conf, side)} #{step_get(ty, name)}"}
+            {:go, conf, "#{side_name(conf, side)} #{step_get(ty, name)}", 0}
         end
     end
   end
@@ -198,10 +295,10 @@ defmodule Muro.Async do
         :wait
 
       {:msg, {:lab, false}, rest} ->
-        {:go, take(conf, side, p, rest), "#{side_name(conf, side)} cover0"}
+        {:go, take(conf, side, p, rest), "#{side_name(conf, side)} cover0", 0}
 
       {:msg, {:lab, true}, rest} ->
-        {:go, take(conf, side, q, rest), "#{side_name(conf, side)} cover1"}
+        {:go, take(conf, side, q, rest), "#{side_name(conf, side)} cover1", 1}
 
       {:msg, msg, _rest} ->
         {:bad, {:recv, side, msg}}
@@ -233,7 +330,8 @@ defmodule Muro.Async do
             case open_nat_match(arm, venv_of(conf, side), conf.book) do
               {:ok, arm} ->
                 conf = commit_recv(conf, side, arm, rest, name, recv_ty, orig, ready)
-                {:go, conf, "#{side_name(conf, side)} arm #{arm_label(ready)}"}
+                picked = Enum.find_index(arms, &(Muro.Session.arm_body(&1) == arm)) || 0
+                {:go, conf, "#{side_name(conf, side)} arm #{arm_label(ready)}", {:into, picked}}
 
               :error ->
                 {:bad, @cover}
@@ -254,11 +352,11 @@ defmodule Muro.Async do
 
       ready == :b0 ->
         conf = commit_recv(conf, side, p, rest, name, :bit, orig, ready)
-        {:go, conf, "#{side_name(conf, side)} arm b0"}
+        {:go, conf, "#{side_name(conf, side)} arm b0", 0}
 
       ready == :b1 ->
         conf = commit_recv(conf, side, q, rest, name, :bit, orig, ready)
-        {:go, conf, "#{side_name(conf, side)} arm b1"}
+        {:go, conf, "#{side_name(conf, side)} arm b1", 1}
 
       true ->
         {:bad, {:recv, side, msg}}
@@ -271,7 +369,7 @@ defmodule Muro.Async do
     if length(out_queue(conf, side)) >= conf.k do
       :wait
     else
-      {:go, enqueue(conf, side, cont, {:lab, bit}), "#{side_name(conf, side)} #{label}"}
+      {:go, enqueue(conf, side, cont, {:lab, bit}), "#{side_name(conf, side)} #{label}", 0}
     end
   end
 
@@ -394,6 +492,38 @@ defmodule Muro.Async do
 
   defp side_name(conf, :left), do: conf.left
   defp side_name(conf, :right), do: conf.right
+
+  defp span_of(conf, :left), do: conf.lspan
+  defp span_of(conf, :right), do: conf.rspan
+  defp put_span(conf, :left, span), do: %{conf | lspan: span}
+  defp put_span(conf, :right, span), do: %{conf | rspan: span}
+  defp ps_of(conf, :left), do: conf.lps
+  defp ps_of(conf, :right), do: conf.rps
+  defp put_ps(conf, :left, ps), do: %{conf | lps: ps}
+  defp put_ps(conf, :right, ps), do: %{conf | rps: ps}
+
+  # The child keeps the continuation. Its span is the action's span
+  # stepped once, after `rec` has been chased, so the next visit lines
+  # the stored span up with the stored process.
+  defp finish_go(parent, child, side, label, index) do
+    {proc, env} = pull(parent, side)
+    {action, ps} = Muro.Session.expose_span(proc, span_of(parent, side), env, ps_of(parent, side))
+
+    child =
+      child
+      |> put_span(side, Muro.Session.shift_span(action, index))
+      |> put_ps(side, ps)
+
+    at = Muro.Session.step_at(action)
+
+    loc =
+      case side do
+        :left -> %{left: at, right: nil}
+        :right -> %{left: nil, right: at}
+      end
+
+    {:go, child, label, %{loc: loc, side: side}}
+  end
 
   defp step_get(ty, name), do: Muro.Session.step_proc({:get, ty, name, :done})
 

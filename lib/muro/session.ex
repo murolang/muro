@@ -764,30 +764,155 @@ defmodule Muro.Session do
 
   @doc false
   def conform_at(proc, proto, book, steps) do
+    case judge(proc, proto, book, steps) do
+      :ok ->
+        :ok
+
+      {:no, p, s} ->
+        {:error, nil, blame(p, s, nil)}
+
+      {:no, p, s, reason, at} ->
+        {:error, at, blame(p, s, reason)}
+
+      {:error, msg} ->
+        {:error, nil, msg}
+
+      {:error, at, msg} ->
+        {:error, at, msg}
+    end
+  end
+
+  @doc """
+  Re-check `proc` against `proto` after moving the step at `index` one
+  place earlier. The result is the refusal as data. `index` 0 has no
+  earlier place. A step that is not a send, a receive, or a choice, or
+  a neighbour that is not one either, is `:immovable`.
+
+  `:still_conforms` means the moved process still conforms. `:refused`
+  is the pair `decide` returns `no` for, with the source location of
+  that step. `:error` is a check that did not return a pair.
+  """
+  def out_of_order(proc, proto, book, steps, index) when is_integer(index) and index >= 0 do
+    items = spine(proc, steps)
+
+    cond do
+      index < 1 or index >= length(items) ->
+        immovable(index, items)
+
+      not (swappable?(Enum.at(items, index - 1)) and swappable?(Enum.at(items, index))) ->
+        immovable(index, items)
+
+      true ->
+        moved = Enum.at(items, index)
+        {proc2, steps2} = rebuild(swap_items(items, index))
+        moved_loc = item_at(moved)
+
+        case judge(proc2, proto, book, steps2) do
+          :ok ->
+            pack(:still_conforms, moved_loc, nil, nil, nil, index)
+
+          {:no, p, s} ->
+            pack(:refused, moved_loc, p, s, nil, index)
+
+          {:no, p, s, reason, at} ->
+            pack(:refused, at || moved_loc, p, s, reason, index)
+
+          {:error, at, msg} when is_binary(msg) ->
+            pack(:error, at || moved_loc, nil, nil, msg, index)
+
+          {:error, msg} ->
+            pack(:error, moved_loc, nil, nil, msg, index)
+        end
+    end
+  end
+
+  @doc false
+  def spine(proc, steps), do: linearize(proc, steps)
+
+  defp judge(proc, proto, book, steps) do
     Process.put(@span_key, steps)
     Process.put(@pspans_key, %{})
 
     try do
-      case go(proc, proto, %{}, %{}, %{}, %{}, MapSet.new(), @conform_fuel, prepare(book)) do
-        :ok ->
-          :ok
-
-        {:no, p, s} ->
-          {:error, nil, blame(p, s, nil)}
-
-        {:no, p, s, reason, at} ->
-          {:error, at, blame(p, s, reason)}
-
-        {:error, msg} ->
-          {:error, nil, msg}
-
-        {:error, at, msg} ->
-          {:error, at, msg}
-      end
+      go(proc, proto, %{}, %{}, %{}, %{}, MapSet.new(), @conform_fuel, prepare(book))
     after
       Process.delete(@span_key)
       Process.delete(@pspans_key)
     end
+  end
+
+  defp pack(kind, loc, proc, proto, reason, index) do
+    %{kind: kind, loc: loc, proc: proc, proto: proto, reason: reason, index: index}
+  end
+
+  defp immovable(index, items) do
+    loc =
+      case Enum.at(items, index) do
+        nil -> nil
+        item -> item_at(item)
+      end
+
+    pack(:immovable, loc, nil, nil, nil, index)
+  end
+
+  defp swappable?({:put, _, _, _}), do: true
+  defp swappable?({:get, _, _, _}), do: true
+  defp swappable?({:pick0, _}), do: true
+  defp swappable?({:pick1, _}), do: true
+  defp swappable?(_), do: false
+
+  defp item_at({:put, _, _, at}), do: at
+  defp item_at({:get, _, _, at}), do: at
+  defp item_at({:pick0, at}), do: at
+  defp item_at({:pick1, at}), do: at
+  defp item_at({:rest, _, span}), do: step_at(span)
+
+  defp swap_items(items, index) do
+    a = Enum.at(items, index - 1)
+    b = Enum.at(items, index)
+    items |> List.replace_at(index - 1, b) |> List.replace_at(index, a)
+  end
+
+  defp linearize({:put, ty, val, cont}, span) do
+    [{:put, ty, val, step_at(span)} | linearize(cont, step_down(span, 0))]
+  end
+
+  defp linearize({:get, ty, name, cont}, span) do
+    [{:get, ty, name, step_at(span)} | linearize(cont, step_down(span, 0))]
+  end
+
+  defp linearize({:pick0, cont}, span) do
+    [{:pick0, step_at(span)} | linearize(cont, step_down(span, 0))]
+  end
+
+  defp linearize({:pick1, cont}, span) do
+    [{:pick1, step_at(span)} | linearize(cont, step_down(span, 0))]
+  end
+
+  defp linearize({:rec, _, body}, span), do: linearize(body, step_down(span, 0))
+
+  defp linearize(other, span), do: [{:rest, other, span}]
+
+  defp rebuild([{:rest, proc, span}]), do: {proc, span}
+
+  defp rebuild([{:put, ty, val, at} | rest]) do
+    {cont, cspan} = rebuild(rest)
+    {{:put, ty, val, cont}, %{at: at, down: [cspan]}}
+  end
+
+  defp rebuild([{:get, ty, name, at} | rest]) do
+    {cont, cspan} = rebuild(rest)
+    {{:get, ty, name, cont}, %{at: at, down: [cspan]}}
+  end
+
+  defp rebuild([{:pick0, at} | rest]) do
+    {cont, cspan} = rebuild(rest)
+    {{:pick0, cont}, %{at: at, down: [cspan]}}
+  end
+
+  defp rebuild([{:pick1, at} | rest]) do
+    {cont, cspan} = rebuild(rest)
+    {{:pick1, cont}, %{at: at, down: [cspan]}}
   end
 
   defp blame(p, s, nil), do: "#{show_proc(p)} does not conform to #{show_proto(s)}"
@@ -5661,6 +5786,63 @@ defmodule Muro.Session do
   def step_down(nil, _), do: nil
   def step_down(%{down: ds}, i) when is_list(ds), do: Enum.at(ds, i)
   def step_down(_, _), do: nil
+
+  @doc false
+  def shift_span(span, {:into, i}) when is_integer(i) do
+    span |> step_down(0) |> step_down(i)
+  end
+
+  def shift_span(span, i) when is_integer(i), do: step_down(span, i)
+  def shift_span(span, _), do: span
+
+  @doc """
+  The span of the head `unwind_proc` exposes.
+
+  A `rec` steps into its body. A `call` steps into the body of the
+  `rec` that bound the name, using `pspans` recorded on the way in.
+  The returned span is that head. `pspans` keeps every `rec` seen, so
+  a later jump finds it. The stored span is not replaced by the caller:
+  chasing again from the same `rec` would step past it.
+  """
+  def expose_span(proc, span, env \\ %{}, pspans \\ %{}) do
+    expose_span(proc, span, env, pspans, MapSet.new())
+  end
+
+  defp expose_span({:rec, name, body} = term, span, env, pspans, stack) do
+    if MapSet.member?(stack, term) do
+      {span, pspans}
+    else
+      expose_span(
+        body,
+        step_down(span, 0),
+        Map.put(env, name, term),
+        Map.put(pspans, name, span),
+        MapSet.put(stack, term)
+      )
+    end
+  end
+
+  defp expose_span({:call, name}, span, env, pspans, stack) do
+    case Map.get(env, name) do
+      {:rec, _, body} = term ->
+        if MapSet.member?(stack, term) do
+          {span, pspans}
+        else
+          expose_span(
+            body,
+            step_down(Map.get(pspans, name), 0),
+            env,
+            pspans,
+            MapSet.put(stack, term)
+          )
+        end
+
+      _ ->
+        {span, pspans}
+    end
+  end
+
+  defp expose_span(_proc, span, _env, pspans, _stack), do: {span, pspans}
 
   @doc false
   def step_proc(:done), do: "done"
