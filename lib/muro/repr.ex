@@ -169,19 +169,7 @@ defmodule Muro.Repr do
     Enum.find(runs, fn {_src, em} -> MapSet.member?(names, em) end)
   end
 
-  defp run_names(book) do
-    taken =
-      if Enum.any?(book, fn d -> Map.get(d, :mode) == :run and has_toi64?(Map.get(d, :body)) end),
-        do: MapSet.new(["muro_nat_to_int"]),
-        else: MapSet.new()
-
-    Emit.def_names(book, &Emit.elixir_base/1, taken)
-  end
-
-  defp has_toi64?({:toi64, _}), do: true
-  defp has_toi64?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&has_toi64?/1)
-  defp has_toi64?(t) when is_list(t), do: Enum.any?(t, &has_toi64?/1)
-  defp has_toi64?(_), do: false
+  defp run_names(book), do: Emit.elixir_names(book)
 
   # -- compile ---------------------------------------------------------------
 
@@ -1507,20 +1495,30 @@ defmodule Muro.Repr do
 
   defp hd_field([ty | _]), do: ty
 
-  defp ctor_atom(name) do
-    name
-    |> String.replace("-", "_")
-    |> String.replace("'", "_")
-    |> String.to_atom()
+  defp ctor_atom(name), do: String.to_atom(Emit.elixir_atom_name(name))
+
+  # `Entry` stays `entry`, so `decode_entry` stays. Two types that still
+  # snake together keep colliding in `collide/4`. A suffix that would be
+  # an invalid function name, or that contains `__`, uses `elixir_base/1`.
+  @doc false
+  def snake_ident(name) when is_binary(name) do
+    raw =
+      name
+      |> String.replace("-", "_")
+      |> String.replace("'", "_")
+      |> String.replace(~r/([a-z0-9])([A-Z])/, "\\1_\\2")
+      |> String.downcase()
+
+    fun = "decode_" <> raw
+
+    if String.match?(fun, ~r/^[a-z_][A-Za-z0-9_]*$/) and not String.contains?(fun, "__") do
+      raw
+    else
+      Emit.elixir_base(name)
+    end
   end
 
-  defp snake(name) do
-    name
-    |> String.replace("-", "_")
-    |> String.replace("'", "_")
-    |> String.replace(~r/([a-z0-9])([A-Z])/, "\\1_\\2")
-    |> String.downcase()
-  end
+  defp snake(name), do: snake_ident(name)
 
   defp blame(%{entry: d}, msg), do: blame(d, msg)
 
@@ -2224,10 +2222,17 @@ defmodule Muro.Repr do
   # neither must not carry an unused attribute.
   defp maybe_nat_max(acc, feats) do
     if MapSet.member?(feats, :nat) or MapSet.member?(feats, :interned) do
-      acc ++ ["@muro_repr_nat_max #{inspect(@nat_max)}"]
+      acc ++ [nat_max_attr()]
     else
       acc
     end
+  end
+
+  defp nat_max_attr do
+    """
+    @muro_repr_nat_max #{inspect(@nat_max)}
+    """
+    |> String.trim()
   end
 
   defp maybe(acc, feat, feats, src) do
@@ -2533,6 +2538,34 @@ defmodule Muro.Repr do
 
   # `name_term` / `name_index` grow a clause per numeral target the book uses.
   # A Nat-only book must not mention the binary helpers, and the other way round.
+  defp name_term_nat do
+    """
+    defp muro_repr_name_term(i, :nat), do: muro_repr_nat_from(i)
+    """
+    |> String.trim()
+  end
+
+  defp name_term_bin do
+    """
+    defp muro_repr_name_term(i, {z, d1, d2}), do: muro_repr_bin_from(i, z, d1, d2)
+    """
+    |> String.trim()
+  end
+
+  defp name_index_nat do
+    """
+    defp muro_repr_name_index(term, :nat), do: muro_repr_encode_nat(term)
+    """
+    |> String.trim()
+  end
+
+  defp name_index_bin do
+    """
+    defp muro_repr_name_index(term, {z, d1, d2}), do: muro_repr_bin_index(term, z, d1, d2)
+    """
+    |> String.trim()
+  end
+
   defp interned_helpers(feats) do
     nat? = MapSet.member?(feats, :interned_nat)
     bin? = MapSet.member?(feats, :bin)
@@ -2540,10 +2573,8 @@ defmodule Muro.Repr do
     term =
       Enum.join(
         [
-          if(nat?, do: "defp muro_repr_name_term(i, :nat), do: muro_repr_nat_from(i)"),
-          if(bin?,
-            do: "defp muro_repr_name_term(i, {z, d1, d2}), do: muro_repr_bin_from(i, z, d1, d2)"
-          )
+          if(nat?, do: name_term_nat()),
+          if(bin?, do: name_term_bin())
         ]
         |> Enum.reject(&is_nil/1),
         "\n"
@@ -2552,11 +2583,8 @@ defmodule Muro.Repr do
     index =
       Enum.join(
         [
-          if(nat?, do: "defp muro_repr_name_index(term, :nat), do: muro_repr_encode_nat(term)"),
-          if(bin?,
-            do:
-              "defp muro_repr_name_index(term, {z, d1, d2}), do: muro_repr_bin_index(term, z, d1, d2)"
-          )
+          if(nat?, do: name_index_nat()),
+          if(bin?, do: name_index_bin())
         ]
         |> Enum.reject(&is_nil/1),
         "\n"

@@ -41,9 +41,9 @@ The name is `"<file> <def-name>"`: the book path as the suite renders it, one sp
 
 0.16.76 named the test `"<name> (<file>:<line>)"` and used that same string as the message. The name changed in 0.17.0 so a line shift does not change a CI history, a quarantine list, or an `--only` / `--exclude` filter. Regenerate the suite with `mix muro.gen`. The line stays in the message. The skip comment and the `skipped` line keep the 0.16.76 spelling, `name (file:line): reason`. The name is built in one place from the equation's origin, which today is that file.
 
-The function name is the spelling `Muro.Emit.def_names/3` gives the Elixir backend, with the same taken set. The arity is the number of non-erased binders of `f`. The assertion calls `impl.f(args)` or `impl.f()`. It does not call a hard-coded emitted module.
+The function name is the spelling `Muro.Emit.elixir_names/1` gives that run, the same name the Elixir, NIF, OTP, and FSM outputs use. The arity is the number of non-erased binders of `f`. The assertion calls `impl.f(args)` or `impl.f()`. It does not call a hard-coded emitted module.
 
-`f` from the file stem `rounding` is `round` when the Muro name is `round`. Reserved words and hyphenated names follow the Elixir backend.
+`f` from the file stem `rounding` is `round` when the Muro name is `round`. A reserved word or a hyphenated name is the same `muro__` spelling the Elixir backend emits.
 
 ## The implementation
 
@@ -301,7 +301,7 @@ A larger library, a `decide` of a key and a list whose silence and empty cases a
 
 ```elixir
 [
-  muro: "0.20.3",
+  muro: "0.20.4",
   modules: [
     {"kit.muro", KitTest, "test/kit_test.exs", [kind: :exunit]},
     {"impl.muro", ImplTest, "test/impl_test.exs", [kind: :exunit, imports: true]}
@@ -309,7 +309,7 @@ A larger library, a `decide` of a key and a list whose silence and empty cases a
 ]
 ```
 
-`mix muro.emit impl.muro --backend exunit --imports` is the same collection. `--imports` with `--backend elixir`, or with `c`, `rust`, `asm`, `otp`, `fsm`, or `--node`, is an error. `imports:` on a `kind: :elixir` entry is an error and names the entry index (`modules entry 1: imports: is only valid for kind: :exunit`). A non-boolean is `imports: must be a boolean`.
+`mix muro.emit impl.muro --backend exunit --imports` is the same collection. `--imports` with `--backend elixir`, or with `c`, `rust`, `zig`, `asm`, `otp`, `fsm`, or `--node`, is an error. `imports:` on a `kind: :elixir` entry is an error and names the entry index (`modules entry 1: imports: is only valid for kind: :exunit`). A non-boolean is `imports: must be a boolean`.
 
 A `pkg:` import is a direct import like any other. The test is named with the file under the project root, `muro_deps/shared/wire.muro wire-ok`, not with the `pkg:` spelling. A `std:` import is named with its id, `std:bool.muro not-not`, and that id is not expanded to a path.
 
@@ -368,7 +368,7 @@ A 3-tuple is still an Elixir module. An ExUnit entry adds a keyword list:
 
 ```elixir
 [
-  muro: "0.20.3",
+  muro: "0.20.4",
   modules: [
     {"priv/muro/rounding.muro", MyApp.Rounding, "lib/my_app/rounding.ex"},
     {"priv/muro/rounding.muro", MyApp.RoundingTest, "test/rounding_test.exs",

@@ -76,7 +76,7 @@ defmodule Muro.ReleaseTest do
     File.chmod!(Path.join(stub_dir, "docker"), 0o755)
     dist = Path.join(dir, "dist")
     File.mkdir_p!(dist)
-    File.write!(Path.join(dist, "muro-0.20.3-linux-x86_64"), "bin")
+    File.write!(Path.join(dist, "muro-0.20.4-linux-x86_64"), "bin")
     host = Path.join(dir, "smoke.sh")
     File.write!(host, smoke)
 

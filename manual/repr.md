@@ -11,7 +11,7 @@ In brief: a `repr` states how a data type looks in the host. `mix muro.emit` wri
 
 A host calls decode, then the proved function, then encode. The translation is the statement in the book, not a function written beside it. One decode shape covers every type, so a host does not have to know which types contain names.
 
-`repr` is host-side. It is not a kernel term, it has no Agda rule, and it never enters a run image. `Muro.Repr` checks it and emits it. The C, Rust, asm, OTP, and `--node` backends ignore it. `else` does not change `Muro.Check` or the kernel.
+`repr` is host-side. It is not a kernel term, it has no Agda rule, and it never enters a run image. `Muro.Repr` checks it and emits it. The C, Rust, Zig, asm, OTP, and `--node` backends ignore it. `else` does not change `Muro.Check` or the kernel.
 
 The books are `examples/repr.muro` and `examples/repr_names.muro`.
 
@@ -270,7 +270,7 @@ An interned name whose target is `Nat` builds the same Peano term, so the same g
 
 ## In a host
 
-`<type>` is the type name in snake case. `Entry` is `entry`. `HttpRequest` is `http_request`. `-` and `'` become `_`. The functions are public. A name that collides with a run, with another type's snake case, or with a codec helper is refused, and the error names both. The table helpers (`muro_repr_table_new`, `muro_repr_table_names`, and the private helpers they use) are on that list in every repr, including a book that interns nothing.
+`<type>` is the type name in snake case. `Entry` is `entry`. `HttpRequest` is `http_request`. `-` and `'` become `_`. A snake form that is not a function name, or that contains `__`, uses the Elixir function spelling instead. The functions are public. A name that collides with a run, with another type's snake case, or with a codec helper is refused, and the error names both. The table helpers (`muro_repr_table_new`, `muro_repr_table_names`, and the private helpers they use) are on that list in every repr, including a book that interns nothing.
 
 Reprs from imported books are emitted in book order, the same way runs from imports are. A book with no repr emits the same module text as before. A feature's private helpers are emitted only when the book uses that feature, so a boolean repr does not carry the Nat guard or the name decoder.
 

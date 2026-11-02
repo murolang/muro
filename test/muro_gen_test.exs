@@ -866,8 +866,8 @@ defmodule Muro.GenTest do
     target = Path.join(dir, "lib/host/repr_names.ex")
     content = File.read!(target)
     assert content =~ "defmodule Host.ReprNames do\n"
-    assert content =~ "def reads_off("
-    assert content =~ "def count_entries("
+    assert content =~ "def #{Muro.Emit.elixir_base("reads-off")}("
+    assert content =~ "def #{Muro.Emit.elixir_base("count-entries")}("
     assert content =~ "def decode_template("
     assert content =~ "def encode_template("
     assert content =~ "def muro_repr_table_new"

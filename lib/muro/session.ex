@@ -670,10 +670,12 @@ defmodule Muro.Session do
 
   def runtime({:rep, {:var, name}, val}), do: {:rep, {:var, name}, runtime(val)}
 
-  def runtime({:con, name, []}) when is_binary(name), do: String.to_atom(name)
+  def runtime({:con, name, []}) when is_binary(name) do
+    String.to_atom(Muro.Emit.elixir_atom_name(name))
+  end
 
   def runtime({:con, name, args}) when is_binary(name) and is_list(args) do
-    List.to_tuple([String.to_atom(name) | Enum.map(args, &runtime/1)])
+    List.to_tuple([String.to_atom(Muro.Emit.elixir_atom_name(name)) | Enum.map(args, &runtime/1)])
   end
 
   @doc """
@@ -5272,8 +5274,8 @@ defmodule Muro.Session do
         :error
 
       d ->
-        case ctor_fields(d, Atom.to_string(value)) do
-          {:ok, []} -> {:ok, {:con, Atom.to_string(value), []}}
+        case read_tag(d, Atom.to_string(value)) do
+          {:ok, name, []} -> {:ok, {:con, name, []}}
           _ -> :error
         end
     end
@@ -5284,16 +5286,14 @@ defmodule Muro.Session do
     [tag | fields] = Tuple.to_list(value)
 
     if is_atom(tag) do
-      label = Atom.to_string(tag)
-
       case find_decl(book, dname) do
         nil ->
           :error
 
         d ->
-          case ctor_fields(d, label) do
-            {:ok, tmpls} when length(tmpls) == length(fields) ->
-              read_ctor_fields(label, tmpls, fields, dname, args, book, [])
+          case read_tag(d, Atom.to_string(tag)) do
+            {:ok, name, tmpls} when length(tmpls) == length(fields) ->
+              read_ctor_fields(name, tmpls, fields, dname, args, book, [])
 
             _ ->
               :error
@@ -5305,6 +5305,21 @@ defmodule Muro.Session do
   end
 
   defp read_pay(_, _, _), do: :error
+
+  # One decode of the host label, against this declaration only.
+  # The result is the source constructor. Callers do not decode it again.
+  defp read_tag(d, label) when is_binary(label) do
+    case decl_templates(d) do
+      {:ok, {_name, %{ctors: ctors}}} ->
+        case Muro.Emit.source_ctor(Map.keys(ctors), label) do
+          {:ok, name} -> {:ok, name, Map.fetch!(ctors, name)}
+          :error -> :error
+        end
+
+      :error ->
+        :error
+    end
+  end
 
   defp read_ctor_fields(tag, [], [], _dname, _args, _book, acc), do: {:ok, {:con, tag, acc}}
 

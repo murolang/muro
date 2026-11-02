@@ -2,7 +2,7 @@
 title: The executable
 slug: binary
 order: 16
-summary: The self-contained muro binary, muro.toml, gen for C, Rust, and assembly, init, and muro skills add.
+summary: The self-contained muro binary, muro.toml, gen for C, Rust, Zig, and assembly, init, and muro skills add.
 ---
 
 # The executable
@@ -14,10 +14,10 @@ In brief: `muro` is a self-contained executable. It carries its own Erlang runti
 Release assets are one file per target, named `muro-<version>-<os>-<arch>`, with a `.sha256` file beside each:
 
 ```
-muro-0.20.3-macos-aarch64
-muro-0.20.3-macos-x86_64
-muro-0.20.3-linux-x86_64
-muro-0.20.3-linux-aarch64
+muro-0.20.4-macos-aarch64
+muro-0.20.4-macos-x86_64
+muro-0.20.4-linux-x86_64
+muro-0.20.4-linux-aarch64
 ```
 
 The Linux binaries are built against musl, so one file runs on glibc and on Alpine. The asset name does not contain `musl`.
@@ -25,14 +25,14 @@ The Linux binaries are built against musl, so one file runs on glibc and on Alpi
 [mise](https://mise.jdx.dev/) installs the asset for the host:
 
 ```
-mise use -g github:murolang/muro@0.20.3
+mise use -g github:murolang/muro@0.20.4
 ```
 
 If mise reports `No versions found` or a 404 from `mise-versions.jdx.dev`, its version mirror does not list the release yet. Turn the mirror off and ask GitHub directly:
 
 ```
 mise settings set use_versions_host false
-mise use -g github:murolang/muro@0.20.3
+mise use -g github:murolang/muro@0.20.4
 ```
 
 `mise install muro` from the mise registry follows once the assets exist. A tag `v*` builds the four files, then smokes the Linux binary in a container with no Elixir and no Erlang. The assets are attached to the GitHub release only after that smoke succeeds. A failed smoke publishes nothing. The Hex package's dependencies are unchanged. Burrito builds the executable and is not a runtime dependency of the package.
@@ -47,7 +47,7 @@ prints `Muro v` and the version, the same line as `mix muro --version`.
 
 ```
 muro check path.muro
-muro emit path.muro [--backend elixir|c|rust|asm|otp|fsm|exunit] [--node NAME] [--imports]
+muro emit path.muro [--backend elixir|c|rust|zig|asm|otp|fsm|exunit] [--node NAME] [--imports]
 muro gen
 muro gen --check
 muro init [--ci github] [--backend BACKEND] [--cargo-metadata]
@@ -82,7 +82,7 @@ muro.toml and [package.metadata.muro] in Cargo.toml both define a manifest
 Three or more end with `all define a manifest`.
 
 ```toml
-muro = "0.20.3"
+muro = "0.20.4"
 fuel = 2000          # optional
 backend = "rust"     # optional default for [[modules]]
 
@@ -95,11 +95,11 @@ git = "https://example.com/rounding.git"
 tag = "v1"
 ```
 
-`muro` is required. `fuel` is an optional positive integer. The default is the fuel `muro check` uses. `backend` is optional. It is `elixir`, `c`, `rust`, `asm`, `fsm`, or `exunit`, and it is the kind of every `[[modules]]` entry that omits `backend`. An entry that omits `backend` when the file omits it too is `modules entry N: missing backend`, and the message names the line.
+`muro` is required. `fuel` is an optional positive integer. The default is the fuel `muro check` uses. `backend` is optional. It is `elixir`, `c`, `rust`, `zig`, `asm`, `fsm`, or `exunit`, and it is the kind of every `[[modules]]` entry that omits `backend`. An entry that omits `backend` when the file omits it too is `modules entry N: missing backend`, and the message names the line.
 
 `book` and `target` are required. Paths are relative to the project root. A book or a target outside the project is refused, a missing book is refused, and a duplicate target is refused. The errors name the entry index, as they do for `muro.exs`.
 
-`module` is an alias string (`"MyApp.Billing.Rounding"`). It is required for `elixir`, `fsm`, and `exunit`. A `c`, `rust`, or `asm` entry omits it. The `c` target ends with `.c`, and the header is written beside it with the same stem (`src/rounding.c` also reserves `src/rounding.h`). That path is checked as a target before generation, including when it is already a directory. The error names the entry index. The `rust` target ends with `.rs`. The `asm` target ends with `.s`. A wrong suffix is `modules entry N: target for kind :rust must end with .rs`.
+`module` is an alias string (`"MyApp.Billing.Rounding"`). It is required for `elixir`, `fsm`, and `exunit`. A `c`, `rust`, `zig`, or `asm` entry omits it. The `c` target ends with `.c`, and the header is written beside it with the same stem (`src/rounding.c` also reserves `src/rounding.h`). That path is checked as a target before generation, including when it is already a directory. The error names the entry index. The `rust` target ends with `.rs`. The `zig` target ends with `.zig`. The `asm` target ends with `.s`. A wrong suffix is `modules entry N: target for kind :rust must end with .rs`.
 
 `muro_deps` is the same set of packages as `muro_deps:` in `muro.exs`. Each name is a table:
 
@@ -128,17 +128,18 @@ In a `Cargo.toml`, tables other than `[package.metadata.muro]` and its children 
 
 ## gen
 
-`muro gen` and `mix muro.gen` write `elixir`, `exunit`, `fsm`, `c`, `rust`, and `asm` targets. In `muro.exs` the native entries may omit the module:
+`muro gen` and `mix muro.gen` write `elixir`, `exunit`, `fsm`, `c`, `rust`, `zig`, and `asm` targets. In `muro.exs` the native entries may omit the module:
 
 ```
 {"muro/rounding.muro", "src/rounding.rs", [kind: :rust]}
+{"muro/rounding.muro", "src/rounding.zig", [kind: :zig]}
 {"muro/rounding.muro", "src/rounding.c", [kind: :c]}
 {"muro/rounding.muro", "src/rounding.s", [kind: :asm]}
 ```
 
 A missing `kind:` in `muro.exs` is still `:elixir`.
 
-The header is the same two lines and the same hashes as an Elixir target. A C source includes the header written beside the target, so `src/rounding.c` from book `muro/half.muro` includes `rounding.h`. The comment mark is `// ` for C and Rust, including the `.h`, and `@ ` for Cortex-M assembly. Formatting is left alone for these three kinds, so the body hash is the sha256 of the emitter's text. `muro gen --check` reports a missing, stale, hand-edited, or differing target, or a header that names another version, with the same messages it uses for Elixir. The `.h` beside a C target is checked the same way. See [Committed modules](gen.md).
+The header is the same two lines and the same hashes as an Elixir target. A C source includes the header written beside the target, so `src/rounding.c` from book `muro/half.muro` includes `rounding.h`. The comment mark is `// ` for C, Rust, and Zig, including the `.h`, and `@ ` for Cortex-M assembly. Formatting is left alone for these four kinds, so the body hash is the sha256 of the emitter's text. `muro gen --check` reports a missing, stale, hand-edited, or differing target, or a header that names another version, with the same messages it uses for Elixir. The `.h` beside a C target is checked the same way. See [Committed modules](gen.md).
 
 ## init
 
@@ -151,7 +152,7 @@ The header is the same two lines and the same hashes as an Elixir target. A C so
 | `CMakeLists.txt`, `meson.build`, or a `Makefile`, and neither `mix.exs` nor `Cargo.toml` | `muro.toml` and `muro/` | c |
 | none of these | `muro.toml` with `modules = []`, and `muro/` | none |
 
-`--backend asm` overrides the detected backend and stores it as the manifest's top-level `backend`, so `muro skills add` and later commands use `asm`. On `muro.exs` the key is `backend: :asm`. On `muro.toml` and `[package.metadata.muro]` it is `backend = "asm"`. `--backend elixir` stores that key too. Without `--backend`, a Mix project still omits it. The flag does not change which file is written. There is no detection of embedded projects. `--backend` accepts `elixir`, `c`, `rust`, `asm`, `fsm`, or `exunit`.
+`--backend asm` overrides the detected backend and stores it as the manifest's top-level `backend`, so `muro skills add` and later commands use `asm`. On `muro.exs` the key is `backend: :asm`. On `muro.toml` and `[package.metadata.muro]` it is `backend = "asm"`. `--backend elixir` stores that key too. Without `--backend`, a Mix project still omits it. The flag does not change which file is written. There is no detection of embedded projects. `--backend` accepts `elixir`, `c`, `rust`, `zig`, `asm`, `fsm`, or `exunit`.
 
 `--cargo-metadata` on a directory with `Cargo.toml` appends `[package.metadata.muro]` and writes `muro/`. It does not write `muro.toml`. Without a `Cargo.toml` it exits 1 and writes nothing.
 

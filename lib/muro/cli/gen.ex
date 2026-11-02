@@ -21,7 +21,7 @@ defmodule Muro.CLI.Gen do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro gen reads the manifest and writes the modules it names. The manifest is muro.toml, [package.metadata.muro] in Cargo.toml, or muro.exs. It pins muro to a version, which must equal the running version, and lists modules. Each entry names a book and a target. elixir, fsm, and exunit also name a module. c, rust, and asm name a target ending in .c, .rs, or .s. An optional fuel is the checker's bound. An optional backend is the kind of every entry that omits one. gen checks every book before it writes. If one fails, it writes nothing. A target that already matches is left untouched. Do not edit a generated file. Change the .muro file and run muro gen.
+      muro gen reads the manifest and writes the modules it names. The manifest is muro.toml, [package.metadata.muro] in Cargo.toml, or muro.exs. It pins muro to a version, which must equal the running version, and lists modules. Each entry names a book and a target. elixir, fsm, and exunit also name a module. c, rust, zig, and asm name a target ending in .c, .rs, .zig, or .s. An optional fuel is the checker's bound. An optional backend is the kind of every entry that omits one. gen checks every book before it writes. If one fails, it writes nothing. A target that already matches is left untouched. Do not edit a generated file. Change the .muro file and run muro gen.
       """),
       Muro.CLI.Text.section("USAGE", Muro.CLI.Text.pre(["muro gen [--check]"])),
       Muro.CLI.Text.section(

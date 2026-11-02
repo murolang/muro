@@ -69,10 +69,10 @@ The Finder adds `leb`, `default-action` and `horizon`. `successor_sum.muro` adds
 
 | Environment | `episode` | `successor-episode` |
 | --- | --- | --- |
-| BinarySacrifice | `go_trap` 1, then 0 forever | `go_paradise` 0, then 1 forever |
+| BinarySacrifice | `muro__gozdtrap` 1, then 0 forever | `muro__gozdparadise` 0, then 1 forever |
 | SkillInvestment | `work` 1 forever | `train` 0 three times, then 5 forever |
 
-In `trap` both actions return to `trap`. The Finder's sort is stable, so the tie goes to `go_paradise`, the first action in `all-actions`.
+In `trap` both actions return to `trap`. The Finder's sort is stable, so the tie goes to `go-paradise`, emitted as `muro__gozdparadise`, the first action in `all-actions`.
 
 ## The return theorem
 

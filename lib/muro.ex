@@ -102,6 +102,9 @@ defmodule Muro do
     with {:ok, book} <- checked_book(path, opts),
          {:ok, header, source, sigs} <- Emit.C.prepare(book, stem) do
       if nif?, do: Emit.Nif.ensure_make!(sigs), else: :ok
+      # Claimed for every run, before `nat_export?` drops internal and non-Nat runs.
+      names = Emit.elixir_names(book)
+      sigs = Enum.map(sigs, &Map.put(&1, :elixir, Map.fetch!(names, &1.source)))
       h = Path.join(dir, stem <> ".h")
       c = Path.join(dir, stem <> ".c")
       File.write!(h, header)
@@ -124,6 +127,22 @@ defmodule Muro do
       rs = Path.join(dir, stem <> ".rs")
       File.write!(rs, source)
       {:ok, [rs]}
+    end
+  end
+
+  @doc """
+  Write `<name>.zig` next to `path` for its run definitions.
+  `zig` translates that file. The proof stops at the run image.
+  """
+  def emit_zig(path, opts \\ []) do
+    stem = Path.basename(path, ".muro")
+    dir = Path.dirname(path)
+
+    with {:ok, book} <- checked_book(path, opts),
+         {:ok, source} <- Emit.Zig.render(book, stem) do
+      file = Path.join(dir, stem <> ".zig")
+      File.write!(file, source)
+      {:ok, [file]}
     end
   end
 

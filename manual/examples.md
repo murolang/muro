@@ -38,7 +38,7 @@ See [The wall](wall.md), [Terms](language.md), [Identity](identity.md).
 
 ## ping.muro
 
-An affine session. The protocol is spec. The process is evidence. The Elixir, C, Rust, and assembly emitters omit it. `--backend otp` writes a GenServer for each process.
+An affine session. The protocol is spec. The process is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit it. `--backend otp` writes a GenServer for each process.
 
 ```
 session ping := recv Nat (send Nat end)
@@ -82,7 +82,7 @@ meet wire : pong with peer
 
 `pong` receives a nat and sends `1`. `peer` is the other end, so it sends `1` and receives a nat. `wire` is the evidence that those two processes are that exchange. `arm` is a choice: `pick0 done` meets `cover done (get Nat done)`. `drop` is both ends abandoning after `0`. `box` sends a pair of a bit and a record `{x : Nat, y : Nat}`. That pair is a tuple, and the record is a map whose keys are `x` and `y`. `here` sends `(b0, {x = 0, y = 0})`. `far` sends `(b1, {x = 1, y = 2})` of that same type, and it meets `there`. `window` receives a window `w` and sends a nat `d` with `d ≤ w`. `window-server` sends the window back, which is that evidence. `window-wire` meets it with a client that grants `8`. `kept` is the run definition in the same file. `mix muro.emit examples/meet.muro` emits `kept`.
 
-`mix muro.emit examples/meet.muro --backend otp` writes `meet_otp.ex`. `MeetOtp.wire/0` starts `pong` and `peer` as each other's peer. `arm` starts the choice. `drop` starts both ends abandoning after `0`. `wrapped` carries the pair. `window_wire` sends `8` and then `8` back. The evidence is not in the message. Each server talks to one peer. `Pong.start/1` still takes a peer pid supplied by the caller. See [Emit](emit.md#otp).
+`mix muro.emit examples/meet.muro --backend otp` writes `meet_otp.ex`. `MeetOtp.wire/0` starts `pong` and `peer` as each other's peer. `arm` starts the choice. `drop` starts both ends abandoning after `0`. `wrapped` carries the pair. `muro__windowzdwire` sends `8` and then `8` back. The evidence is not in the message. Each server talks to one peer. `Pong.start/1` still takes a peer pid supplied by the caller. See [Emit](emit.md#otp).
 
 `mix muro.emit examples/meet.muro --backend fsm` prints `MeetFsm`. `MeetFsm.Ping` receives a nat and then sends one. See [State machines](fsm.md).
 
@@ -334,7 +334,7 @@ See [Sessions](sessions.md#a-bounded-buffer).
 
 ## place.muro
 
-A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, and assembly emitters omit all three. `--node` writes one call for each cross.
+A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit all three. `--node` writes one call for each cross.
 
 ```
 place home := ambient
@@ -363,7 +363,7 @@ See [Terms](language.md#place) and [Emit](emit.md#node).
 
 ## located.muro
 
-A session read at a place. The endpoint is spec. The reading is evidence. The Elixir, C, Rust, and assembly emitters omit both. A run definition has no seat.
+A session read at a place. The endpoint is spec. The reading is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit both. A run definition has no seat.
 
 ```
 endpoint ping-home := ping at local
@@ -376,7 +376,7 @@ read cross pong-away : ping-home at away := get Nat (put 1 done)
 
 `mix muro.emit examples/located.muro --node a` writes `located_node.ex`. `pong-away`, `pong-done`, and `left-open` are the three calls, and each one reads `local`. `pong`, `pong-poly`, and `pong-poly-away` stay, so they write no call. The payload stays on the session. See [Emit](emit.md#node).
 
-`mix muro.emit examples/located.muro --backend otp` writes `located_otp.ex`. `Pong` and `PongAway` both receive a nat and send `1`. `LeftOpen` sends `0` and abandons the channel. The server talks to one peer. See [Emit](emit.md#otp).
+`mix muro.emit examples/located.muro --backend otp` writes `located_otp.ex`. `Pong` and `Mmuro__pongzdaway` both receive a nat and send `1`. `Mmuro__leftzdopen` sends `0` and abandons the channel. The server talks to one peer. See [Emit](emit.md#otp).
 
 A `stay` on that cross, a `cross` on a stay, a `cross` of `ping-poly`, a value of a type the protocol does not name, or an abandoned `%1` channel, is refused. Those books live in `test/muro_located_test.exs`, so a program copies the form that checks.
 

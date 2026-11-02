@@ -35,18 +35,19 @@ defmodule Muro.Gen do
   `Muro.emit_file/3`. An `:exunit` entry calls `Muro.emit_exunit/3`.
   A `:fsm` entry calls `Muro.emit_fsm/3`. A `:c` entry calls
   `Muro.Emit.C.prepare/2` and writes the `.c` target and the `.h`
-  beside it. A `:rust` entry calls `Muro.Emit.Rust.render/2`. An
-  `:asm` entry calls `Muro.Emit.Asm.render/2`. The stem passed to
-  those emitters is the book basename.
+  beside it. A `:rust` entry calls `Muro.Emit.Rust.render/2`. A
+  `:zig` entry calls `Muro.Emit.Zig.render/2`. An `:asm` entry calls
+  `Muro.Emit.Asm.render/2`. The stem passed to those emitters is the
+  book basename.
   The Elixir bytes are formatted with the project's `.formatter.exs`
   when that file exists (`Mix.Tasks.Format.formatter_for_file/2`),
   and with `Code.format_string!/2` otherwise. `.ex` and `.exs` are
   formatted even when the formatter inputs do not list the file. The
   header is comments, so formatting does not rewrite it. `:c`,
-  `:rust`, and `:asm` are not formatted. The body hash is the
+  `:rust`, `:zig`, and `:asm` are not formatted. The body hash is the
   emitter's text. There is no timestamp and no absolute path.
 
-  The header comment is `#` for Elixir, `//` for C, Rust, and the
+  The header comment is `#` for Elixir, `//` for C, Rust, Zig, and the
   C header, and `@` for Cortex-M assembly. The words of the two
   lines are the same.
 
@@ -276,7 +277,7 @@ defmodule Muro.Gen do
 
   defp render(root, entry, version, fuel) do
     case Map.get(entry, :kind, :elixir) do
-      kind when kind in [:c, :rust, :asm] ->
+      kind when kind in [:c, :rust, :zig, :asm] ->
         render_native(root, entry, version, fuel, kind)
 
       _kind ->
@@ -350,6 +351,13 @@ defmodule Muro.Gen do
 
   defp native_parts(entry, :rust, book, stem) do
     case Muro.Emit.Rust.render(book, stem) do
+      {:ok, source} -> {:ok, [{entry.target, source}]}
+      {:error, _} = err -> err
+    end
+  end
+
+  defp native_parts(entry, :zig, book, stem) do
+    case Muro.Emit.Zig.render(book, stem) do
       {:ok, source} -> {:ok, [{entry.target, source}]}
       {:error, _} = err -> err
     end
