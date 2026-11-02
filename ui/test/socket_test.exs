@@ -3,26 +3,18 @@ defmodule MuroVisor.SocketTest do
 
   @moduletag timeout: 60_000
 
-  setup do
+  test "the live socket joins with the layout token and refuses a join without it" do
     saved = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
 
     on_exit(fn ->
+      assert {:ok, {_ip, port}} = Bandit.PhoenixAdapter.server_info(MuroVisor.Endpoint, :http)
       Application.put_env(:muro_visor, MuroVisor.Endpoint, saved)
       restart!()
-      port = Process.get(:visor_port)
-
-      if is_integer(port) do
-        assert match?({:error, :econnrefused}, :gen_tcp.connect({127, 0, 0, 1}, port, [], 200))
-      end
+      assert {:error, :econnrefused} = :gen_tcp.connect({127, 0, 0, 1}, port, [], 200)
     end)
 
-    :ok
-  end
-
-  test "the live socket joins with the layout token and refuses a join without it" do
     listen!()
     port = port!()
-    Process.put(:visor_port, port)
 
     assert {:ok, _conn, %{status: 200, body: phoenix}} =
              request(port, "GET", "/assets/phoenix.min.js", [])
@@ -52,6 +44,19 @@ defmodule MuroVisor.SocketTest do
     origins = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)[:check_origin]
     assert "//127.0.0.1" in origins
     assert "//localhost" in origins
+  end
+
+  test "a join reply split across reads waits for the whole frame" do
+    payload = Jason.encode!(["4", "4", "lv:phx", "phx_reply", %{"status" => "ok"}])
+    ws = %Mint.WebSocket{}
+    {:ok, ws, binary} = Mint.WebSocket.encode(ws, {:text, payload})
+    assert byte_size(binary) > 2
+    at = div(byte_size(binary), 2)
+    <<left::binary-size(at), right::binary>> = binary
+
+    assert {:more, ws} = decode_chunks(ws, [left])
+    assert {:ok, "ok", _ws} = decode_chunks(ws, [right])
+    assert {:ok, "ok", _} = decode_chunks(%Mint.WebSocket{}, [left, right])
   end
 
   defp listen! do
@@ -219,27 +224,62 @@ defmodule MuroVisor.SocketTest do
   end
 
   defp read_reply(conn, ref, websocket) do
-    {:ok, _conn, responses} = Mint.WebSocket.recv(conn, 0, 5_000)
+    case await_reply(conn, ref, websocket, []) do
+      {:ok, status} -> {:ok, status}
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
-    frames =
-      Enum.flat_map(responses, fn
-        {:data, ^ref, data} ->
-          {:ok, _websocket, frames} = Mint.WebSocket.decode(websocket, data)
-          frames
+  defp await_reply(conn, ref, websocket, frames) do
+    case Mint.WebSocket.recv(conn, 0, 5_000) do
+      {:ok, conn, responses} ->
+        {websocket, frames} = take_frames(websocket, ref, responses, frames)
 
-        _ ->
-          []
-      end)
+        case reply_status(frames) do
+          {:ok, status} -> {:ok, status}
+          :more -> await_reply(conn, ref, websocket, frames)
+        end
 
-    text =
-      Enum.find_value(frames, fn
-        {:text, text} -> text
-        _ -> nil
-      end)
+      {:error, _conn, reason, _responses} ->
+        {:error, reason}
+    end
+  end
 
-    case Jason.decode!(text) do
-      [_join, _ref, _topic, "phx_reply", %{"status" => status}] -> {:ok, status}
-      other -> {:ok, inspect(other)}
+  defp take_frames(websocket, ref, responses, frames) do
+    Enum.reduce(responses, {websocket, frames}, fn
+      {:data, ^ref, data}, {websocket, frames} ->
+        {:ok, websocket, more} = Mint.WebSocket.decode(websocket, data)
+        {websocket, frames ++ more}
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp decode_chunks(websocket, chunks) do
+    {websocket, frames} =
+      take_frames(websocket, :chunk, Enum.map(chunks, &{:data, :chunk, &1}), [])
+
+    case reply_status(frames) do
+      {:ok, status} -> {:ok, status, websocket}
+      :more -> {:more, websocket}
+    end
+  end
+
+  defp reply_status(frames) do
+    case Enum.find_value(frames, fn
+           {:text, text} -> text
+           _ -> nil
+         end) do
+      nil ->
+        :more
+
+      text ->
+        case Jason.decode(text) do
+          {:ok, [_join, _ref, _topic, "phx_reply", %{"status" => status}]} -> {:ok, status}
+          {:ok, other} -> {:ok, inspect(other)}
+          _ -> :more
+        end
     end
   end
 end
