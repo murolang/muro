@@ -110,6 +110,21 @@ defmodule MuroVisor.LayoutTest do
     assert html =~ "id=\"zoom-150\""
   end
 
+  test "the default view keeps labels readable and focus is not a box", %{conn: conn} do
+    page = html_response(get(conn, "/"), 200)
+
+    assert page =~ ~s(id="zoom-fit")
+    assert page =~ "checked"
+    assert page =~ "max(100%, calc(var(--native-width) * 0.75))"
+    assert page =~ "font: 12px"
+    assert 12 * 0.75 >= 9
+
+    assert page =~ "svg g:focus, svg g:focus-visible { outline: none; }"
+    assert page =~ "svg g:focus-visible > path.edge"
+    assert page =~ "path.edge.selected + text"
+    refute page =~ "svg g:focus { outline: 2px"
+  end
+
   defp assert_layout(graph, label) do
     once = MuroVisor.Draw.layout(graph)
     assert once == MuroVisor.Draw.layout(graph), "#{label} is not stable"
@@ -139,15 +154,22 @@ defmodule MuroVisor.LayoutTest do
       end
     end
 
-    trans_paths =
+    trans_edges =
       for node <- once.nodes, meet <- node.meetings, trans <- meet.transitions do
         kids = Map.new(meet.children, &{&1.id, &1})
         assert_endpoints(trans.d, Map.fetch!(kids, trans.from), Map.fetch!(kids, trans.to), label)
         assert_label(trans, once, label)
-        trans.d
+        trans
       end
 
-    assert_distinct_paths(Enum.map(once.edges, & &1.d) ++ trans_paths, label)
+    paths = Enum.map(once.edges, & &1.d) ++ Enum.map(trans_edges, & &1.d)
+    assert_distinct_paths(paths, label)
+    assert_no_collinear_overlap(once.edges ++ trans_edges, label)
+    assert_distinct_ports(once.nodes, once.edges, label)
+
+    for node <- once.nodes, meet <- node.meetings do
+      assert_distinct_ports(meet.children, meet.transitions, label)
+    end
   end
 
   defp assert_no_overlap(boxes, label) do
@@ -281,6 +303,53 @@ defmodule MuroVisor.LayoutTest do
       for s1 <- a, s2 <- b do
         refute share?(s1, s2), "#{label} edges share a line"
       end
+    end
+  end
+
+  defp assert_no_collinear_overlap(edges, label) do
+    indexed = Enum.map(edges, fn edge -> {edge, segments(edge.d)} end)
+
+    for {{e1, s1}, i} <- Enum.with_index(indexed),
+        {{e2, s2}, j} <- Enum.with_index(indexed),
+        i < j,
+        not shares_node?(e1, e2),
+        s1 <- s1,
+        s2 <- s2 do
+      refute share?(s1, s2), "#{label} #{e1.id} overlaps #{e2.id}"
+    end
+  end
+
+  defp shares_node?(a, b) do
+    MapSet.size(MapSet.intersection(MapSet.new([a.from, a.to]), MapSet.new([b.from, b.to]))) > 0
+  end
+
+  defp assert_distinct_ports(nodes, edges, label) do
+    by_id = Map.new(nodes, &{&1.id, &1})
+
+    groups =
+      for edge <- edges,
+          pts = numbers(edge.d),
+          {nid, {x, y}} <- [{edge.from, List.first(pts)}, {edge.to, List.last(pts)}],
+          node = Map.get(by_id, nid),
+          side = port_side(x, y, node),
+          side != nil do
+        {{node.id, side}, {x, y}}
+      end
+      |> Enum.group_by(&elem(&1, 0), &elem(&1, 1))
+
+    for {{id, side}, pts} <- groups do
+      assert length(pts) == length(Enum.uniq(pts)),
+             "#{label} repeats a port on #{id} #{side}"
+    end
+  end
+
+  defp port_side(x, y, node) do
+    cond do
+      x == node.x and y >= node.y and y <= node.y + node.h -> :left
+      x == node.x + node.w and y >= node.y and y <= node.y + node.h -> :right
+      y == node.y and x >= node.x and x <= node.x + node.w -> :top
+      y == node.y + node.h and x >= node.x and x <= node.x + node.w -> :bottom
+      true -> nil
     end
   end
 

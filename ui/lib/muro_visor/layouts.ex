@@ -32,7 +32,7 @@ defmodule MuroVisor.Layouts do
           .graph-pane { min-width: 0; }
           .zoom { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
           .graph-scroll { overflow: auto; max-height: calc(100vh - 140px); border: 1px solid #e7e5e4; background: #fff; }
-          #zoom-fit:checked ~ .graph-scroll svg { width: 100%; height: auto; }
+          #zoom-fit:checked ~ .graph-scroll svg { width: max(100%, calc(var(--native-width) * 0.75)); height: auto; }
           #zoom-100:checked ~ .graph-scroll svg { width: var(--native-width); height: auto; }
           #zoom-150:checked ~ .graph-scroll svg { width: calc(var(--native-width) * 1.5); height: auto; }
           aside.side { min-width: 0; }
@@ -48,8 +48,17 @@ defmodule MuroVisor.Layouts do
           svg g.selected > rect.compound,
           svg rect.selected { stroke: #b45309; stroke-width: 2.5px; }
           svg path.edge.selected { stroke: #b45309; stroke-width: 2.5px; }
+          svg path.edge.selected + text { fill: #b45309; }
           svg text { font: 12px ui-sans-serif, sans-serif; }
-          svg g:focus { outline: 2px solid #b45309; }
+          svg g:focus, svg g:focus-visible { outline: none; }
+          svg g:focus-visible > rect.node,
+          svg g:focus-visible > rect.compound { stroke: #b45309; stroke-width: 2.5px; }
+          svg g:focus-visible > path.edge {
+            stroke: #b45309;
+            stroke-width: 2.5px;
+            filter: drop-shadow(0 0 1px #b45309);
+          }
+          svg g:focus-visible > path.edge + text { fill: #b45309; }
           @media (max-width: 800px) {
             main { grid-template-columns: 1fr; }
           }
