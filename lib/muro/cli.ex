@@ -1,7 +1,7 @@
 defmodule Muro.CLI do
   @moduledoc false
 
-  @usage_line "usage: muro [--version] <check|emit|gen|init|skills|deps.get|mutate> ..."
+  @usage_line "usage: muro [--version] <check|emit|gen|init|skills|deps.get|mutate|ui> ..."
 
   @doc """
   Entry point for the self-contained executable.
@@ -67,7 +67,9 @@ defmodule Muro.CLI do
           {[
              "mutate path.muro [--only NAME] [--json] [--fuel N]",
              "    [--max-mutants-per-def N] [--max-survivors N]"
-           ], "Change run definitions and report which evidence still holds."}
+           ], "Change run definitions and report which evidence still holds."},
+          {"ui path.muro",
+           "Print how to install muro_visor and open this book. The compiler does not start the explorer."}
         ])
       ),
       Muro.CLI.Text.section(
@@ -136,7 +138,8 @@ defmodule Muro.CLI do
       Muro.CLI.Init.help(),
       Muro.CLI.Skills.help(),
       Muro.CLI.Deps.help(),
-      Muro.CLI.Mutate.help()
+      Muro.CLI.Mutate.help(),
+      Muro.CLI.Ui.help()
     ]
   end
 
@@ -154,6 +157,7 @@ defmodule Muro.CLI do
   defp dispatch(["skills" | rest]), do: command(rest, Muro.CLI.Skills)
   defp dispatch(["deps.get" | rest]), do: command(rest, Muro.CLI.Deps)
   defp dispatch(["mutate" | rest]), do: command(rest, Muro.CLI.Mutate)
+  defp dispatch(["ui" | rest]), do: command(rest, Muro.CLI.Ui)
 
   defp dispatch([unknown | _rest]) do
     label =
@@ -169,7 +173,8 @@ defmodule Muro.CLI do
   defp help_command(["skills"]), do: shown(Muro.CLI.Skills.help())
   defp help_command(["skills", "add"]), do: shown(Muro.CLI.Skills.help())
 
-  defp help_command([name]) when name in ["check", "emit", "gen", "init", "deps.get", "mutate"] do
+  defp help_command([name])
+       when name in ["check", "emit", "gen", "init", "deps.get", "mutate", "ui"] do
     shown(module(name).help())
   end
 
@@ -183,6 +188,7 @@ defmodule Muro.CLI do
   defp module("init"), do: Muro.CLI.Init
   defp module("deps.get"), do: Muro.CLI.Deps
   defp module("mutate"), do: Muro.CLI.Mutate
+  defp module("ui"), do: Muro.CLI.Ui
 
   defp command(args, module) do
     cond do

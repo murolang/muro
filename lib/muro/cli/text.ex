@@ -191,8 +191,8 @@ defmodule Muro.CLI.Text do
     line =~ ~r/\A[A-Z][A-Z ]{2,}\z/
   end
 
-  @invocation ~r/^(\s*)(muro)(\s+)(skills add|deps\.get|check|emit|gen|init|mutate)(?![\w-])(.*)$/
-  @synopsis ~r/^(\s*)(skills add|deps\.get|check|emit|gen|init|mutate)(?![\w-])(.*)$/
+  @invocation ~r/^(\s*)(muro)(\s+)(skills add|deps\.get|check|emit|gen|init|mutate|ui)(?![\w-])(.*)$/
+  @synopsis ~r/^(\s*)(skills add|deps\.get|check|emit|gen|init|mutate|ui)(?![\w-])(.*)$/
 
   defp paint_invocation(line) do
     cond do

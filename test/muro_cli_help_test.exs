@@ -10,10 +10,11 @@ defmodule Muro.CliHelpTest do
     Muro.CLI.Init,
     Muro.CLI.Skills,
     Muro.CLI.Deps,
-    Muro.CLI.Mutate
+    Muro.CLI.Mutate,
+    Muro.CLI.Ui
   ]
 
-  @commands ["check", "emit", "gen", "init", "skills", "deps.get", "mutate"]
+  @commands ["check", "emit", "gen", "init", "skills", "deps.get", "mutate", "ui"]
 
   @doc_urls [
     "https://muro-lang.dev",
@@ -27,6 +28,7 @@ defmodule Muro.CliHelpTest do
     "https://muro-lang.dev/docs/emit",
     "https://muro-lang.dev/docs/gen",
     "https://muro-lang.dev/docs/mutate",
+    "https://muro-lang.dev/docs/explorer",
     "https://muro-lang.dev/docs/packages",
     "https://muro-lang.dev/docs/library",
     "https://muro-lang.dev/docs/examples",
@@ -49,7 +51,7 @@ defmodule Muro.CliHelpTest do
     refute first =~ "\e["
 
     lines = first |> String.trim_trailing("\n") |> String.split("\n")
-    assert length(lines) in 50..70
+    assert length(lines) in 50..80
 
     for line <- lines do
       assert String.length(line) <= 80, "usage line longer than 80: #{line}"
@@ -59,7 +61,7 @@ defmodule Muro.CliHelpTest do
   test "help names the commands, the manifest, and where to read next" do
     text = Muro.CLI.usage_text()
 
-    for command <- ["check", "emit", "gen", "init", "skills add", "deps.get", "mutate"] do
+    for command <- ["check", "emit", "gen", "init", "skills add", "deps.get", "mutate", "ui"] do
       assert text =~ command
     end
 
@@ -222,6 +224,7 @@ defmodule Muro.CliHelpTest do
           {["skills", "--nope"], "--nope"},
           {["deps.get", "--nope"], "--nope"},
           {["mutate", "--nope"], "--nope"},
+          {["ui", "--nope"], "--nope"},
           {["check", "--fuel"], "--fuel"}
         ] do
       {out, err, code} = cli(args)
@@ -244,6 +247,22 @@ defmodule Muro.CliHelpTest do
       assert err =~ usage
       refute err =~ "mix muro"
     end
+  end
+
+  test "muro ui prints how to install muro_visor and does not start the explorer" do
+    {out, err, code} = cli(["ui", "book.muro"])
+    assert code == 0
+    assert err == ""
+    assert out =~ "mix archive.install hex muro_visor"
+    assert out =~ "mix muro.ui book.muro"
+    assert out =~ "https://muro-lang.dev/docs/explorer"
+    assert out =~ "does not start the explorer"
+    refute out =~ "Phoenix"
+
+    {out, err, code} = cli(["ui"])
+    assert code == 1
+    assert out == ""
+    assert err =~ "usage: muro ui path.muro"
   end
 
   test "messages that name a Mix task name the executable command instead" do

@@ -1,0 +1,79 @@
+defmodule Muro.CLI.Ui do
+  @moduledoc false
+
+  @doc false
+  def switches, do: []
+
+  @doc false
+  def options, do: []
+
+  @doc false
+  def help do
+    Muro.CLI.Text.page([
+      Muro.CLI.Text.prose("""
+      muro ui prints how to install muro_visor and open one book. The compiler does not start the explorer. muro_visor is its own package. mix muro.ui path.muro, from that package, starts the explorer and opens the book. The explorer is read-only: it does not emit code and it does not change the wall.
+      """),
+      Muro.CLI.Text.section("USAGE", Muro.CLI.Text.pre(["muro ui path.muro"])),
+      Muro.CLI.Text.section(
+        "ARGUMENTS",
+        Muro.CLI.Text.arguments([
+          {"path.muro", "Required. The book the explorer opens."}
+        ])
+      ),
+      Muro.CLI.Text.section(
+        "EXAMPLES",
+        Muro.CLI.Text.examples([
+          {"muro ui book.muro", "Print the install steps for this book."}
+        ])
+      ),
+      Muro.CLI.Text.section(
+        "EXIT CODES",
+        Muro.CLI.Text.exits([
+          {"0", "The install steps were printed."},
+          {"1", "The path was omitted, more than one path was given, or a flag is unknown."}
+        ])
+      ),
+      Muro.CLI.Text.section(
+        "LEARN MORE",
+        Muro.CLI.Text.pre(["https://muro-lang.dev/docs/explorer"])
+      )
+    ])
+  end
+
+  @doc false
+  def run(args) do
+    {_opts, paths, invalid} = OptionParser.parse(args, strict: switches())
+
+    cond do
+      invalid != [] ->
+        {:raise, "", "unknown option: #{inspect(invalid)}"}
+
+      length(paths) != 1 ->
+        {:raise, "", "usage: muro ui path.muro"}
+
+      true ->
+        {:ok, instructions(hd(paths)), ""}
+    end
+  end
+
+  defp instructions(path) do
+    Muro.CLI.Text.page([
+      Muro.CLI.Text.prose("""
+      muro_visor draws this book. This command does not start the explorer. Install the package, then open the book with its Mix task.
+      """),
+      Muro.CLI.Text.section(
+        "INSTALL",
+        Muro.CLI.Text.pre(["mix archive.install hex muro_visor"])
+      ),
+      Muro.CLI.Text.section("OPEN", Muro.CLI.Text.pre(["mix muro.ui #{path}"])),
+      Muro.CLI.Text.section(
+        "FROM A CHECKOUT",
+        Muro.CLI.Text.pre(["cd ui && mix deps.get && mix muro.ui #{path}"])
+      ),
+      Muro.CLI.Text.section(
+        "LEARN MORE",
+        Muro.CLI.Text.pre(["https://muro-lang.dev/docs/explorer"])
+      )
+    ])
+  end
+end
