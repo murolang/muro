@@ -938,7 +938,8 @@ defmodule Muro.Session do
 
   # `path` is the address under a spine rest: a branch index, then a
   # local index in that branch, then the same shape again for a nested
-  # branch. `rec` is not an address.
+  # branch. `rec` is not an address. The integer after an arm index is
+  # that arm's own sequence index, even when the arm opens on a branch.
   defp move_path(_proc, _span, []), do: {:immovable, nil}
 
   defp move_path({:rec, name, body}, span, path) do
@@ -954,7 +955,7 @@ defmodule Muro.Session do
   defp move_path({:cover, p, q}, span, [i | rest]) when i in [0, 1] do
     child = if i == 0, do: p, else: q
 
-    case move_path(child, step_down(span, i), rest) do
+    case move_sequence(child, step_down(span, i), rest) do
       {:ok, child2, cspan, loc} ->
         proc = if i == 0, do: {:cover, child2, q}, else: {:cover, p, child2}
         {:ok, proc, put_down(span, i, cspan), loc}
@@ -967,7 +968,7 @@ defmodule Muro.Session do
   defp move_path({:iget, name, p, q}, span, [i | rest]) when i in [0, 1] do
     child = if i == 0, do: p, else: q
 
-    case move_path(child, step_down(span, i), rest) do
+    case move_sequence(child, step_down(span, i), rest) do
       {:ok, child2, cspan, loc} ->
         proc = if i == 0, do: {:iget, name, child2, q}, else: {:iget, name, p, child2}
         {:ok, proc, put_down(span, i, cspan), loc}
@@ -983,7 +984,7 @@ defmodule Muro.Session do
         {:immovable, nil}
 
       arm ->
-        case move_path(arm_body(arm), step_down(span, i), rest) do
+        case move_sequence(arm_body(arm), step_down(span, i), rest) do
           {:ok, body2, bspan, loc} ->
             arms2 = List.replace_at(arms, i, put_arm_body(arm, body2))
             {:ok, {:match, scrut, arms2}, put_down(span, i, bspan), loc}
@@ -994,9 +995,13 @@ defmodule Muro.Session do
     end
   end
 
-  defp move_path(proc, span, [k]) when is_integer(k), do: move_earlier(proc, span, k)
+  defp move_path(proc, span, path), do: move_sequence(proc, span, path)
 
-  defp move_path(proc, span, [k | rest]) when is_integer(k) do
+  defp move_sequence(_proc, _span, []), do: {:immovable, nil}
+
+  defp move_sequence(proc, span, [k]) when is_integer(k), do: move_earlier(proc, span, k)
+
+  defp move_sequence(proc, span, [k | rest]) when is_integer(k) do
     items = pieces(proc, span)
 
     case Enum.at(items, k) do
@@ -1016,7 +1021,7 @@ defmodule Muro.Session do
     end
   end
 
-  defp move_path(_proc, _span, _path), do: {:immovable, nil}
+  defp move_sequence(_proc, _span, _path), do: {:immovable, nil}
 
   defp piece_swappable?({:act, kind, _, _, _}) when kind in [:put, :get, :pick0, :pick1], do: true
   defp piece_swappable?(_), do: false
@@ -1059,11 +1064,28 @@ defmodule Muro.Session do
       if tail == [] do
         rebuild_chain(peeled)
       else
-        {cont, cspan} = rebuild_chain(tail)
+        # `tail` still carries `w`. Wrapping it again would shadow the
+        # outer binder with a second copy of the same `rec`.
+        stripped = Enum.map(tail, &strip_wrap(&1, w))
+        {cont, cspan} = rebuild_chain(stripped)
         rebuild_onto(peeled, cont, cspan)
       end
 
     wrap_recs(body, bspan, w)
+  end
+
+  defp strip_wrap(item, prefix) do
+    kept =
+      if List.starts_with?(wraps(item), prefix) do
+        Enum.drop(wraps(item), length(prefix))
+      else
+        wraps(item)
+      end
+
+    case item do
+      {:act, k, d, at, _} -> {:act, k, d, at, kept}
+      {:rest, p, s, _} -> {:rest, p, s, kept}
+    end
   end
 
   defp rebuild_onto([], cont, cspan), do: {cont, cspan}

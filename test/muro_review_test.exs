@@ -68,6 +68,62 @@ defmodule Muro.ReviewTest do
     refute moved.reason == "free session variable X"
   end
 
+  test "a branch arm that opens on a branch still swaps the nested send" do
+    book =
+      load("""
+      session gate := branch (branch (send Nat (send Nat end)) end) end
+      conform pick : gate := cover (cover (put 1 (put 2 done)) done) done
+      session bits := recv (b : Bit) on (recv (c : Bit) on (send Nat (send Nat end)) end) end
+      conform split : bits := get (b : Bit) on (get (c : Bit) on (put 1 (put 2 done)) done) done
+      data Choice : Type where
+        is-on : Choice
+        is-off : Choice
+      data Pack : Type where
+        held : Choice → Pack
+        other : Choice → Pack
+      def mark : run Π (p : Pack) → Choice :=
+        λ (p : Pack) →
+          match p motive (λ _ → Choice)
+            | held c => c
+            | other c => c
+      session ask :=
+        recv (p : Pack) (case (mark p)
+          | is-on => send Nat (send Nat end)
+          | is-off => end)
+      conform nest : ask :=
+        get (p : Pack) (match p
+          | held c => (match c
+              | is-on => put 1 (put 2 done)
+              | is-off => done)
+          | other c => (match c
+              | is-on => put 1 (put 2 done)
+              | is-off => done))
+      """)
+
+    for name <- ["pick", "split", "nest"] do
+      edge =
+        Enum.find(Explore.graph(book).edges, fn e ->
+          e.proc == name and match?({:down, _, [0, 0, 0, 1]}, e.step)
+        end)
+
+      assert edge, "#{name} has no nested second send"
+      moved = Explore.out_of_order(book, edge)
+      assert moved.kind == :still_conforms, "#{name} #{inspect(moved)}"
+    end
+  end
+
+  test "swapping sends under a nested rec does not rewrap the outer loop" do
+    book =
+      load("""
+      session nums := rec X. recv Nat (rec Y. send Nat (send Nat X))
+      conform loop : nums := rec X. get (n : Nat) (rec Y. put 1 (put 2 X))
+      """)
+
+    moved = Explore.out_of_order(book, "loop", 2)
+    assert moved.kind == :still_conforms
+    refute to_string(moved.reason) =~ "free session variable"
+  end
+
   test "a seen session is the checker's protocol" do
     {:ok, book} = Load.file(Path.expand("examples/talk.muro", File.cwd!()))
     moved = Explore.out_of_order(book, "pong", 1)
