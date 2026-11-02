@@ -29,27 +29,25 @@ defmodule Muro.Temporal do
   configurations. `{:error, message}` when it does not, or the meeting is
   out of scope. The message has no location and no declaration name.
   """
-  def judge(book, %{meeting: meeting, formula: formula}, fuel \\ nil) when is_list(book) do
+  def judge(book, %{meeting: meeting} = decl, fuel \\ nil) when is_list(book) do
     fuel = fuel || Muro.Check.default_fuel()
 
-    with {:ok, meet} <- fetch_meet(book, meeting),
-         :ok <- meeting_checks(book, meet, fuel),
-         :ok <- needs_buffer(meet),
-         {:ok, g} <- build(book, meet),
-         {cs, parents} = reachable(g),
-         :ok <- nostuck(g, cs),
-         {:ok, formulas} <- expand(book, g, formula) do
-      edges = Map.new(cs, fn conf -> {conf, Graph.edges(g, conf)} end)
+    status =
+      case fetch_meet(book, meeting) do
+        {:error, _} ->
+          :absent
 
-      case Enum.find_value(formulas, fn f ->
-             case check(g, parents, cs, edges, f) do
-               :yes -> nil
-               {:no, msg} -> {:no, msg}
-             end
-           end) do
-        nil -> {:ok, length(cs)}
-        {:no, msg} -> {:error, msg}
+        {:ok, meet} ->
+          case Muro.Check.check_def(book, meet, fuel) do
+            :ok -> :ok
+            {:note, _} -> :ok
+            {:error, _} -> :unchecked
+          end
       end
+
+    case prepare(book, meeting, status) do
+      {:ok, prep} -> judge_prepared(book, decl, {:ok, prep})
+      {:error, _} = err -> err
     end
   end
 
@@ -74,6 +72,29 @@ defmodule Muro.Temporal do
       end
     end
   end
+
+  @doc false
+  def judge_prepared(book, %{formula: formula}, {:ok, prep}) do
+    %{g: g, cs: cs, parents: parents, edges: edges} = prep
+
+    case expand(book, g, formula) do
+      {:ok, formulas} ->
+        case Enum.find_value(formulas, fn f ->
+               case check(g, parents, cs, edges, f) do
+                 :yes -> nil
+                 {:no, msg} -> {:no, msg}
+               end
+             end) do
+          nil -> {:ok, length(cs)}
+          {:no, msg} -> {:error, msg}
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  def judge_prepared(_book, _decl, {:error, msg}), do: {:error, msg}
 
   @doc """
   Transcribes `decide-nostuck` over the configurations `reachable` returned.
@@ -350,9 +371,13 @@ defmodule Muro.Temporal do
   order and the parent map (`child => {who, parent}`).
   """
   def reachable(g) do
+    Muro.Explore.note(:graph, meeting_name(g))
     start = Graph.init(g)
     levels(g, [start], MapSet.new([start]), %{}, [])
   end
+
+  defp meeting_name(%{meeting: name}), do: name
+  defp meeting_name(_g), do: nil
 
   defp walk(edges, zset, conf, seen, origin, steps) do
     if MapSet.member?(seen, conf) do
@@ -451,14 +476,6 @@ defmodule Muro.Temporal do
 
   defp needs_buffer(%{buffer: n}) when is_integer(n), do: :ok
   defp needs_buffer(_meet), do: {:error, "temporal needs a buffered meeting"}
-
-  defp meeting_checks(book, meet, fuel) do
-    case Muro.Check.check_def(book, meet, fuel) do
-      :ok -> :ok
-      {:error, _} -> {:error, "skipped because #{meet.name} does not check"}
-      {:note, _} -> :ok
-    end
-  end
 
   defp fetch_process(book, name) do
     case Enum.find(book, &(Map.get(&1, :kind) in [:conform, :read] and &1.name == name)) do

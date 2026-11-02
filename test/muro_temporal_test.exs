@@ -130,31 +130,86 @@ defmodule Muro.TemporalTest do
   end
 
   test "a rendezvous meeting is out of scope" do
-    assert {:error, msg} =
-             check("""
-             session ping := recv Nat (send Nat end)
-             session back := dual ping
-             conform pong : ping := get (k : Nat) (put 1 done)
-             conform peer : back := put 1 (get (m : Nat) done)
-             meet wire : pong with peer
-             temporal late : wire := always true
-             """)
+    events =
+      explorations(fn ->
+        assert {:error, msg} =
+                 check("""
+                 session ping := recv Nat (send Nat end)
+                 session back := dual ping
+                 conform pong : ping := get (k : Nat) (put 1 done)
+                 conform peer : back := put 1 (get (m : Nat) done)
+                 meet wire : pong with peer
+                 temporal late : wire := always true
+                 """)
 
-    assert msg =~ "late: temporal needs a buffered meeting"
+        assert msg =~ "late: temporal needs a buffered meeting"
+      end)
+
+    assert events == [meeting: "wire"]
   end
 
   test "a meeting that does not check is skipped" do
-    assert {:error, msg} =
-             check("""
-             session ping := send Nat end
-             conform a : ping := put 0 done
-             conform b : ping := put 0 done
-             meet bad : a with b
-             temporal t : bad := always true
-             """)
+    events =
+      explorations(fn ->
+        assert {:error, msg} =
+                 check("""
+                 session ping := send Nat end
+                 conform a : ping := put 0 done
+                 conform b : ping := put 0 done
+                 meet bad : a with b
+                 temporal t1 : bad := always true
+                 temporal t2 : bad := eventually true
+                 """)
 
-    assert msg =~ "skipped because bad does not check"
-    refute msg =~ "temporal needs a buffered meeting"
+        assert msg =~ "t1: skipped because bad does not check"
+        assert msg =~ "t2: skipped because bad does not check"
+        refute msg =~ "temporal needs a buffered meeting"
+      end)
+
+    assert events == [meeting: "bad"]
+  end
+
+  test "each meeting and its configuration graph are explored once" do
+    events =
+      explorations(fn ->
+        assert check(@echo) == :ok
+        assert length(Check.temporal_lines()) == 3
+      end)
+
+    assert events == [meeting: "echo-wire", graph: "echo-wire"]
+
+    refused =
+      explorations(fn ->
+        assert {:error, msg} = check(@spin)
+        assert msg =~ "drained:"
+        assert msg =~ "ends:"
+      end)
+
+    assert refused == [meeting: "spin-wire", graph: "spin-wire"]
+
+    bare =
+      explorations(fn ->
+        src = @echo |> String.split(~r/\ntemporal /) |> hd()
+        assert check(src) == :ok
+        assert Check.temporal_lines() == []
+      end)
+
+    assert bare == [meeting: "echo-wire"]
+
+    both =
+      explorations(fn ->
+        assert {:error, _} = check(@echo <> "\n" <> @spin)
+      end)
+
+    assert both |> Enum.filter(&match?({:meeting, _}, &1)) |> Enum.sort() == [
+             meeting: "echo-wire",
+             meeting: "spin-wire"
+           ]
+
+    assert both |> Enum.filter(&match?({:graph, _}, &1)) |> Enum.sort() == [
+             graph: "echo-wire",
+             graph: "spin-wire"
+           ]
   end
 
   test "a vector payload is outside the fragment" do
@@ -373,6 +428,25 @@ defmodule Muro.TemporalTest do
   defp check(src, opts \\ []) do
     assert {:ok, book} = Parser.parse(src)
     Check.check_sig(book, opts)
+  end
+
+  defp explorations(fun) do
+    Muro.Explore.listen(self())
+
+    try do
+      fun.()
+      collect_explores([])
+    after
+      Muro.Explore.silence()
+    end
+  end
+
+  defp collect_explores(acc) do
+    receive do
+      {:muro_explore, kind, meeting} -> collect_explores([{kind, meeting} | acc])
+    after
+      0 -> Enum.reverse(acc)
+    end
   end
 
   defp emit_all(path) do

@@ -7,7 +7,7 @@ summary: always, eventually, and leads_to on one buffered meeting.
 
 # Temporal
 
-A `temporal` declaration states one linear-time property of one buffered meeting. It is evidence. It adds nothing to a term, and the emitters skip it. The Zig file is the same as the C and Rust files: the declaration is not in it. The meeting stays its own entry and is checked once, as it is today.
+A `temporal` declaration states one linear-time property of one buffered meeting. It is evidence. It adds nothing to a term, and the emitters skip it. The Zig file is the same as the C and Rust files: the declaration is not in it. The meeting stays its own entry and is checked once. The configuration graph is explored once, and every temporal declaration of that meeting reads it.
 
 ```
 temporal <name> : <meeting> := <formula>
