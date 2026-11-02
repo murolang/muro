@@ -11,7 +11,7 @@ defmodule Muro.CLI.Ui do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro ui prints how to install muro_visor and open one book. The compiler does not start the explorer. muro_visor is its own package. mix muro.ui path.muro, from that package, starts the explorer and opens the book. The explorer is read-only: it does not emit code and it does not change the wall.
+      muro ui prints how to install muro_visor and open one book. The compiler does not start the explorer. muro_visor is its own package. mix muro.ui path.muro, from that package, starts the explorer and opens the book. It prints the URL of the address it binds and opens it. IPv4 loopback is http://127.0.0.1:4017/. An IPv6 address is http://[::1]:4017/. A hostname is http://localhost:4017/. The explorer is read-only: it does not emit code and it does not change the wall.
       """),
       Muro.CLI.Text.section("USAGE", Muro.CLI.Text.pre(["muro ui path.muro"])),
       Muro.CLI.Text.section(
@@ -62,7 +62,7 @@ defmodule Muro.CLI.Ui do
 
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro_visor draws this book. This command does not start the explorer. Add muro_visor to a Mix project, then open the book with its Mix task.
+      muro_visor draws this book. This command does not start the explorer. Add muro_visor to a Mix project, then open the book with its Mix task. That task prints the URL of the address it binds and opens it. IPv4 loopback is http://127.0.0.1:4017/. An IPv6 address is http://[::1]:4017/. A hostname is http://localhost:4017/.
       """),
       Muro.CLI.Text.section(
         "INSTALL",

@@ -9,6 +9,9 @@ defmodule Mix.Tasks.Muro.Ui do
       mix muro.ui path.muro
 
   The book is loaded before the server listens. The page is read-only.
+  The task prints the URL of the address it binds and opens it.
+  IPv4 loopback is `http://127.0.0.1:4017/`. An IPv6 address is
+  `http://[::1]:4017/`. A hostname is `http://localhost:4017/`.
   In a Mix project, add `{:muro_visor, "~> 0.1.0"}` and run `mix deps.get`
   first. Outside a project, the task installs that package and starts it.
   """

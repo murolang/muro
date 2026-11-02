@@ -140,6 +140,60 @@ defmodule MuroVisor.TaskTest do
     :gen_tcp.close(sock)
   end
 
+  test "the url brackets an ipv6 address and keeps ipv4 and hostnames" do
+    saved = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
+
+    on_exit(fn ->
+      Application.put_env(:muro_visor, MuroVisor.Endpoint, saved)
+    end)
+
+    full = {0x2001, 0x0DB8, 0x85A3, 0x0000, 0x0000, 0x8A2E, 0x0370, 0x7334}
+
+    for {ip, host, url} <- [
+          {{0, 0, 0, 0, 0, 0, 0, 1}, "::1", "http://[::1]:4017/"},
+          {full, "2001:db8:85a3::8a2e:370:7334", "http://[2001:db8:85a3::8a2e:370:7334]:4017/"},
+          {{0, 0, 0, 0, 0, 0, 0, 0}, "::", "http://[::]:4017/"},
+          {{127, 0, 0, 1}, "127.0.0.1", "http://127.0.0.1:4017/"},
+          {:loopback, "127.0.0.1", "http://127.0.0.1:4017/"},
+          {:any, "0.0.0.0", "http://0.0.0.0:4017/"},
+          {"localhost", "localhost", "http://localhost:4017/"},
+          {"visor.example", "visor.example", "http://visor.example:4017/"},
+          {"::1", "::1", "http://[::1]:4017/"},
+          {"[::1]", "::1", "http://[::1]:4017/"},
+          {~c"::1", "::1", "http://[::1]:4017/"},
+          {~c"localhost", "localhost", "http://localhost:4017/"}
+        ] do
+      Application.put_env(:muro_visor, MuroVisor.Endpoint, http: [ip: ip, port: 4017])
+
+      assert MuroVisor.url() == url
+      parsed = URI.parse(url)
+      assert parsed.scheme == "http"
+      assert parsed.host == host
+      assert parsed.port == 4017
+
+      if String.contains?(host, ":") do
+        assert String.starts_with?(parsed.authority, "[#{host}]")
+      else
+        refute String.contains?(url, "[")
+      end
+
+      merged = MuroVisor.merge_endpoint(http: [ip: ip, port: 4017])
+      assert "//#{authority_host(host)}" in merged[:check_origin]
+    end
+
+    kept =
+      MuroVisor.merge_endpoint(
+        http: [ip: {0, 0, 0, 0, 0, 0, 0, 1}, port: 4017],
+        check_origin: ["//example.com"]
+      )
+
+    assert kept[:check_origin] == ["//example.com"]
+  end
+
+  defp authority_host(host) do
+    if String.contains?(host, ":"), do: "[#{host}]", else: host
+  end
+
   defp mix_ui(args) do
     System.cmd("mix", ["muro.ui" | args],
       cd: Path.expand("..", __DIR__),

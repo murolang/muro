@@ -249,6 +249,32 @@ defmodule Muro.CliHelpTest do
     end
   end
 
+  test "muro ui names an ipv4 address, a bracketed ipv6 address, and a hostname" do
+    urls = [
+      "http://127.0.0.1:4017/",
+      "http://[::1]:4017/",
+      "http://localhost:4017/"
+    ]
+
+    {:ok, out, ""} = Muro.CLI.Ui.run(["book.muro"])
+    help = Muro.CLI.Ui.help()
+
+    pages = [
+      out,
+      help,
+      File.read!("manual/explorer.md"),
+      File.read!("ui/README.md"),
+      File.read!("ui/CHANGELOG.md"),
+      File.read!("ui/lib/mix/tasks/muro.ui.ex"),
+      File.read!("ui/lib/muro_visor.ex")
+    ]
+
+    for page <- pages, url <- urls do
+      assert page =~ url
+      refute page =~ "http://::1:"
+    end
+  end
+
   test "muro ui prints how to install muro_visor and does not start the explorer" do
     {out, err, code} = cli(["ui", "book.muro"])
     assert code == 0
