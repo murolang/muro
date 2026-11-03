@@ -90,7 +90,8 @@ defmodule MuroVisor.LayoutTest do
     assert attr_class(keyed, "##{edge.id} path.edge") =~ "selected"
 
     page = html_response(get(conn, "/"), 200)
-    assert page =~ "overflow-wrap: anywhere"
+    assert page =~ "overflow-wrap: normal"
+    refute page =~ "overflow-wrap: anywhere"
     assert page =~ "overflow-x: hidden"
     assert page =~ "#outline pre"
 
@@ -110,14 +111,33 @@ defmodule MuroVisor.LayoutTest do
     assert html =~ "id=\"zoom-150\""
   end
 
-  test "the default view keeps labels readable and focus is not a box", %{conn: conn} do
-    page = html_response(get(conn, "/"), 200)
+  test "the definitions view keeps labels readable and focus is not a box", %{conn: conn} do
+    page = html_response(get(conn, "/?view=all"), 200)
 
     assert page =~ ~s(id="zoom-fit")
     assert page =~ "checked"
-    assert page =~ "max(100%, calc(var(--native-width) * 0.75))"
+    assert page =~ "#zoom-fit:checked ~ .graph-scroll svg#book-graph"
+    assert page =~ "calc(var(--native-width) * 11 / 12)"
+    assert page =~ "100cqw - 24px"
+    assert page =~ "100cqh - 24px"
+    assert page =~ "aspect-ratio: var(--native-width) / var(--native-height)"
+    assert page =~ "#zoom-100:checked ~ .graph-scroll svg#book-graph"
+    assert page =~ "#zoom-150:checked ~ .graph-scroll svg#book-graph"
+    assert page =~ "aspect-ratio: auto"
+    assert page =~ ~s(preserveAspectRatio="xMidYMid meet")
+    assert page =~ "--native-height:"
     assert page =~ "font: 12px"
-    assert 12 * 0.75 >= 9
+
+    assert page =~
+             "svg text { font: 12px ui-sans-serif, sans-serif; fill: #1c1917; stroke: none; }"
+
+    assert page =~ "paint-order: stroke fill"
+    refute page =~ "0.75"
+
+    assert page =~ "svg rect.cluster-frame { fill: #fafaf9; stroke: #d6d3d1; stroke-width: 1px; }"
+
+    assert page =~
+             "svg .edge-dual { stroke: #1e3a8a; stroke-width: 1.5px; stroke-dasharray: 8 5; }"
 
     assert page =~ "svg g:focus, svg g:focus-visible { outline: none; }"
     assert page =~ "svg g:focus-visible > path.edge"
@@ -165,12 +185,35 @@ defmodule MuroVisor.LayoutTest do
     paths = Enum.map(once.edges, & &1.d) ++ Enum.map(trans_edges, & &1.d)
     assert_distinct_paths(paths, label)
     assert_no_collinear_overlap(once.edges ++ trans_edges, label)
+    assert_track_spacing(once.edges ++ trans_edges, layout_boxes(once), label)
     assert_distinct_ports(once.nodes, once.edges, label)
+    assert_badges_clear(once, label)
 
     for node <- once.nodes, meet <- node.meetings do
       assert_distinct_ports(meet.children, meet.transitions, label)
     end
   end
+
+  defp assert_badges_clear(picture, label) do
+    badges =
+      for edge <- picture.edges, Map.has_key?(edge, :bw) do
+        %{x: edge.bx, y: edge.by, w: edge.bw, h: edge.bh, id: edge.id}
+      end
+
+    nodes = Enum.map(picture.nodes, &%{x: &1.x, y: &1.y, w: &1.w, h: &1.h, id: &1.id})
+
+    for {a, i} <- Enum.with_index(badges), {b, j} <- Enum.with_index(badges), i < j do
+      refute overlap?(inflate(a, 1), b), "#{label} badges #{a.id} and #{b.id} overlap"
+    end
+
+    for badge <- badges, node <- nodes do
+      refute overlap?(inflate(badge, 1), node),
+             "#{label} badge #{badge.id} overlaps #{node.id}"
+    end
+  end
+
+  defp inflate(box, n),
+    do: %{box | x: box.x - n, y: box.y - n, w: box.w + 2 * n, h: box.h + 2 * n}
 
   defp assert_no_overlap(boxes, label) do
     for {a, i} <- Enum.with_index(boxes), {b, j} <- Enum.with_index(boxes), i < j do
@@ -316,6 +359,58 @@ defmodule MuroVisor.LayoutTest do
         s1 <- s1,
         s2 <- s2 do
       refute share?(s1, s2), "#{label} #{e1.id} overlaps #{e2.id}"
+    end
+  end
+
+  defp layout_boxes(picture) do
+    Enum.flat_map(picture.nodes, fn node ->
+      kids = Enum.flat_map(node.meetings, & &1.children)
+      [node | kids]
+    end)
+  end
+
+  # Channel tracks and stubs that leave different nodes stay a few pixels apart.
+  # Stubs that share one node are the ports on that side.
+  defp assert_track_spacing(edges, nodes, label) do
+    indexed = for edge <- edges, seg <- segments(edge.d), do: {edge.id, seg}
+
+    for {{id1, s1}, i} <- Enum.with_index(indexed),
+        {{id2, s2}, j} <- Enum.with_index(indexed),
+        i < j,
+        id1 != id2,
+        gap = parallel_gap(s1, s2),
+        is_integer(gap) and gap > 0 and gap < 6,
+        not same_node_stubs?(s1, s2, nodes) do
+      flunk("#{label} #{id1} and #{id2} run #{gap}px apart")
+    end
+  end
+
+  defp parallel_gap({{x1, y1}, {x2, y2}}, {{x3, y3}, {x4, y4}}) do
+    cond do
+      y1 == y2 and y3 == y4 and y1 != y3 and
+          ranges_overlap?(min(x1, x2), max(x1, x2), min(x3, x4), max(x3, x4)) ->
+        abs(y1 - y3)
+
+      x1 == x2 and x3 == x4 and x1 != x3 and
+          ranges_overlap?(min(y1, y2), max(y1, y2), min(y3, y4), max(y3, y4)) ->
+        abs(x1 - x3)
+
+      true ->
+        nil
+    end
+  end
+
+  defp same_node_stubs?(s1, s2, nodes) do
+    case {stub_node(s1, nodes), stub_node(s2, nodes)} do
+      {id, id} when not is_nil(id) -> true
+      _ -> false
+    end
+  end
+
+  defp stub_node({{x1, y1}, {x2, y2}}, nodes) do
+    case Enum.filter(nodes, &(on_boundary?(x1, y1, &1) or on_boundary?(x2, y2, &1))) do
+      [node] -> node.id
+      _ -> nil
     end
   end
 

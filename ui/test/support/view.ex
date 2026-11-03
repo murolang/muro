@@ -16,7 +16,7 @@ defmodule MuroVisor.View do
 
   def open_book(conn, path) do
     assert {:ok, _stamp} = MuroVisor.Book.open(path)
-    {:ok, view, _html} = live(conn, "/")
+    {:ok, view, _html} = live(conn, "/?view=all")
     view
   end
 

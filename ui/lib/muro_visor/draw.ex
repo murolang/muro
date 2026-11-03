@@ -2,12 +2,14 @@ defmodule MuroVisor.Draw do
   @moduledoc false
 
   alias Muro.Emit.Name
+  alias MuroVisor.Pack
 
   @pad 16
   @node_gap 32
   @rank_gap 88
   @grid_gap 64
   @track 16
+  @min_track 6
   @gutter 12
   @pitch 16
   @inset 6
@@ -17,22 +19,169 @@ defmodule MuroVisor.Draw do
   @char 7
   @label_h 14
   @sweeps 8
+  @label_px 12
+  @min_label_px 11
+  @fit_margin 12
+  @pane_w 1070
+  @pane_h 760
+  # A chain of configurations is one row. The port sits low enough that the
+  # label box (baseline minus 12) stays inside the row, above the stroke.
+  @meet_head 20
+  @state_h 32
+  @state_port 24
+  @meet_gap 4
+  # Room for the cluster title above its nodes, inside the frame.
+  @title_band 16
 
   @doc """
-  Layered positions for the book graph.
+  Positions for the book graph.
 
-  Nodes sit in ranks along use edges. A rank is a column, and a book
-  with no use edges wraps into a wide grid. Each edge takes one track
-  in the channel between two ranks, spread so edges into one node do
-  not cross. A long edge bends at a dummy in every rank it crosses, and
-  that dummy keeps the row the ordering gave it. The same book always
-  yields the same coordinates.
+  A book of sessions is one cluster per base session, packed into a grid.
+  Each cluster is a framed region titled with the session name. Other books
+  keep a layered layout. The same book always yields the same coordinates.
+  Fit scales that picture to the pane, and stops at the scale where a
+  #{@label_px}px label is still #{@min_label_px}px.
   """
   def layout(%{nodes: nodes, edges: edges}) do
+    edges = fold_steps(edges)
     prepared = Enum.map(nodes, &prepare/1)
-    picture = place(prepared, book_edges(edges))
+    legend = legend(edges)
+    groups = Pack.assign(prepared, edges)
+
+    picture =
+      if Enum.any?(groups, &(&1.name != "other")) do
+        pack_groups(groups, edges, legend)
+      else
+        place(prepared, book_edges(edges, legend))
+      end
+
+    picture = finish(picture)
     nodes = Enum.map(picture.nodes, &mount_meetings/1)
-    %{picture | nodes: nodes}
+
+    picture
+    |> Map.put(:nodes, nodes)
+    |> Map.put(:legend, legend)
+  end
+
+  @doc """
+  Scale that fits `width` by `height` into a pane, keeping labels readable.
+
+  The result is uniform. When the fitted scale would draw a #{@label_px}px
+  label below #{@min_label_px}px, the scale stays at #{@min_label_px}/#{@label_px}
+  and the pane scrolls.
+  """
+  def fit_scale(width, height, pane_w, pane_h)
+      when width > 0 and height > 0 and pane_w > 0 and pane_h > 0 do
+    raw = raw_scale(width, height, pane_w, pane_h)
+
+    if raw * @label_px + 1.0e-9 >= @min_label_px do
+      raw
+    else
+      @min_label_px / @label_px
+    end
+  end
+
+  @doc false
+  def raw_scale(width, height, pane_w, pane_h) do
+    avail_w = pane_w - 2 * @fit_margin
+    avail_h = pane_h - 2 * @fit_margin
+    min(avail_w / width, avail_h / height)
+  end
+
+  @doc """
+  Clusters the book graph would draw, in source order, plus `"other"`.
+  """
+  def clusters(%{nodes: nodes, edges: edges}) do
+    edges = fold_steps(edges)
+    Pack.assign(Enum.map(nodes, &prepare/1), edges)
+  end
+
+  defp pack_groups(groups, edges, legend) do
+    drawn = book_edges(edges, legend)
+
+    owner =
+      Enum.reduce(groups, %{}, fn group, acc ->
+        Enum.reduce(group.nodes, acc, &Map.put(&2, &1.id, group.name))
+      end)
+
+    {locals, cross} =
+      Enum.split_with(drawn, fn edge ->
+        from = Map.get(owner, edge.from)
+        from != nil and from == Map.get(owner, edge.to)
+      end)
+
+    pictures =
+      Enum.map(groups, fn group ->
+        local = Enum.filter(locals, &(Map.get(owner, &1.from) == group.name))
+
+        picture =
+          if group.name == "other" do
+            place(group.nodes, local)
+          else
+            Pack.cluster(%{name: group.name, nodes: group.nodes, edges: local})
+          end
+
+        picture
+        |> Map.put(:name, group.name)
+        |> frame_cluster()
+      end)
+
+    {nodes, edges, clusters, width, height} =
+      Pack.arrange(pictures, cross, &raw_scale(&1, &2, @pane_w, @pane_h))
+
+    %{width: width, height: height, nodes: nodes, edges: edges, clusters: clusters}
+  end
+
+  # The title occupies a band inside the frame, clear of the nodes.
+  defp frame_cluster(picture) do
+    height = picture.height + @title_band
+
+    picture
+    |> Map.put(:nodes, Enum.map(picture.nodes, &shift_node(&1, 0, @title_band)))
+    |> Map.put(:edges, Enum.map(picture.edges, &shift_edge(&1, 0, @title_band)))
+    |> Map.put(:height, height)
+    |> Map.put(:frame, %{
+      name: picture.name || "other",
+      x: 0,
+      y: 0,
+      w: picture.width,
+      h: height
+    })
+  end
+
+  defp finish(picture) do
+    clusters = Map.get(picture, :clusters, [])
+    edges = seat_badges(picture.edges, picture.nodes, clusters)
+    picture = Map.put(picture, :clusters, clusters)
+    lift(%{picture | edges: edges})
+  end
+
+  # One step edge per conform and session, however many spine steps use it.
+  # The kept id is the first in book order, so a click still resolves.
+  defp fold_steps(edges) do
+    {order, map} =
+      Enum.reduce(edges, {[], %{}}, fn edge, {order, map} ->
+        if edge.use == :step do
+          key = {edge.from, edge.to}
+
+          if Map.has_key?(map, key) do
+            {order, Map.update!(map, key, &%{&1 | count: &1.count + 1})}
+          else
+            {[key | order], Map.put(map, key, Map.put(edge, :count, 1))}
+          end
+        else
+          key = {:keep, edge.id}
+          {[key | order], Map.put(map, key, Map.put(edge, :count, 1))}
+        end
+      end)
+
+    order |> Enum.reverse() |> Enum.map(&Map.fetch!(map, &1))
+  end
+
+  defp legend(edges) do
+    present = edges |> Enum.map(&to_string(&1.use)) |> Enum.uniq()
+    preferred = ["meet", "step", "dual", "def"]
+    Enum.filter(preferred, &(&1 in present)) ++ Enum.reject(present, &(&1 in preferred))
   end
 
   defp prepare(node) do
@@ -43,12 +192,13 @@ defmodule MuroVisor.Draw do
     inner_h =
       case meetings do
         [] -> 36
-        ms -> @header + Enum.sum(Enum.map(ms, & &1.h)) + 8 * length(ms)
+        ms -> @header + Enum.sum(Enum.map(ms, & &1.h)) + @meet_gap * length(ms)
       end
 
     %{
       id: node.id,
       name: label,
+      bare: node.name,
       kind: to_string(node.kind),
       mode: to_string(node.mode),
       class: if(meetings == [], do: "node", else: "node compound"),
@@ -76,14 +226,14 @@ defmodule MuroVisor.Draw do
   defp layout_meeting(session, meet, children, transitions) do
     nodes =
       Enum.map(children, fn child ->
-        label = "#{child.meeting} #{state_id(child)}"
+        label = state_id(child)
 
         %{
           id: child.id,
           label: label,
           state: state_id(child),
-          w: max(text_w(label) + 20, 72),
-          h: 28,
+          w: max(text_w(label) + 16, 36),
+          h: @state_h,
           x: 0,
           y: 0,
           meetings: []
@@ -98,21 +248,31 @@ defmodule MuroVisor.Draw do
           to: t.to,
           label: text_label(t.label),
           use: "trans",
+          count: 1,
           d: "",
           lx: 0,
           ly: 0
         }
       end)
 
-    picture = place(nodes, edges)
-    picture = shift_picture(picture, 0, @header)
+    picture =
+      if chain_row?(nodes, edges) do
+        row_meeting(nodes, edges)
+      else
+        with_profile(meeting_profile(), fn ->
+          place(nodes, edges)
+        end)
+      end
+
+    picture = picture |> reseat_meeting() |> shift_picture(0, @meet_head)
+    label_w = edges |> Enum.map(&text_w(&1.label)) |> Enum.max(fn -> 0 end)
 
     %{
       id: "m-" <> Name.encode(session) <> "-" <> Name.encode(meet),
       name: meet,
       x: 0,
       y: 0,
-      w: max(picture.width, text_w(meet) + 16),
+      w: max(picture.width, max(text_w(meet) + 16, label_w + 16)),
       h: picture.height,
       children:
         Enum.map(picture.nodes, fn n ->
@@ -128,20 +288,21 @@ defmodule MuroVisor.Draw do
   defp mount_meetings(node) do
     {meetings, _} =
       Enum.map_reduce(node.meetings, node.y + @header, fn meet, y ->
-        {shift_meeting(meet, node.x + 8 - meet.x, y - meet.y), y + meet.h + 8}
+        {shift_meeting(meet, node.x + 8 - meet.x, y - meet.y), y + meet.h + @meet_gap}
       end)
 
     %{node | meetings: meetings}
   end
 
-  defp book_edges(edges) do
+  defp book_edges(edges, _legend) do
     Enum.map(edges, fn edge ->
       %{
         id: edge.id,
         from: edge.from,
         to: edge.to,
-        label: to_string(edge.use),
+        label: "",
         use: to_string(edge.use),
+        count: Map.get(edge, :count, 1),
         d: "",
         lx: 0,
         ly: 0
@@ -149,7 +310,36 @@ defmodule MuroVisor.Draw do
     end)
   end
 
-  defp place([], _edges), do: %{width: @pad * 2, height: @pad * 2, nodes: [], edges: []}
+  defp meeting_profile do
+    %{rank_gap: 18, node_gap: 8, grid_gap: 12, track: 8, gutter: 6, pad: 6, pitch: 8}
+  end
+
+  defp with_profile(profile, fun) do
+    previous = Process.get(:muro_draw_profile)
+    Process.put(:muro_draw_profile, profile)
+
+    try do
+      fun.()
+    after
+      if previous == nil do
+        Process.delete(:muro_draw_profile)
+      else
+        Process.put(:muro_draw_profile, previous)
+      end
+    end
+  end
+
+  defp prof(key, default) do
+    case Process.get(:muro_draw_profile) do
+      profile when is_map(profile) -> Map.get(profile, key, default)
+      _ -> default
+    end
+  end
+
+  defp place([], _edges) do
+    pad = prof(:pad, @pad)
+    %{width: pad * 2, height: pad * 2, nodes: [], edges: [], name: nil}
+  end
 
   defp place(nodes, edges) do
     known = MapSet.new(nodes, & &1.id)
@@ -190,8 +380,10 @@ defmodule MuroVisor.Draw do
     col_w = ordered |> Enum.map(& &1.w) |> Enum.max()
     rows = Enum.chunk_every(ordered, cols)
 
+    pad = prof(:pad, @pad)
+
     {positions, _y} =
-      Enum.reduce(rows, {%{}, @pad}, fn row, {acc, y} ->
+      Enum.reduce(rows, {%{}, pad}, fn row, {acc, y} ->
         row_h =
           row
           |> Enum.map(fn node -> node.h + loop_count(node.id, edges) * @loop_band end)
@@ -200,12 +392,12 @@ defmodule MuroVisor.Draw do
         acc =
           Enum.reduce(Enum.with_index(row), acc, fn {node, c}, acc ->
             loops = loop_count(node.id, edges) * @loop_band
-            x = @pad + c * (col_w + @grid_gap)
+            x = pad + c * (col_w + prof(:grid_gap, @grid_gap))
 
             Map.put(acc, node.id, %{node | x: x, y: y + loops})
           end)
 
-        {acc, y + row_h + @node_gap}
+        {acc, y + row_h + prof(:node_gap, @node_gap)}
       end)
 
     placed = Enum.map(nodes, &Map.fetch!(positions, &1.id))
@@ -351,7 +543,7 @@ defmodule MuroVisor.Draw do
     ranks = order |> Map.keys() |> Enum.sort()
     last = List.last(ranks)
 
-    Enum.reduce(ranks, {[], %{}, %{}, @pad}, fn r, {nodes, cols, ys, x} ->
+    Enum.reduce(ranks, {[], %{}, %{}, prof(:pad, @pad)}, fn r, {nodes, cols, ys, x} ->
       ids = Map.get(order, r, [])
       width = column_width(ids, by_id)
       {col_nodes, ys, bottom} = stack_ids(ids, by_id, edges, ys, x)
@@ -378,7 +570,8 @@ defmodule MuroVisor.Draw do
     gaps = if n >= 2, do: tuck_outside(gaps, n), else: gaps
 
     {nodes, ys, y} =
-      Enum.reduce(Enum.with_index(reals), {[], ys, @pad}, fn {id, i}, {nodes, ys, y} ->
+      Enum.reduce(Enum.with_index(reals), {[], ys, prof(:pad, @pad)}, fn {id, i},
+                                                                         {nodes, ys, y} ->
         above = if i == 0, do: Map.get(gaps, 0, []), else: []
         {ys, used} = occupy(above, ys, y, :compact)
         y = y + used + if(above == [], do: 0, else: 4)
@@ -390,7 +583,8 @@ defmodule MuroVisor.Draw do
         below = Map.get(gaps, i + 1, [])
         mode = if n < 2, do: :compact, else: :spread
         {ys, used} = occupy(below, ys, bottom + 4, mode)
-        advance = if below == [], do: @node_gap, else: max(@node_gap, used + 8)
+        gap = prof(:node_gap, @node_gap)
+        advance = if below == [], do: gap, else: max(gap, used + 8)
         {[node | nodes], ys, bottom + advance}
       end)
 
@@ -434,9 +628,9 @@ defmodule MuroVisor.Draw do
     {ys, length(ids) * step}
   end
 
-  defp dummy_step(:spread, _n), do: @track
-  defp dummy_step(:compact, n) when n <= 1, do: @track
-  defp dummy_step(:compact, n), do: max(min(@track, div(140, n)), 1)
+  defp dummy_step(:spread, _n), do: prof(:track, @track)
+  defp dummy_step(:compact, n) when n <= 1, do: prof(:track, @track)
+  defp dummy_step(:compact, n), do: max(min(prof(:track, @track), div(140, n)), @min_track)
 
   # The strip beside a rank holds same-rank edges. The rest of the gap is
   # the channel, wide enough for one track per edge that crosses it.
@@ -447,15 +641,18 @@ defmodule MuroVisor.Draw do
     strip_width(same_n) +
       cond do
         cross_n > 0 -> channel_width(cross_n)
-        has_next -> @rank_gap
+        has_next -> prof(:rank_gap, @rank_gap)
         true -> 0
       end
   end
 
   defp strip_width(0), do: 0
   defp strip_width(n), do: channel_width(n)
-  defp channel_width(n) when n <= 1, do: @rank_gap
-  defp channel_width(n), do: max(@rank_gap, 2 * @gutter + (n - 1) * @track)
+  defp channel_width(n) when n <= 1, do: prof(:rank_gap, @rank_gap)
+
+  defp channel_width(n) do
+    max(prof(:rank_gap, @rank_gap), 2 * prof(:gutter, @gutter) + (n - 1) * prof(:track, @track))
+  end
 
   defp ordered_ports(segments, edges, placed) do
     attachments =
@@ -540,11 +737,16 @@ defmodule MuroVisor.Draw do
   defp disjoint_shift([], _prev), do: 0
 
   defp disjoint_shift(ys, prev) do
-    limit = max(Enum.max(prev) - Enum.min(ys) + 1, 0)
+    limit =
+      max(Enum.max(prev) - Enum.min(ys) + @min_track * max(MapSet.size(prev), 1), @min_track)
 
     Enum.find(0..limit, limit, fn k ->
-      Enum.all?(ys, &(not MapSet.member?(prev, &1 + k)))
+      Enum.all?(ys, &clear?(&1 + k, prev))
     end)
+  end
+
+  defp clear?(y, prev) do
+    not Enum.any?(prev, fn p -> abs(p - y) < @min_track end)
   end
 
   defp apply_rank_shifts(placed, shifts, order) do
@@ -636,10 +838,11 @@ defmodule MuroVisor.Draw do
   defp spread(left, width, 1), do: [left + div(width, 2)]
 
   defp spread(left, width, n) do
-    inner = max(width - 2 * @gutter, n - 1)
+    gutter = prof(:gutter, @gutter)
+    inner = max(width - 2 * gutter, n - 1)
 
     Enum.map(0..(n - 1), fn i ->
-      left + @gutter + div(i * inner, n - 1)
+      left + gutter + div(i * inner, n - 1)
     end)
   end
 
@@ -755,15 +958,17 @@ defmodule MuroVisor.Draw do
     side = max(length(ports.left), length(ports.right))
     top = length(ports.top)
 
+    pitch = prof(:pitch, @pitch)
+
     h =
       if side <= 1,
         do: node.h,
-        else: max(node.h, 2 * @inset + (side - 1) * @pitch)
+        else: max(node.h, 2 * @inset + (side - 1) * pitch)
 
     w =
       if top <= 1,
         do: node.w,
-        else: max(node.w, 2 * @inset + (top - 1) * @pitch)
+        else: max(node.w, 2 * @inset + (top - 1) * pitch)
 
     %{node | w: w, h: h}
   end
@@ -910,43 +1115,101 @@ defmodule MuroVisor.Draw do
 
   defp separate_labels(edges, nodes) do
     Enum.reduce(edges, [], fn edge, placed ->
-      placed ++ [seat_label(edge, nodes, placed)]
+      placed ++ [seat_label(edge, nodes, placed, edges)]
     end)
   end
 
-  defp seat_label(edge, nodes, placed) do
+  defp seat_label(edge, nodes, placed, edges) do
     {x, y} = label_anchor(edge)
-    nudge_label(edge, x, y, nodes, placed, 0)
+    nudge_label(edge, x, y, nodes, placed, edges, 0)
   end
 
+  # The label sits on this edge's own track, beside the stroke, not on
+  # the midpoint where another edge crosses.
   defp label_anchor(%{d: d, lx: lx, ly: ly}) do
-    if String.contains?(d, " C "), do: {lx, ly}, else: path_midpoint(d)
+    if String.contains?(d, " C "), do: {lx, ly}, else: track_point(d)
   end
 
-  defp nudge_label(edge, x, y, _nodes, _placed, n) when n > 48 do
+  defp track_point(d) do
+    segs =
+      d
+      |> path_pairs()
+      |> then(fn pts -> Enum.zip(pts, tl(pts)) end)
+      |> Enum.reject(fn {a, b} -> a == b end)
+
+    vertical = Enum.filter(segs, fn {{x1, _y1}, {x2, _y2}} -> x1 == x2 end)
+
+    chosen =
+      cond do
+        vertical != [] -> Enum.max_by(vertical, fn {a, b} -> manhattan(a, b) end)
+        segs != [] -> Enum.max_by(segs, fn {a, b} -> manhattan(a, b) end)
+        true -> nil
+      end
+
+    case chosen do
+      nil ->
+        path_midpoint(d)
+
+      {{x, y1}, {x, y2}} ->
+        {x + 8, div(y1 + y2, 2)}
+
+      {{x1, y1}, {x2, y2}} ->
+        {div(x1 + x2, 2), min(y1, y2) - 10}
+    end
+  end
+
+  defp nudge_label(edge, x, y, _nodes, _placed, _edges, n) when n > 48 do
     %{edge | lx: x, ly: max(y, 12)}
   end
 
-  defp nudge_label(edge, x, y, nodes, placed, n) do
+  defp nudge_label(edge, x, y, nodes, placed, edges, n) do
     {dx, dy} = spiral_at(n)
     candidate = %{edge | lx: x + dx, ly: max(y + dy, 12)}
 
-    if label_clash?(candidate, nodes, placed) do
-      nudge_label(edge, x, y, nodes, placed, n + 1)
+    if label_clash?(candidate, nodes, placed, edges) do
+      nudge_label(edge, x, y, nodes, placed, edges, n + 1)
     else
       candidate
     end
   end
 
-  defp label_clash?(%{label: ""}, _nodes, _placed), do: false
+  defp label_clash?(%{label: ""}, _nodes, _placed, _edges), do: false
 
-  defp label_clash?(edge, nodes, placed) do
+  defp label_clash?(edge, nodes, placed, edges) do
     box = label_box(edge)
 
     Enum.any?(placed, fn other ->
       other.label != "" and boxes_overlap?(label_box(other), box)
-    end) or Enum.any?(nodes, &boxes_overlap?(box, &1))
+    end) or Enum.any?(nodes, &boxes_overlap?(box, &1)) or hits_other?(box, edge, edges)
   end
+
+  defp hits_other?(box, edge, edges) do
+    Enum.any?(edges, fn other ->
+      other.id != edge.id and hits_box?(box, other.d)
+    end)
+  end
+
+  defp hits_box?(box, d) do
+    d
+    |> path_pairs()
+    |> then(fn pts -> Enum.zip(pts, tl(pts)) end)
+    |> Enum.any?(fn {{x1, y1}, {x2, y2}} ->
+      cond do
+        x1 == x2 ->
+          x1 >= box.x and x1 <= box.x + box.w and
+            ranges_overlap?(min(y1, y2), max(y1, y2), box.y, box.y + box.h)
+
+        y1 == y2 ->
+          y1 >= box.y and y1 <= box.y + box.h and
+            ranges_overlap?(min(x1, x2), max(x1, x2), box.x, box.x + box.w)
+
+        true ->
+          false
+      end
+    end)
+  end
+
+  defp ranges_overlap?(a1, a2, b1, b2), do: max(a1, b1) < min(a2, b2)
 
   defp spiral_at(0), do: {0, 0}
 
@@ -1014,57 +1277,420 @@ defmodule MuroVisor.Draw do
   end
 
   defp bounds(nodes, edges) do
-    boxes =
-      Enum.flat_map(nodes, fn n ->
-        [{n.x, n.y}, {n.x + n.w, n.y + n.h}]
-      end) ++
-        Enum.flat_map(edges, fn e ->
-          b = label_box(e)
-          path_pairs(e.d) ++ [{b.x, b.y}, {b.x + b.w, b.y + b.h}]
-        end)
-
-    max_x = boxes |> Enum.map(&elem(&1, 0)) |> Enum.max(fn -> @pad end)
-    max_y = boxes |> Enum.map(&elem(&1, 1)) |> Enum.max(fn -> @pad end)
-    %{width: max(max_x + @pad, @pad * 2), height: max(max_y + @pad, @pad * 2)}
+    pad = prof(:pad, @pad)
+    boxes = extent_points(nodes, edges)
+    max_x = boxes |> Enum.map(&elem(&1, 0)) |> Enum.max(fn -> pad end)
+    max_y = boxes |> Enum.map(&elem(&1, 1)) |> Enum.max(fn -> pad end)
+    %{width: max(max_x + pad, pad * 2), height: max(max_y + pad, pad * 2)}
   end
 
   defp lift(picture) do
-    pts =
-      Enum.flat_map(picture.nodes, fn n ->
-        [{n.x, n.y}, {n.x + n.w, n.y + n.h}]
-      end) ++
-        Enum.flat_map(picture.edges, fn e ->
-          b = label_box(e)
-          path_pairs(e.d) ++ [{b.x, b.y}]
-        end)
+    pad = prof(:pad, @pad)
+    pts = picture_points(picture)
+    min_x = pts |> Enum.map(&elem(&1, 0)) |> Enum.min(fn -> pad end)
+    min_y = pts |> Enum.map(&elem(&1, 1)) |> Enum.min(fn -> pad end)
+    dx = max(0, pad - min_x)
+    dy = max(0, pad - min_y)
 
-    min_x = pts |> Enum.map(&elem(&1, 0)) |> Enum.min(fn -> @pad end)
-    min_y = pts |> Enum.map(&elem(&1, 1)) |> Enum.min(fn -> @pad end)
-    dx = max(0, @pad - min_x)
-    dy = max(0, @pad - min_y)
+    picture =
+      if dx == 0 and dy == 0 do
+        picture
+      else
+        shift_picture(picture, dx, dy)
+      end
 
-    if dx == 0 and dy == 0 do
-      picture
-    else
-      picture = shift_picture(picture, dx, dy)
-      Map.merge(picture, bounds(picture.nodes, picture.edges))
+    Map.merge(picture, size_of(picture))
+  end
+
+  defp size_of(picture) do
+    pad = prof(:pad, @pad)
+    pts = picture_points(picture)
+    max_x = pts |> Enum.map(&elem(&1, 0)) |> Enum.max(fn -> pad end)
+    max_y = pts |> Enum.map(&elem(&1, 1)) |> Enum.max(fn -> pad end)
+    %{width: max(max_x + pad, pad * 2), height: max(max_y + pad, pad * 2)}
+  end
+
+  defp picture_points(picture) do
+    extent_points(picture.nodes, picture.edges) ++
+      frame_points(Map.get(picture, :clusters, []))
+  end
+
+  defp frame_points(clusters) do
+    Enum.flat_map(clusters, fn cluster ->
+      [{cluster.x, cluster.y}, {cluster.x + cluster.w, cluster.y + cluster.h}]
+    end)
+  end
+
+  defp extent_points(nodes, edges) do
+    Enum.flat_map(nodes, fn n ->
+      [{n.x, n.y}, {n.x + n.w, n.y + n.h}]
+    end) ++ Enum.flat_map(edges, &edge_points/1)
+  end
+
+  defp edge_points(edge) do
+    box = label_box(edge)
+
+    badge =
+      if Map.has_key?(edge, :bw) do
+        [{edge.bx, edge.by}, {edge.bx + edge.bw, edge.by + edge.bh}]
+      else
+        []
+      end
+
+    path_pairs(edge.d) ++ [{box.x, box.y}, {box.x + box.w, box.y + box.h}] ++ badge
+  end
+
+  defp reseat_meeting(picture) do
+    edges = seat_config_labels(picture.edges, picture.nodes)
+    pad_meeting(%{picture | edges: edges}, 6)
+  end
+
+  # Source order is already the order the checker walked. A meeting whose
+  # edges only join neighbours (or loop) is one row, with the label in the
+  # gap, so the compound stays short enough to fit the pane.
+  defp chain_row?(nodes, edges) do
+    index = Map.new(Enum.with_index(nodes), fn {node, i} -> {node.id, i} end)
+
+    Enum.all?(edges, fn edge ->
+      a = Map.get(index, edge.from)
+      b = Map.get(index, edge.to)
+      a != nil and b != nil and (a == b or abs(a - b) == 1)
+    end) and length(Enum.uniq(Enum.map(edges, &{&1.from, &1.to}))) == length(edges)
+  end
+
+  defp row_meeting(nodes, edges) do
+    gaps = row_gaps(nodes, edges)
+
+    {placed, _} =
+      Enum.map_reduce(Enum.with_index(nodes), 0, fn {node, i}, x ->
+        node = %{node | x: x, y: 0, h: @state_h}
+        {node, x + node.w + Enum.at(gaps, i, 0)}
+      end)
+
+    by_id = Map.new(placed, &{&1.id, &1})
+    drawn = Enum.map(edges, &route_row(&1, by_id))
+    %{nodes: placed, edges: drawn, width: 0, height: 0}
+  end
+
+  defp row_gaps(nodes, edges) do
+    Enum.map(Enum.with_index(nodes), fn {node, i} ->
+      nxt = Enum.at(nodes, i + 1)
+
+      if nxt == nil do
+        0
+      else
+        labels =
+          for edge <- edges,
+              MapSet.new([edge.from, edge.to]) == MapSet.new([node.id, nxt.id]),
+              do: text_w(edge.label)
+
+        max(Enum.max(labels, fn -> 0 end) + 8, 16)
+      end
+    end)
+  end
+
+  defp route_row(%{from: id, to: id} = edge, by_id) do
+    node = Map.fetch!(by_id, id)
+    x1 = node.x + slot(node.w, 0, 2)
+    x2 = node.x + slot(node.w, 1, 2)
+    y = node.y
+    cy = y - 16
+
+    %{
+      edge
+      | d: "M #{x1} #{y} C #{x1} #{cy} #{x2} #{cy} #{x2} #{y}",
+        lx: x1,
+        ly: max(cy + 12, 12)
+    }
+  end
+
+  defp route_row(edge, by_id) do
+    a = Map.fetch!(by_id, edge.from)
+    b = Map.fetch!(by_id, edge.to)
+    forward = a.x <= b.x
+    y = if forward, do: a.y + @state_port, else: a.y + a.h
+    x1 = if forward, do: a.x + a.w, else: a.x
+    x2 = if forward, do: b.x, else: b.x + b.w
+    polyline(edge, [x1, y, x2, y], 0, 0)
+  end
+
+  defp seat_config_labels(edges, nodes) do
+    Enum.reduce(edges, [], fn edge, placed ->
+      edge = place_config_label(edge)
+      edge = clear_label(edge, placed, nodes)
+      placed ++ [edge]
+    end)
+  end
+
+  defp place_config_label(%{label: label} = edge) when label in [nil, ""], do: edge
+
+  defp place_config_label(edge) do
+    w = text_w(edge.label)
+
+    case longest_horizontal(edge.d) do
+      {x1, y, x2} ->
+        %{edge | lx: div(x1 + x2, 2) - div(w, 2), ly: y - 12}
+
+      nil ->
+        pts = path_pairs(edge.d)
+        top = pts |> Enum.map(&elem(&1, 1)) |> Enum.min()
+        left = pts |> Enum.map(&elem(&1, 0)) |> Enum.min()
+        right = pts |> Enum.map(&elem(&1, 0)) |> Enum.max()
+        %{edge | lx: div(left + right, 2) - div(w, 2), ly: top - 14}
     end
   end
 
-  defp shift_picture(picture, dx, dy) do
+  defp longest_horizontal(d) do
+    d
+    |> path_pairs()
+    |> then(fn pts -> Enum.zip(pts, tl(pts)) end)
+    |> Enum.filter(fn {{_x1, y1}, {_x2, y2}} -> y1 == y2 end)
+    |> Enum.reject(fn {a, b} -> a == b end)
+    |> case do
+      [] ->
+        nil
+
+      segs ->
+        {{x1, y}, {x2, _}} = Enum.max_by(segs, fn {a, b} -> abs(elem(b, 0) - elem(a, 0)) end)
+        {min(x1, x2), y, max(x1, x2)}
+    end
+  end
+
+  defp clear_label(%{label: label} = edge, _placed, _nodes) when label in [nil, ""], do: edge
+
+  defp clear_label(edge, placed, nodes) do
+    obstacles =
+      Enum.flat_map(placed, fn other ->
+        if other.label in [nil, ""], do: [], else: [label_box(other)]
+      end) ++ Enum.map(nodes, fn node -> %{x: node.x, y: node.y, w: node.w, h: node.h} end)
+
+    rise(edge, obstacles)
+  end
+
+  defp rise(edge, obstacles) do
+    box = label_box(edge)
+
+    case Enum.filter(obstacles, &boxes_overlap?(box, &1)) do
+      [] ->
+        edge
+
+      hits ->
+        top = Enum.min(Enum.map(hits, & &1.y))
+        above = Enum.filter(obstacles, &(&1.y < top))
+        rise(%{edge | ly: top - 6}, above)
+    end
+  end
+
+  defp pad_meeting(picture, margin) do
+    pts = extent_points(picture.nodes, picture.edges)
+    min_x = pts |> Enum.map(&elem(&1, 0)) |> Enum.min(fn -> 0 end)
+    min_y = pts |> Enum.map(&elem(&1, 1)) |> Enum.min(fn -> 0 end)
+    max_x = pts |> Enum.map(&elem(&1, 0)) |> Enum.max(fn -> margin end)
+    max_y = pts |> Enum.map(&elem(&1, 1)) |> Enum.max(fn -> margin end)
+    dx = max(0, margin - min_x)
+    dy = max(0, margin - min_y)
+    nodes = Enum.map(picture.nodes, &shift_node(&1, dx, dy))
+    edges = Enum.map(picture.edges, &shift_edge(&1, dx, dy))
+
     %{
       picture
-      | width: picture.width + dx,
-        height: picture.height + dy,
-        nodes: Enum.map(picture.nodes, &shift_node(&1, dx, dy)),
-        edges: Enum.map(picture.edges, &shift_edge(&1, dx, dy))
+      | nodes: nodes,
+        edges: edges,
+        width: max_x + dx + margin,
+        height: max_y + dy + margin
     }
   end
+
+  # A count sits beside the middle of its edge. If that pill would touch a
+  # node, a title, or another count, it walks along the edge until it is clear.
+  defp seat_badges(edges, nodes, clusters) do
+    base =
+      Enum.map(nodes, fn node -> %{x: node.x, y: node.y, w: node.w, h: node.h} end) ++
+        Enum.map(clusters, &title_obstacle/1)
+
+    {edges, _placed} =
+      Enum.map_reduce(edges, [], fn edge, placed ->
+        if Map.get(edge, :count, 1) > 1 do
+          edge = put_badge(edge, base ++ placed)
+          {edge, [badge_rect(edge) | placed]}
+        else
+          {edge, placed}
+        end
+      end)
+
+    edges
+  end
+
+  defp title_obstacle(%{name: name, x: x, y: y}) do
+    %{x: x + 8, y: y + 1, w: text_w(name), h: 14}
+  end
+
+  defp put_badge(edge, obstacles) do
+    text = Integer.to_string(edge.count)
+    w = text_w(text) + 8
+    h = 16
+
+    box =
+      Enum.find_value(badge_spots(edge.d), fn {x, y, nx, ny} ->
+        rect = %{x: x + nx - div(w, 2), y: y + ny - div(h, 2), w: w, h: h}
+        if badge_clear?(rect, obstacles), do: rect
+      end) || badge_fallback(edge, w, h)
+
+    Map.merge(edge, %{
+      bx: box.x,
+      by: box.y,
+      bw: box.w,
+      bh: box.h,
+      tx: box.x + div(box.w, 2),
+      ty: box.y + 12
+    })
+  end
+
+  defp badge_rect(edge), do: %{x: edge.bx, y: edge.by, w: edge.bw, h: edge.bh}
+
+  defp badge_fallback(edge, w, h) do
+    {x, y} = path_midpoint(edge.d)
+    %{x: x - div(w, 2), y: y - h - 6, w: w, h: h}
+  end
+
+  # Two pixels of air, so a pill that only touches a box still counts as a hit.
+  defp badge_clear?(rect, obstacles) do
+    Enum.all?(obstacles, &(not near?(rect, &1)))
+  end
+
+  defp near?(a, b) do
+    a.x < b.x + b.w + 2 and b.x < a.x + a.w + 2 and a.y < b.y + b.h + 2 and
+      b.y < a.y + a.h + 2
+  end
+
+  defp badge_spots(d) do
+    samples = path_samples(d, 4)
+
+    ordered =
+      case samples do
+        [] ->
+          []
+
+        _ ->
+          mid = div(List.last(samples).dist, 2)
+
+          Enum.sort_by(samples, fn sample ->
+            {abs(sample.dist - mid), sample.dist}
+          end)
+      end
+
+    Enum.flat_map(ordered, fn sample ->
+      Enum.map([12, -12, 20, -20, 28, -28], fn off ->
+        {nx, ny} = perp_offset(sample.dx, sample.dy, off)
+        {sample.x, sample.y, nx, ny}
+      end)
+    end)
+  end
+
+  defp perp_offset(dx, dy, off) do
+    len = :math.sqrt(dx * dx + dy * dy)
+    len = if len < 1.0e-6, do: 1.0, else: len
+    {round(-dy / len * off), round(dx / len * off)}
+  end
+
+  defp path_samples(d, step) do
+    case flatten_path(d) do
+      [] ->
+        []
+
+      [point] ->
+        [%{x: elem(point, 0), y: elem(point, 1), dist: 0, dx: 1.0, dy: 0.0}]
+
+      points ->
+        walk_samples(points, step)
+    end
+  end
+
+  defp walk_samples(points, step) do
+    {_prev, _dist, acc} =
+      Enum.reduce(tl(points), {hd(points), 0.0, []}, fn nxt, {{x1, y1}, dist, acc} ->
+        {x2, y2} = nxt
+        len = :math.sqrt((x2 - x1) * (x2 - x1) + (y2 - y1) * (y2 - y1))
+        dx = if len < 1.0e-6, do: 1.0, else: (x2 - x1) / len
+        dy = if len < 1.0e-6, do: 0.0, else: (y2 - y1) / len
+        count = max(trunc(len / step), 1)
+
+        samples =
+          Enum.map(0..count, fn i ->
+            t = min(i * step, len)
+
+            %{
+              x: round(x1 + dx * t),
+              y: round(y1 + dy * t),
+              dist: round(dist + t),
+              dx: dx,
+              dy: dy
+            }
+          end)
+
+        {nxt, dist + len, acc ++ samples}
+      end)
+
+    Enum.uniq_by(acc, fn sample -> {sample.x, sample.y} end)
+  end
+
+  defp flatten_path(d) do
+    tokens = Regex.scan(~r/[MLC]|-?\d+/, d) |> Enum.map(&hd/1)
+    decode_path(tokens, [])
+  end
+
+  defp decode_path([], acc), do: Enum.reverse(acc)
+  defp decode_path(["M", x, y | rest], acc), do: decode_path(rest, [{num(x), num(y)} | acc])
+  defp decode_path(["L", x, y | rest], acc), do: decode_path(rest, [{num(x), num(y)} | acc])
+
+  defp decode_path(["C", x1, y1, x2, y2, x, y | rest], [p0 | _] = acc) do
+    p1 = {num(x1), num(y1)}
+    p2 = {num(x2), num(y2)}
+    p3 = {num(x), num(y)}
+
+    extra =
+      1..4
+      |> Enum.map(fn i -> cubic(p0, p1, p2, p3, i / 4) end)
+      |> Enum.reverse()
+
+    decode_path(rest, extra ++ acc)
+  end
+
+  defp decode_path([_token | rest], acc), do: decode_path(rest, acc)
+
+  defp cubic({x0, y0}, {x1, y1}, {x2, y2}, {x3, y3}, t) do
+    u = 1 - t
+
+    x = u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3
+    y = u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3
+    {round(x), round(y)}
+  end
+
+  defp num(token), do: String.to_integer(token)
+
+  defp shift_picture(picture, dx, dy) do
+    picture
+    |> Map.update!(:width, &(&1 + dx))
+    |> Map.update!(:height, &(&1 + dy))
+    |> Map.update!(:nodes, fn nodes -> Enum.map(nodes, &shift_node(&1, dx, dy)) end)
+    |> Map.update!(:edges, fn edges -> Enum.map(edges, &shift_edge(&1, dx, dy)) end)
+    |> Map.update(:clusters, [], fn clusters ->
+      Enum.map(clusters, &shift_cluster(&1, dx, dy))
+    end)
+  end
+
+  defp shift_cluster(cluster, dx, dy), do: %{cluster | x: cluster.x + dx, y: cluster.y + dy}
 
   defp shift_node(node, dx, dy), do: %{node | x: node.x + dx, y: node.y + dy}
 
   defp shift_edge(edge, dx, dy) do
-    %{edge | d: shift_path(edge.d, dx, dy), lx: edge.lx + dx, ly: edge.ly + dy}
+    edge = %{edge | d: shift_path(edge.d, dx, dy), lx: edge.lx + dx, ly: edge.ly + dy}
+
+    if Map.has_key?(edge, :bx) do
+      %{edge | bx: edge.bx + dx, by: edge.by + dy, tx: edge.tx + dx, ty: edge.ty + dy}
+    else
+      edge
+    end
   end
 
   defp shift_meeting(meet, dx, dy) do

@@ -13,9 +13,13 @@ defmodule MuroVisor.ReadonlyTest do
 
     for node <- graph.nodes do
       view |> element("#node-#{node.id}") |> render_click()
+
+      if to_string(node.kind) == "meet" do
+        view |> element("#view-all") |> render_click()
+      end
     end
 
-    for edge <- graph.edges do
+    for edge <- MuroVisor.Draw.layout(graph).edges do
       view |> element("#edge-#{edge.id}") |> render_click()
     end
 

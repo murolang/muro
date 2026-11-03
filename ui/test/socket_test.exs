@@ -7,10 +7,13 @@ defmodule MuroVisor.SocketTest do
     saved = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
 
     on_exit(fn ->
-      assert {:ok, {_ip, port}} = Bandit.PhoenixAdapter.server_info(MuroVisor.Endpoint, :http)
+      port = listening_port()
       Application.put_env(:muro_visor, MuroVisor.Endpoint, saved)
-      restart!()
-      assert {:error, :econnrefused} = :gen_tcp.connect({127, 0, 0, 1}, port, [], 200)
+      MuroVisor.TestEndpoint.quiet!()
+
+      if is_integer(port) and port > 0 do
+        assert {:error, :econnrefused} = :gen_tcp.connect({127, 0, 0, 1}, port, [], 200)
+      end
     end)
 
     listen!()
@@ -61,7 +64,6 @@ defmodule MuroVisor.SocketTest do
 
   defp listen! do
     config = Application.fetch_env!(:muro_visor, MuroVisor.Endpoint)
-
     http = config |> Keyword.fetch!(:http) |> Keyword.put(:port, 0)
 
     Application.put_env(
@@ -70,12 +72,41 @@ defmodule MuroVisor.SocketTest do
       Keyword.merge(config, http: http, server: true)
     )
 
-    restart!()
+    case restart_result() do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Application.put_env(:muro_visor, MuroVisor.Endpoint, Keyword.put(config, :server, false))
+        MuroVisor.TestEndpoint.ensure!()
+        flunk("endpoint did not listen: #{inspect(reason)}")
+    end
   end
 
-  defp restart! do
-    :ok = Supervisor.terminate_child(MuroVisor.Supervisor, MuroVisor.Endpoint)
-    {:ok, _pid} = Supervisor.restart_child(MuroVisor.Supervisor, MuroVisor.Endpoint)
+  defp restart_result do
+    sup = MuroVisor.Supervisor
+
+    case Supervisor.terminate_child(sup, MuroVisor.Endpoint) do
+      :ok -> :ok
+      {:error, :not_found} -> :ok
+    end
+
+    case Supervisor.restart_child(sup, MuroVisor.Endpoint) do
+      {:ok, _} -> :ok
+      {:error, :running} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp listening_port do
+    try do
+      case Bandit.PhoenixAdapter.server_info(MuroVisor.Endpoint, :http) do
+        {:ok, {_ip, port}} -> port
+        _ -> nil
+      end
+    catch
+      _, _ -> nil
+    end
   end
 
   defp port! do

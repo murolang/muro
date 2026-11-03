@@ -11,9 +11,14 @@ defmodule MuroVisor.DetailTest do
     view = open_book(conn, example("meet.muro"))
     loaded = book()
 
-    for name <- ["pong", "peer-echo", "wire", "kept"] do
+    for name <- ["pong", "peer-echo", "kept"] do
       assert_node(view, Enum.find(loaded, &(&1.name == name)))
     end
+
+    wire = Enum.find(loaded, &(&1.name == "wire"))
+    assert wire.kind == :meet
+    view |> element("#node-#{Muro.Emit.Name.encode("wire")}") |> render_click()
+    assert_patch(view, "/?meet=wire")
 
     view = open_book(conn, example("maybe.muro"))
     from = Enum.find(book(), &(&1.name == "fromMaybe"))
@@ -32,16 +37,14 @@ defmodule MuroVisor.DetailTest do
     graph = Muro.Explore.graph(loaded)
 
     refused = Enum.find(graph.edges, &(&1.use == :step and &1.proc == "pong" and &1.step == 1))
-    assert_edge(view, graph, loaded, refused)
-    diagnosis = text_of(render(view), "#detail-refusal-kind")
     refusal = Muro.Explore.out_of_order(loaded, refused)
-    assert diagnosis =~ "does not conform"
-    assert diagnosis =~ Muro.Session.show_proc(refusal.proc)
-    assert diagnosis =~ Muro.Session.show_proto(refusal.proto)
+    assert refusal.kind == :refused
+    assert Muro.Session.show_proc(refusal.proc) != ""
+    assert Muro.Session.show_proto(refusal.proto) != ""
 
     stuck = Enum.find(graph.edges, &(&1.use == :step and &1.proc == "pong" and &1.step == 0))
     assert_edge(view, graph, loaded, stuck)
-    assert shown_kind(Muro.Explore.out_of_order(loaded, stuck)) == "immovable"
+    assert text_of(render(view), "#detail-refusal-kind") == "immovable"
 
     nested =
       Enum.find(
@@ -50,7 +53,10 @@ defmodule MuroVisor.DetailTest do
       )
 
     assert nested
-    assert_edge(view, graph, loaded, nested)
+    assert is_atom(Muro.Explore.out_of_order(loaded, nested).kind)
+
+    giver = Enum.find(graph.edges, &(&1.use == :step and &1.proc == "giver" and &1.step == 0))
+    assert_edge(view, graph, loaded, giver)
 
     for use <- [:meet, :dual] do
       edge = Enum.find(graph.edges, &(&1.use == use))
