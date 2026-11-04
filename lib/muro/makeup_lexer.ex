@@ -50,11 +50,13 @@ defmodule Muro.MakeupLexer do
 
   defp tag(:whitespace), do: :whitespace
   defp tag(:comment), do: :comment
+  defp tag(:string), do: :string
+  defp tag(:declaration), do: :keyword_declaration
   defp tag(:keyword), do: :keyword
-  defp tag(:tag), do: :keyword_type
-  defp tag(:builtin), do: :name_builtin
+  defp tag(:type), do: :keyword_type
   defp tag(:operator), do: :operator
   defp tag(:punctuation), do: :punctuation
+  defp tag(:function), do: :name_function
   defp tag(:name), do: :name
   defp tag(:number), do: :number_integer
   defp tag(:text), do: :error
