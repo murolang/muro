@@ -66,7 +66,7 @@ defmodule Muro.SessionTest do
     assert box.proto == {:send, {:pair, {:dat, "Maybe", [:nat]}, :bit}, :end}
   end
 
-  test "a session payload ends at the next declaration" do
+  test "a missing end after a payload is reported at the next declaration" do
     src = """
     data Reply : Type where
       written : Reply
@@ -76,10 +76,29 @@ defmodule Muro.SessionTest do
     def kept : run Nat := 0
     """
 
+    assert {:error, "6:1: expected end"} = Parser.parse(src)
+
+    src = """
+    session ping := send Nat
+    session other := end
+    """
+
+    assert {:error, "2:1: expected end"} = Parser.parse(src)
+
+    src = """
+    data Reply : Type where
+      written : Reply
+      invalid : Reply
+
+    session ping := send Reply end
+    def kept : run Nat := 0
+    """
+
     assert {:ok, book} = Parser.parse(src)
     assert Check.check_sig(book) == :ok
     ping = Enum.find(book, &(&1.name == "ping"))
     assert ping.proto == {:send, {:dat, "Reply", []}, :end}
+    assert Enum.any?(book, &match?(%{name: "kept"}, &1))
   end
 
   test "a parameterised payload is an application, including a nested one" do

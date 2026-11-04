@@ -2076,11 +2076,13 @@ defmodule Muro.Parser do
           with {:ok, ty, rest} <- parse_pay(rest, bound) do
             rest = skip(rest)
 
-            # A declaration, or the end of the book, closes this
-            # continuation as `end`. `send Reply` then `def kept` is
-            # `send Reply end`. A binder still writes its continuation.
-            if proto_done?(rest) do
-              {:ok, {tag, ty, :end}, rest}
+            # The continuation is written. A missing `end` at the end of
+            # the book, or where the next declaration starts, is an error
+            # at that point. `send Reply` then `def kept` fails at `def`
+            # and leaves the declaration. A binder still writes its
+            # continuation, and a written `end` is still consumed.
+            if end_missing?(rest) do
+              {:error, err(rest, "expected end")}
             else
               with {:ok, p, rest} <- parse_proto(rest, bound) do
                 {:ok, {tag, ty, p}, rest}
@@ -2100,11 +2102,12 @@ defmodule Muro.Parser do
   defp ev_tag(:send), do: :esend
   defp ev_tag(:recv), do: :erecv
 
-  # The next token begins a declaration, or the book ends. It is not a
-  # protocol, and it is not consumed here.
-  defp proto_done?(s) do
+  # The protocol did not continue. The book is over, a declaration
+  # starts, or a closer ends the surrounding form. The token stays.
+  defp end_missing?(s) do
     s = skip(s)
-    s == "" or decl_boundary?(s)
+
+    s == "" or choreo_boundary?(s) or has_prefix?(s, ")") or has_prefix?(s, "}")
   end
 
   # `recv (b : Bit) on S T` receives a bit. `b0` continues as `S` and
