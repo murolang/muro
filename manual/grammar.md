@@ -99,7 +99,7 @@ term       ::= atom atom*                  -- juxtaposition is application
              | term "::" term              -- desugars to cons
              | term ("→" | "->") term      -- non-dependent, = Π (_ : A) → B
              | term "~" term               -- bisimulation (also prefix "bisim")
-atom       ::= "Type" | "Nat" | "I64" | "F32" | "Unit" | "Empty" | "refl" | "tt" | "0" | "?"
+atom       ::= "Type" | "Nat" | "I64" | "F32" | "Unit" | "Empty" | "refl" | "tt" | numeral | "?"
              | suc | pi | lam | let | match | matchEmpty | rewrite | idt
              | stream | unfold | uncons
              | "fst" atom | "snd" atom          -- sugar for let
@@ -122,6 +122,7 @@ word       ::= "U8" | "U32" | "U64" | "WBool" | "wtrue" | "wfalse" | "wnone"
              | "eqi" atom atom | "lti" atom atom | "lei" atom atom
              | "andi" atom atom | "ori" atom atom | "xori" atom atom
              | "shli" atom atom | "shri" atom atom
+numeral    ::= digit+                 -- the token "0" is zero; any other digit string is a closed numeral
 suc        ::= "suc" "(" term ")" | "suc" atom
 stream     ::= "Stream" atom
 unfold     ::= "unfold" atom atom         -- seed, λ s → (head, next_seed)

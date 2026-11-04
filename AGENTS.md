@@ -92,7 +92,7 @@ The C backend refuses some terms that the Elixir backend accepts. `U8`, `U32`, `
 - **Reusing an affine variable inside a recursive `def` can be reported as `recursive call does not descend on a smaller argument`.** Before you change your recursion, check whether a non-reusable variable is used twice.
 - **`match` branches must follow the order the constructors were declared in.**
 - **Erased guards cannot rule out `run` branches.** An `evidence`/erased argument does not make a branch of a `run` term unreachable. Encode the invariant in a run-mode indexed type instead (see [Indexed data](manual/indexed.md)).
-- **`Nat` is unary (Peano), so large constants are slow** to check and to run. `U8`, `U32`, `U64`, and `I64` are the fixed-width words (see [Machine numbers](manual/machine.md)). `toNat` of a wide residue can be `out of fuel`.
+- **A long chain of `suc` is slow** to check and to run. A closed numeral is a machine integer. `toNat` of a `U8`, `U32`, `U64`, or `I64` residue is that integer, and word operations on it do not spend fuel in proportion to the value (see [Machine numbers](manual/machine.md)).
 - **`out of fuel` is not acceptance, and it is not a type error.** The checker gave up reducing. Raise `--fuel` and check again.
 
 ## Manual

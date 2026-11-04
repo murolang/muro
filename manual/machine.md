@@ -13,7 +13,7 @@ In brief: `U8`, `U32`, `U64`, and `I64` are fixed-width residues. Wrapping arith
 
 `U8` is ℕ modulo 256. `U32` is ℕ modulo 2^32. `U64` is ℕ modulo 2^64. `I64` is those same 64 bits read as two's complement. The bit pattern of −1 is 2^64−1. The bit pattern of the minimum is 2^63.
 
-A value of one of these types is that residue. `toU8`, `toU32`, `toU64`, and `toI64` are total on Peano `Nat` and reduce modulo the width. There is no kind-less `ofNat`. `toNat` returns the residue as a Peano numeral, so `toNat` of `I64` −1 is the numeral 2^64−1, not a signed integer. A residue longer than the checker's fuel does not reduce. That failure is `out of fuel`, and it is not acceptance.
+A value of one of these types is that residue, a machine integer. `toU8`, `toU32`, `toU64`, and `toI64` are total on `Nat` and reduce modulo the width. A closed numeral is that integer. A Peano numeral still reduces by its constructors. There is no kind-less `ofNat`. `toNat` returns the residue as a closed numeral, so `toNat` of `I64` −1 is 2^64−1, not a signed integer. A `match` still sees `0` and `suc`: it peels one successor from a closed numeral and does not expand the residue. Word operations and that numeral do not spend fuel in proportion to the value.
 
 `asU8`, `asU32`, `asU64`, and `asI64` cast. A cast is the residue modulo the destination width. Narrowing keeps the low bits. Widening an unsigned word zero-extends. `U64` and `I64` are the same width, so each cast reinterprets the bits.
 
