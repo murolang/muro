@@ -163,7 +163,9 @@ defmodule MuroVisor.ExplorerLive do
               phx-value-name={node.bare}
             >
               <rect class={node.class} x={node.x} y={node.y} width={node.w} height={node.h} />
-              <text x={node.x + 8} y={node.y + 18}>{node.name}</text>
+              <text class="node-label muro-code" x={node.x + 8} y={node.y + 18}>
+                {MuroVisor.Code.svg(node.name)}
+              </text>
               <g
                 :for={meet <- node.meetings}
                 id={"meeting-#{meet.id}"}
@@ -216,7 +218,9 @@ defmodule MuroVisor.ExplorerLive do
                     stroke="#78716c"
                     stroke-width="1.25"
                   />
-                  <text :if={t.label != ""} class="edge-label" x={t.lx} y={t.ly}>{t.label}</text>
+                  <text :if={t.label != ""} class="edge-label muro-code" x={t.lx} y={t.ly}>
+                    {MuroVisor.Code.svg(t.label)}
+                  </text>
                 </g>
               </g>
             </g>
@@ -239,8 +243,8 @@ defmodule MuroVisor.ExplorerLive do
                 d={edge.d}
                 stroke-width="1.5"
               />
-              <text :if={edge.label != ""} class="edge-label" x={edge.lx} y={edge.ly}>
-                {edge.label}
+              <text :if={edge.label != ""} class="edge-label muro-code" x={edge.lx} y={edge.ly}>
+                {MuroVisor.Code.svg(edge.label)}
               </text>
               <rect
                 :if={edge.count > 1}
@@ -280,7 +284,7 @@ defmodule MuroVisor.ExplorerLive do
             data-session={group.base}
           >
             <h2 class="session-head">
-              <span class="session-name">{group.base}</span>: <code>{group.spec}</code>
+              <span class="session-name">{group.base}</span>: {MuroVisor.Code.inline(group.spec)}
             </h2>
             <div class="sheet" role="table">
               <div class="sheet-head" role="row">
@@ -305,7 +309,7 @@ defmodule MuroVisor.ExplorerLive do
                 <span class="name">{meet.name}</span>
                 <span class="parties">{meet.left} ⇄ {meet.right}</span>
                 <span class="steps">{meet.steps}</span>
-                <span class="evidence">{meet.evidence}</span>
+                <span class="evidence">{MuroVisor.Code.inline(meet.evidence)}</span>
               </.link>
             </div>
           </section>
@@ -316,10 +320,10 @@ defmodule MuroVisor.ExplorerLive do
           <p id="meeting-checked" class="badge">checked</p>
           <h2>Session</h2>
           <p id="context-session">{@focus.base}</p>
-          <pre id="context-spec">{@focus.spec}</pre>
+          {MuroVisor.Code.pre(@focus.spec, id: "context-spec")}
           <h2>Dual</h2>
           <p :if={@focus.dual_name} id="context-dual-name">{@focus.dual_name}</p>
-          <pre id="context-dual">{@focus.dual}</pre>
+          {MuroVisor.Code.pre(@focus.dual, id: "context-dual")}
           <h2>Conforms</h2>
           {conform_button(@focus.left_select, @focus.left_dom, @focus.left, @focus.left_loc)}
           {conform_button(@focus.right_select, @focus.right_dom, @focus.right, @focus.right_loc)}
@@ -330,26 +334,27 @@ defmodule MuroVisor.ExplorerLive do
           <p id="detail-title">{@detail.title}</p>
           <p id="detail-loc">{@detail.loc}</p>
           <p id="detail-refusal-kind">{@detail.kind}</p>
+          {MuroVisor.Code.blocks(@detail.excerpts)}
         </section>
         <h2>Outline</h2>
-        <pre :if={!is_map(@outline)} id="outline">{@outline}</pre>
+        <pre :if={!is_map(@outline)} id="outline" class="muro-code">{MuroVisor.Code.html(@outline)}</pre>
         <section :if={is_map(@outline)} id="outline">
           <h2 id="outline-backend">{@backend}</h2>
           <details id="outline-names" open>
             <summary>names</summary>
-            <pre>{"names: #{@outline.names}"}</pre>
+            <pre class="muro-code">{MuroVisor.Code.html("names: #{@outline.names}")}</pre>
           </details>
           <details id="outline-signatures">
             <summary>signatures</summary>
-            <pre>{@outline.signatures}</pre>
+            <pre class="muro-code">{MuroVisor.Code.html(@outline.signatures)}</pre>
           </details>
           <details id="outline-layouts">
             <summary>layouts</summary>
-            <pre>{"layouts:\n#{@outline.layouts}"}</pre>
+            <pre class="muro-code">{MuroVisor.Code.html("layouts:\n#{@outline.layouts}")}</pre>
           </details>
           <details id="outline-clauses">
             <summary>clauses</summary>
-            <pre>{@outline.clauses}</pre>
+            <pre class="muro-code">{MuroVisor.Code.html(@outline.clauses)}</pre>
           </details>
         </section>
       </aside>

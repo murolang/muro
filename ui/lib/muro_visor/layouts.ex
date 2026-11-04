@@ -3,7 +3,15 @@ defmodule MuroVisor.Layouts do
 
   use Phoenix.Component
 
+  # Makeup's own sheets. The class is the visor's code class, so a
+  # second keyword list cannot drift from `Muro.MakeupLexer`.
+  @light_css Makeup.stylesheet(:default_style, "muro-code")
+  @dark_css Makeup.stylesheet(:one_dark_style, "theme-dark .muro-code")
+
   def root(assigns) do
+    assigns =
+      assign(assigns, :ink, {:safe, ["<style>", @light_css, "\n", @dark_css, "</style>"]})
+
     ~H"""
     <!DOCTYPE html>
     <html lang="en">
@@ -12,6 +20,15 @@ defmodule MuroVisor.Layouts do
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <meta name="csrf-token" content={Plug.CSRFProtection.get_csrf_token()} />
         <title>muro visor</title>
+        <script>
+          (function () {
+            try {
+              var theme = new URLSearchParams(window.location.search).get("theme")
+              var dark = theme === "dark" || (theme !== "light" && window.matchMedia("(prefers-color-scheme: dark)").matches)
+              document.documentElement.classList.add(dark ? "theme-dark" : "theme-light")
+            } catch (e) {}
+          })()
+        </script>
         <script src="/assets/phoenix.min.js">
         </script>
         <script src="/assets/phoenix_live_view.min.js">
@@ -106,6 +123,64 @@ defmodule MuroVisor.Layouts do
           @media (max-width: 800px) {
             main { grid-template-columns: 1fr; }
           }
+        </style>
+        {@ink}
+        <style>
+          .session-head code { white-space: pre-wrap; }
+          pre.muro-code { background-color: #fff; border-radius: 4px; }
+          code.muro-code { background-color: transparent; }
+          svg text.muro-code { background-color: transparent; }
+          .muro-code .k, svg .k { color: #6d28d9; fill: #6d28d9; font-weight: 600; }
+          .muro-code .kt, svg .kt { color: #0f766e; fill: #0f766e; }
+          .muro-code .n, svg .n { color: #1c1917; fill: #1c1917; }
+          .muro-code .nb, svg .nb { color: #1d4ed8; fill: #1d4ed8; }
+          .muro-code .mi, svg .mi, .muro-code .m, svg .m { color: #b45309; fill: #b45309; }
+          .muro-code .o, svg .o { color: #c2410c; fill: #c2410c; }
+          .muro-code .p, svg .p { color: #44403c; fill: #44403c; }
+          .muro-code .c, svg .c, .muro-code .c1, svg .c1 { color: #78716c; fill: #78716c; font-style: italic; }
+          .muro-code .w, svg .w { color: inherit; fill: inherit; }
+          .muro-code .err, svg .err { color: #c2410c; fill: #c2410c; border: 0; background: none; font-style: normal; }
+          .muro-source { margin: 4px 0 8px; max-width: 100%; overflow-x: auto; font: 12px/1.45 ui-monospace, monospace; }
+          .muro-source .row { display: block; }
+          .muro-source .ln { display: inline-block; min-width: 2.6em; padding-right: 0.8em; text-align: right; color: #a8a29e; user-select: none; }
+          .muro-source .row.marked { background: #fef3c7; }
+          .muro-source .here, .muro-code .here { background: #fde68a; border-radius: 2px; }
+          html.theme-dark body { color: #e7e5e4; background: #1c1917; }
+          html.theme-dark header { border-bottom-color: #44403c; }
+          html.theme-dark .graph-scroll { background: #292524; border-color: #44403c; }
+          html.theme-dark svg .node { fill: #292524; stroke: #a8a29e; }
+          html.theme-dark svg .compound { fill: #44403c; }
+          html.theme-dark svg rect.cluster-frame { fill: #1c1917; stroke: #57534e; }
+          html.theme-dark svg text.cluster-title { fill: #d6d3d1; }
+          html.theme-dark svg text { fill: #e7e5e4; }
+          html.theme-dark svg rect.count-badge { fill: #292524; stroke: #a8a29e; }
+          html.theme-dark svg text.count-badge { fill: #e7e5e4; }
+          html.theme-dark .sequence text { fill: #e7e5e4; }
+          html.theme-dark .sequence .lane-session, html.theme-dark .sequence .loop-note { fill: #d6d3d1; }
+          html.theme-dark .sequence .step-no { fill: #e7e5e4; stroke: #1c1917; }
+          html.theme-dark .sequence .evidence-pill { fill: #292524; stroke: #a8a29e; }
+          html.theme-dark .sequence .evidence-badge { fill: #e7e5e4; }
+          html.theme-dark .sequence rect, html.theme-dark .sequence .choice-diamond { fill: #292524; stroke: #a8a29e; }
+          html.theme-dark .sequence .term-mark { fill: #e7e5e4; }
+          html.theme-dark .sequence .lifeline, html.theme-dark .sequence .arrow { stroke: #a8a29e; }
+          html.theme-dark #seq-arrow path { fill: #a8a29e; }
+          html.theme-dark .sheet-head { color: #a8a29e; border-bottom-color: #44403c; }
+          html.theme-dark .meet-row { border-bottom-color: #292524; }
+          html.theme-dark .meet-row:hover { background: #292524; }
+          html.theme-dark .views a { color: inherit; }
+          html.theme-dark pre.muro-code { background-color: #292524; color: #e7e5e4; }
+          html.theme-dark .muro-code .k, html.theme-dark svg .k { color: #c4b5fd; fill: #c4b5fd; }
+          html.theme-dark .muro-code .kt, html.theme-dark svg .kt { color: #5eead4; fill: #5eead4; }
+          html.theme-dark .muro-code .n, html.theme-dark svg .n { color: #e7e5e4; fill: #e7e5e4; }
+          html.theme-dark .muro-code .nb, html.theme-dark svg .nb { color: #93c5fd; fill: #93c5fd; }
+          html.theme-dark .muro-code .mi, html.theme-dark svg .mi, html.theme-dark .muro-code .m, html.theme-dark svg .m { color: #fdba74; fill: #fdba74; }
+          html.theme-dark .muro-code .o, html.theme-dark svg .o { color: #fdba74; fill: #fdba74; }
+          html.theme-dark .muro-code .p, html.theme-dark svg .p { color: #d6d3d1; fill: #d6d3d1; }
+          html.theme-dark .muro-code .c, html.theme-dark svg .c, html.theme-dark .muro-code .c1, html.theme-dark svg .c1 { color: #a8a29e; fill: #a8a29e; }
+          html.theme-dark .muro-code .err, html.theme-dark svg .err { color: #fdba74; fill: #fdba74; border: 0; background: none; }
+          html.theme-dark .muro-source .ln { color: #a8a29e; }
+          html.theme-dark .muro-source .row.marked { background: #44403c; }
+          html.theme-dark .muro-source .here, html.theme-dark .muro-code .here { background: #78350f; }
         </style>
       </head>
       <body>

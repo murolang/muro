@@ -165,7 +165,7 @@ defmodule MuroVisor.MeetingViewTest do
     assert page =~ "font-size: 14px"
     assert page =~ "justify-content: center"
     refute page =~ "id=\"book-graph\""
-    assert page =~ "rep n 0"
+    assert text_of(page, "#sequence") =~ "rep n 0"
     refute page =~ ~r/\bwidth="\d{4,}"/
     assert_on_lifelines(page)
   end

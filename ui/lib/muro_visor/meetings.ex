@@ -108,7 +108,7 @@ defmodule MuroVisor.Meetings do
   end
 
   defp protocols(_book, _base, proto) when not is_nil(proto) do
-    {Muro.Session.show_proto(proto), Muro.Session.show_proto(Muro.Session.dual(proto))}
+    {MuroVisor.Code.protocol(proto), MuroVisor.Code.protocol(Muro.Session.dual(proto))}
   end
 
   defp protocols(book, base, _proto) do
@@ -119,7 +119,7 @@ defmodule MuroVisor.Meetings do
   end
 
   defp declared({:dual, target}), do: "dual " <> (ref_name(target) || "")
-  defp declared(proto), do: Muro.Session.show_proto(proto)
+  defp declared(proto), do: MuroVisor.Code.protocol(proto)
 
   defp evidence(book, base) do
     proto =

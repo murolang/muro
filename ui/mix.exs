@@ -6,7 +6,7 @@ defmodule MuroVisor.MixProject do
 
     [
       app: :muro_visor,
-      version: "0.2.0",
+      version: "0.2.1",
       elixir: "~> 1.15",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
@@ -38,6 +38,7 @@ defmodule MuroVisor.MixProject do
       {:phoenix, "~> 1.7.14"},
       {:phoenix_live_view, "~> 1.0.0"},
       {:phoenix_html, "~> 4.1"},
+      {:makeup, "~> 1.2"},
       {:bandit, "~> 1.5"},
       {:jason, "~> 1.4"},
       {:floki, ">= 0.30.0", only: :test},

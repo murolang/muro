@@ -1,7 +1,7 @@
 defmodule MuroVisor.Detail do
   @moduledoc false
 
-  def empty, do: %{title: "", loc: "", kind: ""}
+  def empty, do: %{title: "", loc: "", kind: "", excerpts: []}
 
   @kinds [:configuration, :transition, :node, :edge]
 
@@ -28,16 +28,16 @@ defmodule MuroVisor.Detail do
   def lookup(%{nodes: nodes, edges: edges}, book, id) when is_binary(id) do
     case split(id) do
       {:node, raw} ->
-        node_detail(nodes, raw)
+        node_detail(nodes, book, raw)
 
       {:edge, raw} ->
         edge_detail(nodes, edges, book, raw)
 
       {:configuration, raw} ->
-        configuration_detail(nodes, raw)
+        configuration_detail(nodes, book, raw)
 
       {:transition, raw} ->
-        transition_detail(nodes, raw)
+        transition_detail(nodes, book, raw)
 
       :error ->
         empty()
@@ -54,10 +54,18 @@ defmodule MuroVisor.Detail do
     end) || :error
   end
 
-  defp node_detail(nodes, id) do
+  defp node_detail(nodes, book, id) do
     case Enum.find(nodes, &(&1.id == id)) do
-      nil -> empty()
-      node -> %{title: node.name, loc: show_at(node.file, node.loc), kind: ""}
+      nil ->
+        empty()
+
+      node ->
+        %{
+          title: node.name,
+          loc: show_at(node.file, node.loc),
+          kind: "",
+          excerpts: MuroVisor.Code.excerpts(book, node.file, node.loc)
+        }
     end
   end
 
@@ -68,26 +76,47 @@ defmodule MuroVisor.Detail do
 
       edge ->
         refusal = Muro.Explore.out_of_order(book, edge)
+        file = file_of(nodes, edge.from)
+        at = Map.get(refusal, :loc) || edge.loc
 
         %{
           title: title(edge),
-          loc: show_at(file_of(nodes, edge.from), Map.get(refusal, :loc) || edge.loc),
-          kind: refusal_kind(refusal)
+          loc: show_at(file, at),
+          kind: refusal_kind(refusal),
+          excerpts: MuroVisor.Code.excerpts(book, file, at)
         }
     end
   end
 
-  defp configuration_detail(nodes, id) do
+  defp configuration_detail(nodes, book, id) do
     case find_child(nodes, id) do
-      nil -> empty()
-      child -> %{title: child.meeting, loc: show(child.loc), kind: ""}
+      nil ->
+        empty()
+
+      child ->
+        %{
+          title: child.meeting,
+          loc: show(child.loc),
+          kind: "",
+          excerpts: MuroVisor.Code.excerpts(book, nil, child.loc)
+        }
     end
   end
 
-  defp transition_detail(nodes, id) do
+  defp transition_detail(nodes, book, id) do
     case find_transition(nodes, id) do
-      nil -> empty()
-      t -> %{title: transition_title(t), loc: show(Map.get(t, :loc)), kind: ""}
+      nil ->
+        empty()
+
+      t ->
+        at = Map.get(t, :loc)
+
+        %{
+          title: transition_title(t),
+          loc: show(at),
+          kind: "",
+          excerpts: MuroVisor.Code.excerpts(book, nil, at)
+        }
     end
   end
 
