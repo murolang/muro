@@ -1777,13 +1777,16 @@ defmodule Muro.Parser do
     end
   end
 
+  # A payload starts only when the next token is a payload. A declaration,
+  # a role continuation, a protocol word, a closer, or the end of the
+  # book is Unit, and the token stays for what follows.
   defp parse_msg_pay(s) do
     s = skip(s)
 
-    cond do
-      s == "" or global_stop?(s) or role_cont?(s) -> {:ok, :unit, s}
-      pay_head?(s) -> parse_pay(s)
-      true -> {:ok, :unit, s}
+    if pay_head?(s) do
+      parse_pay(s)
+    else
+      {:ok, :unit, s}
     end
   end
 
@@ -1800,11 +1803,14 @@ defmodule Muro.Parser do
     end
   end
 
-  defp pay_head?(s) do
+  # `bound` is the recursion variables in scope. A choreography message
+  # has none. The same boundary decides an argument of a payload.
+  defp pay_head?(s, bound \\ MapSet.new()) do
     s = skip(s)
 
-    word_kw?(s, "Nat") or word_kw?(s, "Bit") or word_kw?(s, "Unit") or word_kw?(s, "Vec") or
-      has_prefix?(s, "(") or has_prefix?(s, "{") or ident_start?(s)
+    not pay_ends?(s, bound) and
+      (word_kw?(s, "Nat") or word_kw?(s, "Bit") or word_kw?(s, "Unit") or word_kw?(s, "Vec") or
+         has_prefix?(s, "(") or has_prefix?(s, "{") or ident_start?(s))
   end
 
   defp colon(s) do
@@ -2067,9 +2073,21 @@ defmodule Muro.Parser do
           end
 
         :not_binder ->
-          with {:ok, ty, rest} <- parse_pay(rest, bound),
-               {:ok, p, rest} <- parse_proto(skip(rest), bound) do
-            {:ok, {tag, ty, p}, rest}
+          with {:ok, ty, rest} <- parse_pay(rest, bound) do
+            rest = skip(rest)
+
+            # The continuation is written. A missing `end` at the end of
+            # the book, or where the next declaration starts, is an error
+            # at that point. `send Reply` then `def kept` fails at `def`
+            # and leaves the declaration. A binder still writes its
+            # continuation, and a written `end` is still consumed.
+            if end_missing?(rest) do
+              {:error, err(rest, "expected end")}
+            else
+              with {:ok, p, rest} <- parse_proto(rest, bound) do
+                {:ok, {tag, ty, p}, rest}
+              end
+            end
           end
 
         {:error, _} = err ->
@@ -2083,6 +2101,14 @@ defmodule Muro.Parser do
 
   defp ev_tag(:send), do: :esend
   defp ev_tag(:recv), do: :erecv
+
+  # The protocol did not continue. The book is over, a declaration
+  # starts, or a closer ends the surrounding form. The token stays.
+  defp end_missing?(s) do
+    s = skip(s)
+
+    s == "" or choreo_boundary?(s) or has_prefix?(s, ")") or has_prefix?(s, "}")
+  end
 
   # `recv (b : Bit) on S T` receives a bit. `b0` continues as `S` and
   # `b1` continues as `T`. A nat does not choose the arm.
@@ -3000,14 +3026,15 @@ defmodule Muro.Parser do
       word_kw?(s, "Vec") -> parse_vec(s, bound)
       has_prefix?(s, "(") -> parse_paren(s, fn body -> parse_pay(body, bound) end)
       has_prefix?(s, "{") -> parse_pay_rec(s, bound)
-      ident_start?(s) and not pay_stop?(s) -> parse_dat(s, bound)
+      ident_start?(s) and not pay_ends?(s, bound) -> parse_dat(s, bound)
       true -> {:error, err(s, "expected a payload")}
     end
   end
 
-  # `Maybe Nat` is that data type applied to `Nat`. A protocol keyword
-  # is not an argument: `send Bool end` stops before `end`. A recursion
-  # variable is the continuation, not an argument: `send Bool X`.
+  # `Maybe Nat` is that data type applied to `Nat`. An argument stops
+  # where `pay_ends?/2` says the next token begins something else:
+  # `send Bool end` stops before `end`, and `send Bool X` leaves the
+  # recursion variable as the continuation.
   defp parse_dat(s, bound) do
     with {:ok, name, rest} <- ident(s),
          {:ok, args, rest} <- take_pay_args(rest, [], bound) do
@@ -3032,7 +3059,7 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
-      pay_stop?(s) ->
+      pay_ends?(s, bound) ->
         false
 
       word_kw?(s, "Nat") or word_kw?(s, "Bit") or word_kw?(s, "Unit") or word_kw?(s, "Vec") ->
@@ -3042,13 +3069,70 @@ defmodule Muro.Parser do
         true
 
       ident_start?(s) ->
-        case ident(s) do
-          {:ok, name, _} -> not MapSet.member?(bound, name)
-          _ -> false
-        end
+        true
 
       true ->
         false
+    end
+  end
+
+  # The next token begins something other than a payload argument.
+  # Declaration words and entry forms, a role continuation (`name ->`,
+  # `name chooses`, `name:`), a protocol word, a talk word (`over`,
+  # `say`, `offer`), a choice closer, a closer (`)` or `}`), or a
+  # recursion variable in scope. `(` and `{` still open a payload.
+  defp pay_ends?(s, bound) do
+    s = skip(s)
+
+    cond do
+      s == "" ->
+        true
+
+      has_prefix?(s, ")") or has_prefix?(s, "}") ->
+        true
+
+      choice_closer?(s) ->
+        true
+
+      decl_boundary?(s) ->
+        true
+
+      pay_stop?(s) ->
+        true
+
+      talk_word?(s) ->
+        true
+
+      role_cont?(s) ->
+        true
+
+      true ->
+        bound_var?(s, bound)
+    end
+  end
+
+  # A declaration word, or the form that starts a book entry. A bare
+  # `place` or `relay` is included, so a payload does not take it.
+  defp decl_boundary?(s) do
+    s = skip(s)
+    choreo_boundary?(s) or decl_word_at?(s)
+  end
+
+  defp decl_word_at?(s) do
+    case ident(skip(s)) do
+      {:ok, name, _} -> decl_word?(name)
+      _ -> false
+    end
+  end
+
+  defp talk_word?(s) do
+    Enum.any?(~w(over say offer), &word_kw?(s, &1))
+  end
+
+  defp bound_var?(s, bound) do
+    case ident(skip(s)) do
+      {:ok, name, _} -> MapSet.member?(bound, name)
+      _ -> false
     end
   end
 
@@ -3060,7 +3144,8 @@ defmodule Muro.Parser do
   end
 
   # `Vec Nat n` and `Vec Nat 2`. The length is a numeral or a name.
-  # A successor, or a missing length, is not a length.
+  # A successor, a missing length, or a token that ends a payload is
+  # not a length. A recursion variable is the continuation.
   defp parse_vec(s, bound) do
     with {:ok, rest} <- kw(s, "Vec"),
          {:ok, elem, rest} <- parse_pay_atom(skip(rest), bound) do
@@ -3071,7 +3156,7 @@ defmodule Muro.Parser do
           {digits, rest} = take_digits(rest, "")
           {:ok, {:vec, elem, {:lit, String.to_integer(digits)}}, rest}
 
-        ident_start?(rest) ->
+        ident_start?(rest) and not pay_ends?(rest, bound) ->
           case ident(rest) do
             {:ok, name, rest} -> {:ok, {:vec, elem, {:var, String.to_atom(name)}}, rest}
             err -> err
@@ -3410,15 +3495,7 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
-      s == "" ->
-        {:ok, Enum.reverse(acc), s}
-
-      word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
-        word_kw?(s, "session") or word_kw?(s, "conform") or nu_start?(s) or
-        place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
-        endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
-        talk_start?(s) or choreography_start?(s) or seat_start?(s) or link_start?(s) or
-          repr_start?(s) ->
+      s == "" or choreo_boundary?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
@@ -3612,17 +3689,10 @@ defmodule Muro.Parser do
   end
 
   # A following book entry is not an argument. `meet s t` is the term.
-  # `meet name :` is the next entry.
+  # `meet name :` is the next entry. `motive` and `in` stay term keywords.
   defp eboundary?(s) do
     s = skip(s)
-
-    word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
-      word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
-      word_kw?(s, "where") or word_kw?(s, "motive") or word_kw?(s, "in") or
-      nu_start?(s) or place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
-      endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
-      talk_start?(s) or choreography_start?(s) or seat_start?(s) or link_start?(s) or
-      repr_start?(s)
+    choreo_boundary?(s) or word_kw?(s, "motive") or word_kw?(s, "in")
   end
 
   defp eatom_start?(s) do
@@ -3815,17 +3885,11 @@ defmodule Muro.Parser do
   end
 
   # `session` and `conform` use `:=`, so ctor_decl_start? does not see
-  # them. A new line that starts either form, or a place, scheme, move,
-  # endpoint, reading, meeting, temporal declaration, talk, repr, seat, or
-  # link entry, ends the constructor's type. `temporal name :` is that line.
+  # them. A new line that starts a book entry ends the constructor's
+  # type. On the same line the word is an argument (`w : place`).
   defp session_line?(s, s0) do
     skipped = binary_part(s, 0, byte_size(s) - byte_size(s0))
-
-    String.contains?(skipped, "\n") and
-      (session_start?(s0) or conform_start?(s0) or place_entry?(s0) or scheme_entry?(s0) or
-         move_entry?(s0) or endpoint_entry?(s0) or read_entry?(s0) or meet_entry?(s0) or
-         temporal_entry?(s0) or talk_start?(s0) or choreography_start?(s0) or repr_start?(s0) or
-         seat_start?(s0) or link_start?(s0))
+    String.contains?(skipped, "\n") and choreo_boundary?(s0)
   end
 
   defp starts_atom?(s) do

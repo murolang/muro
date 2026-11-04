@@ -3074,8 +3074,11 @@ defmodule Muro.Check do
 
   # `say` names one payload type and one continuation. `offer` still
   # has two arms. A name expands to the tree it stands for.
+  # The payload is a session payload. A declared data type takes as
+  # many arguments as its declaration has parameters.
   defp expand_talk(book, {:say, a, b, ty, t}, stack) do
-    with {:ok, u} <- expand_talk(book, t, stack) do
+    with :ok <- Muro.Session.proto_ok({:send, ty, :end}, book),
+         {:ok, u} <- expand_talk(book, t, stack) do
       {:ok, {:say, a, b, ty, u}}
     end
   end

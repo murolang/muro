@@ -24,7 +24,7 @@ coordinator -> alice : prepare
 coordinator -> alice : prepare Nat
 ```
 
-`→` is the same arrow. The label is a name. The payload is optional and defaults to `Unit`. It is the type a `send` writes, and it does not bind a name. `prepare Nat` carries `Nat`. `prepare` carries `Unit`. A name followed by `->`, `chooses`, `:`, or the next declaration is the next interaction, not a payload. Parentheses group a payload that would otherwise look like one. `Maybe Nat` is a payload.
+`→` is the same arrow. The label is a name. The payload is optional and defaults to `Unit`. It is the type a `send` writes, and it does not bind a name. `prepare Nat` carries `Nat`. `prepare` carries `Unit`. A payload argument stops before a token that begins something else. The words are `def`, `data`, `session`, `conform`, `meet`, `place`, `scheme`, `move`, `endpoint`, `read`, `talk`, `choreography`, `seat`, `link`, `relay`, `import`, `param`, `where`, `nu`, `ν`, `end`, `send`, `recv`, `choose`, `branch`, `rec`, `case`, `on`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `over`, `say`, and `offer`. `temporal <name> :` and `repr <name> :=` stop as well. A name followed by `->`, `→`, `chooses`, or `:` is the next interaction or a branch label, not an argument. `)` and `}` stop, and `end` closes a choice. Parentheses group a payload that would otherwise look like one (`(Reply)`, `(Maybe (List Nat))`). `Maybe Nat` is a payload. The wrong number of arguments is the session refusal `<name> takes <n> arguments, given <k>`, and one parameter is `argument`.
 
 A choice is one role selecting a labelled branch. Two or more branches are required.
 
@@ -108,7 +108,7 @@ The position is the choreography. Several failures are joined with `; `.
 - A branch label written twice in one choice: `duplicate branch <label>`.
 - A choice with fewer than two branches: `a choice has two branches`.
 - Plain merge fails: `<role>: branches <label> and <label> disagree`. Three or more labels are joined with commas: `branches l, m, r disagree`. The role is the one being projected. Both ends of that pair are reported.
-- A payload that is not a session payload is refused with that session error.
+- A payload that is not a session payload is refused with that session error. The wrong number of arguments is `<name> takes <n> arguments, given <k>`. One parameter is `argument`.
 
 An inner choice that fails is reported at that choice. It is not rewritten as a failure of the choice wrapped around it.
 
