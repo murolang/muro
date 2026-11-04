@@ -149,6 +149,29 @@ defmodule Muro.LexerTest do
              ]
   end
 
+  test "payload boundary words are classified" do
+    for word <- Words.book_words() do
+      assert Words.decl_word?(word)
+      assert Words.kind(word) == :declaration
+    end
+
+    for word <- Words.nu_words() do
+      assert Words.kind(word) == :declaration
+    end
+
+    for word <- Words.pay_stop_words() do
+      assert Words.kind(word) in [:keyword, :declaration]
+    end
+
+    for word <- Words.talk_stop_words() do
+      assert word in Words.talk_words()
+      assert Words.kind(word) == :keyword
+    end
+
+    assert "with" in Words.talk_words()
+    refute "with" in Words.talk_stop_words()
+  end
+
   test "every lexicon word and every operator has its kind" do
     for {word, kind} <- Words.lexicon() do
       assert [{^kind, 0, _}] = Lexer.tokenize(word), word

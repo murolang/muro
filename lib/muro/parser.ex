@@ -1862,12 +1862,10 @@ defmodule Muro.Parser do
   defp choreo_boundary?(s) do
     s = skip(s)
 
-    word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
-      word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
-      word_kw?(s, "where") or nu_start?(s) or place_entry?(s) or scheme_entry?(s) or
-      move_entry?(s) or endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or
-      temporal_entry?(s) or talk_start?(s) or choreography_start?(s) or seat_start?(s) or
-      link_start?(s) or repr_start?(s)
+    Enum.any?(Words.book_words(), &word_kw?(s, &1)) or nu_start?(s) or place_entry?(s) or
+      scheme_entry?(s) or move_entry?(s) or endpoint_entry?(s) or read_entry?(s) or
+      meet_entry?(s) or temporal_entry?(s) or talk_start?(s) or choreography_start?(s) or
+      seat_start?(s) or link_start?(s) or repr_start?(s)
   end
 
   defp parse_talk_term(s) do
@@ -3136,7 +3134,7 @@ defmodule Muro.Parser do
   end
 
   defp talk_word?(s) do
-    Enum.any?(~w(over say offer), &word_kw?(s, &1))
+    Enum.any?(Words.talk_stop_words(), &word_kw?(s, &1))
   end
 
   defp bound_var?(s, bound) do

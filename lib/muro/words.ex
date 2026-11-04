@@ -8,13 +8,18 @@ defmodule Muro.Words do
   """
 
   @decl ~w(def data session conform meet place scheme move endpoint read talk choreography seat link relay import param where)
+  # A book entry on its own. `place` and `relay` are declaration words too;
+  # the parser tells those from a type by what follows the word.
+  @book ~w(def data param import session conform where)
   @pay_stop ~w(end send recv choose branch rec case on done stop put get pick0 pick1 cover where)
   @reserved ~w(end send recv choose branch rec case done stop put get pick0 pick1 cover match on Nat Bit Unit Vec dual seen)
   @proc ~w(done stop put get pick0 pick1 cover rec match end send recv choose branch on)
   @proc_start ~w(done stop put get pick0 pick1 cover rec match)
   @proto_head ~w(end send recv choose branch rec)
 
-  @talk ~w(over say offer with)
+  # `with` is a name in `seen role with role`. It does not end a payload.
+  @talk_stop ~w(over say offer)
+  @talk @talk_stop ++ ~w(with)
   @choreo ~w(roles chooses)
   @place ~w(ambient node any fixed stay cross at buffer)
   @temporal ~w(forall always eventually leads_to implies or and not true false inbox is empty full stopped has first second third st nd rd th)
@@ -95,6 +100,9 @@ defmodule Muro.Words do
 
   def decl_word?(name) when is_binary(name), do: name in @decl
 
+  @doc "Declaration words that end a surrounding form on their own."
+  def book_words, do: @book
+
   @doc "Words that end a payload type."
   def pay_stop_words, do: @pay_stop
 
@@ -117,6 +125,9 @@ defmodule Muro.Words do
   def proto_head_words, do: @proto_head
 
   def talk_words, do: @talk
+
+  @doc "Talk words that end a payload. `with` is not one of them."
+  def talk_stop_words, do: @talk_stop
   def choreo_words, do: @choreo
   def place_words, do: @place
   def temporal_words, do: @temporal
