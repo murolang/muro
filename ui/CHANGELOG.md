@@ -2,9 +2,9 @@
 
 ## 0.2.1
 
-Muro code on the page is coloured by `Muro.MakeupLexer` and broken to the width of the side panel. A session spec and its dual, the spec in a group heading, the outline, the evidence in a meeting row, the labels on a sequence, and the labels on the definition graph all use those spans. The text is the printer's text: a break is a space in `Muro.Session.show_proto/1`, so the tokens do not change. Selecting a node, an edge, or a configuration shows that definition's source. Line numbers are the lines in the file. The selected or refused column is marked. `?theme=dark`, or a dark colour scheme, draws the same page on a dark ground. The server-rendered page is light until that choice.
+Muro code on the page is coloured by `Muro.MakeupLexer`. Session words, types, names, numerals, and operators each have their own colour, including `≤`, `→`, and `⊢`. A break in a spec is a space in `Muro.Session.show_proto/1`, so the tokens do not change. The side column starts at 520px and drags wider or narrower. That width is remembered in the browser. Selecting a node, an edge, or a configuration shows the whole definition, from the bytes the parser consumed, with the file's line numbers and the selected column marked. A definition longer than forty lines folds the rest behind "show more". OTP and FSM signatures and clauses are coloured as Elixir. Rust clauses are coloured when a Rust lexer is present. C and Zig stay plain. `?theme=dark`, or a dark colour scheme, draws the same page on a dark ground. The server-rendered page is light until that choice.
 
-Install it by adding `{:muro_visor, "~> 0.2.1"}` to a Mix project. A published package depends on `muro ~> 0.20.7`. A checkout builds against the repository. It does not emit code and it does not change the wall.
+Install it by adding `{:muro_visor, "~> 0.2.1"}` to a Mix project. A published package depends on `muro ~> 0.20.12`. A checkout builds against the repository. It does not emit code and it does not change the wall.
 
 ## 0.2.0
 

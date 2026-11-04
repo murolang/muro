@@ -159,8 +159,8 @@ defmodule MuroVisor.MeetingViewTest do
     assert page =~
              ".meeting-pane, .sequence-wrap, .picker { max-width: 100%; overflow-x: hidden; }"
 
-    assert page =~ "overflow-wrap: normal"
-    refute page =~ "overflow-wrap: anywhere"
+    assert page =~ "overflow-wrap: anywhere"
+    refute page =~ "overflow-wrap: normal"
     assert page =~ "minmax(0, 1fr)"
     assert page =~ "font-size: 14px"
     assert page =~ "justify-content: center"

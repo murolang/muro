@@ -90,6 +90,8 @@ defmodule MuroVisor.ExplorerLive do
 
   @impl true
   def render(assigns) do
+    assigns = assign(assigns, :host, MuroVisor.HostLexer.for_backend(assigns.backend))
+
     ~H"""
     <header>
       <strong>muro visor</strong>
@@ -106,7 +108,7 @@ defmodule MuroVisor.ExplorerLive do
       </button>
     </header>
     <p :if={@error} id="book-error">{@error}</p>
-    <main>
+    <main id="workspace" phx-hook="SideWidth">
       <div :if={@screen == :all} class="graph-pane">
         <nav class="views">
           <.link id="view-meetings" patch="/">Meetings</.link>
@@ -316,6 +318,7 @@ defmodule MuroVisor.ExplorerLive do
         </div>
       </div>
       <aside class="side">
+        <div class="side-grip" role="separator" aria-orientation="vertical"></div>
         <section :if={@focus} id="context">
           <p id="meeting-checked" class="badge">checked</p>
           <h2>Session</h2>
@@ -346,7 +349,7 @@ defmodule MuroVisor.ExplorerLive do
           </details>
           <details id="outline-signatures">
             <summary>signatures</summary>
-            <pre class="muro-code">{MuroVisor.Code.html(@outline.signatures)}</pre>
+            <pre class="muro-code">{MuroVisor.Code.html(@outline.signatures, lexer: @host)}</pre>
           </details>
           <details id="outline-layouts">
             <summary>layouts</summary>
@@ -354,7 +357,7 @@ defmodule MuroVisor.ExplorerLive do
           </details>
           <details id="outline-clauses">
             <summary>clauses</summary>
-            <pre class="muro-code">{MuroVisor.Code.html(@outline.clauses)}</pre>
+            <pre class="muro-code">{MuroVisor.Code.html(@outline.clauses, lexer: @host)}</pre>
           </details>
         </section>
       </aside>

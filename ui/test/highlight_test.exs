@@ -12,17 +12,17 @@ defmodule MuroVisor.HighlightTest do
     assert meet.spec =~ "recv Nat (send Nat end)"
     refute meet.spec =~ "\n"
 
-    assert saw?(html, "#context-spec span.n", "recv")
-    assert saw?(html, "#context-spec span.nb", "Nat")
-    assert saw?(html, "#context-dual span.n", "send")
-    assert saw?(html, "#context-dual span.nb", "Nat")
+    assert saw?(html, "#context-spec span.k", "recv")
+    assert saw?(html, "#context-spec span.kt", "Nat")
+    assert saw?(html, "#context-dual span.k", "send")
+    assert saw?(html, "#context-dual span.kt", "Nat")
     assert class_text(html, "#lane-left tspan.n") != []
     assert class_text(html, "#sequence text.step-no tspan") == []
 
     {:ok, _view, picker} = live(conn, "/")
     assert text_of(picker, ~s(section[data-session="ping"] code)) == meet.spec
-    assert saw?(picker, ~s(section[data-session="ping"] code span.n), "recv")
-    assert saw?(picker, ~s(section[data-session="ping"] code span.nb), "Nat")
+    assert saw?(picker, ~s(section[data-session="ping"] code span.k), "recv")
+    assert saw?(picker, ~s(section[data-session="ping"] code span.kt), "Nat")
   end
 
   test "a numeral is a literal, and a long spec wraps onto the same tokens", %{conn: conn} do
@@ -30,7 +30,7 @@ defmodule MuroVisor.HighlightTest do
     {:ok, _view, html} = live(conn, "/?meet=#{URI.encode_www_form(meet.name)}")
     assert text_of(html, "#context-spec") == meet.spec
     assert class_text(html, "#context-spec span.mi") != []
-    assert class_text(html, "#context-spec span.n") != []
+    assert class_text(html, "#context-spec span.kt") != []
 
     assert {:ok, _} = MuroVisor.Book.open(example("value-protocols.muro"))
     book = book()
@@ -49,7 +49,7 @@ defmodule MuroVisor.HighlightTest do
     shown = text_of(html, "#context-spec")
     assert shown =~ "\n"
     assert sigils(shown) == sigils(flat)
-    assert saw?(html, "#context-spec span.n", "case")
+    assert saw?(html, "#context-spec span.k", "case")
     assert saw?(html, "#context-spec span.n", "Frame")
     assert class_text(html, "#context-spec span.p") != []
     assert class_text(html, "#context-spec span.o") != []
@@ -86,7 +86,10 @@ defmodule MuroVisor.HighlightTest do
     assert pre_text(html, "#outline-signatures") == outline.signatures
     assert pre_text(html, "#outline-layouts") == "layouts:\n#{outline.layouts}"
     assert pre_text(html, "#outline-clauses") == outline.clauses
-    assert saw?(html, "#outline-clauses span.k", "def")
+
+    assert saw?(html, "#outline-clauses span.k", "def") or
+             saw?(html, "#outline-clauses span.kd", "def")
+
     assert class_text(html, "#outline span.n") != []
 
     view |> element("#backend-c") |> render_click()
@@ -122,10 +125,10 @@ defmodule MuroVisor.HighlightTest do
     marked = Enum.filter(rows, &(Floki.attribute(&1, "class") |> List.first() =~ "marked"))
     assert [only] = marked
     assert Floki.attribute(only, "data-line") == [Integer.to_string(line)]
-    assert saw?(html, "#detail-source span.k", "def")
-    assert saw?(html, "#detail-source span.n", "kept")
+    assert saw?(html, "#detail-source span.kd", "def")
+    assert saw?(html, "#detail-source span.nf", "kept")
     assert saw?(html, "#detail-source span.kt", "run")
-    assert saw?(html, "#detail-source span.nb", "Nat")
+    assert saw?(html, "#detail-source span.kt", "Nat")
     assert saw?(html, "#detail-source span.mi", "0")
     here = Floki.find(parse(html), "#detail-source .row.marked .here")
     assert here != []
@@ -136,6 +139,57 @@ defmodule MuroVisor.HighlightTest do
     assert node.text == "run kept"
     assert saw?(html, "##{id} tspan.kt", "run")
     assert saw?(html, "##{id} tspan.n", "kept")
+  end
+
+  test "detail shows a whole multi-line definition", %{conn: conn} do
+    path = example("value-protocols.muro")
+    view = open_book(conn, path)
+    late = Enum.find(book(), &(&1.name == "late"))
+    {line, col} = late.loc
+    {start, stop} = late.extent
+    {:ok, src} = File.read(late.file)
+    slice = binary_part(src, start, stop - start)
+    lines = String.split(String.trim_trailing(slice, "\n"), "\n")
+    assert length(lines) > 1
+
+    view |> element("#node-#{Muro.Emit.Name.encode("late")}") |> render_click()
+    html = render(view)
+    rows = html |> parse() |> Floki.find("#detail-source .row")
+    assert length(rows) == length(lines)
+    assert Floki.text(Floki.find(hd(rows), ".ln")) == Integer.to_string(line)
+
+    for {row, text} <- Enum.zip(rows, lines) do
+      assert Floki.text(Floki.find(row, "code")) == text
+    end
+
+    assert saw?(html, "#detail-source span.k", "match")
+    assert saw?(html, "#detail-source span.kt", "run")
+    assert saw?(html, "#detail-source span.n", "Bool")
+    assert saw?(html, "#detail-source span.o", "→")
+
+    marked = Enum.filter(rows, &(Floki.attribute(&1, "class") |> List.first() =~ "marked"))
+    assert [only] = marked
+    assert Floki.attribute(only, "data-line") == [Integer.to_string(line)]
+    assert Floki.find(parse(html), "#detail-source .here") != []
+    assert col >= 1
+  end
+
+  test "a definition longer than forty lines folds the tail" do
+    rows = for n <- 1..45, do: %{n: n, marked: false, html: Integer.to_string(n)}
+    {:safe, iodata} = MuroVisor.Code.source_block(%{id: "detail-source", label: nil, rows: rows})
+    html = IO.iodata_to_binary(iodata)
+    parsed = Floki.parse_fragment!(html)
+    assert Floki.find(parsed, "details.more") != []
+    assert Floki.attribute(hd(Floki.find(parsed, "details.more")), "open") == []
+    assert length(Floki.find(parsed, "#detail-source .row")) == 45
+
+    marked = List.update_at(rows, 41, &%{&1 | marked: true})
+
+    {:safe, iodata} =
+      MuroVisor.Code.source_block(%{id: "detail-source", label: nil, rows: marked})
+
+    open = IO.iodata_to_binary(iodata) |> Floki.parse_fragment!() |> Floki.find("details.more")
+    assert Floki.attribute(hd(open), "open") == ["open"]
   end
 
   test "a refused edge and a configuration mark the checker's locations", %{conn: conn} do
@@ -170,6 +224,8 @@ defmodule MuroVisor.HighlightTest do
     {:ok, _view, html} = live(conn, "/?meet=window-wire")
     assert text_of(html, "#sequence .evidence-badge") == "w ⊢ d ≤ w"
     assert class_text(html, "#sequence .evidence-badge tspan") != []
+    assert saw?(html, "#sequence .evidence-badge tspan.o", "⊢")
+    assert saw?(html, "#sequence .evidence-badge tspan.o", "≤")
     assert class_text(html, "#sequence text.arrow-label tspan") != []
     assert class_text(html, "#sequence text.step-no tspan") == []
 

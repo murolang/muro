@@ -90,8 +90,8 @@ defmodule MuroVisor.LayoutTest do
     assert attr_class(keyed, "##{edge.id} path.edge") =~ "selected"
 
     page = html_response(get(conn, "/"), 200)
-    assert page =~ "overflow-wrap: normal"
-    refute page =~ "overflow-wrap: anywhere"
+    assert page =~ "overflow-wrap: anywhere"
+    refute page =~ "overflow-wrap: normal"
     assert page =~ "overflow-x: hidden"
     assert page =~ "#outline pre"
 

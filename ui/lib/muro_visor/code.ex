@@ -44,14 +44,14 @@ defmodule MuroVisor.Code do
   def highlight(source, opts) when is_binary(source) do
     tag = Keyword.get(opts, :tag, "span")
     mark = Keyword.get(opts, :mark)
+    lexer = Keyword.get(opts, :lexer, Muro.MakeupLexer)
 
     {iodata, _pos} =
       source
-      |> Muro.MakeupLexer.lex()
-      |> Enum.map(fn {type, meta, text} -> {type, meta, IO.iodata_to_binary(text)} end)
-      |> glue()
+      |> lex(lexer)
+      |> Enum.map(fn {type, meta, text} -> {type, meta, token_text(text)} end)
       |> Enum.map_reduce(0, fn {type, meta, bin}, pos ->
-        html = Makeup.Formatters.HTML.HTMLFormatter.format_token({type, meta, bin}, tag)
+        html = format_token({type, meta, bin}, tag)
 
         html =
           if marks?(pos, byte_size(bin), mark) do
@@ -108,9 +108,13 @@ defmodule MuroVisor.Code do
     {:safe, highlight(blank(source), tag: "tspan")}
   end
 
-  @doc "Highlighted tokens, safe to place inside an element."
-  def html(source) do
-    {:safe, highlight(blank(source))}
+  @doc """
+  Highlighted tokens, safe to place inside an element.
+
+  `lexer` is a Makeup lexer module. `nil` leaves the text plain.
+  """
+  def html(source, opts \\ []) do
+    {:safe, highlight(blank(source), opts)}
   end
 
   @doc "Every excerpt from `excerpts/3`, as one safe fragment."
@@ -123,45 +127,79 @@ defmodule MuroVisor.Code do
   end
 
   @doc "The `<pre>` for one excerpt map from `excerpts/3`."
+  # A definition longer than this folds the tail behind "show more".
+  @fold 40
+
   def source_block(excerpt) when is_map(excerpt) do
-    rows =
-      Enum.map(excerpt.rows, fn row ->
-        mark = if row.marked, do: " marked", else: ""
-
-        [
-          ~s(<span class="row#{mark}" data-line="#{row.n}">),
-          ~s(<span class="ln">#{row.n}</span><code>),
-          row.html,
-          "</code></span>"
-        ]
-      end)
-
     {:safe,
      [
        ~s(<pre id="#{escape(excerpt.id)}" class="muro-code muro-source">),
-       rows,
+       folded_rows(excerpt.rows),
        "</pre>"
      ]}
   end
 
-  # A space stays on the token before it. A whitespace-only element is
-  # dropped by the HTML parser the tests use, and a space has no colour.
-  # The characters are still the lexer's characters.
-  defp glue(tokens) do
-    tokens
-    |> Enum.reduce({[], ""}, fn
-      {:whitespace, _meta, text}, {[], lead} ->
-        {[], lead <> text}
+  defp folded_rows(rows) when length(rows) <= @fold, do: Enum.map(rows, &row_html/1)
 
-      {:whitespace, _meta, text}, {[{type, meta, bin} | acc], ""} ->
-        {[{type, meta, bin <> text} | acc], ""}
+  defp folded_rows(rows) do
+    {head, tail} = Enum.split(rows, @fold)
+    open = if Enum.any?(tail, & &1.marked), do: " open", else: ""
 
-      {type, meta, text}, {acc, lead} ->
-        {[{type, meta, lead <> text} | acc], ""}
-    end)
-    |> case do
-      {acc, ""} -> Enum.reverse(acc)
-      {[], lead} -> [{:whitespace, %{}, lead}]
+    [
+      Enum.map(head, &row_html/1),
+      ~s(<details class="more"#{open}><summary>show more</summary>),
+      Enum.map(tail, &row_html/1),
+      "</details>"
+    ]
+  end
+
+  defp row_html(row) do
+    mark = if row.marked, do: " marked", else: ""
+
+    [
+      ~s(<span class="row#{mark}" data-line="#{row.n}">),
+      ~s(<span class="ln">#{row.n}</span><code>),
+      row.html,
+      "</code></span>"
+    ]
+  end
+
+  # A Makeup lexer may return a charlist of code points. `IO.iodata_to_binary`
+  # refuses a point above 255, which an Elixir string token contains.
+  defp token_text(text) when is_binary(text), do: text
+
+  defp token_text(text) do
+    case :unicode.characters_to_binary(text) do
+      bin when is_binary(bin) -> bin
+    end
+  end
+
+  defp lex(source, nil), do: [{nil, %{}, source}]
+
+  defp lex(source, lexer) when is_atom(lexer) do
+    lexer.lex(source, [])
+  end
+
+  defp format_token({nil, _meta, bin}, _tag), do: escape(bin)
+
+  # A whitespace-only element is dropped unless the space is an entity.
+  defp format_token({:whitespace, _meta, bin}, tag) do
+    [?<, tag, ~s( class="w">), ws_entities(bin), ?<, ?/, tag, ?>]
+  end
+
+  defp format_token(token, tag) do
+    Makeup.Formatters.HTML.HTMLFormatter.format_token(token, tag)
+  end
+
+  defp ws_entities(bin) do
+    for <<byte <- bin>>, into: "" do
+      case byte do
+        ?\s -> "&#32;"
+        ?\n -> "&#10;"
+        ?\t -> "&#9;"
+        ?\r -> "&#13;"
+        _ -> <<byte>>
+      end
     end
   end
 
@@ -195,29 +233,104 @@ defmodule MuroVisor.Code do
 
   defp excerpt(book, %{file: file, line: line, col: col, label: label}) do
     with {:ok, src} <- read_source(file) do
-      lines = source_lines(src)
-      starts = decl_lines(book, file)
-      owner = owner_line(starts, line) || line
-      last = excerpt_last(lines, starts, owner, line)
+      rows =
+        case extent_span(book, file, src, line, col) do
+          {start, stop} -> rows_from_extent(src, start, stop, line, col)
+          :lines -> rows_from_lines(book, file, src, line, col)
+        end
 
-      if owner < 1 or last < owner or owner > length(lines) do
-        nil
-      else
-        rows =
-          for n <- owner..last do
-            text = Enum.at(lines, n - 1) || ""
-
-            %{
-              n: n,
-              marked: n == line,
-              html: highlight(text, mark: if(n == line, do: col, else: nil))
-            }
-          end
-
-        %{id: excerpt_id(label), label: label, rows: rows}
+      case rows do
+        [] -> nil
+        _ -> %{id: excerpt_id(label), label: label, rows: rows}
       end
     else
       _ -> nil
+    end
+  end
+
+  defp extent_span(book, file, src, line, col) do
+    offset = loc_to_offset(src, line, col)
+
+    spans =
+      for decl <- book,
+          match?({_, _, _}, decl_pos(decl)),
+          {path, _, _} = decl_pos(decl),
+          same_file?(path, file),
+          {a, b} = Map.get(decl, :extent, {nil, nil}),
+          is_integer(a) and is_integer(b) and a <= b,
+          do: {a, b}
+
+    cond do
+      spans == [] ->
+        :lines
+
+      inside = Enum.filter(spans, fn {a, b} -> a <= offset and offset < b end) ->
+        if inside == [] do
+          nearest_span(spans, offset)
+        else
+          Enum.min_by(inside, fn {a, b} -> b - a end)
+        end
+
+      true ->
+        nearest_span(spans, offset)
+    end
+  end
+
+  defp nearest_span(spans, offset) do
+    before = Enum.filter(spans, fn {a, _b} -> a <= offset end)
+
+    case before do
+      [] -> Enum.min_by(spans, fn {a, _b} -> a end)
+      some -> Enum.max_by(some, fn {a, _b} -> a end)
+    end
+  end
+
+  defp rows_from_extent(src, start, stop, mark_line, mark_col) do
+    start = min(max(start, 0), byte_size(src))
+    stop = min(max(stop, start), byte_size(src))
+    slice = binary_part(src, start, stop - start)
+    {start_line, _} = Muro.Print.offset_to_loc(src, start)
+
+    slice
+    |> source_lines()
+    |> Enum.with_index(start_line)
+    |> Enum.map(fn {text, n} ->
+      %{
+        n: n,
+        marked: n == mark_line,
+        html: highlight(text, mark: if(n == mark_line, do: mark_col, else: nil))
+      }
+    end)
+  end
+
+  # Byte column, matching `Muro.Print.offset_to_loc/2`. A trailing newline
+  # is the end of the last line.
+  defp loc_to_offset(src, line, col) when line >= 1 and col >= 1 do
+    {prior, _} = String.split(src, "\n") |> Enum.split(max(line - 1, 0))
+    base = Enum.reduce(prior, 0, fn part, acc -> acc + byte_size(part) + 1 end)
+    min(base + col - 1, byte_size(src))
+  end
+
+  defp loc_to_offset(src, _line, _col), do: byte_size(src)
+
+  defp rows_from_lines(book, file, src, line, col) do
+    lines = source_lines(src)
+    starts = decl_lines(book, file)
+    owner = owner_line(starts, line) || line
+    last = excerpt_last(lines, starts, owner, line)
+
+    if owner < 1 or last < owner or owner > length(lines) do
+      []
+    else
+      for n <- owner..last do
+        text = Enum.at(lines, n - 1) || ""
+
+        %{
+          n: n,
+          marked: n == line,
+          html: highlight(text, mark: if(n == line, do: col, else: nil))
+        }
+      end
     end
   end
 

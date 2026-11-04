@@ -37,7 +37,43 @@ defmodule MuroVisor.Layouts do
           window.addEventListener("DOMContentLoaded", function () {
             if (!window.Phoenix || !window.LiveView) return
             var token = document.querySelector("meta[name='csrf-token']").getAttribute("content")
-            var socket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {params: {_csrf_token: token}})
+            var Hooks = {
+              SideWidth: {
+                mounted: function () { this.restore(); this.bind() },
+                updated: function () { this.restore() },
+                restore: function () {
+                  try {
+                    var saved = window.localStorage.getItem("muro-visor-side")
+                    if (saved) this.el.style.setProperty("--side-width", saved + "px")
+                  } catch (e) {}
+                },
+                bind: function () {
+                  var main = this.el
+                  var grip = main.querySelector(".side-grip")
+                  if (!grip) return
+                  var dragging = false
+                  grip.addEventListener("pointerdown", function (event) {
+                    dragging = true
+                    grip.setPointerCapture(event.pointerId)
+                    event.preventDefault()
+                  })
+                  grip.addEventListener("pointermove", function (event) {
+                    if (!dragging) return
+                    var rect = main.getBoundingClientRect()
+                    var width = rect.right - event.clientX
+                    var min = 240
+                    var max = Math.max(min, Math.round(rect.width * 0.7))
+                    width = Math.round(Math.min(max, Math.max(min, width)))
+                    main.style.setProperty("--side-width", width + "px")
+                    try { window.localStorage.setItem("muro-visor-side", String(width)) } catch (e) {}
+                  })
+                  var stop = function () { dragging = false }
+                  grip.addEventListener("pointerup", stop)
+                  grip.addEventListener("pointercancel", stop)
+                }
+              }
+            }
+            var socket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {params: {_csrf_token: token}, hooks: Hooks})
             socket.connect()
           })
         </script>
@@ -45,7 +81,7 @@ defmodule MuroVisor.Layouts do
           html, body { max-width: 100%; }
           body { font: 14px/1.4 ui-sans-serif, sans-serif; margin: 0; color: #1c1917; background: #fafaf9; overflow-x: hidden; }
           header { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 12px 16px; border-bottom: 1px solid #e7e5e4; }
-          main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 320px); gap: 16px; padding: 16px; align-items: start; }
+          main { --side-width: 520px; display: grid; grid-template-columns: minmax(0, 1fr) var(--side-width); gap: 16px; padding: 16px; align-items: start; }
           .graph-pane { min-width: 0; }
           .zoom { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
           .graph-scroll { container-type: size; overflow: auto; height: calc(100vh - 140px); border: 1px solid #e7e5e4; background: #fff; }
@@ -55,11 +91,12 @@ defmodule MuroVisor.Layouts do
           #zoom-fit:checked ~ .graph-scroll svg#book-graph { width: max(calc(var(--native-width) * 11 / 12), min(calc(100cqw - 24px), calc((100cqh - 24px) * var(--native-width) / var(--native-height)))); height: auto; aspect-ratio: var(--native-width) / var(--native-height); }
           #zoom-100:checked ~ .graph-scroll svg#book-graph { width: var(--native-width); height: var(--native-height); max-width: none; max-height: none; aspect-ratio: auto; }
           #zoom-150:checked ~ .graph-scroll svg#book-graph { width: calc(var(--native-width) * 1.5); height: calc(var(--native-height) * 1.5); max-width: none; max-height: none; aspect-ratio: auto; }
-          aside.side { min-width: 0; }
+          aside.side { position: relative; min-width: 0; }
+          .side-grip { position: absolute; left: -12px; top: 0; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; }
           button { font: inherit; padding: 4px 10px; }
           #outline { font: 12px/1.35 ui-monospace, monospace; max-width: 100%; }
           #outline h2 { margin: 0 0 8px; font: 600 14px/1.3 ui-sans-serif, sans-serif; }
-          #outline pre { white-space: pre-wrap; overflow-wrap: normal; word-break: normal; max-width: 100%; margin: 0; }
+          #outline pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; max-width: 100%; margin: 0; overflow-x: auto; }
           #outline details { margin: 0; }
           #outline summary { cursor: pointer; }
           svg .node { fill: #fff; stroke: #44403c; }
@@ -114,7 +151,7 @@ defmodule MuroVisor.Layouts do
           .meet-row:hover { background: #f5f5f4; }
           .meet-row .name { text-decoration: underline; }
           #context { margin-bottom: 16px; }
-          #context pre { white-space: pre-wrap; overflow-wrap: normal; word-break: normal; max-width: 100%; margin: 0 0 8px; font: 13px/1.4 ui-monospace, monospace; }
+          #context pre { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; max-width: 100%; margin: 0 0 8px; font: 13px/1.4 ui-monospace, monospace; overflow-x: auto; }
           #context button { display: block; text-align: left; margin: 4px 0; white-space: normal; max-width: 100%; }
           #context .loc { display: block; font: 12px/1.4 ui-monospace, monospace; white-space: nowrap; }
           #detail { margin-bottom: 16px; }
@@ -122,25 +159,30 @@ defmodule MuroVisor.Layouts do
           .badge { display: inline-block; border: 1px solid #44403c; padding: 0 6px; }
           @media (max-width: 800px) {
             main { grid-template-columns: 1fr; }
+            .side-grip { display: none; }
           }
         </style>
         {@ink}
         <style>
-          .session-head code { white-space: pre-wrap; }
-          pre.muro-code { background-color: #fff; border-radius: 4px; }
+          .session-head code { white-space: pre-wrap; overflow-wrap: anywhere; }
+          pre.muro-code { background-color: #fff; border-radius: 4px; white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: auto; }
           code.muro-code { background-color: transparent; }
           svg text.muro-code { background-color: transparent; }
           .muro-code .k, svg .k { color: #6d28d9; fill: #6d28d9; font-weight: 600; }
+          .muro-code .kd, svg .kd { color: #4c1d95; fill: #4c1d95; font-weight: 600; }
           .muro-code .kt, svg .kt { color: #0f766e; fill: #0f766e; }
           .muro-code .n, svg .n { color: #1c1917; fill: #1c1917; }
+          .muro-code .nf, svg .nf { color: #1d4ed8; fill: #1d4ed8; }
           .muro-code .nb, svg .nb { color: #1d4ed8; fill: #1d4ed8; }
+          .muro-code .s, svg .s { color: #3f6212; fill: #3f6212; }
           .muro-code .mi, svg .mi, .muro-code .m, svg .m { color: #b45309; fill: #b45309; }
-          .muro-code .o, svg .o { color: #c2410c; fill: #c2410c; }
+          .muro-code .o, svg .o { color: #be123c; fill: #be123c; }
           .muro-code .p, svg .p { color: #44403c; fill: #44403c; }
           .muro-code .c, svg .c, .muro-code .c1, svg .c1 { color: #78716c; fill: #78716c; font-style: italic; }
           .muro-code .w, svg .w { color: inherit; fill: inherit; }
-          .muro-code .err, svg .err { color: #c2410c; fill: #c2410c; border: 0; background: none; font-style: normal; }
-          .muro-source { margin: 4px 0 8px; max-width: 100%; overflow-x: auto; font: 12px/1.45 ui-monospace, monospace; }
+          .muro-source { margin: 4px 0 8px; max-width: 100%; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.45 ui-monospace, monospace; }
+          .muro-source details.more { margin: 0; }
+          .muro-source details.more summary { cursor: pointer; color: #57534e; }
           .muro-source .row { display: block; }
           .muro-source .ln { display: inline-block; min-width: 2.6em; padding-right: 0.8em; text-align: right; color: #a8a29e; user-select: none; }
           .muro-source .row.marked { background: #fef3c7; }
@@ -170,14 +212,17 @@ defmodule MuroVisor.Layouts do
           html.theme-dark .views a { color: inherit; }
           html.theme-dark pre.muro-code { background-color: #292524; color: #e7e5e4; }
           html.theme-dark .muro-code .k, html.theme-dark svg .k { color: #c4b5fd; fill: #c4b5fd; }
+          html.theme-dark .muro-code .kd, html.theme-dark svg .kd { color: #ddd6fe; fill: #ddd6fe; }
           html.theme-dark .muro-code .kt, html.theme-dark svg .kt { color: #5eead4; fill: #5eead4; }
           html.theme-dark .muro-code .n, html.theme-dark svg .n { color: #e7e5e4; fill: #e7e5e4; }
+          html.theme-dark .muro-code .nf, html.theme-dark svg .nf { color: #93c5fd; fill: #93c5fd; }
           html.theme-dark .muro-code .nb, html.theme-dark svg .nb { color: #93c5fd; fill: #93c5fd; }
+          html.theme-dark .muro-code .s, html.theme-dark svg .s { color: #d9f99d; fill: #d9f99d; }
           html.theme-dark .muro-code .mi, html.theme-dark svg .mi, html.theme-dark .muro-code .m, html.theme-dark svg .m { color: #fdba74; fill: #fdba74; }
-          html.theme-dark .muro-code .o, html.theme-dark svg .o { color: #fdba74; fill: #fdba74; }
+          html.theme-dark .muro-code .o, html.theme-dark svg .o { color: #fb7185; fill: #fb7185; }
           html.theme-dark .muro-code .p, html.theme-dark svg .p { color: #d6d3d1; fill: #d6d3d1; }
           html.theme-dark .muro-code .c, html.theme-dark svg .c, html.theme-dark .muro-code .c1, html.theme-dark svg .c1 { color: #a8a29e; fill: #a8a29e; }
-          html.theme-dark .muro-code .err, html.theme-dark svg .err { color: #fdba74; fill: #fdba74; border: 0; background: none; }
+          html.theme-dark .muro-source details.more summary { color: #a8a29e; }
           html.theme-dark .muro-source .ln { color: #a8a29e; }
           html.theme-dark .muro-source .row.marked { background: #44403c; }
           html.theme-dark .muro-source .here, html.theme-dark .muro-code .here { background: #78350f; }

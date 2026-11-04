@@ -1,6 +1,6 @@
 # muro_visor
 
-A read-only visual explorer for one checked muro book. Version 0.2.1. It is its own Hex package and it depends on `muro ~> 0.20.7`.
+A read-only visual explorer for one checked muro book. Version 0.2.1. It is its own Hex package and it depends on `muro ~> 0.20.12`.
 
 The compiler does not start this application, and the muro release binaries do not depend on Phoenix. `muro ui path.muro` prints these install steps and links to [the explorer page](https://muro-lang.dev/docs/explorer).
 
@@ -12,7 +12,7 @@ mix deps.get
 mix muro.ui path.muro
 ```
 
-A published package depends on `muro ~> 0.20.7`. This checkout, and CI, build against the repository instead. From this checkout:
+A published package depends on `muro ~> 0.20.12`. This checkout, and CI, build against the repository instead. From this checkout:
 
 ```
 cd ui
