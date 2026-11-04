@@ -24,6 +24,87 @@ defmodule Muro.ChoreoTest do
     assert Choreo.project(ping, "b", "a") == {:ok, {:recv, :nat, :end}}
   end
 
+  test "a declared payload stops before the next message, label, and declaration" do
+    reply = """
+    data Reply : Type where
+      written : Reply
+      invalid : Reply
+
+    choreography ping
+      roles a, b
+      a -> b : x Reply
+
+    session ab := seen a with b in ping
+
+    def kept : run Nat := 0
+    """
+
+    assert check(reply) == :ok
+    assert {:ok, book} = Parser.parse(reply)
+    ping = Enum.find(book, &(&1.name == "ping"))
+    assert ping.body == {:comm, "a", "b", "x", {:dat, "Reply", []}, :end}
+
+    two = """
+    data Reply : Type where
+      written : Reply
+      invalid : Reply
+
+    choreography ping
+      roles a, b
+      a -> b : x Reply
+      b -> a : y Nat
+
+    session ab := seen a with b in ping
+    """
+
+    assert check(two) == :ok
+    assert {:ok, book} = Parser.parse(two)
+    ping = Enum.find(book, &(&1.name == "ping"))
+
+    assert ping.body ==
+             {:comm, "a", "b", "x", {:dat, "Reply", []}, {:comm, "b", "a", "y", :nat, :end}}
+
+    paren = """
+    data Reply : Type where
+      written : Reply
+
+    choreography ping
+      roles a, b
+      a -> b : x (Reply)
+
+    session ab := seen a with b in ping
+    """
+
+    assert check(paren) == :ok
+    assert {:ok, book} = Parser.parse(paren)
+    ping = Enum.find(book, &(&1.name == "ping"))
+    assert ping.body == {:comm, "a", "b", "x", {:dat, "Reply", []}, :end}
+
+    labelled = """
+    data Reply : Type where
+      written : Reply
+
+    choreography pick
+      roles a, b
+      a chooses
+        go: a -> b : x Reply
+        stop: b -> a : y Nat
+
+    session ab := seen a with b in pick
+    """
+
+    assert check(labelled) == :ok
+    assert {:ok, book} = Parser.parse(labelled)
+    pick = Enum.find(book, &(&1.name == "pick"))
+
+    assert pick.body ==
+             {:choice, "a",
+              [
+                {"go", {:comm, "a", "b", "x", {:dat, "Reply", []}, :end}},
+                {"stop", {:comm, "b", "a", "y", :nat, :end}}
+              ]}
+  end
+
   test "the chooser has a choice even when the arms agree" do
     same = {:comm, "b", "c", "go", :unit, :end}
 
