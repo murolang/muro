@@ -14,6 +14,30 @@
 
 - Version 0.20.9.
 
+## 0.20.12
+
+`Muro.Lexer` classifies the words of the language. Declaration words, session and protocol words, choreography words, type formers, and the builtin types each have a kind. Numerals, strings, comments, and punctuation do too. Operators include the forms the parser accepts, among them `≤`, `→`, `λ`, `Π`, `×`, `⊎`, `≡`, and `⊸`, and the evidence mark `⊢`. The lists live in `Muro.Words`. The parser and the lexer both read them. Whitespace is its own token. `Muro.MakeupLexer` maps each kind onto a Makeup tag, and a token the language accepts is not an error. A parsed definition carries `:extent`, the byte span from its first word to the first byte the parser did not consume.
+
+### Package
+
+- Version 0.20.12.
+
+## 0.20.11
+
+A payload stops before a token that begins something else. The words are `def`, `data`, `session`, `conform`, `meet`, `place`, `scheme`, `move`, `endpoint`, `read`, `talk`, `choreography`, `seat`, `link`, `relay`, `import`, `param`, `where`, `nu`, `ν`, `end`, `send`, `recv`, `choose`, `branch`, `rec`, `case`, `on`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `over`, `say`, and `offer`. `temporal <name> :` and `repr <name> :=` stop as well. A name followed by `->`, `→`, `chooses`, or `:` is the next interaction or a branch label. `)` and `}` stop, and `end` closes a choice. A recursion variable in scope is the continuation (`send Bool X`). Parentheses still group a payload (`(Reply)`, `(Maybe (List Nat))`). Omitting `end` after the payload is a parse error at that point, and the message says `end` was expected. The next declaration stays where it is. A vector length is still a numeral or a name, and a token from that list is not a length.
+
+A declared data type used as a payload takes exactly as many arguments as its declaration has parameters. The wrong count is refused at that declaration: `Reply takes 0 arguments, given 2`. One parameter is `argument`. A count that matches, when the declaration is indexed, has a parameter that is not `Type`, or has a field that is not a payload, stays `ill-formed payload`. `send Count end`, where `Count` takes a nat, is `Count takes 1 argument, given 0`.
+
+A payload type named with one of those words is refused. A constructor named `import` or `where` is refused, because a constructor list stops at the next book entry, and that entry includes `import` and `where`. A constructor such as `place : Box` stays a constructor. The books in this repository did not use those words as a payload type or as a constructor of that name.
+
+### Manual
+
+- Grammar, Choreography, Terms, Sessions, Limits.
+
+### Package
+
+- Version 0.20.11.
+
 ## 0.20.8
 
 A `choreography` declaration names roles and one global type. Projection gives each ordered pair of roles a binary session: `end`, `send`, `recv`, `choose`, or `branch`. A message is `send` for the sender and `recv` for the receiver. A choice by a role on that pair is `choose` or `branch`, nested to the right when there are more than two branches, and the choice stays even when the arms agree. A role that is neither end of the choice has a session only when every branch projects to the same session. Otherwise the checker names the role and the branches that disagree. A duplicate role, an unknown role, a self-interaction, a duplicate branch label, and a choice with fewer than two branches are refused. `project-sound` and `project-complete` say the function returns a session exactly when `g ↾ r / s ≡ b` derives it. `pairwise-dual` says the two directions are dual whenever that projection exists, including a pair that never interacts. The module is `agda/Muro/Choreo.agda`, checked under `--safe`. The choreography is spec. The emitters skip it. `session name := seen role with role in choreography` is that projection. `mix muro.check` prints `choreography <name>: <role> with <role> = <session>` after any temporal lines. A book with no choreography prints what it printed before. The book is `examples/two-phase-commit.muro`. The page is [Choreography](manual/choreography.md).

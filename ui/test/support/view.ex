@@ -38,7 +38,31 @@ defmodule MuroVisor.View do
     end)
   end
 
-  def parse(html), do: Floki.parse_fragment!(html)
+  # The page keeps each space in its own element so lines can wrap. Floki
+  # drops an element whose only child is a raw space, so the characters are
+  # written back as entities before this one parse.
+  def parse(html) do
+    html
+    |> absorb_ws_spans()
+    |> Floki.parse_fragment!()
+  end
+
+  defp absorb_ws_spans(html) do
+    Regex.replace(~r/<(span|tspan) class="w">([^<]*)<\/\1>/, html, fn _, tag, inner ->
+      encoded =
+        inner
+        |> String.to_charlist()
+        |> Enum.map(fn
+          ?\s -> "&#32;"
+          ?\n -> "&#10;"
+          ?\t -> "&#9;"
+          ?\r -> "&#13;"
+          cp -> <<cp::utf8>>
+        end)
+
+      IO.iodata_to_binary(["<", tag, ~s( class="w">), encoded, "</", tag, ">"])
+    end)
+  end
 
   def text_of(html, selector) do
     html |> parse() |> Floki.find(selector) |> Floki.text()

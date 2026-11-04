@@ -104,7 +104,8 @@ defmodule MuroVisor.Sequence do
             class: "arrow-label",
             x: step.label_x,
             y: step.label_y,
-            "text-anchor": "middle"
+            "text-anchor": "middle",
+            code: true
           )}
           <rect
             :for={badge <- badge_list(step.badge)}
@@ -120,7 +121,8 @@ defmodule MuroVisor.Sequence do
             x: step.badge_x,
             y: step.badge_y,
             fill: "#1c1917",
-            "text-anchor": "middle"
+            "text-anchor": "middle",
+            code: true
           )}
           {text_at(step.loop && "loop", class: "loop-note", x: step.loop_x, y: step.loop_y)}
           <polygon
@@ -150,7 +152,8 @@ defmodule MuroVisor.Sequence do
             class: "term-label",
             x: step.label_x,
             y: step.label_y,
-            "text-anchor": "middle"
+            "text-anchor": "middle",
+            code: true
           )}
         </g>
         <.lane box={@d.left_foot} />
@@ -165,12 +168,28 @@ defmodule MuroVisor.Sequence do
   defp text_at(false, _attrs), do: nil
 
   defp text_at(text, attrs) do
+    {code, attrs} = Keyword.pop(attrs, :code, false)
+
+    attrs =
+      if code do
+        Keyword.update(attrs, :class, "muro-code", &"#{&1} muro-code")
+      else
+        attrs
+      end
+
     rendered =
       attrs
       |> Enum.reject(fn {_key, value} -> is_nil(value) end)
       |> Enum.map_join(" ", fn {key, value} -> ~s(#{key}="#{escape(value)}") end)
 
-    {:safe, ~s(<text #{rendered}>#{escape(text)}</text>)}
+    inner =
+      if code do
+        MuroVisor.Code.highlight(to_string(text), tag: "tspan")
+      else
+        escape(text)
+      end
+
+    {:safe, ["<text ", rendered, ">", inner, "</text>"]}
   end
 
   defp escape(value) do
@@ -201,13 +220,15 @@ defmodule MuroVisor.Sequence do
         x: @box.cx,
         y: @box.name_y,
         "text-anchor": "middle",
-        "font-weight": "700"
+        "font-weight": "700",
+        code: true
       )}
       {text_at(@box.session,
         class: "lane-session",
         x: @box.cx,
         y: @box.session_y,
-        "text-anchor": "middle"
+        "text-anchor": "middle",
+        code: true
       )}
     </g>
     """

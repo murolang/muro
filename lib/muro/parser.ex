@@ -3,7 +3,7 @@ defmodule Muro.Parser do
   Tiny .muro parser. Agda-looking: Π, λ, match, explicit types.
   """
 
-  alias Muro.Print
+  alias Muro.{Print, Words}
 
   @src_key {__MODULE__, :src}
   @noting_key {__MODULE__, :noting_proc}
@@ -243,121 +243,131 @@ defmodule Muro.Parser do
       nu_start?(s) ->
         case parse_nu(s) do
           {:ok, rest} -> parse_book(rest, acc)
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       import_start?(s) ->
         case parse_import(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       param_start?(s) ->
         case parse_param(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       data_start?(s) ->
         case parse_data(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       session_start?(s) ->
         case parse_session(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       conform_start?(s) ->
         case parse_conform(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       place_start?(s) ->
         case parse_place(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       scheme_start?(s) ->
         case parse_scheme(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       move_start?(s) ->
         case parse_move(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       endpoint_start?(s) ->
         case parse_endpoint(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       read_start?(s) ->
         case parse_read(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       meet_start?(s) ->
         case parse_meet(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       temporal_start?(s) ->
         case parse_temporal(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       talk_start?(s) ->
         case parse_talk(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       choreography_start?(s) ->
         case parse_choreography(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       repr_start?(s) ->
         case parse_repr(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       seat_start?(s) ->
         case parse_seat(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       link_start?(s) ->
         case parse_link(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       true ->
         case parse_def(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
     end
   end
 
-  defp nu_start?(s), do: word_kw?(s, "ν") or word_kw?(s, "nu")
+  defp noted(start, decl, rest, acc) do
+    decl = Map.put(decl, :extent, {byte_off(start), byte_off(rest)})
+    parse_book(rest, [decl | acc])
+  end
+
+  defp byte_off(rest) do
+    src = Process.get(@src_key, "")
+    max(0, byte_size(src) - byte_size(rest))
+  end
+
+  defp nu_start?(s), do: Enum.any?(Words.nu_words(), &word_kw?(s, &1))
 
   defp import_start?(s), do: word_kw?(s, "import")
 
@@ -410,7 +420,7 @@ defmodule Muro.Parser do
   # is `ν Name. λ x₁ … xₙ → B`: inside B, Name is the ν-bound family.
   defp parse_nu(s) do
     loc = here(s)
-    rest = s |> skip() |> eat_kw(["ν", "nu"])
+    rest = s |> skip() |> eat_kw(Words.nu_words())
 
     with {:ok, name, rest} <- ident(skip(rest)) do
       if name == "Stream", do: parse_nu_stream(rest), else: parse_nu_family(name, loc, rest)
@@ -1195,7 +1205,7 @@ defmodule Muro.Parser do
       rest = skip(rest)
 
       cond do
-        has_prefix?(rest, "<=") or has_prefix?(rest, "≤") or has_prefix?(rest, "<") ->
+        Enum.any?(Words.le_words(), &has_prefix?(rest, &1)) or has_prefix?(rest, "<") ->
           parse_has_cmp(role, name, rest)
 
         word_kw?(rest, "is") ->
@@ -1216,10 +1226,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     {tag, rest} =
-      cond do
-        has_prefix?(s, "<=") -> {:le, after_kw(s, "<=")}
-        has_prefix?(s, "≤") -> {:le, after_kw(s, "≤")}
-        true -> {:lt, after_kw(s, "<")}
+      case Enum.find(Words.le_words(), &has_prefix?(s, &1)) do
+        nil -> {:lt, after_kw(s, "<")}
+        word -> {:le, after_kw(s, word)}
       end
 
     with {:ok, n, rest} <- parse_numeral(rest) do
@@ -1777,13 +1786,16 @@ defmodule Muro.Parser do
     end
   end
 
+  # A payload starts only when the next token is a payload. A declaration,
+  # a role continuation, a protocol word, a closer, or the end of the
+  # book is Unit, and the token stays for what follows.
   defp parse_msg_pay(s) do
     s = skip(s)
 
-    cond do
-      s == "" or global_stop?(s) or role_cont?(s) -> {:ok, :unit, s}
-      pay_head?(s) -> parse_pay(s)
-      true -> {:ok, :unit, s}
+    if pay_head?(s) do
+      parse_pay(s)
+    else
+      {:ok, :unit, s}
     end
   end
 
@@ -1800,11 +1812,14 @@ defmodule Muro.Parser do
     end
   end
 
-  defp pay_head?(s) do
+  # `bound` is the recursion variables in scope. A choreography message
+  # has none. The same boundary decides an argument of a payload.
+  defp pay_head?(s, bound \\ MapSet.new()) do
     s = skip(s)
 
-    word_kw?(s, "Nat") or word_kw?(s, "Bit") or word_kw?(s, "Unit") or word_kw?(s, "Vec") or
-      has_prefix?(s, "(") or has_prefix?(s, "{") or ident_start?(s)
+    not pay_ends?(s, bound) and
+      (word_kw?(s, "Nat") or word_kw?(s, "Bit") or word_kw?(s, "Unit") or word_kw?(s, "Vec") or
+         has_prefix?(s, "(") or has_prefix?(s, "{") or ident_start?(s))
   end
 
   defp colon(s) do
@@ -1847,12 +1862,10 @@ defmodule Muro.Parser do
   defp choreo_boundary?(s) do
     s = skip(s)
 
-    word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
-      word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
-      word_kw?(s, "where") or nu_start?(s) or place_entry?(s) or scheme_entry?(s) or
-      move_entry?(s) or endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or
-      temporal_entry?(s) or talk_start?(s) or choreography_start?(s) or seat_start?(s) or
-      link_start?(s) or repr_start?(s)
+    Enum.any?(Words.book_words(), &word_kw?(s, &1)) or nu_start?(s) or place_entry?(s) or
+      scheme_entry?(s) or move_entry?(s) or endpoint_entry?(s) or read_entry?(s) or
+      meet_entry?(s) or temporal_entry?(s) or talk_start?(s) or choreography_start?(s) or
+      seat_start?(s) or link_start?(s) or repr_start?(s)
   end
 
   defp parse_talk_term(s) do
@@ -2067,9 +2080,21 @@ defmodule Muro.Parser do
           end
 
         :not_binder ->
-          with {:ok, ty, rest} <- parse_pay(rest, bound),
-               {:ok, p, rest} <- parse_proto(skip(rest), bound) do
-            {:ok, {tag, ty, p}, rest}
+          with {:ok, ty, rest} <- parse_pay(rest, bound) do
+            rest = skip(rest)
+
+            # The continuation is written. A missing `end` at the end of
+            # the book, or where the next declaration starts, is an error
+            # at that point. `send Reply` then `def kept` fails at `def`
+            # and leaves the declaration. A binder still writes its
+            # continuation, and a written `end` is still consumed.
+            if end_missing?(rest) do
+              {:error, err(rest, "expected end")}
+            else
+              with {:ok, p, rest} <- parse_proto(rest, bound) do
+                {:ok, {tag, ty, p}, rest}
+              end
+            end
           end
 
         {:error, _} = err ->
@@ -2083,6 +2108,14 @@ defmodule Muro.Parser do
 
   defp ev_tag(:send), do: :esend
   defp ev_tag(:recv), do: :erecv
+
+  # The protocol did not continue. The book is over, a declaration
+  # starts, or a closer ends the surrounding form. The token stays.
+  defp end_missing?(s) do
+    s = skip(s)
+
+    s == "" or choreo_boundary?(s) or has_prefix?(s, ")") or has_prefix?(s, "}")
+  end
 
   # `recv (b : Bit) on S T` receives a bit. `b0` continues as `S` and
   # `b1` continues as `T`. A nat does not choose the arm.
@@ -2420,7 +2453,7 @@ defmodule Muro.Parser do
   end
 
   defp proto_head?(s) do
-    Enum.any?(~w(end send recv choose branch rec), &word_kw?(s, &1))
+    Enum.any?(Words.proto_head_words(), &word_kw?(s, &1))
   end
 
   defp parse_sexpr(s) do
@@ -2525,9 +2558,7 @@ defmodule Muro.Parser do
     end
   end
 
-  defp reserved_session?(name) do
-    name in ~w(end send recv choose branch rec case done stop put get pick0 pick1 cover match on Nat Bit Unit Vec dual seen)
-  end
+  defp reserved_session?(name), do: Words.reserved_session?(name)
 
   defp parse_proto2(s, word, tag, bound) do
     with {:ok, rest} <- kw(s, word),
@@ -2920,7 +2951,7 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
-      Enum.any?(~w(done stop put get pick0 pick1 cover rec match), &word_kw?(s, &1)) ->
+      Enum.any?(Words.proc_start_words(), &word_kw?(s, &1)) ->
         true
 
       has_prefix?(s, "(") ->
@@ -2937,9 +2968,7 @@ defmodule Muro.Parser do
     end
   end
 
-  defp decl_word?(name) do
-    name in ~w(def data session conform meet place scheme move endpoint read talk choreography seat link relay import param where)
-  end
+  defp decl_word?(name), do: Words.decl_word?(name)
 
   # A payload type. `Nat`, `Bit`, and `Unit` are those types. A name is
   # a declared data type, applied to the payload types written after it.
@@ -2972,7 +3001,12 @@ defmodule Muro.Parser do
   defp known_pay?(_), do: false
 
   # `*` is the payload pair. `×` is the same operator.
-  defp pair_tok?(s), do: has_prefix?(s, "×") or (has_prefix?(s, "*") and not has_prefix?(s, "**"))
+  defp pair_tok?(s) do
+    Enum.any?(Words.times_words(), fn
+      "*" -> has_prefix?(s, "*") and not has_prefix?(s, "**")
+      word -> has_prefix?(s, word)
+    end)
+  end
 
   defp drop_pair(s) do
     if has_prefix?(s, "×"), do: after_kw(s, "×"), else: after_kw(s, "*")
@@ -3000,14 +3034,15 @@ defmodule Muro.Parser do
       word_kw?(s, "Vec") -> parse_vec(s, bound)
       has_prefix?(s, "(") -> parse_paren(s, fn body -> parse_pay(body, bound) end)
       has_prefix?(s, "{") -> parse_pay_rec(s, bound)
-      ident_start?(s) and not pay_stop?(s) -> parse_dat(s, bound)
+      ident_start?(s) and not pay_ends?(s, bound) -> parse_dat(s, bound)
       true -> {:error, err(s, "expected a payload")}
     end
   end
 
-  # `Maybe Nat` is that data type applied to `Nat`. A protocol keyword
-  # is not an argument: `send Bool end` stops before `end`. A recursion
-  # variable is the continuation, not an argument: `send Bool X`.
+  # `Maybe Nat` is that data type applied to `Nat`. An argument stops
+  # where `pay_ends?/2` says the next token begins something else:
+  # `send Bool end` stops before `end`, and `send Bool X` leaves the
+  # recursion variable as the continuation.
   defp parse_dat(s, bound) do
     with {:ok, name, rest} <- ident(s),
          {:ok, args, rest} <- take_pay_args(rest, [], bound) do
@@ -3032,7 +3067,7 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
-      pay_stop?(s) ->
+      pay_ends?(s, bound) ->
         false
 
       word_kw?(s, "Nat") or word_kw?(s, "Bit") or word_kw?(s, "Unit") or word_kw?(s, "Vec") ->
@@ -3042,25 +3077,80 @@ defmodule Muro.Parser do
         true
 
       ident_start?(s) ->
-        case ident(s) do
-          {:ok, name, _} -> not MapSet.member?(bound, name)
-          _ -> false
-        end
+        true
 
       true ->
         false
     end
   end
 
+  # The next token begins something other than a payload argument.
+  # Declaration words and entry forms, a role continuation (`name ->`,
+  # `name chooses`, `name:`), a protocol word, a talk word (`over`,
+  # `say`, `offer`), a choice closer, a closer (`)` or `}`), or a
+  # recursion variable in scope. `(` and `{` still open a payload.
+  defp pay_ends?(s, bound) do
+    s = skip(s)
+
+    cond do
+      s == "" ->
+        true
+
+      has_prefix?(s, ")") or has_prefix?(s, "}") ->
+        true
+
+      choice_closer?(s) ->
+        true
+
+      decl_boundary?(s) ->
+        true
+
+      pay_stop?(s) ->
+        true
+
+      talk_word?(s) ->
+        true
+
+      role_cont?(s) ->
+        true
+
+      true ->
+        bound_var?(s, bound)
+    end
+  end
+
+  # A declaration word, or the form that starts a book entry. A bare
+  # `place` or `relay` is included, so a payload does not take it.
+  defp decl_boundary?(s) do
+    s = skip(s)
+    choreo_boundary?(s) or decl_word_at?(s)
+  end
+
+  defp decl_word_at?(s) do
+    case ident(skip(s)) do
+      {:ok, name, _} -> decl_word?(name)
+      _ -> false
+    end
+  end
+
+  defp talk_word?(s) do
+    Enum.any?(Words.talk_stop_words(), &word_kw?(s, &1))
+  end
+
+  defp bound_var?(s, bound) do
+    case ident(skip(s)) do
+      {:ok, name, _} -> MapSet.member?(bound, name)
+      _ -> false
+    end
+  end
+
   defp pay_stop?(s) do
-    Enum.any?(
-      ~w(end send recv choose branch rec case on done stop put get pick0 pick1 cover where),
-      &word_kw?(s, &1)
-    )
+    Enum.any?(Words.pay_stop_words(), &word_kw?(s, &1))
   end
 
   # `Vec Nat n` and `Vec Nat 2`. The length is a numeral or a name.
-  # A successor, or a missing length, is not a length.
+  # A successor, a missing length, or a token that ends a payload is
+  # not a length. A recursion variable is the continuation.
   defp parse_vec(s, bound) do
     with {:ok, rest} <- kw(s, "Vec"),
          {:ok, elem, rest} <- parse_pay_atom(skip(rest), bound) do
@@ -3071,7 +3161,7 @@ defmodule Muro.Parser do
           {digits, rest} = take_digits(rest, "")
           {:ok, {:vec, elem, {:lit, String.to_integer(digits)}}, rest}
 
-        ident_start?(rest) ->
+        ident_start?(rest) and not pay_ends?(rest, bound) ->
           case ident(rest) do
             {:ok, name, rest} -> {:ok, {:vec, elem, {:var, String.to_atom(name)}}, rest}
             err -> err
@@ -3253,9 +3343,7 @@ defmodule Muro.Parser do
     end
   end
 
-  defp proc_word?(name) do
-    name in ~w(done stop put get pick0 pick1 cover rec match end send recv choose branch on)
-  end
+  defp proc_word?(name), do: Words.proc_word?(name)
 
   defp number?(<<c, _::binary>>) when c in ?0..?9, do: true
   defp number?(_), do: false
@@ -3422,15 +3510,7 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
-      s == "" ->
-        {:ok, Enum.reverse(acc), s}
-
-      word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
-        word_kw?(s, "session") or word_kw?(s, "conform") or nu_start?(s) or
-        place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
-        endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
-        talk_start?(s) or choreography_start?(s) or seat_start?(s) or link_start?(s) or
-          repr_start?(s) ->
+      s == "" or choreo_boundary?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
@@ -3614,27 +3694,19 @@ defmodule Muro.Parser do
   defp eat_earrow(s) do
     s = skip(s)
 
-    cond do
-      has_prefix?(s, "⊸") -> {:ok, :lin, after_kw(s, "⊸")}
-      has_prefix?(s, "-o") -> {:ok, :lin, after_kw(s, "-o")}
-      has_prefix?(s, "→") -> {:ok, :aff, after_kw(s, "→")}
-      has_prefix?(s, "->") and not has_prefix?(s, "=>") -> {:ok, :aff, after_kw(s, "->")}
-      true -> {:error, err(s, "expected ⊸")}
+    case Enum.find(Words.earrow_forms(), fn {word, _qty} ->
+           has_prefix?(s, word) and not (word == "->" and has_prefix?(s, "=>"))
+         end) do
+      {word, qty} -> {:ok, qty, after_kw(s, word)}
+      nil -> {:error, err(s, "expected ⊸")}
     end
   end
 
   # A following book entry is not an argument. `meet s t` is the term.
-  # `meet name :` is the next entry.
+  # `meet name :` is the next entry. `motive` and `in` stay term keywords.
   defp eboundary?(s) do
     s = skip(s)
-
-    word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
-      word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
-      word_kw?(s, "where") or word_kw?(s, "motive") or word_kw?(s, "in") or
-      nu_start?(s) or place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
-      endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
-      talk_start?(s) or choreography_start?(s) or seat_start?(s) or link_start?(s) or
-      repr_start?(s)
+    choreo_boundary?(s) or word_kw?(s, "motive") or word_kw?(s, "in")
   end
 
   defp eatom_start?(s) do
@@ -3769,31 +3841,32 @@ defmodule Muro.Parser do
   end
 
   defp arrow_tok?(s) do
-    (has_prefix?(s, "→") or has_prefix?(s, "->")) and not has_prefix?(s, "=>")
+    Enum.any?(Words.arrow_words(), &has_prefix?(s, &1)) and not has_prefix?(s, "=>")
   end
 
   defp eat_arrow(s) do
-    cond do
-      has_prefix?(s, "→") -> {:ok, after_kw(s, "→")}
-      has_prefix?(s, "->") -> {:ok, after_kw(s, "->")}
-      true -> {:error, "expected →"}
+    case Enum.find(Words.arrow_words(), &has_prefix?(s, &1)) do
+      nil -> {:error, "expected →"}
+      word -> {:ok, after_kw(s, word)}
     end
   end
 
-  defp times_tok?(s), do: has_prefix?(s, "×") or has_prefix?(s, "*")
+  defp times_tok?(s), do: Enum.any?(Words.times_words(), &has_prefix?(s, &1))
 
   defp eat_times(s) do
-    cond do
-      has_prefix?(s, "×") -> {:ok, after_kw(s, "×")}
-      has_prefix?(s, "*") -> {:ok, after_kw(s, "*")}
-      true -> {:error, "expected ×"}
+    case Enum.find(Words.times_words(), &has_prefix?(s, &1)) do
+      nil -> {:error, "expected ×"}
+      word -> {:ok, after_kw(s, word)}
     end
   end
 
-  defp sum_tok?(s), do: has_prefix?(s, "⊎")
+  defp sum_tok?(s), do: Enum.any?(Words.sum_words(), &has_prefix?(s, &1))
 
   defp eat_sum(s) do
-    if has_prefix?(s, "⊎"), do: {:ok, after_kw(s, "⊎")}, else: {:error, "expected ⊎"}
+    case Enum.find(Words.sum_words(), &has_prefix?(s, &1)) do
+      nil -> {:error, "expected ⊎"}
+      word -> {:ok, after_kw(s, word)}
+    end
   end
 
   defp bisim_tok?(s), do: has_prefix?(s, "~") and not ident_char?(after_kw(s, "~"))
@@ -3802,10 +3875,13 @@ defmodule Muro.Parser do
     if bisim_tok?(s), do: {:ok, after_kw(s, "~")}, else: {:error, "expected ~"}
   end
 
-  defp cons_tok?(s), do: has_prefix?(s, "::")
+  defp cons_tok?(s), do: Enum.any?(Words.cons_words(), &has_prefix?(s, &1))
 
   defp eat_cons(s) do
-    if cons_tok?(s), do: {:ok, after_kw(s, "::")}, else: {:error, "expected ::"}
+    case Enum.find(Words.cons_words(), &has_prefix?(s, &1)) do
+      nil -> {:error, "expected ::"}
+      word -> {:ok, after_kw(s, word)}
+    end
   end
 
   # Next constructor in a data block: `name : type`, not `:=` or `::`.
@@ -3827,17 +3903,11 @@ defmodule Muro.Parser do
   end
 
   # `session` and `conform` use `:=`, so ctor_decl_start? does not see
-  # them. A new line that starts either form, or a place, scheme, move,
-  # endpoint, reading, meeting, temporal declaration, talk, repr, seat, or
-  # link entry, ends the constructor's type. `temporal name :` is that line.
+  # them. A new line that starts a book entry ends the constructor's
+  # type. On the same line the word is an argument (`w : place`).
   defp session_line?(s, s0) do
     skipped = binary_part(s, 0, byte_size(s) - byte_size(s0))
-
-    String.contains?(skipped, "\n") and
-      (session_start?(s0) or conform_start?(s0) or place_entry?(s0) or scheme_entry?(s0) or
-         move_entry?(s0) or endpoint_entry?(s0) or read_entry?(s0) or meet_entry?(s0) or
-         temporal_entry?(s0) or talk_start?(s0) or choreography_start?(s0) or repr_start?(s0) or
-         seat_start?(s0) or link_start?(s0))
+    String.contains?(skipped, "\n") and choreo_boundary?(s0)
   end
 
   defp starts_atom?(s) do
@@ -4291,10 +4361,10 @@ defmodule Muro.Parser do
 
   defp parse_pi(s) do
     loc = here(skip(s))
-    rest = s |> skip() |> eat_kw(["Π", "Pi"])
+    rest = s |> skip() |> eat_kw(Words.pi_words())
 
     with {:ok, {q, x, a}, rest} <- parse_binder(rest),
-         {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
+         {:ok, rest} <- either_tok(skip(rest), Words.arrow_words()),
          {:ok, b, rest} <- parse_term(skip(rest), 0) do
       ok_node(loc, {:pi, q, a, x, b}, 2, rest)
     end
@@ -4302,10 +4372,10 @@ defmodule Muro.Parser do
 
   defp parse_lam(s) do
     loc = here(skip(s))
-    rest = s |> skip() |> eat_kw(["λ", "lam"])
+    rest = s |> skip() |> eat_kw(Words.lam_words())
 
     with {:ok, {q, x, a}, rest} <- parse_binder(rest),
-         {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
+         {:ok, rest} <- either_tok(skip(rest), Words.arrow_words()),
          {:ok, t, rest} <- parse_term(skip(rest), 0) do
       ok_node(loc, {:lam, q, a, x, t}, 2, rest)
     end
@@ -4320,7 +4390,7 @@ defmodule Muro.Parser do
          {:ok, rest} <- tok(skip(rest), "("),
          {:ok, rest} <- eat_lam(skip(rest)),
          {:ok, x, rest} <- parse_motive_binder(skip(rest)),
-         {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
+         {:ok, rest} <- either_tok(skip(rest), Words.arrow_words()),
          {:ok, p, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), ")"),
          {:ok, rest} <- tok(skip(rest), "|") do
@@ -4458,7 +4528,7 @@ defmodule Muro.Parser do
          {:ok, rest} <- tok(skip(rest), "("),
          {:ok, rest} <- eat_lam(skip(rest)),
          {:ok, x, rest} <- ident(skip(rest)),
-         {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
+         {:ok, rest} <- either_tok(skip(rest), Words.arrow_words()),
          {:ok, p, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), ")") do
       ok_node(loc, {:memp, e, x, p}, 2, rest)
@@ -4474,7 +4544,7 @@ defmodule Muro.Parser do
          {:ok, rest} <- tok(skip(rest), "("),
          {:ok, rest} <- eat_lam(skip(rest)),
          {:ok, x, rest} <- ident(skip(rest)),
-         {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
+         {:ok, rest} <- either_tok(skip(rest), Words.arrow_words()),
          {:ok, p, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), ")"),
          {:ok, rest} <- kw(skip(rest), "in"),
@@ -4510,7 +4580,7 @@ defmodule Muro.Parser do
 
     with {:ok, rest} <- tok(s, "{"),
          {:ok, a, rest} <- parse_term(skip(rest), 0),
-         {:ok, rest} <- either_tok(skip(rest), ["≡", "=="]),
+         {:ok, rest} <- either_tok(skip(rest), Words.equiv_words()),
          {:ok, b, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), ":"),
          {:ok, ty, rest} <- parse_term(skip(rest), 0),

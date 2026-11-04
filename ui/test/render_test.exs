@@ -63,7 +63,8 @@ defmodule MuroVisor.RenderTest do
     node = Enum.find(definition_nodes(html), &(&1.id == "node-#{id}"))
     assert node.text == "run #{@unicode}"
     refute html =~ "λ<muro__"
-    assert html =~ "λ&lt;muro__名"
+    assert html =~ "&lt;"
+    assert html =~ "class=\"n\""
     assert well_formed!(svg_source(html))
     assert svg_source(render(view)) == svg_source(html)
 
