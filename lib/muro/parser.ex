@@ -3424,9 +3424,110 @@ defmodule Muro.Parser do
       true ->
         with {:ok, cname, rest} <- ident(s),
              {:ok, rest} <- tok(skip(rest), ":"),
-             {:ok, ty, rest} <- parse_term(skip(rest), 0) do
-          parse_ctors(rest, [%{name: cname, type: ty} | acc])
+             {:ok, ty, bounds, rest} <- parse_ctor_type(skip(rest)) do
+          ctor = %{name: cname, type: ty}
+
+          ctor =
+            if bounds == %{} do
+              ctor
+            else
+              Map.put(ctor, :bounds, bounds)
+            end
+
+          parse_ctors(rest, [ctor | acc])
         end
+    end
+  end
+
+  # A constructor telescope. `(slot : Nat) {slot ≤ 3}` is a nat field
+  # whose split is `0` … `3`. The bound is not part of the core type.
+  # The right side is a numeral, and the left side is that field.
+  defp parse_ctor_type(s), do: parse_ctor_pis(skip(s), %{})
+
+  defp parse_ctor_pis(s, bounds) do
+    s = skip(s)
+
+    # `(slot : Nat)` and `Π (slot : Nat)` are field binders. A parenthesis
+    # that only groups a type, `(Nat → Nat)`, stays a term.
+    if named_telescope?(s) do
+      rest = eat_kw(s, ["Π", "Pi"])
+
+      with {:ok, {q, x, a}, rest} <- parse_binder(rest),
+           {:ok, bounds, rest} <- take_field_bound(skip(rest), x, a, bounds),
+           {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
+           {:ok, body, bounds, rest} <- parse_ctor_pis(rest, bounds) do
+        {:ok, {:pi, q, a, x, body}, bounds, rest}
+      end
+    else
+      with {:ok, ty, rest} <- parse_term(s, 0), do: {:ok, ty, bounds, rest}
+    end
+  end
+
+  defp named_telescope?(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "Π") or word_kw?(s, "Pi") -> true
+      has_prefix?(s, "(") -> binder_shape?(after_kw(s, "("))
+      true -> false
+    end
+  end
+
+  defp binder_shape?(s) do
+    case parse_qty(skip(s)) do
+      {:ok, _, rest} ->
+        case ident(skip(rest)) do
+          {:ok, _, rest} -> has_prefix?(skip(rest), ":")
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp take_field_bound(s, field, domain, bounds) do
+    if has_prefix?(skip(s), "{") do
+      with {:ok, n, rest} <- field_bound(s, field, domain) do
+        {:ok, Map.put(bounds, field, n), rest}
+      end
+    else
+      {:ok, bounds, s}
+    end
+  end
+
+  defp field_bound(s, field, domain) do
+    with {:ok, rest} <- tok(skip(s), "{"),
+         {:ok, left, rest} <- ident(skip(rest)),
+         {:ok, rest} <- either_tok(skip(rest), ["≤", "<="]),
+         {:ok, n, rest} <- field_numeral(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), "}") do
+      cond do
+        left != field ->
+          {:error, err(s, "a field bound is a numeral")}
+
+        domain != :nat ->
+          {:error, err(s, "a field bound is on a nat")}
+
+        true ->
+          {:ok, n, rest}
+      end
+    else
+      _ -> {:error, err(s, "a field bound is a numeral")}
+    end
+  end
+
+  defp field_numeral(s) do
+    if number?(s) do
+      {digits, rest} = take_digits(s, "")
+
+      if digits == "0" or not String.starts_with?(digits, "0") do
+        {:ok, String.to_integer(digits), rest}
+      else
+        {:error, err(s, "a field bound is a numeral")}
+      end
+    else
+      {:error, err(s, "a field bound is a numeral")}
     end
   end
 

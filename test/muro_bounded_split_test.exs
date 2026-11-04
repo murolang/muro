@@ -124,7 +124,7 @@ defmodule Muro.BoundedSplitTest do
     assert msg =~ "united: a case is on a bit or a declared data type"
   end
 
-  test "a run of more than the nat and one payload does not decide an arm" do
+  test "a run of several finite factors decides an arm, and the old refusals stay" do
     assert {:error, msg} =
              check("""
              data Bool : Type where
@@ -165,8 +165,8 @@ defmodule Muro.BoundedSplitTest do
                  | false => end)
              """)
 
-    assert msg =~ "two-nats: the run does not decide an arm"
-    assert msg =~ "tri: the run does not decide an arm"
+    refute msg =~ "two-nats:"
+    refute msg =~ "tri:"
     assert msg =~ "early: a case is on the name just bound"
     assert msg =~ "unbounded-run: a case is on a bit or a declared data type"
   end
