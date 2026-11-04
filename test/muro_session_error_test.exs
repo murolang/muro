@@ -318,7 +318,7 @@ defmodule Muro.SessionErrorTest do
     assert {:error, msg} = Parser.parse(src)
     assert msg =~ "2:"
     refute msg =~ "3:"
-    assert msg =~ "unexpected end of file, expected"
+    assert msg =~ "unexpected end of file, expected end"
   end
 
   test "an in-flight frame that sends goaway is refused, and the meeting is skipped" do

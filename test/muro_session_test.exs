@@ -66,6 +66,101 @@ defmodule Muro.SessionTest do
     assert box.proto == {:send, {:pair, {:dat, "Maybe", [:nat]}, :bit}, :end}
   end
 
+  test "a missing end after a payload is reported at the next declaration" do
+    src = """
+    data Reply : Type where
+      written : Reply
+      invalid : Reply
+
+    session ping := send Reply
+    def kept : run Nat := 0
+    """
+
+    assert {:error, "6:1: expected end"} = Parser.parse(src)
+
+    src = """
+    session ping := send Nat
+    session other := end
+    """
+
+    assert {:error, "2:1: expected end"} = Parser.parse(src)
+
+    src = """
+    data Reply : Type where
+      written : Reply
+      invalid : Reply
+
+    session ping := send Reply end
+    def kept : run Nat := 0
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+    ping = Enum.find(book, &(&1.name == "ping"))
+    assert ping.proto == {:send, {:dat, "Reply", []}, :end}
+    assert Enum.any?(book, &match?(%{name: "kept"}, &1))
+  end
+
+  test "a parameterised payload is an application, including a nested one" do
+    src = """
+    data Maybe (A : Type) : Type where
+      nothing : Maybe A
+      just : A → Maybe A
+
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+
+    session opt := send Maybe Nat end
+    session nested := send Maybe (List Nat) end
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+    opt = Enum.find(book, &(&1.name == "opt"))
+    nested = Enum.find(book, &(&1.name == "nested"))
+    assert opt.proto == {:send, {:dat, "Maybe", [:nat]}, :end}
+    assert nested.proto == {:send, {:dat, "Maybe", [{:dat, "List", [:nat]}]}, :end}
+  end
+
+  test "a payload gets exactly the arguments its declaration takes" do
+    assert {:error, msg} =
+             check("""
+             data Reply : Type where
+               written : Reply
+
+             session bad := send Reply Nat Bit end
+             """)
+
+    assert msg =~ "4:1: bad: Reply takes 0 arguments, given 2"
+  end
+
+  test "a recursion variable after a payload is the continuation" do
+    assert {:ok, [flags]} =
+             Parser.parse("""
+             session flags := rec X. send Bool X
+             """)
+
+    assert flags.proto == {:rec, :X, {:send, {:dat, "Bool", []}, {:svar, :X}}}
+  end
+
+  test "a constructor type stops at the next import" do
+    src = """
+    data Box : Type where
+      b : Box
+
+    import "std:bool.muro"
+
+    def n : run Bool := not false
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Enum.any?(book, &match?(%{kind: :import, path: "std:bool.muro"}, &1))
+    box = Enum.find(book, &(&1.kind == :data and &1.name == "Box"))
+    assert hd(box.ctors).type == {:var, "Box"}
+    assert Enum.any?(book, &match?(%{name: "n"}, &1))
+  end
+
   test "a run beside a session is what emit keeps" do
     src = """
     session ping := recv Nat (send Nat end)
@@ -888,7 +983,7 @@ defmodule Muro.SessionTest do
              session count := send Count end
              """)
 
-    assert msg =~ "ill-formed payload"
+    assert msg =~ "4:1: count: Count takes 1 argument, given 0"
 
     assert {:error, msg} =
              check("""

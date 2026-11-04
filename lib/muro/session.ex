@@ -4335,9 +4335,10 @@ defmodule Muro.Session do
 
   defp ty_ok({:vec, _, _}, _ctx, _book, _seen), do: {:error, "vector length is not a nat"}
 
-  # A declared data type. An inductive occurrence of the same application
-  # is the declaration already being checked. An index, a parameter that
-  # is not `Type`, or a field that is not a payload, is ill-formed.
+  # A declared data type. The argument count is the parameter count.
+  # An inductive occurrence of the same application is the declaration
+  # already being checked. An index, a parameter that is not `Type`, or
+  # a field that is not a payload, is ill-formed.
   defp ty_ok({:dat, name, args}, ctx, book, seen), do: ty_dat(name, args, ctx, book, seen)
 
   defp ty_ok(_, _ctx, _book, _seen), do: {:error, "ill-formed payload"}
@@ -4412,20 +4413,37 @@ defmodule Muro.Session do
             {:error, "ill-formed payload"}
 
           d ->
-            case decl_templates(d) do
-              {:ok, {_name, %{np: n, ctors: ctors}}} when n == length(args) ->
-                seen = MapSet.put(seen, key)
-
-                with :ok <- each_ty(args, ctx, book, seen) do
-                  each_ctor(ctors, name, args, ctx, book, seen)
-                end
-
-              _ ->
-                {:error, "ill-formed payload"}
-            end
+            dat_arity(name, args, d, ctx, book, seen, key)
         end
     end
   end
+
+  # The count is checked before the template. A matching count whose
+  # declaration is not a payload stays ill-formed. `Fin` has no
+  # parameters and an index, so zero arguments stays ill-formed.
+  defp dat_arity(name, args, d, ctx, book, seen, key) do
+    n = length(d.params)
+    k = length(args)
+
+    if n == k do
+      case decl_templates(d) do
+        {:ok, {_name, %{np: ^n, ctors: ctors}}} ->
+          seen = MapSet.put(seen, key)
+
+          with :ok <- each_ty(args, ctx, book, seen) do
+            each_ctor(ctors, name, args, ctx, book, seen)
+          end
+
+        _ ->
+          {:error, "ill-formed payload"}
+      end
+    else
+      {:error, "#{name} takes #{n} #{arg_word(n)}, given #{k}"}
+    end
+  end
+
+  defp arg_word(1), do: "argument"
+  defp arg_word(_), do: "arguments"
 
   defp each_ty(args, ctx, book, seen) do
     Enum.reduce_while(args, :ok, fn ty, :ok ->

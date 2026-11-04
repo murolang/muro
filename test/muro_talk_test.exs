@@ -253,6 +253,21 @@ defmodule Muro.TalkTest do
            """) == :ok
   end
 
+  test "a talk payload stops before over" do
+    src = """
+    data Reply : Type where
+      written : Reply
+
+    talk ping := say a b Reply over
+    session ab := seen a with b in ping
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    talk = Enum.find(book, &(&1.name == "ping"))
+    assert talk.body == {:say, "a", "b", {:dat, "Reply", []}, :over}
+    assert Check.check_sig(book) == :ok
+  end
+
   test "over, say, and offer are not party names" do
     assert {:error, msg} = Parser.parse("talk bad := say over pong over over\n")
     assert msg =~ "expected a party"
