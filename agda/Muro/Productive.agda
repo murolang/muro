@@ -191,6 +191,7 @@ mutual
   occℕ-ren-avoid k ρ (toi64 t) hyp = occℕ-ren-avoid k ρ t hyp
   occℕ-ren-avoid k ρ (packi x y) hyp =
     ∨-both-false (occℕ-ren-avoid k ρ x hyp) (occℕ-ren-avoid k ρ y hyp)
+  occℕ-ren-avoid k ρ (word _ ts) hyp = occℕList-ren-avoid k ρ ts hyp
   occℕ-ren-avoid _ _ typ       _ = refl
   occℕ-ren-avoid _ _ nat       _ = refl
   occℕ-ren-avoid _ _ ze        _ = refl
@@ -286,6 +287,7 @@ mutual
   occℕ-thin k i (addt t u) = cong₂ _∨_ (occℕ-thin k i t) (occℕ-thin k i u)
   occℕ-thin k i (toi64 t) = occℕ-thin k i t
   occℕ-thin k i (packi x y) = cong₂ _∨_ (occℕ-thin k i x) (occℕ-thin k i y)
+  occℕ-thin k i (word _ ts) = occℕList-thin k i ts
   occℕ-thin _ _ typ = refl
   occℕ-thin _ _ nat = refl
   occℕ-thin _ _ ze = refl
@@ -398,6 +400,7 @@ mutual
   occℕ-sub i σ (addt t u) hyp = cong₂ _∨_ (occℕ-sub i σ t hyp) (occℕ-sub i σ u hyp)
   occℕ-sub i σ (toi64 t) hyp = occℕ-sub i σ t hyp
   occℕ-sub i σ (packi x y) hyp = cong₂ _∨_ (occℕ-sub i σ x hyp) (occℕ-sub i σ y hyp)
+  occℕ-sub i σ (word _ ts) hyp = occℕList-sub i σ ts hyp
   occℕ-sub _ _ typ _ = refl
   occℕ-sub _ _ nat _ = refl
   occℕ-sub _ _ ze _ = refl
@@ -464,6 +467,7 @@ mutual
   occℕ-occurs x (addt t u) = cong₂ _∨_ (occℕ-occurs x t) (occℕ-occurs x u)
   occℕ-occurs x (toi64 t) = occℕ-occurs x t
   occℕ-occurs x (packi a b) = cong₂ _∨_ (occℕ-occurs x a) (occℕ-occurs x b)
+  occℕ-occurs x (word _ ts) = occℕList-occurs x ts
   occℕ-occurs _ typ = refl
   occℕ-occurs _ nat = refl
   occℕ-occurs _ ze = refl
@@ -509,6 +513,7 @@ mutual
   hasSelf-ren B ρ (addt t u) = cong₂ _∨_ (hasSelf-ren B ρ t) (hasSelf-ren B ρ u)
   hasSelf-ren B ρ (toi64 t) = hasSelf-ren B ρ t
   hasSelf-ren B ρ (packi x y) = cong₂ _∨_ (hasSelf-ren B ρ x) (hasSelf-ren B ρ y)
+  hasSelf-ren B ρ (word _ ts) = hasSelfList-ren B ρ ts
   hasSelf-ren B ρ (lam _ A t) =
     cong₂ _∨_ (hasSelf-ren B ρ A) (hasSelf-ren B (lift ρ) t)
   hasSelf-ren B ρ (pi _ A C) =
@@ -718,6 +723,7 @@ mutual
     let hx , hy = ∨-false₂ (hasSelf B x) (hasSelf B y) ht in
     ∨-both-false (hasSelf-sub-occ B τ x hx (λ z oc → hyp z (∨-left oc)))
                  (hasSelf-sub-occ B τ y hy (λ z oc → hyp z (∨-right oc)))
+  hasSelf-sub-occ B τ (word _ ts) ht hyp = hasSelfList-sub-occ B τ ts ht hyp
   hasSelf-sub-occ B τ (lam _ A t) ht hyp =
     let hA , ht′ = ∨-false₂ (hasSelf B A) (hasSelf B t) ht in
     ∨-both-false (hasSelf-sub-occ B τ A hA (λ x oc → hyp x (∨-left oc)))
@@ -1111,6 +1117,7 @@ shape-sub {σ = σ} B {t = t} τ hf (sh-other p) = shape-other τ t hf p
   shape-other _ (addt _ _) _ _ = sh-other refl
   shape-other _ (toi64 _) _ _ = sh-other refl
   shape-other _ (packi _ _) _ _ = sh-other refl
+  shape-other _ (word _ _) _ _ = sh-other refl
 
 shape-inst : ∀ {σ n} B {t : Tm (suc n)} {a : Tm n}
   → BodyShape σ B t → hasSelf B a ≡ false → BodyShape σ B (inst t a)
@@ -2274,6 +2281,7 @@ AllUnf k σ B (muli x y) = AllUnf k σ B x × AllUnf k σ B y
 AllUnf k σ B (addt x y) = AllUnf k σ B x × AllUnf k σ B y
 AllUnf k σ B (toi64 t) = AllUnf k σ B t
 AllUnf k σ B (packi x y) = AllUnf k σ B x × AllUnf k σ B y
+AllUnf k σ B (word op ts) = AllUnfList k σ B ts
 AllUnf _ _ _ (var _) = ⊤
 AllUnf _ _ _ typ = ⊤
 AllUnf _ _ _ nat = ⊤
@@ -2314,7 +2322,7 @@ mutual
   -- seedGuard reduces to whnf, a Result (Tm _), so the chain cannot be
   -- split by unifying with >> of two Result ⊤. Open the clause and
   -- case on each result, as checkDef-nu does for tags.
-  seedWalk-all k σ B Γ m (unf s f) eq =
+  seedWalk-all {n} k σ B Γ m (unf s f) eq =
     fromOpen (subst (λ z → z ≡ ok tt) unf-open eq)
     where
     unf-open : seedWalk k σ B Γ m (unf s f) ≡
@@ -2336,10 +2344,22 @@ mutual
     ... | fail _ = ⊥-elim (fail≢ok eBT)
     ... | ok tt with SG in eSG
     ... | fail _ = ⊥-elim (fail≢ok eGS)
-    ... | ok tt =
-      let f′ , weq , geq , sg , bit = takeUnf k σ B s f eSG eGS
-      in f′ , weq , geq , sg , bit
-       , seedWalk-all k σ B Γ m s eWS , seedWalk-all k σ B Γ m f eq
+    ... | ok tt = assemble (takeUnf k σ B s f eSG eGS)
+      where
+      -- A let-pattern on the equality sits inside four withs, and Agda
+      -- then demands a constructor of _≡_. Unpack with the projections.
+      assemble : Σ (Tm n) (λ f′ →
+            whnf k σ f ≡ ok f′ × guardedStep B f′ ≡ ok tt × StepGuard B f′
+            × ((seedFlows nothing f′ ∧ hasSelf B s) ≡ false))
+          → AllUnf k σ B (unf s f)
+      assemble tu =
+        let f′ = proj₁ tu
+            weq = proj₁ (proj₂ tu)
+            geq = proj₁ (proj₂ (proj₂ tu))
+            sg = proj₁ (proj₂ (proj₂ (proj₂ tu)))
+            bit = proj₂ (proj₂ (proj₂ (proj₂ tu)))
+        in f′ , weq , geq , sg , bit
+         , seedWalk-all k σ B Γ m s eWS , seedWalk-all k σ B Γ m f eq
   seedWalk-all k σ B Γ m (app f a) eq =
     let ef , ea = split>> eq
     in seedWalk-all k σ B Γ m f ef , seedWalk-all k σ B Γ m a ea
@@ -2415,6 +2435,7 @@ mutual
   seedWalk-all k σ B Γ m (packi x y) eq =
     let ex , ey = split>> eq
     in seedWalk-all k σ B Γ m x ex , seedWalk-all k σ B Γ m y ey
+  seedWalk-all k σ B Γ m (word _ ts) eq = seedWalkList-all k σ B Γ m ts eq
   seedWalk-all _ _ _ _ _ (var _) _ = tt
   seedWalk-all _ _ _ _ _ typ _ = tt
   seedWalk-all _ _ _ _ _ nat _ = tt
@@ -2522,7 +2543,7 @@ unfFacts {k = k} {σ = σ} {B = B} {s = s} {q = q} {A = A} {h = h} {t = t} u =
   step = lam q A (pair h t)
   facts : ∀ k′ → AllUnf k′ σ B (unf s step)
         → hasSelf B h ≡ false × GuardedTail B t × HeadSeed B h s × SeedCovered B h t s
-  facts zero (_ , weq , _ , _ , _ , _) = ⊥-elim (fail≢ok weq)
+  facts zero (_ , wheq , _ , _ , _ , _) = ⊥-elim (fail≢ok wheq)
   facts (suc _) (.step , refl , _ , sg-lam (sg-pair hh gt) , bit , _) =
     let hs , cov = lamPairFacts B {s = s} {h = h} {t = t} bit
         r : hasSelf B h ≡ false × GuardedTail B t × HeadSeed B h s × SeedCovered B h t s
@@ -2739,6 +2760,7 @@ stepFact {n} B (lam q A u) eq = onLam u eq
   onLam (addt _ _) ()
   onLam (toi64 _) ()
   onLam (packi _ _) ()
+  onLam (word _ _) ()
 stepFact B (pair h t) eq =
   let hs , gt = pair-facts B h t eq in sf-pair hs gt
 stepFact _ (var _) ()
@@ -2775,6 +2797,7 @@ stepFact _ (muli _ _) ()
 stepFact _ (addt _ _) ()
 stepFact _ (toi64 _) ()
 stepFact _ (packi _ _) ()
+stepFact _ (word _ _) ()
 
 -- Not an unfold. Block-free is the stronger shape; a block mention that
 -- is not an unfold (a match, a numeral helper) stops.
@@ -2788,7 +2811,7 @@ shape-rest {σ = σ} B t p = on (hasSelf B t) refl
 
 shapeOf : ∀ {n} k (σ : Sig) (B : List ℕ) (t : Tm n) → AllUnf k σ B t → BodyShape σ B t
 shapeOf zero _ _ (unf _ _) (_ , () , _ , _ , _ , _)
-shapeOf (suc k) σ B (unf s f) (f′ , weq , geq , _ , bit , _ , _) = from (stepFact B f′ geq) weq bit
+shapeOf (suc k) σ B (unf s f) (f′ , wheq , geq , _ , bit , _ , _) = from (stepFact B f′ geq) wheq bit
   where
   from : StepFact B f′
     → whnf (suc k) σ f ≡ ok f′
@@ -2834,6 +2857,7 @@ shapeOf _ σ B (muli x y) _ = shape-rest {σ} B (muli x y) refl
 shapeOf _ σ B (addt x y) _ = shape-rest {σ} B (addt x y) refl
 shapeOf _ σ B (toi64 t) _ = shape-rest {σ} B (toi64 t) refl
 shapeOf _ σ B (packi x y) _ = shape-rest {σ} B (packi x y) refl
+shapeOf _ σ B (word op ts) _ = shape-rest {σ} B (word op ts) refl
 
 ------------------------------------------------------------------------
 -- accepted-productive. The only productivity hypothesis is checkSig.
@@ -2936,6 +2960,8 @@ mutual
     seen-toi64 : ∀ {d t} → Seen σ B d t → Seen σ B d (toi64 t)
     seen-packi : ∀ {d x y}
       → Seen σ B d x → Seen σ B d y → Seen σ B d (packi x y)
+    seen-word : ∀ {d op ts}
+      → SeenList σ B d ts → Seen σ B d (word op ts)
 
   data SeenList (σ : Sig) (B : List ℕ) : ℕ → List (Tm 0) → Set where
     seen-nil  : ∀ {d} → SeenList σ B d []
@@ -3044,6 +3070,7 @@ see-other _ _ (muli _ _) _ _ _ _ = seen-stop refl
 see-other _ _ (addt _ _) _ _ _ _ = seen-stop refl
 see-other _ _ (toi64 _) _ _ _ _ = seen-stop refl
 see-other _ _ (packi _ _) _ _ _ _ = seen-stop refl
+see-other _ _ (word _ _) _ _ _ _ = seen-stop refl
 
 -- streamReads false: the next seed is not fed to a head that would read
 -- a block mention, so the same step is observed at every depth.
@@ -3194,6 +3221,8 @@ see-term k σ B (toi64 t) bod ut ρ hf d =
   seen-toi64 (see-term k σ B t bod ut ρ hf d)
 see-term k σ B (packi x y) bod (ux , uy) ρ hf d =
   seen-packi (see-term k σ B x bod ux ρ hf d) (see-term k σ B y bod uy ρ hf d)
+see-term k σ B (word op ts) bod uts ρ hf d =
+  seen-word (see-list k σ B ts bod uts ρ hf d)
 see-term _ _ _ (var x) _ _ ρ hf _ = seen-free (hf x)
 see-term _ _ _ typ _ _ _ _ _ = seen-stop refl
 see-term _ _ _ nat _ _ _ _ _ = seen-stop refl

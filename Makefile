@@ -69,6 +69,7 @@ agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Consistency.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Frag.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Tag.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Word.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Check.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Productive.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Soundness.agda

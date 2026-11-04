@@ -108,6 +108,7 @@ viewPi-sound k σ () | ok (muli _ _)
 viewPi-sound k σ () | ok (addt _ _)
 viewPi-sound k σ () | ok (toi64 _)
 viewPi-sound k σ () | ok (packi _ _)
+viewPi-sound k σ () | ok (word _ _)
 
 viewProd-sound : ∀ k σ {n} {T : Tm n} {A B}
   → viewProd k σ T ≡ ok (A , B) → whnf k σ T ≡ ok (prod A B)
@@ -150,6 +151,7 @@ viewProd-sound k σ () | ok (muli _ _)
 viewProd-sound k σ () | ok (addt _ _)
 viewProd-sound k σ () | ok (toi64 _)
 viewProd-sound k σ () | ok (packi _ _)
+viewProd-sound k σ () | ok (word _ _)
 
 viewId-sound : ∀ k σ {n} {T : Tm n} {A a b}
   → viewId k σ T ≡ ok (A , a , b) → whnf k σ T ≡ ok (idt A a b)
@@ -192,6 +194,7 @@ viewId-sound k σ () | ok (muli _ _)
 viewId-sound k σ () | ok (addt _ _)
 viewId-sound k σ () | ok (toi64 _)
 viewId-sound k σ () | ok (packi _ _)
+viewId-sound k σ () | ok (word _ _)
 
 viewData-sound : ∀ k σ {n} {T : Tm n} {di ps idxs}
   → viewData k σ T ≡ ok (di , ps , idxs)
@@ -254,21 +257,21 @@ isData-sound (suc k) σ {t = t} fs Ft eq with whnf (suc k) σ t in weq
 
 isDataN-sound k σ {t = t} fs Ft eq with unspine t in ueq
 ... | (nat , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | weq = subst (IsData σ) (sym weq) d-nat
+...   | wheq = subst (IsData σ) (sym wheq) d-nat
 isDataN-sound k σ fs Ft eq | (unit , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | weq = subst (IsData σ) (sym weq) d-unit
+...   | wheq = subst (IsData σ) (sym wheq) d-unit
 isDataN-sound k σ fs Ft eq | (empty , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | weq = subst (IsData σ) (sym weq) d-empty
+...   | wheq = subst (IsData σ) (sym wheq) d-empty
 isDataN-sound k σ fs Ft eq | (i64 , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | weq = ⊥-elim (noFrag (subst Frag weq Ft))
+...   | wheq = ⊥-elim (noFrag (subst Frag wheq Ft))
   where noFrag : ∀ {n} → Frag {n} i64 → ⊥
         noFrag ()
 isDataN-sound k σ fs Ft eq | (f32ty , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | weq = ⊥-elim (noFrag (subst Frag weq Ft))
+...   | wheq = ⊥-elim (noFrag (subst Frag wheq Ft))
   where noFrag : ∀ {n} → Frag {n} f32ty → ⊥
         noFrag ()
 isDataN-sound k σ fs Ft eq | (tensor _ _ , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | weq = ⊥-elim (noFrag (subst Frag weq Ft))
+...   | wheq = ⊥-elim (noFrag (subst Frag wheq Ft))
   where noFrag : ∀ {n d s} → Frag {n} (tensor d s) → ⊥
         noFrag ()
 isDataN-sound k σ {t = t} fs Ft eq | (dty i , as) with lookupData σ i in leq
@@ -341,7 +344,7 @@ isDataN-sound k σ fs Ft eq | ((ann _ _) , _) = ⊥-elim (false≢true (ok-inj e
   where false≢true : false ≡ true → ⊥
         false≢true ()
 isDataN-sound k σ {t = t} fs Ft eq | ((prod A B) , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | weq = subst (IsData σ) (sym weq) (prodData-sound k σ fs (subst Frag weq Ft) eq)
+...   | wheq = subst (IsData σ) (sym wheq) (prodData-sound k σ fs (subst Frag wheq Ft) eq)
 isDataN-sound k σ fs Ft eq | ((prod _ _) , _ ∷ _) = ⊥-elim (false≢true (ok-inj eq))
   where false≢true : false ≡ true → ⊥
         false≢true ()
@@ -382,6 +385,13 @@ isDataN-sound k σ fs Ft eq | ((toi64 _) , _) = ⊥-elim (false≢true (ok-inj e
   where false≢true : false ≡ true → ⊥
         false≢true ()
 isDataN-sound k σ fs Ft eq | ((packi _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
+  where false≢true : false ≡ true → ⊥
+        false≢true ()
+isDataN-sound k σ fs Ft eq | ((word op ts) , []) with Spine-≡ (unspine→Spine′ ueq)
+... | wheq = ⊥-elim (noFrag (subst Frag wheq Ft))
+  where noFrag : ∀ {n op ts} → Frag {n} (word op ts) → ⊥
+        noFrag ()
+isDataN-sound k σ fs Ft eq | ((word _ _) , _ ∷ _) = ⊥-elim (false≢true (ok-inj eq))
   where false≢true : false ≡ true → ⊥
         false≢true ()
 

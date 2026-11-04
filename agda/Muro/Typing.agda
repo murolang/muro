@@ -604,6 +604,7 @@ applyFam-ren ρ (muli x y) (i ∷ is) = applyFam-ren ρ (app (muli x y) i) is
 applyFam-ren ρ (addt t u) (i ∷ is) = applyFam-ren ρ (app (addt t u) i) is
 applyFam-ren ρ (toi64 t) (i ∷ is) = applyFam-ren ρ (app (toi64 t) i) is
 applyFam-ren ρ (packi x y) (i ∷ is) = applyFam-ren ρ (app (packi x y) i) is
+applyFam-ren ρ (word op ts) (i ∷ is) = applyFam-ren ρ (app (word op ts) i) is
 
 unfFam-ren : ∀ {n m} (ρ : Fin n → Fin m) S F is {G fam}
   → unfFam S F is ≡ ok (G , fam)
@@ -649,6 +650,7 @@ unfFam-ren ρ S (muli _ _) (_ ∷ _) ()
 unfFam-ren ρ S (addt _ _) (_ ∷ _) ()
 unfFam-ren ρ S (toi64 _) (_ ∷ _) ()
 unfFam-ren ρ S (packi _ _) (_ ∷ _) ()
+unfFam-ren ρ S (word _ _) (_ ∷ _) ()
 
 unfStepOf-ren : ∀ {n m} (ρ : Fin n → Fin m) (S T : Tm n) {G fam}
   → unfStepOf S T ≡ ok (G , fam)
@@ -695,6 +697,7 @@ unfStepOf-ren ρ S (app f a) eq = go f (a ∷ []) eq
   go (addt _ _) _ ()
   go (toi64 _) _ ()
   go (packi _ _) _ ()
+  go (word _ _) _ ()
 unfStepOf-ren ρ S (var _) ()
 unfStepOf-ren ρ S typ ()
 unfStepOf-ren ρ S (pi _ _ _) ()
@@ -729,6 +732,7 @@ unfStepOf-ren ρ S (muli _ _) ()
 unfStepOf-ren ρ S (addt _ _) ()
 unfStepOf-ren ρ S (toi64 _) ()
 unfStepOf-ren ρ S (packi _ _) ()
+unfStepOf-ren ρ S (word _ _) ()
 
 Ren : ∀ {n k} → (Fin n → Fin k) → Ctx n → Ctx k → Set
 Ren ρ Γ Δ = ∀ x → (qtyOf Δ (ρ x) ≡ qtyOf Γ x) × (typOf Δ (ρ x) ≡ ren ρ (typOf Γ x))
@@ -938,6 +942,7 @@ applyFam-apps (muli x y) (i ∷ is) = applyFam-apps (app (muli x y) i) is
 applyFam-apps (addt t u) (i ∷ is) = applyFam-apps (app (addt t u) i) is
 applyFam-apps (toi64 t) (i ∷ is) = applyFam-apps (app (toi64 t) i) is
 applyFam-apps (packi x y) (i ∷ is) = applyFam-apps (app (packi x y) i) is
+applyFam-apps (word op ts) (i ∷ is) = applyFam-apps (app (word op ts) i) is
 
 applyFam-sub≈ : ∀ {σ n k} (τ : Fin n → Tm k) (t : Tm n) (is : List (Tm n))
   → σ ⊢[ spec ] sub τ (applyFam t is) ≈ applyFam (sub τ t) (subList τ is)
@@ -995,6 +1000,7 @@ unfFam-sub τ S (muli _ _) (_ ∷ _) ()
 unfFam-sub τ S (addt _ _) (_ ∷ _) ()
 unfFam-sub τ S (toi64 _) (_ ∷ _) ()
 unfFam-sub τ S (packi _ _) (_ ∷ _) ()
+unfFam-sub τ S (word _ _) (_ ∷ _) ()
 
 unfStepOf-sub : ∀ {σ n k} (τ : Fin n → Tm k) (S T : Tm n) {G fam}
   → unfStepOf S T ≡ ok (G , fam)
@@ -1044,6 +1050,7 @@ unfStepOf-sub {σ = σ} τ S (app f a) eq = go f (a ∷ []) eq
   go (addt _ _) _ ()
   go (toi64 _) _ ()
   go (packi _ _) _ ()
+  go (word _ _) _ ()
 unfStepOf-sub τ S (var _) ()
 unfStepOf-sub τ S typ ()
 unfStepOf-sub τ S (pi _ _ _) ()
@@ -1078,6 +1085,7 @@ unfStepOf-sub τ S (muli _ _) ()
 unfStepOf-sub τ S (addt _ _) ()
 unfStepOf-sub τ S (toi64 _) ()
 unfStepOf-sub τ S (packi _ _) ()
+unfStepOf-sub τ S (word _ _) ()
 
 -- Substitution. τ maps Γ into Δ when each τ x has the (substituted)
 -- type of x, in mode m₀ if x is usable computationally and in spec if
@@ -1592,6 +1600,7 @@ nu-app-body {σ = σ} {T = T} {G = G} {fam = fam} eq c with ≈→join c
     go (addt _ _) _ _ () _
     go (toi64 _) _ _ () _
     go (packi _ _) _ _ () _
+    go (word _ _) _ _ () _
 
 -- An inferred unfold's uncons goal is the element paired with the
 -- stream. The λ's tail is the next seed; wrapping it in the same λ
@@ -1645,6 +1654,7 @@ stream-goal {σ = σ} {Eh = Eh} {T = T} {G = G} {fam = fam} cU cT st = go _ st (
   go (addt _ _) () _
   go (toi64 _) () _
   go (packi _ _) () _
+  go (word _ _) () _
 
 pres-ι-unf : ∀ {σ n} {Γ : Ctx n} {m q q′ A S Eh s h t T T′ G fam}
   → σ , Γ ⊨[ m ] s ∶ S
@@ -1760,6 +1770,7 @@ apps-apply (muli x y) (i ∷ is) = apps-apply (app (muli x y) i) is
 apps-apply (addt t u) (i ∷ is) = apps-apply (app (addt t u) i) is
 apps-apply (toi64 t) (i ∷ is) = apps-apply (app (toi64 t) i) is
 apps-apply (packi x y) (i ∷ is) = apps-apply (app (packi x y) i) is
+apps-apply (word op ts) (i ∷ is) = apps-apply (app (word op ts) i) is
 
 head-nu : ∀ {n} {F : Tm (suc n)} → Head (nu F)
 head-nu _ = refl
@@ -1846,6 +1857,7 @@ fam-of {n = n} {S = S} {f = f} {a = a} {G = G} {fam = fam} eq = go f a [] refl e
   go (nu (addt _ _)) _ _ _ ()
   go (nu (toi64 _)) _ _ _ ()
   go (nu (packi _ _)) _ _ _ ()
+  go (nu (word _ _)) _ _ _ ()
   go (var _) _ _ _ ()
   go typ _ _ _ ()
   go (pi _ _ _) _ _ _ ()
@@ -1880,6 +1892,7 @@ fam-of {n = n} {S = S} {f = f} {a = a} {G = G} {fam = fam} eq = go f a [] refl e
   go (addt _ _) _ _ _ ()
   go (toi64 _) _ _ _ ()
   go (packi _ _) _ _ _ ()
+  go (word _ _) _ _ _ ()
 
 -- Two ν spines that join have the same instantiated family goal.
 -- The λ lives under the ν binder: its domain is a term one level up.
@@ -1985,6 +1998,7 @@ fam-goal {T0 = app _ _} {T′ = muli _ _} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = addt _ _} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = toi64 _} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = packi _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = word _ _} _ _ _ ()
 fam-goal {T0 = nu _} st0 _ _ _ = ⊥-elim (false≢true (proj₂ (×2 (ok-inj st0))))
 fam-goal {T0 = var _} ()
 fam-goal {T0 = typ} ()
@@ -2020,6 +2034,7 @@ fam-goal {T0 = muli _ _} ()
 fam-goal {T0 = addt _ _} ()
 fam-goal {T0 = toi64 _} ()
 fam-goal {T0 = packi _ _} ()
+fam-goal {T0 = word _ _} ()
 
 -- uncons of a family unfold reads the pair. The components are already
 -- the head obligation and the tail proof, so the reduct is that pair.

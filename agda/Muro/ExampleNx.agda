@@ -41,16 +41,16 @@ addTTm =
       (addt (var zero) (var zero)))
 
 t1Ty : Tm 0
-t1Ty = tensor i64 (toi64 (su (su ze)))
+t1Ty = tensor i64 i64two
 
 t1Tm : Tm 0
 t1Tm = packi (toi64 (su ze)) (toi64 (su (su ze)))
 
 doubledTy : Tm 0
-doubledTy = tensor i64 (toi64 (su (su ze)))
+doubledTy = tensor i64 i64two
 
 doubledTm : Tm 0
-doubledTm = app (app (def 1) (toi64 (su (su ze)))) (def 2)
+doubledTm = app (app (def 1) i64two) (def 2)
 
 nxBook : Sig
 nxBook =

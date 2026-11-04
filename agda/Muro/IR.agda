@@ -51,6 +51,11 @@ data Layout : Set where
   -- inlining them would make `layoutOf` recurse through a data type that
   -- mentions itself (List A inside cons).
   dataL : String → Layout
+  -- Fixed-width words. Passed by value. wboolL is 0 or 1. optL is a
+  -- tagged payload; wnone elaborates at optL opaqueL and the function's
+  -- declared return layout still comes from the type.
+  u8L u32L u64L i64L wboolL : Layout
+  optL : Layout → Layout
 
 mutual
   data Term : Set where
@@ -68,6 +73,9 @@ mutual
     Uncons : Term → Term
     Abort : Term
     Stream : Term → List (String × Term) → String → Term
+    -- Kind is the result kind. A binary operator does not carry one,
+    -- and a variable argument has no kind of its own.
+    Wrd : WKind → WOp → List Term → Term
 
   data Arm : Set where
     arm : String → List String → Term → Arm
@@ -148,6 +156,7 @@ mutual
   size (addt t u)     = suc (size t + size u)
   size (toi64 t)      = suc (size t)
   size (packi x y)    = suc (size x + size y)
+  size (word _ ts)    = suc (sumSize ts)
 
   sumSize : ∀ {n} → List (Tm n) → ℕ
   sumSize []       = 0
@@ -221,9 +230,84 @@ isZero (var i) = toℕ i ≡ᵇ 0
 isZero _       = false
 
 ------------------------------------------------------------------------
+-- Word layouts. I64's type is i64L. U8, U32, and U64 are word type
+-- formers. A binary operator takes its kind from the arguments.
+------------------------------------------------------------------------
+
+wordLay : WKind → Layout
+wordLay ku8  = u8L
+wordLay ku32 = u32L
+wordLay ku64 = u64L
+wordLay ki64 = i64L
+
+layKind : Layout → Maybe WKind
+layKind u8L  = just ku8
+layKind u32L = just ku32
+layKind u64L = just ku64
+layKind i64L = just ki64
+layKind _    = nothing
+
+sameKind : Layout → Layout → Maybe WKind
+sameKind lx ly = join (layKind lx) (layKind ly)
+  where
+  join : Maybe WKind → Maybe WKind → Maybe WKind
+  join (just k) (just k′) with wk≡ᵇ k k′
+  ... | true  = just k
+  ... | false = nothing
+  join _ _ = nothing
+
+binW : (WKind → Layout) → WOp → List Term → List Layout → Result (Term × Layout)
+binW ret op (x ∷ y ∷ []) (lx ∷ ly ∷ []) with sameKind lx ly
+... | just k  = ok (Wrd k op (x ∷ y ∷ []) , ret k)
+... | nothing = fail "c:unsupported"
+binW _ _ _ _ = fail "c:unsupported"
+
+-- wnone has no payload kind. optL opaqueL is a placeholder; elabFun
+-- keeps the return layout taken from the function's type.
+wordImage : WOp → List Term → List Layout → Result (Term × Layout)
+wordImage (wlit k n) [] [] = ok (Wrd k (wlit k n) [] , wordLay k)
+wordImage (wof k) (t ∷ []) (natL ∷ []) = ok (Wrd k (wof k) (t ∷ []) , wordLay k)
+wordImage wton (t ∷ []) (lay ∷ []) with layKind lay
+... | just k  = ok (Wrd k wton (t ∷ []) , natL)
+... | nothing = fail "c:unsupported"
+wordImage wadd ts ls = binW wordLay wadd ts ls
+wordImage wsub ts ls = binW wordLay wsub ts ls
+wordImage wmul ts ls = binW wordLay wmul ts ls
+wordImage wand ts ls = binW wordLay wand ts ls
+wordImage wor ts ls = binW wordLay wor ts ls
+wordImage wxor ts ls = binW wordLay wxor ts ls
+wordImage wcadd ts ls = binW (λ k → optL (wordLay k)) wcadd ts ls
+wordImage wcsub ts ls = binW (λ k → optL (wordLay k)) wcsub ts ls
+wordImage wcmul ts ls = binW (λ k → optL (wordLay k)) wcmul ts ls
+wordImage wdiv ts ls = binW (λ k → optL (wordLay k)) wdiv ts ls
+wordImage wrem ts ls = binW (λ k → optL (wordLay k)) wrem ts ls
+wordImage weq ts ls = binW (λ _ → wboolL) weq ts ls
+wordImage wlt ts ls = binW (λ _ → wboolL) wlt ts ls
+wordImage wle ts ls = binW (λ _ → wboolL) wle ts ls
+wordImage wnot (t ∷ []) (lay ∷ []) with layKind lay
+... | just k  = ok (Wrd k wnot (t ∷ []) , wordLay k)
+... | nothing = fail "c:unsupported"
+wordImage wshl (x ∷ a ∷ []) (lx ∷ natL ∷ []) with layKind lx
+... | just k  = ok (Wrd k wshl (x ∷ a ∷ []) , wordLay k)
+... | nothing = fail "c:unsupported"
+wordImage wshr (x ∷ a ∷ []) (lx ∷ natL ∷ []) with layKind lx
+... | just k  = ok (Wrd k wshr (x ∷ a ∷ []) , wordLay k)
+... | nothing = fail "c:unsupported"
+wordImage (wcast k) (t ∷ []) (lay ∷ []) with layKind lay
+... | just _  = ok (Wrd k (wcast k) (t ∷ []) , wordLay k)
+... | nothing = fail "c:unsupported"
+wordImage wtrue [] [] = ok (Wrd ku8 wtrue [] , wboolL)
+wordImage wfalse [] [] = ok (Wrd ku8 wfalse [] , wboolL)
+wordImage wsome (t ∷ []) (lay ∷ []) with layKind lay
+... | just k  = ok (Wrd k wsome (t ∷ []) , optL (wordLay k))
+... | nothing = fail "c:unsupported"
+wordImage wnone [] [] = ok (Wrd ku8 wnone [] , optL opaqueL)
+wordImage _ _ _ = fail "c:unsupported"
+
+------------------------------------------------------------------------
 -- Layouts. `app` peels to the head. A Π is an unknown layout: a use of a higher-order
--- value is c:lambda, not a layout. Machine formers are c:machine. A ν that
--- is not `ν X. A × X` is c:stream; that one shape is `streamL`.
+-- value is c:lambda, not a layout. Floats and tensors are c:machine.
+-- I64 is i64L. A ν that is not `ν X. A × X` is c:stream; that one shape is `streamL`.
 ------------------------------------------------------------------------
 
 layoutOf : Sig → ∀ {n} → Tm n → Result Layout
@@ -259,7 +343,15 @@ layoutOf σ (nu (prod A arg)) =
 layoutOf _ (nu _) = fail "c:stream"
 layoutOf _ (unf _ _) = fail "c:unsupported"
 layoutOf _ (ucons _) = fail "c:unsupported"
-layoutOf _ i64 = fail "c:machine"
+layoutOf _ i64 = ok i64L
+layoutOf _ (word (wty ku8) []) = ok u8L
+layoutOf _ (word (wty ku32) []) = ok u32L
+layoutOf _ (word (wty ku64) []) = ok u64L
+layoutOf _ (word (wty ki64) _) = fail "c:unsupported"
+layoutOf _ (word wbool []) = ok wboolL
+layoutOf _ (word (woptk k) []) = ok (optL (wordLay k))
+layoutOf σ (word wopt (A ∷ [])) = optL <$> layoutOf σ A
+layoutOf _ (word _ _) = fail "c:unsupported"
 layoutOf _ f32ty = fail "c:machine"
 layoutOf _ (tensor _ _) = fail "c:machine"
 layoutOf _ (addi _ _) = fail "c:machine"
@@ -383,6 +475,7 @@ mutual
   freeIdxs (addt t u)     = freeIdxs t ++ freeIdxs u
   freeIdxs (toi64 t)      = freeIdxs t
   freeIdxs (packi x y)    = freeIdxs x ++ freeIdxs y
+  freeIdxs (word _ ts)    = freeList ts
 
   freeList : ∀ {n} → List (Tm n) → List ℕ
   freeList []       = []
@@ -485,7 +578,6 @@ seedParam q x lay = if eqQty q erased then [] else (x , lay) ∷ []
 
 -- A head that is already a refusal, applied or not.
 badHead : ∀ {n} → Tm n → Maybe String
-badHead i64 = just "c:machine"
 badHead f32ty = just "c:machine"
 badHead (tensor _ _) = just "c:machine"
 badHead (addi _ _) = just "c:machine"
@@ -699,7 +791,7 @@ step n ih t eq σ k ctx = go t eq
   go (ucons s) refl with call ih σ s (s≤s ≤-refl) ctx k
   ... | fail e = fail e
   ... | ok (mkE tm lay ss , k1) = ok (mkE (Uncons tm) (unconsLay lay) ss , k1)
-  go i64 refl = fail "c:machine"
+  go i64 refl = fail "c:unsupported"
   go f32ty refl = fail "c:machine"
   go (tensor _ _) refl = fail "c:machine"
   go (addi _ _) refl = fail "c:machine"
@@ -707,6 +799,22 @@ step n ih t eq σ k ctx = go t eq
   go (addt _ _) refl = fail "c:machine"
   go (toi64 _) refl = fail "c:machine"
   go (packi _ _) refl = fail "c:machine"
+  go (word op ts) refl = fromArgs (elabArgs ts (s≤s ≤-refl) k)
+    where
+    elabArgs : ∀ {ℓ} (us : List (Tm ℓ)) → sumSize us < n → ℕ
+             → Result (List Term × List Layout × List Fun × ℕ)
+    elabArgs [] _ k0 = ok ([] , [] , [] , k0)
+    elabArgs (u ∷ us) sp k0 with call ih σ u (here< u us sp) ctx k0
+    ... | fail e = fail e
+    ... | ok (mkE tm lay ss , k1) with elabArgs us (rest< u us sp) k1
+    ... | fail e = fail e
+    ... | ok (tms , lays , ss2 , k2) =
+      ok (tm ∷ tms , lay ∷ lays , ss ++ ss2 , k2)
+    fromArgs : Result (List Term × List Layout × List Fun × ℕ) → Result (E × ℕ)
+    fromArgs (fail e) = fail e
+    fromArgs (ok (tms , lays , ss , k1)) with wordImage op tms lays
+    ... | fail e = fail e
+    ... | ok (tm , lay) = ok (mkE tm lay ss , k1)
 
 elaborate : Sig → ℕ → ICtx → ∀ {ℓ} → Tm ℓ → Result (E × ℕ)
 elaborate σ k ctx t = <-rec Elab step (size t) t refl σ k ctx

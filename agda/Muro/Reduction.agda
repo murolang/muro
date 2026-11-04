@@ -16,7 +16,9 @@
 -- no redex of their own. uncons of an unfold contracts when instantiating
 -- the λ-body at the seed is already a pair (the body is a pair, or it is
 -- the variable and the seed is a pair). That is the step uncons reads.
--- Tensor and the numeric formers have congruence rules and no redexes.
+-- Tensor and the inert numeric formers have congruence rules and no
+-- redexes. A word redex fires only when wordStep accepts the developed
+-- arguments; the contractum is the canonical residue.
 ------------------------------------------------------------------------
 
 {-# OPTIONS --safe #-}
@@ -27,6 +29,7 @@ open import Data.Empty using (⊥; ⊥-elim)
 open import Data.Fin.Base using (Fin; zero; suc)
 import Data.Fin.Base as Fin
 open import Data.List.Base using (List; []; _∷_; _++_)
+open import Data.Maybe.Base using (just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc)
 open import Data.Product.Base using (_×_; _,_; ∃; proj₂)
 open import Relation.Binary.PropositionalEquality.Core
@@ -36,6 +39,7 @@ open import Muro.Base
 open import Muro.Syntax
 open import Muro.Subst
 open import Muro.SubstLemmas
+open import Muro.Word
 open import Muro.Env
 open import Muro.Spine
 
@@ -157,6 +161,11 @@ data _⊢[_]_⇛_ σ m where
   ⇛-toi64 : ∀ {t t′} → σ ⊢[ m ] t ⇛ t′ → σ ⊢[ m ] toi64 t ⇛ toi64 t′
   ⇛-packi : ∀ {x x′ y y′} → σ ⊢[ m ] x ⇛ x′ → σ ⊢[ m ] y ⇛ y′
     → σ ⊢[ m ] packi x y ⇛ packi x′ y′
+  ⇛-word : ∀ {op ts ts′} → σ ⊢[ m ] ts ⇛L ts′
+    → σ ⊢[ m ] word op ts ⇛ word op ts′
+  ⇛-wred : ∀ {op ts ts′ r} → σ ⊢[ m ] ts ⇛L ts′
+    → wordStep op ts′ ≡ just r
+    → σ ⊢[ m ] word op ts ⇛ r
 
 data _⊢[_]_⇛L_ σ m where
   ⇛L-[] : σ ⊢[ m ] [] ⇛L []
@@ -205,6 +214,7 @@ mutual
   ⇛-refl (addt t u) = ⇛-addt (⇛-refl t) (⇛-refl u)
   ⇛-refl (toi64 t) = ⇛-toi64 (⇛-refl t)
   ⇛-refl (packi x y) = ⇛-packi (⇛-refl x) (⇛-refl y)
+  ⇛-refl (word op ts) = ⇛-word (⇛L-refl ts)
 
   ⇛L-refl : ∀ {σ m n} (ts : List (Tm n)) → σ ⊢[ m ] ts ⇛L ts
   ⇛L-refl [] = ⇛L-[]
@@ -266,6 +276,8 @@ mutual
   ⇛-mode h (⇛-addt t u) = ⇛-addt (⇛-mode h t) (⇛-mode h u)
   ⇛-mode h (⇛-toi64 t) = ⇛-toi64 (⇛-mode h t)
   ⇛-mode h (⇛-packi x y) = ⇛-packi (⇛-mode h x) (⇛-mode h y)
+  ⇛-mode h (⇛-word ts) = ⇛-word (⇛L-mode h ts)
+  ⇛-mode h (⇛-wred ts eq) = ⇛-wred (⇛L-mode h ts) eq
 
   ⇛L-mode : ∀ {σ m m′ n} {ts us : List (Tm n)} → m ≤ᵐ m′
     → σ ⊢[ m ] ts ⇛L us → σ ⊢[ m′ ] ts ⇛L us
@@ -336,6 +348,9 @@ mutual
   ⇛-ren ρ (⇛-addt t u) = ⇛-addt (⇛-ren ρ t) (⇛-ren ρ u)
   ⇛-ren ρ (⇛-toi64 t) = ⇛-toi64 (⇛-ren ρ t)
   ⇛-ren ρ (⇛-packi x y) = ⇛-packi (⇛-ren ρ x) (⇛-ren ρ y)
+  ⇛-ren ρ (⇛-word st) = ⇛-word (⇛L-ren ρ st)
+  ⇛-ren ρ (⇛-wred {op = op} {ts′ = ts′} st eq) =
+    ⇛-wred (⇛L-ren ρ st) (wordStep-ren ρ op ts′ eq)
 
   ⇛L-ren : ∀ {σ m n k} (ρ : Fin n → Fin k) {ts us : List (Tm n)}
     → σ ⊢[ m ] ts ⇛L us → σ ⊢[ m ] renList ρ ts ⇛L renList ρ us
@@ -414,6 +429,9 @@ mutual
   ⇛-sub h (⇛-addt t u) = ⇛-addt (⇛-sub h t) (⇛-sub h u)
   ⇛-sub h (⇛-toi64 t) = ⇛-toi64 (⇛-sub h t)
   ⇛-sub h (⇛-packi x y) = ⇛-packi (⇛-sub h x) (⇛-sub h y)
+  ⇛-sub h (⇛-word st) = ⇛-word (⇛L-sub h st)
+  ⇛-sub {τ′ = τ′} h (⇛-wred {op = op} {ts′ = ts′} st eq) =
+    ⇛-wred (⇛L-sub h st) (wordStep-sub τ′ op ts′ eq)
 
   ⇛L-sub : ∀ {σ m n k} {τ τ′ : Fin n → Tm k} {ts us : List (Tm n)}
     → σ ⊢[ m ] τ ⇛σ τ′ → σ ⊢[ m ] ts ⇛L us → σ ⊢[ m ] subList τ ts ⇛L subList τ′ us
@@ -540,10 +558,48 @@ mutual
   dev σ m (addt t u) = addt (dev σ m t) (dev σ m u)
   dev σ m (toi64 t) = toi64 (dev σ m t)
   dev σ m (packi x y) = packi (dev σ m x) (dev σ m y)
+  dev σ m (word op ts) with wordStep op (devL σ m ts)
+  ... | just r  = r
+  ... | nothing = word op (devL σ m ts)
 
   devL : ∀ {n} → Sig → Mode → List (Tm n) → List (Tm n)
   devL σ m [] = []
   devL σ m (t ∷ ts) = dev σ m t ∷ devL σ m ts
+
+-- A word redex's development is the contractum. The with matches dev's.
+dev-word-just : ∀ {σ m n} op (ts : List (Tm n)) {r}
+  → wordStep op (devL σ m ts) ≡ just r
+  → dev σ m (word op ts) ≡ r
+dev-word-just {σ} {m} op ts eq with wordStep op (devL σ m ts)
+dev-word-just _ _ refl | just _ = refl
+dev-word-just _ _ ()   | nothing
+
+-- A canonical term has no redex, so a step from it is the term itself.
+canon-⇛ : ∀ {σ m n} {t u : Tm n} → Canon t → σ ⊢[ m ] t ⇛ u → t ≡ u
+canon-⇛ can-ze ⇛-ze = refl
+canon-⇛ (can-su c) (⇛-su st) = cong su (canon-⇛ c st)
+canon-⇛ can-lit (⇛-word ⇛L-[]) = refl
+canon-⇛ can-lit (⇛-wred _ ())
+canon-⇛ can-true (⇛-word ⇛L-[]) = refl
+canon-⇛ can-true (⇛-wred _ ())
+canon-⇛ can-false (⇛-word ⇛L-[]) = refl
+canon-⇛ can-false (⇛-wred _ ())
+canon-⇛ can-none (⇛-word ⇛L-[]) = refl
+canon-⇛ can-none (⇛-wred _ ())
+canon-⇛ can-some (⇛-word (⇛L-∷ st ⇛L-[])) rewrite canon-⇛ can-lit st = refl
+canon-⇛ can-some (⇛-wred _ ())
+canon-⇛ can-ty (⇛-word ⇛L-[]) = refl
+canon-⇛ can-ty (⇛-wred _ ())
+canon-⇛ can-bool (⇛-word ⇛L-[]) = refl
+canon-⇛ can-bool (⇛-wred _ ())
+canon-⇛ can-opt (⇛-word ⇛L-[]) = refl
+canon-⇛ can-opt (⇛-wred _ ())
+canon-⇛ can-i64 ⇛-i64 = refl
+
+canonL-inv : ∀ {σ m n} {xs ys : List (Tm n)}
+  → AllC xs → σ ⊢[ m ] xs ⇛L ys → ys ≡ xs
+canonL-inv ac0 ⇛L-[] = refl
+canonL-inv (c ac∷ cs) (⇛L-∷ st sts) rewrite canon-⇛ c st | canonL-inv cs sts = refl
 
 -- def i reduces to its development.
 dev-def : ∀ {σ m n} (i : ℕ) → σ ⊢[ m ] def {n} i ⇛ devDef m i (lookupDef σ i)
@@ -697,6 +753,13 @@ mutual
   tri (⇛-addt t u) = ⇛-addt (tri t) (tri u)
   tri (⇛-toi64 t) = ⇛-toi64 (tri t)
   tri (⇛-packi x y) = ⇛-packi (tri x) (tri y)
+  tri {σ} {m} (⇛-word {op = op} {ts = ts} st) with wordStep op (devL σ m ts) in eq
+  ... | just _  = ⇛-wred (triL st) eq
+  ... | nothing = ⇛-word (triL st)
+  tri {σ} {m} (⇛-wred {op = op} {ts = ts} {ts′ = ts′} {r = r} st eq)
+    with canonL-inv (wordStep-args-canon op ts′ eq) (triL st)
+  ... | refl =
+    subst (λ z → σ ⊢[ m ] r ⇛ z) (sym (dev-word-just {σ} {m} op ts eq)) (⇛-refl r)
 
   triL : ∀ {σ m n} {ts us : List (Tm n)} → σ ⊢[ m ] ts ⇛L us → σ ⊢[ m ] us ⇛L devL σ m ts
   triL ⇛L-[] = ⇛L-[]
@@ -773,6 +836,7 @@ mutual
   ... | (addt _ _ , _) = ⇛-mData e* P* bs*
   ... | (toi64 _ , _) = ⇛-mData e* P* bs*
   ... | (packi _ _ , _) = ⇛-mData e* P* bs*
+  ... | (word _ _ , _) = ⇛-mData e* P* bs*
 
   -- app: the development contracts the redex iff the function is a λ.
   tri-app : ∀ {σ m n} {f f′ a a′ : Tm n}
@@ -814,6 +878,7 @@ mutual
   tri-app {f = addt _ _} _ f* a* = ⇛-app f* a*
   tri-app {f = toi64 _} _ f* a* = ⇛-app f* a*
   tri-app {f = packi _ _} _ f* a* = ⇛-app f* a*
+  tri-app {f = word _ _} _ f* a* = ⇛-app f* a*
 
   -- mNat: the development contracts the redex iff the scrutinee is ze or su.
   tri-mNat : ∀ {σ m n} {e e′ : Tm n} {P P′ : Tm (suc n)} {z z′ : Tm n} {s s′ : Tm (suc n)}
@@ -856,6 +921,7 @@ mutual
   tri-mNat {e = addt _ _} _ e* P* z* s* = ⇛-mNat e* P* z* s*
   tri-mNat {e = toi64 _} _ e* P* z* s* = ⇛-mNat e* P* z* s*
   tri-mNat {e = packi _ _} _ e* P* z* s* = ⇛-mNat e* P* z* s*
+  tri-mNat {e = word _ _} _ e* P* z* s* = ⇛-mNat e* P* z* s*
 
   -- mUnit: the development contracts the redex iff the scrutinee is one.
   tri-mUnit : ∀ {σ m n} {e e′ : Tm n} {P P′ : Tm (suc n)} {u u′ : Tm n}
@@ -898,6 +964,7 @@ mutual
   tri-mUnit {e = addt _ _} _ e* P* u* = ⇛-mUnit e* P* u*
   tri-mUnit {e = toi64 _} _ e* P* u* = ⇛-mUnit e* P* u*
   tri-mUnit {e = packi _ _} _ e* P* u* = ⇛-mUnit e* P* u*
+  tri-mUnit {e = word _ _} _ e* P* u* = ⇛-mUnit e* P* u*
 
   -- letp: the development contracts the redex iff the scrutinee is a pair.
   tri-letp : ∀ {σ m n} {e e′ : Tm n} {t t′ : Tm (suc (suc n))}
@@ -939,6 +1006,7 @@ mutual
   tri-letp {e = addt _ _} _ e* t* = ⇛-letp e* t*
   tri-letp {e = toi64 _} _ e* t* = ⇛-letp e* t*
   tri-letp {e = packi _ _} _ e* t* = ⇛-letp e* t*
+  tri-letp {e = word _ _} _ e* t* = ⇛-letp e* t*
 
   -- rwt: the development contracts the redex iff the equation is rfl.
   tri-rwt : ∀ {σ m n} {e e′ : Tm n} {P P′ : Tm (suc n)} {t t′ : Tm n}
@@ -981,6 +1049,7 @@ mutual
   tri-rwt {e = addt _ _} _ e* P* t* = ⇛-rwt e* P* t*
   tri-rwt {e = toi64 _} _ e* P* t* = ⇛-rwt e* P* t*
   tri-rwt {e = packi _ _} _ e* P* t* = ⇛-rwt e* P* t*
+  tri-rwt {e = word _ _} _ e* P* t* = ⇛-rwt e* P* t*
 
   -- uncons contracts exactly when the scrutinee is one of the two
   -- syntactic redexes. A congruence reduct of a redex is still a redex,
@@ -1031,6 +1100,7 @@ mutual
   tri-ucons {e = addt _ _} _ e* = ⇛-ucons e*
   tri-ucons {e = toi64 _} _ e* = ⇛-ucons e*
   tri-ucons {e = packi _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = word _ _} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (var _)} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ typ} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (pi _ _ _)} _ e* = ⇛-ucons e*
@@ -1069,6 +1139,7 @@ mutual
   tri-ucons {e = unf _ (addt _ _)} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (toi64 _)} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (packi _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (word _ _)} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (lam _ _ (var (suc _)))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (lam _ _ typ)} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (lam _ _ (pi _ _ _))} _ e* = ⇛-ucons e*
@@ -1104,6 +1175,7 @@ mutual
   tri-ucons {e = unf _ (lam _ _ (addt _ _))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (lam _ _ (toi64 _))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (lam _ _ (packi _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (word _ _))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf (var _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf typ (lam _ _ (var zero))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf (pi _ _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
@@ -1139,6 +1211,7 @@ mutual
   tri-ucons {e = unf (addt _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf (toi64 _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf (packi _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (word _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
 
 ------------------------------------------------------------------------
 -- Diamond, and confluence of the reflexive-transitive closure.

@@ -33,6 +33,7 @@ open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl; sym; 
 open import Muro.Base
 open import Muro.Syntax
 open import Muro.Subst
+open import Muro.Word using (wordStep; wordTy; optTy)
 open import Muro.Env public
 open import Muro.Tag using (tmTag)
 open import Muro.Spine using (unspine; ctorSpine; dtyArgs; defArgs)
@@ -167,7 +168,24 @@ mutual
   ... | fail m          = fail m
   ... | ok (pair a b)   = whnf k σ (inst₂ t a b)
   ... | ok e′           = ok (letp e′ t)
+  -- Arguments first, then one residue step. A value (literal, type,
+  -- bool, opt) does not step. Fuel for the list is the fuel left
+  -- after this call, the same clock as every other redex.
+  whnf (suc k) σ (word op ts) =
+    whnfList k σ ts >>= λ ts′ →
+    case wordStep op ts′ of λ where
+      (just r) → whnf k σ r
+      nothing  → ok (word op ts′)
   whnf (suc _) _ t = ok t
+
+  whnfList : ∀ {n} → ℕ → Sig → List (Tm n) → Result (List (Tm n))
+  whnfList zero _ [] = ok []
+  whnfList zero _ (_ ∷ _) = fail outOfFuel
+  whnfList (suc k) σ [] = ok []
+  whnfList (suc k) σ (t ∷ ts) =
+    whnf k σ t >>= λ t′ →
+    whnfList k σ ts >>= λ ts′ →
+    ok (t′ ∷ ts′)
 
   uconsWhnf : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n)
   -- The three uncons steps, on the nose. A λ whose body merely reduces
@@ -205,6 +223,9 @@ mutual
   isDataN k σ (i64 , [])        = ok true
   isDataN k σ (f32ty , [])      = ok true
   isDataN k σ (tensor _ _ , []) = ok true
+  -- The operator is matched only once the spine is known to be empty,
+  -- so a non-empty spine reduces to the catch-all.
+  isDataN k σ (word op ts , []) = wordData k σ op ts
   isDataN k σ (dty i , as)      = dataParamsData k σ i as
   isDataN k σ (prod A B , [])   = isData k σ A >>= λ b → if b then isData k σ B else ok false
   isDataN k σ _                 = ok false
@@ -213,6 +234,13 @@ mutual
   dataParamsData k σ i as with lookupData σ i
   ... | fail _ = ok false
   ... | ok d   = allData k σ (take (nparams d) as)
+
+  wordData : ∀ {n} → ℕ → Sig → WOp → List (Tm n) → Result Bool
+  wordData k σ (wty _) []     = ok true
+  wordData k σ wbool []       = ok true
+  wordData k σ (woptk _) []   = ok true
+  wordData k σ wopt (A ∷ [])  = isData k σ A
+  wordData k σ _ _            = ok false
 
 -- Is a type copyable (Data.IsCopy): Data, a Π, or a product of copyable
 -- types. A + binder asks this; an argument at a + position that is
@@ -265,6 +293,10 @@ runTy (nu F)         = runTy F
 runTy (prod A B)     = runTy A ∧ runTy B
 runTy (dty _)        = true
 runTy (app f _)      = runTy f
+runTy (word (wty _) []) = true
+runTy (word wbool []) = true
+runTy (word (woptk _) []) = true
+runTy (word wopt (A ∷ [])) = runTy A
 runTy _              = false
 
 mutual
@@ -334,6 +366,7 @@ mutual
   synEqD (addt t u)     (addt t′ u′)   = synEq t t′ ∧ synEq u u′
   synEqD (toi64 t)      (toi64 t′)     = synEq t t′
   synEqD (packi x y)    (packi x′ y′)  = synEq x x′ ∧ synEq y y′
+  synEqD (word op ts)   (word op′ ts′) = wop≡ᵇ op op′ ∧ synEqList ts ts′
   synEqD _              _              = false
 
 -- Definitions whose unfolding is already in progress.
@@ -462,6 +495,9 @@ mutual
   convND k σ seen (addt t u)    (addt t′ u′)  = convGo k σ seen t t′ >> convGo k σ seen u u′
   convND k σ seen (toi64 t)     (toi64 t′)    = convGo k σ seen t t′
   convND k σ seen (packi x y)   (packi x′ y′) = convGo k σ seen x x′ >> convGo k σ seen y y′
+  convND k σ seen (word op ts)  (word op′ ts′) =
+    guard "word operator mismatch" (wop≡ᵇ op op′) >>
+    convArgs seen k σ ts ts′
   convND _ _ _    u             v             =
     fail ("cannot convert " ++ showTm u ++ " ≁ " ++ showTm v)
 
@@ -667,7 +703,82 @@ data _,_⊢[_]_⇒_ σ Γ where
   ⇒-packi : ∀ {m x y}
     → σ , Γ ⊢[ m ] x ⇐ i64
     → σ , Γ ⊢[ m ] y ⇐ i64
-    → σ , Γ ⊢[ m ] packi x y ⇒ tensor i64 (toi64 (su (su ze)))
+    → σ , Γ ⊢[ m ] packi x y ⇒ tensor i64 (word (wlit ki64 2) [])
+
+  -- Fixed-width words. I64 stays the i64 former. Comparisons yield
+  -- WBool; checked arithmetic, div, and rem yield Opt.
+  ⇒-wu8  : σ , Γ ⊢[ spec ] word (wty ku8) [] ⇒ typ
+  ⇒-wu32 : σ , Γ ⊢[ spec ] word (wty ku32) [] ⇒ typ
+  ⇒-wu64 : σ , Γ ⊢[ spec ] word (wty ku64) [] ⇒ typ
+  ⇒-wboolty : σ , Γ ⊢[ spec ] word wbool [] ⇒ typ
+  ⇒-woptk : ∀ {k} → σ , Γ ⊢[ spec ] word (woptk k) [] ⇒ typ
+  ⇒-wopt : ∀ {A} → σ , Γ ⊢ A wf → σ , Γ ⊢[ spec ] word wopt (A ∷ []) ⇒ typ
+  ⇒-wlit : ∀ {m k n} → σ , Γ ⊢[ m ] word (wlit k n) [] ⇒ wordTy k
+  ⇒-wof : ∀ {m k n}
+    → σ , Γ ⊢[ m ] n ⇐ nat
+    → σ , Γ ⊢[ m ] word (wof k) (n ∷ []) ⇒ wordTy k
+  ⇒-wton : ∀ {m k t}
+    → σ , Γ ⊢[ m ] t ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wton (t ∷ []) ⇒ nat
+  ⇒-wadd : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wadd (x ∷ y ∷ []) ⇒ wordTy k
+  ⇒-wsub : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wsub (x ∷ y ∷ []) ⇒ wordTy k
+  ⇒-wmul : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wmul (x ∷ y ∷ []) ⇒ wordTy k
+  ⇒-wcadd : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wcadd (x ∷ y ∷ []) ⇒ optTy k
+  ⇒-wcsub : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wcsub (x ∷ y ∷ []) ⇒ optTy k
+  ⇒-wcmul : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wcmul (x ∷ y ∷ []) ⇒ optTy k
+  ⇒-wdiv : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wdiv (x ∷ y ∷ []) ⇒ optTy k
+  ⇒-wrem : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wrem (x ∷ y ∷ []) ⇒ optTy k
+  ⇒-weq : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word weq (x ∷ y ∷ []) ⇒ word wbool []
+  ⇒-wlt : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wlt (x ∷ y ∷ []) ⇒ word wbool []
+  ⇒-wle : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wle (x ∷ y ∷ []) ⇒ word wbool []
+  ⇒-wand : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wand (x ∷ y ∷ []) ⇒ wordTy k
+  ⇒-wor : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wor (x ∷ y ∷ []) ⇒ wordTy k
+  ⇒-wxor : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wxor (x ∷ y ∷ []) ⇒ wordTy k
+  ⇒-wnot : ∀ {m k x}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wnot (x ∷ []) ⇒ wordTy k
+  ⇒-wshl : ∀ {m k x n}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] n ⇐ nat
+    → σ , Γ ⊢[ m ] word wshl (x ∷ n ∷ []) ⇒ wordTy k
+  ⇒-wshr : ∀ {m k x n}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] n ⇐ nat
+    → σ , Γ ⊢[ m ] word wshr (x ∷ n ∷ []) ⇒ wordTy k
+  ⇒-wcast : ∀ {m k k′ t}
+    → σ , Γ ⊢[ m ] t ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word (wcast k′) (t ∷ []) ⇒ wordTy k′
+  ⇒-wtrue  : ∀ {m} → σ , Γ ⊢[ m ] word wtrue [] ⇒ word wbool []
+  ⇒-wfalse : ∀ {m} → σ , Γ ⊢[ m ] word wfalse [] ⇒ word wbool []
+  ⇒-wsome : ∀ {m k t}
+    → σ , Γ ⊢[ m ] t ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wsome (t ∷ []) ⇒ optTy k
 
 data _,_⊢[_]_⇐_ σ Γ where
   ⇐-conv : ∀ {m e A B}
@@ -694,6 +805,10 @@ data _,_⊢[_]_⇐_ σ Γ where
     → σ , Γ ⊢[ m ] a ⇐ A
     → σ , Γ ⊢[ m ] b ⇐ B
     → σ , Γ ⊢[ m ] pair a b ⇐ prod A B
+
+  -- None has no payload kind. The expected Opt type supplies it.
+  ⇐-wnone : ∀ {m k}
+    → σ , Γ ⊢[ m ] word wnone [] ⇐ optTy k
 
   -- let (a, b) = e in t: the tensor eliminator. Both components are
   -- bound affine (a at var 1, b at var 0); the body is checked against
@@ -759,7 +874,7 @@ floatIdOk k σ A =
   guard "kernel identity is not defined on F32" (not b)
 
 i64two : ∀ {n} → Tm n
-i64two = toi64 (su (su ze))
+i64two = word (wlit ki64 2) []
 
 viewProd : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n × Tm n)
 viewProd k σ t with whnf k σ t
@@ -813,6 +928,7 @@ mutual
   hasSelf s (addt t u)     = hasSelf s t ∨ hasSelf s u
   hasSelf s (toi64 t)      = hasSelf s t
   hasSelf s (packi x y)    = hasSelf s x ∨ hasSelf s y
+  hasSelf s (word _ ts)    = hasSelfList s ts
   hasSelf s (lam _ A t)    = hasSelf s A ∨ hasSelf s t
   hasSelf s (pi _ A B)     = hasSelf s A ∨ hasSelf s B
   hasSelf s (prod A B)     = hasSelf s A ∨ hasSelf s B
@@ -980,6 +1096,7 @@ mutual
   tail-go B (addt t u) false nb eq = absent-only B (addt t u) nb eq refl
   tail-go B (toi64 t) false nb eq = absent-only B (toi64 t) nb eq refl
   tail-go B (packi x y) false nb eq = absent-only B (packi x y) nb eq refl
+  tail-go B (word op ts) false nb eq = absent-only B (word op ts) nb eq refl
 
   -- Carry the view as an argument so unfCall reduces on it.
   unf-go : ∀ {n} (B : List ℕ) (s f : Tm n) (v : StepFun f)
@@ -1036,6 +1153,7 @@ mutual
   call-ok _ (addt _ _) eq = ⊥-elim (boom refl eq)
   call-ok _ (toi64 _) eq = ⊥-elim (boom refl eq)
   call-ok _ (packi _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (word _ _) eq = ⊥-elim (boom refl eq)
 
 -- guardedTail B t ≡ true reflects GuardedTail B t.
 guardedTail-reflects : ∀ {n} (B : List ℕ) (t : Tm n) → guardedTail B t ≡ true → GuardedTail B t
@@ -1093,6 +1211,7 @@ mutual
   occℕ i (addt t u)     = occℕ i t ∨ occℕ i u
   occℕ i (toi64 t)      = occℕ i t
   occℕ i (packi a b)    = occℕ i a ∨ occℕ i b
+  occℕ i (word _ ts)    = occℕList i ts
   occℕ _ _              = false
 
   occℕList : ∀ {n} → ℕ → List (Tm n) → Bool
@@ -1268,6 +1387,7 @@ pairStep-ok _ (muli _ _) ()
 pairStep-ok _ (addt _ _) ()
 pairStep-ok _ (toi64 _) ()
 pairStep-ok _ (packi _ _) ()
+pairStep-ok _ (word _ _) ()
 
 guardedStep-ok : ∀ {n} (B : List ℕ) (t : Tm n) → guardedStep B t ≡ ok tt → StepGuard B t
 guardedStep-ok B (lam _ _ t) eq = sg-lam (pairStep-ok B t eq)
@@ -1309,6 +1429,7 @@ guardedStep-ok _ (muli _ _) ()
 guardedStep-ok _ (addt _ _) ()
 guardedStep-ok _ (toi64 _) ()
 guardedStep-ok _ (packi _ _) ()
+guardedStep-ok _ (word _ _) ()
 
 unfold-from : ∀ {n} k σ (B : List ℕ) (f : Tm n)
   → (whnf k σ f >>= guardedStep B) ≡ ok tt → UnfoldGuard k σ B f
@@ -1354,6 +1475,7 @@ mutual
   occurs x (addt t u)     = occurs x t ∨ occurs x u
   occurs x (toi64 t)      = occurs x t
   occurs x (packi a b)    = occurs x a ∨ occurs x b
+  occurs x (word _ ts)    = occursList x ts
   occurs _ _              = false
 
   occursList : ∀ {n} → Fin n → List (Tm n) → Bool
@@ -1412,6 +1534,7 @@ mutual
   occursD i (addt t u)     = occursD i t ∨ occursD i u
   occursD i (toi64 t)      = occursD i t
   occursD i (packi a b)    = occursD i a ∨ occursD i b
+  occursD i (word _ ts)    = occursDList i ts
   occursD _ _              = false
 
   occursDList : ∀ {n} → ℕ → List (Tm n) → Bool
@@ -1467,6 +1590,7 @@ mutual
   absentGo k σ i seen (addt t u)     = absentD k σ i seen t ∧ absentD k σ i seen u
   absentGo k σ i seen (toi64 t)      = absentD k σ i seen t
   absentGo k σ i seen (packi a b)    = absentD k σ i seen a ∧ absentD k σ i seen b
+  absentGo k σ i seen (word _ ts)    = absentDList k σ i seen ts
   absentGo k σ i seen (mData e P bs) = absentD k σ i seen e ∧ absentD k σ i seen P ∧ absentDList k σ i seen bs
   absentGo k σ i seen (dty j)        = absentData k σ i seen j
   absentGo _ _ _ _ _                 = true
@@ -1732,6 +1856,18 @@ unfStepOf S t      = unfSpine S (unspine t)
 -- expected type is an applied family (true) or a bare ν (false).
 unfStep : ∀ {n} → ℕ → Sig → Tm n → Tm n → Result (Tm n × Bool)
 unfStep k σ T S = whnf k σ T >>= unfStepOf S
+
+-- i64 is the I64 type. word (wty ki64) is not a second one.
+kindOfWord : ∀ {n} → Tm n → Maybe WKind
+kindOfWord i64                 = just ki64
+kindOfWord (word (wty k) [])   = just k
+kindOfWord _                   = nothing
+
+noWordProm : String
+noWordProm = "no promotion: a word type is an erased term"
+
+needWord : String
+needWord = "machine integer operation expects a machine integer"
 
 mutual
   infer : ∀ {n} → ℕ → Sig → RecSt n → Ctx n → Mode → Tm n → Result (Tm n × UseVec n)
@@ -2159,6 +2295,107 @@ mutual
     combine m xu yu >>= λ uses →
     ok (tensor i64 i64two , uses)
 
+  -- ⇒-word. Types are spec-only. Operations are allowed in every mode.
+  infer′ k σ rs Γ (word op ts) m _ = inferWord k σ rs Γ m op ts
+
+  inferWord : ∀ {n} → ℕ → Sig → RecSt n → Ctx n → Mode → WOp → List (Tm n) → Result (Tm n × UseVec n)
+  inferWord {n} k σ rs Γ m op ts = go op m ts
+    where
+    bin : List (Tm n) → (WKind → Tm n) → Result (Tm n × UseVec n)
+    bin (x ∷ y ∷ []) result =
+      infer k σ rs Γ m x >>= λ (Tx , ux) →
+      whnf k σ Tx >>= λ Tx′ →
+      case kindOfWord Tx′ of λ where
+        nothing → fail needWord
+        (just kx) →
+          check k σ rs Γ m y (wordTy kx) >>= λ uy →
+          combine m ux uy >>= λ uses →
+          ok (result kx , uses)
+    bin _ _ = fail "word operation takes two machine integers"
+
+    una : Tm n → (WKind → Tm n) → Result (Tm n × UseVec n)
+    una t result =
+      infer k σ rs Γ m t >>= λ (T , u) →
+      whnf k σ T >>= λ T′ →
+      case kindOfWord T′ of λ where
+        nothing → fail needWord
+        (just kx) → ok (result kx , u)
+
+    shift : Tm n → Tm n → Result (Tm n × UseVec n)
+    shift x amt =
+      infer k σ rs Γ m x >>= λ (Tx , ux) →
+      whnf k σ Tx >>= λ Tx′ →
+      case kindOfWord Tx′ of λ where
+        nothing → fail needWord
+        (just kx) →
+          check k σ rs Γ m amt nat >>= λ un →
+          combine m ux un >>= λ uses →
+          ok (wordTy kx , uses)
+
+    go : WOp → Mode → List (Tm n) → Result (Tm n × UseVec n)
+    go (wty ki64) _ _ = fail "I64 is the i64 former"
+    go (wty _) run _ = fail noWordProm
+    go (wty _) evid _ = fail noWordProm
+    go (wty _) spec [] = ok (typ , u0s)
+    go (wty _) _ _ = fail "U8, U32, and U64 take no arguments"
+    go (wlit kx _) _ [] = ok (wordTy kx , u0s)
+    go (wlit _ _) _ _ = fail "a word literal takes no arguments"
+    go (wof kx) _ (t ∷ []) = check k σ rs Γ m t nat >>= λ u → ok (wordTy kx , u)
+    go (wof _) _ _ = fail "ofNat takes one Nat"
+    go wton _ (t ∷ []) =
+      infer k σ rs Γ m t >>= λ (T , u) →
+      whnf k σ T >>= λ T′ →
+      case kindOfWord T′ of λ where
+        (just _) → ok (nat , u)
+        nothing  → fail needWord
+    go wton _ _ = fail "toNat takes one word"
+    go wadd _ ts′ = bin ts′ wordTy
+    go wsub _ ts′ = bin ts′ wordTy
+    go wmul _ ts′ = bin ts′ wordTy
+    go wand _ ts′ = bin ts′ wordTy
+    go wor  _ ts′ = bin ts′ wordTy
+    go wxor _ ts′ = bin ts′ wordTy
+    go wcadd _ ts′ = bin ts′ optTy
+    go wcsub _ ts′ = bin ts′ optTy
+    go wcmul _ ts′ = bin ts′ optTy
+    go wdiv _ ts′ = bin ts′ optTy
+    go wrem _ ts′ = bin ts′ optTy
+    go weq _ ts′ = bin ts′ (λ _ → word wbool [])
+    go wlt _ ts′ = bin ts′ (λ _ → word wbool [])
+    go wle _ ts′ = bin ts′ (λ _ → word wbool [])
+    go wnot _ (t ∷ []) = una t wordTy
+    go wnot _ _ = fail "noti takes one word"
+    go wshl _ (x ∷ n ∷ []) = shift x n
+    go wshl _ _ = fail "shli takes a word and a Nat"
+    go wshr _ (x ∷ n ∷ []) = shift x n
+    go wshr _ _ = fail "shri takes a word and a Nat"
+    go (wcast kd) _ (t ∷ []) =
+      infer k σ rs Γ m t >>= λ (T , u) →
+      whnf k σ T >>= λ T′ →
+      case kindOfWord T′ of λ where
+        (just _) → ok (wordTy kd , u)
+        nothing  → fail needWord
+    go (wcast _) _ _ = fail "a cast takes one word"
+    go wbool run _ = fail noWordProm
+    go wbool evid _ = fail noWordProm
+    go wbool spec [] = ok (typ , u0s)
+    go wbool _ _ = fail "WBool takes no arguments"
+    go wtrue _ [] = ok (word wbool [] , u0s)
+    go wtrue _ _ = fail "wtrue takes no arguments"
+    go wfalse _ [] = ok (word wbool [] , u0s)
+    go wfalse _ _ = fail "wfalse takes no arguments"
+    go wopt run _ = fail noWordProm
+    go wopt evid _ = fail noWordProm
+    go wopt spec (A ∷ []) = checkTy k σ rs Γ A >> ok (typ , u0s)
+    go wopt _ _ = fail "Opt takes one type"
+    go (woptk _) run _ = fail noWordProm
+    go (woptk _) evid _ = fail noWordProm
+    go (woptk _) spec [] = ok (typ , u0s)
+    go (woptk _) _ _ = fail "Opt takes no arguments"
+    go wsome _ (t ∷ []) = una t optTy
+    go wsome _ _ = fail "wsome takes one word"
+    go wnone _ _ = fail "wnone requires an expected Opt type"
+
   -- ⇐-lam: against a Π after whnf; otherwise inferred and converted.
   check′ k σ rs Γ m (lam q A t) T = checkLam k σ rs Γ m (lam q A t) T (viewPi k σ T)
 
@@ -2216,6 +2453,15 @@ mutual
           (pi affine S (wk goal)) >>= λ fu →
     checkUnfold k σ m rs f >>
     combine m seedU fu
+
+  -- ⇐-wnone. The expected type is Opt, after whnf.
+  check′ k σ rs Γ m (word wnone []) T =
+    whnf k σ T >>= λ where
+      (word (woptk _) []) → ok u0s
+      (word wopt (A ∷ [])) →
+        isData k σ A >>= guard "wnone requires an expected Opt type" >>
+        ok u0s
+      _ → fail "wnone requires an expected Opt type"
 
   -- ⇐-ctor / ⇐-conv (default)
   check′ k σ rs Γ m e A = checkAgainst k σ rs Γ m e A (viewData k σ A) (ctorSpine e)
@@ -2366,6 +2612,7 @@ mutual
   seedWalk k σ B Γ m (addt t u)  = seedWalk k σ B Γ m t >> seedWalk k σ B Γ m u
   seedWalk k σ B Γ m (toi64 t)   = seedWalk k σ B Γ m t
   seedWalk k σ B Γ m (packi x y) = seedWalk k σ B Γ m x >> seedWalk k σ B Γ m y
+  seedWalk k σ B Γ m (word _ ts) = seedWalkList k σ B Γ m ts
   seedWalk _ _ _ _ _ _           = ok tt
 
   seedWalkList : ∀ {n} → ℕ → Sig → List ℕ → Ctx n → Mode → List (Tm n) → Result ⊤
@@ -2482,6 +2729,7 @@ mutual
   mentions (addt t u)     = cats (mentions t) (mentions u)
   mentions (toi64 t)      = mentions t
   mentions (packi a b)    = cats (mentions a) (mentions b)
+  mentions (word _ ts)    = mentionsList ts
   mentions _              = []
 
   mentionsList : ∀ {n} → List (Tm n) → List ℕ

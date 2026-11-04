@@ -59,6 +59,7 @@ mutual
   ren ρ (addt t u)    = addt (ren ρ t) (ren ρ u)
   ren ρ (toi64 t)     = toi64 (ren ρ t)
   ren ρ (packi x y)   = packi (ren ρ x) (ren ρ y)
+  ren ρ (word op ts)  = word op (renList ρ ts)
 
   renList : ∀ {n m} → (Fin n → Fin m) → List (Tm n) → List (Tm m)
   renList ρ []       = []
@@ -120,6 +121,7 @@ mutual
   renM ρ (addt t u) = addt <$> renM ρ t ⊛ renM ρ u
   renM ρ (toi64 t) = toi64 <$> renM ρ t
   renM ρ (packi x y) = packi <$> renM ρ x ⊛ renM ρ y
+  renM ρ (word op ts) = word op <$> renMList ρ ts
 
   renMList : ∀ {n m} → (Fin n → Result (Fin m)) → List (Tm n) → Result (List (Tm m))
   renMList ρ []       = ok []
@@ -225,6 +227,7 @@ mutual
   sub σ (addt t u)     = addt (sub σ t) (sub σ u)
   sub σ (toi64 t)      = toi64 (sub σ t)
   sub σ (packi x y)    = packi (sub σ x) (sub σ y)
+  sub σ (word op ts)   = word op (subList σ ts)
 
   subList : ∀ {n m} → (Fin n → Tm m) → List (Tm n) → List (Tm m)
   subList σ []       = []
