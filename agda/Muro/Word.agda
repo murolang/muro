@@ -1386,9 +1386,47 @@ ex-div = refl
 ex-rem : remPayload ku8 10 3 ≡ just 1
 ex-rem = refl
 
--- Signed residues at 2^63 and above are not closed `refl` tests here:
--- the standard-library remainder walks the dividend. The signed
--- equations are the lemmas above (wrapAdd-mod, div-iff, inRange).
+-- Closed residues at the width. `%` on a literal is the builtin
+-- remainder, so these do not walk the dividend.
+
+ex-u32-wrap : wrapAddN ku32 4294967295 1 ≡ 0
+ex-u32-wrap = refl
+
+ex-u32-cadd : checkedAddN ku32 4294967295 1 ≡ nothing
+ex-u32-cadd = refl
+
+ex-u64-wrap : wrapAddN ku64 (mod64 ∸ 1) 1 ≡ 0
+ex-u64-wrap = refl
+
+ex-u64-cadd : checkedAddN ku64 (mod64 ∸ 1) 1 ≡ nothing
+ex-u64-cadd = refl
+
+ex-u64-sub : wrapSubN ku64 0 1 ≡ mod64 ∸ 1
+ex-u64-sub = refl
+
+ex-u64-cast : castN ku32 (mod64 ∸ 1) ≡ 4294967295
+ex-u64-cast = refl
+
+ex-u64-round : (mod64 ∸ 1) %w ku64 ≡ mod64 ∸ 1
+ex-u64-round = refl
+
+ex-u64-width : mod64 %w ku64 ≡ 0
+ex-u64-width = refl
+
+ex-i64-wrap-max : wrapAddN ki64 (half64 ∸ 1) 1 ≡ half64
+ex-i64-wrap-max = refl
+
+ex-i64-wrap-min : wrapAddN ki64 half64 half64 ≡ 0
+ex-i64-wrap-min = refl
+
+ex-i64-cadd-max : checkedAddN ki64 (half64 ∸ 1) 1 ≡ nothing
+ex-i64-cadd-max = refl
+
+ex-i64-cadd-min : checkedAddN ki64 half64 half64 ≡ nothing
+ex-i64-cadd-min = refl
+
+ex-i64-div : divPayload ki64 half64 (mod64 ∸ 1) ≡ nothing
+ex-i64-div = refl
 
 ex-step : ∀ {n} →
   wordStep wadd (wlitT {n} ku8 200 ∷ wlitT ku8 100 ∷ []) ≡ just (wlitT ku8 44)
