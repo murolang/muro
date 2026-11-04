@@ -11,7 +11,7 @@ In brief: one sort `Type`. Binders are written. Application is juxtaposition. `m
 
 ## The book
 
-A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `talk`, `session`, `conform`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `seat`, `link`, and `def` entries.
+A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `talk`, `choreography`, `session`, `conform`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `seat`, `link`, and `def` entries.
 
 ```
 def name : tag type := body
@@ -21,7 +21,7 @@ The tag is `run`, `run internal`, `spec`, or `evidence`. There is no other tag.
 
 Forward references are allowed. The checker sees every definition when it checks any one of them.
 
-Definitions, data types, constructors, sessions, conformances, places, schemes, meetings, talks, seats, and links share one set of names. Each name is declared once.
+Definitions, data types, constructors, sessions, conformances, places, schemes, meetings, talks, choreographies, seats, and links share one set of names. Each name is declared once.
 
 ## Session
 
@@ -80,6 +80,8 @@ session back := seen peer with pong in ping-exchange
 
 `say` is one party sending a value of one type to another, then one continuation. `offer` is one party choosing and the other offering both arms. On a `say`, the sender's session is `send` of that type and the receiver's session is `recv` of that type. On an `offer`, the sender's session is `choose` and the receiver's session is `branch`. `pong` receiving a nat and then sending `1` is `recv Nat (send Nat end)`. `peer` has `send Nat (recv Nat end)`. A party off a `say` has the continuation's session. A party off an `offer` has a session when both arms are the same description. A run term has no seat. `examples/talk.muro` is that book.
 
+A choreography names every role and one global type. `session ca := seen coordinator with alice in two-phase-commit` is the session `coordinator` has with `alice`. Projection is pairwise. A message is `send` for the sender and `recv` for the receiver. A choice by a role on that pair is `choose` or `branch`. A role that is neither end of the choice has a session only when every branch projects to the same session. The choreography is spec. The emitters omit it. `examples/two-phase-commit.muro` is that book. See [Choreography](choreography.md).
+
 A party of that description sits at a place.
 
 ```
@@ -90,7 +92,7 @@ link go : cross pong-home with peer-away in ping-exchange
 
 `pong` sits at `home` and `peer` sits at `away`. They have a session, and the places differ, so the boundary crosses once. The same place stays. The other party reads that same boundary. The payload stays on the session. `examples/seated.muro` is that book.
 
-The checker sees the whole book, so a `conform` may name a session declared later, a dual session may name a session declared later, a meeting may name a process declared later, a session may name a description declared later, and a seat may name a place or a description declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
+The checker sees the whole book, so a `conform` may name a session declared later, a dual session may name a session declared later, a meeting may name a process declared later, a session may name a description or a choreography declared later, and a seat may name a place or a description declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
 
 ## Place
 

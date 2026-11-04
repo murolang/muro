@@ -157,6 +157,28 @@ A party the description does not seat, or a description that refers to itself, i
 
 See [Terms](language.md#session).
 
+## two-phase-commit.muro
+
+One choreography, and each role has a session with each other role. The choreography is spec. The run emitters omit it.
+
+```
+choreography two-phase-commit
+  roles coordinator, alice, bob
+  coordinator -> alice : prepare
+  coordinator -> bob : prepare
+  alice -> coordinator : vote
+  bob -> coordinator : vote
+  coordinator chooses
+    commit: coordinator -> alice : commit
+            coordinator -> bob : commit
+    abort: coordinator -> alice : abort
+           coordinator -> bob : abort
+```
+
+`coordinator` with `alice` is `send Unit (recv Unit (choose (send Unit end) (send Unit end)))`. `alice` with `coordinator` is the dual, `recv Unit (send Unit (branch (recv Unit end) (recv Unit end)))`. `coordinator` with `bob` is the same shape, and `bob` with `coordinator` is its dual. `alice` with `bob` is `end`, and so is `bob` with `alice`: those two never interact. The choice stays even though commit and abort send the same shape of message. `session ca := seen coordinator with alice in two-phase-commit` is that first session. `kept` is the run definition in the same file. `mix muro.emit examples/two-phase-commit.muro` emits `kept`.
+
+A participant whose branches differ, and who was not told the choice, is refused. That book is `test/fixtures/choreo_untold.muro`, not an example. See [Choreography](choreography.md).
+
 ## seated.muro
 
 A party of a description sits at a place. The seating is spec. The boundary is evidence. The run emitters omit both.
@@ -497,6 +519,8 @@ Uses `sym`, `cong`, and `pred` from the prelude and defines none of them. `befor
 ## Refused
 
 `mix muro.check` fails on each of these. `even_odd.muro` is the mutual recursion that checks.
+
+`test/fixtures/choreo_untold.muro` is a choreography the projection refuses. The coordinator chooses. The commit arm is `alice -> bob : go` and the abort arm is `bob -> alice : stop`. Alice and bob are not an end of that choice, and the arms are not the same session, so the checker reports `alice: branches commit and abort disagree` and `bob: branches commit and abort disagree`. The file is a test fixture, not an example. See [Choreography](choreography.md#a-refusal).
 
 ### bad_dup.muro
 

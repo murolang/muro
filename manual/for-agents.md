@@ -87,6 +87,7 @@ lib/muro/subst.ex       de Bruijn subst
 lib/muro/check.ex       Elixir mirror of ⊢
 lib/muro/session.ex     session / conform, mirror of decide and finishes; `rec X. S` unfolds one action and a repeated head conforms
 lib/muro/talk.ex        one description of an exchange, mirror of seen
+lib/muro/choreo.ex      a global type projected to each role pair, mirror of project
 lib/muro/place.ex       place / scheme / move, mirror of decide
 lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
@@ -114,6 +115,7 @@ agda/Muro/Rec.agda      equi-recursive `rec X. S` unfolded to a guarded coinduct
 agda/Muro/Dual.agda     the other end of a session; send swaps with recv, a dependent receive swaps with a dependent send, an evidence send swaps with an evidence receive, an indexed bit keeps its index and each arm dualises, and the payload type stays; `session name := dual name` follows it
 agda/Muro/Meet.agda     two processes on one channel; a send meets a receive of the same payload type and the value inhabits it; a received nat instantiates a vector length; an evidence payload meets as a nat; a literal bit meets the arm of that bit; a variable meets a receive at its innermost binding; `meet name : left with right` follows it
 agda/Muro/Talk.agda     one description of an exchange; say names one payload and one continuation; `session name := seen party with party in talk` follows it
+agda/Muro/Choreo.agda   a global type; `g ↾ r / s ≡ b` is the binary session of one role with another; `project-sound`, `project-complete`, and `pairwise-dual`; `--safe`; not a Tm
 agda/Muro/Seated.agda   a party of a description sits at a place; `seat name : party at place in talk` follows it; the same place stays; two places cross once
 agda/Muro/Held.agda     a meeting at the parties' places; the same place stays; two places cross once; a `.muro` file does not write it
 agda/Muro/Arrow.agda    %1 on a Π binder must be used; both marks are the affine quantity
@@ -140,7 +142,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.20.7`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.20.8`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -153,7 +155,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.20.7.ez
+mix archive.install muro-0.20.8.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -218,14 +220,14 @@ mix muro.deps.get  # fetch muro_deps/ and write muro.lock
 make agda          # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-On success, `mix muro.check` prints the version that checked the book, then:
+On success, `mix muro.check` prints the version that checked the book, then one line per temporal declaration, then one line per projected pair of each choreography, then:
 
 ```
-Muro v0.20.7
+Muro v0.20.8
 All terms check. Evidence never becomes a run.
 ```
 
-A book that imports packages prints `conforms to <name> <version> (sha256 <hash>)` after that sentence, one line per package it loaded. A book that imports none, and `mix muro.check` with no path, print only those two lines.
+A book with no temporal declaration and no choreography prints those two lines and nothing between them. A book that imports packages prints `conforms to <name> <version> (sha256 <hash>)` after that sentence, one line per package it loaded. A book that imports none, and `mix muro.check` with no path, print only those two lines.
 
 `Muro.Check.check_sig/2` returns `:ok` on a well-typed book, or `{:error, msg}` with every definition error in book order. `check_sig(book, fuel: n)` sets the fuel for each definition. Definitions are checked concurrently; the fuel is the bound, not a wall-clock timeout.
 

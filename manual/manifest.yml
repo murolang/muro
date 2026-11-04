@@ -34,6 +34,10 @@ pages:
     slug: temporal
     title: Temporal
     summary: always, eventually, and leads_to on one buffered meeting.
+  - file: choreography.md
+    slug: choreography
+    title: Choreography
+    summary: A global type, projected to the binary session each pair of roles follows.
   - file: identity.md
     slug: identity
     title: Identity
