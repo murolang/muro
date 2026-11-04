@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.9
+## 0.20.13
 
 `U8`, `U32`, `U64`, and `I64` are fixed-width residues. `U8` is ℕ modulo 256, `U32` modulo 2^32, and `U64` modulo 2^64. `I64` is those 64 bits as two's complement. `addi`, `subi`, and `muli` wrap. `addc`, `subc`, and `mulc` return `Opt` and are `wsome` exactly when the result fits: below 2^w for an unsigned word, and in [−2^63, 2^63−1] for `I64`. `divi` and `remi` return `Opt`, empty for a zero divisor and for signed division of the minimum by −1. Division truncates toward zero and the remainder takes the sign of the dividend. `eqi`, `lti`, and `lei` return `WBool`. `andi`, `ori`, `xori`, and `noti` are bitwise. `shli` and `shri` are total: an amount at or past the width yields 0, except a signed `shri`, which sign-extends. `toU8`, `toU32`, `toU64`, and `toI64` reduce modulo the width. `toNat` returns the residue as a closed numeral. Word operations and that numeral reduce as machine integers, so a residue near 2^32 or 2^64 does not run out of fuel. `asU8`, `asU32`, `asU64`, and `asI64` are the only casts. There is no implicit coercion.
 
@@ -12,7 +12,7 @@
 
 ### Package
 
-- Version 0.20.9.
+- Version 0.20.13.
 
 ## 0.20.12
 
