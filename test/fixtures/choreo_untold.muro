@@ -1,0 +1,6 @@
+-- A participant's branches differ, and nobody told that participant the choice.
+choreography untold
+  roles coordinator, alice, bob
+  coordinator chooses
+    commit: alice -> bob : go
+    abort: bob -> alice : stop

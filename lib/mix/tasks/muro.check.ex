@@ -26,14 +26,16 @@ defmodule Mix.Tasks.Muro.Check do
   The first line is the version that checked the book (`Muro v` and the
   version from the application spec). Each temporal declaration that
   holds then prints `temporal <name>: holds in <n> reachable states`.
-  On success the next line is
+  Each choreography then prints one
+  `choreography <name>: <role> with <role> = <session>` line per
+  ordered pair of roles. On success the next line is
   `All terms check. Evidence never becomes a run.` A book with no
-  temporal declaration prints that line immediately after the version.
-  When the book imports
-  packages, one `conforms to <name> <version> (sha256 <hash>)` line
-  follows for each package it loaded. A book that imports no package,
-  and the built-in check with no path, print only those two lines.
-  A refusal prints the errors after the version line.
+  temporal declaration and no choreography prints that line immediately
+  after the version. When the book imports packages, one
+  `conforms to <name> <version> (sha256 <hash>)` line follows for each
+  package it loaded. A book that imports no package, and the built-in
+  check with no path, print only those two lines. A refusal prints the
+  errors after the version line.
   """
 
   def run(args) do

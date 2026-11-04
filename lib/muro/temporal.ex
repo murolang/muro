@@ -839,6 +839,7 @@ defmodule Muro.Temporal do
           :read,
           :meet,
           :talk,
+          :choreography,
           :repr,
           :seat,
           :link,

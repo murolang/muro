@@ -96,6 +96,9 @@ defmodule Muro.Check do
       %{kind: :talk} ->
         {:skip, "#{name} is a talk, not a definition"}
 
+      %{kind: :choreography} ->
+        {:skip, "#{name} is a choreography, not a definition"}
+
       # The data type of the same name is the term. `:skip` would hide it.
       %{kind: :repr} ->
         {:error, "unknown definition #{name}"}
@@ -169,6 +172,7 @@ defmodule Muro.Check do
               :meet,
               :temporal,
               :talk,
+              :choreography,
               :repr,
               :seat,
               :link,
@@ -2590,6 +2594,18 @@ defmodule Muro.Check do
     end
   end
 
+  # Projection. A choreography is spec. The lines are the binary
+  # session of each ordered pair of roles.
+  def check_def(book, %{kind: :choreography, name: name, roles: roles, body: body} = d, _fuel) do
+    case Muro.Choreo.check(name, roles, body, book) do
+      {:ok, lines} ->
+        {:choreo, lines}
+
+      {:error, msg} ->
+        {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+    end
+  end
+
   # The description expands. A name that refers to itself has no
   # description. A party with no session is refused on the session.
   # A talk is spec.
@@ -2975,10 +2991,7 @@ defmodule Muro.Check do
           end
 
         %{proto: {:seen, p, q, talk}} = s ->
-          with {:ok, tree} <- resolve_talk_name(book, talk, MapSet.new()),
-               {:ok, proto} <- Muro.Talk.seen(p, q, tree) do
-            {:ok, %{s | proto: proto}}
-          end
+          resolve_seen(book, s, p, q, talk)
 
         s ->
           cond do
@@ -2996,6 +3009,31 @@ defmodule Muro.Check do
   end
 
   # `dual ping` may name a later session. `dual (stream 0)` opens that call.
+  # A `seen` name is a talk, or a choreography. The error stays
+  # `unknown talk` when it is neither, which is the message a missing
+  # description already had.
+  defp resolve_seen(book, session, p, q, name) do
+    cond do
+      Enum.any?(book, &(Map.get(&1, :kind) == :talk and &1.name == name)) ->
+        with {:ok, tree} <- resolve_talk_name(book, name, MapSet.new()),
+             {:ok, proto} <- Muro.Talk.seen(p, q, tree) do
+          {:ok, %{session | proto: proto}}
+        end
+
+      Enum.any?(book, &(Map.get(&1, :kind) == :choreography and &1.name == name)) ->
+        %{roles: roles, body: body} =
+          Enum.find(book, &(Map.get(&1, :kind) == :choreography and &1.name == name))
+
+        case Muro.Choreo.session(roles, body, p, q, book) do
+          {:ok, proto} -> {:ok, %{session | proto: proto}}
+          {:error, msg} -> {:error, msg}
+        end
+
+      true ->
+        {:error, "unknown talk #{name}"}
+    end
+  end
+
   defp resolve_dual_target(book, name, seen) when is_binary(name) do
     resolve_session(book, name, seen)
   end
@@ -3265,6 +3303,7 @@ defmodule Muro.Check do
           :meet,
           :temporal,
           :talk,
+          :choreography,
           :repr,
           :seat,
           :link,
@@ -3472,6 +3511,7 @@ defmodule Muro.Check do
 
   @graphs_key {__MODULE__, :meeting_graphs}
   @temporal_key {__MODULE__, :temporal_lines}
+  @choreo_key {__MODULE__, :choreo_lines}
 
   @doc false
   def begin_meeting_graphs, do: Process.put(@graphs_key, %{})
@@ -3526,6 +3566,13 @@ defmodule Muro.Check do
   def temporal_lines, do: Process.get(@temporal_key, [])
 
   @doc """
+  Projection lines of the choreographies in the book just checked, in
+  book order. Empty when that check was refused, or when the book has
+  no choreography.
+  """
+  def choreo_lines, do: Process.get(@choreo_key, [])
+
+  @doc """
   Check a named book. Options: `fuel: n` (default `default_fuel/0`).
 
   Each definition other than a temporal declaration is checked against
@@ -3545,6 +3592,7 @@ defmodule Muro.Check do
   def check_sig(named_book, opts \\ []) do
     note_check()
     Process.delete(@temporal_key)
+    Process.delete(@choreo_key)
     fuel = Keyword.get(opts, :fuel, @fuel)
     # `params: :open` keeps unsupplied params as assumptions. The default
     # refuses them. Only `Muro.Load` passes `:open`, and only when the
@@ -3577,12 +3625,18 @@ defmodule Muro.Check do
       errors = for {:error, msg} <- outcomes, do: msg
       notes = for {:note, line} <- outcomes, do: line
 
+      choreos =
+        for {:choreo, lines} <- outcomes, line <- lines do
+          line
+        end
+
       case errors do
         [] ->
           graphs = for {:graph, name, session, g} <- outcomes, do: {name, {session, g}}
           prev = Process.get(@graphs_key, %{})
           Process.put(@graphs_key, Map.merge(prev, Map.new(graphs)))
           if notes != [], do: Process.put(@temporal_key, notes)
+          if choreos != [], do: Process.put(@choreo_key, choreos)
           :ok
 
         msgs ->
