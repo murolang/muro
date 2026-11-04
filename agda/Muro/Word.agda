@@ -612,6 +612,13 @@ wof-from : ∀ {n} {t : Tm n} (k : WKind) →
 wof-from k (just (m , _)) = just (wlitT k (m %w k))
 wof-from _ nothing        = nothing
 
+-- Opt's step takes the type view as an argument. A with on kindOfTy
+-- inside wordStep does not reduce while the canon proof matches refl.
+wopt-from : ∀ {n} {t : Tm n} → Maybe (TyArg t) → Maybe (Tm n)
+wopt-from (just (ty-i64 _))  = just (optTy ki64)
+wopt-from (just (ty-wd k _)) = just (optTy k)
+wopt-from nothing            = nothing
+
 -- Fires only when every argument is already a value. whnf reduces
 -- arguments first, then calls this, then whnfs the contractum.
 wordStep : ∀ {n} → WOp → List (Tm n) → Maybe (Tm n)
@@ -639,10 +646,7 @@ wordStep wshr        (x ∷ n ∷ [])   = onShift shrN x n
 wordStep (wcast k)   (t ∷ [])       with litArg t
 ... | just (_ , a , _)               = just (wlitT k (castN k a))
 ... | nothing                        = nothing
-wordStep wopt        (t ∷ [])       with kindOfTy t
-... | just (ty-i64 _)                = just (optTy ki64)
-... | just (ty-wd k _)               = just (optTy k)
-... | nothing                        = nothing
+wordStep wopt        (t ∷ [])       = wopt-from (kindOfTy t)
 wordStep _           _              = nothing
 
 wordStep-res-canon : ∀ {n} op (ts : List (Tm n)) {r} → wordStep op ts ≡ just r → Canon r
