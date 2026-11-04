@@ -10,8 +10,10 @@ defmodule Muro.Emit.C do
   A `run` stream is a struct: the seed, an environment for values the
   step closes over, and a function pointer for the step. `uncons` calls
   that function and builds a new struct for the tail. `Always`, `~`,
-  and a raw `ν` in a run are refused (`c:stream`). `I64`, `F32`, and
-  `Tensor` are refused (`c:machine`). A lambda applied on the spot is a
+  and a raw `ν` in a run are refused (`c:stream`). `U8`, `U32`, `U64`,
+  and `I64` are passed by value. Signed wrapping goes through `uint64_t`.
+  A shift past the width and a division by zero are not evaluated.
+  `F32`, `Tensor`, `addt`, and `packI` are refused (`c:machine`). A lambda applied on the spot is a
   local. An unapplied lambda, and a call of a local function, are
   `c:lambda`.
 
@@ -217,9 +219,10 @@ defmodule Muro.Emit.C do
         case compile_funs(funs, book, nm) do
           {:ok, sigs, texts, extras} ->
             runs = Emit.run_defs(book)
+            opts = opt_typedefs(funs)
 
-            {:ok, header(book, sigs, stem, nm), source(book, runs, sigs, texts, extras, stem, nm),
-             sigs}
+            {:ok, header(book, sigs, stem, nm, opts),
+             source(book, runs, sigs, texts, extras, stem, nm, opts), sigs}
 
           {:error, _} = err ->
             err
@@ -461,6 +464,18 @@ defmodule Muro.Emit.C do
     with {:ok, {pre, ex, _lay, st}} <- emit_ir(scrut, env, st, scrut_ty(kind, st.book)),
          {:ok, {stmt, name, st}} <- emit_switch(kind, pre, ex, arms, env, st, expect) do
       {:ok, {stmt, name, rlay, st}}
+    end
+  end
+
+  defp emit_ir({:wrd, k, op, args}, env, st, expect) do
+    with {:ok, {pres, exprs, st}} <- emit_word_args(args, env, st) do
+      case word_c(k, op, exprs, st, expect) do
+        {:ok, {more, expr, lay, st}} ->
+          {:ok, {squash(pres ++ [more]), expr, lay, st}}
+
+        {:error, _} = err ->
+          err
+      end
     end
   end
 
@@ -931,6 +946,16 @@ defmodule Muro.Emit.C do
   end
 
   defp type_layout(book, {:ann, e, _}), do: type_layout(book, e)
+  defp type_layout(_book, :i64), do: :i64
+  defp type_layout(_book, {:word, {:ty, :u8}, []}), do: :u8
+  defp type_layout(_book, {:word, {:ty, :u32}, []}), do: :u32
+  defp type_layout(_book, {:word, {:ty, :u64}, []}), do: :u64
+  defp type_layout(_book, {:word, :bool, []}), do: :wbool
+  defp type_layout(_book, {:word, {:optk, :u8}, []}), do: {:opt, :u8}
+  defp type_layout(_book, {:word, {:optk, :u32}, []}), do: {:opt, :u32}
+  defp type_layout(_book, {:word, {:optk, :u64}, []}), do: {:opt, :u64}
+  defp type_layout(_book, {:word, {:optk, :i64}, []}), do: {:opt, :i64}
+  defp type_layout(book, {:word, :opt, [a]}), do: {:opt, type_layout(book, a)}
   defp type_layout(_book, _), do: :opaque
 
   defp pair_halves({:pair, a, b}), do: {a, b}
@@ -1018,6 +1043,316 @@ defmodule Muro.Emit.C do
   defp news(st), do: {g("s", st.s), %{st | s: st.s + 1}}
   defp newt(st), do: {g("t", st.t), %{st | t: st.t + 1}}
 
+  defp emit_word_args(args, env, st) do
+    Enum.reduce_while(args, {:ok, {[], [], st}}, fn arg, {:ok, {pres, exprs, st}} ->
+      case emit_ir(arg, env, st, "void *") do
+        {:ok, {pre, ex, _lay, st}} -> {:cont, {:ok, {pres ++ [pre], exprs ++ [ex], st}}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp word_c(k, {:lit, k, n}, [], st, _expect) do
+    {:ok, {"", c_word_lit(k, n), k, st}}
+  end
+
+  defp word_c(_k, true, [], st, _expect), do: {:ok, {"", "1", :wbool, st}}
+  defp word_c(_k, false, [], st, _expect), do: {:ok, {"", "0", :wbool, st}}
+
+  defp word_c(_k, :none, [], st, expect) do
+    ty =
+      if String.starts_with?(String.trim(expect), g("opt")) do
+        String.trim(expect)
+      else
+        opt_name(:u8)
+      end
+
+    {tmp, st} = news(st)
+    pre = "#{ty} #{tmp};\n#{tmp}.tag = 0;\n#{tmp}.val = 0;"
+    {:ok, {pre, tmp, {:opt, :opaque}, st}}
+  end
+
+  defp word_c(k, {:of, k}, [nat], st, _expect) do
+    {acc, st} = news(st)
+    {p, st} = news(st)
+
+    pre = """
+    uint64_t #{acc} = 0;
+    #{g("nat")} *#{p} = #{nat};
+    while (#{p}->#{g("field_tag")} != 0) {
+      #{acc}++;
+      #{p} = #{p}->#{g("field_suc")};
+    }
+    """
+
+    {:ok, {pre, "(#{cty(k)})#{acc}", k, st}}
+  end
+
+  defp word_c(_k, :ton, [x], st, _expect) do
+    {n, st} = news(st)
+    {r, st} = news(st)
+
+    pre = """
+    uint64_t #{n} = (uint64_t)(#{x});
+    #{g("nat")} *#{r} = #{g("zero")}();
+    while (#{n} != 0) {
+      #{r} = #{g("suc")}(#{r});
+      #{n}--;
+    }
+    """
+
+    {:ok, {pre, r, :nat, st}}
+  end
+
+  defp word_c(k, op, [x, y], st, _expect) when op in [:add, :sub, :mul] do
+    {:ok, {"", wrap_bin(op, k, x, y), k, st}}
+  end
+
+  defp word_c(k, op, [x, y], st, _expect) when op in [:and, :or, :xor] do
+    {:ok, {"", bit_bin(op, k, x, y), k, st}}
+  end
+
+  defp word_c(k, :not, [x], st, _expect), do: {:ok, {"", bit_not(k, x), k, st}}
+
+  defp word_c(k, op, [x, y], st, _expect) when op in [:eq, :lt, :le] do
+    {:ok, {"", cmp_c(op, k, x, y), :wbool, st}}
+  end
+
+  defp word_c(k, op, [x, y], st, _expect) when op in [:cadd, :csub, :cmul] do
+    checked_c(k, op, x, y, st)
+  end
+
+  defp word_c(k, op, [x, y], st, _expect) when op in [:div, :rem] do
+    divrem_c(k, op, x, y, st)
+  end
+
+  defp word_c(k, op, [x, amt], st, _expect) when op in [:shl, :shr] do
+    shift_c(k, op, x, amt, st)
+  end
+
+  defp word_c(k, {:cast, k}, [x], st, _expect), do: {:ok, {"", cast_c(k, x), k, st}}
+
+  defp word_c(k, :some, [x], st, _expect) do
+    {tmp, st} = news(st)
+    name = opt_name(k)
+    pre = "#{name} #{tmp};\n#{tmp}.tag = 1;\n#{tmp}.val = #{x};"
+    {:ok, {pre, tmp, {:opt, k}, st}}
+  end
+
+  defp word_c(_k, _op, _args, _st, _expect), do: {:error, "c:unsupported"}
+
+  defp cty(:u8), do: "uint8_t"
+  defp cty(:u32), do: "uint32_t"
+  defp cty(:u64), do: "uint64_t"
+  defp cty(:i64), do: "int64_t"
+
+  defp c_width(:u8), do: 8
+  defp c_width(:u32), do: 32
+  defp c_width(:u64), do: 64
+  defp c_width(:i64), do: 64
+
+  defp c_word_lit(:i64, n) do
+    n = rem(n, 18_446_744_073_709_551_616)
+    if n >= 9_223_372_036_854_775_808, do: "(int64_t)UINT64_C(#{n})", else: "#{n}LL"
+  end
+
+  defp c_word_lit(k, n) do
+    mod =
+      if k == :u8,
+        do: 256,
+        else: if(k == :u32, do: 4_294_967_296, else: 18_446_744_073_709_551_616)
+
+    "(#{cty(k)})UINT64_C(#{rem(n, mod)})"
+  end
+
+  defp wrap_bin(:add, :i64, x, y), do: "(int64_t)((uint64_t)(#{x}) + (uint64_t)(#{y}))"
+  defp wrap_bin(:sub, :i64, x, y), do: "(int64_t)((uint64_t)(#{x}) - (uint64_t)(#{y}))"
+  defp wrap_bin(:mul, :i64, x, y), do: "(int64_t)((uint64_t)(#{x}) * (uint64_t)(#{y}))"
+  defp wrap_bin(:add, :u64, x, y), do: "(uint64_t)((uint64_t)(#{x}) + (uint64_t)(#{y}))"
+  defp wrap_bin(:sub, :u64, x, y), do: "(uint64_t)((uint64_t)(#{x}) - (uint64_t)(#{y}))"
+  defp wrap_bin(:mul, :u64, x, y), do: "(uint64_t)((uint64_t)(#{x}) * (uint64_t)(#{y}))"
+  defp wrap_bin(:add, :u32, x, y), do: "(uint32_t)((uint64_t)(#{x}) + (uint64_t)(#{y}))"
+  defp wrap_bin(:sub, :u32, x, y), do: "(uint32_t)((uint64_t)(#{x}) - (uint64_t)(#{y}))"
+  defp wrap_bin(:mul, :u32, x, y), do: "(uint32_t)((uint64_t)(#{x}) * (uint64_t)(#{y}))"
+  defp wrap_bin(:add, :u8, x, y), do: "(uint8_t)((uint32_t)(#{x}) + (uint32_t)(#{y}))"
+  defp wrap_bin(:sub, :u8, x, y), do: "(uint8_t)((uint32_t)(#{x}) - (uint32_t)(#{y}))"
+  defp wrap_bin(:mul, :u8, x, y), do: "(uint8_t)((uint32_t)(#{x}) * (uint32_t)(#{y}))"
+
+  defp bit_bin(op, :i64, x, y) do
+    sym = bit_sym(op)
+    "(int64_t)((uint64_t)(#{x}) #{sym} (uint64_t)(#{y}))"
+  end
+
+  defp bit_bin(op, k, x, y) do
+    wide = if k == :u8, do: "uint32_t", else: cty(k)
+    "(#{cty(k)})((#{wide})(#{x}) #{bit_sym(op)} (#{wide})(#{y}))"
+  end
+
+  defp bit_sym(:and), do: "&"
+  defp bit_sym(:or), do: "|"
+  defp bit_sym(:xor), do: "^"
+
+  defp bit_not(:i64, x), do: "(int64_t)(~(uint64_t)(#{x}))"
+
+  defp bit_not(k, x) do
+    wide = if k == :u8, do: "uint32_t", else: cty(k)
+    "(#{cty(k)})(~(#{wide})(#{x}))"
+  end
+
+  defp cmp_c(:eq, _k, x, y), do: "(uint8_t)((#{x}) == (#{y}))"
+  defp cmp_c(:lt, _k, x, y), do: "(uint8_t)((#{x}) < (#{y}))"
+  defp cmp_c(:le, _k, x, y), do: "(uint8_t)((#{x}) <= (#{y}))"
+
+  defp checked_c(k, op, x, y, st) do
+    {tmp, st} = news(st)
+    {out, st} = news(st)
+    name = opt_name(k)
+    builtin = checked_builtin(op)
+
+    pre = """
+    #{cty(k)} #{tmp};
+    #{name} #{out};
+    if (#{builtin}(#{x}, #{y}, &#{tmp})) {
+      #{out}.tag = 0;
+      #{out}.val = 0;
+    } else {
+      #{out}.tag = 1;
+      #{out}.val = #{tmp};
+    }
+    """
+
+    {:ok, {pre, out, {:opt, k}, st}}
+  end
+
+  defp checked_builtin(:cadd), do: "__builtin_add_overflow"
+  defp checked_builtin(:csub), do: "__builtin_sub_overflow"
+  defp checked_builtin(:cmul), do: "__builtin_mul_overflow"
+
+  defp divrem_c(k, op, x, y, st) do
+    {out, st} = news(st)
+    name = opt_name(k)
+    sym = if op == :div, do: "/", else: "%"
+
+    pre = """
+    #{name} #{out};
+    if (#{div_guard(k, x, y)}) {
+      #{out}.tag = 0;
+      #{out}.val = 0;
+    } else {
+      #{out}.tag = 1;
+      #{out}.val = (#{x}) #{sym} (#{y});
+    }
+    """
+
+    {:ok, {pre, out, {:opt, k}, st}}
+  end
+
+  defp div_guard(:i64, x, y) do
+    "(#{y}) == 0 || ((uint64_t)(#{x}) == (UINT64_C(1) << 63) && (uint64_t)(#{y}) == UINT64_MAX)"
+  end
+
+  defp div_guard(_k, _x, y), do: "(#{y}) == 0"
+
+  defp shift_c(k, op, x, amt, st) do
+    {sh, st} = news(st)
+    {p, st} = news(st)
+    {out, st} = news(st)
+    w = c_width(k)
+    nat = g("nat")
+    tag = g("field_tag")
+    suc = g("field_suc")
+
+    pre = """
+    unsigned #{sh} = 0;
+    const #{nat} *#{p} = #{amt};
+    while (#{p}->#{tag} != 0 && #{sh} + 1u < #{w}u) {
+      #{sh}++;
+      #{p} = #{p}->#{suc};
+    }
+    #{cty(k)} #{out};
+    if (#{p}->#{tag} != 0) {
+      #{out} = #{shift_oob(k, op, x)};
+    } else {
+      #{out} = #{shift_in(k, op, x, sh)};
+    }
+    """
+
+    {:ok, {pre, out, k, st}}
+  end
+
+  defp shift_oob(k, :shl, _x), do: "(#{cty(k)})0"
+  defp shift_oob(k, :shr, _x) when k != :i64, do: "(#{cty(k)})0"
+
+  defp shift_oob(:i64, :shr, x) do
+    "((uint64_t)(#{x}) >= (UINT64_C(1) << 63)) ? (int64_t)UINT64_MAX : 0"
+  end
+
+  defp shift_in(:u8, :shl, x, sh), do: "(uint8_t)((uint32_t)(#{x}) << #{sh})"
+  defp shift_in(:u32, :shl, x, sh), do: "(uint32_t)((uint64_t)(#{x}) << #{sh})"
+  defp shift_in(:u64, :shl, x, sh), do: "(uint64_t)((uint64_t)(#{x}) << #{sh})"
+  defp shift_in(:i64, :shl, x, sh), do: "(int64_t)((uint64_t)(#{x}) << #{sh})"
+  defp shift_in(:u8, :shr, x, sh), do: "(uint8_t)((uint32_t)(#{x}) >> #{sh})"
+  defp shift_in(:u32, :shr, x, sh), do: "(uint32_t)((uint64_t)(#{x}) >> #{sh})"
+  defp shift_in(:u64, :shr, x, sh), do: "(uint64_t)((#{x}) >> #{sh})"
+
+  defp shift_in(:i64, :shr, x, sh) do
+    "((#{sh}) == 0) ? (#{x}) : (int64_t)(((uint64_t)(#{x}) >> #{sh}) | (((uint64_t)(#{x}) >= (UINT64_C(1) << 63)) ? (~((UINT64_C(1) << (64u - #{sh})) - 1u)) : 0u))"
+  end
+
+  defp cast_c(:u8, x), do: "(uint8_t)(uint64_t)(#{x})"
+  defp cast_c(:u32, x), do: "(uint32_t)(uint64_t)(#{x})"
+  defp cast_c(:u64, x), do: "(uint64_t)(#{x})"
+  defp cast_c(:i64, x), do: "(int64_t)(uint64_t)(#{x})"
+
+  defp opt_typedefs(funs) do
+    funs
+    |> Enum.flat_map(fn fun ->
+      [fun.ret | Enum.map(fun.params, fn {_n, lay} -> lay end)] ++ collect_opts(fun.body, [])
+    end)
+    |> Enum.flat_map(&opt_payloads/1)
+    |> Enum.uniq()
+    |> Enum.map_join("\n", &opt_typedef/1)
+  end
+
+  defp collect_opts(tm, acc) when is_tuple(tm) do
+    acc = if match?({:opt, _}, tm), do: [tm | acc], else: acc
+    Enum.reduce(Tuple.to_list(tm), acc, &collect_opts/2)
+  end
+
+  defp collect_opts(tm, acc) when is_list(tm), do: Enum.reduce(tm, acc, &collect_opts/2)
+  defp collect_opts(_tm, acc), do: acc
+
+  defp opt_payloads({:opt, p} = lay), do: [lay | opt_payloads(p)]
+  defp opt_payloads({:pair, a, b}), do: opt_payloads(a) ++ opt_payloads(b)
+  defp opt_payloads({:stream, a}), do: opt_payloads(a)
+  defp opt_payloads(_), do: []
+
+  defp opt_typedef({:opt, pay}) do
+    name = opt_name(pay)
+
+    """
+    typedef struct #{name} #{name};
+    struct #{name} { uint8_t tag; #{ctype(pay, nil)}val; };
+    """
+    |> String.trim()
+  end
+
+  defp opt_name(pay), do: g("opt_" <> lay_tag(pay))
+
+  defp lay_tag(:u8), do: "u8"
+  defp lay_tag(:u32), do: "u32"
+  defp lay_tag(:u64), do: "u64"
+  defp lay_tag(:i64), do: "i64"
+  defp lay_tag(:nat), do: "nat"
+  defp lay_tag(:wbool), do: "bool"
+  defp lay_tag(:unit), do: "unit"
+  defp lay_tag(:opaque), do: "opaque"
+  defp lay_tag({:opt, p}), do: "opt_" <> lay_tag(p)
+  defp lay_tag({:data, name}), do: "d_" <> to_string(name)
+  defp lay_tag({:pair, a, b}), do: "pair_#{lay_tag(a)}_#{lay_tag(b)}"
+  defp lay_tag({:stream, a}), do: "stream_#{lay_tag(a)}"
+  defp lay_tag(other), do: to_string(other)
+
   defp ctype(:atom, _book), do: atom_ty()
   defp ctype(:nat, _book), do: nat_ptr()
   defp ctype(:unit, _book), do: unit_ptr()
@@ -1030,6 +1365,18 @@ defmodule Muro.Emit.C do
   defp ctype({:app, f, _a}, book), do: ctype(f, book)
   defp ctype({:data, "Atom"}, _book), do: atom_ty()
   defp ctype({:data, name}, _book), do: struct_ptr(name)
+  defp ctype(:u8, _book), do: "uint8_t "
+  defp ctype(:u32, _book), do: "uint32_t "
+  defp ctype(:u64, _book), do: "uint64_t "
+  defp ctype(:i64, _book), do: "int64_t "
+  defp ctype(:wbool, _book), do: "uint8_t "
+  defp ctype({:opt, pay}, _book), do: opt_name(pay) <> " "
+  defp ctype({:word, {:ty, :u8}, []}, book), do: ctype(:u8, book)
+  defp ctype({:word, {:ty, :u32}, []}, book), do: ctype(:u32, book)
+  defp ctype({:word, {:ty, :u64}, []}, book), do: ctype(:u64, book)
+  defp ctype({:word, :bool, []}, book), do: ctype(:wbool, book)
+  defp ctype({:word, {:optk, k}, []}, book), do: ctype({:opt, k}, book)
+  defp ctype({:word, :opt, [a]}, book), do: ctype({:opt, type_layout(book, a)}, book)
   defp ctype(_, _book), do: "void *"
 
   defp data?(book, name) do
@@ -1060,7 +1407,7 @@ defmodule Muro.Emit.C do
     s |> String.split("\n") |> Enum.map_join("\n", &(pad <> &1))
   end
 
-  defp header(book, sigs, stem, nm) do
+  defp header(book, sigs, stem, nm, opts) do
     guard = guard(stem)
 
     parts = [
@@ -1071,6 +1418,7 @@ defmodule Muro.Emit.C do
       alloc_macro(),
       nat_struct(),
       unit_struct(),
+      opts,
       atom_enum(book, nm),
       stream_typedef(sigs, book),
       data_structs(book),
@@ -1081,7 +1429,7 @@ defmodule Muro.Emit.C do
     join_parts(parts)
   end
 
-  defp source(book, runs, sigs, funs, extras, stem, nm) do
+  defp source(book, runs, sigs, funs, extras, stem, nm, _opts) do
     internals =
       sigs
       |> Enum.reject(& &1.export)
@@ -1208,7 +1556,7 @@ defmodule Muro.Emit.C do
     """
     static #{unit} #{obj} = {0};
 
-    static #{unit} *#{tt}(void) { return &#{obj}; }
+    __attribute__((unused)) static #{unit} *#{tt}(void) { return &#{obj}; }
     """
     |> String.trim()
   end

@@ -1276,6 +1276,7 @@ defmodule Muro.Mutate do
   defp rebuild({:addt, _, _}, [a, b]), do: {:addt, a, b}
   defp rebuild({:toi64, _}, [a]), do: {:toi64, a}
   defp rebuild({:packi, _, _}, [a, b]), do: {:packi, a, b}
+  defp rebuild({:word, op, _}, args), do: {:word, op, args}
   defp rebuild({:nu, x, _}, [f]), do: {:nu, x, f}
 
   # -- classify ---------------------------------------------------------------

@@ -399,6 +399,15 @@ defmodule Muro.Emit.Rust do
     end
   end
 
+  defp emit_tm({:wrd, k, op, args}, env, st) do
+    with {:ok, {lines, exprs, lays, st}} <- emit_list(args, env, st) do
+      case word_rust(k, op, exprs, lays, st) do
+        {:ok, {more, expr, lay, st}} -> {:ok, {lines ++ more, expr, lay, st}}
+        {:error, _} = err -> err
+      end
+    end
+  end
+
   defp emit_tm(_other, _env, _st), do: {:error, "c:unsupported"}
 
   defp emit_list(ts, env, st) do
@@ -622,6 +631,10 @@ defmodule Muro.Emit.Rust do
 
   defp coerce(ex, :never, _to, _st), do: ex
   defp coerce(ex, from, to, _st) when from == to, do: ex
+
+  defp coerce("None", {:opt, _}, {:opt, pay}, st),
+    do: "::std::option::Option::<#{rty(pay, st)}>::None"
+
   defp coerce(ex, _from, :opaque, _st), do: "#{g("erase")}(#{ex})"
   defp coerce(ex, :opaque, to, st), do: "#{g("reveal")}::<#{rty(to, st)}>(#{ex})"
   defp coerce(ex, _from, to, st), do: "#{g("reveal")}::<#{rty(to, st)}>(#{g("erase")}(#{ex}))"
@@ -638,6 +651,147 @@ defmodule Muro.Emit.Rust do
   defp uncons_lay({:stream, s}), do: {:pair, :opaque, {:stream, s}}
   defp uncons_lay(_), do: {:pair, :opaque, :opaque}
 
+  # Words are `Copy` and passed by value. `checked_div` / `checked_rem`
+  # already return None for zero and for `i64::MIN / -1`. Shifts use the
+  # operator only when the amount is below the width; `wrapping_shl`
+  # would mask the count.
+  defp word_rust(k, {:lit, k, n}, [], _lays, st) do
+    {:ok, {[], r_lit(k, n), k, st}}
+  end
+
+  defp word_rust(_k, true, [], _lays, st), do: {:ok, {[], "true", :wbool, st}}
+  defp word_rust(_k, false, [], _lays, st), do: {:ok, {[], "false", :wbool, st}}
+  defp word_rust(_k, :none, [], _lays, st), do: {:ok, {[], "None", {:opt, :opaque}, st}}
+
+  defp word_rust(k, {:of, k}, [nat], _lays, st) do
+    acc = "#{g("to_u64")}(&#{nat})"
+
+    expr =
+      case k do
+        :u8 -> "(#{acc} as u8)"
+        :u32 -> "(#{acc} as u32)"
+        :u64 -> acc
+        :i64 -> "(#{acc} as i64)"
+      end
+
+    {:ok, {[], expr, k, st}}
+  end
+
+  defp word_rust(_k, :ton, [x], _lays, st) do
+    {:ok, {[], "#{g("from_u64")}(#{x} as u64)", :nat, st}}
+  end
+
+  defp word_rust(k, op, [x, y], _lays, st) when op in [:add, :sub, :mul] do
+    name = %{add: "wrapping_add", sub: "wrapping_sub", mul: "wrapping_mul"}
+    {:ok, {[], "#{x}.#{name[op]}(#{y})", k, st}}
+  end
+
+  defp word_rust(k, op, [x, y], _lays, st) when op in [:and, :or, :xor] do
+    sym = %{and: "&", or: "|", xor: "^"}
+    {:ok, {[], "(#{x} #{sym[op]} #{y})", k, st}}
+  end
+
+  defp word_rust(k, :not, [x], _lays, st), do: {:ok, {[], "(!#{x})", k, st}}
+
+  defp word_rust(_k, op, [x, y], _lays, st) when op in [:eq, :lt, :le] do
+    sym = %{eq: "==", lt: "<", le: "<="}
+    {:ok, {[], "(#{x} #{sym[op]} #{y})", :wbool, st}}
+  end
+
+  defp word_rust(k, op, [x, y], _lays, st) when op in [:cadd, :csub, :cmul] do
+    name = %{cadd: "checked_add", csub: "checked_sub", cmul: "checked_mul"}
+    {:ok, {[], "#{x}.#{name[op]}(#{y})", {:opt, k}, st}}
+  end
+
+  defp word_rust(k, :div, [x, y], _lays, st) do
+    {:ok, {[], "#{x}.checked_div(#{y})", {:opt, k}, st}}
+  end
+
+  defp word_rust(k, :rem, [x, y], _lays, st) do
+    {:ok, {[], "#{x}.checked_rem(#{y})", {:opt, k}, st}}
+  end
+
+  defp word_rust(k, op, [x, amt], _lays, st) when op in [:shl, :shr] do
+    r_shift(k, op, x, amt, st)
+  end
+
+  defp word_rust(k, {:cast, k}, [x], [src | _], st) do
+    {:ok, {[], r_cast(k, src, x), k, st}}
+  end
+
+  defp word_rust(k, :some, [x], _lays, st) do
+    {:ok, {[], "::std::option::Option::Some(#{x})", {:opt, k}, st}}
+  end
+
+  defp word_rust(_k, _op, _args, _lays, _st), do: {:error, "c:unsupported"}
+
+  defp r_lit(:i64, n) do
+    n = rem(n, 18_446_744_073_709_551_616)
+
+    if n >= 9_223_372_036_854_775_808,
+      do: "(#{n}u64 as i64)",
+      else: "#{n}i64"
+  end
+
+  defp r_lit(k, n) do
+    mod =
+      case k do
+        :u8 -> 256
+        :u32 -> 4_294_967_296
+        _ -> 18_446_744_073_709_551_616
+      end
+
+    "#{rem(n, mod)}#{k}"
+  end
+
+  defp r_shift(k, op, x, amt, st) do
+    {sh, st} = local(st, g("s"))
+    {p, st} = local(st, g("p"))
+    {out, st} = local(st, g("t"))
+    w = r_width(k)
+    node = g("NatNode")
+    zero = g("tag_zero")
+    suc = g("tag_suc")
+    nxt = g("n")
+
+    lines = [
+      "let mut #{sh}: u32 = 0;",
+      "let mut #{p} = #{amt}.clone();",
+      "while #{sh} + 1 < #{w} {",
+      "    match &*#{p}.0 {",
+      "        #{node}::#{zero} => break,",
+      "        #{node}::#{suc}(#{nxt}) => { #{sh} += 1; #{p} = #{nxt}.clone(); }",
+      "    }",
+      "}",
+      "let #{out}: #{rty(k, st)} = if matches!(&*#{p}.0, #{node}::#{suc}(_)) { #{r_shift_oob(k, op, x)} } else { #{r_shift_in(op, x, sh)} };"
+    ]
+
+    {:ok, {lines, out, k, st}}
+  end
+
+  defp r_width(:u8), do: 8
+  defp r_width(:u32), do: 32
+  defp r_width(_), do: 64
+
+  defp r_shift_oob(k, :shl, _x), do: "0#{k}"
+  defp r_shift_oob(k, :shr, _x) when k != :i64, do: "0#{k}"
+  defp r_shift_oob(:i64, :shr, x), do: "if #{x} < 0 { -1i64 } else { 0i64 }"
+
+  defp r_shift_in(:shl, x, sh), do: "#{x} << #{sh}"
+  defp r_shift_in(:shr, x, sh), do: "#{x} >> #{sh}"
+
+  defp r_cast(k, src, x), do: r_from_u64(k, r_as_u64(src, x))
+  defp r_as_u64(:u64, x), do: "(#{x})"
+  defp r_as_u64(_src, x), do: "(#{x} as u64)"
+  defp r_from_u64(:u64, bits), do: "(#{bits})"
+  defp r_from_u64(k, bits), do: "(#{bits} as #{k})"
+
+  defp rty(:u8, _st), do: "u8"
+  defp rty(:u32, _st), do: "u32"
+  defp rty(:u64, _st), do: "u64"
+  defp rty(:i64, _st), do: "i64"
+  defp rty(:wbool, _st), do: "bool"
+  defp rty({:opt, pay}, st), do: "::std::option::Option<#{rty(pay, st)}>"
   defp rty(:nat, _st), do: g("Nat")
   defp rty(:unit, _st), do: g("Unit")
   defp rty(:opaque, _st), do: g("Erased")
@@ -693,6 +847,16 @@ defmodule Muro.Emit.Rust do
   end
 
   defp type_layout(book, {:ann, e, _}), do: type_layout(book, e)
+  defp type_layout(_book, :i64), do: :i64
+  defp type_layout(_book, {:word, {:ty, :u8}, []}), do: :u8
+  defp type_layout(_book, {:word, {:ty, :u32}, []}), do: :u32
+  defp type_layout(_book, {:word, {:ty, :u64}, []}), do: :u64
+  defp type_layout(_book, {:word, :bool, []}), do: :wbool
+  defp type_layout(_book, {:word, {:optk, :u8}, []}), do: {:opt, :u8}
+  defp type_layout(_book, {:word, {:optk, :u32}, []}), do: {:opt, :u32}
+  defp type_layout(_book, {:word, {:optk, :u64}, []}), do: {:opt, :u64}
+  defp type_layout(_book, {:word, {:optk, :i64}, []}), do: {:opt, :i64}
+  defp type_layout(book, {:word, :opt, [a]}), do: {:opt, type_layout(book, a)}
   defp type_layout(_book, _), do: :opaque
 
   defp telescope(t), do: telescope(t, [])

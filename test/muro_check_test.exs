@@ -1682,9 +1682,7 @@ defmodule Muro.CheckTest do
     assert Nx.to_flat_list(call("NxAdd", :doubled, [])) == [2, 4]
     assert Nx.to_flat_list(call("NxAdd", :addT, [Nx.tensor([1, 2], type: :s64)])) == [2, 4]
 
-    sum = call("NxAdd", :addI, [Nx.tensor(3, type: :s64), Nx.tensor(4, type: :s64)])
-    assert %Nx.Tensor{} = sum
-    assert Nx.to_number(sum) == 7
+    assert call("NxAdd", :addI, [3, 4]) == 7
   end
 
   test "Peano Nat is not emitted as s64 except through toI64" do

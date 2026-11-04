@@ -134,15 +134,7 @@ defmodule Muro.Emit do
         clashes -> "import Kernel, except: #{inspect(clashes)}\n"
       end
 
-    nat =
-      if Enum.any?(runs, &term_has_toi64?(&1.body)) do
-        """
-        defp muro_nat_to_int(0), do: 0
-        defp muro_nat_to_int({:suc, n}), do: 1 + muro_nat_to_int(n)
-        """
-      else
-        ""
-      end
+    nat = nat_helpers(runs, "")
 
     String.trim(except <> "\n" <> funs <> "\n" <> nat)
   end
@@ -240,15 +232,7 @@ defmodule Muro.Emit do
         clashes -> "  import Kernel, except: #{inspect(clashes)}\n"
       end
 
-    nat_helper =
-      if Enum.any?(runs, &term_has_toi64?(&1.body)) do
-        """
-          defp muro_nat_to_int(0), do: 0
-          defp muro_nat_to_int({:suc, n}), do: 1 + muro_nat_to_int(n)
-        """
-      else
-        ""
-      end
+    nat_helper = nat_helpers(runs, "  ")
 
     source = """
     defmodule #{inspect(module)} do
@@ -273,20 +257,25 @@ defmodule Muro.Emit do
     {:ok, body_db} = Ast.to_db(body)
     {erased, arity} = telescope(ty_db, 0, [])
     inner = eta_body(body_db, arity)
+    Process.put({Muro.Emit, :word_kinds}, word_kind_spine(ty_db))
 
-    args =
-      0..(arity - 1)//1
-      |> Enum.reject(&(&1 in erased))
-      |> Enum.map(&bound_name(inner, arity - 1 - &1, &1, book))
+    try do
+      args =
+        0..(arity - 1)//1
+        |> Enum.reject(&(&1 in erased))
+        |> Enum.map(&bound_name(inner, arity - 1 - &1, &1, book))
 
-    expr = emit_db(inner, arity, book, names)
-    kw = if Map.get(d, :export, true), do: "def", else: "defp"
-    fun = Map.fetch!(names, name)
+      expr = emit_db(inner, arity, book, names)
+      kw = if Map.get(d, :export, true), do: "def", else: "defp"
+      fun = Map.fetch!(names, name)
 
-    if args == [] do
-      "#{kw} #{fun} do\n  #{expr}\nend"
-    else
-      "#{kw} #{fun}(#{Enum.join(args, ", ")}) do\n  #{expr}\nend"
+      if args == [] do
+        "#{kw} #{fun} do\n  #{expr}\nend"
+      else
+        "#{kw} #{fun}(#{Enum.join(args, ", ")}) do\n  #{expr}\nend"
+      end
+    after
+      Process.delete({Muro.Emit, :word_kinds})
     end
   end
 
@@ -359,17 +348,25 @@ defmodule Muro.Emit do
     |> String.trim()
   end
 
-  defp emit_db({:lam, :erased, _, _, t}, d, book, names), do: emit_db(t, d + 1, book, names)
+  defp emit_db({:lam, :erased, _, _, t}, d, book, names) do
+    with_kinds([nil], fn -> emit_db(t, d + 1, book, names) end)
+  end
 
-  defp emit_db({:lam, _, _, _, t}, d, book, names) do
-    "fn #{bound_name(t, 0, d, book)} -> #{emit_db(t, d + 1, book, names)} end"
+  defp emit_db({:lam, _, a, _, t}, d, book, names) do
+    with_kinds([kind_of_annot(a)], fn ->
+      "fn #{bound_name(t, 0, d, book)} -> #{emit_db(t, d + 1, book, names)} end"
+    end)
   end
 
   defp emit_db({:mdata, e, _p, bs}, d, book, names) do
     clauses =
       Enum.map(bs, fn {name, ar, b} ->
         pat = emit_ctor_pat(name, ar, d, b, book)
-        "      #{pat} -> #{emit_db(b, d + ar, book, names)}"
+
+        body =
+          with_kinds(List.duplicate(nil, ar), fn -> emit_db(b, d + ar, book, names) end)
+
+        "      #{pat} -> #{body}"
       end)
       |> Enum.join("\n")
 
@@ -382,10 +379,12 @@ defmodule Muro.Emit do
   end
 
   defp emit_db({:mnat, e, _p, z, s}, d, book, names) do
+    suc = with_kinds([nil], fn -> emit_db(s, d + 1, book, names) end)
+
     """
     case #{emit_db(e, d, book, names)} do
       0 -> #{emit_db(z, d, book, names)}
-      {:suc, #{bound_name(s, 0, d, book)}} -> #{emit_db(s, d + 1, book, names)}
+      {:suc, #{bound_name(s, 0, d, book)}} -> #{suc}
     end
     """
     |> String.trim()
@@ -404,7 +403,8 @@ defmodule Muro.Emit do
   defp emit_db({:letp, e, t}, d, book, names) do
     a = bound_name(t, 1, d, book)
     b = bound_name(t, 0, d + 1, book)
-    "({#{a}, #{b}} = #{emit_db(e, d, book, names)}; #{emit_db(t, d + 2, book, names)})"
+    body = with_kinds([nil, nil], fn -> emit_db(t, d + 2, book, names) end)
+    "({#{a}, #{b}} = #{emit_db(e, d, book, names)}; #{body})"
   end
 
   defp emit_db({:unf, seed, f}, d, book, names) do
@@ -445,6 +445,8 @@ defmodule Muro.Emit do
   end
 
   defp emit_db({:def, n}, d, book, names), do: emit_ref(n, [], d, book, names)
+
+  defp emit_db({:word, op, args}, d, book, names), do: emit_word(op, args, d, book, names)
 
   defp emit_db(_, _, _book, _names), do: "raise \"erased term\""
 
@@ -596,6 +598,9 @@ defmodule Muro.Emit do
   defp emitted_occurs?(i, {:packi, a, b}, book),
     do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
 
+  defp emitted_occurs?(i, {:word, _, args}, book),
+    do: Enum.any?(args, &emitted_occurs?(i, &1, book))
+
   defp emitted_occurs?(i, {:app, _, _} = t, book) do
     {h, args} = spine(t, [])
 
@@ -672,6 +677,7 @@ defmodule Muro.Emit do
   defp value_kind({:packi, _x, _y}, _book), do: :machine
   defp value_kind({:tensor, _d, _s}, _book), do: :machine
   defp value_kind(:i64, _book), do: :machine
+  defp value_kind({:word, _, _}, _book), do: :machine
   defp value_kind(:f32ty, _book), do: :machine
 
   defp value_kind({:app, _, _} = term, book) do
@@ -840,6 +846,8 @@ defmodule Muro.Emit do
   defp claim(base, used), do: Name.claim(base, used)
 
   defp term_has_toi64?({:toi64, _}), do: true
+  defp term_has_toi64?({:word, {:of, _}, _}), do: true
+  defp term_has_toi64?({:word, op, _}) when op in [:shl, :shr], do: true
 
   defp term_has_toi64?(t) when is_tuple(t) do
     t |> Tuple.to_list() |> Enum.any?(&term_has_toi64?/1)
@@ -847,6 +855,199 @@ defmodule Muro.Emit do
 
   defp term_has_toi64?(t) when is_list(t), do: Enum.any?(t, &term_has_toi64?/1)
   defp term_has_toi64?(_), do: false
+
+  defp term_has_ton?({:word, :ton, _}), do: true
+
+  defp term_has_ton?(t) when is_tuple(t) do
+    t |> Tuple.to_list() |> Enum.any?(&term_has_ton?/1)
+  end
+
+  defp term_has_ton?(t) when is_list(t), do: Enum.any?(t, &term_has_ton?/1)
+  defp term_has_ton?(_), do: false
+
+  defp nat_helpers(runs, pad) do
+    [
+      helper(Enum.any?(runs, &term_has_toi64?(&1.body)), pad, """
+      defp muro_nat_to_int(0), do: 0
+      defp muro_nat_to_int({:suc, n}), do: 1 + muro_nat_to_int(n)
+      """),
+      helper(Enum.any?(runs, &term_has_ton?(&1.body)), pad, """
+      defp muro_int_to_nat(0), do: 0
+      defp muro_int_to_nat(n) when n > 0, do: {:suc, muro_int_to_nat(n - 1)}
+      """)
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+  end
+
+  # The helper text is a heredoc whose lines start with `defp`, so the
+  # reservation scan sees the name. `pad` is applied when the text is built.
+  defp helper(false, _pad, _src), do: ""
+
+  defp helper(true, pad, src) do
+    src
+    |> String.trim_trailing()
+    |> String.split("\n")
+    |> Enum.map_join("\n", &(pad <> &1))
+  end
+
+  # Index 0 is the innermost binder (de Bruijn 0).
+  defp word_kind_spine(ty), do: word_kind_spine(ty, [])
+  defp word_kind_spine({:pi, _, a, _, b}, acc), do: word_kind_spine(b, [kind_of_annot(a) | acc])
+  defp word_kind_spine(_, acc), do: acc
+
+  defp kind_of_annot(:i64), do: :i64
+  defp kind_of_annot({:word, {:ty, k}, []}), do: k
+  defp kind_of_annot({:word, {:optk, k}, []}), do: {:opt, k}
+  defp kind_of_annot({:word, :bool, []}), do: :bool
+  defp kind_of_annot({:ann, _, a}), do: kind_of_annot(a)
+  defp kind_of_annot(_), do: nil
+
+  defp with_kinds(ks, fun) do
+    push_kinds(ks)
+
+    try do
+      fun.()
+    after
+      pop_kinds(length(ks))
+    end
+  end
+
+  defp push_kinds(ks) do
+    Process.put({Muro.Emit, :word_kinds}, ks ++ (Process.get({Muro.Emit, :word_kinds}) || []))
+  end
+
+  defp pop_kinds(n) do
+    Process.put(
+      {Muro.Emit, :word_kinds},
+      Enum.drop(Process.get({Muro.Emit, :word_kinds}) || [], n)
+    )
+  end
+
+  defp emit_word({:lit, k, n}, [], _d, _book, _names) do
+    Integer.to_string(Muro.Word.residue(k, n))
+  end
+
+  defp emit_word(true, [], _d, _book, _names), do: "true"
+  defp emit_word(false, [], _d, _book, _names), do: "false"
+  defp emit_word(:none, [], _d, _book, _names), do: ":none"
+
+  defp emit_word({:of, k}, [t], d, book, names) do
+    "Muro.Word.of(#{inspect(k)}, muro_nat_to_int(#{emit_db(t, d, book, names)}))"
+  end
+
+  defp emit_word(:ton, [t], d, book, names) do
+    "muro_int_to_nat(#{emit_db(t, d, book, names)})"
+  end
+
+  defp emit_word(op, [x, y], d, book, names) when op in [:add, :sub, :mul] do
+    fun = %{add: "add", sub: "sub", mul: "mul"}
+    word_bin(fun[op], x, y, d, book, names)
+  end
+
+  defp emit_word(op, [x, y], d, book, names) when op in [:and, :or, :xor] do
+    fun = %{and: "band", or: "bor", xor: "bxor"}
+    word_bin(fun[op], x, y, d, book, names)
+  end
+
+  defp emit_word(:not, [x], d, book, names) do
+    "Muro.Word.bnot(#{inspect(need_kind(x, book))}, #{emit_db(x, d, book, names)})"
+  end
+
+  defp emit_word(op, [x, y], d, book, names) when op in [:eq, :lt, :le] do
+    fun = %{eq: "eq?", lt: "lt?", le: "le?"}
+    word_bin(fun[op], x, y, d, book, names)
+  end
+
+  defp emit_word(op, [x, y], d, book, names) when op in [:cadd, :csub, :cmul] do
+    fun = %{cadd: "checked_add", csub: "checked_sub", cmul: "checked_mul"}
+    word_bin(fun[op], x, y, d, book, names)
+  end
+
+  defp emit_word(:div, [x, y], d, book, names), do: word_bin("divide", x, y, d, book, names)
+  defp emit_word(:rem, [x, y], d, book, names), do: word_bin("remainder", x, y, d, book, names)
+
+  defp emit_word(op, [x, amt], d, book, names) when op in [:shl, :shr] do
+    fun = if op == :shl, do: "shl", else: "shr"
+
+    "Muro.Word.#{fun}(#{inspect(need_kind(x, book))}, #{emit_db(x, d, book, names)}, muro_nat_to_int(#{emit_db(amt, d, book, names)}))"
+  end
+
+  defp emit_word({:cast, k}, [x], d, book, names) do
+    "Muro.Word.cast(#{inspect(k)}, #{emit_db(x, d, book, names)})"
+  end
+
+  defp emit_word(:some, [x], d, book, names) do
+    "{:some, #{emit_db(x, d, book, names)}}"
+  end
+
+  defp emit_word(_op, _args, _d, _book, _names), do: "raise \"erased term\""
+
+  defp word_bin(fun, x, y, d, book, names) do
+    "Muro.Word.#{fun}(#{inspect(operand_kind(x, y, book))}, #{emit_db(x, d, book, names)}, #{emit_db(y, d, book, names)})"
+  end
+
+  defp operand_kind(x, y, book) do
+    case term_kind(x, book) || term_kind(y, book) do
+      k when k in [:u8, :u32, :u64, :i64] -> k
+      _ -> raise "word kind"
+    end
+  end
+
+  defp need_kind(t, book) do
+    case term_kind(t, book) do
+      k when k in [:u8, :u32, :u64, :i64] -> k
+      _ -> raise "word kind"
+    end
+  end
+
+  defp term_kind({:var, i}, _book) do
+    Enum.at(Process.get({Muro.Emit, :word_kinds}) || [], i)
+  end
+
+  defp term_kind({:ann, e, a}, book), do: term_kind(e, book) || kind_of_annot(a)
+  defp term_kind({:word, {:lit, k, _}, _}, _book), do: k
+  defp term_kind({:word, {:of, k}, _}, _book), do: k
+  defp term_kind({:word, {:cast, k}, _}, _book), do: k
+  defp term_kind({:word, true, _}, _book), do: :bool
+  defp term_kind({:word, false, _}, _book), do: :bool
+  defp term_kind({:word, :none, _}, _book), do: {:opt, nil}
+  defp term_kind({:word, :some, [t]}, book), do: {:opt, term_kind(t, book)}
+  defp term_kind({:word, op, [_x, _]}, _book) when op in [:eq, :lt, :le], do: :bool
+
+  defp term_kind({:word, op, [x, _]}, book) when op in [:cadd, :csub, :cmul, :div, :rem],
+    do: {:opt, term_kind(x, book)}
+
+  defp term_kind({:word, op, [x, _]}, book)
+       when op in [:add, :sub, :mul, :and, :or, :xor, :shl, :shr],
+       do: term_kind(x, book)
+
+  defp term_kind({:word, :not, [x]}, book), do: term_kind(x, book)
+
+  defp term_kind({:app, _, _} = t, book) do
+    {h, args} = spine(t, [])
+
+    case h do
+      {:def, n} ->
+        case Enum.find(book, &(Map.get(&1, :name) == n and Map.get(&1, :kind, :def) == :def)) do
+          nil ->
+            nil
+
+          dfn ->
+            {:ok, ty} = Ast.to_db(dfn.type)
+            result_kind(ty, length(args))
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp term_kind(_, _book), do: nil
+
+  defp result_kind(ty, 0), do: kind_of_annot(ty)
+  defp result_kind({:pi, _, _, _, b}, n) when n > 0, do: result_kind(b, n - 1)
+  defp result_kind(_, _), do: nil
 
   defp indent(s, n) do
     pad = String.duplicate(" ", n)

@@ -4,7 +4,7 @@ defmodule Muro.Check do
   from `Muro.Check` (`⇒-var-run`, `⇐-refl`, …). There is no promotion.
   """
 
-  alias Muro.{Ast, Place, Print, Repr, Subst}
+  alias Muro.{Ast, Place, Print, Repr, Subst, Word}
 
   # Default fuel. Fuel bounds reduction (whnf, conversion, isData, the
   # index-clash test); everything else is structural recursion on the
@@ -586,7 +586,27 @@ defmodule Muro.Check do
     end
   end
 
+  # Arguments share one fuel budget. An empty spine does not spend it,
+  # so a nullary word still reduces at fuel 1.
+  defp whnf(k, book, {:word, op, ts}, unfold) do
+    with {:ok, ts1} <- whnf_words(k - 1, book, ts, unfold) do
+      case Muro.Word.step(op, ts1, k - 1) do
+        {:ok, r} -> whnf(k - 1, book, r, unfold)
+        :stuck -> {:ok, {:word, op, ts1}}
+        {:error, :fuel} -> {:error, @out_of_fuel}
+      end
+    end
+  end
+
   defp whnf(_, _, t, _), do: {:ok, t}
+
+  defp whnf_words(_k, _book, [], _unfold), do: {:ok, []}
+
+  defp whnf_words(k, book, [t | ts], unfold) do
+    with {:ok, t1} <- whnf(k, book, t, unfold),
+         {:ok, ts1} <- whnf_words(k, book, ts, unfold),
+         do: {:ok, [t1 | ts1]}
+  end
 
   @doc """
   Full normal form of a de Bruijn term. Fuel bounds every reduction step.
@@ -621,7 +641,25 @@ defmodule Muro.Check do
     end
   end
 
+  defp deepen(k, book, {:word, op, ts}, unfold) do
+    with {:ok, ts1} <- deepen_words(k, book, ts, unfold) do
+      case Muro.Word.step(op, ts1, k) do
+        {:ok, r} -> nf(fuel_dec(k), book, r, unfold)
+        :stuck -> {:ok, {:word, op, ts1}}
+        {:error, :fuel} -> {:error, @out_of_fuel}
+      end
+    end
+  end
+
   defp deepen(_k, _book, t, _unfold), do: {:ok, t}
+
+  defp deepen_words(_k, _book, [], _unfold), do: {:ok, []}
+
+  defp deepen_words(k, book, [t | ts], unfold) do
+    with {:ok, t1} <- nf(fuel_dec(k), book, t, unfold),
+         {:ok, ts1} <- deepen_words(k, book, ts, unfold),
+         do: {:ok, [t1 | ts1]}
+  end
 
   defp fuel_dec(k) when k > 0, do: k - 1
   defp fuel_dec(_), do: 0
@@ -653,6 +691,18 @@ defmodule Muro.Check do
 
         {:tensor, _, _} ->
           {:ok, as == []}
+
+        {:word, {:ty, _}, []} ->
+          {:ok, as == []}
+
+        {:word, :bool, []} ->
+          {:ok, as == []}
+
+        {:word, {:optk, _}, []} ->
+          {:ok, as == []}
+
+        {:word, :opt, [a]} when as == [] ->
+          is_data(k, book, a)
 
         {:def, n} ->
           case lookup_data(book, n) do
@@ -761,6 +811,10 @@ defmodule Muro.Check do
   defp run_ty_n(_book, :i64), do: true
   defp run_ty_n(_book, :f32ty), do: true
   defp run_ty_n(_book, {:tensor, _, _}), do: true
+  defp run_ty_n(_book, {:word, {:ty, _}, []}), do: true
+  defp run_ty_n(_book, {:word, :bool, []}), do: true
+  defp run_ty_n(_book, {:word, {:optk, _}, []}), do: true
+  defp run_ty_n(book, {:word, :opt, [a]}), do: run_ty_n(book, a)
   defp run_ty_n(book, {:pi, _, _, _, b}), do: run_ty_n(book, b)
   defp run_ty_n(book, {:nu, f}), do: run_ty_n(book, f)
   defp run_ty_n(book, {:prod, a, b}), do: run_ty_n(book, a) and run_ty_n(book, b)
@@ -1034,6 +1088,9 @@ defmodule Muro.Check do
     conv_all(k, [at(k, book, names, x, x1, seen), at(k, book, names, y, y1, seen)])
   end
 
+  defp conv_n(k, book, names, {:word, op, xs}, {:word, op, ys}, seen),
+    do: conv_args_f(k, k, book, names, xs, ys, seen)
+
   defp conv_n(k, book, names, {:mdata, e, p, bs}, {:mdata, e1, p1, bs1}, seen) do
     case conv_all(k, [at(k, book, names, e, e1, seen), at(k, book, names, p, p1, seen)]) do
       {:ok, k1} -> conv_mdata_bs(k, k1, book, names, bs, bs1, seen)
@@ -1104,7 +1161,7 @@ defmodule Muro.Check do
   end
 
   # packI shape: toI64 (suc (suc 0))
-  defp i64two, do: {:toi64, {:su, {:su, :ze}}}
+  defp i64two, do: {:word, {:lit, :i64, 2}, []}
 
   defp view_prod(k, book, t, names) do
     case whnf(k, book, t) do
@@ -1298,6 +1355,8 @@ defmodule Muro.Check do
   defp has_self?(self, {:addt, t, u}), do: has_self?(self, t) or has_self?(self, u)
   defp has_self?(self, {:toi64, t}), do: has_self?(self, t)
   defp has_self?(self, {:packi, x, y}), do: has_self?(self, x) or has_self?(self, y)
+
+  defp has_self?(self, {:word, _, args}), do: Enum.any?(args, &has_self?(self, &1))
   defp has_self?(self, {:lam, _, a, _, t}), do: has_self?(self, a) or has_self?(self, t)
   defp has_self?(self, {:pi, _, a, _, b}), do: has_self?(self, a) or has_self?(self, b)
   defp has_self?(self, {:prod, a, b}), do: has_self?(self, a) or has_self?(self, b)
@@ -1374,6 +1433,7 @@ defmodule Muro.Check do
   defp occurs?(x, {:addt, t, u}), do: occurs?(x, t) or occurs?(x, u)
   defp occurs?(x, {:toi64, t}), do: occurs?(x, t)
   defp occurs?(x, {:packi, a, b}), do: occurs?(x, a) or occurs?(x, b)
+  defp occurs?(x, {:word, _, args}), do: Enum.any?(args, &occurs?(x, &1))
   defp occurs?(_x, :typ), do: false
   defp occurs?(_x, :nat), do: false
   defp occurs?(_x, :ze), do: false
@@ -1590,6 +1650,9 @@ defmodule Muro.Check do
 
   defp seed_walk(k, book, block, gamma, mode, {:toi64, t}),
     do: seed_walk(k, book, block, gamma, mode, t)
+
+  defp seed_walk(k, book, block, gamma, mode, {:word, _, args}),
+    do: seed_walk_list(k, book, block, gamma, mode, args)
 
   defp seed_walk(k, book, block, gamma, mode, {:packi, x, y}),
     do: with_both(k, book, block, gamma, mode, x, y)
@@ -2213,8 +2276,219 @@ defmodule Muro.Check do
           {:ok, {{:tensor, :i64, i64two()}, uses}}
         end
 
+      # ⇒-word. Types are spec-only. Operations are allowed in every mode.
+      {m, {:word, op, ts}} ->
+        infer_word(k, book, rs, gamma, m, op, ts, n)
+
       {_, t1} ->
         {:error, "cannot infer #{shown(rs, gamma, t1)}"}
+    end
+  end
+
+  # ⇒-word. Types are spec-only. Operations are allowed in every mode.
+  # Mirrors Muro.Check.inferWord.
+  defp infer_word(k, book, rs, gamma, m, op, ts, n) do
+    case {op, m, ts} do
+      {{:ty, :i64}, _, _} ->
+        {:error, "I64 is the i64 former"}
+
+      {{:ty, _}, m1, _} when m1 in [:run, :evidence] ->
+        {:error, "no promotion: a word type is an erased term"}
+
+      {{:ty, _}, :spec, []} ->
+        {:ok, {:typ, u0s(n)}}
+
+      {{:ty, _}, _, _} ->
+        {:error, "U8, U32, and U64 take no arguments"}
+
+      {{:lit, kx, _}, _, []} ->
+        {:ok, {Word.word_ty(kx), u0s(n)}}
+
+      {{:lit, _, _}, _, _} ->
+        {:error, "a word literal takes no arguments"}
+
+      {{:of, kx}, _, [t]} ->
+        with {:ok, u} <- check(k, book, rs, gamma, m, t, :nat) do
+          {:ok, {Word.word_ty(kx), u}}
+        end
+
+      {{:of, _}, _, _} ->
+        {:error, "ofNat takes one Nat"}
+
+      {:ton, _, [t]} ->
+        word_ton(k, book, rs, gamma, m, t)
+
+      {:ton, _, _} ->
+        {:error, "toNat takes one word"}
+
+      {:add, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.word_ty/1)
+
+      {:sub, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.word_ty/1)
+
+      {:mul, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.word_ty/1)
+
+      {:and, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.word_ty/1)
+
+      {:or, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.word_ty/1)
+
+      {:xor, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.word_ty/1)
+
+      {:cadd, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.opt_ty/1)
+
+      {:csub, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.opt_ty/1)
+
+      {:cmul, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.opt_ty/1)
+
+      {:div, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.opt_ty/1)
+
+      {:rem, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.opt_ty/1)
+
+      {:eq, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, fn _ -> Word.bool_ty() end)
+
+      {:lt, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, fn _ -> Word.bool_ty() end)
+
+      {:le, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, fn _ -> Word.bool_ty() end)
+
+      {:not, _, [t]} ->
+        word_una(k, book, rs, gamma, m, t, &Word.word_ty/1)
+
+      {:not, _, _} ->
+        {:error, "noti takes one word"}
+
+      {:shl, _, [x, n1]} ->
+        word_shift(k, book, rs, gamma, m, x, n1)
+
+      {:shl, _, _} ->
+        {:error, "shli takes a word and a Nat"}
+
+      {:shr, _, [x, n1]} ->
+        word_shift(k, book, rs, gamma, m, x, n1)
+
+      {:shr, _, _} ->
+        {:error, "shri takes a word and a Nat"}
+
+      {{:cast, kd}, _, [t]} ->
+        word_cast(k, book, rs, gamma, m, kd, t)
+
+      {{:cast, _}, _, _} ->
+        {:error, "a cast takes one word"}
+
+      {:bool, m1, _} when m1 in [:run, :evidence] ->
+        {:error, "no promotion: a word type is an erased term"}
+
+      {:bool, :spec, []} ->
+        {:ok, {:typ, u0s(n)}}
+
+      {:bool, _, _} ->
+        {:error, "WBool takes no arguments"}
+
+      {true, _, []} ->
+        {:ok, {Word.bool_ty(), u0s(n)}}
+
+      {true, _, _} ->
+        {:error, "wtrue takes no arguments"}
+
+      {false, _, []} ->
+        {:ok, {Word.bool_ty(), u0s(n)}}
+
+      {false, _, _} ->
+        {:error, "wfalse takes no arguments"}
+
+      {:opt, m1, _} when m1 in [:run, :evidence] ->
+        {:error, "no promotion: a word type is an erased term"}
+
+      {:opt, :spec, [a]} ->
+        with :ok <- check_ty(k, book, rs, gamma, a) do
+          {:ok, {:typ, u0s(n)}}
+        end
+
+      {:opt, _, _} ->
+        {:error, "Opt takes one type"}
+
+      {{:optk, _}, m1, _} when m1 in [:run, :evidence] ->
+        {:error, "no promotion: a word type is an erased term"}
+
+      {{:optk, _}, :spec, []} ->
+        {:ok, {:typ, u0s(n)}}
+
+      {{:optk, _}, _, _} ->
+        {:error, "Opt takes no arguments"}
+
+      {:some, _, [t]} ->
+        word_una(k, book, rs, gamma, m, t, &Word.opt_ty/1)
+
+      {:some, _, _} ->
+        {:error, "wsome takes one word"}
+
+      {:none, _, _} ->
+        {:error, "wnone requires an expected Opt type"}
+    end
+  end
+
+  defp word_kind!(ty) do
+    case Word.kind_of_ty(ty) do
+      {:ok, kx} -> {:ok, kx}
+      :error -> {:error, "machine integer operation expects a machine integer"}
+    end
+  end
+
+  defp word_bin(k, book, rs, gamma, m, [x, y], result) do
+    with {:ok, {tx, ux}} <- infer(k, book, rs, gamma, m, x),
+         {:ok, tx1} <- whnf(k, book, tx),
+         {:ok, kx} <- word_kind!(tx1),
+         {:ok, uy} <- check(k, book, rs, gamma, m, y, Word.word_ty(kx)),
+         {:ok, uses} <- combine(m, ux, uy) do
+      {:ok, {result.(kx), uses}}
+    end
+  end
+
+  defp word_bin(_, _, _, _, _, _, _), do: {:error, "word operation takes two machine integers"}
+
+  defp word_una(k, book, rs, gamma, m, t, result) do
+    with {:ok, {ty, u}} <- infer(k, book, rs, gamma, m, t),
+         {:ok, ty1} <- whnf(k, book, ty),
+         {:ok, kx} <- word_kind!(ty1) do
+      {:ok, {result.(kx), u}}
+    end
+  end
+
+  defp word_ton(k, book, rs, gamma, m, t) do
+    with {:ok, {ty, u}} <- infer(k, book, rs, gamma, m, t),
+         {:ok, ty1} <- whnf(k, book, ty),
+         {:ok, _} <- word_kind!(ty1) do
+      {:ok, {:nat, u}}
+    end
+  end
+
+  defp word_cast(k, book, rs, gamma, m, kd, t) do
+    with {:ok, {ty, u}} <- infer(k, book, rs, gamma, m, t),
+         {:ok, ty1} <- whnf(k, book, ty),
+         {:ok, _} <- word_kind!(ty1) do
+      {:ok, {Word.word_ty(kd), u}}
+    end
+  end
+
+  defp word_shift(k, book, rs, gamma, m, x, n1) do
+    with {:ok, {tx, ux}} <- infer(k, book, rs, gamma, m, x),
+         {:ok, tx1} <- whnf(k, book, tx),
+         {:ok, kx} <- word_kind!(tx1),
+         {:ok, un} <- check(k, book, rs, gamma, m, n1, :nat),
+         {:ok, uses} <- combine(m, ux, un) do
+      {:ok, {Word.word_ty(kx), uses}}
     end
   end
 
@@ -2400,6 +2674,25 @@ defmodule Muro.Check do
                ),
              :ok <- check_unfold(k, book, mode, rs, f),
              do: combine(mode, seed_u, fu)
+
+      # ⇐-wnone. The expected type is Opt, after whnf.
+      {:word, :none, []} ->
+        with {:ok, t1} <- whnf(k, book, a) do
+          case t1 do
+            {:word, {:optk, _}, []} ->
+              {:ok, u0s(nctx(gamma))}
+
+            {:word, :opt, [ty]} ->
+              case is_data(k, book, ty) do
+                {:ok, true} -> {:ok, u0s(nctx(gamma))}
+                {:ok, false} -> {:error, "wnone requires an expected Opt type"}
+                err -> err
+              end
+
+            _ ->
+              {:error, "wnone requires an expected Opt type"}
+          end
+        end
 
       # ⇐-ctor / ⇐-conv
       _ ->
@@ -3337,6 +3630,9 @@ defmodule Muro.Check do
   defp mentions({:toi64, t}, acc), do: mentions(t, acc)
   defp mentions({:packi, x, y}, acc), do: mentions(y, mentions(x, acc))
 
+  defp mentions({:word, _, args}, acc),
+    do: Enum.reduce(args, acc, fn t, acc -> mentions(t, acc) end)
+
   defp mentions({:matom, e, p, bs}, acc) do
     acc = mentions(p, mentions(e, acc))
     Enum.reduce(bs, acc, fn {_, b}, acc -> mentions(b, acc) end)
@@ -4195,6 +4491,9 @@ defmodule Muro.Check do
     do: absent?(k, book, dname, t, seen) and absent?(k, book, dname, u, seen)
 
   defp absent_go?(k, book, dname, {:toi64, t}, seen), do: absent?(k, book, dname, t, seen)
+
+  defp absent_go?(k, book, dname, {:word, _, args}, seen),
+    do: Enum.all?(args, &absent?(k, book, dname, &1, seen))
 
   defp absent_go?(k, book, dname, {:packi, a, b}, seen),
     do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
