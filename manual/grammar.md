@@ -104,14 +104,24 @@ atom       ::= "Type" | "Nat" | "I64" | "F32" | "Unit" | "Empty" | "refl" | "tt"
              | stream | unfold | uncons
              | "fst" atom | "snd" atom          -- sugar for let
              | "head" atom | "tail" atom
-             | "Tensor" atom atom | "addi" atom atom | "muli" atom atom
-             | "addt" atom atom | "toI64" atom | "packI" atom atom
+             | word
+             | "Tensor" atom atom | "addt" atom atom | "packI" atom atom
              | "Always" atom atom atom
              | "bisim" atom atom
              | "[]"                        -- desugars to nil
              | "(" term ")" | "(" term "," term ")"
              | ident
 
+word       ::= "U8" | "U32" | "U64" | "WBool" | "wtrue" | "wfalse" | "wnone"
+             | "Opt" atom | "wsome" atom
+             | "toU8" atom | "toU32" atom | "toU64" atom | "toI64" atom | "toNat" atom
+             | "noti" atom | "asU8" atom | "asU32" atom | "asU64" atom | "asI64" atom
+             | "addi" atom atom | "subi" atom atom | "muli" atom atom
+             | "addc" atom atom | "subc" atom atom | "mulc" atom atom
+             | "divi" atom atom | "remi" atom atom
+             | "eqi" atom atom | "lti" atom atom | "lei" atom atom
+             | "andi" atom atom | "ori" atom atom | "xori" atom atom
+             | "shli" atom atom | "shri" atom atom
 suc        ::= "suc" "(" term ")" | "suc" atom
 stream     ::= "Stream" atom
 unfold     ::= "unfold" atom atom         -- seed, λ s → (head, next_seed)

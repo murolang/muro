@@ -1,5 +1,6 @@
--- I64 and Tensor I64 n wrap %Nx.Tensor{}. Nat stays Peano.
--- toI64 is the only Nat → I64 map (total on Peano; example uses small values).
+-- I64 is the 64-bit two's complement word. addi wraps.
+-- Tensor I64 n, addt, and packI still wrap %Nx.Tensor{}.
+-- toI64 reduces a Peano Nat modulo 2^64.
 -- Shape is an I64, not a Peano Nat. No Vec in this file.
 
 def addI : run Π (x : I64) → Π (y : I64) → I64 :=

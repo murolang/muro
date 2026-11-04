@@ -19,7 +19,7 @@ Nothing is inferred: there are no implicits, unification, metavariables or tacti
 - [Indexed data](https://muro-lang.dev/docs/indexed): Fin, Vec, and lookup without a runtime bounds check.
 - [Streams](https://muro-lang.dev/docs/streams): ν, unfold, Always, and bisimulation.
 - [Either and Dec](https://muro-lang.dev/docs/either): Disjoint union and decisions. Not LEM.
-- [Machine numbers](https://muro-lang.dev/docs/machine): I64, F32, Tensor, and Nx. Nat stays Peano.
+- [Machine numbers](https://muro-lang.dev/docs/machine): U8, U32, U64, and I64 are fixed-width residues. F32 and Tensor stay Nx. Nat stays Peano.
 - [Emit](https://muro-lang.dev/docs/emit): What becomes Elixir. C, Rust, and Zig print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A session endpoint is a state machine. A cross is one call on a named node. Spec and evidence are omitted from a run.
 - [State machines](https://muro-lang.dev/docs/fsm): Each session endpoint is a pure state machine. The transport stays with the host.
 - [Closed equations as tests](https://muro-lang.dev/docs/exunit): A book's closed equations become one ExUnit module. The tests call an implementation the host names. A skip is printed and recorded.

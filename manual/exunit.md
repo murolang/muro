@@ -301,7 +301,7 @@ A larger library, a `decide` of a key and a list whose silence and empty cases a
 
 ```elixir
 [
-  muro: "0.20.8",
+  muro: "0.20.9",
   modules: [
     {"kit.muro", KitTest, "test/kit_test.exs", [kind: :exunit]},
     {"impl.muro", ImplTest, "test/impl_test.exs", [kind: :exunit, imports: true]}
@@ -352,7 +352,7 @@ No skips:
 | any argument sits on an erased binder of `f` | `argument passed at an erased binder of <f>` |
 | an argument or the result does not normalize within fuel | `argument N did not normalize within fuel` or `result did not normalize within fuel` |
 | normalization fails for another reason | `argument N did not normalize` or `result did not normalize` |
-| the normal form is a function, a stream, or a machine term (`I64`, `F32`, `Tensor`, `toi64`, and the rest of that family) | `argument N normal form is a function`, `a stream`, or `a machine term` (or `result normal form is …`) |
+| the normal form is a function, a stream, or a machine term (`U8`, `U32`, `U64`, `I64`, `WBool`, `Opt`, `F32`, `Tensor`, `toi64`, and the rest of that family) | `argument N normal form is a function`, `a stream`, or `a machine term` (or `result normal form is …`) |
 | the normal form has no literal the emitter prints | `argument N normal form has no literal` or `result normal form has no literal` |
 | the normal form is open: a free variable, or a name that is not a constructor. Normalization unfolds `run` only, so an `evidence` or `spec` name used as a value lands here | `argument N is not closed (free variable or unresolved param)` or the same sentence for `result` |
 | a `run` param is nested in an argument or a result, not at the head of that side | `calls param <name> inside a value` |
@@ -368,7 +368,7 @@ A 3-tuple is still an Elixir module. An ExUnit entry adds a keyword list:
 
 ```elixir
 [
-  muro: "0.20.8",
+  muro: "0.20.9",
   modules: [
     {"priv/muro/rounding.muro", MyApp.Rounding, "lib/my_app/rounding.ex"},
     {"priv/muro/rounding.muro", MyApp.RoundingTest, "test/rounding_test.exs",

@@ -50,7 +50,7 @@ mix muro.emit path.muro --node a
 
 A `run` stream is a struct: the seed, an environment for values the step closes over, and a function pointer for the step. `unfold n (λ k → (k, suc k))` is `muro__stream_new` of `n` and that step. `uncons` calls the step and returns the head together with a new struct for the tail. The original seed stays in place, as `Enum.take` plus `Stream.drop` does on the Elixir backend. `examples/zeros.muro` and `examples/nats.muro` are the drivers. `Always` and `~` are evidence, so they are omitted. A lambda applied on the spot is a local: the argument is evaluated once and the body uses it. An unapplied lambda, and a call of a local function, are refused (`c:lambda`).
 
-A run whose type or body mentions `I64`, `F32`, or `Tensor` is refused (`c:machine`) and still emits on the Elixir backend. A raw `ν`, `Always`, or `~` inside a `run` is refused (`c:stream`).
+A run of `U8`, `U32`, `U64`, or `I64` is passed by value on C, Rust, and Zig. Signed wrapping on C is unsigned arithmetic, cast back. A shift at or past the width is not a host shift. Division by zero, and signed division of the minimum by −1, are not evaluated. `F32`, `Tensor`, `addt`, and `packI` are refused (`c:machine`) and still emit on the Elixir backend. A raw `ν`, `Always`, or `~` inside a `run` is refused (`c:stream`).
 
 The header is shaped like this:
 

@@ -506,9 +506,15 @@ Free-form names, a map keyed by those names, and a stated fallback. `Key` is `wi
 
 See [Host representations](repr.md).
 
+## fnv.muro
+
+32-bit FNV-1a over a monomorphic list of `U8`. The offset basis is 2166136261 and the prime is 16777619, each built by shifts of one. `hashEmpty` is the basis. `hashA` hashes the byte 97 and is 3826002220. `fnv-empty` and `fnv-a` are `refl`. `Bytes` stores the byte by value. It is not `std:list.muro`.
+
+See [Machine numbers](machine.md).
+
 ## nx_add.muro
 
-`I64` and `Tensor`. `doubled` is `[2, 4]` after `Nx.to_flat_list/1`. Nat stays Peano.
+`addI` is wrapping `I64` addition. `addt` and `packI` are still Nx, and `doubled` is `[2, 4]` after `Nx.to_flat_list/1`. Nat stays Peano.
 
 See [Machine numbers](machine.md).
 

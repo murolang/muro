@@ -26,8 +26,8 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - Typing raw Elixir
 - Emitting spec or evidence
 - Identity on `F32` or `Tensor F32 S`
-- Treating `I64` as `Nat`
-- A second index language for tensor shapes
+- An implicit coercion between `Nat` and `U8`, `U32`, `U64`, or `I64`. The maps are `toU8`, `toU32`, `toU64`, `toI64`, and `toNat`
+- A second index language for tensor shapes. A tensor shape stays one `I64`
 - Redeclaring Nat, Unit, Empty, or Stream as `data`
 - A fourth term representation
 - Raw HOAS (`Tm → Tm`) as inductive syntax

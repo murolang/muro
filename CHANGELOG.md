@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.9
+
+`U8`, `U32`, `U64`, and `I64` are fixed-width residues. `U8` is ℕ modulo 256, `U32` modulo 2^32, and `U64` modulo 2^64. `I64` is those 64 bits as two's complement. `addi`, `subi`, and `muli` wrap. `addc`, `subc`, and `mulc` return `Opt` and are `wsome` exactly when the result fits: below 2^w for an unsigned word, and in [−2^63, 2^63−1] for `I64`. `divi` and `remi` return `Opt`, empty for a zero divisor and for signed division of the minimum by −1. Division truncates toward zero and the remainder takes the sign of the dividend. `eqi`, `lti`, and `lei` return `WBool`. `andi`, `ori`, `xori`, and `noti` are bitwise. `shli` and `shri` are total: an amount at or past the width yields 0, except a signed `shri`, which sign-extends. `toU8`, `toU32`, `toU64`, and `toI64` reduce modulo the width. `toNat` returns the residue. `asU8`, `asU32`, `asU64`, and `asI64` are the only casts. There is no implicit coercion.
+
+`ofNat∘toNat`, `toNat∘ofNat`, `wrapAdd-mod`, `wrapSub-mod`, `wrapMul-mod`, `checkedAdd-iff`, `checkedSub-iff`, `checkedMul-iff`, `div-iff`, and `rem-iff` are in `agda/Muro/Word.agda`, checked under `--safe`. C, Rust, and Zig pass the words by value. Signed C wrapping goes through `uint64_t`. A shift past the width and a division by zero are not evaluated. Elixir emits the residue as an integer. `F32`, `Tensor`, `addt`, and `packI` stay refused (`c:machine`). The book is `examples/fnv.muro`. The page is [Machine numbers](manual/machine.md).
+
+### Manual
+
+- Machine numbers, Grammar, Terms, Emit, Limits, Examples, Closed equations as tests.
+
+### Package
+
+- Version 0.20.9.
+
 ## 0.20.8
 
 A `choreography` declaration names roles and one global type. Projection gives each ordered pair of roles a binary session: `end`, `send`, `recv`, `choose`, or `branch`. A message is `send` for the sender and `recv` for the receiver. A choice by a role on that pair is `choose` or `branch`, nested to the right when there are more than two branches, and the choice stays even when the arms agree. A role that is neither end of the choice has a session only when every branch projects to the same session. Otherwise the checker names the role and the branches that disagree. A duplicate role, an unknown role, a self-interaction, a duplicate branch label, and a choice with fewer than two branches are refused. `project-sound` and `project-complete` say the function returns a session exactly when `g ↾ r / s ≡ b` derives it. `pairwise-dual` says the two directions are dual whenever that projection exists, including a pair that never interacts. The module is `agda/Muro/Choreo.agda`, checked under `--safe`. The choreography is spec. The emitters skip it. `session name := seen role with role in choreography` is that projection. `mix muro.check` prints `choreography <name>: <role> with <role> = <session>` after any temporal lines. A book with no choreography prints what it printed before. The book is `examples/two-phase-commit.muro`. The page is [Choreography](manual/choreography.md).

@@ -61,7 +61,7 @@ pages:
   - file: machine.md
     slug: machine
     title: Machine numbers
-    summary: I64, F32, Tensor, and Nx. Nat stays Peano.
+    summary: U8, U32, U64, and I64 are fixed-width residues. F32 and Tensor stay Nx. Nat stays Peano.
   - file: emit.md
     slug: emit
     title: Emit

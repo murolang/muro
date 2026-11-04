@@ -196,7 +196,9 @@ Primitive types you can write as atoms:
 | `Atom` | The atom literals written in this file |
 | `Unit` | One constructor, `tt` |
 | `Empty` | No constructors |
-| `I64` / `F32` | Machine scalars; see [Machine numbers](machine.md) |
+| `U8` / `U32` / `U64` / `I64` | Fixed-width residues; see [Machine numbers](machine.md) |
+| `WBool` / `Opt` | Results of word comparisons and of checked or partial word operations |
+| `F32` | Nx scalar; see [Machine numbers](machine.md) |
 | `Stream A` | Greatest fixed point; see [Streams](streams.md) |
 
 `Nat`, `Unit`, and `Empty` as *types* are spec formers. You infer them only in spec. Their *constructors* (`0`, `suc`, `tt`) compute in run.
@@ -217,13 +219,13 @@ The mark sits immediately before the name, inside the parentheses. `(-A : Type)`
 
 `%0` and `%1` are the affine quantity. In run and evidence, a `%1` binder that is never used is refused. Spec forgets uses, so the obligation is not checked there. Using the variable twice is still refused, because the quantity is affine. The λ mark and the Π mark must agree. `examples/arrow.muro` is the worked book.
 
-**Data** (after WHNF): `Nat`, `Unit`, `Empty`, `I64`, `F32`, `Tensor`, a pair of two Data types, or a user `data` type whose *parameters* are Data. Indices do not have to be Data. `List A` is Data iff `A` is. `List (Nat → Nat)` is not, so you cannot write `+xs : List (Nat → Nat)`.
+**Data** (after WHNF): `Nat`, `Unit`, `Empty`, `U8`, `U32`, `U64`, `I64`, `WBool`, `Opt` of a Data type, `F32`, `Tensor`, a pair of two Data types, or a user `data` type whose *parameters* are Data. Indices do not have to be Data. `List A` is Data iff `A` is. `List (Nat → Nat)` is not, so you cannot write `+xs : List (Nat → Nat)`.
 
 **Copyable** (after WHNF), the types `+` accepts: a Data type, a Π type, or a pair of two copyable types. A Data value copies by value, so a Data argument at a `+` position keeps its uses. A function copies by closure: copying it copies what it captured, so an argument at a `+` position whose type is a Π, or a pair holding one, has every use inside it counted as many. `twice (addn n) 1` with `twice : Π (+ f : Nat → Nat) → …` checks when `n` is reusable and is refused with `affine variable used as reusable` when `n` is affine. The domain and codomain of a `+` function are not asked to be copyable: `Π (+ f : Π (s : Stream Nat) → Nat) → …` is fine, the closure is what is copied, not the stream it will be given.
 
 `Stream` and `Either` are not copyable. There is no `+` on a stream. The refusal is `+ requires a copyable type: Data, a pair of them, or a function`.
 
-**Run type**: a variable or a definition used in run code has one. It is `Nat`, `Unit`, `Empty`, `Atom`, `I64`, `F32`, `Tensor`, a `data` type, a type variable, a Π whose codomain is a run type, a pair of two, or a ν type whose body is one. Each part is read after WHNF, so a definition naming a type is the type it names: with `def R : spec Type := Nat`, `inc : run Π (r : R) → R` is used in run like `Π (r : Nat) → Nat`. An identity type is not a run type, under a name or not: `p : Nat × Eq0` with `def Eq0 : spec Type := {0 ≡ 0 : Nat}` is refused in run with `variable has a spec type`.
+**Run type**: a variable or a definition used in run code has one. It is `Nat`, `Unit`, `Empty`, `Atom`, `U8`, `U32`, `U64`, `I64`, `WBool`, `Opt` of a run type, `F32`, `Tensor`, a `data` type, a type variable, a Π whose codomain is a run type, a pair of two, or a ν type whose body is one. Each part is read after WHNF, so a definition naming a type is the type it names: with `def R : spec Type := Nat`, `inc : run Π (r : R) → R` is used in run like `Π (r : Nat) → Nat`. An identity type is not a run type, under a name or not: `p : Nat × Eq0` with `def Eq0 : spec Type := {0 ≡ 0 : Nat}` is refused in run with `variable has a spec type`.
 
 In spec, uses are forgotten. You can mention an affine variable twice while building a type.
 
