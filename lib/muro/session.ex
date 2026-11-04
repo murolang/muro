@@ -5406,6 +5406,7 @@ defmodule Muro.Session do
               :meet,
               :temporal,
               :talk,
+              :choreography,
               :repr,
               :seat,
               :link,

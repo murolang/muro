@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.8
+
+A `choreography` declaration names roles and one global type. Projection gives each ordered pair of roles a binary session: `end`, `send`, `recv`, `choose`, or `branch`. A message is `send` for the sender and `recv` for the receiver. A choice by a role on that pair is `choose` or `branch`, nested to the right when there are more than two branches, and the choice stays even when the arms agree. A role that is neither end of the choice has a session only when every branch projects to the same session. Otherwise the checker names the role and the branches that disagree. A duplicate role, an unknown role, a self-interaction, a duplicate branch label, and a choice with fewer than two branches are refused. `project-sound` and `project-complete` say the function returns a session exactly when `g ↾ r / s ≡ b` derives it. `pairwise-dual` says the two directions are dual whenever that projection exists, including a pair that never interacts. The module is `agda/Muro/Choreo.agda`, checked under `--safe`. The choreography is spec. The emitters skip it. `session name := seen role with role in choreography` is that projection. `mix muro.check` prints `choreography <name>: <role> with <role> = <session>` after any temporal lines. A book with no choreography prints what it printed before. The book is `examples/two-phase-commit.muro`. The page is [Choreography](manual/choreography.md).
+
+### Manual
+
+- Choreography, Grammar, Limits, Extending, Examples, Terms.
+
+### Package
+
+- Version 0.20.8.
+
 ## 0.20.7
 
 A meeting's explored configurations are data. The same walk that accepts the meeting records each state, the transition that reached it, and the source location of the step. Moving one process step and asking again returns the refusal and that step's location as data. `Muro.Explore.graph/1` draws one node for each spec, evidence, and run, one edge for each use, and hangs those configurations on the session the meeting belongs to.

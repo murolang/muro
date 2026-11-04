@@ -445,6 +445,7 @@ defmodule Muro.Ast do
             :meet,
             :temporal,
             :talk,
+            :choreography,
             :repr,
             :seat,
             :link,

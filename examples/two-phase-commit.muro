@@ -1,0 +1,48 @@
+-- two-phase-commit.muro — one choreography, and each role has a session.
+-- The choreography is spec. A run definition has no role.
+
+choreography two-phase-commit
+  roles coordinator, alice, bob
+  coordinator -> alice : prepare
+  coordinator -> bob : prepare
+  alice -> coordinator : vote
+  bob -> coordinator : vote
+  coordinator chooses
+    commit: coordinator -> alice : commit
+            coordinator -> bob : commit
+    abort: coordinator -> alice : abort
+           coordinator -> bob : abort
+
+session ca := seen coordinator with alice in two-phase-commit
+
+session ac := seen alice with coordinator in two-phase-commit
+
+session cb := seen coordinator with bob in two-phase-commit
+
+session bc := seen bob with coordinator in two-phase-commit
+
+session ab := seen alice with bob in two-phase-commit
+
+session ba := seen bob with alice in two-phase-commit
+
+conform coord-commit : ca := put tt (get Unit (pick0 (put tt done)))
+
+conform alice-cover : ac := get Unit (put tt (cover (get Unit done) (get Unit done)))
+
+meet decide : coord-commit with alice-cover
+
+conform coord-abort : ca := put tt (get Unit (pick1 (put tt done)))
+
+conform coord-bob : cb := put tt (get Unit (pick0 (put tt done)))
+
+conform bob-cover : bc := get Unit (put tt (cover (get Unit done) (get Unit done)))
+
+meet decide-bob : coord-bob with bob-cover
+
+conform quiet-alice : ab := done
+
+conform quiet-bob : ba := done
+
+meet quiet : quiet-alice with quiet-bob
+
+def kept : run Nat := 0

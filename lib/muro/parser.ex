@@ -325,6 +325,12 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      choreography_start?(s) ->
+        case parse_choreography(s) do
+          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          err -> err
+        end
+
       repr_start?(s) ->
         case parse_repr(s) do
           {:ok, d, rest} -> parse_book(rest, [d | acc])
@@ -1298,6 +1304,21 @@ defmodule Muro.Parser do
   # keywords only in this form. A constructor `talk : Box` is not one.
   defp talk_start?(s), do: assign_entry?(s, "talk")
 
+  # choreography two-phase-commit
+  #   roles coordinator, alice, bob
+  #   coordinator -> alice : prepare
+  # `choreography` is a keyword only when a name follows. A constructor
+  # `choreography : Box` is not one. `roles` and `chooses` are keywords
+  # only inside the body. Indentation does not structure it.
+  defp choreography_start?(s) do
+    if word_kw?(s, "choreography") do
+      rest = s |> after_kw("choreography") |> skip()
+      match?({:ok, _, _}, ident(rest))
+    else
+      false
+    end
+  end
+
   # `repr Name := …` is a host representation. `repr` is a keyword only
   # in this form. A constructor `repr : Box` and `def repr` stay names.
   defp repr_start?(s), do: assign_entry?(s, "repr")
@@ -1611,7 +1632,8 @@ defmodule Muro.Parser do
       word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
       nu_start?(s) or place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
       endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
-      talk_start?(s) or seat_start?(s) or link_start?(s) or repr_start?(s)
+      talk_start?(s) or choreography_start?(s) or seat_start?(s) or link_start?(s) or
+      repr_start?(s)
   end
 
   defp parse_talk(s) do
@@ -1623,6 +1645,214 @@ defmodule Muro.Parser do
          {:ok, body, rest} <- parse_talk_term(skip(rest)) do
       {:ok, %{kind: :talk, name: name, mode: :spec, body: body, loc: loc}, rest}
     end
+  end
+
+  # The body is one global type. A choice ends its sequence: the
+  # continuations are the branches. `end` closes a choice, so a nested
+  # choice can sit in a branch that is not the last one. A message
+  # payload is optional and defaults to Unit.
+  defp parse_choreography(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "choreography"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, roles, rest} <- parse_roles(skip(rest)),
+         {:ok, body, rest} <- parse_global(skip(rest)) do
+      {:ok, %{kind: :choreography, name: name, mode: :spec, roles: roles, body: body, loc: loc},
+       rest}
+    end
+  end
+
+  defp parse_roles(s) do
+    with {:ok, rest} <- kw(s, "roles"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, names, rest} <- parse_role_tail(skip(rest), [name]) do
+      {:ok, names, rest}
+    end
+  end
+
+  defp parse_role_tail(s, acc) do
+    s = skip(s)
+
+    if has_prefix?(s, ",") do
+      with {:ok, rest} <- tok(s, ","),
+           {:ok, name, rest} <- ident(skip(rest)) do
+        parse_role_tail(rest, acc ++ [name])
+      end
+    else
+      {:ok, acc, s}
+    end
+  end
+
+  defp parse_global(s) do
+    s = skip(s)
+
+    cond do
+      s == "" or global_stop?(s) ->
+        {:ok, :end, s}
+
+      true ->
+        case ident(s) do
+          {:ok, name, rest} ->
+            rest = skip(rest)
+
+            cond do
+              word_kw?(rest, "chooses") -> parse_choice(name, rest)
+              arrow_tok?(rest) -> parse_comm(name, rest)
+              true -> {:ok, :end, s}
+            end
+
+          _ ->
+            {:ok, :end, s}
+        end
+    end
+  end
+
+  defp parse_comm(sender, s) do
+    with {:ok, rest} <- eat_arrow(s),
+         {:ok, recv, rest} <- ident(skip(rest)),
+         {:ok, rest} <- colon(skip(rest)),
+         {:ok, label, rest} <- ident(skip(rest)),
+         {:ok, ty, rest} <- parse_msg_pay(skip(rest)),
+         {:ok, cont, rest} <- parse_global(skip(rest)) do
+      {:ok, {:comm, sender, recv, label, ty, cont}, rest}
+    end
+  end
+
+  defp parse_choice(role, s) do
+    with {:ok, rest} <- kw(s, "chooses"),
+         {:ok, branches, rest} <- parse_branches(skip(rest)) do
+      {:ok, {:choice, role, branches}, rest}
+    end
+  end
+
+  defp parse_branches(s) do
+    with {:ok, label, g, rest} <- parse_one_branch(s) do
+      parse_branch_tail(rest, [{label, g}])
+    end
+  end
+
+  defp parse_branch_tail(s, acc) do
+    s = skip(s)
+
+    cond do
+      branch_start?(s) ->
+        with {:ok, label, g, rest} <- parse_one_branch(s) do
+          parse_branch_tail(rest, acc ++ [{label, g}])
+        end
+
+      choice_closer?(s) ->
+        {:ok, acc, after_kw(s, "end")}
+
+      true ->
+        {:ok, acc, s}
+    end
+  end
+
+  defp parse_one_branch(s) do
+    with {:ok, label, rest} <- ident(skip(s)),
+         {:ok, rest} <- colon(skip(rest)),
+         {:ok, g, rest} <- parse_branch_body(skip(rest)) do
+      {:ok, label, g, rest}
+    end
+  end
+
+  # `label: end` is the empty global type. The `end` that closes a
+  # nested choice stands after a finished branch, where `parse_global`
+  # leaves it, and `parse_branch_tail` consumes it.
+  defp parse_branch_body(s) do
+    s = skip(s)
+
+    if choice_closer?(s) do
+      {:ok, :end, after_kw(s, "end")}
+    else
+      parse_global(s)
+    end
+  end
+
+  defp branch_start?(s) do
+    case ident(skip(s)) do
+      {:ok, _, rest} -> colon_tok?(skip(rest))
+      _ -> false
+    end
+  end
+
+  defp parse_msg_pay(s) do
+    s = skip(s)
+
+    cond do
+      s == "" or global_stop?(s) or role_cont?(s) -> {:ok, :unit, s}
+      pay_head?(s) -> parse_pay(s)
+      true -> {:ok, :unit, s}
+    end
+  end
+
+  # The next token starts another interaction, a branch, or a choice
+  # closer, so it is not a payload.
+  defp role_cont?(s) do
+    case ident(skip(s)) do
+      {:ok, _, rest} ->
+        rest = skip(rest)
+        arrow_tok?(rest) or word_kw?(rest, "chooses") or colon_tok?(rest)
+
+      _ ->
+        false
+    end
+  end
+
+  defp pay_head?(s) do
+    s = skip(s)
+
+    word_kw?(s, "Nat") or word_kw?(s, "Bit") or word_kw?(s, "Unit") or word_kw?(s, "Vec") or
+      has_prefix?(s, "(") or has_prefix?(s, "{") or ident_start?(s)
+  end
+
+  defp colon(s) do
+    s = skip(s)
+
+    if colon_tok?(s) do
+      {:ok, after_kw(s, ":")}
+    else
+      {:error, err(s, "expected :")}
+    end
+  end
+
+  defp colon_tok?(s) do
+    has_prefix?(s, ":") and not has_prefix?(s, ":=") and not has_prefix?(s, "::")
+  end
+
+  # `end` closes a choice. `end ->` is a role named end sending, and
+  # `end:` is a branch label, so neither of those closes the choice.
+  defp choice_closer?(s) do
+    s = skip(s)
+    word_kw?(s, "end") and not branch_start?(s) and not interaction_start?(s)
+  end
+
+  defp interaction_start?(s) do
+    case ident(skip(s)) do
+      {:ok, _, rest} ->
+        rest = skip(rest)
+        arrow_tok?(rest) or word_kw?(rest, "chooses")
+
+      _ ->
+        false
+    end
+  end
+
+  defp global_stop?(s) do
+    s = skip(s)
+    s == "" or choice_closer?(s) or choreo_boundary?(s) or has_prefix?(s, ")")
+  end
+
+  defp choreo_boundary?(s) do
+    s = skip(s)
+
+    word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
+      word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
+      word_kw?(s, "where") or nu_start?(s) or place_entry?(s) or scheme_entry?(s) or
+      move_entry?(s) or endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or
+      temporal_entry?(s) or talk_start?(s) or choreography_start?(s) or seat_start?(s) or
+      link_start?(s) or repr_start?(s)
   end
 
   defp parse_talk_term(s) do
@@ -2708,7 +2938,7 @@ defmodule Muro.Parser do
   end
 
   defp decl_word?(name) do
-    name in ~w(def data session conform meet place scheme move endpoint read talk seat link relay import param where)
+    name in ~w(def data session conform meet place scheme move endpoint read talk choreography seat link relay import param where)
   end
 
   # A payload type. `Nat`, `Bit`, and `Unit` are those types. A name is
@@ -3187,7 +3417,8 @@ defmodule Muro.Parser do
         word_kw?(s, "session") or word_kw?(s, "conform") or nu_start?(s) or
         place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
         endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
-        talk_start?(s) or seat_start?(s) or link_start?(s) or repr_start?(s) ->
+        talk_start?(s) or choreography_start?(s) or seat_start?(s) or link_start?(s) or
+          repr_start?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
@@ -3390,7 +3621,8 @@ defmodule Muro.Parser do
       word_kw?(s, "where") or word_kw?(s, "motive") or word_kw?(s, "in") or
       nu_start?(s) or place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
       endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
-      talk_start?(s) or seat_start?(s) or link_start?(s) or repr_start?(s)
+      talk_start?(s) or choreography_start?(s) or seat_start?(s) or link_start?(s) or
+      repr_start?(s)
   end
 
   defp eatom_start?(s) do
@@ -3592,8 +3824,8 @@ defmodule Muro.Parser do
     String.contains?(skipped, "\n") and
       (session_start?(s0) or conform_start?(s0) or place_entry?(s0) or scheme_entry?(s0) or
          move_entry?(s0) or endpoint_entry?(s0) or read_entry?(s0) or meet_entry?(s0) or
-         temporal_entry?(s0) or talk_start?(s0) or repr_start?(s0) or seat_start?(s0) or
-         link_start?(s0))
+         temporal_entry?(s0) or talk_start?(s0) or choreography_start?(s0) or repr_start?(s0) or
+         seat_start?(s0) or link_start?(s0))
   end
 
   defp starts_atom?(s) do
