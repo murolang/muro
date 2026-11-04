@@ -314,11 +314,15 @@ defmodule Muro.SessionErrorTest do
     assert {line, col} == {1, 21}
     assert msg =~ "#{line}:#{col}: "
 
-    src = "session ping :=\nrecv Nat\n"
+    src = "session ping :=\nrecv\n"
     assert {:error, msg} = Parser.parse(src)
     assert msg =~ "2:"
     refute msg =~ "3:"
     assert msg =~ "unexpected end of file, expected"
+
+    src = "session ping :=\nrecv Nat\n"
+    assert {:ok, [ping]} = Parser.parse(src)
+    assert ping.proto == {:recv, :nat, :end}
   end
 
   test "an in-flight frame that sends goaway is refused, and the meeting is skipped" do
