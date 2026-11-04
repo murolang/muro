@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.10
+
+A numeral bound on a nat field of a constructor is a finite split, and a `run` that reads any number of finite factors decides an arm by the product of those splits. `(slot : Nat) {slot ≤ 1}` admits `0` and `1`. The left side is that field and the right side is a canonical decimal. `{slot ≤ 00}`, `{slot ≤ suc 0}`, another field, and an earlier name are `a field bound is a numeral`. A bound on a field that is not a nat is `a field bound is on a nat`. Building the value needs the same evidence as a bounded nat payload, so `put (req 1)` is within the bound and `put (req 2)` misses it. A field the `run` binds and does not read is not a factor. Two bounded fields are the product of their widths. A mix of constructors is the sum of those products. A second bounded nat, and three or more finite factors, are that product. The two-factor derivation of one bounded nat and one bit or declared data payload stays. `enum-size` is the product of the factor widths, `data-size` is the sum over constructors, and `in-product` with `member-admitted` is the tuple. There is no fuel and no budget. An unbounded nat, a vector, a pair, a record, a unit, a `_` wildcard, and a recursive field the `run` reads stay refused. The book is `examples/bounded-fields.muro`. The pages are [Sessions](manual/sessions.md), [Terms](manual/language.md), and [Limits](manual/limits.md).
+
+### Manual
+
+- Sessions, Terms, Data, Grammar, Limits, Extending.
+
+### Package
+
+- Version 0.20.10.
+
 ## 0.20.8
 
 A `choreography` declaration names roles and one global type. Projection gives each ordered pair of roles a binary session: `end`, `send`, `recv`, `choose`, or `branch`. A message is `send` for the sender and `recv` for the receiver. A choice by a role on that pair is `choose` or `branch`, nested to the right when there are more than two branches, and the choice stays even when the arms agree. A role that is neither end of the choice has a session only when every branch projects to the same session. Otherwise the checker names the role and the branches that disagree. A duplicate role, an unknown role, a self-interaction, a duplicate branch label, and a choice with fewer than two branches are refused. `project-sound` and `project-complete` say the function returns a session exactly when `g ↾ r / s ≡ b` derives it. `pairwise-dual` says the two directions are dual whenever that projection exists, including a pair that never interacts. The module is `agda/Muro/Choreo.agda`, checked under `--safe`. The choreography is spec. The emitters skip it. `session name := seen role with role in choreography` is that projection. `mix muro.check` prints `choreography <name>: <role> with <role> = <session>` after any temporal lines. A book with no choreography prints what it printed before. The book is `examples/two-phase-commit.muro`. The page is [Choreography](manual/choreography.md).

@@ -397,11 +397,29 @@ session mixed :=
       | false => end))
 ```
 
-The length of a run's split is the product of the widths of the factors it reads. `enum-size` in `agda/Muro/Session.agda` states that for any factor list, with no fuel and no budget. `prod-card` is the product for one bounded nat and one constructor list. The derivation the checker builds is one bounded nat (`erecv-val`, `erecv-run`), or that nat with one bit or declared data payload (`erecv-prod`). `in-split` and `split-bound` say every value in `0 … w` is in the split and every member is within the bound. `val-sound` and `rows-at` say a process that covers the split conforms on the arm its value selects. `bound-recv-decides` is that decision for bound `1`. `meet-agrees` in `agda/Muro/Meet.agda` says the meeting of a literal numeral takes that arm.
+The length of a run's split is the product of the widths of the factors it reads. `enum-size` in `agda/Muro/Session.agda` states that for any factor list, with no fuel and no budget. `prod-card` is the product for one bounded nat and one constructor list. `data-size` is the sum of those products over the constructors of a data payload. `in-split` and `split-bound` say every value in `0` … `w` is in the split and every member is within the bound. `in-product` and `member-admitted` say every tuple the factors admit is in the product, and every member of the product is such a tuple. `val-sound` and `rows-at` say a process that covers the split conforms on the arm its value selects. `bound-recv-decides` is that decision for bound `1`. `meet-agrees` in `agda/Muro/Meet.agda` says the meeting of a literal numeral takes that arm.
 
-A nat with no bound does not split, and neither does a bound that is a name: `recv (w : Nat) (recv (d : Nat) {d ≤ w} (case d …))` is `a case is on a bit or a declared data type`, because `w` is not known until it arrives. A second bounded nat, and a run of three or more factors, stay `the run does not decide an arm`. A `_` wildcard arm is `case arms do not match the constructors`. A pair, a record, a vector, and unit stay refused. A constructor field carries no bound, so a nat inside a declared data type is not this split. `put 3` against `{d ≤ 2}` misses the bound.
+One bounded nat and one bit or declared data payload stay the two-factor derivation (`erecv-prod`). A second bounded nat, and a run of three or more finite factors, are the same split on the whole list (`erecv-wide`, `mget-wide`, `eget-wide`). The match stands on the last factor. Earlier factors are matched inside its arms, and parentheses close an inner match when another arm follows. A sender whose value is known is checked on the arm that value selects (`eput-wide`, `dput-wide`).
+
+A constructor may bound a nat field by a numeral. The left side is that field and the right side is a canonical decimal, so `{slot ≤ 1}` admits `0` and `1`. `{slot ≤ 00}`, `{slot ≤ suc 0}`, a bound that names another field, and a bound that names an earlier value are `a field bound is a numeral`. A bound on a field that is not a nat is `a field bound is on a nat`. The bound is not part of the core type. Building the value needs the evidence a bounded nat payload needs: `put (req 1)` is within the bound, and `put (req 2)`, a computed nat, and a variable nat miss it. A `run` that reads the field splits it into `0` … `w`. A field the `run` binds and does not read is not a factor. Two bounded fields are the product of their widths. A mix of constructors is the sum of those products. A bit field contributes two, and a data field contributes its own split.
+
+```muro
+data Req : Type where
+  req : (slot : Nat) {slot ≤ 1} → Req
+
+session ask :=
+  recv (r : Req) (case (slotOf r)
+    | true => send Nat end
+    | false => end)
+```
+
+`slotOf` returns `true` at `0` and `false` at `1`. The server matches `req`, then the numeral.
+
+A nat with no bound does not split, and neither does a bound that is a name: `recv (w : Nat) (recv (d : Nat) {d ≤ w} (case d …))` is `a case is on a bit or a declared data type`, because `w` is not known until it arrives. A `_` wildcard arm is `case arms do not match the constructors`. A pair, a record, a vector, and unit stay refused. A recursive field the `run` reads stays `the run does not decide an arm`. A case on a name bound earlier stays `a case is on the name just bound`. `put 3` against `{d ≤ 2}` misses the bound.
 
 `examples/bounded-split.muro`
+
+`examples/bounded-fields.muro`
 
 ## Index
 
