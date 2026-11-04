@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.20.12
+
+`Muro.Lexer` classifies the words of the language. Declaration words, session and protocol words, choreography words, type formers, and the builtin types each have a kind. Numerals, strings, comments, and punctuation do too. Operators include the forms the parser accepts, among them `≤`, `→`, `λ`, `Π`, `×`, `⊎`, `≡`, and `⊸`, and the evidence mark `⊢`. The lists live in `Muro.Words`. The parser and the lexer both read them. Whitespace is its own token. `Muro.MakeupLexer` maps each kind onto a Makeup tag, and a token the language accepts is not an error. A parsed definition carries `:extent`, the byte span from its first word to the first byte the parser did not consume.
+
+Versions 0.20.9, 0.20.10, and 0.20.11 are on other branches. This note will be reconciled with theirs when the branches merge.
+
+### Package
+
+- Version 0.20.12.
+
 ## 0.20.8
 
 A `choreography` declaration names roles and one global type. Projection gives each ordered pair of roles a binary session: `end`, `send`, `recv`, `choose`, or `branch`. A message is `send` for the sender and `recv` for the receiver. A choice by a role on that pair is `choose` or `branch`, nested to the right when there are more than two branches, and the choice stays even when the arms agree. A role that is neither end of the choice has a session only when every branch projects to the same session. Otherwise the checker names the role and the branches that disagree. A duplicate role, an unknown role, a self-interaction, a duplicate branch label, and a choice with fewer than two branches are refused. `project-sound` and `project-complete` say the function returns a session exactly when `g ↾ r / s ≡ b` derives it. `pairwise-dual` says the two directions are dual whenever that projection exists, including a pair that never interacts. The module is `agda/Muro/Choreo.agda`, checked under `--safe`. The choreography is spec. The emitters skip it. `session name := seen role with role in choreography` is that projection. `mix muro.check` prints `choreography <name>: <role> with <role> = <session>` after any temporal lines. A book with no choreography prints what it printed before. The book is `examples/two-phase-commit.muro`. The page is [Choreography](manual/choreography.md).
