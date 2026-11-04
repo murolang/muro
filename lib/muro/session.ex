@@ -3242,6 +3242,7 @@ defmodule Muro.Session do
   end
 
   defp outside_fragment(:ze), do: nil
+  defp outside_fragment({:nat, n}) when is_integer(n) and n >= 0, do: nil
   defp outside_fragment(:one), do: nil
   defp outside_fragment({:var, i}) when is_integer(i), do: nil
   defp outside_fragment({:def, name}) when is_binary(name), do: nil
@@ -5747,6 +5748,10 @@ defmodule Muro.Session do
   defp drop_lams(_, _), do: :error
 
   defp ev(:ze, _env, _prefix, _defs, _book), do: {:ok, {:nat, 0}}
+
+  defp ev({:nat, n}, _env, _prefix, _defs, _book) when is_integer(n) and n >= 0,
+    do: {:ok, {:nat, n}}
+
   defp ev(:one, _env, _prefix, _defs, _book), do: {:ok, :tt}
   defp ev({:ann, t, _}, env, prefix, defs, book), do: ev(t, env, prefix, defs, book)
 

@@ -5,8 +5,9 @@ defmodule Muro.Word do
   mul are the bit-pattern operations. Ordering, checked arithmetic, and
   division use the signed value.
 
-  `toNat` returns the canonical residue, so `toNat` of I64 −1 is
-  2^64−1. Shifts are total: an amount at or past the width yields the
+  `toNat` returns the canonical residue as a closed numeral, so
+  `toNat` of I64 −1 is 2^64−1. Shifts are total: an amount at or past
+  the width yields the
   guarded value and is never a host shift. `div` and `rem` are `Opt`;
   signed `div` and `rem` are also empty for `INT64_MIN / −1`. Checked
   I64 arithmetic succeeds exactly when the result lies in
@@ -112,8 +113,9 @@ defmodule Muro.Word do
 
   @doc """
   Reduce a word whose arguments are already values. `:stuck` means a
-  redex is not ready. `{:error, :fuel}` means `toNat` would build a
-  Peano numeral longer than the fuel.
+  redex is not ready. Every operation is a constant-time integer
+  calculation. `toNat` returns a closed numeral and does not consult
+  the fuel.
   """
   def step(op, args, fuel \\ 2_000)
 
@@ -124,19 +126,10 @@ defmodule Muro.Word do
     end
   end
 
-  def step(:ton, [t], fuel) do
+  def step(:ton, [t], _fuel) do
     case lit_arg(t) do
-      {:ok, k, n} ->
-        n = residue(k, n)
-
-        if n > fuel do
-          {:error, :fuel}
-        else
-          {:ok, to_nat(n)}
-        end
-
-      :error ->
-        :stuck
+      {:ok, k, n} -> {:ok, to_nat(residue(k, n))}
+      :error -> :stuck
     end
   end
 
@@ -181,6 +174,7 @@ defmodule Muro.Word do
   def kind_of_ty({:word, {:ty, k}, []}) when k in [:u8, :u32, :u64], do: {:ok, k}
   def kind_of_ty(_), do: :error
 
+  def from_nat({:nat, n}) when is_integer(n) and n >= 0, do: {:ok, n}
   def from_nat(:ze), do: {:ok, 0}
 
   def from_nat({:su, t}) do
@@ -192,8 +186,37 @@ defmodule Muro.Word do
 
   def from_nat(_), do: :error
 
-  def to_nat(0), do: :ze
-  def to_nat(n) when n > 0, do: {:su, to_nat(n - 1)}
+  @doc """
+  The residue as a closed numeral. Zero is `{:nat, 0}`, which converts
+  with the constructor `0` and is not a chain of successors.
+  """
+  def to_nat(n) when is_integer(n) and n >= 0, do: {:nat, n}
+
+  @doc """
+  One Nat constructor. A positive closed numeral peels a single
+  successor and leaves the predecessor as a numeral.
+  """
+  def nat_ctor(:ze), do: :ze
+  def nat_ctor({:su, t}), do: {:su, t}
+  def nat_ctor({:nat, 0}), do: :ze
+  def nat_ctor({:nat, n}) when is_integer(n) and n > 0, do: {:su, {:nat, n - 1}}
+  def nat_ctor(t), do: t
+
+  @doc """
+  The integer denoted by a closed numeral, including a successor spine
+  that ends in one. An open term is `:error`.
+  """
+  def nat_closed(:ze), do: {:ok, 0}
+  def nat_closed({:nat, n}) when is_integer(n) and n >= 0, do: {:ok, n}
+
+  def nat_closed({:su, t}) do
+    case nat_closed(t) do
+      {:ok, n} -> {:ok, n + 1}
+      :error -> :error
+    end
+  end
+
+  def nat_closed(_), do: :error
 
   def lit_arg({:word, {:lit, k, n}, []}) when k in @kinds and is_integer(n), do: {:ok, k, n}
   def lit_arg(_), do: :error

@@ -3260,6 +3260,18 @@ defmodule Muro.Parser do
   defp number?(<<c, _::binary>>) when c in ?0..?9, do: true
   defp number?(_), do: false
 
+  # The token `0` stays the constructor. Any longer digit run is a closed
+  # numeral, so a word equation can name a residue without a successor chain.
+  defp parse_nat_literal(s) do
+    {digits, rest} = take_digits(s, "")
+
+    if digits == "0" do
+      leaf(s, :ze, rest)
+    else
+      leaf(s, {:nat, String.to_integer(digits)}, rest)
+    end
+  end
+
   defp parse_nat_val(s) do
     {digits, rest} = take_digits(s, "")
     {:ok, {:nat, {:nat, String.to_integer(digits)}}, rest}
@@ -4014,8 +4026,8 @@ defmodule Muro.Parser do
       has_prefix?(s, "?") ->
         leaf(s, {:hole, here(s)}, after_kw(s, "?"))
 
-      has_prefix?(s, "0") ->
-        leaf(s, :ze, after_kw(s, "0"))
+      number?(s) ->
+        parse_nat_literal(s)
 
       word_kw?(s, "suc") ->
         parse_suc(s)

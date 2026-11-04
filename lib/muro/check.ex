@@ -483,10 +483,15 @@ defmodule Muro.Check do
 
   defp whnf(k, book, {:mnat, e, p, z, s}, unfold) do
     case whnf(k - 1, book, e, unfold) do
-      {:ok, :ze} -> whnf(k - 1, book, z, unfold)
-      {:ok, {:su, u}} -> whnf(k - 1, book, Subst.inst(s, u), unfold)
-      {:ok, e1} -> {:ok, {:mnat, e1, p, z, s}}
-      err -> err
+      {:ok, e1} ->
+        case Muro.Word.nat_ctor(e1) do
+          :ze -> whnf(k - 1, book, z, unfold)
+          {:su, u} -> whnf(k - 1, book, Subst.inst(s, u), unfold)
+          _ -> {:ok, {:mnat, e1, p, z, s}}
+        end
+
+      err ->
+        err
     end
   end
 
@@ -593,7 +598,6 @@ defmodule Muro.Check do
       case Muro.Word.step(op, ts1, k - 1) do
         {:ok, r} -> whnf(k - 1, book, r, unfold)
         :stuck -> {:ok, {:word, op, ts1}}
-        {:error, :fuel} -> {:error, @out_of_fuel}
       end
     end
   end
@@ -646,7 +650,6 @@ defmodule Muro.Check do
       case Muro.Word.step(op, ts1, k) do
         {:ok, r} -> nf(fuel_dec(k), book, r, unfold)
         :stuck -> {:ok, {:word, op, ts1}}
-        {:error, :fuel} -> {:error, @out_of_fuel}
       end
     end
   end
@@ -984,6 +987,21 @@ defmodule Muro.Check do
   defp at(k, book, names, u, v, seen), do: fn -> conv_f(k, book, names, u, v, seen) end
 
   defp conv_n(k, _book, _names, a, a, _seen), do: {:ok, k}
+
+  defp conv_n(k, _book, names, {:nat, n}, {:nat, m}, _seen)
+       when is_integer(n) and is_integer(m) do
+    {:error, "cannot convert #{Print.term({:nat, n}, names)} ≁ #{Print.term({:nat, m}, names)}",
+     k}
+  end
+
+  defp conv_n(k, book, names, {:nat, n}, v, seen) when is_integer(n) and n >= 0 do
+    conv_n(k, book, names, Muro.Word.nat_ctor({:nat, n}), v, seen)
+  end
+
+  defp conv_n(k, book, names, u, {:nat, n}, seen) when is_integer(n) and n >= 0 do
+    conv_n(k, book, names, u, Muro.Word.nat_ctor({:nat, n}), seen)
+  end
+
   defp conv_n(k, book, names, {:su, a}, {:su, b}, seen), do: conv_f(k, book, names, a, b, seen)
   defp conv_n(k, _book, _names, {:var, i}, {:var, i}, _seen), do: {:ok, k}
 
@@ -1437,6 +1455,7 @@ defmodule Muro.Check do
   defp occurs?(_x, :typ), do: false
   defp occurs?(_x, :nat), do: false
   defp occurs?(_x, :ze), do: false
+  defp occurs?(_x, {:nat, n}) when is_integer(n), do: false
   defp occurs?(_x, :unit), do: false
   defp occurs?(_x, :one), do: false
   defp occurs?(_x, :empty), do: false
@@ -1883,6 +1902,10 @@ defmodule Muro.Check do
 
       # ⇒-ze
       {_, :ze} ->
+        {:ok, {:nat, u0s(n)}}
+
+      # A closed numeral has the same type as zero. It is not a successor spine.
+      {_, {:nat, m}} when is_integer(m) and m >= 0 ->
         {:ok, {:nat, u0s(n)}}
 
       # ⇒-su
@@ -4324,11 +4347,17 @@ defmodule Muro.Check do
   defp clash_idx(k, book, e, t) do
     with {:ok, e1} <- whnf(k - 1, book, e),
          {:ok, t1} <- whnf(k - 1, book, t) do
-      case {e1, t1} do
-        {{:su, e2}, {:su, t2}} -> clash_idx(k - 1, book, e2, t2)
-        {{:su, _}, :ze} -> {:ok, true}
-        {:ze, {:su, _}} -> {:ok, true}
-        {_, _} -> {:ok, false}
+      case {Muro.Word.nat_closed(e1), Muro.Word.nat_closed(t1)} do
+        {{:ok, n}, {:ok, m}} ->
+          {:ok, n != m}
+
+        _ ->
+          case {Muro.Word.nat_ctor(e1), Muro.Word.nat_ctor(t1)} do
+            {{:su, e2}, {:su, t2}} -> clash_idx(k - 1, book, e2, t2)
+            {{:su, _}, :ze} -> {:ok, true}
+            {:ze, {:su, _}} -> {:ok, true}
+            _ -> {:ok, false}
+          end
       end
     end
   end

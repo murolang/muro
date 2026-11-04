@@ -9,13 +9,26 @@ defmodule Muro.WordTest do
     assert Check.check_sig(book!(edges_src())) == :ok
   end
 
-  test "toNat of a U32 maximum is out of fuel" do
-    src = """
-    def wide : evidence {toNat (noti (toU32 0)) ≡ 0 : Nat} := refl
-    """
+  test "closed numerals at the word boundaries check, and a wrong one is refused" do
+    assert check_src(boundary_src()) == :ok
+    assert Check.check_sig(book!(boundary_src()), fuel: 40) == :ok
 
-    assert {:error, msg} = check_src(src)
-    assert Check.out_of_fuel?(msg)
+    assert {:error, msg} = check_src(boundary_wrong_src())
+    refute Check.out_of_fuel?(msg)
+    assert msg =~ "cannot convert"
+  end
+
+  test "toNat of U64 max normalises to a closed numeral" do
+    book =
+      book!("""
+      def n : spec Nat := toNat (noti (toU64 0))
+      """)
+
+    assert {:ok, [d]} = Muro.Ast.book_to_db(book)
+    n = 18_446_744_073_709_551_615
+    assert {:ok, {:nat, ^n}} = Check.normalize([], d.body, 30)
+    assert Muro.Word.step(:ton, [Muro.Word.lit(:u64, n)], 1) == {:ok, {:nat, n}}
+    assert Muro.Word.from_nat({:nat, n}) == {:ok, n}
   end
 
   test "fnv.muro checks and its hashes are the 32-bit FNV-1a values" do
@@ -195,6 +208,63 @@ defmodule Muro.WordTest do
 
   defp check_src(src) do
     with {:ok, book} <- Parser.parse(src), do: Check.check_sig(book)
+  end
+
+  # Check only. These equations name residues near 2^32 and 2^64, so they
+  # stay out of the emitted edge suite.
+  defp boundary_src do
+    """
+    def pred : evidence Π (n : Nat) → Nat :=
+      λ (n : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => 0
+          | suc k => k
+    def u8nat : evidence {toNat (noti (toU8 0)) ≡ 255 : Nat} := refl
+    def u8wrap : evidence {addi (noti (toU8 0)) (toU8 1) ≡ toU8 0 : U8} := refl
+    def u8cadd : evidence {addc (noti (toU8 0)) (toU8 1) ≡ wnone : Opt U8} := refl
+    def u32nat : evidence {toNat (noti (toU32 0)) ≡ 4294967295 : Nat} := refl
+    def u32wrap : evidence {addi (noti (toU32 0)) (toU32 1) ≡ toU32 0 : U32} := refl
+    def u32cadd : evidence {addc (noti (toU32 0)) (toU32 1) ≡ wnone : Opt U32} := refl
+    def u32of : evidence {toU32 4294967297 ≡ toU32 1 : U32} := refl
+    def u32cast : evidence {asU32 (noti (toU64 0)) ≡ noti (toU32 0) : U32} := refl
+    def u32shl : evidence {shli (toU32 1) 32 ≡ toU32 0 : U32} := refl
+    def u64nat : evidence {toNat (noti (toU64 0)) ≡ 18446744073709551615 : Nat} := refl
+    def u64zero : evidence {toNat (toU64 0) ≡ 0 : Nat} := refl
+    def u64wrap : evidence {addi (noti (toU64 0)) (toU64 1) ≡ toU64 0 : U64} := refl
+    def u64cadd : evidence {addc (noti (toU64 0)) (toU64 1) ≡ wnone : Opt U64} := refl
+    def u64csub : evidence {subc (toU64 0) (toU64 1) ≡ wnone : Opt U64} := refl
+    def u64of : evidence {toU64 18446744073709551616 ≡ toU64 0 : U64} := refl
+    def u64round : evidence {toU64 (toNat (noti (toU64 0))) ≡ noti (toU64 0) : U64} := refl
+    def u64shl : evidence {toNat (shli (toU64 1) 63) ≡ 9223372036854775808 : Nat} := refl
+    def u64shl0 : evidence {shli (toU64 1) 64 ≡ toU64 0 : U64} := refl
+    def i64min : evidence {toNat (shli (toI64 1) 63) ≡ 9223372036854775808 : Nat} := refl
+    def i64max : evidence {toNat (noti (shli (toI64 1) 63)) ≡ 9223372036854775807 : Nat} := refl
+    def i64neg : evidence {toNat (noti (toI64 0)) ≡ 18446744073709551615 : Nat} := refl
+    def i64ofmin : evidence {toI64 9223372036854775808 ≡ shli (toI64 1) 63 : I64} := refl
+    def i64ofneg : evidence {toI64 18446744073709551615 ≡ noti (toI64 0) : I64} := refl
+    def i64wrap : evidence {addi (noti (shli (toI64 1) 63)) (toI64 1) ≡ shli (toI64 1) 63 : I64} := refl
+    def i64cmax : evidence {addc (noti (shli (toI64 1) 63)) (toI64 1) ≡ wnone : Opt I64} := refl
+    def i64cmin : evidence {addc (shli (toI64 1) 63) (shli (toI64 1) 63) ≡ wnone : Opt I64} := refl
+    def i64div : evidence {divi (shli (toI64 1) 63) (noti (toI64 0)) ≡ wnone : Opt I64} := refl
+    def i64cast : evidence {asU64 (noti (toI64 0)) ≡ noti (toU64 0) : U64} := refl
+    def i64bit : evidence {asI64 (noti (toU64 0)) ≡ noti (toI64 0) : I64} := refl
+    def i64lt : evidence {lti (shli (toI64 1) 63) (toI64 0) ≡ wtrue : WBool} := refl
+    def peel0 : evidence {pred (toNat (toU64 0)) ≡ 0 : Nat} := refl
+    def peel1 : evidence {pred (toNat (toU8 1)) ≡ 0 : Nat} := refl
+    def peelBig : evidence {pred 18446744073709551615 ≡ 18446744073709551614 : Nat} := refl
+    def big : run Nat := 18446744073709551615
+    def wide : run U64 := toU64 18446744073709551617
+    def wide-ok : evidence {wide ≡ toU64 1 : U64} := refl
+    """
+  end
+
+  defp boundary_wrong_src do
+    """
+    def badNat : evidence {toNat (noti (toU64 0)) ≡ 0 : Nat} := refl
+    def badWrap : evidence {addi (noti (toU32 0)) (toU32 1) ≡ toU32 1 : U32} := refl
+    def badCadd : evidence {addc (noti (toU64 0)) (toU64 1) ≡ wsome (toU64 0) : Opt U64} := refl
+    def badOf : evidence {toI64 9223372036854775808 ≡ toI64 0 : I64} := refl
+    """
   end
 
   defp emit_elixir(src, mod) do

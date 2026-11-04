@@ -18,6 +18,7 @@ defmodule Muro.Ast do
           | {:app, named, named}
           | :nat
           | :ze
+          | {:nat, non_neg_integer()}
           | {:su, named}
           | :unit
           | :one
@@ -64,6 +65,7 @@ defmodule Muro.Ast do
           | {:app, db, db}
           | :nat
           | :ze
+          | {:nat, non_neg_integer()}
           | {:su, db}
           | :unit
           | :one
@@ -190,6 +192,7 @@ defmodule Muro.Ast do
   def to_db(:typ, _), do: {:ok, :typ}
   def to_db(:nat, _), do: {:ok, :nat}
   def to_db(:ze, _), do: {:ok, :ze}
+  def to_db({:nat, n}, _) when is_integer(n) and n >= 0, do: {:ok, {:nat, n}}
   def to_db(:unit, _), do: {:ok, :unit}
   def to_db(:one, _), do: {:ok, :one}
   def to_db(:empty, _), do: {:ok, :empty}

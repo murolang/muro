@@ -42,6 +42,9 @@ defmodule Muro.Subst do
       :ze ->
         :ze
 
+      {:nat, n} when is_integer(n) ->
+        {:nat, n}
+
       {:su, u} ->
         {:su, ren(rho, u)}
 
@@ -193,6 +196,9 @@ defmodule Muro.Subst do
 
       :ze ->
         :ze
+
+      {:nat, n} when is_integer(n) ->
+        {:nat, n}
 
       {:su, u} ->
         {:su, sub(sigma, u)}

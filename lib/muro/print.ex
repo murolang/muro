@@ -67,6 +67,7 @@ defmodule Muro.Print do
   defp fmt(:typ, _, _), do: "Type"
   defp fmt(:nat, _, _), do: "Nat"
   defp fmt(:ze, _, _), do: "0"
+  defp fmt({:nat, n}, _, _) when is_integer(n), do: Integer.to_string(n)
   defp fmt(:unit, _, _), do: "Unit"
   defp fmt(:one, _, _), do: "tt"
   defp fmt(:empty, _, _), do: "Empty"
