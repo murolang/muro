@@ -132,10 +132,9 @@ jobs:
       # shipped with the stdlib checkout (tests, docs) are not loaded.
       # Cap the Haskell RTS heap so Views collects instead of growing past
       # the self-hosted runner's 14g cgroup (Linux peaked ~13.2 GiB).
+      # AGDA on the make line overrides the Makefile default.
       - name: Run make agda
-        env:
-          AGDA: agda +RTS -M12G -A64M -RTS
-        run: make agda
+        run: make agda AGDA="agda +RTS -M12G -A64M -RTS"
 
   visor:
     name: muro_visor

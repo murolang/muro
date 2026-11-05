@@ -1,4 +1,4 @@
-AGDA  := agda
+AGDA  ?= agda
 # --no-libraries: vendored stdlib ships extra .agda-lib files (tests, cubical).
 AFLAGS := --no-libraries -i agda -i vendor/agda-stdlib/src --warning=noUnsupportedIndexedMatch
 
