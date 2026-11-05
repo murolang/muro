@@ -34,6 +34,8 @@ data Name params : index-telescope Type where
 
 Parameters are the binders before `:`. Indices are the telescope after `:` and before `Type`.
 
+A nat field may carry a numeral bound before the arrow: `(slot : Nat) {slot ≤ 1}`. The spelling is [A bounded field](language.md#a-bounded-field). The session split is [A numeral bound](sessions.md#a-numeral-bound).
+
 ```
 data List (A : Type) : Type where          -- one parameter, no indices
   nil  : List A

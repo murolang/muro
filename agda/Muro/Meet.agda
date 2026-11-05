@@ -41,7 +41,7 @@ open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl; sym; 
 open import Relation.Nullary.Decidable.Core using (Dec) renaming (yes to yes′; no to no′)
 
 open import Muro.Base using (Mode; evid; run)
-open import Muro.Session hiding (¬_; Seat; no-run; ping; pong; Answer; Answerρ; yes; no; decide; decideρ; opened)
+open import Muro.Session hiding (¬_; Seat; no-run; ping; pong; Answer; Answerρ; yes; no; decide; decideρ; opened; Found)
 open import Muro.Dual using (dual; grant; grant-ok)
 
 ¬_ : Set → Set

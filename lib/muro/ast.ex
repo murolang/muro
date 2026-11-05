@@ -440,15 +440,28 @@ defmodule Muro.Ast do
   end
 
   defp ctors_to_db(params, ctors) do
-    Enum.reduce_while(ctors, {:ok, []}, fn %{name: cn, type: ty}, {:ok, acc} ->
+    Enum.reduce_while(ctors, {:ok, []}, fn %{name: cn, type: ty} = ctor, {:ok, acc} ->
       wrapped =
         Enum.reduce(Enum.reverse(params), ty, fn {q, x, a}, t ->
           {:pi, q, a, x, t}
         end)
 
       case to_db(wrapped) do
-        {:ok, ty1} -> {:cont, {:ok, acc ++ [%{name: cn, type: ty1}]}}
-        err -> {:halt, err}
+        {:ok, ty1} ->
+          base = %{name: cn, type: ty1}
+          bounds = Map.get(ctor, :bounds, %{})
+
+          row =
+            if bounds == %{} do
+              base
+            else
+              Map.put(base, :bounds, bounds)
+            end
+
+          {:cont, {:ok, acc ++ [row]}}
+
+        err ->
+          {:halt, err}
       end
     end)
   end
