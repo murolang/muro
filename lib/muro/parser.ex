@@ -3348,6 +3348,18 @@ defmodule Muro.Parser do
   defp number?(<<c, _::binary>>) when c in ?0..?9, do: true
   defp number?(_), do: false
 
+  # The token `0` stays the constructor. Any longer digit run is a closed
+  # numeral, so a word equation can name a residue without a successor chain.
+  defp parse_nat_literal(s) do
+    {digits, rest} = take_digits(s, "")
+
+    if digits == "0" do
+      leaf(s, :ze, rest)
+    else
+      leaf(s, {:nat, String.to_integer(digits)}, rest)
+    end
+  end
+
   defp parse_nat_val(s) do
     {digits, rest} = take_digits(s, "")
     {:ok, {:nat, {:nat, String.to_integer(digits)}}, rest}
@@ -4053,6 +4065,33 @@ defmodule Muro.Parser do
       word_kw?(s, "I64") ->
         leaf(s, :i64, after_kw(s, "I64"))
 
+      word_kw?(s, "U8") ->
+        parse_word_leaf(s, "U8", {:ty, :u8})
+
+      word_kw?(s, "U32") ->
+        parse_word_leaf(s, "U32", {:ty, :u32})
+
+      word_kw?(s, "U64") ->
+        parse_word_leaf(s, "U64", {:ty, :u64})
+
+      word_kw?(s, "WBool") ->
+        parse_word_leaf(s, "WBool", :bool)
+
+      word_kw?(s, "wtrue") ->
+        parse_word_leaf(s, "wtrue", true)
+
+      word_kw?(s, "wfalse") ->
+        parse_word_leaf(s, "wfalse", false)
+
+      word_kw?(s, "wnone") ->
+        parse_word_leaf(s, "wnone", :none)
+
+      word_kw?(s, "Opt") ->
+        parse_word_unary(s, "Opt", :opt)
+
+      word_kw?(s, "wsome") ->
+        parse_word_unary(s, "wsome", :some)
+
       word_kw?(s, "F32") ->
         leaf(s, :f32ty, after_kw(s, "F32"))
 
@@ -4060,16 +4099,85 @@ defmodule Muro.Parser do
         parse_binary(s, "Tensor", :tensor)
 
       word_kw?(s, "addi") ->
-        parse_binary(s, "addi", :addi)
+        parse_word_binary(s, "addi", :add)
+
+      word_kw?(s, "subi") ->
+        parse_word_binary(s, "subi", :sub)
 
       word_kw?(s, "muli") ->
-        parse_binary(s, "muli", :muli)
+        parse_word_binary(s, "muli", :mul)
+
+      word_kw?(s, "addc") ->
+        parse_word_binary(s, "addc", :cadd)
+
+      word_kw?(s, "subc") ->
+        parse_word_binary(s, "subc", :csub)
+
+      word_kw?(s, "mulc") ->
+        parse_word_binary(s, "mulc", :cmul)
+
+      word_kw?(s, "divi") ->
+        parse_word_binary(s, "divi", :div)
+
+      word_kw?(s, "remi") ->
+        parse_word_binary(s, "remi", :rem)
+
+      word_kw?(s, "eqi") ->
+        parse_word_binary(s, "eqi", :eq)
+
+      word_kw?(s, "lti") ->
+        parse_word_binary(s, "lti", :lt)
+
+      word_kw?(s, "lei") ->
+        parse_word_binary(s, "lei", :le)
+
+      word_kw?(s, "andi") ->
+        parse_word_binary(s, "andi", :and)
+
+      word_kw?(s, "ori") ->
+        parse_word_binary(s, "ori", :or)
+
+      word_kw?(s, "xori") ->
+        parse_word_binary(s, "xori", :xor)
+
+      word_kw?(s, "noti") ->
+        parse_word_unary(s, "noti", :not)
+
+      word_kw?(s, "shli") ->
+        parse_word_binary(s, "shli", :shl)
+
+      word_kw?(s, "shri") ->
+        parse_word_binary(s, "shri", :shr)
 
       word_kw?(s, "addt") ->
         parse_binary(s, "addt", :addt)
 
+      word_kw?(s, "toU8") ->
+        parse_word_unary(s, "toU8", {:of, :u8})
+
+      word_kw?(s, "toU32") ->
+        parse_word_unary(s, "toU32", {:of, :u32})
+
+      word_kw?(s, "toU64") ->
+        parse_word_unary(s, "toU64", {:of, :u64})
+
       word_kw?(s, "toI64") ->
-        parse_unary(s, "toI64", :toi64)
+        parse_word_unary(s, "toI64", {:of, :i64})
+
+      word_kw?(s, "toNat") ->
+        parse_word_unary(s, "toNat", :ton)
+
+      word_kw?(s, "asU8") ->
+        parse_word_unary(s, "asU8", {:cast, :u8})
+
+      word_kw?(s, "asU32") ->
+        parse_word_unary(s, "asU32", {:cast, :u32})
+
+      word_kw?(s, "asU64") ->
+        parse_word_unary(s, "asU64", {:cast, :u64})
+
+      word_kw?(s, "asI64") ->
+        parse_word_unary(s, "asI64", {:cast, :i64})
 
       word_kw?(s, "packI") ->
         parse_binary(s, "packI", :packi)
@@ -4089,8 +4197,8 @@ defmodule Muro.Parser do
       has_prefix?(s, "?") ->
         leaf(s, {:hole, here(s)}, after_kw(s, "?"))
 
-      has_prefix?(s, "0") ->
-        leaf(s, :ze, after_kw(s, "0"))
+      number?(s) ->
+        parse_nat_literal(s)
 
       word_kw?(s, "suc") ->
         parse_suc(s)
@@ -4261,6 +4369,26 @@ defmodule Muro.Parser do
 
     with {:ok, e, rest} <- parse_unary_arg(s, w) do
       ok_node(loc, {tag, e}, 1, rest)
+    end
+  end
+
+  defp parse_word_leaf(s, w, op), do: leaf(s, {:word, op, []}, after_kw(s, w))
+
+  defp parse_word_unary(s, w, op) do
+    loc = here(skip(s))
+
+    with {:ok, e, rest} <- parse_unary_arg(s, w) do
+      ok_node(loc, {:word, op, [e]}, 1, rest)
+    end
+  end
+
+  defp parse_word_binary(s, w, op) do
+    loc = here(skip(s))
+
+    with {:ok, rest} <- kw(s, w),
+         {:ok, a, rest} <- parse_atom(skip(rest)),
+         {:ok, b, rest} <- parse_atom(skip(rest)) do
+      ok_node(loc, {:word, op, [a, b]}, 2, rest)
     end
   end
 

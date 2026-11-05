@@ -228,7 +228,7 @@ defmodule Muro.Emit.Zig do
     with {:ok, {lines, ex, lay, eff, _st}} <- emit_tm(fun.body, env, st) do
       discards =
         []
-        |> alloc_discard(fun.body, st)
+        |> alloc_discard(fun.body, st, lines, ex)
         |> param_discards(params, fun.body)
 
       body = fn_body(discards ++ lines, coerce(force(ex, eff), lay, fun.ret, st))
@@ -285,7 +285,7 @@ defmodule Muro.Emit.Zig do
       with {:ok, {lines, ex, lay, eff, st}} <- emit_tm(fun.body, env, st) do
         target = pair_target(lay)
         expr = coerce(force(ex, eff), lay, target, st)
-        discards = alloc_discard([], fun.body, st)
+        discards = alloc_discard([], fun.body, st, lines, ex)
         body = fn_body(discards ++ pro ++ lines, expr)
         {:ok, "#{step_head(fun, st)} {\n#{body}\n}"}
       end
@@ -570,6 +570,23 @@ defmodule Muro.Emit.Zig do
     end
   end
 
+  defp emit_tm({:wrd, k, op, args}, env, st) do
+    with {:ok, {lines, exprs, lays, effs, st}} <- emit_list(args, env, st) do
+      forced =
+        exprs
+        |> Enum.zip(effs)
+        |> Enum.map(fn {ex, eff} -> force(ex, eff) end)
+
+      case word_zig(k, op, forced, lays, st) do
+        {:ok, {more, expr, lay, eff, st}} ->
+          {:ok, {lines ++ more, expr, lay, eff, st}}
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
   defp emit_tm(_other, _env, _st), do: {:error, "c:unsupported"}
 
   defp emit_list(ts, env, st) do
@@ -842,6 +859,7 @@ defmodule Muro.Emit.Zig do
 
   defp coerce(ex, :never, _to, _st), do: ex
   defp coerce(ex, from, to, _st) when from == to, do: ex
+  defp coerce("null", {:opt, _}, {:opt, _} = to, st), do: "@as(#{zty(to, st)}, null)"
 
   defp coerce(ex, from, to, st) do
     cond do
@@ -867,8 +885,213 @@ defmodule Muro.Emit.Zig do
   defp pair_target({:pair, _, _} = lay), do: lay
   defp pair_target(_), do: {:pair, :opaque, :opaque}
 
+  # Words are passed by value. Wrapping uses +%/-%/*%. Shifts and
+  # division are guarded so an out-of-range count or a zero divisor is
+  # never evaluated. Signed division also refuses INT64_MIN / −1.
+  defp word_zig(k, {:lit, k, n}, [], _lays, st) do
+    {:ok, {[], z_lit(k, n), k, :pure, st}}
+  end
+
+  defp word_zig(_k, true, [], _lays, st), do: {:ok, {[], "@as(u8, 1)", :wbool, :pure, st}}
+  defp word_zig(_k, false, [], _lays, st), do: {:ok, {[], "@as(u8, 0)", :wbool, :pure, st}}
+  defp word_zig(_k, :none, [], _lays, st), do: {:ok, {[], "null", {:opt, :opaque}, :pure, st}}
+
+  defp word_zig(k, {:of, k}, [nat], _lays, st) do
+    acc = "#{g("to_u64")}(#{nat})"
+
+    expr =
+      case k do
+        :u8 -> "@as(u8, @truncate(#{acc}))"
+        :u32 -> "@as(u32, @truncate(#{acc}))"
+        :u64 -> acc
+        :i64 -> "@as(i64, @bitCast(#{acc}))"
+      end
+
+    {:ok, {[], expr, k, :pure, st}}
+  end
+
+  defp word_zig(k, :ton, [x], _lays, st) do
+    bits = if k == :i64, do: "@as(u64, @bitCast(#{x}))", else: "@as(u64, #{x})"
+    {:ok, {[], "#{g("from_u64")}(#{al()}, #{bits})", :nat, :fail, st}}
+  end
+
+  defp word_zig(k, op, [x, y], _lays, st) when op in [:add, :sub, :mul] do
+    sym = %{add: "+%", sub: "-%", mul: "*%"}
+    {:ok, {[], "(#{x}) #{sym[op]} (#{y})", k, :pure, st}}
+  end
+
+  defp word_zig(k, op, [x, y], _lays, st) when op in [:and, :or, :xor] do
+    {:ok, {[], z_bit(op, k, x, y), k, :pure, st}}
+  end
+
+  defp word_zig(k, :not, [x], _lays, st), do: {:ok, {[], z_not(k, x), k, :pure, st}}
+
+  defp word_zig(_k, op, [x, y], _lays, st) when op in [:eq, :lt, :le] do
+    sym = %{eq: "==", lt: "<", le: "<="}
+    {:ok, {[], "@as(u8, @intFromBool((#{x}) #{sym[op]} (#{y})))", :wbool, :pure, st}}
+  end
+
+  defp word_zig(k, op, [x, y], _lays, st) when op in [:cadd, :csub, :cmul] do
+    z_checked(k, op, x, y, st)
+  end
+
+  defp word_zig(k, op, [x, y], _lays, st) when op in [:div, :rem] do
+    z_divrem(k, op, x, y, st)
+  end
+
+  defp word_zig(k, op, [x, amt], _lays, st) when op in [:shl, :shr] do
+    z_shift(k, op, x, amt, st)
+  end
+
+  defp word_zig(k, {:cast, k}, [x], [src | _], st) do
+    {:ok, {[], z_cast(k, src, x), k, :pure, st}}
+  end
+
+  defp word_zig(k, :some, [x], _lays, st) do
+    {:ok, {[], "@as(?#{zty(k, st)}, #{x})", {:opt, k}, :pure, st}}
+  end
+
+  defp word_zig(_k, _op, _args, _lays, _st), do: {:error, "c:unsupported"}
+
+  defp z_lit(:i64, n) do
+    n = rem(n, 18_446_744_073_709_551_616)
+
+    if n >= 9_223_372_036_854_775_808,
+      do: "@as(i64, @bitCast(@as(u64, #{n})))",
+      else: "@as(i64, #{n})"
+  end
+
+  defp z_lit(k, n) do
+    mod =
+      case k do
+        :u8 -> 256
+        :u32 -> 4_294_967_296
+        _ -> 18_446_744_073_709_551_616
+      end
+
+    "@as(#{k}, #{rem(n, mod)})"
+  end
+
+  defp z_bit(op, :i64, x, y) do
+    sym = %{and: "&", or: "|", xor: "^"}
+    "@as(i64, @bitCast(@as(u64, @bitCast(#{x})) #{sym[op]} @as(u64, @bitCast(#{y}))))"
+  end
+
+  defp z_bit(op, _k, x, y) do
+    sym = %{and: "&", or: "|", xor: "^"}
+    "(#{x}) #{sym[op]} (#{y})"
+  end
+
+  defp z_not(:i64, x), do: "@as(i64, @bitCast(~@as(u64, @bitCast(#{x}))))"
+  defp z_not(_k, x), do: "~(#{x})"
+
+  defp z_checked(k, op, x, y, st) do
+    {ov, st} = local(st, g("s"))
+    {out, st} = local(st, g("t"))
+    builtin = %{cadd: "@addWithOverflow", csub: "@subWithOverflow", cmul: "@mulWithOverflow"}
+
+    lines = [
+      "const #{ov} = #{builtin[op]}(#{x}, #{y});",
+      "const #{out}: ?#{zty(k, st)} = if (#{ov}[1] == 0) #{ov}[0] else null;"
+    ]
+
+    {:ok, {lines, out, {:opt, k}, :pure, st}}
+  end
+
+  defp z_divrem(k, op, x, y, st) do
+    {out, st} = local(st, g("t"))
+    fnm = if op == :div, do: "@divTrunc", else: "@rem"
+
+    lines = [
+      "const #{out}: ?#{zty(k, st)} = if (#{z_div_guard(k, x, y)}) null else #{fnm}(#{x}, #{y});"
+    ]
+
+    {:ok, {lines, out, {:opt, k}, :pure, st}}
+  end
+
+  defp z_div_guard(:i64, x, y) do
+    "#{y} == 0 or (@as(u64, @bitCast(#{x})) == (@as(u64, 1) << 63) and @as(u64, @bitCast(#{y})) == ~@as(u64, 0))"
+  end
+
+  defp z_div_guard(_k, _x, y), do: "#{y} == 0"
+
+  defp z_shift(k, op, x, amt, st) do
+    {sh, st} = local(st, g("s"))
+    {p, st} = local(st, g("p"))
+    {out, st} = local(st, g("t"))
+    {lab, st} = fresh_label(st)
+    w = z_width(k)
+    zero = g("tag_zero")
+    suc = g("tag_suc")
+    nxt = g("n")
+
+    lines = [
+      "var #{sh}: u32 = 0;",
+      "var #{p} = #{amt};",
+      "#{lab}: while (#{sh} + 1 < #{w}) {",
+      "    switch (#{p}.*) {",
+      "        .#{zero} => break :#{lab},",
+      "        .#{suc} => |#{nxt}| { #{sh} += 1; #{p} = #{nxt}; },",
+      "    }",
+      "}",
+      "const #{out}: #{zty(k, st)} = if (switch (#{p}.*) { .#{zero} => false, .#{suc} => true, }) #{z_shift_oob(k, op, x)} else #{z_shift_in(k, op, x, sh)};"
+    ]
+
+    {:ok, {lines, out, k, :pure, st}}
+  end
+
+  defp z_width(:u8), do: 8
+  defp z_width(:u32), do: 32
+  defp z_width(_), do: 64
+
+  defp z_shamt(:u8), do: "u3"
+  defp z_shamt(:u32), do: "u5"
+  defp z_shamt(_), do: "u6"
+
+  defp z_shift_oob(_k, :shl, _x), do: "0"
+  defp z_shift_oob(k, :shr, _x) when k != :i64, do: "0"
+
+  defp z_shift_oob(:i64, :shr, x) do
+    "if (@as(u64, @bitCast(#{x})) >= (@as(u64, 1) << 63)) @as(i64, -1) else @as(i64, 0)"
+  end
+
+  defp z_shift_in(k, :shl, x, sh) when k != :i64 do
+    "#{x} << @as(#{z_shamt(k)}, @intCast(#{sh}))"
+  end
+
+  defp z_shift_in(:i64, :shl, x, sh) do
+    "@as(i64, @bitCast(@as(u64, @bitCast(#{x})) << @as(u6, @intCast(#{sh}))))"
+  end
+
+  defp z_shift_in(k, :shr, x, sh) when k != :i64 do
+    "#{x} >> @as(#{z_shamt(k)}, @intCast(#{sh}))"
+  end
+
+  defp z_shift_in(:i64, :shr, x, sh) do
+    "#{x} >> @as(u6, @intCast(#{sh}))"
+  end
+
+  defp z_cast(k, src, x), do: z_from_u64(k, z_as_u64(src, x))
+
+  defp z_as_u64(:i64, x), do: "@as(u64, @bitCast(#{x}))"
+  defp z_as_u64(:u64, x), do: "(#{x})"
+  defp z_as_u64(_src, x), do: "@as(u64, #{x})"
+
+  defp z_from_u64(:u8, bits), do: "@as(u8, @truncate(#{bits}))"
+  defp z_from_u64(:u32, bits), do: "@as(u32, @truncate(#{bits}))"
+  defp z_from_u64(:u64, bits), do: "(#{bits})"
+  defp z_from_u64(:i64, bits), do: "@as(i64, @bitCast(#{bits}))"
+
+  defp pty(lay, st) when lay in [:u8, :u32, :u64, :i64, :wbool], do: zty(lay, st)
+  defp pty({:opt, _} = lay, st), do: zty(lay, st)
   defp pty(lay, st), do: "*const " <> zty(lay, st)
 
+  defp zty(:u8, _st), do: "u8"
+  defp zty(:u32, _st), do: "u32"
+  defp zty(:u64, _st), do: "u64"
+  defp zty(:i64, _st), do: "i64"
+  defp zty(:wbool, _st), do: "u8"
+  defp zty({:opt, pay}, st), do: "?" <> pty(pay, st)
   defp zty(:nat, _st), do: g("Nat")
   defp zty(:unit, _st), do: g("Unit")
   defp zty(:opaque, _st), do: "anyopaque"
@@ -939,6 +1162,16 @@ defmodule Muro.Emit.Zig do
   end
 
   defp type_layout(book, {:ann, e, _}), do: type_layout(book, e)
+  defp type_layout(_book, :i64), do: :i64
+  defp type_layout(_book, {:word, {:ty, :u8}, []}), do: :u8
+  defp type_layout(_book, {:word, {:ty, :u32}, []}), do: :u32
+  defp type_layout(_book, {:word, {:ty, :u64}, []}), do: :u64
+  defp type_layout(_book, {:word, :bool, []}), do: :wbool
+  defp type_layout(_book, {:word, {:optk, :u8}, []}), do: {:opt, :u8}
+  defp type_layout(_book, {:word, {:optk, :u32}, []}), do: {:opt, :u32}
+  defp type_layout(_book, {:word, {:optk, :u64}, []}), do: {:opt, :u64}
+  defp type_layout(_book, {:word, {:optk, :i64}, []}), do: {:opt, :i64}
+  defp type_layout(book, {:word, :opt, [a]}), do: {:opt, type_layout(book, a)}
   defp type_layout(_book, _), do: :opaque
 
   defp telescope(t), do: telescope(t, [])
@@ -994,8 +1227,18 @@ defmodule Muro.Emit.Zig do
     {name, %{st | blk: st.blk + 1, scope: scope}}
   end
 
-  defp alloc_discard(lines, body, st) do
-    if mentions_alloc?(body, st), do: lines, else: lines ++ ["_ = #{al()};"]
+  # ofNat and toNat name the allocator in the emitted text. Discarding a
+  # parameter that text also names is an error, so the scan sees the
+  # statements and the result expression, not only the source term.
+  defp alloc_discard(prefix, body, st, lines, expr) do
+    name = al()
+
+    used =
+      mentions_alloc?(body, st) or
+        Enum.any?(lines, &String.contains?(&1, name)) or
+        String.contains?(expr, name)
+
+    if used, do: prefix, else: prefix ++ ["_ = #{name};"]
   end
 
   defp param_discards(lines, params, body) do

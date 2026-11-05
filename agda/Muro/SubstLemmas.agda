@@ -80,6 +80,7 @@ mutual
   ren-ext h (addt t u) rewrite ren-ext h t | ren-ext h u = refl
   ren-ext h (toi64 t) rewrite ren-ext h t = refl
   ren-ext h (packi x y) rewrite ren-ext h x | ren-ext h y = refl
+  ren-ext h (word op ts) rewrite renList-ext h ts = refl
 
   renList-ext : ∀ {n m} {ρ ρ′ : Fin n → Fin m} → ρ ≗ ρ′ → (ts : List (Tm n))
     → renList ρ ts ≡ renList ρ′ ts
@@ -130,6 +131,7 @@ mutual
   sub-ext h (addt t u) rewrite sub-ext h t | sub-ext h u = refl
   sub-ext h (toi64 t) rewrite sub-ext h t = refl
   sub-ext h (packi x y) rewrite sub-ext h x | sub-ext h y = refl
+  sub-ext h (word op ts) rewrite subList-ext h ts = refl
 
   subList-ext : ∀ {n m} {σ σ′ : Fin n → Tm m} → σ ≗ σ′ → (ts : List (Tm n))
     → subList σ ts ≡ subList σ′ ts
@@ -188,6 +190,7 @@ mutual
   ren-id (addt t u) rewrite ren-id t | ren-id u = refl
   ren-id (toi64 t) rewrite ren-id t = refl
   ren-id (packi x y) rewrite ren-id x | ren-id y = refl
+  ren-id (word op ts) rewrite renList-id ts = refl
 
   renList-id : ∀ {n} (ts : List (Tm n)) → renList (λ x → x) ts ≡ ts
   renList-id [] = refl
@@ -256,6 +259,7 @@ mutual
   ren-ren ρ ρ′ (addt t u) rewrite ren-ren ρ ρ′ t | ren-ren ρ ρ′ u = refl
   ren-ren ρ ρ′ (toi64 t) rewrite ren-ren ρ ρ′ t = refl
   ren-ren ρ ρ′ (packi x y) rewrite ren-ren ρ ρ′ x | ren-ren ρ ρ′ y = refl
+  ren-ren ρ ρ′ (word op ts) rewrite renList-ren ρ ρ′ ts = refl
 
   renList-ren : ∀ {n m k} (ρ : Fin m → Fin k) (ρ′ : Fin n → Fin m)
     (ts : List (Tm n)) → renList ρ (renList ρ′ ts) ≡ renList (λ x → ρ (ρ′ x)) ts
@@ -325,6 +329,7 @@ mutual
   sub-ren σ ρ (addt t u) rewrite sub-ren σ ρ t | sub-ren σ ρ u = refl
   sub-ren σ ρ (toi64 t) rewrite sub-ren σ ρ t = refl
   sub-ren σ ρ (packi x y) rewrite sub-ren σ ρ x | sub-ren σ ρ y = refl
+  sub-ren σ ρ (word op ts) rewrite subList-ren σ ρ ts = refl
 
   subList-ren : ∀ {n m k} (σ : Fin m → Tm k) (ρ : Fin n → Fin m)
     (ts : List (Tm n)) → subList σ (renList ρ ts) ≡ subList (λ x → σ (ρ x)) ts
@@ -395,6 +400,7 @@ mutual
   ren-sub ρ σ (addt t u) rewrite ren-sub ρ σ t | ren-sub ρ σ u = refl
   ren-sub ρ σ (toi64 t) rewrite ren-sub ρ σ t = refl
   ren-sub ρ σ (packi x y) rewrite ren-sub ρ σ x | ren-sub ρ σ y = refl
+  ren-sub ρ σ (word op ts) rewrite renList-sub ρ σ ts = refl
 
   renList-sub : ∀ {n m k} (ρ : Fin m → Fin k) (σ : Fin n → Tm m)
     (ts : List (Tm n)) → renList ρ (subList σ ts) ≡ subList (λ x → ren ρ (σ x)) ts
@@ -465,6 +471,7 @@ mutual
   sub-sub σ τ (addt t u) rewrite sub-sub σ τ t | sub-sub σ τ u = refl
   sub-sub σ τ (toi64 t) rewrite sub-sub σ τ t = refl
   sub-sub σ τ (packi x y) rewrite sub-sub σ τ x | sub-sub σ τ y = refl
+  sub-sub σ τ (word op ts) rewrite subList-sub σ τ ts = refl
 
   subList-sub : ∀ {n m k} (σ : Fin m → Tm k) (τ : Fin n → Tm m)
     (ts : List (Tm n)) → subList σ (subList τ ts) ≡ subList (λ x → sub σ (τ x)) ts
@@ -535,6 +542,7 @@ mutual
   ren-is-sub ρ (addt t u) rewrite ren-is-sub ρ t | ren-is-sub ρ u = refl
   ren-is-sub ρ (toi64 t) rewrite ren-is-sub ρ t = refl
   ren-is-sub ρ (packi x y) rewrite ren-is-sub ρ x | ren-is-sub ρ y = refl
+  ren-is-sub ρ (word op ts) rewrite renList-is-sub ρ ts = refl
 
   renList-is-sub : ∀ {n m} (ρ : Fin n → Fin m) (ts : List (Tm n))
     → renList ρ ts ≡ subList (λ x → var (ρ x)) ts
@@ -717,6 +725,8 @@ mutual
   renM-sound ρ? ρ h (toi64 t) refl | ok t′ = cong toi64 (renM-sound ρ? ρ h t et)
   renM-sound ρ? ρ h (packi x y) eq with renM ρ? x in ex | renM ρ? y in ey
   renM-sound ρ? ρ h (packi x y) refl | ok x′ | ok y′ = cong₂ packi (renM-sound ρ? ρ h x ex) (renM-sound ρ? ρ h y ey)
+  renM-sound ρ? ρ h (word op ts) eq with renMList ρ? ts in ets
+  renM-sound ρ? ρ h (word op ts) refl | ok ts′ = cong (word op) (renMList-sound ρ? ρ h ts ets)
 
   renMList-sound : ∀ {n m} (ρ? : Fin n → Result (Fin m)) (ρ : Fin m → Fin n) → Inv ρ? ρ
     → (ts : List (Tm n)) {us : List (Tm m)} → renMList ρ? ts ≡ ok us → renList ρ us ≡ ts

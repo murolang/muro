@@ -18,6 +18,7 @@ defmodule Muro.Ast do
           | {:app, named, named}
           | :nat
           | :ze
+          | {:nat, non_neg_integer()}
           | {:su, named}
           | :unit
           | :one
@@ -51,6 +52,7 @@ defmodule Muro.Ast do
           | {:addt, named, named}
           | {:toi64, named}
           | {:packi, named, named}
+          | {:word, word_op(), [named]}
           | {:hole, {pos_integer(), pos_integer()} | nil}
 
   # de Bruijn. Indices count from the nearest binder (0). Binder
@@ -63,6 +65,7 @@ defmodule Muro.Ast do
           | {:app, db, db}
           | :nat
           | :ze
+          | {:nat, non_neg_integer()}
           | {:su, db}
           | :unit
           | :one
@@ -94,7 +97,41 @@ defmodule Muro.Ast do
           | {:addt, db, db}
           | {:toi64, db}
           | {:packi, db, db}
+          | {:word, word_op(), [db]}
           | {:hole, {pos_integer(), pos_integer()} | nil}
+
+  @type word_kind :: :u8 | :u32 | :u64 | :i64
+
+  @type word_op ::
+          {:ty, :u8 | :u32 | :u64}
+          | {:lit, word_kind(), non_neg_integer()}
+          | {:of, word_kind()}
+          | :ton
+          | :add
+          | :sub
+          | :mul
+          | :cadd
+          | :csub
+          | :cmul
+          | :div
+          | :rem
+          | :eq
+          | :lt
+          | :le
+          | :and
+          | :or
+          | :xor
+          | :not
+          | :shl
+          | :shr
+          | {:cast, word_kind()}
+          | :bool
+          | true
+          | false
+          | :opt
+          | {:optk, word_kind()}
+          | :some
+          | :none
 
   @type defn :: %{
           name: name,
@@ -137,6 +174,7 @@ defmodule Muro.Ast do
       {:addt, a, b} -> [a, b]
       {:toi64, a} -> [a]
       {:packi, a, b} -> [a, b]
+      {:word, _, args} -> args
       {:nu, _, f} -> [f]
       _ -> []
     end
@@ -154,6 +192,7 @@ defmodule Muro.Ast do
   def to_db(:typ, _), do: {:ok, :typ}
   def to_db(:nat, _), do: {:ok, :nat}
   def to_db(:ze, _), do: {:ok, :ze}
+  def to_db({:nat, n}, _) when is_integer(n) and n >= 0, do: {:ok, {:nat, n}}
   def to_db(:unit, _), do: {:ok, :unit}
   def to_db(:one, _), do: {:ok, :one}
   def to_db(:empty, _), do: {:ok, :empty}
@@ -313,6 +352,10 @@ defmodule Muro.Ast do
          do: {:ok, {:addt, t1, u1}}
   end
 
+  def to_db({:word, op, args}, env) do
+    with {:ok, args1} <- to_db_list(args, env), do: {:ok, {:word, op, args1}}
+  end
+
   def to_db({:packi, x, y}, env) do
     with {:ok, x1} <- to_db(x, env),
          {:ok, y1} <- to_db(y, env),
@@ -329,6 +372,15 @@ defmodule Muro.Ast do
 
   defp map1(t, env, f) do
     with {:ok, t1} <- to_db(t, env), do: {:ok, f.(t1)}
+  end
+
+  defp to_db_list(ts, env) do
+    Enum.reduce_while(ts, {:ok, []}, fn t, {:ok, acc} ->
+      case to_db(t, env) do
+        {:ok, t1} -> {:cont, {:ok, acc ++ [t1]}}
+        err -> {:halt, err}
+      end
+    end)
   end
 
   defp to_db_atom_branches(branches, env) do

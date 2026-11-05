@@ -42,6 +42,9 @@ defmodule Muro.Subst do
       :ze ->
         :ze
 
+      {:nat, n} when is_integer(n) ->
+        {:nat, n}
+
       {:su, u} ->
         {:su, ren(rho, u)}
 
@@ -135,6 +138,9 @@ defmodule Muro.Subst do
 
       {:packi, x, y} ->
         {:packi, ren(rho, x), ren(rho, y)}
+
+      {:word, op, args} ->
+        {:word, op, Enum.map(args, &ren(rho, &1))}
     end
   end
 
@@ -190,6 +196,9 @@ defmodule Muro.Subst do
 
       :ze ->
         :ze
+
+      {:nat, n} when is_integer(n) ->
+        {:nat, n}
 
       {:su, u} ->
         {:su, sub(sigma, u)}
@@ -285,6 +294,9 @@ defmodule Muro.Subst do
 
       {:packi, x, y} ->
         {:packi, sub(sigma, x), sub(sigma, y)}
+
+      {:word, op, args} ->
+        {:word, op, Enum.map(args, &sub(sigma, &1))}
     end
   end
 

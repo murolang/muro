@@ -11,7 +11,8 @@ defmodule Muro.IR do
   them, so the same arm there is `b` plus the context length.
 
   Layouts: `:nat`, `:unit`, `:opaque`, `{:pair, a, b}`, `{:stream, a}`,
-  `{:data, name}`. `{:data, name}` is `dataL`.
+  `{:data, name}`, `:u8`, `:u32`, `:u64`, `:i64`, `:wbool`, `{:opt, payload}`.
+  `{:data, name}` is `dataL`. A word term is `{:wrd, kind, op, args}`.
   """
 
   alias Muro.{Ast, Load, Prelude}
@@ -331,6 +332,15 @@ defmodule Muro.IR do
   defp elab_form(_st, {:unf, _, _}, _ctx, _k), do: {:error, "c:lambda"}
   defp elab_form(_st, {:lam, _, _, _, _}, _ctx, _k), do: {:error, "c:lambda"}
 
+  defp elab_form(st, {:word, op, args}, ctx, k) do
+    with {:ok, {tms, lays, steps, k1}} <- elab_words(st, args, ctx, k) do
+      case word_image(op, tms, lays) do
+        {:ok, {tm, lay}} -> ok(tm, lay, steps, k1)
+        {:error, _} = err -> err
+      end
+    end
+  end
+
   defp elab_form(_st, t, _ctx, _k) do
     case bad_head(t) do
       nil -> {:error, "c:unsupported"}
@@ -474,6 +484,20 @@ defmodule Muro.IR do
 
   defp layout_of(_st, {:nu, _, _}), do: {:error, "c:stream"}
   defp layout_of(_st, {:nu, _}), do: {:error, "c:stream"}
+  defp layout_of(_st, :i64), do: {:ok, :i64}
+  defp layout_of(_st, {:word, {:ty, :u8}, []}), do: {:ok, :u8}
+  defp layout_of(_st, {:word, {:ty, :u32}, []}), do: {:ok, :u32}
+  defp layout_of(_st, {:word, {:ty, :u64}, []}), do: {:ok, :u64}
+  defp layout_of(_st, {:word, :bool, []}), do: {:ok, :wbool}
+  defp layout_of(_st, {:word, {:optk, k}, []}), do: {:ok, {:opt, word_lay(k)}}
+
+  defp layout_of(st, {:word, :opt, [a]}) do
+    with {:ok, lay} <- layout_of(st, a) do
+      {:ok, {:opt, lay}}
+    end
+  end
+
+  defp layout_of(_st, {:word, _, _}), do: {:error, "c:unsupported"}
   defp layout_of(_st, t), do: head_refusal(t)
 
   defp motive_lay(st, {:lam, _, _, x, body}, scr, _binder), do: motive_lay(st, body, scr, x)
@@ -487,7 +511,6 @@ defmodule Muro.IR do
     end
   end
 
-  defp bad_head(:i64), do: "c:machine"
   defp bad_head(:f32ty), do: "c:machine"
   defp bad_head({:tensor, _, _}), do: "c:machine"
   defp bad_head({:addi, _, _}), do: "c:machine"
@@ -501,6 +524,103 @@ defmodule Muro.IR do
   defp bad_head({:always, _, _}), do: "c:stream"
   defp bad_head({:bisim, _, _}), do: "c:stream"
   defp bad_head(_), do: nil
+
+  defp elab_words(_st, [], _ctx, k), do: {:ok, {[], [], [], k}}
+
+  defp elab_words(st, [t | ts], ctx, k) do
+    with {:ok, e} <- elab(st, t, ctx, k),
+         {:ok, {tms, lays, steps, k1}} <- elab_words(st, ts, ctx, e.k) do
+      {:ok, {[e.tm | tms], [e.lay | lays], e.steps ++ steps, k1}}
+    end
+  end
+
+  defp word_lay(:u8), do: :u8
+  defp word_lay(:u32), do: :u32
+  defp word_lay(:u64), do: :u64
+  defp word_lay(:i64), do: :i64
+
+  defp lay_kind(:u8), do: :u8
+  defp lay_kind(:u32), do: :u32
+  defp lay_kind(:u64), do: :u64
+  defp lay_kind(:i64), do: :i64
+  defp lay_kind(_), do: nil
+
+  defp same_kind(lx, ly) do
+    case {lay_kind(lx), lay_kind(ly)} do
+      {k, k} when k != nil -> k
+      _ -> nil
+    end
+  end
+
+  defp bin_w(ret, op, [x, y], [lx, ly]) do
+    case same_kind(lx, ly) do
+      nil -> {:error, "c:unsupported"}
+      k -> {:ok, {{:wrd, k, op, [x, y]}, ret.(k)}}
+    end
+  end
+
+  defp bin_w(_ret, _op, _ts, _ls), do: {:error, "c:unsupported"}
+
+  # wnone has no payload kind. {:opt, :opaque} is a placeholder; the
+  # function return layout still comes from the declared type.
+  defp word_image({:lit, k, n}, [], []), do: {:ok, {{:wrd, k, {:lit, k, n}, []}, word_lay(k)}}
+  defp word_image({:of, k}, [t], [:nat]), do: {:ok, {{:wrd, k, {:of, k}, [t]}, word_lay(k)}}
+
+  defp word_image(:ton, [t], [lay]) do
+    case lay_kind(lay) do
+      nil -> {:error, "c:unsupported"}
+      k -> {:ok, {{:wrd, k, :ton, [t]}, :nat}}
+    end
+  end
+
+  defp word_image(:add, ts, ls), do: bin_w(&word_lay/1, :add, ts, ls)
+  defp word_image(:sub, ts, ls), do: bin_w(&word_lay/1, :sub, ts, ls)
+  defp word_image(:mul, ts, ls), do: bin_w(&word_lay/1, :mul, ts, ls)
+  defp word_image(:and, ts, ls), do: bin_w(&word_lay/1, :and, ts, ls)
+  defp word_image(:or, ts, ls), do: bin_w(&word_lay/1, :or, ts, ls)
+  defp word_image(:xor, ts, ls), do: bin_w(&word_lay/1, :xor, ts, ls)
+
+  defp word_image(op, ts, ls) when op in [:cadd, :csub, :cmul, :div, :rem] do
+    bin_w(fn k -> {:opt, word_lay(k)} end, op, ts, ls)
+  end
+
+  defp word_image(op, ts, ls) when op in [:eq, :lt, :le] do
+    bin_w(fn _k -> :wbool end, op, ts, ls)
+  end
+
+  defp word_image(:not, [t], [lay]) do
+    case lay_kind(lay) do
+      nil -> {:error, "c:unsupported"}
+      k -> {:ok, {{:wrd, k, :not, [t]}, word_lay(k)}}
+    end
+  end
+
+  defp word_image(op, [x, a], [lx, :nat]) when op in [:shl, :shr] do
+    case lay_kind(lx) do
+      nil -> {:error, "c:unsupported"}
+      k -> {:ok, {{:wrd, k, op, [x, a]}, word_lay(k)}}
+    end
+  end
+
+  defp word_image({:cast, k}, [t], [lay]) do
+    case lay_kind(lay) do
+      nil -> {:error, "c:unsupported"}
+      _ -> {:ok, {{:wrd, k, {:cast, k}, [t]}, word_lay(k)}}
+    end
+  end
+
+  defp word_image(true, [], []), do: {:ok, {{:wrd, :u8, true, []}, :wbool}}
+  defp word_image(false, [], []), do: {:ok, {{:wrd, :u8, false, []}, :wbool}}
+
+  defp word_image(:some, [t], [lay]) do
+    case lay_kind(lay) do
+      nil -> {:error, "c:unsupported"}
+      k -> {:ok, {{:wrd, k, :some, [t]}, {:opt, word_lay(k)}}}
+    end
+  end
+
+  defp word_image(:none, [], []), do: {:ok, {{:wrd, :u8, :none, []}, {:opt, :opaque}}}
+  defp word_image(_op, _ts, _ls), do: {:error, "c:unsupported"}
 
   defp pair_halves({:pair, a, b}), do: {a, b}
   defp pair_halves(_), do: {:opaque, :opaque}

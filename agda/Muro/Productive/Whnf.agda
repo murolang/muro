@@ -13,6 +13,7 @@ module Muro.Productive.Whnf where
 
 open import Data.Bool.Base using (Bool; true; false)
 open import Data.Empty using (⊥-elim)
+open import Data.List.Base using (List; []; _∷_)
 open import Data.Maybe.Base using (just; nothing)
 open import Data.Nat.Base using (ℕ; zero; suc)
 import Data.Fin.Base as Fin
@@ -25,7 +26,8 @@ open import Muro.Syntax
 open import Muro.Subst using (closed; inst; inst₂; appsFrom)
 open import Muro.Env using (Sig; Def; lookupDef; lookupList; allowedDef)
 open import Muro.Spine using (ctorSpine; ctorSpine-just)
-open import Muro.Check using (whnf; uconsWhnf; dataWhnf; fail≢ok)
+open import Muro.Check using (whnf; whnfList; uconsWhnf; dataWhnf; fail≢ok)
+open import Muro.Word using (wordStep)
 open import Muro.Reduction
 
 ok-inj : ∀ {A : Set} {x y : A} → ok x ≡ ok y → x ≡ y
@@ -132,6 +134,7 @@ ucons-go k σ (unf (muli wx wy) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf 
 ucons-go k σ (unf (addt wt wu) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (addt wt wu) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf (toi64 wt) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (toi64 wt) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf (packi wx wy) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (packi wx wy) (lam q1 A1 (var Fin.zero))) v eq
+ucons-go k σ (unf (word wop wts) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (word wop wts) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf s (lam q1 A1 (var (Fin.suc y)))) v eq =
   stay σ (unf s (lam q1 A1 (var (Fin.suc y)))) v eq
 ucons-go k σ (unf s (lam q1 A1 (typ))) v eq = stay σ (unf s (lam q1 A1 (typ))) v eq
@@ -168,6 +171,7 @@ ucons-go k σ (unf s (lam q1 A1 (muli wx wy))) v eq = stay σ (unf s (lam q1 A1 
 ucons-go k σ (unf s (lam q1 A1 (addt wt wu))) v eq = stay σ (unf s (lam q1 A1 (addt wt wu))) v eq
 ucons-go k σ (unf s (lam q1 A1 (toi64 wt))) v eq = stay σ (unf s (lam q1 A1 (toi64 wt))) v eq
 ucons-go k σ (unf s (lam q1 A1 (packi wx wy))) v eq = stay σ (unf s (lam q1 A1 (packi wx wy))) v eq
+ucons-go k σ (unf s (lam q1 A1 (word wop wts))) v eq = stay σ (unf s (lam q1 A1 (word wop wts))) v eq
 ucons-go k σ (unf s (var wx)) v eq = stay σ (unf s (var wx)) v eq
 ucons-go k σ (unf s (typ)) v eq = stay σ (unf s (typ)) v eq
 ucons-go k σ (unf s (pi wq wA wB)) v eq = stay σ (unf s (pi wq wA wB)) v eq
@@ -202,6 +206,7 @@ ucons-go k σ (unf s (muli wx wy)) v eq = stay σ (unf s (muli wx wy)) v eq
 ucons-go k σ (unf s (addt wt wu)) v eq = stay σ (unf s (addt wt wu)) v eq
 ucons-go k σ (unf s (toi64 wt)) v eq = stay σ (unf s (toi64 wt)) v eq
 ucons-go k σ (unf s (packi wx wy)) v eq = stay σ (unf s (packi wx wy)) v eq
+ucons-go k σ (unf s (word wop wts)) v eq = stay σ (unf s (word wop wts)) v eq
 ucons-go k σ (var wx) v eq = stay σ (var wx) v eq
 ucons-go k σ (typ) v eq = stay σ (typ) v eq
 ucons-go k σ (pi wq wA wB) v eq = stay σ (pi wq wA wB) v eq
@@ -237,9 +242,52 @@ ucons-go k σ (muli wx wy) v eq = stay σ (muli wx wy) v eq
 ucons-go k σ (addt wt wu) v eq = stay σ (addt wt wu) v eq
 ucons-go k σ (toi64 wt) v eq = stay σ (toi64 wt) v eq
 ucons-go k σ (packi wx wy) v eq = stay σ (packi wx wy) v eq
+ucons-go k σ (word wop wts) v eq = stay σ (word wop wts) v eq
 
 byRefl : ∀ {n} (σ : Sig) (t v : Tm n) → ok t ≡ ok v → σ ⊢[ spec ] t ⇛* v
 byRefl σ t v eq = subst (λ z → σ ⊢[ spec ] t ⇛* z) (ok-inj eq) ⇛*-refl
+
+-- A pointwise reduction of arguments is a chain of word congruences.
+-- ⇛-word is one parallel step, so each argument's ⇛* is replayed alone.
+data OnlyWord {σ n} (op : WOp) : Tm n → Tm n → Set where
+  ow-refl : ∀ {t} → OnlyWord {σ} op t t
+  ow-step : ∀ {ts ts′ u}
+    → σ ⊢[ spec ] ts ⇛L ts′
+    → OnlyWord {σ} op (word op ts′) u
+    → OnlyWord {σ} op (word op ts) u
+
+ow-trans : ∀ {σ n} {op : WOp} {t u v : Tm n}
+  → OnlyWord {σ} op t u → OnlyWord {σ} op u v → OnlyWord {σ} op t v
+ow-trans ow-refl q = q
+ow-trans (ow-step st r) q = ow-step st (ow-trans r q)
+
+only* : ∀ {σ n} {op : WOp} {t u : Tm n}
+  → OnlyWord {σ} op t u → σ ⊢[ spec ] t ⇛* u
+only* ow-refl = ⇛*-refl
+only* (ow-step st r) = ⇛*-step (⇛-word st) (only* r)
+
+word-cong* : ∀ {σ n} {op : WOp} {ts ts′ : List (Tm n)}
+  → σ ⊢[ spec ] ts ⇛L* ts′
+  → σ ⊢[ spec ] word op ts ⇛* word op ts′
+word-cong* {σ} {op = op} red = only* (go red)
+  where
+  pad : ∀ {ts ts′} (t : Tm _)
+    → OnlyWord {σ} op (word op ts) (word op ts′)
+    → OnlyWord {σ} op (word op (t ∷ ts)) (word op (t ∷ ts′))
+  pad _ ow-refl = ow-refl
+  pad t (ow-step st r) = ow-step (⇛L-∷ (⇛-refl t) st) (pad t r)
+
+  headOW : ∀ {a a′} (as : List (Tm _))
+    → σ ⊢[ spec ] a ⇛* a′
+    → OnlyWord {σ} op (word op (a ∷ as)) (word op (a′ ∷ as))
+  headOW _ ⇛*-refl = ow-refl
+  headOW as (⇛*-step d r) = ow-step (⇛L-∷ d (⇛L-refl as)) (headOW as r)
+
+  go : ∀ {ts ts′} → σ ⊢[ spec ] ts ⇛L* ts′
+    → OnlyWord {σ} op (word op ts) (word op ts′)
+  go ⇛L*-[] = ow-refl
+  go (⇛L*-∷ {a′ = a′} {as = as} ra ras) =
+    ow-trans (headOW as ra) (pad a′ (go ras))
 
 whnf-red : ∀ {n} k (σ : Sig) (t v : Tm n)
   → whnf k σ t ≡ ok v
@@ -322,6 +370,8 @@ whnf-red (suc k) σ (app f a) v eq | ok (toi64 wt) with whnf-red k σ f (toi64 w
 ... | r | refl = app-star r
 whnf-red (suc k) σ (app f a) v eq | ok (packi wx wy) with whnf-red k σ f (packi wx wy) weq | ok-inj eq
 ... | r | refl = app-star r
+whnf-red (suc k) σ (app f a) v eq | ok (word wop wts) with whnf-red k σ f (word wop wts) weq | ok-inj eq
+... | r | refl = app-star r
 whnf-red (suc k) σ (mNat e P z s) v eq with whnf k σ e in weq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok ze =
@@ -401,6 +451,8 @@ whnf-red (suc k) σ (mNat e P z s) v eq | ok (toi64 wt) with whnf-red k σ e (to
 ... | r | refl = mNat-star r
 whnf-red (suc k) σ (mNat e P z s) v eq | ok (packi wx wy) with whnf-red k σ e (packi wx wy) weq | ok-inj eq
 ... | r | refl = mNat-star r
+whnf-red (suc k) σ (mNat e P z s) v eq | ok (word wop wts) with whnf-red k σ e (word wop wts) weq | ok-inj eq
+... | r | refl = mNat-star r
 whnf-red (suc k) σ (mUnit e P u) v eq with whnf k σ e in weq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok one =
@@ -477,6 +529,8 @@ whnf-red (suc k) σ (mUnit e P u) v eq | ok (addt wt wu) with whnf-red k σ e (a
 whnf-red (suc k) σ (mUnit e P u) v eq | ok (toi64 wt) with whnf-red k σ e (toi64 wt) weq | ok-inj eq
 ... | r | refl = mUnit-star r
 whnf-red (suc k) σ (mUnit e P u) v eq | ok (packi wx wy) with whnf-red k σ e (packi wx wy) weq | ok-inj eq
+... | r | refl = mUnit-star r
+whnf-red (suc k) σ (mUnit e P u) v eq | ok (word wop wts) with whnf-red k σ e (word wop wts) weq | ok-inj eq
 ... | r | refl = mUnit-star r
 whnf-red (suc k) σ (mEmp e P) v eq with whnf k σ e in weq
 ... | fail _ = ⊥-elim (fail≢ok eq)
@@ -574,6 +628,8 @@ whnf-red (suc k) σ (letp e t) v eq | ok (toi64 wt) with whnf-red k σ e (toi64 
 ... | r | refl = letp-star r
 whnf-red (suc k) σ (letp e t) v eq | ok (packi wx wy) with whnf-red k σ e (packi wx wy) weq | ok-inj eq
 ... | r | refl = letp-star r
+whnf-red (suc k) σ (letp e t) v eq | ok (word wop wts) with whnf-red k σ e (word wop wts) weq | ok-inj eq
+... | r | refl = letp-star r
 whnf-red (suc k) σ (def i) v eq with lookupDef σ i in leq
 ... | fail _ = byRefl σ (def i) v eq
 ... | ok d =
@@ -613,4 +669,34 @@ whnf-red (suc k) σ (muli wx wy) v eq = byRefl σ (muli wx wy) v eq
 whnf-red (suc k) σ (addt wt wu) v eq = byRefl σ (addt wt wu) v eq
 whnf-red (suc k) σ (toi64 wt) v eq = byRefl σ (toi64 wt) v eq
 whnf-red (suc k) σ (packi wx wy) v eq = byRefl σ (packi wx wy) v eq
+whnf-red {n} (suc k) σ (word op ts) v eq = word-red eq
+  where
+  -- whnfList shares the outer fuel, so each recursive whnf-red is on k.
+  listRed : ∀ {m} {us us′ : List (Tm n)}
+    → whnfList m σ us ≡ ok us′
+    → σ ⊢[ spec ] us ⇛L* us′
+  listRed {zero} {[]} {[]} refl = ⇛L*-[]
+  listRed {zero} {_ ∷ _} ()
+  listRed {suc m} {[]} {[]} refl = ⇛L*-[]
+  listRed {suc m} {u ∷ us} {us′} eq′ with whnf m σ u in teq
+  ... | fail _ = ⊥-elim (fail≢ok eq′)
+  ... | ok u′ with whnfList m σ us in leq
+  ... | fail _ = ⊥-elim (fail≢ok eq′)
+  ... | ok tail rewrite sym (ok-inj eq′) =
+      ⇛L*-∷ (whnf-red m σ u u′ teq) (listRed {m} {us} {tail} leq)
+
+  -- eq′ stays an argument of both withs. A with abstracts its
+  -- scrutinee only from the goal and from the types of arguments, so a
+  -- proof closed over from an outer where would keep the unreduced case.
+  word-red : whnf (suc k) σ (word op ts) ≡ ok v → σ ⊢[ spec ] word op ts ⇛* v
+  word-red eq′ with whnfList k σ ts in leq
+  ... | fail _ = ⊥-elim (fail≢ok eq′)
+  ... | ok ts′ with wordStep op ts′ in seq
+  ... | nothing =
+      subst (λ z → σ ⊢[ spec ] word op ts ⇛* z) (ok-inj eq′)
+        (word-cong* (listRed {k} {ts} {ts′} leq))
+  ... | just r =
+      ⇛*-trans (word-cong* (listRed {k} {ts} {ts′} leq))
+        (⇛*-trans (⇛*-one (⇛-wred (⇛L-refl ts′) seq))
+                  (whnf-red k σ r v eq′))
 

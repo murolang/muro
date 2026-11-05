@@ -251,6 +251,7 @@ ok-nu-app {S = S} {G = G} {fam = fam} {f = f} {a = a} eq = go f a [] eq
   go (addt _ _) _ _ ()
   go (toi64 _) _ _ ()
   go (packi _ _) _ _ ()
+  go (word _ _) _ _ ()
 
 -- An application is not a shaped term. A bare ν is.
 shape-app : ∀ {n s} {t : Tm n}
@@ -308,6 +309,7 @@ rigid-spine {σ = σ} {S = S} {G = G} {fam = fam} {s = s} hs diff eq c with ≈�
   side {addt _ _} () _ _
   side {toi64 _} () _ _
   side {packi _ _} () _ _
+  side {word _ _} () _ _
 
 ------------------------------------------------------------------------
 -- No closed normal evidence of Empty.

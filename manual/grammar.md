@@ -99,19 +99,30 @@ term       ::= atom atom*                  -- juxtaposition is application
              | term "::" term              -- desugars to cons
              | term ("→" | "->") term      -- non-dependent, = Π (_ : A) → B
              | term "~" term               -- bisimulation (also prefix "bisim")
-atom       ::= "Type" | "Nat" | "I64" | "F32" | "Unit" | "Empty" | "refl" | "tt" | "0" | "?"
+atom       ::= "Type" | "Nat" | "I64" | "F32" | "Unit" | "Empty" | "refl" | "tt" | numeral | "?"
              | suc | pi | lam | let | match | matchEmpty | rewrite | idt
              | stream | unfold | uncons
              | "fst" atom | "snd" atom          -- sugar for let
              | "head" atom | "tail" atom
-             | "Tensor" atom atom | "addi" atom atom | "muli" atom atom
-             | "addt" atom atom | "toI64" atom | "packI" atom atom
+             | word
+             | "Tensor" atom atom | "addt" atom atom | "packI" atom atom
              | "Always" atom atom atom
              | "bisim" atom atom
              | "[]"                        -- desugars to nil
              | "(" term ")" | "(" term "," term ")"
              | ident
 
+word       ::= "U8" | "U32" | "U64" | "WBool" | "wtrue" | "wfalse" | "wnone"
+             | "Opt" atom | "wsome" atom
+             | "toU8" atom | "toU32" atom | "toU64" atom | "toI64" atom | "toNat" atom
+             | "noti" atom | "asU8" atom | "asU32" atom | "asU64" atom | "asI64" atom
+             | "addi" atom atom | "subi" atom atom | "muli" atom atom
+             | "addc" atom atom | "subc" atom atom | "mulc" atom atom
+             | "divi" atom atom | "remi" atom atom
+             | "eqi" atom atom | "lti" atom atom | "lei" atom atom
+             | "andi" atom atom | "ori" atom atom | "xori" atom atom
+             | "shli" atom atom | "shri" atom atom
+numeral    ::= digit+                 -- the token "0" is zero; any other digit string is a closed numeral
 suc        ::= "suc" "(" term ")" | "suc" atom
 stream     ::= "Stream" atom
 unfold     ::= "unfold" atom atom         -- seed, λ s → (head, next_seed)
