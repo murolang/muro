@@ -32,7 +32,9 @@ open import Muro.Convert
 open import Muro.Data hiding (subst₂)
 open import Muro.Check
   using (whnf; apps; viewPi; viewId; viewProd; viewData; splitData; isData; isDataN; allData; isCopy; isCopyN; CopyView; cv-pi; cv-prod; cv-other; copyView;
-         dataParamsData; instParams; clashes; clashIdx; clashIdxN; clashIdxV; clashIdxs; NatView; nv-su; nv-ze; nv-other; natView; nparamsOf; firstMotLam)
+         dataParamsData; instParams; clashes; clashIdx; clashIdxN; clashIdxV; clashIdxs; NatView; nv-su; nv-ze; nv-other; natView; nparamsOf; firstMotLam;
+         PiView; piv-pi; piv-no; piView; IdView; idv-id; idv-no; idView; ProdView; prv-prod; prv-no; prodView;
+         DataN; dataN; dn-nat; dn-unit; dn-empty; dn-i64; dn-f32; dn-tensor; dn-word; dn-dty; dn-prod; dn-other)
 open import Muro.Typing using (typ-ext-suc)
 open import Muro.Soundness.Conv
 
@@ -67,134 +69,34 @@ whnf-dty (suc k) σ (sp-snoc (sp-snoc _)) eq | ok _ | refl = sym (ok-inj eq)
 -- The views.
 ------------------------------------------------------------------------
 
+-- Case on the view Check computed. An arm per Tm constructor, word
+-- included, is what exhausts the type checker.
 viewPi-sound : ∀ k σ {n} {T : Tm n} {q A B}
   → viewPi k σ T ≡ ok (q , A , B) → whnf k σ T ≡ ok (pi q A B)
 viewPi-sound k σ {T = T} eq with whnf k σ T
-viewPi-sound k σ () | fail _
-viewPi-sound k σ eq | ok (pi _ _ _) with ok-inj eq
+... | fail _ = ⊥-elim (fail≢ok eq)
+... | ok t with piView t
+viewPi-sound k σ eq | ok .(pi q A B) | piv-pi q A B with ok-inj eq
 ... | refl = refl
-viewPi-sound k σ () | ok (var _)
-viewPi-sound k σ () | ok typ
-viewPi-sound k σ () | ok (lam _ _ _)
-viewPi-sound k σ () | ok (app _ _)
-viewPi-sound k σ () | ok nat
-viewPi-sound k σ () | ok ze
-viewPi-sound k σ () | ok (su _)
-viewPi-sound k σ () | ok unit
-viewPi-sound k σ () | ok one
-viewPi-sound k σ () | ok empty
-viewPi-sound k σ () | ok (dty _)
-viewPi-sound k σ () | ok (ctor _ _)
-viewPi-sound k σ () | ok (mData _ _ _)
-viewPi-sound k σ () | ok (mNat _ _ _ _)
-viewPi-sound k σ () | ok (mEmp _ _)
-viewPi-sound k σ () | ok (mUnit _ _ _)
-viewPi-sound k σ () | ok (idt _ _ _)
-viewPi-sound k σ () | ok rfl
-viewPi-sound k σ () | ok (rwt _ _ _)
-viewPi-sound k σ () | ok (def _)
-viewPi-sound k σ () | ok (ann _ _)
-viewPi-sound k σ () | ok (prod _ _)
-viewPi-sound k σ () | ok (pair _ _)
-viewPi-sound k σ () | ok (letp _ _)
-viewPi-sound k σ () | ok (nu _)
-viewPi-sound k σ () | ok (unf _ _)
-viewPi-sound k σ () | ok (ucons _)
-viewPi-sound k σ () | ok i64
-viewPi-sound k σ () | ok f32ty
-viewPi-sound k σ () | ok (tensor _ _)
-viewPi-sound k σ () | ok (addi _ _)
-viewPi-sound k σ () | ok (muli _ _)
-viewPi-sound k σ () | ok (addt _ _)
-viewPi-sound k σ () | ok (toi64 _)
-viewPi-sound k σ () | ok (packi _ _)
-viewPi-sound k σ () | ok (word _ _)
+viewPi-sound k σ eq | ok t | piv-no .t = ⊥-elim (fail≢ok eq)
 
 viewProd-sound : ∀ k σ {n} {T : Tm n} {A B}
   → viewProd k σ T ≡ ok (A , B) → whnf k σ T ≡ ok (prod A B)
 viewProd-sound k σ {T = T} eq with whnf k σ T
-viewProd-sound k σ () | fail _
-viewProd-sound k σ eq | ok (prod _ _) with ok-inj eq
+... | fail _ = ⊥-elim (fail≢ok eq)
+... | ok t with prodView t
+viewProd-sound k σ eq | ok .(prod A B) | prv-prod A B with ok-inj eq
 ... | refl = refl
-viewProd-sound k σ () | ok (var _)
-viewProd-sound k σ () | ok (typ)
-viewProd-sound k σ () | ok (pi _ _ _)
-viewProd-sound k σ () | ok (lam _ _ _)
-viewProd-sound k σ () | ok (app _ _)
-viewProd-sound k σ () | ok (nat)
-viewProd-sound k σ () | ok (ze)
-viewProd-sound k σ () | ok (su _)
-viewProd-sound k σ () | ok (unit)
-viewProd-sound k σ () | ok (one)
-viewProd-sound k σ () | ok (empty)
-viewProd-sound k σ () | ok (dty _)
-viewProd-sound k σ () | ok (ctor _ _)
-viewProd-sound k σ () | ok (mData _ _ _)
-viewProd-sound k σ () | ok (mNat _ _ _ _)
-viewProd-sound k σ () | ok (mEmp _ _)
-viewProd-sound k σ () | ok (mUnit _ _ _)
-viewProd-sound k σ () | ok (idt _ _ _)
-viewProd-sound k σ () | ok (rfl)
-viewProd-sound k σ () | ok (rwt _ _ _)
-viewProd-sound k σ () | ok (def _)
-viewProd-sound k σ () | ok (ann _ _)
-viewProd-sound k σ () | ok (pair _ _)
-viewProd-sound k σ () | ok (letp _ _)
-viewProd-sound k σ () | ok (nu _)
-viewProd-sound k σ () | ok (unf _ _)
-viewProd-sound k σ () | ok (ucons _)
-viewProd-sound k σ () | ok (i64)
-viewProd-sound k σ () | ok (f32ty)
-viewProd-sound k σ () | ok (tensor _ _)
-viewProd-sound k σ () | ok (addi _ _)
-viewProd-sound k σ () | ok (muli _ _)
-viewProd-sound k σ () | ok (addt _ _)
-viewProd-sound k σ () | ok (toi64 _)
-viewProd-sound k σ () | ok (packi _ _)
-viewProd-sound k σ () | ok (word _ _)
+viewProd-sound k σ eq | ok t | prv-no .t = ⊥-elim (fail≢ok eq)
 
 viewId-sound : ∀ k σ {n} {T : Tm n} {A a b}
   → viewId k σ T ≡ ok (A , a , b) → whnf k σ T ≡ ok (idt A a b)
 viewId-sound k σ {T = T} eq with whnf k σ T
-viewId-sound k σ () | fail _
-viewId-sound k σ eq | ok (idt _ _ _) with ok-inj eq
+... | fail _ = ⊥-elim (fail≢ok eq)
+... | ok t with idView t
+viewId-sound k σ eq | ok .(idt A a b) | idv-id A a b with ok-inj eq
 ... | refl = refl
-viewId-sound k σ () | ok (var _)
-viewId-sound k σ () | ok typ
-viewId-sound k σ () | ok (pi _ _ _)
-viewId-sound k σ () | ok (lam _ _ _)
-viewId-sound k σ () | ok (app _ _)
-viewId-sound k σ () | ok nat
-viewId-sound k σ () | ok ze
-viewId-sound k σ () | ok (su _)
-viewId-sound k σ () | ok unit
-viewId-sound k σ () | ok one
-viewId-sound k σ () | ok empty
-viewId-sound k σ () | ok (dty _)
-viewId-sound k σ () | ok (ctor _ _)
-viewId-sound k σ () | ok (mData _ _ _)
-viewId-sound k σ () | ok (mNat _ _ _ _)
-viewId-sound k σ () | ok (mEmp _ _)
-viewId-sound k σ () | ok (mUnit _ _ _)
-viewId-sound k σ () | ok rfl
-viewId-sound k σ () | ok (rwt _ _ _)
-viewId-sound k σ () | ok (def _)
-viewId-sound k σ () | ok (ann _ _)
-viewId-sound k σ () | ok (prod _ _)
-viewId-sound k σ () | ok (pair _ _)
-viewId-sound k σ () | ok (letp _ _)
-viewId-sound k σ () | ok (nu _)
-viewId-sound k σ () | ok (unf _ _)
-viewId-sound k σ () | ok (ucons _)
-viewId-sound k σ () | ok i64
-viewId-sound k σ () | ok f32ty
-viewId-sound k σ () | ok (tensor _ _)
-viewId-sound k σ () | ok (addi _ _)
-viewId-sound k σ () | ok (muli _ _)
-viewId-sound k σ () | ok (addt _ _)
-viewId-sound k σ () | ok (toi64 _)
-viewId-sound k σ () | ok (packi _ _)
-viewId-sound k σ () | ok (word _ _)
+viewId-sound k σ eq | ok t | idv-no .t = ⊥-elim (fail≢ok eq)
 
 viewData-sound : ∀ k σ {n} {T : Tm n} {di ps idxs}
   → viewData k σ T ≡ ok (di , ps , idxs)
@@ -235,19 +137,31 @@ isDataN-sound : ∀ k σ {n} {t : Tm n} → FragSig σ → Frag t
 allData-sound : ∀ k σ {n} {ts : List (Tm n)} → FragSig σ → FragL ts
   → allData k σ ts ≡ ok true → AllData σ ts
 
+private
+  false≢true : false ≡ true → ⊥
+  false≢true ()
+
+  ¬frag-i64 : ∀ {n} → Frag {n} i64 → ⊥
+  ¬frag-i64 ()
+
+  ¬frag-f32 : ∀ {n} → Frag {n} f32ty → ⊥
+  ¬frag-f32 ()
+
+  ¬frag-tensor : ∀ {n d s} → Frag {n} (tensor d s) → ⊥
+  ¬frag-tensor ()
+
+  ¬frag-word : ∀ {n op ts} → Frag {n} (word op ts) → ⊥
+  ¬frag-word ()
+
 allData-sound k σ fs fl-[] _ = ad-[]
 allData-sound k σ fs (fl-∷ {t = t} F Fs) eq with isData k σ t in ieq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok false = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
 ... | ok true = ad-∷ (isData-sound k σ fs F ieq) (allData-sound k σ fs Fs eq)
 
 prodData-sound k σ {A = A} fs (f-prod FA FB) eq with isData k σ A in aeq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok false = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
 ... | ok true = d-prod (isData-sound k σ fs FA aeq) (isData-sound k σ fs FB eq)
 
 isData-sound (suc k) σ {t = t} fs Ft eq with whnf (suc k) σ t in weq
@@ -256,144 +170,28 @@ isData-sound (suc k) σ {t = t} fs Ft eq with whnf (suc k) σ t in weq
 ...   | r , F = d-conv (⟶*→≈ r) (isDataN-sound k σ fs F eq)
 
 isDataN-sound k σ {t = t} fs Ft eq with unspine t in ueq
-... | (nat , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | wheq = subst (IsData σ) (sym wheq) d-nat
-isDataN-sound k σ fs Ft eq | (unit , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | wheq = subst (IsData σ) (sym wheq) d-unit
-isDataN-sound k σ fs Ft eq | (empty , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | wheq = subst (IsData σ) (sym wheq) d-empty
-isDataN-sound k σ fs Ft eq | (i64 , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | wheq = ⊥-elim (noFrag (subst Frag wheq Ft))
-  where noFrag : ∀ {n} → Frag {n} i64 → ⊥
-        noFrag ()
-isDataN-sound k σ fs Ft eq | (f32ty , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | wheq = ⊥-elim (noFrag (subst Frag wheq Ft))
-  where noFrag : ∀ {n} → Frag {n} f32ty → ⊥
-        noFrag ()
-isDataN-sound k σ fs Ft eq | (tensor _ _ , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | wheq = ⊥-elim (noFrag (subst Frag wheq Ft))
-  where noFrag : ∀ {n d s} → Frag {n} (tensor d s) → ⊥
-        noFrag ()
-isDataN-sound k σ {t = t} fs Ft eq | (dty i , as) with lookupData σ i in leq
-...   | fail _ = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-...   | ok d with unspine→Spine′ ueq
-...     | sp = d-dty leq sp (allData-sound k σ fs (FragL-take (nparams d) (proj₂ (Frag-Spine sp Ft))) eq)
-isDataN-sound k σ fs Ft eq | ((var _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | (typ , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((pi _ _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((lam _ _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((app _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | (nat , _ ∷ _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | (ze , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((su _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | (unit , _ ∷ _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | (one , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | (empty , _ ∷ _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((ctor _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((mData _ _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((mNat _ _ _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((mEmp _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((mUnit _ _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((idt _ _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | (rfl , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((rwt _ _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((def _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((ann _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ {t = t} fs Ft eq | ((prod A B) , []) with Spine-≡ (unspine→Spine′ ueq)
-...   | wheq = subst (IsData σ) (sym wheq) (prodData-sound k σ fs (subst Frag wheq Ft) eq)
-isDataN-sound k σ fs Ft eq | ((prod _ _) , _ ∷ _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((pair _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((letp _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((nu _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((unf _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((ucons _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | (i64 , _ ∷ _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | (f32ty , _ ∷ _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((tensor _ _) , _ ∷ _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((addi _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((muli _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((addt _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((toi64 _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((packi _ _) , _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
-isDataN-sound k σ fs Ft eq | ((word op ts) , []) with Spine-≡ (unspine→Spine′ ueq)
-... | wheq = ⊥-elim (noFrag (subst Frag wheq Ft))
-  where noFrag : ∀ {n op ts} → Frag {n} (word op ts) → ⊥
-        noFrag ()
-isDataN-sound k σ fs Ft eq | ((word _ _) , _ ∷ _) = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
+... | p with dataN p
+isDataN-sound k σ fs Ft eq | .(nat , []) | dn-nat with Spine-≡ (unspine→Spine′ ueq)
+... | wheq = subst (IsData σ) (sym wheq) d-nat
+isDataN-sound k σ fs Ft eq | .(unit , []) | dn-unit with Spine-≡ (unspine→Spine′ ueq)
+... | wheq = subst (IsData σ) (sym wheq) d-unit
+isDataN-sound k σ fs Ft eq | .(empty , []) | dn-empty with Spine-≡ (unspine→Spine′ ueq)
+... | wheq = subst (IsData σ) (sym wheq) d-empty
+isDataN-sound k σ fs Ft eq | .(i64 , []) | dn-i64 with Spine-≡ (unspine→Spine′ ueq)
+... | wheq = ⊥-elim (¬frag-i64 (subst Frag wheq Ft))
+isDataN-sound k σ fs Ft eq | .(f32ty , []) | dn-f32 with Spine-≡ (unspine→Spine′ ueq)
+... | wheq = ⊥-elim (¬frag-f32 (subst Frag wheq Ft))
+isDataN-sound k σ fs Ft eq | .(tensor _ _ , []) | dn-tensor _ _ with Spine-≡ (unspine→Spine′ ueq)
+... | wheq = ⊥-elim (¬frag-tensor (subst Frag wheq Ft))
+isDataN-sound k σ fs Ft eq | .(word _ _ , []) | dn-word _ _ with Spine-≡ (unspine→Spine′ ueq)
+... | wheq = ⊥-elim (¬frag-word (subst Frag wheq Ft))
+isDataN-sound k σ {t = t} fs Ft eq | .(dty i , as) | dn-dty i as with lookupData σ i in leq
+... | fail _ = ⊥-elim (false≢true (ok-inj eq))
+... | ok d with unspine→Spine′ ueq
+...   | sp = d-dty leq sp (allData-sound k σ fs (FragL-take (nparams d) (proj₂ (Frag-Spine sp Ft))) eq)
+isDataN-sound k σ {t = t} fs Ft eq | .(prod A B , []) | dn-prod A B with Spine-≡ (unspine→Spine′ ueq)
+... | wheq = subst (IsData σ) (sym wheq) (prodData-sound k σ fs (subst Frag wheq Ft) eq)
+isDataN-sound k σ fs Ft eq | .(h , as) | dn-other h as = ⊥-elim (false≢true (ok-inj eq))
 
 -- isCopy says yes only on a copyable type (Check.isCopy, Data.IsCopy).
 isCopy-sound : ∀ k σ {n} {t : Tm n} → FragSig σ → Frag t → isCopy k σ t ≡ ok true → IsCopy σ t
@@ -411,8 +209,6 @@ isCopyN-sound k σ fs Ft eq | cv-prod {A = A} {B = B} with Ft
 ... | f-prod FA FB with isCopy k σ A in aeq
 ...   | fail _ = ⊥-elim (fail≢ok eq)
 ...   | ok false = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
 ...   | ok true = c-prod (isCopy-sound k σ fs FA aeq) (isCopy-sound k σ fs FB eq)
 
 -- if q is +, the binder's type was checked to be copyable
@@ -525,23 +321,13 @@ clashIdx-sound (suc k) σ ρ {e} {t} fs Fe Ft eq with whnf k σ e in eeq
 ...     | nv-su | nv-ze | _ | _ = ci-sz (≈-ren ρ (whnf-≈ k σ fs Fe eeq)) (whnf-≈ k σ fs Ft teq)
 ...     | nv-ze | nv-su | _ | _ = ci-zs (≈-ren ρ (whnf-≈ k σ fs Fe eeq)) (whnf-≈ k σ fs Ft teq)
 ...     | nv-su | nv-other | _ | _ = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
 ...     | nv-ze | nv-ze | _ | _ = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
 ...     | nv-ze | nv-other | _ | _ = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
 ...     | nv-other | _ | _ | _ = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
 
 clashIdxs-sound : ∀ k σ {n m} (ρ : Fin n → Fin m) {es : List (Tm n)} {ts : List (Tm m)} → FragSig σ
   → FragL es → FragL ts → clashIdxs k σ es ts ≡ ok true → ClashL σ (renList ρ es) ts
 clashIdxs-sound k σ ρ fs fl-[] fl-[] eq = ⊥-elim (false≢true (ok-inj eq))
-  where false≢true : false ≡ true → ⊥
-        false≢true ()
 clashIdxs-sound k σ ρ {es = e ∷ es} {ts = t ∷ ts} fs (fl-∷ Fe Fes) (fl-∷ Ft Fts) eq with clashIdx k σ e t in ceq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok true = cl-here (clashIdx-sound k σ ρ fs Fe Ft ceq)

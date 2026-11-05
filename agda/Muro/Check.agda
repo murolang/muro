@@ -204,6 +204,35 @@ mutual
       (fail _) → ok (mData e P bs)
   ... | nothing = ok (mData e P bs)
 
+-- Head of the spine isData inspects. One constructor per answer, and a
+-- catch-all for every other head, so the split stays the size of this
+-- view when a term constructor is added. A non-empty spine of a rigid
+-- head (nat, a word, a product) is the catch-all: the operator is read
+-- only when the argument list is empty.
+data DataN {n} : Tm n × List (Tm n) → Set where
+  dn-nat    : DataN (nat , [])
+  dn-unit   : DataN (unit , [])
+  dn-empty  : DataN (empty , [])
+  dn-i64    : DataN (i64 , [])
+  dn-f32    : DataN (f32ty , [])
+  dn-tensor : ∀ d s → DataN (tensor d s , [])
+  dn-word   : ∀ op ts → DataN (word op ts , [])
+  dn-dty    : ∀ i as → DataN (dty i , as)
+  dn-prod   : ∀ A B → DataN (prod A B , [])
+  dn-other  : ∀ h as → DataN (h , as)
+
+dataN : ∀ {n} (p : Tm n × List (Tm n)) → DataN p
+dataN (nat , [])          = dn-nat
+dataN (unit , [])         = dn-unit
+dataN (empty , [])        = dn-empty
+dataN (i64 , [])          = dn-i64
+dataN (f32ty , [])        = dn-f32
+dataN (tensor d s , [])   = dn-tensor d s
+dataN (word op ts , [])   = dn-word op ts
+dataN (dty i , as)        = dn-dty i as
+dataN (prod A B , [])     = dn-prod A B
+dataN (h , as)            = dn-other h as
+
 -- Is a (spec) type Data: Nat, Unit, Empty, I64, F32, Tensor, or a data
 -- type whose parameters are Data. Fuel also bounds the descent into the
 -- parameters (a spec definition may be recursive: X : Type := D X).
@@ -217,18 +246,19 @@ mutual
   isData (suc k) σ t = whnf (suc k) σ t >>= λ t′ → isDataN k σ (apps t′)
 
   isDataN : ∀ {n} → ℕ → Sig → Tm n × List (Tm n) → Result Bool
-  isDataN k σ (nat , [])        = ok true
-  isDataN k σ (unit , [])       = ok true
-  isDataN k σ (empty , [])      = ok true
-  isDataN k σ (i64 , [])        = ok true
-  isDataN k σ (f32ty , [])      = ok true
-  isDataN k σ (tensor _ _ , []) = ok true
-  -- The operator is matched only once the spine is known to be empty,
-  -- so a non-empty spine reduces to the catch-all.
-  isDataN k σ (word op ts , []) = wordData k σ op ts
-  isDataN k σ (dty i , as)      = dataParamsData k σ i as
-  isDataN k σ (prod A B , [])   = isData k σ A >>= λ b → if b then isData k σ B else ok false
-  isDataN k σ _                 = ok false
+  isDataN k σ p = isDataNV k σ (dataN p)
+
+  isDataNV : ∀ {n} → ℕ → Sig → {p : Tm n × List (Tm n)} → DataN p → Result Bool
+  isDataNV k σ dn-nat            = ok true
+  isDataNV k σ dn-unit           = ok true
+  isDataNV k σ dn-empty          = ok true
+  isDataNV k σ dn-i64            = ok true
+  isDataNV k σ dn-f32            = ok true
+  isDataNV k σ (dn-tensor _ _)   = ok true
+  isDataNV k σ (dn-word op ts)   = wordData k σ op ts
+  isDataNV k σ (dn-dty i as)     = dataParamsData k σ i as
+  isDataNV k σ (dn-prod A B)     = isData k σ A >>= λ b → if b then isData k σ B else ok false
+  isDataNV k σ (dn-other _ _)    = ok false
 
   dataParamsData : ∀ {n} → ℕ → Sig → ℕ → List (Tm n) → Result Bool
   dataParamsData k σ i as with lookupData σ i
@@ -834,17 +864,41 @@ data _,_⊢[_]_⇐_ σ Γ where
 -- Decision procedure.
 ------------------------------------------------------------------------
 
+-- whnf, then one of these. The no arm is a catch-all, so naming a new
+-- term constructor does not add a clause here or in the soundness proof.
+data PiView {n} : Tm n → Set where
+  piv-pi : ∀ q A B → PiView (pi q A B)
+  piv-no : ∀ t → PiView t
+
+piView : ∀ {n} (t : Tm n) → PiView t
+piView (pi q A B) = piv-pi q A B
+piView t          = piv-no t
+
+data IdView {n} : Tm n → Set where
+  idv-id : ∀ A a b → IdView (idt A a b)
+  idv-no : ∀ t → IdView t
+
+idView : ∀ {n} (t : Tm n) → IdView t
+idView (idt A a b) = idv-id A a b
+idView t           = idv-no t
+
+viewPiOf : ∀ {n} (t : Tm n) → PiView t → Result (Qty × Tm n × Tm (suc n))
+viewPiOf .(pi q A B) (piv-pi q A B) = ok (q , A , B)
+viewPiOf t           (piv-no .t)    = fail ("expected Π, got " ++ showTm t)
+
+viewIdOf : ∀ {n} (t : Tm n) → IdView t → Result (Tm n × Tm n × Tm n)
+viewIdOf .(idt A a b) (idv-id A a b) = ok (A , a , b)
+viewIdOf t            (idv-no .t)    = fail ("expected Id, got " ++ showTm t)
+
 viewPi : ∀ {n} → ℕ → Sig → Tm n → Result (Qty × Tm n × Tm (suc n))
 viewPi k σ t with whnf k σ t
-... | fail m          = fail m
-... | ok (pi q A B)   = ok (q , A , B)
-... | ok t′           = fail ("expected Π, got " ++ showTm t′)
+... | fail m = fail m
+... | ok t′  = viewPiOf t′ (piView t′)
 
 viewId : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n × Tm n × Tm n)
 viewId k σ t with whnf k σ t
-... | fail m          = fail m
-... | ok (idt A a b)  = ok (A , a , b)
-... | ok t′           = fail ("expected Id, got " ++ showTm t′)
+... | fail m = fail m
+... | ok t′  = viewIdOf t′ (idView t′)
 
 -- Dtype of Tensor: I64 or F32 after WHNF.
 isNxDtype : ∀ {n} → ℕ → Sig → Tm n → Result Bool
@@ -876,11 +930,22 @@ floatIdOk k σ A =
 i64two : ∀ {n} → Tm n
 i64two = word (wlit ki64 2) []
 
+data ProdView {n} : Tm n → Set where
+  prv-prod : ∀ A B → ProdView (prod A B)
+  prv-no   : ∀ t → ProdView t
+
+prodView : ∀ {n} (t : Tm n) → ProdView t
+prodView (prod A B) = prv-prod A B
+prodView t          = prv-no t
+
+viewProdOf : ∀ {n} (t : Tm n) → ProdView t → Result (Tm n × Tm n)
+viewProdOf .(prod A B) (prv-prod A B) = ok (A , B)
+viewProdOf t           (prv-no .t)    = fail ("expected ×, got " ++ showTm t)
+
 viewProd : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n × Tm n)
 viewProd k σ t with whnf k σ t
-... | fail m          = fail m
-... | ok (prod A B)   = ok (A , B)
-... | ok t′           = fail ("expected ×, got " ++ showTm t′)
+... | fail m = fail m
+... | ok t′  = viewProdOf t′ (prodView t′)
 
 viewNu : ∀ {n} → ℕ → Sig → Tm n → Result (Tm (suc n))
 viewNu k σ t with whnf k σ t
