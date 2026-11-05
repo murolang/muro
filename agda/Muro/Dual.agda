@@ -21,7 +21,7 @@ open import Data.Empty using (⊥)
 open import Data.List.Base using (List; []; _∷_)
 open import Data.Product using (_×_; _,_)
 open import Data.String.Base using (String)
-open import Relation.Binary.PropositionalEquality using (_≡_; refl; cong; cong₂)
+open import Relation.Binary.PropositionalEquality using (_≡_; refl; sym; cong; cong₂)
 
 open import Muro.Base using (Mode; spec; run)
 open import Muro.Session hiding (¬_; Seat; no-run; ping)
@@ -120,6 +120,7 @@ grant-ok = dput-ok refl (lit-ok refl) plain-erecv (eget-ok done-end)
 -- The receiver gets a nat, not a bit.
 grant-bit : ¬ Conforms [] (put nat (lit (num 8)) (get bit "d" done)) (dual window)
 grant-bit (dput-ok refl _ _ ())
+grant-bit (dput-wide _ _ _ p _ _ _ _ _ _) = just≢nothing (sym p)
 
 peer : Proc
 peer = put nat (lit two) (get nat "x" done)

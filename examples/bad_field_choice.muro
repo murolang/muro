@@ -123,7 +123,7 @@ session looped :=
 
 session sided :=
   recv (t : Two) (case (sibling t)
-    | true => end
+    | true => send Ctl end
     | false => end)
 
 conform sided-server : sided :=

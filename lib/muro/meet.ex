@@ -903,16 +903,26 @@ defmodule Muro.Meet do
 
   # A match on a nat already in the receiver index is the arm that
   # numeral selects. The value just exchanged is not in the index yet.
-  defp open_nat_match({:match, name, arms}, idx, book, path) do
-    case nat_at(idx, name) do
-      {:nat, n} ->
+  defp open_nat_match({:match, name, arms} = proc, idx, book, path) do
+    cond do
+      match?({:nat, _}, nat_at(idx, name)) ->
+        {:nat, n} = nat_at(idx, name)
+
         case Muro.Session.arm_at(:nat, {:nat, n}, arms, book) do
           {:ok, leaf, more} -> open_nat_match(leaf, idx, book, path ++ more)
           :error -> :error
         end
 
-      _ ->
-        {:ok, {:match, name, arms}, path}
+      match?({_, _}, Map.get(idx, {:pay, name})) ->
+        {ty, val} = Map.get(idx, {:pay, name})
+
+        case Muro.Session.arm_at(ty, val, arms, book) do
+          {:ok, leaf, more} -> open_nat_match(leaf, idx, book, path ++ more)
+          :error -> {:ok, proc, path}
+        end
+
+      true ->
+        {:ok, proc, path}
     end
   end
 
@@ -999,17 +1009,31 @@ defmodule Muro.Meet do
   defp ground(ctx, idx), do: Map.new(ctx, fn {name, ty} -> {name, apply_ty(idx, ty)} end)
 
   # A nat received under a name instantiates lengths on that side.
-  # Another payload shadows the name. `_` binds nothing.
+  # Another payload shadows the name and is remembered beside the
+  # lengths, so a later product can read it. `_` binds nothing.
   defp ext(idx, :_, _val, _ty), do: idx
 
   defp ext(idx, name, val, :nat) do
+    idx = Map.delete(idx, {:pay, name})
+
     case nexp(val) do
       nil -> Map.delete(idx, name)
       e -> Map.put(idx, name, e)
     end
   end
 
-  defp ext(idx, name, _val, _ty), do: Map.delete(idx, name)
+  defp ext(idx, name, val, ty) do
+    idx = Map.delete(idx, name)
+
+    case pay_mem(val) do
+      nil -> Map.delete(idx, {:pay, name})
+      v -> Map.put(idx, {:pay, name}, {ty, v})
+    end
+  end
+
+  defp pay_mem(v) when v in [:b0, :b1], do: v
+  defp pay_mem({:con, _, _} = v), do: v
+  defp pay_mem(_), do: nil
 
   defp nexp({:nat, n}) when is_integer(n) and n >= 0, do: {:lit, n}
   defp nexp({:var, name}), do: {:var, name}

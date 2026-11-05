@@ -51,7 +51,7 @@ open import Relation.Binary.PropositionalEquality
 open import Relation.Nullary.Decidable.Core using (Dec)
   renaming (yes to yes′; no to no′)
 
-open import Muro.Session hiding (yes; no; pong; kids)
+open import Muro.Session hiding (yes; no; pong; kids; asBit)
 open import Muro.Meet using (ext)
 
 ------------------------------------------------------------------------

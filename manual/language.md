@@ -293,6 +293,17 @@ match m motive (λ _ → A)
 
 Motives are written in parentheses. Nested λ in the motive cover index binders (see [Indexed data](indexed.md)).
 
+## A bounded field
+
+A constructor may bound a nat field by a numeral. The bound sits after the binder and before the arrow. The left side is that field. The right side is a canonical decimal. `<=` is the same token as `≤`.
+
+```
+data Req : Type where
+  req : (slot : Nat) {slot ≤ 1} → Req
+```
+
+`{slot ≤ 1}` admits `0` and `1`. `{slot ≤ 00}`, `{slot ≤ suc 0}`, a name that is not that field, and a right side that is not a numeral are `a field bound is a numeral`. A bound on a field that is not a nat is `a field bound is on a nat`. The bound is not part of the core type. A `run` that reads the field, and a session `case` on that `run`, split the field into `0` … `w`. See [A numeral bound](sessions.md#a-numeral-bound).
+
 ## Atoms
 
 An atom literal is a tag written in the file, colon glued to the name: `:asc`. It is a value of type `Atom`. It is not a constructor and not a `Nat`. `Atom` is not Data, so `+` does not apply. There is no `where` block of atoms, and no function from a string to an atom.

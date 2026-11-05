@@ -363,7 +363,7 @@ defmodule Muro.Async do
       {:ok, recv_ty, orig, ready} ->
         case Muro.Session.arm_at(recv_ty, ready, arms, conf.book) do
           {:ok, arm, path} ->
-            case open_nat_match(arm, venv_of(conf, side), conf.book, path) do
+            case open_nat_match(arm, venv_of(conf, side), ctx_of(conf, side), conf.book, path) do
               {:ok, arm, path} ->
                 conf = commit_recv(conf, side, arm, rest, name, recv_ty, orig, ready)
                 {:go, conf, "#{side_name(conf, side)} arm #{arm_label(ready)}", {:into, path}}
@@ -570,20 +570,46 @@ defmodule Muro.Async do
 
   # A match on a nat already stored on this side is the arm that
   # numeral selects. The value just received is bound after this.
-  defp open_nat_match({:match, name, arms}, env, book, path) do
+  defp open_nat_match({:match, name, arms} = proc, env, tys, book, path) do
     case Map.get(env, name) do
       {:nat, n} when is_integer(n) and n >= 0 ->
         case Muro.Session.arm_at(:nat, {:nat, n}, arms, book) do
-          {:ok, leaf, more} -> open_nat_match(leaf, env, book, path ++ more)
+          {:ok, leaf, more} -> open_nat_match(leaf, env, tys, book, path ++ more)
           :error -> :error
         end
 
+      :b0 ->
+        open_stored(:bit, :b0, proc, env, tys, book, path)
+
+      :b1 ->
+        open_stored(:bit, :b1, proc, env, tys, book, path)
+
+      {:con, _, _} = val ->
+        case Map.get(tys, name) do
+          ty
+          when ty in [:bit] or (is_tuple(ty) and tuple_size(ty) >= 1 and elem(ty, 0) == :dat) ->
+            open_stored(ty, val, proc, env, tys, book, path)
+
+          {:bnat, w} when is_integer(w) ->
+            open_stored({:bnat, w}, val, proc, env, tys, book, path)
+
+          _ ->
+            {:ok, proc, path}
+        end
+
       _ ->
-        {:ok, {:match, name, arms}, path}
+        {:ok, proc, path}
     end
   end
 
-  defp open_nat_match(proc, _env, _book, path), do: {:ok, proc, path}
+  defp open_nat_match(proc, _env, _tys, _book, path), do: {:ok, proc, path}
+
+  defp open_stored(ty, val, proc, env, tys, book, path) do
+    case Muro.Session.arm_at(ty, val, elem(proc, 2), book) do
+      {:ok, leaf, more} -> open_nat_match(leaf, env, tys, book, path ++ more)
+      :error -> {:ok, proc, path}
+    end
+  end
 
   defp render(msg, _conf, _trace) when is_binary(msg), do: msg
 

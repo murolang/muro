@@ -320,6 +320,10 @@ defmodule Muro.Session do
       {:nat, {:nat, n}, _} when is_integer(n) and n >= 0 ->
         take_indexed(arms, n, Integer.to_string(n), [], [], book)
 
+      {{:bnat, w}, {:nat, n}, _}
+      when is_integer(w) and is_integer(n) and n >= 0 and n <= w ->
+        take_indexed(arms, n, Integer.to_string(n), [], [], book)
+
       {{:dat, dname, _} = dty, {:con, c, fields}, _} ->
         case Enum.find_index(ctor_names(book, dname), &(&1 == cname(c))) do
           i when is_integer(i) ->
@@ -1349,20 +1353,57 @@ defmodule Muro.Session do
     end
   end
 
-  # A lone put does not select an arm of a split. The product is
-  # decided on the evidence send that carried the bounded nat.
+  # A product whose earlier factors were sent is decided here, on the
+  # last payload. A put that does not have those values still does not
+  # select an arm: the two-factor product is decided on the evidence send.
   defp step(
-         {:put, _, _, _} = proc,
-         {:dsend, _, _, {:case, {:run, _, _, _}, _}} = proto,
-         _ctx,
-         _idx,
-         _penv,
-         _senv,
-         _seen,
-         _fuel,
-         _book
-       ) do
-    refuse(proc, proto)
+         {:put, ty, val, p} = proc,
+         {:dsend, y, sty, {:case, {:run, fname, _last, earlier}, arms}} = proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book
+       )
+       when is_list(earlier) do
+    expected = apply_ty(idx, sty)
+
+    case put_ok?(ty, val, expected, ctx, book) do
+      :yes ->
+        case wide_send(fname, earlier, val, arms, ctx, book) do
+          {:ok, chosen} ->
+            got = sent_val(val, ctx, book)
+
+            keep(
+              descend(
+                p,
+                chosen,
+                remember(ctx, y, got, book),
+                ext(idx, y, got, expected),
+                penv,
+                senv,
+                seen,
+                fuel - 1,
+                book,
+                step_down(here_span(), 0)
+              )
+            )
+
+          :no ->
+            refuse(proc, proto)
+
+          {:error, msg} ->
+            refuse(proc, proto, msg)
+        end
+
+      :no ->
+        refuse(proc, proto, explain_no(ty, val, expected, ctx, book))
+
+      {:error, msg} ->
+        refuse(proc, proto, rewrite_run(msg))
+    end
   end
 
   # `dput-arm`. The value selects one protocol arm. A variable continues
@@ -1426,12 +1467,14 @@ defmodule Muro.Session do
 
     case put_ok?(ty, val, expected, ctx, book) do
       :yes ->
+        got = sent_val(val, ctx, book)
+
         keep(
           descend(
             p,
             s,
-            ctx,
-            ext(idx, y, sent_val(val, ctx, book), expected),
+            remember(ctx, y, got, book),
+            ext(idx, y, got, expected),
             penv,
             senv,
             seen,
@@ -1596,7 +1639,7 @@ defmodule Muro.Session do
   # together select the arm. `stop` still abandons before that payload.
   defp step(
          {:put, nty, val, p} = proc,
-         {:esend, _y, {:lit, w},
+         {:esend, y, {:lit, w},
           {:dsend, z, sty, {:case, {:run, fname, last, earlier}, arms}} = inner} =
            proto,
          ctx,
@@ -1609,7 +1652,9 @@ defmodule Muro.Session do
        )
        when is_integer(w) and w >= 0 and is_list(earlier) do
     case owed_nat(nty, val, {:lit, w}, proc, proto, ctx, book) do
-      {:ok, _got} ->
+      {:ok, got} ->
+        ctx1 = remember(ctx, y, got, book)
+
         case {p, last, earlier} do
           {{:put, ty, u, q}, ^z, [_nat]} ->
             prod_send(
@@ -1637,7 +1682,7 @@ defmodule Muro.Session do
               descend(
                 p,
                 inner,
-                ctx,
+                ctx1,
                 idx,
                 penv,
                 senv,
@@ -1700,7 +1745,7 @@ defmodule Muro.Session do
   # the bound the substitution resolves.
   defp step(
          {:put, ty, val, p} = proc,
-         {:esend, _y, e, s} = proto,
+         {:esend, y, e, s} = proto,
          ctx,
          idx,
          penv,
@@ -1720,7 +1765,7 @@ defmodule Muro.Session do
                 descend(
                   p,
                   s,
-                  ctx,
+                  remember(ctx, y, got, book),
                   idx,
                   penv,
                   senv,
@@ -2055,6 +2100,10 @@ defmodule Muro.Session do
 
   # The field mark is what `answer` reads. A later `get` of the same name
   # clears it, so the innermost binding wins and a received nat stays a nat.
+  # A bounded field is a nat in the process. The bound was checked when
+  # the value was built.
+  defp bind_field(ctx, name, {:bnat, _}), do: bind_field(ctx, name, :nat)
+
   defp bind_field(ctx, name, ty) do
     ctx
     |> bind_ctx(name, ty)
@@ -2096,6 +2145,23 @@ defmodule Muro.Session do
   end
 
   defp fields_of_ctor(_, _, _), do: :error
+
+  # The split sees a recursive field as not splittable. The process
+  # still binds that field at the data type.
+  defp slots_of_ctor({:dat, dname, args}, ctor, book) do
+    case find_decl(book, dname) do
+      nil ->
+        :error
+
+      d ->
+        case ctor_fields(d, ctor) do
+          {:ok, tmpls} -> {:ok, Enum.map(tmpls, &inst_slot(&1, dname, args))}
+          :error -> :error
+        end
+    end
+  end
+
+  defp slots_of_ctor(ty, ctor, book), do: fields_of_ctor(ty, ctor, book)
 
   # The binding is the `rec` term. A jump unfolds that term. The stack
   # is only the unwind, so a cycle here has no action under it.
@@ -2392,8 +2458,8 @@ defmodule Muro.Session do
       {:run, fname, ^name} ->
         run_case(fname, ty, arms, ctx, ctx1, book)
 
-      {:run, _, ^name, _} ->
-        {:error, "the run does not decide an arm"}
+      {:run, fname, ^name, earlier} when is_list(earlier) ->
+        wide_case(fname, earlier, name, ty, arms, ctx, ctx1, book)
 
       {:name, _} ->
         {:error, "a case is on the name just bound"}
@@ -2506,10 +2572,11 @@ defmodule Muro.Session do
 
   defp one_arg(_), do: :error
 
-  # A numeral bound. Direct arms are `0` … `w`. A one-argument run is
-  # evaluated at each of those numerals. A run of this nat and the next
-  # declared data payload is their product. Three or more factors are
-  # not a split. The nat is not entered as a length.
+  # A numeral bound. Direct arms are `0` .. `w`. A one-argument run is
+  # evaluated at each of those numerals. A run of this nat and one
+  # following bit or declared data payload is their product. A run of
+  # several finite factors is the product of every factor. The nat is
+  # not entered as a length.
   defp nat_proto(name, w, {:case, scrut, arms}, ctx, book) do
     case scrut do
       {:name, ^name} ->
@@ -2522,8 +2589,8 @@ defmodule Muro.Session do
       {:run, fname, ^name} ->
         nat_run_proto(fname, w, arms, ctx, book)
 
-      {:run, _, ^name, _} ->
-        {:error, "the run does not decide an arm"}
+      {:run, fname, ^name, earlier} when is_list(earlier) ->
+        wide_on_nat(fname, earlier, {:nat, name, w}, arms, ctx, book)
 
       {:name, _} ->
         {:error, "a case is on the name just bound"}
@@ -2541,16 +2608,18 @@ defmodule Muro.Session do
 
   defp nat_proto(name, w, {tag, b, ty, {:case, scrut, arms}}, ctx, book)
        when tag in [:dsend, :drecv] do
+    ctx1 = guard(Map.put(ctx, {:win, name}, w))
+
     cond do
-      match?({:run, _, ^b, [^name]}, scrut) ->
+      match?({:run, _, ^b, [^name]}, scrut) and finite_pay?(ty, book) ->
         {:run, fname, _, _} = scrut
         product_proto(ty, fname, w, arms, ctx, book)
 
       match?({:run, _, ^b, _}, scrut) ->
-        {:error, "the run does not decide an arm"}
+        {:run, fname, _, earlier} = scrut
+        wide_on_pay(fname, earlier, b, ty, arms, ctx1, book)
 
       true ->
-        ctx1 = guard(Map.put(ctx, {:win, name}, w))
         proto_at({tag, b, ty, {:case, scrut, arms}}, ctx1, book)
     end
   end
@@ -2688,6 +2757,602 @@ defmodule Muro.Session do
 
   defp two_arg(_), do: :error
 
+  defp finite_pay?(ty, book) do
+    case pay_ctors(ty, book) do
+      cs when is_list(cs) and cs != [] -> true
+      _ -> false
+    end
+  end
+
+  # The factors of a run, in source order. The last one is the payload
+  # the case stands on. A nat factor is a numeral window already stored.
+  # A bit or a declared data type is the binding. Anything else is not
+  # a factor, and the run does not decide an arm.
+  defp wide_case(fname, earlier, name, ty, arms, ctx, ctx1, book) do
+    case last_factor(name, ty, book) do
+      {:ok, last} ->
+        case factors_of(earlier, ctx, book) do
+          {:ok, prev} -> wide_proto(prev ++ [last], fname, arms, ctx1, book)
+          :no -> {:error, "the run does not decide an arm"}
+        end
+
+      :no ->
+        {:error, "the run does not decide an arm"}
+    end
+  end
+
+  defp wide_on_nat(fname, earlier, last, arms, ctx, book) do
+    case factors_of(earlier, ctx, book) do
+      {:ok, prev} -> wide_proto(prev ++ [last], fname, arms, guard(ctx), book)
+      :no -> {:error, "the run does not decide an arm"}
+    end
+  end
+
+  defp wide_on_pay(fname, earlier, name, ty, arms, ctx, book) do
+    case last_factor(name, ty, book) do
+      {:ok, last} ->
+        case factors_of(earlier, ctx, book) do
+          {:ok, prev} ->
+            wide_proto(prev ++ [last], fname, arms, guard(Map.put(ctx, name, ty)), book)
+
+          :no ->
+            {:error, "the run does not decide an arm"}
+        end
+
+      :no ->
+        {:error, "the run does not decide an arm"}
+    end
+  end
+
+  defp wide_proto(factors, fname, arms, ctx, book) do
+    prepared = run_book(ctx, book)
+
+    case n_ready(fname, Enum.map(factors, &factor_ty/1), prepared, book) do
+      {:error, msg} ->
+        {:error, msg}
+
+      {:ok, labels} ->
+        cond do
+          labels != Enum.map(arms, fn {c, _} -> c end) ->
+            {:error, "case arms do not match the constructors"}
+
+          true ->
+            case wide_rows(factors, fname, arms, prepared) do
+              {:ok, _} ->
+                arms_ok(arms, ctx, book)
+
+              {:error, msg} ->
+                {:error, rewrite_run(msg)}
+
+              :no ->
+                {:error, "the run does not decide an arm"}
+            end
+        end
+    end
+  end
+
+  defp wide_or_refuse(
+         fname,
+         earlier,
+         name,
+         ty,
+         ps,
+         arms,
+         proc,
+         proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book
+       ) do
+    case last_factor(name, ty, book) do
+      {:ok, last} ->
+        case factors_of(earlier, ctx, book) do
+          {:ok, prev} ->
+            wide_cover(
+              prev ++ [last],
+              fname,
+              ps,
+              arms,
+              name,
+              proc,
+              proto,
+              ctx,
+              idx,
+              penv,
+              senv,
+              seen,
+              fuel,
+              book
+            )
+
+          :no ->
+            refuse(proc, proto, "the run does not decide an arm")
+        end
+
+      :no ->
+        refuse(proc, proto, "the run does not decide an arm")
+    end
+  end
+
+  defp wide_nat_recv(
+         fname,
+         earlier,
+         y,
+         w,
+         name,
+         ps,
+         arms,
+         proc,
+         proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book,
+         span
+       ) do
+    case factors_of(earlier, ctx, book) do
+      {:ok, prev} ->
+        wide_cover(
+          prev ++ [{:nat, y, w}],
+          fname,
+          ps,
+          arms,
+          name,
+          proc,
+          proto,
+          ctx,
+          idx,
+          penv,
+          senv,
+          seen,
+          fuel,
+          book,
+          span
+        )
+
+      :no ->
+        refuse(proc, proto, "the run does not decide an arm")
+    end
+  end
+
+  defp wide_cover(
+         factors,
+         fname,
+         ps,
+         arms,
+         name,
+         proc,
+         proto,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book,
+         span \\ nil
+       ) do
+    span = span || here_span()
+
+    case n_ready(fname, Enum.map(factors, &factor_ty/1), book, book) do
+      {:error, msg} ->
+        refuse(proc, proto, msg)
+
+      {:ok, labels} ->
+        cond do
+          labels != Enum.map(arms, fn {c, _} -> c end) ->
+            refuse(proc, proto, "case arms do not match the constructors")
+
+          true ->
+            case wide_rows(factors, fname, arms, book) do
+              {:ok, rows} ->
+                cover_last(
+                  ps,
+                  factors,
+                  rows,
+                  name,
+                  ctx,
+                  idx,
+                  penv,
+                  senv,
+                  seen,
+                  fuel,
+                  book,
+                  span
+                )
+
+              {:error, msg} ->
+                refuse(proc, proto, rewrite_run(msg))
+
+              :no ->
+                refuse(proc, proto, "the run does not decide an arm")
+            end
+        end
+    end
+  end
+
+  defp last_factor(name, :bit, _book), do: {:ok, {:bit, name}}
+
+  defp last_factor(name, {:dat, _, _} = ty, book) do
+    case pay_ctors(ty, book) do
+      cs when is_list(cs) and cs != [] -> {:ok, {:tag, name, ty, cs}}
+      _ -> :no
+    end
+  end
+
+  defp last_factor(_, _, _), do: :no
+
+  defp factors_of(names, ctx, book) do
+    Enum.reduce_while(names, {:ok, []}, fn name, {:ok, acc} ->
+      case factor_in(name, ctx, book) do
+        {:ok, fac} -> {:cont, {:ok, acc ++ [fac]}}
+        :no -> {:halt, :no}
+      end
+    end)
+  end
+
+  defp factor_in(name, ctx, book) do
+    w = Map.get(ctx, {:win, name})
+
+    cond do
+      is_integer(w) and w >= 0 ->
+        {:ok, {:nat, name, w}}
+
+      Map.get(ctx, name) == :bit ->
+        {:ok, {:bit, name}}
+
+      match?({:dat, _, _}, Map.get(ctx, name)) ->
+        last_factor(name, Map.get(ctx, name), book)
+
+      true ->
+        :no
+    end
+  end
+
+  defp factor_ty({:nat, _, _}), do: :nat
+  defp factor_ty({:bit, _}), do: :bit
+  defp factor_ty({:tag, _, ty, _}), do: ty
+
+  defp factor_name({:nat, name, _}), do: name
+  defp factor_name({:bit, name}), do: name
+  defp factor_name({:tag, name, _, _}), do: name
+
+  defp factor_labels({:nat, _, w}), do: nat_arms(w)
+  defp factor_labels({:bit, _}), do: ["b0", "b1"]
+  defp factor_labels({:tag, _, _, cs}), do: cs
+
+  defp open_ty({:nat, _, w}), do: {:bnat, w}
+  defp open_ty({:bit, _}), do: :bit
+  defp open_ty({:tag, _, ty, _}), do: ty
+
+  defp factor_points({:nat, _, w}), do: Enum.map(0..w, &{:nat, &1})
+  defp factor_points({:bit, _}), do: [:b0, :b1]
+
+  defp factor_points({:tag, _, ty, cs}), do: Enum.map(cs, &probe_of(ty, &1))
+
+  defp cart_points(factors) do
+    Enum.reduce(factors, [[]], fn fac, acc ->
+      for prefix <- acc, point <- factor_points(fac), do: prefix ++ [point]
+    end)
+  end
+
+  defp point_label({:nat, n}) when is_integer(n), do: Integer.to_string(n)
+  defp point_label(:b0), do: "b0"
+  defp point_label(:b1), do: "b1"
+  defp point_label({:con, c, _}), do: cname(c)
+  defp point_label(_), do: nil
+
+  defp wide_rows(factors, fname, arms, book) do
+    Enum.reduce_while(cart_points(factors), {:ok, []}, fn args, {:ok, acc} ->
+      case eval_split(fname, args, arms, book) do
+        {:ok, proto} -> {:cont, {:ok, acc ++ [{args, proto}]}}
+        other -> {:halt, other}
+      end
+    end)
+  end
+
+  defp n_ready(fname, payloads, prepared, data_book) do
+    defs = run_defs(prepared)
+
+    case Enum.find_index(defs, &(&1.name == fname)) do
+      nil ->
+        {:error, "the run does not decide an arm"}
+
+      i ->
+        defn = Enum.at(defs, i)
+        prefix = Enum.take(defs, i)
+
+        case n_arg(defn, length(payloads)) do
+          {:ok, doms, cod, body} ->
+            cond do
+              length(doms) != length(payloads) ->
+                {:error, "the run does not decide an arm"}
+
+              not Enum.all?(Enum.zip(payloads, doms), fn {pay, dom} ->
+                type_matches?(pay, dom, data_book)
+              end) ->
+                {:error, "the run does not decide an arm"}
+
+              calls_out?(body, prefix, defs) ->
+                {:error, run_cycle(fname, body)}
+
+              head = outside_fragment(body) ->
+                {:error, "outside the computed fragment: #{head}"}
+
+              true ->
+                case result_ty(cod, data_book) do
+                  {:ok, rty} ->
+                    case arm_labels(rty, data_book) do
+                      {:ok, labels} -> {:ok, labels}
+                      :error -> {:error, "a case is on a bit or a declared data type"}
+                    end
+
+                  :error ->
+                    {:error, "a case is on a bit or a declared data type"}
+                end
+            end
+
+          :error ->
+            {:error, "the run does not decide an arm"}
+        end
+    end
+  end
+
+  defp n_arg(%{type: ty, body: body}, n), do: peel_pi(ty, body, n, [])
+  defp n_arg(_, _), do: :error
+
+  defp peel_pi(cod, body, 0, doms) do
+    if match?({:pi, _, _, _, _}, cod) do
+      :error
+    else
+      {:ok, Enum.reverse(doms), cod, body}
+    end
+  end
+
+  defp peel_pi({:pi, _, dom, _, cod}, {:lam, _, _, _, body}, n, doms) when n > 0 do
+    peel_pi(cod, body, n - 1, [dom | doms])
+  end
+
+  defp peel_pi(_, _, _, _), do: :error
+
+  defp cover_last(ps, factors, rows, name, ctx, idx, penv, senv, seen, fuel, book, span) do
+    last = List.last(factors)
+    prefix = Enum.drop(factors, -1)
+    labels = factor_labels(last)
+
+    groups =
+      Enum.map(labels, fn lab ->
+        {lab, Enum.filter(rows, fn {args, _} -> point_label(List.last(args)) == lab end)}
+      end)
+
+    if length(ps) != length(labels) do
+      {:error, step_at(span), "match does not cover the received value"}
+    else
+      ctx1 = bind_ctx(ctx, name, factor_ty(last))
+
+      cover_groups(
+        ps,
+        groups,
+        prefix,
+        open_ty(last),
+        ctx1,
+        idx,
+        penv,
+        senv,
+        seen,
+        fuel,
+        book,
+        span
+      )
+    end
+  end
+
+  defp cover_groups([], [], _prefix, _ty, _ctx, _idx, _penv, _senv, _seen, _fuel, _book, _span),
+    do: :ok
+
+  defp cover_groups(
+         [p | ps],
+         [{lab, group} | groups],
+         prefix,
+         ty,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book,
+         span
+       ) do
+    case open_named(p, lab, ty, ctx, book) do
+      {:ok, body, ctx1} ->
+        sub = Enum.map(group, fn {args, proto} -> {Enum.drop(args, -1), proto} end)
+
+        case cover_prefix(
+               body,
+               prefix,
+               sub,
+               ctx1,
+               idx,
+               penv,
+               senv,
+               seen,
+               fuel,
+               book,
+               span
+             ) do
+          :ok ->
+            cover_groups(ps, groups, prefix, ty, ctx, idx, penv, senv, seen, fuel, book, span)
+
+          other ->
+            other
+        end
+
+      {:error, msg} ->
+        {:error, step_at(span), msg}
+    end
+  end
+
+  defp cover_groups(_, _, _, _, _, _, _, _, _, _, _, span),
+    do: {:error, step_at(span), "match does not cover the received value"}
+
+  defp cover_prefix(proc, [], rows, ctx, idx, penv, senv, seen, fuel, book, span) do
+    case same_rows(rows) do
+      {:ok, proto} ->
+        descend(proc, proto, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(span, 0))
+
+      :no ->
+        {:error, step_at(span), "match does not cover the received value"}
+    end
+  end
+
+  defp cover_prefix(proc, factors, rows, ctx, idx, penv, senv, seen, fuel, book, span) do
+    case same_rows(rows) do
+      {:ok, proto} ->
+        case cover_match(proc, factors, rows, ctx, idx, penv, senv, seen, fuel, book, span) do
+          :ok ->
+            :ok
+
+          _ ->
+            descend(proc, proto, ctx, idx, penv, senv, seen, fuel - 1, book, step_down(span, 0))
+        end
+
+      :no ->
+        cover_match(proc, factors, rows, ctx, idx, penv, senv, seen, fuel, book, span)
+    end
+  end
+
+  defp cover_match(
+         {:match, scrut, arms},
+         factors,
+         rows,
+         ctx,
+         idx,
+         penv,
+         senv,
+         seen,
+         fuel,
+         book,
+         span
+       )
+       when is_list(arms) do
+    fac = List.last(factors)
+    prefix = Enum.drop(factors, -1)
+    labels = factor_labels(fac)
+
+    cond do
+      scrut != factor_name(fac) ->
+        {:error, step_at(span), "match does not cover the received value"}
+
+      length(arms) != length(labels) ->
+        {:error, step_at(span), "match does not cover the received value"}
+
+      true ->
+        groups =
+          Enum.map(labels, fn lab ->
+            {lab, Enum.filter(rows, fn {args, _} -> point_label(List.last(args)) == lab end)}
+          end)
+
+        cover_groups(
+          arms,
+          groups,
+          prefix,
+          open_ty(fac),
+          ctx,
+          idx,
+          penv,
+          senv,
+          seen,
+          fuel,
+          book,
+          span
+        )
+    end
+  end
+
+  defp cover_match(_proc, _factors, _rows, _ctx, _idx, _penv, _senv, _seen, _fuel, _book, span),
+    do: {:error, step_at(span), "match does not cover the received value"}
+
+  defp same_rows([]), do: :no
+
+  defp same_rows([{_, proto} | rest]) do
+    if Enum.all?(rest, fn {_, other} -> other == proto end), do: {:ok, proto}, else: :no
+  end
+
+  defp sent_factors(names, ctx) do
+    vals = Enum.map(names, &sent_arg(&1, ctx))
+
+    cond do
+      Enum.any?(vals, &(&1 == :no)) -> :no
+      Enum.any?(vals, &(&1 == :unknown)) -> :unknown
+      true -> {:ok, Enum.map(vals, fn {:ok, v} -> v end)}
+    end
+  end
+
+  defp sent_arg(name, ctx) do
+    case Map.get(ctx, {:sent, name}) do
+      {:nat, n} when is_integer(n) and n >= 0 -> {:ok, {:nat, n}}
+      :b0 -> {:ok, :b0}
+      :b1 -> {:ok, :b1}
+      {:con, _, _} = val -> {:ok, val}
+      {:var, _} -> :unknown
+      _ -> :no
+    end
+  end
+
+  defp wide_send(fname, earlier, val, arms, ctx, book) do
+    case sent_factors(earlier, ctx) do
+      :no ->
+        :no
+
+      :unknown ->
+        case agree_arms(val, arms) do
+          {:ok, proto} -> {:ok, proto}
+          _ -> :no
+        end
+
+      {:ok, args} ->
+        case known_payload(val, ctx, book) do
+          :unknown ->
+            case agree_arms(val, arms) do
+              {:ok, proto} -> {:ok, proto}
+              _ -> :no
+            end
+
+          {:ok, v} ->
+            run_select(fname, args ++ [v], arms, book)
+
+          {:error, msg} ->
+            {:error, msg}
+        end
+    end
+  end
+
+  defp meet_factor(idx, name) do
+    case Map.get(idx, name) do
+      {:lit, n} when is_integer(n) and n >= 0 ->
+        {:nat, n}
+
+      {:nat, n} when is_integer(n) and n >= 0 ->
+        {:nat, n}
+
+      _ ->
+        case Map.get(idx, {:pay, name}) do
+          {_ty, :b0} -> :b0
+          {_ty, :b1} -> :b1
+          {_ty, {:con, _, _} = val} -> val
+          _ -> nil
+        end
+    end
+  end
+
   defp nat_arms(w) when is_integer(w) and w >= 0, do: Enum.map(0..w, &Integer.to_string/1)
 
   defp nat_rows(fname, arms, w, book) do
@@ -2782,8 +3447,25 @@ defmodule Muro.Session do
   defp pick_nat({:run, fname, y}, y, val, got, w, arms, _ctx, book),
     do: pick_run_arm(val, got, w, fname, arms, book)
 
-  defp pick_nat({:run, _, y, _}, y, _val, _got, _w, _arms, _ctx, _book),
-    do: {:error, "the run does not decide an arm"}
+  defp pick_nat({:run, fname, y, earlier}, y, val, got, w, arms, ctx, book)
+       when is_list(earlier) do
+    case sent_factors(earlier, ctx) do
+      :no ->
+        {:error, "the run does not decide an arm"}
+
+      :unknown ->
+        agree_arms(val, arms)
+
+      {:ok, args} ->
+        case got do
+          {:nat, n} when is_integer(n) and n >= 0 and n <= w ->
+            run_select(fname, args ++ [got], arms, book)
+
+          _ ->
+            {:error, "the value #{show_val(got)} does not select an arm"}
+        end
+    end
+  end
 
   defp pick_nat({:name, _}, _y, _val, _got, _w, _arms, _ctx, _book),
     do: {:error, "a case is on the name just bound"}
@@ -2988,8 +3670,26 @@ defmodule Muro.Session do
             refuse(proc, proto, msg)
         end
 
-      {:run, _, ^y, _} ->
-        refuse(proc, proto, "the run does not decide an arm")
+      {:run, fname, ^y, earlier} when is_list(earlier) ->
+        wide_nat_recv(
+          fname,
+          earlier,
+          y,
+          w,
+          name,
+          ps,
+          arms,
+          proc,
+          proto,
+          ctx,
+          idx,
+          penv,
+          senv,
+          seen,
+          fuel,
+          book,
+          span
+        )
 
       {:name, _} ->
         refuse(proc, proto, "a case is on the name just bound")
@@ -3026,14 +3726,53 @@ defmodule Muro.Session do
       [nat] ->
         case Map.get(ctx, {:win, nat}) do
           w when is_integer(w) and w >= 0 ->
-            prod_cover(
+            if finite_pay?(ty, book) do
+              prod_cover(
+                fname,
+                nat,
+                w,
+                ty,
+                ps,
+                arms,
+                name,
+                proc,
+                proto,
+                ctx,
+                idx,
+                penv,
+                senv,
+                seen,
+                fuel,
+                book
+              )
+            else
+              wide_or_refuse(
+                fname,
+                earlier,
+                name,
+                ty,
+                ps,
+                arms,
+                proc,
+                proto,
+                ctx,
+                idx,
+                penv,
+                senv,
+                seen,
+                fuel,
+                book
+              )
+            end
+
+          _ ->
+            wide_or_refuse(
               fname,
-              nat,
-              w,
+              earlier,
+              name,
               ty,
               ps,
               arms,
-              name,
               proc,
               proto,
               ctx,
@@ -3044,13 +3783,26 @@ defmodule Muro.Session do
               fuel,
               book
             )
-
-          _ ->
-            refuse(proc, proto, "the run does not decide an arm")
         end
 
       _ ->
-        refuse(proc, proto, "the run does not decide an arm")
+        wide_or_refuse(
+          fname,
+          earlier,
+          name,
+          ty,
+          ps,
+          arms,
+          proc,
+          proto,
+          ctx,
+          idx,
+          penv,
+          senv,
+          seen,
+          fuel,
+          book
+        )
     end
   end
 
@@ -3427,13 +4179,7 @@ defmodule Muro.Session do
   defp choose_arm({:run, fname, _last, earlier}, val, arms, book) when is_list(earlier) do
     idx = Process.get({__MODULE__, :meet_idx}, %{})
 
-    prev =
-      Enum.map(earlier, fn name ->
-        case Map.get(idx, name) do
-          {:lit, n} when is_integer(n) and n >= 0 -> {:nat, n}
-          _ -> nil
-        end
-      end)
+    prev = Enum.map(earlier, &meet_factor(idx, &1))
 
     if Enum.any?(prev, &is_nil/1) do
       {:error, "the run does not decide an arm"}
@@ -3534,12 +4280,14 @@ defmodule Muro.Session do
   defp probe_of(:bit, "b1"), do: :b1
   defp probe_of(_, c), do: {:con, c, []}
 
-  # A field is splittable when it is a bit or a declared data type.
-  # The split follows the run. A field the run binds and does not read
-  # is a dummy, and it is not a node. A nat, a vector, a pair, or a
-  # record is not a finite split.
+  # A field is splittable when it is a bit, a declared data type, or a
+  # nat whose bound is a numeral. The split follows the run. A field the
+  # run binds and does not read is a dummy, and it is not a node. An
+  # unbounded nat, a vector, a pair, a record, or a recursive field is
+  # not a finite split.
   defp splittable?(:bit), do: true
   defp splittable?({:dat, _, _}), do: true
+  defp splittable?({:bnat, w}) when is_integer(w) and w >= 0, do: true
   defp splittable?(_), do: false
 
   defp pay_ctors(:bit, _book), do: ["b0", "b1"]
@@ -3626,6 +4374,8 @@ defmodule Muro.Session do
   defp mk_val(_ty, c, ftys, _book), do: {:con, c, Enum.map(ftys, &dummy_field/1)}
 
   defp dummy_field(:nat), do: {:nat, 0}
+  defp dummy_field({:bnat, _}), do: {:nat, 0}
+  defp dummy_field(:rec), do: {:con, "rec", []}
   defp dummy_field(:bit), do: :b0
   defp dummy_field(:unit), do: :tt
   defp dummy_field({:pair, a, b}), do: {:tup, dummy_field(a), dummy_field(b)}
@@ -3680,9 +4430,28 @@ defmodule Muro.Session do
                 :no
 
               {:ok, ftys} ->
-                case opened(body, ctor) do
-                  nil -> plain_probe(fname, ty, ctor, arms, book)
-                  b -> guard(fname, arms, ftys, [], 0, 0, mk_val(ty, ctor, ftys, book), b, book)
+                case slots_of_ctor(ty, ctor, book) do
+                  :error ->
+                    :no
+
+                  {:ok, slots} ->
+                    case opened(body, ctor) do
+                      nil ->
+                        plain_probe(fname, ty, ctor, arms, book)
+
+                      b ->
+                        guard(
+                          fname,
+                          arms,
+                          slots,
+                          [],
+                          0,
+                          0,
+                          mk_val(ty, ctor, ftys, book),
+                          b,
+                          book
+                        )
+                    end
                 end
             end
 
@@ -3835,11 +4604,23 @@ defmodule Muro.Session do
 
   defp kids(_, _, _, _, _, _, _, _, _, _), do: :no
 
+  # A nullary arm that reads another field of this constructor continues
+  # the product on the parent field list. The field just chosen stays
+  # fixed. A constructor that has its own fields keeps those as the
+  # next split, and a parent field read from inside them is not a split.
   defp descend(fname, arms, tys, path, host, i, a, c, [], b, book) do
+    host1 = poke(host, path, i, mk_val(a, c, [], book))
+
     if others(tys, i, b) do
-      :no
+      case read_idxs(tys, b) do
+        {:ok, is} ->
+          enum_or(fname, arms, tys, host1, Enum.reject(is, &(&1 == i)), book)
+
+        :no ->
+          :no
+      end
     else
-      guard(fname, arms, [], path, 0, 0, poke(host, path, i, mk_val(a, c, [], book)), b, book)
+      guard(fname, arms, [], path, 0, 0, host1, b, book)
     end
   end
 
@@ -3869,6 +4650,9 @@ defmodule Muro.Session do
       nil ->
         :no
 
+      {:bnat, w} when is_integer(w) and w >= 0 ->
+        enum_nats(fname, arms, tys, host, i, is, w, book)
+
       a ->
         case pay_ctors(a, book) do
           nil ->
@@ -3880,6 +4664,21 @@ defmodule Muro.Session do
               other -> other
             end
         end
+    end
+  end
+
+  defp enum_nats(fname, arms, tys, host, i, is, w, book) do
+    Enum.reduce_while(0..w, {:ok, []}, fn k, {:ok, acc} ->
+      host1 = set_field(host, i, {:nat, k})
+
+      case enum_or(fname, arms, tys, host1, is, book) do
+        {:ok, s} -> {:cont, {:ok, acc ++ [{Integer.to_string(k), s}]}}
+        other -> {:halt, other}
+      end
+    end)
+    |> case do
+      {:ok, ch} -> {:ok, collapse(i, ch)}
+      other -> other
     end
   end
 
@@ -4053,7 +4852,9 @@ defmodule Muro.Session do
                 case Enum.at(ftys, i) do
                   fty when not is_nil(fty) ->
                     if splittable?(fty) do
-                      pair_fork(children, inner, fty, bind_fields(ctx, binders, ftys), book)
+                      ctx1 = bind_fields(ctx, binders, ftys)
+                      parent = %{binders: binders, tys: ftys, ctx: ctx1}
+                      pair_fork(children, inner, fty, ctx1, book, parent)
                     else
                       {:shape}
                     end
@@ -4075,14 +4876,14 @@ defmodule Muro.Session do
 
   defp cover_node(_, _, _, _, _, _, _), do: {:shape}
 
-  defp pair_fork([], [], _fty, _ctx, _book), do: {:ok, []}
-  defp pair_fork([], [_ | _], _fty, _ctx, _book), do: {:error, @cover}
-  defp pair_fork([_ | _], [], _fty, _ctx, _book), do: {:error, @cover}
+  defp pair_fork([], [], _fty, _ctx, _book, _parent), do: {:ok, []}
+  defp pair_fork([], [_ | _], _fty, _ctx, _book, _parent), do: {:error, @cover}
+  defp pair_fork([_ | _], [], _fty, _ctx, _book, _parent), do: {:error, @cover}
 
-  defp pair_fork([{cname, {:flat, proto}} | ch], [p | ps], fty, ctx, book) do
+  defp pair_fork([{cname, {:flat, proto}} | ch], [p | ps], fty, ctx, book, parent) do
     case open_named(p, cname, fty, ctx, book) do
       {:ok, body, ctx1} ->
-        case pair_fork(ch, ps, fty, ctx, book) do
+        case pair_fork(ch, ps, fty, ctx, book, parent) do
           {:ok, rest} -> {:ok, [{:check, body, proto, ctx1} | rest]}
           other -> other
         end
@@ -4092,7 +4893,7 @@ defmodule Muro.Session do
     end
   end
 
-  defp pair_fork([{cname, {:node, j, ch2}} | ch], [arm | ps], fty, ctx, book) do
+  defp pair_fork([{cname, {:node, j, ch2}} | ch], [arm | ps], fty, ctx, book, parent) do
     case arm do
       {:arm, c, xs, {:match, y, inner}}
       when is_binary(c) and is_list(xs) and is_list(inner) ->
@@ -4100,35 +4901,19 @@ defmodule Muro.Session do
           c != cname ->
             {:error, @cover}
 
-          Enum.at(xs, j) != y ->
-            {:shape}
-
           true ->
-            case fields_of_ctor(fty, cname, book) do
-              {:ok, ftys} ->
-                if length(xs) == length(ftys) do
-                  case Enum.at(ftys, j) do
-                    inner_ty when not is_nil(inner_ty) ->
-                      if splittable?(inner_ty) do
-                        ctx1 = bind_fields(ctx, xs, ftys)
-
-                        with {:ok, nested} <- pair_fork(ch2, inner, inner_ty, ctx1, book),
-                             {:ok, rest} <- pair_fork(ch, ps, fty, ctx, book) do
-                          {:ok, nested ++ rest}
-                        end
-                      else
-                        {:shape}
-                      end
-
-                    _ ->
-                      {:shape}
-                  end
-                else
-                  {:error, "wrong arity"}
+            case fork_scope(fty, cname, xs, j, y, ctx, book, parent) do
+              {:ok, inner_ty, ctx1, next} ->
+                with {:ok, nested} <- pair_fork(ch2, inner, inner_ty, ctx1, book, next),
+                     {:ok, rest} <- pair_fork(ch, ps, fty, ctx, book, parent) do
+                  {:ok, nested ++ rest}
                 end
 
-              :error ->
-                {:error, @cover}
+              :shape ->
+                {:shape}
+
+              {:error, msg} ->
+                {:error, msg}
             end
         end
 
@@ -4137,10 +4922,66 @@ defmodule Muro.Session do
     end
   end
 
-  defp pair_fork(_, _, _, _, _), do: {:shape}
+  defp pair_fork(_, _, _, _, _, _), do: {:shape}
+
+  # `fork-nest`: the inner index is a field of the constructor just
+  # opened. `fork-sib`: the label binds nothing (a numeral or a nullary
+  # constructor) and the index is a sibling field of the parent.
+  defp fork_scope(fty, cname, xs, j, y, ctx, book, parent) do
+    case fields_of_ctor(fty, cname, book) do
+      {:ok, ftys} ->
+        cond do
+          ftys != [] and length(xs) != length(ftys) ->
+            {:error, "wrong arity"}
+
+          Enum.at(xs, j) == y ->
+            case Enum.at(ftys, j) do
+              inner when not is_nil(inner) ->
+                if splittable?(inner) do
+                  ctx1 = bind_fields(ctx, xs, ftys)
+                  {:ok, inner, ctx1, %{binders: xs, tys: ftys, ctx: ctx1}}
+                else
+                  sib_scope(j, y, parent)
+                end
+
+              _ ->
+                sib_scope(j, y, parent)
+            end
+
+          true ->
+            sib_scope(j, y, parent)
+        end
+
+      :error ->
+        sib_scope(j, y, parent)
+    end
+  end
+
+  defp sib_scope(j, y, %{binders: binders, tys: tys, ctx: ctx}) do
+    inner = Enum.at(tys, j)
+
+    if Enum.at(binders, j) == y and not is_nil(inner) and splittable?(inner) do
+      {:ok, inner, ctx, %{binders: binders, tys: tys, ctx: ctx}}
+    else
+      :shape
+    end
+  end
+
+  defp sib_scope(_j, _y, _parent), do: :shape
 
   # Fields come from the payload constructor. The protocol arm is the
   # one the run selects for this constructor, or for the field it reads.
+  defp open_named({:arm, ctor, [], body}, expected, {:bnat, w}, ctx, _book)
+       when is_binary(ctor) and ctor == expected and is_integer(w) and w >= 0 do
+    case Integer.parse(ctor) do
+      {n, ""} when n >= 0 and n <= w ->
+        if Integer.to_string(n) == ctor, do: {:ok, body, ctx}, else: {:error, @cover}
+
+      _ ->
+        {:error, @cover}
+    end
+  end
+
   defp open_named({:arm, ctor, binders, body}, expected, ty, ctx, book)
        when is_binary(ctor) and is_list(binders) do
     cond do
@@ -4307,6 +5148,7 @@ defmodule Muro.Session do
   defp ty_ok(ty, ctx, book), do: ty_ok(ty, ctx, book, MapSet.new())
 
   defp ty_ok(ty, _ctx, _book, _seen) when ty in [:nat, :bit, :unit], do: :ok
+  defp ty_ok({:bnat, w}, _ctx, _book, _seen) when is_integer(w) and w >= 0, do: :ok
 
   defp ty_ok({:pair, a, b}, ctx, book, seen) do
     with_ty(ty_ok(a, ctx, book, seen), ty_ok(b, ctx, book, seen))
@@ -4350,6 +5192,20 @@ defmodule Muro.Session do
   defp keep({:error, _, _} = err), do: err
 
   defp fits({:nat, n}, :nat, _ctx, _book) when is_integer(n) and n >= 0, do: :yes
+
+  defp fits({:nat, n}, {:bnat, w}, _ctx, _book)
+       when is_integer(n) and is_integer(w) and n >= 0 and n <= w,
+       do: :yes
+
+  defp fits({:nat, n}, {:bnat, w}, _ctx, book)
+       when is_integer(n) and is_integer(w) and n >= 0 do
+    {:error, bound_reason({:nat, n}, {:nat, n}, {:lit, w}, book)}
+  end
+
+  defp fits({:var, name}, {:bnat, w}, _ctx, book) when is_integer(w) and w >= 0 do
+    {:error, bound_reason({:var, name}, {:var, name}, {:lit, w}, book)}
+  end
+
   defp fits(bit, :bit, _ctx, _book) when bit in [:b0, :b1], do: :yes
   defp fits(:tt, :unit, _ctx, _book), do: :yes
 
@@ -4586,11 +5442,12 @@ defmodule Muro.Session do
   # Drop the parameter binders. The remaining domains are the fields.
   # `0` after that drop is the last parameter. A field that mentions a
   # previous field, a function, or an erased argument is not a payload.
-  defp fields_of(d, %{type: ty}) do
+  defp fields_of(d, %{type: ty} = ctor) do
     n = length(d.params)
+    bounds = Map.get(ctor, :bounds, %{})
 
     case drop_params(ty, n) do
-      {:ok, body} -> read_fields(body, d.name, n, 0)
+      {:ok, body} -> read_fields(body, d.name, n, 0, bounds)
       :error -> :error
     end
   end
@@ -4599,18 +5456,31 @@ defmodule Muro.Session do
   defp drop_params({:pi, _q, _a, _x, b}, n) when n > 0, do: drop_params(b, n - 1)
   defp drop_params(_, _), do: :error
 
-  defp read_fields({:pi, q, a, _x, b}, dname, n, depth) do
+  defp read_fields({:pi, q, a, x, b}, dname, n, depth, bounds) do
     if q == :erased do
       :error
     else
       with {:ok, field} <- field_template(a, dname, n, depth),
-           {:ok, rest} <- read_fields(b, dname, n, depth + 1) do
+           {:ok, field} <- stamp_bound(field, x, bounds),
+           {:ok, rest} <- read_fields(b, dname, n, depth + 1, bounds) do
         {:ok, [field | rest]}
       end
     end
   end
 
-  defp read_fields(_result, _dname, _n, _depth), do: {:ok, []}
+  defp read_fields(_result, _dname, _n, _depth, _bounds), do: {:ok, []}
+
+  defp stamp_bound(:nat, x, bounds) do
+    case Map.get(bounds, x) do
+      w when is_integer(w) and w >= 0 -> {:ok, {:bnat, w}}
+      nil -> {:ok, :nat}
+      _ -> :error
+    end
+  end
+
+  defp stamp_bound(field, x, bounds) do
+    if Map.has_key?(bounds, x), do: :error, else: {:ok, field}
+  end
 
   defp field_template(:nat, _dname, _n, _depth), do: {:ok, :nat}
   defp field_template(:unit, _dname, _n, _depth), do: {:ok, :unit}
@@ -4664,6 +5534,7 @@ defmodule Muro.Session do
   defp unspine(_, _), do: :error
 
   defp inst_field(:nat, _dname, _args), do: :nat
+  defp inst_field({:bnat, w}, _dname, _args) when is_integer(w) and w >= 0, do: {:bnat, w}
   defp inst_field(:bit, _dname, _args), do: :bit
   defp inst_field(:unit, _dname, _args), do: :unit
   defp inst_field({:par, i}, _dname, args), do: Enum.at(args, i)
@@ -4676,6 +5547,9 @@ defmodule Muro.Session do
 
   defp inst_field({:dat, name, ts}, dname, args),
     do: {:dat, name, Enum.map(ts, &inst_field(&1, dname, args))}
+
+  defp inst_slot({:self, _ts}, _dname, _args), do: :rec
+  defp inst_slot(field, dname, args), do: inst_field(field, dname, args)
 
   def show_proc(:done), do: "done"
   def show_proc(:stop), do: "stop"
@@ -4800,6 +5674,7 @@ defmodule Muro.Session do
   end
 
   defp show_pay(:nat), do: "Nat"
+  defp show_pay({:bnat, _}), do: "Nat"
   defp show_pay(:bit), do: "Bit"
   defp show_pay(:unit), do: "Unit"
   defp show_pay({:pair, a, b}), do: "#{show_pay_atom(a)} * #{show_pay_atom(b)}"
@@ -4834,6 +5709,10 @@ defmodule Muro.Session do
   defp paren_proto({:sjump, _, _} = s), do: show_proto(s)
   defp paren_proto({:sess, _, _} = s), do: show_proto(s)
   defp paren_proto(s), do: "(#{show_proto(s)})"
+
+  # A sent factor is stored in canonical form, so a nullary constructor
+  # written as a name is the constructor the product probes.
+  defp remember(ctx, name, val, book), do: Map.put(ctx, {:sent, name}, canon(val, book))
 
   # The value a dependent send instantiates. A run application is the
   # nat it computes. A name stays a name.
@@ -5618,6 +6497,11 @@ defmodule Muro.Session do
   # The parameter type chooses the reading. A two-element tuple is a pair
   # or a one-field constructor, and those are different types.
   defp read_pay(:nat, n, _book) when is_integer(n) and n >= 0, do: {:ok, {:nat, n}}
+
+  defp read_pay({:bnat, w}, n, _book)
+       when is_integer(n) and is_integer(w) and n >= 0 and n <= w,
+       do: {:ok, {:nat, n}}
+
   defp read_pay(:bit, bit, _book) when bit in [:b0, :b1], do: {:ok, bit}
   defp read_pay(:unit, :tt, _book), do: {:ok, :tt}
 
