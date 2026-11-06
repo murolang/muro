@@ -43,7 +43,7 @@ The name is `"<file> <def-name>"`: the book path as the suite renders it, one sp
 
 The function name is the spelling `Muro.Emit.elixir_names/1` gives that run, the same name the Elixir, NIF, OTP, and FSM outputs use. The arity is the number of non-erased binders of `f`. The assertion calls `impl.f(args)` or `impl.f()`. It does not call a hard-coded emitted module.
 
-`f` from the file stem `rounding` is `round` when the Muro name is `round`. A reserved word or a hyphenated name is the same `muro__` spelling the Elixir backend emits.
+`f` from the file stem `rounding` is `round` when the Muro name is `round`. A hyphenated name whose fold is a function name is that fold (`golden-silence` is `golden_silence`). A reserved word is the same `muro__` spelling the Elixir backend emits.
 
 ## The implementation
 
@@ -301,7 +301,7 @@ A larger library, a `decide` of a key and a list whose silence and empty cases a
 
 ```elixir
 [
-  muro: "0.20.15",
+  muro: "0.20.16",
   modules: [
     {"kit.muro", KitTest, "test/kit_test.exs", [kind: :exunit]},
     {"impl.muro", ImplTest, "test/impl_test.exs", [kind: :exunit, imports: true]}
@@ -368,7 +368,7 @@ A 3-tuple is still an Elixir module. An ExUnit entry adds a keyword list:
 
 ```elixir
 [
-  muro: "0.20.15",
+  muro: "0.20.16",
   modules: [
     {"priv/muro/rounding.muro", MyApp.Rounding, "lib/my_app/rounding.ex"},
     {"priv/muro/rounding.muro", MyApp.RoundingTest, "test/rounding_test.exs",

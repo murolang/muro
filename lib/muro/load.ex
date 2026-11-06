@@ -362,7 +362,14 @@ defmodule Muro.Load do
 
     case Check.check_sig(Prelude.for_check(book), opts) do
       :ok ->
-        {:ok, Check.take_meeting_graphs()}
+        case Muro.Emit.elixir_clash(book) do
+          :ok ->
+            {:ok, Check.take_meeting_graphs()}
+
+          {:error, msg} ->
+            Check.take_meeting_graphs()
+            {:error, prefix_locs(msg, path, ctx)}
+        end
 
       {:error, msg} ->
         Check.take_meeting_graphs()

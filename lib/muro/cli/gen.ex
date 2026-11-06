@@ -12,7 +12,7 @@ defmodule Muro.CLI.Gen do
         type: :boolean,
         default: "false",
         doc:
-          "Write nothing. Compare each committed file with the bytes muro gen would leave in place. The book hash, the body hash, and the Muro version in the header must agree. Success prints ok. A missing target, a stale book, a hand edit, a body that differs, or a header that names another version is an error and names the target and the book. The .h beside a C target is checked the same way."
+          "Write nothing. Compare each committed file with the bytes muro gen would leave in place. The book hash, the body hash, and the Muro version in the header must agree. Success prints ok. A missing target, a stale book, a hand edit, a body that differs, or a header that names another version is an error and names the target and the book. When the header is older than the Elixir spelling rule, the error also lists host names that changed. The .h beside a C target is checked the same way."
       }
     ]
   end

@@ -156,7 +156,6 @@ defmodule Muro.EmitZigTest do
     def fn : run Nat := 0
     def Nat : run Nat := suc 0
     def foo-bar : run Nat := 0
-    def foo_bar : run Nat := suc 0
     def keep : run Nat := u8
     """)
 
@@ -173,7 +172,7 @@ defmodule Muro.EmitZigTest do
     assert source =~ "pub fn #{Muro.Emit.Zig.source_id("fn")}("
     assert source =~ "pub fn #{Muro.Emit.Zig.source_id("Nat")}("
     assert source =~ "pub fn #{Muro.Emit.Zig.source_id("foo-bar")}("
-    assert source =~ "pub fn #{Muro.Emit.Zig.source_id("foo_bar")}("
+    refute source =~ "pub fn #{Muro.Emit.Zig.source_id("foo_bar")}("
     assert source =~ "pub fn keep("
     refute Muro.Emit.Zig.source_id("foo-bar") == Muro.Emit.Zig.source_id("foo_bar")
     refute source =~ "foo_bar_2("
@@ -956,7 +955,6 @@ defmodule Muro.EmitZigTest do
       λ (s : Stream Nat) → head s
 
     def muro_step : run Nat := 0
-    def muro-step : run Nat := suc 0
     """)
 
     source = File.read!(emit_zig!(dir, "steps"))
@@ -970,7 +968,7 @@ defmodule Muro.EmitZigTest do
     refute bare in steps
     refute dashed in steps
     assert source =~ "pub fn #{bare}("
-    assert source =~ "pub fn #{dashed}("
+    refute source =~ "pub fn #{dashed}("
 
     File.write!(Path.join(dir, "check.zig"), """
     const std = @import("std");
@@ -982,7 +980,6 @@ defmodule Muro.EmitZigTest do
         const a = arena.allocator();
 
         try std.testing.expectEqual(@as(u64, 0), m.muro__to_u64(try m.#{bare}(a)));
-        try std.testing.expectEqual(@as(u64, 1), m.muro__to_u64(try m.#{dashed}(a)));
         try std.testing.expectEqual(@as(u64, 0), m.muro__to_u64(try m.hd(a, try m.s0(a))));
         try std.testing.expectEqual(@as(u64, 1), m.muro__to_u64(try m.hd(a, try m.s1(a))));
         try std.testing.expectEqual(@as(u64, 2), m.muro__to_u64(try m.hd(a, try m.s2(a))));
@@ -998,19 +995,24 @@ defmodule Muro.EmitZigTest do
     dir = tmp_dir()
 
     File.write!(Path.join(dir, "inj.muro"), """
-    def a-b : run Nat := 0
     def a_b : run Nat := suc 0
     def a_b_2 : run Nat := suc (suc 0)
     def call : run Nat := a_b
     """)
 
+    clash = Path.join(dir, "clash.muro")
+    File.write!(clash, "def a-b : run Nat := 0\ndef a_b : run Nat := suc 0\n")
+    assert {:error, msg} = Muro.check_file(clash)
+    assert msg =~ "a-b and a_b spell one Elixir function"
+
     source = File.read!(emit_zig!(dir, "inj"))
     ids = Enum.map(~w(a-b a_b a_b_2), &Muro.Emit.Zig.source_id/1)
     assert length(Enum.uniq(ids)) == 3
     Enum.each(ids, fn id -> refute String.contains?(id, "__") end)
-    Enum.each(ids, fn id -> assert source =~ "pub fn #{id}(" end)
-
     [ab, a_b, a_b_2] = ids
+    refute source =~ "pub fn #{ab}("
+    assert source =~ "pub fn #{a_b}("
+    assert source =~ "pub fn #{a_b_2}("
 
     File.write!(Path.join(dir, "check.zig"), """
     const std = @import("std");
@@ -1021,7 +1023,6 @@ defmodule Muro.EmitZigTest do
         defer arena.deinit();
         const a = arena.allocator();
 
-        try std.testing.expectEqual(@as(u64, 0), m.muro__to_u64(try m.#{ab}(a)));
         try std.testing.expectEqual(@as(u64, 1), m.muro__to_u64(try m.#{a_b}(a)));
         try std.testing.expectEqual(@as(u64, 2), m.muro__to_u64(try m.#{a_b_2}(a)));
         try std.testing.expectEqual(@as(u64, 1), m.muro__to_u64(try m.call(a)));

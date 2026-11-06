@@ -47,9 +47,10 @@ defmodule Mix.Tasks.Muro.Gen do
   every problem: a book that does not check, a missing target, a stale
   target (the book changed), a hand-edited target (the book is
   unchanged and the body hash does not match), a target that differs
-  from what its book emits, and a header that names a different Muro
-  version. Each line names the target and the book. When every target
-  matches, the task prints `ok`.
+  from what its book emits, a header that names a different Muro
+  version, and, when that header is older than the Elixir spelling
+  rule, the host names that changed. Each line names the target and
+  the book. When every target matches, the task prints `ok`.
 
   The header, the hashes, and the manifest are documented in
   `Muro.Gen` and `Muro.Manifest`.

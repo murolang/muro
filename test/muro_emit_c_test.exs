@@ -85,8 +85,7 @@ defmodule Muro.EmitCTest do
 
     File.write!(Path.join(dir, "names.muro"), """
     def foo-bar : run Nat := 0
-    def foo_bar : run Nat := suc 0
-    def answer : run Nat := foo_bar
+    def answer : run Nat := foo-bar
     def and : run Nat := suc (suc 0)
     def read : run Nat := suc (suc (suc 0))
     """)
@@ -104,8 +103,9 @@ defmodule Muro.EmitCTest do
 
     bar = Muro.Emit.elixir_base("foo-bar")
     conj = Muro.Emit.elixir_base("and")
+    assert bar == "foo_bar"
+    assert dash != under
     assert ex =~ "def #{bar}, do:"
-    assert ex =~ "def foo_bar, do:"
     assert ex =~ "def answer, do:"
     assert ex =~ "def #{conj}, do:"
     assert ex =~ "def read, do:"
@@ -113,16 +113,16 @@ defmodule Muro.EmitCTest do
     refute ex =~ "def #{dash}"
     refute ex =~ "foozubar"
     refute ex =~ "def and,"
+    refute ex =~ "def muro__foozdbar"
 
     assert source =~ "#{dash}("
-    assert source =~ "#{under}("
+    refute source =~ "#{under}("
     assert source =~ "#{read}("
     assert nif =~ ~s|"#{bar}", 0,|
-    assert nif =~ ~s|"foo_bar", 0,|
     assert nif =~ ~s|"#{conj}", 0,|
     assert nif =~ ~s|"read", 0,|
     assert nif =~ "#{dash}("
-    assert nif =~ "#{under}("
+    refute nif =~ "#{under}("
     assert nif =~ "#{read}("
     refute nif =~ ~s|"foo_bar_2"|
     refute nif =~ ~s|"foozubar"|
@@ -137,12 +137,13 @@ defmodule Muro.EmitCTest do
     Code.compile_file(Path.join(dir, "names.ex"))
     call = fn name -> apply(:"Elixir.Names", name, []) end
     assert call.(String.to_atom(bar)) == 0
-    assert call.(:foo_bar) == 1
-    assert call.(:answer) == 1
+    assert call.(:foo_bar) == 0
+    assert call.(:answer) == 0
     assert call.(String.to_atom(conj)) == 2
     assert call.(:read) == 3
     assert_raise UndefinedFunctionError, fn -> call.(:foozubar) end
     assert_raise UndefinedFunctionError, fn -> call.(:foo_bar_2) end
+    assert_raise UndefinedFunctionError, fn -> call.(:muro__foozdbar) end
   end
 
   test "a run Stream compiles as a seed and a step, and Elixir still uses Stream.unfold" do
@@ -588,7 +589,7 @@ defmodule Muro.EmitCTest do
     status == 0
   end
 
-  test "two definitions that spell the same stay two C functions" do
+  test "two definitions that spell one Elixir function are refused before C emit" do
     dir = tmp_dir()
     path = Path.join(dir, "collide.muro")
 
@@ -600,22 +601,10 @@ defmodule Muro.EmitCTest do
     def use-and : run Nat := and 0
     """)
 
-    capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "c"]) end)
-    header = File.read!(Path.join(dir, "collide.h"))
-    source = File.read!(Path.join(dir, "collide.c"))
-    bar = Muro.Emit.C.source_id("foo-bar")
-    under = Muro.Emit.C.source_id("foo_bar")
-    use_and = Muro.Emit.C.source_id("use-and")
-    assert bar != under
-    assert header =~ "muro__nat *#{bar}(void);"
-    assert header =~ "muro__nat *#{under}(void);"
-    assert header =~ "muro__nat *answer(void);"
-    assert header =~ "muro__nat *and("
-    assert header =~ "muro__nat *#{use_and}(void);"
-    refute header =~ "foo_bar_2"
-    assert source =~ "#{under}()"
-    refute source =~ "foo_bar_2()"
-    cc!(dir, "collide.c", "collide.o")
+    assert {:error, msg} = Muro.check_file(path)
+    assert msg =~ "foo-bar and foo_bar spell one Elixir function"
+    assert Muro.Emit.C.source_id("foo-bar") != Muro.Emit.C.source_id("foo_bar")
+    refute File.exists?(Path.join(dir, "collide.c"))
   end
 
   test "a data field of a stream declares muro__stream" do
@@ -806,7 +795,6 @@ defmodule Muro.EmitCTest do
       λ (s : Stream Nat) → head s
 
     def muro_step : run Nat := 0
-    def muro-step : run Nat := suc 0
     """)
 
     capture_io(fn ->
@@ -825,7 +813,7 @@ defmodule Muro.EmitCTest do
     refute bare in steps
     refute dashed in steps
     assert header =~ "muro__nat *#{bare}(void);"
-    assert header =~ "muro__nat *#{dashed}(void);"
+    refute header =~ "muro__nat *#{dashed}(void);"
 
     link_run!(dir, "steps", """
     #include "steps.h"
@@ -841,7 +829,6 @@ defmodule Muro.EmitCTest do
 
     int main(void) {
       if (nats(#{bare}()) != 0) return 1;
-      if (nats(#{dashed}()) != 1) return 2;
       if (nats(hd(s0())) != 0) return 3;
       if (nats(hd(s1())) != 1) return 4;
       if (nats(hd(s2())) != 2) return 5;
@@ -854,11 +841,15 @@ defmodule Muro.EmitCTest do
     dir = tmp_dir()
 
     File.write!(Path.join(dir, "inj.muro"), """
-    def a-b : run Nat := 0
     def a_b : run Nat := suc 0
     def a_b_2 : run Nat := suc (suc 0)
     def call : run Nat := a_b
     """)
+
+    clash = Path.join(dir, "clash.muro")
+    File.write!(clash, "def a-b : run Nat := 0\ndef a_b : run Nat := suc 0\n")
+    assert {:error, msg} = Muro.check_file(clash)
+    assert msg =~ "a-b and a_b spell one Elixir function"
 
     capture_io(fn ->
       Mix.Tasks.Muro.Emit.run([Path.join(dir, "inj.muro"), "--backend", "c"])
@@ -868,7 +859,9 @@ defmodule Muro.EmitCTest do
     [ab, a_b, a_b_2] = ids = Enum.map(~w(a-b a_b a_b_2), &Muro.Emit.C.source_id/1)
     assert length(Enum.uniq(ids)) == 3
     Enum.each(ids, fn id -> refute String.contains?(id, "__") end)
-    Enum.each(ids, fn id -> assert header =~ "muro__nat *#{id}(void);" end)
+    refute header =~ "muro__nat *#{ab}(void);"
+    assert header =~ "muro__nat *#{a_b}(void);"
+    assert header =~ "muro__nat *#{a_b_2}(void);"
 
     link_run!(dir, "inj", """
     #include "inj.h"
@@ -883,7 +876,6 @@ defmodule Muro.EmitCTest do
     }
 
     int main(void) {
-      if (nats(#{ab}()) != 0) return 1;
       if (nats(#{a_b}()) != 1) return 2;
       if (nats(#{a_b_2}()) != 2) return 3;
       if (nats(call()) != 1) return 4;

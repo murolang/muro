@@ -2520,26 +2520,42 @@ defmodule Muro.CheckTest do
     assert call("KernelNameEx", :min, [0]) == 0
   end
 
-  test "two names with one Elixir spelling do not collide on emit" do
-    src = """
+  test "two names with one Elixir spelling are refused at check" do
+    dir = Path.join(System.tmp_dir!(), "muro_elixir_clash_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+
+    path = Path.join(dir, "collide.muro")
+
+    File.write!(path, """
     def foo-bar : run Nat := 0
     def foo_bar : run Nat := suc 0
     def answer : run Nat := foo_bar
-    """
+    """)
 
-    assert {:ok, book} = Parser.parse(src)
-    assert :ok = Check.check_sig(book)
-    out = Emit.emit_module(Muro.Collide, book)
-    bar = Emit.elixir_base("foo-bar")
-    assert out =~ "def #{bar} do"
-    assert out =~ "def foo_bar do"
-    assert out =~ "foo_bar()"
-    refute out =~ "#{bar}()"
-    refute out =~ "def foo_bar_2"
-    Code.eval_string(out)
-    assert call("Collide", :answer, []) == {:suc, 0}
-    assert call("Collide", :foo_bar, []) == {:suc, 0}
-    assert call("Collide", String.to_atom(bar), []) == 0
+    assert {:error, msg} = Muro.check_file(path)
+    assert msg =~ "foo-bar and foo_bar spell one Elixir function"
+    assert msg =~ "collide.muro:1:1:"
+    assert msg =~ "collide.muro:2:1:"
+
+    lib = Path.join(dir, "lib.muro")
+    File.write!(lib, "def golden-silence : run Nat := 0\n")
+    use = Path.join(dir, "use.muro")
+    File.write!(use, "import \"lib.muro\"\ndef golden_silence : run Nat := suc 0\n")
+    assert {:error, imported} = Muro.check_file(use)
+    assert imported =~ "spell one Elixir function"
+    assert imported =~ "golden-silence"
+    assert imported =~ "golden_silence"
+    assert imported =~ "lib.muro:1:1:"
+    assert imported =~ "use.muro:2:1:"
+
+    ok = Path.join(dir, "ok.muro")
+    File.write!(ok, "def golden-silence : run Nat := 0\ndef Bit : run Nat := suc 0\n")
+    assert Muro.check_file(ok) == :ok
+    assert {:ok, out} = Muro.emit_file(ok, Muro.FoldOk)
+    assert out =~ "def golden_silence do"
+    assert out =~ "def muro__Bit do"
+    refute out =~ "def muro__goldenzdsilence"
   end
 
   test "a definition named like an Elixir reserved word emits a compilable module" do

@@ -303,16 +303,16 @@ defmodule Muro.EmitOtpTest do
     conform pong : ping := get Nat (put 1 done)
     meet wire : pong with peer
     meet a-b : peer with pong
-    meet a_b : pong with peer
     meet end : pong with peer
     """)
 
     assert {:ok, src} = Emit.Otp.render(checked!(path), "read-meet")
     assert src =~ "def wire do"
-    assert src =~ "def #{Emit.elixir_base("a-b")} do"
+    assert Emit.elixir_base("a-b") == "a_b"
     assert src =~ "def a_b do"
     refute src =~ "def a_b_2 do"
     refute src =~ "def a_b2 do"
+    refute src =~ "def muro__azdbar do"
     assert src =~ "def #{Emit.elixir_base("end")} do"
     assert src =~ "{:hear, :nat, :_, {:say, 1, :finish}}"
     assert src =~ "{:say, 1, {:hear, :nat, :_, :finish}}"
