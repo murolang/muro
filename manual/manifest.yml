@@ -89,7 +89,7 @@ pages:
   - file: library.md
     slug: library
     title: Library
-    summary: The ordinary library, imported as std:. Bool, Le, List, Maybe, and comparison.
+    summary: The ordinary library, imported as std:. Bool, Le, List, Maybe, comparison, and a binary successor.
   - file: grammar.md
     slug: grammar
     title: Grammar

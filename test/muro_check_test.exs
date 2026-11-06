@@ -2849,6 +2849,25 @@ defmodule Muro.CheckTest do
     assert Muro.check_file("examples/cshrl/envs/optimal.muro") == :ok
   end
 
+  test "binary successor checks, and the bits of 11 step to the bits of 12" do
+    assert Muro.check_file("lib/muro/std/suc_bin.muro") == :ok
+    assert {:ok, src} = Muro.emit_file("lib/muro/std/suc_bin.muro", Muro.StdSucBin)
+    assert src =~ ~r/\bdef sucBin\b/
+    assert src =~ ~r/\bdefp double\b/
+    refute src =~ "sucBin-corresp"
+    refute src =~ "sucBits-id"
+    refute src =~ "fromBits-toBits"
+    Code.eval_string(src)
+
+    bits11 = call("StdSucBin", :bits11, [])
+    bits12 = call("StdSucBin", :bits12, [])
+    assert call("StdSucBin", :sucBin, [bits11]) == bits12
+
+    eleven = call("StdSucBin", :eleven, [])
+    assert call("StdSucBin", :fromBits, [bits11]) == eleven
+    assert call("StdSucBin", :fromBits, [bits12]) == {:suc, eleven}
+  end
+
   # The module exists only after Code.eval_string, so a literal remote call warns.
   # Head is the seed binder. Annotation and unit match are kernel forms.
   defp stream_head_src do

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.20.16
+
+A library binary successor, as `std:suc_bin.muro`. Inductive Nat stays the primary number type. Machine integers (`U8`, `U32`, `U64`, `I64`) stay fixed-width residues and do not replace this book. `List Bit` is a numeral, least significant bit first, and leading zeros are allowed. `sucBit`, `sucBits`, and `sucBin` are a Mealy machine: the carry is the state, and `sucBin` starts at `I`. `fromBits` reads a bit list as a Nat. No host integer is used, and there is no fixed width. `sucBin-corresp` is `fromBits (sucBin (toBits n)) ≡ suc n`, by induction on the bit list and on `n`. The bits of 11 step to the bits of 12.
+
+### Library
+
+- `lib/muro/std/suc_bin.muro`. `import "std:suc_bin.muro"`. The book imports `list.muro`. `double` is `run internal`, the place-value shift `fromBits` needs.
+
+### Tests
+
+- The file checks. Emit omits the proofs and keeps `double` as `defp`. `sucBin` of the bits of 11 is the bits of 12, and `fromBits` reads both.
+
+### Manual
+
+- Library: the binary successor. Host representations: `std:suc_bin.muro` is not an interned-name target.
+
+### Package
+
+- Version 0.20.16.
+
 ## 0.20.15
 
 `U8`, `U32`, `U64`, and `I64` are fixed-width residues. `U8` is ℕ modulo 256, `U32` modulo 2^32, and `U64` modulo 2^64. `I64` is those 64 bits as two's complement. `addi`, `subi`, and `muli` wrap. `addc`, `subc`, and `mulc` return `Opt` and are `wsome` exactly when the result fits: below 2^w for an unsigned word, and in [−2^63, 2^63−1] for `I64`. `divi` and `remi` return `Opt`, empty for a zero divisor and for signed division of the minimum by −1. Division truncates toward zero and the remainder takes the sign of the dividend. `eqi`, `lti`, and `lei` return `WBool`. `andi`, `ori`, `xori`, and `noti` are bitwise. `shli` and `shri` are total: an amount at or past the width yields 0, except a signed `shri`, which sign-extends. `toU8`, `toU32`, `toU64`, and `toI64` reduce modulo the width. `toNat` returns the residue as a closed numeral. Word operations and that numeral reduce as machine integers, so a residue near 2^32 or 2^64 does not run out of fuel. `asU8`, `asU32`, `asU64`, and `asI64` are the only casts. There is no implicit coercion.

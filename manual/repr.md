@@ -266,7 +266,7 @@ The same check applies inside a shape that has to pick, such as `nullable` of a 
 
 An integer above the guard is `{:nat_too_large, v}`. The guard is the module attribute `@muro_repr_nat_max`, set to `1_000_000` in the generated code, so the limit is visible and the same on every run. A negative integer is `{:negative_integer, v}`. A float, a string, or `nil` is `{:not_integer, v}`.
 
-An interned name whose target is `Nat` builds the same Peano term, so the same guard bounds the table. A binary-numeral target, described above, is the other numeral a name may use. Its terms are as deep as the bit count, not as deep as the index. A binary successor beside inductive `Nat` is issue #80, and it is open. This version does not add one. Until that exists, keep host integers and `Nat` names inside the guard, or intern into a binary numeral.
+An interned name whose target is `Nat` builds the same Peano term, so the same guard bounds the table. A binary-numeral target, described above, is the other numeral a name may use. Its terms are as deep as the bit count, not as deep as the index. `std:suc_bin.muro` is a library successor on `List Bit`; it is not an interned-name target. Keep host integers and `Nat` names inside the guard, or intern into a binary numeral.
 
 ## In a host
 
