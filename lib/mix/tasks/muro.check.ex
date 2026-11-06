@@ -15,35 +15,31 @@ defmodule Mix.Tasks.Muro.Check do
   `Muro.Check.default_fuel/0`). Running out is reported as an error, not
   as a type error; raise the fuel and check again. Every definition is
   checked, and every error is reported, in book order.
+
+  `import "std:file.muro"` loads a book of the ordinary library compiled
+  into this copy of muro. The same bytes are used from a Hex install,
+  from the self-contained executable, and from a checkout. A missing
+  name lists the books. A path that leaves the library is refused.
+  `import "pkg:name/file.muro"` loads a package file. A relative path
+  is relative to the importing file. A file reached twice joins once.
+
+  The first line is the version that checked the book (`Muro v` and the
+  version from the application spec). Each temporal declaration that
+  holds then prints `temporal <name>: holds in <n> reachable states`.
+  Each choreography then prints one
+  `choreography <name>: <role> with <role> = <session>` line per
+  ordered pair of roles. On success the next line is
+  `All terms check. Evidence never becomes a run.` A book with no
+  temporal declaration and no choreography prints that line immediately
+  after the version. When the book imports packages, one
+  `conforms to <name> <version> (sha256 <hash>)` line follows for each
+  package it loaded. A book that imports no package, and the built-in
+  check with no path, print only those two lines. A refusal prints the
+  errors after the version line.
   """
 
-  @switches [fuel: :integer]
-
   def run(args) do
-    Mix.Task.run("app.start")
-
-    {opts, paths, invalid} = OptionParser.parse(args, strict: @switches)
-
-    if invalid != [] do
-      Mix.raise("unknown option: #{inspect(invalid)}")
-    end
-
-    fuel = Keyword.get(opts, :fuel, Muro.Check.default_fuel())
-
-    if fuel <= 0 do
-      Mix.raise("--fuel must be a positive integer")
-    end
-
-    result =
-      case paths do
-        [] -> Muro.Check.check_sig(Muro.Example.book(), fuel: fuel)
-        [path] -> Muro.check_file(path, fuel: fuel)
-        _ -> Mix.raise("expected at most one path")
-      end
-
-    case result do
-      :ok -> Mix.shell().info("All terms check. Evidence never becomes a run.")
-      {:error, e} -> Mix.raise(e)
-    end
+    Mix.Tasks.Muro.ensure_started()
+    Muro.CLI.Output.mix(Muro.CLI.Check.run(args))
   end
 end

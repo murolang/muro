@@ -1,0 +1,1063 @@
+defmodule Muro.Meet do
+  @moduledoc """
+  The Elixir mirror of `decide` in `agda/Muro/Meet.agda`.
+
+  A send meets a receive of the same payload type, and the
+  continuations meet. The sent value inhabits that type. A constructor
+  inhabits the declaration's type, or it does not. The values need not
+  be the same term. A nat sent for a dependent receive instantiates
+  vector lengths that name it on the receiver's side. A variable is sent
+  at the type of its innermost binding, after a nat received on that
+  side has instantiated the lengths in that type. That is the type the
+  other process receives. An evidence payload meets as a nat. The
+  evidence is in each conformance, not in the meeting, so this module
+  has no case for it. A bit index meets the arm of that same bit. `b0`
+  meets the first arm and `b1` meets the second. A variable bit selects
+  neither. A choice meets the arm that was offered.
+  Both ends close, or both abandon. A repeated head is the same pair
+  of processes again, and that pair meets. `meets/2` is `:ok` when
+  `decide` returns `yes`. Otherwise the pair where it returns `no`.
+  """
+
+  @doc """
+  `:ok` when the two processes meet. Otherwise the pair where `decide` returns `no`.
+  """
+  @path_key {__MODULE__, :path}
+  @proto_key {__MODULE__, :proto}
+  @why_key {__MODULE__, :why}
+  @book_key {__MODULE__, :book}
+  @lspan_key {__MODULE__, :lspan}
+  @rspan_key {__MODULE__, :rspan}
+  @lps_key {__MODULE__, :lps}
+  @rps_key {__MODULE__, :rps}
+  @graph_key {__MODULE__, :graph}
+  @here_key {__MODULE__, :here}
+  @pending_key {__MODULE__, :pending}
+
+  def meets(p, q, book \\ [], proto \\ nil) do
+    {verdict, _graph} = walk_pair(p, q, book, proto, {nil, nil})
+    verdict
+  end
+
+  @doc """
+  The configurations `meets/4` walks, and the transitions it took.
+
+  `spans` is `{left_steps, right_steps}`. A span is not part of the
+  pair the search remembers, so the verdict is the one `meets/4`
+  returns. States carry the source location of each exposed head.
+  `go/3` does not record a graph: a caller that steps the pair itself
+  gets the same `:ok` or `{:no, _, _}` it did before.
+  """
+  def graph(p, q, book \\ [], proto \\ nil, spans \\ {nil, nil}) do
+    walk_pair(p, q, book, proto, spans)
+  end
+
+  defp walk_pair(p, q, book, proto, {lspan, rspan}) do
+    Process.put(@path_key, [])
+    Process.put(@proto_key, proto)
+    Process.put(@book_key, book)
+    Process.delete(@why_key)
+    Process.put(@lspan_key, lspan)
+    Process.put(@rspan_key, rspan)
+    Process.put(@lps_key, %{})
+    Process.put(@rps_key, %{})
+    Process.put(@graph_key, %{states: [], transitions: [], next: 0, index: %{}})
+    Process.put(@here_key, nil)
+    Process.delete(@pending_key)
+
+    try do
+      result = go(p, q, book)
+
+      verdict =
+        case result do
+          :ok -> :ok
+          {:no, a, b} -> {:error, diverged(a, b)}
+          {:error, msg} -> {:error, msg}
+        end
+
+      {verdict, publish_graph()}
+    after
+      Process.delete(@path_key)
+      Process.delete(@proto_key)
+      Process.delete(@why_key)
+      Process.delete(@book_key)
+      Process.delete(@lspan_key)
+      Process.delete(@rspan_key)
+      Process.delete(@lps_key)
+      Process.delete(@rps_key)
+      Process.delete(@graph_key)
+      Process.delete(@here_key)
+      Process.delete(@pending_key)
+    end
+  end
+
+  defp publish_graph do
+    case Process.get(@graph_key) do
+      nil ->
+        %{states: [], transitions: []}
+
+      g ->
+        %{states: g.states, transitions: g.transitions}
+    end
+  end
+
+  defp diverged(a, b) do
+    path = Process.get(@path_key, [])
+    where = if path == [], do: "", else: " after " <> Enum.join(path, ", ")
+
+    msg =
+      "diverged#{where}: left: #{Muro.Session.step_proc(a)}; right: #{Muro.Session.step_proc(b)}"
+
+    msg =
+      case Process.get(@why_key) do
+        nil -> msg
+        reason -> msg <> ": #{reason}"
+      end
+
+    case Process.get(@proto_key) do
+      proto when proto in [nil, :unset] -> msg
+      proto -> msg <> "; protocol: #{Muro.Session.show_proto(proto)}"
+    end
+  end
+
+  defp took(labels, proto_step, downs \\ {0, 0}) do
+    labels = List.wrap(labels)
+    Process.put(@path_key, Process.get(@path_key, []) ++ labels)
+    Process.put(@proto_key, advance_proto(Process.get(@proto_key), proto_step))
+    record_step(labels, downs)
+  end
+
+  # The pending transition closes when the next configuration is
+  # entered, including a configuration already seen. Recording stays
+  # off when `go/3` is called on its own.
+  defp record_step(labels, downs) do
+    case Process.get(@graph_key) do
+      g when is_map(g) -> record_step_on(labels, downs)
+      _ -> :ok
+    end
+  end
+
+  defp record_step_on(labels, {ld, rd}) do
+    Process.put(@pending_key, %{
+      from: Process.get(@here_key),
+      label: labels,
+      loc: %{left: side_at(@lspan_key, ld), right: side_at(@rspan_key, rd)}
+    })
+
+    Process.put(@lspan_key, Muro.Session.shift_span(Process.get(@lspan_key), ld))
+    Process.put(@rspan_key, Muro.Session.shift_span(Process.get(@rspan_key), rd))
+  end
+
+  defp side_at(_key, :none), do: nil
+  defp side_at(key, _), do: Muro.Session.step_at(Process.get(key))
+
+  defp align_spans(p, q, penv, qenv) do
+    case Process.get(@graph_key) do
+      g when is_map(g) ->
+        {lspan, lps} =
+          Muro.Session.expose_span(p, Process.get(@lspan_key), penv, Process.get(@lps_key) || %{})
+
+        {rspan, rps} =
+          Muro.Session.expose_span(q, Process.get(@rspan_key), qenv, Process.get(@rps_key) || %{})
+
+        Process.put(@lspan_key, lspan)
+        Process.put(@rspan_key, rspan)
+        Process.put(@lps_key, lps)
+        Process.put(@rps_key, rps)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp note_state(p, q, pk, qk) do
+    case Process.get(@graph_key) do
+      g when is_map(g) ->
+        key = {p, pk, q, qk}
+
+        {g, id} =
+          case Map.get(g.index, key) do
+            nil ->
+              id = g.next
+
+              st = %{
+                id: id,
+                left: p,
+                right: q,
+                loc: %{
+                  left: Muro.Session.step_at(Process.get(@lspan_key)),
+                  right: Muro.Session.step_at(Process.get(@rspan_key))
+                }
+              }
+
+              g = %{
+                g
+                | next: id + 1,
+                  index: Map.put(g.index, key, id),
+                  states: g.states ++ [st]
+              }
+
+              {g, id}
+
+            id ->
+              {g, id}
+          end
+
+        g =
+          case Process.get(@pending_key) do
+            nil ->
+              g
+
+            pend ->
+              trans = %{from: pend.from, to: id, label: pend.label, loc: pend.loc, side: :both}
+              %{g | transitions: g.transitions ++ [trans]}
+          end
+
+        Process.put(@graph_key, g)
+        Process.put(@here_key, id)
+        Process.delete(@pending_key)
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp why(nil), do: :ok
+  defp why(reason) when is_binary(reason), do: Process.put(@why_key, reason)
+
+  defp advance_proto(nil, _), do: nil
+  defp advance_proto(proto, step), do: advance_head(proto, step)
+
+  defp advance_head({:rec, _, body}, step), do: advance_head(body, step)
+
+  defp advance_head({:dsend, _, _, {:case, scrut, arms}}, {:arm, val}),
+    do: enter_case(scrut, val, arms)
+
+  defp advance_head({:drecv, _, _, {:case, scrut, arms}}, {:arm, val}),
+    do: enter_case(scrut, val, arms)
+
+  defp advance_head({:dsend, _, _, s}, {:arm, _}), do: s
+  defp advance_head({:drecv, _, _, s}, {:arm, _}), do: s
+  defp advance_head({:send, _, s}, {:arm, _}), do: s
+  defp advance_head({:recv, _, s}, {:arm, _}), do: s
+
+  defp advance_head({:esend, _, _, {:case, scrut, arms}}, {:arm, val}),
+    do: enter_case(scrut, val, arms)
+
+  defp advance_head({:erecv, _, _, {:case, scrut, arms}}, {:arm, val}),
+    do: enter_case(scrut, val, arms)
+
+  defp advance_head({:esend, _, _, s}, {:arm, _}), do: s
+  defp advance_head({:erecv, _, _, s}, {:arm, _}), do: s
+  defp advance_head({:send, _, s}, :put), do: s
+  defp advance_head({:dsend, _, _, s}, :put), do: s
+  defp advance_head({:esend, _, _, s}, :put), do: s
+  defp advance_head({:isend, _, s, _}, {:put, :b0}), do: s
+  defp advance_head({:isend, _, _, t}, {:put, :b1}), do: t
+  defp advance_head({:recv, _, s}, :get), do: s
+  defp advance_head({:drecv, _, _, s}, :get), do: s
+  defp advance_head({:erecv, _, _, s}, :get), do: s
+  defp advance_head({:irecv, _, s, _}, {:get, :b0}), do: s
+  defp advance_head({:irecv, _, _, t}, {:get, :b1}), do: t
+  defp advance_head({:choose, s, _}, :pick0), do: s
+  defp advance_head({:choose, _, t}, :pick1), do: t
+  defp advance_head({:branch, s, _}, :cover0), do: s
+  defp advance_head({:branch, _, t}, :cover1), do: t
+  defp advance_head(proto, _), do: proto
+
+  # The sent value selects the same arm on this protocol that conformance
+  # selected. A run is applied to that value, not to an invented field.
+  defp enter_case(scrut, val, arms) do
+    case Muro.Session.chosen_arm(scrut, val, arms, Process.get(@book_key, [])) do
+      {:ok, proto} -> proto
+      _ -> {:case, scrut, arms}
+    end
+  end
+
+  @doc """
+  `meets/2`, then the multiplicity. Affine abandonment stays.
+  A linear endpoint that is not consumed once is refused.
+  """
+  def meet_mult(mult, p, q, book \\ []) when mult in [:aff, :lin] and is_list(book) do
+    with :ok <- meets(p, q, book), do: Muro.Linear.meet_proc(mult, p, q)
+  end
+
+  @doc false
+  def go(p, q), do: go(p, q, [])
+
+  @meet_fuel 10_000
+
+  @doc false
+  def go(p, q, book) when is_list(book) do
+    advance(p, q, %{}, %{}, %{}, %{}, %{}, %{}, MapSet.new(), @meet_fuel, book)
+  end
+
+  # The value indices stay inside one pass. They are not part of the
+  # pair, so a nat bound in the loop does not have to be the same nat
+  # on the next arrival at the head.
+  defp advance(p0, q0, lp, rq, li, ri, penv0, qenv0, seen, fuel, book) do
+    if fuel <= 0 do
+      {:error, "out of fuel"}
+    else
+      with {:ok, p, penv} <- Muro.Session.unwind_proc(p0, penv0),
+           {:ok, q, qenv} <- Muro.Session.unwind_proc(q0, qenv0),
+           {:ok, pk} <- Muro.Session.project_proc(penv, p),
+           {:ok, qk} <- Muro.Session.project_proc(qenv, q) do
+        align_spans(p0, q0, penv0, qenv0)
+        note_state(p, q, pk, qk)
+        key = {p, pk, q, qk}
+
+        if MapSet.member?(seen, key) do
+          :ok
+        else
+          step(p, q, lp, rq, li, ri, penv, qenv, MapSet.put(seen, key), fuel, book)
+        end
+      end
+    end
+  end
+
+  # `done-done` and `stop-stop`.
+  defp step(:done, :done, _lp, _rq, _li, _ri, _penv, _qenv, _seen, _fuel, _book), do: :ok
+  defp step(:stop, :stop, _lp, _rq, _li, _ri, _penv, _qenv, _seen, _fuel, _book), do: :ok
+
+  # A computed value meets the arm the match selects. The other
+  # orientation is the same pair of premises.
+  defp step(
+         {:put, ty, val, cont},
+         {:get, gty, gname, {:match, scrut, arms}} = getp,
+         lp,
+         rq,
+         li,
+         ri,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       ) do
+    match_meet(
+      {:put, ty, val, cont},
+      getp,
+      ty,
+      val,
+      cont,
+      gty,
+      gname,
+      scrut,
+      arms,
+      lp,
+      rq,
+      li,
+      ri,
+      :put_first,
+      penv,
+      qenv,
+      seen,
+      fuel,
+      book
+    )
+  end
+
+  defp step(
+         {:get, gty, gname, {:match, scrut, arms}} = getp,
+         {:put, ty, val, cont},
+         lp,
+         rq,
+         li,
+         ri,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       ) do
+    match_meet(
+      getp,
+      {:put, ty, val, cont},
+      ty,
+      val,
+      cont,
+      gty,
+      gname,
+      scrut,
+      arms,
+      rq,
+      lp,
+      ri,
+      li,
+      :get_first,
+      penv,
+      qenv,
+      seen,
+      fuel,
+      book
+    )
+  end
+
+  # A variable has no type of its own. Its innermost binding is read
+  # after this side's lengths are instantiated, and that type is
+  # compared with the receive. An unbound name is a constructor when
+  # the declaration says so. `:unknown` is not a payload type, so
+  # this clause stays ahead of the concrete one.
+  defp step(
+         {:put, :unknown, val, p},
+         {:get, gty, gname, q},
+         lp,
+         rq,
+         li,
+         ri,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       ) do
+    ty = apply_ty(ri, gty)
+
+    case sends?(val, ty, lp, li, book) do
+      :yes ->
+        took(put_label(val), :put)
+
+        keep(
+          advance(
+            p,
+            q,
+            lp,
+            bind(rq, gname, ty),
+            li,
+            ext(ri, gname, sent_of(val, lp, li, book), ty),
+            penv,
+            qenv,
+            seen,
+            fuel - 1,
+            book
+          )
+        )
+
+      :no ->
+        why(Muro.Session.explain_put(val, ty, ground(lp, li), book))
+        {:no, {:put, :unknown, val, p}, {:get, gty, gname, q}}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp step(
+         {:get, gty, gname, p},
+         {:put, :unknown, val, q},
+         lp,
+         rq,
+         li,
+         ri,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       ) do
+    ty = apply_ty(li, gty)
+
+    case sends?(val, ty, rq, ri, book) do
+      :yes ->
+        took(put_label(val), :get)
+
+        keep(
+          advance(
+            p,
+            q,
+            bind(lp, gname, ty),
+            rq,
+            ext(li, gname, sent_of(val, rq, ri, book), ty),
+            ri,
+            penv,
+            qenv,
+            seen,
+            fuel - 1,
+            book
+          )
+        )
+
+      :no ->
+        why(Muro.Session.explain_put(val, ty, ground(rq, ri), book))
+        {:no, {:get, gty, gname, p}, {:put, :unknown, val, q}}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # The payload types agree after a received nat instantiates lengths.
+  # A variable is the type of its innermost binding, as in `conforms`.
+  # A `get` binds that type for its continuation.
+  defp step(
+         {:put, ty, val, p},
+         {:get, gty, name, q},
+         lp,
+         rq,
+         li,
+         ri,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       )
+       when ty != :unknown do
+    left = apply_ty(li, ty)
+    right = apply_ty(ri, gty)
+
+    case {left == right, inhabits?(val, left, li, lp, book)} do
+      {true, :yes} ->
+        took(put_label(val), :put)
+
+        keep(
+          advance(
+            p,
+            q,
+            lp,
+            bind(rq, name, right),
+            li,
+            ext(ri, name, sent_of(val, lp, li, book), right),
+            penv,
+            qenv,
+            seen,
+            fuel - 1,
+            book
+          )
+        )
+
+      {_, {:error, msg}} ->
+        why(msg)
+        {:no, {:put, ty, val, p}, {:get, gty, name, q}}
+
+      _ ->
+        why(Muro.Session.explain_put(val, left, ground(lp, li), book))
+        {:no, {:put, ty, val, p}, {:get, gty, name, q}}
+    end
+  end
+
+  defp step(
+         {:get, gty, name, p},
+         {:put, ty, val, q},
+         lp,
+         rq,
+         li,
+         ri,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       )
+       when ty != :unknown do
+    left = apply_ty(li, gty)
+    right = apply_ty(ri, ty)
+
+    case {left == right, inhabits?(val, right, ri, rq, book)} do
+      {true, :yes} ->
+        took(put_label(val), :get)
+
+        keep(
+          advance(
+            p,
+            q,
+            bind(lp, name, left),
+            rq,
+            ext(li, name, sent_of(val, rq, ri, book), left),
+            ri,
+            penv,
+            qenv,
+            seen,
+            fuel - 1,
+            book
+          )
+        )
+
+      {_, {:error, msg}} ->
+        why(msg)
+        {:no, {:get, gty, name, p}, {:put, ty, val, q}}
+
+      _ ->
+        why(Muro.Session.explain_put(val, right, ground(rq, ri), book))
+        {:no, {:get, gty, name, p}, {:put, ty, val, q}}
+    end
+  end
+
+  # `iget-b0`, `iget-b1`, `b0-iget`, `b1-iget`. The literal selects the
+  # arm. The bit is bound on the receiver and does not instantiate a length.
+  defp step(
+         {:iget, name, p, _q},
+         {:put, :bit, :b0, r},
+         lp,
+         rq,
+         li,
+         ri,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       ) do
+    took(["get #{name}", "arm b0"], {:get, :b0})
+
+    keep(
+      advance(
+        p,
+        r,
+        bind(lp, name, :bit),
+        rq,
+        ext(li, name, :b0, :bit),
+        ri,
+        penv,
+        qenv,
+        seen,
+        fuel - 1,
+        book
+      )
+    )
+  end
+
+  defp step(
+         {:iget, name, _p, q},
+         {:put, :bit, :b1, r},
+         lp,
+         rq,
+         li,
+         ri,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       ) do
+    took(["get #{name}", "arm b1"], {:get, :b1}, {1, 0})
+
+    keep(
+      advance(
+        q,
+        r,
+        bind(lp, name, :bit),
+        rq,
+        ext(li, name, :b1, :bit),
+        ri,
+        penv,
+        qenv,
+        seen,
+        fuel - 1,
+        book
+      )
+    )
+  end
+
+  defp step(
+         {:put, :bit, :b0, p},
+         {:iget, name, q, _r},
+         lp,
+         rq,
+         li,
+         ri,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       ) do
+    took(["get #{name}", "arm b0"], {:put, :b0})
+
+    keep(
+      advance(
+        p,
+        q,
+        lp,
+        bind(rq, name, :bit),
+        li,
+        ext(ri, name, :b0, :bit),
+        penv,
+        qenv,
+        seen,
+        fuel - 1,
+        book
+      )
+    )
+  end
+
+  defp step(
+         {:put, :bit, :b1, p},
+         {:iget, name, _q, r},
+         lp,
+         rq,
+         li,
+         ri,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       ) do
+    took(["get #{name}", "arm b1"], {:put, :b1}, {0, 1})
+
+    keep(
+      advance(
+        p,
+        r,
+        lp,
+        bind(rq, name, :bit),
+        li,
+        ext(ri, name, :b1, :bit),
+        penv,
+        qenv,
+        seen,
+        fuel - 1,
+        book
+      )
+    )
+  end
+
+  # `pick0-cover`, `pick1-cover`, `cover-pick0`, `cover-pick1`.
+  defp step({:pick0, p}, {:cover, q, _}, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
+    took("arm pick0", :pick0)
+    keep(advance(p, q, lp, rq, li, ri, penv, qenv, seen, fuel - 1, book))
+  end
+
+  defp step({:pick1, p}, {:cover, _, r}, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
+    took("arm pick1", :pick1, {0, 1})
+    keep(advance(p, r, lp, rq, li, ri, penv, qenv, seen, fuel - 1, book))
+  end
+
+  defp step({:cover, p, _}, {:pick0, r}, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
+    took("arm pick0", :cover0)
+    keep(advance(p, r, lp, rq, li, ri, penv, qenv, seen, fuel - 1, book))
+  end
+
+  defp step({:cover, _, q}, {:pick1, r}, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
+    took("arm pick1", :cover1, {1, 0})
+    keep(advance(q, r, lp, rq, li, ri, penv, qenv, seen, fuel - 1, book))
+  end
+
+  defp step(p, q, _lp, _rq, _li, _ri, _penv, _qenv, _seen, _fuel, _book), do: {:no, p, q}
+
+  defp keep(:ok), do: :ok
+  defp keep({:no, _, _} = no), do: no
+  defp keep({:error, _} = err), do: err
+
+  defp put_label(val), do: "put #{Muro.Session.show_value(val)}"
+
+  # `_` is an unnamed `get` and adds no binding. A later binding of the same name wins.
+  defp bind(ctx, :_, _ty), do: ctx
+  defp bind(ctx, name, ty), do: Map.put(ctx, name, ty)
+
+  # The innermost binding, with this side's lengths instantiated.
+  # An unbound name has no type.
+  defp held(ctx, idx, name) do
+    case Map.get(ctx, name) do
+      nil -> nil
+      stored -> apply_ty(idx, stored)
+    end
+  end
+
+  # A literal inhabits the type written on the send. A name inhabits its
+  # instantiated binding, and an unbound or mistyped name does not.
+  # A constructor inhabits the declaration's type, or it does not.
+  defp sends?({:var, name} = val, ty, ctx, idx, book) do
+    case held(ctx, idx, name) do
+      nil -> Muro.Session.answer(val, ty, %{}, book)
+      got -> if got == ty, do: :yes, else: :no
+    end
+  end
+
+  defp sends?(val, ty, ctx, idx, book), do: inhabits?(val, ty, idx, ctx, book)
+
+  defp inhabits?({:var, name}, ty, idx, ctx, _book) do
+    if held(ctx, idx, name) == ty, do: :yes, else: :no
+  end
+
+  defp inhabits?({:con, _, _} = val, ty, idx, ctx, book) do
+    Muro.Session.answer(val, ty, ground(ctx, idx), book)
+  end
+
+  defp inhabits?(_val, _ty, _idx, _ctx, _book), do: :yes
+
+  defp sent_of(val, ctx, idx, book) do
+    case Muro.Session.form(val, ground(ctx, idx), book) do
+      {:ok, v} -> v
+      _ -> val
+    end
+  end
+
+  @cover "match does not cover the received value"
+
+  # `orient` says which process is the put. The receiver's context is
+  # extended with the value that was computed, and the selected arm is
+  # the continuation that meets the sender's continuation.
+  defp match_meet(
+         left,
+         right,
+         ty,
+         val,
+         cont,
+         gty,
+         gname,
+         scrut,
+         arms,
+         sctx,
+         rctx,
+         sidx,
+         ridx,
+         orient,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       ) do
+    if scrut != gname do
+      {:error, @cover}
+    else
+      recv_ty = apply_ty(ridx, gty)
+      send_ty = if ty == :unknown, do: recv_ty, else: apply_ty(sidx, ty)
+
+      if send_ty != recv_ty do
+        {:no, left, right}
+      else
+        case Muro.Session.form(val, ground(sctx, sidx), book) do
+          {:error, msg} ->
+            why(msg)
+            {:no, left, right}
+
+          {:ok, {:var, name}} ->
+            why("the value #{name} does not select an arm")
+            {:no, left, right}
+
+          {:ok, :miss} ->
+            {:no, left, right}
+
+          {:ok, v} ->
+            case Muro.Session.answer(v, send_ty, ground(sctx, sidx), book) do
+              :yes ->
+                case Muro.Session.arm_at(send_ty, v, arms, book) do
+                  {:ok, arm, path} ->
+                    case open_nat_match(arm, ridx, book, path) do
+                      {:ok, arm, path} ->
+                        Process.put({Muro.Session, :meet_idx}, ridx)
+
+                        try do
+                          took(
+                            ["get #{gname}", "arm #{arm_name(v)}"],
+                            {:arm, v},
+                            match_downs(orient, path)
+                          )
+                        after
+                          Process.delete({Muro.Session, :meet_idx})
+                        end
+
+                        advance_arm(
+                          orient,
+                          cont,
+                          arm,
+                          gname,
+                          v,
+                          send_ty,
+                          sctx,
+                          rctx,
+                          sidx,
+                          ridx,
+                          penv,
+                          qenv,
+                          seen,
+                          fuel,
+                          book
+                        )
+
+                      :error ->
+                        why(@cover)
+                        {:no, left, right}
+                    end
+
+                  :error ->
+                    why("the value #{Muro.Session.show_value(v)} does not select an arm")
+                    {:no, left, right}
+                end
+
+              :no ->
+                why(Muro.Session.explain_put(val, send_ty, ground(sctx, sidx), book))
+                {:no, left, right}
+
+              {:error, msg} ->
+                why(msg)
+                {:no, left, right}
+            end
+        end
+      end
+    end
+  end
+
+  defp match_downs(:put_first, path), do: {0, {:into, path}}
+  defp match_downs(:get_first, path), do: {{:into, path}, 0}
+
+  defp arm_name(:b0), do: "b0"
+  defp arm_name(:b1), do: "b1"
+  defp arm_name({:nat, n}) when is_integer(n), do: Integer.to_string(n)
+  defp arm_name({:con, name, _}), do: name
+  defp arm_name(other), do: Muro.Session.show_value(other)
+
+  # A match on a nat already in the receiver index is the arm that
+  # numeral selects. The value just exchanged is not in the index yet.
+  defp open_nat_match({:match, name, arms} = proc, idx, book, path) do
+    cond do
+      match?({:nat, _}, nat_at(idx, name)) ->
+        {:nat, n} = nat_at(idx, name)
+
+        case Muro.Session.arm_at(:nat, {:nat, n}, arms, book) do
+          {:ok, leaf, more} -> open_nat_match(leaf, idx, book, path ++ more)
+          :error -> :error
+        end
+
+      match?({_, _}, Map.get(idx, {:pay, name})) ->
+        {ty, val} = Map.get(idx, {:pay, name})
+
+        case Muro.Session.arm_at(ty, val, arms, book) do
+          {:ok, leaf, more} -> open_nat_match(leaf, idx, book, path ++ more)
+          :error -> {:ok, proc, path}
+        end
+
+      true ->
+        {:ok, proc, path}
+    end
+  end
+
+  defp open_nat_match(proc, _idx, _book, path), do: {:ok, proc, path}
+
+  defp nat_at(idx, name) do
+    case Map.get(idx, name) do
+      {:lit, n} when is_integer(n) and n >= 0 -> {:nat, n}
+      {:nat, n} when is_integer(n) and n >= 0 -> {:nat, n}
+      _ -> nil
+    end
+  end
+
+  defp advance_arm(
+         :put_first,
+         cont,
+         arm,
+         gname,
+         val,
+         ty,
+         sctx,
+         rctx,
+         sidx,
+         ridx,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       ) do
+    keep(
+      advance(
+        cont,
+        arm,
+        sctx,
+        bind(rctx, gname, ty),
+        sidx,
+        ext(ridx, gname, val, ty),
+        penv,
+        qenv,
+        seen,
+        fuel - 1,
+        book
+      )
+    )
+  end
+
+  defp advance_arm(
+         :get_first,
+         cont,
+         arm,
+         gname,
+         val,
+         ty,
+         sctx,
+         rctx,
+         sidx,
+         ridx,
+         penv,
+         qenv,
+         seen,
+         fuel,
+         book
+       ) do
+    # The call site swapped the contexts so the sender is `sctx`, but
+    # the processes were not swapped: the get is still the left process.
+    keep(
+      advance(
+        arm,
+        cont,
+        bind(rctx, gname, ty),
+        sctx,
+        ext(ridx, gname, val, ty),
+        sidx,
+        penv,
+        qenv,
+        seen,
+        fuel - 1,
+        book
+      )
+    )
+  end
+
+  defp ground(ctx, idx), do: Map.new(ctx, fn {name, ty} -> {name, apply_ty(idx, ty)} end)
+
+  # A nat received under a name instantiates lengths on that side.
+  # Another payload shadows the name and is remembered beside the
+  # lengths, so a later product can read it. `_` binds nothing.
+  defp ext(idx, :_, _val, _ty), do: idx
+
+  defp ext(idx, name, val, :nat) do
+    idx = Map.delete(idx, {:pay, name})
+
+    case nexp(val) do
+      nil -> Map.delete(idx, name)
+      e -> Map.put(idx, name, e)
+    end
+  end
+
+  defp ext(idx, name, val, ty) do
+    idx = Map.delete(idx, name)
+
+    case pay_mem(val) do
+      nil -> Map.delete(idx, {:pay, name})
+      v -> Map.put(idx, {:pay, name}, {ty, v})
+    end
+  end
+
+  defp pay_mem(v) when v in [:b0, :b1], do: v
+  defp pay_mem({:con, _, _} = v), do: v
+  defp pay_mem(_), do: nil
+
+  defp nexp({:nat, n}) when is_integer(n) and n >= 0, do: {:lit, n}
+  defp nexp({:var, name}), do: {:var, name}
+  defp nexp(_), do: nil
+
+  defp apply_ty(_idx, ty) when ty in [:nat, :bit, :unit, :unknown], do: ty
+  defp apply_ty(idx, {:pair, a, b}), do: {:pair, apply_ty(idx, a), apply_ty(idx, b)}
+
+  defp apply_ty(idx, {:rec, fields}) when is_list(fields) do
+    {:rec, Enum.map(fields, fn {name, ty} -> {name, apply_ty(idx, ty)} end)}
+  end
+
+  defp apply_ty(idx, {:vec, elem, e}), do: {:vec, apply_ty(idx, elem), apply_ix(idx, e)}
+
+  defp apply_ty(idx, {:dat, name, args}) do
+    {:dat, name, Enum.map(args, &apply_ty(idx, &1))}
+  end
+
+  defp apply_ix(_idx, {:lit, _} = e), do: e
+
+  defp apply_ix(idx, {:var, name}) do
+    case Map.get(idx, name) do
+      nil -> {:var, name}
+      e -> e
+    end
+  end
+end

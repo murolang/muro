@@ -1,42 +1,45 @@
 ------------------------------------------------------------------------
 -- List A, length, and length (cons 1 (cons 1 nil)) ≡ 2.
+-- Binders are de Bruijn: the innermost variable is var zero.
 ------------------------------------------------------------------------
 
+{-# OPTIONS --safe #-}
 module Muro.ExampleList where
 
+open import Data.Fin.Base using (zero; suc)
 open import Data.List.Base using (List; []; _∷_)
 open import Data.Unit.Base using (⊤; tt)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
 open import Muro.Base
 open import Muro.Syntax
-open import Muro.Subst
-open import Muro.Unembed
 open import Muro.Check
 
-nilTy : ∀ {V} → PTm V
-nilTy = pi affine typ (λ A → app (dty 0) (var A))
+nilTy : Tm 0
+nilTy =
+  pi affine typ
+    (app (dty 0) (var zero))
 
-consTy : ∀ {V} → PTm V
+consTy : Tm 0
 consTy =
-  pi affine typ (λ A →
-  pi affine (var A) (λ _ →
-  pi affine (app (dty 0) (var A)) (λ _ →
-    app (dty 0) (var A))))
+  pi affine typ
+    (pi affine (var zero)
+      (pi affine (app (dty 0) (var (suc zero)))
+        (app (dty 0) (var (suc (suc zero))))))
 
-lengthTy : ∀ {V} → PTm V
-lengthTy = pi erased typ (λ A → pi affine (app (dty 0) (var A)) (λ _ → nat))
+lengthTy : Tm 0
+lengthTy =
+  pi erased typ
+    (pi affine (app (dty 0) (var zero))
+      nat)
 
-lengthTm : ∀ {V} → PTm V
+lengthTm : Tm 0
 lengthTm =
-  lam erased typ (λ A →
-  lam affine (app (dty 0) (var A)) (λ xs →
-    mData (var xs) (λ _ → nat)
-      ( ze ∷
-        lam affine (var A) (λ _ →
-        lam affine (app (dty 0) (var A)) (λ as →
-          su (app (app (def 0) (var A)) (var as)))) ∷
-        [] )))
+  lam erased typ
+    (lam affine (app (dty 0) (var zero))
+      (mData (var zero) nat (ze ∷ (lam affine (var (suc zero))
+        (lam affine (app (dty 0) (var (suc (suc zero))))
+          (su (app (app (def 0) (var (suc (suc (suc zero))))) (var zero))))) ∷ [])))
 
 ones2Ty : Tm 0
 ones2Ty = app (dty 0) nat
@@ -51,34 +54,19 @@ lenOkTy = idt nat (app (app (def 0) nat) (def 1)) (su (su ze))
 lenOkTm : Tm 0
 lenOkTm = rfl
 
-data IsOk {A : Set} : Result A → Set where
-  is-ok : (x : A) → IsOk (ok x)
-
-out : ∀ {A} {r : Result A} → IsOk r → A
-out (is-ok x) = x
-
-nilTy-ok    : IsOk (unembed∀ nilTy)
-consTy-ok   : IsOk (unembed∀ consTy)
-lengthTy-ok : IsOk (unembed∀ lengthTy)
-lengthTm-ok : IsOk (unembed∀ lengthTm)
-nilTy-ok    = is-ok _
-consTy-ok   = is-ok _
-lengthTy-ok = is-ok _
-lengthTm-ok = is-ok _
-
 listDecl : DataDecl
 listDecl =
   mkData "List" (affine ∷ []) []
-    ( mkCtor "nil"  (out nilTy-ok)  ∷
-      mkCtor "cons" (out consTy-ok) ∷
+    ( mkCtor "nil"  nilTy  ∷
+      mkCtor "cons" consTy ∷
       [] )
 
 listBook : Sig
 listBook =
   mkSig (listDecl ∷ [])
-    ( mkDef "length"       run  (out lengthTy-ok) (out lengthTm-ok) ∷
-      mkDef "ones2"        run  ones2Ty           ones2Tm           ∷
-      mkDef "length-ones2" evid lenOkTy           lenOkTm           ∷
+    ( mkDef "length"       run  lengthTy lengthTm ∷
+      mkDef "ones2"        run  ones2Ty  ones2Tm  ∷
+      mkDef "length-ones2" evid lenOkTy  lenOkTm  ∷
       [] )
 
 length-ones2-checks : checkSig! listBook ≡ ok tt

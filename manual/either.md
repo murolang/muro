@@ -1,7 +1,7 @@
 ---
 title: Either and Dec
 slug: either
-order: 10
+order: 11
 summary: Disjoint union and decisions. Not LEM.
 ---
 

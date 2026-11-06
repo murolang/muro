@@ -13,23 +13,27 @@
 module Muro.Check where
 
 open import Data.Bool.Base
-  using (Bool; true; false; _∧_; _∨_; not; if_then_else_)
-open import Data.Empty using (⊥)
-open import Data.Fin.Base using (Fin; zero; suc)
+  using (Bool; true; false; _∧_; _∨_; not; if_then_else_; T)
+open import Data.Empty using (⊥; ⊥-elim)
+open import Data.Fin.Base using (Fin; zero; suc; toℕ)
 open import Data.List.Base as List using (List; []; _∷_; length; take; drop)
 open import Data.Maybe.Base using (Maybe; just; nothing)
-open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _<ᵇ_; _+_)
+open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _<ᵇ_; _+_; _≤_; _<_; z≤n; s≤s)
+open import Data.Nat.Properties using (≡ᵇ⇒≡)
+open import Data.Nat.Induction using (<-wellFounded; Acc; acc)
 open import Data.Nat.Show using (show)
 open import Data.Product.Base using (_×_; _,_; proj₁; proj₂)
 open import Data.String.Base using (String; _++_)
+open import Data.String.Properties using (_==_)
 open import Data.Unit.Base using (⊤; tt)
 open import Data.Vec.Base as Vec using (Vec; []; _∷_; lookup; map)
 open import Function.Base using (case_of_; _$_)
-open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
+open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl; sym; trans; cong; subst)
 
 open import Muro.Base
 open import Muro.Syntax
 open import Muro.Subst
+open import Muro.Word using (wordStep; wordTy; optTy)
 open import Muro.Env public
 open import Muro.Tag using (tmTag)
 open import Muro.Spine using (unspine; ctorSpine; dtyArgs; defArgs)
@@ -57,8 +61,10 @@ record RecSt (n : ℕ) : Set where
     nextArg : Maybe ℕ        -- leading λs still to pass before that argument
     smaller : Vec Bool n
     recOk   : Vec Bool n
-    -- Set on the step of an indexed ν (Always, ~). In evidence, a
-    -- self-call there is the coinductive step and need not descend.
+    -- Descent exemption for the whole step of an indexed ν (Always, ~).
+    -- In evidence, a self-call there need not descend and may be
+    -- unapplied. Where the block may occur in the pair is the tail
+    -- guard in checkUnfold, not this flag.
     coind   : Bool
     block   : List ℕ         -- indices of the recursive block, including self
 
@@ -128,6 +134,13 @@ nthQty _          _       = fail "recursive-call spine longer than Π telescope"
 outOfFuel : String
 outOfFuel = "out of fuel (the checker gave up reducing; raise the fuel)"
 
+-- uncons (unfold (a, b) (λ _ → v)) reads the pair. Any other seed is
+-- stuck, and the clause is split so a seed that is already a constructor
+-- reduces without waiting on the pair pattern.
+idStep : ∀ {n} → Tm n → Qty → Tm n → Result (Tm n)
+idStep (pair a b) q A = ok (pair a (unf b (lam q A (var zero))))
+idStep s          q A = ok (ucons (unf s (lam q A (var zero))))
+
 mutual
   whnf : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n)
   whnf zero    _ _ = fail outOfFuel
@@ -155,7 +168,24 @@ mutual
   ... | fail m          = fail m
   ... | ok (pair a b)   = whnf k σ (inst₂ t a b)
   ... | ok e′           = ok (letp e′ t)
+  -- Arguments first, then one residue step. A value (literal, type,
+  -- bool, opt) does not step. Fuel for the list is the fuel left
+  -- after this call, the same clock as every other redex.
+  whnf (suc k) σ (word op ts) =
+    whnfList k σ ts >>= λ ts′ →
+    case wordStep op ts′ of λ where
+      (just r) → whnf k σ r
+      nothing  → ok (word op ts′)
   whnf (suc _) _ t = ok t
+
+  whnfList : ∀ {n} → ℕ → Sig → List (Tm n) → Result (List (Tm n))
+  whnfList zero _ [] = ok []
+  whnfList zero _ (_ ∷ _) = fail outOfFuel
+  whnfList (suc k) σ [] = ok []
+  whnfList (suc k) σ (t ∷ ts) =
+    whnf k σ t >>= λ t′ →
+    whnfList k σ ts >>= λ ts′ →
+    ok (t′ ∷ ts′)
 
   uconsWhnf : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n)
   -- The three uncons steps, on the nose. A λ whose body merely reduces
@@ -163,8 +193,7 @@ mutual
   uconsWhnf _ _ (unf s (pair h t)) = ok (pair h t)
   uconsWhnf _ _ (unf s (lam q A (pair h t))) =
     ok (pair (inst h s) (unf (inst t s) (lam q A (pair h t))))
-  uconsWhnf _ _ (unf (pair a b) (lam q A (var zero))) =
-    ok (pair a (unf b (lam q A (var zero))))
+  uconsWhnf _ _ (unf s (lam q A (var zero))) = idStep s q A
   uconsWhnf _ _ e = ok (ucons e)
 
   dataWhnf : ∀ {n} → ℕ → Sig → Tm n → Tm (suc n) → List (Tm n) → Result (Tm n)
@@ -174,6 +203,35 @@ mutual
       (ok b)  → whnf k σ (appsFrom b args)
       (fail _) → ok (mData e P bs)
   ... | nothing = ok (mData e P bs)
+
+-- Head of the spine isData inspects. One constructor per answer, and a
+-- catch-all for every other head, so the split stays the size of this
+-- view when a term constructor is added. A non-empty spine of a rigid
+-- head (nat, a word, a product) is the catch-all: the operator is read
+-- only when the argument list is empty.
+data DataN {n} : Tm n × List (Tm n) → Set where
+  dn-nat    : DataN (nat , [])
+  dn-unit   : DataN (unit , [])
+  dn-empty  : DataN (empty , [])
+  dn-i64    : DataN (i64 , [])
+  dn-f32    : DataN (f32ty , [])
+  dn-tensor : ∀ d s → DataN (tensor d s , [])
+  dn-word   : ∀ op ts → DataN (word op ts , [])
+  dn-dty    : ∀ i as → DataN (dty i , as)
+  dn-prod   : ∀ A B → DataN (prod A B , [])
+  dn-other  : ∀ h as → DataN (h , as)
+
+dataN : ∀ {n} (p : Tm n × List (Tm n)) → DataN p
+dataN (nat , [])          = dn-nat
+dataN (unit , [])         = dn-unit
+dataN (empty , [])        = dn-empty
+dataN (i64 , [])          = dn-i64
+dataN (f32ty , [])        = dn-f32
+dataN (tensor d s , [])   = dn-tensor d s
+dataN (word op ts , [])   = dn-word op ts
+dataN (dty i , as)        = dn-dty i as
+dataN (prod A B , [])     = dn-prod A B
+dataN (h , as)            = dn-other h as
 
 -- Is a (spec) type Data: Nat, Unit, Empty, I64, F32, Tensor, or a data
 -- type whose parameters are Data. Fuel also bounds the descent into the
@@ -188,20 +246,31 @@ mutual
   isData (suc k) σ t = whnf (suc k) σ t >>= λ t′ → isDataN k σ (apps t′)
 
   isDataN : ∀ {n} → ℕ → Sig → Tm n × List (Tm n) → Result Bool
-  isDataN k σ (nat , [])        = ok true
-  isDataN k σ (unit , [])       = ok true
-  isDataN k σ (empty , [])      = ok true
-  isDataN k σ (i64 , [])        = ok true
-  isDataN k σ (f32ty , [])      = ok true
-  isDataN k σ (tensor _ _ , []) = ok true
-  isDataN k σ (dty i , as)      = dataParamsData k σ i as
-  isDataN k σ (prod A B , [])   = isData k σ A >>= λ b → if b then isData k σ B else ok false
-  isDataN k σ _                 = ok false
+  isDataN k σ p = isDataNV k σ (dataN p)
+
+  isDataNV : ∀ {n} → ℕ → Sig → {p : Tm n × List (Tm n)} → DataN p → Result Bool
+  isDataNV k σ dn-nat            = ok true
+  isDataNV k σ dn-unit           = ok true
+  isDataNV k σ dn-empty          = ok true
+  isDataNV k σ dn-i64            = ok true
+  isDataNV k σ dn-f32            = ok true
+  isDataNV k σ (dn-tensor _ _)   = ok true
+  isDataNV k σ (dn-word op ts)   = wordData k σ op ts
+  isDataNV k σ (dn-dty i as)     = dataParamsData k σ i as
+  isDataNV k σ (dn-prod A B)     = isData k σ A >>= λ b → if b then isData k σ B else ok false
+  isDataNV k σ (dn-other _ _)    = ok false
 
   dataParamsData : ∀ {n} → ℕ → Sig → ℕ → List (Tm n) → Result Bool
   dataParamsData k σ i as with lookupData σ i
   ... | fail _ = ok false
   ... | ok d   = allData k σ (take (nparams d) as)
+
+  wordData : ∀ {n} → ℕ → Sig → WOp → List (Tm n) → Result Bool
+  wordData k σ (wty _) []     = ok true
+  wordData k σ wbool []       = ok true
+  wordData k σ (woptk _) []   = ok true
+  wordData k σ wopt (A ∷ [])  = isData k σ A
+  wordData k σ _ _            = ok false
 
 -- Is a type copyable (Data.IsCopy): Data, a Π, or a product of copyable
 -- types. A + binder asks this; an argument at a + position that is
@@ -254,6 +323,10 @@ runTy (nu F)         = runTy F
 runTy (prod A B)     = runTy A ∧ runTy B
 runTy (dty _)        = true
 runTy (app f _)      = runTy f
+runTy (word (wty _) []) = true
+runTy (word wbool []) = true
+runTy (word (woptk _) []) = true
+runTy (word wopt (A ∷ [])) = runTy A
 runTy _              = false
 
 mutual
@@ -323,96 +396,139 @@ mutual
   synEqD (addt t u)     (addt t′ u′)   = synEq t t′ ∧ synEq u u′
   synEqD (toi64 t)      (toi64 t′)     = synEq t t′
   synEqD (packi x y)    (packi x′ y′)  = synEq x x′ ∧ synEq y y′
+  synEqD (word op ts)   (word op′ ts′) = wop≡ᵇ op op′ ∧ synEqList ts ts′
   synEqD _              _              = false
 
-ctorHead : ∀ {n} → Tm n → Bool
-ctorHead t with proj₁ (apps t)
-... | ze       = true
-... | su _     = true
-... | one      = true
-... | ctor _ _ = true
-... | _        = false
+-- Definitions whose unfolding is already in progress.
+inSeen : ℕ → List ℕ → Bool
+inSeen _ []       = false
+inSeen i (j ∷ js) = (i ≡ᵇ j) ∨ inSeen i js
+
+-- An eliminator whnf did not ι-reduce. The match did not fire.
+stuckForm : ∀ {n} → Tm n → Bool
+stuckForm (mData _ _ _)   = true
+stuckForm (mNat _ _ _ _)  = true
+stuckForm (mEmp _ _)      = true
+stuckForm (mUnit _ _ _)   = true
+stuckForm (letp _ _)      = true
+stuckForm (ucons _)       = true
+stuckForm _               = false
+
+isOOF : String → Bool
+isOOF e = e == outOfFuel
+
+-- The second alternative runs only on a definite failure. Out of fuel
+-- is not retried: the predecessor fuel is the whole budget of this call.
+_orFuel_ : Result ⊤ → Result ⊤ → Result ⊤
+ok tt  orFuel _ = ok tt
+fail e orFuel r = if isOOF e then fail e else r
+
+infixr 2 _orFuel_
 
 mutual
-  convArgs : ∀ {n} → ℕ → Sig → List (Tm n) → List (Tm n) → Result ⊤
-  convArgs k σ []       []       = ok tt
-  convArgs k σ (a ∷ as) (b ∷ bs) = conv k σ a b >> convArgs k σ as bs
-  convArgs _ _ _        _        = fail "conv: spine length mismatch"
+  convArgs : ∀ {n} → List ℕ → ℕ → Sig → List (Tm n) → List (Tm n) → Result ⊤
+  convArgs _    _ _ []       []       = ok tt
+  convArgs seen k σ (a ∷ as) (b ∷ bs) = convGo k σ seen a b >> convArgs seen k σ as bs
+  convArgs _    _ _ _        _        = fail "conv: spine length mismatch"
 
+  -- Each conversion starts with nothing unfolding.
   conv : ∀ {n} → ℕ → Sig → Tm n → Tm n → Result ⊤
-  conv zero    _ _ _ = fail outOfFuel
-  conv (suc k) σ u v =
+  conv k σ u v = convGo k σ [] u v
+
+  convGo : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
+  convGo zero    _ _    _ _ = fail outOfFuel
+  convGo (suc k) σ seen u v =
     if synEq u v then ok tt
-    else convStuck k σ u v (defArgs u) (defArgs v)
+    else convStuck k σ seen u v (defArgs u) (defArgs v)
 
-  -- Two applications of the same def to arguments that are not
-  -- constructor-headed are compared argumentwise before unfolding
-  -- (otherwise a recursive def is unfolded just to compare a call with
-  -- itself). Arguments that differ do not decide it: the def may match
-  -- on a later argument, so both sides are unfolded and compared.
-  convStuck : ∀ {n} → ℕ → Sig → Tm n → Tm n
+  -- Same definition, applied. Arguments are compared first (congruence).
+  -- A definite mismatch unfolds once. While that unfolding is in
+  -- progress, a re-entry unfolds only when the match fires; otherwise
+  -- the argument mismatch stands. Fuel on the two alternatives is the
+  -- predecessor: Agda's checker decreases on that predecessor, and the
+  -- seen guard keeps a stuck re-entry from unfolding again.
+  convStuck : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n
     → Maybe (ℕ × Tm n × List (Tm n)) → Maybe (ℕ × Tm n × List (Tm n)) → Result ⊤
-  convStuck k σ u v (just (i , a , as)) (just (j , b , bs)) =
-    if (i ≡ᵇ j) ∧ not (ctorHead a) ∧ not (ctorHead b)
-    then ((conv k σ a b >> convArgs k σ as bs) orElse convWhnf k σ u v)
-    else convWhnf k σ u v
-  convStuck k σ u v _ _ = convWhnf k σ u v
+  convStuck k σ seen u v (just (i , a , as)) (just (j , b , bs)) =
+    if i ≡ᵇ j
+    then (convGo k σ seen a b >> convArgs seen k σ as bs) orFuel
+         (if inSeen i seen then convProgress k σ seen u v
+          else convWhnf k σ (i ∷ seen) u v)
+    else convWhnf k σ seen u v
+  convStuck k σ seen u v _ _ = convWhnf k σ seen u v
 
-  convWhnf : ∀ {n} → ℕ → Sig → Tm n → Tm n → Result ⊤
-  convWhnf k σ u v = whnf k σ u >>= λ u′ → whnf k σ v >>= λ v′ → convN k σ u′ v′
+  -- whnf has ι-reduced a constructor. Two stuck eliminators did not
+  -- fire, so the applications stay neutral.
+  convProgress : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
+  convProgress k σ seen u v with whnf k σ u
+  ... | fail e = fail e
+  ... | ok u′ with whnf k σ v
+  ...   | fail e = fail e
+  ...   | ok v′ =
+    if synEq u′ v′ then ok tt
+    else if stuckForm u′ ∧ stuckForm v′
+         then fail ("cannot convert " ++ showTm u′ ++ " ≁ " ++ showTm v′)
+         else convN k σ seen u′ v′
+
+  convWhnf : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
+  convWhnf k σ seen u v = whnf k σ u >>= λ u′ → whnf k σ v >>= λ v′ → convN k σ seen u′ v′
 
   -- Tags are compared first (Muro.Tag); convND only has to handle terms
   -- of the same shape.
-  convN : ∀ {n} → ℕ → Sig → Tm n → Tm n → Result ⊤
-  convN k σ u v =
-    if tmTag u ≡ᵇ tmTag v then convND k σ u v
+  convN : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
+  convN k σ seen u v =
+    if tmTag u ≡ᵇ tmTag v then convND k σ seen u v
     else fail ("cannot convert " ++ showTm u ++ " ≁ " ++ showTm v)
 
-  convND : ∀ {n} → ℕ → Sig → Tm n → Tm n → Result ⊤
-  convND k σ typ           typ           = ok tt
-  convND k σ nat           nat           = ok tt
-  convND k σ unit          unit          = ok tt
-  convND k σ empty         empty         = ok tt
-  convND k σ (dty i)       (dty j)       = guard "data index mismatch" (i ≡ᵇ j)
-  convND k σ (ctor i j)    (ctor i′ j′)  =
+  convND : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
+  convND _ _ _    typ           typ           = ok tt
+  convND _ _ _    nat           nat           = ok tt
+  convND _ _ _    unit          unit          = ok tt
+  convND _ _ _    empty         empty         = ok tt
+  convND _ _ _    (dty i)       (dty j)       = guard "data index mismatch" (i ≡ᵇ j)
+  convND _ _ _    (ctor i j)    (ctor i′ j′)  =
     guard "constructor mismatch" ((i ≡ᵇ i′) ∧ (j ≡ᵇ j′))
-  convND k σ (mData e P bs) (mData e′ P′ bs′) =
-    conv k σ e e′ >> conv k σ P P′ >> convArgs k σ bs bs′
-  convND k σ ze            ze            = ok tt
-  convND k σ one           one           = ok tt
-  convND k σ rfl           rfl           = ok tt
-  convND k σ (su a)        (su b)        = conv k σ a b
-  convND k σ (var i)       (var j)       = guard ("var " ++ showTm (var i) ++ " ≠ " ++ showTm (var j)) (eqFin i j)
-  convND k σ (def i)       (def j)       = guard ("def " ++ showDef i ++ " ≠ " ++ showDef j) (i ≡ᵇ j)
-  convND k σ (pi q A B)    (pi q′ A′ B′) =
-    guard "Π quantity mismatch" (eqQty q q′) >> conv k σ A A′ >> conv k σ B B′
-  convND k σ (lam q A t)   (lam q′ A′ t′) =
-    guard "λ quantity mismatch" (eqQty q q′) >> conv k σ A A′ >> conv k σ t t′
-  convND k σ (app f a)     (app g b)     = conv k σ f g >> conv k σ a b
-  convND k σ (idt A a b)   (idt A′ a′ b′) = conv k σ A A′ >> conv k σ a a′ >> conv k σ b b′
-  convND k σ (mNat e P z s) (mNat e′ P′ z′ s′) =
-    conv k σ e e′ >> conv k σ P P′ >> conv k σ z z′ >> conv k σ s s′
-  convND k σ (mEmp e P)    (mEmp e′ P′)  = conv k σ e e′ >> conv k σ P P′
-  convND k σ (mUnit e P u) (mUnit e′ P′ u′) =
-    conv k σ e e′ >> conv k σ P P′ >> conv k σ u u′
-  convND k σ (rwt e P t)   (rwt e′ P′ t′) =
-    conv k σ e e′ >> conv k σ P P′ >> conv k σ t t′
-  convND k σ (ann e A)     (ann e′ A′)   = conv k σ e e′ >> conv k σ A A′
-  convND k σ (prod A B)    (prod A′ B′)  = conv k σ A A′ >> conv k σ B B′
-  convND k σ (pair a b)    (pair a′ b′)  = conv k σ a a′ >> conv k σ b b′
-  convND k σ (letp e t)    (letp e′ t′)  = conv k σ e e′ >> conv k σ t t′
-  convND k σ (nu F)        (nu F′)       = conv k σ F F′
-  convND k σ (unf s f)     (unf s′ f′)   = conv k σ s s′ >> conv k σ f f′
-  convND k σ (ucons s)     (ucons s′)    = conv k σ s s′
-  convND k σ i64           i64           = ok tt
-  convND k σ f32ty         f32ty         = ok tt
-  convND k σ (tensor d s)  (tensor d′ s′) = conv k σ d d′ >> conv k σ s s′
-  convND k σ (addi x y)    (addi x′ y′)  = conv k σ x x′ >> conv k σ y y′
-  convND k σ (muli x y)    (muli x′ y′)  = conv k σ x x′ >> conv k σ y y′
-  convND k σ (addt t u)    (addt t′ u′)  = conv k σ t t′ >> conv k σ u u′
-  convND k σ (toi64 t)     (toi64 t′)    = conv k σ t t′
-  convND k σ (packi x y)   (packi x′ y′) = conv k σ x x′ >> conv k σ y y′
-  convND _ _ u            v             =
+  convND k σ seen (mData e P bs) (mData e′ P′ bs′) =
+    convGo k σ seen e e′ >> convGo k σ seen P P′ >> convArgs seen k σ bs bs′
+  convND _ _ _    ze            ze            = ok tt
+  convND _ _ _    one           one           = ok tt
+  convND _ _ _    rfl           rfl           = ok tt
+  convND k σ seen (su a)        (su b)        = convGo k σ seen a b
+  convND _ _ _    (var i)       (var j)       = guard ("var " ++ showTm (var i) ++ " ≠ " ++ showTm (var j)) (eqFin i j)
+  convND _ _ _    (def i)       (def j)       = guard ("def " ++ showDef i ++ " ≠ " ++ showDef j) (i ≡ᵇ j)
+  convND k σ seen (pi q A B)    (pi q′ A′ B′) =
+    guard "Π quantity mismatch" (eqQty q q′) >> convGo k σ seen A A′ >> convGo k σ seen B B′
+  convND k σ seen (lam q A t)   (lam q′ A′ t′) =
+    guard "λ quantity mismatch" (eqQty q q′) >> convGo k σ seen A A′ >> convGo k σ seen t t′
+  convND k σ seen (app f a)     (app g b)     = convGo k σ seen f g >> convGo k σ seen a b
+  convND k σ seen (idt A a b)   (idt A′ a′ b′) =
+    convGo k σ seen A A′ >> convGo k σ seen a a′ >> convGo k σ seen b b′
+  convND k σ seen (mNat e P z s) (mNat e′ P′ z′ s′) =
+    convGo k σ seen e e′ >> convGo k σ seen P P′ >> convGo k σ seen z z′ >> convGo k σ seen s s′
+  convND k σ seen (mEmp e P)    (mEmp e′ P′)  = convGo k σ seen e e′ >> convGo k σ seen P P′
+  convND k σ seen (mUnit e P u) (mUnit e′ P′ u′) =
+    convGo k σ seen e e′ >> convGo k σ seen P P′ >> convGo k σ seen u u′
+  convND k σ seen (rwt e P t)   (rwt e′ P′ t′) =
+    convGo k σ seen e e′ >> convGo k σ seen P P′ >> convGo k σ seen t t′
+  convND k σ seen (ann e A)     (ann e′ A′)   = convGo k σ seen e e′ >> convGo k σ seen A A′
+  convND k σ seen (prod A B)    (prod A′ B′)  = convGo k σ seen A A′ >> convGo k σ seen B B′
+  convND k σ seen (pair a b)    (pair a′ b′)  = convGo k σ seen a a′ >> convGo k σ seen b b′
+  convND k σ seen (letp e t)    (letp e′ t′)  = convGo k σ seen e e′ >> convGo k σ seen t t′
+  convND k σ seen (nu F)        (nu F′)       = convGo k σ seen F F′
+  convND k σ seen (unf s f)     (unf s′ f′)   = convGo k σ seen s s′ >> convGo k σ seen f f′
+  convND k σ seen (ucons s)     (ucons s′)    = convGo k σ seen s s′
+  convND _ _ _    i64           i64           = ok tt
+  convND _ _ _    f32ty         f32ty         = ok tt
+  convND k σ seen (tensor d s)  (tensor d′ s′) = convGo k σ seen d d′ >> convGo k σ seen s s′
+  convND k σ seen (addi x y)    (addi x′ y′)  = convGo k σ seen x x′ >> convGo k σ seen y y′
+  convND k σ seen (muli x y)    (muli x′ y′)  = convGo k σ seen x x′ >> convGo k σ seen y y′
+  convND k σ seen (addt t u)    (addt t′ u′)  = convGo k σ seen t t′ >> convGo k σ seen u u′
+  convND k σ seen (toi64 t)     (toi64 t′)    = convGo k σ seen t t′
+  convND k σ seen (packi x y)   (packi x′ y′) = convGo k σ seen x x′ >> convGo k σ seen y y′
+  convND k σ seen (word op ts)  (word op′ ts′) =
+    guard "word operator mismatch" (wop≡ᵇ op op′) >>
+    convArgs seen k σ ts ts′
+  convND _ _ _    u             v             =
     fail ("cannot convert " ++ showTm u ++ " ≁ " ++ showTm v)
 
 ------------------------------------------------------------------------
@@ -617,7 +733,82 @@ data _,_⊢[_]_⇒_ σ Γ where
   ⇒-packi : ∀ {m x y}
     → σ , Γ ⊢[ m ] x ⇐ i64
     → σ , Γ ⊢[ m ] y ⇐ i64
-    → σ , Γ ⊢[ m ] packi x y ⇒ tensor i64 (toi64 (su (su ze)))
+    → σ , Γ ⊢[ m ] packi x y ⇒ tensor i64 (word (wlit ki64 2) [])
+
+  -- Fixed-width words. I64 stays the i64 former. Comparisons yield
+  -- WBool; checked arithmetic, div, and rem yield Opt.
+  ⇒-wu8  : σ , Γ ⊢[ spec ] word (wty ku8) [] ⇒ typ
+  ⇒-wu32 : σ , Γ ⊢[ spec ] word (wty ku32) [] ⇒ typ
+  ⇒-wu64 : σ , Γ ⊢[ spec ] word (wty ku64) [] ⇒ typ
+  ⇒-wboolty : σ , Γ ⊢[ spec ] word wbool [] ⇒ typ
+  ⇒-woptk : ∀ {k} → σ , Γ ⊢[ spec ] word (woptk k) [] ⇒ typ
+  ⇒-wopt : ∀ {A} → σ , Γ ⊢ A wf → σ , Γ ⊢[ spec ] word wopt (A ∷ []) ⇒ typ
+  ⇒-wlit : ∀ {m k n} → σ , Γ ⊢[ m ] word (wlit k n) [] ⇒ wordTy k
+  ⇒-wof : ∀ {m k n}
+    → σ , Γ ⊢[ m ] n ⇐ nat
+    → σ , Γ ⊢[ m ] word (wof k) (n ∷ []) ⇒ wordTy k
+  ⇒-wton : ∀ {m k t}
+    → σ , Γ ⊢[ m ] t ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wton (t ∷ []) ⇒ nat
+  ⇒-wadd : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wadd (x ∷ y ∷ []) ⇒ wordTy k
+  ⇒-wsub : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wsub (x ∷ y ∷ []) ⇒ wordTy k
+  ⇒-wmul : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wmul (x ∷ y ∷ []) ⇒ wordTy k
+  ⇒-wcadd : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wcadd (x ∷ y ∷ []) ⇒ optTy k
+  ⇒-wcsub : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wcsub (x ∷ y ∷ []) ⇒ optTy k
+  ⇒-wcmul : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wcmul (x ∷ y ∷ []) ⇒ optTy k
+  ⇒-wdiv : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wdiv (x ∷ y ∷ []) ⇒ optTy k
+  ⇒-wrem : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wrem (x ∷ y ∷ []) ⇒ optTy k
+  ⇒-weq : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word weq (x ∷ y ∷ []) ⇒ word wbool []
+  ⇒-wlt : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wlt (x ∷ y ∷ []) ⇒ word wbool []
+  ⇒-wle : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wle (x ∷ y ∷ []) ⇒ word wbool []
+  ⇒-wand : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wand (x ∷ y ∷ []) ⇒ wordTy k
+  ⇒-wor : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wor (x ∷ y ∷ []) ⇒ wordTy k
+  ⇒-wxor : ∀ {m k x y}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] y ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wxor (x ∷ y ∷ []) ⇒ wordTy k
+  ⇒-wnot : ∀ {m k x}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wnot (x ∷ []) ⇒ wordTy k
+  ⇒-wshl : ∀ {m k x n}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] n ⇐ nat
+    → σ , Γ ⊢[ m ] word wshl (x ∷ n ∷ []) ⇒ wordTy k
+  ⇒-wshr : ∀ {m k x n}
+    → σ , Γ ⊢[ m ] x ⇐ wordTy k → σ , Γ ⊢[ m ] n ⇐ nat
+    → σ , Γ ⊢[ m ] word wshr (x ∷ n ∷ []) ⇒ wordTy k
+  ⇒-wcast : ∀ {m k k′ t}
+    → σ , Γ ⊢[ m ] t ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word (wcast k′) (t ∷ []) ⇒ wordTy k′
+  ⇒-wtrue  : ∀ {m} → σ , Γ ⊢[ m ] word wtrue [] ⇒ word wbool []
+  ⇒-wfalse : ∀ {m} → σ , Γ ⊢[ m ] word wfalse [] ⇒ word wbool []
+  ⇒-wsome : ∀ {m k t}
+    → σ , Γ ⊢[ m ] t ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wsome (t ∷ []) ⇒ optTy k
 
 data _,_⊢[_]_⇐_ σ Γ where
   ⇐-conv : ∀ {m e A B}
@@ -645,6 +836,10 @@ data _,_⊢[_]_⇐_ σ Γ where
     → σ , Γ ⊢[ m ] b ⇐ B
     → σ , Γ ⊢[ m ] pair a b ⇐ prod A B
 
+  -- None has no payload kind. The expected Opt type supplies it.
+  ⇐-wnone : ∀ {m k}
+    → σ , Γ ⊢[ m ] word wnone [] ⇐ optTy k
+
   -- let (a, b) = e in t: the tensor eliminator. Both components are
   -- bound affine (a at var 1, b at var 0); the body is checked against
   -- the expected type weakened past them. fst / snd are surface sugar:
@@ -669,17 +864,41 @@ data _,_⊢[_]_⇐_ σ Γ where
 -- Decision procedure.
 ------------------------------------------------------------------------
 
+-- whnf, then one of these. The no arm is a catch-all, so naming a new
+-- term constructor does not add a clause here or in the soundness proof.
+data PiView {n} : Tm n → Set where
+  piv-pi : ∀ q A B → PiView (pi q A B)
+  piv-no : ∀ t → PiView t
+
+piView : ∀ {n} (t : Tm n) → PiView t
+piView (pi q A B) = piv-pi q A B
+piView t          = piv-no t
+
+data IdView {n} : Tm n → Set where
+  idv-id : ∀ A a b → IdView (idt A a b)
+  idv-no : ∀ t → IdView t
+
+idView : ∀ {n} (t : Tm n) → IdView t
+idView (idt A a b) = idv-id A a b
+idView t           = idv-no t
+
+viewPiOf : ∀ {n} (t : Tm n) → PiView t → Result (Qty × Tm n × Tm (suc n))
+viewPiOf .(pi q A B) (piv-pi q A B) = ok (q , A , B)
+viewPiOf t           (piv-no .t)    = fail ("expected Π, got " ++ showTm t)
+
+viewIdOf : ∀ {n} (t : Tm n) → IdView t → Result (Tm n × Tm n × Tm n)
+viewIdOf .(idt A a b) (idv-id A a b) = ok (A , a , b)
+viewIdOf t            (idv-no .t)    = fail ("expected Id, got " ++ showTm t)
+
 viewPi : ∀ {n} → ℕ → Sig → Tm n → Result (Qty × Tm n × Tm (suc n))
 viewPi k σ t with whnf k σ t
-... | fail m          = fail m
-... | ok (pi q A B)   = ok (q , A , B)
-... | ok t′           = fail ("expected Π, got " ++ showTm t′)
+... | fail m = fail m
+... | ok t′  = viewPiOf t′ (piView t′)
 
 viewId : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n × Tm n × Tm n)
 viewId k σ t with whnf k σ t
-... | fail m          = fail m
-... | ok (idt A a b)  = ok (A , a , b)
-... | ok t′           = fail ("expected Id, got " ++ showTm t′)
+... | fail m = fail m
+... | ok t′  = viewIdOf t′ (idView t′)
 
 -- Dtype of Tensor: I64 or F32 after WHNF.
 isNxDtype : ∀ {n} → ℕ → Sig → Tm n → Result Bool
@@ -709,13 +928,24 @@ floatIdOk k σ A =
   guard "kernel identity is not defined on F32" (not b)
 
 i64two : ∀ {n} → Tm n
-i64two = toi64 (su (su ze))
+i64two = word (wlit ki64 2) []
+
+data ProdView {n} : Tm n → Set where
+  prv-prod : ∀ A B → ProdView (prod A B)
+  prv-no   : ∀ t → ProdView t
+
+prodView : ∀ {n} (t : Tm n) → ProdView t
+prodView (prod A B) = prv-prod A B
+prodView t          = prv-no t
+
+viewProdOf : ∀ {n} (t : Tm n) → ProdView t → Result (Tm n × Tm n)
+viewProdOf .(prod A B) (prv-prod A B) = ok (A , B)
+viewProdOf t           (prv-no .t)    = fail ("expected ×, got " ++ showTm t)
 
 viewProd : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n × Tm n)
 viewProd k σ t with whnf k σ t
-... | fail m          = fail m
-... | ok (prod A B)   = ok (A , B)
-... | ok t′           = fail ("expected ×, got " ++ showTm t′)
+... | fail m = fail m
+... | ok t′  = viewProdOf t′ (prodView t′)
 
 viewNu : ∀ {n} → ℕ → Sig → Tm n → Result (Tm (suc n))
 viewNu k σ t with whnf k σ t
@@ -763,6 +993,7 @@ mutual
   hasSelf s (addt t u)     = hasSelf s t ∨ hasSelf s u
   hasSelf s (toi64 t)      = hasSelf s t
   hasSelf s (packi x y)    = hasSelf s x ∨ hasSelf s y
+  hasSelf s (word _ ts)    = hasSelfList s ts
   hasSelf s (lam _ A t)    = hasSelf s A ∨ hasSelf s t
   hasSelf s (pi _ A B)     = hasSelf s A ∨ hasSelf s B
   hasSelf s (prod A B)     = hasSelf s A ∨ hasSelf s B
@@ -782,40 +1013,504 @@ mutual
   hasSelfList _ []       = false
   hasSelfList s (t ∷ ts) = hasSelf s t ∨ hasSelfList s ts
 
--- On run/evid, unfold's λ-body must be a pair and the head must not
--- contain a self-call. spec skips the test.
+-- The tail of an unfold step may mention the block only as a call:
+-- a block member applied to arguments that do not mention the block,
+-- a pair of such tails, or a nested unfold whose seed, binder type
+-- and head do not mention the block and whose own tail is guarded.
+-- head, tail, uncons, let, match, and rewrite over the block force
+-- it, so they are not calls. Spec does not run the test.
+-- The coinductive flag exempts the step from descent. It does not
+-- place the block.
+
+data StepFun {n} : Tm n → Set where
+  sf-pair : (q : Qty) (A : Tm n) (h t : Tm (suc n)) → StepFun (lam q A (pair h t))
+  sf-rest : (f : Tm n) → StepFun f
+
+stepFun : ∀ {n} (f : Tm n) → StepFun f
+stepFun (lam q A (pair h t)) = sf-pair q A h t
+stepFun f                    = sf-rest f
+
+mutual
+  guardedCall : ∀ {n} → List ℕ → Tm n → Bool
+  guardedCall B (def i)    = elemℕ i B
+  guardedCall B (app f a)  = not (hasSelf B a) ∧ guardedCall B f
+  guardedCall B (pair a b) = guardedTail B a ∧ guardedTail B b
+  guardedCall B (unf s f)  = unfCall B s (stepFun f)
+  guardedCall _ _          = false
+
+  -- The view is the scrutinee, so a step reduces to its tail test and
+  -- every other function reduces to false.
+  unfCall : ∀ {n} (B : List ℕ) (s : Tm n) {f : Tm n} → StepFun f → Bool
+  unfCall B s (sf-pair _ A h t) =
+    not (hasSelf B s ∨ hasSelf B A ∨ hasSelf B h) ∧ guardedTail B t
+  unfCall _ _ (sf-rest _) = false
+
+  guardedTail : ∀ {n} → List ℕ → Tm n → Bool
+  guardedTail B t = not (hasSelf B t) ∨ guardedCall B t
+
+-- Inductive form of the boolean. A tail is guarded when the block is
+-- absent, or the term is one of the four call forms.
+data GuardedCall {n} (B : List ℕ) : Tm n → Set
+data GuardedTail {n} (B : List ℕ) : Tm n → Set
+
+data GuardedTail {n} B where
+  gt-absent : ∀ {t} → hasSelf B t ≡ false → GuardedTail B t
+  gt-call   : ∀ {t} → GuardedCall B t → GuardedTail B t
+
+data GuardedCall {n} B where
+  gc-def : ∀ {i} → elemℕ i B ≡ true → GuardedCall B (def i)
+  gc-app : ∀ {f a} → hasSelf B a ≡ false → GuardedCall B f → GuardedCall B (app f a)
+  gc-pair : ∀ {a b} → GuardedTail B a → GuardedTail B b → GuardedCall B (pair a b)
+  gc-unf : ∀ {s q A h t}
+    → hasSelf B s ≡ false → hasSelf B A ≡ false → hasSelf B h ≡ false
+    → GuardedTail B t
+    → GuardedCall B (unf s (lam q A (pair h t)))
+
+not-elim : ∀ {b} → not b ≡ true → b ≡ false
+not-elim {false} refl = refl
+not-elim {true}  ()
+
+not-elim-false : ∀ b → not b ≡ false → b ≡ true
+not-elim-false true  refl = refl
+not-elim-false false ()
+
+∧-true₂ : ∀ a b → a ∧ b ≡ true → a ≡ true × b ≡ true
+∧-true₂ true  b eq = refl , eq
+∧-true₂ false b ()
+
+∨-false₂ : ∀ a b → a ∨ b ≡ false → a ≡ false × b ≡ false
+∨-false₂ false false refl = refl , refl
+∨-false₂ true  _    ()
+∨-false₂ false true  ()
+
+boom : ∀ {b} → b ≡ false → b ≡ true → ⊥
+boom refl ()
+
+true≢false : true ≡ false → ⊥
+true≢false ()
+
+fail≢ok : ∀ {A : Set} {e : String} {a : A} → fail e ≡ ok a → ⊥
+fail≢ok ()
+
+ok≢fail : ∀ {A : Set} {a : A} {e : String} → ok a ≡ fail e → ⊥
+ok≢fail ()
+
+ok-inj : ∀ {A : Set} {x y : A} → ok x ≡ ok y → x ≡ y
+ok-inj refl = refl
+
+≡ᵇ-≡ : ∀ m n → (m ≡ᵇ n) ≡ true → m ≡ n
+≡ᵇ-≡ m n eq = ≡ᵇ⇒≡ m n (subst T (sym eq) tt)
+
+-- false ∨ b reduces to b, so a false absence bit leaves the call test.
+toCall : ∀ {n} (B : List ℕ) (t : Tm n)
+  → not (hasSelf B t) ≡ false → guardedTail B t ≡ true → guardedCall B t ≡ true
+toCall B t nb eq = trans (cong (λ b → b ∨ guardedCall B t) (sym nb)) eq
+
+-- guardedCall is definitionally false. A true tail is then block-free,
+-- and the two equations cannot both hold.
+absent-only : ∀ {n} (B : List ℕ) (t : Tm n)
+  → not (hasSelf B t) ≡ false → guardedTail B t ≡ true
+  → guardedCall B t ≡ false → GuardedTail B t
+absent-only B t nb eq cf = ⊥-elim (boom cf (toCall B t nb eq))
+
+mutual
+  tail-ok : ∀ {n} (B : List ℕ) (t : Tm n) → guardedTail B t ≡ true → GuardedTail B t
+  tail-ok B t eq = tail-go B t (not (hasSelf B t)) refl eq
+
+  tail-go : ∀ {n} (B : List ℕ) (t : Tm n) (b : Bool)
+    → not (hasSelf B t) ≡ b → guardedTail B t ≡ true → GuardedTail B t
+  tail-go B t true nb _ = gt-absent (not-elim nb)
+  tail-go B (def i) false nb _ = gt-call (gc-def (not-elim-false (elemℕ i B) nb))
+  tail-go B (app f a) false nb eq =
+    let na , cf = ∧-true₂ (not (hasSelf B a)) (guardedCall B f) (toCall B (app f a) nb eq)
+    in gt-call (gc-app (not-elim na) (call-ok B f cf))
+  tail-go B (pair a b) false nb eq =
+    let ta , tb = ∧-true₂ (guardedTail B a) (guardedTail B b) (toCall B (pair a b) nb eq)
+    in gt-call (gc-pair (tail-ok B a ta) (tail-ok B b tb))
+  tail-go B (unf s f) false nb eq =
+    gt-call (unf-go B s f (stepFun f) refl (toCall B (unf s f) nb eq))
+  tail-go B (var x) false nb eq = absent-only B (var x) nb eq refl
+  tail-go B typ false nb eq = absent-only B typ nb eq refl
+  tail-go B (pi q A C) false nb eq = absent-only B (pi q A C) nb eq refl
+  tail-go B (lam q A t) false nb eq = absent-only B (lam q A t) nb eq refl
+  tail-go B nat false nb eq = absent-only B nat nb eq refl
+  tail-go B ze false nb eq = absent-only B ze nb eq refl
+  tail-go B (su t) false nb eq = absent-only B (su t) nb eq refl
+  tail-go B unit false nb eq = absent-only B unit nb eq refl
+  tail-go B one false nb eq = absent-only B one nb eq refl
+  tail-go B empty false nb eq = absent-only B empty nb eq refl
+  tail-go B (dty i) false nb eq = absent-only B (dty i) nb eq refl
+  tail-go B (ctor i j) false nb eq = absent-only B (ctor i j) nb eq refl
+  tail-go B (mData e P bs) false nb eq = absent-only B (mData e P bs) nb eq refl
+  tail-go B (mNat e P z s) false nb eq = absent-only B (mNat e P z s) nb eq refl
+  tail-go B (mEmp e P) false nb eq = absent-only B (mEmp e P) nb eq refl
+  tail-go B (mUnit e P u) false nb eq = absent-only B (mUnit e P u) nb eq refl
+  tail-go B (idt A a b) false nb eq = absent-only B (idt A a b) nb eq refl
+  tail-go B rfl false nb eq = absent-only B rfl nb eq refl
+  tail-go B (rwt e P t) false nb eq = absent-only B (rwt e P t) nb eq refl
+  tail-go B (ann e A) false nb eq = absent-only B (ann e A) nb eq refl
+  tail-go B (prod A C) false nb eq = absent-only B (prod A C) nb eq refl
+  tail-go B (letp e t) false nb eq = absent-only B (letp e t) nb eq refl
+  tail-go B (nu F) false nb eq = absent-only B (nu F) nb eq refl
+  tail-go B (ucons u) false nb eq = absent-only B (ucons u) nb eq refl
+  tail-go B i64 false nb eq = absent-only B i64 nb eq refl
+  tail-go B f32ty false nb eq = absent-only B f32ty nb eq refl
+  tail-go B (tensor d u) false nb eq = absent-only B (tensor d u) nb eq refl
+  tail-go B (addi x y) false nb eq = absent-only B (addi x y) nb eq refl
+  tail-go B (muli x y) false nb eq = absent-only B (muli x y) nb eq refl
+  tail-go B (addt t u) false nb eq = absent-only B (addt t u) nb eq refl
+  tail-go B (toi64 t) false nb eq = absent-only B (toi64 t) nb eq refl
+  tail-go B (packi x y) false nb eq = absent-only B (packi x y) nb eq refl
+  tail-go B (word op ts) false nb eq = absent-only B (word op ts) nb eq refl
+
+  -- Carry the view as an argument so unfCall reduces on it.
+  unf-go : ∀ {n} (B : List ℕ) (s f : Tm n) (v : StepFun f)
+    → stepFun f ≡ v → guardedCall B (unf s f) ≡ true → GuardedCall B (unf s f)
+  unf-go B s f v rv eq = unf-go′ B s f v (trans (sym (cong (unfCall B s) rv)) eq)
+
+  unf-go′ : ∀ {n} (B : List ℕ) (s f : Tm n) (v : StepFun f)
+    → unfCall B s v ≡ true → GuardedCall B (unf s f)
+  unf-go′ B s .(lam q A (pair h t)) (sf-pair q A h t) eq =
+    let nf , tg = ∧-true₂ (not (hasSelf B s ∨ hasSelf B A ∨ hasSelf B h)) (guardedTail B t) eq
+        hs , rest = ∨-false₂ (hasSelf B s) (hasSelf B A ∨ hasSelf B h) (not-elim nf)
+        hA , hh = ∨-false₂ (hasSelf B A) (hasSelf B h) rest
+    in gc-unf hs hA hh (tail-ok B t tg)
+  unf-go′ _ _ _ (sf-rest _) eq = ⊥-elim (boom refl eq)
+
+  call-ok : ∀ {n} (B : List ℕ) (t : Tm n) → guardedCall B t ≡ true → GuardedCall B t
+  call-ok B (def i) eq = gc-def eq
+  call-ok B (app f a) eq =
+    let na , cf = ∧-true₂ (not (hasSelf B a)) (guardedCall B f) eq
+    in gc-app (not-elim na) (call-ok B f cf)
+  call-ok B (pair a b) eq =
+    let ta , tb = ∧-true₂ (guardedTail B a) (guardedTail B b) eq
+    in gc-pair (tail-ok B a ta) (tail-ok B b tb)
+  call-ok B (unf s f) eq = unf-go B s f (stepFun f) refl eq
+  call-ok _ (var _) eq = ⊥-elim (boom refl eq)
+  call-ok _ typ eq = ⊥-elim (boom refl eq)
+  call-ok _ (pi _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (lam _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ nat eq = ⊥-elim (boom refl eq)
+  call-ok _ ze eq = ⊥-elim (boom refl eq)
+  call-ok _ (su _) eq = ⊥-elim (boom refl eq)
+  call-ok _ unit eq = ⊥-elim (boom refl eq)
+  call-ok _ one eq = ⊥-elim (boom refl eq)
+  call-ok _ empty eq = ⊥-elim (boom refl eq)
+  call-ok _ (dty _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (ctor _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (mData _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (mNat _ _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (mEmp _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (mUnit _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (idt _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ rfl eq = ⊥-elim (boom refl eq)
+  call-ok _ (rwt _ _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (ann _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (prod _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (letp _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (nu _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (ucons _) eq = ⊥-elim (boom refl eq)
+  call-ok _ i64 eq = ⊥-elim (boom refl eq)
+  call-ok _ f32ty eq = ⊥-elim (boom refl eq)
+  call-ok _ (tensor _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (addi _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (muli _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (addt _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (toi64 _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (packi _ _) eq = ⊥-elim (boom refl eq)
+  call-ok _ (word _ _) eq = ⊥-elim (boom refl eq)
+
+-- guardedTail B t ≡ true reflects GuardedTail B t.
+guardedTail-reflects : ∀ {n} (B : List ℕ) (t : Tm n) → guardedTail B t ≡ true → GuardedTail B t
+guardedTail-reflects = tail-ok
+
+-- true: the head mentions the block, or the tail is not guarded.
+unguarded : Bool → Result ⊤
+unguarded true  = fail "unguarded recursive call"
+unguarded false = ok tt
+
+unguarded-ok : ∀ b → unguarded b ≡ ok tt → b ≡ false
+unguarded-ok false refl = refl
+unguarded-ok true  ()
+
+-- One λ, then a pair. A further λ is not a pair: the unfold applies
+-- the step to one seed, and the body of that λ is checked as the
+-- product. Binder types of this outer step are not part of the guard;
+-- a nested unfold constrains its own seed, binder type, and head.
+-- A bare pair does not bind the seed.
+pairStep : ∀ {n} → List ℕ → Tm n → Result ⊤
+pairStep B (pair h t) = unguarded (hasSelf B h ∨ not (guardedTail B t))
+pairStep _ _          = fail "unfold body must be a pair"
+
+guardedStep : ∀ {n} → List ℕ → Tm n → Result ⊤
+guardedStep B (lam _ _ t) = pairStep B t
+guardedStep B (pair h t)  = unguarded (hasSelf B h ∨ not (guardedTail B t))
+guardedStep _ _           = fail "unfold body must be a pair"
+
+-- occℕ i t: de Bruijn variable i occurs free in t. The same walk as
+-- `occurs`, indexed by ℕ so a seed binder can be counted while the
+-- lambdas of a step are stripped.
+mutual
+  occℕ : ∀ {n} → ℕ → Tm n → Bool
+  occℕ i (var x)        = i ≡ᵇ toℕ x
+  occℕ i (pi _ A B)     = occℕ i A ∨ occℕ (suc i) B
+  occℕ i (lam _ A t)    = occℕ i A ∨ occℕ (suc i) t
+  occℕ i (app f a)      = occℕ i f ∨ occℕ i a
+  occℕ i (su t)         = occℕ i t
+  occℕ i (mData e P bs) = occℕ i e ∨ occℕ (suc i) P ∨ occℕList i bs
+  occℕ i (mNat e P z s) = occℕ i e ∨ occℕ (suc i) P ∨ occℕ i z ∨ occℕ (suc i) s
+  occℕ i (mEmp e P)     = occℕ i e ∨ occℕ (suc i) P
+  occℕ i (mUnit e P u)  = occℕ i e ∨ occℕ (suc i) P ∨ occℕ i u
+  occℕ i (idt A a b)    = occℕ i A ∨ occℕ i a ∨ occℕ i b
+  occℕ i (rwt e P t)    = occℕ i e ∨ occℕ (suc i) P ∨ occℕ i t
+  occℕ i (ann e A)      = occℕ i e ∨ occℕ i A
+  occℕ i (prod A B)     = occℕ i A ∨ occℕ i B
+  occℕ i (pair a b)     = occℕ i a ∨ occℕ i b
+  occℕ i (letp e t)     = occℕ i e ∨ occℕ (suc (suc i)) t
+  occℕ i (nu F)         = occℕ (suc i) F
+  occℕ i (unf s f)      = occℕ i s ∨ occℕ i f
+  occℕ i (ucons s)      = occℕ i s
+  occℕ i (tensor d s)   = occℕ i d ∨ occℕ i s
+  occℕ i (addi a b)     = occℕ i a ∨ occℕ i b
+  occℕ i (muli a b)     = occℕ i a ∨ occℕ i b
+  occℕ i (addt t u)     = occℕ i t ∨ occℕ i u
+  occℕ i (toi64 t)      = occℕ i t
+  occℕ i (packi a b)    = occℕ i a ∨ occℕ i b
+  occℕ i (word _ ts)    = occℕList i ts
+  occℕ _ _              = false
+
+  occℕList : ∀ {n} → ℕ → List (Tm n) → Bool
+  occℕList _ []       = false
+  occℕList i (t ∷ ts) = occℕ i t ∨ occℕList i ts
+
+-- nothing: the step has not bound the seed (a bare pair does not
+-- instantiate it). just i: the seed is variable i. The first λ binds
+-- it at 0; each further λ shifts it. The binder is read when it occurs
+-- in the head or in the tail. A seed that mentions the block may occur
+-- in neither: the observed head cannot be that mention, and the tail
+-- is not instantiated with it. A block-free seed may occur in either.
+seedFlows : ∀ {n} → Maybe ℕ → Tm n → Bool
+seedFlows nothing  (lam _ _ t) = seedFlows (just 0) t
+seedFlows (just i) (lam _ _ t) = seedFlows (just (suc i)) t
+seedFlows (just i) (pair h t)  = occℕ i h ∨ occℕ i t
+seedFlows _        _           = false
+
+-- Outside spec, an unfold whose head or tail reads the seed must be
+-- seeded by a term that does not mention the block. The walk is the
+-- whole body: checkUnfold never receives the seed, and the three unf
+-- clauses of check′/infer′ are quoted by Soundness. A seed neither
+-- component reads is not constrained, so a descending call discarded
+-- before the step stays accepted. The same walk runs guardedStep on
+-- every syntactic unfold, so acceptance is the guard as well as the
+-- seed fact.
+seedGuard : ∀ {n} → ℕ → Sig → List ℕ → Tm n → Tm n → Result ⊤
+seedGuard k σ B s f =
+  whnf k σ f >>= λ f′ → unguarded (seedFlows nothing f′ ∧ hasSelf B s)
+
+-- seedWalk and checkNu are defined after infer. The bare-stream test
+-- asks infer whether the unfold's tail converts with its seed, and
+-- infer does not call the walk.
+
+-- On run/evid, unfold's λ-body must be a pair, the head must not
+-- mention the block, and the tail must be guarded. spec skips the test.
 checkUnfold : ∀ {n} → ℕ → Sig → Mode → RecSt n → Tm n → Result ⊤
 checkUnfold _ _ spec _ _ = ok tt
-checkUnfold k σ _ rs f = whnf k σ f >>= go
-  where
-    go : ∀ {n} → Tm n → Result ⊤
-    go (lam _ _ t) = go t
-    go (pair h _)  =
-      if hasSelf (RecSt.block rs) h
-      then fail "unguarded recursive call"
-      else ok tt
-    go _ = fail "unfold body must be a pair"
+checkUnfold k σ _ rs f   = whnf k σ f >>= guardedStep (RecSt.block rs)
+
+-- A bare ν is a stream when it is ν X. A × X and A does not mention X.
+-- Declared families are applications, not this shape: their unfold is
+-- the instantiated pair, and uncons reads that pair.
+lamForm : ∀ {n} → Tm n → Bool
+lamForm (nu (prod B (var zero))) with strengthen B
+... | ok _    = true
+... | fail _  = false
+lamForm _ = false
+
+-- The seed binder of the one λ occurs in the head, and the tail
+-- mentions the block. On a bare stream that tail is the next seed, so
+-- the next head is that mention. A family is not this test: lamForm is
+-- false, and the tail is the next proof, not the next seed.
+streamReads : ∀ {n} → List ℕ → Tm n → Bool
+streamReads B (lam _ _ (pair h t)) = occℕ 0 h ∧ hasSelf B t
+streamReads _ _                    = false
 
 -- On run/evid, a definition whose type reduces to a ν (bare, or a
--- family applied to any number of indices) is an unfold, or it does not
--- mention its own block: a call into the block is productive only as
--- the tail of an unfold step, where checkUnfold guards it.
+-- family applied to any number of indices) is an unfold whose step
+-- passes this same guard, or it does not mention its own block.
 isNuHead : ∀ {n} → Tm n → Bool
 isNuHead (nu _) = true
 isNuHead _      = false
 
-checkNu : ∀ {n} → ℕ → Sig → List ℕ → Mode → Tm n → Tm n → Result ⊤
-checkNu _       _ _   spec _ _ = ok tt
-checkNu zero    _ _   _    _ _ = fail outOfFuel
-checkNu (suc k) σ blk m    T t = whnf (suc k) σ T >>= λ T′ → go T′ t
+-- Run and evidence are checked. A spec definition is not: checkNu of
+-- spec returns without walking. A component of a run or evidence
+-- definition is therefore only run and evidence. Acceptance of the
+-- signature already keeps a spec body from naming a run, and a run
+-- body from naming a spec; this refuses the component that would make
+-- an observation open a body the walk did not see.
+specAt : Sig → ℕ → Bool
+specAt σ i with lookupDef σ i
+... | ok d   = eqMode (Def.dmode d) spec
+... | fail _ = false
+
+anySpec : Sig → List ℕ → Bool
+anySpec _ []       = false
+anySpec σ (i ∷ is) = specAt σ i ∨ anySpec σ is
+
+membersRun : Sig → List ℕ → Result ⊤
+membersRun σ js =
+  if anySpec σ js then fail "spec definition in a productive component" else ok tt
+
+members-false : ∀ σ js → membersRun σ js ≡ ok tt → anySpec σ js ≡ false
+members-false σ js eq with anySpec σ js
+... | false = refl
+... | true  = ⊥-elim (fail≢ok eq)
+
+anySpec-at : ∀ σ j js
+  → anySpec σ js ≡ false → elemℕ j js ≡ true → specAt σ j ≡ false
+anySpec-at _ _ [] _ ()
+anySpec-at σ j (i ∷ is) eq el =
+  let hi , ti = ∨-false₂ (specAt σ i) (anySpec σ is) eq
+  in at (j ≡ᵇ i) refl el hi ti
   where
-    go : ∀ {n} → Tm n → Tm n → Result ⊤
-    go (pi _ _ B) (lam _ _ u) = checkNu k σ blk m B u
-    go _          (unf _ _)   = ok tt
-    go T′         u           =
-      if isNuHead (proj₁ (apps T′)) ∧ hasSelf blk u
-      then fail "ν value calls its own block outside an unfold"
-      else ok tt
+  at : (b : Bool) → (j ≡ᵇ i) ≡ b → elemℕ j (i ∷ is) ≡ true
+     → specAt σ i ≡ false → anySpec σ is ≡ false → specAt σ j ≡ false
+  at true  beq _ hi _ =
+    subst (λ z → specAt σ z ≡ false) (sym (≡ᵇ-≡ j i beq)) hi
+  at false beq el _ ti rewrite beq = anySpec-at σ j is ti el
+
+specAt-mode : ∀ σ j d
+  → specAt σ j ≡ false → lookupDef σ j ≡ ok d
+  → eqMode (Def.dmode d) spec ≡ false
+specAt-mode σ j d eq lk rewrite lk = eq
+
+membersRun-spec : ∀ σ j (d : Def) js
+  → membersRun σ js ≡ ok tt
+  → elemℕ j js ≡ true
+  → lookupDef σ j ≡ ok d
+  → eqMode (Def.dmode d) spec ≡ false
+membersRun-spec σ j d js eq el lk =
+  specAt-mode σ j d (anySpec-at σ j js (members-false σ js eq) el) lk
+
+mode-not-spec : ∀ m → eqMode m spec ≡ false → m ≡ spec → ⊥
+mode-not-spec spec eq _ = true≢false eq
+mode-not-spec run  _  ()
+mode-not-spec evid _  ()
+
+-- checkNu is defined with seedWalk, after infer.
+
+-- What checkUnfold demands of a step, after whnf: lambdas over a pair
+-- whose head does not mention the block and whose tail is guarded.
+-- This is the shape of an accepted unfold. That an observation to any
+-- finite depth reads a block-free head is Muro.Productive.
+-- checkSig-guarded reads this guard, and the seed fact, off seedWalk:
+-- the seed binder may occur in the head or the tail only when the seed
+-- does not mention the block.
+data StepGuard {n} (B : List ℕ) : Tm n → Set where
+  sg-lam  : ∀ {q A t} → StepGuard B t → StepGuard B (lam q A t)
+  sg-pair : ∀ {h t} → hasSelf B h ≡ false → GuardedTail B t → StepGuard B (pair h t)
+
+data UnfoldGuard {n} (k : ℕ) (σ : Sig) (B : List ℕ) (f : Tm n) : Set where
+  unfold-guard : (f′ : Tm n) → whnf k σ f ≡ ok f′ → StepGuard B f′ → UnfoldGuard k σ B f
+
+pairStep-ok : ∀ {n} (B : List ℕ) (t : Tm n) → pairStep B t ≡ ok tt → StepGuard B t
+pairStep-ok B (pair h t) eq =
+  let hs , ng = ∨-false₂ (hasSelf B h) (not (guardedTail B t))
+                  (unguarded-ok (hasSelf B h ∨ not (guardedTail B t)) eq)
+  in sg-pair hs (guardedTail-reflects B t (not-elim-false (guardedTail B t) ng))
+pairStep-ok _ (var _) ()
+pairStep-ok _ typ ()
+pairStep-ok _ (pi _ _ _) ()
+pairStep-ok _ (lam _ _ _) ()
+pairStep-ok _ (app _ _) ()
+pairStep-ok _ nat ()
+pairStep-ok _ ze ()
+pairStep-ok _ (su _) ()
+pairStep-ok _ unit ()
+pairStep-ok _ one ()
+pairStep-ok _ empty ()
+pairStep-ok _ (dty _) ()
+pairStep-ok _ (ctor _ _) ()
+pairStep-ok _ (mData _ _ _) ()
+pairStep-ok _ (mNat _ _ _ _) ()
+pairStep-ok _ (mEmp _ _) ()
+pairStep-ok _ (mUnit _ _ _) ()
+pairStep-ok _ (idt _ _ _) ()
+pairStep-ok _ rfl ()
+pairStep-ok _ (rwt _ _ _) ()
+pairStep-ok _ (def _) ()
+pairStep-ok _ (ann _ _) ()
+pairStep-ok _ (prod _ _) ()
+pairStep-ok _ (letp _ _) ()
+pairStep-ok _ (nu _) ()
+pairStep-ok _ (unf _ _) ()
+pairStep-ok _ (ucons _) ()
+pairStep-ok _ i64 ()
+pairStep-ok _ f32ty ()
+pairStep-ok _ (tensor _ _) ()
+pairStep-ok _ (addi _ _) ()
+pairStep-ok _ (muli _ _) ()
+pairStep-ok _ (addt _ _) ()
+pairStep-ok _ (toi64 _) ()
+pairStep-ok _ (packi _ _) ()
+pairStep-ok _ (word _ _) ()
+
+guardedStep-ok : ∀ {n} (B : List ℕ) (t : Tm n) → guardedStep B t ≡ ok tt → StepGuard B t
+guardedStep-ok B (lam _ _ t) eq = sg-lam (pairStep-ok B t eq)
+guardedStep-ok B (pair h t) eq =
+  let hs , ng = ∨-false₂ (hasSelf B h) (not (guardedTail B t))
+                  (unguarded-ok (hasSelf B h ∨ not (guardedTail B t)) eq)
+  in sg-pair hs (guardedTail-reflects B t (not-elim-false (guardedTail B t) ng))
+guardedStep-ok _ (var _) ()
+guardedStep-ok _ typ ()
+guardedStep-ok _ (pi _ _ _) ()
+guardedStep-ok _ (app _ _) ()
+guardedStep-ok _ nat ()
+guardedStep-ok _ ze ()
+guardedStep-ok _ (su _) ()
+guardedStep-ok _ unit ()
+guardedStep-ok _ one ()
+guardedStep-ok _ empty ()
+guardedStep-ok _ (dty _) ()
+guardedStep-ok _ (ctor _ _) ()
+guardedStep-ok _ (mData _ _ _) ()
+guardedStep-ok _ (mNat _ _ _ _) ()
+guardedStep-ok _ (mEmp _ _) ()
+guardedStep-ok _ (mUnit _ _ _) ()
+guardedStep-ok _ (idt _ _ _) ()
+guardedStep-ok _ rfl ()
+guardedStep-ok _ (rwt _ _ _) ()
+guardedStep-ok _ (def _) ()
+guardedStep-ok _ (ann _ _) ()
+guardedStep-ok _ (prod _ _) ()
+guardedStep-ok _ (letp _ _) ()
+guardedStep-ok _ (nu _) ()
+guardedStep-ok _ (unf _ _) ()
+guardedStep-ok _ (ucons _) ()
+guardedStep-ok _ i64 ()
+guardedStep-ok _ f32ty ()
+guardedStep-ok _ (tensor _ _) ()
+guardedStep-ok _ (addi _ _) ()
+guardedStep-ok _ (muli _ _) ()
+guardedStep-ok _ (addt _ _) ()
+guardedStep-ok _ (toi64 _) ()
+guardedStep-ok _ (packi _ _) ()
+guardedStep-ok _ (word _ _) ()
+
+unfold-from : ∀ {n} k σ (B : List ℕ) (f : Tm n)
+  → (whnf k σ f >>= guardedStep B) ≡ ok tt → UnfoldGuard k σ B f
+unfold-from k σ B f eq with whnf k σ f in weq
+... | fail _ = ⊥-elim (fail≢ok eq)
+... | ok f′  = unfold-guard f′ weq (guardedStep-ok B f′ eq)
+
+-- An unfold checkUnfold accepts outside spec has, after whnf, a
+-- block-free head and a guarded tail. ⊢ does not recheck this.
+checkUnfold-guarded : ∀ {n} k σ m (rs : RecSt n) (f : Tm n)
+  → eqMode m spec ≡ false
+  → checkUnfold k σ m rs f ≡ ok tt
+  → UnfoldGuard k σ (RecSt.block rs) f
+checkUnfold-guarded k σ spec rs f eq _   = ⊥-elim (true≢false eq)
+checkUnfold-guarded k σ run  rs f refl eq = unfold-from k σ (RecSt.block rs) f eq
+checkUnfold-guarded k σ evid rs f refl eq = unfold-from k σ (RecSt.block rs) f eq
 
 mutual
   occurs : ∀ {n} → Fin n → Tm n → Bool
@@ -845,6 +1540,7 @@ mutual
   occurs x (addt t u)     = occurs x t ∨ occurs x u
   occurs x (toi64 t)      = occurs x t
   occurs x (packi a b)    = occurs x a ∨ occurs x b
+  occurs x (word _ ts)    = occursList x ts
   occurs _ _              = false
 
   occursList : ∀ {n} → Fin n → List (Tm n) → Bool
@@ -903,6 +1599,7 @@ mutual
   occursD i (addt t u)     = occursD i t ∨ occursD i u
   occursD i (toi64 t)      = occursD i t
   occursD i (packi a b)    = occursD i a ∨ occursD i b
+  occursD i (word _ ts)    = occursDList i ts
   occursD _ _              = false
 
   occursDList : ∀ {n} → ℕ → List (Tm n) → Bool
@@ -958,6 +1655,7 @@ mutual
   absentGo k σ i seen (addt t u)     = absentD k σ i seen t ∧ absentD k σ i seen u
   absentGo k σ i seen (toi64 t)      = absentD k σ i seen t
   absentGo k σ i seen (packi a b)    = absentD k σ i seen a ∧ absentD k σ i seen b
+  absentGo k σ i seen (word _ ts)    = absentDList k σ i seen ts
   absentGo k σ i seen (mData e P bs) = absentD k σ i seen e ∧ absentD k σ i seen P ∧ absentDList k σ i seen bs
   absentGo k σ i seen (dty j)        = absentData k σ i seen j
   absentGo _ _ _ _ _                 = true
@@ -1199,15 +1897,6 @@ nuBodyProd (lam _ _ t) = nuBodyProd t
 nuBodyProd (prod _ _)  = true
 nuBodyProd _           = false
 
--- A bare ν is a stream when it is ν X. A × X and A does not mention X.
--- Declared families are applications, not this shape: their unfold is
--- the instantiated pair, and uncons reads that pair.
-lamForm : ∀ {n} → Tm n → Bool
-lamForm (nu (prod B (var zero))) with strengthen B
-... | ok _    = true
-... | fail _  = false
-lamForm _ = false
-
 applyFam : ∀ {n} → Tm n → List (Tm n) → Tm n
 applyFam t []             = t
 applyFam (lam _ _ b) (i ∷ is) = applyFam (inst b i) is
@@ -1232,6 +1921,18 @@ unfStepOf S t      = unfSpine S (unspine t)
 -- expected type is an applied family (true) or a bare ν (false).
 unfStep : ∀ {n} → ℕ → Sig → Tm n → Tm n → Result (Tm n × Bool)
 unfStep k σ T S = whnf k σ T >>= unfStepOf S
+
+-- i64 is the I64 type. word (wty ki64) is not a second one.
+kindOfWord : ∀ {n} → Tm n → Maybe WKind
+kindOfWord i64                 = just ki64
+kindOfWord (word (wty k) [])   = just k
+kindOfWord _                   = nothing
+
+noWordProm : String
+noWordProm = "no promotion: a word type is an erased term"
+
+needWord : String
+needWord = "machine integer operation expects a machine integer"
 
 mutual
   infer : ∀ {n} → ℕ → Sig → RecSt n → Ctx n → Mode → Tm n → Result (Tm n × UseVec n)
@@ -1659,6 +2360,107 @@ mutual
     combine m xu yu >>= λ uses →
     ok (tensor i64 i64two , uses)
 
+  -- ⇒-word. Types are spec-only. Operations are allowed in every mode.
+  infer′ k σ rs Γ (word op ts) m _ = inferWord k σ rs Γ m op ts
+
+  inferWord : ∀ {n} → ℕ → Sig → RecSt n → Ctx n → Mode → WOp → List (Tm n) → Result (Tm n × UseVec n)
+  inferWord {n} k σ rs Γ m op ts = go op m ts
+    where
+    bin : List (Tm n) → (WKind → Tm n) → Result (Tm n × UseVec n)
+    bin (x ∷ y ∷ []) result =
+      infer k σ rs Γ m x >>= λ (Tx , ux) →
+      whnf k σ Tx >>= λ Tx′ →
+      case kindOfWord Tx′ of λ where
+        nothing → fail needWord
+        (just kx) →
+          check k σ rs Γ m y (wordTy kx) >>= λ uy →
+          combine m ux uy >>= λ uses →
+          ok (result kx , uses)
+    bin _ _ = fail "word operation takes two machine integers"
+
+    una : Tm n → (WKind → Tm n) → Result (Tm n × UseVec n)
+    una t result =
+      infer k σ rs Γ m t >>= λ (T , u) →
+      whnf k σ T >>= λ T′ →
+      case kindOfWord T′ of λ where
+        nothing → fail needWord
+        (just kx) → ok (result kx , u)
+
+    shift : Tm n → Tm n → Result (Tm n × UseVec n)
+    shift x amt =
+      infer k σ rs Γ m x >>= λ (Tx , ux) →
+      whnf k σ Tx >>= λ Tx′ →
+      case kindOfWord Tx′ of λ where
+        nothing → fail needWord
+        (just kx) →
+          check k σ rs Γ m amt nat >>= λ un →
+          combine m ux un >>= λ uses →
+          ok (wordTy kx , uses)
+
+    go : WOp → Mode → List (Tm n) → Result (Tm n × UseVec n)
+    go (wty ki64) _ _ = fail "I64 is the i64 former"
+    go (wty _) run _ = fail noWordProm
+    go (wty _) evid _ = fail noWordProm
+    go (wty _) spec [] = ok (typ , u0s)
+    go (wty _) _ _ = fail "U8, U32, and U64 take no arguments"
+    go (wlit kx _) _ [] = ok (wordTy kx , u0s)
+    go (wlit _ _) _ _ = fail "a word literal takes no arguments"
+    go (wof kx) _ (t ∷ []) = check k σ rs Γ m t nat >>= λ u → ok (wordTy kx , u)
+    go (wof _) _ _ = fail "ofNat takes one Nat"
+    go wton _ (t ∷ []) =
+      infer k σ rs Γ m t >>= λ (T , u) →
+      whnf k σ T >>= λ T′ →
+      case kindOfWord T′ of λ where
+        (just _) → ok (nat , u)
+        nothing  → fail needWord
+    go wton _ _ = fail "toNat takes one word"
+    go wadd _ ts′ = bin ts′ wordTy
+    go wsub _ ts′ = bin ts′ wordTy
+    go wmul _ ts′ = bin ts′ wordTy
+    go wand _ ts′ = bin ts′ wordTy
+    go wor  _ ts′ = bin ts′ wordTy
+    go wxor _ ts′ = bin ts′ wordTy
+    go wcadd _ ts′ = bin ts′ optTy
+    go wcsub _ ts′ = bin ts′ optTy
+    go wcmul _ ts′ = bin ts′ optTy
+    go wdiv _ ts′ = bin ts′ optTy
+    go wrem _ ts′ = bin ts′ optTy
+    go weq _ ts′ = bin ts′ (λ _ → word wbool [])
+    go wlt _ ts′ = bin ts′ (λ _ → word wbool [])
+    go wle _ ts′ = bin ts′ (λ _ → word wbool [])
+    go wnot _ (t ∷ []) = una t wordTy
+    go wnot _ _ = fail "noti takes one word"
+    go wshl _ (x ∷ n ∷ []) = shift x n
+    go wshl _ _ = fail "shli takes a word and a Nat"
+    go wshr _ (x ∷ n ∷ []) = shift x n
+    go wshr _ _ = fail "shri takes a word and a Nat"
+    go (wcast kd) _ (t ∷ []) =
+      infer k σ rs Γ m t >>= λ (T , u) →
+      whnf k σ T >>= λ T′ →
+      case kindOfWord T′ of λ where
+        (just _) → ok (wordTy kd , u)
+        nothing  → fail needWord
+    go (wcast _) _ _ = fail "a cast takes one word"
+    go wbool run _ = fail noWordProm
+    go wbool evid _ = fail noWordProm
+    go wbool spec [] = ok (typ , u0s)
+    go wbool _ _ = fail "WBool takes no arguments"
+    go wtrue _ [] = ok (word wbool [] , u0s)
+    go wtrue _ _ = fail "wtrue takes no arguments"
+    go wfalse _ [] = ok (word wbool [] , u0s)
+    go wfalse _ _ = fail "wfalse takes no arguments"
+    go wopt run _ = fail noWordProm
+    go wopt evid _ = fail noWordProm
+    go wopt spec (A ∷ []) = checkTy k σ rs Γ A >> ok (typ , u0s)
+    go wopt _ _ = fail "Opt takes one type"
+    go (woptk _) run _ = fail noWordProm
+    go (woptk _) evid _ = fail noWordProm
+    go (woptk _) spec [] = ok (typ , u0s)
+    go (woptk _) _ _ = fail "Opt takes no arguments"
+    go wsome _ (t ∷ []) = una t optTy
+    go wsome _ _ = fail "wsome takes one word"
+    go wnone _ _ = fail "wnone requires an expected Opt type"
+
   -- ⇐-lam: against a Π after whnf; otherwise inferred and converted.
   check′ k σ rs Γ m (lam q A t) T = checkLam k σ rs Γ m (lam q A t) T (viewPi k σ T)
 
@@ -1717,6 +2519,15 @@ mutual
     checkUnfold k σ m rs f >>
     combine m seedU fu
 
+  -- ⇐-wnone. The expected type is Opt, after whnf.
+  check′ k σ rs Γ m (word wnone []) T =
+    whnf k σ T >>= λ where
+      (word (woptk _) []) → ok u0s
+      (word wopt (A ∷ [])) →
+        isData k σ A >>= guard "wnone requires an expected Opt type" >>
+        ok u0s
+      _ → fail "wnone requires an expected Opt type"
+
   -- ⇐-ctor / ⇐-conv (default)
   check′ k σ rs Γ m e A = checkAgainst k σ rs Γ m e A (viewData k σ A) (ctorSpine e)
 
@@ -1746,6 +2557,155 @@ mutual
            (appsFrom (dty di) (List._++_ params idxs))
     else inferConv k σ rs Γ m e A
   checkAgainst k σ rs Γ m e A _ _ = inferConv k σ rs Γ m e A
+
+------------------------------------------------------------------------
+-- Productivity walk. One traversal of the body. At every syntactic
+-- unfold it runs the seed guard and guardedStep, then, when infer
+-- accepts the unfold, the bare-stream test. Infer succeeds only when
+-- the tail's type converts with the seed's, which is a bare stream.
+-- A family or a bisimulation fails that conversion, so the test does
+-- not apply. The neutral recursion state imposes no descent: a guarded
+-- tail that names the block still infers. The context starts empty on
+-- a closed definition and extends at each binder the term binds.
+------------------------------------------------------------------------
+
+falses : ∀ n → Vec Bool n
+falses zero    = []
+falses (suc n) = false ∷ falses n
+
+neutralRec : ∀ {n} → RecSt n
+neutralRec {n} = recst nothing [] nothing (falses n) (falses n) false []
+
+bareTail : ∀ {n} → ℕ → Sig → List ℕ → Ctx n → Mode → Tm n → Tm n → Result ⊤
+bareTail {n} k σ B Γ m s f = go (infer k σ neutralRec Γ m (unf s f))
+  where
+  go : Result (Tm n × UseVec n) → Result ⊤
+  go (fail _) = ok tt
+  go (ok _)   = whnf k σ f >>= λ f′ → unguarded (streamReads B f′)
+
+-- Binder types for the walk. A failed infer is not a productivity
+-- verdict: the binder falls back to Type, and an unfold that needed
+-- the real type is not reported as a bare stream.
+letΓ : ∀ {n} → ℕ → Sig → Ctx n → Mode → Tm n → Ctx (suc (suc n))
+letΓ {n} k σ Γ m e = onE (infer k σ neutralRec Γ m e)
+  where
+  onP : Result (Tm n × Tm n) → Ctx (suc (suc n))
+  onP (fail _)     = ext (ext Γ affine typ) affine (wk typ)
+  onP (ok (A , B)) = ext (ext Γ affine A) affine (wk B)
+  onE : Result (Tm n × UseVec n) → Ctx (suc (suc n))
+  onE (fail _)     = ext (ext Γ affine typ) affine (wk typ)
+  onE (ok (E , _)) = onP (viewProd k σ E)
+
+nuΓ : ∀ {n} → Ctx n → Tm (suc n) → Ctx (suc n)
+nuΓ {n} Γ F = onK (nuKind F)
+  where
+  onK : Result (Tm n) → Ctx (suc n)
+  onK (fail _) = ext Γ affine typ
+  onK (ok K)   = ext Γ affine K
+
+rwtΓ : ∀ {n} → ℕ → Sig → Ctx n → Mode → Tm n → Ctx (suc n)
+rwtΓ {n} k σ Γ m eq = onE (infer k σ neutralRec Γ (rwtMode m) eq)
+  where
+  onI : Result (Tm n × Tm n × Tm n) → Ctx (suc n)
+  onI (fail _)         = ext Γ affine typ
+  onI (ok (A , _ , _)) = ext Γ affine A
+  onE : Result (Tm n × UseVec n) → Ctx (suc n)
+  onE (fail _)      = ext Γ affine typ
+  onE (ok (et , _)) = onI (viewId k σ et)
+
+-- checkMotive's first binder: the scrutinee's type, or the first index.
+mDataΓ : ∀ {n} → ℕ → Sig → Ctx n → Mode → Tm n → Ctx (suc n)
+mDataΓ {n} k σ Γ m e = onE (infer k σ neutralRec Γ m e)
+  where
+  onI : ℕ → List (Tm n) → List (Qty × Tm 0) → Ctx (suc n)
+  onI di params []            = ext Γ affine (appsFrom (dty di) params)
+  onI _  _      ((q , T) ∷ _) = ext Γ q (closed T)
+  onL : ℕ → List (Tm n) → Result DataDecl → Ctx (suc n)
+  onL _ _ (fail _)     = ext Γ affine typ
+  onL di params (ok d) = onI di params (DataDecl.idxs d)
+  onD : Result (ℕ × List (Tm n) × List (Tm n)) → Ctx (suc n)
+  onD (fail _)               = ext Γ affine typ
+  onD (ok (di , params , _)) = onL di params (lookupData σ di)
+  onE : Result (Tm n × UseVec n) → Ctx (suc n)
+  onE (fail _)      = ext Γ affine typ
+  onE (ok (et , _)) = onD (viewData k σ et)
+
+mutual
+  seedWalk : ∀ {n} → ℕ → Sig → List ℕ → Ctx n → Mode → Tm n → Result ⊤
+  seedWalk k σ B Γ m (unf s f) =
+    seedGuard k σ B s f >>
+    (whnf k σ f >>= guardedStep B) >>
+    bareTail k σ B Γ m s f >>
+    seedWalk k σ B Γ m s >> seedWalk k σ B Γ m f
+  seedWalk k σ B Γ m (app f a)      = seedWalk k σ B Γ m f >> seedWalk k σ B Γ m a
+  seedWalk k σ B Γ m (su t)         = seedWalk k σ B Γ m t
+  seedWalk k σ B Γ m (lam q A t)    =
+    seedWalk k σ B Γ m A >> seedWalk k σ B (ext Γ q A) m t
+  seedWalk k σ B Γ m (pi q A B′)    =
+    seedWalk k σ B Γ m A >> seedWalk k σ B (ext Γ q A) m B′
+  seedWalk k σ B Γ m (mData e P bs) =
+    seedWalk k σ B Γ m e >>
+    seedWalk k σ B (mDataΓ k σ Γ m e) m P >>
+    seedWalkList k σ B Γ m bs
+  seedWalk k σ B Γ m (mNat e P z s) =
+    seedWalk k σ B Γ m e >>
+    seedWalk k σ B (ext Γ affine nat) m P >>
+    seedWalk k σ B Γ m z >>
+    seedWalk k σ B (ext Γ (predQty Γ e) nat) m s
+  seedWalk k σ B Γ m (mEmp e P) =
+    seedWalk k σ B Γ m e >> seedWalk k σ B (ext Γ affine empty) m P
+  seedWalk k σ B Γ m (mUnit e P u) =
+    seedWalk k σ B Γ m e >>
+    seedWalk k σ B (ext Γ affine unit) m P >>
+    seedWalk k σ B Γ m u
+  seedWalk k σ B Γ m (idt A a b) =
+    seedWalk k σ B Γ m A >> seedWalk k σ B Γ m a >> seedWalk k σ B Γ m b
+  seedWalk k σ B Γ m (rwt e P t) =
+    seedWalk k σ B Γ m e >>
+    seedWalk k σ B (rwtΓ k σ Γ m e) m P >>
+    seedWalk k σ B Γ m t
+  seedWalk k σ B Γ m (ann e A)   = seedWalk k σ B Γ m e >> seedWalk k σ B Γ m A
+  seedWalk k σ B Γ m (prod A B′) = seedWalk k σ B Γ m A >> seedWalk k σ B Γ m B′
+  seedWalk k σ B Γ m (pair a b)  = seedWalk k σ B Γ m a >> seedWalk k σ B Γ m b
+  seedWalk k σ B Γ m (letp e t)  =
+    seedWalk k σ B Γ m e >> seedWalk k σ B (letΓ k σ Γ m e) m t
+  seedWalk k σ B Γ m (nu F)      = seedWalk k σ B (nuΓ Γ F) m F
+  seedWalk k σ B Γ m (ucons u)   = seedWalk k σ B Γ m u
+  seedWalk k σ B Γ m (tensor d u) = seedWalk k σ B Γ m d >> seedWalk k σ B Γ m u
+  seedWalk k σ B Γ m (addi x y)  = seedWalk k σ B Γ m x >> seedWalk k σ B Γ m y
+  seedWalk k σ B Γ m (muli x y)  = seedWalk k σ B Γ m x >> seedWalk k σ B Γ m y
+  seedWalk k σ B Γ m (addt t u)  = seedWalk k σ B Γ m t >> seedWalk k σ B Γ m u
+  seedWalk k σ B Γ m (toi64 t)   = seedWalk k σ B Γ m t
+  seedWalk k σ B Γ m (packi x y) = seedWalk k σ B Γ m x >> seedWalk k σ B Γ m y
+  seedWalk k σ B Γ m (word _ ts) = seedWalkList k σ B Γ m ts
+  seedWalk _ _ _ _ _ _           = ok tt
+
+  seedWalkList : ∀ {n} → ℕ → Sig → List ℕ → Ctx n → Mode → List (Tm n) → Result ⊤
+  seedWalkList _ _ _ _ _ []       = ok tt
+  seedWalkList k σ B Γ m (t ∷ ts) = seedWalk k σ B Γ m t >> seedWalkList k σ B Γ m ts
+
+-- On run/evid, a definition whose type reduces to a ν is an unfold
+-- whose step passes guardedStep, or it does not mention its block.
+-- The bare-stream test is seedWalk's, at every unfold, not only the
+-- one left after the leading λs.
+checkNu : ∀ {n} → ℕ → Sig → List ℕ → Ctx n → Mode → Tm n → Tm n → Result ⊤
+checkNu _       _ _   _ spec _ _ = ok tt
+checkNu zero    _ _   _ _    _ _ = fail outOfFuel
+checkNu {n} (suc k) σ blk Γ m    T t =
+  membersRun σ blk >>
+  seedWalk (suc k) σ blk Γ m t >>
+  whnf (suc k) σ T >>= λ T′ → go T′ t
+  where
+    -- The open body is walked at the λ's own binder, the context
+    -- seedWalk uses when it enters that λ. A recursive call at the
+    -- outer context would not typecheck for an open term.
+    go : Tm n → Tm n → Result ⊤
+    go (pi _ _ B) (lam q A u) = checkNu k σ blk (ext Γ q A) m B u
+    go _          (unf _ f)   = whnf (suc k) σ f >>= guardedStep blk
+    go T′         u           =
+      if isNuHead (proj₁ (apps T′)) ∧ hasSelf blk u
+      then fail "ν value calls its own block outside an unfold"
+      else ok tt
 
 ------------------------------------------------------------------------
 -- Check a whole signature. Run and evidence definitions that reach
@@ -1834,6 +2794,7 @@ mutual
   mentions (addt t u)     = cats (mentions t) (mentions u)
   mentions (toi64 t)      = mentions t
   mentions (packi a b)    = cats (mentions a) (mentions b)
+  mentions (word _ ts)    = mentionsList ts
   mentions _              = []
 
   mentionsList : ∀ {n} → List (Tm n) → List ℕ
@@ -1845,42 +2806,95 @@ recMode run  = true
 recMode evid = true
 recMode spec = true
 
-keepRec : Sig → List ℕ → List ℕ
-keepRec _ []       = []
-keepRec σ (j ∷ js) with lookupDef σ j
-... | ok d    = if recMode (Def.dmode d) then j ∷ keepRec σ js else keepRec σ js
-... | fail _  = keepRec σ js
+mutual
+  keepRec : Sig → List ℕ → List ℕ
+  keepRec _ []       = []
+  keepRec σ (j ∷ js) = keepStep σ j js (lookupDef σ j)
+
+  keepStep : Sig → ℕ → List ℕ → Result Def → List ℕ
+  keepStep σ j js (ok d) =
+    if recMode (Def.dmode d) then j ∷ keepRec σ js else keepRec σ js
+  keepStep σ _ js (fail _) = keepRec σ js
+
+edgeOf : Sig → Result Def → List ℕ
+edgeOf _ (fail _) = []
+edgeOf σ (ok d)   =
+  if recMode (Def.dmode d) then keepRec σ (mentions (Def.dbody d)) else []
 
 edge : Sig → ℕ → List ℕ
-edge σ i with lookupDef σ i
-... | fail _ = []
-... | ok d   = if recMode (Def.dmode d) then keepRec σ (mentions (Def.dbody d)) else []
+edge σ i = edgeOf σ (lookupDef σ i)
 
+-- Drop the first occurrence of i. The search measure is the length of
+-- the nodes still to visit, so removing a member that is present
+-- decreases it.
+removeℕ : ℕ → List ℕ → List ℕ
+removeℕ _ []       = []
+removeℕ i (x ∷ xs) = if i ≡ᵇ x then xs else x ∷ removeℕ i xs
+
+≤-reflℕ : ∀ {n} → n ≤ n
+≤-reflℕ {zero}  = z≤n
+≤-reflℕ {suc n} = s≤s ≤-reflℕ
+
+removeℕ-len : ∀ i xs → elemℕ i xs ≡ true → length (removeℕ i xs) < length xs
+removeℕ-len i [] ()
+removeℕ-len i (x ∷ xs) eq with i ≡ᵇ x | eq
+... | true  | _   = s≤s ≤-reflℕ
+... | false | eq′ = s≤s (removeℕ-len i xs eq′)
+
+-- n-1 down to 0. Every index a definition can look up sits here, and
+-- the length is the number of definitions.
+downFrom : ℕ → List ℕ
+downFrom zero    = []
+downFrom (suc n) = n ∷ downFrom n
+
+downFrom-len : ∀ n → length (downFrom n) ≡ n
+downFrom-len zero    = refl
+downFrom-len (suc n) = cong suc (downFrom-len n)
+
+-- Reachability over the finite definition set. No fuel: the recursion
+-- is well-founded on the length of the nodes not yet expanded. cur ≡ tgt
+-- is asked before membership, so a node reaches itself even outside the
+-- set. A node already expanded is absent from rest and is not expanded
+-- again, which is the visited set of the fuel-bounded search.
+-- reachOn is the expansion step, split out so a proof can case on the
+-- booleans and still reduce.
 mutual
-  reachGo : Sig → ℕ → ℕ → ℕ → List ℕ → Bool
-  reachGo _ zero _ _ _ = false
-  reachGo σ (suc f) tgt cur vis =
-    if cur ≡ᵇ tgt then true
-    else if elemℕ cur vis then false
-    else reachAny σ f tgt (edge σ cur) (cur ∷ vis)
+  reachOn :
+    (σ : Sig) (tgt cur : ℕ) (rest : List ℕ)
+    → (e : Bool) → elemℕ cur rest ≡ e
+    → (∀ {y} → y < length rest → Acc _<_ y)
+    → Bool
+  reachOn _ _   _   _     false _   _   = false
+  reachOn σ tgt cur rest  true  elm rec =
+    reachEdges σ tgt (edge σ cur) (removeℕ cur rest)
+      (rec (removeℕ-len cur rest elm))
 
-  reachAny : Sig → ℕ → ℕ → List ℕ → List ℕ → Bool
-  reachAny _ _ _ [] _ = false
-  reachAny σ f tgt (x ∷ xs) vis = reachGo σ f tgt x vis ∨ reachAny σ f tgt xs vis
+  reachAt : (σ : Sig) (tgt cur : ℕ) (rest : List ℕ) → Acc _<_ (length rest) → Bool
+  reachAt σ tgt cur rest (acc rec) =
+    if cur ≡ᵇ tgt then true
+    else reachOn σ tgt cur rest (elemℕ cur rest) refl rec
+
+  reachEdges : (σ : Sig) (tgt : ℕ) (xs rest′ : List ℕ) → Acc _<_ (length rest′) → Bool
+  reachEdges _ _ []       _     _ = false
+  reachEdges σ tgt (x ∷ xs) rest′ a =
+    reachAt σ tgt x rest′ a ∨ reachEdges σ tgt xs rest′ a
 
 reaches : Sig → ℕ → ℕ → Bool
-reaches σ src tgt = reachGo σ (suc (length (Sig.defs σ))) tgt src []
+reaches σ src tgt =
+  reachAt σ tgt src (downFrom (length (Sig.defs σ)))
+    (<-wellFounded (length (downFrom (length (Sig.defs σ)))))
 
--- Indices j such that i and j reach each other. i reaches i, so a
--- run, evidence, or spec definition is always in its own block.
+-- Indices j such that i and j reach each other, walking the definition
+-- list from index j. i reaches i, so a run, evidence, or spec
+-- definition is always in its own block.
+compGo : Sig → ℕ → ℕ → List Def → List ℕ
+compGo _ _ _ []       = []
+compGo σ i j (_ ∷ ds) =
+  let rest = compGo σ i (suc j) ds in
+  if reaches σ i j ∧ reaches σ j i then j ∷ rest else rest
+
 component : Sig → ℕ → List ℕ
-component σ i = go 0 (Sig.defs σ)
-  where
-    go : ℕ → List Def → List ℕ
-    go _ []       = []
-    go j (_ ∷ ds) =
-      let rest = go (suc j) ds in
-      if reaches σ i j ∧ reaches σ j i then j ∷ rest else rest
+component σ i = compGo σ i 0 (Sig.defs σ)
 
 argsOf : Sig → ℕ → List ℕ
 argsOf σ i with lookupDef σ i
@@ -2004,7 +3018,7 @@ checkDef k σ i =
       (checkTy k σ emptyRec [] (Def.dtype d) >> runDecl k σ (Def.dmode d) (Def.dtype d)) >>
   tag (Def.dname d ++ " body") (checkBody k σ i d) >>
   tag (Def.dname d ++ " productivity")
-      (checkNu k σ (component σ i) (Def.dmode d) (Def.dtype d) (Def.dbody d)) >>
+      (checkNu k σ (component σ i) [] (Def.dmode d) (Def.dtype d) (Def.dbody d)) >>
   ok tt
 
 checkDefs : ℕ → Sig → ℕ → List Def → Result ⊤

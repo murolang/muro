@@ -1,0 +1,208 @@
+-- value-protocols.muro — a protocol continues by the value just exchanged.
+-- `server` follows the constructor. `gate` follows `late` of that constructor.
+-- bytes and trailers close the stream. headers on `gate` sends goaway.
+
+data Frame : Type where
+  bytes : Frame
+  trailers : Frame
+  headers : Frame
+
+data Ctl : Type where
+  rst : Ctl
+
+data Goaway : Type where
+  goaway : Goaway
+
+data Body : Type where
+  chunk : Body
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+def late : run Π (f : Frame) → Bool :=
+  λ (f : Frame) →
+    match f motive (λ _ → Bool)
+      | bytes => true
+      | trailers => true
+      | headers => false
+
+def as-bytes : run Frame := bytes
+
+def as-headers : run Frame := headers
+
+session server :=
+  recv (f : Frame) (case f
+    | bytes => send Ctl end
+    | trailers => send Ctl end
+    | headers => recv Body end)
+
+session client := dual server
+
+conform stream : server :=
+  get (f : Frame) (match f (put rst done) (put rst done) (get (b : Body) done))
+
+conform open-headers : client := put headers (put chunk done)
+
+conform inflight : client := put bytes (get (c : Ctl) done)
+
+conform trailers-client : client := put trailers (get (c : Ctl) done)
+
+conform open-computed : client := put as-headers (put chunk done)
+
+conform inflight-computed : client := put as-bytes (get (c : Ctl) done)
+
+meet headers-wire : stream with open-headers
+
+meet headers-swap : open-headers with stream
+
+meet bytes-wire : stream with inflight
+
+meet bytes-swap : inflight with stream
+
+meet trailers-wire : stream with trailers-client
+
+meet trailers-swap : trailers-client with stream
+
+meet computed-headers : stream with open-computed
+
+meet computed-headers-swap : open-computed with stream
+
+meet computed-bytes : stream with inflight-computed
+
+meet computed-bytes-swap : inflight-computed with stream
+
+session gate :=
+  recv (f : Frame) (case (late f)
+    | true => send Ctl end
+    | false => send Goaway end)
+
+session gate-back := dual gate
+
+conform gate-server : gate :=
+  get (f : Frame) (match f (put rst done) (put rst done) (put goaway done))
+
+conform gate-headers : gate-back := put headers (get (g : Goaway) done)
+
+conform gate-bytes : gate-back := put bytes (get (c : Ctl) done)
+
+conform gate-trailers : gate-back := put trailers (get (c : Ctl) done)
+
+meet gate-headers-wire : gate-server with gate-headers
+
+meet gate-headers-swap : gate-headers with gate-server
+
+meet gate-bytes-wire : gate-server with gate-bytes
+
+meet gate-bytes-swap : gate-bytes with gate-server
+
+meet gate-trailers-wire : gate-server with gate-trailers
+
+meet gate-trailers-swap : gate-trailers with gate-server
+
+session loop :=
+  rec X. recv (f : Frame) (case f
+    | bytes => X
+    | trailers => end
+    | headers => end)
+
+session loop-back := dual loop
+
+conform loop-server : loop := rec Y. get (f : Frame) (match f Y done done)
+
+conform loop-client : loop-back := rec Z. put bytes Z
+
+meet loop-wire : loop-server with loop-client
+
+meet loop-swap : loop-client with loop-server
+
+session spin :=
+  recv (f : Frame) (case f
+    | bytes => spin
+    | trailers => end
+    | headers => end)
+
+session spin-back := dual spin
+
+conform spin-server : spin := rec Y. get (f : Frame) (match f Y done done)
+
+conform spin-client : spin-back := rec Z. put bytes Z
+
+meet spin-wire : spin-server with spin-client
+
+meet spin-swap : spin-client with spin-server
+
+session ack := send Bit end
+
+session srv :=
+  recv (f : Frame) (case f
+    | bytes => ack
+    | trailers => end
+    | headers => end)
+
+session srv-back := dual srv
+
+conform acked : srv := get (f : Frame) (match f (put b0 done) done done)
+
+conform acked-client : srv-back := put bytes (get Bit done)
+
+meet ack-wire : acked with acked-client
+
+meet ack-swap : acked-client with acked
+
+session sized (k : Nat) :=
+  recv (b : Bit) (case b
+    | b0 => send (Vec Nat k) end
+    | b1 => end)
+
+session sized3 := sized 3
+
+session sized3-back := dual sized3
+
+conform wide : sized3 := get (b : Bit) (match b (put (rep 3 0) done) done)
+
+conform ask : sized3-back := put b0 (get (Vec Nat 3) done)
+
+meet sized-wire : wide with ask
+
+meet sized-swap : ask with wide
+
+session counted :=
+  recv (f : Frame) (case f
+    | bytes => send (d : Nat) {d ≤ 1} end
+    | trailers => end
+    | headers => end)
+
+session counted-back := dual counted
+
+conform counted-server : counted :=
+  get (f : Frame) (match f (put 0 done) done done)
+
+conform counted-client : counted-back := put bytes (get (d : Nat) done)
+
+meet counted-wire : counted-server with counted-client
+
+meet counted-swap : counted-client with counted-server
+
+session %1 once :=
+  recv (f : Frame) (case f
+    | bytes => end
+    | trailers => end
+    | headers => end)
+
+conform once-server : once := get (f : Frame) (match f done done done)
+
+def pass : (s : once) ⊸ once := λ¹ (s : once) → s
+
+session relay :=
+  recv (g : Frame) (send (f : Frame) (case f
+    | bytes => end
+    | trailers => end
+    | headers => end))
+
+conform relayed : relay := get (g : Frame) (put g done)
+
+-- Refused. An in-flight frame follows send Ctl, so goaway does not.
+-- conform inflight-bad : client := put bytes (put goaway done)
+-- conform late-bad : gate :=
+--   get (f : Frame) (match f (put goaway done) (put rst done) (put goaway done))

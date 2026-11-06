@@ -1,0 +1,69 @@
+-- field-bindings.muro — a match on the value just received binds that constructor's fields.
+-- The field is payload data. A computed put is checked by type and evaluated at the meeting.
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+data Maybe (A : Type) : Type where
+  nothing : Maybe A
+  just : A → Maybe A
+
+data List (A : Type) : Type where
+  nil : List A
+  cons : A → List A → List A
+
+def grant : run Π (b : Bool) → Bool :=
+  λ (b : Bool) →
+    match b motive (λ _ → Bool)
+      | true => true
+      | false => false
+
+session ask := recv (Maybe Bool) (send Bool end)
+
+session ask-back := dual ask
+
+conform reply : ask :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => put false done
+      | just b => put (grant b) done)
+
+conform asker : ask-back := put (just true) (get (k : Bool) done)
+
+meet reply-wire : reply with asker
+
+session forward := recv (Maybe Bool) (send Bool end)
+
+session forward-back := dual forward
+
+conform pass : forward :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => put false done
+      | just b => put b done)
+
+conform passer : forward-back := put (just false) (get (k : Bool) done)
+
+meet pass-wire : pass with passer
+
+session tail := recv (List Nat) (send (List Nat) end)
+
+session tail-back := dual tail
+
+conform rest : tail :=
+  get (xs : List Nat)
+    (match xs
+      | nil => put nil done
+      | cons n ys => put ys done)
+
+conform rest-peer : tail-back := put (cons 0 nil) (get (ys : List Nat) done)
+
+meet tail-wire : rest with rest-peer
+
+-- Refused: the binder count is the field count.
+-- conform short : ask :=
+--   get (m : Maybe Bool)
+--     (match m
+--       | nothing => put false done
+--       | just => put false done)

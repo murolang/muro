@@ -1,0 +1,121 @@
+-- bad_pair_bindings.muro — a product arm that does not bind the received value.
+-- mix muro.check refuses each of these. pair-bindings.muro is the legal form.
+-- A nested pattern is refused at parse: a pattern is one level.
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+def grant : run Π (b : Bool) → Bool :=
+  λ (b : Bool) →
+    match b motive (λ _ → Bool)
+      | true => true
+      | false => false
+
+def tag : run Π (p : Bool × Bool) → Bool :=
+  λ (p : Bool × Bool) → true
+
+session pair-ping := recv (Nat × Bit) (send Nat end)
+
+session rec-ping := recv { x : Nat, y : Bit } (send Bit end)
+
+session nums := recv Nat end
+
+session units := recv Unit end
+
+session vecs := recv (Vec Nat 1) end
+
+conform short : pair-ping :=
+  get (p : Nat × Bit)
+    (match p
+      | (n) => put 0 done)
+
+conform extra-binders : pair-ping :=
+  get (p : Nat × Bit)
+    (match p
+      | (n, b, c) => put n done)
+
+conform ctor-pair : pair-ping :=
+  get (p : Nat × Bit)
+    (match p
+      | just n => put 0 done)
+
+conform ctor-rec : rec-ping :=
+  get (r : { x : Nat, y : Bit })
+    (match r
+      | just a => put b0 done)
+
+conform missing : rec-ping :=
+  get (r : { x : Nat, y : Bit })
+    (match r
+      | { x = a } => put b0 done)
+
+conform extra-field : rec-ping :=
+  get (r : { x : Nat, y : Bit })
+    (match r
+      | { x = a, y = c, z = d } => put c done)
+
+conform duplicate : rec-ping :=
+  get (r : { x : Nat, y : Bit })
+    (match r
+      | { x = a, x = b } => put b0 done)
+
+conform order : rec-ping :=
+  get (r : { x : Nat, y : Bit })
+    (match r
+      | { y = c, x = a } => put c done)
+
+conform wrong-type : pair-ping :=
+  get (p : Nat × Bit)
+    (match p
+      | (n, b) => put b done)
+
+conform natty : nums :=
+  get (n : Nat)
+    (match n
+      | (a, b) => done)
+
+conform united : units :=
+  get (u : Unit)
+    (match u
+      | (a, b) => done)
+
+conform vectored : vecs :=
+  get (v : Vec Nat 1)
+    (match v
+      | (a, b) => done)
+
+session on-pair :=
+  recv (p : Nat × Bit) (case p
+    | b0 => end
+    | b1 => end)
+
+session on-rec :=
+  recv (r : { x : Nat, y : Bit }) (case r
+    | b0 => end
+    | b1 => end)
+
+session on-comp :=
+  recv (p : Nat × Bit) (case n
+    | b0 => end
+    | b1 => end)
+
+session peek :=
+  recv (p : Bool × Bit) (case (tag p)
+    | true => end
+    | false => end)
+
+session nest := recv Nat (recv (Nat × Bit) end)
+
+conform other : nest :=
+  get (k : Nat)
+    (get (p : Nat × Bit)
+      (match k
+        | (n, b) => done))
+
+session %1 open := recv (Nat × Bit) end
+
+conform abandoned : open :=
+  get (p : Nat × Bit)
+    (match p
+      | (n, b) => stop)

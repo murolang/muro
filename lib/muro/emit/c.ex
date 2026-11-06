@@ -1,6 +1,7 @@
 defmodule Muro.Emit.C do
   @moduledoc """
   Emit a closed run book to C. Specs and evidence are omitted.
+  Run bodies are the image from `Muro.IR`.
 
   `Nat` is a tagged struct. User data, indexed data included, is a tag
   plus fields. `match` is a `switch`. Erased arguments are dropped.
@@ -9,16 +10,24 @@ defmodule Muro.Emit.C do
   A `run` stream is a struct: the seed, an environment for values the
   step closes over, and a function pointer for the step. `uncons` calls
   that function and builds a new struct for the tail. `Always`, `~`,
-  and a raw `ν` in a run are refused (`c:stream`). `I64`, `F32`, and
-  `Tensor` are refused (`c:machine`). A lambda applied on the spot is a
+  and a raw `ν` in a run are refused (`c:stream`). `U8`, `U32`, `U64`,
+  and `I64` are passed by value. Signed wrapping goes through `uint64_t`.
+  A shift past the width and a division by zero are not evaluated.
+  `F32`, `Tensor`, `addt`, and `packI` are refused (`c:machine`). A lambda applied on the spot is a
   local. An unapplied lambda, and a call of a local function, are
   `c:lambda`.
 
-  Allocations call `MURO_ALLOC`, which is `malloc` unless the caller
+  Allocations call `muro__ALLOC`, which is `malloc` unless the caller
   defines it. A constructor with no fields is a static object and does not.
+
+  Identifiers come from `Muro.Emit.Name`. A source name is spelled there.
+  A helper, a step, a constructor argument, and a temporary are generated
+  there. The two spellings share no identifier. A binder is claimed there
+  against every name visible in its scope, including type names.
   """
 
-  alias Muro.{Ast, Emit}
+  alias Muro.{Ast, Emit, IR}
+  alias Muro.Emit.Name
 
   # Keywords through C23, including the underscore spellings. `bool`,
   # `true`, and `false` are also the `<stdbool.h>` macros.
@@ -34,7 +43,9 @@ defmodule Muro.Emit.C do
 
   # Typedefs from `<stdint.h>`, which the header includes, and functions
   # from stdio, stdlib, string, and unistd. `delete` is a C++ keyword.
-  # `error` is the GNU `error` function. A name outside this set is unchanged.
+  # `error` is the GNU `error` function. `spell/3` matches the encoding,
+  # which has no underscore, so a source `uint8_t` is `uint8zut` and does
+  # not spell the typedef. A name outside this set is unchanged.
   @host_names ~w(
     int8_t int16_t int32_t int64_t uint8_t uint16_t uint32_t uint64_t
     int_least8_t int_least16_t int_least32_t int_least64_t
@@ -62,105 +73,220 @@ defmodule Muro.Emit.C do
     delete error
   ) |> MapSet.new()
 
-  @reserved ~w(
-    muro_nat muro_unit muro_pair muro_zero muro_suc muro_tt muro_nat_new muro_mk_pair
-    muro_stream muro_stream_new muro_envp muro_seedp muro_ep
-  ) |> MapSet.new()
+  @forbidden MapSet.union(@c_keywords, @host_names)
+
+  @doc false
+  def source_id(name) when is_binary(name), do: spell(name)
+
+  @doc false
+  def generated_samples do
+    tags = ~w(
+      nat unit pair stream atom
+      zero suc tt nat_new mk_pair stream_new
+      ALLOC tt_obj
+      field_tag field_suc field_fst field_snd field_step field_seed field_env
+      as unused
+      envp seedp ep p n s
+    )
+
+    Enum.map(tags, &Name.gen/1) ++
+      [
+        Name.gen("step", 0),
+        Name.gen("env", 0),
+        Name.gen("ep", 0),
+        Name.gen("f", 0),
+        Name.gen("s", 0),
+        Name.gen("t", 0),
+        Name.gen("obj_List_nil")
+      ]
+  end
+
+  defp spell(name), do: Name.spell(name, @forbidden)
+  defp g(tag), do: Name.gen(tag)
+  defp g(tag, n) when is_integer(n), do: Name.gen(tag, n)
+  defp claim(base, used), do: Name.claim(base, used)
+
+  defp nat_ptr, do: g("nat") <> " *"
+  defp unit_ptr, do: g("unit") <> " *"
+  defp pair_ptr, do: g("pair") <> " *"
+  defp stream_ptr, do: g("stream") <> " *"
+  defp atom_ty, do: g("atom") <> " "
+
+  # Struct spellings, then atoms, then constructor functions. A run is
+  # claimed after those, so a shared C namespace suffixes inside one
+  # space. Generated names are not in this set: they already contain `__`.
+  defp name_map(book) do
+    {structs, taken} =
+      Enum.reduce(data_defs(book), {%{}, MapSet.new()}, fn d, {map, used} ->
+        {rn, used} = claim(spell(d.name), used)
+        {Map.put(map, d.name, rn), used}
+      end)
+
+    {atoms, taken} =
+      Enum.reduce(Ast.atoms(book), {%{}, taken}, fn name, {map, used} ->
+        {rn, used} = claim(spell(name), used)
+        {Map.put(map, name, rn), used}
+      end)
+
+    {ctors, taken} =
+      Enum.reduce(data_defs(book), {%{}, taken}, fn d, {map, used} ->
+        Enum.reduce(d.ctors, {map, used}, fn c, {map, used} ->
+          {rn, used} = claim(spell(c.name), used)
+          {Map.put(map, {d.name, c.name}, rn), used}
+        end)
+      end)
+
+    %{structs: structs, atoms: atoms, ctors: ctors, taken: taken}
+  end
 
   @doc """
   Render `book` as `{header, source}` for a file stem such as `half_ok`.
+
+  Run bodies are printed from `Muro.IR`. A refusal is that elaboration's.
   """
   def render(book, stem) when is_list(book) and is_binary(stem) do
-    runs = Emit.run_defs(book)
+    case prepare(book, stem) do
+      {:ok, header, source, _sigs} -> {:ok, {header, source}}
+      {:error, _} = err -> err
+    end
+  end
 
-    case reject(runs) do
-      nil ->
-        case compile_runs(runs, book) do
-          {:ok, sigs, funs, extras} ->
-            {:ok, {header(book, sigs, stem), source(book, runs, sigs, funs, extras, stem)}}
+  @doc """
+  Names, signatures, layouts, and clause heads of the C file `render/2`
+  writes. The signatures are the ones `compile_fun/6` builds for each
+  run. No source is written.
+  """
+  def outline(book, stem) when is_list(book) and is_binary(stem) do
+    case IR.elaborate(book) do
+      {:ok, funs} ->
+        nm = name_map(book)
+
+        with {:ok, sigs, _texts, _extras} <- compile_funs(funs, book, nm),
+             {:ok, groups, _} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
+          {:ok, c_outline(book, sigs, groups)}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp c_outline(book, sigs, groups) do
+    user = Enum.map(groups, fn {fun, _} -> fun end)
+
+    signatures =
+      Enum.zip(sigs, user)
+      |> Enum.map(fn {sig, fun} ->
+        %{
+          source: fun.name,
+          name: sig.name,
+          layout: fun.ret,
+          param_layouts: Enum.map(fun.params, fn {_n, lay} -> lay end),
+          params: Enum.map(sig.params, fn {_ty, cname} -> cname end),
+          ret: sig.ret,
+          export: sig.export
+        }
+      end)
+
+    names =
+      signatures
+      |> Enum.flat_map(fn sig -> [sig.name | sig.params] end)
+      |> Enum.uniq()
+
+    %{
+      names: names,
+      elixir: Emit.elixir_names(book),
+      signatures: signatures,
+      layouts:
+        Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}) ++
+          data_layouts(book),
+      clauses: Enum.map(sigs, &decl/1)
+    }
+  end
+
+  @doc """
+  `render/2` plus the signature of each run, in book order.
+
+  A signature is `%{name, export, params, ret}`. `name` is the C spelling.
+  `params` is `{ctype, c_name}` for each live argument. `run internal` has
+  `export: false`.
+  """
+  def prepare(book, stem) when is_list(book) and is_binary(stem) do
+    case IR.elaborate(book) do
+      {:ok, funs} ->
+        nm = name_map(book)
+
+        case compile_funs(funs, book, nm) do
+          {:ok, sigs, texts, extras} ->
+            runs = Emit.run_defs(book)
+            opts = opt_typedefs(funs)
+
+            {:ok, header(book, sigs, stem, nm, opts),
+             source(book, runs, sigs, texts, extras, stem, nm, opts), sigs}
 
           {:error, _} = err ->
             err
         end
 
-      err ->
-        {:error, err}
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  defp reject(runs) do
-    Enum.find_value(runs, fn d ->
-      case forbid(d.type) || forbid(d.body) do
-        nil -> nil
-        kind -> "c:#{kind}"
-      end
-    end)
-  end
+  defp compile_funs(funs, book, nm) do
+    runs = Emit.run_defs(book)
 
-  defp forbid(t) do
-    case classify(t) do
-      nil -> forbid_children(t)
-      kind -> kind
+    with {:ok, groups, step_map} <- Emit.partition_funs(funs, runs) do
+      names = Emit.def_names(book, &spell/1, nm.taken)
+      by_name = Map.new(groups, fn {fun, _} -> {fun.name, fun} end)
+
+      Enum.reduce_while(groups, {:ok, [], [], []}, fn {fun, _steps}, {:ok, sigs, texts, extras} ->
+        case compile_fun(fun, book, names, by_name, step_map, nm) do
+          {:ok, sig, text, extra} ->
+            {:cont, {:ok, sigs ++ [sig], texts ++ [text], extras ++ extra}}
+
+          {:error, _} = err ->
+            {:halt, err}
+        end
+      end)
     end
   end
 
-  defp forbid_children(t) when is_tuple(t) do
-    t |> Tuple.to_list() |> Enum.find_value(&forbid/1)
-  end
+  defp compile_fun(fun, book, names, by_name, step_map, nm) do
+    file_scope = file_scope(nm, MapSet.new(Map.values(names)))
 
-  defp forbid_children(t) when is_list(t), do: Enum.find_value(t, &forbid/1)
-  defp forbid_children(_), do: nil
+    {bound, scope} =
+      Enum.map_reduce(fun.params, file_scope, fn {pname, lay}, scope ->
+        {c, scope} = Name.bind(spell(pname), scope)
+        {{pname, c, lay}, scope}
+      end)
 
-  defp classify({:nu, _, _}), do: :stream
-  defp classify({:always, _, _, _}), do: :stream
-  defp classify({:bisim, _, _}), do: :stream
-  defp classify(:i64), do: :machine
-  defp classify(:f32ty), do: :machine
-  defp classify({:tensor, _, _}), do: :machine
-  defp classify({:addi, _, _}), do: :machine
-  defp classify({:muli, _, _}), do: :machine
-  defp classify({:addt, _, _}), do: :machine
-  defp classify({:toi64, _}), do: :machine
-  defp classify({:packi, _, _}), do: :machine
-  defp classify(_), do: nil
+    sig = %{
+      name: Map.fetch!(names, fun.name),
+      source: fun.name,
+      export: fun.export,
+      params: for({_n, c, lay} <- bound, do: {ctype(lay, book), c}),
+      ret: ctype(fun.ret, book)
+    }
 
-  defp compile_runs(runs, book) do
-    names = Emit.def_names(book, &c_name/1, ctor_fun_names(book))
+    env = Enum.reduce(bound, [], fn {n, c, lay}, env -> [{n, c, lay} | env] end)
 
-    Enum.reduce_while(runs, {:ok, [], [], [], 0}, fn d, {:ok, sigs, funs, extras, k} ->
-      case compile_def(d, book, k, names) do
-        {:ok, sig, fun, extra, k1} ->
-          {:cont, {:ok, sigs ++ [sig], funs ++ [fun], extras ++ extra, k1}}
+    st = %{
+      t: 0,
+      s: 0,
+      steps: [],
+      envs: [],
+      names: names,
+      book: book,
+      funs: by_name,
+      steps_by_name: step_map,
+      nm: nm,
+      file_scope: file_scope,
+      base_scope: scope,
+      scope: scope
+    }
 
-        {:error, _} = err ->
-          {:halt, err}
-      end
-    end)
-    |> case do
-      {:ok, sigs, funs, extras, _k} -> {:ok, sigs, funs, extras}
-      err -> err
-    end
-  end
-
-  defp ctor_fun_names(book) do
-    book
-    |> Enum.flat_map(fn
-      %{kind: :data, ctors: cs} -> Enum.map(cs, &c_name(&1.name))
-      _ -> []
-    end)
-    |> MapSet.new()
-  end
-
-  defp compile_def(d, book, k, names) do
-    with {:ok, sig} <- signature(d, book, names),
-         {:ok, {pre, expr, st}} <-
-           emit(
-             sig.inner,
-             sig.env,
-             book,
-             %{t: 0, s: 0, k: k, steps: [], envs: [], names: names},
-             sig.ret
-           ) do
+    with {:ok, {pre, expr, _lay, st}} <- emit_ir(fun.body, env, st, sig.ret) do
       body =
         if pre == "" do
           "  return #{expr};"
@@ -168,63 +294,9 @@ defmodule Muro.Emit.C do
           indent(pre, 2) <> "\n  return #{expr};"
         end
 
-      {:ok, sig, "#{decl(sig)} {\n#{body}\n}", st.envs ++ st.steps, st.k}
+      {:ok, sig, "#{decl(sig)} {\n#{body}\n}", st.envs ++ st.steps}
     end
   end
-
-  defp signature(d, book, names) do
-    {pis, ret} = telescope(d.type)
-
-    case peel_lams(d.body, length(pis)) do
-      {:ok, lams, inner} ->
-        bound =
-          Enum.zip(pis, lams)
-          |> Enum.map(fn {{q, a, _x}, {lq, lname}} ->
-            {lname, ctype(a, book), q == :erased or lq == :erased}
-          end)
-
-        {named, _used} =
-          Enum.map_reduce(bound, MapSet.new(), fn {muro, ty, erased}, used ->
-            {c, used} = fresh(c_name(muro), used)
-            {{muro, c, ty, erased}, used}
-          end)
-
-        params = for {_muro, c, ty, false} <- named, do: {ty, c}
-
-        env =
-          Enum.reduce(named, [], fn {muro, c, _ty, erased}, env ->
-            [{muro, c, if(erased, do: :erased, else: :live)} | env]
-          end)
-
-        {:ok,
-         %{
-           name: Map.fetch!(names, d.name),
-           export: Map.get(d, :export, true),
-           params: params,
-           ret: ctype(ret, book),
-           env: env,
-           inner: inner
-         }}
-
-      {:error, _} = err ->
-        err
-    end
-  end
-
-  defp peel_lams(t, 0), do: {:ok, [], t}
-
-  defp peel_lams({:lam, q, _a, x, t}, n) when n > 0 do
-    case peel_lams(t, n - 1) do
-      {:ok, rest, inner} -> {:ok, [{q, x} | rest], inner}
-      err -> err
-    end
-  end
-
-  defp peel_lams(_, _), do: {:error, "c:unsupported"}
-
-  defp telescope(t), do: telescope(t, [])
-  defp telescope({:pi, q, a, x, b}, acc), do: telescope(b, [{q, a, x} | acc])
-  defp telescope(ret, acc), do: {Enum.reverse(acc), ret}
 
   defp decl(sig) do
     args =
@@ -237,77 +309,291 @@ defmodule Muro.Emit.C do
     "#{kw}#{sig.ret}#{sig.name}(#{args})"
   end
 
-  defp emit({:var, name}, env, book, st, _expect) do
+  defp telescope(t), do: telescope(t, [])
+  defp telescope({:pi, q, a, x, b}, acc), do: telescope(b, [{q, a, x} | acc])
+  defp telescope(ret, acc), do: {Enum.reverse(acc), ret}
+
+  defp emit_ir({:var, name}, env, st, _expect) do
     case lookup(env, name) do
-      nil -> emit_global(name, [], env, book, st)
-      {:erased, _} -> {:error, "c:erased"}
-      {:live, c} -> {:ok, {"", c, st}}
+      {c, lay} -> {:ok, {"", c, lay, st}}
+      nil -> {:error, "c:unsupported"}
     end
   end
 
-  defp emit({:def, name}, env, book, st, expect), do: emit({:var, name}, env, book, st, expect)
-  defp emit(:ze, _env, _book, st, _expect), do: {:ok, {"", "muro_zero()", st}}
-  defp emit(:one, _env, _book, st, _expect), do: {:ok, {"", "muro_tt()", st}}
+  defp emit_ir(:ze, _env, st, _expect), do: {:ok, {"", "#{g("zero")}()", :nat, st}}
+  defp emit_ir(:tt, _env, st, _expect), do: {:ok, {"", "#{g("tt")}()", :unit, st}}
 
-  defp emit({:su, u}, env, book, st, _expect) do
-    with {:ok, {pre, ex, st}} <- emit(u, env, book, st, "muro_nat *") do
-      {:ok, {pre, "muro_suc(#{ex})", st}}
+  defp emit_ir({:su, u}, env, st, _expect) do
+    with {:ok, {pre, ex, _lay, st}} <- emit_ir(u, env, st, nat_ptr()) do
+      {:ok, {pre, "#{g("suc")}(#{ex})", :nat, st}}
     end
   end
 
-  defp emit({:ann, e, _a}, env, book, st, expect), do: emit(e, env, book, st, expect)
-  defp emit({:rwt, _eq, _x, _p, t}, env, book, st, expect), do: emit(t, env, book, st, expect)
-
-  # An applied lambda is a let: the argument is evaluated once, then the
-  # body sees that local. An erased binder drops the argument. A chain
-  # `((λ x → λ y → e) a) b` peels one binder at a time.
-  defp emit({:app, {:lam, q, a, x, body}, arg}, env, book, st, expect),
-    do: emit_lam_app(q, a, x, body, arg, [], env, book, st, expect)
-
-  defp emit({:app, _, _} = t, env, book, st, expect) do
-    case spine(t, []) do
-      {{:lam, q, a, x, body}, [arg | rest]} ->
-        emit_lam_app(q, a, x, body, arg, rest, env, book, st, expect)
-
-      {{:var, name}, args} ->
-        if lookup(env, name) == nil do
-          emit_global(name, args, env, book, st)
-        else
-          {:error, "c:lambda"}
-        end
-
-      _ ->
-        {:error, "c:lambda"}
+  defp emit_ir({:call, name, args}, env, st, _expect) do
+    with {:ok, {pres, exprs, st}} <- emit_args(args, live_ctypes(st.book, name), env, st) do
+      {:ok,
+       {squash(pres), "#{ename(st, name)}(#{Enum.join(exprs, ", ")})", call_lay(st, name), st}}
     end
   end
 
-  defp emit({:mnat, e, _x, _p, z, y, s}, env, book, st, expect) do
-    with {:ok, {pre, scrut, st}} <- emit(e, env, book, st, "muro_nat *") do
+  defp emit_ir({:con, "Atom", name, []}, _env, st, _expect) do
+    {:ok, {"", atom_c(name, st.nm), {:data, "Atom"}, st}}
+  end
+
+  defp emit_ir({:con, dname, cname, args}, env, st, _expect) do
+    with {:ok, {pres, exprs, st}} <- emit_args(args, con_ctypes(st.book, cname), env, st) do
+      fun = Map.fetch!(st.nm.ctors, {dname, cname})
+      {:ok, {squash(pres), "#{fun}(#{Enum.join(exprs, ", ")})", {:data, dname}, st}}
+    end
+  end
+
+  # An erased constructor field. `0`, not a Nat zero. A zero passed
+  # under a spec alias is bound at the argument's layout, so this clause
+  # does not see it.
+  defp emit_ir({:let, name, :opaque, :ze, body}, env, st, expect) do
+    {c, scope} = Name.bind(spell(name), st.scope)
+    st = %{st | scope: scope}
+
+    with {:ok, {pre, ex, lay, st}} <- emit_ir(body, [{name, c, :opaque} | env], st, expect) do
+      {:ok, {squash(["void *#{c} = 0;", pre]), ex, lay, st}}
+    end
+  end
+
+  # `matchEmpty`. The scrutinee is bound only so the expression is evaluated.
+  defp emit_ir({:let, _name, _lay, val, :abort}, env, st, _expect) do
+    with {:ok, {pre, ex, _vlay, st}} <- emit_ir(val, env, st, "void *") do
+      stmt = squash([pre, "(void)(#{ex});", "/* unreachable */", "abort();"])
+      {:ok, {stmt, "0", :opaque, st}}
+    end
+  end
+
+  defp emit_ir({:let, name, lay, val, body}, env, st, expect) do
+    ty = ctype(lay, st.book)
+
+    with {:ok, {pre, ex, _vlay, st}} <- emit_ir(val, env, st, ty) do
+      {local, st} = news(st)
+
+      with {:ok, {pre2, ex2, blay, st}} <-
+             emit_ir(body, [{name, local, lay} | env], st, expect) do
+        void = if lay == :unit and not uses?(body, name), do: "(void)#{local};", else: ""
+        stmt = squash([pre, "#{ty}#{local} = #{ex};", void, pre2])
+        {:ok, {stmt, ex2, blay, st}}
+      end
+    end
+  end
+
+  defp emit_ir({:pair, a, b}, env, st, _expect) do
+    with {:ok, {pre, ea, la, st}} <- emit_ir(a, env, st, "void *"),
+         {:ok, {pre2, eb, lb, st}} <- emit_ir(b, env, st, "void *") do
+      {:ok, {squash([pre, pre2]), "#{g("mk_pair")}(#{ea}, #{eb})", {:pair, la, lb}, st}}
+    end
+  end
+
+  defp emit_ir({:letp, a, b, e, body}, env, st, expect) do
+    with {:ok, {pre, ex, elay, st}} <- emit_ir(e, env, st, pair_ptr()) do
       {sname, st} = news(st)
-      {tname, st} = newt(st)
+      {ca, scope} = Name.bind(spell(a), st.scope)
+      {cb, scope} = Name.bind(spell(b), scope)
+      st = %{st | scope: scope}
+      {la, lb} = pair_halves(elay)
+      env1 = [{b, cb, lb}, {a, ca, la} | env]
 
-      with {:ok, {zpre, zex, st}} <- emit(z, env, book, st, expect) do
-        {yname, env1} = bind_one(y, env)
+      with {:ok, {pre2, ex2, blay, st}} <- emit_ir(body, env1, st, expect) do
+        stmt =
+          squash([
+            pre,
+            "#{pair_ptr()}#{sname} = #{ex};",
+            "void *#{ca} = #{sname}->#{g("field_fst")};",
+            "void *#{cb} = #{sname}->#{g("field_snd")};",
+            pre2
+          ])
 
-        with {:ok, {spre, sex, st}} <- emit(s, env1, book, st, expect) do
+        {:ok, {stmt, ex2, blay, st}}
+      end
+    end
+  end
+
+  defp emit_ir({:uncons, e}, env, st, _expect) do
+    with {:ok, {pre, ex, elay, st}} <- emit_ir(e, env, st, stream_ptr()) do
+      {sname, st} = news(st)
+      {pname, st} = news(st)
+      {hname, st} = news(st)
+      {nname, st} = news(st)
+      {tname, st} = news(st)
+
+      stmt =
+        squash([
+          "#{stream_ptr()}#{sname} = #{ex};",
+          "#{pair_ptr()}#{pname} = #{sname}->#{g("field_step")}(#{sname}->#{g("field_env")}, #{sname}->#{g("field_seed")});",
+          "void *#{hname} = #{pname}->#{g("field_fst")};",
+          "void *#{nname} = #{pname}->#{g("field_snd")};",
+          "#{stream_ptr()}#{tname} = #{g("stream_new")}(#{nname}, #{sname}->#{g("field_env")}, #{sname}->#{g("field_step")});"
+        ])
+
+      {:ok, {squash([pre, stmt]), "#{g("mk_pair")}(#{hname}, #{tname})", uncons_lay(elay), st}}
+    end
+  end
+
+  defp emit_ir({:stream, seed, caps, step_name}, env, st, _expect) do
+    with {:ok, step} <- fetch_step(st, step_name),
+         {:ok, {seed_p, cap_ps}} <- ok_split(step.params, caps),
+         {:ok, {pre, seed_ex, seed_lay, st}} <-
+           emit_ir(seed, env, st, ctype(lay_of(seed, env, st), st.book)) do
+      id = step_id(step_name)
+      slots = capture_slots(caps, cap_ps, st.file_scope)
+
+      with {:ok, {cpre, outers, st}} <- emit_outers(slots, env, st) do
+        {env_ty, env_src, env_ex, st} = alloc_env(slots, outers, id, st)
+        saved = st.scope
+
+        with {:ok, {src, st}} <- emit_step_fun(step, slots, seed_p, id, env_ty, st) do
+          expr = "#{g("stream_new")}(#{seed_ex}, #{env_ex}, #{g("step", id)})"
+          st = %{st | steps: st.steps ++ [src], scope: saved}
+
+          {:ok,
+           {squash([pre, cpre, env_src]), expr, {:stream, seed_domain(seed_p, seed_lay)}, st}}
+        end
+      end
+    end
+  end
+
+  defp emit_ir({:match, scrut, arms} = tm, env, st, expect) do
+    kind = match_kind(lay_of(scrut, env, st), arms, st.book)
+    rlay = lay_of(tm, env, st)
+
+    with {:ok, {pre, ex, _lay, st}} <- emit_ir(scrut, env, st, scrut_ty(kind, st.book)),
+         {:ok, {stmt, name, st}} <- emit_switch(kind, pre, ex, arms, env, st, expect) do
+      {:ok, {stmt, name, rlay, st}}
+    end
+  end
+
+  defp emit_ir({:wrd, k, op, args}, env, st, expect) do
+    with {:ok, {pres, exprs, st}} <- emit_word_args(args, env, st) do
+      case word_c(k, op, exprs, st, expect) do
+        {:ok, {more, expr, lay, st}} ->
+          {:ok, {squash(pres ++ [more]), expr, lay, st}}
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  defp emit_ir(:abort, _env, st, _expect) do
+    {:ok, {squash(["/* unreachable */", "abort();"]), "0", :opaque, st}}
+  end
+
+  defp emit_ir(_other, _env, _st, _expect), do: {:error, "c:unsupported"}
+
+  defp emit_args(args, types, env, st) do
+    paired = Enum.zip(args, pad_types(types, length(args)))
+
+    Enum.reduce_while(paired, {:ok, [], [], st}, fn {arg, ty}, {:ok, pres, exprs, st} ->
+      case emit_ir(arg, env, st, ty) do
+        {:ok, {pre, ex, _lay, st}} -> {:cont, {:ok, pres ++ [pre], exprs ++ [ex], st}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, pres, exprs, st} -> {:ok, {pres, exprs, st}}
+      err -> err
+    end
+  end
+
+  defp pad_types(types, n) do
+    types ++ List.duplicate("void *", max(n - length(types), 0))
+  end
+
+  defp scrut_ty(:nat, _book), do: nat_ptr()
+  defp scrut_ty(:atom, _book), do: atom_ty()
+  defp scrut_ty({:data, name}, _book), do: struct_ptr(name)
+  defp scrut_ty(_, _book), do: "void *"
+
+  defp emit_switch(:nat, pre, ex, [{:arm, "zero", [], z}, {:arm, "suc", [y], s}], env, st, expect) do
+    {sname, st} = news(st)
+    {tname, st} = newt(st)
+    st = %{st | scope: st.base_scope}
+
+    with {:ok, {zpre, zex, _lay, st}} <- emit_ir(z, env, st, expect) do
+      st = %{st | scope: st.base_scope}
+      {yname, scope} = Name.bind(spell(y), st.scope)
+      st = %{st | scope: scope}
+
+      with {:ok, {spre, sex, _lay, st}} <- emit_ir(s, [{y, yname, :nat} | env], st, expect) do
+        stmt =
+          squash([
+            pre,
+            "#{expect}#{tname} = 0;",
+            "{",
+            "#{nat_ptr()}#{sname} = #{ex};",
+            "switch (#{sname}->#{g("field_tag")}) {",
+            "case 0: {",
+            zpre,
+            "#{tname} = #{zex};",
+            "break;",
+            "}",
+            "case 1: {",
+            "#{nat_ptr()}#{yname} = #{sname}->#{g("field_suc")};",
+            spre,
+            "#{tname} = #{sex};",
+            "break;",
+            "}",
+            "default: {",
+            "/* unreachable */",
+            "abort();",
+            "}",
+            "}",
+            "}"
+          ])
+
+        {:ok, {stmt, tname, st}}
+      end
+    end
+  end
+
+  defp emit_switch(:atom, pre, ex, arms, env, st, expect) do
+    {sname, st} = news(st)
+    {tname, st} = newt(st)
+
+    with {:ok, {cases, st}} <- emit_atom_arms(arms, tname, env, st, expect) do
+      stmt =
+        squash([
+          pre,
+          "#{expect}#{tname} = 0;",
+          "{",
+          "#{atom_ty()}#{sname} = #{ex};",
+          "switch (#{sname}) {",
+          cases,
+          "default: {",
+          "abort();",
+          "}",
+          "}",
+          "}"
+        ])
+
+      {:ok, {stmt, tname, st}}
+    end
+  end
+
+  defp emit_switch({:data, dname}, pre, ex, arms, env, st, expect) do
+    case find_data(st.book, dname) do
+      nil ->
+        {:error, "c:unsupported"}
+
+      data ->
+        ptr = struct_ptr(dname)
+        {sname, st} = news(st)
+        {tname, st} = newt(st)
+
+        with {:ok, {cases, st}} <- emit_data_arms(arms, data, sname, tname, env, st, expect) do
           stmt =
             squash([
               pre,
               "#{expect}#{tname} = 0;",
               "{",
-              "muro_nat *#{sname} = #{scrut};",
-              "switch (#{sname}->tag) {",
-              "case 0: {",
-              zpre,
-              "#{tname} = #{zex};",
-              "break;",
-              "}",
-              "case 1: {",
-              "muro_nat *#{yname} = #{sname}->suc;",
-              spre,
-              "#{tname} = #{sex};",
-              "break;",
-              "}",
+              "#{ptr}#{sname} = #{ex};",
+              "switch (#{sname}->#{g("field_tag")}) {",
+              cases,
               "default: {",
               "/* unreachable */",
               "abort();",
@@ -318,520 +604,401 @@ defmodule Muro.Emit.C do
 
           {:ok, {stmt, tname, st}}
         end
-      end
     end
   end
 
-  defp emit({:mdata, _e, _x, _p, []}, _env, _book, _st, _expect), do: {:error, "c:unsupported"}
+  defp emit_switch(_kind, _pre, _ex, _arms, _env, _st, _expect), do: {:error, "c:unsupported"}
 
-  defp emit({:mdata, e, _x, _p, [{cname, _, _} | _] = branches}, env, book, st, expect) do
-    case data_of_ctor(book, cname) do
-      nil ->
-        {:error, "c:unsupported"}
+  defp emit_atom_arms(arms, tname, env, st, expect) do
+    emit_arm_list(arms, st, fn {:arm, name, _bs, body}, st ->
+      st = %{st | scope: st.base_scope}
 
-      data ->
-        ptr = struct_ptr(data.name)
-
-        with {:ok, {pre, scrut, st}} <- emit(e, env, book, st, ptr) do
-          {sname, st} = news(st)
-          {tname, st} = newt(st)
-
-          case emit_cases(branches, data, sname, tname, env, book, st, expect) do
-            {:ok, {cases, st}} ->
-              stmt =
-                squash([
-                  pre,
-                  "#{expect}#{tname} = 0;",
-                  "{",
-                  "#{ptr}#{sname} = #{scrut};",
-                  "switch (#{sname}->tag) {",
-                  cases,
-                  "default: {",
-                  "/* unreachable */",
-                  "abort();",
-                  "}",
-                  "}",
-                  "}"
-                ])
-
-              {:ok, {stmt, tname, st}}
-
-            {:error, _} = err ->
-              err
-          end
-        end
-    end
-  end
-
-  defp emit({:munit, e, _x, _p, u}, env, book, st, expect) do
-    with {:ok, {pre, ex, st}} <- emit(e, env, book, st, "muro_unit *") do
-      {sname, st} = news(st)
-
-      with {:ok, {pre2, ex2, st}} <- emit(u, env, book, st, expect) do
-        stmt =
+      with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env, st, expect) do
+        text =
           squash([
+            "case #{atom_c(name, st.nm)}: {",
             pre,
-            "muro_unit *#{sname} = #{ex};",
-            "(void)#{sname};",
-            pre2
+            "#{tname} = #{ex};",
+            "break;",
+            "}"
           ])
 
-        {:ok, {stmt, ex2, st}}
+        {:ok, {text, st}}
       end
+    end)
+  end
+
+  defp emit_data_arms(arms, data, sname, tname, env, st, expect) do
+    emit_arm_list(arms, st, fn arm, st ->
+      data_arm(arm, data, sname, tname, env, st, expect)
+    end)
+  end
+
+  defp emit_arm_list(arms, st, fun) do
+    Enum.reduce_while(arms, {:ok, [], st}, fn arm, {:ok, acc, st} ->
+      case fun.(arm, st) do
+        {:ok, {text, st}} -> {:cont, {:ok, acc ++ [text], st}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, cases, st} -> {:ok, {Enum.join(cases, "\n"), st}}
+      err -> err
     end
   end
 
-  defp emit({:memp, e, _x, _p}, env, book, st, _expect) do
-    with {:ok, {pre, ex, st}} <- emit(e, env, book, st, "void *") do
-      stmt = squash([pre, "(void)(#{ex});", "/* unreachable */", "abort();"])
-      {:ok, {stmt, "0", st}}
-    end
-  end
+  defp data_arm({:arm, cname, binders, body}, data, sname, tname, env, st, expect) do
+    ctor = Enum.find(data.ctors, &(&1.name == cname))
+    tag = Enum.find_index(data.ctors, &(&1.name == cname))
+    fields = if ctor, do: live_fields(ctor, st.book), else: []
 
-  defp emit({:pair, a, b}, env, book, st, _expect) do
-    with {:ok, {pre, ea, st}} <- emit(a, env, book, st, "void *"),
-         {:ok, {pre2, eb, st}} <- emit(b, env, book, st, "void *") do
-      {:ok, {squash([pre, pre2]), "muro_mk_pair(#{ea}, #{eb})", st}}
-    end
-  end
+    if ctor == nil or tag == nil or length(fields) != length(binders) do
+      {:error, "c:unsupported"}
+    else
+      member = spell(cname)
 
-  defp emit({:letp, e, a, b, t}, env, book, st, expect) do
-    with {:ok, {pre, ex, st}} <- emit(e, env, book, st, "muro_pair *") do
-      {sname, st} = news(st)
-      {ca, used} = fresh(c_name(a), MapSet.new())
-      {cb, _} = fresh(c_name(b), used)
-      env1 = [{b, cb, :live}, {a, ca, :live} | env]
+      {decls, env1, scope} =
+        Enum.zip(binders, fields)
+        |> Enum.reduce({[], env, st.base_scope}, fn {bname, {ty, lay, k}}, {decls, env, scope} ->
+          {c, scope} = Name.bind(spell(bname), scope)
+          decl = "#{ty}#{c} = #{sname}->#{g("as")}.#{member}.#{g("f", k)};"
+          {decls ++ [decl], [{bname, c, lay} | env], scope}
+        end)
 
-      with {:ok, {pre2, ex2, st}} <- emit(t, env1, book, st, expect) do
-        stmt =
+      st = %{st | scope: scope}
+
+      with {:ok, {pre, ex, _lay, st}} <- emit_ir(body, env1, st, expect) do
+        text =
           squash([
+            "case #{tag}: {",
+            Enum.join(decls, "\n"),
             pre,
-            "muro_pair *#{sname} = #{ex};",
-            "void *#{ca} = #{sname}->fst;",
-            "void *#{cb} = #{sname}->snd;",
-            pre2
+            "#{tname} = #{ex};",
+            "break;",
+            "}"
           ])
 
-        {:ok, {stmt, ex2, st}}
+        {:ok, {text, st}}
       end
     end
   end
 
-  defp emit({:unf, seed, {:lam, q, dom, x, body}}, env, book, st, _expect) do
-    seed_ty = ctype(dom, book)
+  defp live_fields(ctor, book) do
+    {pis, _} = telescope(ctor.type)
 
-    with {:ok, {pre, seed_ex, st}} <- emit(seed, env, book, st, seed_ty) do
-      id = st.k
-      st = %{st | k: id + 1}
-      caps = capture_fields(body, x, env)
-      {env_ty, env_pre, env_ex, st} = alloc_env(caps, id, st)
-      step = "muro_step_#{id}"
+    pis
+    |> Enum.reject(fn {q, _, _} -> q == :erased end)
+    |> Enum.with_index()
+    |> Enum.map(fn {{_, a, _}, k} -> {ctype(a, book), type_layout(book, a), k} end)
+  end
 
-      with {:ok, {src, st}} <-
-             emit_step(step, q, x, seed_ty, body, caps, env_ty, env, book, st) do
-        expr = "muro_stream_new(#{seed_ex}, #{env_ex}, #{step})"
-        {:ok, {squash([pre, env_pre]), expr, %{st | steps: st.steps ++ [src]}}}
-      end
+  defp fetch_step(st, name) do
+    case Map.fetch(st.steps_by_name, name) do
+      {:ok, step} -> {:ok, step}
+      :error -> {:error, "c:unsupported"}
     end
   end
 
-  defp emit({:unf, _, _}, _env, _book, _st, _expect), do: {:error, "c:lambda"}
+  defp ok_split(params, caps) do
+    {cap_ps, rest} = Enum.split(params, length(caps))
 
-  defp emit({:ucons, s}, env, book, st, _expect) do
-    with {:ok, {pre, ex, st}} <- emit(s, env, book, st, "muro_stream *") do
-      {sname, st} = news(st)
-      {pname, st} = news(st)
-      {hname, st} = news(st)
-      {nname, st} = news(st)
-      {tname, st} = news(st)
-
-      stmt =
-        squash([
-          "#{stream_ptr()}#{sname} = #{ex};",
-          "muro_pair *#{pname} = #{sname}->step(#{sname}->env, #{sname}->seed);",
-          "void *#{hname} = #{pname}->fst;",
-          "void *#{nname} = #{pname}->snd;",
-          "#{stream_ptr()}#{tname} = muro_stream_new(#{nname}, #{sname}->env, #{sname}->step);"
-        ])
-
-      {:ok, {squash([pre, stmt]), "muro_mk_pair(#{hname}, #{tname})", st}}
+    case rest do
+      [] -> {:ok, {nil, cap_ps}}
+      [seed] -> {:ok, {seed, cap_ps}}
+      _ -> {:error, "c:unsupported"}
     end
   end
 
-  defp emit({:lam, _, _, _, _}, _env, _book, _st, _expect), do: {:error, "c:lambda"}
+  defp step_id("step" <> n), do: String.to_integer(n)
 
-  defp emit({:atom, name}, _env, book, st, _expect), do: {:ok, {"", atom_c(name, book), st}}
+  defp seed_domain(nil, lay), do: lay
+  defp seed_domain({_name, lay}, _lay), do: lay
 
-  defp emit({:matom, e, _x, _p, bs}, env, book, st, expect) do
-    with {:ok, {pre, scrut, st}} <- emit(e, env, book, st, "muro_atom ") do
-      {sname, st} = news(st)
-      {tname, st} = newt(st)
+  # A capture field shares the struct, not the parameter namespace. Claim
+  # it against the file, so a field stays `n` when the arm parameter is `n`.
+  defp capture_slots(caps, cap_ps, file_scope) do
+    lays = Enum.map(cap_ps, fn {_n, lay} -> lay end)
 
-      case emit_atom_cases(bs, tname, env, book, st, expect) do
-        {:ok, {cases, st}} ->
-          stmt =
-            squash([
-              pre,
-              "#{expect}#{tname} = 0;",
-              "{",
-              "muro_atom #{sname} = #{scrut};",
-              "switch (#{sname}) {",
-              cases,
-              "default: {",
-              "abort();",
-              "}",
-              "}",
-              "}"
-            ])
-
-          {:ok, {stmt, tname, st}}
-
-        {:error, _} = err ->
-          err
-      end
-    end
-  end
-
-  defp emit(_other, _env, _book, _st, _expect), do: {:error, "c:unsupported"}
-
-  defp emit_lam_app(:erased, _a, x, body, _arg, rest, env, book, st, expect) do
-    emit(apply_args(body, rest), [{x, "muro_erased", :erased} | env], book, st, expect)
-  end
-
-  defp emit_lam_app(_q, a, x, body, arg, rest, env, book, st, expect) do
-    ty = ctype(a, book)
-
-    with {:ok, {pre, ex, st}} <- emit(arg, env, book, st, ty) do
-      {local, st} = news(st)
-
-      with {:ok, {pre2, ex2, st}} <-
-             emit(apply_args(body, rest), [{x, local, :live} | env], book, st, expect) do
-        {:ok, {squash([pre, "#{ty}#{local} = #{ex};", pre2]), ex2, st}}
-      end
-    end
-  end
-
-  defp apply_args(body, []), do: body
-  defp apply_args(body, [a | as]), do: apply_args({:app, body, a}, as)
-
-  defp emit_step(step, q, x, seed_ty, body, caps, env_ty, env, book, st) do
-    cap_env =
-      Enum.reduce(Enum.reverse(caps), env, fn {name, field, _outer}, env ->
-        [{name, "muro_ep->#{field}", :live} | env]
+    {slots, _} =
+      caps
+      |> Enum.zip(lays)
+      |> Enum.map_reduce(file_scope, fn {{name, tm}, lay}, scope ->
+        {field, scope} = Name.bind(spell(name), scope)
+        {{name, field, tm, lay}, scope}
       end)
 
-    {seed_local, seed_env} =
-      case q do
-        :erased ->
-          {nil, [{x, "muro_seedp", :erased} | cap_env]}
+    slots
+  end
 
-        _ ->
-          used = MapSet.new(["muro_ep", "muro_envp", "muro_seedp" | Enum.map(caps, &elem(&1, 1))])
-          {local, _} = fresh(c_name(x), used)
-          {local, [{x, local, :live} | cap_env]}
+  defp emit_outers(slots, env, st) do
+    Enum.reduce_while(slots, {:ok, [], [], st}, fn {_n, _f, tm, _lay}, {:ok, pres, exprs, st} ->
+      case emit_ir(tm, env, st, "void *") do
+        {:ok, {pre, ex, _lay, st}} -> {:cont, {:ok, pres ++ [pre], exprs ++ [ex], st}}
+        {:error, _} = err -> {:halt, err}
       end
-
-    with {:ok, {pre, expr, st}} <- emit(body, seed_env, book, st, "muro_pair *") do
-      prelude =
-        cond do
-          pre == "" -> "  return #{expr};"
-          true -> indent(pre, 2) <> "\n  return #{expr};"
-        end
-
-      src = """
-      static muro_pair *#{step}(void *muro_envp, void *muro_seedp) {
-      #{step_bind(q, seed_ty, seed_local, caps, env_ty)}
-      #{prelude}
-      }
-      """
-
-      {:ok, {String.trim(src), st}}
+    end)
+    |> case do
+      {:ok, pres, exprs, st} -> {:ok, {squash(pres), exprs, st}}
+      err -> err
     end
   end
 
-  defp step_bind(q, seed_ty, seed_local, caps, env_ty) do
-    env_line =
-      if caps == [] do
-        "  (void)muro_envp;"
-      else
-        "  #{env_ty} *muro_ep = muro_envp;"
-      end
+  defp alloc_env([], _outers, _id, st), do: {nil, "", "0", st}
 
-    seed_line =
-      if q == :erased or seed_local == nil do
-        "  (void)muro_seedp;"
-      else
-        "  #{seed_ty}#{seed_local} = muro_seedp;"
-      end
-
-    env_line <> "\n" <> seed_line
-  end
-
-  defp alloc_env([], _id, st), do: {nil, "", "0", st}
-
-  defp alloc_env(caps, id, st) do
-    env_ty = "muro_env_#{id}"
-    var = "muro_ep#{id}"
-
-    fields = Enum.map_join(caps, "\n", fn {_name, field, _outer} -> "  void *#{field};" end)
-
-    typedef = """
-    typedef struct {
-    #{fields}
-    } #{env_ty};
-    """
+  defp alloc_env(slots, outers, id, st) do
+    env_ty = g("env", id)
+    var = g("ep", id)
+    fields = Enum.map_join(slots, "\n", fn {_n, field, _tm, _lay} -> "  void *#{field};" end)
+    typedef = "typedef struct {\n#{fields}\n} #{env_ty};"
 
     assigns =
-      Enum.map_join(caps, "\n", fn {_name, field, outer} ->
+      Enum.map_join(Enum.zip(slots, outers), "\n", fn {{_n, field, _tm, _lay}, outer} ->
         "#{var}->#{field} = #{outer};"
       end)
 
-    pre = """
-    #{env_ty} *#{var} = MURO_ALLOC(sizeof *#{var});
-    if (#{var} == 0) abort();
-    #{assigns}
-    """
+    pre =
+      "#{env_ty} *#{var} = #{g("ALLOC")}(sizeof *#{var});\nif (#{var} == 0) abort();\n#{assigns}"
 
-    {env_ty, String.trim(pre), var, %{st | envs: st.envs ++ [String.trim(typedef)]}}
+    {env_ty, pre, var, %{st | envs: st.envs ++ [typedef]}}
   end
 
-  defp capture_fields(body, binder, env) do
-    body
-    |> free_names(MapSet.new([binder]))
-    |> Enum.uniq()
-    |> Enum.flat_map(fn name ->
-      case lookup(env, name) do
-        {:live, c} -> [{name, c}]
-        _ -> []
+  defp emit_step_fun(step, slots, seed_p, id, env_ty, st) do
+    ep = g("ep")
+    envp = g("envp")
+    seedp = g("seedp")
+    saved_base = st.base_scope
+
+    cap_env =
+      Enum.reduce(Enum.reverse(slots), [], fn {name, field, _tm, lay}, env ->
+        [{name, "#{ep}->#{field}", lay} | env]
+      end)
+
+    visible =
+      [ep, envp, seedp | Enum.map(slots, &elem(&1, 1))]
+      |> Enum.reduce(st.file_scope, &Name.see(&2, &1))
+
+    {seed_line, env, step_base} =
+      case seed_p do
+        nil ->
+          {"  (void)#{seedp};", cap_env, visible}
+
+        {sname, slay} ->
+          {local, visible} = Name.bind(spell(sname), visible)
+          line = "  #{ctype(slay, st.book)}#{local} = #{seedp};"
+          {line, [{sname, local, slay} | cap_env], visible}
       end
-    end)
-    |> then(fn caps ->
-      {named, _} =
-        Enum.map_reduce(caps, MapSet.new(), fn {name, outer}, used ->
-          {field, used} = fresh(c_name(name), used)
-          {{name, field, outer}, used}
-        end)
 
-      named
-    end)
+    env_line =
+      if slots == [] do
+        "  (void)#{envp};"
+      else
+        "  #{env_ty} *#{ep} = #{envp};"
+      end
+
+    st = %{st | scope: step_base, base_scope: step_base}
+
+    with {:ok, {pre, expr, _lay, st}} <- emit_ir(step.body, env, st, pair_ptr()) do
+      st = %{st | base_scope: saved_base, scope: saved_base}
+      {:ok, {step_text(id, env_line <> "\n" <> seed_line, pre, expr), st}}
+    end
   end
 
-  defp free_names({:var, name}, bound) do
-    if MapSet.member?(bound, name), do: [], else: [name]
+  defp step_text(id, bind, pre, expr) do
+    ret =
+      if pre == "" do
+        "  return #{expr};"
+      else
+        indent(pre, 2) <> "\n  return #{expr};"
+      end
+
+    "static #{pair_ptr()}#{g("step", id)}(void *#{g("envp")}, void *#{g("seedp")}) {\n" <>
+      bind <> "\n" <> ret <> "\n}"
   end
 
-  defp free_names({:lam, _, a, x, t}, bound) do
-    free_names(a, bound) ++ free_names(t, MapSet.put(bound, x))
+  defp lay_of({:var, name}, env, _st) do
+    case lookup(env, name) do
+      {_c, lay} -> lay
+      nil -> :opaque
+    end
   end
 
-  defp free_names({:pi, _, a, x, b}, bound) do
-    free_names(a, bound) ++ free_names(b, MapSet.put(bound, x))
+  defp lay_of({:let, name, lay, _val, body}, env, st) do
+    lay_of(body, [{name, "", lay} | env], st)
   end
 
-  defp free_names({:letp, e, a, b, t}, bound) do
-    free_names(e, bound) ++ free_names(t, bound |> MapSet.put(a) |> MapSet.put(b))
+  defp lay_of({:call, name, _}, _env, st), do: call_lay(st, name)
+  defp lay_of({:con, d, _, _}, _env, _st), do: {:data, d}
+  defp lay_of(:ze, _env, _st), do: :nat
+  defp lay_of({:su, _}, _env, _st), do: :nat
+  defp lay_of(:tt, _env, _st), do: :unit
+
+  defp lay_of({:pair, a, b}, env, st), do: {:pair, lay_of(a, env, st), lay_of(b, env, st)}
+
+  defp lay_of({:letp, a, b, e, body}, env, st) do
+    {la, lb} = pair_halves(lay_of(e, env, st))
+    lay_of(body, [{b, "", lb}, {a, "", la} | env], st)
   end
 
-  defp free_names({:mnat, e, x, p, z, y, s}, bound) do
-    free_names(e, bound) ++
-      free_names(p, MapSet.put(bound, x)) ++
-      free_names(z, bound) ++ free_names(s, MapSet.put(bound, y))
+  defp lay_of({:uncons, e}, env, st), do: uncons_lay(lay_of(e, env, st))
+  defp lay_of(:abort, _env, _st), do: :opaque
+
+  defp lay_of({:stream, seed, caps, step_name}, env, st) do
+    case Map.get(st.steps_by_name, step_name) do
+      %{params: params} ->
+        case ok_split(params, caps) do
+          {:ok, {nil, _}} -> {:stream, lay_of(seed, env, st)}
+          {:ok, {{_n, lay}, _}} -> {:stream, lay}
+          _ -> {:stream, lay_of(seed, env, st)}
+        end
+
+      _ ->
+        {:stream, lay_of(seed, env, st)}
+    end
   end
 
-  defp free_names({:matom, e, x, p, bs}, bound) do
-    free_names(e, bound) ++
-      free_names(p, MapSet.put(bound, x)) ++
-      Enum.flat_map(bs, fn {_n, body} -> free_names(body, bound) end)
+  defp lay_of({:match, scrut, arms}, env, st) do
+    case match_kind(lay_of(scrut, env, st), arms, st.book) do
+      :nat -> arm_result(arms, env, st)
+      :atom -> arm_result(arms, env, st)
+      {:data, dname} -> data_result(dname, arms, env, st)
+      :unknown -> :opaque
+    end
   end
 
-  defp free_names({:mdata, e, x, p, bs}, bound) do
-    free_names(e, bound) ++
-      free_names(p, MapSet.put(bound, x)) ++
-      Enum.flat_map(bs, fn {_c, binders, body} ->
-        bound1 = Enum.reduce(binders, bound, &MapSet.put(&2, &1))
-        free_names(body, bound1)
+  defp lay_of(_, _env, _st), do: :opaque
+
+  defp arm_result([{:arm, _, _, body} | _], env, st), do: lay_of(body, env, st)
+  defp arm_result(_, _env, _st), do: :opaque
+
+  defp data_result(dname, [{:arm, cname, binders, body} | _], env, st) do
+    env1 =
+      binders
+      |> Enum.zip(field_lays(st.book, dname, cname))
+      |> Enum.reduce(env, fn {name, lay}, env -> [{name, "", lay} | env] end)
+
+    lay_of(body, env1, st)
+  end
+
+  defp data_result(_dname, _, _env, _st), do: :opaque
+
+  defp field_lays(book, dname, cname) do
+    data = find_data(book, dname)
+    ctor = data && Enum.find(data.ctors, &(&1.name == cname))
+
+    if ctor == nil do
+      []
+    else
+      {pis, _} = telescope(ctor.type)
+
+      Enum.flat_map(pis, fn
+        {:erased, _, _} -> []
+        {_, a, _} -> [type_layout(book, a)]
+      end)
+    end
+  end
+
+  defp match_kind(:nat, _arms, _book), do: :nat
+  defp match_kind({:data, "Atom"}, _arms, _book), do: :atom
+  defp match_kind({:data, name}, _arms, _book), do: {:data, name}
+  defp match_kind(_lay, [{:arm, "zero", [], _}, {:arm, "suc", [_], _}], _book), do: :nat
+
+  defp match_kind(_lay, arms, book) do
+    cond do
+      atom_arms?(arms, book) -> :atom
+      name = ctor_data(arms, book) -> {:data, name}
+      true -> :unknown
+    end
+  end
+
+  defp atom_arms?(arms, book) do
+    atoms = Ast.atoms(book)
+
+    atoms != [] and
+      Enum.all?(arms, fn
+        {:arm, name, [], _} -> name in atoms
+        _ -> false
       end)
   end
 
-  defp free_names({:memp, e, x, p}, bound) do
-    free_names(e, bound) ++ free_names(p, MapSet.put(bound, x))
-  end
-
-  defp free_names({:munit, e, x, p, u}, bound) do
-    free_names(e, bound) ++ free_names(p, MapSet.put(bound, x)) ++ free_names(u, bound)
-  end
-
-  defp free_names({:rwt, e, x, p, t}, bound) do
-    free_names(e, bound) ++ free_names(p, MapSet.put(bound, x)) ++ free_names(t, bound)
-  end
-
-  defp free_names(t, bound) when is_tuple(t) do
-    t |> Tuple.to_list() |> Enum.flat_map(&free_names(&1, bound))
-  end
-
-  defp free_names(t, bound) when is_list(t), do: Enum.flat_map(t, &free_names(&1, bound))
-  defp free_names(_, _), do: []
-
-  defp emit_atom_cases(bs, tname, env, book, st, expect) do
-    Enum.reduce_while(bs, {:ok, {[], st}}, fn {name, body}, {:ok, {acc, st}} ->
-      case emit(body, env, book, st, expect) do
-        {:ok, {bpre, bex, st}} ->
-          text =
-            squash([
-              "case #{atom_c(name, book)}: {",
-              bpre,
-              "#{tname} = #{bex};",
-              "break;",
-              "}"
-            ])
-
-          {:cont, {:ok, {acc ++ [text], st}}}
-
-        {:error, _} = err ->
-          {:halt, err}
-      end
-    end)
-    |> case do
-      {:ok, {cases, st}} -> {:ok, {Enum.join(cases, "\n"), st}}
-      err -> err
+  defp ctor_data([{:arm, cname, _, _} | _], book) do
+    case data_of_ctor(book, cname) do
+      %{name: name} -> name
+      _ -> nil
     end
   end
 
-  defp emit_cases(branches, data, sname, tname, env, book, st, expect) do
-    Enum.reduce_while(branches, {:ok, {[], st}}, fn {cname, binders, body}, {:ok, {acc, st}} ->
-      case branch_case(cname, binders, body, data, sname, tname, env, book, st, expect) do
-        {:ok, {text, st}} -> {:cont, {:ok, {acc ++ [text], st}}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-    |> case do
-      {:ok, {cases, st}} -> {:ok, {Enum.join(cases, "\n"), st}}
-      err -> err
+  defp ctor_data(_, _), do: nil
+
+  defp type_layout(_book, :nat), do: :nat
+  defp type_layout(_book, :unit), do: :unit
+  defp type_layout(_book, :atom), do: {:data, "Atom"}
+  defp type_layout(book, {:stream, a}), do: {:stream, type_layout(book, a)}
+
+  defp type_layout(book, {:var, name}) do
+    if data?(book, name), do: {:data, name}, else: :opaque
+  end
+
+  defp type_layout(book, {:def, name}), do: type_layout(book, {:var, name})
+  defp type_layout(book, {:app, f, _}), do: type_layout(book, f)
+
+  defp type_layout(book, {:prod, a, b}) do
+    {:pair, type_layout(book, a), type_layout(book, b)}
+  end
+
+  defp type_layout(book, {:ann, e, _}), do: type_layout(book, e)
+  defp type_layout(_book, :i64), do: :i64
+  defp type_layout(_book, {:word, {:ty, :u8}, []}), do: :u8
+  defp type_layout(_book, {:word, {:ty, :u32}, []}), do: :u32
+  defp type_layout(_book, {:word, {:ty, :u64}, []}), do: :u64
+  defp type_layout(_book, {:word, :bool, []}), do: :wbool
+  defp type_layout(_book, {:word, {:optk, :u8}, []}), do: {:opt, :u8}
+  defp type_layout(_book, {:word, {:optk, :u32}, []}), do: {:opt, :u32}
+  defp type_layout(_book, {:word, {:optk, :u64}, []}), do: {:opt, :u64}
+  defp type_layout(_book, {:word, {:optk, :i64}, []}), do: {:opt, :i64}
+  defp type_layout(book, {:word, :opt, [a]}), do: {:opt, type_layout(book, a)}
+  defp type_layout(_book, _), do: :opaque
+
+  defp pair_halves({:pair, a, b}), do: {a, b}
+  defp pair_halves(_), do: {:opaque, :opaque}
+
+  defp uncons_lay({:stream, s}), do: {:pair, :opaque, {:stream, s}}
+  defp uncons_lay(_), do: {:pair, :opaque, :opaque}
+
+  defp call_lay(st, name) do
+    case Map.get(st.funs, name) do
+      %{ret: lay} -> lay
+      _ -> :opaque
     end
   end
 
-  defp branch_case(cname, binders, body, data, sname, tname, env, book, st, expect) do
-    ctor = Enum.find(data.ctors, &(&1.name == cname))
-    tag = Enum.find_index(data.ctors, &(&1.name == cname))
-
-    if ctor == nil or tag == nil do
-      {:error, "c:unsupported"}
-    else
-      case open_branch(binders, ctor, sname, env, book) do
-        {:ok, {decls, env1}} ->
-          with {:ok, {pre, ex, st}} <- emit(body, env1, book, st, expect) do
-            text =
-              squash([
-                "case #{tag}: {",
-                decls,
-                pre,
-                "#{tname} = #{ex};",
-                "break;",
-                "}"
-              ])
-
-            {:ok, {text, st}}
-          end
-
-        {:error, _} = err ->
-          err
-      end
-    end
-  end
-
-  defp open_branch(binders, ctor, sname, env, book) do
-    {pis, _} = telescope(ctor.type)
-
-    if length(binders) != length(pis) do
-      {:error, "c:unsupported"}
-    else
-      member = c_name(ctor.name)
-
-      {decls, env1, _used, _k} =
-        Enum.reduce(Enum.zip(binders, pis), {[], env, MapSet.new(), 0}, fn
-          {bname, {:erased, _a, _x}}, {decls, env, used, k} ->
-            {c, used} = fresh(c_name(bname), used)
-            decl = "void *#{c} = 0;"
-            {decls ++ [decl], [{bname, c, :live} | env], used, k}
-
-          {bname, {_q, a, _x}}, {decls, env, used, k} ->
-            {c, used} = fresh(c_name(bname), used)
-            ty = ctype(a, book)
-            decl = "#{ty}#{c} = #{sname}->as.#{member}.f#{k};"
-            {decls ++ [decl], [{bname, c, :live} | env], used, k + 1}
-        end)
-
-      {:ok, {Enum.join(decls, "\n"), env1}}
-    end
-  end
-
-  defp emit_global(name, args, env, book, st) do
-    specs = live_args(book, name, args)
-    need = live_count(book, name)
-
-    cond do
-      need != :unknown and length(specs) != need ->
-        {:error, "c:lambda"}
-
-      true ->
-        with {:ok, {pres, exprs, st}} <- emit_specs(specs, env, book, st) do
-          {:ok, {squash(pres), "#{ename(st, name)}(#{Enum.join(exprs, ", ")})", st}}
-        end
-    end
-  end
-
-  defp emit_specs(specs, env, book, st) do
-    Enum.reduce_while(specs, {:ok, {[], [], st}}, fn {a, ty}, {:ok, {pres, exprs, st}} ->
-      case emit(a, env, book, st, ty) do
-        {:ok, {pre, ex, st}} -> {:cont, {:ok, {pres ++ [pre], exprs ++ [ex], st}}}
-        {:error, _} = err -> {:halt, err}
-      end
-    end)
-  end
-
-  defp live_args(book, name, args) do
-    qtys = quantities(book, name)
-    extra = max(length(args) - length(qtys), 0)
-    padded = qtys ++ List.duplicate({:live, "void *"}, extra)
-
-    args
-    |> Enum.zip(padded)
-    |> Enum.flat_map(fn
-      {_a, :erased} -> []
-      {a, {:live, ty}} -> [{a, ty}]
-    end)
-  end
-
-  defp live_count(book, name) do
-    case quantities(book, name) do
-      [] ->
-        if find_ctor(book, name) == nil and find_def(book, name) == nil, do: :unknown, else: 0
-
-      qtys ->
-        Enum.count(qtys, &(&1 != :erased))
-    end
-  end
-
-  defp quantities(book, name) do
+  defp live_ctypes(book, name) do
     type =
       cond do
-        ctor = find_ctor(book, name) -> ctor.type
-        defn = find_def(book, name) -> defn.type
+        d = find_def(book, name) -> d.type
+        c = find_ctor(book, name) -> c.type
         true -> nil
       end
 
     case type do
-      nil ->
-        []
-
-      ty ->
-        {pis, _} = telescope(ty)
-
-        Enum.map(pis, fn
-          {:erased, _, _} -> :erased
-          {_, a, _} -> {:live, ctype(a, book)}
-        end)
+      nil -> []
+      ty -> live_ctypes_of(ty, book)
     end
+  end
+
+  defp con_ctypes(book, cname) do
+    case find_ctor(book, cname) do
+      nil -> []
+      ctor -> live_ctypes_of(ctor.type, book)
+    end
+  end
+
+  defp live_ctypes_of(ty, book) do
+    {pis, _} = telescope(ty)
+
+    Enum.flat_map(pis, fn
+      {:erased, _, _} -> []
+      {_, a, _} -> [ctype(a, book)]
+    end)
   end
 
   defp find_ctor(book, name) do
@@ -842,7 +1009,14 @@ defmodule Muro.Emit.C do
   end
 
   defp find_def(book, name) do
-    Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name))
+    Enum.find(
+      book,
+      &(Map.get(&1, :kind, :def) not in [:data, :repr] and Map.get(&1, :name) == name)
+    )
+  end
+
+  defp find_data(book, name) do
+    Enum.find(book, &(Map.get(&1, :kind) == :data and &1.name == name))
   end
 
   defp data_of_ctor(book, name) do
@@ -854,32 +1028,355 @@ defmodule Muro.Emit.C do
 
   defp lookup(env, name) do
     Enum.find_value(env, fn
-      {^name, c, kind} -> {kind, c}
+      {^name, c, lay} -> {c, lay}
       _ -> nil
     end)
   end
 
-  defp bind_one(name, env) do
-    c = c_name(name)
-    {c, [{name, c, :live} | env]}
+  defp uses?(t, name) when is_tuple(t) do
+    t == {:var, name} or t |> Tuple.to_list() |> Enum.any?(&uses?(&1, name))
   end
 
-  defp news(st), do: {"muro_s#{st.s}", %{st | s: st.s + 1}}
-  defp newt(st), do: {"muro_t#{st.t}", %{st | t: st.t + 1}}
+  defp uses?(t, name) when is_list(t), do: Enum.any?(t, &uses?(&1, name))
+  defp uses?(_, _), do: false
 
-  defp spine({:app, f, a}, acc), do: spine(f, [a | acc])
-  defp spine(h, acc), do: {h, acc}
+  defp news(st), do: {g("s", st.s), %{st | s: st.s + 1}}
+  defp newt(st), do: {g("t", st.t), %{st | t: st.t + 1}}
 
-  defp ctype(:atom, _book), do: "muro_atom "
-  defp ctype(:nat, _book), do: "muro_nat *"
-  defp ctype(:unit, _book), do: "muro_unit *"
-  defp ctype({:stream, _}, _book), do: "muro_stream *"
+  defp emit_word_args(args, env, st) do
+    Enum.reduce_while(args, {:ok, {[], [], st}}, fn arg, {:ok, {pres, exprs, st}} ->
+      case emit_ir(arg, env, st, "void *") do
+        {:ok, {pre, ex, _lay, st}} -> {:cont, {:ok, {pres ++ [pre], exprs ++ [ex], st}}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp word_c(k, {:lit, k, n}, [], st, _expect) do
+    {:ok, {"", c_word_lit(k, n), k, st}}
+  end
+
+  defp word_c(_k, true, [], st, _expect), do: {:ok, {"", "1", :wbool, st}}
+  defp word_c(_k, false, [], st, _expect), do: {:ok, {"", "0", :wbool, st}}
+
+  defp word_c(_k, :none, [], st, expect) do
+    ty =
+      if String.starts_with?(String.trim(expect), g("opt")) do
+        String.trim(expect)
+      else
+        opt_name(:u8)
+      end
+
+    {tmp, st} = news(st)
+    pre = "#{ty} #{tmp};\n#{tmp}.tag = 0;\n#{tmp}.val = 0;"
+    {:ok, {pre, tmp, {:opt, :opaque}, st}}
+  end
+
+  defp word_c(k, {:of, k}, [nat], st, _expect) do
+    {acc, st} = news(st)
+    {p, st} = news(st)
+
+    pre = """
+    uint64_t #{acc} = 0;
+    #{g("nat")} *#{p} = #{nat};
+    while (#{p}->#{g("field_tag")} != 0) {
+      #{acc}++;
+      #{p} = #{p}->#{g("field_suc")};
+    }
+    """
+
+    {:ok, {pre, "(#{cty(k)})#{acc}", k, st}}
+  end
+
+  defp word_c(_k, :ton, [x], st, _expect) do
+    {n, st} = news(st)
+    {r, st} = news(st)
+
+    pre = """
+    uint64_t #{n} = (uint64_t)(#{x});
+    #{g("nat")} *#{r} = #{g("zero")}();
+    while (#{n} != 0) {
+      #{r} = #{g("suc")}(#{r});
+      #{n}--;
+    }
+    """
+
+    {:ok, {pre, r, :nat, st}}
+  end
+
+  defp word_c(k, op, [x, y], st, _expect) when op in [:add, :sub, :mul] do
+    {:ok, {"", wrap_bin(op, k, x, y), k, st}}
+  end
+
+  defp word_c(k, op, [x, y], st, _expect) when op in [:and, :or, :xor] do
+    {:ok, {"", bit_bin(op, k, x, y), k, st}}
+  end
+
+  defp word_c(k, :not, [x], st, _expect), do: {:ok, {"", bit_not(k, x), k, st}}
+
+  defp word_c(k, op, [x, y], st, _expect) when op in [:eq, :lt, :le] do
+    {:ok, {"", cmp_c(op, k, x, y), :wbool, st}}
+  end
+
+  defp word_c(k, op, [x, y], st, _expect) when op in [:cadd, :csub, :cmul] do
+    checked_c(k, op, x, y, st)
+  end
+
+  defp word_c(k, op, [x, y], st, _expect) when op in [:div, :rem] do
+    divrem_c(k, op, x, y, st)
+  end
+
+  defp word_c(k, op, [x, amt], st, _expect) when op in [:shl, :shr] do
+    shift_c(k, op, x, amt, st)
+  end
+
+  defp word_c(k, {:cast, k}, [x], st, _expect), do: {:ok, {"", cast_c(k, x), k, st}}
+
+  defp word_c(k, :some, [x], st, _expect) do
+    {tmp, st} = news(st)
+    name = opt_name(k)
+    pre = "#{name} #{tmp};\n#{tmp}.tag = 1;\n#{tmp}.val = #{x};"
+    {:ok, {pre, tmp, {:opt, k}, st}}
+  end
+
+  defp word_c(_k, _op, _args, _st, _expect), do: {:error, "c:unsupported"}
+
+  defp cty(:u8), do: "uint8_t"
+  defp cty(:u32), do: "uint32_t"
+  defp cty(:u64), do: "uint64_t"
+  defp cty(:i64), do: "int64_t"
+
+  defp c_width(:u8), do: 8
+  defp c_width(:u32), do: 32
+  defp c_width(:u64), do: 64
+  defp c_width(:i64), do: 64
+
+  defp c_word_lit(:i64, n) do
+    n = rem(n, 18_446_744_073_709_551_616)
+    if n >= 9_223_372_036_854_775_808, do: "(int64_t)UINT64_C(#{n})", else: "#{n}LL"
+  end
+
+  defp c_word_lit(k, n) do
+    mod =
+      if k == :u8,
+        do: 256,
+        else: if(k == :u32, do: 4_294_967_296, else: 18_446_744_073_709_551_616)
+
+    "(#{cty(k)})UINT64_C(#{rem(n, mod)})"
+  end
+
+  defp wrap_bin(:add, :i64, x, y), do: "(int64_t)((uint64_t)(#{x}) + (uint64_t)(#{y}))"
+  defp wrap_bin(:sub, :i64, x, y), do: "(int64_t)((uint64_t)(#{x}) - (uint64_t)(#{y}))"
+  defp wrap_bin(:mul, :i64, x, y), do: "(int64_t)((uint64_t)(#{x}) * (uint64_t)(#{y}))"
+  defp wrap_bin(:add, :u64, x, y), do: "(uint64_t)((uint64_t)(#{x}) + (uint64_t)(#{y}))"
+  defp wrap_bin(:sub, :u64, x, y), do: "(uint64_t)((uint64_t)(#{x}) - (uint64_t)(#{y}))"
+  defp wrap_bin(:mul, :u64, x, y), do: "(uint64_t)((uint64_t)(#{x}) * (uint64_t)(#{y}))"
+  defp wrap_bin(:add, :u32, x, y), do: "(uint32_t)((uint64_t)(#{x}) + (uint64_t)(#{y}))"
+  defp wrap_bin(:sub, :u32, x, y), do: "(uint32_t)((uint64_t)(#{x}) - (uint64_t)(#{y}))"
+  defp wrap_bin(:mul, :u32, x, y), do: "(uint32_t)((uint64_t)(#{x}) * (uint64_t)(#{y}))"
+  defp wrap_bin(:add, :u8, x, y), do: "(uint8_t)((uint32_t)(#{x}) + (uint32_t)(#{y}))"
+  defp wrap_bin(:sub, :u8, x, y), do: "(uint8_t)((uint32_t)(#{x}) - (uint32_t)(#{y}))"
+  defp wrap_bin(:mul, :u8, x, y), do: "(uint8_t)((uint32_t)(#{x}) * (uint32_t)(#{y}))"
+
+  defp bit_bin(op, :i64, x, y) do
+    sym = bit_sym(op)
+    "(int64_t)((uint64_t)(#{x}) #{sym} (uint64_t)(#{y}))"
+  end
+
+  defp bit_bin(op, k, x, y) do
+    wide = if k == :u8, do: "uint32_t", else: cty(k)
+    "(#{cty(k)})((#{wide})(#{x}) #{bit_sym(op)} (#{wide})(#{y}))"
+  end
+
+  defp bit_sym(:and), do: "&"
+  defp bit_sym(:or), do: "|"
+  defp bit_sym(:xor), do: "^"
+
+  defp bit_not(:i64, x), do: "(int64_t)(~(uint64_t)(#{x}))"
+
+  defp bit_not(k, x) do
+    wide = if k == :u8, do: "uint32_t", else: cty(k)
+    "(#{cty(k)})(~(#{wide})(#{x}))"
+  end
+
+  defp cmp_c(:eq, _k, x, y), do: "(uint8_t)((#{x}) == (#{y}))"
+  defp cmp_c(:lt, _k, x, y), do: "(uint8_t)((#{x}) < (#{y}))"
+  defp cmp_c(:le, _k, x, y), do: "(uint8_t)((#{x}) <= (#{y}))"
+
+  defp checked_c(k, op, x, y, st) do
+    {tmp, st} = news(st)
+    {out, st} = news(st)
+    name = opt_name(k)
+    builtin = checked_builtin(op)
+
+    pre = """
+    #{cty(k)} #{tmp};
+    #{name} #{out};
+    if (#{builtin}(#{x}, #{y}, &#{tmp})) {
+      #{out}.tag = 0;
+      #{out}.val = 0;
+    } else {
+      #{out}.tag = 1;
+      #{out}.val = #{tmp};
+    }
+    """
+
+    {:ok, {pre, out, {:opt, k}, st}}
+  end
+
+  defp checked_builtin(:cadd), do: "__builtin_add_overflow"
+  defp checked_builtin(:csub), do: "__builtin_sub_overflow"
+  defp checked_builtin(:cmul), do: "__builtin_mul_overflow"
+
+  defp divrem_c(k, op, x, y, st) do
+    {out, st} = news(st)
+    name = opt_name(k)
+    sym = if op == :div, do: "/", else: "%"
+
+    pre = """
+    #{name} #{out};
+    if (#{div_guard(k, x, y)}) {
+      #{out}.tag = 0;
+      #{out}.val = 0;
+    } else {
+      #{out}.tag = 1;
+      #{out}.val = (#{x}) #{sym} (#{y});
+    }
+    """
+
+    {:ok, {pre, out, {:opt, k}, st}}
+  end
+
+  defp div_guard(:i64, x, y) do
+    "(#{y}) == 0 || ((uint64_t)(#{x}) == (UINT64_C(1) << 63) && (uint64_t)(#{y}) == UINT64_MAX)"
+  end
+
+  defp div_guard(_k, _x, y), do: "(#{y}) == 0"
+
+  defp shift_c(k, op, x, amt, st) do
+    {sh, st} = news(st)
+    {p, st} = news(st)
+    {out, st} = news(st)
+    w = c_width(k)
+    nat = g("nat")
+    tag = g("field_tag")
+    suc = g("field_suc")
+
+    pre = """
+    unsigned #{sh} = 0;
+    const #{nat} *#{p} = #{amt};
+    while (#{p}->#{tag} != 0 && #{sh} + 1u < #{w}u) {
+      #{sh}++;
+      #{p} = #{p}->#{suc};
+    }
+    #{cty(k)} #{out};
+    if (#{p}->#{tag} != 0) {
+      #{out} = #{shift_oob(k, op, x)};
+    } else {
+      #{out} = #{shift_in(k, op, x, sh)};
+    }
+    """
+
+    {:ok, {pre, out, k, st}}
+  end
+
+  defp shift_oob(k, :shl, _x), do: "(#{cty(k)})0"
+  defp shift_oob(k, :shr, _x) when k != :i64, do: "(#{cty(k)})0"
+
+  defp shift_oob(:i64, :shr, x) do
+    "((uint64_t)(#{x}) >= (UINT64_C(1) << 63)) ? (int64_t)UINT64_MAX : 0"
+  end
+
+  defp shift_in(:u8, :shl, x, sh), do: "(uint8_t)((uint32_t)(#{x}) << #{sh})"
+  defp shift_in(:u32, :shl, x, sh), do: "(uint32_t)((uint64_t)(#{x}) << #{sh})"
+  defp shift_in(:u64, :shl, x, sh), do: "(uint64_t)((uint64_t)(#{x}) << #{sh})"
+  defp shift_in(:i64, :shl, x, sh), do: "(int64_t)((uint64_t)(#{x}) << #{sh})"
+  defp shift_in(:u8, :shr, x, sh), do: "(uint8_t)((uint32_t)(#{x}) >> #{sh})"
+  defp shift_in(:u32, :shr, x, sh), do: "(uint32_t)((uint64_t)(#{x}) >> #{sh})"
+  defp shift_in(:u64, :shr, x, sh), do: "(uint64_t)((#{x}) >> #{sh})"
+
+  defp shift_in(:i64, :shr, x, sh) do
+    "((#{sh}) == 0) ? (#{x}) : (int64_t)(((uint64_t)(#{x}) >> #{sh}) | (((uint64_t)(#{x}) >= (UINT64_C(1) << 63)) ? (~((UINT64_C(1) << (64u - #{sh})) - 1u)) : 0u))"
+  end
+
+  defp cast_c(:u8, x), do: "(uint8_t)(uint64_t)(#{x})"
+  defp cast_c(:u32, x), do: "(uint32_t)(uint64_t)(#{x})"
+  defp cast_c(:u64, x), do: "(uint64_t)(#{x})"
+  defp cast_c(:i64, x), do: "(int64_t)(uint64_t)(#{x})"
+
+  defp opt_typedefs(funs) do
+    funs
+    |> Enum.flat_map(fn fun ->
+      [fun.ret | Enum.map(fun.params, fn {_n, lay} -> lay end)] ++ collect_opts(fun.body, [])
+    end)
+    |> Enum.flat_map(&opt_payloads/1)
+    |> Enum.uniq()
+    |> Enum.map_join("\n", &opt_typedef/1)
+  end
+
+  defp collect_opts(tm, acc) when is_tuple(tm) do
+    acc = if match?({:opt, _}, tm), do: [tm | acc], else: acc
+    Enum.reduce(Tuple.to_list(tm), acc, &collect_opts/2)
+  end
+
+  defp collect_opts(tm, acc) when is_list(tm), do: Enum.reduce(tm, acc, &collect_opts/2)
+  defp collect_opts(_tm, acc), do: acc
+
+  defp opt_payloads({:opt, p} = lay), do: [lay | opt_payloads(p)]
+  defp opt_payloads({:pair, a, b}), do: opt_payloads(a) ++ opt_payloads(b)
+  defp opt_payloads({:stream, a}), do: opt_payloads(a)
+  defp opt_payloads(_), do: []
+
+  defp opt_typedef({:opt, pay}) do
+    name = opt_name(pay)
+
+    """
+    typedef struct #{name} #{name};
+    struct #{name} { uint8_t tag; #{ctype(pay, nil)}val; };
+    """
+    |> String.trim()
+  end
+
+  defp opt_name(pay), do: g("opt_" <> lay_tag(pay))
+
+  defp lay_tag(:u8), do: "u8"
+  defp lay_tag(:u32), do: "u32"
+  defp lay_tag(:u64), do: "u64"
+  defp lay_tag(:i64), do: "i64"
+  defp lay_tag(:nat), do: "nat"
+  defp lay_tag(:wbool), do: "bool"
+  defp lay_tag(:unit), do: "unit"
+  defp lay_tag(:opaque), do: "opaque"
+  defp lay_tag({:opt, p}), do: "opt_" <> lay_tag(p)
+  defp lay_tag({:data, name}), do: "d_" <> to_string(name)
+  defp lay_tag({:pair, a, b}), do: "pair_#{lay_tag(a)}_#{lay_tag(b)}"
+  defp lay_tag({:stream, a}), do: "stream_#{lay_tag(a)}"
+  defp lay_tag(other), do: to_string(other)
+
+  defp ctype(:atom, _book), do: atom_ty()
+  defp ctype(:nat, _book), do: nat_ptr()
+  defp ctype(:unit, _book), do: unit_ptr()
+  defp ctype({:stream, _}, _book), do: stream_ptr()
 
   defp ctype({:var, name}, book) do
     if data?(book, name), do: struct_ptr(name), else: "void *"
   end
 
   defp ctype({:app, f, _a}, book), do: ctype(f, book)
+  defp ctype({:data, "Atom"}, _book), do: atom_ty()
+  defp ctype({:data, name}, _book), do: struct_ptr(name)
+  defp ctype(:u8, _book), do: "uint8_t "
+  defp ctype(:u32, _book), do: "uint32_t "
+  defp ctype(:u64, _book), do: "uint64_t "
+  defp ctype(:i64, _book), do: "int64_t "
+  defp ctype(:wbool, _book), do: "uint8_t "
+  defp ctype({:opt, pay}, _book), do: opt_name(pay) <> " "
+  defp ctype({:word, {:ty, :u8}, []}, book), do: ctype(:u8, book)
+  defp ctype({:word, {:ty, :u32}, []}, book), do: ctype(:u32, book)
+  defp ctype({:word, {:ty, :u64}, []}, book), do: ctype(:u64, book)
+  defp ctype({:word, :bool, []}, book), do: ctype(:wbool, book)
+  defp ctype({:word, {:optk, k}, []}, book), do: ctype({:opt, k}, book)
+  defp ctype({:word, :opt, [a]}, book), do: ctype({:opt, type_layout(book, a)}, book)
   defp ctype(_, _book), do: "void *"
 
   defp data?(book, name) do
@@ -888,48 +1385,11 @@ defmodule Muro.Emit.C do
 
   defp struct_ptr(name), do: struct_name(name) <> " *"
 
-  defp struct_name(name) do
-    base = "muro_" <> (safe(name) |> String.downcase())
+  # Claimed first, against an empty set. `spell/1` is injective, so the
+  # struct spelling is the source spelling.
+  defp struct_name(name), do: spell(name)
 
-    if base in ~w(muro_nat muro_unit muro_pair) do
-      "muro_ty_" <> String.downcase(safe(name))
-    else
-      base
-    end
-  end
-
-  defp ename(st, name), do: Map.get(st.names, name, c_name(name))
-
-  defp c_name(name) do
-    n = safe(name)
-
-    cond do
-      n == "" or n == "_" -> "x"
-      String.match?(n, ~r/^[0-9]/) -> "muro_" <> n
-      MapSet.member?(@c_keywords, n) -> "muro_" <> n
-      MapSet.member?(@host_names, n) -> "muro_" <> n
-      MapSet.member?(@reserved, n) -> "muro_" <> n
-      String.starts_with?(n, "_") -> "muro_" <> n
-      String.match?(n, ~r/^muro_[st][0-9]+$/) -> "muro_" <> n
-      true -> n
-    end
-  end
-
-  defp safe(name) do
-    name
-    |> String.replace("-", "_")
-    |> String.replace("'", "_")
-  end
-
-  defp fresh(base, used) do
-    name = if MapSet.member?(used, base), do: bump(base, 2, used), else: base
-    {name, MapSet.put(used, name)}
-  end
-
-  defp bump(base, i, used) do
-    n = "#{base}_#{i}"
-    if MapSet.member?(used, n), do: bump(base, i + 1, used), else: n
-  end
+  defp ename(st, name), do: Map.get(st.names, name, spell(name))
 
   defp squash(parts) do
     parts
@@ -947,19 +1407,20 @@ defmodule Muro.Emit.C do
     s |> String.split("\n") |> Enum.map_join("\n", &(pad <> &1))
   end
 
-  defp header(book, sigs, stem) do
-    g = guard(stem)
+  defp header(book, sigs, stem, nm, opts) do
+    guard = guard(stem)
 
     parts = [
       "/* generated by muro — do not edit */",
-      "#ifndef #{g}",
-      "#define #{g}",
+      "#ifndef #{guard}",
+      "#define #{guard}",
       "#include <stdint.h>",
       alloc_macro(),
       nat_struct(),
       unit_struct(),
-      atom_enum(book),
-      stream_typedef(sigs),
+      opts,
+      atom_enum(book, nm),
+      stream_typedef(sigs, book),
       data_structs(book),
       prototypes(sigs),
       "#endif"
@@ -968,7 +1429,7 @@ defmodule Muro.Emit.C do
     join_parts(parts)
   end
 
-  defp source(book, runs, sigs, funs, extras, stem) do
+  defp source(book, runs, sigs, funs, extras, stem, nm, _opts) do
     internals =
       sigs
       |> Enum.reject(& &1.export)
@@ -981,8 +1442,8 @@ defmodule Muro.Emit.C do
       nat_helpers(),
       unit_helpers(),
       pair_helpers(runs),
-      stream_helpers(runs, exports_stream?(sigs)),
-      data_ctors(book),
+      stream_helpers(runs, stream_declared?(sigs, book)),
+      data_ctors(book, nm, sigs),
       internals,
       Enum.join(extras, "\n\n"),
       Enum.join(funs, "\n\n")
@@ -1004,110 +1465,121 @@ defmodule Muro.Emit.C do
     |> Enum.map_join("\n", &"#{decl(&1)};")
   end
 
-  defp guard(stem) do
-    body =
-      stem
-      |> String.upcase()
-      |> String.replace(~r/[^A-Z0-9]/, "_")
+  # `encode/1` has no underscore, so the tag cannot contain `__`.
+  defp guard(stem), do: g("H_" <> Name.encode(stem))
 
-    "MURO_#{body}_H"
-  end
-
-  defp atom_enum(book) do
+  defp atom_enum(book, nm) do
     case Ast.atoms(book) do
       [] ->
         ""
 
       names ->
-        consts = Enum.map_join(names, ",\n  ", &atom_c(&1, book))
+        consts = Enum.map_join(names, ",\n  ", &atom_c(&1, nm))
 
         """
         typedef enum {
           #{consts}
-        } muro_atom;
+        } #{g("atom")};
         """
         |> String.trim()
     end
   end
 
-  # First spelling in the file keeps MURO_ASC. A later spelling that
-  # sanitizes to the same identifier is bumped, as other C names are.
-  defp atom_c(name, book) do
-    Map.fetch!(atom_names(book), name)
-  end
-
-  defp atom_names(book) do
-    {map, _used} =
-      Enum.reduce(Ast.atoms(book), {%{}, MapSet.new()}, fn name, {map, used} ->
-        {c, used} = fresh("MURO_" <> (name |> safe() |> String.upcase()), used)
-        {Map.put(map, name, c), used}
-      end)
-
-    map
-  end
+  defp atom_c(name, nm), do: Map.fetch!(nm.atoms, name)
 
   defp alloc_macro do
+    alloc = g("ALLOC")
+
     """
-    #ifndef MURO_ALLOC
-    #define MURO_ALLOC(n) malloc(n)
+    #ifndef #{alloc}
+    #define #{alloc}(n) malloc(n)
     #endif
     """
     |> String.trim()
   end
 
   defp nat_struct do
+    nat = g("nat")
+    tag = g("field_tag")
+    suc = g("field_suc")
+
     """
-    typedef struct muro_nat muro_nat;
-    struct muro_nat { uint8_t tag; muro_nat *suc; }; /* 0 = zero, 1 = suc */
+    typedef struct #{nat} #{nat};
+    struct #{nat} { uint8_t #{tag}; #{nat} *#{suc}; }; /* 0 = zero, 1 = suc */
     """
     |> String.trim()
   end
 
   defp unit_struct do
+    unit = g("unit")
+    tag = g("field_tag")
+
     """
-    typedef struct muro_unit muro_unit;
-    struct muro_unit { uint8_t tag; };
+    typedef struct #{unit} #{unit};
+    struct #{unit} { uint8_t #{tag}; };
     """
     |> String.trim()
   end
 
   defp nat_helpers do
+    nat = g("nat")
+    new = g("nat_new")
+    p = g("p")
+    n = g("n")
+    tag = g("field_tag")
+    sucf = g("field_suc")
+    alloc = g("ALLOC")
+    zero = g("zero")
+    suc = g("suc")
+
     """
-    static muro_nat *muro_nat_new(uint8_t tag, muro_nat *suc) {
-      muro_nat *p = MURO_ALLOC(sizeof *p);
-      if (p == 0) abort();
-      p->tag = tag;
-      p->suc = suc;
-      return p;
+    static #{nat} *#{new}(uint8_t #{tag}, #{nat} *#{n}) {
+      #{nat} *#{p} = #{alloc}(sizeof *#{p});
+      if (#{p} == 0) abort();
+      #{p}->#{tag} = #{tag};
+      #{p}->#{sucf} = #{n};
+      return #{p};
     }
 
-    static muro_nat *muro_zero(void) { return muro_nat_new(0, 0); }
+    static #{nat} *#{zero}(void) { return #{new}(0, 0); }
 
-    static muro_nat *muro_suc(muro_nat *n) { return muro_nat_new(1, n); }
+    static #{nat} *#{suc}(#{nat} *#{n}) { return #{new}(1, #{n}); }
     """
     |> String.trim()
   end
 
   defp unit_helpers do
-    """
-    static muro_unit muro_tt_obj = {0};
+    unit = g("unit")
+    obj = g("tt_obj")
+    tt = g("tt")
 
-    static muro_unit *muro_tt(void) { return &muro_tt_obj; }
+    """
+    static #{unit} #{obj} = {0};
+
+    __attribute__((unused)) static #{unit} *#{tt}(void) { return &#{obj}; }
     """
     |> String.trim()
   end
 
   defp pair_helpers(runs) do
     if mentions?(runs, &pair_form?/1) or mentions?(runs, &stream_form?/1) do
-      """
-      typedef struct muro_pair_s { void *fst; void *snd; } muro_pair;
+      pair = g("pair")
+      fst = g("field_fst")
+      snd = g("field_snd")
+      p = g("p")
+      alloc = g("ALLOC")
+      mk = g("mk_pair")
 
-      static muro_pair *muro_mk_pair(void *fst, void *snd) {
-        muro_pair *p = MURO_ALLOC(sizeof *p);
-        if (p == 0) abort();
-        p->fst = fst;
-        p->snd = snd;
-        return p;
+      """
+      typedef struct #{pair} #{pair};
+      struct #{pair} { void *#{fst}; void *#{snd}; };
+
+      static #{pair} *#{mk}(void *#{fst}, void *#{snd}) {
+        #{pair} *#{p} = #{alloc}(sizeof *#{p});
+        if (#{p} == 0) abort();
+        #{p}->#{fst} = #{fst};
+        #{p}->#{snd} = #{snd};
+        return #{p};
       }
       """
       |> String.trim()
@@ -1125,8 +1597,6 @@ defmodule Muro.Emit.C do
   defp stream_form?({:ucons, _}), do: true
   defp stream_form?(_), do: false
 
-  defp stream_ptr, do: "muro_stream *"
-
   defp exports_stream?(sigs) do
     Enum.any?(sigs, fn sig ->
       sig.export and
@@ -1134,31 +1604,60 @@ defmodule Muro.Emit.C do
     end)
   end
 
-  defp stream_ty?(ty), do: String.starts_with?(ty, "muro_stream ")
+  defp stream_ty?(ty), do: String.starts_with?(ty, g("stream") <> " ")
 
-  defp stream_typedef(sigs) do
-    if exports_stream?(sigs), do: "typedef struct muro_stream muro_stream;", else: ""
+  # A data field typed as a stream needs the typedef even when no
+  # signature exports a stream. The .c completes the struct only when a
+  # run uses one, and must not repeat the typedef.
+  defp stream_declared?(sigs, book) do
+    exports_stream?(sigs) or data_field_stream?(book)
   end
 
-  defp stream_helpers(runs, exported?) do
+  defp data_field_stream?(book) do
+    Enum.any?(data_defs(book), fn d ->
+      Enum.any?(d.ctors, fn ctor ->
+        {pis, _} = telescope(ctor.type)
+
+        Enum.any?(pis, fn
+          {:erased, _, _} -> false
+          {_, a, _} -> stream_ty?(ctype(a, book))
+        end)
+      end)
+    end)
+  end
+
+  defp stream_typedef(sigs, book) do
+    stream = g("stream")
+    if stream_declared?(sigs, book), do: "typedef struct #{stream} #{stream};", else: ""
+  end
+
+  defp stream_helpers(runs, declared?) do
     if mentions?(runs, &stream_form?/1) do
-      decl = if exported?, do: "", else: "typedef struct muro_stream muro_stream;"
+      stream = g("stream")
+      seed = g("field_seed")
+      env = g("field_env")
+      step = g("field_step")
+      pair = g("pair")
+      new = g("stream_new")
+      p = g("p")
+      alloc = g("ALLOC")
+      decl = if declared?, do: "", else: "typedef struct #{stream} #{stream};"
 
       """
       #{decl}
-      struct muro_stream {
-        void *seed;
-        void *env;
-        muro_pair *(*step)(void *env, void *seed);
+      struct #{stream} {
+        void *#{seed};
+        void *#{env};
+        #{pair} *(*#{step})(void *, void *);
       };
 
-      static muro_stream *muro_stream_new(void *seed, void *env, muro_pair *(*step)(void *env, void *seed)) {
-        muro_stream *p = MURO_ALLOC(sizeof *p);
-        if (p == 0) abort();
-        p->seed = seed;
-        p->env = env;
-        p->step = step;
-        return p;
+      static #{stream} *#{new}(void *#{seed}, void *#{env}, #{pair} *(*#{step})(void *, void *)) {
+        #{stream} *#{p} = #{alloc}(sizeof *#{p});
+        if (#{p} == 0) abort();
+        #{p}->#{seed} = #{seed};
+        #{p}->#{env} = #{env};
+        #{p}->#{step} = #{step};
+        return #{p};
       }
       """
       |> String.trim()
@@ -1199,6 +1698,9 @@ defmodule Muro.Emit.C do
 
   defp struct_src(d, book) do
     name = struct_name(d.name)
+    tagf = g("field_tag")
+    asf = g("as")
+    unused = g("unused")
 
     members =
       d.ctors
@@ -1210,7 +1712,7 @@ defmodule Muro.Emit.C do
           pis
           |> Enum.reject(fn {q, _, _} -> q == :erased end)
           |> Enum.with_index()
-          |> Enum.map(fn {{_, a, _}, k} -> "    #{ctype(a, book)}f#{k};" end)
+          |> Enum.map(fn {{_, a, _}, k} -> "    #{ctype(a, book)}#{g("f", k)};" end)
 
         {tag, ctor.name, fs}
       end)
@@ -1222,42 +1724,43 @@ defmodule Muro.Emit.C do
         if fs == [] do
           []
         else
-          ["    struct {\n#{Enum.join(fs, "\n")}\n    } #{c_name(cname)};"]
+          ["    struct {\n#{Enum.join(fs, "\n")}\n    } #{spell(cname)};"]
         end
       end)
 
-    union_body = Enum.join(["    char unused;" | union_members], "\n")
+    union_body = Enum.join(["    char #{unused};" | union_members], "\n")
 
     """
     struct #{name} {
-      uint8_t tag; /* #{comment} */
+      uint8_t #{tagf}; /* #{comment} */
       union {
     #{union_body}
-      } as;
+      } #{asf};
     };
     """
     |> String.trim()
   end
 
-  defp data_ctors(book) do
-    {chunks, _} =
-      book
-      |> data_defs()
-      |> Enum.flat_map(fn d ->
-        d.ctors
-        |> Enum.with_index()
-        |> Enum.map(fn {ctor, tag} -> {d, ctor, tag} end)
-      end)
-      |> Enum.map_reduce(MapSet.new(), fn {d, ctor, tag}, used ->
-        ctor_fun(d, ctor, tag, book, used)
-      end)
+  defp data_ctors(book, nm, sigs) do
+    visible = file_scope(nm, MapSet.new(Enum.map(sigs, & &1.name)))
 
-    Enum.join(chunks, "\n\n")
+    book
+    |> data_defs()
+    |> Enum.flat_map(fn d ->
+      d.ctors
+      |> Enum.with_index()
+      |> Enum.map(fn {ctor, tag} -> ctor_fun(d, ctor, tag, book, nm, visible) end)
+    end)
+    |> Enum.join("\n\n")
   end
 
-  # A constructor with no runtime fields has one value. Share it, as `tt`
-  # does. `struct_name/1` already includes the `muro_` prefix.
-  defp ctor_fun(d, ctor, tag, book, used) do
+  defp file_scope(nm, extra) do
+    Name.open(MapSet.union(nm.taken, extra))
+  end
+
+  # A constructor with no runtime fields has one value. Share it, as `tt` does.
+  # The object name is generated, so a source spelling cannot be it.
+  defp ctor_fun(d, ctor, tag, book, nm, file_scope) do
     {pis, _} = telescope(ctor.type)
 
     fields =
@@ -1267,50 +1770,65 @@ defmodule Muro.Emit.C do
       |> Enum.map(fn {{_, a, x}, k} -> {ctype(a, book), x, k} end)
 
     {params, _} =
-      Enum.map_reduce(fields, MapSet.new(), fn {ty, x, k}, used ->
-        base = if x == "_", do: "f#{k}", else: c_name(x)
-        {cname, used} = fresh(base, used)
-        {{ty, cname, k}, used}
+      Enum.map_reduce(fields, file_scope, fn {ty, x, k}, scope ->
+        base = if x == "_", do: g("f", k), else: spell(x)
+        {cname, scope} = Name.bind(base, scope)
+        {{ty, cname, k}, scope}
       end)
 
     ptr = struct_ptr(d.name)
-    fun = c_name(ctor.name)
+    fun = Map.fetch!(nm.ctors, {d.name, ctor.name})
+    member = spell(ctor.name)
+    p = g("p")
+    alloc = g("ALLOC")
+    tagf = g("field_tag")
+    asf = g("as")
 
     if params == [] do
-      {obj, used} = fresh(struct_name(d.name) <> "_" <> safe(ctor.name) <> "_obj", used)
+      obj = g("obj_" <> spell(d.name) <> "_" <> spell(ctor.name))
 
-      text = """
+      """
       static #{struct_name(d.name)} #{obj} = {#{tag}};
 
       static #{ptr}#{fun}(void) { return &#{obj}; }
       """
-
-      {String.trim(text), used}
+      |> String.trim()
     else
-      member = fun
-
       assigns =
         Enum.map_join(params, "\n", fn {_ty, cname, k} ->
-          "  p->as.#{member}.f#{k} = #{cname};"
+          "  #{p}->#{asf}.#{member}.#{g("f", k)} = #{cname};"
         end)
 
       args = Enum.map_join(params, ", ", fn {ty, n, _} -> "#{ty}#{n}" end)
 
-      text = """
+      """
       static #{ptr}#{fun}(#{args}) {
-        #{ptr}p = MURO_ALLOC(sizeof *p);
-        if (p == 0) abort();
-        p->tag = #{tag};
+        #{ptr}#{p} = #{alloc}(sizeof *#{p});
+        if (#{p} == 0) abort();
+        #{p}->#{tagf} = #{tag};
       #{assigns}
-        return p;
+        return #{p};
       }
       """
-
-      {String.trim(text), used}
+      |> String.trim()
     end
   end
 
   defp data_defs(book) do
     Enum.filter(book, &(Map.get(&1, :kind) == :data))
+  end
+
+  defp data_layouts(book) do
+    Enum.map(data_defs(book), fn d ->
+      ctors =
+        d.ctors
+        |> Enum.with_index()
+        |> Enum.map(fn {ctor, tag} ->
+          fields = Enum.map(live_fields(ctor, book), fn {_ctype, lay, _k} -> lay end)
+          %{name: ctor.name, tag: tag, fields: fields}
+        end)
+
+      %{name: d.name, layout: {:data, d.name}, constructors: ctors}
+    end)
   end
 end

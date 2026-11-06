@@ -1,7 +1,7 @@
 ---
 title: CSHRL
 slug: cshrl
-order: 15
+order: 18
 summary: Coinductive symmetric homomorphisms for RL, as a library on params, with three environments and their agents.
 ---
 
@@ -69,10 +69,10 @@ The Finder adds `leb`, `default-action` and `horizon`. `successor_sum.muro` adds
 
 | Environment | `episode` | `successor-episode` |
 | --- | --- | --- |
-| BinarySacrifice | `go_trap` 1, then 0 forever | `go_paradise` 0, then 1 forever |
+| BinarySacrifice | `muro__gozdtrap` 1, then 0 forever | `muro__gozdparadise` 0, then 1 forever |
 | SkillInvestment | `work` 1 forever | `train` 0 three times, then 5 forever |
 
-In `trap` both actions return to `trap`. The Finder's sort is stable, so the tie goes to `go_paradise`, the first action in `all-actions`.
+In `trap` both actions return to `trap`. The Finder's sort is stable, so the tie goes to `go-paradise`, emitted as `muro__gozdparadise`, the first action in `all-actions`.
 
 ## The return theorem
 
@@ -91,4 +91,4 @@ In BinarySacrifice the stream of `go-trap` is 1, 0, 0, … and the stream of `go
 
 ## What is proved
 
-`agent-optimal` and the ranking theorems above are what `mix muro.check` accepts. `Dom` is a declared ν family, and that shape is in ⊢ ([Limits](limits.md)): the unfold is a derivation of the pair instantiated at the seed, and `uncons` of that pair is the head and the proof at the tails. Unfolding the definition and then taking `uncons` is not a step the preservation proof covers. The guard on the recursive call is the checker's shape, argued there. The descent of the mutual blocks in `finder.muro` is the checker's measure, argued, not an Agda theorem. The library has none of the artifact's appendices or stochastic environment classes.
+`agent-optimal` and the ranking theorems above are what `mix muro.check` accepts. `Dom` is a declared ν family, and that shape is in ⊢ ([Limits](limits.md)): the unfold is a derivation of the pair instantiated at the seed, and `uncons` of that pair is the head and the proof at the tails. Unfolding the definition opens it onto the family λ, and `uncons` of the pair instantiated at the seed is a derivation at the family goal (`fam-def-uncons`, [Limits](limits.md)). The guard on the recursive call is the checker's shape, argued there. The descent of the mutual blocks in `finder.muro` is the checker's measure, argued, not an Agda theorem. The library has none of the artifact's appendices or stochastic environment classes.

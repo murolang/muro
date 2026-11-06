@@ -1,0 +1,598 @@
+---
+title: Sessions
+slug: sessions
+order: 6
+summary: A session is the protocol two processes follow.
+---
+
+# Sessions
+
+A session is a description of the messages two processes exchange and the order they exchange them. It is not the processes. It is the protocol.
+
+You write the protocol once:
+
+```muro
+session ping := recv Nat (send Nat end)
+```
+
+This says: the process that holds this end receives a nat, then sends a nat, then ends. The other end is the dual:
+
+```muro
+session back := dual ping
+```
+
+`back` is `send Nat (recv Nat end)`. Every send on one is a receive on the other. That is duality.
+
+A process is evidence that it follows one end of the protocol. You write it with `conform`:
+
+```muro
+conform pong : ping := get (k : Nat) (put 1 done)
+```
+
+`get` receives. The binder `(k : Nat)` names the value. `get Nat` receives a nat and does not name it. `put` sends. `done` ends. The process `pong` follows `ping`: it receives a nat, then sends the literal `1`.
+
+The other process follows the dual:
+
+```muro
+conform peer : back := put 1 (get (m : Nat) done)
+```
+
+It sends `1`, then receives a nat.
+
+The meeting is the check that these two processes are the two parties of one description:
+
+```muro
+meet wire : pong with peer
+```
+
+The meeting is evidence. It is not a run term. A run definition has no seat. The OTP image is the only runtime that can produce the event of exchanging the payload and stopping `:normal` when the parties sit at different places. Other emitters do not implement the meeting.
+
+`mix muro.emit path.muro --backend fsm` prints each end as a state machine the host steps itself. The transport stays with the host. See [State machines](fsm.md).
+
+Places are where the parties sit. When the places are the same, the meeting stays. When the places differ, the meeting crosses once. The boundary is the seating. The payload stays on the session.
+
+```mermaid
+---
+config:
+  theme: base
+  look: classic
+  themeVariables:
+    darkMode: true
+    background: "#050505"
+    fontFamily: "IBM Plex Mono, ui-monospace, monospace"
+    primaryColor: "#1a1a1a"
+    primaryTextColor: "#f3f3f3"
+    primaryBorderColor: "#2e2e2e"
+    lineColor: "#8d8d8d"
+    textColor: "#f3f3f3"
+    actorBkg: "#1a1a1a"
+    actorBorder: "#2e2e2e"
+    actorTextColor: "#f3f3f3"
+    actorLineColor: "#5e5e5e"
+    signalColor: "#f3f3f3"
+    signalTextColor: "#c8c8c8"
+    noteBkgColor: "#1a1a1a"
+    noteTextColor: "#8d8d8d"
+    noteBorderColor: "#2e2e2e"
+    labelBoxBkgColor: "#1a1a1a"
+    labelBoxBorderColor: "#2e2e2e"
+    labelTextColor: "#8d8d8d"
+  sequence:
+    actorFontFamily: "IBM Plex Mono, ui-monospace, monospace"
+    noteFontFamily: "IBM Plex Mono, ui-monospace, monospace"
+    messageFontFamily: "IBM Plex Mono, ui-monospace, monospace"
+---
+sequenceDiagram
+  participant Pong as pong
+  participant Peer as peer
+  Note over Pong, Peer: same place
+  Pong->>Peer: stay
+  Note over Pong, Peer: places differ
+  Pong->>Peer: cross
+```
+
+`examples/meet.muro`
+
+## Value binding
+
+Value binding is the ability to name what you received and send it later:
+
+```muro
+conform echo : ping := get (k : Nat) (put k done)
+```
+
+`k` is bound by the `get`. The `put` uses it. The innermost binding wins. The payload type is data, so the bound value can be sent more than once. The meeting requires that name to be bound at exactly the type the other process receives.
+
+## Declared data
+
+A data definition may be a payload when it has no indices and every constructor field is a payload: a nat, a bit, unit, a pair of those, a parameter, that same data type, or another such data type. The constructors are the ones that definition has. The other end receives the same type. The meeting checks that the sent value inhabits the type. `put (just 0)` does not inhabit `Bool`. `nothing` and `(just 0)` inhabit `Maybe Nat`. The OTP image carries the atom `true`, or the tagged tuple `{:just, 0}`.
+
+A payload argument stops before a token that begins something else. The words are `def`, `data`, `session`, `conform`, `meet`, `place`, `scheme`, `move`, `endpoint`, `read`, `talk`, `choreography`, `seat`, `link`, `relay`, `import`, `param`, `where`, `nu`, `ν`, `end`, `send`, `recv`, `choose`, `branch`, `rec`, `case`, `on`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `over`, `say`, and `offer`. `temporal <name> :` and `repr <name> :=` stop as well. A name followed by `->`, `→`, `chooses`, or `:` stops, and so do `)` and `}`. A recursion variable in scope is the continuation (`send Bool X`). Parentheses group a payload (`(Reply)`, `(Maybe (List Nat))`). Omitting `end` after the payload is a parse error at that point, and the message says `end` was expected. The next declaration stays where it is. The declaration takes exactly as many arguments as it has parameters. `Reply takes 0 arguments, given 2` names the count at that declaration, and one parameter is `argument`. A matching count whose declaration is indexed, or whose parameter is not `Type`, stays `ill-formed payload`.
+
+```muro
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+session flag := send Bool end
+
+session flag-back := dual flag
+
+conform up : flag := put true done
+
+conform down : flag-back := get Bool done
+
+meet flag-wire : up with down
+```
+
+## A computed put
+
+A `put` may send the value an in-scope `run` definition computes from its arguments. The value that is sent is the value that function computes. The body is a first-order term: a variable, a literal, a constructor, a match on a constructor or a nat, or a call of a definition declared before it. Evaluation walks that prefix and the term, so a definition that calls itself, or a definition declared later, does not evaluate, including an arm the argument does not take. The meeting checks that the value inhabits the payload. The protocol stays spec. The process stays evidence. Nothing is added to the term language. The OTP image carries the value, and the definition is erased.
+
+```muro
+data Item : Type where
+  self : Item
+  other : Item
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+data Maybe (A : Type) : Type where
+  nothing : Maybe A
+  just : A → Maybe A
+
+def mark : run Π (f : Item) → Bool :=
+  λ (f : Item) →
+    match f motive (λ _ → Bool)
+      | self => true
+      | other => false
+
+def effective : run Π (+ f : Item) → Maybe Bool :=
+  λ (+ f : Item) →
+    match f motive (λ _ → Maybe Bool)
+      | self => just (mark f)
+      | other => nothing
+
+session answer := send (Maybe Bool) end
+
+session answer-back := dual answer
+
+conform reply : answer := put (effective self) done
+
+conform hear : answer-back := get (Maybe Bool) done
+
+meet reply-wire : reply with hear
+```
+
+`effective self` computes `just (mark self)`, and `mark self` is `true`, so the value sent is `just true`. `effective other` computes `nothing`. Both inhabit `Maybe Bool`, and they are different values. `put (bad self)` does not conform when `bad` computes a `Bool`. `put (size self)` sends `0`, which meets `send (d : Nat) {d ≤ 1}`. `put (size other)` sends `2` and does not. The same put may sit under `rec`: `rec X. put (effective self) X` follows `rec X. send (Maybe Bool) X`, and it meets the dual. A nullary `run` is the same form with no argument. `put (bump 0)` sends `1` when `bump` calls an earlier `run`. `put (plus 0 0)` is refused when `plus` calls itself.
+
+## A value chooses the next action
+
+The continuation of a `get` may match on the value that `get` just bound. The process has one arm per constructor, in declaration order. A bit is `b0`, then `b1`. The protocol after the `get` is one protocol. Each arm is a process that conforms to that protocol, and the processes may differ: `pick0 done` and `pick1 (put 0 done)` both follow `choose`, and `stop` and `done` both follow `end`. The received value chooses which of those processes runs. It does not choose a different protocol. A different protocol after the value is `case`, below. Two protocols after a bit stay `recv (b : Bit) on S T`, and the sender writes the literal `b0` or `b1`. A variable bit and a computed bit do not select an `on` arm. The meeting checks that the chosen arm is the one the other party covers. The same form works for a declared data type.
+
+```muro
+session choice := recv Bit (choose end (send Nat end))
+
+session offered := dual choice
+
+conform taker : choice := get (b : Bit) (match b pick0 done pick1 (put 0 done))
+
+conform giver : offered := put b0 (cover done (get Nat done))
+
+meet arm : taker with giver
+```
+
+`b0` takes `pick0 done`. `b1` takes `pick1 (put 0 done)`. `get (b : Bool) (match b done done)` and `get (m : Maybe Nat) (match m done done)` cover `Bool` and `Maybe` the same way: `true` then `false`, `nothing` then `just`. A match that does not cover the received value is refused. `recv (b : Bool) on end end` is still refused: an indexed protocol is a bit, and the sender writes the literal.
+
+The arms may name the constructor and bind its fields. `| nothing =>` binds nothing. `| just b =>` binds one field, and the type is that field at the payload's arguments: `Maybe Bool` gives `b : Bool`. A tail of `List` is a `List`. The name is payload data, so it may be sent more than once, and a `%1` endpoint is still consumed once. `put b` sends the field. `put (grant b)` sends what that `run` returns. Conformance checks the declared type, because the field is not known yet. The meeting evaluates `grant` on the value that arrived, and an asynchronous meeting does the same. The form with no names, one process per constructor, stays. A `run` that reads the field chooses the protocol, as the section on a run of the value describes.
+
+```muro
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+data Maybe (A : Type) : Type where
+  nothing : Maybe A
+  just : A → Maybe A
+
+def grant : run Π (b : Bool) → Bool :=
+  λ (b : Bool) →
+    match b motive (λ _ → Bool)
+      | true => true
+      | false => false
+
+session ask := recv (Maybe Bool) (send Bool end)
+
+session ask-back := dual ask
+
+conform reply : ask :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => put false done
+      | just b => put (grant b) done)
+```
+
+`just true` meets `reply` as `true`. `nothing` meets it as `false`.
+
+`examples/field-bindings.muro`
+
+`examples/computed.muro`
+
+A received pair has one arm. `| (a, b) =>` binds `a` at the first component's type and `b` at the second. The component is payload data, the same way a bound constructor field is: it may be sent more than once, it is never linear, and the innermost binding wins. `put a` sends the component. `put (grant a)` is checked by the type `grant` declares, and the meeting evaluates `grant` on the value that arrived. A component that is itself a pair or a record is bound whole.
+
+```muro
+session pair-ping := recv (Nat × Bit) (send Nat end)
+
+session pair-pong := dual pair-ping
+
+conform pair-reply : pair-ping :=
+  get (p : Nat × Bit)
+    (match p
+      | (n, b) => put n done)
+
+conform pair-ask : pair-pong := put (1, b1) (get (k : Nat) done)
+
+meet pair-wire : pair-reply with pair-ask
+```
+
+`(1, b1)` meets `pair-reply` as `1`. `b` is the bit, and it is not sent.
+
+A received record has one arm. `| { f1 = a1, ..., fk = ak } =>` names every field once, in the order the type writes them. Each binder has that field's type. The same rules apply: the component is payload data, `put` sends it, and `put (grant a)` is the run the field bindings already check.
+
+```muro
+session rec-ping := recv { x : Nat, y : Bit } (send Bit end)
+
+session rec-pong := dual rec-ping
+
+conform rec-reply : rec-ping :=
+  get (r : { x : Nat, y : Bit })
+    (match r
+      | { x = a, y = c } => put c done)
+
+conform rec-ask : rec-pong := put { x = 1, y = b0 } (get (k : Bit) done)
+
+meet rec-wire : rec-reply with rec-ask
+```
+
+`{ x = 1, y = b0 }` meets `rec-reply` as `b0`. A missing field, an extra field, a duplicate field, a field out of order, a binder count other than two, and a constructor arm on a pair or a record are refused. A pattern does not open a component that is itself a pair or a record.
+
+`examples/pair-bindings.muro`
+
+## A protocol follows the received constructor
+
+The continuation of the value just exchanged may be one protocol per constructor. The payload is a bit or a declared data type. The arms are that declaration's constructors, in declaration order, and each arm is a protocol. The dual writes `send` and dualises each arm. A receiver covers every constructor. Each process arm conforms to the protocol arm of that constructor. A sender of a literal, or of a value a `run` computes, is checked only on the arm that value selects.
+
+```muro
+session server :=
+  recv (f : Frame) (case f
+    | bytes => send Ctl end
+    | trailers => send Ctl end
+    | headers => recv Body end)
+
+conform stream : server :=
+  get (f : Frame) (match f (put rst done) (put rst done) (get (b : Body) done))
+
+conform open-headers : client := put headers (put chunk done)
+```
+
+`headers` takes `recv Body`. `bytes` and `trailers` take `send Ctl`. `client` is `dual server`, so `open-headers` sends `headers` and then a body. `put bytes (get (c : Ctl) done)` follows the `bytes` arm. A sender that writes `goaway` on that arm does not.
+
+## A protocol follows a run of the value
+
+The scrutinee may be a `run` applied to the value just bound. The `run` is one argument, the payload, and its body is the computed fragment: it does not call itself or a later `run`. The arms are the constructors of the result, in declaration order. A receiver still has one process arm per constructor of the payload. A `run` that only matches the constructor is checked at that constructor.
+
+```muro
+def late : run Π (f : Frame) → Bool :=
+  λ (f : Frame) →
+    match f motive (λ _ → Bool)
+      | bytes => true
+      | trailers => true
+      | headers => false
+
+session gate :=
+  recv (f : Frame) (case (late f)
+    | true => send Ctl end
+    | false => send Goaway end)
+
+conform gate-server : gate :=
+  get (f : Frame) (match f (put rst done) (put rst done) (put goaway done))
+```
+
+`late bytes` and `late trailers` are `true`, so those arms send `Ctl`. `late headers` is `false`, so that arm sends `Goaway`. The same `case` may sit under `rec`, in a session call, and on a linear endpoint. Each arm of a linear endpoint consumes it once.
+
+A `run` may read a field of the payload. The field is splittable when its type is a bit or a declared data type, and each field that `run` reads under a constructor is splittable in the same way. The receiver still has one process arm per payload constructor. When every value of the fields the `run` reads selects the same protocol, that arm is that protocol. When they differ, the process cases on the bound field, and each of those arms is the protocol that value selects. A field the `run` binds and never inspects is not split. A meeting of a known value still evaluates the `run` on that value.
+
+```muro
+def late : run Π (m : Maybe Bool) → Bool :=
+  λ (m : Maybe Bool) →
+    match m motive (λ _ → Bool)
+      | nothing => false
+      | just b => b
+
+session gate :=
+  recv (m : Maybe Bool) (case (late m)
+    | true => send Ctl end
+    | false => end)
+
+session gate-back := dual gate
+
+conform gate-server : gate :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put rst done
+          | false => done)
+```
+
+`late nothing` is `false`, so that arm ends. `late (just true)` is `true`, so that arm sends `Ctl`. `late (just false)` is `false`, so that arm ends. `put (just true)`, `put (just false)`, and `put nothing` meet `gate-server` in both orders, and those meetings check with `buffer 1`.
+
+`examples/value-protocols.muro`
+
+`examples/field-choice.muro`
+
+## Dependence
+
+A continuation may mention a nat that was received, as the length of a vector. The length of the vector that will be sent is the nat that was received. The dual sends that nat and then receives a vector of that length. The meeting checks that the value the sender provides is the length the receiver's continuation expects.
+
+```muro
+session sized := recv (n : Nat) (send (Vec Nat n) end)
+```
+
+The OTP image sends two messages. The first is `{:muro, from, n}`. The second is `{:muro, from, vec}`, and the length of `vec` is `n`. A vector of another length stops the process with `{:shutdown, {:unexpected, value}}`.
+
+## Evidence
+
+A protocol may require that a sent nat is at most a bound. The bound is a numeral, or a nat bound earlier in the session. The sender owes that evidence. The receiver gets a nat.
+
+```muro
+session window := recv (w : Nat) (send (d : Nat) {d ≤ w} end)
+
+session grant-end := dual window
+
+conform window-server : window := get (w : Nat) (put w done)
+
+conform window-client : grant-end := put 8 (get (d : Nat) done)
+
+meet window-wire : window-server with window-client
+```
+
+The server receives a window and sends data within it. The process writes the nat alone. The checker finds the evidence, as `decide` in `Session.agda` does. A numeral within a numeral bound is evidence by `≤`. Zero is within any window. The window itself is within the window, when the process bound that name once. `get (w : Nat) (put 2 done)` has no evidence, because the window may be smaller. `put 8 (put 9 done)` at `send (w : Nat) (send (d : Nat) {d ≤ w} end)` is refused, because nine is not at most eight. `<=` is the same as `≤`.
+
+The meeting compares the nats. The evidence is in each conformance, so a process without it is refused at its `conform`. The OTP image sends `{:muro, from, d}`. The evidence is not in the message.
+
+## A numeral bound
+
+A received nat whose bound is a numeral `w` has the values `0` … `w`. A `case` on that name writes one protocol per value, in that order. The label is the decimal spelling, so `| 0 =>` is zero and `| 00 =>` is not that arm. A `run` of the nat is evaluated at each value. The protocol arms are the constructors the `run` returns, and the process still has one arm per numeral. A `run` of the nat and one declared data payload is the product of those splits: `w + 1` times the number of constructors. `Bit` is a payload, not a term, so a `run` written in a file does not take `Bit`. The judgment also counts a bit, `b0` then `b1`, when the run's domain is that payload. Under an arm whose numerals select different protocols, it matches the nat by the name the protocol bound. Parentheses close that match when another constructor arm follows. A sender of a literal, or of a numeral a `run` computes, is checked on the arm that value selects. A meeting, including one written `buffer 1`, runs the arm of the value that arrived.
+
+```muro
+session direct :=
+  recv (d : Nat) {d ≤ 2} (case d
+    | 0 => send Ctl end
+    | 1 => send Nat end
+    | 2 => end)
+
+conform direct-server : direct :=
+  get (d : Nat) (match d
+    | 0 => put rst done
+    | 1 => put 0 done
+    | 2 => done)
+```
+
+`gate` below returns `false` at `0` and `true` at every successor, so `put 0` ends and `put 1` sends `Ctl`. `put two` does the same when `two` is `suc (suc 0)`.
+
+```muro
+session gated :=
+  recv (d : Nat) {d ≤ 2} (case (gate d)
+    | true => send Ctl end
+    | false => end)
+```
+
+`mix` reads the nat and a `Bool`. `true` at `0` sends `Ctl`. `true` at `1` ends. `false` ends at both. The `true` column is the match on `d`. Dropping `| 1 =>` does not conform.
+
+```muro
+session mixed :=
+  recv (d : Nat) {d ≤ 1} (
+    recv (b : Bool) (case (mix d b)
+      | true => send Ctl end
+      | false => end))
+```
+
+The length of a run's split is the product of the widths of the factors it reads. `enum-size` in `agda/Muro/Session.agda` states that for any factor list, with no fuel and no budget. `prod-card` is the product for one bounded nat and one constructor list. `data-size` is the sum of those products over the constructors of a data payload. `in-split` and `split-bound` say every value in `0` … `w` is in the split and every member is within the bound. `in-product` and `member-admitted` say every tuple the factors admit is in the product, and every member of the product is such a tuple. `val-sound` and `rows-at` say a process that covers the split conforms on the arm its value selects. `bound-recv-decides` is that decision for bound `1`. `meet-agrees` in `agda/Muro/Meet.agda` says the meeting of a literal numeral takes that arm.
+
+One bounded nat and one bit or declared data payload stay the two-factor derivation (`erecv-prod`). A second bounded nat, and a run of three or more finite factors, are the same split on the whole list (`erecv-wide`, `mget-wide`, `eget-wide`). The match stands on the last factor. Earlier factors are matched inside its arms, and parentheses close an inner match when another arm follows. A sender whose value is known is checked on the arm that value selects (`eput-wide`, `dput-wide`).
+
+A constructor may bound a nat field by a numeral. The left side is that field and the right side is a canonical decimal, so `{slot ≤ 1}` admits `0` and `1`. `{slot ≤ 00}`, `{slot ≤ suc 0}`, a bound that names another field, and a bound that names an earlier value are `a field bound is a numeral`. A bound on a field that is not a nat is `a field bound is on a nat`. The bound is not part of the core type. Building the value needs the evidence a bounded nat payload needs: `put (req 1)` is within the bound, and `put (req 2)`, a computed nat, and a variable nat miss it. A `run` that reads the field splits it into `0` … `w`. A field the `run` binds and does not read is not a factor. Two bounded fields are the product of their widths. A mix of constructors is the sum of those products. A bit field contributes two, and a data field contributes its own split.
+
+```muro
+data Req : Type where
+  req : (slot : Nat) {slot ≤ 1} → Req
+
+session ask :=
+  recv (r : Req) (case (slotOf r)
+    | true => send Nat end
+    | false => end)
+```
+
+`slotOf` returns `true` at `0` and `false` at `1`. The server matches `req`, then the numeral.
+
+A nat with no bound does not split, and neither does a bound that is a name: `recv (w : Nat) (recv (d : Nat) {d ≤ w} (case d …))` is `a case is on a bit or a declared data type`, because `w` is not known until it arrives. A `_` wildcard arm is `case arms do not match the constructors`. A pair, a record, a vector, and unit stay refused. A recursive field the `run` reads stays `the run does not decide an arm`. A case on a name bound earlier stays `a case is on the name just bound`. `put 3` against `{d ≤ 2}` misses the bound.
+
+`examples/bounded-split.muro`
+
+`examples/bounded-fields.muro`
+
+## Index
+
+A received bit selects one of two written continuations. The arm is the index. `b0` takes the first arm and `b1` takes the second. The sender writes the literal. A variable bit does not select an arm.
+
+```muro
+session route := recv (b : Bit) on (send Nat end) (recv Nat end)
+
+session route-back := dual route
+
+conform server : route := get (b : Bit) on (put 1 done) (get (n : Nat) done)
+
+conform client : route-back := put b0 (get (m : Nat) done)
+
+meet wire : server with client
+```
+
+`route` receives a bit. `b0` continues by sending a nat. `b1` continues by receiving a nat. `route-back` is the other end, so each arm is dualised and the index stays. `put b0` sends the literal and then receives the nat. `put b1 (put 0 done)` sends the bit and then the nat. The meeting checks that both sides take the same arm for the same bit.
+
+The bound bit is a bit. A vector length may not mention it. Inside an arm the process can send it as an ordinary bit: `get (b : Bit) on (put b done) (put b done)` follows `recv (b : Bit) on (send Bit end) (send Bit end)`.
+
+The OTP image sends `{:muro, from, :b0}` or `{:muro, from, :b1}`. The receiver's skeleton holds both arms. The message is the bit.
+
+`on` does not take a nat, so `recv (n : Nat) on end end` is refused. A nat at most a numeral chooses an arm by `case`, under [A numeral bound](#a-numeral-bound). `get Bit on done done` is refused, because the bit is bound. `put b` against `send (c : Bit) on …` is refused: the sender writes `b0` or `b1`. A protocol whose arms are not dualised pointwise is not the other end. `choose` stays a label.
+
+`examples/indexed.muro`
+
+## Choice
+
+A choice is an arm selection:
+
+```muro
+session choice := choose end (send Nat end)
+session offered := dual choice
+conform taker : choice := pick0 done
+conform giver : offered := cover done (get Nat done)
+meet arm : taker with giver
+```
+
+`pick0` takes the first arm. The other party covers both arms. The meeting checks that the chosen arm matches.
+
+## Recursion
+
+A protocol may repeat. `rec X. S` is that protocol again where `X` stands. The variable is a continuation, and the dot separates the name. It must sit under an action of its own `rec`. `send`, `recv`, a dependent action, an evidence action, an indexed bit, `choose`, and `branch` guard it. `rec` itself does not.
+
+```muro
+session loop := rec X. recv Nat (send Nat X)
+
+session loop-back := dual loop
+
+conform forever : loop := rec X. get (n : Nat) (put n X)
+
+conform sender : loop-back := rec Y. put 1 (get (m : Nat) Y)
+```
+
+`loop` receives a nat and sends a nat, and then it is that protocol again. `loop-back` is `rec` of the dual, and the variable stays, so it sends a nat and receives a nat, forever. The process repeats with the same form. The name on the process is not the name on the protocol. `forever` and `sender` meet. A nat bound inside the loop is bound again on the next arrival.
+
+A received bit can end the loop. `b0` takes the arm that repeats. `b1` takes the arm that ends.
+
+```muro
+session echo := rec X. recv (b : Bit) on (recv Nat (send Nat X)) end
+
+session echo-back := dual echo
+
+conform server : echo := rec X. get (b : Bit) on (get (n : Nat) (put n X)) done
+
+conform client : echo-back := put b0 (put 1 (get (m : Nat) (put b1 done)))
+
+meet wire : server with client
+```
+
+`client` echoes one nat and then sends `b1`. Both processes finish. The OTP image is a tail call: the server stores the body of `rec` and a jump runs that body again. It is not an unrolling.
+
+`rec X. X` is not a protocol. `rec X. rec Y. X` is not one either: the second `rec` does not guard `X`. A name in a process with no `rec` is not a process. A name in a protocol is a session declared earlier, and that form is the next section. `rec X. end` binds nothing and is `end`. `rec X. rec Y. send Nat X` is one loop, and both names are that loop. A jump does not finish, so `session %1` still refuses a process that can return to its `rec`. `rec X. done` does not jump, and it finishes.
+
+`examples/recursive.muro`
+
+## A named continuation
+
+A session declared earlier may be the continuation of another session. `req` is `send Nat (send Bit end)`. The name means that body. The same name may sit in an arm of `choose` or `branch`, after `on`, inside `rec`, and as the protocol of an endpoint. `dual req` is `req` with `dual` applied to that body. A process that conforms to `req` conforms to the body, and a meeting of the two ends checks as if the body had been written out.
+
+```muro
+session ack := send Bit end
+
+session req := send Nat ack
+
+session req-back := dual req
+
+conform client : req := put 1 (put b0 done)
+
+conform server : req-back := get Nat (get Bit done)
+
+meet wire : client with server
+```
+
+`client` sends a nat and then a bit. `server` receives both. `wire` is that exchange, and the swapped meeting is the same pair. `examples/session-calls.muro` also writes `ack` in a `choose` arm, after `on`, and inside `rec`, and returns `req` from a linear endpoint.
+
+## A parameterised session
+
+A session may take parameters. A parameter is a nat, written before `:=`, and it may appear wherever a length or an evidence bound may appear. An argument is a numeral, a nat already in scope, or a `run` application that evaluates to a nat. `frames 3` is `send (Vec Nat 3) end`. `stream n` sends a nat at most `n` and continues as `stream (suc n)`. The self-call sits under `send`, so it is that protocol again, at the next nat. `dual (stream 0)` is the body of `stream` with `dual` applied at `0`. A meeting of the two ends checks as if that body had been written out, in either order.
+
+```muro
+session frames (k : Nat) := send (Vec Nat k) end
+
+session stream (n : Nat) := send (d : Nat) {d ≤ n} (stream (suc n))
+
+session stream0 := stream 0
+
+session stream-back := dual stream0
+
+conform up : stream0 := rec X. put 0 X
+
+conform down : stream-back := rec Y. get (d : Nat) Y
+
+meet stream-wire : up with down
+```
+
+`up` sends `0` on every turn. The bound is `0`, then `1`, then the next nat, so `0` stays inside it. `down` is the other end. `frames (bump 0)` is `frames 1` when `bump` computes `suc` of an earlier `run`. `put (bump 0)` sends that nat on `send Nat`. A call of the session itself with no action under it, a call of a session declared later, an unknown name, the wrong number of arguments, and an argument that does not evaluate to a nat are refused before a meeting. `examples/session-calls.muro` is the worked book.
+
+## A linear endpoint
+
+An endpoint binder is affine by default, so the endpoint is used at most once. `λ¹` binds a session endpoint linearly, and the checker requires that variable to be used once. `⊸` is the arrow that accepts or returns a linear endpoint. `dual` keeps the multiplicity and dualises the protocol. A meeting of two linear endpoints requires each one to be consumed once; abandoning either is refused. The function is evidence, so it is erased before emit. The protocol stays spec. The process stays evidence. The OTP image still carries the value. `examples/linear.muro` is the worked book.
+
+```muro
+session ping := recv Nat (send Nat end)
+
+def forward : (s : ping) ⊸ ping := λ¹ (s : ping) → s
+```
+
+The protocol may repeat, and a payload may be a declared data type. `dual` keeps `rec` and the payload. The multiplicity is the endpoint's. A computed put consumes the endpoint once, and so does a match whose every arm does. One abandoned arm does not: the meeting reports `linear endpoint not consumed`.
+
+```muro
+session loop := rec X. recv Nat (send Nat X)
+
+def echo : (s : loop) ⊸ loop := λ¹ (s : loop) → s
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+session flag := send Bool end
+
+def pass : (s : flag) ⊸ flag := λ¹ (s : flag) → s
+
+session flags := rec X. send Bool X
+
+def flags-pass : (s : flags) ⊸ flags := λ¹ (s : flags) → s
+```
+
+## A bounded buffer
+
+A meeting may name a buffer. `meet inflight : client with server buffer 1` checks the two processes against every interleaving that bound allows: each direction is a queue of at most that many messages, a send waits when its queue is full, and a receive takes the head of the other queue. The synchronous meeting, written with no buffer, is still the rendezvous. The OTP image was already a mailbox; this meeting is the check that matches that runtime. A pair that both send first meets at buffer 1. A server that, after its own message, still accepts the frame already in flight meets at buffer 1 and at buffer 2. A server that answers that frame with a further message leaves it queued, and the meeting names the trace.
+
+```muro
+meet inflight : client with server buffer 1
+```
+
+`examples/async-meetings.muro` is the worked book. A `temporal` declaration states `always`, `eventually`, or `leads_to` of one such meeting. The meeting is still checked here. The declaration is [Temporal](temporal.md), and the worked book is `examples/temporal.muro`.
+
+## Where a check fails
+
+A refusal names the step and the position of that step. The line and column are the `put`, `get`, `pick0`, `pick1`, `cover`, or `match`, not the `conform` that contains it. A conformance says what the process does and which protocol step it was checked against. A reason comes after that, when the value was computed.
+
+```
+3:3: bad: put b0 done does not conform to recv Nat end
+```
+
+```
+13:3: over: put (size other) done does not conform to send (d : Nat) {d ≤ 1} end: computed value 2 misses bound ≤ 1
+```
+
+A meeting names the first step where the two processes disagree, the path that got there, and the protocol both were checked against. `diverged after put 0, get b, arm b1: left: put goaway; right: get (f : Frame); protocol: recv Frame end` is that step: the left process puts `goaway` and the right process gets a `Frame`. A meeting whose participant failed its own conform is not run. The report says `skipped because bad does not conform`, and the conform is the diagnosis.
+
+The configurations a meeting proved are the ones that walk recorded. [Visual explorer](explorer.md) opens on those meetings and draws one as a sequence of the recorded steps, from the sender to the receiver. All definitions is the graph, with one node per definition and one edge per use. `muro ui path.muro` prints how to open that view. It does not start it.

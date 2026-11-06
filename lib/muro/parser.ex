@@ -3,9 +3,14 @@ defmodule Muro.Parser do
   Tiny .muro parser. Agda-looking: Π, λ, match, explicit types.
   """
 
-  alias Muro.Print
+  alias Muro.{Print, Words}
 
   @src_key {__MODULE__, :src}
+  @noting_key {__MODULE__, :noting_proc}
+  @notes_key {__MODULE__, :proc_notes}
+  @span_key {__MODULE__, :span_on}
+  @span_stack {__MODULE__, :span_stack}
+  @span_bad {__MODULE__, :span_bad}
 
   def parse(src) when is_binary(src) do
     Process.put(@src_key, src)
@@ -34,7 +39,197 @@ defmodule Muro.Parser do
     Print.offset_to_loc(src, max(0, byte_size(src) - byte_size(rest)))
   end
 
-  defp err(rest, msg), do: "#{Print.loc_prefix(here(rest))}#{msg}"
+  # Source spans for one definition body, parallel to `Muro.Ast.children/1`.
+  # Off except while that body is parsed. A mismatch drops the span; the
+  # body itself is unchanged.
+  defp span_on?, do: Process.get(@span_key) == true
+
+  defp push_span(loc, n) when is_integer(n) do
+    if span_on?() do
+      stack = Process.get(@span_stack, [])
+
+      if length(stack) < n do
+        Process.put(@span_bad, true)
+        Process.put(@span_stack, [{loc, []} | stack])
+      else
+        {raw, rest} = Enum.split(stack, n)
+        Process.put(@span_stack, [{loc, Enum.reverse(raw)} | rest])
+      end
+    end
+
+    :ok
+  end
+
+  defp push_node(node) do
+    if span_on?(), do: Process.put(@span_stack, [node | Process.get(@span_stack, [])])
+    :ok
+  end
+
+  defp pop_span do
+    case Process.get(@span_stack, []) do
+      [top | rest] ->
+        Process.put(@span_stack, rest)
+        top
+
+      [] ->
+        Process.put(@span_bad, true)
+        {{1, 1}, []}
+    end
+  end
+
+  defp ok_leaf(loc, term, rest) do
+    push_span(loc, 0)
+    {:ok, term, rest}
+  end
+
+  defp ok_node(loc, term, n, rest) do
+    push_span(loc, n)
+    {:ok, term, rest}
+  end
+
+  defp without_span(fun) do
+    old = Process.get(@span_key)
+    Process.put(@span_key, false)
+
+    try do
+      fun.()
+    after
+      Process.put(@span_key, old)
+    end
+  end
+
+  defp parse_body_term(s) do
+    Process.put(@span_key, true)
+    Process.put(@span_stack, [])
+    Process.put(@span_bad, false)
+
+    try do
+      case parse_term(s, 0) do
+        {:ok, term, rest} ->
+          span =
+            case {Process.get(@span_bad), Process.get(@span_stack)} do
+              {false, [one]} -> if(span_match?(term, one), do: one, else: nil)
+              _ -> nil
+            end
+
+          {:ok, term, span, rest}
+
+        {:error, _} = err ->
+          err
+      end
+    after
+      Process.delete(@span_key)
+      Process.delete(@span_stack)
+      Process.delete(@span_bad)
+    end
+  end
+
+  defp span_match?(term, {_loc, kids}) do
+    cs = Muro.Ast.children(term)
+
+    length(cs) == length(kids) and
+      Enum.all?(Enum.zip(cs, kids), fn {c, k} -> span_match?(c, k) end)
+  end
+
+  defp span_match?(_, _), do: false
+
+  # An error with nothing left names the last line of the file.
+  defp err(rest, msg) do
+    src = Process.get(@src_key, "")
+
+    if skip(rest) == "" do
+      "#{Print.loc_prefix(Print.offset_to_loc(src, byte_size(src)))}#{eof_msg(msg)}"
+    else
+      "#{Print.loc_prefix(here(rest))}#{msg}"
+    end
+  end
+
+  defp eof_msg("expected " <> what), do: "unexpected end of file, expected #{what}"
+  defp eof_msg(msg), do: msg
+
+  # Locations of process steps, in preorder, while a conform or a read is parsed.
+  # A parenthesis is not a step. A protocol `rec` is not one either.
+  defp note(s) do
+    if Process.get(@noting_key) do
+      Process.put(@notes_key, [here(s) | Process.get(@notes_key, [])])
+    end
+
+    :ok
+  end
+
+  defp with_steps(s, bound \\ MapSet.new()) do
+    Process.put(@noting_key, true)
+    Process.put(@notes_key, [])
+
+    try do
+      case parse_proc(s, bound) do
+        {:ok, proc, rest} ->
+          notes = Enum.reverse(Process.get(@notes_key, []))
+          {:ok, proc, zip_steps(proc, notes), rest}
+
+        other ->
+          other
+      end
+    after
+      Process.delete(@noting_key)
+      Process.delete(@notes_key)
+    end
+  end
+
+  defp zip_steps(proc, notes) do
+    case take_span(proc, notes) do
+      {:ok, span, []} -> span
+      _ -> nil
+    end
+  end
+
+  defp take_span(:done, [at | rest]), do: {:ok, %{at: at, down: []}, rest}
+  defp take_span(:stop, [at | rest]), do: {:ok, %{at: at, down: []}, rest}
+  defp take_span({:call, _}, [at | rest]), do: {:ok, %{at: at, down: []}, rest}
+
+  defp take_span({:put, _, _, p}, [at | rest]), do: take_one(at, p, rest)
+  defp take_span({:get, _, _, p}, [at | rest]), do: take_one(at, p, rest)
+  defp take_span({:pick0, p}, [at | rest]), do: take_one(at, p, rest)
+  defp take_span({:pick1, p}, [at | rest]), do: take_one(at, p, rest)
+  defp take_span({:rec, _, p}, [at | rest]), do: take_one(at, p, rest)
+
+  defp take_span({:cover, p, q}, [at | rest]), do: take_two(at, p, q, rest)
+  defp take_span({:iget, _, p, q}, [at | rest]), do: take_two(at, p, q, rest)
+
+  defp take_span({:match, _, arms}, [at | rest]) do
+    with {:ok, cs, rest} <- take_many(arms, rest) do
+      {:ok, %{at: at, down: cs}, rest}
+    end
+  end
+
+  # A named arm is the process it stores. A product arm is the same.
+  # The `|` line is not a step of its own.
+  defp take_span({:arm, _, _, p}, notes), do: take_span(p, notes)
+  defp take_span({:prod, _, p}, notes), do: take_span(p, notes)
+
+  defp take_span(_, _), do: :error
+
+  defp take_one(at, p, rest) do
+    with {:ok, c, rest} <- take_span(p, rest) do
+      {:ok, %{at: at, down: [c]}, rest}
+    end
+  end
+
+  defp take_two(at, p, q, rest) do
+    with {:ok, a, rest} <- take_span(p, rest),
+         {:ok, b, rest} <- take_span(q, rest) do
+      {:ok, %{at: at, down: [a, b]}, rest}
+    end
+  end
+
+  defp take_many([], rest), do: {:ok, [], rest}
+
+  defp take_many([p | ps], rest) do
+    with {:ok, s, rest} <- take_span(p, rest),
+         {:ok, ss, rest} <- take_many(ps, rest) do
+      {:ok, [s | ss], rest}
+    end
+  end
 
   defp parse_book(s), do: parse_book(s, [])
 
@@ -48,37 +243,131 @@ defmodule Muro.Parser do
       nu_start?(s) ->
         case parse_nu(s) do
           {:ok, rest} -> parse_book(rest, acc)
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       import_start?(s) ->
         case parse_import(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       param_start?(s) ->
         case parse_param(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       data_start?(s) ->
         case parse_data(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      session_start?(s) ->
+        case parse_session(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      conform_start?(s) ->
+        case parse_conform(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      place_start?(s) ->
+        case parse_place(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      scheme_start?(s) ->
+        case parse_scheme(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      move_start?(s) ->
+        case parse_move(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      endpoint_start?(s) ->
+        case parse_endpoint(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      read_start?(s) ->
+        case parse_read(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      meet_start?(s) ->
+        case parse_meet(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      temporal_start?(s) ->
+        case parse_temporal(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      talk_start?(s) ->
+        case parse_talk(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      choreography_start?(s) ->
+        case parse_choreography(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      repr_start?(s) ->
+        case parse_repr(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      seat_start?(s) ->
+        case parse_seat(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
+      link_start?(s) ->
+        case parse_link(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
 
       true ->
         case parse_def(s) do
-          {:ok, d, rest} -> parse_book(rest, [d | acc])
+          {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
     end
   end
 
-  defp nu_start?(s), do: word_kw?(s, "ν") or word_kw?(s, "nu")
+  defp noted(start, decl, rest, acc) do
+    decl = Map.put(decl, :extent, {byte_off(start), byte_off(rest)})
+    parse_book(rest, [decl | acc])
+  end
+
+  defp byte_off(rest) do
+    src = Process.get(@src_key, "")
+    max(0, byte_size(src) - byte_size(rest))
+  end
+
+  defp nu_start?(s), do: Enum.any?(Words.nu_words(), &word_kw?(s, &1))
 
   defp import_start?(s), do: word_kw?(s, "import")
 
@@ -131,7 +420,7 @@ defmodule Muro.Parser do
   # is `ν Name. λ x₁ … xₙ → B`: inside B, Name is the ν-bound family.
   defp parse_nu(s) do
     loc = here(s)
-    rest = s |> skip() |> eat_kw(["ν", "nu"])
+    rest = s |> skip() |> eat_kw(Words.nu_words())
 
     with {:ok, name, rest} <- ident(skip(rest)) do
       if name == "Stream", do: parse_nu_stream(rest), else: parse_nu_family(name, loc, rest)
@@ -185,6 +474,2998 @@ defmodule Muro.Parser do
     end
   end
 
+  defp session_start?(s), do: word_kw?(s, "session")
+
+  defp conform_start?(s), do: word_kw?(s, "conform")
+
+  # session ping := recv Nat (send Nat end)
+  # session %1 ping-done := recv Nat (send Nat end)
+  # session back := dual ping
+  # %0 is affine, and it is the default. %1 must finish.
+  # A dual session with no mark takes the named session's mark.
+  # `dual` is a keyword only in that form. Neither mark is a quantity
+  # on a Π binder. Keywords here are not term keywords.
+  defp parse_session(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "session"),
+         {:ok, mult, stated, rest} <- parse_session_mult(skip(rest)),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, params, rest} <- parse_session_params(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, proto, rest} <- parse_session_proto(skip(rest)) do
+      mult =
+        case proto do
+          {:dual, _} -> if stated, do: mult, else: :inherit
+          _ -> mult
+        end
+
+      {:ok,
+       %{
+         kind: :session,
+         name: name,
+         mode: :spec,
+         mult: mult,
+         params: params,
+         proto: proto,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  # `(k : Nat)` before `:=`. A parameter is a nat. The name is in scope
+  # in the protocol, as a length or as an argument of a later session.
+  defp parse_session_params(s) do
+    s = skip(s)
+
+    if has_prefix?(s, "(") do
+      with {:ok, name, rest} <- parse_session_param(s),
+           {:ok, more, rest} <- parse_session_params(rest) do
+        {:ok, [name | more], rest}
+      end
+    else
+      {:ok, [], s}
+    end
+  end
+
+  defp parse_session_param(s) do
+    with {:ok, rest} <- tok(s, "("),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, rest} <- session_param_type(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ")") do
+      {:ok, String.to_atom(name), rest}
+    end
+  end
+
+  defp session_param_type(s) do
+    if word_kw?(s, "Nat") do
+      {:ok, after_kw(s, "Nat")}
+    else
+      {:error, err(s, "a session parameter is a nat")}
+    end
+  end
+
+  defp parse_session_mult("%" <> _ = s) do
+    with {:ok, mult, rest} <- parse_mult(s), do: {:ok, mult, true, rest}
+  end
+
+  defp parse_session_mult(s), do: {:ok, :affine, false, s}
+
+  # session back := dual ping
+  # The other end of ping. The mark stays on ping.
+  # session ping := seen pong with peer in ping-exchange
+  # The session pong has with peer in that description. The mark is
+  # the mark written here. `seen` is a keyword only in this form.
+  defp parse_session_proto(s) do
+    cond do
+      word_kw?(s, "dual") ->
+        with {:ok, rest} <- kw(s, "dual"),
+             {:ok, ref, rest} <- parse_dual_ref(skip(rest)) do
+          {:ok, {:dual, ref}, rest}
+        end
+
+      word_kw?(s, "seen") ->
+        parse_seen(s)
+
+      true ->
+        parse_proto(s)
+    end
+  end
+
+  defp parse_seen(s) do
+    with {:ok, rest} <- kw(s, "seen"),
+         {:ok, p, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "with"),
+         {:ok, q, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "in"),
+         {:ok, talk, rest} <- ident(skip(rest)) do
+      {:ok, {:seen, p, q, talk}, rest}
+    end
+  end
+
+  # %1 is a whole token. %10 is not %1 followed by 0.
+  defp parse_mult("%" <> rest = s) do
+    case take_mult(rest) do
+      {:ok, mult, more} -> {:ok, mult, more}
+      :error -> {:error, err(s, "expected %0 or %1")}
+    end
+  end
+
+  defp parse_mult(s), do: {:ok, :affine, s}
+
+  defp take_mult("0" <> more), do: close_mult(:affine, more)
+  defp take_mult("1" <> more), do: close_mult(:linear, more)
+  defp take_mult(_), do: :error
+
+  defp close_mult(mult, more) do
+    if more == "" or not ident_char?(String.first(more)),
+      do: {:ok, mult, more},
+      else: :error
+  end
+
+  # conform pong : ping := get Nat (put 1 done)
+  # The process is evidence that it conforms to the named session.
+  defp parse_conform(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "conform"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, session, rest} <- parse_session_use(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, proc, steps, rest} <- with_steps(skip(rest)) do
+      {:ok,
+       %{
+         kind: :conform,
+         name: name,
+         mode: :evidence,
+         session: session,
+         proc: proc,
+         steps: steps,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  defp place_start?(s), do: word_kw?(s, "place")
+
+  defp scheme_start?(s), do: word_kw?(s, "scheme")
+
+  defp move_start?(s), do: word_kw?(s, "move")
+
+  # place home := ambient
+  # place away := node a
+  # `ambient` and `node` are keywords only on this right-hand side.
+  defp parse_place(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "place"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, place, rest} <- parse_place_rhs(skip(rest)) do
+      {:ok, %{kind: :place, name: name, mode: :spec, place: place, loc: loc}, rest}
+    end
+  end
+
+  defp parse_place_rhs(s) do
+    cond do
+      word_kw?(s, "ambient") ->
+        {:ok, :ambient, after_kw(s, "ambient")}
+
+      word_kw?(s, "node") ->
+        with {:ok, name, rest} <- ident(skip(after_kw(s, "node"))) do
+          {:ok, {:node, name}, rest}
+        end
+
+      true ->
+        {:error, err(s, "expected ambient or node")}
+    end
+  end
+
+  # scheme local := fixed home
+  # scheme poly := any
+  defp parse_scheme(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "scheme"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, scheme, rest} <- parse_scheme_rhs(skip(rest)) do
+      {:ok, %{kind: :scheme, name: name, mode: :spec, scheme: scheme, loc: loc}, rest}
+    end
+  end
+
+  defp parse_scheme_rhs(s) do
+    cond do
+      word_kw?(s, "any") ->
+        {:ok, :any, after_kw(s, "any")}
+
+      word_kw?(s, "fixed") ->
+        with {:ok, name, rest} <- ident(skip(after_kw(s, "fixed"))) do
+          {:ok, {:fixed, name}, rest}
+        end
+
+      true ->
+        {:error, err(s, "expected any or fixed")}
+    end
+  end
+
+  # move stay local : home
+  # move cross local : away
+  # The mark is evidence. `stay` and `cross` are keywords only here.
+  defp parse_move(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "move"),
+         {:ok, mark, rest} <- parse_mark(skip(rest)),
+         {:ok, scheme, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, place, rest} <- ident(skip(rest)) do
+      {:ok, %{kind: :move, mode: :evidence, mark: mark, scheme: scheme, place: place, loc: loc},
+       rest}
+    end
+  end
+
+  defp parse_mark(s) do
+    cond do
+      word_kw?(s, "stay") -> {:ok, :stay, after_kw(s, "stay")}
+      word_kw?(s, "cross") -> {:ok, :cross, after_kw(s, "cross")}
+      true -> {:error, err(s, "expected stay or cross")}
+    end
+  end
+
+  defp endpoint_start?(s), do: word_kw?(s, "endpoint")
+
+  defp read_start?(s), do: word_kw?(s, "read")
+
+  # endpoint ping-home := ping at local
+  # The session's mark is the endpoint's mark. `at` is a keyword only here.
+  defp parse_endpoint(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "endpoint"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, session, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "at"),
+         {:ok, scheme, rest} <- ident(skip(rest)) do
+      {:ok,
+       %{
+         kind: :endpoint,
+         name: name,
+         mode: :spec,
+         session: session,
+         scheme: scheme,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  # read stay pong : ping-home at home := get Nat (put 1 done)
+  # read cross pong : ping-home at away := get Nat (put 1 done)
+  # The process conforms to the session. The mark is the move.
+  defp parse_read(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "read"),
+         {:ok, mark, rest} <- parse_mark(skip(rest)),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, endpoint, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "at"),
+         {:ok, place, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, proc, steps, rest} <- with_steps(skip(rest)) do
+      {:ok,
+       %{
+         kind: :read,
+         name: name,
+         mode: :evidence,
+         mark: mark,
+         endpoint: endpoint,
+         place: place,
+         proc: proc,
+         steps: steps,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  # A place or scheme entry is `name := …`. A constructor `place : Box`
+  # is not one. A move entry starts `move stay` or `move cross`.
+  defp assign_entry?(s, word) do
+    if word_kw?(s, word) do
+      rest = s |> after_kw(word) |> skip()
+
+      case ident(rest) do
+        {:ok, _, rest} -> has_prefix?(skip(rest), ":=")
+        _ -> false
+      end
+    else
+      false
+    end
+  end
+
+  defp place_entry?(s), do: assign_entry?(s, "place")
+
+  defp scheme_entry?(s), do: assign_entry?(s, "scheme")
+
+  defp move_entry?(s) do
+    if word_kw?(s, "move") do
+      rest = s |> after_kw("move") |> skip()
+      word_kw?(rest, "stay") or word_kw?(rest, "cross")
+    else
+      false
+    end
+  end
+
+  defp endpoint_entry?(s), do: assign_entry?(s, "endpoint")
+
+  defp read_entry?(s) do
+    if word_kw?(s, "read") do
+      rest = s |> after_kw("read") |> skip()
+      word_kw?(rest, "stay") or word_kw?(rest, "cross")
+    else
+      false
+    end
+  end
+
+  defp meet_start?(s), do: meet_entry?(s)
+
+  # `temporal name :` is an entry. `def temporal` and `temporal : Box` are not.
+  defp temporal_start?(s), do: temporal_entry?(s)
+
+  # meet wire : pong with peer
+  # meet wire : pong with peer buffer 1
+  # `meet` and `with` are keywords only in this form. `buffer` is a
+  # keyword only here, and only with a numeral. Absent, the meeting is
+  # the rendezvous.
+  defp parse_meet(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "meet"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, left, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "with"),
+         {:ok, right, rest} <- ident(skip(rest)),
+         {:ok, buffer, rest} <- parse_buffer(skip(rest)) do
+      {:ok,
+       %{
+         kind: :meet,
+         name: name,
+         mode: :evidence,
+         left: left,
+         right: right,
+         buffer: buffer,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  defp parse_buffer(s) do
+    if word_kw?(s, "buffer") do
+      rest = s |> after_kw("buffer") |> skip()
+
+      if number?(rest) do
+        {digits, rest} = take_digits(rest, "")
+        {:ok, String.to_integer(digits), rest}
+      else
+        {:error, err(rest, "buffer bound is a nat")}
+      end
+    else
+      {:ok, nil, s}
+    end
+  end
+
+  # temporal echo-answered : echo-wire := (inbox echo-b head 0) leads_to (inbox echo-a head 0)
+  # `temporal` is a keyword only as `temporal name :`. Inside the entry,
+  # `always`, `eventually`, `leads_to`, and the proposition words are
+  # keywords. `always (P implies eventually Q)` is `P leads_to Q`.
+  defp parse_temporal(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "temporal"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, meeting, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, formula, rest} <- parse_formula(skip(rest)) do
+      {:ok,
+       %{
+         kind: :temporal,
+         name: name,
+         mode: :evidence,
+         meeting: meeting,
+         formula: formula,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  defp parse_formula(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "forall") ->
+        parse_forall(s)
+
+      word_kw?(s, "always") ->
+        parse_t_always(s)
+
+      word_kw?(s, "eventually") ->
+        with {:ok, rest} <- kw(s, "eventually"),
+             {:ok, p, rest} <- parse_prop(skip(rest)) do
+          {:ok, {:eventually, p}, rest}
+        end
+
+      nested_temporal?(s) ->
+        {:error, err(s, "nested temporal operator")}
+
+      true ->
+        with {:ok, p, rest} <- parse_prop(s) do
+          rest = skip(rest)
+
+          if word_kw?(rest, "leads_to") do
+            with {:ok, rest} <- kw(rest, "leads_to"),
+                 {:ok, q, rest} <- parse_prop(skip(rest)) do
+              {:ok, {:leads_to, p, q}, rest}
+            end
+          else
+            {:error, err(rest, "expected leads_to")}
+          end
+        end
+    end
+  end
+
+  defp parse_forall(s) do
+    with {:ok, rest} <- kw(s, "forall"),
+         {:ok, rest} <- tok(skip(rest), "("),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, ty, rest} <- parse_pay(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ")"),
+         {:ok, rest} <- tok(skip(rest), "."),
+         {:ok, formula, rest} <- parse_formula(skip(rest)) do
+      {:ok, {:forall, name, ty, formula}, rest}
+    end
+  end
+
+  defp parse_t_always(s) do
+    with {:ok, rest} <- kw(s, "always") do
+      rest = skip(rest)
+
+      if has_prefix?(rest, "(") do
+        case parse_t_always_paren(rest) do
+          {:sugar, p, q, rest} -> {:ok, {:leads_to, p, q}, rest}
+          {:prop, p, rest} -> {:ok, {:always, p}, rest}
+          {:error, _} = err -> err
+        end
+      else
+        with {:ok, p, rest} <- parse_prop(rest) do
+          {:ok, {:always, p}, rest}
+        end
+      end
+    end
+  end
+
+  # `always (P implies eventually Q)` stops the left proposition before
+  # `implies eventually`. Any other `eventually` inside a proposition is
+  # a nested operator.
+  defp parse_t_always_paren(s) do
+    with {:ok, rest} <- tok(s, "(") do
+      case parse_imp(skip(rest), true) do
+        {:stop, p, at} ->
+          with {:ok, rest} <- kw(at, "implies"),
+               {:ok, rest} <- kw(skip(rest), "eventually"),
+               {:ok, q, rest} <- parse_prop(skip(rest)),
+               {:ok, rest} <- tok(skip(rest), ")") do
+            {:sugar, p, q, rest}
+          end
+
+        {:ok, p, rest} ->
+          with {:ok, rest} <- tok(skip(rest), ")") do
+            {:prop, p, rest}
+          end
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  defp parse_prop(s), do: parse_imp(s, false)
+
+  defp parse_imp(s, stop?) do
+    case parse_or(s) do
+      {:ok, left, rest} ->
+        rest = skip(rest)
+
+        if word_kw?(rest, "implies") do
+          after_imp = rest |> after_kw("implies") |> skip()
+
+          cond do
+            stop? and word_kw?(after_imp, "eventually") ->
+              {:stop, left, rest}
+
+            nested_temporal?(after_imp) ->
+              {:error, err(after_imp, "nested temporal operator")}
+
+            true ->
+              case parse_imp(after_imp, stop?) do
+                {:ok, right, rest} -> {:ok, {:imp, left, right}, rest}
+                {:stop, right, at} -> {:stop, {:imp, left, right}, at}
+                {:error, _} = err -> err
+              end
+          end
+        else
+          {:ok, left, rest}
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp parse_or(s) do
+    with {:ok, left, rest} <- parse_and(s) do
+      parse_or_rest(left, rest)
+    end
+  end
+
+  defp parse_or_rest(left, s) do
+    s = skip(s)
+
+    if word_kw?(s, "or") do
+      with {:ok, rest} <- kw(s, "or"),
+           {:ok, right, rest} <- parse_and(skip(rest)) do
+        parse_or_rest({:or, left, right}, rest)
+      end
+    else
+      {:ok, left, s}
+    end
+  end
+
+  defp parse_and(s) do
+    with {:ok, left, rest} <- parse_not_prop(s) do
+      parse_and_rest(left, rest)
+    end
+  end
+
+  defp parse_and_rest(left, s) do
+    s = skip(s)
+
+    if word_kw?(s, "and") do
+      with {:ok, rest} <- kw(s, "and"),
+           {:ok, right, rest} <- parse_not_prop(skip(rest)) do
+        parse_and_rest({:and, left, right}, rest)
+      end
+    else
+      {:ok, left, s}
+    end
+  end
+
+  defp parse_not_prop(s) do
+    s = skip(s)
+
+    if word_kw?(s, "not") do
+      with {:ok, rest} <- kw(s, "not"),
+           {:ok, p, rest} <- parse_not_prop(skip(rest)) do
+        {:ok, {:not, p}, rest}
+      end
+    else
+      parse_atom_prop(s)
+    end
+  end
+
+  defp parse_atom_prop(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "true") ->
+        {:ok, true, after_kw(s, "true")}
+
+      word_kw?(s, "false") ->
+        {:ok, false, after_kw(s, "false")}
+
+      word_kw?(s, "inbox") ->
+        parse_inbox(s)
+
+      nested_temporal?(s) ->
+        {:error, err(s, "nested temporal operator")}
+
+      has_prefix?(s, "(") ->
+        parse_paren(s, &parse_prop/1)
+
+      ident_start?(s) ->
+        parse_role_atom(s)
+
+      true ->
+        {:error, err(s, "expected a state proposition")}
+    end
+  end
+
+  defp nested_temporal?(s) do
+    word_kw?(s, "always") or word_kw?(s, "eventually") or word_kw?(s, "leads_to") or
+      word_kw?(s, "forall")
+  end
+
+  defp parse_inbox(s) do
+    with {:ok, rest} <- kw(s, "inbox"),
+         {:ok, role, rest} <- ident(skip(rest)) do
+      rest = skip(rest)
+
+      cond do
+        word_kw?(rest, "is") ->
+          rest = rest |> after_kw("is") |> skip()
+
+          cond do
+            word_kw?(rest, "empty") -> {:ok, {:empty, role}, after_kw(rest, "empty")}
+            word_kw?(rest, "full") -> {:ok, {:full, role}, after_kw(rest, "full")}
+            true -> {:error, err(rest, "expected empty or full")}
+          end
+
+        word_kw?(rest, "head") ->
+          with {:ok, val, rest} <- parse_tval(skip(after_kw(rest, "head"))) do
+            {:ok, {:head, role, val}, rest}
+          end
+
+        true ->
+          {:error, err(rest, "expected is or head")}
+      end
+    end
+  end
+
+  defp parse_role_atom(s) do
+    with {:ok, role, rest} <- ident(s) do
+      rest = skip(rest)
+
+      cond do
+        word_kw?(rest, "done") ->
+          {:ok, {:done, role}, after_kw(rest, "done")}
+
+        word_kw?(rest, "stopped") ->
+          {:ok, {:stopped, role}, after_kw(rest, "stopped")}
+
+        word_kw?(rest, "at") ->
+          parse_at(role, after_kw(rest, "at"))
+
+        word_kw?(rest, "has") ->
+          parse_has(role, after_kw(rest, "has"))
+
+        true ->
+          {:error, err(rest, "expected done, stopped, at, or has")}
+      end
+    end
+  end
+
+  defp parse_at(role, s) do
+    with {:ok, n, rest} <- parse_ordinal(skip(s)),
+         {:ok, verb, rest} <- parse_verb(skip(rest)) do
+      {:ok, {:at, role, n, verb}, rest}
+    end
+  end
+
+  defp parse_ordinal(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "first") ->
+        {:ok, 1, after_kw(s, "first")}
+
+      word_kw?(s, "second") ->
+        {:ok, 2, after_kw(s, "second")}
+
+      word_kw?(s, "third") ->
+        {:ok, 3, after_kw(s, "third")}
+
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        n = String.to_integer(digits)
+        suf = ordinal_suffix(n)
+
+        if word_kw?(rest, suf) do
+          {:ok, n, after_kw(rest, suf)}
+        else
+          {:error, err(s, "expected an ordinal")}
+        end
+
+      true ->
+        {:error, err(s, "expected an ordinal")}
+    end
+  end
+
+  defp ordinal_suffix(n) when rem(n, 100) in 11..13, do: "th"
+
+  defp ordinal_suffix(n) do
+    case rem(n, 10) do
+      1 -> "st"
+      2 -> "nd"
+      3 -> "rd"
+      _ -> "th"
+    end
+  end
+
+  defp parse_verb(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "put") -> {:ok, :put, after_kw(s, "put")}
+      word_kw?(s, "get") -> {:ok, :get, after_kw(s, "get")}
+      word_kw?(s, "pick0") -> {:ok, :pick0, after_kw(s, "pick0")}
+      word_kw?(s, "pick1") -> {:ok, :pick1, after_kw(s, "pick1")}
+      word_kw?(s, "cover") -> {:ok, :cover, after_kw(s, "cover")}
+      true -> {:error, err(s, "expected put, get, pick0, pick1, or cover")}
+    end
+  end
+
+  defp parse_has(role, s) do
+    with {:ok, name, rest} <- ident(skip(s)) do
+      rest = skip(rest)
+
+      cond do
+        Enum.any?(Words.le_words(), &has_prefix?(rest, &1)) or has_prefix?(rest, "<") ->
+          parse_has_cmp(role, name, rest)
+
+        word_kw?(rest, "is") ->
+          with {:ok, ctor, rest} <- ident(skip(after_kw(rest, "is"))) do
+            {:ok, {:is, role, name, ctor}, rest}
+          end
+
+        has_prefix?(rest, "=") ->
+          parse_has_eq(role, name, after_kw(rest, "="))
+
+        true ->
+          {:ok, {:bound, role, name}, rest}
+      end
+    end
+  end
+
+  defp parse_has_cmp(role, name, s) do
+    s = skip(s)
+
+    {tag, rest} =
+      case Enum.find(Words.le_words(), &has_prefix?(s, &1)) do
+        nil -> {:lt, after_kw(s, "<")}
+        word -> {:le, after_kw(s, word)}
+      end
+
+    with {:ok, n, rest} <- parse_numeral(rest) do
+      {:ok, {tag, role, name, n}, rest}
+    end
+  end
+
+  defp parse_has_eq(role, name, s) do
+    case try_eq2(skip(s)) do
+      {:ok, role2, name2, rest} ->
+        {:ok, {:eq2, role, name, role2, name2}, rest}
+
+      :no ->
+        with {:ok, val, rest} <- parse_tval(s) do
+          {:ok, {:eq, role, name, val}, rest}
+        end
+    end
+  end
+
+  defp try_eq2(s) do
+    case ident(s) do
+      {:ok, role2, rest} ->
+        rest = skip(rest)
+
+        if word_kw?(rest, "has") do
+          case ident(skip(after_kw(rest, "has"))) do
+            {:ok, name2, rest} -> {:ok, role2, name2, rest}
+            _ -> :no
+          end
+        else
+          :no
+        end
+
+      _ ->
+        :no
+    end
+  end
+
+  defp parse_numeral(s) do
+    s = skip(s)
+
+    if number?(s) do
+      {digits, rest} = take_digits(s, "")
+      {:ok, String.to_integer(digits), rest}
+    else
+      {:error, err(s, "expected a numeral")}
+    end
+  end
+
+  defp parse_tval(s) do
+    s = skip(s)
+
+    cond do
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, {:nat, String.to_integer(digits)}, rest}
+
+      word_kw?(s, "b0") ->
+        {:ok, :b0, after_kw(s, "b0")}
+
+      word_kw?(s, "b1") ->
+        {:ok, :b1, after_kw(s, "b1")}
+
+      word_kw?(s, "pick0") ->
+        {:ok, :pick0, after_kw(s, "pick0")}
+
+      word_kw?(s, "pick1") ->
+        {:ok, :pick1, after_kw(s, "pick1")}
+
+      ident_start?(s) ->
+        with {:ok, name, rest} <- ident(s) do
+          {:ok, {:var, name}, rest}
+        end
+
+      true ->
+        {:error, err(s, "expected a value")}
+    end
+  end
+
+  # talk ping-exchange := say peer pong Nat (say pong peer Nat over)
+  # The description is spec. `talk`, `over`, `say`, and `offer` are
+  # keywords only in this form. A constructor `talk : Box` is not one.
+  defp talk_start?(s), do: assign_entry?(s, "talk")
+
+  # choreography two-phase-commit
+  #   roles coordinator, alice, bob
+  #   coordinator -> alice : prepare
+  # `choreography` is a keyword only when a name follows. A constructor
+  # `choreography : Box` is not one. `roles` and `chooses` are keywords
+  # only inside the body. Indentation does not structure it.
+  defp choreography_start?(s) do
+    if word_kw?(s, "choreography") do
+      rest = s |> after_kw("choreography") |> skip()
+      match?({:ok, _, _}, ident(rest))
+    else
+      false
+    end
+  end
+
+  # `repr Name := …` is a host representation. `repr` is a keyword only
+  # in this form. A constructor `repr : Box` and `def repr` stay names.
+  defp repr_start?(s), do: assign_entry?(s, "repr")
+
+  defp parse_repr(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "repr"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, body, rest} <- parse_repr_body(skip(rest)) do
+      {:ok, %{kind: :repr, name: name, mode: :spec, body: body, loc: loc}, rest}
+    end
+  end
+
+  # A variant is `ctor => shape`. `nil => …` names the constructor `nil`.
+  # Anywhere else `nil` is the host nil.
+  defp parse_repr_body(s) do
+    if repr_variant_start?(s) do
+      parse_repr_choice(s, [])
+    else
+      parse_repr_shape(s)
+    end
+  end
+
+  defp repr_variant_start?(s) do
+    case ident(skip(s)) do
+      {:ok, _, rest} -> has_prefix?(skip(rest), "=>")
+      _ -> false
+    end
+  end
+
+  defp parse_repr_choice(s, acc) do
+    with {:ok, name, rest} <- ident(skip(s)),
+         {:ok, rest} <- tok(skip(rest), "=>"),
+         {:ok, shape, rest} <- parse_repr_shape(skip(rest)) do
+      acc = [{name, shape} | acc]
+      looked = skip(rest)
+
+      if has_prefix?(looked, "|") and not repr_boundary?(looked) do
+        with {:ok, rest} <- tok(looked, "|") do
+          parse_repr_choice(skip(rest), acc)
+        end
+      else
+        {:ok, {:choice, Enum.reverse(acc)}, rest}
+      end
+    end
+  end
+
+  # `else` binds looser than `list`, `optional`, `nullable`, and `map_of`.
+  # `list boolean else false` is a fallback on the list. Parentheses put the
+  # fallback inside: `optional (boolean else false)`.
+  defp parse_repr_shape(s) do
+    with {:ok, shape, rest} <- parse_repr_shape_tight(skip(s)) do
+      parse_repr_else(shape, rest)
+    end
+  end
+
+  defp parse_repr_else(shape, s) do
+    looked = skip(s)
+
+    if word_kw?(looked, "else") do
+      rest = looked |> after_kw("else") |> skip()
+
+      with {:ok, value, rest} <- parse_repr_fallback(rest) do
+        parse_repr_else({:else, shape, value}, rest)
+      end
+    else
+      {:ok, shape, s}
+    end
+  end
+
+  defp parse_repr_fallback(s) do
+    s = skip(s)
+
+    cond do
+      s == "" or repr_boundary?(s) or has_prefix?(s, "|") or has_prefix?(s, ",") or
+        has_prefix?(s, "}") or has_prefix?(s, ")") ->
+        {:error, err(s, "expected a fallback")}
+
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, {:numeral, String.to_integer(digits)}, rest}
+
+      true ->
+        with {:ok, name, rest} <- ident(s) do
+          {:ok, {:ctor, name}, rest}
+        end
+    end
+  end
+
+  defp parse_repr_shape_tight(s) do
+    s = skip(s)
+
+    cond do
+      s == "" or repr_boundary?(s) ->
+        {:error, err(s, "expected a shape")}
+
+      word_kw?(s, "boolean") ->
+        {:ok, {:boolean}, after_kw(s, "boolean")}
+
+      word_kw?(s, "integer") ->
+        {:ok, {:integer}, after_kw(s, "integer")}
+
+      word_kw?(s, "nil") ->
+        {:ok, {nil}, after_kw(s, "nil")}
+
+      word_kw?(s, "interned") ->
+        parse_repr_interned(s)
+
+      word_kw?(s, "list") ->
+        parse_repr_wrapped(s, "list", :list)
+
+      word_kw?(s, "optional") ->
+        parse_repr_wrapped(s, "optional", :optional)
+
+      word_kw?(s, "nullable") ->
+        parse_repr_wrapped(s, "nullable", :nullable)
+
+      word_kw?(s, "tuple") ->
+        parse_repr_tuple(s)
+
+      word_kw?(s, "map_of") ->
+        parse_repr_map_of(s)
+
+      word_kw?(s, "map") ->
+        parse_repr_map(s)
+
+      has_prefix?(s, "(") ->
+        parse_repr_paren(s)
+
+      atom_lit?(s) ->
+        with {:ok, {:atom, name}, rest} <- parse_atom_lit(s), do: {:ok, {:atom, name}, rest}
+
+      has_prefix?(s, "\"") ->
+        with {:ok, text, rest} <- parse_string(s), do: {:ok, {:string, text}, rest}
+
+      true ->
+        with {:ok, name, rest} <- ident(s), do: {:ok, {:ref, name}, rest}
+    end
+  end
+
+  defp parse_repr_interned(s) do
+    rest = s |> after_kw("interned") |> skip()
+
+    if word_kw?(rest, "string") do
+      {:ok, {:interned}, after_kw(rest, "string")}
+    else
+      {:error, err(rest, "interned needs string")}
+    end
+  end
+
+  defp parse_repr_paren(s) do
+    with {:ok, rest} <- tok(s, "("),
+         {:ok, shape, rest} <- parse_repr_shape(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ")") do
+      {:ok, shape, rest}
+    end
+  end
+
+  defp parse_repr_map_of(s) do
+    rest = s |> after_kw("map_of") |> skip()
+
+    if repr_shape_start?(rest) do
+      with {:ok, key, rest} <- parse_repr_shape_tight(rest),
+           {:ok, rest} <- tok(skip(rest), "=>"),
+           {:ok, val, rest} <- parse_repr_shape_tight(skip(rest)) do
+        {:ok, {:map_of, key, val}, rest}
+      end
+    else
+      {:error, err(rest, "map_of needs a shape")}
+    end
+  end
+
+  defp parse_repr_wrapped(s, word, tag) do
+    rest = s |> after_kw(word) |> skip()
+
+    if repr_shape_start?(rest) do
+      with {:ok, shape, rest} <- parse_repr_shape_tight(rest), do: {:ok, {tag, shape}, rest}
+    else
+      {:error, err(rest, "#{word} needs a shape")}
+    end
+  end
+
+  defp parse_repr_tuple(s) do
+    rest = s |> after_kw("tuple") |> skip()
+
+    if has_prefix?(rest, "{") do
+      with {:ok, rest} <- tok(rest, "{"),
+           {:ok, shapes, rest} <- parse_repr_shapes(skip(rest)),
+           {:ok, rest} <- tok(skip(rest), "}") do
+        {:ok, {:tuple, shapes}, rest}
+      end
+    else
+      {:error, err(rest, "tuple needs {")}
+    end
+  end
+
+  defp parse_repr_shapes(s) do
+    s = skip(s)
+
+    if has_prefix?(s, "}") do
+      {:ok, [], s}
+    else
+      with {:ok, shape, rest} <- parse_repr_shape(s) do
+        parse_repr_shape_tail(rest, [shape])
+      end
+    end
+  end
+
+  defp parse_repr_shape_tail(s, acc) do
+    s = skip(s)
+
+    if has_prefix?(s, ",") do
+      with {:ok, rest} <- tok(s, ","),
+           {:ok, shape, rest} <- parse_repr_shape(skip(rest)) do
+        parse_repr_shape_tail(rest, [shape | acc])
+      end
+    else
+      {:ok, Enum.reverse(acc), s}
+    end
+  end
+
+  defp parse_repr_map(s) do
+    rest = s |> after_kw("map") |> skip()
+
+    {open?, rest} =
+      if word_kw?(rest, "open") do
+        {true, rest |> after_kw("open") |> skip()}
+      else
+        {false, rest}
+      end
+
+    if has_prefix?(rest, "{") do
+      with {:ok, rest} <- tok(rest, "{"),
+           {:ok, entries, rest} <- parse_repr_entries(skip(rest)),
+           {:ok, rest} <- tok(skip(rest), "}") do
+        {:ok, {:map, open?, entries}, rest}
+      end
+    else
+      {:error, err(rest, "map needs {")}
+    end
+  end
+
+  defp parse_repr_entries(s) do
+    s = skip(s)
+
+    if has_prefix?(s, "}") do
+      {:ok, [], s}
+    else
+      with {:ok, key, rest} <- parse_repr_key(s),
+           {:ok, rest} <- tok(skip(rest), "=>"),
+           {:ok, shape, rest} <- parse_repr_shape(skip(rest)) do
+        parse_repr_entry_tail(rest, [{key, shape}])
+      end
+    end
+  end
+
+  defp parse_repr_entry_tail(s, acc) do
+    s = skip(s)
+
+    if has_prefix?(s, ",") do
+      with {:ok, rest} <- tok(s, ","),
+           {:ok, key, rest} <- parse_repr_key(skip(rest)),
+           {:ok, rest} <- tok(skip(rest), "=>"),
+           {:ok, shape, rest} <- parse_repr_shape(skip(rest)) do
+        parse_repr_entry_tail(rest, [{key, shape} | acc])
+      end
+    else
+      {:ok, Enum.reverse(acc), s}
+    end
+  end
+
+  defp parse_repr_key(s) do
+    s = skip(s)
+
+    cond do
+      atom_lit?(s) ->
+        <<":", rest::binary>> = s
+        {name, rest} = take_ident(rest, "")
+        {:ok, String.to_atom(name), rest}
+
+      has_prefix?(s, "\"") ->
+        parse_string(s)
+
+      true ->
+        {:error, err(s, "expected a string or atom key")}
+    end
+  end
+
+  defp repr_shape_start?(s) do
+    s = skip(s)
+
+    cond do
+      s == "" or repr_boundary?(s) -> false
+      word_kw?(s, "boolean") or word_kw?(s, "integer") or word_kw?(s, "nil") -> true
+      word_kw?(s, "interned") or word_kw?(s, "map_of") -> true
+      word_kw?(s, "list") or word_kw?(s, "optional") or word_kw?(s, "nullable") -> true
+      word_kw?(s, "tuple") or word_kw?(s, "map") -> true
+      has_prefix?(s, "(") -> true
+      atom_lit?(s) or has_prefix?(s, "\"") -> true
+      true -> match?(<<c, _::binary>> when c in ?a..?z or c in ?A..?Z or c == ?_, s)
+    end
+  end
+
+  # The next book entry ends a repr body. Shape words stay available as shapes.
+  defp repr_boundary?(s) do
+    s = skip(s)
+
+    word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
+      word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
+      nu_start?(s) or place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
+      endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
+      talk_start?(s) or choreography_start?(s) or seat_start?(s) or link_start?(s) or
+      repr_start?(s)
+  end
+
+  defp parse_talk(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "talk"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, body, rest} <- parse_talk_term(skip(rest)) do
+      {:ok, %{kind: :talk, name: name, mode: :spec, body: body, loc: loc}, rest}
+    end
+  end
+
+  # The body is one global type. A choice ends its sequence: the
+  # continuations are the branches. `end` closes a choice, so a nested
+  # choice can sit in a branch that is not the last one. A message
+  # payload is optional and defaults to Unit.
+  defp parse_choreography(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "choreography"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, roles, rest} <- parse_roles(skip(rest)),
+         {:ok, body, rest} <- parse_global(skip(rest)) do
+      {:ok, %{kind: :choreography, name: name, mode: :spec, roles: roles, body: body, loc: loc},
+       rest}
+    end
+  end
+
+  defp parse_roles(s) do
+    with {:ok, rest} <- kw(s, "roles"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, names, rest} <- parse_role_tail(skip(rest), [name]) do
+      {:ok, names, rest}
+    end
+  end
+
+  defp parse_role_tail(s, acc) do
+    s = skip(s)
+
+    if has_prefix?(s, ",") do
+      with {:ok, rest} <- tok(s, ","),
+           {:ok, name, rest} <- ident(skip(rest)) do
+        parse_role_tail(rest, acc ++ [name])
+      end
+    else
+      {:ok, acc, s}
+    end
+  end
+
+  defp parse_global(s) do
+    s = skip(s)
+
+    cond do
+      s == "" or global_stop?(s) ->
+        {:ok, :end, s}
+
+      true ->
+        case ident(s) do
+          {:ok, name, rest} ->
+            rest = skip(rest)
+
+            cond do
+              word_kw?(rest, "chooses") -> parse_choice(name, rest)
+              arrow_tok?(rest) -> parse_comm(name, rest)
+              true -> {:ok, :end, s}
+            end
+
+          _ ->
+            {:ok, :end, s}
+        end
+    end
+  end
+
+  defp parse_comm(sender, s) do
+    with {:ok, rest} <- eat_arrow(s),
+         {:ok, recv, rest} <- ident(skip(rest)),
+         {:ok, rest} <- colon(skip(rest)),
+         {:ok, label, rest} <- ident(skip(rest)),
+         {:ok, ty, rest} <- parse_msg_pay(skip(rest)),
+         {:ok, cont, rest} <- parse_global(skip(rest)) do
+      {:ok, {:comm, sender, recv, label, ty, cont}, rest}
+    end
+  end
+
+  defp parse_choice(role, s) do
+    with {:ok, rest} <- kw(s, "chooses"),
+         {:ok, branches, rest} <- parse_branches(skip(rest)) do
+      {:ok, {:choice, role, branches}, rest}
+    end
+  end
+
+  defp parse_branches(s) do
+    with {:ok, label, g, rest} <- parse_one_branch(s) do
+      parse_branch_tail(rest, [{label, g}])
+    end
+  end
+
+  defp parse_branch_tail(s, acc) do
+    s = skip(s)
+
+    cond do
+      branch_start?(s) ->
+        with {:ok, label, g, rest} <- parse_one_branch(s) do
+          parse_branch_tail(rest, acc ++ [{label, g}])
+        end
+
+      choice_closer?(s) ->
+        {:ok, acc, after_kw(s, "end")}
+
+      true ->
+        {:ok, acc, s}
+    end
+  end
+
+  defp parse_one_branch(s) do
+    with {:ok, label, rest} <- ident(skip(s)),
+         {:ok, rest} <- colon(skip(rest)),
+         {:ok, g, rest} <- parse_branch_body(skip(rest)) do
+      {:ok, label, g, rest}
+    end
+  end
+
+  # `label: end` is the empty global type. The `end` that closes a
+  # nested choice stands after a finished branch, where `parse_global`
+  # leaves it, and `parse_branch_tail` consumes it.
+  defp parse_branch_body(s) do
+    s = skip(s)
+
+    if choice_closer?(s) do
+      {:ok, :end, after_kw(s, "end")}
+    else
+      parse_global(s)
+    end
+  end
+
+  defp branch_start?(s) do
+    case ident(skip(s)) do
+      {:ok, _, rest} -> colon_tok?(skip(rest))
+      _ -> false
+    end
+  end
+
+  # A payload starts only when the next token is a payload. A declaration,
+  # a role continuation, a protocol word, a closer, or the end of the
+  # book is Unit, and the token stays for what follows.
+  defp parse_msg_pay(s) do
+    s = skip(s)
+
+    if pay_head?(s) do
+      parse_pay(s)
+    else
+      {:ok, :unit, s}
+    end
+  end
+
+  # The next token starts another interaction, a branch, or a choice
+  # closer, so it is not a payload.
+  defp role_cont?(s) do
+    case ident(skip(s)) do
+      {:ok, _, rest} ->
+        rest = skip(rest)
+        arrow_tok?(rest) or word_kw?(rest, "chooses") or colon_tok?(rest)
+
+      _ ->
+        false
+    end
+  end
+
+  # `bound` is the recursion variables in scope. A choreography message
+  # has none. The same boundary decides an argument of a payload.
+  defp pay_head?(s, bound \\ MapSet.new()) do
+    s = skip(s)
+
+    not pay_ends?(s, bound) and
+      (word_kw?(s, "Nat") or word_kw?(s, "Bit") or word_kw?(s, "Unit") or word_kw?(s, "Vec") or
+         has_prefix?(s, "(") or has_prefix?(s, "{") or ident_start?(s))
+  end
+
+  defp colon(s) do
+    s = skip(s)
+
+    if colon_tok?(s) do
+      {:ok, after_kw(s, ":")}
+    else
+      {:error, err(s, "expected :")}
+    end
+  end
+
+  defp colon_tok?(s) do
+    has_prefix?(s, ":") and not has_prefix?(s, ":=") and not has_prefix?(s, "::")
+  end
+
+  # `end` closes a choice. `end ->` is a role named end sending, and
+  # `end:` is a branch label, so neither of those closes the choice.
+  defp choice_closer?(s) do
+    s = skip(s)
+    word_kw?(s, "end") and not branch_start?(s) and not interaction_start?(s)
+  end
+
+  defp interaction_start?(s) do
+    case ident(skip(s)) do
+      {:ok, _, rest} ->
+        rest = skip(rest)
+        arrow_tok?(rest) or word_kw?(rest, "chooses")
+
+      _ ->
+        false
+    end
+  end
+
+  defp global_stop?(s) do
+    s = skip(s)
+    s == "" or choice_closer?(s) or choreo_boundary?(s) or has_prefix?(s, ")")
+  end
+
+  defp choreo_boundary?(s) do
+    s = skip(s)
+
+    Enum.any?(Words.book_words(), &word_kw?(s, &1)) or nu_start?(s) or place_entry?(s) or
+      scheme_entry?(s) or move_entry?(s) or endpoint_entry?(s) or read_entry?(s) or
+      meet_entry?(s) or temporal_entry?(s) or talk_start?(s) or choreography_start?(s) or
+      seat_start?(s) or link_start?(s) or repr_start?(s)
+  end
+
+  defp parse_talk_term(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "over") ->
+        {:ok, :over, after_kw(s, "over")}
+
+      word_kw?(s, "say") ->
+        parse_say(s)
+
+      word_kw?(s, "offer") ->
+        parse_talk2(s, "offer", :offer)
+
+      has_prefix?(s, "(") ->
+        parse_paren(s, &parse_talk_term/1)
+
+      true ->
+        with {:ok, name, rest} <- ident(s) do
+          {:ok, {:ref, name}, rest}
+        end
+    end
+  end
+
+  # say peer pong Nat (say pong peer Nat over)
+  # One payload type, then one continuation.
+  defp parse_say(s) do
+    with {:ok, rest} <- kw(s, "say"),
+         {:ok, a, rest} <- parse_party(skip(rest)),
+         {:ok, b, rest} <- parse_party(skip(rest)),
+         {:ok, ty, rest} <- parse_pay(skip(rest)),
+         {:ok, t, rest} <- parse_talk_term(skip(rest)) do
+      {:ok, {:say, a, b, ty, t}, rest}
+    end
+  end
+
+  defp parse_talk2(s, word, tag) do
+    with {:ok, rest} <- kw(s, word),
+         {:ok, a, rest} <- parse_party(skip(rest)),
+         {:ok, b, rest} <- parse_party(skip(rest)),
+         {:ok, t0, rest} <- parse_talk_term(skip(rest)),
+         {:ok, t1, rest} <- parse_talk_term(skip(rest)) do
+      {:ok, {tag, a, b, t0, t1}, rest}
+    end
+  end
+
+  # A party is a name. `over`, `say`, and `offer` stay the description words.
+  defp parse_party(s) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "over") or word_kw?(s, "say") or word_kw?(s, "offer") ->
+        {:error, err(s, "expected a party")}
+
+      true ->
+        ident(s)
+    end
+  end
+
+  # seat pong-home : pong at home in ping-exchange
+  # Where a party of a description sits. `seat`, `at`, and `in` are
+  # keywords only in this form. A constructor `seat : Box` is not one.
+  defp seat_start?(s), do: colon_entry?(s, "seat")
+
+  defp parse_seat(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "seat"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, party, rest} <- parse_party(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "at"),
+         {:ok, place, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "in"),
+         {:ok, talk, rest} <- ident(skip(rest)) do
+      {:ok,
+       %{
+         kind: :seat,
+         name: name,
+         mode: :spec,
+         party: party,
+         place: place,
+         talk: talk,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  # link go : cross pong-home with peer-away in ping-exchange
+  # The boundary between two seatings. `link` is a keyword only in
+  # this form. `stay` and `cross` name the boundary. A constructor
+  # `link : Box` is not one.
+  defp link_start?(s), do: colon_entry?(s, "link")
+
+  defp parse_link(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "link"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, mark, rest} <- parse_link_mark(skip(rest)),
+         {:ok, left, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "with"),
+         {:ok, right, rest} <- ident(skip(rest)),
+         {:ok, rest} <- kw(skip(rest), "in"),
+         {:ok, talk, rest} <- ident(skip(rest)) do
+      {:ok,
+       %{
+         kind: :link,
+         name: name,
+         mode: :evidence,
+         mark: mark,
+         left: left,
+         right: right,
+         talk: talk,
+         loc: loc
+       }, rest}
+    end
+  end
+
+  defp parse_link_mark(s) do
+    cond do
+      word_kw?(s, "stay") -> {:ok, :stay, after_kw(s, "stay")}
+      word_kw?(s, "cross") -> {:ok, :cross, after_kw(s, "cross")}
+      true -> {:error, err(s, "expected stay or cross")}
+    end
+  end
+
+  # `name :` and not `:=` or `::`. A constructor `word : Box` is not one.
+  defp colon_entry?(s, word) do
+    if word_kw?(s, word) do
+      rest = s |> after_kw(word) |> skip()
+
+      case ident(rest) do
+        {:ok, _, rest} ->
+          rest = skip(rest)
+          has_prefix?(rest, ":") and not has_prefix?(rest, ":=") and not has_prefix?(rest, "::")
+
+        _ ->
+          false
+      end
+    else
+      false
+    end
+  end
+
+  # A temporal declaration is `temporal name :`. A constructor `temporal : Box` is not one.
+  defp temporal_entry?(s), do: colon_entry?(s, "temporal")
+
+  # A meeting is `meet name :`. A constructor `meet : Box` is not one.
+  defp meet_entry?(s) do
+    if word_kw?(s, "meet") do
+      rest = s |> after_kw("meet") |> skip()
+
+      case ident(rest) do
+        {:ok, _, rest} ->
+          rest = skip(rest)
+          has_prefix?(rest, ":") and not has_prefix?(rest, ":=") and not has_prefix?(rest, "::")
+
+        _ ->
+          false
+      end
+    else
+      false
+    end
+  end
+
+  defp parse_proto(s, bound \\ MapSet.new()) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "end") -> {:ok, :end, after_kw(s, "end")}
+      word_kw?(s, "send") -> parse_comm_proto(s, "send", :send, bound)
+      word_kw?(s, "recv") -> parse_comm_proto(s, "recv", :recv, bound)
+      word_kw?(s, "choose") -> parse_proto2(s, "choose", :choose, bound)
+      word_kw?(s, "branch") -> parse_proto2(s, "branch", :branch, bound)
+      word_kw?(s, "rec") -> parse_rec(s, &parse_proto/2, bound)
+      word_kw?(s, "case") -> parse_case_proto(s, bound)
+      has_prefix?(s, "(") -> parse_paren(s, fn body -> parse_proto(body, bound) end)
+      ident_start?(s) -> parse_proto_name(s, bound)
+      true -> {:error, err(s, "expected a protocol")}
+    end
+  end
+
+  # `recv (n : Nat)` binds `n` for the continuation. `recv (Nat)` and
+  # `recv (Vec Nat n)` are payload types and do not bind.
+  # `send (d : Nat) {d ≤ w}` is an evidence payload: the sender owes
+  # `d ≤ w`. The name is in scope in its bound only.
+  defp parse_comm_proto(s, word, tag, bound) do
+    with {:ok, rest} <- kw(s, word) do
+      rest = skip(rest)
+
+      case try_binder(rest, bound) do
+        {:ok, name, ty, rest} ->
+          rest = skip(rest)
+
+          cond do
+            has_prefix?(rest, "{") ->
+              with {:ok, e, rest} <- parse_bound(rest, name, ty),
+                   {:ok, p, rest} <- parse_proto(skip(rest), bound) do
+                {:ok, {ev_tag(tag), name, e, p}, rest}
+              end
+
+            word_kw?(rest, "on") ->
+              parse_index_proto(rest, tag, name, ty, bound)
+
+            true ->
+              with {:ok, p, rest} <- parse_proto(rest, bound) do
+                {:ok, {dep_tag(tag), name, ty, p}, rest}
+              end
+          end
+
+        :not_binder ->
+          with {:ok, ty, rest} <- parse_pay(rest, bound) do
+            rest = skip(rest)
+
+            # The continuation is written. A missing `end` at the end of
+            # the book, or where the next declaration starts, is an error
+            # at that point. `send Reply` then `def kept` fails at `def`
+            # and leaves the declaration. A binder still writes its
+            # continuation, and a written `end` is still consumed.
+            if end_missing?(rest) do
+              {:error, err(rest, "expected end")}
+            else
+              with {:ok, p, rest} <- parse_proto(rest, bound) do
+                {:ok, {tag, ty, p}, rest}
+              end
+            end
+          end
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  defp dep_tag(:send), do: :dsend
+  defp dep_tag(:recv), do: :drecv
+
+  defp ev_tag(:send), do: :esend
+  defp ev_tag(:recv), do: :erecv
+
+  # The protocol did not continue. The book is over, a declaration
+  # starts, or a closer ends the surrounding form. The token stays.
+  defp end_missing?(s) do
+    s = skip(s)
+
+    s == "" or choreo_boundary?(s) or has_prefix?(s, ")") or has_prefix?(s, "}")
+  end
+
+  # `recv (b : Bit) on S T` receives a bit. `b0` continues as `S` and
+  # `b1` continues as `T`. A nat does not choose the arm.
+  defp parse_index_proto(s, tag, name, :bit, bound) do
+    with {:ok, rest} <- kw(s, "on"),
+         {:ok, a, rest} <- parse_proto(skip(rest), bound),
+         {:ok, b, rest} <- parse_proto(skip(rest), bound) do
+      {:ok, {ix_tag(tag), name, a, b}, rest}
+    end
+  end
+
+  defp parse_index_proto(s, _tag, _name, _ty, _bound) do
+    {:error, err(s, "a next action is chosen by a bit")}
+  end
+
+  defp ix_tag(:send), do: :isend
+  defp ix_tag(:recv), do: :irecv
+
+  # `case f | data => S | headers => T` is one protocol per constructor
+  # of the value just bound. `case (late f) | true => S | false => T`
+  # is one protocol per constructor of what `late` returns. The arms
+  # are written in declaration order. The case is the continuation of
+  # the `send` or `recv` that bound the name.
+  defp parse_case_proto(s, bound) do
+    with {:ok, rest} <- kw(s, "case"),
+         {:ok, scrut, rest} <- parse_case_scrut(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), "|"),
+         {:ok, arms, rest} <- parse_case_arms(skip(rest), [], bound) do
+      {:ok, {:case, scrut, arms}, rest}
+    end
+  end
+
+  defp parse_case_scrut(s) do
+    s = skip(s)
+
+    if has_prefix?(s, "(") do
+      with {:ok, rest} <- tok(s, "("),
+           {:ok, fname, rest} <- ident(skip(rest)),
+           {:ok, args, rest} <- parse_scrut_args(skip(rest), []),
+           {:ok, rest} <- tok(skip(rest), ")") do
+        cond do
+          args == [] or reserved_session?(fname) or Enum.any?(args, &reserved_session?/1) ->
+            {:error, err(s, "expected a name")}
+
+          length(args) == 1 ->
+            {:ok, {:run, fname, String.to_atom(hd(args))}, rest}
+
+          true ->
+            atoms = Enum.map(args, &String.to_atom/1)
+            {:ok, {:run, fname, List.last(atoms), Enum.drop(atoms, -1)}, rest}
+        end
+      end
+    else
+      with {:ok, name, rest} <- ident(s) do
+        if reserved_session?(name) do
+          {:error, err(s, "expected a name")}
+        else
+          {:ok, {:name, String.to_atom(name)}, rest}
+        end
+      end
+    end
+  end
+
+  defp parse_scrut_args(s, acc) do
+    s = skip(s)
+
+    cond do
+      has_prefix?(s, ")") ->
+        {:ok, Enum.reverse(acc), s}
+
+      ident_start?(s) ->
+        with {:ok, name, rest} <- ident(s) do
+          parse_scrut_args(rest, [name | acc])
+        end
+
+      true ->
+        {:error, err(s, "expected a name")}
+    end
+  end
+
+  defp parse_case_arms(s, acc, bound) do
+    with {:ok, cname, rest} <- arm_label(skip(s)),
+         {:ok, rest} <- tok(skip(rest), "=>"),
+         {:ok, proto, rest} <- parse_proto(skip(rest), bound) do
+      acc = [{cname, proto} | acc]
+      looked = skip(rest)
+
+      if has_prefix?(looked, "|") do
+        with {:ok, rest} <- tok(looked, "|") do
+          parse_case_arms(skip(rest), acc, bound)
+        end
+      else
+        {:ok, Enum.reverse(acc), rest}
+      end
+    end
+  end
+
+  # `get (b : Bit) on P Q` offers both arms. The name is bound in each.
+  defp parse_index_proc(s, name, :bit, bound) do
+    with {:ok, rest} <- kw(s, "on"),
+         {:ok, p, rest} <- parse_proc(skip(rest), bound),
+         {:ok, q, rest} <- parse_proc(skip(rest), bound) do
+      {:ok, {:iget, name, p, q}, rest}
+    end
+  end
+
+  defp parse_index_proc(s, _name, _ty, _bound) do
+    {:error, err(s, "a next action is chosen by a bit")}
+  end
+
+  # `{d ≤ w}` or `{d <= w}`. The left side is the name just bound. The
+  # bound is a numeral or a name. The payload is a nat.
+  defp parse_bound(s, name, :nat) do
+    with {:ok, rest} <- tok(s, "{"),
+         rest = skip(rest),
+         {:ok, left, rest} <- ident(rest),
+         :ok <- bound_left(left, name, s),
+         rest = skip(rest),
+         {:ok, rest} <- either_tok(rest, ["≤", "<="]),
+         {:ok, e, rest} <- parse_bound_exp(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), "}") do
+      {:ok, e, rest}
+    end
+  end
+
+  defp parse_bound(s, _name, _ty), do: {:error, err(s, "an evidence payload is a nat")}
+
+  defp bound_left(left, name, s) do
+    if String.to_atom(left) == name do
+      :ok
+    else
+      {:error, err(s, "the bound names the nat that is sent")}
+    end
+  end
+
+  defp parse_bound_exp(s) do
+    cond do
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, {:lit, String.to_integer(digits)}, rest}
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, rest} -> {:ok, {:var, String.to_atom(name)}, rest}
+          err -> err
+        end
+
+      true ->
+        {:error, err(s, "expected a bound")}
+    end
+  end
+
+  defp try_binder(s, bound) do
+    if has_prefix?(s, "(") do
+      case tok(s, "(") do
+        {:ok, rest} ->
+          rest = skip(rest)
+
+          case ident(rest) do
+            {:ok, name, rest} ->
+              rest = skip(rest)
+
+              if has_prefix?(rest, ":") and not has_prefix?(rest, ":=") and
+                   not has_prefix?(rest, "::") do
+                with {:ok, rest} <- tok(rest, ":"),
+                     {:ok, ty, rest} <- parse_pay(skip(rest), bound),
+                     {:ok, rest} <- tok(skip(rest), ")") do
+                  {:ok, String.to_atom(name), ty, rest}
+                end
+              else
+                :not_binder
+              end
+
+            _ ->
+              :not_binder
+          end
+
+        _ ->
+          :not_binder
+      end
+    else
+      :not_binder
+    end
+  end
+
+  # `rec X. S`. The variable is a continuation. `rec` is a keyword only
+  # inside a protocol or a process. The dot separates the name.
+  # `bound` is the recursion variables in scope. One of those names is
+  # the continuation, so a payload does not take it as an argument:
+  # `send Bool X` is `Bool`, then `X`, and `put n X` is `n`, then `X`.
+  defp parse_rec(s, parse_body, bound) do
+    note(skip(s))
+
+    with {:ok, rest} <- kw(s, "rec"),
+         {:ok, name, rest} <- rec_name(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), "."),
+         {:ok, body, rest} <- parse_body.(skip(rest), MapSet.put(bound, Atom.to_string(name))) do
+      {:ok, {:rec, name, body}, rest}
+    end
+  end
+
+  defp rec_name(s) do
+    with {:ok, name, rest} <- ident(s) do
+      if reserved_session?(name) do
+        {:error, err(s, "expected a session variable")}
+      else
+        {:ok, String.to_atom(name), rest}
+      end
+    end
+  end
+
+  # A name in the `rec` bound is that variable. Any other name is a
+  # session declared earlier, applied to the arguments that follow.
+  # A parenthesis whose body is a protocol is the next protocol, not
+  # an argument: `choose ack (send Nat end)`.
+  defp parse_proto_name(s, bound) do
+    s0 = skip(s)
+
+    with {:ok, name, rest} <- ident(s0) do
+      cond do
+        reserved_session?(name) ->
+          {:error, err(s0, "expected a protocol")}
+
+        MapSet.member?(bound, name) ->
+          {:ok, {:svar, String.to_atom(name)}, rest}
+
+        true ->
+          with {:ok, args, rest} <- parse_sargs(skip(rest)) do
+            {:ok, {:sess, name, args}, rest}
+          end
+      end
+    end
+  end
+
+  # `dual ping` keeps the bare name. `dual (stream 0)` carries the arguments.
+  defp parse_dual_ref(s) do
+    s = skip(s)
+
+    if has_prefix?(s, "(") do
+      with {:ok, rest} <- tok(s, "("),
+           {:ok, ref, rest} <- parse_session_use(skip(rest)),
+           {:ok, rest} <- tok(skip(rest), ")") do
+        {:ok, ref, rest}
+      end
+    else
+      parse_session_use(s)
+    end
+  end
+
+  # No arguments stays a string, so a use that names a session is the
+  # name it always was. Arguments are the application.
+  defp parse_session_use(s) do
+    with {:ok, name, rest} <- ident(skip(s)) do
+      if reserved_session?(name) do
+        {:error, err(s, "expected a session")}
+      else
+        # A declaration word is a legal session name (`relay`). It is not
+        # an argument: `parse_sarg` stops before the next entry.
+        with {:ok, args, rest} <- parse_sargs(skip(rest)) do
+          if args == [] do
+            {:ok, name, rest}
+          else
+            {:ok, {:sess, name, args}, rest}
+          end
+        end
+      end
+    end
+  end
+
+  defp parse_sargs(s) do
+    case parse_sarg(skip(s)) do
+      {:ok, arg, rest} ->
+        with {:ok, more, rest} <- parse_sargs(rest) do
+          {:ok, [arg | more], rest}
+        end
+
+      :no ->
+        {:ok, [], s}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp parse_sarg(s) do
+    s = skip(s)
+
+    cond do
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, {:lit, String.to_integer(digits)}, rest}
+
+      word_kw?(s, "suc") ->
+        case parse_sarg(skip(after_kw(s, "suc"))) do
+          {:ok, arg, rest} -> {:ok, {:suc, arg}, rest}
+          :no -> {:error, err(s, "expected a session argument")}
+          {:error, _} = err -> err
+        end
+
+      has_prefix?(s, "(") ->
+        parse_sarg_paren(s)
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, rest} ->
+            if reserved_session?(name) or decl_word?(name) do
+              :no
+            else
+              {:ok, {:var, String.to_atom(name)}, rest}
+            end
+
+          _ ->
+            :no
+        end
+
+      true ->
+        :no
+    end
+  end
+
+  # `(send …)` is a protocol. `(suc n)` and `(bump 0)` are arguments.
+  defp parse_sarg_paren(s) do
+    with {:ok, rest} <- tok(s, "(") do
+      inner = skip(rest)
+
+      if proto_head?(inner) do
+        :no
+      else
+        with {:ok, arg, rest} <- parse_sexpr(inner),
+             {:ok, rest} <- tok(skip(rest), ")") do
+          {:ok, arg, rest}
+        end
+      end
+    end
+  end
+
+  defp proto_head?(s) do
+    Enum.any?(Words.proto_head_words(), &word_kw?(s, &1))
+  end
+
+  defp parse_sexpr(s) do
+    s = skip(s)
+
+    cond do
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, {:lit, String.to_integer(digits)}, rest}
+
+      word_kw?(s, "suc") ->
+        case parse_sarg(skip(after_kw(s, "suc"))) do
+          {:ok, arg, rest} -> {:ok, {:suc, arg}, rest}
+          :no -> {:error, err(s, "expected a session argument")}
+          {:error, _} = err -> err
+        end
+
+      has_prefix?(s, "(") ->
+        parse_sarg_paren(s)
+
+      ident_start?(s) ->
+        with {:ok, name, rest} <- ident(s) do
+          if reserved_session?(name) or decl_word?(name) do
+            {:error, err(s, "expected a session argument")}
+          else
+            parse_sexpr_args(skip(rest), name, [])
+          end
+        end
+
+      true ->
+        {:error, err(s, "expected a session argument")}
+    end
+  end
+
+  defp parse_sexpr_args(s, name, acc) do
+    case parse_sexpr_atom(skip(s)) do
+      {:ok, arg, rest} ->
+        parse_sexpr_args(rest, name, [arg | acc])
+
+      :no ->
+        args = Enum.reverse(acc)
+
+        if args == [] do
+          {:ok, {:var, String.to_atom(name)}, s}
+        else
+          {:ok, {:con, name, args}, s}
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # One atom of an application. An identifier is not itself an application:
+  # `bump 0` is `bump` applied to `0`.
+  defp parse_sexpr_atom(s) do
+    s = skip(s)
+
+    cond do
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, {:lit, String.to_integer(digits)}, rest}
+
+      word_kw?(s, "suc") ->
+        case parse_sarg(skip(after_kw(s, "suc"))) do
+          {:ok, arg, rest} -> {:ok, {:suc, arg}, rest}
+          :no -> {:error, err(s, "expected a session argument")}
+          {:error, _} = err -> err
+        end
+
+      has_prefix?(s, "(") ->
+        parse_sarg_paren(s)
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, rest} ->
+            if reserved_session?(name) or decl_word?(name) do
+              :no
+            else
+              {:ok, {:var, String.to_atom(name)}, rest}
+            end
+
+          _ ->
+            :no
+        end
+
+      true ->
+        :no
+    end
+  end
+
+  defp parse_name_cont(s, tag, what) do
+    s0 = skip(s)
+    note(s0)
+
+    with {:ok, name, rest} <- ident(s0) do
+      if reserved_session?(name) do
+        {:error, err(s0, "expected a #{what}")}
+      else
+        {:ok, {tag, String.to_atom(name)}, rest}
+      end
+    end
+  end
+
+  defp reserved_session?(name), do: Words.reserved_session?(name)
+
+  defp parse_proto2(s, word, tag, bound) do
+    with {:ok, rest} <- kw(s, word),
+         {:ok, a, rest} <- parse_proto(skip(rest), bound),
+         {:ok, b, rest} <- parse_proto(skip(rest), bound) do
+      {:ok, {tag, a, b}, rest}
+    end
+  end
+
+  defp parse_proc(s, bound) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "done") ->
+        note(s)
+        {:ok, :done, after_kw(s, "done")}
+
+      word_kw?(s, "stop") ->
+        note(s)
+        {:ok, :stop, after_kw(s, "stop")}
+
+      word_kw?(s, "put") ->
+        parse_comm(s, "put", :put, bound)
+
+      word_kw?(s, "get") ->
+        parse_comm(s, "get", :get, bound)
+
+      word_kw?(s, "pick0") ->
+        parse_proc1(s, "pick0", :pick0, bound)
+
+      word_kw?(s, "pick1") ->
+        parse_proc1(s, "pick1", :pick1, bound)
+
+      word_kw?(s, "cover") ->
+        parse_proc2(s, "cover", :cover, bound)
+
+      word_kw?(s, "match") ->
+        parse_match(s, bound)
+
+      word_kw?(s, "rec") ->
+        parse_rec(s, &parse_proc/2, bound)
+
+      has_prefix?(s, "(") ->
+        parse_paren(s, fn body -> parse_proc(body, bound) end)
+
+      ident_start?(s) ->
+        parse_name_cont(s, :call, "process")
+
+      true ->
+        {:error, err(s, "expected a process")}
+    end
+  end
+
+  defp parse_comm(s, "put", :put, bound) do
+    note(skip(s))
+
+    with {:ok, rest} <- kw(s, "put"),
+         {:ok, {ty, val}, rest} <- parse_pval(skip(rest), bound),
+         {:ok, p, rest} <- parse_proc(skip(rest), bound) do
+      {:ok, {:put, ty, val, p}, rest}
+    end
+  end
+
+  defp parse_comm(s, "get", :get, bound) do
+    note(skip(s))
+
+    with {:ok, rest} <- kw(s, "get") do
+      rest = skip(rest)
+
+      # Try parsing with binding: get (name : Type) proc
+      if has_prefix?(rest, "(") do
+        case tok(rest, "(") do
+          {:ok, after_paren} ->
+            after_paren = skip(after_paren)
+
+            # Check if this is a binder (identifier followed by :)
+            case ident(after_paren) do
+              {:ok, name, after_name} ->
+                after_name = skip(after_name)
+
+                if has_prefix?(after_name, ":") do
+                  # This is get (name : Type) proc, or get (b : Bit) on P Q.
+                  with {:ok, rest} <- tok(after_name, ":"),
+                       {:ok, ty, rest} <- parse_pay(skip(rest), bound),
+                       {:ok, rest} <- tok(skip(rest), ")") do
+                    rest = skip(rest)
+
+                    if word_kw?(rest, "on") do
+                      parse_index_proc(rest, String.to_atom(name), ty, bound)
+                    else
+                      with {:ok, p, rest} <- parse_proc(rest, bound) do
+                        {:ok, {:get, ty, String.to_atom(name), p}, rest}
+                      end
+                    end
+                  end
+                else
+                  # Not a binder, fall back to old syntax: get Type proc
+                  parse_get_no_binding(s, bound)
+                end
+
+              _ ->
+                # Couldn't parse identifier, fall back
+                parse_get_no_binding(s, bound)
+            end
+
+          _ ->
+            parse_get_no_binding(s, bound)
+        end
+      else
+        # No opening paren, must be old syntax: get Type proc
+        parse_get_no_binding(s, bound)
+      end
+    end
+  end
+
+  defp parse_get_no_binding(s, bound) do
+    with {:ok, rest} <- kw(s, "get"),
+         {:ok, ty, rest} <- parse_pay(skip(rest), bound) do
+      rest = skip(rest)
+
+      if word_kw?(rest, "on") do
+        {:error, err(rest, "a bit index is bound")}
+      else
+        with {:ok, p, rest} <- parse_proc(rest, bound) do
+          # Use a generated anonymous variable name
+          {:ok, {:get, ty, :_, p}, rest}
+        end
+      end
+    end
+  end
+
+  defp parse_proc1(s, word, tag, bound) do
+    note(skip(s))
+
+    with {:ok, rest} <- kw(s, word),
+         {:ok, p, rest} <- parse_proc(skip(rest), bound) do
+      {:ok, {tag, p}, rest}
+    end
+  end
+
+  defp parse_proc2(s, word, tag, bound) do
+    note(skip(s))
+
+    with {:ok, rest} <- kw(s, word),
+         {:ok, p, rest} <- parse_proc(skip(rest), bound),
+         {:ok, q, rest} <- parse_proc(skip(rest), bound) do
+      {:ok, {tag, p, q}, rest}
+    end
+  end
+
+  # `match b P Q` is one process per constructor of the value `get` just
+  # bound, in declaration order. A bit is `b0` then `b1`. The arms stop
+  # before the next declaration.
+  # `| just b => P` names that constructor and binds its fields.
+  # `| (a, b) => P` binds the two components of a received pair.
+  # `| { f = a, ... } => P` binds the fields of a received record, in
+  # the order written. A pattern is one level. The old positional form
+  # stays a list of processes.
+  defp parse_match(s, bound) do
+    note(skip(s))
+
+    with {:ok, rest} <- kw(s, "match"),
+         {:ok, name, rest} <- match_name(skip(rest)) do
+      rest = skip(rest)
+
+      if has_prefix?(rest, "|") do
+        with {:ok, rest} <- tok(rest, "|"),
+             {:ok, arms, rest} <- parse_named_arms(skip(rest), [], bound) do
+          {:ok, {:match, name, arms}, rest}
+        end
+      else
+        with {:ok, arms, rest} <- parse_match_arms(rest, [], bound) do
+          {:ok, {:match, name, arms}, rest}
+        end
+      end
+    end
+  end
+
+  defp match_name(s) do
+    with {:ok, name, rest} <- ident(s) do
+      if reserved_session?(name) or decl_word?(name) do
+        {:error, err(s, "expected a name")}
+      else
+        {:ok, String.to_atom(name), rest}
+      end
+    end
+  end
+
+  defp parse_match_arms(s, acc, bound) do
+    s = skip(s)
+
+    cond do
+      proc_start?(s) ->
+        case parse_proc(s, bound) do
+          {:ok, p, rest} -> parse_match_arms(rest, [p | acc], bound)
+          err -> err
+        end
+
+      acc == [] ->
+        {:error, err(s, "expected a process")}
+
+      true ->
+        {:ok, Enum.reverse(acc), s}
+    end
+  end
+
+  # `| (a, b) =>` is a pair. `| { f = a } =>` is a record. Anything else
+  # is a constructor arm. A component that is itself a pattern is refused:
+  # the component is bound whole.
+  defp parse_named_arms(s, acc, bound) do
+    s = skip(s)
+
+    cond do
+      has_prefix?(s, "(") ->
+        with {:ok, pat, rest} <- parse_pair_pat(s),
+             {:ok, body, rest} <- parse_arm_body(rest, bound) do
+          finish_named({:prod, pat, body}, rest, acc, bound)
+        end
+
+      has_prefix?(s, "{") ->
+        with {:ok, pat, rest} <- parse_rec_pat(s),
+             {:ok, body, rest} <- parse_arm_body(rest, bound) do
+          finish_named({:prod, pat, body}, rest, acc, bound)
+        end
+
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+
+        with {:ok, body, rest} <- parse_arm_body(rest, bound) do
+          finish_named({:arm, digits, [], body}, rest, acc, bound)
+        end
+
+      true ->
+        with {:ok, cname, rest} <- ident(s),
+             {:ok, binders, rest} <- parse_proc_binders(skip(rest)),
+             {:ok, body, rest} <- parse_arm_body(rest, bound) do
+          binders = Enum.map(binders, &String.to_atom/1)
+          finish_named({:arm, cname, binders, body}, rest, acc, bound)
+        end
+    end
+  end
+
+  # A session arm label is a constructor or the decimal spelling of a
+  # numeral. `| 0 =>` keeps the digits that were written, so `| 00 =>`
+  # is the label `"00"`.
+  defp arm_label(s) do
+    cond do
+      number?(s) ->
+        {digits, rest} = take_digits(s, "")
+        {:ok, digits, rest}
+
+      true ->
+        ident(s)
+    end
+  end
+
+  defp parse_arm_body(s, bound) do
+    with {:ok, rest} <- tok(skip(s), "=>"),
+         {:ok, body, rest} <- parse_proc(skip(rest), bound) do
+      {:ok, body, rest}
+    end
+  end
+
+  defp finish_named(arm, rest, acc, bound) do
+    acc = [arm | acc]
+    looked = skip(rest)
+
+    if has_prefix?(looked, "|") do
+      with {:ok, rest} <- tok(looked, "|") do
+        parse_named_arms(skip(rest), acc, bound)
+      end
+    else
+      {:ok, Enum.reverse(acc), rest}
+    end
+  end
+
+  # Exactly the names written. The checker refuses a count other than two.
+  defp parse_pair_pat(s) do
+    with {:ok, rest} <- tok(s, "(") do
+      parse_pair_names(skip(rest), [])
+    end
+  end
+
+  defp parse_pair_names(s, acc) do
+    s = skip(s)
+
+    cond do
+      has_prefix?(s, ")") ->
+        {:ok, {:pair, Enum.reverse(acc)}, after_kw(s, ")")}
+
+      has_prefix?(s, "(") or has_prefix?(s, "{") ->
+        {:error, err(s, "a pattern is one level")}
+
+      true ->
+        with {:ok, name, rest} <- pat_name(s) do
+          rest = skip(rest)
+
+          cond do
+            has_prefix?(rest, ",") ->
+              parse_pair_names(after_kw(rest, ","), [name | acc])
+
+            has_prefix?(rest, ")") ->
+              {:ok, {:pair, Enum.reverse([name | acc])}, after_kw(rest, ")")}
+
+            has_prefix?(rest, "(") or has_prefix?(rest, "{") ->
+              {:error, err(rest, "a pattern is one level")}
+
+            true ->
+              {:error, err(rest, "expected , or )")}
+          end
+        end
+    end
+  end
+
+  # Field name, then the binder. Duplicate fields are the checker's refusal.
+  defp parse_rec_pat(s) do
+    with {:ok, rest} <- tok(s, "{"),
+         {:ok, bs, rest} <- parse_rec_binds(skip(rest), []) do
+      {:ok, {:rec, bs}, rest}
+    end
+  end
+
+  defp parse_rec_binds(s, acc) do
+    s = skip(s)
+
+    if has_prefix?(s, "}") do
+      {:ok, Enum.reverse(acc), after_kw(s, "}")}
+    else
+      with {:ok, field, rest} <- ident(s),
+           {:ok, rest} <- field_eq(skip(rest)) do
+        rest = skip(rest)
+
+        cond do
+          has_prefix?(rest, "(") or has_prefix?(rest, "{") ->
+            {:error, err(rest, "a pattern is one level")}
+
+          true ->
+            with {:ok, binder, rest} <- pat_name(rest),
+                 {:ok, more, rest} <- field_sep(skip(rest)) do
+              pair = {field, binder}
+
+              case more do
+                :end -> {:ok, Enum.reverse([pair | acc]), rest}
+                :next -> parse_rec_binds(rest, [pair | acc])
+              end
+            end
+        end
+      end
+    end
+  end
+
+  defp pat_name(s) do
+    case ident(s) do
+      {:ok, name, rest} ->
+        if proc_word?(name) or reserved_session?(name) or decl_word?(name) do
+          {:error, err(s, "expected a name")}
+        else
+          {:ok, String.to_atom(name), rest}
+        end
+
+      _ ->
+        {:error, err(s, "expected a name")}
+    end
+  end
+
+  # Binders are names, innermost last. A process keyword is not a field.
+  defp parse_proc_binders(s) do
+    s = skip(s)
+
+    if has_prefix?(s, "=>") do
+      {:ok, [], s}
+    else
+      case ident(s) do
+        {:ok, x, rest} ->
+          if proc_word?(x) or reserved_session?(x) or decl_word?(x) do
+            {:error, err(s, "expected =>")}
+          else
+            with {:ok, xs, rest} <- parse_proc_binders(rest) do
+              {:ok, [x | xs], rest}
+            end
+          end
+
+        _ ->
+          {:error, err(s, "expected =>")}
+      end
+    end
+  end
+
+  defp proc_start?(s) do
+    s = skip(s)
+
+    cond do
+      Enum.any?(Words.proc_start_words(), &word_kw?(s, &1)) ->
+        true
+
+      has_prefix?(s, "(") ->
+        true
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, _} -> not reserved_session?(name) and not decl_word?(name)
+          _ -> false
+        end
+
+      true ->
+        false
+    end
+  end
+
+  defp decl_word?(name), do: Words.decl_word?(name)
+
+  # A payload type. `Nat`, `Bit`, and `Unit` are those types. A name is
+  # a declared data type, applied to the payload types written after it.
+  # `*` is a pair, and a pair is a tuple. `{ name : type }` is a record,
+  # and a record is a map whose keys are fixed in that order. A key
+  # chosen at run time is not a type.
+  defp parse_pay(s, bound \\ MapSet.new()) do
+    with {:ok, ty, rest} <- parse_pay_atom(skip(s), bound) do
+      parse_pay_rest(ty, rest, bound)
+    end
+  end
+
+  # A component whose type is not known here (a constructor, a bound
+  # name) makes the whole pair or record unknown. The checker reads the
+  # value against the protocol type.
+  defp ann_pay(ty) do
+    if known_pay?(ty), do: ty, else: :unknown
+  end
+
+  defp known_pay?(:nat), do: true
+  defp known_pay?(:bit), do: true
+  defp known_pay?(:unit), do: true
+  defp known_pay?({:pair, a, b}), do: known_pay?(a) and known_pay?(b)
+
+  defp known_pay?({:rec, fields}) when is_list(fields),
+    do: Enum.all?(fields, fn {_, t} -> known_pay?(t) end)
+
+  defp known_pay?({:vec, elem, _}), do: known_pay?(elem)
+  defp known_pay?({:dat, _, _}), do: true
+  defp known_pay?(_), do: false
+
+  # `*` is the payload pair. `×` is the same operator.
+  defp pair_tok?(s) do
+    Enum.any?(Words.times_words(), fn
+      "*" -> has_prefix?(s, "*") and not has_prefix?(s, "**")
+      word -> has_prefix?(s, word)
+    end)
+  end
+
+  defp drop_pair(s) do
+    if has_prefix?(s, "×"), do: after_kw(s, "×"), else: after_kw(s, "*")
+  end
+
+  defp parse_pay_rest(ty, s, bound) do
+    s = skip(s)
+
+    if pair_tok?(s) do
+      with {:ok, right, rest} <- parse_pay(drop_pair(s), bound) do
+        {:ok, {:pair, ty, right}, rest}
+      end
+    else
+      {:ok, ty, s}
+    end
+  end
+
+  defp parse_pay_atom(s, bound) do
+    s = skip(s)
+
+    cond do
+      word_kw?(s, "Nat") -> {:ok, :nat, after_kw(s, "Nat")}
+      word_kw?(s, "Bit") -> {:ok, :bit, after_kw(s, "Bit")}
+      word_kw?(s, "Unit") -> {:ok, :unit, after_kw(s, "Unit")}
+      word_kw?(s, "Vec") -> parse_vec(s, bound)
+      has_prefix?(s, "(") -> parse_paren(s, fn body -> parse_pay(body, bound) end)
+      has_prefix?(s, "{") -> parse_pay_rec(s, bound)
+      ident_start?(s) and not pay_ends?(s, bound) -> parse_dat(s, bound)
+      true -> {:error, err(s, "expected a payload")}
+    end
+  end
+
+  # `Maybe Nat` is that data type applied to `Nat`. An argument stops
+  # where `pay_ends?/2` says the next token begins something else:
+  # `send Bool end` stops before `end`, and `send Bool X` leaves the
+  # recursion variable as the continuation.
+  defp parse_dat(s, bound) do
+    with {:ok, name, rest} <- ident(s),
+         {:ok, args, rest} <- take_pay_args(rest, [], bound) do
+      {:ok, {:dat, name, args}, rest}
+    end
+  end
+
+  defp take_pay_args(s, acc, bound) do
+    s = skip(s)
+
+    if pay_arg?(s, bound) do
+      case parse_pay_atom(s, bound) do
+        {:ok, ty, rest} -> take_pay_args(rest, [ty | acc], bound)
+        _ -> {:ok, Enum.reverse(acc), s}
+      end
+    else
+      {:ok, Enum.reverse(acc), s}
+    end
+  end
+
+  defp pay_arg?(s, bound) do
+    s = skip(s)
+
+    cond do
+      pay_ends?(s, bound) ->
+        false
+
+      word_kw?(s, "Nat") or word_kw?(s, "Bit") or word_kw?(s, "Unit") or word_kw?(s, "Vec") ->
+        true
+
+      has_prefix?(s, "(") or has_prefix?(s, "{") ->
+        true
+
+      ident_start?(s) ->
+        true
+
+      true ->
+        false
+    end
+  end
+
+  # The next token begins something other than a payload argument.
+  # Declaration words and entry forms, a role continuation (`name ->`,
+  # `name chooses`, `name:`), a protocol word, a talk word (`over`,
+  # `say`, `offer`), a choice closer, a closer (`)` or `}`), or a
+  # recursion variable in scope. `(` and `{` still open a payload.
+  defp pay_ends?(s, bound) do
+    s = skip(s)
+
+    cond do
+      s == "" ->
+        true
+
+      has_prefix?(s, ")") or has_prefix?(s, "}") ->
+        true
+
+      choice_closer?(s) ->
+        true
+
+      decl_boundary?(s) ->
+        true
+
+      pay_stop?(s) ->
+        true
+
+      talk_word?(s) ->
+        true
+
+      role_cont?(s) ->
+        true
+
+      true ->
+        bound_var?(s, bound)
+    end
+  end
+
+  # A declaration word, or the form that starts a book entry. A bare
+  # `place` or `relay` is included, so a payload does not take it.
+  defp decl_boundary?(s) do
+    s = skip(s)
+    choreo_boundary?(s) or decl_word_at?(s)
+  end
+
+  defp decl_word_at?(s) do
+    case ident(skip(s)) do
+      {:ok, name, _} -> decl_word?(name)
+      _ -> false
+    end
+  end
+
+  defp talk_word?(s) do
+    Enum.any?(Words.talk_stop_words(), &word_kw?(s, &1))
+  end
+
+  defp bound_var?(s, bound) do
+    case ident(skip(s)) do
+      {:ok, name, _} -> MapSet.member?(bound, name)
+      _ -> false
+    end
+  end
+
+  defp pay_stop?(s) do
+    Enum.any?(Words.pay_stop_words(), &word_kw?(s, &1))
+  end
+
+  # `Vec Nat n` and `Vec Nat 2`. The length is a numeral or a name.
+  # A successor, a missing length, or a token that ends a payload is
+  # not a length. A recursion variable is the continuation.
+  defp parse_vec(s, bound) do
+    with {:ok, rest} <- kw(s, "Vec"),
+         {:ok, elem, rest} <- parse_pay_atom(skip(rest), bound) do
+      rest = skip(rest)
+
+      cond do
+        number?(rest) ->
+          {digits, rest} = take_digits(rest, "")
+          {:ok, {:vec, elem, {:lit, String.to_integer(digits)}}, rest}
+
+        ident_start?(rest) and not pay_ends?(rest, bound) ->
+          case ident(rest) do
+            {:ok, name, rest} -> {:ok, {:vec, elem, {:var, String.to_atom(name)}}, rest}
+            err -> err
+          end
+
+        true ->
+          {:error, err(rest, "expected a vector length")}
+      end
+    end
+  end
+
+  defp parse_pay_rec(s, bound) do
+    with {:ok, rest} <- tok(s, "{"),
+         {:ok, fields, rest} <- parse_pay_fields(skip(rest), [], bound) do
+      {:ok, {:rec, fields}, rest}
+    end
+  end
+
+  defp parse_pay_fields(s, acc, bound) do
+    s = skip(s)
+
+    if has_prefix?(s, "}") do
+      {:ok, Enum.reverse(acc), after_kw(s, "}")}
+    else
+      with {:ok, name, rest} <- ident(s),
+           {:ok, rest} <- tok(skip(rest), ":"),
+           {:ok, ty, rest} <- parse_pay(skip(rest), bound),
+           :ok <- fresh_field(name, acc, s),
+           {:ok, more, rest} <- field_sep(skip(rest)) do
+        case more do
+          :end -> {:ok, Enum.reverse([{name, ty} | acc]), rest}
+          :next -> parse_pay_fields(rest, [{name, ty} | acc], bound)
+        end
+      end
+    end
+  end
+
+  # A payload value. A numeral is a nat. `tt` is unit. `b0` and `b1`
+  # are bits. `(v, w)` is a pair. `{ name = v }` is a record. A name
+  # with arguments is a constructor (`just 0`, `node leaf leaf`). A
+  # name alone is a variable or a nullary constructor. The type is the
+  # type of that value. `get` names a type and does not bind.
+  defp parse_pval(s, bound) do
+    parse_pval_atom(skip(s), bound)
+  end
+
+  defp parse_pval_atom(s, bound) do
+    s = skip(s)
+
+    cond do
+      number?(s) ->
+        parse_nat_val(s)
+
+      word_kw?(s, "tt") ->
+        {:ok, {:unit, :tt}, after_kw(s, "tt")}
+
+      word_kw?(s, "b0") ->
+        {:ok, {:bit, :b0}, after_kw(s, "b0")}
+
+      word_kw?(s, "b1") ->
+        {:ok, {:bit, :b1}, after_kw(s, "b1")}
+
+      word_kw?(s, "rep") ->
+        parse_rep(s, bound)
+
+      has_prefix?(s, "(") ->
+        parse_pval_paren(s, bound)
+
+      has_prefix?(s, "{") ->
+        parse_val_rec(s, bound)
+
+      ident_start?(s) ->
+        # A name with no arguments is a variable or a nullary constructor.
+        # The binding wins; the checker decides which. Arguments make it
+        # a constructor. A process keyword is not a value. A recursion
+        # variable is the continuation, so it is not an argument.
+        case ident(s) do
+          {:ok, name, rest} ->
+            if proc_word?(name) do
+              {:error, err(s, "expected a value")}
+            else
+              case take_val_args(rest, [], bound) do
+                {:ok, [], rest} -> {:ok, {:unknown, {:var, String.to_atom(name)}}, rest}
+                {:ok, args, rest} -> {:ok, {:unknown, {:con, name, args}}, rest}
+              end
+            end
+
+          err ->
+            err
+        end
+
+      true ->
+        {:error, err(s, "expected a value")}
+    end
+  end
+
+  defp ident_start?(<<c, _::binary>>) when c in ?a..?z or c in ?A..?Z or c == ?_, do: true
+  defp ident_start?(_), do: false
+
+  # An argument is one value: a name does not take arguments of its own.
+  # `node leaf leaf` is `node` applied to `leaf` and `leaf`.
+  # `rep n 0` keeps `n` and `0` as two operands. A nested application
+  # is parenthesized: `cons 0 (cons 0 nil)`.
+  defp take_val_args(s, acc, bound) do
+    s = skip(s)
+
+    if val_arg?(s, bound) do
+      case parse_pval_atomic(s, bound) do
+        {:ok, {_ty, val}, rest} -> take_val_args(rest, [val | acc], bound)
+        _ -> {:ok, Enum.reverse(acc), s}
+      end
+    else
+      {:ok, Enum.reverse(acc), s}
+    end
+  end
+
+  defp parse_pval_atomic(s, bound) do
+    s = skip(s)
+
+    cond do
+      number?(s) ->
+        parse_nat_val(s)
+
+      word_kw?(s, "tt") ->
+        {:ok, {:unit, :tt}, after_kw(s, "tt")}
+
+      word_kw?(s, "b0") ->
+        {:ok, {:bit, :b0}, after_kw(s, "b0")}
+
+      word_kw?(s, "b1") ->
+        {:ok, {:bit, :b1}, after_kw(s, "b1")}
+
+      word_kw?(s, "rep") ->
+        parse_rep(s, bound)
+
+      has_prefix?(s, "(") ->
+        parse_pval_paren(s, bound)
+
+      has_prefix?(s, "{") ->
+        parse_val_rec(s, bound)
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, rest} ->
+            if proc_word?(name) do
+              {:error, err(s, "expected a value")}
+            else
+              {:ok, {:unknown, {:var, String.to_atom(name)}}, rest}
+            end
+
+          err ->
+            err
+        end
+
+      true ->
+        {:error, err(s, "expected a value")}
+    end
+  end
+
+  defp val_arg?(s, bound) do
+    s = skip(s)
+
+    cond do
+      number?(s) or word_kw?(s, "tt") or word_kw?(s, "b0") or word_kw?(s, "b1") or
+          word_kw?(s, "rep") ->
+        true
+
+      has_prefix?(s, "(") or has_prefix?(s, "{") ->
+        true
+
+      ident_start?(s) ->
+        case ident(s) do
+          {:ok, name, _} -> not proc_word?(name) and not MapSet.member?(bound, name)
+          _ -> false
+        end
+
+      true ->
+        false
+    end
+  end
+
+  defp proc_word?(name), do: Words.proc_word?(name)
+
+  defp number?(<<c, _::binary>>) when c in ?0..?9, do: true
+  defp number?(_), do: false
+
+  # The token `0` stays the constructor. Any longer digit run is a closed
+  # numeral, so a word equation can name a residue without a successor chain.
+  defp parse_nat_literal(s) do
+    {digits, rest} = take_digits(s, "")
+
+    if digits == "0" do
+      leaf(s, :ze, rest)
+    else
+      leaf(s, {:nat, String.to_integer(digits)}, rest)
+    end
+  end
+
+  defp parse_nat_val(s) do
+    {digits, rest} = take_digits(s, "")
+    {:ok, {:nat, {:nat, String.to_integer(digits)}}, rest}
+  end
+
+  # `rep n 0` is a vector of that length. The length is a numeral or a name.
+  defp parse_rep(s, bound) do
+    with {:ok, rest} <- kw(s, "rep"),
+         {:ok, {_ity, ix}, rest} <- parse_pval_atomic(skip(rest), bound),
+         {:ok, {ety, elem}, rest} <- parse_pval_atomic(skip(rest), bound),
+         {:ok, ixexp} <- length_exp(ix, s) do
+      {:ok, {{:vec, ety, ixexp}, {:rep, ix, elem}}, rest}
+    end
+  end
+
+  defp length_exp({:nat, n}, _s) when is_integer(n) and n >= 0, do: {:ok, {:lit, n}}
+  defp length_exp({:var, name}, _s), do: {:ok, {:var, name}}
+  defp length_exp(_ix, s), do: {:error, err(s, "vector length is not a nat")}
+
+  defp take_digits(<<c, r::binary>>, acc) when c in ?0..?9, do: take_digits(r, acc <> <<c>>)
+  defp take_digits(s, acc), do: {acc, s}
+
+  defp parse_pval_paren(s, bound) do
+    with {:ok, rest} <- tok(s, "("),
+         {:ok, {ty, val}, rest} <- parse_pval(skip(rest), bound) do
+      rest = skip(rest)
+
+      cond do
+        has_prefix?(rest, ",") ->
+          with {:ok, {ty2, val2}, rest} <- parse_pval(after_kw(rest, ","), bound),
+               {:ok, rest} <- tok(skip(rest), ")") do
+            {:ok, {ann_pay({:pair, ty, ty2}), {:tup, val, val2}}, rest}
+          end
+
+        has_prefix?(rest, ")") ->
+          {:ok, {ty, val}, after_kw(rest, ")")}
+
+        true ->
+          {:error, err(rest, "expected , or )")}
+      end
+    end
+  end
+
+  defp parse_val_rec(s, bound) do
+    with {:ok, rest} <- tok(s, "{"),
+         {:ok, fields, rest} <- parse_val_fields(skip(rest), [], bound) do
+      tys = Enum.map(fields, fn {name, ty, _} -> {name, ty} end)
+      vals = Enum.map(fields, fn {name, _, val} -> {name, val} end)
+      {:ok, {ann_pay({:rec, tys}), {:rec, vals}}, rest}
+    end
+  end
+
+  defp parse_val_fields(s, acc, bound) do
+    s = skip(s)
+
+    if has_prefix?(s, "}") do
+      {:ok, Enum.reverse(acc), after_kw(s, "}")}
+    else
+      with {:ok, name, rest} <- ident(s),
+           {:ok, rest} <- field_eq(skip(rest)),
+           {:ok, {ty, val}, rest} <- parse_pval(skip(rest), bound),
+           :ok <- fresh_field(name, acc, s),
+           {:ok, more, rest} <- field_sep(skip(rest)) do
+        case more do
+          :end -> {:ok, Enum.reverse([{name, ty, val} | acc]), rest}
+          :next -> parse_val_fields(rest, [{name, ty, val} | acc], bound)
+        end
+      end
+    end
+  end
+
+  defp field_sep(s) do
+    cond do
+      has_prefix?(s, ",") -> {:ok, :next, after_kw(s, ",")}
+      has_prefix?(s, "}") -> {:ok, :end, after_kw(s, "}")}
+      true -> {:error, err(s, "expected , or }")}
+    end
+  end
+
+  defp field_eq(s) do
+    if has_prefix?(s, "=") and not has_prefix?(s, "==") and not has_prefix?(s, "=>") do
+      {:ok, after_kw(s, "=")}
+    else
+      {:error, err(s, "expected =")}
+    end
+  end
+
+  defp fresh_field(name, acc, s) do
+    if Enum.any?(acc, fn
+         {n, _, _} -> n == name
+         {n, _} -> n == name
+       end) do
+      {:error, err(s, "duplicate field #{name}")}
+    else
+      :ok
+    end
+  end
+
+  defp parse_paren(s, parse) do
+    with {:ok, rest} <- tok(s, "("),
+         {:ok, x, rest} <- parse.(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ")") do
+      {:ok, x, rest}
+    end
+  end
+
   defp data_start?(s), do: word_kw?(s, "data")
 
   # Parameters before `:`. Index telescope after `:` before Type.
@@ -229,32 +3510,327 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
-      s == "" ->
-        {:ok, Enum.reverse(acc), s}
-
-      word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or nu_start?(s) ->
+      s == "" or choreo_boundary?(s) ->
         {:ok, Enum.reverse(acc), s}
 
       true ->
         with {:ok, cname, rest} <- ident(s),
              {:ok, rest} <- tok(skip(rest), ":"),
-             {:ok, ty, rest} <- parse_term(skip(rest), 0) do
-          parse_ctors(rest, [%{name: cname, type: ty} | acc])
+             {:ok, ty, bounds, rest} <- parse_ctor_type(skip(rest)) do
+          ctor = %{name: cname, type: ty}
+
+          ctor =
+            if bounds == %{} do
+              ctor
+            else
+              Map.put(ctor, :bounds, bounds)
+            end
+
+          parse_ctors(rest, [ctor | acc])
         end
     end
   end
 
+  # A constructor telescope. `(slot : Nat) {slot ≤ 3}` is a nat field
+  # whose split is `0` … `3`. The bound is not part of the core type.
+  # The right side is a numeral, and the left side is that field.
+  defp parse_ctor_type(s), do: parse_ctor_pis(skip(s), %{})
+
+  defp parse_ctor_pis(s, bounds) do
+    s = skip(s)
+
+    # `(slot : Nat)` and `Π (slot : Nat)` are field binders. A parenthesis
+    # that only groups a type, `(Nat → Nat)`, stays a term.
+    if named_telescope?(s) do
+      rest = eat_kw(s, Words.pi_words())
+
+      with {:ok, {q, x, a}, rest} <- parse_binder(rest),
+           {:ok, bounds, rest} <- take_field_bound(skip(rest), x, a, bounds),
+           {:ok, rest} <- either_tok(skip(rest), Words.arrow_words()),
+           {:ok, body, bounds, rest} <- parse_ctor_pis(rest, bounds) do
+        {:ok, {:pi, q, a, x, body}, bounds, rest}
+      end
+    else
+      with {:ok, ty, rest} <- parse_term(s, 0), do: {:ok, ty, bounds, rest}
+    end
+  end
+
+  defp named_telescope?(s) do
+    s = skip(s)
+
+    cond do
+      Enum.any?(Words.pi_words(), &word_kw?(s, &1)) -> true
+      has_prefix?(s, "(") -> binder_shape?(after_kw(s, "("))
+      true -> false
+    end
+  end
+
+  defp binder_shape?(s) do
+    case parse_qty(skip(s)) do
+      {:ok, _, rest} ->
+        case ident(skip(rest)) do
+          {:ok, _, rest} -> has_prefix?(skip(rest), ":")
+          _ -> false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp take_field_bound(s, field, domain, bounds) do
+    if has_prefix?(skip(s), "{") do
+      with {:ok, n, rest} <- field_bound(s, field, domain) do
+        {:ok, Map.put(bounds, field, n), rest}
+      end
+    else
+      {:ok, bounds, s}
+    end
+  end
+
+  defp field_bound(s, field, domain) do
+    with {:ok, rest} <- tok(skip(s), "{"),
+         {:ok, left, rest} <- ident(skip(rest)),
+         {:ok, rest} <- either_tok(skip(rest), Words.le_words()),
+         {:ok, n, rest} <- field_numeral(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), "}") do
+      cond do
+        left != field ->
+          {:error, err(s, "a field bound is a numeral")}
+
+        domain != :nat ->
+          {:error, err(s, "a field bound is on a nat")}
+
+        true ->
+          {:ok, n, rest}
+      end
+    else
+      _ -> {:error, err(s, "a field bound is a numeral")}
+    end
+  end
+
+  defp field_numeral(s) do
+    if number?(s) do
+      {digits, rest} = take_digits(s, "")
+
+      if digits == "0" or not String.starts_with?(digits, "0") do
+        {:ok, String.to_integer(digits), rest}
+      else
+        {:error, err(s, "a field bound is a numeral")}
+      end
+    else
+      {:error, err(s, "a field bound is a numeral")}
+    end
+  end
+
+  # `def name : run|spec|evidence …` is a core definition.
+  # `def name : (s : session) ⊸ …` is an endpoint function. The type
+  # starts with `(`, which a tagged definition does not.
   defp parse_def(s) do
     loc = here(s)
 
     with {:ok, rest} <- kw(s, "def"),
          {:ok, name, rest} <- ident(skip(rest)),
-         {:ok, rest} <- tok(skip(rest), ":"),
-         {:ok, tag, rest} <- parse_mode(skip(rest)),
-         {:ok, ty, rest} <- parse_term(skip(rest), 0),
+         {:ok, rest} <- tok(skip(rest), ":") do
+      rest = skip(rest)
+
+      if has_prefix?(rest, "("),
+        do: parse_relay(loc, name, rest),
+        else: parse_tagged_def(loc, name, rest)
+    end
+  end
+
+  defp parse_tagged_def(loc, name, s) do
+    with {:ok, tag, rest} <- parse_mode(s),
+         {:ok, ty, type_span, rest} <- parse_body_term(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":="),
-         {:ok, body, rest} <- parse_term(skip(rest), 0) do
-      {:ok, Map.merge(%{name: name, type: ty, body: body, loc: loc}, tag), rest}
+         {:ok, body, span, rest} <- parse_body_term(skip(rest)) do
+      base = %{
+        name: name,
+        type: ty,
+        body: body,
+        loc: loc,
+        type_span: type_span,
+        body_span: span
+      }
+
+      {:ok, Map.merge(base, tag), rest}
+    end
+  end
+
+  # Evidence. The arrow's multiplicity is the binder's obligation.
+  # `⊸` (`-o`) accepts or returns a linear endpoint. `→` is affine.
+  defp parse_relay(loc, name, s) do
+    with {:ok, ty, rest} <- parse_etype(s, :aff),
+         {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, body, rest} <- parse_eterm(skip(rest)) do
+      {:ok, %{kind: :relay, name: name, mode: :evidence, type: ty, body: body, loc: loc}, rest}
+    end
+  end
+
+  # A bare session name takes `bare`. `done` is the meeting, not a session.
+  defp parse_etype(s, bare) do
+    s = skip(s)
+
+    cond do
+      has_prefix?(s, "(") ->
+        with {:ok, _x, sess, rest} <- parse_ebinder(s),
+             {:ok, q, rest} <- eat_earrow(rest),
+             {:ok, cod, rest} <- parse_etype(rest, q) do
+          {:ok, {:arr, q, {:sess, q, sess}, cod}, rest}
+        end
+
+      word_kw?(s, "done") ->
+        {:ok, {:done}, after_kw(s, "done")}
+
+      true ->
+        with {:ok, name, rest} <- ident(s) do
+          {:ok, {:sess, bare, name}, rest}
+        end
+    end
+  end
+
+  # `+`, `-`, and `%` are term quantities. An endpoint is affine or linear.
+  defp parse_ebinder(s) do
+    with {:ok, rest} <- tok(skip(s), "(") do
+      rest = skip(rest)
+
+      cond do
+        has_prefix?(rest, "+") or has_prefix?(rest, "-") or has_prefix?(rest, "%") ->
+          {:error, err(rest, "a session endpoint is affine or linear")}
+
+        true ->
+          with {:ok, name, rest} <- ident(rest),
+               {:ok, rest} <- tok(skip(rest), ":"),
+               {:ok, sess, rest} <- ident(skip(rest)),
+               {:ok, rest} <- tok(skip(rest), ")") do
+            {:ok, name, sess, rest}
+          end
+      end
+    end
+  end
+
+  # `λ¹` (`lam1`) is linear. `λ` (`lam`) is affine. The arrow after the
+  # binder may be `→` or `⊸`. The multiplicity is the lambda's.
+  defp parse_eterm(s) do
+    with {:ok, left, rest} <- parse_eatom(skip(s)) do
+      parse_eapp(rest, left)
+    end
+  end
+
+  defp parse_eapp(s, left) do
+    s0 = skip(s)
+
+    cond do
+      s0 == "" or eboundary?(s0) or not eatom_start?(s0) ->
+        {:ok, left, s}
+
+      true ->
+        with {:ok, arg, rest} <- parse_eatom(s0) do
+          parse_eapp(rest, {:app, left, arg})
+        end
+    end
+  end
+
+  defp parse_eatom(s) do
+    s = skip(s)
+
+    cond do
+      has_prefix?(s, "(") ->
+        with {:ok, rest} <- tok(s, "("),
+             {:ok, t, rest} <- parse_eterm(rest),
+             {:ok, rest} <- tok(skip(rest), ")") do
+          {:ok, t, rest}
+        end
+
+      word_kw?(s, "λ¹") || word_kw?(s, "lam1") || word_kw?(s, "λ") || word_kw?(s, "lam") ->
+        parse_elam(s)
+
+      word_kw?(s, "dual") ->
+        parse_edual(s)
+
+      word_kw?(s, "meet") ->
+        parse_emeet(s)
+
+      true ->
+        with {:ok, name, rest} <- ident(s) do
+          {:ok, {:var, name}, rest}
+        end
+    end
+  end
+
+  defp parse_elam(s) do
+    s = skip(s)
+
+    {q, rest} =
+      cond do
+        word_kw?(s, "λ¹") -> {:lin, after_kw(s, "λ¹")}
+        word_kw?(s, "lam1") -> {:lin, after_kw(s, "lam1")}
+        word_kw?(s, "λ") -> {:aff, after_kw(s, "λ")}
+        word_kw?(s, "lam") -> {:aff, after_kw(s, "lam")}
+      end
+
+    with {:ok, name, sess, rest} <- parse_ebinder(rest),
+         {:ok, _arrow, rest} <- eat_earrow(rest),
+         {:ok, body, rest} <- parse_eterm(rest) do
+      {:ok, {:lam, q, name, {:sess, q, sess}, body}, rest}
+    end
+  end
+
+  defp parse_edual(s) do
+    with {:ok, rest} <- kw(s, "dual"),
+         {:ok, t, rest} <- parse_eatom(skip(rest)) do
+      {:ok, {:dual, t}, rest}
+    end
+  end
+
+  defp parse_emeet(s) do
+    with {:ok, rest} <- kw(s, "meet"),
+         {:ok, a, rest} <- parse_eatom(skip(rest)),
+         {:ok, b, rest} <- parse_eatom(skip(rest)) do
+      {:ok, {:meet, a, b}, rest}
+    end
+  end
+
+  defp eat_earrow(s) do
+    s = skip(s)
+
+    case Enum.find(Words.earrow_forms(), fn {word, _qty} ->
+           has_prefix?(s, word) and not (word == "->" and has_prefix?(s, "=>"))
+         end) do
+      {word, qty} -> {:ok, qty, after_kw(s, word)}
+      nil -> {:error, err(s, "expected ⊸")}
+    end
+  end
+
+  # A following book entry is not an argument. `meet s t` is the term.
+  # `meet name :` is the next entry. `motive` and `in` stay term keywords.
+  defp eboundary?(s) do
+    s = skip(s)
+    choreo_boundary?(s) or word_kw?(s, "motive") or word_kw?(s, "in")
+  end
+
+  defp eatom_start?(s) do
+    s = skip(s)
+
+    cond do
+      eboundary?(s) ->
+        false
+
+      has_prefix?(s, "(") ->
+        true
+
+      word_kw?(s, "λ¹") || word_kw?(s, "lam1") || word_kw?(s, "λ") || word_kw?(s, "lam") ->
+        true
+
+      word_kw?(s, "dual") or word_kw?(s, "meet") ->
+        true
+
+      true ->
+        case s do
+          <<c, _::binary>> when c in ?a..?z or c in ?A..?Z or c == ?_ -> true
+          _ -> false
+        end
     end
   end
 
@@ -295,48 +3871,55 @@ defmodule Muro.Parser do
 
   # Pratt-ish: apps are juxtaposition, arrows bind looser via Π/λ.
   defp parse_term(s, min_bp) do
-    with {:ok, left, rest} <- parse_atom(skip(s)) do
-      parse_infix(rest, left, min_bp)
+    s = skip(s)
+
+    with {:ok, left, rest} <- parse_atom(s) do
+      parse_infix(rest, left, min_bp, here(s))
     end
   end
 
-  defp parse_infix(s, left, min_bp) do
+  defp parse_infix(s, left, min_bp, start_loc) do
     s0 = skip(s)
 
     cond do
       arrow_tok?(s0) and min_bp <= 5 ->
         with {:ok, rest} <- eat_arrow(s0),
              {:ok, right, rest} <- parse_term(skip(rest), 5) do
-          parse_infix(rest, {:pi, :affine, left, "_", right}, min_bp)
+          push_span(start_loc, 2)
+          parse_infix(rest, {:pi, :affine, left, "_", right}, min_bp, start_loc)
         end
 
       times_tok?(s0) and min_bp <= 15 ->
         with {:ok, rest} <- eat_times(s0),
              {:ok, right, rest} <- parse_term(skip(rest), 16) do
-          parse_infix(rest, {:prod, left, right}, min_bp)
+          push_span(start_loc, 2)
+          parse_infix(rest, {:prod, left, right}, min_bp, start_loc)
         end
 
       sum_tok?(s0) and min_bp <= 12 ->
         with {:ok, rest} <- eat_sum(s0),
              {:ok, right, rest} <- parse_term(skip(rest), 13) do
-          parse_infix(rest, {:app, {:app, {:var, "Either"}, left}, right}, min_bp)
+          finish_bin_app(start_loc, here(s0), "Either", left, right, rest, min_bp)
         end
 
       cons_tok?(s0) and min_bp <= 18 ->
         with {:ok, rest} <- eat_cons(s0),
              {:ok, right, rest} <- parse_term(skip(rest), 18) do
-          parse_infix(rest, {:app, {:app, {:var, "cons"}, left}, right}, min_bp)
+          finish_bin_app(start_loc, here(s0), "cons", left, right, rest, min_bp)
         end
 
       bisim_tok?(s0) and min_bp <= 10 ->
         with {:ok, rest} <- eat_bisim(s0),
              {:ok, right, rest} <- parse_term(skip(rest), 11) do
-          parse_infix(rest, {:bisim, left, right}, min_bp)
+          push_span(start_loc, 2)
+          parse_infix(rest, {:bisim, left, right}, min_bp, start_loc)
         end
 
-      starts_atom?(s0) and min_bp <= 20 and not ctor_decl_start?(s, s0) ->
+      starts_atom?(s0) and min_bp <= 20 and not ctor_decl_start?(s, s0) and
+          not session_line?(s, s0) ->
         with {:ok, arg, rest} <- parse_atom(s0) do
-          parse_infix(rest, {:app, left, arg}, min_bp)
+          push_span(start_loc, 2)
+          parse_infix(rest, {:app, left, arg}, min_bp, start_loc)
         end
 
       true ->
@@ -344,32 +3927,47 @@ defmodule Muro.Parser do
     end
   end
 
+  # `A ⊎ B` and `A :: B` are applications of a name that is not written.
+  # The span tree matches that term: (head left) right.
+  defp finish_bin_app(start_loc, op_loc, head, left, right, rest, min_bp) do
+    if span_on?() do
+      right_s = pop_span()
+      left_s = pop_span()
+      var = {op_loc, []}
+      inner = {op_loc, [var, left_s]}
+      push_node({start_loc, [inner, right_s]})
+    end
+
+    parse_infix(rest, {:app, {:app, {:var, head}, left}, right}, min_bp, start_loc)
+  end
+
   defp arrow_tok?(s) do
-    (has_prefix?(s, "→") or has_prefix?(s, "->")) and not has_prefix?(s, "=>")
+    Enum.any?(Words.arrow_words(), &has_prefix?(s, &1)) and not has_prefix?(s, "=>")
   end
 
   defp eat_arrow(s) do
-    cond do
-      has_prefix?(s, "→") -> {:ok, after_kw(s, "→")}
-      has_prefix?(s, "->") -> {:ok, after_kw(s, "->")}
-      true -> {:error, "expected →"}
+    case Enum.find(Words.arrow_words(), &has_prefix?(s, &1)) do
+      nil -> {:error, "expected →"}
+      word -> {:ok, after_kw(s, word)}
     end
   end
 
-  defp times_tok?(s), do: has_prefix?(s, "×") or has_prefix?(s, "*")
+  defp times_tok?(s), do: Enum.any?(Words.times_words(), &has_prefix?(s, &1))
 
   defp eat_times(s) do
-    cond do
-      has_prefix?(s, "×") -> {:ok, after_kw(s, "×")}
-      has_prefix?(s, "*") -> {:ok, after_kw(s, "*")}
-      true -> {:error, "expected ×"}
+    case Enum.find(Words.times_words(), &has_prefix?(s, &1)) do
+      nil -> {:error, "expected ×"}
+      word -> {:ok, after_kw(s, word)}
     end
   end
 
-  defp sum_tok?(s), do: has_prefix?(s, "⊎")
+  defp sum_tok?(s), do: Enum.any?(Words.sum_words(), &has_prefix?(s, &1))
 
   defp eat_sum(s) do
-    if has_prefix?(s, "⊎"), do: {:ok, after_kw(s, "⊎")}, else: {:error, "expected ⊎"}
+    case Enum.find(Words.sum_words(), &has_prefix?(s, &1)) do
+      nil -> {:error, "expected ⊎"}
+      word -> {:ok, after_kw(s, word)}
+    end
   end
 
   defp bisim_tok?(s), do: has_prefix?(s, "~") and not ident_char?(after_kw(s, "~"))
@@ -378,10 +3976,13 @@ defmodule Muro.Parser do
     if bisim_tok?(s), do: {:ok, after_kw(s, "~")}, else: {:error, "expected ~"}
   end
 
-  defp cons_tok?(s), do: has_prefix?(s, "::")
+  defp cons_tok?(s), do: Enum.any?(Words.cons_words(), &has_prefix?(s, &1))
 
   defp eat_cons(s) do
-    if cons_tok?(s), do: {:ok, after_kw(s, "::")}, else: {:error, "expected ::"}
+    case Enum.find(Words.cons_words(), &has_prefix?(s, &1)) do
+      nil -> {:error, "expected ::"}
+      word -> {:ok, after_kw(s, word)}
+    end
   end
 
   # Next constructor in a data block: `name : type`, not `:=` or `::`.
@@ -400,6 +4001,14 @@ defmodule Muro.Parser do
         _ ->
           false
       end
+  end
+
+  # `session` and `conform` use `:=`, so ctor_decl_start? does not see
+  # them. A new line that starts a book entry ends the constructor's
+  # type. On the same line the word is an argument (`w : place`).
+  defp session_line?(s, s0) do
+    skipped = binary_part(s, 0, byte_size(s) - byte_size(s0))
+    String.contains?(skipped, "\n") and choreo_boundary?(s0)
   end
 
   defp starts_atom?(s) do
@@ -445,61 +4054,157 @@ defmodule Muro.Parser do
         parse_atom_lit(s)
 
       word_kw?(s, "Atom") ->
-        {:ok, :atom, after_kw(s, "Atom")}
+        leaf(s, :atom, after_kw(s, "Atom"))
 
       word_kw?(s, "Type") ->
-        {:ok, :typ, after_kw(s, "Type")}
+        leaf(s, :typ, after_kw(s, "Type"))
 
       word_kw?(s, "Nat") ->
-        {:ok, :nat, after_kw(s, "Nat")}
+        leaf(s, :nat, after_kw(s, "Nat"))
 
       word_kw?(s, "I64") ->
-        {:ok, :i64, after_kw(s, "I64")}
+        leaf(s, :i64, after_kw(s, "I64"))
+
+      word_kw?(s, "U8") ->
+        parse_word_leaf(s, "U8", {:ty, :u8})
+
+      word_kw?(s, "U32") ->
+        parse_word_leaf(s, "U32", {:ty, :u32})
+
+      word_kw?(s, "U64") ->
+        parse_word_leaf(s, "U64", {:ty, :u64})
+
+      word_kw?(s, "WBool") ->
+        parse_word_leaf(s, "WBool", :bool)
+
+      word_kw?(s, "wtrue") ->
+        parse_word_leaf(s, "wtrue", true)
+
+      word_kw?(s, "wfalse") ->
+        parse_word_leaf(s, "wfalse", false)
+
+      word_kw?(s, "wnone") ->
+        parse_word_leaf(s, "wnone", :none)
+
+      word_kw?(s, "Opt") ->
+        parse_word_unary(s, "Opt", :opt)
+
+      word_kw?(s, "wsome") ->
+        parse_word_unary(s, "wsome", :some)
 
       word_kw?(s, "F32") ->
-        {:ok, :f32ty, after_kw(s, "F32")}
+        leaf(s, :f32ty, after_kw(s, "F32"))
 
       word_kw?(s, "Tensor") ->
         parse_binary(s, "Tensor", :tensor)
 
       word_kw?(s, "addi") ->
-        parse_binary(s, "addi", :addi)
+        parse_word_binary(s, "addi", :add)
+
+      word_kw?(s, "subi") ->
+        parse_word_binary(s, "subi", :sub)
 
       word_kw?(s, "muli") ->
-        parse_binary(s, "muli", :muli)
+        parse_word_binary(s, "muli", :mul)
+
+      word_kw?(s, "addc") ->
+        parse_word_binary(s, "addc", :cadd)
+
+      word_kw?(s, "subc") ->
+        parse_word_binary(s, "subc", :csub)
+
+      word_kw?(s, "mulc") ->
+        parse_word_binary(s, "mulc", :cmul)
+
+      word_kw?(s, "divi") ->
+        parse_word_binary(s, "divi", :div)
+
+      word_kw?(s, "remi") ->
+        parse_word_binary(s, "remi", :rem)
+
+      word_kw?(s, "eqi") ->
+        parse_word_binary(s, "eqi", :eq)
+
+      word_kw?(s, "lti") ->
+        parse_word_binary(s, "lti", :lt)
+
+      word_kw?(s, "lei") ->
+        parse_word_binary(s, "lei", :le)
+
+      word_kw?(s, "andi") ->
+        parse_word_binary(s, "andi", :and)
+
+      word_kw?(s, "ori") ->
+        parse_word_binary(s, "ori", :or)
+
+      word_kw?(s, "xori") ->
+        parse_word_binary(s, "xori", :xor)
+
+      word_kw?(s, "noti") ->
+        parse_word_unary(s, "noti", :not)
+
+      word_kw?(s, "shli") ->
+        parse_word_binary(s, "shli", :shl)
+
+      word_kw?(s, "shri") ->
+        parse_word_binary(s, "shri", :shr)
 
       word_kw?(s, "addt") ->
         parse_binary(s, "addt", :addt)
 
+      word_kw?(s, "toU8") ->
+        parse_word_unary(s, "toU8", {:of, :u8})
+
+      word_kw?(s, "toU32") ->
+        parse_word_unary(s, "toU32", {:of, :u32})
+
+      word_kw?(s, "toU64") ->
+        parse_word_unary(s, "toU64", {:of, :u64})
+
       word_kw?(s, "toI64") ->
-        parse_unary(s, "toI64", :toi64)
+        parse_word_unary(s, "toI64", {:of, :i64})
+
+      word_kw?(s, "toNat") ->
+        parse_word_unary(s, "toNat", :ton)
+
+      word_kw?(s, "asU8") ->
+        parse_word_unary(s, "asU8", {:cast, :u8})
+
+      word_kw?(s, "asU32") ->
+        parse_word_unary(s, "asU32", {:cast, :u32})
+
+      word_kw?(s, "asU64") ->
+        parse_word_unary(s, "asU64", {:cast, :u64})
+
+      word_kw?(s, "asI64") ->
+        parse_word_unary(s, "asI64", {:cast, :i64})
 
       word_kw?(s, "packI") ->
         parse_binary(s, "packI", :packi)
 
       word_kw?(s, "Unit") ->
-        {:ok, :unit, after_kw(s, "Unit")}
+        leaf(s, :unit, after_kw(s, "Unit"))
 
       word_kw?(s, "Empty") ->
-        {:ok, :empty, after_kw(s, "Empty")}
+        leaf(s, :empty, after_kw(s, "Empty"))
 
       word_kw?(s, "refl") ->
-        {:ok, :rfl, after_kw(s, "refl")}
+        leaf(s, :rfl, after_kw(s, "refl"))
 
       word_kw?(s, "tt") ->
-        {:ok, :one, after_kw(s, "tt")}
+        leaf(s, :one, after_kw(s, "tt"))
 
       has_prefix?(s, "?") ->
-        {:ok, {:hole, here(s)}, after_kw(s, "?")}
+        leaf(s, {:hole, here(s)}, after_kw(s, "?"))
 
-      has_prefix?(s, "0") ->
-        {:ok, :ze, after_kw(s, "0")}
+      number?(s) ->
+        parse_nat_literal(s)
 
       word_kw?(s, "suc") ->
         parse_suc(s)
 
       has_prefix?(s, "[]") ->
-        {:ok, {:var, "nil"}, after_kw(s, "[]")}
+        leaf(s, {:var, "nil"}, after_kw(s, "[]"))
 
       word_kw?(s, "Stream") ->
         parse_stream(s)
@@ -521,24 +4226,16 @@ defmodule Muro.Parser do
 
       # fst / snd are sugar for let: fst t = let (a, b) = t in a.
       word_kw?(s, "fst") ->
-        with {:ok, e, rest} <- parse_unary_arg(s, "fst") do
-          {:ok, fst_sugar(e), rest}
-        end
+        parse_proj(s, "fst", :fst)
 
       word_kw?(s, "snd") ->
-        with {:ok, e, rest} <- parse_unary_arg(s, "snd") do
-          {:ok, snd_sugar(e), rest}
-        end
+        parse_proj(s, "snd", :snd)
 
       word_kw?(s, "head") ->
-        with {:ok, e, rest} <- parse_unary_arg(s, "head") do
-          {:ok, fst_sugar({:ucons, e}), rest}
-        end
+        parse_proj(s, "head", :head)
 
       word_kw?(s, "tail") ->
-        with {:ok, e, rest} <- parse_unary_arg(s, "tail") do
-          {:ok, snd_sugar({:ucons, e}), rest}
-        end
+        parse_proj(s, "tail", :tail)
 
       word_kw?(s, "Π") or word_kw?(s, "Pi") ->
         parse_pi(s)
@@ -559,30 +4256,39 @@ defmodule Muro.Parser do
         parse_idt(s)
 
       first_char(s) == ?( ->
-        with {:ok, rest} <- tok(s, "("),
-             {:ok, t, rest} <- parse_term(skip(rest), 0) do
-          rest1 = skip(rest)
-
-          if has_prefix?(rest1, ",") do
-            with {:ok, rest} <- tok(rest1, ","),
-                 {:ok, u, rest} <- parse_term(skip(rest), 0),
-                 {:ok, rest} <- tok(skip(rest), ")") do
-              {:ok, {:pair, t, u}, rest}
-            end
-          else
-            with {:ok, rest} <- tok(rest1, ")") do
-              {:ok, t, rest}
-            end
-          end
-        end
+        parse_paren(s)
 
       true ->
         case ident(s) do
-          {:ok, name, rest} -> {:ok, {:var_or_def, name}, rest}
+          {:ok, name, rest} -> leaf(s, {:var_or_def, name}, rest)
           _ -> {:error, err(s, "expected term")}
         end
     end
     |> resolve_name()
+  end
+
+  defp leaf(s, term, rest), do: ok_leaf(here(s), term, rest)
+
+  # A parenthesis is not a node. A pair is.
+  defp parse_paren(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- tok(s, "("),
+         {:ok, t, rest} <- parse_term(skip(rest), 0) do
+      rest1 = skip(rest)
+
+      if has_prefix?(rest1, ",") do
+        with {:ok, rest} <- tok(rest1, ","),
+             {:ok, u, rest} <- parse_term(skip(rest), 0),
+             {:ok, rest} <- tok(skip(rest), ")") do
+          ok_node(loc, {:pair, t, u}, 2, rest)
+        end
+      else
+        with {:ok, rest} <- tok(rest1, ")") do
+          {:ok, t, rest}
+        end
+      end
+    end
   end
 
   defp resolve_name({:ok, {:var_or_def, name}, rest}) do
@@ -595,6 +4301,8 @@ defmodule Muro.Parser do
   defp resolve_name(other), do: other
 
   defp parse_suc(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "suc") do
       rest = skip(rest)
 
@@ -602,45 +4310,53 @@ defmodule Muro.Parser do
         with {:ok, rest} <- tok(rest, "("),
              {:ok, t, rest} <- parse_term(skip(rest), 0),
              {:ok, rest} <- tok(skip(rest), ")") do
-          {:ok, {:su, t}, rest}
+          ok_node(loc, {:su, t}, 1, rest)
         end
       else
         with {:ok, t, rest} <- parse_atom(rest) do
-          {:ok, {:su, t}, rest}
+          ok_node(loc, {:su, t}, 1, rest)
         end
       end
     end
   end
 
   defp parse_stream(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "Stream"),
          {:ok, a, rest} <- parse_atom(skip(rest)) do
-      {:ok, {:stream, a}, rest}
+      ok_node(loc, {:stream, a}, 1, rest)
     end
   end
 
   defp parse_always(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "Always"),
          {:ok, a, rest} <- parse_atom(skip(rest)),
          {:ok, p, rest} <- parse_atom(skip(rest)),
          {:ok, st, rest} <- parse_atom(skip(rest)) do
-      {:ok, {:always, a, p, st}, rest}
+      ok_node(loc, {:always, a, p, st}, 3, rest)
     end
   end
 
   defp parse_bisim(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "bisim"),
          {:ok, a, rest} <- parse_atom(skip(rest)),
          {:ok, b, rest} <- parse_atom(skip(rest)) do
-      {:ok, {:bisim, a, b}, rest}
+      ok_node(loc, {:bisim, a, b}, 2, rest)
     end
   end
 
   defp parse_unf(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "unfold"),
          {:ok, seed, rest} <- parse_atom(skip(rest)),
          {:ok, f, rest} <- parse_atom(skip(rest)) do
-      {:ok, {:unf, seed, f}, rest}
+      ok_node(loc, {:unf, seed, f}, 2, rest)
     end
   end
 
@@ -649,16 +4365,40 @@ defmodule Muro.Parser do
   end
 
   defp parse_unary(s, w, tag) do
+    loc = here(skip(s))
+
     with {:ok, e, rest} <- parse_unary_arg(s, w) do
-      {:ok, {tag, e}, rest}
+      ok_node(loc, {tag, e}, 1, rest)
+    end
+  end
+
+  defp parse_word_leaf(s, w, op), do: leaf(s, {:word, op, []}, after_kw(s, w))
+
+  defp parse_word_unary(s, w, op) do
+    loc = here(skip(s))
+
+    with {:ok, e, rest} <- parse_unary_arg(s, w) do
+      ok_node(loc, {:word, op, [e]}, 1, rest)
+    end
+  end
+
+  defp parse_word_binary(s, w, op) do
+    loc = here(skip(s))
+
+    with {:ok, rest} <- kw(s, w),
+         {:ok, a, rest} <- parse_atom(skip(rest)),
+         {:ok, b, rest} <- parse_atom(skip(rest)) do
+      ok_node(loc, {:word, op, [a, b]}, 2, rest)
     end
   end
 
   defp parse_binary(s, w, tag) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, w),
          {:ok, a, rest} <- parse_atom(skip(rest)),
          {:ok, b, rest} <- parse_atom(skip(rest)) do
-      {:ok, {tag, a, b}, rest}
+      ok_node(loc, {tag, a, b}, 2, rest)
     end
   end
 
@@ -667,6 +4407,31 @@ defmodule Muro.Parser do
          {:ok, e, rest} <- parse_atom(skip(rest)) do
       {:ok, e, rest}
     end
+  end
+
+  # fst/snd/head/tail are sugar. The span follows the term they become.
+  defp parse_proj(s, w, which) do
+    loc = here(skip(s))
+
+    with {:ok, e, rest} <- parse_unary_arg(s, w) do
+      case which do
+        :fst -> finish_let_sugar(loc, e, "a", fst_sugar(e), rest)
+        :snd -> finish_let_sugar(loc, e, "b", snd_sugar(e), rest)
+        :head -> finish_uncons_sugar(loc, e, "a", fst_sugar({:ucons, e}), rest)
+        :tail -> finish_uncons_sugar(loc, e, "b", snd_sugar({:ucons, e}), rest)
+      end
+    end
+  end
+
+  defp finish_let_sugar(loc, _e, _var, term, rest) do
+    push_span(loc, 0)
+    ok_node(loc, term, 2, rest)
+  end
+
+  defp finish_uncons_sugar(loc, _e, _var, term, rest) do
+    push_span(loc, 1)
+    push_span(loc, 0)
+    ok_node(loc, term, 2, rest)
   end
 
   defp parse_binder(s) do
@@ -682,60 +4447,78 @@ defmodule Muro.Parser do
 
   defp parse_qty(<<"+", rest::binary>>), do: {:ok, :reuse, rest}
   defp parse_qty(<<"-", rest::binary>>), do: {:ok, :erased, rest}
+
+  # %0 is affine. %1 is the affine quantity that must be used.
+  # Both are whole tokens. %10 is not %1 followed by 0.
+  defp parse_qty("%" <> _ = s) do
+    case parse_mult(s) do
+      {:ok, :linear, rest} -> {:ok, :linear, rest}
+      {:ok, :affine, rest} -> {:ok, :affine, rest}
+      {:error, _} = err -> err
+    end
+  end
+
   defp parse_qty(s), do: {:ok, :affine, s}
 
   defp parse_pi(s) do
-    rest = s |> skip() |> eat_kw(["Π", "Pi"])
+    loc = here(skip(s))
+    rest = s |> skip() |> eat_kw(Words.pi_words())
 
     with {:ok, {q, x, a}, rest} <- parse_binder(rest),
-         {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
+         {:ok, rest} <- either_tok(skip(rest), Words.arrow_words()),
          {:ok, b, rest} <- parse_term(skip(rest), 0) do
-      {:ok, {:pi, q, a, x, b}, rest}
+      ok_node(loc, {:pi, q, a, x, b}, 2, rest)
     end
   end
 
   defp parse_lam(s) do
-    rest = s |> skip() |> eat_kw(["λ", "lam"])
+    loc = here(skip(s))
+    rest = s |> skip() |> eat_kw(Words.lam_words())
 
     with {:ok, {q, x, a}, rest} <- parse_binder(rest),
-         {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
+         {:ok, rest} <- either_tok(skip(rest), Words.arrow_words()),
          {:ok, t, rest} <- parse_term(skip(rest), 0) do
-      {:ok, {:lam, q, a, x, t}, rest}
+      ok_node(loc, {:lam, q, a, x, t}, 2, rest)
     end
   end
 
   defp parse_match(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "match"),
          {:ok, e, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- kw(skip(rest), "motive"),
          {:ok, rest} <- tok(skip(rest), "("),
          {:ok, rest} <- eat_lam(skip(rest)),
          {:ok, x, rest} <- parse_motive_binder(skip(rest)),
-         {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
+         {:ok, rest} <- either_tok(skip(rest), Words.arrow_words()),
          {:ok, p, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), ")"),
          {:ok, rest} <- tok(skip(rest), "|") do
       rest = skip(rest)
 
       cond do
-        word_kw?(rest, "0") -> parse_mnat_cases(e, x, p, rest)
-        atom_lit?(rest) -> parse_matom_cases(e, x, p, rest)
-        true -> parse_mdata_cases(e, x, p, rest)
+        word_kw?(rest, "0") -> parse_mnat_cases(loc, e, x, p, rest)
+        atom_lit?(rest) -> parse_matom_cases(loc, e, x, p, rest)
+        true -> parse_mdata_cases(loc, e, x, p, rest)
       end
     end
   end
 
+  # `(x : A)` in a motive names x. A is not a child of the match.
   defp parse_motive_binder(s) do
     s = skip(s)
 
     if has_prefix?(s, "(") do
-      with {:ok, {_q, x, _a}, rest} <- parse_binder(s), do: {:ok, x, rest}
+      without_span(fn ->
+        with {:ok, {_q, x, _a}, rest} <- parse_binder(s), do: {:ok, x, rest}
+      end)
     else
       ident(s)
     end
   end
 
-  defp parse_mnat_cases(e, x, p, rest) do
+  defp parse_mnat_cases(loc, e, x, p, rest) do
     with {:ok, rest} <- kw(rest, "0"),
          {:ok, rest} <- tok(skip(rest), "=>"),
          {:ok, z, rest} <- parse_term(skip(rest), 0),
@@ -744,7 +4527,7 @@ defmodule Muro.Parser do
          {:ok, y, rest} <- ident(skip(rest)),
          {:ok, rest} <- tok(skip(rest), "=>"),
          {:ok, sc, rest} <- parse_term(skip(rest), 0) do
-      {:ok, {:mnat, e, x, p, z, y, sc}, rest}
+      ok_node(loc, {:mnat, e, x, p, z, y, sc}, 4, rest)
     end
   end
 
@@ -757,33 +4540,35 @@ defmodule Muro.Parser do
   end
 
   defp parse_atom_lit(s) do
-    <<":", rest::binary>> = skip(s)
+    s = skip(s)
+    <<":", rest::binary>> = s
 
     case rest do
       <<c, _::binary>> when c in ?a..?z or c in ?A..?Z or c == ?_ ->
         {name, rest} = take_ident(rest, "")
-        {:ok, {:atom, name}, rest}
+        leaf(s, {:atom, name}, rest)
 
       _ ->
         {:error, err(s, "expected atom")}
     end
   end
 
-  defp parse_matom_cases(e, x, p, rest) do
+  defp parse_matom_cases(loc, e, x, p, rest) do
     with {:ok, branches, rest} <- parse_matom_branches(rest, []) do
-      {:ok, {:matom, e, x, p, branches}, rest}
+      ok_node(loc, {:matom, e, x, p, branches}, 2 + length(branches), rest)
     end
   end
 
   defp parse_matom_branches(s, acc) do
-    with {:ok, {:atom, name}, rest} <- parse_atom_lit(skip(s)),
+    with {:ok, {:atom, name}, rest} <- without_span(fn -> parse_atom_lit(skip(s)) end),
          {:ok, rest} <- tok(skip(rest), "=>"),
          {:ok, body, rest} <- parse_term(skip(rest), 0) do
       acc = [{name, body} | acc]
-      rest = skip(rest)
+      # Keep the newline. A following `session` or `conform` is not an argument.
+      looked = skip(rest)
 
-      if has_prefix?(rest, "|") do
-        with {:ok, rest} <- tok(rest, "|") do
+      if has_prefix?(looked, "|") do
+        with {:ok, rest} <- tok(looked, "|") do
           parse_matom_branches(skip(rest), acc)
         end
       else
@@ -792,9 +4577,9 @@ defmodule Muro.Parser do
     end
   end
 
-  defp parse_mdata_cases(e, x, p, rest) do
+  defp parse_mdata_cases(loc, e, x, p, rest) do
     with {:ok, branches, rest} <- parse_mdata_branches(rest, []) do
-      {:ok, {:mdata, e, x, p, branches}, rest}
+      ok_node(loc, {:mdata, e, x, p, branches}, 2 + length(branches), rest)
     end
   end
 
@@ -804,10 +4589,11 @@ defmodule Muro.Parser do
          {:ok, rest} <- tok(skip(rest), "=>"),
          {:ok, body, rest} <- parse_term(skip(rest), 0) do
       acc = [{cname, binders, body} | acc]
-      rest = skip(rest)
+      # Keep the newline. A following `session` or `conform` is not an argument.
+      looked = skip(rest)
 
-      if has_prefix?(rest, "|") do
-        with {:ok, rest} <- tok(rest, "|") do
+      if has_prefix?(looked, "|") do
+        with {:ok, rest} <- tok(looked, "|") do
           parse_mdata_branches(skip(rest), acc)
         end
       else
@@ -835,32 +4621,36 @@ defmodule Muro.Parser do
   end
 
   defp parse_memp(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "matchEmpty"),
          {:ok, e, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- kw(skip(rest), "motive"),
          {:ok, rest} <- tok(skip(rest), "("),
          {:ok, rest} <- eat_lam(skip(rest)),
          {:ok, x, rest} <- ident(skip(rest)),
-         {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
+         {:ok, rest} <- either_tok(skip(rest), Words.arrow_words()),
          {:ok, p, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), ")") do
-      {:ok, {:memp, e, x, p}, rest}
+      ok_node(loc, {:memp, e, x, p}, 2, rest)
     end
   end
 
   defp parse_rwt(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "rewrite"),
          {:ok, eq, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- kw(skip(rest), "motive"),
          {:ok, rest} <- tok(skip(rest), "("),
          {:ok, rest} <- eat_lam(skip(rest)),
          {:ok, x, rest} <- ident(skip(rest)),
-         {:ok, rest} <- either_tok(skip(rest), ["→", "->"]),
+         {:ok, rest} <- either_tok(skip(rest), Words.arrow_words()),
          {:ok, p, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), ")"),
          {:ok, rest} <- kw(skip(rest), "in"),
          {:ok, t, rest} <- parse_term(skip(rest), 0) do
-      {:ok, {:rwt, eq, x, p, t}, rest}
+      ok_node(loc, {:rwt, eq, x, p, t}, 3, rest)
     end
   end
 
@@ -869,6 +4659,8 @@ defmodule Muro.Parser do
 
   # let (a, b) = e in t
   defp parse_letp(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- kw(s, "let"),
          {:ok, rest} <- tok(skip(rest), "("),
          {:ok, a, rest} <- ident(skip(rest)),
@@ -879,20 +4671,35 @@ defmodule Muro.Parser do
          {:ok, e, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- kw(skip(rest), "in"),
          {:ok, t, rest} <- parse_term(skip(rest), 0) do
-      {:ok, {:letp, e, a, b, t}, rest}
+      ok_node(loc, {:letp, e, a, b, t}, 2, rest)
     end
   end
 
+  # Written `{a ≡ b : ty}`, stored with the type first.
   defp parse_idt(s) do
+    loc = here(skip(s))
+
     with {:ok, rest} <- tok(s, "{"),
          {:ok, a, rest} <- parse_term(skip(rest), 0),
-         {:ok, rest} <- either_tok(skip(rest), ["≡", "=="]),
+         {:ok, rest} <- either_tok(skip(rest), Words.equiv_words()),
          {:ok, b, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), ":"),
          {:ok, ty, rest} <- parse_term(skip(rest), 0),
          {:ok, rest} <- tok(skip(rest), "}") do
+      push_idt(loc)
       {:ok, {:idt, ty, a, b}, rest}
     end
+  end
+
+  defp push_idt(loc) do
+    if span_on?() do
+      ty = pop_span()
+      b = pop_span()
+      a = pop_span()
+      push_node({loc, [ty, a, b]})
+    end
+
+    :ok
   end
 
   defp eat_lam(s) do

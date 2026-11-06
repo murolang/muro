@@ -1,0 +1,166 @@
+-- session-calls.muro — a session name is a continuation.
+-- A parameter is a nat. A guarded self-call is that protocol again.
+
+session ack := send Bit end
+
+session req := send Nat ack
+
+session req-back := dual req
+
+conform client : req := put 1 (put b0 done)
+
+conform server : req-back := get Nat (get Bit done)
+
+meet wire : client with server
+
+meet wire-swap : server with client
+
+session choice := choose ack end
+
+session choice-back := dual choice
+
+conform taker : choice := pick0 (put b1 done)
+
+conform giver : choice-back := cover (get Bit done) done
+
+meet choice-wire : taker with giver
+
+session route := recv (b : Bit) on ack (recv Nat end)
+
+session route-back := dual route
+
+conform route-server : route := get (b : Bit) on (put b1 done) (get (n : Nat) done)
+
+conform route-client : route-back := put b0 (get Bit done)
+
+meet route-wire : route-server with route-client
+
+session loop := rec X. recv Nat (send Nat ack)
+
+session loop-back := dual loop
+
+conform forever : loop := rec X. get (n : Nat) (put n (put b0 done))
+
+conform sender : loop-back := rec Y. put 1 (get (m : Nat) (get Bit done))
+
+meet loop-wire : forever with sender
+
+session split := branch ack (recv Nat end)
+
+session split-back := dual split
+
+conform cover-ack : split := cover (put b0 done) (get Nat done)
+
+conform pick-ack : split-back := pick0 (get Bit done)
+
+meet split-wire : cover-ack with pick-ack
+
+def id : run Π (n : Nat) → Nat :=
+  λ (n : Nat) → n
+
+def bump : run Π (n : Nat) → Nat :=
+  λ (n : Nat) → suc (id n)
+
+def zero : run Nat := 0
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+session flag (k : Nat) := send Bool end
+
+session flag1 := flag 1
+
+session flag-back := dual flag1
+
+conform yes : flag1 := put true done
+
+conform hear-flag : flag-back := get Bool done
+
+meet flag-wire : yes with hear-flag
+
+meet flag-swap : hear-flag with yes
+
+session frames (k : Nat) := send (Vec Nat k) end
+
+session three := frames 3
+
+session counted := frames (bump 0)
+
+conform send3 : three := put (rep 3 0) done
+
+conform send1 : counted := put (rep 1 0) done
+
+session three-back := dual three
+
+conform hear3 : three-back := get (Vec Nat 3) done
+
+meet frames-wire : send3 with hear3
+
+session stream (n : Nat) := send (d : Nat) {d ≤ n} (stream (suc n))
+
+session stream0 := stream 0
+
+session stream-back := dual stream0
+
+conform up : stream0 := rec X. put 0 X
+
+conform down : stream-back := rec Y. get (d : Nat) Y
+
+meet stream-wire : up with down
+
+meet stream-swap : down with up
+
+session wide := stream (bump 0)
+
+conform wide-client : wide := rec X. put zero X
+
+session wide-back := dual wide
+
+conform wide-server : wide-back := rec Y. get (d : Nat) Y
+
+meet wide-wire : wide-client with wide-server
+
+session nums (k : Nat) := send Nat end
+
+conform bumped : nums (bump 0) := put (bump 0) done
+
+session nums-back := dual (nums 1)
+
+conform hear-num : nums-back := get Nat done
+
+meet num-wire : bumped with hear-num
+
+session rest (n : Nat) := send (Vec Nat n) end
+
+session sized := recv (n : Nat) (rest n)
+
+session sized-back := dual sized
+
+conform sized-server : sized := get (n : Nat) (put (rep n 0) done)
+
+conform sized-client : sized-back := put 2 (get (Vec Nat 2) done)
+
+meet sized-wire : sized-server with sized-client
+
+session inner (k : Nat) := send (Vec Nat k) end
+
+session outer (n : Nat) := inner (suc n)
+
+session one := outer 0
+
+conform send-one : one := put (rep 1 0) done
+
+def pass : (s : req) ⊸ req := λ¹ (s : req) → s
+
+def pass-three : (s : three) ⊸ three := λ¹ (s : three) → s
+
+place home := ambient
+
+scheme local := fixed home
+
+endpoint req-home := req at local
+
+endpoint three-home := three at local
+
+def kept : run Nat := 0

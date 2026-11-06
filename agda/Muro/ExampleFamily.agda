@@ -11,6 +11,7 @@
 -- call its own block, so it is productive.
 ------------------------------------------------------------------------
 
+{-# OPTIONS --safe #-}
 module Muro.ExampleFamily where
 
 open import Data.Fin.Base using (zero; suc)

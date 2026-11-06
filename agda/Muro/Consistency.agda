@@ -16,7 +16,7 @@
 --                    corollary of Muro.Typing.pres;
 --   Empty-evid-from  normalisation of closed evidence gives: no closed
 --                    evidence of Empty. The hypothesis is an argument
---                    of the lemma. Nothing is postulated.
+--                    of the lemma. No axiom is added.
 --
 -- Not proved: Empty-evid itself. What is missing is exactly the
 -- hypothesis of Empty-evid-from: normalisation of closed evidence
@@ -251,6 +251,7 @@ ok-nu-app {S = S} {G = G} {fam = fam} {f = f} {a = a} eq = go f a [] eq
   go (addt _ _) _ _ ()
   go (toi64 _) _ _ ()
   go (packi _ _) _ _ ()
+  go (word _ _) _ _ ()
 
 -- An application is not a shaped term. A bare ν is.
 shape-app : ∀ {n s} {t : Tm n}
@@ -308,6 +309,7 @@ rigid-spine {σ = σ} {S = S} {G = G} {fam = fam} {s = s} hs diff eq c with ≈�
   side {addt _ _} () _ _
   side {toi64 _} () _ _
   side {packi _ _} () _ _
+  side {word _ _} () _ _
 
 ------------------------------------------------------------------------
 -- No closed normal evidence of Empty.
@@ -695,7 +697,7 @@ preservation : ∀ {e e′} →
 preservation D s = pres WfSig-empty D s
 
 ------------------------------------------------------------------------
--- The remaining obligation, as a hypothesis. Not postulated.
+-- The remaining obligation, as a hypothesis. It is not an axiom.
 ------------------------------------------------------------------------
 
 -- Normalisation: closed evidence at Empty reaches a normal form.

@@ -1,0 +1,122 @@
+-- ord.muro — an ordering, comparison on Nat, and lexicographic order on pairs.
+-- compare is sound against Le: lt means suc m ≤ n, eq means m ≡ n, gt means suc n ≤ m.
+import "le.muro"
+
+data Ordering : Type where
+  lt : Ordering
+  eq : Ordering
+  gt : Ordering
+
+def compare : run Π (m : Nat) → Π (n : Nat) → Ordering :=
+  λ (m : Nat) → λ (n : Nat) →
+    match m motive (λ _ → Ordering)
+      | 0 =>
+          (match n motive (λ _ → Ordering)
+            | 0 => eq
+            | suc _ => lt)
+      | suc p =>
+          (match n motive (λ _ → Ordering)
+            | 0 => gt
+            | suc q => compare p q)
+
+-- What an Ordering says about the two numbers it compared.
+def CompareAt : spec Π (m : Nat) → Π (n : Nat) → Π (o : Ordering) → Type :=
+  λ (m : Nat) → λ (n : Nat) → λ (o : Ordering) →
+    match o motive (λ _ → Type)
+      | lt => Le (suc m) n
+      | eq => {m ≡ n : Nat}
+      | gt => Le (suc n) m
+
+-- A result at p and q is the same result at their successors.
+def lift-compare : evidence Π (p : Nat) → Π (q : Nat) →
+                            Π (o : Ordering) → Π (h : CompareAt p q o) →
+                            CompareAt (suc p) (suc q) o :=
+  λ (p : Nat) → λ (q : Nat) → λ (o : Ordering) → λ (h : CompareAt p q o) →
+    (match o motive (λ (z : Ordering) → Π (e : CompareAt p q z) → CompareAt (suc p) (suc q) z)
+      | lt => λ (e : Le (suc p) q) → e
+      | eq => λ (e : {p ≡ q : Nat}) → cong Nat Nat (λ (z : Nat) → suc z) p q e
+      | gt => λ (e : Le (suc q) p) → e) h
+
+def compare-sound : evidence Π (m : Nat) → Π (n : Nat) → CompareAt m n (compare m n) :=
+  λ (m : Nat) →
+    match m motive (λ (x : Nat) → Π (n : Nat) → CompareAt x n (compare x n))
+      | 0 => λ (n : Nat) →
+          match n motive (λ (y : Nat) → CompareAt 0 y (compare 0 y))
+            | 0 => refl
+            | suc _ => tt
+      | suc p => λ (n : Nat) →
+          match n motive (λ (y : Nat) → CompareAt (suc p) y (compare (suc p) y))
+            | 0 => tt
+            | suc q => lift-compare p q (compare p q) (compare-sound p q)
+
+-- The first ordering wins, unless it is eq, in which case the second decides.
+-- Evidence, not a run: compare-lex inlines the same match. A run would be a
+-- strict call, and the second ordering would be evaluated on every branch.
+def lex-step : evidence Π (o1 : Ordering) → Π (o2 : Ordering) → Ordering :=
+  λ (o1 : Ordering) → λ (o2 : Ordering) →
+    match o1 motive (λ _ → Ordering)
+      | lt => lt
+      | eq => o2
+      | gt => gt
+
+-- Lexicographic comparison of pairs. The first components are compared first.
+-- The second components are compared only when that ordering is eq.
+-- lex-step (compare a c) (compare b d) would walk b and d on a strict backend
+-- even when the first ordering is lt or gt and that result is discarded.
+def compare-lex : run Π (p : Nat × Nat) → Π (q : Nat × Nat) → Ordering :=
+  λ (p : Nat × Nat) → λ (q : Nat × Nat) →
+    let (a, b) = p in
+    let (c, d) = q in
+    match (compare a c) motive (λ _ → Ordering)
+      | lt => lt
+      | eq => compare b d
+      | gt => gt
+
+-- The first ordering was lt, so the pair result is about that side.
+def LexSide : spec Π (a : Nat) → Π (b : Nat) → Π (c : Nat) → Π (d : Nat) →
+                     Π (o : Ordering) → Type :=
+  λ (a : Nat) → λ (b : Nat) → λ (c : Nat) → λ (d : Nat) → λ (o : Ordering) →
+    match o motive (λ _ → Type)
+      | lt => Le (suc a) c
+      | eq => Le (suc b) d
+      | gt => Empty
+
+-- The first ordering was gt, so the pair result is about that side.
+def LexGt : spec Π (a : Nat) → Π (b : Nat) → Π (c : Nat) → Π (d : Nat) →
+                   Π (o : Ordering) → Type :=
+  λ (a : Nat) → λ (b : Nat) → λ (c : Nat) → λ (d : Nat) → λ (o : Ordering) →
+    match o motive (λ _ → Type)
+      | lt => Empty
+      | eq => Le (suc d) b
+      | gt => Le (suc c) a
+
+-- What the lexicographic result says, given the ordering of the first components.
+def LexAt : spec Π (a : Nat) → Π (b : Nat) → Π (c : Nat) → Π (d : Nat) →
+                   Π (o1 : Ordering) → Π (r : Ordering) → Type :=
+  λ (a : Nat) → λ (b : Nat) → λ (c : Nat) → λ (d : Nat) →
+  λ (o1 : Ordering) → λ (r : Ordering) →
+    match r motive (λ _ → Type)
+      | lt => LexSide a b c d o1
+      | eq => {a ≡ c : Nat} × {b ≡ d : Nat}
+      | gt => LexGt a b c d o1
+
+def lex-sound-at : evidence Π (a : Nat) → Π (b : Nat) → Π (c : Nat) → Π (d : Nat) →
+                            Π (o1 : Ordering) → Π (o2 : Ordering) →
+                            Π (h1 : CompareAt a c o1) → Π (h2 : CompareAt b d o2) →
+                            LexAt a b c d o1 (lex-step o1 o2) :=
+  λ (a : Nat) → λ (b : Nat) → λ (c : Nat) → λ (d : Nat) →
+  λ (o1 : Ordering) → λ (o2 : Ordering) →
+  λ (h1 : CompareAt a c o1) → λ (h2 : CompareAt b d o2) →
+    (match o1 motive (λ (z : Ordering) → Π (e1 : CompareAt a c z) → LexAt a b c d z (lex-step z o2))
+      | lt => λ (e1 : Le (suc a) c) → e1
+      | eq => λ (e1 : {a ≡ c : Nat}) →
+          (match o2 motive (λ (w : Ordering) → Π (e2 : CompareAt b d w) → LexAt a b c d eq w)
+            | lt => λ (e2 : Le (suc b) d) → e2
+            | eq => λ (e2 : {b ≡ d : Nat}) → (e1, e2)
+            | gt => λ (e2 : Le (suc d) b) → e2) h2
+      | gt => λ (e1 : Le (suc c) a) → e1) h1
+
+def lex-sound : evidence Π (a : Nat) → Π (b : Nat) → Π (c : Nat) → Π (d : Nat) →
+                         LexAt a b c d (compare a c) (compare-lex (a, b) (c, d)) :=
+  λ (a : Nat) → λ (b : Nat) → λ (c : Nat) → λ (d : Nat) →
+    lex-sound-at a b c d (compare a c) (compare b d) (compare-sound a c) (compare-sound b d)

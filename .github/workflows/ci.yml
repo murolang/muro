@@ -16,12 +16,21 @@ permissions:
 jobs:
   elixir:
     name: Elixir
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
     timeout-minutes: 20
     env:
       MIX_ENV: test
     steps:
       - uses: actions/checkout@v5
+
+      - name: Install the ARM assembler and QEMU
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi qemu-system-arm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: mlugg/setup-zig@v2.2.1
+        with:
+          version: 0.15.2
 
       - uses: jdx/mise-action@v4
 
@@ -40,23 +49,45 @@ jobs:
       - run: mix compile --warnings-as-errors
       - run: mix test
       - run: mix muro.check
+      - run: bash scripts/archive-smoke.sh
 
   agda:
     name: Agda 2.8.0
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
     # Muro.Soundness typechecks one large mutual block. On a 16 GB runner
     # that check is killed; the swap gives it room. The cache of
-    # agda/_build makes a rerun with unchanged sources fast.
-    timeout-minutes: 75
+    # agda/_build makes a rerun with unchanged sources fast. A changed
+    # Soundness rechecks for longer than 75 minutes on the hosted runner.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
+
+      # The swap file and the restored agda/_build cache need room the
+      # hosted image does not leave free. Remove preinstalled toolchains
+      # this job never uses before anything else writes to disk.
+      - name: Free disk space
+        if: runner.environment == 'github-hosted'
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo docker image prune --all --force >/dev/null 2>&1 || true
+          df -h /
 
       # Extract outside the repo: the tarball's `agda` binary collides with
       # the `agda/` source directory (tar exits 2). agda-setup-action@v1
       # unpacks in cwd and hits the same clash.
+      # A self-hosted runner image may carry Agda 2.8.0 already, built for
+      # its own architecture; the release tarball below is x86-64 only.
       - name: Install Agda 2.8.0
         run: |
           set -euo pipefail
+          if command -v agda >/dev/null 2>&1 && agda --version | head -n1 | grep -q 'version 2\.8\.0$'; then
+            agda --version
+            agda --setup
+            exit 0
+          fi
           trap 'echo "::error::agda install failed at line $LINENO exit $?"' ERR
           tmp=$(mktemp -d)
           asset="Agda-v2.8.0-linux.tar.xz"
@@ -82,6 +113,7 @@ jobs:
       # The hosted runner has 16 GB and no swap. Soundness peaks above that
       # and the kernel kills it (`make: Killed`) with no Agda error.
       - name: Add swap
+        if: runner.environment == 'github-hosted'
         run: |
           set -euo pipefail
           free -h
@@ -98,4 +130,51 @@ jobs:
 
       # Same flags as `make agda`: --no-libraries so extra .agda-lib files
       # shipped with the stdlib checkout (tests, docs) are not loaded.
-      - run: make agda
+      # Cap the Haskell RTS heap so Views collects instead of growing past
+      # the self-hosted runner's 14g cgroup (Linux peaked ~13.2 GiB).
+      # AGDA on the make line overrides the Makefile default.
+      - name: Run make agda
+        run: make agda AGDA="agda +RTS -M12G -A64M -RTS"
+
+  visor:
+    name: muro_visor
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.18.4"
+            otp: "27.2"
+          - elixir: "1.20.4"
+            otp: "28.1"
+    defaults:
+      run:
+        working-directory: ui
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      # ui/_build holds the compiled path dependency. A prefix restore
+      # brought muro.app 0.20.5 into a 0.20.7 checkout, and Mix then
+      # refused to compile. The key covers the parent sources, and a
+      # miss does not restore another key. The path build is dropped
+      # either way, so a hit cannot supply a stale muro.app.
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ui/deps
+            ui/_build
+          key: visor-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('ui/mix.lock', 'ui/mix.exs', 'ui/lib/**/*.ex', 'mix.lock', 'mix.exs', 'lib/**/*.ex', 'lib/**/*.muro') }}
+
+      - name: Drop the cached path dependency
+        run: rm -rf _build/*/lib/muro
+
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix test

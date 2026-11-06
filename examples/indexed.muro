@@ -1,0 +1,32 @@
+-- indexed.muro — a received bit selects the next action.
+-- The arm is the index. The sender writes the literal. A nat does not choose an arm.
+
+session route := recv (b : Bit) on (send Nat end) (recv Nat end)
+
+session route-back := dual route
+
+conform server : route := get (b : Bit) on (put 1 done) (get (n : Nat) done)
+
+conform client : route-back := put b0 (get (m : Nat) done)
+
+meet wire : server with client
+
+conform client-one : route-back := put b1 (put 0 done)
+
+meet wire-one : server with client-one
+
+-- The bound bit is an ordinary payload inside the arm.
+session echo-bit := recv (b : Bit) on (send Bit end) (send Bit end)
+
+session echo-back := dual echo-bit
+
+conform echo : echo-bit := get (b : Bit) on (put b done) (put b done)
+
+conform ask : echo-back := put b1 (get (c : Bit) done)
+
+meet echo-wire : echo with ask
+
+-- `on` is an identifier outside a session.
+def on : run Nat := 0
+
+def kept : run Nat := 0

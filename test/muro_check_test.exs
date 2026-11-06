@@ -144,11 +144,8 @@ defmodule Muro.CheckTest do
   end
 
   test "higher_order.muro: a definition passed as a value or partially applied is a closure" do
-    src = File.read!("examples/higher_order.muro")
-    assert {:ok, book} = Parser.parse(src)
-    assert Check.check_sig(book) == :ok
-
-    out = Emit.emit_module(Muro.HigherOrder, book)
+    assert Muro.check_file("examples/higher_order.muro") == :ok
+    assert {:ok, out} = Muro.emit_file("examples/higher_order.muro", Muro.HigherOrder)
     refute out =~ "ident()"
     refute out =~ "add2-ok"
     Code.eval_string(out)
@@ -158,7 +155,7 @@ defmodule Muro.CheckTest do
     assert call("HigherOrder", :add2, []) ==
              {:cons, {:suc, {:suc, 0}}, {:cons, {:suc, {:suc, {:suc, 0}}}, nil}}
 
-    assert call("HigherOrder", :len_one, []) == {:suc, 0}
+    assert call("HigherOrder", String.to_atom(Emit.elixir_base("len-one")), []) == {:suc, 0}
     assert call("HigherOrder", :adder, [{:suc, 0}, {:suc, 0}]) == {:suc, {:suc, 0}}
   end
 
@@ -626,7 +623,7 @@ defmodule Muro.CheckTest do
 
     out = Emit.emit_module(Muro.BisimEx, book)
     assert out =~ ~r/\bdef zeros\b/
-    assert out =~ ~r/\bdef zeros_\b/
+    assert out =~ ~r/\bdef #{Emit.elixir_base("zeros'")}\b/
     assert out =~ ~r/\bdef natsFrom\b/
     refute out =~ "zeros-bisim"
     refute out =~ "nats_tail_bisim"
@@ -721,6 +718,413 @@ defmodule Muro.CheckTest do
     assert msg =~ "unguarded recursive call"
   end
 
+  test "an unfold whose tail forces the block is refused" do
+    stream = """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+    """
+
+    alt = """
+    def s : run Stream Nat :=
+      unfold 0 (λ (+ k : Nat) → (k, match k motive (λ _ → Nat) | 0 => suc(0) | suc _ => 0))
+    """
+
+    for tl <- ["tail p", "snd (uncons p)", "let (a, b) = uncons p in b"] do
+      src =
+        stream <>
+          alt <>
+          """
+          def p : evidence Always Nat (λ (n : Nat) → {n ≡ 0 : Nat}) s :=
+            unfold tt (λ (_ : Unit) → (refl, #{tl}))
+          """
+
+      assert {:ok, book} = Parser.parse(src)
+      assert {:error, msg} = Check.check_sig(book)
+      assert msg =~ "p body: unguarded recursive call"
+    end
+
+    indexed =
+      stream <>
+        """
+        def natsFrom : run Π (n : Nat) → Stream Nat :=
+          λ (n : Nat) → unfold n (λ (+ k : Nat) → (k, suc k))
+        def p : evidence Π (n : Nat) → Always Nat (λ (m : Nat) → {m ≡ n : Nat}) (natsFrom n) :=
+          λ (n : Nat) → unfold tt (λ (_ : Unit) → (refl, tail (p n)))
+        """
+
+    assert {:ok, book} = Parser.parse(indexed)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "p body: unguarded recursive call"
+
+    # 0, 0, 1, 1, … so two guarded heads are true and the third is not.
+    # The nested tail skips that third obligation.
+    nested =
+      stream <>
+        """
+        def s : run Stream Nat :=
+          unfold 0 (λ (+ k : Nat) →
+            (match k motive (λ _ → Nat)
+               | 0 => 0
+               | suc j => match j motive (λ _ → Nat) | 0 => 0 | suc _ => suc(0),
+             match k motive (λ _ → Nat)
+               | 0 => suc(0)
+               | suc j => match j motive (λ _ → Nat) | 0 => suc(suc(0)) | suc _ => 0))
+        def p : evidence Always Nat (λ (n : Nat) → {n ≡ 0 : Nat}) s :=
+          unfold tt (λ (_ : Unit) → (refl, unfold tt (λ (_ : Unit) → (refl, tail (tail p)))))
+        """
+
+    assert {:ok, book} = Parser.parse(nested)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "p body: unguarded recursive call"
+
+    head =
+      stream <>
+        """
+        ν Same (s : Stream Nat) : Type where
+          uncons : Same s → {head s ≡ 0 : Nat} × {head s ≡ 0 : Nat}
+        def zeros : run Stream Nat := unfold 0 (λ (_ : Nat) → (0, 0))
+        def p : evidence Same zeros :=
+          unfold tt (λ (_ : Unit) → (refl, head p))
+        """
+
+    assert {:ok, book} = Parser.parse(head)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "p body: unguarded recursive call"
+
+    zeros = "def zeros : run Stream Nat := unfold 0 (λ (_ : Nat) → (0, 0))\n"
+    always = "Always Nat (λ (_ : Nat) → {0 ≡ 0 : Nat}) zeros"
+
+    match_tail =
+      stream <>
+        zeros <>
+        """
+        def p : evidence #{always} :=
+          unfold tt (λ (_ : Unit) → (refl, match 0 motive (λ _ → #{always}) | 0 => p | suc _ => p))
+        """
+
+    assert {:ok, book} = Parser.parse(match_tail)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "p body: unguarded recursive call"
+
+    rewrite_tail =
+      stream <>
+        zeros <>
+        """
+        def eq : evidence {0 ≡ 0 : Nat} := refl
+        def p : evidence #{always} :=
+          unfold tt (λ (_ : Unit) → (refl, rewrite eq motive (λ _ → #{always}) in p))
+        """
+
+    assert {:ok, book} = Parser.parse(rewrite_tail)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "p body: unguarded recursive call"
+  end
+
+  test "forcing the block is a guard failure, and the old controls stay type errors" do
+    stream = """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+    def s : run Stream Nat :=
+      unfold 0 (λ (+ k : Nat) → (k, match k motive (λ _ → Nat) | 0 => suc(0) | suc _ => 0))
+    """
+
+    # (refl, p) is a guarded tail and the wrong type: the predicate fails at suc(0).
+    src =
+      stream <>
+        """
+        def p : evidence Always Nat (λ (n : Nat) → {n ≡ 0 : Nat}) s :=
+          unfold tt (λ (_ : Unit) → (refl, p))
+        """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "cannot convert"
+    refute msg =~ "unguarded recursive call"
+
+    src =
+      stream <>
+        """
+        def one-eq-zero : evidence {suc(0) ≡ 0 : Nat} := refl
+        """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "cannot convert"
+    refute msg =~ "unguarded recursive call"
+
+    src =
+      stream <>
+        """
+        def bad : evidence Empty := tt
+        """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "cannot convert"
+    refute msg =~ "unguarded recursive call"
+  end
+
+  test "a seed the head reads is refused when it mentions the block" do
+    src = """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+    def s : run Π (n : Nat) → Stream Nat :=
+      λ (n : Nat) →
+        unfold (match n motive (λ _ → Nat)
+                  | 0 => 0
+                  | suc m => head (s m))
+          (λ (k : Nat) → (k, 0))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a seed the tail reads is refused when it mentions the block" do
+    src = """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+    def s : run Π (n : Nat) → Stream Nat :=
+      λ (n : Nat) →
+        unfold (match n motive (λ _ → Nat)
+                  | 0 => 0
+                  | suc m => head (s m))
+          (λ (k : Nat) → (0, k))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a stream tail that mentions the block is refused when the head reads the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) → unfold n (λ (k : Nat) → (k, f n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a bare stream nested under a pair is refused when the head reads the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (snd (s m))
+    def s : run Π (+ n : Nat) → Nat × Stream Nat :=
+      λ (+ n : Nat) → (0, unfold n (λ (k : Nat) → (k, f n)))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a bare stream nested under an application is refused when the head reads the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) → (λ (u : Stream Nat) → u) (unfold n (λ (k : Nat) → (k, f n)))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a bare stream nested under a match is refused when the head reads the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) →
+        match n motive (λ _ → Stream Nat)
+          | 0 => unfold n (λ (k : Nat) → (k, f n))
+          | suc _ => unfold n (λ (k : Nat) → (k, f n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a bare stream nested under a pair is accepted when the head ignores the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (snd (s m))
+    def s : run Π (+ n : Nat) → Nat × Stream Nat :=
+      λ (+ n : Nat) → (0, unfold n (λ (k : Nat) → (0, f n)))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a computed Nat match in the head is refused when it reads the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) →
+        unfold n (λ (k : Nat) →
+          (match k motive (λ _ → Nat) | 0 => 0 | suc j => suc j, f n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "an annotation in the head is refused when it reads the seed" do
+    assert {:ok, book} = Parser.parse(stream_head_src())
+    book = wrap_s_head(book, &{:ann, &1, :nat})
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a unit match in the head is refused when it reads the seed" do
+    assert {:ok, book} = Parser.parse(stream_head_src())
+    book = wrap_s_head(book, &{:munit, :one, "_", :nat, &1})
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a rewrite in the head is refused when it reads the seed" do
+    src = """
+    def eq : evidence {0 ≡ 0 : Nat} := refl
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) →
+        unfold n (λ (k : Nat) → (rewrite eq motive (λ _ → Nat) in k, f n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "an empty motive in the head is refused when it reads the seed" do
+    src = """
+    def f : run Π (+ e : Empty) → Π (n : Nat) → Nat :=
+      λ (+ e : Empty) → λ (n : Nat) →
+        match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s e m)
+    def s : run Π (+ e : Empty) → Π (+ n : Nat) → Stream Nat :=
+      λ (+ e : Empty) → λ (+ n : Nat) →
+        unfold n (λ (k : Nat) →
+          (matchEmpty e motive (λ _ → (λ (_ : Nat) → Nat) k), f e n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert {:error, msg} = Check.check_sig(book)
+    assert msg =~ "s productivity: unguarded recursive call"
+  end
+
+  test "a stream tail that mentions the block is accepted when the head ignores the seed" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) → unfold n (λ (k : Nat) → (0, f n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "an unfold whose step is a definition is accepted when the head ignores the seed" do
+    src = """
+    def step : run Π (k : Nat) → Nat × Nat :=
+      λ (k : Nat) → (0, suc k)
+    def s : run Stream Nat := unfold 0 step
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a family whose head reads the seed may call the block" do
+    src = """
+    ν F (n : Nat) : Type where
+      uncons : F n → Nat × F n
+    def s : evidence Π (+ n : Nat) → F n :=
+      λ (+ n : Nat) → unfold n (λ (k : Nat) → (k, f n))
+    def f : evidence Π (+ n : Nat) → F n :=
+      λ (+ n : Nat) → unfold n (λ (k : Nat) → (k, s n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a seed the head does not read may mention the block" do
+    src = """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+    def zeros : run Stream Nat := unfold 0 (λ (_ : Nat) → (0, 0))
+    def p : evidence Π (n : Nat) → Always Nat (λ (_ : Nat) → {0 ≡ 0 : Nat}) zeros :=
+      λ (n : Nat) →
+        unfold (match n motive (λ _ → Unit)
+                  | 0 => tt
+                  | suc m => let (a, b) = uncons (p m) in tt)
+          (λ (_ : Unit) → (refl, p n))
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a guarded tail, a pair of them, and a nested unfold still check" do
+    stream = """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+    """
+
+    zeros = "def zeros : run Stream Nat := unfold 0 (λ (_ : Nat) → (0, 0))\n"
+
+    assert {:ok, book} = Parser.parse(File.read!("examples/always.muro"))
+    assert Check.check_sig(book) == :ok
+
+    fam =
+      stream <>
+        zeros <>
+        """
+        def p : evidence Π (n : Nat) → Always Nat (λ (_ : Nat) → {0 ≡ 0 : Nat}) zeros :=
+          λ (n : Nat) → unfold tt (λ (_ : Unit) → (refl, p (suc n)))
+        """
+
+    assert {:ok, book} = Parser.parse(fam)
+    assert Check.check_sig(book) == :ok
+
+    pair =
+      stream <>
+        """
+        ν Two (s : Stream Nat) : Type where
+          uncons : Two s → Unit × (Two (tail s) × Two (tail s))
+        #{zeros}
+        def two : evidence Two zeros := unfold tt (λ (_ : Unit) → (tt, (two, two)))
+        """
+
+    assert {:ok, book} = Parser.parse(pair)
+    assert Check.check_sig(book) == :ok
+
+    nested =
+      stream <>
+        zeros <>
+        """
+        def p : evidence Always Nat (λ (_ : Nat) → {0 ≡ 0 : Nat}) zeros :=
+          unfold tt (λ (_ : Unit) → (refl, unfold tt (λ (_ : Unit) → (refl, p))))
+        """
+
+    assert {:ok, book} = Parser.parse(nested)
+    assert Check.check_sig(book) == :ok
+  end
+
   test "a declared family unfold checks, and a stream tail wraps" do
     src = """
     ν Count (n : Nat) : Type where
@@ -770,11 +1174,8 @@ defmodule Muro.CheckTest do
   end
 
   test "list.muro checks; evidence is not emitted; length runs" do
-    src = File.read!("examples/list.muro")
-    assert {:ok, book} = Parser.parse(src)
-    assert Check.check_sig(book) == :ok
-
-    out = Emit.emit_module(Muro.Lists, book)
+    assert Muro.check_file("examples/list.muro") == :ok
+    assert {:ok, out} = Muro.emit_file("examples/list.muro", Muro.Lists)
     assert out =~ ~r/\bdef length\b/
     assert out =~ ~r/\bdef ones2\b/
     refute out =~ "length-ones2"
@@ -783,11 +1184,8 @@ defmodule Muro.CheckTest do
   end
 
   test "maybe.muro checks; fromMaybe runs" do
-    src = File.read!("examples/maybe.muro")
-    assert {:ok, book} = Parser.parse(src)
-    assert Check.check_sig(book) == :ok
-
-    out = Emit.emit_module(Muro.MaybeEx, book)
+    assert Muro.check_file("examples/maybe.muro") == :ok
+    assert {:ok, out} = Muro.emit_file("examples/maybe.muro", Muro.MaybeEx)
     assert out =~ ~r/\bdef fromMaybe\b/
     refute out =~ "fromJust1"
     Code.eval_string(out)
@@ -1210,8 +1608,7 @@ defmodule Muro.CheckTest do
   end
 
   test "non-descending Maybe recursion fails" do
-    src = File.read!("examples/maybe.muro")
-    assert {:ok, book} = Parser.parse(src)
+    assert {:ok, book} = Muro.Load.file("examples/maybe.muro")
 
     bad = %{
       name: "loop",
@@ -1248,8 +1645,7 @@ defmodule Muro.CheckTest do
   end
 
   test "non-descending list recursion fails" do
-    src = File.read!("examples/list.muro")
-    assert {:ok, book} = Parser.parse(src)
+    assert {:ok, book} = Muro.Load.file("examples/list.muro")
 
     bad = %{
       name: "badlen",
@@ -1286,9 +1682,7 @@ defmodule Muro.CheckTest do
     assert Nx.to_flat_list(call("NxAdd", :doubled, [])) == [2, 4]
     assert Nx.to_flat_list(call("NxAdd", :addT, [Nx.tensor([1, 2], type: :s64)])) == [2, 4]
 
-    sum = call("NxAdd", :addI, [Nx.tensor(3, type: :s64), Nx.tensor(4, type: :s64)])
-    assert %Nx.Tensor{} = sum
-    assert Nx.to_number(sum) == 7
+    assert call("NxAdd", :addI, [3, 4]) == 7
   end
 
   test "Peano Nat is not emitted as s64 except through toI64" do
@@ -1809,6 +2203,18 @@ defmodule Muro.CheckTest do
     assert Mix.Tasks.Muro.Check.run(["examples/bisim.muro"]) == :ok
   end
 
+  test "mix muro.check accepts a product arm and refuses a bad one" do
+    assert Mix.Tasks.Muro.Check.run(["examples/pair-bindings.muro"]) == :ok
+
+    assert {:error, msg} = Muro.check_file("examples/bad_pair_bindings.muro")
+    assert msg =~ "constructor arm on a pair"
+    assert msg =~ "missing field"
+
+    assert_raise Mix.Error, ~r/constructor arm on a pair/, fn ->
+      Mix.Tasks.Muro.Check.run(["examples/bad_pair_bindings.muro"])
+    end
+  end
+
   test "a match on a two-field constructor reduces with both fields in place" do
     # The second field was substituted one variable too low, into whichever
     # binder came next: drop1 (cons y ys) reduced to zs, so the true equation
@@ -1827,7 +2233,7 @@ defmodule Muro.CheckTest do
     sort_src = File.read!("examples/sort.muro")
     refute sort_src =~ "data List"
     assert {:ok, sort_book} = Parser.parse(sort_src)
-    assert Enum.any?(sort_book, &(&1[:kind] == :import and &1.path == "list.muro"))
+    assert Enum.any?(sort_book, &(&1[:kind] == :import and &1.path == "std:list.muro"))
     refute Enum.any?(sort_book, &(&1[:kind] == :data and &1.name == "List"))
 
     assert {:ok, ex} = Muro.emit_file("examples/sort.muro", Sort)
@@ -2124,13 +2530,16 @@ defmodule Muro.CheckTest do
     assert {:ok, book} = Parser.parse(src)
     assert :ok = Check.check_sig(book)
     out = Emit.emit_module(Muro.Collide, book)
+    bar = Emit.elixir_base("foo-bar")
+    assert out =~ "def #{bar} do"
     assert out =~ "def foo_bar do"
-    assert out =~ "def foo_bar_2 do"
-    assert out =~ "foo_bar_2()"
+    assert out =~ "foo_bar()"
+    refute out =~ "#{bar}()"
+    refute out =~ "def foo_bar_2"
     Code.eval_string(out)
     assert call("Collide", :answer, []) == {:suc, 0}
-    assert call("Collide", :foo_bar, []) == 0
-    assert call("Collide", :foo_bar_2, []) == {:suc, 0}
+    assert call("Collide", :foo_bar, []) == {:suc, 0}
+    assert call("Collide", String.to_atom(bar), []) == 0
   end
 
   test "a definition named like an Elixir reserved word emits a compilable module" do
@@ -2144,9 +2553,10 @@ defmodule Muro.CheckTest do
       assert :ok = Check.check_sig(book)
       mod = Module.concat(Muro, "Reserved#{word}")
       out = Emit.emit_module(mod, book)
-      assert out =~ "def muro_#{word}("
+      assert out =~ "def #{Emit.elixir_base(word)}("
+      assert out =~ "def #{Emit.elixir_base("use-#{word}")}"
       Code.eval_string(out)
-      assert apply(mod, :"use_#{word}", []) == 0
+      assert apply(mod, String.to_atom(Emit.elixir_base("use-#{word}")), []) == 0
     end
   end
 
@@ -2335,6 +2745,63 @@ defmodule Muro.CheckTest do
     assert msg =~ "ν"
   end
 
+  test "a false equation of two stuck recursive calls is a conversion failure" do
+    assert {:ok, false_book} =
+             Parser.parse(find_book("or (find k xs) (eq-key k x)", false_tail()))
+
+    for fuel <- [60, Check.default_fuel()] do
+      assert {:error, msg} = Check.check_sig(false_book, fuel: fuel)
+      assert msg =~ "cannot convert"
+      assert msg =~ "wild"
+      assert msg =~ "named"
+      refute Check.out_of_fuel?(msg)
+    end
+
+    assert {:ok, swapped} =
+             Parser.parse(find_book("or (eq-key k x) (find k xs)", false_tail()))
+
+    assert {:error, swapped_msg} = Check.check_sig(swapped, fuel: 60)
+    assert swapped_msg =~ "cannot convert"
+    assert swapped_msg =~ "true"
+    assert swapped_msg =~ "false"
+    refute Check.out_of_fuel?(swapped_msg)
+
+    assert {:ok, true_book} = Parser.parse(find_book("or (find k xs) (eq-key k x)", true_tail()))
+    assert Check.check_sig(true_book) == :ok
+
+    # One unfolding erases an argument the body does not use.
+    assert {:ok, drop} = Parser.parse(drop_src())
+    assert Check.check_sig(drop) == :ok
+
+    # The match is on a later argument, and both arms are the same.
+    assert {:ok, later} = Parser.parse(later_src())
+    assert Check.check_sig(later) == :ok
+
+    # The scrutinee is a constructor, so the match fires and both sides are false.
+    assert {:ok, on_nil} = Parser.parse(find_book("or (find k xs) (eq-key k x)", nil_tail()))
+    assert Check.check_sig(on_nil) == :ok
+  end
+
+  test "a stuck false equation takes the same number of steps at every fuel" do
+    assert {:ok, named} = Parser.parse(find_book("or (find k xs) (eq-key k x)", false_tail()))
+    assert {:ok, db} = Ast.book_to_db(named)
+    defn = Enum.find(db, &(&1.name == "wild-is-named"))
+
+    counts =
+      for fuel <- [40, 60, Check.default_fuel()] do
+        {result, steps} =
+          Check.with_conv_steps(fn -> Check.check_def(db, defn, fuel) end)
+
+        assert {:error, msg} = result
+        assert msg =~ "cannot convert"
+        refute Check.out_of_fuel?(msg)
+        steps
+      end
+
+    assert match?([n, n, n], counts)
+    assert hd(counts) < 10_000
+  end
+
   test "CSHRL checks in every environment, and its agents run" do
     assert {:error, msg} = Muro.check_file("examples/cshrl/lib/core.muro")
     assert msg =~ "is supplied by a file that imports this one"
@@ -2361,15 +2828,19 @@ defmodule Muro.CheckTest do
     assert take.("CshrlTwo", :episode, :start, 3) == [go: 1, go: 1, go: 1]
 
     load.("examples/cshrl/envs/binary_sacrifice.muro", "CshrlSac")
-    assert take.("CshrlSac", :episode, :start, 3) == [go_trap: 1, go_paradise: 0, go_paradise: 0]
+    trap = String.to_atom(Emit.elixir_atom_name("go-trap"))
+    paradise = String.to_atom(Emit.elixir_atom_name("go-paradise"))
+    successor = String.to_atom(Emit.elixir_base("successor-episode"))
 
-    assert take.("CshrlSac", :successor_episode, :start, 3) ==
-             [go_paradise: 0, go_paradise: 1, go_paradise: 1]
+    assert take.("CshrlSac", :episode, :start, 3) == [{trap, 1}, {paradise, 0}, {paradise, 0}]
+
+    assert take.("CshrlSac", successor, :start, 3) ==
+             [{paradise, 0}, {paradise, 1}, {paradise, 1}]
 
     load.("examples/cshrl/envs/skill_investment.muro", "CshrlSkill")
     assert take.("CshrlSkill", :episode, :novice, 3) == [work: 1, work: 1, work: 1]
 
-    assert take.("CshrlSkill", :successor_episode, :novice, 5) ==
+    assert take.("CshrlSkill", successor, :novice, 5) ==
              [train: 0, train: 0, train: 0, work: 5, work: 5]
 
     assert call("CshrlSkill", :value, [:novice]) |> Enum.take(5) |> Enum.map(&nat.(nat, &1)) ==
@@ -2379,24 +2850,132 @@ defmodule Muro.CheckTest do
   end
 
   test "binary successor checks, and the bits of 11 step to the bits of 12" do
-    assert Muro.check_file("stdlib/binary.muro") == :ok
-    assert {:ok, src} = Muro.emit_file("stdlib/binary.muro", Muro.StdlibBinary)
+    assert Muro.check_file("lib/muro/std/binary.muro") == :ok
+    assert {:ok, src} = Muro.emit_file("lib/muro/std/binary.muro", Muro.StdBinary)
     assert src =~ ~r/\bdef sucBin\b/
     assert src =~ ~r/\bdefp double\b/
     refute src =~ "sucBin-corresp"
     refute src =~ "sucBits-id"
-    refute src =~ "toNat-toBits"
+    refute src =~ "fromBits-toBits"
     Code.eval_string(src)
 
-    bits11 = call("StdlibBinary", :bits11, [])
-    bits12 = call("StdlibBinary", :bits12, [])
-    assert call("StdlibBinary", :sucBin, [bits11]) == bits12
+    bits11 = call("StdBinary", :bits11, [])
+    bits12 = call("StdBinary", :bits12, [])
+    assert call("StdBinary", :sucBin, [bits11]) == bits12
 
-    eleven = call("StdlibBinary", :eleven, [])
-    assert call("StdlibBinary", :toNat, [bits11]) == eleven
-    assert call("StdlibBinary", :toNat, [bits12]) == {:suc, eleven}
+    eleven = call("StdBinary", :eleven, [])
+    assert call("StdBinary", :fromBits, [bits11]) == eleven
+    assert call("StdBinary", :fromBits, [bits12]) == {:suc, eleven}
   end
 
   # The module exists only after Code.eval_string, so a literal remote call warns.
+  # Head is the seed binder. Annotation and unit match are kernel forms.
+  defp stream_head_src do
+    """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → match n motive (λ _ → Nat) | 0 => 0 | suc m => head (s m)
+    def s : run Π (+ n : Nat) → Stream Nat :=
+      λ (+ n : Nat) → unfold n (λ (k : Nat) → (k, f n))
+    """
+  end
+
+  defp wrap_s_head(book, wrap) do
+    Enum.map(book, fn
+      %{name: "s", body: {:lam, q, a, x, {:unf, seed, {:lam, q1, s, y, {:pair, h, t}}}}} = d ->
+        %{d | body: {:lam, q, a, x, {:unf, seed, {:lam, q1, s, y, {:pair, wrap.(h), t}}}}}
+
+      d ->
+        d
+    end)
+  end
+
   defp call(mod, fun, args), do: apply(Module.concat(Muro, mod), fun, args)
+
+  defp find_book(cons_arm, tail) do
+    """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+    data Key : Type where
+      wild : Key
+      named : Nat → Key
+
+    def eq-nat : run Π (a : Nat) → Π (b : Nat) → Bool :=
+      λ (a : Nat) → λ (b : Nat) →
+        match a motive (λ _ → Bool)
+          | 0 => (match b motive (λ _ → Bool) | 0 => true | suc _ => false)
+          | suc p => (match b motive (λ _ → Bool) | 0 => false | suc q => eq-nat p q)
+
+    def eq-key : run Π (k : Key) → Π (j : Key) → Bool :=
+      λ (k : Key) → λ (j : Key) →
+        match k motive (λ _ → Bool)
+          | wild => (match j motive (λ _ → Bool) | wild => true | named _ => false)
+          | named n => (match j motive (λ _ → Bool) | wild => false | named m => eq-nat n m)
+
+    def or : run Π (a : Bool) → Π (b : Bool) → Bool :=
+      λ (a : Bool) → λ (b : Bool) → match a motive (λ _ → Bool) | true => true | false => b
+
+    def find : run Π (+ k : Key) → Π (t : List Key) → Bool :=
+      λ (+ k : Key) → λ (t : List Key) →
+        match t motive (λ _ → Bool)
+          | nil => false
+          | cons x xs => #{cons_arm}
+    #{tail}
+    """
+  end
+
+  defp false_tail do
+    """
+    def wild-is-named : evidence Π (t : List Key) → {find wild t ≡ find (named 0) t : Bool} :=
+      λ (t : List Key) → refl
+    """
+  end
+
+  defp true_tail do
+    """
+    def g : run Π (+ k : Key) → Π (t : List Key) → Bool :=
+      λ (+ k : Key) → λ (t : List Key) → find k t
+
+    def g-is-find : evidence Π (k : Key) → Π (t : List Key) → {g k t ≡ find k t : Bool} :=
+      λ (k : Key) → λ (t : List Key) → refl
+    def same-key : evidence Π (t : List Key) → {find wild t ≡ find wild t : Bool} :=
+      λ (t : List Key) → refl
+    """
+  end
+
+  defp nil_tail do
+    """
+    def find-nil : evidence {find wild nil ≡ find (named 0) nil : Bool} := refl
+    """
+  end
+
+  defp drop_src do
+    """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+    def drop : run Π (b : Bool) → Π (n : Nat) → Nat :=
+      λ (b : Bool) → λ (n : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => 0
+          | suc m => suc (drop true m)
+    def drop-ignores : evidence Π (n : Nat) → {drop true n ≡ drop false n : Nat} :=
+      λ (n : Nat) → refl
+    """
+  end
+
+  defp later_src do
+    """
+    def g : run Π (A : Type) → Π (n : Nat) → Π (k : Nat) → Nat :=
+      λ (A : Type) → λ (n : Nat) → λ (k : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => k
+          | suc _ => k
+    def g-later : evidence Π (A : Type) → Π (k : Nat) → {g A suc(0) k ≡ g A 0 k : Nat} :=
+      λ (A : Type) → λ (k : Nat) → refl
+    """
+  end
 end

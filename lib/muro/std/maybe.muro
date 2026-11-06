@@ -1,0 +1,39 @@
+-- maybe.muro — Maybe, the eliminator, and the emptiness test.
+-- A relative import stays inside the standard library.
+import "bool.muro"
+
+data Maybe (A : Type) : Type where
+  nothing : Maybe A
+  just    : A → Maybe A
+
+def fromMaybe : run Π (-A : Type) → Π (d : A) → Π (m : Maybe A) → A :=
+  λ (-A : Type) → λ (d : A) → λ (m : Maybe A) →
+    match m motive (λ _ → A)
+      | nothing => d
+      | just a  => a
+
+def isJust : run Π (-A : Type) → Π (m : Maybe A) → Bool :=
+  λ (-A : Type) → λ (m : Maybe A) →
+    match m motive (λ _ → Bool)
+      | nothing => false
+      | just _  => true
+
+def isNothing : run Π (-A : Type) → Π (m : Maybe A) → Bool :=
+  λ (-A : Type) → λ (m : Maybe A) → not (isJust A m)
+
+def fromMaybe-nothing : evidence Π (-A : Type) → Π (d : A) →
+                                 {fromMaybe A d nothing ≡ d : A} :=
+  λ (-A : Type) → λ (d : A) → refl
+
+def fromMaybe-just : evidence Π (-A : Type) → Π (d : A) → Π (a : A) →
+                              {fromMaybe A d (just a) ≡ a : A} :=
+  λ (-A : Type) → λ (d : A) → λ (a : A) → refl
+
+def isJust-nothing : evidence Π (-A : Type) → {isJust A nothing ≡ false : Bool} :=
+  λ (-A : Type) → refl
+
+def isJust-just : evidence Π (-A : Type) → Π (a : A) → {isJust A (just a) ≡ true : Bool} :=
+  λ (-A : Type) → λ (a : A) → refl
+
+def fromJust1 : evidence {fromMaybe Nat 0 (just (suc 0)) ≡ suc 0 : Nat} :=
+  refl

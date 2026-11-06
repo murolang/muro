@@ -1,0 +1,200 @@
+-- A numeral bound on a constructor field, and a run of three finite
+-- payloads. The split is the product of the bounds the types declare.
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+data Ctl : Type where
+  go : Ctl
+
+data Req : Type where
+  req : (slot : Nat) {slot ≤ 1} → Req
+
+data Pair : Type where
+  both : (a : Nat) {a ≤ 1} → (b : Nat) {b ≤ 1} → Pair
+
+data Msg : Type where
+  ping : Msg
+  set : (n : Nat) {n ≤ 1} → Msg
+  flag : Bool → Msg
+
+data Wrap : Type where
+  wrap : (n : Nat) {n ≤ 3} → (b : Bool) → Wrap
+
+def slotOf : run Π (r : Req) → Bool :=
+  λ (r : Req) →
+    match r motive (λ _ → Bool)
+      | req slot =>
+          match slot motive (λ _ → Bool)
+            | 0 => true
+            | suc _ => false
+
+def pairOf : run Π (p : Pair) → Bool :=
+  λ (p : Pair) →
+    match p motive (λ _ → Bool)
+      | both a b =>
+          match a motive (λ _ → Bool)
+            | 0 =>
+                match b motive (λ _ → Bool)
+                  | 0 => true
+                  | suc _ => false
+            | suc _ => false
+
+def msgOf : run Π (m : Msg) → Bool :=
+  λ (m : Msg) →
+    match m motive (λ _ → Bool)
+      | ping => false
+      | set n =>
+          match n motive (λ _ → Bool)
+            | 0 => true
+            | suc _ => false
+      | flag b => b
+
+def see : run Π (w : Wrap) → Bool :=
+  λ (w : Wrap) →
+    match w motive (λ _ → Bool)
+      | wrap n b => b
+
+def mix3 : run Π (d : Nat) → Π (b : Bool) → Π (c : Bool) → Bool :=
+  λ (d : Nat) → λ (b : Bool) → λ (c : Bool) →
+    match c motive (λ _ → Bool)
+      | true =>
+          (match b motive (λ _ → Bool)
+            | true =>
+                (match d motive (λ _ → Bool)
+                  | 0 => true
+                  | suc _ => false)
+            | false => false)
+      | false => false
+
+def two : run Π (d : Nat) → Π (e : Nat) → Bool :=
+  λ (d : Nat) → λ (e : Nat) →
+    match d motive (λ _ → Bool)
+      | 0 =>
+          match e motive (λ _ → Bool)
+            | 0 => true
+            | suc _ => false
+      | suc _ => false
+
+session ask :=
+  recv (r : Req) (case (slotOf r)
+    | true => send Nat end
+    | false => end)
+
+session paired :=
+  recv (p : Pair) (case (pairOf p)
+    | true => send Nat end
+    | false => end)
+
+session mixed :=
+  recv (m : Msg) (case (msgOf m)
+    | true => send Ctl end
+    | false => end)
+
+session quiet :=
+  recv (w : Wrap) (case (see w)
+    | true => end
+    | false => send Nat end)
+
+session tri :=
+  recv (d : Nat) {d ≤ 1} (
+    recv (b : Bool) (
+      recv (c : Bool) (case (mix3 d b c)
+        | true => send Nat end
+        | false => end)))
+
+session two-nats :=
+  recv (d : Nat) {d ≤ 1} (
+    recv (e : Nat) {e ≤ 1} (case (two d e)
+      | true => send Nat end
+      | false => end))
+
+session give := send Req end
+
+conform ask-server : ask :=
+  get (r : Req) (
+    match r
+      | req slot =>
+          match slot
+            | 0 => put 0 done
+            | 1 => done)
+
+conform pair-server : paired :=
+  get (p : Pair) (
+    match p
+      | both a b =>
+          match a
+            | 0 =>
+                (match b
+                  | 0 => put 0 done
+                  | 1 => done)
+            | 1 => done)
+
+conform mixed-server : mixed :=
+  get (m : Msg) (
+    match m
+      | ping => done
+      | set n =>
+          (match n
+            | 0 => put go done
+            | 1 => done)
+      | flag b =>
+          match b
+            | true => put go done
+            | false => done)
+
+conform quiet-server : quiet :=
+  get (w : Wrap) (
+    match w
+      | wrap n b =>
+          match b
+            | true => done
+            | false => put 0 done)
+
+conform tri-server : tri :=
+  get (d : Nat) (
+    get (b : Bool) (
+      get (c : Bool) (
+        match c
+          | true =>
+              (match b
+                | true =>
+                    (match d
+                      | 0 => put 0 done
+                      | 1 => done)
+                | false => done)
+          | false => done)))
+
+conform two-server : two-nats :=
+  get (d : Nat) (
+    get (e : Nat) (
+      match e
+        | 0 =>
+            (match d
+              | 0 => put 0 done
+              | 1 => done)
+        | 1 => done))
+
+conform give-ok : give := put (req 1) done
+
+session tri-back := dual tri
+
+conform tri-send : tri-back :=
+  put 0 (
+    put true (
+      put true (
+        get (n : Nat) done)))
+
+session two-back := dual two-nats
+
+conform two-send : two-back :=
+  put 0 (
+    put 0 (
+      get (n : Nat) done))
+
+session ask-back := dual ask
+
+conform ask-send : ask-back :=
+  put (req 0) (
+    get (n : Nat) done)

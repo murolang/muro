@@ -3,7 +3,9 @@ defmodule Muro.Ast do
   Named FOAS (parser / pretty / emit) and de Bruijn terms (checker).
   """
 
-  @type qty :: :affine | :reuse | :erased
+  # `:linear` is Mark m1 in agda/Muro/Arrow.agda: the affine quantity,
+  # plus a must-use obligation. It is not a fourth Agda Qty.
+  @type qty :: :affine | :reuse | :erased | :linear
   @type mode :: :run | :spec | :evidence
   @type name :: String.t()
 
@@ -16,6 +18,7 @@ defmodule Muro.Ast do
           | {:app, named, named}
           | :nat
           | :ze
+          | {:nat, non_neg_integer()}
           | {:su, named}
           | :unit
           | :one
@@ -49,6 +52,7 @@ defmodule Muro.Ast do
           | {:addt, named, named}
           | {:toi64, named}
           | {:packi, named, named}
+          | {:word, word_op(), [named]}
           | {:hole, {pos_integer(), pos_integer()} | nil}
 
   # de Bruijn. Indices count from the nearest binder (0). Binder
@@ -61,6 +65,7 @@ defmodule Muro.Ast do
           | {:app, db, db}
           | :nat
           | :ze
+          | {:nat, non_neg_integer()}
           | {:su, db}
           | :unit
           | :one
@@ -92,7 +97,41 @@ defmodule Muro.Ast do
           | {:addt, db, db}
           | {:toi64, db}
           | {:packi, db, db}
+          | {:word, word_op(), [db]}
           | {:hole, {pos_integer(), pos_integer()} | nil}
+
+  @type word_kind :: :u8 | :u32 | :u64 | :i64
+
+  @type word_op ::
+          {:ty, :u8 | :u32 | :u64}
+          | {:lit, word_kind(), non_neg_integer()}
+          | {:of, word_kind()}
+          | :ton
+          | :add
+          | :sub
+          | :mul
+          | :cadd
+          | :csub
+          | :cmul
+          | :div
+          | :rem
+          | :eq
+          | :lt
+          | :le
+          | :and
+          | :or
+          | :xor
+          | :not
+          | :shl
+          | :shr
+          | {:cast, word_kind()}
+          | :bool
+          | true
+          | false
+          | :opt
+          | {:optk, word_kind()}
+          | :some
+          | :none
 
   @type defn :: %{
           name: name,
@@ -102,6 +141,44 @@ defmodule Muro.Ast do
         }
 
   @type book :: [defn]
+
+  @doc """
+  Immediate subterms of a named term, in the order the parser records
+  source spans. Binder names are not terms. A leaf has none.
+  """
+  def children(t) do
+    case t do
+      {:su, a} -> [a]
+      {:stream, a} -> [a]
+      {:always, a, p, s} -> [a, p, s]
+      {:bisim, a, b} -> [a, b]
+      {:unf, a, b} -> [a, b]
+      {:ucons, a} -> [a]
+      {:pi, _, a, _, b} -> [a, b]
+      {:lam, _, a, _, b} -> [a, b]
+      {:app, a, b} -> [a, b]
+      {:prod, a, b} -> [a, b]
+      {:pair, a, b} -> [a, b]
+      {:letp, e, _, _, b} -> [e, b]
+      {:idt, ty, a, b} -> [ty, a, b]
+      {:rwt, e, _, p, b} -> [e, p, b]
+      {:ann, e, a} -> [e, a]
+      {:mnat, e, _, p, z, _, s} -> [e, p, z, s]
+      {:memp, e, _, p} -> [e, p]
+      {:munit, e, _, p, u} -> [e, p, u]
+      {:matom, e, _, p, bs} -> [e, p | Enum.map(bs, fn {_, b} -> b end)]
+      {:mdata, e, _, p, bs} -> [e, p | Enum.map(bs, fn {_, _, b} -> b end)]
+      {:tensor, a, b} -> [a, b]
+      {:addi, a, b} -> [a, b]
+      {:muli, a, b} -> [a, b]
+      {:addt, a, b} -> [a, b]
+      {:toi64, a} -> [a]
+      {:packi, a, b} -> [a, b]
+      {:word, _, args} -> args
+      {:nu, _, f} -> [f]
+      _ -> []
+    end
+  end
 
   def to_db(named, env \\ [])
 
@@ -115,6 +192,7 @@ defmodule Muro.Ast do
   def to_db(:typ, _), do: {:ok, :typ}
   def to_db(:nat, _), do: {:ok, :nat}
   def to_db(:ze, _), do: {:ok, :ze}
+  def to_db({:nat, n}, _) when is_integer(n) and n >= 0, do: {:ok, {:nat, n}}
   def to_db(:unit, _), do: {:ok, :unit}
   def to_db(:one, _), do: {:ok, :one}
   def to_db(:empty, _), do: {:ok, :empty}
@@ -274,6 +352,10 @@ defmodule Muro.Ast do
          do: {:ok, {:addt, t1, u1}}
   end
 
+  def to_db({:word, op, args}, env) do
+    with {:ok, args1} <- to_db_list(args, env), do: {:ok, {:word, op, args1}}
+  end
+
   def to_db({:packi, x, y}, env) do
     with {:ok, x1} <- to_db(x, env),
          {:ok, y1} <- to_db(y, env),
@@ -290,6 +372,15 @@ defmodule Muro.Ast do
 
   defp map1(t, env, f) do
     with {:ok, t1} <- to_db(t, env), do: {:ok, f.(t1)}
+  end
+
+  defp to_db_list(ts, env) do
+    Enum.reduce_while(ts, {:ok, []}, fn t, {:ok, acc} ->
+      case to_db(t, env) do
+        {:ok, t1} -> {:cont, {:ok, acc ++ [t1]}}
+        err -> {:halt, err}
+      end
+    end)
   end
 
   defp to_db_atom_branches(branches, env) do
@@ -349,15 +440,28 @@ defmodule Muro.Ast do
   end
 
   defp ctors_to_db(params, ctors) do
-    Enum.reduce_while(ctors, {:ok, []}, fn %{name: cn, type: ty}, {:ok, acc} ->
+    Enum.reduce_while(ctors, {:ok, []}, fn %{name: cn, type: ty} = ctor, {:ok, acc} ->
       wrapped =
         Enum.reduce(Enum.reverse(params), ty, fn {q, x, a}, t ->
           {:pi, q, a, x, t}
         end)
 
       case to_db(wrapped) do
-        {:ok, ty1} -> {:cont, {:ok, acc ++ [%{name: cn, type: ty1}]}}
-        err -> {:halt, err}
+        {:ok, ty1} ->
+          base = %{name: cn, type: ty1}
+          bounds = Map.get(ctor, :bounds, %{})
+
+          row =
+            if bounds == %{} do
+              base
+            else
+              Map.put(base, :bounds, bounds)
+            end
+
+          {:cont, {:ok, acc ++ [row]}}
+
+        err ->
+          {:halt, err}
       end
     end)
   end
@@ -365,24 +469,54 @@ defmodule Muro.Ast do
   # Definitions, data types, and constructors are one name space
   # (`infer_def`). A second declaration with a name already used is a
   # different entry, and a match can then skip the branch it should check.
-  def book_to_db(book) do
+  @doc """
+  Convert a named book to de Bruijn.
+
+  `params: :closed` (the default) refuses a `param`: it is supplied by
+  a file that imports this one. `params: :open` keeps each param as an
+  assumption. Its type is converted and it has no body. Only the exunit
+  path passes `:open`.
+  """
+  def book_to_db(book, opts \\ []) when is_list(book) and is_list(opts) do
     with :ok <- unique_names(book) do
-      book_to_db_entries(book)
+      book_to_db_entries(book, Keyword.get(opts, :params, :closed))
     end
   end
 
-  defp book_to_db_entries(book) do
+  defp book_to_db_entries(book, params_mode) do
     Enum.reduce_while(book, {:ok, []}, fn d, {:ok, acc} ->
       result =
         cond do
           Map.get(d, :kind) == :import ->
             {:error, import_left(d)}
 
+          Map.get(d, :kind) == :param and params_mode == :open ->
+            param_to_db(d)
+
           Map.get(d, :kind) == :param ->
             {:error, param_left(d)}
 
           Map.get(d, :kind) == :data ->
             data_to_db(d)
+
+          Map.get(d, :kind) in [
+            :session,
+            :conform,
+            :place,
+            :scheme,
+            :move,
+            :endpoint,
+            :read,
+            :meet,
+            :temporal,
+            :talk,
+            :choreography,
+            :repr,
+            :seat,
+            :link,
+            :relay
+          ] ->
+            {:ok, d}
 
           true ->
             def_to_db(d)
@@ -410,6 +544,9 @@ defmodule Muro.Ast do
   end
 
   defp entry_names(%{kind: :import}), do: []
+  defp entry_names(%{kind: :move}), do: []
+  # A repr names the data type again. The data entry already owns that name.
+  defp entry_names(%{kind: :repr}), do: []
 
   defp entry_names(%{kind: :data, name: name, ctors: ctors}) do
     [name | Enum.map(ctors, & &1.name)]
@@ -433,6 +570,13 @@ defmodule Muro.Ast do
 
   defp import_left(_), do: "import is resolved from a file"
 
+  defp param_to_db(%{type: ty} = d) do
+    case to_db(ty) do
+      {:ok, ty1} -> {:ok, %{d | type: ty1}}
+      err -> err
+    end
+  end
+
   defp param_left(d) do
     "#{Muro.Print.loc_prefix(Map.get(d, :loc))}param #{d.name} is supplied by a file that imports this one"
   end
@@ -452,8 +596,14 @@ defmodule Muro.Ast do
         acc = atoms_in(Map.get(d, :indices, []), acc)
         Enum.reduce(ctors, acc, fn c, acc -> atoms_in(c.type, acc) end)
 
+      %{kind: :relay}, acc ->
+        acc
+
       %{type: ty, body: bo}, acc ->
         atoms_in(bo, atoms_in(ty, acc))
+
+      _, acc ->
+        acc
     end)
   end
 

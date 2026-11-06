@@ -1,0 +1,44 @@
+-- linear.muro — a session endpoint may be bound linearly.
+-- λ¹ uses it once. ⊸ accepts or returns it. The function is evidence.
+
+session ping := recv Nat (send Nat end)
+session back := dual ping
+
+def forward : (s : ping) ⊸ ping := λ¹ (s : ping) → s
+
+def backed : (s : ping) ⊸ back := λ¹ (s : ping) → dual s
+
+def wire : (s : ping) ⊸ (t : back) ⊸ done :=
+  λ¹ (s : ping) → λ¹ (t : back) → meet s t
+
+def again : (s : ping) ⊸ ping := λ¹ (s : ping) → forward s
+
+session loop := rec X. recv Nat (send Nat X)
+session loop-back := dual loop
+
+def echo : (s : loop) ⊸ loop := λ¹ (s : loop) → s
+
+def echo-back : (s : loop) ⊸ loop-back := λ¹ (s : loop) → dual s
+
+def loop-wire : (s : loop) ⊸ (t : loop-back) ⊸ done :=
+  λ¹ (s : loop) → λ¹ (t : loop-back) → meet s t
+
+data Bool : Type where
+  true : Bool
+  false : Bool
+
+session flag := send Bool end
+session flag-back := dual flag
+
+def pass : (s : flag) ⊸ flag := λ¹ (s : flag) → s
+
+def pass-back : (s : flag) ⊸ flag-back := λ¹ (s : flag) → dual s
+
+session flags := rec X. send Bool X
+session flags-back := dual flags
+
+def flags-pass : (s : flags) ⊸ flags := λ¹ (s : flags) → s
+
+def flags-backed : (s : flags) ⊸ flags-back := λ¹ (s : flags) → dual s
+
+def kept : run Nat := 0

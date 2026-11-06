@@ -140,6 +140,7 @@ unspine→Spine (muli _ _) acc refl = [] , refl , sp-[]
 unspine→Spine (addt _ _) acc refl = [] , refl , sp-[]
 unspine→Spine (toi64 _) acc refl = [] , refl , sp-[]
 unspine→Spine (packi _ _) acc refl = [] , refl , sp-[]
+unspine→Spine (word _ _) acc refl = [] , refl , sp-[]
 
 unspine→Spine′ : ∀ {n} {e h : Tm n} {as} → unspine e ≡ (h , as) → Spine h as e
 unspine→Spine′ {e = e} eq with unspine→Spine e [] eq
@@ -279,6 +280,7 @@ ctorSpine-just () | ((muli _ _) , _)
 ctorSpine-just () | ((addt _ _) , _)
 ctorSpine-just () | ((toi64 _) , _)
 ctorSpine-just () | ((packi _ _) , _)
+ctorSpine-just () | ((word _ _) , _)
 
 -- Data types dty i p₁ … pₙ.
 dtyArgs : ∀ {n} → Tm n → Maybe (ℕ × List (Tm n))
@@ -325,6 +327,7 @@ dtyArgs-just () | ((muli _ _) , _)
 dtyArgs-just () | ((addt _ _) , _)
 dtyArgs-just () | ((toi64 _) , _)
 dtyArgs-just () | ((packi _ _) , _)
+dtyArgs-just () | ((word _ _) , _)
 
 -- `def i` applied to at least one argument.
 defArgs : ∀ {n} → Tm n → Maybe (ℕ × Tm n × List (Tm n))
@@ -372,3 +375,4 @@ defArgs-just () | ((muli _ _) , _)
 defArgs-just () | ((addt _ _) , _)
 defArgs-just () | ((toi64 _) , _)
 defArgs-just () | ((packi _ _) , _)
+defArgs-just () | ((word _ _) , _)

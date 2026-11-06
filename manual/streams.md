@@ -1,13 +1,13 @@
 ---
 title: Streams
 slug: streams
-order: 9
+order: 10
 summary: ν, unfold, Always, bisimulation, and declared ν families.
 ---
 
 # Streams
 
-In brief: μ descends (`match` on Nat). ν is a greatest fixed point. Stream is `ν X. A × X`. Only a `run` Stream becomes an Elixir `Stream`. A non-productive unfold is rejected.
+In brief: μ descends (`match` on Nat). ν is a greatest fixed point. Stream is `ν X. A × X`. Only a `run` Stream becomes an Elixir `Stream`. An unfold whose head mentions its block, or whose tail uses the block other than as a guarded tail, is rejected. A seed that mentions the block is rejected when the head or the tail reads that seed. A bare stream whose head reads the seed binder and whose tail mentions the block is rejected wherever that unfold occurs, including under a pair, an application, a match, a λ, or another unfold: that tail is the next seed. A declared family is not a bare stream, and stays accepted.
 
 ## ν Stream
 
@@ -30,9 +30,21 @@ A ν value is built by an `unfold`.
 unfold seed (λ (s : S) → (head, next_seed))
 ```
 
-The body is a pair. Productivity: in `run` and `evidence`, no definition of the recursive block may occur in the pair’s **head**. The tail may continue the stream. Spec does not run this check.
+The body is a pair. Productivity, in `run` and `evidence`: the block may not occur in the pair’s **head**, and in the **tail** it may occur only as a guarded tail. With `B` the block:
 
-A definition whose type is a ν need not be an `unfold` itself: `def nats : run Stream Nat := tabulate ident` checks. Such a body may not call its own block; a call into the block is productive only as the tail of an unfold step, so `def s : run Stream Nat := s` is refused.
+```
+guardedTail B t  =  B ∉ t
+                 ∨  t = f a₁ … aₙ,   f ∈ B,  B ∉ aᵢ
+                 ∨  t = (t₁, t₂),    guardedTail B t₁ ∧ guardedTail B t₂
+                 ∨  t = unfold s (λ x. (h′, t′)),
+                       B ∉ s, B ∉ type of x, B ∉ h′, guardedTail B t′
+```
+
+A call is a block member applied to arguments that do not mention the block. A pair of guarded tails is guarded, and so is a nested `unfold` whose seed, binder type and head do not mention the block and whose own tail is guarded. `head`, `tail`, `uncons`, `let`, `match`, and `rewrite` on the block in the tail are refused (`unguarded recursive call`): `unfold tt (λ (_ : Unit) → (refl, tail p))` forces `p` instead of continuing it. Spec does not run this check.
+
+On a bare stream the tail is the next seed. An unfold whose head reads the seed binder and whose tail mentions the block is refused at every such unfold in the body, not only the one left after the leading λs. `(0, unfold n (λ (k : Nat) → (k, f n)))` is the same refusal as the bare unfold. The head reads the binder when the binder occurs in it, including under a match, an annotation, a unit match, a rewrite, or an empty motive. A head that ignores the binder, `(0, f n)`, stays accepted. A declared family stays accepted: its tail is the next proof.
+
+A definition whose type is a ν need not be an `unfold` itself: `def nats : run Stream Nat := tabulate ident` checks. Such a body may not call its own block; a call into the block is productive only as a guarded tail of an unfold step, so `def s : run Stream Nat := s` is refused.
 
 A stream is not copyable, so a seed of type `Stream` is affine. The binder of an unfold step is held to the same test as any other `+`: `(+ t : Stream Nat)` is refused. A Nat seed may be `+`: `(+ k : Nat)`.
 
@@ -115,6 +127,8 @@ def zeros-below : evidence Π (n : Nat) → Dom zeros (natsFrom n) :=
     unfold tt (λ (_ : Unit) → (tt, zeros-below (suc n)))
 ```
 
-(`examples/dominance.muro`.) A family is spec; its proofs are evidence, omitted at emit. Stream, `Always`, `~`, and a declared family are in ⊢ ([Limits](limits.md)). An unfold of the family is a derivation of the pair at the seed, and `uncons` of that pair reads it back. The guard that keeps the recursive call under the pair is the checker's shape; the judgment records the pair and does not recheck it.
+(`examples/dominance.muro`.) A family is spec; its proofs are evidence, omitted at emit. Stream, `Always`, `~`, and a declared family are in ⊢ ([Limits](limits.md)). An unfold of the family is a derivation of the pair at the seed, and `uncons` of that pair reads it back.
+
+`accepted-productive` in `agda/Muro/Productive.agda`: if `checkSig` accepts the signature, every run or evidence definition is observable at every finite depth on its component. Each head is block-free, and the observation does not re-enter the block. A λ is observed at every block-free argument. Normalisation of a block-free head (`Empty-evid`) and termination of an accepted block by the descent check are not this theorem. The judgment ⊢ records the pair and does not recheck the guard.
 
 Next: [Either and Dec](either.md).

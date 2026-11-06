@@ -1,7 +1,7 @@
 ---
 title: Examples
 slug: examples
-order: 14
+order: 17
 summary: Every file in examples/ and what it is for.
 ---
 
@@ -36,6 +36,390 @@ Also defines `plus` (run) and `plus_suc` (evidence). Half of eight is four. Evid
 
 See [The wall](wall.md), [Terms](language.md), [Identity](identity.md).
 
+## ping.muro
+
+An affine session. The protocol is spec. The process is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit it. `--backend otp` writes a GenServer for each process.
+
+```
+session ping := recv Nat (send Nat end)
+conform pong : ping := get Nat (put 1 done)
+
+session %1 ping-done := recv Nat (send Nat end)
+conform pong-done : ping-done := get Nat (put 1 done)
+```
+
+`pong` receives a nat and sends `1`. `left-open` sends `0` and then abandons the channel. `untouched` abandons it before any action. `open-stop` is the same abandonment written `session %0`. `pong-done` is that protocol as `session %1`, and it finishes. `chosen` takes the first arm of an internal choice. `both` offers `done` and then `put 0 done`. A second send, a send where the protocol says receive, or an abandoned `%1` channel, is refused; those books live in `test/muro_session_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#session) and [Emit](emit.md#otp).
+
+## dual.muro
+
+The other end of a session. The protocol is spec. The process is evidence. The run emitters omit both.
+
+```
+session ping := recv Nat (send Nat end)
+session back := dual ping
+conform peer : back := put 1 (get Nat done)
+```
+
+`ping` receives a nat and then sends `1`. `back` is the other end, so `peer` sends `1` and then receives a nat. `forth` is `dual back`, and that is `ping` again. `reply` is the other end of `session %1 ping-done`, so it carries that mark and the process finishes. `offered` is the other end of a `choose`, and the process is a `cover`. `kept` is the run definition in the same file. `mix muro.emit examples/dual.muro` emits `kept`.
+
+A value of a type the other end does not name, a mark other than the named session's mark, or a cycle of duals, is refused. Those books live in `test/muro_dual_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#session).
+
+## meet.muro
+
+Two processes on one session. The meeting is evidence. The run emitters omit it.
+
+```
+session ping := recv Nat (send Nat end)
+session back := dual ping
+conform pong : ping := get Nat (put 1 done)
+conform peer : back := put 1 (get Nat done)
+meet wire : pong with peer
+```
+
+`pong` receives a nat and sends `1`. `peer` is the other end, so it sends `1` and receives a nat. `wire` is the evidence that those two processes are that exchange. `arm` is a choice: `pick0 done` meets `cover done (get Nat done)`. `drop` is both ends abandoning after `0`. `box` sends a pair of a bit and a record `{x : Nat, y : Nat}`. That pair is a tuple, and the record is a map whose keys are `x` and `y`. `here` sends `(b0, {x = 0, y = 0})`. `far` sends `(b1, {x = 1, y = 2})` of that same type, and it meets `there`. `window` receives a window `w` and sends a nat `d` with `d ≤ w`. `window-server` sends the window back, which is that evidence. `window-wire` meets it with a client that grants `8`. `kept` is the run definition in the same file. `mix muro.emit examples/meet.muro` emits `kept`.
+
+`mix muro.emit examples/meet.muro --backend otp` writes `meet_otp.ex`. `MeetOtp.wire/0` starts `pong` and `peer` as each other's peer. `arm` starts the choice. `drop` starts both ends abandoning after `0`. `wrapped` carries the pair. `muro__windowzdwire` sends `8` and then `8` back. The evidence is not in the message. Each server talks to one peer. `Pong.start/1` still takes a peer pid supplied by the caller. See [Emit](emit.md#otp).
+
+`mix muro.emit examples/meet.muro --backend fsm` prints `MeetFsm`. `MeetFsm.Ping` receives a nat and then sends one. See [State machines](fsm.md).
+
+A process whose session is not the other end, or a payload type the two processes do not share, is refused. Those books live in `test/muro_meet_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#session).
+
+## indexed.muro
+
+A received bit selects the next action. The arm is the index. The run emitters omit the session.
+
+```
+session route := recv (b : Bit) on (send Nat end) (recv Nat end)
+session route-back := dual route
+conform server : route := get (b : Bit) on (put 1 done) (get (n : Nat) done)
+conform client : route-back := put b0 (get (m : Nat) done)
+meet wire : server with client
+```
+
+`route` receives a bit. `b0` continues by sending a nat, and `b1` continues by receiving a nat. `client` sends `b0` and then receives that nat. `client-one` sends `b1` and then `0`. `wire` and `wire-one` are the evidence that each pair takes the same arm. `echo-bit` binds the bit and sends it back on either arm. `ask` sends `b1` and receives that bit. `on` and `kept` are the run definitions in the same file. `mix muro.emit examples/indexed.muro` emits them.
+
+`mix muro.emit examples/indexed.muro --backend otp` writes `indexed_otp.ex`. `IndexedOtp.wire/0` starts the two processes as each other's peer. The message is `{:muro, from, :b0}` or `{:muro, from, :b1}`. The server holds both arms. See [Emit](emit.md#otp).
+
+`mix muro.emit examples/indexed.muro --backend fsm` prints `IndexedFsm`. `IndexedFsm.Route` receives the bit and then takes that arm. See [State machines](fsm.md).
+
+A nat written as the index, a variable bit used to select an arm, a bit used as a vector length, or a dual whose arms are not dualised pointwise, is refused. Those books live in `test/muro_session_test.exs`, `test/muro_meet_test.exs`, and `test/muro_dual_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#session).
+
+## recursive.muro
+
+A protocol may repeat. The variable sits under an action. The run emitters omit the session.
+
+```
+session loop := rec X. recv Nat (send Nat X)
+session loop-back := dual loop
+conform forever : loop := rec X. get (n : Nat) (put n X)
+conform sender : loop-back := rec Y. put 1 (get (m : Nat) Y)
+session echo := rec X. recv (b : Bit) on (recv Nat (send Nat X)) end
+session echo-back := dual echo
+conform server : echo := rec X. get (b : Bit) on (get (n : Nat) (put n X)) done
+conform client : echo-back := put b0 (put 1 (get (m : Nat) (put b1 done)))
+meet wire : server with client
+```
+
+`loop` receives a nat and sends it back, and then it is that protocol again. `loop-back` is `rec` of the dual. `echo` repeats when the bit is `b0` and ends when it is `b1`. `client` echoes one nat and then sends `b1`. `wire` is the evidence that both sides take the same arms. `kept` is the run definition in the same file. `mix muro.emit examples/recursive.muro` emits `kept`.
+
+`mix muro.emit examples/recursive.muro --backend otp` writes `recursive_otp.ex`. `RecursiveOtp.wire/0` starts the server and the client as each other's peer. Both finish with `:normal`. `Forever.start/1` is the loop that never finishes: each nat comes back, and the jump is a tail call. See [Emit](emit.md#otp).
+
+`mix muro.emit examples/recursive.muro --backend fsm` prints `RecursiveFsm`. `RecursiveFsm.Loop` repeats the same recv and send, and `done?` stays false. See [State machines](fsm.md).
+
+`rec X. X`, a free process variable, and `session %1` on a process that jumps are refused. A bare name in a protocol is a session call. Those books live in `test/muro_session_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#session).
+
+## talk.muro
+
+One description of an exchange. Each party has a session. The description is spec. The run emitters omit it.
+
+```
+talk ping-exchange := say peer pong Nat (say pong peer Nat over)
+session ping := seen pong with peer in ping-exchange
+session back := seen peer with pong in ping-exchange
+conform pong : ping := get Nat (put 1 done)
+conform peer : back := put 1 (get Nat done)
+meet wire : pong with peer
+```
+
+`pong` receives a nat and then sends `1`, so `ping` is `recv Nat (send Nat end)`. `peer` has `send Nat (recv Nat end)`. `wire` is the evidence that those two processes are that exchange. `both-arms` is an offer of two sends of a nat from `b` to `c`, so `a` with `b` is `choose end end`, `b` with `c` is `send Nat end`, and `a` with `c` is `end`. `arm` is `a` offering `b` the choice of `end` or a send of a nat. `kept` is the run definition in the same file. `mix muro.emit examples/talk.muro` emits `kept`.
+
+A party the description does not seat, or a description that refers to itself, is refused. Those books live in `test/muro_talk_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#session).
+
+## two-phase-commit.muro
+
+One choreography, and each role has a session with each other role. The choreography is spec. The run emitters omit it.
+
+```
+choreography two-phase-commit
+  roles coordinator, alice, bob
+  coordinator -> alice : prepare
+  coordinator -> bob : prepare
+  alice -> coordinator : vote
+  bob -> coordinator : vote
+  coordinator chooses
+    commit: coordinator -> alice : commit
+            coordinator -> bob : commit
+    abort: coordinator -> alice : abort
+           coordinator -> bob : abort
+```
+
+`coordinator` with `alice` is `send Unit (recv Unit (choose (send Unit end) (send Unit end)))`. `alice` with `coordinator` is the dual, `recv Unit (send Unit (branch (recv Unit end) (recv Unit end)))`. `coordinator` with `bob` is the same shape, and `bob` with `coordinator` is its dual. `alice` with `bob` is `end`, and so is `bob` with `alice`: those two never interact. The choice stays even though commit and abort send the same shape of message. `session ca := seen coordinator with alice in two-phase-commit` is that first session. `kept` is the run definition in the same file. `mix muro.emit examples/two-phase-commit.muro` emits `kept`.
+
+A participant whose branches differ, and who was not told the choice, is refused. That book is `test/fixtures/choreo_untold.muro`, not an example. See [Choreography](choreography.md).
+
+## seated.muro
+
+A party of a description sits at a place. The seating is spec. The boundary is evidence. The run emitters omit both.
+
+```
+place home := node a
+place away := node b
+talk ping-exchange := say peer pong Nat (say pong peer Nat over)
+seat pong-home : pong at home in ping-exchange
+seat peer-away : peer at away in ping-exchange
+link go : cross pong-home with peer-away in ping-exchange
+```
+
+`pong` sits at `home`. `peer` sits at `away`. They have a session, so the boundary crosses once. `peer` at `home` stays with `pong`. Ambient stays with itself, and ambient to a node crosses once. The other direction of a boundary is that same boundary. `ping` is still `recv Nat (send Nat end)`, and `pong` receives a nat and then sends `1`. The payload stays on the session. `kept` is the run definition in the same file. `mix muro.emit examples/seated.muro` emits `kept`.
+
+A party with no session in the description has no boundary. A `stay` where the places differ, or a `cross` where they are the same, is refused. Those books live in `test/muro_seated_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#session).
+
+## arrow.muro
+
+A `%1` binder must be used. A `%0` binder, and an unmarked binder, may be dropped.
+
+```
+def keep : run Π (%1 x : Nat) → Nat :=
+  λ (%1 x : Nat) → x
+
+def loose : run Π (%0 x : Nat) → Nat :=
+  λ (%0 x : Nat) → 0
+```
+
+`keep` returns its argument. `use` applies it to `0`. `loose` and `plain` drop the argument. A `%1` binder that is never used, a λ whose mark disagrees with the Π, or a second use of the variable, is refused; those books live in `test/muro_arrow_test.exs`.
+
+See [Terms](language.md#binders-and-quantities).
+
+## linear.muro
+
+A session endpoint may be bound linearly. `λ¹` uses it once. `⊸` accepts or returns it.
+
+```
+session ping := recv Nat (send Nat end)
+session back := dual ping
+
+def forward : (s : ping) ⊸ ping := λ¹ (s : ping) → s
+```
+
+`backed` is `dual s` and stays linear. `wire` meets `ping` with `back`. `again` is `forward s`, so the obligation travels. `echo` returns a repeating endpoint, and `echo-back` is `dual s`, so `rec` stays. `pass` returns an endpoint whose payload is `Bool`. `flags-pass` returns that payload on a repeating protocol, and `flags-backed` is its dual. `kept` is the run. Emit keeps `kept` and drops the endpoint functions. An unused linear endpoint, and a linear endpoint used twice, are refused; those books live in `test/muro_linear_test.exs`.
+
+## computed.muro
+
+A put may send the value a `run` definition computes. A `get` may match on the received value and choose the next action.
+
+```
+def mark : run Π (f : Item) → Bool :=
+  λ (f : Item) →
+    match f motive (λ _ → Bool)
+      | self => true
+      | other => false
+
+def effective : run Π (+ f : Item) → Maybe Bool :=
+  λ (+ f : Item) →
+    match f motive (λ _ → Maybe Bool)
+      | self => just (mark f)
+      | other => nothing
+
+conform reply : answer := put (effective self) done
+```
+
+`reply` sends `just true`, which is `just (mark self)`. `effective other` sends `nothing`. `hear` receives `Maybe Bool`, and `reply-wire` meets them. `loop` sends that value on every turn of `rec X. send (Maybe Bool) X`. `taker` matches on a bit: `b0` ends, and `b1` sends a nat. The two arms are different processes, and both follow `choose`. `flag-taker` matches on `Bool`, and `opt-taker` matches on `Maybe Nat`. `finished` is that computed put on `session %1`. `pass` returns the `answer` endpoint linearly. `kept` is the run. Emit keeps `mark`, `effective`, and `kept`. The meeting is evidence, and a run definition has no seat.
+
+See [Sessions](sessions.md#a-computed-put).
+
+## field-bindings.muro
+
+A match on the value just received may name the constructor and bind its fields.
+
+```
+conform reply : ask :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => put false done
+      | just b => put (grant b) done)
+```
+
+`reply` sends `false` for `nothing` and `grant b` for `just`. `grant true` is `true`. `pass` sends the field itself. `rest` sends the tail of a `List`. A binder count other than the field count is refused; that program is a comment in the file.
+
+See [Sessions](sessions.md#a-value-chooses-the-next-action).
+
+## session-calls.muro
+
+A declared session may be the continuation of another, and a session may take a nat parameter.
+
+```
+session ack := send Bit end
+session req := send Nat ack
+session stream (n : Nat) := send (d : Nat) {d ≤ n} (stream (suc n))
+session stream0 := stream 0
+session stream-back := dual stream0
+conform up : stream0 := rec X. put 0 X
+conform down : stream-back := rec Y. get (d : Nat) Y
+meet stream-wire : up with down
+```
+
+`req` is `send Nat` followed by `ack`. `choice` puts `ack` in a `choose` arm, `route` puts it after `on`, and `loop` puts it inside `rec`. `flag 1` sends a `Bool`. `frames 3` and `frames (bump 0)` send a vector of that length. `stream 0` sends a nat at most the current counter and continues at the next one. `stream-swap` is the same meeting in the other order. `bumped` sends the nat `bump` computes. `pass` returns the `req` endpoint, and `three-home` is an endpoint at `frames 3`. `kept`, `id`, `bump`, and `zero` are the runs. Emit keeps those and drops the sessions. An unguarded self-call, a forward call, an unknown session, and a bad argument are refused; those books live in `test/muro_session_test.exs`.
+
+See [Sessions](sessions.md#a-named-continuation).
+
+## value-protocols.muro
+
+A protocol continues by the value just exchanged. One form follows the constructor. The other follows a `run` of it.
+
+```
+session server :=
+  recv (f : Frame) (case f
+    | bytes => send Ctl end
+    | trailers => send Ctl end
+    | headers => recv Body end)
+
+def late : run Π (f : Frame) → Bool :=
+  λ (f : Frame) →
+    match f motive (λ _ → Bool)
+      | bytes => true
+      | trailers => true
+      | headers => false
+
+session gate :=
+  recv (f : Frame) (case (late f)
+    | true => send Ctl end
+    | false => send Goaway end)
+```
+
+`stream` matches on `Frame`. `bytes` and `trailers` send `rst`. `headers` receives a body. `open-headers` and `inflight` are the other end, and both meeting orders check. `as-headers` and `as-bytes` are computed puts, and each is checked on the arm that value selects. `gate-server` sends `rst` when `late` is `true` and `goaway` when it is `false`. `loop` is that `case` under `rec`. `spin` calls itself from the `bytes` arm. `srv` continues as `ack`. `sized 3` sends a vector on `b0`. `counted` owes `d ≤ 1` on `bytes`, and the nat is what travels. `once` is `%1`, and each arm finishes. `pass` returns that endpoint. `relayed` forwards a frame when every arm is `end`. A server that sends `goaway` for an in-flight frame is refused; that book is in `test/muro_session_error_test.exs`.
+
+See [Sessions](sessions.md#a-protocol-follows-the-received-constructor).
+
+## field-choice.muro
+
+A run may read a field of the received value, and that field chooses the protocol.
+
+```
+def late : run Π (m : Maybe Bool) → Bool :=
+  λ (m : Maybe Bool) →
+    match m motive (λ _ → Bool)
+      | nothing => false
+      | just b => b
+
+conform gate-server : gate :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put rst done
+          | false => done)
+```
+
+`late nothing` ends. `late (just true)` sends `rst`. `late (just false)` ends. `put (just true)`, `put (just false)`, and `put nothing` meet `gate-server` in both orders, and the same meetings check with `buffer 1`. `late-hdr` reads the `Frame` inside `Hdr`. The same split sits under `rec`, in a session call, on a parameter, after evidence, and on a `%1` endpoint. A nat, a wildcard arm, a pair or a record as the case payload, and a process that does not cover the split are refused; that book is `bad_field_choice.muro`.
+
+See [Sessions](sessions.md#a-protocol-follows-a-run-of-the-value).
+
+## async-meetings.muro
+
+Two processes meet across a bounded queue in each direction.
+
+```
+meet inflight : client with server buffer 1
+session ping := send Nat (recv Nat end)
+conform ping-a : ping := put 1 (get (n : Nat) done)
+conform ping-b : ping := put 1 (get (n : Nat) done)
+meet crossed : ping-a with ping-b buffer 1
+```
+
+`client` sends two frames and then takes one control message. `server` sends `rst` after the first frame and still takes the frame already in flight, whichever constructor it is. That meeting checks at buffer 1 and at buffer 2. `crossed` is two processes that both send first. `owed-wire` sends a nat inside `d ≤ 1`. `vec-wire` sends the vector of `out 1`. `stream-async` sends `0` on every turn of a parameterised session. `echo-wire` sends back the nat it just received. `spin-wire` sends `bytes` on every turn. `line-wire` is `%1`, and each side finishes. A synchronous meeting of `up` with `down` is in the same file, with no buffer. A server that answers the in-flight frame with `goaway` is refused; that book is in `test/muro_async_test.exs`.
+
+See [Sessions](sessions.md#a-bounded-buffer).
+
+## temporal.muro
+
+Four declarations on meetings from `async-meetings.muro`. `echo-wire` has eight reachable configurations. Each echo declaration holds in those eight. `inflight` has nine, and `ctl-seen` holds in those nine.
+
+```
+temporal echo-returns-zero : echo-wire :=
+  always (echo-b at first put implies echo-b has n = 0)
+temporal echo-answers : echo-wire := eventually (echo-a has m = 0)
+temporal echo-answered : echo-wire :=
+  (inbox echo-b head 0) leads_to (inbox echo-a head 0)
+temporal ctl-seen : inflight :=
+  always (client done implies client has c is rst)
+```
+
+See [Temporal](temporal.md).
+
+## place.muro
+
+A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit all three. `--node` writes one call for each cross.
+
+```
+place home := ambient
+place away := node a
+
+scheme local := fixed home
+scheme poly := any
+
+move stay local : home
+move cross local : away
+move stay poly : home
+move stay poly : away
+```
+
+`local` is fixed at `home`. Reading it there stays. Reading it at `away` crosses once. `poly` stays at `home` and at `away`. `kept` is the `run` definition in the same file.
+
+```
+mix muro.emit examples/place.muro --node a
+```
+
+That writes `place_node.ex`. The module is `PlaceNode`. The cross is `PlaceNode.cross_local_at_away/1`: a call to the process registered as `:local` on the node `:a`, with the message `{:muro_read, "local"}`. Each stay is absent from that file. `mix muro.emit examples/place.muro` emits `kept`.
+
+A `stay` on that cross, a `cross` on a stay, or a `cross` of `poly`, is refused. Those books live in `test/muro_place_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#place) and [Emit](emit.md#node).
+
+## located.muro
+
+A session read at a place. The endpoint is spec. The reading is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit both. A run definition has no seat.
+
+```
+endpoint ping-home := ping at local
+
+read stay pong : ping-home at home := get Nat (put 1 done)
+read cross pong-away : ping-home at away := get Nat (put 1 done)
+```
+
+`ping` is fixed at `home` through `local`. Reading it there stays. Reading it at `away` crosses once. `ping-poly` stays at `home` and at `away`. `pong-done` is `session %1` and finishes at `away`. `left-open` abandons an unmarked session, and that reading crosses once. `kept` is the run definition in the same file. `mix muro.emit examples/located.muro` emits `kept`.
+
+`mix muro.emit examples/located.muro --node a` writes `located_node.ex`. `pong-away`, `pong-done`, and `left-open` are the three calls, and each one reads `local`. `pong`, `pong-poly`, and `pong-poly-away` stay, so they write no call. The payload stays on the session. See [Emit](emit.md#node).
+
+`mix muro.emit examples/located.muro --backend otp` writes `located_otp.ex`. `Pong` and `Mmuro__pongzdaway` both receive a nat and send `1`. `Mmuro__leftzdopen` sends `0` and abandons the channel. The server talks to one peer. See [Emit](emit.md#otp).
+
+A `stay` on that cross, a `cross` on a stay, a `cross` of `ping-poly`, a value of a type the protocol does not name, or an abandoned `%1` channel, is refused. Those books live in `test/muro_located_test.exs`, so a program copies the form that checks.
+
+See [Terms](language.md#endpoint).
+
 ## internal_ok.muro
 
 `run internal` helper `step` emits `defp`. `inc` is `run` and calls it. See [Emit](emit.md).
@@ -58,7 +442,7 @@ A productive `run` Stream of zeros. `head-zeros` is `{head zeros ≡ 0 : Nat}` b
 
 ## higher_order.muro
 
-A `run` definition as a value. `map` and `tabulate` take a `+` function; `tabulate ident` passes a definition, `map (plus 2)` a partial application, and `measure (length Nat)` a partial application whose given argument is erased. The emitted code passes curried closures ([Emit](emit.md#functions-as-values)); C emit refuses it (`c:lambda`).
+A `run` definition as a value. It imports `std:list.muro`. `map` and `tabulate` take a `+` function; `tabulate ident` passes a definition, `map (plus 2)` a partial application, and `measure (length Nat)` a partial application of the library `length` whose given argument is erased. The emitted code passes curried closures ([Emit](emit.md#functions-as-values)); C emit refuses it (`c:lambda`).
 
 ## dominance.muro
 
@@ -78,11 +462,11 @@ See [Either and Dec](either.md).
 
 ## list.muro
 
-`List A`, `nil` / `cons`, `length`, `ones2`. `List A` is Data iff `A` is. `length-ones2` is `refl`.
+Imports `std:list.muro` and declares nothing of its own. `List`, membership, `length`, `lookup`, and `ones2` live in the library ([Library](library.md)). `length-ones2` is `refl`.
 
 ## maybe.muro
 
-`Maybe`, `fromMaybe`, `fromJust1`. Erased type argument.
+Imports `std:maybe.muro` and declares nothing of its own. `Maybe`, `fromMaybe`, `isJust`, and `isNothing` live in the library. `fromJust1` is `refl`. The type argument is erased.
 
 ## even_odd.muro
 
@@ -110,9 +494,27 @@ See [Terms](language.md).
 
 See [Emit](emit.md).
 
+## repr.muro
+
+Host representations for input and output types. `Bool` is `boolean`. `Entry` is a map with an optional `Maybe Bool`. `Shape` and `Outcome` are choices of tagged maps, and `empty` and `absent` are `nil`. `toggle`, `flip`, `describe`, and `widen` are run. `toggle-on` and `describe-none` are `refl`.
+
+`mix muro.emit examples/repr.muro` writes `decode_entry` and `encode_entry` next to `toggle`. Decode returns `{:ok, value, table}`. Encode takes that table. A host calls decode, then the run function, then encode. See [Host representations](repr.md).
+
+## repr_names.muro
+
+Free-form names, a map keyed by those names, and a stated fallback. `Key` is `wild` for `"*"` and `named` of an interned `Nat` otherwise. `Entry` maps `"relation"` to a `Key` and `"read"` to `optional (boolean else false)`. `Template` is a one-field newtype, and its repr is `map_of Key => list Entry`. `reads-off` sets every flag to `just false`. `count-entries` counts the entries. `off-wild` is `refl`.
+
+See [Host representations](repr.md).
+
+## fnv.muro
+
+32-bit FNV-1a over a monomorphic list of `U8`. The offset basis is 2166136261 and the prime is 16777619, each built by shifts of one. `hashEmpty` is the basis. `hashA` hashes the byte 97 and is 3826002220. `fnv-empty` and `fnv-a` are `refl`. `Bytes` stores the byte by value. It is not `std:list.muro`.
+
+See [Machine numbers](machine.md).
+
 ## nx_add.muro
 
-`I64` and `Tensor`. `doubled` is `[2, 4]` after `Nx.to_flat_list/1`. Nat stays Peano.
+`addI` is wrapping `I64` addition. `addt` and `packI` are still Nx, and `doubled` is `[2, 4]` after `Nx.to_flat_list/1`. Nat stays Peano.
 
 See [Machine numbers](machine.md).
 
@@ -123,6 +525,8 @@ Uses `sym`, `cong`, and `pred` from the prelude and defines none of them. `befor
 ## Refused
 
 `mix muro.check` fails on each of these. `even_odd.muro` is the mutual recursion that checks.
+
+`test/fixtures/choreo_untold.muro` is a choreography the projection refuses. The coordinator chooses. The commit arm is `alice -> bob : go` and the abort arm is `bob -> alice : stop`. Alice and bob are not an end of that choice, and the arms are not the same session, so the checker reports `alice: branches commit and abort disagree` and `bob: branches commit and abort disagree`. The file is a test fixture, not an example. See [Choreography](choreography.md#a-refusal).
 
 ### bad_dup.muro
 
@@ -171,7 +575,7 @@ mix muro.check examples/cshrl/envs/binary_sacrifice.muro
 ## Adding a file
 
 1. Put it in `examples/`. Use only `run` / `run internal` / `spec` / `evidence`.
-2. Every binder is `(x : A)` or `(+ x : A)` or `(- x : A)`.
+2. Every binder is `(x : A)` or `(+ x : A)` or `(- x : A)`. A linear session endpoint is `λ¹ (s : session)`, and its arrow is `⊸`.
 3. Every `match` / `rewrite` writes `motive (λ x → …)` in parentheses.
 4. Recursion on `run`/`evidence` goes through `match` and a smaller variable.
 5. `mix muro.check examples/your_file.muro`.

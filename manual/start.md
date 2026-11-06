@@ -7,11 +7,79 @@ summary: Install, write a .muro file, check it, emit Elixir.
 
 # Start
 
-In brief: clone the repo, write a `.muro` file against the [grammar](grammar.md), check it with Mix. Do not change Agda or the Elixir kernel unless you are changing the type theory.
+In brief: install the archive or clone the repo, write a `.muro` file against the [grammar](grammar.md), check it with Mix. Do not change Agda or the Elixir kernel unless you are changing the type theory.
 
 ## Install
 
-Elixir via [mise](https://mise.jdx.dev/), then:
+Elixir via [mise](https://mise.jdx.dev/).
+
+The archive installs `mix muro`, `mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` in any directory, with or without a `mix.exs`.
+
+Install it from Hex:
+
+```
+mix archive.install hex muro
+```
+
+Alternatively, build the archive from a checkout and install that file:
+
+```
+git clone https://github.com/murolang/muro.git
+cd muro
+mise install
+mix deps.get
+mix archive.build
+mix archive.install muro-0.20.16.ez
+```
+
+From GitHub, Mix fetches the default branch and builds the archive:
+
+```
+mix archive.install github murolang/muro
+```
+
+`mix archive.install` asks before it writes. `--force` skips the question.
+
+A project that does not have Elixir installs the self-contained executable. It carries its own Erlang runtime:
+
+```
+mise use -g github:murolang/muro@0.20.16
+muro --version
+muro check path.muro
+```
+
+If mise reports `No versions found` or a 404 from `mise-versions.jdx.dev`, its version mirror does not list the release yet. `mise settings set use_versions_host false` makes it ask GitHub directly.
+
+The commands match the Mix tasks. `muro.toml` is the manifest. The page is [The executable](binary.md).
+
+Then, in any directory:
+
+```
+mix muro --version
+mix muro.check path.muro
+mix muro.mutate path.muro
+mix muro.emit path.muro
+```
+
+`mix muro --version` prints `Muro v` and the version of the copy that ran. `mix muro` with no arguments prints that line and the muro tasks.
+
+Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. The version line names the copy that ran.
+
+A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks. Check and emit with `mix muro.check` and `mix muro.emit`.
+
+`mix muro.emit path.muro` prints the Elixir module. Save it with `mix muro.emit path.muro > path.ex`.
+
+`mix muro.init` writes `muro.exs` and `priv/muro/`, and prints a note that points at `muro skills add`. `muro init` writes the manifest the directory calls for (`muro.exs` or `muro.toml`). `mix muro.gen` writes the modules that file names, under the paths it names, with the project's module names, including C, Rust, Zig, and Cortex-M assembly. `mix muro.gen --check` writes nothing and fails when a committed module and its book disagree. See [Committed modules](gen.md) and [The executable](binary.md). `mix muro.deps.get` fetches the packages in `muro_deps:` and writes `muro.lock`. See [Packages](packages.md).
+
+`--backend c` writes C from the archive. A NIF needs `elixir_make`, and the Mix task writes it when the working directory is that loaded Mix project. Outside that directory the Mix task writes the `.h` and the `.c` only, and so does the self-contained executable. Neither mentions `elixir_make`. Without `elixir_make`, the NIF stops and names the dependency to add:
+
+```
+{:elixir_make, "~> 0.10", runtime: false}
+```
+
+Add that to the project deps, or run the task inside a project that depends on muro. `nx` and `makeup` are optional too. Checking a book and emitting Elixir do not load them. The Makeup lexer is registered when Makeup is loaded.
+
+To work on this repository:
 
 ```
 git clone https://github.com/murolang/muro.git
@@ -50,11 +118,14 @@ Check it:
 mix muro.check examples/plus.muro
 ```
 
-On success the shell prints:
+On success the shell prints the version that checked the book, then:
 
 ```
+Muro v0.20.16
 All terms check. Evidence never becomes a run.
 ```
+
+The version line is the copy that ran.
 
 You just wrote a `run` function. `plus` will emit as an ordinary Elixir `def`. `Nat` is Peano: `0` and `suc`.
 

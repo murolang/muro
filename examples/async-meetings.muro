@@ -1,0 +1,129 @@
+-- async-meetings.muro — two processes, one bounded queue in each direction.
+-- A send waits when its queue is full. The synchronous meeting is the
+-- rendezvous, written with no buffer.
+
+data Frame : Type where
+  bytes : Frame
+  trailers : Frame
+  headers : Frame
+
+data Ctl : Type where
+  rst : Ctl
+
+data Goaway : Type where
+  goaway : Goaway
+
+-- The client sends two frames, then takes one control message.
+session out-frames := send Frame (send Frame (recv Ctl end))
+
+conform client : out-frames :=
+  put headers (put trailers (get (c : Ctl) done))
+
+-- After the first frame the server sends rst and still takes the frame
+-- that was already on its way. Every constructor of that frame ends.
+session tolerate :=
+  recv (f : Frame) (case f
+    | bytes => send Ctl (recv (g : Frame) (case g
+        | bytes => end
+        | trailers => end
+        | headers => end))
+    | trailers => send Ctl (recv (g : Frame) (case g
+        | bytes => end
+        | trailers => end
+        | headers => end))
+    | headers => send Ctl (recv (g : Frame) (case g
+        | bytes => end
+        | trailers => end
+        | headers => end)))
+
+conform server : tolerate :=
+  get (f : Frame) (match f
+    (put rst (get (g : Frame) (match g done done done)))
+    (put rst (get (g : Frame) (match g done done done)))
+    (put rst (get (g : Frame) (match g done done done))))
+
+meet inflight : client with server buffer 1
+
+meet inflight-two : client with server buffer 2
+
+-- A server that answers the second frame with goaway is refused.
+-- That book is in test/muro_async_test.exs.
+
+-- Both send first. The synchronous meeting cannot take that step.
+session ping := send Nat (recv Nat end)
+
+conform ping-a : ping := put 1 (get (n : Nat) done)
+
+conform ping-b : ping := put 1 (get (n : Nat) done)
+
+meet crossed : ping-a with ping-b buffer 1
+
+-- The sender discharges the bound. The queue carries the nat.
+session owed := send (d : Nat) {d ≤ 1} (recv Nat end)
+
+conform owe : owed := put 0 (get (n : Nat) done)
+
+conform owe-back : owed := put 0 (get (n : Nat) done)
+
+meet owed-wire : owe with owe-back buffer 1
+
+-- A parameter is a nat. The meeting sees the process at that length.
+session out (k : Nat) := send (Vec Nat k) (recv (Vec Nat k) end)
+
+session out1 := out 1
+
+conform vec-a : out1 := put (rep 1 0) (get (v : Vec Nat 1) done)
+
+conform vec-b : out1 := put (rep 1 0) (get (v : Vec Nat 1) done)
+
+meet vec-wire : vec-a with vec-b buffer 1
+
+-- A constant stays inside the bound on every turn.
+session stream (n : Nat) := send (d : Nat) {d ≤ n} (stream (suc n))
+
+session stream0 := stream 0
+
+session stream-back := dual stream0
+
+conform up : stream0 := rec X. put 0 X
+
+conform down : stream-back := rec Y. get (d : Nat) Y
+
+meet stream-sync : up with down
+
+meet stream-async : up with down buffer 1
+
+-- An echo sends the nat it just received.
+session echo := rec X. send Nat (recv Nat X)
+
+session echo-back := rec Y. recv Nat (send Nat Y)
+
+conform echo-a : echo := rec X. put 0 (get (m : Nat) X)
+
+conform echo-b : echo-back := rec Y. get (n : Nat) (put n Y)
+
+meet echo-wire : echo-a with echo-b buffer 1
+
+-- bytes repeats. trailers and headers end.
+session spin := rec X. send Frame X
+
+session hear :=
+  rec Y. recv (f : Frame) (case f
+    | bytes => Y
+    | trailers => end
+    | headers => end)
+
+conform spin-client : spin := rec X. put bytes X
+
+conform hear-server : hear := rec Y. get (f : Frame) (match f Y done done)
+
+meet spin-wire : spin-client with hear-server buffer 1
+
+-- Each endpoint is used once.
+session %1 line := send Nat (recv Nat end)
+
+conform line-a : line := put 0 (get (n : Nat) done)
+
+conform line-b : line := put 1 (get (n : Nat) done)
+
+meet line-wire : line-a with line-b buffer 1

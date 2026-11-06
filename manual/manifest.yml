@@ -26,6 +26,18 @@ pages:
     slug: language
     title: Terms
     summary: Type, Π, λ, match, quantities, and the book.
+  - file: sessions.md
+    slug: sessions
+    title: Sessions
+    summary: A session is the protocol two processes follow.
+  - file: temporal.md
+    slug: temporal
+    title: Temporal
+    summary: always, eventually, and leads_to on one buffered meeting.
+  - file: choreography.md
+    slug: choreography
+    title: Choreography
+    summary: A global type, projected to the binary session each pair of roles follows.
   - file: identity.md
     slug: identity
     title: Identity
@@ -49,11 +61,35 @@ pages:
   - file: machine.md
     slug: machine
     title: Machine numbers
-    summary: I64, F32, Tensor, and Nx. Nat stays Peano.
+    summary: U8, U32, U64, and I64 are fixed-width residues. F32 and Tensor stay Nx. Nat stays Peano.
   - file: emit.md
     slug: emit
     title: Emit
-    summary: What becomes Elixir. Spec and evidence are omitted.
+    summary: What becomes Elixir. C, Rust, and Zig print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A cross is one call on a named node. Spec and evidence are omitted from a run.
+  - file: exunit.md
+    slug: exunit
+    title: Closed equations as tests
+    summary: A book's closed equations become one ExUnit module. The tests call an implementation the host names. A skip is printed and recorded.
+  - file: gen.md
+    slug: gen
+    title: Committed modules
+    summary: A manifest names each book, module, and target. mix muro.gen writes the module. mix muro.gen --check fails when the file and the book disagree.
+  - file: binary.md
+    slug: binary
+    title: The executable
+    summary: The self-contained muro binary, muro.toml, gen for C, Rust, Zig, and assembly, init, and muro skills add.
+  - file: repr.md
+    slug: repr
+    title: Host representations
+    summary: A repr states the host shape of a data type. Emit writes strict decode and encode, including interned names, maps keyed by data, and an opt-in fallback.
+  - file: packages.md
+    slug: packages
+    title: Packages
+    summary: Import a book from a git or Hex package at the version muro.lock records.
+  - file: library.md
+    slug: library
+    title: Library
+    summary: The ordinary library, imported as std:. Bool, Le, List, Maybe, comparison, and a binary successor.
   - file: grammar.md
     slug: grammar
     title: Grammar
@@ -78,3 +114,15 @@ pages:
     slug: limits
     title: Limits
     summary: What the language does not do. Facts about the checker, not a roadmap.
+  - file: fsm.md
+    slug: fsm
+    title: State machines
+    summary: Each session endpoint is a pure state machine. The transport stays with the host.
+  - file: mutate.md
+    slug: mutate
+    title: Mutation
+    summary: mix muro.mutate reports which evidence fails when a run definition changes.
+  - file: explorer.md
+    slug: explorer
+    title: Visual explorer
+    summary: muro_visor draws a checked book. The compiler does not start it.

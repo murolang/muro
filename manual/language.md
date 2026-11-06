@@ -11,7 +11,7 @@ In brief: one sort `Type`. Binders are written. Application is juxtaposition. `m
 
 ## The book
 
-A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, and `def` entries.
+A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `talk`, `choreography`, `session`, `conform`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `seat`, `link`, and `def` entries.
 
 ```
 def name : tag type := body
@@ -21,11 +21,132 @@ The tag is `run`, `run internal`, `spec`, or `evidence`. There is no other tag.
 
 Forward references are allowed. The checker sees every definition when it checks any one of them.
 
-Definitions, data types, and constructors share one set of names. Each name is declared once.
+Definitions, data types, constructors, sessions, conformances, places, schemes, meetings, talks, choreographies, seats, and links share one set of names. Each name is declared once.
+
+## Session
+
+A `session` is a protocol. A `conform` is a process that follows a named session. The protocol is spec. The derivation is evidence. The run emitters omit both. `--backend otp` writes the process as a GenServer. See [Emit](emit.md#otp).
+
+```
+session ping := recv Nat (send Nat end)
+conform pong : ping := get Nat (put 1 done)
+```
+
+The payload is a nat, a bit, unit, a pair, a record of named fields, a vector, or a non-indexed declared data type applied to payload arguments (`send Bool end`). A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. `send` and `recv` each name that type and one continuation. `recv (n : Nat)` binds `n`, and a later payload may mention `n` as the length of a vector. `send (d : Nat) {d ≤ w}` sends a nat at most `w`, and the process owes that evidence. `recv (b : Bit) on S T` receives a bit and continues as one of the two protocols. `b0` takes the first and `b1` takes the second. The sender writes `put b0` or `put b1`. `get (b : Bit) on P Q` offers both arms and binds the bit. `put` sends a literal, a name a `get` bound, or the value an in-scope `run` definition computes from its arguments. A run that calls itself, or a run declared later, is not a put source. The continuation of `get` may match on that value. The received value chooses which process runs, and every arm conforms to the one continuation. `get Nat` receives a value and does not name it. `get (k : Nat)` binds it to `k`, and the continuation can send `k` at that type. A name bound twice is the inner binding. `choose` is the process's choice (`pick0`, `pick1`). `branch` is the other side's choice, and `cover` offers both arms. `done` closes the channel at `end`. `stop` abandons it, at any protocol.
+
+A payload argument stops before a token that begins something else. The words are `def`, `data`, `session`, `conform`, `meet`, `place`, `scheme`, `move`, `endpoint`, `read`, `talk`, `choreography`, `seat`, `link`, `relay`, `import`, `param`, `where`, `nu`, `ν`, `end`, `send`, `recv`, `choose`, `branch`, `rec`, `case`, `on`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `over`, `say`, and `offer`. `temporal <name> :` and `repr <name> :=` stop as well. A name followed by `->`, `→`, `chooses`, or `:` stops, and so do `)` and `}`. A recursion variable in scope is the continuation (`send Bool X`). Parentheses group a payload (`(Reply)`, `(Maybe (List Nat))`). Omitting `end` after the payload is a parse error at that point, and the message says `end` was expected. The next declaration stays where it is. A declared data type takes exactly as many arguments as it has parameters. `Reply takes 0 arguments, given 2` is the refusal, and one parameter is `argument`.
+
+```
+session box := send (Bit * {x : Nat, y : Nat}) end
+session boxed := dual box
+conform here : box := put (b0, {x = 0, y = 0}) done
+conform there : boxed := get (Bit * {x : Nat, y : Nat}) done
+```
+
+`here` sends a tuple: a bit, and a map whose keys are `x` and `y`. `there` receives that type. `{x : Nat, y : Nat}` and `{y : Nat, x : Nat}` are different types. `examples/meet.muro` is that book.
+
+An unmarked session, and `session %0`, may abandon the channel. `session %1` requires the process to finish: every leaf is `done`, and an abandoned channel is refused. Both marks are the affine quantity. A `%1` binder on Π is not this form. A linear endpoint is `λ¹` and `⊸` ([Sessions](sessions.md#a-linear-endpoint)).
+
+```
+session %1 ping-done := recv Nat (send Nat end)
+conform pong-done : ping-done := get Nat (put 1 done)
+```
+
+A session has another end. `session back := dual ping` names it. `send` swaps with `recv`, an indexed bit keeps its index and each arm dualises, and `choose` swaps with `branch`. The payload type stays. The continuation dualises. The other end of the other end is the same session. The mark stays the session's mark.
+
+```
+session ping := recv Nat (send Nat end)
+session back := dual ping
+conform peer : back := put 1 (get Nat done)
+```
+
+`peer` sends `1` and then receives a nat. `examples/dual.muro` is that book.
+
+Two processes are one exchange when a send is a receive of that type and each session is the other end of the other. Any value of that type meets. A name bound by `get` meets that receive at the type it was bound. A name bound twice is the inner binding. A nat that was sent is the length of a vector the continuation names. An evidence payload meets as a nat. A bit index meets the arm of that same bit. A variable bit selects neither arm.
+
+```
+meet wire : pong with peer
+```
+
+`pong` is `get Nat (put 1 done)` on `ping`. `peer` is `put 1 (get Nat done)` on `back`. A choice meets the arm that was offered. A received bit meets the same way: both sides take the arm of that bit. Both ends close, or both abandon. A run term has no seat. `examples/meet.muro` is that book. `examples/indexed.muro` is the bit index. `--backend otp` starts the two processes as each other's peer. Each server still talks to one peer. See [Emit](emit.md#otp).
+
+A protocol may repeat. `session loop := rec X. recv Nat (send Nat X)` receives a nat and sends a nat, and then it is that protocol again. The other end is `rec` of the dual, and the variable stays. A process repeats with `rec X. … X`. The variable must sit under an action. `rec X. X` and a free name are refused. A jump does not finish, so `session %1` still refuses a loop. `rec X. recv (b : Bit) on (recv Nat (send Nat X)) end` repeats on `b0` and ends on `b1`. `examples/recursive.muro` is that book. The OTP image of a loop is a tail call.
+
+One description covers the exchange. `talk` writes it. `session ping := seen pong with peer in ping-exchange` is the session `pong` has with `peer`.
+
+```
+talk ping-exchange := say peer pong Nat (say pong peer Nat over)
+session ping := seen pong with peer in ping-exchange
+session back := seen peer with pong in ping-exchange
+```
+
+`say` is one party sending a value of one type to another, then one continuation. `offer` is one party choosing and the other offering both arms. On a `say`, the sender's session is `send` of that type and the receiver's session is `recv` of that type. On an `offer`, the sender's session is `choose` and the receiver's session is `branch`. `pong` receiving a nat and then sending `1` is `recv Nat (send Nat end)`. `peer` has `send Nat (recv Nat end)`. A party off a `say` has the continuation's session. A party off an `offer` has a session when both arms are the same description. A run term has no seat. `examples/talk.muro` is that book.
+
+A choreography names every role and one global type. `session ca := seen coordinator with alice in two-phase-commit` is the session `coordinator` has with `alice`. Projection is pairwise. A message is `send` for the sender and `recv` for the receiver. A choice by a role on that pair is `choose` or `branch`. A role that is neither end of the choice has a session only when every branch projects to the same session. The choreography is spec. The emitters omit it. `examples/two-phase-commit.muro` is that book. See [Choreography](choreography.md).
+
+A party of that description sits at a place.
+
+```
+seat pong-home : pong at home in ping-exchange
+seat peer-away : peer at away in ping-exchange
+link go : cross pong-home with peer-away in ping-exchange
+```
+
+`pong` sits at `home` and `peer` sits at `away`. They have a session, and the places differ, so the boundary crosses once. The same place stays. The other party reads that same boundary. The payload stays on the session. `examples/seated.muro` is that book.
+
+The checker sees the whole book, so a `conform` may name a session declared later, a dual session may name a session declared later, a meeting may name a process declared later, a session may name a description or a choreography declared later, and a seat may name a place or a description declared later. A second send, or a send where the protocol says receive, is refused. `examples/ping.muro` is the worked book. `run` is unchanged.
+
+## Place
+
+A `place` is ambient or a node. A `scheme` is a place in spec: `fixed` names one place, and `any` is instantiated where it is read. A `move` is the evidence that reading the scheme at a place stays or crosses once. The run emitters omit all three. A run definition has no place. `--node` writes one call for each cross. See [Emit](emit.md#node).
+
+```
+place home := ambient
+place away := node a
+
+scheme local := fixed home
+scheme poly := any
+
+move stay local : home
+move cross local : away
+move stay poly : home
+move stay poly : away
+```
+
+`home` is the ambient place. `away` is the node named `a`. Reading `local` at `home` stays. Reading `local` at `away` crosses once. Reading `poly` stays at whichever place reads it. The node name is the identifier after `node`. Two place names with the same node name are the same place. The generated call is addressed to the node given to `--node`.
+
+The checker sees the whole book, so a `move` may name a place or a scheme declared later. A `stay` where the reading crosses, or a `cross` where it stays, is refused. `examples/place.muro` is the worked book. `run` is unchanged.
+
+## Endpoint
+
+An `endpoint` is a session at a scheme. The session's mark is the endpoint's mark. A `read` is the evidence that a process conforms to that session, and that reading the scheme at a place stays or crosses once. The run emitters omit both. A run definition has no seat. `--node` writes one call for each cross reading. The call reads the scheme the endpoint names. The payload stays on the session. A reading that stays writes no call. See [Emit](emit.md#node). `--backend otp` writes each reading as a GenServer with one peer. See [Emit](emit.md#otp).
+
+```
+session ping := recv Nat (send Nat end)
+
+place home := ambient
+place away := node a
+scheme local := fixed home
+
+endpoint ping-home := ping at local
+
+read stay pong : ping-home at home := get Nat (put 1 done)
+read cross pong-away : ping-home at away := get Nat (put 1 done)
+```
+
+`ping` at `local` sits at `home`. Reading it there stays. Reading it at `away` crosses once. The process is `get Nat` and then `put 1`. The payload is the session's. The boundary is the reading's.
+
+A polymorphic scheme stays at the place that reads it. `session %1` still has to finish, at `home` and at `away`. A value of a type the protocol does not name is refused at every place. An unmarked session may abandon the channel. Reading that process at another place crosses once.
+
+The checker sees the whole book, so a `read` may name an endpoint declared later. A `stay` where the reading crosses, or a `cross` where it stays, is refused. `examples/located.muro` is the worked book. `run` is unchanged.
 
 ## Import
 
-`import "list.muro"` names a file. The path is relative to the importing file, and the string is the whole path. The file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A file reached by two imports, directly or through another file, is loaded once. A cycle of imports is an error. `examples/sort.muro` imports `list.muro` and does not declare `List`.
+`import "list.muro"` names a file. The path is relative to the importing file, and the string is the whole path. The file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A file reached by two imports, directly or through another file, is loaded once. A cycle of imports is an error. `examples/sort.muro` imports `std:list.muro` and does not declare `List`.
+
+`import "std:list.muro"` loads a book of the ordinary library compiled into the compiler. The id is `std:list.muro`, not a path on disk, so the same import works from a Hex package, from the self-contained executable, and from this repository. The books are `binary.muro`, `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, and `ord.muro`. A name that is not one of them is an error at the import, and the message lists the books. `..`, a leading `/`, a backslash, or any path that leaves the library is refused. A relative import inside a library book stays in the library. A library book reached twice joins once. See [Library](library.md).
+
+`import "pkg:shared_wire/wire.muro"` loads a file from a package named in the manifest, at the version `muro.lock` records. A file that differs from the lock is refused. See [Packages](packages.md). `std:` is not a package and is not fetched.
 
 ## Params
 
@@ -39,7 +160,7 @@ param keep : evidence Π (+ s : State) → Π (p : P s) → P (step s)
 
 A `param` is a name with a tag and a type, and no body. The file that imports the library supplies it with a `def` or a `data` of the same name; a declaration anywhere in the importing book counts, including one from another import. The supplying declaration has the param's tag (a `data` type supplies a `spec` param), and its type converts with the param's type, which is checked by a definition `step (param) : run Π (+ s : State) → State := step` that is checked and not kept. Inside the library a param is that definition: `+ s : State` is copyable when the supplied `State` is, a run param is run code, and a call to an evidence param discards the uses of its arguments like a call to any evidence definition.
 
-A file with a param nobody has supplied is not checked on its own: it is checked in the file that supplies the param, together with the supplying declarations, and an error in it prints the library's path and line. Its params pass through a file that imports it without supplying them. `Muro.check_file/2` on such a file is refused, naming each param: `param State is supplied by a file that imports this one`. A program is one book, so each param has one supplier in it. Agda's module application (`open Core State Action ℕ step …`) is the model; here the names do the applying.
+A file with a param nobody has supplied is not checked on its own: it is checked in the file that supplies the param, together with the supplying declarations, and an error in it prints the library's path and line. Its params pass through a file that imports it without supplying them. `Muro.check_file/2` on such a file is refused, naming each param: `param State is supplied by a file that imports this one`. The exunit backend is the exception: `mix muro.emit --backend exunit` checks the remaining params as assumptions and emits the equations. Every other backend, and `mix muro.check`, still refuse the file with that message. See [Closed equations as tests](exunit.md). A program is one book, so each param has one supplier in it. Agda's module application (`open Core State Action ℕ step …`) is the model; here the names do the applying.
 
 ## Prelude
 
@@ -77,7 +198,9 @@ Primitive types you can write as atoms:
 | `Atom` | The atom literals written in this file |
 | `Unit` | One constructor, `tt` |
 | `Empty` | No constructors |
-| `I64` / `F32` | Machine scalars; see [Machine numbers](machine.md) |
+| `U8` / `U32` / `U64` / `I64` | Fixed-width residues; see [Machine numbers](machine.md) |
+| `WBool` / `Opt` | Results of word comparisons and of checked or partial word operations |
+| `F32` | Nx scalar; see [Machine numbers](machine.md) |
 | `Stream A` | Greatest fixed point; see [Streams](streams.md) |
 
 `Nat`, `Unit`, and `Empty` as *types* are spec formers. You infer them only in spec. Their *constructors* (`0`, `suc`, `tt`) compute in run.
@@ -87,24 +210,28 @@ Primitive types you can write as atoms:
 A binder is always parenthesized.
 
 ```
-(n : Nat)        affine (default): at most one run/evidence use
+(n : Nat)        affine (default): at most one run/evidence use, and it may be unused
+(%0 n : Nat)     the same affine binder, written out
+(%1 n : Nat)     affine, and the variable must be used once
 (+ n : Nat)      reuse: only if the type WHNFs to a copyable type
 (- e : IsEven n) erased: compile-time; cannot be used computationally
 ```
 
-The `+` or `-` sits immediately before the name, inside the parentheses. `(-A : Type)` and `(- A : Type)` both parse.
+The mark sits immediately before the name, inside the parentheses. `(-A : Type)` and `(- A : Type)` both parse. `%1` is a whole token, so `(%1n : Nat)` does not.
 
-**Data** (after WHNF): `Nat`, `Unit`, `Empty`, `I64`, `F32`, `Tensor`, a pair of two Data types, or a user `data` type whose *parameters* are Data. Indices do not have to be Data. `List A` is Data iff `A` is. `List (Nat → Nat)` is not, so you cannot write `+xs : List (Nat → Nat)`.
+`%0` and `%1` are the affine quantity. In run and evidence, a `%1` binder that is never used is refused. Spec forgets uses, so the obligation is not checked there. Using the variable twice is still refused, because the quantity is affine. The λ mark and the Π mark must agree. `examples/arrow.muro` is the worked book.
+
+**Data** (after WHNF): `Nat`, `Unit`, `Empty`, `U8`, `U32`, `U64`, `I64`, `WBool`, `Opt` of a Data type, `F32`, `Tensor`, a pair of two Data types, or a user `data` type whose *parameters* are Data. Indices do not have to be Data. `List A` is Data iff `A` is. `List (Nat → Nat)` is not, so you cannot write `+xs : List (Nat → Nat)`.
 
 **Copyable** (after WHNF), the types `+` accepts: a Data type, a Π type, or a pair of two copyable types. A Data value copies by value, so a Data argument at a `+` position keeps its uses. A function copies by closure: copying it copies what it captured, so an argument at a `+` position whose type is a Π, or a pair holding one, has every use inside it counted as many. `twice (addn n) 1` with `twice : Π (+ f : Nat → Nat) → …` checks when `n` is reusable and is refused with `affine variable used as reusable` when `n` is affine. The domain and codomain of a `+` function are not asked to be copyable: `Π (+ f : Π (s : Stream Nat) → Nat) → …` is fine, the closure is what is copied, not the stream it will be given.
 
 `Stream` and `Either` are not copyable. There is no `+` on a stream. The refusal is `+ requires a copyable type: Data, a pair of them, or a function`.
 
-**Run type**: a variable or a definition used in run code has one. It is `Nat`, `Unit`, `Empty`, `Atom`, `I64`, `F32`, `Tensor`, a `data` type, a type variable, a Π whose codomain is a run type, a pair of two, or a ν type whose body is one. Each part is read after WHNF, so a definition naming a type is the type it names: with `def R : spec Type := Nat`, `inc : run Π (r : R) → R` is used in run like `Π (r : Nat) → Nat`. An identity type is not a run type, under a name or not: `p : Nat × Eq0` with `def Eq0 : spec Type := {0 ≡ 0 : Nat}` is refused in run with `variable has a spec type`.
+**Run type**: a variable or a definition used in run code has one. It is `Nat`, `Unit`, `Empty`, `Atom`, `U8`, `U32`, `U64`, `I64`, `WBool`, `Opt` of a run type, `F32`, `Tensor`, a `data` type, a type variable, a Π whose codomain is a run type, a pair of two, or a ν type whose body is one. Each part is read after WHNF, so a definition naming a type is the type it names: with `def R : spec Type := Nat`, `inc : run Π (r : R) → R` is used in run like `Π (r : Nat) → Nat`. An identity type is not a run type, under a name or not: `p : Nat × Eq0` with `def Eq0 : spec Type := {0 ≡ 0 : Nat}` is refused in run with `variable has a spec type`.
 
 In spec, uses are forgotten. You can mention an affine variable twice while building a type.
 
-In run and evidence, using an affine variable twice is an error: `affine variable used twice`. Using an erased variable computationally is an error: `erased variable used computationally`.
+In run and evidence, using an affine variable twice is an error: `affine variable used twice`. A `%1` binder that is never used is an error: `linear variable unused`. Using an erased variable computationally is an error: `erased variable used computationally`.
 
 ## Π and λ
 
@@ -167,6 +294,17 @@ match m motive (λ _ → A)
 ```
 
 Motives are written in parentheses. Nested λ in the motive cover index binders (see [Indexed data](indexed.md)).
+
+## A bounded field
+
+A constructor may bound a nat field by a numeral. The bound sits after the binder and before the arrow. The left side is that field. The right side is a canonical decimal. `<=` is the same token as `≤`.
+
+```
+data Req : Type where
+  req : (slot : Nat) {slot ≤ 1} → Req
+```
+
+`{slot ≤ 1}` admits `0` and `1`. `{slot ≤ 00}`, `{slot ≤ suc 0}`, a name that is not that field, and a right side that is not a numeral are `a field bound is a numeral`. A bound on a field that is not a nat is `a field bound is on a nat`. The bound is not part of the core type. A `run` that reads the field, and a session `case` on that `run`, split the field into `0` … `w`. See [A numeral bound](sessions.md#a-numeral-bound).
 
 ## Atoms
 

@@ -21,7 +21,9 @@ If you want to write a program today, start at [Start](start.md), then [Marks](m
 
 If you are an agent (or you are pairing with one), read [For agents](for-agents.md) first. There are two jobs. Do not mix them.
 
-If you already write `.muro` and need a fact, use [Grammar](grammar.md) and [Examples](examples.md).
+If you already write `.muro` and need a fact, use [Grammar](grammar.md) and [Examples](examples.md). The ordinary library is [Library](library.md): `import "std:list.muro"`. A linear-time property of a buffered meeting is [Temporal](temporal.md). A global type projected onto each pair of roles is [Choreography](choreography.md).
+
+To see a book's meetings, read [Visual explorer](explorer.md). `muro ui path.muro` prints how to open it.
 
 If you want to change the calculus itself, stop. That is a different job: [Extending the kernel](extending.md).
 
@@ -35,7 +37,7 @@ They are not the same book.
 | **Elixir docs** | `@moduledoc` / `@doc`, later `mix docs` | The implementation API: `Muro.Check`, `Muro.Parser`, `Muro.Emit`. Not this folder. |
 | **Agda** | `agda/Muro/` | The rules of the calculus. A decision procedure (structural on the term, fuelled where it reduces), an inductive judgment, and the proof that the first is sound for the second on the fragment. Not a certificate that your `.muro` file is correct. |
 
-Agda is not what `mix muro.check` runs. Elixir is. If Agda and Elixir disagree, Agda wins — you fix Elixir to match, after the Agda clause exists.
+Agda is not what `mix muro.check` runs. Elixir is.
 
 ## What it is
 

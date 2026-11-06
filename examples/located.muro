@@ -1,0 +1,39 @@
+-- located.muro — a session read at a place.
+-- The endpoint is spec. The reading is evidence.
+-- A run definition has no seat.
+
+session ping := recv Nat (send Nat end)
+
+session %1 ping-done := recv Nat (send Nat end)
+
+session send-then-send := send Nat (send Nat end)
+
+place home := ambient
+
+place away := node a
+
+scheme local := fixed home
+
+scheme poly := any
+
+endpoint ping-home := ping at local
+
+endpoint ping-poly := ping at poly
+
+endpoint done-home := ping-done at local
+
+endpoint open-home := send-then-send at local
+
+read stay pong : ping-home at home := get Nat (put 1 done)
+
+read cross pong-away : ping-home at away := get Nat (put 1 done)
+
+read stay pong-poly : ping-poly at home := get Nat (put 1 done)
+
+read stay pong-poly-away : ping-poly at away := get Nat (put 1 done)
+
+read cross pong-done : done-home at away := get Nat (put 1 done)
+
+read cross left-open : open-home at away := put 0 stop
+
+def kept : run Nat := 0

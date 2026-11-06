@@ -6,6 +6,7 @@
 -- in Coinduction), ENTCS 45 (2001), Theorem 2.1.
 ------------------------------------------------------------------------
 
+{-# OPTIONS --safe #-}
 module Muro.ExampleBisim where
 
 open import Data.Fin.Base using (zero; suc)

@@ -6,9 +6,15 @@ defmodule Muro.Emit do
   A checked run Stream is emitted as `Stream.unfold/2`. The pair in an
   unfold body is `{head, next_seed}`. `uncons` is two replayable views
   (`Enum.take/2` + `Stream.drop/2`); affinity was already checked.
+
+  A `repr` is emitted as `decode_<type>/1`, `decode_<type>/2`, and
+  `encode_<type>/2` by `Muro.Repr`, from the same analysis the checker
+  used. Decode returns `{:ok, value, table}`. Encode takes that table.
+  A book with no `repr` emits the same module text as before.
   """
 
   alias Muro.Ast
+  alias Muro.Emit.Name
 
   # Words the Elixir parser rejects as function names (`syntax error before: do`).
   @elixir_reserved ~w(
@@ -19,11 +25,45 @@ defmodule Muro.Emit do
 
   @doc """
   Run definitions in book order. Data, spec, and evidence are omitted.
+  A temporal declaration has mode evidence, so it is omitted here and in
+  every backend that reads this list, including Zig.
   `run internal` stays in the list; its `export` flag is false.
   """
   def run_defs(book) when is_list(book) do
     Enum.filter(book, &(Map.get(&1, :kind, :def) != :data and &1.mode == :run))
   end
+
+  @doc """
+  Group each elaborated run with the unfold steps it closed.
+
+  A generated step has `generated: true`. It follows the run that
+  closed it. A source name, including `step0`, and a parameter list
+  that matches the step are still that run. The two are not told
+  apart by spelling.
+  """
+  def partition_funs(funs, runs) when is_list(funs) and is_list(runs) do
+    partition_funs(funs, runs, [], %{})
+  end
+
+  defp partition_funs([], [], groups, map), do: {:ok, Enum.reverse(groups), map}
+
+  defp partition_funs([%{generated: true} | _], _runs, _groups, _map),
+    do: {:error, "c:unsupported"}
+
+  defp partition_funs([%{name: name} = fun | rest], [%{name: name} | ds], groups, map) do
+    {steps, rest} = take_generated(rest)
+    map = Enum.reduce(steps, map, &Map.put(&2, &1.name, &1))
+    partition_funs(rest, ds, [{fun, steps} | groups], map)
+  end
+
+  defp partition_funs(_funs, _runs, _groups, _map), do: {:error, "c:unsupported"}
+
+  defp take_generated([%{generated: true} = fun | rest]) do
+    {more, rest} = take_generated(rest)
+    {[fun | more], rest}
+  end
+
+  defp take_generated(funs), do: {[], funs}
 
   @doc """
   Source name to emitted name for each run definition, in book order.
@@ -43,15 +83,147 @@ defmodule Muro.Emit do
     map
   end
 
+  @doc """
+  Module name `mix muro.emit` gives a file: the stem, hyphens turned
+  into underscores, then camelized. `rounding.muro` is `Rounding`.
+  `half_ok.muro` is `HalfOk`.
+  """
+  def elixir_module(path) when is_binary(path) do
+    path
+    |> elixir_stem()
+    |> List.wrap()
+    |> Module.concat()
+  end
+
+  @doc """
+  Test module `mix muro.emit --backend exunit` prints for `path`.
+  The stem module plus `Test`: `rounding.muro` is `RoundingTest`.
+  The implementation under test stays `elixir_module/1`, so the two
+  modules can be compiled together.
+  """
+  def exunit_module(path) when is_binary(path) do
+    Module.concat([elixir_stem(path) <> "Test"])
+  end
+
+  @doc """
+  Module name `mix muro.emit --backend fsm` gives a file.
+  The stem plus `Fsm`: `meet.muro` is `MeetFsm`.
+  """
+  def fsm_module(path) when is_binary(path) do
+    Module.concat([elixir_stem(path) <> "Fsm"])
+  end
+
+  @doc false
+  def emit_private_runs(book, wanted) when is_list(book) and is_list(wanted) do
+    names = elixir_names(book)
+    want = MapSet.new(wanted)
+
+    runs =
+      book
+      |> run_defs()
+      |> Enum.filter(&MapSet.member?(want, &1.name))
+
+    funs =
+      runs
+      |> Enum.map(&emit_def(Map.put(&1, :export, false), book, names))
+      |> Enum.join("\n\n")
+
+    except =
+      case kernel_clashes(runs, names) do
+        [] -> ""
+        clashes -> "import Kernel, except: #{inspect(clashes)}\n"
+      end
+
+    nat = nat_helpers(runs, "")
+
+    String.trim(except <> "\n" <> funs <> "\n" <> nat)
+  end
+
+  defp elixir_stem(path) do
+    path
+    |> Path.basename(".muro")
+    |> String.replace("-", "_")
+    |> Macro.camelize()
+  end
+
+  @doc """
+  Source name to Elixir function name for every `run` definition.
+
+  The spelling is `elixir_base/1`. Every run is claimed, in book order,
+  before a backend drops internal or non-`Nat` runs. `taken` is the
+  host functions that share a module with those runs: the NIF loader,
+  the FSM interpreter, `muro_nat_to_int`, and the repr helpers.
+  Elixir, NIF, OTP, FSM, and ExUnit all read this map.
+  """
+  def elixir_names(book) when is_list(book) do
+    def_names(book, &elixir_base/1, Muro.Emit.Helpers.runs())
+  end
+
+  @doc """
+  The outline of one backend. `:c`, `:rust`, `:zig`, and `:otp` take a
+  stem. `:fsm` takes the book path and uses `fsm_module/1`. The result
+  is `{:ok, outline}` or `{:error, reason}`. An outline names the
+  signatures, layouts, and clause heads that backend emits. It does not
+  write source.
+  """
+  def outline(:otp, book, stem), do: Muro.Emit.Otp.outline(book, stem)
+  def outline(:c, book, stem), do: Muro.Emit.C.outline(book, stem)
+  def outline(:rust, book, stem), do: Muro.Emit.Rust.outline(book, stem)
+  def outline(:zig, book, stem), do: Muro.Emit.Zig.outline(book, stem)
+
+  def outline(:fsm, book, path) when is_binary(path) do
+    Muro.Emit.Fsm.outline(book, path, fsm_module(path))
+  end
+
+  @doc """
+  Module alias of each source name, claimed in list order.
+
+  `Macro.camelize/1` is not injective (`a_1b` and `a1b` both become
+  `A1b`). The later name takes `_2`.
+  """
+  def elixir_modules(names) when is_list(names) do
+    {map, _} =
+      Enum.reduce(names, {%{}, MapSet.new()}, fn name, {map, used} ->
+        {mod, used} = Name.claim(elixir_alias(name), used)
+        {Map.put(map, name, mod), used}
+      end)
+
+    map
+  end
+
+  @doc """
+  Quantities of the Π binders of a named type, outer binder first.
+  `emit_module/2` drops the `:erased` ones from the Elixir arity.
+  """
+  def binder_qtys(type) do
+    case Ast.to_db(type) do
+      {:ok, ty} -> qty_spine(ty)
+      {:error, _message} -> []
+    end
+  end
+
+  @doc """
+  Render a closed de Bruijn value as the Elixir literal `emit_module/2`
+  builds: `0`, `{:suc, n}`, `:tt`, an atom, a constructor tuple, or a
+  pair.
+
+  `book` is the named book, so declared constructors are recognized.
+  Returns `{:ok, source}` or `{:error, reason}` where `reason` is
+  `:function`, `:stream`, `:machine`, `:open`, or `:shape`.
+
+  Host data (`repr`, issue #131) belongs in this function. Until that
+  exists, a caller compares these shapes.
+  """
+  def emit_closed(term, book) when is_list(book) do
+    case value_kind(term, book) do
+      :value -> {:ok, emit_db(term, 0, book, %{})}
+      reason -> {:error, reason}
+    end
+  end
+
   def emit_module(module, book) when is_atom(module) do
     runs = run_defs(book)
-
-    taken =
-      if Enum.any?(runs, &term_has_toi64?(&1.body)),
-        do: MapSet.new(["muro_nat_to_int"]),
-        else: MapSet.new()
-
-    names = def_names(book, &elixir_base/1, taken)
+    names = elixir_names(book)
     funs = runs |> Enum.map(&emit_def(&1, book, names)) |> Enum.join("\n\n")
 
     except =
@@ -60,17 +232,9 @@ defmodule Muro.Emit do
         clashes -> "  import Kernel, except: #{inspect(clashes)}\n"
       end
 
-    nat_helper =
-      if Enum.any?(runs, &term_has_toi64?(&1.body)) do
-        """
-          defp muro_nat_to_int(0), do: 0
-          defp muro_nat_to_int({:suc, n}), do: 1 + muro_nat_to_int(n)
-        """
-      else
-        ""
-      end
+    nat_helper = nat_helpers(runs, "  ")
 
-    """
+    source = """
     defmodule #{inspect(module)} do
       # Generated by Muro. Evidence never becomes a run.
     #{except}
@@ -78,6 +242,14 @@ defmodule Muro.Emit do
     #{nat_helper}
     end
     """
+
+    case Muro.Repr.elixir(book, names) do
+      "" ->
+        source
+
+      codec ->
+        String.replace_suffix(source, "end\n", indent(codec, 2) <> "\nend\n")
+    end
   end
 
   defp emit_def(%{name: name, type: ty, body: body} = d, book, names) do
@@ -85,20 +257,25 @@ defmodule Muro.Emit do
     {:ok, body_db} = Ast.to_db(body)
     {erased, arity} = telescope(ty_db, 0, [])
     inner = eta_body(body_db, arity)
+    Process.put({Muro.Emit, :word_kinds}, word_kind_spine(ty_db))
 
-    args =
-      0..(arity - 1)//1
-      |> Enum.reject(&(&1 in erased))
-      |> Enum.map(&bound_name(inner, arity - 1 - &1, &1, book))
+    try do
+      args =
+        0..(arity - 1)//1
+        |> Enum.reject(&(&1 in erased))
+        |> Enum.map(&bound_name(inner, arity - 1 - &1, &1, book))
 
-    expr = emit_db(inner, arity, book, names)
-    kw = if Map.get(d, :export, true), do: "def", else: "defp"
-    fun = Map.fetch!(names, name)
+      expr = emit_db(inner, arity, book, names)
+      kw = if Map.get(d, :export, true), do: "def", else: "defp"
+      fun = Map.fetch!(names, name)
 
-    if args == [] do
-      "#{kw} #{fun} do\n  #{expr}\nend"
-    else
-      "#{kw} #{fun}(#{Enum.join(args, ", ")}) do\n  #{expr}\nend"
+      if args == [] do
+        "#{kw} #{fun} do\n  #{expr}\nend"
+      else
+        "#{kw} #{fun}(#{Enum.join(args, ", ")}) do\n  #{expr}\nend"
+      end
+    after
+      Process.delete({Muro.Emit, :word_kinds})
     end
   end
 
@@ -171,17 +348,25 @@ defmodule Muro.Emit do
     |> String.trim()
   end
 
-  defp emit_db({:lam, :erased, _, _, t}, d, book, names), do: emit_db(t, d + 1, book, names)
+  defp emit_db({:lam, :erased, _, _, t}, d, book, names) do
+    with_kinds([nil], fn -> emit_db(t, d + 1, book, names) end)
+  end
 
-  defp emit_db({:lam, _, _, _, t}, d, book, names) do
-    "fn #{bound_name(t, 0, d, book)} -> #{emit_db(t, d + 1, book, names)} end"
+  defp emit_db({:lam, _, a, _, t}, d, book, names) do
+    with_kinds([kind_of_annot(a)], fn ->
+      "fn #{bound_name(t, 0, d, book)} -> #{emit_db(t, d + 1, book, names)} end"
+    end)
   end
 
   defp emit_db({:mdata, e, _p, bs}, d, book, names) do
     clauses =
       Enum.map(bs, fn {name, ar, b} ->
         pat = emit_ctor_pat(name, ar, d, b, book)
-        "      #{pat} -> #{emit_db(b, d + ar, book, names)}"
+
+        body =
+          with_kinds(List.duplicate(nil, ar), fn -> emit_db(b, d + ar, book, names) end)
+
+        "      #{pat} -> #{body}"
       end)
       |> Enum.join("\n")
 
@@ -194,10 +379,12 @@ defmodule Muro.Emit do
   end
 
   defp emit_db({:mnat, e, _p, z, s}, d, book, names) do
+    suc = with_kinds([nil], fn -> emit_db(s, d + 1, book, names) end)
+
     """
     case #{emit_db(e, d, book, names)} do
       0 -> #{emit_db(z, d, book, names)}
-      {:suc, #{bound_name(s, 0, d, book)}} -> #{emit_db(s, d + 1, book, names)}
+      {:suc, #{bound_name(s, 0, d, book)}} -> #{suc}
     end
     """
     |> String.trim()
@@ -216,7 +403,8 @@ defmodule Muro.Emit do
   defp emit_db({:letp, e, t}, d, book, names) do
     a = bound_name(t, 1, d, book)
     b = bound_name(t, 0, d + 1, book)
-    "({#{a}, #{b}} = #{emit_db(e, d, book, names)}; #{emit_db(t, d + 2, book, names)})"
+    body = with_kinds([nil, nil], fn -> emit_db(t, d + 2, book, names) end)
+    "({#{a}, #{b}} = #{emit_db(e, d, book, names)}; #{body})"
   end
 
   defp emit_db({:unf, seed, f}, d, book, names) do
@@ -257,6 +445,8 @@ defmodule Muro.Emit do
   end
 
   defp emit_db({:def, n}, d, book, names), do: emit_ref(n, [], d, book, names)
+
+  defp emit_db({:word, op, args}, d, book, names), do: emit_word(op, args, d, book, names)
 
   defp emit_db(_, _, _book, _names), do: "raise \"erased term\""
 
@@ -324,7 +514,10 @@ defmodule Muro.Emit do
   # Quantities of the Πs of a definition's type; nil for a name the book
   # does not define.
   defp ref_qtys(book, name) do
-    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name)) do
+    case Enum.find(
+           book,
+           &(Map.get(&1, :kind, :def) not in [:data, :repr] and Map.get(&1, :name) == name)
+         ) do
       nil ->
         nil
 
@@ -336,18 +529,19 @@ defmodule Muro.Emit do
 
   defp emit_ctor(name, args, d, book, names) do
     xs = Enum.map(args, &emit_db(&1, d, book, names))
+    atom = elixir_atom(name)
 
     case xs do
-      [] -> ":#{safe(name)}"
-      _ -> "{:#{safe(name)}, #{Enum.join(xs, ", ")}}"
+      [] -> atom
+      _ -> "{#{atom}, #{Enum.join(xs, ", ")}}"
     end
   end
 
-  defp emit_ctor_pat(name, 0, _d, _body, _book), do: ":#{safe(name)}"
+  defp emit_ctor_pat(name, 0, _d, _body, _book), do: elixir_atom(name)
 
   defp emit_ctor_pat(name, ar, d, body, book) do
     vars = Enum.map(0..(ar - 1), fn i -> bound_name(body, ar - 1 - i, d + i, book) end)
-    "{:#{safe(name)}, #{Enum.join(vars, ", ")}}"
+    "{#{elixir_atom(name)}, #{Enum.join(vars, ", ")}}"
   end
 
   # A binder the emitted term never mentions is `_`, so eval does not warn.
@@ -404,6 +598,9 @@ defmodule Muro.Emit do
   defp emitted_occurs?(i, {:packi, a, b}, book),
     do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
 
+  defp emitted_occurs?(i, {:word, _, args}, book),
+    do: Enum.any?(args, &emitted_occurs?(i, &1, book))
+
   defp emitted_occurs?(i, {:app, _, _} = t, book) do
     {h, args} = spine(t, [])
 
@@ -426,7 +623,10 @@ defmodule Muro.Emit do
   defp emitted_occurs?(_, _, _), do: false
 
   defp arg_qtys(book, name, n) do
-    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name)) do
+    case Enum.find(
+           book,
+           &(Map.get(&1, :kind, :def) not in [:data, :repr] and Map.get(&1, :name) == name)
+         ) do
       nil ->
         List.duplicate(:affine, n)
 
@@ -444,8 +644,74 @@ defmodule Muro.Emit do
     end)
   end
 
+  # A value the suite can pass to `==`. Anything else is a skip reason.
+  # `repr` (#131) replaces this classification.
+  defp value_kind(:ze, _book), do: :value
+  defp value_kind(:one, _book), do: :value
+  defp value_kind({:atom, _name}, _book), do: :value
+  defp value_kind({:su, t}, book), do: value_kind(t, book)
+  defp value_kind({:ann, e, _ty}, book), do: value_kind(e, book)
+
+  defp value_kind({:pair, a, b}, book) do
+    case value_kind(a, book) do
+      :value -> value_kind(b, book)
+      reason -> reason
+    end
+  end
+
+  defp value_kind({:var, _i}, _book), do: :open
+
+  defp value_kind({:def, name}, book) do
+    if ctor_name?(book, name), do: :value, else: :open
+  end
+
+  defp value_kind({:lam, _q, _a, _x, _t}, _book), do: :function
+  defp value_kind({:unf, _s, _f}, _book), do: :stream
+  defp value_kind({:ucons, _s}, _book), do: :stream
+  defp value_kind({:nu, _f}, _book), do: :stream
+  defp value_kind({:bisim, _s, _t}, _book), do: :stream
+  defp value_kind({:toi64, _t}, _book), do: :machine
+  defp value_kind({:addi, _x, _y}, _book), do: :machine
+  defp value_kind({:muli, _x, _y}, _book), do: :machine
+  defp value_kind({:addt, _t, _u}, _book), do: :machine
+  defp value_kind({:packi, _x, _y}, _book), do: :machine
+  defp value_kind({:tensor, _d, _s}, _book), do: :machine
+  defp value_kind(:i64, _book), do: :machine
+  defp value_kind({:word, _, _}, _book), do: :machine
+  defp value_kind(:f32ty, _book), do: :machine
+
+  defp value_kind({:app, _, _} = term, book) do
+    {head, args} = spine(term, [])
+
+    case head do
+      {:def, name} ->
+        if ctor_name?(book, name) do
+          value_args(args, book)
+        else
+          :shape
+        end
+
+      _other ->
+        :shape
+    end
+  end
+
+  defp value_kind(_other, _book), do: :shape
+
+  defp value_args([], _book), do: :value
+
+  defp value_args([arg | rest], book) do
+    case value_kind(arg, book) do
+      :value -> value_args(rest, book)
+      reason -> reason
+    end
+  end
+
   defp live_args(book, name, args, d, names) do
-    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name)) do
+    case Enum.find(
+           book,
+           &(Map.get(&1, :kind, :def) not in [:data, :repr] and Map.get(&1, :name) == name)
+         ) do
       nil ->
         Enum.map(args, &emit_db(&1, d, book, names))
 
@@ -466,36 +732,122 @@ defmodule Muro.Emit do
   defp spine({:app, f, a}, acc), do: spine(f, [a | acc])
   defp spine(h, acc), do: {h, acc}
 
-  defp elixir_atom(name) do
-    if String.match?(name, ~r/^[A-Za-z_][A-Za-z0-9_@]*$/),
-      do: ":#{name}",
-      else: ":#{inspect(name)}"
+  defp elixir_atom(name), do: ":" <> elixir_atom_name(name)
+
+  # Injective on binaries. A kept name matches `^[a-z_][A-Za-z0-9_]*$`,
+  # contains no `__`, and is not reserved, and it is returned unchanged.
+  # Every other name is `muro__` plus `Name.encode/1`. The two images are
+  # disjoint: a kept name has no `__`, and the escape contains `__` only
+  # as that prefix, because `encode/1` writes no underscore. `encode/1`
+  # is injective, so the escape is injective. The identity is injective
+  # on the kept set, and each source name takes exactly one branch. The
+  # result matches `^[a-z_][A-Za-z0-9_]*$`, so it is a function name.
+  # `?` and `!` are not kept: a claim suffix would follow them (`foo?_2`),
+  # which Elixir rejects. `foo_bar` is kept. `Bit` and `foo-bar` are not,
+  # so they do not fold onto `bit` and `foo_bar`.
+  @doc """
+  Injective Elixir function name of one source identifier.
+
+  `foo_bar`, `fromMaybe`, and `muro_and` stay themselves. An uppercase
+  first letter, a leading digit, `?` or `!`, a hyphen, a quote, Unicode,
+  a reserved word, or a name that already contains `__` becomes `muro__`
+  plus `Muro.Emit.Name.encode/1`.
+  """
+  def elixir_base(name) when is_binary(name) do
+    if kept_function?(name) and not MapSet.member?(@elixir_reserved, name) do
+      name
+    else
+      "muro__" <> Name.encode(name)
+    end
   end
 
-  defp safe(name) do
-    name
-    |> String.replace("-", "_")
-    |> String.replace("'", "_")
+  @doc """
+  Atom spelling of a source constructor or tag.
+
+  A valid unquoted atom with no `__` stays itself, so `:true`, `:Bit`,
+  `:just`, and `:nil` stay. Anything else uses `elixir_base/1`. That
+  image contains `__`, which a kept atom does not, so the two branches
+  are disjoint. A function still uses `elixir_base/1` only: the atom
+  `:and` and the function `muro__and` are different spellings.
+  """
+  def elixir_atom_name(name) when is_binary(name) do
+    if String.match?(name, ~r/^[A-Za-z_][A-Za-z0-9_]*[?!]?$/) and not String.contains?(name, "__") do
+      name
+    else
+      elixir_base(name)
+    end
   end
 
-  defp elixir_base(name) do
-    n = safe(name)
-    if MapSet.member?(@elixir_reserved, n), do: "muro_" <> n, else: n
+  @doc """
+  Inverse of `elixir_base/1` and of `elixir_atom_name/1`.
+
+  A spelling that begins with `muro__` is `Name.decode/1` of the rest.
+  Any other spelling is itself. `Name.encode/1` writes no underscore, so
+  the prefix splits in one place. `elixir_source(elixir_base(name))` and
+  `elixir_source(elixir_atom_name(name))` are `{:ok, name}`.
+
+  This is the spelling inverse, not a lookup among one declaration's
+  constructors. `elixir_source("muro__iszdon")` is `{:ok, "is-on"}` even
+  when a constructor is named `muro__iszdon`. `source_ctor/2` is that
+  lookup, and it is the only place a host label becomes a constructor.
+  """
+  def elixir_source("muro__" <> rest), do: Name.decode(rest)
+  def elixir_source(spelling) when is_binary(spelling), do: {:ok, spelling}
+
+  @doc """
+  Source constructor named by a host label, or `:error`.
+
+  `names` are the source constructors of one declaration. A label equal
+  to `elixir_atom_name/1` of one of them is that constructor. A label
+  that is itself one of those names is that constructor. When both
+  apply, the host atom wins: the label `muro__iszdon` is `is-on` when
+  that declaration has both. The decoded name is the source constructor.
+  Callers do not decode it again.
+  """
+  def source_ctor(names, label) when is_binary(label) do
+    set = if is_struct(names, MapSet), do: names, else: MapSet.new(names)
+
+    case Enum.find(set, fn name -> elixir_atom_name(name) == label end) do
+      name when is_binary(name) ->
+        {:ok, name}
+
+      nil ->
+        if MapSet.member?(set, label), do: {:ok, label}, else: :error
+    end
+  end
+
+  @doc """
+  Module alias of one source name.
+
+  A snake name matching `^[a-z][a-z0-9]*(_[a-z0-9]+)*$` is camelized, so
+  `pong` is `Pong` and `foo_bar` is `FooBar`. Every other spelling is
+  `M` plus `elixir_base/1`. Camelizing an escape would collide:
+  `muro__and` and `muro_and` both become `MuroAnd`, and `_foo` becomes
+  `Foo`.
+  """
+  def elixir_alias(name) when is_binary(name) do
+    base = elixir_base(name)
+
+    if String.match?(base, ~r/^[a-z][a-z0-9]*(_[a-z0-9]+)*$/) do
+      Macro.camelize(base)
+    else
+      "M" <> base
+    end
+  end
+
+  defp kept_function?(name) do
+    String.match?(name, ~r/^[a-z_][A-Za-z0-9_]*$/) and not String.contains?(name, "__")
   end
 
   defp ename(names, name), do: Map.fetch!(names, name)
 
-  defp claim(base, used) do
-    name = if MapSet.member?(used, base), do: bump(base, 2, used), else: base
-    {name, MapSet.put(used, name)}
-  end
-
-  defp bump(base, i, used) do
-    n = "#{base}_#{i}"
-    if MapSet.member?(used, n), do: bump(base, i + 1, used), else: n
-  end
+  # Same suffix as the C, Rust, and Zig emitters. Elixir spellings are
+  # not in those two spaces; only the numeric tail is shared.
+  defp claim(base, used), do: Name.claim(base, used)
 
   defp term_has_toi64?({:toi64, _}), do: true
+  defp term_has_toi64?({:word, {:of, _}, _}), do: true
+  defp term_has_toi64?({:word, op, _}) when op in [:shl, :shr], do: true
 
   defp term_has_toi64?(t) when is_tuple(t) do
     t |> Tuple.to_list() |> Enum.any?(&term_has_toi64?/1)
@@ -503,6 +855,199 @@ defmodule Muro.Emit do
 
   defp term_has_toi64?(t) when is_list(t), do: Enum.any?(t, &term_has_toi64?/1)
   defp term_has_toi64?(_), do: false
+
+  defp term_has_ton?({:word, :ton, _}), do: true
+
+  defp term_has_ton?(t) when is_tuple(t) do
+    t |> Tuple.to_list() |> Enum.any?(&term_has_ton?/1)
+  end
+
+  defp term_has_ton?(t) when is_list(t), do: Enum.any?(t, &term_has_ton?/1)
+  defp term_has_ton?(_), do: false
+
+  defp nat_helpers(runs, pad) do
+    [
+      helper(Enum.any?(runs, &term_has_toi64?(&1.body)), pad, """
+      defp muro_nat_to_int(0), do: 0
+      defp muro_nat_to_int({:suc, n}), do: 1 + muro_nat_to_int(n)
+      """),
+      helper(Enum.any?(runs, &term_has_ton?(&1.body)), pad, """
+      defp muro_int_to_nat(0), do: 0
+      defp muro_int_to_nat(n) when n > 0, do: {:suc, muro_int_to_nat(n - 1)}
+      """)
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+  end
+
+  # The helper text is a heredoc whose lines start with `defp`, so the
+  # reservation scan sees the name. `pad` is applied when the text is built.
+  defp helper(false, _pad, _src), do: ""
+
+  defp helper(true, pad, src) do
+    src
+    |> String.trim_trailing()
+    |> String.split("\n")
+    |> Enum.map_join("\n", &(pad <> &1))
+  end
+
+  # Index 0 is the innermost binder (de Bruijn 0).
+  defp word_kind_spine(ty), do: word_kind_spine(ty, [])
+  defp word_kind_spine({:pi, _, a, _, b}, acc), do: word_kind_spine(b, [kind_of_annot(a) | acc])
+  defp word_kind_spine(_, acc), do: acc
+
+  defp kind_of_annot(:i64), do: :i64
+  defp kind_of_annot({:word, {:ty, k}, []}), do: k
+  defp kind_of_annot({:word, {:optk, k}, []}), do: {:opt, k}
+  defp kind_of_annot({:word, :bool, []}), do: :bool
+  defp kind_of_annot({:ann, _, a}), do: kind_of_annot(a)
+  defp kind_of_annot(_), do: nil
+
+  defp with_kinds(ks, fun) do
+    push_kinds(ks)
+
+    try do
+      fun.()
+    after
+      pop_kinds(length(ks))
+    end
+  end
+
+  defp push_kinds(ks) do
+    Process.put({Muro.Emit, :word_kinds}, ks ++ (Process.get({Muro.Emit, :word_kinds}) || []))
+  end
+
+  defp pop_kinds(n) do
+    Process.put(
+      {Muro.Emit, :word_kinds},
+      Enum.drop(Process.get({Muro.Emit, :word_kinds}) || [], n)
+    )
+  end
+
+  defp emit_word({:lit, k, n}, [], _d, _book, _names) do
+    Integer.to_string(Muro.Word.residue(k, n))
+  end
+
+  defp emit_word(true, [], _d, _book, _names), do: "true"
+  defp emit_word(false, [], _d, _book, _names), do: "false"
+  defp emit_word(:none, [], _d, _book, _names), do: ":none"
+
+  defp emit_word({:of, k}, [t], d, book, names) do
+    "Muro.Word.of(#{inspect(k)}, muro_nat_to_int(#{emit_db(t, d, book, names)}))"
+  end
+
+  defp emit_word(:ton, [t], d, book, names) do
+    "muro_int_to_nat(#{emit_db(t, d, book, names)})"
+  end
+
+  defp emit_word(op, [x, y], d, book, names) when op in [:add, :sub, :mul] do
+    fun = %{add: "add", sub: "sub", mul: "mul"}
+    word_bin(fun[op], x, y, d, book, names)
+  end
+
+  defp emit_word(op, [x, y], d, book, names) when op in [:and, :or, :xor] do
+    fun = %{and: "band", or: "bor", xor: "bxor"}
+    word_bin(fun[op], x, y, d, book, names)
+  end
+
+  defp emit_word(:not, [x], d, book, names) do
+    "Muro.Word.bnot(#{inspect(need_kind(x, book))}, #{emit_db(x, d, book, names)})"
+  end
+
+  defp emit_word(op, [x, y], d, book, names) when op in [:eq, :lt, :le] do
+    fun = %{eq: "eq?", lt: "lt?", le: "le?"}
+    word_bin(fun[op], x, y, d, book, names)
+  end
+
+  defp emit_word(op, [x, y], d, book, names) when op in [:cadd, :csub, :cmul] do
+    fun = %{cadd: "checked_add", csub: "checked_sub", cmul: "checked_mul"}
+    word_bin(fun[op], x, y, d, book, names)
+  end
+
+  defp emit_word(:div, [x, y], d, book, names), do: word_bin("divide", x, y, d, book, names)
+  defp emit_word(:rem, [x, y], d, book, names), do: word_bin("remainder", x, y, d, book, names)
+
+  defp emit_word(op, [x, amt], d, book, names) when op in [:shl, :shr] do
+    fun = if op == :shl, do: "shl", else: "shr"
+
+    "Muro.Word.#{fun}(#{inspect(need_kind(x, book))}, #{emit_db(x, d, book, names)}, muro_nat_to_int(#{emit_db(amt, d, book, names)}))"
+  end
+
+  defp emit_word({:cast, k}, [x], d, book, names) do
+    "Muro.Word.cast(#{inspect(k)}, #{emit_db(x, d, book, names)})"
+  end
+
+  defp emit_word(:some, [x], d, book, names) do
+    "{:some, #{emit_db(x, d, book, names)}}"
+  end
+
+  defp emit_word(_op, _args, _d, _book, _names), do: "raise \"erased term\""
+
+  defp word_bin(fun, x, y, d, book, names) do
+    "Muro.Word.#{fun}(#{inspect(operand_kind(x, y, book))}, #{emit_db(x, d, book, names)}, #{emit_db(y, d, book, names)})"
+  end
+
+  defp operand_kind(x, y, book) do
+    case term_kind(x, book) || term_kind(y, book) do
+      k when k in [:u8, :u32, :u64, :i64] -> k
+      _ -> raise "word kind"
+    end
+  end
+
+  defp need_kind(t, book) do
+    case term_kind(t, book) do
+      k when k in [:u8, :u32, :u64, :i64] -> k
+      _ -> raise "word kind"
+    end
+  end
+
+  defp term_kind({:var, i}, _book) do
+    Enum.at(Process.get({Muro.Emit, :word_kinds}) || [], i)
+  end
+
+  defp term_kind({:ann, e, a}, book), do: term_kind(e, book) || kind_of_annot(a)
+  defp term_kind({:word, {:lit, k, _}, _}, _book), do: k
+  defp term_kind({:word, {:of, k}, _}, _book), do: k
+  defp term_kind({:word, {:cast, k}, _}, _book), do: k
+  defp term_kind({:word, true, _}, _book), do: :bool
+  defp term_kind({:word, false, _}, _book), do: :bool
+  defp term_kind({:word, :none, _}, _book), do: {:opt, nil}
+  defp term_kind({:word, :some, [t]}, book), do: {:opt, term_kind(t, book)}
+  defp term_kind({:word, op, [_x, _]}, _book) when op in [:eq, :lt, :le], do: :bool
+
+  defp term_kind({:word, op, [x, _]}, book) when op in [:cadd, :csub, :cmul, :div, :rem],
+    do: {:opt, term_kind(x, book)}
+
+  defp term_kind({:word, op, [x, _]}, book)
+       when op in [:add, :sub, :mul, :and, :or, :xor, :shl, :shr],
+       do: term_kind(x, book)
+
+  defp term_kind({:word, :not, [x]}, book), do: term_kind(x, book)
+
+  defp term_kind({:app, _, _} = t, book) do
+    {h, args} = spine(t, [])
+
+    case h do
+      {:def, n} ->
+        case Enum.find(book, &(Map.get(&1, :name) == n and Map.get(&1, :kind, :def) == :def)) do
+          nil ->
+            nil
+
+          dfn ->
+            {:ok, ty} = Ast.to_db(dfn.type)
+            result_kind(ty, length(args))
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp term_kind(_, _book), do: nil
+
+  defp result_kind(ty, 0), do: kind_of_annot(ty)
+  defp result_kind({:pi, _, _, _, b}, n) when n > 0, do: result_kind(b, n - 1)
+  defp result_kind(_, _), do: nil
 
   defp indent(s, n) do
     pad = String.duplicate(" ", n)

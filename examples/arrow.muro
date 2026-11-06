@@ -1,0 +1,12 @@
+-- arrow.muro — %1 on a Π binder must be used. %0, and an unmarked binder, may be dropped.
+
+def keep : run Π (%1 x : Nat) → Nat :=
+  λ (%1 x : Nat) → x
+
+def use : run Nat := keep 0
+
+def loose : run Π (%0 x : Nat) → Nat :=
+  λ (%0 x : Nat) → 0
+
+def plain : run Π (x : Nat) → Nat :=
+  λ (x : Nat) → 0

@@ -10,23 +10,31 @@
 
 An explicit affine dependent type theory. Elixir parses, checks, and emits `.muro`. Only run terms become running code. Users do not need Agda.
 
-Muro is built for agents to write. The agent carries the load of formal verification: every type, motive and proof step is written out and nothing is inferred, so `mix muro.check` either accepts what it wrote or names each definition that fails. Proofs are checked, then erased. Only `run` terms are emitted: as Elixir for the BEAM, or as C with `mix muro.emit --backend c`, from the same source. The checker's soundness is proved in Agda for a fragment of the calculus (see [Limits](manual/limits.md)); it is not a proof about every program.
+Muro is built for agents to write. The agent carries the load of formal verification: every type, motive and proof step is written out and nothing is inferred, so `mix muro.check` either accepts what it wrote or names each definition that fails. Proofs are checked, then erased. Only `run` terms are emitted: as Elixir for the BEAM, as C with `mix muro.emit --backend c`, as Rust with `mix muro.emit --backend rust`, as Zig with `mix muro.emit --backend zig`, or as Cortex-M assembly with `mix muro.emit --backend asm`, from the same source. The checker's soundness is proved in Agda for a fragment of the calculus (see [Limits](manual/limits.md)); it is not a proof about every program.
 
 The language book is [`manual/`](manual/index.md). That is what [muro-lang.dev](https://muro-lang.dev) will render. It is not ExDoc. Elixir API docs, when added, stay on `@moduledoc` / `mix docs`. Agda in `agda/Muro/` is a third layer: the rules of the calculus, not a certificate that a `.muro` file is correct.
 
 ## Install
 
-[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.16.28. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
+[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.20.16. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ```elixir
 def deps do
   [
-    {:muro, "~> 0.16.28"}
+    {:muro, "~> 0.20.16"}
   ]
 end
 ```
 
-A clone is for changing the kernel. A `.muro` file is checked with `mix muro.check` from a project that depends on the package.
+`nx`, `makeup`, and `elixir_make` are optional. A project that depends on muro does not fetch them. Checking a book and emitting Elixir do not load them.
+
+The archive installs `mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` in any directory, with or without a `mix.exs`. Install it from Hex: `mix archive.install hex muro`. A pinned version uses `mix archive.install hex muro 0.20.16`. From a checkout: `mix archive.build && mix archive.install muro-0.20.16.ez`. From GitHub, Mix fetches the default branch and builds the archive: `mix archive.install github murolang/muro`. See [Committed modules](manual/gen.md).
+
+A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.20.16`. It carries its own Erlang runtime. `muro check`, `muro emit`, and `muro gen` are the same commands. `muro ui path.muro` prints how to install `muro_visor` and does not start the explorer. The manifest is `muro.toml`. See [The executable](manual/binary.md) and [Visual explorer](manual/explorer.md).
+
+Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. `mix muro --version` prints the copy that ran. A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks.
+
+A clone is for changing the kernel. A `.muro` file is checked with `mix muro.check`. `mix muro.emit path.muro` prints the Elixir module. A `repr` declares the host shape of a data type, and that module then includes `decode_<type>/1`, `decode_<type>/2`, and `encode_<type>/2`. Decode returns `{:ok, value, table}`. See [Host representations](manual/repr.md).
 
 ---
 
@@ -56,13 +64,13 @@ def plus : run Π (n : Nat) → Π (m : Nat) → Nat :=
 mix muro.check examples/your_file.muro
 ```
 
-A definition is in the book the moment `Parser.parse/1` returns it. The checker sees the whole book (forward references are allowed). Emit keeps only `run`.
+A definition is in the book the moment `Parser.parse/1` returns it. The checker sees the whole book (forward references are allowed). Emit keeps `run`. A `repr` becomes `decode_<type>/1`, `decode_<type>/2`, and `encode_<type>/2`. Spec and evidence are omitted.
 
 ---
 
 ## Library
 
-[`stdlib/binary.muro`](stdlib/binary.muro) is a binary successor. Inductive `Nat` stays the number type. `sucBin` is a Mealy machine on `List Bit`, least significant bit first, and the carry is the state. `toNat (sucBin (toBits n)) ≡ suc n`. The bits of 11 step to the bits of 12. There is no fixed width.
+[`lib/muro/std/binary.muro`](lib/muro/std/binary.muro) is a binary successor, imported as `std:binary.muro`. Inductive `Nat` stays the number type. Machine integers do not replace it. `sucBin` is a Mealy machine on `List Bit`, least significant bit first, and the carry is the state. `fromBits (sucBin (toBits n)) ≡ suc n`. The bits of 11 step to the bits of 12. There is no fixed width. See [Library](manual/library.md).
 
 ---
 
@@ -71,9 +79,15 @@ A definition is in the book the moment `Parser.parse/1` returns it. The checker 
 | Page | For |
 | --- | --- |
 | [Start](manual/start.md) | Install, first file, emit |
+| [The executable](manual/binary.md) | Self-contained `muro`, `muro.toml`, init, `muro skills add` |
+| [Library](manual/library.md) | Ordinary library as `std:`. Bool, Le, List, Maybe, comparison, binary successor |
 | [The wall](manual/wall.md) | spec / evidence / run |
 | [Terms](manual/language.md) | Π, λ, match, quantities |
+| [Sessions](manual/sessions.md) | The protocol two processes follow |
+| [Choreography](manual/choreography.md) | A global type projected to each pair of roles |
+| [State machines](manual/fsm.md) | A session endpoint the host steps itself |
 | [Grammar](manual/grammar.md) | What the parser implements |
+| [Host representations](manual/repr.md) | `repr`, strict decode and encode |
 | [Examples](manual/examples.md) | Every file in `examples/` |
 | [CSHRL](manual/cshrl.md) | A library on params, three environments, their agents |
 | [For agents](manual/for-agents.md) | Operational contract |
@@ -102,7 +116,7 @@ make agda
 
 `Muro.Lexer.tokenize/1` is the highlighter. It walks a fragment with the parser's lexical rules and returns `{kind, start, stop}` byte spans. A snippet that `Parser.parse/1` rejects still yields spans, and joining the slices gives the source back. `Muro.MakeupLexer` maps those spans onto Makeup tags (language `"muro"`, extension `.muro`) and is registered when the application starts. HTML and colors stay with the caller.
 
-`Muro.Check.check_sig/2` returns `:ok` on the book, or every definition error in book order. Each definition is checked on its own process against the whole book; the per-definition answer is the one `checkSig-sound` is about. CI runs the Elixir job and `make agda` on every push and pull request. `make agda` checks the theorem modules (`Muro.Judgement`, `Muro.Typing`, `Muro.Wall`, `Muro.Consistency`, `Muro.Frag`, `Muro.Tag`, `Muro.Check`, `Muro.Soundness`) under `--safe`: no postulates, no `TERMINATING`. Conversion in ⊢ is a congruent relation generated by a confluent parallel reduction, `Muro.Typing` proves substitution and preservation for the fragment, `Muro.Consistency` proves that no closed normal evidence term has type Empty, and `Empty-evid` itself waits on normalisation of closed evidence. `Muro.Soundness` proves that the executable checker is sound for ⊢ on the fragment: when `Muro.Check` accepts a definition over a signature whose constructor types are telescopes into their data type (`GoodSig`), ⊢ derives it with the same uses when the subject is that term and every premise meets its rule (one direction only, for every fuel). A declared-family unfold is a derivation of the instantiated pair. The checker is structurally recursive on the term; fuel bounds only reduction, and running out is reported as `out of fuel` (`mix muro.check --fuel N`), never as a verdict. The fragment is Π, λ, application, Nat, Unit, Empty, identity, `rewrite`, `def`, annotation, pairs, `data` (constructor applications and `match`, on indexed data types too: a branch is typed at its constructor's own indices; a constructor whose numeral index clashes with the scrutinee's is skipped), and ν (Stream, `Always`, `~`, and declared families). A stream unfold is a derivation of the λ; a declared-family unfold is a derivation of the pair instantiated at the seed, and `uncons` of that pair reads it. Productivity is the guard the checker enforces and ⊢ records without rechecking. Tensor and Atom remain outside ⊢. `Type` is one impredicative sort; kinds (`Π (x : A) → Type`) are well-formed but are not terms of type `Type`, in Agda and in Elixir alike.
+`Muro.Check.check_sig/2` returns `:ok` on the book, or every definition error in book order. Each definition is checked on its own process against the whole book; the per-definition answer is the one `checkSig-sound` is about. CI runs the Elixir job and `make agda` on every push and pull request. `make agda` checks the whole Agda tree under `--safe`, including the theorem modules (`Muro.Judgement`, `Muro.Typing`, `Muro.Wall`, `Muro.Consistency`, `Muro.Frag`, `Muro.Tag`, `Muro.Check`, `Muro.Soundness`) and the examples: no postulates, no `TERMINATING`. Conversion in ⊢ is a congruent relation generated by a confluent parallel reduction, `Muro.Typing` proves substitution and preservation for the fragment, `Muro.Consistency` proves that no closed normal evidence term has type Empty, and `Empty-evid` itself waits on normalisation of closed evidence. `Muro.Soundness` proves that the executable checker is sound for ⊢ on the fragment: when `Muro.Check` accepts a definition over a signature whose constructor types are telescopes into their data type (`GoodSig`), ⊢ derives it with the same uses when the subject is that term and every premise meets its rule (one direction only, for every fuel). A declared-family unfold is a derivation of the instantiated pair. The checker is structurally recursive on the term; fuel bounds only reduction, and running out is reported as `out of fuel` (`mix muro.check --fuel N`), never as a verdict. The fragment is Π, λ, application, Nat, Unit, Empty, identity, `rewrite`, `def`, annotation, pairs, `data` (constructor applications and `match`, on indexed data types too: a branch is typed at its constructor's own indices; a constructor whose numeral index clashes with the scrutinee's is skipped), and ν (Stream, `Always`, `~`, and declared families). A stream unfold is a derivation of the λ; a declared-family unfold is a derivation of the pair instantiated at the seed, and `uncons` of that pair reads it. Productivity is the guard the checker enforces and ⊢ records without rechecking. Tensor and Atom remain outside ⊢. `Type` is one impredicative sort; kinds (`Π (x : A) → Type`) are well-formed but are not terms of type `Type`, in Agda and in Elixir alike.
 
 ## Names
 

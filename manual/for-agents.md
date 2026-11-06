@@ -1,7 +1,7 @@
 ---
 title: For agents
 slug: for-agents
-order: 16
+order: 19
 summary: Two jobs. Do not mix them. Commands and file map.
 ---
 
@@ -29,7 +29,7 @@ In brief: two jobs. Do not mix them. This page is the operational contract. Huma
 - Edit `agda/`.
 - Edit `lib/muro/*.ex`.
 - Edit `lib/mix/tasks/`.
-- Add a fourth representation (no raw HOAS as inductive syntax).
+- Add a third representation (no raw HOAS as inductive syntax).
 - Invent tags, implicits, metavariables, or tactics.
 - Promote a spec to evidence or evidence to run.
 - Treat this manual as ExDoc. Elixir API docs are `@moduledoc` / `mix docs`.
@@ -71,7 +71,6 @@ Users still only run Mix. If you are doing Job A, you are not doing Job B.
 | What is the language? | This manual, especially [Grammar](grammar.md) |
 | What does the parser accept? | `lib/muro/parser.ex` |
 | What does the checker accept? | `lib/muro/check.ex`, specified by `agda/Muro/Check.agda` |
-| If Agda and Elixir disagree? | Agda wins. Fix Elixir after the Agda clause exists. |
 | Is Agda a certificate for a `.muro` file? | No. `mix muro.check` is. |
 | Canonical book? | `examples/half_ok.muro` = `Muro.Example.book/0` = `agda/Muro/Example.agda` |
 
@@ -81,24 +80,48 @@ Users still only run Mix. If you are doing Job A, you are not doing Job B.
 manual/                 this book (muro-lang.dev). Not ExDoc.
 examples/*.muro         programs
 examples/cshrl/         CSHRL: lib/ on params, envs/ supply them
-stdlib/binary.muro      binary successor on List Bit; Nat stays primary
 lib/muro/parser.ex      .muro → named FOAS
 lib/muro/ast.ex         named FOAS, to_db
 lib/muro/print.ex       surface syntax, locations, hole messages
 lib/muro/subst.ex       de Bruijn subst
 lib/muro/check.ex       Elixir mirror of ⊢
+lib/muro/session.ex     session / conform, mirror of decide and finishes; `rec X. S` unfolds one action and a repeated head conforms
+lib/muro/talk.ex        one description of an exchange, mirror of seen
+lib/muro/choreo.ex      a global type projected to each role pair, mirror of project
+lib/muro/place.ex       place / scheme / move, mirror of decide
 lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
+lib/muro/load.ex        import: a relative path, pkg:, and std:
+lib/muro/std.ex         the ordinary library, embedded at compile time
+lib/muro/std/*.muro     binary, bool, le, list, maybe, ord
 lib/muro/emit.ex        run → Elixir source
+lib/muro/repr.ex        a repr: check the host shape and emit decode/1, decode/2, and encode/2. Not a kernel term.
+lib/muro/emit/exunit.ex closed equations → one ExUnit module (`--backend exunit`, `kind: :exunit`)
+lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a meeting starts the two processes as each other's peer; a `rec` is a tail call on `drive` (`--backend otp`)
+lib/muro/emit/fsm.ex    a session endpoint is a state machine; the transport stays with the host (`--backend fsm`, `kind: :fsm`)
+lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
 lib/muro/example.ex     same book as Agda
+lib/muro/mutate.ex      mutants of run definitions (`mix muro.mutate`)
 lib/mix/tasks/muro.check.ex
+lib/mix/tasks/muro.mutate.ex
 agda/Muro.agda          public re-export
-agda/Muro/Syntax.agda   Tm n (de Bruijn) and PTm V (PHOAS)
+agda/Muro/Syntax.agda   Tm n (de Bruijn)
 agda/Muro/Subst.agda    wk, sub, inst
-agda/Muro/Unembed.agda  PHOAS → de Bruijn (TERMINATING, not --safe)
 agda/Muro/SubstLemmas.agda  renaming / substitution algebra
 agda/Muro/Env.agda      Sig, Ctx, uses, mode order (shared by Check and ⊢)
 agda/Muro/Check.agda    the decision procedure: structural on the term, fuel only where it reduces
+agda/Muro/Session.agda  affine session judgment; a payload is a nat, a bit, unit, a pair, a record, a vector whose length is a received nat, a nat at most a bound the sender owes evidence for, or a non-indexed declared data type; a received bit selects one of two arms; a name is a session declared earlier, opened on the declaration prefix with no fuel; a parameter is a nat; %1 must finish; decide searches, skel is the OTP actions
+agda/Muro/Rec.agda      equi-recursive `rec X. S` unfolded to a guarded coinductive protocol (`--safe --guardedness`); a guarded self-call of a parameterised session is the same coinduction (`stream`); `dual∞`, conformance, and meet are bisimulations; a declared data payload inside `rec` meets when `sent` holds; `Finishes` stays finite, so a jump is not `%1`. `agda/Muro.agda` imports it, so that file carries the same pragma
+agda/Muro/Dual.agda     the other end of a session; send swaps with recv, a dependent receive swaps with a dependent send, an evidence send swaps with an evidence receive, an indexed bit keeps its index and each arm dualises, and the payload type stays; `session name := dual name` follows it
+agda/Muro/Meet.agda     two processes on one channel; a send meets a receive of the same payload type and the value inhabits it; a received nat instantiates a vector length; an evidence payload meets as a nat; a literal bit meets the arm of that bit; a variable meets a receive at its innermost binding; `meet name : left with right` follows it
+agda/Muro/Talk.agda     one description of an exchange; say names one payload and one continuation; `session name := seen party with party in talk` follows it
+agda/Muro/Choreo.agda   a global type; `g ↾ r / s ≡ b` is the binary session of one role with another; `project-sound`, `project-complete`, and `pairwise-dual`; `--safe`; not a Tm
+agda/Muro/Seated.agda   a party of a description sits at a place; `seat name : party at place in talk` follows it; the same place stays; two places cross once
+agda/Muro/Held.agda     a meeting at the parties' places; the same place stays; two places cross once; a `.muro` file does not write it
+agda/Muro/Arrow.agda    %1 on a Π binder must be used; both marks are the affine quantity
+agda/Muro/Linear.agda   multiplicity on a session endpoint; λ¹ must be used once; ⊸ accepts or returns it; the protocol is `SExp`, so `rec` and a declared data payload are endpoints; `dualS` keeps both; `--safe --guardedness`; not a Tm
+agda/Muro/Place.agda    placement coeffect; ambient by default; one boundary; run has no seat
+agda/Muro/Located.agda  a session at a place; `endpoint` and `read` follow the sitting; `--node` follows a cross reading; `--backend otp` follows the process
 agda/Muro/Tag.agda      constructor tags (Check compares tags before structure)
 agda/Muro/Spine.agda    application spines (constructor / dty applications), spine views
 agda/Muro/Frag.agda     the ⊢ fragment as a predicate on terms, signatures, contexts
@@ -115,6 +138,70 @@ agda/Muro/Soundness/Views.agda  views, isData-sound, GoodSig, instParams / index
 test/muro_check_test.exs
 ```
 
+## Install
+
+`mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
+
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.20.16`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
+
+Install it from Hex:
+
+```
+mix archive.install hex muro
+```
+
+Alternatively, from a checkout of this version:
+
+```
+mix deps.get
+mix archive.build
+mix archive.install muro-0.20.16.ez
+```
+
+From GitHub, Mix fetches the default branch and builds the archive:
+
+```
+mix archive.install github murolang/muro
+```
+
+`--force` skips the install question.
+
+`mix muro --version` prints `Muro v` and the version of the copy that ran. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. The version line names the copy that ran.
+
+A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks. Use `mix muro.check` and `mix muro.emit`.
+
+`mix muro.emit path.muro` prints the Elixir module. `mix muro.emit path.muro > path.ex` saves it. `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the book's closed equations, including a library whose `param`s are not supplied. `--imports` with that backend also collects the files the book imports directly. The page is [Closed equations as tests](exunit.md).
+
+`--backend zig` writes `<name>.zig` next to the file. `zig` translates it. The proof stops at the run image.
+
+`--backend c` writes C. The Mix task builds a NIF when the working directory is the loaded Mix project. Add `{:elixir_make, "~> 0.10", runtime: false}` to the project deps, or run the task inside a project that depends on muro. Without `elixir_make`, that NIF stops and names the dependency. Outside the loaded project the task writes the `.h` and the `.c` only, and so does the executable. `nx` and `makeup` are optional. Checking and emitting Elixir do not load them.
+
+## Committed modules
+
+A project commits the modules `muro gen` writes. The `.muro` file is the source. Do not edit the generated file by hand. Change the `.muro` file and run `muro gen`.
+
+`muro skills add` writes this block into `AGENTS.md`, and into `CLAUDE.md` when that file already exists. The command lines and the example anchor are filled from the project. The markers are part of the block. Each marker is a whole line. A trailing carriage return is allowed. An inline mention is left as prose. The file's line endings stay.
+
+<!-- muro:begin -->
+Muro has two jobs: spec and evidence. `run` is what is emitted.
+
+The wall: a spec never becomes evidence. Evidence never becomes a run.
+
+{{commands}}
+
+Every binder is typed and every motive is written.
+
+Generated files are not edited by hand.
+
+Nearest example: manual/examples.md#{{example}}.
+<!-- muro:end -->
+
+`muro.exs` at the project root, a `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml` names each book and the target path. Elixir, fsm, and exunit entries also name the module. An entry may add `[kind: :exunit, impl: Adapter, imports: true]`, or `[kind: :c]`, `[kind: :rust]`, `[kind: :zig]`, or `[kind: :asm]`. `imports:` is valid only on an exunit entry. `muro:` is the version the books are checked with. `muro gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions.
+
+`mix muro.init` creates `muro.exs` and `priv/muro/`. It prints a note that points at `muro skills add`. It does not write `AGENTS.md`. `muro init --backend` stores that backend as the manifest's top-level `backend`. `muro init` writes the one manifest the directory calls for. If `muro.exs`, `muro.toml`, or `[package.metadata.muro]` is already present, it prints a diff of that file in its own format and leaves every file as it is. `mix muro.init --ci github` writes `.github/workflows/muro.yml`. The job installs the archive with `mix archive.install hex muro <version> --force`, with the version from the manifest, and runs `mix muro.gen --check`. `muro init --ci github` installs the executable and runs `muro gen --check`.
+
+The page is [Committed modules](gen.md). Package imports (`import "pkg:..."`, `muro_deps:`, `mix muro.deps.get`, `muro.lock`) are [Packages](packages.md). The ordinary library is `import "std:file.muro"` ([Library](library.md)). It is compiled into the compiler. It is not the prelude, and it is not a package.
+
 ## Commands
 
 ```
@@ -122,27 +209,37 @@ mix deps.get
 mix test
 mix muro.check
 mix muro.check examples/half_ok.muro
+mix muro.mutate examples/half_ok.muro --only half
+mix muro.emit path.muro --backend exunit
+mix muro.emit path.muro --backend exunit --imports
+mix muro --version
+mix muro.init
+mix muro.gen
+mix muro.gen --check
+mix muro.deps.get  # fetch muro_deps/ and write muro.lock
 make agda          # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-Success line from `mix muro.check`:
+On success, `mix muro.check` prints the version that checked the book, then one line per temporal declaration, then one line per projected pair of each choreography, then:
 
 ```
+Muro v0.20.16
 All terms check. Evidence never becomes a run.
 ```
 
+A book with no temporal declaration and no choreography prints those two lines and nothing between them. A book that imports packages prints `conforms to <name> <version> (sha256 <hash>)` after that sentence, one line per package it loaded. A book that imports none, and `mix muro.check` with no path, print only those two lines.
+
 `Muro.Check.check_sig/2` returns `:ok` on a well-typed book, or `{:error, msg}` with every definition error in book order. `check_sig(book, fuel: n)` sets the fuel for each definition. Definitions are checked concurrently; the fuel is the bound, not a wall-clock timeout.
 
-## Representations (do not add a fourth)
+## Representations (do not add a third)
 
 | Layer | Form | Where |
 | --- | --- | --- |
 | Parser / pretty / emit | named FOAS | `lib/muro/{parser,ast,emit}.ex` |
 | Check / subst | de Bruijn | `lib/muro/{check,subst}.ex`, `agda/Muro/{Check,Subst}.agda` |
-| Examples in Agda | PHOAS `PTm V` | `agda/Muro/Syntax.agda`, `agda/Muro/Example.agda` |
-| Metatheory | de Bruijn `Tm n` | `agda/Muro/Syntax.agda` |
+| Examples and metatheory | de Bruijn `Tm n` | `agda/Muro/Syntax.agda`, `agda/Muro/Example*.agda` |
 
-Elixir constraints when you are in Job B: ASCII identifiers only. Do not define local `hd/1`. Guards cannot call ordinary `defp` helpers.
+Elixir constraints when you are in Job B: ASCII identifiers only. Do not define local `hd/1`. Guards cannot call ordinary `defp` helpers. `repr` entries are host-side declarations checked by `Muro.Repr`, not part of the Agda calculus.
 
 ## What is not in the language
 

@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Muro is an explicit affine dependent type theory built for agents to write. As the agent, you carry the formal verification: every type, motive and proof step is written out and nothing is inferred, so the checker either accepts your file or names each failing definition. A spec never becomes evidence. Evidence never becomes a run. Only `run` terms are emitted, as Elixir (BEAM) or as C, from the same source.
+Muro is an explicit affine dependent type theory built for agents to write. As the agent, you carry the formal verification: every type, motive and proof step is written out and nothing is inferred, so the checker either accepts your file or names each failing definition. A spec never becomes evidence. Evidence never becomes a run. Only `run` terms are emitted, as Elixir (BEAM), as C, as Rust, as Zig, or as Cortex-M assembly, from the same source.
 
 The canonical contract is [`manual/for-agents.md`](manual/for-agents.md). If this file and that page ever disagree, that page wins.
 
@@ -14,6 +14,7 @@ Do:
 - Type every binder. Write every motive.
 - Use only the tags `run`, `run internal`, `spec` and `evidence`.
 - `pred`, `plus`, `inj-suc`, `plus_suc`, `sym` and `cong` are already in scope (`lib/muro/prelude.muro`). If you redefine one, your definition replaces it, and any prelude definition that refers to it is dropped.
+- The ordinary library is `import "std:<file>.muro"` ([Library](manual/library.md)). Do not copy `List`, `Maybe`, or `Bool` into a new file, and do not add those names to the prelude.
 - Use `?` only while a term is unfinished. A hole always fails, and it prints `expected` and `context` for you to fill.
 - Read every error. Parse and check errors start with `line:col`, and the failing definitions are listed in book order.
 - For a library with `param` entries, check it through a file that supplies the params (see [Params](manual/language.md#params)).
@@ -26,7 +27,7 @@ Do not:
 
 ### Job B: change the type theory
 
-Follow [`manual/extending.md`](manual/extending.md). The order is mandatory: Agda syntax → subst → check → `make agda` → Elixir mirror → `mix test` and `mix muro.check`. If Agda and Elixir disagree, Agda wins. If you are doing Job A, you are not doing Job B.
+Follow [`manual/extending.md`](manual/extending.md). The order is mandatory: Agda syntax → subst → check → `make agda` → Elixir mirror → `mix test` and `mix muro.check`. If you are doing Job A, you are not doing Job B.
 
 ## Commands
 
@@ -36,10 +37,22 @@ mix test
 mix muro.check                              # whole book
 mix muro.check path.muro                    # one file
 mix muro.check --fuel 20000 path.muro       # after "out of fuel"
+mix muro.mutate path.muro                   # which evidence constrains each run
+mix muro.mutate path.muro --only half --json
+mix muro --version                          # the copy that ran
+mix muro.init                               # muro.exs and priv/muro/
+mix muro.emit path.muro --backend fsm           # one state machine per session, on stdout
+mix muro.emit path.muro --backend exunit       # ExUnit suite on stdout; a param library is accepted
+mix muro.emit path.muro --backend exunit --imports  # also that book's direct imports
+mix muro.gen                                 # write the modules the manifest names
+mix muro.gen --check                         # fail when a committed module and its book disagree
+mix muro.deps.get                            # fetch muro_deps/ and write muro.lock
 make agda                                   # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-Success line: `All terms check. Evidence never becomes a run.`
+The archive installs those tasks in any directory: `mix archive.install hex muro`. A pinned version: `mix archive.install hex muro 0.20.16`. From a checkout: `mix archive.build && mix archive.install muro-0.20.16.ez`. From GitHub: `mix archive.install github murolang/muro`. Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. A script run with `mix run --no-start` does not see the archive; use the Mix tasks. A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.20.16`. See [The executable](manual/binary.md).
+
+Success from `mix muro.check`: a `Muro v…` line, then `All terms check. Evidence never becomes a run.` A temporal declaration prints one line per declaration, and a choreography prints one line per projected pair, both between the version and that sentence. A book with neither prints the two lines. A book that imports packages then prints one `conforms to <name> <version> (sha256 <hash>)` line per package. See [Packages](manual/packages.md).
 
 ## Emit
 
@@ -47,15 +60,31 @@ Emit only after a successful check. Spec and evidence are omitted; erased argume
 
 ```
 mix muro.emit path.muro                     # Elixir (default); module name from the file stem
-mix muro.emit path.muro --backend c         # writes <name>.h and <name>.c next to the file
+mix muro.emit path.muro --backend exunit    # ExUnit suite on stdout; test module is the stem plus Test
+mix muro.emit path.muro --backend c         # <name>.h and <name>.c; a Nat run is also a NIF
+mix muro.emit path.muro --backend rust      # <name>.rs
+mix muro.emit path.muro --backend zig       # <name>.zig
+mix muro.emit path.muro --backend asm       # <name>.s, Cortex-M0, Nat run
+mix muro.emit path.muro --backend fsm       # one state machine per session, on stdout
 ```
 
 ```elixir
 {:ok, src} = Muro.emit_file("examples/your_file.muro", Foo)   # Elixir source
-{:ok, [h, c]} = Muro.emit_c("examples/your_file.muro")        # C header + source
+{:ok, files} = Muro.emit_c("examples/your_file.muro")         # .h and .c, then the Nat NIF paths
+{:ok, files} = Muro.emit_rust("examples/your_file.muro")      # .rs
+{:ok, files} = Muro.emit_zig("examples/your_file.muro")       # .zig
+{:ok, files} = Muro.emit_asm("examples/your_file.muro")       # .s
 ```
 
-The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` and `Tensor` are refused as `c:machine`. Unapplied lambdas, definitions passed as values and calls of local functions are refused as `c:lambda`, because C has no closures. A raw `ν`, `Always` or `~` inside a `run` is refused as `c:stream`. Allocation goes through `MURO_ALLOC`, which is `malloc` unless you define it. See [Emit](manual/emit.md).
+A `repr` makes `mix muro.emit` also write `decode_<type>/1`, `decode_<type>/2`, and `encode_<type>/2`. Decode returns `{:ok, value, table}`. Encode takes that table. See [Host representations](manual/repr.md).
+
+`--backend exunit` prints one test module for the book's closed equations. A file of unsupplied `param`s is accepted only by this backend. `--imports` also collects the files that book imports directly, and it is an error with any other backend. The tests call an implementation the host names. See [Closed equations as tests](manual/exunit.md).
+
+The C backend refuses some terms that the Elixir backend accepts. `U8`, `U32`, `U64`, and `I64` are passed by value. `F32`, `Tensor`, `addt`, and `packI` are refused as `c:machine`. Unapplied lambdas, definitions passed as values and calls of local functions are refused as `c:lambda`, because C has no closures. A raw `ν`, `Always` or `~` inside a `run` is refused as `c:stream`. Allocation goes through `muro__ALLOC`, which is `malloc` unless you define it. An exported run of `Nat` arguments and a `Nat` result is a NIF; that build defines `muro__ALLOC` as one block and resets it when the call returns. The Rust backend prints the same image and refuses a term the C backend refuses. `rustc` translates that text. The Zig backend prints that same image and refuses a term the C backend refuses. A function that allocates takes `muro__allocator` first and returns an error union. `zig` translates that text. The Cortex-M backend prints the Nat fragment of that image. The assembler translates that text. See [Emit](manual/emit.md).
+
+## Committed modules
+
+`mix muro.gen` writes a module from a manifest (`muro.exs`, a `:muro` key in `mix.exs`, or `muro.toml`) into the path the manifest names. The module name is the manifest's alias, passed to `Muro.emit_file/3`. C, Rust, Zig, and assembly entries name a target and no module. The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256. Do not edit that file by hand. The `.muro` file is the source. Run `mix muro.gen` after changing it. `mix muro.gen --check` fails when the committed file and the book disagree. `muro:` must equal the running version. `mix muro.init` creates the manifest and prints a note that points at `muro skills add`. It does not write that file. See [Committed modules](manual/gen.md).
 
 ## Pitfalls seen in practice
 
@@ -63,11 +92,11 @@ The C backend refuses some terms that the Elixir backend accepts. `I64`, `F32` a
 - **Reusing an affine variable inside a recursive `def` can be reported as `recursive call does not descend on a smaller argument`.** Before you change your recursion, check whether a non-reusable variable is used twice.
 - **`match` branches must follow the order the constructors were declared in.**
 - **Erased guards cannot rule out `run` branches.** An `evidence`/erased argument does not make a branch of a `run` term unreachable. Encode the invariant in a run-mode indexed type instead (see [Indexed data](manual/indexed.md)).
-- **`Nat` is unary (Peano), so large constants are slow** to check and to run. Use `I64` where machine numbers fit (see [Machine numbers](manual/machine.md)).
+- **A long chain of `suc` is slow** to check and to run. A closed numeral is a machine integer. `toNat` of a `U8`, `U32`, `U64`, or `I64` residue is that integer, and word operations on it do not spend fuel in proportion to the value (see [Machine numbers](manual/machine.md)).
 - **`out of fuel` is not acceptance, and it is not a type error.** The checker gave up reducing. Raise `--fuel` and check again.
 
 ## Manual
 
-[Start](manual/start.md) · [Marks](manual/marks.md) · [The wall](manual/wall.md) · [Terms](manual/language.md) · [Identity](manual/identity.md) · [Data](manual/data.md) · [Indexed data](manual/indexed.md) · [Streams](manual/streams.md) · [Either and Dec](manual/either.md) · [Machine numbers](manual/machine.md) · [Emit](manual/emit.md) · [Grammar](manual/grammar.md) · [Examples](manual/examples.md) · [CSHRL](manual/cshrl.md) · [For agents](manual/for-agents.md) · [Extending](manual/extending.md) · [Limits](manual/limits.md)
+[Start](manual/start.md) · [Marks](manual/marks.md) · [The wall](manual/wall.md) · [Terms](manual/language.md) · [Sessions](manual/sessions.md) · [Choreography](manual/choreography.md) · [Identity](manual/identity.md) · [Data](manual/data.md) · [Indexed data](manual/indexed.md) · [Streams](manual/streams.md) · [Either and Dec](manual/either.md) · [Machine numbers](manual/machine.md) · [Emit](manual/emit.md) · [State machines](manual/fsm.md) · [Mutation](manual/mutate.md) · [Closed equations as tests](manual/exunit.md) · [Committed modules](manual/gen.md) · [The executable](manual/binary.md) · [Host representations](manual/repr.md) · [Packages](manual/packages.md) · [Library](manual/library.md) · [Grammar](manual/grammar.md) · [Examples](manual/examples.md) · [CSHRL](manual/cshrl.md) · [For agents](manual/for-agents.md) · [Extending](manual/extending.md) · [Limits](manual/limits.md)
 
 Machine-readable index: [`manual/manifest.yml`](manual/manifest.yml). Canonical book: `examples/half_ok.muro`.

@@ -1,10 +1,13 @@
 ------------------------------------------------------------------------
 -- Fin n, Vec A n, vhead and vtail by a motive that computes from the
 -- index, lookup, and lookup of fzero on a singleton.
+-- Binders are de Bruijn: the innermost variable is var zero.
 ------------------------------------------------------------------------
 
+{-# OPTIONS --safe #-}
 module Muro.ExampleVec where
 
+open import Data.Fin.Base using (zero; suc)
 open import Data.List.Base using (List; []; _∷_)
 open import Data.Product.Base using (_,_)
 open import Data.Unit.Base using (⊤; tt)
@@ -12,122 +15,116 @@ open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
 open import Muro.Base
 open import Muro.Syntax
-open import Muro.Subst
-open import Muro.Unembed
 open import Muro.Check
 
 -- Fin is dty 0, Vec is dty 1.
+-- pred is def 0, vhead is def 1, vtail is def 2, lookup is def 3.
 
-fzeroTy : ∀ {V} → PTm V
-fzeroTy = pi affine nat (λ n → app (dty 0) (su (var n)))
+fzeroTy : Tm 0
+fzeroTy =
+  pi affine nat
+    (app (dty 0) (su (var zero)))
 
-fsucTy : ∀ {V} → PTm V
+fsucTy : Tm 0
 fsucTy =
-  pi affine nat (λ n →
-  pi affine (app (dty 0) (var n)) (λ _ →
-    app (dty 0) (su (var n))))
+  pi affine nat
+    (pi affine (app (dty 0) (var zero))
+      (app (dty 0) (su (var (suc zero)))))
 
-vnilTy : ∀ {V} → PTm V
-vnilTy = pi affine typ (λ A → app (app (dty 1) (var A)) ze)
+vnilTy : Tm 0
+vnilTy =
+  pi affine typ
+    (app (app (dty 1) (var zero)) ze)
 
-vconsTy : ∀ {V} → PTm V
+vconsTy : Tm 0
 vconsTy =
-  pi affine typ (λ A →
-  pi affine nat (λ n →
-  pi affine (var A) (λ _ →
-  pi affine (app (app (dty 1) (var A)) (var n)) (λ _ →
-    app (app (dty 1) (var A)) (su (var n))))))
+  pi affine typ
+    (pi affine nat
+      (pi affine (var (suc zero))
+        (pi affine (app (app (dty 1) (var (suc (suc zero)))) (var (suc zero)))
+          (app (app (dty 1) (var (suc (suc (suc zero))))) (su (var (suc (suc zero))))))))
 
 -- pred : Nat → Nat, read by vtail's motive.
-predTy : ∀ {V} → PTm V
-predTy = pi affine nat (λ _ → nat)
+predTy : Tm 0
+predTy =
+  pi affine nat
+    nat
 
-predTm : ∀ {V} → PTm V
-predTm = lam affine nat (λ n → mNat (var n) (λ _ → nat) ze (λ m → var m))
+predTm : Tm 0
+predTm =
+  lam affine nat
+    (mNat (var zero) nat
+      ze
+      (var zero))
 
 -- vhead, vtail : (A : Type) → (m : Nat) → Vec A (su m) → …
 --
 -- The vcons branch is typed at its own index (su p). vtail's motive
 -- Vec A (pred k) is Vec A p there, the type of as, and Vec A m at the
 -- scrutinee's index su m. vnil clashes with su m and is skipped.
-vheadTy : ∀ {V} → PTm V
+vheadTy : Tm 0
 vheadTy =
-  pi erased typ (λ A →
-  pi erased nat (λ m →
-  pi affine (app (app (dty 1) (var A)) (su (var m))) (λ _ →
-    var A)))
+  pi erased typ
+    (pi erased nat
+      (pi affine (app (app (dty 1) (var (suc zero))) (su (var zero)))
+        (var (suc (suc zero)))))
 
-vheadTm : ∀ {V} → PTm V
+vheadTm : Tm 0
 vheadTm =
-  lam erased typ (λ A →
-  lam erased nat (λ m →
-  lam affine (app (app (dty 1) (var A)) (su (var m))) (λ ys →
-    mData (var ys)
-      (λ k → lam affine (app (app (dty 1) (var A)) (var k)) (λ _ → var A))
-      ( ze ∷
-        lam affine nat (λ p →
-        lam affine (var A) (λ a →
-        lam affine (app (app (dty 1) (var A)) (var p)) (λ _ →
-          var a))) ∷
-        [] ))))
+  lam erased typ
+    (lam erased nat
+      (lam affine (app (app (dty 1) (var (suc zero))) (su (var zero)))
+        (mData (var zero) (lam affine (app (app (dty 1) (var (suc (suc (suc zero))))) (var zero))
+          (var (suc (suc (suc (suc zero)))))) (ze ∷ (lam affine nat
+          (lam affine (var (suc (suc (suc zero))))
+            (lam affine (app (app (dty 1) (var (suc (suc (suc (suc zero)))))) (var (suc zero)))
+              (var (suc zero))))) ∷ []))))
 
-vtailTy : ∀ {V} → PTm V
+vtailTy : Tm 0
 vtailTy =
-  pi erased typ (λ A →
-  pi erased nat (λ m →
-  pi affine (app (app (dty 1) (var A)) (su (var m))) (λ _ →
-    app (app (dty 1) (var A)) (var m))))
+  pi erased typ
+    (pi erased nat
+      (pi affine (app (app (dty 1) (var (suc zero))) (su (var zero)))
+        (app (app (dty 1) (var (suc (suc zero)))) (var (suc zero)))))
 
-vtailTm : ∀ {V} → PTm V
+vtailTm : Tm 0
 vtailTm =
-  lam erased typ (λ A →
-  lam erased nat (λ m →
-  lam affine (app (app (dty 1) (var A)) (su (var m))) (λ ys →
-    mData (var ys)
-      (λ k →
-        lam affine (app (app (dty 1) (var A)) (var k)) (λ _ →
-          app (app (dty 1) (var A)) (app (def 0) (var k))))
-      ( ze ∷
-        lam affine nat (λ p →
-        lam affine (var A) (λ _ →
-        lam affine (app (app (dty 1) (var A)) (var p)) (λ as →
-          var as))) ∷
-        [] ))))
+  lam erased typ
+    (lam erased nat
+      (lam affine (app (app (dty 1) (var (suc zero))) (su (var zero)))
+        (mData (var zero) (lam affine (app (app (dty 1) (var (suc (suc (suc zero))))) (var zero))
+          (app (app (dty 1) (var (suc (suc (suc (suc zero)))))) (app (def 0) (var (suc zero))))) (ze ∷ (lam affine nat
+          (lam affine (var (suc (suc (suc zero))))
+            (lam affine (app (app (dty 1) (var (suc (suc (suc (suc zero)))))) (var (suc zero)))
+              (var zero)))) ∷ []))))
 
 -- lookup : (A : Type) → (n : Nat) → Fin n → Vec A n → A
 --
 -- The match on i : Fin n is typed at each constructor's own index
 -- (su m), and returns a function of Vec A (su m): vhead for fzero, and
 -- for fsuc m j the recursive call on j and vtail.
-lookupTy : ∀ {V} → PTm V
+lookupTy : Tm 0
 lookupTy =
-  pi erased typ (λ A →
-  pi erased nat (λ n →
-  pi affine (app (dty 0) (var n)) (λ _ →
-  pi affine (app (app (dty 1) (var A)) (var n)) (λ _ →
-    var A))))
+  pi erased typ
+    (pi erased nat
+      (pi affine (app (dty 0) (var zero))
+        (pi affine (app (app (dty 1) (var (suc (suc zero)))) (var (suc zero)))
+          (var (suc (suc (suc zero)))))))
 
-lookupTm : ∀ {V} → PTm V
+lookupTm : Tm 0
 lookupTm =
-  lam erased typ (λ A →
-  lam erased nat (λ n →
-  lam affine (app (dty 0) (var n)) (λ i →
-  lam affine (app (app (dty 1) (var A)) (var n)) (λ xs →
-    app
-      (mData (var i)
-        (λ k →
-          lam affine (app (dty 0) (var k)) (λ _ →
-            pi affine (app (app (dty 1) (var A)) (var k)) (λ _ → var A)))
-        ( lam affine nat (λ m →
-            lam affine (app (app (dty 1) (var A)) (su (var m))) (λ ys →
-              app (app (app (def 1) (var A)) (var m)) (var ys))) ∷
-          lam affine nat (λ m →
-          lam affine (app (dty 0) (var m)) (λ j →
-            lam affine (app (app (dty 1) (var A)) (su (var m))) (λ ys →
-              app (app (app (app (def 3) (var A)) (var m)) (var j))
-                (app (app (app (def 2) (var A)) (var m)) (var ys))))) ∷
-          [] ))
-      (var xs)))))
+  lam erased typ
+    (lam erased nat
+      (lam affine (app (dty 0) (var zero))
+        (lam affine (app (app (dty 1) (var (suc (suc zero)))) (var (suc zero)))
+          (app (mData (var (suc zero)) (lam affine (app (dty 0) (var zero))
+            (pi affine (app (app (dty 1) (var (suc (suc (suc (suc (suc zero))))))) (var (suc zero)))
+              (var (suc (suc (suc (suc (suc (suc zero))))))))) ((lam affine nat
+            (lam affine (app (app (dty 1) (var (suc (suc (suc (suc zero)))))) (su (var zero)))
+              (app (app (app (def 1) (var (suc (suc (suc (suc (suc zero))))))) (var (suc zero))) (var zero)))) ∷ (lam affine nat
+            (lam affine (app (dty 0) (var zero))
+              (lam affine (app (app (dty 1) (var (suc (suc (suc (suc (suc zero))))))) (su (var (suc zero))))
+                (app (app (app (app (def 3) (var (suc (suc (suc (suc (suc (suc zero)))))))) (var (suc (suc zero)))) (var (suc zero))) (app (app (app (def 2) (var (suc (suc (suc (suc (suc (suc zero)))))))) (var (suc (suc zero)))) (var zero)))))) ∷ [])) (var zero)))))
 
 ones1Ty : Tm 0
 ones1Ty = app (app (dty 1) nat) (su ze)
@@ -144,60 +141,29 @@ lookOkTy =
 lookOkTm : Tm 0
 lookOkTm = rfl
 
-data IsOk {A : Set} : Result A → Set where
-  is-ok : (x : A) → IsOk (ok x)
-
-out : ∀ {A} {r : Result A} → IsOk r → A
-out (is-ok x) = x
-
-fzeroTy-ok  : IsOk (unembed∀ fzeroTy)
-fsucTy-ok   : IsOk (unembed∀ fsucTy)
-vnilTy-ok   : IsOk (unembed∀ vnilTy)
-vconsTy-ok  : IsOk (unembed∀ vconsTy)
-predTy-ok   : IsOk (unembed∀ predTy)
-predTm-ok   : IsOk (unembed∀ predTm)
-vheadTy-ok  : IsOk (unembed∀ vheadTy)
-vheadTm-ok  : IsOk (unembed∀ vheadTm)
-vtailTy-ok  : IsOk (unembed∀ vtailTy)
-vtailTm-ok  : IsOk (unembed∀ vtailTm)
-lookupTy-ok : IsOk (unembed∀ lookupTy)
-lookupTm-ok : IsOk (unembed∀ lookupTm)
-fzeroTy-ok  = is-ok _
-fsucTy-ok   = is-ok _
-vnilTy-ok   = is-ok _
-vconsTy-ok  = is-ok _
-predTy-ok   = is-ok _
-predTm-ok   = is-ok _
-vheadTy-ok  = is-ok _
-vheadTm-ok  = is-ok _
-vtailTy-ok  = is-ok _
-vtailTm-ok  = is-ok _
-lookupTy-ok = is-ok _
-lookupTm-ok = is-ok _
-
 finDecl : DataDecl
 finDecl =
   mkData "Fin" [] ((affine , nat) ∷ [])
-    ( mkCtor "fzero" (out fzeroTy-ok) ∷
-      mkCtor "fsuc"  (out fsucTy-ok)  ∷
+    ( mkCtor "fzero" fzeroTy ∷
+      mkCtor "fsuc"  fsucTy  ∷
       [] )
 
 vecDecl : DataDecl
 vecDecl =
   mkData "Vec" (affine ∷ []) ((affine , nat) ∷ [])
-    ( mkCtor "vnil"  (out vnilTy-ok)  ∷
-      mkCtor "vcons" (out vconsTy-ok) ∷
+    ( mkCtor "vnil"  vnilTy  ∷
+      mkCtor "vcons" vconsTy ∷
       [] )
 
 vecBook : Sig
 vecBook =
   mkSig (finDecl ∷ vecDecl ∷ [])
-    ( mkDef "pred"       run  (out predTy-ok)   (out predTm-ok)   ∷
-      mkDef "vhead"      run  (out vheadTy-ok)  (out vheadTm-ok)  ∷
-      mkDef "vtail"      run  (out vtailTy-ok)  (out vtailTm-ok)  ∷
-      mkDef "lookup"     run  (out lookupTy-ok) (out lookupTm-ok) ∷
-      mkDef "ones1"      run  ones1Ty           ones1Tm           ∷
-      mkDef "lookup-ok"  evid lookOkTy          lookOkTm          ∷
+    ( mkDef "pred"      run  predTy   predTm   ∷
+      mkDef "vhead"     run  vheadTy  vheadTm  ∷
+      mkDef "vtail"     run  vtailTy  vtailTm  ∷
+      mkDef "lookup"    run  lookupTy lookupTm ∷
+      mkDef "ones1"     run  ones1Ty  ones1Tm  ∷
+      mkDef "lookup-ok" evid lookOkTy lookOkTm ∷
       [] )
 
 lookup-ok-checks : checkSig! vecBook ≡ ok tt

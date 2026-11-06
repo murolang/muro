@@ -1,7 +1,7 @@
 ---
 title: Data
 slug: data
-order: 7
+order: 8
 summary: Inductive types, positivity, Maybe, List, Tree.
 ---
 
@@ -17,7 +17,7 @@ data Maybe (A : Type) : Type where
   just    : A → Maybe A
 ```
 
-(`examples/maybe.muro`.)
+(`lib/muro/std/maybe.muro`. `examples/maybe.muro` imports it.)
 
 - The type former is spec.
 - Constructors compute in run and may appear in evidence.
@@ -33,6 +33,8 @@ data Name params : index-telescope Type where
 ```
 
 Parameters are the binders before `:`. Indices are the telescope after `:` and before `Type`.
+
+A nat field may carry a numeral bound before the arrow: `(slot : Nat) {slot ≤ 1}`. The spelling is [A bounded field](language.md#a-bounded-field). The session split is [A numeral bound](sessions.md#a-numeral-bound).
 
 ```
 data List (A : Type) : Type where          -- one parameter, no indices
@@ -105,7 +107,7 @@ def length : run Π (- A : Type) → Π (xs : List A) → Nat :=
       | cons _ as => suc (length A as)
 ```
 
-(`examples/list.muro`. `[]` is `nil`; `::` is `cons`.)
+(`lib/muro/std/list.muro`. `examples/list.muro` imports it. `[]` is `nil`; `::` is `cons`.)
 
 ```
 def size : run Π (t : Tree) → Nat :=
@@ -140,5 +142,7 @@ Code.eval_string(src)
 Muro.Lists.length(Muro.Lists.ones2())
 # {:suc, {:suc, 0}}
 ```
+
+A `repr` states the host shape of a declared type and emits decode and encode. Decode returns `{:ok, value, table}`. The type is still this inductive type. See [Host representations](repr.md).
 
 Next: [Indexed data](indexed.md).

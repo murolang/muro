@@ -12,6 +12,13 @@ defmodule Muro.Print do
   @doc "1-based `{line, column}` for a UTF-8 byte offset into `src`."
   def offset_to_loc(src, offset) when is_binary(src) and is_integer(offset) do
     n = min(max(offset, 0), byte_size(src))
+
+    # A trailing newline is the end of the last line, not a line past it.
+    n =
+      if n == byte_size(src) and n > 0 and binary_part(src, n - 1, 1) == "\n",
+        do: n - 1,
+        else: n
+
     prefix = binary_part(src, 0, n)
     parts = String.split(prefix, "\n")
     {length(parts), byte_size(List.last(parts)) + 1}
@@ -60,6 +67,7 @@ defmodule Muro.Print do
   defp fmt(:typ, _, _), do: "Type"
   defp fmt(:nat, _, _), do: "Nat"
   defp fmt(:ze, _, _), do: "0"
+  defp fmt({:nat, n}, _, _) when is_integer(n), do: Integer.to_string(n)
   defp fmt(:unit, _, _), do: "Unit"
   defp fmt(:one, _, _), do: "tt"
   defp fmt(:empty, _, _), do: "Empty"
@@ -186,13 +194,66 @@ defmodule Muro.Print do
   defp fmt({:toi64, t}, names, _), do: "toI64 #{fmt(t, names, :app)}"
   defp fmt({:packi, x, y}, names, _), do: "packI #{fmt(x, names, :app)} #{fmt(y, names, :app)}"
 
+  defp fmt({:word, op, args}, names, _) do
+    head = word_head(op)
+
+    case args do
+      [] -> head
+      _ -> Enum.map_join([head | Enum.map(args, &fmt(&1, names, :app))], " ", & &1)
+    end
+  end
+
   defp fmt(other, _, _), do: inspect(other)
+
+  defp word_head({:ty, :u8}), do: "U8"
+  defp word_head({:ty, :u32}), do: "U32"
+  defp word_head({:ty, :u64}), do: "U64"
+  defp word_head({:lit, k, n}), do: "#{word_kind(k)}##{n}"
+  defp word_head({:of, :u8}), do: "toU8"
+  defp word_head({:of, :u32}), do: "toU32"
+  defp word_head({:of, :u64}), do: "toU64"
+  defp word_head({:of, :i64}), do: "toI64"
+  defp word_head(:ton), do: "toNat"
+  defp word_head(:add), do: "addi"
+  defp word_head(:sub), do: "subi"
+  defp word_head(:mul), do: "muli"
+  defp word_head(:cadd), do: "addc"
+  defp word_head(:csub), do: "subc"
+  defp word_head(:cmul), do: "mulc"
+  defp word_head(:div), do: "divi"
+  defp word_head(:rem), do: "remi"
+  defp word_head(:eq), do: "eqi"
+  defp word_head(:lt), do: "lti"
+  defp word_head(:le), do: "lei"
+  defp word_head(:and), do: "andi"
+  defp word_head(:or), do: "ori"
+  defp word_head(:xor), do: "xori"
+  defp word_head(:not), do: "noti"
+  defp word_head(:shl), do: "shli"
+  defp word_head(:shr), do: "shri"
+  defp word_head({:cast, :u8}), do: "asU8"
+  defp word_head({:cast, :u32}), do: "asU32"
+  defp word_head({:cast, :u64}), do: "asU64"
+  defp word_head({:cast, :i64}), do: "asI64"
+  defp word_head(:bool), do: "WBool"
+  defp word_head(true), do: "wtrue"
+  defp word_head(false), do: "wfalse"
+  defp word_head(:opt), do: "Opt"
+  defp word_head({:optk, k}), do: "Opt #{word_kind(k)}"
+  defp word_head(:some), do: "wsome"
+  defp word_head(:none), do: "wnone"
+
+  defp word_kind(:u8), do: "U8"
+  defp word_kind(:u32), do: "U32"
+  defp word_kind(:u64), do: "U64"
+  defp word_kind(:i64), do: "I64"
 
   defp spine({:app, f, a}, acc), do: spine(f, [a | acc])
   defp spine(h, acc), do: {h, acc}
 
   defp qty_mark(:erased), do: "-"
   defp qty_mark(:reuse), do: "+"
+  defp qty_mark(:linear), do: "%1 "
   defp qty_mark(_), do: ""
 
   defp wrap(:none, _, s), do: s

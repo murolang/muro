@@ -1,0 +1,77 @@
+-- fnv.muro — 32-bit FNV-1a over a list of U8.
+-- The offset basis is 2166136261 (0x811C9DC5) and the prime is 16777619
+-- (0x01000193). Both are built by shifts of one, because Nat is Peano.
+-- Bytes is that list. The element is a U8 field, passed by value.
+-- The empty list hashes to the offset basis. One byte, 97, is the next step.
+
+data Bytes : Type where
+  nil  : Bytes
+  cons : U8 → Bytes → Bytes
+
+def n0 : run Nat := 0
+def n1 : run Nat := suc n0
+def n2 : run Nat := suc n1
+def n3 : run Nat := suc n2
+def n4 : run Nat := suc n3
+def n5 : run Nat := suc n4
+def n6 : run Nat := suc n5
+def n7 : run Nat := suc n6
+def n8 : run Nat := suc n7
+def n9 : run Nat := suc n8
+def n10 : run Nat := suc n9
+def n11 : run Nat := suc n10
+def n12 : run Nat := suc n11
+def n13 : run Nat := suc n12
+def n14 : run Nat := suc n13
+def n15 : run Nat := suc n14
+def n16 : run Nat := suc n15
+def n17 : run Nat := suc n16
+def n18 : run Nat := suc n17
+def n19 : run Nat := suc n18
+def n20 : run Nat := suc n19
+def n21 : run Nat := suc n20
+def n22 : run Nat := suc n21
+def n23 : run Nat := suc n22
+def n24 : run Nat := suc n23
+def n25 : run Nat := suc n24
+def n26 : run Nat := suc n25
+def n27 : run Nat := suc n26
+def n28 : run Nat := suc n27
+def n29 : run Nat := suc n28
+def n30 : run Nat := suc n29
+def n31 : run Nat := suc n30
+
+def bit : run Π (k : Nat) → U32 :=
+  λ (k : Nat) → shli (toU32 (suc 0)) k
+
+def bit8 : run Π (k : Nat) → U8 :=
+  λ (k : Nat) → shli (toU8 (suc 0)) k
+
+def offset : run U32 :=
+  ori (bit n31) (ori (bit n24) (ori (bit n20) (ori (bit n19) (ori (bit n18) (ori (bit n15) (ori (bit n12) (ori (bit n11) (ori (bit n10) (ori (bit n8) (ori (bit n7) (ori (bit n6) (ori (bit n2) (bit n0)))))))))))))
+
+def prime : run U32 :=
+  ori (bit n24) (ori (bit n8) (ori (bit n7) (ori (bit n4) (ori (bit n1) (bit n0)))))
+
+def byteA : run U8 :=
+  ori (bit8 n6) (ori (bit8 n5) (bit8 n0))
+
+def mix : run Π (h : U32) → Π (b : U8) → U32 :=
+  λ (h : U32) → λ (b : U8) → muli (xori h (asU32 b)) prime
+
+def go : run Π (h : U32) → Π (xs : Bytes) → U32 :=
+  λ (h : U32) → λ (xs : Bytes) →
+    match xs motive (λ _ → U32)
+      | nil => h
+      | cons b bs => go (mix h b) bs
+
+def fnv : run Π (xs : Bytes) → U32 :=
+  λ (xs : Bytes) → go offset xs
+
+def hashEmpty : run U32 := fnv nil
+
+def hashA : run U32 := fnv (cons byteA nil)
+
+def fnv-empty : evidence {fnv nil ≡ offset : U32} := refl
+
+def fnv-a : evidence {fnv (cons byteA nil) ≡ mix offset byteA : U32} := refl

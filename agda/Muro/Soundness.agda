@@ -14,6 +14,9 @@
 --                       structural recursion on the fragment witness,
 --                       and checkDef-sound / checkSig-sound: every
 --                       definition Check accepts is derivable in ⊢.
+--                       fam-def-uncons: unfold a def whose body is a
+--                       family λ, then uncons the instantiated pair;
+--                       the read is derivable at the family goal.
 --
 -- One direction only: nothing here says ⊢ derivations are found by
 -- Check. Fuel is universally quantified: a run that stops for lack of
@@ -56,7 +59,8 @@ open import Muro.Check
          applyFam; unfFam; unfSpine)
 open import Muro.Judgement
 open import Muro.Wall using (spec-⇒-uses)
-open import Muro.Typing using (typ-ext-suc; ≈-≡)
+open import Muro.Typing
+  using (typ-ext-suc; ≈-≡; forget-⇒; forget-⇐; pres-ιr; closed-⊨; _,_⊨[_]_∶_)
 open import Muro.Soundness.Conv
 open import Muro.Soundness.Views
 open import Data.List.Properties using (take++drop≡id; length-take; length-drop)
@@ -355,6 +359,7 @@ applyFam-Frag (muli x y) (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app (mul
 applyFam-Frag (addt x y) (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app (addt x y) i) is (f-app Ft Fi) Fis
 applyFam-Frag (toi64 t) (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app (toi64 t) i) is (f-app Ft Fi) Fis
 applyFam-Frag (packi x y) (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app (packi x y) i) is (f-app Ft Fi) Fis
+applyFam-Frag (word op ts) (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app (word op ts) i) is (f-app Ft Fi) Fis
 
 unfFam-Frag : ∀ {n} {S : Tm n} {F : Tm (suc n)} {as G fam} → Frag S → Frag F → FragL as
   → unfFam S F as ≡ ok (G , fam) → Frag G
@@ -429,6 +434,7 @@ unspine-go-Frag (muli x y) acc Ft Facc = muli x y , acc , refl , Ft , Facc
 unspine-go-Frag (addt x y) acc Ft Facc = addt x y , acc , refl , Ft , Facc
 unspine-go-Frag (toi64 t) acc Ft Facc = toi64 t , acc , refl , Ft , Facc
 unspine-go-Frag (packi x y) acc Ft Facc = packi x y , acc , refl , Ft , Facc
+unspine-go-Frag (word op ts) acc Ft Facc = word op ts , acc , refl , Ft , Facc
 
 unspine-Frag : ∀ {n} (t : Tm n) → Frag t
   → ∃ λ h → ∃ λ as → unspine t ≡ (h , as) × Frag h × FragL as
@@ -538,6 +544,8 @@ unfStepOf-Frag S (addt x y) FS Ft eq with unspine-Frag (addt x y) Ft
 unfStepOf-Frag S (toi64 t) FS Ft eq with unspine-Frag (toi64 t) Ft
 ... | h , as , refl , Fh , Fas = unfSpine-Frag FS Fh Fas eq
 unfStepOf-Frag S (packi x y) FS Ft eq with unspine-Frag (packi x y) Ft
+... | h , as , refl , Fh , Fas = unfSpine-Frag FS Fh Fas eq
+unfStepOf-Frag S (word op ts) FS Ft eq with unspine-Frag (word op ts) Ft
 ... | h , as , refl , Fh , Fas = unfSpine-Frag FS Fh Fas eq
 
 -- hd: the term is inferred as the head of an application spine (Check
@@ -842,7 +850,7 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-mData {e = e} {P = P} {bs = bs} Fe F
 ... | ok (et , eu) with viewData k σ et in veq
 ...   | fail _ = ⊥-elim (fail≢ok eq)
 ...   | ok (di , params , idxs) with viewData-sound k σ veq
-...     | et′ , d , args , weq , leq , sp , lenA , peq , ieq′ rewrite leq
+...     | et′ , d , args , wheq , leq , sp , lenA , peq , ieq′ rewrite leq
       with checkMotive k σ rs Γ di (DataDecl.idxs d) params P in meq
 ...     | fail _ = ⊥-elim (fail≢ok eq)
 ...     | ok tt with infer-sound k σ rs m false G FΓ Fe ieq
@@ -850,7 +858,7 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-mData {e = e} {P = P} {bs = bs} Fe F
 ...       | inf′ _ = miss
 ...       | inf Fet De c
       with firstMotLam-form di params P
-             (subst FragL (sym peq) (FragL-take (nparams d) (proj₂ (Frag-Spine sp (whnf-Frag k σ (GoodSig.frag G) Fet weq)))))
+             (subst FragL (sym peq) (FragL-take (nparams d) (proj₂ (Frag-Spine sp (whnf-Frag k σ (GoodSig.frag G) Fet wheq)))))
              (proj₁ (FragSig.datas (GoodSig.frag G) di d leq))
 ...       | q , D , mform , FD rewrite mform
       with checkBranches k σ rs Γ m di (scrutOk rs e) params idxs (lam q D P) 0 (DataDecl.ctors d) bs in beq
@@ -860,7 +868,7 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-mData {e = e} {P = P} {bs = bs} Fe F
 ...         | ok uses with ok-inj eq
 ...           | refl =
   let fs = GoodSig.frag G
-      Fargs = proj₂ (Frag-Spine sp (whnf-Frag k σ fs Fet weq))
+      Fargs = proj₂ (Frag-Spine sp (whnf-Frag k σ fs Fet wheq))
       Fparams = subst FragL (sym peq) (FragL-take (nparams d) Fargs)
       Fidxs = subst FragL (sym ieq′) (FragL-drop (nparams d) Fargs)
       pieq : params ++ idxs ≡ args
@@ -886,7 +894,7 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-mData {e = e} {P = P} {bs = bs} Fe F
     matchGo Fidxs fs pieq lps lidx (just mot) (just brs) =
       inf (Frag-appsFrom (f-lam FD FP) (FragL-++ Fidxs (fl-∷ Fe fl-[])))
         (⇒-mData De
-          (≈-trans c (≈-trans (whnf-≈ k σ fs Fet weq)
+          (≈-trans c (≈-trans (whnf-≈ k σ fs Fet wheq)
             (≈-≡ (trans (Spine-≡ sp) (cong (appsFrom (dty di)) (sym pieq))))))
           leq lps lidx mot brs ceq)
         (≈-sym (motApp-β idxs))
@@ -1198,15 +1206,15 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-unf {s = seed} {f = lam q A (pair h 
 -- uncons infers the pair the step returns.
 infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-ucons {s = s} Fs) eq with infer k σ rs Γ m s in ieq
 ... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok (T , u) with whnf k σ T in weq
+... | ok (T , u) with whnf k σ T in wheq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok T′ with unfStepOf T T′ in seq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok (G′ , _) with ok-inj eq
 ... | refl with infer-sound k σ rs m false G FΓ Fs ieq
 ... | inf FT Ds ≈-refl =
-  inf (unfStepOf-Frag T T′ FT (whnf-Frag k σ (GoodSig.frag G) FT weq) seq)
-      (⇒-ucons Ds (whnf-≈ k σ (GoodSig.frag G) FT weq) seq) ≈-refl
+  inf (unfStepOf-Frag T T′ FT (whnf-Frag k σ (GoodSig.frag G) FT wheq) seq)
+      (⇒-ucons Ds (whnf-≈ k σ (GoodSig.frag G) FT wheq) seq) ≈-refl
 ... | inf _ _ _ = miss
 ... | inf′ _ = miss
 ... | miss = miss
@@ -1358,10 +1366,10 @@ check-sound k σ {n = n} rs {Γ = Γ} m {A = T} {u = uses} G FΓ
       where
         famYes : Inf {σ} Γ m seed S seedU → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
         famYes (inf FS Ds ≈-refl) with >>=-ok seq
-        ... | T′ , weq , steq with check-sound k σ (extRec (setGuard rs) false false) m G (FragCtx-ext FΓ FS)
-                                  (f-pair Fh Ft) (Frag-wk (unfStepOf-Frag S T′ FS (whnf-Frag k σ (GoodSig.frag G) FT weq) steq)) beq
+        ... | T′ , wheq , steq with check-sound k σ (extRec (setGuard rs) false false) m G (FragCtx-ext FΓ FS)
+                                  (f-pair Fh Ft) (Frag-wk (unfStepOf-Frag S T′ FS (whnf-Frag k σ (GoodSig.frag G) FT wheq) steq)) beq
         ... | chk Dp = chk′ (⇐-unfR Ds (conv-sound k σ (GoodSig.frag G) FA FS aeq)
-                                (whnf-≈ k σ (GoodSig.frag G) FT weq) steq refl Dp bb eq′)
+                                (whnf-≈ k σ (GoodSig.frag G) FT wheq) steq refl Dp bb eq′)
         ... | chk′ _ = miss
         ... | miss = miss
         famYes (inf _ _ (≈-sym _)) = miss
@@ -1389,19 +1397,19 @@ check-sound k σ {n = n} rs {Γ = Γ} m {A = T} {u = uses} G FΓ
           → checkBound m q u₀ ≡ ok tt
           → (checkUnfold k σ m rs (lam q A (pair h t)) >> combine m seedU bus) ≡ ok uses
           → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
-        onUnf T′ weq leq steq u₀ bus beq bb eq′ with checkUnfold k σ m rs (lam q A (pair h t))
+        onUnf T′ wheq leq steq u₀ bus beq bb eq′ with checkUnfold k σ m rs (lam q A (pair h t))
         ... | fail _ = ⊥-elim (fail≢ok eq′)
         ... | ok tt = streamYes (infer-sound k σ rs m false G FΓ Fs ieq)
           where
             Eh : Tm n
-            Eh = proj₁ (lamForm-inv (whnf-Frag k σ (GoodSig.frag G) FT weq) leq)
+            Eh = proj₁ (lamForm-inv (whnf-Frag k σ (GoodSig.frag G) FT wheq) leq)
             shp : T′ ≡ nu (prod (wk Eh) (var Fin.zero))
-            shp = proj₂ (lamForm-inv (whnf-Frag k σ (GoodSig.frag G) FT weq) leq)
+            shp = proj₂ (lamForm-inv (whnf-Frag k σ (GoodSig.frag G) FT wheq) leq)
             streamYes : Inf {σ} Γ m seed S seedU → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
             streamYes (inf FS Ds ≈-refl) with check-sound k σ (extRec rs false false) m G (FragCtx-ext FΓ FS)
-                                            (f-pair Fh Ft) (Frag-wk (unfStepOf-Frag S T′ FS (whnf-Frag k σ (GoodSig.frag G) FT weq) steq)) beq
+                                            (f-pair Fh Ft) (Frag-wk (unfStepOf-Frag S T′ FS (whnf-Frag k σ (GoodSig.frag G) FT wheq) steq)) beq
             ... | chk Dp = chk (⇐-unf Ds (conv-sound k σ (GoodSig.frag G) FA FS aeq)
-                                   (whnf-≈ k σ (GoodSig.frag G) FT weq) steq shp Dp bb eq′)
+                                   (whnf-≈ k σ (GoodSig.frag G) FT wheq) steq shp Dp bb eq′)
             ... | chk′ _ = miss
             ... | miss = miss
             streamYes (inf _ _ (≈-sym _)) = miss
@@ -1414,18 +1422,18 @@ check-sound k σ {n = n} rs {Γ = Γ} m {A = T} {u = uses} G FΓ
           → (u₀ : Use) (bus : UseVec n) → check k σ (extRec rs false false) (ext Γ q S) m (pair h t) (wk goal) ≡ ok (u₀ Vec.∷ bus)
           → (checkBound m q u₀ >> checkUnfold k σ m rs (lam q A (pair h t)) >> combine m seedU bus) ≡ ok uses
           → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
-        onBnd T′ weq leq steq u₀ bus beq eq′ with checkBound m q u₀ in bb
+        onBnd T′ wheq leq steq u₀ bus beq eq′ with checkBound m q u₀ in bb
         ... | fail _ = ⊥-elim (fail≢ok eq′)
-        ... | ok tt = onUnf T′ weq leq steq u₀ bus beq bb eq′
+        ... | ok tt = onUnf T′ wheq leq steq u₀ bus beq bb eq′
         onChk : (T′ : Tm n) → whnf k σ T ≡ ok T′ → lamForm T′ ≡ true
           → unfStepOf S T′ ≡ ok (goal , false)
           → (check k σ (extRec rs false false) (ext Γ q S) m (pair h t) (wk goal) >>= λ bodyU →
              let (u₀ , us) = headTailU bodyU in
              checkBound m q u₀ >> checkUnfold k σ m rs (lam q A (pair h t)) >> combine m seedU us)
             ≡ ok uses → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
-        onChk T′ weq leq steq eq′ with check k σ (extRec rs false false) (ext Γ q S) m (pair h t) (wk goal) in beq
+        onChk T′ wheq leq steq eq′ with check k σ (extRec rs false false) (ext Γ q S) m (pair h t) (wk goal) in beq
         ... | fail _ = ⊥-elim (fail≢ok eq′)
-        ... | ok (u₀ Vec.∷ bus) = onBnd T′ weq leq steq u₀ bus beq eq′
+        ... | ok (u₀ Vec.∷ bus) = onBnd T′ wheq leq steq u₀ bus beq eq′
         onLam : (T′ : Tm n) → whnf k σ T ≡ ok T′
           → (guard "bare ν is not a stream" (lamForm T′) >>
              (if eqQty q reuse then isCopy k σ S >>= guard notCopy else ok tt) >>
@@ -1433,24 +1441,24 @@ check-sound k σ {n = n} rs {Γ = Γ} m {A = T} {u = uses} G FΓ
              let (u₀ , us) = headTailU bodyU in
              checkBound m q u₀ >> checkUnfold k σ m rs (lam q A (pair h t)) >> combine m seedU us)
             ≡ ok uses → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
-        onLam T′ weq eq′ with lamForm T′ in leq
+        onLam T′ wheq eq′ with lamForm T′ in leq
         ... | false = ⊥-elim (fail≢ok eq′)
         ... | true with (if eqQty q reuse then isCopy k σ S >>= guard notCopy else ok tt)
         ... | fail _ = ⊥-elim (fail≢ok eq′)
         ... | ok tt =
           let T″ , weq2 , steq0 = >>=-ok seq
               steq = subst (λ z → unfStepOf S z ≡ ok (goal , false))
-                           (sym (ok-inj (trans (sym weq) weq2))) steq0
-          in onChk T′ weq leq steq eq′
+                           (sym (ok-inj (trans (sym wheq) weq2))) steq0
+          in onChk T′ wheq leq steq eq′
         onWhnf : ((if false then ok tt else whnf k σ T >>= λ T′ → guard "bare ν is not a stream" (lamForm T′)) >>
                   (if eqQty q reuse then isCopy k σ S >>= guard notCopy else ok tt) >>
                   check k σ (extRec (if false then setGuard rs else rs) false false) (ext Γ q S) m (pair h t) (wk goal) >>= λ bodyU →
                   let (u₀ , us) = headTailU bodyU in
                   checkBound m q u₀ >> checkUnfold k σ m rs (lam q A (pair h t)) >> combine m seedU us)
                  ≡ ok uses → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
-        onWhnf eq′ with whnf k σ T in weq
+        onWhnf eq′ with whnf k σ T in wheq
         ... | fail _ = ⊥-elim (fail≢ok eq′)
-        ... | ok T′ = onLam T′ weq eq′
+        ... | ok T′ = onLam T′ wheq eq′
 
 ------------------------------------------------------------------------
 -- checkLam: the λ's fragment witness is matched here, once the view of
@@ -1517,12 +1525,12 @@ checkAgainst-sound k σ rs {Γ = Γ} m {e} {A} G FΓ Fe FA eq with viewData k σ
 ... | ok (di , params , idxs) | just (di′ , ci , args) with di ≡ᵇ di′
 ...   | false = inferConv-sound k σ rs m G FΓ Fe FA eq
 ...   | true with viewData-sound k σ veq
-...     | A′ , d , args′ , weq , leq , sp′ , lenA , peq , ieq′
+...     | A′ , d , args′ , wheq , leq , sp′ , lenA , peq , ieq′
       with checkCtorApp-sound k σ rs m G FΓ Fe
-             (subst FragL (sym peq) (FragL-take (nparams d) (proj₂ (Frag-Spine sp′ (whnf-Frag k σ (GoodSig.frag G) FA weq)))))
+             (subst FragL (sym peq) (FragL-take (nparams d) (proj₂ (Frag-Spine sp′ (whnf-Frag k σ (GoodSig.frag G) FA wheq)))))
              (Frag-appsFrom f-dty (FragL-++
-               (subst FragL (sym peq) (FragL-take (nparams d) (proj₂ (Frag-Spine sp′ (whnf-Frag k σ (GoodSig.frag G) FA weq)))))
-               (subst FragL (sym ieq′) (FragL-drop (nparams d) (proj₂ (Frag-Spine sp′ (whnf-Frag k σ (GoodSig.frag G) FA weq)))))))
+               (subst FragL (sym peq) (FragL-take (nparams d) (proj₂ (Frag-Spine sp′ (whnf-Frag k σ (GoodSig.frag G) FA wheq)))))
+               (subst FragL (sym ieq′) (FragL-drop (nparams d) (proj₂ (Frag-Spine sp′ (whnf-Frag k σ (GoodSig.frag G) FA wheq)))))))
              leq eq
 ...       | nothing = miss
 ...       | just (as , ci′ , c , T , R , sp , keq , ip , Ar , cR) =
@@ -1537,7 +1545,7 @@ checkAgainst-sound k σ rs {Γ = Γ} m {e} {A} G FΓ Fe FA eq with viewData k σ
                (trans (length-drop (nparams d) args′)
                  (trans (cong (_∸ nparams d) lenA) (m+n∸m≡n (nparams d) (nidxs d))))
   in chk (⇐-ctor sp
-       (≈-trans (whnf-≈ k σ (GoodSig.frag G) FA weq)
+       (≈-trans (whnf-≈ k σ (GoodSig.frag G) FA wheq)
          (≈-≡ (trans (Spine-≡ sp′) (cong (appsFrom (dty di)) (sym pieq)))))
        leq lps lidx keq ip Ar cR)
 
@@ -1561,11 +1569,11 @@ inferCtorSpine-sound k σ rs m {di} {ps} {d = d} G FΓ (f-ctor {i = di′} {j = 
 inferCtorSpine-sound k σ rs {Γ = Γ} m {di} {ps} {d = d} G FΓ (f-app {f = f} {a = a} Ff Fa) Fps leq eq
   with inferCtorSpine k σ rs Γ m di ps f in feq
 ... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok (tele , fu) with whnf k σ tele in weq
+... | ok (tele , fu) with whnf k σ tele in wheq
 ...   | fail _ = ⊥-elim (fail≢ok eq)
 ...   | ok ty′ with inferCtorSpine-sound k σ rs m G FΓ Ff Fps leq feq
 ...     | nothing = nothing
-...     | just (as , ci , c , T , sp , keq , ip , Ar , Fty , tl) with Tel-whnf k σ tl weq
+...     | just (as , ci , c , T , sp , keq , ip , Ar , Fty , tl) with Tel-whnf k σ tl wheq
 ...       | refl with tl | Fty
 ...         | tel-end sp-[] _ | _ = ⊥-elim (fail≢ok eq)
 ...         | tel-end (sp-snoc _) _ | _ = ⊥-elim (fail≢ok eq)
@@ -1616,11 +1624,11 @@ inferCtorSpine-sound k σ rs m G FΓ (f-ucons _) Fps leq eq = ⊥-elim (fail≢o
 checkCtorApp-sound k σ rs {Γ = Γ} m {di} {ps} {e} {X} G FΓ Fe Fps FX leq eq
   with inferCtorSpine k σ rs Γ m di ps e in seq
 ... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok (R , u′) with whnf k σ R in weq
+... | ok (R , u′) with whnf k σ R in wheq
 ...   | fail _ = ⊥-elim (fail≢ok eq)
 ...   | ok R′ with inferCtorSpine-sound k σ rs m G FΓ Fe Fps leq seq
 ...     | nothing = nothing
-...     | just (as , ci , c , T , sp , keq , ip , Ar , FR , tl) with Tel-whnf k σ tl weq
+...     | just (as , ci , c , T , sp , keq , ip , Ar , FR , tl) with Tel-whnf k σ tl wheq
 ...       | refl with tl
 ...         | tel-pi _ = ⊥-elim (fail≢ok eq)
 ...         | tel-end sp-[] _ with conv k σ (dty di) X in ceq
@@ -1637,9 +1645,9 @@ checkCtorApp-sound k σ rs {Γ = Γ} m {di} {ps} {e} {X} G FΓ Fe Fps FX leq eq 
 ------------------------------------------------------------------------
 
 checkBr-sound k σ rs {Γ = Γ} m di ci sm {np} {ty = brTy} {br} {q = q} {D = D} {P} {args} {u = u} G FΓ Fty Fbr FD FP Fargs tl npeq eq
-  with whnf k σ brTy in weq
+  with whnf k σ brTy in wheq
 ... | fail _ = ⊥-elim (fail≢ok eq)
-... | ok ty′ with Tel-whnf k σ tl weq
+... | ok ty′ with Tel-whnf k σ tl wheq
 ...   | refl with tl | Fty
 ...     | tel-end {as = as} sp-[] len | _ rewrite npeq =
       brEnd (check-sound k σ rs m G FΓ Fbr
@@ -1961,3 +1969,174 @@ checkSig-sound : ∀ k σ → GoodSig σ → checkSig k σ ≡ ok tt
 checkSig-sound k σ G eq i d leq =
   checkDef-sound k σ i G leq
     (checkDefs-sound k σ 0 (Sig.defs σ) (proj₂ (>>-ok {r = checkDatas k σ} eq)) i d leq)
+
+------------------------------------------------------------------------
+-- A family step's goal is the ν instantiated at its indices. The seed
+-- argument does not occur in that goal, so the same step at the
+-- scrutinee's type is the goal uncons reads.
+------------------------------------------------------------------------
+
+unfStepOf-fam : ∀ {n} {S S′ T : Tm n} {G : Tm n}
+  → unfStepOf S T ≡ ok (G , true)
+  → unfStepOf S′ T ≡ ok (G , true)
+unfStepOf-fam {n = n} {S = S} {S′ = S′} {T = T} {G = G} eq = on T eq
+  where
+  not-fam : ∀ {F : Tm (suc n)} → unfFam S F [] ≡ ok (G , true) → ⊥
+  not-fam e = false≢true (cong proj₂ (ok-inj e))
+
+  spine : (h : Tm n) (is : List (Tm n))
+    → unfSpine S (unspine-go h is) ≡ ok (G , true)
+    → unfSpine S′ (unspine-go h is) ≡ ok (G , true)
+  spine (app f a) is e = spine f (a ∷ is) e
+  spine (nu F) [] e = ⊥-elim (not-fam {F = F} e)
+  -- The family goal does not mention the seed, so the same equation
+  -- holds at S′.
+  spine (nu (lam _ _ _)) (_ ∷ _) e = e
+  spine (nu (var _)) (_ ∷ _) ()
+  spine (nu typ) (_ ∷ _) ()
+  spine (nu (pi _ _ _)) (_ ∷ _) ()
+  spine (nu (app _ _)) (_ ∷ _) ()
+  spine (nu nat) (_ ∷ _) ()
+  spine (nu ze) (_ ∷ _) ()
+  spine (nu (su _)) (_ ∷ _) ()
+  spine (nu unit) (_ ∷ _) ()
+  spine (nu one) (_ ∷ _) ()
+  spine (nu empty) (_ ∷ _) ()
+  spine (nu (dty _)) (_ ∷ _) ()
+  spine (nu (ctor _ _)) (_ ∷ _) ()
+  spine (nu (mData _ _ _)) (_ ∷ _) ()
+  spine (nu (mNat _ _ _ _)) (_ ∷ _) ()
+  spine (nu (mEmp _ _)) (_ ∷ _) ()
+  spine (nu (mUnit _ _ _)) (_ ∷ _) ()
+  spine (nu (idt _ _ _)) (_ ∷ _) ()
+  spine (nu rfl) (_ ∷ _) ()
+  spine (nu (rwt _ _ _)) (_ ∷ _) ()
+  spine (nu (def _)) (_ ∷ _) ()
+  spine (nu (ann _ _)) (_ ∷ _) ()
+  spine (nu (prod _ _)) (_ ∷ _) ()
+  spine (nu (pair _ _)) (_ ∷ _) ()
+  spine (nu (letp _ _)) (_ ∷ _) ()
+  spine (nu (nu _)) (_ ∷ _) ()
+  spine (nu (unf _ _)) (_ ∷ _) ()
+  spine (nu (ucons _)) (_ ∷ _) ()
+  spine (nu i64) (_ ∷ _) ()
+  spine (nu f32ty) (_ ∷ _) ()
+  spine (nu (tensor _ _)) (_ ∷ _) ()
+  spine (nu (addi _ _)) (_ ∷ _) ()
+  spine (nu (muli _ _)) (_ ∷ _) ()
+  spine (nu (addt _ _)) (_ ∷ _) ()
+  spine (nu (toi64 _)) (_ ∷ _) ()
+  spine (nu (packi _ _)) (_ ∷ _) ()
+  spine (nu (word _ _)) (_ ∷ _) ()
+  spine (var _) _ ()
+  spine typ _ ()
+  spine (pi _ _ _) _ ()
+  spine (lam _ _ _) _ ()
+  spine nat _ ()
+  spine ze _ ()
+  spine (su _) _ ()
+  spine unit _ ()
+  spine one _ ()
+  spine empty _ ()
+  spine (dty _) _ ()
+  spine (ctor _ _) _ ()
+  spine (mData _ _ _) _ ()
+  spine (mNat _ _ _ _) _ ()
+  spine (mEmp _ _) _ ()
+  spine (mUnit _ _ _) _ ()
+  spine (idt _ _ _) _ ()
+  spine rfl _ ()
+  spine (rwt _ _ _) _ ()
+  spine (def _) _ ()
+  spine (ann _ _) _ ()
+  spine (prod _ _) _ ()
+  spine (pair _ _) _ ()
+  spine (letp _ _) _ ()
+  spine (unf _ _) _ ()
+  spine (ucons _) _ ()
+  spine i64 _ ()
+  spine f32ty _ ()
+  spine (tensor _ _) _ ()
+  spine (addi _ _) _ ()
+  spine (muli _ _) _ ()
+  spine (addt _ _) _ ()
+  spine (toi64 _) _ ()
+  spine (packi _ _) _ ()
+  spine (word _ _) _ ()
+
+  on : (t : Tm n) → unfStepOf S t ≡ ok (G , true) → unfStepOf S′ t ≡ ok (G , true)
+  on (nu _) e = ⊥-elim (false≢true (cong proj₂ (ok-inj e)))
+  on (app f a) e = spine f (a ∷ []) e
+  on (var _) ()
+  on typ ()
+  on (pi _ _ _) ()
+  on (lam _ _ _) ()
+  on nat ()
+  on ze ()
+  on (su _) ()
+  on unit ()
+  on one ()
+  on empty ()
+  on (dty _) ()
+  on (ctor _ _) ()
+  on (mData _ _ _) ()
+  on (mNat _ _ _ _) ()
+  on (mEmp _ _) ()
+  on (mUnit _ _ _) ()
+  on (idt _ _ _) ()
+  on rfl ()
+  on (rwt _ _ _) ()
+  on (def _) ()
+  on (ann _ _) ()
+  on (prod _ _) ()
+  on (pair _ _) ()
+  on (letp _ _) ()
+  on (unf _ _) ()
+  on (ucons _) ()
+  on i64 ()
+  on f32ty ()
+  on (tensor _ _) ()
+  on (addi _ _) ()
+  on (muli _ _) ()
+  on (addt _ _) ()
+  on (toi64 _) ()
+  on (packi _ _) ()
+  on (word _ _) ()
+
+------------------------------------------------------------------------
+-- Unfold a definition whose body is a family λ, then uncons the
+-- instantiated pair. δ opens the definition onto that λ. The family
+-- rule's subject is the pair at the seed, and uncons of that pair
+-- reads it. The read is a derivation at the family goal, in any
+-- context.
+------------------------------------------------------------------------
+
+fam-def-uncons :
+  ∀ {σ n} {Γ : Ctx n} {i} {d : Def} {q}
+    {seed S A : Tm 0} {h t : Tm 1} {Tw G : Tm 0} {su u}
+  → lookupDef σ i ≡ ok d
+  → Def.dbody d ≡ unf seed (lam q A (pair h t))
+  → σ , ε ⊢[ Def.dmode d ] seed ⇒ S ⊣ su
+  → σ ⊢[ spec ] A ≈ S
+  → σ ⊢[ spec ] Def.dtype d ≈ Tw
+  → unfStepOf S Tw ≡ ok (G , true)
+  → σ , ext ε q S ⊢[ Def.dmode d ] pair h t ⇐ wk G ⊣ u
+  → (σ ⊢[ spec ] def i ⟶ closed {n} (unf seed (lam q A (pair h t))))
+  × (σ ⊢[ spec ]
+       ucons (closed {n} (unf seed (pair (inst h seed) (inst t seed))))
+       ⟶ closed {n} (pair (inst h seed) (inst t seed)))
+  × (σ , Γ ⊨[ Def.dmode d ]
+       closed {n} (pair (inst h seed) (inst t seed)) ∶ closed {n} G)
+fam-def-uncons {σ = σ} {n = n} {Γ = Γ} {i = i} {d = d} {q = q}
+    {seed = seed} {S = S} {A = A} {h = h} {t = t} {Tw = Tw} {G = G}
+    lk body Ds cA cT st Dp =
+  subst (λ b → σ ⊢[ spec ] def i ⟶ closed {n} b) body
+        (δ {n = n} lk (allowedDef-spec (Def.dmode d)))
+  , ι-ucons-r {n = n}
+  , closed-⊨ {n = n} {Γ = Γ}
+      (pres-ιr {σ = σ} {n = 0} {Γ = ε} {m = Def.dmode d} {q = q} {s = seed}
+               {S = S} {A = A} {h = h} {t = t} {T0 = Tw} {G0 = G}
+               {T = Def.dtype d} {T′ = Tw} {G = G} {fam = true}
+               (forget-⇒ Ds) cA st (forget-⇐ Dp)
+               (≈-sym cT) cT
+               (unfStepOf-fam {n = 0} {S = S} {S′ = Def.dtype d} {T = Tw} {G = G} st))

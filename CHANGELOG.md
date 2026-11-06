@@ -1,20 +1,1361 @@
 # Changelog
 
-## 0.16.28
+## 0.20.16
 
-A library binary successor, under `stdlib/`. Inductive Nat stays the primary number type. `List Bit` is a numeral, least significant bit first, and leading zeros are allowed. `sucBit`, `sucBits`, and `sucBin` are a Mealy machine: the carry is the state, and `sucBin` starts at `I`. No host integer is used, and there is no fixed width. `sucBin-corresp` is `toNat (sucBin (toBits n)) ≡ suc n`, by induction on the bit list and on `n`. The bits of 11 step to the bits of 12.
+A library binary successor, as `std:binary.muro`. Inductive Nat stays the primary number type. Machine integers (`U8`, `U32`, `U64`, `I64`) stay fixed-width residues and do not replace this book. `List Bit` is a numeral, least significant bit first, and leading zeros are allowed. `sucBit`, `sucBits`, and `sucBin` are a Mealy machine: the carry is the state, and `sucBin` starts at `I`. `fromBits` reads a bit list as a Nat. No host integer is used, and there is no fixed width. `sucBin-corresp` is `fromBits (sucBin (toBits n)) ≡ suc n`, by induction on the bit list and on `n`. The bits of 11 step to the bits of 12.
 
 ### Library
 
-- `stdlib/binary.muro`. `double` is `run internal`, the place-value shift `toNat` needs.
+- `lib/muro/std/binary.muro`. `import "std:binary.muro"`. The book imports `list.muro`. `double` is `run internal`, the place-value shift `fromBits` needs.
 
 ### Tests
 
-- The file checks. Emit omits the proofs and keeps `double` as `defp`. `sucBin` of the bits of 11 is the bits of 12, and `toNat` reads both.
+- The file checks. Emit omits the proofs and keeps `double` as `defp`. `sucBin` of the bits of 11 is the bits of 12, and `fromBits` reads both.
 
 ### Manual
 
-- README and For agents: where the library lives.
+- Library: the binary successor. Host representations: `std:binary.muro` is not an interned-name target.
+
+### Package
+
+- Version 0.20.16.
+
+## 0.20.15
+
+`U8`, `U32`, `U64`, and `I64` are fixed-width residues. `U8` is ℕ modulo 256, `U32` modulo 2^32, and `U64` modulo 2^64. `I64` is those 64 bits as two's complement. `addi`, `subi`, and `muli` wrap. `addc`, `subc`, and `mulc` return `Opt` and are `wsome` exactly when the result fits: below 2^w for an unsigned word, and in [−2^63, 2^63−1] for `I64`. `divi` and `remi` return `Opt`, empty for a zero divisor and for signed division of the minimum by −1. Division truncates toward zero and the remainder takes the sign of the dividend. `eqi`, `lti`, and `lei` return `WBool`. `andi`, `ori`, `xori`, and `noti` are bitwise. `shli` and `shri` are total: an amount at or past the width yields 0, except a signed `shri`, which sign-extends. `toU8`, `toU32`, `toU64`, and `toI64` reduce modulo the width. `toNat` returns the residue as a closed numeral. Word operations and that numeral reduce as machine integers, so a residue near 2^32 or 2^64 does not run out of fuel. `asU8`, `asU32`, `asU64`, and `asI64` are the only casts. There is no implicit coercion.
+
+`ofNat∘toNat`, `toNat∘ofNat`, `wrapAdd-mod`, `wrapSub-mod`, `wrapMul-mod`, `checkedAdd-iff`, `checkedSub-iff`, `checkedMul-iff`, `div-iff`, and `rem-iff` are in `agda/Muro/Word.agda`, checked under `--safe`. C, Rust, and Zig pass the words by value. Signed C wrapping goes through `uint64_t`. A shift past the width and a division by zero are not evaluated. Elixir emits the residue as an integer. `F32`, `Tensor`, `addt`, and `packI` stay refused (`c:machine`). The book is `examples/fnv.muro`. The page is [Machine numbers](manual/machine.md).
+
+### Manual
+
+- Machine numbers, Grammar, Terms, Emit, Limits, Examples, Closed equations as tests.
+
+### Package
+
+- Version 0.20.15.
+
+## 0.20.14
+
+This release follows 0.20.13.
+
+A numeral bound on a nat field of a constructor is a finite split, and a `run` that reads any number of finite factors decides an arm by the product of those splits. `(slot : Nat) {slot ≤ 1}` admits `0` and `1`. The left side is that field and the right side is a canonical decimal. `{slot ≤ 00}`, `{slot ≤ suc 0}`, another field, and an earlier name are `a field bound is a numeral`. A bound on a field that is not a nat is `a field bound is on a nat`. Building the value needs the same evidence as a bounded nat payload, so `put (req 1)` is within the bound and `put (req 2)` misses it. A field the `run` binds and does not read is not a factor. Two bounded fields are the product of their widths. A mix of constructors is the sum of those products. A second bounded nat, and three or more finite factors, are that product. The two-factor derivation of one bounded nat and one bit or declared data payload stays. `enum-size` is the product of the factor widths, `data-size` is the sum over constructors, and `in-product` with `member-admitted` is the tuple. There is no fuel and no budget. An unbounded nat, a vector, a pair, a record, a unit, a `_` wildcard, and a recursive field the `run` reads stay refused. The book is `examples/bounded-fields.muro`. The pages are [Sessions](manual/sessions.md), [Terms](manual/language.md), and [Limits](manual/limits.md).
+
+### Manual
+
+- Sessions, Terms, Data, Grammar, Limits, Extending.
+
+### Package
+
+- Version 0.20.14.
+## 0.20.12
+
+`Muro.Lexer` classifies the words of the language. Declaration words, session and protocol words, choreography words, type formers, and the builtin types each have a kind. Numerals, strings, comments, and punctuation do too. Operators include the forms the parser accepts, among them `≤`, `→`, `λ`, `Π`, `×`, `⊎`, `≡`, and `⊸`, and the evidence mark `⊢`. The lists live in `Muro.Words`. The parser and the lexer both read them. Whitespace is its own token. `Muro.MakeupLexer` maps each kind onto a Makeup tag, and a token the language accepts is not an error. A parsed definition carries `:extent`, the byte span from its first word to the first byte the parser did not consume.
+
+### Package
+
+- Version 0.20.12.
+
+## 0.20.11
+
+A payload stops before a token that begins something else. The words are `def`, `data`, `session`, `conform`, `meet`, `place`, `scheme`, `move`, `endpoint`, `read`, `talk`, `choreography`, `seat`, `link`, `relay`, `import`, `param`, `where`, `nu`, `ν`, `end`, `send`, `recv`, `choose`, `branch`, `rec`, `case`, `on`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `over`, `say`, and `offer`. `temporal <name> :` and `repr <name> :=` stop as well. A name followed by `->`, `→`, `chooses`, or `:` is the next interaction or a branch label. `)` and `}` stop, and `end` closes a choice. A recursion variable in scope is the continuation (`send Bool X`). Parentheses still group a payload (`(Reply)`, `(Maybe (List Nat))`). Omitting `end` after the payload is a parse error at that point, and the message says `end` was expected. The next declaration stays where it is. A vector length is still a numeral or a name, and a token from that list is not a length.
+
+A declared data type used as a payload takes exactly as many arguments as its declaration has parameters. The wrong count is refused at that declaration: `Reply takes 0 arguments, given 2`. One parameter is `argument`. A count that matches, when the declaration is indexed, has a parameter that is not `Type`, or has a field that is not a payload, stays `ill-formed payload`. `send Count end`, where `Count` takes a nat, is `Count takes 1 argument, given 0`.
+
+A payload type named with one of those words is refused. A constructor named `import` or `where` is refused, because a constructor list stops at the next book entry, and that entry includes `import` and `where`. A constructor such as `place : Box` stays a constructor. The books in this repository did not use those words as a payload type or as a constructor of that name.
+
+### Manual
+
+- Grammar, Choreography, Terms, Sessions, Limits.
+
+### Package
+
+- Version 0.20.11.
+
+## 0.20.8
+
+A `choreography` declaration names roles and one global type. Projection gives each ordered pair of roles a binary session: `end`, `send`, `recv`, `choose`, or `branch`. A message is `send` for the sender and `recv` for the receiver. A choice by a role on that pair is `choose` or `branch`, nested to the right when there are more than two branches, and the choice stays even when the arms agree. A role that is neither end of the choice has a session only when every branch projects to the same session. Otherwise the checker names the role and the branches that disagree. A duplicate role, an unknown role, a self-interaction, a duplicate branch label, and a choice with fewer than two branches are refused. `project-sound` and `project-complete` say the function returns a session exactly when `g ↾ r / s ≡ b` derives it. `pairwise-dual` says the two directions are dual whenever that projection exists, including a pair that never interacts. The module is `agda/Muro/Choreo.agda`, checked under `--safe`. The choreography is spec. The emitters skip it. `session name := seen role with role in choreography` is that projection. `mix muro.check` prints `choreography <name>: <role> with <role> = <session>` after any temporal lines. A book with no choreography prints what it printed before. The book is `examples/two-phase-commit.muro`. The page is [Choreography](manual/choreography.md).
+
+### Manual
+
+- Choreography, Grammar, Limits, Extending, Examples, Terms.
+
+### Package
+
+- Version 0.20.8.
+
+## 0.20.7
+
+A meeting's explored configurations are data. The same walk that accepts the meeting records each state, the transition that reached it, and the source location of the step. Moving one process step and asking again returns the refusal and that step's location as data. `Muro.Explore.graph/1` draws one node for each spec, evidence, and run, one edge for each use, and hangs those configurations on the session the meeting belongs to.
+
+`Muro.Emit.outline/3` returns the names, signatures, layouts, and clauses of the OTP, FSM, C, Rust, and Zig emitters without writing source. Each outline is built from that emitter's own intermediate form. C, Rust, and Zig read the `Muro.IR` image they emit from. Names come from `Muro.Emit.Name` and `Muro.Emit.elixir_names/1`.
+
+`muro ui path.muro` prints how to install `muro_visor` and open the book, with a link to this manual. The compiler does not start the explorer. The compiler and the release binaries do not depend on Phoenix. `muro_visor` 0.1.0 is its own package.
+
+### Manual
+
+- Visual explorer: the book as a graph, the backend outlines, and how to install `muro_visor`.
+
+### Package
+
+- Version 0.20.7.
+
+## 0.20.6
+
+A `temporal` declaration states `always`, `eventually`, or `leads_to` of one buffered meeting. The meeting stays its own entry. A book check explores each meeting once. Every temporal declaration of that meeting reads the recorded outcome, including the configuration graph. A meeting that does not check is skipped. The declaration is evidence. The emitters skip it, including the Zig backend, and `--fuel` does not change its verdict. `mix muro.check` prints `temporal <name>: holds in <n> reachable states` after the version line. A book with no temporal declaration prints what it printed before.
+
+The formula is decided on the configurations reachable from the start. Liveness pruning is linear in that region: a configuration is removed when its surviving out-degree reaches zero, and the membership set, the predecessors, and the out-degrees are built once (`Muro.Temporal.Live`). `Decide.check-sound` and `Decide.check-complete` say the decision accepts exactly when every infinite run satisfies the formula. A refusal is a valid counterexample, and an infinite run that misses the formula (`Decide.cex-sound`). A finished configuration stutters. `solo-bounded` bounds a stretch of one side by the room in its queues, and `every-run-fair` says a run that never finishes takes both sides infinitely often, so the grammar has no fairness clause. The source fragment elaborates to the compiled process (`elab` of the echo and the spin, by `refl`) and the two starts agree (`init-sim`). Every source step is the graph step on the projected configuration (`sim-fwd`). A graph step on a left put whose place is already that put is the source put (`bwd-put`). Under the cursor `Hold`, a graph step other than the stutter is the source step (`sim-bwd`), and a halted source configuration is a halted graph configuration (`final-iff`). `SourceShape`, every source-reachable view being `Shape`, holds exactly when `NoStuck` does (`source-safe-iff`). The source meeting satisfies the formula exactly when the graph does (`transfer`, `check-yes`, `check-no`), for `always`, `eventually`, and `leads_to`. A refusal is a source run (`cex-source`). `SourceSafe` is the weaker final-or-step predicate. `inj-fwd` and `inj-bwd` embed one finite `Muro.Async` step as a source step of `inj`, and `safe→nostuck` says a safe finite meeting is `NoStuck` under `graphOf ≡ gok`, `initS`, and `echoOk`. `inj-bwd` takes `Safe` and a step other than the stutter. `muOk` of the injection holds whenever `Frag` does. `inj` is `sout` or `pOut` for a bare arm, an arm list other than the declaration, a constructor the declaration does not inhabit, an ill-typed echo, an open index, a second in-scope binding, or a name that occurs twice anywhere in the process. The statements and the refusals are in [Limits](manual/limits.md). The page is [Temporal](manual/temporal.md). The book is `examples/temporal.muro`.
+
+### Manual
+
+- Temporal, Sessions, Grammar, Limits, Extending, Examples.
+
+### Package
+
+- Version 0.20.6.
+
+## 0.20.4
+
+`--backend zig` writes `<name>.zig` next to the book and prints that path. It prints the same closed run as the C and Rust backends: `run` and `run internal`, `Nat`, `Unit`, user data including indexed data, `match`, and streams. A lambda applied on the spot is a local. Erased arguments are dropped. Spec and evidence are omitted. `Nat` and user data are tagged unions. A fieldless constructor is one static value. `match` is `switch`. A stream is a seed, an environment, and a step. `run internal` is a private function. A function that allocates takes `muro__allocator: muro__std.mem.Allocator` first and returns an error union, so the caller can pass a `muro__std.heap.ArenaAllocator` and reset it. `muro__from_u64` builds a `Nat` and `muro__to_u64` reads it back. A spec alias is revealed where the text reads a `Nat`, a pair, or a stream. Every identifier in the C, Rust, and Zig text is either a source spelling or a generated name. A source spelling is an injective encoding of the source identifier. It gains `_k` when that encoding is a keyword, a primitive, or a host name, and a numeric suffix when the spelling is already taken. It contains no `__`. A generated name, a helper, a step, a constructor argument, or a temporary, is `muro__` plus a tag and always contains `__`, including after a suffix. `muro_step` and `muro-step` stay apart from `muro__step_2`. `a-b`, `a_b`, and `a_b_2` stay three identifiers. C allocation is `muro__ALLOC`. A lambda applied on the spot binds an argument of a spec alias at that argument's layout, so a zero stays a Nat. A pattern binder hidden by a later binder of the same name is discarded. A binder is claimed against every name visible in its scope, including type names. Rust reserves primitive types and the prelude names its runtime uses, and it names `u64` as `::std::primitive::u64`. Zig reserves its keywords and primitives, including `u64`, `bool`, `type`, and `anyopaque`. A source `uint8_t` encodes to `uint8zut`, so it does not spell the C typedef. An Elixir function name stays the source name when that name is already a function name (`foo_bar`, `fromMaybe`, `read`). Otherwise it is `muro__` plus the encoding, so `Bit` is `muro__Bit`, `foo-bar` is `muro__foozdbar`, and `and` is `muro__and`. Those do not take `bit`, `foo_bar`, or `muro_and`. Every run is named in book order before a backend drops internal or non-`Nat` runs, and the Elixir, NIF, OTP, FSM, and ExUnit outputs use that name. The C symbol the NIF calls is still the spelling. Every function, callback, and module attribute an Elixir template defines is reserved, taken from the template text, so a meeting or a run of that name compiles and runs. An escaped constructor tag is decoded once, against the constructors of the declaration being matched, so `Session.eval_run/3`, the OTP reader, and the FSM reader map `:muro__iszdon` back to `is-on` when that declaration has `is-on`, for an atom and for a tuple. A source constructor already in hand is not decoded again, and a declaration that has both `is-on` and `muro__iszdon` does not confuse them with another declaration's `muro__iszdon`. A named split uses its own arms. A scalar outside the source alphabet is `zn` and six hexadecimal digits, so `U+10000` does not spell `U+1000` followed by a digit, and `Name.decode/1` is the inverse. A term the C backend refuses is refused here, with the same reason. The text is Zig 0.15. `zig` translates it. The proof stops at the run image.
+
+### Manual
+
+- Emit: the Zig file.
+- Emit: one Elixir host spelling for a run, shared by Elixir, NIF, OTP, FSM, and ExUnit.
+- Emit: template helpers are reserved from the template text, and an escaped constructor tag round-trips.
+- Emit: a scalar outside the source alphabet is six hex digits, and a host tag is decoded once against the declaration being matched.
+
+### Package
+
+- Version 0.20.4.
+
+## 0.20.3
+
+The ordinary library is five checked books compiled into the compiler: `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, and `ord.muro`. `import "std:list.muro"` loads that copy. The same bytes are used from a Hex package, from the self-contained executable, and from a checkout. A missing name lists the books. A path that leaves the library is refused. A book reached twice joins once. A relative import inside a library book stays in the library.
+
+`Le` is ≤ on `Nat`, with reflexivity, transitivity, and `max` with its monotonicity lemmas. `List` has membership and lookup. `Bool` has `not`, `and`, and `or`. `Maybe` has `fromMaybe`, `isJust`, and `isNothing`. `Ordering` compares `Nat`, sound against `Le`, and pairs compare lexicographically. The second components of a pair are compared only when the first ordering is `eq`. `examples/list.muro` and `examples/maybe.muro` import those books. `examples/sort.muro` imports `std:list.muro`.
+
+The book hash includes an imported library book as `std/<file>`. The prelude stays out of the hash. The version pin covers the checker, the emitter, the prelude, and this library.
+
+### Manual
+
+- Library: each book and what it provides. Terms, Packages, Grammar, and the `muro check` help name `std:`.
+
+### Package
+
+- Version 0.20.3.
+
+## 0.20.1
+
+A received nat whose bound is a numeral `w` splits into `0` … `w`. A direct `case` writes those arms in order. A `run` that reads the nat is evaluated at each value, and the protocol arm is the constructor it returns. The process still covers every numeral. A `run` of that nat and one declared data payload is the product of the splits. The judgment also counts a bit. `Bit` is a payload, not a term, so a `run` in a file does not take it. A sender of a literal or a computed numeral is checked on the arm that value selects. A meeting, including `buffer 1`, runs the arm of the value that arrived. The arm label is the decimal spelling, so `| 0 =>` is zero and `| 00 =>` is not.
+
+An unbounded nat, a bound that is a name, a `_` wildcard, a pair, a record, a vector, and unit stay refused. A second bounded nat and a run of three or more factors stay `the run does not decide an arm`. A constructor field still carries no bound.
+
+`in-split` and `split-bound` in `agda/Muro/Session.agda` say every value in `0 … w` is in the split and every member is within the bound. `enum-size` says a run's split has the product of the factor widths, with no fuel. `val-sound` and `rows-at` say a covering process conforms on every value the bound admits. `bound-recv-decides` is that decision for bound `1`. `meet-agrees` in `agda/Muro/Meet.agda` says the meeting of a literal numeral takes that arm.
+
+### Manual
+
+- Sessions, Limits, and Grammar: a numeral bound is a finite split. `examples/bounded-split.muro`.
+
+### Package
+
+- Version 0.20.1.
+
+## 0.20.0
+
+**Breaking:** A bare stream unfold whose head reads the seed binder and whose tail mentions the block is refused, wherever that unfold occurs in the body: under a pair, an application, a match, a λ, or another unfold. The tail of a bare stream is the next seed, so that mention is the next head. The error is `<name> productivity: unguarded recursive call`. The head reads the binder when the binder occurs in it. A match, an annotation, a unit match, a rewrite, or an empty motive does not hide that occurrence.
+
+Rewrite: a head that ignores the binder, `(0, f n)`, or a tail that does not mention the block, `(k, suc k)` or `(0, 0)`, as in `examples/nats.muro` and `examples/zeros.muro`. A declared family is unchanged. Its tail is the next proof, and a head that reads the binder may call the block. `accepted-productive` observes those nested unfolds: `Seen` follows every subterm the productivity walk enters.
+
+`accepted-productive` in `agda/Muro/Productive.agda` says that if `checkSig` accepts the signature, every run or evidence definition is observable at every finite depth. Each head is block-free and the observation does not re-enter the block. A λ is observed at every block-free argument. The block is the definition's component. Closure of that component follows from the fuel-free reachability, with no fuel. Normalisation of a block-free head (`Empty-evid`) and termination of an accepted block by the descent check are separate theorems.
+
+### Manual
+
+- Streams and Limits: the theorem.
+
+### Package
+
+- Version 0.20.0.
+
+## 0.19.7
+
+`muro` with no arguments, `muro --help`, `muro -h`, and `muro help` print the same usage and exit 0. The page names the version, every command and what it does, the global flags, a short getting-started flow, examples, and where the manifest lives: `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`. `muro help <command>` and `muro <command> --help` print that command's arguments, flags, defaults, examples, and exit codes, and do not run the command. An unknown command or flag names itself on standard error, then the one-line usage and `run muro --help`. A usage error or a hint from the executable names `muro init`, `muro gen`, or `muro deps.get`, not the Mix task. The overview prints an em dash. If mise says `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false`, then `mise use -g github:murolang/muro@VERSION`. The Mix tasks are unchanged.
+
+### Manual
+
+- Start, For agents, and The executable: the mise version mirror, and the usage the executable prints.
+
+### Package
+
+- Version 0.19.7.
+
+## 0.19.6
+
+A self-contained `muro` executable checks, emits, and commits modules on a machine with no Elixir and no Erlang. It carries its own Erlang runtime. `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`, is the manifest where there is no `mix.exs`. `muro gen` writes C, Rust, and Cortex-M assembly as well as Elixir. A C target's source includes the header written beside it, named from the target stem. `muro init` reads the directory and writes one manifest. An existing manifest at `muro.exs`, `muro.toml`, or `[package.metadata.muro]` is left in place; init prints a diff in that file's format and does not create a second one. `muro skills add` writes the agent block into `AGENTS.md`. The block is read from `manual/for-agents.md`, and that file is in the Hex package. The markers are whole lines, including a trailing carriage return, and an inline mention is left alone. The file's line endings stay. A tag builds the four binaries and smokes the Linux one before any asset is attached to the GitHub release. A failed smoke publishes nothing. `mix muro.emit --backend c` builds a NIF only when the working directory is the loaded Mix project. Outside that directory it writes the `.h` and the `.c`, the same files as the executable. `muro init --backend` stores that backend as the manifest's top-level `backend`, including `backend: :elixir` in `muro.exs`. Without the flag, a Mix project still omits the key. A `Cargo.toml` header outside `[package.metadata.muro]` may quote a key (`[target.'cfg(unix)'.dependencies]`, `[target."x86_64-pc-windows-msvc".dependencies]`). The reader skips that table, including a multi-line string or array, and still reads the muro table with the restricted subset. The executable loads `:public_key`, `:ssl`, `:inets`, `:crypto`, and `:asn1` so `muro deps.get` can open HTTPS where no Erlang is installed. Mix records the code path before that boot step, so the fetcher loads the copies that sit beside `:muro` in the release. They are not Hex dependencies. The wrap is a production build, so the executable does not print unpack debug lines. The Mix tasks stay and call the same functions. The Hex package gains no runtime dependency.
+
+### Manual
+
+- The executable: the binary, `muro.toml`, the TOML subset, init, and `muro skills add`.
+- Start, Committed modules, and For agents: the path without Mix.
+
+### Package
+
+- Version 0.19.6.
+
+## 0.19.5
+
+A false equation between two stuck calls of the same definition is a conversion failure. The checker used to unfold both calls, miss the clash, and report `out of fuel`, and the work doubled for every two units of fuel.
+
+A definition applied to arguments unfolds only when that unfolding makes progress: the match it reduces to fires on a constructor. The arguments are compared first. If they convert, the applications convert. If that comparison runs out of fuel, conversion stops. A definite mismatch unfolds once. While that unfolding is already in progress and the match does not fire, the application is neutral and the argument mismatch stands, so the failure is the same at every fuel. Fuel is one budget shared by the argument comparison and that unfolding. `out of fuel` means that budget was spent.
+
+A definition that ignores an argument, and one that matches on a later argument and reduces both sides to the same term, still converts after that one unfolding.
+
+`mix muro.mutate` compares a mutant with the original at a quarter of `--fuel` (at least 1, and less than `--fuel` when `--fuel` is greater than 1) and re-checks depending definitions at the full fuel. Each mutant prints `<id> <operator> <outcome>` on standard error as it is classified. A mutant that changes a passed-along argument and makes a theorem false is `killed`.
+
+### Manual
+
+- Identity, Limits, and Extending: when a definition unfolds, and that fuel is one budget.
+- Mutation: the equivalence probe and the progress line.
+- For agents: a `cannot convert` failure is not fixed by raising the fuel.
+
+### Package
+
+- Version 0.19.5.
+
+## 0.19.4
+
+`S else v` in a generated repr no longer emits a `muro_repr_else/4` clause that Elixir 1.19 and later report as never used. A book with an open map and a fallback whose shape cannot return `{:ambiguous_key, key}`, such as `optional (boolean else false)`, compiles with `--warnings-as-errors`. The fallback still replaces an error at its own position. It still does not replace `{:ambiguous_key, key}`. A numeral fallback still does not replace `{:nat_too_large, v}`.
+
+### Package
+
+- Version 0.19.4.
+
+## 0.19.1
+
+Outside spec, a seed that mentions the block is refused when the head or the tail of the step reads the seed binder. The refusal is `<name> productivity: unguarded recursive call`. A seed neither component reads stays accepted, including a descending call discarded before the step whose tail is a guarded call. A block-free seed may occur in the head or in the tail.
+
+`agda/Muro/Productive.agda` proves that a guarded tail unrolls to every finite depth (`guarded-unrolls`) and that the observations `obs-stream` and `obs-fam` read a block-free head at every depth, under the hypotheses in that module. `checkSig-nu` extracts the productivity check from an accepted signature. `checkSig-guarded` reads that check: every syntactic unfold in an accepted run or evidence body has the guard and the seed fact (`AllUnf`), and a one-λ pair yields `HeadSeed` and `SeedCovered` (`unfFacts`). `SeedCovered` is the tail not reading the seed, the head reading it, or the seed not mentioning the block. Closure of `component` (`BlockClosed`), a stream call tail, normalisation of the head, and termination by descent stay open. ⊢ is unchanged.
+
+### Manual
+
+- Streams and Limits: the theorem, the seed rule, and what is still not a theorem.
+
+### Package
+
+- Version 0.19.1.
+
+## 0.19.0
+
+**Breaking:** An open-map decode that used to succeed when the host map carried a declared key in another form (atom vs string) now returns `{:error, {path, {:ambiguous_key, k}}}`. Callers that send such maps must send the declared form.
+
+`map open` still ignores a key that names no declared key, so metadata stays legal. It refuses a key that is not declared when that key names a declared key in the other host form: an atom whose `Atom.to_string` equals a declared string key, or a string equal to the name of a declared atom key. The error names the form that was not declared, including when both forms are present. Several collisions report the one whose declared key comes first in the repr, before any field value is decoded, so the result does not depend on map iteration. A nested open map reports the inner map's path. `S else v` does not replace this error. A closed `map` still returns `{:unexpected_key, k}`. `map_of` has no declared keys and is unchanged. Encoding is unchanged.
+
+### Manual
+
+- Host representations: the rule next to `map open`, the error, and that `map_of` is unaffected.
+
+### Package
+
+- Version 0.19.0.
+
+## 0.18.4
+
+`mix muro.mutate path.muro` reports which evidence constrains each `run` definition. For every `run` and `run internal` definition in the file it builds type-preserving mutants, in a fixed order, and re-checks the definitions that mention the mutated name. Evidence, spec, data, and the prelude are left unchanged. A mutant the checker rejects is discarded and counted. A mutant whose body converts with the original, under `Muro.Check.conv/4` and the book's fuel, is `equivalent`. A mutant that makes a depending definition fail is `killed`, with that definition's name and location. A mutant the fuel cannot decide is `out_of_fuel`. A mutant that type-checks, whose conversion with the original fails within the fuel, and that leaves every re-checked definition checking, is `surviving`.
+
+`--only name` may be repeated. `--max-mutants-per-def N` caps candidates per definition (default 100). `--max-survivors N` exits 1 when more than `N` survive. `--json` prints the same report as one object. `--fuel` is the checker's fuel and applies to the original check. A book that does not check is refused with exit 2 and is not mutated. The text header records how many evidence definitions were re-checked. The manual page is [Mutation](manual/mutate.md).
+
+### Package
+
+- Version 0.18.4.
+
+## 0.18.3
+
+A git package may leave out both `tag:` and `ref:`. `{:git, url}` and `{:git, url, []}` are the same spec, and `{:git, url, root: "priv/muro"}` is that spec with a directory. The fetch is `git clone --depth 1` with no `--branch`, so the clone follows the remote's default branch, whatever that branch is named. The lock records the commit. `version` is `<branch>@<sha7>`, the same shape as a branch `ref:`, and the `conforms to` line uses it. The branch name is read from the clone. A remote whose HEAD names no branch is refused, and the message says to add `tag:` or `ref:`. `mix muro.deps.get` resolves the spec again on every run. `mix muro.check` and `mix muro.gen` still read only `muro.lock` and `muro_deps/`.
+
+`tag:` and `ref:` are unchanged, including the lock text. Naming both is still an error. An unknown option is still refused, and the message names the key.
+
+### Manual
+
+- Packages: the pin-free git spec, next to `tag:` and `ref:`.
+
+### Package
+
+- Version 0.18.3.
+
+## 0.18.2
+
+An unfold step may mention its recursive block in the tail only as a call: a member of the block applied to arguments that do not mention the block, a pair of such tails, or a nested unfold whose seed, binder type and head do not mention the block and whose own tail is guarded. `tail p`, `snd (uncons p)`, and `let (a, b) = uncons p in b`, inside the definition of `p`, were accepted. Each forces `p`. With a stream that breaks the predicate at a later element, that acceptance was a closed `evidence Empty`. The checker refuses them with `unguarded recursive call`, reported as `<def> body: unguarded recursive call`. `head`, `match`, and `rewrite` on the block in a tail are the same refusal. A tail that is the block applied to block-free arguments, a pair of guarded tails, or a nested unfold with a guarded tail still checks. `examples/always.muro` is unchanged.
+
+The same test is in the Agda checker. `GuardedTail` is that tail as an inductive relation, `guardedTail-reflects` says the boolean test reflects it, and `checkUnfold-guarded` says an unfold the checker accepts outside spec has, after whnf, a block-free head and a guarded tail. The judgment records the pair and does not recheck the guard, so productivity is still not an Agda theorem.
+
+### Manual
+
+- Streams: the tail rule, in words and in the rule form.
+- Limits: the guard, the two lemmas, and that productivity is still not a theorem.
+
+### Package
+
+- Version 0.18.2.
+
+## 0.18.1
+
+`mix muro.emit path.muro --backend fsm` prints one module for the book's sessions. Each session is a child module, the stem plus `Fsm`, then the session name (`MeetFsm.Ping`). The module is pure: no process, no transport, and no dependency on Muro at run time. A host that already has an RPC, an HTTP exchange, a queue, or a websocket threads the state through `init`, `send`, and `recv`, and asks `done?` at the end.
+
+`send/2` and `recv/2` return `{:ok, state}` or `{:error, {:unexpected, step, expected, value}}`. `value` is the host's value, unchanged. `step` names the action in the source protocol, for example `examples/meet.muro:6 session back: first send Nat`. `expected/1` is `:done`, `{:send, type}`, `{:recv, type}`, `{:send_pick, [:b0, :b1]}`, or `{:recv_pick, [:b0, :b1]}`. A choice is `{:pick, :b0}` or `{:pick, :b1}`. A bit index is the bit itself.
+
+`check_trace/1` accepts a prefix of one end's exchange. A log may be cut short, and a `rec` protocol never reaches `end`. `check_trace(trace, complete: true)` also requires the protocol to be at `end`. A session with parameters takes those nats as `init` arguments, and `check_trace/2` takes `args:`.
+
+The wire form is the one the OTP image carries. A nat is an integer, a bit is `:b0` or `:b1`, unit is `:tt`, a pair is a tuple, a record is a map, a vector is a list of the length the type says, and a constructor is an atom or a tagged tuple. An evidence payload is that nat, and the machine also checks the bound the evidence stands for. A nat above the bound is refused. The OTP image checks only that the value is a nat. When the book has a `repr` (#131) for a payload type, that type's host form is the repr: `decode_<type>/1` returns `{:ok, value, table}`, the value is checked, and the table is dropped. A value the codec rejects is `:unexpected`.
+
+The machine takes the same arm a meeting would: a bit index, the constructor just exchanged, or a `run` of that value. The run is the emitted function. A nat above 100_000 is refused at that call, before a Peano term is built. State is opaque. Hosts store it and compare it with `==`.
+
+A book with no session is refused. A protocol the machine cannot evaluate, including a talk, an unevaluable bound or length, and a `run` it cannot call, is refused at emit time and names the session. Nothing is emitted for part of the book. `--node` and `--imports` with this backend are refused. The OTP backend is unchanged. One module is one session.
+
+`kind: :fsm` in a manifest writes the same module. `impl:` and `imports:` on that entry are errors.
+
+### Manual
+
+- State machines: the API of one end, the wire form, evidence bounds, `repr` payloads, and what emit refuses.
+- Emit, Sessions, Committed modules, Examples, and For agents point at that page.
+
+### Package
+
+- `scripts/archive-smoke.sh` generates `examples/meet.muro` as `kind: :fsm` inside a host and walks one end.
+- Version 0.18.1.
+
+## 0.18.0
+
+**Breaking:** Every `decode_<type>` now returns `{:ok, value, table}` instead of `{:ok, value}`. Match the three-tuple, and keep the table to encode. Every `encode_<type>` now takes `(value, table)`, and the arity-1 form is gone, so regenerate every committed module with `mix muro.gen` and update each caller. A book that uses no names gets an empty table and needs only the mechanical change.
+
+This extends the host representation from #131. `interned string` maps a UTF-8 binary, of any length including empty, to an index in one table shared by the whole decode. The target is `Nat`, built as the same Peano term `integer` builds, or a binary-numeral type recognised by shape: a declared type with no parameters and no indices, one nullary constructor in any declaration position, and two unary constructors of the type itself, in declaration order. The index is the bijective base-2 numeral, so every index has one term and every term has one index. Any other target is refused at `mix muro.check`, and the message names the constructor, the field, the type, and those two targets. `repr Nat := interned string` stays `Nat is represented by integer`. A whole-body `interned string` on a type with more than one constructor is refused: a name is a field.
+
+The table hosts may rely on is `%{by_name: %{binary => index}, by_index: %{index => binary}}`, dense from 0, each map the inverse of the other. It is built only with `muro_repr_table_new/0`, `muro_repr_table_new/1` (distinct binaries; the position is the index), and read back with `muro_repr_table_names/1`. Those names are on the helper collision list. A table that does not have this shape raises `ArgumentError` naming the function. `decode_<type>/1` starts empty. `decode_<type>/2` starts from the table the host passes, so a name it already knows keeps its index. The table grows in first-seen order, and that order is the repr's traversal, not map iteration: fixed keys in the order written, lists in element order, a `map_of` in sorted wire-key order, and inside one pair the key before the value. A failed decode returns no table. A new index above `@muro_repr_nat_max` is `{:too_many_names, max}`. Encode looks the index up and never extends the table. A missing index, or a name reserved by a sibling string literal, raises `ArgumentError`.
+
+An `interned string` arm of a choice accepts every string except the string literals sibling arms of that same choice name directly, whatever the declaration order. Two such arms overlap. A string reached only through a type reference is not reserved, and the arms overlap. A binary that is not valid UTF-8 is `{:not_string, v}`. A non-binary that matches no arm stays `{:no_variant, names, v}`.
+
+`map_of K => V` decodes a map into a list of pairs or of a two-field record. The list is sorted by the wire key in host term order (`{key, is_float(key)}`), so `1` comes before `1.0` and the order does not change after 32 keys. A key failure is at `{:key, wire_key}`. A value failure is at `wire_key`. Two wire keys that decode to one Muro key are `{:keys_collide, a, b}` at the map, with the wire keys in that order. It is an error, not a merge. Encode raises `ArgumentError` on a duplicate wire key and names the key. `decode(encode(v), table)` equals `v` only when the list was already sorted that way. A non-map is `{:not_map, v}`. `%{}` is the empty list.
+
+`S else v` is an opt-in fallback. Strict stays the default. `else` binds looser than `list`, `optional`, `nullable`, and `map_of`, and parentheses are that shape. It may follow only `boolean`, `integer`, or a type with its own repr, and only inside a component, not as a whole repr or a whole choice arm. The value is a nullary constructor of the field, or a `Nat` numeral at most the guard. It replaces an error reported at the position of that shape: a present non-boolean, a present non-integer or a negative integer, or a named type that fails at its own root. It does not replace a missing map key, an error deeper inside, or `{:nat_too_large, v}`. `optional (boolean else false)` decodes a missing key to `nothing` and every other present value, `nil` included, to `just false`. A present `nil` under a plain `optional` stays `{:nil_not_allowed, nil}`. `nullable` still takes `nil` as the nullary constructor before the fallback. Encode ignores the fallback, so encode of a decoded fallback is not the original wire value. The ambiguity check sees the inner shape.
+
+There is no arity-1 encode, including in a book with no names. A later `interned string` must not change what callers write. `flatten` of `%{k => [v1, v2]}` is not supported. A book states the item as a record of key and value. The codec does not parse JSON and does not keep the unknown keys of an `open` map.
+
+### Manual
+
+- Host representations: the table, `interned string`, `map_of`, `else`, and the new error reasons.
+- Emit, Committed modules, Grammar, Data, Examples, and For agents follow the new return shape.
+
+### Package
+
+- `examples/repr_names.muro` decodes a map keyed by free-form names, with `"read"` falling back to `false`.
+- `scripts/archive-smoke.sh` calls `decode_entry` and `encode_entry` with the table, and runs the names book inside the host.
+- Version 0.18.0.
+
+## 0.17.0
+
+**Breaking:** Every ExUnit test is now named `"<file> <def-name>"` instead of `<name> (<file>:<line>)`. Regenerate suites with `mix muro.gen` and update any CI history, quarantine list, or `--only` / `--exclude` filter that matched the old names. The file and line are in the assertion message, `"<file>:<line> <def-name>"`, so a failure still names the equation and the line. The name has no line number, so a line shift does not change it. Skip comments and the `skipped` lines keep the 0.16.76 spelling, `name (file:line): reason`.
+
+`mix muro.emit path.muro --backend exunit` emits a library of `param`s. The library is checked with those params as assumptions (`params: :open`). Every other backend, `mix muro.check`, and a `kind: :elixir` manifest entry still refuse the file with `param <name> is supplied by a file that imports this one`. A `run` param at the head of a side becomes `impl.<name>(...)`. Its arguments are closed values, so a nullary library `run` such as `golden` is a literal. One `@callback` is generated per `run` param an emitted test calls, with the arity `Muro.Emit.binder_qtys/1` already gives that type, and the Elixir spelling `Muro.Emit.def_names/3` gives the name. An `evidence` param is not a callback. A param that only a skipped equation mentions is not a callback.
+
+A param call is emitted only at the head of a side, and only when the arguments are data. A higher-order argument is skipped as `param <name> takes a function`. A `Stream` argument or result is `takes a stream` or `returns a stream`. An argument that is not data, such as `I64`, is `param <name> arguments are not data`. A `run` param inside a value is `calls param <name> inside a value`. A library `run` whose evaluation reaches a param is `calls param <name> through <def>`. The adapter is not threaded through library code. A session name in a param type does not check (`<name> is a session, not a definition`); it is an error, not a skip. A spec alias is not unfolded, so a name that stands for a function and is not itself a Π is `arguments are not data` or `returns a value that is not data`.
+
+`imports: true` on a `kind: :exunit` entry, and `--imports` on `mix muro.emit --backend exunit`, also collects the closed equations of the files the book imports directly, in declaration order, once each. The book's own equations come first. Imports of those files are not followed. The default is off, and today's suites do not gain tests. `--imports` with any other backend is an error. `imports:` on a `kind: :elixir` entry is an error, and the message names the entry index. A `pkg:` import is a direct import. The test name uses the file path under the project root, such as `muro_deps/shared/wire.muro wire-ok`. The book hash already covers imported files, so `mix muro.gen --check` reports the suite stale when a direct import changes, whether or not the suite collects it.
+
+On a supplying book, `--imports` evaluates the library equations against the supplied definitions. An equation the library itself skips, because a `run` reaches a param, can be an ordinary test once that param reduces. The default implementation is the book's emitted module, which includes the supplied params, so the suite passes with no `Application.put_env`.
+
+A library whose `decide` reads a silence wildcard as `true` produced 14 tests. The emitted implementation and a hand-written adapter passed. An adapter that reads silence as `false` failed exactly `conformance.muro sil-k0`, `conformance.muro sil-k1`, and `conformance.muro sil-deep`, and each failure carried `conformance.muro:<line> <name>`.
+
+### Manual
+
+- Closed equations as tests: param libraries, imported equations, the new test name, and the new skip reasons.
+- Emit and Committed modules: `--imports`, and `imports:` on an exunit entry.
+- Terms: the exunit backend is the one path that checks an unsupplied param.
+
+### Package
+
+- `scripts/archive-smoke.sh` emits a param library inside a host, refuses the Elixir backend for that file, passes the suite against a hand-written adapter, and fails a mutant by equation name.
+- Version 0.17.0.
+
+## 0.16.78
+
+`import "pkg:shared_wire/wire.muro"` loads a book from a package named in the manifest, at the version `muro.lock` records. `muro_deps:` is an optional key in `muro.exs` or the `:muro` key of `mix.exs`. A git spec is `{:git, url, tag: "v1.2.0"}` or `ref:`, with an optional `root:` directory. A Hex spec is `{:hex, "package_name", "~> 2.0"}`. Hex books live under `priv/muro/`.
+
+`mix muro.deps.get` fetches every package into `muro_deps/<name>/` and writes `muro.lock`. Only regular `.muro` files are copied. A failure leaves the directory and the lock unchanged. The lock is a sorted Elixir literal: a banner comment, then one map, packages by name, keys `files`, `resolved`, `source`, `version`, one line per file. File values are the lowercase hex sha256 of the bytes. The reader walks the quoted AST and does not evaluate the file.
+
+The checker hashes the bytes it parses. A file that differs from the lock is refused: `muro_deps/<name>/<path> changed since muro.lock (expected sha256 <lock>, found sha256 <actual>; run mix muro.deps.get to fetch it again)`. A missing lock, a package or file absent from the lock, a manifest spec that no longer matches, and a missing file each name the package and the file and say to run `mix muro.deps.get`. `mix muro.check` and `mix muro.gen` do not fetch and do not use the network.
+
+`mix muro.check path.muro` prints `conforms to <name> <version> (sha256 <hash>)` after the success sentence, one line per package the book loaded. The hash covers those files, not the rest of the package. A generated target carries the same text as `# Conforms to <name> <version> (sha256 <hash>).` between the first header line and `# Do not edit`. A book that imports no package keeps the two-line header. Package files are part of the book hash, at `muro_deps/<name>/<path>`.
+
+A `param` in a package book is supplied by the importing book, as across files. The same package path reached twice is loaded once. Two packages that declare the same name clash. A package that imports another package does not fetch it; the consumer lists that package.
+
+Git uses the `git` CLI. A tag or branch is a shallow clone. A commit is `git init`, `git fetch --depth 1`, and `git checkout --detach FETCH_HEAD`. If `git` is not on `PATH`, the task stops and the lock is unchanged. The version label drops one leading `v` from a tag when the rest starts with a digit. A ref is `<ref>@<7 hex chars>`, or those 7 chars when the ref is a commit.
+
+Hex does not use the Hex client. `:inets`, `:ssl`, and `:public_key` are started by the fetcher, not as extra applications of `:muro`. When Mix is loaded, the fetcher calls `Mix.ensure_application!/1` for those three first, because Mix removes other OTP applications from the code path. Releases come from `HEX_API_URL` (default `https://hex.pm/api`) and tarballs from `HEX_MIRROR` (default `https://repo.hex.pm`). The highest release matching the requirement is selected with `Version.match?/3` and `allow_pre: false`, so a pre-release matches only when the requirement itself contains one. A retired release is skipped when a non-retired match exists; otherwise the highest retired release is used. The outer `CHECKSUM` must be the sha256 of `VERSION <> metadata.config <> contents.tar.gz`, as hex or as the raw digest. The lock records the tarball sha256. Private repositories, organizations, and auth keys are not supported.
+
+### Manual
+
+- Packages: the manifest, the lock, the hash checks, `conforms to`, publishing, and what is not supported.
+- Terms, Committed modules, Start, and For agents link to that page.
+
+### Package
+
+- Commit `muro_deps/` and `muro.lock` for offline `mix muro.check` and `mix muro.gen --check`.
+- `scripts/archive-smoke.sh` fetches a local git package from the archive, checks the conforms line, refuses a hand edit, and reports a stale target after the tag moves.
+- Version 0.16.78.
+
+## 0.16.77
+
+A book declares how a data type is represented on the host. `repr Name := …` is a spec-side entry. It is not a kernel term. `mix muro.emit` writes `decode_<type>/1` and `encode_<type>/1` next to the run functions. `mix muro.gen` commits that codec with the module, and `mix muro.gen --check` reports a changed repr as a stale target.
+
+The vocabulary is `boolean`, `integer`, `nil`, an atom literal, a string literal, a type that has its own repr, `list`, `optional`, `nullable`, `tuple`, and `map`, including `open`. A sum is a choice, `ctor => shape | …`. Decode returns `{:ok, value}` or `{:error, {path, reason}}`. It is total and strict: a missing key is the nullary constructor only for `optional`, `nil` is an error unless the shape says `nullable`, and an extra key is an error unless the map says `open`. The reason names the path and the value that did not match.
+
+`mix muro.check` refuses an ambiguous repr and names the two constructors. Two shapes overlap when they can share a host value. A type name is replaced by the classes of that type's repr. Two open maps overlap, even when a required key holds different constants. An unknown or recursive case overlaps, so the checker refuses it. A cycle of bare names (`repr Loop := Loop`) is refused, because decoding would not consume the input.
+
+`integer` is a non-negative Elixir integer and a Peano `Nat`. Decode builds that term with a tail call, one `{:suc, _}` per unit, and refuses an integer above `@muro_repr_nat_max` (`1_000_000`) with `{:nat_too_large, v}`. Encode counts the chain with an accumulator. A binary Nat (#80) would remove the guard. This version does not add one.
+
+Free-form strings and interned names are not supported. A `repr` names a declared data type with no parameters and no indices, or `Nat`. A field that is a pair, `Unit`, `Atom`, a stream, a function, `I64`, `F32`, or a tensor is refused. The codec does not parse JSON, and it does not keep the unknown keys of an `open` map. This version does not emit a round-trip property test for a project's own reprs.
+
+### Manual
+
+- Host representations: the syntax, the vocabulary, strict decode, the ambiguity check, and the Nat guard.
+- Emit, Committed modules, Grammar, Data, Examples, For agents, and Extending point at that page.
+
+### Package
+
+- `examples/repr.muro` is the end-to-end book. `scripts/archive-smoke.sh` generates it inside a host and calls `decode_entry`, the run function, and `encode_entry`.
+- Version 0.16.77.
+
+## 0.16.76
+
+`mix muro.emit path.muro --backend exunit` prints one ExUnit module for the book's closed equations. `mix muro.gen` writes the same module when a manifest entry is `{book, module, target, [kind: :exunit]}`. `impl: An.Adapter` sets the implementation that suite calls by default. A 3-tuple still emits Elixir.
+
+A candidate is an `evidence` definition in that file whose type is an equation `{f a₁ … aₙ ≡ b : T}` and whose left-hand head is a name. Each candidate is one test or one skipped line. The test is named after the evidence definition and the book's file and line. It calls the implementation module. The default implementation is the file stem, the name the Elixir backend gives that file (`rounding.muro` is `Rounding`). The test module `mix muro.emit` prints is that name plus `Test`. In the manifest, `module` is the test module the entry names.
+
+The implementation is `Application.get_env(:muro, TestModule, DefaultImpl)`, read in `setup_all`. The key is the test module. A tuple key warns on Elixir 1.18. The same file defines `TestModule.Behaviour`, one `@callback` per `run` the tests call, each `term()`. A `test/*_test.exs` target is what `mix test` loads. An adapter compiled earlier warns that the behaviour does not exist. A target under `test/support/*.ex`, with that directory on `elixirc_paths` in the test env, is compiled with the adapter, and a missing callback warns. `test/test_helper.exs` registers that case with `ExUnit.Server.add_module/2` after `ExUnit.start()`. With no `*_test.exs` file, `mix test` prints `There are no tests to run`.
+
+Skipped equations are a comment block in the test module, covered by the body sha256. `mix muro.emit` prints each skip on standard error and then `N tests, M skipped`. `mix muro.gen` prints `skipped <target>: …` after the `written` or `unchanged` line. `--check` does not print those lines. A book change that only alters the skipped set changes the book hash, and `--check` reports the target stale.
+
+Comparisons use emitted shapes. Host data arrives with repr (#131). `Muro.Emit.emit_closed/2` is where that mapping hooks. Quantified evidence is outside the candidate set. Property tests from those are a later change.
+
+### Manual
+
+- Closed equations as tests: what is collected, the test name, the behaviour, both adapter layouts, the skip reasons, the manifest entry, and drift checking.
+- Emit, Committed modules, For agents, and the command lists point at that page.
+
+### Package
+
+- `scripts/archive-smoke.sh` generates a suite inside a host that does not depend on muro, runs the tests, checks an incomplete `@behaviour` adapter, and fails the suite against a wrong implementation.
+- Version 0.16.76.
+
+## 0.16.75
+
+`mix muro.gen` writes the modules a project manifest names. `mix muro.gen --check` writes nothing and fails when a committed module and its book disagree. `mix muro.init` creates `muro.exs` and `priv/muro/`.
+
+The manifest is `muro.exs` at the project root, evaluated as a keyword list, or a `:muro` key in `mix.exs`. If both exist, the task stops and names both. `muro:` is the version the books are checked with. `mix muro.gen` and `mix muro.gen --check` refuse to run when it differs from the running version, and the message names both. `fuel:` is optional. `modules:` lists `{book, module, target}`. The module name is that alias, passed to `Muro.emit_file/3`.
+
+Each target starts with two comment lines: the Muro version, the book path relative to the project root, the book sha256, and the body sha256, then the line that says to change the `.muro` file and run `mix muro.gen`. The book hash is the book together with every file it imports, in path order. The prelude is not in the hash. The body hash is everything after the header. Those two hashes separate a stale target (the book changed) from a hand-edited target (the book is unchanged and the body no longer matches). A missing target, a book that does not check, a target that differs from what its book emits, and a header that names a different Muro version are reported as their own messages. Each message names the target and the book.
+
+The task checks every book before it writes. A failing book writes nothing. Formatting uses the project's `.formatter.exs` when that file exists. The bytes are the same across runs: no timestamps, paths relative to the project root with `/` separators, one trailing newline. An unchanged target is not rewritten.
+
+`mix muro.init --ci github` writes `.github/workflows/muro.yml`. The job sets up Elixir and OTP, installs the archive with `mix archive.install hex muro <version> --force`, where the version is the one in the manifest, and runs `mix muro.gen --check`. Init prints a note for the project's agent instructions and does not write that file.
+
+### Manual
+
+- Committed modules: the manifest, the header, the version pin, and the CI job.
+- Emit, Start, and For agents point at that page.
+
+### Package
+
+- muro 0.16.73 is on Hex. The install docs in the README, AGENTS.md, llms.txt, Start, and For agents lead with `mix archive.install hex muro`, with the checkout build and `mix archive.install github murolang/muro` as alternatives. The "once it is on Hex" wording is gone.
+- `scripts/archive-smoke.sh` goes from `mix muro.init --ci github` to a generated module, a clean `--check`, a hand-edited failure, and a stale failure.
+- Version 0.16.75.
+
+## 0.16.74
+
+`mix muro.check` and `mix muro.emit` use the installed archive inside a Mix project that does not depend on muro. The host is neither compiled nor started.
+
+Inside a project that depends on muro, the project's copy runs after `app.start`, as before. Outside a project, the archive's copy runs, as before. `Muro v` and the version name the copy that ran.
+
+A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks.
+
+### Manual
+
+- Start, For agents, and llms.txt: the archive inside a project that does not depend on muro, and the `mix run --no-start` limitation.
+
+### Package
+
+- From a checkout: `mix archive.build && mix archive.install muro-0.16.74.ez`. From GitHub: `mix archive.install github murolang/muro`. Once this release is on Hex: `mix archive.install hex muro`.
+- CI runs the archive outside a project and inside a `--sup` project that does not depend on muro (`scripts/archive-smoke.sh`).
+- Version 0.16.74.
+
+## 0.16.73
+
+`mix muro.check` and `mix muro.emit` run from an installed archive, in a directory that has no Mix project.
+
+`nx`, `makeup`, and `elixir_make` are optional. Checking a book and emitting Elixir do not load them. The Makeup lexer is registered when Makeup is loaded. `--backend c` writes C. A NIF is built only when `elixir_make` is available. Without it, the task stops before it writes a file and names the dependency to add: `{:elixir_make, "~> 0.10", runtime: false}`.
+
+`mix muro --version` and `mix muro -v` print `Muro v` and the version from the application spec. `mix muro` with no arguments prints that line and the muro tasks. `mix muro.check` prints the same version line, then `All terms check. Evidence never becomes a run.` on success. A refusal prints the version line, then the errors.
+
+When a project depends on muro and the archive is also installed, Mix uses the project's copy. The version line is the copy that ran.
+
+### Manual
+
+- Start and For agents: the archive install, the precedence rule, and the NIF dependency.
+
+### Package
+
+- From a checkout: `mix archive.build && mix archive.install muro-0.16.73.ez`. From GitHub: `mix archive.install github murolang/muro`. Once this release is on Hex: `mix archive.install hex muro`.
+- CI builds the archive, installs it into a temporary `MIX_ARCHIVES`, and runs the tasks from an empty directory (`scripts/archive-smoke.sh`).
+- Version 0.16.73.
+
+## 0.16.72
+
+A run may read a field of the received value, and that field chooses the protocol.
+
+```
+def late : run Π (m : Maybe Bool) → Bool :=
+  λ (m : Maybe Bool) →
+    match m motive (λ _ → Bool)
+      | nothing => false
+      | just b => b
+
+session gate :=
+  recv (m : Maybe Bool) (case (late m)
+    | true => send Ctl end
+    | false => end)
+
+conform gate-server : gate :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => done
+      | just b => match b
+          | true => put rst done
+          | false => done)
+```
+
+`late nothing` ends. `late (just true)` sends `Ctl`. `late (just false)` ends. The receiver covers that split: one process arm per payload constructor, and, where the values of a field the run reads select different protocols, a case on the field just bound. A field the run binds and never inspects is not split. A known sender is still checked by evaluating the run on the value. Both meeting orders check, and so does `buffer 1`. The same split sits under `rec`, in a session call, on a parameter, after an evidence payload, and on a `%1` endpoint. A declared-data field, such as `hdr : Frame → Hdr`, is split the same way.
+
+A nat, a vector, a pair, or a record is not a finite split (`the run does not decide an arm`). A `_` wildcard arm in the run's match stays refused. A pair or a record as the case payload stays refused. An open term, a self-call (`run definition calls itself`), a later run (`run definition declared later`), a body outside the computed fragment (`outside the computed fragment: let`), a case on a name bound earlier (`a case is on the name just bound`), and a result that is not a bit or a declared data type (`a case is on a bit or a declared data type`) stay refused. A process that does not cover the split does not conform. A short or misaligned inner match is `match does not cover the received value`.
+
+### Manual
+
+- Sessions: a protocol follows a field the run reads.
+- Limits: a splittable field chooses the protocol. A nat, a vector, a pair, a record, a wildcard arm, and the existing run refusals stay refused.
+
+### Examples
+
+- `field-choice.muro`: `Maybe Bool`, a declared-data field, both meeting orders, `buffer 1`, `rec`, a session call, a parameter, evidence, and a `%1` endpoint.
+- `bad_field_choice.muro`: the refused runs and the processes that do not cover the split.
+
+### Emit
+
+- The OTP image resolves the nested match. The value is already on the message. `just true` sends `rst`. `just false` and `nothing` end. Other emitters are unchanged.
+
+### Package
+
+- Version 0.16.72.
+
+## 0.16.71
+
+A match on a received pair or record binds its components.
+
+```
+conform pair-reply : pair-ping :=
+  get (p : Nat × Bit)
+    (match p
+      | (n, b) => put n done)
+
+conform rec-reply : rec-ping :=
+  get (r : { x : Nat, y : Bit })
+    (match r
+      | { x = a, y = c } => put c done)
+```
+
+`n` has the first component's type and `b` the second. `a` has `x`'s type and `c` has `y`'s. `put n` sends the component. `put (grant a)` is checked by the type `grant` declares, and the meeting evaluates `grant` on the component that arrived. The same check is the asynchronous meeting. A component does not choose a protocol. The positional match and a match on a declared data type stay.
+
+A missing field is `missing field`. An extra field is `extra field`. A duplicate field is `duplicate field`. A field out of order is `field out of order`. A binder count other than two is `wrong arity`. A constructor arm on a pair is `constructor arm on a pair`, and on a record is `constructor arm on a record`. A nested pattern is `a pattern is one level`. A nat, a vector, or unit as the scrutinee stays `match does not cover the received value`. A case on a pair, a record, or a component stays refused. A run that reads a component to choose an arm is `the run does not decide an arm`.
+
+### Manual
+
+- Sessions: a received pair and a received record bind their components.
+- Limits: one product arm on a received pair or record is accepted. A case on a pair, a record, or a component, a nested pattern, and a nat, vector, or unit scrutinee stay refused.
+
+### Examples
+
+- `pair-bindings.muro`: a pair and a record, both meeting orders, a `%1` endpoint, a computed component, a `rec` loop, and an asynchronous meeting at buffer 1.
+- `bad_pair_bindings.muro`: the refused arms.
+
+### Emit
+
+- The OTP image destructures the received tuple `{a, b}` and the received map by the keys fixed in the type. A computed put sends the value the run returns. Evidence is erased. Other emitters are unchanged.
+
+### Package
+
+- Version 0.16.71.
+
+## 0.16.70
+
+A match on the value a `get` just bound may bind the fields of its constructor.
+
+```
+conform reply : ask :=
+  get (m : Maybe Bool)
+    (match m
+      | nothing => put false done
+      | just b => put (grant b) done)
+```
+
+`b` has the field's type. `put b` sends it. `put (grant b)` is checked by the type `grant` declares, and the meeting evaluates `grant` on the field that arrived. The same check is the asynchronous meeting. A field does not choose a protocol. The positional match, one process per constructor, stays.
+
+A binder count other than the field count is `wrong arity`. An unbound name is `unbound variable`. `put (just b)` is `outside the computed fragment`. `put (grant (just b))` is `argument is not a value`. A match on another name is `match does not cover the received value`. A run that reads a field to choose an arm is `the run does not decide an arm`.
+
+### Manual
+
+- Sessions: a received match binds the constructor's fields.
+- Limits: named arms, a field sent as itself or as the argument of a run, and the meeting of that field are accepted. Wrong arity, an unbound field, a field read to choose a protocol, a match not on the received name, and a put argument outside the fragment stay refused.
+- Grammar and Examples: the surface form.
+
+### Examples
+
+- `field-bindings.muro`: a computed field, a field sent as itself, a list tail, and a refused arity.
+
+### Emit
+
+- The OTP image destructures the constructor and binds the field. A computed put sends the value the run returns. Evidence is erased. Other emitters are unchanged.
+
+### Package
+
+- Version 0.16.70.
+
+## 0.16.69
+
+A meeting may name a buffer. The two processes then meet across one queue in each direction.
+
+```
+meet inflight : client with server buffer 1
+```
+
+A send waits when its queue holds that many messages. A receive takes the head of the other queue. Every interleaving allowed by the bound is checked: a receive never meets a head of the wrong type, label, or arm; both ends finish with both queues empty; and some step stays possible until then. The synchronous meeting, with no buffer, is unchanged. A synchronous meeting is this check at buffer 1. A larger bound is not proved. Buffer 0 is not the rendezvous.
+
+A server that still accepts a frame sent before its own message meets at buffer 1 and at buffer 2. A server that answers that frame with a further message is refused, and the refusal names the trace: who sent what, what each queue held, and why. A pair that both send first meets only with a buffer. A loop that would enqueue a successor of a received nat is `unbounded recursive payload`. A constant send and an echo of a received value are accepted. The OTP image was already a mailbox. This meeting is the check that matches that runtime. Other emitters are unchanged.
+
+### Manual
+
+- Sessions: a bounded buffer.
+- Limits: two parties and a bounded FIFO in each direction are accepted. An unbounded buffer, more than two participants, a transport that reorders, and a recursive payload outside a finite alphabet stay refused. A synchronous meeting is an asynchronous meeting at buffer 1.
+- Grammar and Examples: the surface form.
+
+### Examples
+
+- `async-meetings.muro`: a frame still in flight, both sides sending first, an evidence payload, a parameterised session, a constant loop, an echo, and a linear endpoint.
+
+### Package
+
+- Version 0.16.69.
+
+## 0.16.68
+
+A protocol may continue by the value just exchanged.
+
+```
+session server :=
+  recv (f : Frame) (case f
+    | bytes => send Ctl end
+    | trailers => send Ctl end
+    | headers => recv Body end)
+```
+
+Each constructor has its own continuation, in declaration order. The dual is `send` with the dual of each arm. A receiver covers every constructor, and each process arm follows the protocol arm of that constructor. A sender of a literal or a computed value is checked on the arm that value selects.
+
+A `run` of that value may choose the arm.
+
+```
+def late : run Π (f : Frame) → Bool :=
+  λ (f : Frame) →
+    match f motive (λ _ → Bool)
+      | bytes => true
+      | trailers => true
+      | headers => false
+
+session gate :=
+  recv (f : Frame) (case (late f)
+    | true => send Ctl end
+    | false => send Goaway end)
+```
+
+`late bytes` is `true`, so that arm sends `Ctl`. `late headers` is `false`, so that arm sends `Goaway`. The `run` is one argument, in the computed fragment, and it does not call itself or a later `run`. Each process arm is checked against what `late` returns for that constructor. The protocol stays spec. The process stays evidence. Nothing is added to the term language.
+
+A `case` on a nat, a pair, a record, a vector, or unit is refused, and so is a `case` on a name bound earlier. A missing arm, an extra arm, a `run` outside the computed fragment, and a recursive `run` are refused. A sender whose value is not known is refused unless every arm is the same protocol. A meeting of a value that is not known is refused.
+
+### Manual
+
+- Sessions: a protocol chosen by the received constructor, and a protocol chosen by a run of it.
+- Limits: those two forms are accepted. A case on an earlier name, on a nat, a pair, a record, a vector, or unit, a run outside the fragment or recursive, a missing or extra arm, and an unknown sender unless every arm agrees, stay refused. A meeting of an unknown value stays refused.
+- Grammar and Examples: the surface form.
+
+### Examples
+
+- `value-protocols.muro`: a constructor case, a `run` case, both meeting orders, `rec`, a session call, a parameter, an evidence arm, and a linear endpoint.
+
+### Emit
+
+- The OTP image is the process skeleton. The selected arm is the branch the process already takes. Evidence is erased. Other emitters are unchanged.
+
+### Package
+
+- Version 0.16.68.
+
+## 0.16.67
+
+A session refusal names the step, and the line and column of that step.
+
+A conform says the process step and the protocol step it was checked against. `3:3: bad: put b0 done does not conform to recv Nat end` points at `put`, not at `conform`. A computed put says why: `run definition calls itself`, `run definition declared later`, `outside the computed fragment: let`, `evidence is not a value`, `argument is not a value`, or `computed value true does not inhabit Maybe Bool`. An evidence bound names the value and the bound: `computed value 2 misses bound ≤ 1`. Only a name with no binding says `unbound variable`.
+
+A meeting names the first divergence. `diverged after put 0, get b, arm b1: left: put goaway; right: get (f : Frame); protocol: recv Frame end` is the step, what each side does there, and the protocol both were checked against. The same shape covers a payload, a choice, a match arm the value does not select, `done` against a pending action, and `linear endpoint not consumed`. A meeting whose participant failed its own conform is not run: `skipped because bad does not conform`.
+
+A parse error at the end of a file points at the last line: `unexpected end of file, expected a process`.
+
+### Manual
+
+- Sessions: where a check fails.
+- Limits: a session argument that does not evaluate names `run definition calls itself` or `run definition declared later`.
+
+### Package
+
+- Version 0.16.67.
+
+## 0.16.66
+
+A declared session may be the continuation of another session, and a session may take nat parameters.
+
+```
+session ack := send Bit end
+session req := send Nat ack
+
+session stream (n : Nat) := send (d : Nat) {d ≤ n} (stream (suc n))
+session stream0 := stream 0
+session stream-back := dual stream0
+```
+
+`req` is `send Nat (send Bit end)`. The name may sit in a `choose` or `branch` arm, after `on`, inside `rec`, and as an endpoint's protocol. `stream 0` sends a nat at most `0` and continues as `stream 1`. `stream-back` is the dual of that body at `0`. Both meeting orders check. `frames 3` and `frames (bump 0)` open a parameterised session at a numeral or at a `run` that evaluates. An unguarded self-call, a call of a session declared later, an unknown name, the wrong number of arguments, and an argument that does not evaluate to a nat are refused before a meeting. The protocol stays spec. The process stays evidence. Nothing is added to the term language. The OTP image is the process skeleton.
+
+### Manual
+
+- Sessions: a named continuation, and a parameterised session.
+- Limits: a guarded call of an earlier session, and a guarded self-call at nat arguments, are allowed. `unguarded session call`, `session declared later`, `unknown session`, `wrong number of session arguments`, and an argument that does not evaluate to a nat stay refused. A self-call that changes a vector length is not absorbed. The other end of a self-calling session is `dual` of that call.
+- Grammar and Examples: the surface form.
+
+### Examples
+
+- `session-calls.muro`: `req` continues as `ack`, `stream` counts, both meeting orders, a declared data payload, a computed put, and a linear endpoint at a named session.
+
+### Emit
+
+- Unchanged. A session call is spec and is erased with the protocol. The image keeps the run definitions.
+
+### Package
+
+- Version 0.16.66.
+
+## 0.16.65
+
+A put may send the value a `run` definition computes. A `get` may match on the received value and choose the next action.
+
+```
+def effective : run Π (+ f : Item) → Maybe Bool :=
+  λ (+ f : Item) →
+    match f motive (λ _ → Maybe Bool)
+      | self => just (mark f)
+      | other => nothing
+
+conform reply : answer := put (effective self) done
+```
+
+`effective self` computes `just true`, and `mark` is an earlier `run`. `effective other` computes `nothing`. The meeting checks that the value inhabits `Maybe Bool`. `put (bad self)` is refused when `bad` computes a `Bool`. `put (size other)` is refused when the computed nat misses the bound. A `run` that calls itself or a later `run` is refused. The same put may sit inside `rec`.
+
+```
+conform taker : choice := get (b : Bit) (match b pick0 done pick1 (put 0 done))
+```
+
+The process matches on the received bit. The protocol after `get` is one protocol, and the received value chooses which process runs. The processes may differ. The meeting checks that the chosen arm is the one the other party covers. A term `match` keeps the newline after its last arm, so the following `session` or `conform` is not an argument. `get (b : Bool) (match b done done)` and `get (m : Maybe Nat) (match m done done)` cover a declared data type the same way, one process per constructor in declaration order. A match that does not cover the received value is refused. `recv (b : Bool) on end end` stays refused. A computed bit does not select an indexed arm. The protocol stays spec. The process stays evidence. The OTP image carries the value. Evidence is erased. A linear endpoint is still consumed once. A match consumes every arm, so one abandoned arm is refused.
+
+### Manual
+
+- Sessions: a computed put, and a match on the received value.
+- Limits: a `run` application whose value inhabits the payload, and a match on a bit or a declared data type, are allowed. The body may call only an earlier `run`. `put (suc 0)`, an evidence or spec application, an open application, a value that does not inhabit the payload, a `run` that calls itself or a later `run`, a term outside that fragment, `recv (b : Bool) on`, a nat, a pair, a record, a vector, or unit as the scrutinee, a variable or computed bit as an `on` index, a short match, an extra arm, a match that is not the `get` just taken, and a scrutinee that is not the received name stay refused.
+- Extending, Grammar, Terms, and Examples: the judgment and the surface form.
+
+### Examples
+
+- `computed.muro`: `mark` and `effective`, a repeating protocol, a match on a bit, on `Bool`, and on `Maybe`, a `%1` session, a linear endpoint, and a run that emit keeps.
+
+### Emit
+
+- OTP carries the computed value. A `get` whose continuation is a match selects the arm of the value that arrives. A nullary constructor is an atom. A constructor with fields is a tagged tuple.
+
+### Package
+
+- Version 0.16.65.
+
+## 0.16.64
+
+A session endpoint may be bound linearly. A binder stays affine by default: the endpoint is used at most once. `λ¹` requires the variable to be used once. `⊸` is the arrow that accepts or returns a linear endpoint.
+
+```
+session ping := recv Nat (send Nat end)
+session back := dual ping
+
+def forward : (s : ping) ⊸ ping := λ¹ (s : ping) → s
+```
+
+`dual s` keeps the linear multiplicity and dualises the protocol. `meet s t` checks when `t` is the other end and each linear endpoint is consumed once. An unused linear endpoint is refused. A linear endpoint used twice is refused, with the affine message. An affine endpoint may still be dropped, and a second use of it is still refused. Data declared `+` stays reusable. `%1` on a session still means the process must finish, and `%1` on a Π binder still means that variable must be used. A linear binder on `Nat` is refused. `+`, `-`, and `%` on an endpoint binder are refused. The endpoint function is evidence, so emit drops it. The protocol stays spec. The process stays evidence. The OTP image carries the value.
+
+### Manual
+
+- Sessions: one paragraph and the `forward` example.
+- Limits: affine and linear are the endpoint multiplicities. A third multiplicity, a quantity mark on an endpoint, a linear binder on data, an unused linear endpoint, a linear endpoint used twice, and a meeting that drops a linear endpoint stay refused.
+
+### Examples
+
+- `linear.muro`: `forward`, its dual, a matching meeting, and a run that emit keeps.
+
+### Package
+
+- Version 0.16.64.
+## 0.16.63
+
+A declared data type may be a session payload. `session flag := send Bool end` checks when `Bool` is `data Bool : Type where true : Bool` and `false : Bool`. The other end is `recv Bool end`. `put true done` meets `get Bool done`. `put (just 0) done` does not inhabit `Bool`. `Maybe Nat`, `List Nat`, and `Either Nat Bit` are payloads the same way: `nothing` and `(just 0)`, `nil` and `(cons 0 nil)`, `(left 0)` and `(right b0)`. The OTP image carries the atom `true`, or the tagged tuple `{:just, 0}`. An evidence term is still dropped before the message.
+
+An indexed declaration is still refused, and so is `Atom`, a field that is a function or erased, a parameter that is not `Type`, and a name that is not a declared data type. `put (plus 0 0) done` and `put (suc 0) done` are refused. A received bit may still select one of two written continuations. A received `Bool` or data value may not: `recv (b : Bool) on end end` is refused.
+
+### Manual
+
+- Sessions: a declared data type as a payload, the flag exchange.
+- Limits: `Bool`, `Maybe Nat`, `List Nat`, and `Either Nat Bit` are payloads. An indexed declaration, `Atom`, a computed put, and a next action chosen by a received `Bool` or data value stay refused. A received bit with two written arms stays allowed.
+- Grammar, Terms, Extending, and For agents: a non-indexed declared data type in a payload.
+
+### Emit
+
+- OTP carries a declared data value. A nullary constructor is an atom. A constructor with fields is a tagged tuple. The evidence in an evidence payload is still not in the message.
+
+### Package
+
+- Version 0.16.63.
+
+## 0.16.62
+
+A protocol may repeat. `rec X. recv Nat (send Nat X)` receives a nat and sends a nat, and then it is that protocol again. `rec X. recv (b : Bit) on (recv Nat (send Nat X)) end` repeats when the bit is `b0` and ends when it is `b1`. The other end is `rec` of the dual, and the variable stays. A process repeats with `rec X. … X`. The variable must sit under an action of its own `rec`. `rec X. X` and a free session variable are refused. A jump does not finish, so `session %1` still refuses a loop. The OTP image is a tail call, not an unrolling. In Agda the protocol is coinductive and guarded. `Muro.agda` imports that module, so its pragma is `--safe --guardedness`.
+
+### Manual
+
+- Sessions: `rec X. S`, the echo, and the bit that ends the loop.
+- Limits: a guarded recursion variable is allowed. Unguarded recursion, a free session variable, a recursion variable used as a payload, and `%1` on a jump stay refused. A nat, a variable bit, and a third arm stay refused as the index.
+- Grammar, Terms, Extending, Examples, Emit, and For agents: `rec X. S` and the tail call.
+
+### Examples
+
+- `recursive.muro`: a server that echoes a nat until the bit says stop.
+
+### Emit
+
+- OTP stores the body of a `rec` and a jump calls `drive` on that body.
+
+### Package
+
+- Version 0.16.62.
+
+## 0.16.61
+
+The Agda examples are de Bruijn terms. `plus`, `IsEven`, `half`, `plus_suc`, and `half_ok` are `Tm n`, and so are `List`, `Either`, `Fin`, `Vec`, and the `I64` wrappers. The books still check. `plus (half 2) (half 2)` still converts to `2`. Equality of floats, and of a float tensor, is still refused. The whole Agda tree is checked under `--safe`.
+
+### Manual
+
+- Extending and For agents: examples and metatheory are de Bruijn `Tm n`. `make agda` checks that tree under `--safe`.
+
+### Package
+
+- Version 0.16.61.
+
+## 0.16.60
+
+A received bit selects one of two written continuations. `recv (b : Bit) on (send Nat end) (recv Nat end)` receives a bit. `b0` continues by sending a nat. `b1` continues by receiving a nat. The other end sends the literal `b0` or `b1` and then takes the dual of that arm. `get (b : Bit) on (put 1 done) (get (n : Nat) done)` offers both arms. The meeting checks that both sides take the same arm for the same bit. The bound bit is a bit, so it is not a vector length. Inside an arm it can be sent as an ordinary bit. The OTP message is the bit alone.
+
+### Manual
+
+- Sessions: a bit index, the route exchange, and its OTP message.
+- Limits: a next action chosen by a bit, written as two arms, is allowed. A nat, a variable bit, a third arm, and a recursive session stay refused.
+- Grammar, Terms, Extending, and For agents: `recv (b : Bit) on`, `send (b : Bit) on`, and `get (b : Bit) on`.
+
+### Examples
+
+- `indexed.muro`: a bit selects the next action.
+
+### Emit
+
+- OTP sends the bit of an indexed session. The receiver holds both arms. The message is not a choice label.
+
+### Package
+
+- Version 0.16.60.
+
+## 0.16.59
+
+A protocol may require that a sent nat is at most a bound. `recv (w : Nat) (send (d : Nat) {d ≤ w} end)` receives a window and sends a nat within it. The bound is a numeral or a nat bound earlier. The sender owes the evidence, and the checker decides it: a numeral within a numeral by `≤`, zero within a name, or the bound name itself when the process bound that name once. `get (w : Nat) (put 2 done)` is refused. `put 8 (put 9 done)` at `send (w : Nat) (send (d : Nat) {d ≤ w} end)` is refused. The receiver gets a nat. The meeting compares the nats. The evidence is erased, and the OTP message is the nat alone.
+
+### Manual
+
+- Sessions: an evidence payload, the window exchange, and its OTP message.
+- Limits: one `≤` between the sent nat and a numeral or a nat bound earlier is allowed. Other constraints, and evidence the checker does not find, are refused.
+- Grammar, Terms, Extending, and For agents: `send (d : Nat) {d ≤ w}` and `recv (d : Nat) {d ≤ w}`.
+
+### Examples
+
+- `meet.muro`: a window exchange.
+
+### Emit
+
+- OTP sends the nat of an evidence payload. The evidence is not in the message.
+
+### Package
+
+- Version 0.16.59.
+
+## 0.16.58
+
+A session continuation may mention a nat that was received, as the length of a vector. `recv (n : Nat) (send (Vec Nat n) end)` receives a nat and then sends a vector of that length. The other end sends the nat and then receives that vector. The meeting checks the length. The next action does not depend on the value. The OTP image carries the vector.
+
+### Manual
+
+- Sessions: a continuation may depend on a received nat as a vector length.
+- Limits: that dependence is allowed. A length that is not that nat, and a next action chosen by the value, are refused.
+- Grammar, Terms, Extending, and For agents: `Vec`, `rep`, and a binder on `send` and `recv`.
+
+### Emit
+
+- OTP carries a vector whose length is the nat that was received.
+
+### Package
+
+- Version 0.16.58.
+
+## 0.16.57
+
+A meeting sends a bound name at the type it was received. `get (k : Nat) (put k done)` meets a process that receives a nat. A process that receives a bit has no meeting with that name. A name bound twice is sent at the inner binding. The same name can be sent again, at that type.
+
+### Manual
+
+- Sessions: the protocol, its dual, the process, the meeting, value binding, and choice.
+- Terms, Extending, and For agents: a bound name meets a receive of the type it was bound at.
+- Grammar: a bound payload can be sent more than once.
+
+### Package
+
+- Version 0.16.57.
+
+## 0.16.56
+
+A process can bind the value it receives. `get (k : Nat) (put k done)` binds the received value to `k` and sends it back. `get Nat` still receives without a name. A bound name is sent at its type. A name bound twice is the inner binding. Sending that name at the outer binding's type is refused. Every payload type is data, so a bound value can be sent more than once. The OTP image keeps the latest value bound to each name and sends it. A run term has no seat.
+
+### Manual
+
+- Grammar: `get (name : Type) proc`. A payload value can be a variable.
+- Terms, Extending, Sessions: value binding, the context `Conforms` carries, and shadowing.
+- Examples: `meet.muro`, `talk.muro`, `dual.muro` bind values.
+
+### Package
+
+- Version 0.16.56.
+
+## 0.16.55
+
+A session sends a value and then continues. The value is a nat, a bit, unit, a pair, or a record of named fields. A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. A pair around a record is a tuple wrapping that map. Sending that type is receiving it. Two processes meet when the types agree. A choice stays a choice. The OTP image carries that value between the two peers.
+
+### Manual
+
+- Grammar, Terms, and Examples: a payload is a nat, a bit, unit, a pair, or a record of named fields.
+- Sessions: the messages two processes exchange, and where the meeting stays or crosses.
+- Emit: the OTP message carries that value.
+- Extending: the checker follows the payload.
+- Limits: a payload is one of those types.
+- For agents: the checker follows the payload.
+
+### Package
+
+- Version 0.16.55.
+
+## 0.16.54
+
+A meeting sits where the parties sit. Two processes that meet are the two parties of one description. They stay when those parties sit at the same place, and cross once when the places differ. The bits stay on the session. A run term has no seat.
+
+### Manual
+
+- Extending: a meeting sits where the parties sit.
+- Limits: the meeting is checked.
+
+### Package
+
+- Version 0.16.54.
+
+## 0.16.53
+
+A party of a description can sit at a place. `seat pong-home : pong at home in ping-exchange` is that seating. Two parties who have a session stay when the place is the same, and cross once when the places differ. The bits stay on the session. A run term has no seat.
+
+### Manual
+
+- Grammar, Terms, and Examples: a party sits at a place.
+- Extending: the checker follows the seating.
+
+### Package
+
+- Version 0.16.53.
+
+## 0.16.52
+
+A party of a description sits at a place. Two parties who have a session stay when that place is the same, and cross once when the places differ. The bits stay on the session. A run term has no seat.
+
+### Manual
+
+- Extending: a party sits at a place.
+
+### Package
+
+- Version 0.16.52.
+
+## 0.16.51
+
+A session can be the session one party has with another in one description of the exchange. `talk ping-exchange := say peer pong over (say pong peer over over)` is that description. `session ping := seen pong with peer in ping-exchange` is `recv end (send end end)`. The other party has the other end. A run term has no seat.
+
+### Manual
+
+- Grammar, Terms, and Examples: one description, and each party has a session.
+- Extending: the checker follows the description.
+
+### Package
+
+- Version 0.16.51.
+
+## 0.16.50
+
+One description covers the exchange. Each party has the session that description gives them on the channel with one other party. The other party has the other end. A party off that channel has a session only when both continuations are the same description. A run term has no seat.
+
+### Manual
+
+- Extending: one description, and each party has a session.
+
+### Package
+
+- Version 0.16.50.
+
+## 0.16.49
+
+A meeting starts its two processes as each other's peer. Each process still talks to one peer. The bits stay on the session. A run term has no seat.
+
+### Manual
+
+- Emit, Terms, Examples: a meeting starts the two processes together.
+- Extending: the server follows the meeting.
+
+### Package
+
+- Version 0.16.49.
+
+## 0.16.48
+
+Two processes can be written as one session. `meet wire : pong with peer` is the evidence that they exchange the same bits, and that each session is the other end of the other. A run term has no seat.
+
+### Manual
+
+- Grammar, Terms, Examples: two processes meet.
+- Extending: the checker follows the meeting.
+
+### Package
+
+- Version 0.16.48.
+
+## 0.16.47
+
+Two processes can be the two ends of one session. A send meets a receive of the same bit, and a choice meets the arm that was offered. Both ends close, or both abandon. A bit they do not share has no derivation. A run term has no seat.
+
+### Manual
+
+- Extending: two processes meet when they exchange the same bits.
+- Limits: a `.muro` file does not write that two processes meet yet.
+
+### Package
+
+- Version 0.16.47.
+
+## 0.16.46
+
+A session can name the other end of a session. `session back := dual ping` swaps send with recv and choose with branch. The bit stays the bit. The mark stays the session's mark. A run term has no seat.
+
+### Manual
+
+- Grammar, Terms, Examples: the other end of a session.
+- Extending: the checker follows the other end.
+
+### Package
+
+- Version 0.16.46.
+
+## 0.16.45
+
+A session has another end. Sending here is receiving there, and choosing here is offering there. The bit stays the bit. The other end of the other end is the same session. A run term has no seat.
+
+### Manual
+
+- Extending: the other end of a session swaps send with recv and choose with branch.
+- Limits: a `.muro` file does not write the other end yet.
+
+### Package
+
+- Version 0.16.45.
+
+## 0.16.44
+
+A reading is a process. `--backend otp` writes that process as a GenServer with one peer. The bits are the session's. The place stays the reading's boundary. A run term has no seat.
+
+### Manual
+
+- Emit, Terms, Examples: a reading is a GenServer.
+- Extending: the server follows the reading.
+
+### Package
+
+- Version 0.16.44.
+
+## 0.16.43
+
+A cross reading is one call. The call reads the scheme the endpoint names, on the node given to `--node`. A reading that stays writes no call. The bits stay on the session. A run term has no seat.
+
+### Manual
+
+- Emit, Terms, Examples: a cross reading is one call.
+- Extending: the call follows a cross reading. The bits stay on the session.
+
+### Package
+
+- Version 0.16.43.
+
+## 0.16.42
+
+A session can be read at a place. The endpoint names the session and the scheme. Reading it where the scheme sits stays. Reading it at another place crosses once. A polymorphic scheme stays where it is read. The bits stay on the session. A session that must finish still has to finish. A run term has no seat.
+
+### Manual
+
+- Grammar, Terms, Examples: an endpoint and a reading.
+- Extending: the checker follows the sitting.
+
+### Package
+
+- Version 0.16.42.
+
+## 0.16.41
+
+A session can sit at a place. The place is ambient when it is not named. Reading it there stays. Reading it at another place crosses once. A polymorphic session stays wherever it is read. The bits stay on the session. A session that must finish still has to finish. A run term has no seat.
+
+### Manual
+
+- Extending: a session sits at a place. The bits stay on the session. One boundary.
+- Limits: a `.muro` file does not locate a session yet.
+
+### Package
+
+- Version 0.16.41.
+
+## 0.16.40
+
+A cross can be sent to a node. `mix muro.emit --node` names that node. Each cross is one call and one monitor of a registered name on the node. A stay emits no call. A run term has no place.
+
+### Manual
+
+- Emit: `--node` writes one call for each cross. `place.muro` is the example.
+- Terms, Examples: that call sits next to the place.
+- Extending: the call follows a cross. The registered name is the reference.
+- Limits: one cross is one call. A stay emits no call.
+
+### Package
+
+- Version 0.16.40.
+
+## 0.16.39
+
+A named place can be ambient or a node. Reading a fixed place at that same place stays. Reading it at another place crosses once. A polymorphic place stays wherever it is read. `run` has no place.
+
+### Manual
+
+- Grammar, Terms, Examples: a place, a scheme, and a move.
+- Extending: the checker follows `decide`.
+
+### Package
+
+- Version 0.16.39.
+
+## 0.16.38
+
+A value can sit at a place. The place is ambient when it is not named. Staying there takes no boundary. Crossing to another place takes one. A polymorphic value is used where it is instantiated, and that use stays. A run term has no place.
+
+### Manual
+
+- Extending: placement is a coeffect. Ambient is the default. A boundary is one step.
+- Limits: a `.muro` file does not write a place yet.
+
+### Package
+
+- Version 0.16.38.
+
+## 0.16.37
+
+A Π binder can require its variable to be used. `(%1 x : A)` refuses a binder that is never used. `(%0 x : A)`, and an unmarked binder, still allow that. The λ mark and the Π mark must agree. `run` is unchanged.
+
+### Manual
+
+- Grammar, Terms, Examples: `%0` and `%1` on a Π binder.
+- Extending: a `%1` binder must be used. Both marks are the affine quantity.
+
+### Package
+
+- Version 0.16.37.
+
+## 0.16.36
+
+A session can require the process to finish. `session %1` refuses an abandoned channel. An unmarked session, and `session %0`, still allow it. `run` is unchanged.
+
+### Manual
+
+- Grammar, Terms, Examples: `%0` and `%1` on a session.
+- Extending: a `%1` session must finish. `%0` is the affine session.
+
+### Package
+
+- Version 0.16.36.
+
+## 0.16.35
+
+`--backend otp` writes a GenServer for each process that conforms to a session. The process sends and receives bits with its peer. Abandoning the channel stops the server, and a monitor sees that stop. The BEAM runs the server. The proof stops at the conformance derivation. `run` is unchanged.
+
+### Emit
+
+- `Muro.Emit.Otp`, from `--backend otp`. The file is `<stem>_otp.ex`.
+
+### Manual
+
+- Emit: the OTP process. One peer. A bit is the payload.
+
+### Package
+
+- Version 0.16.35.
+
+## 0.16.34
+
+A `.muro` file can state an affine session protocol and a process that conforms to it. Abandoning a channel is accepted. A second send, or a send where the protocol says receive, is refused. `run` is unchanged.
+
+### Manual
+
+- Grammar, Terms, Examples, Limits, and For agents: `session` and `conform`. A payload is a bit.
+- Extending: the checker decides the session judgment.
+
+### Package
+
+- Version 0.16.34.
+
+## 0.16.33
+
+Affine session protocols are specified in Agda. Sending a bit continues as the branch for that bit. Abandoning a channel has a conformance derivation. A second send, or a send where the protocol says receive, has none. `run` is unchanged.
+
+### Manual
+
+- Extending: the affine session judgment. A protocol is spec. A conformance derivation is evidence.
+
+### Package
+
+- Version 0.16.33.
+
+## 0.16.32
+
+`--backend asm` prints a Cortex-M run for `Nat`. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. The assembler translates that text. The proof stops at the run image.
+
+### Emit
+
+- `Muro.Emit.Asm`, from `--backend asm`. The file is `<stem>.s`.
+
+### Tests
+
+- `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns.
+
+### Manual
+
+- Emit: the Cortex-M file. The assembler translates. The proof stops at the run image.
+
+### Package
+
+- Version 0.16.32.
+
+## 0.16.31
+
+`--backend rust` prints the same closed run as the C backend. `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns. `rustc` translates that text. `cc` translates the C. CompCert is the high-assurance C translator. The proof stops at the run image.
+
+### Emit
+
+- `Muro.Emit.Rust`, from `--backend rust`. The file is `<stem>.rs`.
+
+### Tests
+
+- `half(4)` is `2` and `plus(2, 3)` is `5`, the same integers the Nat NIF returns.
+
+### Manual
+
+- Emit: the Rust file. `rustc` and `cc` translate. CompCert is the high-assurance C translator. The proof stops at the run image.
+
+### Package
+
+- Version 0.16.31.
+
+## 0.16.30
+
+An exported run whose arguments and result are `Nat` is a NIF. `half(4)` is the integer `2`, and `plus(2, 3)` is `5`. The argument and the result are non-negative integers that fit in 64 bits; anything else is a bad argument. The generated C is unchanged: `Nat` is the tagged struct, and the call allocates it through one `MURO_ALLOC` block that the next call reuses. `elixir_make` runs the makefile. A file with no such run still writes the `.h` and the `.c` only. `run internal` stays `static`.
+
+### Emit
+
+- `Muro.Emit.Nif`, from `--backend c`. The library is `priv/<stem>.so`. The module is the camelized stem.
+
+### Tests
+
+- `half(4)` is `2` and `plus(2, 3)` is `5`. A negative argument is a bad argument. `nats` writes no NIF. `inc` is an entry and `step` is not.
+
+### Manual
+
+- Emit: the Nat NIF and the block. `cc` translates the C. The proof stops at the run image.
+
+### Package
+
+- Version 0.16.30.
+
+## 0.16.29
+
+A checked book has a closed `run` image. `Muro.IR` keeps `mode: :run`, records `run internal` as `export: false`, and drops spec, evidence, and data declarations. An atom is a nullary constructor of one closed data declaration. An index outside that declaration is refused. Nothing in the image builds an atom from a string. The C emitter prints this image. The Elixir emitter still walks the named AST. A program the C emitter already accepted prints the same text. The refusals stay `c:lambda`, `c:machine`, `c:stream`, `c:erased`, and `c:unsupported`.
+
+### Emit
+
+- `Muro.IR` in Agda and `Muro.IR.elaborate/1`. `Muro.Emit.C` prints that image.
+
+### Tests
+
+- `half_ok`, `nats`, `list`, and `sort` elaborate. `nx_add` is `c:machine`. A bare λ is `c:lambda`. An erased argument is dropped. A raw ν is `c:stream`. A name outside the book is `c:unsupported`. An atom literal is a nullary constructor of `Atom`.
+
+### Manual
+
+- Extending: the image is not a source syntax. The C emitter prints it. The Elixir emitter still walks the named AST.
+
+### Package
+
+- Version 0.16.29.
+
+## 0.16.28
+
+`uncons` after unfolding a definition whose body is a family λ has a derivation. `fam-def-uncons` opens that definition onto the λ, and `uncons` of the pair instantiated at the seed reads it at the family goal, in any context. The signature hypothesis of preservation is still not the checker's acceptance of the definition. Productivity of an accepted unfold is still argued from the checker's shape.
+
+### Manual
+
+- Limits, CSHRL, Extending: `fam-def-uncons` opens a family-λ definition onto that λ and derives `uncons` of the pair at the seed. The productivity sentence stays.
 
 ### Package
 
@@ -720,7 +2061,7 @@ The kernel has one pair eliminator. `fst` and `snd` are no longer constructors o
 
 ### Kernel (Agda)
 
-- `Muro.Syntax`: `fst`, `snd` removed, with their clauses in every module (`Tag`, `Subst`, `SubstLemmas`, `Unembed`, `Spine`, `Reduction`, `Convert`, `Check`, `Consistency`, `Soundness/*`). `Subst.fstTm` / `sndTm` build the `let` forms; `always` and `bisim` use them.
+- `Muro.Syntax`: `fst`, `snd` removed, with their clauses in every module (`Tag`, `Subst`, `SubstLemmas`, `Spine`, `Reduction`, `Convert`, `Check`, `Consistency`, `Soundness/*`). `Subst.fstTm` / `sndTm` build the `let` forms; `always` and `bisim` use them.
 - `Muro.Subst`: `renM` (partial renaming), `strengthen₂ = renM unwk₂`. `Muro.SubstLemmas`: `renM-sound`, `strengthen₂-sound : strengthen₂ T ≡ ok C → T ≡ wk (wk C)`.
 - `Muro.Judgement`: `⇒-letp`. `Muro.Typing`: `forget-⇒` case. `Muro.Wall`: `spec-⇒-uses` case. `Muro.Consistency`: `ne-untyped-⇒`, `progress-⇒` cases.
 - `Muro.Frag`: `Frag-unren` (the fragment is closed under un-renaming). `Muro.Soundness`: `infer-sound` for `letp` through `strengthen₂-sound`; `checkTy-sound` on a `let` goes through `infer`. Statements unchanged; `--safe`, no postulates.
@@ -923,7 +2264,7 @@ The checker changes. A book that checked under 0.1.0 still checks unless it used
 - Conversion in ⊢ is a relation. `Muro.Convert` defines deterministic weak-head reduction `⟶` (δ, β, ι for `Nat` / `Unit` / `Empty` / `rewrite`, congruence under `suc`, in the function and argument of an application, and in eliminator scrutinees) and `≈` as its equivalence closure, without fuel. `⇐-conv`, `⇐-lam`, `⇐-refl`, and the `Π` / `≡` views of `Muro.Judgement` use `≈` instead of `_≡_`. `≈` does not reduce under `λ`, `Π`, identity types, motives, or branches. `≈-nf`: distinct normal forms are not convertible.
 - `Muro.Judgement`: `wf` has `type-pi`; `⇒-pi` checks the codomain against `Type`. `⇒-var-run` and `⇒-var-evid` were mis-parenthesised (two premises instead of `(qtyOf Γ x ≡ erased → ⊥)`) and no run or evidence variable was derivable; fixed.
 - `Muro.Consistency`: the `Empty-evid` postulate is deleted. Proved: introduction forms never check against `Empty`; no closed normal evidence term has type `Empty`; closed neutral terms are untyped in the empty context; closed well-typed evidence terms are normal or take a `⟶` step. `Empty-evid-from : Preservation → Normalising → … → ⊥` states what remains. `Empty-evid` itself is not proved.
-- `make agda` checks `Muro.Judgement`, `Muro.Wall`, `Muro.Consistency`, and their imports under `--safe`, then the whole tree. `Muro.Env` (signature, context, uses) and `Muro.Unembed` (PHOAS to de Bruijn, `TERMINATING`) are split out of `Muro.Check` and `Muro.Subst` so the theorem modules have no `TERMINATING` dependency. There are no postulates in `agda/`.
+- `make agda` checks `Muro.Judgement`, `Muro.Wall`, `Muro.Consistency`, and their imports under `--safe`, then the whole tree. `Muro.Env` (signature, context, uses) is split out of `Muro.Check`, and the PHOAS-to-de-Bruijn pass (`TERMINATING`) is split out of `Muro.Subst`, so the theorem modules have no `TERMINATING` dependency. There are no postulates in `agda/`.
 - data, ν, and Tensor are still outside ⊢.
 
 ### Manual

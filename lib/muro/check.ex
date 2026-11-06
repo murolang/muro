@@ -4,7 +4,7 @@ defmodule Muro.Check do
   from `Muro.Check` (`⇒-var-run`, `⇐-refl`, …). There is no promotion.
   """
 
-  alias Muro.{Ast, Print, Subst}
+  alias Muro.{Ast, Place, Print, Repr, Subst, Word}
 
   # Default fuel. Fuel bounds reduction (whnf, conversion, isData, the
   # index-clash test); everything else is structural recursion on the
@@ -16,12 +16,104 @@ defmodule Muro.Check do
   @doc "The default fuel of `check_sig/2` and `check_def/3`."
   def default_fuel, do: @fuel
 
+  @doc """
+  Whether `msg` is the checker's out-of-fuel error.
+
+  Running out of fuel is not a type error and not a failed conversion.
+  """
+  def out_of_fuel?(msg) when is_binary(msg), do: String.contains?(msg, "out of fuel")
+
+  @doc """
+  Weak-head normal form, with the same fuelled reduction as checking.
+
+  `:all` unfolds every definition. `{:error, msg}` is out of fuel.
+  A stuck term is `{:ok, term}`.
+  """
+  def reduce(book, term, fuel \\ @fuel) when is_list(book) and is_integer(fuel) do
+    whnf(fuel, book, term, :all)
+  end
+
+  @doc """
+  The checker's conversion on two de Bruijn terms.
+
+  `:ok` means they convert within `fuel`. `{:error, msg}` means they do
+  not, or the checker ran out of fuel. `out_of_fuel?/1` tells those apart.
+
+  A definition applied to arguments is unfolded when that unfolding
+  makes progress. While the same application is already being unfolded
+  and the match it reduces to does not fire, it is neutral: the
+  arguments are compared, and a difference the one unfolding does not
+  erase is a conversion failure. Fuel is one budget for that comparison
+  and the unfolding that follows it.
+  """
+  def conv(book, u, v, fuel \\ @fuel) when is_list(book) and is_integer(fuel) do
+    conv(fuel, book, [], u, v)
+  end
+
+  @doc false
+  def with_conv_steps(fun) when is_function(fun, 0) do
+    Process.put(:muro_conv_steps, 0)
+
+    try do
+      {fun.(), Process.get(:muro_conv_steps)}
+    after
+      Process.delete(:muro_conv_steps)
+    end
+  end
+
   # -- lookup ----------------------------------------------------------------
 
   defp lookup_def(book, name) do
-    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and &1.name == name)) do
-      nil -> {:error, "unknown definition #{name}"}
-      d -> {:ok, d}
+    case Enum.find(book, &(Map.get(&1, :kind, :def) != :data and Map.get(&1, :name) == name)) do
+      nil ->
+        {:error, "unknown definition #{name}"}
+
+      # A session shares the book name space and is not a term.
+      %{kind: :session} ->
+        {:skip, "#{name} is a session, not a definition"}
+
+      %{kind: :conform} ->
+        {:skip, "#{name} is a conformance, not a definition"}
+
+      %{kind: :place} ->
+        {:skip, "#{name} is a place, not a definition"}
+
+      %{kind: :scheme} ->
+        {:skip, "#{name} is a scheme, not a definition"}
+
+      %{kind: :endpoint} ->
+        {:skip, "#{name} is an endpoint, not a definition"}
+
+      %{kind: :read} ->
+        {:skip, "#{name} is a reading, not a definition"}
+
+      %{kind: :meet} ->
+        {:skip, "#{name} is a meeting, not a definition"}
+
+      %{kind: :temporal} ->
+        {:skip, "#{name} is a temporal declaration, not a definition"}
+
+      %{kind: :talk} ->
+        {:skip, "#{name} is a talk, not a definition"}
+
+      %{kind: :choreography} ->
+        {:skip, "#{name} is a choreography, not a definition"}
+
+      # The data type of the same name is the term. `:skip` would hide it.
+      %{kind: :repr} ->
+        {:error, "unknown definition #{name}"}
+
+      %{kind: :seat} ->
+        {:skip, "#{name} is a seat, not a definition"}
+
+      %{kind: :link} ->
+        {:skip, "#{name} is a link, not a definition"}
+
+      %{kind: :relay} ->
+        {:skip, "#{name} is an endpoint function, not a definition"}
+
+      d ->
+        {:ok, d}
     end
   end
 
@@ -51,6 +143,46 @@ defmodule Muro.Check do
 
   defp data_name?(book, name), do: match?({:ok, _}, lookup_data(book, name))
   defp ctor_name?(book, name), do: match?({:ok, _}, lookup_ctor(book, name))
+
+  # A session value may be this application when the definition is `run`.
+  # Evidence and spec stay out of the payload.
+  defp run_def?(book, name) do
+    Enum.any?(book, fn d ->
+      Map.get(d, :name) == name and Map.get(d, :mode) == :run and term_def?(d)
+    end)
+  end
+
+  defp term_def?(book, name) do
+    Enum.any?(book, fn d ->
+      Map.get(d, :name) == name and Map.get(d, :mode) in [:run, :spec, :evidence] and
+        term_def?(d)
+    end)
+  end
+
+  defp term_def?(%{kind: kind})
+       when kind in [
+              :data,
+              :session,
+              :conform,
+              :place,
+              :scheme,
+              :move,
+              :endpoint,
+              :read,
+              :meet,
+              :temporal,
+              :talk,
+              :choreography,
+              :repr,
+              :seat,
+              :link,
+              :relay,
+              :import,
+              :param
+            ],
+       do: false
+
+  defp term_def?(_), do: true
 
   # -- context: newest at index 0 -------------------------------------------
 
@@ -213,7 +345,23 @@ defmodule Muro.Check do
   defp check_bound(m, :affine, :uw) when m in [:run, :evidence],
     do: {:error, "affine variable used as reusable"}
 
+  # checkArrow (agda/Muro/Arrow.agda). :linear is Mark m1. Its
+  # quantity is affine, so a reusable use fails checkBound first.
+  # checkMark then refuses a drop in run and evidence.
+  defp check_bound(m, :linear, :uw) when m in [:run, :evidence],
+    do: {:error, "affine variable used as reusable"}
+
+  defp check_bound(m, :linear, :u0) when m in [:run, :evidence],
+    do: {:error, "linear variable unused"}
+
   defp check_bound(_, _, _), do: :ok
+
+  # The λ mark and the Π mark are the same mark. :linear is m1;
+  # :affine is m0, whether the binder was written %0 or left unmarked.
+  defp qty_agree(:linear, q) when q != :linear, do: {:error, "λ/Π multiplicity mismatch"}
+  defp qty_agree(q, :linear) when q != :linear, do: {:error, "λ/Π multiplicity mismatch"}
+  defp qty_agree(q, q), do: :ok
+  defp qty_agree(_, _), do: {:error, "λ/Π quantity mismatch"}
 
   # Using a definition of `from` while checking in `to`.
   # spec ↛ evidence, evidence ↛ run, spec ↛ run.
@@ -256,16 +404,6 @@ defmodule Muro.Check do
   defp apps(t), do: apps(t, [])
   defp apps({:app, f, a}, acc), do: apps(f, [a | acc])
   defp apps(f, acc), do: {f, acc}
-
-  defp ctor_head_book?(book, t) do
-    case elem(apps(t), 0) do
-      :ze -> true
-      {:su, _} -> true
-      :one -> true
-      {:def, n} -> ctor_name?(book, n)
-      _ -> false
-    end
-  end
 
   @no_descent "recursive call does not descend on a smaller argument"
 
@@ -329,30 +467,39 @@ defmodule Muro.Check do
 
   # Weak-head normalisation, fuelled. `{:ok, t}` is a weak-head normal form
   # (or a stuck term); `{:error, msg}` is out of fuel.
-  defp whnf(0, _book, _t), do: {:error, @out_of_fuel}
+  # `:all` unfolds every definition. `:run` unfolds only a `run` definition,
+  # which is the value a computed session payload may send.
+  defp whnf(k, book, t), do: whnf(k, book, t, :all)
 
-  defp whnf(k, book, {:app, f, a}) do
-    case whnf(k - 1, book, f) do
-      {:ok, {:lam, _, _, _, t}} -> whnf(k - 1, book, Subst.inst(t, a))
+  defp whnf(0, _book, _t, _unfold), do: {:error, @out_of_fuel}
+
+  defp whnf(k, book, {:app, f, a}, unfold) do
+    case whnf(k - 1, book, f, unfold) do
+      {:ok, {:lam, _, _, _, t}} -> whnf(k - 1, book, Subst.inst(t, a), unfold)
       {:ok, f1} -> {:ok, {:app, f1, a}}
       err -> err
     end
   end
 
-  defp whnf(k, book, {:mnat, e, p, z, s}) do
-    case whnf(k - 1, book, e) do
-      {:ok, :ze} -> whnf(k - 1, book, z)
-      {:ok, {:su, u}} -> whnf(k - 1, book, Subst.inst(s, u))
-      {:ok, e1} -> {:ok, {:mnat, e1, p, z, s}}
-      err -> err
+  defp whnf(k, book, {:mnat, e, p, z, s}, unfold) do
+    case whnf(k - 1, book, e, unfold) do
+      {:ok, e1} ->
+        case Muro.Word.nat_ctor(e1) do
+          :ze -> whnf(k - 1, book, z, unfold)
+          {:su, u} -> whnf(k - 1, book, Subst.inst(s, u), unfold)
+          _ -> {:ok, {:mnat, e1, p, z, s}}
+        end
+
+      err ->
+        err
     end
   end
 
-  defp whnf(k, book, {:matom, e, p, bs}) do
-    case whnf(k - 1, book, e) do
+  defp whnf(k, book, {:matom, e, p, bs}, unfold) do
+    case whnf(k - 1, book, e, unfold) do
       {:ok, {:atom, name}} ->
         case Enum.find(bs, fn {n, _} -> n == name end) do
-          {_, b} -> whnf(k - 1, book, b)
+          {_, b} -> whnf(k - 1, book, b, unfold)
           nil -> {:ok, {:matom, {:atom, name}, p, bs}}
         end
 
@@ -364,12 +511,12 @@ defmodule Muro.Check do
     end
   end
 
-  defp whnf(k, book, {:mdata, e, p, bs}) do
-    with {:ok, e1} <- whnf(k - 1, book, e) do
+  defp whnf(k, book, {:mdata, e, p, bs}, unfold) do
+    with {:ok, e1} <- whnf(k - 1, book, e, unfold) do
       case ctor_spine(book, e1) do
         {:ok, {_dname, ci, args}} ->
           case Enum.at(bs, ci) do
-            {_n, _ar, b} -> whnf(k - 1, book, Subst.inst_n(b, args))
+            {_n, _ar, b} -> whnf(k - 1, book, Subst.inst_n(b, args), unfold)
             nil -> {:ok, {:mdata, e1, p, bs}}
           end
 
@@ -379,38 +526,48 @@ defmodule Muro.Check do
     end
   end
 
-  defp whnf(k, book, {:munit, e, p, u}) do
-    case whnf(k - 1, book, e) do
-      {:ok, :one} -> whnf(k - 1, book, u)
+  defp whnf(k, book, {:munit, e, p, u}, unfold) do
+    case whnf(k - 1, book, e, unfold) do
+      {:ok, :one} -> whnf(k - 1, book, u, unfold)
       {:ok, e1} -> {:ok, {:munit, e1, p, u}}
       err -> err
     end
   end
 
-  defp whnf(k, book, {:memp, e, p}) do
-    with {:ok, e1} <- whnf(k - 1, book, e), do: {:ok, {:memp, e1, p}}
+  defp whnf(k, book, {:memp, e, p}, unfold) do
+    with {:ok, e1} <- whnf(k - 1, book, e, unfold), do: {:ok, {:memp, e1, p}}
   end
 
-  defp whnf(k, book, {:def, name}) do
+  defp whnf(k, book, {:def, name}, unfold) do
     case lookup_def(book, name) do
-      {:ok, d} -> whnf(k - 1, book, d.body)
-      _ -> {:ok, {:def, name}}
+      # An open param is an assumption. It does not reduce.
+      {:ok, %{kind: :param}} ->
+        {:ok, {:def, name}}
+
+      {:ok, %{mode: :run} = d} ->
+        whnf(k - 1, book, d.body, unfold)
+
+      {:ok, d} when unfold == :all ->
+        whnf(k - 1, book, d.body, unfold)
+
+      _ ->
+        {:ok, {:def, name}}
     end
   end
 
-  defp whnf(k, book, {:ann, e, _}), do: whnf(k - 1, book, e)
+  defp whnf(k, book, {:ann, e, _}, unfold), do: whnf(k - 1, book, e, unfold)
 
   # ι-letp
-  defp whnf(k, book, {:letp, e, t}) do
-    case whnf(k - 1, book, e) do
-      {:ok, {:pair, a, b}} -> whnf(k - 1, book, Subst.inst2(t, a, b))
+  defp whnf(k, book, {:letp, e, t}, unfold) do
+    case whnf(k - 1, book, e, unfold) do
+      {:ok, {:pair, a, b}} -> whnf(k - 1, book, Subst.inst2(t, a, b), unfold)
       {:ok, e1} -> {:ok, {:letp, e1, t}}
       err -> err
     end
   end
 
-  defp whnf(k, book, {:ucons, e}) do
-    case whnf(k - 1, book, e) do
+  defp whnf(k, book, {:ucons, e}, unfold) do
+    case whnf(k - 1, book, e, unfold) do
       # ι-ucons-r
       {:ok, {:unf, _s, {:pair, h, t}}} ->
         {:ok, {:pair, h, t}}
@@ -434,7 +591,81 @@ defmodule Muro.Check do
     end
   end
 
-  defp whnf(_, _, t), do: {:ok, t}
+  # Arguments share one fuel budget. An empty spine does not spend it,
+  # so a nullary word still reduces at fuel 1.
+  defp whnf(k, book, {:word, op, ts}, unfold) do
+    with {:ok, ts1} <- whnf_words(k - 1, book, ts, unfold) do
+      case Muro.Word.step(op, ts1, k - 1) do
+        {:ok, r} -> whnf(k - 1, book, r, unfold)
+        :stuck -> {:ok, {:word, op, ts1}}
+      end
+    end
+  end
+
+  defp whnf(_, _, t, _), do: {:ok, t}
+
+  defp whnf_words(_k, _book, [], _unfold), do: {:ok, []}
+
+  defp whnf_words(k, book, [t | ts], unfold) do
+    with {:ok, t1} <- whnf(k, book, t, unfold),
+         {:ok, ts1} <- whnf_words(k, book, ts, unfold),
+         do: {:ok, [t1 | ts1]}
+  end
+
+  @doc """
+  Full normal form of a de Bruijn term. Fuel bounds every reduction step.
+  Out of fuel is an error. A stuck term is returned as that term.
+
+  Only a `run` definition is unfolded. An evidence or spec definition
+  stays stuck, so a session payload cannot be computed from one.
+  """
+  def normalize(book, term, fuel \\ @fuel) do
+    nf(fuel, book, term, :run)
+  end
+
+  defp nf(k, book, term, unfold) do
+    with {:ok, t} <- whnf(k, book, term, unfold), do: deepen(k, book, t, unfold)
+  end
+
+  defp deepen(k, book, {:su, u}, unfold) do
+    with {:ok, u1} <- nf(fuel_dec(k), book, u, unfold), do: {:ok, {:su, u1}}
+  end
+
+  defp deepen(k, book, {:pair, a, b}, unfold) do
+    with {:ok, a1} <- nf(fuel_dec(k), book, a, unfold),
+         {:ok, b1} <- nf(fuel_dec(k), book, b, unfold) do
+      {:ok, {:pair, a1, b1}}
+    end
+  end
+
+  defp deepen(k, book, {:app, f, a}, unfold) do
+    with {:ok, f1} <- nf(fuel_dec(k), book, f, unfold),
+         {:ok, a1} <- nf(fuel_dec(k), book, a, unfold) do
+      {:ok, {:app, f1, a1}}
+    end
+  end
+
+  defp deepen(k, book, {:word, op, ts}, unfold) do
+    with {:ok, ts1} <- deepen_words(k, book, ts, unfold) do
+      case Muro.Word.step(op, ts1, k) do
+        {:ok, r} -> nf(fuel_dec(k), book, r, unfold)
+        :stuck -> {:ok, {:word, op, ts1}}
+      end
+    end
+  end
+
+  defp deepen(_k, _book, t, _unfold), do: {:ok, t}
+
+  defp deepen_words(_k, _book, [], _unfold), do: {:ok, []}
+
+  defp deepen_words(k, book, [t | ts], unfold) do
+    with {:ok, t1} <- nf(fuel_dec(k), book, t, unfold),
+         {:ok, ts1} <- deepen_words(k, book, ts, unfold),
+         do: {:ok, [t1 | ts1]}
+  end
+
+  defp fuel_dec(k) when k > 0, do: k - 1
+  defp fuel_dec(_), do: 0
 
   # Fuelled, as Agda's isData: fuel also bounds the descent into data
   # parameters (a spec definition may be recursive: X : Type := D X).
@@ -463,6 +694,18 @@ defmodule Muro.Check do
 
         {:tensor, _, _} ->
           {:ok, as == []}
+
+        {:word, {:ty, _}, []} ->
+          {:ok, as == []}
+
+        {:word, :bool, []} ->
+          {:ok, as == []}
+
+        {:word, {:optk, _}, []} ->
+          {:ok, as == []}
+
+        {:word, :opt, [a]} when as == [] ->
+          is_data(k, book, a)
 
         {:def, n} ->
           case lookup_data(book, n) do
@@ -571,6 +814,10 @@ defmodule Muro.Check do
   defp run_ty_n(_book, :i64), do: true
   defp run_ty_n(_book, :f32ty), do: true
   defp run_ty_n(_book, {:tensor, _, _}), do: true
+  defp run_ty_n(_book, {:word, {:ty, _}, []}), do: true
+  defp run_ty_n(_book, {:word, :bool, []}), do: true
+  defp run_ty_n(_book, {:word, {:optk, _}, []}), do: true
+  defp run_ty_n(book, {:word, :opt, [a]}), do: run_ty_n(book, a)
   defp run_ty_n(book, {:pi, _, _, _, b}), do: run_ty_n(book, b)
   defp run_ty_n(book, {:nu, f}), do: run_ty_n(book, f)
   defp run_ty_n(book, {:prod, a, b}), do: run_ty_n(book, a) and run_ty_n(book, b)
@@ -579,167 +826,310 @@ defmodule Muro.Check do
   defp run_ty_n(_book, _), do: false
 
   # -- conversion ------------------------------------------------------------
+  #
+  # Fuel left by a call is the depth it did not use. Each subterm of one
+  # weak-head form is given the same depth (a wide term keeps the budget
+  # a single spine used to have). The two alternatives of a stuck
+  # definition share it: argument comparison spends some, and the one
+  # unfolding that follows a failure gets what remains. A second copy is
+  # never started, so the work grows with the fuel.
+  #
+  # `seen` is the definitions whose unfolding is in progress. A recursive
+  # application is unfolded when the match it reduces to can fire. While
+  # it is in `seen`, that match did not fire, so the application is
+  # neutral and only its arguments are compared. One unfolding is still
+  # tried before that, which is what makes an argument the body does not
+  # use convertible (`drop b n := match n ...` with `b` absent). A
+  # difference that unfolding does not erase is a conversion failure.
+  # Running out of fuel is only the budget reaching zero.
 
   defp syn_eq(a, b), do: a == b
 
-  defp conv(0, _, _, _, _), do: {:error, @out_of_fuel}
-
-  defp conv(k, book, names, u, v) do
-    if syn_eq(u, v) do
-      :ok
-    else
-      stuck_cong(k, book, names, u, v)
+  defp step do
+    case Process.get(:muro_conv_steps) do
+      n when is_integer(n) -> Process.put(:muro_conv_steps, n + 1)
+      _ -> :ok
     end
   end
 
-  # The same def at arguments that are not constructor-headed: compare the
-  # arguments first. Arguments that differ do not decide it, since the def
-  # may match on a later argument; both sides are then unfolded.
-  defp stuck_cong(k, book, names, u, v) do
+  defp conv(k, book, names, u, v) do
+    case conv_f(k, book, names, u, v, []) do
+      {:ok, _} -> :ok
+      {:error, msg, _} -> {:error, msg}
+    end
+  end
+
+  defp conv_f(k, _book, _names, _u, _v, _seen) when k <= 0 do
+    step()
+    {:error, @out_of_fuel, 0}
+  end
+
+  defp conv_f(k, book, names, u, v, seen) do
+    step()
+
+    if syn_eq(u, v) do
+      {:ok, k}
+    else
+      stuck_f(k, book, names, u, v, seen)
+    end
+  end
+
+  defp stuck_f(k, book, names, u, v, seen) do
     case {apps(u), apps(v)} do
-      {{{:def, i}, [a | as]}, {{:def, j}, [b | bs]}} ->
-        if i == j and not ctor_head_book?(book, a) and not ctor_head_book?(book, b) do
-          with :ok <- conv(k - 1, book, names, a, b),
-               :ok <- conv_args(k - 1, book, names, as, bs) do
-            :ok
-          else
-            _ -> conv_whnf(k - 1, book, names, u, v)
-          end
-        else
-          conv_whnf(k - 1, book, names, u, v)
+      {{{:def, i}, [_ | _] = as}, {{:def, i}, [_ | _] = bs}} ->
+        # Arguments first, at the fuel this alternative has. Success is
+        # congruence. Out of fuel stops here: the unfolding is not started
+        # on a spent budget. A definite mismatch unfolds once, with `i`
+        # recorded so a stuck re-entry does not unfold again.
+        case conv_args_f(k - 1, book, names, as, bs, seen) do
+          {:ok, k1} ->
+            {:ok, k1}
+
+          {:error, msg, k1} ->
+            cond do
+              k1 <= 0 ->
+                {:error, @out_of_fuel, 0}
+
+              out_of_fuel?(msg) ->
+                {:error, msg, k1}
+
+              i in seen ->
+                # The one unfolding is already in progress. Unfold again
+                # only when the match fires; otherwise the mismatch stands.
+                stuck_progress(k1, book, names, u, v, seen, msg)
+
+              true ->
+                conv_whnf_f(k1, book, names, u, v, [i | seen])
+            end
         end
 
       _ ->
-        conv_whnf(k - 1, book, names, u, v)
+        conv_whnf_f(k - 1, book, names, u, v, seen)
     end
   end
 
-  defp conv_whnf(k, book, names, u, v) do
+  # `whnf` has already ι-reduced a constructor scrutinee, so a remaining
+  # eliminator did not fire. The two applications are neutral.
+  defp stuck_progress(k, book, names, u, v, seen, clash) do
+    case {whnf(k, book, u), whnf(k, book, v)} do
+      {{:ok, u1}, {:ok, v1}} ->
+        cond do
+          syn_eq(u1, v1) ->
+            {:ok, k}
+
+          stuck_form?(u1) and stuck_form?(v1) ->
+            {:error, clash, k}
+
+          true ->
+            conv_n(k, book, names, u1, v1, seen)
+        end
+
+      {{:error, msg}, _} ->
+        {:error, msg, 0}
+
+      {_, {:error, msg}} ->
+        {:error, msg, 0}
+    end
+  end
+
+  defp stuck_form?({:mdata, _, _, _}), do: true
+  defp stuck_form?({:mnat, _, _, _, _}), do: true
+  defp stuck_form?({:memp, _, _}), do: true
+  defp stuck_form?({:munit, _, _, _}), do: true
+  defp stuck_form?({:matom, _, _, _}), do: true
+  defp stuck_form?({:letp, _, _}), do: true
+  defp stuck_form?({:ucons, _}), do: true
+  defp stuck_form?(_), do: false
+
+  defp conv_whnf_f(k, _book, _names, _u, _v, _seen) when k <= 0,
+    do: {:error, @out_of_fuel, 0}
+
+  defp conv_whnf_f(k, book, names, u, v, seen) do
     with {:ok, u1} <- whnf(k, book, u),
-         {:ok, v1} <- whnf(k, book, v),
-         do: conv_n(k, book, names, u1, v1)
-  end
-
-  defp conv_args(_k, _book, _names, [], []), do: :ok
-  defp conv_args(_k, _book, _names, _, []), do: {:error, "conv: spine length mismatch"}
-  defp conv_args(_k, _book, _names, [], _), do: {:error, "conv: spine length mismatch"}
-
-  defp conv_args(k, book, names, [a | as], [b | bs]) do
-    with :ok <- conv(k, book, names, a, b), do: conv_args(k, book, names, as, bs)
-  end
-
-  defp conv_n(_k, _book, _names, a, b) when a == b, do: :ok
-  defp conv_n(k, book, names, {:su, a}, {:su, b}), do: conv(k, book, names, a, b)
-  defp conv_n(_k, _book, _names, {:var, i}, {:var, j}) when i == j, do: :ok
-
-  defp conv_n(k, book, names, {:pi, q, a, x, b}, {:pi, q, a1, _, b1}) do
-    with :ok <- conv(k, book, names, a, a1), do: conv(k, book, [x | names], b, b1)
-  end
-
-  defp conv_n(k, book, names, {:lam, q, a, x, t}, {:lam, q, a1, _, t1}) do
-    with :ok <- conv(k, book, names, a, a1), do: conv(k, book, [x | names], t, t1)
-  end
-
-  defp conv_n(k, book, names, {:app, f, a}, {:app, g, b}) do
-    with :ok <- conv(k, book, names, f, g), do: conv(k, book, names, a, b)
-  end
-
-  defp conv_n(k, book, names, {:idt, a, x, y}, {:idt, a1, x1, y1}) do
-    with :ok <- conv(k, book, names, a, a1),
-         :ok <- conv(k, book, names, x, x1),
-         do: conv(k, book, names, y, y1)
-  end
-
-  defp conv_n(k, book, names, {:mnat, e, p, z, s}, {:mnat, e1, p1, z1, s1}) do
-    with :ok <- conv(k, book, names, e, e1),
-         :ok <- conv(k, book, names, p, p1),
-         :ok <- conv(k, book, names, z, z1),
-         do: conv(k, book, names, s, s1)
-  end
-
-  defp conv_n(k, book, names, {:memp, e, p}, {:memp, e1, p1}) do
-    with :ok <- conv(k, book, names, e, e1), do: conv(k, book, names, p, p1)
-  end
-
-  defp conv_n(k, book, names, {:munit, e, p, u}, {:munit, e1, p1, u1}) do
-    with :ok <- conv(k, book, names, e, e1),
-         :ok <- conv(k, book, names, p, p1),
-         do: conv(k, book, names, u, u1)
-  end
-
-  defp conv_n(k, book, names, {:rwt, e, p, t}, {:rwt, e1, p1, t1}) do
-    with :ok <- conv(k, book, names, e, e1),
-         :ok <- conv(k, book, names, p, p1),
-         do: conv(k, book, names, t, t1)
-  end
-
-  defp conv_n(k, book, names, {:ann, e, a}, {:ann, e1, a1}) do
-    with :ok <- conv(k, book, names, e, e1), do: conv(k, book, names, a, a1)
-  end
-
-  defp conv_n(k, book, names, {:prod, a, b}, {:prod, a1, b1}) do
-    with :ok <- conv(k, book, names, a, a1), do: conv(k, book, names, b, b1)
-  end
-
-  defp conv_n(k, book, names, {:pair, a, b}, {:pair, a1, b1}) do
-    with :ok <- conv(k, book, names, a, a1), do: conv(k, book, names, b, b1)
-  end
-
-  defp conv_n(k, book, names, {:letp, e, t}, {:letp, e1, t1}) do
-    with :ok <- conv(k, book, names, e, e1), do: conv(k, book, ["b", "a" | names], t, t1)
-  end
-
-  defp conv_n(k, book, names, {:nu, f}, {:nu, f1}), do: conv(k, book, names, f, f1)
-
-  defp conv_n(k, book, names, {:bisim, s, t}, {:bisim, s1, t1}) do
-    with :ok <- conv(k, book, names, s, s1), do: conv(k, book, names, t, t1)
-  end
-
-  defp conv_n(k, book, names, {:unf, s, f}, {:unf, s1, f1}) do
-    with :ok <- conv(k, book, names, s, s1), do: conv(k, book, names, f, f1)
-  end
-
-  defp conv_n(k, book, names, {:ucons, s}, {:ucons, s1}), do: conv(k, book, names, s, s1)
-
-  defp conv_n(k, book, names, {:tensor, d, s}, {:tensor, d1, s1}) do
-    with :ok <- conv(k, book, names, d, d1), do: conv(k, book, names, s, s1)
-  end
-
-  defp conv_n(k, book, names, {:addi, x, y}, {:addi, x1, y1}) do
-    with :ok <- conv(k, book, names, x, x1), do: conv(k, book, names, y, y1)
-  end
-
-  defp conv_n(k, book, names, {:muli, x, y}, {:muli, x1, y1}) do
-    with :ok <- conv(k, book, names, x, x1), do: conv(k, book, names, y, y1)
-  end
-
-  defp conv_n(k, book, names, {:addt, t, u}, {:addt, t1, u1}) do
-    with :ok <- conv(k, book, names, t, t1), do: conv(k, book, names, u, u1)
-  end
-
-  defp conv_n(k, book, names, {:toi64, t}, {:toi64, t1}), do: conv(k, book, names, t, t1)
-
-  defp conv_n(k, book, names, {:packi, x, y}, {:packi, x1, y1}) do
-    with :ok <- conv(k, book, names, x, x1), do: conv(k, book, names, y, y1)
-  end
-
-  defp conv_n(k, book, names, {:mdata, e, p, bs}, {:mdata, e1, p1, bs1}) do
-    with :ok <- conv(k, book, names, e, e1),
-         :ok <- conv(k, book, names, p, p1) do
-      conv_mdata_bs(k, book, names, bs, bs1)
+         {:ok, v1} <- whnf(k, book, v) do
+      conv_n(k, book, names, u1, v1, seen)
+    else
+      {:error, msg} -> {:error, msg, 0}
     end
   end
 
-  defp conv_n(_k, _book, names, u, v),
-    do: {:error, "cannot convert #{Print.term(u, names)} ≁ #{Print.term(v, names)}"}
-
-  defp conv_mdata_bs(_k, _book, _names, [], []), do: :ok
-
-  defp conv_mdata_bs(k, book, names, [{n, ar, b} | bs], [{n, ar, b1} | bs1]) do
-    with :ok <- conv(k, book, names, b, b1), do: conv_mdata_bs(k, book, names, bs, bs1)
+  defp conv_args_f(k, book, names, as, bs, seen) do
+    conv_args_f(k, k, book, names, as, bs, seen)
   end
 
-  defp conv_mdata_bs(_, _, _, _, _), do: {:error, "match branches do not convert"}
+  defp conv_args_f(kmin, _k, _book, _names, [], [], _seen), do: {:ok, kmin}
+
+  defp conv_args_f(_kmin, k, _book, _names, _, [], _seen),
+    do: {:error, "conv: spine length mismatch", k}
+
+  defp conv_args_f(_kmin, k, _book, _names, [], _, _seen),
+    do: {:error, "conv: spine length mismatch", k}
+
+  defp conv_args_f(kmin, k, book, names, [a | as], [b | bs], seen) do
+    case conv_f(k, book, names, a, b, seen) do
+      {:ok, k1} -> conv_args_f(min(kmin, k1), k, book, names, as, bs, seen)
+      {:error, msg, k1} -> {:error, msg, min(kmin, k1)}
+    end
+  end
+
+  # Each component is given `k`, not what its sibling left. The value
+  # returned is the least leftover, so a caller that shares fuel sees
+  # the deepest component.
+  defp conv_all(k, calls) do
+    Enum.reduce_while(calls, {:ok, k}, fn call, {:ok, kmin} ->
+      case call.() do
+        {:ok, k1} -> {:cont, {:ok, min(kmin, k1)}}
+        {:error, msg, k1} -> {:halt, {:error, msg, min(kmin, k1)}}
+      end
+    end)
+  end
+
+  defp at(k, book, names, u, v, seen), do: fn -> conv_f(k, book, names, u, v, seen) end
+
+  defp conv_n(k, _book, _names, a, a, _seen), do: {:ok, k}
+
+  defp conv_n(k, _book, names, {:nat, n}, {:nat, m}, _seen)
+       when is_integer(n) and is_integer(m) do
+    {:error, "cannot convert #{Print.term({:nat, n}, names)} ≁ #{Print.term({:nat, m}, names)}",
+     k}
+  end
+
+  defp conv_n(k, book, names, {:nat, n}, v, seen) when is_integer(n) and n >= 0 do
+    conv_n(k, book, names, Muro.Word.nat_ctor({:nat, n}), v, seen)
+  end
+
+  defp conv_n(k, book, names, u, {:nat, n}, seen) when is_integer(n) and n >= 0 do
+    conv_n(k, book, names, u, Muro.Word.nat_ctor({:nat, n}), seen)
+  end
+
+  defp conv_n(k, book, names, {:su, a}, {:su, b}, seen), do: conv_f(k, book, names, a, b, seen)
+  defp conv_n(k, _book, _names, {:var, i}, {:var, i}, _seen), do: {:ok, k}
+
+  defp conv_n(k, book, names, {:pi, q, a, x, b}, {:pi, q, a1, _, b1}, seen) do
+    conv_all(k, [at(k, book, names, a, a1, seen), at(k, book, [x | names], b, b1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:lam, q, a, x, t}, {:lam, q, a1, _, t1}, seen) do
+    conv_all(k, [at(k, book, names, a, a1, seen), at(k, book, [x | names], t, t1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:app, f, a}, {:app, g, b}, seen) do
+    conv_all(k, [at(k, book, names, f, g, seen), at(k, book, names, a, b, seen)])
+  end
+
+  defp conv_n(k, book, names, {:idt, a, x, y}, {:idt, a1, x1, y1}, seen) do
+    conv_all(k, [
+      at(k, book, names, a, a1, seen),
+      at(k, book, names, x, x1, seen),
+      at(k, book, names, y, y1, seen)
+    ])
+  end
+
+  defp conv_n(k, book, names, {:mnat, e, p, z, s}, {:mnat, e1, p1, z1, s1}, seen) do
+    conv_all(k, [
+      at(k, book, names, e, e1, seen),
+      at(k, book, names, p, p1, seen),
+      at(k, book, names, z, z1, seen),
+      at(k, book, names, s, s1, seen)
+    ])
+  end
+
+  defp conv_n(k, book, names, {:memp, e, p}, {:memp, e1, p1}, seen) do
+    conv_all(k, [at(k, book, names, e, e1, seen), at(k, book, names, p, p1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:munit, e, p, u}, {:munit, e1, p1, u1}, seen) do
+    conv_all(k, [
+      at(k, book, names, e, e1, seen),
+      at(k, book, names, p, p1, seen),
+      at(k, book, names, u, u1, seen)
+    ])
+  end
+
+  defp conv_n(k, book, names, {:rwt, e, p, t}, {:rwt, e1, p1, t1}, seen) do
+    conv_all(k, [
+      at(k, book, names, e, e1, seen),
+      at(k, book, names, p, p1, seen),
+      at(k, book, names, t, t1, seen)
+    ])
+  end
+
+  defp conv_n(k, book, names, {:ann, e, a}, {:ann, e1, a1}, seen) do
+    conv_all(k, [at(k, book, names, e, e1, seen), at(k, book, names, a, a1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:prod, a, b}, {:prod, a1, b1}, seen) do
+    conv_all(k, [at(k, book, names, a, a1, seen), at(k, book, names, b, b1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:pair, a, b}, {:pair, a1, b1}, seen) do
+    conv_all(k, [at(k, book, names, a, a1, seen), at(k, book, names, b, b1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:letp, e, t}, {:letp, e1, t1}, seen) do
+    conv_all(k, [at(k, book, names, e, e1, seen), at(k, book, ["b", "a" | names], t, t1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:nu, f}, {:nu, f1}, seen), do: conv_f(k, book, names, f, f1, seen)
+
+  defp conv_n(k, book, names, {:bisim, s, t}, {:bisim, s1, t1}, seen) do
+    conv_all(k, [at(k, book, names, s, s1, seen), at(k, book, names, t, t1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:unf, s, f}, {:unf, s1, f1}, seen) do
+    conv_all(k, [at(k, book, names, s, s1, seen), at(k, book, names, f, f1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:ucons, s}, {:ucons, s1}, seen),
+    do: conv_f(k, book, names, s, s1, seen)
+
+  defp conv_n(k, book, names, {:tensor, d, s}, {:tensor, d1, s1}, seen) do
+    conv_all(k, [at(k, book, names, d, d1, seen), at(k, book, names, s, s1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:addi, x, y}, {:addi, x1, y1}, seen) do
+    conv_all(k, [at(k, book, names, x, x1, seen), at(k, book, names, y, y1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:muli, x, y}, {:muli, x1, y1}, seen) do
+    conv_all(k, [at(k, book, names, x, x1, seen), at(k, book, names, y, y1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:addt, t, u}, {:addt, t1, u1}, seen) do
+    conv_all(k, [at(k, book, names, t, t1, seen), at(k, book, names, u, u1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:toi64, t}, {:toi64, t1}, seen),
+    do: conv_f(k, book, names, t, t1, seen)
+
+  defp conv_n(k, book, names, {:packi, x, y}, {:packi, x1, y1}, seen) do
+    conv_all(k, [at(k, book, names, x, x1, seen), at(k, book, names, y, y1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:word, op, xs}, {:word, op, ys}, seen),
+    do: conv_args_f(k, k, book, names, xs, ys, seen)
+
+  defp conv_n(k, book, names, {:mdata, e, p, bs}, {:mdata, e1, p1, bs1}, seen) do
+    case conv_all(k, [at(k, book, names, e, e1, seen), at(k, book, names, p, p1, seen)]) do
+      {:ok, k1} -> conv_mdata_bs(k, k1, book, names, bs, bs1, seen)
+      err -> err
+    end
+  end
+
+  defp conv_n(k, _book, names, u, v, _seen),
+    do: {:error, "cannot convert #{Print.term(u, names)} ≁ #{Print.term(v, names)}", k}
+
+  defp conv_mdata_bs(_k, kmin, _book, _names, [], [], _seen), do: {:ok, kmin}
+
+  defp conv_mdata_bs(k, kmin, book, names, [{n, ar, b} | bs], [{n, ar, b1} | bs1], seen) do
+    case conv_f(k, book, names, b, b1, seen) do
+      {:ok, k1} -> conv_mdata_bs(k, min(kmin, k1), book, names, bs, bs1, seen)
+      {:error, msg, k1} -> {:error, msg, min(kmin, k1)}
+    end
+  end
+
+  defp conv_mdata_bs(_k, kmin, _, _, _, _, _),
+    do: {:error, "match branches do not convert", kmin}
 
   defp view_pi(k, book, t, names) do
     case whnf(k, book, t) do
@@ -789,7 +1179,7 @@ defmodule Muro.Check do
   end
 
   # packI shape: toI64 (suc (suc 0))
-  defp i64two, do: {:toi64, {:su, {:su, :ze}}}
+  defp i64two, do: {:word, {:lit, :i64, 2}, []}
 
   defp view_prod(k, book, t, names) do
     case whnf(k, book, t) do
@@ -825,6 +1215,9 @@ defmodule Muro.Check do
     end
   end
 
+  # Descent exemption for the whole step of an indexed ν. In evidence a
+  # self-call there need not descend. Where the block may occur is
+  # guarded_tail?/2, not this flag.
   defp step_rec(rs, true), do: %{rs | guard: true}
   defp step_rec(rs, false), do: rs
 
@@ -980,6 +1373,8 @@ defmodule Muro.Check do
   defp has_self?(self, {:addt, t, u}), do: has_self?(self, t) or has_self?(self, u)
   defp has_self?(self, {:toi64, t}), do: has_self?(self, t)
   defp has_self?(self, {:packi, x, y}), do: has_self?(self, x) or has_self?(self, y)
+
+  defp has_self?(self, {:word, _, args}), do: Enum.any?(args, &has_self?(self, &1))
   defp has_self?(self, {:lam, _, a, _, t}), do: has_self?(self, a) or has_self?(self, t)
   defp has_self?(self, {:pi, _, a, _, b}), do: has_self?(self, a) or has_self?(self, b)
   defp has_self?(self, {:prod, a, b}), do: has_self?(self, a) or has_self?(self, b)
@@ -1014,6 +1409,7 @@ defmodule Muro.Check do
 
   defp has_self?(_, _), do: false
 
+  # Same shifts as occℕ. A missing constructor is a clause error, not false.
   defp occurs?(x, {:var, y}), do: x == y
   defp occurs?(x, {:pi, _, a, _, b}), do: occurs?(x, a) or occurs?(x + 1, b)
   defp occurs?(x, {:lam, _, a, _, t}), do: occurs?(x, a) or occurs?(x + 1, t)
@@ -1029,21 +1425,47 @@ defmodule Muro.Check do
     occurs?(x, e) or occurs?(x + 1, p) or Enum.any?(bs, fn {_, b} -> occurs?(x, b) end)
   end
 
+  # occℕList stays at i because each Agda branch is a telescope of λs.
+  # The stored branch is that body, already shifted by its field binders.
   defp occurs?(x, {:mdata, e, p, bs}) do
     occurs?(x, e) or occurs?(x + 1, p) or
       Enum.any?(bs, fn {_, ar, b} -> occurs?(x + ar, b) end)
   end
 
+  defp occurs?(x, {:mnat, e, p, z, s}),
+    do: occurs?(x, e) or occurs?(x + 1, p) or occurs?(x, z) or occurs?(x + 1, s)
+
+  defp occurs?(x, {:memp, e, p}), do: occurs?(x, e) or occurs?(x + 1, p)
+
+  defp occurs?(x, {:munit, e, p, u}),
+    do: occurs?(x, e) or occurs?(x + 1, p) or occurs?(x, u)
+
   defp occurs?(x, {:unf, s, f}), do: occurs?(x, s) or occurs?(x, f)
   defp occurs?(x, {:ucons, s}), do: occurs?(x, s)
   defp occurs?(x, {:idt, a, b, c}), do: occurs?(x, a) or occurs?(x, b) or occurs?(x, c)
+  defp occurs?(x, {:rwt, e, p, t}), do: occurs?(x, e) or occurs?(x + 1, p) or occurs?(x, t)
+  defp occurs?(x, {:ann, e, a}), do: occurs?(x, e) or occurs?(x, a)
   defp occurs?(x, {:tensor, d, s}), do: occurs?(x, d) or occurs?(x, s)
   defp occurs?(x, {:addi, a, b}), do: occurs?(x, a) or occurs?(x, b)
   defp occurs?(x, {:muli, a, b}), do: occurs?(x, a) or occurs?(x, b)
   defp occurs?(x, {:addt, t, u}), do: occurs?(x, t) or occurs?(x, u)
   defp occurs?(x, {:toi64, t}), do: occurs?(x, t)
   defp occurs?(x, {:packi, a, b}), do: occurs?(x, a) or occurs?(x, b)
-  defp occurs?(_, _), do: false
+  defp occurs?(x, {:word, _, args}), do: Enum.any?(args, &occurs?(x, &1))
+  defp occurs?(_x, :typ), do: false
+  defp occurs?(_x, :nat), do: false
+  defp occurs?(_x, :ze), do: false
+  defp occurs?(_x, {:nat, n}) when is_integer(n), do: false
+  defp occurs?(_x, :unit), do: false
+  defp occurs?(_x, :one), do: false
+  defp occurs?(_x, :empty), do: false
+  defp occurs?(_x, :rfl), do: false
+  defp occurs?(_x, {:def, _}), do: false
+  defp occurs?(_x, :i64), do: false
+  defp occurs?(_x, :f32ty), do: false
+  defp occurs?(_x, :atom), do: false
+  defp occurs?(_x, {:atom, _}), do: false
+  defp occurs?(_x, {:hole, _}), do: false
 
   defp spos?(_x, {:var, _}), do: true
   defp spos?(x, {:prod, a, b}), do: spos?(x, a) and spos?(x, b)
@@ -1070,31 +1492,330 @@ defmodule Muro.Check do
     with {:ok, f1} <- whnf(k, book, f), do: go_unfold(f1, block_of(rs))
   end
 
-  defp go_unfold({:lam, _, _, _, t}, self), do: go_unfold(t, self)
+  # One λ, then a pair. The unfold applies the step to one seed.
+  defp go_unfold({:lam, _, _, _, {:pair, _, _} = p}, self), do: go_unfold(p, self)
+  defp go_unfold({:lam, _, _, _, _}, _), do: {:error, "unfold body must be a pair"}
 
-  defp go_unfold({:pair, h, _}, self) do
-    if has_self?(self, h),
+  defp go_unfold({:pair, h, t}, self) do
+    if has_self?(self, h) or not guarded_tail?(self, t),
       do: {:error, "unguarded recursive call"},
       else: :ok
   end
 
   defp go_unfold(_, _), do: {:error, "unfold body must be a pair"}
 
+  # The seed binder occurs in the head and the tail mentions the block.
+  # On a stream that tail is the next seed, so the next head is the mention.
+  # One λ: guardedStep has already rejected a further λ.
+  defp stream_reads(block, {:lam, _, _, _, {:pair, h, t}}),
+    do: occurs?(0, h) and has_self?(block, t)
+
+  defp stream_reads(_, _), do: false
+
+  # No descent and no block. Infer then decides whether an unfold is a
+  # bare stream, without refusing a guarded tail that names the block.
+  defp neutral_rec(gamma) do
+    n = length(gamma)
+    falses = List.duplicate(false, n)
+
+    %{
+      self: nil,
+      poss: %{},
+      order: %{},
+      next_arg: nil,
+      smaller: falses,
+      rec_ok: falses,
+      names: [],
+      guard: false,
+      block: MapSet.new()
+    }
+  end
+
+  # Infer succeeds only for a bare stream: the tail's type converts with
+  # the seed's. A family, a bisimulation, or a term this walk does not
+  # type fails infer, and the stream test does not apply. The vectors
+  # match the context so a lookup in infer does not read past them.
+  defp bare_tail(k, book, block, gamma, mode, s, f) do
+    case infer(k, book, neutral_rec(gamma), gamma, mode, {:unf, s, f}) do
+      {:error, _} ->
+        :ok
+
+      {:ok, _} ->
+        with {:ok, f1} <- whnf(k, book, f) do
+          if stream_reads(block, f1),
+            do: {:error, "unguarded recursive call"},
+            else: :ok
+        end
+    end
+  end
+
+  # The tail may mention the block only as a call: a block member applied
+  # to arguments that do not mention the block, a pair of such tails, or a
+  # nested unfold whose seed, binder type and head do not mention the block
+  # and whose own tail is guarded. head, tail, uncons, let, match, and
+  # rewrite over the block force it instead of continuing it.
+  defp guarded_tail?(self, t) do
+    not has_self?(self, t) or guarded_call?(self, t)
+  end
+
+  defp guarded_call?(self, {:def, _} = d), do: has_self?(self, d)
+
+  defp guarded_call?(self, {:app, f, a}),
+    do: not has_self?(self, a) and guarded_call?(self, f)
+
+  defp guarded_call?(self, {:pair, a, b}),
+    do: guarded_tail?(self, a) and guarded_tail?(self, b)
+
+  defp guarded_call?(self, {:unf, s, {:lam, _, a, _, {:pair, h, t}}}) do
+    not (has_self?(self, s) or has_self?(self, a) or has_self?(self, h)) and
+      guarded_tail?(self, t)
+  end
+
+  defp guarded_call?(_, _), do: false
+
+  # The seed binder's index after the lambdas `go_unfold` strips.
+  # nil: no binder yet (a bare pair does not instantiate the seed).
+  # The binder is read when it occurs in the head or the tail. A seed
+  # that mentions the block may occur in neither, so a descending call
+  # discarded before the step stays accepted. A block-free seed may
+  # occur in either component.
+  defp seed_flows(nil, {:lam, _, _, _, t}), do: seed_flows(0, t)
+  defp seed_flows(i, {:lam, _, _, _, t}) when is_integer(i), do: seed_flows(i + 1, t)
+  defp seed_flows(i, {:pair, h, t}) when is_integer(i), do: occurs?(i, h) or occurs?(i, t)
+  defp seed_flows(_, _), do: false
+
+  defp seed_guard(k, book, block, seed, step) do
+    with {:ok, step1} <- whnf(k, book, step) do
+      if seed_flows(nil, step1) and has_self?(block, seed),
+        do: {:error, "unguarded recursive call"},
+        else: :ok
+    end
+  end
+
+  # Whole body: check_unfold never receives the seed. Spec skips the walk.
+  # Every syntactic unfold is guarded here, and a typed bare stream is
+  # refused when its head reads the seed and its tail mentions the block.
+  # One traversal covers a pair, an application, a match, a λ, and an
+  # unfold inside another unfold. The context is the one the body was
+  # typed in, starting from [] on a closed definition.
+  defp seed_walk(k, book, block, gamma, mode, {:unf, s, f}) do
+    with :ok <- seed_guard(k, book, block, s, f),
+         {:ok, f1} <- whnf(k, book, f),
+         :ok <- go_unfold(f1, block),
+         :ok <- bare_tail(k, book, block, gamma, mode, s, f),
+         :ok <- seed_walk(k, book, block, gamma, mode, s),
+         do: seed_walk(k, book, block, gamma, mode, f)
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:app, f, a}),
+    do: with_both(k, book, block, gamma, mode, f, a)
+
+  defp seed_walk(k, book, block, gamma, mode, {:su, t}),
+    do: seed_walk(k, book, block, gamma, mode, t)
+
+  defp seed_walk(k, book, block, gamma, mode, {:lam, q, a, _, t}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, a),
+         do: seed_walk(k, book, block, ext(gamma, q, a), mode, t)
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:pi, q, a, _, b}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, a),
+         do: seed_walk(k, book, block, ext(gamma, q, a), mode, b)
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:prod, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
+
+  defp seed_walk(k, book, block, gamma, mode, {:pair, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
+
+  defp seed_walk(k, book, block, gamma, mode, {:letp, e, t}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         do: seed_walk(k, book, block, let_gamma(k, book, gamma, mode, e), mode, t)
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:nu, f}),
+    do: seed_walk(k, book, block, nu_gamma(gamma, f), mode, f)
+
+  defp seed_walk(k, book, block, gamma, mode, {:bisim, s, t}),
+    do: with_both(k, book, block, gamma, mode, s, t)
+
+  defp seed_walk(k, book, block, gamma, mode, {:ann, e, a}),
+    do: with_both(k, book, block, gamma, mode, e, a)
+
+  defp seed_walk(k, book, block, gamma, mode, {:idt, a, x, y}),
+    do: seed_walk_list(k, book, block, gamma, mode, [a, x, y])
+
+  defp seed_walk(k, book, block, gamma, mode, {:rwt, e, p, t}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         :ok <- seed_walk(k, book, block, rwt_gamma(k, book, gamma, mode, e), mode, p),
+         do: seed_walk(k, book, block, gamma, mode, t)
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:ucons, s}),
+    do: seed_walk(k, book, block, gamma, mode, s)
+
+  defp seed_walk(k, book, block, gamma, mode, {:tensor, d, s}),
+    do: with_both(k, book, block, gamma, mode, d, s)
+
+  defp seed_walk(k, book, block, gamma, mode, {:addi, x, y}),
+    do: with_both(k, book, block, gamma, mode, x, y)
+
+  defp seed_walk(k, book, block, gamma, mode, {:muli, x, y}),
+    do: with_both(k, book, block, gamma, mode, x, y)
+
+  defp seed_walk(k, book, block, gamma, mode, {:addt, t, u}),
+    do: with_both(k, book, block, gamma, mode, t, u)
+
+  defp seed_walk(k, book, block, gamma, mode, {:toi64, t}),
+    do: seed_walk(k, book, block, gamma, mode, t)
+
+  defp seed_walk(k, book, block, gamma, mode, {:word, _, args}),
+    do: seed_walk_list(k, book, block, gamma, mode, args)
+
+  defp seed_walk(k, book, block, gamma, mode, {:packi, x, y}),
+    do: with_both(k, book, block, gamma, mode, x, y)
+
+  defp seed_walk(k, book, block, gamma, mode, {:matom, e, p, bs}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         :ok <- seed_walk(k, book, block, ext(gamma, :affine, :atom), mode, p),
+         do: seed_walk_list(k, book, block, gamma, mode, Enum.map(bs, fn {_, b} -> b end))
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:mdata, e, p, bs}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         :ok <- seed_walk(k, book, block, mdata_gamma(k, book, gamma, mode, e), mode, p),
+         do: seed_walk_list(k, book, block, gamma, mode, Enum.map(bs, fn {_, _, b} -> b end))
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:mnat, e, p, z, s}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         :ok <- seed_walk(k, book, block, ext(gamma, :affine, :nat), mode, p),
+         :ok <- seed_walk(k, book, block, gamma, mode, z),
+         do: seed_walk(k, book, block, ext(gamma, pred_qty(gamma, e), :nat), mode, s)
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:memp, e, p}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         do: seed_walk(k, book, block, ext(gamma, :affine, :empty), mode, p)
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:munit, e, p, u}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         :ok <- seed_walk(k, book, block, ext(gamma, :affine, :unit), mode, p),
+         do: seed_walk(k, book, block, gamma, mode, u)
+  end
+
+  defp seed_walk(_k, _book, _block, _gamma, _mode, _), do: :ok
+
+  # The two components, when the scrutinee infers as a product. A failure
+  # here is not a productivity verdict: the binder types fall back to Type,
+  # and an unfold that needed them is not reported as a bare stream.
+  defp let_gamma(k, book, gamma, mode, e) do
+    rs = neutral_rec(gamma)
+
+    case infer(k, book, rs, gamma, mode, e) do
+      {:ok, {ety, _}} ->
+        case view_prod(k, book, ety, names_of(rs, gamma)) do
+          {:ok, {a, b}} -> ext(ext(gamma, :affine, a), :affine, Subst.wk(b))
+          _ -> ext(ext(gamma, :affine, :typ), :affine, Subst.wk(:typ))
+        end
+
+      _ ->
+        ext(ext(gamma, :affine, :typ), :affine, Subst.wk(:typ))
+    end
+  end
+
+  defp nu_gamma(gamma, f) do
+    case nu_kind(f) do
+      {:ok, kind} -> ext(gamma, :affine, kind)
+      _ -> ext(gamma, :affine, :typ)
+    end
+  end
+
+  defp rwt_gamma(k, book, gamma, mode, eq) do
+    rs = neutral_rec(gamma)
+    rmode = if mode == :spec, do: :spec, else: :evidence
+
+    case infer(k, book, rs, gamma, rmode, eq) do
+      {:ok, {et, _}} ->
+        case view_id(k, book, et, names_of(rs, gamma)) do
+          {:ok, {a, _, _}} -> ext(gamma, :affine, a)
+          _ -> ext(gamma, :affine, :typ)
+        end
+
+      _ ->
+        ext(gamma, :affine, :typ)
+    end
+  end
+
+  # checkMotive's first binder: the scrutinee's type, or the first index.
+  defp mdata_gamma(k, book, gamma, mode, e) do
+    rs = neutral_rec(gamma)
+
+    case infer(k, book, rs, gamma, mode, e) do
+      {:ok, {et, _}} ->
+        case view_data(k, book, et, names_of(rs, gamma)) do
+          {:ok, {d, dname, params, _idxs}} ->
+            case Map.get(d, :indices, []) do
+              [] -> ext(gamma, :affine, Subst.apps_from({:def, dname}, params))
+              [{q, _x, t} | _] -> ext(gamma, q, t)
+            end
+
+          _ ->
+            ext(gamma, :affine, :typ)
+        end
+
+      _ ->
+        ext(gamma, :affine, :typ)
+    end
+  end
+
+  defp with_both(k, book, block, gamma, mode, a, b) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, a),
+         do: seed_walk(k, book, block, gamma, mode, b)
+  end
+
+  defp seed_walk_list(_k, _book, _block, _gamma, _mode, []), do: :ok
+
+  defp seed_walk_list(k, book, block, gamma, mode, [t | ts]) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, t),
+         do: seed_walk_list(k, book, block, gamma, mode, ts)
+  end
+
+  # Agda's membersRun. spec is not walked, so a run or evidence component
+  # that contains one is refused before the seed walk.
+  defp members_run(book, block) do
+    Enum.reduce_while(block, :ok, fn name, :ok ->
+      case lookup_def(book, name) do
+        {:ok, %{mode: :spec}} ->
+          {:halt, {:error, "spec definition in a productive component"}}
+
+        _ ->
+          {:cont, :ok}
+      end
+    end)
+  end
+
   # Agda's checkNu: on run/evidence, a definition whose type reduces to a
   # ν (bare, a family applied to any number of indices, or ~) is an
-  # unfold, or it does not mention its own block. A call into the block
-  # is productive only as the tail of an unfold step (check_unfold).
+  # unfold whose step passes the same tail guard, or it does not mention
+  # its own block. A call into the block is productive only as a guarded tail.
+  # The seed walk runs first, under this same productivity tag, and it is
+  # the only place the bare-stream tail test runs.
   defp check_nu(_k, _book, _block, :spec, _ty, _body), do: :ok
   defp check_nu(0, _book, _block, _mode, _ty, _body), do: {:error, @out_of_fuel}
 
   defp check_nu(k, book, block, mode, ty, body) do
-    with {:ok, ty1} <- whnf(k, book, ty) do
+    with :ok <- members_run(book, block),
+         :ok <- seed_walk(k, book, block, [], mode, body),
+         {:ok, ty1} <- whnf(k, book, ty) do
       case {ty1, body} do
         {{:pi, _, _, _, b}, {:lam, _, _, _, t}} ->
           check_nu(k - 1, book, block, mode, b, t)
 
-        {_, {:unf, _, _}} ->
-          :ok
+        {_ty1, {:unf, _, f}} ->
+          with {:ok, f1} <- whnf(k, book, f), do: go_unfold(f1, block)
 
         _ ->
           if nu_type?(ty1) and has_self?(block, body),
@@ -1130,6 +1851,9 @@ defmodule Muro.Check do
           true ->
             {:ok, {d.type, u0s(n)}}
         end
+
+      {:skip, msg} ->
+        {:error, msg}
 
       {:error, _} ->
         case lookup_data(book, name) do
@@ -1178,6 +1902,10 @@ defmodule Muro.Check do
 
       # ⇒-ze
       {_, :ze} ->
+        {:ok, {:nat, u0s(n)}}
+
+      # A closed numeral has the same type as zero. It is not a successor spine.
+      {_, {:nat, m}} when is_integer(m) and m >= 0 ->
         {:ok, {:nat, u0s(n)}}
 
       # ⇒-su
@@ -1571,8 +2299,219 @@ defmodule Muro.Check do
           {:ok, {{:tensor, :i64, i64two()}, uses}}
         end
 
+      # ⇒-word. Types are spec-only. Operations are allowed in every mode.
+      {m, {:word, op, ts}} ->
+        infer_word(k, book, rs, gamma, m, op, ts, n)
+
       {_, t1} ->
         {:error, "cannot infer #{shown(rs, gamma, t1)}"}
+    end
+  end
+
+  # ⇒-word. Types are spec-only. Operations are allowed in every mode.
+  # Mirrors Muro.Check.inferWord.
+  defp infer_word(k, book, rs, gamma, m, op, ts, n) do
+    case {op, m, ts} do
+      {{:ty, :i64}, _, _} ->
+        {:error, "I64 is the i64 former"}
+
+      {{:ty, _}, m1, _} when m1 in [:run, :evidence] ->
+        {:error, "no promotion: a word type is an erased term"}
+
+      {{:ty, _}, :spec, []} ->
+        {:ok, {:typ, u0s(n)}}
+
+      {{:ty, _}, _, _} ->
+        {:error, "U8, U32, and U64 take no arguments"}
+
+      {{:lit, kx, _}, _, []} ->
+        {:ok, {Word.word_ty(kx), u0s(n)}}
+
+      {{:lit, _, _}, _, _} ->
+        {:error, "a word literal takes no arguments"}
+
+      {{:of, kx}, _, [t]} ->
+        with {:ok, u} <- check(k, book, rs, gamma, m, t, :nat) do
+          {:ok, {Word.word_ty(kx), u}}
+        end
+
+      {{:of, _}, _, _} ->
+        {:error, "ofNat takes one Nat"}
+
+      {:ton, _, [t]} ->
+        word_ton(k, book, rs, gamma, m, t)
+
+      {:ton, _, _} ->
+        {:error, "toNat takes one word"}
+
+      {:add, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.word_ty/1)
+
+      {:sub, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.word_ty/1)
+
+      {:mul, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.word_ty/1)
+
+      {:and, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.word_ty/1)
+
+      {:or, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.word_ty/1)
+
+      {:xor, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.word_ty/1)
+
+      {:cadd, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.opt_ty/1)
+
+      {:csub, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.opt_ty/1)
+
+      {:cmul, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.opt_ty/1)
+
+      {:div, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.opt_ty/1)
+
+      {:rem, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, &Word.opt_ty/1)
+
+      {:eq, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, fn _ -> Word.bool_ty() end)
+
+      {:lt, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, fn _ -> Word.bool_ty() end)
+
+      {:le, _, ts1} ->
+        word_bin(k, book, rs, gamma, m, ts1, fn _ -> Word.bool_ty() end)
+
+      {:not, _, [t]} ->
+        word_una(k, book, rs, gamma, m, t, &Word.word_ty/1)
+
+      {:not, _, _} ->
+        {:error, "noti takes one word"}
+
+      {:shl, _, [x, n1]} ->
+        word_shift(k, book, rs, gamma, m, x, n1)
+
+      {:shl, _, _} ->
+        {:error, "shli takes a word and a Nat"}
+
+      {:shr, _, [x, n1]} ->
+        word_shift(k, book, rs, gamma, m, x, n1)
+
+      {:shr, _, _} ->
+        {:error, "shri takes a word and a Nat"}
+
+      {{:cast, kd}, _, [t]} ->
+        word_cast(k, book, rs, gamma, m, kd, t)
+
+      {{:cast, _}, _, _} ->
+        {:error, "a cast takes one word"}
+
+      {:bool, m1, _} when m1 in [:run, :evidence] ->
+        {:error, "no promotion: a word type is an erased term"}
+
+      {:bool, :spec, []} ->
+        {:ok, {:typ, u0s(n)}}
+
+      {:bool, _, _} ->
+        {:error, "WBool takes no arguments"}
+
+      {true, _, []} ->
+        {:ok, {Word.bool_ty(), u0s(n)}}
+
+      {true, _, _} ->
+        {:error, "wtrue takes no arguments"}
+
+      {false, _, []} ->
+        {:ok, {Word.bool_ty(), u0s(n)}}
+
+      {false, _, _} ->
+        {:error, "wfalse takes no arguments"}
+
+      {:opt, m1, _} when m1 in [:run, :evidence] ->
+        {:error, "no promotion: a word type is an erased term"}
+
+      {:opt, :spec, [a]} ->
+        with :ok <- check_ty(k, book, rs, gamma, a) do
+          {:ok, {:typ, u0s(n)}}
+        end
+
+      {:opt, _, _} ->
+        {:error, "Opt takes one type"}
+
+      {{:optk, _}, m1, _} when m1 in [:run, :evidence] ->
+        {:error, "no promotion: a word type is an erased term"}
+
+      {{:optk, _}, :spec, []} ->
+        {:ok, {:typ, u0s(n)}}
+
+      {{:optk, _}, _, _} ->
+        {:error, "Opt takes no arguments"}
+
+      {:some, _, [t]} ->
+        word_una(k, book, rs, gamma, m, t, &Word.opt_ty/1)
+
+      {:some, _, _} ->
+        {:error, "wsome takes one word"}
+
+      {:none, _, _} ->
+        {:error, "wnone requires an expected Opt type"}
+    end
+  end
+
+  defp word_kind!(ty) do
+    case Word.kind_of_ty(ty) do
+      {:ok, kx} -> {:ok, kx}
+      :error -> {:error, "machine integer operation expects a machine integer"}
+    end
+  end
+
+  defp word_bin(k, book, rs, gamma, m, [x, y], result) do
+    with {:ok, {tx, ux}} <- infer(k, book, rs, gamma, m, x),
+         {:ok, tx1} <- whnf(k, book, tx),
+         {:ok, kx} <- word_kind!(tx1),
+         {:ok, uy} <- check(k, book, rs, gamma, m, y, Word.word_ty(kx)),
+         {:ok, uses} <- combine(m, ux, uy) do
+      {:ok, {result.(kx), uses}}
+    end
+  end
+
+  defp word_bin(_, _, _, _, _, _, _), do: {:error, "word operation takes two machine integers"}
+
+  defp word_una(k, book, rs, gamma, m, t, result) do
+    with {:ok, {ty, u}} <- infer(k, book, rs, gamma, m, t),
+         {:ok, ty1} <- whnf(k, book, ty),
+         {:ok, kx} <- word_kind!(ty1) do
+      {:ok, {result.(kx), u}}
+    end
+  end
+
+  defp word_ton(k, book, rs, gamma, m, t) do
+    with {:ok, {ty, u}} <- infer(k, book, rs, gamma, m, t),
+         {:ok, ty1} <- whnf(k, book, ty),
+         {:ok, _} <- word_kind!(ty1) do
+      {:ok, {:nat, u}}
+    end
+  end
+
+  defp word_cast(k, book, rs, gamma, m, kd, t) do
+    with {:ok, {ty, u}} <- infer(k, book, rs, gamma, m, t),
+         {:ok, ty1} <- whnf(k, book, ty),
+         {:ok, _} <- word_kind!(ty1) do
+      {:ok, {Word.word_ty(kd), u}}
+    end
+  end
+
+  defp word_shift(k, book, rs, gamma, m, x, n1) do
+    with {:ok, {tx, ux}} <- infer(k, book, rs, gamma, m, x),
+         {:ok, tx1} <- whnf(k, book, tx),
+         {:ok, kx} <- word_kind!(tx1),
+         {:ok, un} <- check(k, book, rs, gamma, m, n1, :nat),
+         {:ok, uses} <- combine(m, ux, un) do
+      {:ok, {Word.word_ty(kx), uses}}
     end
   end
 
@@ -1608,6 +2547,12 @@ defmodule Muro.Check do
   defp infer_arg(k, book, rs, gamma, m, :affine, a, fu, arg, f) do
     with {:ok, au} <- check(k, book, rs, gamma, m, arg, a),
          do: app_uses(book, m, f, fu, au)
+  end
+
+  # Mark m1 has the affine quantity (Arrow.qty-affine): one use of the
+  # argument, not erased and not scaled.
+  defp infer_arg(k, book, rs, gamma, m, :linear, a, fu, arg, f) do
+    infer_arg(k, book, rs, gamma, m, :affine, a, fu, arg, f)
   end
 
   defp infer_arg(k, book, rs, gamma, m, :reuse, a, fu, arg, f) do
@@ -1649,7 +2594,7 @@ defmodule Muro.Check do
       {:lam, q, a_ann, x, t} ->
         case view_pi(k, book, a, names_of(rs, gamma)) do
           {:ok, {q1, a1, b}} ->
-            with :ok <- if(q == q1, do: :ok, else: {:error, "λ/Π quantity mismatch"}),
+            with :ok <- qty_agree(q, q1),
                  :ok <- check_ty(k, book, rs, gamma, a_ann),
                  :ok <- conv(k, book, names_of(rs, gamma), a_ann, a1),
                  :ok <-
@@ -1753,6 +2698,25 @@ defmodule Muro.Check do
              :ok <- check_unfold(k, book, mode, rs, f),
              do: combine(mode, seed_u, fu)
 
+      # ⇐-wnone. The expected type is Opt, after whnf.
+      {:word, :none, []} ->
+        with {:ok, t1} <- whnf(k, book, a) do
+          case t1 do
+            {:word, {:optk, _}, []} ->
+              {:ok, u0s(nctx(gamma))}
+
+            {:word, :opt, [ty]} ->
+              case is_data(k, book, ty) do
+                {:ok, true} -> {:ok, u0s(nctx(gamma))}
+                {:ok, false} -> {:error, "wnone requires an expected Opt type"}
+                err -> err
+              end
+
+            _ ->
+              {:error, "wnone requires an expected Opt type"}
+          end
+        end
+
       # ⇐-ctor / ⇐-conv
       _ ->
         case {view_data(k, book, a, names_of(rs, gamma)), ctor_spine(book, e)} do
@@ -1792,7 +2756,237 @@ defmodule Muro.Check do
   """
   def check_def(book, d, fuel \\ @fuel)
 
+  # The other end is `Muro.Session.dual`. An omitted mark is the named
+  # session's mark. A written mark that disagrees is refused. A cycle
+  # of duals has no protocol.
+  def check_def(book, %{kind: :session, name: name} = d, _fuel) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with :ok <- Muro.Session.decl_ok(d, book) do
+      params = Map.get(d, :params, [])
+
+      # A parameterised declaration is the template. It is opened at a use.
+      # `dual` and `seen` still resolve, including a forward `dual`.
+      if params != [] and not match?({:dual, _}, d.proto) and
+           not match?({:seen, _, _, _}, d.proto) do
+        :ok
+      else
+        case resolve_session(book, name, MapSet.new()) do
+          {:ok, session} ->
+            case Muro.Session.proto_ok(session.proto, book) do
+              :ok -> :ok
+              {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+            end
+
+          {:error, msg} ->
+            {:error, "#{loc}#{name}: #{msg}"}
+        end
+      end
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
+  # Muro.Session.decide, then `finishes` when the session is `%1`. The
+  # evidence an evidence payload owes is decided there.
+  # A protocol mismatch is reported before an abandoned linear channel.
+  def check_def(book, %{kind: :conform, name: name, session: sname, proc: proc} = d, _fuel) do
+    with {:ok, session} <- open_session(book, sname),
+         :ok <- session_sits(book, session, proc, Map.get(d, :steps)) do
+      :ok
+    else
+      {:error, at, msg} -> {:error, "#{Print.loc_prefix(at)}#{name}: #{msg}"}
+      {:error, msg} -> {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+    end
+  end
+
+  # A place is ambient or a node name. The node name is a string.
+  def check_def(_book, %{kind: :place}, _fuel), do: :ok
+
+  # A scheme is spec. `fixed` names a place declared in the book.
+  def check_def(book, %{kind: :scheme, name: name, scheme: scheme} = d, _fuel) do
+    case resolve_scheme(book, scheme) do
+      {:ok, _} ->
+        :ok
+
+      {:error, msg} ->
+        {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+    end
+  end
+
+  # Muro.Place.conform. The stated mark is stay or cross. A mark whose
+  # boundary disagrees with `bounds` is refused. A move is evidence.
+  def check_def(book, %{kind: :move, mark: mark, scheme: sname, place: pname} = d, _fuel) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, scheme} <- fetch_scheme(book, sname),
+         {:ok, resolved} <- resolve_scheme(book, scheme.scheme),
+         {:ok, placed} <- fetch_place(book, pname) do
+      actual = Place.conform(resolved, placed.place)
+
+      if actual == mark do
+        :ok
+      else
+        {:error, "#{loc}expected #{actual}"}
+      end
+    else
+      {:error, msg} -> {:error, "#{loc}#{msg}"}
+    end
+  end
+
+  # Muro.Located. The endpoint is the session's mark, its protocol, and
+  # the scheme. Spec holds that. The scheme's place must resolve.
+  def check_def(book, %{kind: :endpoint, name: name, session: sname, scheme: sch} = d, _fuel) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, _} <- open_session(book, sname),
+         {:ok, scheme} <- fetch_scheme(book, sch),
+         {:ok, _} <- resolve_scheme(book, scheme.scheme) do
+      :ok
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
+  # Muro.Located.Sits. The process conforms, and `%1` finishes, before the
+  # move is checked. The stated mark is stay or cross. A mark whose
+  # boundary disagrees with `Place.conform` is refused. A reading is evidence.
+  def check_def(
+        book,
+        %{kind: :read, name: name, mark: mark, endpoint: ename, place: pname, proc: proc} = d,
+        _fuel
+      ) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, endpoint} <- fetch_endpoint(book, ename),
+         {:ok, session} <- fetch_session(book, endpoint.session),
+         {:ok, scheme} <- fetch_scheme(book, endpoint.scheme),
+         {:ok, resolved} <- resolve_scheme(book, scheme.scheme),
+         {:ok, placed} <- fetch_place(book, pname),
+         :ok <- session_sits(book, session, proc, Map.get(d, :steps)),
+         :ok <- move_sits(resolved, placed.place, mark) do
+      :ok
+    else
+      {:error, at, msg} -> {:error, "#{Print.loc_prefix(at)}#{name}: #{msg}"}
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
+  # Where a party of a description sits. The description expands, and
+  # the place is declared. A party with no session may still sit.
+  # A seat is spec.
+  def check_def(book, %{kind: :seat, name: name, place: pname, talk: talk} = d, _fuel) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, _} <- resolve_talk_name(book, talk, MapSet.new()),
+         {:ok, _} <- fetch_place(book, pname) do
+      :ok
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
+  # The boundary is `Place.decide` of the two places. Both seats are
+  # that description, and the parties have a session, before the
+  # stated mark is checked. The payload stays on the session. Evidence.
+  def check_def(
+        book,
+        %{kind: :link, name: name, mark: mark, left: left, right: right, talk: talk} = d,
+        _fuel
+      ) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, l} <- fetch_seat(book, left),
+         {:ok, r} <- fetch_seat(book, right),
+         :ok <- one_description(l.talk, r.talk, talk),
+         {:ok, tree} <- resolve_talk_name(book, talk, MapSet.new()),
+         {:ok, _} <- Muro.Talk.seen(l.party, r.party, tree),
+         {:ok, lp} <- fetch_place(book, l.place),
+         {:ok, rp} <- fetch_place(book, r.place),
+         :ok <- boundary_sits(lp.place, rp.place, mark) do
+      :ok
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
+  # Projection. A choreography is spec. The lines are the binary
+  # session of each ordered pair of roles.
+  def check_def(book, %{kind: :choreography, name: name, roles: roles, body: body} = d, _fuel) do
+    case Muro.Choreo.check(name, roles, body, book) do
+      {:ok, lines} ->
+        {:choreo, lines}
+
+      {:error, msg} ->
+        {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+    end
+  end
+
+  # The description expands. A name that refers to itself has no
+  # description. A party with no session is refused on the session.
+  # A talk is spec.
+  def check_def(book, %{kind: :talk, name: name, body: body} = d, _fuel) do
+    case expand_talk(book, body, MapSet.new([name])) do
+      {:ok, _} ->
+        :ok
+
+      {:error, msg} ->
+        {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: #{msg}"}
+    end
+  end
+
+  # Muro.Meet.decide when no buffer is written. Both names are processes.
+  # The protocol of one is the other end of the other, and then the
+  # payload types meet. A protocol that is not the other end is reported
+  # before a type they do not share. `buffer N` is Muro.Async: the same
+  # processes across two queues of that length. Those protocols need not
+  # be dual. Each side still has to conform.
+  def check_def(book, %{kind: :meet, name: name, left: left, right: right} = d, _fuel) do
+    # One entry per book check. A temporal declaration reads the outcome
+    # recorded from this call and does not enter here again.
+    Muro.Explore.note(:meeting, name)
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, lp} <- fetch_process(book, left),
+         {:ok, rp} <- fetch_process(book, right),
+         :ok <- guard_sits(book, lp, left),
+         :ok <- guard_sits(book, rp, right),
+         {:ok, l} <- process_session(book, lp),
+         {:ok, r} <- process_session(book, rp) do
+      case meet_ends(book, l, r, left, right, Map.get(d, :buffer)) do
+        {:ok, graph} -> {:graph, name, l.session, graph}
+        {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+      end
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
+  # Standalone check of one temporal declaration. It checks the named
+  # meeting once, then decides the formula. `check_sig/2` does not use
+  # this clause: the meeting was already checked, and the declaration
+  # reads that recorded outcome. Fuel does not reduce a formula.
+  def check_def(book, %{kind: :temporal} = d, fuel) do
+    temporal_report(d, Muro.Temporal.judge(book, d, fuel))
+  end
+
+  # Host representation. No kernel term. `Muro.Repr` is the contract.
+  def check_def(book, %{kind: :repr} = d, _fuel), do: Repr.check_entry(book, d)
+
   def check_def(book, %{kind: :data} = d, fuel), do: check_data(book, d, fuel)
+
+  # Muro.Linear. The function is evidence. A linear endpoint is used
+  # once. An affine endpoint is used at most once. The body is not a term.
+  def check_def(book, %{kind: :relay} = d, _fuel), do: check_relay(book, d)
+
+  # An open param is an assumption: the type is checked, and there is no
+  # body to unfold. `params: :open` is the only way one reaches this clause.
+  def check_def(book, %{kind: :param, mode: mode, type: ty} = d, k) do
+    with :ok <- fail_at(d, "type", check_ty(k, book, empty_rec(), [], ty)),
+         :ok <- fail_at(d, "type", run_decl(k, book, mode, ty)) do
+      :ok
+    end
+  end
 
   def check_def(book, %{mode: mode, type: ty, body: body} = d, k) do
     with :ok <- fail_at(d, "type", check_ty(k, book, empty_rec(), [], ty)),
@@ -1805,6 +2999,594 @@ defmodule Muro.Check do
              check_nu(k, book, MapSet.put(component(book, d.name), d.name), mode, ty, body)
            ) do
       :ok
+    end
+  end
+
+  defp temporal_report(%{name: name} = d, result) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    case result do
+      {:ok, n} -> {:note, "temporal #{name}: holds in #{n} reachable states"}
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
+  defp meet_ends(book, l, r, _left, _right, nil) do
+    with :ok <- other_end(l.proto, r.proto) do
+      case Muro.Meet.graph(l.proc, r.proc, book, l.proto, {l.steps, r.steps}) do
+        {:ok, graph} -> {:ok, graph}
+        {{:error, msg}, _graph} -> {:error, msg}
+      end
+    end
+  end
+
+  defp meet_ends(book, l, r, left, right, k) when is_integer(k) do
+    case Muro.Async.recorded(l.proc, r.proc, book, k, left, right, {l.steps, r.steps}) do
+      {:ok, graph} -> {:ok, graph}
+      {:error, msg, _graph} -> {:error, msg}
+    end
+  end
+
+  # The meeting is not a second report of a process that already failed.
+  defp guard_sits(book, defn, name) do
+    case sits_participant(book, defn) do
+      :ok -> :ok
+      _ -> {:error, "skipped because #{name} does not conform"}
+    end
+  end
+
+  defp sits_participant(book, %{kind: :conform, session: sname, proc: proc} = d) do
+    case open_session(book, sname) do
+      {:ok, session} -> session_sits(book, session, proc, Map.get(d, :steps))
+      err -> err
+    end
+  end
+
+  defp sits_participant(book, %{kind: :read, endpoint: ename, proc: proc} = d) do
+    with {:ok, endpoint} <- fetch_endpoint(book, ename),
+         {:ok, session} <- fetch_session(book, endpoint.session) do
+      session_sits(book, session, proc, Map.get(d, :steps))
+    end
+  end
+
+  # `%1` is Mark lin. An unmarked session, and `%0`, are affine.
+  defp linear_session?(session), do: Map.get(session, :mult, :affine) == :linear
+
+  # Conforms, then Ends when the session is `%1`. A protocol mismatch is
+  # reported before an abandoned channel. Mirrors `held` and `finished`.
+  defp session_sits(book, session, proc, steps) do
+    with :ok <- check_proc_vars(proc, MapSet.new(), book, steps),
+         :ok <- Muro.Session.proc_ok(proc) do
+      case Muro.Session.conform_at(proc, session.proto, book, steps) do
+        :ok ->
+          if linear_session?(session) and Muro.Session.finishes(proc) == :no do
+            {:error, "linear channel abandoned"}
+          else
+            :ok
+          end
+
+        {:error, at, msg} when not is_nil(at) ->
+          {:error, at, msg}
+
+        {:error, _at, msg} ->
+          {:error, msg}
+      end
+    end
+  end
+
+  # Check that all variables used in a process are bound.
+  # A constructor of a declared data type is not a variable.
+  defp check_proc_vars(proc, ctx, book, span)
+
+  defp check_proc_vars(:done, _ctx, _book, _span), do: :ok
+  defp check_proc_vars(:stop, _ctx, _book, _span), do: :ok
+
+  defp check_proc_vars({:put, _ty, val, p}, ctx, book, span) do
+    with :ok <- check_val_vars(val, ctx, book, Muro.Session.step_at(span)),
+         do: check_proc_vars(p, ctx, book, Muro.Session.step_down(span, 0))
+  end
+
+  defp check_proc_vars({:get, _ty, name, p}, ctx, book, span) do
+    # Anonymous binder _ doesn't add to context
+    new_ctx = if name == :_, do: ctx, else: MapSet.put(ctx, name)
+    check_proc_vars(p, new_ctx, book, Muro.Session.step_down(span, 0))
+  end
+
+  defp check_proc_vars({:pick0, p}, ctx, book, span),
+    do: check_proc_vars(p, ctx, book, Muro.Session.step_down(span, 0))
+
+  defp check_proc_vars({:pick1, p}, ctx, book, span),
+    do: check_proc_vars(p, ctx, book, Muro.Session.step_down(span, 0))
+
+  defp check_proc_vars({:cover, p, q}, ctx, book, span) do
+    with :ok <- check_proc_vars(p, ctx, book, Muro.Session.step_down(span, 0)),
+         do: check_proc_vars(q, ctx, book, Muro.Session.step_down(span, 1))
+  end
+
+  defp check_proc_vars({:iget, name, p, q}, ctx, book, span) do
+    ctx1 = if name == :_, do: ctx, else: MapSet.put(ctx, name)
+
+    with :ok <- check_proc_vars(p, ctx1, book, Muro.Session.step_down(span, 0)),
+         do: check_proc_vars(q, ctx1, book, Muro.Session.step_down(span, 1))
+  end
+
+  # A recursion variable is not a payload. The value context is unchanged.
+  defp check_proc_vars({:rec, _name, body}, ctx, book, span),
+    do: check_proc_vars(body, ctx, book, Muro.Session.step_down(span, 0))
+
+  defp check_proc_vars({:call, _name}, _ctx, _book, _span), do: :ok
+
+  # The scrutinee is the value `get` just bound. Each arm is that continuation.
+  # A named arm's binders are in scope in its body.
+  defp check_proc_vars({:match, name, arms}, ctx, book, span) do
+    if MapSet.member?(ctx, name) do
+      arms
+      |> Enum.with_index()
+      |> Enum.reduce_while(:ok, fn {arm, i}, :ok ->
+        case check_arm_vars(arm, ctx, book, Muro.Session.step_down(span, i)) do
+          :ok -> {:cont, :ok}
+          err -> {:halt, err}
+        end
+      end)
+    else
+      at_step(span, "match does not cover the received value")
+    end
+  end
+
+  defp check_arm_vars({:arm, _ctor, binders, body}, ctx, book, span) when is_list(binders) do
+    ctx1 = Enum.reduce(binders, ctx, &MapSet.put(&2, &1))
+    check_proc_vars(body, ctx1, book, span)
+  end
+
+  defp check_arm_vars({:prod, _, _} = arm, ctx, book, span) do
+    ctx1 = Enum.reduce(Muro.Session.arm_binders(arm), ctx, &MapSet.put(&2, &1))
+    check_proc_vars(body_of(arm), ctx1, book, span)
+  end
+
+  defp check_arm_vars(arm, ctx, book, span), do: check_proc_vars(arm, ctx, book, span)
+
+  defp body_of({:prod, _, body}), do: body
+
+  # A bound name is in scope. An unbound name is in scope when it is a
+  # constructor. Conformance then decides whether that constructor
+  # inhabits the payload.
+  defp check_val_vars(val, ctx, book, at)
+
+  defp check_val_vars({:var, name}, ctx, book, at) do
+    label = ctor_label(name)
+
+    cond do
+      MapSet.member?(ctx, name) -> :ok
+      ctor_name?(book, label) -> :ok
+      run_def?(book, label) -> :ok
+      evidence_def?(book, label) -> at_step(at, "evidence is not a value")
+      term_def?(book, label) -> at_step(at, "#{label} is not a run definition")
+      true -> at_step(at, "unbound variable #{name}")
+    end
+  end
+
+  defp check_val_vars({:con, name, args}, ctx, book, at) when is_list(args) do
+    cond do
+      ctor_name?(book, name) or run_def?(book, name) ->
+        Enum.reduce_while(args, :ok, fn arg, :ok ->
+          case check_val_vars(arg, ctx, book, at) do
+            :ok -> {:cont, :ok}
+            err -> {:halt, err}
+          end
+        end)
+
+      evidence_def?(book, name) ->
+        at_step(at, "evidence is not a value")
+
+      term_def?(book, name) ->
+        at_step(at, "#{name} is not a run definition")
+
+      true ->
+        at_step(at, "unbound variable #{name}")
+    end
+  end
+
+  defp check_val_vars({:nat, _}, _ctx, _book, _at), do: :ok
+  defp check_val_vars(:b0, _ctx, _book, _at), do: :ok
+  defp check_val_vars(:b1, _ctx, _book, _at), do: :ok
+  defp check_val_vars(:tt, _ctx, _book, _at), do: :ok
+
+  defp check_val_vars({:tup, a, b}, ctx, book, at) do
+    with :ok <- check_val_vars(a, ctx, book, at), do: check_val_vars(b, ctx, book, at)
+  end
+
+  defp check_val_vars({:rec, fields}, ctx, book, at) when is_list(fields) do
+    Enum.reduce_while(fields, :ok, fn {_name, val}, :ok ->
+      case check_val_vars(val, ctx, book, at) do
+        :ok -> {:cont, :ok}
+        err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp check_val_vars({:rep, ix, elem}, ctx, book, at) do
+    with :ok <- check_val_vars(ix, ctx, book, at), do: check_val_vars(elem, ctx, book, at)
+  end
+
+  defp check_val_vars(_, _ctx, _book, _at), do: :ok
+
+  # `at` is a `{line, col}` of the step, or a span, or nil for the definition.
+  defp at_step(%{at: at}, msg), do: at_step(at, msg)
+
+  defp at_step({line, col}, msg) when is_integer(line) and is_integer(col),
+    do: {:error, {line, col}, msg}
+
+  defp at_step({file, line, col}, msg) when is_binary(file), do: {:error, {file, line, col}, msg}
+  defp at_step(_, msg), do: {:error, msg}
+
+  defp evidence_def?(book, name) do
+    Enum.any?(book, fn d ->
+      Map.get(d, :name) == name and Map.get(d, :mode) == :evidence and term_def?(d)
+    end)
+  end
+
+  defp ctor_label(name) when is_atom(name), do: Atom.to_string(name)
+  defp ctor_label(name) when is_binary(name), do: name
+  defp ctor_label(_), do: ""
+
+  # The boundary is `Place.conform`. The payload stays on the session.
+  defp move_sits(scheme, place, mark) do
+    actual = Place.conform(scheme, place)
+
+    if actual == mark do
+      :ok
+    else
+      {:error, "expected #{actual}"}
+    end
+  end
+
+  # Ground the declared sessions, then `Muro.Linear.check`. A closed
+  # endpoint function is its declared type. Its body is not unfolded.
+  defp check_relay(book, %{name: name, type: ty, body: body} = d) do
+    loc = Print.loc_prefix(Map.get(d, :loc))
+
+    with {:ok, protos} <- session_protos(book),
+         relays = relay_types(book, protos),
+         {:ok, ty} <- Muro.Linear.ground_ty(protos, ty),
+         {:ok, body} <- Muro.Linear.ground_tm(protos, body),
+         :ok <- Muro.Linear.check(relays, ty, body) do
+      :ok
+    else
+      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
+  defp session_protos(book) do
+    Enum.reduce_while(book, {:ok, %{}}, fn
+      %{kind: :session, name: name} = s, {:ok, acc} ->
+        if Map.get(s, :params, []) != [] do
+          {:cont, {:ok, Map.put(acc, name, :arity)}}
+        else
+          case fetch_session(book, name) do
+            {:ok, %{proto: proto}} -> {:cont, {:ok, Map.put(acc, name, proto)}}
+            {:error, msg} -> {:halt, {:error, msg}}
+          end
+        end
+
+      _, acc ->
+        {:cont, acc}
+    end)
+  end
+
+  defp relay_types(book, protos) do
+    Enum.flat_map(book, fn
+      %{kind: :relay, name: name, type: ty} ->
+        case Muro.Linear.ground_ty(protos, ty) do
+          {:ok, gty} -> [{name, gty}]
+          _ -> []
+        end
+
+      _ ->
+        []
+    end)
+  end
+
+  defp fetch_session(book, name), do: resolve_session(book, name, MapSet.new())
+
+  # Walk `dual` to a protocol. The mark of an omitted dual is the mark
+  # at the end of that walk. `dual (dual S)` is `S`. A `seen` session is
+  # the protocol one party has with another in the description. Its mark
+  # is the mark written on the session. The talk cycle is its own set.
+  defp resolve_session(book, name, seen) do
+    if MapSet.member?(seen, name) do
+      {:error, "dual cycle"}
+    else
+      case Enum.find(book, &(Map.get(&1, :kind) == :session and &1.name == name)) do
+        nil ->
+          {:error, "unknown session #{name}"}
+
+        %{proto: {:dual, other}} = s ->
+          with {:ok, base} <- resolve_dual_target(book, other, MapSet.put(seen, name)),
+               {:ok, mark} <- agreed_mark(s.mult, base.mult) do
+            {:ok, %{s | proto: Muro.Session.dual(base.proto), mult: mark, params: []}}
+          end
+
+        %{proto: {:seen, p, q, talk}} = s ->
+          resolve_seen(book, s, p, q, talk)
+
+        s ->
+          cond do
+            Map.get(s, :params, []) != [] ->
+              {:error, "wrong number of session arguments"}
+
+            true ->
+              case Muro.Session.elaborate(s, book) do
+                {:ok, proto} -> {:ok, %{s | proto: proto}}
+                {:error, _} = err -> err
+              end
+          end
+      end
+    end
+  end
+
+  # `dual ping` may name a later session. `dual (stream 0)` opens that call.
+  # A `seen` name is a talk, or a choreography. The error stays
+  # `unknown talk` when it is neither, which is the message a missing
+  # description already had.
+  defp resolve_seen(book, session, p, q, name) do
+    cond do
+      Enum.any?(book, &(Map.get(&1, :kind) == :talk and &1.name == name)) ->
+        with {:ok, tree} <- resolve_talk_name(book, name, MapSet.new()),
+             {:ok, proto} <- Muro.Talk.seen(p, q, tree) do
+          {:ok, %{session | proto: proto}}
+        end
+
+      Enum.any?(book, &(Map.get(&1, :kind) == :choreography and &1.name == name)) ->
+        %{roles: roles, body: body} =
+          Enum.find(book, &(Map.get(&1, :kind) == :choreography and &1.name == name))
+
+        case Muro.Choreo.session(roles, body, p, q, book) do
+          {:ok, proto} -> {:ok, %{session | proto: proto}}
+          {:error, msg} -> {:error, msg}
+        end
+
+      true ->
+        {:error, "unknown talk #{name}"}
+    end
+  end
+
+  defp resolve_dual_target(book, name, seen) when is_binary(name) do
+    resolve_session(book, name, seen)
+  end
+
+  defp resolve_dual_target(book, {:sess, name, args}, _seen) do
+    Muro.Session.open_applied(book, name, args)
+  end
+
+  defp resolve_dual_target(_book, _, _), do: {:error, "unknown session"}
+
+  @doc false
+  def open_session(book, name) when is_binary(name),
+    do: resolve_session(book, name, MapSet.new())
+
+  def open_session(book, {:sess, name, args}) do
+    Muro.Session.open_applied(book, name, args)
+  end
+
+  def open_session(_book, _other), do: {:error, "unknown session"}
+
+  # Names expand before `seen`. Two names of one body are one description.
+  # The stack is the talks currently being expanded, not the dual walk.
+  defp resolve_talk_name(book, name, stack) do
+    if MapSet.member?(stack, name) do
+      {:error, "talk cycle"}
+    else
+      case Enum.find(book, &(Map.get(&1, :kind) == :talk and &1.name == name)) do
+        nil ->
+          {:error, "unknown talk #{name}"}
+
+        %{body: body} ->
+          expand_talk(book, body, MapSet.put(stack, name))
+      end
+    end
+  end
+
+  defp expand_talk(_book, :over, _stack), do: {:ok, :over}
+
+  # `say` names one payload type and one continuation. `offer` still
+  # has two arms. A name expands to the tree it stands for.
+  # The payload is a session payload. A declared data type takes as
+  # many arguments as its declaration has parameters.
+  defp expand_talk(book, {:say, a, b, ty, t}, stack) do
+    with :ok <- Muro.Session.proto_ok({:send, ty, :end}, book),
+         {:ok, u} <- expand_talk(book, t, stack) do
+      {:ok, {:say, a, b, ty, u}}
+    end
+  end
+
+  defp expand_talk(book, {:offer, a, b, t0, t1}, stack) do
+    with {:ok, u0} <- expand_talk(book, t0, stack),
+         {:ok, u1} <- expand_talk(book, t1, stack) do
+      {:ok, {:offer, a, b, u0, u1}}
+    end
+  end
+
+  defp expand_talk(book, {:ref, name}, stack), do: resolve_talk_name(book, name, stack)
+
+  defp agreed_mark(:inherit, mark), do: {:ok, mark}
+  defp agreed_mark(mark, mark), do: {:ok, mark}
+  defp agreed_mark(_stated, actual), do: {:error, "expected #{show_mark(actual)}"}
+
+  defp show_mark(:linear), do: "%1"
+  defp show_mark(:affine), do: "%0"
+
+  # One direction is enough: `dual` is an involution.
+  # The first step where the right protocol is not that dual is the refusal.
+  defp other_end(proto, other), do: ends_walk(proto, other, [])
+
+  defp ends_walk(left, right, path) do
+    if right == Muro.Session.dual(left) do
+      :ok
+    else
+      case peel_ends(left, right) do
+        {:one, label, l, r} ->
+          ends_walk(l, r, path ++ [label])
+
+        {:two, label, l0, r0, l1, r1} ->
+          case ends_walk(l0, r0, path ++ [label, "arm b0"]) do
+            :ok -> ends_walk(l1, r1, path ++ [label, "arm b1"])
+            err -> err
+          end
+
+        {:many, label, pairs} ->
+          Enum.reduce_while(pairs, :ok, fn {arm, l, r}, :ok ->
+            case ends_walk(l, r, path ++ [label, "arm #{arm}"]) do
+              :ok -> {:cont, :ok}
+              err -> {:halt, err}
+            end
+          end)
+
+        :diff ->
+          {:error, proto_diverged(left, right, path)}
+      end
+    end
+  end
+
+  defp proto_diverged(left, right, path) do
+    where = if path == [], do: "", else: " after " <> Enum.join(path, ", ")
+
+    "diverged#{where}: left: #{Muro.Session.step_proto(left)}; right: #{Muro.Session.step_proto(right)}; protocol: #{Muro.Session.show_proto(left)}"
+  end
+
+  defp peel_ends({:send, a, s}, {:recv, a, t}), do: {:one, "send #{pay_atom(a)}", s, t}
+  defp peel_ends({:recv, a, s}, {:send, a, t}), do: {:one, "recv #{pay_atom(a)}", s, t}
+
+  defp peel_ends({:dsend, x, a, {:case, sl, arms}}, {:drecv, x, a, {:case, sr, arms2}}) do
+    peel_case("send", x, a, sl, sr, arms, arms2)
+  end
+
+  defp peel_ends({:drecv, x, a, {:case, sl, arms}}, {:dsend, x, a, {:case, sr, arms2}}) do
+    peel_case("recv", x, a, sl, sr, arms, arms2)
+  end
+
+  defp peel_ends({:dsend, x, a, s}, {:drecv, x, a, t}), do: {:one, dep_label("send", x, a), s, t}
+  defp peel_ends({:drecv, x, a, s}, {:dsend, x, a, t}), do: {:one, dep_label("recv", x, a), s, t}
+  defp peel_ends({:esend, x, e, s}, {:erecv, x, e, t}), do: {:one, ev_label("send", x, e), s, t}
+  defp peel_ends({:erecv, x, e, s}, {:esend, x, e, t}), do: {:one, ev_label("recv", x, e), s, t}
+
+  defp peel_ends({:choose, s, t}, {:branch, u, v}), do: {:two, "choose", s, u, t, v}
+  defp peel_ends({:branch, s, t}, {:choose, u, v}), do: {:two, "branch", s, u, t, v}
+
+  defp peel_ends({:isend, x, s, t}, {:irecv, x, u, v}),
+    do: {:two, "send (#{x} : Bit)", s, u, t, v}
+
+  defp peel_ends({:irecv, x, s, t}, {:isend, x, u, v}),
+    do: {:two, "recv (#{x} : Bit)", s, u, t, v}
+
+  defp peel_ends({:rec, x, s}, {:rec, x, t}), do: {:one, "rec #{x}", s, t}
+  defp peel_ends(_, _), do: :diff
+
+  defp peel_case(dir, x, a, sl, sr, arms, arms2) do
+    left = Enum.map(arms, fn {c, s} -> {c, s} end)
+    right = Enum.map(arms2, fn {c, s} -> {c, s} end)
+
+    if sl == sr and Enum.map(left, &elem(&1, 0)) == Enum.map(right, &elem(&1, 0)) do
+      pairs =
+        Enum.zip(left, right)
+        |> Enum.map(fn {{c, s}, {_c, t}} -> {c, s, t} end)
+
+      {:many, dep_label(dir, x, a), pairs}
+    else
+      :diff
+    end
+  end
+
+  defp pay_atom(ty),
+    do: Muro.Session.step_proto({:send, ty, :end}) |> String.replace_prefix("send ", "")
+
+  defp dep_label(dir, x, a), do: "#{dir} (#{x} : #{pay_atom(a)})"
+
+  defp ev_label(dir, x, e),
+    do: Muro.Session.step_proto({if(dir == "send", do: :esend, else: :erecv), x, e, :end})
+
+  defp fetch_process(book, name) do
+    case Enum.find(book, &(Map.get(&1, :kind) in [:conform, :read] and &1.name == name)) do
+      nil -> {:error, "unknown process #{name}"}
+      p -> {:ok, p}
+    end
+  end
+
+  defp process_session(book, %{kind: :conform, name: name, session: sname, proc: proc} = d) do
+    with {:ok, session} <- open_session(book, sname) do
+      {:ok,
+       %{
+         name: name,
+         proc: proc,
+         proto: session.proto,
+         steps: Map.get(d, :steps),
+         session: session.name
+       }}
+    end
+  end
+
+  defp process_session(book, %{kind: :read, name: name, endpoint: ename, proc: proc} = d) do
+    with {:ok, endpoint} <- fetch_endpoint(book, ename),
+         {:ok, session} <- open_session(book, endpoint.session) do
+      {:ok,
+       %{
+         name: name,
+         proc: proc,
+         proto: session.proto,
+         steps: Map.get(d, :steps),
+         session: session.name
+       }}
+    end
+  end
+
+  defp fetch_endpoint(book, name) do
+    case Enum.find(book, &(Map.get(&1, :kind) == :endpoint and &1.name == name)) do
+      nil -> {:error, "unknown endpoint #{name}"}
+      e -> {:ok, e}
+    end
+  end
+
+  defp fetch_place(book, name) do
+    case Enum.find(book, &(Map.get(&1, :kind) == :place and &1.name == name)) do
+      nil -> {:error, "unknown place #{name}"}
+      p -> {:ok, p}
+    end
+  end
+
+  defp fetch_seat(book, name) do
+    case Enum.find(book, &(Map.get(&1, :kind) == :seat and &1.name == name)) do
+      nil -> {:error, "unknown seat #{name}"}
+      s -> {:ok, s}
+    end
+  end
+
+  # Both seats are the description the link names.
+  defp one_description(talk, talk, talk), do: :ok
+  defp one_description(_left, _right, _talk), do: {:error, "expected one description"}
+
+  # `decide` of the two places. The same place stays. Two places cross once.
+  defp boundary_sits(p, q, mark) do
+    actual = Place.decide(p, q)
+
+    if actual == mark do
+      :ok
+    else
+      {:error, "expected #{actual}"}
+    end
+  end
+
+  defp fetch_scheme(book, name) do
+    case Enum.find(book, &(Map.get(&1, :kind) == :scheme and &1.name == name)) do
+      nil -> {:error, "unknown scheme #{name}"}
+      s -> {:ok, s}
+    end
+  end
+
+  defp resolve_scheme(_book, :any), do: {:ok, :any}
+
+  defp resolve_scheme(book, {:fixed, pname}) do
+    case fetch_place(book, pname) do
+      {:ok, %{place: p}} -> {:ok, {:fixed, p}}
+      {:error, _} = err -> err
     end
   end
 
@@ -1823,8 +3605,31 @@ defmodule Muro.Check do
   # block and descend on one shared argument (Agda: component).
   defp rec_mode?(mode), do: mode in [:run, :evidence, :spec]
 
+  # A session, a conformance, a place, a scheme, a move, an endpoint, a
+  # reading, a meeting, a description, a repr, a seat, and a link have a
+  # mode and no term, so they are outside the descent block.
   defp rec_names(book) do
-    for %{mode: mode, name: name} <- book, rec_mode?(mode), do: name
+    for %{mode: mode, name: name} = d <- book,
+        rec_mode?(mode),
+        Map.get(d, :kind) not in [
+          :session,
+          :conform,
+          :place,
+          :scheme,
+          :move,
+          :endpoint,
+          :read,
+          :meet,
+          :temporal,
+          :talk,
+          :choreography,
+          :repr,
+          :seat,
+          :link,
+          :relay,
+          :param
+        ],
+        do: name
   end
 
   defp mentions(t), do: mentions(t, []) |> Enum.uniq()
@@ -1851,6 +3656,9 @@ defmodule Muro.Check do
   defp mentions({:toi64, t}, acc), do: mentions(t, acc)
   defp mentions({:packi, x, y}, acc), do: mentions(y, mentions(x, acc))
 
+  defp mentions({:word, _, args}, acc),
+    do: Enum.reduce(args, acc, fn t, acc -> mentions(t, acc) end)
+
   defp mentions({:matom, e, p, bs}, acc) do
     acc = mentions(p, mentions(e, acc))
     Enum.reduce(bs, acc, fn {_, b}, acc -> mentions(b, acc) end)
@@ -1873,7 +3681,7 @@ defmodule Muro.Check do
   defp rec_callees(book, name, names) do
     case Enum.find(book, &(&1[:name] == name and rec_mode?(&1[:mode]))) do
       nil -> []
-      d -> mentions(d.body) |> Enum.filter(&(&1 in names))
+      d -> mentions(Map.get(d, :body)) |> Enum.filter(&(&1 in names))
     end
   end
 
@@ -1903,7 +3711,11 @@ defmodule Muro.Check do
   # member, members in book order, the first member's choice first. Empty
   # when a member has none (Agda: sharedArgs, choices).
   defp shared_positions(book, block) do
-    members = Enum.filter(book, &(rec_mode?(&1[:mode]) and MapSet.member?(block, &1.name)))
+    members =
+      Enum.filter(book, fn d ->
+        name = Map.get(d, :name)
+        name != nil and rec_mode?(d[:mode]) and MapSet.member?(block, name)
+      end)
 
     case members do
       [] -> []
@@ -1927,10 +3739,12 @@ defmodule Muro.Check do
 
   defp all_ok?(k, book, block, order, poss) do
     Enum.all?(book, fn d ->
-      if rec_mode?(d[:mode]) and MapSet.member?(block, d.name) do
+      name = Map.get(d, :name)
+
+      if name != nil and rec_mode?(d[:mode]) and MapSet.member?(block, name) do
         match?(
           {:ok, _},
-          check(k, book, def_rec(d.name, poss, block, order), [], d.mode, d.body, d.type)
+          check(k, book, def_rec(name, poss, block, order), [], d.mode, d.body, d.type)
         )
       else
         true
@@ -2017,34 +3831,176 @@ defmodule Muro.Check do
     end
   end
 
+  @graphs_key {__MODULE__, :meeting_graphs}
+  @temporal_key {__MODULE__, :temporal_lines}
+  @choreo_key {__MODULE__, :choreo_lines}
+
+  @doc false
+  def begin_meeting_graphs, do: Process.put(@graphs_key, %{})
+
+  @doc false
+  def take_meeting_graphs do
+    graphs = Process.get(@graphs_key, %{})
+    Process.delete(@graphs_key)
+    graphs
+  end
+
+  @doc false
+  def stamp_meeting_graphs(book, graphs) when is_list(book) and is_map(graphs) do
+    Enum.map(book, fn
+      %{kind: :meet, name: name} = d ->
+        case Map.get(graphs, name) do
+          {session, g} when is_binary(session) and is_map(g) ->
+            Map.merge(d, %{graph: g, session: session})
+
+          _ ->
+            d
+        end
+
+      d ->
+        d
+    end)
+  end
+
+  @doc false
+  def check_hook(fun) when is_function(fun, 0) do
+    :persistent_term.put({__MODULE__, :hook}, fun)
+    :ok
+  end
+
+  def check_hook(nil) do
+    :persistent_term.erase({__MODULE__, :hook})
+    :ok
+  end
+
+  defp note_check do
+    case :persistent_term.get({__MODULE__, :hook}, nil) do
+      fun when is_function(fun, 0) -> fun.()
+      _ -> :ok
+    end
+  end
+
+  @doc """
+  Success lines of the temporal declarations in the book just checked,
+  in book order. Empty when that check was refused, or when the book
+  has no temporal declaration.
+  """
+  def temporal_lines, do: Process.get(@temporal_key, [])
+
+  @doc """
+  Projection lines of the choreographies in the book just checked, in
+  book order. Empty when that check was refused, or when the book has
+  no choreography.
+  """
+  def choreo_lines, do: Process.get(@choreo_key, [])
+
   @doc """
   Check a named book. Options: `fuel: n` (default `default_fuel/0`).
 
-  Each definition is checked against the whole book, on its own process,
-  with that same fuel. `:ok` means every definition checked. `{:error, msg}`
-  is every failure, in book order, separated by a blank line. Fuel is the
-  only bound; a definition is not cut off by a wall-clock timeout.
+  Each definition other than a temporal declaration is checked against
+  the whole book, on its own process, with that same fuel. `:ok` means
+  every definition checked. `{:error, msg}` is every failure, in book
+  order, separated by a blank line. Fuel is the only bound; a definition
+  is not cut off by a wall-clock timeout.
+  A temporal declaration that holds adds one line to `temporal_lines/0`.
+
+  Each meeting is checked once. That walk records the source
+  configuration graph the explorer draws, and it is not run again for
+  the drawing. When a temporal declaration names the meeting, the
+  compiled configuration graph is explored once and shared by every
+  declaration of that meeting. A meeting that does not check is
+  skipped, and its compiled graph is not explored.
   """
   def check_sig(named_book, opts \\ []) do
+    note_check()
+    Process.delete(@temporal_key)
+    Process.delete(@choreo_key)
     fuel = Keyword.get(opts, :fuel, @fuel)
+    # `params: :open` keeps unsupplied params as assumptions. The default
+    # refuses them. Only `Muro.Load` passes `:open`, and only when the
+    # exunit entry points asked for it.
+    db_opts = if Keyword.get(opts, :params) == :open, do: [params: :open], else: []
 
-    with {:ok, book} <- Ast.book_to_db(named_book) do
-      errors =
-        book
-        |> Task.async_stream(fn d -> check_def(book, d, fuel) end,
+    with {:ok, book} <- Ast.book_to_db(named_book, db_opts) do
+      indexed = Enum.with_index(book)
+      {temps, defs} = Enum.split_with(indexed, fn {d, _} -> match?(%{kind: :temporal}, d) end)
+
+      def_slots =
+        defs
+        |> Task.async_stream(fn {d, i} -> {i, check_def(book, d, fuel)} end,
           ordered: true,
           timeout: :infinity
         )
-        |> Enum.flat_map(fn
-          {:ok, :ok} -> []
-          {:ok, {:error, msg}} -> [msg]
+        |> Enum.map(fn
+          {:ok, slot} -> slot
           {:exit, reason} -> exit(reason)
         end)
 
+      meetings = recorded_meetings(defs, def_slots)
+      temp_slots = temporal_slots(book, temps, meetings)
+
+      outcomes =
+        (def_slots ++ temp_slots)
+        |> Enum.sort_by(&elem(&1, 0))
+        |> Enum.map(&elem(&1, 1))
+
+      errors = for {:error, msg} <- outcomes, do: msg
+      notes = for {:note, line} <- outcomes, do: line
+
+      choreos =
+        for {:choreo, lines} <- outcomes, line <- lines do
+          line
+        end
+
       case errors do
-        [] -> :ok
-        msgs -> {:error, Enum.join(msgs, "\n\n")}
+        [] ->
+          graphs = for {:graph, name, session, g} <- outcomes, do: {name, {session, g}}
+          prev = Process.get(@graphs_key, %{})
+          Process.put(@graphs_key, Map.merge(prev, Map.new(graphs)))
+          if notes != [], do: Process.put(@temporal_key, notes)
+          if choreos != [], do: Process.put(@choreo_key, choreos)
+          :ok
+
+        msgs ->
+          {:error, Enum.join(msgs, "\n\n")}
       end
+    end
+  end
+
+  defp recorded_meetings(defs, def_slots) do
+    defs
+    |> Enum.zip(def_slots)
+    |> Enum.flat_map(fn
+      {{%{kind: :meet, name: name}, _i}, {_j, outcome}} -> [{name, outcome}]
+      _ -> []
+    end)
+    |> Map.new()
+  end
+
+  defp temporal_slots(_book, [], _meetings), do: []
+
+  defp temporal_slots(book, temps, meetings) do
+    prepared =
+      temps
+      |> Enum.map(fn {%{meeting: meeting}, _i} -> meeting end)
+      |> Enum.uniq()
+      |> Map.new(fn name ->
+        {name, Muro.Temporal.prepare(book, name, recorded_status(meetings, name))}
+      end)
+
+    Enum.map(temps, fn {d, i} ->
+      {i,
+       temporal_report(d, Muro.Temporal.judge_prepared(book, d, Map.fetch!(prepared, d.meeting)))}
+    end)
+  end
+
+  defp recorded_status(meetings, name) do
+    case Map.get(meetings, name, :absent) do
+      :absent -> :absent
+      :ok -> :ok
+      {:note, _} -> :ok
+      {:graph, _, _, _} -> :ok
+      {:error, _} -> :unchecked
     end
   end
 
@@ -2295,7 +4251,7 @@ defmodule Muro.Check do
             rs2 = push_name(ext_rec(rs, rec?, rec?), x)
             args1 = Enum.map(args, &Subst.wk/1) ++ [{:var, 0}]
 
-            with :ok <- if(q == q1, do: :ok, else: {:error, "λ/Π quantity mismatch"}),
+            with :ok <- qty_agree(q, q1),
                  :ok <- check_ty(k, book, rs, gamma, a1),
                  :ok <- conv(k, book, names_of(rs, gamma), a1, a),
                  :ok <- if(q == :reuse, do: guard_copy(k, book, a1), else: :ok),
@@ -2394,11 +4350,17 @@ defmodule Muro.Check do
   defp clash_idx(k, book, e, t) do
     with {:ok, e1} <- whnf(k - 1, book, e),
          {:ok, t1} <- whnf(k - 1, book, t) do
-      case {e1, t1} do
-        {{:su, e2}, {:su, t2}} -> clash_idx(k - 1, book, e2, t2)
-        {{:su, _}, :ze} -> {:ok, true}
-        {:ze, {:su, _}} -> {:ok, true}
-        {_, _} -> {:ok, false}
+      case {Muro.Word.nat_closed(e1), Muro.Word.nat_closed(t1)} do
+        {{:ok, n}, {:ok, m}} ->
+          {:ok, n != m}
+
+        _ ->
+          case {Muro.Word.nat_ctor(e1), Muro.Word.nat_ctor(t1)} do
+            {{:su, e2}, {:su, t2}} -> clash_idx(k - 1, book, e2, t2)
+            {{:su, _}, :ze} -> {:ok, true}
+            {:ze, {:su, _}} -> {:ok, true}
+            _ -> {:ok, false}
+          end
       end
     end
   end
@@ -2561,6 +4523,9 @@ defmodule Muro.Check do
     do: absent?(k, book, dname, t, seen) and absent?(k, book, dname, u, seen)
 
   defp absent_go?(k, book, dname, {:toi64, t}, seen), do: absent?(k, book, dname, t, seen)
+
+  defp absent_go?(k, book, dname, {:word, _, args}, seen),
+    do: Enum.all?(args, &absent?(k, book, dname, &1, seen))
 
   defp absent_go?(k, book, dname, {:packi, a, b}, seen),
     do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
