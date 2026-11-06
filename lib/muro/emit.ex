@@ -744,7 +744,7 @@ defmodule Muro.Emit do
   # spelling are refused by `elixir_clash/1`; within a book the map is
   # injective. `?` and `!` are not kept: a claim suffix would follow
   # them (`foo?_2`), which Elixir rejects.
-  @elixir_spelling "0.20.16"
+  @elixir_spelling "0.20.17"
 
   @doc """
   Elixir function name of one source identifier.
