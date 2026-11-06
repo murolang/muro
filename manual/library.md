@@ -13,14 +13,14 @@ In brief: six ordinary `.muro` books ship inside the compiler. `import "std:list
 import "std:list.muro"
 ```
 
-The name after `std:` is a file in the library: `binary.muro`, `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, or `ord.muro`. A name that is not one of those is an error at the import, and the message lists the books:
+The name after `std:` is a file in the library: `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, `ord.muro`, or `suc_bin.muro`. A name that is not one of those is an error at the import, and the message lists the books:
 
 ```
 unknown standard library book "nope.muro"
-available books: binary.muro, bool.muro, le.muro, list.muro, maybe.muro, ord.muro
+available books: bool.muro, le.muro, list.muro, maybe.muro, ord.muro, suc_bin.muro
 ```
 
-`..`, a leading `/`, a backslash, or any other path that leaves the library is refused: `import "std:../le.muro" leaves the standard library`. A relative import written inside a library book stays in the library. `binary.muro` imports `list.muro`, `list.muro` imports `maybe.muro`, `maybe.muro` imports `bool.muro`, and `ord.muro` imports `le.muro`. A book reached by two imports, directly or through another book, joins once.
+`..`, a leading `/`, a backslash, or any other path that leaves the library is refused: `import "std:../le.muro" leaves the standard library`. A relative import written inside a library book stays in the library. `suc_bin.muro` imports `list.muro`, `list.muro` imports `maybe.muro`, `maybe.muro` imports `bool.muro`, and `ord.muro` imports `le.muro`. A book reached by two imports, directly or through another book, joins once.
 
 The id of a loaded book is `std:list.muro`, not a path on disk. An error inside a library book is reported at that id. `mix muro.gen` hashes an imported library book as `std/<file>`. The prelude is not in that hash. The version pin covers the checker, the emitter, the prelude, and this library. Changing a library book changes the hash of every book that imports it.
 
@@ -31,18 +31,6 @@ These books are not the prelude. The prelude stays `pred`, `plus`, `inj-suc`, `p
 Agda does not model `import` or file loading. What it checks is the book after the imports have been joined. See [Limits](limits.md).
 
 A `run` in this library is first-order. A function argument is outside the closed run image that C, Rust, and assembly emit, so the library has no `map`.
-
-## binary.muro
-
-A binary successor beside inductive `Nat`. It imports `list.muro`. Machine integers (`U8`, `U32`, `U64`, `I64`) are fixed-width residues and do not replace this book ([Machine numbers](machine.md)).
-
-`Bit` is `O` and `I`. A `List Bit` is a numeral, least significant bit first. Leading zeros are allowed. The empty list is zero.
-
-`sucBit`, `sucBits`, and `sucBin` are a Mealy machine: the carry is the state, and `sucBin` starts at `I`. `fromBits` reads a bit list as a `Nat`. `toBits n` is `n` applications of `sucBin` from `nil`. `double` is `run internal`, the place-value shift `fromBits` needs. No host integer is used, and there is no fixed width.
-
-Evidence: `sucBits-id`, `sucBin-step`, `fromBits-toBits`, `sucBin-corresp` (`fromBits (sucBin (toBits n)) ≡ suc n`), `suc-11` (the bits of 11 step to the bits of 12), `bits11-nat`, and `suc-11-nat`.
-
-Check on disk with `mix muro.check lib/muro/std/binary.muro`. Import it with `import "std:binary.muro"`.
 
 ## bool.muro
 
@@ -81,6 +69,18 @@ Evidence: `fromMaybe-nothing`, `fromMaybe-just`, `isJust-nothing`, `isJust-just`
 `compare` is `run` on `Nat`. `CompareAt m n o` says what that result means: `lt` is `Le (suc m) n`, `eq` is `{m ≡ n : Nat}`, and `gt` is `Le (suc n) m`. `compare-sound` inhabits `CompareAt m n (compare m n)`. `lift-compare` carries a result at `p` and `q` to their successors, and the `eq` arm uses `cong` from the prelude.
 
 `compare-lex` is `run` on `Nat × Nat`. The first components are compared first. The second components are compared only when that ordering is `eq`. `lex-step` is evidence: the first ordering wins, unless it is `eq`, in which case the second decides. `compare-lex` inlines that match, so the second comparison is not an argument of a call. `LexAt` says what that pair result means, given the ordering of the first components, and `lex-sound` inhabits it. `LexSide` and `LexGt` are the two sides of that statement. Each of them matches the ordering already in hand.
+
+## suc_bin.muro
+
+A binary successor beside inductive `Nat`. It imports `list.muro`. Machine integers (`U8`, `U32`, `U64`, `I64`) are fixed-width residues and do not replace this book ([Machine numbers](machine.md)).
+
+`Bit` is `O` and `I`. A `List Bit` is a numeral, least significant bit first. Leading zeros are allowed. The empty list is zero.
+
+`sucBit`, `sucBits`, and `sucBin` are a Mealy machine: the carry is the state, and `sucBin` starts at `I`. `fromBits` reads a bit list as a `Nat`. `toBits n` is `n` applications of `sucBin` from `nil`. `double` is `run internal`, the place-value shift `fromBits` needs. No host integer is used, and there is no fixed width.
+
+Evidence: `sucBits-id`, `sucBin-step`, `fromBits-toBits`, `sucBin-corresp` (`fromBits (sucBin (toBits n)) ≡ suc n`), `suc-11` (the bits of 11 step to the bits of 12), `bits11-nat`, and `suc-11-nat`.
+
+Check on disk with `mix muro.check lib/muro/std/suc_bin.muro`. Import it with `import "std:suc_bin.muro"`.
 
 ## Examples
 

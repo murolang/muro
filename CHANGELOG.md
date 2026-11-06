@@ -2,11 +2,11 @@
 
 ## 0.20.16
 
-A library binary successor, as `std:binary.muro`. Inductive Nat stays the primary number type. Machine integers (`U8`, `U32`, `U64`, `I64`) stay fixed-width residues and do not replace this book. `List Bit` is a numeral, least significant bit first, and leading zeros are allowed. `sucBit`, `sucBits`, and `sucBin` are a Mealy machine: the carry is the state, and `sucBin` starts at `I`. `fromBits` reads a bit list as a Nat. No host integer is used, and there is no fixed width. `sucBin-corresp` is `fromBits (sucBin (toBits n)) ≡ suc n`, by induction on the bit list and on `n`. The bits of 11 step to the bits of 12.
+A library binary successor, as `std:suc_bin.muro`. Inductive Nat stays the primary number type. Machine integers (`U8`, `U32`, `U64`, `I64`) stay fixed-width residues and do not replace this book. `List Bit` is a numeral, least significant bit first, and leading zeros are allowed. `sucBit`, `sucBits`, and `sucBin` are a Mealy machine: the carry is the state, and `sucBin` starts at `I`. `fromBits` reads a bit list as a Nat. No host integer is used, and there is no fixed width. `sucBin-corresp` is `fromBits (sucBin (toBits n)) ≡ suc n`, by induction on the bit list and on `n`. The bits of 11 step to the bits of 12.
 
 ### Library
 
-- `lib/muro/std/binary.muro`. `import "std:binary.muro"`. The book imports `list.muro`. `double` is `run internal`, the place-value shift `fromBits` needs.
+- `lib/muro/std/suc_bin.muro`. `import "std:suc_bin.muro"`. The book imports `list.muro`. `double` is `run internal`, the place-value shift `fromBits` needs.
 
 ### Tests
 
@@ -14,7 +14,7 @@ A library binary successor, as `std:binary.muro`. Inductive Nat stays the primar
 
 ### Manual
 
-- Library: the binary successor. Host representations: `std:binary.muro` is not an interned-name target.
+- Library: the binary successor. Host representations: `std:suc_bin.muro` is not an interned-name target.
 
 ### Package
 

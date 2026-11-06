@@ -93,7 +93,7 @@ lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
 lib/muro/load.ex        import: a relative path, pkg:, and std:
 lib/muro/std.ex         the ordinary library, embedded at compile time
-lib/muro/std/*.muro     binary, bool, le, list, maybe, ord
+lib/muro/std/*.muro     bool, le, list, maybe, ord, suc_bin
 lib/muro/emit.ex        run → Elixir source
 lib/muro/repr.ex        a repr: check the host shape and emit decode/1, decode/2, and encode/2. Not a kernel term.
 lib/muro/emit/exunit.ex closed equations → one ExUnit module (`--backend exunit`, `kind: :exunit`)

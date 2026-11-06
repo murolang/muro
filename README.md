@@ -70,7 +70,7 @@ A definition is in the book the moment `Parser.parse/1` returns it. The checker 
 
 ## Library
 
-[`lib/muro/std/binary.muro`](lib/muro/std/binary.muro) is a binary successor, imported as `std:binary.muro`. Inductive `Nat` stays the number type. Machine integers do not replace it. `sucBin` is a Mealy machine on `List Bit`, least significant bit first, and the carry is the state. `fromBits (sucBin (toBits n)) ≡ suc n`. The bits of 11 step to the bits of 12. There is no fixed width. See [Library](manual/library.md).
+[`lib/muro/std/suc_bin.muro`](lib/muro/std/suc_bin.muro) is a binary successor, imported as `std:suc_bin.muro`. Inductive `Nat` stays the number type. Machine integers do not replace it. `sucBin` is a Mealy machine on `List Bit`, least significant bit first, and the carry is the state. `fromBits (sucBin (toBits n)) ≡ suc n`. The bits of 11 step to the bits of 12. There is no fixed width. See [Library](manual/library.md).
 
 ---
 

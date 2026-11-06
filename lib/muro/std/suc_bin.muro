@@ -1,4 +1,4 @@
--- binary.muro — a binary successor beside inductive Nat.
+-- suc_bin.muro — a binary successor beside inductive Nat.
 -- A relative import stays inside the standard library.
 --
 -- Inductive Nat stays the primary number type. Nothing here replaces it,

@@ -55,7 +55,7 @@ defmodule Muro.StdTest do
     assert msg =~ "unknown standard library book \"nope.muro\""
 
     assert msg =~
-             "available books: binary.muro, bool.muro, le.muro, list.muro, maybe.muro, ord.muro"
+             "available books: bool.muro, le.muro, list.muro, maybe.muro, ord.muro, suc_bin.muro"
 
     assert msg =~ "missing.muro:1:1:"
 

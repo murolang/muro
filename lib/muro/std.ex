@@ -13,7 +13,7 @@ defmodule Muro.Std do
   is resolved with `relative/2`, so it stays inside the library.
   """
 
-  @books ~w(binary.muro bool.muro le.muro list.muro maybe.muro ord.muro)
+  @books ~w(bool.muro le.muro list.muro maybe.muro ord.muro suc_bin.muro)
 
   for name <- @books do
     @external_resource Path.join([__DIR__, "std", name])
