@@ -25,9 +25,11 @@ defmodule Muro.Temporal do
   @run_msg "temporal formulas do not mention run definitions"
 
   @doc """
-  `{:ok, count}` when the formula holds, `count` the number of reachable
-  configurations. `{:error, message}` when it does not, or the meeting is
-  out of scope. The message has no location and no declaration name.
+  `{:ok, states, transitions}` when the formula holds. `states` is the
+  number of reachable configurations. `transitions` is the number of
+  entries in the successor table of that same search, including each
+  finish self-loop. `{:error, message}` when it does not, or the meeting
+  is out of scope. The message has no location and no declaration name.
   """
   def judge(book, %{meeting: meeting} = decl, fuel \\ nil) when is_list(book) do
     fuel = fuel || Muro.Check.default_fuel()
@@ -88,7 +90,7 @@ defmodule Muro.Temporal do
                  {:no, msg} -> {:no, msg}
                end
              end) do
-          nil -> {:ok, length(cs)}
+          nil -> {:ok, length(cs), transition_count(edges)}
           {:no, msg} -> {:error, msg}
         end
 
@@ -98,6 +100,13 @@ defmodule Muro.Temporal do
   end
 
   def judge_prepared(_book, _decl, {:error, msg}), do: {:error, msg}
+
+  # One entry per `Graph.edges` step of a reachable configuration: the
+  # left successor, the right successor, then the finish self-loop.
+  # The breadth-first parent map is smaller and is not this count.
+  defp transition_count(edges) when is_map(edges) do
+    Enum.reduce(edges, 0, fn {_conf, steps}, n -> n + length(steps) end)
+  end
 
   @doc """
   Transcribes `decide-nostuck` over the configurations `reachable` returned.
@@ -862,10 +871,19 @@ defmodule Muro.Temporal do
     "#{pp_formula({:always, prop})} fails in #{where_of(g)}#{where}"
   end
 
+  # The prefix is the path to the cycle entry. An empty stem used to
+  # append the cycle there as well, so the same steps were printed twice.
   defp live_msg(g, formula, to_c, stem, loop) do
-    after_steps = if stem == [], do: to_c ++ loop, else: to_c ++ stem
+    prefix = to_c ++ stem
+    body = pp_formula(formula)
+    place = where_of(g)
+    forever = labels(g, loop)
 
-    "#{pp_formula(formula)} fails in #{where_of(g)} after #{labels(g, after_steps)}; then forever: #{labels(g, loop)}"
+    if prefix == [] do
+      "#{body} fails in #{place}; then forever: #{forever}"
+    else
+      "#{body} fails in #{place} after #{labels(g, prefix)}; then forever: #{forever}"
+    end
   end
 
   defp where_of(g) do

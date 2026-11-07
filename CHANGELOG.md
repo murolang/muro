@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.18
+
+A temporal declaration that holds prints `temporal <name>: holds in <N> reachable states, <M> transitions`. `<N>` is the number of reachable configurations. `<M>` is the number of entries in the successor table of that same search: a left step, a right step, and the finish self-loop at a finished configuration. It is not the breadth-first parent map. The graph is built once per meeting. A liveness refusal is the path to the cycle, then `then forever`. An empty stem no longer copies the cycle onto that path, so a cycle at the start has no `after` list. On a meeting the checker has accepted, a fragment formula is accepted exactly when every infinite run from the start satisfies it (`Satisfies`, under `NoStuck`; `check-sound`, `check-complete`). The source meeting has the same verdict when `Frag` holds of both processes, both are `echoOk` and `muOk`, `graphOf` is `gok`, and `initS` is `just` (`check-yes`, `check-no`). The configuration set is finite, which is why the walk ends. Finiteness is not a proof of `eventually` or `leads_to`. There is no fairness filter.
+
+### Manual
+
+- Temporal.
+
+### Package
+
+- Version 0.20.18.
+
 ## 0.20.17
 
 **Breaking.** An Elixir function name folds `-` to `_`. A name whose fold is already a function name takes that fold: `golden-silence` is `golden_silence/0`, as in 0.20.1 and earlier. A plain name stays itself. The `muro__` escape is only for a name the fold cannot make plain (`Bit`, `and`, `?`, `!`). Two source names in a book, including imported packages, that reach one host spelling are refused at check, and the message names both. `mix muro.gen` prints the host names that changed when a committed module's header is older than that spelling rule.
