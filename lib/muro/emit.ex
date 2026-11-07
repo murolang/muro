@@ -734,31 +734,115 @@ defmodule Muro.Emit do
 
   defp elixir_atom(name), do: ":" <> elixir_atom_name(name)
 
-  # Injective on binaries. A kept name matches `^[a-z_][A-Za-z0-9_]*$`,
-  # contains no `__`, and is not reserved, and it is returned unchanged.
-  # Every other name is `muro__` plus `Name.encode/1`. The two images are
-  # disjoint: a kept name has no `__`, and the escape contains `__` only
-  # as that prefix, because `encode/1` writes no underscore. `encode/1`
-  # is injective, so the escape is injective. The identity is injective
-  # on the kept set, and each source name takes exactly one branch. The
-  # result matches `^[a-z_][A-Za-z0-9_]*$`, so it is a function name.
-  # `?` and `!` are not kept: a claim suffix would follow them (`foo?_2`),
-  # which Elixir rejects. `foo_bar` is kept. `Bit` and `foo-bar` are not,
-  # so they do not fold onto `bit` and `foo_bar`.
-  @doc """
-  Injective Elixir function name of one source identifier.
+  # The host spelling of one source identifier. A hyphen folds to `_`.
+  # If that fold is already a function name (`^[a-z_][A-Za-z0-9_]*$`, no
+  # `__`, not reserved), the fold is the spelling: `golden-silence` is
+  # `golden_silence`. A name that is already that shape stays itself.
+  # Everything else is `muro__` plus `Name.encode/1` of the source name
+  # (`Bit`, `and`, `?`, `!`, a scalar outside the alphabet). The escape
+  # contains `__` only as that prefix. Two source names that reach one
+  # spelling are refused by `elixir_clash/1`; within a book the map is
+  # injective. `?` and `!` are not kept: a claim suffix would follow
+  # them (`foo?_2`), which Elixir rejects.
+  @elixir_spelling "0.20.17"
 
-  `foo_bar`, `fromMaybe`, and `muro_and` stay themselves. An uppercase
-  first letter, a leading digit, `?` or `!`, a hyphen, a quote, Unicode,
-  a reserved word, or a name that already contains `__` becomes `muro__`
-  plus `Muro.Emit.Name.encode/1`.
+  @doc """
+  Elixir function name of one source identifier.
+
+  A hyphen folds to `_`. `foo_bar`, `fromMaybe`, `muro_and`, and
+  `golden-silence` (as `golden_silence`) stay or become that fold when
+  it is already a function name. An uppercase first letter, a leading
+  digit, `?` or `!`, a reserved word, a fold that contains `__`, or a
+  scalar outside the alphabet becomes `muro__` plus
+  `Muro.Emit.Name.encode/1` of the source name.
   """
   def elixir_base(name) when is_binary(name) do
-    if kept_function?(name) and not MapSet.member?(@elixir_reserved, name) do
-      name
+    folded = String.replace(name, "-", "_")
+
+    if kept_function?(folded) and not MapSet.member?(@elixir_reserved, folded) do
+      folded
     else
       "muro__" <> Name.encode(name)
     end
+  end
+
+  @doc """
+  The Muro version that introduced the current Elixir host spelling.
+
+  A committed module whose header names an older version may still
+  carry the 0.20.4 `muro__` spelling of a hyphenated run.
+  `mix muro.gen` prints the host names that changed in that case.
+  """
+  def elixir_spelling, do: @elixir_spelling
+
+  @doc """
+  `:ok` when every run and every meeting in `book` has a distinct
+  `elixir_base/1` spelling. `{:error, message}` names both source
+  names when two of them reach one Elixir function.
+  """
+  def elixir_clash(book) when is_list(book) do
+    book
+    |> elixir_host_entries()
+    |> elixir_clash_seen(%{})
+  end
+
+  defp elixir_host_entries(book) do
+    Enum.filter(book, fn d ->
+      Map.get(d, :kind, :def) not in [:data, :repr] and
+        (Map.get(d, :mode) == :run or Map.get(d, :kind) == :meet)
+    end)
+  end
+
+  defp elixir_clash_seen([], _seen), do: :ok
+
+  defp elixir_clash_seen([d | rest], seen) do
+    host = elixir_base(d.name)
+
+    case Map.fetch(seen, host) do
+      {:ok, prev} ->
+        {:error,
+         "#{Muro.Print.loc_prefix(Map.get(prev, :loc))}#{prev.name} and #{d.name} spell one Elixir function\n" <>
+           "#{Muro.Print.loc_prefix(Map.get(d, :loc))}#{prev.name} and #{d.name} spell one Elixir function"}
+
+      :error ->
+        elixir_clash_seen(rest, Map.put(seen, host, d))
+    end
+  end
+
+  @doc """
+  Host function names in `old_body` that this spelling rewrites.
+
+  Each pair is `{old, new}`: a `muro__` spelling whose source folds to
+  a name present in `new_body`. Used when a committed module's header
+  is older than `elixir_spelling/0`.
+  """
+  def elixir_host_renames(old_body, new_body)
+      when is_binary(old_body) and is_binary(new_body) do
+    new = MapSet.new(elixir_def_names(new_body))
+
+    old_body
+    |> elixir_def_names()
+    |> Enum.flat_map(fn name ->
+      case elixir_source(name) do
+        {:ok, source} ->
+          folded = elixir_base(source)
+
+          if folded != name and MapSet.member?(new, folded) do
+            [{name, folded}]
+          else
+            []
+          end
+
+        :error ->
+          []
+      end
+    end)
+    |> Enum.uniq()
+  end
+
+  defp elixir_def_names(body) do
+    Regex.scan(~r/^[ \t]*defp? ([A-Za-z_][A-Za-z0-9_]*)/m, body)
+    |> Enum.map(fn [_all, name] -> name end)
   end
 
   @doc """
@@ -779,12 +863,14 @@ defmodule Muro.Emit do
   end
 
   @doc """
-  Inverse of `elixir_base/1` and of `elixir_atom_name/1`.
+  Inverse of the `muro__` escape, and of a spelling that was kept.
 
   A spelling that begins with `muro__` is `Name.decode/1` of the rest.
   Any other spelling is itself. `Name.encode/1` writes no underscore, so
-  the prefix splits in one place. `elixir_source(elixir_base(name))` and
-  `elixir_source(elixir_atom_name(name))` are `{:ok, name}`.
+  the prefix splits in one place. A hyphenated source whose fold is a
+  function name is not recovered: `elixir_source("golden_silence")` is
+  `{:ok, "golden_silence"}`. `source_ctor/2` is the book-aware inverse
+  for constructors.
 
   This is the spelling inverse, not a lookup among one declaration's
   constructors. `elixir_source("muro__iszdon")` is `{:ok, "is-on"}` even
@@ -800,9 +886,9 @@ defmodule Muro.Emit do
   `names` are the source constructors of one declaration. A label equal
   to `elixir_atom_name/1` of one of them is that constructor. A label
   that is itself one of those names is that constructor. When both
-  apply, the host atom wins: the label `muro__iszdon` is `is-on` when
-  that declaration has both. The decoded name is the source constructor.
-  Callers do not decode it again.
+  apply, the host atom wins: the label `is_on` is `is-on` when that
+  declaration has `is-on`. A constructor named `muro__iszdon` stays
+  that source name as a label. Callers do not decode it again.
   """
   def source_ctor(names, label) when is_binary(label) do
     set = if is_struct(names, MapSet), do: names, else: MapSet.new(names)
@@ -820,10 +906,10 @@ defmodule Muro.Emit do
   Module alias of one source name.
 
   A snake name matching `^[a-z][a-z0-9]*(_[a-z0-9]+)*$` is camelized, so
-  `pong` is `Pong` and `foo_bar` is `FooBar`. Every other spelling is
-  `M` plus `elixir_base/1`. Camelizing an escape would collide:
-  `muro__and` and `muro_and` both become `MuroAnd`, and `_foo` becomes
-  `Foo`.
+  `pong` is `Pong`, `foo_bar` is `FooBar`, and `grant-end` is `GrantEnd`.
+  Every other spelling is `M` plus `elixir_base/1`. Camelizing an escape
+  would collide: `muro__and` and `muro_and` both become `MuroAnd`, and
+  `_foo` becomes `Foo`.
   """
   def elixir_alias(name) when is_binary(name) do
     base = elixir_base(name)

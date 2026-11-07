@@ -153,11 +153,15 @@ defmodule Muro.EmitReserveTest do
   test "an escaped constructor tag round-trips through eval_run and a live process" do
     book = escaped_book() |> checked!()
 
-    assert Session.eval_run("seen", [:muro__iszdon], book) == 1
+    on = String.to_atom(Emit.elixir_atom_name("is-on"))
+    hold = String.to_atom(Emit.elixir_atom_name("hold-it"))
+    assert on == :is_on
+    assert hold == :hold_it
+    assert Session.eval_run("seen", [on], book) == 1
     assert Session.eval_run("seen", [String.to_atom("is-on")], book) == 1
     assert Session.eval_run("seen", [:muro__nope], book) == {:run, "seen", [:muro__nope]}
     assert Session.eval_run("seen", [true], book) == {:run, "seen", [true]}
-    assert Session.eval_run("held", [{:muro__holdzdit, 4}], book) == 4
+    assert Session.eval_run("held", [{hold, 4}], book) == 4
     assert Session.eval_run("held", [{String.to_atom("hold-it"), 4}], book) == 4
     assert Session.eval_run("flag", [true], book) == 1
     assert Session.eval_run("flag", [false], book) == 0
@@ -167,19 +171,19 @@ defmodule Muro.EmitReserveTest do
     long = String.to_atom(Emit.elixir_atom_name("muro__iszdon"))
     assert Session.eval_run("wrapped", [long], book) == 7
     assert Session.eval_run("wrapped", [String.to_atom("muro__iszdon")], book) == 7
-    assert Session.eval_run("seen", [String.to_atom("muro__iszdon")], book) == 1
+    assert Session.eval_run("seen", [on], book) == 1
 
     assert {:ok, src} = Emit.Otp.render(book, "escaped")
     compile!(src)
 
     reply = Module.concat(EscapedOtp, Emit.elixir_alias("reply"))
     assert {:ok, pid, ref} = apply(reply, :start, [self()])
-    send(pid, {:muro, self(), {:tagged, :muro__iszdon}})
+    send(pid, {:muro, self(), {:tagged, on}})
     assert_receive {:muro, ^pid, 1}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
     assert {:ok, pid, ref} = apply(reply, :start, [self()])
-    send(pid, {:muro, self(), {:boxed, {:muro__holdzdit, 4}}})
+    send(pid, {:muro, self(), {:boxed, {hold, 4}}})
     assert_receive {:muro, ^pid, 4}
     assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
 
@@ -188,15 +192,15 @@ defmodule Muro.EmitReserveTest do
     compile!(fsm)
 
     ask = Module.concat(EscapedFsm, Emit.elixir_alias("choice"))
-    assert {:ok, st} = ask.recv(ask.init(), :muro__iszdon)
+    assert {:ok, st} = ask.recv(ask.init(), on)
     assert ask.expected(st) == {:send, :nat}
 
     box = Module.concat(EscapedFsm, Emit.elixir_alias("box"))
-    assert {:ok, st} = box.recv(box.init(), {:muro__holdzdit, 4})
+    assert {:ok, st} = box.recv(box.init(), {hold, 4})
     assert box.expected(st) == {:send, :nat}
 
     pick = Module.concat(EscapedFsm, Emit.elixir_alias("pick"))
-    assert {:ok, st} = pick.recv(pick.init(), :muro__iszdon)
+    assert {:ok, st} = pick.recv(pick.init(), on)
     assert pick.done?(st)
     assert {:ok, st} = pick.recv(pick.init(), String.to_atom("is-off"))
     assert pick.done?(st)

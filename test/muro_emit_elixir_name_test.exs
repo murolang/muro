@@ -5,12 +5,12 @@ defmodule Muro.EmitElixirNameTest do
 
   @book """
   def foo-bar : run internal Nat := 0
-  def foo_bar : run Nat := suc 0
+  def golden-silence : run Nat := suc 0
   def Bit : run Nat := suc (suc 0)
   def bit : run Nat := suc (suc (suc 0))
   def see : run Nat := foo-bar
   def bit-ok : evidence {bit ≡ suc (suc (suc 0)) : Nat} := refl
-  def foo-ok : evidence {foo_bar ≡ suc 0 : Nat} := refl
+  def golden-ok : evidence {golden-silence ≡ suc 0 : Nat} := refl
   def see-ok : evidence {see ≡ 0 : Nat} := refl
   def bits-ok : evidence {Bit ≡ suc (suc 0) : Nat} := refl
   session ping := recv Nat (send Nat end)
@@ -28,21 +28,25 @@ defmodule Muro.EmitElixirNameTest do
   move cross go-away : away
   """
 
-  test "elixir_base is injective and keeps a plain snake name" do
+  test "elixir_base folds a hyphen and escapes only when the fold is not plain" do
     assert Emit.elixir_base("foo_bar") == "foo_bar"
     assert Emit.elixir_base("fromMaybe") == "fromMaybe"
     assert Emit.elixir_base("isJust") == "isJust"
     assert Emit.elixir_base("muro_and") == "muro_and"
     assert Emit.elixir_base("bit") == "bit"
     assert Emit.elixir_base("read") == "read"
+    assert Emit.elixir_base("golden-silence") == "golden_silence"
+    assert Emit.elixir_base("foo-bar") == "foo_bar"
+    assert Emit.elixir_base("foo-bar") == Emit.elixir_base("foo_bar")
     assert Emit.elixir_base("Bit") == "muro__Bit"
-    assert Emit.elixir_base("foo-bar") == "muro__foozdbar"
     assert Emit.elixir_base("and") == "muro__and"
     assert Emit.elixir_base("end") == "muro__end"
     assert Emit.elixir_base("1foo") == "muro__1foo"
     assert Emit.elixir_base("n'") == "muro__nzq"
+    assert Emit.elixir_base("?") == "muro__" <> Muro.Emit.Name.encode("?")
+    assert Emit.elixir_base("!") == "muro__" <> Muro.Emit.Name.encode("!")
 
-    for name <- ["foo?", "foo!", "λ", "1foo"] do
+    for name <- ["foo?", "foo!", "λ", "1foo", "?", "!"] do
       host = Emit.elixir_base(name)
       assert String.starts_with?(host, "muro__")
       refute String.contains?(host, "?")
@@ -54,7 +58,6 @@ defmodule Muro.EmitElixirNameTest do
       "foo_bar",
       "Bit",
       "bit",
-      "foo-bar",
       "and",
       "muro_and",
       "1foo",
@@ -69,7 +72,10 @@ defmodule Muro.EmitElixirNameTest do
       "foo__bar",
       "a_1b",
       "a1b",
-      "muro_nif_load"
+      "muro_nif_load",
+      "golden-silence",
+      "?",
+      "!"
     ]
 
     spelled = Enum.map(names, &Emit.elixir_base/1)
@@ -87,14 +93,16 @@ defmodule Muro.EmitElixirNameTest do
     assert Emit.elixir_atom_name("nil") == "nil"
     assert Emit.elixir_atom_name("just") == "just"
     assert Emit.elixir_atom_name("and") == "and"
-    assert Emit.elixir_atom_name("foo-bar") == "muro__foozdbar"
+    assert Emit.elixir_atom_name("foo-bar") == "foo_bar"
+    assert Emit.elixir_atom_name("is-on") == "is_on"
     assert Emit.elixir_atom_name("foo?") == "foo?"
 
     assert Emit.elixir_alias("pong") == "Pong"
     assert Emit.elixir_alias("foo_bar") == "FooBar"
     assert Emit.elixir_alias("muro_and") == "MuroAnd"
     assert Emit.elixir_alias("and") == "Mmuro__and"
-    assert Emit.elixir_alias("grant-end") == "Mmuro__grantzdend"
+    assert Emit.elixir_alias("grant-end") == "GrantEnd"
+    assert Emit.elixir_alias("pong-away") == "PongAway"
     assert Emit.elixir_alias("_foo") == "M_foo"
 
     claimed = Emit.elixir_modules(["a_1b", "a1b"])
@@ -106,7 +114,7 @@ defmodule Muro.EmitElixirNameTest do
     src = """
     def muro_nif_load : run internal Nat := 0
     def foo-bar : run internal Nat := 0
-    def foo_bar : run Nat := suc 0
+    def golden-silence : run Nat := suc 0
     def Bit : run Nat := 0
     def bit : run Nat := suc 0
     """
@@ -114,8 +122,8 @@ defmodule Muro.EmitElixirNameTest do
     assert {:ok, book} = Muro.Parser.parse(src)
     names = Emit.elixir_names(book)
     assert names["muro_nif_load"] == "muro_nif_load_2"
-    assert names["foo-bar"] == "muro__foozdbar"
-    assert names["foo_bar"] == "foo_bar"
+    assert names["foo-bar"] == "foo_bar"
+    assert names["golden-silence"] == "golden_silence"
     assert names["Bit"] == "muro__Bit"
     assert names["bit"] == "bit"
   end
@@ -144,8 +152,8 @@ defmodule Muro.EmitElixirNameTest do
     book = Muro.Prelude.for_emit(loaded)
     names = Emit.elixir_names(book)
 
-    assert names["foo-bar"] == "muro__foozdbar"
-    assert names["foo_bar"] == "foo_bar"
+    assert names["foo-bar"] == "foo_bar"
+    assert names["golden-silence"] == "golden_silence"
     assert names["Bit"] == "muro__Bit"
     assert names["bit"] == "bit"
 
@@ -155,33 +163,34 @@ defmodule Muro.EmitElixirNameTest do
       assert fsm =~ ~s|defp muro_fsm_host(#{inspect(source)}), do: :#{host}|
     end
 
-    # The internal run is claimed before the NIF drops it, so foo_bar is not foo_bar_2.
     refute ex =~ "def muro__foozdbar"
-    assert ex =~ "def foo_bar,"
+    refute ex =~ "def muro__goldenzdsilence"
+    assert ex =~ "def golden_silence,"
     assert ex =~ "def muro__Bit,"
     assert ex =~ "def bit,"
-    refute ex =~ "def foo_bar_2"
+    refute ex =~ "def golden_silence_2"
     refute ex =~ "def Bit"
 
-    assert suite =~ "impl.foo_bar()"
+    assert suite =~ "impl.golden_silence()"
     assert suite =~ "impl.muro__Bit()"
     assert suite =~ "impl.bit()"
     assert suite =~ "impl.see()"
-    refute suite =~ "impl.foo_bar_2"
+    refute suite =~ "impl.muro__goldenzdsilence"
 
     assert [{HostsImpl, _}] = Code.compile_string(elixir)
-    assert apply(HostsImpl, :foo_bar, []) == {:suc, 0}
+    assert apply(HostsImpl, :golden_silence, []) == {:suc, 0}
     assert apply(HostsImpl, :muro__Bit, []) == {:suc, {:suc, 0}}
     assert apply(HostsImpl, :bit, []) == {:suc, {:suc, {:suc, 0}}}
     assert apply(HostsImpl, :see, []) == 0
 
     Code.compile_file(Path.join(dir, "hosts.ex"))
     nif = fn name -> apply(Hosts, name, []) end
-    assert nif.(:foo_bar) == 1
+    assert nif.(:golden_silence) == 1
     assert nif.(:muro__Bit) == 2
     assert nif.(:bit) == 3
     assert nif.(:see) == 0
-    assert_raise UndefinedFunctionError, fn -> nif.(:foo_bar_2) end
+    assert_raise UndefinedFunctionError, fn -> nif.(:golden_silence_2) end
+    assert_raise UndefinedFunctionError, fn -> nif.(:muro__goldenzdsilence) end
     assert_raise UndefinedFunctionError, fn -> nif.(:muro__foozdbar) end
 
     assert HostsOtp in Enum.map(Code.compile_string(otp_src), &elem(&1, 0))
@@ -224,13 +233,10 @@ defmodule Muro.EmitElixirNameTest do
     assert out =~ "failures: 0"
   end
 
-  test "elixir_source inverts both spellings, and source_ctor is that inverse" do
+  test "elixir_source inverts the escape, and source_ctor is that inverse" do
     samples = [
-      "is-on",
-      "hold-it",
       "muro__iszdon",
       "a_b_2",
-      "foo-bar",
       "n'",
       "λ",
       "?",
@@ -249,26 +255,48 @@ defmodule Muro.EmitElixirNameTest do
 
     for name <- samples do
       assert Emit.elixir_source(Emit.elixir_base(name)) == {:ok, name}
-      assert Emit.elixir_source(Emit.elixir_atom_name(name)) == {:ok, name}
     end
 
-    assert Emit.elixir_atom_name("is-on") == "muro__iszdon"
-    assert Emit.elixir_atom_name("hold-it") == "muro__holdzdit"
+    assert Emit.elixir_source(Emit.elixir_base("golden-silence")) == {:ok, "golden_silence"}
+    assert Emit.elixir_source("golden_silence") == {:ok, "golden_silence"}
+    assert Emit.elixir_atom_name("is-on") == "is_on"
+    assert Emit.elixir_atom_name("hold-it") == "hold_it"
     assert Emit.elixir_source("muro__iszdon") == {:ok, "is-on"}
     assert Emit.elixir_source("just") == {:ok, "just"}
 
-    assert Emit.source_ctor(["is-on", "is-off"], "muro__iszdon") == {:ok, "is-on"}
+    assert Emit.source_ctor(["is-on", "is-off"], "is_on") == {:ok, "is-on"}
     assert Emit.source_ctor(["just"], "just") == {:ok, "just"}
     assert Emit.source_ctor(["is-on"], "is-on") == {:ok, "is-on"}
     assert Emit.source_ctor(["muro__iszdon"], "muro__iszdon") == {:ok, "muro__iszdon"}
-    assert Emit.source_ctor(["is-on", "muro__iszdon"], "muro__iszdon") == {:ok, "is-on"}
+    assert Emit.source_ctor(["is-on", "muro__iszdon"], "is_on") == {:ok, "is-on"}
+    assert Emit.source_ctor(["is-on", "muro__iszdon"], "muro__iszdon") == {:ok, "muro__iszdon"}
 
     long = Emit.elixir_atom_name("muro__iszdon")
     assert Emit.source_ctor(["muro__iszdon"], long) == {:ok, "muro__iszdon"}
     assert Emit.source_ctor(["is-on"], long) == :error
     assert Emit.source_ctor(["just"], "muro__iszdon") == :error
     assert Emit.source_ctor(["nothing"], "nothing") == {:ok, "nothing"}
-    assert Emit.source_ctor(MapSet.new(["is-on"]), "muro__iszdon") == {:ok, "is-on"}
+    assert Emit.source_ctor(MapSet.new(["is-on"]), "is_on") == {:ok, "is-on"}
+  end
+
+  test "elixir_host_renames pairs the 0.20.4 escape with the fold" do
+    old = "  def muro__goldenzdsilence do\n    0\n  end\n  def muro__Bit do\n    0\n  end\n"
+    new = "  def golden_silence do\n    0\n  end\n  def muro__Bit do\n    0\n  end\n"
+
+    assert Emit.elixir_host_renames(old, new) == [{"muro__goldenzdsilence", "golden_silence"}]
+  end
+
+  # archive-smoke.sh calls the host functions of examples/repr_names.muro.
+  # 0.20.4 spelled reads-off as muro__readszdoff. The fold is reads_off.
+  test "the archive smoke calls hyphenated repr runs by the current Elixir spelling" do
+    script = File.read!(Path.expand("../scripts/archive-smoke.sh", __DIR__))
+    reads = Emit.elixir_base("reads-off")
+    count = Emit.elixir_base("count-entries")
+
+    assert script =~ "Host.ReprNames.#{reads}("
+    assert script =~ "Host.ReprNames.#{count}("
+    refute script =~ "muro__#{Emit.Name.encode("reads-off")}"
+    refute script =~ "muro__#{Emit.Name.encode("count-entries")}"
   end
 
   defp tmp! do

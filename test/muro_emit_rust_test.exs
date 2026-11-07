@@ -585,7 +585,6 @@ defmodule Muro.EmitRustTest do
       λ (s : Stream Nat) → head s
 
     def muro_step : run Nat := 0
-    def muro-step : run Nat := suc 0
     """)
 
     source = File.read!(emit_rust!(dir, "steps"))
@@ -605,7 +604,6 @@ defmodule Muro.EmitRustTest do
         """
         fn main() {
             assert_eq!(steps::muro__to_u64(&steps::#{bare}()), 0);
-            assert_eq!(steps::muro__to_u64(&steps::#{dashed}()), 1);
             assert_eq!(steps::muro__to_u64(&steps::hd(steps::s0())), 0);
             assert_eq!(steps::muro__to_u64(&steps::hd(steps::s1())), 1);
             assert_eq!(steps::muro__to_u64(&steps::hd(steps::s2())), 2);
@@ -621,24 +619,29 @@ defmodule Muro.EmitRustTest do
     dir = tmp_dir()
 
     File.write!(Path.join(dir, "inj.muro"), """
-    def a-b : run Nat := 0
     def a_b : run Nat := suc 0
     def a_b_2 : run Nat := suc (suc 0)
     def call : run Nat := a_b
     """)
 
+    clash = Path.join(dir, "clash.muro")
+    File.write!(clash, "def a-b : run Nat := 0\ndef a_b : run Nat := suc 0\n")
+    assert {:error, msg} = Muro.check_file(clash)
+    assert msg =~ "a-b and a_b spell one Elixir function"
+
     source = File.read!(emit_rust!(dir, "inj"))
     [ab, a_b, a_b_2] = ids = Enum.map(~w(a-b a_b a_b_2), &Muro.Emit.Rust.source_id/1)
     assert length(Enum.uniq(ids)) == 3
     Enum.each(ids, fn id -> refute String.contains?(id, "__") end)
-    Enum.each(ids, fn id -> assert source =~ "pub fn #{id}(" end)
+    refute source =~ "pub fn #{ab}("
+    assert source =~ "pub fn #{a_b}("
+    assert source =~ "pub fn #{a_b_2}("
 
     out =
       run_rust!(
         dir,
         """
         fn main() {
-            assert_eq!(inj::muro__to_u64(&inj::#{ab}()), 0);
             assert_eq!(inj::muro__to_u64(&inj::#{a_b}()), 1);
             assert_eq!(inj::muro__to_u64(&inj::#{a_b_2}()), 2);
             assert_eq!(inj::muro__to_u64(&inj::call()), 1);
