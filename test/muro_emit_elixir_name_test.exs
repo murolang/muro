@@ -286,6 +286,19 @@ defmodule Muro.EmitElixirNameTest do
     assert Emit.elixir_host_renames(old, new) == [{"muro__goldenzdsilence", "golden_silence"}]
   end
 
+  # archive-smoke.sh calls the host functions of examples/repr_names.muro.
+  # 0.20.4 spelled reads-off as muro__readszdoff. The fold is reads_off.
+  test "the archive smoke calls hyphenated repr runs by the current Elixir spelling" do
+    script = File.read!(Path.expand("../scripts/archive-smoke.sh", __DIR__))
+    reads = Emit.elixir_base("reads-off")
+    count = Emit.elixir_base("count-entries")
+
+    assert script =~ "Host.ReprNames.#{reads}("
+    assert script =~ "Host.ReprNames.#{count}("
+    refute script =~ "muro__#{Emit.Name.encode("reads-off")}"
+    refute script =~ "muro__#{Emit.Name.encode("count-entries")}"
+  end
+
   defp tmp! do
     dir = Path.join(System.tmp_dir!(), "muro_elixir_name_#{System.unique_integer([:positive])}")
     File.mkdir_p!(dir)
