@@ -41,9 +41,9 @@ defmodule Muro.TemporalTest do
     assert check(@echo) == :ok
 
     assert Check.temporal_lines() == [
-             "temporal echo-returns-zero: holds in 8 reachable states",
-             "temporal echo-answers: holds in 8 reachable states",
-             "temporal echo-answered: holds in 8 reachable states"
+             "temporal echo-returns-zero: holds in 8 reachable states, 8 transitions",
+             "temporal echo-answers: holds in 8 reachable states, 8 transitions",
+             "temporal echo-answered: holds in 8 reachable states, 8 transitions"
            ]
   end
 
@@ -59,7 +59,10 @@ defmodule Muro.TemporalTest do
     """
 
     assert check(src) == :ok
-    assert Check.temporal_lines() == ["temporal echo-answered: holds in 8 reachable states"]
+
+    assert Check.temporal_lines() == [
+             "temporal echo-answered: holds in 8 reachable states, 8 transitions"
+           ]
   end
 
   test "spin refusals name the trace" do
@@ -91,7 +94,10 @@ defmodule Muro.TemporalTest do
     """
 
     assert check(src) == :ok
-    assert Check.temporal_lines() == ["temporal counted: holds in 4 reachable states"]
+
+    assert Check.temporal_lines() == [
+             "temporal counted: holds in 4 reachable states, 4 transitions"
+           ]
   end
 
   test "inflight constructor case holds" do
@@ -103,7 +109,10 @@ defmodule Muro.TemporalTest do
         """
 
     assert check(src) == :ok
-    assert Check.temporal_lines() == ["temporal ctl-seen: holds in 9 reachable states"]
+
+    assert Check.temporal_lines() == [
+             "temporal ctl-seen: holds in 9 reachable states, 11 transitions"
+           ]
   end
 
   test "fuel does not change a temporal verdict" do
@@ -370,7 +379,10 @@ defmodule Muro.TemporalTest do
     """
 
     assert check(src) == :ok
-    assert Check.temporal_lines() == ["temporal tagged: holds in 8 reachable states"]
+
+    assert Check.temporal_lines() == [
+             "temporal tagged: holds in 8 reachable states, 8 transitions"
+           ]
   end
 
   test "emit is unchanged when a temporal declaration is appended" do
@@ -442,11 +454,124 @@ defmodule Muro.TemporalTest do
     assert out ==
              """
              Muro v#{version}
-             temporal echo-returns-zero: holds in 8 reachable states
-             temporal echo-answers: holds in 8 reachable states
-             temporal echo-answered: holds in 8 reachable states
+             temporal echo-returns-zero: holds in 8 reachable states, 8 transitions
+             temporal echo-answers: holds in 8 reachable states, 8 transitions
+             temporal echo-answered: holds in 8 reachable states, 8 transitions
              All terms check. Evidence never becomes a run.
              """
+  end
+
+  test "a spinning leads_to keeps the prefix and the cycle" do
+    src = """
+    data Frame : Type where
+      bytes : Frame
+      trailers : Frame
+      headers : Frame
+    session spin := rec X. send Frame X
+    session hear :=
+      rec Y. recv (f : Frame) (case f
+        | bytes => Y
+        | trailers => end
+        | headers => end)
+    conform spin-client : spin := rec X. put bytes X
+    conform hear-server : hear := rec Y. get (f : Frame) (match f Y done done)
+    meet spin-wire : spin-client with hear-server buffer 1
+    temporal answered : spin-wire :=
+      (inbox hear-server head bytes) leads_to (hear-server done)
+    """
+
+    assert {:error, msg} = check(src)
+
+    assert msg =~
+             "answered: (inbox hear-server head bytes) leads_to (hear-server done) fails in spin-wire (spin-client : spin, hear-server : hear) after spin-client put bytes, hear-server arm bytes; then forever: spin-client put bytes, hear-server arm bytes"
+  end
+
+  test "a finished meeting refuses eventually and leads_to on the finish loop" do
+    src =
+      File.read!("examples/async-meetings.muro") <>
+        """
+        temporal never : inflight := eventually false
+        temporal stays : inflight := (client done) leads_to (client stopped)
+        """
+
+    assert {:error, msg} = check(src)
+
+    finished =
+      "after client put headers, server arm headers, client put trailers, server put rst, client get (c : Ctl), server arm trailers; then forever: the meeting has finished"
+
+    assert msg =~
+             "never: eventually (false) fails in inflight (client : out-frames, server : tolerate) #{finished}"
+
+    assert msg =~
+             "stays: (client done) leads_to (client stopped) fails in inflight (client : out-frames, server : tolerate) #{finished}"
+
+    refute msg =~ "then forever: the meeting has finished; then forever"
+  end
+
+  test "an empty stem prints the cycle once" do
+    src = """
+    session ping := rec X. choose X end
+    session pong := dual ping
+    conform a : ping := rec X. pick0 X
+    conform b : pong := rec Y. cover Y done
+    meet wire : a with b buffer 1
+    """
+
+    assert check(src <> "temporal quiet : wire := always true\n") == :ok
+
+    assert Check.temporal_lines() == [
+             "temporal quiet: holds in 2 reachable states, 2 transitions"
+           ]
+
+    assert {:error, msg} =
+             check("""
+             #{src}
+             temporal loops : wire := eventually (b done)
+             temporal waits : wire := (inbox b head pick0) leads_to (b done)
+             """)
+
+    assert msg =~
+             "loops: eventually (b done) fails in wire (a : ping, b : pong); then forever: a pick0, b cover"
+
+    assert msg =~
+             "waits: (inbox b head pick0) leads_to (b done) fails in wire (a : ping, b : pong) after a pick0; then forever: b cover, a pick0"
+
+    refute msg =~ "after a pick0, b cover; then forever: a pick0, b cover"
+    refute msg =~ "quiet:"
+  end
+
+  test "a deadlock is the meeting refusal and the temporal declaration is skipped" do
+    events =
+      explorations(fn ->
+        assert {:error, msg} =
+                 check("""
+                 data Frame : Type where
+                   bytes : Frame
+                   trailers : Frame
+                   headers : Frame
+                 session once := send Frame (send Frame end)
+                 session forever :=
+                   rec Y. recv (f : Frame) (case f
+                     | bytes => Y
+                     | trailers => Y
+                     | headers => Y)
+                 conform client : once := put bytes (put trailers done)
+                 conform server : forever := rec Y. get (f : Frame) (match f Y Y Y)
+                 meet stuck : client with server buffer 1
+                 temporal late : stuck := always true
+                 temporal later : stuck := eventually (client done)
+                 """)
+
+        assert msg =~
+                 "deadlock after client put bytes, server arm bytes, client put trailers, server arm trailers: client: done; server: get (f : Frame); l2r: []; r2l: []"
+
+        assert msg =~ "late: skipped because stuck does not check"
+        assert msg =~ "later: skipped because stuck does not check"
+        refute msg =~ "fails in"
+        refute msg =~ "then forever"
+      end)
+
+    assert events == [meeting: "stuck"]
   end
 
   defp check(src, opts \\ []) do

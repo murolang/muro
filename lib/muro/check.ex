@@ -3006,10 +3006,16 @@ defmodule Muro.Check do
     loc = Print.loc_prefix(Map.get(d, :loc))
 
     case result do
-      {:ok, n} -> {:note, "temporal #{name}: holds in #{n} reachable states"}
-      {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
+      {:ok, n, m} ->
+        {:note, "temporal #{name}: holds in #{n} reachable states, #{transitions(m)}"}
+
+      {:error, msg} ->
+        {:error, "#{loc}#{name}: #{msg}"}
     end
   end
+
+  defp transitions(1), do: "1 transition"
+  defp transitions(m) when is_integer(m) and m > 1, do: "#{m} transitions"
 
   defp meet_ends(book, l, r, _left, _right, nil) do
     with :ok <- other_end(l.proto, r.proto) do
