@@ -1248,6 +1248,263 @@ defmodule Muro.EmitOtpTest do
     end
   end
 
+  test "a normal DOWN queued ahead of go abandons when the sender yields" do
+    # Suspend the emitted sender so the mailbox is exactly [DOWN, go].
+    # The peer is a handwritten process that exits :normal. This is not a
+    # generated pair and not a public meeting.
+    %{mod: mod, book: book} = compile_book!(buffer_book(), "buf-down-go")
+    {pid, ref, peer} = open_with_peer(mod, carry(book, "burst-a"), 1)
+
+    try do
+      true = :erlang.suspend_process(pid)
+      send(peer, :bye)
+
+      await_messages(pid, fn
+        [{:DOWN, _, :process, ^peer, :normal}] -> true
+        _ -> false
+      end)
+
+      send(pid, :muro_go)
+
+      {:messages, msgs} = Process.info(pid, :messages)
+
+      assert match?(
+               [{:DOWN, _, :process, ^peer, :normal}, :muro_go],
+               msgs
+             )
+
+      :erlang.resume_process(pid)
+      assert_down(ref, pid, {:shutdown, :abandon})
+    after
+      stop(pid)
+      stop(peer)
+    end
+  end
+
+  test "a go queued ahead of a normal DOWN still abandons" do
+    %{mod: mod, book: book} = compile_book!(buffer_book(), "buf-go-down")
+    {pid, ref, peer} = open_with_peer(mod, carry(book, "burst-a"), 1)
+
+    try do
+      true = :erlang.suspend_process(pid)
+      send(pid, :muro_go)
+      send(peer, :bye)
+
+      await_messages(pid, fn
+        [:muro_go, {:DOWN, _, :process, ^peer, :normal}] -> true
+        _ -> false
+      end)
+
+      :erlang.resume_process(pid)
+      assert_down(ref, pid, {:shutdown, :abandon})
+    after
+      stop(pid)
+      stop(peer)
+    end
+  end
+
+  test "a normal DOWN before go abandons a running sender" do
+    %{mod: mod, book: book} = compile_book!(buffer_book(), "buf-down-early")
+    {pid, ref, peer} = open_with_peer(mod, carry(book, "burst-a"), 1)
+
+    try do
+      send(peer, :bye)
+      assert_down(ref, pid, {:shutdown, :abandon})
+    after
+      stop(pid)
+      stop(peer)
+    end
+  end
+
+  test "a normal DOWN while credit is exhausted abandons the yielded sender" do
+    %{mod: mod, book: book} = compile_book!(buffer_book(), "buf-down-yield")
+    {pid, ref, peer} = open_with_peer(mod, carry(book, "burst-a"), 1)
+
+    try do
+      send(pid, :muro_go)
+
+      st =
+        await_state(pid, fn st ->
+          st.phase == :run and match?({:say, _, _}, st.send_wait) and st.peer_down == nil
+        end)
+
+      assert st.unacked == MapSet.new([0])
+      send(peer, :bye)
+      assert_down(ref, pid, {:shutdown, :abandon})
+    after
+      stop(pid)
+      stop(peer)
+    end
+  end
+
+  test "a normal DOWN after settle with unacked ids is orphan" do
+    %{mod: mod, book: book} = compile_book!(buffer_book(), "buf-orphan")
+    {pid, ref, peer} = open_with_peer(mod, carry(book, "burst-a"), 3)
+
+    try do
+      send(pid, :muro_go)
+
+      st =
+        await_state(pid, fn st ->
+          st.phase == :settled and st.unacked == MapSet.new([0, 1, 2]) and
+            st.peer_settled == false and st.peer_down == nil and st.send_wait == nil
+        end)
+
+      assert st.paired
+      send(peer, :bye)
+      assert_down(ref, pid, {:shutdown, :orphan})
+    after
+      stop(pid)
+      stop(peer)
+    end
+  end
+
+  test "a peer settled message with unacked ids still held is orphan" do
+    # The peer is handwritten and sends {:muro_settled, self()} itself.
+    # The emitted process is already settled and still holds ids, so this
+    # is the peer_settled arm. A compatible generated peer sends that mark
+    # only once it is clear. This does not claim a public meeting reaches it.
+    %{mod: mod, book: book} = compile_book!(buffer_book(), "buf-peer-settled")
+    peer = settled_peer()
+    {pid, ref} = open_monitored(mod, carry(book, "burst-a"), 3)
+
+    try do
+      :ok = GenServer.call(pid, {:muro_peer, peer})
+      send(pid, :muro_go)
+
+      st =
+        await_state(pid, fn st ->
+          st.phase == :settled and st.unacked == MapSet.new([0, 1, 2]) and
+            st.peer_settled == false and st.peer_down == nil and st.send_wait == nil and
+            st.queue == []
+        end)
+
+      assert st.paired
+      send(peer, {:tell, pid})
+      assert_down(ref, pid, {:shutdown, :orphan})
+      assert Process.alive?(peer)
+    after
+      stop(pid)
+      stop(peer)
+    end
+  end
+
+  test "the other wire from the known peer stops with incompatible_wire" do
+    %{mod: mod, book: book} = compile_book!(buffer_book(), "buf-wire")
+    sink = carry(book, "sink-b")
+    picker = carry(book, "picker")
+
+    assert_incompatible(mod, sink, 1, {:muro, self(), 0})
+    assert_incompatible(mod, sink, nil, {:muro, self(), 0, 0})
+    assert_incompatible(mod, picker, 1, {:muro_pick, self(), :b0})
+    assert_incompatible(mod, picker, nil, {:muro_pick, self(), 0, :b0})
+
+    {pid, ref} = open_monitored(mod, sink, 1)
+    other = normal_peer()
+
+    try do
+      :ok = GenServer.call(pid, {:muro_peer, self()})
+      send(pid, :muro_go)
+      send(pid, {:muro, other, 0})
+      send(pid, {:muro, other, 0, 1})
+      send(pid, {:muro_pick, other, :b0})
+      send(pid, {:muro_pick, other, 0, :b1})
+      send(pid, {:muro, self(), :no, 0})
+      send(pid, {:nope, 1})
+      refute_receive {:DOWN, ^ref, :process, ^pid, _}, 200
+      assert Process.alive?(pid)
+      st = :sys.get_state(pid, 5_000)
+      assert st.phase == :run and st.cap == 1
+      send(pid, {:muro, self(), 0, 0})
+      assert_receive {:muro_ack, ^pid, 0}, 5_000
+      assert Process.alive?(pid)
+    after
+      stop(pid)
+      stop(other)
+      drain_protocol()
+    end
+
+    {pid, ref} = open_monitored(mod, sink, nil)
+
+    try do
+      :ok = GenServer.call(pid, {:muro_peer, self()})
+      send(pid, :muro_go)
+      send(pid, {:muro, self(), 0})
+      send(pid, {:muro, self(), 1})
+      send(pid, {:muro, self(), 2})
+      assert_receive {:muro_settled, ^pid}, 5_000
+      st = :sys.get_state(pid, 5_000)
+      assert st.phase == :settled and st.cap == nil
+      send(pid, {:muro_settled, self()})
+      assert_down(ref, pid, :normal)
+    after
+      stop(pid)
+      drain_protocol()
+    end
+  end
+
+  test "a manual integer cap paired with a nil cap stops incompatible_wire" do
+    %{mod: mod, book: book} = compile_book!(buffer_book(), "buf-mixed")
+    {:ok, left} = GenServer.start(mod, {carry(book, "burst-a"), :open, 1})
+    {:ok, right} = GenServer.start(mod, {carry(book, "sink-b"), :open})
+    lref = Process.monitor(left)
+    rref = Process.monitor(right)
+
+    try do
+      :ok = GenServer.call(left, {:muro_peer, right})
+      :ok = GenServer.call(right, {:muro_peer, left})
+      send(left, :muro_go)
+      send(right, :muro_go)
+      assert_down(rref, right, {:shutdown, :incompatible_wire})
+      assert_down(lref, left, {:shutdown, :abandon})
+    after
+      stop(left)
+      stop(right)
+      drain_protocol()
+    end
+  end
+
+  test "a scheduler block is restored after a nested block and an exception" do
+    parent = self()
+    token = make_ref()
+
+    pid =
+      spawn(fn ->
+        result =
+          try do
+            prior = scheduling_probe()
+            {:ok, prior, :erlang.system_info(:multi_scheduling)}
+          rescue
+            error -> {:raise, error, __STACKTRACE__}
+          catch
+            kind, reason -> {kind, reason, __STACKTRACE__}
+          end
+
+        send(parent, {token, result})
+      end)
+
+    mon = Process.monitor(pid)
+
+    receive do
+      {^token, {:ok, prior, restored}} ->
+        assert restored == prior
+
+      {^token, other} ->
+        flunk("scheduler probe failed: #{inspect(other)}")
+
+      {:DOWN, ^mon, :process, ^pid, reason} ->
+        flunk("scheduler probe exited: #{inspect(reason)}")
+    after
+      5_000 ->
+        Process.exit(pid, :kill)
+        flunk("scheduler probe timed out")
+    end
+
+    Process.demonitor(mon, [:flush])
+    blockers = :erlang.system_info(:multi_scheduling_blockers)
+    refute self() in blockers
+  end
+
   defp buffer_book do
     """
     session burst := send Nat (send Nat (send Nat end))
@@ -1336,8 +1593,13 @@ defmodule Muro.EmitOtpTest do
 
   defp hold(mod, fun) do
     # One scheduler, so the receiver cannot run between the two go sends
-    # and the suspend. `unblock` restores the previous schedulers.
-    previous = :erlang.system_flag(:multi_scheduling, :block)
+    # and the suspend. The flag returns the state after the call, which is
+    # `:blocked` on OTP 29 when the VM was `:enabled`, so comparing that
+    # return with `:enabled` never unblocks. Unblock once for this block.
+    # Exit of this process can also release it; this after restores before
+    # returning. A second unblock would release a block this call did not take.
+    prior = :erlang.system_info(:multi_scheduling)
+    :erlang.system_flag(:multi_scheduling, :block)
 
     try do
       {:ok, left, right, lref, rref} = apply(mod, fun, [])
@@ -1351,7 +1613,184 @@ defmodule Muro.EmitOtpTest do
       state = :sys.get_state(left, 5_000)
       {left, right, lref, rref, state, protocol_mailbox(right)}
     after
-      if previous == :enabled, do: :erlang.system_flag(:multi_scheduling, :unblock)
+      :erlang.system_flag(:multi_scheduling, :unblock)
+      assert :erlang.system_info(:multi_scheduling) == prior
+
+      blockers = :erlang.system_info(:multi_scheduling_blockers)
+      refute self() in blockers
+    end
+  end
+
+  # Runs in a spawned process. One block, one nested block, and one block
+  # that raises are each matched by one unblock. The assertions run before
+  # that process exits, so exit-time release is not what makes them pass.
+  defp scheduling_probe do
+    prior = :erlang.system_info(:multi_scheduling)
+    :erlang.system_flag(:multi_scheduling, :block)
+
+    try do
+      blocked = :erlang.system_info(:multi_scheduling)
+
+      cond do
+        prior == :enabled -> assert blocked == :blocked
+        prior == :disabled -> assert blocked == :disabled
+        true -> assert blocked == prior
+      end
+
+      nested_scheduling(blocked)
+      raised_scheduling(blocked)
+      prior
+    after
+      :erlang.system_flag(:multi_scheduling, :unblock)
+      assert :erlang.system_info(:multi_scheduling) == prior
+
+      blockers = :erlang.system_info(:multi_scheduling_blockers)
+      refute self() in blockers
+    end
+  end
+
+  defp nested_scheduling(outer_blocked) do
+    :erlang.system_flag(:multi_scheduling, :block)
+
+    try do
+      :ok
+    after
+      :erlang.system_flag(:multi_scheduling, :unblock)
+      assert :erlang.system_info(:multi_scheduling) == outer_blocked
+
+      if outer_blocked in [:blocked, :blocked_normal] do
+        blockers = :erlang.system_info(:multi_scheduling_blockers)
+        assert self() in blockers
+      end
+    end
+  end
+
+  defp raised_scheduling(outer_blocked) do
+    assert_raise RuntimeError, "scheduler probe", fn ->
+      :erlang.system_flag(:multi_scheduling, :block)
+
+      try do
+        raise "scheduler probe"
+      after
+        :erlang.system_flag(:multi_scheduling, :unblock)
+        assert :erlang.system_info(:multi_scheduling) == outer_blocked
+      end
+    end
+  end
+
+  defp open_with_peer(mod, skel, cap) do
+    peer = normal_peer()
+    {pid, ref} = open_monitored(mod, skel, cap)
+    :ok = GenServer.call(pid, {:muro_peer, peer})
+    {pid, ref, peer}
+  end
+
+  defp open_monitored(mod, skel, cap) do
+    arg = if is_integer(cap), do: {skel, :open, cap}, else: {skel, :open}
+    {:ok, pid} = GenServer.start(mod, arg)
+    on_exit(fn -> stop(pid) end)
+    {pid, Process.monitor(pid)}
+  end
+
+  defp normal_peer do
+    pid =
+      spawn(fn ->
+        receive do
+          :bye -> :ok
+        end
+      end)
+
+    on_exit(fn -> stop(pid) end)
+    pid
+  end
+
+  # Stays up after the settled send, so the stop is not a :normal DOWN.
+  defp settled_peer do
+    pid =
+      spawn(fn ->
+        receive do
+          {:tell, dest} ->
+            send(dest, {:muro_settled, self()})
+
+            receive do
+              :bye -> :ok
+            end
+        end
+      end)
+
+    on_exit(fn -> stop(pid) end)
+    pid
+  end
+
+  defp assert_incompatible(mod, skel, cap, msg) do
+    {pid, ref} = open_monitored(mod, skel, cap)
+
+    try do
+      :ok = GenServer.call(pid, {:muro_peer, self()})
+      send(pid, :muro_go)
+      send(pid, msg)
+      assert_down(ref, pid, {:shutdown, :incompatible_wire})
+    after
+      stop(pid)
+      drain_protocol()
+    end
+  end
+
+  defp await_state(pid, pred) do
+    await_state(pid, pred, System.monotonic_time(:millisecond) + 5_000)
+  end
+
+  defp await_state(pid, pred, deadline) do
+    st = :sys.get_state(pid, 5_000)
+
+    cond do
+      pred.(st) ->
+        st
+
+      System.monotonic_time(:millisecond) > deadline ->
+        flunk("timed out waiting for state #{inspect(st)}")
+
+      true ->
+        Process.sleep(10)
+        await_state(pid, pred, deadline)
+    end
+  end
+
+  defp await_messages(pid, pred) do
+    await_messages(pid, pred, System.monotonic_time(:millisecond) + 5_000)
+  end
+
+  defp await_messages(pid, pred, deadline) do
+    case Process.info(pid, :messages) do
+      {:messages, msgs} ->
+        cond do
+          pred.(msgs) ->
+            msgs
+
+          System.monotonic_time(:millisecond) > deadline ->
+            flunk("timed out waiting for mailbox #{inspect(msgs)}")
+
+          true ->
+            Process.sleep(10)
+            await_messages(pid, pred, deadline)
+        end
+
+      nil ->
+        flunk("process exited while waiting for mailbox")
+    end
+  end
+
+  defp drain_protocol do
+    receive do
+      {:muro, _, _} -> drain_protocol()
+      {:muro, _, _, _} -> drain_protocol()
+      {:muro_pick, _, _} -> drain_protocol()
+      {:muro_pick, _, _, _} -> drain_protocol()
+      {:muro_ack, _, _} -> drain_protocol()
+      {:muro_ack, _, _, _} -> drain_protocol()
+      {:muro_settled, _} -> drain_protocol()
+    after
+      0 -> :ok
     end
   end
 

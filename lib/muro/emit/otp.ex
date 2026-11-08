@@ -12,8 +12,14 @@ defmodule Muro.Emit.Otp do
   after `finish` until its sends are acked, its queue is empty, and the
   peer has sent `{:muro_settled, _}`. Both then stop `:normal`. A peer
   exit that is not `:normal` is abandon, and so is a `:normal` exit that
-  arrives before this process has settled. A finished pair with a token
-  still held is `{:shutdown, :orphan}`.
+  arrives before this process has settled. A `:normal` exit after this
+  process has settled, while an id is still unacked or a token is still
+  queued, is `{:shutdown, :orphan}` even when the peer sent no settled
+  message. The same orphan is the stop when the peer has settled and a
+  token is still held. A data or choice tuple whose arity does not match
+  this process's cap, and whose `from` is the peer, stops
+  `{:shutdown, :incompatible_wire}`. Another pid, and any other term, is
+  ignored.
 
   An integer `buffer N` on a paired meeting gives each direction N send
   credits. A payload and a choice spend one credit each and carry a fresh
@@ -23,8 +29,9 @@ defmodule Muro.Emit.Otp do
   ack. The same id does not return a second credit. Ids are not reused.
   The set drops a retired id, so its size stays at most N; the counter
   grows with the number of sends.
-  The sender yields while none remain, and still handles acks and peer
-  failure. Buffer 0 blocks every send. It is not a rendezvous. A meeting
+  The sender yields while none remain. That yield applies a peer failure
+  already recorded, and a later ack or failure still runs if the process
+  stays up. Buffer 0 blocks every send. It is not a rendezvous. A meeting
   with no buffer stays an unbounded 3-tuple mailbox, with no credit and
   no per-send id. Paired completion on that meeting still waits for a
   clear local state and the peer's settled mark. `start/2` does not
@@ -416,9 +423,13 @@ defmodule Muro.Emit.Otp do
       # A `:normal` DOWN waits until protocol messages already queued
       # are applied. Success then requires this process to be settled
       # and clear. Before that, the stop is abandon. A settled process
-      # that still holds a token stops `{:shutdown, :orphan}`. Any other
-      # reason abandons immediately, including while parked on credit
-      # or on the handshake.
+      # that still holds a token stops `{:shutdown, :orphan}`, including
+      # when the peer exits `:normal` without `{:muro_settled, _}`.
+      # The peer-settled arm is that same reason when the settled message
+      # has arrived and a token is still held. Any other reason abandons
+      # immediately, including while parked on credit or on the handshake.
+      # A known-peer data or choice tuple of the other cap's arity stops
+      # `{:shutdown, :incompatible_wire}`.
       def handle_info({:DOWN, mon, :process, peer, reason}, %{mon: mon, peer: peer} = st) do
         if reason == :normal do
           muro_idle(%{st | peer_down: :normal})
@@ -481,6 +492,30 @@ defmodule Muro.Emit.Otp do
         arrived(msg, st, nil)
       end
 
+      # The other arity, from this peer, is the other wire. An integer cap
+      # speaks 4-tuples. A nil cap, and `start/2`, speak 3-tuples. A
+      # non-integer id on a 4-tuple integer cap still falls through, and so
+      # does a message whose `from` is not the peer.
+      def handle_info({:muro, from, _value}, %{peer: peer} = st)
+          when from == peer and is_integer(st.cap) do
+        {:stop, {:shutdown, :incompatible_wire}, st}
+      end
+
+      def handle_info({:muro_pick, from, _bit}, %{peer: peer} = st)
+          when from == peer and is_integer(st.cap) do
+        {:stop, {:shutdown, :incompatible_wire}, st}
+      end
+
+      def handle_info({:muro, from, _id, _value}, %{peer: peer} = st)
+          when from == peer and not is_integer(st.cap) do
+        {:stop, {:shutdown, :incompatible_wire}, st}
+      end
+
+      def handle_info({:muro_pick, from, _id, _bit}, %{peer: peer} = st)
+          when from == peer and not is_integer(st.cap) do
+        {:stop, {:shutdown, :incompatible_wire}, st}
+      end
+
       def handle_info(_msg, st), do: muro_idle(st)
 
       # A payload that arrives before the server reaches its next receive is
@@ -536,7 +571,9 @@ defmodule Muro.Emit.Otp do
 
       # `cap` nil is the unbuffered and `start/2` path: a 3-tuple, no id, no ack.
       # An integer cap stamps a fresh id and spends one slot in `unacked`.
-      # At the cap the callback returns so acks and DOWN still run.
+      # At the cap the callback returns through `muro_idle`, so a DOWN
+      # already recorded is applied. A later ack or DOWN still runs if the
+      # process stays up.
       # Free slots are `cap - size(unacked)`. Membership, not that count,
       # decides whether an ack names this send. Ids are never reused, so a
       # retired id cannot free a later send. The set drops retired ids.
@@ -557,7 +594,7 @@ defmodule Muro.Emit.Otp do
             )
 
           true ->
-            {:noreply, %{st | send_wait: parked}}
+            muro_idle(%{st | send_wait: parked})
         end
       end
 
