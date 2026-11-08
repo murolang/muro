@@ -8,7 +8,27 @@ defmodule Muro.Emit.Otp do
   peer pid. The message carries the value. The place stays on the
   reading. A `meet` starts those two processes as each other's peer.
   `leave` stops with `{:shutdown, :abandon}`, which a monitor observes.
-  `finish` stops with `:normal`.
+  `start/2` stops with `:normal` at `finish`. A paired meeting stays up
+  after `finish` until its sends are acked, its queue is empty, and the
+  peer has sent `{:muro_settled, _}`. Both then stop `:normal`. A peer
+  exit that is not `:normal` is abandon, and so is a `:normal` exit that
+  arrives before this process has settled. A finished pair with a token
+  still held is `{:shutdown, :orphan}`.
+
+  An integer `buffer N` on a paired meeting gives each direction N send
+  credits. A payload and a choice spend one credit each and carry a fresh
+  send id. The credit for that id returns when its ack is applied, not
+  when the token is queued. The outstanding set is ids sent whose ack
+  is not yet applied, so it can include a consumed token awaiting that
+  ack. The same id does not return a second credit. Ids are not reused.
+  The set drops a retired id, so its size stays at most N; the counter
+  grows with the number of sends.
+  The sender yields while none remain, and still handles acks and peer
+  failure. Buffer 0 blocks every send. It is not a rendezvous. A meeting
+  with no buffer stays an unbounded 3-tuple mailbox, with no credit and
+  no per-send id. Paired completion on that meeting still waits for a
+  clear local state and the peer's settled mark. `start/2` does not
+  carry a buffer.
 
   Value binding: When a process has `get (k : Type) continuation`, the
   received value is checked against the type, but variable substitution
@@ -116,8 +136,8 @@ defmodule Muro.Emit.Otp do
       "def handle_call({:muro_peer, peer}, _from, %{peer: nil} = st)",
       "def init({skel, :open})"
     ] ++
-      Enum.flat_map(meets, fn {name, left, right} ->
-        ["def #{name} do", "exchange(#{inspect(left)}, #{inspect(right)})"]
+      Enum.flat_map(meets, fn {name, left, right, buffer} ->
+        ["def #{name} do", exchange_call(left, right, buffer)]
       end)
   end
 
@@ -143,9 +163,11 @@ defmodule Muro.Emit.Otp do
     {funs, _} =
       book
       |> Enum.filter(&match?(%{kind: :meet}, &1))
-      |> Enum.reduce({[], taken0}, fn %{name: name, left: left, right: right}, {acc, used} ->
+      |> Enum.reduce({[], taken0}, fn %{name: name, left: left, right: right} = meet,
+                                      {acc, used} ->
         {fname, used} = Name.claim(Muro.Emit.elixir_base(name), used)
-        {[{fname, skel_of(book, left), skel_of(book, right)} | acc], used}
+
+        {[{fname, skel_of(book, left), skel_of(book, right), Map.get(meet, :buffer)} | acc], used}
       end)
 
     Enum.reverse(funs)
@@ -194,7 +216,11 @@ defmodule Muro.Emit.Otp do
   defp open_init do
     """
       def init({skel, :open}) do
-        {:ok, %{peer: nil, mon: nil, skel: skel, wait: nil, queue: [], bindings: %{}, loops: %{}}}
+        {:ok, muro_fresh(skel, nil, nil, nil)}
+      end
+
+      def init({skel, :open, cap}) when is_integer(cap) and cap >= 0 do
+        {:ok, muro_fresh(skel, nil, nil, cap)}
       end
 
     """
@@ -204,7 +230,7 @@ defmodule Muro.Emit.Otp do
     """
       @impl true
       def handle_call({:muro_peer, peer}, _from, %{peer: nil} = st) when is_pid(peer) do
-        {:reply, :ok, %{st | peer: peer, mon: Process.monitor(peer)}}
+        {:reply, :ok, %{st | peer: peer, mon: Process.monitor(peer), paired: true}}
       end
 
     """
@@ -213,51 +239,90 @@ defmodule Muro.Emit.Otp do
   defp meeting_funs(meets) do
     funs = Enum.map_join(meets, "\n\n", &meeting_fun/1)
 
-    funs <> "\n\n" <> exchange_fun() <> "\n"
+    funs <> "\n\n" <> exchange_fun(meets) <> "\n"
   end
 
-  defp meeting_fun({name, left, right}) do
+  defp meeting_fun({name, left, right, buffer}) do
     """
       def #{name} do
-        exchange(#{inspect(left)}, #{inspect(right)})
+        #{exchange_call(left, right, buffer)}
       end
     """
     |> String.trim_trailing()
   end
 
-  defp exchange_fun do
-    """
-      defp exchange(left_skel, right_skel) do
-        with {:ok, left} <- GenServer.start(__MODULE__, {left_skel, :open}),
-             {:ok, right} <- open_peer(right_skel, left) do
-          :ok = GenServer.call(left, {:muro_peer, right})
-          :ok = GenServer.call(right, {:muro_peer, left})
-          ref_l = Process.monitor(left)
-          ref_r = Process.monitor(right)
-          send(left, :muro_go)
-          send(right, :muro_go)
-          {:ok, left, right, ref_l, ref_r}
-        end
-      end
+  # Nil is two skeletons and no credit: the unbounded 3-tuple image.
+  # An integer is the bound. Cap 0 is that integer, not the nil path.
+  defp integer_cap?(cap) when is_integer(cap) and cap >= 0, do: true
+  defp integer_cap?(_cap), do: false
 
-      defp open_peer(skel, sibling) do
-        case GenServer.start(__MODULE__, {skel, :open}) do
-          {:ok, pid} ->
-            {:ok, pid}
+  defp exchange_call(left, right, cap) when is_integer(cap) and cap >= 0 do
+    "exchange(#{inspect(left)}, #{inspect(right)}, #{cap})"
+  end
 
-          {:error, reason} ->
-            GenServer.stop(sibling)
-            {:error, reason}
-        end
-      end
-    """
+  defp exchange_call(left, right, _cap) do
+    "exchange(#{inspect(left)}, #{inspect(right)})"
+  end
+
+  defp exchange_fun(meets) do
+    unlimited = Enum.any?(meets, fn {_, _, _, cap} -> not integer_cap?(cap) end)
+    bounded = Enum.any?(meets, fn {_, _, _, cap} -> integer_cap?(cap) end)
+
+    heads =
+      [
+        unlimited &&
+          """
+            defp exchange(left_skel, right_skel) do
+              muro_open_pair(left_skel, right_skel, nil)
+            end
+          """,
+        bounded &&
+          """
+            defp exchange(left_skel, right_skel, cap) when is_integer(cap) and cap >= 0 do
+              muro_open_pair(left_skel, right_skel, cap)
+            end
+          """
+      ]
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map_join("\n", &String.trim_trailing/1)
+
+    (heads <>
+       """
+
+           defp muro_open_pair(left_skel, right_skel, cap) do
+           with {:ok, left} <- GenServer.start(__MODULE__, muro_open_arg(left_skel, cap)),
+                {:ok, right} <- open_peer(right_skel, left, cap) do
+             :ok = GenServer.call(left, {:muro_peer, right})
+             :ok = GenServer.call(right, {:muro_peer, left})
+             ref_l = Process.monitor(left)
+             ref_r = Process.monitor(right)
+             send(left, :muro_go)
+             send(right, :muro_go)
+             {:ok, left, right, ref_l, ref_r}
+           end
+         end
+
+         defp muro_open_arg(skel, cap) when is_integer(cap) and cap >= 0, do: {skel, :open, cap}
+         defp muro_open_arg(skel, _cap), do: {skel, :open}
+
+         defp open_peer(skel, sibling, cap) do
+           case GenServer.start(__MODULE__, muro_open_arg(skel, cap)) do
+             {:ok, pid} ->
+               {:ok, pid}
+
+             {:error, reason} ->
+               GenServer.stop(sibling)
+               {:error, reason}
+           end
+         end
+       """)
     |> String.trim_trailing()
   end
 
   defp run_names_in(mods, meets) do
     skels =
       Enum.map(mods, fn {_mod, skel} -> skel end) ++
-        Enum.flat_map(meets, fn {_name, left, right} -> [left, right] end)
+        Enum.flat_map(meets, fn {_name, left, right, _buffer} -> [left, right] end)
 
     skels |> Enum.flat_map(&run_names/1) |> Enum.uniq()
   end
@@ -318,7 +383,29 @@ defmodule Muro.Emit.Otp do
       @impl true
       def init({skel, peer}) do
         mon = Process.monitor(peer)
-        {:ok, %{peer: peer, mon: mon, skel: skel, wait: nil, queue: [], bindings: %{}, loops: %{}}}
+        {:ok, muro_fresh(skel, peer, mon, nil)}
+      end
+
+      defp muro_fresh(skel, peer, mon, cap) do
+        %{
+          peer: peer,
+          mon: mon,
+          skel: skel,
+          wait: nil,
+          queue: [],
+          bindings: %{},
+          loops: %{},
+          cap: cap,
+          credit: if(is_integer(cap), do: cap, else: nil),
+          next_send: 0,
+          unacked: MapSet.new(),
+          send_wait: nil,
+          paired: false,
+          phase: :run,
+          peer_settled: false,
+          peer_down: nil,
+          told: false
+        }
       end
 
       @impl true
@@ -326,38 +413,102 @@ defmodule Muro.Emit.Otp do
         drive(skel, %{st | skel: nil})
       end
 
-      def handle_info({:DOWN, mon, :process, peer, _}, %{mon: mon, peer: peer} = st) do
-        {:stop, {:shutdown, :abandon}, st}
+      # A `:normal` DOWN waits until protocol messages already queued
+      # are applied. Success then requires this process to be settled
+      # and clear. Before that, the stop is abandon. A settled process
+      # that still holds a token stops `{:shutdown, :orphan}`. Any other
+      # reason abandons immediately, including while parked on credit
+      # or on the handshake.
+      def handle_info({:DOWN, mon, :process, peer, reason}, %{mon: mon, peer: peer} = st) do
+        if reason == :normal do
+          muro_idle(%{st | peer_down: :normal})
+        else
+          {:stop, {:shutdown, :abandon}, st}
+        end
       end
 
-      def handle_info({:muro, from, _value} = msg, %{peer: peer} = st) when from == peer do
-        arrived(msg, st)
+      # Credit returns only for an id this process still has outstanding.
+      # A replay of that id, a never-issued id, or a 2-tuple ack does not
+      # free a different send. `from` is the payload peer, not an
+      # authentication of the BEAM sender.
+      def handle_info({:muro_ack, from, id}, %{peer: peer, cap: cap, unacked: unacked} = st)
+          when from == peer and is_integer(cap) and is_integer(id) do
+        if MapSet.member?(unacked, id) do
+          unacked = MapSet.delete(unacked, id)
+          st = %{st | unacked: unacked, credit: cap - MapSet.size(unacked)}
+
+          case st.send_wait do
+            nil ->
+              muro_idle(st)
+
+            action ->
+              drive(action, %{st | send_wait: nil})
+          end
+        else
+          muro_idle(st)
+        end
+      end
+
+      def handle_info({:muro_ack, from, _id}, %{peer: peer} = st) when from == peer do
+        muro_idle(st)
+      end
+
+      def handle_info({:muro_ack, from}, %{peer: peer} = st) when from == peer do
+        muro_idle(st)
+      end
+
+      def handle_info({:muro_settled, from}, %{peer: peer} = st) when from == peer do
+        muro_idle(%{st | peer_settled: true})
+      end
+
+      def handle_info({:muro, from, id, value}, %{peer: peer} = st)
+          when from == peer and is_integer(st.cap) and is_integer(id) do
+        arrived({:muro, from, value}, st, id)
+      end
+
+      def handle_info({:muro_pick, from, id, bit}, %{peer: peer} = st)
+          when from == peer and is_integer(st.cap) and is_integer(id) and bit in [:b0, :b1] do
+        arrived({:muro_pick, from, bit}, st, id)
+      end
+
+      def handle_info({:muro, from, _value} = msg, %{peer: peer} = st)
+          when from == peer and not is_integer(st.cap) do
+        arrived(msg, st, nil)
       end
 
       def handle_info({:muro_pick, from, bit} = msg, %{peer: peer} = st)
-          when from == peer and bit in [:b0, :b1] do
-        arrived(msg, st)
+          when from == peer and not is_integer(st.cap) and bit in [:b0, :b1] do
+        arrived(msg, st, nil)
       end
 
-      def handle_info(_msg, st), do: {:noreply, st}
+      def handle_info(_msg, st), do: muro_idle(st)
 
       # A payload that arrives before the server reaches its next receive is
       # kept, in order, and read there. The peer can send as soon as start returns.
-      defp arrived(msg, %{wait: nil, queue: queue} = st) do
-        {:noreply, %{st | queue: queue ++ [msg]}}
+      # The id stays with the queued token so the ack names that send.
+      defp arrived(msg, %{wait: nil, queue: queue} = st, id) do
+        muro_idle(%{st | queue: queue ++ [{msg, id}]})
       end
 
-      defp arrived(msg, %{wait: wait, bindings: bindings} = st) do
+      defp arrived(msg, %{wait: wait, bindings: bindings} = st, id) do
         case step(ready(wait, bindings), msg) do
-          {:go, next} -> drive(next, %{st | wait: nil})
-          {:bind, :_, _value, next} -> drive(next, %{st | wait: nil})
-          {:bind, name, value, next} -> drive(next, %{st | wait: nil, bindings: Map.put(bindings, name, value)})
-          {:bind_fields, pairs, next} -> drive(next, %{st | wait: nil, bindings: store_all(bindings, pairs)})
+          {:go, next} -> muro_on_consume(%{st | wait: nil}, next, id)
+          {:bind, :_, _value, next} -> muro_on_consume(%{st | wait: nil}, next, id)
+          {:bind, name, value, next} ->
+            muro_on_consume(%{st | wait: nil, bindings: Map.put(bindings, name, value)}, next, id)
+
+          {:bind_fields, pairs, next} ->
+            muro_on_consume(%{st | wait: nil, bindings: store_all(bindings, pairs)}, next, id)
+
           {:unexpected, value} -> {:stop, {:shutdown, {:unexpected, value}}, st}
         end
       end
 
-      defp drive(:finish, st), do: {:stop, :normal, st}
+      # `start/2` is not paired: finish is `:normal` immediately. A paired
+      # process records source finish and stays up until `muro_idle` can
+      # exit. `leave` is abandon, not a normal completion.
+      defp drive(:finish, %{paired: false} = st), do: {:stop, :normal, st}
+      defp drive(:finish, st), do: muro_idle(%{st | phase: :settled})
       defp drive(:leave, st), do: {:stop, {:shutdown, :abandon}, st}
 
       defp drive({:loop, name, body}, %{loops: loops} = st) do
@@ -368,15 +519,12 @@ defmodule Muro.Emit.Otp do
         drive(Map.fetch!(loops, name), st)
       end
 
-      defp drive({:say, value, next}, %{peer: peer, bindings: bindings} = st) do
-        resolved = substitute(value, bindings)
-        send(peer, {:muro, self(), resolved})
-        drive(next, st)
+      defp drive({:say, value, next}, %{bindings: bindings} = st) do
+        muro_emit_token(st, :muro, substitute(value, bindings), {:say, value, next}, next)
       end
 
-      defp drive({:choose, bit, next}, %{peer: peer} = st) do
-        send(peer, {:muro_pick, self(), bit})
-        drive(next, st)
+      defp drive({:choose, bit, next}, st) do
+        muro_emit_token(st, :muro_pick, bit, {:choose, bit, next}, next)
       end
 
       defp drive({:hear, ty, name, next}, st), do: park({:hear, ty, name, next}, st)
@@ -386,22 +534,144 @@ defmodule Muro.Emit.Otp do
         park({:index, name, left, right}, st)
       end
 
-      defp park(wait, %{queue: []} = st), do: {:noreply, %{st | wait: wait}}
+      # `cap` nil is the unbuffered and `start/2` path: a 3-tuple, no id, no ack.
+      # An integer cap stamps a fresh id and spends one slot in `unacked`.
+      # At the cap the callback returns so acks and DOWN still run.
+      # Free slots are `cap - size(unacked)`. Membership, not that count,
+      # decides whether an ack names this send. Ids are never reused, so a
+      # retired id cannot free a later send. The set drops retired ids.
+      defp muro_emit_token(%{cap: cap, peer: peer} = st, tag, payload, parked, next) do
+        cond do
+          not is_integer(cap) ->
+            send(peer, {tag, self(), payload})
+            drive(next, st)
 
-      defp park(wait, %{queue: [msg | rest], bindings: bindings} = st) do
+          MapSet.size(st.unacked) < cap ->
+            id = st.next_send
+            unacked = MapSet.put(st.unacked, id)
+            send(peer, {tag, self(), id, payload})
+
+            drive(
+              next,
+              %{st | next_send: id + 1, unacked: unacked, credit: cap - MapSet.size(unacked)}
+            )
+
+          true ->
+            {:noreply, %{st | send_wait: parked}}
+        end
+      end
+
+      defp muro_on_consume(st, next, id) do
+        drive(next, muro_grant(st, id))
+      end
+
+      defp muro_grant(%{cap: cap, peer: peer} = st, id) when is_integer(cap) and is_integer(id) do
+        send(peer, {:muro_ack, self(), id})
+        st
+      end
+
+      defp muro_grant(st, _id), do: st
+
+      # Local obligations are an empty unacked set, an empty queue, and no
+      # credit park. Mailbox protocol messages are not obligations yet;
+      # they are applied before a normal exit. `peer_down` wins over the
+      # settle handshake so a crash already queued is not reported as success.
+      defp muro_idle(%{peer_down: :normal} = st) do
+        if muro_mailbox_quiet(), do: muro_down_stop(st), else: {:noreply, st}
+      end
+
+      defp muro_idle(%{peer_down: reason} = st) when not is_nil(reason) do
+        {:stop, {:shutdown, :abandon}, st}
+      end
+
+      defp muro_idle(%{phase: :settled} = st), do: muro_conclude(st)
+      defp muro_idle(st), do: {:noreply, st}
+
+      defp muro_down_stop(%{paired: true, phase: :settled} = st) do
+        if muro_clear(st), do: {:stop, :normal, st}, else: {:stop, {:shutdown, :orphan}, st}
+      end
+
+      defp muro_down_stop(st), do: {:stop, {:shutdown, :abandon}, st}
+
+      defp muro_conclude(st) do
+        cond do
+          not muro_mailbox_quiet() ->
+            {:noreply, st}
+
+          muro_clear(st) ->
+            st = muro_tell(st)
+
+            if st.peer_settled do
+              {:stop, :normal, st}
+            else
+              {:noreply, st}
+            end
+
+          st.peer_settled ->
+            {:stop, {:shutdown, :orphan}, st}
+
+          true ->
+            {:noreply, st}
+        end
+      end
+
+      defp muro_tell(%{told: true} = st), do: st
+
+      defp muro_tell(%{paired: true, phase: :settled, peer: peer} = st) when is_pid(peer) do
+        if muro_clear(st) do
+          send(peer, {:muro_settled, self()})
+          %{st | told: true}
+        else
+          st
+        end
+      end
+
+      defp muro_tell(st), do: st
+
+      defp muro_clear(%{unacked: unacked, queue: queue, send_wait: send_wait}) do
+        MapSet.size(unacked) == 0 and queue == [] and send_wait == nil
+      end
+
+      defp muro_mailbox_quiet do
+        {:messages, msgs} = Process.info(self(), :messages)
+        not Enum.any?(msgs, &muro_control/1)
+      end
+
+      defp muro_control({:muro, _, _}), do: true
+      defp muro_control({:muro, _, _, _}), do: true
+      defp muro_control({:muro_pick, _, _}), do: true
+      defp muro_control({:muro_pick, _, _, _}), do: true
+      defp muro_control({:muro_ack, _, _}), do: true
+      defp muro_control({:muro_ack, _, _, _}), do: true
+      defp muro_control({:muro_settled, _}), do: true
+      defp muro_control(:muro_go), do: true
+      defp muro_control({:DOWN, _, :process, _, _}), do: true
+      defp muro_control(_msg), do: false
+
+      defp park(wait, %{queue: []} = st), do: muro_idle(%{st | wait: wait})
+
+      defp park(wait, %{queue: [{msg, id} | rest], bindings: bindings} = st) do
         case step(ready(wait, bindings), msg) do
           {:go, next} ->
-            drive(next, %{st | wait: nil, queue: rest})
+            muro_on_consume(%{st | wait: nil, queue: rest}, next, id)
 
           {:bind, :_, _value, next} ->
             # Anonymous binder, don't store
-            drive(next, %{st | wait: nil, queue: rest})
+            muro_on_consume(%{st | wait: nil, queue: rest}, next, id)
 
           {:bind, name, value, next} ->
-            drive(next, %{st | wait: nil, queue: rest, bindings: Map.put(bindings, name, value)})
+            muro_on_consume(
+              %{st | wait: nil, queue: rest, bindings: Map.put(bindings, name, value)},
+              next,
+              id
+            )
 
           {:bind_fields, pairs, next} ->
-            drive(next, %{st | wait: nil, queue: rest, bindings: store_all(bindings, pairs)})
+            muro_on_consume(
+              %{st | wait: nil, queue: rest, bindings: store_all(bindings, pairs)},
+              next,
+              id
+            )
 
           {:unexpected, value} ->
             {:stop, {:shutdown, {:unexpected, value}}, st}

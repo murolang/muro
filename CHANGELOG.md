@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.20.19
+
+**Breaking** for generated OTP processes that talk to each other. Regenerate every process in a conversation and run that set as one version. A 0.20.18 image and a 0.20.19 image are not a compatible pair on this wire.
+
+An integer `buffer N` on a paired meeting bounds pending data and choice tokens in that direction. A payload is `{:muro, from, id, value}`. A choice is `{:muro_pick, from, id, bit}`. `id` starts at 0 and increases for the life of the process. The outstanding set holds ids that have been sent and whose ack is not yet applied, and its size stays at most N. It can still contain a token the peer has already consumed, while that ack is in transit. The sender yields while the set is full and still handles acks and peer failure. The peer sends `{:muro_ack, from, id}` when it consumes that token. The ack returns the credit when `from` is the peer and `id` is still outstanding. Queuing the token does not ack it. A second ack of the same id, an id that was never sent, and `{:muro_ack, from}` leave the set as it is. A retired id is dropped, so it cannot free a later send.
+
+Buffer 0 is that integer bound. Every send yields. A meeting that sends deadlocks, because a send cannot proceed. A `done`/`done` meeting can finish. The meeting written with no buffer is still the source rendezvous. Its OTP image stays an unbounded 3-tuple mailbox, `{:muro, from, value}` and `{:muro_pick, from, bit}`, with no id and no ack.
+
+A paired process, including that nil-buffer meeting, stays alive after its skeleton finishes. It stops `:normal` when its outstanding set is empty, its queue is empty, it is not parked on a send, and the peer has sent `{:muro_settled, peer}`. `meet` still returns `{:ok, left, right, left_ref, right_ref}` once both processes have been started and both have been sent `:muro_go`. The monitors report completion after the handshake. A peer exit whose reason is not `:normal` stops this process with `{:shutdown, :abandon}`, including while it is yielded on credit or waiting to settle. A `:normal` exit before this process has settled is the same abandon. A `:normal` exit after it has settled and its obligations are clear is `:normal`. If the peer has settled and this process still holds a token or a queued message, the reason is `{:shutdown, :orphan}`. `stop` is still immediate `{:shutdown, :abandon}`.
+
+`Child.start/1` calls `start/2` with the caller's peer. That process is not paired. Local finish is still immediate `:normal`, on the 3-tuple wire, with no settled message.
+
+The server has one peer. A protocol message is taken when its `from` field is that pid. Another pid does not move credit or the handshake. The field is not a check of which BEAM process sent the term.
+
+The formal account is the Agda model of the source meeting, and the correspondence hypotheses stated there: bounded queues, the rendezvous when no buffer is written, and a temporal verdict on that model's configurations, with no fairness filter. The executable checker mirrors the model. It is not the theorem. The OTP image is the runtime of this release. Temporal and fairness transfer from the model to that schedule is unproved.
+
+### Manual
+
+- Emit, Sessions.
+
+### Package
+
+- Version 0.20.19.
+
 ## 0.20.18
 
 A temporal declaration that holds prints `temporal <name>: holds in <N> reachable states, <M> transitions`. `<N>` is the number of reachable configurations. `<M>` is the number of entries in the successor table of that same search: a left step, a right step, and the finish self-loop at a finished configuration. It is not the breadth-first parent map. The graph is built once per meeting. A liveness refusal is the path to the cycle, then `then forever`. An empty stem no longer copies the cycle onto that path, so a cycle at the start has no `after` list. On a meeting the checker has accepted, a fragment formula is accepted exactly when every infinite run from the start satisfies it (`Satisfies`, under `NoStuck`; `check-sound`, `check-complete`). The source meeting has the same verdict when `Frag` holds of both processes, both are `echoOk` and `muOk`, `graphOf` is `gok`, and `initS` is `just` (`check-yes`, `check-no`). The configuration set is finite, which is why the walk ends. Finiteness is not a proof of `eventually` or `leads_to`. There is no fairness filter.
