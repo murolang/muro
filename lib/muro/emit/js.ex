@@ -555,14 +555,23 @@ defmodule Muro.Emit.JS do
 
   defp cps_rec(tm, st, _tail?), do: cps_suspend(tm, fn hole -> hole end, st)
 
-  defp cps_let_pure(name, lay, val, body, st, tail?) do
+  # An erased constructor field, marked `:erased`. The payload is ignored.
+  defp cps_let_pure(name, :erased, _val, body, st, tail?) do
+    {rn, scope} = bind_source(spell(name), st.scope)
+    st2 = %{st | scope: scope, vars: Map.put(st.vars, name, rn)}
+
+    with {:ok, lines, st3} <- cps(body, st2, tail?) do
+      {:ok, ["const #{rn} = (undefined);" | lines], st3}
+    end
+  end
+
+  defp cps_let_pure(name, _lay, val, body, st, tail?) do
     with {:ok, ve} <- emit_tm(val, st) do
       {rn, scope} = bind_source(spell(name), st.scope)
       st2 = %{st | scope: scope, vars: Map.put(st.vars, name, rn)}
-      rhs = if lay == :opaque and val == :ze, do: "undefined", else: ve
 
       with {:ok, lines, st3} <- cps(body, st2, tail?) do
-        {:ok, ["const #{rn} = (#{rhs});" | lines], st3}
+        {:ok, ["const #{rn} = (#{ve});" | lines], st3}
       end
     end
   end
@@ -1059,14 +1068,24 @@ defmodule Muro.Emit.JS do
     end
   end
 
-  defp emit_tm({:let, name, lay, val, body}, st) do
+  # An erased constructor field, marked `:erased`. The payload is ignored.
+  # A Nat zero under a spec alias keeps that argument's layout.
+  defp emit_tm({:let, name, :erased, _val, body}, st) do
+    {rn, scope} = bind_source(spell(name), st.scope)
+    st2 = %{st | scope: scope, vars: Map.put(st.vars, name, rn)}
+
+    with {:ok, be} <- emit_tm(body, st2) do
+      {:ok, js_fn(["const #{rn} = (undefined);", "return (#{be});"])}
+    end
+  end
+
+  defp emit_tm({:let, name, _lay, val, body}, st) do
     with {:ok, ve} <- emit_tm(val, st) do
       {rn, scope} = bind_source(spell(name), st.scope)
       st2 = %{st | scope: scope, vars: Map.put(st.vars, name, rn)}
 
       with {:ok, be} <- emit_tm(body, st2) do
-        rhs = if lay == :opaque and val == :ze, do: "undefined", else: ve
-        {:ok, js_fn(["const #{rn} = (#{rhs});", "return (#{be});"])}
+        {:ok, js_fn(["const #{rn} = (#{ve});", "return (#{be});"])}
       end
     end
   end
