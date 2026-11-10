@@ -393,6 +393,135 @@ defmodule Muro.EmitJSTest do
     end
   end
 
+  test "a unary eta wrapper contracts and a partial of plus stays an arrow" do
+    dir = tmp()
+    File.cp!("examples/higher_order.muro", Path.join(dir, "higher_order.muro"))
+    higher = File.read!(emit_js!(dir, "higher_order"))
+
+    assert higher =~ "return (tabulate(ident));"
+    refute higher =~ "(n) => (ident(n))"
+    assert higher =~ "return (measure(length));"
+    refute higher =~ "(xs) => (length(xs))"
+    assert higher =~ "(m) => (plus(muro__suc(muro__suc(0n)), m))"
+    assert higher =~ "export function adder(n, _)"
+    assert higher =~ "return (plus(n, _));"
+
+    write_book(dir, "eta", """
+    import "std:list.muro"
+
+    def plus : run Π (n : Nat) → Π (m : Nat) → Nat :=
+      λ (n : Nat) → λ (m : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => m
+          | suc p => suc (plus p m)
+
+    def map : run Π (+ f : Π (_ : Nat) → Nat) → Π (xs : List Nat) → List Nat :=
+      λ (+ f : Π (_ : Nat) → Nat) → λ (xs : List Nat) →
+        match xs motive (λ _ → List Nat)
+          | nil => nil
+          | cons x rest => cons (f x) (map f rest)
+
+    def apply : run Π (+ f : Π (_ : Nat) → Nat) → List Nat :=
+      λ (+ f : Π (_ : Nat) → Nat) →
+        map (λ (n : Nat) → f n) (cons 0 (cons (suc 0) nil))
+
+    def both : run Π (+ f : Π (n : Nat) → Π (m : Nat) → Nat) → Nat :=
+      λ (+ f : Π (n : Nat) → Π (m : Nat) → Nat) →
+        f (suc (suc 0)) (suc (suc (suc 0)))
+
+    def five : run Nat := both (λ (n : Nat) → λ (m : Nat) → plus n m)
+
+    def pass : run Π (+ f : Π (n : Nat) → Π (m : Nat) → Nat) → Π (+ k : Π (g : Π (n : Nat) → Π (m : Nat) → Nat) → Nat) → Nat :=
+      λ (+ f : Π (n : Nat) → Π (m : Nat) → Nat) →
+        λ (+ k : Π (g : Π (n : Nat) → Π (m : Nat) → Nat) → Nat) →
+          k (λ (n : Nat) → λ (m : Nat) → f n m)
+
+    def step : run internal Π (n : Nat) → Nat := λ (n : Nat) → suc n
+
+    def stepped : run List Nat := map step (cons 0 nil)
+    """)
+
+    source = File.read!(emit_js!(dir, "eta"))
+
+    assert source =~
+             "map(f, muro__data(\"cons\", 0n, muro__data(\"cons\", muro__suc(0n), muro__data(\"nil\"))))"
+
+    refute source =~ "(n) => (f(n))"
+    assert source =~ "(n) => ((m) => (plus(n, m)))"
+    refute source =~ "both(plus)"
+    assert source =~ "(n) => ((m) => ((f(n))(m)))"
+    refute source =~ "k(f)"
+    assert source =~ "function step(n)"
+    refute source =~ "export function step("
+    assert source =~ "map(step, muro__data(\"cons\", 0n, muro__data(\"nil\")))"
+    refute source =~ "(n) => (step(n))"
+  end
+
+  @tag skip: @node_skip
+  test "contracted function values and a one-argument partial agree with Elixir" do
+    dir = tmp()
+
+    higher =
+      run_example(dir, "higher_order", [
+        {:val, "adder", {:call, "adder", [nat(2), nat(3)]}},
+        {:val, "add2", {:call, "add2", []}},
+        {:val, "len-one", {:call, "len-one", []}},
+        {:take, "nats", {:call, "nats", []}, 3}
+      ])
+
+    assert higher["adder"] == "5"
+    assert higher["add2"] == "cons(2,cons(3,nil))"
+    assert higher["len-one"] == "1"
+    assert higher["nats"] == "0,1,2"
+
+    write_book(dir, "eta", """
+    import "std:list.muro"
+
+    def plus : run Π (n : Nat) → Π (m : Nat) → Nat :=
+      λ (n : Nat) → λ (m : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => m
+          | suc p => suc (plus p m)
+
+    def ident : run Π (n : Nat) → Nat := λ (n : Nat) → n
+
+    def map : run Π (+ f : Π (_ : Nat) → Nat) → Π (xs : List Nat) → List Nat :=
+      λ (+ f : Π (_ : Nat) → Nat) → λ (xs : List Nat) →
+        match xs motive (λ _ → List Nat)
+          | nil => nil
+          | cons x rest => cons (f x) (map f rest)
+
+    def apply : run Π (+ f : Π (_ : Nat) → Nat) → List Nat :=
+      λ (+ f : Π (_ : Nat) → Nat) →
+        map (λ (n : Nat) → f n) (cons 0 (cons (suc 0) nil))
+
+    def applied : run List Nat := apply ident
+
+    def both : run Π (+ f : Π (n : Nat) → Π (m : Nat) → Nat) → Nat :=
+      λ (+ f : Π (n : Nat) → Π (m : Nat) → Nat) →
+        f (suc (suc 0)) (suc (suc (suc 0)))
+
+    def five : run Nat := both (λ (n : Nat) → λ (m : Nat) → plus n m)
+
+    def step : run internal Π (n : Nat) → Nat := λ (n : Nat) → suc n
+
+    def stepped : run List Nat := map step (cons 0 nil)
+    """)
+
+    got =
+      run_example(dir, "eta", [
+        {:val, "ident", {:call, "applied", []}},
+        {:val, "suc", {:call, "apply", [{:host, :suc}]}},
+        {:val, "five", {:call, "five", []}},
+        {:val, "stepped", {:call, "stepped", []}}
+      ])
+
+    assert got["ident"] == "cons(0,cons(1,nil))"
+    assert got["suc"] == "cons(1,cons(2,nil))"
+    assert got["five"] == "5"
+    assert got["stepped"] == "cons(1,nil)"
+  end
+
   test "list constructors keep source argument order" do
     dir = tmp()
     File.cp!("examples/list.muro", Path.join(dir, "list.muro"))

@@ -12,6 +12,8 @@ The module is plain JavaScript. Exported runs are `export function` with one par
 
 A lambda is a native arrow function and closes over the bindings in scope. A definition is uncurried. A function value is curried, one argument at a time. The host calls `plus(2n, 3n)`. The host passes a curried function into a higher-order parameter: `map((n) => n + 1n, xs)`. At a definition boundary every leading Π becomes a parameter, including a definition whose body names fewer λs than its type has Πs. `adder := plus`, whose type is `Π (n : Nat) → Π (_ : Nat) → Nat`, is `adder(n, _)`. A second binder of that name is `_2`.
 
+A unary wrapper that only passes its argument on is the function it calls. `tabulate ident` passes `ident`, and `measure (length Nat)` passes `length`. The same rule applies to a function value already in scope and to an internal function. `map (λ (n : Nat) → f n)` passes `f`. The contracted name is the function the wrapper called, so a word boundary stays the residue function the module already used. A partial of a function of several arguments stays an arrow. `map (plus 2)` is `(m) => plus(2n, m)`. That arrow closes over `2n`. The export `plus` takes both arguments at once, so it is not a stand-in for the arrow. `(n) => (m) => plus(n, m)` stays two arrows for the same reason. `(n) => (m) => f(n)(m)` stays two arrows as well: the wrapper applied once must not run `f`.
+
 An immediately applied λ is still a `let`. The argument is evaluated once.
 
 ## Values
@@ -109,4 +111,3 @@ A layout-directed Elixir walk treats `{:suc, _}` as a `Nat` before it treats an 
 - A real string type, distinct from atoms.
 - Whether a later version should map a session to async functions or to an `init` / `send` / `recv` stepper. This backend refuses the book.
 - Browsers, beyond Node, once the module is loaded as an ES module.
-- Whether a saturated partial application should eta-contract to the export. The module emits the wrapper `(m) => plus(n, m)`.
