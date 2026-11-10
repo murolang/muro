@@ -147,6 +147,24 @@ defmodule Muro do
   end
 
   @doc """
+  Write `<name>.mjs` and `<name>.d.ts` next to `path` for its run
+  definitions. `node` runs the module. The proof stops at the run image.
+  """
+  def emit_js(path, opts \\ []) do
+    stem = Path.basename(path, ".muro")
+    dir = Path.dirname(path)
+
+    with {:ok, book} <- checked_book(path, opts),
+         {:ok, source, types} <- Emit.JS.render(book, stem) do
+      mjs = Path.join(dir, stem <> ".mjs")
+      dts = Path.join(dir, stem <> ".d.ts")
+      File.write!(mjs, source)
+      File.write!(dts, types)
+      {:ok, [mjs, dts]}
+    end
+  end
+
+  @doc """
   Write `<name>.s` next to `path` for a closed Nat run.
   The assembler translates that file. The proof stops at the run image.
   """

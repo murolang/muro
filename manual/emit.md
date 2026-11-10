@@ -2,12 +2,12 @@
 title: Emit
 slug: emit
 order: 13
-summary: What becomes Elixir. C, Rust, and Zig print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A session endpoint is a state machine. A cross is one call on a named node. Spec and evidence are omitted from a run.
+summary: What becomes Elixir. C, Rust, Zig, and JavaScript print the closed run. A Nat run is a NIF. Cortex-M prints a Nat run. OTP writes a conforming process. A session endpoint is a state machine. A cross is one call on a named node. Spec and evidence are omitted from a run.
 ---
 
 # Emit
 
-In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. A `temporal` declaration is evidence about one meeting, so the Zig backend omits it with the others. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend zig` writes that same closed run as Zig. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--backend fsm` writes each session endpoint as a state machine and leaves the transport with the host. `--node` writes one call for each cross, on the node the flag names.
+In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. A `temporal` declaration is evidence about one meeting, so the Zig backend omits it with the others. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend zig` writes that same closed run as Zig. `--backend js` writes that run as an ES module and a declaration file, and a lambda is a closure. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--backend fsm` writes each session endpoint as a state machine and leaves the transport with the host. `--node` writes one call for each cross, on the node the flag names.
 
 ## From a file
 
@@ -39,6 +39,7 @@ mix muro.emit path.muro --backend elixir
 mix muro.emit path.muro --backend c
 mix muro.emit path.muro --backend rust
 mix muro.emit path.muro --backend zig
+mix muro.emit path.muro --backend js
 mix muro.emit path.muro --backend asm
 mix muro.emit path.muro --backend otp
 mix muro.emit path.muro --backend fsm
@@ -46,7 +47,7 @@ mix muro.emit path.muro --backend exunit
 mix muro.emit path.muro --node a
 ```
 
-`--backend c` writes `<name>.h` and `<name>.c` next to the file and prints those paths. It emits `run` and `run internal` only. `run internal` is `static`. Erased arguments are dropped. `Nat` is a tagged struct (`0` is zero, `1` is `suc`) with constructors `muro__zero` and `muro__suc`. `Unit` and user `data`, indexed data included, are a tag plus fields. `match` is a `switch`. A constructor with no fields is one static object, and its function returns that address. A constructor with fields allocates through `muro__ALLOC`. Every identifier is either a source spelling or a generated name. A source spelling is an injective encoding of the source identifier: `z` and `Z` are doubled, `_` is `zu`, `-` is `zd`, and `'` is `zq`. It gains `_k` when that encoding is a C keyword through C23, a typedef from `<stdint.h>` or `<stdbool.h>`, or a common function from the C library and POSIX (`true`, `read`, `malloc`). The encoding has no underscore, so a source `uint8_t` is `uint8zut` and does not spell the typedef. A spelling that is already taken, by an earlier definition or by a constructor function, gains a numeric suffix. A binder is claimed against every name visible in its scope, including type names. A source spelling contains no `__`. A helper, a step, a constructor argument, and a temporary are `muro__` plus a tag, so they always contain `__`. `a-b`, `a_b`, and `a_b_2` stay three functions. That spelling is the C, Rust, or Zig symbol. A host export is the source name: the Elixir NIF maps it the same way as the Elixir backend and calls the symbol.
+`--backend c` writes `<name>.h` and `<name>.c` next to the file and prints those paths. It emits `run` and `run internal` only. `run internal` is `static`. Erased arguments are dropped. `Nat` is a tagged struct (`0` is zero, `1` is `suc`) with constructors `muro__zero` and `muro__suc`. `Unit` and user `data`, indexed data included, are a tag plus fields. `match` is a `switch`. A constructor with no fields is one static object, and its function returns that address. A constructor with fields allocates through `muro__ALLOC`. Every identifier is either a source spelling or a generated name. A source spelling is an injective encoding of the source identifier: `z` and `Z` are doubled, `_` is `zu`, `-` is `zd`, and `'` is `zq`. It gains `_k` when that encoding is a C keyword through C23, a typedef from `<stdint.h>` or `<stdbool.h>`, or a common function from the C library and POSIX (`true`, `read`, `malloc`). The encoding has no underscore, so a source `uint8_t` is `uint8zut` and does not spell the typedef. A spelling that is already taken, by an earlier definition or by a constructor function, gains a numeric suffix. A binder is claimed against every name visible in its scope, including type names. A source spelling contains no `__`. A helper, a step, a constructor argument, and a temporary are `muro__` plus a tag, so they always contain `__`. `a-b`, `a_b`, and `a_b_2` stay three functions. That spelling is the C, Rust, Zig, or JavaScript symbol. A host export is the source name: the Elixir NIF maps it the same way as the Elixir backend and calls the symbol.
 
 A `run` stream is a struct: the seed, an environment for values the step closes over, and a function pointer for the step. `unfold n (λ k → (k, suc k))` is `muro__stream_new` of `n` and that step. `uncons` calls the step and returns the head together with a new struct for the tail. The original seed stays in place, as `Enum.take` plus `Stream.drop` does on the Elixir backend. `examples/zeros.muro` and `examples/nats.muro` are the drivers. `Always` and `~` are evidence, so they are omitted. A lambda applied on the spot is a local: the argument is evaluated once and the body uses it. An unapplied lambda, and a call of a local function, are refused (`c:lambda`).
 
@@ -101,6 +102,20 @@ The entry builds the tagged struct and reads it back. An argument that is not a 
 A function that allocates takes `muro__allocator: muro__std.mem.Allocator` first and returns an error union. The caller can pass a `muro__std.heap.ArenaAllocator` and reset it. `muro__from_u64` builds a `Nat`. `muro__to_u64` reads one back. Identifiers use the same split as the C text. A source spelling contains no `__`. It gains `_k` when the encoding is a Zig keyword, a primitive such as `u64`, `bool`, `type`, or `anyopaque`, or a width such as `u8`, and a numeric suffix when that spelling is already taken. Zig has no path for a primitive, so the spelling is what keeps `u64` in scope. A binder is claimed against every name visible in its scope, including type names. A helper, a step, a constructor argument, or a temporary is `muro__` plus a tag, so a suffix cannot move it into the source spellings. A binder hidden by a later binder in the same pattern is discarded.
 
 The text is Zig 0.15. `zig` translates it. The proof stops at the run image.
+
+## JavaScript
+
+`--backend js` writes `<name>.mjs` and `<name>.d.ts` next to the file and prints both paths. It emits `run` and `run internal` only. `run internal` is a function the module does not export. `Nat` is a JavaScript bigint: `0` is `0n` and `suc` adds one. The host passes `4n`, not `4`. `Unit` is `null`. A word is the same unsigned residue the Elixir backend computes, so `I64` −1 is `2^64−1`, not a negative bigint. `match` on `Nat` tests `0n`. `match` on data switches on the constructor name. A constructor is `{tag, fields}`. An atom is the source name as a string.
+
+A lambda is a JavaScript closure. A definition is one function of its live arguments, so the host calls `plus(2n, 3n)`. A function value is curried, so a parameter of type `Nat → Nat` is called as `f(n)`. An unapplied lambda, a definition passed as a value, and a call of a local function are emitted. C, Rust, and Zig still refuse those (`c:lambda`). `F32`, `Tensor`, `addt`, and `packI` are refused (`c:machine`). A raw `ν`, `Always`, or `~` inside a `run` is refused (`c:stream`).
+
+A `run` stream is an object: the seed, an environment for values the step closes over, and the step. `uncons` calls the step and returns the head together with a new object for the tail. The original seed stays in place. The step is a function of the module. `half(4n)` is `2n` and `plus(2n, 3n)` is `5n`, the same integers the Nat NIF returns.
+
+Identifiers use the same split as the C text. A source spelling contains no `__`. It gains `_k` when the encoding is a JavaScript keyword, a host name such as `Array` or `undefined`, or a TypeScript word the declaration file cannot reuse. A binder is claimed against the function names in the file. A helper or a step is `muro__` plus a tag. `a-b`, `a_b`, and `a_b_2` stay three functions.
+
+The declaration file names the exported runs and the data they build. A polymorphic field is `unknown`. `I64` in that file is the unsigned residue. Internal runs and steps are not exported. `node` runs the module. The proof stops at the run image.
+
+A direct recursive call is a JavaScript call. Engines do not guarantee that the call reuses the frame, so a deep `Nat` recursion can overflow the stack.
 
 ## Cortex-M
 
@@ -251,7 +266,7 @@ A `run` definition becomes an Elixir function with one parameter per live (non-e
 
 A body with fewer λs than its type has Πs is applied to the binders it does not name: `def adder : run Π (n : Nat) → Π (m : Nat) → Nat := plus` emits `def adder(x0, x1)` calling `plus(x0, x1)`.
 
-The C backend has no closures. An unapplied lambda, a definition passed as a value, and a call of a local function are refused there (`c:lambda`).
+The C backend has no closures. An unapplied lambda, a definition passed as a value, and a call of a local function are refused there (`c:lambda`). The JavaScript backend emits those as closures. The definition itself stays one function of its live arguments.
 
 ## Host data
 
@@ -271,7 +286,7 @@ If you want a book in the test suite, parse/check/emit it from `test/muro_check_
 
 `--backend exunit` prints one ExUnit module for the book's closed equations, the same text as `Muro.emit_exunit/3`. The test module is the file stem plus `Test` (`rounding.muro` prints `RoundingTest`). The implementation it calls by default is the stem (`Rounding`). Skipped equations go to standard error, then a line `N tests, M skipped`. Standard output is only the module. `--node` with this backend is refused.
 
-This is the one backend that accepts a file whose `param`s are not supplied. It checks them as assumptions. Elixir, C, Rust, Zig, assembly, OTP, and `--node` still refuse that file with `param <name> is supplied by a file that imports this one`.
+This is the one backend that accepts a file whose `param`s are not supplied. It checks them as assumptions. Elixir, C, Rust, Zig, JavaScript, assembly, OTP, and `--node` still refuse that file with `param <name> is supplied by a file that imports this one`.
 
 `--imports` is valid only with `--backend exunit`. It also collects the closed equations of the files the book imports directly. With any other backend it is an error: `--imports is only valid with --backend exunit`. Absent, the suite is this file only.
 

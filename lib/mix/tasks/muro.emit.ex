@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.Muro.Emit do
   use Mix.Task
 
-  @shortdoc "Emit run definitions as Elixir, C, Rust, Zig, or Cortex-M assembly, a session as OTP or a state machine, a cross as a call, or closed equations as ExUnit"
+  @shortdoc "Emit run definitions as Elixir, C, Rust, Zig, JavaScript, or Cortex-M assembly, a session as OTP or a state machine, a cross as a call, or closed equations as ExUnit"
 
   @moduledoc """
   Emit the `run` definitions of a `.muro` file.
@@ -11,6 +11,7 @@ defmodule Mix.Tasks.Muro.Emit do
       mix muro.emit path.muro --backend c
       mix muro.emit path.muro --backend rust
       mix muro.emit path.muro --backend zig
+      mix muro.emit path.muro --backend js
       mix muro.emit path.muro --backend asm
       mix muro.emit path.muro --backend otp
       mix muro.emit path.muro --backend fsm
@@ -44,6 +45,10 @@ defmodule Mix.Tasks.Muro.Emit do
 
   `--backend zig` writes `<name>.zig` next to the file and prints that
   path. `zig` translates it. The proof stops at the run image.
+
+  `--backend js` writes `<name>.mjs` and `<name>.d.ts` next to the file
+  and prints those paths. `node` runs the module. A lambda is a
+  JavaScript closure. The proof stops at the run image.
 
   `--backend asm` writes `<name>.s` next to the file and prints that
   path. The text is Thumb for Cortex-M0, for a closed `Nat` run.

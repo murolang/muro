@@ -13,6 +13,8 @@ defmodule Muro.IR do
   Layouts: `:nat`, `:unit`, `:opaque`, `{:pair, a, b}`, `{:stream, a}`,
   `{:data, name}`, `:u8`, `:u32`, `:u64`, `:i64`, `:wbool`, `{:opt, payload}`.
   `{:data, name}` is `dataL`. A word term is `{:wrd, kind, op, args}`.
+  `closures: true` also uses `{:fn, arg, ret}`, `{:lam, name, lay, body}`,
+  and `{:appv, fun, arg}`. The default image does not.
   """
 
   alias Muro.{Ast, Load, Prelude}
@@ -23,9 +25,19 @@ defmodule Muro.IR do
 
   Returns `{:ok, funs}` or `{:error, reason}` where `reason` is one of
   `c:lambda`, `c:machine`, `c:stream`, `c:erased`, `c:unsupported`.
+
+  `opts` may set `closures: true`. That path elaborates a lambda as a
+  closure instead of `c:lambda`, and a definition with fewer λs than Πs
+  is applied to the missing parameters. The default, `closures: false`,
+  is the image C, Rust, and Zig emit. It is unchanged.
   """
-  def elaborate(book) when is_list(book) do
-    st = %{book: book, atoms: Ast.atoms(book)}
+  def elaborate(book, opts \\ []) when is_list(book) and is_list(opts) do
+    st = %{
+      book: book,
+      atoms: Ast.atoms(book),
+      closures: Keyword.get(opts, :closures, false)
+    }
+
     elab_runs(st, book, 0)
   end
 
@@ -57,8 +69,9 @@ defmodule Muro.IR do
   end
 
   # One λ per Π. An erased Π or an erased λ drops that parameter.
-  # Fewer λs than Πs is c:unsupported. A λ left over is elaborated, and a
-  # value λ is c:lambda.
+  # Fewer λs than Πs is c:unsupported, unless `closures: true`, which
+  # makes those Πs parameters and applies the body to them. A λ left
+  # over is elaborated, and a value λ is c:lambda on the default path.
   defp elab_fun(st, %{name: name, type: ty, body: body} = d, k) do
     with {:ok, {params, ctx, inner, ret}} <- peel(st, [], [], ty, body),
          {:ok, e} <- elab(st, inner, ctx, k) do
@@ -81,6 +94,16 @@ defmodule Muro.IR do
       with {:ok, lay} <- layout_of(st, a) do
         peel(st, [{:live, name, lay} | ctx], acc ++ [{name, lay}], b, body)
       end
+    end
+  end
+
+  defp peel(%{closures: true} = st, ctx, acc, {:pi, :erased, _, name, b}, body) do
+    peel(st, [{:gone, name} | ctx], acc, b, {:app, body, {:var, name}})
+  end
+
+  defp peel(%{closures: true} = st, ctx, acc, {:pi, _q, a, name, b}, body) do
+    with {:ok, lay} <- layout_of(st, a) do
+      peel(st, [{:live, name, lay} | ctx], acc ++ [{name, lay}], b, {:app, body, {:var, name}})
     end
   end
 
@@ -134,6 +157,19 @@ defmodule Muro.IR do
 
   defp apply(st, t, [], ctx, k), do: elab_form(st, t, ctx, k)
 
+  defp apply(%{closures: true} = st, t, args, ctx, k) when args != [] do
+    case bad_head(t) do
+      nil ->
+        with {:ok, e} <- elab_form(st, t, ctx, k),
+             {:ok, be} <- apply_value(st, e.tm, e.lay, args, e.k) do
+          {:ok, %{be | steps: e.steps ++ be.steps}}
+        end
+
+      reason ->
+        {:error, reason}
+    end
+  end
+
   defp apply(_st, t, _args, _ctx, _k) do
     case bad_head(t) do
       nil -> {:error, "c:lambda"}
@@ -149,6 +185,14 @@ defmodule Muro.IR do
       {:live, lay} -> ok({:var, name}, lay, [], k)
       :gone -> {:error, "c:erased"}
       :miss -> global(st, name, [], k)
+    end
+  end
+
+  defp apply_name(%{closures: true} = st, name, args, ctx, k) when args != [] do
+    case lookup(ctx, name) do
+      :miss -> global(st, name, args, k)
+      :gone -> {:error, "c:erased"}
+      {:live, lay} -> apply_value(st, {:var, name}, lay, args, k)
     end
   end
 
@@ -173,6 +217,10 @@ defmodule Muro.IR do
     end
   end
 
+  defp finish_def(%{closures: true} = st, %{mode: :run, name: name, type: ty}, args, k) do
+    finish_closure(st, ty, args, k, fn ts, lay -> {{:call, name, ts}, lay} end)
+  end
+
   defp finish_def(st, %{mode: :run, name: name, type: ty}, args, k) do
     with {:ok, {ts, steps, k1, lay}} <- zip_live(st, ty, args, k) do
       ok({:call, name, ts}, lay, steps, k1)
@@ -181,11 +229,126 @@ defmodule Muro.IR do
 
   defp finish_def(_st, _d, _args, _k), do: {:error, "c:unsupported"}
 
+  defp finish_ctor(%{closures: true} = st, data, ctor, args, k) do
+    finish_closure(st, ctor.type, args, k, fn ts, _lay ->
+      {{:con, data.name, ctor.name, ts}, {:data, data.name}}
+    end)
+  end
+
   defp finish_ctor(st, data, ctor, args, k) do
     with {:ok, {ts, steps, k1, _lay}} <- zip_live(st, ctor.type, args, k) do
       ok({:con, data.name, ctor.name, ts}, {:data, data.name}, steps, k1)
     end
   end
+
+  # A saturated call stays `{:call, ...}` or `{:con, ...}`. Fewer live
+  # arguments become nested `{:lam, ...}` whose body is that call. Extra
+  # arguments apply the result. `consume` already stores arguments in
+  # source order. A binder is freshened when it would capture a name
+  # already stored in the argument list.
+  defp finish_closure(st, ty, args, k, pack) do
+    with {:ok, consumed} <- consume(st, ty, args, k) do
+      case consumed do
+        {:done, ts, steps, k1, lay} ->
+          {tm, lay} = pack.(ts, lay)
+          ok(tm, lay, steps, k1)
+
+        {:partial, ts, steps, k1, rest} ->
+          with {:ok, {tm, lay}} <- wrap_inner(st, ts, rest, pack) do
+            ok(tm, lay, steps, k1)
+          end
+
+        {:over, ts, steps, k1, lay, extra} ->
+          {tm, lay} = pack.(ts, lay)
+
+          with {:ok, be} <- apply_value(st, tm, lay, extra, k1) do
+            {:ok, %{be | steps: steps ++ be.steps}}
+          end
+      end
+    end
+  end
+
+  defp consume(st, {:pi, :erased, _, _, b}, [_arg | rest], k) do
+    consume(st, b, rest, k)
+  end
+
+  defp consume(st, {:pi, _q, _, _, b}, [{arg, actx} | rest], k) do
+    with {:ok, e} <- elab(st, arg, actx, k),
+         {:ok, consumed} <- consume(st, b, rest, e.k) do
+      {:ok, push_arg(consumed, e.tm, e.steps)}
+    end
+  end
+
+  defp consume(_st, {:pi, _, _, _, _} = ty, [], k), do: {:ok, {:partial, [], [], k, ty}}
+
+  defp consume(st, ty, [], k) do
+    with {:ok, lay} <- layout_of(st, ty) do
+      {:ok, {:done, [], [], k, lay}}
+    end
+  end
+
+  defp consume(st, ty, args, k) when args != [] do
+    with {:ok, lay} <- layout_of(st, ty) do
+      {:ok, {:over, [], [], k, lay, args}}
+    end
+  end
+
+  defp push_arg({:done, ts, steps, k, lay}, tm, more),
+    do: {:done, [tm | ts], more ++ steps, k, lay}
+
+  defp push_arg({:partial, ts, steps, k, rest}, tm, more),
+    do: {:partial, [tm | ts], more ++ steps, k, rest}
+
+  defp push_arg({:over, ts, steps, k, lay, extra}, tm, more),
+    do: {:over, [tm | ts], more ++ steps, k, lay, extra}
+
+  defp wrap_inner(st, ts, {:pi, :erased, _, _, b}, pack) do
+    wrap_inner(st, ts, b, pack)
+  end
+
+  defp wrap_inner(st, ts, {:pi, _q, a, name, b}, pack) do
+    with {:ok, lay} <- layout_of(st, a) do
+      fresh = freshen(name, ts)
+
+      with {:ok, {body, ret}} <- wrap_inner(st, ts ++ [{:var, fresh}], b, pack) do
+        {:ok, {{:lam, fresh, lay, body}, {:fn, lay, ret}}}
+      end
+    end
+  end
+
+  defp wrap_inner(st, ts, ty, pack) do
+    with {:ok, lay} <- layout_of(st, ty) do
+      {tm, lay} = pack.(ts, lay)
+      {:ok, {tm, lay}}
+    end
+  end
+
+  defp freshen(name, ts) do
+    if occurs_name?(name, ts), do: freshen(name <> "_", ts), else: name
+  end
+
+  defp occurs_name?(name, t) when is_tuple(t), do: occurs_name?(name, Tuple.to_list(t))
+  defp occurs_name?(name, t) when is_list(t), do: Enum.any?(t, &occurs_name?(name, &1))
+  defp occurs_name?(name, name), do: true
+  defp occurs_name?(_name, _t), do: false
+
+  defp apply_value(_st, fun, lay, [], k), do: ok(fun, lay, [], k)
+
+  defp apply_value(st, fun, {:fn, _arg, ret}, [{arg, actx} | rest], k) do
+    with {:ok, ae} <- elab(st, arg, actx, k),
+         {:ok, be} <- apply_value(st, {:appv, fun, ae.tm}, ret, rest, ae.k) do
+      {:ok, %{be | steps: ae.steps ++ be.steps}}
+    end
+  end
+
+  defp apply_value(st, fun, :opaque, [{arg, actx} | rest], k) do
+    with {:ok, ae} <- elab(st, arg, actx, k),
+         {:ok, be} <- apply_value(st, {:appv, fun, ae.tm}, :opaque, rest, ae.k) do
+      {:ok, %{be | steps: ae.steps ++ be.steps}}
+    end
+  end
+
+  defp apply_value(_st, _fun, _lay, _args, _k), do: {:error, "c:lambda"}
 
   # An unknown atom is refused before the arity check. A known atom with
   # an argument is an extra constructor argument.
@@ -262,7 +425,7 @@ defmodule Muro.IR do
         {:arm, "suc", [y], se.tm}
       ]
 
-      ok({:match, ee.tm, arms}, rlay, ee.steps ++ ze.steps ++ se.steps, se.k)
+      ok(match_tm(st, ee.tm, :nat, arms), rlay, ee.steps ++ ze.steps ++ se.steps, se.k)
     end
   end
 
@@ -273,7 +436,7 @@ defmodule Muro.IR do
          :ok <- branch_count(data.ctors, bs),
          {:ok, {arms, steps, k1}} <- elab_arms(st, data.ctors, bs, ctx, ee.k),
          {:ok, rlay} <- motive_lay(st, mot, ee.lay, mx) do
-      ok({:match, ee.tm, arms}, rlay, ee.steps ++ steps, k1)
+      ok(match_tm(st, ee.tm, {:data, dname}, arms), rlay, ee.steps ++ steps, k1)
     end
   end
 
@@ -283,7 +446,7 @@ defmodule Muro.IR do
          :ok <- atom_cover(st.atoms, bs),
          {:ok, {arms, steps, k1}} <- elab_atom_arms(st, st.atoms, bs, ctx, ee.k),
          {:ok, rlay} <- motive_lay(st, mot, ee.lay, mx) do
-      ok({:match, ee.tm, arms}, rlay, ee.steps ++ steps, k1)
+      ok(match_tm(st, ee.tm, :atom, arms), rlay, ee.steps ++ steps, k1)
     end
   end
 
@@ -330,6 +493,18 @@ defmodule Muro.IR do
   end
 
   defp elab_form(_st, {:unf, _, _}, _ctx, _k), do: {:error, "c:lambda"}
+
+  defp elab_form(%{closures: true} = st, {:lam, :erased, _dom, name, body}, ctx, k) do
+    elab(st, body, [{:gone, name} | ctx], k)
+  end
+
+  defp elab_form(%{closures: true} = st, {:lam, _q, dom, name, body}, ctx, k) do
+    with {:ok, lay} <- layout_of(st, dom),
+         {:ok, be} <- elab(st, body, [{:live, name, lay} | ctx], k) do
+      ok({:lam, name, lay, be.tm}, {:fn, lay, be.lay}, be.steps, be.k)
+    end
+  end
+
   defp elab_form(_st, {:lam, _, _, _, _}, _ctx, _k), do: {:error, "c:lambda"}
 
   defp elab_form(st, {:word, op, args}, ctx, k) do
@@ -448,6 +623,16 @@ defmodule Muro.IR do
   defp layout_of(_st, :nat), do: {:ok, :nat}
   defp layout_of(_st, :unit), do: {:ok, :unit}
   defp layout_of(_st, :typ), do: {:ok, :opaque}
+
+  defp layout_of(%{closures: true} = st, {:pi, :erased, _, _, b}), do: layout_of(st, b)
+
+  defp layout_of(%{closures: true} = st, {:pi, _q, a, _, b}) do
+    with {:ok, la} <- layout_of(st, a),
+         {:ok, lb} <- layout_of(st, b) do
+      {:ok, {:fn, la, lb}}
+    end
+  end
+
   defp layout_of(_st, {:pi, _, _, _, _}), do: {:ok, :opaque}
   defp layout_of(_st, :empty), do: {:ok, :opaque}
   defp layout_of(_st, {:idt, _, _, _}), do: {:ok, :opaque}
@@ -765,6 +950,11 @@ defmodule Muro.IR do
       name
     end
   end
+
+  # The kind is only on the closure image. C, Rust, and Zig match
+  # `{:match, scrut, arms}` and must keep seeing that tuple.
+  defp match_tm(%{closures: true}, scrut, kind, arms), do: {:match, scrut, kind, arms}
+  defp match_tm(_st, scrut, _kind, arms), do: {:match, scrut, arms}
 
   defp ok(tm, lay, steps, k), do: {:ok, %{tm: tm, lay: lay, steps: steps, k: k}}
 end

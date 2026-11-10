@@ -160,9 +160,9 @@ defmodule Muro.Emit do
   end
 
   @doc """
-  The outline of one backend. `:c`, `:rust`, `:zig`, and `:otp` take a
-  stem. `:fsm` takes the book path and uses `fsm_module/1`. The result
-  is `{:ok, outline}` or `{:error, reason}`. An outline names the
+  The outline of one backend. `:c`, `:rust`, `:zig`, `:js`, and `:otp`
+  take a stem. `:fsm` takes the book path and uses `fsm_module/1`. The
+  result is `{:ok, outline}` or `{:error, reason}`. An outline names the
   signatures, layouts, and clause heads that backend emits. It does not
   write source.
   """
@@ -170,6 +170,7 @@ defmodule Muro.Emit do
   def outline(:c, book, stem), do: Muro.Emit.C.outline(book, stem)
   def outline(:rust, book, stem), do: Muro.Emit.Rust.outline(book, stem)
   def outline(:zig, book, stem), do: Muro.Emit.Zig.outline(book, stem)
+  def outline(:js, book, stem), do: Muro.Emit.JS.outline(book, stem)
 
   def outline(:fsm, book, path) when is_binary(path) do
     Muro.Emit.Fsm.outline(book, path, fsm_module(path))
