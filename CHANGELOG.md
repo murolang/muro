@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.27
+
+JavaScript emits a `match` on a variable bound by the enclosing arm. The element a list arm binds is that variable. The inner match may be the arm or an argument of a constructor, and the function may recurse on the tail.
+
+A refusal from the JavaScript backend names the definition it refused, and names the construct when the refusal has one.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.27.
+
 ## 0.20.22
 
 A JavaScript function value that only passes its argument on to a function of one argument is that function. `tabulate ident` passes `ident`. `measure (length Nat)` passes `length`. A parameter used the same way is that parameter, and an internal function is that function.

@@ -64,15 +64,15 @@ defmodule Muro.EmitJSTest do
     dir = tmp()
 
     for {stem, reason} <- [
-          {"ping", "c:session"},
-          {"indexed", "c:session"},
-          {"computed", "c:session"},
-          {"place", "c:host"}
+          {"ping", "c:session in ping (session)"},
+          {"indexed", "c:session in route (session)"},
+          {"computed", "c:session in answer (session)"},
+          {"place", "c:host in home (place)"}
         ] do
       File.cp!("examples/#{stem}.muro", Path.join(dir, "#{stem}.muro"))
       path = Path.join(dir, "#{stem}.muro")
 
-      assert_raise Mix.Error, ~r/\A#{reason}\z/, fn ->
+      assert_raise Mix.Error, ~r/\A#{Regex.escape(reason)}\z/, fn ->
         Mix.Tasks.Muro.Emit.run([path, "--backend", "js"])
       end
 
@@ -81,11 +81,17 @@ defmodule Muro.EmitJSTest do
     end
 
     for kind <- ~w(session conform meet endpoint read choreography talk seat link relay)a do
-      assert {:error, "c:session"} = Muro.Emit.JS.render([%{kind: kind}], "x")
+      wire = "c:session in wire (#{kind})"
+      bare = "c:session (#{kind})"
+      assert {:error, ^wire} = Muro.Emit.JS.render([%{kind: kind, name: "wire"}], "x")
+      assert {:error, ^bare} = Muro.Emit.JS.render([%{kind: kind}], "x")
     end
 
     for kind <- ~w(place scheme move)a do
-      assert {:error, "c:host"} = Muro.Emit.JS.render([%{kind: kind}], "x")
+      home = "c:host in home (#{kind})"
+      bare = "c:host (#{kind})"
+      assert {:error, ^home} = Muro.Emit.JS.render([%{kind: kind, name: "home"}], "x")
+      assert {:error, ^bare} = Muro.Emit.JS.render([%{kind: kind}], "x")
     end
   end
 
@@ -319,7 +325,7 @@ defmodule Muro.EmitJSTest do
     nx = Path.join(dir, "nx_add.muro")
     File.cp!("examples/nx_add.muro", nx)
 
-    assert_raise Mix.Error, ~r/\Ac:machine\z/, fn ->
+    assert_raise Mix.Error, ~r/\Ac:machine in addT \(Tensor\)\z/, fn ->
       Mix.Tasks.Muro.Emit.run([nx, "--backend", "js"])
     end
 
@@ -344,7 +350,7 @@ defmodule Muro.EmitJSTest do
     {:ok, machine_book} = Muro.Load.file("examples/nx_add.muro")
 
     refused = [
-      {"c:erased",
+      {"c:erased", "use", "c:erased in use",
        [
          %{
            name: "use",
@@ -353,7 +359,7 @@ defmodule Muro.EmitJSTest do
            body: {:lam, :erased, :nat, "n", {:var, "n"}}
          }
        ]},
-      {"c:stream",
+      {"c:stream", "bad", "c:stream in bad (ν)",
        [
          %{
            name: "bad",
@@ -362,7 +368,7 @@ defmodule Muro.EmitJSTest do
            body: {:nu, "X", :nat}
          }
        ]},
-      {"c:stream",
+      {"c:stream", "bad", "c:stream in bad (Always)",
        [
          %{
            name: "bad",
@@ -371,7 +377,7 @@ defmodule Muro.EmitJSTest do
            body: {:always, "A", :nat, :ze}
          }
        ]},
-      {"c:stream",
+      {"c:stream", "bad", "c:stream in bad (~)",
        [
          %{
            name: "bad",
@@ -380,7 +386,7 @@ defmodule Muro.EmitJSTest do
            body: {:bisim, :ze, :ze}
          }
        ]},
-      {"c:unsupported",
+      {"c:unsupported", "bad", "c:unsupported in bad",
        [
          %{
            name: "bad",
@@ -389,13 +395,73 @@ defmodule Muro.EmitJSTest do
            body: {:var, "missing"}
          }
        ]},
-      {"c:machine", Muro.Prelude.for_emit(machine_book)}
+      {"c:machine", "addT", "c:machine in addT (Tensor)", Muro.Prelude.for_emit(machine_book)}
     ]
 
-    for {reason, book} <- refused do
+    for {reason, name, message, book} <- refused do
       assert {:error, ^reason} = Muro.IR.elaborate(book)
-      assert {:error, ^reason} = Muro.IR.elaborate(book, closures: true)
-      assert {:error, ^reason} = Muro.Emit.JS.render(book, "x")
+      assert {:error, {:named, ^reason, ^name}} = Muro.IR.elaborate(book, closures: true)
+      assert {:error, ^message} = Muro.Emit.JS.render(book, "x")
+    end
+  end
+
+  test "a match on a variable bound by the enclosing arm is a data match in the closure image" do
+    dir = tmp()
+
+    for book <- arm_books() do
+      write_book(dir, book.stem, book.src)
+      path = Path.join(dir, book.stem <> ".muro")
+      {:ok, checked} = Muro.Load.file(path)
+      checked = Muro.Prelude.for_emit(checked)
+
+      if book.refused do
+        assert {:error, "c:unsupported"} = Muro.IR.elaborate(checked)
+      else
+        assert {:ok, _} = Muro.IR.elaborate(checked)
+      end
+
+      assert {:ok, funs} = Muro.IR.elaborate(checked, closures: true)
+      assert %{body: body} = Enum.find(funs, &(&1.name == book.fun))
+      assert match_on(body, book.scrut) == book.kind, book.stem
+
+      {:ok, [mjs, _dts]} = Muro.emit_js(path)
+      source = File.read!(mjs)
+
+      for mark <- book.marks do
+        assert source =~ mark, book.stem
+      end
+
+      if book.recur, do: assert(source =~ book.fun <> "__w(", book.stem)
+    end
+
+    pick = Path.join(dir, "pick.muro")
+
+    assert_raise Mix.Error, ~r/\Ac:unsupported\z/, fn ->
+      Mix.Tasks.Muro.Emit.run([pick, "--backend", "zig"])
+    end
+
+    refute File.exists?(Path.join(dir, "pick.zig"))
+  end
+
+  @tag skip: @node_skip
+  test "a match on an arm-bound variable agrees with the Elixir canon" do
+    dir = tmp()
+
+    for book <- arm_books() do
+      write_book(dir, book.stem, book.src)
+
+      got =
+        run_example(
+          dir,
+          book.stem,
+          Enum.map(book.calls, fn {label, fun, args, _expected} ->
+            {:val, label, {:call, fun, args}}
+          end)
+        )
+
+      for {label, _fun, _args, expected} <- book.calls do
+        assert got[label] == expected, "#{book.stem} #{label}: #{got[label]}"
+      end
     end
   end
 
@@ -1056,6 +1122,228 @@ defmodule Muro.EmitJSTest do
     assert peano_to_int(apply(mod, fun_atom(ex, "odd"), [peano_n(20_000)])) == 1
     assert peano_to_int(apply(mod, fun_atom(ex, "count"), [peano_n(4), peano_n(3)])) == 7
   end
+
+  defp arm_books do
+    nil_ = data("nil", [])
+    yes = data("yes", [])
+    no = data("no", [])
+    cons = fn head, tail -> data("cons", [head, tail]) end
+    two = fn a, b -> data("mk", [nat(a), nat(b)]) end
+    pair = cons.(two.(1, 2), cons.(two.(3, 4), nil_))
+    triple = cons.(two.(1, 2), cons.(two.(3, 4), cons.(two.(5, 6), nil_)))
+
+    [
+      %{
+        stem: "pick",
+        fun: "pick",
+        scrut: "x",
+        kind: {:data, "Bool2"},
+        refused: true,
+        recur: false,
+        marks: ["case \"yes\"", "case \"no\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Bool2 : Type where
+          yes : Bool2
+          no  : Bool2
+
+        def pick : run Π (xs : List Bool2) → Bool2 :=
+          λ (xs : List Bool2) →
+            match xs motive (λ _ → Bool2)
+              | nil => no
+              | cons x rest => (match x motive (λ _ → Bool2)
+                                 | yes => no
+                                 | no => yes)
+        """,
+        calls: [
+          {"nil", "pick", [nil_], "no"},
+          {"yes", "pick", [cons.(yes, nil_)], "no"},
+          {"no", "pick", [cons.(no, cons.(yes, nil_))], "yes"}
+        ]
+      },
+      %{
+        stem: "firsts",
+        fun: "firsts",
+        scrut: "x",
+        kind: {:data, "Two"},
+        refused: true,
+        recur: false,
+        marks: ["case \"mk\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Two : Type where
+          mk : Nat → Nat → Two
+
+        def firsts : run Π (xs : List Two) → List Nat :=
+          λ (xs : List Two) →
+            match xs motive (λ _ → List Nat)
+              | nil => nil
+              | cons x rest => (match x motive (λ _ → List Nat)
+                                 | mk a b => cons a nil)
+        """,
+        calls: [
+          {"nil", "firsts", [nil_], "nil"},
+          {"head", "firsts", [pair], "cons(1,nil)"}
+        ]
+      },
+      %{
+        stem: "swap-all",
+        fun: "swapAll",
+        scrut: "x",
+        kind: {:data, "Two"},
+        refused: true,
+        recur: false,
+        marks: ["case \"mk\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Two : Type where
+          mk : Nat → Nat → Two
+
+        def swapAll : run Π (xs : List Two) → List Two :=
+          λ (xs : List Two) →
+            match xs motive (λ _ → List Two)
+              | nil => nil
+              | cons x rest => cons (match x motive (λ _ → Two) | mk a b => mk b a) rest
+        """,
+        calls: [
+          {"nil", "swapAll", [nil_], "nil"},
+          {"head", "swapAll", [pair], "cons(mk(2,1),cons(mk(3,4),nil))"}
+        ]
+      },
+      %{
+        stem: "firsts-rec",
+        fun: "firsts",
+        scrut: "x",
+        kind: {:data, "Two"},
+        refused: true,
+        recur: true,
+        marks: ["case \"mk\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Two : Type where
+          mk : Nat → Nat → Two
+
+        def firsts : run Π (xs : List Two) → List Nat :=
+          λ (xs : List Two) →
+            match xs motive (λ _ → List Nat)
+              | nil => nil
+              | cons x rest => cons (match x motive (λ _ → Nat) | mk a b => a) (firsts rest)
+        """,
+        calls: [
+          {"nil", "firsts", [nil_], "nil"},
+          {"all", "firsts", [triple], "cons(1,cons(3,cons(5,nil)))"}
+        ]
+      },
+      %{
+        stem: "swap-all-rec",
+        fun: "swapAll",
+        scrut: "x",
+        kind: {:data, "Two"},
+        refused: true,
+        recur: true,
+        marks: ["case \"mk\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Two : Type where
+          mk : Nat → Nat → Two
+
+        def swapAll : run Π (xs : List Two) → List Two :=
+          λ (xs : List Two) →
+            match xs motive (λ _ → List Two)
+              | nil => nil
+              | cons x rest => cons (match x motive (λ _ → Two) | mk a b => mk b a) (swapAll rest)
+        """,
+        calls: [
+          {"nil", "swapAll", [nil_], "nil"},
+          {"all", "swapAll", [triple], "cons(mk(2,1),cons(mk(4,3),cons(mk(6,5),nil)))"}
+        ]
+      },
+      %{
+        stem: "swap-first",
+        fun: "swapFirst",
+        scrut: "t",
+        kind: {:data, "Two"},
+        refused: false,
+        recur: false,
+        marks: ["case \"mk\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Two : Type where
+          mk : Nat → Nat → Two
+
+        def swapFirst : run Π (t : Two) → Π (xs : List Two) → Two :=
+          λ (t : Two) → λ (xs : List Two) →
+            match xs motive (λ _ → Two)
+              | nil => t
+              | cons x rest => (match t motive (λ _ → Two)
+                                 | mk a b => mk b a)
+        """,
+        calls: [
+          {"nil", "swapFirst", [two.(1, 2), nil_], "mk(1,2)"},
+          {"swap", "swapFirst", [two.(1, 2), cons.(two.(3, 4), nil_)], "mk(2,1)"}
+        ]
+      },
+      %{
+        stem: "firsts-help",
+        fun: "first",
+        scrut: "x",
+        kind: {:data, "Two"},
+        refused: false,
+        recur: false,
+        marks: ["case \"mk\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Two : Type where
+          mk : Nat → Nat → Two
+
+        def first : run internal Π (x : Two) → Nat :=
+          λ (x : Two) →
+            match x motive (λ _ → Nat)
+              | mk a b => a
+
+        def firsts : run Π (xs : List Two) → List Nat :=
+          λ (xs : List Two) →
+            match xs motive (λ _ → List Nat)
+              | nil => nil
+              | cons x rest => cons (first x) (firsts rest)
+        """,
+        calls: [
+          {"nil", "firsts", [nil_], "nil"},
+          {"all", "firsts", [triple], "cons(1,cons(3,cons(5,nil)))"}
+        ]
+      }
+    ]
+  end
+
+  defp match_on({:match, {:var, name}, kind, _arms}, name), do: kind
+
+  defp match_on(term, name) when is_tuple(term) do
+    term |> Tuple.to_list() |> Enum.find_value(&match_on(&1, name))
+  end
+
+  defp match_on(term, name) when is_list(term), do: Enum.find_value(term, &match_on(&1, name))
+  defp match_on(_term, _name), do: nil
 
   # Node warns on stderr when both NO_COLOR and FORCE_COLOR are set.
   # The driver merges stderr into stdout, so that warning would fail a line count.
