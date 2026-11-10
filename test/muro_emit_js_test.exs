@@ -3,8 +3,14 @@ defmodule Muro.EmitJSTest do
 
   import ExUnit.CaptureIO
 
-  @node System.find_executable("node") ||
-          if(File.regular?("/opt/homebrew/bin/node"), do: "/opt/homebrew/bin/node")
+  # Resolved when this file is compiled. Mix does not recompile because
+  # PATH or CI changed. GitHub Actions sets CI. A missing node fails the
+  # file in that case. The differentials still skip when CI is unset.
+  @node System.find_executable("node")
+
+  if System.get_env("CI") && is_nil(@node) do
+    raise "node is required when CI is set and was not found on PATH"
+  end
 
   @node_skip if(is_nil(@node), do: "node not on PATH", else: false)
 
@@ -40,7 +46,7 @@ defmodule Muro.EmitJSTest do
     assert types =~ "BigInt.asIntN(64)"
     refute types =~ "I64 is the unsigned residue"
     assert types =~ "export function muro__data("
-    assert types =~ "export function muro__uncons("
+    assert types =~ "export function muro__uncons<A>(s: Stream<A>): readonly [A, Stream<A>];"
     assert types =~ "export function muro__canon("
   end
 
@@ -369,6 +375,76 @@ defmodule Muro.EmitJSTest do
     assert peano_to_int(apply(mod, fun_atom(ex, "steps"), [peano_n(2)])) == 2
   end
 
+  test "parameterized data and streams carry their type arguments" do
+    dir = tmp()
+
+    File.write!(Path.join(dir, "gen.muro"), """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+
+    data Nest (A : Type) : Type where
+      nest : List (List A) → Nest A
+      nums : List Nat → Nest A
+      both : List (Nat × Bool) → Nest A
+
+    data Box (string : Type) : Type where
+      box : string → List string → Box string
+
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def zeros : run Stream Nat := unfold 0 (λ (_ : Nat) → (0, 0))
+
+    def length : run Π (-A : Type) → Π (xs : List A) → Nat :=
+      λ (-A : Type) → λ (xs : List A) →
+        match xs motive (λ _ → Nat)
+          | nil => 0
+          | cons _ ys => suc (length A ys)
+
+    def yes : run Bool := true
+    def div2 : run Opt I64 := divi (toI64 (suc (suc 0))) (toI64 (suc 0))
+    """)
+
+    mjs = emit_js!(dir, "gen")
+    types = File.read!(Path.join(dir, "gen.d.ts"))
+    source = File.read!(mjs)
+
+    assert types =~
+             "export type List<A> =\n  | { readonly tag: \"nil\"; readonly fields: readonly [] }\n  | { readonly tag: \"cons\"; readonly fields: readonly [A, List<A>] };"
+
+    assert types =~
+             "export type Nest<A> =\n  | { readonly tag: \"nest\"; readonly fields: readonly [List<List<A>>] }\n  | { readonly tag: \"nums\"; readonly fields: readonly [List<Nat>] }\n  | { readonly tag: \"both\"; readonly fields: readonly [List<Pair<Nat, Bool>>] };"
+
+    assert types =~
+             "export type Box<string_k> =\n  | { readonly tag: \"box\"; readonly fields: readonly [string_k, List<string_k>] };"
+
+    assert types =~
+             "export type Bool =\n  | { readonly tag: \"true\"; readonly fields: readonly [] }\n  | { readonly tag: \"false\"; readonly fields: readonly [] };"
+
+    assert types =~ "export type Stream<A> = {"
+
+    assert types =~
+             "readonly step: (env: readonly unknown[], seed: unknown) => readonly [A, unknown];"
+
+    assert types =~ "export function muro__uncons<A>(s: Stream<A>): readonly [A, Stream<A>];"
+    assert types =~ "export function zeros(): Stream<Nat>;"
+    assert types =~ "export function length<A>(xs: List<A>): Nat;"
+    assert types =~ "export function yes(): Bool;"
+    assert types =~ "export function div2(): Opt<I64>;"
+    refute types =~ "export type List ="
+    refute types =~ "export type Stream ="
+    refute types =~ "fields: readonly [unknown, List]"
+    refute source =~ "<A>"
+    assert source =~ "export function length("
+    assert source =~ "export function zeros("
+  end
+
+
   test "closures elaborate where the default image refuses a lambda, and the shared refusals stay" do
     dir = tmp()
     lam = Path.join(dir, "lam.muro")
@@ -486,6 +562,135 @@ defmodule Muro.EmitJSTest do
       assert {:error, ^reason} = Muro.IR.elaborate(book, closures: true)
       assert {:error, ^reason} = Muro.Emit.JS.render(book, "x")
     end
+  end
+
+  test "a unary eta wrapper contracts and a partial of plus stays an arrow" do
+    dir = tmp()
+    File.cp!("examples/higher_order.muro", Path.join(dir, "higher_order.muro"))
+    higher = File.read!(emit_js!(dir, "higher_order"))
+
+    assert higher =~ "return (tabulate(ident));"
+    refute higher =~ "(n) => (ident(n))"
+    assert higher =~ "return (measure(length));"
+    refute higher =~ "(xs) => (length(xs))"
+    assert higher =~ "(m) => (plus(muro__suc(muro__suc(0n)), m))"
+    assert higher =~ "export function adder(n, _)"
+    assert higher =~ "return (plus(n, _));"
+
+    write_book(dir, "eta", """
+    import "std:list.muro"
+
+    def plus : run Π (n : Nat) → Π (m : Nat) → Nat :=
+      λ (n : Nat) → λ (m : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => m
+          | suc p => suc (plus p m)
+
+    def map : run Π (+ f : Π (_ : Nat) → Nat) → Π (xs : List Nat) → List Nat :=
+      λ (+ f : Π (_ : Nat) → Nat) → λ (xs : List Nat) →
+        match xs motive (λ _ → List Nat)
+          | nil => nil
+          | cons x rest => cons (f x) (map f rest)
+
+    def apply : run Π (+ f : Π (_ : Nat) → Nat) → List Nat :=
+      λ (+ f : Π (_ : Nat) → Nat) →
+        map (λ (n : Nat) → f n) (cons 0 (cons (suc 0) nil))
+
+    def both : run Π (+ f : Π (n : Nat) → Π (m : Nat) → Nat) → Nat :=
+      λ (+ f : Π (n : Nat) → Π (m : Nat) → Nat) →
+        f (suc (suc 0)) (suc (suc (suc 0)))
+
+    def five : run Nat := both (λ (n : Nat) → λ (m : Nat) → plus n m)
+
+    def pass : run Π (+ f : Π (n : Nat) → Π (m : Nat) → Nat) → Π (+ k : Π (g : Π (n : Nat) → Π (m : Nat) → Nat) → Nat) → Nat :=
+      λ (+ f : Π (n : Nat) → Π (m : Nat) → Nat) →
+        λ (+ k : Π (g : Π (n : Nat) → Π (m : Nat) → Nat) → Nat) →
+          k (λ (n : Nat) → λ (m : Nat) → f n m)
+
+    def step : run internal Π (n : Nat) → Nat := λ (n : Nat) → suc n
+
+    def stepped : run List Nat := map step (cons 0 nil)
+    """)
+
+    source = File.read!(emit_js!(dir, "eta"))
+
+    assert source =~
+             "map(f, muro__data(\"cons\", 0n, muro__data(\"cons\", muro__suc(0n), muro__data(\"nil\"))))"
+
+    refute source =~ "(n) => (f(n))"
+    assert source =~ "(n) => ((m) => (plus(n, m)))"
+    refute source =~ "both(plus)"
+    assert source =~ "(n) => ((m) => ((f(n))(m)))"
+    refute source =~ "k(f)"
+    assert source =~ "function step(n)"
+    refute source =~ "export function step("
+    assert source =~ "map(step, muro__data(\"cons\", 0n, muro__data(\"nil\")))"
+    refute source =~ "(n) => (step(n))"
+  end
+
+  @tag skip: @node_skip
+  test "contracted function values and a one-argument partial agree with Elixir" do
+    dir = tmp()
+
+    higher =
+      run_example(dir, "higher_order", [
+        {:val, "adder", {:call, "adder", [nat(2), nat(3)]}},
+        {:val, "add2", {:call, "add2", []}},
+        {:val, "len-one", {:call, "len-one", []}},
+        {:take, "nats", {:call, "nats", []}, 3}
+      ])
+
+    assert higher["adder"] == "5"
+    assert higher["add2"] == "cons(2,cons(3,nil))"
+    assert higher["len-one"] == "1"
+    assert higher["nats"] == "0,1,2"
+
+    write_book(dir, "eta", """
+    import "std:list.muro"
+
+    def plus : run Π (n : Nat) → Π (m : Nat) → Nat :=
+      λ (n : Nat) → λ (m : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => m
+          | suc p => suc (plus p m)
+
+    def ident : run Π (n : Nat) → Nat := λ (n : Nat) → n
+
+    def map : run Π (+ f : Π (_ : Nat) → Nat) → Π (xs : List Nat) → List Nat :=
+      λ (+ f : Π (_ : Nat) → Nat) → λ (xs : List Nat) →
+        match xs motive (λ _ → List Nat)
+          | nil => nil
+          | cons x rest => cons (f x) (map f rest)
+
+    def apply : run Π (+ f : Π (_ : Nat) → Nat) → List Nat :=
+      λ (+ f : Π (_ : Nat) → Nat) →
+        map (λ (n : Nat) → f n) (cons 0 (cons (suc 0) nil))
+
+    def applied : run List Nat := apply ident
+
+    def both : run Π (+ f : Π (n : Nat) → Π (m : Nat) → Nat) → Nat :=
+      λ (+ f : Π (n : Nat) → Π (m : Nat) → Nat) →
+        f (suc (suc 0)) (suc (suc (suc 0)))
+
+    def five : run Nat := both (λ (n : Nat) → λ (m : Nat) → plus n m)
+
+    def step : run internal Π (n : Nat) → Nat := λ (n : Nat) → suc n
+
+    def stepped : run List Nat := map step (cons 0 nil)
+    """)
+
+    got =
+      run_example(dir, "eta", [
+        {:val, "ident", {:call, "applied", []}},
+        {:val, "suc", {:call, "apply", [{:host, :suc}]}},
+        {:val, "five", {:call, "five", []}},
+        {:val, "stepped", {:call, "stepped", []}}
+      ])
+
+    assert got["ident"] == "cons(0,cons(1,nil))"
+    assert got["suc"] == "cons(1,cons(2,nil))"
+    assert got["five"] == "5"
+    assert got["stepped"] == "cons(1,nil)"
   end
 
   test "list constructors keep source argument order" do

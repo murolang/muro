@@ -12,6 +12,48 @@ An erased constructor field stays out of the value a host matches on. JavaScript
 
 - Version 0.20.24.
 
+## 0.20.23
+
+The JavaScript declaration file types a parameterized data type as a generic. `List (A : Type)` is `List<A>`. A field of `A` is `A`, a field of `List A` is `List<A>`, a field of `List (List A)` is `List<List<A>>`, and a field of `List Nat` is `List<Nat>`. An index is not a type parameter, so `Vec A n` is `Vec<A>`.
+
+`Stream` carries its element. A run of `Stream Nat` is `Stream<Nat>`. `muro__uncons` returns a head of that element and a stream of the same element. The seed stays unknown, because the seed is not the element. `Bool` stays the tagged union of `{tag: "true"}` and `{tag: "false"}`.
+
+An exported run that erases a type parameter is generic in the declaration. `length` takes `List<A>`. The module is the same JavaScript: `length(xs)`.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.23.
+
+## 0.20.22
+
+A JavaScript function value that only passes its argument on to a function of one argument is that function. `tabulate ident` passes `ident`. `measure (length Nat)` passes `length`. A parameter used the same way is that parameter, and an internal function is that function.
+
+A partial application of a function of several arguments stays a closure. `map (plus 2)` is `(m) => plus(2n, m)`. The export `plus` takes both arguments at once, and the closure takes one and remembers the `2`. `(n) => (m) => f(n)(m)` stays two closures: applying it once does not run `f`.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.22.
+
+## 0.20.21
+
+The Elixir CI job installs Node 22 and runs the JavaScript backend differentials. Those tests fail when `CI` is set and `node` is not on `PATH`. They do not skip. Where `CI` is unset, the same cases still skip when `node` is absent.
+
+### Tests
+
+- `test/muro_emit_js_test.exs` runs the JavaScript differentials under `node`. When `CI` is set and `node` is missing, the file fails. When `CI` is unset and `node` is missing, those cases skip.
+
+### Package
+
+- Version 0.20.21.
+
 ## 0.20.20
 
 `mix muro.emit path.muro --backend js` writes `<stem>.mjs` and `<stem>.d.ts` beside the book and prints both paths. `Muro.emit_js/1` returns `{:ok, [mjs, dts]}`. Spec and evidence are omitted. The proof stops at the run image.
