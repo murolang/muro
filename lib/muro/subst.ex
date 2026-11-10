@@ -63,6 +63,21 @@ defmodule Muro.Subst do
       {:atom, n} ->
         {:atom, n}
 
+      :string ->
+        :string
+
+      {:slit, bin} ->
+        {:slit, bin}
+
+      {:scat, a, b} ->
+        {:scat, ren(rho, a), ren(rho, b)}
+
+      {:slen, a} ->
+        {:slen, ren(rho, a)}
+
+      {:seq, a, b} ->
+        {:seq, ren(rho, a), ren(rho, b)}
+
       {:matom, e, p, bs} ->
         {:matom, ren(rho, e), ren(lift(rho), p), Enum.map(bs, fn {n, b} -> {n, ren(rho, b)} end)}
 
@@ -217,6 +232,21 @@ defmodule Muro.Subst do
 
       {:atom, n} ->
         {:atom, n}
+
+      :string ->
+        :string
+
+      {:slit, bin} ->
+        {:slit, bin}
+
+      {:scat, a, b} ->
+        {:scat, sub(sigma, a), sub(sigma, b)}
+
+      {:slen, a} ->
+        {:slen, sub(sigma, a)}
+
+      {:seq, a, b} ->
+        {:seq, sub(sigma, a), sub(sigma, b)}
 
       {:matom, e, p, bs} ->
         {:matom, sub(sigma, e), sub(lifts(sigma), p),

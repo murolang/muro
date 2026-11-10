@@ -10,12 +10,14 @@ defmodule Muro.Emit.JS do
   `I64` is a signed bigint and an unsigned word is an unsigned bigint.
   Inside the module, word operations keep the unsigned residue.
 
-  A refusal is `c:machine`, `c:stream`, `c:erased`, `c:session`,
-  `c:host`, or `c:unsupported`, and it names the definition. When the
-  refusal has a construct, the message names that too
-  (`c:session in ping (session)`). A lambda is a closure, so `c:lambda`
-  is not a refusal here. A session declaration or a host placement
-  refuses the book. Two source names that spell one JavaScript
+  A refusal is `c:machine`, `c:stream`, `c:erased`, `c:host`, or
+  `c:unsupported`, or the reason a session state machine refuses,
+  and it names the definition. When the refusal has a construct, the
+  message names that too (`c:host in home (place)`). A lambda is a
+  closure, so `c:lambda` is not a refusal here. A string is
+  `{ string: "…" }` and an atom stays a JavaScript string. A host
+  placement refuses the book. A session endpoint is a synchronous
+  stepper beside the runs. Two source names that spell one JavaScript
   identifier are refused before any file is written.
 
   This is not `Muro.Emit.Node`. That file is the BEAM `--node` backend.
@@ -29,6 +31,7 @@ defmodule Muro.Emit.JS do
   """
 
   alias Muro.Emit
+  alias Muro.Emit.JS.Session
   alias Muro.Emit.Name
   alias Muro.IR
 
@@ -58,7 +61,7 @@ defmodule Muro.Emit.JS do
   @ts_reserved ~w(
     string number boolean bigint symbol any unknown never object
     undefined null void this
-    Nat Unit U8 U32 U64 I64 WordBool Opt Pair Stream Atom
+    Nat Unit U8 U32 U64 I64 WordBool Opt Pair Stream Atom String
   ) |> MapSet.new()
 
   @type_forbidden MapSet.union(@forbidden, @ts_reserved)
@@ -72,12 +75,9 @@ defmodule Muro.Emit.JS do
     shl ashr shr toZ fromZ inRange some none
     cadd csub cmul badDiv negBits absBits div rem
     of ton cast scrut pair
+    scat slen seq qstr
     bounce go hole ret stack
   )
-
-  @session_kinds ~w(
-    session conform meet endpoint read choreography talk seat link relay
-  )a
 
   @host_kinds ~w(place scheme move)a
 
@@ -87,28 +87,40 @@ defmodule Muro.Emit.JS do
 
   @doc """
   Render `book` as an ES module and a declaration file for `stem`.
+
+  `opts` may set `:path`, `:book`, and `:root`. Step strings use `:book`
+  when it is given, and otherwise the path. An absolute path with no
+  `:book` uses the file name. The default path is `stem` plus `.muro`.
   """
-  def render(book, stem) when is_list(book) and is_binary(stem) do
-    case compile(book) do
-      {:ok, compiled, types} -> {:ok, mjs(stem, compiled), dts(compiled, types, book)}
-      {:error, reason} -> {:error, reason}
+  def render(book, stem, opts \\ []) when is_list(book) and is_binary(stem) and is_list(opts) do
+    opts = Keyword.put_new(opts, :path, stem <> ".muro")
+
+    case compile(book, opts) do
+      {:ok, compiled, types, session} ->
+        {:ok, mjs(stem, compiled, session), dts(compiled, types, book, session)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   @doc """
-  Names, signatures, layouts, and clause heads of the module `render/2`
-  writes. No source is written.
+  Names, signatures, layouts, and clause heads of the module `render/3`
+  writes. No source is written. Session exports are `export const` names.
   """
-  def outline(book, _stem) when is_list(book) do
-    case compile(book) do
-      {:ok, compiled, _types} ->
+  def outline(book, stem) when is_list(book) and is_binary(stem) do
+    case compile(book, path: stem <> ".muro") do
+      {:ok, compiled, _types, session} ->
         user = Enum.reject(compiled, &generated?/1)
+        extra_names = if session, do: Map.values(session.idents), else: []
+        extra_clauses = if session, do: session.clauses, else: []
 
         {:ok,
          %{
            names:
              compiled
              |> Enum.flat_map(fn rec -> [rec.name | param_names(rec)] end)
+             |> Enum.concat(extra_names)
              |> Enum.uniq(),
            elixir: Emit.elixir_names(book),
            signatures: Enum.map(user, &signature/1),
@@ -120,7 +132,7 @@ defmodule Muro.Emit.JS do
                  params: Enum.map(rec.fun.params, fn {_n, lay} -> lay end)
                }
              end),
-           clauses: Enum.map(compiled, & &1.head)
+           clauses: Enum.map(compiled, & &1.head) ++ extra_clauses
          }}
 
       {:error, reason} ->
@@ -131,27 +143,45 @@ defmodule Muro.Emit.JS do
   @doc false
   def source_id(name) when is_binary(name), do: spell(name)
 
-  defp compile(book) do
-    with :ok <- refuse_book(book),
+  defp compile(book, opts) do
+    path = Keyword.get(opts, :path, "book.muro")
+
+    with :ok <- refuse_host(book),
          :ok <- clash_book(book),
+         {:ok, image} <- Session.prepare(book, path, opts),
          {:ok, funs} <- elaborate_named(book),
          {:ok, groups, _} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
       h = helper_map()
       taken = MapSet.new(Map.values(h))
+
+      {sess_var, taken} =
+        if image do
+          Name.claim(Name.gen("sess"), taken)
+        else
+          {nil, taken}
+        end
+
       names = Emit.def_names(book, &spell/1, taken)
       steps = Enum.flat_map(groups, fn {_fun, ss} -> ss end)
       used = MapSet.union(taken, MapSet.new(Map.values(names)))
 
-      {step_names, _used} =
+      {step_names, used} =
         Enum.reduce(steps, {%{}, used}, fn step, {map, used} ->
           {rn, used} = Name.claim(Name.gen("step", map_size(map)), used)
           {Map.put(map, step.name, rn), used}
         end)
 
-      visible =
-        used
-        |> MapSet.union(MapSet.new(Map.values(step_names)))
-        |> Name.open()
+      {idents, used} =
+        if image do
+          Enum.reduce(image.sessions, {%{}, used}, fn sess, {map, used} ->
+            {ident, used} = Name.claim(spell(sess.name), used)
+            {Map.put(map, sess.name, ident), used}
+          end)
+        else
+          {%{}, used}
+        end
+
+      visible = Name.open(used)
 
       rec = recursive_names(funs)
 
@@ -172,26 +202,47 @@ defmodule Muro.Emit.JS do
 
       ordered = steps ++ Enum.map(groups, fn {fun, _} -> fun end)
 
-      with {:ok, compiled} <- emit_all(ordered, st) do
-        {:ok, compiled, data_types(book)}
+      with {:ok, compiled} <- emit_all(ordered, st),
+           {:ok, session} <- session_block(image, compiled, sess_var, idents) do
+        {:ok, compiled, data_types(book), session}
       end
     end
   end
 
-  defp refuse_book(book) do
+  defp session_block(nil, _compiled, _var, _idents), do: {:ok, nil}
+
+  defp session_block(image, compiled, var, idents) do
+    by_source = Map.new(compiled, fn rec -> {rec.fun.name, rec.name} end)
+
+    runs =
+      for name <- image.runs,
+          ident = Map.get(by_source, name),
+          not is_nil(ident),
+          into: %{},
+          do: {name, ident}
+
+    case Session.script(image, %{var: var, runs: runs, idents: idents}) do
+      {:ok, source} ->
+        clauses =
+          Enum.map(image.sessions, fn sess ->
+            "export const #{Map.fetch!(idents, sess.name)}"
+          end)
+
+        {:ok,
+         %{source: source, dts: Session.dts(image, idents), idents: idents, clauses: clauses}}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp refuse_host(book) do
     Enum.find_value(book, :ok, fn entry ->
       kind = Map.get(entry, :kind, :def)
       name = Map.get(entry, :name)
 
-      cond do
-        kind in @session_kinds ->
-          {:error, refusal("c:session", name, Atom.to_string(kind))}
-
-        kind in @host_kinds ->
-          {:error, refusal("c:host", name, Atom.to_string(kind))}
-
-        true ->
-          nil
+      if kind in @host_kinds do
+        {:error, refusal("c:host", name, Atom.to_string(kind))}
       end
     end)
   end
@@ -312,6 +363,9 @@ defmodule Muro.Emit.JS do
   end
 
   defp calls_acc({:wrd, _, _, args}, acc), do: Enum.reduce(args, acc, &calls_acc/2)
+  defp calls_acc({:scat, a, b}, acc), do: calls_acc(b, calls_acc(a, acc))
+  defp calls_acc({:slen, a}, acc), do: calls_acc(a, acc)
+  defp calls_acc({:seq, a, b}, acc), do: calls_acc(b, calls_acc(a, acc))
   defp calls_acc(_tm, acc), do: acc
 
   defp build_targets(funs, names, step_names, rec) do
@@ -732,6 +786,9 @@ defmodule Muro.Emit.JS do
   end
 
   defp contains_rec?({:wrd, _, _, args}, rec), do: Enum.any?(args, &contains_rec?(&1, rec))
+  defp contains_rec?({:scat, a, b}, rec), do: contains_rec?(a, rec) or contains_rec?(b, rec)
+  defp contains_rec?({:slen, a}, rec), do: contains_rec?(a, rec)
+  defp contains_rec?({:seq, a, b}, rec), do: contains_rec?(a, rec) or contains_rec?(b, rec)
   defp contains_rec?(_tm, _rec), do: false
 
   defp lift({:call, name, args} = tm, rec) do
@@ -807,6 +864,22 @@ defmodule Muro.Emit.JS do
 
   defp lift({:wrd, k, op, args}, rec) do
     lift_kids(args, rec, fn args -> {:wrd, k, op, args} end)
+  end
+
+  defp lift({:scat, a, b}, rec) do
+    case lift(a, rec) do
+      {:ok, call, rebuild} -> {:ok, call, fn hole -> {:scat, rebuild.(hole), b} end}
+      :none -> lift_one(b, rec, fn hole -> {:scat, a, hole} end)
+    end
+  end
+
+  defp lift({:slen, a}, rec), do: lift_one(a, rec, fn hole -> {:slen, hole} end)
+
+  defp lift({:seq, a, b}, rec) do
+    case lift(a, rec) do
+      {:ok, call, rebuild} -> {:ok, call, fn hole -> {:seq, rebuild.(hole), b} end}
+      :none -> lift_one(b, rec, fn hole -> {:seq, a, hole} end)
+    end
   end
 
   defp lift(_tm, _rec), do: :none
@@ -982,6 +1055,24 @@ defmodule Muro.Emit.JS do
   end
 
   defp emit_tm({:con, "Atom", name, []}, _st), do: {:ok, js_str(name)}
+
+  defp emit_tm({:str, bin}, _st) when is_binary(bin), do: {:ok, "{ string: #{js_str(bin)} }"}
+
+  defp emit_tm({:scat, a, b}, st) do
+    with {:ok, ea} <- emit_tm(a, st),
+         {:ok, eb} <- emit_tm(b, st),
+         do: {:ok, "#{st.h.scat}(#{ea}, #{eb})"}
+  end
+
+  defp emit_tm({:slen, a}, st) do
+    with {:ok, e} <- emit_tm(a, st), do: {:ok, "#{st.h.slen}(#{e})"}
+  end
+
+  defp emit_tm({:seq, a, b}, st) do
+    with {:ok, ea} <- emit_tm(a, st),
+         {:ok, eb} <- emit_tm(b, st),
+         do: {:ok, "#{st.h.seq}(#{ea}, #{eb})"}
+  end
 
   defp emit_tm({:con, _data, cname, args}, st) do
     with {:ok, es} <- emit_many(args, st) do
@@ -1218,6 +1309,9 @@ defmodule Muro.Emit.JS do
   end
 
   defp occurs_bind?(name, {:wrd, _, _, args}), do: Enum.any?(args, &occurs_bind?(name, &1))
+  defp occurs_bind?(name, {:scat, a, b}), do: occurs_bind?(name, a) or occurs_bind?(name, b)
+  defp occurs_bind?(name, {:slen, a}), do: occurs_bind?(name, a)
+  defp occurs_bind?(name, {:seq, a, b}), do: occurs_bind?(name, a) or occurs_bind?(name, b)
   defp occurs_bind?(_name, _other), do: false
 
   defp emit_wrd(k, op, args, st) do
@@ -1358,15 +1452,23 @@ defmodule Muro.Emit.JS do
   defp js_str(s) when is_binary(s) do
     body =
       s
-      |> String.replace("\\", "\\\\")
-      |> String.replace("\"", "\\\"")
-      |> String.replace("\n", "\\n")
-      |> String.replace("\r", "\\r")
-      |> String.replace("\u2028", "\\u2028")
-      |> String.replace("\u2029", "\\u2029")
+      |> :unicode.characters_to_list()
+      |> Enum.map_join(&js_scalar/1)
 
     "\"" <> body <> "\""
   end
+
+  defp js_scalar(?\\), do: "\\\\"
+  defp js_scalar(?"), do: "\\\""
+  defp js_scalar(?\n), do: "\\n"
+  defp js_scalar(?\r), do: "\\r"
+  defp js_scalar(0x2028), do: "\\u2028"
+  defp js_scalar(0x2029), do: "\\u2029"
+
+  defp js_scalar(n) when n < 0x20 or n == 0x7F,
+    do: "\\u{" <> Integer.to_string(n, 16) <> "}"
+
+  defp js_scalar(n), do: <<n::utf8>>
 
   # A second binder `_` is `_2`. `Name.claim/2` would write `__2`,
   # because its suffix is `_` plus digits and the base is already `_`.
@@ -1430,6 +1532,10 @@ defmodule Muro.Emit.JS do
     [{entry, type_spell(name)}]
   end
 
+  defp spell_entry(%{kind: :session, name: name} = entry) when is_binary(name) do
+    [{entry, spell(name)}]
+  end
+
   defp spell_entry(%{name: name} = entry) when is_binary(name) do
     kind = Map.get(entry, :kind, :def)
 
@@ -1477,8 +1583,9 @@ defmodule Muro.Emit.JS do
     }
   end
 
-  defp mjs(stem, compiled) do
+  defp mjs(stem, compiled, session) do
     h = helper_map()
+    session_src = if session, do: session.source, else: ""
 
     [
       "// generated by muro — do not edit",
@@ -1486,6 +1593,7 @@ defmodule Muro.Emit.JS do
       "// The proof stops at the run image.",
       runtime(h),
       Enum.map_join(compiled, "\n\n", & &1.text),
+      session_src,
       ""
     ]
     |> Enum.reject(&(&1 == ""))
@@ -1523,6 +1631,23 @@ defmodule Muro.Emit.JS do
       const #{h["pair"]} = s.step(s.env, s.seed);
       return [#{h["pair"]}[0], { seed: #{h["pair"]}[1], env: s.env, step: s.step }];
     }
+    function #{h["qstr"]}(s) {
+      const bs = String.fromCharCode(92);
+      const q = String.fromCharCode(34);
+      let out = q;
+      for (const ch of s) {
+        const cp = ch.codePointAt(0);
+        if (cp === 92) out += bs + bs;
+        else if (cp === 34) out += bs + q;
+        else if (cp === 10) out += bs + "n";
+        else if (cp < 32 || cp === 127) out += bs + "u{" + cp.toString(16) + "}";
+        else out += ch;
+      }
+      return out + q;
+    }
+    function #{h["scat"]}(a, b) { return { string: a.string + b.string }; }
+    function #{h["slen"]}(a) { return BigInt(Array.from(a.string).length); }
+    function #{h["seq"]}(a, b) { return a.string === b.string; }
     export function #{h["canon"]}(v) {
       if (typeof v === "bigint") return (v < 0n ? BigInt.asUintN(64, v) : v).toString();
       if (v === null) return "tt";
@@ -1531,6 +1656,7 @@ defmodule Muro.Emit.JS do
       if (typeof v === "function") return "fn";
       if (Array.isArray(v)) return "(" + v.map(#{h["canon"]}).join(",") + ")";
       if (v && typeof v === "object") {
+        if (Object.keys(v).length === 1 && typeof v.string === "string") return #{h["qstr"]}(v.string);
         if (typeof v.tag === "string" && Array.isArray(v.fields)) {
           if (v.fields.length === 0) return v.tag;
           return v.tag + "(" + v.fields.map(#{h["canon"]}).join(",") + ")";
@@ -1660,10 +1786,11 @@ defmodule Muro.Emit.JS do
     |> String.trim()
   end
 
-  defp dts(compiled, types, book) do
+  defp dts(compiled, types, book, session) do
     h = helper_map()
     ctx = %{types: types, tyvars: %{}}
     funs = compiled |> Enum.map(&dts_fun(&1, ctx, book)) |> Enum.reject(&is_nil/1)
+    session_dts = if session, do: session.dts, else: ""
 
     [
       "// generated by muro — do not edit",
@@ -1679,6 +1806,7 @@ defmodule Muro.Emit.JS do
       "export function #{h.data}(tag: string, ...fields: unknown[]): { readonly tag: string; readonly fields: readonly unknown[] };",
       "export function #{h.uncons}<A>(s: Stream<A>): readonly [A, Stream<A>];",
       "export function #{h.canon}(value: unknown): string;",
+      session_dts,
       ""
     ]
     |> Enum.reject(&(&1 == ""))
@@ -1695,6 +1823,7 @@ defmodule Muro.Emit.JS do
     export type I64 = bigint;
     export type WordBool = boolean;
     export type Atom = string;
+    export type String = { readonly string: string };
     export type Opt<T> = { readonly k: "none" } | { readonly k: "some"; readonly v: T };
     export type Pair<A, B> = readonly [A, B];
     export type Stream<A> = {
@@ -1890,6 +2019,7 @@ defmodule Muro.Emit.JS do
   defp rough_form(_book, :unit, _tparams), do: :unit
   defp rough_form(_book, :i64, _tparams), do: :i64
   defp rough_form(_book, :atom, _tparams), do: {:data, "Atom"}
+  defp rough_form(_book, :string, _tparams), do: :string
   defp rough_form(_book, {:word, {:ty, k}, []}, _tparams) when k in [:u8, :u32, :u64], do: k
   defp rough_form(_book, {:word, :bool, []}, _tparams), do: :wbool
   defp rough_form(_book, {:word, {:optk, k}, []}, _tparams), do: {:opt, rough_word(k)}
@@ -1980,6 +2110,7 @@ defmodule Muro.Emit.JS do
   defp render_lay(:opaque, _ctx, _nested), do: "unknown"
   defp render_lay(:never, _ctx, _nested), do: "never"
   defp render_lay({:data, "Atom"}, _ctx, _nested), do: "Atom"
+  defp render_lay(:string, _ctx, _nested), do: "String"
   defp render_lay({:tyvar, name}, ctx, _nested), do: Map.get(ctx.tyvars, name, type_spell(name))
 
   defp render_lay({:data, name, args}, ctx, _nested) do

@@ -44,6 +44,11 @@ defmodule Muro.Ast do
           | :atom
           | {:atom, name}
           | {:matom, named, name, named, [{name, named}]}
+          | :string
+          | {:slit, binary()}
+          | {:scat, named, named}
+          | {:slen, named}
+          | {:seq, named, named}
           | :i64
           | :f32ty
           | {:tensor, named, named}
@@ -89,6 +94,11 @@ defmodule Muro.Ast do
           | :atom
           | {:atom, name}
           | {:matom, db, db, [{name, db}]}
+          | :string
+          | {:slit, binary()}
+          | {:scat, db, db}
+          | {:slen, db}
+          | {:seq, db, db}
           | :i64
           | :f32ty
           | {:tensor, db, db}
@@ -176,6 +186,9 @@ defmodule Muro.Ast do
       {:packi, a, b} -> [a, b]
       {:word, _, args} -> args
       {:nu, _, f} -> [f]
+      {:scat, a, b} -> [a, b]
+      {:slen, a} -> [a]
+      {:seq, a, b} -> [a, b]
       _ -> []
     end
   end
@@ -315,6 +328,22 @@ defmodule Muro.Ast do
   def to_db({:ucons, s}, env), do: map1(s, env, &{:ucons, &1})
   def to_db(:atom, _), do: {:ok, :atom}
   def to_db({:atom, n}, _), do: {:ok, {:atom, n}}
+  def to_db(:string, _), do: {:ok, :string}
+  def to_db({:slit, bin}, _) when is_binary(bin), do: {:ok, {:slit, bin}}
+
+  def to_db({:scat, a, b}, env) do
+    with {:ok, a1} <- to_db(a, env),
+         {:ok, b1} <- to_db(b, env),
+         do: {:ok, {:scat, a1, b1}}
+  end
+
+  def to_db({:slen, a}, env), do: map1(a, env, &{:slen, &1})
+
+  def to_db({:seq, a, b}, env) do
+    with {:ok, a1} <- to_db(a, env),
+         {:ok, b1} <- to_db(b, env),
+         do: {:ok, {:seq, a1, b1}}
+  end
 
   def to_db({:matom, e, x, p, bs}, env) do
     with {:ok, e1} <- to_db(e, env),

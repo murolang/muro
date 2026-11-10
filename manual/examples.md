@@ -647,6 +647,14 @@ Two data types are both named `Foo`. `foo` builds the first at `0` and `bar` bui
 mix muro.check examples/cshrl/envs/binary_sacrifice.muro
 ```
 
+### string.muro
+
+A string is a sequence of Unicode scalars, and an atom is a name. `"hello"` and `:hello` stay distinct. `strCat` joins two strings, `strLen` counts scalars, and `strEq` compares them. `"é"` has length one. `"e\u{0301}"` has length two. Elixir emits a binary. JavaScript emits `{ string: "…" }` and leaves the atom as a string. C, Rust, and Zig refuse the book.
+
+```
+mix muro.check examples/string.muro
+```
+
 ## Adding a file
 
 1. Put it in `examples/`. Use only `run` / `run internal` / `spec` / `evidence`.

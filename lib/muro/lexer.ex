@@ -83,6 +83,8 @@ defmodule Muro.Lexer do
   defp take_string(<<"\"", rest::binary>>), do: {:string, 1 + string_rest(rest)}
   defp take_string(_), do: nil
 
+  defp string_rest(<<"\\\"", rest::binary>>), do: 2 + string_rest(rest)
+  defp string_rest(<<"\\\\", rest::binary>>), do: 2 + string_rest(rest)
   defp string_rest(<<"\"", _::binary>>), do: 1
   defp string_rest(<<"\n", _::binary>>), do: 0
   defp string_rest(<<>>), do: 0

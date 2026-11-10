@@ -602,7 +602,36 @@ defmodule Muro.Check do
     end
   end
 
+  # A string step spends one fuel on each argument. Two literals compute.
+  # Anything else stays stuck and the backend computes it.
+  defp whnf(k, book, {:scat, a, b}, unfold) do
+    with {:ok, a1} <- whnf(k - 1, book, a, unfold),
+         {:ok, b1} <- whnf(k - 1, book, b, unfold) do
+      {:ok, scat_step(a1, b1)}
+    end
+  end
+
+  defp whnf(k, book, {:slen, a}, unfold) do
+    with {:ok, a1} <- whnf(k - 1, book, a, unfold), do: {:ok, slen_step(a1)}
+  end
+
+  defp whnf(k, book, {:seq, a, b}, unfold) do
+    with {:ok, a1} <- whnf(k - 1, book, a, unfold),
+         {:ok, b1} <- whnf(k - 1, book, b, unfold) do
+      {:ok, seq_step(a1, b1)}
+    end
+  end
+
   defp whnf(_, _, t, _), do: {:ok, t}
+
+  defp scat_step({:slit, x}, {:slit, y}), do: {:slit, x <> y}
+  defp scat_step(a, b), do: {:scat, a, b}
+
+  defp slen_step({:slit, bin}), do: {:nat, Print.scalar_count(bin)}
+  defp slen_step(a), do: {:slen, a}
+
+  defp seq_step({:slit, x}, {:slit, y}), do: {:word, x == y, []}
+  defp seq_step(a, b), do: {:seq, a, b}
 
   defp whnf_words(_k, _book, [], _unfold), do: {:ok, []}
 
@@ -654,6 +683,24 @@ defmodule Muro.Check do
     end
   end
 
+  defp deepen(k, book, {:scat, a, b}, unfold) do
+    with {:ok, a1} <- nf(fuel_dec(k), book, a, unfold),
+         {:ok, b1} <- nf(fuel_dec(k), book, b, unfold) do
+      {:ok, scat_step(a1, b1)}
+    end
+  end
+
+  defp deepen(k, book, {:slen, a}, unfold) do
+    with {:ok, a1} <- nf(fuel_dec(k), book, a, unfold), do: {:ok, slen_step(a1)}
+  end
+
+  defp deepen(k, book, {:seq, a, b}, unfold) do
+    with {:ok, a1} <- nf(fuel_dec(k), book, a, unfold),
+         {:ok, b1} <- nf(fuel_dec(k), book, b, unfold) do
+      {:ok, seq_step(a1, b1)}
+    end
+  end
+
   defp deepen(_k, _book, t, _unfold), do: {:ok, t}
 
   defp deepen_words(_k, _book, [], _unfold), do: {:ok, []}
@@ -678,6 +725,9 @@ defmodule Muro.Check do
 
       case h do
         :nat ->
+          {:ok, as == []}
+
+        :string ->
           {:ok, as == []}
 
         :unit ->
@@ -808,6 +858,7 @@ defmodule Muro.Check do
 
   defp run_ty_n(_book, {:var, _}), do: true
   defp run_ty_n(_book, :atom), do: true
+  defp run_ty_n(_book, :string), do: true
   defp run_ty_n(_book, :nat), do: true
   defp run_ty_n(_book, :unit), do: true
   defp run_ty_n(_book, :empty), do: true
@@ -1109,6 +1160,17 @@ defmodule Muro.Check do
   defp conv_n(k, book, names, {:word, op, xs}, {:word, op, ys}, seen),
     do: conv_args_f(k, k, book, names, xs, ys, seen)
 
+  defp conv_n(k, book, names, {:scat, a, b}, {:scat, a1, b1}, seen) do
+    conv_all(k, [at(k, book, names, a, a1, seen), at(k, book, names, b, b1, seen)])
+  end
+
+  defp conv_n(k, book, names, {:slen, a}, {:slen, a1}, seen),
+    do: conv_f(k, book, names, a, a1, seen)
+
+  defp conv_n(k, book, names, {:seq, a, b}, {:seq, a1, b1}, seen) do
+    conv_all(k, [at(k, book, names, a, a1, seen), at(k, book, names, b, b1, seen)])
+  end
+
   defp conv_n(k, book, names, {:mdata, e, p, bs}, {:mdata, e1, p1, bs1}, seen) do
     case conv_all(k, [at(k, book, names, e, e1, seen), at(k, book, names, p, p1, seen)]) do
       {:ok, k1} -> conv_mdata_bs(k, k1, book, names, bs, bs1, seen)
@@ -1375,6 +1437,9 @@ defmodule Muro.Check do
   defp has_self?(self, {:packi, x, y}), do: has_self?(self, x) or has_self?(self, y)
 
   defp has_self?(self, {:word, _, args}), do: Enum.any?(args, &has_self?(self, &1))
+  defp has_self?(self, {:scat, a, b}), do: has_self?(self, a) or has_self?(self, b)
+  defp has_self?(self, {:slen, a}), do: has_self?(self, a)
+  defp has_self?(self, {:seq, a, b}), do: has_self?(self, a) or has_self?(self, b)
   defp has_self?(self, {:lam, _, a, _, t}), do: has_self?(self, a) or has_self?(self, t)
   defp has_self?(self, {:pi, _, a, _, b}), do: has_self?(self, a) or has_self?(self, b)
   defp has_self?(self, {:prod, a, b}), do: has_self?(self, a) or has_self?(self, b)
@@ -1452,6 +1517,11 @@ defmodule Muro.Check do
   defp occurs?(x, {:toi64, t}), do: occurs?(x, t)
   defp occurs?(x, {:packi, a, b}), do: occurs?(x, a) or occurs?(x, b)
   defp occurs?(x, {:word, _, args}), do: Enum.any?(args, &occurs?(x, &1))
+  defp occurs?(x, {:scat, a, b}), do: occurs?(x, a) or occurs?(x, b)
+  defp occurs?(x, {:slen, a}), do: occurs?(x, a)
+  defp occurs?(x, {:seq, a, b}), do: occurs?(x, a) or occurs?(x, b)
+  defp occurs?(_x, :string), do: false
+  defp occurs?(_x, {:slit, _}), do: false
   defp occurs?(_x, :typ), do: false
   defp occurs?(_x, :nat), do: false
   defp occurs?(_x, :ze), do: false
@@ -1672,6 +1742,15 @@ defmodule Muro.Check do
 
   defp seed_walk(k, book, block, gamma, mode, {:word, _, args}),
     do: seed_walk_list(k, book, block, gamma, mode, args)
+
+  defp seed_walk(k, book, block, gamma, mode, {:scat, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
+
+  defp seed_walk(k, book, block, gamma, mode, {:slen, a}),
+    do: seed_walk(k, book, block, gamma, mode, a)
+
+  defp seed_walk(k, book, block, gamma, mode, {:seq, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
 
   defp seed_walk(k, book, block, gamma, mode, {:packi, x, y}),
     do: with_both(k, book, block, gamma, mode, x, y)
@@ -1948,6 +2027,34 @@ defmodule Muro.Check do
 
       {_, {:atom, _name}} ->
         {:ok, {:atom, u0s(n)}}
+
+      # String is a type of Unicode scalars. A literal is a value of it.
+      {m, :string} when m in [:run, :evidence] ->
+        {:error, "no promotion: String is an erased term"}
+
+      {:spec, :string} ->
+        {:ok, {:typ, u0s(n)}}
+
+      {_, {:slit, _bin}} ->
+        {:ok, {:string, u0s(n)}}
+
+      {m, {:scat, a, b}} ->
+        with {:ok, au} <- check(k, book, rs, gamma, m, a, :string),
+             {:ok, bu} <- check(k, book, rs, gamma, m, b, :string),
+             {:ok, uses} <- combine(m, au, bu) do
+          {:ok, {:string, uses}}
+        end
+
+      {m, {:slen, a}} ->
+        with {:ok, au} <- check(k, book, rs, gamma, m, a, :string),
+             do: {:ok, {:nat, au}}
+
+      {m, {:seq, a, b}} ->
+        with {:ok, au} <- check(k, book, rs, gamma, m, a, :string),
+             {:ok, bu} <- check(k, book, rs, gamma, m, b, :string),
+             {:ok, uses} <- combine(m, au, bu) do
+          {:ok, {{:word, :bool, []}, uses}}
+        end
 
       {m, {:matom, e, p, bs}} ->
         with {:ok, eu} <- check(k, book, rs, gamma, m, e, :atom),
@@ -3665,6 +3772,10 @@ defmodule Muro.Check do
   defp mentions({:word, _, args}, acc),
     do: Enum.reduce(args, acc, fn t, acc -> mentions(t, acc) end)
 
+  defp mentions({:scat, a, b}, acc), do: mentions(b, mentions(a, acc))
+  defp mentions({:slen, a}, acc), do: mentions(a, acc)
+  defp mentions({:seq, a, b}, acc), do: mentions(b, mentions(a, acc))
+
   defp mentions({:matom, e, p, bs}, acc) do
     acc = mentions(p, mentions(e, acc))
     Enum.reduce(bs, acc, fn {_, b}, acc -> mentions(b, acc) end)
@@ -4532,6 +4643,14 @@ defmodule Muro.Check do
 
   defp absent_go?(k, book, dname, {:word, _, args}, seen),
     do: Enum.all?(args, &absent?(k, book, dname, &1, seen))
+
+  defp absent_go?(k, book, dname, {:scat, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
+
+  defp absent_go?(k, book, dname, {:slen, a}, seen), do: absent?(k, book, dname, a, seen)
+
+  defp absent_go?(k, book, dname, {:seq, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
 
   defp absent_go?(k, book, dname, {:packi, a, b}, seen),
     do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)

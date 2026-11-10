@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.29
+## 0.20.30
 
 A duplicate name in one file is reported at both declarations, as `file:line:col`. A name that clashes with the prelude names the prelude line as well. A duplicate inside a package is reported at `muro_deps/<name>/<path>:<line>:<col>`.
 
@@ -16,7 +16,37 @@ The Agda library no longer sets `--without-K`. The proofs use K. `make agda` sti
 
 ### Package
 
-- Version 0.20.29.
+- Version 0.20.30.
+
+## 0.20.28
+
+`String` is a type of Unicode scalars, distinct from `Atom`. A literal is `"hello"`, with escapes `\\`, `\"`, `\n`, and `\u{...}`. `strCat` concatenates, `strLen` is the number of scalars, and `strEq` compares. There is no coercion between a string and an atom.
+
+Elixir emits a binary. JavaScript emits `{ string: "hello" }` and leaves an atom as a string. `muro__canon` prints `"hello"` for the string and `hello` for the atom. C, Rust, Zig, and assembly refuse a string.
+
+### Manual
+
+- Terms. Grammar. Emit.
+
+### Package
+
+- Version 0.20.28.
+
+## 0.20.27
+
+JavaScript emit writes each session endpoint as a synchronous stepper beside the runs. The module starts no process and talks to no peer. The host owns the transport.
+
+One object per session. `init` returns the state. `send` and `recv` return `{ok: state}` or `{error: {unexpected, step, expected, value}}` and do not throw. `done` is true at the end. `expected` is the next step. `check_trace` replays a list of sends and receives. A parameter is a nat on `init` and an `args` list on `check_trace`.
+
+A payload is the same value a run uses: a bigint nat, `"b0"` or `"b1"`, `null`, a two-element array, an object, or `{tag, fields}`. A choice is `{k: "pick", label: "b0"}`. A book may declare runs and sessions together. A place, a scheme, or a move is still refused. A protocol the machine cannot represent is refused, and nothing is written. The declaration file types each stepper.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.27.
 
 ## 0.20.26
 
@@ -27,7 +57,6 @@ The smoke job runs the Linux binary that matches the runner: `linux-aarch64` nat
 ### Package
 
 - Version 0.20.26.
-
 
 ## 0.20.25
 

@@ -37,7 +37,7 @@ defmodule Muro.Gen do
   `Muro.Emit.C.prepare/2` and writes the `.c` target and the `.h`
   beside it. A `:rust` entry calls `Muro.Emit.Rust.render/2`. A
   `:zig` entry calls `Muro.Emit.Zig.render/2`. An `:asm` entry calls
-  `Muro.Emit.Asm.render/2`. A `:js` entry calls `Muro.Emit.JS.render/2`
+  `Muro.Emit.Asm.render/2`. A `:js` entry calls `Muro.Emit.JS.render/3`
   and writes the `.mjs` target and the `.d.ts` beside it. The stem passed to those emitters is the
   book basename.
   The Elixir bytes are formatted with the project's `.formatter.exs`
@@ -313,7 +313,7 @@ defmodule Muro.Gen do
     prefix = comment_prefix(kind)
 
     with {:ok, book} <- native_book(path, fuel, root),
-         {:ok, parts} <- native_parts(entry, kind, book, stem),
+         {:ok, parts} <- native_parts(entry, kind, book, stem, root),
          {:ok, lines} <- Muro.conforms(path, conform_opts(entry, root, fuel)) do
       book_sha = book_hash(root, entry.book)
 
@@ -342,7 +342,7 @@ defmodule Muro.Gen do
     end
   end
 
-  defp native_parts(entry, :c, book, _stem) do
+  defp native_parts(entry, :c, book, _stem, _root) do
     # The header is named from the target (`src/rounding.c` writes
     # `rounding.h`). The book's stem would include a different file.
     stem = entry.target |> Path.rootname() |> Path.basename()
@@ -356,29 +356,29 @@ defmodule Muro.Gen do
     end
   end
 
-  defp native_parts(entry, :rust, book, stem) do
+  defp native_parts(entry, :rust, book, stem, _root) do
     case Muro.Emit.Rust.render(book, stem) do
       {:ok, source} -> {:ok, [{entry.target, source}]}
       {:error, _} = err -> err
     end
   end
 
-  defp native_parts(entry, :zig, book, stem) do
+  defp native_parts(entry, :zig, book, stem, _root) do
     case Muro.Emit.Zig.render(book, stem) do
       {:ok, source} -> {:ok, [{entry.target, source}]}
       {:error, _} = err -> err
     end
   end
 
-  defp native_parts(entry, :asm, book, stem) do
+  defp native_parts(entry, :asm, book, stem, _root) do
     case Muro.Emit.Asm.render(book, stem) do
       {:ok, source} -> {:ok, [{entry.target, source}]}
       {:error, _} = err -> err
     end
   end
 
-  defp native_parts(entry, :js, book, stem) do
-    case Muro.Emit.JS.render(book, stem) do
+  defp native_parts(entry, :js, book, stem, root) do
+    case Muro.Emit.JS.render(book, stem, path: entry.book, book: entry.book, root: root) do
       {:ok, source, types} ->
         {:ok, [{entry.target, source}, {dts_rel(entry.target), types}]}
 

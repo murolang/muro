@@ -147,15 +147,17 @@ defmodule Muro do
   end
 
   @doc """
-  Write `<name>.mjs` and `<name>.d.ts` next to `path` for its run
-  definitions. `node` runs the module. The proof stops at the run image.
+  Write `<name>.mjs` and `<name>.d.ts` next to `path`. Runs are functions.
+  A session endpoint is a synchronous stepper. `node` runs the module.
+  The proof stops at the run image.
   """
   def emit_js(path, opts \\ []) do
     stem = Path.basename(path, ".muro")
     dir = Path.dirname(path)
+    render_opts = [path: path] ++ Keyword.take(opts, [:book, :root])
 
     with {:ok, book} <- checked_book(path, opts),
-         {:ok, source, types} <- Emit.JS.render(book, stem) do
+         {:ok, source, types} <- Emit.JS.render(book, stem, render_opts) do
       mjs = Path.join(dir, stem <> ".mjs")
       dts = Path.join(dir, stem <> ".d.ts")
       File.write!(mjs, source)

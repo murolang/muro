@@ -60,31 +60,22 @@ defmodule Muro.EmitJSTest do
     refute source =~ "export function step"
   end
 
-  test "a session or a host placement is refused and nothing is written" do
+  test "a host placement is refused and nothing is written" do
     dir = tmp()
+    File.cp!("examples/place.muro", Path.join(dir, "place.muro"))
+    path = Path.join(dir, "place.muro")
 
-    for {stem, reason} <- [
-          {"ping", "c:session in ping (session)"},
-          {"indexed", "c:session in route (session)"},
-          {"computed", "c:session in answer (session)"},
-          {"place", "c:host in home (place)"}
-        ] do
-      File.cp!("examples/#{stem}.muro", Path.join(dir, "#{stem}.muro"))
-      path = Path.join(dir, "#{stem}.muro")
-
-      assert_raise Mix.Error, ~r/\A#{Regex.escape(reason)}\z/, fn ->
-        Mix.Tasks.Muro.Emit.run([path, "--backend", "js"])
-      end
-
-      refute File.exists?(Path.join(dir, "#{stem}.mjs"))
-      refute File.exists?(Path.join(dir, "#{stem}.d.ts"))
+    assert_raise Mix.Error, ~r/\Ac:host in home \(place\)\z/, fn ->
+      Mix.Tasks.Muro.Emit.run([path, "--backend", "js"])
     end
 
-    for kind <- ~w(session conform meet endpoint read choreography talk seat link relay)a do
-      wire = "c:session in wire (#{kind})"
-      bare = "c:session (#{kind})"
-      assert {:error, ^wire} = Muro.Emit.JS.render([%{kind: kind, name: "wire"}], "x")
-      assert {:error, ^bare} = Muro.Emit.JS.render([%{kind: kind}], "x")
+    refute File.exists?(Path.join(dir, "place.mjs"))
+    refute File.exists?(Path.join(dir, "place.d.ts"))
+
+    assert {:error, "ill-formed session"} = Muro.Emit.JS.render([%{kind: :session}], "x")
+
+    for kind <- ~w(conform meet endpoint read choreography talk seat link relay)a do
+      assert {:ok, _source, _types} = Muro.Emit.JS.render([%{kind: kind}], "x")
     end
 
     for kind <- ~w(place scheme move)a do
@@ -1287,6 +1278,55 @@ defmodule Muro.EmitJSTest do
     assert peano_to_int(apply(mod, fun_atom(ex, "count"), [peano_n(4), peano_n(3)])) == 7
   end
 
+  @tag skip: @node_skip
+  test "a string and an atom of the same letters print differently" do
+    dir = tmp()
+
+    got =
+      run_example(dir, "string", [
+        {:val, "hello", {:call, "hello", []}},
+        {:val, "tag", {:call, "tag", []}},
+        {:val, "accent", {:call, "accent", []}},
+        {:val, "n", {:call, "n", []}},
+        {:val, "two", {:call, "two", []}},
+        {:val, "wave_n", {:call, "wave_n", []}},
+        {:val, "nul_n", {:call, "nul_n", []}},
+        {:val, "empty_n", {:call, "empty_n", []}},
+        {:val, "empty", {:call, "empty", []}},
+        {:val, "yes", {:call, "yes", []}},
+        {:val, "no", {:call, "no", []}},
+        {:val, "parts", {:call, "parts", []}},
+        {:val, "nl", {:call, "nl", []}},
+        {:val, "quoted", {:call, "quoted", []}},
+        {:val, "slash", {:call, "slash", []}},
+        {:val, "nul", {:call, "nul", []}},
+        {:val, "twice-ab", {:call, "twice", [{:string, "ab"}]}},
+        {:val, "twice-e", {:call, "twice", [{:string, "é"}]}},
+        {:val, "id-e", {:call, "id", [{:string, "é"}]}}
+      ])
+
+    assert got["hello"] == "\"hello\""
+    assert got["tag"] == "hello"
+    assert got["hello"] != got["tag"]
+    assert got["accent"] == Muro.Print.quote_string("é")
+    assert got["n"] == "1"
+    assert got["two"] == "2"
+    assert got["wave_n"] == "1"
+    assert got["nul_n"] == "1"
+    assert got["empty_n"] == "0"
+    assert got["empty"] == "\"\""
+    assert got["yes"] == "true"
+    assert got["no"] == "false"
+    assert got["parts"] == "\"hello\""
+    assert got["nl"] == "\"a\\nb\""
+    assert got["quoted"] == "\"a\\\"b\""
+    assert got["slash"] == "\"a\\\\b\""
+    assert got["nul"] == "\"\\u{0}\""
+    assert got["twice-ab"] == "\"abab\""
+    assert got["twice-e"] == Muro.Print.quote_string("éé")
+    assert got["id-e"] == Muro.Print.quote_string("é")
+  end
+
   defp arm_books do
     nil_ = data("nil", [])
     yes = data("yes", [])
@@ -1600,6 +1640,7 @@ defmodule Muro.EmitJSTest do
   defp js_val({:nat, n}, _names), do: "#{n}n"
   defp js_val(:tt, _names), do: "null"
   defp js_val({:atom, name}, _names), do: "\"#{name}\""
+  defp js_val({:string, bin}, _names), do: "{ string: #{JSON.encode!(bin)} }"
   defp js_val({:host, :suc}, _names), do: "(x) => x + 1n"
   defp js_val({:host, :id}, _names), do: "(x) => x"
 
@@ -1636,6 +1677,7 @@ defmodule Muro.EmitJSTest do
   defp ex_val({:nat, n}, _mod, _names) when n > 0, do: {:suc, ex_val({:nat, n - 1}, nil, nil)}
   defp ex_val(:tt, _mod, _names), do: :tt
   defp ex_val({:atom, name}, _mod, _names), do: String.to_atom(name)
+  defp ex_val({:string, bin}, _mod, _names), do: bin
   defp ex_val({:host, :suc}, _mod, _names), do: fn n -> {:suc, n} end
   defp ex_val({:host, :id}, _mod, _names), do: fn n -> n end
 
@@ -1651,6 +1693,7 @@ defmodule Muro.EmitJSTest do
   defp canon(f) when is_function(f), do: "fn"
   defp canon(%Stream{}), do: "stream"
   defp canon(a) when is_atom(a), do: Atom.to_string(a)
+  defp canon(bin) when is_binary(bin), do: Muro.Print.quote_string(bin)
 
   defp canon(t) when is_tuple(t) do
     case Tuple.to_list(t) do
