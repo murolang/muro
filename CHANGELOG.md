@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.28
+## 0.20.26
 
 An erased constructor field stays out of the value a host matches on. JavaScript binds that name to `undefined`. C binds a dummy `0`. Rust and Zig keep the same placeholder. A Nat zero whose type is a spec alias stays a Nat zero. Declared `Bool` stays tagged, `{tag: "true"}` or `{tag: "false"}`.
 
@@ -10,7 +10,7 @@ An erased constructor field stays out of the value a host matches on. JavaScript
 
 ### Package
 
-- Version 0.20.28.
+- Version 0.20.26.
 
 ## 0.20.23
 
