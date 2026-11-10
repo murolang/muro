@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.21
+
+The Elixir CI job installs Node 22 and runs the JavaScript backend differentials. Those tests fail when `CI` is set and `node` is not on `PATH`. They do not skip. Where `CI` is unset, the same cases still skip when `node` is absent.
+
+### Tests
+
+- `test/muro_emit_js_test.exs` runs the JavaScript differentials under `node`. When `CI` is set and `node` is missing, the file fails. When `CI` is unset and `node` is missing, those cases skip.
+
+### Package
+
+- Version 0.20.21.
+
 ## 0.20.20
 
 `mix muro.emit path.muro --backend js` writes `<stem>.mjs` and `<stem>.d.ts` beside the book and prints both paths. `Muro.emit_js/1` returns `{:ok, [mjs, dts]}`. Spec and evidence are omitted. The proof stops at the run image.

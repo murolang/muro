@@ -3,8 +3,14 @@ defmodule Muro.EmitJSTest do
 
   import ExUnit.CaptureIO
 
-  @node System.find_executable("node") ||
-          if(File.regular?("/opt/homebrew/bin/node"), do: "/opt/homebrew/bin/node")
+  # Resolved when this file is compiled. Mix does not recompile because
+  # PATH or CI changed. GitHub Actions sets CI. A missing node fails the
+  # file in that case. The differentials still skip when CI is unset.
+  @node System.find_executable("node")
+
+  if System.get_env("CI") && is_nil(@node) do
+    raise "node is required when CI is set and was not found on PATH"
+  end
 
   @node_skip if(is_nil(@node), do: "node not on PATH", else: false)
 
