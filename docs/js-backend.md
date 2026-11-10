@@ -1,6 +1,6 @@
 # JavaScript backend
 
-v1 emits a checked book's `run` terms as one ES module and one declaration file. A session endpoint in that book is a synchronous stepper in the same module. Spec and evidence are omitted. The proof stops at the run image. The host translation is not the book.
+v1 emits a checked book's `run` terms as one ES module and one declaration file. A session endpoint the machine can represent is a synchronous stepper in the same module. A session it cannot represent is omitted, and the runs are still written. Spec and evidence are omitted. The proof stops at the run image. The host translation is not the book.
 
 `mix muro.emit path.muro --backend js` writes `<stem>.mjs` and `<stem>.d.ts` beside the book and prints both paths, one per line. `Muro.emit_js/1` returns `{:ok, [mjs, dts]}`. `node` runs the module. A `.mjs` file is an ES module without a `package.json`.
 
@@ -85,16 +85,16 @@ Two source names that reach one identifier are refused before any file is writte
 
 ## Unsupported
 
-A book that contains one of these is refused before any file is written. The message names the definition, and the construct when the refusal has one. The first matching declaration in the book wins. A host placement is refused before a session is planned. A session the machine cannot represent is refused before a run is elaborated.
+A book that contains one of these is refused before any file is written. The message names the definition, and the construct when the refusal has one. The first matching declaration in the book wins. A host placement is refused before a session is planned. A run that names a session is refused before a session is planned.
 
-`c:host in home (place)` is the place `home`. `c:machine in addT (Tensor)` is `addT` in `examples/nx_add.muro`. `c:stream in bad (ν)` is a raw `ν`. `c:erased in use` and `c:unsupported in bad` name the definition and have no construct. A declaration with no name still names the construct: `c:host (place)`.
+`c:host in home (place)` is the place `home`. `c:machine in addT (Tensor)` is `addT` in `examples/nx_add.muro`. `c:stream in bad (ν)` is a raw `ν`. `c:erased in use` and `c:unsupported in bad` name the definition and have no construct. A declaration with no name still names the construct: `c:host (place)`. `c:session in use (session)` is a run that names a session.
 
 - `c:machine`. `F32`, `Tensor`, `addt`, and `packI`, including `examples/nx_add.muro`. `addi` on a word is emitted.
 - `c:stream`. A raw `ν`, `Always`, or `~` inside a `run`. A `run` whose type is `Stream` is emitted. An `evidence` `Always` or `~` is omitted with the other evidence.
 - `c:erased`. A gone variable used as a value.
+- `c:session`. A run that names a session, a conformance, a meeting, an endpoint, a reading, a choreography, a talk, a seat, a link, or a relay. The book is refused and nothing is written. A session the machine cannot represent is omitted when no run names it, and the runs are written. `--backend fsm` still refuses that protocol. A conformance or a meeting on its own does not refuse the book: a representable endpoint is the stepper.
 - `c:host`. A place, a scheme, or a move. A book that also has sessions is refused the same way, and nothing is written. `--backend fsm` may still emit those sessions.
-- A session, meeting, endpoint, reading, choreography, talk, seat, link, or relay that the state machine cannot represent. The reason is the one `--backend fsm` reports (`seen is not a state machine`, an unguarded `rec`, an unknown session, and the rest of that list). Nothing is written. A conformance or a meeting on its own does not refuse the book: the endpoints are the steppers.
-- A session payload whose type has a `repr`, including a field of a payload data type and a `Nat` bound when `Nat` has a `repr`. The stepper uses the run image, not a host codec. The reason names the session and the type. `--backend fsm` still accepts that book.
+- A session payload whose type has a `repr`, including a field of a payload data type and a `Nat` bound when `Nat` has a `repr`. That session is omitted when no run names it, and the runs are written. The stepper uses the run image. This backend does not emit `repr` codecs. `--backend fsm` still accepts that book.
 
 OTP, `--node`, fsm, and `repr` codecs are not this backend. A lambda is a closure, and this backend emits it.
 
@@ -137,6 +137,8 @@ A payload is the run image. A nat is a bigint. A bit is `"b0"` or `"b1"`. Unit i
 `check_trace` replays `{ k: "send", value }` and `{ k: "recv", value }`. A prefix is valid and returns `{ ok: true }`. A bad step returns `{ error: { index, unexpected: true, step, expected, value } }`. `{ complete: true }` also requires `done`, or `{ error: { index, incomplete: true, step, expected } }`. A parameterized session takes `{ args: [0n] }`. A missing or wrong-length `args` list returns `{ error: { message } }`.
 
 A book may declare runs and sessions together. The runs stay exported functions. A state is opaque. `muro__session` is the only field the declaration file names.
+
+A session that is not a stepper is omitted. The runs stay. That is a protocol the machine cannot represent, a payload type that has a `repr`, or a declaration that is not an endpoint. A book that imports the session emits when its own runs do not name it. A representable endpoint the book imports is still a stepper in that module.
 
 The declaration file exports `SessionStepper` and one `export const` per session. `init` may return a state or `{ error: { message } }`. `send` and `recv` return `{ ok }` or `{ error }`.
 

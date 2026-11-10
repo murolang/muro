@@ -277,7 +277,7 @@ defmodule Muro.Gen do
     Enum.reduce_while(manifest.modules, {:ok, []}, fn entry, {:ok, acc} ->
       case render(root, entry, version, manifest.fuel) do
         {:ok, contents, notes} -> {:cont, {:ok, acc ++ [{entry, contents, notes}]}}
-        {:error, message} -> {:halt, {:error, does_not_check(entry, message)}}
+        {:error, message} -> {:halt, {:error, backend_refused(entry, message)}}
       end
     end)
   end
@@ -669,6 +669,17 @@ defmodule Muro.Gen do
 
   defp does_not_check(entry, message) do
     "#{entry.target}: #{entry.book} does not check\n#{message}"
+  end
+
+  # The book already checked. The emitter refused it.
+  defp backend_refused(entry, message) do
+    "#{entry.target}: #{entry.book} is refused by the #{backend_name(entry)} backend\n#{message}"
+  end
+
+  defp backend_name(entry) do
+    entry
+    |> Map.get(:kind, :elixir)
+    |> Atom.to_string()
   end
 
   defp format_elixir(source, target, root) do

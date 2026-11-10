@@ -10,15 +10,17 @@ defmodule Muro.Emit.JS do
   `I64` is a signed bigint and an unsigned word is an unsigned bigint.
   Inside the module, word operations keep the unsigned residue.
 
-  A refusal is `c:machine`, `c:stream`, `c:erased`, `c:host`, or
-  `c:unsupported`, or the reason a session state machine refuses,
-  and it names the definition. When the refusal has a construct, the
-  message names that too (`c:host in home (place)`). A lambda is a
+  A refusal is `c:machine`, `c:stream`, `c:erased`, `c:session`,
+  `c:host`, or `c:unsupported`, and it names the definition. When the
+  refusal has a construct, the message names that too (`c:host in home
+  (place)`, `c:session in use (session)`). A lambda is a
   closure, so `c:lambda` is not a refusal here. A string is
   `{ string: "…" }` and an atom stays a JavaScript string. A host
-  placement refuses the book. A session endpoint is a synchronous
-  stepper beside the runs. Two source names that spell one JavaScript
-  identifier are refused before any file is written.
+  placement refuses the book. A session endpoint the machine can represent
+  is a synchronous stepper beside the runs. A session it cannot represent,
+  and a session whose payload type has a `repr`, is omitted, and the runs
+  are still written. A run that names a session is refused. Two source names
+  that spell one JavaScript identifier are refused before any file is written.
 
   This is not `Muro.Emit.Node`. That file is the BEAM `--node` backend.
 
@@ -80,6 +82,8 @@ defmodule Muro.Emit.JS do
   )
 
   @host_kinds ~w(place scheme move)a
+
+  @session_kinds ~w(session conform meet endpoint read choreography talk seat link relay)a
 
   @unsigned_words [:u8, :u32, :u64]
 
@@ -147,8 +151,9 @@ defmodule Muro.Emit.JS do
     path = Keyword.get(opts, :path, "book.muro")
 
     with :ok <- refuse_host(book),
-         :ok <- clash_book(book),
+         :ok <- refuse_run_session(book),
          {:ok, image} <- Session.prepare(book, path, opts),
+         :ok <- clash_book(book, image),
          {:ok, funs} <- elaborate_named(book),
          {:ok, groups, _} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
       h = helper_map()
@@ -245,6 +250,129 @@ defmodule Muro.Emit.JS do
         {:error, refusal("c:host", name, Atom.to_string(kind))}
       end
     end)
+  end
+
+  # A run that names a session, a conformance, a meeting, or another
+  # session declaration cannot be emitted. A binder of that name is the
+  # binder. Spec-only declarations are not a refusal: `prepare/3` omits
+  # the ones that are not steppers.
+  defp refuse_run_session(book) do
+    index = session_index(book)
+
+    if index == %{} do
+      :ok
+    else
+      Enum.find_value(Emit.run_defs(book), :ok, fn dfn ->
+        kind =
+          session_use(Map.get(dfn, :type), index, MapSet.new()) ||
+            session_use(Map.get(dfn, :body), index, MapSet.new())
+
+        if kind do
+          {:error, refusal("c:session", Map.get(dfn, :name), Atom.to_string(kind))}
+        end
+      end)
+    end
+  end
+
+  defp session_index(book) do
+    for entry <- book,
+        kind = Map.get(entry, :kind),
+        kind in @session_kinds,
+        name = Map.get(entry, :name),
+        is_binary(name),
+        into: %{},
+        do: {name, kind}
+  end
+
+  defp session_use({:var, name}, index, bound) do
+    use_name(name, index, bound, :bound)
+  end
+
+  defp session_use({:def, name}, index, bound) do
+    use_name(name, index, bound, :free)
+  end
+
+  defp session_use({:lam, _, dom, name, body}, index, bound) do
+    session_use(dom, index, bound) || session_use(body, index, bind(bound, name))
+  end
+
+  defp session_use({:pi, _, dom, name, body}, index, bound) do
+    session_use(dom, index, bound) || session_use(body, index, bind(bound, name))
+  end
+
+  defp session_use({:letp, scrut, a, b, body}, index, bound) do
+    session_use(scrut, index, bound) ||
+      session_use(body, index, bind(bind(bound, a), b))
+  end
+
+  defp session_use({:let, name, _, val, body}, index, bound) do
+    session_use(val, index, bound) || session_use(body, index, bind(bound, name))
+  end
+
+  defp session_use({:mnat, scrut, x, motive, zero, y, suc}, index, bound) do
+    session_use(scrut, index, bound) ||
+      session_use(motive, index, bind(bound, x)) ||
+      session_use(zero, index, bound) ||
+      session_use(suc, index, bind(bound, y))
+  end
+
+  defp session_use({:matom, scrut, x, motive, branches}, index, bound) do
+    session_use(scrut, index, bound) ||
+      session_use(motive, index, bind(bound, x)) ||
+      Enum.find_value(branches, fn {_atom, body} -> session_use(body, index, bound) end)
+  end
+
+  defp session_use({:mdata, scrut, x, motive, branches}, index, bound) do
+    session_use(scrut, index, bound) ||
+      session_use(motive, index, bind(bound, x)) ||
+      Enum.find_value(branches, fn {_ctor, binders, body} ->
+        session_use(body, index, Enum.reduce(List.wrap(binders), bound, &bind(&2, &1)))
+      end)
+  end
+
+  defp session_use({:memp, scrut, x, motive}, index, bound) do
+    session_use(scrut, index, bound) || session_use(motive, index, bind(bound, x))
+  end
+
+  defp session_use({:rwt, eq, x, motive, body}, index, bound) do
+    session_use(eq, index, bound) ||
+      session_use(motive, index, bind(bound, x)) ||
+      session_use(body, index, bound)
+  end
+
+  defp session_use({:rec, name, body}, index, bound) when is_binary(name) or is_atom(name) do
+    session_use(body, index, bind(bound, name))
+  end
+
+  defp session_use(term, index, bound) when is_tuple(term) do
+    term |> Tuple.to_list() |> Enum.find_value(&session_use(&1, index, bound))
+  end
+
+  defp session_use(term, index, bound) when is_list(term) do
+    Enum.find_value(term, &session_use(&1, index, bound))
+  end
+
+  defp session_use(_term, _index, _bound), do: nil
+
+  defp use_name(name, index, bound, mode) do
+    key = name_key(name)
+
+    cond do
+      not is_binary(key) -> nil
+      mode == :bound and MapSet.member?(bound, key) -> nil
+      true -> Map.get(index, key)
+    end
+  end
+
+  defp name_key(name) when is_binary(name), do: name
+  defp name_key(name) when is_atom(name) and not is_nil(name), do: Atom.to_string(name)
+  defp name_key(_name), do: nil
+
+  defp bind(bound, name) do
+    case name_key(name) do
+      nil -> bound
+      key -> MapSet.put(bound, key)
+    end
   end
 
   defp elaborate_named(book) do
@@ -1522,18 +1650,30 @@ defmodule Muro.Emit.JS do
     "$" <> hex
   end
 
-  defp clash_book(book) do
+  # An omitted session does not claim its spelling. A stepper does,
+  # in book order, the same way a run does.
+  defp clash_book(book, image) do
+    emitted = emitted_sessions(image)
+
     book
-    |> Enum.flat_map(&spell_entry/1)
+    |> Enum.flat_map(fn entry -> spell_entry(entry) ++ session_spell(entry, emitted) end)
     |> clash_seen(%{})
   end
 
-  defp spell_entry(%{kind: :data, name: name} = entry) when is_binary(name) do
-    [{entry, type_spell(name)}]
+  defp emitted_sessions(nil), do: MapSet.new()
+
+  defp emitted_sessions(%{sessions: sessions}) do
+    MapSet.new(sessions, & &1.name)
   end
 
-  defp spell_entry(%{kind: :session, name: name} = entry) when is_binary(name) do
-    [{entry, spell(name)}]
+  defp session_spell(%{kind: :session, name: name} = entry, emitted) when is_binary(name) do
+    if MapSet.member?(emitted, name), do: [{entry, spell(name)}], else: []
+  end
+
+  defp session_spell(_entry, _emitted), do: []
+
+  defp spell_entry(%{kind: :data, name: name} = entry) when is_binary(name) do
+    [{entry, type_spell(name)}]
   end
 
   defp spell_entry(%{name: name} = entry) when is_binary(name) do
