@@ -199,6 +199,117 @@ defmodule Muro.GenNativeTest do
     assert File.read!(Path.join(dir, "src/half.d.ts/keep")) == "leave me\n"
   end
 
+  test "a muro.toml javascript book emits runs beside a spec-only session" do
+    dir = tmp()
+    version = Mix.Tasks.Muro.version()
+    File.mkdir_p!(Path.join(dir, "books"))
+
+    File.write!(Path.join(dir, "books/wire.muro"), """
+    data Bool : Type where
+      true  : Bool
+      false : Bool
+
+    def flip : run Π (b : Bool) → Bool :=
+      λ (b : Bool) →
+        match b motive (λ _ → Bool)
+          | true => false
+          | false => true
+
+    data Reply : Type where
+      written : Reply
+      invalid : Reply
+
+    session ask := recv Bool (send Reply end)
+
+    conform answer : ask :=
+      get (b : Bool) (put written done)
+    """)
+
+    File.write!(Path.join(dir, "books/user.muro"), """
+    import "wire.muro"
+
+    def twice : run Π (b : Bool) → Bool :=
+      λ (b : Bool) → flip (flip b)
+    """)
+
+    File.write!(Path.join(dir, "muro.toml"), """
+    muro = "#{version}"
+    backend = "js"
+
+    [[modules]]
+    book = "books/user.muro"
+    target = "out/user.mjs"
+    """)
+
+    out = generate!(dir)
+    assert out =~ "written out/user.mjs\n"
+    assert out =~ "written out/user.d.ts\n"
+    source = File.read!(Path.join(dir, "out/user.mjs"))
+    assert source =~ "export function flip("
+    assert source =~ "export function twice("
+    assert source =~ "export const ask ="
+  end
+
+  test "a book the javascript backend refuses names that backend and writes nothing" do
+    dir = tmp()
+    version = Mix.Tasks.Muro.version()
+    File.mkdir_p!(Path.join(dir, "books"))
+    File.cp!("examples/place.muro", Path.join(dir, "books/home.muro"))
+
+    File.write!(Path.join(dir, "muro.toml"), """
+    muro = "#{version}"
+    backend = "js"
+
+    [[modules]]
+    book = "books/home.muro"
+    target = "out/home.mjs"
+    """)
+
+    error =
+      in_dir(dir, fn ->
+        assert_raise Mix.Error, fn -> Mix.Tasks.Muro.Gen.run([]) end
+      end)
+
+    assert error.message =~ "out/home.mjs: books/home.muro is refused by the js backend"
+    assert error.message =~ "c:host in home (place)"
+    assert error.message =~ "muro.gen wrote nothing"
+    refute error.message =~ "does not check"
+    refute File.regular?(Path.join(dir, "out/home.mjs"))
+    refute File.regular?(Path.join(dir, "out/home.d.ts"))
+  end
+
+  test "a run that names a session does not check, and gen writes nothing" do
+    dir = tmp()
+    version = Mix.Tasks.Muro.version()
+    File.mkdir_p!(Path.join(dir, "books"))
+
+    File.write!(Path.join(dir, "books/use.muro"), """
+    session ask := recv Nat end
+    def use : run Nat := ask
+    """)
+
+    File.write!(Path.join(dir, "muro.toml"), """
+    muro = "#{version}"
+    backend = "js"
+
+    [[modules]]
+    book = "books/use.muro"
+    target = "out/use.mjs"
+    """)
+
+    error =
+      in_dir(dir, fn ->
+        assert_raise Mix.Error, fn -> Mix.Tasks.Muro.Gen.run([]) end
+      end)
+
+    assert error.message =~ "out/use.mjs: books/use.muro does not check"
+    assert error.message =~ "ask is a session, not a definition"
+    assert error.message =~ "muro.gen wrote nothing"
+    refute error.message =~ "is refused by the js backend"
+    refute File.regular?(Path.join(dir, "out/use.mjs"))
+    refute File.regular?(Path.join(dir, "out/use.d.ts"))
+  end
+
   test "a muro.toml rust target is written by muro gen" do
     dir = tmp()
     version = Mix.Tasks.Muro.version()

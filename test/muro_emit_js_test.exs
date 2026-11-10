@@ -72,7 +72,9 @@ defmodule Muro.EmitJSTest do
     refute File.exists?(Path.join(dir, "place.mjs"))
     refute File.exists?(Path.join(dir, "place.d.ts"))
 
-    assert {:error, "ill-formed session"} = Muro.Emit.JS.render([%{kind: :session}], "x")
+    assert {:ok, bare, bare_types} = Muro.Emit.JS.render([%{kind: :session}], "x")
+    refute bare =~ "export const "
+    refute bare_types =~ "SessionStepper"
 
     for kind <- ~w(conform meet endpoint read choreography talk seat link relay)a do
       assert {:ok, _source, _types} = Muro.Emit.JS.render([%{kind: kind}], "x")

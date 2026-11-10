@@ -38,14 +38,17 @@ defmodule Muro.EmitJSSessionTest do
     {"examples/recursive.muro", "loop"} => :open
   }
 
-  test "a session the state machine refuses is the fsm reason" do
+  test "a session the state machine refuses is omitted and the runs stay" do
     talk = book!("examples/talk.muro")
 
     assert {:error, reason} =
              Emit.Fsm.render(talk, "examples/talk.muro", Emit.fsm_module("talk.muro"))
 
     assert reason =~ "seen is not a state machine"
-    assert {:error, ^reason} = Emit.JS.render(talk, "talk", path: "examples/talk.muro")
+    assert {:ok, source, types} = Emit.JS.render(talk, "talk", path: "examples/talk.muro")
+    assert source =~ "export function kept("
+    refute source =~ "export const "
+    refute types =~ "SessionStepper"
 
     seated = book!("examples/seated.muro")
 
@@ -58,16 +61,38 @@ defmodule Muro.EmitJSSessionTest do
              Emit.JS.render(seated, "seated", path: "examples/seated.muro")
 
     src = """
+    def kept : run Nat := 0
     session s := rec X. X
     """
 
     book = parse!(src)
     assert {:error, reason} = Emit.Fsm.render(book, "loop.muro", Emit.fsm_module("loop.muro"))
     assert reason =~ "unguarded rec"
-    assert {:error, ^reason} = Emit.JS.render(book, "loop", path: "loop.muro")
+    assert {:ok, source, types} = Emit.JS.render(book, "loop", path: "loop.muro")
+    assert source =~ "export function kept("
+    refute source =~ "export const "
+    refute types =~ "SessionStepper"
   end
 
-  test "a place is c:host and a repr payload is refused" do
+  test "a sibling stepper stays when another session is unrepresentable" do
+    src = """
+    session bad := rec X. X
+    session ping := recv Nat (send Nat end)
+    def kept : run Nat := 0
+    """
+
+    book = parse!(src)
+    assert {:error, reason} = Emit.Fsm.render(book, "mix.muro", Emit.fsm_module("mix.muro"))
+    assert reason =~ "unguarded rec"
+    assert {:ok, source, types} = Emit.JS.render(book, "mix", path: "mix.muro")
+    assert source =~ "export function kept("
+    assert source =~ "export const ping ="
+    refute source =~ "export const bad ="
+    assert types =~ "export const ping: SessionStepper;"
+    refute types =~ "bad: SessionStepper"
+  end
+
+  test "a place is c:host and a repr payload is omitted" do
     located = book!("examples/located.muro")
 
     assert {:error, "c:host in home (place)"} =
@@ -88,22 +113,138 @@ defmodule Muro.EmitJSSessionTest do
     repr Box := map { "n" => integer }
     session give := recv Box end
     session num := recv Nat end
+    session ping := recv Bool end
+    def kept : run Nat := 0
     """
 
     book = parse!(body)
     assert {:ok, _fsm} = Emit.Fsm.render(book, "reprs.muro", Emit.fsm_module("reprs.muro"))
-    assert {:error, reason} = Emit.JS.render(book, "reprs", path: "reprs.muro")
-    assert reason =~ "session give: repr Box is not a JavaScript payload"
+    assert {:ok, source, types} = Emit.JS.render(book, "reprs", path: "reprs.muro")
+    assert source =~ "export function kept("
+    assert source =~ "export const ping ="
+    refute source =~ "export const give ="
+    refute source =~ "export const num ="
+    assert types =~ "export const ping: SessionStepper;"
+    refute types =~ "give: SessionStepper"
+    refute types =~ "num: SessionStepper"
 
     arm = """
+    data Bool : Type where
+      true : Bool
+      false : Bool
     repr Nat := integer
     session s := choose (send Nat end) end
+    session ping := recv Bool end
+    def kept : run Nat := 0
     """
 
     book = parse!(arm)
     assert {:ok, _} = Emit.Fsm.render(book, "arm.muro", Emit.fsm_module("arm.muro"))
-    assert {:error, reason} = Emit.JS.render(book, "arm", path: "arm.muro")
-    assert reason =~ "session s: repr Nat is not a JavaScript payload"
+    assert {:ok, source, _types} = Emit.JS.render(book, "arm", path: "arm.muro")
+    assert source =~ "export function kept("
+    assert source =~ "export const ping ="
+    refute source =~ "export const s ="
+  end
+
+  @tag skip: @node_skip
+  test "a spec-only session stays beside the runs, and an importer emits those runs" do
+    dir = tmp()
+    write!(dir, "wire.muro", wire_src())
+    user = write!(dir, "user.muro", user_src())
+
+    assert {:ok, [wire_mjs, _]} = Muro.emit_js(Path.join(dir, "wire.muro"))
+    assert {:ok, [user_mjs, _]} = Muro.emit_js(user)
+    wire = File.read!(wire_mjs)
+    user_js = File.read!(user_mjs)
+    assert wire =~ "export function flip("
+    assert wire =~ "export const ask ="
+    assert user_js =~ "export function flip("
+    assert user_js =~ "export function twice("
+    assert user_js =~ "export const ask ="
+
+    script = """
+    import { flip, twice, muro__data } from "./user.mjs";
+    function assert(cond, msg) { if (!cond) throw new Error(msg); }
+    const t = muro__data("true");
+    const f = muro__data("false");
+    assert(flip(t).tag === "false", "flip true");
+    assert(flip(f).tag === "true", "flip false");
+    assert(twice(t).tag === "true", "twice true");
+    assert(twice(f).tag === "false", "twice false");
+    console.log("ok");
+    """
+
+    assert node!([write!(dir, "drive.mjs", script)], dir) =~ "ok"
+  end
+
+  test "a run that names a session is refused" do
+    ask = """
+    session ask := recv Nat end
+    def use : run Nat := ask
+    """
+
+    assert {:error, "c:session in use (session)"} =
+             Emit.JS.render(parse!(ask), "use", path: "use.muro")
+
+    conform = """
+    session ask := recv Nat end
+    conform answer : ask := get (k : Nat) (put 0 done)
+    def use : run Nat := answer
+    """
+
+    assert {:error, "c:session in use (conform)"} =
+             Emit.JS.render(parse!(conform), "use", path: "use.muro")
+
+    meet = """
+    session ask := recv Nat end
+    session back := dual ask
+    conform answer : ask := get (k : Nat) (put 0 done)
+    conform reply : back := put 0 (get (m : Nat) done)
+    meet one : answer with reply
+    def use : run Nat := one
+    """
+
+    assert {:error, "c:session in use (meet)"} =
+             Emit.JS.render(parse!(meet), "use", path: "use.muro")
+  end
+
+  test "a binder may reuse a session name" do
+    src = """
+    session ask := recv Nat end
+    data Box : Type where
+      box : Nat → Box
+    def f : run Π (b : Box) → Nat :=
+      λ (b : Box) →
+        match b motive (λ _ → Nat)
+          | box ask => ask
+    def g : run Π (ask : Nat) → Nat :=
+      λ (ask : Nat) → ask
+    """
+
+    book = parse!(src)
+    assert {:ok, source, _types} = Emit.JS.render(book, "shadow", path: "shadow.muro")
+    assert source =~ "export function f("
+    assert source =~ "export function g("
+    assert source =~ "export const ask ="
+  end
+
+  test "an omitted session does not claim a JavaScript identifier" do
+    omitted = """
+    session function := rec X. X
+    def function_k : run Nat := 0
+    """
+
+    assert {:ok, source, _types} = Emit.JS.render(parse!(omitted), "omit", path: "omit.muro")
+    assert source =~ "export function function_k("
+    refute source =~ "spell one JavaScript identifier"
+
+    kept = """
+    session function := recv Nat end
+    def function_k : run Nat := 0
+    """
+
+    assert {:error, reason} = Emit.JS.render(parse!(kept), "clash", path: "clash.muro")
+    assert reason =~ "function and function_k spell one JavaScript identifier"
   end
 
   @tag skip: @node_skip
@@ -1060,6 +1201,38 @@ defmodule Muro.EmitJSSessionTest do
   defp parse!(src) do
     assert {:ok, book} = Muro.Parser.parse(src)
     Prelude.for_emit(book)
+  end
+
+  defp wire_src do
+    """
+    data Bool : Type where
+      true  : Bool
+      false : Bool
+
+    def flip : run Π (b : Bool) → Bool :=
+      λ (b : Bool) →
+        match b motive (λ _ → Bool)
+          | true => false
+          | false => true
+
+    data Reply : Type where
+      written : Reply
+      invalid : Reply
+
+    session ask := recv Bool (send Reply end)
+
+    conform answer : ask :=
+      get (b : Bool) (put written done)
+    """
+  end
+
+  defp user_src do
+    """
+    import "wire.muro"
+
+    def twice : run Π (b : Bool) → Bool :=
+      λ (b : Bool) → flip (flip b)
+    """
   end
 
   defp stem(path), do: path |> Path.basename() |> String.trim_trailing(".muro")

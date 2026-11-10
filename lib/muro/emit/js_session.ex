@@ -4,21 +4,17 @@ defmodule Muro.Emit.JS.Session do
   alias Muro.Emit.Fsm
 
   @doc false
+  # A session the state machine can represent stays in the image. One it
+  # cannot represent, or whose payload has a `repr`, is omitted. The runs
+  # of the book are emitted either way. A run that names a session is
+  # refused earlier, by `Muro.Emit.JS`.
   def prepare(book, path, opts) when is_list(book) do
-    sessions = Enum.filter(book, &(Map.get(&1, :kind) == :session))
+    sessions =
+      book
+      |> Enum.filter(&(Map.get(&1, :kind) == :session))
+      |> Enum.filter(&well_formed?/1)
 
-    cond do
-      sessions == [] ->
-        {:ok, nil}
-
-      Enum.any?(sessions, &(not well_formed?(&1))) ->
-        {:error, "ill-formed session"}
-
-      true ->
-        with {:ok, image} <- Fsm.image(book, path, opts) do
-          refuse_repr(image)
-        end
-    end
+    attempt(book, sessions, path, opts)
   end
 
   @doc false
@@ -57,6 +53,87 @@ defmodule Muro.Emit.JS.Session do
   defp well_formed?(sess) do
     is_binary(Map.get(sess, :name)) and Map.has_key?(sess, :proto)
   end
+
+  defp attempt(_book, [], _path, _opts), do: {:ok, nil}
+
+  defp attempt(book, sessions, path, opts) do
+    names = MapSet.new(sessions, & &1.name)
+
+    case Fsm.image(only_sessions(book, names), path, opts) do
+      {:ok, image} ->
+        blocked = MapSet.new(repr_blocked(image))
+
+        if MapSet.size(blocked) == 0 do
+          {:ok, image}
+        else
+          kept = Enum.reject(sessions, &MapSet.member?(blocked, &1.name))
+          shrink(book, sessions, kept, path, opts)
+        end
+
+      {:error, reason} ->
+        case blamed_session(reason) do
+          name when is_binary(name) ->
+            kept =
+              if MapSet.member?(names, name) do
+                Enum.reject(sessions, &(&1.name == name))
+              else
+                Enum.reject(sessions, &mentions?(&1, name))
+              end
+
+            shrink(book, sessions, kept, path, opts)
+
+          _other ->
+            {:ok, nil}
+        end
+    end
+  end
+
+  defp shrink(_book, sessions, kept, _path, _opts) when length(kept) >= length(sessions) do
+    {:ok, nil}
+  end
+
+  defp shrink(book, _sessions, kept, path, opts), do: attempt(book, kept, path, opts)
+
+  # Non-session entries stay, so a payload declaration is still visible.
+  # A session that was dropped is not planned again.
+  defp only_sessions(book, names) do
+    Enum.filter(book, fn entry ->
+      Map.get(entry, :kind) != :session or MapSet.member?(names, Map.get(entry, :name))
+    end)
+  end
+
+  defp repr_blocked(image) do
+    Enum.flat_map(image.sessions, fn sess ->
+      if repr_hit(sess, image), do: [sess.name], else: []
+    end)
+  end
+
+  # `examples/session.muro:4 session ping:` blames `ping`. The path's
+  # own `session` has no space in front of it.
+  defp blamed_session(reason) when is_binary(reason) do
+    case Regex.run(~r/ session ([^:\n]+):/, reason) do
+      [_, name] -> name
+      _other -> nil
+    end
+  end
+
+  defp blamed_session(_reason), do: nil
+
+  defp mentions?(sess, name), do: mentions_term?(Map.get(sess, :proto), name)
+
+  defp mentions_term?({:dual, ref}, name) when is_binary(ref) and ref == name, do: true
+  defp mentions_term?({:dual, ref}, name), do: mentions_term?(ref, name)
+  defp mentions_term?({:sess, ref, _args}, name) when is_binary(ref) and ref == name, do: true
+
+  defp mentions_term?(term, name) when is_tuple(term) do
+    term |> Tuple.to_list() |> Enum.any?(&mentions_term?(&1, name))
+  end
+
+  defp mentions_term?(term, name) when is_list(term) do
+    Enum.any?(term, &mentions_term?(&1, name))
+  end
+
+  defp mentions_term?(_term, _name), do: false
 
   defp templates_of(image) do
     Map.new(image.sessions, fn sess -> {sess.name, {sess.params, sess.proto}} end)
@@ -122,15 +199,6 @@ defmodule Muro.Emit.JS.Session do
       expected(state) { return #{var}.expected(#{key}, state); },
     #{trace}};\
     """
-  end
-
-  defp refuse_repr(%{reprs: []} = image), do: {:ok, image}
-
-  defp refuse_repr(image) do
-    case Enum.find_value(image.sessions, &repr_hit(&1, image)) do
-      nil -> {:ok, image}
-      reason -> {:error, reason}
-    end
   end
 
   defp repr_hit(sess, image) do
