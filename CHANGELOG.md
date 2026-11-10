@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.20.27
+
+The self-contained binary release workflow runs on the same runners as CI (`CI_RUNNER`, falling back to `ubuntu-24.04`). An existing tag can be rebuilt from `workflow_dispatch`, and the run refuses when that tag does not match the version in `mix.exs`. A pull request that touches the workflow, or a dispatch with `dry_run`, builds and smokes the binaries without publishing a GitHub release.
+
+The smoke job runs the Linux binary that matches the runner: `linux-aarch64` natively on the arm64 self-hosted runners, and `linux-x86_64` natively on an x86_64 hosted runner. When Docker is available it also runs `linux-x86_64` inside a fresh `ubuntu:24.04` container that must not contain Elixir or Erlang. macOS binaries are published and not executed here.
+
+### Package
+
+- Version 0.20.27.
+
+
 ## 0.20.25
 
 An erased constructor field stays out of the value a host matches on. JavaScript binds that name to `undefined`. C binds a dummy `0`. Rust and Zig keep the same placeholder. A Nat zero whose type is a spec alias stays a Nat zero. Declared `Bool` stays tagged, `{tag: "true"}` or `{tag: "false"}`.
