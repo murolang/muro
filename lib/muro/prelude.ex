@@ -50,7 +50,10 @@ defmodule Muro.Prelude do
   defp visible(user_book) do
     prelude = book()
     hidden = hidden(prelude, names(user_book))
-    Enum.reject(prelude, &(&1.name in hidden))
+
+    prelude
+    |> Enum.reject(&(&1.name in hidden))
+    |> Enum.map(&Map.put(&1, :prelude, true))
   end
 
   defp names(book), do: MapSet.new(for %{name: name} <- book, do: name)

@@ -206,12 +206,12 @@ defmodule Muro.LexerTest do
   end
 
   test "examples and the prelude lex without an error token" do
-    files =
-      Path.wildcard("examples/**/*.muro") ++
-        Path.wildcard("lib/muro/std/**/*.muro") ++
-        ["lib/muro/prelude.muro"]
+    examples = Path.wildcard("examples/**/*.muro")
+    library = Path.wildcard("lib/muro/std/**/*.muro")
+    assert examples != []
+    assert library != []
 
-    assert files != []
+    files = examples ++ library ++ ["lib/muro/prelude.muro"]
 
     for path <- files do
       src = File.read!(path)

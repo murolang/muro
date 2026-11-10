@@ -267,6 +267,21 @@ conform reply : ask :=
 
 See [Sessions](sessions.md#a-value-chooses-the-next-action).
 
+## pair-bindings.muro
+
+A match on a received pair or record binds the components. A component is payload data. A computed put is checked by type.
+
+```
+conform pair-reply : pair-ping :=
+  get (p : Nat × Bit)
+    (match p
+      | (n, b) => put n done)
+```
+
+`pair-ping` receives `Nat × Bit` and sends a nat. `pair-reply` sends that nat. `pair-ask` sends `(1, b1)`. `pair-wire` meets them, `pair-swap` is the other order, and `pair-async` is that meeting with `buffer 1`. `grant-reply` sends `grant a`. A record arm names every field once, in the order the type writes them. A missing field, an extra field, a duplicate field, a field out of order, a constructor arm, and a binder count other than the component count are refused. That book is `bad_pair_bindings.muro`. A pattern does not open a component that is itself a pair or a record.
+
+See [Sessions](sessions.md#a-value-chooses-the-next-action).
+
 ## session-calls.muro
 
 A declared session may be the continuation of another, and a session may take a nat parameter.
@@ -337,6 +352,35 @@ conform gate-server : gate :=
 `late nothing` ends. `late (just true)` sends `rst`. `late (just false)` ends. `put (just true)`, `put (just false)`, and `put nothing` meet `gate-server` in both orders, and the same meetings check with `buffer 1`. `late-hdr` reads the `Frame` inside `Hdr`. The same split sits under `rec`, in a session call, on a parameter, after evidence, and on a `%1` endpoint. A nat, a wildcard arm, a pair or a record as the case payload, and a process that does not cover the split are refused; that book is `bad_field_choice.muro`.
 
 See [Sessions](sessions.md#a-protocol-follows-a-run-of-the-value).
+
+## bounded-split.muro
+
+A nat at most a numeral chooses the next arm. The arms are `0` through that numeral.
+
+```
+session direct :=
+  recv (d : Nat) {d ≤ 2} (case d
+    | 0 => send Ctl end
+    | 1 => send Nat end
+    | 2 => end)
+```
+
+`direct-server` matches `d` and sends `rst` at `0`, `0` at `1`, and ends at `2`. `direct-bare` is the same match with the bars omitted. `direct-back` is the other end. A run of the nat and one declared data payload is their product. The match on the nat is parenthesized when another constructor arm follows. A nat with no bound, a bound that is a name, and a wildcard arm are refused.
+
+See [Sessions](sessions.md#a-numeral-bound).
+
+## bounded-fields.muro
+
+A constructor field may carry a numeral bound. The split a run reads is the product of those bounds.
+
+```
+data Req : Type where
+  req : (slot : Nat) {slot ≤ 1} → Req
+```
+
+`slotOf` matches `slot` and returns `true` at `0`. `Pair` bounds both fields by `1`. `Msg` mixes an unbounded constructor, one bounded nat, and a `Bool`. `Wrap` bounds a nat by `3` and then carries a `Bool`. `{slot ≤ 1}` admits `0` and `1`. A bound that is not a canonical decimal, a bound on a field that is not a nat, and a value outside the bound are refused.
+
+See [Sessions](sessions.md#a-numeral-bound) and [Data](data.md).
 
 ## async-meetings.muro
 
@@ -444,6 +488,25 @@ A productive `run` Stream of zeros. `head-zeros` is `{head zeros ≡ 0 : Nat}` b
 
 A `run` definition as a value. It imports `std:list.muro`. `map` and `tabulate` take a `+` function; `tabulate ident` passes a definition, `map (plus 2)` a partial application, and `measure (length Nat)` a partial application of the library `length` whose given argument is erased. Elixir passes curried closures ([Emit](emit.md#functions-as-values)). JavaScript passes `ident` and `length` as those functions, and keeps `(m) => plus(n, m)` for the partial of `plus`. C emit refuses the book (`c:lambda`).
 
+## sort.muro
+
+Insertion sort on `List Nat`. It imports `std:list.muro` and does not declare `List`. The direction is an atom.
+
+```
+def sort : run Π (d : Atom) → Π (xs : List Nat) → List Nat :=
+  λ (d : Atom) → λ (xs : List Nat) →
+    match xs motive (λ _ → List Nat)
+      | nil => nil
+      | cons x xs1 =>
+          match d motive (λ _ → List Nat)
+            | :asc => insert :asc x (sort :asc xs1)
+            | :desc => insert :desc x (sort :desc xs1)
+```
+
+`:asc` orders upward and `:desc` downward. `order` returns `leq` or `gt`, and each variable is used once. `sort-two` is `refl`: `sort :asc` of `suc 0` then `0` is `0` then `suc 0`. Elixir emit prints `:asc` and `:desc`.
+
+See [Marks](marks.md#atom) and [Library](library.md).
+
 ## dominance.muro
 
 A declared ν family, `Dom f g`: every element of `f` is at most the element of `g` at the same position. `dom-refl` proves `Dom s s`, `zeros-below` proves `Dom zeros (natsFrom n)` with the tail obligation at `natsFrom (suc n)`, and `dom-head` reads the head obligation back with `head`. Evidence only; `zeros` and `natsFrom` are emitted.
@@ -463,6 +526,10 @@ See [Either and Dec](either.md).
 ## list.muro
 
 Imports `std:list.muro` and declares nothing of its own. `List`, membership, `length`, `lookup`, and `ones2` live in the library ([Library](library.md)). `length-ones2` is `refl`.
+
+## second_field.muro
+
+A match on a constructor with two fields puts both fields in place. It imports `std:list.muro`. `drop1 (cons y ys)` is `ys`, and `drop1-cons` is `refl`. The false equation is `bad_second_field.muro`.
 
 ## maybe.muro
 
@@ -563,6 +630,14 @@ Two data types are both named `Foo`. `foo` builds the first at `0` and `bar` bui
 ### bad_second_field.muro
 
 `drop1 (cons y ys)` is `ys`. The false equation `{drop1 (cons y ys) ≡ zs}` is refused; `second_field.muro` is the true one. A match on a constructor with several fields puts every field in place at once.
+
+### bad_pair_bindings.muro
+
+`pair-bindings.muro` is the match that checks. This file refuses a product arm that does not bind the received value. A short arm and an arm with an extra binder are the wrong arity. A constructor arm on a pair or a record is refused. A record arm with a missing field, an extra field, a duplicate field, or a field out of order is refused. `put` of the bit where the protocol sends a nat does not conform. A pair pattern on a nat, on unit, or on a vector does not cover the received value. A `case` on a pair or a record is not a case on a bit or a declared data type. A `case` on a name other than the one just bound is refused. A run of a pair does not decide an arm. A nested pattern is refused at parse: a pattern is one level.
+
+### bad_field_choice.muro
+
+`field-choice.muro` is the split that checks. This file refuses a field the run reads when that field does not choose an arm. A wildcard arm is `expected constructor nothing, got _`. A nat, a pair, a record, or a vector as the case payload is not a case on a bit or a declared data type. A run that does not decide an arm, a run that calls itself, a run declared later, a `let`, and a case on a name bound earlier are refused. A `let` is outside the computed fragment. An arm that does not cover the constructors does not conform.
 
 ## cshrl/
 

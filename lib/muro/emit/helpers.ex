@@ -128,12 +128,5 @@ defmodule Muro.Emit.Helpers do
   def exunit, do: @sets.exunit
   def nif, do: @sets.nif
   def node, do: @sets.node
-  def elixir, do: @sets.elixir
-  def repr, do: @sets.repr
   def runs, do: @sets.runs
-
-  @doc false
-  def names_in(source) when is_binary(source) do
-    Muro.Emit.Helpers.Scan.names_in(source)
-  end
 end

@@ -531,15 +531,15 @@ defmodule Muro.Ast do
 
   defp unique_names(book) do
     book
-    |> Enum.reduce_while(MapSet.new(), fn d, seen ->
-      case take_names(seen, entry_names(d)) do
+    |> Enum.reduce_while(%{}, fn d, seen ->
+      case take_names(seen, d, entry_names(d)) do
         {:ok, seen1} -> {:cont, seen1}
         {:error, msg} -> {:halt, {:error, msg}}
       end
     end)
     |> case do
       {:error, _} = err -> err
-      %MapSet{} -> :ok
+      %{} -> :ok
     end
   end
 
@@ -548,21 +548,34 @@ defmodule Muro.Ast do
   # A repr names the data type again. The data entry already owns that name.
   defp entry_names(%{kind: :repr}), do: []
 
-  defp entry_names(%{kind: :data, name: name, ctors: ctors}) do
-    [name | Enum.map(ctors, & &1.name)]
+  defp entry_names(%{kind: :data, name: name, ctors: ctors} = d) do
+    loc = Map.get(d, :loc)
+    [{name, loc} | Enum.map(ctors, &{&1.name, Map.get(&1, :loc, loc)})]
   end
 
-  defp entry_names(%{name: name}), do: [name]
+  defp entry_names(%{name: name} = d), do: [{name, Map.get(d, :loc)}]
 
-  defp take_names(seen, []), do: {:ok, seen}
+  defp take_names(seen, _d, []), do: {:ok, seen}
 
-  defp take_names(seen, [name | names]) do
-    if MapSet.member?(seen, name) do
-      {:error, "duplicate name #{name}"}
-    else
-      take_names(MapSet.put(seen, name), names)
+  defp take_names(seen, d, [{name, loc} | names]) do
+    here = name_prefix(d, loc)
+
+    case Map.fetch(seen, name) do
+      {:ok, prev} ->
+        {:error, "#{prev}duplicate name #{name}\n#{here}duplicate name #{name}"}
+
+      :error ->
+        take_names(Map.put(seen, name, here), d, names)
     end
   end
+
+  # A prelude line must not look like `line:col`. `Load` prefixes every
+  # such line with the file it is checking.
+  defp name_prefix(%{prelude: true}, {line, col}) when is_integer(line) and is_integer(col) do
+    "prelude:#{line}:#{col}: "
+  end
+
+  defp name_prefix(_d, loc), do: Muro.Print.loc_prefix(loc)
 
   defp import_left(%{loc: {line, col}}) do
     "#{line}:#{col}: import is resolved from a file"

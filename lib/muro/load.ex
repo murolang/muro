@@ -387,9 +387,39 @@ defmodule Muro.Load do
     entries = Enum.map(entries, &Map.put(&1, :file, path))
     {own, imps} = Enum.split_with(entries, &(Map.get(&1, :kind) != :import))
 
-    with {:ok, loaded, ctx} <- load_all(imps, [path | stack], opts, ctx),
+    with :ok <- own_clashes(own, ctx),
+         {:ok, loaded, ctx} <- load_all(imps, [path | stack], opts, ctx),
          :ok <- clashes(own, loaded, ctx) do
       {:ok, own ++ Enum.uniq_by(Enum.concat(loaded), &origin/1), ctx}
+    end
+  end
+
+  # `index/1` keeps the first declaration of a name. A second declaration
+  # in this same file would otherwise disappear, and the later refusal
+  # would name neither site. Report both sites before imports are loaded.
+  defp own_clashes(entries, ctx) do
+    Enum.reduce_while(entries, {:ok, %{}}, fn d, {:ok, seen} ->
+      case take_own(seen, d, decl_names(d), ctx) do
+        {:ok, seen1} -> {:cont, {:ok, seen1}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, _} -> :ok
+      {:error, _} = err -> err
+    end
+  end
+
+  defp take_own(seen, _d, [], _ctx), do: {:ok, seen}
+
+  defp take_own(seen, d, [name | names], ctx) do
+    case Map.fetch(seen, name) do
+      {:ok, prev} ->
+        {:error,
+         "#{site(prev, ctx)}duplicate name #{name}\n#{site(d, ctx)}duplicate name #{name}"}
+
+      :error ->
+        take_own(Map.put(seen, name, d), d, names, ctx)
     end
   end
 

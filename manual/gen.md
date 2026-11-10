@@ -13,6 +13,8 @@ In brief: a project commits the Elixir a book emits. `muro.exs` names the module
 
 A `repr` is part of the committed module. `decode_<type>/1`, `decode_<type>/2`, and `encode_<type>/2` sit next to the run functions. Decode returns `{:ok, value, table}`. Encode takes that table. Change the repr and `mix muro.gen --check` fails, because the book hash changed. See [Host representations](repr.md).
 
+An Elixir module of a book that uses `U8`, `U32`, `U64`, or `I64` calls `Muro.Word` when the host runs it. The project that compiles the module depends on muro. The archive that wrote the file does not. See [Machine numbers](machine.md).
+
 ## Manifest
 
 `muro.exs` at the project root is a keyword list. `Code.eval_file/1` evaluates that file and nothing else. A Mix project may instead put the same keyword list under the `:muro` key in `mix.exs`. If both exist, loading stops and names both.

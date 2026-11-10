@@ -227,7 +227,7 @@ Muro v0.20.17
 All terms check. Evidence never becomes a run.
 ```
 
-A book with no temporal declaration and no choreography prints those two lines and nothing between them. A book that imports packages prints `conforms to <name> <version> (sha256 <hash>)` after that sentence, one line per package it loaded. A book that imports none, and `mix muro.check` with no path, print only those two lines.
+A book with no temporal declaration and no choreography prints those two lines and nothing between them. A book that imports packages prints `conforms to <name> <version> (sha256 <hash>)` after that sentence, one line per package it loaded. A book that imports none, and `mix muro.check` with no path, print only those two lines. With no path the task checks the built-in book (`Muro.Example.book/0`), the same book as `examples/half_ok.muro`. It does not walk `examples/`.
 
 `Muro.Check.check_sig/2` returns `:ok` on a well-typed book, or `{:error, msg}` with every definition error in book order. `check_sig(book, fuel: n)` sets the fuel for each definition. Definitions are checked concurrently; the fuel is the bound, not a wall-clock timeout.
 
