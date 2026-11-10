@@ -71,7 +71,7 @@ defmodule Muro.CliTest do
       "nope"
     ])
 
-    for backend <- ["rust", "zig", "asm", "c"] do
+    for backend <- ["rust", "zig", "asm", "c", "js"] do
       dir = copy_book(backend)
       path = Path.join(dir, "half.muro")
       argv = ["emit", path, "--backend", backend]

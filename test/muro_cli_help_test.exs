@@ -84,7 +84,7 @@ defmodule Muro.CliHelpTest do
       assert text =~ flag
     end
 
-    for backend <- ["elixir", "c", "rust", "zig", "asm", "otp", "fsm", "exunit"] do
+    for backend <- ["elixir", "c", "rust", "zig", "asm", "js", "otp", "fsm", "exunit"] do
       assert text =~ backend
     end
 
@@ -186,7 +186,7 @@ defmodule Muro.CliHelpTest do
     assert emit =~ "Default: elixir."
     assert emit =~ "https://muro-lang.dev/docs/emit"
 
-    for backend <- ["elixir", "c", "rust", "zig", "asm", "otp", "fsm", "exunit"] do
+    for backend <- ["elixir", "c", "rust", "zig", "asm", "js", "otp", "fsm", "exunit"] do
       assert emit =~ backend
     end
 
