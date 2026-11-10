@@ -59,7 +59,11 @@ defmodule Muro.ReleaseTest do
       assert status == 0, out
     end
 
-    smoke = Enum.find(scripts, &String.contains?(&1, "release-std-smoke.sh"))
+    host = Path.expand("scripts/release-linux-smoke.sh")
+    {syntax, 0} = System.cmd("bash", ["-n", host], stderr_to_stdout: true)
+    assert syntax == ""
+
+    smoke = File.read!(host)
     assert smoke =~ "bash /release-std-smoke.sh /tmp/muro"
     assert smoke =~ "muro emit /tmp/one.muro --backend rust"
     refute smoke =~ "bash -c"
@@ -76,18 +80,44 @@ defmodule Muro.ReleaseTest do
     File.chmod!(Path.join(stub_dir, "docker"), 0o755)
     dist = Path.join(dir, "dist")
     File.mkdir_p!(dist)
-    File.write!(Path.join(dist, "muro-0.20.7-linux-x86_64"), "bin")
-    host = Path.join(dir, "smoke.sh")
-    File.write!(host, smoke)
+
+    stub = """
+    #!/bin/bash
+    set -euo pipefail
+    case "${1:-}" in
+      --version)
+        echo "Muro stub"
+        ;;
+      check)
+        echo "All terms check. Evidence never becomes a run."
+        ;;
+      emit)
+        book=$2
+        : > "${book%.muro}.rs"
+        ;;
+      *)
+        echo "unexpected: $*" >&2
+        exit 2
+        ;;
+    esac
+    """
+
+    for name <- ["muro-0.20.7-linux-x86_64", "muro-0.20.7-linux-aarch64"] do
+      path = Path.join(dist, name)
+      File.write!(path, stub)
+      File.chmod!(path, 0o755)
+    end
 
     {out, status} =
-      System.cmd("bash", [host],
+      System.cmd("bash", [host, dist],
         cd: dir,
         stderr_to_stdout: true,
         env: [{"PATH", stub_dir <> ":" <> System.get_env("PATH")}]
       )
 
     assert status == 0, out
+    assert out =~ "SMOKE native"
+    assert File.exists?(captured)
     body = File.read!(captured)
     assert body =~ "bash /release-std-smoke.sh /tmp/muro"
     assert body =~ "test -f /tmp/one.rs"
