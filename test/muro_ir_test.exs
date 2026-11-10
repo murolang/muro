@@ -178,6 +178,62 @@ defmodule Muro.IRTest do
     assert fun.ret == {:data, "Atom"}
   end
 
+  test "an erased constructor field is marked erased and a spec alias of Nat is not" do
+    dir = Path.join(System.tmp_dir!(), "muro_ir_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    path = Path.join(dir, "mark.muro")
+
+    File.write!(path, """
+    def R : spec Type := Nat
+
+    data Box : Type where
+      mk : Π (- e : Nat) → Nat → Box
+
+    def one : run Nat := (λ (r : R) → suc r) 0
+
+    def boxed : run Box := mk 0 (suc (suc 0))
+
+    def live : run Nat :=
+      match boxed motive (λ _ → Nat)
+        | mk e n => n
+    """)
+
+    {:ok, book} = Muro.Load.file(path)
+    book = Muro.Prelude.for_emit(book)
+
+    assert {:ok, plain} = Muro.IR.elaborate(book)
+    assert {:ok, closed} = Muro.IR.elaborate(book, closures: true)
+
+    assert fun_body(plain, "one") == {:let, "r", :nat, :ze, {:su, {:var, "r"}}}
+    assert fun_body(closed, "one") == {:let, "r", :nat, :ze, {:su, {:var, "r"}}}
+
+    assert fun_body(plain, "live") ==
+             {:match, {:call, "boxed", []},
+              [{:arm, "mk", ["n"], {:let, "e", :erased, :ze, {:var, "n"}}}]}
+
+    assert fun_body(closed, "live") ==
+             {:match, {:call, "boxed", []}, {:data, "Box"},
+              [{:arm, "mk", ["n"], {:let, "e", :erased, :ze, {:var, "n"}}}]}
+
+    assert fun_body(plain, "boxed") == {:con, "Box", "mk", [{:su, {:su, :ze}}]}
+
+    for funs <- [plain, closed] do
+      refute Enum.any?(["one", "live", "boxed"], fn name ->
+               opaque_zero?(fun_body(funs, name))
+             end)
+    end
+  end
+
+  defp fun_body(funs, name) do
+    Enum.find(funs, &(&1.name == name)).body
+  end
+
+  defp opaque_zero?({:let, _, :opaque, :ze, _}), do: true
+  defp opaque_zero?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&opaque_zero?/1)
+  defp opaque_zero?(t) when is_list(t), do: Enum.any?(t, &opaque_zero?/1)
+  defp opaque_zero?(_), do: false
+
   defp atom?({:con, "Atom", name, []}, name), do: true
   defp atom?(t, name) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&atom?(&1, name))
   defp atom?(t, name) when is_list(t), do: Enum.any?(t, &atom?(&1, name))

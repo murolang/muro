@@ -427,10 +427,10 @@ defmodule Muro.Emit.Zig do
     end
   end
 
-  # An erased constructor field. The placeholder is unit, not a Nat zero.
-  # A zero passed under a spec alias is bound at the argument's layout,
-  # so this clause does not see it.
-  defp emit_tm({:let, name, :opaque, :ze, body}, env, st) do
+  # An erased constructor field, marked `:erased`. The placeholder is
+  # unit, and the payload is ignored. A zero passed under a spec alias
+  # is bound at the argument's layout, so this clause does not see it.
+  defp emit_tm({:let, name, :erased, _val, body}, env, st) do
     if uses?(body, name) do
       {rn, st} = local(st, spell(name))
 
