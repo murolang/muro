@@ -1,6 +1,6 @@
 # JavaScript backend
 
-v1 emits a checked book's `run` terms as one ES module and one declaration file. Spec and evidence are omitted. The proof stops at the run image. The host translation is not the book.
+v1 emits a checked book's `run` terms as one ES module and one declaration file. A session endpoint in that book is a synchronous stepper in the same module. Spec and evidence are omitted. The proof stops at the run image. The host translation is not the book.
 
 `mix muro.emit path.muro --backend js` writes `<stem>.mjs` and `<stem>.d.ts` beside the book and prints both paths, one per line. `Muro.emit_js/1` returns `{:ok, [mjs, dts]}`. `node` runs the module. A `.mjs` file is an ES module without a `package.json`.
 
@@ -77,13 +77,14 @@ Two source names that reach one identifier are refused before any file is writte
 
 ## Unsupported
 
-A book that contains one of these is refused before any file is written. The error is the whole message. The first matching declaration in the book wins.
+A book that contains one of these is refused before any file is written. The error is the whole message. A host placement is refused before a session is planned. A session the machine cannot represent is refused before a run is elaborated.
 
 - `c:machine`. `F32`, `Tensor`, `addt`, and `packI`, including `examples/nx_add.muro`.
 - `c:stream`. A raw `ν`, `Always`, or `~` inside a `run`. A `run` whose type is `Stream` is emitted. An `evidence` `Always` or `~` is omitted with the other evidence.
 - `c:erased`. A gone variable used as a value.
-- `c:session`. A session, a conformance, a meeting, an endpoint, a reading, a choreography, a talk, a seat, a link, or a relay. A book that also has runs is refused.
-- `c:host`. A place, a scheme, or a move.
+- `c:host`. A place, a scheme, or a move. A book that also has sessions is refused the same way, and nothing is written. `--backend fsm` may still emit those sessions.
+- A session, meeting, endpoint, reading, choreography, talk, seat, link, or relay that the state machine cannot represent. The reason is the one `--backend fsm` reports (`seen is not a state machine`, an unguarded `rec`, an unknown session, and the rest of that list). Nothing is written. A conformance or a meeting on its own does not refuse the book: the endpoints are the steppers.
+- A session payload whose type has a `repr`, including a field of a payload data type and a `Nat` bound when `Nat` has a `repr`. The stepper uses the run image, not a host codec. The reason names the session and the type. `--backend fsm` still accepts that book.
 
 OTP, `--node`, fsm, and `repr` codecs are not this backend. A lambda is a closure, and this backend emits it.
 
@@ -103,10 +104,38 @@ Tests elaborate the same book twice. Elixir comes from `Muro.emit_file/3`, compi
 
 A layout-directed Elixir walk treats `{:suc, _}` as a `Nat` before it treats an atom-headed tuple as a constructor. A pair of `Nat`s is printed as a pair. Atoms and nullary constructors print without a colon, so `:b0` and the string `"b0"` agree, and `:nil` and `{tag: "nil", fields: []}` both print `nil`.
 
+## Sessions
+
+A session endpoint is one exported object. The name is the session's JavaScript spelling (`grant-end` is `grant_end`). A host name gains `_k`, so the session `window` is `window_k`. `done?` is the method `done`. The generated code is synchronous. It does not start a process, and it does not talk to a peer. The host sends and receives on its own transport.
+
+```js
+let state = ping.init();
+ping.expected(state);                 // { k: "recv", type: "nat" }
+const step = ping.recv(state, 0n);   // { ok: state } or { error }
+state = step.ok;
+ping.done(state);                     // true or false
+ping.check_trace([{ k: "recv", value: 0n }, { k: "send", value: 1n }], { complete: true });
+```
+
+`init` returns the state. A parameterized session takes one bigint nat per parameter: `stream.init(0n)`. The wrong arity, or a nat that is not a non-negative bigint, returns `{ error: { message } }` and does not throw.
+
+`send` and `recv` return `{ ok: state }` or `{ error: { unexpected: true, step, expected, value } }`. `value` is the host value unchanged. `step` is the same string `--backend fsm` uses: the book path, the line, the session, the ordinal, and the action.
+
+`expected` is `"done"`, `{ k: "send", type }` or `{ k: "recv", type }`, or `{ k: "send_pick", labels: ["b0", "b1"] }` or `{ k: "recv_pick", labels: ["b0", "b1"] }`. A type is `"nat"`, `"bit"`, `"unit"`, `{ k: "pair", left, right }`, `{ k: "record", fields }`, `{ k: "vec", elem, len }`, `{ k: "data", name, args }`, or `{ k: "nat_at_most", max }`.
+
+A payload is the run image. A nat is a bigint. A bit is `"b0"` or `"b1"`. Unit is `null`. A pair is a two-element array. A record is an object whose keys are the field names. A vector is an array. Data is `{ tag, fields }`, including declared `Bool`. A choice is `{ k: "pick", label: "b0" }` or `"b1"`, passed to `send` on a chooser and to `recv` on a brancher.
+
+`check_trace` replays `{ k: "send", value }` and `{ k: "recv", value }`. A prefix is valid and returns `{ ok: true }`. A bad step returns `{ error: { index, unexpected: true, step, expected, value } }`. `{ complete: true }` also requires `done`, or `{ error: { index, incomplete: true, step, expected } }`. A parameterized session takes `{ args: [0n] }`. A missing or wrong-length `args` list returns `{ error: { message } }`.
+
+A book may declare runs and sessions together. The runs stay exported functions. A state is opaque. `muro__session` is the only field the declaration file names.
+
+The declaration file exports `SessionStepper` and one `export const` per session. `init` may return a state or `{ error: { message } }`. `send` and `recv` return `{ ok }` or `{ error }`.
+
+An `async` wrapper that loops on `expected` and waits for the host is not emitted.
+
 ## Open questions
 
 - Generics in the declaration file (`List<A>` rather than `unknown`).
 - A real string type, distinct from atoms.
-- Whether a later version should map a session to async functions or to an `init` / `send` / `recv` stepper. This backend refuses the book.
 - Browsers, beyond Node, once the module is loaded as an ES module.
 - Whether a saturated partial application should eta-contract to the export. The module emits the wrapper `(m) => plus(n, m)`.

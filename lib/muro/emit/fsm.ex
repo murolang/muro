@@ -40,6 +40,43 @@ defmodule Muro.Emit.Fsm do
     end
   end
 
+  @doc false
+  def image(book, path, opts \\ []) when is_list(book) do
+    case plan(book, path, opts) do
+      {:ok, st} ->
+        sessions =
+          Enum.map(st.sessions, fn sess ->
+            entry = Map.fetch!(st.opened, sess.name)
+
+            %{
+              name: sess.name,
+              params: Enum.map(entry.params, &to_string/1),
+              proto: entry.proto,
+              end_step: entry.end_step,
+              file: entry.file,
+              line: entry.line
+            }
+          end)
+
+        duals =
+          Map.new(dual_templates(st), fn {name, {params, proto}} ->
+            {name, {Enum.map(params, &to_string/1), proto}}
+          end)
+
+        {:ok,
+         %{
+           sessions: sessions,
+           duals: duals,
+           decls: Session.payload_decls(st.book),
+           reprs: repr_names(st.book),
+           runs: st.runs |> MapSet.to_list() |> Enum.sort()
+         }}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   defp plan(book, path, opts) do
     label = book_label(path, opts)
 

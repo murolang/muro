@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.25
+
+JavaScript emit writes each session endpoint as a synchronous stepper beside the runs. The module starts no process and talks to no peer. The host owns the transport.
+
+One object per session. `init` returns the state. `send` and `recv` return `{ok: state}` or `{error: {unexpected, step, expected, value}}` and do not throw. `done` is true at the end. `expected` is the next step. `check_trace` replays a list of sends and receives. A parameter is a nat on `init` and an `args` list on `check_trace`.
+
+A payload is the same value a run uses: a bigint nat, `"b0"` or `"b1"`, `null`, a two-element array, an object, or `{tag, fields}`. A choice is `{k: "pick", label: "b0"}`. A book may declare runs and sessions together. A place, a scheme, or a move is still refused. A protocol the machine cannot represent is refused, and nothing is written. The declaration file types each stepper.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.25.
+
 ## 0.20.20
 
 `mix muro.emit path.muro --backend js` writes `<stem>.mjs` and `<stem>.d.ts` beside the book and prints both paths. `Muro.emit_js/1` returns `{:ok, [mjs, dts]}`. Spec and evidence are omitted. The proof stops at the run image.

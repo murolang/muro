@@ -54,28 +54,22 @@ defmodule Muro.EmitJSTest do
     refute source =~ "export function step"
   end
 
-  test "a session or a host placement is refused and nothing is written" do
+  test "a host placement is refused and nothing is written" do
     dir = tmp()
+    File.cp!("examples/place.muro", Path.join(dir, "place.muro"))
+    path = Path.join(dir, "place.muro")
 
-    for {stem, reason} <- [
-          {"ping", "c:session"},
-          {"indexed", "c:session"},
-          {"computed", "c:session"},
-          {"place", "c:host"}
-        ] do
-      File.cp!("examples/#{stem}.muro", Path.join(dir, "#{stem}.muro"))
-      path = Path.join(dir, "#{stem}.muro")
-
-      assert_raise Mix.Error, ~r/\A#{reason}\z/, fn ->
-        Mix.Tasks.Muro.Emit.run([path, "--backend", "js"])
-      end
-
-      refute File.exists?(Path.join(dir, "#{stem}.mjs"))
-      refute File.exists?(Path.join(dir, "#{stem}.d.ts"))
+    assert_raise Mix.Error, ~r/\Ac:host\z/, fn ->
+      Mix.Tasks.Muro.Emit.run([path, "--backend", "js"])
     end
 
-    for kind <- ~w(session conform meet endpoint read choreography talk seat link relay)a do
-      assert {:error, "c:session"} = Muro.Emit.JS.render([%{kind: kind}], "x")
+    refute File.exists?(Path.join(dir, "place.mjs"))
+    refute File.exists?(Path.join(dir, "place.d.ts"))
+
+    assert {:error, "ill-formed session"} = Muro.Emit.JS.render([%{kind: :session}], "x")
+
+    for kind <- ~w(conform meet endpoint read choreography talk seat link relay)a do
+      assert {:ok, _source, _types} = Muro.Emit.JS.render([%{kind: kind}], "x")
     end
 
     for kind <- ~w(place scheme move)a do
