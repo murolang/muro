@@ -541,6 +541,8 @@ defmodule Muro.EmitJSReprTest do
     refute bools =~ "muro_repr_else"
     refute bools =~ "muro_repr_map_of"
     refute bools =~ "muro_repr_decode_interned"
+    refute bools =~ "muro_repr_borrow_begin"
+    refute bools =~ "muro_repr_string_ok"
     refute bools =~ "muro_repr_bin_from"
     refute bools =~ "muro_repr_atom("
     refute types =~ "muro_repr_atom"
@@ -805,6 +807,136 @@ defmodule Muro.EmitJSReprTest do
     g = decoded(m.decode_bag(ints));
     const intsBack = took(m.encode_bag(g.value, g.table));
     check(intsBack instanceof Map && intsBack.size === 2000 && intsBack.get(0) === true && intsBack.get(1) === false, "2000 integer keys");
+    """)
+  end
+
+  @tag skip: @node_skip
+  test "name tables, string order, and plain maps match the Elixir codec" do
+    dir = tmp()
+    path = write!(dir, "probe.muro", probe_src())
+    {source, _} = emit_path!(dir, "probe")
+    assert source =~ "function muro_repr_string_ok("
+    assert source =~ "value.isWellFormed()"
+    assert source =~ "function muro_repr_str_cmp("
+    assert source =~ "new WeakMap()"
+    assert source =~ "muro_repr_borrow_begin()"
+    refute source =~ "Object.keys(by_name).length"
+
+    mod = Muro.JSReprReviewProbe
+    {:ok, ex} = Muro.emit_file(path, mod)
+    [{^mod, _bin}] = Code.compile_string(ex)
+
+    smile = "\u{1F600}"
+    tilde = "\u{FF5E}"
+    assert tilde < smile
+
+    assert {:ok, _value, table} = apply(mod, :decode_nat_map, [%{smile => true, tilde => true}])
+
+    assert table_names(table) == [tilde, smile]
+    assert table.by_name[tilde] == 0
+    assert table.by_name[smile] == 1
+
+    node!(dir, """
+    import * as m from "./probe.mjs";
+    #{@harness}
+    const smile = "\\u{1F600}";
+    const tilde = "\\u{FF5E}";
+    check(smile < tilde, "javascript < is utf-16");
+    const wire = {};
+    wire[smile] = true;
+    wire[tilde] = true;
+    let g = decoded(m.decode_nat_map(wire));
+    check(names(g.table)[0] === tilde && names(g.table)[1] === smile, "code point order " + dump(names(g.table)));
+    check(g.table.by_name[tilde] === 0 && g.table.by_name[smile] === 1, dump(g.table.by_name));
+    check(same(g.value, T("natmap", T("cons", [0n, T("true")], T("cons", [1n, T("true")], T("nil"))))), dump(g.value));
+    const flipped = {};
+    flipped[tilde] = true;
+    flipped[smile] = true;
+    const g2 = decoded(m.decode_nat_map(flipped));
+    check(same(names(g2.table), names(g.table)) && same(g2.value, g.value), "insertion order does not matter");
+
+    const preset = m.muro_repr_table_new(["a", "b"]);
+    const presetNames = preset.by_name;
+    const presetIndex = preset.by_index;
+    g = decoded(m.decode_names(["b", "c", "d"], preset));
+    check(g.table !== preset, "result table is a new object");
+    check(preset.by_name === presetNames && preset.by_index === presetIndex, "preset maps stay");
+    check(same(names(preset), ["a", "b"]), dump(names(preset)));
+    check(same(names(g.table), ["a", "b", "c", "d"]), dump(names(g.table)));
+    check(Object.keys(g.table).length === 2, "result table shape");
+    const more = decoded(m.decode_names(["e"], g.table));
+    check(more.table !== g.table, "a returned table is copied again");
+    check(same(names(g.table), ["a", "b", "c", "d"]), "returned table stays");
+    check(same(names(more.table), ["a", "b", "c", "d", "e"]), dump(names(more.table)));
+    const known = decoded(m.decode_names(["a", "b"], preset));
+    check(known.table === preset, "known names keep the caller's table");
+
+    const lone = "\\uD800";
+    const kept = m.muro_repr_table_new(["ok"]);
+    let r = reason(m.decode_wrap(lone, kept), [], "not_string");
+    check(r.value === lone, "lone surrogate value");
+    check(same(names(kept), ["ok"]), "lone surrogate does not intern");
+    r = reason(m.decode_wrap("a\\uD800b", kept), [], "not_string");
+    check(r.value === "a\\uD800b", "embedded surrogate");
+    check(same(names(kept), ["ok"]), "embedded surrogate does not intern");
+    g = decoded(m.decode_wrap(smile, kept));
+    check(g.table !== kept && same(names(kept), ["ok"]), "astral name leaves the preset");
+    check(same(names(g.table), ["ok", smile]), dump(names(g.table)));
+
+    const empty = m.muro_repr_table_new();
+    const encoded = took(m.encode_nat(2000000n, empty));
+    check(encoded === 2000000 && typeof encoded === "number", "2000000 encodes as a number");
+    const max = BigInt(Number.MAX_SAFE_INTEGER);
+    check(typeof took(m.encode_nat(max, empty)) === "number", "max safe integer encodes as a number");
+    const over = max + 1n;
+    check(took(m.encode_nat(over, empty)) === over, "above the safe integer stays a bigint");
+    reason(m.decode_nat(1000001), [], "nat_too_large");
+
+    reason(m.decode_bag(new Date(0)), [], "not_map");
+    class Holder { constructor() { this.k = true; } }
+    const holder = new Holder();
+    r = reason(m.decode_bag(holder), [], "not_map");
+    check(r.value === holder, "class instance value");
+    r = reason(m.decode_nat_map(new Date(0)), [], "not_map");
+    check(r.value instanceof Date, "date is not a string map");
+    reason(m.decode_nat_map(holder), [], "not_map");
+    g = decoded(m.decode_bag({}));
+    check(same(g.value, T("bag", T("nil"))), "empty literal map");
+    g = decoded(m.decode_bag(Object.create(null)));
+    check(same(g.value, T("bag", T("nil"))), "empty null prototype map");
+    g = decoded(m.decode_nat_map({ k: true }));
+    check(same(names(g.table), ["k"]), "literal map");
+    const bare = Object.create(null);
+    bare.k = true;
+    g = decoded(m.decode_nat_map(bare));
+    check(same(names(g.table), ["k"]), "null prototype map");
+    const proto = Object.create(null);
+    proto["__proto__"] = true;
+    g = decoded(m.decode_nat_map(proto));
+    check(same(names(g.table), ["__proto__"]), "proto key on a null prototype");
+
+    r = reason(m.decode_same(new Map([["b", true], ["a", false]])), [], "keys_collide");
+    check(r.a === "a" && r.b === "b", dump(r));
+    r = reason(m.decode_collide(new Map([[1, false], [1n, true]])), [], "keys_collide");
+    check(r.a === 1 && r.b === 1n, dump(r));
+    g = decoded(m.decode_dict({ b: true, a: false }));
+    check(names(g.table)[0] === "a" && names(g.table)[1] === "b", dump(names(g.table)));
+    check(same(took(m.encode_dict(g.value, g.table)), { a: false, b: true }), "binary numeral keys round trip");
+
+    const many = [];
+    for (let i = 0; i < 10000; i++) many.push("n" + i + "xxxxxxxx");
+    const t0 = Date.now();
+    g = decoded(m.decode_names(many));
+    const nameMs = Date.now() - t0;
+    check(nameMs < 5000, "10000 names took " + nameMs + "ms");
+    check(names(g.table).length === 10000, "10000 name count " + names(g.table).length);
+    const host = {};
+    for (let i = 0; i < 10000; i++) host["k" + i + "xxxxxxxx"] = i % 2 === 0;
+    const t1 = Date.now();
+    g = decoded(m.decode_nat_map(host));
+    const mapMs = Date.now() - t1;
+    check(mapMs < 5000, "10000 map keys took " + mapMs + "ms");
+    check(names(g.table).length === 10000, "10000 map count " + names(g.table).length);
     """)
   end
 
@@ -1315,5 +1447,53 @@ defmodule Muro.EmitJSReprTest do
       names : List Nat → Names
     repr Names := list interned string
     """
+  end
+
+  defp probe_src do
+    """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+    data Names : Type where
+      names : List Nat → Names
+    data Wrap : Type where
+      wrap : Nat → Wrap
+    data NatMap : Type where
+      natmap : List (Nat × Bool) → NatMap
+    data Bag : Type where
+      bag : List (Nat × Bool) → Bag
+    data Flag : Type where
+      no : Flag
+      yes : Nat → Flag
+    data Same : Type where
+      same : List (Flag × Bool) → Same
+    data Collide : Type where
+      collide : List (Nat × Bool) → Collide
+    data Bit : Type where
+      d1 : Bit → Bit
+      z : Bit
+      d2 : Bit → Bit
+    data Dict : Type where
+      dict : List (Bit × Bool) → Dict
+    repr Bool := boolean
+    repr Nat := integer
+    repr Names := list interned string
+    repr Wrap := interned string
+    repr NatMap := map_of interned string => boolean
+    repr Bag := map_of integer => boolean
+    repr Flag := no => nil | yes => integer
+    repr Same := map_of (Flag else no) => boolean
+    repr Collide := map_of (integer else 0) => boolean
+    repr Dict := map_of interned string => boolean
+    """
+  end
+
+  defp table_names(%{by_index: by_index}) do
+    by_index
+    |> Enum.sort_by(fn {index, _name} -> index end)
+    |> Enum.map(fn {_index, name} -> name end)
   end
 end

@@ -23,6 +23,7 @@ defmodule Muro.Emit.JS.Repr do
     muro_repr_table_new
     muro_repr_table_names
     muro_repr_table_check
+    muro_repr_borrow_begin
     muro_repr_table_copy
     muro_repr_inspect
     muro_repr_is_ctor
@@ -45,6 +46,7 @@ defmodule Muro.Emit.JS.Repr do
     muro_repr_expect
     muro_repr_atom_name
     muro_repr_wire_rank
+    muro_repr_str_cmp
     muro_repr_wire_cmp
     muro_repr_array_cmp
     muro_repr_map_cmp
@@ -61,6 +63,7 @@ defmodule Muro.Emit.JS.Repr do
     muro_repr_encode_nullable
     muro_repr_list_decode
     muro_repr_list_encode
+    muro_repr_string_ok
     muro_repr_decode_interned
     muro_repr_intern_index
     muro_repr_name_term
@@ -69,6 +72,7 @@ defmodule Muro.Emit.JS.Repr do
     muro_repr_bin_from
     muro_repr_bin_index
     muro_repr_term_eq
+    muro_repr_term_key
     muro_repr_map_put
     muro_repr_finish_map
     muro_repr_finish_entries
@@ -99,7 +103,7 @@ defmodule Muro.Emit.JS.Repr do
     kinds = interned_kinds(plans)
     keep_nat = num_fallback?(plans)
     helpers = helper_sources(kinds, keep_nat)
-    funs = Enum.map_join(plans, "\n\n", fn {d, codec} -> render_pair(d, codec, by_fun) end)
+    funs = Enum.map_join(plans, "\n\n", fn {d, codec} -> render_pair(d, codec, by_fun, kinds) end)
 
     set =
       (called(funs) ++ ["muro_repr_table_new", "muro_repr_table_names", "muro_repr_table_check"])
@@ -123,15 +127,19 @@ defmodule Muro.Emit.JS.Repr do
     end
   end
 
-  defp render_pair(d, codec, plans) do
+  defp render_pair(d, codec, plans, kinds) do
     fun = Repr.snake_ident(d.name)
     dec = "decode_" <> fun
     enc = "encode_" <> fun
+
+    borrow =
+      if MapSet.size(kinds) == 0, do: "", else: "muro_repr_borrow_begin();"
 
     """
     export function #{dec}(value, table) {
       const checked = muro_repr_table_check(table === undefined ? muro_repr_table_new() : table, "#{dec}");
       if (checked.error) return checked;
+      #{borrow}
       return muro_repr_dec_#{fun}(value, [], checked.ok);
     }
 
@@ -936,6 +944,7 @@ defmodule Muro.Emit.JS.Repr do
       "muro_repr_table_new" => table_new_src(),
       "muro_repr_table_names" => table_names_src(),
       "muro_repr_table_check" => table_check_src(),
+      "muro_repr_borrow_begin" => borrow_src(),
       "muro_repr_table_copy" => table_copy_src(),
       "muro_repr_inspect" => inspect_src(),
       "muro_repr_is_ctor" => is_ctor_src(),
@@ -958,6 +967,7 @@ defmodule Muro.Emit.JS.Repr do
       "muro_repr_expect" => expect_src(),
       "muro_repr_atom_name" => atom_name_src(),
       "muro_repr_wire_rank" => wire_rank_src(),
+      "muro_repr_str_cmp" => str_cmp_src(),
       "muro_repr_wire_cmp" => wire_cmp_src(),
       "muro_repr_array_cmp" => array_cmp_src(),
       "muro_repr_map_cmp" => map_cmp_src(),
@@ -974,6 +984,7 @@ defmodule Muro.Emit.JS.Repr do
       "muro_repr_encode_nullable" => nullable_enc_src(),
       "muro_repr_list_decode" => list_dec_src(),
       "muro_repr_list_encode" => list_enc_src(),
+      "muro_repr_string_ok" => string_ok_src(),
       "muro_repr_decode_interned" => interned_dec_src(),
       "muro_repr_intern_index" => intern_index_src(),
       "muro_repr_name_term" => name_term_src(kinds),
@@ -982,6 +993,7 @@ defmodule Muro.Emit.JS.Repr do
       "muro_repr_bin_from" => bin_from_src(),
       "muro_repr_bin_index" => bin_index_src(),
       "muro_repr_term_eq" => term_eq_src(),
+      "muro_repr_term_key" => term_key_src(),
       "muro_repr_map_put" => map_put_src(),
       "muro_repr_finish_map" => finish_map_src(),
       "muro_repr_finish_entries" => finish_entries_src(),
@@ -1042,14 +1054,32 @@ defmodule Muro.Emit.JS.Repr do
     """
   end
 
+  # One private copy per decode call. `muro_repr_borrow` changes at each public
+  # decode, so a table returned earlier is not written when the caller passes
+  # it back. The mark lives in a WeakMap: `muro_repr_table_check` rejects a
+  # table with any key besides `by_name` and `by_index`.
+  defp borrow_src do
+    """
+    const muro_repr_owned = new WeakMap();
+    let muro_repr_borrow = 0;
+    function muro_repr_borrow_begin() {
+      muro_repr_borrow += 1;
+    }
+    """
+  end
+
   defp table_copy_src do
     """
     function muro_repr_table_copy(table) {
       const by_name = Object.create(null);
       const by_index = Object.create(null);
-      for (const k of Object.keys(table.by_name)) by_name[k] = table.by_name[k];
-      for (const k of Object.keys(table.by_index)) by_index[k] = table.by_index[k];
-      return { by_name, by_index };
+      const nameKeys = Object.keys(table.by_name);
+      for (let i = 0; i < nameKeys.length; i++) by_name[nameKeys[i]] = table.by_name[nameKeys[i]];
+      const indexKeys = Object.keys(table.by_index);
+      for (let i = 0; i < indexKeys.length; i++) by_index[indexKeys[i]] = table.by_index[indexKeys[i]];
+      const next = { by_name, by_index };
+      muro_repr_owned.set(next, { borrow: muro_repr_borrow, size: nameKeys.length });
+      return next;
     }
     """
   end
@@ -1107,7 +1137,9 @@ defmodule Muro.Emit.JS.Repr do
   defp is_plain_src do
     """
     function muro_repr_is_plain(value) {
-      return value !== null && typeof value === "object" && !Array.isArray(value) && !(value instanceof Map) && !muro_repr_is_atom(value);
+      if (value === null || typeof value !== "object" || Array.isArray(value) || value instanceof Map || muro_repr_is_atom(value)) return false;
+      const proto = Object.getPrototypeOf(value);
+      return proto === Object.prototype || proto === null;
     }
     """
   end
@@ -1269,6 +1301,26 @@ defmodule Muro.Emit.JS.Repr do
     """
   end
 
+  # Code points, matching Elixir's byte order for every valid Unicode string.
+  defp str_cmp_src do
+    """
+    function muro_repr_str_cmp(a, b) {
+      if (a === b) return 0;
+      let i = 0;
+      let j = 0;
+      while (i < a.length && j < b.length) {
+        const ca = a.codePointAt(i);
+        const cb = b.codePointAt(j);
+        if (ca !== cb) return ca < cb ? -1 : 1;
+        i += ca > 0xFFFF ? 2 : 1;
+        j += cb > 0xFFFF ? 2 : 1;
+      }
+      if (i === a.length && j === b.length) return 0;
+      return i === a.length ? -1 : 1;
+    }
+    """
+  end
+
   defp wire_cmp_src do
     """
     function muro_repr_wire_cmp(a, b) {
@@ -1284,11 +1336,11 @@ defmodule Muro.Emit.JS.Repr do
       if (ra === 1) {
         const na = muro_repr_atom_name(a);
         const nb = muro_repr_atom_name(b);
-        return na < nb ? -1 : na > nb ? 1 : 0;
+        return muro_repr_str_cmp(na, nb);
       }
       if (ra === 2) return muro_repr_array_cmp(a, b);
       if (ra === 3) return muro_repr_map_cmp(a, b);
-      if (ra === 4) return a < b ? -1 : a > b ? 1 : 0;
+      if (ra === 4) return muro_repr_str_cmp(a, b);
       return 0;
     }
     """
@@ -1492,10 +1544,29 @@ defmodule Muro.Emit.JS.Repr do
     """
   end
 
+  defp string_ok_src do
+    """
+    function muro_repr_string_ok(value) {
+      if (typeof value !== "string") return false;
+      if (typeof value.isWellFormed === "function") return value.isWellFormed();
+      for (let i = 0; i < value.length; i++) {
+        const c = value.charCodeAt(i);
+        if (c < 0xD800 || c > 0xDFFF) continue;
+        if (c <= 0xDBFF && i + 1 < value.length) {
+          const n = value.charCodeAt(i + 1);
+          if (n >= 0xDC00 && n <= 0xDFFF) { i += 1; continue; }
+        }
+        return false;
+      }
+      return true;
+    }
+    """
+  end
+
   defp interned_dec_src do
     """
     function muro_repr_decode_interned(value, path, table, kind, reserved) {
-      if (typeof value !== "string" || reserved.indexOf(value) !== -1) return { error: { path, reason: { k: "not_string", value } } };
+      if (!muro_repr_string_ok(value) || reserved.indexOf(value) !== -1) return { error: { path, reason: { k: "not_string", value } } };
       return muro_repr_intern_index(value, path, table, kind);
     }
     """
@@ -1506,11 +1577,17 @@ defmodule Muro.Emit.JS.Repr do
     function muro_repr_intern_index(name, path, table, kind) {
       const by_name = table.by_name;
       if (Object.prototype.hasOwnProperty.call(by_name, name)) return { ok: { value: muro_repr_name_term(by_name[name], kind), table } };
-      const i = Object.keys(by_name).length;
+      let next = table;
+      let mark = muro_repr_owned.get(table);
+      if (mark === undefined || mark.borrow !== muro_repr_borrow) {
+        next = muro_repr_table_copy(table);
+        mark = muro_repr_owned.get(next);
+      }
+      const i = mark.size;
       if (i > muro_repr_nat_max) return { error: { path, reason: { k: "too_many_names", max: muro_repr_nat_max } } };
-      const next = muro_repr_table_copy(table);
       next.by_name[name] = i;
       next.by_index[String(i)] = name;
+      mark.size = i + 1;
       return { ok: { value: muro_repr_name_term(i, kind), table: next } };
     }
     """
@@ -1644,6 +1721,34 @@ defmodule Muro.Emit.JS.Repr do
     """
   end
 
+  # A key for `muro_repr_term_eq`. Bigints and `{tag, fields}` terms share a
+  # key when they are structurally equal, including two different objects.
+  defp term_key_src do
+    """
+    let muro_repr_term_seq = 0;
+    function muro_repr_term_key(term) {
+      if (typeof term === "bigint") return "i" + term.toString() + ";";
+      if (term === null) return "n;";
+      if (typeof term === "boolean") return term ? "t;" : "f;";
+      if (typeof term === "string") return "s" + term.length + ":" + term + ";";
+      if (typeof term === "number") return "u" + (Object.is(term, -0) ? "-0" : String(term)) + ";";
+      if (typeof term === "undefined") return "v;";
+      if (typeof term !== "object") return "x" + typeof term + ";";
+      if (Array.isArray(term)) {
+        let s = "a" + term.length + ":";
+        for (let i = 0; i < term.length; i++) s += muro_repr_term_key(term[i]);
+        return s + ";";
+      }
+      if (muro_repr_is_data(term)) {
+        let s = "d" + term.tag.length + ":" + term.tag + ":" + term.fields.length + ":";
+        for (let i = 0; i < term.fields.length; i++) s += muro_repr_term_key(term.fields[i]);
+        return s + ";";
+      }
+      return "o" + String(++muro_repr_term_seq) + ";";
+    }
+    """
+  end
+
   defp map_put_src do
     """
     function muro_repr_map_put(map, key, value, fun) {
@@ -1690,7 +1795,7 @@ defmodule Muro.Emit.JS.Repr do
       const pairs = muro_repr_entries(value);
       pairs.sort((a, b) => muro_repr_wire_cmp(a[0], b[0]));
       const acc = [];
-      const seen = [];
+      const seen = new Map();
       for (let i = 0; i < pairs.length; i++) {
         const wk = pairs[i][0];
         const wv = pairs[i][1];
@@ -1698,16 +1803,16 @@ defmodule Muro.Emit.JS.Repr do
         if (ks.error) return ks;
         const mk = ks.ok.value;
         table = ks.ok.table;
-        let prev = null;
-        for (const s of seen) if (muro_repr_term_eq(s.mk, mk)) prev = s;
-        if (prev) {
-          const ordered = muro_repr_wire_cmp(prev.wk, wk) <= 0 ? [prev.wk, wk] : [wk, prev.wk];
+        const id = muro_repr_term_key(mk);
+        if (seen.has(id)) {
+          const prevWk = seen.get(id);
+          const ordered = muro_repr_wire_cmp(prevWk, wk) <= 0 ? [prevWk, wk] : [wk, prevWk];
           return { error: { path, reason: { k: "keys_collide", a: muro_repr_show(ordered[0]), b: muro_repr_show(ordered[1]) } } };
         }
         const vs = valFun(wv, path.concat([muro_repr_show(wk)]), table);
         if (vs.error) return vs;
         table = vs.ok.table;
-        seen.push({ mk, wk });
+        seen.set(id, wk);
         acc.push(elemFun(mk, vs.ok.value));
       }
       let packed = { tag: nilCtor, fields: [] };
