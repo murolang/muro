@@ -37,18 +37,19 @@ defmodule Muro.Gen do
   `Muro.Emit.C.prepare/2` and writes the `.c` target and the `.h`
   beside it. A `:rust` entry calls `Muro.Emit.Rust.render/2`. A
   `:zig` entry calls `Muro.Emit.Zig.render/2`. An `:asm` entry calls
-  `Muro.Emit.Asm.render/2`. The stem passed to those emitters is the
+  `Muro.Emit.Asm.render/2`. A `:js` entry calls `Muro.Emit.JS.render/2`
+  and writes the `.mjs` target and the `.d.ts` beside it. The stem passed to those emitters is the
   book basename.
   The Elixir bytes are formatted with the project's `.formatter.exs`
   when that file exists (`Mix.Tasks.Format.formatter_for_file/2`),
   and with `Code.format_string!/2` otherwise. `.ex` and `.exs` are
   formatted even when the formatter inputs do not list the file. The
   header is comments, so formatting does not rewrite it. `:c`,
-  `:rust`, `:zig`, and `:asm` are not formatted. The body hash is the
+  `:rust`, `:zig`, `:asm`, and `:js` are not formatted. The body hash is the
   emitter's text. There is no timestamp and no absolute path.
 
-  The header comment is `#` for Elixir, `//` for C, Rust, Zig, and the
-  C header, and `@` for Cortex-M assembly. The words of the two
+  The header comment is `#` for Elixir, `//` for C, Rust, Zig, JavaScript,
+  the C header, and the declaration file, and `@` for Cortex-M assembly. The words of the two
   lines are the same.
 
   An ExUnit entry's body lists skipped equations in a comment. That
@@ -283,7 +284,7 @@ defmodule Muro.Gen do
 
   defp render(root, entry, version, fuel) do
     case Map.get(entry, :kind, :elixir) do
-      kind when kind in [:c, :rust, :zig, :asm] ->
+      kind when kind in [:c, :rust, :zig, :asm, :js] ->
         render_native(root, entry, version, fuel, kind)
 
       _kind ->
@@ -376,10 +377,21 @@ defmodule Muro.Gen do
     end
   end
 
+  defp native_parts(entry, :js, book, stem) do
+    case Muro.Emit.JS.render(book, stem) do
+      {:ok, source, types} ->
+        {:ok, [{entry.target, source}, {dts_rel(entry.target), types}]}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   defp comment_prefix(:asm), do: "@ "
   defp comment_prefix(_kind), do: "// "
 
   defp header_rel(target), do: Path.rootname(target) <> ".h"
+  defp dts_rel(target), do: Path.rootname(target) <> ".d.ts"
 
   defp emit_entry(root, entry, fuel) do
     path = Muro.Manifest.book_path(root, entry)
@@ -535,6 +547,7 @@ defmodule Muro.Gen do
   defp output_rels(entry) do
     case Map.get(entry, :kind, :elixir) do
       :c -> [entry.target, header_rel(entry.target)]
+      :js -> [entry.target, dts_rel(entry.target)]
       _kind -> [entry.target]
     end
   end

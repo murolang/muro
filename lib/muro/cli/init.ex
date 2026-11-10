@@ -21,7 +21,7 @@ defmodule Muro.CLI.Init do
         value: "NAME",
         default: "the backend this directory selects",
         doc:
-          "Store this backend on the manifest. It does not change which file is written. The value is elixir, c, rust, zig, asm, fsm, or exunit. Without the flag, a Mix project omits the key."
+          "Store this backend on the manifest. It does not change which file is written. The value is elixir, c, rust, zig, asm, js, fsm, or exunit. Without the flag, a Mix project omits the key."
       },
       %{
         name: :cargo_metadata,
@@ -80,25 +80,27 @@ defmodule Muro.CLI.Init do
 
   @doc false
   def run_mix(args) do
-    {opts, rest, invalid} = OptionParser.parse(args, strict: [ci: :string])
+    {opts, rest, invalid} = OptionParser.parse(args, strict: [ci: :string, backend: :string])
 
     cond do
       invalid != [] ->
         {:raise, "", "unknown option: #{inspect(invalid)}"}
 
       rest != [] ->
-        {:raise, "", "usage: mix muro.init [--ci github]"}
+        {:raise, "", "usage: mix muro.init [--ci github] [--backend NAME]"}
 
       true ->
-        case ci_value(Keyword.get(opts, :ci)) do
-          {:ok, ci} ->
-            case Muro.Init.write(Muro.Manifest.root(), Mix.Tasks.Muro.version(), ci) do
-              {:ok, lines, note} -> {:ok, created(lines, note), ""}
-              {:error, message} -> {:raise, "", message}
-            end
-
-          {:error, message} ->
-            {:raise, "", message}
+        with {:ok, ci} <- ci_value(Keyword.get(opts, :ci)),
+             {:ok, backend} <- backend_value(Keyword.get(opts, :backend)) do
+          case Muro.Init.write(Muro.Manifest.root(), Mix.Tasks.Muro.version(),
+                 ci: ci,
+                 backend: backend
+               ) do
+            {:ok, lines, note} -> {:ok, created(lines, note), ""}
+            {:error, message} -> {:raise, "", message}
+          end
+        else
+          {:error, message} -> {:raise, "", message}
         end
     end
   end
@@ -144,7 +146,7 @@ defmodule Muro.CLI.Init do
 
   defp backend_value(nil), do: {:ok, nil}
 
-  defp backend_value(name) when name in ~w(elixir c rust zig asm fsm exunit) do
+  defp backend_value(name) when name in ~w(elixir c rust zig asm js fsm exunit) do
     {:ok, String.to_atom(name)}
   end
 

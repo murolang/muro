@@ -17,10 +17,10 @@ defmodule Mix.Tasks.Muro.Gen do
   `fuel:` is optional. `modules:` lists `{book, module, target}` or
   `{book, module, target, opts}`. A 3-tuple emits Elixir. `opts` may
   set `kind: :exunit`, `kind: :fsm`, `kind: :c`, `kind: :rust`,
-  `kind: :zig`, or `kind: :asm`, and for `:exunit`, `impl: An.Adapter` and
-  `imports: true`. A `:c`, `:rust`, `:zig`, or `:asm` entry may omit the
+  `kind: :zig`, `kind: :asm`, or `kind: :js`, and for `:exunit`, `impl: An.Adapter` and
+  `imports: true`. A `:c`, `:rust`, `:zig`, `:asm`, or `:js` entry may omit the
   module (`{book, target, [kind: :c]}`). `:c` also writes the `.h`
-  beside the `.c`. `imports:` is a boolean, default `false`, and is
+  beside the `.c`. `:js` also writes the `.d.ts` beside the `.mjs`. `imports:` is a boolean, default `false`, and is
   valid only for `:exunit`. `imports: true` also collects the closed
   equations of the files that book imports directly. An ExUnit target
   is usually `test/<name>_test.exs`. After the `written` or

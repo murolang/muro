@@ -48,7 +48,9 @@ defmodule Mix.Tasks.Muro.Emit do
 
   `--backend js` writes `<name>.mjs` and `<name>.d.ts` next to the file
   and prints those paths. `node` runs the module. A lambda is a
-  JavaScript closure. The proof stops at the run image.
+  JavaScript closure. A self-tail call is a loop, and other named
+  recursion is trampolined. At the host boundary `I64` is a signed
+  bigint. The proof stops at the run image.
 
   `--backend asm` writes `<name>.s` next to the file and prints that
   path. The text is Thumb for Cortex-M0, for a closed `Nat` run.

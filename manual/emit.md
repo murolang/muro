@@ -105,17 +105,17 @@ The text is Zig 0.15. `zig` translates it. The proof stops at the run image.
 
 ## JavaScript
 
-`--backend js` writes `<name>.mjs` and `<name>.d.ts` next to the file and prints both paths. It emits `run` and `run internal` only. `run internal` is a function the module does not export. `Nat` is a JavaScript bigint: `0` is `0n` and `suc` adds one. The host passes `4n`, not `4`. `Unit` is `null`. A word is the same unsigned residue the Elixir backend computes, so `I64` −1 is `2^64−1`, not a negative bigint. `match` on `Nat` tests `0n`. `match` on data switches on the constructor name. A constructor is `{tag, fields}`. An atom is the source name as a string.
+`--backend js` writes `<name>.mjs` and `<name>.d.ts` next to the file and prints both paths. It emits `run` and `run internal` only. `run internal` is a function the module does not export. `Nat` is a JavaScript bigint: `0` is `0n` and `suc` adds one. The host passes `4n`, not `4`. `Unit` is `null`. `U8`, `U32`, and `U64` are unsigned residues. At the host boundary `I64` is a signed bigint: the host sees `-1n` for `I64` −1 and `-(2n**63n)` for the minimum, and a signed input is accepted. Inside the module, word operations keep the unsigned residue, the same integer the Elixir backend computes. A constructor field of `I64` stays that residue. `match` on `Nat` tests `0n`. `match` on data switches on the constructor name. A constructor is `{tag, fields}`. An atom is the source name as a string.
 
-A lambda is a JavaScript closure. A definition is one function of its live arguments, so the host calls `plus(2n, 3n)`. A function value is curried, so a parameter of type `Nat → Nat` is called as `f(n)`. An unapplied lambda, a definition passed as a value, and a call of a local function are emitted. C, Rust, and Zig still refuse those (`c:lambda`). `F32`, `Tensor`, `addt`, and `packI` are refused (`c:machine`). A raw `ν`, `Always`, or `~` inside a `run` is refused (`c:stream`).
+A lambda is a JavaScript closure. A definition is one function of its live arguments, so the host calls `plus(2n, 3n)`. A function value is curried, so a parameter of type `Nat → Nat` is called as `f(n)`. An unapplied lambda, a definition passed as a value, and a call of a local function are emitted. C, Rust, and Zig still refuse those (`c:lambda`). `F32`, `Tensor`, `addt`, and `packI` are refused (`c:machine`). A raw `ν`, `Always`, or `~` inside a `run` is refused (`c:stream`). A gone variable used as a value is refused (`c:erased`). A session, a meeting, or a host placement (`place`, `scheme`, `move`) refuses the book, and nothing is written.
 
 A `run` stream is an object: the seed, an environment for values the step closes over, and the step. `uncons` calls the step and returns the head together with a new object for the tail. The original seed stays in place. The step is a function of the module. `half(4n)` is `2n` and `plus(2n, 3n)` is `5n`, the same integers the Nat NIF returns.
 
 Identifiers use the same split as the C text. A source spelling contains no `__`. It gains `_k` when the encoding is a JavaScript keyword, a host name such as `Array` or `undefined`, or a TypeScript word the declaration file cannot reuse. A binder is claimed against the function names in the file. A helper or a step is `muro__` plus a tag. `a-b`, `a_b`, and `a_b_2` stay three functions.
 
-The declaration file names the exported runs and the data they build. A polymorphic field is `unknown`. `I64` in that file is the unsigned residue. Internal runs and steps are not exported. `node` runs the module. The proof stops at the run image.
+The declaration file names the exported runs and the data they build. A polymorphic field is `unknown`. `I64` in that file is the signed bigint the host sees. Internal runs and steps are not exported. `node` runs the module. The proof stops at the run image.
 
-A direct recursive call is a JavaScript call. Engines do not guarantee that the call reuses the frame, so a deep `Nat` recursion can overflow the stack.
+A self-tail call compiles to a loop. Other named recursion is trampolined, so a deep `Nat` recursion stays within the JavaScript stack. A host closure that recurses on itself uses the host stack.
 
 ## Cortex-M
 

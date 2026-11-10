@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Muro is an explicit affine dependent type theory built for agents to write. As the agent, you carry the formal verification: every type, motive and proof step is written out and nothing is inferred, so the checker either accepts your file or names each failing definition. A spec never becomes evidence. Evidence never becomes a run. Only `run` terms are emitted, as Elixir (BEAM), as C, as Rust, as Zig, or as Cortex-M assembly, from the same source.
+Muro is an explicit affine dependent type theory built for agents to write. As the agent, you carry the formal verification: every type, motive and proof step is written out and nothing is inferred, so the checker either accepts your file or names each failing definition. A spec never becomes evidence. Evidence never becomes a run. Only `run` terms are emitted, as Elixir (BEAM), as C, as Rust, as Zig, as JavaScript, or as Cortex-M assembly, from the same source.
 
 The canonical contract is [`manual/for-agents.md`](manual/for-agents.md). If this file and that page ever disagree, that page wins.
 
@@ -65,6 +65,7 @@ mix muro.emit path.muro --backend c         # <name>.h and <name>.c; a Nat run i
 mix muro.emit path.muro --backend rust      # <name>.rs
 mix muro.emit path.muro --backend zig       # <name>.zig
 mix muro.emit path.muro --backend asm       # <name>.s, Cortex-M0, Nat run
+mix muro.emit path.muro --backend js        # <name>.mjs and <name>.d.ts; node runs the module
 mix muro.emit path.muro --backend fsm       # one state machine per session, on stdout
 ```
 
@@ -74,6 +75,7 @@ mix muro.emit path.muro --backend fsm       # one state machine per session, on 
 {:ok, files} = Muro.emit_rust("examples/your_file.muro")      # .rs
 {:ok, files} = Muro.emit_zig("examples/your_file.muro")       # .zig
 {:ok, files} = Muro.emit_asm("examples/your_file.muro")       # .s
+{:ok, files} = Muro.emit_js("examples/your_file.muro")        # .mjs and .d.ts
 ```
 
 A `repr` makes `mix muro.emit` also write `decode_<type>/1`, `decode_<type>/2`, and `encode_<type>/2`. Decode returns `{:ok, value, table}`. Encode takes that table. See [Host representations](manual/repr.md).
@@ -84,7 +86,7 @@ The C backend refuses some terms that the Elixir backend accepts. `U8`, `U32`, `
 
 ## Committed modules
 
-`mix muro.gen` writes a module from a manifest (`muro.exs`, a `:muro` key in `mix.exs`, or `muro.toml`) into the path the manifest names. The module name is the manifest's alias, passed to `Muro.emit_file/3`. C, Rust, Zig, and assembly entries name a target and no module. The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256. Do not edit that file by hand. The `.muro` file is the source. Run `mix muro.gen` after changing it. `mix muro.gen --check` fails when the committed file and the book disagree. `muro:` must equal the running version. `mix muro.init` creates the manifest and prints a note that points at `muro skills add`. It does not write that file. See [Committed modules](manual/gen.md).
+`mix muro.gen` writes a module from a manifest (`muro.exs`, a `:muro` key in `mix.exs`, or `muro.toml`) into the path the manifest names. The module name is the manifest's alias, passed to `Muro.emit_file/3`. C, Rust, Zig, JavaScript, and assembly entries name a target and no module. A JavaScript entry also writes the `.d.ts` beside the `.mjs`. The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256. Do not edit that file by hand. The `.muro` file is the source. Run `mix muro.gen` after changing it. `mix muro.gen --check` fails when the committed file and the book disagree. `muro:` must equal the running version. `mix muro.init` creates the manifest and prints a note that points at `muro skills add`. It does not write that file. See [Committed modules](manual/gen.md).
 
 ## Pitfalls seen in practice
 

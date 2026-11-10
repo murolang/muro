@@ -109,6 +109,48 @@ defmodule Muro.InitBinTest do
     assert elixir_source =~ "backend: :elixir,"
     assert {:ok, %{backend: :elixir}} = Muro.Manifest.load(elixir)
     assert elixir_source != Muro.Init.manifest_source(version)
+
+    js = tmp()
+    assert cli(js, ["init", "--backend", "js"]) =~ "created muro.toml\n"
+    js_toml = File.read!(Path.join(js, "muro.toml"))
+    assert js_toml =~ ~s(backend = "js")
+    assert js_toml =~ ~s(target = "src/rounding.mjs")
+
+    forced_js = tmp()
+    File.write!(Path.join(forced_js, "mix.exs"), mix_exs())
+    assert cli(forced_js, ["init", "--backend", "js"]) =~ "created muro.exs\n"
+    js_exs = File.read!(Path.join(forced_js, "muro.exs"))
+    assert js_exs =~ "backend: :js,"
+    assert js_exs =~ "src/rounding.mjs"
+    assert js_exs =~ "kind: :js"
+    assert {:ok, %{backend: :js}} = Muro.Manifest.load(forced_js)
+
+    unknown = tmp()
+    assert cli_status(unknown, ["init", "--backend", "nope"]) == 1
+  end
+
+  test "mix muro.init --backend js stores the entry and refuses an unknown backend" do
+    version = Mix.Tasks.Muro.version()
+    dir = tmp()
+    File.write!(Path.join(dir, "mix.exs"), mix_exs())
+
+    out =
+      File.cd!(dir, fn ->
+        ExUnit.CaptureIO.capture_io(fn ->
+          assert Mix.Tasks.Muro.Init.run(["--backend", "js"]) == :ok
+        end)
+      end)
+
+    assert out =~ "created muro.exs\n"
+    source = File.read!(Path.join(dir, "muro.exs"))
+    assert source =~ "backend: :js,"
+    assert source =~ ~s(src/rounding.mjs)
+    assert source =~ "kind: :js"
+    assert {:ok, %{backend: :js, version: ^version}} = Muro.Manifest.load(dir)
+
+    assert_raise Mix.Error, ~r/unknown backend: nope/, fn ->
+      File.cd!(dir, fn -> Mix.Tasks.Muro.Init.run(["--backend", "nope"]) end)
+    end
   end
 
   test "init diffs an existing manifest instead of writing a second one" do

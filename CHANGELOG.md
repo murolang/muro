@@ -6,15 +6,17 @@
 
 The module is an ES module. `node` loads it without a `package.json`. Exported runs are `export function` with one parameter per live argument. `run internal` is a function the module does not export. A lambda is a native arrow function and closes over the bindings in scope. A definition is uncurried. A function value is curried. JavaScript elaborates with `Muro.IR.elaborate(book, closures: true)`. C, Rust, and Zig keep the default closed image and still refuse an unapplied lambda (`c:lambda`).
 
-`Nat` is a bigint: `0` is `0n`, and the host passes `4n`. `Unit` is `null`. Data is `{tag, fields}` with the source constructor name. An atom is the source name as a JavaScript string, without a colon. A pair is a two-element array. A stream is `{seed, env, step}`. `U8`, `U32`, `U64`, and `I64` are bigint residues in `0 .. 2^w-1`. `I64` is not a signed bigint. Word `Opt` is `{k: "none"}` or `{k: "some", v}`. A word bool is a JavaScript boolean. `true` and `false` from `Bool` stay the strings `"true"` and `"false"`.
+`Nat` is a bigint: `0` is `0n`, and the host passes `4n`. `Unit` is `null`. Data is `{tag, fields}` with the source constructor name. An atom is the source name as a JavaScript string, without a colon. A pair is a two-element array. A stream is `{seed, env, step}`. `U8`, `U32`, and `U64` are unsigned bigint residues. At the host boundary `I64` is a signed bigint: `-1n` is `I64` −1, and the minimum is `-(2n**63n)`. A signed input is accepted. Inside the module, word operations keep the unsigned residue and match the Elixir backend. Word `Opt` is `{k: "none"}` or `{k: "some", v}`. A word bool is a JavaScript boolean. `true` and `false` from `Bool` stay the strings `"true"` and `"false"`. A constructor field stays the residue.
 
-Word operations follow `Muro.Word` and return the same integers the Elixir backend returns. `F32`, `Tensor`, `addt`, and `packI` stay `c:machine`. A raw `ν`, `Always`, or `~` inside a `run` stays `c:stream`. Sessions, OTP, `--node`, `repr` codecs, and host effects are not emitted. A session declaration in a book that also has runs is omitted, and the runs are emitted.
+Word operations follow `Muro.Word` and return the same integers the Elixir backend returns. `F32`, `Tensor`, `addt`, and `packI` stay refused. A raw `ν`, `Always`, or `~` inside a `run` stays refused. A book that contains a session, a meeting, or a host placement is refused, and nothing is written. OTP, `--node`, and `repr` codecs are not emitted.
 
-`muro__data`, `muro__uncons`, and `muro__canon` are the host helpers. JavaScript engines do not guarantee tail-call elimination, and v1 does not trampoline. A recursion whose depth follows a `Nat` can overflow the stack.
+`muro__data`, `muro__uncons`, and `muro__canon` are the host helpers. A self-tail call is a loop. Other named recursion is trampolined, so a deep `Nat` recursion stays within the JavaScript stack. A self-tail `count` of one million steps matches the Elixir backend. A host closure that recurses on itself uses the host stack.
+
+`mix muro.gen` and `mix muro.init` accept `backend: js`. A JavaScript entry writes the module and the declaration file.
 
 ### Tests
 
-- `test/muro_emit_js_test.exs` emits the same book as Elixir and as JavaScript, runs the module under `node`, and compares `muro__canon` strings. Streams are compared by a forced prefix. Those cases are skipped only when `node` is not on `PATH`.
+- `test/muro_emit_js_test.exs` emits the same book as Elixir and as JavaScript, runs the module under `node`, and compares `muro__canon` strings. Streams are compared by a forced prefix. A tail-recursive `count` of one million steps agrees with Elixir, and the host reads `I64` −1 as `-1n`. Those cases are skipped only when `node` is not on `PATH`.
 
 ### Manual
 

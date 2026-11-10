@@ -4,9 +4,16 @@ defmodule Muro.Emit.JS do
   Run bodies are the closure image from `Muro.IR` (`closures: true`).
 
   The text is an ES module. `node` runs the `.mjs`. A `.d.ts` beside it
-  names the host types. A refusal of a term this backend still rejects
-  is the elaboration's: `c:machine`, `c:stream`, `c:erased`, `c:unsupported`.
-  A lambda is a closure, so `c:lambda` is not a refusal here.
+  names the host types. A self-tail call is a loop. Any other named
+  recursion, including mutual recursion, is a trampoline, so a deep
+  `Nat` does not grow the JavaScript stack. At the host boundary an
+  `I64` is a signed bigint and an unsigned word is an unsigned bigint.
+  Inside the module, word operations keep the unsigned residue.
+
+  A refusal is `c:machine`, `c:stream`, `c:erased`, `c:session`,
+  `c:host`, or `c:unsupported`. A lambda is a closure, so `c:lambda`
+  is not a refusal here. A session declaration or a host placement
+  refuses the book.
 
   This is not `Muro.Emit.Node`. That file is the BEAM `--node` backend.
 
@@ -57,7 +64,16 @@ defmodule Muro.Emit.JS do
     shl ashr shr toZ fromZ inRange some none
     cadd csub cmul badDiv negBits absBits div rem
     of ton cast scrut pair
+    bounce go hole ret stack
   )
+
+  @session_kinds ~w(
+    session conform meet endpoint read choreography talk seat link relay
+  )a
+
+  @host_kinds ~w(place scheme move)a
+
+  @unsigned_words [:u8, :u32, :u64]
 
   @doc """
   Render `book` as an ES module and a declaration file for `stem`.
@@ -106,7 +122,8 @@ defmodule Muro.Emit.JS do
   def source_id(name) when is_binary(name), do: spell(name)
 
   defp compile(book) do
-    with {:ok, funs} <- IR.elaborate(book, closures: true),
+    with :ok <- refuse_book(book),
+         {:ok, funs} <- IR.elaborate(book, closures: true),
          {:ok, groups, _} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
       h = helper_map()
       taken = MapSet.new(Map.values(h))
@@ -125,6 +142,8 @@ defmodule Muro.Emit.JS do
         |> MapSet.union(MapSet.new(Map.values(step_names)))
         |> Name.open()
 
+      rec = recursive_names(funs)
+
       st = %{
         h: h,
         names: names,
@@ -132,7 +151,12 @@ defmodule Muro.Emit.JS do
         step_funs: Map.new(steps, &{&1.name, &1}),
         file_scope: visible,
         scope: visible,
-        vars: %{}
+        vars: %{},
+        targets: build_targets(funs, names, step_names, rec),
+        rec: rec,
+        k: 0,
+        self: nil,
+        params: []
       }
 
       ordered = steps ++ Enum.map(groups, fn {fun, _} -> fun end)
@@ -142,6 +166,97 @@ defmodule Muro.Emit.JS do
       end
     end
   end
+
+  defp refuse_book(book) do
+    Enum.find_value(book, :ok, fn entry ->
+      kind = Map.get(entry, :kind, :def)
+
+      cond do
+        kind in @session_kinds -> {:error, "c:session"}
+        kind in @host_kinds -> {:error, "c:host"}
+        true -> nil
+      end
+    end)
+  end
+
+  defp recursive_names(funs) do
+    graph = Map.new(funs, fn fun -> {fun.name, calls_of(fun.body)} end)
+
+    Enum.reduce(Map.keys(graph), MapSet.new(), fn name, acc ->
+      if reaches?(name, name, graph, MapSet.new()), do: MapSet.put(acc, name), else: acc
+    end)
+  end
+
+  defp reaches?(origin, name, graph, seen) do
+    Enum.any?(Map.get(graph, name, []), fn callee ->
+      cond do
+        callee == origin -> true
+        MapSet.member?(seen, callee) -> false
+        true -> reaches?(origin, callee, graph, MapSet.put(seen, callee))
+      end
+    end)
+  end
+
+  defp calls_of(tm), do: tm |> calls_acc([]) |> Enum.uniq()
+
+  defp calls_acc({:call, name, args}, acc), do: Enum.reduce(args, [name | acc], &calls_acc/2)
+  defp calls_acc({:lam, _, _, body}, acc), do: calls_acc(body, acc)
+  defp calls_acc({:su, t}, acc), do: calls_acc(t, acc)
+  defp calls_acc({:pair, a, b}, acc), do: calls_acc(b, calls_acc(a, acc))
+  defp calls_acc({:con, _, _, args}, acc), do: Enum.reduce(args, acc, &calls_acc/2)
+  defp calls_acc({:appv, f, a}, acc), do: calls_acc(a, calls_acc(f, acc))
+  defp calls_acc({:let, _, _, val, body}, acc), do: calls_acc(body, calls_acc(val, acc))
+  defp calls_acc({:letp, _, _, e, body}, acc), do: calls_acc(body, calls_acc(e, acc))
+  defp calls_acc({:uncons, e}, acc), do: calls_acc(e, acc)
+
+  defp calls_acc({:stream, seed, caps, _step}, acc) do
+    Enum.reduce(caps, calls_acc(seed, acc), fn {_name, tm}, acc -> calls_acc(tm, acc) end)
+  end
+
+  defp calls_acc({:match, scrut, _, arms}, acc) do
+    Enum.reduce(arms, calls_acc(scrut, acc), fn {:arm, _, _, body}, acc ->
+      calls_acc(body, acc)
+    end)
+  end
+
+  defp calls_acc({:wrd, _, _, args}, acc), do: Enum.reduce(args, acc, &calls_acc/2)
+  defp calls_acc(_tm, acc), do: acc
+
+  defp build_targets(funs, names, step_names, rec) do
+    Map.new(funs, fn fun ->
+      js = js_name(fun, names, step_names)
+      recursive = MapSet.member?(rec, fun.name)
+      boundary = fun.export == true and boundary?(fun)
+      call = if boundary, do: js <> "__r", else: js
+      worker = if recursive, do: js <> "__w", else: nil
+
+      {fun.name,
+       %{
+         js: js,
+         recursive: recursive,
+         boundary: boundary,
+         call: call,
+         worker: worker,
+         arity: length(fun.params)
+       }}
+    end)
+  end
+
+  defp js_name(fun, names, step_names) do
+    if generated_fun?(fun),
+      do: Map.fetch!(step_names, fun.name),
+      else: Map.fetch!(names, fun.name)
+  end
+
+  defp boundary?(fun) do
+    converts?(fun.ret) or Enum.any?(fun.params, fn {_name, lay} -> converts?(lay) end)
+  end
+
+  defp converts?(:i64), do: true
+  defp converts?(kind) when kind in @unsigned_words, do: true
+  defp converts?({:opt, inner}), do: converts?(inner)
+  defp converts?({:pair, a, b}), do: converts?(a) or converts?(b)
+  defp converts?(_lay), do: false
 
   defp emit_all(funs, st) do
     Enum.reduce_while(funs, {:ok, []}, fn fun, {:ok, acc} ->
@@ -153,24 +268,563 @@ defmodule Muro.Emit.JS do
   end
 
   defp emit_fun(fun, st) do
-    base = %{st | scope: st.file_scope, vars: %{}}
-    {fst, name, kw, params} = open_fun(fun, base)
+    info = Map.fetch!(st.targets, fun.name)
+    base = %{st | scope: st.file_scope, vars: %{}, k: 0, self: nil, params: []}
 
-    with {:ok, body} <- emit_tm(fun.body, fst) do
-      args = Enum.map_join(params, ", ", fn {_src, rn, _lay} -> rn end)
-      head = "#{kw} #{name}(#{args})"
-
-      {:ok,
-       %{
-         fun: fun,
-         name: name,
-         kw: kw,
-         params: params,
-         head: head,
-         text: head <> " {\n  return (" <> body <> ");\n}"
-       }}
+    cond do
+      info.recursive -> emit_worker(fun, base, info)
+      info.boundary -> emit_boundary(fun, base, info)
+      true -> emit_plain(fun, base)
     end
   end
+
+  defp emit_plain(fun, st) do
+    {fst, name, kw, params} = open_fun(fun, st)
+
+    with {:ok, body} <- emit_tm(fun.body, fst) do
+      head = "#{kw} #{name}(#{arg_names(params)})"
+      {:ok, compiled(fun, name, kw, params, head, block(head, ["return (#{body});"]))}
+    end
+  end
+
+  defp emit_boundary(fun, st, info) do
+    {fst, name, _kw, params} = open_fun(fun, st)
+
+    with {:ok, body} <- emit_tm(fun.body, fst) do
+      residue = block("function #{info.call}(#{arg_names(params)})", ["return (#{body});"])
+      wrapper = wrapper_block(name, params, fun.ret, info, fst)
+      head = "export function #{name}(#{arg_names(params)})"
+      {:ok, compiled(fun, name, "export function", params, head, residue <> "\n" <> wrapper)}
+    end
+  end
+
+  defp emit_worker(fun, st, info) do
+    {fst, name, kw, params} = open_fun(fun, st)
+    fst = %{fst | self: fun.name, params: params}
+
+    with {:ok, lines, _fst} <- cps(fun.body, fst, true) do
+      args = arg_names(params)
+      worker_args = call_args(Enum.map(params, fn {_src, rn, _lay} -> rn end), fst.h.stack)
+
+      worker =
+        block(
+          "function #{info.worker}(#{worker_args})",
+          ["while (true) {"] ++ indent(lines) ++ ["}"]
+        )
+
+      bounce_body = [
+        "return #{fst.h.bounce}((#{fst.h.stack}) => #{info.worker}(#{pass_args(params, fst.h.stack)}));"
+      ]
+
+      bounce =
+        if info.boundary do
+          block("function #{info.call}(#{args})", bounce_body) <>
+            "\n" <> wrapper_block(name, params, fun.ret, info, fst)
+        else
+          block("#{kw} #{name}(#{args})", bounce_body)
+        end
+
+      head =
+        if fun.export, do: "export function #{name}(#{args})", else: "function #{name}(#{args})"
+
+      kw_out = if fun.export, do: "export function", else: "function"
+      {:ok, compiled(fun, name, kw_out, params, head, worker <> "\n" <> bounce)}
+    end
+  end
+
+  defp wrapper_block(host, params, ret, info, st) do
+    ins = Enum.map_join(params, ", ", fn {_src, rn, lay} -> in_expr(rn, lay) end)
+    retn = st.h.ret
+
+    block("export function #{host}(#{arg_names(params)})", [
+      "const #{retn} = #{info.call}(#{ins});",
+      "return #{out_expr(retn, ret)};"
+    ])
+  end
+
+  defp compiled(fun, name, kw, params, head, text) do
+    %{fun: fun, name: name, kw: kw, params: params, head: head, text: text}
+  end
+
+  defp block(head, lines) do
+    inner =
+      Enum.map_join(lines, "\n", fn
+        "" -> ""
+        line -> "  " <> line
+      end)
+
+    head <> " {\n" <> inner <> "\n}"
+  end
+
+  defp indent(lines) do
+    Enum.map(lines, fn
+      "" -> ""
+      line -> "  " <> line
+    end)
+  end
+
+  defp arg_names(params), do: Enum.map_join(params, ", ", fn {_src, rn, _lay} -> rn end)
+
+  defp pass_args(params, stack) do
+    call_args(Enum.map(params, fn {_src, rn, _lay} -> rn end), stack)
+  end
+
+  defp call_args([], stack), do: stack
+  defp call_args(es, stack), do: Enum.join(es, ", ") <> ", " <> stack
+
+  defp cps(tm, st, tail?) do
+    if contains_rec?(tm, st.rec) do
+      cps_rec(tm, st, tail?)
+    else
+      with {:ok, expr} <- emit_tm(tm, st), do: {:ok, ["return (#{expr});"], st}
+    end
+  end
+
+  defp cps_rec({:let, name, lay, val, body}, st, tail?) do
+    if contains_rec?(val, st.rec) do
+      cps_suspend(val, fn hole -> {:let, name, lay, hole, body} end, st)
+    else
+      cps_let_pure(name, lay, val, body, st, tail?)
+    end
+  end
+
+  defp cps_rec({:letp, a, b, e, body}, st, tail?) do
+    if contains_rec?(e, st.rec) do
+      cps_suspend(e, fn hole -> {:letp, a, b, hole, body} end, st)
+    else
+      cps_letp_pure(a, b, e, body, st, tail?)
+    end
+  end
+
+  defp cps_rec({:match, scrut, kind, arms}, st, tail?) do
+    if contains_rec?(scrut, st.rec) do
+      cps_suspend(scrut, fn hole -> {:match, hole, kind, arms} end, st)
+    else
+      cps_match(scrut, kind, arms, st, tail?)
+    end
+  end
+
+  defp cps_rec({:call, name, args}, st, tail?) do
+    if Enum.any?(args, &contains_rec?(&1, st.rec)) do
+      cps_suspend({:call, name, args}, fn hole -> hole end, st)
+    else
+      cps_call(name, args, st, tail?)
+    end
+  end
+
+  defp cps_rec(tm, st, _tail?), do: cps_suspend(tm, fn hole -> hole end, st)
+
+  defp cps_let_pure(name, lay, val, body, st, tail?) do
+    with {:ok, ve} <- emit_tm(val, st) do
+      {rn, scope} = Name.bind(spell(name), st.scope)
+      st2 = %{st | scope: scope, vars: Map.put(st.vars, name, rn)}
+      rhs = if lay == :opaque and val == :ze, do: "undefined", else: ve
+
+      with {:ok, lines, st3} <- cps(body, st2, tail?) do
+        {:ok, ["const #{rn} = (#{rhs});" | lines], st3}
+      end
+    end
+  end
+
+  defp cps_letp_pure(a, b, e, body, st, tail?) do
+    with {:ok, ee} <- emit_tm(e, st) do
+      {ra, scope} = Name.bind(spell(a), st.scope)
+      {rb, scope} = Name.bind(spell(b), scope)
+      {pn, st1} = fresh_name(%{st | scope: scope})
+      vars = st.vars |> Map.put(a, ra) |> Map.put(b, rb)
+      st2 = %{st1 | vars: vars}
+
+      with {:ok, lines, st3} <- cps(body, st2, tail?) do
+        {:ok,
+         [
+           "const #{pn} = (#{ee});",
+           "const #{ra} = #{pn}[0];",
+           "const #{rb} = #{pn}[1];"
+           | lines
+         ], st3}
+      end
+    end
+  end
+
+  defp cps_match(scrut, :nat, arms, st, tail?) do
+    with {:ok, se} <- emit_tm(scrut, st),
+         {:arm, "zero", _, zbody} <- arm(arms, "zero"),
+         {:arm, "suc", [y], sbody} <- arm(arms, "suc") do
+      {scr, st1} = fresh_name(st)
+
+      with {:ok, zlines, _} <- cps(zbody, st1, tail?),
+           {:ok, slines, rn} <- cps_suc(y, sbody, st1, scr, tail?) do
+        lines =
+          ["const #{scr} = (#{se});", "if (#{scr} === 0n) {"] ++
+            indent(zlines) ++
+            ["} else {"] ++
+            indent(["const #{rn} = #{st.h.pred}(#{scr});" | slines]) ++
+            ["}"]
+
+        {:ok, lines, st1}
+      end
+    else
+      {:error, _} = err -> err
+      _ -> {:error, "c:unsupported"}
+    end
+  end
+
+  defp cps_match(scrut, kind, arms, st, tail?) when kind == :atom or is_tuple(kind) do
+    with {:ok, se} <- emit_tm(scrut, st) do
+      {scr, st1} = fresh_name(st)
+
+      with {:ok, cases} <- cps_cases(arms, st1, kind, tail?, scr) do
+        switch_on = if kind == :atom, do: scr, else: "#{scr}.tag"
+
+        lines =
+          ["const #{scr} = (#{se});", "switch (#{switch_on}) {"] ++
+            cases ++
+            ["  default: { return #{st.h.abort}(); }", "}"]
+
+        {:ok, lines, st1}
+      end
+    end
+  end
+
+  defp cps_match(_scrut, _kind, _arms, _st, _tail?), do: {:error, "c:unsupported"}
+
+  defp cps_suc(y, body, st, _scr, tail?) do
+    {rn, scope} = Name.bind(spell(y), st.scope)
+    st2 = %{st | scope: scope, vars: Map.put(st.vars, y, rn)}
+
+    with {:ok, lines, _} <- cps(body, st2, tail?) do
+      {:ok, lines, rn}
+    end
+  end
+
+  defp cps_cases(arms, st, kind, tail?, scr) do
+    Enum.reduce_while(arms, {:ok, []}, fn arm, {:ok, acc} ->
+      case cps_one_case(arm, st, kind, tail?, scr) do
+        {:ok, lines} -> {:cont, {:ok, acc ++ lines}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
+
+  defp cps_one_case({:arm, cname, binders, body}, st, kind, tail?, scr) do
+    {names, st2} = if kind == :atom, do: {[], st}, else: bind_fields(binders, st)
+
+    with {:ok, lines, _} <- cps(body, st2, tail?) do
+      consts =
+        names
+        |> Enum.with_index()
+        |> Enum.map(fn {rn, i} -> "const #{rn} = #{scr}.fields[#{i}];" end)
+
+      {:ok, ["  case #{js_str(cname)}: {"] ++ indent(indent(consts ++ lines)) ++ ["  }"]}
+    end
+  end
+
+  defp cps_one_case(_arm, _st, _kind, _tail?, _scr), do: {:error, "c:unsupported"}
+
+  defp cps_call(name, args, st, tail?) do
+    with {:ok, info} <- target(st, name, length(args)),
+         {:ok, es} <- emit_many(args, st) do
+      cond do
+        tail? and name == st.self ->
+          {tmps, binds, st1} = bind_temps(es, st)
+          assigns = assign_params(st.params, tmps)
+          {:ok, binds ++ assigns ++ ["continue;"], st1}
+
+        info.recursive ->
+          {tmps, binds, st1} = bind_temps(es, st)
+
+          {:ok,
+           binds ++ ["return #{st.h.go}(() => #{info.worker}(#{call_args(tmps, st.h.stack)}));"],
+           st1}
+
+        true ->
+          {:ok, ["return #{info.call}(#{Enum.join(es, ", ")});"], st}
+      end
+    end
+  end
+
+  defp cps_suspend(focus, wrap, st) do
+    case lift(focus, st.rec) do
+      {:ok, {:call, name, args}, rebuild} ->
+        with {:ok, info} <- target(st, name, length(args)),
+             true <- info.recursive,
+             {:ok, es} <- emit_many(args, st) do
+          {hole, st1} = fresh_name(st)
+          whole = wrap.(rebuild.({:js, hole}))
+
+          with {:ok, rest, st2} <- cps(whole, st1, false) do
+            lines =
+              ["#{st.h.stack}.push((#{hole}) => {"] ++
+                indent(rest) ++
+                [
+                  "});",
+                  "return #{st.h.go}(() => #{info.worker}(#{call_args(es, st.h.stack)}));"
+                ]
+
+            {:ok, lines, st2}
+          end
+        else
+          false -> {:error, "c:unsupported"}
+          {:error, _} = err -> err
+        end
+
+      _ ->
+        {:error, "c:unsupported"}
+    end
+  end
+
+  defp target(st, name, arity) do
+    case Map.fetch(st.targets, name) do
+      {:ok, %{arity: ^arity} = info} -> {:ok, info}
+      {:ok, _info} -> {:error, "c:unsupported"}
+      :error -> {:error, "c:unsupported"}
+    end
+  end
+
+  defp bind_temps(es, st) do
+    {pairs, st} =
+      Enum.map_reduce(es, st, fn expr, st ->
+        {rn, st} = fresh_name(st)
+        {{rn, "const #{rn} = (#{expr});"}, st}
+      end)
+
+    {Enum.map(pairs, &elem(&1, 0)), Enum.map(pairs, &elem(&1, 1)), st}
+  end
+
+  defp assign_params(params, tmps) do
+    params
+    |> Enum.zip(tmps)
+    |> Enum.map(fn {{_src, rn, _lay}, tmp} -> "#{rn} = #{tmp};" end)
+  end
+
+  defp fresh_name(st) do
+    {rn, scope} = Name.bind(st.h.hole <> Integer.to_string(st.k), st.scope)
+    {rn, %{st | k: st.k + 1, scope: scope}}
+  end
+
+  defp contains_rec?({:call, name, args}, rec) do
+    MapSet.member?(rec, name) or Enum.any?(args, &contains_rec?(&1, rec))
+  end
+
+  defp contains_rec?({:lam, _, _, _}, _rec), do: false
+  defp contains_rec?({:js, _}, _rec), do: false
+  defp contains_rec?({:su, t}, rec), do: contains_rec?(t, rec)
+  defp contains_rec?({:pair, a, b}, rec), do: contains_rec?(a, rec) or contains_rec?(b, rec)
+  defp contains_rec?({:con, _, _, args}, rec), do: Enum.any?(args, &contains_rec?(&1, rec))
+  defp contains_rec?({:appv, f, a}, rec), do: contains_rec?(f, rec) or contains_rec?(a, rec)
+
+  defp contains_rec?({:let, _, _, val, body}, rec),
+    do: contains_rec?(val, rec) or contains_rec?(body, rec)
+
+  defp contains_rec?({:letp, _, _, e, body}, rec),
+    do: contains_rec?(e, rec) or contains_rec?(body, rec)
+
+  defp contains_rec?({:uncons, e}, rec), do: contains_rec?(e, rec)
+
+  defp contains_rec?({:stream, seed, caps, _step}, rec) do
+    contains_rec?(seed, rec) or Enum.any?(caps, fn {_name, tm} -> contains_rec?(tm, rec) end)
+  end
+
+  defp contains_rec?({:match, scrut, _, arms}, rec) do
+    contains_rec?(scrut, rec) or
+      Enum.any?(arms, fn {:arm, _, _, body} -> contains_rec?(body, rec) end)
+  end
+
+  defp contains_rec?({:wrd, _, _, args}, rec), do: Enum.any?(args, &contains_rec?(&1, rec))
+  defp contains_rec?(_tm, _rec), do: false
+
+  defp lift({:call, name, args} = tm, rec) do
+    case lift_list(args, rec) do
+      {:ok, index, call, rebuild} ->
+        {:ok, call, fn hole -> {:call, name, List.replace_at(args, index, rebuild.(hole))} end}
+
+      :none ->
+        if MapSet.member?(rec, name), do: {:ok, tm, fn hole -> hole end}, else: :none
+    end
+  end
+
+  defp lift({:lam, _, _, _}, _rec), do: :none
+  defp lift({:js, _}, _rec), do: :none
+  defp lift({:su, t}, rec), do: lift_one(t, rec, fn hole -> {:su, hole} end)
+
+  defp lift({:pair, a, b}, rec) do
+    case lift(a, rec) do
+      {:ok, call, rebuild} -> {:ok, call, fn hole -> {:pair, rebuild.(hole), b} end}
+      :none -> lift_one(b, rec, fn hole -> {:pair, a, hole} end)
+    end
+  end
+
+  defp lift({:con, data, cname, args}, rec) do
+    lift_kids(args, rec, fn args -> {:con, data, cname, args} end)
+  end
+
+  defp lift({:appv, f, a}, rec) do
+    case lift(f, rec) do
+      {:ok, call, rebuild} -> {:ok, call, fn hole -> {:appv, rebuild.(hole), a} end}
+      :none -> lift_one(a, rec, fn hole -> {:appv, f, hole} end)
+    end
+  end
+
+  defp lift({:let, name, lay, val, body}, rec) do
+    case lift(val, rec) do
+      {:ok, call, rebuild} ->
+        {:ok, call, fn hole -> {:let, name, lay, rebuild.(hole), body} end}
+
+      :none ->
+        lift_one(body, rec, fn hole -> {:let, name, lay, val, hole} end)
+    end
+  end
+
+  defp lift({:letp, a, b, e, body}, rec) do
+    case lift(e, rec) do
+      {:ok, call, rebuild} -> {:ok, call, fn hole -> {:letp, a, b, rebuild.(hole), body} end}
+      :none -> lift_one(body, rec, fn hole -> {:letp, a, b, e, hole} end)
+    end
+  end
+
+  defp lift({:uncons, e}, rec), do: lift_one(e, rec, fn hole -> {:uncons, hole} end)
+
+  defp lift({:stream, seed, caps, step}, rec) do
+    case lift(seed, rec) do
+      {:ok, call, rebuild} ->
+        {:ok, call, fn hole -> {:stream, rebuild.(hole), caps, step} end}
+
+      :none ->
+        lift_caps(caps, rec, fn caps -> {:stream, seed, caps, step} end)
+    end
+  end
+
+  defp lift({:match, scrut, kind, arms}, rec) do
+    case lift(scrut, rec) do
+      {:ok, call, rebuild} ->
+        {:ok, call, fn hole -> {:match, rebuild.(hole), kind, arms} end}
+
+      :none ->
+        lift_arms(arms, rec, fn arms -> {:match, scrut, kind, arms} end)
+    end
+  end
+
+  defp lift({:wrd, k, op, args}, rec) do
+    lift_kids(args, rec, fn args -> {:wrd, k, op, args} end)
+  end
+
+  defp lift(_tm, _rec), do: :none
+
+  defp lift_one(tm, rec, rebuild) do
+    case lift(tm, rec) do
+      {:ok, call, inner} -> {:ok, call, fn hole -> rebuild.(inner.(hole)) end}
+      :none -> :none
+    end
+  end
+
+  defp lift_kids(items, rec, rebuild) do
+    case lift_list(items, rec) do
+      {:ok, index, call, inner} ->
+        {:ok, call, fn hole -> rebuild.(List.replace_at(items, index, inner.(hole))) end}
+
+      :none ->
+        :none
+    end
+  end
+
+  defp lift_list(items, rec), do: lift_list(items, rec, 0)
+  defp lift_list([], _rec, _index), do: :none
+
+  defp lift_list([item | rest], rec, index) do
+    case lift(item, rec) do
+      {:ok, call, rebuild} -> {:ok, index, call, rebuild}
+      :none -> lift_list(rest, rec, index + 1)
+    end
+  end
+
+  defp lift_caps(caps, rec, rebuild) do
+    case lift_list(Enum.map(caps, fn {_name, tm} -> tm end), rec) do
+      {:ok, index, call, inner} ->
+        {:ok, call,
+         fn hole ->
+           rebuild.(List.update_at(caps, index, fn {name, _tm} -> {name, inner.(hole)} end))
+         end}
+
+      :none ->
+        :none
+    end
+  end
+
+  defp lift_arms([], _rec, _rebuild), do: :none
+
+  defp lift_arms([{:arm, cname, binders, body} | rest], rec, rebuild) do
+    case lift(body, rec) do
+      {:ok, call, inner} ->
+        {:ok, call,
+         fn hole ->
+           rebuild.([{:arm, cname, binders, inner.(hole)} | rest])
+         end}
+
+      :none ->
+        case lift_arms(rest, rec, fn arms -> arms end) do
+          {:ok, call, inner} ->
+            {:ok, call, fn hole -> rebuild.([{:arm, cname, binders, body} | inner.(hole)]) end}
+
+          :none ->
+            :none
+        end
+    end
+  end
+
+  defp lift_arms([_ | rest], rec, rebuild), do: lift_arms(rest, rec, rebuild)
+
+  defp arm(arms, name) do
+    case find_arm(arms, name) do
+      {:arm, _, _, _} = found -> found
+      _ -> {:error, "c:unsupported"}
+    end
+  end
+
+  defp in_expr(js, :i64), do: "BigInt.asUintN(64, #{js})"
+  defp in_expr(js, :u8), do: "BigInt.asUintN(8, #{js})"
+  defp in_expr(js, :u32), do: "BigInt.asUintN(32, #{js})"
+  defp in_expr(js, :u64), do: "BigInt.asUintN(64, #{js})"
+
+  defp in_expr(js, {:opt, inner}) do
+    if converts?(inner) do
+      "((#{js}) && (#{js}).k === \"some\" ? { k: \"some\", v: #{in_expr("(#{js}).v", inner)} } : (#{js}))"
+    else
+      js
+    end
+  end
+
+  defp in_expr(js, {:pair, a, b}) do
+    if converts?(a) or converts?(b) do
+      "[#{in_expr("(#{js})[0]", a)}, #{in_expr("(#{js})[1]", b)}]"
+    else
+      js
+    end
+  end
+
+  defp in_expr(js, _lay), do: js
+
+  defp out_expr(js, :i64), do: "BigInt.asIntN(64, #{js})"
+  defp out_expr(js, :u8), do: "BigInt.asUintN(8, #{js})"
+  defp out_expr(js, :u32), do: "BigInt.asUintN(32, #{js})"
+  defp out_expr(js, :u64), do: "BigInt.asUintN(64, #{js})"
+
+  defp out_expr(js, {:opt, inner}) do
+    if converts?(inner) do
+      "((#{js}) && (#{js}).k === \"some\" ? { k: \"some\", v: #{out_expr("(#{js}).v", inner)} } : (#{js}))"
+    else
+      js
+    end
+  end
+
+  defp out_expr(js, {:pair, a, b}) do
+    if converts?(a) or converts?(b) do
+      "[#{out_expr("(#{js})[0]", a)}, #{out_expr("(#{js})[1]", b)}]"
+    else
+      js
+    end
+  end
+
+  defp out_expr(js, _lay), do: js
 
   defp open_fun(fun, st) do
     {params, scope} =
@@ -217,12 +871,12 @@ defmodule Muro.Emit.JS do
          do: {:ok, "[#{ea}, #{eb}]"}
   end
 
+  defp emit_tm({:js, rn}, _st) when is_binary(rn), do: {:ok, rn}
+
   defp emit_tm({:call, name, args}, st) do
-    with {:ok, es} <- emit_many(args, st) do
-      case Map.fetch(st.names, name) do
-        {:ok, rn} -> {:ok, "#{rn}(#{Enum.join(es, ", ")})"}
-        :error -> {:error, "c:unsupported"}
-      end
+    with {:ok, info} <- target(st, name, length(args)),
+         {:ok, es} <- emit_many(args, st) do
+      {:ok, "#{info.call}(#{Enum.join(es, ", ")})"}
     end
   end
 
@@ -566,6 +1220,20 @@ defmodule Muro.Emit.JS do
     const #{h["half"]} = 9223372036854775808n;
 
     function #{h["abort"]}() { throw new Error("Empty"); }
+    function #{h["go"]}(f) { return { #{h["go"]}: f }; }
+    function #{h["bounce"]}(start) {
+      const stack = [];
+      let v = start(stack);
+      while (true) {
+        if (typeof v === "object" && v !== null && typeof v.#{h["go"]} === "function") {
+          v = v.#{h["go"]}();
+          continue;
+        }
+        if (stack.length === 0) return v;
+        const k = stack.pop();
+        v = k(v);
+      }
+    }
     function #{h["suc"]}(n) { return n + 1n; }
     function #{h["pred"]}(n) { return n === 0n ? 0n : n - 1n; }
     export function #{h["data"]}(tag, ...fields) { return { tag: tag, fields: fields }; }
@@ -575,7 +1243,7 @@ defmodule Muro.Emit.JS do
       return [#{h["pair"]}[0], { seed: #{h["pair"]}[1], env: s.env, step: s.step }];
     }
     export function #{h["canon"]}(v) {
-      if (typeof v === "bigint") return v.toString();
+      if (typeof v === "bigint") return (v < 0n ? BigInt.asUintN(64, v) : v).toString();
       if (v === null) return "tt";
       if (typeof v === "boolean") return v ? "true" : "false";
       if (typeof v === "string") return v;
@@ -718,7 +1386,10 @@ defmodule Muro.Emit.JS do
     [
       "// generated by muro — do not edit",
       "// The proof stops at the run image. This is a host binding, not the book.",
-      "// I64 is the unsigned residue in 0 .. 2^64-1, not a signed bigint.",
+      "// I64 at the host boundary is a signed bigint (BigInt.asIntN(64)).",
+      "// -1n is I64 −1. The minimum is -(2n**63n).",
+      "// Inside the module, word operations use the unsigned residue.",
+      "// U8, U32, and U64 are unsigned (BigInt.asUintN).",
       "// Nat is a bigint. A host passes 4n, not 4.",
       dts_prelude(),
       dts_data(book, types),

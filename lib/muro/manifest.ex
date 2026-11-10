@@ -22,7 +22,7 @@ defmodule Muro.Manifest do
       (`MyApp.Billing.Rounding`). A 3-tuple is an Elixir module.
       `opts` is a keyword list: `kind: :elixir` (the default),
       `kind: :exunit`, `kind: :fsm`, `kind: :c`, `kind: :rust`,
-      `kind: :zig`, or `kind: :asm`, and for `:exunit` an optional `impl:` alias,
+      `kind: :zig`, `kind: :asm`, or `kind: :js`, and for `:exunit` an optional `impl:` alias,
       the implementation the suite tests by default, and an optional
       `imports:` boolean. `imports: true` collects closed equations
       from the files that book imports directly. The default is
@@ -35,9 +35,9 @@ defmodule Muro.Manifest do
   not `:exunit`. `imports:` must be a boolean.
 
   `module` is required for `:elixir`, `:fsm`, and `:exunit`. A
-  `:c`, `:rust`, `:zig`, or `:asm` entry may omit it. The target then ends
-  with `.c`, `.rs`, `.zig`, or `.s`. A `:c` target also reserves the `.h`
-  written beside it. That path is checked as a target before
+  `:c`, `:rust`, `:zig`, `:asm`, or `:js` entry may omit it. The target then ends
+  with `.c`, `.rs`, `.zig`, `.s`, or `.mjs`. A `:c` target also reserves the `.h`
+  written beside it, and a `:js` target reserves the `.d.ts`. That path is checked as a target before
   generation: a directory is refused, and it is a duplicate when
   another entry names it. `backend` on a TOML manifest is the default kind
   for entries that omit one. `muro.exs` still defaults a missing
@@ -695,14 +695,14 @@ defmodule Muro.Manifest do
       :error ->
         {nil, errors}
 
-      {:ok, backend} when backend in [:elixir, :c, :rust, :zig, :asm, :fsm, :exunit] ->
+      {:ok, backend} when backend in [:elixir, :c, :rust, :zig, :asm, :js, :fsm, :exunit] ->
         {backend, errors}
 
       {:ok, backend} ->
         {nil,
          errors ++
            [
-             "manifest backend: must be elixir, c, rust, zig, asm, fsm, or exunit, got: #{inspect(backend)}"
+             "manifest backend: must be elixir, c, rust, zig, asm, js, fsm, or exunit, got: #{inspect(backend)}"
            ]}
     end
   end
@@ -849,7 +849,7 @@ defmodule Muro.Manifest do
       :error ->
         {:elixir, []}
 
-      {:ok, kind} when kind in [:elixir, :exunit, :fsm, :c, :rust, :zig, :asm] ->
+      {:ok, kind} when kind in [:elixir, :exunit, :fsm, :c, :rust, :zig, :asm, :js] ->
         {kind, []}
 
       {:ok, kind} ->
@@ -964,7 +964,7 @@ defmodule Muro.Manifest do
     end
   end
 
-  defp validate_module(nil, _index, kind) when kind in [:c, :rust, :zig, :asm], do: []
+  defp validate_module(nil, _index, kind) when kind in [:c, :rust, :zig, :asm, :js], do: []
 
   defp validate_module(module, index, _kind) do
     if alias_atom?(module) do
@@ -978,6 +978,7 @@ defmodule Muro.Manifest do
   defp extension_errors(:rust, rel, index), do: extension_errors(rel, ".rs", :rust, index)
   defp extension_errors(:zig, rel, index), do: extension_errors(rel, ".zig", :zig, index)
   defp extension_errors(:asm, rel, index), do: extension_errors(rel, ".s", :asm, index)
+  defp extension_errors(:js, rel, index), do: extension_errors(rel, ".mjs", :js, index)
   defp extension_errors(_kind, _rel, _index), do: []
 
   defp extension_errors(rel, suffix, kind, index) do
@@ -997,6 +998,13 @@ defmodule Muro.Manifest do
   # then writes the `.c` before `File.write!` fails on the header.
   defp reserve_header(%{kind: :c, target: rel}, index, root, seen) do
     header = Path.rootname(rel) <> ".h"
+    {_header, errors, seen} = validate_target(header, index, root, seen)
+    {seen, errors}
+  end
+
+  # The `.d.ts` beside a `:js` target is an output, reserved the same way.
+  defp reserve_header(%{kind: :js, target: rel}, index, root, seen) do
+    header = Path.rootname(rel) <> ".d.ts"
     {_header, errors, seen} = validate_target(header, index, root, seen)
     {seen, errors}
   end

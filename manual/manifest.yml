@@ -77,7 +77,7 @@ pages:
   - file: binary.md
     slug: binary
     title: The executable
-    summary: The self-contained muro binary, muro.toml, gen for C, Rust, Zig, and assembly, init, and muro skills add.
+    summary: The self-contained muro binary, muro.toml, gen for C, Rust, Zig, JavaScript, and assembly, init, and muro skills add.
   - file: repr.md
     slug: repr
     title: Host representations
