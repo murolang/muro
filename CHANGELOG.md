@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.23
+
+The JavaScript declaration file types a parameterized data type as a generic. `List (A : Type)` is `List<A>`. A field of `A` is `A`, a field of `List A` is `List<A>`, a field of `List (List A)` is `List<List<A>>`, and a field of `List Nat` is `List<Nat>`. An index is not a type parameter, so `Vec A n` is `Vec<A>`.
+
+`Stream` carries its element. A run of `Stream Nat` is `Stream<Nat>`. `muro__uncons` returns a head of that element and a stream of the same element. The seed stays unknown, because the seed is not the element. `Bool` stays the tagged union of `{tag: "true"}` and `{tag: "false"}`.
+
+An exported run that erases a type parameter is generic in the declaration. `length` takes `List<A>`. The module is the same JavaScript: `length(xs)`.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.23.
+
 ## 0.20.20
 
 `mix muro.emit path.muro --backend js` writes `<stem>.mjs` and `<stem>.d.ts` beside the book and prints both paths. `Muro.emit_js/1` returns `{:ok, [mjs, dts]}`. Spec and evidence are omitted. The proof stops at the run image.

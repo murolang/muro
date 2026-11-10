@@ -69,7 +69,9 @@ The core has no string type. Atoms are the nominal strings, represented as JavaS
 
 The host boundary is the exported function. `I64` parameters and results use `BigInt.asIntN(64)` on the way out and `BigInt.asUintN(64)` on the way in, so `-1n` and the residue `2^64−1` are the same word. `U8`, `U32`, and `U64` use `BigInt.asUintN` in both directions. An exported `Opt` or pair of those words is converted the same way, and the call result is bound once. Internal functions, workers, and stream steps see the residue.
 
-The `.d.ts` file exports the runs the module exports, plus `muro__data`, `muro__uncons`, and `muro__canon`. Parameter names are the same spellings as the module. A function parameter whose layout is an arrow is a curried TypeScript arrow. Data is a union of `{tag, fields}`. A polymorphic field is `unknown`. `Stream` does not carry its element type. The file documents `I64` as the signed bigint the host sees. Internal runs and steps are omitted. Type names that TypeScript reserves (`string`, `Nat`, a keyword) gain the same `_k` suffix as a colliding value spelling.
+The `.d.ts` file exports the runs the module exports, plus `muro__data`, `muro__uncons`, and `muro__canon`. Parameter names are the same spellings as the module. A function parameter whose layout is an arrow is a curried TypeScript arrow. Data is a union of `{tag, fields}`. A data type with a parameter of sort Type is generic, in the order written. `List (A : Type)` is `List<A>`. A field `A` is `A`, a field `List A` is `List<A>`, a field `List (List A)` is `List<List<A>>`, and a field `List Nat` is `List<Nat>`. An index is not a parameter: `Vec A n` is `Vec<A>`, and `Fin` stays a plain alias. A type the declaration cannot name stays `unknown`.
+
+`Stream` carries its element. The seed and the environment stay `unknown`, because the seed is not the element. The step returns `[A, unknown]`. `muro__uncons<A>` takes `Stream<A>` and returns `[A, Stream<A>]`. An erased type parameter of an exported run is a generic of that function, and the module does not take it. `length` is `length<A>(xs: List<A>)` in the declaration and `length(xs)` in the module. `Bool` stays the tagged union of `true` and `false`. The file documents `I64` as the signed bigint the host sees. Internal runs and steps are omitted. Type names that TypeScript reserves (`string`, `Nat`, a keyword) gain the same `_k` suffix as a colliding value spelling, including a type parameter.
 
 A source name folds `-` to `_`. `golden-silence` is `golden_silence`. A name that is already a JavaScript identifier stays as written: `zeros`, `a_b`, `a_b_2`, `fromMaybe`, and `Bit`. `Bit` is a legal JavaScript identifier. A strict-mode keyword, a host name (`undefined`, `Array`, `NaN`, `eval`, `arguments`), or a TypeScript word the declaration file cannot reuse gains `_k` (`function` is `function_k`, and a type named `string` is `string_k`). A character that is not in the identifier alphabet after that fold (`?`, `!`, `'`, a leading digit, any other scalar) is an injective `$` escape. The module and the declaration file use that same spelling. A binder is claimed against the function names and the step names in the file, so a parameter `id` does not hide a function `id`. A parameter `_` stays `_`, and a second one is `_2`. A helper or a step is `muro__` plus a tag (`muro__step_0`).
 
@@ -94,7 +96,7 @@ OTP, `--node`, fsm, and `repr` codecs are not this backend. A lambda is a closur
 ## Out of scope
 
 - `repr` encode and decode
-- a host string type, and richer `.d.ts` generics (`List<A>`)
+- a host string type
 - the browser DOM. The module is plain ECMAScript and does not touch it. This backend is run under Node.
 
 ## Differential testing
@@ -105,7 +107,6 @@ A layout-directed Elixir walk treats `{:suc, _}` as a `Nat` before it treats an 
 
 ## Open questions
 
-- Generics in the declaration file (`List<A>` rather than `unknown`).
 - A real string type, distinct from atoms.
 - Whether a later version should map a session to async functions or to an `init` / `send` / `recv` stepper. This backend refuses the book.
 - Browsers, beyond Node, once the module is loaded as an ES module.
