@@ -65,19 +65,21 @@ A self-tail `count` of one million steps returns the same nat as the Elixir back
 
 ## Strings
 
-The core has no string type. Atoms are the nominal strings, represented as JavaScript strings of the source name. They do not collide with a future host string type because that type is not in this image. A host that wants a string of characters does not get one from v1.
+`String` is a sequence of Unicode scalars. A literal is `"hello"`, with escapes `\\`, `\"`, `\n`, and `\u{…}`. The module boxes it as `{ string: "hello" }`. An atom stays a JavaScript string of the source name, so a host that already passes `"asc"` keeps doing that. `muro__canon` prints the box as `"hello"` and the atom as `hello`. Length is the number of scalars: `muro__slen` counts code points. `strCat` concatenates and `strEq` compares the text. A string and an atom stay distinct.
+
+The declaration file types `String` as `{ readonly string: string }` and `Atom` as `string`. A data type the book names `String` is `String_k`, the same suffix a reserved word takes. This backend emits a string. It is not one of the refusals below.
 
 ## Host boundary
 
-`muro__data(tag, ...fields)` builds a constructor value. `muro__uncons` forces one step and returns `[head, tail]`. `muro__canon` prints a value for tests: a bigint as decimal, a negative bigint as its unsigned 64-bit residue, `null` as `tt`, a boolean or an atom string as that text, a pair as `(a,b)` with no spaces, data as `tag` or `tag(a,b)`, `none` / `some(v)`, a stream as `stream`, and a function as `fn`. The canon string of `I64` −1 is `18446744073709551615`, which is what the Elixir walker prints for the residue. A host that calls the export reads `-1n`.
+`muro__data(tag, ...fields)` builds a constructor value. `muro__uncons` forces one step and returns `[head, tail]`. `muro__canon` prints a value for tests: a bigint as decimal, a negative bigint as its unsigned 64-bit residue, `null` as `tt`, a boolean or an atom string as that text, a string box as a quoted literal, a pair as `(a,b)` with no spaces, data as `tag` or `tag(a,b)`, `none` / `some(v)`, a stream as `stream`, and a function as `fn`. An atom string prints unquoted. The canon string of `I64` −1 is `18446744073709551615`, which is what the Elixir walker prints for the residue. A host that calls the export reads `-1n`.
 
 The host boundary is the exported function. `I64` parameters and results use `BigInt.asIntN(64)` on the way out and `BigInt.asUintN(64)` on the way in, so `-1n` and the residue `2^64−1` are the same word. `U8`, `U32`, and `U64` use `BigInt.asUintN` in both directions. An exported `Opt` or pair of those words is converted the same way, and the call result is bound once. Internal functions, workers, and stream steps see the residue.
 
 The `.d.ts` file exports the runs the module exports, plus `muro__data`, `muro__uncons`, and `muro__canon`. Parameter names are the same spellings as the module. A function parameter whose layout is an arrow is a curried TypeScript arrow. Data is a union of `{tag, fields}`. A data type with a parameter of sort Type is generic, in the order written. `List (A : Type)` is `List<A>`. A field `A` is `A`, a field `List A` is `List<A>`, a field `List (List A)` is `List<List<A>>`, and a field `List Nat` is `List<Nat>`. An index is not a parameter: `Vec A n` is `Vec<A>`, and `Fin` stays a plain alias. A type the declaration cannot name stays `unknown`.
 
-`Stream` carries its element. The seed and the environment stay `unknown`, because the seed is not the element. The step returns `[A, unknown]`. `muro__uncons<A>` takes `Stream<A>` and returns `[A, Stream<A>]`. An erased type parameter of an exported run is a generic of that function, and the module does not take it. `length` is `length<A>(xs: List<A>)` in the declaration and `length(xs)` in the module. `Bool` stays the tagged union of `true` and `false`. The file documents `I64` as the signed bigint the host sees. Internal runs and steps are omitted. Type names that TypeScript reserves (`string`, `Nat`, a keyword) gain the same `_k` suffix as a colliding value spelling, including a type parameter.
+`Stream` carries its element. The seed and the environment stay `unknown`, because the seed is not the element. The step returns `[A, unknown]`. `muro__uncons<A>` takes `Stream<A>` and returns `[A, Stream<A>]`. An erased type parameter of an exported run is a generic of that function, and the module does not take it. `length` is `length<A>(xs: List<A>)` in the declaration and `length(xs)` in the module. `Bool` stays the tagged union of `true` and `false`. The file documents `I64` as the signed bigint the host sees. Internal runs and steps are omitted. Type names that TypeScript reserves (`string`, `String`, `Nat`, a keyword) gain the same `_k` suffix as a colliding value spelling, including a type parameter. The kernel string keeps the name `String`.
 
-A source name folds `-` to `_`. `golden-silence` is `golden_silence`. A name that is already a JavaScript identifier stays as written: `zeros`, `a_b`, `a_b_2`, `fromMaybe`, and `Bit`. `Bit` is a legal JavaScript identifier. A strict-mode keyword, a host name (`undefined`, `Array`, `NaN`, `eval`, `arguments`), or a TypeScript word the declaration file cannot reuse gains `_k` (`function` is `function_k`, and a type named `string` is `string_k`). A character that is not in the identifier alphabet after that fold (`?`, `!`, `'`, a leading digit, any other scalar) is an injective `$` escape. The module and the declaration file use that same spelling. A binder is claimed against the function names and the step names in the file, so a parameter `id` does not hide a function `id`. A parameter `_` stays `_`, and a second one is `_2`. A helper or a step is `muro__` plus a tag (`muro__step_0`).
+A source name folds `-` to `_`. `golden-silence` is `golden_silence`. A name that is already a JavaScript identifier stays as written: `zeros`, `a_b`, `a_b_2`, `fromMaybe`, and `Bit`. `Bit` is a legal JavaScript identifier. A strict-mode keyword, a host name (`undefined`, `Array`, `NaN`, `eval`, `arguments`), or a TypeScript word the declaration file cannot reuse gains `_k` (`function` is `function_k`, a type named `string` is `string_k`, and a type named `String` is `String_k`). A character that is not in the identifier alphabet after that fold (`?`, `!`, `'`, a leading digit, any other scalar) is an injective `$` escape. The module and the declaration file use that same spelling. A binder is claimed against the function names and the step names in the file, so a parameter `id` does not hide a function `id`. A parameter `_` stays `_`, and a second one is `_2`. A helper or a step is `muro__` plus a tag (`muro__step_0`).
 
 Two source names that reach one identifier are refused before any file is written, and the error names both. `golden-silence` and `golden_silence` are one identifier. `a-b` and `a_b` are one identifier. A reserved-word rewrite collides the same way: `function` becomes `function_k`, so a book that also defines `function_k` is refused. C, Rust, and Zig keep the injective encoding, where `z` doubles, `_` is `zu`, and `-` is `zd`, so `a-b`, `a_b`, and `a_b_2` spell three ways (`azdb`, `azub`, `azubzu2`).
 
@@ -103,14 +105,13 @@ OTP, `--node`, fsm, and `repr` codecs are not this backend. A lambda is a closur
 ## Out of scope
 
 - `repr` encode and decode
-- a host string type
 - the browser DOM. The module is plain ECMAScript and does not touch it. This backend is run under Node.
 
 ## Differential testing
 
 Tests elaborate the same book twice. Elixir comes from `Muro.emit_file/3`, compiled in the test, and walked to the canon string above. JavaScript is the emitted module, imported by a driver, and printed with `muro__canon`. Streams are compared by forcing a prefix with `Enum.take` on one side and `muro__uncons` on the other. The original seed is forced twice to check that `uncons` does not mutate it. CI installs Node and runs these differentials. When `CI` is set and `node` is missing, the file fails. When `CI` is unset and `node` is missing, the differentials are skipped.
 
-A layout-directed Elixir walk treats `{:suc, _}` as a `Nat` before it treats an atom-headed tuple as a constructor. A pair of `Nat`s is printed as a pair. Atoms and nullary constructors print without a colon, so `:b0` and the string `"b0"` agree, and `:nil` and `{tag: "nil", fields: []}` both print `nil`.
+A layout-directed Elixir walk treats `{:suc, _}` as a `Nat` before it treats an atom-headed tuple as a constructor. A pair of `Nat`s is printed as a pair. Atoms and nullary constructors print without a colon, so the atom `:b0` and the JavaScript string `"b0"` that carries it both print `b0`. A string prints as a quoted literal, so the atom `b0` and the string `"b0"` do not print the same text. `:nil` and `{tag: "nil", fields: []}` both print `nil`.
 
 ## Sessions
 
@@ -145,5 +146,4 @@ An `async` wrapper that loops on `expected` and waits for the host is not emitte
 
 ## Open questions
 
-- A real string type, distinct from atoms.
 - Browsers, beyond Node, once the module is loaded as an ES module.

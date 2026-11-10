@@ -60,6 +60,33 @@ defmodule Muro.Print do
     loc_prefix(loc) <> "unsolved hole\n#{goal}\n#{ctx}"
   end
 
+  @doc "Number of Unicode scalars in a UTF-8 binary. Not grapheme clusters."
+  def scalar_count(bin) when is_binary(bin) do
+    length(:unicode.characters_to_list(bin))
+  end
+
+  @doc """
+  A string literal. `\\\\`, `\\\"`, and a newline are escaped. Other
+  controls and DEL are `\\\\u{hex}`. Every other scalar is itself.
+  """
+  def quote_string(bin) when is_binary(bin) do
+    body =
+      bin
+      |> :unicode.characters_to_list()
+      |> Enum.map_join(&quote_scalar/1)
+
+    "\"" <> body <> "\""
+  end
+
+  defp quote_scalar(?\\), do: "\\\\"
+  defp quote_scalar(?"), do: "\\\""
+  defp quote_scalar(?\n), do: "\\n"
+
+  defp quote_scalar(n) when n < 0x20 or n == 0x7F,
+    do: "\\u{" <> Integer.to_string(n, 16) <> "}"
+
+  defp quote_scalar(n), do: <<n::utf8>>
+
   # -- format ----------------------------------------------------------------
 
   defp fmt({:hole, _}, _, _), do: "?"
@@ -73,6 +100,11 @@ defmodule Muro.Print do
   defp fmt(:empty, _, _), do: "Empty"
   defp fmt(:atom, _, _), do: "Atom"
   defp fmt({:atom, n}, _, _), do: ":#{n}"
+  defp fmt(:string, _, _), do: "String"
+  defp fmt({:slit, bin}, _, _), do: quote_string(bin)
+  defp fmt({:scat, a, b}, names, _), do: "strCat #{fmt(a, names, :app)} #{fmt(b, names, :app)}"
+  defp fmt({:slen, a}, names, _), do: "strLen #{fmt(a, names, :app)}"
+  defp fmt({:seq, a, b}, names, _), do: "strEq #{fmt(a, names, :app)} #{fmt(b, names, :app)}"
   defp fmt(:rfl, _, _), do: "refl"
   defp fmt(:i64, _, _), do: "I64"
   defp fmt(:f32ty, _, _), do: "F32"

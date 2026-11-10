@@ -449,6 +449,20 @@ defmodule Muro.Emit do
 
   defp emit_db({:word, op, args}, d, book, names), do: emit_word(op, args, d, book, names)
 
+  defp emit_db({:slit, bin}, _, _book, _names) when is_binary(bin), do: inspect(bin)
+
+  defp emit_db({:scat, a, b}, d, book, names) do
+    "(#{emit_db(a, d, book, names)}) <> (#{emit_db(b, d, book, names)})"
+  end
+
+  defp emit_db({:slen, a}, d, book, names) do
+    ":erlang.length(:unicode.characters_to_list(#{emit_db(a, d, book, names)}))"
+  end
+
+  defp emit_db({:seq, a, b}, d, book, names) do
+    "(#{emit_db(a, d, book, names)}) == (#{emit_db(b, d, book, names)})"
+  end
+
   defp emit_db(_, _, _book, _names), do: "raise \"erased term\""
 
   # A definition applied to `args`. With as many arguments as its type
@@ -602,6 +616,14 @@ defmodule Muro.Emit do
   defp emitted_occurs?(i, {:word, _, args}, book),
     do: Enum.any?(args, &emitted_occurs?(i, &1, book))
 
+  defp emitted_occurs?(i, {:scat, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:slen, a}, book), do: emitted_occurs?(i, a, book)
+
+  defp emitted_occurs?(i, {:seq, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
   defp emitted_occurs?(i, {:app, _, _} = t, book) do
     {h, args} = spine(t, [])
 
@@ -650,6 +672,24 @@ defmodule Muro.Emit do
   defp value_kind(:ze, _book), do: :value
   defp value_kind(:one, _book), do: :value
   defp value_kind({:atom, _name}, _book), do: :value
+  defp value_kind({:slit, bin}, _book) when is_binary(bin), do: :value
+
+  defp value_kind({:scat, a, b}, book) do
+    case value_kind(a, book) do
+      :value -> value_kind(b, book)
+      reason -> reason
+    end
+  end
+
+  defp value_kind({:slen, a}, book), do: value_kind(a, book)
+
+  defp value_kind({:seq, a, b}, book) do
+    case value_kind(a, book) do
+      :value -> value_kind(b, book)
+      reason -> reason
+    end
+  end
+
   defp value_kind({:su, t}, book), do: value_kind(t, book)
   defp value_kind({:ann, e, _ty}, book), do: value_kind(e, book)
 

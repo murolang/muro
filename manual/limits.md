@@ -27,6 +27,7 @@ In brief: this is what the parser and checker refuse today. It is a description 
 - Emitting spec or evidence
 - Identity on `F32` or `Tensor F32 S`
 - An implicit coercion between `Nat` and `U8`, `U32`, `U64`, or `I64`. The maps are `toU8`, `toU32`, `toU64`, `toI64`, and `toNat`
+- An implicit coercion between `Atom` and `String`. A string is a sequence of Unicode scalars, and an atom is a name written in the file
 - A second index language for tensor shapes. A tensor shape stays one `I64`
 - Redeclaring Nat, Unit, Empty, or Stream as `data`
 - A fourth term representation
