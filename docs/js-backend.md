@@ -1,6 +1,6 @@
 # JavaScript backend
 
-v1 emits a checked book's `run` terms as one ES module and one declaration file. A session endpoint the machine can represent is a synchronous stepper in the same module. A session it cannot represent is omitted, and the runs are still written. Spec and evidence are omitted. The proof stops at the run image. The host translation is not the book.
+v1 emits a checked book's `run` terms as one ES module and one declaration file. A session endpoint the machine can represent is a synchronous stepper in the same module. A session it cannot represent is omitted, and the runs are still written. A `repr` emits `decode_<type>` and `encode_<type>` beside those runs. Spec and evidence are omitted. The proof stops at the run image. The host translation is not the book.
 
 `mix muro.emit path.muro --backend js` writes `<stem>.mjs` and `<stem>.d.ts` beside the book and prints both paths, one per line. `Muro.emit_js/1` returns `{:ok, [mjs, dts]}`. `node` runs the module. A `.mjs` file is an ES module without a `package.json`.
 
@@ -36,6 +36,8 @@ An immediately applied λ is still a `let`. The argument is evaluated once.
 An opaque field is not boxed. `erase` and `reveal` are the identity, so a `Nat` stored in a polymorphic field stays a bigint. `fromMaybe` of a `Nat` returns a bigint.
 
 Data constructor tags stay the source strings. Declared `Bool` stays a tagged object, `{tag: "true", fields: []}` or `{tag: "false", fields: []}`, so the canon and the Elixir backend agree: both print `true` or `false`. The declaration file types `Bool` as `{ readonly tag: "true"; readonly fields: readonly [] } | { readonly tag: "false"; readonly fields: readonly [] }`, and a TypeScript host checks `.tag`. `Bool` is not a JavaScript boolean. A word bool is a JavaScript boolean (`WordBool`). `muro__canon` prints both shapes as `true` or `false`, and a single run returns one of the two shapes.
+
+A host representation decodes into this image and encodes it back out. A `boolean` shape is a JavaScript boolean on the wire and the tagged `Bool` object in the value. The run image stays the table above. The wire, the name table, and the results are under Host representations.
 
 ## Words
 
@@ -75,7 +77,7 @@ The declaration file types `String` as `{ readonly string: string }` and `Atom` 
 
 The host boundary is the exported function. `I64` parameters and results use `BigInt.asIntN(64)` on the way out and `BigInt.asUintN(64)` on the way in, so `-1n` and the residue `2^64−1` are the same word. `U8`, `U32`, and `U64` use `BigInt.asUintN` in both directions. An exported `Opt` or pair of those words is converted the same way, and the call result is bound once. Internal functions, workers, and stream steps see the residue.
 
-The `.d.ts` file exports the runs the module exports, plus `muro__data`, `muro__uncons`, and `muro__canon`. Parameter names are the same spellings as the module. A function parameter whose layout is an arrow is a curried TypeScript arrow. Data is a union of `{tag, fields}`. A data type with a parameter of sort Type is generic, in the order written. `List (A : Type)` is `List<A>`. A field `A` is `A`, a field `List A` is `List<A>`, a field `List (List A)` is `List<List<A>>`, and a field `List Nat` is `List<Nat>`. An index is not a parameter: `Vec A n` is `Vec<A>`, and `Fin` stays a plain alias. A type the declaration cannot name stays `unknown`.
+The `.d.ts` file exports the runs the module exports, plus `muro__data`, `muro__uncons`, and `muro__canon`. A book with a `repr` also exports the codecs, `ReprDecode<T>`, and `ReprEncode`. Parameter names are the same spellings as the module. A function parameter whose layout is an arrow is a curried TypeScript arrow. Data is a union of `{tag, fields}`. A data type with a parameter of sort Type is generic, in the order written. `List (A : Type)` is `List<A>`. A field `A` is `A`, a field `List A` is `List<A>`, a field `List (List A)` is `List<List<A>>`, and a field `List Nat` is `List<Nat>`. An index is not a parameter: `Vec A n` is `Vec<A>`, and `Fin` stays a plain alias. A type the declaration cannot name stays `unknown`.
 
 `Stream` carries its element. The seed and the environment stay `unknown`, because the seed is not the element. The step returns `[A, unknown]`. `muro__uncons<A>` takes `Stream<A>` and returns `[A, Stream<A>]`. An erased type parameter of an exported run is a generic of that function, and the module does not take it. `length` is `length<A>(xs: List<A>)` in the declaration and `length(xs)` in the module. `Bool` stays the tagged union of `true` and `false`. The file documents `I64` as the signed bigint the host sees. Internal runs and steps are omitted. Type names that TypeScript reserves (`string`, `String`, `Nat`, a keyword) gain the same `_k` suffix as a colliding value spelling, including a type parameter. The kernel string keeps the name `String`.
 
@@ -94,9 +96,9 @@ A book that contains one of these is refused before any file is written. The mes
 - `c:erased`. A gone variable used as a value.
 - `c:session`. A run that names a session, a conformance, a meeting, an endpoint, a reading, a choreography, a talk, a seat, a link, or a relay. The book is refused and nothing is written. A session the machine cannot represent is omitted when no run names it, and the runs are written. `--backend fsm` still refuses that protocol. A conformance or a meeting on its own does not refuse the book: a representable endpoint is the stepper.
 - `c:host`. A place, a scheme, or a move. A book that also has sessions is refused the same way, and nothing is written. `--backend fsm` may still emit those sessions.
-- A session payload whose type has a `repr`, including a field of a payload data type and a `Nat` bound when `Nat` has a `repr`. That session is omitted when no run names it, and the runs are written. The stepper uses the run image. This backend does not emit `repr` codecs. `--backend fsm` still accepts that book.
+- A session payload whose type has a `repr`, including a field of a payload data type and a `Nat` bound when `Nat` has a `repr`. That session is omitted when no run names it, and the runs are written. The stepper uses the run image. The `repr` declarations are still `decode_*` and `encode_*` in the same module. `--backend fsm` still accepts that book.
 
-OTP, `--node`, fsm, and `repr` codecs are not this backend. A lambda is a closure, and this backend emits it.
+OTP, `--node`, and fsm are not this backend. A lambda is a closure, and this backend emits it. A `repr` is a codec in this module.
 
 ## Committed modules
 
@@ -104,7 +106,6 @@ OTP, `--node`, fsm, and `repr` codecs are not this backend. A lambda is a closur
 
 ## Out of scope
 
-- `repr` encode and decode
 - the browser DOM. The module is plain ECMAScript and does not touch it. This backend is run under Node.
 
 ## Differential testing
@@ -138,11 +139,40 @@ A payload is the run image. A nat is a bigint. A bit is `"b0"` or `"b1"`. Unit i
 
 A book may declare runs and sessions together. The runs stay exported functions. A state is opaque. `muro__session` is the only field the declaration file names.
 
-A session that is not a stepper is omitted. The runs stay. That is a protocol the machine cannot represent, a payload type that has a `repr`, or a declaration that is not an endpoint. A book that imports the session emits when its own runs do not name it. A representable endpoint the book imports is still a stepper in that module.
+A session that is not a stepper is omitted. The runs stay. That is a protocol the machine cannot represent, a payload type that has a `repr`, or a declaration that is not an endpoint. The codecs for those representations are still written. The stepper does not call them, and its payload stays the run image. A book that imports the session emits when its own runs do not name it. A representable endpoint the book imports is still a stepper in that module.
 
 The declaration file exports `SessionStepper` and one `export const` per session. `init` may return a state or `{ error: { message } }`. `send` and `recv` return `{ ok }` or `{ error }`.
 
 An `async` wrapper that loops on `expected` and waits for the host is not emitted.
+
+## Host representations
+
+A `repr` emits `decode_<type>` and `encode_<type>` after the runs and the session steppers. The names are the snake case the Elixir module uses: `decode_entry`, `encode_entry`. A book with no `repr` emits no codec, and the module text is the text it emitted before. The declaration file types each codec.
+
+Decode takes the host value and an optional name table. One argument starts from an empty table. Encode takes the value and the table. There is no one-argument encode. A missing or malformed table is `{ error }`. Decode and encode do not throw on host input. `muro_repr_table_new` and `muro_repr_table_names` throw when the caller builds a table wrong.
+
+```js
+const decoded = decode_entry({ id: 3, enabled: true });
+// { ok: { value, table } } or { error: { path, reason } }
+if (Object.hasOwn(decoded, "ok")) {
+  const wire = encode_entry(decoded.ok.value, decoded.ok.table);
+  // { ok: wire } or { error: { path, reason } }
+}
+```
+
+`ok` may be `null`. A host tests `Object.hasOwn(result, "ok")`.
+
+The value is the run image. A decoded `Nat` is a bigint. Declared `Bool` is `{tag: "true", fields: []}` or `{tag: "false", fields: []}`. Unit is `null`. A pair is a two-element array. Data is `{tag, fields}`. The name table is `{ by_name, by_index }`. `by_index` keys are the decimal index (`"0"`, `"1"`). `muro_repr_table_new()` builds an empty table, and `muro_repr_table_new(names)` interns a list of strings in order. `muro_repr_table_names(table)` reads the names back. A book with no `interned string` keeps the table empty. Decode copies the table when it interns a name and returns the same table object when it does not. Encode does not extend the table.
+
+The host wire is the shape the `repr` names. A `boolean` is a JavaScript boolean. An `integer` is a number `Number.isInteger` accepts, or a bigint. A decoded nat at most `1_000_000` encodes as a number. A larger bigint encodes as a bigint. Encode does not apply the nat guard. A string is a JavaScript string. A string-key map is an object with a null prototype, so `"__proto__"` is an own key. A map that uses an atom, a number, or `null` as a key is a `Map`. An atom on the wire is `muro_repr_atom(name)`: `{ atom: name }` with `Symbol.for("muro.repr.atom")`. A plain `{ atom: "yes" }` without that symbol is a map. `null` is nil.
+
+`path` is an array. A field name is a string. A tuple index is a number. An atom key is `{ atom: name }`. A `map_of` key failure is `{ k: "key", key }`. `reason.k` is `not_boolean`, `not_integer`, `negative_integer`, `nat_too_large`, `not_map`, `not_list`, `not_tuple`, `not_string`, `missing_key`, `unexpected_key`, `nil_not_allowed`, `no_variant`, `wrong_tuple_size`, `expected`, `ambiguous_key`, `too_many_names`, `keys_collide`, `bad_table`, `bad_value`, `no_name`, `reserved_name`, or `duplicate_key`. The original host value stays on the reason. `no_variant` names the constructor tags in declaration order.
+
+An integer above `1_000_000`, and a negative integer, fail on decode. `1` and `1.0` are the same JavaScript number, so a host value that is an integer decodes as that integer. A list and a tuple are both arrays. A choice that accepts both tries the constructors in declaration order, and the first match wins. JavaScript has no improper list and no invalid UTF-8 string. `JSON.stringify` drops the atom symbol, so a stored atom comes back as a plain object and is a map. `else` replaces a failure at that position. It does not replace `ambiguous_key`. Encode ignores a fallback.
+
+A session stepper does not use these codecs. Its payload stays the run image. A session whose payload type has a `repr` is still omitted. The runs of that book are written, and so are `decode_*` and `encode_*`.
+
+The declaration file exports `ReprPath`, `ReprReason`, `ReprTable`, `ReprDecode<T>`, and `ReprEncode`. `decode_<type>` returns `ReprDecode` of the run-image type. `encode_<type>` takes that type and a `ReprTable` and returns `ReprEncode`.
 
 ## Open questions
 
