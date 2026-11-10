@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.30
+## 0.20.31
 
 A duplicate name in one file is reported at both declarations, as `file:line:col`. A name that clashes with the prelude names the prelude line as well. A duplicate inside a package is reported at `muro_deps/<name>/<path>:<line>:<col>`.
 
@@ -16,7 +16,7 @@ The Agda library no longer sets `--without-K`. The proofs use K. `make agda` sti
 
 ### Package
 
-- Version 0.20.30.
+- Version 0.20.31.
 
 ## 0.20.28
 
