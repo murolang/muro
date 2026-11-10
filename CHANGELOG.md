@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.32
+## 0.20.30
 
 JavaScript emit writes `decode_<type>` and `encode_<type>` for each host representation, beside the runs. Decode returns `{ok: {value, table}}` or `{error: {path, reason}}` and does not throw. Encode takes the value and the name table and returns `{ok: wire}` or `{error}`. A decoded nat is a bigint. The value is the same one a run uses. A book with no representation emits no codec. A session whose payload type has a representation is still omitted, and the runs and the codecs are written.
 
@@ -10,7 +10,7 @@ JavaScript emit writes `decode_<type>` and `encode_<type>` for each host represe
 
 ### Package
 
-- Version 0.20.32.
+- Version 0.20.30.
 
 ## 0.20.29
 
