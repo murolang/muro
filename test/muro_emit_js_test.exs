@@ -101,7 +101,7 @@ defmodule Muro.EmitJSTest do
     refute dts =~ "export type string\n"
   end
 
-  test "names gain _k, a hyphen stays apart from an underscore, and a parameter does not hide a function" do
+  test "names fold a hyphen, keep a plain identifier, and a parameter does not hide a function" do
     dir = tmp()
 
     File.write!(Path.join(dir, "names.muro"), """
@@ -113,6 +113,10 @@ defmodule Muro.EmitJSTest do
     def true : run Nat := suc (suc 0)
     def a-b : run Nat := suc 0
     def a_b_2 : run Nat := suc (suc (suc 0))
+    def zeros : run Nat := 0
+    def golden-silence : run Nat := suc 0
+    def fromMaybe : run Nat := 0
+    def Bit : run Nat := 0
     def id : run Π (n : Nat) → Nat := λ (n : Nat) → n
     def use : run Π (id : Nat) → Nat := λ (id : Nat) → id
     def both : run Π (a : Nat) → Π (_ : Nat) → Π (_ : Nat) → Nat :=
@@ -120,26 +124,154 @@ defmodule Muro.EmitJSTest do
     """)
 
     source = File.read!(emit_js!(dir, "names"))
+    types = File.read!(Path.join(dir, "names.d.ts"))
 
-    for name <- ~w(function_k default_k undefined_k Array_k NaN_k true_k azdb azubzu2) do
+    for name <-
+          ~w(function_k default_k undefined_k Array_k NaN_k true_k a_b a_b_2 zeros golden_silence fromMaybe Bit) do
       assert source =~ "export function #{name}(", "missing #{name}"
+      assert types =~ "export function #{name}(", "declaration missing #{name}"
     end
 
-    # `a-b` and `a_b` fold to one Elixir function, so a checked book cannot
-    # define both. The JavaScript spellings stay apart.
-    assert Muro.Emit.JS.source_id("a-b") == "azdb"
-    assert Muro.Emit.JS.source_id("a_b") == "azub"
-    assert Muro.Emit.JS.source_id("a_b_2") == "azubzu2"
+    assert Muro.Emit.JS.source_id("a-b") == "a_b"
+    assert Muro.Emit.JS.source_id("a_b") == "a_b"
+    assert Muro.Emit.JS.source_id("a_b_2") == "a_b_2"
+    assert Muro.Emit.JS.source_id("zeros") == "zeros"
+    assert Muro.Emit.JS.source_id("golden-silence") == "golden_silence"
+    assert Muro.Emit.JS.source_id("fromMaybe") == "fromMaybe"
+    assert Muro.Emit.JS.source_id("Bit") == "Bit"
+    assert Muro.Emit.JS.source_id("function") == "function_k"
+    assert Muro.Emit.JS.source_id("_") == "_"
+    refute source =~ "export function azdb("
     refute source =~ "export function azub("
+    refute source =~ "function zzeros"
+    refute source =~ "goldenzd"
+    refute types =~ "export function azdb("
 
     assert source =~ "export function id(n)"
     assert source =~ "export function use(id_2)"
-    assert source =~ "zu_2"
+    assert source =~ "export function both(a, _, _2)"
+    assert types =~ "export function both(a: Nat, _: Nat, _2: Nat)"
+    refute source =~ "zu_2"
     refute source =~ "export function function("
     refute source =~ "export function default("
     refute source =~ "export function undefined("
     refute source =~ "export function use(id)"
     refute source =~ "muro__muro__"
+  end
+
+  test "a character outside the identifier alphabet is an injective $ escape" do
+    assert Muro.Emit.JS.source_id("zeros'") == "$zeros$000027"
+    assert Muro.Emit.JS.source_id("foo?") == "$foo$00003f"
+    assert Muro.Emit.JS.source_id("foo!") == "$foo$000021"
+    assert Muro.Emit.JS.source_id("1abc") == "$1abc"
+    assert Muro.Emit.JS.source_id("λ") == "$$0003bb"
+    assert Muro.Emit.JS.source_id("foo?") != Muro.Emit.JS.source_id("foo!")
+    assert Muro.Emit.JS.source_id("zz") == "zz"
+
+    for name <- ["zeros'", "foo?", "foo!", "1abc", "λ"] do
+      id = Muro.Emit.JS.source_id(name)
+      assert Regex.match?(~r/^[A-Za-z_$][A-Za-z0-9_$]*$/, id)
+      refute id =~ "zd"
+      refute id =~ "zu"
+      refute id =~ "zq"
+    end
+  end
+
+  test "two source names that spell one identifier are refused before a file is written" do
+    assert {:error, silence} =
+             Muro.Emit.JS.render(
+               [
+                 %{name: "golden-silence", mode: :run},
+                 %{name: "golden_silence", mode: :run}
+               ],
+               "g"
+             )
+
+    assert silence =~ "golden-silence and golden_silence spell one JavaScript identifier"
+
+    assert {:error, ab} =
+             Muro.Emit.JS.render(
+               [
+                 %{name: "a-b", mode: :run},
+                 %{name: "a_b", mode: :run}
+               ],
+               "ab"
+             )
+
+    assert ab =~ "a-b and a_b spell one JavaScript identifier"
+
+    dir = tmp()
+    path = Path.join(dir, "clash.muro")
+
+    File.write!(path, """
+    def function : run Nat := 0
+    def function_k : run Nat := suc 0
+    """)
+
+    assert_raise Mix.Error, ~r/function and function_k spell one JavaScript identifier/, fn ->
+      Mix.Tasks.Muro.Emit.run([path, "--backend", "js"])
+    end
+
+    refute File.exists?(Path.join(dir, "clash.mjs"))
+    refute File.exists?(Path.join(dir, "clash.d.ts"))
+
+    fold = Path.join(dir, "fold.muro")
+
+    File.write!(fold, """
+    def golden-silence : run Nat := 0
+    def golden_silence : run Nat := suc 0
+    """)
+
+    assert_raise Mix.Error, ~r/golden-silence and golden_silence/, fn ->
+      Mix.Tasks.Muro.Emit.run([fold, "--backend", "js"])
+    end
+
+    refute File.exists?(Path.join(dir, "fold.mjs"))
+    refute File.exists?(Path.join(dir, "fold.d.ts"))
+
+    data = Path.join(dir, "data.muro")
+
+    File.write!(data, """
+    data a-b : Type where
+      c : a-b
+
+    def a_b : run Nat := 0
+    """)
+
+    assert_raise Mix.Error, ~r/a-b and a_b spell one JavaScript identifier/, fn ->
+      Mix.Tasks.Muro.Emit.run([data, "--backend", "js"])
+    end
+
+    refute File.exists?(Path.join(dir, "data.mjs"))
+    refute File.exists?(Path.join(dir, "data.d.ts"))
+  end
+
+  test "Bool is a tagged union in the declaration file and a word bool is a boolean" do
+    dir = tmp()
+
+    File.write!(Path.join(dir, "bools.muro"), """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    def yes : run Bool := true
+    def no : run Bool := false
+    def flag : run WBool := wtrue
+    """)
+
+    emit_js!(dir, "bools")
+    types = File.read!(Path.join(dir, "bools.d.ts"))
+    source = File.read!(Path.join(dir, "bools.mjs"))
+
+    assert types =~
+             "export type Bool =\n  | { readonly tag: \"true\"; readonly fields: readonly [] }\n  | { readonly tag: \"false\"; readonly fields: readonly [] };"
+
+    assert types =~ "export type WordBool = boolean;"
+    assert types =~ "export function yes(): Bool;"
+    assert types =~ "export function flag(): WordBool;"
+    refute types =~ "export type Bool = boolean"
+    assert source =~ ~s|muro__data("true")|
+    assert source =~ ~s|muro__data("false")|
   end
 
   test "closures elaborate where the default image refuses a lambda, and the shared refusals stay" do
@@ -658,6 +790,9 @@ defmodule Muro.EmitJSTest do
     assert got["true"] == "2"
     assert got["a-b"] == "1"
     assert got["a_b_2"] == "3"
+    assert File.read!(Path.join(dir, "names.mjs")) =~ "export function a_b("
+    assert File.read!(Path.join(dir, "_drv_names.mjs")) =~ "M.a_b()"
+    refute File.read!(Path.join(dir, "_drv_names.mjs")) =~ "azdb"
 
     write_book(dir, "under", "def a_b : run Nat := suc (suc 0)\n")
     under = run_example(dir, "under", [{:val, "a_b", {:call, "a_b", []}}])
@@ -730,7 +865,7 @@ defmodule Muro.EmitJSTest do
     console.log("ok");
     """)
 
-    {out, status} = System.cmd(@node, ["_drv_hostw.mjs"], cd: dir, stderr_to_stdout: true)
+    {out, status} = node("_drv_hostw.mjs", dir)
     assert status == 0, out
     assert String.trim(out) == "ok"
     assert File.regular?(mjs)
@@ -776,7 +911,7 @@ defmodule Muro.EmitJSTest do
     console.log(String(count(4n, 3n)));
     """)
 
-    {out, status} = System.cmd(@node, ["_drv_deep.mjs"], cd: dir, stderr_to_stdout: true)
+    {out, status} = node("_drv_deep.mjs", dir)
     assert status == 0, out
     assert String.trim(out) == "1000000\n0\n1\n7"
 
@@ -785,6 +920,16 @@ defmodule Muro.EmitJSTest do
     assert peano_to_int(apply(mod, fun_atom(ex, "even"), [peano_n(20_000)])) == 0
     assert peano_to_int(apply(mod, fun_atom(ex, "odd"), [peano_n(20_000)])) == 1
     assert peano_to_int(apply(mod, fun_atom(ex, "count"), [peano_n(4), peano_n(3)])) == 7
+  end
+
+  # Node warns on stderr when both NO_COLOR and FORCE_COLOR are set.
+  # The driver merges stderr into stdout, so that warning would fail a line count.
+  defp node(script, dir) do
+    System.cmd(@node, [script],
+      cd: dir,
+      stderr_to_stdout: true,
+      env: [{"NO_COLOR", nil}, {"FORCE_COLOR", nil}]
+    )
   end
 
   defp run_example(dir, stem, queries) do
@@ -803,7 +948,7 @@ defmodule Muro.EmitJSTest do
       end)
 
     File.write!(Path.join(dir, "_drv_#{stem}.mjs"), driver(stem, queries, js_names))
-    {out, status} = System.cmd(@node, ["_drv_#{stem}.mjs"], cd: dir, stderr_to_stdout: true)
+    {out, status} = node("_drv_#{stem}.mjs", dir)
     assert status == 0, out
 
     lines =

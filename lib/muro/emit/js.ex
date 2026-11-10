@@ -13,14 +13,17 @@ defmodule Muro.Emit.JS do
   A refusal is `c:machine`, `c:stream`, `c:erased`, `c:session`,
   `c:host`, or `c:unsupported`. A lambda is a closure, so `c:lambda`
   is not a refusal here. A session declaration or a host placement
-  refuses the book.
+  refuses the book. Two source names that spell one JavaScript
+  identifier are refused before any file is written.
 
   This is not `Muro.Emit.Node`. That file is the BEAM `--node` backend.
 
-  Identifiers come from `Muro.Emit.Name`. A source name is spelled there.
-  A helper and a step are generated there. The two spellings share no
-  identifier. A binder is claimed against the function names in the file.
-  The proof stops at the run image.
+  A source name folds `-` to `_`. A result that is already a JavaScript
+  identifier is kept (`zeros`, `fromMaybe`, `Bit`). A reserved word
+  gains `_k`. Any other character is an injective `$` escape. C, Rust,
+  and Zig keep `Muro.Emit.Name.spell/3`. A helper and a step are still
+  generated there (`muro__`). A binder is claimed against the function
+  names in the file. The proof stops at the run image.
   """
 
   alias Muro.Emit
@@ -57,6 +60,9 @@ defmodule Muro.Emit.JS do
   ) |> MapSet.new()
 
   @type_forbidden MapSet.union(@forbidden, @ts_reserved)
+
+  # `$` inside the class is a literal dollar. The trailing `$` is the end.
+  @ident ~r/^[A-Za-z_$][A-Za-z0-9_$]*$/
 
   @tags ~w(
     mod bits half abort suc pred data stream uncons canon
@@ -123,6 +129,7 @@ defmodule Muro.Emit.JS do
 
   defp compile(book) do
     with :ok <- refuse_book(book),
+         :ok <- clash_book(book),
          {:ok, funs} <- IR.elaborate(book, closures: true),
          {:ok, groups, _} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
       h = helper_map()
@@ -416,7 +423,7 @@ defmodule Muro.Emit.JS do
 
   defp cps_let_pure(name, lay, val, body, st, tail?) do
     with {:ok, ve} <- emit_tm(val, st) do
-      {rn, scope} = Name.bind(spell(name), st.scope)
+      {rn, scope} = bind_source(spell(name), st.scope)
       st2 = %{st | scope: scope, vars: Map.put(st.vars, name, rn)}
       rhs = if lay == :opaque and val == :ze, do: "undefined", else: ve
 
@@ -428,8 +435,8 @@ defmodule Muro.Emit.JS do
 
   defp cps_letp_pure(a, b, e, body, st, tail?) do
     with {:ok, ee} <- emit_tm(e, st) do
-      {ra, scope} = Name.bind(spell(a), st.scope)
-      {rb, scope} = Name.bind(spell(b), scope)
+      {ra, scope} = bind_source(spell(a), st.scope)
+      {rb, scope} = bind_source(spell(b), scope)
       {pn, st1} = fresh_name(%{st | scope: scope})
       vars = st.vars |> Map.put(a, ra) |> Map.put(b, rb)
       st2 = %{st1 | vars: vars}
@@ -489,7 +496,7 @@ defmodule Muro.Emit.JS do
   defp cps_match(_scrut, _kind, _arms, _st, _tail?), do: {:error, "c:unsupported"}
 
   defp cps_suc(y, body, st, _scr, tail?) do
-    {rn, scope} = Name.bind(spell(y), st.scope)
+    {rn, scope} = bind_source(spell(y), st.scope)
     st2 = %{st | scope: scope, vars: Map.put(st.vars, y, rn)}
 
     with {:ok, lines, _} <- cps(body, st2, tail?) do
@@ -829,7 +836,7 @@ defmodule Muro.Emit.JS do
   defp open_fun(fun, st) do
     {params, scope} =
       Enum.map_reduce(fun.params, st.scope, fn {src, lay}, scope ->
-        {rn, scope} = Name.bind(spell(src), scope)
+        {rn, scope} = bind_source(spell(src), scope)
         {{src, rn, lay}, scope}
       end)
 
@@ -889,7 +896,7 @@ defmodule Muro.Emit.JS do
   end
 
   defp emit_tm({:lam, name, _lay, body}, st) do
-    {rn, scope} = Name.bind(spell(name), st.scope)
+    {rn, scope} = bind_source(spell(name), st.scope)
     st2 = %{st | scope: scope, vars: Map.put(st.vars, name, rn)}
 
     with {:ok, be} <- emit_tm(body, st2) do
@@ -906,7 +913,7 @@ defmodule Muro.Emit.JS do
 
   defp emit_tm({:let, name, lay, val, body}, st) do
     with {:ok, ve} <- emit_tm(val, st) do
-      {rn, scope} = Name.bind(spell(name), st.scope)
+      {rn, scope} = bind_source(spell(name), st.scope)
       st2 = %{st | scope: scope, vars: Map.put(st.vars, name, rn)}
 
       with {:ok, be} <- emit_tm(body, st2) do
@@ -918,8 +925,8 @@ defmodule Muro.Emit.JS do
 
   defp emit_tm({:letp, a, b, e, body}, st) do
     with {:ok, ee} <- emit_tm(e, st) do
-      {ra, scope} = Name.bind(spell(a), st.scope)
-      {rb, scope} = Name.bind(spell(b), scope)
+      {ra, scope} = bind_source(spell(a), st.scope)
+      {rb, scope} = bind_source(spell(b), scope)
       vars = st.vars |> Map.put(a, ra) |> Map.put(b, rb)
       st2 = %{st | scope: scope, vars: vars}
       p = st.h.pair
@@ -966,7 +973,7 @@ defmodule Muro.Emit.JS do
          {:arm, "zero", _, zbody} <- find_arm(arms, "zero"),
          {:arm, "suc", [y], sbody} <- find_arm(arms, "suc"),
          {:ok, ze} <- emit_tm(zbody, st) do
-      {rn, scope} = Name.bind(spell(y), st.scope)
+      {rn, scope} = bind_source(spell(y), st.scope)
       st2 = %{st | scope: scope, vars: Map.put(st.vars, y, rn)}
 
       with {:ok, se_body} <- emit_tm(sbody, st2) do
@@ -1106,7 +1113,7 @@ defmodule Muro.Emit.JS do
 
   defp bind_fields(binders, st) do
     Enum.map_reduce(binders, st, fn src, st ->
-      {rn, scope} = Name.bind(spell(src), st.scope)
+      {rn, scope} = bind_source(spell(src), st.scope)
       {rn, %{st | scope: scope, vars: Map.put(st.vars, src, rn)}}
     end)
   end
@@ -1172,8 +1179,93 @@ defmodule Muro.Emit.JS do
     "\"" <> body <> "\""
   end
 
-  defp spell(name), do: Name.spell(name, @forbidden)
-  defp type_spell(name), do: Name.spell(name, @type_forbidden)
+  # A second binder `_` is `_2`. `Name.claim/2` would write `__2`,
+  # because its suffix is `_` plus digits and the base is already `_`.
+  defp bind_source("_", %Name.Scope{names: names} = scope) do
+    chosen = if MapSet.member?(names, "_"), do: next_blank(2, names), else: "_"
+    {chosen, %{scope | names: MapSet.put(names, chosen)}}
+  end
+
+  defp bind_source(base, scope), do: Name.bind(base, scope)
+
+  defp next_blank(i, names) do
+    candidate = "_" <> Integer.to_string(i)
+    if MapSet.member?(names, candidate), do: next_blank(i + 1, names), else: candidate
+  end
+
+  # A hyphen folds to `_`. A result that is already a JavaScript
+  # identifier is kept, and a reserved word gains `_k`. Anything else
+  # is `$` plus a prefix code: a letter, digit, or `_` is itself, `$`
+  # is `$$`, and every other scalar is `$` and six hex digits. Those
+  # codes are prefix-free, so the escape is injective. A fold or a
+  # `_k` that lands on another source name is refused by `clash_book/1`.
+  defp spell(name), do: spell_with(name, @forbidden)
+  defp type_spell(name), do: spell_with(name, @type_forbidden)
+
+  defp spell_with(name, forbidden) do
+    folded = String.replace(name, "-", "_")
+
+    cond do
+      identifier?(folded) and MapSet.member?(forbidden, folded) -> folded <> "_k"
+      identifier?(folded) -> folded
+      true -> escape(folded)
+    end
+  end
+
+  defp identifier?(name), do: Regex.match?(@ident, name)
+
+  defp escape(folded) do
+    body =
+      folded
+      |> String.to_charlist()
+      |> Enum.map_join(&escape_char/1)
+
+    "$" <> body
+  end
+
+  defp escape_char(c) when c in ?A..?Z or c in ?a..?z or c in ?0..?9 or c == ?_, do: <<c>>
+  defp escape_char(?$), do: "$$"
+
+  defp escape_char(c) when is_integer(c) and c >= 0 and c <= 0x10FFFF do
+    hex = c |> Integer.to_string(16) |> String.downcase() |> String.pad_leading(6, "0")
+    "$" <> hex
+  end
+
+  defp clash_book(book) do
+    book
+    |> Enum.flat_map(&spell_entry/1)
+    |> clash_seen(%{})
+  end
+
+  defp spell_entry(%{kind: :data, name: name} = entry) when is_binary(name) do
+    [{entry, type_spell(name)}]
+  end
+
+  defp spell_entry(%{name: name} = entry) when is_binary(name) do
+    kind = Map.get(entry, :kind, :def)
+
+    if kind == :def and Map.get(entry, :mode) == :run do
+      [{entry, spell(name)}]
+    else
+      []
+    end
+  end
+
+  defp spell_entry(_entry), do: []
+
+  defp clash_seen([], _seen), do: :ok
+
+  defp clash_seen([{entry, host} | rest], seen) do
+    case Map.fetch(seen, host) do
+      {:ok, prev} ->
+        {:error,
+         "#{Muro.Print.loc_prefix(Map.get(prev, :loc))}#{prev.name} and #{entry.name} spell one JavaScript identifier\n" <>
+           "#{Muro.Print.loc_prefix(Map.get(entry, :loc))}#{prev.name} and #{entry.name} spell one JavaScript identifier"}
+
+      :error ->
+        clash_seen(rest, Map.put(seen, host, entry))
+    end
+  end
 
   defp helper_map do
     Map.new(@tags, fn tag -> {String.to_atom(tag), Name.gen(tag)} end)

@@ -10,7 +10,7 @@ C, Rust, and Zig keep the default closed image. JavaScript elaborates with `Muro
 
 The module is plain JavaScript. Exported runs are `export function` with one parameter per live argument. `run internal` is `function` and is not exported. Generated stream steps are `function` and are not exported. Function declarations are hoisted. `even` and `odd` reach each other through the trampoline.
 
-A lambda is a native arrow function and closes over the bindings in scope. A definition is uncurried. A function value is curried, one argument at a time. The host calls `plus(2n, 3n)`. The host passes a curried function into a higher-order parameter: `map((n) => n + 1n, xs)`. At a definition boundary every leading Π becomes a parameter, including a definition whose body names fewer λs than its type has Πs. `adder := plus`, whose type is `Π (n : Nat) → Π (_ : Nat) → Nat`, is `adder(n, zu)`.
+A lambda is a native arrow function and closes over the bindings in scope. A definition is uncurried. A function value is curried, one argument at a time. The host calls `plus(2n, 3n)`. The host passes a curried function into a higher-order parameter: `map((n) => n + 1n, xs)`. At a definition boundary every leading Π becomes a parameter, including a definition whose body names fewer λs than its type has Πs. `adder := plus`, whose type is `Π (n : Nat) → Π (_ : Nat) → Nat`, is `adder(n, _)`. A second binder of that name is `_2`.
 
 An immediately applied λ is still a `let`. The argument is evaluated once.
 
@@ -33,7 +33,7 @@ An immediately applied λ is still a `let`. The argument is evaluated once.
 
 An opaque field is not boxed. `erase` and `reveal` are the identity, so a `Nat` stored in a polymorphic field stays a bigint. `fromMaybe` of a `Nat` returns a bigint.
 
-Data constructor tags stay the source strings. `true` and `false` from `Bool` are `"true"` and `"false"`, not booleans. A word bool is a boolean. Both print as `true` or `false` through `muro__canon`, and a single run returns one of the two shapes.
+Data constructor tags stay the source strings. Declared `Bool` stays a tagged object, `{tag: "true", fields: []}` or `{tag: "false", fields: []}`, so the canon and the Elixir backend agree: both print `true` or `false`. The declaration file types `Bool` as `{ readonly tag: "true"; readonly fields: readonly [] } | { readonly tag: "false"; readonly fields: readonly [] }`, and a TypeScript host checks `.tag`. `Bool` is not a JavaScript boolean. A word bool is a JavaScript boolean (`WordBool`). `muro__canon` prints both shapes as `true` or `false`, and a single run returns one of the two shapes.
 
 ## Words
 
@@ -71,7 +71,9 @@ The host boundary is the exported function. `I64` parameters and results use `Bi
 
 The `.d.ts` file exports the runs the module exports, plus `muro__data`, `muro__uncons`, and `muro__canon`. Parameter names are the same spellings as the module. A function parameter whose layout is an arrow is a curried TypeScript arrow. Data is a union of `{tag, fields}`. A polymorphic field is `unknown`. `Stream` does not carry its element type. The file documents `I64` as the signed bigint the host sees. Internal runs and steps are omitted. Type names that TypeScript reserves (`string`, `Nat`, a keyword) gain the same `_k` suffix as a colliding value spelling.
 
-Identifiers use `Muro.Emit.Name`. A source spelling contains no `__`. It gains `_k` when the encoding is a JavaScript strict-mode keyword or a host name (`undefined`, `Array`, `NaN`, `eval`, `arguments`, and the TypeScript words the declaration file cannot reuse). A binder is claimed against the function names and the step names in the file, so a parameter `id` does not hide a function `id`. A helper or a step is `muro__` plus a tag (`muro__step_0`). `a-b`, `a_b`, and `a_b_2` spell three ways.
+A source name folds `-` to `_`. `golden-silence` is `golden_silence`. A name that is already a JavaScript identifier stays as written: `zeros`, `a_b`, `a_b_2`, `fromMaybe`, and `Bit`. `Bit` is a legal JavaScript identifier. A strict-mode keyword, a host name (`undefined`, `Array`, `NaN`, `eval`, `arguments`), or a TypeScript word the declaration file cannot reuse gains `_k` (`function` is `function_k`, and a type named `string` is `string_k`). A character that is not in the identifier alphabet after that fold (`?`, `!`, `'`, a leading digit, any other scalar) is an injective `$` escape. The module and the declaration file use that same spelling. A binder is claimed against the function names and the step names in the file, so a parameter `id` does not hide a function `id`. A parameter `_` stays `_`, and a second one is `_2`. A helper or a step is `muro__` plus a tag (`muro__step_0`).
+
+Two source names that reach one identifier are refused before any file is written, and the error names both. `golden-silence` and `golden_silence` are one identifier. `a-b` and `a_b` are one identifier. A reserved-word rewrite collides the same way: `function` becomes `function_k`, so a book that also defines `function_k` is refused. C, Rust, and Zig keep the injective encoding, where `z` doubles, `_` is `zu`, and `-` is `zd`, so `a-b`, `a_b`, and `a_b_2` spell three ways (`azdb`, `azub`, `azubzu2`).
 
 ## Unsupported
 
@@ -87,7 +89,7 @@ OTP, `--node`, fsm, and `repr` codecs are not this backend. A lambda is a closur
 
 ## Committed modules
 
-`mix muro.gen` and `mix muro.init` accept `backend: js`. A JavaScript entry names a target ending in `.mjs`, omits the module, and also writes the `.d.ts` beside it. That declaration path is reserved the way a C header is reserved. The files are not formatted. The comment mark is `// `.
+`mix muro.gen` and `mix muro.init` accept `backend: js`. A JavaScript entry names a target ending in `.mjs`, omits the module, and also writes the `.d.ts` beside it. That declaration path is reserved the way a C header is reserved. The files are not formatted. The comment mark is `// `. `mix muro.gen --check` compares both files with the book. A hand-edited body, a header version that is not the running Muro, a body that is not what the book emits, a book that changed under the file, or a missing file fails the check for that path.
 
 ## Out of scope
 
