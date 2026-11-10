@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.23
+
+The JavaScript declaration file types a parameterized data type as a generic. `List (A : Type)` is `List<A>`. A field of `A` is `A`, a field of `List A` is `List<A>`, a field of `List (List A)` is `List<List<A>>`, and a field of `List Nat` is `List<Nat>`. An index is not a type parameter, so `Vec A n` is `Vec<A>`.
+
+`Stream` carries its element. A run of `Stream Nat` is `Stream<Nat>`. `muro__uncons` returns a head of that element and a stream of the same element. The seed stays unknown, because the seed is not the element. `Bool` stays the tagged union of `{tag: "true"}` and `{tag: "false"}`.
+
+An exported run that erases a type parameter is generic in the declaration. `length` takes `List<A>`. The module is the same JavaScript: `length(xs)`.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.23.
+
 ## 0.20.22
 
 A JavaScript function value that only passes its argument on to a function of one argument is that function. `tabulate ident` passes `ident`. `measure (length Nat)` passes `length`. A parameter used the same way is that parameter, and an internal function is that function.
