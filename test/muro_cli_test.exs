@@ -355,6 +355,7 @@ defmodule Muro.CliTest do
 
     [smoke, published] = String.split(smoked, ~r/^  release:/m, parts: 2)
     refute smoke =~ "gh release"
+    refute smoke =~ "inputs.tag"
     assert published =~ ~r/needs:\s*(\[\s*)?smoke/
     assert published =~ "gh release create"
     assert published =~ "gh release upload"
