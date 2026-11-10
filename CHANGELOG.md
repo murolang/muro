@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.26
+## 0.20.25
 
 An erased constructor field stays out of the value a host matches on. JavaScript binds that name to `undefined`. C binds a dummy `0`. Rust and Zig keep the same placeholder. A Nat zero whose type is a spec alias stays a Nat zero. Declared `Bool` stays tagged, `{tag: "true"}` or `{tag: "false"}`.
 
@@ -10,7 +10,21 @@ An erased constructor field stays out of the value a host matches on. JavaScript
 
 ### Package
 
-- Version 0.20.26.
+- Version 0.20.25.
+
+## 0.20.24
+
+JavaScript emits a `match` on a variable bound by the enclosing arm. The element a list arm binds is that variable. The inner match may be the arm or an argument of a constructor, and the function may recurse on the tail.
+
+A refusal from the JavaScript backend names the definition it refused, and names the construct when the refusal has one.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.24.
 
 ## 0.20.23
 
