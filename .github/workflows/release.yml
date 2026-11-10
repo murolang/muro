@@ -20,12 +20,10 @@ permissions:
   contents: write
 
 jobs:
-  binaries:
+  release:
     name: Self-contained binaries
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
-    timeout-minutes: 60
-    outputs:
-      version: ${{ steps.version.outputs.version }}
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v5
         with:
@@ -85,7 +83,7 @@ jobs:
       - name: Name the assets
         run: |
           set -euo pipefail
-          version=$(sed -n 's/^[[:space:]]*version: "\([^"]*\)".*/\1/p' mix.exs | head -1)
+          version="${{ steps.version.outputs.version }}"
           mkdir -p dist
           name_one() {
             src="$1"
@@ -100,42 +98,17 @@ jobs:
           name_one burrito_out/muro_linux_x86_64 linux-x86_64
           name_one burrito_out/muro_linux_aarch64 linux-aarch64
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: muro-binaries
-          path: dist/*
-
-  smoke:
-    name: Smoke the Linux binaries
-    needs: binaries
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
-    timeout-minutes: 15
-    steps:
-      # Check out the workflow commit, not a rebuilt tag, so older tags
-      # still get scripts/release-linux-smoke.sh.
-      - uses: actions/checkout@v5
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: muro-binaries
-          path: dist
+      - name: Load the smoke scripts from the workflow commit
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "${{ github.ref }}"
+          git checkout "${{ github.sha }}" -- scripts/release-linux-smoke.sh scripts/release-std-smoke.sh
 
       - name: Smoke the matching Linux binary
         run: bash scripts/release-linux-smoke.sh dist
 
-  release:
-    name: Publish the GitHub release
-    needs: [smoke, binaries]
-    if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          name: muro-binaries
-          path: dist
-
       - name: Install GitHub CLI
+        if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
         run: |
           set -euo pipefail
           if command -v gh >/dev/null 2>&1; then
@@ -160,11 +133,12 @@ jobs:
           gh --version
 
       - name: Attach the assets to the GitHub release
+        if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version="${{ needs.binaries.outputs.version }}"
+          version="${{ steps.version.outputs.version }}"
           test -n "$version"
           tag="v${version}"
           if ! gh release view "$tag" >/dev/null 2>&1; then

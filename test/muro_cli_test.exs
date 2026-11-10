@@ -339,7 +339,7 @@ defmodule Muro.CliTest do
     assert text =~ "vars.CI_RUNNER || 'ubuntu-24.04'"
 
     assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \|\| 'ubuntu-24\.04' \}\}/, text)) ==
-             3
+             1
 
     assert smoke =~ "muro --version"
     assert smoke =~ "muro check"
@@ -348,21 +348,17 @@ defmodule Muro.CliTest do
     refute text =~ "hex.publish"
   end
 
-  test "the release is created only after the smoke job succeeds" do
+  test "the release is created only after the binaries are smoked" do
     text = File.read!(".github/workflows/release.yml")
-    [built, smoked] = String.split(text, ~r/^  smoke:/m, parts: 2)
-    refute built =~ "gh release"
-
-    [smoke, published] = String.split(smoked, ~r/^  release:/m, parts: 2)
-    refute smoke =~ "gh release"
-    refute smoke =~ "inputs.tag"
-    assert published =~ ~r/needs:\s*(\[\s*)?smoke/
-    assert published =~ "gh release create"
-    assert published =~ "gh release upload"
-    assert published =~ "--clobber"
-    assert published =~ "actions/download-artifact"
-    assert published =~ "inputs.dry_run"
-    assert published =~ "github.event_name != 'pull_request'"
+    refute text =~ "actions/upload-artifact"
+    refute text =~ "actions/download-artifact"
+    [before_smoke, after_smoke] = String.split(text, "Smoke the matching Linux binary", parts: 2)
+    refute before_smoke =~ "gh release"
+    assert after_smoke =~ "gh release create"
+    assert after_smoke =~ "gh release upload"
+    assert after_smoke =~ "--clobber"
+    assert after_smoke =~ "inputs.dry_run"
+    assert after_smoke =~ "github.event_name != 'pull_request'"
   end
 
   defp assert_same(fun, argv, cd \\ nil) do
