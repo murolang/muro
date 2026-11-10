@@ -4,7 +4,8 @@ defmodule Muro.Emit.Zig do
   Run bodies are the image from `Muro.IR`.
 
   The text is what `zig` translates. A refusal is the elaboration's:
-  `c:lambda`, `c:machine`, `c:stream`, `c:erased`, `c:unsupported`.
+  `c:lambda`, `c:machine`, `c:stream`, `c:string`, `c:erased`,
+  `c:unsupported`.
 
   Every run takes an allocator first and returns an error union. A caller
   can pass a `muro__std.heap.ArenaAllocator` and reset it. `Nat` and user
@@ -587,6 +588,10 @@ defmodule Muro.Emit.Zig do
     end
   end
 
+  defp emit_tm({:str, _}, _env, _st), do: {:error, "c:string"}
+  defp emit_tm({:scat, _, _}, _env, _st), do: {:error, "c:string"}
+  defp emit_tm({:slen, _}, _env, _st), do: {:error, "c:string"}
+  defp emit_tm({:seq, _, _}, _env, _st), do: {:error, "c:string"}
   defp emit_tm(_other, _env, _st), do: {:error, "c:unsupported"}
 
   defp emit_list(ts, env, st) do

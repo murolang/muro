@@ -196,6 +196,7 @@ Primitive types you can write as atoms:
 | `Type` | The sort |
 | `Nat` | Peano naturals |
 | `Atom` | The atom literals written in this file |
+| `String` | A sequence of Unicode scalars |
 | `Unit` | One constructor, `tt` |
 | `Empty` | No constructors |
 | `U8` / `U32` / `U64` / `I64` | Fixed-width residues; see [Machine numbers](machine.md) |
@@ -221,13 +222,13 @@ The mark sits immediately before the name, inside the parentheses. `(-A : Type)`
 
 `%0` and `%1` are the affine quantity. In run and evidence, a `%1` binder that is never used is refused. Spec forgets uses, so the obligation is not checked there. Using the variable twice is still refused, because the quantity is affine. The λ mark and the Π mark must agree. `examples/arrow.muro` is the worked book.
 
-**Data** (after WHNF): `Nat`, `Unit`, `Empty`, `U8`, `U32`, `U64`, `I64`, `WBool`, `Opt` of a Data type, `F32`, `Tensor`, a pair of two Data types, or a user `data` type whose *parameters* are Data. Indices do not have to be Data. `List A` is Data iff `A` is. `List (Nat → Nat)` is not, so you cannot write `+xs : List (Nat → Nat)`.
+**Data** (after WHNF): `Nat`, `Unit`, `Empty`, `String`, `U8`, `U32`, `U64`, `I64`, `WBool`, `Opt` of a Data type, `F32`, `Tensor`, a pair of two Data types, or a user `data` type whose *parameters* are Data. Indices do not have to be Data. `List A` is Data iff `A` is. `List (Nat → Nat)` is not, so you cannot write `+xs : List (Nat → Nat)`.
 
 **Copyable** (after WHNF), the types `+` accepts: a Data type, a Π type, or a pair of two copyable types. A Data value copies by value, so a Data argument at a `+` position keeps its uses. A function copies by closure: copying it copies what it captured, so an argument at a `+` position whose type is a Π, or a pair holding one, has every use inside it counted as many. `twice (addn n) 1` with `twice : Π (+ f : Nat → Nat) → …` checks when `n` is reusable and is refused with `affine variable used as reusable` when `n` is affine. The domain and codomain of a `+` function are not asked to be copyable: `Π (+ f : Π (s : Stream Nat) → Nat) → …` is fine, the closure is what is copied, not the stream it will be given.
 
 `Stream` and `Either` are not copyable. There is no `+` on a stream. The refusal is `+ requires a copyable type: Data, a pair of them, or a function`.
 
-**Run type**: a variable or a definition used in run code has one. It is `Nat`, `Unit`, `Empty`, `Atom`, `U8`, `U32`, `U64`, `I64`, `WBool`, `Opt` of a run type, `F32`, `Tensor`, a `data` type, a type variable, a Π whose codomain is a run type, a pair of two, or a ν type whose body is one. Each part is read after WHNF, so a definition naming a type is the type it names: with `def R : spec Type := Nat`, `inc : run Π (r : R) → R` is used in run like `Π (r : Nat) → Nat`. An identity type is not a run type, under a name or not: `p : Nat × Eq0` with `def Eq0 : spec Type := {0 ≡ 0 : Nat}` is refused in run with `variable has a spec type`.
+**Run type**: a variable or a definition used in run code has one. It is `Nat`, `Unit`, `Empty`, `Atom`, `String`, `U8`, `U32`, `U64`, `I64`, `WBool`, `Opt` of a run type, `F32`, `Tensor`, a `data` type, a type variable, a Π whose codomain is a run type, a pair of two, or a ν type whose body is one. Each part is read after WHNF, so a definition naming a type is the type it names: with `def R : spec Type := Nat`, `inc : run Π (r : R) → R` is used in run like `Π (r : Nat) → Nat`. An identity type is not a run type, under a name or not: `p : Nat × Eq0` with `def Eq0 : spec Type := {0 ≡ 0 : Nat}` is refused in run with `variable has a spec type`.
 
 In spec, uses are forgotten. You can mention an affine variable twice while building a type.
 
@@ -313,6 +314,24 @@ An atom literal is a tag written in the file, colon glued to the name: `:asc`. I
 The spellings that occur in the file are the whole type. A `match` on `Atom` is exhaustive for that set. A missing arm is an error that names the atom (`missing branch for :asc`). Elixir prints the colon form and matches with `case`. C emits an enum of those spellings (`MURO_ASC`, `MURO_DESC`) and matches with `switch`. The first spelling in the file keeps that name. A later spelling that sanitizes to the same identifier gets a numeric suffix (`:A` then `:a` is `MURO_A` and `MURO_A_2`). A name the file did not write is not added. Atom is checked and emitted by this implementation; it is not in the Agda kernel.
 
 `examples/sort.muro` is insertion sort on `List Nat`. `:asc` orders upward and `:desc` downward.
+
+## Strings
+
+A string is a sequence of Unicode scalars. A literal is written in quotes.
+
+```
+"hello"
+"a\nb"
+"a\"b"
+"a\\b"
+"\u{1F44B}"
+```
+
+The escapes are `\\`, `\"`, `\n`, and `\u{…}`. `\u{…}` is one scalar, written in hex, at most `10FFFF`, and a surrogate (`D800` through `DFFF`) is refused. The literal has no interpolation. `strCat` concatenates two strings. `strLen` is the number of scalars, so `"é"` has length one and `"e\u{0301}"` has length two. `strEq` compares two strings and returns a `WBool`.
+
+`String` is Data, so `+ s : String` is allowed. The type `String` itself is erased in run and evidence: writing it as a value is `no promotion: String is an erased term`. A string and an atom stay distinct. `:hello` does not inhabit `String`, and `"hello"` does not inhabit `Atom`. There is no function from one to the other.
+
+A `match` on a string literal is not part of this version, and neither is an index into one. `examples/string.muro` is the worked book. Elixir emits a binary. JavaScript emits `{ string: "hello" }` and leaves an atom as a string. `muro__canon` prints `"hello"` for the string and `hello` for the atom. C, Rust, and Zig refuse a string. A `repr` string and an import path stay a raw span of quotes; they are not this type.
 
 ## Products
 

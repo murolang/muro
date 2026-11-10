@@ -13,7 +13,8 @@ defmodule Muro.Emit.C do
   and a raw `ν` in a run are refused (`c:stream`). `U8`, `U32`, `U64`,
   and `I64` are passed by value. Signed wrapping goes through `uint64_t`.
   A shift past the width and a division by zero are not evaluated.
-  `F32`, `Tensor`, `addt`, and `packI` are refused (`c:machine`). A lambda applied on the spot is a
+  `F32`, `Tensor`, `addt`, and `packI` are refused (`c:machine`).
+  A string is refused (`c:string`). A lambda applied on the spot is a
   local. An unapplied lambda, and a call of a local function, are
   `c:lambda`.
 
@@ -483,6 +484,10 @@ defmodule Muro.Emit.C do
     {:ok, {squash(["/* unreachable */", "abort();"]), "0", :opaque, st}}
   end
 
+  defp emit_ir({:str, _}, _env, _st, _expect), do: {:error, "c:string"}
+  defp emit_ir({:scat, _, _}, _env, _st, _expect), do: {:error, "c:string"}
+  defp emit_ir({:slen, _}, _env, _st, _expect), do: {:error, "c:string"}
+  defp emit_ir({:seq, _, _}, _env, _st, _expect), do: {:error, "c:string"}
   defp emit_ir(_other, _env, _st, _expect), do: {:error, "c:unsupported"}
 
   defp emit_args(args, types, env, st) do

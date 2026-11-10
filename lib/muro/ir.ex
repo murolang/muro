@@ -11,7 +11,8 @@ defmodule Muro.IR do
   them, so the same arm there is `b` plus the context length.
 
   Layouts: `:nat`, `:unit`, `:opaque`, `{:pair, a, b}`, `{:stream, a}`,
-  `{:data, name}`, `:u8`, `:u32`, `:u64`, `:i64`, `:wbool`, `{:opt, payload}`.
+  `{:data, name}`, `:u8`, `:u32`, `:u64`, `:i64`, `:wbool`, `{:opt, payload}`,
+  `:string`.
   `{:data, name}` is `dataL`. A word term is `{:wrd, kind, op, args}`.
   `closures: true` also uses `{:fn, arg, ret}`, `{:lam, name, lay, body}`,
   and `{:appv, fun, arg}`. The default image does not.
@@ -24,12 +25,15 @@ defmodule Muro.IR do
   (`Muro.Load.file/1`, then `Muro.Prelude.for_emit/1`).
 
   Returns `{:ok, funs}` or `{:error, reason}` where `reason` is one of
-  `c:lambda`, `c:machine`, `c:stream`, `c:erased`, `c:unsupported`.
+  `c:lambda`, `c:machine`, `c:stream`, `c:string`, `c:erased`,
+  `c:unsupported`.
 
   `opts` may set `closures: true`. That path elaborates a lambda as a
   closure instead of `c:lambda`, and a definition with fewer λs than Πs
-  is applied to the missing parameters. The default, `closures: false`,
-  is the image C, Rust, and Zig emit. It is unchanged.
+  is applied to the missing parameters. It also elaborates a string as
+  `{:str, utf8}`, `{:scat, a, b}`, `{:slen, a}`, or `{:seq, a, b}`.
+  The default, `closures: false`, is the image C, Rust, and Zig emit.
+  That image refuses a string.
   """
   def elaborate(book, opts \\ []) when is_list(book) and is_list(opts) do
     st = %{
@@ -516,6 +520,30 @@ defmodule Muro.IR do
     end
   end
 
+  defp elab_form(%{closures: true}, {:slit, bin}, _ctx, k) when is_binary(bin) do
+    ok({:str, bin}, :string, [], k)
+  end
+
+  defp elab_form(%{closures: true} = st, {:scat, a, b}, ctx, k) do
+    with {:ok, ea} <- elab(st, a, ctx, k),
+         {:ok, eb} <- elab(st, b, ctx, ea.k) do
+      ok({:scat, ea.tm, eb.tm}, :string, ea.steps ++ eb.steps, eb.k)
+    end
+  end
+
+  defp elab_form(%{closures: true} = st, {:slen, a}, ctx, k) do
+    with {:ok, ea} <- elab(st, a, ctx, k) do
+      ok({:slen, ea.tm}, :nat, ea.steps, ea.k)
+    end
+  end
+
+  defp elab_form(%{closures: true} = st, {:seq, a, b}, ctx, k) do
+    with {:ok, ea} <- elab(st, a, ctx, k),
+         {:ok, eb} <- elab(st, b, ctx, ea.k) do
+      ok({:seq, ea.tm, eb.tm}, :wbool, ea.steps ++ eb.steps, eb.k)
+    end
+  end
+
   defp elab_form(_st, t, _ctx, _k) do
     case bad_head(t) do
       nil -> {:error, "c:unsupported"}
@@ -637,6 +665,8 @@ defmodule Muro.IR do
   defp layout_of(_st, :empty), do: {:ok, :opaque}
   defp layout_of(_st, {:idt, _, _, _}), do: {:ok, :opaque}
   defp layout_of(_st, :atom), do: {:ok, {:data, "Atom"}}
+  defp layout_of(%{closures: true}, :string), do: {:ok, :string}
+  defp layout_of(_st, :string), do: {:error, "c:string"}
 
   defp layout_of(st, {:var, name}) do
     if data?(st.book, name), do: {:ok, {:data, name}}, else: {:ok, :opaque}
@@ -696,6 +726,11 @@ defmodule Muro.IR do
     end
   end
 
+  defp bad_head(:string), do: "c:string"
+  defp bad_head({:slit, _}), do: "c:string"
+  defp bad_head({:scat, _, _}), do: "c:string"
+  defp bad_head({:slen, _}), do: "c:string"
+  defp bad_head({:seq, _, _}), do: "c:string"
   defp bad_head(:f32ty), do: "c:machine"
   defp bad_head({:tensor, _, _}), do: "c:machine"
   defp bad_head({:addi, _, _}), do: "c:machine"

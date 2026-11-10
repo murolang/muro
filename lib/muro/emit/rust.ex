@@ -4,7 +4,8 @@ defmodule Muro.Emit.Rust do
   Run bodies are the image from `Muro.IR`.
 
   The text is what `rustc` translates. A refusal is the elaboration's:
-  `c:lambda`, `c:machine`, `c:stream`, `c:erased`, `c:unsupported`.
+  `c:lambda`, `c:machine`, `c:stream`, `c:string`, `c:erased`,
+  `c:unsupported`.
 
   Identifiers come from `Muro.Emit.Name`. A source name is spelled there.
   A helper, a step, a constructor argument, and a temporary are generated
@@ -408,6 +409,10 @@ defmodule Muro.Emit.Rust do
     end
   end
 
+  defp emit_tm({:str, _}, _env, _st), do: {:error, "c:string"}
+  defp emit_tm({:scat, _, _}, _env, _st), do: {:error, "c:string"}
+  defp emit_tm({:slen, _}, _env, _st), do: {:error, "c:string"}
+  defp emit_tm({:seq, _, _}, _env, _st), do: {:error, "c:string"}
   defp emit_tm(_other, _env, _st), do: {:error, "c:unsupported"}
 
   defp emit_list(ts, env, st) do
