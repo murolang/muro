@@ -324,8 +324,10 @@ defmodule Muro.CliTest do
 
   test "the release workflow builds the four assets and smokes the Linux binary" do
     text = File.read!(".github/workflows/release.yml")
+    smoke = File.read!("scripts/release-linux-smoke.sh")
     assert text =~ "tags:"
     assert text =~ "- \"v*\""
+    assert text =~ "workflow_dispatch:"
     assert text =~ "macos-aarch64"
     assert text =~ "macos-x86_64"
     assert text =~ "linux-x86_64"
@@ -333,25 +335,30 @@ defmodule Muro.CliTest do
     refute text =~ "musl"
     assert text =~ "zig-${zarch}-linux-0.15.2"
     assert text =~ "0.15.2"
-    assert text =~ "muro --version"
-    assert text =~ "muro check"
-    assert text =~ "muro emit /tmp/one.muro --backend rust"
-    assert text =~ "ubuntu:24.04"
+    assert text =~ "scripts/release-linux-smoke.sh"
+    assert text =~ "vars.CI_RUNNER || 'ubuntu-24.04'"
+
+    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \|\| 'ubuntu-24\.04' \}\}/, text)) ==
+             1
+
+    assert smoke =~ "muro --version"
+    assert smoke =~ "muro check"
+    assert smoke =~ "muro emit /tmp/one.muro --backend rust"
+    assert smoke =~ "ubuntu:24.04"
     refute text =~ "hex.publish"
   end
 
-  test "the release is created only after the smoke job succeeds" do
+  test "the release is created only after the binaries are smoked" do
     text = File.read!(".github/workflows/release.yml")
-    [built, smoked] = String.split(text, ~r/^  smoke:/m, parts: 2)
-    refute built =~ "gh release"
-
-    [smoke, published] = String.split(smoked, ~r/^  release:/m, parts: 2)
-    refute smoke =~ "gh release"
-    assert published =~ ~r/needs:\s*(\[\s*)?smoke/
-    assert published =~ "gh release create"
-    assert published =~ "gh release upload"
-    assert published =~ "--clobber"
-    assert published =~ "actions/download-artifact"
+    refute text =~ "actions/upload-artifact"
+    refute text =~ "actions/download-artifact"
+    [before_smoke, after_smoke] = String.split(text, "Smoke the matching Linux binary", parts: 2)
+    refute before_smoke =~ "gh release"
+    assert after_smoke =~ "gh release create"
+    assert after_smoke =~ "gh release upload"
+    assert after_smoke =~ "--clobber"
+    assert after_smoke =~ "inputs.dry_run"
+    assert after_smoke =~ "github.event_name != 'pull_request'"
   end
 
   defp assert_same(fun, argv, cd \\ nil) do

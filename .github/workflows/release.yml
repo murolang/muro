@@ -4,17 +4,57 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to rebuild (for example v0.20.24)
+        required: true
+        type: string
+      dry_run:
+        description: Build and smoke without publishing a GitHub release
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
-  binaries:
+  release:
     name: Self-contained binaries
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
+
+      - name: Read the package version
+        id: version
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^[[:space:]]*version: "\([^"]*\)".*/\1/p' mix.exs | head -1)
+          test -n "$version"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "package version ${version}"
+
+      - name: Require the tag to match mix.exs
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${{ github.ref_name }}"
+          fi
+          tag="${tag#refs/tags/}"
+          expected="v${version}"
+          if [ "$tag" != "$expected" ]; then
+            echo "::error::tag ${tag} does not match mix.exs version ${version} (expected ${expected})"
+            exit 1
+          fi
+          echo "building ${expected}"
 
       - uses: jdx/mise-action@v4
 
@@ -43,7 +83,7 @@ jobs:
       - name: Name the assets
         run: |
           set -euo pipefail
-          version=$(sed -n 's/^[[:space:]]*version: "\([^"]*\)".*/\1/p' mix.exs | head -1)
+          version="${{ steps.version.outputs.version }}"
           mkdir -p dist
           name_one() {
             src="$1"
@@ -58,67 +98,48 @@ jobs:
           name_one burrito_out/muro_linux_x86_64 linux-x86_64
           name_one burrito_out/muro_linux_aarch64 linux-aarch64
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: muro-binaries
-          path: dist/*
-
-  smoke:
-    name: Smoke the Linux x86_64 binary
-    needs: binaries
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: muro-binaries
-          path: dist
-
-      - name: Run in a container with no Elixir
+      - name: Load the smoke scripts from the workflow commit
         run: |
           set -euo pipefail
-          test -f dist/muro-*-linux-x86_64
-          docker run --rm -i \
-            -v "$PWD/dist:/opt:ro" \
-            -v "$PWD/scripts/release-std-smoke.sh:/release-std-smoke.sh:ro" \
-            ubuntu:24.04 /bin/bash -s <<'SCRIPT'
+          git fetch --depth=1 origin "${{ github.ref }}"
+          git checkout "${{ github.sha }}" -- scripts/release-linux-smoke.sh scripts/release-std-smoke.sh
+
+      - name: Smoke the matching Linux binary
+        run: bash scripts/release-linux-smoke.sh dist
+
+      - name: Install GitHub CLI
+        if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        run: |
           set -euo pipefail
-          if command -v elixir >/dev/null || command -v erl >/dev/null; then
-            echo "the smoke container has Elixir or Erlang" >&2
-            exit 1
+          if command -v gh >/dev/null 2>&1; then
+            gh --version
+            exit 0
           fi
-          bin=$(echo /opt/muro-*-linux-x86_64)
-          cp "$bin" /tmp/muro
-          chmod 0755 /tmp/muro
-          /tmp/muro --version
-          /tmp/muro check
-          printf '%s\n' 'def one : run Nat := 0' > /tmp/one.muro
-          /tmp/muro emit /tmp/one.muro --backend rust
-          test -f /tmp/one.rs
-          bash /release-std-smoke.sh /tmp/muro
-          SCRIPT
-
-  release:
-    name: Publish the GitHub release
-    needs: smoke
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: muro-binaries
-          path: dist
+          sudo apt-get update
+          if sudo apt-get install -y gh; then
+            gh --version
+            exit 0
+          fi
+          tmp=$(mktemp -d)
+          case "$(uname -m)" in
+            x86_64) garch=amd64 ;;
+            aarch64|arm64) garch=arm64 ;;
+            *) echo "unsupported arch $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL -o "$tmp/gh.tgz" \
+            "https://github.com/cli/cli/releases/download/v2.81.0/gh_2.81.0_linux_${garch}.tar.gz"
+          tar -xzf "$tmp/gh.tgz" -C "$tmp"
+          sudo install -m 0755 "$tmp"/gh_*/bin/gh /usr/local/bin/gh
+          gh --version
 
       - name: Attach the assets to the GitHub release
+        if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version=$(sed -n 's/^[[:space:]]*version: "\([^"]*\)".*/\1/p' mix.exs | head -1)
+          version="${{ steps.version.outputs.version }}"
+          test -n "$version"
           tag="v${version}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" --title "$tag" --notes "Muro ${version}"
