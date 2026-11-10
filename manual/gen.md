@@ -57,7 +57,13 @@ With no Mix project, the root is the working directory. Inside a Mix project, th
 mix muro.gen
 ```
 
-The task checks every listed book with the manifest's fuel before it emits anything. If any book fails, it prints each failure and writes nothing. The line ends with `muro.gen wrote nothing`.
+The task checks every listed book with the manifest's fuel before it emits anything. If any book fails, it prints each failure and writes nothing. The line ends with `muro.gen wrote nothing`. A book that does not check is named that way. A book that checks, and that the backend then refuses, names the backend:
+
+```
+out/home.mjs: books/home.muro is refused by the js backend
+c:host in home (place)
+muro.gen wrote nothing
+```
 
 Otherwise it emits each module, formats it, adds the header, and writes the target, creating directories. One line per target:
 

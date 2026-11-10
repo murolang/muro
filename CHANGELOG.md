@@ -18,6 +18,21 @@ The Agda library no longer sets `--without-K`. The proofs use K. `make agda` sti
 
 - Version 0.20.31.
 
+## 0.20.29
+
+JavaScript emit writes the runs of a book that also declares a session it does not turn into a stepper. A protocol the machine cannot represent is left out. A session whose payload type has a host representation is left out. The runs are written. A session that can be a stepper is still that stepper, beside the runs. A book that imports the session emits when its own runs do not use the session.
+
+A place, a scheme, or a move is still refused, and nothing is written. `mix muro.gen` says the backend refused the book when the book checked and the emitter refused it. A book that does not check is reported as before. The module still has no encode or decode for a host representation.
+
+### Manual
+
+- Emit.
+- Committed modules.
+
+### Package
+
+- Version 0.20.29.
+
 ## 0.20.28
 
 `String` is a type of Unicode scalars, distinct from `Atom`. A literal is `"hello"`, with escapes `\\`, `\"`, `\n`, and `\u{...}`. `strCat` concatenates, `strLen` is the number of scalars, and `strEq` compares. There is no coercion between a string and an atom.

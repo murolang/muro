@@ -36,7 +36,9 @@ defmodule Mix.Tasks.Muro.Gen do
 
   `mix muro.gen` checks every listed book with that fuel before it
   writes. If any book fails, it prints each failure and writes
-  nothing. Otherwise it formats each module with the project's
+  nothing. A book that checks, and that the backend then refuses, is
+  reported as refused by that backend, and nothing is written. When
+  every book is emitted, it formats each module with the project's
   `.formatter.exs` when that file exists, adds the header, and writes
   the target, creating directories. One line per target says `written`
   or `unchanged`. A package-using target then prints each
