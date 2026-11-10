@@ -101,7 +101,7 @@ OTP, `--node`, fsm, and `repr` codecs are not this backend. A lambda is a closur
 
 ## Differential testing
 
-Tests elaborate the same book twice. Elixir comes from `Muro.emit_file/3`, compiled in the test, and walked to the canon string above. JavaScript is the emitted module, imported by a driver, and printed with `muro__canon`. Streams are compared by forcing a prefix with `Enum.take` on one side and `muro__uncons` on the other. The original seed is forced twice to check that `uncons` does not mutate it.
+Tests elaborate the same book twice. Elixir comes from `Muro.emit_file/3`, compiled in the test, and walked to the canon string above. JavaScript is the emitted module, imported by a driver, and printed with `muro__canon`. Streams are compared by forcing a prefix with `Enum.take` on one side and `muro__uncons` on the other. The original seed is forced twice to check that `uncons` does not mutate it. CI installs Node and runs these differentials. When `CI` is set and `node` is missing, the file fails. When `CI` is unset and `node` is missing, the differentials are skipped.
 
 A layout-directed Elixir walk treats `{:suc, _}` as a `Nat` before it treats an atom-headed tuple as a constructor. A pair of `Nat`s is printed as a pair. Atoms and nullary constructors print without a colon, so `:b0` and the string `"b0"` agree, and `:nil` and `{tag: "nil", fields: []}` both print `nil`.
 
