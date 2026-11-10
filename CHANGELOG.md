@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.30
+
+JavaScript emit writes `decode_<type>` and `encode_<type>` for each host representation, beside the runs. Decode returns `{ok: {value, table}}` or `{error: {path, reason}}` and does not throw. Encode takes the value and the name table and returns `{ok: wire}` or `{error}`. A decoded nat is a bigint. The value is the same one a run uses. A book with no representation emits no codec. A session whose payload type has a representation is still omitted, and the runs and the codecs are written.
+
+Decoding a long run of new names copies the name table once and leaves the caller's table unchanged. String keys and interned names follow Unicode scalar order, the same order as the Elixir codec. A name that is not valid Unicode is refused. A nat that fits in a safe integer encodes as a number, and a larger nat encodes as a bigint. A date or a class instance is not a map.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.30.
+
 ## 0.20.29
 
 JavaScript emit writes the runs of a book that also declares a session it does not turn into a stepper. A protocol the machine cannot represent is left out. A session whose payload type has a host representation is left out. The runs are written. A session that can be a stepper is still that stepper, beside the runs. A book that imports the session emits when its own runs do not use the session.
