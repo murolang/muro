@@ -14,9 +14,10 @@ defmodule Muro.Emit.JS do
   `c:unsupported`, or the reason a session state machine refuses,
   and it names the definition. When the refusal has a construct, the
   message names that too (`c:host in home (place)`). A lambda is a
-  closure, so `c:lambda` is not a refusal here. A host placement
-  refuses the book. A session endpoint is a synchronous stepper beside
-  the runs. Two source names that spell one JavaScript
+  closure, so `c:lambda` is not a refusal here. A string is
+  `{ string: "…" }` and an atom stays a JavaScript string. A host
+  placement refuses the book. A session endpoint is a synchronous
+  stepper beside the runs. Two source names that spell one JavaScript
   identifier are refused before any file is written.
 
   This is not `Muro.Emit.Node`. That file is the BEAM `--node` backend.
@@ -60,7 +61,7 @@ defmodule Muro.Emit.JS do
   @ts_reserved ~w(
     string number boolean bigint symbol any unknown never object
     undefined null void this
-    Nat Unit U8 U32 U64 I64 WordBool Opt Pair Stream Atom
+    Nat Unit U8 U32 U64 I64 WordBool Opt Pair Stream Atom String
   ) |> MapSet.new()
 
   @type_forbidden MapSet.union(@forbidden, @ts_reserved)
@@ -74,6 +75,7 @@ defmodule Muro.Emit.JS do
     shl ashr shr toZ fromZ inRange some none
     cadd csub cmul badDiv negBits absBits div rem
     of ton cast scrut pair
+    scat slen seq qstr
     bounce go hole ret stack
   )
 
@@ -361,6 +363,9 @@ defmodule Muro.Emit.JS do
   end
 
   defp calls_acc({:wrd, _, _, args}, acc), do: Enum.reduce(args, acc, &calls_acc/2)
+  defp calls_acc({:scat, a, b}, acc), do: calls_acc(b, calls_acc(a, acc))
+  defp calls_acc({:slen, a}, acc), do: calls_acc(a, acc)
+  defp calls_acc({:seq, a, b}, acc), do: calls_acc(b, calls_acc(a, acc))
   defp calls_acc(_tm, acc), do: acc
 
   defp build_targets(funs, names, step_names, rec) do
@@ -781,6 +786,9 @@ defmodule Muro.Emit.JS do
   end
 
   defp contains_rec?({:wrd, _, _, args}, rec), do: Enum.any?(args, &contains_rec?(&1, rec))
+  defp contains_rec?({:scat, a, b}, rec), do: contains_rec?(a, rec) or contains_rec?(b, rec)
+  defp contains_rec?({:slen, a}, rec), do: contains_rec?(a, rec)
+  defp contains_rec?({:seq, a, b}, rec), do: contains_rec?(a, rec) or contains_rec?(b, rec)
   defp contains_rec?(_tm, _rec), do: false
 
   defp lift({:call, name, args} = tm, rec) do
@@ -856,6 +864,22 @@ defmodule Muro.Emit.JS do
 
   defp lift({:wrd, k, op, args}, rec) do
     lift_kids(args, rec, fn args -> {:wrd, k, op, args} end)
+  end
+
+  defp lift({:scat, a, b}, rec) do
+    case lift(a, rec) do
+      {:ok, call, rebuild} -> {:ok, call, fn hole -> {:scat, rebuild.(hole), b} end}
+      :none -> lift_one(b, rec, fn hole -> {:scat, a, hole} end)
+    end
+  end
+
+  defp lift({:slen, a}, rec), do: lift_one(a, rec, fn hole -> {:slen, hole} end)
+
+  defp lift({:seq, a, b}, rec) do
+    case lift(a, rec) do
+      {:ok, call, rebuild} -> {:ok, call, fn hole -> {:seq, rebuild.(hole), b} end}
+      :none -> lift_one(b, rec, fn hole -> {:seq, a, hole} end)
+    end
   end
 
   defp lift(_tm, _rec), do: :none
@@ -1031,6 +1055,24 @@ defmodule Muro.Emit.JS do
   end
 
   defp emit_tm({:con, "Atom", name, []}, _st), do: {:ok, js_str(name)}
+
+  defp emit_tm({:str, bin}, _st) when is_binary(bin), do: {:ok, "{ string: #{js_str(bin)} }"}
+
+  defp emit_tm({:scat, a, b}, st) do
+    with {:ok, ea} <- emit_tm(a, st),
+         {:ok, eb} <- emit_tm(b, st),
+         do: {:ok, "#{st.h.scat}(#{ea}, #{eb})"}
+  end
+
+  defp emit_tm({:slen, a}, st) do
+    with {:ok, e} <- emit_tm(a, st), do: {:ok, "#{st.h.slen}(#{e})"}
+  end
+
+  defp emit_tm({:seq, a, b}, st) do
+    with {:ok, ea} <- emit_tm(a, st),
+         {:ok, eb} <- emit_tm(b, st),
+         do: {:ok, "#{st.h.seq}(#{ea}, #{eb})"}
+  end
 
   defp emit_tm({:con, _data, cname, args}, st) do
     with {:ok, es} <- emit_many(args, st) do
@@ -1267,6 +1309,9 @@ defmodule Muro.Emit.JS do
   end
 
   defp occurs_bind?(name, {:wrd, _, _, args}), do: Enum.any?(args, &occurs_bind?(name, &1))
+  defp occurs_bind?(name, {:scat, a, b}), do: occurs_bind?(name, a) or occurs_bind?(name, b)
+  defp occurs_bind?(name, {:slen, a}), do: occurs_bind?(name, a)
+  defp occurs_bind?(name, {:seq, a, b}), do: occurs_bind?(name, a) or occurs_bind?(name, b)
   defp occurs_bind?(_name, _other), do: false
 
   defp emit_wrd(k, op, args, st) do
@@ -1407,15 +1452,23 @@ defmodule Muro.Emit.JS do
   defp js_str(s) when is_binary(s) do
     body =
       s
-      |> String.replace("\\", "\\\\")
-      |> String.replace("\"", "\\\"")
-      |> String.replace("\n", "\\n")
-      |> String.replace("\r", "\\r")
-      |> String.replace("\u2028", "\\u2028")
-      |> String.replace("\u2029", "\\u2029")
+      |> :unicode.characters_to_list()
+      |> Enum.map_join(&js_scalar/1)
 
     "\"" <> body <> "\""
   end
+
+  defp js_scalar(?\\), do: "\\\\"
+  defp js_scalar(?"), do: "\\\""
+  defp js_scalar(?\n), do: "\\n"
+  defp js_scalar(?\r), do: "\\r"
+  defp js_scalar(0x2028), do: "\\u2028"
+  defp js_scalar(0x2029), do: "\\u2029"
+
+  defp js_scalar(n) when n < 0x20 or n == 0x7F,
+    do: "\\u{" <> Integer.to_string(n, 16) <> "}"
+
+  defp js_scalar(n), do: <<n::utf8>>
 
   # A second binder `_` is `_2`. `Name.claim/2` would write `__2`,
   # because its suffix is `_` plus digits and the base is already `_`.
@@ -1578,6 +1631,23 @@ defmodule Muro.Emit.JS do
       const #{h["pair"]} = s.step(s.env, s.seed);
       return [#{h["pair"]}[0], { seed: #{h["pair"]}[1], env: s.env, step: s.step }];
     }
+    function #{h["qstr"]}(s) {
+      const bs = String.fromCharCode(92);
+      const q = String.fromCharCode(34);
+      let out = q;
+      for (const ch of s) {
+        const cp = ch.codePointAt(0);
+        if (cp === 92) out += bs + bs;
+        else if (cp === 34) out += bs + q;
+        else if (cp === 10) out += bs + "n";
+        else if (cp < 32 || cp === 127) out += bs + "u{" + cp.toString(16) + "}";
+        else out += ch;
+      }
+      return out + q;
+    }
+    function #{h["scat"]}(a, b) { return { string: a.string + b.string }; }
+    function #{h["slen"]}(a) { return BigInt(Array.from(a.string).length); }
+    function #{h["seq"]}(a, b) { return a.string === b.string; }
     export function #{h["canon"]}(v) {
       if (typeof v === "bigint") return (v < 0n ? BigInt.asUintN(64, v) : v).toString();
       if (v === null) return "tt";
@@ -1586,6 +1656,7 @@ defmodule Muro.Emit.JS do
       if (typeof v === "function") return "fn";
       if (Array.isArray(v)) return "(" + v.map(#{h["canon"]}).join(",") + ")";
       if (v && typeof v === "object") {
+        if (Object.keys(v).length === 1 && typeof v.string === "string") return #{h["qstr"]}(v.string);
         if (typeof v.tag === "string" && Array.isArray(v.fields)) {
           if (v.fields.length === 0) return v.tag;
           return v.tag + "(" + v.fields.map(#{h["canon"]}).join(",") + ")";
@@ -1752,6 +1823,7 @@ defmodule Muro.Emit.JS do
     export type I64 = bigint;
     export type WordBool = boolean;
     export type Atom = string;
+    export type String = { readonly string: string };
     export type Opt<T> = { readonly k: "none" } | { readonly k: "some"; readonly v: T };
     export type Pair<A, B> = readonly [A, B];
     export type Stream<A> = {
@@ -1947,6 +2019,7 @@ defmodule Muro.Emit.JS do
   defp rough_form(_book, :unit, _tparams), do: :unit
   defp rough_form(_book, :i64, _tparams), do: :i64
   defp rough_form(_book, :atom, _tparams), do: {:data, "Atom"}
+  defp rough_form(_book, :string, _tparams), do: :string
   defp rough_form(_book, {:word, {:ty, k}, []}, _tparams) when k in [:u8, :u32, :u64], do: k
   defp rough_form(_book, {:word, :bool, []}, _tparams), do: :wbool
   defp rough_form(_book, {:word, {:optk, k}, []}, _tparams), do: {:opt, rough_word(k)}
@@ -2037,6 +2110,7 @@ defmodule Muro.Emit.JS do
   defp render_lay(:opaque, _ctx, _nested), do: "unknown"
   defp render_lay(:never, _ctx, _nested), do: "never"
   defp render_lay({:data, "Atom"}, _ctx, _nested), do: "Atom"
+  defp render_lay(:string, _ctx, _nested), do: "String"
   defp render_lay({:tyvar, name}, ctx, _nested), do: Map.get(ctx.tyvars, name, type_spell(name))
 
   defp render_lay({:data, name, args}, ctx, _nested) do

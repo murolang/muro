@@ -1,0 +1,57 @@
+-- string.muro — a string is a sequence of Unicode scalars.
+
+def hello : run String := "hello"
+
+def wave : run String := "\u{1F44B}"
+
+def accent : run String := "é"
+
+def empty : run String := ""
+
+def empty_n : run Nat := strLen ""
+
+def parts : run String := strCat "hel" "lo"
+
+def nl : run String := "a\nb"
+
+def quoted : run String := "a\"b"
+
+def slash : run String := "a\\b"
+
+def nul : run String := "\u{0}"
+
+def n : run Nat := strLen "é"
+
+def two : run Nat := strLen "e\u{0301}"
+
+def wave_n : run Nat := strLen wave
+
+def nul_n : run Nat := strLen nul
+
+def yes : run WBool := strEq "hello" hello
+
+def no : run WBool := strEq "hello" "world"
+
+def id : run Π (s : String) → String :=
+  λ (s : String) → s
+
+def twice : run Π (+ s : String) → String :=
+  λ (+ s : String) → strCat s s
+
+def tag : run Atom := :hello
+
+def parts_ok : evidence {strCat "hel" "lo" ≡ "hello" : String} := refl
+
+def empty_ok : evidence {strLen "" ≡ 0 : Nat} := refl
+
+def accent_ok : evidence {strLen "é" ≡ suc 0 : Nat} := refl
+
+def combining_ok : evidence {strLen "e\u{0301}" ≡ suc (suc 0) : Nat} := refl
+
+def wave_ok : evidence {strLen wave ≡ suc 0 : Nat} := refl
+
+def nul_ok : evidence {strLen "\u{0}" ≡ suc 0 : Nat} := refl
+
+def eq_ok : evidence {strEq "a" "a" ≡ wtrue : WBool} := refl
+
+def eq_no : evidence {strEq "a" "b" ≡ wfalse : WBool} := refl

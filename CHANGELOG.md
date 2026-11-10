@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.28
+
+`String` is a type of Unicode scalars, distinct from `Atom`. A literal is `"hello"`, with escapes `\\`, `\"`, `\n`, and `\u{...}`. `strCat` concatenates, `strLen` is the number of scalars, and `strEq` compares. There is no coercion between a string and an atom.
+
+Elixir emits a binary. JavaScript emits `{ string: "hello" }` and leaves an atom as a string. `muro__canon` prints `"hello"` for the string and `hello` for the atom. C, Rust, Zig, and assembly refuse a string.
+
+### Manual
+
+- Terms. Grammar. Emit.
+
+### Package
+
+- Version 0.20.28.
+
 ## 0.20.27
 
 JavaScript emit writes each session endpoint as a synchronous stepper beside the runs. The module starts no process and talks to no peer. The host owns the transport.

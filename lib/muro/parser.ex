@@ -410,6 +410,75 @@ defmodule Muro.Parser do
     read_string(rest, acc <> c)
   end
 
+  # A core string is a term. Escapes are `\\`, `\"`, `\n`, and `\u{…}`.
+  # A `repr` string and an import path stay on `read_string/2`: a quote
+  # ends them and a backslash is a character.
+  defp parse_core_string(s) do
+    "\"" <> rest = s
+
+    case read_core_string(rest, []) do
+      {:ok, bin, rest} -> leaf(s, {:slit, bin}, rest)
+      {:error, msg, at} -> {:error, err(at, msg)}
+    end
+  end
+
+  defp read_core_string("\"" <> rest, acc), do: {:ok, finish_string(acc), rest}
+  defp read_core_string("\n" <> _ = s, _acc), do: {:error, "unclosed string", s}
+  defp read_core_string("", _acc), do: {:error, "unclosed string", ""}
+  defp read_core_string("\\" <> _ = s, acc), do: read_escape(s, acc)
+
+  defp read_core_string(<<c::utf8, rest::binary>>, acc),
+    do: read_core_string(rest, [c | acc])
+
+  defp read_core_string(s, _acc), do: {:error, "bad string", s}
+
+  defp read_escape("\\\\" <> rest, acc), do: read_core_string(rest, [?\\ | acc])
+  defp read_escape("\\\"" <> rest, acc), do: read_core_string(rest, [?" | acc])
+  defp read_escape("\\n" <> rest, acc), do: read_core_string(rest, [?\n | acc])
+  defp read_escape("\\u{" <> rest, acc), do: read_scalar(rest, acc)
+  defp read_escape(s, _acc), do: {:error, "bad escape", s}
+
+  defp read_scalar(s, acc) do
+    case take_hex(s, 0, 0) do
+      {:ok, n, k, rest} when k > 0 -> close_scalar(rest, n, acc)
+      _ -> {:error, "bad unicode scalar", s}
+    end
+  end
+
+  defp take_hex(<<c, rest::binary>>, n, k) when k < 6 and c in ?0..?9,
+    do: take_hex(rest, n * 16 + (c - ?0), k + 1)
+
+  defp take_hex(<<c, rest::binary>>, n, k) when k < 6 and c in ?a..?f,
+    do: take_hex(rest, n * 16 + (c - ?a + 10), k + 1)
+
+  defp take_hex(<<c, rest::binary>>, n, k) when k < 6 and c in ?A..?F,
+    do: take_hex(rest, n * 16 + (c - ?A + 10), k + 1)
+
+  defp take_hex(s, n, k), do: {:ok, n, k, s}
+
+  defp close_scalar("}" <> rest, n, acc) do
+    if scalar?(n) do
+      read_core_string(rest, [n | acc])
+    else
+      {:error, "bad unicode scalar", rest}
+    end
+  end
+
+  defp close_scalar(<<c, _::binary>> = s, _n, _acc)
+       when c in ?0..?9 or c in ?a..?f or c in ?A..?F,
+       do: {:error, "bad unicode scalar", s}
+
+  defp close_scalar(s, _n, _acc), do: {:error, "unclosed unicode escape", s}
+
+  defp scalar?(n) when is_integer(n) and n >= 0 and n <= 0x10FFFF,
+    do: n < 0xD800 or n > 0xDFFF
+
+  defp scalar?(_), do: false
+
+  defp finish_string(acc) do
+    acc |> Enum.reverse() |> :unicode.characters_to_binary()
+  end
+
   # `ν Stream (A : Type) : Type where uncons : Stream A → A × Stream A`
   # is checked for shape and dropped: Stream is primitive. Any other name
   # declares a family over its indices,
@@ -4037,7 +4106,7 @@ defmodule Muro.Parser do
         case s do
           <<c, _::binary>>
           when c in ?a..?z or c in ?A..?Z or c in ?0..?9 or c == ?_ or c == ?( or
-                 c == ?{ or c == ?[ or c == ?? or c == ?: ->
+                 c == ?{ or c == ?[ or c == ?? or c == ?: or c == ?" ->
             atom_lit?(s) or c != ?:
 
           _ ->
@@ -4055,6 +4124,21 @@ defmodule Muro.Parser do
 
       word_kw?(s, "Atom") ->
         leaf(s, :atom, after_kw(s, "Atom"))
+
+      word_kw?(s, "String") ->
+        leaf(s, :string, after_kw(s, "String"))
+
+      has_prefix?(s, "\"") ->
+        parse_core_string(s)
+
+      word_kw?(s, "strCat") ->
+        parse_binary(s, "strCat", :scat)
+
+      word_kw?(s, "strLen") ->
+        parse_unary(s, "strLen", :slen)
+
+      word_kw?(s, "strEq") ->
+        parse_binary(s, "strEq", :seq)
 
       word_kw?(s, "Type") ->
         leaf(s, :typ, after_kw(s, "Type"))

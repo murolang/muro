@@ -397,6 +397,7 @@ defmodule Muro.Emit.ExUnitSuite do
   defp type_class(:nat, _ctx), do: :data
   defp type_class(:unit, _ctx), do: :data
   defp type_class(:atom, _ctx), do: :data
+  defp type_class(:string, _ctx), do: :data
   defp type_class(:empty, _ctx), do: :data
 
   defp type_class({:prod, a, b}, ctx) do
@@ -427,6 +428,7 @@ defmodule Muro.Emit.ExUnitSuite do
   defp type_class({:su, _}, _ctx), do: :index
   defp type_class(:one, _ctx), do: :index
   defp type_class({:atom, _}, _ctx), do: :index
+  defp type_class({:slit, _}, _ctx), do: :index
   defp type_class(_other, _ctx), do: :other
 
   # An index of a data type (a nat, a variable) does not make the value
