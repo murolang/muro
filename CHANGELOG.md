@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.25
+## 0.20.26
 
 JavaScript emit writes each session endpoint as a synchronous stepper beside the runs. The module starts no process and talks to no peer. The host owns the transport.
 
@@ -14,7 +14,21 @@ A payload is the same value a run uses: a bigint nat, `"b0"` or `"b1"`, `null`, 
 
 ### Package
 
-- Version 0.20.25.
+- Version 0.20.26.
+
+## 0.20.24
+
+JavaScript emits a `match` on a variable bound by the enclosing arm. The element a list arm binds is that variable. The inner match may be the arm or an argument of a constructor, and the function may recurse on the tail.
+
+A refusal from the JavaScript backend names the definition it refused, and names the construct when the refusal has one.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.24.
 
 ## 0.20.23
 

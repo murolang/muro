@@ -53,7 +53,9 @@ defmodule Muro.EmitJSSessionTest do
              Emit.Fsm.render(seated, "examples/seated.muro", Emit.fsm_module("seated.muro"))
 
     assert seated_reason =~ "seen is not a state machine"
-    assert {:error, "c:host"} = Emit.JS.render(seated, "seated", path: "examples/seated.muro")
+
+    assert {:error, "c:host in home (place)"} =
+             Emit.JS.render(seated, "seated", path: "examples/seated.muro")
 
     src = """
     session s := rec X. X
@@ -67,7 +69,9 @@ defmodule Muro.EmitJSSessionTest do
 
   test "a place is c:host and a repr payload is refused" do
     located = book!("examples/located.muro")
-    assert {:error, "c:host"} = Emit.JS.render(located, "located", path: "examples/located.muro")
+
+    assert {:error, "c:host in home (place)"} =
+             Emit.JS.render(located, "located", path: "examples/located.muro")
 
     pair = book!("examples/pair.muro")
     assert {:ok, source, _types} = Emit.JS.render(pair, "pair", path: "examples/pair.muro")
@@ -228,7 +232,10 @@ defmodule Muro.EmitJSSessionTest do
   @tag skip: @node_skip
   test "session parameters and a run case agree with fsm" do
     path = "examples/session-calls.muro"
-    assert {:error, "c:host"} = Emit.JS.render(book!(path), "session-calls", path: path)
+
+    assert {:error, "c:host in home (place)"} =
+             Emit.JS.render(book!(path), "session-calls", path: path)
+
     {_source, _types, dir} = emit_book!(without_host!(path), path)
 
     script = """
@@ -307,7 +314,9 @@ defmodule Muro.EmitJSSessionTest do
   test "fsm corpus traces agree with the javascript stepper" do
     for path <- @corpus do
       if path == "examples/session-calls.muro" do
-        assert {:error, "c:host"} = Emit.JS.render(book!(path), stem(path), path: path)
+        assert {:error, "c:host in home (place)"} =
+                 Emit.JS.render(book!(path), stem(path), path: path)
+
         differ_book!(without_host!(path), path)
       else
         differ!(path)

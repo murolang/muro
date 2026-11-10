@@ -14,7 +14,7 @@ defmodule Muro.IR do
   `{:data, name}`, `:u8`, `:u32`, `:u64`, `:i64`, `:wbool`, `{:opt, payload}`.
   `{:data, name}` is `dataL`. A word term is `{:wrd, kind, op, args}`.
   `closures: true` also uses `{:fn, arg, ret}`, `{:lam, name, lay, body}`,
-  and `{:appv, fun, arg}`. The default image does not.
+  `{:appv, fun, arg}`, and `{:data, name, args}`. The default image does not.
   """
 
   alias Muro.{Ast, Load, Prelude}
@@ -23,8 +23,11 @@ defmodule Muro.IR do
   Elaborate every `run` definition in `book`, which is a checked named book
   (`Muro.Load.file/1`, then `Muro.Prelude.for_emit/1`).
 
-  Returns `{:ok, funs}` or `{:error, reason}` where `reason` is one of
-  `c:lambda`, `c:machine`, `c:stream`, `c:erased`, `c:unsupported`.
+  Returns `{:ok, funs}` or `{:error, reason}`. `reason` is `c:lambda`,
+  `c:machine`, `c:stream`, `c:erased`, or `c:unsupported`. With
+  `closures: true` a refusal is `{:named, reason, def_name}` instead.
+  That path may also record `{:data, name, args}`. The default image
+  keeps the bare reason and `{:data, name}`.
 
   `opts` may set `closures: true`. That path elaborates a lambda as a
   closure instead of `c:lambda`, and a definition with fewer λs than Πs
@@ -61,12 +64,25 @@ defmodule Muro.IR do
         elab_runs(st, ds, k)
 
       true ->
-        with {:ok, {fun, steps, k1}} <- elab_fun(st, d, k),
-             {:ok, rest} <- elab_runs(st, ds, k1) do
-          {:ok, [fun | steps ++ rest]}
+        case elab_fun(st, d, k) do
+          {:ok, {fun, steps, k1}} ->
+            with {:ok, rest} <- elab_runs(st, ds, k1) do
+              {:ok, [fun | steps ++ rest]}
+            end
+
+          {:error, reason} ->
+            {:error, named_closure(st, d, reason)}
         end
     end
   end
+
+  # A later definition's tagged error passes through `with` above.
+  # Wrapping only this definition's bare reason keeps the failing name.
+  defp named_closure(%{closures: true}, %{name: name}, reason)
+       when is_binary(reason) and is_binary(name),
+       do: {:named, reason, name}
+
+  defp named_closure(_st, _d, reason), do: reason
 
   # One λ per Π. An erased Π or an erased λ drops that parameter.
   # Fewer λs than Πs is c:unsupported, unless `closures: true`, which
@@ -434,7 +450,8 @@ defmodule Muro.IR do
          {:ok, dname} <- data_key(ee.lay),
          {:ok, data} <- find_data(st.book, dname),
          :ok <- branch_count(data.ctors, bs),
-         {:ok, {arms, steps, k1}} <- elab_arms(st, data.ctors, bs, ctx, ee.k),
+         {:ok, {arms, steps, k1}} <-
+           elab_arms(st, data.ctors, bs, ctx, ee.k, field_subst(st, data, ee.lay)),
          {:ok, rlay} <- motive_lay(st, mot, ee.lay, mx) do
       ok(match_tm(st, ee.tm, {:data, dname}, arms), rlay, ee.steps ++ steps, k1)
     end
@@ -523,22 +540,22 @@ defmodule Muro.IR do
     end
   end
 
-  defp elab_arms(_st, [], [], _ctx, k), do: {:ok, {[], [], k}}
+  defp elab_arms(_st, [], [], _ctx, k, _subst), do: {:ok, {[], [], k}}
 
-  defp elab_arms(st, [c | cs], [{cname, binders, body} | bs], ctx, k) do
+  defp elab_arms(st, [c | cs], [{cname, binders, body} | bs], ctx, k, subst) do
     if c.name != cname do
       {:error, "c:unsupported"}
     else
-      with {:ok, {bctx, wraps}} <- open_ctor(st, c.type, binders, ctx),
+      with {:ok, {bctx, wraps}} <- open_ctor(st, c.type, binders, ctx, subst),
            {:ok, e} <- elab(st, body, bctx, k),
-           {:ok, {arms, steps, k1}} <- elab_arms(st, cs, bs, ctx, e.k) do
+           {:ok, {arms, steps, k1}} <- elab_arms(st, cs, bs, ctx, e.k, subst) do
         {names, tm} = wrap(wraps, e.tm)
         {:ok, {[{:arm, cname, names, tm} | arms], e.steps ++ steps, k1}}
       end
     end
   end
 
-  defp elab_arms(_st, _cs, _bs, _ctx, _k), do: {:error, "c:unsupported"}
+  defp elab_arms(_st, _cs, _bs, _ctx, _k, _subst), do: {:error, "c:unsupported"}
 
   defp elab_atom_arms(_st, [], _bs, _ctx, k), do: {:ok, {[], [], k}}
 
@@ -557,27 +574,42 @@ defmodule Muro.IR do
 
   # An erased constructor field is omitted from the arm and wrapped as
   # `Let x opaque Ze`, so a use is `Var`.
-  defp open_ctor(st, ty, binders, ctx) do
+  defp open_ctor(st, ty, binders, ctx, subst) do
     pis = telescope(ty)
 
     if length(pis) != length(binders) do
       {:error, "c:unsupported"}
     else
-      open_fields(st, Enum.zip(pis, binders), ctx, [])
+      open_fields(st, Enum.zip(pis, binders), ctx, [], subst)
     end
   end
 
-  defp open_fields(_st, [], ctx, wraps), do: {:ok, {ctx, wraps}}
+  defp open_fields(_st, [], ctx, wraps, _subst), do: {:ok, {ctx, wraps}}
 
-  defp open_fields(st, [{{:erased, _, _}, bname} | rest], ctx, wraps) do
-    open_fields(st, rest, [{:live, bname, :opaque} | ctx], wraps ++ [{:gone, bname}])
+  defp open_fields(st, [{{:erased, _, _}, bname} | rest], ctx, wraps, subst) do
+    open_fields(st, rest, [{:live, bname, :opaque} | ctx], wraps ++ [{:gone, bname}], subst)
   end
 
-  defp open_fields(st, [{{_q, a, _}, bname} | rest], ctx, wraps) do
-    with {:ok, lay} <- layout_of(st, a) do
-      open_fields(st, rest, [{:live, bname, lay} | ctx], wraps ++ [{:live, bname}])
+  defp open_fields(st, [{{_q, a, _}, bname} | rest], ctx, wraps, subst) do
+    with {:ok, lay} <- layout_of(Map.put(st, :subst, subst), a) do
+      open_fields(st, rest, [{:live, bname, lay} | ctx], wraps ++ [{:live, bname}], subst)
     end
   end
+
+  # Indices are not parameters. `Enum.zip` drops a trailing index, so a
+  # field that shares an index's name stays the field.
+  defp field_subst(%{closures: true}, data, {:data, _, arg_lays}) when is_list(arg_lays) do
+    data
+    |> Map.get(:params, [])
+    |> Enum.flat_map(fn
+      {_q, x, _a} when is_binary(x) -> [x]
+      _ -> []
+    end)
+    |> Enum.zip(arg_lays)
+    |> Map.new()
+  end
+
+  defp field_subst(_st, _data, _lay), do: %{}
 
   defp wrap([], tm), do: {[], tm}
 
@@ -639,10 +671,36 @@ defmodule Muro.IR do
   defp layout_of(_st, :atom), do: {:ok, {:data, "Atom"}}
 
   defp layout_of(st, {:var, name}) do
-    if data?(st.book, name), do: {:ok, {:data, name}}, else: {:ok, :opaque}
+    case Map.get(Map.get(st, :subst, %{}), name) do
+      nil ->
+        if data?(st.book, name), do: {:ok, {:data, name}}, else: {:ok, :opaque}
+
+      lay ->
+        {:ok, lay}
+    end
   end
 
   defp layout_of(st, {:def, name}), do: layout_of(st, {:var, name})
+
+  # A field type names the data parameter (`A`), not the argument the
+  # scrutinee was built at (`Bool2`). The closure image substitutes that
+  # parameter so a match on the element is a data match. An argument
+  # with no layout (`suc m`) stays opaque and does not refuse the
+  # application. The default image still drops the arguments.
+  defp layout_of(%{closures: true} = st, {:app, _, _} = t) do
+    {head, args} = app_spine(t, [])
+
+    with {:ok, hl} <- layout_of(st, head) do
+      case hl do
+        {:data, name} when is_binary(name) ->
+          {:ok, {:data, name, Enum.map(args, &arg_lay(st, &1))}}
+
+        other ->
+          {:ok, other}
+      end
+    end
+  end
+
   defp layout_of(st, {:app, f, _}), do: layout_of(st, f)
   defp layout_of(st, {:ann, e, _}), do: layout_of(st, e)
   defp layout_of(st, {:rwt, _, _, _, t}), do: layout_of(st, t)
@@ -684,6 +742,16 @@ defmodule Muro.IR do
 
   defp layout_of(_st, {:word, _, _}), do: {:error, "c:unsupported"}
   defp layout_of(_st, t), do: head_refusal(t)
+
+  defp app_spine({:app, f, a}, acc), do: app_spine(f, [a | acc])
+  defp app_spine(head, acc), do: {head, acc}
+
+  defp arg_lay(st, t) do
+    case layout_of(st, t) do
+      {:ok, lay} -> lay
+      {:error, _} -> :opaque
+    end
+  end
 
   defp motive_lay(st, {:lam, _, _, x, body}, scr, _binder), do: motive_lay(st, body, scr, x)
   defp motive_lay(_st, {:var, x}, scr, x), do: {:ok, scr}
@@ -814,6 +882,7 @@ defmodule Muro.IR do
   defp uncons_lay(_), do: {:pair, :opaque, :opaque}
 
   defp data_key({:data, name}), do: {:ok, name}
+  defp data_key({:data, name, _args}), do: {:ok, name}
   defp data_key(_), do: {:error, "c:unsupported"}
 
   defp find_data(book, name) do

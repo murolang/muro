@@ -11,10 +11,12 @@ defmodule Muro.Emit.JS do
   Inside the module, word operations keep the unsigned residue.
 
   A refusal is `c:machine`, `c:stream`, `c:erased`, `c:host`, or
-  `c:unsupported`, or the reason a session state machine refuses.
-  A lambda is a closure, so `c:lambda` is not a refusal here. A host
-  placement refuses the book. A session endpoint is a synchronous
-  stepper beside the runs. Two source names that spell one JavaScript
+  `c:unsupported`, or the reason a session state machine refuses,
+  and it names the definition. When the refusal has a construct, the
+  message names that too (`c:host in home (place)`). A lambda is a
+  closure, so `c:lambda` is not a refusal here. A host placement
+  refuses the book. A session endpoint is a synchronous stepper beside
+  the runs. Two source names that spell one JavaScript
   identifier are refused before any file is written.
 
   This is not `Muro.Emit.Node`. That file is the BEAM `--node` backend.
@@ -78,6 +80,8 @@ defmodule Muro.Emit.JS do
   @host_kinds ~w(place scheme move)a
 
   @unsigned_words [:u8, :u32, :u64]
+
+  @refusal_codes ~w(c:unsupported c:machine c:stream c:erased c:session c:host c:lambda)
 
   @doc """
   Render `book` as an ES module and a declaration file for `stem`.
@@ -143,7 +147,7 @@ defmodule Muro.Emit.JS do
     with :ok <- refuse_host(book),
          :ok <- clash_book(book),
          {:ok, image} <- Session.prepare(book, path, opts),
-         {:ok, funs} <- IR.elaborate(book, closures: true),
+         {:ok, funs} <- elaborate_named(book),
          {:ok, groups, _} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
       h = helper_map()
       taken = MapSet.new(Map.values(h))
@@ -231,12 +235,90 @@ defmodule Muro.Emit.JS do
   end
 
   defp refuse_host(book) do
-    if Enum.any?(book, &(Map.get(&1, :kind) in @host_kinds)) do
-      {:error, "c:host"}
-    else
-      :ok
+    Enum.find_value(book, :ok, fn entry ->
+      kind = Map.get(entry, :kind, :def)
+      name = Map.get(entry, :name)
+
+      if kind in @host_kinds do
+        {:error, refusal("c:host", name, Atom.to_string(kind))}
+      end
+    end)
+  end
+
+  defp elaborate_named(book) do
+    case IR.elaborate(book, closures: true) do
+      {:ok, funs} ->
+        {:ok, funs}
+
+      {:error, {:named, reason, name}} ->
+        {:error, refusal(reason, name, construct_of(book, name, reason))}
+
+      {:error, reason} ->
+        {:error, refusal(reason, nil, nil)}
     end
   end
+
+  # The type is laid out before the body, so the first construct there
+  # is the one that refused. A bare `c:unsupported` or `c:erased` has none.
+  defp construct_of(book, name, reason)
+       when reason in ["c:machine", "c:stream"] and is_binary(name) do
+    case Enum.find(book, &(Map.get(&1, :name) == name and Map.has_key?(&1, :body))) do
+      nil ->
+        nil
+
+      d ->
+        form = if reason == "c:machine", do: &machine_form/1, else: &stream_form/1
+        find_form(Map.get(d, :type), form) || find_form(Map.get(d, :body), form)
+    end
+  end
+
+  defp construct_of(_book, _name, _reason), do: nil
+
+  defp find_form(term, form) do
+    case form.(term) do
+      nil -> walk_form(term, form)
+      hit -> hit
+    end
+  end
+
+  defp walk_form(term, form) when is_tuple(term) do
+    term |> Tuple.to_list() |> Enum.find_value(&find_form(&1, form))
+  end
+
+  defp walk_form(term, form) when is_list(term), do: Enum.find_value(term, &find_form(&1, form))
+  defp walk_form(_term, _form), do: nil
+
+  defp machine_form(:f32ty), do: "F32"
+  defp machine_form({:tensor, _, _}), do: "Tensor"
+  defp machine_form({:packi, _, _}), do: "packI"
+  defp machine_form({:addi, _, _}), do: "addi"
+  defp machine_form({:muli, _, _}), do: "muli"
+  defp machine_form({:addt, _, _}), do: "addt"
+  defp machine_form({:toi64, _}), do: "toI64"
+  defp machine_form(_), do: nil
+
+  defp stream_form({:nu, _, _}), do: "ν"
+  defp stream_form({:nu, _}), do: "ν"
+  defp stream_form({:always, _, _, _}), do: "Always"
+  defp stream_form({:always, _, _}), do: "Always"
+  defp stream_form({:bisim, _, _}), do: "~"
+  defp stream_form(_), do: nil
+
+  defp refusal(reason, name, construct \\ nil)
+
+  defp refusal(reason, name, construct) when is_binary(reason) and reason in @refusal_codes do
+    named = is_binary(name) and name != ""
+    built = is_binary(construct) and construct != ""
+
+    cond do
+      named and built -> "#{reason} in #{name} (#{construct})"
+      named -> "#{reason} in #{name}"
+      built -> "#{reason} (#{construct})"
+      true -> reason
+    end
+  end
+
+  defp refusal(reason, _name, _construct), do: reason
 
   defp recursive_names(funs) do
     graph = Map.new(funs, fn fun -> {fun.name, calls_of(fun.body)} end)
@@ -321,7 +403,7 @@ defmodule Muro.Emit.JS do
     Enum.reduce_while(funs, {:ok, []}, fn fun, {:ok, acc} ->
       case emit_fun(fun, st) do
         {:ok, rec} -> {:cont, {:ok, acc ++ [rec]}}
-        {:error, _} = err -> {:halt, err}
+        {:error, reason} -> {:halt, {:error, refusal(reason, Map.get(fun, :name))}}
       end
     end)
   end
