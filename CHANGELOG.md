@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.26
+## 0.20.28
 
 `String` is a type of Unicode scalars, distinct from `Atom`. A literal is `"hello"`, with escapes `\\`, `\"`, `\n`, and `\u{...}`. `strCat` concatenates, `strLen` is the number of scalars, and `strEq` compares. There is no coercion between a string and an atom.
 
@@ -12,9 +12,9 @@ Elixir emits a binary. JavaScript emits `{ string: "hello" }` and leaves an atom
 
 ### Package
 
-- Version 0.20.26.
+- Version 0.20.28.
 
-## 0.20.25
+## 0.20.27
 
 JavaScript emit writes each session endpoint as a synchronous stepper beside the runs. The module starts no process and talks to no peer. The host owns the transport.
 
@@ -28,7 +28,43 @@ A payload is the same value a run uses: a bigint nat, `"b0"` or `"b1"`, `null`, 
 
 ### Package
 
+- Version 0.20.27.
+
+## 0.20.26
+
+The self-contained binary release workflow runs on the same runners as CI (`CI_RUNNER`, falling back to `ubuntu-24.04`). An existing tag can be rebuilt from `workflow_dispatch`, and the run refuses when that tag does not match the version in `mix.exs`. A dispatch with `dry_run` builds and smokes the binaries without publishing a GitHub release. Build, smoke, and publish run in one job so the workflow does not store GitHub Actions artifacts.
+
+The smoke job runs the Linux binary that matches the runner: `linux-aarch64` natively on the arm64 self-hosted runners, and `linux-x86_64` natively on an x86_64 hosted runner. When Docker is available it also runs `linux-x86_64` inside a fresh `ubuntu:24.04` container that must not contain Elixir or Erlang. macOS binaries are published and not executed here.
+
+### Package
+
+- Version 0.20.26.
+
+## 0.20.25
+
+An erased constructor field stays out of the value a host matches on. JavaScript binds that name to `undefined`. C binds a dummy `0`. Rust and Zig keep the same placeholder. A Nat zero whose type is a spec alias stays a Nat zero. Declared `Bool` stays tagged, `{tag: "true"}` or `{tag: "false"}`.
+
+### Manual
+
+- Extending.
+
+### Package
+
 - Version 0.20.25.
+
+## 0.20.24
+
+JavaScript emits a `match` on a variable bound by the enclosing arm. The element a list arm binds is that variable. The inner match may be the arm or an argument of a constructor, and the function may recurse on the tail.
+
+A refusal from the JavaScript backend names the definition it refused, and names the construct when the refusal has one.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.24.
 
 ## 0.20.23
 

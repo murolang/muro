@@ -65,7 +65,7 @@ defmodule Muro.EmitJSTest do
     File.cp!("examples/place.muro", Path.join(dir, "place.muro"))
     path = Path.join(dir, "place.muro")
 
-    assert_raise Mix.Error, ~r/\Ac:host\z/, fn ->
+    assert_raise Mix.Error, ~r/\Ac:host in home \(place\)\z/, fn ->
       Mix.Tasks.Muro.Emit.run([path, "--backend", "js"])
     end
 
@@ -79,7 +79,10 @@ defmodule Muro.EmitJSTest do
     end
 
     for kind <- ~w(place scheme move)a do
-      assert {:error, "c:host"} = Muro.Emit.JS.render([%{kind: kind}], "x")
+      home = "c:host in home (#{kind})"
+      bare = "c:host (#{kind})"
+      assert {:error, ^home} = Muro.Emit.JS.render([%{kind: kind, name: "home"}], "x")
+      assert {:error, ^bare} = Muro.Emit.JS.render([%{kind: kind}], "x")
     end
   end
 
@@ -274,6 +277,101 @@ defmodule Muro.EmitJSTest do
     assert source =~ ~s|muro__data("false")|
   end
 
+  test "an erased-field let is marked erased, a spec alias of Nat stays a zero, and JavaScript binds undefined" do
+    dir = tmp()
+
+    File.write!(Path.join(dir, "mark.muro"), """
+    def R : spec Type := Nat
+
+    data Box : Type where
+      mk : Π (- e : Nat) → Nat → Box
+
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    def yes : run Bool := true
+    def no : run Bool := false
+
+    def one : run Nat := (λ (r : R) → suc r) 0
+
+    def boxed : run Box := mk 0 (suc (suc 0))
+
+    def seed : run Box := mk 0 0
+
+    def live : run Nat :=
+      match boxed motive (λ _ → Nat)
+        | mk e n => n
+
+    def steps : run Π (n : Nat) → Nat :=
+      λ (n : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => 0
+          | suc k =>
+            match seed motive (λ _ → Nat)
+              | mk e m => suc (steps k)
+    """)
+
+    path = Path.join(dir, "mark.muro")
+    {:ok, book} = Muro.Load.file(path)
+    book = Muro.Prelude.for_emit(book)
+
+    assert {:ok, plain} = Muro.IR.elaborate(book)
+    assert {:ok, closed} = Muro.IR.elaborate(book, closures: true)
+
+    for funs <- [plain, closed] do
+      assert fun_body(funs, "one") == {:let, "r", :nat, :ze, {:su, {:var, "r"}}}
+      assert erased_lets(fun_body(funs, "live")) == ["e"]
+      assert erased_lets(fun_body(funs, "steps")) == ["e"]
+      refute opaque_zero?(fun_body(funs, "one"))
+      refute opaque_zero?(fun_body(funs, "live"))
+      refute opaque_zero?(fun_body(funs, "steps"))
+    end
+
+    {:ok, js, dts} = Muro.Emit.JS.render(book, "mark")
+    assert js =~ "const e = (undefined);"
+    assert js =~ "const r = (0n);"
+    refute js =~ "const r = (undefined);"
+    refute js =~ "const e = (0n);"
+    assert occurrences(js, "const e = (undefined);") == 2
+    assert js =~ ~s|muro__data("true")|
+    assert js =~ ~s|muro__data("false")|
+    assert dts =~ ~s|tag: "true"|
+    refute dts =~ "export type Bool = boolean"
+
+    {:ok, {_header, c}} = Muro.Emit.C.render(book, "mark")
+    assert c =~ "void *e = 0;"
+    refute c =~ "void *r = 0;"
+    assert c =~ "muro__zero()"
+
+    {:ok, rust} = Muro.Emit.Rust.render(book, "mark")
+    assert rust =~ "let e = muro__erase(());"
+    assert rust =~ "let r = muro__zero();"
+    refute rust =~ "let r = muro__erase(());"
+
+    {:ok, zig} = Muro.Emit.Zig.render(book, "mark")
+    assert zig =~ "const r = muro__zero();"
+    refute zig =~ "muro__erase(muro__tt())"
+
+    File.write!(Path.join(dir, "mark.mjs"), js)
+
+    File.write!(Path.join(dir, "_drv_mark.mjs"), """
+    import { one, live, steps } from "./mark.mjs";
+    console.log(String(one()));
+    console.log(String(live()));
+    console.log(String(steps(2n)));
+    """)
+
+    {out, status} = node("_drv_mark.mjs", dir)
+    assert status == 0, out
+    assert String.trim(out) == "1\n2\n2"
+
+    {_js_names, ex, mod} = load_pair(path)
+    assert peano_to_int(apply(mod, fun_atom(ex, "one"), [])) == 1
+    assert peano_to_int(apply(mod, fun_atom(ex, "live"), [])) == 2
+    assert peano_to_int(apply(mod, fun_atom(ex, "steps"), [peano_n(2)])) == 2
+  end
+
   test "parameterized data and streams carry their type arguments" do
     dir = tmp()
 
@@ -382,7 +480,7 @@ defmodule Muro.EmitJSTest do
     nx = Path.join(dir, "nx_add.muro")
     File.cp!("examples/nx_add.muro", nx)
 
-    assert_raise Mix.Error, ~r/\Ac:machine\z/, fn ->
+    assert_raise Mix.Error, ~r/\Ac:machine in addT \(Tensor\)\z/, fn ->
       Mix.Tasks.Muro.Emit.run([nx, "--backend", "js"])
     end
 
@@ -407,7 +505,7 @@ defmodule Muro.EmitJSTest do
     {:ok, machine_book} = Muro.Load.file("examples/nx_add.muro")
 
     refused = [
-      {"c:erased",
+      {"c:erased", "use", "c:erased in use",
        [
          %{
            name: "use",
@@ -416,7 +514,7 @@ defmodule Muro.EmitJSTest do
            body: {:lam, :erased, :nat, "n", {:var, "n"}}
          }
        ]},
-      {"c:stream",
+      {"c:stream", "bad", "c:stream in bad (ν)",
        [
          %{
            name: "bad",
@@ -425,7 +523,7 @@ defmodule Muro.EmitJSTest do
            body: {:nu, "X", :nat}
          }
        ]},
-      {"c:stream",
+      {"c:stream", "bad", "c:stream in bad (Always)",
        [
          %{
            name: "bad",
@@ -434,7 +532,7 @@ defmodule Muro.EmitJSTest do
            body: {:always, "A", :nat, :ze}
          }
        ]},
-      {"c:stream",
+      {"c:stream", "bad", "c:stream in bad (~)",
        [
          %{
            name: "bad",
@@ -443,7 +541,7 @@ defmodule Muro.EmitJSTest do
            body: {:bisim, :ze, :ze}
          }
        ]},
-      {"c:unsupported",
+      {"c:unsupported", "bad", "c:unsupported in bad",
        [
          %{
            name: "bad",
@@ -452,13 +550,73 @@ defmodule Muro.EmitJSTest do
            body: {:var, "missing"}
          }
        ]},
-      {"c:machine", Muro.Prelude.for_emit(machine_book)}
+      {"c:machine", "addT", "c:machine in addT (Tensor)", Muro.Prelude.for_emit(machine_book)}
     ]
 
-    for {reason, book} <- refused do
+    for {reason, name, message, book} <- refused do
       assert {:error, ^reason} = Muro.IR.elaborate(book)
-      assert {:error, ^reason} = Muro.IR.elaborate(book, closures: true)
-      assert {:error, ^reason} = Muro.Emit.JS.render(book, "x")
+      assert {:error, {:named, ^reason, ^name}} = Muro.IR.elaborate(book, closures: true)
+      assert {:error, ^message} = Muro.Emit.JS.render(book, "x")
+    end
+  end
+
+  test "a match on a variable bound by the enclosing arm is a data match in the closure image" do
+    dir = tmp()
+
+    for book <- arm_books() do
+      write_book(dir, book.stem, book.src)
+      path = Path.join(dir, book.stem <> ".muro")
+      {:ok, checked} = Muro.Load.file(path)
+      checked = Muro.Prelude.for_emit(checked)
+
+      if book.refused do
+        assert {:error, "c:unsupported"} = Muro.IR.elaborate(checked)
+      else
+        assert {:ok, _} = Muro.IR.elaborate(checked)
+      end
+
+      assert {:ok, funs} = Muro.IR.elaborate(checked, closures: true)
+      assert %{body: body} = Enum.find(funs, &(&1.name == book.fun))
+      assert match_on(body, book.scrut) == book.kind, book.stem
+
+      {:ok, [mjs, _dts]} = Muro.emit_js(path)
+      source = File.read!(mjs)
+
+      for mark <- book.marks do
+        assert source =~ mark, book.stem
+      end
+
+      if book.recur, do: assert(source =~ book.fun <> "__w(", book.stem)
+    end
+
+    pick = Path.join(dir, "pick.muro")
+
+    assert_raise Mix.Error, ~r/\Ac:unsupported\z/, fn ->
+      Mix.Tasks.Muro.Emit.run([pick, "--backend", "zig"])
+    end
+
+    refute File.exists?(Path.join(dir, "pick.zig"))
+  end
+
+  @tag skip: @node_skip
+  test "a match on an arm-bound variable agrees with the Elixir canon" do
+    dir = tmp()
+
+    for book <- arm_books() do
+      write_book(dir, book.stem, book.src)
+
+      got =
+        run_example(
+          dir,
+          book.stem,
+          Enum.map(book.calls, fn {label, fun, args, _expected} ->
+            {:val, label, {:call, fun, args}}
+          end)
+        )
+
+      for {label, _fun, _args, expected} <- book.calls do
+        assert got[label] == expected, "#{book.stem} #{label}: #{got[label]}"
+      end
     end
   end
 
@@ -1169,6 +1327,228 @@ defmodule Muro.EmitJSTest do
     assert got["id-e"] == Muro.Print.quote_string("é")
   end
 
+  defp arm_books do
+    nil_ = data("nil", [])
+    yes = data("yes", [])
+    no = data("no", [])
+    cons = fn head, tail -> data("cons", [head, tail]) end
+    two = fn a, b -> data("mk", [nat(a), nat(b)]) end
+    pair = cons.(two.(1, 2), cons.(two.(3, 4), nil_))
+    triple = cons.(two.(1, 2), cons.(two.(3, 4), cons.(two.(5, 6), nil_)))
+
+    [
+      %{
+        stem: "pick",
+        fun: "pick",
+        scrut: "x",
+        kind: {:data, "Bool2"},
+        refused: true,
+        recur: false,
+        marks: ["case \"yes\"", "case \"no\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Bool2 : Type where
+          yes : Bool2
+          no  : Bool2
+
+        def pick : run Π (xs : List Bool2) → Bool2 :=
+          λ (xs : List Bool2) →
+            match xs motive (λ _ → Bool2)
+              | nil => no
+              | cons x rest => (match x motive (λ _ → Bool2)
+                                 | yes => no
+                                 | no => yes)
+        """,
+        calls: [
+          {"nil", "pick", [nil_], "no"},
+          {"yes", "pick", [cons.(yes, nil_)], "no"},
+          {"no", "pick", [cons.(no, cons.(yes, nil_))], "yes"}
+        ]
+      },
+      %{
+        stem: "firsts",
+        fun: "firsts",
+        scrut: "x",
+        kind: {:data, "Two"},
+        refused: true,
+        recur: false,
+        marks: ["case \"mk\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Two : Type where
+          mk : Nat → Nat → Two
+
+        def firsts : run Π (xs : List Two) → List Nat :=
+          λ (xs : List Two) →
+            match xs motive (λ _ → List Nat)
+              | nil => nil
+              | cons x rest => (match x motive (λ _ → List Nat)
+                                 | mk a b => cons a nil)
+        """,
+        calls: [
+          {"nil", "firsts", [nil_], "nil"},
+          {"head", "firsts", [pair], "cons(1,nil)"}
+        ]
+      },
+      %{
+        stem: "swap-all",
+        fun: "swapAll",
+        scrut: "x",
+        kind: {:data, "Two"},
+        refused: true,
+        recur: false,
+        marks: ["case \"mk\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Two : Type where
+          mk : Nat → Nat → Two
+
+        def swapAll : run Π (xs : List Two) → List Two :=
+          λ (xs : List Two) →
+            match xs motive (λ _ → List Two)
+              | nil => nil
+              | cons x rest => cons (match x motive (λ _ → Two) | mk a b => mk b a) rest
+        """,
+        calls: [
+          {"nil", "swapAll", [nil_], "nil"},
+          {"head", "swapAll", [pair], "cons(mk(2,1),cons(mk(3,4),nil))"}
+        ]
+      },
+      %{
+        stem: "firsts-rec",
+        fun: "firsts",
+        scrut: "x",
+        kind: {:data, "Two"},
+        refused: true,
+        recur: true,
+        marks: ["case \"mk\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Two : Type where
+          mk : Nat → Nat → Two
+
+        def firsts : run Π (xs : List Two) → List Nat :=
+          λ (xs : List Two) →
+            match xs motive (λ _ → List Nat)
+              | nil => nil
+              | cons x rest => cons (match x motive (λ _ → Nat) | mk a b => a) (firsts rest)
+        """,
+        calls: [
+          {"nil", "firsts", [nil_], "nil"},
+          {"all", "firsts", [triple], "cons(1,cons(3,cons(5,nil)))"}
+        ]
+      },
+      %{
+        stem: "swap-all-rec",
+        fun: "swapAll",
+        scrut: "x",
+        kind: {:data, "Two"},
+        refused: true,
+        recur: true,
+        marks: ["case \"mk\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Two : Type where
+          mk : Nat → Nat → Two
+
+        def swapAll : run Π (xs : List Two) → List Two :=
+          λ (xs : List Two) →
+            match xs motive (λ _ → List Two)
+              | nil => nil
+              | cons x rest => cons (match x motive (λ _ → Two) | mk a b => mk b a) (swapAll rest)
+        """,
+        calls: [
+          {"nil", "swapAll", [nil_], "nil"},
+          {"all", "swapAll", [triple], "cons(mk(2,1),cons(mk(4,3),cons(mk(6,5),nil)))"}
+        ]
+      },
+      %{
+        stem: "swap-first",
+        fun: "swapFirst",
+        scrut: "t",
+        kind: {:data, "Two"},
+        refused: false,
+        recur: false,
+        marks: ["case \"mk\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Two : Type where
+          mk : Nat → Nat → Two
+
+        def swapFirst : run Π (t : Two) → Π (xs : List Two) → Two :=
+          λ (t : Two) → λ (xs : List Two) →
+            match xs motive (λ _ → Two)
+              | nil => t
+              | cons x rest => (match t motive (λ _ → Two)
+                                 | mk a b => mk b a)
+        """,
+        calls: [
+          {"nil", "swapFirst", [two.(1, 2), nil_], "mk(1,2)"},
+          {"swap", "swapFirst", [two.(1, 2), cons.(two.(3, 4), nil_)], "mk(2,1)"}
+        ]
+      },
+      %{
+        stem: "firsts-help",
+        fun: "first",
+        scrut: "x",
+        kind: {:data, "Two"},
+        refused: false,
+        recur: false,
+        marks: ["case \"mk\""],
+        src: """
+        data List (A : Type) : Type where
+          nil  : List A
+          cons : A → List A → List A
+
+        data Two : Type where
+          mk : Nat → Nat → Two
+
+        def first : run internal Π (x : Two) → Nat :=
+          λ (x : Two) →
+            match x motive (λ _ → Nat)
+              | mk a b => a
+
+        def firsts : run Π (xs : List Two) → List Nat :=
+          λ (xs : List Two) →
+            match xs motive (λ _ → List Nat)
+              | nil => nil
+              | cons x rest => cons (first x) (firsts rest)
+        """,
+        calls: [
+          {"nil", "firsts", [nil_], "nil"},
+          {"all", "firsts", [triple], "cons(1,cons(3,cons(5,nil)))"}
+        ]
+      }
+    ]
+  end
+
+  defp match_on({:match, {:var, name}, kind, _arms}, name), do: kind
+
+  defp match_on(term, name) when is_tuple(term) do
+    term |> Tuple.to_list() |> Enum.find_value(&match_on(&1, name))
+  end
+
+  defp match_on(term, name) when is_list(term), do: Enum.find_value(term, &match_on(&1, name))
+  defp match_on(_term, _name), do: nil
+
   # Node warns on stderr when both NO_COLOR and FORCE_COLOR are set.
   # The driver merges stderr into stdout, so that warning would fail a line count.
   defp node(script, dir) do
@@ -1364,6 +1744,29 @@ defmodule Muro.EmitJSTest do
   defp nat(n), do: {:nat, n}
   defp data(tag, fields), do: {:data, tag, fields}
   defp pair(a, b), do: {:pair, a, b}
+
+  defp fun_body(funs, name), do: Enum.find(funs, &(&1.name == name)).body
+
+  defp erased_lets(tm), do: erased_lets(tm, [])
+  defp erased_lets({:let, name, :erased, _val, body}, acc), do: erased_lets(body, [name | acc])
+
+  defp erased_lets({:let, _name, _lay, val, body}, acc),
+    do: erased_lets(body, erased_lets(val, acc))
+
+  defp erased_lets(t, acc) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.reduce(acc, &erased_lets/2)
+
+  defp erased_lets(t, acc) when is_list(t), do: Enum.reduce(t, acc, &erased_lets/2)
+  defp erased_lets(_t, acc), do: acc
+
+  defp opaque_zero?({:let, _, :opaque, :ze, _}), do: true
+  defp opaque_zero?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&opaque_zero?/1)
+  defp opaque_zero?(t) when is_list(t), do: Enum.any?(t, &opaque_zero?/1)
+  defp opaque_zero?(_), do: false
+
+  defp occurrences(text, needle) do
+    text |> String.split(needle) |> length() |> Kernel.-(1)
+  end
 
   defp emit_js!(dir, name) do
     path = Path.join(dir, "#{name}.muro")

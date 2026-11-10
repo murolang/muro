@@ -348,10 +348,10 @@ defmodule Muro.Emit.C do
     end
   end
 
-  # An erased constructor field. `0`, not a Nat zero. A zero passed
-  # under a spec alias is bound at the argument's layout, so this clause
-  # does not see it.
-  defp emit_ir({:let, name, :opaque, :ze, body}, env, st, expect) do
+  # An erased constructor field, marked `:erased`. `0`, and the payload
+  # is ignored. A zero passed under a spec alias is bound at the
+  # argument's layout, so this clause does not see it.
+  defp emit_ir({:let, name, :erased, _val, body}, env, st, expect) do
     {c, scope} = Name.bind(spell(name), st.scope)
     st = %{st | scope: scope}
 
@@ -825,6 +825,11 @@ defmodule Muro.Emit.C do
       {_c, lay} -> lay
       nil -> :opaque
     end
+  end
+
+  # The mark is `:erased`. A use keeps the opaque layout.
+  defp lay_of({:let, name, :erased, _val, body}, env, st) do
+    lay_of(body, [{name, "", :opaque} | env], st)
   end
 
   defp lay_of({:let, name, lay, _val, body}, env, st) do

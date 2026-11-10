@@ -45,6 +45,9 @@ _<>_ = Data.String.Base._++_
 
 data Layout : Set where
   natL unitL opaqueL : Layout
+  -- The let of an erased constructor field. A use stays `opaqueL`.
+  -- The term under this layout is `Ze`, and emitters ignore it.
+  erasedL : Layout
   pairL : Layout → Layout → Layout
   streamL : Layout → Layout
   -- Nominal. Constructor fields live in `ctorShapes`, not in the layout:
@@ -203,7 +206,7 @@ rest< t ts p = ≤-<-trans (m≤n+m (sumSize ts) (size t)) p
 ------------------------------------------------------------------------
 -- Names. de Bruijn 0 is the head of the list. A `gone` entry is an erased
 -- λ-binder; using it is c:erased. An erased constructor field is `live`
--- at `opaqueL` instead, so a use is `Var`.
+-- at `opaqueL`, so a use is `Var`. The let that binds it is `erasedL`.
 ------------------------------------------------------------------------
 
 data Entry : Set where
@@ -494,8 +497,9 @@ uniq = go []
 
 ------------------------------------------------------------------------
 -- Match arms. Skip the data parameters, then one λ per field. An erased
--- field is omitted from the binder list and wrapped as `Let x opaqueL Ze`
--- after the body is elaborated, so a use is `Var`.
+-- field is omitted from the binder list and wrapped as `Let x erasedL Ze`
+-- after the body is elaborated, so a use is `Var`. The layout is the
+-- mark. Emitters ignore the `Ze`. The field stays live at `opaqueL`.
 ------------------------------------------------------------------------
 
 data Wrap : Set where
@@ -547,7 +551,7 @@ wrapTerm (wLive x ∷ ws) tm =
   in x ∷ ns , tm'
 wrapTerm (wGone x ∷ ws) tm =
   let (ns , tm') = wrapTerm ws tm
-  in ns , Let x opaqueL Ze tm'
+  in ns , Let x erasedL Ze tm'
 
 ------------------------------------------------------------------------
 -- Stream captures. Index 0 of the step body is the seed.
@@ -965,3 +969,22 @@ stream-layout = refl
 
 spec-skip : elabRuns (fromDefs (mkDef "ghost" spec ze ze ∷ [])) ≡ ok []
 spec-skip = refl
+
+-- An erased constructor field is `Let x erasedL Ze`. The live field
+-- stays in the binder list. Emitters ignore the `Ze`.
+boxDecl : DataDecl
+boxDecl = mkData "Box" [] [] (mkCtor "mk" (pi erased nat (pi affine nat (dty 0))) ∷ [])
+
+boxSig : Sig
+boxSig = mkSig (boxDecl ∷ []) []
+
+boxBranch : Tm 0
+boxBranch = lam erased nat (lam affine nat (var (F.zero {1})))
+
+boxMatch : Tm 0
+boxMatch = mData (app (app (ctor 0 0) ze) (su ze)) nat (boxBranch ∷ [])
+
+box-erased : termOf (elaborate boxSig 0 [] boxMatch)
+           ≡ ok (Match (Con "Box" "mk" (Su Ze ∷ []))
+                   (arm "mk" ("b1" ∷ []) (Let "b0" erasedL Ze (Var "b1")) ∷ []))
+box-erased = refl

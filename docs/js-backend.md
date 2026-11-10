@@ -31,7 +31,7 @@ An immediately applied λ is still a `let`. The argument is evaluated once.
 | word `Opt` | `{k: "none"}` or `{k: "some", v}`. `Unit` is already `null`, so `none` is not `null`. An exported `Opt` of a word is converted at the boundary. |
 | word bool | a JavaScript boolean |
 | function | a JavaScript function |
-| erased field | `undefined`, only for the `let` the image wraps around an erased constructor field |
+| erased field | `undefined`, for the `let` the image marks `:erased`. The payload is ignored. |
 
 An opaque field is not boxed. `erase` and `reveal` are the identity, so a `Nat` stored in a polymorphic field stays a bigint. `fromMaybe` of a `Nat` returns a bigint.
 
@@ -47,9 +47,11 @@ A shift whose amount is negative or at least the width yields `0`, except a sign
 
 ## Match and data
 
-`match` on `Nat` tests `=== 0n` and otherwise binds the predecessor. `match` on data switches on `.tag` and binds `.fields` in order. `match` on an atom switches on the string. A branch that the image marks empty throws `Error("Empty")`. Erased constructor fields are omitted from `fields` and bound as `undefined` where the body names them.
+`match` on `Nat` tests `=== 0n` and otherwise binds the predecessor. `match` on data switches on `.tag` and binds `.fields` in order. `match` on an atom switches on the string. A branch that the image marks empty throws `Error("Empty")`. Erased constructor fields are omitted from `fields` and bound as `undefined` where the body names them. The image marks that `let` with layout `:erased`.
 
-The closure image tags a `match` with `:nat`, `{:data, name}`, or `:atom`. The default image stays `{:match, scrut, arms}`, which is what C, Rust, and Zig match on.
+A `match` may scrutinize a variable bound by the enclosing arm. The element a list arm binds is that variable. The inner match may be the whole arm or an argument of a constructor, and the function may recurse on the tail. A `run internal` helper is not required for that shape.
+
+The closure image tags a `match` with `:nat`, `{:data, name}`, or `:atom`. The default image stays `{:match, scrut, arms}`, which is what C, Rust, and Zig match on. That image does not instantiate the element a parameter stands for, so C, Rust, and Zig still refuse the same books.
 
 ## Recursion
 
@@ -83,9 +85,11 @@ Two source names that reach one identifier are refused before any file is writte
 
 ## Unsupported
 
-A book that contains one of these is refused before any file is written. The error is the whole message. A host placement is refused before a session is planned. A session the machine cannot represent is refused before a run is elaborated.
+A book that contains one of these is refused before any file is written. The message names the definition, and the construct when the refusal has one. The first matching declaration in the book wins. A host placement is refused before a session is planned. A session the machine cannot represent is refused before a run is elaborated.
 
-- `c:machine`. `F32`, `Tensor`, `addt`, and `packI`, including `examples/nx_add.muro`.
+`c:host in home (place)` is the place `home`. `c:machine in addT (Tensor)` is `addT` in `examples/nx_add.muro`. `c:stream in bad (ν)` is a raw `ν`. `c:erased in use` and `c:unsupported in bad` name the definition and have no construct. A declaration with no name still names the construct: `c:host (place)`.
+
+- `c:machine`. `F32`, `Tensor`, `addt`, and `packI`, including `examples/nx_add.muro`. `addi` on a word is emitted.
 - `c:stream`. A raw `ν`, `Always`, or `~` inside a `run`. A `run` whose type is `Stream` is emitted. An `evidence` `Always` or `~` is omitted with the other evidence.
 - `c:erased`. A gone variable used as a value.
 - `c:host`. A place, a scheme, or a move. A book that also has sessions is refused the same way, and nothing is written. `--backend fsm` may still emit those sessions.
