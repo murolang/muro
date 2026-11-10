@@ -10,12 +10,13 @@ defmodule Muro.Emit.JS do
   `I64` is a signed bigint and an unsigned word is an unsigned bigint.
   Inside the module, word operations keep the unsigned residue.
 
-  A refusal is `c:machine`, `c:stream`, `c:erased`, `c:session`,
-  `c:host`, or `c:unsupported`, and it names the definition. When the
-  refusal has a construct, the message names that too
-  (`c:session in ping (session)`). A lambda is a closure, so `c:lambda`
-  is not a refusal here. A session declaration or a host placement
-  refuses the book. Two source names that spell one JavaScript
+  A refusal is `c:machine`, `c:stream`, `c:erased`, `c:host`, or
+  `c:unsupported`, or the reason a session state machine refuses,
+  and it names the definition. When the refusal has a construct, the
+  message names that too (`c:host in home (place)`). A lambda is a
+  closure, so `c:lambda` is not a refusal here. A host placement
+  refuses the book. A session endpoint is a synchronous stepper beside
+  the runs. Two source names that spell one JavaScript
   identifier are refused before any file is written.
 
   This is not `Muro.Emit.Node`. That file is the BEAM `--node` backend.
@@ -29,6 +30,7 @@ defmodule Muro.Emit.JS do
   """
 
   alias Muro.Emit
+  alias Muro.Emit.JS.Session
   alias Muro.Emit.Name
   alias Muro.IR
 
@@ -75,10 +77,6 @@ defmodule Muro.Emit.JS do
     bounce go hole ret stack
   )
 
-  @session_kinds ~w(
-    session conform meet endpoint read choreography talk seat link relay
-  )a
-
   @host_kinds ~w(place scheme move)a
 
   @unsigned_words [:u8, :u32, :u64]
@@ -87,28 +85,40 @@ defmodule Muro.Emit.JS do
 
   @doc """
   Render `book` as an ES module and a declaration file for `stem`.
+
+  `opts` may set `:path`, `:book`, and `:root`. Step strings use `:book`
+  when it is given, and otherwise the path. An absolute path with no
+  `:book` uses the file name. The default path is `stem` plus `.muro`.
   """
-  def render(book, stem) when is_list(book) and is_binary(stem) do
-    case compile(book) do
-      {:ok, compiled, types} -> {:ok, mjs(stem, compiled), dts(compiled, types, book)}
-      {:error, reason} -> {:error, reason}
+  def render(book, stem, opts \\ []) when is_list(book) and is_binary(stem) and is_list(opts) do
+    opts = Keyword.put_new(opts, :path, stem <> ".muro")
+
+    case compile(book, opts) do
+      {:ok, compiled, types, session} ->
+        {:ok, mjs(stem, compiled, session), dts(compiled, types, book, session)}
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
   @doc """
-  Names, signatures, layouts, and clause heads of the module `render/2`
-  writes. No source is written.
+  Names, signatures, layouts, and clause heads of the module `render/3`
+  writes. No source is written. Session exports are `export const` names.
   """
-  def outline(book, _stem) when is_list(book) do
-    case compile(book) do
-      {:ok, compiled, _types} ->
+  def outline(book, stem) when is_list(book) and is_binary(stem) do
+    case compile(book, path: stem <> ".muro") do
+      {:ok, compiled, _types, session} ->
         user = Enum.reject(compiled, &generated?/1)
+        extra_names = if session, do: Map.values(session.idents), else: []
+        extra_clauses = if session, do: session.clauses, else: []
 
         {:ok,
          %{
            names:
              compiled
              |> Enum.flat_map(fn rec -> [rec.name | param_names(rec)] end)
+             |> Enum.concat(extra_names)
              |> Enum.uniq(),
            elixir: Emit.elixir_names(book),
            signatures: Enum.map(user, &signature/1),
@@ -120,7 +130,7 @@ defmodule Muro.Emit.JS do
                  params: Enum.map(rec.fun.params, fn {_n, lay} -> lay end)
                }
              end),
-           clauses: Enum.map(compiled, & &1.head)
+           clauses: Enum.map(compiled, & &1.head) ++ extra_clauses
          }}
 
       {:error, reason} ->
@@ -131,27 +141,45 @@ defmodule Muro.Emit.JS do
   @doc false
   def source_id(name) when is_binary(name), do: spell(name)
 
-  defp compile(book) do
-    with :ok <- refuse_book(book),
+  defp compile(book, opts) do
+    path = Keyword.get(opts, :path, "book.muro")
+
+    with :ok <- refuse_host(book),
          :ok <- clash_book(book),
+         {:ok, image} <- Session.prepare(book, path, opts),
          {:ok, funs} <- elaborate_named(book),
          {:ok, groups, _} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
       h = helper_map()
       taken = MapSet.new(Map.values(h))
+
+      {sess_var, taken} =
+        if image do
+          Name.claim(Name.gen("sess"), taken)
+        else
+          {nil, taken}
+        end
+
       names = Emit.def_names(book, &spell/1, taken)
       steps = Enum.flat_map(groups, fn {_fun, ss} -> ss end)
       used = MapSet.union(taken, MapSet.new(Map.values(names)))
 
-      {step_names, _used} =
+      {step_names, used} =
         Enum.reduce(steps, {%{}, used}, fn step, {map, used} ->
           {rn, used} = Name.claim(Name.gen("step", map_size(map)), used)
           {Map.put(map, step.name, rn), used}
         end)
 
-      visible =
-        used
-        |> MapSet.union(MapSet.new(Map.values(step_names)))
-        |> Name.open()
+      {idents, used} =
+        if image do
+          Enum.reduce(image.sessions, {%{}, used}, fn sess, {map, used} ->
+            {ident, used} = Name.claim(spell(sess.name), used)
+            {Map.put(map, sess.name, ident), used}
+          end)
+        else
+          {%{}, used}
+        end
+
+      visible = Name.open(used)
 
       rec = recursive_names(funs)
 
@@ -172,26 +200,47 @@ defmodule Muro.Emit.JS do
 
       ordered = steps ++ Enum.map(groups, fn {fun, _} -> fun end)
 
-      with {:ok, compiled} <- emit_all(ordered, st) do
-        {:ok, compiled, data_types(book)}
+      with {:ok, compiled} <- emit_all(ordered, st),
+           {:ok, session} <- session_block(image, compiled, sess_var, idents) do
+        {:ok, compiled, data_types(book), session}
       end
     end
   end
 
-  defp refuse_book(book) do
+  defp session_block(nil, _compiled, _var, _idents), do: {:ok, nil}
+
+  defp session_block(image, compiled, var, idents) do
+    by_source = Map.new(compiled, fn rec -> {rec.fun.name, rec.name} end)
+
+    runs =
+      for name <- image.runs,
+          ident = Map.get(by_source, name),
+          not is_nil(ident),
+          into: %{},
+          do: {name, ident}
+
+    case Session.script(image, %{var: var, runs: runs, idents: idents}) do
+      {:ok, source} ->
+        clauses =
+          Enum.map(image.sessions, fn sess ->
+            "export const #{Map.fetch!(idents, sess.name)}"
+          end)
+
+        {:ok,
+         %{source: source, dts: Session.dts(image, idents), idents: idents, clauses: clauses}}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp refuse_host(book) do
     Enum.find_value(book, :ok, fn entry ->
       kind = Map.get(entry, :kind, :def)
       name = Map.get(entry, :name)
 
-      cond do
-        kind in @session_kinds ->
-          {:error, refusal("c:session", name, Atom.to_string(kind))}
-
-        kind in @host_kinds ->
-          {:error, refusal("c:host", name, Atom.to_string(kind))}
-
-        true ->
-          nil
+      if kind in @host_kinds do
+        {:error, refusal("c:host", name, Atom.to_string(kind))}
       end
     end)
   end
@@ -1430,6 +1479,10 @@ defmodule Muro.Emit.JS do
     [{entry, type_spell(name)}]
   end
 
+  defp spell_entry(%{kind: :session, name: name} = entry) when is_binary(name) do
+    [{entry, spell(name)}]
+  end
+
   defp spell_entry(%{name: name} = entry) when is_binary(name) do
     kind = Map.get(entry, :kind, :def)
 
@@ -1477,8 +1530,9 @@ defmodule Muro.Emit.JS do
     }
   end
 
-  defp mjs(stem, compiled) do
+  defp mjs(stem, compiled, session) do
     h = helper_map()
+    session_src = if session, do: session.source, else: ""
 
     [
       "// generated by muro — do not edit",
@@ -1486,6 +1540,7 @@ defmodule Muro.Emit.JS do
       "// The proof stops at the run image.",
       runtime(h),
       Enum.map_join(compiled, "\n\n", & &1.text),
+      session_src,
       ""
     ]
     |> Enum.reject(&(&1 == ""))
@@ -1660,10 +1715,11 @@ defmodule Muro.Emit.JS do
     |> String.trim()
   end
 
-  defp dts(compiled, types, book) do
+  defp dts(compiled, types, book, session) do
     h = helper_map()
     ctx = %{types: types, tyvars: %{}}
     funs = compiled |> Enum.map(&dts_fun(&1, ctx, book)) |> Enum.reject(&is_nil/1)
+    session_dts = if session, do: session.dts, else: ""
 
     [
       "// generated by muro — do not edit",
@@ -1679,6 +1735,7 @@ defmodule Muro.Emit.JS do
       "export function #{h.data}(tag: string, ...fields: unknown[]): { readonly tag: string; readonly fields: readonly unknown[] };",
       "export function #{h.uncons}<A>(s: Stream<A>): readonly [A, Stream<A>];",
       "export function #{h.canon}(value: unknown): string;",
+      session_dts,
       ""
     ]
     |> Enum.reject(&(&1 == ""))

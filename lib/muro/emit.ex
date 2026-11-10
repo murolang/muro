@@ -30,7 +30,7 @@ defmodule Muro.Emit do
   `run internal` stays in the list; its `export` flag is false.
   """
   def run_defs(book) when is_list(book) do
-    Enum.filter(book, &(Map.get(&1, :kind, :def) != :data and &1.mode == :run))
+    Enum.filter(book, &(Map.get(&1, :kind, :def) != :data and Map.get(&1, :mode) == :run))
   end
 
   @doc """

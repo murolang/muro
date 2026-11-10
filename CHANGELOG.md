@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.27
+
+JavaScript emit writes each session endpoint as a synchronous stepper beside the runs. The module starts no process and talks to no peer. The host owns the transport.
+
+One object per session. `init` returns the state. `send` and `recv` return `{ok: state}` or `{error: {unexpected, step, expected, value}}` and do not throw. `done` is true at the end. `expected` is the next step. `check_trace` replays a list of sends and receives. A parameter is a nat on `init` and an `args` list on `check_trace`.
+
+A payload is the same value a run uses: a bigint nat, `"b0"` or `"b1"`, `null`, a two-element array, an object, or `{tag, fields}`. A choice is `{k: "pick", label: "b0"}`. A book may declare runs and sessions together. A place, a scheme, or a move is still refused. A protocol the machine cannot represent is refused, and nothing is written. The declaration file types each stepper.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.27.
+
 ## 0.20.26
 
 The self-contained binary release workflow runs on the same runners as CI (`CI_RUNNER`, falling back to `ubuntu-24.04`). An existing tag can be rebuilt from `workflow_dispatch`, and the run refuses when that tag does not match the version in `mix.exs`. A dispatch with `dry_run` builds and smokes the binaries without publishing a GitHub release. Build, smoke, and publish run in one job so the workflow does not store GitHub Actions artifacts.
@@ -9,7 +25,6 @@ The smoke job runs the Linux binary that matches the runner: `linux-aarch64` nat
 ### Package
 
 - Version 0.20.26.
-
 
 ## 0.20.25
 
