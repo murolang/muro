@@ -46,7 +46,7 @@ defmodule Muro.EmitJSTest do
     assert types =~ "BigInt.asIntN(64)"
     refute types =~ "I64 is the unsigned residue"
     assert types =~ "export function muro__data("
-    assert types =~ "export function muro__uncons("
+    assert types =~ "export function muro__uncons<A>(s: Stream<A>): readonly [A, Stream<A>];"
     assert types =~ "export function muro__canon("
   end
 
@@ -284,6 +284,75 @@ defmodule Muro.EmitJSTest do
     refute types =~ "export type Bool = boolean"
     assert source =~ ~s|muro__data("true")|
     assert source =~ ~s|muro__data("false")|
+  end
+
+  test "parameterized data and streams carry their type arguments" do
+    dir = tmp()
+
+    File.write!(Path.join(dir, "gen.muro"), """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    data List (A : Type) : Type where
+      nil : List A
+      cons : A → List A → List A
+
+    data Nest (A : Type) : Type where
+      nest : List (List A) → Nest A
+      nums : List Nat → Nest A
+      both : List (Nat × Bool) → Nest A
+
+    data Box (string : Type) : Type where
+      box : string → List string → Box string
+
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def zeros : run Stream Nat := unfold 0 (λ (_ : Nat) → (0, 0))
+
+    def length : run Π (-A : Type) → Π (xs : List A) → Nat :=
+      λ (-A : Type) → λ (xs : List A) →
+        match xs motive (λ _ → Nat)
+          | nil => 0
+          | cons _ ys => suc (length A ys)
+
+    def yes : run Bool := true
+    def div2 : run Opt I64 := divi (toI64 (suc (suc 0))) (toI64 (suc 0))
+    """)
+
+    mjs = emit_js!(dir, "gen")
+    types = File.read!(Path.join(dir, "gen.d.ts"))
+    source = File.read!(mjs)
+
+    assert types =~
+             "export type List<A> =\n  | { readonly tag: \"nil\"; readonly fields: readonly [] }\n  | { readonly tag: \"cons\"; readonly fields: readonly [A, List<A>] };"
+
+    assert types =~
+             "export type Nest<A> =\n  | { readonly tag: \"nest\"; readonly fields: readonly [List<List<A>>] }\n  | { readonly tag: \"nums\"; readonly fields: readonly [List<Nat>] }\n  | { readonly tag: \"both\"; readonly fields: readonly [List<Pair<Nat, Bool>>] };"
+
+    assert types =~
+             "export type Box<string_k> =\n  | { readonly tag: \"box\"; readonly fields: readonly [string_k, List<string_k>] };"
+
+    assert types =~
+             "export type Bool =\n  | { readonly tag: \"true\"; readonly fields: readonly [] }\n  | { readonly tag: \"false\"; readonly fields: readonly [] };"
+
+    assert types =~ "export type Stream<A> = {"
+
+    assert types =~
+             "readonly step: (env: readonly unknown[], seed: unknown) => readonly [A, unknown];"
+
+    assert types =~ "export function muro__uncons<A>(s: Stream<A>): readonly [A, Stream<A>];"
+    assert types =~ "export function zeros(): Stream<Nat>;"
+    assert types =~ "export function length<A>(xs: List<A>): Nat;"
+    assert types =~ "export function yes(): Bool;"
+    assert types =~ "export function div2(): Opt<I64>;"
+    refute types =~ "export type List ="
+    refute types =~ "export type Stream ="
+    refute types =~ "fields: readonly [unknown, List]"
+    refute source =~ "<A>"
+    assert source =~ "export function length("
+    assert source =~ "export function zeros("
   end
 
   test "closures elaborate where the default image refuses a lambda, and the shared refusals stay" do
