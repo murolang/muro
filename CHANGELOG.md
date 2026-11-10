@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.26
+## 0.20.27
 
 JavaScript emit writes each session endpoint as a synchronous stepper beside the runs. The module starts no process and talks to no peer. The host owns the transport.
 
@@ -14,7 +14,7 @@ A payload is the same value a run uses: a bigint nat, `"b0"` or `"b1"`, `null`, 
 
 ### Package
 
-- Version 0.20.26.
+- Version 0.20.27.
 
 ## 0.20.25
 
