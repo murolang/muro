@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.27
+## 0.20.26
 
 The self-contained binary release workflow runs on the same runners as CI (`CI_RUNNER`, falling back to `ubuntu-24.04`). An existing tag can be rebuilt from `workflow_dispatch`, and the run refuses when that tag does not match the version in `mix.exs`. A dispatch with `dry_run` builds and smokes the binaries without publishing a GitHub release. Build, smoke, and publish run in one job so the workflow does not store GitHub Actions artifacts.
 
@@ -8,7 +8,7 @@ The smoke job runs the Linux binary that matches the runner: `linux-aarch64` nat
 
 ### Package
 
-- Version 0.20.27.
+- Version 0.20.26.
 
 
 ## 0.20.25
