@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.27
+## 0.20.24
 
 JavaScript emits a `match` on a variable bound by the enclosing arm. The element a list arm binds is that variable. The inner match may be the arm or an argument of a constructor, and the function may recurse on the tail.
 
@@ -12,7 +12,7 @@ A refusal from the JavaScript backend names the definition it refused, and names
 
 ### Package
 
-- Version 0.20.27.
+- Version 0.20.24.
 
 ## 0.20.23
 
