@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.24
+
+JavaScript emits a `match` on a variable bound by the enclosing arm. The element a list arm binds is that variable. The inner match may be the arm or an argument of a constructor, and the function may recurse on the tail.
+
+A refusal from the JavaScript backend names the definition it refused, and names the construct when the refusal has one.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.24.
+
 ## 0.20.23
 
 The JavaScript declaration file types a parameterized data type as a generic. `List (A : Type)` is `List<A>`. A field of `A` is `A`, a field of `List A` is `List<A>`, a field of `List (List A)` is `List<List<A>>`, and a field of `List Nat` is `List<Nat>`. An index is not a type parameter, so `Vec A n` is `Vec<A>`.
