@@ -444,7 +444,6 @@ defmodule Muro.EmitJSTest do
     assert source =~ "export function zeros("
   end
 
-
   test "closures elaborate where the default image refuses a lambda, and the shared refusals stay" do
     dir = tmp()
     lam = Path.join(dir, "lam.muro")
