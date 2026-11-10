@@ -10,9 +10,12 @@ defmodule Muro.IR do
   The named book keeps source binder names. Agda's de Bruijn `Tm` has lost
   them, so the same arm there is `b` plus the context length.
 
-  Layouts: `:nat`, `:unit`, `:opaque`, `{:pair, a, b}`, `{:stream, a}`,
-  `{:data, name}`, `:u8`, `:u32`, `:u64`, `:i64`, `:wbool`, `{:opt, payload}`.
-  `{:data, name}` is `dataL`. A word term is `{:wrd, kind, op, args}`.
+  Layouts: `:nat`, `:unit`, `:opaque`, `:erased`, `{:pair, a, b}`,
+  `{:stream, a}`, `{:data, name}`, `:u8`, `:u32`, `:u64`, `:i64`, `:wbool`,
+  `{:opt, payload}`. `{:data, name}` is `dataL`. `:erased` marks the let of
+  an erased constructor field (`{:let, x, :erased, :ze, body}`). Emitters
+  match that layout and ignore the payload. The field stays live at
+  `:opaque`, so a use is `Var`. A word term is `{:wrd, kind, op, args}`.
   `closures: true` also uses `{:fn, arg, ret}`, `{:lam, name, lay, body}`,
   and `{:appv, fun, arg}`. The default image does not.
   """
@@ -556,7 +559,10 @@ defmodule Muro.IR do
   end
 
   # An erased constructor field is omitted from the arm and wrapped as
-  # `Let x opaque Ze`, so a use is `Var`.
+  # `Let x erased Ze`. The layout is the mark. Emitters ignore the
+  # payload. The field stays live at `:opaque`, so a use is `Var`.
+  # A zero passed under a spec alias is bound by `bind_layout` at the
+  # argument's layout, so that let is not this one.
   defp open_ctor(st, ty, binders, ctx) do
     pis = telescope(ty)
 
@@ -588,7 +594,7 @@ defmodule Muro.IR do
 
   defp wrap([{:gone, x} | ws], tm) do
     {names, inner} = wrap(ws, tm)
-    {names, {:let, x, :opaque, :ze, inner}}
+    {names, {:let, x, :erased, :ze, inner}}
   end
 
   defp telescope(t), do: telescope(t, [])

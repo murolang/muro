@@ -274,6 +274,101 @@ defmodule Muro.EmitJSTest do
     assert source =~ ~s|muro__data("false")|
   end
 
+  test "an erased-field let is marked erased, a spec alias of Nat stays a zero, and JavaScript binds undefined" do
+    dir = tmp()
+
+    File.write!(Path.join(dir, "mark.muro"), """
+    def R : spec Type := Nat
+
+    data Box : Type where
+      mk : Π (- e : Nat) → Nat → Box
+
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    def yes : run Bool := true
+    def no : run Bool := false
+
+    def one : run Nat := (λ (r : R) → suc r) 0
+
+    def boxed : run Box := mk 0 (suc (suc 0))
+
+    def seed : run Box := mk 0 0
+
+    def live : run Nat :=
+      match boxed motive (λ _ → Nat)
+        | mk e n => n
+
+    def steps : run Π (n : Nat) → Nat :=
+      λ (n : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => 0
+          | suc k =>
+            match seed motive (λ _ → Nat)
+              | mk e m => suc (steps k)
+    """)
+
+    path = Path.join(dir, "mark.muro")
+    {:ok, book} = Muro.Load.file(path)
+    book = Muro.Prelude.for_emit(book)
+
+    assert {:ok, plain} = Muro.IR.elaborate(book)
+    assert {:ok, closed} = Muro.IR.elaborate(book, closures: true)
+
+    for funs <- [plain, closed] do
+      assert fun_body(funs, "one") == {:let, "r", :nat, :ze, {:su, {:var, "r"}}}
+      assert erased_lets(fun_body(funs, "live")) == ["e"]
+      assert erased_lets(fun_body(funs, "steps")) == ["e"]
+      refute opaque_zero?(fun_body(funs, "one"))
+      refute opaque_zero?(fun_body(funs, "live"))
+      refute opaque_zero?(fun_body(funs, "steps"))
+    end
+
+    {:ok, js, dts} = Muro.Emit.JS.render(book, "mark")
+    assert js =~ "const e = (undefined);"
+    assert js =~ "const r = (0n);"
+    refute js =~ "const r = (undefined);"
+    refute js =~ "const e = (0n);"
+    assert occurrences(js, "const e = (undefined);") == 2
+    assert js =~ ~s|muro__data("true")|
+    assert js =~ ~s|muro__data("false")|
+    assert dts =~ ~s|tag: "true"|
+    refute dts =~ "export type Bool = boolean"
+
+    {:ok, {_header, c}} = Muro.Emit.C.render(book, "mark")
+    assert c =~ "void *e = 0;"
+    refute c =~ "void *r = 0;"
+    assert c =~ "muro__zero()"
+
+    {:ok, rust} = Muro.Emit.Rust.render(book, "mark")
+    assert rust =~ "let e = muro__erase(());"
+    assert rust =~ "let r = muro__zero();"
+    refute rust =~ "let r = muro__erase(());"
+
+    {:ok, zig} = Muro.Emit.Zig.render(book, "mark")
+    assert zig =~ "const r = muro__zero();"
+    refute zig =~ "muro__erase(muro__tt())"
+
+    File.write!(Path.join(dir, "mark.mjs"), js)
+
+    File.write!(Path.join(dir, "_drv_mark.mjs"), """
+    import { one, live, steps } from "./mark.mjs";
+    console.log(String(one()));
+    console.log(String(live()));
+    console.log(String(steps(2n)));
+    """)
+
+    {out, status} = node("_drv_mark.mjs", dir)
+    assert status == 0, out
+    assert String.trim(out) == "1\n2\n2"
+
+    {_js_names, ex, mod} = load_pair(path)
+    assert peano_to_int(apply(mod, fun_atom(ex, "one"), [])) == 1
+    assert peano_to_int(apply(mod, fun_atom(ex, "live"), [])) == 2
+    assert peano_to_int(apply(mod, fun_atom(ex, "steps"), [peano_n(2)])) == 2
+  end
+
   test "closures elaborate where the default image refuses a lambda, and the shared refusals stay" do
     dir = tmp()
     lam = Path.join(dir, "lam.muro")
@@ -1114,6 +1209,29 @@ defmodule Muro.EmitJSTest do
   defp nat(n), do: {:nat, n}
   defp data(tag, fields), do: {:data, tag, fields}
   defp pair(a, b), do: {:pair, a, b}
+
+  defp fun_body(funs, name), do: Enum.find(funs, &(&1.name == name)).body
+
+  defp erased_lets(tm), do: erased_lets(tm, [])
+  defp erased_lets({:let, name, :erased, _val, body}, acc), do: erased_lets(body, [name | acc])
+
+  defp erased_lets({:let, _name, _lay, val, body}, acc),
+    do: erased_lets(body, erased_lets(val, acc))
+
+  defp erased_lets(t, acc) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.reduce(acc, &erased_lets/2)
+
+  defp erased_lets(t, acc) when is_list(t), do: Enum.reduce(t, acc, &erased_lets/2)
+  defp erased_lets(_t, acc), do: acc
+
+  defp opaque_zero?({:let, _, :opaque, :ze, _}), do: true
+  defp opaque_zero?(t) when is_tuple(t), do: t |> Tuple.to_list() |> Enum.any?(&opaque_zero?/1)
+  defp opaque_zero?(t) when is_list(t), do: Enum.any?(t, &opaque_zero?/1)
+  defp opaque_zero?(_), do: false
+
+  defp occurrences(text, needle) do
+    text |> String.split(needle) |> length() |> Kernel.-(1)
+  end
 
   defp emit_js!(dir, name) do
     path = Path.join(dir, "#{name}.muro")
