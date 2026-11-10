@@ -895,12 +895,26 @@ defmodule Muro.Emit.JS do
     end
   end
 
+  # A definition is uncurried (`plus(n, m)`) and a function value is
+  # curried (`f(n)(m)`). `(x) => f(x)` is `f` when `f` is already one
+  # function of one argument and `x` does not occur in `f`: a unary
+  # export or internal, or a function value in scope. `(m) => plus(n, m)`
+  # stays an arrow. It closes over `n`, and `plus` takes both arguments
+  # at once. `(n) => (m) => f(n)(m)` stays too: applying it once must not
+  # run `f`.
   defp emit_tm({:lam, name, _lay, body}, st) do
-    {rn, scope} = bind_source(spell(name), st.scope)
-    st2 = %{st | scope: scope, vars: Map.put(st.vars, name, rn)}
+    case contract_lam(name, body) do
+      {:funref, fname} ->
+        with {:ok, info} <- target(st, fname, 1), do: {:ok, info.call}
 
-    with {:ok, be} <- emit_tm(body, st2) do
-      {:ok, "(#{rn}) => (#{be})"}
+      {:var, _} = var ->
+        emit_tm(var, st)
+
+      {:lam, ename, _, ebody} ->
+        emit_arrow(ename, ebody, st)
+
+      :keep ->
+        emit_arrow(name, body, st)
     end
   end
 
@@ -1030,6 +1044,77 @@ defmodule Muro.Emit.JS do
 
   defp emit_tm({:wrd, k, op, args}, st), do: emit_wrd(k, op, args, st)
   defp emit_tm(_tm, _st), do: {:error, "c:unsupported"}
+
+  defp emit_arrow(name, body, st) do
+    {rn, scope} = bind_source(spell(name), st.scope)
+    st2 = %{st | scope: scope, vars: Map.put(st.vars, name, rn)}
+
+    with {:ok, be} <- emit_tm(body, st2) do
+      {:ok, "(#{rn}) => (#{be})"}
+    end
+  end
+
+  defp contract_lam(name, body) do
+    case eta_callee(name, body) do
+      {:ok, {:var, _} = var} ->
+        var
+
+      {:ok, {:funref, _} = ref} ->
+        ref
+
+      {:ok, {:lam, ename, _, ebody} = lam} ->
+        case contract_lam(ename, ebody) do
+          :keep -> lam
+          other -> other
+        end
+
+      :no ->
+        :keep
+    end
+  end
+
+  defp eta_callee(name, {:appv, fun, {:var, name}}) do
+    if occurs_bind?(name, fun) or not eta_value?(fun), do: :no, else: {:ok, fun}
+  end
+
+  defp eta_callee(name, {:call, fname, [{:var, name}]}), do: {:ok, {:funref, fname}}
+  defp eta_callee(_name, _body), do: :no
+
+  defp eta_value?({:var, _}), do: true
+  defp eta_value?({:lam, _, _, _}), do: true
+  defp eta_value?(_other), do: false
+
+  defp occurs_bind?(name, {:var, name}), do: true
+  defp occurs_bind?(_name, {:var, _}), do: false
+  defp occurs_bind?(name, {:lam, _, _, body}), do: occurs_bind?(name, body)
+  defp occurs_bind?(name, {:call, _, args}), do: Enum.any?(args, &occurs_bind?(name, &1))
+  defp occurs_bind?(name, {:appv, f, a}), do: occurs_bind?(name, f) or occurs_bind?(name, a)
+  defp occurs_bind?(name, {:su, t}), do: occurs_bind?(name, t)
+  defp occurs_bind?(name, {:pair, a, b}), do: occurs_bind?(name, a) or occurs_bind?(name, b)
+  defp occurs_bind?(name, {:con, _, _, args}), do: Enum.any?(args, &occurs_bind?(name, &1))
+
+  defp occurs_bind?(name, {:let, _, _, val, body}),
+    do: occurs_bind?(name, val) or occurs_bind?(name, body)
+
+  defp occurs_bind?(name, {:letp, _, _, e, body}),
+    do: occurs_bind?(name, e) or occurs_bind?(name, body)
+
+  defp occurs_bind?(name, {:uncons, e}), do: occurs_bind?(name, e)
+
+  defp occurs_bind?(name, {:stream, seed, caps, _step}) do
+    occurs_bind?(name, seed) or Enum.any?(caps, fn {_cap, tm} -> occurs_bind?(name, tm) end)
+  end
+
+  defp occurs_bind?(name, {:match, scrut, _, arms}) do
+    occurs_bind?(name, scrut) or
+      Enum.any?(arms, fn
+        {:arm, _, _, arm_body} -> occurs_bind?(name, arm_body)
+        _other -> false
+      end)
+  end
+
+  defp occurs_bind?(name, {:wrd, _, _, args}), do: Enum.any?(args, &occurs_bind?(name, &1))
+  defp occurs_bind?(_name, _other), do: false
 
   defp emit_wrd(k, op, args, st) do
     h = st.h
