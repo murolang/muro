@@ -442,7 +442,7 @@ A productive `run` Stream of zeros. `head-zeros` is `{head zeros ≡ 0 : Nat}` b
 
 ## higher_order.muro
 
-A `run` definition as a value. It imports `std:list.muro`. `map` and `tabulate` take a `+` function; `tabulate ident` passes a definition, `map (plus 2)` a partial application, and `measure (length Nat)` a partial application of the library `length` whose given argument is erased. The emitted code passes curried closures ([Emit](emit.md#functions-as-values)); C emit refuses it (`c:lambda`).
+A `run` definition as a value. It imports `std:list.muro`. `map` and `tabulate` take a `+` function; `tabulate ident` passes a definition, `map (plus 2)` a partial application, and `measure (length Nat)` a partial application of the library `length` whose given argument is erased. Elixir passes curried closures ([Emit](emit.md#functions-as-values)). JavaScript passes `ident` and `length` as those functions, and keeps `(m) => plus(n, m)` for the partial of `plus`. C emit refuses the book (`c:lambda`).
 
 ## dominance.muro
 

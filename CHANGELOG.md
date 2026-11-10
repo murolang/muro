@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.22
+
+A JavaScript function value that only passes its argument on to a function of one argument is that function. `tabulate ident` passes `ident`. `measure (length Nat)` passes `length`. A parameter used the same way is that parameter, and an internal function is that function.
+
+A partial application of a function of several arguments stays a closure. `map (plus 2)` is `(m) => plus(2n, m)`. The export `plus` takes both arguments at once, and the closure takes one and remembers the `2`. `(n) => (m) => f(n)(m)` stays two closures: applying it once does not run `f`.
+
+### Manual
+
+- Emit.
+
+### Package
+
+- Version 0.20.22.
+
 ## 0.20.21
 
 The Elixir CI job installs Node 22 and runs the JavaScript backend differentials. Those tests fail when `CI` is set and `node` is not on `PATH`. They do not skip. Where `CI` is unset, the same cases still skip when `node` is absent.
