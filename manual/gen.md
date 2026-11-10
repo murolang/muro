@@ -29,16 +29,17 @@ A `repr` is part of the committed module. `decode_<type>/1`, `decode_<type>/2`, 
 ]
 ```
 
-`muro:` is required. It is the version string the books are checked with. `fuel:` is optional. The default is the fuel `mix muro.check` uses (`Muro.Check.default_fuel/0`, 2000). `modules:` is required. It may be empty. Each entry is `{book_path, module, target_path}` or `{book_path, module, target_path, opts}`. A 3-tuple emits Elixir. `opts` is a keyword list: `kind: :elixir` (the default), `kind: :exunit`, `kind: :fsm`, `kind: :c`, `kind: :rust`, `kind: :zig`, or `kind: :asm`, and for `:exunit` an optional `impl:` alias, the implementation the suite calls by default, and an optional `imports:` boolean. `imports: true` also collects the closed equations of the files that book imports directly. The default is `false`. `imports:` on an `:elixir` entry is an error, and a non-boolean is an error. Unknown options, an unknown kind, `impl:` on an Elixir entry, and an `impl` that is not an alias are errors, and the message names the entry index. `impl:` and `imports:` on a `:fsm` entry are the same error: both are only valid for `kind: :exunit`. The page for the suite is [Closed equations as tests](exunit.md). The page for the state machine is [State machines](fsm.md).
+`muro:` is required. It is the version string the books are checked with. `fuel:` is optional. The default is the fuel `mix muro.check` uses (`Muro.Check.default_fuel/0`, 2000). `modules:` is required. It may be empty. Each entry is `{book_path, module, target_path}` or `{book_path, module, target_path, opts}`. A 3-tuple emits Elixir. `opts` is a keyword list: `kind: :elixir` (the default), `kind: :exunit`, `kind: :fsm`, `kind: :c`, `kind: :rust`, `kind: :zig`, `kind: :asm`, or `kind: :js`, and for `:exunit` an optional `impl:` alias, the implementation the suite calls by default, and an optional `imports:` boolean. `imports: true` also collects the closed equations of the files that book imports directly. The default is `false`. `imports:` on an `:elixir` entry is an error, and a non-boolean is an error. Unknown options, an unknown kind, `impl:` on an Elixir entry, and an `impl` that is not an alias are errors, and the message names the entry index. `impl:` and `imports:` on a `:fsm` entry are the same error: both are only valid for `kind: :exunit`. The page for the suite is [Closed equations as tests](exunit.md). The page for the state machine is [State machines](fsm.md).
 
-A `c`, `rust`, `zig`, or `asm` entry may omit the module. The target ends with `.c`, `.rs`, `.zig`, or `.s`:
+A `c`, `rust`, `zig`, `asm`, or `js` entry may omit the module. The target ends with `.c`, `.rs`, `.zig`, `.s`, or `.mjs`:
 
 ```
 {"muro/rounding.muro", "src/rounding.rs", [kind: :rust]}
 {"muro/rounding.muro", "src/rounding.zig", [kind: :zig]}
+{"muro/rounding.muro", "src/rounding.mjs", [kind: :js]}
 ```
 
-A `:c` target also writes the header beside it (`src/rounding.c` writes `src/rounding.h`). The source's `#include` names that header (`rounding.h`), the target stem, including when the book is `muro/half.muro`. That header is checked as a target before anything is written, including when the path is already a directory. The error names the entry index. It is also a target for `mix muro.gen --check`. These four kinds are not formatted. The body hash is the sha256 of the emitter's text. The comment mark is `// ` for C, Rust, and Zig, including the `.h`, and `@ ` for Cortex-M assembly. The words of the header are the ones below.
+A `:c` target also writes the header beside it (`src/rounding.c` writes `src/rounding.h`). The source's `#include` names that header (`rounding.h`), the target stem, including when the book is `muro/half.muro`. That header is checked as a target before anything is written, including when the path is already a directory. The error names the entry index. It is also a target for `mix muro.gen --check`. A `:js` target writes the declaration file beside the module (`src/rounding.mjs` writes `src/rounding.d.ts`) and reserves that path the same way. These kinds are not formatted. The body hash is the sha256 of the emitter's text. The comment mark is `// ` for C, Rust, Zig, and JavaScript, including the `.h` and the `.d.ts`, and `@ ` for Cortex-M assembly. The words of the header are the ones below.
 
 A project without `mix.exs` uses `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`. The keys mean the same thing. `backend` there is the default kind. The page is [The executable](binary.md).
 
@@ -186,6 +187,7 @@ A book that fails and a target that is stale are both reported. A hand edit is r
 ```
 mix muro.init
 mix muro.init --ci github
+mix muro.init --backend js
 ```
 
 `mix muro.init` creates `muro.exs` and `priv/muro/`. `muro:` is the running version. `modules:` is empty, with one commented example entry. An existing `muro.exs`, or a `:muro` key already in `mix.exs`, is left untouched. The message names what it refused.

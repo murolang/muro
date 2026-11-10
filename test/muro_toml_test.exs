@@ -36,6 +36,36 @@ defmodule Muro.TomlTest do
     assert dep.source == {:git, "https://example.com/rounding.git", [tag: "v1"]}
   end
 
+  test "backend js is a native entry and an unknown backend is refused" do
+    dir = tmp()
+    version = Mix.Tasks.Muro.version()
+    write_book(dir, "muro/rounding.muro")
+
+    File.write!(Path.join(dir, "muro.toml"), """
+    muro = "#{version}"
+    backend = "js"
+
+    [[modules]]
+    book = "muro/rounding.muro"
+    target = "src/rounding.mjs"
+    """)
+
+    assert {:ok, manifest} = Muro.Manifest.load(dir)
+    assert manifest.backend == :js
+
+    assert [%{book: "muro/rounding.muro", target: "src/rounding.mjs", module: nil, kind: :js}] =
+             manifest.modules
+
+    assert {:error, unknown} =
+             load(dir, """
+             muro = "#{version}"
+             backend = "nope"
+             modules = []
+             """)
+
+    assert unknown =~ "unknown backend \"nope\""
+  end
+
   test "an elixir entry takes an alias string and a native entry omits module" do
     dir = tmp()
     version = Mix.Tasks.Muro.version()

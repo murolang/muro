@@ -25,20 +25,32 @@ defmodule Muro.Init do
   @doc """
   Write the manifest under `root`.
 
-  `ci` is `nil` or `:github`. Returns `{:ok, lines, note}` or
-  `{:error, message}`. `lines` names each file that was created.
+  `ci` is `nil` or `:github`, or `opts` is a keyword list of
+  `ci:` and `backend:`. With no backend the manifest omits that key.
+  Returns `{:ok, lines, note}` or `{:error, message}`. `lines` names
+  each file that was created.
   """
   def write(root, version, ci \\ nil)
 
   def write(root, version, ci)
       when is_binary(root) and is_binary(version) and ci in [nil, :github] do
+    write(root, version, ci: ci)
+  end
+
+  def write(root, version, opts)
+      when is_binary(root) and is_binary(version) and is_list(opts) do
     root = Path.expand(root)
+    ci = Keyword.get(opts, :ci)
+    backend = Keyword.get(opts, :backend)
     exs = Path.join(root, "muro.exs")
     workflow = Path.join(root, ".github/workflows/muro.yml")
     has_exs = File.regular?(exs)
     has_mix = match?({:ok, _value}, Muro.Manifest.mix_config(root))
 
     cond do
+      ci not in [nil, :github] ->
+        {:error, "unknown --ci #{inspect(ci)}; expected github"}
+
       has_exs and has_mix ->
         {:error,
          "refusing to overwrite an existing manifest: muro.exs and the :muro key in mix.exs"}
@@ -54,7 +66,7 @@ defmodule Muro.Init do
 
       true ->
         File.mkdir_p!(Path.join(root, "priv/muro"))
-        File.write!(exs, manifest_source(version))
+        File.write!(exs, mix_manifest(version, backend))
 
         lines = ["created muro.exs", "created priv/muro/"]
 
@@ -433,7 +445,13 @@ defmodule Muro.Init do
   defp example_paths(:rust), do: {"src/rounding.rs", nil}
   defp example_paths(:zig), do: {"src/rounding.zig", nil}
   defp example_paths(:asm), do: {"src/rounding.s", nil}
+  defp example_paths(:js), do: {"src/rounding.mjs", nil}
   defp example_paths(nil), do: {"src/rounding.rs", nil}
+
+  # No backend keeps the historical `muro.exs`, which omits the key.
+  # `write/2` and `write/3` with `nil` or `:github` stay on that text.
+  defp mix_manifest(version, nil), do: manifest_source(version)
+  defp mix_manifest(version, backend), do: exs_source(version, backend)
 
   defp exs_source(version, backend) do
     {target, module} = example_paths(backend)

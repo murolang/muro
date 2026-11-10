@@ -8,11 +8,15 @@ defmodule Mix.Tasks.Muro.Init do
 
       mix muro.init
       mix muro.init --ci github
+      mix muro.init --backend js
 
   `muro.exs` pins `muro:` to the running version and starts with an
   empty `modules:` list, plus a commented example entry. The task
   refuses to overwrite `muro.exs` or a `:muro` key already in
   `mix.exs`.
+
+  `--backend NAME` stores that backend on the manifest. `js` is one
+  of the accepted values. Without the flag, a Mix project omits the key.
 
   `--ci github` also writes `.github/workflows/muro.yml`. The job
   sets up Elixir and OTP, installs the archive at the pinned version

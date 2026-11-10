@@ -5,7 +5,8 @@ end
 
 defmodule Muro.Emit.Name do
   @moduledoc """
-  Identifiers for the C, Rust, and Zig emitters.
+  Identifiers for the C, Rust, and Zig emitters, and the generated
+  names of the JavaScript emitter.
 
   Every emitted identifier is built here, and it lands in exactly one of
   two sets.
@@ -34,9 +35,12 @@ defmodule Muro.Emit.Name do
   binder is introduced, including type names. `bind/2` claims against
   the whole scope, then adds the chosen spelling. A caller does not
   pass a smaller set. `see/2` records a generated identifier that is
-  already visible. The C, Rust, and Zig symbol stays in this module.
-  An Elixir host name is `Muro.Emit.elixir_base/1` of the source name.
-  It is not this spelling.
+  already visible. The C, Rust, and Zig source spelling stays in this module.
+  A JavaScript source name is `Muro.Emit.JS.source_id/1`: a hyphen folds
+  to `_`, a reserved word gains `_k`, and any other character is a `$`
+  escape. Two source names that reach one JavaScript identifier are
+  refused. An Elixir host name is `Muro.Emit.elixir_base/1` of the
+  source name. It is not this spelling.
 
   `decode/1` inverts `encode/1` on that image: `decode(encode(name))` is
   `{:ok, name}`. `encode/1` is injective on every binary, not only the
