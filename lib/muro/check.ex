@@ -4,7 +4,7 @@ defmodule Muro.Check do
   from `Muro.Check` (`⇒-var-run`, `⇐-refl`, …). There is no promotion.
   """
 
-  alias Muro.{Ast, Place, Print, Repr, Subst, Word}
+  alias Muro.{Ast, Grade, Place, Print, Repr, Subst, Word}
 
   # Default fuel. Fuel bounds reduction (whnf, conversion, isData, the
   # index-clash test); everything else is structural recursion on the
@@ -199,10 +199,18 @@ defmodule Muro.Check do
 
   # The quantity of the predecessor bound by a match on Nat (Agda:
   # Env.predQty): reusable under a reusable variable, affine otherwise.
+  # Grade 1 is the `%1` mark, so an unused predecessor is linear.
   defp pred_qty(gamma, {:var, x}) do
     case Enum.at(gamma, x) do
-      {:reuse, _} -> :reuse
-      _ -> :affine
+      {q, _} ->
+        case Grade.kernel_qty(q) do
+          :reuse -> :reuse
+          :linear -> :linear
+          _ -> :affine
+        end
+
+      _ ->
+        :affine
     end
   end
 
@@ -339,6 +347,8 @@ defmodule Muro.Check do
   defp combine_alt(m, u, v) when m in [:run, :evidence], do: max_uses(u, v)
   defp combine_alt(:spec, u, _), do: List.duplicate(:u0, length(u))
 
+  defp check_bound(m, {:grade, _, _} = q, u), do: check_bound(m, Grade.kernel_qty(q), u)
+
   defp check_bound(m, :erased, u) when m in [:run, :evidence] and u in [:u1, :uw],
     do: {:error, "erased variable used computationally"}
 
@@ -383,17 +393,27 @@ defmodule Muro.Check do
         {:error, "no promotion: erased variable in #{mode} mode"}
 
       {:ok, {q, ty}} ->
-        u = if q == :reuse, do: :uw, else: :u1
+        case Grade.kernel_qty(q) do
+          :erased ->
+            {:error, "no promotion: erased variable in #{mode} mode"}
 
-        if mode == :run do
-          case run_ty(k, book, ty) do
-            {:ok, true} -> {:ok, {ty, one_hot(n, x, u)}}
-            {:ok, false} -> {:error, "no promotion: variable has a spec type"}
-            err -> err
-          end
-        else
-          {:ok, {ty, one_hot(n, x, u)}}
+          kq ->
+            var_tax(k, book, n, x, mode, ty, kq)
         end
+    end
+  end
+
+  defp var_tax(k, book, n, x, mode, ty, kq) do
+    u = if kq == :reuse, do: :uw, else: :u1
+
+    if mode == :run do
+      case run_ty(k, book, ty) do
+        {:ok, true} -> {:ok, {ty, one_hot(n, x, u)}}
+        {:ok, false} -> {:error, "no promotion: variable has a spec type"}
+        err -> err
+      end
+    else
+      {:ok, {ty, one_hot(n, x, u)}}
     end
   end
 
@@ -458,7 +478,7 @@ defmodule Muro.Check do
   # The non-erased argument positions of a definition's type, read
   # syntactically: the candidates for the position a self-call descends on.
   defp arg_positions({:pi, q, _, _, b}, j) do
-    if(q == :erased, do: [], else: [j]) ++ arg_positions(b, j + 1)
+    if(Grade.kernel_qty(q) == :erased, do: [], else: [j]) ++ arg_positions(b, j + 1)
   end
 
   defp arg_positions(_, _), do: []
@@ -2124,7 +2144,7 @@ defmodule Muro.Check do
       {m, {:lam, q, a, x, t1}} ->
         with :ok <- check_ty(k, book, rs, gamma, a),
              :ok <-
-               if(q == :reuse,
+               if(Grade.kernel_qty(q) == :reuse,
                  do: guard_copy(k, book, a),
                  else: :ok
                ),
@@ -2645,6 +2665,10 @@ defmodule Muro.Check do
     if evid_call?(book, m, f), do: {:ok, fu}, else: combine(m, fu, au)
   end
 
+  defp infer_arg(k, book, rs, gamma, m, {:grade, _, _} = q, a, fu, arg, f) do
+    infer_arg(k, book, rs, gamma, m, Grade.kernel_qty(q), a, fu, arg, f)
+  end
+
   defp infer_arg(k, book, rs, gamma, m, :erased, a, fu, arg, _f) do
     with {:ok, _} <- check(k, book, rs, gamma, :spec, arg, a) do
       if m in [:run, :evidence], do: {:ok, fu}, else: {:ok, u0s(nctx(gamma))}
@@ -2705,7 +2729,7 @@ defmodule Muro.Check do
                  :ok <- check_ty(k, book, rs, gamma, a_ann),
                  :ok <- conv(k, book, names_of(rs, gamma), a_ann, a1),
                  :ok <-
-                   if(q == :reuse,
+                   if(Grade.kernel_qty(q) == :reuse,
                      do: guard_copy(k, book, a1),
                      else: :ok
                    ),
@@ -2773,7 +2797,7 @@ defmodule Muro.Check do
              :ok <- conv(k, book, names_of(rs, gamma), a_ann, s_ty),
              {:ok, {goal, fam}} <- unf_step(k, book, rs, gamma, a, s_ty),
              :ok <- bare_stream(k, book, fam, a),
-             :ok <- if(q == :reuse, do: guard_copy(k, book, s_ty), else: :ok),
+             :ok <- if(Grade.kernel_qty(q) == :reuse, do: guard_copy(k, book, s_ty), else: :ok),
              {:ok, [u0 | us]} <-
                check(
                  k,
@@ -3090,7 +3114,8 @@ defmodule Muro.Check do
   # body to unfold. `params: :open` is the only way one reaches this clause.
   def check_def(book, %{kind: :param, mode: mode, type: ty} = d, k) do
     with :ok <- fail_at(d, "type", check_ty(k, book, empty_rec(), [], ty)),
-         :ok <- fail_at(d, "type", run_decl(k, book, mode, ty)) do
+         :ok <- fail_at(d, "type", run_decl(k, book, mode, ty)),
+         :ok <- fail_at(d, "grade", grade_type(mode, ty)) do
       :ok
     end
   end
@@ -3099,6 +3124,7 @@ defmodule Muro.Check do
     with :ok <- fail_at(d, "type", check_ty(k, book, empty_rec(), [], ty)),
          :ok <- fail_at(d, "type", run_decl(k, book, mode, ty)),
          {:ok, _} <- fail_at(d, "body", check_body(k, book, d)),
+         :ok <- fail_at(d, "grade", grade_of(d)),
          :ok <-
            fail_at(
              d,
@@ -4191,11 +4217,18 @@ defmodule Muro.Check do
     do: {:error, "not a constructor spine"}
 
   # Agda's fieldUses: a + field scales as a + argument does.
+  defp field_uses(k, book, {:grade, _, _} = q, a_ty, au),
+    do: field_uses(k, book, Grade.kernel_qty(q), a_ty, au)
+
   defp field_uses(k, book, :reuse, a_ty, au), do: reuse_arg_uses(k, book, a_ty, au)
   defp field_uses(_k, _book, _q, _a_ty, au), do: {:ok, au}
 
+  defp field_mode({:grade, _, _} = q, m), do: field_mode(Grade.kernel_qty(q), m)
   defp field_mode(:erased, _m), do: :spec
   defp field_mode(_q, m), do: m
+
+  defp combine_arg({:grade, _, _} = q, m, au, fu),
+    do: combine_arg(Grade.kernel_qty(q), m, au, fu)
 
   defp combine_arg(:erased, :spec, _au, fu), do: {:ok, u0s(length(fu))}
   defp combine_arg(:erased, _m, _au, fu), do: {:ok, fu}
@@ -4371,7 +4404,7 @@ defmodule Muro.Check do
             with :ok <- qty_agree(q, q1),
                  :ok <- check_ty(k, book, rs, gamma, a1),
                  :ok <- conv(k, book, names_of(rs, gamma), a1, a),
-                 :ok <- if(q == :reuse, do: guard_copy(k, book, a1), else: :ok),
+                 :ok <- if(Grade.kernel_qty(q) == :reuse, do: guard_copy(k, book, a1), else: :ok),
                  {:ok, [u0 | us]} <-
                    check_br(
                      k,
@@ -4745,7 +4778,7 @@ defmodule Muro.Check do
 
   defp check_ctor_fields(k, book, rs, gamma, 0, {:pi, q, a, x, b}) do
     with {:ok, _} <- check(k, book, rs, gamma, :spec, a, :typ),
-         :ok <- if(q == :reuse, do: guard_copy(k, book, a), else: :ok),
+         :ok <- if(Grade.kernel_qty(q) == :reuse, do: guard_copy(k, book, a), else: :ok),
          do:
            check_ctor_fields(
              k,
@@ -4776,6 +4809,7 @@ defmodule Muro.Check do
     Enum.reduce_while(ctors, :ok, fn c, :ok ->
       result =
         with :ok <- check_ty(k, book, empty_rec(), [], c.type),
+             :ok <- grade_ctor(c.type),
              :ok <- check_ctor_fields(k, book, empty_rec(), [], np, c.type) do
           check_ctor_rest(k, book, name, np, ni, c.type)
         end
@@ -4785,5 +4819,25 @@ defmodule Muro.Check do
         err -> {:halt, err}
       end
     end)
+  end
+
+  # Grades refine the kernel. The kernel runs first, so its message
+  # stands when both would refuse. A book with no grade is not walked.
+  # `check_def` already receives a de Bruijn book. A second `to_db`
+  # would read `{:var, 0}` as a definition and count the use as zero.
+  defp grade_of(%{mode: mode, type: ty, body: body}) do
+    if Grade.any?(ty) or Grade.any?(body) do
+      Grade.check(mode, ty, body)
+    else
+      :ok
+    end
+  end
+
+  defp grade_type(mode, ty) do
+    if Grade.any?(ty), do: Grade.closed(mode, ty), else: :ok
+  end
+
+  defp grade_ctor(ty) do
+    if Grade.any?(ty), do: Grade.closed(:spec, ty), else: :ok
   end
 end

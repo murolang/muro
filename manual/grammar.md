@@ -129,7 +129,10 @@ stream     ::= "Stream" atom
 unfold     ::= "unfold" atom atom         -- seed, λ s → (head, next_seed)
 uncons     ::= "uncons" atom
 qty        ::= "+" | "-" | "%0" | "%1" | ε  -- ε = %0 = affine (default); %1 must be used
+grade      ::= "0" | numeral | "ω" | "omega" | "[" point "," point "]"
+point      ::= "0" | numeral | "ω" | "omega"   -- not a nested interval; no leading zero
 binder     ::= "(" qty ident ":" term ")"
+             | "(" ident ":" "(" grade "," grade ")" term ")"  -- unmarked; the pair is evidence
 pi         ::= ("Π" | "Pi") binder ("→" | "->") term
 lam        ::= ("λ" | "lam") binder ("→" | "->") term
 let        ::= "let" "(" ident "," ident ")" "=" term "in" term
@@ -176,6 +179,8 @@ Value binding: `get (k : Type) continuation` receives a value of that type and b
 
 `%0` and `%1` are whole tokens. `%10` is not `%1` followed by `0`. On a session, an unmarked session is `%0`, and `%1` requires the process to finish. On a Π or λ binder, an unmarked binder is `%0`, and `%1` requires the variable to be used. Both marks are the affine quantity. The λ mark and the Π mark must agree.
 
+A grade pair is written on an unmarked binder, `(n : (1, 0) Nat)`. The first grade is the run use and the second is the type use. `ω` and `omega` are the same grade. An interval is inclusive, and its ends are points. `[2, 1]` is empty. `(x : (0, 1))` is still a pair, because no type follows the grades. A `+`, `-`, or `%` mark is not written together with a grade pair. The pair is evidence. Emit erases it.
+
 An endpoint function has no mode tag. Its type starts with `(`. `(s : ping) ⊸ ping` is a linear arrow (`-o` is the same arrow). `(s : ping) → ping` is affine. `λ¹` (`lam1`) binds the endpoint linearly. `λ` (`lam`) binds it affinely. The arrow after `λ` may be `→` or `⊸`; the multiplicity is the lambda's. `done` is the meeting. `dual` and `meet` are keywords in that body: `dual s`, `meet s t`. `+`, `-`, and `%` on an endpoint binder are refused. The function is evidence. The named session may repeat, and its payload may be a declared data type. `dual` keeps `rec` and that payload. A following `def`, `session`, or `meet name :` is the next entry.
 
 Inside a `data` block each constructor declaration `ident ":" term` begins on its own line; that is how an application stops before the next constructor. A nat field may carry a numeral bound before the arrow, `(slot : Nat) {slot ≤ 1}`. The left side is that field and the right side is a canonical decimal. The page is [Terms](language.md#a-bounded-field). On one line, `f x : Nat` inside `{ … }` is the application `f x` followed by the type. A following line that starts with `session` or `conform`, or with a `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `temporal`, `talk`, `choreography`, `repr`, `seat`, or `link` entry, ends that type the same way. A constructor may be named `talk`, `choreography`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `temporal`, `repr`, `seat`, or `link`: the entry forms are `talk name :=`, `choreography name` followed by `roles`, `place name :=`, `scheme name :=`, `move stay` or `move cross`, `endpoint name :=`, `read stay` or `read cross`, `meet name :`, `temporal name :`, `repr name :=`, `seat name :`, and `link name :`. `talk : Type`, `choreography : Box`, `meet : Type`, `temporal : Box`, `repr : Box`, `seat : Type`, and `link : Type` are constructors. `buffer` is a keyword only after the right-hand process of `meet name :`, and only with a numeral. `def buffer : run Nat := 0` is a definition. `def repr : run Nat := 0` is a definition. The host shape of a data type is [Host representations](repr.md).
@@ -209,6 +214,8 @@ From the Pratt parser in `lib/muro/parser.ex`:
 Π (%1 n : Nat) → …     affine, and the variable must be used once
 Π (+ n : Nat) → …      reuse, if the type WHNFs to Data
 Π (- e : IsEven n) → … erased
+Π (n : (1, 0) Nat) → … grade 1 computationally, unused in the type
+Π (n : (ω, 0) Nat) → … any number of run uses, on a copyable type
 ```
 
 ## Identity, match, rewrite

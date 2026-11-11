@@ -223,6 +223,7 @@ defmodule Muro.Emit do
   end
 
   def emit_module(module, book) when is_atom(module) do
+    book = Muro.Grade.erase_book(book)
     runs = run_defs(book)
     names = elixir_names(book)
     funs = runs |> Enum.map(&emit_def(&1, book, names)) |> Enum.join("\n\n")

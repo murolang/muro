@@ -6,7 +6,7 @@ defmodule Muro do
   it, only run terms run.
   """
 
-  alias Muro.{Emit, Load, Prelude}
+  alias Muro.{Emit, Grade, Load, Prelude}
 
   @doc """
   Parse and check a `.muro` file. Options: `fuel: n` (see `Muro.Check.check_sig/2`).
@@ -79,7 +79,12 @@ defmodule Muro do
     load_opts = [fuel: fuel, root: Keyword.get(opts, :root), params: :open]
 
     with {:ok, book} <- Load.file(path, load_opts) do
-      Emit.ExUnitSuite.render(path, module, book, Keyword.put(opts, :fuel, fuel))
+      Emit.ExUnitSuite.render(
+        path,
+        module,
+        Grade.erase_book(book),
+        Keyword.put(opts, :fuel, fuel)
+      )
     end
   end
 
@@ -240,7 +245,7 @@ defmodule Muro do
 
   defp checked_book(path, opts) do
     with {:ok, book} <- Load.file(path, opts) do
-      {:ok, Prelude.for_emit(book)}
+      {:ok, book |> Prelude.for_emit() |> Grade.erase_book()}
     end
   end
 end

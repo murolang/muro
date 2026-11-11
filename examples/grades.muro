@@ -1,0 +1,7 @@
+-- grades.muro — a grade pair on a binder. 1 is exactly once. ω may be copied.
+
+def once : run Π (n : (1, 0) Nat) → Nat :=
+  λ (n : (1, 0) Nat) → n
+
+def many : run Π (n : (ω, 0) Nat) → Nat :=
+  λ (n : (ω, 0) Nat) → plus n n

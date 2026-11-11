@@ -9,6 +9,8 @@ summary: What the language does not do. Facts about the checker, not a roadmap.
 
 In brief: this is what the parser and checker refuse today. It is a description of the language, not a version number and not a list of things to add later.
 
+A grade pair on a binder is evidence. It refines how many times a run or an evidence term may use the variable, and how many times a type may mention it. The emitters erase it. A runtime may elect to read the grade. No runtime yet consults it.
+
 ## The checker does not accept
 
 - `Type : Type`
