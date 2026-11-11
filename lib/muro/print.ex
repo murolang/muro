@@ -283,6 +283,7 @@ defmodule Muro.Print do
   defp spine({:app, f, a}, acc), do: spine(f, [a | acc])
   defp spine(h, acc), do: {h, acc}
 
+  defp qty_mark({:grade, c, t}), do: "(#{Muro.Grade.show(c)}, #{Muro.Grade.show(t)}) "
   defp qty_mark(:erased), do: "-"
   defp qty_mark(:reuse), do: "+"
   defp qty_mark(:linear), do: "%1 "

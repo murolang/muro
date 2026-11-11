@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.32
+
+A binder may carry a grade pair `(x : (c, t) A)`. `c` is how many times run and evidence use the variable. `t` is how many times the type uses it. The grades are `0`, `1`, `ω`, an exact natural, and an interval. An unmarked binder stays affine.
+
+The grades are evidence. They refine the run use. The emitters erase them, so a graded book emits the same code as the book with the pairs removed.
+
+### Manual
+
+- Terms. Grammar. Limits. Examples. Extending.
+
+### Package
+
+- Version 0.20.32.
+
 ## 0.20.31
 
 A duplicate name in one file is reported at both declarations, as `file:line:col`. A name that clashes with the prelude names the prelude line as well. A duplicate inside a package is reported at `muro_deps/<name>/<path>:<line>:<col>`.

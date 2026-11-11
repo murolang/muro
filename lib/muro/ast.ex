@@ -5,7 +5,9 @@ defmodule Muro.Ast do
 
   # `:linear` is Mark m1 in agda/Muro/Arrow.agda: the affine quantity,
   # plus a must-use obligation. It is not a fourth Agda Qty.
-  @type qty :: :affine | :reuse | :erased | :linear
+  # `{:grade, c, t}` is the pair in agda/Muro/Grade.agda. It is not a Qty.
+  @type grade :: non_neg_integer() | :w | {:iv, non_neg_integer() | :w, non_neg_integer() | :w}
+  @type qty :: :affine | :reuse | :erased | :linear | {:grade, grade, grade}
   @type mode :: :run | :spec | :evidence
   @type name :: String.t()
 

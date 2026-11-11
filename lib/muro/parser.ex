@@ -4523,10 +4523,164 @@ defmodule Muro.Parser do
          {:ok, q, rest} <- parse_qty(skip(rest)),
          {:ok, x, rest} <- ident(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":"),
-         {:ok, a, rest} <- parse_term(skip(rest), 0),
+         {:ok, q, a, rest} <- parse_graded_type(q, skip(rest)),
          {:ok, rest} <- tok(skip(rest), ")") do
       {:ok, {q, x, a}, rest}
     end
+  end
+
+  # `(c, t)` is a grade pair only when a type follows the closing
+  # parenthesis. `(x : (0, 1))` stays a pair. A mark and a grade pair
+  # are not written together.
+  defp parse_graded_type(q, s) do
+    case try_grade_pair(s) do
+      {:grade, c, t, rest} ->
+        if q == :affine do
+          case parse_term(skip(rest), 0) do
+            {:ok, a, rest} -> {:ok, {:grade, c, t}, a, rest}
+            err -> err
+          end
+        else
+          {:error, err(s, "a grade pair is written on an unmarked binder")}
+        end
+
+      :not_grade ->
+        with {:ok, a, rest} <- parse_term(s, 0), do: {:ok, q, a, rest}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp try_grade_pair(s) do
+    s = skip(s)
+
+    case tok_soft(s, "(") do
+      :no ->
+        :not_grade
+
+      {:ok, rest} ->
+        case parse_grade(skip(rest)) do
+          :not_grade ->
+            :not_grade
+
+          {:error, _} = err ->
+            err
+
+          {:ok, c, rest} ->
+            case tok_soft(skip(rest), ",") do
+              :no ->
+                :not_grade
+
+              {:ok, rest} ->
+                case parse_grade(skip(rest)) do
+                  :not_grade ->
+                    :not_grade
+
+                  {:error, _} = err ->
+                    err
+
+                  {:ok, t, rest} ->
+                    case tok_soft(skip(rest), ")") do
+                      :no ->
+                        :not_grade
+
+                      {:ok, rest} ->
+                        close_grade_pair(c, t, rest)
+                    end
+                end
+            end
+        end
+    end
+  end
+
+  defp close_grade_pair(c, t, rest) do
+    nxt = skip(rest)
+
+    cond do
+      nxt == "" -> {:error, err(rest, "a grade pair needs a type")}
+      String.starts_with?(nxt, ")") -> :not_grade
+      true -> {:grade, c, t, rest}
+    end
+  end
+
+  defp parse_grade(s) do
+    s = skip(s)
+
+    cond do
+      String.starts_with?(s, "[") -> parse_grade_interval(s)
+      true -> parse_grade_point(s)
+    end
+  end
+
+  defp parse_grade_point("ω" <> rest), do: {:ok, :w, rest}
+
+  defp parse_grade_point(s) do
+    cond do
+      word_kw?(s, "omega") ->
+        {:ok, :w, after_kw(s, "omega")}
+
+      true ->
+        parse_grade_nat(s)
+    end
+  end
+
+  defp parse_grade_nat(<<c, _::binary>> = s) when c in ?0..?9 do
+    {digits, rest} = take_digits(s, "")
+
+    cond do
+      digits == "0" -> {:ok, 0, rest}
+      String.starts_with?(digits, "0") -> {:error, err(s, "a grade does not have a leading zero")}
+      true -> {:ok, String.to_integer(digits), rest}
+    end
+  end
+
+  defp parse_grade_nat(_s), do: :not_grade
+
+  defp parse_grade_interval("[" <> rest = s) do
+    case parse_grade_point(skip(rest)) do
+      :not_grade ->
+        :not_grade
+
+      {:error, _} = err ->
+        err
+
+      {:ok, lo, rest} ->
+        case tok_soft(skip(rest), ",") do
+          :no ->
+            :not_grade
+
+          {:ok, rest} ->
+            case parse_grade_point(skip(rest)) do
+              :not_grade ->
+                {:error, err(s, "a grade interval needs two grades")}
+
+              {:error, _} = err ->
+                err
+
+              {:ok, hi, rest} ->
+                case tok_soft(skip(rest), "]") do
+                  :no ->
+                    {:error, err(s, "a grade interval needs two grades")}
+
+                  {:ok, rest} ->
+                    if grade_le(lo, hi),
+                      do: {:ok, {:iv, lo, hi}, rest},
+                      else: {:error, err(s, "a grade interval is empty")}
+                end
+            end
+        end
+    end
+  end
+
+  defp grade_le(a, b) when is_integer(a) and is_integer(b), do: a <= b
+  defp grade_le(a, :w) when is_integer(a), do: true
+  defp grade_le(:w, :w), do: true
+  defp grade_le(:w, b) when is_integer(b), do: false
+
+  defp tok_soft(s, t) do
+    s = skip(s)
+    if has_prefix?(s, t), do: {:ok, after_kw(s, t)}, else: :no
   end
 
   defp parse_qty(<<"+", rest::binary>>), do: {:ok, :reuse, rest}

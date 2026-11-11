@@ -31,7 +31,9 @@ defmodule Muro.Words do
 
   @term ~w(matchEmpty rewrite unfold motive let in uncons packI toI64 toU8 toU32 toU64 toNat asU8 asU32 asU64 asI64 bisim addi subi muli addc subc mulc divi remi eqi lti lei andi ori xori noti shli shri addt head tail refl fst snd suc tt b0 b1 wsome wtrue wfalse wnone rep dual seen strCat strLen strEq)
 
-  @word_ops ["lam1", "lam", "Pi"]
+  # `omega` is the ASCII spelling of the grade ω. It is an operator word,
+  # the same way `lam` is the ASCII spelling of λ.
+  @word_ops ["lam1", "lam", "Pi", "omega"]
   @pi ["Π", "Pi"]
   @lam ["λ", "lam"]
   @elam ["λ¹", "lam1", "λ", "lam"]
@@ -54,6 +56,7 @@ defmodule Muro.Words do
     "⊢",
     "λ",
     "Π",
+    "ω",
     "~",
     "*",
     "+",

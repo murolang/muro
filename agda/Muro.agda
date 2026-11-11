@@ -70,6 +70,7 @@ import Muro.Choreo
 import Muro.Seated
 import Muro.Held
 import Muro.Arrow
+import Muro.Grade
 import Muro.Linear
 import Muro.Place
 import Muro.Located

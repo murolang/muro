@@ -214,6 +214,22 @@ def loose : run Π (%0 x : Nat) → Nat :=
 
 See [Terms](language.md#binders-and-quantities).
 
+## grades.muro
+
+A binder may carry a grade pair. `1` is used once. `ω` may be used any number of times.
+
+```
+def once : run Π (n : (1, 0) Nat) → Nat :=
+  λ (n : (1, 0) Nat) → n
+
+def many : run Π (n : (ω, 0) Nat) → Nat :=
+  λ (n : (ω, 0) Nat) → plus n n
+```
+
+`once` returns its argument. `many` adds it to itself. The pair is evidence. Emit erases it, so the module is the one the book would emit with the pairs removed. An unused grade `1`, a second use of grade `1`, and a type that mentions a variable whose type grade is `0` are refused; those books live in `test/muro_grade_test.exs`.
+
+See [Terms](language.md#binders-and-quantities).
+
 ## linear.muro
 
 A session endpoint may be bound linearly. `λ¹` uses it once. `⊸` accepts or returns it.
@@ -658,7 +674,7 @@ mix muro.check examples/string.muro
 ## Adding a file
 
 1. Put it in `examples/`. Use only `run` / `run internal` / `spec` / `evidence`.
-2. Every binder is `(x : A)` or `(+ x : A)` or `(- x : A)`. A linear session endpoint is `λ¹ (s : session)`, and its arrow is `⊸`.
+2. Every binder is `(x : A)`, `(x : (c, t) A)`, `(+ x : A)`, or `(- x : A)`. A linear session endpoint is `λ¹ (s : session)`, and its arrow is `⊸`.
 3. Every `match` / `rewrite` writes `motive (λ x → …)` in parentheses.
 4. Recursion on `run`/`evidence` goes through `match` and a smaller variable.
 5. `mix muro.check examples/your_file.muro`.

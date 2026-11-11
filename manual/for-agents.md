@@ -119,6 +119,7 @@ agda/Muro/Choreo.agda   a global type; `g ↾ r / s ≡ b` is the binary session
 agda/Muro/Seated.agda   a party of a description sits at a place; `seat name : party at place in talk` follows it; the same place stays; two places cross once
 agda/Muro/Held.agda     a meeting at the parties' places; the same place stays; two places cross once; a `.muro` file does not write it
 agda/Muro/Arrow.agda    %1 on a Π binder must be used; both marks are the affine quantity
+agda/Muro/Grade.agda    a grade pair `(c, t)` on a binder; `ungraded-fragment` is the affine check; not a Tm
 agda/Muro/Linear.agda   multiplicity on a session endpoint; λ¹ must be used once; ⊸ accepts or returns it; the protocol is `SExp`, so `rec` and a declared data payload are endpoints; `dualS` keeps both; `--safe --guardedness`; not a Tm
 agda/Muro/Place.agda    placement coeffect; ambient by default; one boundary; run has no seat
 agda/Muro/Located.agda  a session at a place; `endpoint` and `read` follow the sitting; `--node` follows a cross reading; `--backend otp` follows the process
