@@ -974,10 +974,22 @@ defmodule Muro.ReprTest do
     assert Emit.C.prepare(with_repr, "half_ok") == Emit.C.prepare(without, "half_ok")
     assert Emit.Rust.render(with_repr, "half_ok") == Emit.Rust.render(without, "half_ok")
     assert Emit.Zig.render(with_repr, "half_ok") == Emit.Zig.render(without, "half_ok")
-    assert Emit.JS.render(with_repr, "half_ok") == Emit.JS.render(without, "half_ok")
     assert Emit.Asm.render(with_repr, "half_ok") == Emit.Asm.render(without, "half_ok")
     assert Emit.Otp.render(with_repr, "half_ok") == Emit.Otp.render(without, "half_ok")
     assert Emit.Node.render(with_repr, "half_ok", :a) == Emit.Node.render(without, "half_ok", :a)
+
+    assert {:ok, js_without, dts_without} = Emit.JS.render(without, "half_ok")
+    assert {:ok, js_with, dts_with} = Emit.JS.render(with_repr, "half_ok")
+    refute js_without =~ "decode_"
+    refute js_without =~ "muro_repr_"
+    refute dts_without =~ "decode_"
+    refute dts_without =~ "ReprDecode"
+    assert String.starts_with?(js_with, js_without)
+    assert String.starts_with?(dts_with, dts_without)
+    assert js_with =~ "export function decode_bool("
+    assert js_with =~ "export function encode_bool("
+    assert dts_with =~ "export function decode_bool("
+    assert dts_with =~ "ReprDecode<Bool>"
   end
 
   test "interned string is refused unless the field is Nat or a binary numeral" do

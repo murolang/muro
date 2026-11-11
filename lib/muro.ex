@@ -148,7 +148,8 @@ defmodule Muro do
 
   @doc """
   Write `<name>.mjs` and `<name>.d.ts` next to `path`. Runs are functions.
-  A session endpoint is a synchronous stepper. `node` runs the module.
+  A session endpoint is a synchronous stepper. A `repr` emits
+  `decode_<type>` and `encode_<type>` beside the runs. `node` runs the module.
   The proof stops at the run image.
   """
   def emit_js(path, opts \\ []) do

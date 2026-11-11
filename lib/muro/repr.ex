@@ -94,6 +94,18 @@ defmodule Muro.Repr do
     end
   end
 
+  @doc false
+  # The same plans `elixir/2` renders. `[]` when the book has no repr.
+  # `{:error, msg}` when a repr does not check. Does not render Elixir.
+  def plans(book, names) when is_list(book) and is_map(names) do
+    reprs = Enum.filter(book, &(Map.get(&1, :kind) == :repr))
+
+    case reprs do
+      [] -> {:ok, []}
+      _ -> compile_all(reprs, book, names)
+    end
+  end
+
   defp compile_all(reprs, book, names) do
     case duplicate_group(reprs) do
       nil ->
