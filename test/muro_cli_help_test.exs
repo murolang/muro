@@ -122,7 +122,7 @@ defmodule Muro.CliHelpTest do
         end
 
       pages = Enum.map(forms, &cli/1)
-      assert Enum.all?(pages, fn {out, err, code} -> code == 0 and err == "" end)
+      assert Enum.all?(pages, fn {_out, err, code} -> code == 0 and err == "" end)
       [first | rest] = Enum.map(pages, fn {out, _, _} -> out end)
       assert Enum.all?(rest, &(&1 == first))
       assert first =~ "USAGE\n"

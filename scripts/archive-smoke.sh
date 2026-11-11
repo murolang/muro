@@ -106,6 +106,8 @@ fi
 bad_all=$(cat "$tmp/bad.out" "$tmp/bad.err")
 have "$bad_all" "Muro v${version}" "refused check"
 have "$bad_all" "duplicate name" "refused check"
+have "$bad_all" "bad_dup.muro:3:1: duplicate name" "refused check"
+have "$bad_all" "bad_dup.muro:5:1: duplicate name" "refused check"
 
 set +e
 mix muro.emit half_ok.muro --backend c >"$tmp/c.out" 2>"$tmp/c.err"

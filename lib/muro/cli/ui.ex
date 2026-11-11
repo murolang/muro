@@ -5,9 +5,6 @@ defmodule Muro.CLI.Ui do
   def switches, do: []
 
   @doc false
-  def options, do: []
-
-  @doc false
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""

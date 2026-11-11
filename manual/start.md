@@ -65,7 +65,7 @@ mix muro.emit path.muro
 
 Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. The version line names the copy that ran.
 
-A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks. Check and emit with `mix muro.check` and `mix muro.emit`.
+A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks. Check and emit with `mix muro.check` and `mix muro.emit`. A book of `U8`, `U32`, `U64`, or `I64` emits calls to `Muro.Word`. Compiling that module needs `{:muro, ...}` in the host project. See [Machine numbers](machine.md).
 
 `mix muro.emit path.muro` prints the Elixir module. Save it with `mix muro.emit path.muro > path.ex`.
 

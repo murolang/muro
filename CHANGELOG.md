@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.20.31
+
+A duplicate name in one file is reported at both declarations, as `file:line:col`. A name that clashes with the prelude names the prelude line as well. A duplicate inside a package is reported at `muro_deps/<name>/<path>:<line>:<col>`.
+
+Elixir emit of `U8`, `U32`, `U64`, and `I64` calls `Muro.Word` from the host module. The host project depends on muro. The archive checks and emits the book, and it does not put `Muro.Word` on the host's compile path.
+
+The Agda library no longer sets `--without-K`. The proofs use K. `make agda` still checks them under `--safe`.
+
+### Manual
+
+- Machine numbers, emit, the start page, and committed modules: a host that compiles emitted word operations depends on muro.
+- Examples covers sort, pair bindings, bounded fields, a bounded split, the second field of a constructor, and the refused pair-binding and field-choice books.
+- `mix muro.check` with no path checks the built-in book.
+
+### Package
+
+- Version 0.20.31.
+
 ## 0.20.30
 
 JavaScript emit writes `decode_<type>` and `encode_<type>` for each host representation, beside the runs. Decode returns `{ok: {value, table}}` or `{error: {path, reason}}` and does not throw. Encode takes the value and the name table and returns `{ok: wire}` or `{error}`. A decoded nat is a bigint. The value is the same one a run uses. A book with no representation emits no codec. A session whose payload type has a representation is still omitted, and the runs and the codecs are written.

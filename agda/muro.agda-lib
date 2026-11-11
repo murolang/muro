@@ -1,5 +1,5 @@
 name: muro
 depend: standard-library-2.3
 include: .
-flags:
-  --without-K
+-- The proofs use K. --without-K rejects them. make agda passes
+-- --no-libraries, so this file is what an editor loads.

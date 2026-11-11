@@ -20,7 +20,7 @@ iex -S mix
 IO.puts(src)
 ```
 
-`Muro.emit_file/2` parses, checks (with the prelude in scope), then emits. If the book does not check, you get the error and no module. A prelude `run` the file calls is emitted as `defp`. One the file does not call is left out. The file's own `run` definitions are unchanged.
+`Muro.emit_file/2` parses, checks (with the prelude in scope), then emits. If the book does not check, you get the error and no module. A prelude `run` the file calls is emitted as `defp`. One the file does not call is left out. The file's own `run` definitions are unchanged. A book that uses `U8`, `U32`, `U64`, or `I64` calls `Muro.Word` from the emitted module. Compiling that module needs a muro dependency. The archive does not supply it. See [Machine numbers](machine.md).
 
 The generated file starts with:
 

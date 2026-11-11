@@ -2090,7 +2090,8 @@ defmodule Muro.CheckTest do
 
     assert {:ok, book} = Parser.parse(src)
     assert {:error, msg} = Check.check_sig(book)
-    assert msg =~ "duplicate name Foo"
+    assert msg =~ "1:1: duplicate name Foo"
+    assert msg =~ "3:1: duplicate name Foo"
   end
 
   test "a definition with a constructor's name is refused" do
@@ -2104,6 +2105,7 @@ defmodule Muro.CheckTest do
     assert {:ok, book} = Parser.parse(src)
     assert {:error, msg} = Check.check_sig(book)
     assert msg =~ "duplicate name vnil"
+    assert msg =~ ~r/\d+:\d+: duplicate name vnil/
   end
 
   test "two definitions with one name are refused" do
@@ -2114,7 +2116,8 @@ defmodule Muro.CheckTest do
 
     assert {:ok, book} = Parser.parse(src)
     assert {:error, msg} = Check.check_sig(book)
-    assert msg =~ "duplicate name x"
+    assert msg =~ "1:1: duplicate name x"
+    assert msg =~ "2:1: duplicate name x"
   end
 
   test "a constructor that reuses a prelude name is refused" do
@@ -2125,7 +2128,8 @@ defmodule Muro.CheckTest do
 
     assert {:ok, book} = Parser.parse(src)
     assert {:error, msg} = Check.check_sig(Muro.Prelude.for_check(book))
-    assert msg =~ "duplicate name plus"
+    assert msg =~ "1:1: duplicate name plus"
+    assert msg =~ "prelude:16:1: duplicate name plus"
   end
 
   test "mix muro.check refuses a mutual Empty cycle" do
@@ -2151,9 +2155,10 @@ defmodule Muro.CheckTest do
 
   test "mix muro.check refuses a repeated name" do
     assert {:error, msg} = Muro.check_file("examples/bad_dup.muro")
-    assert msg =~ "duplicate name Foo"
+    assert msg =~ "examples/bad_dup.muro:3:1: duplicate name Foo"
+    assert msg =~ "examples/bad_dup.muro:5:1: duplicate name Foo"
 
-    assert_raise Mix.Error, ~r/duplicate name Foo/, fn ->
+    assert_raise Mix.Error, ~r/examples\/bad_dup\.muro:3:1: duplicate name Foo/, fn ->
       Mix.Tasks.Muro.Check.run(["examples/bad_dup.muro"])
     end
   end

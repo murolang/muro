@@ -391,6 +391,24 @@ defmodule Muro.DepsTest do
     assert message =~ "muro_deps/beta/c.muro"
   end
 
+  test "a duplicate name inside one package file names that file" do
+    dir = tmp_dir()
+
+    dup = "def c : run Nat := 0\ndef c : run Nat := suc 0\n"
+    write_locked(dir, ["shared"], %{"muro_deps/shared/c.muro" => dup})
+
+    book =
+      write_file(dir, "book.muro", """
+      import "pkg:shared/c.muro"
+      def top : run Nat := c
+      """)
+
+    assert {:error, message} = Muro.check_file(book)
+    assert message =~ "in package shared"
+    assert message =~ "muro_deps/shared/c.muro:1:1: duplicate name c"
+    assert message =~ "muro_deps/shared/c.muro:2:1: duplicate name c"
+  end
+
   test "package imports name the package, the file, and the lock problem" do
     dir = tmp_dir()
     write_locked(dir, ["shared"], %{"muro_deps/shared/wire.muro" => @wire})

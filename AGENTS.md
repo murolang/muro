@@ -34,7 +34,7 @@ Follow [`manual/extending.md`](manual/extending.md). The order is mandatory: Agd
 ```
 mix deps.get
 mix test
-mix muro.check                              # whole book
+mix muro.check                              # built-in half_ok book
 mix muro.check path.muro                    # one file
 mix muro.check --fuel 20000 path.muro       # after "out of fuel"
 mix muro.mutate path.muro                   # which evidence constrains each run
