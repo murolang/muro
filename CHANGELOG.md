@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.34
+
+`mix muro.synth` searches a version space of predicate programs against a checked environment. The search calls that environment's emitted `step`. A program that misses an observation is dropped. The smallest program that matches every observation is the policy the book deploys, and `eval` runs it. A score breaks ties of equal size and does not decide who survives. Depth grows when the space is empty. A failed check of that policy is another observation. The report says when the features cannot express the target, or when an oracle cannot label a pair. A homomorphism for the policy is later. The search is not the certificate.
+
+### Manual
+
+- Synthesis. CSHRL.
+
+### Package
+
+- Version 0.20.34.
+
 ## 0.20.33
 
 A synthesized PredProg is the policy. `eval` is the run that executes it, and the backends emit that run. Propagation, version-space shrinkage, and sufficient-cegis are evidence about that run policy. The emitters erase them. A program is a feature test, a conjunction, a disjunction, a negation, or a constant. Carriers that agree on the features evaluate the same way. Refinement never grows the version space. On two carriers and one feature, one representative observation is enough: every survivor matches the target. The one-bit book deploys a run policy that matches the target on both carriers. The search is not the certificate. The loop that runs the search, and a homomorphism for an agent, are later.

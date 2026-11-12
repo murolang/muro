@@ -99,7 +99,7 @@ In BinarySacrifice the stream of `go-trap` is 1, 0, 0, … and the stream of `go
 
 `envs/synth_bit.muro` is that claim on two carriers. Both make the one feature true, so `on` represents `off`, and the target is constantly true. One observation is enough. `bit-policy` is the run `eval truep`. It is the deployed policy, and `bit-policy-matches` is `sufficient-cegis` at that exact run: the policy matches the target on both carriers.
 
-The Elixir enumerator is a different search. A homomorphism for an agent is a different book.
+`mix muro.synth` runs that search on a checked environment and calls the environment's emitted `step`. The smallest program that matches every observation is the policy the result book deploys, and `eval` runs it. A score does not decide who survives. A homomorphism for that policy is later. The page is [Synthesis](synth.md).
 
 ```
 mix muro.check examples/cshrl/envs/synth_bit.muro

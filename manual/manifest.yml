@@ -122,6 +122,10 @@ pages:
     slug: mutate
     title: Mutation
     summary: mix muro.mutate reports which evidence fails when a run definition changes.
+  - file: synth.md
+    slug: synth
+    title: Synthesis
+    summary: mix muro.synth searches a version space of predicate programs on a checked environment.
   - file: explorer.md
     slug: explorer
     title: Visual explorer

@@ -22,8 +22,36 @@ defmodule Muro.SynthTest do
   end
 
   test "depth 0 returns the feature test that matches the oracle" do
-    assert Synth.run(&score/1, &oracle/2, &traj/1, &feats/1, &bit/2, 0) ==
-             {:converged, {:feat, :bit}}
+    assert {:survivors, preds} =
+             Synth.run(&score/1, &oracle/2, &traj/1, &feats/1, &bit/2, 0)
+
+    assert Synth.pick(preds, &score/1) == {:feat, :bit}
+  end
+
+  test "a high score does not keep a program that misses an observation" do
+    # true scores 100 and is wrong at false. The feature test scores 0
+    # and matches both states. The score does not put true back.
+    score = fn
+      true -> 100
+      _pred -> 0
+    end
+
+    assert {:survivors, preds} =
+             Synth.solve([true, {:feat, :bit}], score, &oracle/2, &traj/1, &bit/2)
+
+    refute true in preds
+    assert Synth.pick(preds, score) == {:feat, :bit}
+  end
+
+  test "a smaller program wins over a higher score" do
+    score = fn
+      {:not, false} -> 100
+      _pred -> 0
+    end
+
+    assert Synth.pick([{:not, false}, true], score) == true
+    assert Synth.size(true) == 1
+    assert Synth.size({:not, {:feat, :bit}}) == 2
   end
 
   test "a predicate that matches an observation stays, and the space shrinks" do
@@ -70,8 +98,10 @@ defmodule Muro.SynthTest do
   end
 
   test "the synthesized policy checks and runs" do
-    assert {:converged, pred} =
+    assert {:survivors, preds} =
              Synth.run(&score/1, &oracle/2, &traj/1, &feats/1, &bit/2, 0)
+
+    pred = Synth.pick(preds, &score/1)
 
     spell = fn :bit -> "s" end
     src = Synth.policy([{pred, :go}], :stay, spell)
@@ -87,8 +117,10 @@ defmodule Muro.SynthTest do
     assert apply(Muro.SynthBitPolicy, :policy, [true]) == :go
     assert apply(Muro.SynthBitPolicy, :policy, [false]) == :stay
 
-    assert {:converged, negated} =
-             Synth.cegar(0, 0, &neg_score/1, &neg_oracle/2, &traj/1, &feats/1, &bit/2)
+    assert {:survivors, neg_preds} =
+             Synth.deepen(0, 0, &neg_score/1, &neg_oracle/2, &traj/1, &feats/1, &bit/2)
+
+    negated = Synth.pick(neg_preds, &neg_score/1)
 
     neg = Synth.policy([{negated, :go}], :stay, spell)
 
@@ -118,7 +150,45 @@ defmodule Muro.SynthTest do
 
     oracle = fn _pred, state -> not state end
 
-    assert Synth.cegar(0, 0, score, oracle, &traj/1, &feats/1, &bit/2) ==
-             {:converged, {:not, {:feat, :bit}}}
+    assert {:survivors, preds} =
+             Synth.deepen(0, 0, score, oracle, &traj/1, &feats/1, &bit/2)
+
+    assert Synth.pick(preds, score) == {:not, {:feat, :bit}}
+  end
+
+  test "an observation of len drops the copy formula" do
+    # uses > 1 and arg_apps ≠ 0. Both features hold at len, so the
+    # formula predicts true. The observation says false.
+    pred = {:and, {:feat, "uses-gt1"}, {:feat, "arg-apps-ne0"}}
+
+    feat = fn
+      _feature, state when state in [:len, :copy] -> true
+      _feature, _state -> false
+    end
+
+    vs = [pred | Synth.enumerate(["uses-gt1", "arg-apps-ne0"], 0)]
+    kept = Synth.refine(vs, {:len, false}, feat)
+    refute pred in kept
+    assert length(kept) < length(vs)
+  end
+
+  test "a failed refl names the obligation" do
+    dir = Path.join(System.tmp_dir!(), "muro_synth_cex_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    path = Path.join(dir, "bad.muro")
+
+    File.write!(path, """
+    data Bool : Type where
+      true : Bool
+      false : Bool
+
+    def hold-len : evidence {false ≡ true : Bool} := refl
+    """)
+
+    assert {:error, text} = Muro.check_file(path)
+    cex = Muro.Synth.Book.cex_from(text, [%{name: "hold-len", carrier: "len", oracle: true}])
+    assert cex.carrier == "len"
+    assert cex.predicted == false
+    assert cex.oracle == true
   end
 end

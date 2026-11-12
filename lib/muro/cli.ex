@@ -1,7 +1,7 @@
 defmodule Muro.CLI do
   @moduledoc false
 
-  @usage_line "usage: muro [--version] <check|emit|gen|init|skills|deps.get|mutate|ui> ..."
+  @usage_line "usage: muro [--version] <check|emit|gen|init|skills|deps.get|mutate|synth|ui> ..."
 
   @doc """
   Entry point for the self-contained executable.
@@ -68,6 +68,10 @@ defmodule Muro.CLI do
              "mutate path.muro [--only NAME] [--json] [--fuel N]",
              "    [--max-mutants-per-def N] [--max-survivors N]"
            ], "Change run definitions and report which evidence still holds."},
+          {[
+             "synth path.muro [--oracle NAME] [--depth N] [--fuel N]",
+             "    [--out out.muro] [--json]"
+           ], "Search a version space. The homomorphism for the policy is later."},
           {"ui path.muro",
            "Print how to install muro_visor and open this book. The compiler does not start the explorer."}
         ])
@@ -139,6 +143,7 @@ defmodule Muro.CLI do
       Muro.CLI.Skills.help(),
       Muro.CLI.Deps.help(),
       Muro.CLI.Mutate.help(),
+      Muro.CLI.Synth.help(),
       Muro.CLI.Ui.help()
     ]
   end
@@ -157,6 +162,7 @@ defmodule Muro.CLI do
   defp dispatch(["skills" | rest]), do: command(rest, Muro.CLI.Skills)
   defp dispatch(["deps.get" | rest]), do: command(rest, Muro.CLI.Deps)
   defp dispatch(["mutate" | rest]), do: command(rest, Muro.CLI.Mutate)
+  defp dispatch(["synth" | rest]), do: command(rest, Muro.CLI.Synth)
   defp dispatch(["ui" | rest]), do: command(rest, Muro.CLI.Ui)
 
   defp dispatch([unknown | _rest]) do
@@ -174,7 +180,7 @@ defmodule Muro.CLI do
   defp help_command(["skills", "add"]), do: shown(Muro.CLI.Skills.help())
 
   defp help_command([name])
-       when name in ["check", "emit", "gen", "init", "deps.get", "mutate", "ui"] do
+       when name in ["check", "emit", "gen", "init", "deps.get", "mutate", "synth", "ui"] do
     shown(module(name).help())
   end
 
@@ -188,6 +194,7 @@ defmodule Muro.CLI do
   defp module("init"), do: Muro.CLI.Init
   defp module("deps.get"), do: Muro.CLI.Deps
   defp module("mutate"), do: Muro.CLI.Mutate
+  defp module("synth"), do: Muro.CLI.Synth
   defp module("ui"), do: Muro.CLI.Ui
 
   defp command(args, module) do
@@ -225,7 +232,11 @@ defmodule Muro.CLI do
 
   @doc false
   def executable_names(message) do
-    Regex.replace(~r/\bmix muro\.(deps\.get|gen|init|check|emit|mutate)\b/, message, "muro \\1")
+    Regex.replace(
+      ~r/\bmix muro\.(deps\.get|gen|init|check|emit|mutate|synth)\b/,
+      message,
+      "muro \\1"
+    )
   end
 
   defp hint(label), do: label <> "\n" <> @usage_line <> "\nrun muro --help"
