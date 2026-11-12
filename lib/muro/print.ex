@@ -60,6 +60,9 @@ defmodule Muro.Print do
     loc_prefix(loc) <> "unsolved hole\n#{goal}\n#{ctx}"
   end
 
+  @doc "A bytes literal. See `Muro.Bytes.quote_bytes/1`."
+  def quote_bytes(bin) when is_binary(bin), do: Muro.Bytes.quote_bytes(bin)
+
   @doc "Number of Unicode scalars in a UTF-8 binary. Not grapheme clusters."
   def scalar_count(bin) when is_binary(bin) do
     length(:unicode.characters_to_list(bin))
@@ -105,6 +108,40 @@ defmodule Muro.Print do
   defp fmt({:scat, a, b}, names, _), do: "strCat #{fmt(a, names, :app)} #{fmt(b, names, :app)}"
   defp fmt({:slen, a}, names, _), do: "strLen #{fmt(a, names, :app)}"
   defp fmt({:seq, a, b}, names, _), do: "strEq #{fmt(a, names, :app)} #{fmt(b, names, :app)}"
+  defp fmt(:bytes, _, _), do: "Bytes"
+  defp fmt(:slice, _, _), do: "Slice"
+  defp fmt({:blit, bin}, _, _), do: Muro.Bytes.quote_bytes(bin)
+
+  defp fmt({:bcat, a, b}, names, _),
+    do: "bytesCat #{fmt(a, names, :app)} #{fmt(b, names, :app)}"
+
+  defp fmt({:blen, a}, names, _), do: "bytesLen #{fmt(a, names, :app)}"
+  defp fmt({:beq, a, b}, names, _), do: "bytesEq #{fmt(a, names, :app)} #{fmt(b, names, :app)}"
+  defp fmt({:xlen, a}, names, _), do: "sliceLen #{fmt(a, names, :app)}"
+  defp fmt({:xeq, a, b}, names, _), do: "sliceEq #{fmt(a, names, :app)} #{fmt(b, names, :app)}"
+  defp fmt({:bget, a, b}, names, _), do: "sliceGet #{fmt(a, names, :app)} #{fmt(b, names, :app)}"
+  defp fmt({:aget, a, b}, names, _), do: "bytesGet #{fmt(a, names, :app)} #{fmt(b, names, :app)}"
+  defp fmt({:bunc, a}, names, _), do: "sliceUncons #{fmt(a, names, :app)}"
+  defp fmt({:sbytes, a}, names, _), do: "strBytes #{fmt(a, names, :app)}"
+
+  defp fmt({:btil, a, b}, names, _),
+    do: "sliceUntil #{fmt(a, names, :app)} #{fmt(b, names, :app)}"
+
+  defp fmt({:baft, a, b}, names, _),
+    do: "sliceAfter #{fmt(a, names, :app)} #{fmt(b, names, :app)}"
+
+  defp fmt({:bsub, a, b, c}, names, _) do
+    "slice #{fmt(a, names, :app)} #{fmt(b, names, :app)} #{fmt(c, names, :app)}"
+  end
+
+  defp fmt({:bfold, ty, z, f, s}, names, _) do
+    "sliceFold #{fmt(ty, names, :app)} #{fmt(z, names, :app)} #{fmt(f, names, :app)} #{fmt(s, names, :app)}"
+  end
+
+  defp fmt({:afold, ty, z, f, s}, names, _) do
+    "bytesFold #{fmt(ty, names, :app)} #{fmt(z, names, :app)} #{fmt(f, names, :app)} #{fmt(s, names, :app)}"
+  end
+
   defp fmt(:rfl, _, _), do: "refl"
   defp fmt(:i64, _, _), do: "I64"
   defp fmt(:f32ty, _, _), do: "F32"

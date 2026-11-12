@@ -1,0 +1,135 @@
+-- bytes.muro — a Bytes is a sequence of octets, and a Slice is a view of one.
+-- A literal is raw octets. "é" is one scalar; b"é" is the two UTF-8 octets.
+-- b"\xFF" is one octet and is not a Unicode scalar.
+-- sliceUncons lives in bytes-uncons.muro, which imports std:maybe.
+
+def hello : run Bytes := b"hello"
+
+def ff : run Bytes := b"\xFF"
+
+def nul : run Bytes := b"\x00"
+
+def nl : run Bytes := b"\n"
+
+def cr : run Bytes := b"\r"
+
+def tab : run Bytes := b"\t"
+
+def quoted : run Bytes := b"a\"b"
+
+def slash : run Bytes := b"a\\b"
+
+def accent : run Bytes := b"é"
+
+def empty : run Bytes := b""
+
+def parts : run Bytes := bytesCat b"hel" b"lo"
+
+def from_str : run Bytes := strBytes "hello"
+
+def from_parts : run Bytes := strBytes (strCat "hel" "lo")
+
+def n_hello : run U64 := bytesLen b"hello"
+
+def n_accent : run U64 := bytesLen b"é"
+
+def n_ff : run U64 := bytesLen b"\xFF"
+
+def n_cat : run U64 := bytesLen (bytesCat b"hel" b"lo")
+
+def n_slice : run U64 := sliceLen b"hello"
+
+def yes : run WBool := bytesEq b"ab" b"ab"
+
+def no : run WBool := bytesEq b"ab" b"ba"
+
+def yes_slice : run WBool := sliceEq b"ab" (bytesCat b"a" b"b")
+
+def mid : run Slice := slice b"hello" (toU64 1) (toU64 3)
+
+def past : run Slice := slice b"ab" (toU64 5) (toU64 1)
+
+def over : run Slice := slice b"ab" (toU64 1) (toU64 9)
+
+def at0 : run Opt U8 := sliceGet b"ab" (toU64 0)
+
+def at1 : run Opt U8 := bytesGet b"ab" (toU64 1)
+
+def miss : run Opt U8 := sliceGet b"ab" (toU64 2)
+
+def method : run Slice := sliceUntil b"GET /x" (toU8 32)
+
+def whole : run Slice := sliceUntil b"GET" (toU8 32)
+
+def path : run Slice := sliceAfter b"GET /x" (toU8 32)
+
+def no_path : run Slice := sliceAfter b"GET" (toU8 32)
+
+def sum2 : run U64 :=
+  sliceFold U64 (toU64 0) (λ (b : U8) → λ (rest : Slice) → λ (n : U64) → addi n (asU64 b)) (b"\x01\x02")
+
+def cat_ok : evidence {bytesCat b"hel" b"lo" ≡ b"hello" : Bytes} := refl
+
+def empty_cat : evidence {bytesCat b"" b"a" ≡ b"a" : Bytes} := refl
+
+def len_hello : evidence {bytesLen b"hello" ≡ toU64 5 : U64} := refl
+
+def len_accent : evidence {bytesLen b"é" ≡ toU64 2 : U64} := refl
+
+def len_ff : evidence {bytesLen b"\xFF" ≡ toU64 1 : U64} := refl
+
+def len_nul : evidence {bytesLen b"\x00" ≡ toU64 1 : U64} := refl
+
+def len_nl : evidence {bytesLen b"\n" ≡ toU64 1 : U64} := refl
+
+def len_slash : evidence {bytesLen b"\\" ≡ toU64 1 : U64} := refl
+
+def len_quote : evidence {bytesLen b"\"" ≡ toU64 1 : U64} := refl
+
+def len_cat : evidence {bytesLen (bytesCat b"hel" b"lo") ≡ toU64 5 : U64} := refl
+
+def slice_len : evidence {sliceLen b"é" ≡ toU64 2 : U64} := refl
+
+def eq_yes : evidence {bytesEq b"ab" b"ab" ≡ wtrue : WBool} := refl
+
+def eq_no : evidence {bytesEq b"ab" b"ba" ≡ wfalse : WBool} := refl
+
+def eq_esc : evidence {bytesEq b"\n" b"\x0a" ≡ wtrue : WBool} := refl
+
+def eq_slice : evidence {sliceEq b"ab" (bytesCat b"a" b"b") ≡ wtrue : WBool} := refl
+
+def sub_ok : evidence {slice b"hello" (toU64 1) (toU64 3) ≡ b"ell" : Slice} := refl
+
+def sub_past : evidence {slice b"ab" (toU64 5) (toU64 1) ≡ b"" : Slice} := refl
+
+def sub_over : evidence {slice b"ab" (toU64 1) (toU64 9) ≡ b"" : Slice} := refl
+
+def sub_empty : evidence {slice b"ab" (toU64 2) (toU64 0) ≡ b"" : Slice} := refl
+
+def get0 : evidence {sliceGet b"ab" (toU64 0) ≡ wsome (toU8 97) : Opt U8} := refl
+
+def get1 : evidence {bytesGet b"ab" (toU64 1) ≡ wsome (toU8 98) : Opt U8} := refl
+
+def get_miss : evidence {sliceGet b"ab" (toU64 2) ≡ wnone : Opt U8} := refl
+
+def until_ok : evidence {sliceUntil b"GET /x" (toU8 32) ≡ b"GET" : Slice} := refl
+
+def until_miss : evidence {sliceUntil b"GET" (toU8 32) ≡ b"GET" : Slice} := refl
+
+def after_ok : evidence {sliceAfter b"GET /x" (toU8 32) ≡ b"/x" : Slice} := refl
+
+def after_miss : evidence {sliceAfter b"GET" (toU8 32) ≡ b"" : Slice} := refl
+
+def utf8_ok : evidence {strBytes "hello" ≡ b"hello" : Bytes} := refl
+
+def utf8_cat : evidence {strBytes (strCat "hel" "lo") ≡ b"hello" : Bytes} := refl
+
+def utf8_accent : evidence {strBytes "é" ≡ b"\xc3\xa9" : Bytes} := refl
+
+def scalar_len : evidence {strLen "é" ≡ suc 0 : Nat} := refl
+
+def fold_ok : evidence
+  {sliceFold U64 (toU64 0) (λ (b : U8) → λ (rest : Slice) → λ (n : U64) → addi n (asU64 b)) (b"\x01\x02") ≡ toU64 3 : U64} :=
+  refl
+
+def fold_empty : evidence {sliceFold U64 (toU64 0) (λ (b : U8) → λ (rest : Slice) → λ (n : U64) → addi n (asU64 b)) (b"") ≡ toU64 0 : U64} := refl

@@ -1,12 +1,12 @@
 -- fnv.muro — 32-bit FNV-1a over a list of U8.
 -- The offset basis is 2166136261 (0x811C9DC5) and the prime is 16777619
 -- (0x01000193). Both are built by shifts of one, because Nat is Peano.
--- Bytes is that list. The element is a U8 field, passed by value.
+-- ByteList is that list. The element is a U8 field, passed by value.
 -- The empty list hashes to the offset basis. One byte, 97, is the next step.
 
-data Bytes : Type where
-  nil  : Bytes
-  cons : U8 → Bytes → Bytes
+data ByteList : Type where
+  nil  : ByteList
+  cons : U8 → ByteList → ByteList
 
 def n0 : run Nat := 0
 def n1 : run Nat := suc n0
@@ -59,14 +59,14 @@ def byteA : run U8 :=
 def mix : run Π (h : U32) → Π (b : U8) → U32 :=
   λ (h : U32) → λ (b : U8) → muli (xori h (asU32 b)) prime
 
-def go : run Π (h : U32) → Π (xs : Bytes) → U32 :=
-  λ (h : U32) → λ (xs : Bytes) →
+def go : run Π (h : U32) → Π (xs : ByteList) → U32 :=
+  λ (h : U32) → λ (xs : ByteList) →
     match xs motive (λ _ → U32)
       | nil => h
       | cons b bs => go (mix h b) bs
 
-def fnv : run Π (xs : Bytes) → U32 :=
-  λ (xs : Bytes) → go offset xs
+def fnv : run Π (xs : ByteList) → U32 :=
+  λ (xs : ByteList) → go offset xs
 
 def hashEmpty : run U32 := fnv nil
 

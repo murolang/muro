@@ -464,7 +464,76 @@ defmodule Muro.Emit do
     "(#{emit_db(a, d, book, names)}) == (#{emit_db(b, d, book, names)})"
   end
 
+  defp emit_db({:blit, bin}, _, _book, _names) when is_binary(bin), do: inspect(bin)
+
+  defp emit_db({:bcat, a, b}, d, book, names) do
+    "(#{emit_db(a, d, book, names)}) <> (#{emit_db(b, d, book, names)})"
+  end
+
+  defp emit_db({:blen, a}, d, book, names), do: byte_size_of(emit_db(a, d, book, names))
+  defp emit_db({:xlen, a}, d, book, names), do: byte_size_of(emit_db(a, d, book, names))
+
+  defp emit_db({:beq, a, b}, d, book, names),
+    do: bytes_eq(emit_db(a, d, book, names), emit_db(b, d, book, names))
+
+  defp emit_db({:xeq, a, b}, d, book, names),
+    do: bytes_eq(emit_db(a, d, book, names), emit_db(b, d, book, names))
+
+  defp emit_db({:bsub, s, off, len}, d, book, names) do
+    bytes_sub(
+      emit_db(s, d, book, names),
+      emit_db(off, d, book, names),
+      emit_db(len, d, book, names)
+    )
+  end
+
+  defp emit_db({:bget, s, i}, d, book, names),
+    do: bytes_get(emit_db(s, d, book, names), emit_db(i, d, book, names))
+
+  defp emit_db({:aget, s, i}, d, book, names),
+    do: bytes_get(emit_db(s, d, book, names), emit_db(i, d, book, names))
+
+  defp emit_db({:bunc, s}, d, book, names), do: bytes_uncons(emit_db(s, d, book, names))
+  defp emit_db({:sbytes, s}, d, book, names), do: emit_db(s, d, book, names)
+
+  defp emit_db({:btil, s, b}, d, book, names),
+    do: bytes_until(emit_db(s, d, book, names), emit_db(b, d, book, names))
+
+  defp emit_db({:baft, s, b}, d, book, names),
+    do: bytes_after(emit_db(s, d, book, names), emit_db(b, d, book, names))
+
+  defp emit_db({tag, _ty, z, f, s}, d, book, names) when tag in [:bfold, :afold] do
+    bytes_fold(emit_db(f, d, book, names), emit_db(z, d, book, names), emit_db(s, d, book, names))
+  end
+
   defp emit_db(_, _, _book, _names), do: "raise \"erased term\""
+
+  defp byte_size_of(s), do: "byte_size(#{s})"
+  defp bytes_eq(a, b), do: "(#{a}) == (#{b})"
+
+  defp bytes_sub(s, off, len) do
+    "(fn s, off, len -> n = byte_size(s); if off < 0 or len < 0 or off > n or len > n - off, do: <<>>, else: :binary.part(s, off, len) end).(#{s}, #{off}, #{len})"
+  end
+
+  defp bytes_get(s, i) do
+    "(fn s, i -> if i >= 0 and i < byte_size(s), do: {:some, :binary.at(s, i)}, else: :none end).(#{s}, #{i})"
+  end
+
+  defp bytes_uncons(s) do
+    "(fn s -> case s do <<>> -> :nothing; <<b, rest::binary>> -> {:just, {b, rest}} end end).(#{s})"
+  end
+
+  defp bytes_until(s, b) do
+    "(fn s, b -> case :binary.match(s, <<b>>) do :nomatch -> s; {pos, _} -> :binary.part(s, 0, pos) end end).(#{s}, #{b})"
+  end
+
+  defp bytes_after(s, b) do
+    "(fn s, b -> case :binary.match(s, <<b>>) do :nomatch -> <<>>; {pos, 1} -> :binary.part(s, pos + 1, byte_size(s) - pos - 1) end end).(#{s}, #{b})"
+  end
+
+  defp bytes_fold(f, z, s) do
+    "(fn f, z, s -> recur = fn recur, acc, cur -> case cur do <<>> -> acc; <<b, rest::binary>> -> recur.(recur, f.(b).(rest).(acc), rest) end end; recur.(recur, z, s) end).(#{f}, #{z}, #{s})"
+  end
 
   # A definition applied to `args`. With as many arguments as its type
   # has Πs it is a direct call. With more, the result is a function value
@@ -625,6 +694,41 @@ defmodule Muro.Emit do
   defp emitted_occurs?(i, {:seq, a, b}, book),
     do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
 
+  defp emitted_occurs?(i, {:bcat, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:blen, a}, book), do: emitted_occurs?(i, a, book)
+  defp emitted_occurs?(i, {:xlen, a}, book), do: emitted_occurs?(i, a, book)
+
+  defp emitted_occurs?(i, {:beq, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:xeq, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:bget, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:aget, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:btil, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:baft, a, b}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book)
+
+  defp emitted_occurs?(i, {:bunc, a}, book), do: emitted_occurs?(i, a, book)
+  defp emitted_occurs?(i, {:sbytes, a}, book), do: emitted_occurs?(i, a, book)
+
+  defp emitted_occurs?(i, {:bsub, a, b, c}, book),
+    do: emitted_occurs?(i, a, book) or emitted_occurs?(i, b, book) or emitted_occurs?(i, c, book)
+
+  defp emitted_occurs?(i, {tag, ty, z, f, s}, book) when tag in [:bfold, :afold],
+    do:
+      emitted_occurs?(i, ty, book) or emitted_occurs?(i, z, book) or emitted_occurs?(i, f, book) or
+        emitted_occurs?(i, s, book)
+
   defp emitted_occurs?(i, {:app, _, _} = t, book) do
     {h, args} = spine(t, [])
 
@@ -674,6 +778,16 @@ defmodule Muro.Emit do
   defp value_kind(:one, _book), do: :value
   defp value_kind({:atom, _name}, _book), do: :value
   defp value_kind({:slit, bin}, _book) when is_binary(bin), do: :value
+  defp value_kind({:blit, bin}, _book) when is_binary(bin), do: :value
+
+  defp value_kind({:bcat, a, b}, book) do
+    case value_kind(a, book) do
+      :value -> value_kind(b, book)
+      reason -> reason
+    end
+  end
+
+  defp value_kind({:sbytes, a}, book), do: value_kind(a, book)
 
   defp value_kind({:scat, a, b}, book) do
     case value_kind(a, book) do
@@ -1059,6 +1173,10 @@ defmodule Muro.Emit do
   defp emit_word(true, [], _d, _book, _names), do: "true"
   defp emit_word(false, [], _d, _book, _names), do: "false"
   defp emit_word(:none, [], _d, _book, _names), do: ":none"
+
+  defp emit_word({:of, k}, [{:nat, n}], _d, _book, _names) when is_integer(n) and n >= 0 do
+    Integer.to_string(Muro.Word.residue(k, n))
+  end
 
   defp emit_word({:of, k}, [t], d, book, names) do
     "Muro.Word.of(#{inspect(k)}, muro_nat_to_int(#{emit_db(t, d, book, names)}))"

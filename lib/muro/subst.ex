@@ -78,6 +78,57 @@ defmodule Muro.Subst do
       {:seq, a, b} ->
         {:seq, ren(rho, a), ren(rho, b)}
 
+      :bytes ->
+        :bytes
+
+      :slice ->
+        :slice
+
+      {:blit, bin} ->
+        {:blit, bin}
+
+      {:bcat, a, b} ->
+        {:bcat, ren(rho, a), ren(rho, b)}
+
+      {:blen, a} ->
+        {:blen, ren(rho, a)}
+
+      {:beq, a, b} ->
+        {:beq, ren(rho, a), ren(rho, b)}
+
+      {:xlen, a} ->
+        {:xlen, ren(rho, a)}
+
+      {:xeq, a, b} ->
+        {:xeq, ren(rho, a), ren(rho, b)}
+
+      {:bsub, a, b, c} ->
+        {:bsub, ren(rho, a), ren(rho, b), ren(rho, c)}
+
+      {:bget, a, b} ->
+        {:bget, ren(rho, a), ren(rho, b)}
+
+      {:aget, a, b} ->
+        {:aget, ren(rho, a), ren(rho, b)}
+
+      {:bunc, a} ->
+        {:bunc, ren(rho, a)}
+
+      {:bfold, ty, z, f, s} ->
+        {:bfold, ren(rho, ty), ren(rho, z), ren(rho, f), ren(rho, s)}
+
+      {:afold, ty, z, f, s} ->
+        {:afold, ren(rho, ty), ren(rho, z), ren(rho, f), ren(rho, s)}
+
+      {:sbytes, a} ->
+        {:sbytes, ren(rho, a)}
+
+      {:btil, a, b} ->
+        {:btil, ren(rho, a), ren(rho, b)}
+
+      {:baft, a, b} ->
+        {:baft, ren(rho, a), ren(rho, b)}
+
       {:matom, e, p, bs} ->
         {:matom, ren(rho, e), ren(lift(rho), p), Enum.map(bs, fn {n, b} -> {n, ren(rho, b)} end)}
 
@@ -247,6 +298,57 @@ defmodule Muro.Subst do
 
       {:seq, a, b} ->
         {:seq, sub(sigma, a), sub(sigma, b)}
+
+      :bytes ->
+        :bytes
+
+      :slice ->
+        :slice
+
+      {:blit, bin} ->
+        {:blit, bin}
+
+      {:bcat, a, b} ->
+        {:bcat, sub(sigma, a), sub(sigma, b)}
+
+      {:blen, a} ->
+        {:blen, sub(sigma, a)}
+
+      {:beq, a, b} ->
+        {:beq, sub(sigma, a), sub(sigma, b)}
+
+      {:xlen, a} ->
+        {:xlen, sub(sigma, a)}
+
+      {:xeq, a, b} ->
+        {:xeq, sub(sigma, a), sub(sigma, b)}
+
+      {:bsub, a, b, c} ->
+        {:bsub, sub(sigma, a), sub(sigma, b), sub(sigma, c)}
+
+      {:bget, a, b} ->
+        {:bget, sub(sigma, a), sub(sigma, b)}
+
+      {:aget, a, b} ->
+        {:aget, sub(sigma, a), sub(sigma, b)}
+
+      {:bunc, a} ->
+        {:bunc, sub(sigma, a)}
+
+      {:bfold, ty, z, f, s} ->
+        {:bfold, sub(sigma, ty), sub(sigma, z), sub(sigma, f), sub(sigma, s)}
+
+      {:afold, ty, z, f, s} ->
+        {:afold, sub(sigma, ty), sub(sigma, z), sub(sigma, f), sub(sigma, s)}
+
+      {:sbytes, a} ->
+        {:sbytes, sub(sigma, a)}
+
+      {:btil, a, b} ->
+        {:btil, sub(sigma, a), sub(sigma, b)}
+
+      {:baft, a, b} ->
+        {:baft, sub(sigma, a), sub(sigma, b)}
 
       {:matom, e, p, bs} ->
         {:matom, sub(sigma, e), sub(lifts(sigma), p),

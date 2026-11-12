@@ -591,9 +591,23 @@ See [Host representations](repr.md).
 
 ## fnv.muro
 
-32-bit FNV-1a over a monomorphic list of `U8`. The offset basis is 2166136261 and the prime is 16777619, each built by shifts of one. `hashEmpty` is the basis. `hashA` hashes the byte 97 and is 3826002220. `fnv-empty` and `fnv-a` are `refl`. `Bytes` stores the byte by value. It is not `std:list.muro`.
+32-bit FNV-1a over a monomorphic list of `U8`. The offset basis is 2166136261 and the prime is 16777619, each built by shifts of one. `hashEmpty` is the basis. `hashA` hashes the byte 97 and is 3826002220. `fnv-empty` and `fnv-a` are `refl`. `ByteList` stores the byte by value, one cell per octet. It is not the kernel `Bytes`, and it is not `std:list.muro`.
 
 See [Machine numbers](machine.md).
+
+## bytes.muro
+
+Kernel `Bytes` and `Slice`. A literal is `b"…"`, with `\\`, `\"`, `\n`, `\r`, `\t`, and `\xHH`. `b"é"` is two octets and `"é"` is one scalar. `b"\xFF"` has length one. `bytesCat`, `bytesLen`, `bytesEq`, `slice`, `sliceGet`, `sliceUntil`, `sliceAfter`, `sliceFold`, and `strBytes` reduce on closed literals, and those equations are `refl`. `examples/bytes-uncons.muro` imports `std:maybe.muro` and reduces `sliceUncons`.
+
+See [Terms](language.md#bytes).
+
+## request-line.muro
+
+The method and the path of one request line, as `Slice` views. `method` is the prefix before the first space. `path` is the next word. `GET /feed HTTP/1.1\r\n` gives `b"GET"` and `b"/feed"`. A missing space leaves the path empty. An empty path, two spaces in a row, is the empty view at that point. No status line, no headers, no routing.
+
+## fnv_slice.muro
+
+32-bit FNV-1a over a `Slice`. The basis and the prime are the same numbers as `fnv.muro`, written as closed `U32` literals. `hash b""` is the basis. `hash b"a"` is the next step. `fnv-empty` and `fnv-a` are `refl`. The book does not import `fnv.muro`.
 
 ## nx_add.muro
 

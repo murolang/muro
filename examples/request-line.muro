@@ -1,0 +1,33 @@
+-- request-line.muro — the method and the path of one request line.
+-- A Slice is a view. sliceUntil and sliceAfter move the start and the
+-- length. They do not copy the octets. This is not an HTTP stack.
+
+def method : run Π (s : Slice) → Slice :=
+  λ (s : Slice) → sliceUntil s (toU8 32)
+
+def path : run Π (s : Slice) → Slice :=
+  λ (s : Slice) → sliceUntil (sliceAfter s (toU8 32)) (toU8 32)
+
+def get_line : run Slice := b"GET /feed HTTP/1.1\r\n"
+
+def get_method : evidence {method get_line ≡ b"GET" : Slice} := refl
+
+def get_path : evidence {path get_line ≡ b"/feed" : Slice} := refl
+
+def post_line : run Slice := b"POST /x HTTP/1.1\r\n"
+
+def post_method : evidence {method post_line ≡ b"POST" : Slice} := refl
+
+def post_path : evidence {path post_line ≡ b"/x" : Slice} := refl
+
+def glued : run Slice := b"GET/feed"
+
+def glued_method : evidence {method glued ≡ b"GET/feed" : Slice} := refl
+
+def glued_path : evidence {path glued ≡ b"" : Slice} := refl
+
+def gap : run Slice := b"GET  HTTP/1.1\r\n"
+
+def gap_method : evidence {method gap ≡ b"GET" : Slice} := refl
+
+def gap_path : evidence {path gap ≡ b"" : Slice} := refl

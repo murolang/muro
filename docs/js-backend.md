@@ -69,6 +69,8 @@ A self-tail `count` of one million steps returns the same nat as the Elixir back
 
 `String` is a sequence of Unicode scalars. A literal is `"hello"`, with escapes `\\`, `\"`, `\n`, and `\u{…}`. The module boxes it as `{ string: "hello" }`. An atom stays a JavaScript string of the source name, so a host that already passes `"asc"` keeps doing that. `muro__canon` prints the box as `"hello"` and the atom as `hello`. Length is the number of scalars: `muro__slen` counts code points. `strCat` concatenates and `strEq` compares the text. A string and an atom stay distinct.
 
+`Bytes` and `Slice` are a `Uint8Array`. A literal is `new Uint8Array([...])`. A view is `subarray`, which shares the buffer. An out-of-range view is a fresh empty array. Length is `BigInt(arr.length)`. An octet index is a bigint, and `sliceGet` returns `{k: "some", v}` or `{k: "none"}`. `muro__canon` prints the array as `b"…"`, including `\xHH` for an octet that is not printable ASCII. The declaration file types both as `Uint8Array`. A data type the book names `Bytes` or `Slice` takes the `_k` suffix, the same way `String` does. `strBytes` of a computed string is `TextEncoder.encode`. A closed string literal is already the array.
+
 The declaration file types `String` as `{ readonly string: string }` and `Atom` as `string`. A data type the book names `String` is `String_k`, the same suffix a reserved word takes. This backend emits a string. It is not one of the refusals below.
 
 ## Host boundary

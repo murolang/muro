@@ -201,6 +201,26 @@ defmodule Muro.Grade do
   defp walk(mode, gamma, {:scat, a, b}), do: walk_add(mode, gamma, [a, b])
   defp walk(mode, gamma, {:slen, t}), do: walk(mode, gamma, t)
   defp walk(mode, gamma, {:seq, a, b}), do: walk_add(mode, gamma, [a, b])
+  defp walk(mode, gamma, {:bcat, a, b}), do: walk_add(mode, gamma, [a, b])
+  defp walk(mode, gamma, {:blen, t}), do: walk(mode, gamma, t)
+  defp walk(mode, gamma, {:beq, a, b}), do: walk_add(mode, gamma, [a, b])
+  defp walk(mode, gamma, {:xlen, t}), do: walk(mode, gamma, t)
+  defp walk(mode, gamma, {:xeq, a, b}), do: walk_add(mode, gamma, [a, b])
+  defp walk(mode, gamma, {:bsub, a, b, c}), do: walk_add(mode, gamma, [a, b, c])
+  defp walk(mode, gamma, {:bget, a, b}), do: walk_add(mode, gamma, [a, b])
+  defp walk(mode, gamma, {:aget, a, b}), do: walk_add(mode, gamma, [a, b])
+  defp walk(mode, gamma, {:bunc, t}), do: walk(mode, gamma, t)
+  defp walk(mode, gamma, {:sbytes, t}), do: walk(mode, gamma, t)
+  defp walk(mode, gamma, {:btil, a, b}), do: walk_add(mode, gamma, [a, b])
+  defp walk(mode, gamma, {:baft, a, b}), do: walk_add(mode, gamma, [a, b])
+
+  defp walk(mode, gamma, {tag, ty, z, f, s}) when tag in [:bfold, :afold] do
+    with {:ok, tu} <- walk(:spec, gamma, ty),
+         {:ok, ru} <- walk_add(mode, gamma, [z, f, s]) do
+      {:ok, add(tu, ru)}
+    end
+  end
+
   defp walk(mode, gamma, {:tensor, a, b}), do: walk_add(mode, gamma, [a, b])
   defp walk(mode, gamma, {:addi, a, b}), do: walk_add(mode, gamma, [a, b])
   defp walk(mode, gamma, {:muli, a, b}), do: walk_add(mode, gamma, [a, b])
@@ -219,12 +239,27 @@ defmodule Muro.Grade do
   defp walk(_mode, gamma, {:nu, f}), do: under(:spec, gamma, f, 1)
 
   defp walk(_mode, _gamma, leaf)
-       when leaf in [:typ, :nat, :ze, :unit, :one, :empty, :rfl, :atom, :string, :i64, :f32ty],
+       when leaf in [
+              :typ,
+              :nat,
+              :ze,
+              :unit,
+              :one,
+              :empty,
+              :rfl,
+              :atom,
+              :string,
+              :bytes,
+              :slice,
+              :i64,
+              :f32ty
+            ],
        do: {:ok, %{}}
 
   defp walk(_mode, _gamma, {:nat, n}) when is_integer(n), do: {:ok, %{}}
   defp walk(_mode, _gamma, {:atom, _}), do: {:ok, %{}}
   defp walk(_mode, _gamma, {:slit, _}), do: {:ok, %{}}
+  defp walk(_mode, _gamma, {:blit, _}), do: {:ok, %{}}
   defp walk(_mode, _gamma, {:def, _}), do: {:ok, %{}}
   defp walk(_mode, _gamma, {:hole, _}), do: {:ok, %{}}
 

@@ -1,0 +1,23 @@
+-- fnv_slice.muro — 32-bit FNV-1a over a Slice.
+-- The offset basis is 2166136261 and the prime is 16777619.
+-- Both are closed word literals, so a walk does not build a Peano tower.
+-- sliceFold walks the octets. This book does not import examples/fnv.muro.
+
+def offset : run U32 := toU32 2166136261
+
+def prime : run U32 := toU32 16777619
+
+def mix : run Π (h : U32) → Π (b : U8) → U32 :=
+  λ (h : U32) → λ (b : U8) → muli (xori h (asU32 b)) prime
+
+def hash : run Π (s : Slice) → U32 :=
+  λ (s : Slice) →
+    sliceFold U32 offset (λ (b : U8) → λ (rest : Slice) → λ (h : U32) → mix h b) s
+
+def hashEmpty : run U32 := hash b""
+
+def hashA : run U32 := hash b"a"
+
+def fnv-empty : evidence {hash b"" ≡ offset : U32} := refl
+
+def fnv-a : evidence {hash b"a" ≡ mix offset (toU8 97) : U32} := refl

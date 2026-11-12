@@ -15,7 +15,9 @@ defmodule Muro.Emit.JS do
   refusal has a construct, the message names that too (`c:host in home
   (place)`, `c:session in use (session)`). A lambda is a
   closure, so `c:lambda` is not a refusal here. A string is
-  `{ string: "…" }` and an atom stays a JavaScript string. A host
+  `{ string: "…" }` and an atom stays a JavaScript string. A `Bytes`
+  value and a `Slice` view are a `Uint8Array`. A view is a `subarray`.
+  A host
   placement refuses the book. A session endpoint the machine can represent
   is a synchronous stepper beside the runs. A session it cannot represent,
   and a session whose payload type has a `repr`, is omitted, and the runs
@@ -69,6 +71,7 @@ defmodule Muro.Emit.JS do
     string number boolean bigint symbol any unknown never object
     undefined null void this
     Nat Unit U8 U32 U64 I64 WordBool Opt Pair Stream Atom String
+    Bytes Slice
   ) |> MapSet.new()
 
   @type_forbidden MapSet.union(@forbidden, @ts_reserved)
@@ -83,6 +86,7 @@ defmodule Muro.Emit.JS do
     cadd csub cmul badDiv negBits absBits div rem
     of ton cast scrut pair
     scat slen seq qstr
+    bcat blen beq bsub bget bunc btil baft sbytes qbyt
     bounce go hole ret stack
   )
 
@@ -516,6 +520,22 @@ defmodule Muro.Emit.JS do
   defp calls_acc({:scat, a, b}, acc), do: calls_acc(b, calls_acc(a, acc))
   defp calls_acc({:slen, a}, acc), do: calls_acc(a, acc)
   defp calls_acc({:seq, a, b}, acc), do: calls_acc(b, calls_acc(a, acc))
+  defp calls_acc({:bcat, a, b}, acc), do: calls_acc(b, calls_acc(a, acc))
+  defp calls_acc({:blen, a}, acc), do: calls_acc(a, acc)
+  defp calls_acc({:beq, a, b}, acc), do: calls_acc(b, calls_acc(a, acc))
+  defp calls_acc({:bsub, s, off, len}, acc), do: calls_acc(len, calls_acc(off, calls_acc(s, acc)))
+  defp calls_acc({:bget, s, i}, acc), do: calls_acc(i, calls_acc(s, acc))
+  defp calls_acc({:btil, s, b}, acc), do: calls_acc(b, calls_acc(s, acc))
+  defp calls_acc({:baft, s, b}, acc), do: calls_acc(b, calls_acc(s, acc))
+  defp calls_acc({:sbytes, a}, acc), do: calls_acc(a, acc)
+  defp calls_acc({:bunc, s}, acc), do: calls_acc(s, acc)
+
+  defp calls_acc({:bfold, _step, caps, z, s}, acc) do
+    acc = Enum.reduce(caps, acc, &calls_acc/2)
+    calls_acc(s, calls_acc(z, acc))
+  end
+
+  defp calls_acc({:byt, _}, acc), do: acc
   defp calls_acc(_tm, acc), do: acc
 
   defp build_targets(funs, names, step_names, rec) do
@@ -939,6 +959,25 @@ defmodule Muro.Emit.JS do
   defp contains_rec?({:scat, a, b}, rec), do: contains_rec?(a, rec) or contains_rec?(b, rec)
   defp contains_rec?({:slen, a}, rec), do: contains_rec?(a, rec)
   defp contains_rec?({:seq, a, b}, rec), do: contains_rec?(a, rec) or contains_rec?(b, rec)
+  defp contains_rec?({:bcat, a, b}, rec), do: contains_rec?(a, rec) or contains_rec?(b, rec)
+  defp contains_rec?({:blen, a}, rec), do: contains_rec?(a, rec)
+  defp contains_rec?({:beq, a, b}, rec), do: contains_rec?(a, rec) or contains_rec?(b, rec)
+
+  defp contains_rec?({:bsub, s, off, len}, rec) do
+    contains_rec?(s, rec) or contains_rec?(off, rec) or contains_rec?(len, rec)
+  end
+
+  defp contains_rec?({:bget, s, i}, rec), do: contains_rec?(s, rec) or contains_rec?(i, rec)
+  defp contains_rec?({:btil, s, b}, rec), do: contains_rec?(s, rec) or contains_rec?(b, rec)
+  defp contains_rec?({:baft, s, b}, rec), do: contains_rec?(s, rec) or contains_rec?(b, rec)
+  defp contains_rec?({:sbytes, a}, rec), do: contains_rec?(a, rec)
+  defp contains_rec?({:bunc, s}, rec), do: contains_rec?(s, rec)
+
+  defp contains_rec?({:bfold, _step, caps, z, s}, rec) do
+    contains_rec?(z, rec) or contains_rec?(s, rec) or Enum.any?(caps, &contains_rec?(&1, rec))
+  end
+
+  defp contains_rec?({:byt, _}, _rec), do: false
   defp contains_rec?(_tm, _rec), do: false
 
   defp lift({:call, name, args} = tm, rec) do
@@ -1032,6 +1071,68 @@ defmodule Muro.Emit.JS do
     end
   end
 
+  defp lift({:bcat, a, b}, rec) do
+    case lift(a, rec) do
+      {:ok, call, rebuild} -> {:ok, call, fn hole -> {:bcat, rebuild.(hole), b} end}
+      :none -> lift_one(b, rec, fn hole -> {:bcat, a, hole} end)
+    end
+  end
+
+  defp lift({:blen, a}, rec), do: lift_one(a, rec, fn hole -> {:blen, hole} end)
+
+  defp lift({:beq, a, b}, rec) do
+    case lift(a, rec) do
+      {:ok, call, rebuild} -> {:ok, call, fn hole -> {:beq, rebuild.(hole), b} end}
+      :none -> lift_one(b, rec, fn hole -> {:beq, a, hole} end)
+    end
+  end
+
+  defp lift({:bsub, s, off, len}, rec) do
+    lift_kids([s, off, len], rec, fn [s, off, len] -> {:bsub, s, off, len} end)
+  end
+
+  defp lift({:bget, s, i}, rec) do
+    case lift(s, rec) do
+      {:ok, call, rebuild} -> {:ok, call, fn hole -> {:bget, rebuild.(hole), i} end}
+      :none -> lift_one(i, rec, fn hole -> {:bget, s, hole} end)
+    end
+  end
+
+  defp lift({:btil, s, b}, rec) do
+    case lift(s, rec) do
+      {:ok, call, rebuild} -> {:ok, call, fn hole -> {:btil, rebuild.(hole), b} end}
+      :none -> lift_one(b, rec, fn hole -> {:btil, s, hole} end)
+    end
+  end
+
+  defp lift({:baft, s, b}, rec) do
+    case lift(s, rec) do
+      {:ok, call, rebuild} -> {:ok, call, fn hole -> {:baft, rebuild.(hole), b} end}
+      :none -> lift_one(b, rec, fn hole -> {:baft, s, hole} end)
+    end
+  end
+
+  defp lift({:sbytes, a}, rec), do: lift_one(a, rec, fn hole -> {:sbytes, hole} end)
+  defp lift({:bunc, s}, rec), do: lift_one(s, rec, fn hole -> {:bunc, hole} end)
+
+  defp lift({:bfold, step, caps, z, s}, rec) do
+    case lift_list(caps, rec) do
+      {:ok, index, call, inner} ->
+        {:ok, call,
+         fn hole -> {:bfold, step, List.replace_at(caps, index, inner.(hole)), z, s} end}
+
+      :none ->
+        case lift(z, rec) do
+          {:ok, call, rebuild} ->
+            {:ok, call, fn hole -> {:bfold, step, caps, rebuild.(hole), s} end}
+
+          :none ->
+            lift_one(s, rec, fn hole -> {:bfold, step, caps, z, hole} end)
+        end
+    end
+  end
+
+  defp lift({:byt, _}, _rec), do: :none
   defp lift(_tm, _rec), do: :none
 
   defp lift_one(tm, rec, rebuild) do
@@ -1388,6 +1489,92 @@ defmodule Muro.Emit.JS do
   end
 
   defp emit_tm({:wrd, k, op, args}, st), do: emit_wrd(k, op, args, st)
+
+  defp emit_tm({:byt, bin}, _st) when is_binary(bin) do
+    if bin == <<>> do
+      {:ok, "new Uint8Array(0)"}
+    else
+      nums = bin |> :binary.bin_to_list() |> Enum.join(", ")
+      {:ok, "new Uint8Array([#{nums}])"}
+    end
+  end
+
+  defp emit_tm({:bcat, a, b}, st) do
+    with {:ok, ea} <- emit_tm(a, st),
+         {:ok, eb} <- emit_tm(b, st),
+         do: {:ok, "#{st.h.bcat}(#{ea}, #{eb})"}
+  end
+
+  defp emit_tm({:blen, a}, st) do
+    with {:ok, e} <- emit_tm(a, st), do: {:ok, "#{st.h.blen}(#{e})"}
+  end
+
+  defp emit_tm({:beq, a, b}, st) do
+    with {:ok, ea} <- emit_tm(a, st),
+         {:ok, eb} <- emit_tm(b, st),
+         do: {:ok, "#{st.h.beq}(#{ea}, #{eb})"}
+  end
+
+  defp emit_tm({:bsub, s, off, len}, st) do
+    with {:ok, es} <- emit_tm(s, st),
+         {:ok, eo} <- emit_tm(off, st),
+         {:ok, en} <- emit_tm(len, st),
+         do: {:ok, "#{st.h.bsub}(#{es}, #{eo}, #{en})"}
+  end
+
+  defp emit_tm({:bget, s, i}, st) do
+    with {:ok, es} <- emit_tm(s, st),
+         {:ok, ei} <- emit_tm(i, st),
+         do: {:ok, "#{st.h.bget}(#{es}, #{ei})"}
+  end
+
+  defp emit_tm({:btil, s, b}, st) do
+    with {:ok, es} <- emit_tm(s, st),
+         {:ok, eb} <- emit_tm(b, st),
+         do: {:ok, "#{st.h.btil}(#{es}, #{eb})"}
+  end
+
+  defp emit_tm({:baft, s, b}, st) do
+    with {:ok, es} <- emit_tm(s, st),
+         {:ok, eb} <- emit_tm(b, st),
+         do: {:ok, "#{st.h.baft}(#{es}, #{eb})"}
+  end
+
+  defp emit_tm({:sbytes, a}, st) do
+    with {:ok, e} <- emit_tm(a, st), do: {:ok, "#{st.h.sbytes}(#{e})"}
+  end
+
+  defp emit_tm({:bunc, s}, st) do
+    with {:ok, e} <- emit_tm(s, st), do: {:ok, "#{st.h.bunc}(#{e})"}
+  end
+
+  defp emit_tm({:bfold, step, caps, z, s}, st) do
+    with {:ok, ces} <- emit_many(caps, st),
+         {:ok, ze} <- emit_tm(z, st),
+         {:ok, se} <- emit_tm(s, st),
+         {:ok, sname} <- fetch_step(st, step) do
+      tag = Integer.to_string(:erlang.phash2({step, caps, z, s}))
+      acc = "muro__ba" <> tag
+      cur = "muro__bc" <> tag
+      byte = "muro__bb" <> tag
+      rest = "muro__br" <> tag
+      args = Enum.join(ces ++ [byte, rest, acc], ", ")
+
+      {:ok,
+       js_fn([
+         "let #{acc} = (#{ze});",
+         "let #{cur} = (#{se});",
+         "while (#{cur}.length > 0) {",
+         "  const #{byte} = BigInt(#{cur}[0]);",
+         "  const #{rest} = #{cur}.subarray(1);",
+         "  #{acc} = #{sname}(#{args});",
+         "  #{cur} = #{rest};",
+         "}",
+         "return #{acc};"
+       ])}
+    end
+  end
+
   defp emit_tm(_tm, _st), do: {:error, "c:unsupported"}
 
   defp emit_arrow(name, body, st) do
@@ -1462,6 +1649,25 @@ defmodule Muro.Emit.JS do
   defp occurs_bind?(name, {:scat, a, b}), do: occurs_bind?(name, a) or occurs_bind?(name, b)
   defp occurs_bind?(name, {:slen, a}), do: occurs_bind?(name, a)
   defp occurs_bind?(name, {:seq, a, b}), do: occurs_bind?(name, a) or occurs_bind?(name, b)
+  defp occurs_bind?(name, {:bcat, a, b}), do: occurs_bind?(name, a) or occurs_bind?(name, b)
+  defp occurs_bind?(name, {:blen, a}), do: occurs_bind?(name, a)
+  defp occurs_bind?(name, {:beq, a, b}), do: occurs_bind?(name, a) or occurs_bind?(name, b)
+
+  defp occurs_bind?(name, {:bsub, s, off, len}) do
+    occurs_bind?(name, s) or occurs_bind?(name, off) or occurs_bind?(name, len)
+  end
+
+  defp occurs_bind?(name, {:bget, s, i}), do: occurs_bind?(name, s) or occurs_bind?(name, i)
+  defp occurs_bind?(name, {:btil, s, b}), do: occurs_bind?(name, s) or occurs_bind?(name, b)
+  defp occurs_bind?(name, {:baft, s, b}), do: occurs_bind?(name, s) or occurs_bind?(name, b)
+  defp occurs_bind?(name, {:sbytes, a}), do: occurs_bind?(name, a)
+  defp occurs_bind?(name, {:bunc, s}), do: occurs_bind?(name, s)
+
+  defp occurs_bind?(name, {:bfold, _step, caps, z, s}) do
+    occurs_bind?(name, z) or occurs_bind?(name, s) or Enum.any?(caps, &occurs_bind?(name, &1))
+  end
+
+  defp occurs_bind?(_name, {:byt, _}), do: false
   defp occurs_bind?(_name, _other), do: false
 
   defp emit_wrd(k, op, args, st) do
@@ -1819,6 +2025,7 @@ defmodule Muro.Emit.JS do
       if (typeof v === "string") return v;
       if (typeof v === "function") return "fn";
       if (Array.isArray(v)) return "(" + v.map(#{h["canon"]}).join(",") + ")";
+      if (typeof Uint8Array === "function" && v instanceof Uint8Array) return #{h["qbyt"]}(v);
       if (v && typeof v === "object") {
         if (Object.keys(v).length === 1 && typeof v.string === "string") return #{h["qstr"]}(v.string);
         if (typeof v.tag === "string" && Array.isArray(v.fields)) {
@@ -1948,6 +2155,73 @@ defmodule Muro.Emit.JS do
     function #{h["cast"]}(k, n) { return #{h["res"]}(k, n); }
     """
     |> String.trim()
+    |> Kernel.<>(bytes_runtime(h))
+  end
+
+  # A bytes value is a Uint8Array. A view is a subarray of the same
+  # buffer. Out of range is a fresh empty array. An empty side of a
+  # concatenation is returned as it is.
+  defp bytes_runtime(h) do
+    """
+
+    function #{h["bcat"]}(a, b) {
+      if (a.length === 0) return b;
+      if (b.length === 0) return a;
+      const out = new Uint8Array(a.length + b.length);
+      out.set(a, 0);
+      out.set(b, a.length);
+      return out;
+    }
+    function #{h["blen"]}(a) { return BigInt(a.length); }
+    function #{h["beq"]}(a, b) {
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+      return true;
+    }
+    function #{h["bsub"]}(s, off, len) {
+      if (off < 0n || len < 0n) return new Uint8Array(0);
+      const n = BigInt(s.length);
+      if (off > n || len > n - off) return new Uint8Array(0);
+      const o = Number(off);
+      return s.subarray(o, o + Number(len));
+    }
+    function #{h["bget"]}(s, i) {
+      const n = BigInt(s.length);
+      if (i < 0n || i >= n) return #{h["none"]}();
+      return #{h["some"]}(BigInt(s[Number(i)]));
+    }
+    function #{h["btil"]}(s, b) {
+      const i = s.indexOf(Number(b));
+      if (i < 0) return s;
+      return s.subarray(0, i);
+    }
+    function #{h["baft"]}(s, b) {
+      const i = s.indexOf(Number(b));
+      if (i < 0) return new Uint8Array(0);
+      return s.subarray(i + 1);
+    }
+    function #{h["sbytes"]}(a) { return new TextEncoder().encode(a.string); }
+    function #{h["bunc"]}(s) {
+      if (s.length === 0) return #{h["data"]}("nothing");
+      return #{h["data"]}("just", [BigInt(s[0]), s.subarray(1)]);
+    }
+    function #{h["qbyt"]}(a) {
+      const bs = String.fromCharCode(92);
+      const q = String.fromCharCode(34);
+      let out = "b" + q;
+      for (let i = 0; i < a.length; i++) {
+        const b = a[i];
+        if (b === 92) out += bs + bs;
+        else if (b === 34) out += bs + q;
+        else if (b === 10) out += bs + "n";
+        else if (b === 13) out += bs + "r";
+        else if (b === 9) out += bs + "t";
+        else if (b >= 32 && b <= 126) out += String.fromCharCode(b);
+        else out += bs + "x" + b.toString(16).padStart(2, "0");
+      }
+      return out + q;
+    }
+    """
   end
 
   defp dts(compiled, types, book, session, codec) do
@@ -1990,6 +2264,8 @@ defmodule Muro.Emit.JS do
     export type WordBool = boolean;
     export type Atom = string;
     export type String = { readonly string: string };
+    export type Bytes = Uint8Array;
+    export type Slice = Uint8Array;
     export type Opt<T> = { readonly k: "none" } | { readonly k: "some"; readonly v: T };
     export type Pair<A, B> = readonly [A, B];
     export type Stream<A> = {
@@ -2186,6 +2462,8 @@ defmodule Muro.Emit.JS do
   defp rough_form(_book, :i64, _tparams), do: :i64
   defp rough_form(_book, :atom, _tparams), do: {:data, "Atom"}
   defp rough_form(_book, :string, _tparams), do: :string
+  defp rough_form(_book, :bytes, _tparams), do: :bytes
+  defp rough_form(_book, :slice, _tparams), do: :slice
   defp rough_form(_book, {:word, {:ty, k}, []}, _tparams) when k in [:u8, :u32, :u64], do: k
   defp rough_form(_book, {:word, :bool, []}, _tparams), do: :wbool
   defp rough_form(_book, {:word, {:optk, k}, []}, _tparams), do: {:opt, rough_word(k)}
@@ -2277,6 +2555,8 @@ defmodule Muro.Emit.JS do
   defp render_lay(:never, _ctx, _nested), do: "never"
   defp render_lay({:data, "Atom"}, _ctx, _nested), do: "Atom"
   defp render_lay(:string, _ctx, _nested), do: "String"
+  defp render_lay(:bytes, _ctx, _nested), do: "Bytes"
+  defp render_lay(:slice, _ctx, _nested), do: "Slice"
   defp render_lay({:tyvar, name}, ctx, _nested), do: Map.get(ctx.tyvars, name, type_spell(name))
 
   defp render_lay({:data, name, args}, ctx, _nested) do
