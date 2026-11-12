@@ -88,7 +88,8 @@ defmodule Muro.Synth.Loop do
               checker,
               fuel,
               %{},
-              %{}
+              %{},
+              spec.oracle
             )
         end
     end
@@ -158,13 +159,17 @@ defmodule Muro.Synth.Loop do
          checker,
          fuel,
          seen,
-         rejected
+         rejected,
+         oracle
        ) do
-    {:ok, source} = Book.render(host, arms, anchor)
+    {:ok, source, meta} = Book.render(host, arms, anchor, oracle)
 
     case Book.check(source, anchor, fn path -> checker.(path, fuel) end) do
       :ok ->
-        {:ok, checked(arms, source, versions)}
+        {:ok, checked(arms, source, versions, meta)}
+
+      {:error, :storage, diagnostic} ->
+        {:error, :storage, diagnostic}
 
       {:error, text} ->
         feedback(
@@ -181,7 +186,9 @@ defmodule Muro.Synth.Loop do
           fuel,
           seen,
           rejected,
-          text
+          text,
+          meta,
+          oracle
         )
     end
   end
@@ -200,9 +207,11 @@ defmodule Muro.Synth.Loop do
          fuel,
          seen,
          rejected,
-         text
+         text,
+         meta,
+         oracle
        ) do
-    cex = Book.cex_from(text, Book.obligations(host, arms))
+    cex = Book.cex_from(text, meta.obligations ++ Book.obligations(host, arms))
     fed = Map.get(seen, cex.carrier, 0) + 1
     cex = %{cex | fed: fed}
     seen = Map.put(seen, cex.carrier, fed)
@@ -233,7 +242,8 @@ defmodule Muro.Synth.Loop do
           checker,
           fuel,
           seen,
-          rejected
+          rejected,
+          oracle
         )
 
       depth < max_depth ->
@@ -258,7 +268,8 @@ defmodule Muro.Synth.Loop do
               checker,
               fuel,
               seen,
-              rejected
+              rejected,
+              oracle
             )
         end
 
@@ -289,6 +300,10 @@ defmodule Muro.Synth.Loop do
 
   defp replace_arm(arms, arm) do
     Enum.map(arms, fn old -> if old.name == arm.name, do: arm, else: old end)
+  end
+
+  defp arm_for(_host, arms, %{kind: :certificate, arm: name}) when is_binary(name) do
+    Enum.find(arms, hd(arms), &(&1.name == name))
   end
 
   defp arm_for(host, arms, %{name: name}) when is_binary(name) do
@@ -397,22 +412,50 @@ defmodule Muro.Synth.Loop do
     %{status: :silent, program: nil, book: nil, lines: lines, versions: [], cex: [cex]}
   end
 
-  defp checked(arms, source, versions) do
-    lines =
-      ["muro synth: policy checked"] ++
-        Enum.map(arms, &"program: #{Synth.render(&1.pred)}") ++
+  defp checked(arms, source, versions, meta) do
+    base =
+      Enum.map(arms, &"program: #{Synth.render(&1.pred)}") ++
         preference(arms) ++
-        ["homomorphism certificate is later"] ++
         Enum.map(versions, &"version space #{&1}")
 
-    %{
-      status: :policy,
-      program: program_of(arms),
-      book: source,
-      lines: lines,
-      versions: versions,
-      cex: []
-    }
+    case meta.kind do
+      :certified ->
+        also = if meta.also, do: ["also #{meta.also}"], else: []
+
+        lines =
+          ["muro synth: homomorphism checked"] ++
+            base ++
+            ["certificate #{meta.certificate}"] ++
+            also
+
+        %{
+          status: :certified,
+          program: program_of(arms),
+          book: source,
+          lines: lines,
+          versions: versions,
+          cex: [],
+          certificate: meta.certificate,
+          reason: nil
+        }
+
+      :policy ->
+        lines =
+          ["muro synth: policy checked"] ++
+            base ++
+            ["homomorphism is not derivable", meta.reason]
+
+        %{
+          status: :policy,
+          program: program_of(arms),
+          book: source,
+          lines: lines,
+          versions: versions,
+          cex: [],
+          certificate: nil,
+          reason: meta.reason
+        }
+    end
   end
 
   defp program_of([arm]), do: arm.pred
@@ -450,9 +493,16 @@ defmodule Muro.Synth.Loop do
         _ -> []
       end
 
+    title =
+      if Map.get(cex, :kind) == :certificate do
+        "muro synth: homomorphism is not derivable"
+      else
+        "muro synth: residual counterexample"
+      end
+
     lines =
       [
-        "muro synth: residual counterexample",
+        title,
         "carrier #{cex.carrier}",
         "predicted #{show_bit(cex.predicted)}",
         "oracle #{show_bit(cex.oracle)}",

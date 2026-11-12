@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.35
+
+`mix muro.synth` checks the homomorphism of the ranking it synthesized. The surviving predicate is still the policy that runs. `rank` reads that predicate: `Unit` when it prefers the action, `Empty` when it does not. On a finite state type the book also carries the evidence, and exit 0 means the policy and that evidence both check, on the environment's `step`. `trace` checks `CoindHomo`. On the two-state environment the survivor prefers `go` at `start`. `successor` checks `CoinductiveHomomorphism`. On binary sacrifice the survivor prefers `go-paradise`, and that book does not claim `CoindHomo`. `coind-homo` on the same environment reports that the pair cannot be labelled. A policy whose environment does not define the homomorphism is not success. A reward that is at least every other reward is the maximum, in either order. A temporary book that cannot be written exits 2, with the diagnostic the write returned. A certificate obligation that runs out of fuel stays unknown and does not drop the survivor. A reward that is not a closed Nat leaves the policy book without a ranking.
+
+### Manual
+
+- Synthesis. The executable.
+
+### Package
+
+- Version 0.20.35.
+
 ## 0.20.34
 
 `mix muro.synth` searches a version space of predicate programs against a checked environment. The search calls that environment's emitted `step`. A program that misses an observation is dropped. The smallest program that matches every observation is the policy the book deploys, and `eval` runs it. A score breaks ties of equal size and does not decide who survives. Depth grows when the space is empty, and again when a failed check removes every survivor while a greater depth is allowed. A failed check drops the candidate the checker refused, and that candidate is not selected again. The report says when the features cannot express the target, or when an oracle cannot label a pair. A `Carrier` that does not convert to `State` is refused. A definition the search calls is a public run, and an argument the search passes is not erased. `--out` does not replace a file. A policy book can be an environment for a later search. A homomorphism for the policy is later. The search is not the certificate. Printed on standard output, the environment import is relative to the current directory. A repeated state or action is kept once, in the order first written, and an omitted `default-action` stays the last element of `all-actions`. An `eval-feature` without `Feature` is refused. A value with no maximum is not a ranking. A write that fails leaves no file. A name that would spell an Elixir function the book already uses is given a fresh name.
