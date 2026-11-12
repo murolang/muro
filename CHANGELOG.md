@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.20.33
+
+The theory of a predicate program is evidence, beside the Elixir enumerator. A program is a feature test, a conjunction, a disjunction, a negation, or a constant. Carriers that agree on the features evaluate the same way. Refinement never grows the version space. On two carriers and one feature, one representative observation is enough: every survivor matches the target. The search is not the certificate. The loop that runs the search, and a homomorphism for an agent, are later.
+
+### Manual
+
+- CSHRL. Examples.
+
+### Package
+
+- Version 0.20.33.
+
 ## 0.20.32
 
 A binder may carry a grade pair `(x : (c, t) A)`. `c` is how many times run and evidence use the variable. `t` is how many times the type uses it. The grades are `0`, `1`, `ω`, an exact natural, and an interval. An unmarked binder stays affine.

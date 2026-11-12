@@ -1,0 +1,82 @@
+-- synth_bit.muro — the CEGIS theory on two carriers.
+--
+-- This is the CEGIS theory. The Elixir search is untrusted. A
+-- homomorphism certificate is later work.
+--
+-- Both carriers make the one feature true, so `on` represents `off`.
+-- The target is constantly true. One representative observation is
+-- enough: every survivor matches the target on both carriers.
+import "../lib/synth.muro"
+
+data Carrier : Type where
+  on  : Carrier
+  off : Carrier
+
+data Feature : Type where
+  bit : Feature
+
+def eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
+  λ (+ f : Feature) → λ (+ _ : Carrier) →
+    match f motive (λ _ → Bool)
+      | bit => true
+
+def target : run Π (c : Carrier) → Bool :=
+  λ (_ : Carrier) → true
+
+def agree-on-on : evidence AllFeatAgree on on :=
+  λ (f : Feature) →
+    match f motive (λ (g : Feature) → {eval-feature g on ≡ eval-feature g on : Bool})
+      | bit => refl
+
+def agree-on-off : evidence AllFeatAgree on off :=
+  λ (f : Feature) →
+    match f motive (λ (g : Feature) → {eval-feature g on ≡ eval-feature g off : Bool})
+      | bit => refl
+
+def agree-off-on : evidence AllFeatAgree off on :=
+  λ (f : Feature) →
+    match f motive (λ (g : Feature) → {eval-feature g off ≡ eval-feature g on : Bool})
+      | bit => refl
+
+def agree-off-off : evidence AllFeatAgree off off :=
+  λ (f : Feature) →
+    match f motive (λ (g : Feature) → {eval-feature g off ≡ eval-feature g off : Bool})
+      | bit => refl
+
+def target-respects : evidence FeatureRespects target :=
+  λ (+ c1 : Carrier) → λ (+ c2 : Carrier) → λ (+ _ : AllFeatAgree c1 c2) → refl
+
+def reps : run Reps := rcons on rnil
+
+def cover-on : evidence CoverAt reps on :=
+  pick reps on on (here on rnil) agree-on-on
+
+def cover-off : evidence CoverAt reps off :=
+  pick reps off on (here on rnil) agree-on-off
+
+def covers : evidence Covers reps :=
+  λ (+ c : Carrier) →
+    match c motive (λ (x : Carrier) → CoverAt reps x)
+      | on => cover-on
+      | off => cover-off
+
+-- The generic lemma, at this carrier.
+def bit-sufficient : evidence Π (vs : VersionSpace) → Π (+ p : PredProg) →
+                              Π (mem : InSpace p (refine-all vs (obs-of target reps))) →
+                              MatchesAll p target :=
+  λ (vs : VersionSpace) → λ (+ p : PredProg) →
+  λ (mem : InSpace p (refine-all vs (obs-of target reps))) →
+    sufficient-cegis target reps target-respects covers vs p mem
+
+def programs : run VersionSpace := vcons truep (vcons falsep vnil)
+
+def seen : run PredObs := observe on true
+
+-- truep matches the bit and stays. falsep does not, and is dropped.
+def drops-false : evidence {refine seen programs ≡ vcons truep vnil : VersionSpace} := refl
+
+def shrinks-here : evidence Le (vlength (refine seen programs)) (vlength programs) :=
+  vs-shrinks seen programs
+
+def features-propagate : evidence {eval (feat bit) on ≡ eval (feat bit) off : Bool} :=
+  propagation (feat bit) on off refl

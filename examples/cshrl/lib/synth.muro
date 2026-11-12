@@ -1,0 +1,520 @@
+-- synth.muro — CEGIS for a predicate program.
+--
+-- A program is a feature test, a conjunction, a disjunction, a negation,
+-- or a constant. eval reads a carrier. Carriers that agree on every
+-- feature evaluate the same way. refine keeps the programs that match
+-- an observation, and the version space never grows. If the target
+-- respects the features and a list of representatives covers every
+-- carrier, every survivor of those representative observations matches
+-- the target on every carrier.
+--
+-- The Elixir enumerator is not this file. This file is the evidence.
+-- A homomorphism for an agent is a different book.
+import "../std/nat.muro"
+
+param Carrier : spec Type
+param Feature : spec Type
+param eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool
+
+def andb : run Π (a : Bool) → Π (b : Bool) → Bool :=
+  λ (a : Bool) → λ (b : Bool) →
+    match a motive (λ _ → Bool)
+      | true => b
+      | false => false
+
+def orb : run Π (a : Bool) → Π (b : Bool) → Bool :=
+  λ (a : Bool) → λ (b : Bool) →
+    match a motive (λ _ → Bool)
+      | true => true
+      | false => b
+
+def notb : run Π (a : Bool) → Bool :=
+  λ (a : Bool) →
+    match a motive (λ _ → Bool)
+      | true => false
+      | false => true
+
+def eq-bool : run Π (a : Bool) → Π (b : Bool) → Bool :=
+  λ (a : Bool) → λ (b : Bool) →
+    match a motive (λ _ → Bool)
+      | true => b
+      | false => notb b
+
+def eq-bool-refl : evidence Π (b : Bool) → {eq-bool b b ≡ true : Bool} :=
+  λ (b : Bool) →
+    match b motive (λ (x : Bool) → {eq-bool x x ≡ true : Bool})
+      | true => refl
+      | false => refl
+
+def neq-tf : evidence Π (h : {false ≡ true : Bool}) → Empty :=
+  λ (h : {false ≡ true : Bool}) →
+    rewrite h motive (λ b → (match b motive (λ _ → Type) | true => Unit | false => Empty)) in tt
+
+def eq-bool-sound : evidence Π (a : Bool) → Π (b : Bool) →
+                             Π (h : {eq-bool a b ≡ true : Bool}) → {a ≡ b : Bool} :=
+  λ (a : Bool) → λ (b : Bool) → λ (h : {eq-bool a b ≡ true : Bool}) →
+    (match a motive (λ (x : Bool) → Π (y : Bool) → Π (p : {eq-bool x y ≡ true : Bool}) → {x ≡ y : Bool})
+      | true => λ (y : Bool) →
+          (match y motive (λ (z : Bool) → Π (p : {eq-bool true z ≡ true : Bool}) → {true ≡ z : Bool})
+            | true => λ (_ : {true ≡ true : Bool}) → refl
+            | false => λ (p : {false ≡ true : Bool}) →
+                matchEmpty (neq-tf p) motive (λ _ → {true ≡ false : Bool}))
+      | false => λ (y : Bool) →
+          (match y motive (λ (z : Bool) → Π (p : {eq-bool false z ≡ true : Bool}) → {false ≡ z : Bool})
+            | true => λ (p : {false ≡ true : Bool}) →
+                matchEmpty (neq-tf p) motive (λ _ → {false ≡ true : Bool})
+            | false => λ (_ : {true ≡ true : Bool}) → refl)) b h
+
+def eq-trans : evidence Π (- A : Type) → Π (- x : A) → Π (- y : A) → Π (- z : A) →
+                        Π (xy : {x ≡ y : A}) → Π (yz : {y ≡ z : A}) → {x ≡ z : A} :=
+  λ (- A : Type) → λ (- x : A) → λ (- y : A) → λ (- z : A) →
+  λ (xy : {x ≡ y : A}) → λ (yz : {y ≡ z : A}) →
+    rewrite xy motive (λ w → {w ≡ z : A}) in yz
+
+-- PredProg. andp, orp, and notp are the paper's _∧p_, _∨p_, and ¬p_.
+data PredProg : Type where
+  feat   : Π (+ f : Feature) → PredProg
+  andp   : PredProg → PredProg → PredProg
+  orp    : PredProg → PredProg → PredProg
+  notp   : PredProg → PredProg
+  truep  : PredProg
+  falsep : PredProg
+
+def eval : run Π (p : PredProg) → Π (+ c : Carrier) → Bool :=
+  λ (p : PredProg) → λ (+ c : Carrier) →
+    match p motive (λ _ → Bool)
+      | feat f => eval-feature f c
+      | andp q r => andb (eval q c) (eval r c)
+      | orp q r => orb (eval q c) (eval r c)
+      | notp q => notb (eval q c)
+      | truep => true
+      | falsep => false
+
+-- Agreement of one program, structurally. A feature test stores the
+-- bit equality. A compound stores the agreements of its parts.
+def FeatureEquiv : spec Π (p : PredProg) → Π (c1 : Carrier) → Π (c2 : Carrier) → Type :=
+  λ (p : PredProg) → λ (c1 : Carrier) → λ (c2 : Carrier) →
+    match p motive (λ _ → Type)
+      | feat f => {eval-feature f c1 ≡ eval-feature f c2 : Bool}
+      | andp q r => FeatureEquiv q c1 c2 × FeatureEquiv r c1 c2
+      | orp q r => FeatureEquiv q c1 c2 × FeatureEquiv r c1 c2
+      | notp q => FeatureEquiv q c1 c2
+      | truep => Unit
+      | falsep => Unit
+
+def AllFeatAgree : spec Π (c1 : Carrier) → Π (c2 : Carrier) → Type :=
+  λ (c1 : Carrier) → λ (c2 : Carrier) →
+    Π (f : Feature) → {eval-feature f c1 ≡ eval-feature f c2 : Bool}
+
+def propagation : evidence Π (p : PredProg) → Π (+ c1 : Carrier) → Π (+ c2 : Carrier) →
+                           Π (e : FeatureEquiv p c1 c2) → {eval p c1 ≡ eval p c2 : Bool} :=
+  λ (p : PredProg) → λ (+ c1 : Carrier) → λ (+ c2 : Carrier) →
+  λ (e : FeatureEquiv p c1 c2) →
+    (match p motive (λ (q : PredProg) → Π (h : FeatureEquiv q c1 c2) → {eval q c1 ≡ eval q c2 : Bool})
+      | feat f => λ (h : {eval-feature f c1 ≡ eval-feature f c2 : Bool}) → h
+      | andp q r => λ (h : FeatureEquiv q c1 c2 × FeatureEquiv r c1 c2) →
+          let (hq, hr) = h in
+          rewrite (propagation q c1 c2 hq)
+            motive (λ z → {andb z (eval r c1) ≡ andb (eval q c2) (eval r c2) : Bool}) in
+          rewrite (propagation r c1 c2 hr)
+            motive (λ z → {andb (eval q c2) z ≡ andb (eval q c2) (eval r c2) : Bool}) in
+          refl
+      | orp q r => λ (h : FeatureEquiv q c1 c2 × FeatureEquiv r c1 c2) →
+          let (hq, hr) = h in
+          rewrite (propagation q c1 c2 hq)
+            motive (λ z → {orb z (eval r c1) ≡ orb (eval q c2) (eval r c2) : Bool}) in
+          rewrite (propagation r c1 c2 hr)
+            motive (λ z → {orb (eval q c2) z ≡ orb (eval q c2) (eval r c2) : Bool}) in
+          refl
+      | notp q => λ (h : FeatureEquiv q c1 c2) →
+          rewrite (propagation q c1 c2 h)
+            motive (λ z → {notb z ≡ notb (eval q c2) : Bool}) in
+          refl
+      | truep => λ (_ : Unit) → refl
+      | falsep => λ (_ : Unit) → refl) e
+
+def all-agree-feat-equiv : evidence Π (+ c1 : Carrier) → Π (+ c2 : Carrier) →
+                                    Π (+ a : AllFeatAgree c1 c2) → Π (p : PredProg) →
+                                    FeatureEquiv p c1 c2 :=
+  λ (+ c1 : Carrier) → λ (+ c2 : Carrier) → λ (+ a : AllFeatAgree c1 c2) →
+  λ (p : PredProg) →
+    match p motive (λ (q : PredProg) → FeatureEquiv q c1 c2)
+      | feat f => a f
+      | andp q r => (all-agree-feat-equiv c1 c2 a q, all-agree-feat-equiv c1 c2 a r)
+      | orp q r => (all-agree-feat-equiv c1 c2 a q, all-agree-feat-equiv c1 c2 a r)
+      | notp q => all-agree-feat-equiv c1 c2 a q
+      | truep => tt
+      | falsep => tt
+
+-- An observation is a carrier and the bit the oracle gave it.
+data PredObs : Type where
+  observe : Π (+ c : Carrier) → Bool → PredObs
+
+def consistent : run Π (+ p : PredProg) → Π (+ ob : PredObs) → Bool :=
+  λ (+ p : PredProg) → λ (+ ob : PredObs) →
+    match ob motive (λ _ → Bool)
+      | observe c b => eq-bool (eval p c) b
+
+-- A program that matches the bit is consistent with the observation.
+def consistent-correct : evidence Π (+ p : PredProg) → Π (+ c : Carrier) → Π (b : Bool) →
+                                  Π (h : {eval p c ≡ b : Bool}) →
+                                  {consistent p (observe c b) ≡ true : Bool} :=
+  λ (+ p : PredProg) → λ (+ c : Carrier) → λ (b : Bool) →
+  λ (h : {eval p c ≡ b : Bool}) →
+    rewrite h motive (λ z → {eq-bool z b ≡ true : Bool}) in
+    eq-bool-refl b
+
+data Or (A : Type) (B : Type) : Type where
+  inl : A → Or A B
+  inr : B → Or A B
+
+-- The version space is a list of programs. Each program is reusable:
+-- refine tests it and, when it matches, keeps it.
+data VersionSpace : Type where
+  vnil  : VersionSpace
+  vcons : Π (+ p : PredProg) → VersionSpace → VersionSpace
+
+def vsplice : run Π (flag : Bool) → Π (+ p : PredProg) → Π (rest : VersionSpace) → VersionSpace :=
+  λ (flag : Bool) → λ (+ p : PredProg) → λ (rest : VersionSpace) →
+    match flag motive (λ _ → VersionSpace)
+      | true => vcons p rest
+      | false => rest
+
+def refine : run Π (+ ob : PredObs) → Π (vs : VersionSpace) → VersionSpace :=
+  λ (+ ob : PredObs) → λ (vs : VersionSpace) →
+    match vs motive (λ _ → VersionSpace)
+      | vnil => vnil
+      | vcons p rest => vsplice (consistent p ob) p (refine ob rest)
+
+data Obs : Type where
+  onil  : Obs
+  ocons : Π (+ ob : PredObs) → Obs → Obs
+
+def refine-all : run Π (vs : VersionSpace) → Π (obs : Obs) → VersionSpace :=
+  λ (vs : VersionSpace) → λ (obs : Obs) →
+    match obs motive (λ _ → VersionSpace)
+      | onil => vs
+      | ocons ob rest => refine-all (refine ob vs) rest
+
+-- The loop is refinement along the observation list.
+def cegis-loop : run Π (vs : VersionSpace) → Π (obs : Obs) → VersionSpace :=
+  λ (vs : VersionSpace) → λ (obs : Obs) → refine-all vs obs
+
+def vlength : run Π (vs : VersionSpace) → Nat :=
+  λ (vs : VersionSpace) →
+    match vs motive (λ _ → Nat)
+      | vnil => 0
+      | vcons _ rest => suc (vlength rest)
+
+def le-suc : evidence Π (m : Nat) → Π (n : Nat) → Π (h : Le m n) → Le m (suc n) :=
+  λ (m : Nat) → λ (n : Nat) → λ (h : Le m n) →
+    (match m motive (λ (a : Nat) → Π (b : Nat) → Π (p : Le a b) → Le a (suc b))
+      | 0 => λ (b : Nat) → λ (_ : Le 0 b) → tt
+      | suc m1 => λ (b : Nat) →
+          (match b motive (λ (c : Nat) → Π (p : Le (suc m1) c) → Le (suc m1) (suc c))
+            | 0 => λ (p : Le (suc m1) 0) → matchEmpty p motive (λ _ → Le (suc m1) (suc 0))
+            | suc b1 => λ (p : Le (suc m1) (suc b1)) → le-suc m1 b1 p)) n h
+
+def splice-le : evidence Π (flag : Bool) → Π (+ p : PredProg) → Π (rest : VersionSpace) →
+                         Π (n : Nat) → Π (h : Le (vlength rest) n) →
+                         Le (vlength (vsplice flag p rest)) (suc n) :=
+  λ (flag : Bool) → λ (+ p : PredProg) → λ (rest : VersionSpace) →
+  λ (n : Nat) → λ (h : Le (vlength rest) n) →
+    match flag motive (λ (b : Bool) → Le (vlength (vsplice b p rest)) (suc n))
+      | true => h
+      | false => le-suc (vlength rest) n h
+
+-- refine never grows the version space.
+def vs-shrinks : evidence Π (+ ob : PredObs) → Π (vs : VersionSpace) →
+                          Le (vlength (refine ob vs)) (vlength vs) :=
+  λ (+ ob : PredObs) → λ (vs : VersionSpace) →
+    match vs motive (λ (ys : VersionSpace) → Le (vlength (refine ob ys)) (vlength ys))
+      | vnil => tt
+      | vcons p rest =>
+          splice-le (consistent p ob) p (refine ob rest) (vlength rest) (vs-shrinks ob rest)
+
+def cegis-bounded : evidence Π (obs : Obs) → Π (+ vs : VersionSpace) →
+                             Le (vlength (refine-all vs obs)) (vlength vs) :=
+  λ (obs : Obs) → λ (+ vs : VersionSpace) →
+    match obs motive (λ (os : Obs) → Le (vlength (refine-all vs os)) (vlength vs))
+      | onil => le-refl (vlength vs)
+      | ocons ob rest =>
+          le-trans (vlength (refine-all (refine ob vs) rest)) (vlength (refine ob vs)) (vlength vs)
+            (cegis-bounded rest (refine ob vs)) (vs-shrinks ob vs)
+
+-- A program that matches is not dropped from the head of the space.
+def kept : evidence Π (+ ob : PredObs) → Π (+ p : PredProg) → Π (rest : VersionSpace) →
+                    Π (h : {consistent p ob ≡ true : Bool}) →
+                    {refine ob (vcons p rest) ≡ vcons p (refine ob rest) : VersionSpace} :=
+  λ (+ ob : PredObs) → λ (+ p : PredProg) → λ (rest : VersionSpace) →
+  λ (h : {consistent p ob ≡ true : Bool}) →
+    rewrite h motive (λ z → {vsplice z p (refine ob rest) ≡ vcons p (refine ob rest) : VersionSpace}) in
+    refl
+
+def correct-kept : evidence Π (+ p : PredProg) → Π (+ c : Carrier) → Π (b : Bool) →
+                            Π (rest : VersionSpace) → Π (h : {eval p c ≡ b : Bool}) →
+                            {refine (observe c b) (vcons p rest) ≡ vcons p (refine (observe c b) rest) : VersionSpace} :=
+  λ (+ p : PredProg) → λ (+ c : Carrier) → λ (b : Bool) → λ (rest : VersionSpace) →
+  λ (h : {eval p c ≡ b : Bool}) →
+    kept (observe c b) p rest (consistent-correct p c b h)
+
+def InSpace : spec Π (p : PredProg) → Π (vs : VersionSpace) → Type :=
+  λ (p : PredProg) → λ (vs : VersionSpace) →
+    match vs motive (λ _ → Type)
+      | vnil => Empty
+      | vcons q rest => Or {p ≡ q : PredProg} (InSpace p rest)
+
+def InObs : spec Π (ob : PredObs) → Π (obs : Obs) → Type :=
+  λ (ob : PredObs) → λ (obs : Obs) →
+    match obs motive (λ _ → Type)
+      | onil => Empty
+      | ocons x rest => Or {ob ≡ x : PredObs} (InObs ob rest)
+
+def ConsistAll : spec Π (p : PredProg) → Π (obs : Obs) → Type :=
+  λ (p : PredProg) → λ (obs : Obs) →
+    match obs motive (λ _ → Type)
+      | onil => Unit
+      | ocons ob rest => {consistent p ob ≡ true : Bool} × ConsistAll p rest
+
+-- Membership in the refined space yields the consistency bit and
+-- membership in the space that was refined.
+def sound-and-subset : evidence Π (+ ob : PredObs) → Π (vs : VersionSpace) → Π (+ p : PredProg) →
+                                Π (mem : InSpace p (refine ob vs)) →
+                                {consistent p ob ≡ true : Bool} × InSpace p vs :=
+  λ (+ ob : PredObs) → λ (vs : VersionSpace) → λ (+ p : PredProg) →
+  λ (mem : InSpace p (refine ob vs)) →
+    (match vs motive (λ (ys : VersionSpace) → Π (m : InSpace p (refine ob ys)) → {consistent p ob ≡ true : Bool} × InSpace p ys)
+      | vnil => λ (m : Empty) →
+          matchEmpty m motive (λ _ → {consistent p ob ≡ true : Bool} × InSpace p vnil)
+      | vcons q rest => λ (m : InSpace p (vsplice (consistent q ob) q (refine ob rest))) →
+          (match (consistent q ob) motive (λ (flag : Bool) → {consistent q ob ≡ flag : Bool} → InSpace p (vsplice flag q (refine ob rest)) → {consistent p ob ≡ true : Bool} × InSpace p (vcons q rest))
+            | true => λ (e : {consistent q ob ≡ true : Bool}) →
+                λ (m2 : InSpace p (vcons q (refine ob rest))) →
+                  (match m2 motive (λ _ → {consistent p ob ≡ true : Bool} × InSpace p (vcons q rest))
+                    | inl eq =>
+                        rewrite eq motive (λ z → {consistent z ob ≡ true : Bool} × InSpace z (vcons q rest)) in
+                        (e, inl refl)
+                    | inr m3 =>
+                        let (bit, inRest) = sound-and-subset ob rest p m3 in
+                        (bit, inr inRest))
+            | false => λ (_ : {consistent q ob ≡ false : Bool}) →
+                λ (m2 : InSpace p (refine ob rest)) →
+                  let (bit, inRest) = sound-and-subset ob rest p m2 in
+                  (bit, inr inRest)) refl m) mem
+
+def survivors-and : evidence Π (obs : Obs) → Π (vs : VersionSpace) → Π (+ p : PredProg) →
+                             Π (mem : InSpace p (refine-all vs obs)) →
+                             ConsistAll p obs × InSpace p vs :=
+  λ (obs : Obs) → λ (vs : VersionSpace) → λ (+ p : PredProg) →
+  λ (mem : InSpace p (refine-all vs obs)) →
+    (match obs motive (λ (os : Obs) → Π (m : InSpace p (refine-all vs os)) → ConsistAll p os × InSpace p vs)
+      | onil => λ (m : InSpace p vs) → (tt, m)
+      | ocons ob rest => λ (m : InSpace p (refine-all (refine ob vs) rest)) →
+          let (more, here) = survivors-and rest (refine ob vs) p m in
+          let (bit, orig) = sound-and-subset ob vs p here in
+          ((bit, more), orig)) mem
+
+-- Every survivor of the loop agrees with every observation it saw.
+def cegis-survivors-consistent : evidence Π (obs : Obs) → Π (vs : VersionSpace) → Π (+ p : PredProg) →
+                                          Π (mem : InSpace p (refine-all vs obs)) →
+                                          ConsistAll p obs :=
+  λ (obs : Obs) → λ (vs : VersionSpace) → λ (+ p : PredProg) →
+  λ (mem : InSpace p (refine-all vs obs)) →
+    let (all, kept) = survivors-and obs vs p mem in all
+
+-- The two flags of one program. The goal mentions the flags, so each
+-- branch sees a constructor and both splices reduce.
+def comm-flags : evidence Π (+ ob1 : PredObs) → Π (+ ob2 : PredObs) → Π (+ p : PredProg) →
+                          Π (rest : VersionSpace) → Π (f1 : Bool) → Π (f2 : Bool) →
+                          Π (e1 : {consistent p ob1 ≡ f1 : Bool}) →
+                          Π (e2 : {consistent p ob2 ≡ f2 : Bool}) →
+                          Π (ih : {refine ob1 (refine ob2 rest) ≡ refine ob2 (refine ob1 rest) : VersionSpace}) →
+                          {refine ob1 (vsplice f2 p (refine ob2 rest)) ≡ refine ob2 (vsplice f1 p (refine ob1 rest)) : VersionSpace} :=
+  λ (+ ob1 : PredObs) → λ (+ ob2 : PredObs) → λ (+ p : PredProg) → λ (rest : VersionSpace) →
+  λ (f1 : Bool) → λ (f2 : Bool) →
+  λ (e1 : {consistent p ob1 ≡ f1 : Bool}) → λ (e2 : {consistent p ob2 ≡ f2 : Bool}) →
+  λ (ih : {refine ob1 (refine ob2 rest) ≡ refine ob2 (refine ob1 rest) : VersionSpace}) →
+    (match f1 motive (λ (a : Bool) → {f1 ≡ a : Bool} → {refine ob1 (vsplice f2 p (refine ob2 rest)) ≡ refine ob2 (vsplice a p (refine ob1 rest)) : VersionSpace})
+      | true => λ (ea : {f1 ≡ true : Bool}) →
+          (match f2 motive (λ (b : Bool) → {f2 ≡ b : Bool} → {refine ob1 (vsplice b p (refine ob2 rest)) ≡ refine ob2 (vsplice true p (refine ob1 rest)) : VersionSpace})
+            | true => λ (eb : {f2 ≡ true : Bool}) →
+                rewrite (eq-trans Bool (consistent p ob1) f1 true e1 ea)
+                  motive (λ z → {vsplice z p (refine ob1 (refine ob2 rest)) ≡ vsplice (consistent p ob2) p (refine ob2 (refine ob1 rest)) : VersionSpace}) in
+                rewrite (eq-trans Bool (consistent p ob2) f2 true e2 eb)
+                  motive (λ z → {vcons p (refine ob1 (refine ob2 rest)) ≡ vsplice z p (refine ob2 (refine ob1 rest)) : VersionSpace}) in
+                rewrite ih motive (λ w → {vcons p w ≡ vcons p (refine ob2 (refine ob1 rest)) : VersionSpace}) in
+                refl
+            | false => λ (eb : {f2 ≡ false : Bool}) →
+                rewrite (eq-trans Bool (consistent p ob2) f2 false e2 eb)
+                  motive (λ z → {refine ob1 (refine ob2 rest) ≡ vsplice z p (refine ob2 (refine ob1 rest)) : VersionSpace}) in
+                ih) refl
+      | false => λ (ea : {f1 ≡ false : Bool}) →
+          (match f2 motive (λ (b : Bool) → {f2 ≡ b : Bool} → {refine ob1 (vsplice b p (refine ob2 rest)) ≡ refine ob2 (vsplice false p (refine ob1 rest)) : VersionSpace})
+            | true => λ (eb : {f2 ≡ true : Bool}) →
+                rewrite (eq-trans Bool (consistent p ob1) f1 false e1 ea)
+                  motive (λ z → {vsplice z p (refine ob1 (refine ob2 rest)) ≡ refine ob2 (refine ob1 rest) : VersionSpace}) in
+                ih
+            | false => λ (_ : {f2 ≡ false : Bool}) → ih) refl) refl
+
+def refine-commutes : evidence Π (+ ob1 : PredObs) → Π (+ ob2 : PredObs) → Π (vs : VersionSpace) →
+                               {refine ob1 (refine ob2 vs) ≡ refine ob2 (refine ob1 vs) : VersionSpace} :=
+  λ (+ ob1 : PredObs) → λ (+ ob2 : PredObs) → λ (vs : VersionSpace) →
+    match vs motive (λ (ys : VersionSpace) → {refine ob1 (refine ob2 ys) ≡ refine ob2 (refine ob1 ys) : VersionSpace})
+      | vnil => refl
+      | vcons p rest =>
+          (match (consistent p ob1) motive (λ (f1 : Bool) → {consistent p ob1 ≡ f1 : Bool} → {refine ob1 (vsplice (consistent p ob2) p (refine ob2 rest)) ≡ refine ob2 (vsplice f1 p (refine ob1 rest)) : VersionSpace})
+            | true => λ (e1 : {consistent p ob1 ≡ true : Bool}) →
+                (match (consistent p ob2) motive (λ (f2 : Bool) → {consistent p ob2 ≡ f2 : Bool} → {refine ob1 (vsplice f2 p (refine ob2 rest)) ≡ refine ob2 (vsplice true p (refine ob1 rest)) : VersionSpace})
+                  | true => λ (e2 : {consistent p ob2 ≡ true : Bool}) →
+                      comm-flags ob1 ob2 p rest true true e1 e2 (refine-commutes ob1 ob2 rest)
+                  | false => λ (e2 : {consistent p ob2 ≡ false : Bool}) →
+                      comm-flags ob1 ob2 p rest true false e1 e2 (refine-commutes ob1 ob2 rest)) refl
+            | false => λ (e1 : {consistent p ob1 ≡ false : Bool}) →
+                (match (consistent p ob2) motive (λ (f2 : Bool) → {consistent p ob2 ≡ f2 : Bool} → {refine ob1 (vsplice f2 p (refine ob2 rest)) ≡ refine ob2 (vsplice false p (refine ob1 rest)) : VersionSpace})
+                  | true => λ (e2 : {consistent p ob2 ≡ true : Bool}) →
+                      comm-flags ob1 ob2 p rest false true e1 e2 (refine-commutes ob1 ob2 rest)
+                  | false => λ (e2 : {consistent p ob2 ≡ false : Bool}) →
+                      comm-flags ob1 ob2 p rest false false e1 e2 (refine-commutes ob1 ob2 rest)) refl) refl
+
+def refine-all-cong : evidence Π (obs : Obs) → Π (a : VersionSpace) → Π (b : VersionSpace) →
+                               Π (e : {a ≡ b : VersionSpace}) →
+                               {refine-all a obs ≡ refine-all b obs : VersionSpace} :=
+  λ (obs : Obs) → λ (a : VersionSpace) → λ (b : VersionSpace) →
+  λ (e : {a ≡ b : VersionSpace}) →
+    rewrite e motive (λ z → {refine-all z obs ≡ refine-all b obs : VersionSpace}) in refl
+
+def refine-loop-comm : evidence Π (+ ob : PredObs) → Π (obs : Obs) → Π (+ vs : VersionSpace) →
+                                {refine ob (refine-all vs obs) ≡ refine-all (refine ob vs) obs : VersionSpace} :=
+  λ (+ ob : PredObs) → λ (obs : Obs) → λ (+ vs : VersionSpace) →
+    match obs motive (λ (os : Obs) → {refine ob (refine-all vs os) ≡ refine-all (refine ob vs) os : VersionSpace})
+      | onil => refl
+      | ocons x rest =>
+          rewrite (sym VersionSpace (refine ob (refine x vs)) (refine x (refine ob vs)) (refine-commutes ob x vs))
+            motive (λ z → {refine ob (refine-all (refine x vs) rest) ≡ refine-all z rest : VersionSpace}) in
+          refine-loop-comm ob rest (refine x vs)
+
+-- Filtering by an observation that is already in the list does nothing.
+def replay-one : evidence Π (+ ob : PredObs) → Π (vs : VersionSpace) →
+                          {refine ob (refine ob vs) ≡ refine ob vs : VersionSpace} :=
+  λ (+ ob : PredObs) → λ (vs : VersionSpace) →
+    match vs motive (λ (ys : VersionSpace) → {refine ob (refine ob ys) ≡ refine ob ys : VersionSpace})
+      | vnil => refl
+      | vcons p rest =>
+          (match (consistent p ob) motive (λ (flag : Bool) → {consistent p ob ≡ flag : Bool} → {refine ob (vsplice flag p (refine ob rest)) ≡ vsplice flag p (refine ob rest) : VersionSpace})
+            | true => λ (e : {consistent p ob ≡ true : Bool}) →
+                rewrite e motive (λ z → {vsplice z p (refine ob (refine ob rest)) ≡ vcons p (refine ob rest) : VersionSpace}) in
+                rewrite (replay-one ob rest) motive (λ w → {vcons p w ≡ vcons p (refine ob rest) : VersionSpace}) in
+                refl
+            | false => λ (_ : {consistent p ob ≡ false : Bool}) → replay-one ob rest) refl
+
+def replay-redundant : evidence Π (+ ob : PredObs) → Π (obs : Obs) → Π (+ vs : VersionSpace) →
+                                Π (i : InObs ob obs) →
+                                {refine ob (refine-all vs obs) ≡ refine-all vs obs : VersionSpace} :=
+  λ (+ ob : PredObs) → λ (obs : Obs) → λ (+ vs : VersionSpace) → λ (i : InObs ob obs) →
+    (match obs motive (λ (os : Obs) → Π (m : InObs ob os) → {refine ob (refine-all vs os) ≡ refine-all vs os : VersionSpace})
+      | onil => λ (m : Empty) →
+          matchEmpty m motive (λ _ → {refine ob vs ≡ vs : VersionSpace})
+      | ocons x rest => λ (m : Or {ob ≡ x : PredObs} (InObs ob rest)) →
+          (match m motive (λ _ → {refine ob (refine-all (refine x vs) rest) ≡ refine-all (refine x vs) rest : VersionSpace})
+            | inl eq =>
+                eq-trans VersionSpace
+                  (refine ob (refine-all (refine x vs) rest))
+                  (refine-all (refine ob (refine x vs)) rest)
+                  (refine-all (refine x vs) rest)
+                  (refine-loop-comm ob rest (refine x vs))
+                  (refine-all-cong rest (refine ob (refine x vs)) (refine x vs)
+                    (rewrite eq motive (λ z → {refine z (refine x vs) ≡ refine x vs : VersionSpace}) in
+                      replay-one x vs))
+            | inr i2 => replay-redundant ob rest (refine x vs) i2)) i
+
+-- Representatives. Each carrier is reusable: the observation reads it
+-- once for the point and once for the oracle bit.
+data Reps : Type where
+  rnil  : Reps
+  rcons : Π (+ r : Carrier) → Reps → Reps
+
+data InReps : Carrier → Reps → Type where
+  here  : Π (+ r : Carrier) → Π (rest : Reps) → InReps r (rcons r rest)
+  there : Π (+ r : Carrier) → Π (+ s : Carrier) → Π (rest : Reps) →
+          InReps r rest → InReps r (rcons s rest)
+
+def obs-of : run Π (+ target : Carrier → Bool) → Π (reps : Reps) → Obs :=
+  λ (+ target : Carrier → Bool) → λ (reps : Reps) →
+    match reps motive (λ _ → Obs)
+      | rnil => onil
+      | rcons r rest => ocons (observe r (target r)) (obs-of target rest)
+
+def FeatureRespects : spec Π (target : Carrier → Bool) → Type :=
+  λ (target : Carrier → Bool) →
+    Π (+ c1 : Carrier) → Π (+ c2 : Carrier) → Π (+ a : AllFeatAgree c1 c2) →
+      {target c1 ≡ target c2 : Bool}
+
+def Matches : spec Π (p : PredProg) → Π (target : Carrier → Bool) → Π (c : Carrier) → Type :=
+  λ (p : PredProg) → λ (target : Carrier → Bool) → λ (c : Carrier) →
+    {eval p c ≡ target c : Bool}
+
+def MatchesAll : spec Π (p : PredProg) → Π (target : Carrier → Bool) → Type :=
+  λ (p : PredProg) → λ (target : Carrier → Bool) →
+    Π (+ c : Carrier) → Matches p target c
+
+data CoverAt : Reps → Carrier → Type where
+  pick : Π (+ rs : Reps) → Π (+ x : Carrier) → Π (+ r : Carrier) →
+         Π (i : InReps r rs) → Π (+ a : AllFeatAgree r x) → CoverAt rs x
+
+def Covers : spec Π (reps : Reps) → Type :=
+  λ (reps : Reps) → Π (+ c : Carrier) → CoverAt reps c
+
+def rep-matches : evidence Π (+ target : Carrier → Bool) → Π (reps : Reps) → Π (+ p : PredProg) →
+                           Π (+ r : Carrier) → Π (i : InReps r reps) →
+                           Π (all : ConsistAll p (obs-of target reps)) →
+                           Matches p target r :=
+  λ (+ target : Carrier → Bool) → λ (reps : Reps) → λ (+ p : PredProg) →
+  λ (+ r : Carrier) → λ (i : InReps r reps) →
+  λ (all : ConsistAll p (obs-of target reps)) →
+    (match i motive (λ (c : Carrier) → λ (rs : Reps) → λ (_ : InReps c rs) → {r ≡ c : Carrier} → {reps ≡ rs : Reps} → Π (a : ConsistAll p (obs-of target reps)) → Matches p target c)
+      | here s rest => λ (_ : {r ≡ s : Carrier}) → λ (es : {reps ≡ rcons s rest : Reps}) →
+          λ (a0 : ConsistAll p (obs-of target reps)) →
+            let (bit, skip) = (rewrite (sym Reps reps (rcons s rest) es) motive (λ z → ConsistAll p (obs-of target z)) in a0) in
+            eq-bool-sound (eval p s) (target s) bit
+      | there s t rest j => λ (_ : {r ≡ s : Carrier}) → λ (es : {reps ≡ rcons t rest : Reps}) →
+          λ (a0 : ConsistAll p (obs-of target reps)) →
+            let (bit, more) = (rewrite (sym Reps reps (rcons t rest) es) motive (λ z → ConsistAll p (obs-of target z)) in a0) in
+            rep-matches target rest p s j more) refl refl all
+
+def match-propagates : evidence Π (p : PredProg) → Π (+ target : Carrier → Bool) →
+                                Π (+ c1 : Carrier) → Π (+ c2 : Carrier) →
+                                Π (fe : FeatureEquiv p c1 c2) →
+                                Π (m : Matches p target c1) →
+                                Π (r : {target c1 ≡ target c2 : Bool}) →
+                                Matches p target c2 :=
+  λ (p : PredProg) → λ (+ target : Carrier → Bool) →
+  λ (+ c1 : Carrier) → λ (+ c2 : Carrier) →
+  λ (fe : FeatureEquiv p c1 c2) →
+  λ (m : Matches p target c1) →
+  λ (r : {target c1 ≡ target c2 : Bool}) →
+    eq-trans Bool (eval p c2) (eval p c1) (target c2)
+      (sym Bool (eval p c1) (eval p c2) (propagation p c1 c2 fe))
+      (eq-trans Bool (eval p c1) (target c1) (target c2) m r)
+
+-- One representative observation per cover element is enough.
+def sufficient-cegis : evidence Π (+ target : Carrier → Bool) → Π (+ reps : Reps) →
+                                Π (respects : FeatureRespects target) → Π (covers : Covers reps) →
+                                Π (vs : VersionSpace) → Π (+ p : PredProg) →
+                                Π (mem : InSpace p (refine-all vs (obs-of target reps))) →
+                                MatchesAll p target :=
+  λ (+ target : Carrier → Bool) → λ (+ reps : Reps) →
+  λ (respects : FeatureRespects target) → λ (covers : Covers reps) →
+  λ (vs : VersionSpace) → λ (+ p : PredProg) →
+  λ (mem : InSpace p (refine-all vs (obs-of target reps))) →
+    λ (+ c : Carrier) →
+      (match (covers c) motive (λ (rs : Reps) → λ (x : Carrier) → λ (_ : CoverAt rs x) → {reps ≡ rs : Reps} → Matches p target x)
+        | pick rs0 x r i agree =>
+            λ (ers : {reps ≡ rs0 : Reps}) →
+              match-propagates p target r x
+                (all-agree-feat-equiv r x agree p)
+                (rep-matches target rs0 p r i
+                  (cegis-survivors-consistent (obs-of target rs0) vs p
+                    (rewrite (sym Reps reps rs0 ers)
+                      motive (λ z → InSpace p (refine-all vs (obs-of target z))) in
+                      mem)))
+                (respects r x agree)) refl

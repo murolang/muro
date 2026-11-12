@@ -2870,6 +2870,28 @@ defmodule Muro.CheckTest do
     assert Muro.check_file("examples/cshrl/envs/optimal.muro") == :ok
   end
 
+  test "the predicate-program theory checks, and its evidence is erased" do
+    assert {:error, msg} = Muro.check_file("examples/cshrl/lib/synth.muro")
+    assert msg =~ "is supplied by a file that imports this one"
+
+    path = "examples/cshrl/envs/synth_bit.muro"
+    assert Muro.check_file(path) == :ok
+    assert {:ok, src} = Muro.emit_file(path, Module.concat(Muro, "CshrlSynth"))
+    refute src =~ "sufficient-cegis"
+    refute src =~ "propagation"
+    refute src =~ "vs-shrinks"
+    refute src =~ "CoindHomo"
+    Code.eval_string(src)
+
+    assert call("CshrlSynth", :eval, [:truep, :on]) == true
+    assert call("CshrlSynth", :eval, [:falsep, :off]) == false
+    assert call("CshrlSynth", :eval, [{:notp, :truep}, :on]) == false
+
+    programs = call("CshrlSynth", :programs, [])
+    seen = call("CshrlSynth", :seen, [])
+    assert call("CshrlSynth", :refine, [seen, programs]) == {:vcons, :truep, :vnil}
+  end
+
   test "binary successor checks, and the bits of 11 step to the bits of 12" do
     assert Muro.check_file("lib/muro/std/suc_bin.muro") == :ok
     assert {:ok, src} = Muro.emit_file("lib/muro/std/suc_bin.muro", Muro.StdSucBin)
