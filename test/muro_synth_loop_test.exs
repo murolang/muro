@@ -382,7 +382,417 @@ defmodule Muro.SynthLoopTest do
     assert decoded["cex"] == []
   end
 
+  test "three actions stay silent when the losers are incomparable" do
+    dir = tmp()
+    path = Path.join(dir, "dom.muro")
+
+    File.write!(path, """
+    import "std:bool.muro"
+    import "std:list.muro"
+
+    data State : Type where
+      s : State
+
+    data Reward : Type where
+      rt : Reward
+      rp : Reward
+      rq : Reward
+
+    data Action : Type where
+      top : Action
+      p : Action
+      q : Action
+
+    def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+      λ (s : State) → λ (a : Action) →
+        match a motive (λ _ → State × Reward)
+          | top => (s, rt)
+          | p => (s, rp)
+          | q => (s, rq)
+
+    def all-actions : run List Action := cons top (cons p (cons q nil))
+    def default-action : run Action := q
+    def horizon : run Nat := 0
+    def all-states : run List State := cons s nil
+
+    def leb : run Π (m : Reward) → Π (n : Reward) → Bool :=
+      λ (m : Reward) → λ (n : Reward) →
+        match m motive (λ _ → Bool)
+          | rt =>
+              (match n motive (λ _ → Bool) | rt => true | rp => false | rq => false)
+          | rp =>
+              (match n motive (λ _ → Bool) | rt => true | rp => true | rq => false)
+          | rq =>
+              (match n motive (λ _ → Bool) | rt => true | rp => false | rq => true)
+    """)
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+    assert result.status == :silent
+    assert result.program == nil
+    assert result.book == nil
+    text = joined(result)
+    assert text =~ "oracle cannot label"
+    assert text =~ "pair p q"
+  end
+
+  test "an output path created after the existence check is refused" do
+    dir = tmp()
+    out = Path.join(dir, "out.muro")
+    refute File.exists?(out)
+
+    assert {:exit, 2, "", [message]} =
+             Muro.CLI.Synth.run([prefer_go(dir), "--depth", "0", "--out", out],
+               before_write: fn path -> File.write!(path, "raced\n") end
+             )
+
+    assert message == "#{out} already exists"
+    assert File.read!(out) == "raced\n"
+  end
+
+  test "an environment that already declares the evaluator synthesizes" do
+    dir = tmp()
+    path = Path.join(dir, "env.muro")
+
+    File.write!(
+      path,
+      prefer_src() <> "\n" <> feature_src() <> "\n" <> Muro.Synth.Book.evaluator()
+    )
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert result.program == true
+    refute result.book =~ "data PredProg"
+    refute result.book =~ "def andb "
+    refute result.book =~ "def eval :"
+  end
+
+  test "a generated policy book can be synthesized again" do
+    dir = tmp()
+    env = Path.join(dir, "env.muro")
+    File.write!(env, prefer_src())
+
+    assert {:ok, first} = Muro.Synth.cegis_loop(env, depth: 0, max_depth: 0)
+    assert first.status == :policy
+    policy = Path.join(dir, "policy.muro")
+    File.write!(policy, first.book)
+
+    assert {:ok, second} = Muro.Synth.cegis_loop(policy, depth: 0, max_depth: 0)
+    assert second.status == :policy
+    assert second.book =~ "def survivor-2 "
+    assert second.book =~ "def policy-2 "
+    assert second.book =~ "def hold-s-2 "
+    refute second.book =~ "data PredProg"
+  end
+
+  test "a later obligation's bit does not drop the candidate" do
+    calls = :counters.new(1, [:atomics])
+
+    checker = fn path, _fuel ->
+      :counters.add(calls, 1, 1)
+
+      if :counters.get(calls, 1) == 1 do
+        {:error,
+         """
+         #{path}:1:1: hold-s body: out of fuel (the checker gave up reducing; raise the fuel)
+
+         #{path}:2:1: hold-t body: cannot convert false ≁ true
+         """}
+      else
+        :ok
+      end
+    end
+
+    assert {:ok, result} =
+             Muro.Synth.cegis_loop(two_hot(tmp()),
+               depth: 0,
+               max_depth: 0,
+               checker: checker,
+               max_rounds: 4
+             )
+
+    assert :counters.get(calls, 1) == 1
+    assert result.status == :residual
+    [cex] = result.cex
+    assert cex.carrier == "s"
+    assert cex.predicted == nil
+    assert cex.oracle == true
+  end
+
+  test "the next depth is fitted after the last survivor is refused" do
+    calls = :counters.new(1, [:atomics])
+
+    checker = fn path, _fuel ->
+      :counters.add(calls, 1, 1)
+      src = File.read!(path)
+
+      if String.contains?(src, "def survivor : run PredProg := truep") do
+        {:error, "#{path}:1:1: hold-s body: cannot convert false ≁ true"}
+      else
+        :ok
+      end
+    end
+
+    assert {:ok, result} =
+             Muro.Synth.cegis_loop(prefer_go(tmp()),
+               depth: 0,
+               max_depth: 1,
+               checker: checker,
+               max_rounds: 2
+             )
+
+    assert :counters.get(calls, 1) == 2
+    assert result.status == :policy
+    assert result.program == {:not, false}
+    assert result.book =~ "def survivor : run PredProg := (notp falsep)"
+    refute result.book =~ "def survivor : run PredProg := truep"
+  end
+
+  test "an internal or erased callback is an environment refusal" do
+    dir = tmp()
+
+    internal =
+      host_book(dir, "internal.muro", """
+      def step : run internal Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+      def all-actions : run List Action := cons a (cons b nil)
+      def horizon : run Nat := 0
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, msg} = Muro.Synth.Host.open(internal)
+    assert msg =~ "step is run internal"
+    assert {:exit, 2, "", lines} = Muro.CLI.Synth.run([internal])
+    assert Enum.join(lines, "\n") =~ "step is run internal"
+
+    erased =
+      host_book(dir, "erased.muro", """
+      def step : run Π (- s : State) → Π (a : Action) → State × Nat :=
+        λ (- _ : State) → λ (_ : Action) → (s, 0)
+      def all-actions : run List Action := cons a (cons b nil)
+      def horizon : run Nat := 0
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, erased_msg} = Muro.Synth.Host.open(erased)
+    assert erased_msg =~ "erased argument"
+    assert {:exit, 2, "", erased_lines} = Muro.CLI.Synth.run([erased])
+    assert Enum.join(erased_lines, "\n") =~ "erased argument"
+
+    actions =
+      host_book(dir, "actions.muro", """
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+      def all-actions : run internal List Action := cons a (cons b nil)
+      def horizon : run Nat := 0
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, actions_msg} = Muro.Synth.Host.open(actions)
+    assert actions_msg =~ "all-actions is run internal"
+
+    leb =
+      host_book(dir, "leb.muro", """
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+      def all-actions : run List Action := cons a (cons b nil)
+      def horizon : run Nat := 0
+      def leb : run Π (- m : Nat) → Π (n : Nat) → Bool :=
+        λ (- _ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, leb_msg} = Muro.Synth.Host.open(leb)
+    assert leb_msg =~ "leb takes an erased argument"
+
+    hidden =
+      host_book(dir, "default.muro", """
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+      def all-actions : run List Action := cons a (cons b nil)
+      def default-action : run internal Action := a
+      def horizon : run Nat := 0
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, hidden_msg} = Muro.Synth.Host.open(hidden)
+    assert hidden_msg =~ "default-action is run internal"
+
+    feat =
+      host_book(dir, "feat.muro", """
+      def Carrier : spec Type := State
+      data Feature : Type where
+        hot : Feature
+      def eval-feature : run internal Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
+        λ (+ _ : Feature) → λ (+ _ : Carrier) → true
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+      def all-actions : run List Action := cons a (cons b nil)
+      def horizon : run Nat := 0
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, feat_msg} = Muro.Synth.Host.open(feat)
+    assert feat_msg =~ "eval-feature is run internal"
+  end
+
+  test "a Carrier that does not convert to State is refused" do
+    dir = tmp()
+
+    plain =
+      host_book(dir, "carrier.muro", """
+      def Carrier : spec Type := Nat
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+      def all-actions : run List Action := cons a (cons b nil)
+      def horizon : run Nat := 0
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, msg} = Muro.Synth.Host.open(plain)
+    assert msg =~ "Carrier must convert to State"
+    assert {:exit, 2, "", lines} = Muro.CLI.Synth.run([plain])
+    assert Enum.join(lines, "\n") =~ "Carrier must convert to State"
+
+    featured =
+      host_book(dir, "carrier-feat.muro", """
+      def Carrier : spec Type := Nat
+      data Feature : Type where
+        hot : Feature
+      def eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
+        λ (+ _ : Feature) → λ (+ c : Carrier) →
+          match c motive (λ _ → Bool)
+            | 0 => true
+            | suc _ => false
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+      def all-actions : run List Action := cons a (cons b nil)
+      def horizon : run Nat := 0
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, feat_msg} = Muro.Synth.Host.open(featured)
+    assert feat_msg =~ "Carrier must convert to State"
+  end
+
   defp joined(result), do: Enum.join(result.lines, "\n")
+
+  defp prefer_go(dir), do: write_book(dir, "prefer.muro", prefer_src())
+
+  defp two_hot(dir), do: write_book(dir, "hot.muro", two_hot_src())
+
+  defp write_book(dir, name, src) do
+    path = Path.join(dir, name)
+    File.write!(path, src)
+    path
+  end
+
+  defp host_book(dir, name, body) do
+    write_book(dir, name, """
+    import "std:bool.muro"
+    import "std:list.muro"
+
+    data State : Type where
+      s : State
+
+    data Action : Type where
+      a : Action
+      b : Action
+
+    #{body}
+    """)
+  end
+
+  defp prefer_src do
+    """
+    import "std:bool.muro"
+    import "std:list.muro"
+
+    data State : Type where
+      s : State
+
+    data Action : Type where
+      go : Action
+      stay : Action
+
+    def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+      λ (s : State) → λ (a : Action) →
+        match a motive (λ _ → State × Nat)
+          | go => (s, suc 0)
+          | stay => (s, 0)
+
+    def all-actions : run List Action := cons go (cons stay nil)
+    def default-action : run Action := stay
+    def horizon : run Nat := 0
+    def all-states : run List State := cons s nil
+    #{leb_src()}
+    """
+  end
+
+  defp feature_src do
+    """
+    def Carrier : spec Type := State
+
+    data Feature : Type where
+      hot : Feature
+
+    def eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
+      λ (+ _ : Feature) → λ (+ _ : Carrier) → true
+    """
+  end
+
+  defp two_hot_src do
+    """
+    import "std:bool.muro"
+    import "std:list.muro"
+
+    data State : Type where
+      s : State
+      t : State
+
+    data Action : Type where
+      go : Action
+      stay : Action
+
+    def Carrier : spec Type := State
+
+    data Feature : Type where
+      hot : Feature
+
+    def eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
+      λ (+ _ : Feature) → λ (+ _ : Carrier) → true
+
+    def step : run Π (x : State) → Π (a : Action) → State × Nat :=
+      λ (x : State) → λ (a : Action) →
+        match a motive (λ _ → State × Nat)
+          | go => (x, suc 0)
+          | stay => (x, 0)
+
+    def all-actions : run List Action := cons go (cons stay nil)
+    def default-action : run Action := stay
+    def horizon : run Nat := 0
+    def all-states : run List State := cons s (cons t nil)
+    #{leb_src()}
+    """
+  end
+
+  defp leb_src do
+    """
+    def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+      λ (m : Nat) → λ (n : Nat) →
+        match m motive (λ _ → Bool)
+          | 0 => true
+          | suc p =>
+              (match n motive (λ _ → Bool)
+                | 0 => false
+                | suc q => leb p q)
+    """
+  end
 
   defp tmp do
     path = Path.join(System.tmp_dir!(), "muro_synth_loop_#{System.unique_integer([:positive])}")

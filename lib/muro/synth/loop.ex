@@ -70,7 +70,7 @@ defmodule Muro.Synth.Loop do
         {:ok, insufficient(host, task, depth, feat, earlier, later, predicted, oracle)}
 
       :ok ->
-        case fit(host, spec.tasks, depth, max_depth, score, feat, []) do
+        case fit(host, spec.tasks, depth, max_depth, score, feat, [], %{}) do
           {:empty, versions, at} ->
             {:ok, empty(versions, at)}
 
@@ -87,23 +87,24 @@ defmodule Muro.Synth.Loop do
               anchor,
               checker,
               fuel,
+              %{},
               %{}
             )
         end
     end
   end
 
-  defp fit(_host, _tasks, depth, max_depth, _score, _feat, versions)
+  defp fit(_host, _tasks, depth, max_depth, _score, _feat, versions, _rejected)
        when depth > max_depth do
     {:empty, versions, depth - 1}
   end
 
-  defp fit(host, tasks, depth, max_depth, score, feat, versions) do
+  defp fit(host, tasks, depth, max_depth, score, feat, versions, rejected) do
     vs = Synth.enumerate(host.features, depth)
 
-    case fit_tasks(tasks, vs, score, feat) do
+    case fit_tasks(tasks, vs, score, feat, rejected) do
       {:empty, sizes} when depth < max_depth ->
-        fit(host, tasks, depth + 1, max_depth, score, feat, versions ++ sizes)
+        fit(host, tasks, depth + 1, max_depth, score, feat, versions ++ sizes, rejected)
 
       {:empty, sizes} ->
         {:empty, versions ++ sizes, depth}
@@ -113,17 +114,22 @@ defmodule Muro.Synth.Loop do
     end
   end
 
-  defp fit_tasks(tasks, vs, score, feat) do
+  defp fit_tasks(tasks, vs, score, feat, rejected) do
     initial = length(vs)
 
     Enum.reduce_while(tasks, {:ok, [], []}, fn task, {:ok, arms, sizes} ->
-      kept = Synth.refine_all(vs, task.observations, feat)
+      name = arm_name(task, length(tasks), length(arms))
+
+      kept =
+        vs
+        |> Synth.refine_all(task.observations, feat)
+        |> Enum.reject(&MapSet.member?(Map.get(rejected, name, MapSet.new()), &1))
 
       if kept == [] do
         {:halt, {:empty, [initial, 0]}}
       else
         arm = %{
-          name: arm_name(task, length(tasks), length(arms)),
+          name: name,
           pred: Synth.pick(kept, score),
           kept: kept,
           action: task.action,
@@ -151,7 +157,8 @@ defmodule Muro.Synth.Loop do
          anchor,
          checker,
          fuel,
-         seen
+         seen,
+         rejected
        ) do
     {:ok, source} = Book.render(host, arms, anchor)
 
@@ -173,6 +180,7 @@ defmodule Muro.Synth.Loop do
           checker,
           fuel,
           seen,
+          rejected,
           text
         )
     end
@@ -191,33 +199,23 @@ defmodule Muro.Synth.Loop do
          checker,
          fuel,
          seen,
+         rejected,
          text
        ) do
-    cex = Book.cex_from(text, Book.obligations(arms))
+    cex = Book.cex_from(text, Book.obligations(host, arms))
     fed = Map.get(seen, cex.carrier, 0) + 1
     cex = %{cex | fed: fed}
     seen = Map.put(seen, cex.carrier, fed)
 
-    arm = arm_for(arms, cex)
-
-    # The survivors were already filtered by the oracle bit. Refining by
-    # that bit again cannot shrink the space, so the first failure would
-    # be a residual at any round bound. A boolean from the checker is
-    # new: this candidate failed, and the next survivor is checked.
-    next =
-      if is_boolean(cex.predicted) do
-        Enum.reject(arm.kept, &(&1 == arm.pred))
-      else
-        arm.kept
-      end
-
+    arm = arm_for(host, arms, cex)
+    {next, rejected} = drop_failed(arm, cex, rejected)
     shrunk = length(next) < length(arm.kept)
 
     cond do
-      not shrunk or rounds <= 1 or next == [] ->
+      not shrunk or rounds <= 1 ->
         {:ok, residual(cex, versions)}
 
-      true ->
+      next != [] ->
         pred = Synth.pick(next, score)
         arm = %{arm | pred: pred, kept: next}
         arms = replace_arm(arms, arm)
@@ -234,24 +232,74 @@ defmodule Muro.Synth.Loop do
           anchor,
           checker,
           fuel,
-          seen
+          seen,
+          rejected
         )
+
+      depth < max_depth ->
+        # The checker removed every survivor at this depth. The next
+        # depth is still allowed. Observations stay, and the refused
+        # candidates stay out: enumeration there includes them.
+        case fit(host, tasks_of(arms), depth + 1, max_depth, score, feat, versions, rejected) do
+          {:empty, versions, _at} ->
+            {:ok, residual(cex, versions)}
+
+          {:ok, arms, versions, at} ->
+            certify(
+              host,
+              arms,
+              versions,
+              at,
+              max_depth,
+              rounds - 1,
+              score,
+              feat,
+              anchor,
+              checker,
+              fuel,
+              seen,
+              rejected
+            )
+        end
+
+      true ->
+        {:ok, residual(cex, versions)}
     end
+  end
+
+  # The oracle bit is already an observation, so filtering by it again
+  # cannot shrink the space. A boolean from the checker is new: this
+  # candidate failed. Remember it, including when it was the last one.
+  defp drop_failed(arm, cex, rejected) do
+    if is_boolean(cex.predicted) do
+      rejected =
+        Map.update(rejected, arm.name, MapSet.new([arm.pred]), &MapSet.put(&1, arm.pred))
+
+      {Enum.reject(arm.kept, &(&1 == arm.pred)), rejected}
+    else
+      {arm.kept, rejected}
+    end
+  end
+
+  defp tasks_of(arms) do
+    Enum.map(arms, fn arm ->
+      %{action: arm.action, else: arm.else, observations: arm.observations}
+    end)
   end
 
   defp replace_arm(arms, arm) do
     Enum.map(arms, fn old -> if old.name == arm.name, do: arm, else: old end)
   end
 
-  defp arm_for(arms, %{name: name}) when is_binary(name) do
+  defp arm_for(host, arms, %{name: name}) when is_binary(name) do
     Enum.find(arms, hd(arms), fn arm ->
       Enum.any?(arm.observations, fn {state, _bit} ->
-        Book.obligation_name(arm, state, length(arms)) == name
+        Book.hold_name(host, arms, arm, state) == name
       end)
     end)
   end
 
-  defp arm_for(arms, cex) do
+  defp arm_for(_host, arms, cex) do
     Enum.find(arms, hd(arms), fn arm ->
       Enum.any?(arm.observations, &(elem(&1, 0) == cex.carrier))
     end)

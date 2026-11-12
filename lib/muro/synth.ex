@@ -22,9 +22,12 @@ defmodule Muro.Synth do
   observations taken from the environment's emitted `step`, deepens
   while the space is empty and the depth bound allows it, and, when a
   check of the surviving program fails, drops that candidate and checks
-  the next one. The fuel bound and the round bound are operational. They
-  stop a loop that is not shrinking. They are not `sufficient-cegis`. A
-  sweep of one trajectory is not that theorem.
+  the next one. A candidate the checker refused is not selected again.
+  When the refusal removes every survivor and a greater depth is still
+  allowed, the search continues there. The fuel bound and the round
+  bound are operational. They stop a loop that is not shrinking. They
+  are not `sufficient-cegis`. A sweep of one trajectory is not that
+  theorem.
 
   `deepen/7` is the depth step. A miss at the current depth searches
   the next depth. `budget` is how many further deepenings follow that

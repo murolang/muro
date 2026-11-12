@@ -25,7 +25,7 @@ The book must already check. It defines `State`, `Action`, `step`, `all-actions`
 
 Features are ordinary definitions. There is no new keyword. `data Feature` names the tests, and `eval-feature` reads one test at a carrier. `Carrier` is that state type when the book defines it. A book that defines `Feature` and not `eval-feature` is refused. A book with no `Feature` has only the two constants in the version space. A state name is not a feature by being a constructor of `State`.
 
-Two actions are one predicate: prefer the first action of `all-actions`, else the second. More than two actions are one predicate per action, chained in `all-actions` order, and the last else is `default-action`. The report follows that chain. The default is the preferred action only when every arm is false. A name that exists with the wrong mode, or the wrong type, is not an environment. `step` is `Π (s : State) → Π (a : Action) → State × Reward`, `all-actions` is `List Action`, `horizon` is `Nat`, and `leb` compares that reward.
+Two actions are one predicate: prefer the first action of `all-actions`, else the second. More than two actions are one predicate per action, chained in `all-actions` order, and the last else is `default-action`. The report follows that chain. The default is the preferred action only when every arm is false. A name that exists with the wrong mode, or the wrong type, is not an environment. `step` is `Π (s : State) → Π (a : Action) → State × Reward`, `all-actions` is `List Action`, `horizon` is `Nat`, and `leb` compares that reward. Those definitions, and `all-states`, `default-action`, and `eval-feature` when the book defines them, are public `run` terms. `run internal` is refused. An argument the search passes is not erased. A `Carrier` the book defines converts to `State`.
 
 ## Oracles
 
@@ -33,7 +33,7 @@ Two actions are one predicate: prefer the first action of `all-actions`, else th
 
 `trace` compares Finder traces out to `horizon`. Prefer the first action when the second action's trace is below it, including when the two traces are equal. When the order compares neither of the first differing rewards with the other, the pair is not ranked.
 
-`successor` compares successor values, pointwise, on a finite prefix. `coind-homo` compares action values, pointwise, on the same kind of prefix. A first reward that is smaller does not make the rest of the stream smaller. A pair the oracle cannot order stops the run. The report names the carrier and the two actions. It does not invent a ranking.
+`successor` compares successor values, pointwise, on a finite prefix. `coind-homo` compares action values, pointwise, on the same kind of prefix. A first reward that is smaller does not make the rest of the stream smaller. A pair the oracle cannot order stops the run, including a pair of actions that both lose to a third. The report names the carrier and the two actions. It does not invent a ranking.
 
 ## The loop
 
@@ -48,11 +48,11 @@ def policy : run Π (+ s : State) → Action :=
     (match eval survivor s motive (λ _ → Action) | true => go | false => stay)
 ```
 
-The equations `hold-<state>` are the observations the survivor matched. They are evidence. The emitters erase them. The book does not case-split on the state names. `PredProg` and `eval` are compiled into the checker. They use the environment's `Bool`, `true`, and `false`. The policy book does not import a second `Bool` or `leb`.
+The equations `hold-<state>` are the observations the survivor matched. They are evidence. The emitters erase them. The book does not case-split on the state names. `PredProg` and `eval` are compiled into the checker. They use the environment's `Bool`, `true`, and `false`. The policy book does not import a second `Bool` or `leb`. An environment that already declares `PredProg`, `eval`, or the Boolean helpers, when those declarations have the types the policy uses, is left as written. A name the book already uses is given a fresh name. A policy book can be read again as an environment.
 
 The fuel bound and the round bound stop a search that is not shrinking. They are operational. They are not `sufficient-cegis`. A sweep of the cover is not that theorem.
 
-A failed check that produced a bit drops the candidate the checker refused and checks the next survivor. A check that produced no bit does not. After the round bound the report names the counterexample: the carrier, the bit the check produced or unknown, the bit the oracle required, and how many times that carrier was fed back.
+A failed check that produced a bit drops the candidate the checker refused and checks the next survivor. That candidate is not selected again. When the refusal removes every survivor and a greater depth is still allowed, the search continues there, with the same observations. A check that produced no bit does not drop a candidate and does not deepen. The bit is the one in that obligation's diagnostic. A later obligation does not supply it, and out of fuel stays unknown. After the round bound the report names the counterexample: the carrier, the bit the check produced or unknown, the bit the oracle required, and how many times that carrier was fed back.
 
 When two carriers on the cover agree on every feature and the oracle disagrees, no program in the version space can match both. The report names the two carriers. The depth is not raised in order to invent a feature.
 
@@ -62,7 +62,7 @@ When two carriers on the cover agree on every feature and the oracle disagrees, 
 | --- | --- |
 | `--oracle NAME` | `trace` (the default), `successor`, or `coind-homo`. |
 | `--depth N` | Initial predicate depth. Default 0. An empty space is searched one depth further. |
-| `--out out.muro` | Write the policy book here. The path must not already exist. Without this flag the book is printed on standard output and nothing is written. |
+| `--out out.muro` | Write the policy book here. The path must not already exist. A path that is present when the book is written is the same refusal, and the file is not replaced. Without this flag the book is printed on standard output and nothing is written. |
 | `--fuel N` | Fuel for the environment and for the policy book. Default `Muro.Check.default_fuel/0` (2000). `out of fuel` is not acceptance. |
 | `--json` | Print the report as one JSON object on standard error. The object records the version-space sizes and the counterexamples. It is not a certificate. |
 

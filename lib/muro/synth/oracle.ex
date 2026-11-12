@@ -75,12 +75,16 @@ defmodule Muro.Synth.Oracle do
     end)
   end
 
+  # A loss is not the end of the column. `top` can dominate both `p` and
+  # `q` while `p` and `q` are unordered. Stopping at the loss would emit
+  # a policy for a pair the oracle cannot label. `false` is the label so
+  # far; a later `:silent` still stops the run.
   defp beats_all?(action, others, state, label) do
-    Enum.reduce_while(others, true, fn other, true ->
+    Enum.reduce_while(others, true, fn other, acc ->
       case label.(action, other, state) do
         :silent -> {:halt, {:silent, state, other}}
-        false -> {:halt, false}
-        true -> {:cont, true}
+        false -> {:cont, false}
+        true -> {:cont, acc}
       end
     end)
   end

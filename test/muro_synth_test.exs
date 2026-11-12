@@ -247,6 +247,151 @@ defmodule Muro.SynthTest do
     assert {:ok, %{tasks: [%{observations: [{"s", true}]}]}} = ordered
   end
 
+  test "incomparable losers are not labelled after a dominance loss" do
+    step = fn
+      "s", "top" -> {"s", :top}
+      "s", "p" -> {"s", :p}
+      "s", "q" -> {"s", :q}
+    end
+
+    leb = fn
+      left, right when left == right -> true
+      :p, :top -> true
+      :q, :top -> true
+      _, _ -> false
+    end
+
+    assert {:silent, cex} = observe3(step, leb)
+    assert cex.carrier == "s"
+    assert cex.pair == {"p", "q"}
+    assert cex.reason =~ "incomparable"
+  end
+
+  test "a total order still labels an action that loses" do
+    step = fn
+      "s", "top" -> {"s", 3}
+      "s", "p" -> {"s", 2}
+      "s", "q" -> {"s", 1}
+    end
+
+    assert {:ok, %{tasks: tasks}} = observe3(step, fn left, right -> left <= right end)
+    bits = Map.new(tasks, &{&1.action, &1.observations})
+    assert bits["top"] == [{"s", true}]
+    assert bits["p"] == [{"s", false}]
+    assert bits["q"] == [{"s", false}]
+  end
+
+  test "an out-of-fuel obligation does not take another obligation's bit" do
+    obs = [
+      %{name: "hold-start", carrier: "start", oracle: true, pair: {"go", "stay"}},
+      %{name: "hold-goal", carrier: "goal", oracle: false, pair: {"go", "stay"}}
+    ]
+
+    fuel_first = """
+    book.muro:1:1: hold-start body: out of fuel (the checker gave up reducing; raise the fuel)
+
+    book.muro:2:1: hold-goal body: cannot convert false ≁ true
+    """
+
+    first = Muro.Synth.Book.cex_from(fuel_first, obs)
+    assert first.carrier == "start"
+    assert first.name == "hold-start"
+    assert first.oracle == true
+    assert first.predicted == nil
+
+    convert_first = """
+    book.muro:2:1: hold-goal body: cannot convert false ≁ true
+
+    book.muro:1:1: hold-start body: out of fuel (the checker gave up reducing; raise the fuel)
+    """
+
+    goal = Muro.Synth.Book.cex_from(convert_first, obs)
+    assert goal.carrier == "goal"
+    assert goal.name == "hold-goal"
+    assert goal.predicted == false
+    assert goal.oracle == false
+  end
+
+  test "concurrent checks in one anchor keep distinct books" do
+    dir = Path.join(System.tmp_dir!(), "muro_synth_conc_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    parent = self()
+
+    run = fn source ->
+      Task.async(fn ->
+        Muro.Synth.Book.check(source, dir, fn path ->
+          send(parent, {:path, path, File.read!(path)})
+          Process.sleep(200)
+          :ok
+        end)
+      end)
+    end
+
+    left = run.("alpha\n")
+    right = run.("beta\n")
+
+    seen =
+      for _ <- 1..2 do
+        assert_receive {:path, path, body}, 5_000
+        {path, body}
+      end
+
+    assert :ok = Task.await(left)
+    assert :ok = Task.await(right)
+    paths = Enum.map(seen, &elem(&1, 0))
+    assert length(Enum.uniq(paths)) == 2
+    assert Enum.sort(Enum.map(seen, &elem(&1, 1))) == ["alpha\n", "beta\n"]
+    assert Enum.all?(paths, &String.contains?(&1, System.pid()))
+    refute Enum.any?(paths, &File.exists?/1)
+  end
+
+  test "a temporary name that already exists is not overwritten" do
+    dir = Path.join(System.tmp_dir!(), "muro_synth_claim_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    taken = Path.join(dir, "taken.muro")
+    File.write!(taken, "keep\n")
+    attempts = :counters.new(1, [:atomics])
+
+    namer = fn _anchor ->
+      :counters.add(attempts, 1, 1)
+
+      if :counters.get(attempts, 1) == 1 do
+        "taken.muro"
+      else
+        "free.muro"
+      end
+    end
+
+    assert :ok =
+             Muro.Synth.Book.check(
+               "source\n",
+               dir,
+               fn path ->
+                 assert Path.basename(path) == "free.muro"
+                 assert File.read!(path) == "source\n"
+                 :ok
+               end,
+               namer
+             )
+
+    assert File.read!(taken) == "keep\n"
+    refute File.exists?(Path.join(dir, "free.muro"))
+    assert :counters.get(attempts, 1) >= 2
+
+    assert {:error, msg} =
+             Muro.Synth.Book.check(
+               "new\n",
+               dir,
+               fn _path -> flunk("checker ran") end,
+               fn _anchor ->
+                 "taken.muro"
+               end
+             )
+
+    assert msg =~ "temporary"
+    assert File.read!(taken) == "keep\n"
+  end
+
   test "sibling actions reuse the solved memo" do
     count = :counters.new(1, [:atomics])
 
@@ -265,6 +410,20 @@ defmodule Muro.SynthTest do
 
     assert {:ok, _} = Muro.Synth.Oracle.observe(host, "successor")
     assert :counters.get(count, 1) < 500
+  end
+
+  defp observe3(step, leb) do
+    host = %{
+      actions: ["top", "p", "q"],
+      default: "q",
+      states: ["s"],
+      all_states: ["s"],
+      horizon: 0,
+      step: step,
+      leb: leb
+    }
+
+    Muro.Synth.Oracle.observe(host, "trace")
   end
 
   defp observe(step, leb) do

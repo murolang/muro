@@ -35,7 +35,7 @@ defmodule Muro.CLI.Synth do
         value: "out.muro",
         default: "omitted. The book is printed on standard output",
         doc:
-          "Write the policy book to this path. The path must not already exist. Without it, the book is printed and nothing is written."
+          "Write the policy book to this path. The path must not already exist, including a path that appears before the write. Without it, the book is printed and nothing is written."
       },
       %{
         name: :fuel,
@@ -99,7 +99,7 @@ defmodule Muro.CLI.Synth do
   end
 
   @doc false
-  def run(args) do
+  def run(args, hooks \\ []) when is_list(args) and is_list(hooks) do
     {opts, paths, invalid} = OptionParser.parse(args, strict: switches())
 
     cond do
@@ -116,14 +116,14 @@ defmodule Muro.CLI.Synth do
         {:raise, "", "--depth must be a non-negative integer"}
 
       true ->
-        go(hd(paths), opts)
+        go(hd(paths), opts, hooks)
     end
   end
 
   defp depth_negative?(value) when is_integer(value), do: value < 0
   defp depth_negative?(_value), do: false
 
-  defp go(path, opts) do
+  defp go(path, opts, hooks) do
     out = Keyword.get(opts, :out)
     oracle = Keyword.get(opts, :oracle, "trace")
     depth = Keyword.get(opts, :depth, Muro.Synth.Loop.default_depth())
@@ -155,26 +155,60 @@ defmodule Muro.CLI.Synth do
             {:exit, 2, "", [message]}
 
           {:ok, result} ->
-            present(result, out, Keyword.get(opts, :json, false))
+            present(result, out, Keyword.get(opts, :json, false), hooks)
         end
     end
   end
 
-  defp present(result, out, json) do
+  defp present(result, out, json, hooks) do
     report = if json, do: [json(result)], else: result.lines
     book = result.book || ""
 
     cond do
       result.status == :policy and is_binary(out) ->
-        File.mkdir_p!(Path.dirname(out))
-        File.write!(out, book)
-        {:exit, 1, "", report}
+        case write_new(out, book, hooks) do
+          :ok ->
+            {:exit, 1, "", report}
+
+          {:error, :eexist} ->
+            {:exit, 2, "", ["#{out} already exists"]}
+
+          {:error, reason} ->
+            {:exit, 2, "", ["#{out}: #{inspect(reason)}"]}
+        end
 
       result.status == :policy ->
         {:exit, 1, book, report}
 
       true ->
         {:exit, 1, "", report}
+    end
+  end
+
+  # The existence check runs before the search. The open is the guarantee:
+  # a path created after that check is the same refusal, and it is not
+  # truncated. `before_write` lets a test create the path in between.
+  defp write_new(path, contents, hooks) do
+    File.mkdir_p!(Path.dirname(path))
+
+    case Keyword.get(hooks, :before_write) do
+      fun when is_function(fun, 1) -> fun.(path)
+      _ -> :ok
+    end
+
+    case File.open(path, [:write, :exclusive]) do
+      {:ok, io} ->
+        # The policy book is UTF-8. `IO.write` would refuse Π and λ.
+        try do
+          IO.binwrite(io, contents)
+        after
+          File.close(io)
+        end
+
+        :ok
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 

@@ -106,13 +106,18 @@ defmodule Muro.Synth.Host do
   # crashes in `decode_list`. The modes and the types are the contract
   # the search calls, and a mismatch is a usage error before any call.
   defp signatures(book) do
-    with {:ok, step} <- run_type(book, "step"),
+    with :ok <- carrier_state(book),
+         {:ok, step} <- public_run(book, "step"),
+         :ok <- no_erased(book, "step", step),
          {:ok, reward} <- step_reward(book, step),
-         {:ok, actions} <- run_type(book, "all-actions"),
+         {:ok, actions} <- public_run(book, "all-actions"),
+         :ok <- no_erased(book, "all-actions", actions),
          :ok <- list_of(book, actions, "Action", "all-actions must be run List Action"),
-         {:ok, horizon} <- run_type(book, "horizon"),
+         {:ok, horizon} <- public_run(book, "horizon"),
+         :ok <- no_erased(book, "horizon", horizon),
          :ok <- nat_type(book, horizon, "horizon must be run Nat"),
-         {:ok, leb} <- run_type(book, "leb"),
+         {:ok, leb} <- public_run(book, "leb"),
+         :ok <- no_erased(book, "leb", leb),
          :ok <- leb_type(book, leb, reward),
          :ok <- optional_list(book, "all-states", "State"),
          :ok <- optional_name(book, "default-action", "Action"),
@@ -121,11 +126,52 @@ defmodule Muro.Synth.Host do
     end
   end
 
-  defp run_type(book, name) do
+  # `run internal` emits `defp`. An erased argument is dropped from the
+  # Elixir arity. Either one makes the later `apply` raise instead of
+  # refusing the environment. Every definition the search calls is a
+  # public run, and every argument is passed.
+  defp public_run(book, name) do
     case Enum.find(book, &(Map.get(&1, :name) == name)) do
-      %{mode: :run, type: ty} -> {:ok, ty}
-      %{mode: mode} -> {:error, :usage, "#{name} is #{mode}; the environment requires run"}
-      _ -> {:error, :usage, "the book does not define #{name}"}
+      %{mode: :run, type: ty} = d ->
+        if Map.get(d, :export, true) do
+          {:ok, ty}
+        else
+          {:error, :usage, "#{name} is run internal; the environment requires a public run"}
+        end
+
+      %{mode: mode} ->
+        {:error, :usage, "#{name} is #{mode}; the environment requires run"}
+
+      %{kind: :data} ->
+        {:error, :usage, "#{name} is spec; the environment requires run"}
+
+      _ ->
+        {:error, :usage, "the book does not define #{name}"}
+    end
+  end
+
+  defp no_erased(book, name, ty) do
+    if erased_arg?(unfold(book, ty)) do
+      {:error, :usage, "#{name} takes an erased argument"}
+    else
+      :ok
+    end
+  end
+
+  defp erased_arg?({:pi, :erased, _, _, _}), do: true
+  defp erased_arg?({:pi, _, _, _, cod}), do: erased_arg?(cod)
+  defp erased_arg?(_ty), do: false
+
+  defp carrier_state(book) do
+    cond do
+      not named?(book, "Carrier") ->
+        :ok
+
+      same?(book, {:var, "Carrier"}, {:var, "State"}) ->
+        :ok
+
+      true ->
+        {:error, :usage, "Carrier must convert to State"}
     end
   end
 
@@ -170,30 +216,26 @@ defmodule Muro.Synth.Host do
   end
 
   defp optional_list(book, name, elem) do
-    case Enum.find(book, &(Map.get(&1, :name) == name)) do
-      nil ->
-        :ok
-
-      %{mode: :run, type: ty} ->
+    if named?(book, name) do
+      with {:ok, ty} <- public_run(book, name),
+           :ok <- no_erased(book, name, ty) do
         list_of(book, ty, elem, "#{name} must be run List #{elem}")
-
-      %{mode: mode} ->
-        {:error, :usage, "#{name} is #{mode}; the environment requires run"}
+      end
+    else
+      :ok
     end
   end
 
   defp optional_name(book, name, type_name) do
-    case Enum.find(book, &(Map.get(&1, :name) == name)) do
-      nil ->
-        :ok
-
-      %{mode: :run, type: ty} ->
+    if named?(book, name) do
+      with {:ok, ty} <- public_run(book, name),
+           :ok <- no_erased(book, name, ty) do
         if same?(book, ty, {:var, type_name}),
           do: :ok,
           else: {:error, :usage, "#{name} must be run #{type_name}"}
-
-      %{mode: mode} ->
-        {:error, :usage, "#{name} is #{mode}; the environment requires run"}
+      end
+    else
+      :ok
     end
   end
 
@@ -203,16 +245,13 @@ defmodule Muro.Synth.Host do
         :ok
 
       true ->
-        case run_type(book, "eval-feature") do
-          {:ok, ty} ->
-            if eval_feature?(book, ty),
-              do: :ok,
-              else:
-                {:error, :usage,
-                 "eval-feature must be run Π (f : Feature) → Π (c : Carrier) → Bool"}
-
-          {:error, _, _} = err ->
-            err
+        with {:ok, ty} <- public_run(book, "eval-feature"),
+             :ok <- no_erased(book, "eval-feature", ty) do
+          if eval_feature?(book, ty),
+            do: :ok,
+            else:
+              {:error, :usage,
+               "eval-feature must be run Π (f : Feature) → Π (c : Carrier) → Bool"}
         end
     end
   end
@@ -229,9 +268,10 @@ defmodule Muro.Synth.Host do
     end
   end
 
+  # `Carrier := State` unfolds to `State`. An unrelated `Carrier` does
+  # not, so a State value is not passed to a function that matches on it.
   defp carrier?(book, ty) do
-    same?(book, ty, {:var, "State"}) or
-      (named?(book, "Carrier") and same?(book, ty, {:var, "Carrier"}))
+    same?(book, ty, {:var, "State"})
   end
 
   defp bool?(book, ty), do: same?(book, ty, {:var, "Bool"})
