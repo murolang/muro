@@ -5,6 +5,9 @@ defmodule Muro.SynthLoopTest do
   @bin "examples/cshrl/envs/binary_sacrifice.muro"
   @lam "test/fixtures/synth_lam.muro"
   @neg "test/fixtures/synth_neg.muro"
+  @stay "test/fixtures/synth_false.muro"
+  @chain "test/fixtures/synth_chain.muro"
+  @retry "test/fixtures/synth_retry.muro"
 
   test "two state trace rediscovers prefer go as the survivor" do
     assert {:ok, result} = Muro.Synth.cegis_loop(@two, depth: 0, max_depth: 0)
@@ -216,6 +219,156 @@ defmodule Muro.SynthLoopTest do
 
     assert Enum.join(lines, "\n") =~ "oracle cannot label"
     refute File.exists?(silent)
+  end
+
+  test "a false program is falsep in the json log outside the checkout" do
+    parent = Path.join(System.tmp_dir!(), "muro_synth_cwd_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(parent)
+    book_path = Path.expand(@stay)
+
+    assert {:exit, 1, book, [json]} =
+             File.cd!(parent, fn ->
+               Muro.CLI.Synth.run([book_path, "--json", "--depth", "0"])
+             end)
+
+    assert book =~ "def survivor : run PredProg := falsep"
+    assert book =~ "data PredProg"
+    refute book =~ "examples/cshrl"
+    refute book =~ "import \"std:bool.muro\""
+    decoded = JSON.decode!(json)
+    assert decoded["status"] == "policy"
+    assert decoded["program"] == "falsep"
+    assert decoded["note"] == "homomorphism certificate is later"
+  end
+
+  test "a chain reports the action the arms select" do
+    assert {:ok, result} = Muro.Synth.cegis_loop(@chain, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert result.program == [false, true, false]
+    assert result.book =~ "| true => b"
+    assert result.book =~ "| false => c"
+
+    programs = Enum.filter(result.lines, &String.starts_with?(&1, "program: "))
+    assert programs == ["program: falsep", "program: truep", "program: falsep"]
+    assert "at s the program prefers b" in result.lines
+    refute Enum.any?(result.lines, &String.contains?(&1, "prefers a"))
+    refute Enum.any?(result.lines, &String.contains?(&1, "prefers c"))
+
+    assert {:exit, 1, _book, [json]} =
+             Muro.CLI.Synth.run([@chain, "--json", "--depth", "0"])
+
+    assert JSON.decode!(json)["program"] == ["falsep", "truep", "falsep"]
+  end
+
+  test "a refused candidate is dropped and the next survivor is checked" do
+    calls = :counters.new(1, [:atomics])
+
+    checker = fn path, _fuel ->
+      :counters.add(calls, 1, 1)
+      src = File.read!(path)
+
+      if String.contains?(src, "def survivor : run PredProg := truep") do
+        {:error, "#{path}:1:1: hold-s body: cannot convert false ≁ true"}
+      else
+        :ok
+      end
+    end
+
+    assert {:ok, result} =
+             Muro.Synth.cegis_loop(@retry,
+               depth: 0,
+               max_depth: 0,
+               checker: checker,
+               max_rounds: 2
+             )
+
+    assert :counters.get(calls, 1) == 2
+    assert result.status == :policy
+    assert result.program == {:feat, "hot"}
+  end
+
+  test "a check that produces no bit reports unknown and does not retry" do
+    calls = :counters.new(1, [:atomics])
+
+    checker = fn path, _fuel ->
+      :counters.add(calls, 1, 1)
+
+      {:error,
+       "#{path}:1:1: hold-start body: out of fuel (the checker gave up reducing; raise the fuel)"}
+    end
+
+    assert {:ok, result} =
+             Muro.Synth.cegis_loop(@two,
+               depth: 0,
+               max_depth: 0,
+               checker: checker,
+               max_rounds: 4
+             )
+
+    assert :counters.get(calls, 1) == 1
+    assert result.status == :residual
+    [cex] = result.cex
+    assert cex.predicted == nil
+    assert cex.oracle == true
+    text = joined(result)
+    assert text =~ "predicted unknown"
+    assert text =~ "oracle true"
+    refute text =~ "predicted false"
+  end
+
+  test "a declaration with the wrong type is an environment refusal" do
+    dir = tmp()
+
+    nat = Path.join(dir, "nat-actions.muro")
+
+    File.write!(nat, """
+    import "std:bool.muro"
+
+    data State : Type where
+      s : State
+
+    data Action : Type where
+      a : Action
+      b : Action
+
+    def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+      λ (s : State) → λ (_ : Action) → (s, 0)
+
+    def all-actions : run Nat := 0
+    def horizon : run Nat := 0
+
+    def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+      λ (_ : Nat) → λ (_ : Nat) → true
+    """)
+
+    assert {:error, :usage, msg} = Muro.Synth.Host.open(nat)
+    assert msg =~ "all-actions must be run List Action"
+    assert {:exit, 2, "", lines} = Muro.CLI.Synth.run([nat])
+    assert Enum.join(lines, "\n") =~ "all-actions must be run List Action"
+
+    step = Path.join(dir, "bad-step.muro")
+
+    File.write!(step, """
+    import "std:bool.muro"
+    import "std:list.muro"
+
+    data State : Type where
+      s : State
+
+    data Action : Type where
+      a : Action
+      b : Action
+
+    def step : run Nat := 0
+    def all-actions : run List Action := cons a (cons b nil)
+    def horizon : run Nat := 0
+
+    def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+      λ (_ : Nat) → λ (_ : Nat) → true
+    """)
+
+    assert {:error, :usage, step_msg} = Muro.Synth.Host.open(step)
+    assert step_msg =~ "step must be run"
   end
 
   test "--json is a log of the version space, not a certificate" do

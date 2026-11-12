@@ -153,32 +153,28 @@ defmodule Muro.Synth.Loop do
          fuel,
          seen
        ) do
-    case Book.render(host, arms, anchor) do
-      {:error, _, _} = err ->
-        err
+    {:ok, source} = Book.render(host, arms, anchor)
 
-      {:ok, source} ->
-        case Book.check(source, anchor, fn path -> checker.(path, fuel) end) do
-          :ok ->
-            {:ok, checked(arms, source, versions)}
+    case Book.check(source, anchor, fn path -> checker.(path, fuel) end) do
+      :ok ->
+        {:ok, checked(arms, source, versions)}
 
-          {:error, text} ->
-            feedback(
-              host,
-              arms,
-              versions,
-              depth,
-              max_depth,
-              rounds,
-              score,
-              feat,
-              anchor,
-              checker,
-              fuel,
-              seen,
-              text
-            )
-        end
+      {:error, text} ->
+        feedback(
+          host,
+          arms,
+          versions,
+          depth,
+          max_depth,
+          rounds,
+          score,
+          feat,
+          anchor,
+          checker,
+          fuel,
+          seen,
+          text
+        )
     end
   end
 
@@ -202,15 +198,18 @@ defmodule Muro.Synth.Loop do
     cex = %{cex | fed: fed}
     seen = Map.put(seen, cex.carrier, fed)
 
-    arm =
-      Enum.find(arms, hd(arms), fn arm ->
-        Enum.any?(arm.observations, &(elem(&1, 0) == cex.carrier))
-      end)
+    arm = arm_for(arms, cex)
 
+    # The survivors were already filtered by the oracle bit. Refining by
+    # that bit again cannot shrink the space, so the first failure would
+    # be a residual at any round bound. A boolean from the checker is
+    # new: this candidate failed, and the next survivor is checked.
     next =
-      if is_boolean(cex.oracle),
-        do: Synth.refine(arm.kept, {cex.carrier, cex.oracle}, feat),
-        else: arm.kept
+      if is_boolean(cex.predicted) do
+        Enum.reject(arm.kept, &(&1 == arm.pred))
+      else
+        arm.kept
+      end
 
     shrunk = length(next) < length(arm.kept)
 
@@ -242,6 +241,20 @@ defmodule Muro.Synth.Loop do
 
   defp replace_arm(arms, arm) do
     Enum.map(arms, fn old -> if old.name == arm.name, do: arm, else: old end)
+  end
+
+  defp arm_for(arms, %{name: name}) when is_binary(name) do
+    Enum.find(arms, hd(arms), fn arm ->
+      Enum.any?(arm.observations, fn {state, _bit} ->
+        Book.obligation_name(arm, state, length(arms)) == name
+      end)
+    end)
+  end
+
+  defp arm_for(arms, cex) do
+    Enum.find(arms, hd(arms), fn arm ->
+      Enum.any?(arm.observations, &(elem(&1, 0) == cex.carrier))
+    end)
   end
 
   defp conflict(cover, tasks, host, feat) do
@@ -337,20 +350,16 @@ defmodule Muro.Synth.Loop do
   end
 
   defp checked(arms, source, versions) do
-    arm = hd(arms)
-
     lines =
-      [
-        "muro synth: policy checked",
-        "program: #{Synth.render(arm.pred)}"
-      ] ++
-        preference(arm) ++
+      ["muro synth: policy checked"] ++
+        Enum.map(arms, &"program: #{Synth.render(&1.pred)}") ++
+        preference(arms) ++
         ["homomorphism certificate is later"] ++
         Enum.map(versions, &"version space #{&1}")
 
     %{
       status: :policy,
-      program: arm.pred,
+      program: program_of(arms),
       book: source,
       lines: lines,
       versions: versions,
@@ -358,10 +367,31 @@ defmodule Muro.Synth.Loop do
     }
   end
 
-  defp preference(arm) do
-    Enum.flat_map(arm.observations, fn {state, bit} ->
-      action = if bit, do: arm.action, else: arm.else
+  defp program_of([arm]), do: arm.pred
+  defp program_of(arms), do: Enum.map(arms, & &1.pred)
+
+  # One arm is one predicate: true selects its action and false selects
+  # the other. A chain selects the first arm that holds. The default is
+  # the action only when every arm is false.
+  defp preference(arms) do
+    arms
+    |> hd()
+    |> Map.fetch!(:observations)
+    |> Enum.flat_map(fn {state, _bit} ->
+      {action, bit} = decision(arms, state)
       ["at #{state} the program prefers #{action}", "carrier #{state} bit #{bit}"]
+    end)
+  end
+
+  defp decision([arm], state) do
+    {_state, bit} = Enum.find(arm.observations, &(elem(&1, 0) == state))
+    {if(bit, do: arm.action, else: arm.else), bit}
+  end
+
+  defp decision(arms, state) do
+    Enum.reduce_while(arms, {List.last(arms).else, false}, fn arm, acc ->
+      {_state, bit} = Enum.find(arm.observations, &(elem(&1, 0) == state))
+      if bit, do: {:halt, {arm.action, true}}, else: {:cont, acc}
     end)
   end
 

@@ -20,11 +20,11 @@ defmodule Muro.Synth do
 
   `cegis_loop/2` is the closed search. It enumerates, refines by
   observations taken from the environment's emitted `step`, deepens
-  while the space is empty and the depth bound allows it, and feeds a
-  failed check of the surviving program back as another observation.
-  The fuel bound and the round bound are operational. They stop a loop
-  that is not shrinking. They are not `sufficient-cegis`. A sweep of one
-  trajectory is not that theorem.
+  while the space is empty and the depth bound allows it, and, when a
+  check of the surviving program fails, drops that candidate and checks
+  the next one. The fuel bound and the round bound are operational. They
+  stop a loop that is not shrinking. They are not `sufficient-cegis`. A
+  sweep of one trajectory is not that theorem.
 
   `deepen/7` is the depth step. A miss at the current depth searches
   the next depth. `budget` is how many further deepenings follow that

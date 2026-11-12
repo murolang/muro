@@ -25,13 +25,13 @@ The book must already check. It defines `State`, `Action`, `step`, `all-actions`
 
 Features are ordinary definitions. There is no new keyword. `data Feature` names the tests, and `eval-feature` reads one test at a carrier. `Carrier` is that state type when the book defines it. A book that defines `Feature` and not `eval-feature` is refused. A book with no `Feature` has only the two constants in the version space. A state name is not a feature by being a constructor of `State`.
 
-Two actions are one predicate: prefer the first action of `all-actions`, else the second. More than two actions are one predicate per action, chained in `all-actions` order, and the last else is `default-action`.
+Two actions are one predicate: prefer the first action of `all-actions`, else the second. More than two actions are one predicate per action, chained in `all-actions` order, and the last else is `default-action`. The report follows that chain. The default is the preferred action only when every arm is false. A name that exists with the wrong mode, or the wrong type, is not an environment. `step` is `Π (s : State) → Π (a : Action) → State × Reward`, `all-actions` is `List Action`, `horizon` is `Nat`, and `leb` compares that reward.
 
 ## Oracles
 
 `--oracle` selects the labels. The default is `trace`.
 
-`trace` compares Finder traces out to `horizon`. Prefer the first action when the second action's trace is below it, including when the two traces are equal.
+`trace` compares Finder traces out to `horizon`. Prefer the first action when the second action's trace is below it, including when the two traces are equal. When the order compares neither of the first differing rewards with the other, the pair is not ranked.
 
 `successor` compares successor values, pointwise, on a finite prefix. `coind-homo` compares action values, pointwise, on the same kind of prefix. A first reward that is smaller does not make the rest of the stream smaller. A pair the oracle cannot order stops the run. The report names the carrier and the two actions. It does not invent a ranking.
 
@@ -48,11 +48,11 @@ def policy : run Π (+ s : State) → Action :=
     (match eval survivor s motive (λ _ → Action) | true => go | false => stay)
 ```
 
-The equations `hold-<state>` are the observations the survivor matched. They are evidence. The emitters erase them. The book does not case-split on the state names.
+The equations `hold-<state>` are the observations the survivor matched. They are evidence. The emitters erase them. The book does not case-split on the state names. `PredProg` and `eval` are compiled into the checker. They use the environment's `Bool`, `true`, and `false`. The policy book does not import a second `Bool` or `leb`.
 
 The fuel bound and the round bound stop a search that is not shrinking. They are operational. They are not `sufficient-cegis`. A sweep of the cover is not that theorem.
 
-A failed check of this policy book is another observation, and the search continues with it. After the round bound the report names the counterexample: the carrier, the bit the check produced, the bit the oracle required, and how many times that carrier was fed back.
+A failed check that produced a bit drops the candidate the checker refused and checks the next survivor. A check that produced no bit does not. After the round bound the report names the counterexample: the carrier, the bit the check produced or unknown, the bit the oracle required, and how many times that carrier was fed back.
 
 When two carriers on the cover agree on every feature and the oracle disagrees, no program in the version space can match both. The report names the two carriers. The depth is not raised in order to invent a feature.
 

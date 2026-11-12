@@ -2,7 +2,7 @@
 
 ## 0.20.34
 
-`mix muro.synth` searches a version space of predicate programs against a checked environment. The search calls that environment's emitted `step`. A program that misses an observation is dropped. The smallest program that matches every observation is the policy the book deploys, and `eval` runs it. A score breaks ties of equal size and does not decide who survives. Depth grows when the space is empty. A failed check of that policy is another observation. The report says when the features cannot express the target, or when an oracle cannot label a pair. A homomorphism for the policy is later. The search is not the certificate.
+`mix muro.synth` searches a version space of predicate programs against a checked environment. The search calls that environment's emitted `step`. A program that misses an observation is dropped. The smallest program that matches every observation is the policy the book deploys, and `eval` runs it. A score breaks ties of equal size and does not decide who survives. Depth grows when the space is empty. A failed check of that policy drops the candidate the checker refused and checks the next one. The report says when the features cannot express the target, or when an oracle cannot label a pair. A homomorphism for the policy is later. The search is not the certificate.
 
 ### Manual
 

@@ -119,7 +119,15 @@ defmodule Muro.Synth.Oracle do
   defp compare(host, "trace", state, action, other, blind) do
     {left, memo} = trace(host, state, other, host.horizon, blind, %{})
     {right, _memo} = trace(host, state, action, host.horizon, blind, memo)
-    trace_le(host, left, right)
+
+    # `trace_le` is false both when the right trace is strictly smaller
+    # and when the first differing rewards are not ordered. The reverse
+    # comparison separates those. An unordered pair is not a ranking.
+    cond do
+      trace_le(host, left, right) == true -> true
+      trace_le(host, right, left) == true -> false
+      true -> :silent
+    end
   end
 
   defp compare(host, oracle, state, action, other, _blind) do
@@ -144,26 +152,21 @@ defmodule Muro.Synth.Oracle do
 
   defp prefix(host, "coind-homo", state, action, n) do
     {next, reward} = host.step.(state, action)
-
-    rest =
-      if n <= 1 do
-        []
-      else
-        Enum.map(0..(n - 2), fn k ->
-          {value, _memo} = solve(host, next, k, %{})
-          value
-        end)
-      end
-
+    {rest, _memo} = values(host, next, max(n - 1, 0))
     [reward | rest]
   end
 
   defp prefix(host, "successor", state, action, n) do
     {next, _reward} = host.step.(state, action)
+    {rest, _memo} = values(host, next, n)
+    rest
+  end
 
-    Enum.map(0..(n - 1), fn k ->
-      {value, _memo} = solve(host, next, k, %{})
-      value
+  defp values(_host, _state, n) when n <= 0, do: {[], %{}}
+
+  defp values(host, state, n) do
+    Enum.map_reduce(0..(n - 1), %{}, fn k, memo ->
+      solve(host, state, k, memo)
     end)
   end
 
@@ -175,20 +178,18 @@ defmodule Muro.Synth.Oracle do
         {value, memo}
 
       :error ->
-        value =
-          host.actions
-          |> Enum.map(fn action ->
+        {rewards, memo} =
+          Enum.map_reduce(host.actions, memo, fn action, memo ->
             {next, reward} = host.step.(state, action)
 
             if k == 0 do
-              reward
+              {reward, memo}
             else
-              {later, _memo} = solve(host, next, k - 1, memo)
-              later
+              solve(host, next, k - 1, memo)
             end
           end)
-          |> Enum.reduce(&max_reward(host, &1, &2))
 
+        value = Enum.reduce(rewards, &max_reward(host, &1, &2))
         {value, Map.put(memo, key, value)}
     end
   end

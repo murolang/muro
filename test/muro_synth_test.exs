@@ -191,4 +191,93 @@ defmodule Muro.SynthTest do
     assert cex.predicted == false
     assert cex.oracle == true
   end
+
+  test "the predicate evaluator is part of the compiler and does not import Bool" do
+    src = Muro.Synth.Book.evaluator()
+    assert src =~ "data PredProg"
+    assert src =~ "def eval "
+    refute src =~ "import"
+    refute src =~ "def leb"
+  end
+
+  test "an obligation name is matched whole, and a missing bit stays unknown" do
+    obs = [
+      %{name: "hold-copy", carrier: "copy", oracle: true, pair: {"arg", "spine"}},
+      %{name: "hold-copy4", carrier: "copy4", oracle: false, pair: {"arg", "spine"}}
+    ]
+
+    named =
+      Muro.Synth.Book.cex_from("book.muro:1:1: hold-copy4 body: cannot convert true ≁ false", obs)
+
+    assert named.carrier == "copy4"
+    assert named.name == "hold-copy4"
+    assert named.predicted == true
+    assert named.oracle == false
+
+    fuel =
+      Muro.Synth.Book.cex_from(
+        "book.muro:4:1: hold-len body: out of fuel (the checker gave up reducing; raise the fuel)",
+        [%{name: "hold-len", carrier: "len", oracle: true}]
+      )
+
+    assert fuel.carrier == "len"
+    assert fuel.oracle == true
+    assert fuel.predicted == nil
+  end
+
+  test "an unordered reward pair is not a trace ranking" do
+    step = fn
+      "s", "a" -> {"s", :p}
+      "s", "b" -> {"s", :q}
+    end
+
+    silent = observe(step, fn left, right -> left == right end)
+    assert {:silent, cex} = silent
+    assert cex.carrier == "s"
+    assert cex.pair == {"a", "b"}
+    assert cex.reason =~ "incomparable"
+
+    ordered =
+      observe(step, fn
+        :q, :p -> true
+        :p, :q -> false
+        left, right -> left == right
+      end)
+
+    assert {:ok, %{tasks: [%{observations: [{"s", true}]}]}} = ordered
+  end
+
+  test "sibling actions reuse the solved memo" do
+    count = :counters.new(1, [:atomics])
+
+    host = %{
+      actions: ["a", "b"],
+      default: "b",
+      states: ["s"],
+      all_states: ["s"],
+      horizon: 12,
+      step: fn state, _action ->
+        :counters.add(count, 1, 1)
+        {state, 0}
+      end,
+      leb: fn left, right -> left <= right end
+    }
+
+    assert {:ok, _} = Muro.Synth.Oracle.observe(host, "successor")
+    assert :counters.get(count, 1) < 500
+  end
+
+  defp observe(step, leb) do
+    host = %{
+      actions: ["a", "b"],
+      default: "b",
+      states: ["s"],
+      all_states: ["s"],
+      horizon: 0,
+      step: step,
+      leb: leb
+    }
+
+    Muro.Synth.Oracle.observe(host, "trace")
+  end
 end

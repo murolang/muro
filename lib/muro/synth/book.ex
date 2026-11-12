@@ -1,7 +1,16 @@
 defmodule Muro.Synth.Book do
   @moduledoc false
 
-  @library "examples/cshrl/lib/synth.muro"
+  # The run half of the predicate language. Bool, true, and false come
+  # from the environment that imports this text. The file is compiled
+  # into the beam, so the policy book does not look the library up from
+  # the working directory and does not import a second Bool or leb.
+  @pred_path Path.join(__DIR__, "pred.muro")
+  @external_resource @pred_path
+  @evaluator File.read!(@pred_path)
+
+  @doc false
+  def evaluator, do: @evaluator
 
   @doc """
   The book whose `survivor` is the predicate the search returned.
@@ -10,41 +19,23 @@ defmodule Muro.Synth.Book do
   `hold-<state>` are the observations. A homomorphism is not in this book.
   """
   def render(host, arms, anchor) when is_list(arms) do
-    case library() do
-      {:error, _, _} = err ->
-        err
+    env = rel(anchor, host.path)
 
-      {:ok, library} ->
-        env = rel(anchor, host.path)
-        lib = rel(anchor, library)
-
-        """
-        -- The survivor is the predicate the search returned.
-        -- eval runs it. The checker sees this policy. It does not see the search.
-        -- A homomorphism for the policy is later.
-        import "#{env}"
-        import "#{lib}"
-        #{carrier(host)}
-        #{features(host)}
-        #{survivors(arms)}
-        def policy : run Π (+ s : State) → Action :=
-          λ (+ s : State) →
-            #{policy_term(arms)}
-        #{holds(arms)}
-        """
-        |> then(&{:ok, &1})
-    end
-  end
-
-  def library do
-    path = Path.expand(@library)
-
-    if File.regular?(path) do
-      {:ok, path}
-    else
-      {:error, :usage,
-       "the predicate library examples/cshrl/lib/synth.muro is not in this directory"}
-    end
+    """
+    -- The survivor is the predicate the search returned.
+    -- eval runs it. The checker sees this policy. It does not see the search.
+    -- A homomorphism for the policy is later.
+    import "#{env}"
+    #{carrier(host)}
+    #{features(host)}
+    #{@evaluator}
+    #{survivors(arms)}
+    def policy : run Π (+ s : State) → Action :=
+      λ (+ s : State) →
+        #{policy_term(arms)}
+    #{holds(arms)}
+    """
+    |> then(&{:ok, &1})
   end
 
   def check(source, anchor, checker) when is_function(checker, 1) do
@@ -63,14 +54,14 @@ defmodule Muro.Synth.Book do
   The obligation a failing check named, if the text names one.
   """
   def cex_from(text, obligations) when is_binary(text) and is_list(obligations) do
-    case Enum.find(obligations, &String.contains?(text, &1.name)) do
+    case earliest_obligation(text, obligations) do
       nil ->
         %{carrier: "book", predicted: nil, oracle: nil, pair: nil, fed: 1, agrees: nil}
 
       ob ->
         %{
           carrier: ob.carrier,
-          predicted: predicted(text, ob),
+          predicted: predicted(text),
           oracle: ob.oracle,
           pair: Map.get(ob, :pair),
           fed: 1,
@@ -80,11 +71,45 @@ defmodule Muro.Synth.Book do
     end
   end
 
+  # The diagnostic is `<name> <part>:`. A shorter name is not a match
+  # for a longer one: `hold-copy` does not name `hold-copy4`.
+  defp earliest_obligation(text, obligations) do
+    obligations
+    |> Enum.reduce(nil, fn ob, best ->
+      case diagnostic_at(text, ob.name) do
+        nil ->
+          best
+
+        at ->
+          case best do
+            nil -> {ob, at}
+            {_earlier, best_at} when at < best_at -> {ob, at}
+            earlier -> earlier
+          end
+      end
+    end)
+    |> case do
+      nil -> nil
+      {ob, _at} -> ob
+    end
+  end
+
+  defp diagnostic_at(text, name) do
+    case Regex.run(diagnostic(name), text, return: :index) do
+      [{at, _len} | _] -> at
+      _ -> nil
+    end
+  end
+
+  defp diagnostic(name) do
+    ~r/(?<![\p{L}\p{N}_-])#{Regex.escape(name)} (?:type|body|grade|productivity):/u
+  end
+
   def obligations(arms) do
     Enum.flat_map(arms, fn arm ->
       Enum.map(arm.observations, fn {state, bit} ->
         %{
-          name: hold_name(arm, state, length(arms)),
+          name: obligation_name(arm, state, length(arms)),
           carrier: state,
           oracle: bit,
           pair: {arm.action, arm.else}
@@ -93,10 +118,10 @@ defmodule Muro.Synth.Book do
     end)
   end
 
-  defp predicted(text, ob) do
+  defp predicted(text) do
     case Regex.run(~r/cannot convert\s+(\S+)\s+≁\s+(\S+)/u, text) do
       [_, got, _expected] -> bit(got)
-      _ -> if is_boolean(ob.oracle), do: not ob.oracle, else: nil
+      _ -> nil
     end
   end
 
@@ -147,7 +172,7 @@ defmodule Muro.Synth.Book do
 
     Enum.map_join(arms, "\n", fn arm ->
       Enum.map_join(arm.observations, "\n", fn {state, bit} ->
-        name = hold_name(arm, state, many)
+        name = obligation_name(arm, state, many)
         word = if bit, do: "true", else: "false"
 
         "def #{name} : evidence {eval #{arm.name} #{state} ≡ #{word} : Bool} := refl"
@@ -155,8 +180,8 @@ defmodule Muro.Synth.Book do
     end)
   end
 
-  defp hold_name(_arm, state, 1), do: "hold-#{state}"
-  defp hold_name(arm, state, _many), do: "hold-#{arm.action}-#{state}"
+  def obligation_name(_arm, state, 1), do: "hold-#{state}"
+  def obligation_name(arm, state, _many), do: "hold-#{arm.action}-#{state}"
 
   defp rel(from_dir, to_file) do
     from = from_dir |> Path.expand() |> Path.split()

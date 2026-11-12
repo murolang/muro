@@ -24,6 +24,7 @@ defmodule Muro.Synth.Host do
          :ok <- present(book, "all-actions"),
          :ok <- present(book, "horizon"),
          :ok <- present(book, "leb"),
+         :ok <- signatures(book),
          {:ok, states} <- nullary(book, "State"),
          {:ok, actions} <- nullary(book, "Action"),
          {:ok, features} <- features(book) do
@@ -99,6 +100,179 @@ defmodule Muro.Synth.Host do
 
   defp present(book, name) do
     if named?(book, name), do: :ok, else: {:error, :usage, "the book does not define #{name}"}
+  end
+
+  # Names are not enough. `all-actions : run Nat := 0` checks and then
+  # crashes in `decode_list`. The modes and the types are the contract
+  # the search calls, and a mismatch is a usage error before any call.
+  defp signatures(book) do
+    with {:ok, step} <- run_type(book, "step"),
+         {:ok, reward} <- step_reward(book, step),
+         {:ok, actions} <- run_type(book, "all-actions"),
+         :ok <- list_of(book, actions, "Action", "all-actions must be run List Action"),
+         {:ok, horizon} <- run_type(book, "horizon"),
+         :ok <- nat_type(book, horizon, "horizon must be run Nat"),
+         {:ok, leb} <- run_type(book, "leb"),
+         :ok <- leb_type(book, leb, reward),
+         :ok <- optional_list(book, "all-states", "State"),
+         :ok <- optional_name(book, "default-action", "Action"),
+         :ok <- eval_feature_type(book) do
+      :ok
+    end
+  end
+
+  defp run_type(book, name) do
+    case Enum.find(book, &(Map.get(&1, :name) == name)) do
+      %{mode: :run, type: ty} -> {:ok, ty}
+      %{mode: mode} -> {:error, :usage, "#{name} is #{mode}; the environment requires run"}
+      _ -> {:error, :usage, "the book does not define #{name}"}
+    end
+  end
+
+  defp step_reward(book, ty) do
+    with {:pi, _, state, _, rest} <- ty,
+         true <- same?(book, state, {:var, "State"}),
+         {:pi, _, action, _, cod} <- rest,
+         true <- same?(book, action, {:var, "Action"}),
+         {:prod, next, reward} <- unfold(book, cod),
+         true <- same?(book, next, {:var, "State"}) do
+      {:ok, unfold(book, reward)}
+    else
+      _ ->
+        {:error, :usage, "step must be run Π (s : State) → Π (a : Action) → State × Reward"}
+    end
+  end
+
+  defp list_of(book, ty, elem, message) do
+    case unfold(book, ty) do
+      {:app, {:var, "List"}, arg} ->
+        if same?(book, arg, {:var, elem}), do: :ok, else: {:error, :usage, message}
+
+      _ ->
+        {:error, :usage, message}
+    end
+  end
+
+  defp nat_type(book, ty, message) do
+    if same?(book, ty, :nat), do: :ok, else: {:error, :usage, message}
+  end
+
+  defp leb_type(book, ty, reward) do
+    with {:pi, _, left, _, rest} <- ty,
+         true <- same?(book, left, reward),
+         {:pi, _, right, _, cod} <- rest,
+         true <- same?(book, right, reward),
+         true <- bool?(book, cod) do
+      :ok
+    else
+      _ -> {:error, :usage, "leb must compare the reward step returns"}
+    end
+  end
+
+  defp optional_list(book, name, elem) do
+    case Enum.find(book, &(Map.get(&1, :name) == name)) do
+      nil ->
+        :ok
+
+      %{mode: :run, type: ty} ->
+        list_of(book, ty, elem, "#{name} must be run List #{elem}")
+
+      %{mode: mode} ->
+        {:error, :usage, "#{name} is #{mode}; the environment requires run"}
+    end
+  end
+
+  defp optional_name(book, name, type_name) do
+    case Enum.find(book, &(Map.get(&1, :name) == name)) do
+      nil ->
+        :ok
+
+      %{mode: :run, type: ty} ->
+        if same?(book, ty, {:var, type_name}),
+          do: :ok,
+          else: {:error, :usage, "#{name} must be run #{type_name}"}
+
+      %{mode: mode} ->
+        {:error, :usage, "#{name} is #{mode}; the environment requires run"}
+    end
+  end
+
+  defp eval_feature_type(book) do
+    cond do
+      not named?(book, "Feature") or not named?(book, "eval-feature") ->
+        :ok
+
+      true ->
+        case run_type(book, "eval-feature") do
+          {:ok, ty} ->
+            if eval_feature?(book, ty),
+              do: :ok,
+              else:
+                {:error, :usage,
+                 "eval-feature must be run Π (f : Feature) → Π (c : Carrier) → Bool"}
+
+          {:error, _, _} = err ->
+            err
+        end
+    end
+  end
+
+  defp eval_feature?(book, ty) do
+    with {:pi, _, feature, _, rest} <- ty,
+         true <- same?(book, feature, {:var, "Feature"}),
+         {:pi, _, carrier, _, cod} <- rest,
+         true <- carrier?(book, carrier),
+         true <- bool?(book, cod) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  defp carrier?(book, ty) do
+    same?(book, ty, {:var, "State"}) or
+      (named?(book, "Carrier") and same?(book, ty, {:var, "Carrier"}))
+  end
+
+  defp bool?(book, ty), do: same?(book, ty, {:var, "Bool"})
+
+  defp same?(book, left, right), do: unfold(book, left) == unfold(book, right)
+
+  defp unfold(book, ty), do: unfold(book, ty, MapSet.new())
+
+  defp unfold(book, {:var, name}, seen) do
+    if MapSet.member?(seen, name) do
+      {:var, name}
+    else
+      case alias_of(book, name) do
+        nil -> {:var, name}
+        body -> unfold(book, body, MapSet.put(seen, name))
+      end
+    end
+  end
+
+  defp unfold(book, {:prod, left, right}, seen) do
+    {:prod, unfold(book, left, seen), unfold(book, right, seen)}
+  end
+
+  defp unfold(book, {:app, fun, arg}, seen) do
+    {:app, unfold(book, fun, seen), unfold(book, arg, seen)}
+  end
+
+  defp unfold(book, {:pi, qty, dom, name, cod}, seen) do
+    {:pi, qty, unfold(book, dom, seen), name, unfold(book, cod, seen)}
+  end
+
+  defp unfold(_book, ty, _seen), do: ty
+
+  defp alias_of(book, name) do
+    Enum.find_value(book, fn
+      %{name: ^name, mode: :spec, type: :typ, body: body} = d ->
+        if Map.get(d, :kind) == :data, do: nil, else: body
+
+      _ ->
+        nil
+    end)
   end
 
   defp features(book) do

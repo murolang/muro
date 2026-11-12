@@ -181,7 +181,7 @@ defmodule Muro.CLI.Synth do
   defp json(result) do
     payload = %{
       status: result.status,
-      program: if(result.program, do: Muro.Synth.render(result.program), else: nil),
+      program: program_json(result.program),
       versions: result.versions,
       cex: Enum.map(result.cex, &cex_json/1),
       note: note(result.status)
@@ -189,6 +189,13 @@ defmodule Muro.CLI.Synth do
 
     JSON.encode!(payload) <> "\n"
   end
+
+  defp program_json(nil), do: nil
+
+  defp program_json(programs) when is_list(programs),
+    do: Enum.map(programs, &Muro.Synth.render/1)
+
+  defp program_json(program), do: Muro.Synth.render(program)
 
   defp cex_json(cex) do
     %{

@@ -1,0 +1,32 @@
+-- Three actions. b is the unique winner. The default is c.
+import "std:bool.muro"
+import "std:list.muro"
+
+data State : Type where
+  s : State
+
+data Action : Type where
+  a : Action
+  b : Action
+  c : Action
+
+def step : run Π (x : State) → Π (act : Action) → State × Nat :=
+  λ (x : State) → λ (act : Action) →
+    match act motive (λ _ → State × Nat)
+      | a => (x, 0)
+      | b => (x, suc (suc 0))
+      | c => (x, suc 0)
+
+def all-actions : run List Action := cons a (cons b (cons c nil))
+def default-action : run Action := c
+def horizon : run Nat := 0
+def all-states : run List State := cons s nil
+
+def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+  λ (m : Nat) → λ (n : Nat) →
+    match m motive (λ _ → Bool)
+      | 0 => true
+      | suc p =>
+          (match n motive (λ _ → Bool)
+            | 0 => false
+            | suc q => leb p q)
