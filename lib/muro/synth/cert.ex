@@ -81,21 +81,25 @@ defmodule Muro.Synth.Cert do
     actions = host.actions
 
     with {:ok, now} <- vector(host, states, actions, &reward(host, &1, &2)) do
-      later =
-        vector(host, states, actions, fn state, action ->
-          now[next(host, state, action)]
-        end)
+      if Enum.all?(Map.values(now), &closed_nat?/1) do
+        later =
+          vector(host, states, actions, fn state, action ->
+            now[next(host, state, action)]
+          end)
 
-      case later do
-        {:ok, ^now} ->
-          {:ok, now}
+        case later do
+          {:ok, ^now} ->
+            {:ok, now}
 
-        {:ok, other} ->
-          state = Enum.find(states, &(now[&1] != other[&1]))
-          {:error, "solve at #{state} is not constant"}
+          {:ok, other} ->
+            state = Enum.find(states, &(now[&1] != other[&1]))
+            {:error, "solve at #{state} is not constant"}
 
-        {:error, reason} ->
-          {:error, reason}
+          {:error, reason} ->
+            {:error, reason}
+        end
+      else
+        {:error, "reward is not a closed Nat"}
       end
     end
   end
@@ -212,6 +216,7 @@ defmodule Muro.Synth.Cert do
   # rewards respect the same ranking. BinarySacrifice does not.
   defp extra_homo?(host, "successor", states, actions, arms, values) do
     defined?(host, "CoindHomo") and defined?(host, "action-value") and
+      defined?(host, "action-at") and
       Enum.all?(states, fn state ->
         winner = chosen(host, arms, state)
 
@@ -491,6 +496,11 @@ defmodule Muro.Synth.Cert do
   defp prefers?(winner, left, right) do
     left != right and right == winner
   end
+
+  defp closed_nat?(0), do: true
+  defp closed_nat?({:suc, n}), do: closed_nat?(n)
+  defp closed_nat?(n) when is_integer(n) and n >= 0, do: true
+  defp closed_nat?(_value), do: false
 
   defp spell_nat(0), do: "0"
   defp spell_nat({:suc, n}), do: spell_nat(nat_int({:suc, n}))

@@ -205,7 +205,7 @@ defmodule Muro.Synth.Book do
 
         %{
           carrier: ob.carrier,
-          predicted: if(is_nil(parsed), do: Map.get(ob, :claimed), else: parsed),
+          predicted: predicted_bit(ob, region, parsed),
           oracle: ob.oracle,
           pair: Map.get(ob, :pair),
           fed: 1,
@@ -305,6 +305,18 @@ defmodule Muro.Synth.Book do
   defp bit("true"), do: true
   defp bit("false"), do: false
   defp bit(_other), do: nil
+
+  # A certificate obligation always records the bit it claimed. That
+  # bit is used only when the diagnostic is a conversion failure. Out
+  # of fuel stays unknown, the same as a hold obligation with no
+  # claimed bit.
+  defp predicted_bit(_ob, _region, parsed) when not is_nil(parsed), do: parsed
+
+  defp predicted_bit(%{kind: :certificate} = ob, region, _parsed) do
+    if Muro.Check.out_of_fuel?(region), do: nil, else: Map.get(ob, :claimed)
+  end
+
+  defp predicted_bit(ob, _region, _parsed), do: Map.get(ob, :claimed)
 
   defp bind(host, arms) do
     taken = taken_names(host.book)

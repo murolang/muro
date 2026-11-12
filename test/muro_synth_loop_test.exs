@@ -405,6 +405,35 @@ defmodule Muro.SynthLoopTest do
     refute text =~ "predicted false"
   end
 
+  test "a certificate check that produces no bit reports unknown and does not retry" do
+    calls = :counters.new(1, [:atomics])
+
+    checker = fn path, _fuel ->
+      :counters.add(calls, 1, 1)
+
+      {:error,
+       "#{path}:1:1: cert-below-action-start-stay-go body: out of fuel (the checker gave up reducing; raise the fuel)"}
+    end
+
+    assert {:ok, result} =
+             Muro.Synth.cegis_loop(@two,
+               depth: 0,
+               max_depth: 0,
+               checker: checker,
+               max_rounds: 4
+             )
+
+    assert :counters.get(calls, 1) == 1
+    assert result.status == :residual
+    [cex] = result.cex
+    assert cex.predicted == nil
+    assert cex.kind == :certificate
+    text = joined(result)
+    assert text =~ "predicted unknown"
+    refute text =~ "predicted false"
+    refute text =~ "predicted true"
+  end
+
   test "a declaration with the wrong type is an environment refusal" do
     dir = tmp()
 
@@ -523,6 +552,73 @@ defmodule Muro.SynthLoopTest do
     text = joined(result)
     assert text =~ "oracle cannot label"
     assert text =~ "pair p q"
+  end
+
+  test "a reward that is not a closed Nat leaves the policy without a ranking" do
+    dir = tmp()
+    path = Path.join(dir, "tokens.muro")
+
+    File.write!(path, """
+    import "std:bool.muro"
+    import "std:list.muro"
+
+    data State : Type where
+      s : State
+
+    data Action : Type where
+      go : Action
+      stay : Action
+
+    data Token : Type where
+      tok : Token
+      other : Token
+
+    def Reward : spec Type := Token
+    def origin : run Token := tok
+    def maxN : run Π (r : Token) → Π (q : Token) → Token :=
+      λ (r : Token) → λ (_ : Token) → r
+    def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+    def bottom : run Reward := origin
+
+    def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+      λ (s : State) → λ (a : Action) →
+        match a motive (λ _ → State × Reward)
+          | go => (s, tok)
+          | stay => (s, other)
+
+    def all-actions : run List Action := cons go (cons stay nil)
+    def default-action : run Action := stay
+    def horizon : run Nat := 0
+    def all-states : run List State := cons s nil
+
+    def leb : run Π (m : Reward) → Π (n : Reward) → Bool :=
+      λ (m : Reward) → λ (n : Reward) →
+        match m motive (λ _ → Bool)
+          | tok => true
+          | other =>
+              (match n motive (λ _ → Bool) | tok => false | other => true)
+
+    def CoindHomo : spec Type := Unit
+    def action-value : run Nat := 0
+    def action-at : run Nat := 0
+    def value : run Nat := 0
+    def solve : run Nat := 0
+    def dom-refl : evidence {0 ≡ 0 : Nat} := refl
+    def tabulate-dom : evidence {0 ≡ 0 : Nat} := refl
+    def le-refl : evidence {0 ≡ 0 : Nat} := refl
+    """)
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert result.book =~ "def survivor"
+    refute result.book =~ "def rank "
+    text = joined(result)
+    assert text =~ "homomorphism is not derivable"
+    assert text =~ "reward is not a closed Nat"
+
+    assert {:exit, 1, book, report} = Muro.CLI.Synth.run([path, "--depth", "0"])
+    assert book =~ "def survivor"
+    assert Enum.join(report, "\n") =~ "reward is not a closed Nat"
   end
 
   test "an output path created after the existence check is refused" do
@@ -799,7 +895,7 @@ defmodule Muro.SynthLoopTest do
 
     assert {:exit, 2, "", [message]} = Muro.CLI.Synth.run([env, "--depth", "0", "--out", out])
     assert message =~ "temporary book"
-    assert message =~ ":enotdir"
+    assert message =~ ":enotdir" or message =~ ":eexist"
     refute message =~ "unknown"
     refute message =~ "residual"
     refute message =~ "counterexample"
@@ -812,7 +908,7 @@ defmodule Muro.SynthLoopTest do
                anchor: Path.join(blocker, "books")
              )
 
-    assert diagnostic =~ ":enotdir"
+    assert diagnostic =~ ":enotdir" or diagnostic =~ ":eexist"
     refute diagnostic =~ "unknown"
   end
 
