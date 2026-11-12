@@ -2878,8 +2878,10 @@ defmodule Muro.CheckTest do
     assert Muro.check_file(path) == :ok
     assert {:ok, src} = Muro.emit_file(path, Module.concat(Muro, "CshrlSynth"))
     refute src =~ "sufficient-cegis"
+    refute src =~ "sufficient_cegis"
     refute src =~ "propagation"
     refute src =~ "vs-shrinks"
+    refute src =~ "vs_shrinks"
     refute src =~ "CoindHomo"
     Code.eval_string(src)
 
