@@ -71,7 +71,7 @@ defmodule Muro.CLI do
           {[
              "synth path.muro [--oracle NAME] [--depth N] [--fuel N]",
              "    [--out out.muro] [--json]"
-           ], "Search a version space. The homomorphism for the policy is later."},
+           ], "Search a version space. Exit 0 is a checked homomorphism."},
           {"ui path.muro",
            "Print how to install muro_visor and open this book. The compiler does not start the explorer."}
         ])

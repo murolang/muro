@@ -18,21 +18,21 @@ defmodule Muro.Synth.Book do
   The book whose `survivor` is the predicate the search returned.
 
   `eval` of that predicate is the deployed policy. The equations
-  `hold-<state>` are the observations. A homomorphism is not in this book.
+  `hold-<state>` are the observations. When the environment defines the
+  homomorphism the oracle asks for, and `solve` is constant, the book
+  also defines `rank` from that predicate and the evidence for it.
+  Otherwise the book is the policy alone.
 
   A name the environment already uses is not declared again. A compatible
   `andb`, `PredProg`, or `eval` is the one the policy calls. Anything
   else is given a fresh name, so a generated policy book can be an
   environment for a later search.
   """
-  def render(host, arms, anchor) when is_list(arms) do
+  def render(host, arms, anchor, oracle) when is_list(arms) and is_binary(oracle) do
     env = rel(anchor, host.path)
     bound = bind(host, arms)
 
-    """
-    -- The survivor is the predicate the search returned.
-    -- eval runs it. The checker sees this policy. It does not see the search.
-    -- A homomorphism for the policy is later.
+    body = """
     import "#{env}"
     #{carrier(host)}
     #{features(host, bound.placeholder)}
@@ -43,7 +43,45 @@ defmodule Muro.Synth.Book do
         #{policy_term(arms, bound)}
     #{holds(arms, bound)}
     """
-    |> then(&{:ok, &1})
+
+    case Muro.Synth.Cert.render(host, arms, oracle, bound) do
+      {:ok, cert} ->
+        {:ok, header(:certified) <> body <> cert.text,
+         %{
+           kind: :certified,
+           certificate: cert.certificate,
+           also: cert.also,
+           reason: nil,
+           obligations: cert.obligations
+         }}
+
+      {:skip, reason} ->
+        {:ok, header(:policy) <> body,
+         %{
+           kind: :policy,
+           certificate: nil,
+           also: nil,
+           reason: reason,
+           obligations: []
+         }}
+    end
+  end
+
+  defp header(:certified) do
+    """
+    -- The survivor is the predicate the search returned.
+    -- eval runs it. rank reads that predicate.
+    -- The homomorphism is evidence about that run.
+    -- The checker sees this book. It does not see the search.
+    """
+  end
+
+  defp header(:policy) do
+    """
+    -- The survivor is the predicate the search returned.
+    -- eval runs it. The checker sees this policy. It does not see the search.
+    -- This book does not contain a homomorphism.
+    """
   end
 
   def check(source, anchor, checker) when is_function(checker, 1) do
@@ -162,14 +200,19 @@ defmodule Muro.Synth.Book do
         %{carrier: "book", predicted: nil, oracle: nil, pair: nil, fed: 1, agrees: nil}
 
       ob ->
+        region = diagnostic_region(text, ob.name)
+        parsed = predicted(region)
+
         %{
           carrier: ob.carrier,
-          predicted: predicted(diagnostic_region(text, ob.name)),
+          predicted: if(is_nil(parsed), do: Map.get(ob, :claimed), else: parsed),
           oracle: ob.oracle,
           pair: Map.get(ob, :pair),
           fed: 1,
           agrees: nil,
-          name: ob.name
+          name: ob.name,
+          kind: Map.get(ob, :kind),
+          arm: Map.get(ob, :arm)
         }
     end
   end
@@ -285,14 +328,13 @@ defmodule Muro.Synth.Book do
 
     {policy, taken} = alloc("policy", taken)
 
-    hold =
+    {taken, hold} =
       Enum.reduce(arms, {taken, %{}}, fn arm, {taken, acc} ->
         Enum.reduce(arm.observations, {taken, acc}, fn {state, _bit}, {taken, acc} ->
           {name, taken} = alloc(obligation_name(arm, state, length(arms)), taken)
           {taken, Map.put(acc, {arm.name, state}, name)}
         end)
       end)
-      |> elem(1)
 
     %{
       evaluator: evaluator,
@@ -300,7 +342,8 @@ defmodule Muro.Synth.Book do
       decl: Map.new(decl),
       policy: policy,
       hold: hold,
-      placeholder: placeholder
+      placeholder: placeholder,
+      taken: taken
     }
   end
 
@@ -545,6 +588,9 @@ defmodule Muro.Synth.Book do
   defp entry_names(%{kind: :import}), do: []
   defp entry_names(%{name: name}), do: [name]
   defp entry_names(_), do: []
+
+  @doc false
+  def reserve(base, taken), do: alloc(base, taken)
 
   defp alloc(base, taken) do
     name = fresh(base, taken)

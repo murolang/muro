@@ -59,7 +59,7 @@ defmodule Muro.CLI.Synth do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro synth reads one checked environment and searches a version space of predicate programs. The search calls that book's emitted step. A program that misses an observation is dropped. The smallest program that matches every observation is the policy the result book deploys, and eval runs it. A score does not decide who survives. The checker sees that policy. It does not see the search. A homomorphism for the policy is later, so this command does not exit 0.
+      muro synth reads one checked environment and searches a version space of predicate programs. The search calls that book's emitted step. A program that misses an observation is dropped. The smallest program that matches every observation is the policy the result book deploys, and eval runs it. A score does not decide who survives. The checker sees that policy and, when the environment defines it, the homomorphism of the ranking that reads the policy. It does not see the search. Exit 0 is that checked homomorphism.
       """),
       Muro.CLI.Text.section(
         "USAGE",
@@ -84,9 +84,10 @@ defmodule Muro.CLI.Synth do
       Muro.CLI.Text.section(
         "EXIT CODES",
         Muro.CLI.Text.exits([
-          {"0", "Not used. A checked homomorphism for the policy is later."},
+          {"0",
+           "The policy book checks and contains the homomorphism for the synthesized ranking, on the step the search called."},
           {"1",
-           "The report names an empty space, a counterexample, a silent oracle, features that cannot separate two carriers, or a policy whose homomorphism is later."},
+           "The report names an empty space, a counterexample, a homomorphism that is not derivable, a silent oracle, features that cannot separate two carriers, or a policy whose environment does not define the homomorphism."},
           {"2",
            "The book does not check, it is not an environment, the oracle name is unknown, --out already exists, or a policy book or a temporary book cannot be written."}
         ])
@@ -170,11 +171,13 @@ defmodule Muro.CLI.Synth do
     report = if json, do: [json(result)], else: result.lines
     book = result.book || ""
 
+    written = result.status in [:policy, :certified]
+
     cond do
-      result.status == :policy and is_binary(out) ->
+      written and is_binary(out) ->
         case write_new(out, book, hooks) do
           :ok ->
-            {:exit, 1, "", report}
+            {:exit, exit_code(result.status), "", report}
 
           {:error, :eexist} ->
             {:exit, 2, "", ["#{out} already exists"]}
@@ -183,13 +186,16 @@ defmodule Muro.CLI.Synth do
             {:exit, 2, "", ["#{out}: #{inspect(reason)}"]}
         end
 
-      result.status == :policy ->
-        {:exit, 1, book, report}
+      written ->
+        {:exit, exit_code(result.status), book, report}
 
       true ->
         {:exit, 1, "", report}
     end
   end
+
+  defp exit_code(:certified), do: 0
+  defp exit_code(_status), do: 1
 
   # The existence check runs before the search. The open is the guarantee:
   # a path created after that check is the same refusal, and it is not
@@ -220,7 +226,8 @@ defmodule Muro.CLI.Synth do
       program: program_json(result.program),
       versions: result.versions,
       cex: Enum.map(result.cex, &cex_json/1),
-      note: note(result.status)
+      note: note(result.status),
+      certificate: Map.get(result, :certificate)
     }
 
     JSON.encode!(payload) <> "\n"
@@ -248,6 +255,7 @@ defmodule Muro.CLI.Synth do
   defp pair_json({action, other}), do: [action, other]
   defp pair_json(_pair), do: nil
 
-  defp note(:policy), do: "homomorphism certificate is later"
+  defp note(:certified), do: "homomorphism checked"
+  defp note(:policy), do: "homomorphism is not derivable"
   defp note(_status), do: nil
 end
