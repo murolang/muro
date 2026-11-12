@@ -48,5 +48,5 @@ Nothing is inferred: there are no implicits, unification, metavariables or tacti
 ## Optional
 
 - [Extending the kernel](https://muro-lang.dev/docs/extending): How to change the type theory. Agda first, then Elixir.
-- [CSHRL](https://muro-lang.dev/docs/cshrl): Coinductive symmetric homomorphisms for RL, as a library on params, with three environments and their agents.
+- [CSHRL](https://muro-lang.dev/docs/cshrl): Coinductive symmetric homomorphisms for RL, as a library on params, with environments, their agents, a PredProg run policy, and evidence about that policy.
 - [CHANGELOG](https://github.com/murolang/muro/blob/main/CHANGELOG.md): Release history.

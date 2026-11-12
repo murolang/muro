@@ -101,7 +101,7 @@ pages:
   - file: cshrl.md
     slug: cshrl
     title: CSHRL
-    summary: Coinductive symmetric homomorphisms for RL, as a library on params, with three environments and their agents.
+    summary: Coinductive symmetric homomorphisms for RL, as a library on params, with environments, their agents, and evidence for a predicate program.
   - file: for-agents.md
     slug: for-agents
     title: For agents

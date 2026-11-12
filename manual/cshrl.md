@@ -2,7 +2,7 @@
 title: CSHRL
 slug: cshrl
 order: 18
-summary: Coinductive symmetric homomorphisms for RL, as a library on params, with three environments and their agents.
+summary: Coinductive symmetric homomorphisms for RL, as a library on params, with environments, their agents, and evidence for a predicate program.
 ---
 
 # CSHRL
@@ -22,6 +22,8 @@ In brief: `examples/cshrl/` is [CSHRL](https://github.com/doctorcorral/csh-rl) i
 | `envs/optimal.muro` | The return theorem: `agent` goes, and its reward stream dominates every other policy |
 | `envs/binary_sacrifice.muro` | `BinarySacrifice` |
 | `envs/skill_investment.muro` | `SkillInvestment` |
+| `lib/synth.muro` | A predicate program: `eval`, `propagation`, `vs-shrinks`, `sufficient-cegis` |
+| `envs/synth_bit.muro` | Two carriers, one feature, one representative |
 | `std/` | Bool, Nat order and `maxN`, List, Stream with `Dom` |
 
 A library file does not check on its own: `mix muro.check examples/cshrl/lib/core.muro` refuses with `param State is supplied by a file that imports this one`. Check an environment instead:
@@ -88,6 +90,20 @@ def agent-optimal : evidence Π (+ policy : State → Action) → Π (+ s : Stat
 `CoindHomo ranks` is a property of a ranking of actions. `find-policy start horizon ≡ go` is the Finder's choice at `start`. `agent-optimal` is the statement that this agent's return dominates every other policy.
 
 In BinarySacrifice the stream of `go-trap` is 1, 0, 0, … and the stream of `go-paradise` is 0, 1, 1, …. Each is strictly ahead at a position where the other is behind, so `Dom` holds in neither direction. No policy's return dominates every other policy there.
+
+## Predicate programs
+
+`lib/synth.muro` is the CEGIS theory for a Boolean program over features. The environment supplies the carrier, the features, and `eval-feature`. `PredProg` is a feature test (`feat`), a conjunction (`andp`), a disjunction (`orp`), a negation (`notp`), or a constant (`truep`, `falsep`). `eval` reads a carrier. `propagation` says a program agrees on feature-equivalent carriers. `refine` keeps the programs that match an observation, and `vs-shrinks` says the version space never grows. `consistent-correct` says a program that matches an observation is kept. `cegis-survivors-consistent` says every survivor of `refine-all` agrees with every observation it saw. `refine-commutes` and `replay-redundant` say the order of observations does not matter, and repeating one that was already seen changes nothing.
+
+`sufficient-cegis` is the claim that makes a finite cover enough. If `FeatureRespects target` and `Covers reps`, every survivor of refinement on the representative observations `(r, target r)` matches the target on every carrier. Those lemmas are evidence about the run policy, and the emitters erase them.
+
+`envs/synth_bit.muro` is that claim on two carriers. Both make the one feature true, so `on` represents `off`, and the target is constantly true. One observation is enough. `bit-policy` is the run `eval truep`. It is the deployed policy, and `bit-policy-matches` is `sufficient-cegis` at that exact run: the policy matches the target on both carriers.
+
+The Elixir enumerator is a different search. A homomorphism for an agent is a different book.
+
+```
+mix muro.check examples/cshrl/envs/synth_bit.muro
+```
 
 ## What is proved
 
