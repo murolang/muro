@@ -59,12 +59,20 @@ defmodule Muro.Synth.Host do
         {:error, :usage, "the book does not define all-actions"}
 
       listed ->
-        actions = listed |> decode_list() |> Enum.map(&source!(host, &1))
+        # A repeated action is one arm, in first-occurrence order. The
+        # default, when `default-action` is omitted, is the last element
+        # of the list as written, including a repeat of an earlier action.
+        decoded = listed |> decode_list() |> Enum.map(&source!(host, &1))
+        actions = Enum.uniq(decoded)
         horizon = host |> call("horizon", []) |> nat_int()
 
         all_states =
           if exported?(host, "all-states", 0) do
-            host |> call("all-states", []) |> decode_list() |> Enum.map(&source!(host, &1))
+            host
+            |> call("all-states", [])
+            |> decode_list()
+            |> Enum.map(&source!(host, &1))
+            |> Enum.uniq()
           else
             nil
           end
@@ -73,7 +81,7 @@ defmodule Muro.Synth.Host do
           if exported?(host, "default-action", 0) do
             source!(host, call(host, "default-action", []))
           else
-            List.last(actions)
+            List.last(decoded)
           end
 
         {:ok,
@@ -241,6 +249,9 @@ defmodule Muro.Synth.Host do
 
   defp eval_feature_type(book) do
     cond do
+      named?(book, "eval-feature") and not named?(book, "Feature") ->
+        {:error, :usage, "the book defines eval-feature and does not define Feature"}
+
       not named?(book, "Feature") or not named?(book, "eval-feature") ->
         :ok
 
@@ -317,6 +328,9 @@ defmodule Muro.Synth.Host do
 
   defp features(book) do
     cond do
+      named?(book, "eval-feature") and not named?(book, "Feature") ->
+        {:error, :usage, "the book defines eval-feature and does not define Feature"}
+
       not named?(book, "Feature") ->
         {:ok, []}
 

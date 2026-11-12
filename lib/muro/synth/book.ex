@@ -35,7 +35,7 @@ defmodule Muro.Synth.Book do
     -- A homomorphism for the policy is later.
     import "#{env}"
     #{carrier(host)}
-    #{features(host)}
+    #{features(host, bound.placeholder)}
     #{bound.evaluator}
     #{survivors(arms, bound)}
     def #{bound.policy} : run Π (+ s : State) → Action :=
@@ -47,15 +47,15 @@ defmodule Muro.Synth.Book do
   end
 
   def check(source, anchor, checker) when is_function(checker, 1) do
-    check(source, anchor, checker, &temp_name/1)
+    check(source, anchor, checker, &temp_name/1, [])
   end
 
   @doc false
-  def check(source, anchor, checker, namer)
-      when is_function(checker, 1) and is_function(namer, 1) do
+  def check(source, anchor, checker, namer, opts \\ [])
+      when is_function(checker, 1) and is_function(namer, 1) and is_list(opts) do
     File.mkdir_p!(anchor)
 
-    case claim(anchor, namer, source, @claim_attempts) do
+    case claim(anchor, namer, source, @claim_attempts, opts) do
       {:ok, path} ->
         try do
           checker.(path)
@@ -71,6 +71,50 @@ defmodule Muro.Synth.Book do
     end
   end
 
+  @doc false
+  # `IO.binwrite/2` and `File.close/1` return `{:error, reason}` without
+  # raising. Either one leaves a partial file, and the next exclusive
+  # open is then refused. The partial file is removed before the error
+  # is returned, and the caller does not read it.
+  def write_bytes(path, io, bytes, opts \\ []) when is_binary(path) and is_list(opts) do
+    binwrite = Keyword.get(opts, :binwrite, &IO.binwrite/2)
+    close = Keyword.get(opts, :close, &File.close/1)
+    write_result = io_result(fn -> binwrite.(io, bytes) end)
+    close_result = io_result(fn -> close.(io) end)
+
+    case {write_result, close_result} do
+      {:ok, :ok} ->
+        :ok
+
+      {{:raise, error, stack}, _} ->
+        _ = File.rm(path)
+        reraise error, stack
+
+      {_, {:raise, error, stack}} ->
+        _ = File.rm(path)
+        reraise error, stack
+
+      {{:error, reason}, _} ->
+        _ = File.rm(path)
+        {:error, reason}
+
+      {:ok, {:error, reason}} ->
+        _ = File.rm(path)
+        {:error, reason}
+    end
+  end
+
+  defp io_result(fun) when is_function(fun, 0) do
+    try do
+      case fun.() do
+        :ok -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    rescue
+      error -> {:raise, error, __STACKTRACE__}
+    end
+  end
+
   # `System.unique_integer/1` repeats across BEAM instances. The pid and
   # the random bytes do not, and `:exclusive` refuses a name another
   # process already created.
@@ -79,37 +123,22 @@ defmodule Muro.Synth.Book do
     ".muro-synth-#{System.pid()}-#{hex}.muro"
   end
 
-  defp claim(_anchor, _namer, _source, 0), do: {:error, :eexist}
+  defp claim(_anchor, _namer, _source, 0, _opts), do: {:error, :eexist}
 
-  defp claim(anchor, namer, source, left) do
+  defp claim(anchor, namer, source, left, opts) do
     path = Path.join(anchor, namer.(anchor))
 
     case File.open(path, [:write, :exclusive]) do
       {:ok, io} ->
         # `IO.write` transcodes to latin1 and refuses Π and λ. The book is
-        # already UTF-8, so the bytes go out unchanged. A failed write
-        # removes the claim so the anchor is not left with a partial book.
-        result =
-          try do
-            IO.binwrite(io, source)
-            :ok
-          rescue
-            error -> {:raise, error, __STACKTRACE__}
-          after
-            File.close(io)
-          end
-
-        case result do
-          :ok ->
-            {:ok, path}
-
-          {:raise, error, stack} ->
-            _ = File.rm(path)
-            reraise error, stack
+        # already UTF-8, so the bytes go out unchanged.
+        case write_bytes(path, io, source, opts) do
+          :ok -> {:ok, path}
+          {:error, reason} -> {:error, reason}
         end
 
       {:error, :eexist} ->
-        claim(anchor, namer, source, left - 1)
+        claim(anchor, namer, source, left - 1, opts)
 
       {:error, reason} ->
         {:error, reason}
@@ -231,6 +260,16 @@ defmodule Muro.Synth.Book do
 
   defp bind(host, arms) do
     taken = taken_names(host.book)
+
+    # Reserve the placeholder before the evaluator, so a later fresh name
+    # does not take the constructor this book is about to declare.
+    {placeholder, taken} =
+      if host.defined_feature do
+        {nil, taken}
+      else
+        alloc("none", taken)
+      end
+
     {evaluator, names, taken} = evaluator(host.book, taken)
 
     {decl, taken} =
@@ -255,7 +294,8 @@ defmodule Muro.Synth.Book do
       names: names,
       decl: Map.new(decl),
       policy: policy,
-      hold: hold
+      hold: hold,
+      placeholder: placeholder
     }
   end
 
@@ -503,19 +543,32 @@ defmodule Muro.Synth.Book do
 
   defp alloc(base, taken) do
     name = fresh(base, taken)
-    {name, MapSet.put(taken, name)}
+    {name, take(taken, [name])}
   end
 
+  # `Muro.Load` refuses two runs that spell one Elixir function.
+  # `policy-2` and `policy_2` are distinct source names and one spelling.
   defp fresh(base, taken) do
-    if MapSet.member?(taken, base) do
-      n = Enum.find(2..10_000, &(not MapSet.member?(taken, "#{base}-#{&1}")))
+    if occupied?(base, taken) do
+      n = Enum.find(2..10_000, &(not occupied?("#{base}-#{&1}", taken)))
       "#{base}-#{n}"
     else
       base
     end
   end
 
-  defp take(taken, names), do: Enum.reduce(names, taken, &MapSet.put(&2, &1))
+  defp occupied?(name, taken) do
+    MapSet.member?(taken, name) or
+      MapSet.member?(taken, {:elixir, Muro.Emit.elixir_base(name)})
+  end
+
+  defp take(taken, names) do
+    Enum.reduce(names, taken, fn name, acc ->
+      acc
+      |> MapSet.put(name)
+      |> MapSet.put({:elixir, Muro.Emit.elixir_base(name)})
+    end)
+  end
 
   defp survivors(arms, bound) do
     Enum.map_join(arms, "\n", fn arm ->
@@ -564,20 +617,18 @@ defmodule Muro.Synth.Book do
     end
   end
 
-  defp features(host) do
-    if host.defined_feature do
-      ""
-    else
-      """
-      data Feature : Type where
-        none : Feature
+  defp features(%{defined_feature: true}, _placeholder), do: ""
 
-      def eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
-        λ (+ f : Feature) → λ (+ _ : Carrier) →
-          match f motive (λ _ → Bool)
-            | none => false
-      """
-    end
+  defp features(_host, name) when is_binary(name) do
+    """
+    data Feature : Type where
+      #{name} : Feature
+
+    def eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
+      λ (+ f : Feature) → λ (+ _ : Carrier) →
+        match f motive (λ _ → Bool)
+          | #{name} => false
+    """
   end
 
   def obligation_name(_arm, state, 1), do: "hold-#{state}"

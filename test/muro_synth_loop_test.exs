@@ -680,6 +680,235 @@ defmodule Muro.SynthLoopTest do
     assert feat_msg =~ "Carrier must convert to State"
   end
 
+  test "stdout import resolves when the book is saved in the current directory" do
+    parent =
+      Path.join(System.tmp_dir!(), "muro_synth_stdout_#{System.unique_integer([:positive])}")
+
+    nested = Path.join(parent, "nested")
+    File.mkdir_p!(nested)
+    env = Path.join(nested, "env.muro")
+    File.write!(env, prefer_src())
+
+    assert {:exit, 1, book, _report} =
+             File.cd!(parent, fn ->
+               Muro.CLI.Synth.run([env, "--depth", "0"])
+             end)
+
+    refute book =~ "import \"env.muro\""
+    saved = Path.join(parent, "policy.muro")
+    File.write!(saved, book)
+    assert :ok = Muro.check_file(saved)
+  end
+
+  test "a failed write of --out removes the partial file" do
+    dir = tmp()
+    env = prefer_go(dir)
+    out = Path.join(dir, "policy.muro")
+
+    assert {:exit, 2, "", [message]} =
+             Muro.CLI.Synth.run([env, "--depth", "0", "--out", out],
+               binwrite: fn io, data ->
+                 IO.binwrite(io, binary_part(data, 0, min(8, byte_size(data))))
+                 {:error, :eio}
+               end
+             )
+
+    assert message =~ ":eio"
+    refute File.exists?(out)
+
+    closed = Path.join(dir, "closed.muro")
+
+    assert {:exit, 2, "", [close_message]} =
+             Muro.CLI.Synth.run([env, "--depth", "0", "--out", closed],
+               close: fn io ->
+                 File.close(io)
+                 {:error, :eio}
+               end
+             )
+
+    assert close_message =~ ":eio"
+    refute File.exists?(closed)
+
+    assert {:exit, 1, "", _} = Muro.CLI.Synth.run([env, "--depth", "0", "--out", out])
+    assert File.read!(out) =~ "def survivor"
+  end
+
+  test "a fresh policy name does not reuse an Elixir spelling" do
+    dir = tmp()
+
+    path =
+      write_book(dir, "spell.muro", """
+      #{prefer_src()}
+      def policy : run Nat := 0
+      def policy_2 : run Nat := 0
+      """)
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert result.book =~ "def policy-3 "
+    refute result.book =~ "def policy-2 "
+  end
+
+  test "a state named none still synthesizes a constant policy" do
+    dir = tmp()
+
+    path =
+      write_book(dir, "none-state.muro", """
+      import "std:bool.muro"
+      import "std:list.muro"
+
+      data State : Type where
+        none : State
+
+      data Action : Type where
+        go : Action
+        stay : Action
+
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (a : Action) →
+          match a motive (λ _ → State × Nat)
+            | go => (s, suc 0)
+            | stay => (s, 0)
+
+      def all-actions : run List Action := cons go (cons stay nil)
+      def default-action : run Action := stay
+      def horizon : run Nat := 0
+      def all-states : run List State := cons none nil
+      #{leb_src()}
+      """)
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert result.book =~ "none-2 : Feature"
+    assert result.book =~ "| none-2 => false"
+    refute result.book =~ ~r/^[ \t]*none : Feature/m
+
+    action =
+      write_book(dir, "none-action.muro", """
+      import "std:bool.muro"
+      import "std:list.muro"
+
+      data State : Type where
+        s : State
+
+      data Action : Type where
+        none : Action
+        stay : Action
+
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (a : Action) →
+          match a motive (λ _ → State × Nat)
+            | none => (s, suc 0)
+            | stay => (s, 0)
+
+      def all-actions : run List Action := cons none (cons stay nil)
+      def default-action : run Action := stay
+      def horizon : run Nat := 0
+      def all-states : run List State := cons s nil
+      #{leb_src()}
+      """)
+
+    assert {:ok, action_result} = Muro.Synth.cegis_loop(action, depth: 0, max_depth: 0)
+    assert action_result.status == :policy
+    assert action_result.book =~ "none-2 : Feature"
+    refute action_result.book =~ ~r/^[ \t]*none : Feature/m
+  end
+
+  test "a repeated action is one arm and the default stays the last element" do
+    dir = tmp()
+
+    path =
+      write_book(dir, "dup-action.muro", """
+      import "std:bool.muro"
+      import "std:list.muro"
+
+      data State : Type where
+        s : State
+
+      data Action : Type where
+        a : Action
+        b : Action
+
+      def step : run Π (s : State) → Π (x : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+
+      def all-actions : run List Action := cons a (cons b (cons a nil))
+      def horizon : run Nat := 0
+      def all-states : run List State := cons s nil
+      #{leb_src()}
+      """)
+
+    assert {:ok, host} = Muro.Synth.Host.open(path)
+    assert host.actions == ["a", "b"]
+    assert host.default == "a"
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert length(Regex.scan(~r/^def survivor :/m, result.book)) == 1
+    refute result.book =~ "def survivor-a "
+  end
+
+  test "a repeated state is one obligation" do
+    dir = tmp()
+
+    path =
+      write_book(dir, "dup-state.muro", """
+      import "std:bool.muro"
+      import "std:list.muro"
+
+      data State : Type where
+        t : State
+        s : State
+
+      data Action : Type where
+        go : Action
+        stay : Action
+
+      def step : run Π (x : State) → Π (a : Action) → State × Nat :=
+        λ (x : State) → λ (a : Action) →
+          match a motive (λ _ → State × Nat)
+            | go => (x, suc 0)
+            | stay => (x, 0)
+
+      def all-actions : run List Action := cons go (cons stay nil)
+      def default-action : run Action := stay
+      def horizon : run Nat := 0
+      def all-states : run List State := cons t (cons s (cons t nil))
+      #{leb_src()}
+      """)
+
+    assert {:ok, host} = Muro.Synth.Host.open(path)
+    assert host.all_states == ["t", "s"]
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert length(Regex.scan(~r/^def hold-t :/m, result.book)) == 1
+    assert length(Regex.scan(~r/^def hold-s :/m, result.book)) == 1
+  end
+
+  test "eval-feature without Feature is a usage error" do
+    dir = tmp()
+
+    path =
+      host_book(dir, "bare-eval.muro", """
+      def eval-feature : run Nat := 0
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+      def all-actions : run List Action := cons a (cons b nil)
+      def horizon : run Nat := 0
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, msg} = Muro.Synth.Host.open(path)
+    assert msg =~ "eval-feature"
+    assert msg =~ "Feature"
+    assert {:exit, 2, "", lines} = Muro.CLI.Synth.run([path])
+    text = Enum.join(lines, "\n")
+    assert text =~ "does not define Feature"
+    refute text =~ "residual"
+  end
+
   defp joined(result), do: Enum.join(result.lines, "\n")
 
   defp prefer_go(dir), do: write_book(dir, "prefer.muro", prefer_src())

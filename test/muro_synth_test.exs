@@ -392,6 +392,87 @@ defmodule Muro.SynthTest do
     assert File.read!(taken) == "keep\n"
   end
 
+  test "a failed write of a temporary book is not checked and leaves no file" do
+    dir = Path.join(System.tmp_dir!(), "muro_synth_write_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+
+    partial = fn io, data ->
+      IO.binwrite(io, binary_part(data, 0, min(4, byte_size(data))))
+      {:error, :eio}
+    end
+
+    assert {:error, msg} =
+             Muro.Synth.Book.check(
+               "source\n",
+               dir,
+               fn _path -> flunk("checker ran") end,
+               fn _anchor -> "partial.muro" end,
+               binwrite: partial
+             )
+
+    assert msg =~ ":eio"
+    refute File.exists?(Path.join(dir, "partial.muro"))
+
+    assert {:error, close_msg} =
+             Muro.Synth.Book.check(
+               "source\n",
+               dir,
+               fn _path -> flunk("checker ran") end,
+               fn _anchor -> "partial.muro" end,
+               close: fn io ->
+                 File.close(io)
+                 {:error, :eio}
+               end
+             )
+
+    assert close_msg =~ ":eio"
+    refute File.exists?(Path.join(dir, "partial.muro"))
+
+    assert :ok =
+             Muro.Synth.Book.check(
+               "source\n",
+               dir,
+               fn path ->
+                 assert File.read!(path) == "source\n"
+                 :ok
+               end,
+               fn _anchor -> "partial.muro" end
+             )
+
+    refute File.exists?(Path.join(dir, "partial.muro"))
+  end
+
+  test "successor does not rank a state whose rewards have no maximum" do
+    step = fn
+      "s", "a" -> {"both", :z}
+      "s", "b" -> {"only", :z}
+      "both", "a" -> {"both", :p}
+      "both", "b" -> {"both", :q}
+      "only", "a" -> {"only", :q}
+      "only", "b" -> {"only", :q}
+    end
+
+    host = %{
+      actions: ["a", "b"],
+      default: "b",
+      states: ["s", "both", "only"],
+      all_states: ["s"],
+      horizon: 1,
+      step: step,
+      leb: fn left, right -> left == right end
+    }
+
+    assert {:silent, successor} = Muro.Synth.Oracle.observe(host, "successor")
+    assert successor.carrier == "s"
+    assert successor.pair == {"a", "b"}
+    assert successor.reason =~ "incomparable"
+
+    assert {:silent, coind} = Muro.Synth.Oracle.observe(host, "coind-homo")
+    assert coind.carrier == "s"
+    assert coind.pair == {"a", "b"}
+    assert coind.reason =~ "incomparable"
+  end
+
   test "sibling actions reuse the solved memo" do
     count = :counters.new(1, [:atomics])
 

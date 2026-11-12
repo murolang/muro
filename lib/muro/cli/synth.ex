@@ -35,7 +35,7 @@ defmodule Muro.CLI.Synth do
         value: "out.muro",
         default: "omitted. The book is printed on standard output",
         doc:
-          "Write the policy book to this path. The path must not already exist, including a path that appears before the write. Without it, the book is printed and nothing is written."
+          "Write the policy book to this path. The path must not already exist, including a path that appears before the write. A write that fails removes the partial file. Without it, the book is printed and nothing is written. That book's environment import is relative to the current directory."
       },
       %{
         name: :fuel,
@@ -88,7 +88,7 @@ defmodule Muro.CLI.Synth do
           {"1",
            "The report names an empty space, a counterexample, a silent oracle, features that cannot separate two carriers, or a policy whose homomorphism is later."},
           {"2",
-           "The book does not check, it is not an environment, the oracle name is unknown, or --out already exists."}
+           "The book does not check, it is not an environment, the oracle name is unknown, --out already exists, or the policy book cannot be written."}
         ])
       ),
       Muro.CLI.Text.section(
@@ -137,10 +137,13 @@ defmodule Muro.CLI.Synth do
         {:exit, 2, "", ["#{out} already exists"]}
 
       true ->
+        # Printed on standard output, the book is saved in the current
+        # directory, so the import is relative to that directory. `--out`
+        # is relative to the file that was written.
         anchor =
           if is_binary(out),
             do: Path.dirname(Path.expand(out)),
-            else: Path.dirname(Path.expand(path))
+            else: File.cwd!()
 
         case Muro.Synth.cegis_loop(path,
                oracle: oracle,
@@ -199,13 +202,9 @@ defmodule Muro.CLI.Synth do
     case File.open(path, [:write, :exclusive]) do
       {:ok, io} ->
         # The policy book is UTF-8. `IO.write` would refuse Π and λ.
-        try do
-          IO.binwrite(io, contents)
-        after
-          File.close(io)
-        end
-
-        :ok
+        # A failed write or close removes the partial file. A retry is
+        # not then refused because the path already exists.
+        Muro.Synth.Book.write_bytes(path, io, contents, hooks)
 
       {:error, reason} ->
         {:error, reason}

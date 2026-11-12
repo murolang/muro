@@ -2,6 +2,9 @@ defmodule Muro.Synth.Oracle do
   @moduledoc false
 
   @names ~w(trace successor coind-homo)
+  # Not a reward. Emitted rewards are atoms, numbers, tuples, and field
+  # maps. They do not carry this module as `__struct__`.
+  @unordered %{__struct__: __MODULE__, muro: :unordered}
 
   def names, do: @names
 
@@ -151,7 +154,9 @@ defmodule Muro.Synth.Oracle do
   defp pointwise_le(host, left, right) do
     left
     |> Enum.zip(right)
-    |> Enum.all?(fn {a, b} -> host.leb.(a, b) end)
+    |> Enum.all?(fn {a, b} ->
+      not unordered?(a) and not unordered?(b) and host.leb.(a, b)
+    end)
   end
 
   defp prefix(host, "coind-homo", state, action, n) do
@@ -193,14 +198,35 @@ defmodule Muro.Synth.Oracle do
             end
           end)
 
-        value = Enum.reduce(rewards, &max_reward(host, &1, &2))
+        value = maximum(host, rewards)
         {value, Map.put(memo, key, value)}
     end
   end
 
-  defp max_reward(host, left, right) do
-    if host.leb.(left, right), do: right, else: left
+  # An unordered pair has no maximum. Picking either reward would make a
+  # state that offers both compare equal to a state that offers only one.
+  defp maximum(host, [first | rest]) do
+    Enum.reduce_while(rest, first, fn reward, acc ->
+      case max_reward(host, acc, reward) do
+        {:ok, value} -> {:cont, value}
+        :incomparable -> {:halt, @unordered}
+      end
+    end)
   end
+
+  defp max_reward(_host, left, right) when left == @unordered or right == @unordered do
+    :incomparable
+  end
+
+  defp max_reward(host, left, right) do
+    cond do
+      host.leb.(left, right) -> {:ok, right}
+      host.leb.(right, left) -> {:ok, left}
+      true -> :incomparable
+    end
+  end
+
+  defp unordered?(value), do: value == @unordered
 
   defp trace(host, state, action, k, blind, memo) do
     if is_list(blind) and action in blind do
