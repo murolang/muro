@@ -88,7 +88,7 @@ defmodule Muro.CLI.Synth do
           {"1",
            "The report names an empty space, a counterexample, a silent oracle, features that cannot separate two carriers, or a policy whose homomorphism is later."},
           {"2",
-           "The book does not check, it is not an environment, the oracle name is unknown, --out already exists, or the policy book cannot be written."}
+           "The book does not check, it is not an environment, the oracle name is unknown, --out already exists, or a policy book or a temporary book cannot be written."}
         ])
       ),
       Muro.CLI.Text.section(
@@ -155,6 +155,9 @@ defmodule Muro.CLI.Synth do
             {:exit, 2, "", [message, "refusing to synthesize from a book that does not check"]}
 
           {:error, :usage, message} ->
+            {:exit, 2, "", [message]}
+
+          {:error, :storage, message} ->
             {:exit, 2, "", [message]}
 
           {:ok, result} ->

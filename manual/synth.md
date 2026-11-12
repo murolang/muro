@@ -70,4 +70,4 @@ When two carriers on the cover agree on every feature and the oracle disagrees, 
 | --- | --- |
 | 0 | Not used. A checked homomorphism for the synthesized policy is later. |
 | 1 | The report names a policy whose homomorphism is later, an empty version space, a counterexample that survived the round bound, an oracle that cannot label a pair, or features that cannot separate two carriers. |
-| 2 | The book does not check, it does not follow the environment convention, the oracle name is unknown, `--out` already exists, or the policy book cannot be written. |
+| 2 | The book does not check, it does not follow the environment convention, the oracle name is unknown, `--out` already exists, or a policy book or a temporary book cannot be written. The diagnostic is the one the write returned. |

@@ -53,29 +53,34 @@ defmodule Muro.Synth.Book do
   @doc false
   def check(source, anchor, checker, namer, opts \\ [])
       when is_function(checker, 1) and is_function(namer, 1) and is_list(opts) do
-    File.mkdir_p!(anchor)
+    case File.mkdir_p(anchor) do
+      :ok ->
+        case claim(anchor, namer, source, @claim_attempts, opts) do
+          {:ok, path} ->
+            try do
+              checker.(path)
+            after
+              _ = File.rm(path)
+            end
 
-    case claim(anchor, namer, source, @claim_attempts, opts) do
-      {:ok, path} ->
-        try do
-          checker.(path)
-        after
-          _ = File.rm(path)
+          {:error, reason} ->
+            storage_error(anchor, reason)
         end
 
-      {:error, :eexist} ->
-        {:error, "could not claim a temporary book in #{anchor}"}
-
       {:error, reason} ->
-        {:error, "could not claim a temporary book in #{anchor}: #{inspect(reason)}"}
+        storage_error(anchor, reason)
     end
+  end
+
+  defp storage_error(anchor, reason) do
+    {:error, :storage, "could not write a temporary book in #{anchor}: #{inspect(reason)}"}
   end
 
   @doc false
   # `IO.binwrite/2` and `File.close/1` return `{:error, reason}` without
-  # raising. Either one leaves a partial file, and the next exclusive
-  # open is then refused. The partial file is removed before the error
-  # is returned, and the caller does not read it.
+  # raising. A raise is the same failure: the partial file is removed
+  # and the error is returned. The caller does not read the file, and
+  # the next exclusive open is not refused because of it.
   def write_bytes(path, io, bytes, opts \\ []) when is_binary(path) and is_list(opts) do
     binwrite = Keyword.get(opts, :binwrite, &IO.binwrite/2)
     close = Keyword.get(opts, :close, &File.close/1)
@@ -86,13 +91,13 @@ defmodule Muro.Synth.Book do
       {:ok, :ok} ->
         :ok
 
-      {{:raise, error, stack}, _} ->
+      {{:raise, error, _stack}, _} ->
         _ = File.rm(path)
-        reraise error, stack
+        {:error, error}
 
-      {_, {:raise, error, stack}} ->
+      {_, {:raise, error, _stack}} ->
         _ = File.rm(path)
-        reraise error, stack
+        {:error, error}
 
       {{:error, reason}, _} ->
         _ = File.rm(path)

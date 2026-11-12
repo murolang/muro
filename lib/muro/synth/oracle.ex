@@ -205,25 +205,32 @@ defmodule Muro.Synth.Oracle do
 
   # An unordered pair has no maximum. Picking either reward would make a
   # state that offers both compare equal to a state that offers only one.
-  defp maximum(host, [first | rest]) do
-    Enum.reduce_while(rest, first, fn reward, acc ->
-      case max_reward(host, acc, reward) do
-        {:ok, value} -> {:cont, value}
-        :incomparable -> {:halt, @unordered}
-      end
-    end)
-  end
-
-  defp max_reward(_host, left, right) when left == @unordered or right == @unordered do
-    :incomparable
-  end
-
-  defp max_reward(host, left, right) do
-    cond do
-      host.leb.(left, right) -> {:ok, right}
-      host.leb.(right, left) -> {:ok, left}
-      true -> :incomparable
+  #
+  # A left-to-right fold is not that maximum. `p` and `q` may be unordered
+  # while `top` is at least both of them. The fold `[p, q, top]` stops at
+  # the pair and misses `top`; `[top, p, q]` keeps it. The maximum is an
+  # element that is at least every reward. When none is, the set is
+  # unordered in every order.
+  @doc false
+  def maximum_reward(leb, rewards) when is_function(leb, 2) and is_list(rewards) do
+    case maximum(%{leb: leb}, rewards) do
+      @unordered -> :unordered
+      value -> value
     end
+  end
+
+  defp maximum(host, rewards) do
+    case Enum.find(rewards, &dominates?(host, &1, rewards)) do
+      nil -> @unordered
+      winner -> winner
+    end
+  end
+
+  defp dominates?(host, candidate, rewards) do
+    not unordered?(candidate) and
+      Enum.all?(rewards, fn other ->
+        not unordered?(other) and host.leb.(other, candidate)
+      end)
   end
 
   defp unordered?(value), do: value == @unordered

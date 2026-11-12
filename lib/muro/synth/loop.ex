@@ -166,6 +166,9 @@ defmodule Muro.Synth.Loop do
       :ok ->
         {:ok, checked(arms, source, versions)}
 
+      {:error, :storage, diagnostic} ->
+        {:error, :storage, diagnostic}
+
       {:error, text} ->
         feedback(
           host,

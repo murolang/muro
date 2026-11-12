@@ -378,7 +378,7 @@ defmodule Muro.SynthTest do
     refute File.exists?(Path.join(dir, "free.muro"))
     assert :counters.get(attempts, 1) >= 2
 
-    assert {:error, msg} =
+    assert {:error, :storage, msg} =
              Muro.Synth.Book.check(
                "new\n",
                dir,
@@ -389,6 +389,7 @@ defmodule Muro.SynthTest do
              )
 
     assert msg =~ "temporary"
+    assert msg =~ ":eexist"
     assert File.read!(taken) == "keep\n"
   end
 
@@ -401,7 +402,7 @@ defmodule Muro.SynthTest do
       {:error, :eio}
     end
 
-    assert {:error, msg} =
+    assert {:error, :storage, msg} =
              Muro.Synth.Book.check(
                "source\n",
                dir,
@@ -413,7 +414,7 @@ defmodule Muro.SynthTest do
     assert msg =~ ":eio"
     refute File.exists?(Path.join(dir, "partial.muro"))
 
-    assert {:error, close_msg} =
+    assert {:error, :storage, close_msg} =
              Muro.Synth.Book.check(
                "source\n",
                dir,
@@ -440,6 +441,32 @@ defmodule Muro.SynthTest do
              )
 
     refute File.exists?(Path.join(dir, "partial.muro"))
+  end
+
+  test "a reward that dominates the set is the maximum in either order" do
+    leb = fn
+      left, right when left == right -> true
+      :p, :top -> true
+      :q, :top -> true
+      _, _ -> false
+    end
+
+    assert Muro.Synth.Oracle.maximum_reward(leb, [:p, :q, :top]) == :top
+    assert Muro.Synth.Oracle.maximum_reward(leb, [:top, :p, :q]) == :top
+    assert Muro.Synth.Oracle.maximum_reward(leb, [:q, :top, :p]) == :top
+
+    none = fn left, right -> left == right end
+    assert Muro.Synth.Oracle.maximum_reward(none, [:p, :q, :top]) == :unordered
+    assert Muro.Synth.Oracle.maximum_reward(none, [:top, :p, :q]) == :unordered
+    assert Muro.Synth.Oracle.maximum_reward(none, [:q, :p]) == :unordered
+    assert Muro.Synth.Oracle.maximum_reward(none, [:p, :q]) == :unordered
+
+    assert {:silent, left} = observe_values(["p", "q", "top"], none)
+    assert {:silent, right} = observe_values(["top", "q", "p"], none)
+    assert left.reason =~ "incomparable"
+    assert right.reason =~ "incomparable"
+    assert left.carrier == "s"
+    assert right.carrier == "s"
   end
 
   test "successor does not rank a state whose rewards have no maximum" do
@@ -491,6 +518,20 @@ defmodule Muro.SynthTest do
 
     assert {:ok, _} = Muro.Synth.Oracle.observe(host, "successor")
     assert :counters.get(count, 1) < 500
+  end
+
+  defp observe_values(actions, leb) do
+    host = %{
+      actions: actions,
+      default: List.last(actions),
+      states: ["s"],
+      all_states: ["s"],
+      horizon: 0,
+      step: fn state, action -> {state, String.to_atom(action)} end,
+      leb: leb
+    }
+
+    Muro.Synth.Oracle.observe(host, "successor")
   end
 
   defp observe3(step, leb) do

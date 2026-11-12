@@ -700,6 +700,32 @@ defmodule Muro.SynthLoopTest do
     assert :ok = Muro.check_file(saved)
   end
 
+  test "a temporary book that cannot be stored exits 2" do
+    dir = tmp()
+    env = prefer_go(dir)
+    blocker = Path.join(dir, "blocker")
+    File.write!(blocker, "not a directory\n")
+    out = Path.join(blocker, "policy.muro")
+
+    assert {:exit, 2, "", [message]} = Muro.CLI.Synth.run([env, "--depth", "0", "--out", out])
+    assert message =~ "temporary book"
+    assert message =~ ":enotdir"
+    refute message =~ "unknown"
+    refute message =~ "residual"
+    refute message =~ "counterexample"
+    refute File.exists?(out)
+
+    assert {:error, :storage, diagnostic} =
+             Muro.Synth.cegis_loop(env,
+               depth: 0,
+               max_depth: 0,
+               anchor: Path.join(blocker, "books")
+             )
+
+    assert diagnostic =~ ":enotdir"
+    refute diagnostic =~ "unknown"
+  end
+
   test "a failed write of --out removes the partial file" do
     dir = tmp()
     env = prefer_go(dir)
