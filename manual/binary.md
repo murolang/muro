@@ -54,10 +54,11 @@ muro init [--ci github] [--backend BACKEND] [--cargo-metadata]
 muro skills add
 muro deps.get
 muro mutate path.muro [--only NAME] [--json] [--fuel N] [--max-mutants-per-def N] [--max-survivors N]
+muro synth path.muro [--oracle NAME] [--depth N] [--out out.muro] [--fuel N] [--json]
 muro --version
 ```
 
-Each command takes the same flags as its Mix task and prints the same lines. Where a Mix task raises, the executable prints that message on stderr and exits 1. `muro mutate` exits 1 when survivors exceed `--max-survivors` and exits 2 when the book does not check, as `mix muro.mutate` does. Each classified mutant prints `<id> <operator> <outcome>` on standard error. A run that builds no mutants prints no such line.
+Each command takes the same flags as its Mix task and prints the same lines. Where a Mix task raises, the executable prints that message on stderr and exits 1. `muro mutate` exits 1 when survivors exceed `--max-survivors` and exits 2 when the book does not check, as `mix muro.mutate` does. Each classified mutant prints `<id> <operator> <outcome>` on standard error. A run that builds no mutants prints no such line. `muro synth` prints the policy book on standard output unless `--out` is set, prints the report on standard error, and exits 1. It exits 2 when the book does not check, as `mix muro.synth` does. Exit 0 is reserved for a later homomorphism. The page is [Synthesis](synth.md).
 
 The executable never compiles a host application and never starts one. That holds outside a Mix project and inside one. A suite that calls an `impl:` keeps using `mix muro.*`, because that suite needs the host compiled. The executable does not load a Mix project, so a lone `:muro` key in `mix.exs` is not a manifest for it. Write `muro.exs` or `muro.toml`. `muro init` in a directory with `mix.exs` writes `muro.exs`.
 

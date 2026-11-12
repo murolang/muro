@@ -1,0 +1,646 @@
+defmodule Muro.Synth.Book do
+  @moduledoc false
+
+  # The run half of the predicate language. Bool, true, and false come
+  # from the environment that imports this text. The file is compiled
+  # into the beam, so the policy book does not look the library up from
+  # the working directory and does not import a second Bool or leb.
+  @pred_path Path.join(__DIR__, "pred.muro")
+  @external_resource @pred_path
+  @evaluator File.read!(@pred_path)
+  @pred_ctors ~w(feat andp orp notp truep falsep)
+  @claim_attempts 16
+
+  @doc false
+  def evaluator, do: @evaluator
+
+  @doc """
+  The book whose `survivor` is the predicate the search returned.
+
+  `eval` of that predicate is the deployed policy. The equations
+  `hold-<state>` are the observations. A homomorphism is not in this book.
+
+  A name the environment already uses is not declared again. A compatible
+  `andb`, `PredProg`, or `eval` is the one the policy calls. Anything
+  else is given a fresh name, so a generated policy book can be an
+  environment for a later search.
+  """
+  def render(host, arms, anchor) when is_list(arms) do
+    env = rel(anchor, host.path)
+    bound = bind(host, arms)
+
+    """
+    -- The survivor is the predicate the search returned.
+    -- eval runs it. The checker sees this policy. It does not see the search.
+    -- A homomorphism for the policy is later.
+    import "#{env}"
+    #{carrier(host)}
+    #{features(host, bound.placeholder)}
+    #{bound.evaluator}
+    #{survivors(arms, bound)}
+    def #{bound.policy} : run Π (+ s : State) → Action :=
+      λ (+ s : State) →
+        #{policy_term(arms, bound)}
+    #{holds(arms, bound)}
+    """
+    |> then(&{:ok, &1})
+  end
+
+  def check(source, anchor, checker) when is_function(checker, 1) do
+    check(source, anchor, checker, &temp_name/1, [])
+  end
+
+  @doc false
+  def check(source, anchor, checker, namer, opts \\ [])
+      when is_function(checker, 1) and is_function(namer, 1) and is_list(opts) do
+    File.mkdir_p!(anchor)
+
+    case claim(anchor, namer, source, @claim_attempts, opts) do
+      {:ok, path} ->
+        try do
+          checker.(path)
+        after
+          _ = File.rm(path)
+        end
+
+      {:error, :eexist} ->
+        {:error, "could not claim a temporary book in #{anchor}"}
+
+      {:error, reason} ->
+        {:error, "could not claim a temporary book in #{anchor}: #{inspect(reason)}"}
+    end
+  end
+
+  @doc false
+  # `IO.binwrite/2` and `File.close/1` return `{:error, reason}` without
+  # raising. Either one leaves a partial file, and the next exclusive
+  # open is then refused. The partial file is removed before the error
+  # is returned, and the caller does not read it.
+  def write_bytes(path, io, bytes, opts \\ []) when is_binary(path) and is_list(opts) do
+    binwrite = Keyword.get(opts, :binwrite, &IO.binwrite/2)
+    close = Keyword.get(opts, :close, &File.close/1)
+    write_result = io_result(fn -> binwrite.(io, bytes) end)
+    close_result = io_result(fn -> close.(io) end)
+
+    case {write_result, close_result} do
+      {:ok, :ok} ->
+        :ok
+
+      {{:raise, error, stack}, _} ->
+        _ = File.rm(path)
+        reraise error, stack
+
+      {_, {:raise, error, stack}} ->
+        _ = File.rm(path)
+        reraise error, stack
+
+      {{:error, reason}, _} ->
+        _ = File.rm(path)
+        {:error, reason}
+
+      {:ok, {:error, reason}} ->
+        _ = File.rm(path)
+        {:error, reason}
+    end
+  end
+
+  defp io_result(fun) when is_function(fun, 0) do
+    try do
+      case fun.() do
+        :ok -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    rescue
+      error -> {:raise, error, __STACKTRACE__}
+    end
+  end
+
+  # `System.unique_integer/1` repeats across BEAM instances. The pid and
+  # the random bytes do not, and `:exclusive` refuses a name another
+  # process already created.
+  defp temp_name(_anchor) do
+    hex = Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
+    ".muro-synth-#{System.pid()}-#{hex}.muro"
+  end
+
+  defp claim(_anchor, _namer, _source, 0, _opts), do: {:error, :eexist}
+
+  defp claim(anchor, namer, source, left, opts) do
+    path = Path.join(anchor, namer.(anchor))
+
+    case File.open(path, [:write, :exclusive]) do
+      {:ok, io} ->
+        # `IO.write` transcodes to latin1 and refuses Π and λ. The book is
+        # already UTF-8, so the bytes go out unchanged.
+        case write_bytes(path, io, source, opts) do
+          :ok -> {:ok, path}
+          {:error, reason} -> {:error, reason}
+        end
+
+      {:error, :eexist} ->
+        claim(anchor, namer, source, left - 1, opts)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  The obligation a failing check named, if the text names one.
+
+  The predicted bit is read from that obligation's diagnostic. A later
+  obligation's `cannot convert` does not supply it.
+  """
+  def cex_from(text, obligations) when is_binary(text) and is_list(obligations) do
+    case earliest_obligation(text, obligations) do
+      nil ->
+        %{carrier: "book", predicted: nil, oracle: nil, pair: nil, fed: 1, agrees: nil}
+
+      ob ->
+        %{
+          carrier: ob.carrier,
+          predicted: predicted(diagnostic_region(text, ob.name)),
+          oracle: ob.oracle,
+          pair: Map.get(ob, :pair),
+          fed: 1,
+          agrees: nil,
+          name: ob.name
+        }
+    end
+  end
+
+  # The diagnostic is `<name> <part>:`. A shorter name is not a match
+  # for a longer one: `hold-copy` does not name `hold-copy4`.
+  defp earliest_obligation(text, obligations) do
+    obligations
+    |> Enum.reduce(nil, fn ob, best ->
+      case diagnostic_at(text, ob.name) do
+        nil ->
+          best
+
+        at ->
+          case best do
+            nil -> {ob, at}
+            {_earlier, best_at} when at < best_at -> {ob, at}
+            earlier -> earlier
+          end
+      end
+    end)
+    |> case do
+      nil -> nil
+      {ob, _at} -> ob
+    end
+  end
+
+  defp diagnostic_at(text, name) do
+    case Regex.run(diagnostic(name), text, return: :index) do
+      [{at, _len} | _] -> at
+      _ -> nil
+    end
+  end
+
+  defp diagnostic(name) do
+    ~r/(?<![\p{L}\p{N}_-])#{Regex.escape(name)} (?:type|body|grade|productivity):/u
+  end
+
+  # From this obligation's header up to the next definition diagnostic.
+  # Errors from `check_sig` are joined by a blank line, and one
+  # definition stops at its first failure, so the bit in a later
+  # obligation is not this one.
+  defp diagnostic_region(text, name) do
+    case Regex.run(diagnostic(name), text, return: :index) do
+      [{at, len} | _] ->
+        rest_at = at + len
+        rest = binary_part(text, rest_at, byte_size(text) - rest_at)
+        header = binary_part(text, at, len)
+
+        tail =
+          case Regex.run(~r/\n+[^\n]* (?:type|body|grade|productivity):/u, rest, return: :index) do
+            [{cut, _} | _] -> binary_part(rest, 0, cut)
+            _ -> rest
+          end
+
+        header <> tail
+
+      _ ->
+        ""
+    end
+  end
+
+  def obligations(host, arms) when is_list(arms) do
+    bound = bind(host, arms)
+
+    Enum.flat_map(arms, fn arm ->
+      Enum.map(arm.observations, fn {state, bit} ->
+        %{
+          name: Map.fetch!(bound.hold, {arm.name, state}),
+          carrier: state,
+          oracle: bit,
+          pair: {arm.action, arm.else}
+        }
+      end)
+    end)
+  end
+
+  @doc false
+  def hold_name(host, arms, arm, state) do
+    bind(host, arms).hold |> Map.fetch!({arm.name, state})
+  end
+
+  defp predicted(text) do
+    case Regex.run(~r/cannot convert\s+(\S+)\s+≁\s+(\S+)/u, text) do
+      [_, got, _expected] -> bit(got)
+      _ -> nil
+    end
+  end
+
+  defp bit("true"), do: true
+  defp bit("false"), do: false
+  defp bit(_other), do: nil
+
+  defp bind(host, arms) do
+    taken = taken_names(host.book)
+
+    # Reserve the placeholder before the evaluator, so a later fresh name
+    # does not take the constructor this book is about to declare.
+    {placeholder, taken} =
+      if host.defined_feature do
+        {nil, taken}
+      else
+        alloc("none", taken)
+      end
+
+    {evaluator, names, taken} = evaluator(host.book, taken)
+
+    {decl, taken} =
+      Enum.map_reduce(arms, taken, fn arm, taken ->
+        {name, taken} = alloc(arm.name, taken)
+        {{arm.name, name}, taken}
+      end)
+
+    {policy, taken} = alloc("policy", taken)
+
+    hold =
+      Enum.reduce(arms, {taken, %{}}, fn arm, {taken, acc} ->
+        Enum.reduce(arm.observations, {taken, acc}, fn {state, _bit}, {taken, acc} ->
+          {name, taken} = alloc(obligation_name(arm, state, length(arms)), taken)
+          {taken, Map.put(acc, {arm.name, state}, name)}
+        end)
+      end)
+      |> elem(1)
+
+    %{
+      evaluator: evaluator,
+      names: names,
+      decl: Map.new(decl),
+      policy: policy,
+      hold: hold,
+      placeholder: placeholder
+    }
+  end
+
+  defp evaluator(book, taken) do
+    names = standard_names()
+
+    if Enum.all?(Map.values(names), &(not MapSet.member?(taken, &1))) do
+      {@evaluator, names, take(taken, Map.values(names))}
+    else
+      evaluator_custom(book, taken)
+    end
+  end
+
+  defp evaluator_custom(book, taken) do
+    {andb, taken, andb_text} = bool_helper(book, taken, "andb", 2, &andb_source/1)
+    {orb, taken, orb_text} = bool_helper(book, taken, "orb", 2, &orb_source/1)
+    {notb, taken, notb_text} = bool_helper(book, taken, "notb", 1, &notb_source/1)
+    {pred_names, taken, pred_text} = pred_block(book, taken)
+
+    names =
+      pred_names
+      |> Map.put(:andb, andb)
+      |> Map.put(:orb, orb)
+      |> Map.put(:notb, notb)
+
+    {eval, _taken, eval_text} = eval_block(book, taken, names)
+    names = Map.put(names, :eval, eval)
+    text = IO.iodata_to_binary([andb_text, orb_text, notb_text, pred_text, eval_text])
+    {text, names, take(taken, Map.values(names))}
+  end
+
+  defp bool_helper(book, taken, name, arity, source) do
+    if compatible_bool?(book, name, arity) do
+      {name, taken, []}
+    else
+      {fresh_name, taken} = alloc(name, taken)
+      {fresh_name, taken, [source.(fresh_name), "\n"]}
+    end
+  end
+
+  defp pred_block(book, taken) do
+    if compatible_pred?(book) do
+      {standard_pred(), taken, []}
+    else
+      {pred, taken} = alloc("PredProg", taken)
+
+      {ctors, taken} =
+        Enum.map_reduce(@pred_ctors, taken, fn name, taken -> alloc(name, taken) end)
+
+      [feat, andp, orp, notp, truep, falsep] = ctors
+
+      names = %{
+        pred: pred,
+        feat: feat,
+        andp: andp,
+        orp: orp,
+        notp: notp,
+        truep: truep,
+        falsep: falsep
+      }
+
+      {names, taken, [pred_source(names), "\n"]}
+    end
+  end
+
+  defp eval_block(book, taken, names) do
+    if names.pred == "PredProg" and compatible_eval?(book) do
+      {"eval", taken, []}
+    else
+      {eval, taken} = alloc("eval", taken)
+      {eval, taken, [eval_source(eval, names), "\n"]}
+    end
+  end
+
+  defp compatible_bool?(book, name, arity) do
+    case find_def(book, name) do
+      %{mode: :run, type: ty} = d ->
+        Map.get(d, :export, true) and bool_arrows?(ty, arity)
+
+      _ ->
+        false
+    end
+  end
+
+  defp bool_arrows?({:pi, qty, {:var, "Bool"}, _, cod}, n) when n > 0 and qty != :erased do
+    bool_arrows?(cod, n - 1)
+  end
+
+  defp bool_arrows?({:var, "Bool"}, 0), do: true
+  defp bool_arrows?(_, _), do: false
+
+  defp compatible_pred?(book) do
+    case Enum.find(book, &(Map.get(&1, :kind) == :data and Map.get(&1, :name) == "PredProg")) do
+      %{ctors: ctors} ->
+        Enum.map(ctors, & &1.name) == @pred_ctors and Enum.all?(ctors, &compatible_ctor?/1)
+
+      _ ->
+        false
+    end
+  end
+
+  defp compatible_ctor?(%{
+         name: "feat",
+         type: {:pi, qty, {:var, "Feature"}, _, {:var, "PredProg"}}
+       })
+       when qty != :erased,
+       do: true
+
+  defp compatible_ctor?(%{
+         name: "andp",
+         type:
+           {:pi, q1, {:var, "PredProg"}, _, {:pi, q2, {:var, "PredProg"}, _, {:var, "PredProg"}}}
+       })
+       when q1 != :erased and q2 != :erased,
+       do: true
+
+  defp compatible_ctor?(%{
+         name: "orp",
+         type:
+           {:pi, q1, {:var, "PredProg"}, _, {:pi, q2, {:var, "PredProg"}, _, {:var, "PredProg"}}}
+       })
+       when q1 != :erased and q2 != :erased,
+       do: true
+
+  defp compatible_ctor?(%{
+         name: "notp",
+         type: {:pi, qty, {:var, "PredProg"}, _, {:var, "PredProg"}}
+       })
+       when qty != :erased,
+       do: true
+
+  defp compatible_ctor?(%{name: "truep", type: {:var, "PredProg"}}), do: true
+  defp compatible_ctor?(%{name: "falsep", type: {:var, "PredProg"}}), do: true
+  defp compatible_ctor?(_ctor), do: false
+
+  defp compatible_eval?(book) do
+    case find_def(book, "eval") do
+      %{
+        mode: :run,
+        type: {:pi, q1, {:var, "PredProg"}, _, {:pi, q2, carrier, _, {:var, "Bool"}}}
+      } = d
+      when q1 != :erased and q2 != :erased ->
+        Map.get(d, :export, true) and carrier_dom?(carrier)
+
+      _ ->
+        false
+    end
+  end
+
+  defp carrier_dom?({:var, "Carrier"}), do: true
+  defp carrier_dom?({:var, "State"}), do: true
+  defp carrier_dom?(_ty), do: false
+
+  defp find_def(book, name) do
+    Enum.find(book, fn d ->
+      Map.get(d, :name) == name and Map.get(d, :kind) not in [:data, :import]
+    end)
+  end
+
+  defp standard_names do
+    Map.put(standard_pred(), :andb, "andb")
+    |> Map.put(:orb, "orb")
+    |> Map.put(:notb, "notb")
+    |> Map.put(:eval, "eval")
+  end
+
+  defp standard_pred do
+    %{
+      pred: "PredProg",
+      feat: "feat",
+      andp: "andp",
+      orp: "orp",
+      notp: "notp",
+      truep: "truep",
+      falsep: "falsep"
+    }
+  end
+
+  defp andb_source(name) do
+    """
+    def #{name} : run Π (a : Bool) → Π (b : Bool) → Bool :=
+      λ (a : Bool) → λ (b : Bool) →
+        match a motive (λ _ → Bool)
+          | true => b
+          | false => false
+    """
+  end
+
+  defp orb_source(name) do
+    """
+    def #{name} : run Π (a : Bool) → Π (b : Bool) → Bool :=
+      λ (a : Bool) → λ (b : Bool) →
+        match a motive (λ _ → Bool)
+          | true => true
+          | false => b
+    """
+  end
+
+  defp notb_source(name) do
+    """
+    def #{name} : run Π (a : Bool) → Bool :=
+      λ (a : Bool) →
+        match a motive (λ _ → Bool)
+          | true => false
+          | false => true
+    """
+  end
+
+  defp pred_source(n) do
+    """
+    data #{n.pred} : Type where
+      #{n.feat} : Π (+ f : Feature) → #{n.pred}
+      #{n.andp} : #{n.pred} → #{n.pred} → #{n.pred}
+      #{n.orp} : #{n.pred} → #{n.pred} → #{n.pred}
+      #{n.notp} : #{n.pred} → #{n.pred}
+      #{n.truep} : #{n.pred}
+      #{n.falsep} : #{n.pred}
+    """
+  end
+
+  defp eval_source(eval, n) do
+    """
+    def #{eval} : run Π (p : #{n.pred}) → Π (+ c : Carrier) → Bool :=
+      λ (p : #{n.pred}) → λ (+ c : Carrier) →
+        match p motive (λ _ → Bool)
+          | #{n.feat} f => eval-feature f c
+          | #{n.andp} q r => #{n.andb} (#{eval} q c) (#{eval} r c)
+          | #{n.orp} q r => #{n.orb} (#{eval} q c) (#{eval} r c)
+          | #{n.notp} q => #{n.notb} (#{eval} q c)
+          | #{n.truep} => true
+          | #{n.falsep} => false
+    """
+  end
+
+  defp taken_names(book) do
+    Enum.reduce(book, MapSet.new(), fn d, acc -> take(acc, entry_names(d)) end)
+  end
+
+  defp entry_names(%{kind: :data, name: name, ctors: ctors}),
+    do: [name | Enum.map(ctors, & &1.name)]
+
+  defp entry_names(%{kind: :import}), do: []
+  defp entry_names(%{name: name}), do: [name]
+  defp entry_names(_), do: []
+
+  defp alloc(base, taken) do
+    name = fresh(base, taken)
+    {name, take(taken, [name])}
+  end
+
+  # `Muro.Load` refuses two runs that spell one Elixir function.
+  # `policy-2` and `policy_2` are distinct source names and one spelling.
+  defp fresh(base, taken) do
+    if occupied?(base, taken) do
+      n = Enum.find(2..10_000, &(not occupied?("#{base}-#{&1}", taken)))
+      "#{base}-#{n}"
+    else
+      base
+    end
+  end
+
+  defp occupied?(name, taken) do
+    MapSet.member?(taken, name) or
+      MapSet.member?(taken, {:elixir, Muro.Emit.elixir_base(name)})
+  end
+
+  defp take(taken, names) do
+    Enum.reduce(names, taken, fn name, acc ->
+      acc
+      |> MapSet.put(name)
+      |> MapSet.put({:elixir, Muro.Emit.elixir_base(name)})
+    end)
+  end
+
+  defp survivors(arms, bound) do
+    Enum.map_join(arms, "\n", fn arm ->
+      decl = Map.fetch!(bound.decl, arm.name)
+      "def #{decl} : run #{bound.names.pred} := #{spell(arm.pred, bound.names)}"
+    end)
+  end
+
+  defp spell(true, names), do: names.truep
+  defp spell(false, names), do: names.falsep
+  defp spell({:feat, feature}, names), do: "(#{names.feat} #{feature})"
+  defp spell({:not, pred}, names), do: "(#{names.notp} #{spell(pred, names)})"
+  defp spell({:and, p, q}, names), do: "(#{names.andp} #{spell(p, names)} #{spell(q, names)})"
+  defp spell({:or, p, q}, names), do: "(#{names.orp} #{spell(p, names)} #{spell(q, names)})"
+
+  defp policy_term([arm], bound) do
+    decl = Map.fetch!(bound.decl, arm.name)
+
+    "(match #{bound.names.eval} #{decl} s motive (λ _ → Action) | true => #{arm.action} | false => #{arm.else})"
+  end
+
+  defp policy_term([arm | rest], bound) do
+    decl = Map.fetch!(bound.decl, arm.name)
+
+    "(match #{bound.names.eval} #{decl} s motive (λ _ → Action) | true => #{arm.action} | false => #{policy_term(rest, bound)})"
+  end
+
+  defp holds(arms, bound) do
+    Enum.map_join(arms, "\n", fn arm ->
+      decl = Map.fetch!(bound.decl, arm.name)
+
+      Enum.map_join(arm.observations, "\n", fn {state, bit} ->
+        name = Map.fetch!(bound.hold, {arm.name, state})
+        word = if bit, do: "true", else: "false"
+
+        "def #{name} : evidence {#{bound.names.eval} #{decl} #{state} ≡ #{word} : Bool} := refl"
+      end)
+    end)
+  end
+
+  defp carrier(host) do
+    if host.defined_carrier do
+      ""
+    else
+      "def Carrier : spec Type := State\n"
+    end
+  end
+
+  defp features(%{defined_feature: true}, _placeholder), do: ""
+
+  defp features(_host, name) when is_binary(name) do
+    """
+    data Feature : Type where
+      #{name} : Feature
+
+    def eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
+      λ (+ f : Feature) → λ (+ _ : Carrier) →
+        match f motive (λ _ → Bool)
+          | #{name} => false
+    """
+  end
+
+  def obligation_name(_arm, state, 1), do: "hold-#{state}"
+  def obligation_name(arm, state, _many), do: "hold-#{arm.action}-#{state}"
+
+  defp rel(from_dir, to_file) do
+    from = from_dir |> Path.expand() |> Path.split()
+    to = to_file |> Path.expand() |> Path.split()
+    {from, to} = drop_common(from, to)
+    Path.join(List.duplicate("..", length(from)) ++ to)
+  end
+
+  defp drop_common([head | from], [head | to]), do: drop_common(from, to)
+  defp drop_common(from, to), do: {from, to}
+end

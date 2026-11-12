@@ -39,6 +39,8 @@ mix muro.check path.muro                    # one file
 mix muro.check --fuel 20000 path.muro       # after "out of fuel"
 mix muro.mutate path.muro                   # which evidence constrains each run
 mix muro.mutate path.muro --only half --json
+mix muro.synth path.muro                    # version space; the homomorphism is later
+mix muro.synth path.muro --out out.muro --oracle trace
 mix muro --version                          # the copy that ran
 mix muro.init                               # muro.exs and priv/muro/
 mix muro.emit path.muro --backend fsm           # one state machine per session, on stdout
@@ -99,6 +101,6 @@ The C backend refuses some terms that the Elixir backend accepts. `U8`, `U32`, `
 
 ## Manual
 
-[Start](manual/start.md) · [Marks](manual/marks.md) · [The wall](manual/wall.md) · [Terms](manual/language.md) · [Sessions](manual/sessions.md) · [Choreography](manual/choreography.md) · [Identity](manual/identity.md) · [Data](manual/data.md) · [Indexed data](manual/indexed.md) · [Streams](manual/streams.md) · [Either and Dec](manual/either.md) · [Machine numbers](manual/machine.md) · [Emit](manual/emit.md) · [State machines](manual/fsm.md) · [Mutation](manual/mutate.md) · [Closed equations as tests](manual/exunit.md) · [Committed modules](manual/gen.md) · [The executable](manual/binary.md) · [Host representations](manual/repr.md) · [Packages](manual/packages.md) · [Library](manual/library.md) · [Grammar](manual/grammar.md) · [Examples](manual/examples.md) · [CSHRL](manual/cshrl.md) · [For agents](manual/for-agents.md) · [Extending](manual/extending.md) · [Limits](manual/limits.md)
+[Start](manual/start.md) · [Marks](manual/marks.md) · [The wall](manual/wall.md) · [Terms](manual/language.md) · [Sessions](manual/sessions.md) · [Choreography](manual/choreography.md) · [Identity](manual/identity.md) · [Data](manual/data.md) · [Indexed data](manual/indexed.md) · [Streams](manual/streams.md) · [Either and Dec](manual/either.md) · [Machine numbers](manual/machine.md) · [Emit](manual/emit.md) · [State machines](manual/fsm.md) · [Mutation](manual/mutate.md) · [Synthesis](manual/synth.md) · [Closed equations as tests](manual/exunit.md) · [Committed modules](manual/gen.md) · [The executable](manual/binary.md) · [Host representations](manual/repr.md) · [Packages](manual/packages.md) · [Library](manual/library.md) · [Grammar](manual/grammar.md) · [Examples](manual/examples.md) · [CSHRL](manual/cshrl.md) · [For agents](manual/for-agents.md) · [Extending](manual/extending.md) · [Limits](manual/limits.md)
 
 Machine-readable index: [`manual/manifest.yml`](manual/manifest.yml). Canonical book: `examples/half_ok.muro`.

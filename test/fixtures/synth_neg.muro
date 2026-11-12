@@ -1,0 +1,43 @@
+-- synth_neg.muro — one feature. The constants miss the observation.
+-- At on, stay pays and go does not. At off, go pays and stay does not.
+-- on-p holds only at on, so the program is the negation of that test.
+import "../../examples/cshrl/std/nat.muro"
+import "../../examples/cshrl/std/list.muro"
+
+data State : Type where
+  on  : State
+  off : State
+
+data Action : Type where
+  go   : Action
+  stay : Action
+
+def Carrier : spec Type := State
+
+data Feature : Type where
+  on-p : Feature
+
+def eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
+  λ (+ f : Feature) → λ (+ c : Carrier) →
+    match f motive (λ _ → Bool)
+      | on-p =>
+          (match c motive (λ _ → Bool)
+            | on => true
+            | off => false)
+
+def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Nat)
+      | on =>
+          (match a motive (λ _ → State × Nat)
+            | go => (on, 0)
+            | stay => (on, suc 0))
+      | off =>
+          (match a motive (λ _ → State × Nat)
+            | go => (off, suc 0)
+            | stay => (off, 0))
+
+def all-actions : run List Action := cons go (cons stay nil)
+def default-action : run Action := go
+def horizon : run Nat := 0
+def all-states : run List State := cons on (cons off nil)

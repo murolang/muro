@@ -1,0 +1,42 @@
+-- One feature holds at the only state, and the first action wins.
+-- Depth 0 keeps truep and the feature test. A checker that refuses
+-- truep still has the feature test to try.
+import "std:bool.muro"
+import "std:list.muro"
+
+data State : Type where
+  s : State
+
+data Action : Type where
+  go   : Action
+  stay : Action
+
+def Carrier : spec Type := State
+
+data Feature : Type where
+  hot : Feature
+
+def eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
+  λ (+ f : Feature) → λ (+ _ : Carrier) →
+    match f motive (λ _ → Bool)
+      | hot => true
+
+def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+  λ (s : State) → λ (a : Action) →
+    match a motive (λ _ → State × Nat)
+      | go => (s, suc 0)
+      | stay => (s, 0)
+
+def all-actions : run List Action := cons go (cons stay nil)
+def default-action : run Action := stay
+def horizon : run Nat := 0
+def all-states : run List State := cons s nil
+
+def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+  λ (m : Nat) → λ (n : Nat) →
+    match m motive (λ _ → Bool)
+      | 0 => true
+      | suc p =>
+          (match n motive (λ _ → Bool)
+            | 0 => false
+            | suc q => leb p q)

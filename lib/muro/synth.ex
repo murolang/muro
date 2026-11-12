@@ -1,21 +1,37 @@
 defmodule Muro.Synth do
   @moduledoc """
-  Discrete predicate synthesis. One state, one action.
+  Discrete predicate synthesis.
 
-  A predicate is a Boolean combination of feature tests. A chain fires
-  the action of the first predicate that holds, or the default. The
-  search enumerates predicates to a depth and keeps the highest-scoring
-  one that agrees with an oracle on a trajectory. Score zero is dropped.
+  A predicate is a Boolean combination of feature tests. `eval/3` is the
+  same reading as `eval` in `examples/cshrl/lib/synth.muro`: a feature
+  test, a conjunction, a disjunction, a negation, or a constant. The
+  checker sees that program, deployed as a `run` policy. It does not see
+  the search that built it.
 
-  `fewer?/7` compares two actions by how soon a stop is reached. One
-  call of `step` is one action. A state that has already stopped ties
-  them.
+  Version space, not scores, decides who survives. `solve/5` keeps every
+  predicate that matches the observations. `pick/2` chooses the smallest
+  of those. The size of a program is the number of predicate
+  constructors: a constant or a feature test is one, a negation is one
+  plus its body, and a conjunction or a disjunction is one plus both
+  parts. The feature's name is not a constructor. A score breaks a tie
+  between programs of equal size, and an earlier program wins a
+  remaining tie. A score does not put a program that missed an
+  observation back into the space.
 
-  `policy/3` transcribes a chain into a `run` definition. The checker
-  sees that definition. It does not see the search that built the chain.
+  `cegis_loop/2` is the closed search. It enumerates, refines by
+  observations taken from the environment's emitted `step`, deepens
+  while the space is empty and the depth bound allows it, and, when a
+  check of the surviving program fails, drops that candidate and checks
+  the next one. A candidate the checker refused is not selected again.
+  When the refusal removes every survivor and a greater depth is still
+  allowed, the search continues there. The fuel bound and the round
+  bound are operational. They stop a loop that is not shrinking. They
+  are not `sufficient-cegis`. A sweep of one trajectory is not that
+  theorem.
 
-  The checker is not involved in the search. A candidate is a predicate,
-  not a reduct.
+  `deepen/7` is the depth step. A miss at the current depth searches
+  the next depth. `budget` is how many further deepenings follow that
+  try. Budget 0 deepens once.
   """
 
   @doc """
@@ -50,6 +66,27 @@ defmodule Muro.Synth do
   def reads({:not, p}), do: reads(p)
 
   @doc """
+  Predicate constructors in `pred`. A feature name adds nothing.
+  """
+  def size(true), do: 1
+  def size(false), do: 1
+  def size({:feat, _feature}), do: 1
+  def size({:not, pred}), do: 1 + size(pred)
+  def size({:and, p, q}), do: 1 + size(p) + size(q)
+  def size({:or, p, q}), do: 1 + size(p) + size(q)
+
+  @doc """
+  The Muro term for `pred`, using `truep`, `falsep`, `feat`, `andp`,
+  `orp`, and `notp`.
+  """
+  def render(true), do: "truep"
+  def render(false), do: "falsep"
+  def render({:feat, feature}), do: "(feat #{feature})"
+  def render({:not, pred}), do: "(notp #{render(pred)})"
+  def render({:and, p, q}), do: "(andp #{render(p)} #{render(q)})"
+  def render({:or, p, q}), do: "(orp #{render(p)} #{render(q)})"
+
+  @doc """
   Every predicate built from `features` at this depth. Depth 0 is the
   constants and the feature tests.
   """
@@ -77,15 +114,32 @@ defmodule Muro.Synth do
   end
 
   @doc """
-  `{:converged, pred}` is the best positive-scoring predicate that
-  agrees with the oracle. `{:cegar, pred}` is the best candidate when
-  none agreed.
+  Every predicate in `cands` that agrees with `oracle` on `traj.(pred)`.
+
+  `score` does not filter and does not order the result. `{:survivors,
+  preds}` keeps every match, in enumeration order. `{:empty, []}` is an
+  empty version space. `pick/2` chooses among the survivors.
   """
-  def solve(cands, score, oracle, traj, feat) do
-    case Enum.filter(cands, &viable?(&1, score, oracle, traj, feat)) do
-      [] -> {:cegar, best(cands, score)}
-      viable -> {:converged, best(viable, score)}
+  def solve(cands, score, oracle, traj, feat) when is_function(score, 1) do
+    case Enum.filter(cands, &agrees?(&1, oracle, traj.(&1), feat)) do
+      [] -> {:empty, []}
+      preds -> {:survivors, preds}
     end
+  end
+
+  @doc """
+  The smallest predicate in `preds`. A higher `score` wins among equal
+  sizes. An earlier predicate wins a remaining tie.
+  """
+  def pick([pred | rest], score) when is_function(score, 1) do
+    Enum.reduce(rest, pred, fn cand, leader ->
+      cond do
+        size(cand) < size(leader) -> cand
+        size(cand) > size(leader) -> leader
+        score.(cand) > score.(leader) -> cand
+        true -> leader
+      end
+    end)
   end
 
   @doc """
@@ -106,20 +160,23 @@ defmodule Muro.Synth do
   end
 
   @doc """
-  On `{:cegar, pred}`, try `pred` at the next depth. `budget` is how
-  many further deepenings follow that try. `{:converged, _}` stops.
+  On an empty version space, search at the next depth. `budget` is how
+  many further deepenings follow that try. `{:survivors, _}` stops.
+  Budget 0 deepens once and returns that space, empty or not.
   """
-  def cegar(budget, depth, score, oracle, traj, feats, feat) do
-    step(
-      budget,
-      depth,
-      run(score, oracle, traj, feats, feat, depth),
-      score,
-      oracle,
-      traj,
-      feats,
-      feat
-    )
+  def deepen(budget, depth, score, oracle, traj, feats, feat) do
+    go(budget, depth, score, oracle, traj, feats, feat)
+  end
+
+  @doc """
+  Closed search over a checked environment.
+
+  `path` is a book that already checks and defines `step`. Observations
+  come from that emitted `step` and the named oracle (`trace`,
+  `successor`, or `coind-homo`). See `Muro.Synth.Loop`.
+  """
+  def cegis_loop(path, opts \\ []) when is_binary(path) and is_list(opts) do
+    Muro.Synth.Loop.run(path, opts)
   end
 
   @doc """
@@ -174,18 +231,19 @@ defmodule Muro.Synth do
     """
   end
 
-  defp step(_budget, _depth, {:converged, pred}, _score, _oracle, _traj, _feats, _feat),
-    do: {:converged, pred}
-
-  defp step(budget, depth, {:cegar, pred}, score, oracle, traj, feats, feat)
-       when budget == 0 or budget > 0 do
-    next = run_from(pred, score, oracle, traj, feats, feat, depth + 1)
-
-    if budget == 0 do
-      next
-    else
-      step(budget - 1, depth + 1, next, score, oracle, traj, feats, feat)
+  defp go(budget, depth, score, oracle, traj, feats, feat) do
+    case run(score, oracle, traj, feats, feat, depth) do
+      {:survivors, _preds} = hit -> hit
+      {:empty, []} -> deepen_more(budget, depth, score, oracle, traj, feats, feat)
     end
+  end
+
+  defp deepen_more(0, depth, score, oracle, traj, feats, feat) do
+    run(score, oracle, traj, feats, feat, depth + 1)
+  end
+
+  defp deepen_more(budget, depth, score, oracle, traj, feats, feat) when budget > 0 do
+    go(budget - 1, depth + 1, score, oracle, traj, feats, feat)
   end
 
   defp chain_term([], default, _spell), do: muro_name(default)
@@ -238,18 +296,4 @@ defmodule Muro.Synth do
   end
 
   defp consistent?(pred, {state, bit}, feat), do: eval(pred, feat, state) == bit
-
-  defp viable?(pred, score, oracle, traj, feat) do
-    score.(pred) > 0 and agrees?(pred, oracle, traj.(pred), feat)
-  end
-
-  # Earlier candidates win a tie. A later one replaces the leader only
-  # on a strictly higher score.
-  defp best([], _score), do: true
-
-  defp best([pred | rest], score) do
-    Enum.reduce(rest, pred, fn cand, leader ->
-      if score.(cand) > score.(leader), do: cand, else: leader
-    end)
-  end
 end

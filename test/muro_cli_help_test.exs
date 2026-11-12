@@ -11,10 +11,11 @@ defmodule Muro.CliHelpTest do
     Muro.CLI.Skills,
     Muro.CLI.Deps,
     Muro.CLI.Mutate,
+    Muro.CLI.Synth,
     Muro.CLI.Ui
   ]
 
-  @commands ["check", "emit", "gen", "init", "skills", "deps.get", "mutate", "ui"]
+  @commands ["check", "emit", "gen", "init", "skills", "deps.get", "mutate", "synth", "ui"]
 
   @doc_urls [
     "https://muro-lang.dev",
@@ -28,6 +29,7 @@ defmodule Muro.CliHelpTest do
     "https://muro-lang.dev/docs/emit",
     "https://muro-lang.dev/docs/gen",
     "https://muro-lang.dev/docs/mutate",
+    "https://muro-lang.dev/docs/synth",
     "https://muro-lang.dev/docs/explorer",
     "https://muro-lang.dev/docs/packages",
     "https://muro-lang.dev/docs/library",
@@ -61,7 +63,17 @@ defmodule Muro.CliHelpTest do
   test "help names the commands, the manifest, and where to read next" do
     text = Muro.CLI.usage_text()
 
-    for command <- ["check", "emit", "gen", "init", "skills add", "deps.get", "mutate", "ui"] do
+    for command <- [
+          "check",
+          "emit",
+          "gen",
+          "init",
+          "skills add",
+          "deps.get",
+          "mutate",
+          "synth",
+          "ui"
+        ] do
       assert text =~ command
     end
 
@@ -224,6 +236,7 @@ defmodule Muro.CliHelpTest do
           {["skills", "--nope"], "--nope"},
           {["deps.get", "--nope"], "--nope"},
           {["mutate", "--nope"], "--nope"},
+          {["synth", "--nope"], "--nope"},
           {["ui", "--nope"], "--nope"},
           {["check", "--fuel"], "--fuel"}
         ] do

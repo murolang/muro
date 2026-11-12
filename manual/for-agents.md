@@ -102,8 +102,10 @@ lib/muro/emit/fsm.ex    a session endpoint is a state machine; the transport sta
 lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
 lib/muro/example.ex     same book as Agda
 lib/muro/mutate.ex      mutants of run definitions (`mix muro.mutate`)
+lib/muro/synth.ex       version-space search on an emitted step (`mix muro.synth`)
 lib/mix/tasks/muro.check.ex
 lib/mix/tasks/muro.mutate.ex
+lib/mix/tasks/muro.synth.ex
 agda/Muro.agda          public re-export
 agda/Muro/Syntax.agda   Tm n (de Bruijn)
 agda/Muro/Subst.agda    wk, sub, inst
@@ -141,9 +143,9 @@ test/muro_check_test.exs
 
 ## Install
 
-`mix muro.check`, `mix muro.mutate`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
+`mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.20.17`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.20.17`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -211,6 +213,7 @@ mix test
 mix muro.check
 mix muro.check examples/half_ok.muro
 mix muro.mutate examples/half_ok.muro --only half
+mix muro.synth path.muro
 mix muro.emit path.muro --backend exunit
 mix muro.emit path.muro --backend exunit --imports
 mix muro --version

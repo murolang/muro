@@ -1,0 +1,38 @@
+-- PredProg and eval, compiled into the checker.
+-- Bool, true, and false are the environment's. This book does not
+-- declare them, and it does not declare leb.
+def andb : run Π (a : Bool) → Π (b : Bool) → Bool :=
+  λ (a : Bool) → λ (b : Bool) →
+    match a motive (λ _ → Bool)
+      | true => b
+      | false => false
+
+def orb : run Π (a : Bool) → Π (b : Bool) → Bool :=
+  λ (a : Bool) → λ (b : Bool) →
+    match a motive (λ _ → Bool)
+      | true => true
+      | false => b
+
+def notb : run Π (a : Bool) → Bool :=
+  λ (a : Bool) →
+    match a motive (λ _ → Bool)
+      | true => false
+      | false => true
+
+data PredProg : Type where
+  feat   : Π (+ f : Feature) → PredProg
+  andp   : PredProg → PredProg → PredProg
+  orp    : PredProg → PredProg → PredProg
+  notp   : PredProg → PredProg
+  truep  : PredProg
+  falsep : PredProg
+
+def eval : run Π (p : PredProg) → Π (+ c : Carrier) → Bool :=
+  λ (p : PredProg) → λ (+ c : Carrier) →
+    match p motive (λ _ → Bool)
+      | feat f => eval-feature f c
+      | andp q r => andb (eval q c) (eval r c)
+      | orp q r => orb (eval q c) (eval r c)
+      | notp q => notb (eval q c)
+      | truep => true
+      | falsep => false

@@ -57,6 +57,7 @@ fi
 list=$(mix muro)
 have "$list" "Muro v${version}" "mix muro"
 have "$list" "mix muro.check" "mix muro"
+have "$list" "mix muro.synth" "mix muro"
 have "$list" "mix muro.emit" "mix muro"
 have "$list" "mix muro.gen" "mix muro"
 have "$list" "mix muro.init" "mix muro"
