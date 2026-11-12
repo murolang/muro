@@ -642,6 +642,88 @@ defmodule Muro.Check do
     end
   end
 
+  # A bytes step spends one fuel on each argument. Closed literals
+  # compute. Anything else stays stuck and the backend computes it.
+  defp whnf(k, book, {:bcat, a, b}, unfold) do
+    with {:ok, a1} <- whnf(k - 1, book, a, unfold),
+         {:ok, b1} <- whnf(k - 1, book, b, unfold) do
+      {:ok, bcat_step(a1, b1)}
+    end
+  end
+
+  defp whnf(k, book, {:blen, a}, unfold) do
+    with {:ok, a1} <- whnf(k - 1, book, a, unfold), do: {:ok, blen_step(a1)}
+  end
+
+  defp whnf(k, book, {:xlen, a}, unfold) do
+    with {:ok, a1} <- whnf(k - 1, book, a, unfold), do: {:ok, xlen_step(a1)}
+  end
+
+  defp whnf(k, book, {:beq, a, b}, unfold) do
+    with {:ok, a1} <- whnf(k - 1, book, a, unfold),
+         {:ok, b1} <- whnf(k - 1, book, b, unfold) do
+      {:ok, beq_step(a1, b1)}
+    end
+  end
+
+  defp whnf(k, book, {:xeq, a, b}, unfold) do
+    with {:ok, a1} <- whnf(k - 1, book, a, unfold),
+         {:ok, b1} <- whnf(k - 1, book, b, unfold) do
+      {:ok, xeq_step(a1, b1)}
+    end
+  end
+
+  defp whnf(k, book, {:bsub, s, off, len}, unfold) do
+    with {:ok, s1} <- whnf(k - 1, book, s, unfold),
+         {:ok, o1} <- whnf(k - 1, book, off, unfold),
+         {:ok, n1} <- whnf(k - 1, book, len, unfold) do
+      {:ok, bsub_step(s1, o1, n1)}
+    end
+  end
+
+  defp whnf(k, book, {:bget, s, i}, unfold) do
+    with {:ok, s1} <- whnf(k - 1, book, s, unfold),
+         {:ok, i1} <- whnf(k - 1, book, i, unfold) do
+      {:ok, bget_step(s1, i1)}
+    end
+  end
+
+  defp whnf(k, book, {:aget, s, i}, unfold) do
+    with {:ok, s1} <- whnf(k - 1, book, s, unfold),
+         {:ok, i1} <- whnf(k - 1, book, i, unfold) do
+      {:ok, aget_step(s1, i1)}
+    end
+  end
+
+  defp whnf(k, book, {:bunc, s}, unfold) do
+    with {:ok, s1} <- whnf(k - 1, book, s, unfold), do: {:ok, bunc_step(s1)}
+  end
+
+  defp whnf(k, book, {:sbytes, s}, unfold) do
+    with {:ok, s1} <- whnf(k - 1, book, s, unfold), do: {:ok, sbytes_step(s1)}
+  end
+
+  defp whnf(k, book, {:btil, s, b}, unfold) do
+    with {:ok, s1} <- whnf(k - 1, book, s, unfold),
+         {:ok, b1} <- whnf(k - 1, book, b, unfold) do
+      {:ok, btil_step(s1, b1)}
+    end
+  end
+
+  defp whnf(k, book, {:baft, s, b}, unfold) do
+    with {:ok, s1} <- whnf(k - 1, book, s, unfold),
+         {:ok, b1} <- whnf(k - 1, book, b, unfold) do
+      {:ok, baft_step(s1, b1)}
+    end
+  end
+
+  defp whnf(k, book, {tag, ty, z, f, s}, unfold) when tag in [:bfold, :afold] do
+    with {:ok, z1} <- whnf(k - 1, book, z, unfold),
+         {:ok, s1} <- whnf(k - 1, book, s, unfold) do
+      fold_go(k - 1, book, tag, ty, z1, f, s1, unfold)
+    end
+  end
+
   defp whnf(_, _, t, _), do: {:ok, t}
 
   defp scat_step({:slit, x}, {:slit, y}), do: {:slit, x <> y}
@@ -652,6 +734,101 @@ defmodule Muro.Check do
 
   defp seq_step({:slit, x}, {:slit, y}), do: {:word, x == y, []}
   defp seq_step(a, b), do: {:seq, a, b}
+
+  defp bcat_step({:blit, x}, {:blit, y}), do: {:blit, Muro.Bytes.cat(x, y)}
+  defp bcat_step(a, b), do: {:bcat, a, b}
+
+  defp blen_step({:blit, bin}), do: u64_lit(Muro.Bytes.len(bin))
+  defp blen_step(a), do: {:blen, a}
+
+  defp xlen_step({:blit, bin}), do: u64_lit(Muro.Bytes.len(bin))
+  defp xlen_step(a), do: {:xlen, a}
+
+  defp beq_step({:blit, x}, {:blit, y}), do: {:word, Muro.Bytes.eq(x, y), []}
+  defp beq_step(a, b), do: {:beq, a, b}
+
+  defp xeq_step({:blit, x}, {:blit, y}), do: {:word, Muro.Bytes.eq(x, y), []}
+  defp xeq_step(a, b), do: {:xeq, a, b}
+
+  defp bsub_step({:blit, bin}, off, len) do
+    case {Muro.Bytes.u64_of(off), Muro.Bytes.u64_of(len)} do
+      {{:ok, o}, {:ok, n}} -> {:blit, Muro.Bytes.sub(bin, o, n)}
+      _ -> {:bsub, {:blit, bin}, off, len}
+    end
+  end
+
+  defp bsub_step(s, off, len), do: {:bsub, s, off, len}
+
+  defp bget_step({:blit, bin}, i) do
+    case Muro.Bytes.u64_of(i) do
+      {:ok, n} -> byte_opt(Muro.Bytes.get(bin, n))
+      :open -> {:bget, {:blit, bin}, i}
+    end
+  end
+
+  defp bget_step(s, i), do: {:bget, s, i}
+
+  defp aget_step({:blit, bin}, i) do
+    case Muro.Bytes.u64_of(i) do
+      {:ok, n} -> byte_opt(Muro.Bytes.get(bin, n))
+      :open -> {:aget, {:blit, bin}, i}
+    end
+  end
+
+  defp aget_step(s, i), do: {:aget, s, i}
+
+  defp bunc_step({:blit, bin}) do
+    case Muro.Bytes.uncons(bin) do
+      :nothing ->
+        {:def, "nothing"}
+
+      {:just, b, rest} ->
+        {:app, {:def, "just"}, {:pair, u8_lit(b), {:blit, rest}}}
+    end
+  end
+
+  defp bunc_step(s), do: {:bunc, s}
+
+  defp sbytes_step({:slit, bin}), do: {:blit, bin}
+  defp sbytes_step(s), do: {:sbytes, s}
+
+  defp btil_step({:blit, bin}, byte) do
+    case Muro.Bytes.u8_of(byte) do
+      {:ok, b} -> {:blit, Muro.Bytes.until(bin, b)}
+      :open -> {:btil, {:blit, bin}, byte}
+    end
+  end
+
+  defp btil_step(s, b), do: {:btil, s, b}
+
+  defp baft_step({:blit, bin}, byte) do
+    case Muro.Bytes.u8_of(byte) do
+      {:ok, b} -> {:blit, Muro.Bytes.aft(bin, b)}
+      :open -> {:baft, {:blit, bin}, byte}
+    end
+  end
+
+  defp baft_step(s, b), do: {:baft, s, b}
+
+  defp u64_lit(n), do: {:word, {:lit, :u64, n}, []}
+  defp u8_lit(n), do: {:word, {:lit, :u8, n}, []}
+
+  defp byte_opt({:some, b}), do: {:word, :some, [u8_lit(b)]}
+  defp byte_opt(:none), do: {:word, :none, []}
+
+  defp fold_go(_k, _book, _tag, _ty, z, _f, {:blit, <<>>}, _unfold), do: {:ok, z}
+
+  defp fold_go(k, book, tag, ty, z, f, {:blit, <<b, rest::binary>>}, unfold) when k > 0 do
+    step = {:app, {:app, {:app, f, u8_lit(b)}, {:blit, rest}}, z}
+
+    with {:ok, z1} <- whnf(k, book, step, unfold) do
+      fold_go(k - 1, book, tag, ty, z1, f, {:blit, rest}, unfold)
+    end
+  end
+
+  defp fold_go(0, _book, _tag, _ty, _z, _f, _s, _unfold), do: {:error, @out_of_fuel}
+
+  defp fold_go(_k, _book, tag, ty, z, f, s, _unfold), do: {:ok, {tag, ty, z, f, s}}
 
   defp whnf_words(_k, _book, [], _unfold), do: {:ok, []}
 
@@ -721,6 +898,90 @@ defmodule Muro.Check do
     end
   end
 
+  defp deepen(k, book, {:bcat, a, b}, unfold) do
+    with {:ok, a1} <- nf(fuel_dec(k), book, a, unfold),
+         {:ok, b1} <- nf(fuel_dec(k), book, b, unfold) do
+      {:ok, bcat_step(a1, b1)}
+    end
+  end
+
+  defp deepen(k, book, {:blen, a}, unfold) do
+    with {:ok, a1} <- nf(fuel_dec(k), book, a, unfold), do: {:ok, blen_step(a1)}
+  end
+
+  defp deepen(k, book, {:xlen, a}, unfold) do
+    with {:ok, a1} <- nf(fuel_dec(k), book, a, unfold), do: {:ok, xlen_step(a1)}
+  end
+
+  defp deepen(k, book, {:beq, a, b}, unfold) do
+    with {:ok, a1} <- nf(fuel_dec(k), book, a, unfold),
+         {:ok, b1} <- nf(fuel_dec(k), book, b, unfold) do
+      {:ok, beq_step(a1, b1)}
+    end
+  end
+
+  defp deepen(k, book, {:xeq, a, b}, unfold) do
+    with {:ok, a1} <- nf(fuel_dec(k), book, a, unfold),
+         {:ok, b1} <- nf(fuel_dec(k), book, b, unfold) do
+      {:ok, xeq_step(a1, b1)}
+    end
+  end
+
+  defp deepen(k, book, {:bsub, s, off, len}, unfold) do
+    with {:ok, s1} <- nf(fuel_dec(k), book, s, unfold),
+         {:ok, o1} <- nf(fuel_dec(k), book, off, unfold),
+         {:ok, n1} <- nf(fuel_dec(k), book, len, unfold) do
+      {:ok, bsub_step(s1, o1, n1)}
+    end
+  end
+
+  defp deepen(k, book, {:bget, s, i}, unfold) do
+    with {:ok, s1} <- nf(fuel_dec(k), book, s, unfold),
+         {:ok, i1} <- nf(fuel_dec(k), book, i, unfold) do
+      {:ok, bget_step(s1, i1)}
+    end
+  end
+
+  defp deepen(k, book, {:aget, s, i}, unfold) do
+    with {:ok, s1} <- nf(fuel_dec(k), book, s, unfold),
+         {:ok, i1} <- nf(fuel_dec(k), book, i, unfold) do
+      {:ok, aget_step(s1, i1)}
+    end
+  end
+
+  defp deepen(k, book, {:bunc, s}, unfold) do
+    with {:ok, s1} <- nf(fuel_dec(k), book, s, unfold), do: {:ok, bunc_step(s1)}
+  end
+
+  defp deepen(k, book, {:sbytes, s}, unfold) do
+    with {:ok, s1} <- nf(fuel_dec(k), book, s, unfold), do: {:ok, sbytes_step(s1)}
+  end
+
+  defp deepen(k, book, {:btil, s, b}, unfold) do
+    with {:ok, s1} <- nf(fuel_dec(k), book, s, unfold),
+         {:ok, b1} <- nf(fuel_dec(k), book, b, unfold) do
+      {:ok, btil_step(s1, b1)}
+    end
+  end
+
+  defp deepen(k, book, {:baft, s, b}, unfold) do
+    with {:ok, s1} <- nf(fuel_dec(k), book, s, unfold),
+         {:ok, b1} <- nf(fuel_dec(k), book, b, unfold) do
+      {:ok, baft_step(s1, b1)}
+    end
+  end
+
+  defp deepen(k, book, {tag, ty, z, f, s}, unfold) when tag in [:bfold, :afold] do
+    with {:ok, z1} <- nf(fuel_dec(k), book, z, unfold),
+         {:ok, f1} <- nf(fuel_dec(k), book, f, unfold),
+         {:ok, s1} <- nf(fuel_dec(k), book, s, unfold) do
+      case s1 do
+        {:blit, _} -> whnf(k, book, {tag, ty, z1, f1, s1}, unfold)
+        _ -> {:ok, {tag, ty, z1, f1, s1}}
+      end
+    end
+  end
+
   defp deepen(_k, _book, t, _unfold), do: {:ok, t}
 
   defp deepen_words(_k, _book, [], _unfold), do: {:ok, []}
@@ -748,6 +1009,12 @@ defmodule Muro.Check do
           {:ok, as == []}
 
         :string ->
+          {:ok, as == []}
+
+        :bytes ->
+          {:ok, as == []}
+
+        :slice ->
           {:ok, as == []}
 
         :unit ->
@@ -879,6 +1146,8 @@ defmodule Muro.Check do
   defp run_ty_n(_book, {:var, _}), do: true
   defp run_ty_n(_book, :atom), do: true
   defp run_ty_n(_book, :string), do: true
+  defp run_ty_n(_book, :bytes), do: true
+  defp run_ty_n(_book, :slice), do: true
   defp run_ty_n(_book, :nat), do: true
   defp run_ty_n(_book, :unit), do: true
   defp run_ty_n(_book, :empty), do: true
@@ -1191,6 +1460,57 @@ defmodule Muro.Check do
     conv_all(k, [at(k, book, names, a, a1, seen), at(k, book, names, b, b1, seen)])
   end
 
+  defp conv_n(k, book, names, {:bcat, a, b}, {:bcat, a1, b1}, seen),
+    do: conv_pair(k, book, names, a, b, a1, b1, seen)
+
+  defp conv_n(k, book, names, {:blen, a}, {:blen, a1}, seen),
+    do: conv_f(k, book, names, a, a1, seen)
+
+  defp conv_n(k, book, names, {:beq, a, b}, {:beq, a1, b1}, seen),
+    do: conv_pair(k, book, names, a, b, a1, b1, seen)
+
+  defp conv_n(k, book, names, {:xlen, a}, {:xlen, a1}, seen),
+    do: conv_f(k, book, names, a, a1, seen)
+
+  defp conv_n(k, book, names, {:xeq, a, b}, {:xeq, a1, b1}, seen),
+    do: conv_pair(k, book, names, a, b, a1, b1, seen)
+
+  defp conv_n(k, book, names, {:bget, a, b}, {:bget, a1, b1}, seen),
+    do: conv_pair(k, book, names, a, b, a1, b1, seen)
+
+  defp conv_n(k, book, names, {:aget, a, b}, {:aget, a1, b1}, seen),
+    do: conv_pair(k, book, names, a, b, a1, b1, seen)
+
+  defp conv_n(k, book, names, {:btil, a, b}, {:btil, a1, b1}, seen),
+    do: conv_pair(k, book, names, a, b, a1, b1, seen)
+
+  defp conv_n(k, book, names, {:baft, a, b}, {:baft, a1, b1}, seen),
+    do: conv_pair(k, book, names, a, b, a1, b1, seen)
+
+  defp conv_n(k, book, names, {:bunc, a}, {:bunc, a1}, seen),
+    do: conv_f(k, book, names, a, a1, seen)
+
+  defp conv_n(k, book, names, {:sbytes, a}, {:sbytes, a1}, seen),
+    do: conv_f(k, book, names, a, a1, seen)
+
+  defp conv_n(k, book, names, {:bsub, a, b, c}, {:bsub, a1, b1, c1}, seen) do
+    conv_all(k, [
+      at(k, book, names, a, a1, seen),
+      at(k, book, names, b, b1, seen),
+      at(k, book, names, c, c1, seen)
+    ])
+  end
+
+  defp conv_n(k, book, names, {tag, ty, z, f, s}, {tag, ty1, z1, f1, s1}, seen)
+       when tag in [:bfold, :afold] do
+    conv_all(k, [
+      at(k, book, names, ty, ty1, seen),
+      at(k, book, names, z, z1, seen),
+      at(k, book, names, f, f1, seen),
+      at(k, book, names, s, s1, seen)
+    ])
+  end
+
   defp conv_n(k, book, names, {:mdata, e, p, bs}, {:mdata, e1, p1, bs1}, seen) do
     case conv_all(k, [at(k, book, names, e, e1, seen), at(k, book, names, p, p1, seen)]) do
       {:ok, k1} -> conv_mdata_bs(k, k1, book, names, bs, bs1, seen)
@@ -1200,6 +1520,10 @@ defmodule Muro.Check do
 
   defp conv_n(k, _book, names, u, v, _seen),
     do: {:error, "cannot convert #{Print.term(u, names)} ≁ #{Print.term(v, names)}", k}
+
+  defp conv_pair(k, book, names, a, b, a1, b1, seen) do
+    conv_all(k, [at(k, book, names, a, a1, seen), at(k, book, names, b, b1, seen)])
+  end
 
   defp conv_mdata_bs(_k, kmin, _book, _names, [], [], _seen), do: {:ok, kmin}
 
@@ -1491,6 +1815,23 @@ defmodule Muro.Check do
     do: has_self?(self, e) or has_self?(self, p) or has_self?(self, t)
 
   defp has_self?(self, {:ann, e, a}), do: has_self?(self, e) or has_self?(self, a)
+  defp has_self?(self, {:bcat, a, b}), do: has_self?(self, a) or has_self?(self, b)
+  defp has_self?(self, {:blen, a}), do: has_self?(self, a)
+  defp has_self?(self, {:beq, a, b}), do: has_self?(self, a) or has_self?(self, b)
+  defp has_self?(self, {:xlen, a}), do: has_self?(self, a)
+  defp has_self?(self, {:xeq, a, b}), do: has_self?(self, a) or has_self?(self, b)
+  defp has_self?(self, {:bget, a, b}), do: has_self?(self, a) or has_self?(self, b)
+  defp has_self?(self, {:aget, a, b}), do: has_self?(self, a) or has_self?(self, b)
+  defp has_self?(self, {:btil, a, b}), do: has_self?(self, a) or has_self?(self, b)
+  defp has_self?(self, {:baft, a, b}), do: has_self?(self, a) or has_self?(self, b)
+  defp has_self?(self, {:bunc, a}), do: has_self?(self, a)
+  defp has_self?(self, {:sbytes, a}), do: has_self?(self, a)
+
+  defp has_self?(self, {:bsub, a, b, c}),
+    do: has_self?(self, a) or has_self?(self, b) or has_self?(self, c)
+
+  defp has_self?(self, {tag, ty, z, f, s}) when tag in [:bfold, :afold],
+    do: has_self?(self, ty) or has_self?(self, z) or has_self?(self, f) or has_self?(self, s)
 
   defp has_self?(_, _), do: false
 
@@ -1540,8 +1881,27 @@ defmodule Muro.Check do
   defp occurs?(x, {:scat, a, b}), do: occurs?(x, a) or occurs?(x, b)
   defp occurs?(x, {:slen, a}), do: occurs?(x, a)
   defp occurs?(x, {:seq, a, b}), do: occurs?(x, a) or occurs?(x, b)
+  defp occurs?(x, {:bcat, a, b}), do: occurs?(x, a) or occurs?(x, b)
+  defp occurs?(x, {:blen, a}), do: occurs?(x, a)
+  defp occurs?(x, {:beq, a, b}), do: occurs?(x, a) or occurs?(x, b)
+  defp occurs?(x, {:xlen, a}), do: occurs?(x, a)
+  defp occurs?(x, {:xeq, a, b}), do: occurs?(x, a) or occurs?(x, b)
+  defp occurs?(x, {:bget, a, b}), do: occurs?(x, a) or occurs?(x, b)
+  defp occurs?(x, {:aget, a, b}), do: occurs?(x, a) or occurs?(x, b)
+  defp occurs?(x, {:btil, a, b}), do: occurs?(x, a) or occurs?(x, b)
+  defp occurs?(x, {:baft, a, b}), do: occurs?(x, a) or occurs?(x, b)
+  defp occurs?(x, {:bunc, a}), do: occurs?(x, a)
+  defp occurs?(x, {:sbytes, a}), do: occurs?(x, a)
+  defp occurs?(x, {:bsub, a, b, c}), do: occurs?(x, a) or occurs?(x, b) or occurs?(x, c)
+
+  defp occurs?(x, {tag, ty, z, f, s}) when tag in [:bfold, :afold],
+    do: occurs?(x, ty) or occurs?(x, z) or occurs?(x, f) or occurs?(x, s)
+
   defp occurs?(_x, :string), do: false
   defp occurs?(_x, {:slit, _}), do: false
+  defp occurs?(_x, :bytes), do: false
+  defp occurs?(_x, :slice), do: false
+  defp occurs?(_x, {:blit, _}), do: false
   defp occurs?(_x, :typ), do: false
   defp occurs?(_x, :nat), do: false
   defp occurs?(_x, :ze), do: false
@@ -1771,6 +2131,45 @@ defmodule Muro.Check do
 
   defp seed_walk(k, book, block, gamma, mode, {:seq, a, b}),
     do: with_both(k, book, block, gamma, mode, a, b)
+
+  defp seed_walk(k, book, block, gamma, mode, {:bcat, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
+
+  defp seed_walk(k, book, block, gamma, mode, {:blen, a}),
+    do: seed_walk(k, book, block, gamma, mode, a)
+
+  defp seed_walk(k, book, block, gamma, mode, {:beq, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
+
+  defp seed_walk(k, book, block, gamma, mode, {:xlen, a}),
+    do: seed_walk(k, book, block, gamma, mode, a)
+
+  defp seed_walk(k, book, block, gamma, mode, {:xeq, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
+
+  defp seed_walk(k, book, block, gamma, mode, {:bget, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
+
+  defp seed_walk(k, book, block, gamma, mode, {:aget, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
+
+  defp seed_walk(k, book, block, gamma, mode, {:btil, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
+
+  defp seed_walk(k, book, block, gamma, mode, {:baft, a, b}),
+    do: with_both(k, book, block, gamma, mode, a, b)
+
+  defp seed_walk(k, book, block, gamma, mode, {:bunc, a}),
+    do: seed_walk(k, book, block, gamma, mode, a)
+
+  defp seed_walk(k, book, block, gamma, mode, {:sbytes, a}),
+    do: seed_walk(k, book, block, gamma, mode, a)
+
+  defp seed_walk(k, book, block, gamma, mode, {:bsub, a, b, c}),
+    do: seed_walk_list(k, book, block, gamma, mode, [a, b, c])
+
+  defp seed_walk(k, book, block, gamma, mode, {tag, ty, z, f, s}) when tag in [:bfold, :afold],
+    do: seed_walk_list(k, book, block, gamma, mode, [ty, z, f, s])
 
   defp seed_walk(k, book, block, gamma, mode, {:packi, x, y}),
     do: with_both(k, book, block, gamma, mode, x, y)
@@ -2074,6 +2473,111 @@ defmodule Muro.Check do
              {:ok, bu} <- check(k, book, rs, gamma, m, b, :string),
              {:ok, uses} <- combine(m, au, bu) do
           {:ok, {{:word, :bool, []}, uses}}
+        end
+
+      # Bytes is a type of raw octets. Slice is a view of one. A literal
+      # is a Bytes. A Bytes checks as a Slice in infer_conv.
+      {m, :bytes} when m in [:run, :evidence] ->
+        {:error, "no promotion: Bytes is an erased term"}
+
+      {:spec, :bytes} ->
+        {:ok, {:typ, u0s(n)}}
+
+      {m, :slice} when m in [:run, :evidence] ->
+        {:error, "no promotion: Slice is an erased term"}
+
+      {:spec, :slice} ->
+        {:ok, {:typ, u0s(n)}}
+
+      {_, {:blit, _bin}} ->
+        {:ok, {:bytes, u0s(n)}}
+
+      {m, {:bcat, a, b}} ->
+        with {:ok, au} <- check(k, book, rs, gamma, m, a, :bytes),
+             {:ok, bu} <- check(k, book, rs, gamma, m, b, :bytes),
+             {:ok, uses} <- combine(m, au, bu) do
+          {:ok, {:bytes, uses}}
+        end
+
+      {m, {:blen, a}} ->
+        with {:ok, au} <- check(k, book, rs, gamma, m, a, :bytes),
+             do: {:ok, {len_ty(), au}}
+
+      {m, {:xlen, a}} ->
+        with {:ok, au} <- check(k, book, rs, gamma, m, a, :slice),
+             do: {:ok, {len_ty(), au}}
+
+      {m, {:beq, a, b}} ->
+        with {:ok, au} <- check(k, book, rs, gamma, m, a, :bytes),
+             {:ok, bu} <- check(k, book, rs, gamma, m, b, :bytes),
+             {:ok, uses} <- combine(m, au, bu) do
+          {:ok, {bool_ty(), uses}}
+        end
+
+      {m, {:xeq, a, b}} ->
+        with {:ok, au} <- check(k, book, rs, gamma, m, a, :slice),
+             {:ok, bu} <- check(k, book, rs, gamma, m, b, :slice),
+             {:ok, uses} <- combine(m, au, bu) do
+          {:ok, {bool_ty(), uses}}
+        end
+
+      {m, {:aget, a, i}} ->
+        with {:ok, au} <- check(k, book, rs, gamma, m, a, :bytes),
+             {:ok, iu} <- check(k, book, rs, gamma, m, i, len_ty()),
+             {:ok, uses} <- combine(m, au, iu) do
+          {:ok, {byte_opt_ty(), uses}}
+        end
+
+      {m, {:bget, a, i}} ->
+        with {:ok, au} <- check(k, book, rs, gamma, m, a, :slice),
+             {:ok, iu} <- check(k, book, rs, gamma, m, i, len_ty()),
+             {:ok, uses} <- combine(m, au, iu) do
+          {:ok, {byte_opt_ty(), uses}}
+        end
+
+      {m, {:bsub, s, off, len}} ->
+        with {:ok, su} <- check(k, book, rs, gamma, m, s, :slice),
+             {:ok, ou} <- check(k, book, rs, gamma, m, off, len_ty()),
+             {:ok, lu} <- check(k, book, rs, gamma, m, len, len_ty()),
+             {:ok, uses} <- combine(m, su, ou),
+             {:ok, uses} <- combine(m, uses, lu) do
+          {:ok, {:slice, uses}}
+        end
+
+      {m, {:bunc, s}} ->
+        with {:ok, su} <- check(k, book, rs, gamma, m, s, :slice) do
+          {:ok, {maybe_byte_slice(), su}}
+        end
+
+      {m, {:sbytes, s}} ->
+        with {:ok, su} <- check(k, book, rs, gamma, m, s, :string) do
+          {:ok, {:bytes, su}}
+        end
+
+      {m, {:btil, s, b}} ->
+        with {:ok, su} <- check(k, book, rs, gamma, m, s, :slice),
+             {:ok, bu} <- check(k, book, rs, gamma, m, b, byte_ty()),
+             {:ok, uses} <- combine(m, su, bu) do
+          {:ok, {:slice, uses}}
+        end
+
+      {m, {:baft, s, b}} ->
+        with {:ok, su} <- check(k, book, rs, gamma, m, s, :slice),
+             {:ok, bu} <- check(k, book, rs, gamma, m, b, byte_ty()),
+             {:ok, uses} <- combine(m, su, bu) do
+          {:ok, {:slice, uses}}
+        end
+
+      {m, {tag, ty, z, f, s}} when tag in [:bfold, :afold] ->
+        held = if tag == :afold, do: :bytes, else: :slice
+
+        with :ok <- check_ty(k, book, rs, gamma, ty),
+             {:ok, zu} <- check(k, book, rs, gamma, m, z, ty),
+             {:ok, fu} <- check(k, book, rs, gamma, m, f, fold_fun(ty)),
+             {:ok, su} <- check(k, book, rs, gamma, m, s, held),
+             {:ok, uses} <- combine(m, zu, fu),
+             {:ok, uses} <- combine(m, uses, su) do
+          {:ok, {ty, uses}}
         end
 
       {m, {:matom, e, p, bs}} ->
@@ -2863,10 +3367,28 @@ defmodule Muro.Check do
   end
 
   # ⇐-conv: infer, then convert to the expected type.
+  # A Bytes is a Slice. The two types do not convert the other way,
+  # and neither converts to String or Atom.
   defp infer_conv(k, book, rs, gamma, mode, e, a) do
     with {:ok, {b, u}} <- infer(k, book, rs, gamma, mode, e),
-         :ok <- conv(k, book, names_of(rs, gamma), b, a),
-         do: {:ok, u}
+         {:ok, got} <- whnf(k, book, b),
+         {:ok, exp} <- whnf(k, book, a) do
+      if got == :bytes and exp == :slice do
+        {:ok, u}
+      else
+        with :ok <- conv(k, book, names_of(rs, gamma), b, a), do: {:ok, u}
+      end
+    end
+  end
+
+  defp byte_ty, do: {:word, {:ty, :u8}, []}
+  defp len_ty, do: {:word, {:ty, :u64}, []}
+  defp bool_ty, do: {:word, :bool, []}
+  defp byte_opt_ty, do: {:word, :opt, [byte_ty()]}
+  defp maybe_byte_slice, do: {:app, {:def, "Maybe"}, {:prod, byte_ty(), :slice}}
+
+  defp fold_fun(ty) do
+    {:pi, :affine, byte_ty(), "_", {:pi, :affine, :slice, "_", {:pi, :affine, ty, "_", ty}}}
   end
 
   # -- signature -------------------------------------------------------------
@@ -3801,6 +4323,21 @@ defmodule Muro.Check do
   defp mentions({:scat, a, b}, acc), do: mentions(b, mentions(a, acc))
   defp mentions({:slen, a}, acc), do: mentions(a, acc)
   defp mentions({:seq, a, b}, acc), do: mentions(b, mentions(a, acc))
+  defp mentions({:bcat, a, b}, acc), do: mentions(b, mentions(a, acc))
+  defp mentions({:blen, a}, acc), do: mentions(a, acc)
+  defp mentions({:beq, a, b}, acc), do: mentions(b, mentions(a, acc))
+  defp mentions({:xlen, a}, acc), do: mentions(a, acc)
+  defp mentions({:xeq, a, b}, acc), do: mentions(b, mentions(a, acc))
+  defp mentions({:bget, a, b}, acc), do: mentions(b, mentions(a, acc))
+  defp mentions({:aget, a, b}, acc), do: mentions(b, mentions(a, acc))
+  defp mentions({:btil, a, b}, acc), do: mentions(b, mentions(a, acc))
+  defp mentions({:baft, a, b}, acc), do: mentions(b, mentions(a, acc))
+  defp mentions({:bunc, a}, acc), do: mentions(a, acc)
+  defp mentions({:sbytes, a}, acc), do: mentions(a, acc)
+  defp mentions({:bsub, a, b, c}, acc), do: mentions(c, mentions(b, mentions(a, acc)))
+
+  defp mentions({tag, ty, z, f, s}, acc) when tag in [:bfold, :afold],
+    do: mentions(s, mentions(f, mentions(z, mentions(ty, acc))))
 
   defp mentions({:matom, e, p, bs}, acc) do
     acc = mentions(p, mentions(e, acc))
@@ -4684,6 +5221,44 @@ defmodule Muro.Check do
 
   defp absent_go?(k, book, dname, {:seq, a, b}, seen),
     do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
+
+  defp absent_go?(k, book, dname, {:bcat, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
+
+  defp absent_go?(k, book, dname, {:blen, a}, seen), do: absent?(k, book, dname, a, seen)
+
+  defp absent_go?(k, book, dname, {:beq, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
+
+  defp absent_go?(k, book, dname, {:xlen, a}, seen), do: absent?(k, book, dname, a, seen)
+
+  defp absent_go?(k, book, dname, {:xeq, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
+
+  defp absent_go?(k, book, dname, {:bget, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
+
+  defp absent_go?(k, book, dname, {:aget, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
+
+  defp absent_go?(k, book, dname, {:btil, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
+
+  defp absent_go?(k, book, dname, {:baft, a, b}, seen),
+    do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)
+
+  defp absent_go?(k, book, dname, {:bunc, a}, seen), do: absent?(k, book, dname, a, seen)
+  defp absent_go?(k, book, dname, {:sbytes, a}, seen), do: absent?(k, book, dname, a, seen)
+
+  defp absent_go?(k, book, dname, {:bsub, a, b, c}, seen),
+    do:
+      absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen) and
+        absent?(k, book, dname, c, seen)
+
+  defp absent_go?(k, book, dname, {tag, ty, z, f, s}, seen) when tag in [:bfold, :afold],
+    do:
+      absent?(k, book, dname, ty, seen) and absent?(k, book, dname, z, seen) and
+        absent?(k, book, dname, f, seen) and absent?(k, book, dname, s, seen)
 
   defp absent_go?(k, book, dname, {:packi, a, b}, seen),
     do: absent?(k, book, dname, a, seen) and absent?(k, book, dname, b, seen)

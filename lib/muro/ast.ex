@@ -51,6 +51,23 @@ defmodule Muro.Ast do
           | {:scat, named, named}
           | {:slen, named}
           | {:seq, named, named}
+          | :bytes
+          | :slice
+          | {:blit, binary()}
+          | {:bcat, named, named}
+          | {:blen, named}
+          | {:beq, named, named}
+          | {:xlen, named}
+          | {:xeq, named, named}
+          | {:bsub, named, named, named}
+          | {:bget, named, named}
+          | {:aget, named, named}
+          | {:bunc, named}
+          | {:bfold, named, named, named, named}
+          | {:afold, named, named, named, named}
+          | {:sbytes, named}
+          | {:btil, named, named}
+          | {:baft, named, named}
           | :i64
           | :f32ty
           | {:tensor, named, named}
@@ -101,6 +118,23 @@ defmodule Muro.Ast do
           | {:scat, db, db}
           | {:slen, db}
           | {:seq, db, db}
+          | :bytes
+          | :slice
+          | {:blit, binary()}
+          | {:bcat, db, db}
+          | {:blen, db}
+          | {:beq, db, db}
+          | {:xlen, db}
+          | {:xeq, db, db}
+          | {:bsub, db, db, db}
+          | {:bget, db, db}
+          | {:aget, db, db}
+          | {:bunc, db}
+          | {:bfold, db, db, db, db}
+          | {:afold, db, db, db, db}
+          | {:sbytes, db}
+          | {:btil, db, db}
+          | {:baft, db, db}
           | :i64
           | :f32ty
           | {:tensor, db, db}
@@ -191,6 +225,20 @@ defmodule Muro.Ast do
       {:scat, a, b} -> [a, b]
       {:slen, a} -> [a]
       {:seq, a, b} -> [a, b]
+      {:bcat, a, b} -> [a, b]
+      {:blen, a} -> [a]
+      {:beq, a, b} -> [a, b]
+      {:xlen, a} -> [a]
+      {:xeq, a, b} -> [a, b]
+      {:bsub, a, b, c} -> [a, b, c]
+      {:bget, a, b} -> [a, b]
+      {:aget, a, b} -> [a, b]
+      {:bunc, a} -> [a]
+      {:bfold, ty, z, f, s} -> [ty, z, f, s]
+      {:afold, ty, z, f, s} -> [ty, z, f, s]
+      {:sbytes, a} -> [a]
+      {:btil, a, b} -> [a, b]
+      {:baft, a, b} -> [a, b]
       _ -> []
     end
   end
@@ -347,6 +395,25 @@ defmodule Muro.Ast do
          do: {:ok, {:seq, a1, b1}}
   end
 
+  def to_db(:bytes, _), do: {:ok, :bytes}
+  def to_db(:slice, _), do: {:ok, :slice}
+  def to_db({:blit, bin}, _) when is_binary(bin), do: {:ok, {:blit, bin}}
+  def to_db({:bcat, a, b}, env), do: map2(a, b, env, &{:bcat, &1, &2})
+  def to_db({:blen, a}, env), do: map1(a, env, &{:blen, &1})
+  def to_db({:beq, a, b}, env), do: map2(a, b, env, &{:beq, &1, &2})
+  def to_db({:xlen, a}, env), do: map1(a, env, &{:xlen, &1})
+  def to_db({:xeq, a, b}, env), do: map2(a, b, env, &{:xeq, &1, &2})
+  def to_db({:bsub, a, b, c}, env), do: map3(a, b, c, env, &{:bsub, &1, &2, &3})
+  def to_db({:bget, a, b}, env), do: map2(a, b, env, &{:bget, &1, &2})
+  def to_db({:aget, a, b}, env), do: map2(a, b, env, &{:aget, &1, &2})
+  def to_db({:bunc, a}, env), do: map1(a, env, &{:bunc, &1})
+  def to_db({:sbytes, a}, env), do: map1(a, env, &{:sbytes, &1})
+  def to_db({:btil, a, b}, env), do: map2(a, b, env, &{:btil, &1, &2})
+  def to_db({:baft, a, b}, env), do: map2(a, b, env, &{:baft, &1, &2})
+
+  def to_db({:bfold, ty, z, f, s}, env), do: map4(ty, z, f, s, env, &{:bfold, &1, &2, &3, &4})
+  def to_db({:afold, ty, z, f, s}, env), do: map4(ty, z, f, s, env, &{:afold, &1, &2, &3, &4})
+
   def to_db({:matom, e, x, p, bs}, env) do
     with {:ok, e1} <- to_db(e, env),
          {:ok, p1} <- to_db(p, [x | env]),
@@ -403,6 +470,27 @@ defmodule Muro.Ast do
 
   defp map1(t, env, f) do
     with {:ok, t1} <- to_db(t, env), do: {:ok, f.(t1)}
+  end
+
+  defp map2(a, b, env, f) do
+    with {:ok, a1} <- to_db(a, env),
+         {:ok, b1} <- to_db(b, env),
+         do: {:ok, f.(a1, b1)}
+  end
+
+  defp map3(a, b, c, env, f) do
+    with {:ok, a1} <- to_db(a, env),
+         {:ok, b1} <- to_db(b, env),
+         {:ok, c1} <- to_db(c, env),
+         do: {:ok, f.(a1, b1, c1)}
+  end
+
+  defp map4(a, b, c, d, env, f) do
+    with {:ok, a1} <- to_db(a, env),
+         {:ok, b1} <- to_db(b, env),
+         {:ok, c1} <- to_db(c, env),
+         {:ok, d1} <- to_db(d, env),
+         do: {:ok, f.(a1, b1, c1, d1)}
   end
 
   defp to_db_list(ts, env) do

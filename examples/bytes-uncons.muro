@@ -1,0 +1,9 @@
+-- bytes-uncons.muro — sliceUncons returns the library Maybe.
+-- The head is an octet and the leftover is a view of the same bytes.
+import "std:maybe.muro"
+
+def uncons_ok : evidence {sliceUncons b"ab" ≡ just (toU8 97, b"b") : Maybe (U8 × Slice)} := refl
+
+def uncons_empty : evidence {sliceUncons b"" ≡ nothing : Maybe (U8 × Slice)} := refl
+
+def one : run Maybe (U8 × Slice) := sliceUncons b"ab"

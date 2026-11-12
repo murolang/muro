@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.20.36
+
+`Bytes` is a sequence of raw octets, and `Slice` is a view of those octets or of a buffer the host already owns. A literal is `b"..."`, with escapes `\\`, `\"`, `\n`, `\r`, `\t`, and `\xHH`. `\xHH` is any octet. There is no interpolation and no `\u{...}`. `b"é"` has length two. `b"\xFF"` has length one. A bytes value is not a `String` and not an atom. A `Bytes` literal is accepted as a `Slice`.
+
+`bytesLen` and `sliceLen` are the number of octets, as a `U64`. `bytesEq` and `sliceEq` return a `WBool`. `bytesCat` concatenates. `slice` takes an offset and a length and is empty when the range does not fit. `bytesGet` and `sliceGet` return `Opt U8`. `sliceUntil` and `sliceAfter` split on an octet. `sliceUncons` returns `Maybe (U8 × Slice)`. `bytesFold` and `sliceFold` walk the octets. `strBytes` is the UTF-8 encoding of a `String`. Closed literals reduce, so `bytesCat b"hel" b"lo" ≡ b"hello"` is `refl`.
+
+C, Rust, and Zig pass and return a pointer and a length by value. The C pointer is `const uint8_t *`. A literal is a static array. A sub-slice is pointer arithmetic. Concatenation allocates one block of the combined length. A combined length that would wrap `size_t` is refused: C aborts, and Zig returns an error. The image does not free the backing store. An empty view has length zero and points at a static empty array. A host wraps an existing buffer without copying it. The view dangles if that buffer is freed, or if the arena is reset, while the slice is still held. Elixir emits a binary, and a sub-slice is a sub-binary. JavaScript emits a `Uint8Array`, and a view is a `subarray`. Assembly does not emit an octet run. A session payload of `Bytes` or `Slice` is refused.
+
+`examples/request-line.muro` reads a method and a path as views of the buffer it was given. `examples/fnv_slice.muro` is FNV-1a over a slice. On a 16 KiB buffer that walk allocates nothing. The same hash over the cons list in `examples/fnv.muro` allocates one cell per octet to build the list, and the walk allocates again. The cons list is named `ByteList`.
+
+### Manual
+
+- Terms. Grammar. Emit. Limits. Examples. Machine numbers. Extending.
+
+### Package
+
+- Version 0.20.36.
+
 ## 0.20.35
 
 `mix muro.synth` checks the homomorphism of the ranking it synthesized. The surviving predicate is still the policy that runs. `rank` reads that predicate: `Unit` when it prefers the action, `Empty` when it does not. On a finite state type the book also carries the evidence, and exit 0 means the policy and that evidence both check, on the environment's `step`. `trace` checks `CoindHomo`. On the two-state environment the survivor prefers `go` at `start`. `successor` checks `CoinductiveHomomorphism`. On binary sacrifice the survivor prefers `go-paradise`, and that book does not claim `CoindHomo`. `coind-homo` on the same environment reports that the pair cannot be labelled. A policy whose environment does not define the homomorphism is not success. A reward that is at least every other reward is the maximum, in either order. A temporary book that cannot be written exits 2, with the diagnostic the write returned. A certificate obligation that runs out of fuel stays unknown and does not drop the survivor. A reward that is not a closed Nat leaves the policy book without a ranking.

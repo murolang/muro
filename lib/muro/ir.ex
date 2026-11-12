@@ -12,7 +12,7 @@ defmodule Muro.IR do
 
   Layouts: `:nat`, `:unit`, `:opaque`, `:erased`, `{:pair, a, b}`,
   `{:stream, a}`, `{:data, name}`, `:u8`, `:u32`, `:u64`, `:i64`, `:wbool`,
-  `{:opt, payload}`, `:string`. `{:data, name}` is `dataL`. `:erased` marks the let of
+  `{:opt, payload}`, `:string`, `:slice`. `{:data, name}` is `dataL`. `:erased` marks the let of
   an erased constructor field (`{:let, x, :erased, :ze, body}`). Emitters
   match that layout and ignore the payload. The field stays live at
   `:opaque`, so a use is `Var`. A word term is `{:wrd, kind, op, args}`.
@@ -37,7 +37,11 @@ defmodule Muro.IR do
   is applied to the missing parameters. It also elaborates a string as
   `{:str, utf8}`, `{:scat, a, b}`, `{:slen, a}`, or `{:seq, a, b}`.
   The default, `closures: false`, is the image C, Rust, and Zig emit.
-  That image refuses a string.
+  That image refuses a string. A `Bytes` or a `Slice` is `:slice` on every
+  image: `{:byt, binary}`, `{:bcat, a, b}`, `{:blen, a}`, `{:beq, a, b}`,
+  `{:bsub, s, off, len}`, `{:bget, s, i}`, `{:bunc, s}`, `{:btil, s, b}`,
+  `{:baft, s, b}`, `{:bfold, step, caps, z, s}`. `strBytes` of a closed
+  string is `{:byt, utf8}`. An open string on the default image is `c:string`.
   """
   def elaborate(book, opts \\ []) when is_list(book) and is_list(opts) do
     st = %{
@@ -530,11 +534,28 @@ defmodule Muro.IR do
   defp elab_form(_st, {:lam, _, _, _, _}, _ctx, _k), do: {:error, "c:lambda"}
 
   defp elab_form(st, {:word, op, args}, ctx, k) do
-    with {:ok, {tms, lays, steps, k1}} <- elab_words(st, args, ctx, k) do
-      case word_image(op, tms, lays) do
-        {:ok, {tm, lay}} -> ok(tm, lay, steps, k1)
-        {:error, _} = err -> err
-      end
+    # A closed numeral converts in one step. Emitting it as a chain of
+    # successors would allocate one cell per unit, which a Slice view
+    # must not do.
+    case Muro.Word.step(op, args) do
+      {:ok, reduced} ->
+        elab_form(st, reduced, ctx, k)
+
+      :stuck ->
+        with {:ok, {tms, lays, steps, k1}} <- elab_words(st, args, ctx, k) do
+          case word_retry(op, tms) do
+            {:ok, reduced} ->
+              with {:ok, e} <- elab_form(st, reduced, ctx, k1) do
+                {:ok, %{e | steps: steps ++ e.steps}}
+              end
+
+            :stuck ->
+              case word_image(op, tms, lays) do
+                {:ok, {tm, lay}} -> ok(tm, lay, steps, k1)
+                {:error, _} = err -> err
+              end
+          end
+        end
     end
   end
 
@@ -559,6 +580,120 @@ defmodule Muro.IR do
     with {:ok, ea} <- elab(st, a, ctx, k),
          {:ok, eb} <- elab(st, b, ctx, ea.k) do
       ok({:seq, ea.tm, eb.tm}, :wbool, ea.steps ++ eb.steps, eb.k)
+    end
+  end
+
+  defp elab_form(_st, {:blit, bin}, _ctx, k) when is_binary(bin) do
+    ok({:byt, bin}, :slice, [], k)
+  end
+
+  defp elab_form(st, {:bcat, a, b}, ctx, k) do
+    with {:ok, ea} <- elab(st, a, ctx, k),
+         {:ok, eb} <- elab(st, b, ctx, ea.k) do
+      ok({:bcat, ea.tm, eb.tm}, :slice, ea.steps ++ eb.steps, eb.k)
+    end
+  end
+
+  defp elab_form(st, {tag, a}, ctx, k) when tag in [:blen, :xlen] do
+    with {:ok, ea} <- elab(st, a, ctx, k) do
+      ok({:blen, ea.tm}, :u64, ea.steps, ea.k)
+    end
+  end
+
+  defp elab_form(st, {tag, a, b}, ctx, k) when tag in [:beq, :xeq] do
+    with {:ok, ea} <- elab(st, a, ctx, k),
+         {:ok, eb} <- elab(st, b, ctx, ea.k) do
+      ok({:beq, ea.tm, eb.tm}, :wbool, ea.steps ++ eb.steps, eb.k)
+    end
+  end
+
+  defp elab_form(st, {:bsub, s, off, len}, ctx, k) do
+    with {:ok, es} <- elab(st, s, ctx, k),
+         {:ok, eo} <- elab(st, off, ctx, es.k),
+         {:ok, en} <- elab(st, len, ctx, eo.k) do
+      ok({:bsub, es.tm, eo.tm, en.tm}, :slice, es.steps ++ eo.steps ++ en.steps, en.k)
+    end
+  end
+
+  defp elab_form(st, {tag, s, i}, ctx, k) when tag in [:bget, :aget] do
+    with {:ok, es} <- elab(st, s, ctx, k),
+         {:ok, ei} <- elab(st, i, ctx, es.k) do
+      ok({:bget, es.tm, ei.tm}, {:opt, :u8}, es.steps ++ ei.steps, ei.k)
+    end
+  end
+
+  defp elab_form(st, {:bunc, s}, ctx, k) do
+    with {:ok, es} <- elab(st, s, ctx, k) do
+      ok({:bunc, es.tm}, {:data, "Maybe"}, es.steps, es.k)
+    end
+  end
+
+  defp elab_form(st, {:btil, s, b}, ctx, k) do
+    with {:ok, es} <- elab(st, s, ctx, k),
+         {:ok, eb} <- elab(st, b, ctx, es.k) do
+      ok({:btil, es.tm, eb.tm}, :slice, es.steps ++ eb.steps, eb.k)
+    end
+  end
+
+  defp elab_form(st, {:baft, s, b}, ctx, k) do
+    with {:ok, es} <- elab(st, s, ctx, k),
+         {:ok, eb} <- elab(st, b, ctx, es.k) do
+      ok({:baft, es.tm, eb.tm}, :slice, es.steps ++ eb.steps, eb.k)
+    end
+  end
+
+  defp elab_form(st, {:sbytes, s}, ctx, k) do
+    case closed_utf8(s) do
+      {:ok, bin} ->
+        ok({:byt, bin}, :slice, [], k)
+
+      :open ->
+        if st.closures do
+          with {:ok, es} <- elab(st, s, ctx, k) do
+            ok({:sbytes, es.tm}, :slice, es.steps, es.k)
+          end
+        else
+          {:error, "c:string"}
+        end
+    end
+  end
+
+  defp elab_form(st, {tag, _ty, z, f, s}, ctx, k) when tag in [:bfold, :afold] do
+    case peel_fold(f) do
+      {:ok, bname, rname, aname, body} ->
+        with {:ok, ez} <- elab(st, z, ctx, k),
+             {:ok, es} <- elab(st, s, ctx, ez.k) do
+          caps = fold_captures(body, [bname, rname, aname], ctx)
+          id = es.k
+
+          body_ctx = [
+            {:live, bname, :u8},
+            {:live, rname, :slice},
+            {:live, aname, ez.lay} | ctx
+          ]
+
+          with {:ok, be} <- elab(st, body, body_ctx, id + 1) do
+            step = %{
+              name: "step#{id}",
+              export: false,
+              generated: true,
+              fold: true,
+              params: cap_params(caps) ++ [{bname, :u8}, {rname, :slice}, {aname, ez.lay}],
+              ret: ez.lay,
+              body: be.tm
+            }
+
+            ok(
+              {:bfold, "step#{id}", cap_terms(caps), ez.tm, es.tm},
+              ez.lay,
+              ez.steps ++ es.steps ++ be.steps ++ [step],
+              be.k
+            )
+          end
+        end
+
+      :error ->
+        {:error, "c:lambda"}
     end
   end
 
@@ -703,6 +838,8 @@ defmodule Muro.IR do
   defp layout_of(_st, :atom), do: {:ok, {:data, "Atom"}}
   defp layout_of(%{closures: true}, :string), do: {:ok, :string}
   defp layout_of(_st, :string), do: {:error, "c:string"}
+  defp layout_of(_st, :bytes), do: {:ok, :slice}
+  defp layout_of(_st, :slice), do: {:ok, :slice}
 
   defp layout_of(st, {:var, name}) do
     case Map.get(Map.get(st, :subst, %{}), name) do
@@ -855,6 +992,27 @@ defmodule Muro.IR do
 
   # wnone has no payload kind. {:opt, :opaque} is a placeholder; the
   # function return layout still comes from the declared type.
+  # Arguments that were closed numerals are literals by the time they
+  # are elaborated. Compare them here so a constant `u8` test is a
+  # boolean, not a comparison rustc rejects as useless.
+  defp word_retry(:ton, _tms), do: :stuck
+  defp word_retry(:opt, _tms), do: :stuck
+
+  defp word_retry(op, tms) do
+    args = Enum.map(tms, &word_value/1)
+
+    if Enum.any?(args, &is_nil/1) do
+      :stuck
+    else
+      Muro.Word.step(op, args)
+    end
+  end
+
+  defp word_value({:wrd, _k, {:lit, k, n}, []}) when is_integer(n), do: {:word, {:lit, k, n}, []}
+  defp word_value({:wrd, _, true, []}), do: {:word, true, []}
+  defp word_value({:wrd, _, false, []}), do: {:word, false, []}
+  defp word_value(_), do: nil
+
   defp word_image({:lit, k, n}, [], []), do: {:ok, {{:wrd, k, {:lit, k, n}, []}, word_lay(k)}}
   defp word_image({:of, k}, [t], [:nat]), do: {:ok, {{:wrd, k, {:of, k}, [t]}, word_lay(k)}}
 
@@ -957,6 +1115,35 @@ defmodule Muro.IR do
 
   defp cap_params(caps), do: Enum.map(caps, fn {name, lay, _} -> {name, lay} end)
   defp cap_terms(caps), do: Enum.map(caps, fn {name, _, tm} -> {name, tm} end)
+
+  defp peel_fold({:lam, q, _, b, {:lam, q2, _, r, {:lam, q3, _, a, body}}})
+       when q != :erased and q2 != :erased and q3 != :erased,
+       do: {:ok, b, r, a, body}
+
+  defp peel_fold(_), do: :error
+
+  defp fold_captures(body, binders, ctx) do
+    body
+    |> free_names(MapSet.new(binders))
+    |> uniq()
+    |> Enum.flat_map(fn name ->
+      case lookup(ctx, name) do
+        {:live, lay} -> [{name, lay, {:var, name}}]
+        _ -> []
+      end
+    end)
+  end
+
+  defp closed_utf8({:slit, bin}) when is_binary(bin), do: {:ok, bin}
+
+  defp closed_utf8({:scat, a, b}) do
+    case {closed_utf8(a), closed_utf8(b)} do
+      {{:ok, x}, {:ok, y}} -> {:ok, x <> y}
+      _ -> :open
+    end
+  end
+
+  defp closed_utf8(_), do: :open
 
   defp captures(body, binder, ctx) do
     body

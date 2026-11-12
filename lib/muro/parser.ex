@@ -432,6 +432,41 @@ defmodule Muro.Parser do
 
   defp read_core_string(s, _acc), do: {:error, "bad string", s}
 
+  # A bytes literal is raw octets. Escapes are `\\`, `\"`, `\n`, `\r`,
+  # `\t`, and `\xHH` (exactly two hex digits). `\u{…}` is a string escape.
+  defp parse_bytes(s) do
+    "b\"" <> rest = s
+
+    case read_bytes(rest, []) do
+      {:ok, bin, rest} -> leaf(s, {:blit, bin}, rest)
+      {:error, msg, at} -> {:error, err(at, msg)}
+    end
+  end
+
+  defp read_bytes("\"" <> rest, acc), do: {:ok, IO.iodata_to_binary(Enum.reverse(acc)), rest}
+  defp read_bytes("\n" <> _ = s, _acc), do: {:error, "unclosed bytes", s}
+  defp read_bytes("", _acc), do: {:error, "unclosed bytes", ""}
+  defp read_bytes("\\\\" <> rest, acc), do: read_bytes(rest, ["\\" | acc])
+  defp read_bytes("\\\"" <> rest, acc), do: read_bytes(rest, ["\"" | acc])
+  defp read_bytes("\\n" <> rest, acc), do: read_bytes(rest, ["\n" | acc])
+  defp read_bytes("\\r" <> rest, acc), do: read_bytes(rest, ["\r" | acc])
+  defp read_bytes("\\t" <> rest, acc), do: read_bytes(rest, ["\t" | acc])
+
+  defp read_bytes(<<"\\x", a, b, rest::binary>>, acc) do
+    case {hex_digit(a), hex_digit(b)} do
+      {{:ok, hi}, {:ok, lo}} -> read_bytes(rest, [<<hi * 16 + lo>> | acc])
+      _ -> {:error, "bad escape", "\\x" <> <<a, b>> <> rest}
+    end
+  end
+
+  defp read_bytes("\\" <> _ = s, _acc), do: {:error, "bad escape", s}
+  defp read_bytes(<<byte, rest::binary>>, acc), do: read_bytes(rest, [<<byte>> | acc])
+
+  defp hex_digit(c) when c in ?0..?9, do: {:ok, c - ?0}
+  defp hex_digit(c) when c in ?a..?f, do: {:ok, c - ?a + 10}
+  defp hex_digit(c) when c in ?A..?F, do: {:ok, c - ?A + 10}
+  defp hex_digit(_), do: :error
+
   defp read_escape("\\\\" <> rest, acc), do: read_core_string(rest, [?\\ | acc])
   defp read_escape("\\\"" <> rest, acc), do: read_core_string(rest, [?" | acc])
   defp read_escape("\\n" <> rest, acc), do: read_core_string(rest, [?\n | acc])
@@ -4140,6 +4175,57 @@ defmodule Muro.Parser do
       word_kw?(s, "strEq") ->
         parse_binary(s, "strEq", :seq)
 
+      word_kw?(s, "Bytes") ->
+        leaf(s, :bytes, after_kw(s, "Bytes"))
+
+      word_kw?(s, "Slice") ->
+        leaf(s, :slice, after_kw(s, "Slice"))
+
+      has_prefix?(s, "b\"") ->
+        parse_bytes(s)
+
+      word_kw?(s, "bytesCat") ->
+        parse_binary(s, "bytesCat", :bcat)
+
+      word_kw?(s, "bytesLen") ->
+        parse_unary(s, "bytesLen", :blen)
+
+      word_kw?(s, "sliceLen") ->
+        parse_unary(s, "sliceLen", :xlen)
+
+      word_kw?(s, "bytesEq") ->
+        parse_binary(s, "bytesEq", :beq)
+
+      word_kw?(s, "sliceEq") ->
+        parse_binary(s, "sliceEq", :xeq)
+
+      word_kw?(s, "bytesGet") ->
+        parse_binary(s, "bytesGet", :aget)
+
+      word_kw?(s, "sliceGet") ->
+        parse_binary(s, "sliceGet", :bget)
+
+      word_kw?(s, "sliceUncons") ->
+        parse_unary(s, "sliceUncons", :bunc)
+
+      word_kw?(s, "strBytes") ->
+        parse_unary(s, "strBytes", :sbytes)
+
+      word_kw?(s, "sliceUntil") ->
+        parse_binary(s, "sliceUntil", :btil)
+
+      word_kw?(s, "sliceAfter") ->
+        parse_binary(s, "sliceAfter", :baft)
+
+      word_kw?(s, "bytesFold") ->
+        parse_fold(s, "bytesFold", :afold)
+
+      word_kw?(s, "sliceFold") ->
+        parse_fold(s, "sliceFold", :bfold)
+
+      word_kw?(s, "slice") ->
+        parse_ternary(s, "slice", :bsub)
+
       word_kw?(s, "Type") ->
         leaf(s, :typ, after_kw(s, "Type"))
 
@@ -4483,6 +4569,29 @@ defmodule Muro.Parser do
          {:ok, a, rest} <- parse_atom(skip(rest)),
          {:ok, b, rest} <- parse_atom(skip(rest)) do
       ok_node(loc, {tag, a, b}, 2, rest)
+    end
+  end
+
+  defp parse_ternary(s, w, tag) do
+    loc = here(skip(s))
+
+    with {:ok, rest} <- kw(s, w),
+         {:ok, a, rest} <- parse_atom(skip(rest)),
+         {:ok, b, rest} <- parse_atom(skip(rest)),
+         {:ok, c, rest} <- parse_atom(skip(rest)) do
+      ok_node(loc, {tag, a, b, c}, 3, rest)
+    end
+  end
+
+  defp parse_fold(s, w, tag) do
+    loc = here(skip(s))
+
+    with {:ok, rest} <- kw(s, w),
+         {:ok, ty, rest} <- parse_atom(skip(rest)),
+         {:ok, z, rest} <- parse_atom(skip(rest)),
+         {:ok, f, rest} <- parse_atom(skip(rest)),
+         {:ok, xs, rest} <- parse_atom(skip(rest)) do
+      ok_node(loc, {tag, ty, z, f, xs}, 4, rest)
     end
   end
 

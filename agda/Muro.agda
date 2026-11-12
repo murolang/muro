@@ -15,6 +15,7 @@ open import Muro.Subst public
 open import Muro.Env public
 open import Muro.Check public
 import Muro.String
+import Muro.Bytes
 import Muro.SubstLemmas
 import Muro.Spine
 import Muro.Reduction

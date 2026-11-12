@@ -1281,6 +1281,20 @@ defmodule Muro.Mutate do
   defp rebuild({:scat, _, _}, [a, b]), do: {:scat, a, b}
   defp rebuild({:slen, _}, [a]), do: {:slen, a}
   defp rebuild({:seq, _, _}, [a, b]), do: {:seq, a, b}
+  defp rebuild({:bcat, _, _}, [a, b]), do: {:bcat, a, b}
+  defp rebuild({:blen, _}, [a]), do: {:blen, a}
+  defp rebuild({:beq, _, _}, [a, b]), do: {:beq, a, b}
+  defp rebuild({:xlen, _}, [a]), do: {:xlen, a}
+  defp rebuild({:xeq, _, _}, [a, b]), do: {:xeq, a, b}
+  defp rebuild({:bsub, _, _, _}, [a, b, c]), do: {:bsub, a, b, c}
+  defp rebuild({:bget, _, _}, [a, b]), do: {:bget, a, b}
+  defp rebuild({:aget, _, _}, [a, b]), do: {:aget, a, b}
+  defp rebuild({:bunc, _}, [a]), do: {:bunc, a}
+  defp rebuild({:bfold, _, _, _, _}, [ty, z, f, s]), do: {:bfold, ty, z, f, s}
+  defp rebuild({:afold, _, _, _, _}, [ty, z, f, s]), do: {:afold, ty, z, f, s}
+  defp rebuild({:sbytes, _}, [a]), do: {:sbytes, a}
+  defp rebuild({:btil, _, _}, [a, b]), do: {:btil, a, b}
+  defp rebuild({:baft, _, _}, [a, b]), do: {:baft, a, b}
 
   # -- classify ---------------------------------------------------------------
 

@@ -60,6 +60,7 @@ defmodule Muro.Lexer do
       tok = take_mult(src) -> tok
       tok = match_prefix(src, @operators, :operator) -> tok
       tok = match_word(src, @words) -> tok
+      tok = take_bytes(src) -> tok
       tok = take_ident(src) -> tok
       tok = take_number(src) -> tok
       tok = take_mark(src) -> tok
@@ -82,6 +83,10 @@ defmodule Muro.Lexer do
 
   defp take_string(<<"\"", rest::binary>>), do: {:string, 1 + string_rest(rest)}
   defp take_string(_), do: nil
+
+  # `b"..."` is one token. `ab"..."` stays a name and then a string.
+  defp take_bytes(<<"b\"", rest::binary>>), do: {:string, 2 + string_rest(rest)}
+  defp take_bytes(_), do: nil
 
   defp string_rest(<<"\\\"", rest::binary>>), do: 2 + string_rest(rest)
   defp string_rest(<<"\\\\", rest::binary>>), do: 2 + string_rest(rest)

@@ -99,8 +99,14 @@ term       ::= atom atom*                  -- juxtaposition is application
              | term "::" term              -- desugars to cons
              | term ("→" | "->") term      -- non-dependent, = Π (_ : A) → B
              | term "~" term               -- bisimulation (also prefix "bisim")
-atom       ::= "Type" | "Nat" | "String" | sliteral | "I64" | "F32" | "Unit" | "Empty" | "refl" | "tt" | numeral | "?"
-             | "strCat" atom atom | "strLen" atom | "strEq" atom atom
+atom       ::= "Type" | "Nat" | "String" | sliteral | "Bytes" | "Slice" | bliteral | "I64" | "F32" | "Unit" | "Empty" | "refl" | "tt" | numeral | "?"
+             | "strCat" atom atom | "strLen" atom | "strEq" atom atom | "strBytes" atom
+             | "bytesCat" atom atom | "bytesLen" atom | "sliceLen" atom
+             | "bytesEq" atom atom | "sliceEq" atom atom
+             | "bytesGet" atom atom | "sliceGet" atom atom
+             | "slice" atom atom atom | "sliceUntil" atom atom | "sliceAfter" atom atom
+             | "sliceUncons" atom
+             | "bytesFold" atom atom atom atom | "sliceFold" atom atom atom atom
              | suc | pi | lam | let | match | matchEmpty | rewrite | idt
              | stream | unfold | uncons
              | "fst" atom | "snd" atom          -- sugar for let
@@ -150,6 +156,8 @@ idt        ::= "{" term ("≡" | "==") term ":" term "}"
 
 sliteral   ::= '"' (scalar | escape)* '"'
 escape     ::= "\\" | "\"" | "\n" | "\u{" hex+ "}"   -- one Unicode scalar, not a surrogate
+bliteral   ::= 'b"' (octet | bexp)* '"'
+bexp       ::= "\\" | "\"" | "\n" | "\r" | "\t" | "\x" hex hex   -- one octet, 00 through FF
 ident      ::= [A-Za-z_][A-Za-z0-9_-]*
 comment    ::= "--" through end of line
 space      ::= [ \t\n\r] | comment
@@ -159,7 +167,7 @@ space      ::= [ \t\n\r] | comment
 
 Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an argument. Digits start atoms, so `| 0 =>` parses. A session `case` and a process `match` accept `| 0 =>` through `| w =>` as arm labels. The label is the decimal spelling that was written, so `| 00 =>` is `00` and it is not the arm `0`.
 
-A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are identifiers; `suc`, `refl`, `tt`, and `Nat` are not. `->` ends a word, so `Nat->Nat` is an arrow. Inside a `repr` body the words `boolean`, `integer`, `nil`, `list`, `optional`, `nullable`, `tuple`, `map`, `open`, `interned`, `map_of`, and `else` are keywords. `string` is a keyword only in `interned string`. In a term, `String`, `strCat`, `strLen`, and `strEq` are keywords. A core string has the escapes `\\`, `\"`, `\n`, and `\u{…}`. A `repr` string and an import path stay a raw span: a backslash is a character, and a quote ends the span. `else` binds looser than `list`, `optional`, `nullable`, and `map_of`; parentheses group a shape. Outside that body they are identifiers, so `def else : run Nat := 0`, a constructor `interned`, and `data map_of` are definitions. `nil =>` at the start of a variant names the constructor `nil`.
+A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are identifiers; `suc`, `refl`, `tt`, and `Nat` are not. `->` ends a word, so `Nat->Nat` is an arrow. Inside a `repr` body the words `boolean`, `integer`, `nil`, `list`, `optional`, `nullable`, `tuple`, `map`, `open`, `interned`, `map_of`, and `else` are keywords. `string` is a keyword only in `interned string`. In a term, `String`, `strCat`, `strLen`, `strEq`, `Bytes`, `Slice`, `bytesCat`, `bytesLen`, `sliceLen`, `bytesEq`, `sliceEq`, `bytesGet`, `sliceGet`, `slice`, `sliceUntil`, `sliceAfter`, `sliceUncons`, `bytesFold`, `sliceFold`, and `strBytes` are keywords. `slice` is that keyword, so it does not steal a longer name such as `sliceLen`. A core string has the escapes `\\`, `\"`, `\n`, and `\u{…}`. A bytes literal is `b"…"` with `\\`, `\"`, `\n`, `\r`, `\t`, and `\xHH`. `\xHH` is exactly two hex digits. `\u{…}` is not a bytes escape. `ab"…"` is a name and then a string. A `repr` string and an import path stay a raw span: a backslash is a character, and a quote ends the span. They are not a bytes literal. `else` binds looser than `list`, `optional`, `nullable`, and `map_of`; parentheses group a shape. Outside that body they are identifiers, so `def else : run Nat := 0`, a constructor `interned`, and `data map_of` are definitions. `nil =>` at the start of a variant names the constructor `nil`.
 
 `end`, `send`, `recv`, `choose`, `branch`, `rec`, `case`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `b0`, and `b1` are keywords inside a `session` or a `conform`. Outside that form they are identifiers, so `def end : run Nat := 0` is a definition. `match` is a keyword in a process, where it chooses the next action, and in a term, where it is the eliminator. Parentheses group a nested protocol or process: `recv Nat (send Nat end)`. `send` and `recv` name one payload type and one continuation. `put` writes a value of that type. `get` names the type. `choose` and `branch` still name two protocols. `dual` is a keyword in `session name := dual name` and in an endpoint function (`dual s`). Outside those forms it is an identifier, so `def dual : run Nat := 0` is a definition. The mark on a dual session is the named session's mark when it is omitted. `seen` is a keyword in `session name := seen party with party in talk`. `with` there names the other party, and `in` names the description. Outside that form `seen` is an identifier, so `def seen : run Nat := 0` is a definition. `meet` and `with` are keywords in `meet name : left with right`. `meet` is also the keyword in an endpoint function (`meet s t`). `with` is also the keyword between the two parties of a `seen` session. Outside those forms they are identifiers, so `def meet : run Nat := 0` and `def with : run Nat := 0` are definitions.
 

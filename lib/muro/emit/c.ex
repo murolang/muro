@@ -220,10 +220,11 @@ defmodule Muro.Emit.C do
         case compile_funs(funs, book, nm) do
           {:ok, sigs, texts, extras} ->
             runs = Emit.run_defs(book)
-            opts = opt_typedefs(funs)
+            bytes? = bytes_image?(funs) or data_field_bytes?(book)
+            opts = opt_typedefs(funs, bytes?)
 
-            {:ok, header(book, sigs, stem, nm, opts),
-             source(book, runs, sigs, texts, extras, stem, nm, opts), sigs}
+            {:ok, header(book, sigs, stem, nm, opts, bytes?),
+             source(book, runs, sigs, texts, extras, stem, nm, opts, bytes?), sigs}
 
           {:error, _} = err ->
             err
@@ -281,6 +282,7 @@ defmodule Muro.Emit.C do
       book: book,
       funs: by_name,
       steps_by_name: step_map,
+      fold_done: MapSet.new(),
       nm: nm,
       file_scope: file_scope,
       base_scope: scope,
@@ -482,6 +484,131 @@ defmodule Muro.Emit.C do
 
   defp emit_ir(:abort, _env, st, _expect) do
     {:ok, {squash(["/* unreachable */", "abort();"]), "0", :opaque, st}}
+  end
+
+  defp emit_ir({:byt, bin}, _env, st, _expect) when is_binary(bin) do
+    if bin == "" do
+      {:ok, {"", "#{g("slice_empty")}()", :slice, st}}
+    else
+      {name, st} = news(st)
+      bytes = bin |> :binary.bin_to_list() |> Enum.map_join(", ", &Integer.to_string/1)
+      pre = "static const uint8_t #{name}[] = {#{bytes}};"
+      expr = "(#{g("slice")}){#{name}, sizeof #{name}}"
+      {:ok, {pre, expr, :slice, st}}
+    end
+  end
+
+  defp emit_ir({:bcat, a, b}, env, st, _expect) do
+    with {:ok, {pa, ea, _, st}} <- emit_ir(a, env, st, slice_ty()),
+         {:ok, {pb, eb, _, st}} <- emit_ir(b, env, st, slice_ty()) do
+      {:ok, {squash([pa, pb]), "#{g("bytes_cat")}(#{ea}, #{eb})", :slice, st}}
+    end
+  end
+
+  defp emit_ir({:blen, a}, env, st, _expect) do
+    with {:ok, {pre, ex, _, st}} <- emit_ir(a, env, st, slice_ty()) do
+      {:ok, {pre, "(uint64_t)((#{ex}).n)", :u64, st}}
+    end
+  end
+
+  defp emit_ir({:beq, a, b}, env, st, _expect) do
+    with {:ok, {pa, ea, _, st}} <- emit_ir(a, env, st, slice_ty()),
+         {:ok, {pb, eb, _, st}} <- emit_ir(b, env, st, slice_ty()) do
+      {:ok, {squash([pa, pb]), "#{g("slice_eq")}(#{ea}, #{eb})", :wbool, st}}
+    end
+  end
+
+  defp emit_ir({:bsub, s, off, len}, env, st, _expect) do
+    with {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()),
+         {:ok, {po, eo, _, st}} <- emit_ir(off, env, st, "uint64_t "),
+         {:ok, {pn, en, _, st}} <- emit_ir(len, env, st, "uint64_t ") do
+      {:ok, {squash([ps, po, pn]), "#{g("slice_sub")}(#{es}, #{eo}, #{en})", :slice, st}}
+    end
+  end
+
+  defp emit_ir({:bget, s, i}, env, st, _expect) do
+    with {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()),
+         {:ok, {pi, ei, _, st}} <- emit_ir(i, env, st, "uint64_t ") do
+      {:ok, {squash([ps, pi]), "#{g("slice_get")}(#{es}, #{ei})", {:opt, :u8}, st}}
+    end
+  end
+
+  defp emit_ir({:btil, s, b}, env, st, _expect) do
+    with {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()),
+         {:ok, {pb, eb, _, st}} <- emit_ir(b, env, st, "uint8_t ") do
+      {:ok, {squash([ps, pb]), "#{g("slice_until")}(#{es}, #{eb})", :slice, st}}
+    end
+  end
+
+  defp emit_ir({:baft, s, b}, env, st, _expect) do
+    with {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()),
+         {:ok, {pb, eb, _, st}} <- emit_ir(b, env, st, "uint8_t ") do
+      {:ok, {squash([ps, pb]), "#{g("slice_after")}(#{es}, #{eb})", :slice, st}}
+    end
+  end
+
+  defp emit_ir({:sbytes, _}, _env, _st, _expect), do: {:error, "c:string"}
+
+  defp emit_ir({:bunc, s}, env, st, _expect) do
+    nothing = Map.get(st.nm.ctors, {"Maybe", "nothing"})
+    just = Map.get(st.nm.ctors, {"Maybe", "just"})
+
+    if nothing == nil or just == nil do
+      {:error, "c:unsupported"}
+    else
+      with {:ok, {pre, ex, _, st}} <- emit_ir(s, env, st, slice_ty()) do
+        {out, st} = news(st)
+        {bp, st} = news(st)
+        {sp, st} = news(st)
+        alloc = g("ALLOC")
+        sl = g("slice")
+
+        stmt = """
+        #{struct_ptr("Maybe")}#{out};
+        if ((#{ex}).n == 0) {
+          #{out} = #{nothing}();
+        } else {
+          uint8_t *#{bp} = #{alloc}(1);
+          if (#{bp} == 0) abort();
+          *#{bp} = (#{ex}).p[0];
+          #{sl} *#{sp} = #{alloc}(sizeof *#{sp});
+          if (#{sp} == 0) abort();
+          *#{sp} = (#{sl}){(#{ex}).p + 1, (#{ex}).n - 1};
+          #{out} = #{just}(#{g("mk_pair")}(#{bp}, #{sp}));
+        }
+        """
+
+        {:ok, {squash([pre, stmt]), out, {:data, "Maybe"}, st}}
+      end
+    end
+  end
+
+  defp emit_ir({:bfold, step, caps, z, s}, env, st, _expect) do
+    with {:ok, st} <- ensure_fold_step(step, st),
+         {:ok, {cpre, cexs, st}} <- emit_cap_list(caps, env, st),
+         {:ok, {pz, ez, lay, st}} <- emit_ir(z, env, st, ctype(fold_ret(st, step), st.book)),
+         {:ok, {ps, es, _, st}} <- emit_ir(s, env, st, slice_ty()) do
+      {acc, st} = news(st)
+      {cur, st} = news(st)
+      {b, st} = news(st)
+      {rest, st} = news(st)
+      cty = ctype(lay, st.book)
+      sl = g("slice")
+      call = Enum.join(cexs ++ [b, rest, acc], ", ")
+
+      loop = """
+      #{cty}#{acc} = #{ez};
+      #{sl} #{cur} = #{es};
+      while (#{cur}.n > 0) {
+        uint8_t #{b} = #{cur}.p[0];
+        #{sl} #{rest} = (#{sl}){#{cur}.p + 1, #{cur}.n - 1};
+        #{acc} = #{fold_cname(step)}(#{call});
+        #{cur} = #{rest};
+      }
+      """
+
+      {:ok, {squash([cpre, pz, ps, loop]), acc, lay, st}}
+    end
   end
 
   defp emit_ir({:str, _}, _env, _st, _expect), do: {:error, "c:string"}
@@ -939,6 +1066,8 @@ defmodule Muro.Emit.C do
 
   defp ctor_data(_, _), do: nil
 
+  defp type_layout(_book, :bytes), do: :slice
+  defp type_layout(_book, :slice), do: :slice
   defp type_layout(_book, :nat), do: :nat
   defp type_layout(_book, :unit), do: :unit
   defp type_layout(_book, :atom), do: {:data, "Atom"}
@@ -1314,10 +1443,16 @@ defmodule Muro.Emit.C do
   defp cast_c(:u64, x), do: "(uint64_t)(#{x})"
   defp cast_c(:i64, x), do: "(int64_t)(uint64_t)(#{x})"
 
-  defp opt_typedefs(funs) do
-    funs
-    |> Enum.flat_map(fn fun ->
-      [fun.ret | Enum.map(fun.params, fn {_n, lay} -> lay end)] ++ collect_opts(fun.body, [])
+  defp opt_typedefs(funs, bytes?) do
+    extra = if bytes?, do: [{:opt, :u8}], else: []
+
+    (funs ++ extra)
+    |> Enum.flat_map(fn
+      fun when is_map(fun) ->
+        [fun.ret | Enum.map(fun.params, fn {_n, lay} -> lay end)] ++ collect_opts(fun.body, [])
+
+      lay ->
+        [lay]
     end)
     |> Enum.flat_map(&opt_payloads/1)
     |> Enum.uniq()
@@ -1325,7 +1460,13 @@ defmodule Muro.Emit.C do
   end
 
   defp collect_opts(tm, acc) when is_tuple(tm) do
-    acc = if match?({:opt, _}, tm), do: [tm | acc], else: acc
+    acc =
+      cond do
+        match?({:opt, _}, tm) -> [tm | acc]
+        match?({:bget, _, _}, tm) -> [{:opt, :u8} | acc]
+        true -> acc
+      end
+
     Enum.reduce(Tuple.to_list(tm), acc, &collect_opts/2)
   end
 
@@ -1356,6 +1497,7 @@ defmodule Muro.Emit.C do
   defp lay_tag(:nat), do: "nat"
   defp lay_tag(:wbool), do: "bool"
   defp lay_tag(:unit), do: "unit"
+  defp lay_tag(:slice), do: "slice"
   defp lay_tag(:opaque), do: "opaque"
   defp lay_tag({:opt, p}), do: "opt_" <> lay_tag(p)
   defp lay_tag({:data, name}), do: "d_" <> to_string(name)
@@ -1380,6 +1522,8 @@ defmodule Muro.Emit.C do
   defp ctype(:u64, _book), do: "uint64_t "
   defp ctype(:i64, _book), do: "int64_t "
   defp ctype(:wbool, _book), do: "uint8_t "
+  defp ctype(:slice, _book), do: g("slice") <> " "
+  defp ctype(:bytes, _book), do: g("slice") <> " "
   defp ctype({:opt, pay}, _book), do: opt_name(pay) <> " "
   defp ctype({:word, {:ty, :u8}, []}, book), do: ctype(:u8, book)
   defp ctype({:word, {:ty, :u32}, []}, book), do: ctype(:u32, book)
@@ -1417,7 +1561,7 @@ defmodule Muro.Emit.C do
     s |> String.split("\n") |> Enum.map_join("\n", &(pad <> &1))
   end
 
-  defp header(book, sigs, stem, nm, opts) do
+  defp header(book, sigs, stem, nm, opts, bytes?) do
     guard = guard(stem)
 
     parts = [
@@ -1428,6 +1572,7 @@ defmodule Muro.Emit.C do
       alloc_macro(),
       nat_struct(),
       unit_struct(),
+      if(bytes?, do: bytes_header(), else: ""),
       opts,
       atom_enum(book, nm),
       stream_typedef(sigs, book),
@@ -1439,7 +1584,7 @@ defmodule Muro.Emit.C do
     join_parts(parts)
   end
 
-  defp source(book, runs, sigs, funs, extras, stem, nm, _opts) do
+  defp source(book, runs, sigs, funs, extras, stem, nm, _opts, bytes?) do
     internals =
       sigs
       |> Enum.reject(& &1.export)
@@ -1449,6 +1594,7 @@ defmodule Muro.Emit.C do
       "/* generated by muro — do not edit */",
       "#include \"#{stem}.h\"",
       "#include <stdlib.h>",
+      if(bytes?, do: "#include <string.h>\n" <> bytes_helpers(), else: ""),
       nat_helpers(),
       unit_helpers(),
       pair_helpers(runs),
@@ -1551,9 +1697,9 @@ defmodule Muro.Emit.C do
       return #{p};
     }
 
-    static #{nat} *#{zero}(void) { return #{new}(0, 0); }
+    __attribute__((unused)) static #{nat} *#{zero}(void) { return #{new}(0, 0); }
 
-    static #{nat} *#{suc}(#{nat} *#{n}) { return #{new}(1, #{n}); }
+    __attribute__((unused)) static #{nat} *#{suc}(#{nat} *#{n}) { return #{new}(1, #{n}); }
     """
     |> String.trim()
   end
@@ -1569,6 +1715,224 @@ defmodule Muro.Emit.C do
     __attribute__((unused)) static #{unit} *#{tt}(void) { return &#{obj}; }
     """
     |> String.trim()
+  end
+
+  defp slice_ty, do: g("slice") <> " "
+
+  defp bytes_image?(funs) do
+    Enum.any?(funs, fn fun ->
+      bytes_lay?(fun.ret) or Enum.any?(fun.params, fn {_n, lay} -> bytes_lay?(lay) end) or
+        ir_has_bytes?(fun.body)
+    end)
+  end
+
+  defp bytes_lay?(:slice), do: true
+  defp bytes_lay?({:opt, a}), do: bytes_lay?(a)
+  defp bytes_lay?({:pair, a, b}), do: bytes_lay?(a) or bytes_lay?(b)
+  defp bytes_lay?(_), do: false
+
+  defp ir_has_bytes?({:byt, _}), do: true
+  defp ir_has_bytes?({:bcat, _, _}), do: true
+  defp ir_has_bytes?({:blen, _}), do: true
+  defp ir_has_bytes?({:beq, _, _}), do: true
+  defp ir_has_bytes?({:bsub, _, _, _}), do: true
+  defp ir_has_bytes?({:bget, _, _}), do: true
+  defp ir_has_bytes?({:bunc, _}), do: true
+  defp ir_has_bytes?({:btil, _, _}), do: true
+  defp ir_has_bytes?({:baft, _, _}), do: true
+  defp ir_has_bytes?({:bfold, _, _, _, _}), do: true
+  defp ir_has_bytes?({:sbytes, _}), do: true
+  defp ir_has_bytes?(tm) when is_tuple(tm), do: Enum.any?(Tuple.to_list(tm), &ir_has_bytes?/1)
+  defp ir_has_bytes?(tm) when is_list(tm), do: Enum.any?(tm, &ir_has_bytes?/1)
+  defp ir_has_bytes?(_), do: false
+
+  defp data_field_bytes?(book) do
+    Enum.any?(book, fn
+      %{kind: :data, ctors: cs} -> Enum.any?(cs, &mentions_bytes_ty?(&1.type))
+      _ -> false
+    end)
+  end
+
+  defp mentions_bytes_ty?(t) when t in [:bytes, :slice], do: true
+
+  defp mentions_bytes_ty?(t) when is_tuple(t),
+    do: Enum.any?(Tuple.to_list(t), &mentions_bytes_ty?/1)
+
+  defp mentions_bytes_ty?(t) when is_list(t), do: Enum.any?(t, &mentions_bytes_ty?/1)
+  defp mentions_bytes_ty?(_), do: false
+
+  defp bytes_header do
+    sl = g("slice")
+    empty = g("empty_bytes")
+    emp = g("slice_empty")
+    wrap = g("slice_of")
+
+    """
+    #include <stddef.h>
+    typedef struct { const uint8_t *p; size_t n; } #{sl};
+    static const uint8_t #{empty}[1] = {0};
+    __attribute__((unused)) static inline #{sl} #{emp}(void) {
+      return (#{sl}){#{empty}, 0};
+    }
+    __attribute__((unused)) static inline #{sl} #{wrap}(const uint8_t *p, size_t n) {
+      if (n == 0 || p == 0) return #{emp}();
+      return (#{sl}){p, n};
+    }
+    """
+    |> String.trim()
+  end
+
+  defp bytes_helpers do
+    sl = g("slice")
+    sub = g("slice_sub")
+    eq = g("slice_eq")
+    cat = g("bytes_cat")
+    get = g("slice_get")
+    til = g("slice_until")
+    aft = g("slice_after")
+    emp = g("slice_empty")
+    alloc = g("ALLOC")
+    opt = g("opt_u8")
+
+    """
+    __attribute__((unused)) static #{sl} #{sub}(#{sl} s, uint64_t off, uint64_t len) {
+      if (off > s.n || len > s.n - off) return #{emp}();
+      return (#{sl}){s.p + (size_t)off, (size_t)len};
+    }
+
+    __attribute__((unused)) static uint8_t #{eq}(#{sl} a, #{sl} b) {
+      if (a.n != b.n) return 0;
+      if (a.n == 0) return 1;
+      return memcmp(a.p, b.p, a.n) == 0;
+    }
+
+    __attribute__((unused)) static #{sl} #{cat}(#{sl} a, #{sl} b) {
+      size_t n;
+      uint8_t *p;
+      if (b.n > SIZE_MAX - a.n) abort();
+      n = a.n + b.n;
+      if (n == 0) return #{emp}();
+      p = #{alloc}(n);
+      if (p == 0) abort();
+      if (a.n != 0) memcpy(p, a.p, a.n);
+      if (b.n != 0) memcpy(p + a.n, b.p, b.n);
+      return (#{sl}){p, n};
+    }
+
+    __attribute__((unused)) static #{opt} #{get}(#{sl} s, uint64_t i) {
+      #{opt} o;
+      if (i >= s.n) { o.tag = 0; o.val = 0; return o; }
+      o.tag = 1;
+      o.val = s.p[i];
+      return o;
+    }
+
+    __attribute__((unused)) static #{sl} #{til}(#{sl} s, uint8_t b) {
+      size_t i;
+      for (i = 0; i < s.n; i++) if (s.p[i] == b) return (#{sl}){s.p, i};
+      return s;
+    }
+
+    __attribute__((unused)) static #{sl} #{aft}(#{sl} s, uint8_t b) {
+      size_t i;
+      for (i = 0; i < s.n; i++) if (s.p[i] == b) return (#{sl}){s.p + i + 1, s.n - i - 1};
+      return #{emp}();
+    }
+    """
+    |> String.trim()
+  end
+
+  defp emit_cap_list(caps, env, st) do
+    Enum.reduce_while(caps, {:ok, [], [], st}, fn {_name, tm}, {:ok, pres, exprs, st} ->
+      case emit_ir(tm, env, st, "void *") do
+        {:ok, {pre, ex, _lay, st}} -> {:cont, {:ok, pres ++ [pre], exprs ++ [ex], st}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, pres, exprs, st} -> {:ok, {squash(pres), exprs, st}}
+      err -> err
+    end
+  end
+
+  defp ensure_fold_step(name, st) do
+    done = Map.get(st, :fold_done, MapSet.new())
+
+    if MapSet.member?(done, name) do
+      {:ok, st}
+    else
+      case Map.get(st.steps_by_name, name) do
+        nil ->
+          {:error, "c:unsupported"}
+
+        fun ->
+          case emit_fold_fun(fun, st) do
+            {:ok, text, st} ->
+              {:ok, %{st | steps: st.steps ++ [text], fold_done: MapSet.put(done, name)}}
+
+            {:error, _} = err ->
+              err
+          end
+      end
+    end
+  end
+
+  defp emit_fold_fun(fun, st) do
+    cname = fold_cname(fun.name)
+    saved_base = st.base_scope
+    saved_scope = st.scope
+    visible = Name.see(st.file_scope, cname)
+
+    {bound, scope} =
+      Enum.map_reduce(fun.params, visible, fn {pname, lay}, scope ->
+        {c, scope} = Name.bind(spell(pname), scope)
+        {{pname, c, lay}, scope}
+      end)
+
+    params = for {_n, c, lay} <- bound, do: {ctype(lay, st.book), c}
+    ret = ctype(fun.ret, st.book)
+    env = Enum.reduce(bound, [], fn {n, c, lay}, env -> [{n, c, lay} | env] end)
+    st = %{st | scope: scope, base_scope: scope}
+
+    with {:ok, {pre, expr, _lay, st}} <- emit_ir(fun.body, env, st, ret) do
+      discards =
+        bound
+        |> Enum.reject(fn {n, _c, _lay} -> uses?(fun.body, n) end)
+        |> Enum.map_join("\n", fn {_n, c, _lay} -> "  (void)#{c};" end)
+
+      body =
+        cond do
+          discards != "" and pre != "" ->
+            discards <> "\n" <> indent(pre, 2) <> "\n  return #{expr};"
+
+          discards != "" ->
+            discards <> "\n  return #{expr};"
+
+          pre != "" ->
+            indent(pre, 2) <> "\n  return #{expr};"
+
+          true ->
+            "  return #{expr};"
+        end
+
+      args =
+        case params do
+          [] -> "void"
+          ps -> Enum.map_join(ps, ", ", fn {ty, name} -> "#{ty}#{name}" end)
+        end
+
+      text = "static #{ret}#{cname}(#{args}) {\n#{body}\n}"
+      {:ok, text, %{st | base_scope: saved_base, scope: saved_scope}}
+    end
+  end
+
+  defp fold_cname(name), do: g("step", step_id(name))
+
+  defp fold_ret(st, name) do
+    case Map.get(st.steps_by_name, name) do
+      %{ret: lay} -> lay
+      _ -> :opaque
+    end
   end
 
   defp pair_helpers(runs) do
@@ -1600,6 +1964,7 @@ defmodule Muro.Emit.C do
 
   defp pair_form?({:pair, _, _}), do: true
   defp pair_form?({:letp, _, _, _, _}), do: true
+  defp pair_form?({:bunc, _}), do: true
   defp pair_form?(_), do: false
 
   defp stream_form?({:stream, _}), do: true

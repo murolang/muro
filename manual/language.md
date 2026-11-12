@@ -197,6 +197,7 @@ Primitive types you can write as atoms:
 | `Nat` | Peano naturals |
 | `Atom` | The atom literals written in this file |
 | `String` | A sequence of Unicode scalars |
+| `Bytes` / `Slice` | A sequence of raw octets, and a view of one |
 | `Unit` | One constructor, `tt` |
 | `Empty` | No constructors |
 | `U8` / `U32` / `U64` / `I64` | Fixed-width residues; see [Machine numbers](machine.md) |
@@ -224,13 +225,13 @@ The mark sits immediately before the name, inside the parentheses. `(-A : Type)`
 
 A binder may also carry a grade pair, `(n : (c, t) Nat)`. `c` is how many times run and evidence use the variable. `t` is how many times a type uses it. The grades are `0`, `1`, `ω` (or `omega`), an exact natural, and an interval `[lo, hi]`. An unmarked binder stays affine, which is at most one use. `1` is exactly once, the same obligation as `%1`. `0` is no computational use. `ω` is any number of uses, on a copyable type, the same as `+`. The pair is evidence. It refines the run use. The emitters ignore it, so a graded book emits the same code as the book with the pairs removed. The λ grade and the Π grade must agree. `examples/grades.muro` is the worked book.
 
-**Data** (after WHNF): `Nat`, `Unit`, `Empty`, `String`, `U8`, `U32`, `U64`, `I64`, `WBool`, `Opt` of a Data type, `F32`, `Tensor`, a pair of two Data types, or a user `data` type whose *parameters* are Data. Indices do not have to be Data. `List A` is Data iff `A` is. `List (Nat → Nat)` is not, so you cannot write `+xs : List (Nat → Nat)`.
+**Data** (after WHNF): `Nat`, `Unit`, `Empty`, `String`, `Bytes`, `Slice`, `U8`, `U32`, `U64`, `I64`, `WBool`, `Opt` of a Data type, `F32`, `Tensor`, a pair of two Data types, or a user `data` type whose *parameters* are Data. Indices do not have to be Data. `List A` is Data iff `A` is. `List (Nat → Nat)` is not, so you cannot write `+xs : List (Nat → Nat)`.
 
 **Copyable** (after WHNF), the types `+` accepts: a Data type, a Π type, or a pair of two copyable types. A Data value copies by value, so a Data argument at a `+` position keeps its uses. A function copies by closure: copying it copies what it captured, so an argument at a `+` position whose type is a Π, or a pair holding one, has every use inside it counted as many. `twice (addn n) 1` with `twice : Π (+ f : Nat → Nat) → …` checks when `n` is reusable and is refused with `affine variable used as reusable` when `n` is affine. The domain and codomain of a `+` function are not asked to be copyable: `Π (+ f : Π (s : Stream Nat) → Nat) → …` is fine, the closure is what is copied, not the stream it will be given.
 
 `Stream` and `Either` are not copyable. There is no `+` on a stream. The refusal is `+ requires a copyable type: Data, a pair of them, or a function`.
 
-**Run type**: a variable or a definition used in run code has one. It is `Nat`, `Unit`, `Empty`, `Atom`, `String`, `U8`, `U32`, `U64`, `I64`, `WBool`, `Opt` of a run type, `F32`, `Tensor`, a `data` type, a type variable, a Π whose codomain is a run type, a pair of two, or a ν type whose body is one. Each part is read after WHNF, so a definition naming a type is the type it names: with `def R : spec Type := Nat`, `inc : run Π (r : R) → R` is used in run like `Π (r : Nat) → Nat`. An identity type is not a run type, under a name or not: `p : Nat × Eq0` with `def Eq0 : spec Type := {0 ≡ 0 : Nat}` is refused in run with `variable has a spec type`.
+**Run type**: a variable or a definition used in run code has one. It is `Nat`, `Unit`, `Empty`, `Atom`, `String`, `Bytes`, `Slice`, `U8`, `U32`, `U64`, `I64`, `WBool`, `Opt` of a run type, `F32`, `Tensor`, a `data` type, a type variable, a Π whose codomain is a run type, a pair of two, or a ν type whose body is one. Each part is read after WHNF, so a definition naming a type is the type it names: with `def R : spec Type := Nat`, `inc : run Π (r : R) → R` is used in run like `Π (r : Nat) → Nat`. An identity type is not a run type, under a name or not: `p : Nat × Eq0` with `def Eq0 : spec Type := {0 ≡ 0 : Nat}` is refused in run with `variable has a spec type`.
 
 In spec, uses are forgotten. You can mention an affine variable twice while building a type.
 
@@ -334,6 +335,27 @@ The escapes are `\\`, `\"`, `\n`, and `\u{…}`. `\u{…}` is one scalar, writte
 `String` is Data, so `+ s : String` is allowed. The type `String` itself is erased in run and evidence: writing it as a value is `no promotion: String is an erased term`. A string and an atom stay distinct. `:hello` does not inhabit `String`, and `"hello"` does not inhabit `Atom`. There is no function from one to the other.
 
 A `match` on a string literal is not part of this version, and neither is an index into one. `examples/string.muro` is the worked book. Elixir emits a binary. JavaScript emits `{ string: "hello" }` and leaves an atom as a string. `muro__canon` prints `"hello"` for the string and `hello` for the atom. C, Rust, and Zig refuse a string. A `repr` string and an import path stay a raw span of quotes; they are not this type.
+
+## Bytes
+
+`Bytes` is a sequence of raw octets. `Slice` is a view of a `Bytes` value or of a buffer the host already owns. A literal is written `b"…"`. It is a `Bytes`, and it is accepted where a `Slice` is expected. It is not a `String` and not an atom.
+
+```
+b"hello"
+b"a\nb"
+b"a\"b"
+b"a\\b"
+b"\x00"
+b"\xFF"
+```
+
+The escapes are `\\`, `\"`, `\n`, `\r`, `\t`, and `\xHH`. `\xHH` is exactly two hex digits and is any octet, including `00` and `FF`. There is no interpolation and no `\u{…}`. A raw UTF-8 byte in the source is that octet, so `b"é"` has length two and `"é"` has length one. `b"\xFF"` has length one and is not a Unicode scalar.
+
+`bytesLen` and `sliceLen` are the number of octets, as a `U64`. `bytesEq` and `sliceEq` compare octets and return a `WBool`. `bytesCat` concatenates two `Bytes` values. `slice s off len` is the `len` octets at `off`. An index past the end, or a length that does not fit, is the empty view. `sliceGet` and `bytesGet` return `Opt U8`: `wsome` of the octet, or `wnone`. `sliceUntil s b` is the prefix before the first `b`, or the whole view when `b` does not occur. `sliceAfter s b` is the suffix strictly after that octet, or empty when it does not occur. `sliceUncons` returns `Maybe (U8 × Slice)` from `std:maybe.muro`: `just` of the head and the leftover view, or `nothing`. `sliceFold` and `bytesFold` walk the octets. The step is `U8 → Slice → A → A`, and the leftover is a view even when the value being folded is a `Bytes`. `strBytes` is the UTF-8 encoding of a `String`.
+
+`Bytes` and `Slice` are Data, so `+` applies. The type formers themselves are erased: writing `Bytes` as a value is `no promotion: Bytes is an erased term`. A bytes value does not inhabit `String` or `Atom`, and neither inhabits `Bytes`. A `Bytes` literal does inhabit `Slice`. A session payload of `Bytes` or `Slice` is refused (`ill-formed payload`).
+
+Closed literals reduce. `bytesCat b"hel" b"lo" ≡ b"hello"`, `bytesLen b"\xFF" ≡ toU64 1`, `slice b"hello" (toU64 1) (toU64 3) ≡ b"ell"`, and `sliceGet b"ab" (toU64 0) ≡ wsome (toU8 97)` are `refl`. `examples/bytes.muro` is the worked book. `examples/request-line.muro` takes a request line as a `Slice` and returns the method and the path as views of that same buffer. `examples/fnv_slice.muro` is FNV-1a over a `Slice`. `examples/fnv.muro` is the same hash over a cons list, named `ByteList`, one cell per octet.
 
 ## Products
 

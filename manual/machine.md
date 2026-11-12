@@ -56,7 +56,7 @@ Elixir emits the residue as an integer. An `I64` value is that residue, not a ne
 
 ## An example
 
-`examples/fnv.muro` is 32-bit FNV-1a over a list of `U8`. The list is a monomorphic `Bytes`, so the byte is stored by value. The offset basis is 2166136261 and the prime is 16777619, each built by `shli` and `ori` of one, because `Nat` is Peano. `hashEmpty` is the basis. `hashA` hashes the byte 97 and is 3826002220. `fnv-empty` and `fnv-a` are `refl`.
+`examples/fnv.muro` is 32-bit FNV-1a over a list of `U8`. The list is a monomorphic `ByteList`, so the byte is stored by value and each `cons` is one cell. The offset basis is 2166136261 and the prime is 16777619, each built by `shli` and `ori` of one, because `Nat` is Peano. `hashEmpty` is the basis. `hashA` hashes the byte 97 and is 3826002220. `fnv-empty` and `fnv-a` are `refl`. `examples/fnv_slice.muro` is the same hash over a kernel `Slice`. The basis and the prime there are closed `U32` literals, and the walk does not allocate a cell per octet.
 
 ## F32 and Tensor
 
