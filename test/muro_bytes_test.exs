@@ -8,11 +8,19 @@ defmodule Muro.BytesTest do
   @node System.find_executable("node") ||
           if(File.regular?("/opt/homebrew/bin/node"), do: "/opt/homebrew/bin/node")
 
+  @zig System.find_executable("zig") ||
+         if(File.regular?("/opt/homebrew/bin/zig"), do: "/opt/homebrew/bin/zig")
+
   if System.get_env("CI") && is_nil(@node) do
     raise "node is required when CI is set and was not found on PATH"
   end
 
+  if System.get_env("CI") && is_nil(@zig) do
+    raise "zig is required when CI is set and was not found on PATH"
+  end
+
   @node_skip if(is_nil(@node), do: "node not on PATH", else: false)
+  @zig_skip if(is_nil(@zig), do: "zig not on PATH", else: false)
   @n 16_384
 
   test "a bytes literal keeps octet escapes and is not a string" do
@@ -109,6 +117,24 @@ defmodule Muro.BytesTest do
     assert msg =~ "no promotion: Bytes is an erased term"
   end
 
+  test "two views of one buffer need +s" do
+    two = """
+    def two : run Π (s : Slice) → Slice × Slice :=
+      λ (s : Slice) → (slice s (toU64 0) (toU64 2), slice s (toU64 2) (toU64 3))
+    """
+
+    assert {:error, msg} = check(two)
+    assert msg =~ "affine variable used twice"
+
+    reused = """
+    def two : run Π (+ s : Slice) → Slice × Slice :=
+      λ (+ s : Slice) → (slice s (toU64 0) (toU64 2), slice s (toU64 2) (toU64 3))
+    def views : run Slice × Slice := two b"hello"
+    """
+
+    assert check(reused) == :ok
+  end
+
   test "canon prints a bytes literal, not a string and not an atom" do
     assert Print.quote_bytes("hello") == "b\"hello\""
     assert Print.quote_bytes(<<255>>) == "b\"\\xff\""
@@ -176,19 +202,31 @@ defmodule Muro.BytesTest do
     header = File.read!(h)
     source = File.read!(c)
 
-    assert header =~ "typedef struct { uint8_t *p; size_t n; } muro__slice;"
+    assert header =~ "typedef struct { const uint8_t *p; size_t n; } muro__slice;"
     assert header =~ "static const uint8_t muro__empty_bytes[1] = {0};"
-    assert header =~ "muro__slice_of(uint8_t *p, size_t n)"
+    assert header =~ "muro__slice_of(const uint8_t *p, size_t n)"
     assert source =~ "static const uint8_t muro__s_0[]"
     assert source =~ "s.p + (size_t)off"
     assert source =~ "muro__ALLOC(n)"
+    assert source =~ "if (b.n > SIZE_MAX - a.n) abort();"
     refute source =~ "typedef struct muro__ByteList"
+    refute source =~ "typedef struct { uint8_t *p;"
 
     File.cp!("examples/request-line.muro", Path.join(dir, "request-line.muro"))
     assert {:ok, _} = Muro.emit_c(Path.join(dir, "request-line.muro"), nif: false)
     File.write!(Path.join(dir, "req_main.c"), req_main())
     assert gcc!(dir, "req_main.c", "req") == :ok
     assert run!(dir, "req") == "OK\n"
+
+    File.write!(Path.join(dir, "cat_overflow.c"), cat_overflow_main())
+    assert gcc!(dir, "cat_overflow.c", "cat_overflow") == :ok
+
+    {out, status} =
+      System.cmd(Path.join(dir, "cat_overflow"), [], cd: dir, stderr_to_stdout: true)
+
+    assert status != 0, "overflowing concat should abort, got 0: #{out}"
+    refute out =~ "ALLOC called"
+    refute out =~ "no abort"
   end
 
   test "a flat slice hashes a buffer without allocating a cell per byte" do
@@ -213,8 +251,8 @@ defmodule Muro.BytesTest do
     assert hash_of(cons) == hash_of(slice)
   end
 
-  test "Rust and Zig emit a pointer and a length" do
-    dir = tmp("rz")
+  test "Rust emits a pointer and a length" do
+    dir = tmp("rust")
     File.cp!("examples/bytes.muro", Path.join(dir, "bytes.muro"))
     path = Path.join(dir, "bytes.muro")
 
@@ -225,12 +263,21 @@ defmodule Muro.BytesTest do
     assert rust =~ "with_capacity"
     refute rust =~ "c:bytes"
     assert rustc!(dir, "bytes.rs") == :ok
+  end
+
+  @tag skip: @zig_skip
+  test "Zig emits a pointer and a length" do
+    dir = tmp("zig")
+    File.cp!("examples/bytes.muro", Path.join(dir, "bytes.muro"))
+    path = Path.join(dir, "bytes.muro")
 
     capture_io(fn -> Mix.Tasks.Muro.Emit.run([path, "--backend", "zig"]) end)
     zig = File.read!(Path.join(dir, "bytes.zig"))
     assert zig =~ "pub const muro__slice = extern struct { p: [*]const u8, n: usize }"
     assert zig =~ "pub fn muro__slice_of"
     assert zig =~ "muro__allocator.alloc(u8, n)"
+    assert zig =~ "@addWithOverflow(a.n, b.n)"
+    assert zig =~ "return error.Overflow"
     refute zig =~ "c:bytes"
     File.write!(Path.join(dir, "check.zig"), zig_main())
     assert zig_test!(dir) == :ok
@@ -334,12 +381,36 @@ defmodule Muro.BytesTest do
 
   defp zig_test!(dir) do
     {out, status} =
-      System.cmd(System.find_executable("zig") || "zig", ["test", "check.zig"],
+      System.cmd(@zig, ["test", "check.zig"],
         cd: dir,
         stderr_to_stdout: true
       )
 
     if status == 0, do: :ok, else: {status, out}
+  end
+
+  defp cat_overflow_main do
+    """
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <stdint.h>
+    #include <stddef.h>
+    static void *muro_test_alloc(size_t n) {
+      fprintf(stderr, "ALLOC called n=%zu\\n", n);
+      exit(3);
+    }
+    #define muro__ALLOC(n) muro_test_alloc(n)
+    #include "bytes.c"
+    int main(void) {
+      static const uint8_t one = 1;
+      muro__slice a = muro__slice_of(&one, SIZE_MAX);
+      muro__slice b = muro__slice_of(&one, (size_t)1);
+      (void)muro__bytes_cat(a, b);
+      fprintf(stderr, "no abort\\n");
+      return 2;
+    }
+    """
   end
 
   defp req_main do
@@ -358,7 +429,7 @@ defmodule Muro.BytesTest do
     }
     int main(void) {
       const char *get = "GET /feed HTTP/1.1\\r\\n";
-      muro__slice s = muro__slice_of((uint8_t *)get, strlen(get));
+      muro__slice s = muro__slice_of((const uint8_t *)get, strlen(get));
       size_t base = allocs;
       muro__slice m = method(s);
       muro__slice p = path(s);
@@ -368,7 +439,7 @@ defmodule Muro.BytesTest do
       if (!inside(m, s) || !inside(p, s)) return fail("inside");
       if (m.p != s.p || p.p != s.p + 4) return fail("ptr");
       const char *post = "POST /x HTTP/1.1\\r\\n";
-      muro__slice ps = muro__slice_of((uint8_t *)post, strlen(post));
+      muro__slice ps = muro__slice_of((const uint8_t *)post, strlen(post));
       base = allocs;
       muro__slice pm = method(ps);
       muro__slice pp = path(ps);
@@ -377,7 +448,7 @@ defmodule Muro.BytesTest do
       if (pp.n != 2 || memcmp(pp.p, "/x", 2) != 0) return fail("post path");
       if (!inside(pm, ps) || !inside(pp, ps)) return fail("post inside");
       const char *glued_s = "GET/feed";
-      muro__slice gs = muro__slice_of((uint8_t *)glued_s, strlen(glued_s));
+      muro__slice gs = muro__slice_of((const uint8_t *)glued_s, strlen(glued_s));
       base = allocs;
       muro__slice gm = method(gs);
       muro__slice gp = path(gs);
@@ -385,7 +456,7 @@ defmodule Muro.BytesTest do
       if (gm.n != strlen(glued_s) || gm.p != gs.p) return fail("glued method");
       if (gp.n != 0 || gp.p != muro__slice_empty().p) return fail("glued path");
       const char *gap_s = "GET  HTTP/1.1\\r\\n";
-      muro__slice as = muro__slice_of((uint8_t *)gap_s, strlen(gap_s));
+      muro__slice as = muro__slice_of((const uint8_t *)gap_s, strlen(gap_s));
       base = allocs;
       muro__slice am = method(as);
       muro__slice ap = path(as);

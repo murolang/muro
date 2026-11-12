@@ -2113,7 +2113,9 @@ defmodule Muro.Emit.Zig do
     }
 
     fn #{cat}(#{al()}: #{alloc_ty()}, a: #{sl}, b: #{sl}) !#{sl} {
-        const n = a.n + b.n;
+        const ov = @addWithOverflow(a.n, b.n);
+        if (ov[1] != 0) return error.Overflow;
+        const n = ov[0];
         if (n == 0) return #{emp}();
         const buf = try #{al()}.alloc(u8, n);
         if (a.n != 0) @memcpy(buf[0..a.n], a.p[0..a.n]);

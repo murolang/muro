@@ -493,7 +493,7 @@ defmodule Muro.Emit.C do
       {name, st} = news(st)
       bytes = bin |> :binary.bin_to_list() |> Enum.map_join(", ", &Integer.to_string/1)
       pre = "static const uint8_t #{name}[] = {#{bytes}};"
-      expr = "(#{g("slice")}){(uint8_t *)#{name}, sizeof #{name}}"
+      expr = "(#{g("slice")}){#{name}, sizeof #{name}}"
       {:ok, {pre, expr, :slice, st}}
     end
   end
@@ -1769,12 +1769,12 @@ defmodule Muro.Emit.C do
 
     """
     #include <stddef.h>
-    typedef struct { uint8_t *p; size_t n; } #{sl};
+    typedef struct { const uint8_t *p; size_t n; } #{sl};
     static const uint8_t #{empty}[1] = {0};
     __attribute__((unused)) static inline #{sl} #{emp}(void) {
-      return (#{sl}){(uint8_t *)#{empty}, 0};
+      return (#{sl}){#{empty}, 0};
     }
-    __attribute__((unused)) static inline #{sl} #{wrap}(uint8_t *p, size_t n) {
+    __attribute__((unused)) static inline #{sl} #{wrap}(const uint8_t *p, size_t n) {
       if (n == 0 || p == 0) return #{emp}();
       return (#{sl}){p, n};
     }
@@ -1807,8 +1807,10 @@ defmodule Muro.Emit.C do
     }
 
     __attribute__((unused)) static #{sl} #{cat}(#{sl} a, #{sl} b) {
-      size_t n = a.n + b.n;
+      size_t n;
       uint8_t *p;
+      if (b.n > SIZE_MAX - a.n) abort();
+      n = a.n + b.n;
       if (n == 0) return #{emp}();
       p = #{alloc}(n);
       if (p == 0) abort();
