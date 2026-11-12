@@ -21,10 +21,12 @@ defmodule Mix.Tasks.Muro.Synth do
 
   The smallest program that matches every observation is the policy
   the book deploys, and `eval` runs it. A score does not decide who
-  survives. Exit 0 is reserved for a later checked homomorphism.
-  This task exits 1 when it reports a policy, an empty space, a
-  counterexample, a silent oracle, or features that cannot separate
-  two carriers. `--json` prints that report as one JSON object.
+  survives. Exit 0 is a checked homomorphism for that ranking, on
+  the same `step`. This task exits 1 when it reports a policy whose
+  environment does not define the homomorphism, an empty space, a
+  counterexample, a homomorphism that is not derivable, a silent
+  oracle, or features that cannot separate two carriers. `--json`
+  prints that report as one JSON object.
   The manual page is `manual/synth.md`.
   """
 

@@ -29,6 +29,13 @@ defmodule Muro.Synth do
   are not `sufficient-cegis`. A sweep of one trajectory is not that
   theorem.
 
+  The book that checks is the surviving predicate. `rank` reads it:
+  `Unit` when the predicate prefers the action, `Empty` when it does
+  not. On a finite state type whose `solve` is constant, the book also
+  carries the homomorphism of that ranking, checked on the same `step`.
+  That checked homomorphism is the success. A policy whose environment
+  does not define the homomorphism is reported and is not success.
+
   `deepen/7` is the depth step. A miss at the current depth searches
   the next depth. `budget` is how many further deepenings follow that
   try. Budget 0 deepens once.

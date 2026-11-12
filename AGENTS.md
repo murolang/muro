@@ -39,7 +39,7 @@ mix muro.check path.muro                    # one file
 mix muro.check --fuel 20000 path.muro       # after "out of fuel"
 mix muro.mutate path.muro                   # which evidence constrains each run
 mix muro.mutate path.muro --only half --json
-mix muro.synth path.muro                    # version space; the homomorphism is later
+mix muro.synth path.muro                    # version space; exit 0 is the checked homomorphism
 mix muro.synth path.muro --out out.muro --oracle trace
 mix muro --version                          # the copy that ran
 mix muro.init                               # muro.exs and priv/muro/
