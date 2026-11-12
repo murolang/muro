@@ -95,9 +95,11 @@ In BinarySacrifice the stream of `go-trap` is 1, 0, 0, … and the stream of `go
 
 `lib/synth.muro` is the CEGIS theory for a Boolean program over features. The environment supplies the carrier, the features, and `eval-feature`. `PredProg` is a feature test (`feat`), a conjunction (`andp`), a disjunction (`orp`), a negation (`notp`), or a constant (`truep`, `falsep`). `eval` reads a carrier. `propagation` says a program agrees on feature-equivalent carriers. `refine` keeps the programs that match an observation, and `vs-shrinks` says the version space never grows. `consistent-correct` says a program that matches an observation is kept. `cegis-survivors-consistent` says every survivor of `refine-all` agrees with every observation it saw. `refine-commutes` and `replay-redundant` say the order of observations does not matter, and repeating one that was already seen changes nothing.
 
-`sufficient-cegis` is the claim that makes a finite cover enough. If `FeatureRespects target` and `Covers reps`, every survivor of refinement on the representative observations `(r, target r)` matches the target on every carrier. `envs/synth_bit.muro` is that lemma on two carriers. Both make the one feature true, so `on` represents `off`, and the target is constantly true. One observation is enough.
+`sufficient-cegis` is the claim that makes a finite cover enough. If `FeatureRespects target` and `Covers reps`, every survivor of refinement on the representative observations `(r, target r)` matches the target on every carrier. Those lemmas are evidence about the run policy, and the emitters erase them.
 
-The Elixir enumerator is not this evidence. A homomorphism for an agent is a different book.
+`envs/synth_bit.muro` is that claim on two carriers. Both make the one feature true, so `on` represents `off`, and the target is constantly true. One observation is enough. `bit-policy` is the run `eval truep`. It is the deployed policy, and `bit-policy-matches` is `sufficient-cegis` at that exact run: the policy matches the target on both carriers.
+
+The Elixir enumerator is a different search. A homomorphism for an agent is a different book.
 
 ```
 mix muro.check examples/cshrl/envs/synth_bit.muro

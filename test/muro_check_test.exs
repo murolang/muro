@@ -2870,7 +2870,7 @@ defmodule Muro.CheckTest do
     assert Muro.check_file("examples/cshrl/envs/optimal.muro") == :ok
   end
 
-  test "the predicate-program theory checks, and its evidence is erased" do
+  test "the predicate-program policy runs, and its evidence is erased" do
     assert {:error, msg} = Muro.check_file("examples/cshrl/lib/synth.muro")
     assert msg =~ "is supplied by a file that imports this one"
 
@@ -2883,6 +2883,11 @@ defmodule Muro.CheckTest do
     refute src =~ "vs-shrinks"
     refute src =~ "vs_shrinks"
     refute src =~ "CoindHomo"
+    refute src =~ "bit-policy-matches"
+    refute src =~ "bit_policy_matches"
+    refute src =~ "truep-survives"
+    refute src =~ "truep_survives"
+    assert src =~ ~r/\bdef bit_policy\b/
     Code.eval_string(src)
 
     assert call("CshrlSynth", :eval, [:truep, :on]) == true
@@ -2892,6 +2897,67 @@ defmodule Muro.CheckTest do
     programs = call("CshrlSynth", :programs, [])
     seen = call("CshrlSynth", :seen, [])
     assert call("CshrlSynth", :refine, [seen, programs]) == {:vcons, :truep, :vnil}
+
+    policy = String.to_atom(Emit.elixir_base("bit-policy"))
+    assert call("CshrlSynth", policy, [:on]) == true
+    assert call("CshrlSynth", policy, [:off]) == true
+
+    node =
+      System.find_executable("node") ||
+        if(File.regular?("/opt/homebrew/bin/node"), do: "/opt/homebrew/bin/node", else: nil)
+
+    if is_nil(node) do
+      if System.get_env("CI") do
+        flunk("node is required when CI is set and was not found on PATH")
+      end
+    else
+      dir = Path.join(System.tmp_dir!(), "muro_synth_bit_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(dir)
+      File.cp_r!("examples/cshrl", Path.join(dir, "cshrl"))
+      js_path = Path.join(dir, "cshrl/envs/synth_bit.muro")
+      assert {:ok, [mjs, _dts]} = Muro.emit_js(js_path)
+      src_js = File.read!(mjs)
+      refute src_js =~ "sufficient-cegis"
+      refute src_js =~ "sufficient_cegis"
+      refute src_js =~ "propagation"
+      refute src_js =~ "vs-shrinks"
+      refute src_js =~ "vs_shrinks"
+      refute src_js =~ "bit-policy-matches"
+      refute src_js =~ "bit_policy_matches"
+      refute src_js =~ "truep-survives"
+      refute src_js =~ "truep_survives"
+      assert src_js =~ "export function bit_policy"
+
+      drv = Path.join(Path.dirname(mjs), "_drv_bit_policy.mjs")
+
+      File.write!(drv, """
+      import { bit_policy, muro__data, muro__canon } from "./synth_bit.mjs";
+      const on = muro__data("on");
+      const off = muro__data("off");
+      const expected = muro__canon(muro__data("true"));
+      const gotOn = muro__canon(bit_policy(on));
+      const gotOff = muro__canon(bit_policy(off));
+      if (gotOn !== expected) {
+        console.error("on", gotOn);
+        process.exit(1);
+      }
+      if (gotOff !== expected) {
+        console.error("off", gotOff);
+        process.exit(1);
+      }
+      console.log("ok");
+      """)
+
+      {out, status} =
+        System.cmd(node, [drv],
+          stderr_to_stdout: true,
+          env: [{"NO_COLOR", nil}, {"FORCE_COLOR", nil}]
+        )
+
+      assert status == 0, out
+      assert String.trim(out) == "ok"
+      File.rm_rf!(dir)
+    end
   end
 
   test "binary successor checks, and the bits of 11 step to the bits of 12" do

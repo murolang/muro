@@ -1,11 +1,14 @@
--- synth_bit.muro — the CEGIS theory on two carriers.
+-- synth_bit.muro — a PredProg policy on two carriers.
 --
--- This is the CEGIS theory. The Elixir search is untrusted. A
+-- The synthesized PredProg is the policy. eval is the run that
+-- executes it and is emitted. The lemmas are evidence about that
+-- run policy and are erased. The Elixir search is untrusted. A
 -- homomorphism certificate is later work.
 --
 -- Both carriers make the one feature true, so `on` represents `off`.
 -- The target is constantly true. One representative observation is
 -- enough: every survivor matches the target on both carriers.
+-- The deployed policy is eval of the survivor truep.
 import "../lib/synth.muro"
 
 data Carrier : Type where
@@ -80,3 +83,15 @@ def shrinks-here : evidence Le (vlength (refine seen programs)) (vlength program
 
 def features-propagate : evidence {eval (feat bit) on ≡ eval (feat bit) off : Bool} :=
   propagation (feat bit) on off refl
+
+-- The deployed policy: eval of the survivor truep. bit-policy-matches
+-- is sufficient-cegis at that exact run, on every carrier.
+def bit-policy : run Π (+ c : Carrier) → Bool :=
+  λ (+ c : Carrier) → eval truep c
+
+def truep-survives : evidence InSpace truep (refine-all programs (obs-of target reps)) :=
+  inl refl
+
+def bit-policy-matches : evidence Π (+ c : Carrier) → {bit-policy c ≡ target c : Bool} :=
+  λ (+ c : Carrier) →
+    bit-sufficient programs truep truep-survives c

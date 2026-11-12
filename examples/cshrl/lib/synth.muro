@@ -8,8 +8,10 @@
 -- carrier, every survivor of those representative observations matches
 -- the target on every carrier.
 --
--- The Elixir enumerator is not this file. This file is the evidence.
--- A homomorphism for an agent is a different book.
+-- The Elixir enumerator is a different search. eval is the run that
+-- executes the program and is emitted. The lemmas are evidence about
+-- that run, and the emitters erase them. A homomorphism for an agent
+-- is a different book.
 import "../std/nat.muro"
 
 param Carrier : spec Type
