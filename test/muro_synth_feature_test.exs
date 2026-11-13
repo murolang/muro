@@ -156,6 +156,47 @@ defmodule Muro.SynthFeatureTest do
     assert Muro.Synth.Term.eval_spec(schema, on_spec, off) == false
   end
 
+  test "more than 32 inhabitants is not a finite list" do
+    bit = {:enum, "Bit", ["b0", "b1"]}
+    row = fn n -> {:data, "State", [%{name: "row", fields: List.duplicate(bit, n)}]} end
+
+    assert {:ok, rows} = Muro.Synth.Term.inhabitants(row.(5))
+    assert length(rows) == Muro.Synth.Term.cap()
+    assert Muro.Synth.Term.inhabitants(row.(6)) == :cap
+    refute Muro.Synth.Term.finite?(row.(6))
+    assert Muro.Synth.Term.equatable?(row.(6))
+
+    listed = {:data, "State", [%{name: "cell", fields: [{:list, :nat}]}]}
+    assert Muro.Synth.Term.inhabitants(listed) == :open
+    assert Muro.Synth.Term.equatable?(listed)
+  end
+
+  test "a function field is not a self-loop or a terminal test" do
+    schema = {:data, "State", [%{name: "box", fields: [{:open, "function"}]}]}
+    refute Muro.Synth.Term.equatable?(schema)
+
+    host =
+      host(
+        states: [{:box, :fa}, {:box, :fc}],
+        actions: ["go", "stay"],
+        step: fn
+          {:box, :fa}, "go" -> {{:box, :fa}, 0}
+          {:box, :fa}, "stay" -> {{:box, :sink}, 0}
+          {:box, :fc}, "go" -> {{:box, :fa}, 1}
+          {:box, :fc}, "stay" -> {{:box, :fa}, 0}
+          {:box, :sink}, _action -> {{:box, :sink}, 0}
+        end
+      )
+      |> Map.put(:structured, true)
+      |> Map.put(:inhabitants, nil)
+      |> Map.put(:schema, schema)
+
+    specs = Feature.discover(host, [])
+    refute Enum.any?(specs, &(&1.kind == :is_self_loop))
+    refute Enum.any?(specs, &(&1.kind == :leads_terminal))
+    assert Enum.any?(specs, &(&1.kind == :has_pos_reward))
+  end
+
   defp pos_host, do: host(step: pos_step())
 
   defp pos_step do

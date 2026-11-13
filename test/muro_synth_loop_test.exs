@@ -1330,6 +1330,310 @@ defmodule Muro.SynthLoopTest do
     refute text =~ "residual"
   end
 
+  test "an incomparable state does not emit an empty match" do
+    host = %{
+      book: [],
+      defined_feature: false,
+      structured: true,
+      inhabitants: nil,
+      schema: {:data, "State", [%{name: "box", fields: [{:open, "function"}]}]},
+      actions: ["go"],
+      feature_specs: [%{name: "is-self-loop-go", kind: :is_self_loop, action: "go"}]
+    }
+
+    arm = %{
+      name: "survivor",
+      pred: {:feat, "is-self-loop-go"},
+      action: "go",
+      else: "stay",
+      observations: []
+    }
+
+    assert {:error, "state equality is not a run"} =
+             Muro.Synth.Book.render(host, [arm], ".", "trace")
+  end
+
+  test "a policy book that names no obligation tries the next survivor" do
+    dir = tmp()
+    calls = :counters.new(1, [:atomics])
+
+    checker = fn book, fuel ->
+      :counters.add(calls, 1, 1)
+
+      if :counters.get(calls, 1) == 1 do
+        {:error, "scratch body: the policy book does not check"}
+      else
+        Muro.check_file(book, fuel: fuel)
+      end
+    end
+
+    assert {:ok, result} =
+             Muro.Synth.cegis_loop(prefer_go(dir),
+               depth: 0,
+               max_depth: 1,
+               checker: checker,
+               max_rounds: 4
+             )
+
+    assert :counters.get(calls, 1) >= 2
+    assert result.status == :policy
+    assert result.program == {:not, false}
+  end
+
+  test "a parameterized State is refused" do
+    dir = tmp()
+
+    path =
+      write_book(dir, "params.muro", """
+      import "std:bool.muro"
+      import "std:list.muro"
+
+      data State (A : Type) : Type where
+        box : Π (x : A) → State A
+
+      data Action : Type where
+        go : Action
+
+      def step : run Π (s : State Nat) → Π (a : Action) → (State Nat) × Nat :=
+        λ (s : State Nat) → λ (_ : Action) → (s, 0)
+
+      def all-actions : run List Action := cons go nil
+      def horizon : run Nat := 0
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, "State has parameters"} = Muro.Synth.Host.open(path)
+  end
+
+  test "an indexed State is refused" do
+    dir = tmp()
+
+    path =
+      write_book(dir, "indexed.muro", """
+      import "std:bool.muro"
+      import "std:list.muro"
+
+      data State : Nat → Type where
+        here : Π (n : Nat) → State n
+
+      data Action : Type where
+        go : Action
+
+      def step : run Π (n : Nat) → Π (s : State n) → Π (a : Action) → (State n) × Nat :=
+        λ (n : Nat) → λ (s : State n) → λ (_ : Action) → (s, 0)
+
+      def all-actions : run List Action := cons go nil
+      def horizon : run Nat := 0
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, "State has indices"} = Muro.Synth.Host.open(path)
+  end
+
+  test "an open constructor without all-states is refused" do
+    dir = tmp()
+
+    path =
+      write_book(dir, "open-list.muro", """
+      import "std:bool.muro"
+      import "std:list.muro"
+
+      data State : Type where
+        cell : Π (xs : List Nat) → State
+
+      data Action : Type where
+        go : Action
+
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+
+      def all-actions : run List Action := cons go nil
+      def horizon : run Nat := 0
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, "State constructors take arguments; declare all-states"} =
+             Muro.Synth.Host.open(path)
+  end
+
+  test "more than 32 inhabitants without all-states is refused" do
+    dir = tmp()
+
+    path = write_book(dir, "wide.muro", wide_src(false))
+
+    message = "State has more than #{Muro.Synth.Term.cap()} inhabitants; declare all-states"
+    assert {:error, :usage, ^message} = Muro.Synth.Host.open(path)
+  end
+
+  test "more than 32 inhabitants with all-states compares by schema" do
+    dir = tmp()
+    path = write_book(dir, "wide-cover.muro", wide_src(true))
+
+    assert {:ok, host} = Muro.Synth.Host.open(path)
+    assert host.structured
+    assert host.inhabitants == nil
+    assert length(host.all_states) == 2
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert result.program == {:feat, "is-self-loop-go"}
+    assert result.reason == "State is not a finite enumeration"
+    assert result.book =~ "dyn-same"
+    assert result.book =~ "| b0 =>"
+    assert result.book =~ "| b1 =>"
+    assert result.book =~ "| row "
+    assert byte_size(result.book) < 30_000
+  end
+
+  test "an open list cover compares the two cells" do
+    dir = tmp()
+    path = write_book(dir, "cells.muro", list_cover_src())
+
+    assert {:ok, host} = Muro.Synth.Host.open(path)
+    assert host.structured
+    assert host.inhabitants == nil
+    assert length(host.all_states) == 2
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert result.program == {:feat, "is-self-loop-go"}
+    assert result.reason == "State is not a finite enumeration"
+    assert result.book =~ "dyn-same"
+    assert result.book =~ "| nil =>"
+    assert result.book =~ "| cons "
+    assert result.book =~ "| cell "
+    refute result.book =~ "predicted unknown"
+  end
+
+  test "schema equality decides two constructors" do
+    schema =
+      {:data, "State", [%{name: "none", fields: []}, %{name: "some", fields: [:nat]}]}
+
+    assert {:ok, text, _taken} = Muro.Synth.Term.eq_source("dyn-same", schema, MapSet.new())
+    dir = tmp()
+
+    path =
+      write_book(dir, "eq.muro", """
+      import "std:bool.muro"
+
+      data State : Type where
+        none : State
+        some : Π (n : Nat) → State
+
+      #{text}
+      def same-none : evidence {dyn-same none none ≡ true : Bool} := refl
+      def diff-arm : evidence {dyn-same none (some 0) ≡ false : Bool} := refl
+      def same-some : evidence {dyn-same (some 0) (some 0) ≡ true : Bool} := refl
+      def diff-suc : evidence {dyn-same (some 0) (some (suc 0)) ≡ false : Bool} := refl
+      """)
+
+    assert Muro.check_file(path) == :ok
+  end
+
+  defp ranking_names do
+    """
+    def CoindHomo : spec Type := Nat
+    def action-value : spec Type := Nat
+    def action-at : spec Type := Nat
+    def value : spec Type := Nat
+    def solve : spec Type := Nat
+    def dom-refl : spec Type := Nat
+    def tabulate-dom : spec Type := Nat
+    def le-refl : spec Type := Nat
+    def maxN : run Π (m : Nat) → Π (n : Nat) → Nat :=
+      λ (m : Nat) → λ (_ : Nat) → m
+    def max : run Π (m : Nat) → Π (n : Nat) → Nat := maxN
+    def bottom : run Nat := 0
+    def Reward : spec Type := Nat
+    """
+  end
+
+  defp list_cover_src do
+    """
+    import "std:bool.muro"
+    import "std:list.muro"
+
+    data State : Type where
+      cell : Π (xs : List Nat) → State
+
+    data Action : Type where
+      go : Action
+      stay : Action
+
+    def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+      λ (s : State) → λ (a : Action) →
+        match s motive (λ _ → State × Nat)
+          | cell xs =>
+              (match a motive (λ _ → State × Nat)
+                | go =>
+                    (match xs motive (λ _ → State × Nat)
+                      | nil => (cell (cons 0 nil), suc 0)
+                      | cons h t => (cell (cons h t), 0))
+                | stay =>
+                    (match xs motive (λ _ → State × Nat)
+                      | nil => (cell nil, suc (suc 0))
+                      | cons _ _ => (cell nil, 0)))
+
+    def all-actions : run List Action := cons go (cons stay nil)
+    def horizon : run Nat := 0
+    def all-states : run List State :=
+      cons (cell nil) (cons (cell (cons 0 nil)) nil)
+    #{leb_src()}
+    #{ranking_names()}
+    """
+  end
+
+  defp wide_src(cover?) do
+    cover =
+      if cover? do
+        """
+        def all-states : run List State :=
+          cons (row b0 b0 b0 b0 b0 b0) (cons (row b1 b1 b1 b1 b1 b1) nil)
+        """
+      else
+        ""
+      end
+
+    """
+    import "std:bool.muro"
+    import "std:list.muro"
+
+    data Bit : Type where
+      b0 : Bit
+      b1 : Bit
+
+    data State : Type where
+      row : Π (a : Bit) → Π (b : Bit) → Π (c : Bit) → Π (d : Bit) → Π (e : Bit) → Π (f : Bit) → State
+
+    data Action : Type where
+      go : Action
+      stay : Action
+
+    def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+      λ (s : State) → λ (a : Action) →
+        match s motive (λ _ → State × Nat)
+          | row x _ _ _ _ _ =>
+              (match a motive (λ _ → State × Nat)
+                | go =>
+                    (match x motive (λ _ → State × Nat)
+                      | b0 => (row b1 b1 b1 b1 b1 b1, suc 0)
+                      | b1 => (row b1 b1 b1 b1 b1 b1, 0))
+                | stay =>
+                    (match x motive (λ _ → State × Nat)
+                      | b0 => (row b0 b0 b0 b0 b0 b0, suc (suc 0))
+                      | b1 => (row b0 b0 b0 b0 b0 b0, 0)))
+
+    def all-actions : run List Action := cons go (cons stay nil)
+    def horizon : run Nat := 0
+    #{cover}
+    #{leb_src()}
+    #{ranking_names()}
+    """
+  end
+
   defp joined(result), do: Enum.join(result.lines, "\n")
 
   defp prefer_go(dir), do: write_book(dir, "prefer.muro", prefer_src())
