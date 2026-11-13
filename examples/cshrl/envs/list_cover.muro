@@ -1,0 +1,41 @@
+-- list_cover.muro — two lists of Nat, with no declared feature.
+--
+-- The state is a list of Nat. The cover is the empty list and the
+-- singleton 0. go and stay both stay put. The empty list pays 1 for
+-- stay and 0 for go. The singleton pays 1 for go and 0 for stay.
+-- Nothing in this book names a feature.
+import "../std/nat.muro"
+import "../lib/agent.muro"
+
+data State : Type where
+  cell : Π (xs : List Nat) → State
+
+data Action : Type where
+  go : Action
+  stay : Action
+
+def Reward : spec Type := Nat
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Reward)
+      | cell xs =>
+          (match a motive (λ _ → State × Reward)
+            | go =>
+                (match xs motive (λ _ → State × Reward)
+                  | nil => (cell nil, 0)
+                  | cons h t => (cell (cons h t), suc 0))
+            | stay =>
+                (match xs motive (λ _ → State × Reward)
+                  | nil => (cell nil, suc 0)
+                  | cons h t => (cell (cons h t), 0)))
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons go (cons stay nil)
+def default-action : run Action := stay
+def horizon : run Nat := 0
+
+def all-states : run List State :=
+  cons (cell nil) (cons (cell (cons 0 nil)) nil)
