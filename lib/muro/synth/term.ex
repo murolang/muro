@@ -1712,6 +1712,529 @@ defmodule Muro.Synth.Term do
   defp eq_binders(_prefix, 0), do: []
   defp eq_binders(prefix, n), do: Enum.map(0..(n - 1)//1, &"#{prefix}#{&1}")
 
+  @doc """
+  A match on `scrutinee` that follows only the terms in `states`.
+
+  `type_of.(src)` is the type of a branch whose source is `src`.
+  `body_of.(spell)` is the branch at one cover element.
+  `miss.(src)` is a state outside the cover, and `src` is already the
+  reconstructed state. A nested split passes that same function
+  through: `embed` is what places the piece. `:open` means the terms
+  do not determine a split. The caller must not emit a partial match.
+  The tree is finite because each step peels a constructor, a list
+  cell, or one `suc` toward the largest Nat in the cover.
+  """
+  def cover_match(schema, scrutinee, states, type_of, body_of, miss)
+      when is_binary(scrutinee) and is_list(states) and is_function(type_of, 1) and
+             is_function(body_of, 1) and is_function(miss, 1) do
+    cands =
+      Enum.map(states, fn state ->
+        %{spell: spell(state), focus: value_of(state), stack: []}
+      end)
+
+    done = fn piece, here, k -> finish_cover(piece, here, body_of, k) end
+
+    case split(schema, scrutinee, & &1, cands, type_of, done, miss, 0) do
+      {:ok, text, _k} -> {:ok, text}
+      :open -> :open
+    end
+  end
+
+  defp finish_cover(piece, cands, body_of, k) do
+    case cands |> Enum.map(& &1.spell) |> Enum.uniq() do
+      [spell] when spell == piece -> {:ok, body_of.(spell), k}
+      _ -> :open
+    end
+  end
+
+  defp split(_schema, hole, embed, [], _type_of, _continue, miss, k) do
+    {:ok, miss.(embed.(hole)), k}
+  end
+
+  defp split(schema, hole, embed, cands, type_of, continue, miss, k) do
+    case schema do
+      :nat ->
+        split_nat(hole, embed, cands, type_of, continue, miss, k)
+
+      {:list, elem} ->
+        split_list(elem, hole, embed, cands, type_of, continue, miss, k)
+
+      {:enum, name, ctors} ->
+        split_enum(name, ctors, hole, embed, cands, type_of, continue, miss, k)
+
+      {:data, name, rows} ->
+        split_data(name, rows, hole, embed, cands, type_of, continue, miss, k)
+
+      {:prod, left, right} ->
+        split_prod(left, right, hole, embed, cands, type_of, continue, miss, k)
+
+      _ ->
+        :open
+    end
+  end
+
+  # The zero arm is the remainder `0`. Outer successors live in
+  # `prefix`, so the source at depth d is `prefix.("0")`, which is
+  # `spell_nat(d)`. A missing number, and every larger `suc`, is a miss.
+  defp split_nat(hole, embed, cands, type_of, continue, miss, k) do
+    case nat_rank(cands) do
+      :open -> :open
+      {:ok, ranked} -> nat_from(hole, embed, & &1, ranked, 0, type_of, continue, miss, k)
+    end
+  end
+
+  defp nat_rank(cands) do
+    Enum.reduce_while(cands, {:ok, []}, fn cand, {:ok, acc} ->
+      case canon_nat(cand.focus) do
+        {:ok, n} -> {:cont, {:ok, [Map.put(cand, :n, n) | acc]}}
+        :error -> {:halt, :open}
+      end
+    end)
+    |> case do
+      :open -> :open
+      {:ok, ranked} -> {:ok, Enum.reverse(ranked)}
+    end
+  end
+
+  defp nat_from(hole, embed, prefix, cands, depth, type_of, continue, miss, k) do
+    var = "n#{k}_#{depth}"
+    suc_var = "s#{k}_#{depth}"
+    motive = "(λ (#{var} : Nat) → #{type_of.(embed.(prefix.(var)))})"
+    here = Enum.filter(cands, &(&1.n == depth))
+    deeper = Enum.filter(cands, &(&1.n > depth))
+
+    with {:ok, zero_body, _} <- arm_or_miss(here, prefix.("0"), continue, miss, embed, k),
+         {:ok, suc_body, _} <-
+           nat_suc(deeper, suc_var, embed, prefix, depth, type_of, continue, miss, k) do
+      text =
+        match_arms(hole, motive, [
+          "| 0 => #{zero_body}",
+          "| suc #{suc_var} => #{suc_body}"
+        ])
+
+      {:ok, text, k}
+    else
+      :open -> :open
+    end
+  end
+
+  defp nat_suc([], suc_var, embed, prefix, _depth, _type_of, _continue, miss, k) do
+    {:ok, miss.(embed.(prefix.(suc_spell(suc_var)))), k}
+  end
+
+  defp nat_suc(deeper, suc_var, embed, prefix, depth, type_of, continue, miss, k) do
+    inner = fn rest -> prefix.(suc_spell(rest)) end
+    nat_from(suc_var, embed, inner, deeper, depth + 1, type_of, continue, miss, k)
+  end
+
+  # `spell_nat(1)` is `suc 0`. A deeper numeral parenthesises the argument.
+  defp suc_spell("0"), do: "suc 0"
+  defp suc_spell(rest), do: "suc " <> arg(rest)
+
+  defp split_list(elem, hole, embed, cands, type_of, continue, miss, k) do
+    case list_rank(cands) do
+      :open ->
+        :open
+
+      {:ok, nils, conses} ->
+        var = "l#{k}"
+        h = "h#{k}"
+        t = "t#{k}"
+        motive = "(λ (#{var} : #{type_name({:list, elem})}) → #{type_of.(embed.(var))})"
+
+        with {:ok, nil_body, _} <- arm_or_miss(nils, "nil", continue, miss, embed, k),
+             {:ok, cons_body, _} <-
+               cons_arm(elem, h, t, conses, embed, type_of, continue, miss, k) do
+          text =
+            match_arms(hole, motive, [
+              "| nil => #{nil_body}",
+              "| cons #{h} #{t} => #{cons_body}"
+            ])
+
+          {:ok, text, k}
+        else
+          :open -> :open
+        end
+    end
+  end
+
+  defp list_rank(cands) do
+    Enum.reduce_while(cands, {:ok, [], []}, fn cand, {:ok, nils, conses} ->
+      case cand.focus do
+        nil -> {:cont, {:ok, [cand | nils], conses}}
+        {:cons, _, _} -> {:cont, {:ok, nils, [cand | conses]}}
+        _ -> {:halt, :open}
+      end
+    end)
+    |> case do
+      :open -> :open
+      {:ok, nils, conses} -> {:ok, Enum.reverse(nils), Enum.reverse(conses)}
+    end
+  end
+
+  defp cons_arm(_elem, h, t, [], embed, _type_of, _continue, miss, k) do
+    {:ok, miss.(embed.("(cons #{h} #{t})")), k}
+  end
+
+  defp cons_arm(elem, h, t, conses, embed, type_of, continue, miss, k) do
+    projected =
+      Enum.map(conses, fn cand ->
+        {:cons, head, tail} = cand.focus
+        push(%{cand | focus: head}, {:tail, tail})
+      end)
+
+    embed_head = fn src -> embed.(plug("(cons #{h} #{t})", h, src, :arg)) end
+
+    step = fn piece, here, k_here ->
+      local = plug("(cons #{h} #{t})", h, piece, :arg)
+
+      case pop_all(here, :tail) do
+        :open ->
+          :open
+
+        {:ok, pairs} ->
+          tails = Enum.map(pairs, fn {tail, cand} -> %{cand | focus: tail} end)
+          embed_tail = fn src -> embed.(plug(local, t, src, :arg)) end
+
+          cont = fn tail_piece, here2, k2 ->
+            continue.(plug(local, t, tail_piece, :arg), here2, k2)
+          end
+
+          split(
+            {:list, elem},
+            t,
+            embed_tail,
+            tails,
+            type_of,
+            cont,
+            miss,
+            k_here
+          )
+      end
+    end
+
+    split(
+      elem,
+      h,
+      embed_head,
+      projected,
+      type_of,
+      step,
+      miss,
+      k + 1
+    )
+  end
+
+  defp split_enum(name, ctors, hole, embed, cands, type_of, continue, miss, k) do
+    var = "e#{k}"
+    motive = "(λ (#{var} : #{name}) → #{type_of.(embed.(var))})"
+    known = MapSet.new(ctors, &atom_of/1)
+
+    if Enum.all?(cands, &(is_atom(&1.focus) and MapSet.member?(known, &1.focus))) do
+      case enum_arms(ctors, cands, embed, continue, miss, k) do
+        :open -> :open
+        {:ok, arms} -> {:ok, match_arms(hole, motive, arms), k}
+      end
+    else
+      :open
+    end
+  end
+
+  defp enum_arms(ctors, cands, embed, continue, miss, k) do
+    gather(ctors, fn ctor ->
+      group = Enum.filter(cands, &(&1.focus == atom_of(ctor)))
+
+      case arm_or_miss(group, ctor, continue, miss, embed, k) do
+        :open -> :open
+        {:ok, body, _} -> {:ok, "| #{ctor} => #{body}"}
+      end
+    end)
+  end
+
+  defp split_data(name, rows, hole, embed, cands, type_of, continue, miss, k) do
+    var = "u#{k}"
+    motive = "(λ (#{var} : #{name}) → #{type_of.(embed.(var))})"
+
+    case data_arms(rows, cands, embed, type_of, continue, miss, k) do
+      :open -> :open
+      {:ok, arms} -> {:ok, match_arms(hole, motive, arms), k}
+    end
+  end
+
+  defp data_arms(rows, cands, embed, type_of, continue, miss, k) do
+    Enum.reduce_while(rows, {:ok, [], cands}, fn row, {:ok, arms, left} ->
+      case take_row(row, left) do
+        :open ->
+          {:halt, :open}
+
+        {:ok, group, rest} ->
+          case row_arm(row, group, embed, type_of, continue, miss, k) do
+            :open -> {:halt, :open}
+            {:ok, arm, _} -> {:cont, {:ok, arms ++ [arm], rest}}
+          end
+      end
+    end)
+    |> case do
+      :open -> :open
+      {:ok, _arms, left} when left != [] -> :open
+      {:ok, arms, []} -> {:ok, arms}
+    end
+  end
+
+  defp take_row(row, cands) do
+    atom = atom_of(row.name)
+    n = length(row.fields)
+
+    Enum.reduce_while(cands, {:ok, [], []}, fn cand, {:ok, hit, other} ->
+      cond do
+        not tagged?(cand.focus) ->
+          {:halt, :open}
+
+        tag_atom(cand.focus) != atom ->
+          {:cont, {:ok, hit, [cand | other]}}
+
+        length(raw_fields(cand.focus)) != n ->
+          {:halt, :open}
+
+        true ->
+          {:cont, {:ok, [cand | hit], other}}
+      end
+    end)
+    |> case do
+      :open -> :open
+      {:ok, hit, other} -> {:ok, Enum.reverse(hit), Enum.reverse(other)}
+    end
+  end
+
+  defp row_arm(row, [], embed, _type_of, _continue, miss, k) do
+    binders = field_binders(row.fields, k)
+    local = app_src(row.name, binders)
+    {:ok, "| #{pat(row.name, binders)} => #{miss.(embed.(local))}", k}
+  end
+
+  defp row_arm(row, group, embed, type_of, continue, miss, k) do
+    binders = field_binders(row.fields, k)
+    local = app_src(row.name, binders)
+
+    seeded =
+      Enum.map(group, fn cand ->
+        push(cand, {:fields, raw_fields(cand.focus)})
+      end)
+
+    case split_fields(row.fields, binders, local, seeded, embed, type_of, continue, miss, k, :arg) do
+      :open -> :open
+      {:ok, inner, k2} -> {:ok, "| #{pat(row.name, binders)} => #{inner}", k2}
+    end
+  end
+
+  defp field_binders([], _k), do: []
+  defp field_binders(fields, k), do: Enum.map(0..(length(fields) - 1), &"f#{k}_#{&1}")
+
+  defp split_fields([], _binders, local, cands, _embed, _type_of, continue, _miss, k, _wrap) do
+    case drop_frame(cands, :fields, []) do
+      :open -> :open
+      {:ok, cands} -> continue.(local, cands, k)
+    end
+  end
+
+  defp split_fields(
+         [field | fields],
+         [binder | binders],
+         local,
+         cands,
+         embed,
+         type_of,
+         continue,
+         miss,
+         k,
+         wrap
+       ) do
+    case take_field(cands) do
+      :open ->
+        :open
+
+      {:ok, projected} ->
+        embed_one = fn src -> embed.(plug(local, binder, src, wrap)) end
+
+        step = fn piece, here, k_here ->
+          next_local = plug(local, binder, piece, wrap)
+
+          split_fields(
+            fields,
+            binders,
+            next_local,
+            here,
+            embed,
+            type_of,
+            continue,
+            miss,
+            k_here,
+            wrap
+          )
+        end
+
+        split(
+          field,
+          binder,
+          embed_one,
+          projected,
+          type_of,
+          step,
+          miss,
+          k + 1
+        )
+    end
+  end
+
+  defp take_field(cands) do
+    Enum.reduce_while(cands, {:ok, []}, fn cand, {:ok, acc} ->
+      case pop(cand, :fields) do
+        {:ok, [value | rest], cand} ->
+          {:cont, {:ok, [push(%{cand | focus: value}, {:fields, rest}) | acc]}}
+
+        _ ->
+          {:halt, :open}
+      end
+    end)
+    |> case do
+      :open -> :open
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+    end
+  end
+
+  defp drop_frame(cands, tag, expected) do
+    Enum.reduce_while(cands, {:ok, []}, fn cand, {:ok, acc} ->
+      case pop(cand, tag) do
+        {:ok, ^expected, cand} -> {:cont, {:ok, [cand | acc]}}
+        _ -> {:halt, :open}
+      end
+    end)
+    |> case do
+      :open -> :open
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+    end
+  end
+
+  defp split_prod(left, right, hole, embed, cands, type_of, continue, miss, k) do
+    a = "p#{k}_0"
+    b = "p#{k}_1"
+    var = "q#{k}"
+    local = "(#{a}, #{b})"
+    schema = {:prod, left, right}
+    motive = "(λ (#{var} : #{type_name(schema)}) → #{type_of.(embed.(var))})"
+
+    case pair_cands(cands) do
+      :open ->
+        :open
+
+      {:ok, projected} ->
+        embed_left = fn src -> embed.(plug(local, a, src, :raw)) end
+
+        step = fn piece, here, k_here ->
+          next_local = plug(local, a, piece, :raw)
+
+          case pop_all(here, :side) do
+            :open ->
+              :open
+
+            {:ok, pairs} ->
+              rights = Enum.map(pairs, fn {value, cand} -> %{cand | focus: value} end)
+              embed_right = fn src -> embed.(plug(next_local, b, src, :raw)) end
+
+              cont = fn right_piece, here2, k2 ->
+                continue.(plug(next_local, b, right_piece, :raw), here2, k2)
+              end
+
+              split(
+                right,
+                b,
+                embed_right,
+                rights,
+                type_of,
+                cont,
+                miss,
+                k_here
+              )
+          end
+        end
+
+        case split(
+               left,
+               a,
+               embed_left,
+               projected,
+               type_of,
+               step,
+               miss,
+               k + 1
+             ) do
+          :open -> :open
+          {:ok, inner, k2} -> {:ok, match_arms(hole, motive, ["| (#{a}, #{b}) => #{inner}"]), k2}
+        end
+    end
+  end
+
+  defp pair_cands(cands) do
+    Enum.reduce_while(cands, {:ok, []}, fn cand, {:ok, acc} ->
+      case cand.focus do
+        {left, right} -> {:cont, {:ok, [push(%{cand | focus: left}, {:side, right}) | acc]}}
+        _ -> {:halt, :open}
+      end
+    end)
+    |> case do
+      :open -> :open
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+    end
+  end
+
+  defp arm_or_miss([], src, _continue, miss, embed, k), do: {:ok, miss.(embed.(src)), k}
+
+  defp arm_or_miss(here, src, continue, _miss, _embed, k), do: continue.(src, here, k + 1)
+
+  defp pop_all(cands, tag) do
+    Enum.reduce_while(cands, {:ok, []}, fn cand, {:ok, acc} ->
+      case pop(cand, tag) do
+        {:ok, value, cand} -> {:cont, {:ok, [{value, cand} | acc]}}
+        :open -> {:halt, :open}
+      end
+    end)
+    |> case do
+      :open -> :open
+      {:ok, pairs} -> {:ok, Enum.reverse(pairs)}
+    end
+  end
+
+  defp pop(%{stack: [{got, value} | rest]} = cand, tag) when got == tag do
+    {:ok, value, %{cand | stack: rest}}
+  end
+
+  defp pop(_cand, _tag), do: :open
+
+  defp push(%{stack: stack} = cand, frame), do: %{cand | stack: [frame | stack]}
+
+  defp plug(local, binder, piece, :arg), do: subst(local, binder, arg(piece))
+  defp plug(local, binder, piece, :raw), do: subst(local, binder, piece)
+
+  defp tagged?(value) when is_atom(value), do: true
+  defp tagged?(value) when is_tuple(value) and tuple_size(value) >= 1, do: is_atom(elem(value, 0))
+  defp tagged?(_value), do: false
+
+  defp gather(enum, fun) do
+    Enum.reduce_while(enum, {:ok, []}, fn item, {:ok, acc} ->
+      case fun.(item) do
+        {:ok, value} -> {:cont, {:ok, acc ++ [value]}}
+        :open -> {:halt, :open}
+      end
+    end)
+  end
+
+  defp match_arms(hole, motive, arms) do
+    """
+    (match #{hole} motive #{motive}
+    #{Enum.join(arms, "\n")})
+    """
+  end
+
   defp atom_of(name), do: String.to_atom(Muro.Emit.elixir_atom_name(name))
 end
 

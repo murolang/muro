@@ -5,15 +5,17 @@ defmodule Muro.Synth.Cert do
 
   # The ranking and its homomorphism, checked on the surviving predicate
   # against the environment's `step`. `solve s n` is the best immediate
-  # reward among states reached in n steps. On a finite `State` each
-  # component is one of a finite set of closed Nat rewards, so the
-  # vector repeats. A transient of 0 and a period of 1 is a constant at
-  # every state. Any other shape is a finite prefix and then a constant
-  # or a repeating tail. The tail comparison rewrites that closed form.
+  # reward among states reached in n steps. On a finite `State`, or on
+  # a finite `all-states` that `step` does not leave, each component is
+  # one of a finite set of closed Nat rewards, so the vector repeats. A
+  # transient of 0 and a period of 1 is a constant at every state of
+  # that set. Any other shape is a finite prefix and then a constant or
+  # a repeating tail. The tail comparison rewrites that closed form.
   # `rank` is Unit when the predicate prefers the action and Empty when
-  # it does not. The evidence is the case split. The walk that finds the
-  # period is the pigeonhole on that finite set. It is not a fuel bound.
-  # The evidence inducts on `n`.
+  # it does not. Off a declared cover it is Empty: the homomorphism
+  # does not order a state the cover does not name. The evidence is the
+  # case split. The walk that finds the period is the pigeonhole on
+  # that finite set. It is not a fuel bound. The evidence inducts on `n`.
 
   def target("successor"), do: "CoinductiveHomomorphism"
   def target(_oracle), do: "CoindHomo"
@@ -94,6 +96,9 @@ defmodule Muro.Synth.Cert do
     case cert_states(host) do
       :open ->
         {:error, "State is not a finite enumeration"}
+
+      {:error, reason} ->
+        {:error, reason}
 
       {:ok, states} ->
         actions = host.actions
@@ -179,7 +184,34 @@ defmodule Muro.Synth.Cert do
   end
 
   defp reward(host, state, action), do: elem(host.step.(state, action), 1)
-  defp next(host, state, action), do: elem(host.step.(state, action), 0)
+
+  # The raw successor. Closure looks at this, so a state outside the
+  # pool is visible. `next/3` then replaces it with the pool element of
+  # the same value, and the walk's keys are that element.
+  defp raw_next(host, state, action), do: elem(host.step.(state, action), 0)
+
+  defp next(host, state, action) do
+    canon_state(state_pool(host), raw_next(host, state, action))
+  end
+
+  defp state_key(%Term{value: value}), do: value
+  defp state_key(other), do: other
+
+  defp state_pool(host) do
+    cond do
+      not host[:structured] -> nil
+      is_list(host[:inhabitants]) and host.inhabitants != [] -> host.inhabitants
+      is_list(host[:all_states]) and host.all_states != [] -> host.all_states
+      true -> nil
+    end
+  end
+
+  defp canon_state(nil, raw), do: raw
+
+  defp canon_state(pool, raw) do
+    key = state_key(raw)
+    Enum.find(pool, raw, &(state_key(&1) == key))
+  end
 
   defp constructors(host, data) do
     %{ctors: ctors} = Enum.find(host.book, &(Map.get(&1, :kind) == :data and &1.name == data))
@@ -188,8 +220,11 @@ defmodule Muro.Synth.Cert do
 
   # Nullary `State` is its constructors, in declaration order. A finite
   # structured `State` is every inhabitant, so the match is exhaustive.
-  # An open term is not that split. The walk is the pigeonhole on this
-  # finite set.
+  # An open term with a finite non-empty `all-states` is that cover,
+  # when `step` of every action stays inside it. Extending the cover
+  # would rank states the search did not observe. An empty cover is
+  # not a ranking. Anything else is not that split. The walk is the
+  # pigeonhole on this finite set.
   defp cert_states(host) do
     cond do
       not host[:structured] ->
@@ -198,9 +233,38 @@ defmodule Muro.Synth.Cert do
       is_list(host[:inhabitants]) and host.inhabitants != [] ->
         {:ok, host.inhabitants}
 
+      host[:all_states] == [] ->
+        {:error, "all-states is empty"}
+
+      cover_only?(host) and not Term.equatable?(host.schema) ->
+        {:error, "the cover cannot be split"}
+
+      cover_only?(host) and not closed_cover?(host, host.all_states, host.actions) ->
+        {:error, "all-states is not closed under step"}
+
+      cover_only?(host) ->
+        {:ok, host.all_states}
+
       true ->
         :open
     end
+  end
+
+  # Inhabitants of at most 32 stay on the exhaustive match. The cover
+  # is only the open, or wider, state.
+  defp cover_only?(host) do
+    host[:structured] and
+      not (is_list(host[:inhabitants]) and host.inhabitants != []) and
+      is_list(host[:all_states]) and host.all_states != []
+  end
+
+  defp closed_cover?(host, states, actions) do
+    Enum.all?(states, fn state ->
+      Enum.all?(actions, fn action ->
+        raw = raw_next(host, state, action)
+        Enum.any?(states, &(state_key(&1) == state_key(raw)))
+      end)
+    end)
   end
 
   defp build(host, arms, oracle, vocab, values, settled, bound) do
@@ -234,53 +298,45 @@ defmodule Muro.Synth.Cert do
 
     {preserves, taken} = Muro.Synth.Book.reserve("preserves", taken)
 
-    {extra_preserves, _taken} =
+    {extra_preserves, taken} =
       if extra?,
         do: Muro.Synth.Book.reserve("preserves-coind", taken),
         else: {nil, taken}
 
-    text =
-      [
-        solves_text(host, states, vocab, values, solves, settled),
-        below,
-        more_below,
-        rank_text(bound, arms, actions, rank),
+    proofs =
+      proof_entries(
+        extra?,
+        preserves,
+        extra_preserves,
+        primary,
+        leaf_names,
+        more_leaf_names,
         leaves,
-        more_leaves,
-        preserves_text(
-          host,
-          preserves,
-          certificate_name(primary),
-          states,
-          actions,
-          rank,
-          primary,
-          leaf_names
-        ),
-        if extra? do
-          preserves_text(
-            host,
-            extra_preserves,
-            "CoindHomo",
-            states,
-            actions,
-            rank,
-            :action,
-            more_leaf_names
-          )
-        else
-          []
-        end
-      ]
-      |> IO.iodata_to_binary()
+        more_leaves
+      )
 
-    {:ok,
-     %{
-       text: text,
-       obligations: below_obs ++ more_below_obs ++ leaf_obs ++ more_leaf_obs,
-       certificate: certificate_name(primary),
-       also: if(extra?, do: "CoindHomo")
-     }}
+    case seal(host, bound, arms, actions, rank, states, proofs, taken) do
+      {:skip, reason} ->
+        {:skip, reason}
+
+      {:ok, tail} ->
+        text =
+          [
+            solves_text(host, states, vocab, values, solves, settled),
+            below,
+            more_below,
+            tail
+          ]
+          |> IO.iodata_to_binary()
+
+        {:ok,
+         %{
+           text: text,
+           obligations: below_obs ++ more_below_obs ++ leaf_obs ++ more_leaf_obs,
+           certificate: certificate_name(primary),
+           also: if(extra?, do: "CoindHomo")
+         }}
+    end
   end
 
   defp primary("successor"), do: :successor
@@ -597,6 +653,147 @@ defmodule Muro.Synth.Cert do
     if String.contains?(term, " ") or String.contains?(term, "("), do: "(#{term})", else: term
   end
 
+  # `{name, target, kind, leaf names, leaf text}`. Leaf text comes before
+  # every preserves, as it did when the split was exhaustive.
+  defp proof_entries(
+         extra?,
+         preserves,
+         extra_preserves,
+         primary,
+         leaf_names,
+         more_leaf_names,
+         leaves,
+         more_leaves
+       ) do
+    primary_proof = {preserves, certificate_name(primary), primary, leaf_names, leaves}
+
+    if extra? do
+      [primary_proof, {extra_preserves, "CoindHomo", :action, more_leaf_names, more_leaves}]
+    else
+      [primary_proof]
+    end
+  end
+
+  defp seal(host, bound, arms, actions, rank, states, proofs, taken) do
+    if cover_only?(host) do
+      seal_cover(host, bound, arms, actions, rank, states, proofs, taken)
+    else
+      {:ok, seal_closed(host, bound, arms, actions, rank, states, proofs)}
+    end
+  end
+
+  defp seal_closed(host, bound, arms, actions, rank, states, proofs) do
+    texts = Enum.map(proofs, fn {_name, _target, _kind, _leaves, text} -> text end)
+
+    bodies =
+      Enum.map(proofs, fn {name, target, kind, leaves, _text} ->
+        preserves_text(host, name, target, states, actions, rank, kind, leaves)
+      end)
+
+    [rank_text(bound, arms, actions, rank) | texts] ++ bodies
+  end
+
+  defp seal_cover(host, bound, arms, actions, rank, states, proofs, taken) do
+    with {:ok, rank_def} <- rank_cover(host, bound, arms, actions, rank, states),
+         {:ok, bodies} <- cover_proofs(host, states, actions, rank, proofs, taken) do
+      texts = Enum.map(proofs, fn {_name, _target, _kind, _leaves, text} -> text end)
+      {:ok, [rank_def | texts] ++ bodies}
+    else
+      :open -> {:skip, "the cover cannot be split"}
+    end
+  end
+
+  defp cover_proofs(host, states, actions, rank, proofs, taken) do
+    Enum.reduce_while(proofs, {:ok, [], taken}, fn proof, {:ok, acc, taken} ->
+      {name, target, kind, leaves, _text} = proof
+      {miss, taken} = Muro.Synth.Book.reserve("cert-cover-miss", taken)
+
+      case preserves_cover(host, name, target, states, actions, rank, kind, leaves, miss) do
+        :open -> {:halt, :open}
+        {:ok, body} -> {:cont, {:ok, acc ++ [cover_miss(miss, kind), body], taken}}
+      end
+    end)
+    |> case do
+      :open -> :open
+      {:ok, parts, _taken} -> {:ok, parts}
+    end
+  end
+
+  # On the cover, `rank` is `eval` of the survivor. Off it, `rank` is
+  # Empty, so the universal homomorphism does not order that state.
+  defp rank_cover(host, bound, arms, actions, rank, states) do
+    case Term.cover_match(
+           host.schema,
+           "s",
+           states,
+           fn _src -> "Type" end,
+           fn _spell -> rank_match(bound, arms, actions) end,
+           fn _src -> "Empty" end
+         ) do
+      :open ->
+        :open
+
+      {:ok, body} ->
+        {:ok,
+         """
+         def #{rank} : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
+           λ (s : State) → λ (a : Action) → λ (b : Action) →
+             #{body}
+         """}
+    end
+  end
+
+  defp preserves_cover(host, name, target, states, actions, rank, kind, leaves, miss_name) do
+    fun = stream_fun(kind)
+    by_spell = Map.new(states, &{&1.spell, &1})
+
+    typed = fn src ->
+      safe = atom_src(src)
+      "Π (r : #{rank} #{safe} a b) → Dom Reward le (#{fun} #{safe} a) (#{fun} #{safe} b)"
+    end
+
+    case Term.cover_match(
+           host.schema,
+           "s",
+           states,
+           typed,
+           fn spell -> action_nest(Map.fetch!(by_spell, spell), actions, rank, kind, leaves) end,
+           fn src -> "#{miss_name} #{atom_src(src)} a b" end
+         ) do
+      :open ->
+        :open
+
+      {:ok, body} ->
+        {:ok,
+         """
+         def #{name} : evidence #{target} #{rank} :=
+           λ (a : Action) → λ (b : Action) → λ (s : State) →
+             #{body}
+         """}
+    end
+  end
+
+  # The branch is this helper applied to the state term. The state
+  # binder of `CoindHomo` is affine, and a motive that named both
+  # streams would use it twice. The helper's own argument is reusable.
+  defp cover_miss(name, kind) do
+    fun = stream_fun(kind)
+
+    """
+    def #{name} : evidence Π (+ s : State) → Π (+ a : Action) → Π (+ b : Action) → Π (r : Empty) → Dom Reward le (#{fun} s a) (#{fun} s b) :=
+      λ (+ s : State) → λ (+ a : Action) → λ (+ b : Action) → λ (r : Empty) →
+        matchEmpty r motive (λ _ → Dom Reward le (#{fun} s a) (#{fun} s b))
+    """
+  end
+
+  defp atom_src(src) do
+    cond do
+      String.starts_with?(src, "(") -> src
+      String.contains?(src, " ") -> "(#{src})"
+      true -> src
+    end
+  end
+
   defp rank_text(bound, arms, actions, rank) do
     """
     def #{rank} : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
@@ -777,53 +974,40 @@ defmodule Muro.Synth.Cert do
 
     {preserves, taken} = Muro.Synth.Book.reserve("preserves", taken)
 
-    {extra_preserves, _taken} =
+    {extra_preserves, taken} =
       if extra?,
         do: Muro.Synth.Book.reserve("preserves-coind", taken),
         else: {nil, taken}
 
-    text =
-      [
-        forms,
-        below,
-        more_below,
-        rank_text(bound, arms, actions, rank),
+    proofs =
+      proof_entries(
+        extra?,
+        preserves,
+        extra_preserves,
+        primary,
+        leaf_names,
+        more_leaf_names,
         leaves,
-        more_leaves,
-        preserves_text(
-          host,
-          preserves,
-          certificate_name(primary),
-          states,
-          actions,
-          rank,
-          primary,
-          leaf_names
-        ),
-        if extra? do
-          preserves_text(
-            host,
-            extra_preserves,
-            "CoindHomo",
-            states,
-            actions,
-            rank,
-            :action,
-            more_leaf_names
-          )
-        else
-          []
-        end
-      ]
-      |> IO.iodata_to_binary()
+        more_leaves
+      )
 
-    {:ok,
-     %{
-       text: text,
-       obligations: below_obs ++ more_below_obs ++ leaf_obs ++ more_leaf_obs,
-       certificate: certificate_name(primary),
-       also: if(extra?, do: "CoindHomo")
-     }}
+    case seal(host, bound, arms, actions, rank, states, proofs, taken) do
+      {:skip, reason} ->
+        {:skip, reason}
+
+      {:ok, tail} ->
+        text =
+          [forms, below, more_below, tail]
+          |> IO.iodata_to_binary()
+
+        {:ok,
+         %{
+           text: text,
+           obligations: below_obs ++ more_below_obs ++ leaf_obs ++ more_leaf_obs,
+           certificate: certificate_name(primary),
+           also: if(extra?, do: "CoindHomo")
+         }}
+    end
   end
 
   # Whole action-value streams, not the value at step 0. A successor
