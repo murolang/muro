@@ -242,12 +242,12 @@ defmodule Muro.CLI.Synth do
 
   defp cex_json(cex) do
     %{
-      carrier: Map.get(cex, :carrier),
+      carrier: Muro.Synth.Term.spell(Map.get(cex, :carrier)),
       predicted: Map.get(cex, :predicted),
       oracle: Map.get(cex, :oracle),
       fed: Map.get(cex, :fed),
       pair: pair_json(Map.get(cex, :pair)),
-      agrees: Map.get(cex, :agrees),
+      agrees: Muro.Synth.Term.spell(Map.get(cex, :agrees)),
       reason: Map.get(cex, :reason)
     }
   end

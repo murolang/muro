@@ -1,0 +1,50 @@
+-- nested_bit.muro — one bit under two constructors, with no declared feature.
+--
+-- Both actions swap the bit. on pays 2 for move and 1 for stay.
+-- off pays the other way. Every reward is positive, no action stays
+-- put, and neither state is absorbing. Nothing in this book names a
+-- feature. The bit is not a field of State.
+import "../std/nat.muro"
+import "../lib/agent.muro"
+
+data Bit : Type where
+  off : Bit
+  on : Bit
+
+data Inner : Type where
+  inn : Π (+ b : Bit) → Inner
+
+data State : Type where
+  wrap : Π (+ i : Inner) → State
+
+data Action : Type where
+  move : Action
+  stay : Action
+
+def Reward : spec Type := Nat
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Reward)
+      | wrap i =>
+          (match i motive (λ _ → State × Reward)
+            | inn b =>
+                (match a motive (λ _ → State × Reward)
+                  | move =>
+                      (match b motive (λ _ → State × Reward)
+                        | off => (wrap (inn on), suc 0)
+                        | on => (wrap (inn off), suc (suc 0)))
+                  | stay =>
+                      (match b motive (λ _ → State × Reward)
+                        | off => (wrap (inn on), suc (suc 0))
+                        | on => (wrap (inn off), suc 0))))
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons move (cons stay nil)
+def default-action : run Action := stay
+def horizon : run Nat := 0
+
+def all-states : run List State :=
+  cons (wrap (inn off)) (cons (wrap (inn on)) nil)

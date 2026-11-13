@@ -27,6 +27,8 @@ In brief: `examples/cshrl/` is [CSHRL](https://github.com/doctorcorral/csh-rl) i
 | `envs/lam.muro` | A finite substitution graph. Not a validated synthesis target. It declares no feature |
 | `envs/maze_auto.muro` | A corridor with no declared feature. `trace` checks `CoindHomo` for the reward of `go` |
 | `envs/maze_auto_e2e.muro` | The three-cell maze with no declared feature. `trace` checks `CoindHomo` for `Fwd` |
+| `envs/placement.muro` | Two rows on a board, no declared feature. `trace` checks `CoindHomo` for the comparison of the rows |
+| `envs/nested_bit.muro` | A bit under two constructors, no declared feature. `trace` checks `CoindHomo` for the constructor of that bit |
 | `std/` | Bool, Nat order and `maxN`, List, Stream with `Dom` |
 
 A library file does not check on its own: `mix muro.check examples/cshrl/lib/core.muro` refuses with `param State is supplied by a file that imports this one`. Check an environment instead:
