@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.20.41
+## 0.20.42
 
 `unboxed data` is an ordinary inductive declaration. A field is a machine word, `WBool`, `Slice`, `Opt` of those, or another unboxed declaration. C, Rust, and Zig pass the product by value, so a `sliceFold` of it allocates nothing. Elixir emits the ordinary tagged tuple. JavaScript emits the ordinary object. Assembly stays the Nat fragment.
 
@@ -14,7 +14,7 @@ The request classifier that motivated both changes folded a nine-word header rec
 
 ### Package
 
-- Version 0.20.41.
+- Version 0.20.42.
 
 ## 0.20.40
 
