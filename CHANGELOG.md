@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.20.39
+
+`match` eliminates `WBool` and `Opt`. The arms are `wtrue` then `wfalse`, and `wsome` then `wnone`. A missing arm is refused. A closed scrutinee reduces, so an equation over `bytesEq` or `sliceGet` is `refl`. On C, Zig, and Rust the test is the host word or the option tag, and the match allocates nothing. Elixir and JavaScript emit the same test. Assembly stays the Nat fragment.
+
+A `match` that returns a `Slice` or `Bytes` initializes that struct. The temporary is not the integer `0`. An arm that returns a sub-slice still points into the original buffer.
+
+Generated C compiles with `-Wall -Wextra -Werror -std=c11`. A fieldless constructor initializes the tag and the unused union member. A binder the arm does not read is not declared. A static function the book does not call is marked unused.
+
+The request classifier that motivated the eliminator walked `toNat` of a byte difference to branch. On muro 0.20.36, classifying `GET /health` allocated 130676 objects and classifying `POST /posts` with a two-byte body allocated 519011. The same books, matching `WBool` and `Opt` and returning a `Slice` from the match, allocate 201 and 685. The views stay at 0. What remains is the header record, one object per byte of each scan, the result record, and the Nat fuel of a case-insensitive name compare. The generated C compiles without suppressing missing initializers, unused variables, or unused functions.
+
+### Manual
+
+- Terms. Grammar. Emit. Machine numbers. Examples. Extending.
+
+### Package
+
+- Version 0.20.39.
+
 ## 0.20.36
 
 `Bytes` is a sequence of raw octets, and `Slice` is a view of those octets or of a buffer the host already owns. A literal is `b"..."`, with escapes `\\`, `\"`, `\n`, `\r`, `\t`, and `\xHH`. `\xHH` is any octet. There is no interpolation and no `\u{...}`. `b"é"` has length two. `b"\xFF"` has length one. A bytes value is not a `String` and not an atom. A `Bytes` literal is accepted as a `Slice`.
