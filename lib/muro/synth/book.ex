@@ -19,8 +19,10 @@ defmodule Muro.Synth.Book do
 
   `eval` of that predicate is the deployed policy. The equations
   `hold-<state>` are the observations. When the environment defines the
-  homomorphism the oracle asks for, and `solve` is constant, the book
-  also defines `rank` from that predicate and the evidence for it.
+  homomorphism the oracle asks for, and every successor has a constant
+  `solve`, the book also defines `rank` from that predicate and the
+  evidence for it. A state that pays less now still ranks: the tail
+  comparison rewrites those constants.
   Otherwise the book is the policy alone.
 
   A name the environment already uses is not declared again. A compatible
@@ -35,7 +37,7 @@ defmodule Muro.Synth.Book do
     body = """
     import "#{env}"
     #{carrier(host)}
-    #{features(host, bound.placeholder)}
+    #{bound.feature_text}
     #{bound.evaluator}
     #{survivors(arms, bound)}
     def #{bound.policy} : run Π (+ s : State) → Action :=
@@ -320,17 +322,21 @@ defmodule Muro.Synth.Book do
 
   defp bind(host, arms) do
     taken = taken_names(host.book)
+    plan = feature_plan(host, arms, taken)
 
     # Reserve the placeholder before the evaluator, so a later fresh name
     # does not take the constructor this book is about to declare.
+    # A discovered feature reserves its own constructor instead.
     {placeholder, taken} =
-      if host.defined_feature do
-        {nil, taken}
-      else
-        alloc("none", taken)
+      case plan.mode do
+        :placeholder -> alloc("none", plan.taken)
+        _ -> {nil, plan.taken}
       end
 
-    {evaluator, names, taken} = evaluator(host.book, taken)
+    {evaluator, names, taken} =
+      evaluator(host.book, taken, plan.feature_type, plan.feature_eval)
+
+    names = Map.put(names, :spell, plan.spell)
 
     {decl, taken} =
       Enum.map_reduce(arms, taken, fn arm, taken ->
@@ -355,25 +361,27 @@ defmodule Muro.Synth.Book do
       policy: policy,
       hold: hold,
       placeholder: placeholder,
+      feature_text: feature_text(plan, placeholder),
       taken: taken
     }
   end
 
-  defp evaluator(book, taken) do
+  defp evaluator(book, taken, feature_type, feature_eval) do
     names = standard_names()
 
-    if Enum.all?(Map.values(names), &(not MapSet.member?(taken, &1))) do
+    if feature_type == "Feature" and feature_eval == "eval-feature" and
+         Enum.all?(Map.values(names), &(not MapSet.member?(taken, &1))) do
       {@evaluator, names, take(taken, Map.values(names))}
     else
-      evaluator_custom(book, taken)
+      evaluator_custom(book, taken, feature_type, feature_eval)
     end
   end
 
-  defp evaluator_custom(book, taken) do
+  defp evaluator_custom(book, taken, feature_type, feature_eval) do
     {andb, taken, andb_text} = bool_helper(book, taken, "andb", 2, &andb_source/1)
     {orb, taken, orb_text} = bool_helper(book, taken, "orb", 2, &orb_source/1)
     {notb, taken, notb_text} = bool_helper(book, taken, "notb", 1, &notb_source/1)
-    {pred_names, taken, pred_text} = pred_block(book, taken)
+    {pred_names, taken, pred_text} = pred_block(book, taken, feature_type)
 
     names =
       pred_names
@@ -381,7 +389,7 @@ defmodule Muro.Synth.Book do
       |> Map.put(:orb, orb)
       |> Map.put(:notb, notb)
 
-    {eval, _taken, eval_text} = eval_block(book, taken, names)
+    {eval, _taken, eval_text} = eval_block(book, taken, names, feature_type, feature_eval)
     names = Map.put(names, :eval, eval)
     text = IO.iodata_to_binary([andb_text, orb_text, notb_text, pred_text, eval_text])
     {text, names, take(taken, Map.values(names))}
@@ -396,8 +404,8 @@ defmodule Muro.Synth.Book do
     end
   end
 
-  defp pred_block(book, taken) do
-    if compatible_pred?(book) do
+  defp pred_block(book, taken, feature_type) do
+    if feature_type == "Feature" and compatible_pred?(book) do
       {standard_pred(), taken, []}
     else
       {pred, taken} = alloc("PredProg", taken)
@@ -417,16 +425,17 @@ defmodule Muro.Synth.Book do
         falsep: falsep
       }
 
-      {names, taken, [pred_source(names), "\n"]}
+      {names, taken, [pred_source(names, feature_type), "\n"]}
     end
   end
 
-  defp eval_block(book, taken, names) do
-    if names.pred == "PredProg" and compatible_eval?(book) do
+  defp eval_block(book, taken, names, feature_type, feature_eval) do
+    if feature_type == "Feature" and feature_eval == "eval-feature" and names.pred == "PredProg" and
+         compatible_eval?(book) do
       {"eval", taken, []}
     else
       {eval, taken} = alloc("eval", taken)
-      {eval, taken, [eval_source(eval, names), "\n"]}
+      {eval, taken, [eval_source(eval, names, feature_eval), "\n"]}
     end
   end
 
@@ -564,10 +573,10 @@ defmodule Muro.Synth.Book do
     """
   end
 
-  defp pred_source(n) do
+  defp pred_source(n, feature_type) do
     """
     data #{n.pred} : Type where
-      #{n.feat} : Π (+ f : Feature) → #{n.pred}
+      #{n.feat} : Π (+ f : #{feature_type}) → #{n.pred}
       #{n.andp} : #{n.pred} → #{n.pred} → #{n.pred}
       #{n.orp} : #{n.pred} → #{n.pred} → #{n.pred}
       #{n.notp} : #{n.pred} → #{n.pred}
@@ -576,12 +585,12 @@ defmodule Muro.Synth.Book do
     """
   end
 
-  defp eval_source(eval, n) do
+  defp eval_source(eval, n, feature_eval) do
     """
     def #{eval} : run Π (p : #{n.pred}) → Π (+ c : Carrier) → Bool :=
       λ (p : #{n.pred}) → λ (+ c : Carrier) →
         match p motive (λ _ → Bool)
-          | #{n.feat} f => eval-feature f c
+          | #{n.feat} f => #{feature_eval} f c
           | #{n.andp} q r => #{n.andb} (#{eval} q c) (#{eval} r c)
           | #{n.orp} q r => #{n.orb} (#{eval} q c) (#{eval} r c)
           | #{n.notp} q => #{n.notb} (#{eval} q c)
@@ -642,7 +651,12 @@ defmodule Muro.Synth.Book do
 
   defp spell(true, names), do: names.truep
   defp spell(false, names), do: names.falsep
-  defp spell({:feat, feature}, names), do: "(#{names.feat} #{feature})"
+
+  defp spell({:feat, feature}, names) do
+    ctor = Map.get(names.spell, feature, feature)
+    "(#{names.feat} #{ctor})"
+  end
+
   defp spell({:not, pred}, names), do: "(#{names.notp} #{spell(pred, names)})"
   defp spell({:and, p, q}, names), do: "(#{names.andp} #{spell(p, names)} #{spell(q, names)})"
   defp spell({:or, p, q}, names), do: "(#{names.orp} #{spell(p, names)} #{spell(q, names)})"
@@ -680,9 +694,7 @@ defmodule Muro.Synth.Book do
     end
   end
 
-  defp features(%{defined_feature: true}, _placeholder), do: ""
-
-  defp features(_host, name) when is_binary(name) do
+  defp feature_text(%{mode: :placeholder}, name) when is_binary(name) do
     """
     data Feature : Type where
       #{name} : Feature
@@ -691,6 +703,208 @@ defmodule Muro.Synth.Book do
       λ (+ f : Feature) → λ (+ _ : Carrier) →
         match f motive (λ _ → Bool)
           | #{name} => false
+    """
+  end
+
+  defp feature_text(%{text: text}, _placeholder), do: text
+
+  # The program reads a dynamics feature. The book's own `Feature`, when
+  # it has one, cannot grow a constructor, so the policy's predicate
+  # talks about a fresh type. A declared hint is a constructor of that
+  # type whose reading is the book's `eval-feature`.
+  defp feature_plan(host, arms, taken) do
+    specs =
+      arms
+      |> Enum.flat_map(&Muro.Synth.reads(&1.pred))
+      |> Enum.uniq()
+      |> Enum.map(&spec!(host, &1))
+
+    cond do
+      specs == [] and not host.defined_feature ->
+        empty_plan(taken, :placeholder)
+
+      Enum.any?(specs, &(&1.kind != :hint)) and host.defined_feature ->
+        extend_plan(host, specs, taken)
+
+      Enum.any?(specs, &(&1.kind != :hint)) ->
+        declared_plan(host, specs, taken)
+
+      true ->
+        empty_plan(taken, :env)
+    end
+  end
+
+  defp empty_plan(taken, mode) do
+    %{
+      mode: mode,
+      text: "",
+      spell: %{},
+      feature_type: "Feature",
+      feature_eval: "eval-feature",
+      taken: taken
+    }
+  end
+
+  defp spec!(host, name) do
+    case Enum.find(host.feature_specs, &(&1.name == name)) do
+      nil -> raise ArgumentError, "the search read a feature it did not discover: #{name}"
+      spec -> spec
+    end
+  end
+
+  defp declared_plan(host, specs, taken) do
+    {text, taken, spell} = vocab_text(host, specs, taken, "Feature", "eval-feature")
+
+    %{
+      mode: :declared,
+      text: text,
+      spell: spell,
+      feature_type: "Feature",
+      feature_eval: "eval-feature",
+      taken: taken
+    }
+  end
+
+  defp extend_plan(host, specs, taken) do
+    {type_name, taken} = alloc("DynFeature", taken)
+    {eval_name, taken} = alloc("eval-dyn", taken)
+    {text, taken, spell} = vocab_text(host, specs, taken, type_name, eval_name)
+
+    %{
+      mode: :extend,
+      text: text,
+      spell: spell,
+      feature_type: type_name,
+      feature_eval: eval_name,
+      taken: taken
+    }
+  end
+
+  defp vocab_text(host, specs, taken, type_name, eval_name) do
+    {helpers, taken} = helper_block(host, specs, taken)
+
+    {rows, taken, spell} =
+      Enum.reduce(specs, {[], taken, %{}}, fn spec, {rows, taken, spell} ->
+        {ctor, taken} = alloc(spec.name, taken)
+        row = %{spec: spec, ctor: ctor}
+        {rows ++ [row], taken, Map.put(spell, spec.name, ctor)}
+      end)
+
+    text = """
+    #{helpers.text}
+    data #{type_name} : Type where
+    #{Enum.map_join(rows, "\n", &"  #{&1.ctor} : #{type_name}")}
+
+    def #{eval_name} : run Π (+ f : #{type_name}) → Π (+ c : Carrier) → Bool :=
+      λ (+ f : #{type_name}) → λ (+ c : Carrier) →
+        match f motive (λ _ → Bool)
+    #{Enum.map_join(rows, "\n", &eval_clause(&1, helpers))}
+    """
+
+    {text, taken, spell}
+  end
+
+  defp helper_block(host, specs, taken) do
+    kinds = MapSet.new(specs, & &1.kind)
+    need_pos = MapSet.member?(kinds, :has_pos_reward)
+    need_same = MapSet.member?(kinds, :is_self_loop) or MapSet.member?(kinds, :leads_terminal)
+    need_terminal = MapSet.member?(kinds, :leads_terminal)
+
+    {pos, taken, pos_text} =
+      if need_pos do
+        {name, taken} = alloc("dyn-pos", taken)
+        {name, taken, pos_source(name)}
+      else
+        {nil, taken, ""}
+      end
+
+    {same, taken, same_text} =
+      if need_same do
+        {name, taken} = alloc("dyn-same", taken)
+        {name, taken, same_source(name, host.states)}
+      else
+        {nil, taken, ""}
+      end
+
+    {terminal, taken, terminal_text} =
+      if need_terminal do
+        {name, taken} = alloc("dyn-terminal", taken)
+        {name, taken, terminal_source(name, same, host.actions)}
+      else
+        {nil, taken, ""}
+      end
+
+    text = Enum.join([pos_text, same_text, terminal_text], "\n")
+    {%{pos: pos, same: same, terminal: terminal, text: text}, taken}
+  end
+
+  defp eval_clause(%{spec: %{kind: :has_pos_reward, action: action}, ctor: ctor}, helpers) do
+    "      | #{ctor} => #{helpers.pos} (snd (step c #{action}))"
+  end
+
+  defp eval_clause(%{spec: %{kind: :is_self_loop, action: action}, ctor: ctor}, helpers) do
+    "      | #{ctor} => #{helpers.same} c (fst (step c #{action}))"
+  end
+
+  defp eval_clause(%{spec: %{kind: :leads_terminal, action: action}, ctor: ctor}, helpers) do
+    "      | #{ctor} => #{helpers.terminal} (fst (step c #{action}))"
+  end
+
+  defp eval_clause(%{spec: %{kind: :hint, name: name}, ctor: ctor}, _helpers) do
+    "      | #{ctor} => eval-feature #{name} c"
+  end
+
+  defp pos_source(name) do
+    """
+    def #{name} : run Π (r : Nat) → Bool :=
+      λ (r : Nat) →
+        match r motive (λ _ → Bool)
+          | 0 => false
+          | suc _ => true
+    """
+  end
+
+  defp same_source(name, states) do
+    branches =
+      Enum.map_join(states, "\n", fn state ->
+        inner =
+          Enum.map_join(states, "\n", fn other ->
+            bit = if state == other, do: "true", else: "false"
+            "          | #{other} => #{bit}"
+          end)
+
+        """
+          | #{state} =>
+              (match t motive (λ _ → Bool)
+        #{inner})
+        """
+      end)
+
+    """
+    def #{name} : run Π (+ s : State) → Π (+ t : State) → Bool :=
+      λ (+ s : State) → λ (+ t : State) →
+        match s motive (λ _ → Bool)
+    #{branches}
+    """
+  end
+
+  defp terminal_source(name, same, actions) do
+    """
+    def #{name} : run Π (+ s : State) → Bool :=
+      λ (+ s : State) →
+        #{terminal_body(same, actions)}
+    """
+  end
+
+  defp terminal_body(same, [action]) do
+    "#{same} s (fst (step s #{action}))"
+  end
+
+  defp terminal_body(same, [action | rest]) do
+    """
+    (match (#{same} s (fst (step s #{action}))) motive (λ _ → Bool)
+      | true => #{terminal_body(same, rest)}
+      | false => false)
     """
   end
 

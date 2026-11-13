@@ -1,0 +1,40 @@
+-- maze_auto.muro — a corridor with no declared feature.
+--
+--   west ──go (r = 0)──▸ east ⟳ go (r = 1)
+--        ╲ stay (r = 1)        ╲ stay (r = 0)
+--
+-- Both states pay 1 now, and every successor does too, so a ranking
+-- can be checked. The search reads the reward of go off step.
+-- Nothing in this book names a feature.
+import "../std/nat.muro"
+import "../lib/agent.muro"
+
+data State : Type where
+  west : State
+  east : State
+
+data Action : Type where
+  go   : Action
+  stay : Action
+
+def Reward : spec Type := Nat
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Reward)
+      | west =>
+          (match a motive (λ _ → State × Reward)
+            | go => (east, 0)
+            | stay => (west, suc 0))
+      | east =>
+          (match a motive (λ _ → State × Reward)
+            | go => (east, suc 0)
+            | stay => (east, 0))
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons go (cons stay nil)
+def default-action : run Action := stay
+def horizon : run Nat := 0
+def all-states : run List State := cons west (cons east nil)

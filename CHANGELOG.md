@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.20.37
+
+`mix muro.synth` discovers features from `step`. For each action it tests a positive reward, a return to the same state, and a step into an absorbing state. A state is absorbing when every action stays there. A test that is true on the whole cover, or false on the whole cover, is dropped, and so is a test with the same truth vector as one already kept. A `Feature` the environment declares is a hint and is filtered the same way. A book that declares neither `Feature` nor `eval-feature` is still an environment. The survivor is a predicate over the tests that remain. `eval` of a discovered test is a run over `step`, and the checker sees that term. It does not see the search. Depth does not invent a new kind of test. A state name is not a feature.
+
+`examples/cshrl/envs/maze_auto.muro` declares no feature. The survivor is `(feat has-pos-reward-go)`. It prefers `stay` at `west` and `go` at `east`, and the book checks `CoindHomo`. `examples/cshrl/envs/lam.muro` is not a validated target. The tests do not separate `copy` from `len`.
+
+The templates are `has-pos-reward` and `is-self-loop` from `CSHRL.Synthesis.DynFeatureTemplate`, and `leads-terminal` from `CSHRL.Synthesis.AutoFeatureNat`. The account is §Feature Discovery (`sec:ftl`) of the CSHRL paper. `CSHRL.Synthesis.CSHRLLoop` raises depth when nothing survives.
+
+A state that pays nothing now, and steps only to states whose `solve` is constant, still receives that ranking. The tail comparison rewrites those constants.
+
+### Manual
+
+- Synthesis. CSHRL. Examples.
+
+### Package
+
+- Version 0.20.37.
+
 ## 0.20.36
 
 `Bytes` is a sequence of raw octets, and `Slice` is a view of those octets or of a buffer the host already owns. A literal is `b"..."`, with escapes `\\`, `\"`, `\n`, `\r`, `\t`, and `\xHH`. `\xHH` is any octet. There is no interpolation and no `\u{...}`. `b"é"` has length two. `b"\xFF"` has length one. A bytes value is not a `String` and not an atom. A `Bytes` literal is accepted as a `Slice`.
