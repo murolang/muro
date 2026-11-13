@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.44
+
+`wsome t` is checked against an expected `Opt A`, and `t` is checked against `A`. A data constructor is accepted there. C, Rust, Zig, Elixir, and JavaScript run that value. Assembly stays the Nat fragment.
+
+A constructor used as the seed of `unfold seed (λ (x : S) → …)` is checked at `S`. A step that is not a λ still infers the seed.
+
+### Manual
+
+- Terms. Machine numbers. Streams. Emit. Extending.
+
+### Package
+
+- Version 0.20.44.
+
 ## 0.20.42
 
 `unboxed data` is an ordinary inductive declaration. A field is a machine word, `WBool`, `Slice`, `Opt` of those, or another unboxed declaration. C, Rust, and Zig pass the product by value, so a `sliceFold` of it allocates nothing. Elixir emits the ordinary tagged tuple. JavaScript emits the ordinary object. Assembly stays the Nat fragment.
