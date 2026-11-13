@@ -84,26 +84,49 @@ defmodule Muro.Synth.Host do
             List.last(decoded)
           end
 
-        {:ok,
-         %{
-           host
-           | actions: actions,
-             states: host.states
-         }
-         |> Map.put(:horizon, horizon)
-         |> Map.put(:all_states, all_states)
-         |> Map.put(:default, default)
-         |> Map.put(:step, fn state, action ->
-           {next, reward} = call(host, "step", [atom!(host, state), atom!(host, action)])
-           {source!(host, next), reward}
-         end)
-         |> Map.put(:leb, fn left, right ->
-           truth!(call(host, "leb", [left, right]))
-         end)
-         |> Map.put(:eval_feature, fn feature, state ->
-           truth!(call(host, "eval-feature", [atom!(host, feature), atom!(host, state)]))
-         end)}
+        host =
+          %{
+            host
+            | actions: actions,
+              states: host.states
+          }
+          |> Map.put(:horizon, horizon)
+          |> Map.put(:all_states, all_states)
+          |> Map.put(:default, default)
+          |> Map.put(:step, fn state, action ->
+            {next, reward} = call(host, "step", [atom!(host, state), atom!(host, action)])
+            {source!(host, next), reward}
+          end)
+          |> Map.put(:leb, fn left, right ->
+            truth!(call(host, "leb", [left, right]))
+          end)
+          |> Map.put(:eval_feature, fn feature, state ->
+            truth!(call(host, "eval-feature", [atom!(host, feature), atom!(host, state)]))
+          end)
+
+        {:ok, discover(host)}
     end
+  end
+
+  # Declared constructors are hints. Dynamics templates are read off
+  # `step`. Both are filtered and reduced before the search sees them.
+  # A book with neither `Feature` nor `eval-feature` has only what the
+  # templates find, plus the two constants.
+  defp discover(host) do
+    hints = host.features
+    specs = Muro.Synth.Feature.discover(host, hints)
+    hint_eval = host.eval_feature
+
+    eval = fn name, state ->
+      spec = Enum.find(specs, &(&1.name == name))
+      Muro.Synth.Feature.eval_spec(host, hint_eval, spec, state)
+    end
+
+    host
+    |> Map.put(:hints, hints)
+    |> Map.put(:feature_specs, specs)
+    |> Map.put(:features, Enum.map(specs, & &1.name))
+    |> Map.put(:eval_feature, eval)
   end
 
   defp present(book, name) do
