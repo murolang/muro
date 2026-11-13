@@ -6,7 +6,7 @@ defmodule Muro.Emit.Rust do
   The text is what `rustc` translates. A refusal is the elaboration's:
   `c:lambda`, `c:machine`, `c:stream`, `c:string`, `c:erased`,
   `c:unboxed`, `c:unsupported`. An `unboxed data` value is the enum.
-  It is not wrapped in `Rc`.
+  It is not wrapped in `Rc`. An `Opt` of that value is `c:unboxed`.
 
   Identifiers come from `Muro.Emit.Name`. A source name is spelled there.
   A helper, a step, a constructor argument, and a temporary are generated
@@ -65,8 +65,13 @@ defmodule Muro.Emit.Rust do
   """
   def render(book, stem) when is_list(book) and is_binary(stem) do
     case IR.elaborate(book) do
-      {:ok, funs} -> compile(book, funs, stem)
-      {:error, reason} -> {:error, reason}
+      {:ok, funs} ->
+        with :ok <- Emit.refuse_unboxed_opt(book, funs) do
+          compile(book, funs, stem)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -78,7 +83,8 @@ defmodule Muro.Emit.Rust do
   def outline(book, _stem) when is_list(book) do
     case IR.elaborate(book) do
       {:ok, funs} ->
-        with {:ok, st0, groups} <- image(book, funs) do
+        with :ok <- Emit.refuse_unboxed_opt(book, funs),
+             {:ok, st0, groups} <- image(book, funs) do
           user = Enum.map(groups, fn {fun, _} -> fun end)
 
           signatures =

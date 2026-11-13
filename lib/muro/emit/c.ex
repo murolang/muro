@@ -16,8 +16,8 @@ defmodule Muro.Emit.C do
   `F32`, `Tensor`, `addt`, and `packI` are refused (`c:machine`).
   A string is refused (`c:string`). A lambda applied on the spot is a
   local. An unapplied lambda, and a call of a local function, are
-  `c:lambda`. An unboxed product in a pair or a stream seed is
-  `c:unboxed`.
+  `c:lambda`. An unboxed product in a pair, a stream seed, or an
+  `Opt` is `c:unboxed`. An `Opt` of ordinary data is a pointer.
 
   Allocations call `muro__ALLOC`, which is `malloc` unless the caller
   defines it. A constructor with no fields is a static object and does
@@ -165,7 +165,8 @@ defmodule Muro.Emit.C do
       {:ok, funs} ->
         nm = name_map(book)
 
-        with {:ok, sigs, _texts, _extras} <- compile_funs(funs, book, nm),
+        with :ok <- Emit.refuse_unboxed_opt(book, funs),
+             {:ok, sigs, _texts, _extras} <- compile_funs(funs, book, nm),
              {:ok, groups, _} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
           {:ok, c_outline(book, sigs, groups)}
         end
@@ -224,10 +225,12 @@ defmodule Muro.Emit.C do
           {:ok, sigs, texts, extras} ->
             runs = Emit.run_defs(book)
             bytes? = bytes_image?(funs) or data_field_bytes?(book)
-            opts = opt_typedefs(funs, book, bytes?)
 
-            {:ok, header(book, sigs, stem, nm, opts, bytes?),
-             source(book, runs, sigs, texts, extras, stem, nm, opts, bytes?), sigs}
+            with :ok <- Emit.refuse_unboxed_opt(book, funs),
+                 {:ok, opts} <- opt_typedefs(funs, book, bytes?) do
+              {:ok, header(book, sigs, stem, nm, opts, bytes?),
+               source(book, runs, sigs, texts, extras, stem, nm, opts, bytes?), sigs}
+            end
 
           {:error, _} = err ->
             err
@@ -495,6 +498,9 @@ defmodule Muro.Emit.C do
   defp emit_ir({:match, scrut, arms} = tm, env, st, expect) do
     kind = match_kind(lay_of(scrut, env, st), arms, st.book)
     rlay = lay_of(tm, env, st)
+    # A word operation emits its operand as `void *`. The arms still
+    # name a word, so the temporary uses that layout.
+    expect = match_expect(expect, rlay, st.book)
 
     with {:ok, {pre, ex, _lay, st}} <- emit_ir(scrut, env, st, scrut_ty(kind, st.book)),
          {:ok, {stmt, name, st}} <- emit_switch(kind, pre, ex, arms, env, st, expect) do
@@ -648,6 +654,15 @@ defmodule Muro.Emit.C do
   defp emit_ir({:slen, _}, _env, _st, _expect), do: {:error, "c:string"}
   defp emit_ir({:seq, _, _}, _env, _st, _expect), do: {:error, "c:string"}
   defp emit_ir(_other, _env, _st, _expect), do: {:error, "c:unsupported"}
+
+  defp match_expect(expect, lay, book) do
+    if String.trim(expect) == "void *" do
+      ty = ctype(lay, book)
+      if String.trim(ty) == "void *", do: expect, else: ty
+    else
+      expect
+    end
+  end
 
   defp emit_args(args, types, env, st) do
     paired = Enum.zip(args, pad_types(types, length(args)))
@@ -1342,9 +1357,11 @@ defmodule Muro.Emit.C do
     )
   end
 
-  defp find_data(book, name) do
+  defp find_data(book, name) when is_list(book) do
     Enum.find(book, &(Map.get(&1, :kind) == :data and &1.name == name))
   end
+
+  defp find_data(_book, _name), do: nil
 
   defp data_of_ctor(book, name) do
     Enum.find(book, fn
@@ -1634,17 +1651,23 @@ defmodule Muro.Emit.C do
   defp opt_typedefs(funs, book, bytes?) do
     extra = if bytes?, do: [{:opt, :u8}], else: []
 
-    (funs ++ extra ++ data_field_opts(book))
-    |> Enum.flat_map(fn
-      fun when is_map(fun) ->
-        [fun.ret | Enum.map(fun.params, fn {_n, lay} -> lay end)] ++ collect_opts(fun.body, [])
+    payloads =
+      (funs ++ extra ++ data_field_opts(book))
+      |> Enum.flat_map(fn
+        fun when is_map(fun) ->
+          [fun.ret | Enum.map(fun.params, fn {_n, lay} -> lay end)] ++ collect_opts(fun.body, [])
 
-      lay ->
-        [lay]
-    end)
-    |> Enum.flat_map(&opt_payloads/1)
-    |> Enum.uniq()
-    |> Enum.map_join("\n", &opt_typedef/1)
+        lay ->
+          [lay]
+      end)
+      |> Enum.flat_map(&opt_payloads/1)
+      |> Enum.uniq()
+
+    if Enum.any?(payloads, &unboxed_opt_pay?(book, &1)) do
+      {:error, "c:unboxed"}
+    else
+      {:ok, Enum.map_join(payloads, "\n", &opt_typedef(&1, book))}
+    end
   end
 
   defp collect_opts(tm, acc) when is_tuple(tm) do
@@ -1688,12 +1711,22 @@ defmodule Muro.Emit.C do
   defp opt_payloads({:stream, a}), do: opt_payloads(a)
   defp opt_payloads(_), do: []
 
-  defp opt_typedef({:opt, pay}) do
+  # The option struct is printed before the data structs. A boxed
+  # payload is a pointer, so the later struct completes it. An unboxed
+  # payload would be that struct by value while it is still incomplete.
+  defp unboxed_opt_pay?(book, {:opt, {:data, name}}) when is_binary(name) do
+    unboxed_name?(book, name)
+  end
+
+  defp unboxed_opt_pay?(book, {:opt, {:opt, _} = inner}), do: unboxed_opt_pay?(book, inner)
+  defp unboxed_opt_pay?(_book, _lay), do: false
+
+  defp opt_typedef({:opt, pay}, book) do
     name = opt_name(pay)
 
     """
     typedef struct #{name} #{name};
-    struct #{name} { uint8_t tag; #{ctype(pay, nil)}val; };
+    struct #{name} { uint8_t tag; #{ctype(pay, book)}val; };
     """
     |> String.trim()
   end
@@ -1755,9 +1788,11 @@ defmodule Muro.Emit.C do
   defp ctype({:word, :opt, [a]}, book), do: ctype({:opt, type_layout(book, a)}, book)
   defp ctype(_, _book), do: "void *"
 
-  defp data?(book, name) do
+  defp data?(book, name) when is_list(book) do
     Enum.any?(book, &(Map.get(&1, :kind) == :data and &1.name == name))
   end
+
+  defp data?(_book, _name), do: false
 
   defp struct_ptr(name), do: struct_name(name) <> " *"
   defp struct_val(name), do: struct_name(name) <> " "
@@ -1796,10 +1831,11 @@ defmodule Muro.Emit.C do
       nat_struct(),
       unit_struct(),
       if(bytes?, do: bytes_header(), else: ""),
+      data_typedefs(book),
       opts,
       atom_enum(book, nm),
       stream_typedef(sigs, book),
-      data_structs(book),
+      data_bodies(book),
       prototypes(sigs),
       "#endif"
     ]
@@ -2279,14 +2315,20 @@ defmodule Muro.Emit.C do
   defp walk_children?(t, pred) when is_list(t), do: Enum.any?(t, &walk?(&1, pred))
   defp walk_children?(_, _), do: false
 
-  defp data_structs(book) do
+  # Forward declarations come before option typedefs. `Opt` of boxed
+  # data holds a pointer, and the pointer needs the typedef. The struct
+  # body stays after the options, in dependency order.
+  defp data_typedefs(book) do
+    datas = data_defs(book)
+    if datas == [], do: "", else: typedefs(datas)
+  end
+
+  defp data_bodies(book) do
     datas = data_defs(book)
 
     if datas == [],
       do: "",
-      else:
-        typedefs(datas) <>
-          "\n" <> Enum.map_join(order_value_deps(datas, book), "\n", &struct_src(&1, book))
+      else: Enum.map_join(order_value_deps(datas, book), "\n", &struct_src(&1, book))
   end
 
   defp typedefs(datas) do

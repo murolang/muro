@@ -5,7 +5,7 @@ defmodule Muro.Emit.Zig do
 
   The text is what `zig` translates. A refusal is the elaboration's:
   `c:lambda`, `c:machine`, `c:stream`, `c:string`, `c:erased`,
-  `c:unboxed`, `c:unsupported`.
+  `c:unboxed`, `c:unsupported`. An `Opt` of unboxed data is `c:unboxed`.
 
   Every run takes an allocator first and returns an error union. A caller
   can pass a `muro__std.heap.ArenaAllocator` and reset it. `Nat` and user
@@ -91,8 +91,13 @@ defmodule Muro.Emit.Zig do
   """
   def render(book, stem) when is_list(book) and is_binary(stem) do
     case IR.elaborate(book) do
-      {:ok, funs} -> compile(book, funs, stem)
-      {:error, reason} -> {:error, reason}
+      {:ok, funs} ->
+        with :ok <- Emit.refuse_unboxed_opt(book, funs) do
+          compile(book, funs, stem)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -105,7 +110,8 @@ defmodule Muro.Emit.Zig do
   def outline(book, _stem) when is_list(book) do
     case IR.elaborate(book) do
       {:ok, funs} ->
-        with {:ok, st, groups, _scan, _flags, steps, _step_info} <- image(book, funs) do
+        with :ok <- Emit.refuse_unboxed_opt(book, funs),
+             {:ok, st, groups, _scan, _flags, steps, _step_info} <- image(book, funs) do
           user = Enum.map(groups, fn {fun, _} -> fun end)
           step_funs = Enum.flat_map(groups, fn {_fun, ss} -> ss end)
 
