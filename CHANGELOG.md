@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.41
+
+`unboxed data` is an ordinary inductive declaration. A field is a machine word, `WBool`, `Slice`, `Opt` of those, or another unboxed declaration. C, Rust, and Zig pass the product by value, so a `sliceFold` of it allocates nothing. Elixir emits the ordinary tagged tuple. JavaScript emits the ordinary object. Assembly stays the Nat fragment.
+
+A word operation carries the width of either operand. A literal on the right of a nested operation is enough. A name with no arguments carries the width of its type, and of its body when the type does not name one. `sliceLen` and `bytesLen` are `U64`.
+
+The request classifier that motivated both changes folded a nine-word header record. On muro 0.20.40, `classify` of `GET /health` allocated 4 objects and `classify` of `POST /posts` with a two-byte body allocated 6. Views stayed at 0. The same scan, with that record declared `unboxed data` and the word operations written directly, allocates 1 for each request. That object is the classified result. Views stay at 0. The generated C compiles with `-Wall -Wextra -Werror -std=c11`.
+
+### Manual
+
+- Data. Grammar. Terms. Emit. Machine numbers. Examples. Extending.
+
+### Package
+
+- Version 0.20.41.
+
 ## 0.20.40
 
 `mix muro.gen` type-checks each book once and emits every target of that book from that copy. The `.c` and the `.h` of a C target come from that copy, and so do the `.mjs` and the `.d.ts` of a JavaScript target. `mix muro.gen --check` still writes nothing. It still fails when a committed file is not what that copy emits. A book that does not check still fails the run.
