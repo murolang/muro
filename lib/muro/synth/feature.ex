@@ -156,9 +156,32 @@ defmodule Muro.Synth.Feature do
         {[], taken}
       end
 
-    {loops, taken} = add_all(taken, actions, "is-self-loop", :is_self_loop)
-    {leads, taken} = add_all(taken, actions, "leads-terminal", :leads_terminal)
+    {loops, leads, taken} =
+      if state_comparable?(host) do
+        {loops, taken} = add_all(taken, actions, "is-self-loop", :is_self_loop)
+        {leads, taken} = add_all(taken, actions, "leads-terminal", :leads_terminal)
+        {loops, leads, taken}
+      else
+        {[], [], taken}
+      end
+
     {reward_specs ++ loops ++ leads, taken}
+  end
+
+  # A finite inhabitant list is an exhaustive match. An open structured
+  # state is a run over its schema. A function, a cycle, or any other
+  # schema with no such run has neither test. A nullary state stays.
+  defp state_comparable?(host) do
+    cond do
+      host[:structured] != true ->
+        true
+
+      is_list(host[:inhabitants]) and host.inhabitants != [] ->
+        true
+
+      true ->
+        Muro.Synth.Term.equatable?(host[:schema])
+    end
   end
 
   defp add_all(taken, actions, prefix, kind) do

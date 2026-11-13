@@ -12,6 +12,8 @@ defmodule Muro.Synth.Term do
 
   @cap 32
 
+  def cap, do: @cap
+
   def spell(%__MODULE__{spell: spell}), do: spell
   def spell(name) when is_binary(name), do: name
   def spell(nil), do: nil
@@ -36,10 +38,7 @@ defmodule Muro.Synth.Term do
   def schema(_book, _name), do: {:open, "missing"}
 
   def finite?(schema) do
-    case inhabitants(schema) do
-      {:ok, _} -> true
-      :open -> false
-    end
+    match?({:ok, _}, inhabitants(schema))
   end
 
   def inhabitants(schema), do: enum_inhabitants(schema, @cap)
@@ -127,6 +126,40 @@ defmodule Muro.Synth.Term do
   """
   def exhaust(schema, scrutinee, type_of, body_of) when is_function(type_of, 1) do
     open(schema, scrutinee, & &1, type_of, body_of, 0)
+  end
+
+  @doc """
+  Whether two values of `schema` can be compared by a run.
+
+  A finite inhabitant list is not required. A function, a cycle, or any
+  other open field cannot.
+  """
+  def equatable?(schema) do
+    match?({:ok, _}, eq_nodes(schema, []))
+  end
+
+  @doc """
+  `name` decides whether two states are the same value.
+
+  The comparison matches constructors and walks fields, lists, and
+  Nats. It does not enumerate inhabitants. `:open` means no such run
+  exists. The caller must not emit an empty match in its place.
+  """
+  def eq_source(name, schema, taken) when is_binary(name) do
+    case eq_nodes(schema, []) do
+      :open ->
+        :open
+
+      {:ok, nodes} ->
+        {names, taken} =
+          Enum.reduce(nodes, {%{}, taken}, fn node, {map, taken} ->
+            {fun, taken} = Muro.Synth.Book.reserve(eq_base(node), taken)
+            {Map.put(map, node, fun), taken}
+          end)
+
+        aux = Enum.map_join(nodes, "\n", &eq_def(&1, Map.fetch!(names, &1), names))
+        {:ok, aux <> "\n" <> eq_root(name, Map.fetch!(names, schema)), taken}
+    end
   end
 
   def same_source(name, schema, inhabitants) when is_list(inhabitants) do
@@ -250,8 +283,9 @@ defmodule Muro.Synth.Term do
   defp enum_inhabitants(schema, cap) do
     case grow(schema, cap) do
       :open -> :open
+      :cap -> :cap
       {:ok, rows} when length(rows) <= cap -> {:ok, Enum.map(rows, &pack_row/1)}
-      _ -> :open
+      _ -> :cap
     end
   end
 
@@ -269,9 +303,13 @@ defmodule Muro.Synth.Term do
         :open ->
           {:halt, :open}
 
+        :cap ->
+          {:halt, :cap}
+
         {:ok, rows} ->
           built = Enum.map(rows, &{:ctor, ctor.name, &1})
-          {:cont, {:ok, acc ++ built}}
+          joined = acc ++ built
+          if length(joined) > cap, do: {:halt, :cap}, else: {:cont, {:ok, joined}}
       end
     end)
   end
@@ -280,7 +318,7 @@ defmodule Muro.Synth.Term do
     with {:ok, ls} <- grow(left, cap),
          {:ok, rs} <- grow(right, cap) do
       rows = for l <- ls, r <- rs, do: {:pair, l, r}
-      if length(rows) > cap, do: :open, else: {:ok, rows}
+      if length(rows) > cap, do: :cap, else: {:ok, rows}
     end
   end
 
@@ -290,9 +328,12 @@ defmodule Muro.Synth.Term do
         :open ->
           {:halt, :open}
 
+        :cap ->
+          {:halt, :cap}
+
         {:ok, items} ->
           rows = for row <- acc, item <- items, do: row ++ [item]
-          if length(rows) > cap, do: {:halt, :open}, else: {:cont, {:ok, rows}}
+          if length(rows) > cap, do: {:halt, :cap}, else: {:cont, {:ok, rows}}
       end
     end)
   end
@@ -1468,6 +1509,208 @@ defmodule Muro.Synth.Term do
       true -> spell
     end
   end
+
+  # Dependencies before the type that uses them. A repeated schema is one
+  # function. A function, a cycle, or an empty declaration is not a run.
+  defp eq_nodes(schema, acc) do
+    if schema in acc do
+      {:ok, acc}
+    else
+      case schema do
+        :nat ->
+          {:ok, acc ++ [:nat]}
+
+        {:enum, _, ctors} when ctors != [] ->
+          {:ok, acc ++ [schema]}
+
+        {:list, elem} ->
+          case eq_nodes(elem, acc) do
+            {:ok, acc} -> {:ok, acc ++ [schema]}
+            :open -> :open
+          end
+
+        {:prod, left, right} ->
+          with {:ok, acc} <- eq_nodes(left, acc),
+               {:ok, acc} <- eq_nodes(right, acc) do
+            {:ok, acc ++ [schema]}
+          end
+
+        {:data, _, rows} when rows != [] ->
+          case eq_rows(rows, acc) do
+            {:ok, acc} -> {:ok, acc ++ [schema]}
+            :open -> :open
+          end
+
+        _ ->
+          :open
+      end
+    end
+  end
+
+  defp eq_rows(rows, acc) do
+    Enum.reduce_while(rows, {:ok, acc}, fn row, {:ok, acc} ->
+      case eq_row(row.fields, acc) do
+        {:ok, acc} -> {:cont, {:ok, acc}}
+        :open -> {:halt, :open}
+      end
+    end)
+  end
+
+  defp eq_row(fields, acc) do
+    Enum.reduce_while(fields, {:ok, acc}, fn field, {:ok, acc} ->
+      case eq_nodes(field, acc) do
+        {:ok, acc} -> {:cont, {:ok, acc}}
+        :open -> {:halt, :open}
+      end
+    end)
+  end
+
+  defp eq_base(:nat), do: "eq-nat"
+  defp eq_base({:enum, name, _}), do: "eq-#{name}"
+  defp eq_base({:data, name, _}), do: "eq-#{name}"
+  defp eq_base({:list, elem}), do: "eq-list-#{eq_word(elem)}"
+  defp eq_base({:prod, left, right}), do: "eq-pair-#{eq_word(left)}-#{eq_word(right)}"
+
+  defp eq_word(:nat), do: "Nat"
+  defp eq_word({:enum, name, _}), do: name
+  defp eq_word({:data, name, _}), do: name
+  defp eq_word({:list, elem}), do: "list-#{eq_word(elem)}"
+  defp eq_word({:prod, left, right}), do: "#{eq_word(left)}-#{eq_word(right)}"
+
+  defp eq_root(name, fun) do
+    """
+    def #{name} : run Π (+ s : State) → Π (+ t : State) → Bool :=
+      λ (+ s : State) → λ (+ t : State) →
+        #{fun} s t
+    """
+  end
+
+  defp eq_def(schema, fun, names) do
+    ty = eq_type(schema)
+
+    """
+    def #{fun} : run Π (x : #{ty}) → Π (y : #{ty}) → Bool :=
+      λ (x : #{ty}) → λ (y : #{ty}) →
+        #{eq_body(schema, fun, names)}
+    """
+  end
+
+  defp eq_type(:nat), do: "Nat"
+  defp eq_type(schema), do: type_name(schema)
+
+  defp eq_body(:nat, fun, _names) do
+    """
+    (match x motive (λ _ → Bool)
+      | 0 =>
+          (match y motive (λ _ → Bool)
+            | 0 => true
+            | suc _ => false)
+      | suc x1 =>
+          (match y motive (λ _ → Bool)
+            | 0 => false
+            | suc y1 => #{fun} x1 y1))
+    """
+  end
+
+  defp eq_body({:enum, _, ctors}, _fun, _names) do
+    arms =
+      Enum.map_join(ctors, "\n", fn ctor ->
+        inner =
+          Enum.map_join(ctors, "\n", fn other ->
+            bit = if ctor == other, do: "true", else: "false"
+            "        | #{other} => #{bit}"
+          end)
+
+        """
+          | #{ctor} =>
+              (match y motive (λ _ → Bool)
+        #{inner})
+        """
+      end)
+
+    """
+    (match x motive (λ _ → Bool)
+    #{arms})
+    """
+  end
+
+  defp eq_body({:list, elem}, fun, names) do
+    elem_eq = Map.fetch!(names, elem)
+
+    """
+    (match x motive (λ _ → Bool)
+      | nil =>
+          (match y motive (λ _ → Bool)
+            | nil => true
+            | cons _ _ => false)
+      | cons h t =>
+          (match y motive (λ _ → Bool)
+            | nil => false
+            | cons i u => #{eq_and(["#{elem_eq} h i", "#{fun} t u"])}))
+    """
+  end
+
+  defp eq_body({:prod, left, right}, _fun, names) do
+    """
+    (match x motive (λ _ → Bool)
+      | (a, b) =>
+          (match y motive (λ _ → Bool)
+            | (c, d) => #{eq_and(["#{Map.fetch!(names, left)} a c", "#{Map.fetch!(names, right)} b d"])}))
+    """
+  end
+
+  defp eq_body({:data, _, rows}, _fun, names) do
+    arms =
+      Enum.map_join(rows, "\n", fn row ->
+        xs = eq_binders("p", length(row.fields))
+
+        inner =
+          Enum.map_join(rows, "\n", fn other ->
+            ys = eq_binders("q", length(other.fields))
+
+            body =
+              if other.name == row.name do
+                eq_and(eq_calls(row.fields, xs, ys, names))
+              else
+                "false"
+              end
+
+            "        | #{pat(other.name, ys)} => #{body}"
+          end)
+
+        """
+          | #{pat(row.name, xs)} =>
+              (match y motive (λ _ → Bool)
+        #{inner})
+        """
+      end)
+
+    """
+    (match x motive (λ _ → Bool)
+    #{arms})
+    """
+  end
+
+  defp eq_calls(fields, xs, ys, names) do
+    fields
+    |> Enum.zip(xs)
+    |> Enum.zip(ys)
+    |> Enum.map(fn {{field, x}, y} -> "#{Map.fetch!(names, field)} #{x} #{y}" end)
+  end
+
+  defp eq_and([]), do: "true"
+  defp eq_and([one]), do: one
+
+  defp eq_and([first | rest]) do
+    """
+    (match (#{first}) motive (λ _ → Bool)
+      | true => #{eq_and(rest)}
+      | false => false)
+    """
+  end
+
+  defp eq_binders(_prefix, 0), do: []
+  defp eq_binders(prefix, n), do: Enum.map(0..(n - 1)//1, &"#{prefix}#{&1}")
 
   defp atom_of(name), do: String.to_atom(Muro.Emit.elixir_atom_name(name))
 end
