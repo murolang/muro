@@ -5,6 +5,7 @@ defmodule Muro.SynthLoopTest do
   @bin "examples/cshrl/envs/binary_sacrifice.muro"
   @lam "examples/cshrl/envs/lam.muro"
   @maze "examples/cshrl/envs/maze_auto.muro"
+  @maze3 "examples/cshrl/envs/maze_auto_e2e.muro"
   @neg "test/fixtures/synth_neg.muro"
   @gap "test/fixtures/synth_gap.muro"
   @stay "test/fixtures/synth_false.muro"
@@ -154,8 +155,10 @@ defmodule Muro.SynthLoopTest do
 
   test "the finite lam environment does not separate copy from len" do
     src = File.read!(@lam)
-    assert src =~ "uses-gt1"
-    assert src =~ "arg-apps-ne0"
+    refute src =~ "uses-gt1"
+    refute src =~ "arg-apps-ne0"
+    refute src =~ "data Feature"
+    refute src =~ "eval-feature"
     refute src =~ "arg-erased"
     refute src =~ "arg-qty"
     refute src =~ "ArgQty"
@@ -174,11 +177,12 @@ defmodule Muro.SynthLoopTest do
     refute text =~ "certificate CoindHomo"
   end
 
-  test "uses and arg-apps agree through the copy states and fail at len" do
+  test "discovered tests agree on copy and on len" do
     assert {:ok, host} = Muro.Synth.Host.open(@lam)
-    assert "uses-gt1" in host.features
-    assert "arg-apps-ne0" in host.features
+    refute "uses-gt1" in host.features
+    refute "arg-apps-ne0" in host.features
     refute "arg-erased" in host.features
+    assert host.features != []
 
     feat = fn feature, state -> host.eval_feature.(feature, state) end
     vector = fn state -> Enum.map(host.features, &feat.(&1, state)) end
@@ -188,18 +192,14 @@ defmodule Muro.SynthLoopTest do
 
     assert {:ok, spec} = Muro.Synth.Oracle.observe(host, "trace", [])
     [task] = spec.tasks
-    phase = {:and, {:feat, "uses-gt1"}, {:feat, "arg-apps-ne0"}}
-    vs = Muro.Synth.enumerate(host.features, 1)
-    assert phase in vs
-
     before_len = Enum.take_while(task.observations, fn {state, _bit} -> state != "len" end)
     assert Enum.map(before_len, &elem(&1, 0)) == ["copy", "copy4", "copy8"]
     assert {"len", false} in task.observations
-    assert phase in Muro.Synth.refine_all(vs, before_len, feat)
-    refute phase in Muro.Synth.refine_all(vs, before_len ++ [{"len", false}], feat)
+    bits = Map.new(task.observations)
+    assert bits["copy"] != bits["len"]
 
-    kept = Muro.Synth.refine_all(vs, task.observations, feat)
-    refute phase in kept
+    vs = Muro.Synth.enumerate(host.features, 1)
+    assert Muro.Synth.refine_all(vs, task.observations, feat) == []
   end
 
   @tag timeout: 180_000
@@ -226,6 +226,41 @@ defmodule Muro.SynthLoopTest do
     assert text =~ "program: (feat has-pos-reward-go)"
     assert text =~ "at west the program prefers stay"
     assert text =~ "at east the program prefers go"
+    assert text =~ "certificate CoindHomo"
+    refute text =~ "CoinductiveHomomorphism"
+  end
+
+  @tag timeout: 180_000
+  test "the three-cell maze certifies forward everywhere" do
+    src = File.read!(@maze3)
+    refute src =~ "data Feature"
+    refute src =~ "eval-feature"
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(@maze3, depth: 0, max_depth: 0)
+    assert result.status == :certified
+    assert result.certificate == "CoindHomo"
+    assert result.program == true
+    assert result.book =~ "def survivor : run PredProg := truep"
+    assert result.book =~ "evidence CoindHomo rank"
+    assert result.book =~ "def cert-solve-P0-0 : evidence {solve P0 0 ≡ 0 : Nat}"
+
+    assert result.book =~
+             "def cert-solve-P0 : evidence Π (n : Nat) → {solve P0 (suc n) ≡ suc 0 : Nat}"
+
+    assert result.book =~ "def cert-solve-P1 : evidence Π (n : Nat) → {solve P1 n ≡ suc 0 : Nat}"
+    assert result.book =~ "def cert-solve-P2 : evidence Π (n : Nat) → {solve P2 n ≡ suc 0 : Nat}"
+    refute result.book =~ "CoinductiveHomomorphism"
+    [policy, _cert] = String.split(result.book, "def rank", parts: 2)
+    refute policy =~ "| P0 =>"
+    refute policy =~ "| P1 =>"
+    refute policy =~ "| P2 =>"
+
+    text = joined(result)
+    assert text =~ "muro synth: homomorphism checked"
+    assert text =~ "program: truep"
+    assert text =~ "at P0 the program prefers Fwd"
+    assert text =~ "at P1 the program prefers Fwd"
+    assert text =~ "at P2 the program prefers Fwd"
     assert text =~ "certificate CoindHomo"
     refute text =~ "CoinductiveHomomorphism"
   end

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.38
+
+On a finite `State`, `solve s n` is the best immediate reward among the states reached in `n` steps. Each component is one of a finite set of closed Nat rewards, so the vector of those values repeats. The policy book characterises `solve` at each state as a constant, or as a finite prefix and then a constant or a repeating tail. The evidence inducts on `n`. The homomorphism rewrites those equations. It is checked on the surviving predicate, against the environment's `step`. A state that pays nothing now is ranked when its stream is below the stream of a state it can reach. A reward that is not a closed Nat, or a set of rewards with no maximum, leaves the book without a ranking.
+
+`examples/cshrl/envs/maze_auto_e2e.muro` is the three-cell maze and declares no feature. The survivor is `truep`. It prefers `Fwd` at `P0`, `P1`, and `P2`, and the book checks `CoindHomo`. `solve P0 0` is `0` and `solve P0 (suc n)` is `suc 0`. `solve` at `P1` and at `P2` is `suc 0`. `examples/cshrl/envs/lam.muro` declares no feature. It is not a validated target. The tests from `step` do not separate `copy` from `len`.
+
+### Manual
+
+- Synthesis. CSHRL. Examples.
+
+### Package
+
+- Version 0.20.38.
+
 ## 0.20.37
 
 `mix muro.synth` discovers features from `step`. For each action it tests a positive reward, a return to the same state, and a step into an absorbing state. A state is absorbing when every action stays there. A test that is true on the whole cover, or false on the whole cover, is dropped, and so is a test with the same truth vector as one already kept. A `Feature` the environment declares is a hint and is filtered the same way. A book that declares neither `Feature` nor `eval-feature` is still an environment. The survivor is a predicate over the tests that remain. `eval` of a discovered test is a run over `step`, and the checker sees that term. It does not see the search. Depth does not invent a new kind of test. A state name is not a feature.
