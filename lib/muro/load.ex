@@ -228,9 +228,15 @@ defmodule Muro.Load do
   end
 
   # A book with a param nobody supplied yet is checked where it is
-  # imported, once its params are definitions.
+  # imported, once its params are definitions. `check: false` is the
+  # gen `--skip-check` path: the caller already type-checked, so this
+  # load does not call the checker. The default checks.
   defp check_supplied(flat, checks, path, opts, ctx) do
-    if Enum.any?(flat, &param?/1), do: {:ok, %{}}, else: check(flat ++ checks, path, opts, ctx)
+    cond do
+      Keyword.get(opts, :check) == false -> {:ok, %{}}
+      Enum.any?(flat, &param?/1) -> {:ok, %{}}
+      true -> check(flat ++ checks, path, opts, ctx)
+    end
   end
 
   defp param?(d), do: Map.get(d, :kind) == :param
@@ -291,16 +297,21 @@ defmodule Muro.Load do
         {:ok, flat}
 
       ps ->
-        if Keyword.get(opts, :params) == :open do
-          case check(flat, path, opts, ctx) do
-            {:ok, graphs} -> {:ok, Check.stamp_meeting_graphs(flat, graphs)}
-            {:error, _} = err -> err
-          end
-        else
-          {:error,
-           Enum.map_join(ps, "\n", fn p ->
-             "#{site(p, ctx)}param #{p.name} is supplied by a file that imports this one"
-           end)}
+        cond do
+          Keyword.get(opts, :check) == false ->
+            {:ok, flat}
+
+          Keyword.get(opts, :params) == :open ->
+            case check(flat, path, opts, ctx) do
+              {:ok, graphs} -> {:ok, Check.stamp_meeting_graphs(flat, graphs)}
+              {:error, _} = err -> err
+            end
+
+          true ->
+            {:error,
+             Enum.map_join(ps, "\n", fn p ->
+               "#{site(p, ctx)}param #{p.name} is supplied by a file that imports this one"
+             end)}
         end
     end
   end

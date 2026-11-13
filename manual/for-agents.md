@@ -199,7 +199,7 @@ Generated files are not edited by hand.
 Nearest example: manual/examples.md#{{example}}.
 <!-- muro:end -->
 
-`muro.exs` at the project root, a `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml` names each book and the target path. Elixir, fsm, and exunit entries also name the module. An entry may add `[kind: :exunit, impl: Adapter, imports: true]`, or `[kind: :c]`, `[kind: :rust]`, `[kind: :zig]`, `[kind: :asm]`, or `[kind: :js]`. `imports:` is valid only on an exunit entry. `muro:` is the version the books are checked with. `muro gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions.
+`muro.exs` at the project root, a `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml` names each book and the target path. Elixir, fsm, and exunit entries also name the module. An entry may add `[kind: :exunit, impl: Adapter, imports: true]`, or `[kind: :c]`, `[kind: :rust]`, `[kind: :zig]`, `[kind: :asm]`, or `[kind: :js]`. `imports:` is valid only on an exunit entry. `muro:` is the version the books are checked with. `muro gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions. One invocation type-checks each book once and emits every target of that book from that copy, including both files of a C target. `--skip-check` does not type-check; `--check --skip-check` still compares bytes. The default type-checks.
 
 `mix muro.init` creates `muro.exs` and `priv/muro/`. It prints a note that points at `muro skills add`. It does not write `AGENTS.md`. `muro init --backend` stores that backend as the manifest's top-level `backend`. `muro init` writes the one manifest the directory calls for. If `muro.exs`, `muro.toml`, or `[package.metadata.muro]` is already present, it prints a diff of that file in its own format and leaves every file as it is. `mix muro.init --ci github` writes `.github/workflows/muro.yml`. The job installs the archive with `mix archive.install hex muro <version> --force`, with the version from the manifest, and runs `mix muro.gen --check`. `muro init --ci github` installs the executable and runs `muro gen --check`.
 
@@ -220,6 +220,7 @@ mix muro --version
 mix muro.init
 mix muro.gen
 mix muro.gen --check
+mix muro.gen --skip-check
 mix muro.deps.get  # fetch muro_deps/ and write muro.lock
 make agda          # Job B only; needs vendor/agda-stdlib v2.3
 ```

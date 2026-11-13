@@ -87,6 +87,7 @@ defmodule Muro.Skills do
     muro emit path.muro
     muro gen
     muro gen --check
+    muro gen --skip-check
     """
     |> String.trim_trailing("\n")
   end
@@ -97,6 +98,7 @@ defmodule Muro.Skills do
     muro emit path.muro --backend #{backend}
     muro gen
     muro gen --check
+    muro gen --skip-check
     """
     |> String.trim_trailing("\n")
   end

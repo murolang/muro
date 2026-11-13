@@ -1014,6 +1014,285 @@ defmodule Muro.GenTest do
     refute edited =~ "stale target"
   end
 
+  test "gen --check type-checks each book once when several targets share it" do
+    dir = tmp_dir()
+    version = Mix.Tasks.Muro.version()
+
+    write_book(dir, "priv/muro/one.muro", """
+    def one : run Nat := suc 0
+    def one-ok : evidence {one ≡ suc 0 : Nat} := refl
+    """)
+
+    write_book(dir, "priv/muro/nat.muro", "def base : run Nat := 0\n")
+
+    write_book(dir, "priv/muro/use.muro", """
+    import "nat.muro"
+    def two : run Nat := suc base
+    """)
+
+    File.write!(Path.join(dir, "muro.exs"), """
+    [
+      muro: "#{version}",
+      modules: [
+        {"priv/muro/one.muro", MyApp.One, "lib/one.ex"},
+        {"priv/muro/one.muro", "c/one.c", [kind: :c]},
+        {"priv/muro/one.muro", OneTest, "test/one_test.exs", [kind: :exunit]},
+        {"priv/muro/use.muro", MyApp.Use, "lib/use.ex"}
+      ]
+    ]
+    """)
+
+    {one_n, {:ok, _}} =
+      count_checks(fn ->
+        Muro.Load.file(Path.join(dir, "priv/muro/one.muro"), root: dir)
+      end)
+
+    {use_n, {:ok, _}} =
+      count_checks(fn ->
+        Muro.Load.file(Path.join(dir, "priv/muro/use.muro"), root: dir)
+      end)
+
+    assert one_n >= 1
+    assert use_n > one_n
+
+    {gen_n, gen_out} =
+      count_checks(fn ->
+        in_dir(dir, fn ->
+          capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+        end)
+      end)
+
+    assert gen_n == one_n + use_n
+    assert gen_out =~ "written lib/one.ex\n"
+    assert gen_out =~ "written c/one.c\n"
+    assert gen_out =~ "written c/one.h\n"
+    assert gen_out =~ "written test/one_test.exs\n"
+    assert gen_out =~ "written lib/use.ex\n"
+    assert File.regular?(Path.join(dir, "c/one.h"))
+
+    before = snapshot(dir)
+
+    {check_n, check_out} =
+      count_checks(fn ->
+        in_dir(dir, fn ->
+          capture(fn -> Mix.Tasks.Muro.Gen.run(["--check"]) end)
+        end)
+      end)
+
+    assert check_out == "ok\n"
+    assert check_n == one_n + use_n
+    assert snapshot(dir) == before
+
+    {skip_n, skip_out} =
+      count_checks(fn ->
+        in_dir(dir, fn ->
+          capture(fn -> Mix.Tasks.Muro.Gen.run(["--check", "--skip-check"]) end)
+        end)
+      end)
+
+    assert skip_out == "ok\n"
+    assert skip_n == 0
+
+    header_path = Path.join(dir, "c/one.h")
+    {:ok, header} = Muro.Gen.parse_header(File.read!(header_path))
+    body = header.body <> "/* drifted */\n"
+
+    File.write!(
+      header_path,
+      Muro.Gen.header(
+        header.version,
+        header.book,
+        header.book_hash,
+        Muro.Gen.body_hash(body),
+        [],
+        header.prefix
+      ) <> body
+    )
+
+    drifted =
+      in_dir(dir, fn ->
+        assert_raise Mix.Error, fn ->
+          Mix.Tasks.Muro.Gen.run(["--check", "--skip-check"])
+        end
+      end).message
+
+    assert drifted =~ "c/one.h: differs from what priv/muro/one.muro emits"
+    refute drifted =~ "hand-edited target"
+    refute drifted =~ "does not check"
+  end
+
+  test "an exunit-only param library is checked once, in open mode" do
+    dir = tmp_dir()
+
+    write_book(dir, "priv/muro/lib.muro", """
+    param p : run Nat
+    param p-is : evidence {p ≡ 0 : Nat}
+    def held : evidence {p ≡ 0 : Nat} := p-is
+    """)
+
+    write_manifest(dir, [
+      {"priv/muro/lib.muro", LibTest, "test/lib_test.exs", [kind: :exunit]}
+    ])
+
+    {open_n, {:ok, _}} =
+      count_checks(fn ->
+        Muro.Load.file(Path.join(dir, "priv/muro/lib.muro"), root: dir, params: :open)
+      end)
+
+    {closed_n, {:error, closed_msg}} =
+      count_checks(fn ->
+        Muro.Load.file(Path.join(dir, "priv/muro/lib.muro"), root: dir)
+      end)
+
+    assert open_n >= 1
+    assert closed_n == 0
+    assert closed_msg =~ "param p is supplied by a file that imports this one"
+
+    {gen_n, out} =
+      count_checks(fn ->
+        in_dir(dir, fn ->
+          capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+        end)
+      end)
+
+    assert gen_n == open_n
+    assert out =~ "written test/lib_test.exs\n"
+
+    {check_n, check_out} =
+      count_checks(fn ->
+        in_dir(dir, fn ->
+          capture(fn -> Mix.Tasks.Muro.Gen.run(["--check"]) end)
+        end)
+      end)
+
+    assert check_out == "ok\n"
+    assert check_n == open_n
+  end
+
+  test "--skip-check emits the checked bytes and still refuses a book that does not parse" do
+    dir = tmp_dir()
+    write_book(dir, "priv/muro/one.muro", @one)
+    write_manifest(dir, [{"priv/muro/one.muro", MyApp.One, "lib/one.ex"}])
+
+    in_dir(dir, fn ->
+      capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+    end)
+
+    checked = snapshot(dir)
+    File.rm!(Path.join(dir, "lib/one.ex"))
+
+    skipped =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run(["--skip-check"]) end)
+      end)
+
+    assert skipped =~ "written lib/one.ex\n"
+    assert snapshot(dir) == checked
+
+    write_book(dir, "priv/muro/bad.muro", "def ::\n")
+
+    File.write!(Path.join(dir, "muro.exs"), """
+    [
+      muro: "#{Mix.Tasks.Muro.version()}",
+      modules: [
+        {"priv/muro/bad.muro", MyApp.Bad, "lib/bad.ex"}
+      ]
+    ]
+    """)
+
+    error =
+      in_dir(dir, fn ->
+        assert_raise Mix.Error, fn -> Mix.Tasks.Muro.Gen.run(["--skip-check"]) end
+      end)
+
+    assert error.message =~ "does not check"
+    assert error.message =~ "muro.gen wrote nothing"
+    refute File.exists?(Path.join(dir, "lib/bad.ex"))
+  end
+
+  test "--check still type-checks when --skip-check is absent" do
+    dir = project()
+
+    in_dir(dir, fn ->
+      capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+    end)
+
+    File.write!(Path.join(dir, "muro.exs"), """
+    [
+      muro: "#{Mix.Tasks.Muro.version()}",
+      fuel: 5,
+      modules: [
+        {"priv/muro/one.muro", MyApp.Billing.Rounding, "lib/my_app/billing/rounding.ex"}
+      ]
+    ]
+    """)
+
+    message = check_error(dir)
+    assert message =~ "does not check"
+    assert message =~ "out of fuel"
+
+    {skip_n, skip_out} =
+      count_checks(fn ->
+        in_dir(dir, fn ->
+          capture(fn -> Mix.Tasks.Muro.Gen.run(["--check", "--skip-check"]) end)
+        end)
+      end)
+
+    assert skip_out == "ok\n"
+    assert skip_n == 0
+  end
+
+  test "--skip-check emits the same fsm bytes as a checked generate" do
+    dir = tmp_dir()
+    src = File.read!("examples/meet.muro")
+    write_book(dir, "priv/muro/meet.muro", src)
+
+    write_manifest(dir, [
+      {"priv/muro/meet.muro", Host.MeetFsm, "lib/host/meet_fsm.ex", [kind: :fsm]}
+    ])
+
+    in_dir(dir, fn ->
+      capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+    end)
+
+    checked = File.read!(Path.join(dir, "lib/host/meet_fsm.ex"))
+    File.rm!(Path.join(dir, "lib/host/meet_fsm.ex"))
+
+    in_dir(dir, fn ->
+      capture(fn -> Mix.Tasks.Muro.Gen.run(["--skip-check"]) end)
+    end)
+
+    assert File.read!(Path.join(dir, "lib/host/meet_fsm.ex")) == checked
+  end
+
+  defp count_checks(fun) do
+    {:ok, agent} = Agent.start_link(fn -> 0 end)
+
+    :ok =
+      Muro.Check.check_hook(fn ->
+        if Process.get(:muro_gen_watch), do: Agent.update(agent, &(&1 + 1))
+      end)
+
+    Process.put(:muro_gen_watch, true)
+
+    try do
+      result = fun.()
+      {Agent.get(agent, & &1), result}
+    after
+      Muro.Check.check_hook(nil)
+      Process.delete(:muro_gen_watch)
+      Agent.stop(agent)
+    end
+  end
+
+  defp snapshot(dir) do
+    dir
+    |> Path.join("**/*.{ex,exs,c,h}")
+    |> Path.wildcard()
+    |> Enum.filter(&File.regular?/1)
+    |> Map.new(fn path -> {Path.relative_to(path, dir), File.read!(path)} end)
+  end
+
   defp project do
     dir = tmp_dir()
     write_book(dir, "priv/muro/one.muro", @one)

@@ -12,7 +12,14 @@ defmodule Muro.CLI.Gen do
         type: :boolean,
         default: "false",
         doc:
-          "Write nothing. Compare each committed file with the bytes muro gen would leave in place. The book hash, the body hash, and the Muro version in the header must agree. Success prints ok. A missing target, a stale book, a hand edit, a body that differs, or a header that names another version is an error and names the target and the book. When the header is older than the Elixir spelling rule, the error also lists host names that changed. The .h beside a C target is checked the same way."
+          "Write nothing. Compare each committed file with the bytes muro gen would leave in place. The book hash, the body hash, and the Muro version in the header must agree. Success prints ok. A missing target, a stale book, a hand edit, a body that differs, or a header that names another version is an error and names the target and the book. When the header is older than the Elixir spelling rule, the error also lists host names that changed. The .h beside a C target is checked the same way. Each book is type-checked once, and every target of that book is compared from that copy."
+      },
+      %{
+        name: :skip_check,
+        type: :boolean,
+        default: "false",
+        doc:
+          "Do not type-check. The caller has already checked the book in this process. The books are still loaded, and a book that does not parse still fails. With --check, the byte comparison is unchanged: a committed file that is not what the book emits is still an error. The default type-checks."
       }
     ]
   end
@@ -21,9 +28,12 @@ defmodule Muro.CLI.Gen do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro gen reads the manifest and writes the modules it names. The manifest is muro.toml, [package.metadata.muro] in Cargo.toml, or muro.exs. It pins muro to a version, which must equal the running version, and lists modules. Each entry names a book and a target. elixir, fsm, and exunit also name a module. c, rust, zig, and asm name a target ending in .c, .rs, .zig, or .s. An optional fuel is the checker's bound. An optional backend is the kind of every entry that omits one. gen checks every book before it writes. If one fails, it writes nothing. A target that already matches is left untouched. Do not edit a generated file. Change the .muro file and run muro gen.
+      muro gen reads the manifest and writes the modules it names. The manifest is muro.toml, [package.metadata.muro] in Cargo.toml, or muro.exs. It pins muro to a version, which must equal the running version, and lists modules. Each entry names a book and a target. elixir, fsm, and exunit also name a module. c, rust, zig, and asm name a target ending in .c, .rs, .zig, or .s. An optional fuel is the checker's bound. An optional backend is the kind of every entry that omits one. gen type-checks each book once, then emits every target of that book from that copy, including both files of a C target. If one book fails, it writes nothing. A target that already matches is left untouched. Do not edit a generated file. Change the .muro file and run muro gen. --skip-check does not type-check; the caller has already checked. --check --skip-check still compares bytes.
       """),
-      Muro.CLI.Text.section("USAGE", Muro.CLI.Text.pre(["muro gen [--check]"])),
+      Muro.CLI.Text.section(
+        "USAGE",
+        Muro.CLI.Text.pre(["muro gen [--check] [--skip-check]"])
+      ),
       Muro.CLI.Text.section(
         "ARGUMENTS",
         Muro.CLI.Text.arguments([
@@ -36,7 +46,9 @@ defmodule Muro.CLI.Gen do
         Muro.CLI.Text.examples(
           [
             {"muro gen", "Write every target the manifest names."},
-            {"muro gen --check", "Exits 0 when those targets match. Writes nothing."}
+            {"muro gen --check", "Exits 0 when those targets match. Writes nothing."},
+            {"muro gen --skip-check",
+             "Write every target without type-checking. The caller has already checked."}
           ],
           "\n\n"
         )
@@ -65,27 +77,28 @@ defmodule Muro.CLI.Gen do
         {:raise, "", "unknown option: #{inspect(invalid)}"}
 
       rest != [] ->
-        {:raise, "", "usage: mix muro.gen [--check]"}
+        {:raise, "", "usage: mix muro.gen [--check] [--skip-check]"}
 
       true ->
-        go(opts[:check] || false)
+        go(opts[:check] || false, opts[:skip_check] || false)
     end
   end
 
-  defp go(check?) do
+  defp go(check?, skip?) do
     root = Muro.Manifest.root()
+    opts = [skip_check: skip?]
 
     with {:ok, manifest} <- load(root),
          :ok <- pin(manifest) do
       running = Mix.Tasks.Muro.version()
 
       if check? do
-        case Muro.Gen.check(manifest, root, running) do
+        case Muro.Gen.check(manifest, root, running, opts) do
           :ok -> {:ok, "ok\n", ""}
           {:error, message} -> {:raise, "", message}
         end
       else
-        case Muro.Gen.generate(manifest, root, running) do
+        case Muro.Gen.generate(manifest, root, running, opts) do
           {:ok, lines} -> {:ok, Muro.CLI.join_lines(lines), ""}
           {:error, message} -> {:raise, "", message}
         end
