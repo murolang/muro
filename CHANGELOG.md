@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.20.45
+
+A two-party meeting can mark a party that stops before `end`. The mark sits on that party, and `buffer N` stays last.
+
+```
+meet wire : server with task may fail buffer 1
+meet back : server may fail with task
+meet both : server may fail with task may fail
+```
+
+`may` and `fail` are that mark. `fail` is also the arm after a receive. A definition named `may` or `fail` stays a definition. The mark is only on a party of a `meet`.
+
+Every receive from a marked party has a failure arm. The arm may name a reason. A send has no arm. A send toward a party that has stopped is dropped, and the stop is seen at the next receive from that party.
+
+The configuration graph of a marked meeting includes, at every point, a run where that party stops. It takes no further step. A message it has not sent is lost. A message already on the queue toward the survivor may arrive, and it may be dropped. A formula that holds only on the report path fails on that run. A meeting that does not mark a party keeps the graph it had.
+
+`examples/may-fail-free.muro` is a server that holds a slot until a task reports or the task stops. The failure arm releases the slot, and the slot is released on every run. The same meeting with no failure arm is refused. An arm that does not release the slot fails the `leads_to`.
+
+Every emit target refuses a book that uses the mark. The declaration is not erased. OTP and the state-machine image do not yet follow the mark with a monitor or a `down` step.
+
+### Manual
+
+- Sessions. Temporal. Grammar. Emit. State machines. Limits. Examples. Extending. For agents.
+
+### Package
+
+- Version 0.20.45.
+
 ## 0.20.42
 
 `unboxed data` is an ordinary inductive declaration. A field is a machine word, `WBool`, `Slice`, `Opt` of those, or another unboxed declaration. C, Rust, and Zig pass the product by value, so a `sliceFold` of it allocates nothing. Elixir emits the ordinary tagged tuple. JavaScript emits the ordinary object. Assembly stays the Nat fragment.
