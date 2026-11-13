@@ -2871,6 +2871,7 @@ defmodule Muro.CheckTest do
     assert Muro.check_file("examples/cshrl/envs/lam.muro") == :ok
     assert Muro.check_file("examples/cshrl/envs/placement.muro") == :ok
     assert Muro.check_file("examples/cshrl/envs/nested_bit.muro") == :ok
+    assert Muro.check_file("examples/cshrl/envs/list_cover.muro") == :ok
   end
 
   test "the predicate-program policy runs, and its evidence is erased" do

@@ -8,6 +8,7 @@ defmodule Muro.SynthLoopTest do
   @maze3 "examples/cshrl/envs/maze_auto_e2e.muro"
   @place "examples/cshrl/envs/placement.muro"
   @nest "examples/cshrl/envs/nested_bit.muro"
+  @cover "examples/cshrl/envs/list_cover.muro"
   @neg "test/fixtures/synth_neg.muro"
   @gap "test/fixtures/synth_gap.muro"
   @stay "test/fixtures/synth_false.muro"
@@ -218,6 +219,7 @@ defmodule Muro.SynthLoopTest do
     assert result.book =~ "has-pos-reward-go : Feature"
     assert result.book =~ "def dyn-pos "
     assert result.book =~ "evidence CoindHomo rank"
+    refute result.book =~ "cert-cover-miss"
     refute result.book =~ "data DynFeature"
     [policy, _cert] = String.split(result.book, "def rank", parts: 2)
     refute policy =~ "| west =>"
@@ -251,6 +253,7 @@ defmodule Muro.SynthLoopTest do
 
     assert result.book =~ "def cert-solve-P1 : evidence Π (n : Nat) → {solve P1 n ≡ suc 0 : Nat}"
     assert result.book =~ "def cert-solve-P2 : evidence Π (n : Nat) → {solve P2 n ≡ suc 0 : Nat}"
+    refute result.book =~ "cert-cover-miss"
     refute result.book =~ "CoinductiveHomomorphism"
     [policy, _cert] = String.split(result.book, "def rank", parts: 2)
     refute policy =~ "| P0 =>"
@@ -294,6 +297,7 @@ defmodule Muro.SynthLoopTest do
     assert result.book =~ "pair-any-0-1 : Feature"
     assert result.book =~ "nat-of-Row"
     assert result.book =~ "evidence CoindHomo rank"
+    refute result.book =~ "cert-cover-miss"
 
     assert result.book =~
              "def cert-solve-board-r0-r0 : evidence Π (n : Nat) → {solve (board r0 r0) n ≡ suc (suc 0) : Nat}"
@@ -321,6 +325,35 @@ defmodule Muro.SynthLoopTest do
   end
 
   @tag timeout: 180_000
+  test "a list cover certifies the reward of go" do
+    src = File.read!(@cover)
+    refute src =~ "data Feature"
+    refute src =~ "eval-feature"
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(@cover, depth: 0, max_depth: 0)
+    assert result.status == :certified
+    assert result.certificate == "CoindHomo"
+    assert result.program == {:feat, "has-pos-reward-go"}
+    assert result.book =~ "def survivor : run PredProg := (feat has-pos-reward-go)"
+    assert result.book =~ "evidence CoindHomo rank"
+    assert result.book =~ "cert-cover-miss"
+
+    assert result.book =~
+             "def cert-solve-cell-nil : evidence Π (n : Nat) → {solve (cell nil) n ≡ suc 0 : Nat}"
+
+    assert result.book =~
+             "def cert-solve-cell-cons-n0 : evidence Π (n : Nat) → {solve (cell (cons 0 nil)) n ≡ suc 0 : Nat}"
+
+    refute result.book =~ "CoinductiveHomomorphism"
+    text = joined(result)
+    assert text =~ "muro synth: homomorphism checked"
+    assert text =~ "program: (feat has-pos-reward-go)"
+    assert text =~ "at (cell nil) the program prefers stay"
+    assert text =~ "at (cell (cons 0 nil)) the program prefers go"
+    assert text =~ "certificate CoindHomo"
+  end
+
+  @tag timeout: 180_000
   test "a bit under two constructors is invented and certified" do
     src = File.read!(@nest)
     refute src =~ "data Feature"
@@ -338,6 +371,7 @@ defmodule Muro.SynthLoopTest do
     assert result.book =~ "def survivor : run PredProg := (feat ctor-is-p0-0-on)"
     assert result.book =~ "ctor-is-p0-0-on : Feature"
     assert result.book =~ "evidence CoindHomo rank"
+    refute result.book =~ "cert-cover-miss"
     refute result.book =~ "has-pos-reward"
     refute result.book =~ "CoinductiveHomomorphism"
 
@@ -1477,15 +1511,12 @@ defmodule Muro.SynthLoopTest do
     assert host.inhabitants == nil
     assert length(host.all_states) == 2
 
-    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
-    assert result.status == :policy
-    assert result.program == {:feat, "is-self-loop-go"}
-    assert result.reason == "State is not a finite enumeration"
-    assert result.book =~ "dyn-same"
-    assert result.book =~ "| b0 =>"
-    assert result.book =~ "| b1 =>"
-    assert result.book =~ "| row "
-    assert byte_size(result.book) < 30_000
+    book = stub_ranking(path)
+    assert book =~ "dyn-same"
+    assert book =~ "| b0 =>"
+    assert book =~ "| b1 =>"
+    assert book =~ "| row "
+    assert byte_size(book) < 80_000
   end
 
   test "an open list cover compares the two cells" do
@@ -1497,15 +1528,92 @@ defmodule Muro.SynthLoopTest do
     assert host.inhabitants == nil
     assert length(host.all_states) == 2
 
+    book = stub_ranking(path)
+    assert book =~ "dyn-same"
+    assert book =~ "| nil =>"
+    assert book =~ "| cons "
+    assert book =~ "| cell "
+    refute book =~ "predicted unknown"
+  end
+
+  test "a cover split returns the named lists and misses the rest" do
+    dir = tmp()
+    path = write_book(dir, "cells.muro", list_cover_src())
+    assert {:ok, host} = Muro.Synth.Host.open(path)
+    [empty, zero] = host.all_states
+
+    bodies = %{empty.spell => "0", zero.spell => "suc 0"}
+
+    assert {:ok, pick} =
+             Muro.Synth.Term.cover_match(
+               host.schema,
+               "s",
+               host.all_states,
+               fn _src -> "Nat" end,
+               fn spell -> Map.fetch!(bodies, spell) end,
+               fn _src -> "suc (suc 0)" end
+             )
+
+    assert {:ok, back} =
+             Muro.Synth.Term.cover_match(
+               host.schema,
+               "s",
+               host.all_states,
+               fn _src -> "State" end,
+               fn spell -> spell end,
+               fn src -> src end
+             )
+
+    book =
+      write_book(dir, "pick.muro", """
+      import "std:bool.muro"
+      import "std:list.muro"
+
+      data State : Type where
+        cell : Π (xs : List Nat) → State
+
+      def pick : run Π (s : State) → Nat :=
+        λ (s : State) →
+          #{pick}
+      def at-nil : evidence {pick (cell nil) ≡ 0 : Nat} := refl
+      def at-zero : evidence {pick (cell (cons 0 nil)) ≡ suc 0 : Nat} := refl
+      def at-one : evidence {pick (cell (cons (suc 0) nil)) ≡ suc (suc 0) : Nat} := refl
+      def at-longer : evidence {pick (cell (cons 0 (cons 0 nil))) ≡ suc (suc 0) : Nat} := refl
+      def back : run Π (s : State) → State :=
+        λ (s : State) →
+          #{back}
+      def back-nil : evidence {back (cell nil) ≡ (cell nil) : State} := refl
+      def back-zero : evidence {back (cell (cons 0 nil)) ≡ (cell (cons 0 nil)) : State} := refl
+      def back-one : evidence {back (cell (cons (suc 0) nil)) ≡ (cell (cons (suc 0) nil)) : State} := refl
+      def back-longer : evidence {back (cell (cons 0 (cons 0 nil))) ≡ (cell (cons 0 (cons 0 nil))) : State} := refl
+      """)
+
+    assert Muro.check_file(book) == :ok
+  end
+
+  test "a cover step leaves is not ranked" do
+    dir = tmp()
+    path = write_book(dir, "open.muro", unclosed_src())
+
     assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
     assert result.status == :policy
     assert result.program == {:feat, "is-self-loop-go"}
-    assert result.reason == "State is not a finite enumeration"
-    assert result.book =~ "dyn-same"
-    assert result.book =~ "| nil =>"
-    assert result.book =~ "| cons "
-    assert result.book =~ "| cell "
-    refute result.book =~ "predicted unknown"
+    assert result.reason == "all-states is not closed under step"
+    refute result.book =~ "evidence CoindHomo"
+    refute result.book =~ "def rank"
+    refute result.book =~ "State is not a finite enumeration"
+  end
+
+  test "an empty all-states is not ranked" do
+    dir = tmp()
+    path = write_book(dir, "empty.muro", empty_cover_src())
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert result.program == true
+    assert result.reason == "all-states is empty"
+    refute result.book =~ "evidence CoindHomo"
+    refute result.book =~ "State is not a finite enumeration"
   end
 
   test "schema equality decides two constructors" do
@@ -1531,6 +1639,59 @@ defmodule Muro.SynthLoopTest do
       """)
 
     assert Muro.check_file(path) == :ok
+  end
+
+  # The stub names `CoindHomo` as `Nat`, so a real certificate cannot
+  # check. The rendered book is the evidence that the cover was ranked.
+  # It is not a homomorphism.
+  defp stub_ranking(path) do
+    parent = self()
+    _ = ranked_books()
+
+    checker = fn book, fuel ->
+      send(parent, {:ranked, File.read!(book)})
+      Muro.check_file(book, fuel: fuel)
+    end
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0, checker: checker)
+    assert result.status == :residual
+    assert result.book == nil
+    refute result.status == :certified
+
+    books = ranked_books()
+    assert books != []
+    book = Enum.join(books, "\n")
+    assert book =~ "def survivor : run PredProg := (feat is-self-loop-go)"
+    assert book =~ "cert-solve"
+    assert book =~ "evidence CoindHomo"
+    assert book =~ "Empty"
+    assert book =~ "cert-cover-miss"
+    refute book =~ "State is not a finite enumeration"
+    book
+  end
+
+  defp ranked_books do
+    receive do
+      {:ranked, src} -> [src | ranked_books()]
+    after
+      0 -> []
+    end
+  end
+
+  defp unclosed_src do
+    String.replace(
+      list_cover_src(),
+      "(cell (cons 0 nil), suc 0)",
+      "(cell (cons (suc 0) nil), suc 0)"
+    )
+  end
+
+  defp empty_cover_src do
+    String.replace(
+      list_cover_src(),
+      "cons (cell nil) (cons (cell (cons 0 nil)) nil)",
+      "nil"
+    )
   end
 
   defp ranking_names do
