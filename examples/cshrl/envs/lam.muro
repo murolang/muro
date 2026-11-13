@@ -8,9 +8,8 @@
 -- erased (- A). Contracting that instantiation adds a step. spine
 -- is shorter there.
 --
--- uses-gt1 and arg-apps-ne0 hold at both. arg-erased is the quantity
--- of the λ that heads the argument redex. It is a reading of that λ,
--- not a state name. Each inst pays 0. done pays 1 forever.
+-- uses-gt1 and arg-apps-ne0 hold at copy, copy4, copy8, and len.
+-- Each inst pays 0. done pays 1 forever.
 import "../std/nat.muro"
 import "../lib/agent.muro"
 
@@ -85,41 +84,9 @@ def horizon : run Nat := suc 0
 
 def Carrier : spec Type := State
 
--- The quantity of the λ that heads the argument, when the argument is
--- itself a redex. absent is a stopped head, a sink, or a λ that is
--- not applied.
-data ArgQty : Type where
-  affine : ArgQty
-  reuse  : ArgQty
-  erased : ArgQty
-  absent : ArgQty
-
 data Feature : Type where
   uses-gt1     : Feature
   arg-apps-ne0 : Feature
-  arg-erased   : Feature
-
-def arg-qty : run Π (+ s : State) → ArgQty :=
-  λ (+ s : State) →
-    match s motive (λ _ → ArgQty)
-      | copy => affine
-      | copy4 => affine
-      | copy8 => affine
-      | len => erased
-      | ready => absent
-      | ready4 => absent
-      | ready8 => absent
-      | done => absent
-      | cold => absent
-      | wlen => absent
-
-def erased-arg : run Π (+ q : ArgQty) → Bool :=
-  λ (+ q : ArgQty) →
-    match q motive (λ _ → Bool)
-      | affine => false
-      | reuse => false
-      | erased => true
-      | absent => false
 
 def eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
   λ (+ f : Feature) → λ (+ c : Carrier) →
@@ -148,7 +115,6 @@ def eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
             | done => false
             | cold => false
             | wlen => false)
-      | arg-erased => erased-arg (arg-qty c)
 
 def all-states : run List State :=
   cons copy

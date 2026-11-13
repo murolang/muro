@@ -151,48 +151,42 @@ defmodule Muro.SynthLoopTest do
     refute text =~ "CoindHomo"
   end
 
-  @tag timeout: 180_000
-  test "the finite lam environment certifies arg at the copy states and spine at len" do
+  test "the finite lam environment does not separate copy from len" do
     src = File.read!(@lam)
     assert src =~ "uses-gt1"
     assert src =~ "arg-apps-ne0"
-    assert src =~ "arg-erased"
+    refute src =~ "arg-erased"
+    refute src =~ "arg-qty"
+    refute src =~ "ArgQty"
+    refute src =~ "erased-arg"
     refute src =~ ~r/copy\s*:\s*Feature/
 
     assert {:ok, result} = Muro.Synth.cegis_loop(@lam)
-    assert result.status == :certified
-    assert result.certificate == "CoindHomo"
-    assert result.program == {:not, {:feat, "arg-erased"}}
-    assert result.book =~ "def survivor : run PredProg := (notp (feat arg-erased))"
-    assert result.book =~ "| true => arg"
-    assert result.book =~ "| false => spine"
-    assert result.book =~ "match eval survivor"
-    assert result.book =~ "evidence CoindHomo rank"
-    refute result.book =~ "CoinductiveHomomorphism"
-    [policy, _cert] = String.split(result.book, "def rank", parts: 2)
-    refute policy =~ "| copy =>"
-    refute policy =~ "| len =>"
+    assert result.status == :insufficient
+    assert result.program == nil
+    assert result.book == nil
 
     text = joined(result)
-    assert text =~ "muro synth: homomorphism checked"
-    assert text =~ "program: (notp (feat arg-erased))"
-    assert text =~ "at copy the program prefers arg"
-    assert text =~ "at copy4 the program prefers arg"
-    assert text =~ "at copy8 the program prefers arg"
-    assert text =~ "at len the program prefers spine"
-    assert text =~ "at ready the program prefers arg"
-    assert text =~ "at done the program prefers arg"
-    assert text =~ "at cold the program prefers arg"
-    assert text =~ "at wlen the program prefers arg"
-    assert text =~ "certificate CoindHomo"
-    refute text =~ "features insufficient"
+    assert text =~ "muro synth: features insufficient"
+    assert text =~ "len agrees with copy"
+    refute text =~ "homomorphism checked"
+    refute text =~ "certificate CoindHomo"
   end
 
   test "uses and arg-apps agree through the copy states and fail at len" do
     assert {:ok, host} = Muro.Synth.Host.open(@lam)
+    assert "uses-gt1" in host.features
+    assert "arg-apps-ne0" in host.features
+    refute "arg-erased" in host.features
+
+    feat = fn feature, state -> host.eval_feature.(feature, state) end
+    vector = fn state -> Enum.map(host.features, &feat.(&1, state)) end
+    assert vector.("copy") == vector.("copy4")
+    assert vector.("copy") == vector.("copy8")
+    assert vector.("copy") == vector.("len")
+
     assert {:ok, spec} = Muro.Synth.Oracle.observe(host, "trace", [])
     [task] = spec.tasks
-    feat = fn feature, state -> host.eval_feature.(feature, state) end
     phase = {:and, {:feat, "uses-gt1"}, {:feat, "arg-apps-ne0"}}
     vs = Muro.Synth.enumerate(host.features, 1)
     assert phase in vs
@@ -205,7 +199,6 @@ defmodule Muro.SynthLoopTest do
 
     kept = Muro.Synth.refine_all(vs, task.observations, feat)
     refute phase in kept
-    assert Muro.Synth.pick(kept, fn _ -> 0 end) == {:not, {:feat, "arg-erased"}}
   end
 
   test "depth 0 on a reward gap is an empty space, not insufficient features" do
@@ -368,14 +361,11 @@ defmodule Muro.SynthLoopTest do
     assert decoded["certificate"] == "CoindHomo"
     assert decoded["cex"] == []
 
-    assert {:exit, 0, lam_book, lam_lines} = Muro.CLI.Synth.run([@lam])
-    assert lam_book =~ "def survivor : run PredProg := (notp (feat arg-erased))"
-    assert lam_book =~ "evidence CoindHomo rank"
+    assert {:exit, 1, "", lam_lines} = Muro.CLI.Synth.run([@lam])
     lam_text = Enum.join(lam_lines, "\n")
-    assert lam_text =~ "homomorphism checked"
-    assert lam_text =~ "at copy the program prefers arg"
-    assert lam_text =~ "at len the program prefers spine"
-    refute lam_text =~ "features insufficient"
+    assert lam_text =~ "features insufficient"
+    assert lam_text =~ "len agrees with copy"
+    refute lam_text =~ "homomorphism checked"
   end
 
   test "a false program is falsep in the json log outside the checkout" do
