@@ -601,6 +601,12 @@ Kernel `Bytes` and `Slice`. A literal is `b"…"`, with `\\`, `\"`, `\n`, `\r`, 
 
 See [Terms](language.md#bytes).
 
+## word_match.muro
+
+`match` on `WBool` and on `Opt`. `wtrue` and `wfalse` are the bool arms. `wsome` and `wnone` are the option arms. A closed `bytesEq` and a closed `sliceGet` reduce, and the equations are `refl`. A `match` may return a `Slice`. `dropCR` returns its argument, or one octet of it, and that octet is a view of the same buffer.
+
+See [match](language.md#match).
+
 ## request-line.muro
 
 The method and the path of one request line, as `Slice` views. `method` is the prefix before the first space. `path` is the next word. `GET /feed HTTP/1.1\r\n` gives `b"GET"` and `b"/feed"`. A missing space leaves the path empty. An empty path, two spaces in a row, is the empty view at that point. No status line, no headers, no routing.
@@ -671,13 +677,14 @@ Two data types are both named `Foo`. `foo` builds the first at `0` and `bar` bui
 
 ## cshrl/
 
-[CSHRL](cshrl.md) as a library. `lib/` holds the generic modules, written against `param` entries, and `envs/` holds the environments that supply them. Three run an agent. `envs/optimal.muro` is the return theorem: the go agent's reward stream dominates every other policy. `envs/synth_bit.muro` deploys a PredProg as a run policy on two carriers. The backends emit `bit-policy`. Propagation, version-space shrinkage, and sufficient-cegis are evidence about that run, and they are erased. `envs/lam.muro` is a finite substitution graph. It is not a validated synthesis target: `mix muro.synth` reports that `len` agrees with `copy` on every feature. `envs/maze_auto.muro` declares no feature. `mix muro.synth` checks `CoindHomo` for `(feat has-pos-reward-go)`, which prefers `stay` at `west` and `go` at `east`. Check an environment; a file under `lib/` alone is refused for its unsupplied params.
+[CSHRL](cshrl.md) as a library. `lib/` holds the generic modules, written against `param` entries, and `envs/` holds the environments that supply them. Three run an agent. `envs/optimal.muro` is the return theorem: the go agent's reward stream dominates every other policy. `envs/synth_bit.muro` deploys a PredProg as a run policy on two carriers. The backends emit `bit-policy`. Propagation, version-space shrinkage, and sufficient-cegis are evidence about that run, and they are erased. `envs/lam.muro` is a finite substitution graph. It declares no feature. It is not a validated synthesis target: `mix muro.synth` reports that `len` agrees with `copy` on every feature. `envs/maze_auto.muro` declares no feature. `mix muro.synth` checks `CoindHomo` for `(feat has-pos-reward-go)`, which prefers `stay` at `west` and `go` at `east`. `envs/maze_auto_e2e.muro` is the three-cell maze, also with no feature. `mix muro.synth` checks `CoindHomo` for `truep`, which prefers `Fwd` at `P0`, `P1`, and `P2`. Check an environment; a file under `lib/` alone is refused for its unsupplied params.
 
 ```
 mix muro.check examples/cshrl/envs/binary_sacrifice.muro
 mix muro.check examples/cshrl/envs/synth_bit.muro
 mix muro.check examples/cshrl/envs/lam.muro
 mix muro.check examples/cshrl/envs/maze_auto.muro
+mix muro.check examples/cshrl/envs/maze_auto_e2e.muro
 ```
 
 ### string.muro

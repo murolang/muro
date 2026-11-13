@@ -290,11 +290,24 @@ defmodule Muro.Emit.C do
     }
 
     with {:ok, {pre, expr, _lay, st}} <- emit_ir(fun.body, env, st, sig.ret) do
+      discards =
+        bound
+        |> Enum.reject(fn {n, _c, _lay} -> uses?(fun.body, n) end)
+        |> Enum.map_join("\n", fn {_n, c, _lay} -> "  (void)#{c};" end)
+
       body =
-        if pre == "" do
-          "  return #{expr};"
-        else
-          indent(pre, 2) <> "\n  return #{expr};"
+        cond do
+          discards != "" and pre != "" ->
+            discards <> "\n" <> indent(pre, 2) <> "\n  return #{expr};"
+
+          discards != "" ->
+            discards <> "\n  return #{expr};"
+
+          pre != "" ->
+            indent(pre, 2) <> "\n  return #{expr};"
+
+          true ->
+            "  return #{expr};"
         end
 
       {:ok, sig, "#{decl(sig)} {\n#{body}\n}", st.envs ++ st.steps}
@@ -308,7 +321,7 @@ defmodule Muro.Emit.C do
         ps -> Enum.map_join(ps, ", ", fn {ty, name} -> "#{ty}#{name}" end)
       end
 
-    kw = if sig.export, do: "", else: "static "
+    kw = if sig.export, do: "", else: "__attribute__((unused)) static "
     "#{kw}#{sig.ret}#{sig.name}(#{args})"
   end
 
@@ -358,7 +371,8 @@ defmodule Muro.Emit.C do
     st = %{st | scope: scope}
 
     with {:ok, {pre, ex, lay, st}} <- emit_ir(body, [{name, c, :opaque} | env], st, expect) do
-      {:ok, {squash(["void *#{c} = 0;", pre]), ex, lay, st}}
+      void = if uses?(body, name), do: "", else: "(void)#{c};"
+      {:ok, {squash(["void *#{c} = 0;", void, pre]), ex, lay, st}}
     end
   end
 
@@ -378,7 +392,7 @@ defmodule Muro.Emit.C do
 
       with {:ok, {pre2, ex2, blay, st}} <-
              emit_ir(body, [{name, local, lay} | env], st, expect) do
-        void = if lay == :unit and not uses?(body, name), do: "(void)#{local};", else: ""
+        void = if uses?(body, name), do: "", else: "(void)#{local};"
         stmt = squash([pre, "#{ty}#{local} = #{ex};", void, pre2])
         {:ok, {stmt, ex2, blay, st}}
       end
@@ -402,12 +416,18 @@ defmodule Muro.Emit.C do
       env1 = [{b, cb, lb}, {a, ca, la} | env]
 
       with {:ok, {pre2, ex2, blay, st}} <- emit_ir(body, env1, st, expect) do
+        unused =
+          [{a, ca}, {b, cb}]
+          |> Enum.reject(fn {n, _} -> uses?(body, n) end)
+          |> Enum.map_join("\n", fn {_n, c} -> "(void)#{c};" end)
+
         stmt =
           squash([
             pre,
             "#{pair_ptr()}#{sname} = #{ex};",
             "void *#{ca} = #{sname}->#{g("field_fst")};",
             "void *#{cb} = #{sname}->#{g("field_snd")};",
+            unused,
             pre2
           ])
 
@@ -639,7 +659,23 @@ defmodule Muro.Emit.C do
   defp scrut_ty(:nat, _book), do: nat_ptr()
   defp scrut_ty(:atom, _book), do: atom_ty()
   defp scrut_ty({:data, name}, _book), do: struct_ptr(name)
+  defp scrut_ty(:wbool, book), do: ctype(:wbool, book)
+  defp scrut_ty({:opt, pay}, book), do: ctype({:opt, pay}, book)
   defp scrut_ty(_, _book), do: "void *"
+
+  # A pointer or a scalar accepts 0. A struct does not: `muro__slice t = 0`
+  # is a type error. `{0}` is the universal initializer, and a scalar
+  # written that way trips -Wbraces-around-scalar under -Wall.
+  defp init_temp(expect, tname) do
+    ty = String.trim(expect)
+
+    cond do
+      String.ends_with?(ty, "*") -> "#{expect}#{tname} = 0;"
+      ty in ["uint8_t", "uint32_t", "uint64_t", "int64_t", "size_t"] -> "#{expect}#{tname} = 0;"
+      ty == String.trim(atom_ty()) -> "#{expect}#{tname} = 0;"
+      true -> "#{expect}#{tname} = {0};"
+    end
+  end
 
   defp emit_switch(:nat, pre, ex, [{:arm, "zero", [], z}, {:arm, "suc", [y], s}], env, st, expect) do
     {sname, st} = news(st)
@@ -655,7 +691,7 @@ defmodule Muro.Emit.C do
         stmt =
           squash([
             pre,
-            "#{expect}#{tname} = 0;",
+            init_temp(expect, tname),
             "{",
             "#{nat_ptr()}#{sname} = #{ex};",
             "switch (#{sname}->#{g("field_tag")}) {",
@@ -691,7 +727,7 @@ defmodule Muro.Emit.C do
       stmt =
         squash([
           pre,
-          "#{expect}#{tname} = 0;",
+          init_temp(expect, tname),
           "{",
           "#{atom_ty()}#{sname} = #{ex};",
           "switch (#{sname}) {",
@@ -721,7 +757,7 @@ defmodule Muro.Emit.C do
           stmt =
             squash([
               pre,
-              "#{expect}#{tname} = 0;",
+              init_temp(expect, tname),
               "{",
               "#{ptr}#{sname} = #{ex};",
               "switch (#{sname}->#{g("field_tag")}) {",
@@ -736,6 +772,95 @@ defmodule Muro.Emit.C do
 
           {:ok, {stmt, tname, st}}
         end
+    end
+  end
+
+  # WBool is the uint8_t word. 1 is wtrue. The test allocates nothing.
+  defp emit_switch(
+         :wbool,
+         pre,
+         ex,
+         [{:arm, "wtrue", [], t}, {:arm, "wfalse", [], f}],
+         env,
+         st,
+         expect
+       ) do
+    {sname, st} = news(st)
+    {tname, st} = newt(st)
+    st = %{st | scope: st.base_scope}
+
+    with {:ok, {tpre, tex, _lay, st}} <- emit_ir(t, env, st, expect) do
+      st = %{st | scope: st.base_scope}
+
+      with {:ok, {fpre, fex, _lay, st}} <- emit_ir(f, env, st, expect) do
+        stmt =
+          squash([
+            pre,
+            init_temp(expect, tname),
+            "{",
+            "#{ctype(:wbool, st.book)}#{sname} = #{ex};",
+            "if (#{sname}) {",
+            tpre,
+            "#{tname} = #{tex};",
+            "} else {",
+            fpre,
+            "#{tname} = #{fex};",
+            "}",
+            "}"
+          ])
+
+        {:ok, {stmt, tname, st}}
+      end
+    end
+  end
+
+  # Opt is the by-value struct. tag 0 is wnone. The payload is `val`.
+  defp emit_switch(
+         {:opt, pay},
+         pre,
+         ex,
+         [{:arm, "wsome", [y], s}, {:arm, "wnone", [], n}],
+         env,
+         st,
+         expect
+       ) do
+    {sname, st} = news(st)
+    {tname, st} = newt(st)
+    st = %{st | scope: st.base_scope}
+
+    with {:ok, {npre, nex, _lay, st}} <- emit_ir(n, env, st, expect) do
+      st = %{st | scope: st.base_scope}
+
+      {bind, env1, st} =
+        if uses?(s, y) do
+          {yname, scope} = Name.bind(spell(y), st.scope)
+          st = %{st | scope: scope}
+          decl = "#{ctype(pay, st.book)}#{yname} = #{sname}.val;"
+          {decl, [{y, yname, pay} | env], st}
+        else
+          {"", env, st}
+        end
+
+      with {:ok, {spre, sex, _lay, st}} <- emit_ir(s, env1, st, expect) do
+        stmt =
+          squash([
+            pre,
+            init_temp(expect, tname),
+            "{",
+            "#{ctype({:opt, pay}, st.book)}#{sname} = #{ex};",
+            "if (#{sname}.tag) {",
+            bind,
+            spre,
+            "#{tname} = #{sex};",
+            "} else {",
+            npre,
+            "#{tname} = #{nex};",
+            "}",
+            "}"
+          ])
+
+        {:ok, {stmt, tname, st}}
+      end
     end
   end
 
@@ -792,9 +917,13 @@ defmodule Muro.Emit.C do
       {decls, env1, scope} =
         Enum.zip(binders, fields)
         |> Enum.reduce({[], env, st.base_scope}, fn {bname, {ty, lay, k}}, {decls, env, scope} ->
-          {c, scope} = Name.bind(spell(bname), scope)
-          decl = "#{ty}#{c} = #{sname}->#{g("as")}.#{member}.#{g("f", k)};"
-          {decls ++ [decl], [{bname, c, lay} | env], scope}
+          if uses?(body, bname) do
+            {c, scope} = Name.bind(spell(bname), scope)
+            decl = "#{ty}#{c} = #{sname}->#{g("as")}.#{member}.#{g("f", k)};"
+            {decls ++ [decl], [{bname, c, lay} | env], scope}
+          else
+            {decls, env, scope}
+          end
         end)
 
       st = %{st | scope: scope}
@@ -915,9 +1044,15 @@ defmodule Muro.Emit.C do
           {"  (void)#{seedp};", cap_env, visible}
 
         {sname, slay} ->
-          {local, visible} = Name.bind(spell(sname), visible)
-          line = "  #{ctype(slay, st.book)}#{local} = #{seedp};"
-          {line, [{sname, local, slay} | cap_env], visible}
+          # An unfold binder the body never reads stays out of the step.
+          # The parameter is still named; a dead local is -Wunused-variable.
+          if uses?(step.body, sname) do
+            {local, visible} = Name.bind(spell(sname), visible)
+            line = "  #{ctype(slay, st.book)}#{local} = #{seedp};"
+            {line, [{sname, local, slay} | cap_env], visible}
+          else
+            {"  (void)#{seedp};", cap_env, visible}
+          end
       end
 
     env_line =
@@ -993,10 +1128,25 @@ defmodule Muro.Emit.C do
     end
   end
 
+  # These forms carry their layout on the term. A match on sliceGet is
+  # Opt U8, and a match on bytesEq or eqi is WBool. Reconstructing that
+  # here is what the switch uses for the scrutinee type.
+  defp lay_of({:bget, _, _}, _env, _st), do: {:opt, :u8}
+  defp lay_of({:beq, _, _}, _env, _st), do: :wbool
+  defp lay_of({:byt, _}, _env, _st), do: :slice
+  defp lay_of({:bcat, _, _}, _env, _st), do: :slice
+  defp lay_of({:blen, _}, _env, _st), do: :u64
+  defp lay_of({:bsub, _, _, _}, _env, _st), do: :slice
+  defp lay_of({:btil, _, _}, _env, _st), do: :slice
+  defp lay_of({:baft, _, _}, _env, _st), do: :slice
+  defp lay_of({:wrd, k, op, _}, _env, _st), do: wrd_lay(k, op)
+
   defp lay_of({:match, scrut, arms}, env, st) do
     case match_kind(lay_of(scrut, env, st), arms, st.book) do
       :nat -> arm_result(arms, env, st)
       :atom -> arm_result(arms, env, st)
+      :wbool -> arm_result(arms, env, st)
+      {:opt, pay} -> opt_result(pay, arms, env, st)
       {:data, dname} -> data_result(dname, arms, env, st)
       :unknown -> :opaque
     end
@@ -1004,8 +1154,25 @@ defmodule Muro.Emit.C do
 
   defp lay_of(_, _env, _st), do: :opaque
 
+  defp wrd_lay(_k, op) when op in [true, false, :eq, :lt, :le], do: :wbool
+  defp wrd_lay(_k, :none), do: {:opt, :opaque}
+  defp wrd_lay(k, :some), do: {:opt, k}
+  defp wrd_lay(_k, :ton), do: :nat
+  defp wrd_lay(k, {:lit, _, _}), do: k
+  defp wrd_lay(k, {:of, _}), do: k
+  defp wrd_lay(k, {:cast, _}), do: k
+  defp wrd_lay(k, op) when op in [:add, :sub, :mul, :and, :or, :xor, :not, :shl, :shr], do: k
+  defp wrd_lay(k, op) when op in [:cadd, :csub, :cmul, :div, :rem], do: {:opt, k}
+  defp wrd_lay(_, _), do: :opaque
+
   defp arm_result([{:arm, _, _, body} | _], env, st), do: lay_of(body, env, st)
   defp arm_result(_, _env, _st), do: :opaque
+
+  defp opt_result(pay, [{:arm, "wsome", [y], body} | _], env, st) do
+    lay_of(body, [{y, "", pay} | env], st)
+  end
+
+  defp opt_result(_pay, arms, env, st), do: arm_result(arms, env, st)
 
   defp data_result(dname, [{:arm, cname, binders, body} | _], env, st) do
     env1 =
@@ -1035,9 +1202,15 @@ defmodule Muro.Emit.C do
   end
 
   defp match_kind(:nat, _arms, _book), do: :nat
+  defp match_kind(:wbool, _arms, _book), do: :wbool
+  defp match_kind({:opt, pay}, _arms, _book), do: {:opt, pay}
   defp match_kind({:data, "Atom"}, _arms, _book), do: :atom
   defp match_kind({:data, name}, _arms, _book), do: {:data, name}
   defp match_kind(_lay, [{:arm, "zero", [], _}, {:arm, "suc", [_], _}], _book), do: :nat
+  defp match_kind(_lay, [{:arm, "wtrue", [], _}, {:arm, "wfalse", [], _}], _book), do: :wbool
+
+  defp match_kind(_lay, [{:arm, "wsome", [_], _}, {:arm, "wnone", [], _}], _book),
+    do: {:opt, :opaque}
 
   defp match_kind(_lay, arms, book) do
     cond do
@@ -1461,10 +1634,9 @@ defmodule Muro.Emit.C do
 
   defp collect_opts(tm, acc) when is_tuple(tm) do
     acc =
-      cond do
-        match?({:opt, _}, tm) -> [tm | acc]
-        match?({:bget, _, _}, tm) -> [{:opt, :u8} | acc]
-        true -> acc
+      case carried_opt(tm) do
+        nil -> acc
+        lay -> [lay | acc]
       end
 
     Enum.reduce(Tuple.to_list(tm), acc, &collect_opts/2)
@@ -1472,6 +1644,13 @@ defmodule Muro.Emit.C do
 
   defp collect_opts(tm, acc) when is_list(tm), do: Enum.reduce(tm, acc, &collect_opts/2)
   defp collect_opts(_tm, acc), do: acc
+
+  # A checked word or a division is Opt even when no binder mentions Opt.
+  defp carried_opt({:opt, _} = lay), do: lay
+  defp carried_opt({:bget, _, _}), do: {:opt, :u8}
+  defp carried_opt({:aget, _, _}), do: {:opt, :u8}
+  defp carried_opt({:wrd, k, op, _}) when op in [:div, :rem, :cadd, :csub, :cmul], do: {:opt, k}
+  defp carried_opt(_), do: nil
 
   defp opt_payloads({:opt, p} = lay), do: [lay | opt_payloads(p)]
   defp opt_payloads({:pair, a, b}), do: opt_payloads(a) ++ opt_payloads(b)
@@ -2161,11 +2340,12 @@ defmodule Muro.Emit.C do
 
     if params == [] do
       obj = g("obj_" <> spell(d.name) <> "_" <> spell(ctor.name))
+      unused = g("unused")
 
       """
-      static #{struct_name(d.name)} #{obj} = {#{tag}};
+      __attribute__((unused)) static #{struct_name(d.name)} #{obj} = { .#{tagf} = #{tag}, .#{asf} = { .#{unused} = 0 } };
 
-      static #{ptr}#{fun}(void) { return &#{obj}; }
+      __attribute__((unused)) static #{ptr}#{fun}(void) { return &#{obj}; }
       """
       |> String.trim()
     else
@@ -2177,7 +2357,7 @@ defmodule Muro.Emit.C do
       args = Enum.map_join(params, ", ", fn {ty, n, _} -> "#{ty}#{n}" end)
 
       """
-      static #{ptr}#{fun}(#{args}) {
+      __attribute__((unused)) static #{ptr}#{fun}(#{args}) {
         #{ptr}#{p} = #{alloc}(sizeof *#{p});
         if (#{p} == 0) abort();
         #{p}->#{tagf} = #{tag};

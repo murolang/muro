@@ -387,6 +387,24 @@ defmodule Muro.Mutate do
     )
   end
 
+  defp walk({tag, e, x, p, bs} = t, span, st, acc) when tag in [:mwbool, :mopt] do
+    acc =
+      acc
+      |> add_swap_arms(t, span, st)
+      |> add_replace_rec(t, span, st)
+
+    spans = child_spans(span, 2 + length(bs))
+    acc = walk(e, Enum.at(spans, 0), plain_child(st, 0, false), acc)
+
+    Enum.with_index(bs)
+    |> Enum.reduce(acc, fn {{cname, binders, body}, i}, acc ->
+      env = word_arm_env(st, cname, binders)
+      expected = motive_type(p, x, word_ctor(cname, binders))
+      st1 = arm_child(%{st | env: env}, i + 2, expected)
+      walk(body, Enum.at(spans, i + 2), st1, acc)
+    end)
+  end
+
   defp walk({:mdata, e, x, p, bs} = t, span, st, acc) do
     acc =
       acc
@@ -494,6 +512,11 @@ defmodule Muro.Mutate do
     swap_pairs(acc, t, span, st, x, p, [{:ze, z}, {{:su, {:var, y}}, s}])
   end
 
+  defp add_swap_arms(acc, {tag, _, x, p, bs} = t, span, st) when tag in [:mwbool, :mopt] do
+    arms = Enum.map(bs, fn {c, binders, body} -> {word_ctor(c, binders), body} end)
+    swap_pairs(acc, t, span, st, x, p, arms)
+  end
+
   defp add_swap_arms(acc, {:mdata, _, x, p, bs} = t, span, st) do
     arms = Enum.map(bs, fn {c, binders, body} -> {ctor_term(c, binders), body} end)
     swap_pairs(acc, t, span, st, x, p, arms)
@@ -539,6 +562,10 @@ defmodule Muro.Mutate do
 
   defp swap_term({:mnat, e, x, p, z, y, s}, 0, 1), do: {:mnat, e, x, p, s, y, z}
 
+  defp swap_term({tag, e, x, p, bs}, i, j) when tag in [:mwbool, :mopt] do
+    {tag, e, x, p, swap_branch_bodies(bs, i, j)}
+  end
+
   defp swap_term({:mdata, e, x, p, bs}, i, j) do
     {:mdata, e, x, p, swap_branch_bodies(bs, i, j)}
   end
@@ -563,6 +590,10 @@ defmodule Muro.Mutate do
 
   defp add_replace_rec(acc, {:mnat, _, _, _, z, _, s} = t, span, st) do
     rec_on(acc, t, span, st, [z, s])
+  end
+
+  defp add_replace_rec(acc, {tag, _, _, _, bs} = t, span, st) when tag in [:mwbool, :mopt] do
+    rec_on(acc, t, span, st, Enum.map(bs, fn {_, _, body} -> body end))
   end
 
   defp add_replace_rec(acc, {:mdata, _, _, _, bs} = t, span, st) do
@@ -604,6 +635,10 @@ defmodule Muro.Mutate do
 
   defp put_arm({:mnat, e, x, p, _z, y, s}, 0, body), do: {:mnat, e, x, p, body, y, s}
   defp put_arm({:mnat, e, x, p, z, y, _}, 1, body), do: {:mnat, e, x, p, z, y, body}
+
+  defp put_arm({tag, e, x, p, bs}, i, body) when tag in [:mwbool, :mopt] do
+    {tag, e, x, p, List.update_at(bs, i, fn {c, binders, _} -> {c, binders, body} end)}
+  end
 
   defp put_arm({:mdata, e, x, p, bs}, i, body) do
     {:mdata, e, x, p, List.update_at(bs, i, fn {c, binders, _} -> {c, binders, body} end)}
@@ -1020,6 +1055,18 @@ defmodule Muro.Mutate do
     end
   end
 
+  defp word_ctor("wtrue", _), do: {:word, true, []}
+  defp word_ctor("wfalse", _), do: {:word, false, []}
+  defp word_ctor("wnone", _), do: {:word, :none, []}
+  defp word_ctor("wsome", [n]), do: {:word, :some, [{:var, n}]}
+  defp word_ctor(name, binders), do: ctor_term(name, binders)
+
+  defp word_arm_env(st, "wsome", [n]) do
+    [{n, :unknown} | st.env]
+  end
+
+  defp word_arm_env(st, _cname, _binders), do: st.env
+
   defp arm_env(st, cname, binders, scrut) do
     types =
       case ctor_field_types(st.named, cname, scrut) do
@@ -1074,6 +1121,18 @@ defmodule Muro.Mutate do
     {:pi, q, subst_name(a, name, rep, bound), x, subst_name(b, name, rep, MapSet.put(bound, x))}
   end
 
+  defp subst_name({tag, e, x, p, bs}, name, rep, bound) when tag in [:mwbool, :mopt] do
+    {tag, subst_name(e, name, rep, bound), x, subst_name(p, name, rep, MapSet.put(bound, x)),
+     Enum.map(bs, fn
+       {c, binders, body} when is_list(binders) ->
+         bbound = Enum.reduce(binders, bound, &MapSet.put(&2, &1))
+         {c, binders, subst_name(body, name, rep, bbound)}
+
+       {c, ar, body} ->
+         {c, ar, subst_name(body, name, rep, bound)}
+     end)}
+  end
+
   defp subst_name({:mnat, e, x, p, z, y, s}, name, rep, bound) do
     {:mnat, subst_name(e, name, rep, bound), x, subst_name(p, name, rep, MapSet.put(bound, x)),
      subst_name(z, name, rep, bound), y, subst_name(s, name, rep, MapSet.put(bound, y))}
@@ -1104,6 +1163,18 @@ defmodule Muro.Mutate do
   defp mentions_any?({:mnat, e, x, p, z, y, s}, names, bound) do
     mentions_any?(e, names, bound) or mentions_any?(p, names, MapSet.put(bound, x)) or
       mentions_any?(z, names, bound) or mentions_any?(s, names, MapSet.put(bound, y))
+  end
+
+  defp mentions_any?({tag, e, x, p, bs}, names, bound) when tag in [:mwbool, :mopt] do
+    mentions_any?(e, names, bound) or mentions_any?(p, names, MapSet.put(bound, x)) or
+      Enum.any?(bs, fn
+        {_, binders, body} when is_list(binders) ->
+          bound = Enum.reduce(binders, bound, &MapSet.put(&2, &1))
+          mentions_any?(body, names, bound)
+
+        {_, _, body} ->
+          mentions_any?(body, names, bound)
+      end)
   end
 
   defp mentions_any?({:mdata, e, x, p, bs}, names, bound) do
@@ -1264,6 +1335,12 @@ defmodule Muro.Mutate do
     {:matom, e, x, p, bs}
   end
 
+  defp rebuild({tag, _, x, _, bs}, kids) when tag in [:mwbool, :mopt] do
+    [e, p | bodies] = kids
+    bs = Enum.zip(bs, bodies) |> Enum.map(fn {{c, bind, _}, b} -> {c, bind, b} end)
+    {tag, e, x, p, bs}
+  end
+
   defp rebuild({:mdata, _, x, _, bs}, kids) do
     [e, p | bodies] = kids
     bs = Enum.zip(bs, bodies) |> Enum.map(fn {{c, bind, _}, b} -> {c, bind, b} end)
@@ -1419,6 +1496,12 @@ defmodule Muro.Mutate do
   defp perm_struct?(book, {:mnat, e, p, z, s}, {:mnat, e1, p1, z1, s1}, fuel) do
     perm_eq?(book, e, e1, fuel) and perm_eq?(book, p, p1, fuel) and perm_eq?(book, z, z1, fuel) and
       perm_eq?(book, s, s1, fuel)
+  end
+
+  defp perm_struct?(book, {tag, e, p, bs}, {tag, e1, p1, bs1}, fuel)
+       when tag in [:mwbool, :mopt] do
+    perm_eq?(book, e, e1, fuel) and perm_eq?(book, p, p1, fuel) and
+      perm_branches?(book, bs, bs1, fuel)
   end
 
   defp perm_struct?(book, {:mdata, e, p, bs}, {:mdata, e1, p1, bs1}, fuel) do

@@ -1,0 +1,50 @@
+-- maze_auto_e2e.muro — the three-cell maze, with no declared feature.
+--
+--   P0 ──Fwd (r = 0)──▸ P1 ──Fwd (r = 1)──▸ P2 ⟳ Fwd (r = 1)
+--    ⟳ Bwd (r = 0)       ╲ Bwd (r = 0)       ╲ Bwd (r = 0)
+--                         ╲▸ P0               ╲▸ P1
+--
+-- The reward is the reward of the state arrived at. P2 pays 1.
+-- P0 pays 0 now and 1 on the next step. Nothing in this book names
+-- a feature.
+import "../std/nat.muro"
+import "../lib/agent.muro"
+
+data State : Type where
+  P0 : State
+  P1 : State
+  P2 : State
+
+data Action : Type where
+  Fwd : Action
+  Bwd : Action
+
+def Reward : spec Type := Nat
+
+def reward-fn : run Π (s : State) → Reward :=
+  λ (s : State) →
+    match s motive (λ _ → Reward)
+      | P0 => 0
+      | P1 => 0
+      | P2 => suc 0
+
+def move : run Π (s : State) → Π (a : Action) → State :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State)
+      | P0 => (match a motive (λ _ → State) | Fwd => P1 | Bwd => P0)
+      | P1 => (match a motive (λ _ → State) | Fwd => P2 | Bwd => P0)
+      | P2 => (match a motive (λ _ → State) | Fwd => P2 | Bwd => P1)
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) → step-from (move s a)
+
+def step-from : run Π (+ s : State) → State × Reward :=
+  λ (+ s : State) → (s, reward-fn s)
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons Fwd (cons Bwd nil)
+def default-action : run Action := Bwd
+def horizon : run Nat := suc 0
+def all-states : run List State := cons P0 (cons P1 (cons P2 nil))

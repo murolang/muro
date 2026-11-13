@@ -140,6 +140,22 @@ defmodule Muro.Grade do
     end
   end
 
+  defp walk(mode, gamma, {:mwbool, e, p, bs}) do
+    with {:ok, eu} <- walk(mode, gamma, e),
+         {:ok, pu} <- under(:spec, gamma, p, 1),
+         {:ok, bu} <- walk_word_arms(mode, gamma, e, bs) do
+      {:ok, add(add(eu, pu), bu)}
+    end
+  end
+
+  defp walk(mode, gamma, {:mopt, e, p, bs}) do
+    with {:ok, eu} <- walk(mode, gamma, e),
+         {:ok, pu} <- under(:spec, gamma, p, 1),
+         {:ok, bu} <- walk_word_arms(mode, gamma, e, bs) do
+      {:ok, add(add(eu, pu), bu)}
+    end
+  end
+
   defp walk(mode, gamma, {:memp, e, p}) do
     with {:ok, eu} <- walk(mode, gamma, e),
          {:ok, pu} <- under(:spec, gamma, p, 1) do
@@ -316,6 +332,28 @@ defmodule Muro.Grade do
         {:ok, uses} -> {:cont, {:ok, max_uses(acc, uses)}}
         err -> {:halt, err}
       end
+    end)
+  end
+
+  # wsome inherits the scrutinee grade, the same way a Nat predecessor
+  # does. Marking that use absent would accept a second use of an affine
+  # payload. A zero-arity arm is checked in the outer context.
+  defp walk_word_arms(mode, gamma, scrut, branches) do
+    Enum.reduce_while(branches, {:ok, %{}}, fn
+      {"wsome", 1, body}, {:ok, acc} ->
+        case walk_pred(mode, gamma, scrut, body) do
+          {:ok, uses} -> {:cont, {:ok, max_uses(acc, uses)}}
+          err -> {:halt, err}
+        end
+
+      {_name, 0, body}, {:ok, acc} ->
+        case walk(mode, gamma, body) do
+          {:ok, uses} -> {:cont, {:ok, max_uses(acc, uses)}}
+          err -> {:halt, err}
+        end
+
+      _other, {:ok, _} ->
+        {:halt, {:error, "a grade does not cover this term"}}
     end)
   end
 

@@ -380,6 +380,40 @@ defmodule Muro.Emit do
     |> String.trim()
   end
 
+  defp emit_db({:mwbool, e, _p, bs}, d, book, names) do
+    t = word_arm(bs, "wtrue")
+    f = word_arm(bs, "wfalse")
+
+    """
+    (case #{emit_db(e, d, book, names)} do
+      true -> #{emit_db(t, d, book, names)}
+      false -> #{emit_db(f, d, book, names)}
+    end)
+    """
+    |> String.trim()
+  end
+
+  defp emit_db({:mopt, e, _p, bs}, d, book, names) do
+    {_, _, s} = Enum.find(bs, fn {n, _, _} -> n == "wsome" end)
+    n = word_arm(bs, "wnone")
+
+    pay =
+      case term_kind(e, book) do
+        {:opt, k} -> k
+        _ -> nil
+      end
+
+    some = with_kinds([pay], fn -> emit_db(s, d + 1, book, names) end)
+
+    """
+    (case #{emit_db(e, d, book, names)} do
+      {:some, #{bound_name(s, 0, d, book)}} -> #{some}
+      :none -> #{emit_db(n, d, book, names)}
+    end)
+    """
+    |> String.trim()
+  end
+
   defp emit_db({:mnat, e, _p, z, s}, d, book, names) do
     suc = with_kinds([nil], fn -> emit_db(s, d + 1, book, names) end)
 
@@ -507,6 +541,11 @@ defmodule Muro.Emit do
   end
 
   defp emit_db(_, _, _book, _names), do: "raise \"erased term\""
+
+  defp word_arm(bs, name) do
+    {_, _, body} = Enum.find(bs, fn {n, _, _} -> n == name end)
+    body
+  end
 
   defp byte_size_of(s), do: "byte_size(#{s})"
   defp bytes_eq(a, b), do: "(#{a}) == (#{b})"
@@ -652,6 +691,11 @@ defmodule Muro.Emit do
         emitted_occurs?(i + 1, s, book)
 
   defp emitted_occurs?(i, {:mdata, e, _, bs}, book) do
+    emitted_occurs?(i, e, book) or
+      Enum.any?(bs, fn {_, ar, b} -> emitted_occurs?(i + ar, b, book) end)
+  end
+
+  defp emitted_occurs?(i, {tag, e, _, bs}, book) when tag in [:mwbool, :mopt] do
     emitted_occurs?(i, e, book) or
       Enum.any?(bs, fn {_, ar, b} -> emitted_occurs?(i + ar, b, book) end)
   end
@@ -1141,6 +1185,14 @@ defmodule Muro.Emit do
   defp kind_of_annot(:i64), do: :i64
   defp kind_of_annot({:word, {:ty, k}, []}), do: k
   defp kind_of_annot({:word, {:optk, k}, []}), do: {:opt, k}
+
+  defp kind_of_annot({:word, :opt, [a]}) do
+    case kind_of_annot(a) do
+      nil -> nil
+      k -> {:opt, k}
+    end
+  end
+
   defp kind_of_annot({:word, :bool, []}), do: :bool
   defp kind_of_annot({:ann, _, a}), do: kind_of_annot(a)
   defp kind_of_annot(_), do: nil
@@ -1269,6 +1321,11 @@ defmodule Muro.Emit do
        do: term_kind(x, book)
 
   defp term_kind({:word, :not, [x]}, book), do: term_kind(x, book)
+  defp term_kind({:beq, _, _}, _book), do: :bool
+  defp term_kind({:xeq, _, _}, _book), do: :bool
+  defp term_kind({:seq, _, _}, _book), do: :bool
+  defp term_kind({:bget, _, _}, _book), do: {:opt, :u8}
+  defp term_kind({:aget, _, _}, _book), do: {:opt, :u8}
 
   defp term_kind({:app, _, _} = t, book) do
     {h, args} = spine(t, [])
