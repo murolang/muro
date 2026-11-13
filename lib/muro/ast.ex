@@ -559,6 +559,7 @@ defmodule Muro.Ast do
          {:ok, indices1} <- params_to_db(indices),
          {:ok, ctors1} <- ctors_to_db(params, ctors) do
       base = %{kind: :data, name: n, params: params1, indices: indices1, ctors: ctors1}
+      base = if Map.get(d, :unboxed) == true, do: Map.put(base, :unboxed, true), else: base
       {:ok, if(Map.has_key?(d, :loc), do: Map.put(base, :loc, d.loc), else: base)}
     end
   end

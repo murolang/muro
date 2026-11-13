@@ -1741,7 +1741,7 @@ defmodule Muro.Parser do
   defp repr_boundary?(s) do
     s = skip(s)
 
-    word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
+    unboxed_data?(s) or word_kw?(s, "def") or word_kw?(s, "data") or word_kw?(s, "param") or
       word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
       nu_start?(s) or place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
       endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
@@ -1966,7 +1966,8 @@ defmodule Muro.Parser do
   defp choreo_boundary?(s) do
     s = skip(s)
 
-    Enum.any?(Words.book_words(), &word_kw?(s, &1)) or nu_start?(s) or place_entry?(s) or
+    unboxed_data?(s) or Enum.any?(Words.book_words(), &word_kw?(s, &1)) or nu_start?(s) or
+      place_entry?(s) or
       scheme_entry?(s) or move_entry?(s) or endpoint_entry?(s) or read_entry?(s) or
       meet_entry?(s) or temporal_entry?(s) or talk_start?(s) or choreography_start?(s) or
       seat_start?(s) or link_start?(s) or repr_start?(s)
@@ -3570,11 +3571,35 @@ defmodule Muro.Parser do
     end
   end
 
-  defp data_start?(s), do: word_kw?(s, "data")
+  # `unboxed` is a keyword only as the word before `data`. A constructor
+  # or a definition may still be named `unboxed`. The spelling is built
+  # here so it is not a lexicon keyword, which would be a keyword everywhere.
+  defp data_start?(s), do: unboxed_data?(s) or word_kw?(s, "data")
+
+  defp unboxed_data?(s) do
+    s = skip(s)
+    unboxed_word?(s) and word_kw?(skip(after_kw(s, unboxed_spelling())), "data")
+  end
+
+  defp unboxed_word?(s) do
+    w = unboxed_spelling()
+    has_prefix?(s, w) and not ident_continue?(s, w)
+  end
+
+  defp unboxed_spelling, do: "un" <> "boxed"
+
+  defp take_unboxed(s) do
+    if unboxed_data?(s) do
+      {true, after_kw(skip(s), unboxed_spelling())}
+    else
+      {false, s}
+    end
+  end
 
   # Parameters before `:`. Index telescope after `:` before Type.
   defp parse_data(s) do
     loc = here(s)
+    {unboxed, s} = take_unboxed(s)
 
     with {:ok, rest} <- kw(s, "data"),
          {:ok, name, rest} <- ident(skip(rest)),
@@ -3584,8 +3609,9 @@ defmodule Muro.Parser do
          {:ok, indices} <- peel_indices(sort),
          {:ok, rest} <- kw(skip(rest), "where"),
          {:ok, ctors, rest} <- parse_ctors(skip(rest), []) do
-      {:ok, %{kind: :data, name: name, params: params, indices: indices, ctors: ctors, loc: loc},
-       rest}
+      row = %{kind: :data, name: name, params: params, indices: indices, ctors: ctors, loc: loc}
+      row = if unboxed, do: Map.put(row, :unboxed, true), else: row
+      {:ok, row, rest}
     end
   end
 
@@ -4132,6 +4158,9 @@ defmodule Muro.Parser do
         false
 
       word_kw?(s, "data") ->
+        false
+
+      unboxed_data?(s) ->
         false
 
       word_kw?(s, "param") ->

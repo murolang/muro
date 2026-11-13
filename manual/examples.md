@@ -607,6 +607,18 @@ See [Terms](language.md#bytes).
 
 See [match](language.md#match).
 
+## unboxed.muro
+
+A product of two `U64` fields and a `Slice`, declared `unboxed data`. `scan` is `sliceFold` of that product over the buffer. A newline changes the mark and replaces the view with `sliceUntil` of the original buffer. `scan b"abcd"` is four, zero marks, and the whole buffer. `scan b"ab\ncd"` is five, one mark, and `b"ab"`. Both equations are `refl`. The view is a span of the buffer the fold was given. `Cell` is ordinary data, so `bump` allocates one object.
+
+See [An unboxed product](data.md#an-unboxed-product).
+
+## word_kind.muro
+
+`nested` subtracts one length from another plus one: `subi (sliceLen s) (addi (sliceLen rest) (toU64 1))`. `mask` is a nullary `U64`, `toU64 7`. `masked` is `andi` of its argument and `noti mask`. `nested b"ab" b""` is `toU64 1`. `masked (toU64 255)` is `toU64 248`. Both equations are `refl`.
+
+See [Machine numbers](machine.md).
+
 ## request-line.muro
 
 The method and the path of one request line, as `Slice` views. `method` is the prefix before the first space. `path` is the next word. `GET /feed HTTP/1.1\r\n` gives `b"GET"` and `b"/feed"`. A missing space leaves the path empty. An empty path, two spaces in a row, is the empty view at that point. No status line, no headers, no routing.

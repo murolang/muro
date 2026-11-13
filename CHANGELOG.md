@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.20.42
+
+`unboxed data` is an ordinary inductive declaration. A field is a machine word, `WBool`, `Slice`, `Opt` of those, or another unboxed declaration. C, Rust, and Zig pass the product by value, so a `sliceFold` of it allocates nothing. Elixir emits the ordinary tagged tuple. JavaScript emits the ordinary object. Assembly stays the Nat fragment.
+
+A word operation carries the width of either operand. A literal on the right of a nested operation is enough. A name with no arguments carries the width of its type, and of its body when the type does not name one. `sliceLen` and `bytesLen` are `U64`.
+
+An option of ordinary data emits on C, and the payload is a pointer. An option of unboxed data is refused on C, Rust, and Zig. A word operation reads the width through a match.
+
+The request classifier that motivated both changes folded a nine-word header record. On muro 0.20.40, `classify` of `GET /health` allocated 4 objects and `classify` of `POST /posts` with a two-byte body allocated 6. Views stayed at 0. The same scan, with that record declared `unboxed data` and the word operations written directly, allocates 1 for each request. That object is the classified result. Views stay at 0. The generated C compiles with `-Wall -Wextra -Werror -std=c11`.
+
+### Manual
+
+- Data. Grammar. Terms. Emit. Machine numbers. Examples. Extending.
+
+### Package
+
+- Version 0.20.42.
+
 ## 0.20.41
 
 `mix muro.synth` reads a state that has fields. The tests are the constructor, whether two fields are equal, whether a field is a closed Nat, and, on a list or on the fields of one constructor, whether two positions are equal, differ by their distance, either of those, or have a given length. A test that is true on the whole cover, or false on the whole cover, is dropped. A comparison that either equality or that distance already covers drops the two narrower tests, and so does a test with the same truth vector as one already kept. The survivor is a predicate over the tests that remain. `eval` of a discovered test is a run over the state, and the checker sees that term. It does not see the search. An atomic state is not walked. A state name is not a feature. Depth does not invent a new kind of test. When two states agree on every test and their terms differ, the search adds tests at the subterm where they differ and searches again.

@@ -5633,19 +5633,95 @@ defmodule Muro.Check do
     np = length(params)
     ni = length(Map.get(d, :indices, []))
 
-    Enum.reduce_while(ctors, :ok, fn c, :ok ->
-      result =
-        with :ok <- check_ty(k, book, empty_rec(), [], c.type),
-             :ok <- grade_ctor(c.type),
-             :ok <- check_ctor_fields(k, book, empty_rec(), [], np, c.type) do
-          check_ctor_rest(k, book, name, np, ni, c.type)
-        end
+    checked =
+      Enum.reduce_while(ctors, :ok, fn c, :ok ->
+        result =
+          with :ok <- check_ty(k, book, empty_rec(), [], c.type),
+               :ok <- grade_ctor(c.type),
+               :ok <- check_ctor_fields(k, book, empty_rec(), [], np, c.type) do
+            check_ctor_rest(k, book, name, np, ni, c.type)
+          end
 
-      case fail_at(d, "#{c.name} type", result) do
+        case fail_at(d, "#{c.name} type", result) do
+          :ok -> {:cont, :ok}
+          err -> {:halt, err}
+        end
+      end)
+
+    with :ok <- checked, do: fail_at(d, "declaration", unboxed_decl(book, d))
+  end
+
+  # `unboxed` is a representation constraint. The term is still `ctor`.
+  # A grade pair is erased to affine before emit, so it stays a field.
+  defp unboxed_decl(_book, %{unboxed: true, params: [_ | _]}),
+    do: {:error, "unboxed data has parameters"}
+
+  defp unboxed_decl(_book, %{unboxed: true, indices: [_ | _]}),
+    do: {:error, "unboxed data is indexed"}
+
+  defp unboxed_decl(book, %{unboxed: true, name: name, ctors: ctors}) do
+    Enum.reduce_while(ctors, :ok, fn c, :ok ->
+      case unboxed_fields(book, c.type, [name]) do
         :ok -> {:cont, :ok}
         err -> {:halt, err}
       end
     end)
+  end
+
+  defp unboxed_decl(_book, _d), do: :ok
+
+  defp unboxed_fields(book, {:pi, q, a, _x, b}, stack) do
+    if Grade.erase(q) == :erased do
+      unboxed_fields(book, b, stack)
+    else
+      with :ok <- unboxed_type(book, a, stack), do: unboxed_fields(book, b, stack)
+    end
+  end
+
+  defp unboxed_fields(_book, _ret, _stack), do: :ok
+
+  defp unboxed_type(_book, {:word, {:ty, k}, []}, _stack) when k in [:u8, :u32, :u64], do: :ok
+  defp unboxed_type(_book, :i64, _stack), do: :ok
+  defp unboxed_type(_book, {:word, :bool, []}, _stack), do: :ok
+  defp unboxed_type(_book, :slice, _stack), do: :ok
+
+  defp unboxed_type(_book, {:word, {:optk, k}, []}, _stack) when k in [:u8, :u32, :u64, :i64],
+    do: :ok
+
+  defp unboxed_type(_book, {:word, :opt, [a]}, _stack) do
+    if unboxed_opt?(a), do: :ok, else: {:error, unboxed_field_msg()}
+  end
+
+  defp unboxed_type(book, {:def, name}, stack) do
+    cond do
+      name in stack ->
+        {:error, "unboxed data is recursive"}
+
+      match?({:ok, %{unboxed: true}}, lookup_data(book, name)) ->
+        {:ok, %{ctors: ctors}} = lookup_data(book, name)
+
+        Enum.reduce_while(ctors, :ok, fn c, :ok ->
+          case unboxed_fields(book, c.type, [name | stack]) do
+            :ok -> {:cont, :ok}
+            err -> {:halt, err}
+          end
+        end)
+
+      true ->
+        {:error, unboxed_field_msg()}
+    end
+  end
+
+  defp unboxed_type(_book, _other, _stack), do: {:error, unboxed_field_msg()}
+
+  defp unboxed_opt?({:word, {:ty, k}, []}) when k in [:u8, :u32, :u64], do: true
+  defp unboxed_opt?(:i64), do: true
+  defp unboxed_opt?({:word, :bool, []}), do: true
+  defp unboxed_opt?(:slice), do: true
+  defp unboxed_opt?(_), do: false
+
+  defp unboxed_field_msg do
+    "unboxed field is not a machine word, WBool, Slice, Opt of those, or unboxed data"
   end
 
   # Grades refine the kernel. The kernel runs first, so its message

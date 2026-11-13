@@ -5,12 +5,14 @@ defmodule Muro.Emit.Zig do
 
   The text is what `zig` translates. A refusal is the elaboration's:
   `c:lambda`, `c:machine`, `c:stream`, `c:string`, `c:erased`,
-  `c:unsupported`.
+  `c:unboxed`, `c:unsupported`. An `Opt` of unboxed data is `c:unboxed`.
 
   Every run takes an allocator first and returns an error union. A caller
   can pass a `muro__std.heap.ArenaAllocator` and reset it. `Nat` and user
-  data are tagged unions. A fieldless constructor is one static value. A
-  stream is a seed, an environment, and a step.
+  data are tagged unions. A fieldless constructor is one static value. An
+  `unboxed data` value is the union itself: its constructor does not take
+  the allocator and does not call `create`. A stream is a seed, an
+  environment, and a step.
 
   Identifiers come from `Muro.Emit.Name`. A source name is spelled there.
   A helper, a step, a constructor argument, and a temporary are generated
@@ -89,8 +91,13 @@ defmodule Muro.Emit.Zig do
   """
   def render(book, stem) when is_list(book) and is_binary(stem) do
     case IR.elaborate(book) do
-      {:ok, funs} -> compile(book, funs, stem)
-      {:error, reason} -> {:error, reason}
+      {:ok, funs} ->
+        with :ok <- Emit.refuse_unboxed_opt(book, funs) do
+          compile(book, funs, stem)
+        end
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -103,7 +110,8 @@ defmodule Muro.Emit.Zig do
   def outline(book, _stem) when is_list(book) do
     case IR.elaborate(book) do
       {:ok, funs} ->
-        with {:ok, st, groups, _scan, _flags, steps, _step_info} <- image(book, funs) do
+        with :ok <- Emit.refuse_unboxed_opt(book, funs),
+             {:ok, st, groups, _scan, _flags, steps, _step_info} <- image(book, funs) do
           user = Enum.map(groups, fn {fun, _} -> fun end)
           step_funs = Enum.flat_map(groups, fn {_fun, ss} -> ss end)
 
@@ -455,6 +463,15 @@ defmodule Muro.Emit.Zig do
             fields == [] ->
               {:ok, {lines, "#{fn_name}()", {:data, dname}, :pure, st}}
 
+            unboxed_name?(st.book, dname) ->
+              coerced =
+                [exprs, lays, effs, fields]
+                |> Enum.zip()
+                |> Enum.map(fn {ex, from, eff, to} -> coerce(force(ex, eff), from, to, st) end)
+
+              call = "#{fn_name}(#{Enum.join(coerced, ", ")})"
+              {:ok, {lines, call, {:data, dname}, :pure, st}}
+
             true ->
               coerced =
                 [exprs, lays, effs, fields]
@@ -511,10 +528,14 @@ defmodule Muro.Emit.Zig do
       {al, ae, aeff, st} = materialize(al, ae, aeff, st)
       {bl, be, beff, st} = materialize(bl, be, beff, st)
 
-      expr =
-        "#{g("pair")}(#{al()}, #{coerce(force(ae, aeff), alay, :opaque, st)}, #{coerce(force(be, beff), blay, :opaque, st)})"
+      if unboxed_lay?(st.book, alay) or unboxed_lay?(st.book, blay) do
+        {:error, "c:unboxed"}
+      else
+        expr =
+          "#{g("pair")}(#{al()}, #{coerce(force(ae, aeff), alay, :opaque, st)}, #{coerce(force(be, beff), blay, :opaque, st)})"
 
-      {:ok, {al ++ bl, expr, {:pair, alay, blay}, :fail, st}}
+        {:ok, {al ++ bl, expr, {:pair, alay, blay}, :fail, st}}
+      end
     end
   end
 
@@ -575,23 +596,28 @@ defmodule Muro.Emit.Zig do
           cap_lays = step.params |> Enum.take(length(caps)) |> Enum.map(&elem(&1, 1))
           seed_lays = step.params |> Enum.drop(length(caps)) |> Enum.map(&elem(&1, 1))
 
-          if length(cap_lays) != length(cexs) do
-            {:error, "c:unsupported"}
-          else
-            {elines, env_ex, st} =
-              env_expr(cexs, clays, ceffs, cap_lays, info, st)
+          cond do
+            length(cap_lays) != length(cexs) ->
+              {:error, "c:unsupported"}
 
-            seed_ex = coerce(force(sex, seff), slay, :opaque, st)
-            fname = Map.fetch!(st.step_names, step_name)
-            expr = "#{g("stream_new")}(#{al()}, #{seed_ex}, #{env_ex}, #{fname})"
+            unboxed_lay?(st.book, slay) or Enum.any?(clays, &unboxed_lay?(st.book, &1)) ->
+              {:error, "c:unboxed"}
 
-            lay =
-              case seed_lays do
-                [dlay] -> {:stream, dlay}
-                _ -> {:stream, slay}
-              end
+            true ->
+              {elines, env_ex, st} =
+                env_expr(cexs, clays, ceffs, cap_lays, info, st)
 
-            {:ok, {slines ++ clines ++ elines, expr, lay, :fail, st}}
+              seed_ex = coerce(force(sex, seff), slay, :opaque, st)
+              fname = Map.fetch!(st.step_names, step_name)
+              expr = "#{g("stream_new")}(#{al()}, #{seed_ex}, #{env_ex}, #{fname})"
+
+              lay =
+                case seed_lays do
+                  [dlay] -> {:stream, dlay}
+                  _ -> {:stream, slay}
+                end
+
+              {:ok, {slines ++ clines ++ elines, expr, lay, :fail, st}}
           end
         else
           _ -> {:error, "c:unsupported"}
@@ -743,7 +769,9 @@ defmodule Muro.Emit.Zig do
   end
 
   defp emit_tm({:bfold, step, caps, z, s}, env, st) do
-    with {:ok, {cl, ces, _, ceffs, st}} <- emit_list(caps, env, st),
+    cap_terms = Enum.map(caps, fn {_name, tm} -> tm end)
+
+    with {:ok, {cl, ces, _, ceffs, st}} <- emit_list(cap_terms, env, st),
          {:ok, {zl, ze, zlay, zeff, st}} <- emit_tm(z, env, st),
          {:ok, {sl, se, _, seff, st}} <- emit_tm(s, env, st) do
       {acc, st} = local(st, nil)
@@ -868,7 +896,8 @@ defmodule Muro.Emit.Zig do
                  {:error, "c:unsupported"}
              end
            end) do
-      {expr, lay, st} = finish_match(ex, rendered, st)
+      deref? = not unboxed_name?(st.book, dname)
+      {expr, lay, st} = finish_match(ex, rendered, st, deref?)
       {:ok, expr, lay, st}
     end
   end
@@ -1018,7 +1047,9 @@ defmodule Muro.Emit.Zig do
     end
   end
 
-  defp finish_match(scrut, arms, st) do
+  defp finish_match(scrut, arms, st), do: finish_match(scrut, arms, st, true)
+
+  defp finish_match(scrut, arms, st, deref?) do
     target = join_lay(Enum.map(arms, fn {_pat, {_lines, _ex, _eff}, lay} -> lay end))
 
     {rendered, st} =
@@ -1028,7 +1059,8 @@ defmodule Muro.Emit.Zig do
       end)
 
     body = Enum.map_join(rendered, "\n", fn {pat, text} -> place_arm(pat, text) end)
-    {"switch (#{scrut}.*) {\n#{body}\n}", target, st}
+    star = if deref?, do: ".*", else: ""
+    {"switch (#{scrut}#{star}) {\n#{body}\n}", target, st}
   end
 
   defp render_arm(lines, expr, eff, lay, target, st) do
@@ -1309,6 +1341,11 @@ defmodule Muro.Emit.Zig do
 
   defp pty(lay, st) when lay in [:u8, :u32, :u64, :i64, :wbool, :slice], do: zty(lay, st)
   defp pty({:opt, _} = lay, st), do: zty(lay, st)
+
+  defp pty({:data, name} = lay, st) do
+    if unboxed_name?(st.book, name), do: zty(lay, st), else: "*const " <> zty(lay, st)
+  end
+
   defp pty(lay, st), do: "*const " <> zty(lay, st)
 
   defp zty(:slice, _st), do: g("slice")
@@ -1414,6 +1451,57 @@ defmodule Muro.Emit.Zig do
     Enum.any?(book, &(Map.get(&1, :kind) == :data and &1.name == name))
   end
 
+  defp unboxed_name?(book, name) when is_binary(name) do
+    case find_data(book, name) do
+      %{unboxed: true} -> true
+      _ -> false
+    end
+  end
+
+  defp unboxed_name?(_book, _name), do: false
+
+  defp unboxed_lay?(book, {:data, name}), do: unboxed_name?(book, name)
+  defp unboxed_lay?(_book, _lay), do: false
+
+  defp order_value_deps(datas, book), do: order_value_deps(datas, book, [])
+
+  defp order_value_deps([], _book, acc), do: acc
+
+  defp order_value_deps(pending, book, acc) do
+    done = MapSet.new(Enum.map(acc, & &1.name))
+
+    {ready, rest} =
+      Enum.split_with(pending, fn d ->
+        d |> value_deps(book) |> Enum.all?(&MapSet.member?(done, &1))
+      end)
+
+    if ready == [] do
+      acc ++ pending
+    else
+      order_value_deps(rest, book, acc ++ ready)
+    end
+  end
+
+  defp value_deps(d, book) do
+    d.ctors
+    |> Enum.flat_map(fn ctor ->
+      case ctor_fields(book, d.name, ctor.name) do
+        {:ok, fields} ->
+          Enum.flat_map(fields, fn
+            {:data, name} ->
+              if name != d.name and unboxed_name?(book, name), do: [name], else: []
+
+            _ ->
+              []
+          end)
+
+        :error ->
+          []
+      end
+    end)
+    |> Enum.uniq()
+  end
+
   defp lookup(env, name) do
     Enum.find_value(env, fn
       {^name, rn, lay} -> {rn, lay}
@@ -1511,10 +1599,18 @@ defmodule Muro.Emit.Zig do
         false
 
       {:con, d, c, args} ->
+        nested = Enum.any?(args, &mentions_alloc?(&1, st))
+
         case ctor_fields(st.book, d, c) do
-          {:ok, []} -> Enum.any?(args, &mentions_alloc?(&1, st))
-          {:ok, _fields} -> true
-          :error -> true
+          {:ok, []} ->
+            nested
+
+          # An unboxed constructor returns the union. It does not create.
+          {:ok, _fields} ->
+            nested or not unboxed_name?(st.book, d)
+
+          :error ->
+            true
         end
 
       {:let, _, _, v, b} ->
@@ -1691,6 +1787,7 @@ defmodule Muro.Emit.Zig do
   defp data_items(book, st, used) do
     book
     |> data_decls()
+    |> order_value_deps(book)
     |> Enum.map_join("\n\n", &data_item(&1, st, used))
   end
 
@@ -1740,6 +1837,53 @@ defmodule Muro.Emit.Zig do
   end
 
   defp ctor_fn(c, dname, type, st) do
+    if unboxed_name?(st.book, dname) do
+      unboxed_ctor_fn(c, dname, type, st)
+    else
+      boxed_ctor_fn(c, dname, type, st)
+    end
+  end
+
+  defp unboxed_ctor_fn(c, dname, type, st) do
+    fn_name = Map.fetch!(st.ctor_fns, {dname, c.name})
+    v = Map.fetch!(st.variants, {dname, c.name})
+    {:ok, fields} = ctor_fields(st.book, dname, c.name)
+    scope = Name.open(st.globals)
+
+    {bound, _} =
+      Enum.map_reduce(Enum.with_index(fields), scope, fn {lay, i}, scope ->
+        {rn, scope} = Name.bind(g("a", i), scope)
+        {{rn, lay}, scope}
+      end)
+
+    args = Enum.map(bound, fn {rn, lay} -> "#{rn}: #{pty(lay, st)}" end)
+
+    {arglist, body} =
+      case bound do
+        [] ->
+          {"", "return .#{v};"}
+
+        [{rn, _lay}] ->
+          {"#{rn}: #{pty(elem(hd(bound), 1), st)}", "return .{ .#{v} = #{rn} };"}
+
+        _ ->
+          inner =
+            bound
+            |> Enum.with_index()
+            |> Enum.map_join(", ", fn {{rn, _lay}, i} -> ".#{g("f", i)} = #{rn}" end)
+
+          {Enum.join(args, ", "), "return .{ .#{v} = .{ #{inner} } };"}
+      end
+
+    """
+    fn #{fn_name}(#{arglist}) #{type} {
+        #{body}
+    }
+    """
+    |> String.trim()
+  end
+
+  defp boxed_ctor_fn(c, dname, type, st) do
     fn_name = Map.fetch!(st.ctor_fns, {dname, c.name})
     v = Map.fetch!(st.variants, {dname, c.name})
     {:ok, fields} = ctor_fields(st.book, dname, c.name)

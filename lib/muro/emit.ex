@@ -34,6 +34,74 @@ defmodule Muro.Emit do
   end
 
   @doc """
+  `{:error, "c:unboxed"}` when a run or a data field carries `Opt` of
+  unboxed data. The option struct is emitted before the data structs,
+  so C, Rust, and Zig refuse it. Elixir and JavaScript do not call this.
+  """
+  def refuse_unboxed_opt(book, funs) when is_list(book) and is_list(funs) do
+    if unboxed_opt_image?(book, funs), do: {:error, "c:unboxed"}, else: :ok
+  end
+
+  defp unboxed_opt_image?(book, funs) do
+    Enum.any?(funs, fn fun ->
+      contains_unboxed_opt?(book, fun.ret) or contains_unboxed_opt?(book, fun.params) or
+        contains_unboxed_opt?(book, fun.body)
+    end) or Enum.any?(book, &unboxed_opt_fields?(book, &1))
+  end
+
+  defp unboxed_opt_fields?(book, %{kind: :data, ctors: ctors}) do
+    Enum.any?(ctors, fn ctor -> unboxed_opt_type?(book, ctor.type) end)
+  end
+
+  defp unboxed_opt_fields?(_book, _decl), do: false
+
+  defp unboxed_opt_type?(book, {:pi, :erased, _, _, b}), do: unboxed_opt_type?(book, b)
+
+  defp unboxed_opt_type?(book, {:pi, _, a, _, b}) do
+    type_is_unboxed_opt?(book, a) or unboxed_opt_type?(book, b)
+  end
+
+  defp unboxed_opt_type?(_book, _ty), do: false
+
+  defp type_is_unboxed_opt?(book, {:word, :opt, [a]}) do
+    unboxed_type_name?(book, a) or type_is_unboxed_opt?(book, a)
+  end
+
+  defp type_is_unboxed_opt?(book, {:ann, e, _}), do: type_is_unboxed_opt?(book, e)
+  defp type_is_unboxed_opt?(_book, _ty), do: false
+
+  defp unboxed_type_name?(book, {:def, name}), do: unboxed_decl?(book, name)
+  defp unboxed_type_name?(book, {:var, name}) when is_binary(name), do: unboxed_decl?(book, name)
+  defp unboxed_type_name?(book, {:app, f, _}), do: unboxed_type_name?(book, f)
+  defp unboxed_type_name?(book, {:ann, e, _}), do: unboxed_type_name?(book, e)
+  defp unboxed_type_name?(_book, _ty), do: false
+
+  defp unboxed_decl?(book, name) do
+    Enum.any?(book, fn
+      %{kind: :data, name: ^name, unboxed: true} -> true
+      _ -> false
+    end)
+  end
+
+  defp contains_unboxed_opt?(book, {:opt, pay}) do
+    unboxed_payload?(book, pay) or contains_unboxed_opt?(book, pay)
+  end
+
+  defp contains_unboxed_opt?(book, t) when is_tuple(t) do
+    Enum.any?(Tuple.to_list(t), &contains_unboxed_opt?(book, &1))
+  end
+
+  defp contains_unboxed_opt?(book, t) when is_list(t) do
+    Enum.any?(t, &contains_unboxed_opt?(book, &1))
+  end
+
+  defp contains_unboxed_opt?(_book, _t), do: false
+
+  defp unboxed_payload?(book, {:data, name}) when is_binary(name), do: unboxed_decl?(book, name)
+  defp unboxed_payload?(book, {:opt, pay}), do: unboxed_payload?(book, pay)
+  defp unboxed_payload?(_book, _pay), do: false
+
+  @doc """
   Group each elaborated run with the unfold steps it closed.
 
   A generated step has `generated: true`. It follows the run that
@@ -1313,12 +1381,15 @@ defmodule Muro.Emit do
   defp term_kind({:word, :some, [t]}, book), do: {:opt, term_kind(t, book)}
   defp term_kind({:word, op, [_x, _]}, _book) when op in [:eq, :lt, :le], do: :bool
 
-  defp term_kind({:word, op, [x, _]}, book) when op in [:cadd, :csub, :cmul, :div, :rem],
-    do: {:opt, term_kind(x, book)}
+  # Both operands are words. A literal on either side is enough: the
+  # checker already requires one width. A shift's amount is a Nat.
+  defp term_kind({:word, op, [x, y]}, book) when op in [:cadd, :csub, :cmul, :div, :rem],
+    do: {:opt, either_word_kind(x, y, book)}
 
-  defp term_kind({:word, op, [x, _]}, book)
-       when op in [:add, :sub, :mul, :and, :or, :xor, :shl, :shr],
-       do: term_kind(x, book)
+  defp term_kind({:word, op, [x, y]}, book) when op in [:add, :sub, :mul, :and, :or, :xor],
+    do: either_word_kind(x, y, book)
+
+  defp term_kind({:word, op, [x, _]}, book) when op in [:shl, :shr], do: term_kind(x, book)
 
   defp term_kind({:word, :not, [x]}, book), do: term_kind(x, book)
   defp term_kind({:beq, _, _}, _book), do: :bool
@@ -1326,6 +1397,25 @@ defmodule Muro.Emit do
   defp term_kind({:seq, _, _}, _book), do: :bool
   defp term_kind({:bget, _, _}, _book), do: {:opt, :u8}
   defp term_kind({:aget, _, _}, _book), do: {:opt, :u8}
+  defp term_kind({:blen, _}, _book), do: :u64
+  defp term_kind({:xlen, _}, _book), do: :u64
+  defp term_kind({:def, n}, book), do: def_word_kind(n, book)
+
+  # `to_db` drops the motive binder. Each arm is `{name, count, body}`.
+  # A kind is kept when every arm that has one names that same kind.
+  defp term_kind({:mwbool, _e, _p, bs}, book), do: agreed_kind(arm_kinds(bs, book, nil))
+
+  defp term_kind({:mopt, e, _p, bs}, book) do
+    pay =
+      case term_kind(e, book) do
+        {:opt, k} -> k
+        _ -> nil
+      end
+
+    agreed_kind(arm_kinds(bs, book, pay))
+  end
+
+  defp term_kind({:mdata, _e, _p, bs}, book), do: agreed_kind(arm_kinds(bs, book, nil))
 
   defp term_kind({:app, _, _} = t, book) do
     {h, args} = spine(t, [])
@@ -1348,9 +1438,59 @@ defmodule Muro.Emit do
 
   defp term_kind(_, _book), do: nil
 
+  defp arm_kinds(bs, book, some_kind) do
+    Enum.map(bs, fn {name, ar, body} ->
+      ks =
+        if name == "wsome",
+          do: List.duplicate(some_kind, ar),
+          else: List.duplicate(nil, ar)
+
+      with_kinds(ks, fn -> term_kind(body, book) end)
+    end)
+  end
+
+  defp agreed_kind(kinds) do
+    case kinds |> Enum.reject(&is_nil/1) |> Enum.uniq() do
+      [k] -> k
+      _ -> nil
+    end
+  end
+
   defp result_kind(ty, 0), do: kind_of_annot(ty)
   defp result_kind({:pi, _, _, _, b}, n) when n > 0, do: result_kind(b, n - 1)
   defp result_kind(_, _), do: nil
+
+  defp either_word_kind(x, y, book) do
+    case term_kind(x, book) || term_kind(y, book) do
+      k when k in [:u8, :u32, :u64, :i64] -> k
+      _ -> nil
+    end
+  end
+
+  # A nullary name carries the kind of its type, then of its body.
+  # The seen set stops a body that mentions its own name.
+  defp def_word_kind(n, book) do
+    key = {Muro.Emit, :word_kind_seen}
+    seen = Process.get(key) || MapSet.new()
+
+    if MapSet.member?(seen, n) do
+      nil
+    else
+      Process.put(key, MapSet.put(seen, n))
+
+      try do
+        case Enum.find(book, &(Map.get(&1, :name) == n and Map.get(&1, :kind, :def) == :def)) do
+          nil ->
+            nil
+
+          dfn ->
+            kind_of_annot(dfn.type) || term_kind(dfn.body, book)
+        end
+      after
+        Process.put(key, seen)
+      end
+    end
+  end
 
   defp indent(s, n) do
     pad = String.duplicate(" ", n)

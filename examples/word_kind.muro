@@ -1,0 +1,18 @@
+-- word_kind.muro — a nested word operation and a nullary word name.
+-- The literal on the right of addi carries the width. mask carries the
+-- width of its body. Nothing here is an HTTP parser.
+
+def nested : run Π (s : Slice) → Π (rest : Slice) → U64 :=
+  λ (s : Slice) → λ (rest : Slice) →
+    subi (sliceLen s) (addi (sliceLen rest) (toU64 1))
+
+def nestedOne : run U64 := nested b"ab" b""
+
+def nested-one : evidence {nested b"ab" b"" ≡ toU64 1 : U64} := refl
+
+def mask : run U64 := toU64 7
+
+def masked : run Π (n : U64) → U64 :=
+  λ (n : U64) → andi n (noti mask)
+
+def masked-255 : evidence {masked (toU64 255) ≡ toU64 248 : U64} := refl
