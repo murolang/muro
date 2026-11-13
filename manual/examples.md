@@ -601,6 +601,12 @@ Kernel `Bytes` and `Slice`. A literal is `b"…"`, with `\\`, `\"`, `\n`, `\r`, 
 
 See [Terms](language.md#bytes).
 
+## word_match.muro
+
+`match` on `WBool` and on `Opt`. `wtrue` and `wfalse` are the bool arms. `wsome` and `wnone` are the option arms. A closed `bytesEq` and a closed `sliceGet` reduce, and the equations are `refl`. A `match` may return a `Slice`. `dropCR` returns its argument, or one octet of it, and that octet is a view of the same buffer.
+
+See [match](language.md#match).
+
 ## request-line.muro
 
 The method and the path of one request line, as `Slice` views. `method` is the prefix before the first space. `path` is the next word. `GET /feed HTTP/1.1\r\n` gives `b"GET"` and `b"/feed"`. A missing space leaves the path empty. An empty path, two spaces in a row, is the empty view at that point. No status line, no headers, no routing.

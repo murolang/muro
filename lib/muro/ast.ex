@@ -26,6 +26,8 @@ defmodule Muro.Ast do
           | :one
           | :empty
           | {:mdata, named, name, named, [{name, [name], named}]}
+          | {:mwbool, named, name, named, [{name, [name], named}]}
+          | {:mopt, named, name, named, [{name, [name], named}]}
           | {:mnat, named, name, named, named, name, named}
           | {:memp, named, name, named}
           | {:munit, named, name, named, named}
@@ -95,6 +97,8 @@ defmodule Muro.Ast do
           | :one
           | :empty
           | {:mdata, db, db, [{name, non_neg_integer(), db}]}
+          | {:mwbool, db, db, [{name, non_neg_integer(), db}]}
+          | {:mopt, db, db, [{name, non_neg_integer(), db}]}
           | {:mnat, db, db, db, db}
           | {:memp, db, db}
           | {:munit, db, db, db}
@@ -214,6 +218,8 @@ defmodule Muro.Ast do
       {:munit, e, _, p, u} -> [e, p, u]
       {:matom, e, _, p, bs} -> [e, p | Enum.map(bs, fn {_, b} -> b end)]
       {:mdata, e, _, p, bs} -> [e, p | Enum.map(bs, fn {_, _, b} -> b end)]
+      {:mwbool, e, _, p, bs} -> [e, p | Enum.map(bs, fn {_, _, b} -> b end)]
+      {:mopt, e, _, p, bs} -> [e, p | Enum.map(bs, fn {_, _, b} -> b end)]
       {:tensor, a, b} -> [a, b]
       {:addi, a, b} -> [a, b]
       {:muli, a, b} -> [a, b]
@@ -268,6 +274,14 @@ defmodule Muro.Ast do
          {:ok, p1} <- to_db(p, [x | env]),
          {:ok, bs} <- to_db_branches(branches, env) do
       {:ok, {:mdata, e1, p1, bs}}
+    end
+  end
+
+  def to_db({tag, e, x, p, branches}, env) when tag in [:mwbool, :mopt] do
+    with {:ok, e1} <- to_db(e, env),
+         {:ok, p1} <- to_db(p, [x | env]),
+         {:ok, bs} <- to_db_branches(branches, env) do
+      {:ok, {tag, e1, p1, bs}}
     end
   end
 

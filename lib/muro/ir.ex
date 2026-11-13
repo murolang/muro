@@ -490,6 +490,27 @@ defmodule Muro.IR do
     end
   end
 
+  # Match on WBool. The image is the word the backends already use.
+  defp elab_form(st, {:mwbool, e, mx, mot, bs}, ctx, k) do
+    with {:ok, ee} <- elab(st, e, ctx, k),
+         :ok <- wbool_arms(bs),
+         {:ok, {arms, steps, k1}} <- elab_wbool_arms(st, bs, ctx, ee.k),
+         {:ok, rlay} <- motive_lay(st, mot, ee.lay, mx) do
+      ok(match_tm(st, ee.tm, :wbool, arms), rlay, ee.steps ++ steps, k1)
+    end
+  end
+
+  # Match on Opt. The payload is by value. wnone carries no binder.
+  defp elab_form(st, {:mopt, e, mx, mot, bs}, ctx, k) do
+    with {:ok, ee} <- elab(st, e, ctx, k),
+         :ok <- opt_arms(bs),
+         pay = opt_payload_lay(ee.lay),
+         {:ok, {arms, steps, k1}} <- elab_opt_arms(st, bs, pay, ctx, ee.k),
+         {:ok, rlay} <- motive_lay(st, mot, ee.lay, mx) do
+      ok(match_tm(st, ee.tm, {:opt, pay}, arms), rlay, ee.steps ++ steps, k1)
+    end
+  end
+
   defp elab_form(st, {:unf, seed, {:lam, q, dom, name, body}}, ctx, k) do
     with {:ok, ee} <- elab(st, seed, ctx, k),
          {:ok, dlay} <- layout_of(st, dom) do
@@ -1201,6 +1222,14 @@ defmodule Muro.IR do
     free_names(e, bound) ++ free_names(p, MapSet.put(bound, x)) ++ free_names(u, bound)
   end
 
+  defp free_names({tag, e, x, p, bs}, bound) when tag in [:mwbool, :mopt] do
+    free_names(e, bound) ++
+      free_names(p, MapSet.put(bound, x)) ++
+      Enum.flat_map(bs, fn {_c, binders, body} ->
+        free_names(body, Enum.reduce(binders, bound, &MapSet.put(&2, &1)))
+      end)
+  end
+
   defp free_names({:rwt, e, x, p, t}, bound) do
     free_names(e, bound) ++ free_names(p, MapSet.put(bound, x)) ++ free_names(t, bound)
   end
@@ -1250,6 +1279,31 @@ defmodule Muro.IR do
   # `{:match, scrut, arms}` and must keep seeing that tuple.
   defp match_tm(%{closures: true}, scrut, kind, arms), do: {:match, scrut, kind, arms}
   defp match_tm(_st, scrut, _kind, arms), do: {:match, scrut, arms}
+
+  defp wbool_arms([{"wtrue", [], _}, {"wfalse", [], _}]), do: :ok
+  defp wbool_arms(_), do: {:error, "c:unsupported"}
+
+  defp opt_arms([{"wsome", [_], _}, {"wnone", [], _}]), do: :ok
+  defp opt_arms(_), do: {:error, "c:unsupported"}
+
+  defp opt_payload_lay({:opt, pay}), do: pay
+  defp opt_payload_lay(_), do: :opaque
+
+  defp elab_wbool_arms(st, [{"wtrue", [], t}, {"wfalse", [], f}], ctx, k) do
+    with {:ok, te} <- elab(st, t, ctx, k),
+         {:ok, fe} <- elab(st, f, ctx, te.k) do
+      arms = [{:arm, "wtrue", [], te.tm}, {:arm, "wfalse", [], fe.tm}]
+      {:ok, {arms, te.steps ++ fe.steps, fe.k}}
+    end
+  end
+
+  defp elab_opt_arms(st, [{"wsome", [y], s}, {"wnone", [], n}], pay, ctx, k) do
+    with {:ok, se} <- elab(st, s, [{:live, y, pay} | ctx], k),
+         {:ok, ne} <- elab(st, n, ctx, se.k) do
+      arms = [{:arm, "wsome", [y], se.tm}, {:arm, "wnone", [], ne.tm}]
+      {:ok, {arms, se.steps ++ ne.steps, ne.k}}
+    end
+  end
 
   defp ok(tm, lay, steps, k), do: {:ok, %{tm: tm, lay: lay, steps: steps, k: k}}
 end

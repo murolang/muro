@@ -4011,6 +4011,16 @@ defmodule Muro.Session do
     outside_fragment(e) || branch_fragment(branches)
   end
 
+  defp outside_fragment({tag, e, _, branches})
+       when tag in [:mwbool, :mopt] and is_list(branches) do
+    outside_fragment(e) || branch_fragment(branches)
+  end
+
+  defp outside_fragment({tag, e, _, _, branches})
+       when tag in [:mwbool, :mopt] and is_list(branches) do
+    outside_fragment(e) || branch_fragment(branches)
+  end
+
   defp outside_fragment(other), do: fragment_head(other)
 
   defp branch_fragment(branches) do
@@ -4316,6 +4326,12 @@ defmodule Muro.Session do
     do: any_var(p, e) or any_arms(p, branches)
 
   defp any_var(p, {:mdata, e, _, _, branches}) when is_list(branches),
+    do: any_var(p, e) or any_arms(p, branches)
+
+  defp any_var(p, {tag, e, _, branches}) when tag in [:mwbool, :mopt] and is_list(branches),
+    do: any_var(p, e) or any_arms(p, branches)
+
+  defp any_var(p, {tag, e, _, _, branches}) when tag in [:mwbool, :mopt] and is_list(branches),
     do: any_var(p, e) or any_arms(p, branches)
 
   defp any_var(_, _), do: false
@@ -6695,6 +6711,28 @@ defmodule Muro.Session do
     end
   end
 
+  defp ev({:mwbool, e, _motive, branches}, env, prefix, defs, book) do
+    case ev(e, env, prefix, defs, book) do
+      {:ok, true} -> ev_word_arm(branches, "wtrue", [], env, prefix, defs, book)
+      {:ok, false} -> ev_word_arm(branches, "wfalse", [], env, prefix, defs, book)
+      {:ok, {:word, true, []}} -> ev_word_arm(branches, "wtrue", [], env, prefix, defs, book)
+      {:ok, {:word, false, []}} -> ev_word_arm(branches, "wfalse", [], env, prefix, defs, book)
+      {:ok, _} -> {:ok, :miss}
+      other -> other
+    end
+  end
+
+  defp ev({:mopt, e, _motive, branches}, env, prefix, defs, book) do
+    case ev(e, env, prefix, defs, book) do
+      {:ok, {:some, a}} -> ev_word_arm(branches, "wsome", [a], env, prefix, defs, book)
+      {:ok, :none} -> ev_word_arm(branches, "wnone", [], env, prefix, defs, book)
+      {:ok, {:word, :some, [a]}} -> ev_word_arm(branches, "wsome", [a], env, prefix, defs, book)
+      {:ok, {:word, :none, []}} -> ev_word_arm(branches, "wnone", [], env, prefix, defs, book)
+      {:ok, _} -> {:ok, :miss}
+      other -> other
+    end
+  end
+
   defp ev({:mdata, e, _motive, branches}, env, prefix, defs, book) do
     case ev(e, env, prefix, defs, book) do
       {:ok, val} ->
@@ -6729,6 +6767,16 @@ defmodule Muro.Session do
   end
 
   defp ev(_, _, _, _, _), do: {:ok, :miss}
+
+  defp ev_word_arm(branches, name, args, env, prefix, defs, book) do
+    case find_branch(branches, name) do
+      {_, arity, body} when length(args) == arity ->
+        ev(body, Enum.reverse(args) ++ env, prefix, defs, book)
+
+      _ ->
+        {:ok, :miss}
+    end
+  end
 
   defp tagged(:b0), do: {:con, "b0", []}
   defp tagged(:b1), do: {:con, "b1", []}

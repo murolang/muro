@@ -450,13 +450,13 @@ defmodule Muro.EmitCTest do
     false_obj = Muro.Emit.Name.gen("obj_#{bool}_#{false_k}")
     bare_obj = Muro.Emit.Name.gen("obj_#{wrap}_bare")
     zed_obj = Muro.Emit.Name.gen("obj_#{tok}_#{zed}")
-    assert source =~ "static #{bool} #{true_obj} = {0};"
+    assert source =~ "static #{bool} #{true_obj} = #{fieldless(0)};"
     assert source =~ "static #{bool} *#{true_k}(void) { return &#{true_obj}; }"
-    assert source =~ "static #{bool} #{false_obj} = {1};"
+    assert source =~ "static #{bool} #{false_obj} = #{fieldless(1)};"
     assert source =~ "static #{bool} *#{false_k}(void) { return &#{false_obj}; }"
-    assert source =~ "static #{wrap} #{bare_obj} = {0};"
+    assert source =~ "static #{wrap} #{bare_obj} = #{fieldless(0)};"
     assert source =~ "static #{wrap} *bare(void) { return &#{bare_obj}; }"
-    assert source =~ "static #{tok} #{zed_obj} = {0};"
+    assert source =~ "static #{tok} #{zed_obj} = #{fieldless(0)};"
     assert source =~ "static #{tok} *#{zed}(void) { return &#{zed_obj}; }"
     assert source =~ "static #{wrap} *box(muro__nat *#{f0}) {"
     assert source =~ "#{wrap} *#{p} = muro__ALLOC(sizeof *#{p});"
@@ -472,7 +472,7 @@ defmodule Muro.EmitCTest do
     f0 = Muro.Emit.Name.gen("f", 0)
     f1 = Muro.Emit.Name.gen("f", 1)
     p = Muro.Emit.Name.gen("p")
-    assert list_c =~ "static List #{nil_obj} = {0};"
+    assert list_c =~ "static List #{nil_obj} = #{fieldless(0)};"
     assert list_c =~ "static List *nil(void) { return &#{nil_obj}; }"
     assert list_c =~ "static List *cons(void *#{f0}, List *#{f1}) {"
     assert list_c =~ "List *#{p} = muro__ALLOC(sizeof *#{p});"
@@ -498,7 +498,7 @@ defmodule Muro.EmitCTest do
     assert source =~ "muro__ALLOC(sizeof *muro__p)"
 
     assert source =~
-             "static Bool #{Muro.Emit.Name.gen("obj_Bool_" <> Muro.Emit.C.source_id("true"))} = {0};"
+             "static Bool #{Muro.Emit.Name.gen("obj_Bool_" <> Muro.Emit.C.source_id("true"))} = #{fieldless(0)};"
 
     refute source =~ "malloc("
     cc!(dir, "call.c", "call.o")
@@ -1118,9 +1118,21 @@ defmodule Muro.EmitCTest do
     dir
   end
 
+  defp fieldless(tag) do
+    tagf = Muro.Emit.Name.gen("field_tag")
+    asf = Muro.Emit.Name.gen("as")
+    unused = Muro.Emit.Name.gen("unused")
+    "{ .#{tagf} = #{tag}, .#{asf} = { .#{unused} = 0 } }"
+  end
+
   defp cc!(dir, src, obj, extra \\ []) do
     {out, status} =
-      System.cmd("cc", extra ++ ["-c", src, "-o", obj], cd: dir, stderr_to_stdout: true)
+      System.cmd(
+        "cc",
+        ~w(-Wall -Wextra -Werror -std=c11 -c) ++ extra ++ [src, "-o", obj],
+        cd: dir,
+        stderr_to_stdout: true
+      )
 
     assert status == 0, out
   end

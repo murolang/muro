@@ -4847,6 +4847,8 @@ defmodule Muro.Parser do
       cond do
         word_kw?(rest, "0") -> parse_mnat_cases(loc, e, x, p, rest)
         atom_lit?(rest) -> parse_matom_cases(loc, e, x, p, rest)
+        word_head?(rest, ["wtrue", "wfalse"]) -> parse_word_cases(loc, e, x, p, rest, :mwbool)
+        word_head?(rest, ["wsome", "wnone"]) -> parse_word_cases(loc, e, x, p, rest, :mopt)
         true -> parse_mdata_cases(loc, e, x, p, rest)
       end
     end
@@ -4927,6 +4929,16 @@ defmodule Muro.Parser do
   defp parse_mdata_cases(loc, e, x, p, rest) do
     with {:ok, branches, rest} <- parse_mdata_branches(rest, []) do
       ok_node(loc, {:mdata, e, x, p, branches}, 2 + length(branches), rest)
+    end
+  end
+
+  # wtrue / wfalse and wsome / wnone are kernel constructors. ident/1
+  # accepts them as data names, so the word head is chosen first.
+  defp word_head?(s, heads), do: Enum.any?(heads, &word_kw?(s, &1))
+
+  defp parse_word_cases(loc, e, x, p, rest, tag) do
+    with {:ok, branches, rest} <- parse_mdata_branches(rest, []) do
+      ok_node(loc, {tag, e, x, p, branches}, 2 + length(branches), rest)
     end
   end
 

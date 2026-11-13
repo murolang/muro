@@ -52,7 +52,9 @@ defmodule Muro.GenNativeTest do
 
     if System.find_executable("cc") do
       {result, status} =
-        System.cmd("cc", ["-c", "src/rounding.c", "-o", "rounding.o"],
+        System.cmd(
+          "cc",
+          ~w(-Wall -Wextra -Werror -std=c11 -c src/rounding.c -o rounding.o),
           cd: dir,
           stderr_to_stdout: true
         )

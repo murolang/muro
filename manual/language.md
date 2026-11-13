@@ -299,6 +299,20 @@ match m motive (λ _ → A)
 
 Motives are written in parentheses. Nested λ in the motive cover index binders (see [Indexed data](indexed.md)).
 
+`WBool` and `Opt` use the same eliminator. The arms are the kernel constructors, in that order. A missing arm, a misspelled constructor, and a body that does not inhabit the motive are refused.
+
+```
+match b motive (λ _ → Nat)
+  | wtrue => 0
+  | wfalse => suc 0
+
+match o motive (λ _ → U64)
+  | wsome n => n
+  | wnone => toU64 0
+```
+
+`n` has the quantity of the scrutinee when the scrutinee is a variable, the same way a `suc` binder does. A closed scrutinee reduces, so `match (bytesEq b"a" b"a") … | wtrue => suc 0 | wfalse => 0` is `suc 0` by `refl`, and `match (sliceGet b"ab" (toU64 0)) … | wsome n => n | wnone => toU8 0` is `toU8 97` by `refl`. `examples/word_match.muro` is the worked book. A `match` whose result is a `Slice` returns that view. An arm that returns `slice s off len` still points into `s`.
+
 ## A bounded field
 
 A constructor may bound a nat field by a numeral. The bound sits after the binder and before the arrow. The left side is that field. The right side is a canonical decimal. `<=` is the same token as `≤`.

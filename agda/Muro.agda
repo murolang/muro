@@ -16,6 +16,7 @@ open import Muro.Env public
 open import Muro.Check public
 import Muro.String
 import Muro.Bytes
+import Muro.WordElim
 import Muro.SubstLemmas
 import Muro.Spine
 import Muro.Reduction

@@ -136,6 +136,10 @@ defmodule Muro.Subst do
         {:mdata, ren(rho, e), ren(lift(rho), p),
          Enum.map(bs, fn {n, ar, b} -> {n, ar, ren(lift_n(rho, ar), b)} end)}
 
+      {tag, e, p, bs} when tag in [:mwbool, :mopt] ->
+        {tag, ren(rho, e), ren(lift(rho), p),
+         Enum.map(bs, fn {n, ar, b} -> {n, ar, ren(lift_n(rho, ar), b)} end)}
+
       {:mnat, e, p, z, s} ->
         {:mnat, ren(rho, e), ren(lift(rho), p), ren(rho, z), ren(lift(rho), s)}
 
@@ -358,6 +362,10 @@ defmodule Muro.Subst do
         {:mdata, sub(sigma, e), sub(lifts(sigma), p),
          Enum.map(bs, fn {n, ar, b} -> {n, ar, sub(lifts_n(sigma, ar), b)} end)}
 
+      {tag, e, p, bs} when tag in [:mwbool, :mopt] ->
+        {tag, sub(sigma, e), sub(lifts(sigma), p),
+         Enum.map(bs, fn {n, ar, b} -> {n, ar, sub(lifts_n(sigma, ar), b)} end)}
+
       {:mnat, e, p, z, s} ->
         {:mnat, sub(sigma, e), sub(lifts(sigma), p), sub(sigma, z), sub(lifts(sigma), s)}
 
@@ -470,6 +478,18 @@ defmodule Muro.Subst do
     sub(
       fn
         0 -> {:su, {:var, 0}}
+        i -> {:var, i}
+      end,
+      p
+    )
+  end
+
+  # The wsome arm opens one binder. Index 0 of the motive becomes
+  # wsome of that binder. Outer indices stay put, as in mot_suc.
+  def mot_some(p) do
+    sub(
+      fn
+        0 -> {:word, :some, [{:var, 0}]}
         i -> {:var, i}
       end,
       p

@@ -554,6 +554,40 @@ defmodule Muro.Check do
     end
   end
 
+  # Muro.WordElim.elimBool. wtrue takes the first arm, wfalse the second.
+  defp whnf(k, book, {:mwbool, e, p, bs}, unfold) do
+    case whnf(k - 1, book, e, unfold) do
+      {:ok, {:word, true, []} = e1} ->
+        whnf_word_arm(k, book, bs, "wtrue", [], {:mwbool, e1, p, bs}, unfold)
+
+      {:ok, {:word, false, []} = e1} ->
+        whnf_word_arm(k, book, bs, "wfalse", [], {:mwbool, e1, p, bs}, unfold)
+
+      {:ok, e1} ->
+        {:ok, {:mwbool, e1, p, bs}}
+
+      err ->
+        err
+    end
+  end
+
+  # Muro.WordElim.elimOpt. wsome instantiates the payload. wnone takes the second arm.
+  defp whnf(k, book, {:mopt, e, p, bs}, unfold) do
+    case whnf(k - 1, book, e, unfold) do
+      {:ok, {:word, :some, [a]} = e1} ->
+        whnf_word_arm(k, book, bs, "wsome", [a], {:mopt, e1, p, bs}, unfold)
+
+      {:ok, {:word, :none, []} = e1} ->
+        whnf_word_arm(k, book, bs, "wnone", [], {:mopt, e1, p, bs}, unfold)
+
+      {:ok, e1} ->
+        {:ok, {:mopt, e1, p, bs}}
+
+      err ->
+        err
+    end
+  end
+
   defp whnf(k, book, {:memp, e, p}, unfold) do
     with {:ok, e1} <- whnf(k - 1, book, e, unfold), do: {:ok, {:memp, e1, p}}
   end
@@ -725,6 +759,13 @@ defmodule Muro.Check do
   end
 
   defp whnf(_, _, t, _), do: {:ok, t}
+
+  defp whnf_word_arm(k, book, bs, name, args, stuck, unfold) do
+    case Enum.find(bs, fn {n, _, _} -> n == name end) do
+      {_, _, b} -> whnf(k - 1, book, Subst.inst_n(b, args), unfold)
+      nil -> {:ok, stuck}
+    end
+  end
 
   defp scat_step({:slit, x}, {:slit, y}), do: {:slit, x <> y}
   defp scat_step(a, b), do: {:scat, a, b}
@@ -1273,6 +1314,8 @@ defmodule Muro.Check do
   end
 
   defp stuck_form?({:mdata, _, _, _}), do: true
+  defp stuck_form?({:mwbool, _, _, _}), do: true
+  defp stuck_form?({:mopt, _, _, _}), do: true
   defp stuck_form?({:mnat, _, _, _, _}), do: true
   defp stuck_form?({:memp, _, _}), do: true
   defp stuck_form?({:munit, _, _, _}), do: true
@@ -1518,6 +1561,14 @@ defmodule Muro.Check do
     end
   end
 
+  defp conv_n(k, book, names, {tag, e, p, bs}, {tag, e1, p1, bs1}, seen)
+       when tag in [:mwbool, :mopt] do
+    case conv_all(k, [at(k, book, names, e, e1, seen), at(k, book, names, p, p1, seen)]) do
+      {:ok, k1} -> conv_mdata_bs(k, k1, book, names, bs, bs1, seen)
+      err -> err
+    end
+  end
+
   defp conv_n(k, _book, names, u, v, _seen),
     do: {:error, "cannot convert #{Print.term(u, names)} ≁ #{Print.term(v, names)}", k}
 
@@ -1742,6 +1793,27 @@ defmodule Muro.Check do
     end
   end
 
+  # Opt A, or the saturated Opt of a machine word. The payload is the
+  # type the wsome binder has.
+  defp view_opt(k, book, t, names) do
+    with {:ok, t1} <- whnf(k, book, t) do
+      case t1 do
+        {:word, {:optk, kd}, []} ->
+          {:ok, Word.word_ty(kd)}
+
+        {:word, :opt, [a]} ->
+          case is_data(k, book, a) do
+            {:ok, true} -> {:ok, a}
+            {:ok, false} -> {:error, "expected Opt, got #{Print.term(t1, names)}"}
+            err -> err
+          end
+
+        _ ->
+          {:error, "expected Opt, got #{Print.term(t1, names)}"}
+      end
+    end
+  end
+
   defp ctor_spine(book, t) do
     {h, args} = apps(t)
 
@@ -1800,6 +1872,11 @@ defmodule Muro.Check do
       Enum.any?(bs, fn {_, _, b} -> has_self?(self, b) end)
   end
 
+  defp has_self?(self, {tag, e, p, bs}) when tag in [:mwbool, :mopt] do
+    has_self?(self, e) or has_self?(self, p) or
+      Enum.any?(bs, fn {_, _, b} -> has_self?(self, b) end)
+  end
+
   defp has_self?(self, {:mnat, e, p, z, s}),
     do: has_self?(self, e) or has_self?(self, p) or has_self?(self, z) or has_self?(self, s)
 
@@ -1854,6 +1931,11 @@ defmodule Muro.Check do
   # occℕList stays at i because each Agda branch is a telescope of λs.
   # The stored branch is that body, already shifted by its field binders.
   defp occurs?(x, {:mdata, e, p, bs}) do
+    occurs?(x, e) or occurs?(x + 1, p) or
+      Enum.any?(bs, fn {_, ar, b} -> occurs?(x + ar, b) end)
+  end
+
+  defp occurs?(x, {tag, e, p, bs}) when tag in [:mwbool, :mopt] do
     occurs?(x, e) or occurs?(x + 1, p) or
       Enum.any?(bs, fn {_, ar, b} -> occurs?(x + ar, b) end)
   end
@@ -2186,6 +2268,22 @@ defmodule Muro.Check do
          do: seed_walk_list(k, book, block, gamma, mode, Enum.map(bs, fn {_, _, b} -> b end))
   end
 
+  defp seed_walk(k, book, block, gamma, mode, {:mwbool, e, p, bs}) do
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         :ok <- seed_walk(k, book, block, ext(gamma, :affine, Word.bool_ty()), mode, p) do
+      seed_word_arms(k, book, block, gamma, mode, e, bs, :typ)
+    end
+  end
+
+  defp seed_walk(k, book, block, gamma, mode, {:mopt, e, p, bs}) do
+    oty = opt_scrut_ty(k, book, gamma, mode, e)
+
+    with :ok <- seed_walk(k, book, block, gamma, mode, e),
+         :ok <- seed_walk(k, book, block, ext(gamma, :affine, oty), mode, p) do
+      seed_word_arms(k, book, block, gamma, mode, e, bs, opt_pay_of(oty))
+    end
+  end
+
   defp seed_walk(k, book, block, gamma, mode, {:mnat, e, p, z, s}) do
     with :ok <- seed_walk(k, book, block, gamma, mode, e),
          :ok <- seed_walk(k, book, block, ext(gamma, :affine, :nat), mode, p),
@@ -2205,6 +2303,46 @@ defmodule Muro.Check do
   end
 
   defp seed_walk(_k, _book, _block, _gamma, _mode, _), do: :ok
+
+  defp seed_word_arms(k, book, block, gamma, mode, scrut, bs, pay) do
+    Enum.reduce_while(bs, :ok, fn
+      {"wsome", 1, body}, :ok ->
+        gamma1 = ext(gamma, pred_qty(gamma, scrut), pay)
+
+        case seed_walk(k, book, block, gamma1, mode, body) do
+          :ok -> {:cont, :ok}
+          err -> {:halt, err}
+        end
+
+      {_n, 0, body}, :ok ->
+        case seed_walk(k, book, block, gamma, mode, body) do
+          :ok -> {:cont, :ok}
+          err -> {:halt, err}
+        end
+
+      _, _ ->
+        {:halt, :ok}
+    end)
+  end
+
+  defp opt_scrut_ty(k, book, gamma, mode, e) do
+    rs = neutral_rec(gamma)
+
+    case infer(k, book, rs, gamma, mode, e) do
+      {:ok, {ety, _}} ->
+        case whnf(k, book, ety) do
+          {:ok, t} -> t
+          _ -> {:word, :opt, [:typ]}
+        end
+
+      _ ->
+        {:word, :opt, [:typ]}
+    end
+  end
+
+  defp opt_pay_of({:word, {:optk, kd}, []}), do: Word.word_ty(kd)
+  defp opt_pay_of({:word, :opt, [a]}), do: a
+  defp opt_pay_of(_), do: :typ
 
   # The two components, when the scrutinee infers as a product. A failure
   # here is not a productivity verdict: the binder types fall back to Type,
@@ -2755,6 +2893,40 @@ defmodule Muro.Check do
                ),
              {:ok, uu} <- check(k, book, rs, gamma, m, u, Subst.inst(p, :one)),
              {:ok, uses} <- combine(m, eu, uu) do
+          {:ok, {Subst.inst(p, e), uses}}
+        end
+
+      # ⇒-mWBool. Agda: Muro.WordElim.elimBool. Nothing is added to Tm.
+      {m, {:mwbool, e, p, bs}} ->
+        with {:ok, eu} <- check(k, book, rs, gamma, m, e, Word.bool_ty()),
+             :ok <-
+               check_ty(
+                 k,
+                 book,
+                 push_name(ext_rec(rs, false, false), "b"),
+                 ext(gamma, :affine, Word.bool_ty()),
+                 p
+               ),
+             {:ok, bu} <- check_wbool_arms(k, book, rs, gamma, m, p, bs),
+             {:ok, uses} <- combine(m, eu, bu) do
+          {:ok, {Subst.inst(p, e), uses}}
+        end
+
+      # ⇒-mOpt. Agda: Muro.WordElim.elimOpt. Nothing is added to Tm.
+      {m, {:mopt, e, p, bs}} ->
+        with {:ok, {ety, eu}} <- infer(k, book, rs, gamma, m, e),
+             {:ok, ety1} <- whnf(k, book, ety),
+             {:ok, pay} <- view_opt(k, book, ety1, names_of(rs, gamma)),
+             :ok <-
+               check_ty(
+                 k,
+                 book,
+                 push_name(ext_rec(rs, false, false), "o"),
+                 ext(gamma, :affine, ety1),
+                 p
+               ),
+             {:ok, bu} <- check_opt_arms(k, book, rs, gamma, m, p, bs, pay, e),
+             {:ok, uses} <- combine(m, eu, bu) do
           {:ok, {Subst.inst(p, e), uses}}
         end
 
@@ -4349,6 +4521,11 @@ defmodule Muro.Check do
     Enum.reduce(bs, acc, fn {_, _, b}, acc -> mentions(b, acc) end)
   end
 
+  defp mentions({tag, e, p, bs}, acc) when tag in [:mwbool, :mopt] do
+    acc = mentions(p, mentions(e, acc))
+    Enum.reduce(bs, acc, fn {_, _, b}, acc -> mentions(b, acc) end)
+  end
+
   defp mentions({:mnat, e, p, z, s}, acc),
     do: mentions(s, mentions(z, mentions(p, mentions(e, acc))))
 
@@ -4893,6 +5070,76 @@ defmodule Muro.Check do
   defp check_branches(_, _, _, _, _, _, _, _, _, _, [], [_ | _]),
     do: {:error, "match branch count does not match constructors"}
 
+  defp check_wbool_arms(k, book, rs, gamma, m, p, bs) do
+    specs = [
+      {"wtrue", 0, Word.bool_tm(true)},
+      {"wfalse", 0, Word.bool_tm(false)}
+    ]
+
+    check_word_bs(k, book, rs, gamma, m, p, specs, bs, nil)
+  end
+
+  defp check_opt_arms(k, book, rs, gamma, m, p, bs, pay, scrut) do
+    specs = [
+      {"wsome", 1, pay},
+      {"wnone", 0, Word.none_tm()}
+    ]
+
+    check_word_bs(k, book, rs, gamma, m, p, specs, bs, scrut)
+  end
+
+  defp check_word_bs(_k, _book, _rs, gamma, _m, _p, [], [], _scrut),
+    do: {:ok, u0s(nctx(gamma))}
+
+  defp check_word_bs(k, book, rs, gamma, m, p, [{name, ar, target} | specs], bs, scrut) do
+    case bs do
+      [] ->
+        {:error, "missing branch for #{name}"}
+
+      [{bname, bar, body} | rest] ->
+        cond do
+          bname != name ->
+            {:error, "expected constructor #{name}, got #{bname}"}
+
+          bar != ar ->
+            {:error, "branch #{bname} binds #{bar} variables, constructor has #{ar} fields"}
+
+          true ->
+            with {:ok, u} <-
+                   check_word_arm(k, book, rs, gamma, m, p, name, target, body, scrut),
+                 {:ok, v} <-
+                   check_word_bs(k, book, rs, gamma, m, p, specs, rest, scrut) do
+              {:ok, combine_alt(m, u, v)}
+            end
+        end
+    end
+  end
+
+  defp check_word_bs(_, _, _, _, _, _, [], [_ | _], _),
+    do: {:error, "match branch count does not match constructors"}
+
+  defp check_word_arm(k, book, rs, gamma, m, p, "wsome", pay, body, scrut) do
+    pq = pred_qty(gamma, scrut)
+
+    with {:ok, [u0 | us]} <-
+           check(
+             k,
+             book,
+             push_name(ext_rec(rs, false, false), "n"),
+             ext(gamma, pq, pay),
+             m,
+             body,
+             Subst.mot_some(p)
+           ),
+         :ok <- check_bound(m, pq, u0) do
+      {:ok, us}
+    end
+  end
+
+  defp check_word_arm(k, book, rs, gamma, m, p, _name, target, body, _scrut) do
+    check(k, book, rs, gamma, m, body, Subst.inst(p, target))
+  end
+
   defp wrap_tel({:pi, q, a, x, b}, body), do: {:lam, q, a, x, wrap_tel(b, body)}
   defp wrap_tel(_, body), do: body
 
@@ -5180,6 +5427,11 @@ defmodule Muro.Check do
         absent?(k, book, dname, z, seen) and absent?(k, book, dname, s, seen)
 
   defp absent_go?(k, book, dname, {:mdata, e, p, bs}, seen) do
+    absent?(k, book, dname, e, seen) and absent?(k, book, dname, p, seen) and
+      Enum.all?(bs, fn {_, _, b} -> absent?(k, book, dname, b, seen) end)
+  end
+
+  defp absent_go?(k, book, dname, {tag, e, p, bs}, seen) when tag in [:mwbool, :mopt] do
     absent?(k, book, dname, e, seen) and absent?(k, book, dname, p, seen) and
       Enum.all?(bs, fn {_, _, b} -> absent?(k, book, dname, b, seen) end)
   end
