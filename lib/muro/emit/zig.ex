@@ -873,14 +873,50 @@ defmodule Muro.Emit.Zig do
     end
   end
 
+  # WBool is a u8. 0 is wfalse. The test does not allocate.
+  defp emit_match(:wbool, ex, [{:arm, "wtrue", [], t}, {:arm, "wfalse", [], f}], env, st) do
+    with {:ok, tarm, tlay, st} <- arm_text(t, [], env, st),
+         {:ok, farm, flay, st} <- arm_text(f, [], env, st) do
+      target = join_lay([tlay, flay])
+      {ttext, st} = render_arm(elem(tarm, 0), elem(tarm, 1), elem(tarm, 2), tlay, target, st)
+      {ftext, st} = render_arm(elem(farm, 0), elem(farm, 1), elem(farm, 2), flay, target, st)
+      {:ok, "if ((#{ex}) == 0) #{ftext} else #{ttext}", target, st}
+    end
+  end
+
+  # Opt is `?T`. The payload is the captured value. null is wnone.
+  defp emit_match({:opt, pay}, ex, [{:arm, "wsome", [y], s}, {:arm, "wnone", [], n}], env, st) do
+    {pat, env1, st} =
+      if binder_used?(s, y, []) do
+        {rn, st} = local(st, spell(y))
+        {"|#{rn}|", [{y, rn, pay} | env], st}
+      else
+        {"|_|", env, st}
+      end
+
+    with {:ok, sarm, slay, st} <- arm_text(s, [], env1, st),
+         {:ok, narm, nlay, st} <- arm_text(n, [], env, st) do
+      target = join_lay([slay, nlay])
+      {stext, st} = render_arm(elem(sarm, 0), elem(sarm, 1), elem(sarm, 2), slay, target, st)
+      {ntext, st} = render_arm(elem(narm, 0), elem(narm, 1), elem(narm, 2), nlay, target, st)
+      {:ok, "if (#{ex}) #{pat} #{stext} else #{ntext}", target, st}
+    end
+  end
+
   defp emit_match(_lay, _ex, _arms, _env, _st), do: {:error, "c:unsupported"}
 
   # An alias is :opaque. The arms still say Nat, Atom, or a data type,
   # the same way the C emitter's match_kind does. Reveal before the switch.
   defp match_kind(:nat, _arms, _book), do: :nat
+  defp match_kind(:wbool, _arms, _book), do: :wbool
+  defp match_kind({:opt, pay}, _arms, _book), do: {:opt, pay}
   defp match_kind({:data, "Atom"}, _arms, _book), do: :atom
   defp match_kind({:data, name}, _arms, _book), do: {:data, name}
   defp match_kind(_lay, [{:arm, "zero", [], _}, {:arm, "suc", [_], _}], _book), do: :nat
+  defp match_kind(_lay, [{:arm, "wtrue", [], _}, {:arm, "wfalse", [], _}], _book), do: :wbool
+
+  defp match_kind(_lay, [{:arm, "wsome", [_], _}, {:arm, "wnone", [], _}], _book),
+    do: {:opt, :opaque}
 
   defp match_kind(_lay, arms, book) do
     cond do
@@ -917,6 +953,8 @@ defmodule Muro.Emit.Zig do
   end
 
   defp scrut_lay(:nat), do: :nat
+  defp scrut_lay(:wbool), do: :wbool
+  defp scrut_lay({:opt, pay}), do: {:opt, pay}
   defp scrut_lay(:atom), do: {:data, "Atom"}
   defp scrut_lay({:data, _} = lay), do: lay
   defp scrut_lay(:unknown), do: :unknown

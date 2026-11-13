@@ -226,6 +226,18 @@ defmodule Muro.Print do
     "match #{fmt(e, names, :none)} motive (λ x → #{fmt(p, ["x" | names], :none)}) #{branches}"
   end
 
+  defp fmt({tag, e, p, bs}, names, _) when tag in [:mwbool, :mopt] do
+    branches =
+      Enum.map_join(bs, " ", fn {cname, ar, body} ->
+        xs = for i <- 0..(ar - 1)//1, do: "x#{i}"
+        env = Enum.reverse(xs) ++ names
+        binders = if xs == [], do: "", else: " " <> Enum.join(xs, " ")
+        "| #{cname}#{binders} => #{fmt(body, env, :none)}"
+      end)
+
+    "match #{fmt(e, names, :none)} motive (λ x → #{fmt(p, ["x" | names], :none)}) #{branches}"
+  end
+
   defp fmt({:mdata, e, p, bs}, names, _) do
     branches =
       Enum.map_join(bs, " ", fn {cname, ar, body} ->

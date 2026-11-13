@@ -147,6 +147,12 @@ match      ::= "match" term "motive" mot
                "|" "0" "=>" term
                "|" "suc" ident "=>" term
              | "match" term "motive" mot
+               "|" "wtrue" "=>" term
+               "|" "wfalse" "=>" term
+             | "match" term "motive" mot
+               "|" "wsome" ident "=>" term
+               "|" "wnone" "=>" term
+             | "match" term "motive" mot
                ("|" ident ident* "=>" term)+
 matchEmpty ::= "matchEmpty" term "motive" mot
 rewrite    ::= "rewrite" term "motive" mot "in" term
@@ -165,7 +171,7 @@ space      ::= [ \t\n\r] | comment
 
 ## Notes the grammar does not say loudly enough
 
-Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an argument. Digits start atoms, so `| 0 =>` parses. A session `case` and a process `match` accept `| 0 =>` through `| w =>` as arm labels. The label is the decimal spelling that was written, so `| 00 =>` is `00` and it is not the arm `0`.
+Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an argument. Digits start atoms, so `| 0 =>` parses. `wtrue` then `wfalse` is a match on `WBool`. `wsome` then `wnone` is a match on `Opt`. Those heads are the kernel constructors, and the arms are in that order. A later data production does not take them. A session `case` and a process `match` accept `| 0 =>` through `| w =>` as arm labels. The label is the decimal spelling that was written, so `| 00 =>` is `00` and it is not the arm `0`.
 
 A keyword is a whole word. `successor`, `reflect`, `ttl`, and `Natural` are identifiers; `suc`, `refl`, `tt`, and `Nat` are not. `->` ends a word, so `Nat->Nat` is an arrow. Inside a `repr` body the words `boolean`, `integer`, `nil`, `list`, `optional`, `nullable`, `tuple`, `map`, `open`, `interned`, `map_of`, and `else` are keywords. `string` is a keyword only in `interned string`. In a term, `String`, `strCat`, `strLen`, `strEq`, `Bytes`, `Slice`, `bytesCat`, `bytesLen`, `sliceLen`, `bytesEq`, `sliceEq`, `bytesGet`, `sliceGet`, `slice`, `sliceUntil`, `sliceAfter`, `sliceUncons`, `bytesFold`, `sliceFold`, and `strBytes` are keywords. `slice` is that keyword, so it does not steal a longer name such as `sliceLen`. A core string has the escapes `\\`, `\"`, `\n`, and `\u{…}`. A bytes literal is `b"…"` with `\\`, `\"`, `\n`, `\r`, `\t`, and `\xHH`. `\xHH` is exactly two hex digits. `\u{…}` is not a bytes escape. `ab"…"` is a name and then a string. A `repr` string and an import path stay a raw span: a backslash is a character, and a quote ends the span. They are not a bytes literal. `else` binds looser than `list`, `optional`, `nullable`, and `map_of`; parentheses group a shape. Outside that body they are identifiers, so `def else : run Nat := 0`, a constructor `interned`, and `data map_of` are definitions. `nil =>` at the start of a variant names the constructor `nil`.
 
@@ -234,6 +240,14 @@ From the Pratt parser in `lib/muro/parser.ex`:
 match n motive (λ x → P)
   | 0 => tz
   | suc p => ts
+
+match b motive (λ _ → Nat)
+  | wtrue => tz
+  | wfalse => ts
+
+match o motive (λ _ → A)
+  | wsome n => n
+  | wnone => d
 
 match m motive (λ _ → A)
   | nothing => d

@@ -155,6 +155,19 @@ defmodule Muro.Explore do
     walk_term(s, kid(span, 3), bind(bound, y), names, by_name, from, acc)
   end
 
+  defp walk_term({tag, e, x, p, branches}, span, bound, names, by_name, from, acc)
+       when tag in [:mwbool, :mopt] do
+    acc = walk_term(e, kid(span, 0), bound, names, by_name, from, acc)
+    acc = walk_term(p, kid(span, 1), bind(bound, x), names, by_name, from, acc)
+
+    branches
+    |> Enum.with_index()
+    |> Enum.reduce(acc, fn {{_cname, binders, body}, i}, acc ->
+      bound1 = if is_list(binders), do: bind_all(bound, binders), else: bound
+      walk_term(body, kid(span, i + 2), bound1, names, by_name, from, acc)
+    end)
+  end
+
   defp walk_term({:mdata, e, x, p, branches}, span, bound, names, by_name, from, acc) do
     acc = walk_term(e, kid(span, 0), bound, names, by_name, from, acc)
     acc = walk_term(p, kid(span, 1), bind(bound, x), names, by_name, from, acc)

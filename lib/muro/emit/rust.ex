@@ -622,14 +622,84 @@ defmodule Muro.Emit.Rust do
     end
   end
 
+  # WBool is bool. The match does not build an Rc.
+  defp emit_match(:wbool, ex, [{:arm, "wtrue", [], t}, {:arm, "wfalse", [], f}], env, st) do
+    with {:ok, tarm, tlay, st} <- arm_expr(t, env, st),
+         {:ok, farm, flay, st} <- arm_expr(f, env, st) do
+      {expr, lay} =
+        finish_match("(#{ex})", [{"true", tarm, tlay}, {"false", farm, flay}], st)
+
+      {:ok, expr, lay, st}
+    end
+  end
+
+  # Opt is Option. An unused payload is `_`, which rustc does not warn on.
+  defp emit_match({:opt, pay}, ex, [{:arm, "wsome", [y], s}, {:arm, "wnone", [], n}], env, st) do
+    {pat, env1, st} =
+      if rust_used?(s, y) do
+        {rn, st} = local(st, spell(y))
+        {"::std::option::Option::Some(#{rn})", [{y, rn, pay} | env], st}
+      else
+        {"::std::option::Option::Some(_)", env, st}
+      end
+
+    with {:ok, sarm, slay, st} <- arm_expr(s, env1, st),
+         {:ok, narm, nlay, st} <- arm_expr(n, env, st) do
+      {expr, lay} =
+        finish_match(
+          "(#{ex})",
+          [{pat, sarm, slay}, {"::std::option::Option::None", narm, nlay}],
+          st
+        )
+
+      {:ok, expr, lay, st}
+    end
+  end
+
   defp emit_match(_lay, _ex, _arms, _env, _st), do: {:error, "c:unsupported"}
+
+  defp rust_used?(tm, name), do: rust_used?(tm, name, MapSet.new())
+  defp rust_used?({:var, n}, name, bound), do: n == name and not MapSet.member?(bound, name)
+
+  defp rust_used?({:let, n, _, v, b}, name, bound) do
+    rust_used?(v, name, bound) or rust_used?(b, name, MapSet.put(bound, n))
+  end
+
+  defp rust_used?({:letp, a, b, e, body}, name, bound) do
+    rust_used?(e, name, bound) or
+      rust_used?(body, name, bound |> MapSet.put(a) |> MapSet.put(b))
+  end
+
+  defp rust_used?({:match, s, arms}, name, bound) do
+    rust_used?(s, name, bound) or
+      Enum.any?(arms, fn {:arm, _, binders, body} ->
+        inner = Enum.reduce(binders, bound, &MapSet.put(&2, &1))
+        rust_used?(body, name, inner)
+      end)
+  end
+
+  defp rust_used?(tm, name, bound) when is_tuple(tm) do
+    tm |> Tuple.to_list() |> Enum.any?(&rust_used?(&1, name, bound))
+  end
+
+  defp rust_used?(tm, name, bound) when is_list(tm) do
+    Enum.any?(tm, &rust_used?(&1, name, bound))
+  end
+
+  defp rust_used?(_tm, _name, _bound), do: false
 
   # An alias is Erased. The arms still say Nat, Atom, or a data type,
   # the same way the C emitter's match_kind does. Reveal before the match.
   defp match_kind(:nat, _arms, _book), do: :nat
+  defp match_kind(:wbool, _arms, _book), do: :wbool
+  defp match_kind({:opt, pay}, _arms, _book), do: {:opt, pay}
   defp match_kind({:data, "Atom"}, _arms, _book), do: :atom
   defp match_kind({:data, name}, _arms, _book), do: {:data, name}
   defp match_kind(_lay, [{:arm, "zero", [], _}, {:arm, "suc", [_], _}], _book), do: :nat
+  defp match_kind(_lay, [{:arm, "wtrue", [], _}, {:arm, "wfalse", [], _}], _book), do: :wbool
+
+  defp match_kind(_lay, [{:arm, "wsome", [_], _}, {:arm, "wnone", [], _}], _book),
+    do: {:opt, :opaque}
 
   defp match_kind(_lay, arms, book) do
     cond do
@@ -666,6 +736,8 @@ defmodule Muro.Emit.Rust do
   end
 
   defp scrut_lay(:nat), do: :nat
+  defp scrut_lay(:wbool), do: :wbool
+  defp scrut_lay({:opt, pay}), do: {:opt, pay}
   defp scrut_lay(:atom), do: {:data, "Atom"}
   defp scrut_lay({:data, _} = lay), do: lay
   defp scrut_lay(:unknown), do: :unknown

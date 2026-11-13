@@ -1,0 +1,110 @@
+-- word_match.muro — match on WBool and Opt, and a Slice returned from a match.
+-- The constructors are the kernel's. A closed scrutinee reduces, so refl
+-- sees the arm. Nothing here is an HTTP parser.
+
+def pick : run Π (b : WBool) → Nat :=
+  λ (b : WBool) →
+    match b motive (λ _ → Nat)
+      | wtrue => 0
+      | wfalse => suc 0
+
+def unwrap : run Π (o : Opt U64) → U64 :=
+  λ (o : Opt U64) →
+    match o motive (λ _ → U64)
+      | wsome n => n
+      | wnone => toU64 0
+
+def pickWord : run Π (b : WBool) → U64 :=
+  λ (b : WBool) →
+    match b motive (λ _ → U64)
+      | wtrue => toU64 0
+      | wfalse => toU64 1
+
+def eqByte : run Π (x : U8) → Π (y : U8) → U64 :=
+  λ (x : U8) → λ (y : U8) →
+    match (eqi x y) motive (λ _ → U64)
+      | wtrue => toU64 1
+      | wfalse => toU64 0
+
+def headByte : run Π (s : Slice) → U8 :=
+  λ (s : Slice) →
+    match (sliceGet s (toU64 0)) motive (λ _ → U8)
+      | wsome n => n
+      | wnone => toU8 0
+
+def eqBytes : run Π (x : Bytes) → Π (y : Bytes) → U64 :=
+  λ (x : Bytes) → λ (y : Bytes) →
+    match (bytesEq x y) motive (λ _ → U64)
+      | wtrue => toU64 1
+      | wfalse => toU64 0
+
+def eqView : run Π (+ s : Slice) → Slice :=
+  λ (+ s : Slice) →
+    match (sliceEq s b"a") motive (λ _ → Slice)
+      | wtrue => s
+      | wfalse => slice s (toU64 0) (toU64 0)
+
+def nested : run Π (b : WBool) → Π (o : Opt U64) → U64 :=
+  λ (b : WBool) → λ (o : Opt U64) →
+    match b motive (λ _ → U64)
+      | wtrue =>
+          (match o motive (λ _ → U64)
+            | wsome n => n
+            | wnone => toU64 0)
+      | wfalse => toU64 0
+
+def nested2 : run Π (o : Opt WBool) → U64 :=
+  λ (o : Opt WBool) →
+    match o motive (λ _ → U64)
+      | wsome b =>
+          (match b motive (λ _ → U64)
+            | wtrue => toU64 1
+            | wfalse => toU64 0)
+      | wnone => toU64 0
+
+def closedPick : evidence {(match (bytesEq b"a" b"a") motive (λ _ → Nat) | wtrue => suc 0 | wfalse => 0) ≡ suc 0 : Nat} := refl
+
+def closedMiss : evidence {(match (bytesEq b"a" b"b") motive (λ _ → Nat) | wtrue => suc 0 | wfalse => 0) ≡ 0 : Nat} := refl
+
+def closedSome : evidence {(match (sliceGet b"ab" (toU64 0)) motive (λ _ → U8) | wsome n => n | wnone => toU8 0) ≡ toU8 97 : U8} := refl
+
+def closedNone : evidence {(match (sliceGet b"ab" (toU64 9)) motive (λ _ → U8) | wsome n => n | wnone => toU8 0) ≡ toU8 0 : U8} := refl
+
+data Flag : Type where
+  empty : Flag
+  kept : Flag
+
+def dropCR : run Π (s : Slice) → Π (f : Flag) → Slice :=
+  λ (s : Slice) → λ (f : Flag) →
+    match f motive (λ _ → Slice)
+      | empty => s
+      | kept => slice s (toU64 1) (toU64 1)
+
+def pickBytes : run Π (b : WBool) → Bytes :=
+  λ (b : WBool) →
+    match b motive (λ _ → Bytes)
+      | wtrue => b"a"
+      | wfalse => b"b"
+
+data Status : Type where
+  ok : Status
+  bad : Status
+  unusedCtor : Status
+
+data Rec : Type where
+  rec : Nat → Nat → Rec
+
+def oneField : run Π (r : Rec) → Nat :=
+  λ (r : Rec) →
+    match r motive (λ _ → Nat)
+      | rec n _ => n
+
+def ignore : run Π (_ : Nat) → Nat :=
+  λ (_ : Nat) → 0
+
+def seeOk : run Π (s : Status) → Nat :=
+  λ (s : Status) →
+    match s motive (λ _ → Nat)
+      | ok => 0
+      | bad => suc 0
+      | unusedCtor => suc (suc 0)

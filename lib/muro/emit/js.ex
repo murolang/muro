@@ -356,6 +356,15 @@ defmodule Muro.Emit.JS do
       end)
   end
 
+  defp session_use({tag, scrut, x, motive, branches}, index, bound)
+       when tag in [:mwbool, :mopt] do
+    session_use(scrut, index, bound) ||
+      session_use(motive, index, bind(bound, x)) ||
+      Enum.find_value(branches, fn {_ctor, binders, body} ->
+        session_use(body, index, Enum.reduce(List.wrap(binders), bound, &bind(&2, &1)))
+      end)
+  end
+
   defp session_use({:memp, scrut, x, motive}, index, bound) do
     session_use(scrut, index, bound) || session_use(motive, index, bind(bound, x))
   end
@@ -784,6 +793,60 @@ defmodule Muro.Emit.JS do
             indent(zlines) ++
             ["} else {"] ++
             indent(["const #{rn} = #{st.h.pred}(#{scr});" | slines]) ++
+            ["}"]
+
+        {:ok, lines, st1}
+      end
+    else
+      {:error, _} = err -> err
+      _ -> {:error, "c:unsupported"}
+    end
+  end
+
+  defp cps_match(scrut, :wbool, arms, st, tail?) do
+    with {:ok, se} <- emit_tm(scrut, st),
+         {:arm, "wtrue", _, tbody} <- arm(arms, "wtrue"),
+         {:arm, "wfalse", _, fbody} <- arm(arms, "wfalse") do
+      {scr, st1} = fresh_name(st)
+
+      with {:ok, tlines, _} <- cps(tbody, st1, tail?),
+           {:ok, flines, _} <- cps(fbody, st1, tail?) do
+        lines =
+          ["const #{scr} = (#{se});", "if (#{scr}) {"] ++
+            indent(tlines) ++
+            ["} else {"] ++
+            indent(flines) ++
+            ["}"]
+
+        {:ok, lines, st1}
+      end
+    else
+      {:error, _} = err -> err
+      _ -> {:error, "c:unsupported"}
+    end
+  end
+
+  defp cps_match(scrut, {:opt, _pay}, arms, st, tail?) do
+    with {:ok, se} <- emit_tm(scrut, st),
+         {:arm, "wsome", [y], sbody} <- arm(arms, "wsome"),
+         {:arm, "wnone", _, nbody} <- arm(arms, "wnone") do
+      {scr, st1} = fresh_name(st)
+
+      {bind, st_some} =
+        if occurs_bind?(y, sbody) do
+          {rn, scope} = bind_source(spell(y), st1.scope)
+          {["const #{rn} = #{scr}.v;"], %{st1 | scope: scope, vars: Map.put(st1.vars, y, rn)}}
+        else
+          {[], st1}
+        end
+
+      with {:ok, slines, _} <- cps(sbody, st_some, tail?),
+           {:ok, nlines, _} <- cps(nbody, st1, tail?) do
+        lines =
+          ["const #{scr} = (#{se});", "if (#{scr} && #{scr}.k === \"some\") {"] ++
+            indent(bind ++ slines) ++
+            ["} else {"] ++
+            indent(nlines) ++
             ["}"]
 
         {:ok, lines, st1}
@@ -1469,6 +1532,66 @@ defmodule Muro.Emit.JS do
          "  default: { return #{st.h.abort}(); }",
          "}"
        ])}
+    end
+  end
+
+  defp emit_tm({:match, scrut, :wbool, arms}, st) do
+    with {:ok, se} <- emit_tm(scrut, st),
+         {:arm, "wtrue", _, tbody} <- find_arm(arms, "wtrue"),
+         {:arm, "wfalse", _, fbody} <- find_arm(arms, "wfalse"),
+         {:ok, te} <- emit_tm(tbody, st),
+         {:ok, fe} <- emit_tm(fbody, st) do
+      scr = st.h.scrut
+
+      {:ok,
+       js_fn([
+         "const #{scr} = (#{se});",
+         "if (#{scr}) {",
+         "  return (#{te});",
+         "} else {",
+         "  return (#{fe});",
+         "}"
+       ])}
+    else
+      {:error, _} = err -> err
+      _ -> {:error, "c:unsupported"}
+    end
+  end
+
+  defp emit_tm({:match, scrut, {:opt, _pay}, arms}, st) do
+    with {:ok, se} <- emit_tm(scrut, st),
+         {:arm, "wsome", [y], sbody} <- find_arm(arms, "wsome"),
+         {:arm, "wnone", _, nbody} <- find_arm(arms, "wnone"),
+         {:ok, ne} <- emit_tm(nbody, st) do
+      scr = st.h.scrut
+
+      {bind, st_some} =
+        if occurs_bind?(y, sbody) do
+          {rn, scope} = bind_source(spell(y), st.scope)
+          {["  const #{rn} = #{scr}.v;"], %{st | scope: scope, vars: Map.put(st.vars, y, rn)}}
+        else
+          {[], st}
+        end
+
+      with {:ok, some_e} <- emit_tm(sbody, st_some) do
+        {:ok,
+         js_fn(
+           [
+             "const #{scr} = (#{se});",
+             "if (#{scr} && #{scr}.k === \"some\") {"
+           ] ++
+             bind ++
+             [
+               "  return (#{some_e});",
+               "} else {",
+               "  return (#{ne});",
+               "}"
+             ]
+         )}
+      end
+    else
+      {:error, _} = err -> err
+      _ -> {:error, "c:unsupported"}
     end
   end
 
