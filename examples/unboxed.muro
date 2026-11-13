@@ -1,0 +1,44 @@
+-- unboxed.muro — a product of words and a Slice, passed by value.
+-- sliceFold rebuilds the product on every octet. A newline changes the
+-- mark and the view. The view stays a span of the buffer the fold was given.
+-- Nothing here is an HTTP parser.
+
+unboxed data Acc : Type where
+  acc : Π (+ n : U64) → Π (+ marks : U64) → Π (+ view : Slice) → Acc
+
+data Cell : Type where
+  cell : Π (+ n : U64) → Cell
+
+def scan : run Π (+ s : Slice) → Acc :=
+  λ (+ s : Slice) →
+    sliceFold Acc
+      (acc (toU64 0) (toU64 0) s)
+      (λ (b : U8) → λ (_rest : Slice) → λ (st : Acc) →
+        match st motive (λ _ → Acc)
+          | acc n marks view =>
+              (match (eqi b (toU8 10)) motive (λ _ → Acc)
+                | wtrue => acc (addi n (toU64 1)) (addi marks (toU64 1)) (sliceUntil s (toU8 10))
+                | wfalse => acc (addi n (toU64 1)) marks view))
+      s
+
+def nOf : run Π (st : Acc) → U64 :=
+  λ (st : Acc) →
+    match st motive (λ _ → U64)
+      | acc n _ _ => n
+
+def marksOf : run Π (st : Acc) → U64 :=
+  λ (st : Acc) →
+    match st motive (λ _ → U64)
+      | acc _ marks _ => marks
+
+def viewOf : run Π (st : Acc) → Slice :=
+  λ (st : Acc) →
+    match st motive (λ _ → Slice)
+      | acc _ _ view => view
+
+def bump : run Π (n : U64) → Cell :=
+  λ (n : U64) → cell n
+
+def scan-plain : evidence {scan b"abcd" ≡ acc (toU64 4) (toU64 0) b"abcd" : Acc} := refl
+
+def scan-nl : evidence {scan b"ab\ncd" ≡ acc (toU64 5) (toU64 1) b"ab" : Acc} := refl

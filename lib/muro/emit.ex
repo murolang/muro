@@ -1313,12 +1313,15 @@ defmodule Muro.Emit do
   defp term_kind({:word, :some, [t]}, book), do: {:opt, term_kind(t, book)}
   defp term_kind({:word, op, [_x, _]}, _book) when op in [:eq, :lt, :le], do: :bool
 
-  defp term_kind({:word, op, [x, _]}, book) when op in [:cadd, :csub, :cmul, :div, :rem],
-    do: {:opt, term_kind(x, book)}
+  # Both operands are words. A literal on either side is enough: the
+  # checker already requires one width. A shift's amount is a Nat.
+  defp term_kind({:word, op, [x, y]}, book) when op in [:cadd, :csub, :cmul, :div, :rem],
+    do: {:opt, either_word_kind(x, y, book)}
 
-  defp term_kind({:word, op, [x, _]}, book)
-       when op in [:add, :sub, :mul, :and, :or, :xor, :shl, :shr],
-       do: term_kind(x, book)
+  defp term_kind({:word, op, [x, y]}, book) when op in [:add, :sub, :mul, :and, :or, :xor],
+    do: either_word_kind(x, y, book)
+
+  defp term_kind({:word, op, [x, _]}, book) when op in [:shl, :shr], do: term_kind(x, book)
 
   defp term_kind({:word, :not, [x]}, book), do: term_kind(x, book)
   defp term_kind({:beq, _, _}, _book), do: :bool
@@ -1326,6 +1329,9 @@ defmodule Muro.Emit do
   defp term_kind({:seq, _, _}, _book), do: :bool
   defp term_kind({:bget, _, _}, _book), do: {:opt, :u8}
   defp term_kind({:aget, _, _}, _book), do: {:opt, :u8}
+  defp term_kind({:blen, _}, _book), do: :u64
+  defp term_kind({:xlen, _}, _book), do: :u64
+  defp term_kind({:def, n}, book), do: def_word_kind(n, book)
 
   defp term_kind({:app, _, _} = t, book) do
     {h, args} = spine(t, [])
@@ -1351,6 +1357,38 @@ defmodule Muro.Emit do
   defp result_kind(ty, 0), do: kind_of_annot(ty)
   defp result_kind({:pi, _, _, _, b}, n) when n > 0, do: result_kind(b, n - 1)
   defp result_kind(_, _), do: nil
+
+  defp either_word_kind(x, y, book) do
+    case term_kind(x, book) || term_kind(y, book) do
+      k when k in [:u8, :u32, :u64, :i64] -> k
+      _ -> nil
+    end
+  end
+
+  # A nullary name carries the kind of its type, then of its body.
+  # The seen set stops a body that mentions its own name.
+  defp def_word_kind(n, book) do
+    key = {Muro.Emit, :word_kind_seen}
+    seen = Process.get(key) || MapSet.new()
+
+    if MapSet.member?(seen, n) do
+      nil
+    else
+      Process.put(key, MapSet.put(seen, n))
+
+      try do
+        case Enum.find(book, &(Map.get(&1, :name) == n and Map.get(&1, :kind, :def) == :def)) do
+          nil ->
+            nil
+
+          dfn ->
+            kind_of_annot(dfn.type) || term_kind(dfn.body, book)
+        end
+      after
+        Process.put(key, seen)
+      end
+    end
+  end
 
   defp indent(s, n) do
     pad = String.duplicate(" ", n)

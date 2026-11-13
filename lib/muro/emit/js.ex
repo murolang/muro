@@ -540,7 +540,7 @@ defmodule Muro.Emit.JS do
   defp calls_acc({:bunc, s}, acc), do: calls_acc(s, acc)
 
   defp calls_acc({:bfold, _step, caps, z, s}, acc) do
-    acc = Enum.reduce(caps, acc, &calls_acc/2)
+    acc = Enum.reduce(caps, acc, fn {_name, tm}, acc -> calls_acc(tm, acc) end)
     calls_acc(s, calls_acc(z, acc))
   end
 
@@ -1037,7 +1037,8 @@ defmodule Muro.Emit.JS do
   defp contains_rec?({:bunc, s}, rec), do: contains_rec?(s, rec)
 
   defp contains_rec?({:bfold, _step, caps, z, s}, rec) do
-    contains_rec?(z, rec) or contains_rec?(s, rec) or Enum.any?(caps, &contains_rec?(&1, rec))
+    contains_rec?(z, rec) or contains_rec?(s, rec) or
+      Enum.any?(caps, fn {_name, tm} -> contains_rec?(tm, rec) end)
   end
 
   defp contains_rec?({:byt, _}, _rec), do: false
@@ -1179,10 +1180,9 @@ defmodule Muro.Emit.JS do
   defp lift({:bunc, s}, rec), do: lift_one(s, rec, fn hole -> {:bunc, hole} end)
 
   defp lift({:bfold, step, caps, z, s}, rec) do
-    case lift_list(caps, rec) do
-      {:ok, index, call, inner} ->
-        {:ok, call,
-         fn hole -> {:bfold, step, List.replace_at(caps, index, inner.(hole)), z, s} end}
+    case lift_caps(caps, rec, fn caps -> {:bfold, step, caps, z, s} end) do
+      {:ok, call, rebuild} ->
+        {:ok, call, rebuild}
 
       :none ->
         case lift(z, rec) do
@@ -1672,7 +1672,7 @@ defmodule Muro.Emit.JS do
   end
 
   defp emit_tm({:bfold, step, caps, z, s}, st) do
-    with {:ok, ces} <- emit_many(caps, st),
+    with {:ok, ces} <- emit_caps(caps, st),
          {:ok, ze} <- emit_tm(z, st),
          {:ok, se} <- emit_tm(s, st),
          {:ok, sname} <- fetch_step(st, step) do
@@ -1787,7 +1787,8 @@ defmodule Muro.Emit.JS do
   defp occurs_bind?(name, {:bunc, s}), do: occurs_bind?(name, s)
 
   defp occurs_bind?(name, {:bfold, _step, caps, z, s}) do
-    occurs_bind?(name, z) or occurs_bind?(name, s) or Enum.any?(caps, &occurs_bind?(name, &1))
+    occurs_bind?(name, z) or occurs_bind?(name, s) or
+      Enum.any?(caps, fn {_name, tm} -> occurs_bind?(name, tm) end)
   end
 
   defp occurs_bind?(_name, {:byt, _}), do: false

@@ -5,7 +5,8 @@ defmodule Muro.Emit.Rust do
 
   The text is what `rustc` translates. A refusal is the elaboration's:
   `c:lambda`, `c:machine`, `c:stream`, `c:string`, `c:erased`,
-  `c:unsupported`.
+  `c:unboxed`, `c:unsupported`. An `unboxed data` value is the enum.
+  It is not wrapped in `Rc`.
 
   Identifiers come from `Muro.Emit.Name`. A source name is spelled there.
   A helper, a step, a constructor argument, and a temporary are generated
@@ -316,8 +317,12 @@ defmodule Muro.Emit.Rust do
   defp emit_tm({:pair, a, b}, env, st) do
     with {:ok, {al, ae, alay, st}} <- emit_tm(a, env, st),
          {:ok, {bl, be, blay, st}} <- emit_tm(b, env, st) do
-      expr = "#{g("Pair")}(#{coerce(ae, alay, :opaque, st)}, #{coerce(be, blay, :opaque, st)})"
-      {:ok, {al ++ bl, expr, {:pair, alay, blay}, st}}
+      if unboxed_lay?(st.book, alay) or unboxed_lay?(st.book, blay) do
+        {:error, "c:unboxed"}
+      else
+        expr = "#{g("Pair")}(#{coerce(ae, alay, :opaque, st)}, #{coerce(be, blay, :opaque, st)})"
+        {:ok, {al ++ bl, expr, {:pair, alay, blay}, st}}
+      end
     end
   end
 
@@ -368,24 +373,29 @@ defmodule Muro.Emit.Rust do
       {:ok, step} ->
         with {:ok, {slines, sex, slay, st}} <- emit_tm(seed, env, st),
              {:ok, {clines, cexs, clays, st}} <- emit_caps(caps, env, st) do
-          {cap_lays, seed_lays} = Enum.split(Enum.map(step.params, &elem(&1, 1)), length(caps))
+          if unboxed_lay?(st.book, slay) or Enum.any?(clays, &unboxed_lay?(st.book, &1)) do
+            {:error, "c:unboxed"}
+          else
+            {cap_lays, seed_lays} =
+              Enum.split(Enum.map(step.params, &elem(&1, 1)), length(caps))
 
-          {cap_locals, cap_binds, st} =
-            Enum.reduce(cexs, {[], [], st}, fn ex, {locs, binds, st} ->
-              {loc, st} = local(st, g("c"))
-              {locs ++ [loc], binds ++ ["let #{loc} = #{ex};"], st}
-            end)
+            {cap_locals, cap_binds, st} =
+              Enum.reduce(cexs, {[], [], st}, fn ex, {locs, binds, st} ->
+                {loc, st} = local(st, g("c"))
+                {locs ++ [loc], binds ++ ["let #{loc} = #{ex};"], st}
+              end)
 
-          call = step_call(step_name, cap_locals, clays, cap_lays, seed_lays, st)
-          expr = stream_expr(coerce(sex, slay, :opaque, st), call)
+            call = step_call(step_name, cap_locals, clays, cap_lays, seed_lays, st)
+            expr = stream_expr(coerce(sex, slay, :opaque, st), call)
 
-          lay =
-            case seed_lays do
-              [dlay] -> {:stream, dlay}
-              _ -> {:stream, slay}
-            end
+            lay =
+              case seed_lays do
+                [dlay] -> {:stream, dlay}
+                _ -> {:stream, slay}
+              end
 
-          {:ok, {slines ++ clines ++ cap_binds, expr, lay, st}}
+            {:ok, {slines ++ clines ++ cap_binds, expr, lay, st}}
+          end
         end
     end
   end
@@ -504,7 +514,9 @@ defmodule Muro.Emit.Rust do
   end
 
   defp emit_tm({:bfold, step, caps, z, s}, env, st) do
-    with {:ok, {cl, ces, _, st}} <- emit_list(caps, env, st),
+    cap_terms = Enum.map(caps, fn {_name, tm} -> tm end)
+
+    with {:ok, {cl, ces, _, st}} <- emit_list(cap_terms, env, st),
          {:ok, {zl, ze, zlay, st}} <- emit_tm(z, env, st),
          {:ok, {sl, se, _, st}} <- emit_tm(s, env, st) do
       {acc, st} = local(st, nil)
@@ -591,7 +603,9 @@ defmodule Muro.Emit.Rust do
   end
 
   defp emit_match({:data, dname}, ex, arms, env, st) do
-    node = node_name(dname, st)
+    by_value = unboxed_name?(st.book, dname)
+    node = if by_value, do: Map.fetch!(st.types, dname), else: node_name(dname, st)
+    scrut = if by_value, do: "(#{ex})", else: owned_node(ex)
 
     with {:ok, rendered, st} <-
            reduce_arms(arms, st, fn {:arm, cname, binders, body}, st ->
@@ -617,7 +631,7 @@ defmodule Muro.Emit.Rust do
                  end
              end
            end) do
-      {expr, lay} = finish_match(owned_node(ex), rendered, st)
+      {expr, lay} = finish_match(scrut, rendered, st)
       {:ok, expr, lay, st}
     end
   end
@@ -1075,6 +1089,18 @@ defmodule Muro.Emit.Rust do
     Enum.any?(book, &(Map.get(&1, :kind) == :data and &1.name == name))
   end
 
+  defp unboxed_name?(book, name) when is_binary(name) do
+    case Enum.find(book, &(Map.get(&1, :kind) == :data and &1.name == name)) do
+      %{unboxed: true} -> true
+      _ -> false
+    end
+  end
+
+  defp unboxed_name?(_book, _name), do: false
+
+  defp unboxed_lay?(book, {:data, name}), do: unboxed_name?(book, name)
+  defp unboxed_lay?(_book, _lay), do: false
+
   defp lookup(env, name) do
     Enum.find_value(env, fn
       {^name, rn, lay} -> {rn, lay}
@@ -1169,62 +1195,126 @@ defmodule Muro.Emit.Rust do
 
   defp data_items(book, types, variants, ctor_fns, file_scope) do
     Enum.map_join(data_decls(book), "\n\n", fn d ->
-      type = Map.fetch!(types, d.name)
-      node = g("node_" <> type)
-
-      variants_txt =
-        Enum.map_join(d.ctors, "\n", fn c ->
-          v = Map.fetch!(variants, {d.name, c.name})
-          fields = ctor_fields(book, c.name)
-
-          if fields == [] do
-            "    #{v},"
-          else
-            tys = Enum.map_join(fields, ", ", &rty(&1, %{types: types}))
-            "    #{v}(#{tys}),"
-          end
-        end)
-
-      ctors =
-        Enum.map_join(d.ctors, "\n\n", fn c ->
-          fn_name = Map.fetch!(ctor_fns, {d.name, c.name})
-          v = Map.fetch!(variants, {d.name, c.name})
-          fields = ctor_fields(book, c.name)
-
-          {bound, _} =
-            fields
-            |> Enum.with_index()
-            |> Enum.map_reduce(file_scope, fn {lay, i}, scope ->
-              {rn, scope} = Name.bind(g("a", i), scope)
-              {{rn, lay}, scope}
-            end)
-
-          args =
-            Enum.map_join(bound, ", ", fn {rn, lay} -> "#{rn}: #{rty(lay, %{types: types})}" end)
-
-          build =
-            if fields == [] do
-              "#{node}::#{v}"
-            else
-              inner = Enum.map_join(bound, ", ", fn {rn, _lay} -> rn end)
-              "#{node}::#{v}(#{inner})"
-            end
-
-          "fn #{fn_name}(#{args}) -> #{type} {\n    #{type}(::std::rc::Rc::new(#{build}))\n}"
-        end)
-
-      """
-      #[derive(::std::clone::Clone)]
-      pub struct #{type}(::std::rc::Rc<#{node}>);
-      #[derive(::std::clone::Clone)]
-      enum #{node} {
-      #{variants_txt}
-      }
-
-      #{ctors}
-      """
-      |> String.trim()
+      if Map.get(d, :unboxed) == true do
+        unboxed_data_item(d, book, types, variants, ctor_fns, file_scope)
+      else
+        boxed_data_item(d, book, types, variants, ctor_fns, file_scope)
+      end
     end)
+  end
+
+  defp boxed_data_item(d, book, types, variants, ctor_fns, file_scope) do
+    type = Map.fetch!(types, d.name)
+    node = g("node_" <> type)
+
+    variants_txt =
+      Enum.map_join(d.ctors, "\n", fn c ->
+        v = Map.fetch!(variants, {d.name, c.name})
+        fields = ctor_fields(book, c.name)
+
+        if fields == [] do
+          "    #{v},"
+        else
+          tys = Enum.map_join(fields, ", ", &rty(&1, %{types: types}))
+          "    #{v}(#{tys}),"
+        end
+      end)
+
+    ctors =
+      Enum.map_join(d.ctors, "\n\n", fn c ->
+        fn_name = Map.fetch!(ctor_fns, {d.name, c.name})
+        v = Map.fetch!(variants, {d.name, c.name})
+        fields = ctor_fields(book, c.name)
+
+        {bound, _} =
+          fields
+          |> Enum.with_index()
+          |> Enum.map_reduce(file_scope, fn {lay, i}, scope ->
+            {rn, scope} = Name.bind(g("a", i), scope)
+            {{rn, lay}, scope}
+          end)
+
+        args =
+          Enum.map_join(bound, ", ", fn {rn, lay} -> "#{rn}: #{rty(lay, %{types: types})}" end)
+
+        build =
+          if fields == [] do
+            "#{node}::#{v}"
+          else
+            inner = Enum.map_join(bound, ", ", fn {rn, _lay} -> rn end)
+            "#{node}::#{v}(#{inner})"
+          end
+
+        "fn #{fn_name}(#{args}) -> #{type} {\n    #{type}(::std::rc::Rc::new(#{build}))\n}"
+      end)
+
+    """
+    #[derive(::std::clone::Clone)]
+    pub struct #{type}(::std::rc::Rc<#{node}>);
+    #[derive(::std::clone::Clone)]
+    enum #{node} {
+    #{variants_txt}
+    }
+
+    #{ctors}
+    """
+    |> String.trim()
+  end
+
+  # By value. Copy is derived and Eq is not: a Slice field is a raw pointer.
+  defp unboxed_data_item(d, book, types, variants, ctor_fns, file_scope) do
+    type = Map.fetch!(types, d.name)
+
+    variants_txt =
+      Enum.map_join(d.ctors, "\n", fn c ->
+        v = Map.fetch!(variants, {d.name, c.name})
+        fields = ctor_fields(book, c.name)
+
+        if fields == [] do
+          "    #{v},"
+        else
+          tys = Enum.map_join(fields, ", ", &rty(&1, %{types: types}))
+          "    #{v}(#{tys}),"
+        end
+      end)
+
+    ctors =
+      Enum.map_join(d.ctors, "\n\n", fn c ->
+        fn_name = Map.fetch!(ctor_fns, {d.name, c.name})
+        v = Map.fetch!(variants, {d.name, c.name})
+        fields = ctor_fields(book, c.name)
+
+        {bound, _} =
+          fields
+          |> Enum.with_index()
+          |> Enum.map_reduce(file_scope, fn {lay, i}, scope ->
+            {rn, scope} = Name.bind(g("a", i), scope)
+            {{rn, lay}, scope}
+          end)
+
+        args =
+          Enum.map_join(bound, ", ", fn {rn, lay} -> "#{rn}: #{rty(lay, %{types: types})}" end)
+
+        build =
+          if fields == [] do
+            "#{type}::#{v}"
+          else
+            inner = Enum.map_join(bound, ", ", fn {rn, _lay} -> rn end)
+            "#{type}::#{v}(#{inner})"
+          end
+
+        "fn #{fn_name}(#{args}) -> #{type} {\n    #{build}\n}"
+      end)
+
+    """
+    #[derive(::std::clone::Clone, ::std::marker::Copy)]
+    pub enum #{type} {
+    #{variants_txt}
+    }
+
+    #{ctors}
+    """
+    |> String.trim()
   end
 
   defp atom_enum(atoms) when map_size(atoms) == 0, do: ""
