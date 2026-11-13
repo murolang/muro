@@ -33,12 +33,18 @@ defmodule Muro.Emit.Asm do
   Render `book` as one Cortex-M0 assembly file.
   """
   def render(book, stem) when is_list(book) and is_binary(stem) do
-    case IR.elaborate(book) do
-      {:ok, funs} ->
-        if scope_ok?(funs), do: compile(book, funs, stem), else: {:error, "asm:scope"}
+    case Emit.refuse_may_fail(book) do
+      {:error, _} = err ->
+        err
 
-      {:error, reason} ->
-        {:error, reason}
+      :ok ->
+        case IR.elaborate(book) do
+          {:ok, funs} ->
+            if scope_ok?(funs), do: compile(book, funs, stem), else: {:error, "asm:scope"}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
     end
   end
 

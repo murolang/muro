@@ -66,6 +66,13 @@ defmodule Muro.Emit.Otp do
   The module is that stem plus `Otp` (`PingOtp`).
   """
   def render(book, stem) when is_list(book) and is_binary(stem) do
+    case Muro.Emit.refuse_may_fail(book) do
+      {:error, _} = err -> err
+      :ok -> render_book(book, stem)
+    end
+  end
+
+  defp render_book(book, stem) do
     parent = module_name(stem)
     mods = modules(book)
     meets = meetings(book)
@@ -82,6 +89,13 @@ defmodule Muro.Emit.Otp do
   `Muro.Emit.elixir_base/1`. No source is written.
   """
   def outline(book, stem) when is_list(book) and is_binary(stem) do
+    case Muro.Emit.refuse_may_fail(book) do
+      {:error, _} = err -> err
+      :ok -> outline_book(book, stem)
+    end
+  end
+
+  defp outline_book(book, stem) do
     parent = module_name(stem)
     mods = modules(book)
     meets = meetings(book)

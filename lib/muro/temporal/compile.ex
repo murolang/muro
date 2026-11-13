@@ -165,8 +165,26 @@ defmodule Muro.Temporal.Compile do
     end
   end
 
+  # The arm is compiled at the pre-receive environment. A `rec` around
+  # the receive still jumps to the receive.
+  defp go({:on_fail, recv, arm}, pending, renv, venv, slot, n) do
+    with {:ok, entry, next, slots, bs, binders} <- go(recv, pending, renv, venv, slot, n),
+         {:ok, aentry, anext, aslots, abs, abinders} <-
+           go(arm, [], add_names(pending, entry, renv), venv, slot, next) do
+      {:ok, entry, anext, max(slots, aslots), put_fail(bs, entry, aentry) ++ abs,
+       binders ++ abinders}
+    end
+  end
+
   defp go(_other, _pending, _renv, _venv, _slot, _n) do
     {:error, "payload outside the temporal fragment"}
+  end
+
+  defp put_fail(blocks, at, fail) do
+    Enum.map(blocks, fn
+      %{at: ^at} = blk -> Map.put(blk, :fail, fail)
+      blk -> blk
+    end)
   end
 
   defp cont(body, pending, renv, venv, slot, n, block_of) do

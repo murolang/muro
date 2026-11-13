@@ -1,0 +1,17 @@
+-- The same exchange with no `may fail`. Death is not in the graph.
+-- The report path releases the slot, and that is the only run.
+
+data Report : Type where
+  ok : Report
+
+session task-work := send Report end
+session server-wait := recv Report end
+
+conform task : task-work := put ok done
+
+conform server : server-wait :=
+  get (r : Report) done
+
+meet plain : server with task buffer 1
+
+temporal released : plain := (server at first get) leads_to (server done)

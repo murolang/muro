@@ -47,7 +47,8 @@ defmodule Muro do
   definitions imported from a file.
   """
   def emit_file(path, module, opts \\ []) when is_atom(module) do
-    with {:ok, book} <- checked_book(path, opts) do
+    with {:ok, book} <- checked_book(path, opts),
+         :ok <- Emit.refuse_may_fail(book) do
       {:ok, Emit.emit_module(module, book)}
     end
   end

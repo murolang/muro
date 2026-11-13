@@ -42,6 +42,14 @@ defmodule Muro.Emit do
     if unboxed_opt_image?(book, funs), do: {:error, "c:unboxed"}, else: :ok
   end
 
+  @doc """
+  `{:error, "c:mayfail\\n..."}` when a meeting marks a party that may fail.
+
+  Every backend refuses the book. The declaration is not erased: the
+  failure arm the checker accepted is not yet the handling that runs.
+  """
+  def refuse_may_fail(book) when is_list(book), do: Muro.Fail.refuse_emit(book)
+
   defp unboxed_opt_image?(book, funs) do
     Enum.any?(funs, fn fun ->
       contains_unboxed_opt?(book, fun.ret) or contains_unboxed_opt?(book, fun.params) or

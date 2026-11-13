@@ -583,6 +583,33 @@ meet inflight : client with server buffer 1
 
 The OTP image of `buffer N` gives each direction N ids sent and not yet acked. That set can still hold a token the peer has consumed, until the ack is applied. The sender yields while N ids are unacked, and that yield applies a peer failure already recorded. Credit returns when the ack is applied, and a second acknowledgement of that same send does not return credit. The OTP image of a meeting with no buffer remains an unbounded mailbox. A paired process on either image stays up after its own skeleton finishes, and it stops `:normal` once its unacked ids, its queue, and the peer's settled mark are discharged. A peer exit for any reason other than `:normal` is `{:shutdown, :abandon}`. A `:normal` exit before this process has settled is the same abandon. A `:normal` exit after it has settled, while an id is still unacked or a token is still queued, is `{:shutdown, :orphan}` even without a settled message from the peer. The same orphan is the stop when the peer has settled and a token is still held. A compatible generated pair that finishes the handshake stops `:normal`. A manual pair of an integer cap with a nil cap stops `{:shutdown, :incompatible_wire}` on the arity that does not match. Standalone `start/2` stops `:normal` at its own finish. Regenerate every emitted process that talks to another, and run that set as one version. The formal account is the Agda model. The executable checker is not that theorem. Temporal and fairness transfer to this runtime is unproved. The wire is [Emit](emit.md).
 
+## A party may stop
+
+A two-party meeting may mark a party that stops before `end`. The mark sits on that party. `buffer N` stays last.
+
+```muro
+meet wire : server with task may fail
+meet back : server may fail with task
+meet both : server may fail with task may fail buffer 1
+```
+
+`may` and `fail` are keywords only in this form, the way `buffer` is a keyword only after the right-hand process and only with a numeral. `def may : run Nat := 0` and `def fail : run Nat := 0` stay definitions. `may fail` in a `run` term is an application. On a talk, a choreography, a link, a seat, an endpoint, an endpoint function, or a process, the same two words are `may fail is only a mark on a party of a meet`.
+
+Every receive from a marked party has a failure arm. The arm is a process, written after the continuation of that receive:
+
+```muro
+conform server : server-wait :=
+  get (r : Report) done
+  fail
+    done
+```
+
+`fail (e : Report)` binds a reason. The reason is a payload type the book names. Omitting the reason is allowed. The name is in scope in the arm. The value the `get` bound is not. The arm is not a step of the protocol. The success continuation is. On `session %1` the continuation and the arm both finish, so `fail stop` on that session is `linear channel abandoned`.
+
+A `put` has no failure arm. A message sent to a party that has stopped is dropped. The stop is handled at the survivor's next receive from that party. A receive from a party that was not marked refuses a failure arm: `server: get (r : Report) has a failure arm, and task may not fail`. A missing arm is refused on the meeting, and the message names the process, the receive, and the party: `server: get (r : Report) does not handle failure of task`.
+
+The meeting is checked. Emit of a book that uses the mark is refused on every backend, including OTP and the state machine, with `c:mayfail`. The handling stays in the book. A monitor, and a `down` step of the state machine, are the next image of this meeting. `examples/may-fail-free.muro` is the worked book. The server holds a slot until the task reports or the task stops, and the failure arm releases the slot. The runs are [Temporal](temporal.md).
+
 ## Where a check fails
 
 A refusal names the step and the position of that step. The line and column are the `put`, `get`, `pick0`, `pick1`, `cover`, or `match`, not the `conform` that contains it. A conformance says what the process does and which protocol step it was checked against. A reason comes after that, when the value was computed.

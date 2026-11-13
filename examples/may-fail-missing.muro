@@ -1,0 +1,15 @@
+-- A server holds a slot until the task reports. The task may stop
+-- first. The receive has only the report arm, so the meeting is refused.
+
+data Report : Type where
+  ok : Report
+
+session task-work := send Report end
+session server-wait := recv Report end
+
+conform task : task-work := put ok done
+
+conform server : server-wait :=
+  get (r : Report) done
+
+meet miss : server with task may fail buffer 1

@@ -86,6 +86,7 @@ lib/muro/print.ex       surface syntax, locations, hole messages
 lib/muro/subst.ex       de Bruijn subst
 lib/muro/check.ex       Elixir mirror of ⊢
 lib/muro/session.ex     session / conform, mirror of decide and finishes; `rec X. S` unfolds one action and a repeated head conforms
+lib/muro/fail.ex        a party of a two-party meeting may stop; a receive from that party has a failure arm; emit of the mark is `c:mayfail`
 lib/muro/talk.ex        one description of an exchange, mirror of seen
 lib/muro/choreo.ex      a global type projected to each role pair, mirror of project
 lib/muro/place.ex       place / scheme / move, mirror of decide

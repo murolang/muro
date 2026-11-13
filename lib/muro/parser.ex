@@ -196,6 +196,13 @@ defmodule Muro.Parser do
   defp take_span({:cover, p, q}, [at | rest]), do: take_two(at, p, q, rest)
   defp take_span({:iget, _, p, q}, [at | rest]), do: take_two(at, p, q, rest)
 
+  defp take_span({:on_fail, recv, _, arm}, notes) do
+    with {:ok, a, rest} <- take_span(recv, notes),
+         {:ok, b, rest} <- take_span(arm, rest) do
+      {:ok, %{at: a.at, down: a.down ++ [b]}, rest}
+    end
+  end
+
   defp take_span({:match, _, arms}, [at | rest]) do
     with {:ok, cs, rest} <- take_many(arms, rest) do
       {:ok, %{at: at, down: cs}, rest}
@@ -348,6 +355,9 @@ defmodule Muro.Parser do
           {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
+
+      may_fail_mark?(s) ->
+        {:error, err(s, may_fail_only())}
 
       true ->
         case parse_def(s) do
@@ -831,6 +841,7 @@ defmodule Muro.Parser do
     with {:ok, rest} <- kw(s, "endpoint"),
          {:ok, name, rest} <- ident(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":="),
+         {:ok, _} <- refuse_stray_may_fail(rest),
          {:ok, session, rest} <- ident(skip(rest)),
          {:ok, rest} <- kw(skip(rest), "at"),
          {:ok, scheme, rest} <- ident(skip(rest)) do
@@ -921,10 +932,11 @@ defmodule Muro.Parser do
   defp temporal_start?(s), do: temporal_entry?(s)
 
   # meet wire : pong with peer
-  # meet wire : pong with peer buffer 1
-  # `meet` and `with` are keywords only in this form. `buffer` is a
-  # keyword only here, and only with a numeral. Absent, the meeting is
-  # the rendezvous.
+  # meet wire : server with task may fail buffer 1
+  # `meet` and `with` are keywords only in this form. `may fail` is a
+  # mark on the party it follows, and only here. `buffer` is a keyword
+  # only here, and only with a numeral, and it stays last. Absent, the
+  # meeting is the rendezvous.
   defp parse_meet(s) do
     loc = here(s)
 
@@ -932,8 +944,10 @@ defmodule Muro.Parser do
          {:ok, name, rest} <- ident(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":"),
          {:ok, left, rest} <- ident(skip(rest)),
+         {:ok, left_fail, rest} <- parse_party_fail(skip(rest)),
          {:ok, rest} <- kw(skip(rest), "with"),
          {:ok, right, rest} <- ident(skip(rest)),
+         {:ok, right_fail, rest} <- parse_party_fail(skip(rest)),
          {:ok, buffer, rest} <- parse_buffer(skip(rest)) do
       {:ok,
        %{
@@ -943,8 +957,42 @@ defmodule Muro.Parser do
          left: left,
          right: right,
          buffer: buffer,
+         may_fail: %{left: left_fail, right: right_fail},
          loc: loc
        }, rest}
+    end
+  end
+
+  # `may` followed by `fail` marks that party. `may` alone is refused:
+  # the two words are the mark, and they are not a party name here.
+  defp parse_party_fail(s) do
+    s = skip(s)
+
+    if word_kw?(s, "may") do
+      rest = s |> after_kw("may") |> skip()
+
+      if word_kw?(rest, "fail") do
+        {:ok, true, after_kw(rest, "fail")}
+      else
+        {:error, err(s, may_fail_only())}
+      end
+    else
+      {:ok, false, s}
+    end
+  end
+
+  defp may_fail_mark?(s) do
+    s = skip(s)
+    word_kw?(s, "may") and word_kw?(skip(after_kw(s, "may")), "fail")
+  end
+
+  defp may_fail_only, do: "may fail is only a mark on a party of a meet"
+
+  defp refuse_stray_may_fail(s) do
+    if may_fail_mark?(s) do
+      {:error, err(skip(s), may_fail_only())}
+    else
+      {:ok, s}
     end
   end
 
@@ -1801,6 +1849,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_fail_mark?(s) ->
+        {:error, err(s, may_fail_only())}
+
       s == "" or global_stop?(s) ->
         {:ok, :end, s}
 
@@ -1977,6 +2028,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_fail_mark?(s) ->
+        {:error, err(s, may_fail_only())}
+
       word_kw?(s, "over") ->
         {:ok, :over, after_kw(s, "over")}
 
@@ -2042,6 +2096,7 @@ defmodule Muro.Parser do
     with {:ok, rest} <- kw(s, "seat"),
          {:ok, name, rest} <- ident(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, _} <- refuse_stray_may_fail(rest),
          {:ok, party, rest} <- parse_party(skip(rest)),
          {:ok, rest} <- kw(skip(rest), "at"),
          {:ok, place, rest} <- ident(skip(rest)),
@@ -2072,6 +2127,7 @@ defmodule Muro.Parser do
     with {:ok, rest} <- kw(s, "link"),
          {:ok, name, rest} <- ident(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, _} <- refuse_stray_may_fail(rest),
          {:ok, mark, rest} <- parse_link_mark(skip(rest)),
          {:ok, left, rest} <- ident(skip(rest)),
          {:ok, rest} <- kw(skip(rest), "with"),
@@ -2143,16 +2199,38 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
-      word_kw?(s, "end") -> {:ok, :end, after_kw(s, "end")}
-      word_kw?(s, "send") -> parse_comm_proto(s, "send", :send, bound)
-      word_kw?(s, "recv") -> parse_comm_proto(s, "recv", :recv, bound)
-      word_kw?(s, "choose") -> parse_proto2(s, "choose", :choose, bound)
-      word_kw?(s, "branch") -> parse_proto2(s, "branch", :branch, bound)
-      word_kw?(s, "rec") -> parse_rec(s, &parse_proto/2, bound)
-      word_kw?(s, "case") -> parse_case_proto(s, bound)
-      has_prefix?(s, "(") -> parse_paren(s, fn body -> parse_proto(body, bound) end)
-      ident_start?(s) -> parse_proto_name(s, bound)
-      true -> {:error, err(s, "expected a protocol")}
+      may_fail_mark?(s) ->
+        {:error, err(s, may_fail_only())}
+
+      word_kw?(s, "end") ->
+        {:ok, :end, after_kw(s, "end")}
+
+      word_kw?(s, "send") ->
+        parse_comm_proto(s, "send", :send, bound)
+
+      word_kw?(s, "recv") ->
+        parse_comm_proto(s, "recv", :recv, bound)
+
+      word_kw?(s, "choose") ->
+        parse_proto2(s, "choose", :choose, bound)
+
+      word_kw?(s, "branch") ->
+        parse_proto2(s, "branch", :branch, bound)
+
+      word_kw?(s, "rec") ->
+        parse_rec(s, &parse_proto/2, bound)
+
+      word_kw?(s, "case") ->
+        parse_case_proto(s, bound)
+
+      has_prefix?(s, "(") ->
+        parse_paren(s, fn body -> parse_proto(body, bound) end)
+
+      ident_start?(s) ->
+        parse_proto_name(s, bound)
+
+      true ->
+        {:error, err(s, "expected a protocol")}
     end
   end
 
@@ -2323,7 +2401,7 @@ defmodule Muro.Parser do
     with {:ok, rest} <- kw(s, "on"),
          {:ok, p, rest} <- parse_proc(skip(rest), bound),
          {:ok, q, rest} <- parse_proc(skip(rest), bound) do
-      {:ok, {:iget, name, p, q}, rest}
+      with_fail({:ok, {:iget, name, p, q}, rest}, bound)
     end
   end
 
@@ -2677,6 +2755,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_fail_mark?(s) ->
+        {:error, err(s, may_fail_only())}
+
       word_kw?(s, "done") ->
         note(s)
         {:ok, :done, after_kw(s, "done")}
@@ -2755,7 +2836,7 @@ defmodule Muro.Parser do
                       parse_index_proc(rest, String.to_atom(name), ty, bound)
                     else
                       with {:ok, p, rest} <- parse_proc(rest, bound) do
-                        {:ok, {:get, ty, String.to_atom(name), p}, rest}
+                        with_fail({:ok, {:get, ty, String.to_atom(name), p}, rest}, bound)
                       end
                     end
                   end
@@ -2789,7 +2870,7 @@ defmodule Muro.Parser do
       else
         with {:ok, p, rest} <- parse_proc(rest, bound) do
           # Use a generated anonymous variable name
-          {:ok, {:get, ty, :_, p}, rest}
+          with_fail({:ok, {:get, ty, :_, p}, rest}, bound)
         end
       end
     end
@@ -2810,7 +2891,54 @@ defmodule Muro.Parser do
     with {:ok, rest} <- kw(s, word),
          {:ok, p, rest} <- parse_proc(skip(rest), bound),
          {:ok, q, rest} <- parse_proc(skip(rest), bound) do
-      {:ok, {tag, p, q}, rest}
+      with_fail({:ok, {tag, p, q}, rest}, bound)
+    end
+  end
+
+  # `fail` is an arm only after a receive continuation. `get Nat fail`
+  # is still a call of a process named `fail`. `fail (r : Reason)` binds
+  # a reason in the arm. `fail (done)` is the parenthesised process.
+  defp with_fail({:ok, recv, rest}, bound) do
+    looked = skip(rest)
+
+    if word_kw?(looked, "fail") do
+      parse_fail_arm(recv, after_kw(looked, "fail"), bound)
+    else
+      {:ok, recv, rest}
+    end
+  end
+
+  defp parse_fail_arm(recv, s, bound) do
+    with {:ok, reason, s} <- parse_fail_reason(skip(s), bound),
+         {:ok, arm, rest} <- parse_proc(skip(s), bound) do
+      {:ok, {:on_fail, recv, reason, arm}, rest}
+    end
+  end
+
+  defp parse_fail_reason(s, bound) do
+    if fail_binder?(s) do
+      with {:ok, rest} <- tok(s, "("),
+           {:ok, name, rest} <- ident(skip(rest)),
+           {:ok, rest} <- tok(skip(rest), ":"),
+           {:ok, ty, rest} <- parse_pay(skip(rest), bound),
+           {:ok, rest} <- tok(skip(rest), ")") do
+        {:ok, {ty, String.to_atom(name)}, rest}
+      end
+    else
+      {:ok, nil, s}
+    end
+  end
+
+  defp fail_binder?(s) do
+    case tok(skip(s), "(") do
+      {:ok, rest} ->
+        case ident(skip(rest)) do
+          {:ok, _, rest} -> has_prefix?(skip(rest), ":")
+          _ -> false
+        end
+
+      _ ->
+        false
     end
   end
 
@@ -3866,6 +3994,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_fail_mark?(s) ->
+        {:error, err(s, may_fail_only())}
+
       has_prefix?(s, "(") ->
         with {:ok, rest} <- tok(s, "("),
              {:ok, t, rest} <- parse_eterm(rest),

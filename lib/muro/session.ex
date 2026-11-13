@@ -467,6 +467,16 @@ defmodule Muro.Session do
     {:match, name, Enum.map(arms, &subst_arm(&1, env1))}
   end
 
+  defp subst_p({:on_fail, recv, reason, arm}, env) do
+    env1 =
+      case reason do
+        {_ty, name} -> Map.delete(env, name)
+        _ -> env
+      end
+
+    {:on_fail, subst_p(recv, env), reason, subst_p(arm, env1)}
+  end
+
   defp subst_p({:rec, name, body}, env), do: {:rec, name, subst_p(body, env)}
   defp subst_p({:call, name}, _env), do: {:call, name}
   defp subst_p(:done, _env), do: :done
@@ -528,6 +538,7 @@ defmodule Muro.Session do
   defp skel_go({:iget, name, p, q}), do: {:index, name, skel_go(p), skel_go(q)}
   defp skel_go({:match, _name, arms}), do: {:pick, Enum.map(arms, &skel_arm/1)}
   defp skel_go({:rec, name, body}), do: {:loop, name, skel_go(body)}
+  defp skel_go({:on_fail, recv, _, _}), do: skel_go(recv)
   defp skel_go({:call, name}), do: {:jump, name}
 
   defp skel_arm({:arm, c, xs, {:match, name, inner}})
@@ -570,6 +581,7 @@ defmodule Muro.Session do
     {:pick, Enum.map(arms, &carry_arm(&1, book, ctx))}
   end
 
+  defp carry_go({:on_fail, recv, _, _}, book, ctx), do: carry_go(recv, book, ctx)
   defp carry_go({:rec, name, body}, book, ctx), do: {:loop, name, carry_go(body, book, ctx)}
   defp carry_go({:call, name}, _book, _ctx), do: {:jump, name}
 
@@ -747,6 +759,13 @@ defmodule Muro.Session do
   defp finishes_go({:iget, _, p, q}) do
     case finishes_go(p) do
       :yes -> finishes_go(q)
+      :no -> :no
+    end
+  end
+
+  defp finishes_go({:on_fail, recv, _, arm}) do
+    case finishes_go(recv) do
+      :yes -> finishes_go(arm)
       :no -> :no
     end
   end
@@ -1926,6 +1945,11 @@ defmodule Muro.Session do
     end
   end
 
+  # The failure arm is not a protocol step. The success continuation is.
+  defp step({:on_fail, recv, _, _}, proto, ctx, idx, penv, senv, seen, fuel, book) do
+    step(recv, proto, ctx, idx, penv, senv, seen, fuel, book)
+  end
+
   defp step(p, s, _ctx, _idx, _penv, _senv, _seen, _fuel, _book), do: refuse(p, s)
 
   defp here_span, do: Process.get(@span_key)
@@ -2243,6 +2267,9 @@ defmodule Muro.Session do
 
   defp free_proc({:match, _, arms}),
     do: Enum.reduce(arms, MapSet.new(), &MapSet.union(free_proc(arm_body(&1)), &2))
+
+  defp free_proc({:on_fail, recv, _, arm}),
+    do: MapSet.union(free_proc(recv), free_proc(arm))
 
   defp free_proc({:call, name}), do: MapSet.new([name])
   defp free_proc({:rec, name, body}), do: MapSet.delete(free_proc(body), name)
@@ -5133,6 +5160,10 @@ defmodule Muro.Session do
     end)
   end
 
+  defp proc_ok({:on_fail, recv, _, arm}, ctx) do
+    with :ok <- proc_ok(recv, ctx), do: proc_ok(arm, guard_proc(ctx))
+  end
+
   defp proc_ok({:rec, name, body}, ctx), do: proc_ok(body, Map.put(ctx, name, :unguarded))
 
   defp proc_ok({:call, name}, ctx) do
@@ -5587,6 +5618,14 @@ defmodule Muro.Session do
     else
       "match #{name} #{Enum.map_join(arms, " ", &paren_proc/1)}"
     end
+  end
+
+  def show_proc({:on_fail, recv, nil, arm}) do
+    "#{show_proc(recv)} fail #{paren_proc(arm)}"
+  end
+
+  def show_proc({:on_fail, recv, {ty, name}, arm}) do
+    "#{show_proc(recv)} fail (#{name} : #{show_pay_atom(ty)}) #{paren_proc(arm)}"
   end
 
   def show_proc({:rec, name, body}), do: "rec #{name}. #{show_proc(body)}"
@@ -7031,6 +7070,7 @@ defmodule Muro.Session do
   def step_proc({:cover, _, _}), do: "cover"
   def step_proc({:iget, name, _, _}), do: "get (#{name} : Bit)"
   def step_proc({:match, name, _}), do: "match #{name}"
+  def step_proc({:on_fail, recv, _, _}), do: step_proc(recv)
   def step_proc({:rec, name, _}), do: "rec #{name}"
   def step_proc({:call, name}), do: "#{name}"
   def step_proc(other), do: inspect(other)

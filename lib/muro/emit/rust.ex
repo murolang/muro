@@ -66,7 +66,8 @@ defmodule Muro.Emit.Rust do
   def render(book, stem) when is_list(book) and is_binary(stem) do
     case IR.elaborate(book) do
       {:ok, funs} ->
-        with :ok <- Emit.refuse_unboxed_opt(book, funs) do
+        with :ok <- Emit.refuse_may_fail(book),
+             :ok <- Emit.refuse_unboxed_opt(book, funs) do
           compile(book, funs, stem)
         end
 
@@ -83,7 +84,8 @@ defmodule Muro.Emit.Rust do
   def outline(book, _stem) when is_list(book) do
     case IR.elaborate(book) do
       {:ok, funs} ->
-        with :ok <- Emit.refuse_unboxed_opt(book, funs),
+        with :ok <- Emit.refuse_may_fail(book),
+             :ok <- Emit.refuse_unboxed_opt(book, funs),
              {:ok, st0, groups} <- image(book, funs) do
           user = Enum.map(groups, fn {fun, _} -> fun end)
 

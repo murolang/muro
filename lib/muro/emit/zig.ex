@@ -92,7 +92,8 @@ defmodule Muro.Emit.Zig do
   def render(book, stem) when is_list(book) and is_binary(stem) do
     case IR.elaborate(book) do
       {:ok, funs} ->
-        with :ok <- Emit.refuse_unboxed_opt(book, funs) do
+        with :ok <- Emit.refuse_may_fail(book),
+             :ok <- Emit.refuse_unboxed_opt(book, funs) do
           compile(book, funs, stem)
         end
 
@@ -110,7 +111,8 @@ defmodule Muro.Emit.Zig do
   def outline(book, _stem) when is_list(book) do
     case IR.elaborate(book) do
       {:ok, funs} ->
-        with :ok <- Emit.refuse_unboxed_opt(book, funs),
+        with :ok <- Emit.refuse_may_fail(book),
+             :ok <- Emit.refuse_unboxed_opt(book, funs),
              {:ok, st, groups, _scan, _flags, steps, _step_info} <- image(book, funs) do
           user = Enum.map(groups, fn {fun, _} -> fun end)
           step_funs = Enum.flat_map(groups, fn {_fun, ss} -> ss end)

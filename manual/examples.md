@@ -430,6 +430,23 @@ temporal ctl-seen : inflight :=
 
 See [Temporal](temporal.md).
 
+## may-fail-free.muro
+
+A task may stop before it reports. The server holds a slot until the report, or until that stop, and then releases it.
+
+```
+meet free : server with task may fail buffer 1
+conform server : server-wait :=
+  get (r : Report) done
+  fail
+    done
+temporal freed : free := (server at first get) leads_to (server done)
+```
+
+The failure arm is `done`, so the slot is released on the report and on the run where the task stops. `mix muro.check` prints `temporal freed: holds in 7 reachable states, 11 transitions`. `may-fail-hold.muro` writes `fail stop`. The meeting checks, and the same formula fails after `task died`. `may-fail-missing.muro` has no failure arm, and the meeting is refused at that receive. `may-fail-control.muro` does not mark the task. The formula holds in 3 reachable states, 3 transitions. `may-fail-send.muro` sends before the receive. The send has no failure arm, and the formula holds in 14 reachable states, 21 transitions.
+
+Emit of a book that uses the mark is refused on every backend (`c:mayfail`). See [Sessions](sessions.md#a-party-may-stop) and [Temporal](temporal.md#a-party-may-stop).
+
 ## place.muro
 
 A named place stays or crosses once. The place and the scheme are spec. The move is evidence. The Elixir, C, Rust, Zig, and assembly emitters omit all three. `--node` writes one call for each cross.

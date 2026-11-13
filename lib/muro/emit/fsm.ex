@@ -78,6 +78,13 @@ defmodule Muro.Emit.Fsm do
   end
 
   defp plan(book, path, opts) do
+    case Emit.refuse_may_fail(book) do
+      {:error, _} = err -> err
+      :ok -> plan_sessions(book, path, opts)
+    end
+  end
+
+  defp plan_sessions(book, path, opts) do
     label = book_label(path, opts)
 
     case Enum.filter(book, &(Map.get(&1, :kind) == :session)) do

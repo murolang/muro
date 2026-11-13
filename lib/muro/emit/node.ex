@@ -19,8 +19,14 @@ defmodule Muro.Emit.Node do
   BEAM node the calls use.
   """
   def render(book, stem, node) when is_list(book) and is_binary(stem) and is_atom(node) do
-    funs = functions(book)
-    {:ok, source(module_name(stem), node, funs)}
+    case Muro.Emit.refuse_may_fail(book) do
+      {:error, _} = err ->
+        err
+
+      :ok ->
+        funs = functions(book)
+        {:ok, source(module_name(stem), node, funs)}
+    end
   end
 
   defp functions(book) do
