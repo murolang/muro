@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.20.37
+
+`mix muro.synth` on the finite lam environment checks a homomorphism for the ranking it synthesized. The survivor is `(notp (feat arg-erased))`. It prefers `arg` at `copy`, `copy4`, and `copy8`, and `spine` at `len`. `arg-erased` asks whether the λ that heads the argument redex is erased. Any environment can supply that reading as a `Feature`. The binder is affine on the copy states and erased at `len`. A binder used more than once, and an argument that is itself a call, hold at both, and that conjunction is dropped. The predicate is the policy that runs. The evidence is about that run.
+
+A state that pays nothing now, and steps only to states whose `solve` is constant, still receives that ranking. The tail comparison rewrites those constants.
+
+### Manual
+
+- Synthesis. CSHRL. Examples.
+
+### Package
+
+- Version 0.20.37.
+
 ## 0.20.36
 
 `Bytes` is a sequence of raw octets, and `Slice` is a view of those octets or of a buffer the host already owns. A literal is `b"..."`, with escapes `\\`, `\"`, `\n`, `\r`, `\t`, and `\xHH`. `\xHH` is any octet. There is no interpolation and no `\u{...}`. `b"é"` has length two. `b"\xFF"` has length one. A bytes value is not a `String` and not an atom. A `Bytes` literal is accepted as a `Slice`.

@@ -24,6 +24,7 @@ In brief: `examples/cshrl/` is [CSHRL](https://github.com/doctorcorral/csh-rl) i
 | `envs/skill_investment.muro` | `SkillInvestment` |
 | `lib/synth.muro` | A predicate program: `eval`, `propagation`, `vs-shrinks`, `sufficient-cegis` |
 | `envs/synth_bit.muro` | Two carriers, one feature, one representative |
+| `envs/lam.muro` | A finite substitution graph. `arg-erased` is the quantity of the λ that heads the argument |
 | `std/` | Bool, Nat order and `maxN`, List, Stream with `Dom` |
 
 A library file does not check on its own: `mix muro.check examples/cshrl/lib/core.muro` refuses with `param State is supplied by a file that imports this one`. Check an environment instead:
@@ -99,7 +100,7 @@ In BinarySacrifice the stream of `go-trap` is 1, 0, 0, … and the stream of `go
 
 `envs/synth_bit.muro` is that claim on two carriers. Both make the one feature true, so `on` represents `off`, and the target is constantly true. One observation is enough. `bit-policy` is the run `eval truep`. It is the deployed policy, and `bit-policy-matches` is `sufficient-cegis` at that exact run: the policy matches the target on both carriers.
 
-`mix muro.synth` runs that search on a checked environment and calls the environment's emitted `step`. The smallest program that matches every observation is the policy the result book deploys, and `eval` runs it. A score does not decide who survives. A homomorphism for that policy is later. The page is [Synthesis](synth.md).
+`mix muro.synth` runs that search on a checked environment and calls the environment's emitted `step`. The smallest program that matches every observation is the policy the result book deploys, and `eval` runs it. A score does not decide who survives. When the environment defines the homomorphism, the same book checks that evidence on this `step`. The page is [Synthesis](synth.md).
 
 ```
 mix muro.check examples/cshrl/envs/synth_bit.muro
