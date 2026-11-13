@@ -677,11 +677,13 @@ Two data types are both named `Foo`. `foo` builds the first at `0` and `bar` bui
 
 ## cshrl/
 
-[CSHRL](cshrl.md) as a library. `lib/` holds the generic modules, written against `param` entries, and `envs/` holds the environments that supply them. Three run an agent. `envs/optimal.muro` is the return theorem: the go agent's reward stream dominates every other policy. `envs/synth_bit.muro` deploys a PredProg as a run policy on two carriers. The backends emit `bit-policy`. Propagation, version-space shrinkage, and sufficient-cegis are evidence about that run, and they are erased. Check an environment; a file under `lib/` alone is refused for its unsupplied params.
+[CSHRL](cshrl.md) as a library. `lib/` holds the generic modules, written against `param` entries, and `envs/` holds the environments that supply them. Three run an agent. `envs/optimal.muro` is the return theorem: the go agent's reward stream dominates every other policy. `envs/synth_bit.muro` deploys a PredProg as a run policy on two carriers. The backends emit `bit-policy`. Propagation, version-space shrinkage, and sufficient-cegis are evidence about that run, and they are erased. `envs/lam.muro` is a finite substitution graph. It is not a validated synthesis target: `mix muro.synth` reports that `len` agrees with `copy` on every feature. `envs/maze_auto.muro` declares no feature. `mix muro.synth` checks `CoindHomo` for `(feat has-pos-reward-go)`, which prefers `stay` at `west` and `go` at `east`. Check an environment; a file under `lib/` alone is refused for its unsupplied params.
 
 ```
 mix muro.check examples/cshrl/envs/binary_sacrifice.muro
 mix muro.check examples/cshrl/envs/synth_bit.muro
+mix muro.check examples/cshrl/envs/lam.muro
+mix muro.check examples/cshrl/envs/maze_auto.muro
 ```
 
 ### string.muro

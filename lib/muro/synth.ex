@@ -31,8 +31,10 @@ defmodule Muro.Synth do
 
   The book that checks is the surviving predicate. `rank` reads it:
   `Unit` when the predicate prefers the action, `Empty` when it does
-  not. On a finite state type whose `solve` is constant, the book also
-  carries the homomorphism of that ranking, checked on the same `step`.
+  not. On a finite state type, the book also carries the homomorphism
+  of that ranking when every successor has a constant `solve`, checked
+  on the same `step`. A state that pays less now still has that
+  ranking: the tail comparison rewrites the successors' constants.
   That checked homomorphism is the success. A policy whose environment
   does not define the homomorphism is reported and is not success.
 

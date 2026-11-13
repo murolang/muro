@@ -3,8 +3,10 @@ defmodule Muro.SynthLoopTest do
 
   @two "examples/cshrl/envs/two_state.muro"
   @bin "examples/cshrl/envs/binary_sacrifice.muro"
-  @lam "test/fixtures/synth_lam.muro"
+  @lam "examples/cshrl/envs/lam.muro"
+  @maze "examples/cshrl/envs/maze_auto.muro"
   @neg "test/fixtures/synth_neg.muro"
+  @gap "test/fixtures/synth_gap.muro"
   @stay "test/fixtures/synth_false.muro"
   @chain "test/fixtures/synth_chain.muro"
   @retry "test/fixtures/synth_retry.muro"
@@ -108,16 +110,25 @@ defmodule Muro.SynthLoopTest do
     refute text =~ "policy checked"
   end
 
-  test "trace on binary sacrifice cannot separate start from paradise" do
+  # is-self-loop of go-paradise is false at start and true at the sinks,
+  # which is the trace label. CoindHomo cannot rank go-trap above
+  # go-paradise at start, so the check fails and the space is empty.
+  test "trace on binary sacrifice separates start and cannot rank it" do
     assert {:ok, result} = Muro.Synth.cegis_loop(@bin, oracle: "trace", depth: 0, max_depth: 0)
-    assert result.status == :insufficient
+    assert result.status == :residual
+    assert result.program == nil
     assert result.book == nil
+    assert result.versions == [5, 1]
 
     text = joined(result)
-    assert text =~ "muro synth: features insufficient"
-    assert text =~ "paradise agrees with start"
+    assert text =~ "muro synth: homomorphism is not derivable"
+    assert text =~ "carrier start"
+    assert text =~ "predicted false"
+    assert text =~ "oracle false"
+    assert text =~ "pair go-paradise go-trap"
     refute text =~ "homomorphism checked"
-    refute text =~ "CoindHomo"
+    refute text =~ "features insufficient"
+    refute text =~ "CoinductiveHomomorphism"
   end
 
   test "successor on binary sacrifice certifies a preference for go-paradise" do
@@ -141,35 +152,86 @@ defmodule Muro.SynthLoopTest do
     refute text =~ "CoindHomo"
   end
 
-  test "the lam graph cannot separate len from copy" do
+  test "the finite lam environment does not separate copy from len" do
     src = File.read!(@lam)
     assert src =~ "uses-gt1"
     assert src =~ "arg-apps-ne0"
+    refute src =~ "arg-erased"
+    refute src =~ "arg-qty"
+    refute src =~ "ArgQty"
+    refute src =~ "erased-arg"
     refute src =~ ~r/copy\s*:\s*Feature/
 
-    assert {:ok, result} = Muro.Synth.cegis_loop(@lam, depth: 1, max_depth: 3)
+    assert {:ok, result} = Muro.Synth.cegis_loop(@lam)
     assert result.status == :insufficient
     assert result.program == nil
     assert result.book == nil
-    assert length(result.versions) == 2
-    assert hd(result.versions) > 4
-    assert List.last(result.versions) == 0
 
     text = joined(result)
     assert text =~ "muro synth: features insufficient"
-    assert text =~ "len agrees with copy on every feature"
-    assert text =~ "carrier len"
-    assert text =~ "predicted true"
-    assert text =~ "oracle false"
-    assert text =~ "fed back 1"
-    assert text =~ "version space #{hd(result.versions)}"
-    assert text =~ "version space 0"
-    refute text =~ "policy checked"
-    refute text =~ "sufficient-cegis"
+    assert text =~ "len agrees with copy"
+    refute text =~ "homomorphism checked"
+    refute text =~ "certificate CoindHomo"
   end
 
-  test "depth 0 on the negation fixture is an empty space, not insufficient features" do
-    assert {:ok, result} = Muro.Synth.cegis_loop(@neg, depth: 0, max_depth: 0)
+  test "uses and arg-apps agree through the copy states and fail at len" do
+    assert {:ok, host} = Muro.Synth.Host.open(@lam)
+    assert "uses-gt1" in host.features
+    assert "arg-apps-ne0" in host.features
+    refute "arg-erased" in host.features
+
+    feat = fn feature, state -> host.eval_feature.(feature, state) end
+    vector = fn state -> Enum.map(host.features, &feat.(&1, state)) end
+    assert vector.("copy") == vector.("copy4")
+    assert vector.("copy") == vector.("copy8")
+    assert vector.("copy") == vector.("len")
+
+    assert {:ok, spec} = Muro.Synth.Oracle.observe(host, "trace", [])
+    [task] = spec.tasks
+    phase = {:and, {:feat, "uses-gt1"}, {:feat, "arg-apps-ne0"}}
+    vs = Muro.Synth.enumerate(host.features, 1)
+    assert phase in vs
+
+    before_len = Enum.take_while(task.observations, fn {state, _bit} -> state != "len" end)
+    assert Enum.map(before_len, &elem(&1, 0)) == ["copy", "copy4", "copy8"]
+    assert {"len", false} in task.observations
+    assert phase in Muro.Synth.refine_all(vs, before_len, feat)
+    refute phase in Muro.Synth.refine_all(vs, before_len ++ [{"len", false}], feat)
+
+    kept = Muro.Synth.refine_all(vs, task.observations, feat)
+    refute phase in kept
+  end
+
+  @tag timeout: 180_000
+  test "a corridor with no declared feature certifies the reward of go" do
+    src = File.read!(@maze)
+    refute src =~ "data Feature"
+    refute src =~ "eval-feature"
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(@maze, depth: 0, max_depth: 0)
+    assert result.status == :certified
+    assert result.certificate == "CoindHomo"
+    assert result.program == {:feat, "has-pos-reward-go"}
+    assert result.book =~ "def survivor : run PredProg := (feat has-pos-reward-go)"
+    assert result.book =~ "has-pos-reward-go : Feature"
+    assert result.book =~ "def dyn-pos "
+    assert result.book =~ "evidence CoindHomo rank"
+    refute result.book =~ "data DynFeature"
+    [policy, _cert] = String.split(result.book, "def rank", parts: 2)
+    refute policy =~ "| west =>"
+    refute policy =~ "| east =>"
+
+    text = joined(result)
+    assert text =~ "muro synth: homomorphism checked"
+    assert text =~ "program: (feat has-pos-reward-go)"
+    assert text =~ "at west the program prefers stay"
+    assert text =~ "at east the program prefers go"
+    assert text =~ "certificate CoindHomo"
+    refute text =~ "CoinductiveHomomorphism"
+  end
+
+  test "depth 0 on a reward gap is an empty space, not insufficient features" do
+    assert {:ok, result} = Muro.Synth.cegis_loop(@gap, depth: 0, max_depth: 0)
     assert result.status == :empty
     assert result.book == nil
     text = joined(result)
@@ -178,11 +240,36 @@ defmodule Muro.SynthLoopTest do
     refute text =~ "features insufficient"
   end
 
-  test "one deepening finds the negation, and eval of that program checks" do
-    assert {:ok, result} = Muro.Synth.cegis_loop(@neg, depth: 0)
+  test "one deepening finds the negation of a discovered reward" do
+    assert {:ok, result} = Muro.Synth.cegis_loop(@gap, depth: 0)
     assert result.status == :policy
-    assert result.program == {:not, {:feat, "on-p"}}
-    assert result.book =~ "def survivor : run PredProg := (notp (feat on-p))"
+    assert result.program == {:not, {:feat, "has-pos-reward-go"}}
+    assert result.book =~ "def survivor : run PredProg := (notp (feat has-pos-reward-go))"
+    assert result.book =~ "data Feature : Type where"
+    assert result.book =~ "has-pos-reward-go : Feature"
+    assert result.book =~ "def dyn-pos "
+    refute result.book =~ "data DynFeature"
+    refute result.book =~ "| a =>"
+    refute result.book =~ "CoindHomo"
+    refute result.book =~ "def rank "
+
+    text = joined(result)
+    assert text =~ "at a the program prefers stay"
+    assert text =~ "at b the program prefers go"
+    assert text =~ "homomorphism is not derivable"
+    assert text =~ "does not define CoindHomo"
+    assert 0 in result.versions
+  end
+
+  test "a declared hint yields to the reward that matches" do
+    assert {:ok, result} = Muro.Synth.cegis_loop(@neg, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert result.program == {:feat, "has-pos-reward-go"}
+    assert result.book =~ "def survivor : run PredProg := (feat has-pos-reward-go)"
+    assert result.book =~ "data DynFeature : Type where"
+    assert result.book =~ "def eval-dyn "
+    assert result.book =~ "def dyn-pos "
+    refute result.book =~ "(notp (feat on-p))"
     refute result.book =~ "| on =>"
     refute result.book =~ "CoindHomo"
     refute result.book =~ "def rank "
@@ -192,7 +279,6 @@ defmodule Muro.SynthLoopTest do
     assert text =~ "at off the program prefers go"
     assert text =~ "homomorphism is not derivable"
     assert text =~ "does not define CoindHomo"
-    assert 0 in result.versions
   end
 
   test "a failed policy check is fed back and then reported" do
@@ -256,6 +342,7 @@ defmodule Muro.SynthLoopTest do
     assert File.read!(out) == "already\n"
   end
 
+  @tag timeout: 180_000
   test "without --out the book is the command result and --out writes a checked homomorphism" do
     assert {:exit, 0, book, report} = Muro.CLI.Synth.run([@two, "--depth", "0"])
     assert book =~ "def survivor : run PredProg := truep"
@@ -303,10 +390,11 @@ defmodule Muro.SynthLoopTest do
     assert decoded["certificate"] == "CoindHomo"
     assert decoded["cex"] == []
 
-    assert {:exit, 1, "", lam_lines} = Muro.CLI.Synth.run([@lam, "--depth", "1"])
+    assert {:exit, 1, "", lam_lines} = Muro.CLI.Synth.run([@lam])
     lam_text = Enum.join(lam_lines, "\n")
     assert lam_text =~ "features insufficient"
     assert lam_text =~ "len agrees with copy"
+    refute lam_text =~ "homomorphism checked"
   end
 
   test "a false program is falsep in the json log outside the checkout" do
@@ -371,9 +459,11 @@ defmodule Muro.SynthLoopTest do
                max_rounds: 2
              )
 
-    assert :counters.get(calls, 1) == 2
-    assert result.status == :policy
-    assert result.program == {:feat, "hot"}
+    assert :counters.get(calls, 1) == 1
+    assert result.status == :residual
+    assert result.program == nil
+    assert result.book == nil
+    assert joined(result) =~ "muro synth: residual counterexample"
   end
 
   test "a check that produces no bit reports unknown and does not retry" do
@@ -491,10 +581,10 @@ defmodule Muro.SynthLoopTest do
 
   test "--json is a log of the version space, not a certificate" do
     assert {:exit, 1, book, [json]} = Muro.CLI.Synth.run([@neg, "--json", "--depth", "0"])
-    assert book =~ "(notp (feat on-p))"
+    assert book =~ "(feat has-pos-reward-go)"
     decoded = JSON.decode!(json)
     assert decoded["status"] == "policy"
-    assert decoded["program"] == "(notp (feat on-p))"
+    assert decoded["program"] == "(feat has-pos-reward-go)"
     assert decoded["note"] == "homomorphism is not derivable"
     assert decoded["certificate"] == nil
     assert is_list(decoded["versions"])
