@@ -4,6 +4,7 @@ defmodule Muro.SynthLoopTest do
   @two "examples/cshrl/envs/two_state.muro"
   @bin "examples/cshrl/envs/binary_sacrifice.muro"
   @lam "examples/cshrl/envs/lam.muro"
+  @maze "examples/cshrl/envs/maze_auto.muro"
   @neg "test/fixtures/synth_neg.muro"
   @gap "test/fixtures/synth_gap.muro"
   @stay "test/fixtures/synth_false.muro"
@@ -199,6 +200,34 @@ defmodule Muro.SynthLoopTest do
 
     kept = Muro.Synth.refine_all(vs, task.observations, feat)
     refute phase in kept
+  end
+
+  @tag timeout: 180_000
+  test "a corridor with no declared feature certifies the reward of go" do
+    src = File.read!(@maze)
+    refute src =~ "data Feature"
+    refute src =~ "eval-feature"
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(@maze, depth: 0, max_depth: 0)
+    assert result.status == :certified
+    assert result.certificate == "CoindHomo"
+    assert result.program == {:feat, "has-pos-reward-go"}
+    assert result.book =~ "def survivor : run PredProg := (feat has-pos-reward-go)"
+    assert result.book =~ "has-pos-reward-go : Feature"
+    assert result.book =~ "def dyn-pos "
+    assert result.book =~ "evidence CoindHomo rank"
+    refute result.book =~ "data DynFeature"
+    [policy, _cert] = String.split(result.book, "def rank", parts: 2)
+    refute policy =~ "| west =>"
+    refute policy =~ "| east =>"
+
+    text = joined(result)
+    assert text =~ "muro synth: homomorphism checked"
+    assert text =~ "program: (feat has-pos-reward-go)"
+    assert text =~ "at west the program prefers stay"
+    assert text =~ "at east the program prefers go"
+    assert text =~ "certificate CoindHomo"
+    refute text =~ "CoinductiveHomomorphism"
   end
 
   test "depth 0 on a reward gap is an empty space, not insufficient features" do
