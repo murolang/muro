@@ -156,6 +156,26 @@ defmodule Muro.SynthTest do
     assert Synth.pick(preds, score) == {:not, {:feat, :bit}}
   end
 
+  test "a tag reading separates carriers that agree on the other features" do
+    # hot and wide hold on both carriers. The tag does not. The
+    # conjunction is consistent with the first carrier and dropped by
+    # the second. The smallest remaining program is the negation of
+    # the tag. The carriers are not a state of any environment.
+    feat = fn
+      "erased", :blue -> true
+      "erased", :red -> false
+      _feature, _state -> true
+    end
+
+    phase = {:and, {:feat, "hot"}, {:feat, "wide"}}
+    vs = Synth.enumerate(["hot", "wide", "erased"], 1)
+    assert phase in vs
+    assert phase in Synth.refine(vs, {:red, true}, feat)
+    kept = Synth.refine_all(vs, [{:red, true}, {:blue, false}], feat)
+    refute phase in kept
+    assert Synth.pick(kept, fn _ -> 0 end) == {:not, {:feat, "erased"}}
+  end
+
   test "an observation of len drops the copy formula" do
     # uses > 1 and arg_apps ≠ 0. Both features hold at len, so the
     # formula predicts true. The observation says false.

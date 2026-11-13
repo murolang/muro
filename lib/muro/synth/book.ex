@@ -19,8 +19,10 @@ defmodule Muro.Synth.Book do
 
   `eval` of that predicate is the deployed policy. The equations
   `hold-<state>` are the observations. When the environment defines the
-  homomorphism the oracle asks for, and `solve` is constant, the book
-  also defines `rank` from that predicate and the evidence for it.
+  homomorphism the oracle asks for, and every successor has a constant
+  `solve`, the book also defines `rank` from that predicate and the
+  evidence for it. A state that pays less now still ranks: the tail
+  comparison rewrites those constants.
   Otherwise the book is the policy alone.
 
   A name the environment already uses is not declared again. A compatible

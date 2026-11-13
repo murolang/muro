@@ -2,7 +2,9 @@ defmodule Muro.Synth.Cert do
   @moduledoc false
 
   # The ranking and its homomorphism, for a finite state type whose
-  # `solve` is constant. `rank` reads the surviving predicate: Unit when
+  # successors have a constant `solve`. A state that pays less now is
+  # included: the tail comparison rewrites the successors. `rank` reads
+  # the surviving predicate: Unit when
   # that predicate prefers the action, Empty when it does not. The
   # evidence is the case split over states and actions. It is checked
   # on the environment's `step`, the same function the search called.
@@ -31,7 +33,7 @@ defmodule Muro.Synth.Cert do
           {:ok, vocab} ->
             case constants(host) do
               {:error, reason} -> {:skip, reason}
-              {:ok, values} -> build(host, arms, oracle, vocab, values, bound)
+              {:ok, values, settled} -> build(host, arms, oracle, vocab, values, settled, bound)
             end
         end
     end
@@ -74,8 +76,12 @@ defmodule Muro.Synth.Cert do
   defp spell_body(_body), do: :error
 
   # `solve s n` is the best immediate reward among states reached in n
-  # steps. On these environments that reward does not depend on n: the
-  # vector of immediate maxima is a fixed point of stepping.
+  # steps. A state is settled when that reward does not depend on n: its
+  # immediate maximum equals the maximum at every successor. A state that
+  # pays less now is still settled enough to rank when every successor is
+  # settled. The tail comparison rewrites those constants. A successor
+  # that is itself unsettled has no constant to rewrite, and the book
+  # does not claim the homomorphism.
   defp constants(host) do
     states = constructors(host, "State")
     actions = host.actions
@@ -88,12 +94,16 @@ defmodule Muro.Synth.Cert do
           end)
 
         case later do
-          {:ok, ^now} ->
-            {:ok, now}
-
           {:ok, other} ->
-            state = Enum.find(states, &(now[&1] != other[&1]))
-            {:error, "solve at #{state} is not constant"}
+            settled =
+              states
+              |> Enum.filter(&(now[&1] == other[&1]))
+              |> MapSet.new()
+
+            case unsettled_successor(host, states, actions, settled) do
+              nil -> {:ok, now, settled}
+              state -> {:error, "solve at #{state} is not constant"}
+            end
 
           {:error, reason} ->
             {:error, reason}
@@ -102,6 +112,16 @@ defmodule Muro.Synth.Cert do
         {:error, "reward is not a closed Nat"}
       end
     end
+  end
+
+  # A ranking rewrites `solve` at the successors. That lemma exists only
+  # for a settled state. An unsettled successor has nothing to rewrite.
+  defp unsettled_successor(host, states, actions, settled) do
+    Enum.find(states, fn state ->
+      Enum.any?(actions, fn action ->
+        not MapSet.member?(settled, next(host, state, action))
+      end)
+    end)
   end
 
   defp vector(host, states, actions, fun) do
@@ -128,7 +148,7 @@ defmodule Muro.Synth.Cert do
     Enum.map(ctors, & &1.name)
   end
 
-  defp build(host, arms, oracle, vocab, values, bound) do
+  defp build(host, arms, oracle, vocab, values, settled, bound) do
     states = constructors(host, "State")
     actions = constructors(host, "Action")
     taken = bound.taken
@@ -166,7 +186,7 @@ defmodule Muro.Synth.Cert do
 
     text =
       [
-        solves_text(host, states, vocab, values, solves),
+        solves_text(host, states, vocab, values, solves, settled),
         below,
         more_below,
         rank_text(bound, arms, actions, rank),
@@ -245,8 +265,10 @@ defmodule Muro.Synth.Cert do
     {Map.new(pairs), taken}
   end
 
-  defp solves_text(host, states, vocab, values, solves) do
-    Enum.map(states, fn state ->
+  defp solves_text(host, states, vocab, values, solves, settled) do
+    states
+    |> Enum.filter(&MapSet.member?(settled, &1))
+    |> Enum.map(fn state ->
       name = Map.fetch!(solves, state)
       const = spell_nat(values[state])
       steps = Enum.map(host.actions, &next(host, state, &1))
