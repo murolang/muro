@@ -15,7 +15,11 @@ defmodule MuroVisor.ExplorerLive do
           |> assign(:path, open.path)
           |> assign(:book, open.book)
           |> assign(:graph, graph)
-          |> assign(:picture, MuroVisor.Draw.layout(graph))
+          |> assign(
+            :picture,
+            graph |> MuroVisor.Draw.layout() |> MuroVisor.Grades.paint(open.book)
+          )
+          |> assign(:env, MuroVisor.EnvGraph.build(open.book))
           |> assign(:catalog, MuroVisor.Meetings.catalog(open.book, graph, open.path))
           |> assign(:backend, :otp)
           |> assign(:outline, MuroVisor.Outline.render(open.book, open.path, :otp))
@@ -31,7 +35,8 @@ defmodule MuroVisor.ExplorerLive do
             path: nil,
             book: nil,
             graph: empty,
-            picture: MuroVisor.Draw.layout(empty),
+            picture: empty |> MuroVisor.Draw.layout() |> MuroVisor.Grades.paint([]),
+            env: MuroVisor.EnvGraph.build(nil),
             catalog: MuroVisor.Meetings.catalog(nil, empty),
             backend: :otp,
             outline: "",
@@ -41,7 +46,17 @@ defmodule MuroVisor.ExplorerLive do
           )
       end
 
-    {:ok, assign(socket, screen: :picker, focus: nil, missing: false)}
+    {:ok,
+     assign(socket,
+       screen: :picker,
+       focus: nil,
+       missing: false,
+       grades_on: false,
+       round: 1,
+       trace: nil,
+       trace_error: nil,
+       trace_path: nil
+     )}
   end
 
   @impl true
@@ -56,7 +71,19 @@ defmodule MuroVisor.ExplorerLive do
     {screen, missing} =
       if screen == :meet and is_nil(focus), do: {:picker, true}, else: {screen, false}
 
-    {:noreply, assign(socket, screen: screen, focus: focus, missing: missing)}
+    {trace, trace_error, trace_path} = load_trace(params["trace"])
+
+    {:noreply,
+     assign(socket,
+       screen: screen,
+       focus: focus,
+       missing: missing,
+       grades_on: screen == :all and params["grades"] == "on",
+       round: parse_round(params["round"]),
+       trace: trace,
+       trace_error: trace_error,
+       trace_path: trace_path
+     )}
   end
 
   @impl true
@@ -90,7 +117,10 @@ defmodule MuroVisor.ExplorerLive do
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :host, MuroVisor.HostLexer.for_backend(assigns.backend))
+    assigns =
+      assigns
+      |> assign(:host, MuroVisor.HostLexer.for_backend(assigns.backend))
+      |> assign(:grade_binders, grade_binders(assigns.picture))
 
     ~H"""
     <header>
@@ -112,8 +142,40 @@ defmodule MuroVisor.ExplorerLive do
       <div :if={@screen == :all} class="graph-pane">
         <nav class="views">
           <.link id="view-meetings" patch="/">Meetings</.link>
-          <.link id="view-all" class="current" patch="/?view=all">All definitions</.link>
+          <.link id="view-all" class="current" patch={all_href(@grades_on)}>All definitions</.link>
+          <.link id="view-synth" patch="/?view=synth">Synthesis</.link>
         </nav>
+        <.link id="grade-toggle" patch={grade_href(@grades_on)} data-on={"#{@grades_on}"}>
+          {if @grades_on, do: "grades on", else: "grades"}
+        </.link>
+        <ul :if={@grades_on} id="grade-legend">
+          <li data-kind="runtime">
+            <span class="swatch grade-runtime">run</span> runtime, full opacity
+          </li>
+          <li data-kind="erased">
+            <span class="swatch grade-erased">erased</span> erased, grade 0, faded
+          </li>
+          <li :if={qty?(@grade_binders, "linear")} data-kind="linear">
+            <span class="swatch">%1</span> linear, used once
+          </li>
+          <li :if={qty?(@grade_binders, "reuse")} data-kind="reuse">
+            <span class="swatch">+</span> reuse, may be copied
+          </li>
+        </ul>
+        <ul :if={@grades_on} id="grade-binders">
+          <li
+            :for={binder <- @grade_binders}
+            data-def={binder.def}
+            data-binder={binder.name}
+            data-qty={binder.qty}
+            data-grade-c={binder.c}
+            data-grade-t={binder.t}
+            class={binder_class(@grades_on, binder.qty)}
+            style={binder_style(@grades_on, binder.qty)}
+          >
+            {binder.def} {binder.name} {binder_label(binder)}
+          </li>
+        </ul>
         <input type="radio" name="zoom" id="zoom-fit" checked />
         <label for="zoom-fit">fit</label>
         <input type="radio" name="zoom" id="zoom-100" />
@@ -152,11 +214,17 @@ defmodule MuroVisor.ExplorerLive do
             <g
               :for={node <- @picture.nodes}
               id={control(:node, node.id)}
-              class={[node.class, picked?(@selected, :node, node.id) && "selected"]}
+              class={[
+                node.class,
+                picked?(@selected, :node, node.id) && "selected",
+                @grades_on && node.grade && "grade-#{node.grade}"
+              ]}
               data-kind={node.kind}
               data-mode={node.mode}
               data-name={node.name}
+              data-grade={node.grade}
               data-cluster={Map.get(node, :cluster)}
+              opacity={MuroVisor.Grades.opacity(@grades_on, node.grade)}
               tabindex="0"
               role="button"
               phx-click={click_event(node)}
@@ -168,6 +236,16 @@ defmodule MuroVisor.ExplorerLive do
               <text class="node-label muro-code" x={node.x + 8} y={node.y + 18}>
                 {MuroVisor.Code.svg(node.name)}
               </text>
+              <g
+                :for={binder <- node.binders}
+                class={binder_class(@grades_on, binder.qty)}
+                data-binder={binder.name}
+                data-qty={binder.qty}
+                data-grade-c={binder.c}
+                data-grade-t={binder.t}
+                opacity={MuroVisor.Grades.binder_opacity(@grades_on, binder.qty)}
+              >
+              </g>
               <g
                 :for={meet <- node.meetings}
                 id={"meeting-#{meet.id}"}
@@ -270,10 +348,19 @@ defmodule MuroVisor.ExplorerLive do
           </svg>
         </div>
       </div>
-      <div :if={@screen != :all} class="graph-pane meeting-pane">
+      <MuroVisor.SynthView.panel
+        :if={@screen == :synth}
+        env={@env}
+        trace={@trace}
+        trace_error={@trace_error}
+        trace_path={@trace_path}
+        round={@round}
+      />
+      <div :if={@screen in [:picker, :meet]} class="graph-pane meeting-pane">
         <nav class="views">
           <.link id="view-meetings" class="current" patch="/">Meetings</.link>
           <.link id="view-all" patch="/?view=all">All definitions</.link>
+          <.link id="view-synth" patch="/?view=synth">Synthesis</.link>
         </nav>
         <p :if={@missing} id="meeting-missing">no such meeting</p>
         <MuroVisor.Sequence.sequence :if={@focus} meet={@focus} />
@@ -401,6 +488,57 @@ defmodule MuroVisor.ExplorerLive do
   defp backend(_other), do: nil
 
   defp screen(%{"meet" => name}) when is_binary(name) and name != "", do: {:meet, name}
+  defp screen(%{"view" => "synth"}), do: {:synth, nil}
   defp screen(%{"view" => "all"}), do: {:all, nil}
   defp screen(_params), do: {:picker, nil}
+
+  defp all_href(true), do: "/?view=all&grades=on"
+  defp all_href(false), do: "/?view=all"
+
+  defp grade_href(true), do: "/?view=all"
+  defp grade_href(false), do: "/?view=all&grades=on"
+
+  defp grade_binders(picture) do
+    Enum.flat_map(picture.nodes, fn node ->
+      node
+      |> Map.get(:binders, [])
+      |> Enum.map(&Map.put(&1, :def, node.bare))
+    end)
+  end
+
+  defp qty?(binders, qty), do: Enum.any?(binders, &(&1.qty == qty))
+
+  defp binder_class(true, "erased"), do: "binder grade-erased"
+  defp binder_class(true, qty) when is_binary(qty), do: "binder grade-runtime"
+  defp binder_class(_on, _qty), do: "binder"
+
+  defp binder_style(true, "erased"), do: "opacity: 0.35"
+  defp binder_style(true, qty) when is_binary(qty), do: "opacity: 1"
+  defp binder_style(_on, _qty), do: nil
+
+  defp binder_label(%{c: c, t: t, qty: qty}) when is_binary(c) and is_binary(t) do
+    "#{qty} (#{c}, #{t})"
+  end
+
+  defp binder_label(%{qty: qty}), do: qty
+
+  defp load_trace(path) when is_binary(path) and path != "" do
+    expanded = Path.expand(path)
+
+    case MuroVisor.SynthTrace.load(expanded) do
+      {:ok, trace} -> {trace, nil, expanded}
+      {:error, msg} -> {nil, msg, expanded}
+    end
+  end
+
+  defp load_trace(_path), do: {nil, nil, nil}
+
+  defp parse_round(text) when is_binary(text) do
+    case Integer.parse(text) do
+      {n, ""} when n > 0 -> n
+      _ -> 1
+    end
+  end
+
+  defp parse_round(_text), do: 1
 end

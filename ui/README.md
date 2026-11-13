@@ -1,13 +1,13 @@
 # muro_visor
 
-A read-only visual explorer for one checked muro book. Version 0.2.1. It is its own Hex package and it depends on `muro ~> 0.20.12`.
+A read-only visual explorer for one checked muro book. Version 0.3.0. It is its own Hex package and it depends on `muro ~> 0.20.12`.
 
 The compiler does not start this application, and the muro release binaries do not depend on Phoenix. `muro ui path.muro` prints these install steps and links to [the explorer page](https://muro-lang.dev/docs/explorer).
 
 Add the package to a Mix project, then open a book:
 
 ```
-{:muro_visor, "~> 0.2.1"}
+{:muro_visor, "~> 0.3.0"}
 mix deps.get
 mix muro.ui path.muro
 ```

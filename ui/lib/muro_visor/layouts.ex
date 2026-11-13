@@ -131,6 +131,27 @@ defmodule MuroVisor.Layouts do
           svg g:focus-visible > path.edge + text,
           svg g:focus-visible > path.transition + text { fill: #b45309; }
           .views { display: flex; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+          #grade-toggle { margin: 0 12px 8px 0; }
+          #grade-legend, #synth-legend, #grade-binders { list-style: none; margin: 0 0 8px; padding: 0; font-size: 13px; }
+          #grade-legend, #synth-legend { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+          #grade-legend li, #synth-legend li { display: flex; align-items: center; gap: 6px; }
+          .swatch { display: inline-block; min-width: 28px; height: 16px; padding: 0 4px; border: 1px solid #44403c; background: #fff; font-size: 12px; line-height: 16px; text-align: center; }
+          .swatch.grade-erased { opacity: 0.35; }
+          #grade-binders li { font: 13px/1.45 ui-monospace, monospace; }
+          #grade-binders li.grade-erased { opacity: 0.35; }
+          #synth-report h2 { margin: 12px 0 4px; font-size: 14px; }
+          #synth-program { font: 14px/1.45 ui-monospace, monospace; margin: 0 0 8px; white-space: pre-wrap; }
+          #synth-versions { list-style: none; margin: 0 0 12px; padding: 0; }
+          #synth-versions li { display: flex; gap: 8px; align-items: center; margin: 4px 0; }
+          #synth-versions .bar { display: inline-block; height: 14px; background: #44403c; }
+          #synth-versions li.current .bar { background: #c2410c; }
+          #synth-legend .swatch.unsettled { border-style: dashed; }
+          #synth-legend .swatch.cex { background: #ffedd5; border-color: #c2410c; }
+          svg#synth-graph .state { fill: #fff; stroke: #44403c; }
+          svg#synth-graph .state.cex { fill: #ffedd5; stroke: #c2410c; stroke-width: 3px; }
+          svg#synth-graph .state.unsettled { stroke-dasharray: 4 3; }
+          svg#synth-graph text { font-size: 14px; }
+
           .views a { color: inherit; }
           .views a.current { font-weight: 600; }
           .meeting-pane, .sequence-wrap, .picker { max-width: 100%; overflow-x: hidden; }

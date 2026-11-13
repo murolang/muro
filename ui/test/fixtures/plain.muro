@@ -1,0 +1,6 @@
+def plain : run Nat := 0
+
+def id : run Π (n : Nat) → Nat :=
+  λ (n : Nat) → n
+
+def eq : evidence {0 ≡ 0 : Nat} := refl

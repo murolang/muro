@@ -1,0 +1,35 @@
+-- Grade overlay fixture. Quantities are the ones the checker records.
+
+def kept : run Π (%1 n : Nat) → Nat :=
+  λ (%1 n : Nat) → n
+
+def copied : run Π (+ n : Nat) → Nat :=
+  λ (+ n : Nat) → n
+
+def once : run Π (n : (1, 0) Nat) → Nat :=
+  λ (n : (1, 0) Nat) → n
+
+def many : run Π (n : (ω, 0) Nat) → Nat :=
+  λ (n : (ω, 0) Nat) → n
+
+def gone : run Π (- n : Nat) → Nat :=
+  λ (- n : Nat) → 0
+
+def erased-pair : run Π (n : (0, 0) Nat) → Nat :=
+  λ (n : (0, 0) Nat) → 0
+
+def mixed : run Π (- p : Nat) → Π (%1 n : Nat) → Nat :=
+  λ (- p : Nat) → λ (%1 n : Nat) → n
+
+def erased-proof : evidence Π (n : (0, 2) Nat) → {n ≡ n : Nat} :=
+  λ (n : (0, 2) Nat) →
+    match 0 motive (λ (_ : Nat) → {n ≡ n : Nat})
+      | 0 => refl
+      | suc k => refl
+
+def holds : evidence {0 ≡ 0 : Nat} := refl
+
+def plain : run Nat := 0
+
+def plain-fn : run Π (n : Nat) → Nat :=
+  λ (n : Nat) → n
