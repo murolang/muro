@@ -3,7 +3,7 @@ defmodule Muro.SynthLoopTest do
 
   @two "examples/cshrl/envs/two_state.muro"
   @bin "examples/cshrl/envs/binary_sacrifice.muro"
-  @lam "test/fixtures/synth_lam.muro"
+  @lam "examples/cshrl/envs/lam.muro"
   @neg "test/fixtures/synth_neg.muro"
   @stay "test/fixtures/synth_false.muro"
   @chain "test/fixtures/synth_chain.muro"
@@ -141,31 +141,61 @@ defmodule Muro.SynthLoopTest do
     refute text =~ "CoindHomo"
   end
 
-  test "the lam graph cannot separate len from copy" do
+  @tag timeout: 180_000
+  test "the finite lam environment certifies arg at the copy states and spine at len" do
     src = File.read!(@lam)
     assert src =~ "uses-gt1"
     assert src =~ "arg-apps-ne0"
+    assert src =~ "arg-erased"
     refute src =~ ~r/copy\s*:\s*Feature/
 
-    assert {:ok, result} = Muro.Synth.cegis_loop(@lam, depth: 1, max_depth: 3)
-    assert result.status == :insufficient
-    assert result.program == nil
-    assert result.book == nil
-    assert length(result.versions) == 2
-    assert hd(result.versions) > 4
-    assert List.last(result.versions) == 0
+    assert {:ok, result} = Muro.Synth.cegis_loop(@lam)
+    assert result.status == :certified
+    assert result.certificate == "CoindHomo"
+    assert result.program == {:not, {:feat, "arg-erased"}}
+    assert result.book =~ "def survivor : run PredProg := (notp (feat arg-erased))"
+    assert result.book =~ "| true => arg"
+    assert result.book =~ "| false => spine"
+    assert result.book =~ "match eval survivor"
+    assert result.book =~ "evidence CoindHomo rank"
+    refute result.book =~ "CoinductiveHomomorphism"
+    [policy, _cert] = String.split(result.book, "def rank", parts: 2)
+    refute policy =~ "| copy =>"
+    refute policy =~ "| len =>"
 
     text = joined(result)
-    assert text =~ "muro synth: features insufficient"
-    assert text =~ "len agrees with copy on every feature"
-    assert text =~ "carrier len"
-    assert text =~ "predicted true"
-    assert text =~ "oracle false"
-    assert text =~ "fed back 1"
-    assert text =~ "version space #{hd(result.versions)}"
-    assert text =~ "version space 0"
-    refute text =~ "policy checked"
-    refute text =~ "sufficient-cegis"
+    assert text =~ "muro synth: homomorphism checked"
+    assert text =~ "program: (notp (feat arg-erased))"
+    assert text =~ "at copy the program prefers arg"
+    assert text =~ "at copy4 the program prefers arg"
+    assert text =~ "at copy8 the program prefers arg"
+    assert text =~ "at len the program prefers spine"
+    assert text =~ "at ready the program prefers arg"
+    assert text =~ "at done the program prefers arg"
+    assert text =~ "at cold the program prefers arg"
+    assert text =~ "at wlen the program prefers arg"
+    assert text =~ "certificate CoindHomo"
+    refute text =~ "features insufficient"
+  end
+
+  test "uses and arg-apps agree through the copy states and fail at len" do
+    assert {:ok, host} = Muro.Synth.Host.open(@lam)
+    assert {:ok, spec} = Muro.Synth.Oracle.observe(host, "trace", [])
+    [task] = spec.tasks
+    feat = fn feature, state -> host.eval_feature.(feature, state) end
+    phase = {:and, {:feat, "uses-gt1"}, {:feat, "arg-apps-ne0"}}
+    vs = Muro.Synth.enumerate(host.features, 1)
+    assert phase in vs
+
+    before_len = Enum.take_while(task.observations, fn {state, _bit} -> state != "len" end)
+    assert Enum.map(before_len, &elem(&1, 0)) == ["copy", "copy4", "copy8"]
+    assert {"len", false} in task.observations
+    assert phase in Muro.Synth.refine_all(vs, before_len, feat)
+    refute phase in Muro.Synth.refine_all(vs, before_len ++ [{"len", false}], feat)
+
+    kept = Muro.Synth.refine_all(vs, task.observations, feat)
+    refute phase in kept
+    assert Muro.Synth.pick(kept, fn _ -> 0 end) == {:not, {:feat, "arg-erased"}}
   end
 
   test "depth 0 on the negation fixture is an empty space, not insufficient features" do
@@ -256,6 +286,7 @@ defmodule Muro.SynthLoopTest do
     assert File.read!(out) == "already\n"
   end
 
+  @tag timeout: 180_000
   test "without --out the book is the command result and --out writes a checked homomorphism" do
     assert {:exit, 0, book, report} = Muro.CLI.Synth.run([@two, "--depth", "0"])
     assert book =~ "def survivor : run PredProg := truep"
@@ -303,10 +334,14 @@ defmodule Muro.SynthLoopTest do
     assert decoded["certificate"] == "CoindHomo"
     assert decoded["cex"] == []
 
-    assert {:exit, 1, "", lam_lines} = Muro.CLI.Synth.run([@lam, "--depth", "1"])
+    assert {:exit, 0, lam_book, lam_lines} = Muro.CLI.Synth.run([@lam])
+    assert lam_book =~ "def survivor : run PredProg := (notp (feat arg-erased))"
+    assert lam_book =~ "evidence CoindHomo rank"
     lam_text = Enum.join(lam_lines, "\n")
-    assert lam_text =~ "features insufficient"
-    assert lam_text =~ "len agrees with copy"
+    assert lam_text =~ "homomorphism checked"
+    assert lam_text =~ "at copy the program prefers arg"
+    assert lam_text =~ "at len the program prefers spine"
+    refute lam_text =~ "features insufficient"
   end
 
   test "a false program is falsep in the json log outside the checkout" do
