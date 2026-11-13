@@ -208,6 +208,95 @@ defmodule Muro.UnboxedTest do
     assert apply(Muro.UnboxedEx, :viewOf, [{:acc, 5, 1, "ab"}]) == "ab"
   end
 
+  test "C emits Opt of boxed data, and the program exercises both arms" do
+    dir = tmp("optcell")
+    path = Path.join(dir, "cell.muro")
+    File.write!(path, opt_cell())
+    assert Muro.check_file(path) == :ok
+    assert {:ok, [h, c]} = Muro.emit_c(path, nif: false)
+    header = File.read!(h)
+    source = File.read!(c)
+    assert header =~ "typedef struct Cell Cell;"
+    assert header =~ "struct muro__opt_d_Cell { uint8_t tag; Cell *val; };"
+    assert header =~ "struct Cell {"
+    opt_at = :binary.match(header, "struct muro__opt_d_Cell") |> elem(0)
+    body_at = :binary.match(header, "struct Cell {") |> elem(0)
+    assert opt_at < body_at
+    assert source =~ "Cell *"
+    File.write!(Path.join(dir, "main.c"), opt_cell_main())
+    assert gcc!(dir, "main.c", "cell") == :ok
+    assert run!(dir, "cell") == "OK\n"
+  end
+
+  test "C, Rust, and Zig refuse Opt of unboxed data" do
+    dir = tmp("optw")
+    path = Path.join(dir, "optw.muro")
+    File.write!(path, opt_unboxed_run())
+    assert Muro.check_file(path) == :ok
+    assert {:error, "c:unboxed"} = Muro.emit_c(path, nif: false)
+    assert {:error, "c:unboxed"} = Muro.emit_rust(path)
+    assert {:error, "c:unboxed"} = Muro.emit_zig(path)
+  end
+
+  test "a nullary unboxed constructor does not allocate, and both arms run" do
+    dir = tmp("flag")
+    path = Path.join(dir, "flag.muro")
+    File.write!(path, flag_book())
+    assert Muro.check_file(path) == :ok
+    assert {:ok, [_h, c]} = Muro.emit_c(path, nif: false)
+    source = File.read!(c)
+    go = body(source, "static Flag go(", "static Flag stop(")
+    stop = body(source, "static Flag stop(", "uint64_t code(")
+    refute go =~ "muro__ALLOC"
+    refute stop =~ "muro__ALLOC"
+    File.write!(Path.join(dir, "main.c"), flag_main())
+    assert gcc!(dir, "main.c", "flag") == :ok
+    assert run!(dir, "flag") == "OK\n"
+
+    assert {:ok, [rs]} = Muro.emit_rust(path)
+    rust = File.read!(rs)
+    rgo = body(rust, "fn go(", "fn stop(")
+    rstop = body(rust, "fn stop(", "pub fn code(")
+    refute rgo =~ "Rc::new"
+    refute rstop =~ "Rc::new"
+    assert rustc_lib!(dir, "flag") == :ok
+
+    if @zig do
+      assert {:ok, [zig]} = Muro.emit_zig(path)
+      zsrc = File.read!(zig)
+      zgo = body(zsrc, "fn go(", "fn stop(")
+      zstop = body(zsrc, "fn stop(", "pub fn code(")
+      refute zgo =~ "create"
+      refute zstop =~ "create"
+      File.write!(Path.join(dir, "check.zig"), flag_zig())
+      assert zig_test!(dir) == :ok
+    end
+  end
+
+  test "Elixir reads a word kind through a match, and C runs the same book" do
+    dir = tmp("mkind")
+    path = Path.join(dir, "match_kind.muro")
+    File.write!(path, match_kind())
+    assert Muro.check_file(path) == :ok
+    assert {:ok, src} = Muro.emit_file(path, Muro.MatchKindEx)
+    Code.compile_string(src)
+    assert apply(Muro.MatchKindEx, :yes, []) == Muro.Word.bnot(:u64, 1)
+    assert apply(Muro.MatchKindEx, :no, []) == Muro.Word.bnot(:u64, 0)
+    assert apply(Muro.MatchKindEx, :four, []) == 4
+    assert apply(Muro.MatchKindEx, :five, []) == 5
+    assert apply(Muro.MatchKindEx, :flagGo, []) == Muro.Word.bnot(:u64, 1)
+    assert apply(Muro.MatchKindEx, :flagStop, []) == Muro.Word.bnot(:u64, 0)
+    assert apply(Muro.MatchKindEx, :fromSome, []) == Muro.Word.bnot(:u64, 3)
+    assert apply(Muro.MatchKindEx, :fromNone, []) == Muro.Word.bnot(:u64, 0)
+
+    assert {:ok, [_h, _c]} = Muro.emit_c(path, nif: false)
+    File.write!(Path.join(dir, "main.c"), match_kind_main())
+    assert gcc!(dir, "main.c", "mkind") == :ok
+    assert run!(dir, "mkind") == "OK\n"
+    assert {:ok, [_rs]} = Muro.emit_rust(path)
+    assert rustc_lib!(dir, "match_kind") == :ok
+  end
+
   defp nat_field do
     """
     unboxed data Bad : Type where
@@ -534,6 +623,166 @@ defmodule Muro.UnboxedTest do
         const w = try u.viewOf(ally, b);
         try std.testing.expect(w.p == nl.ptr);
         try std.testing.expectEqual(@as(usize, 2), w.n);
+    }
+    """
+  end
+
+  defp opt_cell do
+    """
+    data Cell : Type where
+      cell : Π (n : U64) → Cell
+
+    def miss : run Opt Cell := wnone
+
+    def take : run Π (o : Opt Cell) → U64 :=
+      λ (o : Opt Cell) →
+        match o motive (λ _ → U64)
+          | wsome c => (match c motive (λ _ → U64) | cell n => n)
+          | wnone => toU64 0
+    """
+  end
+
+  defp opt_cell_main do
+    """
+    #include <stdio.h>
+    #include <stdlib.h>
+    #define muro__ALLOC(n) malloc(n)
+    #include "cell.c"
+    int main(void) {
+      muro__opt_d_Cell none = miss();
+      if (none.tag != 0) return 1;
+      if (take(none) != 0) return 2;
+      Cell cell = {0};
+      cell.muro__field_tag = 0;
+      cell.muro__as.cell.muro__f_0 = 7;
+      muro__opt_d_Cell some;
+      some.tag = 1;
+      some.val = &cell;
+      if (take(some) != 7) return 3;
+      printf("OK\\n");
+      return 0;
+    }
+    """
+  end
+
+  defp opt_unboxed_run do
+    """
+    unboxed data W : Type where
+      w : Π (n : U64) → W
+
+    def o : run Opt W := wnone
+    """
+  end
+
+  defp flag_book do
+    """
+    unboxed data Flag : Type where
+      go : Flag
+      stop : Flag
+
+    def code : run Π (f : Flag) → U64 :=
+      λ (f : Flag) →
+        match f motive (λ _ → U64)
+          | go => toU64 1
+          | stop => toU64 2
+
+    def on : run U64 := code go
+    def off : run U64 := code stop
+    """
+  end
+
+  defp flag_main do
+    """
+    #include <stdio.h>
+    #include <stdlib.h>
+    #define muro__ALLOC(n) malloc(n)
+    #include "flag.c"
+    int main(void) {
+      if (on() != 1) return 1;
+      if (off() != 2) return 2;
+      printf("OK\\n");
+      return 0;
+    }
+    """
+  end
+
+  defp flag_zig do
+    """
+    const std = @import("std");
+    const f = @import("flag.zig");
+    test "both arms" {
+        const ally = std.testing.failing_allocator;
+        try std.testing.expectEqual(@as(u64, 1), try f.on(ally));
+        try std.testing.expectEqual(@as(u64, 2), try f.off(ally));
+    }
+    """
+  end
+
+  defp match_kind do
+    """
+    def bits : run Π (b : WBool) → U64 :=
+      λ (b : WBool) →
+        noti (match b motive (λ _ → U64)
+          | wtrue => toU64 1
+          | wfalse => toU64 0)
+
+    def both : run Π (b : WBool) → U64 :=
+      λ (b : WBool) →
+        addi (match b motive (λ _ → U64)
+          | wtrue => toU64 1
+          | wfalse => toU64 2) (toU64 3)
+
+    def yes : run U64 := bits wtrue
+    def no : run U64 := bits wfalse
+    def four : run U64 := both wtrue
+    def five : run U64 := both wfalse
+
+    data Flag : Type where
+      go : Flag
+      stop : Flag
+
+    def ofFlag : run Π (f : Flag) → U64 :=
+      λ (f : Flag) →
+        noti (match f motive (λ _ → U64)
+          | go => toU64 1
+          | stop => toU64 0)
+
+    def flagGo : run U64 := ofFlag go
+    def flagStop : run U64 := ofFlag stop
+
+    def fromOpt : run Π (o : Opt U64) → U64 :=
+      λ (o : Opt U64) →
+        noti (match o motive (λ _ → U64)
+          | wsome n => n
+          | wnone => toU64 0)
+
+    def fromSome : run U64 := fromOpt (wsome (toU64 3))
+    def fromNone : run U64 := fromOpt wnone
+    """
+  end
+
+  defp match_kind_main do
+    not1 = Muro.Word.bnot(:u64, 1)
+    not0 = Muro.Word.bnot(:u64, 0)
+    not3 = Muro.Word.bnot(:u64, 3)
+
+    """
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <stdint.h>
+    #define muro__ALLOC(n) malloc(n)
+    #include "match_kind.c"
+    int main(void) {
+      if (yes() != #{not1}ull) return 1;
+      if (no() != #{not0}ull) return 2;
+      if (four() != 4) return 3;
+      if (five() != 5) return 4;
+      if (flagGo() != #{not1}ull) return 5;
+      if (flagStop() != #{not0}ull) return 6;
+      if (fromSome() != #{not3}ull) return 7;
+      if (fromNone() != #{not0}ull) return 8;
+      printf("OK\\n");
+      return 0;
     }
     """
   end
