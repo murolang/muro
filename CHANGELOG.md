@@ -4,6 +4,8 @@
 
 `mix muro.synth` reads a state that has fields. The tests are the constructor, whether two fields are equal, whether a field is a closed Nat, and, on a list or on the fields of one constructor, whether two positions are equal, differ by their distance, either of those, or have a given length. A test that is true on the whole cover, or false on the whole cover, is dropped. A comparison that either equality or that distance already covers drops the two narrower tests, and so does a test with the same truth vector as one already kept. The survivor is a predicate over the tests that remain. `eval` of a discovered test is a run over the state, and the checker sees that term. It does not see the search. An atomic state is not walked. A state name is not a feature. Depth does not invent a new kind of test. When two states agree on every test and their terms differ, the search adds tests at the subterm where they differ and searches again.
 
+A state that is not a finite list, when the book defines `all-states`, compares two values by walking constructors, fields, lists, and Nats. More than 32 inhabitants is not that finite list. A candidate whose policy book does not check is dropped, and the search continues with the next one.
+
 `examples/cshrl/envs/placement.muro` declares no feature. The state is two rows. The survivor is `(feat pair-any-0-1)`. It prefers `move` when the rows are equal or adjacent and `stay` when they are two apart, and the book checks `CoindHomo`. The tests from `step` do not separate those boards. `examples/cshrl/envs/nested_bit.muro` declares no feature. The bit sits under two constructors. The survivor is `(feat ctor-is-p0-0-on)`. It prefers `move` at `on` and `stay` at `off`, and the book checks `CoindHomo`.
 
 ### Manual

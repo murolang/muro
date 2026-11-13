@@ -25,8 +25,8 @@ defmodule Muro.Synth.Host do
          :ok <- present(book, "all-actions"),
          :ok <- present(book, "horizon"),
          :ok <- present(book, "leb"),
-         :ok <- signatures(book),
          {:ok, shape} <- state_shape(book),
+         :ok <- signatures(book),
          {:ok, actions} <- nullary(book, "Action"),
          {:ok, features} <- features(book) do
       module = Module.concat(Muro.Synth.Host, "M#{System.unique_integer([:positive])}")
@@ -155,6 +155,9 @@ defmodule Muro.Synth.Host do
     |> install_features(specs)
   end
 
+  # Parameters and indices are read from the declaration. A checking
+  # book cannot write `s : State` when `State` is a family, so this
+  # refusal runs before the step signature.
   defp state_shape(book) do
     case Muro.Synth.Term.schema(book, "State") do
       {:enum, _, names} ->
@@ -174,13 +177,24 @@ defmodule Muro.Synth.Host do
           {:ok, inhabitants} ->
             {:ok, {:structured, schema, inhabitants}}
 
+          :cap ->
+            open_or(
+              book,
+              schema,
+              "State has more than #{Muro.Synth.Term.cap()} inhabitants; declare all-states"
+            )
+
           :open ->
-            if named?(book, "all-states") do
-              {:ok, {:structured, schema, nil}}
-            else
-              {:error, :usage, "State constructors take arguments; declare all-states"}
-            end
+            open_or(book, schema, "State constructors take arguments; declare all-states")
         end
+    end
+  end
+
+  defp open_or(book, schema, message) do
+    if named?(book, "all-states") do
+      {:ok, {:structured, schema, nil}}
+    else
+      {:error, :usage, message}
     end
   end
 
