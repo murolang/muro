@@ -1,0 +1,117 @@
+-- placement.muro — two rows on one board, with no declared feature.
+--
+-- A board is safe when its rows are two apart. move walks the board
+-- forward and stay walks it backward. On a safe board stay pays 2 and
+-- move pays 1. On every other board the payments are reversed. Every
+-- reward is positive, no action stays put, and no state is absorbing.
+-- Nothing in this book names a feature.
+import "../std/nat.muro"
+import "../lib/agent.muro"
+
+data Row : Type where
+  r0 : Row
+  r1 : Row
+  r2 : Row
+
+data State : Type where
+  board : Π (+ x : Row) → Π (+ y : Row) → State
+
+data Action : Type where
+  move : Action
+  stay : Action
+
+def Reward : spec Type := Nat
+
+def apart : run Π (x : Row) → Π (y : Row) → Bool :=
+  λ (x : Row) → λ (y : Row) →
+    match x motive (λ _ → Bool)
+      | r0 =>
+          (match y motive (λ _ → Bool)
+            | r0 => false
+            | r1 => false
+            | r2 => true)
+      | r1 =>
+          (match y motive (λ _ → Bool)
+            | r0 => false
+            | r1 => false
+            | r2 => false)
+      | r2 =>
+          (match y motive (λ _ → Bool)
+            | r0 => true
+            | r1 => false
+            | r2 => false)
+
+def bump : run Π (+ x : Row) → Π (+ y : Row) → State :=
+  λ (+ x : Row) → λ (+ y : Row) →
+    match y motive (λ _ → State)
+      | r0 => board x r1
+      | r1 => board x r2
+      | r2 =>
+          (match x motive (λ _ → State)
+            | r0 => board r1 r0
+            | r1 => board r2 r0
+            | r2 => board r0 r0)
+
+def dip : run Π (+ x : Row) → Π (+ y : Row) → State :=
+  λ (+ x : Row) → λ (+ y : Row) →
+    match y motive (λ _ → State)
+      | r0 =>
+          (match x motive (λ _ → State)
+            | r0 => board r2 r2
+            | r1 => board r0 r2
+            | r2 => board r1 r2)
+      | r1 =>
+          (match x motive (λ _ → State)
+            | r0 => board r0 r0
+            | r1 => board r1 r0
+            | r2 => board r2 r0)
+      | r2 =>
+          (match x motive (λ _ → State)
+            | r0 => board r0 r1
+            | r1 => board r1 r1
+            | r2 => board r2 r1)
+
+def go : run Π (+ x : Row) → Π (+ y : Row) → Π (a : Action) → State :=
+  λ (+ x : Row) → λ (+ y : Row) → λ (a : Action) →
+    match a motive (λ _ → State)
+      | move => bump x y
+      | stay => dip x y
+
+def pay : run Π (apart : Bool) → Π (a : Action) → Reward :=
+  λ (apart : Bool) → λ (a : Action) →
+    match a motive (λ _ → Reward)
+      | move =>
+          (match apart motive (λ _ → Reward)
+            | true => suc 0
+            | false => suc (suc 0))
+      | stay =>
+          (match apart motive (λ _ → Reward)
+            | true => suc (suc 0)
+            | false => suc 0)
+
+def reply : run Π (+ x : Row) → Π (+ y : Row) → Π (+ a : Action) → State × Reward :=
+  λ (+ x : Row) → λ (+ y : Row) → λ (+ a : Action) →
+    (go x y a, pay (apart x y) a)
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Reward)
+      | board x y => reply x y a
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons move (cons stay nil)
+def default-action : run Action := stay
+def horizon : run Nat := 0
+
+def all-states : run List State :=
+  cons (board r0 r0)
+    (cons (board r0 r1)
+      (cons (board r0 r2)
+        (cons (board r1 r0)
+          (cons (board r1 r1)
+            (cons (board r1 r2)
+              (cons (board r2 r0)
+                (cons (board r2 r1)
+                  (cons (board r2 r2) nil))))))))

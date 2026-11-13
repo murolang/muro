@@ -31,8 +31,17 @@ defmodule Muro.Synth.Book do
   environment for a later search.
   """
   def render(host, arms, anchor, oracle) when is_list(arms) and is_binary(oracle) do
+    case bind(host, arms) do
+      :error ->
+        {:error, "state equality is not a run"}
+
+      {:ok, bound} ->
+        render_bound(host, arms, anchor, oracle, bound)
+    end
+  end
+
+  defp render_bound(host, arms, anchor, oracle, bound) do
     env = rel(anchor, host.path)
-    bound = bind(host, arms)
 
     body = """
     import "#{env}"
@@ -278,7 +287,7 @@ defmodule Muro.Synth.Book do
   end
 
   def obligations(host, arms) when is_list(arms) do
-    bound = bind(host, arms)
+    {:ok, bound} = bind(host, arms)
 
     Enum.flat_map(arms, fn arm ->
       Enum.map(arm.observations, fn {state, bit} ->
@@ -294,7 +303,8 @@ defmodule Muro.Synth.Book do
 
   @doc false
   def hold_name(host, arms, arm, state) do
-    bind(host, arms).hold |> Map.fetch!({arm.name, state})
+    {:ok, bound} = bind(host, arms)
+    Map.fetch!(bound.hold, {arm.name, state})
   end
 
   defp predicted(text) do
@@ -322,8 +332,14 @@ defmodule Muro.Synth.Book do
 
   defp bind(host, arms) do
     taken = taken_names(host.book)
-    plan = feature_plan(host, arms, taken)
 
+    case feature_plan(host, arms, taken) do
+      :error -> :error
+      {:ok, plan} -> {:ok, bind_plan(host, arms, plan)}
+    end
+  end
+
+  defp bind_plan(host, arms, plan) do
     # Reserve the placeholder before the evaluator, so a later fresh name
     # does not take the constructor this book is about to declare.
     # A discovered feature reserves its own constructor instead.
@@ -681,7 +697,7 @@ defmodule Muro.Synth.Book do
         name = Map.fetch!(bound.hold, {arm.name, state})
         word = if bit, do: "true", else: "false"
 
-        "def #{name} : evidence {#{bound.names.eval} #{decl} #{state} ≡ #{word} : Bool} := refl"
+        "def #{name} : evidence {#{bound.names.eval} #{decl} #{Muro.Synth.Term.spell(state)} ≡ #{word} : Bool} := refl"
       end)
     end)
   end
@@ -721,7 +737,7 @@ defmodule Muro.Synth.Book do
 
     cond do
       specs == [] and not host.defined_feature ->
-        empty_plan(taken, :placeholder)
+        {:ok, empty_plan(taken, :placeholder)}
 
       Enum.any?(specs, &(&1.kind != :hint)) and host.defined_feature ->
         extend_plan(host, specs, taken)
@@ -730,7 +746,7 @@ defmodule Muro.Synth.Book do
         declared_plan(host, specs, taken)
 
       true ->
-        empty_plan(taken, :env)
+        {:ok, empty_plan(taken, :env)}
     end
   end
 
@@ -753,36 +769,52 @@ defmodule Muro.Synth.Book do
   end
 
   defp declared_plan(host, specs, taken) do
-    {text, taken, spell} = vocab_text(host, specs, taken, "Feature", "eval-feature")
+    case vocab_text(host, specs, taken, "Feature", "eval-feature") do
+      :error ->
+        :error
 
-    %{
-      mode: :declared,
-      text: text,
-      spell: spell,
-      feature_type: "Feature",
-      feature_eval: "eval-feature",
-      taken: taken
-    }
+      {:ok, text, taken, spell} ->
+        {:ok,
+         %{
+           mode: :declared,
+           text: text,
+           spell: spell,
+           feature_type: "Feature",
+           feature_eval: "eval-feature",
+           taken: taken
+         }}
+    end
   end
 
   defp extend_plan(host, specs, taken) do
     {type_name, taken} = alloc("DynFeature", taken)
     {eval_name, taken} = alloc("eval-dyn", taken)
-    {text, taken, spell} = vocab_text(host, specs, taken, type_name, eval_name)
 
-    %{
-      mode: :extend,
-      text: text,
-      spell: spell,
-      feature_type: type_name,
-      feature_eval: eval_name,
-      taken: taken
-    }
+    case vocab_text(host, specs, taken, type_name, eval_name) do
+      :error ->
+        :error
+
+      {:ok, text, taken, spell} ->
+        {:ok,
+         %{
+           mode: :extend,
+           text: text,
+           spell: spell,
+           feature_type: type_name,
+           feature_eval: eval_name,
+           taken: taken
+         }}
+    end
   end
 
   defp vocab_text(host, specs, taken, type_name, eval_name) do
-    {helpers, taken} = helper_block(host, specs, taken)
+    case helper_block(host, specs, taken) do
+      :error -> :error
+      {:ok, helpers, taken} -> vocab_rows(specs, taken, type_name, eval_name, helpers)
+    end
+  end
 
+  defp vocab_rows(specs, taken, type_name, eval_name, helpers) do
     {rows, taken, spell} =
       Enum.reduce(specs, {[], taken, %{}}, fn spec, {rows, taken, spell} ->
         {ctor, taken} = alloc(spec.name, taken)
@@ -801,7 +833,7 @@ defmodule Muro.Synth.Book do
     #{Enum.map_join(rows, "\n", &eval_clause(&1, helpers))}
     """
 
-    {text, taken, spell}
+    {:ok, text, taken, spell}
   end
 
   defp helper_block(host, specs, taken) do
@@ -818,14 +850,28 @@ defmodule Muro.Synth.Book do
         {nil, taken, ""}
       end
 
-    {same, taken, same_text} =
+    same_built =
       if need_same do
         {name, taken} = alloc("dyn-same", taken)
-        {name, taken, same_source(name, host.states)}
+
+        case equality_source(name, host, taken) do
+          {:ok, text, taken} -> {:ok, name, taken, text}
+          :error -> :error
+        end
       else
-        {nil, taken, ""}
+        {:ok, nil, taken, ""}
       end
 
+    case same_built do
+      :error ->
+        :error
+
+      {:ok, same, taken, same_text} ->
+        helper_rest(host, specs, taken, need_terminal, pos, pos_text, same, same_text)
+    end
+  end
+
+  defp helper_rest(host, specs, taken, need_terminal, pos, pos_text, same, same_text) do
     {terminal, taken, terminal_text} =
       if need_terminal do
         {name, taken} = alloc("dyn-terminal", taken)
@@ -834,9 +880,41 @@ defmodule Muro.Synth.Book do
         {nil, taken, ""}
       end
 
-    text = Enum.join([pos_text, same_text, terminal_text], "\n")
-    {%{pos: pos, same: same, terminal: terminal, text: text}, taken}
+    {struct_helpers, taken} = Muro.Synth.Term.render_helpers(specs, taken)
+    text = Enum.join([struct_helpers.text, pos_text, same_text, terminal_text], "\n")
+
+    {:ok,
+     %{
+       pos: pos,
+       same: same,
+       terminal: terminal,
+       text: text,
+       struct: struct_helpers,
+       schema: host.schema
+     }, taken}
   end
+
+  # A finite structured state matches every inhabitant. An open structured
+  # state compares the two terms from the schema. The nullary match is
+  # only for a non-empty list of constructor names. An empty list is not
+  # a match with no arms.
+  defp equality_source(name, %{structured: true, inhabitants: inhab, schema: schema}, taken)
+       when is_list(inhab) and inhab != [] do
+    {:ok, Muro.Synth.Term.same_source(name, schema, inhab), taken}
+  end
+
+  defp equality_source(name, %{structured: true, schema: schema}, taken) do
+    case Muro.Synth.Term.eq_source(name, schema, taken) do
+      {:ok, text, taken} -> {:ok, text, taken}
+      :open -> :error
+    end
+  end
+
+  defp equality_source(name, %{states: states}, taken) when is_list(states) and states != [] do
+    {:ok, same_source(name, states), taken}
+  end
+
+  defp equality_source(_name, _host, _taken), do: :error
 
   defp eval_clause(%{spec: %{kind: :has_pos_reward, action: action}, ctor: ctor}, helpers) do
     "      | #{ctor} => #{helpers.pos} (snd (step c #{action}))"
@@ -852,6 +930,14 @@ defmodule Muro.Synth.Book do
 
   defp eval_clause(%{spec: %{kind: :hint, name: name}, ctor: ctor}, _helpers) do
     "      | #{ctor} => eval-feature #{name} c"
+  end
+
+  defp eval_clause(%{spec: spec, ctor: ctor}, helpers) do
+    if Muro.Synth.Term.structural?(spec) do
+      Muro.Synth.Term.render_clause(helpers.schema, spec, ctor, helpers.struct)
+    else
+      "      | #{ctor} => false"
+    end
   end
 
   defp pos_source(name) do
@@ -908,8 +994,8 @@ defmodule Muro.Synth.Book do
     """
   end
 
-  def obligation_name(_arm, state, 1), do: "hold-#{state}"
-  def obligation_name(arm, state, _many), do: "hold-#{arm.action}-#{state}"
+  def obligation_name(_arm, state, 1), do: "hold-#{Muro.Synth.Term.label(state)}"
+  def obligation_name(arm, state, _many), do: "hold-#{arm.action}-#{Muro.Synth.Term.label(state)}"
 
   defp rel(from_dir, to_file) do
     from = from_dir |> Path.expand() |> Path.split()

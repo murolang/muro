@@ -2,7 +2,7 @@ defmodule Muro.Synth.Loop do
   @moduledoc false
 
   alias Muro.Synth
-  alias Muro.Synth.{Book, Oracle}
+  alias Muro.Synth.{Book, Oracle, Term}
 
   @rounds 4
 
@@ -24,6 +24,7 @@ defmodule Muro.Synth.Loop do
     score = Keyword.get(opts, :score, fn _ -> 0 end)
     fuel = Keyword.get(opts, :fuel, Muro.Check.default_fuel())
     anchor = Keyword.get(opts, :anchor, Path.dirname(Path.expand(path)))
+    structural = Keyword.get(opts, :structural, true)
 
     checker =
       Keyword.get(opts, :checker, fn book, fuel -> Muro.check_file(book, fuel: fuel) end)
@@ -39,12 +40,36 @@ defmodule Muro.Synth.Loop do
         {:error, :usage, "the depth bound is below --depth"}
 
       true ->
-        open(path, fuel, oracle, blind, depth, max_depth, rounds, score, anchor, checker)
+        open(
+          path,
+          fuel,
+          oracle,
+          blind,
+          depth,
+          max_depth,
+          rounds,
+          score,
+          anchor,
+          checker,
+          structural
+        )
     end
   end
 
-  defp open(path, fuel, oracle, blind, depth, max_depth, rounds, score, anchor, checker) do
-    case Muro.Synth.Host.open(path, fuel: fuel) do
+  defp open(
+         path,
+         fuel,
+         oracle,
+         blind,
+         depth,
+         max_depth,
+         rounds,
+         score,
+         anchor,
+         checker,
+         structural
+       ) do
+    case Muro.Synth.Host.open(path, fuel: fuel, structural: structural) do
       {:error, _kind, _msg} = err ->
         err
 
@@ -63,11 +88,31 @@ defmodule Muro.Synth.Loop do
   end
 
   defp search(host, spec, depth, max_depth, rounds, score, anchor, checker, fuel) do
+    search(host, spec, depth, max_depth, rounds, score, anchor, checker, fuel, length(spec.cover))
+  end
+
+  defp search(host, spec, depth, max_depth, rounds, score, anchor, checker, fuel, left) do
     feat = fn feature, state -> host.eval_feature.(feature, state) end
 
     case conflict(spec.cover, spec.tasks, host, feat) do
       {:conflict, earlier, later, predicted, oracle, task} ->
-        {:ok, insufficient(host, task, depth, feat, earlier, later, predicted, oracle)}
+        invent(
+          host,
+          spec,
+          depth,
+          max_depth,
+          rounds,
+          score,
+          anchor,
+          checker,
+          fuel,
+          left,
+          earlier,
+          later,
+          predicted,
+          oracle,
+          task
+        )
 
       :ok ->
         case fit(host, spec.tasks, depth, max_depth, score, feat, [], %{}) do
@@ -92,6 +137,46 @@ defmodule Muro.Synth.Loop do
               spec.oracle
             )
         end
+    end
+  end
+
+  # A collapse is a missing structural test when the two terms differ.
+  # Each round separates at least the pair it was given, so the number
+  # of rounds is at most the size of the cover. When the new tests do
+  # not separate the pair, the report stays `features insufficient`.
+  defp invent(
+         host,
+         spec,
+         depth,
+         max_depth,
+         rounds,
+         score,
+         anchor,
+         checker,
+         fuel,
+         left,
+         earlier,
+         later,
+         predicted,
+         oracle,
+         task
+       ) do
+    feat = fn feature, state -> host.eval_feature.(feature, state) end
+
+    specs =
+      if host[:structural] != false and host[:structured] and left > 0 do
+        Muro.Synth.Feature.invent(host, earlier, later)
+      else
+        []
+      end
+
+    case specs do
+      [] ->
+        {:ok, insufficient(host, task, depth, feat, earlier, later, predicted, oracle)}
+
+      fresh ->
+        host = Muro.Synth.Host.install_features(host, fresh)
+        search(host, spec, depth, max_depth, rounds, score, anchor, checker, fuel, left - 1)
     end
   end
 
@@ -162,17 +247,9 @@ defmodule Muro.Synth.Loop do
          rejected,
          oracle
        ) do
-    {:ok, source, meta} = Book.render(host, arms, anchor, oracle)
-
-    case Book.check(source, anchor, fn path -> checker.(path, fuel) end) do
-      :ok ->
-        {:ok, checked(arms, source, versions, meta)}
-
-      {:error, :storage, diagnostic} ->
-        {:error, :storage, diagnostic}
-
-      {:error, text} ->
-        feedback(
+    case Book.render(host, arms, anchor, oracle) do
+      {:error, _reason} ->
+        advance(
           host,
           arms,
           versions,
@@ -186,14 +263,48 @@ defmodule Muro.Synth.Loop do
           fuel,
           seen,
           rejected,
-          text,
-          meta,
+          book_cex(),
           oracle
         )
+
+      {:ok, source, meta} ->
+        case Book.check(source, anchor, fn path -> checker.(path, fuel) end) do
+          :ok ->
+            {:ok, checked(arms, source, versions, meta)}
+
+          {:error, :storage, diagnostic} ->
+            {:error, :storage, diagnostic}
+
+          {:error, text} ->
+            cex = Book.cex_from(text, meta.obligations ++ Book.obligations(host, arms))
+
+            advance(
+              host,
+              arms,
+              versions,
+              depth,
+              max_depth,
+              rounds,
+              score,
+              feat,
+              anchor,
+              checker,
+              fuel,
+              seen,
+              rejected,
+              cex,
+              oracle
+            )
+        end
     end
   end
 
-  defp feedback(
+  # The generated book named no obligation. The candidate is not evidence.
+  defp book_cex do
+    %{carrier: "book", predicted: nil, oracle: nil, pair: nil, fed: 1, agrees: nil}
+  end
+
+  defp advance(
          host,
          arms,
          versions,
@@ -207,11 +318,9 @@ defmodule Muro.Synth.Loop do
          fuel,
          seen,
          rejected,
-         text,
-         meta,
+         cex,
          oracle
        ) do
-    cex = Book.cex_from(text, meta.obligations ++ Book.obligations(host, arms))
     fed = Map.get(seen, cex.carrier, 0) + 1
     cex = %{cex | fed: fed}
     seen = Map.put(seen, cex.carrier, fed)
@@ -280,9 +389,12 @@ defmodule Muro.Synth.Loop do
 
   # The oracle bit is already an observation, so filtering by it again
   # cannot shrink the space. A boolean from the checker is new: this
-  # candidate failed. Remember it, including when it was the last one.
+  # candidate failed. A book that names no obligation did not check, so
+  # this candidate is not evidence either. An obligation that produced
+  # no bit stays unknown, including out of fuel. Remember a dropped
+  # candidate, including when it was the last one.
   defp drop_failed(arm, cex, rejected) do
-    if is_boolean(cex.predicted) do
+    if is_boolean(cex.predicted) or book_failure?(cex) do
       rejected =
         Map.update(rejected, arm.name, MapSet.new([arm.pred]), &MapSet.put(&1, arm.pred))
 
@@ -291,6 +403,9 @@ defmodule Muro.Synth.Loop do
       {arm.kept, rejected}
     end
   end
+
+  defp book_failure?(%{carrier: "book", predicted: nil} = cex), do: not Map.has_key?(cex, :name)
+  defp book_failure?(_cex), do: false
 
   defp tasks_of(arms) do
     Enum.map(arms, fn arm ->
@@ -372,8 +487,8 @@ defmodule Muro.Synth.Loop do
 
     lines = [
       "muro synth: features insufficient",
-      "#{later} agrees with #{earlier} on every feature",
-      "carrier #{later}",
+      "#{Term.spell(later)} agrees with #{Term.spell(earlier)} on every feature",
+      "carrier #{Term.spell(later)}",
       "predicted #{predicted}",
       "oracle #{oracle}",
       "fed back 1",
@@ -405,7 +520,7 @@ defmodule Muro.Synth.Loop do
     lines = [
       "muro synth: oracle cannot label",
       cex.reason,
-      "carrier #{cex.carrier}",
+      "carrier #{Term.spell(cex.carrier)}",
       "pair #{action} #{other}"
     ]
 
@@ -470,7 +585,11 @@ defmodule Muro.Synth.Loop do
     |> Map.fetch!(:observations)
     |> Enum.flat_map(fn {state, _bit} ->
       {action, bit} = decision(arms, state)
-      ["at #{state} the program prefers #{action}", "carrier #{state} bit #{bit}"]
+
+      [
+        "at #{Term.spell(state)} the program prefers #{action}",
+        "carrier #{Term.spell(state)} bit #{bit}"
+      ]
     end)
   end
 
@@ -503,7 +622,7 @@ defmodule Muro.Synth.Loop do
     lines =
       [
         title,
-        "carrier #{cex.carrier}",
+        "carrier #{Term.spell(cex.carrier)}",
         "predicted #{show_bit(cex.predicted)}",
         "oracle #{show_bit(cex.oracle)}",
         "fed back #{cex.fed}"

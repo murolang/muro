@@ -16,11 +16,13 @@ defmodule Muro.Synth.Feature do
   # that term. The search that chose the template is not evidence.
   #
   # A state constructor is not a feature. `state-is`, factorization, and
-  # thresholds from AutoFeatureNat are not instantiated: those templates
-  # read a numeric state index. Structural templates (`vals-eq`,
-  # `spread-eq`, `pair-any`, `len-is` in FeatureTemplate.agda) are not
-  # instantiated either. The states this host sees are atomic
-  # constructors, and there is no term to walk.
+  # a threshold on a raw state index are not instantiated.
+  #
+  # When `State` has a field, structural templates are read off that
+  # term: the constructor, equality of two fields, a field equal to a
+  # closed Nat, and on a list (or on the fields of one constructor)
+  # `vals-eq`, `spread-eq`, `pair-any`, and `len-is`. An atomic `State`
+  # is not walked. A bare Nat state is not a template.
 
   @doc """
   Features for `host`, hints first-filtered with the dynamics templates.
@@ -63,6 +65,11 @@ defmodule Muro.Synth.Feature do
     terminal?(host, next)
   end
 
+  def eval_spec(host, _hint_eval, %{kind: kind} = spec, state)
+      when kind in [:ctor_is, :vals_eq, :spread_eq, :pair_any, :len_is, :nat_is] do
+    Muro.Synth.Term.eval_spec(host.schema, spec, state)
+  end
+
   # A state is terminal when every action stays there. That is the
   # absorbing state of the step function. It is not a label on a
   # constructor.
@@ -74,11 +81,69 @@ defmodule Muro.Synth.Feature do
   end
 
   defp enumerate(host, states, hints, taken) do
-    {dyn, _taken} = enumerate_dyn(host, states, taken)
+    {dyn, taken} = enumerate_dyn(host, states, taken)
+    {structural, _taken} = enumerate_structural(host, states, taken)
 
-    Enum.reduce(hints, dyn, fn name, specs ->
+    Enum.reduce(hints, dyn ++ structural, fn name, specs ->
       specs ++ [%{name: name, kind: :hint, action: nil}]
     end)
+  end
+
+  defp enumerate_structural(host, states, taken) do
+    if host[:structured] && host[:structural] != false && host[:schema] do
+      Muro.Synth.Term.templates(host.schema, states, taken, 1)
+    else
+      {[], taken}
+    end
+  end
+
+  @doc """
+  Further structural tests that separate `earlier` from `later`.
+
+  The result is the filtered union, or `[]` when the two carriers still
+  agree. Depth is not involved.
+  """
+  def invent(host, earlier, later) do
+    cond do
+      not structural_host?(host) ->
+        []
+
+      true ->
+        taken = taken_names(host.book)
+
+        taken =
+          Enum.reduce(host.feature_specs, taken, fn spec, taken ->
+            take(taken, spec.name)
+          end)
+
+        {added, _taken} =
+          Muro.Synth.Term.invent(host.schema, earlier, later, host.feature_specs, taken)
+
+        if added == [] do
+          []
+        else
+          specs = host.feature_specs ++ added
+          states = Muro.Synth.Oracle.cover(host)
+          hint_eval = host.hint_eval
+          eval = fn spec, state -> eval_spec(host, hint_eval, spec, state) end
+
+          reduced =
+            specs
+            |> filter_nontrivial(states, eval)
+            |> drop_subsumed()
+            |> drop_equivalent(states, eval)
+
+          if separates?(reduced, earlier, later, eval), do: reduced, else: []
+        end
+    end
+  end
+
+  defp separates?(specs, earlier, later, eval) do
+    Enum.map(specs, &eval.(&1, earlier)) != Enum.map(specs, &eval.(&1, later))
+  end
+
+  defp structural_host?(host) do
+    host[:structured] == true and host[:structural] != false and host[:schema] != nil
   end
 
   defp enumerate_dyn(host, states, taken) do
@@ -91,9 +156,32 @@ defmodule Muro.Synth.Feature do
         {[], taken}
       end
 
-    {loops, taken} = add_all(taken, actions, "is-self-loop", :is_self_loop)
-    {leads, taken} = add_all(taken, actions, "leads-terminal", :leads_terminal)
+    {loops, leads, taken} =
+      if state_comparable?(host) do
+        {loops, taken} = add_all(taken, actions, "is-self-loop", :is_self_loop)
+        {leads, taken} = add_all(taken, actions, "leads-terminal", :leads_terminal)
+        {loops, leads, taken}
+      else
+        {[], [], taken}
+      end
+
     {reward_specs ++ loops ++ leads, taken}
+  end
+
+  # A finite inhabitant list is an exhaustive match. An open structured
+  # state is a run over its schema. A function, a cycle, or any other
+  # schema with no such run has neither test. A nullary state stays.
+  defp state_comparable?(host) do
+    cond do
+      host[:structured] != true ->
+        true
+
+      is_list(host[:inhabitants]) and host.inhabitants != [] ->
+        true
+
+      true ->
+        Muro.Synth.Term.equatable?(host[:schema])
+    end
   end
 
   defp add_all(taken, actions, prefix, kind) do
@@ -136,20 +224,28 @@ defmodule Muro.Synth.Feature do
   defp all_false?(values), do: Enum.all?(values, &(&1 == false))
 
   # FeatureTemplate.eliminate-redundant: `pair-any i j` subsumes
-  # `vals-eq i j` and `spread-eq i j`. No dynamics template has that
-  # shape. The clause is here so a later structural spec drops the same
-  # way. Dynamics redundancy is the equivalence pass below.
+  # `vals-eq i j` and `spread-eq i j` on the same path. Dynamics
+  # templates have no such pair. Two atoms with one truth vector still
+  # collapse below, whichever template produced them.
   defp drop_subsumed(specs) do
     Enum.filter(specs, fn spec ->
       not Enum.any?(specs, &subsumes?(&1, spec))
     end)
   end
 
-  defp subsumes?(%{kind: :pair_any, i: i, j: j}, %{kind: kind, i: i, j: j})
-       when kind in [:vals_eq, :spread_eq],
-       do: true
+  defp subsumes?(%{kind: :pair_any, i: i, j: j} = pair, %{kind: kind, i: i, j: j} = spec)
+       when kind in [:vals_eq, :spread_eq] do
+    same_site?(pair, spec)
+  end
 
   defp subsumes?(_other, _spec), do: false
+
+  defp same_site?(left, right) do
+    Map.get(left, :path, []) == Map.get(right, :path, []) and
+      Map.get(left, :view) == Map.get(right, :view) and
+      Map.get(left, :ctor) == Map.get(right, :ctor) and
+      Map.get(left, :guards) == Map.get(right, :guards)
+  end
 
   # Two features with one truth vector on the cover define the same
   # atom of the version space. Keep the earlier one.
