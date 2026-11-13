@@ -508,7 +508,23 @@ defmodule Muro.Emit.ExUnitSuite do
 
   # The surface did not mention a param. Unfolding `through` did.
   # A normalize failure is not this reason: the later value skip reports it.
+  # The normal form can name a param only when a run param is in scope.
+  # With none, the normalize cannot change this answer, and it is :ok.
   defp through_param(term, through, ctx) do
+    if run_param_in_scope?(ctx) do
+      through_param_unfold(term, through, ctx)
+    else
+      :ok
+    end
+  end
+
+  defp run_param_in_scope?(ctx) do
+    Enum.any?(ctx.scope, fn d ->
+      Map.get(d, :kind) == :param and Map.get(d, :mode) == :run
+    end)
+  end
+
+  defp through_param_unfold(term, through, ctx) do
     case Ast.to_db(term) do
       {:ok, db} ->
         case Check.normalize(ctx.db, db, ctx.fuel) do
