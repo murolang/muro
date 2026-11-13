@@ -2,7 +2,11 @@
 
 ## 0.20.37
 
-`mix muro.synth` on the finite lam environment checks a homomorphism for the ranking it synthesized. The survivor is `(notp (feat arg-erased))`. It prefers `arg` at `copy`, `copy4`, and `copy8`, and `spine` at `len`. `arg-erased` asks whether the λ that heads the argument redex is erased. Any environment can supply that reading as a `Feature`. The binder is affine on the copy states and erased at `len`. A binder used more than once, and an argument that is itself a call, hold at both, and that conjunction is dropped. The predicate is the policy that runs. The evidence is about that run.
+`mix muro.synth` discovers features from `step`. For each action it tests a positive reward, a return to the same state, and a step into an absorbing state. A state is absorbing when every action stays there. A test that is true on the whole cover, or false on the whole cover, is dropped, and so is a test with the same truth vector as one already kept. A `Feature` the environment declares is a hint and is filtered the same way. A book that declares neither `Feature` nor `eval-feature` is still an environment. The survivor is a predicate over the tests that remain. `eval` of a discovered test is a run over `step`, and the checker sees that term. It does not see the search. Depth does not invent a new kind of test. A state name is not a feature.
+
+`examples/cshrl/envs/maze_auto.muro` declares no feature. The survivor is `(feat has-pos-reward-go)`. It prefers `stay` at `west` and `go` at `east`, and the book checks `CoindHomo`. `examples/cshrl/envs/lam.muro` is not a validated target. The tests do not separate `copy` from `len`.
+
+The templates are `has-pos-reward` and `is-self-loop` from `CSHRL.Synthesis.DynFeatureTemplate`, and `leads-terminal` from `CSHRL.Synthesis.AutoFeatureNat`. The account is §Feature Discovery (`sec:ftl`) of the CSHRL paper. `CSHRL.Synthesis.CSHRLLoop` raises depth when nothing survives.
 
 A state that pays nothing now, and steps only to states whose `solve` is constant, still receives that ranking. The tail comparison rewrites those constants.
 

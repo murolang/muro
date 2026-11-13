@@ -24,7 +24,8 @@ In brief: `examples/cshrl/` is [CSHRL](https://github.com/doctorcorral/csh-rl) i
 | `envs/skill_investment.muro` | `SkillInvestment` |
 | `lib/synth.muro` | A predicate program: `eval`, `propagation`, `vs-shrinks`, `sufficient-cegis` |
 | `envs/synth_bit.muro` | Two carriers, one feature, one representative |
-| `envs/lam.muro` | A finite substitution graph. `arg-erased` is the quantity of the λ that heads the argument |
+| `envs/lam.muro` | A finite substitution graph. Not a validated synthesis target |
+| `envs/maze_auto.muro` | A corridor with no declared feature. `trace` checks `CoindHomo` for the reward of `go` |
 | `std/` | Bool, Nat order and `maxN`, List, Stream with `Dom` |
 
 A library file does not check on its own: `mix muro.check examples/cshrl/lib/core.muro` refuses with `param State is supplied by a file that imports this one`. Check an environment instead:
