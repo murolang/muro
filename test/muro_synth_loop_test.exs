@@ -6,6 +6,8 @@ defmodule Muro.SynthLoopTest do
   @lam "examples/cshrl/envs/lam.muro"
   @maze "examples/cshrl/envs/maze_auto.muro"
   @maze3 "examples/cshrl/envs/maze_auto_e2e.muro"
+  @place "examples/cshrl/envs/placement.muro"
+  @nest "examples/cshrl/envs/nested_bit.muro"
   @neg "test/fixtures/synth_neg.muro"
   @gap "test/fixtures/synth_gap.muro"
   @stay "test/fixtures/synth_false.muro"
@@ -263,6 +265,88 @@ defmodule Muro.SynthLoopTest do
     assert text =~ "at P2 the program prefers Fwd"
     assert text =~ "certificate CoindHomo"
     refute text =~ "CoinductiveHomomorphism"
+  end
+
+  @tag timeout: 180_000
+  test "two rows certify the comparison of the fields" do
+    src = File.read!(@place)
+    refute src =~ "data Feature"
+    refute src =~ "eval-feature"
+
+    assert {:ok, bare} = Muro.Synth.Host.open(@place, structural: false)
+    assert bare.features == []
+
+    assert {:ok, missed} =
+             Muro.Synth.cegis_loop(@place, structural: false, depth: 0, max_depth: 0)
+
+    assert missed.status == :insufficient
+    assert missed.book == nil
+    missed_text = joined(missed)
+    assert missed_text =~ "muro synth: features insufficient"
+    assert missed_text =~ "agrees with"
+    refute missed_text =~ "homomorphism checked"
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(@place, depth: 0, max_depth: 0)
+    assert result.status == :certified
+    assert result.certificate == "CoindHomo"
+    assert result.program == {:feat, "pair-any-0-1"}
+    assert result.book =~ "def survivor : run PredProg := (feat pair-any-0-1)"
+    assert result.book =~ "pair-any-0-1 : Feature"
+    assert result.book =~ "nat-of-Row"
+    assert result.book =~ "evidence CoindHomo rank"
+
+    assert result.book =~
+             "def cert-solve-board-r0-r0 : evidence Π (n : Nat) → {solve (board r0 r0) n ≡ suc (suc 0) : Nat}"
+
+    refute result.book =~ "vals-eq"
+    refute result.book =~ "spread-eq"
+    refute result.book =~ "has-pos-reward"
+    refute result.book =~ "is-self-loop"
+    refute result.book =~ "leads-terminal"
+    refute result.book =~ "CoinductiveHomomorphism"
+
+    [_, policy_and_rest] = String.split(result.book, "def policy : run", parts: 2)
+    [policy, _cert] = String.split(policy_and_rest, "def rank", parts: 2)
+    refute policy =~ "| board"
+
+    text = joined(result)
+    assert text =~ "muro synth: homomorphism checked"
+    assert text =~ "program: (feat pair-any-0-1)"
+    assert text =~ "at (board r0 r0) the program prefers move"
+    assert text =~ "at (board r0 r2) the program prefers stay"
+    assert text =~ "at (board r1 r1) the program prefers move"
+    assert text =~ "at (board r2 r0) the program prefers stay"
+    assert text =~ "at (board r2 r2) the program prefers move"
+    assert text =~ "certificate CoindHomo"
+  end
+
+  @tag timeout: 180_000
+  test "a bit under two constructors is invented and certified" do
+    src = File.read!(@nest)
+    refute src =~ "data Feature"
+    refute src =~ "eval-feature"
+
+    assert {:ok, missed} = Muro.Synth.cegis_loop(@nest, structural: false, depth: 0, max_depth: 0)
+    assert missed.status == :insufficient
+    assert missed.book == nil
+    assert joined(missed) =~ "muro synth: features insufficient"
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(@nest, depth: 0, max_depth: 0)
+    assert result.status == :certified
+    assert result.certificate == "CoindHomo"
+    assert result.program == {:feat, "ctor-is-p0-0-on"}
+    assert result.book =~ "def survivor : run PredProg := (feat ctor-is-p0-0-on)"
+    assert result.book =~ "ctor-is-p0-0-on : Feature"
+    assert result.book =~ "evidence CoindHomo rank"
+    refute result.book =~ "has-pos-reward"
+    refute result.book =~ "CoinductiveHomomorphism"
+
+    text = joined(result)
+    assert text =~ "muro synth: homomorphism checked"
+    assert text =~ "program: (feat ctor-is-p0-0-on)"
+    assert text =~ "at (wrap (inn off)) the program prefers stay"
+    assert text =~ "at (wrap (inn on)) the program prefers move"
+    assert text =~ "certificate CoindHomo"
   end
 
   test "depth 0 on a reward gap is an empty space, not insufficient features" do

@@ -10,14 +10,15 @@ defmodule Muro.Synth.Host do
   """
   def open(path, opts \\ []) when is_binary(path) and is_list(opts) do
     fuel = Keyword.get(opts, :fuel, Muro.Check.default_fuel())
+    structural = Keyword.get(opts, :structural, true)
 
     case Muro.Load.file(path, fuel: fuel) do
       {:error, msg} -> {:error, :book, msg}
-      {:ok, book} -> compile(path, book)
+      {:ok, book} -> compile(path, book, structural)
     end
   end
 
-  defp compile(path, book) do
+  defp compile(path, book, structural) do
     with :ok <- present(book, "State"),
          :ok <- present(book, "Action"),
          :ok <- present(book, "step"),
@@ -25,13 +26,22 @@ defmodule Muro.Synth.Host do
          :ok <- present(book, "horizon"),
          :ok <- present(book, "leb"),
          :ok <- signatures(book),
-         {:ok, states} <- nullary(book, "State"),
+         {:ok, shape} <- state_shape(book),
          {:ok, actions} <- nullary(book, "Action"),
          {:ok, features} <- features(book) do
       module = Module.concat(Muro.Synth.Host, "M#{System.unique_integer([:positive])}")
       emitted = book |> Muro.Prelude.for_emit() |> Muro.Grade.erase_book()
       Code.eval_string(Muro.Emit.emit_module(module, emitted))
-      names = states ++ actions ++ features
+
+      {states, names, schema, inhabitants, structured} =
+        case shape do
+          {:nullary, states} ->
+            {states, states ++ actions ++ features, nil, nil, false}
+
+          {:structured, schema, inhabitants} ->
+            {inhabitants || [], actions ++ features, schema, inhabitants, true}
+        end
+
       atoms = Map.new(names, fn name -> {name, atom(name)} end)
       sources = Map.new(atoms, fn {name, atom} -> {atom, name} end)
 
@@ -46,7 +56,11 @@ defmodule Muro.Synth.Host do
         defined_carrier: named?(book, "Carrier"),
         defined_eval: named?(book, "eval-feature"),
         atoms: atoms,
-        sources: sources
+        sources: sources,
+        structured: structured,
+        structural: structural,
+        schema: schema,
+        inhabitants: inhabitants
       }
 
       link(host)
@@ -68,11 +82,12 @@ defmodule Muro.Synth.Host do
 
         all_states =
           if exported?(host, "all-states", 0) do
-            host
-            |> call("all-states", [])
-            |> decode_list()
-            |> Enum.map(&source!(host, &1))
-            |> Enum.uniq()
+            listed = host |> call("all-states", []) |> decode_list()
+
+            case decode_states(host, listed) do
+              {:ok, states} -> states
+              {:error, _, _} = err -> throw(err)
+            end
           else
             nil
           end
@@ -94,18 +109,36 @@ defmodule Muro.Synth.Host do
           |> Map.put(:all_states, all_states)
           |> Map.put(:default, default)
           |> Map.put(:step, fn state, action ->
-            {next, reward} = call(host, "step", [atom!(host, state), atom!(host, action)])
-            {source!(host, next), reward}
+            {next, reward} = call(host, "step", [state_arg(host, state), atom!(host, action)])
+            {decode_state!(host, next), reward}
           end)
           |> Map.put(:leb, fn left, right ->
             truth!(call(host, "leb", [left, right]))
           end)
           |> Map.put(:eval_feature, fn feature, state ->
-            truth!(call(host, "eval-feature", [atom!(host, feature), atom!(host, state)]))
+            truth!(call(host, "eval-feature", [atom!(host, feature), state_arg(host, state)]))
           end)
 
         {:ok, discover(host)}
     end
+  catch
+    {:error, _, _} = err -> err
+  end
+
+  @doc false
+  def install_features(host, specs) when is_list(specs) do
+    hint_eval = Map.get(host, :hint_eval, host.eval_feature)
+
+    eval = fn name, state ->
+      spec = Enum.find(specs, &(&1.name == name))
+      Muro.Synth.Feature.eval_spec(host, hint_eval, spec, state)
+    end
+
+    host
+    |> Map.put(:feature_specs, specs)
+    |> Map.put(:features, Enum.map(specs, & &1.name))
+    |> Map.put(:eval_feature, eval)
+    |> Map.put(:hint_eval, hint_eval)
   end
 
   # Declared constructors are hints. Dynamics templates are read off
@@ -114,19 +147,75 @@ defmodule Muro.Synth.Host do
   # templates find, plus the two constants.
   defp discover(host) do
     hints = host.features
+    host = Map.put(host, :hint_eval, host.eval_feature)
     specs = Muro.Synth.Feature.discover(host, hints)
-    hint_eval = host.eval_feature
-
-    eval = fn name, state ->
-      spec = Enum.find(specs, &(&1.name == name))
-      Muro.Synth.Feature.eval_spec(host, hint_eval, spec, state)
-    end
 
     host
     |> Map.put(:hints, hints)
-    |> Map.put(:feature_specs, specs)
-    |> Map.put(:features, Enum.map(specs, & &1.name))
-    |> Map.put(:eval_feature, eval)
+    |> install_features(specs)
+  end
+
+  defp state_shape(book) do
+    case Muro.Synth.Term.schema(book, "State") do
+      {:enum, _, names} ->
+        {:ok, {:nullary, names}}
+
+      {:open, "missing"} ->
+        {:error, :usage, "the book does not define State"}
+
+      {:open, "params"} ->
+        {:error, :usage, "State has parameters"}
+
+      {:open, "indices"} ->
+        {:error, :usage, "State has indices"}
+
+      schema ->
+        case Muro.Synth.Term.inhabitants(schema) do
+          {:ok, inhabitants} ->
+            {:ok, {:structured, schema, inhabitants}}
+
+          :open ->
+            if named?(book, "all-states") do
+              {:ok, {:structured, schema, nil}}
+            else
+              {:error, :usage, "State constructors take arguments; declare all-states"}
+            end
+        end
+    end
+  end
+
+  defp decode_states(host, raws) do
+    if host.structured do
+      Enum.reduce_while(raws, {:ok, []}, fn raw, {:ok, acc} ->
+        case Muro.Synth.Term.decode(raw, host.schema) do
+          {:ok, term} ->
+            {:cont, {:ok, acc ++ [term]}}
+
+          :error ->
+            {:halt, {:error, :usage, "all-states has a value that is not a State"}}
+        end
+      end)
+      |> case do
+        {:ok, states} -> {:ok, Enum.uniq_by(states, & &1.value)}
+        other -> other
+      end
+    else
+      {:ok, raws |> Enum.map(&source!(host, &1)) |> Enum.uniq()}
+    end
+  end
+
+  defp state_arg(host, %Muro.Synth.Term{value: value}) do
+    if host.structured, do: value, else: atom!(host, value)
+  end
+
+  defp state_arg(host, state), do: atom!(host, state)
+
+  defp decode_state!(host, raw) do
+    if host.structured do
+      Muro.Synth.Term.decode!(raw, host.schema)
+    else
+      source!(host, raw)
+    end
   end
 
   defp present(book, name) do

@@ -118,6 +118,44 @@ defmodule Muro.SynthFeatureTest do
     assert [%{name: "has-pos-reward-go-2"}] = Feature.discover(exact, [])
   end
 
+  test "a list of Nat enumerates vals-eq, spread-eq, pair-any, and len-is" do
+    schema = {:list, :nat}
+    near = {:cons, 0, {:cons, 1, nil}}
+    same = {:cons, 1, {:cons, 1, nil}}
+    far = {:cons, 0, {:cons, 2, nil}}
+    {specs, _taken} = Muro.Synth.Term.templates(schema, [near, same], MapSet.new(), 1)
+
+    assert Enum.any?(specs, &(&1.kind == :vals_eq and &1.i == 0 and &1.j == 1))
+    assert Enum.any?(specs, &(&1.kind == :spread_eq and &1.i == 0 and &1.j == 1))
+    pair = Enum.find(specs, &(&1.kind == :pair_any and &1.i == 0 and &1.j == 1))
+    len2 = Enum.find(specs, &(&1.kind == :len_is and &1.n == 2))
+    vals = Enum.find(specs, &(&1.kind == :vals_eq and &1.i == 0 and &1.j == 1))
+
+    assert Muro.Synth.Term.eval_spec(schema, pair, near) == true
+    assert Muro.Synth.Term.eval_spec(schema, pair, same) == true
+    assert Muro.Synth.Term.eval_spec(schema, pair, far) == false
+    assert Muro.Synth.Term.eval_spec(schema, vals, same) == true
+    assert Muro.Synth.Term.eval_spec(schema, vals, near) == false
+    assert Muro.Synth.Term.eval_spec(schema, len2, near) == true
+    assert Muro.Synth.Term.eval_spec(schema, len2, {:cons, 0, nil}) == false
+  end
+
+  test "invention reads a bit under two constructors" do
+    bit = {:enum, "Bit", ["off", "on"]}
+    inner = {:data, "Inner", [%{name: "inn", fields: [bit]}]}
+    schema = {:data, "State", [%{name: "wrap", fields: [inner]}]}
+    off = {:wrap, {:inn, :off}}
+    on = {:wrap, {:inn, :on}}
+
+    assert {[], _} = Muro.Synth.Term.templates(schema, [off, on], MapSet.new(), 1)
+
+    {added, _} = Muro.Synth.Term.invent(schema, off, on, [], MapSet.new())
+    assert Enum.any?(added, &(&1.kind == :ctor_is and &1.path == [0, 0] and &1.tag == "on"))
+    on_spec = Enum.find(added, &(&1.tag == "on"))
+    assert Muro.Synth.Term.eval_spec(schema, on_spec, on) == true
+    assert Muro.Synth.Term.eval_spec(schema, on_spec, off) == false
+  end
+
   defp pos_host, do: host(step: pos_step())
 
   defp pos_step do

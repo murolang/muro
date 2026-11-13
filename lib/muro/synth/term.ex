@@ -1,0 +1,1477 @@
+defmodule Muro.Synth.Term do
+  @moduledoc false
+
+  # A structured state is a term. Nullary states stay binaries, and
+  # `spell/1` and `label/1` are the identity on those, so a book that
+  # never leaves the nullary path is unchanged.
+  #
+  # `spell` is the source term. `label` is the fragment a definition
+  # name may contain. The two differ when the term has fields.
+
+  defstruct [:value, :spell, :label]
+
+  @cap 32
+
+  def spell(%__MODULE__{spell: spell}), do: spell
+  def spell(name) when is_binary(name), do: name
+  def spell(nil), do: nil
+
+  def label(%__MODULE__{label: label}), do: label
+  def label(name) when is_binary(name), do: name
+  def label(nil), do: nil
+
+  def value_of(%__MODULE__{value: value}), do: value
+  def value_of(value), do: value
+
+  @doc """
+  The shape of `name` after aliases.
+
+  `{:enum, name, ctors}` is a data type whose constructors take nothing.
+  `{:open, reason}` is not a finite term walk.
+  """
+  def schema(book, name) when is_list(book) and is_binary(name) do
+    of_type(book, {:var, name}, MapSet.new())
+  end
+
+  def schema(_book, _name), do: {:open, "missing"}
+
+  def finite?(schema) do
+    case inhabitants(schema) do
+      {:ok, _} -> true
+      :open -> false
+    end
+  end
+
+  def inhabitants(schema), do: enum_inhabitants(schema, @cap)
+
+  def decode(raw, schema) do
+    case pack(schema, raw) do
+      {:ok, value, spell, label} ->
+        {:ok, %__MODULE__{value: value, spell: spell, label: label}}
+
+      :error ->
+        :error
+    end
+  end
+
+  def decode!(raw, schema) do
+    case decode(raw, schema) do
+      {:ok, term} -> term
+      :error -> raise ArgumentError, "not a value of this state: #{inspect(raw)}"
+    end
+  end
+
+  @doc """
+  Structural templates at `path` depth `max_depth`.
+
+  Depth 0 is the value itself. A greater depth opens one field.
+  A list element is not opened here. Invention does that.
+  A bare `Nat` at the root is not a template: that would be a threshold
+  on a state index.
+  """
+  def templates(schema, states, taken, max_depth) do
+    values = Enum.map(states, &value_of/1)
+    specs = collect(schema, values, [], 0, max_depth)
+    name_specs(specs, taken)
+  end
+
+  @doc """
+  Templates at the nodes where `earlier` and `later` differ.
+
+  Specs already present are not returned. The caller filters the union.
+  """
+  def invent(schema, earlier, later, existing, taken) do
+    left = value_of(earlier)
+    right = value_of(later)
+
+    specs =
+      schema
+      |> diffs(left, right, [])
+      |> Enum.flat_map(fn {path, sub, a, b} -> local(sub, [a, b], path) end)
+      |> Enum.reject(fn spec -> Enum.any?(existing, &(spec_key(&1) == spec_key(spec))) end)
+
+    name_specs(specs, taken)
+  end
+
+  def eval_spec(schema, spec, state) do
+    case dig(schema, Map.get(spec, :path, []), value_of(state), Map.get(spec, :guards, [])) do
+      :miss -> false
+      {:ok, sub, value} -> bit(spec, sub, value)
+    end
+  end
+
+  def structural?(%{kind: kind}) do
+    kind in [:ctor_is, :vals_eq, :spread_eq, :pair_any, :len_is, :nat_is]
+  end
+
+  def render_helpers(specs, taken) do
+    struct_specs = Enum.filter(specs, &structural?/1)
+
+    if struct_specs == [] do
+      {%{text: "", funs: %{}}, taken}
+    else
+      build_helpers(struct_specs, taken)
+    end
+  end
+
+  def render_clause(schema, spec, ctor, helpers) do
+    body = test_at(schema, "c", Map.get(spec, :path, []), spec, helpers, [])
+    "      | #{ctor} => #{body}"
+  end
+
+  @doc """
+  Nested match from `scrutinee` down to each inhabitant.
+
+  `type_of.(src)` is the type of a branch at that source term.
+  `body_of.(src)` is the branch once the term is concrete.
+  """
+  def exhaust(schema, scrutinee, type_of, body_of) when is_function(type_of, 1) do
+    open(schema, scrutinee, & &1, type_of, body_of, 0)
+  end
+
+  def same_source(name, schema, inhabitants) when is_list(inhabitants) do
+    body =
+      exhaust(schema, "s", fn _ -> "Bool" end, fn spell ->
+        exhaust(schema, "t", fn _ -> "Bool" end, fn other ->
+          if other == spell, do: "true", else: "false"
+        end)
+      end)
+
+    """
+    def #{name} : run Π (+ s : State) → Π (+ t : State) → Bool :=
+      λ (+ s : State) → λ (+ t : State) →
+        #{body}
+    """
+  end
+
+  defp of_type(book, ty, seen) do
+    case unfold(book, ty, MapSet.new()) do
+      :nat ->
+        :nat
+
+      {:var, "Nat"} ->
+        :nat
+
+      {:var, name} ->
+        of_declared(book, name, seen)
+
+      {:app, {:var, "List"}, elem} ->
+        {:list, of_type(book, elem, seen)}
+
+      {:prod, left, right} ->
+        {:prod, of_type(book, left, seen), of_type(book, right, seen)}
+
+      {:pi, _, _, _, _} ->
+        {:open, "function"}
+
+      _ ->
+        {:open, "type"}
+    end
+  end
+
+  defp of_declared(book, name, seen) do
+    if MapSet.member?(seen, name) do
+      {:open, "cycle"}
+    else
+      case Enum.find(book, &(Map.get(&1, :kind) == :data and &1.name == name)) do
+        nil ->
+          {:open, "missing"}
+
+        %{params: params} when is_list(params) and params != [] ->
+          {:open, "params"}
+
+        %{indices: indices} when is_list(indices) and indices != [] ->
+          {:open, "indices"}
+
+        %{ctors: ctors} ->
+          seen = MapSet.put(seen, name)
+          fields = Enum.map(ctors, &ctor_fields(book, &1, seen))
+
+          rows =
+            Enum.zip(ctors, fields)
+            |> Enum.map(fn {ctor, fs} -> %{name: ctor.name, fields: fs} end)
+
+          if Enum.all?(fields, &(&1 == [])) do
+            {:enum, name, Enum.map(ctors, & &1.name)}
+          else
+            {:data, name, rows}
+          end
+      end
+    end
+  end
+
+  defp ctor_fields(book, ctor, seen) do
+    read_fields(book, Map.get(ctor, :type), seen)
+  end
+
+  defp read_fields(book, {:pi, :erased, _, _, cod}, seen), do: read_fields(book, cod, seen)
+
+  defp read_fields(book, {:pi, _qty, dom, _name, cod}, seen) do
+    [of_type(book, dom, seen) | read_fields(book, cod, seen)]
+  end
+
+  defp read_fields(_book, _ty, _seen), do: []
+
+  defp unfold(book, {:var, name}, seen) do
+    if MapSet.member?(seen, name) do
+      {:var, name}
+    else
+      case alias_of(book, name) do
+        nil -> {:var, name}
+        body -> unfold(book, body, MapSet.put(seen, name))
+      end
+    end
+  end
+
+  defp unfold(book, {:prod, left, right}, seen) do
+    {:prod, unfold(book, left, seen), unfold(book, right, seen)}
+  end
+
+  defp unfold(book, {:app, fun, arg}, seen) do
+    {:app, unfold(book, fun, seen), unfold(book, arg, seen)}
+  end
+
+  defp unfold(book, {:pi, qty, dom, name, cod}, seen) do
+    {:pi, qty, unfold(book, dom, seen), name, unfold(book, cod, seen)}
+  end
+
+  defp unfold(_book, ty, _seen), do: ty
+
+  defp alias_of(book, name) do
+    Enum.find_value(book, fn
+      %{name: ^name, mode: :spec, type: :typ, body: body} = d ->
+        if Map.get(d, :kind) == :data, do: nil, else: body
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp enum_inhabitants(schema, cap) do
+    case grow(schema, cap) do
+      :open -> :open
+      {:ok, rows} when length(rows) <= cap -> {:ok, Enum.map(rows, &pack_row/1)}
+      _ -> :open
+    end
+  end
+
+  defp grow(:nat, _cap), do: :open
+  defp grow({:list, _}, _cap), do: :open
+  defp grow({:open, _}, _cap), do: :open
+
+  defp grow({:enum, _name, ctors}, _cap) do
+    {:ok, Enum.map(ctors, &{:atom, &1})}
+  end
+
+  defp grow({:data, _name, ctors}, cap) do
+    Enum.reduce_while(ctors, {:ok, []}, fn ctor, {:ok, acc} ->
+      case grow_fields(ctor.fields, cap) do
+        :open ->
+          {:halt, :open}
+
+        {:ok, rows} ->
+          built = Enum.map(rows, &{:ctor, ctor.name, &1})
+          {:cont, {:ok, acc ++ built}}
+      end
+    end)
+  end
+
+  defp grow({:prod, left, right}, cap) do
+    with {:ok, ls} <- grow(left, cap),
+         {:ok, rs} <- grow(right, cap) do
+      rows = for l <- ls, r <- rs, do: {:pair, l, r}
+      if length(rows) > cap, do: :open, else: {:ok, rows}
+    end
+  end
+
+  defp grow_fields(fields, cap) do
+    Enum.reduce_while(fields, {:ok, [[]]}, fn field, {:ok, acc} ->
+      case grow(field, cap) do
+        :open ->
+          {:halt, :open}
+
+        {:ok, items} ->
+          rows = for row <- acc, item <- items, do: row ++ [item]
+          if length(rows) > cap, do: {:halt, :open}, else: {:cont, {:ok, rows}}
+      end
+    end)
+  end
+
+  defp pack_row(row) do
+    {value, spell, label} = realize(row)
+    %__MODULE__{value: value, spell: spell, label: label}
+  end
+
+  defp realize({:atom, name}) do
+    {atom_of(name), name, name}
+  end
+
+  defp realize({:ctor, name, field_rows}) do
+    realized = Enum.map(field_rows, &realize/1)
+
+    value =
+      case realized do
+        [] -> atom_of(name)
+        rows -> List.to_tuple([atom_of(name) | Enum.map(rows, &elem(&1, 0))])
+      end
+
+    spell =
+      case realized do
+        [] -> name
+        rows -> "(" <> Enum.join([name | Enum.map(rows, &arg(elem(&1, 1)))], " ") <> ")"
+      end
+
+    label =
+      case realized do
+        [] -> name
+        rows -> Enum.join([name | Enum.map(rows, &elem(&1, 2))], "-")
+      end
+
+    {value, spell, label}
+  end
+
+  defp realize({:pair, left, right}) do
+    {lv, ls, ll} = realize(left)
+    {rv, rs, rl} = realize(right)
+    {{lv, rv}, "(#{ls}, #{rs})", "#{ll}-#{rl}"}
+  end
+
+  defp realize({:packed, value, spell, label}), do: {value, spell, label}
+
+  defp pack(:nat, raw) do
+    case canon_nat(raw) do
+      {:ok, n} -> {:ok, n, spell_nat(n), "n#{n}"}
+      :error -> :error
+    end
+  end
+
+  defp pack({:enum, _name, ctors}, raw) when is_atom(raw) do
+    case Enum.find(ctors, &(atom_of(&1) == raw)) do
+      nil -> :error
+      name -> {:ok, raw, name, name}
+    end
+  end
+
+  defp pack({:enum, _, _}, _), do: :error
+
+  defp pack({:data, _name, ctors}, raw) do
+    tag = tag_atom(raw)
+
+    case Enum.find(ctors, &(atom_of(&1.name) == tag)) do
+      nil ->
+        :error
+
+      ctor ->
+        fields = raw_fields(raw)
+
+        if length(fields) != length(ctor.fields) do
+          :error
+        else
+          decoded = Enum.zip(ctor.fields, fields)
+
+          case decode_fields(decoded) do
+            :error ->
+              :error
+
+            {:ok, rows} ->
+              {value, spell, label} = realize({:ctor, ctor.name, rows_to_ast(rows)})
+              {:ok, value, spell, label}
+          end
+        end
+    end
+  end
+
+  defp pack({:list, elem}, raw) do
+    case canon_list(raw) do
+      :error ->
+        :error
+
+      {:ok, items} ->
+        case decode_list_items(elem, items) do
+          :error ->
+            :error
+
+          {:ok, rows} ->
+            value = encode_list(Enum.map(rows, &elem(&1, 0)))
+            spells = Enum.map(rows, &elem(&1, 1))
+            labels = Enum.map(rows, &elem(&1, 2))
+            {:ok, value, list_spell(spells), list_label(labels)}
+        end
+    end
+  end
+
+  defp pack({:prod, left, right}, {a, b}) do
+    with {:ok, lv, ls, ll} <- pack(left, a),
+         {:ok, rv, rs, rl} <- pack(right, b) do
+      {:ok, {lv, rv}, "(#{ls}, #{rs})", "#{ll}-#{rl}"}
+    else
+      _ -> :error
+    end
+  end
+
+  defp pack({:open, _}, _), do: :error
+  defp pack(_schema, _raw), do: :error
+
+  defp rows_to_ast(rows) do
+    Enum.map(rows, fn {value, spell, label} -> {:packed, value, spell, label} end)
+  end
+
+  defp decode_fields(pairs) do
+    Enum.reduce_while(pairs, {:ok, []}, fn {schema, raw}, {:ok, acc} ->
+      case pack(schema, raw) do
+        {:ok, value, spell, label} -> {:cont, {:ok, acc ++ [{value, spell, label}]}}
+        :error -> {:halt, :error}
+      end
+    end)
+  end
+
+  defp decode_list_items(elem, items) do
+    Enum.reduce_while(items, {:ok, []}, fn raw, {:ok, acc} ->
+      case pack(elem, raw) do
+        {:ok, value, spell, label} -> {:cont, {:ok, acc ++ [{value, spell, label}]}}
+        :error -> {:halt, :error}
+      end
+    end)
+  end
+
+  defp collect(schema, values, path, depth, max_depth) do
+    here = local(schema, values, path)
+
+    below =
+      if depth < max_depth do
+        descend(schema, values, path, depth, max_depth)
+      else
+        []
+      end
+
+    here ++ below
+  end
+
+  defp local(schema, values, path) do
+    ctor_tests(schema, path) ++
+      compare_tests(schema, values, path) ++
+      nat_tests(schema, values, path) ++
+      len_tests(schema, values, path)
+  end
+
+  defp ctor_tests({:enum, _, ctors}, path) when length(ctors) >= 2 do
+    Enum.map(ctors, &%{kind: :ctor_is, path: path, tag: &1})
+  end
+
+  defp ctor_tests({:data, _, ctors}, path) when length(ctors) >= 2 do
+    Enum.map(ctors, &%{kind: :ctor_is, path: path, tag: &1.name})
+  end
+
+  defp ctor_tests(_, _), do: []
+
+  defp compare_tests({:data, _, ctors}, _values, path) do
+    Enum.flat_map(ctors, fn ctor ->
+      ctor.fields
+      |> pair_indexes()
+      |> Enum.flat_map(fn {i, j, elem} ->
+        trio(path, :fields, i, j, elem, ctor.name)
+      end)
+    end)
+  end
+
+  defp compare_tests({:prod, left, right}, _values, path) do
+    case same_family(left, right) do
+      nil -> []
+      elem -> trio(path, :fields, 0, 1, elem, nil)
+    end
+  end
+
+  defp compare_tests({:list, elem}, values, path) do
+    case family(elem) do
+      nil ->
+        []
+
+      fam ->
+        max_len = max_len(values)
+
+        if max_len >= 2 do
+          for j <- 1..(max_len - 1)//1,
+              i <- 0..(j - 1)//1,
+              row <- trio(path, :list, i, j, fam, nil) do
+            row
+          end
+        else
+          []
+        end
+    end
+  end
+
+  defp compare_tests(_, _, _), do: []
+
+  defp nat_tests(:nat, _values, []), do: []
+
+  defp nat_tests(:nat, values, path) do
+    values
+    |> Enum.flat_map(fn value ->
+      case canon_nat(value) do
+        {:ok, n} -> [n]
+        :error -> []
+      end
+    end)
+    |> Enum.uniq()
+    |> Enum.map(&%{kind: :nat_is, path: path, n: &1})
+  end
+
+  defp nat_tests(_, _, _), do: []
+
+  defp len_tests({:list, elem}, values, path) do
+    max_len = max_len(values)
+
+    for n <- 0..max_len//1 do
+      %{kind: :len_is, path: path, n: n, elem: elem}
+    end
+  end
+
+  defp len_tests(_, _, _), do: []
+
+  defp trio(path, view, i, j, elem, ctor) do
+    base = %{path: path, view: view, i: i, j: j, elem: elem, ctor: ctor}
+
+    [
+      Map.put(base, :kind, :vals_eq),
+      Map.put(base, :kind, :spread_eq),
+      Map.put(base, :kind, :pair_any)
+    ]
+  end
+
+  defp pair_indexes(fields) do
+    indexed = Enum.with_index(fields)
+
+    for {left, i} <- indexed,
+        {right, j} <- indexed,
+        i < j,
+        fam = same_family(left, right),
+        fam != nil do
+      {i, j, fam}
+    end
+  end
+
+  defp same_family(left, right) do
+    case {family(left), family(right)} do
+      {nil, _} -> nil
+      {_, nil} -> nil
+      {fam, fam} -> fam
+      _ -> nil
+    end
+  end
+
+  defp family(:nat), do: :nat
+  defp family({:enum, name, ctors}), do: {:enum, name, ctors}
+  defp family(_), do: nil
+
+  defp descend({:data, _, [ctor]}, values, path, depth, max_depth) do
+    ctor.fields
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {field, i} ->
+      projected = Enum.map(values, &data_field(&1, i))
+      collect(field, projected, path ++ [i], depth + 1, max_depth)
+    end)
+  end
+
+  defp descend({:data, _, ctors}, values, path, depth, max_depth) do
+    Enum.flat_map(ctors, fn ctor ->
+      subset = Enum.filter(values, &(tag_name(&1, ctors) == ctor.name))
+
+      ctor.fields
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {field, i} ->
+        projected = Enum.map(subset, &data_field(&1, i))
+
+        field
+        |> collect(projected, path ++ [i], depth + 1, max_depth)
+        |> Enum.map(&add_guard(&1, path, ctor.name))
+      end)
+    end)
+  end
+
+  defp descend({:prod, left, right}, values, path, depth, max_depth) do
+    collect(left, Enum.map(values, &elem(&1, 0)), path ++ [0], depth + 1, max_depth) ++
+      collect(right, Enum.map(values, &elem(&1, 1)), path ++ [1], depth + 1, max_depth)
+  end
+
+  # A list element is a later invention, not part of the first horizon.
+  defp descend({:list, _}, _values, _path, _depth, _max_depth), do: []
+  defp descend(_schema, _values, _path, _depth, _max_depth), do: []
+
+  defp add_guard(spec, prefix, ctor) do
+    Map.update(spec, :guards, [{prefix, ctor}], &(&1 ++ [{prefix, ctor}]))
+  end
+
+  defp diffs(schema, left, right, path) do
+    if left == right do
+      []
+    else
+      diff_at(schema, left, right, path)
+    end
+  end
+
+  defp diff_at({:enum, _, _} = schema, left, right, path), do: [{path, schema, left, right}]
+  defp diff_at(:nat, left, right, path), do: [{path, :nat, left, right}]
+
+  defp diff_at({:data, _, ctors} = schema, left, right, path) do
+    ltag = tag_name(left, ctors)
+    rtag = tag_name(right, ctors)
+
+    if ltag != rtag or ltag == nil do
+      [{path, schema, left, right}]
+    else
+      ctor = Enum.find(ctors, &(&1.name == ltag))
+
+      ctor.fields
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {field, i} ->
+        diffs(field, data_field(left, i), data_field(right, i), path ++ [i])
+      end)
+    end
+  end
+
+  defp diff_at({:prod, a, b}, {l1, r1}, {l2, r2}, path) do
+    diffs(a, l1, l2, path ++ [0]) ++ diffs(b, r1, r2, path ++ [1])
+  end
+
+  defp diff_at({:list, elem} = schema, left, right, path) do
+    here = [{path, schema, left, right}]
+    ls = list_items(left)
+    rs = list_items(right)
+
+    deeper =
+      ls
+      |> Enum.zip(rs)
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {{a, b}, i} -> diffs(elem, a, b, path ++ [i]) end)
+
+    here ++ deeper
+  end
+
+  defp diff_at(_, _, _, _), do: []
+
+  defp name_specs(specs, taken) do
+    Enum.map_reduce(specs, taken, fn spec, taken ->
+      name = fresh(base_name(spec), taken)
+      {Map.put(spec, :name, name), take(taken, name)}
+    end)
+  end
+
+  defp base_name(%{kind: :ctor_is, path: path, tag: tag}) do
+    join_name(["ctor-is", path_tag(path), guard_tag(path), tag])
+  end
+
+  defp base_name(%{kind: kind, path: path, i: i, j: j} = spec)
+       when kind in [:vals_eq, :spread_eq, :pair_any] do
+    join_name([kind_word(kind), path_tag(path), guard_tag(spec), "#{i}", "#{j}"])
+  end
+
+  defp base_name(%{kind: :len_is, path: path, n: n} = spec) do
+    join_name(["len-is", path_tag(path), guard_tag(spec), "#{n}"])
+  end
+
+  defp base_name(%{kind: :nat_is, path: path, n: n} = spec) do
+    join_name(["nat-is", path_tag(path), guard_tag(spec), "#{n}"])
+  end
+
+  defp kind_word(:vals_eq), do: "vals-eq"
+  defp kind_word(:spread_eq), do: "spread-eq"
+  defp kind_word(:pair_any), do: "pair-any"
+
+  defp path_tag([]), do: nil
+
+  defp path_tag([head | tail]) do
+    Enum.join(["p#{head}" | Enum.map(tail, &Integer.to_string/1)], "-")
+  end
+
+  defp guard_tag(%{guards: [{_path, ctor} | _]}), do: ctor
+  defp guard_tag(_), do: nil
+
+  defp join_name(parts) do
+    parts |> Enum.reject(&is_nil/1) |> Enum.join("-")
+  end
+
+  defp spec_key(spec) do
+    {
+      spec.kind,
+      Map.get(spec, :path, []),
+      Map.get(spec, :view),
+      Map.get(spec, :i),
+      Map.get(spec, :j),
+      Map.get(spec, :tag),
+      Map.get(spec, :n),
+      Map.get(spec, :ctor),
+      Map.get(spec, :guards)
+    }
+  end
+
+  defp dig(schema, [], value, guards) do
+    case require_guard(guards, [], value, schema) do
+      :miss -> :miss
+      :ok -> {:ok, schema, value}
+    end
+  end
+
+  defp dig(schema, [index | rest], value, guards) do
+    case require_guard(guards, [], value, schema) do
+      :miss ->
+        :miss
+
+      :ok ->
+        case step_field(schema, index, value) do
+          :miss -> :miss
+          {:ok, sub, child} -> dig_from(sub, rest, child, guards, [index])
+        end
+    end
+  end
+
+  defp dig_from(schema, [], value, guards, walked) do
+    case require_guard(guards, walked, value, schema) do
+      :miss -> :miss
+      :ok -> {:ok, schema, value}
+    end
+  end
+
+  defp dig_from(schema, [index | rest], value, guards, walked) do
+    case require_guard(guards, walked, value, schema) do
+      :miss ->
+        :miss
+
+      :ok ->
+        case step_field(schema, index, value) do
+          :miss -> :miss
+          {:ok, sub, child} -> dig_from(sub, rest, child, guards, walked ++ [index])
+        end
+    end
+  end
+
+  defp require_guard(guards, walked, value, schema) do
+    case Enum.find(guards, fn {prefix, _} -> prefix == walked end) do
+      nil ->
+        :ok
+
+      {_prefix, ctor} ->
+        if tag_name(value, ctors_of(schema)) == ctor, do: :ok, else: :miss
+    end
+  end
+
+  defp ctors_of({:data, _, ctors}), do: ctors
+  defp ctors_of(_), do: []
+
+  defp step_field({:data, _, ctors}, index, value) do
+    case Enum.find(ctors, &(atom_of(&1.name) == tag_atom(value))) do
+      nil ->
+        :miss
+
+      ctor ->
+        if index < length(ctor.fields) do
+          {:ok, Enum.at(ctor.fields, index), data_field(value, index)}
+        else
+          :miss
+        end
+    end
+  end
+
+  defp step_field({:prod, left, _}, 0, {a, _}), do: {:ok, left, a}
+  defp step_field({:prod, _, right}, 1, {_, b}), do: {:ok, right, b}
+
+  defp step_field({:list, elem}, index, value) do
+    case Enum.at(list_items(value), index) do
+      nil -> :miss
+      item -> {:ok, elem, item}
+    end
+  end
+
+  defp step_field(_, _, _), do: :miss
+
+  defp bit(%{kind: :ctor_is, tag: tag}, schema, value) do
+    tag_name(value, ctors_of(schema)) == tag or enum_name(schema, value) == tag
+  end
+
+  defp bit(%{kind: :nat_is, n: n}, :nat, value) do
+    case canon_nat(value) do
+      {:ok, ^n} -> true
+      _ -> false
+    end
+  end
+
+  defp bit(%{kind: :len_is, n: n}, {:list, _}, value), do: length(list_items(value)) == n
+
+  defp bit(%{kind: kind, view: view, i: i, j: j, elem: elem}, schema, value)
+       when kind in [:vals_eq, :spread_eq, :pair_any] do
+    compare(kind, view, schema, value, i, j, elem)
+  end
+
+  defp bit(_, _, _), do: false
+
+  defp compare(kind, :list, _schema, value, i, j, elem) do
+    items = list_items(value)
+
+    if j < length(items) do
+      relate(kind, Enum.at(items, i), Enum.at(items, j), i, j, elem)
+    else
+      false
+    end
+  end
+
+  defp compare(kind, :fields, schema, value, i, j, elem) do
+    with {:ok, a} <- field_at(schema, value, i),
+         {:ok, b} <- field_at(schema, value, j) do
+      relate(kind, a, b, i, j, elem)
+    else
+      _ -> false
+    end
+  end
+
+  defp compare(_, _, _, _, _, _, _), do: false
+
+  defp relate(:vals_eq, a, b, _i, _j, elem) do
+    case {number(a, elem), number(b, elem)} do
+      {{:ok, n}, {:ok, n}} -> true
+      _ -> false
+    end
+  end
+
+  defp relate(:spread_eq, a, b, i, j, elem) do
+    case {number(a, elem), number(b, elem)} do
+      {{:ok, x}, {:ok, y}} -> abs(x - y) == abs(i - j)
+      _ -> false
+    end
+  end
+
+  defp relate(:pair_any, a, b, i, j, elem) do
+    relate(:vals_eq, a, b, i, j, elem) or relate(:spread_eq, a, b, i, j, elem)
+  end
+
+  defp number(value, :nat) do
+    case canon_nat(value) do
+      {:ok, n} -> {:ok, n}
+      :error -> :error
+    end
+  end
+
+  defp number(value, {:enum, _name, ctors}) when is_atom(value) do
+    case Enum.find_index(ctors, &(atom_of(&1) == value)) do
+      nil -> :error
+      index -> {:ok, index}
+    end
+  end
+
+  defp number(_, _), do: :error
+
+  defp field_at({:data, _, ctors}, value, index) do
+    case Enum.find(ctors, &(atom_of(&1.name) == tag_atom(value))) do
+      %{fields: fields} when index < length(fields) -> {:ok, data_field(value, index)}
+      _ -> :error
+    end
+  end
+
+  defp field_at({:prod, _, _}, {a, _}, 0), do: {:ok, a}
+  defp field_at({:prod, _, _}, {_, b}, 1), do: {:ok, b}
+  defp field_at(_, _, _), do: :error
+
+  defp enum_name({:enum, _, ctors}, value) when is_atom(value) do
+    Enum.find(ctors, &(atom_of(&1) == value))
+  end
+
+  defp enum_name(_, _), do: nil
+
+  defp test_at(schema, hole, [], spec, helpers, walked) do
+    leaf_test(schema, hole, spec, helpers, walked)
+  end
+
+  defp test_at({:data, _, ctors} = schema, hole, [index | rest], spec, helpers, walked) do
+    wanted = guard_ctor(spec, walked)
+
+    arms =
+      Enum.map_join(ctors, "\n", fn ctor ->
+        if wanted != nil and ctor.name != wanted do
+          "| #{pat(ctor.name, wild(ctor))} => false"
+        else
+          binder = "x#{length(walked)}"
+          binders = focus(ctor, index, binder)
+          field = Enum.at(ctor.fields, index)
+          inner = test_at(field, binder, rest, spec, helpers, walked ++ [index])
+          "| #{pat(ctor.name, binders)} => #{inner}"
+        end
+      end)
+
+    match_bool(hole, arms, schema)
+  end
+
+  defp test_at({:prod, left, right}, hole, [index | rest], spec, helpers, walked) do
+    binder = "x#{length(walked)}"
+    {b0, b1} = if index == 0, do: {binder, "_"}, else: {"_", binder}
+    field = if index == 0, do: left, else: right
+    inner = test_at(field, binder, rest, spec, helpers, walked ++ [index])
+    match_bool(hole, "| (#{b0}, #{b1}) => #{inner}", {:prod, left, right})
+  end
+
+  defp test_at({:list, elem}, hole, [index | rest], spec, helpers, walked) do
+    binder = "x#{length(walked)}"
+    inner = test_at(elem, binder, rest, spec, helpers, walked ++ [index])
+    peel = peel_cons(hole, index, binder, inner, type_name(elem))
+    peel
+  end
+
+  defp test_at(_schema, _hole, _path, _spec, _helpers, _walked), do: "false"
+
+  defp leaf_test({:enum, _, ctors}, hole, %{kind: :ctor_is, tag: tag}, _helpers, _walked) do
+    arms =
+      Enum.map_join(ctors, "\n", fn ctor ->
+        bit = if ctor == tag, do: "true", else: "false"
+        "| #{ctor} => #{bit}"
+      end)
+
+    match_bool(hole, arms, {:enum, "", ctors})
+  end
+
+  defp leaf_test({:data, _, ctors}, hole, %{kind: :ctor_is, tag: tag}, _helpers, _walked) do
+    arms =
+      Enum.map_join(ctors, "\n", fn ctor ->
+        bit = if ctor.name == tag, do: "true", else: "false"
+        "| #{pat(ctor.name, wild(ctor))} => #{bit}"
+      end)
+
+    match_bool(hole, arms, {:data, "", ctors})
+  end
+
+  defp leaf_test(:nat, hole, %{kind: :nat_is, n: n}, helpers, _walked) do
+    "#{helpers.nat_eq} #{hole} #{spell_nat(n)}"
+  end
+
+  defp leaf_test({:list, elem}, hole, %{kind: :len_is, n: n}, helpers, _walked) do
+    "#{helpers.nat_eq} (#{helpers.list_len} #{type_name(elem)} #{hole}) #{spell_nat(n)}"
+  end
+
+  defp leaf_test(schema, hole, %{view: :fields, i: i, j: j, kind: kind} = spec, helpers, _walked)
+       when kind in [:vals_eq, :spread_eq, :pair_any] do
+    key = {:cmp, kind, spec.elem, abs(j - i)}
+    fun = Map.fetch!(helpers.funs, key)
+    field_call(schema, hole, spec, i, j, fun)
+  end
+
+  defp leaf_test({:list, _elem}, hole, %{view: :list, kind: kind, i: i, j: j} = spec, helpers, _)
+       when kind in [:vals_eq, :spread_eq, :pair_any] do
+    key = {:list_cmp, kind, spec.elem, i, j}
+    fun = Map.fetch!(helpers.funs, key)
+    "#{fun} #{hole}"
+  end
+
+  defp leaf_test(_, _, _, _, _), do: "false"
+
+  defp field_call({:data, _, ctors}, hole, spec, i, j, fun) do
+    ctor = Enum.find(ctors, &(&1.name == (spec.ctor || hd(ctors).name)))
+    xi = "x#{i}"
+    xj = "x#{j}"
+    binders = focus_two(ctor, i, xi, j, xj)
+
+    arms =
+      if length(ctors) == 1 do
+        "| #{pat(ctor.name, binders)} => #{fun} #{xi} #{xj}"
+      else
+        Enum.map_join(ctors, "\n", fn other ->
+          if other.name == ctor.name do
+            "| #{pat(other.name, binders)} => #{fun} #{xi} #{xj}"
+          else
+            "| #{pat(other.name, wild(other))} => false"
+          end
+        end)
+      end
+
+    match_bool(hole, arms, {:data, "", ctors})
+  end
+
+  defp field_call({:prod, _, _}, hole, _spec, _i, _j, fun) do
+    match_bool(hole, "| (x0, x1) => #{fun} x0 x1", :prod)
+  end
+
+  defp field_call(_, _, _, _, _, _), do: "false"
+
+  defp peel_cons(hole, 0, binder, inner, _elem) do
+    """
+    (match #{hole} motive (λ _ → Bool)
+      | nil => false
+      | cons #{binder} _ => #{inner})
+    """
+  end
+
+  defp peel_cons(hole, index, binder, inner, _elem) do
+    """
+    (match #{hole} motive (λ _ → Bool)
+      | nil => false
+      | cons _ t => #{peel_cons("t", index - 1, binder, inner, nil)})
+    """
+  end
+
+  defp match_bool(hole, arms, _schema) do
+    """
+    (match #{hole} motive (λ _ → Bool)
+    #{arms})
+    """
+  end
+
+  defp guard_ctor(spec, walked) do
+    case Enum.find(Map.get(spec, :guards, []), fn {prefix, _} -> prefix == walked end) do
+      nil -> nil
+      {_prefix, ctor} -> ctor
+    end
+  end
+
+  defp wild(ctor), do: Enum.map(ctor.fields, fn _ -> "_" end)
+
+  defp focus(ctor, index, binder) do
+    ctor.fields
+    |> Enum.with_index()
+    |> Enum.map(fn {_field, i} -> if i == index, do: binder, else: "_" end)
+  end
+
+  defp focus_two(ctor, i, xi, j, xj) do
+    ctor.fields
+    |> Enum.with_index()
+    |> Enum.map(fn {_field, k} ->
+      cond do
+        k == i -> xi
+        k == j -> xj
+        true -> "_"
+      end
+    end)
+  end
+
+  defp pat(ctor, []), do: ctor
+  defp pat(ctor, binders), do: ctor <> " " <> Enum.join(binders, " ")
+
+  defp build_helpers(specs, taken) do
+    needs = helper_needs(specs)
+    {funs, taken, parts} = emit_helpers(needs, taken)
+    text = parts |> Enum.reject(&(&1 == "")) |> Enum.join("\n")
+
+    {%{
+       text: text,
+       funs: funs,
+       nat_eq: Map.get(funs, :nat_eq),
+       list_len: Map.get(funs, :list_len)
+     }, taken}
+  end
+
+  defp helper_needs(specs) do
+    Enum.reduce(specs, MapSet.new(), fn spec, acc ->
+      case spec.kind do
+        :nat_is ->
+          MapSet.put(acc, :nat_eq)
+
+        :len_is ->
+          acc |> MapSet.put(:nat_eq) |> MapSet.put(:list_len)
+
+        kind when kind in [:vals_eq, :spread_eq, :pair_any] ->
+          acc
+          |> MapSet.put(:nat_eq)
+          |> needs_abs(kind)
+          |> needs_or(kind)
+          |> put_enum(spec.elem)
+          |> MapSet.put({:cmp, kind, spec.elem, abs(spec.j - spec.i)})
+          |> needs_list(spec, kind)
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
+  defp needs_abs(set, kind) when kind in [:spread_eq, :pair_any], do: MapSet.put(set, :nat_abs)
+  defp needs_abs(set, _), do: set
+  defp put_enum(set, {:enum, _, _} = elem), do: MapSet.put(set, {:enum_fun, elem})
+  defp put_enum(set, _), do: set
+  defp needs_or(set, :pair_any), do: MapSet.put(set, :bit_or)
+  defp needs_or(set, _), do: set
+
+  defp needs_list(set, %{view: :list, elem: elem, i: i, j: j}, kind) do
+    set
+    |> MapSet.put(:list_len)
+    |> MapSet.put(:list_has)
+    |> MapSet.put(:list_at)
+    |> MapSet.put({:list_cmp, kind, elem, i, j})
+  end
+
+  defp needs_list(set, _, _), do: set
+
+  defp emit_helpers(needs, taken) do
+    {funs, taken, parts} =
+      Enum.reduce(ordered_needs(needs), {%{}, taken, []}, fn need, {funs, taken, parts} ->
+        {key, base, source} = helper_def(need, funs)
+        {name, taken} = Muro.Synth.Book.reserve(base, taken)
+        text = source.(name)
+        {Map.put(funs, key, name), taken, parts ++ [text]}
+      end)
+
+    {funs, taken, parts}
+  end
+
+  defp ordered_needs(needs) do
+    keys =
+      [:nat_eq, :nat_abs, :bit_or, :list_len, :list_has, :list_at] ++
+        (needs |> MapSet.to_list() |> Enum.filter(&match?({:enum_fun, _}, &1))) ++
+        (needs |> MapSet.to_list() |> Enum.filter(&match?({:cmp, _, _, _}, &1))) ++
+        (needs |> MapSet.to_list() |> Enum.filter(&match?({:list_cmp, _, _, _, _}, &1)))
+
+    Enum.filter(keys, &MapSet.member?(needs, &1))
+  end
+
+  defp helper_def(:nat_eq, _funs), do: {:nat_eq, "nat-eq", &nat_eq_source/1}
+  defp helper_def(:nat_abs, _funs), do: {:nat_abs, "nat-abs", &nat_abs_source/1}
+  defp helper_def(:bit_or, _funs), do: {:bit_or, "bit-or", &bit_or_source/1}
+  defp helper_def(:list_len, _funs), do: {:list_len, "list-len", &list_len_source/1}
+  defp helper_def(:list_has, _funs), do: {:list_has, "list-has", &list_has_source/1}
+  defp helper_def(:list_at, _funs), do: {:list_at, "list-at", &list_at_source/1}
+
+  defp helper_def({:enum_fun, {:enum, name, ctors}}, _funs) do
+    {{:enum, name}, "nat-of-#{name}", fn def_name -> enum_nat_source(def_name, name, ctors) end}
+  end
+
+  defp helper_def({:cmp, kind, elem, gap}, funs) do
+    key = {:cmp, kind, elem, gap}
+    base = "cmp-#{kind_word(kind)}-#{elem_word(elem)}-#{gap}"
+    {key, base, fn def_name -> cmp_source(def_name, kind, elem, gap, funs) end}
+  end
+
+  defp helper_def({:list_cmp, kind, elem, i, j}, funs) do
+    key = {:list_cmp, kind, elem, i, j}
+    base = "cmp-list-#{kind_word(kind)}-#{elem_word(elem)}-#{i}-#{j}"
+    {key, base, fn def_name -> list_cmp_source(def_name, kind, elem, i, j, funs) end}
+  end
+
+  defp elem_word(:nat), do: "Nat"
+  defp elem_word({:enum, name, _}), do: name
+
+  defp nat_eq_source(name) do
+    """
+    def #{name} : run Π (+ n : Nat) → Π (+ m : Nat) → Bool :=
+      λ (+ n : Nat) → λ (+ m : Nat) →
+        match n motive (λ _ → Bool)
+          | 0 =>
+              (match m motive (λ _ → Bool)
+                | 0 => true
+                | suc _ => false)
+          | suc n1 =>
+              (match m motive (λ _ → Bool)
+                | 0 => false
+                | suc m1 => #{name} n1 m1)
+    """
+  end
+
+  defp nat_abs_source(name) do
+    monus = name <> "-monus"
+
+    """
+    def #{monus} : run Π (+ n : Nat) → Π (+ m : Nat) → Nat :=
+      λ (+ n : Nat) → λ (+ m : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => 0
+          | suc n1 =>
+              (match m motive (λ _ → Nat)
+                | 0 => suc n1
+                | suc m1 => #{monus} n1 m1)
+    def #{name} : run Π (+ n : Nat) → Π (+ m : Nat) → Nat :=
+      λ (+ n : Nat) → λ (+ m : Nat) →
+        plus (#{monus} n m) (#{monus} m n)
+    """
+  end
+
+  defp bit_or_source(name) do
+    """
+    def #{name} : run Π (p : Bool) → Π (q : Bool) → Bool :=
+      λ (p : Bool) → λ (q : Bool) →
+        match p motive (λ _ → Bool)
+          | true => true
+          | false => q
+    """
+  end
+
+  defp list_len_source(name) do
+    """
+    def #{name} : run Π (- A : Type) → Π (xs : List A) → Nat :=
+      λ (- A : Type) → λ (xs : List A) →
+        match xs motive (λ _ → Nat)
+          | nil => 0
+          | cons _ ys => suc (#{name} A ys)
+    """
+  end
+
+  defp list_has_source(name) do
+    """
+    def #{name} : run Π (- A : Type) → Π (xs : List A) → Π (n : Nat) → Bool :=
+      λ (- A : Type) → λ (xs : List A) → λ (n : Nat) →
+        match n motive (λ _ → Bool)
+          | 0 =>
+              (match xs motive (λ _ → Bool)
+                | nil => false
+                | cons _ _ => true)
+          | suc n1 =>
+              (match xs motive (λ _ → Bool)
+                | nil => false
+                | cons _ ys => #{name} A ys n1)
+    """
+  end
+
+  defp list_at_source(name) do
+    """
+    def #{name} : run Π (- A : Type) → Π (xs : List A) → Π (n : Nat) → Π (d : A) → A :=
+      λ (- A : Type) → λ (xs : List A) → λ (n : Nat) → λ (d : A) →
+        match n motive (λ _ → A)
+          | 0 =>
+              (match xs motive (λ _ → A)
+                | nil => d
+                | cons h _ => h)
+          | suc n1 =>
+              (match xs motive (λ _ → A)
+                | nil => d
+                | cons _ ys => #{name} A ys n1 d)
+    """
+  end
+
+  defp enum_nat_source(name, type_name, ctors) do
+    arms =
+      ctors
+      |> Enum.with_index()
+      |> Enum.map_join("\n", fn {ctor, index} ->
+        "      | #{ctor} => #{spell_nat(index)}"
+      end)
+
+    """
+    def #{name} : run Π (+ x : #{type_name}) → Nat :=
+      λ (+ x : #{type_name}) →
+        match x motive (λ _ → Nat)
+    #{arms}
+    """
+  end
+
+  defp cmp_source(name, kind, elem, gap, funs) do
+    type_name = elem_type(elem)
+    body = cmp_body(kind, elem, gap, "x", "y", funs)
+
+    """
+    def #{name} : run Π (+ x : #{type_name}) → Π (+ y : #{type_name}) → Bool :=
+      λ (+ x : #{type_name}) → λ (+ y : #{type_name}) →
+        #{body}
+    """
+  end
+
+  defp cmp_body(kind, elem, gap, x, y, funs) do
+    nx = num_expr(elem, x, funs)
+    ny = num_expr(elem, y, funs)
+    eq = "#{funs.nat_eq} #{nx} #{ny}"
+
+    spread =
+      "#{funs.nat_eq} (#{funs[:nat_abs]} #{nx} #{ny}) #{spell_nat(gap)}"
+
+    case kind do
+      :vals_eq -> eq
+      :spread_eq -> spread
+      :pair_any -> "#{funs[:bit_or]} (#{eq}) (#{spread})"
+    end
+  end
+
+  defp num_expr(:nat, var, _funs), do: var
+
+  defp num_expr({:enum, name, _}, var, funs) do
+    "(#{Map.fetch!(funs, {:enum, name})} #{var})"
+  end
+
+  defp list_cmp_source(name, kind, elem, i, j, funs) do
+    ty = elem_type(elem)
+    default = default_of(elem)
+    cmp = Map.fetch!(funs, {:cmp, kind, elem, abs(j - i)})
+    has = funs.list_has
+    at = funs.list_at
+
+    """
+    def #{name} : run Π (+ xs : List #{ty}) → Bool :=
+      λ (+ xs : List #{ty}) →
+        (match (#{has} #{ty} xs #{spell_nat(j)}) motive (λ _ → Bool)
+          | true => #{cmp} (#{at} #{ty} xs #{spell_nat(i)} #{default}) (#{at} #{ty} xs #{spell_nat(j)} #{default})
+          | false => false)
+    """
+  end
+
+  defp elem_type(:nat), do: "Nat"
+  defp elem_type({:enum, name, _}), do: name
+
+  defp default_of(:nat), do: "0"
+  defp default_of({:enum, _name, [ctor | _]}), do: ctor
+
+  defp open({:data, name, ctors}, hole, plug, type_of, body_of, k) do
+    var = "k#{k}"
+    motive = "(λ (#{var} : #{name}) → #{type_of.(plug.(var))})"
+
+    arms =
+      Enum.map_join(ctors, "\n", fn ctor ->
+        binders = binders(length(ctor.fields), k)
+        local = app_src(ctor.name, binders)
+        inner = open_fields(ctor.fields, binders, local, plug, type_of, body_of, k + 1)
+        "| #{pat(ctor.name, binders)} => #{inner}"
+      end)
+
+    """
+    (match #{hole} motive #{motive}
+    #{arms})
+    """
+  end
+
+  defp open({:enum, name, ctors}, hole, plug, type_of, body_of, k) do
+    var = "k#{k}"
+    motive = "(λ (#{var} : #{name}) → #{type_of.(plug.(var))})"
+    arms = Enum.map_join(ctors, "\n", fn ctor -> "| #{ctor} => #{body_of.(ctor)}" end)
+
+    """
+    (match #{hole} motive #{motive}
+    #{arms})
+    """
+  end
+
+  defp open({:prod, left, right} = schema, hole, plug, type_of, body_of, k) do
+    var = "k#{k}"
+    b0 = "f#{k}_0"
+    b1 = "f#{k}_1"
+    local = "(#{b0}, #{b1})"
+    motive = "(λ (#{var} : #{type_name(schema)}) → #{type_of.(plug.(var))})"
+    inner = open_fields([left, right], [b0, b1], local, plug, type_of, body_of, k + 1)
+
+    """
+    (match #{hole} motive #{motive}
+    | (#{b0}, #{b1}) => #{inner})
+    """
+  end
+
+  defp open(_schema, hole, _plug, _type_of, body_of, _k), do: body_of.(hole)
+
+  defp open_fields([], _binders, local, _plug, _type_of, body_of, _k), do: body_of.(local)
+
+  defp open_fields([field | rest], [binder | binders], local, plug, type_of, body_of, k) do
+    on_concrete = fn concrete ->
+      open_fields(rest, binders, subst(local, binder, concrete), plug, type_of, body_of, k + 1)
+    end
+
+    plug_src = fn src -> plug.(subst(local, binder, src)) end
+    open(field, binder, plug_src, type_of, on_concrete, k)
+  end
+
+  defp binders(0, _k), do: []
+  defp binders(n, k), do: Enum.map(0..(n - 1)//1, &"f#{k}_#{&1}")
+
+  defp app_src(ctor, []), do: ctor
+  defp app_src(ctor, args), do: "(" <> Enum.join([ctor | Enum.map(args, &arg/1)], " ") <> ")"
+
+  defp subst(src, binder, repl) do
+    Regex.replace(~r/(?<![A-Za-z0-9_-])#{Regex.escape(binder)}(?![A-Za-z0-9_-])/, src, fn _ ->
+      repl
+    end)
+  end
+
+  defp type_name(:nat), do: "Nat"
+  defp type_name({:enum, name, _}), do: name
+  defp type_name({:data, name, _}), do: name
+  defp type_name({:list, elem}), do: "(List #{type_name(elem)})"
+  defp type_name({:prod, left, right}), do: "(#{type_name(left)} × #{type_name(right)})"
+  defp type_name({:open, _}), do: "Type"
+
+  defp fresh(base, taken) do
+    if occupied?(base, taken) do
+      n = Enum.find(2..10_000, &(not occupied?("#{base}-#{&1}", taken)))
+      "#{base}-#{n}"
+    else
+      base
+    end
+  end
+
+  defp occupied?(name, taken) do
+    MapSet.member?(taken, name) or MapSet.member?(taken, {:elixir, Muro.Emit.elixir_base(name)})
+  end
+
+  defp take(taken, name) do
+    taken
+    |> MapSet.put(name)
+    |> MapSet.put({:elixir, Muro.Emit.elixir_base(name)})
+  end
+
+  defp tag_atom(atom) when is_atom(atom), do: atom
+  defp tag_atom(tuple) when is_tuple(tuple) and tuple_size(tuple) >= 1, do: elem(tuple, 0)
+
+  defp raw_fields(atom) when is_atom(atom), do: []
+  defp raw_fields(tuple) when is_tuple(tuple), do: Tuple.to_list(tuple) |> tl()
+
+  defp data_field(atom, _index) when is_atom(atom), do: nil
+  defp data_field(tuple, index) when is_tuple(tuple), do: elem(tuple, index + 1)
+
+  defp tag_name(value, ctors) do
+    atom = tag_atom(value)
+    Enum.find_value(ctors, fn ctor -> if atom_of(ctor.name) == atom, do: ctor.name end)
+  end
+
+  defp list_items(nil), do: []
+  defp list_items({:cons, head, tail}), do: [head | list_items(tail)]
+  defp list_items(_), do: []
+
+  defp max_len(values) do
+    values
+    |> Enum.map(&length(list_items(&1)))
+    |> Enum.max(fn -> 0 end)
+  end
+
+  defp canon_list(nil), do: {:ok, []}
+
+  defp canon_list({:cons, head, tail}) do
+    case canon_list(tail) do
+      {:ok, rest} -> {:ok, [head | rest]}
+      :error -> :error
+    end
+  end
+
+  defp canon_list(_), do: :error
+
+  defp encode_list([]), do: nil
+  defp encode_list([head | tail]), do: {:cons, head, encode_list(tail)}
+
+  defp list_spell([]), do: "nil"
+
+  defp list_spell(spells) do
+    Enum.reduce(Enum.reverse(spells), "nil", fn spell, acc ->
+      "(cons #{arg(spell)} #{arg(acc)})"
+    end)
+  end
+
+  defp list_label([]), do: "nil"
+  defp list_label(labels), do: "cons-" <> Enum.join(labels, "-")
+
+  defp canon_nat(0), do: {:ok, 0}
+  defp canon_nat(n) when is_integer(n) and n >= 0, do: {:ok, n}
+
+  defp canon_nat({:suc, n}) do
+    case canon_nat(n) do
+      {:ok, k} -> {:ok, k + 1}
+      :error -> :error
+    end
+  end
+
+  defp canon_nat(_), do: :error
+
+  def spell_nat(0), do: "0"
+  def spell_nat(1), do: "suc 0"
+
+  def spell_nat(n) when is_integer(n) and n > 1 do
+    "suc (" <> spell_nat(n - 1) <> ")"
+  end
+
+  defp arg(spell) do
+    cond do
+      String.starts_with?(spell, "(") -> spell
+      String.contains?(spell, " ") -> "(#{spell})"
+      true -> spell
+    end
+  end
+
+  defp atom_of(name), do: String.to_atom(Muro.Emit.elixir_atom_name(name))
+end
+
+defimpl String.Chars, for: Muro.Synth.Term do
+  def to_string(term), do: term.spell
+end

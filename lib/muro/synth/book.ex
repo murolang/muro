@@ -681,7 +681,7 @@ defmodule Muro.Synth.Book do
         name = Map.fetch!(bound.hold, {arm.name, state})
         word = if bit, do: "true", else: "false"
 
-        "def #{name} : evidence {#{bound.names.eval} #{decl} #{state} ≡ #{word} : Bool} := refl"
+        "def #{name} : evidence {#{bound.names.eval} #{decl} #{Muro.Synth.Term.spell(state)} ≡ #{word} : Bool} := refl"
       end)
     end)
   end
@@ -821,7 +821,8 @@ defmodule Muro.Synth.Book do
     {same, taken, same_text} =
       if need_same do
         {name, taken} = alloc("dyn-same", taken)
-        {name, taken, same_source(name, host.states)}
+        {text, taken} = equality_source(name, host, taken)
+        {name, taken, text}
       else
         {nil, taken, ""}
       end
@@ -834,9 +835,25 @@ defmodule Muro.Synth.Book do
         {nil, taken, ""}
       end
 
-    text = Enum.join([pos_text, same_text, terminal_text], "\n")
-    {%{pos: pos, same: same, terminal: terminal, text: text}, taken}
+    {struct_helpers, taken} = Muro.Synth.Term.render_helpers(specs, taken)
+    text = Enum.join([struct_helpers.text, pos_text, same_text, terminal_text], "\n")
+
+    {%{
+       pos: pos,
+       same: same,
+       terminal: terminal,
+       text: text,
+       struct: struct_helpers,
+       schema: host.schema
+     }, taken}
   end
+
+  defp equality_source(name, %{structured: true, inhabitants: inhab, schema: schema}, taken)
+       when is_list(inhab) and inhab != [] do
+    {Muro.Synth.Term.same_source(name, schema, inhab), taken}
+  end
+
+  defp equality_source(name, host, taken), do: {same_source(name, host.states), taken}
 
   defp eval_clause(%{spec: %{kind: :has_pos_reward, action: action}, ctor: ctor}, helpers) do
     "      | #{ctor} => #{helpers.pos} (snd (step c #{action}))"
@@ -852,6 +869,14 @@ defmodule Muro.Synth.Book do
 
   defp eval_clause(%{spec: %{kind: :hint, name: name}, ctor: ctor}, _helpers) do
     "      | #{ctor} => eval-feature #{name} c"
+  end
+
+  defp eval_clause(%{spec: spec, ctor: ctor}, helpers) do
+    if Muro.Synth.Term.structural?(spec) do
+      Muro.Synth.Term.render_clause(helpers.schema, spec, ctor, helpers.struct)
+    else
+      "      | #{ctor} => false"
+    end
   end
 
   defp pos_source(name) do
@@ -908,8 +933,8 @@ defmodule Muro.Synth.Book do
     """
   end
 
-  def obligation_name(_arm, state, 1), do: "hold-#{state}"
-  def obligation_name(arm, state, _many), do: "hold-#{arm.action}-#{state}"
+  def obligation_name(_arm, state, 1), do: "hold-#{Muro.Synth.Term.label(state)}"
+  def obligation_name(arm, state, _many), do: "hold-#{arm.action}-#{Muro.Synth.Term.label(state)}"
 
   defp rel(from_dir, to_file) do
     from = from_dir |> Path.expand() |> Path.split()

@@ -1,6 +1,8 @@
 defmodule Muro.Synth.Cert do
   @moduledoc false
 
+  alias Muro.Synth.Term
+
   # The ranking and its homomorphism, checked on the surviving predicate
   # against the environment's `step`. `solve s n` is the best immediate
   # reward among states reached in n steps. On a finite `State` each
@@ -89,15 +91,20 @@ defmodule Muro.Synth.Cert do
   # `0 .. transient + period - 1` and does not store the duplicate.
   # A transient of 0 and a period of 1 is the constant certificate.
   defp classify(host) do
-    states = constructors(host, "State")
-    actions = host.actions
+    case cert_states(host) do
+      :open ->
+        {:error, "State is not a finite enumeration"}
 
-    with {:ok, now} <- vector(host, states, actions, &reward(host, &1, &2)) do
-      if Enum.all?(Map.values(now), &closed_nat?/1) do
-        walk(host, states, actions, [now], %{key(now, states) => 0})
-      else
-        {:error, "reward is not a closed Nat"}
-      end
+      {:ok, states} ->
+        actions = host.actions
+
+        with {:ok, now} <- vector(host, states, actions, &reward(host, &1, &2)) do
+          if Enum.all?(Map.values(now), &closed_nat?/1) do
+            walk(host, states, actions, [now], %{key(now, states) => 0})
+          else
+            {:error, "reward is not a closed Nat"}
+          end
+        end
     end
   end
 
@@ -179,8 +186,25 @@ defmodule Muro.Synth.Cert do
     Enum.map(ctors, & &1.name)
   end
 
+  # Nullary `State` is its constructors, in declaration order. A finite
+  # structured `State` is every inhabitant, so the match is exhaustive.
+  # An open term is not that split. The walk is the pigeonhole on this
+  # finite set.
+  defp cert_states(host) do
+    cond do
+      not host[:structured] ->
+        {:ok, constructors(host, "State")}
+
+      is_list(host[:inhabitants]) and host.inhabitants != [] ->
+        {:ok, host.inhabitants}
+
+      true ->
+        :open
+    end
+  end
+
   defp build(host, arms, oracle, vocab, values, settled, bound) do
-    states = constructors(host, "State")
+    {:ok, states} = cert_states(host)
     actions = constructors(host, "Action")
     taken = bound.taken
     {rank, taken} = Muro.Synth.Book.reserve("rank", taken)
@@ -224,6 +248,7 @@ defmodule Muro.Synth.Cert do
         leaves,
         more_leaves,
         preserves_text(
+          host,
           preserves,
           certificate_name(primary),
           states,
@@ -234,6 +259,7 @@ defmodule Muro.Synth.Cert do
         ),
         if extra? do
           preserves_text(
+            host,
             extra_preserves,
             "CoindHomo",
             states,
@@ -289,7 +315,7 @@ defmodule Muro.Synth.Cert do
   defp solve_names(states, taken) do
     {pairs, taken} =
       Enum.map_reduce(states, taken, fn state, taken ->
-        {name, taken} = Muro.Synth.Book.reserve("cert-solve-#{state}", taken)
+        {name, taken} = Muro.Synth.Book.reserve("cert-solve-#{Term.label(state)}", taken)
         {{state, name}, taken}
       end)
 
@@ -355,7 +381,7 @@ defmodule Muro.Synth.Cert do
     pairs = proof_pairs(host, arms, states, actions, kind)
 
     Enum.reduce(pairs, {[], taken, [], %{}}, fn {state, left, right}, {text, taken, obs, names} ->
-      base = "cert-below-#{kind}-#{state}-#{left}-#{right}"
+      base = "cert-below-#{kind}-#{Term.label(state)}-#{left}-#{right}"
       {name, taken} = Muro.Synth.Book.reserve(base, taken)
       arm = deciding(host, arms, state)
       bit = bit_at(host, arm, state)
@@ -449,7 +475,7 @@ defmodule Muro.Synth.Cert do
       end
 
     Enum.reduce(cells, {[], taken, [], %{}}, fn {state, left, right}, {text, taken, obs, names} ->
-      base = "cert-leaf-#{kind}-#{state}-#{left}-#{right}"
+      base = "cert-leaf-#{kind}-#{Term.label(state)}-#{left}-#{right}"
       {name, taken} = Muro.Synth.Book.reserve(base, taken)
       arm = deciding(host, arms, state)
       bit = bit_at(host, arm, state)
@@ -625,7 +651,15 @@ defmodule Muro.Synth.Cert do
     """
   end
 
-  defp preserves_text(name, target, states, actions, rank, kind, leaves) do
+  defp preserves_text(host, name, target, states, actions, rank, kind, leaves) do
+    if Enum.any?(states, &match?(%Term{}, &1)) do
+      preserves_structured(host, name, target, states, actions, rank, kind, leaves)
+    else
+      preserves_closed(name, target, states, actions, rank, kind, leaves)
+    end
+  end
+
+  defp preserves_closed(name, target, states, actions, rank, kind, leaves) do
     fun = stream_fun(kind)
 
     """
@@ -633,6 +667,55 @@ defmodule Muro.Synth.Cert do
       λ (a : Action) → λ (b : Action) → λ (s : State) →
         match s motive (λ (x : State) → Π (r : #{rank} x a b) → Dom Reward le (#{fun} x a) (#{fun} x b))
     #{Enum.map_join(states, "\n", &state_branch(&1, actions, rank, kind, leaves))}
+    """
+  end
+
+  # The scrutinee is the state term. Each arm is one inhabitant, and the
+  # body is the action split at that closed term. A constructor pattern
+  # would not cover a field.
+  defp preserves_structured(host, name, target, states, actions, rank, kind, leaves) do
+    fun = stream_fun(kind)
+    by_spell = Map.new(states, &{&1.spell, &1})
+
+    body =
+      Term.exhaust(
+        host.schema,
+        "s",
+        fn src ->
+          "Π (r : #{rank} #{src} a b) → Dom Reward le (#{fun} #{src} a) (#{fun} #{src} b)"
+        end,
+        fn spell ->
+          action_nest(Map.fetch!(by_spell, spell), actions, rank, kind, leaves)
+        end
+      )
+
+    """
+    def #{name} : evidence #{target} #{rank} :=
+      λ (a : Action) → λ (b : Action) → λ (s : State) →
+        #{body}
+    """
+  end
+
+  defp action_nest(state, actions, rank, kind, leaves) do
+    fun = stream_fun(kind)
+
+    arms =
+      Enum.map_join(actions, "\n", fn left ->
+        rights =
+          Enum.map_join(actions, "\n", fn right ->
+            "            | #{right} => #{Map.fetch!(leaves, {state, left, right})}"
+          end)
+
+        """
+        | #{left} =>
+            (match b motive (λ (z : Action) → Π (r : #{rank} #{state} #{left} z) → Dom Reward le (#{fun} #{state} #{left}) (#{fun} #{state} z))
+        #{rights})
+        """
+      end)
+
+    """
+    (match a motive (λ (y : Action) → Π (r : #{rank} #{state} y b) → Dom Reward le (#{fun} #{state} y) (#{fun} #{state} b))
+    #{arms})
     """
   end
 
@@ -708,6 +791,7 @@ defmodule Muro.Synth.Cert do
         leaves,
         more_leaves,
         preserves_text(
+          host,
           preserves,
           certificate_name(primary),
           states,
@@ -718,6 +802,7 @@ defmodule Muro.Synth.Cert do
         ),
         if extra? do
           preserves_text(
+            host,
             extra_preserves,
             "CoindHomo",
             states,
@@ -797,15 +882,19 @@ defmodule Muro.Synth.Cert do
 
     if p == 1 do
       start = onset(orbit, state)
-      base = if start == t, do: "cert-solve-#{state}", else: "cert-solve-#{state}-tail"
+
+      base =
+        if start == t,
+          do: "cert-solve-#{Term.label(state)}",
+          else: "cert-solve-#{Term.label(state)}-tail"
 
       {lemma, taken} = Muro.Synth.Book.reserve(base, taken)
 
       {wrapper, taken} =
         cond do
           start == t -> {nil, taken}
-          start == 0 -> Muro.Synth.Book.reserve("cert-solve-#{state}", taken)
-          true -> Muro.Synth.Book.reserve("cert-solve-#{state}-from", taken)
+          start == 0 -> Muro.Synth.Book.reserve("cert-solve-#{Term.label(state)}", taken)
+          true -> Muro.Synth.Book.reserve("cert-solve-#{Term.label(state)}-from", taken)
         end
 
       {prefixes, taken} = prefix_names(state, 0..(start - 1)//1, orbit, taken)
@@ -821,7 +910,7 @@ defmodule Muro.Synth.Cert do
 
       {plan, taken}
     else
-      {lemma, taken} = Muro.Synth.Book.reserve("cert-solve-#{state}-rep", taken)
+      {lemma, taken} = Muro.Synth.Book.reserve("cert-solve-#{Term.label(state)}-rep", taken)
       {prefixes, taken} = prefix_names(state, 0..(t + p - 1), orbit, taken)
 
       plan = %{
@@ -839,7 +928,7 @@ defmodule Muro.Synth.Cert do
 
   defp prefix_names(state, range, orbit, taken) do
     Enum.map_reduce(range, taken, fn k, taken ->
-      {name, taken} = Muro.Synth.Book.reserve("cert-solve-#{state}-#{k}", taken)
+      {name, taken} = Muro.Synth.Book.reserve("cert-solve-#{Term.label(state)}-#{k}", taken)
       {{name, k, at(orbit, k)[state]}, taken}
     end)
   end
@@ -949,7 +1038,7 @@ defmodule Muro.Synth.Cert do
     pairs = proof_pairs(host, arms, states, actions, kind)
 
     Enum.reduce(pairs, {[], taken, [], %{}}, fn {state, left, right}, {text, taken, obs, names} ->
-      base = "cert-below-#{kind}-#{state}-#{left}-#{right}"
+      base = "cert-below-#{kind}-#{Term.label(state)}-#{left}-#{right}"
       {name, taken} = Muro.Synth.Book.reserve(base, taken)
       arm = deciding(host, arms, state)
       ob = obligation(name, state, left, right, arm.name, bit_at(host, arm, state))
@@ -966,7 +1055,7 @@ defmodule Muro.Synth.Cert do
     if next(host, state, left) == next(host, state, right) do
       {[], action_form_body(host, state, left, right, nil), taken, [ob]}
     else
-      tag = "action-#{state}-#{left}-#{right}"
+      tag = "action-#{Term.label(state)}-#{left}-#{right}"
       {le_name, taken} = Muro.Synth.Book.reserve("cert-le-#{tag}", taken)
       le_ob = %{ob | name: le_name}
       next_l = next(host, state, left)
@@ -982,7 +1071,7 @@ defmodule Muro.Synth.Cert do
   end
 
   defp form_below(host, :successor, state, left, right, orbit, solves, name, taken, ob) do
-    tag = "successor-#{state}-#{left}-#{right}"
+    tag = "successor-#{Term.label(state)}-#{left}-#{right}"
     next_l = next(host, state, left)
     next_r = next(host, state, right)
     compare_of(name, next_l, next_r, orbit, solves, taken, ob, tag)
