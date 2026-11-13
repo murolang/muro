@@ -28,6 +28,20 @@ Every emit target refuses a book that uses the mark. The declaration is not eras
 
 - Version 0.20.45.
 
+## 0.20.43
+
+`mix muro.synth` ranks a policy over a finite `all-states` when `State` is not a finite enumeration. `step` of every action in `all-actions` stays inside that cover. `solve` at a cover state is the best immediate reward among the states reached in `n` steps, and the evidence is the same eventually-periodic certificate as on a finite enumeration. The split follows the constructors, fields, lists, and Nats of the cover. A state outside the cover has an empty ranking, so the homomorphism does not order it. A cover that `step` leaves, and an empty `all-states`, leave the policy book without a ranking.
+
+`examples/cshrl/envs/list_cover.muro` declares no feature. The state is a list of Nat. The cover is the empty list and the singleton `0`. The survivor is `(feat has-pos-reward-go)`. It prefers `stay` at the empty list and `go` at the singleton, and the book checks `CoindHomo`.
+
+### Manual
+
+- Synthesis. CSHRL. Examples.
+
+### Package
+
+- Version 0.20.43.
+
 ## 0.20.42
 
 `unboxed data` is an ordinary inductive declaration. A field is a machine word, `WBool`, `Slice`, `Opt` of those, or another unboxed declaration. C, Rust, and Zig pass the product by value, so a `sliceFold` of it allocates nothing. Elixir emits the ordinary tagged tuple. JavaScript emits the ordinary object. Assembly stays the Nat fragment.
