@@ -10,10 +10,12 @@ defmodule Mix.Tasks.Muro.Ui do
 
   The book is loaded before the server listens. The page is read-only.
   It opens on the meetings. `?view=all` draws every definition.
+  `?view=all&grades=on` fades erased grades. `?view=synth` draws an
+  environment's states. `?trace=` reads a `mix muro.synth --json` report.
   The task prints the URL of the address it binds and opens it.
   IPv4 loopback is `http://127.0.0.1:4017/`. An IPv6 address is
   `http://[::1]:4017/`. A hostname is `http://localhost:4017/`.
-  In a Mix project, add `{:muro_visor, "~> 0.2.1"}` and run `mix deps.get`
+  In a Mix project, add `{:muro_visor, "~> 0.3.0"}` and run `mix deps.get`
   first. Outside a project, the task installs that package and starts it.
   """
 
@@ -51,14 +53,14 @@ defmodule Mix.Tasks.Muro.Ui do
         :ok
 
       Mix.Project.get() == nil ->
-        Mix.install([{:muro_visor, "~> 0.2.1"}])
+        Mix.install([{:muro_visor, "~> 0.3.0"}])
         :ok
 
       true ->
         Mix.raise("""
         muro_visor is not running in this project. Add it to mix.exs:
 
-            {:muro_visor, "~> 0.2.1"}
+            {:muro_visor, "~> 0.3.0"}
 
         Then fetch it and open the book:
 
