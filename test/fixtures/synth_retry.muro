@@ -1,6 +1,6 @@
--- One feature holds at the only state, and the first action wins.
--- Depth 0 keeps truep and the feature test. A checker that refuses
--- truep still has the feature test to try.
+-- One state, and the first action wins. The declared feature is
+-- true at that state. Every feature of one state is constant, so
+-- depth 0 keeps truep alone.
 import "std:bool.muro"
 import "std:list.muro"
 

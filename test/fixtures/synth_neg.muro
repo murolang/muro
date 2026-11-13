@@ -1,6 +1,6 @@
--- synth_neg.muro — one feature. The constants miss the observation.
+-- synth_neg.muro — a declared feature beside the step function.
 -- At on, stay pays and go does not. At off, go pays and stay does not.
--- on-p holds only at on, so the program is the negation of that test.
+-- on-p holds only at on. It is a hint. The reward of go is the same bit.
 import "../../examples/cshrl/std/nat.muro"
 import "../../examples/cshrl/std/list.muro"
 

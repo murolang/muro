@@ -1,0 +1,29 @@
+-- Two states and no declared feature. go pays at a and not at b.
+-- The observation is the negation of that reward. Depth 0 is empty.
+import "../../examples/cshrl/std/nat.muro"
+import "../../examples/cshrl/std/list.muro"
+
+data State : Type where
+  a : State
+  b : State
+
+data Action : Type where
+  go   : Action
+  stay : Action
+
+def step : run Π (s : State) → Π (act : Action) → State × Nat :=
+  λ (s : State) → λ (act : Action) →
+    match s motive (λ _ → State × Nat)
+      | a =>
+          (match act motive (λ _ → State × Nat)
+            | go => (a, suc 0)
+            | stay => (a, suc (suc 0)))
+      | b =>
+          (match act motive (λ _ → State × Nat)
+            | go => (b, 0)
+            | stay => (b, 0))
+
+def all-actions : run List Action := cons go (cons stay nil)
+def default-action : run Action := stay
+def horizon : run Nat := 0
+def all-states : run List State := cons a (cons b nil)
