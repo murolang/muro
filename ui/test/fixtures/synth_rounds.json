@@ -1,0 +1,17 @@
+{
+  "status": "certified",
+  "program": "truep",
+  "versions": [4, 2, 1],
+  "cex": [{"carrier": "goal", "predicted": false, "oracle": true, "fed": 1}],
+  "note": "homomorphism checked",
+  "certificate": "CoindHomo",
+  "rounds": [
+    {"round": 1, "versions": 4, "cex": ["start"]},
+    {"round": 2, "versions": 2, "cex": ["goal"]},
+    {"round": 3, "versions": 1, "cex": []}
+  ],
+  "states": [
+    {"name": "start", "status": "ranked", "certificate": "CoindHomo"},
+    {"name": "goal", "status": "unsettled"}
+  ]
+}

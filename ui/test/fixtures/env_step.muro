@@ -1,0 +1,13 @@
+data State : Type where
+  start : State
+  goal : State
+
+data Action : Type where
+  go : Action
+  stay : Action
+
+def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Nat)
+      | start => (match a motive (λ _ → State × Nat) | go => (goal, suc 0) | stay => (start, 0))
+      | goal => (goal, 0)
