@@ -195,6 +195,8 @@ spec-⇐-uses (⇐-pair _ _ _ eq) = sym (ok-inj eq)
 spec-⇐-uses (⇐-letp _ _ _ _ _ eq) = sym (ok-inj eq)
 spec-⇐-uses (⇐-unf _ _ _ _ _ _ _ eq) = sym (ok-inj eq)
 spec-⇐-uses (⇐-unfR _ _ _ _ _ _ _ eq) = sym (ok-inj eq)
+spec-⇐-uses (⇐-unfA _ _ _ _ _ _ eq) = sym (ok-inj eq)
+spec-⇐-uses (⇐-unfRA _ _ _ _ _ _ eq) = sym (ok-inj eq)
 
 -- combineArg at spec: an erased argument gives u0s outright; the others
 -- go through combine spec, which forgets.

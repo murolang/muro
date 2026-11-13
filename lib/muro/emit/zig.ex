@@ -1204,8 +1204,9 @@ defmodule Muro.Emit.Zig do
     {:ok, {[], z_cast(k, src, x), k, :pure, st}}
   end
 
+  # A word payload is the word. Boxed data is the pointer `pty` prints.
   defp word_zig(k, :some, [x], _lays, st) do
-    {:ok, {[], "@as(?#{zty(k, st)}, #{x})", {:opt, k}, :pure, st}}
+    {:ok, {[], "@as(?#{pty(k, st)}, #{x})", {:opt, k}, :pure, st}}
   end
 
   defp word_zig(_k, _op, _args, _lays, _st), do: {:error, "c:unsupported"}

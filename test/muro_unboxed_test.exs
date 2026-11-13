@@ -223,9 +223,66 @@ defmodule Muro.UnboxedTest do
     body_at = :binary.match(header, "struct Cell {") |> elem(0)
     assert opt_at < body_at
     assert source =~ "Cell *"
-    File.write!(Path.join(dir, "main.c"), opt_cell_main())
+    hit = body(source, "muro__opt_d_Cell hit(", "uint64_t take(")
+    assert hit =~ ".tag = 1;"
+    assert hit =~ "cell("
+    main = opt_cell_main()
+    refute main =~ "some.tag"
+    refute main =~ "muro__f_0"
+    File.write!(Path.join(dir, "main.c"), main)
     assert gcc!(dir, "main.c", "cell") == :ok
     assert run!(dir, "cell") == "OK\n"
+    assert {:error, "asm:scope"} = Muro.emit_asm(path)
+  end
+
+  test "wsome of a data constructor checks, and a wrong payload is refused" do
+    assert check(opt_cell()) == :ok
+    assert check(wsome_more()) == :ok
+
+    assert {:error, msg} = check(wsome_bad())
+    assert msg =~ "cannot convert U64 ≁ Cell"
+
+    assert {:error, msg} = check(wsome_bare())
+    assert msg =~ "wsome requires an expected Opt type"
+
+    assert {:error, msg} = check(wsome_fun())
+    assert msg =~ "wsome requires an expected Opt type"
+
+    assert {:error, msg} = check(stream_named())
+    assert msg =~ "constructor requires an expected data type"
+  end
+
+  test "Elixir, Rust, Zig, and JavaScript run wsome of boxed data" do
+    dir = tmp("optcellrt")
+    path = Path.join(dir, "cell.muro")
+    File.write!(path, opt_cell())
+    assert Muro.check_file(path) == :ok
+
+    assert {:ok, src} = Muro.emit_file(path, Muro.OptCellEx)
+    Code.compile_string(src)
+    assert apply(Muro.OptCellEx, :fromMiss, []) == 0
+    assert apply(Muro.OptCellEx, :fromHit, []) == 7
+    assert apply(Muro.OptCellEx, :take, [apply(Muro.OptCellEx, :miss, [])]) == 0
+    assert apply(Muro.OptCellEx, :take, [apply(Muro.OptCellEx, :hit, [])]) == 7
+
+    assert {:ok, [rs]} = Muro.emit_rust(path)
+    File.write!(Path.join(dir, "main.rs"), File.read!(rs) <> "\n" <> opt_cell_rust())
+    assert rustc_bin!(dir, "main.rs", "cell_rs") == :ok
+    assert run!(dir, "cell_rs") == "OK\n"
+
+    if @zig do
+      assert {:ok, [_zig]} = Muro.emit_zig(path)
+      File.write!(Path.join(dir, "check.zig"), opt_cell_zig())
+      assert zig_test!(dir) == :ok
+    end
+
+    if @node do
+      assert {:ok, [_mjs, _dts]} = Muro.emit_js(path)
+      File.write!(Path.join(dir, "check.mjs"), opt_cell_js())
+      {out, status} = System.cmd(@node, ["check.mjs"], cd: dir, stderr_to_stdout: true)
+      assert status == 0, out
+      assert String.trim(out) == "OK"
+    end
   end
 
   test "C, Rust, and Zig refuse Opt of unboxed data" do
@@ -634,11 +691,16 @@ defmodule Muro.UnboxedTest do
 
     def miss : run Opt Cell := wnone
 
+    def hit : run Opt Cell := wsome (cell (toU64 7))
+
     def take : run Π (o : Opt Cell) → U64 :=
       λ (o : Opt Cell) →
         match o motive (λ _ → U64)
           | wsome c => (match c motive (λ _ → U64) | cell n => n)
           | wnone => toU64 0
+
+    def fromHit : run U64 := take hit
+    def fromMiss : run U64 := take miss
     """
   end
 
@@ -649,19 +711,128 @@ defmodule Muro.UnboxedTest do
     #define muro__ALLOC(n) malloc(n)
     #include "cell.c"
     int main(void) {
-      muro__opt_d_Cell none = miss();
-      if (none.tag != 0) return 1;
-      if (take(none) != 0) return 2;
-      Cell cell = {0};
-      cell.muro__field_tag = 0;
-      cell.muro__as.cell.muro__f_0 = 7;
-      muro__opt_d_Cell some;
-      some.tag = 1;
-      some.val = &cell;
-      if (take(some) != 7) return 3;
+      if (take(miss()) != 0) return 1;
+      if (take(hit()) != 7) return 2;
+      if (fromMiss() != 0) return 3;
+      if (fromHit() != 7) return 4;
       printf("OK\\n");
       return 0;
     }
+    """
+  end
+
+  defp wsome_more do
+    """
+    import "std:maybe.muro"
+    import "std:list.muro"
+
+    data Cell : Type where
+      cell : Π (n : U64) → Cell
+
+    def word : run Opt U64 := wsome (toU64 3)
+
+    def pair : run Cell × U64 := (cell (toU64 7), toU64 1)
+
+    def wrapped : run Opt (Cell × U64) := wsome (cell (toU64 7), toU64 1)
+
+    def take : run Π (o : Opt Cell) → U64 :=
+      λ (o : Opt Cell) →
+        match o motive (λ _ → U64)
+          | wsome c => (match c motive (λ _ → U64) | cell n => n)
+          | wnone => toU64 0
+
+    def applied : run U64 := take (wsome (cell (toU64 7)))
+
+    def justed : run Maybe Cell := just (cell (toU64 7))
+
+    def listed : run List Cell := cons (cell (toU64 7)) nil
+
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def cells : run Stream Cell :=
+      unfold (cell (toU64 7)) (λ (+ c : Cell) → (c, c))
+
+    def once : run Stream Cell :=
+      unfold (cell (toU64 7)) (λ (c : Cell) → (c, cell (toU64 1)))
+    """
+  end
+
+  defp wsome_bad do
+    """
+    data Cell : Type where
+      cell : Π (n : U64) → Cell
+
+    def bad : run Opt Cell := wsome (toU64 7)
+    """
+  end
+
+  defp wsome_bare do
+    """
+    data Cell : Type where
+      cell : Π (n : U64) → Cell
+
+    def bare : run U64 := wsome (cell (toU64 7))
+    """
+  end
+
+  defp wsome_fun do
+    """
+    def fun : run Π (n : Nat) → Nat := wsome (λ (n : Nat) → n)
+    """
+  end
+
+  defp stream_named do
+    """
+    data Cell : Type where
+      cell : Π (n : U64) → Cell
+
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def step : run Π (c : Cell) → Cell × Cell :=
+      λ (c : Cell) → (c, cell (toU64 1))
+
+    def named : run Stream Cell := unfold (cell (toU64 7)) step
+    """
+  end
+
+  defp opt_cell_rust do
+    """
+    fn main() {
+        assert_eq!(take(miss()), 0);
+        assert_eq!(take(hit()), 7);
+        assert_eq!(fromMiss(), 0);
+        assert_eq!(fromHit(), 7);
+        println!("OK");
+    }
+    """
+  end
+
+  defp opt_cell_zig do
+    """
+    const std = @import("std");
+    const c = @import("cell.zig");
+    test "both arms" {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        const ally = arena.allocator();
+        try std.testing.expectEqual(@as(u64, 0), try c.take(ally, try c.miss(ally)));
+        try std.testing.expectEqual(@as(u64, 7), try c.take(ally, try c.hit(ally)));
+        try std.testing.expectEqual(@as(u64, 0), try c.fromMiss(ally));
+        try std.testing.expectEqual(@as(u64, 7), try c.fromHit(ally));
+    }
+    """
+  end
+
+  defp opt_cell_js do
+    """
+    import { take, hit, miss, fromHit, fromMiss } from "./cell.mjs";
+    if (take(miss()) !== 0n) throw new Error("miss");
+    if (take(hit()) !== 7n) throw new Error("hit");
+    if (fromMiss() !== 0n) throw new Error("fromMiss");
+    if (fromHit() !== 7n) throw new Error("fromHit");
+    console.log("OK");
     """
   end
 

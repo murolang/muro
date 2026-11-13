@@ -1083,10 +1083,22 @@ defmodule Muro.IR do
   defp word_image(true, [], []), do: {:ok, {{:wrd, :u8, true, []}, :wbool}}
   defp word_image(false, [], []), do: {:ok, {{:wrd, :u8, false, []}, :wbool}}
 
+  # A machine payload keeps the word kind. Ordinary data is that
+  # value: the option's payload is the data pointer. Unboxed data
+  # still fails later, as c:unboxed.
   defp word_image(:some, [t], [lay]) do
     case lay_kind(lay) do
-      nil -> {:error, "c:unsupported"}
-      k -> {:ok, {{:wrd, k, :some, [t]}, {:opt, word_lay(k)}}}
+      nil ->
+        case lay do
+          {:data, name} when is_binary(name) ->
+            {:ok, {{:wrd, lay, :some, [t]}, {:opt, lay}}}
+
+          _ ->
+            {:error, "c:unsupported"}
+        end
+
+      k ->
+        {:ok, {{:wrd, k, :some, [t]}, {:opt, word_lay(k)}}}
     end
   end
 

@@ -840,6 +840,17 @@ data _,_⊢[_]_⇐_ σ Γ where
   ⇐-wnone : ∀ {m k}
     → σ , Γ ⊢[ m ] word wnone [] ⇐ optTy k
 
+  -- wsome against a word Opt. The payload is checked at the word.
+  ⇐-wsome : ∀ {m k t}
+    → σ , Γ ⊢[ m ] t ⇐ wordTy k
+    → σ , Γ ⊢[ m ] word wsome (t ∷ []) ⇐ optTy k
+
+  -- wsome against Opt A. The payload is checked at A. The checker
+  -- uses this when A is data (isData); otherwise it infers.
+  ⇐-wsomeD : ∀ {m A t}
+    → σ , Γ ⊢[ m ] t ⇐ A
+    → σ , Γ ⊢[ m ] word wsome (t ∷ []) ⇐ word wopt (A ∷ [])
+
   -- let (a, b) = e in t: the tensor eliminator. Both components are
   -- bound affine (a at var 1, b at var 0); the body is checked against
   -- the expected type weakened past them. fst / snd are surface sugar:
@@ -1934,6 +1945,21 @@ noWordProm = "no promotion: a word type is an erased term"
 needWord : String
 needWord = "machine integer operation expects a machine integer"
 
+-- Infer the payload of wsome and convert the resulting Opt to the
+-- expected type. A constructor, or anything else that is not a word,
+-- is refused: the expected type was not Opt. This does not call
+-- check or infer on the wsome term itself.
+wsomeConv : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n × UseVec n) → Result (UseVec n)
+wsomeConv k σ T (fail e) =
+  if (e == needWord) ∨ (e == "constructor requires an expected data type")
+  then fail "wsome requires an expected Opt type"
+  else fail e
+wsomeConv k σ T (ok (Tp , u)) =
+  whnf k σ Tp >>= λ Tp′ →
+  case kindOfWord Tp′ of λ where
+    (just kx) → conv k σ (optTy kx) T >> ok u
+    nothing   → fail "wsome requires an expected Opt type"
+
 mutual
   infer : ∀ {n} → ℕ → Sig → RecSt n → Ctx n → Mode → Tm n → Result (Tm n × UseVec n)
   infer k σ rs Γ m t = infer′ k σ rs Γ t m false
@@ -2386,6 +2412,15 @@ mutual
         nothing → fail needWord
         (just kx) → ok (result kx , u)
 
+    -- A word payload keeps ⇒-wsome. Anything else that is not a word,
+    -- including a constructor, needs the expected Opt from ⇐-wsome.
+    wsomeGo : Result (Tm n × UseVec n) → Result (Tm n × UseVec n)
+    wsomeGo (ok r) = ok r
+    wsomeGo (fail e) =
+      if (e == needWord) ∨ (e == "constructor requires an expected data type")
+      then fail "wsome requires an expected Opt type"
+      else fail e
+
     shift : Tm n → Tm n → Result (Tm n × UseVec n)
     shift x amt =
       infer k σ rs Γ m x >>= λ (Tx , ux) →
@@ -2457,7 +2492,7 @@ mutual
     go (woptk _) evid _ = fail noWordProm
     go (woptk _) spec [] = ok (typ , u0s)
     go (woptk _) _ _ = fail "Opt takes no arguments"
-    go wsome _ (t ∷ []) = una t optTy
+    go wsome _ (t ∷ []) = wsomeGo (una t optTy)
     go wsome _ _ = fail "wsome takes one word"
     go wnone _ _ = fail "wnone requires an expected Opt type"
 
@@ -2494,20 +2529,35 @@ mutual
        combine m eu tus
 
   -- ⇐-unf. The step binder is affine, or + when the seed type is
-  -- copyable, the same test as ⇐-lam.
+  -- copyable, the same test as ⇐-lam. A seed that infers is ⇐-unf /
+  -- ⇐-unfR. A seed that does not infer is checked at the annotation
+  -- (⇐-unfA / ⇐-unfRA).
   check′ k σ rs Γ m (unf seed (lam q A t)) T =
-    infer k σ rs Γ m seed >>= λ (S , seedU) →
-    conv k σ A S >>
-    unfStep k σ T S >>= λ (goal , fam) →
-    (if fam then ok tt else whnf k σ T >>= λ T′ →
-      guard "bare ν is not a stream" (lamForm T′)) >>
-    (if eqQty q reuse then isCopy k σ S >>= guard notCopy else ok tt) >>
-    check k σ (extRec (if fam then setGuard rs else rs) false false)
-          (ext Γ q S) m t (wk goal) >>= λ uses →
-    let (u₀ , us) = headTailU uses
-    in checkBound m q u₀ >>
-       checkUnfold k σ m rs (lam q A t) >>
-       combine m seedU us
+    case infer k σ rs Γ m seed of λ where
+      (ok (S , seedU)) →
+        conv k σ A S >>
+        unfStep k σ T S >>= λ (goal , fam) →
+        (if fam then ok tt else whnf k σ T >>= λ T′ →
+          guard "bare ν is not a stream" (lamForm T′)) >>
+        (if eqQty q reuse then isCopy k σ S >>= guard notCopy else ok tt) >>
+        check k σ (extRec (if fam then setGuard rs else rs) false false)
+              (ext Γ q S) m t (wk goal) >>= λ uses →
+        let (u₀ , us) = headTailU uses
+        in checkBound m q u₀ >>
+           checkUnfold k σ m rs (lam q A t) >>
+           combine m seedU us
+      (fail _) →
+        check k σ rs Γ m seed A >>= λ seedU →
+        unfStep k σ T A >>= λ (goal , fam) →
+        (if fam then ok tt else whnf k σ T >>= λ T′ →
+          guard "bare ν is not a stream" (lamForm T′)) >>
+        (if eqQty q reuse then isCopy k σ A >>= guard notCopy else ok tt) >>
+        check k σ (extRec (if fam then setGuard rs else rs) false false)
+              (ext Γ q A) m t (wk goal) >>= λ uses →
+        let (u₀ , us) = headTailU uses
+        in checkBound m q u₀ >>
+           checkUnfold k σ m rs (lam q A t) >>
+           combine m seedU us
 
   check′ k σ rs Γ m (unf seed f) T =
     infer k σ rs Γ m seed >>= λ (S , seedU) →
@@ -2527,6 +2577,18 @@ mutual
         isData k σ A >>= guard "wnone requires an expected Opt type" >>
         ok u0s
       _ → fail "wnone requires an expected Opt type"
+
+  -- ⇐-wsome / ⇐-wsomeD. The expected type is Opt, after whnf.
+  -- The payload is checked at that Opt's argument. A type that is not
+  -- Opt infers the payload alone (wsomeConv).
+  check′ k σ rs Γ m (word wsome (t ∷ [])) T =
+    whnf k σ T >>= λ where
+      (word (woptk kd) []) → check k σ rs Γ m t (wordTy kd)
+      (word wopt (A ∷ [])) →
+        isData k σ A >>= λ where
+          true  → check k σ rs Γ m t A
+          false → wsomeConv k σ T (infer k σ rs Γ m t)
+      _ → wsomeConv k σ T (infer k σ rs Γ m t)
 
   -- ⇐-ctor / ⇐-conv (default)
   check′ k σ rs Γ m e A = checkAgainst k σ rs Γ m e A (viewData k σ A) (ctorSpine e)

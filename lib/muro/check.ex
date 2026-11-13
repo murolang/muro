@@ -3255,7 +3255,19 @@ defmodule Muro.Check do
         {:error, "Opt takes no arguments"}
 
       {:some, _, [t]} ->
-        word_una(k, book, rs, gamma, m, t, &Word.opt_ty/1)
+        case word_una(k, book, rs, gamma, m, t, &Word.opt_ty/1) do
+          {:ok, _} = ok ->
+            ok
+
+          {:error, "machine integer operation expects a machine integer"} ->
+            {:error, "wsome requires an expected Opt type"}
+
+          {:error, "constructor requires an expected data type"} ->
+            {:error, "wsome requires an expected Opt type"}
+
+          other ->
+            other
+        end
 
       {:some, _, _} ->
         {:error, "wsome takes one word"}
@@ -3467,26 +3479,51 @@ defmodule Muro.Check do
 
       # ⇐-unf. Bare ν substitutes the seed for Y (Stream). An applied
       # family substitutes ν F for Y and applies the indices, so the
-      # recursive component is the predicate at the tail.
+      # recursive component is the predicate at the tail. A seed that
+      # infers is ⇐-unf / ⇐-unfR. A seed that does not infer is checked
+      # at the annotation (⇐-unfA / ⇐-unfRA).
       {:unf, seed, {:lam, q, a_ann, x, t}} ->
-        with {:ok, {s_ty, seed_u}} <- infer(k, book, rs, gamma, mode, seed),
-             :ok <- conv(k, book, names_of(rs, gamma), a_ann, s_ty),
-             {:ok, {goal, fam}} <- unf_step(k, book, rs, gamma, a, s_ty),
-             :ok <- bare_stream(k, book, fam, a),
-             :ok <- if(Grade.kernel_qty(q) == :reuse, do: guard_copy(k, book, s_ty), else: :ok),
-             {:ok, [u0 | us]} <-
-               check(
-                 k,
-                 book,
-                 push_name(ext_rec(step_rec(rs, fam), false, false), x),
-                 ext(gamma, q, s_ty),
-                 mode,
-                 t,
-                 Subst.wk(goal)
-               ),
-             :ok <- check_bound(mode, q, u0),
-             :ok <- check_unfold(k, book, mode, rs, {:lam, q, a_ann, x, t}),
-             do: combine(mode, seed_u, us)
+        case infer(k, book, rs, gamma, mode, seed) do
+          {:ok, {s_ty, seed_u}} ->
+            with :ok <- conv(k, book, names_of(rs, gamma), a_ann, s_ty),
+                 {:ok, {goal, fam}} <- unf_step(k, book, rs, gamma, a, s_ty),
+                 :ok <- bare_stream(k, book, fam, a),
+                 :ok <-
+                   if(Grade.kernel_qty(q) == :reuse, do: guard_copy(k, book, s_ty), else: :ok),
+                 {:ok, [u0 | us]} <-
+                   check(
+                     k,
+                     book,
+                     push_name(ext_rec(step_rec(rs, fam), false, false), x),
+                     ext(gamma, q, s_ty),
+                     mode,
+                     t,
+                     Subst.wk(goal)
+                   ),
+                 :ok <- check_bound(mode, q, u0),
+                 :ok <- check_unfold(k, book, mode, rs, {:lam, q, a_ann, x, t}),
+                 do: combine(mode, seed_u, us)
+
+          {:error, _} ->
+            with {:ok, seed_u} <- check(k, book, rs, gamma, mode, seed, a_ann),
+                 {:ok, {goal, fam}} <- unf_step(k, book, rs, gamma, a, a_ann),
+                 :ok <- bare_stream(k, book, fam, a),
+                 :ok <-
+                   if(Grade.kernel_qty(q) == :reuse, do: guard_copy(k, book, a_ann), else: :ok),
+                 {:ok, [u0 | us]} <-
+                   check(
+                     k,
+                     book,
+                     push_name(ext_rec(step_rec(rs, fam), false, false), x),
+                     ext(gamma, q, a_ann),
+                     mode,
+                     t,
+                     Subst.wk(goal)
+                   ),
+                 :ok <- check_bound(mode, q, u0),
+                 :ok <- check_unfold(k, book, mode, rs, {:lam, q, a_ann, x, t}),
+                 do: combine(mode, seed_u, us)
+        end
 
       {:unf, seed, f} ->
         with {:ok, {s_ty, seed_u}} <- infer(k, book, rs, gamma, mode, seed),
@@ -3521,6 +3558,26 @@ defmodule Muro.Check do
 
             _ ->
               {:error, "wnone requires an expected Opt type"}
+          end
+        end
+
+      # ⇐-wsome / ⇐-wsomeD. The expected type is Opt, after whnf.
+      # The payload is checked at that type.
+      {:word, :some, [t]} ->
+        with {:ok, t1} <- whnf(k, book, a) do
+          case t1 do
+            {:word, {:optk, kd}, []} ->
+              check(k, book, rs, gamma, mode, t, Word.word_ty(kd))
+
+            {:word, :opt, [ty]} ->
+              case is_data(k, book, ty) do
+                {:ok, true} -> check(k, book, rs, gamma, mode, t, ty)
+                {:ok, false} -> infer_conv(k, book, rs, gamma, mode, e, a)
+                err -> err
+              end
+
+            _ ->
+              infer_conv(k, book, rs, gamma, mode, e, a)
           end
         end
 
