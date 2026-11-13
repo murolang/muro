@@ -48,6 +48,7 @@ mix muro.emit path.muro --backend exunit       # ExUnit suite on stdout; a param
 mix muro.emit path.muro --backend exunit --imports  # also that book's direct imports
 mix muro.gen                                 # write the modules the manifest names
 mix muro.gen --check                         # fail when a committed module and its book disagree
+mix muro.gen --skip-check                    # write without type-checking; the caller already checked
 mix muro.deps.get                            # fetch muro_deps/ and write muro.lock
 make agda                                   # Job B only; needs vendor/agda-stdlib v2.3
 ```
@@ -90,7 +91,7 @@ The C backend refuses some terms that the Elixir backend accepts. `U8`, `U32`, `
 
 ## Committed modules
 
-`mix muro.gen` writes a module from a manifest (`muro.exs`, a `:muro` key in `mix.exs`, or `muro.toml`) into the path the manifest names. The module name is the manifest's alias, passed to `Muro.emit_file/3`. C, Rust, Zig, JavaScript, and assembly entries name a target and no module. A JavaScript entry also writes the `.d.ts` beside the `.mjs`. The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256. Do not edit that file by hand. The `.muro` file is the source. Run `mix muro.gen` after changing it. `mix muro.gen --check` fails when the committed file and the book disagree. `muro:` must equal the running version. `mix muro.init` creates the manifest and prints a note that points at `muro skills add`. It does not write that file. See [Committed modules](manual/gen.md).
+`mix muro.gen` writes a module from a manifest (`muro.exs`, a `:muro` key in `mix.exs`, or `muro.toml`) into the path the manifest names. One invocation type-checks each book once and emits every target of that book from that copy, including a C target's `.c` and `.h`. The module name is the manifest's alias, passed to `Muro.emit_file/3`. C, Rust, Zig, JavaScript, and assembly entries name a target and no module. A JavaScript entry also writes the `.d.ts` beside the `.mjs`. The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256. Do not edit that file by hand. The `.muro` file is the source. Run `mix muro.gen` after changing it. `mix muro.gen --check` fails when the committed file and the book disagree. `--skip-check` does not type-check; `--check --skip-check` still compares bytes. The default type-checks. `muro:` must equal the running version. `mix muro.init` creates the manifest and prints a note that points at `muro skills add`. It does not write that file. See [Committed modules](manual/gen.md).
 
 ## Pitfalls seen in practice
 

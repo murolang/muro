@@ -31,9 +31,12 @@ defmodule Muro.Gen do
   `muro_deps/<name>/<path>`. Each file contributes its relative
   path, a zero byte, its bytes, and a zero byte.
 
-  The module name is the manifest's alias. An `:elixir` entry calls
-  `Muro.emit_file/3`. An `:exunit` entry calls `Muro.emit_exunit/3`.
-  A `:fsm` entry calls `Muro.emit_fsm/3`. A `:c` entry calls
+  Each book is loaded and type-checked once. Every target of that
+  book is emitted from that copy, including the `.c` and the `.h` of
+  one C target, and the `.mjs` and the `.d.ts` of one JavaScript
+  target. An `:elixir` entry emits with `Muro.Emit.emit_module/2`.
+  An `:exunit` entry emits with `Muro.Emit.ExUnitSuite.render/4`.
+  A `:fsm` entry emits with `Muro.Emit.Fsm.render/4`. A `:c` entry calls
   `Muro.Emit.C.prepare/2` and writes the `.c` target and the `.h`
   beside it. A `:rust` entry calls `Muro.Emit.Rust.render/2`. A
   `:zig` entry calls `Muro.Emit.Zig.render/2`. An `:asm` entry calls
@@ -214,7 +217,7 @@ defmodule Muro.Gen do
   end
 
   @doc """
-  Check every book, then write every target.
+  Check every book once, then write every target from that copy.
 
   `{:ok, lines}` is one `written` or `unchanged` line per target,
   followed by that target's `conforms to` lines indented by two
@@ -222,13 +225,18 @@ defmodule Muro.Gen do
   equation. An unchanged target is not opened for writing.
   `{:error, message}` means at least one book failed; nothing was
   written.
-  """
-  def generate(%Muro.Manifest{} = manifest, root, version)
-      when is_binary(root) and is_binary(version) do
-    root = Path.expand(root)
 
-    with :ok <- reject_failing_books(manifest, root) do
-      case render_all(manifest, root, version) do
+  `opts` accepts `skip_check: true`. The books are still loaded, and
+  the type checker is not run. The caller has already checked. The
+  default runs the checker. A book that does not parse still fails.
+  """
+  def generate(%Muro.Manifest{} = manifest, root, version, opts \\ [])
+      when is_binary(root) and is_binary(version) and is_list(opts) do
+    root = Path.expand(root)
+    cache = load_cache(manifest, root, opts)
+
+    with :ok <- reject_failing_books(manifest, cache) do
+      case render_all(manifest, root, version, cache) do
         {:ok, files} -> {:ok, Enum.flat_map(files, &write_target(root, &1))}
         {:error, message} -> {:error, message <> "\nmuro.gen wrote nothing"}
       end
@@ -238,16 +246,21 @@ defmodule Muro.Gen do
   @doc """
   Compare every target to its book. Writes nothing.
 
-  `:ok` when every book checks and every target is the bytes `generate/3`
-  would leave in place. `{:error, message}` lists every problem.
+  `:ok` when every book checks and every target is the bytes `generate/4`
+  would leave in place. Each book is type-checked once. `{:error, message}`
+  lists every problem.
+
+  `skip_check: true` still compares bytes and does not type-check.
+  The default type-checks.
   """
-  def check(%Muro.Manifest{} = manifest, root, version)
-      when is_binary(root) and is_binary(version) do
+  def check(%Muro.Manifest{} = manifest, root, version, opts \\ [])
+      when is_binary(root) and is_binary(version) and is_list(opts) do
     root = Path.expand(root)
+    cache = load_cache(manifest, root, opts)
 
     problems =
       Enum.flat_map(manifest.modules, fn entry ->
-        problems_for(entry, root, version, manifest.fuel)
+        problems_for(entry, root, version, manifest.fuel, cache)
       end)
 
     if problems == [] do
@@ -257,11 +270,73 @@ defmodule Muro.Gen do
     end
   end
 
-  defp reject_failing_books(manifest, root) do
+  # One load per book. A book with a non-exunit target is loaded closed.
+  # That copy is reused for an exunit target of the same book when the
+  # closed load succeeds. An exunit-only book is loaded with
+  # `params: :open`, which is the check exunit already used. A closed
+  # failure is loaded open only when an exunit target still needs a
+  # book, so a param library keeps its assumption check and the other
+  # targets keep the closed error.
+  defp load_cache(manifest, root, opts) do
+    skip? = Keyword.get(opts, :skip_check, false)
+
+    manifest.modules
+    |> Enum.map(& &1.book)
+    |> Enum.uniq()
+    |> Map.new(fn book_rel ->
+      {book_rel, load_one(manifest, root, book_rel, skip?)}
+    end)
+  end
+
+  defp load_one(manifest, root, book_rel, skip?) do
+    entries = Enum.filter(manifest.modules, &(&1.book == book_rel))
+    path = Muro.Manifest.book_path(root, hd(entries))
+    exunit? = Enum.any?(entries, &(Map.get(&1, :kind) == :exunit))
+    closed? = Enum.any?(entries, &(Map.get(&1, :kind) != :exunit))
+    base = [fuel: manifest.fuel, root: root]
+    base = if skip?, do: Keyword.put(base, :check, false), else: base
+
+    closed =
+      if closed? do
+        Muro.Load.open(path, base)
+      else
+        :untried
+      end
+
+    open =
+      if exunit? and not match?({:ok, _, _}, closed) do
+        Muro.Load.open(path, Keyword.put(base, :params, :open))
+      else
+        :untried
+      end
+
+    %{closed: closed, open: open}
+  end
+
+  defp book_for(entry, cache) do
+    %{closed: closed, open: open} = Map.fetch!(cache, entry.book)
+
+    if Map.get(entry, :kind) == :exunit do
+      case closed do
+        {:ok, _, _} = ok ->
+          ok
+
+        _other ->
+          case open do
+            :untried -> closed
+            result -> result
+          end
+      end
+    else
+      closed
+    end
+  end
+
+  defp reject_failing_books(manifest, cache) do
     failures =
       Enum.flat_map(manifest.modules, fn entry ->
-        case check_book(entry, root, manifest.fuel) do
-          :ok -> []
+        case book_for(entry, cache) do
+          {:ok, _book, _lines} -> []
           {:error, message} -> [does_not_check(entry, message)]
         end
       end)
@@ -273,30 +348,29 @@ defmodule Muro.Gen do
     end
   end
 
-  defp render_all(manifest, root, version) do
+  defp render_all(manifest, root, version, cache) do
     Enum.reduce_while(manifest.modules, {:ok, []}, fn entry, {:ok, acc} ->
-      case render(root, entry, version, manifest.fuel) do
+      {:ok, loaded, lines} = book_for(entry, cache)
+
+      case render(root, entry, version, manifest.fuel, loaded, lines) do
         {:ok, contents, notes} -> {:cont, {:ok, acc ++ [{entry, contents, notes}]}}
         {:error, message} -> {:halt, {:error, backend_refused(entry, message)}}
       end
     end)
   end
 
-  defp render(root, entry, version, fuel) do
+  defp render(root, entry, version, fuel, loaded, lines) do
     case Map.get(entry, :kind, :elixir) do
       kind when kind in [:c, :rust, :zig, :asm, :js] ->
-        render_native(root, entry, version, fuel, kind)
+        render_native(root, entry, version, loaded, lines, kind)
 
       _kind ->
-        render_elixir(root, entry, version, fuel)
+        render_elixir(root, entry, version, fuel, loaded, lines)
     end
   end
 
-  defp render_elixir(root, entry, version, fuel) do
-    path = Muro.Manifest.book_path(root, entry)
-
-    with {:ok, source, skips} <- emit_entry(root, entry, fuel),
-         {:ok, lines} <- Muro.conforms(path, conform_opts(entry, root, fuel)) do
+  defp render_elixir(root, entry, version, fuel, loaded, lines) do
+    with {:ok, source, skips} <- emit_loaded(root, entry, fuel, loaded) do
       file = settle(root, entry, version, format_elixir(source, entry.target, root), 3, lines)
 
       if coherent?(file, root, entry, version, lines) do
@@ -307,14 +381,12 @@ defmodule Muro.Gen do
     end
   end
 
-  defp render_native(root, entry, version, fuel, kind) do
-    path = Muro.Manifest.book_path(root, entry)
+  defp render_native(root, entry, version, loaded, lines, kind) do
     stem = Path.basename(entry.book, ".muro")
     prefix = comment_prefix(kind)
+    book = Muro.Prelude.for_emit(loaded)
 
-    with {:ok, book} <- native_book(path, fuel, root),
-         {:ok, parts} <- native_parts(entry, kind, book, stem, root),
-         {:ok, lines} <- Muro.conforms(path, conform_opts(entry, root, fuel)) do
+    with {:ok, parts} <- native_parts(entry, kind, book, stem, root) do
       book_sha = book_hash(root, entry.book)
 
       files =
@@ -333,12 +405,6 @@ defmodule Muro.Gen do
       else
         {:error, "generated header does not describe #{entry.target}"}
       end
-    end
-  end
-
-  defp native_book(path, fuel, root) do
-    with {:ok, book} <- Muro.Load.file(path, fuel: fuel, root: root) do
-      {:ok, Muro.Prelude.for_emit(book)}
     end
   end
 
@@ -393,7 +459,7 @@ defmodule Muro.Gen do
   defp header_rel(target), do: Path.rootname(target) <> ".h"
   defp dts_rel(target), do: Path.rootname(target) <> ".d.ts"
 
-  defp emit_entry(root, entry, fuel) do
+  defp emit_loaded(root, entry, fuel, loaded) do
     path = Muro.Manifest.book_path(root, entry)
 
     case Map.get(entry, :kind, :elixir) do
@@ -411,22 +477,31 @@ defmodule Muro.Gen do
             impl -> Keyword.put(opts, :impl, impl)
           end
 
-        case Muro.emit_exunit(path, entry.module, opts) do
+        case Muro.Emit.ExUnitSuite.render(
+               path,
+               entry.module,
+               Muro.Grade.erase_book(loaded),
+               opts
+             ) do
           {:ok, %{source: source, skips: skips}} -> {:ok, source, skips}
           {:error, message} -> {:error, message}
         end
 
       :fsm ->
-        case Muro.emit_fsm(path, entry.module, fuel: fuel, root: root, book: entry.book) do
+        book = loaded |> Muro.Prelude.for_emit() |> Muro.Grade.erase_book()
+
+        case Muro.Emit.Fsm.render(book, path, entry.module,
+               fuel: fuel,
+               root: root,
+               book: entry.book
+             ) do
           {:ok, source} -> {:ok, source, []}
           {:error, message} -> {:error, message}
         end
 
       _kind ->
-        case Muro.emit_file(path, entry.module, fuel: fuel, root: root) do
-          {:ok, source} -> {:ok, source, []}
-          {:error, message} -> {:error, message}
-        end
+        book = loaded |> Muro.Prelude.for_emit() |> Muro.Grade.erase_book()
+        {:ok, Muro.Emit.emit_module(entry.module, book), []}
     end
   end
 
@@ -511,33 +586,38 @@ defmodule Muro.Gen do
     "skipped #{entry.target}: #{skip.name} (#{skip.file}:#{skip.line}): #{skip.reason}"
   end
 
-  defp problems_for(entry, root, version, fuel) do
-    case check_book(entry, root, fuel) do
-      :ok ->
-        target_problems(entry, root, version, fuel, true)
+  defp problems_for(entry, root, version, fuel, cache) do
+    case book_for(entry, cache) do
+      {:ok, loaded, lines} ->
+        memo = :ets.new(:muro_gen_render, [:set, :private])
+
+        emit = %{
+          root: root,
+          entry: entry,
+          version: version,
+          fuel: fuel,
+          loaded: loaded,
+          lines: lines,
+          memo: memo
+        }
+
+        try do
+          target_problems(entry, root, version, true, emit)
+        after
+          :ets.delete(memo)
+        end
 
       {:error, message} ->
-        [does_not_check(entry, message) | target_problems(entry, root, version, fuel, false)]
+        [does_not_check(entry, message) | target_problems(entry, root, version, false, nil)]
     end
   end
 
-  defp check_book(entry, root, fuel) do
-    Muro.check_file(Muro.Manifest.book_path(root, entry), conform_opts(entry, root, fuel))
-  end
-
-  # An exunit entry may be a param library. The loader then checks the
-  # params as assumptions. An elixir entry never passes that option.
-  defp conform_opts(entry, root, fuel) do
-    opts = [fuel: fuel, root: root]
-    if Map.get(entry, :kind) == :exunit, do: Keyword.put(opts, :params, :open), else: opts
-  end
-
-  defp target_problems(entry, root, version, fuel, book_ok?) do
+  defp target_problems(entry, root, version, book_ok?, emit) do
     Enum.flat_map(output_rels(entry), fn rel ->
       path = Path.expand(rel, root)
 
       if File.regular?(path) do
-        classify(File.read!(path), rel, entry, root, version, fuel, book_ok?)
+        classify(File.read!(path), rel, entry, root, version, book_ok?, emit)
       else
         ["#{rel}: missing target for #{entry.book}"]
       end
@@ -552,10 +632,10 @@ defmodule Muro.Gen do
     end
   end
 
-  defp classify(content, rel, entry, root, version, fuel, book_ok?) do
+  defp classify(content, rel, entry, root, version, book_ok?, emit) do
     case parse_header(content) do
       :error ->
-        differs_message(content, rel, entry, root, version, fuel, book_ok?)
+        differs_message(content, rel, entry, book_ok?, emit)
 
       {:ok, header} ->
         version_problem =
@@ -570,16 +650,16 @@ defmodule Muro.Gen do
         current = book_hash(root, entry.book)
 
         version_problem ++
-          spelling_problems(content, header, rel, entry, root, version, fuel, book_ok?) ++
-          hash_problems(content, header, current, rel, entry, root, version, fuel, book_ok?)
+          spelling_problems(content, header, rel, entry, book_ok?, emit) ++
+          hash_problems(content, header, current, rel, entry, version, book_ok?, emit)
     end
   end
 
-  defp spelling_problems(content, header, rel, entry, root, version, fuel, book_ok?) do
+  defp spelling_problems(content, header, rel, entry, book_ok?, emit) do
     if book_ok? and elixir_kind?(entry) and older_than_spelling?(header.version) do
       case parse_header(content) do
         {:ok, %{body: old_body}} ->
-          case render(root, entry, version, fuel) do
+          case render_cached(emit) do
             {:ok, files, _notes} ->
               case Enum.find(files, &(&1.rel == rel)) do
                 %{contents: new_file} ->
@@ -629,7 +709,7 @@ defmodule Muro.Gen do
     Map.get(entry, :kind, :elixir) in [:elixir, :exunit, :fsm]
   end
 
-  defp hash_problems(content, header, current, rel, entry, root, version, fuel, book_ok?) do
+  defp hash_problems(content, header, current, rel, entry, version, book_ok?, emit) do
     cond do
       header.book != entry.book ->
         ["#{rel}: differs from what #{entry.book} emits"]
@@ -645,15 +725,15 @@ defmodule Muro.Gen do
         ]
 
       header.version == version and book_ok? ->
-        differs_message(content, rel, entry, root, version, fuel, true)
+        differs_message(content, rel, entry, true, emit)
 
       true ->
         []
     end
   end
 
-  defp differs_message(content, rel, entry, root, version, fuel, true) do
-    case render(root, entry, version, fuel) do
+  defp differs_message(content, rel, entry, true, emit) do
+    case render_cached(emit) do
       {:ok, files, _notes} ->
         case Enum.find(files, &(&1.rel == rel)) do
           %{contents: ^content} -> []
@@ -665,7 +745,21 @@ defmodule Muro.Gen do
     end
   end
 
-  defp differs_message(_content, _rel, _entry, _root, _version, _fuel, false), do: []
+  defp differs_message(_content, _rel, _entry, false, _emit), do: []
+
+  defp render_cached(%{memo: memo} = emit) do
+    case :ets.lookup(memo, :render) do
+      [{:render, result}] ->
+        result
+
+      [] ->
+        result =
+          render(emit.root, emit.entry, emit.version, emit.fuel, emit.loaded, emit.lines)
+
+        :ets.insert(memo, {:render, result})
+        result
+    end
+  end
 
   defp does_not_check(entry, message) do
     "#{entry.target}: #{entry.book} does not check\n#{message}"

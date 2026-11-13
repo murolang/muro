@@ -7,7 +7,7 @@ summary: A manifest names each book, module, and target. mix muro.gen writes the
 
 # Committed modules
 
-In brief: a project commits the Elixir a book emits. `muro.exs` names the module and the path. `mix muro.gen` checks every book, formats the module, and writes it. `mix muro.gen --check` writes nothing and fails when the committed file and the book disagree. The running Muro version must equal `muro:`.
+In brief: a project commits the Elixir a book emits. `muro.exs` names the module and the path. `mix muro.gen` type-checks each book once, formats the module, and writes every target of that book from that copy. `mix muro.gen --check` writes nothing and fails when a committed file is not what that copy emits. The running Muro version must equal `muro:`.
 
 `mix muro.emit` prints a module. It does not choose a path under `lib/`, format with the project's `.formatter.exs`, or record which book the file came from. This page is that step.
 
@@ -57,7 +57,7 @@ With no Mix project, the root is the working directory. Inside a Mix project, th
 mix muro.gen
 ```
 
-The task checks every listed book with the manifest's fuel before it emits anything. If any book fails, it prints each failure and writes nothing. The line ends with `muro.gen wrote nothing`. A book that does not check is named that way. A book that checks, and that the backend then refuses, names the backend:
+The task type-checks each book once, with the manifest's fuel, before it emits anything. Every target of that book is emitted from that copy. If any book fails, it prints each failure and writes nothing. The line ends with `muro.gen wrote nothing`. A book that does not check is named that way. A book that checks, and that the backend then refuses, names the backend:
 
 ```
 out/home.mjs: books/home.muro is refused by the js backend
@@ -135,7 +135,7 @@ A mismatch is an error. A different checker can accept a different book or emit 
 mix muro.gen --check
 ```
 
-The task writes nothing. When every book checks and every target is the bytes `mix muro.gen` would leave in place, it prints:
+The task writes nothing. It type-checks each book once. A C target's `.c` and `.h`, and a JavaScript target's `.mjs` and `.d.ts`, are compared from that one copy. When every book checks and every target is the bytes `mix muro.gen` would leave in place, it prints:
 
 ```
 ok
@@ -189,6 +189,15 @@ lib/host/fold.ex: host names changed: muro__goldenzdsilence → golden_silence
 `mix muro.gen` prints the same line under `written` when it overwrites that target.
 
 A book that fails and a target that is stale are both reported. A hand edit is reported only when the book hash matches. A version mismatch is not also reported as "differs".
+
+## --skip-check
+
+```
+mix muro.gen --skip-check
+mix muro.gen --check --skip-check
+```
+
+`--skip-check` does not type-check. A caller that has already checked the book in this process uses it to write, or to compare, without checking again. The books are still loaded. A book that does not parse still fails. With `--check`, the byte comparison stays: a missing file, a stale file, a hand edit, and a body that is not what the book emits are still errors. Without the flag, `mix muro.gen` and `mix muro.gen --check` type-check.
 
 ## mix muro.init
 
