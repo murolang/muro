@@ -8,8 +8,7 @@
 -- erased (- A). Contracting that instantiation adds a step. spine
 -- is shorter there.
 --
--- uses-gt1 and arg-apps-ne0 hold at copy, copy4, copy8, and len.
--- Each inst pays 0. done pays 1 forever.
+-- Each inst pays 0. done pays 1 forever. This book declares no feature.
 import "../std/nat.muro"
 import "../lib/agent.muro"
 
@@ -81,40 +80,6 @@ def bottom : run Reward := 0
 def all-actions : run List Action := cons arg (cons spine nil)
 def default-action : run Action := spine
 def horizon : run Nat := suc 0
-
-def Carrier : spec Type := State
-
-data Feature : Type where
-  uses-gt1     : Feature
-  arg-apps-ne0 : Feature
-
-def eval-feature : run Π (+ f : Feature) → Π (+ c : Carrier) → Bool :=
-  λ (+ f : Feature) → λ (+ c : Carrier) →
-    match f motive (λ _ → Bool)
-      | uses-gt1 =>
-          (match c motive (λ _ → Bool)
-            | copy => true
-            | copy4 => true
-            | copy8 => true
-            | len => true
-            | ready => true
-            | ready4 => true
-            | ready8 => true
-            | done => false
-            | cold => false
-            | wlen => false)
-      | arg-apps-ne0 =>
-          (match c motive (λ _ → Bool)
-            | copy => true
-            | copy4 => true
-            | copy8 => true
-            | len => true
-            | ready => false
-            | ready4 => false
-            | ready8 => false
-            | done => false
-            | cold => false
-            | wlen => false)
 
 def all-states : run List State :=
   cons copy
