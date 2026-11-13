@@ -247,17 +247,9 @@ defmodule Muro.Synth.Loop do
          rejected,
          oracle
        ) do
-    {:ok, source, meta} = Book.render(host, arms, anchor, oracle)
-
-    case Book.check(source, anchor, fn path -> checker.(path, fuel) end) do
-      :ok ->
-        {:ok, checked(arms, source, versions, meta)}
-
-      {:error, :storage, diagnostic} ->
-        {:error, :storage, diagnostic}
-
-      {:error, text} ->
-        feedback(
+    case Book.render(host, arms, anchor, oracle) do
+      {:error, _reason} ->
+        advance(
           host,
           arms,
           versions,
@@ -271,14 +263,48 @@ defmodule Muro.Synth.Loop do
           fuel,
           seen,
           rejected,
-          text,
-          meta,
+          book_cex(),
           oracle
         )
+
+      {:ok, source, meta} ->
+        case Book.check(source, anchor, fn path -> checker.(path, fuel) end) do
+          :ok ->
+            {:ok, checked(arms, source, versions, meta)}
+
+          {:error, :storage, diagnostic} ->
+            {:error, :storage, diagnostic}
+
+          {:error, text} ->
+            cex = Book.cex_from(text, meta.obligations ++ Book.obligations(host, arms))
+
+            advance(
+              host,
+              arms,
+              versions,
+              depth,
+              max_depth,
+              rounds,
+              score,
+              feat,
+              anchor,
+              checker,
+              fuel,
+              seen,
+              rejected,
+              cex,
+              oracle
+            )
+        end
     end
   end
 
-  defp feedback(
+  # The generated book named no obligation. The candidate is not evidence.
+  defp book_cex do
+    %{carrier: "book", predicted: nil, oracle: nil, pair: nil, fed: 1, agrees: nil}
+  end
+
+  defp advance(
          host,
          arms,
          versions,
@@ -292,11 +318,9 @@ defmodule Muro.Synth.Loop do
          fuel,
          seen,
          rejected,
-         text,
-         meta,
+         cex,
          oracle
        ) do
-    cex = Book.cex_from(text, meta.obligations ++ Book.obligations(host, arms))
     fed = Map.get(seen, cex.carrier, 0) + 1
     cex = %{cex | fed: fed}
     seen = Map.put(seen, cex.carrier, fed)
@@ -365,9 +389,12 @@ defmodule Muro.Synth.Loop do
 
   # The oracle bit is already an observation, so filtering by it again
   # cannot shrink the space. A boolean from the checker is new: this
-  # candidate failed. Remember it, including when it was the last one.
+  # candidate failed. A book that names no obligation did not check, so
+  # this candidate is not evidence either. An obligation that produced
+  # no bit stays unknown, including out of fuel. Remember a dropped
+  # candidate, including when it was the last one.
   defp drop_failed(arm, cex, rejected) do
-    if is_boolean(cex.predicted) do
+    if is_boolean(cex.predicted) or book_failure?(cex) do
       rejected =
         Map.update(rejected, arm.name, MapSet.new([arm.pred]), &MapSet.put(&1, arm.pred))
 
@@ -376,6 +403,9 @@ defmodule Muro.Synth.Loop do
       {arm.kept, rejected}
     end
   end
+
+  defp book_failure?(%{carrier: "book", predicted: nil} = cex), do: not Map.has_key?(cex, :name)
+  defp book_failure?(_cex), do: false
 
   defp tasks_of(arms) do
     Enum.map(arms, fn arm ->
