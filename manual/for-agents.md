@@ -86,7 +86,7 @@ lib/muro/print.ex       surface syntax, locations, hole messages
 lib/muro/subst.ex       de Bruijn subst
 lib/muro/check.ex       Elixir mirror of ⊢
 lib/muro/session.ex     session / conform, mirror of decide and finishes; `rec X. S` unfolds one action and a repeated head conforms
-lib/muro/fail.ex        a party of a two-party meeting may stop; a receive from that party has a failure arm; emit of the mark is `c:mayfail`
+lib/muro/fail.ex        a party of a two-party meeting may stop; a receive from that party has a failure arm; OTP and fsm emit it; other backends are `c:mayfail`
 lib/muro/talk.ex        one description of an exchange, mirror of seen
 lib/muro/choreo.ex      a global type projected to each role pair, mirror of project
 lib/muro/place.ex       place / scheme / move, mirror of decide
@@ -98,8 +98,8 @@ lib/muro/std/*.muro     bool, le, list, maybe, ord, suc_bin
 lib/muro/emit.ex        run → Elixir source
 lib/muro/repr.ex        a repr: check the host shape and emit decode/1, decode/2, and encode/2. Not a kernel term.
 lib/muro/emit/exunit.ex closed equations → one ExUnit module (`--backend exunit`, `kind: :exunit`)
-lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a meeting starts the two processes as each other's peer; a `rec` is a tail call on `drive` (`--backend otp`)
-lib/muro/emit/fsm.ex    a session endpoint is a state machine; the transport stays with the host (`--backend fsm`, `kind: :fsm`)
+lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a marked peer is monitored and a `:DOWN` that is not a halt takes the failure arm; a book with no mark emits the previous module (`--backend otp`)
+lib/muro/emit/fsm.ex    a session endpoint is a state machine; a marked book has `down/1` and `down/2` for a failure arm; a book with no mark emits no `down`; the transport stays with the host (`--backend fsm`)
 lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
 lib/muro/example.ex     same book as Agda
 lib/muro/mutate.ex      mutants of run definitions (`mix muro.mutate`)

@@ -612,7 +612,7 @@ defmodule Muro.TemporalTest do
     case Muro.emit_file(path, :Book) do
       {:error, @mayfail} = err ->
         assert Muro.emit_exunit(path, :BookTest) == err
-        assert Muro.emit_fsm(path, :BookFsm) == err
+        assert {:ok, _fsm} = Muro.emit_fsm(path, :BookFsm)
         assert Muro.emit_c(path) == err
         assert Muro.emit_rust(path) == err
         assert Muro.emit_zig(path) == err

@@ -21,6 +21,23 @@ defmodule Muro.Emit.Otp do
   `{:shutdown, :incompatible_wire}`. Another pid, and any other term, is
   ignored.
 
+  A process whose skeleton has a failure arm monitors that same peer.
+  A `:DOWN` that is not a halt takes the arm of the receive it is on,
+  once, and only before the peer has halted. The reason on the arm is
+  the `:DOWN` reason. The image does not check that term against the
+  payload type. `:kill` arrives as `:killed`. A `match` on that name
+  selects the arm and binds the constructor's fields. A reason that
+  matches no arm stops `{:shutdown, {:unexpected, reason}}`. A `put`
+  to a peer already observed dead is consumed and is not an error.
+  Protocol `done` is `:normal`, and that exit is a halt only after this
+  process has settled or the peer has settled. A `:normal` exit before
+  that runs the failure arm. `stop` sends `{:muro_halt, _}` and then
+  exits `{:shutdown, :abandon}`. That exit is a halt even when the halt
+  message has not arrived. A meeting without the mark emits none of
+  this machinery and keeps abandon, settle, and orphan. On one node, a
+  message that reached this mailbox, including `{:muro_settled, _}`, is
+  applied before that `:DOWN`. The checker also counts a run that drops it.
+
   An integer `buffer N` on a paired meeting gives each direction N send
   credits. A payload and a choice spend one credit each and carry a fresh
   send id. The credit for that id returns when its ack is applied, not
@@ -66,20 +83,21 @@ defmodule Muro.Emit.Otp do
   The module is that stem plus `Otp` (`PingOtp`).
   """
   def render(book, stem) when is_list(book) and is_binary(stem) do
-    case Muro.Emit.refuse_may_fail(book) do
-      {:error, _} = err -> err
-      :ok -> render_book(book, stem)
-    end
+    render_book(book, stem)
   end
 
   defp render_book(book, stem) do
+    marked = fail_marked?(book)
     parent = module_name(stem)
     mods = modules(book)
-    meets = meetings(book)
+    meets = meetings(book, marked)
     fragment = Session.run_fragment(book, run_names_in(mods, meets))
     decls = Session.payload_decls(book)
 
-    {:ok, source(parent, mods, decls, fragment, host_clauses(book)) |> with_meetings(meets)}
+    {:ok,
+     source(parent, mods, decls, fragment, host_clauses(book), marked)
+     |> with_meetings(meets)
+     |> gate(marked)}
   end
 
   @doc """
@@ -89,16 +107,14 @@ defmodule Muro.Emit.Otp do
   `Muro.Emit.elixir_base/1`. No source is written.
   """
   def outline(book, stem) when is_list(book) and is_binary(stem) do
-    case Muro.Emit.refuse_may_fail(book) do
-      {:error, _} = err -> err
-      :ok -> outline_book(book, stem)
-    end
+    outline_book(book, stem)
   end
 
   defp outline_book(book, stem) do
+    marked = fail_marked?(book)
     parent = module_name(stem)
     mods = modules(book)
-    meets = meetings(book)
+    meets = meetings(book, marked)
     hosts = host_clauses(book)
 
     names =
@@ -115,7 +131,7 @@ defmodule Muro.Emit.Otp do
       ] ++
         host_lines(hosts) ++
         Enum.flat_map(mods, fn {name, skel} ->
-          ["defmodule #{name} do", "#{parent}.start(#{inspect(skel)}, peer)"]
+          ["defmodule #{name} do", "#{parent}.start(#{skel_text(skel, marked)}, peer)"]
         end) ++ meeting_clauses(meets)
 
     signatures =
@@ -157,8 +173,8 @@ defmodule Muro.Emit.Otp do
       "def handle_call({:muro_peer, peer}, _from, %{peer: nil} = st)",
       "def init({skel, :open})"
     ] ++
-      Enum.flat_map(meets, fn {name, left, right, buffer} ->
-        ["def #{name} do", exchange_call(left, right, buffer)]
+      Enum.flat_map(meets, fn {name, left, right, buffer, marked} ->
+        ["def #{name} do", exchange_call(left, right, buffer, marked)]
       end)
   end
 
@@ -167,7 +183,7 @@ defmodule Muro.Emit.Otp do
     aliases = Muro.Emit.elixir_modules(Enum.map(procs, & &1.name))
 
     Enum.map(procs, fn %{name: name, proc: proc} ->
-      {Map.fetch!(aliases, name), Session.carry(proc, book)}
+      {Map.fetch!(aliases, name), Session.carry_fail(proc, book)}
     end)
   end
 
@@ -177,7 +193,7 @@ defmodule Muro.Emit.Otp do
 
   # A meeting names the peer. Both processes exist before either is told
   # to go, and each is monitored by the other from that moment.
-  defp meetings(book) do
+  defp meetings(book, marked) do
     # A meeting is `def name/0` beside every function this template defines.
     taken0 = Muro.Emit.Helpers.otp()
 
@@ -188,7 +204,10 @@ defmodule Muro.Emit.Otp do
                                       {acc, used} ->
         {fname, used} = Name.claim(Muro.Emit.elixir_base(name), used)
 
-        {[{fname, skel_of(book, left), skel_of(book, right), Map.get(meet, :buffer)} | acc], used}
+        {[
+           {fname, skel_of(book, left), skel_of(book, right), Map.get(meet, :buffer), marked}
+           | acc
+         ], used}
       end)
 
     Enum.reverse(funs)
@@ -205,7 +224,45 @@ defmodule Muro.Emit.Otp do
           false
       end)
 
-    Session.carry(proc, book)
+    Session.carry_fail(proc, book)
+  end
+
+  defp skel_text(term, true), do: inspect(term, limit: :infinity)
+  defp skel_text(term, false), do: inspect(term)
+
+  # `#||fail` / `#||plain` regions are the may-fail image and the unmarked
+  # image. A book with no mark keeps the plain text, byte for byte with
+  # the emitter that has no failure arm. A marked book keeps the fail text.
+  # Key order follows the atom table, so it moves when other modules
+  # load. The unmarked image keeps `runs` first.
+  defp fragment_text(%{runs: runs, decls: decls}) do
+    runs = inspect(runs, limit: :infinity, charlists: :as_lists)
+    decls = inspect(decls, limit: :infinity, charlists: :as_lists)
+    "%{runs: #{runs}, decls: #{decls}}"
+  end
+
+  defp fail_marked?(book), do: Enum.any?(book, &Muro.Fail.marked?/1)
+
+  defp gate(src, true) do
+    src
+    |> drop_region("plain")
+    |> strip_marker("fail")
+  end
+
+  defp gate(src, false) do
+    src
+    |> drop_region("fail")
+    |> strip_marker("plain")
+  end
+
+  defp drop_region(src, name) do
+    Regex.replace(~r/^[ \t]*#\|\|#{name}\n.*?^[ \t]*#\|\|\/#{name}\n/ms, src, "")
+  end
+
+  defp strip_marker(src, name) do
+    src
+    |> String.replace(~r/^[ \t]*#\|\|#{name}\n/m, "")
+    |> String.replace(~r/^[ \t]*#\|\|\/#{name}\n/m, "")
   end
 
   defp with_meetings(src, []), do: src
@@ -263,10 +320,10 @@ defmodule Muro.Emit.Otp do
     funs <> "\n\n" <> exchange_fun(meets) <> "\n"
   end
 
-  defp meeting_fun({name, left, right, buffer}) do
+  defp meeting_fun({name, left, right, buffer, marked}) do
     """
       def #{name} do
-        #{exchange_call(left, right, buffer)}
+        #{exchange_call(left, right, buffer, marked)}
       end
     """
     |> String.trim_trailing()
@@ -277,17 +334,17 @@ defmodule Muro.Emit.Otp do
   defp integer_cap?(cap) when is_integer(cap) and cap >= 0, do: true
   defp integer_cap?(_cap), do: false
 
-  defp exchange_call(left, right, cap) when is_integer(cap) and cap >= 0 do
-    "exchange(#{inspect(left)}, #{inspect(right)}, #{cap})"
+  defp exchange_call(left, right, cap, marked) when is_integer(cap) and cap >= 0 do
+    "exchange(#{skel_text(left, marked)}, #{skel_text(right, marked)}, #{cap})"
   end
 
-  defp exchange_call(left, right, _cap) do
-    "exchange(#{inspect(left)}, #{inspect(right)})"
+  defp exchange_call(left, right, _cap, marked) do
+    "exchange(#{skel_text(left, marked)}, #{skel_text(right, marked)})"
   end
 
   defp exchange_fun(meets) do
-    unlimited = Enum.any?(meets, fn {_, _, _, cap} -> not integer_cap?(cap) end)
-    bounded = Enum.any?(meets, fn {_, _, _, cap} -> integer_cap?(cap) end)
+    unlimited = Enum.any?(meets, fn {_, _, _, cap, _} -> not integer_cap?(cap) end)
+    bounded = Enum.any?(meets, fn {_, _, _, cap, _} -> integer_cap?(cap) end)
 
     heads =
       [
@@ -343,7 +400,7 @@ defmodule Muro.Emit.Otp do
   defp run_names_in(mods, meets) do
     skels =
       Enum.map(mods, fn {_mod, skel} -> skel end) ++
-        Enum.flat_map(meets, fn {_name, left, right, _buffer} -> [left, right] end)
+        Enum.flat_map(meets, fn {_name, left, right, _buffer, _marked} -> [left, right] end)
 
     skels |> Enum.flat_map(&run_names/1) |> Enum.uniq()
   end
@@ -378,8 +435,8 @@ defmodule Muro.Emit.Otp do
     |> String.trim()
   end
 
-  defp source(parent, mods, decls, fragment, hosts) do
-    children = Enum.map_join(mods, "\n\n", &child(parent, &1))
+  defp source(parent, mods, decls, fragment, hosts, marked) do
+    children = Enum.map_join(mods, "\n\n", &child(parent, &1, marked))
 
     """
     defmodule #{parent} do
@@ -425,6 +482,12 @@ defmodule Muro.Emit.Otp do
           phase: :run,
           peer_settled: false,
           peer_down: nil,
+          #||fail
+          peer_halted: false,
+          peer_dead: false,
+          may_fail: muro_has_fail(skel),
+          wait_fail: nil,
+          #||/fail
           told: false
         }
       end
@@ -442,8 +505,26 @@ defmodule Muro.Emit.Otp do
       # The peer-settled arm is that same reason when the settled message
       # has arrived and a token is still held. Any other reason abandons
       # immediately, including while parked on credit or on the handshake.
+      #||fail
+      # A failure arm changes that. A non-halt death is taken at the
+      # receive, once. Protocol `stop` exits `{:shutdown, :abandon}`, and
+      # that reason is a halt whether or not `{:muro_halt, _}` arrived
+      # first. `:normal` is a halt when the peer has settled or this
+      # process has finished. A `:normal` exit before either of those is
+      # the failure arm.
+      #||/fail
       # A known-peer data or choice tuple of the other cap's arity stops
       # `{:shutdown, :incompatible_wire}`.
+      #||fail
+      def handle_info({:DOWN, mon, :process, peer, reason}, %{mon: mon, peer: peer, may_fail: true} = st) do
+        if muro_protocol_halt(reason, st) do
+          muro_idle(%{st | peer_down: :normal})
+        else
+          muro_on_death(reason, st)
+        end
+      end
+
+      #||/fail
       def handle_info({:DOWN, mon, :process, peer, reason}, %{mon: mon, peer: peer} = st) do
         if reason == :normal do
           muro_idle(%{st | peer_down: :normal})
@@ -530,6 +611,12 @@ defmodule Muro.Emit.Otp do
         {:stop, {:shutdown, :incompatible_wire}, st}
       end
 
+      #||fail
+      def handle_info({:muro_halt, from}, %{peer: peer} = st) when from == peer do
+        muro_idle(%{st | peer_halted: true})
+      end
+
+      #||/fail
       def handle_info(_msg, st), do: muro_idle(st)
 
       # A payload that arrives before the server reaches its next receive is
@@ -558,8 +645,45 @@ defmodule Muro.Emit.Otp do
       # exit. `leave` is abandon, not a normal completion.
       defp drive(:finish, %{paired: false} = st), do: {:stop, :normal, st}
       defp drive(:finish, st), do: muro_idle(%{st | phase: :settled})
+      #||fail
+      defp drive(:leave, %{peer: peer} = st) when is_pid(peer) do
+        send(peer, {:muro_halt, self()})
+        {:stop, {:shutdown, :abandon}, st}
+      end
+
+      #||/fail
       defp drive(:leave, st), do: {:stop, {:shutdown, :abandon}, st}
 
+      #||fail
+      defp drive({:fail_at, action, reason, arm}, st) do
+        drive_fail(action, %{st | wait_fail: {reason, arm}})
+      end
+
+      # The scrutinee is already bound. A failure arm matches the reason
+      # the monitor delivered. A constructor arm binds its fields, and a
+      # split on one of those fields is resolved here. The success path
+      # still matches inside `hear`.
+      defp drive({:pick, name, arms}, %{bindings: bindings} = st) when is_atom(name) do
+        case Map.fetch(bindings, name) do
+          {:ok, value} ->
+            case pick_bound(value, arms) do
+              {:ok, next, pairs} ->
+                drive(next, %{st | bindings: store_all(bindings, pairs)})
+
+              :error ->
+                {:stop, {:shutdown, {:unexpected, value}}, st}
+            end
+
+          :error ->
+            {:stop, {:shutdown, {:unexpected, name}}, st}
+        end
+      end
+
+      defp drive({:split, name, arms}, st) when is_atom(name) do
+        drive({:pick, name, arms}, st)
+      end
+
+      #||/fail
       defp drive({:loop, name, body}, %{loops: loops} = st) do
         drive(body, %{st | loops: Map.put(loops, name, body)})
       end
@@ -576,6 +700,7 @@ defmodule Muro.Emit.Otp do
         muro_emit_token(st, :muro_pick, bit, {:choose, bit, next}, next)
       end
 
+      #||plain
       defp drive({:hear, ty, name, next}, st), do: park({:hear, ty, name, next}, st)
       defp drive({:offer, left, right}, st), do: park({:offer, left, right}, st)
 
@@ -583,6 +708,26 @@ defmodule Muro.Emit.Otp do
         park({:index, name, left, right}, st)
       end
 
+      #||/plain
+      #||fail
+      defp drive({:hear, ty, name, next}, st) do
+        park({:hear, ty, name, next}, %{st | wait_fail: nil})
+      end
+
+      defp drive({:offer, left, right}, st) do
+        park({:offer, left, right}, %{st | wait_fail: nil})
+      end
+
+      defp drive({:index, name, left, right}, st) do
+        park({:index, name, left, right}, %{st | wait_fail: nil})
+      end
+
+      defp drive_fail({:hear, ty, name, next}, st), do: park({:hear, ty, name, next}, st)
+      defp drive_fail({:offer, left, right}, st), do: park({:offer, left, right}, st)
+      defp drive_fail({:index, name, left, right}, st), do: park({:index, name, left, right}, st)
+      defp drive_fail(action, st), do: park(action, st)
+
+      #||/fail
       # `cap` nil is the unbuffered and `start/2` path: a 3-tuple, no id, no ack.
       # An integer cap stamps a fresh id and spends one slot in `unacked`.
       # At the cap the callback returns through `muro_idle`, so a DOWN
@@ -591,6 +736,12 @@ defmodule Muro.Emit.Otp do
       # Free slots are `cap - size(unacked)`. Membership, not that count,
       # decides whether an ack names this send. Ids are never reused, so a
       # retired id cannot free a later send. The set drops retired ids.
+      #||fail
+      defp muro_emit_token(%{may_fail: true, peer_dead: true} = st, _tag, _payload, _parked, next) do
+        drive(next, st)
+      end
+
+      #||/fail
       defp muro_emit_token(%{cap: cap, peer: peer} = st, tag, payload, parked, next) do
         cond do
           not is_integer(cap) ->
@@ -612,10 +763,18 @@ defmodule Muro.Emit.Otp do
         end
       end
 
+      #||plain
       defp muro_on_consume(st, next, id) do
         drive(next, muro_grant(st, id))
       end
 
+      #||/plain
+      #||fail
+      defp muro_on_consume(st, next, id) do
+        drive(next, muro_grant(%{st | wait_fail: nil}, id))
+      end
+
+      #||/fail
       defp muro_grant(%{cap: cap, peer: peer} = st, id) when is_integer(cap) and is_integer(id) do
         send(peer, {:muro_ack, self(), id})
         st
@@ -627,6 +786,12 @@ defmodule Muro.Emit.Otp do
       # credit park. Mailbox protocol messages are not obligations yet;
       # they are applied before a normal exit. `peer_down` wins over the
       # settle handshake so a crash already queued is not reported as success.
+      #||fail
+      defp muro_idle(%{may_fail: true, peer_dead: true} = st) do
+        muro_after_death(st)
+      end
+
+      #||/fail
       defp muro_idle(%{peer_down: :normal} = st) do
         if muro_mailbox_quiet(), do: muro_down_stop(st), else: {:noreply, st}
       end
@@ -695,12 +860,121 @@ defmodule Muro.Emit.Otp do
       defp muro_control({:muro_ack, _, _}), do: true
       defp muro_control({:muro_ack, _, _, _}), do: true
       defp muro_control({:muro_settled, _}), do: true
+      #||fail
+      defp muro_control({:muro_halt, _}), do: true
+      #||/fail
       defp muro_control(:muro_go), do: true
       defp muro_control({:DOWN, _, :process, _, _}), do: true
       defp muro_control(_msg), do: false
 
+      #||fail
+      defp muro_has_fail(term), do: muro_fail_term(term)
+
+      defp muro_fail_term({:fail_at, _, _, _}), do: true
+      defp muro_fail_term(tuple) when is_tuple(tuple),
+        do: tuple |> Tuple.to_list() |> Enum.any?(&muro_fail_term/1)
+
+      defp muro_fail_term(list) when is_list(list), do: Enum.any?(list, &muro_fail_term/1)
+      defp muro_fail_term(_), do: false
+
+      defp muro_dead(%{may_fail: true, peer_dead: true}), do: true
+      defp muro_dead(_st), do: false
+
+      # `{:shutdown, :abandon}` is protocol `stop`, with or without
+      # `{:muro_halt, _}`. `:normal` is protocol `done` once the peer has
+      # settled or this process has finished. Anything else, including a
+      # `:normal` exit before that, is the failure arm.
+      defp muro_protocol_halt({:shutdown, :abandon}, _st), do: true
+      defp muro_protocol_halt(_reason, %{peer_halted: true}), do: true
+      defp muro_protocol_halt(:normal, %{peer_settled: true}), do: true
+      defp muro_protocol_halt(:normal, %{phase: :settled}), do: true
+      defp muro_protocol_halt(_reason, _st), do: false
+
+      # One monitor, so one death. Outstanding puts are consumed: the
+      # survivor does not wait for an ack that will not arrive. A message
+      # already queued is stepped before the arm.
+      defp muro_on_death(reason, %{peer_down: nil} = st) do
+        credit = if is_integer(st.cap), do: st.cap, else: st.credit
+        parked = st.send_wait
+
+        st = %{
+          st
+          | peer_down: reason,
+            peer_dead: true,
+            unacked: MapSet.new(),
+            credit: credit,
+            send_wait: nil
+        }
+
+        cond do
+          st.wait != nil and st.queue != [] ->
+            park(st.wait, st)
+
+          match?({_, _}, st.wait_fail) and st.wait != nil ->
+            muro_take_fail(st)
+
+          parked != nil ->
+            drive(parked, st)
+
+          true ->
+            muro_after_death(st)
+        end
+      end
+
+      defp muro_on_death(_reason, st), do: muro_after_death(st)
+
+      defp muro_take_fail(%{wait_fail: {reason, arm}, peer_down: why} = st) do
+        st = %{st | wait: nil, wait_fail: nil}
+
+        st =
+          case reason do
+            {_ty, name} when is_atom(name) ->
+              %{st | bindings: Map.put(st.bindings, name, why)}
+
+            _ ->
+              st
+          end
+
+        drive(arm, st)
+      end
+
+      defp muro_after_death(st) do
+        cond do
+          not muro_mailbox_quiet() ->
+            {:noreply, st}
+
+          st.wait != nil and st.queue == [] and match?({_, _}, st.wait_fail) ->
+            muro_take_fail(st)
+
+          st.send_wait != nil ->
+            action = st.send_wait
+            drive(action, %{st | send_wait: nil})
+
+          st.phase == :settled and muro_clear(st) ->
+            {:stop, :normal, st}
+
+          true ->
+            {:noreply, st}
+        end
+      end
+
+      #||/fail
+      #||plain
       defp park(wait, %{queue: []} = st), do: muro_idle(%{st | wait: wait})
 
+      #||/plain
+      #||fail
+      defp park(wait, %{queue: []} = st) do
+        st = %{st | wait: wait}
+
+        if muro_dead(st) and match?({_, _}, st.wait_fail) do
+          muro_take_fail(st)
+        else
+          muro_idle(st)
+        end
+      end
+
+      #||/fail
       defp park(wait, %{queue: [{msg, id} | rest], bindings: bindings} = st) do
         case step(ready(wait, bindings), msg) do
           {:go, next} ->
@@ -736,6 +1010,12 @@ defmodule Muro.Emit.Otp do
         end)
       end
 
+      #||fail
+      defp step({:hear, ty, name, {:pick, _scrut, arms}}, msg) do
+        step({:hear, ty, name, {:pick, arms}}, msg)
+      end
+
+      #||/fail
       defp step({:hear, ty, name, {:pick, arms}}, {:muro, _, value}) do
         if payload?(ty, value) do
           case pick_arm(ty, value, arms) do
@@ -816,6 +1096,132 @@ defmodule Muro.Emit.Otp do
 
       defp pick_arm(_, _, _), do: :error
 
+      #||fail
+      # A constructor arm binds its fields. A split on one of those fields
+      # is the nested match. A numeral arm is the decimal spelling. `_`
+      # is the arm that remains. `{:ok, next, pairs}` carries the bindings.
+      defp pick_bound(value, arms) do
+        fields = fields_of_runtime(value)
+        names = for {:arm, c, _, _} <- arms, is_binary(c), do: c
+        tag = fail_tag(value, names)
+
+        named =
+          if is_binary(tag) do
+            Enum.find_value(arms, fn
+              {:arm, c, _, _} = arm when c == tag -> open_fail_pick(arm, tag, fields)
+              _ -> nil
+            end)
+          end
+
+        cond do
+          named != nil ->
+            named
+
+          value == :b0 ->
+            case arms do
+              [next | _] -> {:ok, bare_arm(next), []}
+              _ -> :error
+            end
+
+          value == :b1 ->
+            case arms do
+              [_, next | _] -> {:ok, bare_arm(next), []}
+              _ -> :error
+            end
+
+          true ->
+            fail_wild(arms, fields)
+        end
+      end
+
+      defp fail_tag(value, names) do
+        raw =
+          cond do
+            is_atom(value) -> Atom.to_string(value)
+            is_integer(value) and value >= 0 -> Integer.to_string(value)
+            is_tuple(value) and tuple_size(value) >= 1 and is_atom(elem(value, 0)) ->
+              Atom.to_string(elem(value, 0))
+
+            true ->
+              nil
+          end
+
+        case raw do
+          tag when is_binary(tag) ->
+            case Muro.Emit.source_ctor(names, tag) do
+              {:ok, name} -> name
+              :error -> tag
+            end
+
+          _ ->
+            nil
+        end
+      end
+
+      defp fail_wild(arms, fields) do
+        Enum.find_value(arms, fn
+          {:arm, "_", binders, body} when is_list(binders) and length(binders) == length(fields) ->
+            {:ok, body, Enum.zip(binders, fields)}
+
+          _ ->
+            nil
+        end) || :error
+      end
+
+      defp open_fail_pick({:arm, ctor, binders, {:split, name, inner}}, expected, fields)
+           when is_binary(ctor) and is_list(binders) and is_list(fields) and is_atom(name) and
+                  is_list(inner) do
+        pairs = Enum.zip(binders, fields)
+
+        cond do
+          ctor != expected ->
+            :error
+
+          length(binders) != length(fields) ->
+            :error
+
+          true ->
+            case List.keyfind(pairs, name, 0) do
+              {^name, value} ->
+                case pick_bound(value, inner) do
+                  {:ok, next, extra} -> {:ok, next, pairs ++ extra}
+                  :error -> :error
+                end
+
+              nil ->
+                :error
+            end
+        end
+      end
+
+      defp open_fail_pick({:arm, ctor, binders, {:pick, name, inner}}, expected, fields)
+           when is_binary(ctor) and is_list(binders) and is_atom(name) and is_list(inner) do
+        if is_list(binders) and name in binders do
+          open_fail_pick({:arm, ctor, binders, {:split, name, inner}}, expected, fields)
+        else
+          cond do
+            ctor != expected -> :error
+            length(binders) != length(fields) -> :error
+            true -> {:ok, {:pick, name, inner}, Enum.zip(binders, fields)}
+          end
+        end
+      end
+
+      defp open_fail_pick({:arm, ctor, binders, body}, expected, fields)
+           when is_binary(ctor) and is_list(binders) and is_list(fields) do
+        cond do
+          ctor != expected -> :error
+          length(binders) != length(fields) -> :error
+          true -> {:ok, body, Enum.zip(binders, fields)}
+        end
+      end
+
+      defp open_fail_pick(arm, _expected, _fields), do: {:ok, bare_arm(arm), []}
+
+      defp bare_arm({:arm, _, _, next}), do: next
+      defp bare_arm(next), do: next
+
+      #||/fail
       defp open_pick({:arm, ctor, binders, {:split, name, arms}}, expected, fields)
            when is_binary(ctor) and is_list(binders) and is_list(fields) and is_list(arms) do
         cond do
@@ -1023,7 +1429,7 @@ defmodule Muro.Emit.Otp do
       # `{:self, args}` is this declaration. `{:dat, name, args}` is another.
       defp data_decls, do: #{inspect(decls, limit: :infinity)}
 
-      defp run_book, do: #{inspect(fragment, limit: :infinity, charlists: :as_lists)}
+      defp run_book, do: #{fragment_text(fragment)}
 
       # One decode of the host atom against this declaration's constructors.
       defp ctor_source(ctors, tag) when is_atom(tag) do
@@ -1153,11 +1559,11 @@ defmodule Muro.Emit.Otp do
     """
   end
 
-  defp child(parent, {name, skel}) do
+  defp child(parent, {name, skel}, marked) do
     """
     defmodule #{name} do
       def start(peer) when is_pid(peer) do
-        #{parent}.start(#{inspect(skel)}, peer)
+        #{parent}.start(#{skel_text(skel, marked)}, peer)
       end
     end
     """

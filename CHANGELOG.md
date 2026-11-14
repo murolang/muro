@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.21.0
+
+A minor bump for `may fail`.
+
+OTP monitors a party marked `may fail`. A `:DOWN` that is not a halt, while the survivor is at a receive from that peer, runs the failure arm. A reason on the arm is the `:DOWN` reason. A `match` on that reason binds the constructor's fields. A `put` to a peer already observed dead is consumed. Protocol `done` and protocol `stop` are not that arm.
+
+Protocol `stop` exits `{:shutdown, :abandon}`. That exit is a halt even when the halt message has not arrived. A `:normal` exit is a halt only after the protocol has finished. Before that, the failure arm runs. The OTP image does not check the reason against its type. `:kill` arrives as `:killed`, and a reason that matches no arm stops `{:shutdown, {:unexpected, reason}}`. The state machine checks the reason.
+
+On one node, a message that reached the mailbox, including the settled mark, is applied before `:DOWN`. The checker still counts a run that drops a message already queued. This image does not take that run.
+
+The state machine takes the same arm with `down/1` and `down/2`. `down/2` supplies the reason and checks it. Where the protocol has no failure arm, `down` is an error. A meeting that does not mark a party emits the OTP module and the state machine it emitted before, with no `down`. The module starts no process.
+
+C, Rust, Zig, and JavaScript still refuse a marked book with `c:mayfail`, and so do assembly, `--node`, and the ExUnit backend.
+
+### Manual
+
+- Emit. State machines. Sessions. Temporal. Limits. Examples. Extending. For agents.
+
+### Package
+
+- Version 0.21.0.
+
 ## 0.20.45
 
 A two-party meeting can mark a party that stops before `end`. The mark sits on that party, and `buffer N` stays last.

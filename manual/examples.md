@@ -445,7 +445,7 @@ temporal freed : free := (server at first get) leads_to (server done)
 
 The failure arm is `done`, so the slot is released on the report and on the run where the task stops. `mix muro.check` prints `temporal freed: holds in 5 reachable states, 6 transitions`. A party that has reached `done` or `stop` does not stop again. `may-fail-hold.muro` writes `fail stop`. The meeting checks, and the same formula fails after `task died, server fail`. `may-fail-missing.muro` has no failure arm, and the meeting is refused at that receive. `may-fail-control.muro` does not mark the task. The formula holds in 3 reachable states, 3 transitions. `may-fail-send.muro` sends before the receive. The send has no failure arm, and the formula holds in 12 reachable states, 16 transitions.
 
-Emit of a book that uses the mark is refused on every backend (`c:mayfail`). See [Sessions](sessions.md#a-party-may-stop) and [Temporal](temporal.md#a-party-may-stop).
+OTP monitors the marked task. Killing that task before it reports runs the failure arm and releases the slot. The report path still finishes. The state machine takes the same arm with `down`, and `recv` of the report takes the report arm. C, Rust, Zig, JavaScript, assembly, `--node`, and the ExUnit backend still refuse the book with `c:mayfail`. See [Sessions](sessions.md#a-party-may-stop) and [Temporal](temporal.md#a-party-may-stop).
 
 ## place.muro
 

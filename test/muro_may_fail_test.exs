@@ -263,16 +263,27 @@ defmodule Muro.MayFailTest do
 
     assert {:error, @refuse} = Muro.emit_file(path, MayFail)
     assert {:error, @refuse} = Muro.emit_exunit(path, MayFailEmitTest)
-    assert {:error, @refuse} = Muro.emit_fsm(path, MayFail)
     assert {:error, @refuse} = Muro.emit_c(path, nif: false)
     assert {:error, @refuse} = Muro.emit_rust(path)
     assert {:error, @refuse} = Muro.emit_zig(path)
     assert {:error, @refuse} = Muro.emit_js(path)
     assert {:error, @refuse} = Muro.emit_asm(path)
-    assert {:error, @refuse} = Muro.emit_otp(path)
     assert {:error, @refuse} = Muro.emit_node(path, :a)
 
-    assert File.ls!(dir) == ["free.muro"]
+    assert {:ok, fsm} = Muro.emit_fsm(path, MayFail)
+    assert fsm =~ "def down(state)"
+    assert fsm =~ "def down(state, reason)"
+    refute fsm =~ "c:mayfail"
+    refute fsm =~ "GenServer"
+    refute fsm =~ "Process."
+
+    assert {:ok, [otp]} = Muro.emit_otp(path)
+    otp_src = File.read!(otp)
+    assert otp_src =~ "fail_at"
+    assert otp_src =~ "Process.monitor"
+    refute otp_src =~ "c:mayfail"
+
+    assert Enum.sort(File.ls!(dir)) == ["free.muro", "free_otp.ex"]
   end
 
   test "a positional match stops before a bare fail" do
@@ -687,6 +698,612 @@ defmodule Muro.MayFailTest do
     refute :rdie in tags
     refute :ldrop in tags
     refute :rdrop in tags
+  end
+
+  test "the failure arm runs when the task is killed, and the report still finishes" do
+    path = copy!("examples/may-fail-free.muro")
+    mod = compile_otp!(path)
+    assert {:ok, left, right, lref, rref} = mod.free()
+    assert_down(lref, left, :normal)
+    assert_down(rref, right, :normal)
+
+    assert kill_before_go(mod, skel!(path, "server"), 1, :kill) == :normal
+  end
+
+  test "a meeting without the mark still abandons, and down is not a step" do
+    path = copy!("examples/may-fail-control.muro")
+    mod = compile_otp!(path)
+    assert {:ok, left, right, lref, rref} = mod.plain()
+    assert_down(lref, left, :normal)
+    assert_down(rref, right, :normal)
+    assert kill_before_go(mod, skel!(path, "server"), 1, :kill) == {:shutdown, :abandon}
+    refute inspect(skel!(path, "server")) =~ "fail_at"
+
+    fsm = compile_fsm!(path, MayFailControlFsm)
+    child = child(fsm, "server-wait")
+    refute function_exported?(child, :down, 1)
+    refute function_exported?(child, :down, 2)
+    assert {:error, {:unexpected, _, {:recv, _}, 1}} = child.recv(child.init(), 1)
+    assert {:ok, reported} = child.recv(child.init(), :ok)
+    assert child.done?(reported)
+  end
+
+  test "fsm down takes the failure arm, and recv takes the report" do
+    path = copy!("examples/may-fail-free.muro")
+    fsm = compile_fsm!(path, MayFailFreeFsm)
+    server = child(fsm, "server-wait")
+    st = server.init()
+    assert {:ok, failed} = server.down(st)
+    assert server.done?(failed)
+    assert server.expected(failed) == :done
+
+    assert {:ok, reported} = server.recv(server.init(), :ok)
+    assert server.done?(reported)
+
+    task = child(fsm, "task-work")
+    assert {:error, {:unexpected, _, {:send, _}, :down}} = task.down(task.init())
+  end
+
+  test "a bound reason is the DOWN reason, and down checks the one the host supplies" do
+    src = """
+    session task-work := send Bit end
+    session server-wait := recv Bit end
+    conform task : task-work := put b0 done
+    conform server : server-wait :=
+      get (b : Bit) done
+      fail (e : Bit)
+        match e
+          | b0 => done
+          | b1 => stop
+    meet wire : server with task may fail
+    """
+
+    path = write_book!("reason", src)
+    mod = compile_otp!(path)
+    assert kill_before_go(mod, skel!(path, "server"), nil, :b0) == :normal
+    assert kill_before_go(mod, skel!(path, "server"), nil, :b1) == {:shutdown, :abandon}
+
+    fsm = compile_fsm!(path, MayFailReasonFsm)
+    server = child(fsm, "server-wait")
+    st = server.init()
+    assert {:error, {:unexpected, _, {:down, :bit}, :down}} = server.down(st)
+    assert {:error, {:unexpected, _, {:down, :bit}, 1}} = server.down(st, 1)
+    assert {:ok, yes} = server.down(st, :b0)
+    assert server.done?(yes)
+    assert {:ok, no} = server.down(st, :b1)
+    refute server.done?(no)
+    assert server.expected(no) == :stop
+  end
+
+  test "a put to a stopped task is consumed, and down is not a send" do
+    path = copy!("examples/may-fail-send.muro")
+    mod = compile_otp!(path)
+    skel = skel!(path, "server")
+    assert match?({:say, 0, {:fail_at, _, _, _}}, skel)
+    assert kill_before_go(mod, skel, 1, :kill) == :normal
+
+    fsm = compile_fsm!(path, MayFailSendFsm)
+    server = child(fsm, "server-work")
+    assert {:error, {:unexpected, _, {:send, _}, :down}} = server.down(server.init())
+    assert {:ok, st} = server.send(server.init(), 0)
+    assert {:ok, failed} = server.down(st)
+    assert server.done?(failed)
+  end
+
+  test "an arm that stops does not release the slot" do
+    src = """
+    data Report : Type where
+      ok : Report
+    session task-work := send Report end
+    session server-wait := recv Report end
+    conform task : task-work := put ok done
+    conform server : server-wait :=
+      get (r : Report) done
+      fail
+        stop
+    meet hold : server with task may fail buffer 1
+    """
+
+    path = write_book!("hold", src)
+    mod = compile_otp!(path)
+    assert kill_before_go(mod, skel!(path, "server"), 1, :kill) == {:shutdown, :abandon}
+
+    fsm = compile_fsm!(path, MayFailHoldFsm)
+    server = child(fsm, "server-wait")
+    assert {:ok, st} = server.down(server.init())
+    refute server.done?(st)
+    assert server.expected(st) == :stop
+  end
+
+  test "a protocol stop is a halt, and the failure arm does not run" do
+    path = copy!("examples/may-fail-free.muro")
+    mod = compile_otp!(path)
+    server_skel = skel!(path, "server")
+    {:ok, server} = GenServer.start(mod, {server_skel, :open, 1})
+    {:ok, peer} = GenServer.start(mod, {:leave, :open, 1})
+    :ok = GenServer.call(server, {:muro_peer, peer})
+    :ok = GenServer.call(peer, {:muro_peer, server})
+    ref = Process.monitor(server)
+    true = :erlang.suspend_process(server)
+    send(peer, :muro_go)
+
+    await_mailbox(server, fn msgs ->
+      Enum.any?(msgs, &match?({:muro_halt, _}, &1)) and
+        Enum.any?(msgs, &match?({:DOWN, _, :process, ^peer, _}, &1))
+    end)
+
+    send(server, :muro_go)
+    :erlang.resume_process(server)
+    assert_down(ref, server, {:shutdown, :abandon})
+  end
+
+  test "left, right, both, and an unbounded meeting emit" do
+    right = copy!("examples/may-fail-free.muro")
+    assert {:ok, _} = Muro.emit_otp(right)
+    assert {:ok, _} = Muro.emit_fsm(right, MayFailRightFsm)
+
+    left =
+      write_book!("left", """
+      data Report : Type where
+        ok : Report
+      session task-work := recv Report end
+      session server-wait := send Report end
+      conform server : server-wait := put ok done
+      conform task : task-work :=
+        get (r : Report) done
+        fail
+          done
+      meet left : server may fail with task buffer 1
+      """)
+
+    mod = compile_otp!(left)
+    assert kill_before_go(mod, skel!(left, "task"), 1, :kill) == :normal
+    fsm = compile_fsm!(left, MayFailLeftFsm)
+    task = child(fsm, "task-work")
+    assert {:ok, st} = task.down(task.init())
+    assert task.done?(st)
+
+    both =
+      write_book!("both", """
+      session server-wait := recv Bit (send Bit end)
+      session task-work := send Bit (recv Bit end)
+      conform server : server-wait :=
+        get (b : Bit) (put b0 done)
+        fail
+          done
+      conform task : task-work :=
+        put b0 (get (c : Bit) done fail done)
+      meet both : server may fail with task may fail buffer 1
+      """)
+
+    assert {:ok, _} = Muro.emit_otp(both)
+    assert {:ok, src} = Muro.emit_fsm(both, MayFailBothFsm)
+    assert src =~ "def down(state)"
+
+    open =
+      write_book!("open", """
+      data Report : Type where
+        ok : Report
+      session task-work := send Report end
+      session server-wait := recv Report end
+      conform task : task-work := put ok done
+      conform server : server-wait :=
+        get (r : Report) done
+        fail
+          done
+      meet wire : server with task may fail
+      """)
+
+    mod = compile_otp!(open)
+    assert kill_before_go(mod, skel!(open, "server"), nil, :kill) == :normal
+    assert {:ok, _} = Muro.emit_fsm(open, MayFailOpenFsm)
+  end
+
+  test "a match on the reason binds the constructor field" do
+    src = """
+    data Reason : Type where
+      boom : Nat -> Reason
+    session task-work := send Unit end
+    session server-wait := recv Unit end
+    conform task : task-work := put tt done
+    conform server : server-wait :=
+      get (u : Unit) done
+      fail (e : Reason)
+        match e
+          | boom n =>
+            match n
+              | 0 => done
+              | _ => stop
+    meet wire : server with task may fail
+    """
+
+    path = write_book!("boom", src)
+    mod = compile_otp!(path)
+    skel = skel!(path, "server")
+
+    assert match?(
+             {:fail_at, _, _,
+              {:pick, :e,
+               [
+                 {:arm, "boom", [:n],
+                  {:split, :n, [{:arm, "0", [], :finish}, {:arm, "_", [], :leave}]}}
+               ]}},
+             skel
+           )
+
+    assert kill_before_go(mod, skel, nil, {:boom, 0}) == :normal
+    assert kill_before_go(mod, skel, nil, {:boom, 1}) == {:shutdown, :abandon}
+
+    fsm = compile_fsm!(path, MayFailBoomFsm)
+    server = child(fsm, "server-wait")
+    st = server.init()
+    assert {:ok, zero} = server.down(st, {:boom, 0})
+    assert server.done?(zero)
+    assert server.expected(zero) == :done
+    assert {:ok, one} = server.down(st, {:boom, 1})
+    refute server.done?(one)
+    assert server.expected(one) == :stop
+    assert server.check_trace([{:down, {:boom, 0}}], complete: true) == :ok
+
+    assert {:error, {_, {:incomplete, _, :stop}}} =
+             server.check_trace([{:down, {:boom, 1}}], complete: true)
+  end
+
+  test "a message already queued runs before :DOWN" do
+    src = """
+    data Report : Type where
+      ok : Report
+    session task-work := send Report end
+    session server-wait := recv Report end
+    conform task : task-work := put ok done
+    conform server : server-wait :=
+      get (r : Report) done
+      fail
+        stop
+    meet wire : server with task may fail
+    """
+
+    path = write_book!("queued", src)
+    mod = compile_otp!(path)
+    skel = skel!(path, "server")
+    assert kill_before_go(mod, skel, nil, :kill) == {:shutdown, :abandon}
+
+    assert queued_then_down(mod, skel, fn peer -> {:muro, peer, :ok} end, :kill) == :normal
+  end
+
+  test "cover, an index, and a second receive each take their own failure arm" do
+    cover = """
+    session task-work := choose end (send Nat end)
+    session server-wait := dual task-work
+    conform task : task-work := pick1 (put 0 done)
+    conform server : server-wait :=
+      cover done (get (n : Nat) done fail stop)
+      fail
+        done
+    meet arm : server with task may fail
+    """
+
+    path = write_book!("cover", cover)
+    mod = compile_otp!(path)
+    skel = skel!(path, "server")
+    assert match?({:fail_at, {:offer, _, {:fail_at, {:hear, :nat, _, _}, _, _}}, _, _}, skel)
+    assert kill_before_go(mod, skel, nil, :kill) == :normal
+
+    assert queued_then_down(mod, skel, fn peer -> {:muro_pick, peer, :b1} end, :kill) ==
+             {:shutdown, :abandon}
+
+    fsm = compile_fsm!(path, MayFailCoverFsm)
+    server = child(fsm, "server-wait")
+    assert {:ok, finished} = server.down(server.init())
+    assert server.done?(finished)
+    assert {:ok, branched} = server.recv(server.init(), {:pick, :b1})
+    assert {:ok, stopped} = server.down(branched)
+    refute server.done?(stopped)
+    assert server.expected(stopped) == :stop
+
+    ix = """
+    session task-work := send (b : Bit) on end (send Nat end)
+    session server-wait := recv (b : Bit) on end (recv Nat end)
+    conform task : task-work := put b1 (put 0 done)
+    conform server : server-wait :=
+      get (b : Bit) on done (get (n : Nat) done fail stop)
+      fail
+        done
+    meet ix : server with task may fail
+    """
+
+    path = write_book!("iget", ix)
+    mod = compile_otp!(path)
+    skel = skel!(path, "server")
+    assert match?({:fail_at, {:index, _, _, {:fail_at, {:hear, :nat, _, _}, _, _}}, _, _}, skel)
+    assert kill_before_go(mod, skel, nil, :kill) == :normal
+
+    assert queued_then_down(mod, skel, fn peer -> {:muro, peer, :b1} end, :kill) ==
+             {:shutdown, :abandon}
+
+    fsm = compile_fsm!(path, MayFailIgetFsm)
+    server = child(fsm, "server-wait")
+    assert {:ok, finished} = server.down(server.init())
+    assert server.done?(finished)
+    assert {:ok, branched} = server.recv(server.init(), :b1)
+    assert {:ok, stopped} = server.down(branched)
+    refute server.done?(stopped)
+    assert server.expected(stopped) == :stop
+
+    two = """
+    session task-work := send Nat (send Nat end)
+    session server-wait := recv Nat (recv Nat end)
+    conform task : task-work := put 0 (put 1 done)
+    conform server : server-wait :=
+      get (n : Nat) (get (m : Nat) done fail stop) fail done
+    meet two : server with task may fail
+    """
+
+    path = write_book!("two", two)
+    mod = compile_otp!(path)
+    skel = skel!(path, "server")
+
+    assert match?(
+             {:fail_at, {:hear, :nat, _, {:fail_at, {:hear, :nat, _, _}, _, _}}, _, _},
+             skel
+           )
+
+    assert kill_before_go(mod, skel, nil, :kill) == :normal
+
+    assert queued_then_down(mod, skel, fn peer -> {:muro, peer, 0} end, :kill) ==
+             {:shutdown, :abandon}
+
+    fsm = compile_fsm!(path, MayFailTwoFsm)
+    server = child(fsm, "server-wait")
+    assert {:ok, finished} = server.down(server.init())
+    assert server.done?(finished)
+    assert {:ok, next} = server.recv(server.init(), 0)
+    assert {:ok, stopped} = server.down(next)
+    refute server.done?(stopped)
+    assert server.expected(stopped) == :stop
+  end
+
+  test "check_trace accepts a down and rejects one the step cannot take" do
+    path = copy!("examples/may-fail-free.muro")
+    fsm = compile_fsm!(path, MayFailTraceFsm)
+    server = child(fsm, "server-wait")
+    assert server.check_trace([:down], complete: true) == :ok
+
+    assert {:error, {0, {:unexpected, _, {:send, _}, :down}}} =
+             child(fsm, "task-work").check_trace([:down])
+
+    src = """
+    session task-work := send Bit end
+    session server-wait := recv Bit end
+    conform task : task-work := put b0 done
+    conform server : server-wait :=
+      get (b : Bit) done
+      fail (e : Bit)
+        match e
+          | b0 => done
+          | b1 => stop
+    meet wire : server with task may fail
+    """
+
+    path = write_book!("trace-reason", src)
+    fsm = compile_fsm!(path, MayFailTraceReasonFsm)
+    server = child(fsm, "server-wait")
+    assert server.check_trace([{:down, :b0}], complete: true) == :ok
+
+    assert {:error, {_, {:incomplete, _, :stop}}} =
+             server.check_trace([{:down, :b1}], complete: true)
+
+    assert {:error, {0, {:unexpected, _, {:down, :bit}, 1}}} = server.check_trace([{:down, 1}])
+  end
+
+  test "a protocol stop exit is a halt before the halt message" do
+    src = """
+    data Report : Type where
+      ok : Report
+    session task-work := send Report end
+    session server-wait := recv Report end
+    conform task : task-work := put ok done
+    conform server : server-wait :=
+      get (r : Report) done
+      fail
+        done
+    meet wire : server with task may fail
+    """
+
+    path = write_book!("abandon", src)
+    mod = compile_otp!(path)
+
+    assert kill_before_go(mod, skel!(path, "server"), nil, {:shutdown, :abandon}) ==
+             {:shutdown, :abandon}
+  end
+
+  test "a :normal exit before protocol done runs the failure arm" do
+    src = """
+    data Report : Type where
+      ok : Report
+    session task-work := send Report end
+    session server-wait := recv Report end
+    conform task : task-work := put ok done
+    conform server : server-wait :=
+      get (r : Report) done
+      fail
+        done
+    meet wire : server with task may fail
+    """
+
+    path = write_book!("normal-mid", src)
+    mod = compile_otp!(path)
+    assert inject_down(mod, skel!(path, "server"), :normal) == :normal
+
+    held = """
+    data Report : Type where
+      ok : Report
+    session task-work := send Report end
+    session server-wait := recv Report end
+    conform task : task-work := put ok done
+    conform server : server-wait :=
+      get (r : Report) done
+      fail
+        stop
+    meet wire : server with task may fail
+    """
+
+    path = write_book!("normal-done", held)
+    mod = compile_otp!(path)
+    assert {:ok, left, right, lref, rref} = mod.wire()
+    assert_down(lref, left, :normal)
+    assert_down(rref, right, :normal)
+  end
+
+  defp copy!(example) do
+    dir = tmp!()
+    path = Path.join(dir, Path.basename(example))
+    File.cp!(example, path)
+    path
+  end
+
+  defp write_book!(name, src) do
+    path = Path.join(tmp!(), name <> ".muro")
+    File.write!(path, src)
+    path
+  end
+
+  defp tmp! do
+    dir = Path.join(System.tmp_dir!(), "muro-mayfail-otp-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf(dir) end)
+    dir
+  end
+
+  defp compile_otp!(path) do
+    assert {:ok, [file]} = Muro.emit_otp(path)
+    mods = Code.compile_string(File.read!(file))
+    on_exit(fn -> purge(mods) end)
+    stem = path |> Path.basename(".muro") |> String.replace("-", "_") |> Macro.camelize()
+    Module.concat([stem <> "Otp"])
+  end
+
+  defp compile_fsm!(path, mod) do
+    assert {:ok, src} = Muro.emit_fsm(path, mod)
+    mods = Code.compile_string(src)
+    on_exit(fn -> purge(mods) end)
+    mod
+  end
+
+  defp purge(mods) do
+    for {mod, _} <- mods do
+      :code.purge(mod)
+      :code.delete(mod)
+    end
+  end
+
+  defp child(parent, name), do: Module.concat(parent, Muro.Emit.elixir_alias(name))
+
+  defp skel!(path, name) do
+    assert {:ok, book} = Muro.Load.file(path)
+    book = Muro.Prelude.for_emit(book)
+    %{proc: proc} = Enum.find(book, &(&1.kind == :conform and &1.name == name))
+    Session.carry_fail(proc, book)
+  end
+
+  defp queued_then_down(mod, skel, payload, reason) do
+    dummy = spawn(fn -> receive do: (:x -> :ok) end)
+    msg = payload.(dummy)
+    {:ok, pid} = GenServer.start(mod, {skel, :open})
+    :ok = GenServer.call(pid, {:muro_peer, dummy})
+    ref = Process.monitor(pid)
+    true = :erlang.suspend_process(pid)
+    send(pid, msg)
+    Process.exit(dummy, reason)
+
+    await_mailbox(pid, fn msgs ->
+      case {Enum.find_index(msgs, &(&1 == msg)),
+            Enum.find_index(msgs, &match?({:DOWN, _, :process, ^dummy, _}, &1))} do
+        {i, j} when is_integer(i) and is_integer(j) and i < j -> true
+        _ -> false
+      end
+    end)
+
+    send(pid, :muro_go)
+    :erlang.resume_process(pid)
+    why = await_down(ref, pid)
+    if Process.alive?(pid), do: GenServer.stop(pid)
+    if Process.alive?(dummy), do: Process.exit(dummy, :kill)
+    why
+  end
+
+  defp inject_down(mod, skel, reason) do
+    dummy = spawn(fn -> receive do: (:x -> :ok) end)
+    {:ok, pid} = GenServer.start(mod, {skel, :open})
+    :ok = GenServer.call(pid, {:muro_peer, dummy})
+    %{mon: mon} = :sys.get_state(pid)
+    ref = Process.monitor(pid)
+    true = :erlang.suspend_process(pid)
+    send(pid, {:DOWN, mon, :process, dummy, reason})
+
+    await_mailbox(pid, fn msgs ->
+      Enum.any?(msgs, &match?({:DOWN, ^mon, :process, ^dummy, ^reason}, &1))
+    end)
+
+    send(pid, :muro_go)
+    :erlang.resume_process(pid)
+    why = await_down(ref, pid)
+    if Process.alive?(pid), do: GenServer.stop(pid)
+    if Process.alive?(dummy), do: Process.exit(dummy, :kill)
+    why
+  end
+
+  defp kill_before_go(mod, skel, cap, reason) do
+    dummy = spawn(fn -> receive do: (:x -> :ok) end)
+    arg = if is_integer(cap), do: {skel, :open, cap}, else: {skel, :open}
+    {:ok, pid} = GenServer.start(mod, arg)
+    :ok = GenServer.call(pid, {:muro_peer, dummy})
+    ref = Process.monitor(pid)
+    true = :erlang.suspend_process(pid)
+    Process.exit(dummy, reason)
+
+    await_mailbox(pid, fn msgs ->
+      Enum.any?(msgs, &match?({:DOWN, _, :process, ^dummy, _}, &1))
+    end)
+
+    send(pid, :muro_go)
+    :erlang.resume_process(pid)
+    reason = await_down(ref, pid)
+    if Process.alive?(pid), do: GenServer.stop(pid)
+    if Process.alive?(dummy), do: Process.exit(dummy, :kill)
+    reason
+  end
+
+  defp await_mailbox(pid, pred) do
+    deadline = System.monotonic_time(:millisecond) + 2_000
+
+    Stream.repeatedly(fn ->
+      cond do
+        not Process.alive?(pid) ->
+          :dead
+
+        true ->
+          {:messages, msgs} = Process.info(pid, :messages)
+          if pred.(msgs), do: :hit, else: Process.sleep(10)
+      end
+    end)
+    |> Enum.find(fn
+      :hit -> true
+      :dead -> true
+      _ -> System.monotonic_time(:millisecond) > deadline
+    end)
+  end
+
+  defp await_down(ref, pid) do
+    receive do
+      {:DOWN, ^ref, :process, ^pid, reason} -> reason
+    after
+      2_000 -> flunk("timed out waiting for #{inspect(pid)}")
+    end
+  end
+
+  defp assert_down(ref, pid, reason) do
+    assert await_down(ref, pid) == reason
   end
 
   defp check(src) do

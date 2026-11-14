@@ -9,7 +9,7 @@ summary: Each session endpoint is a pure state machine. The transport stays with
 
 `--backend fsm` prints one module for the book's sessions. A host that already has a transport (an RPC, an HTTP exchange, a queue, a websocket, a call between nodes made by other means) steps that module around the messages it sends and receives. The module does not start a process, and it does not talk to a peer.
 
-This is not a replacement for `--backend otp`. The OTP image is a GenServer that owns a mailbox. The state machine is the check that the messages a host already exchanges follow the protocol the meeting proved. The OTP image is unchanged. A meeting marked `may fail` is refused (`c:mayfail`). A `down` step is the next image of that meeting.
+This is not a replacement for `--backend otp`. The OTP image is a GenServer that owns a mailbox and monitors a marked peer. The state machine is the check that the messages a host already exchanges follow the protocol the meeting proved. A meeting marked `may fail` is accepted. `down` takes the failure arm. A meeting that does not mark a party emits no `down`. The module still starts no process.
 
 ## One end
 
@@ -71,12 +71,14 @@ The same book emits the same text on every run, including from two working direc
 | this end chooses | `{:send_pick, [:b0, :b1]}` |
 | the other end chooses | `{:recv_pick, [:b0, :b1]}` |
 | `end` | `:done` |
+| a failure arm that wrote `stop` | `:stop` |
+| a failure arm the machine cannot resolve | `:stuck` |
 
 `type` is `:nat`, `:bit`, `:unit`, `{:pair, a, b}`, `{:record, [{name, type}]}` with the field name a string, `{:vec, type, length}` with the length already a number, or `{:data, "Name", [type]}`. That term is also the third element of the error. A choice is its own step, `{:pick, :b0}` or `{:pick, :b1}`, passed to `send` by the end that chooses and to `recv` by the end that branches. A state expects a payload or a label, not both. A bit index (`on`) is the bit `:b0` or `:b1`, not a pick.
 
 ## check_trace
 
-`check_trace/1` takes a list of `{:send, value}` and `{:recv, value}` in the order this end performed them. It returns `:ok`, or `{:error, {index, reason}}` for the first bad step. `index` is zero-based. `reason` is the same `{:unexpected, step, expected, value}`.
+`check_trace/1` takes a list of `{:send, value}`, `{:recv, value}`, `:down`, and `{:down, reason}` in the order this end performed them. `:down` is a step when the book marks a party. It returns `:ok`, or `{:error, {index, reason}}` for the first bad step. `index` is zero-based. `reason` is the same `{:unexpected, step, expected, value}`. A reason `down/2` rejects names `{:down, type}` as what was expected.
 
 A prefix is a valid trace. A log may be cut short, and a `rec` protocol never reaches `end`. `check_trace(trace, complete: true)` also requires `done?` and otherwise returns `{:error, {length, {:incomplete, step, expected}}}`.
 
@@ -89,6 +91,19 @@ A prefix is a valid trace. A log may be cut short, and a `rec` protocol never re
 ```
 
 A session with parameters has `init/n`, one nat per parameter, and `check_trace/2` with `args: [..]`. `check_trace/1` is not defined for it. A missing `args:` raises `ArgumentError`. An argument that is not a nat raises `ArgumentError` from `init/n`.
+
+## down
+
+A receive from a marked party has a failure arm. `down/1` takes an arm that binds no reason. `down/2` takes an arm that binds one, and the reason is the value the host supplies. The machine checks that value the way `recv` checks a payload. The OTP image does not check the `:DOWN` reason. `:kill` arrives there as `:killed`.
+
+```elixir
+{:ok, state} = ServerWait.down(state)
+true = ServerWait.done?(state)
+```
+
+An arm written `done` finishes, and `expected` is `:done`. An arm written `stop` leaves `done?` false and `expected` `:stop`. An arm the machine cannot resolve leaves `done?` false and `expected` `:stuck`. `down` at a send, at `end`, or after `stop` is `{:unexpected, step, expected, value}`. A book that does not mark a party emits no `down`. `value` is `:down` for `down/1` and the reason for `down/2`. When the arm names a reason and the host calls `down/1`, `expected` is `{:down, type}`. When the arm names no reason and the host calls `down/2`, `expected` is `:down`.
+
+`expected/1` stays the protocol step. While the end is still at the receive, that is `{:recv, type}`. `down` is an extra step beside it. A `match` on the bound reason selects the arm inside `down` and binds the constructor's fields, so `down(state, :b0)` can finish and `down(state, :b1)` can stop. The host calls `down` or `recv` again for a later receive inside the arm. A value already passed to `recv` is not dropped. The checker also counts a run that drops a message already queued. This module does not take that run.
 
 ## Wire form
 
@@ -150,4 +165,4 @@ The refusal is the whole module. A book that does not check is refused by the ch
 
 `impl:` and `imports:` on a `:fsm` entry are errors, and the message names the entry index. They remain valid only for `kind: :exunit`. The header, the hashes, `written` / `unchanged`, `--check`, a stale book, and a hand edit are the same as for the other kinds.
 
-The child of `session ping` is `Host.MeetFsm.Ping`. A session name whose function spelling is plain snake case (lowercase words of letters and digits joined by single underscores) camelizes: `ping` is `Ping`, `foo_bar` is `FooBar`, and `grant-end` is `GrantEnd`. Any other name is `M` plus the function spelling (`and` is `Mmuro__and`). Two sessions that camelize to the same name are `Ping` and `Ping_2`.
+The child of `session ping` is `Host.MeetFsm.Ping`. Each child has `init`, `send`, `recv`, and `done?`. A book that marks a party also gives each child `down/1` and `down/2`. A book that does not mark a party emits no `down`. A session name whose function spelling is plain snake case (lowercase words of letters and digits joined by single underscores) camelizes: `ping` is `Ping`, `foo_bar` is `FooBar`, and `grant-end` is `GrantEnd`. Any other name is `M` plus the function spelling (`and` is `Mmuro__and`). Two sessions that camelize to the same name are `Ping` and `Ping_2`.
