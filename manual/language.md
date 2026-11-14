@@ -350,7 +350,7 @@ The escapes are `\\`, `\"`, `\n`, and `\u{…}`. `\u{…}` is one scalar, writte
 
 `String` is Data, so `+ s : String` is allowed. The type `String` itself is erased in run and evidence: writing it as a value is `no promotion: String is an erased term`. A string and an atom stay distinct. `:hello` does not inhabit `String`, and `"hello"` does not inhabit `Atom`. There is no function from one to the other.
 
-A `match` on a string literal is not part of this version, and neither is an index into one. `examples/string.muro` is the worked book. Elixir emits a binary. JavaScript emits `{ string: "hello" }` and leaves an atom as a string. `muro__canon` prints `"hello"` for the string and `hello` for the atom. C, Rust, and Zig refuse a string. A `repr` string and an import path stay a raw span of quotes; they are not this type.
+A `match` on a string literal is not part of this version, and neither is an index into one. `examples/string.muro` is the worked book. Elixir emits a binary. JavaScript emits `{ string: "hello" }` and leaves an atom as a string. `muro__canon` prints `"hello"` for the string and `hello` for the atom. C, Rust, and Zig emit `muro__str`, a pointer and an octet length, passed by value. The octets are UTF-8 and there is no trailing NUL, so a scalar 0 is an ordinary octet: `"\u{0}"` has length one and `"a\u{0}b"` is the three octets `61 00 62`. `strLen` counts scalars by walking those octets. `strEq` compares the octet length and then the octets. `strCat` allocates the way `bytesCat` does. `strBytes` is that same pointer and length as a `Slice`. Assembly refuses a string (`c:string`). A `repr` string and an import path stay a raw span of quotes; they are not this type.
 
 ## Bytes
 
