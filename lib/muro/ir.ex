@@ -15,7 +15,9 @@ defmodule Muro.IR do
   `{:opt, payload}`, `:string`, `:slice`. `{:data, name}` is `dataL`. `:erased` marks the let of
   an erased constructor field (`{:let, x, :erased, :ze, body}`). Emitters
   match that layout and ignore the payload. The field stays live at
-  `:opaque`, so a use is `Var`. A word term is `{:wrd, kind, op, args}`.
+  `:opaque`, so a use is `Var`. A word term is `{:wrd, layout, op, args}`.
+  A word operation stores its kind there. `wsome` of ordinary data stores
+  `{:data, name}`. A pair does not: that image is `c:unsupported`.
   `closures: true` also uses `{:fn, arg, ret}`, `{:lam, name, lay, body}`,
   `{:appv, fun, arg}`, and `{:data, name, args}`. The default image does not.
   """
@@ -1083,10 +1085,22 @@ defmodule Muro.IR do
   defp word_image(true, [], []), do: {:ok, {{:wrd, :u8, true, []}, :wbool}}
   defp word_image(false, [], []), do: {:ok, {{:wrd, :u8, false, []}, :wbool}}
 
+  # A machine payload keeps the word kind. Ordinary data is that
+  # value: the option's payload is the data pointer. Unboxed data
+  # still fails later, as c:unboxed.
   defp word_image(:some, [t], [lay]) do
     case lay_kind(lay) do
-      nil -> {:error, "c:unsupported"}
-      k -> {:ok, {{:wrd, k, :some, [t]}, {:opt, word_lay(k)}}}
+      nil ->
+        case lay do
+          {:data, name} when is_binary(name) ->
+            {:ok, {{:wrd, lay, :some, [t]}, {:opt, lay}}}
+
+          _ ->
+            {:error, "c:unsupported"}
+        end
+
+      k ->
+        {:ok, {{:wrd, k, :some, [t]}, {:opt, word_lay(k)}}}
     end
   end
 

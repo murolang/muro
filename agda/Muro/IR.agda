@@ -76,9 +76,10 @@ mutual
     Uncons : Term → Term
     Abort : Term
     Stream : Term → List (String × Term) → String → Term
-    -- Kind is the result kind. A binary operator does not carry one,
-    -- and a variable argument has no kind of its own.
-    Wrd : WKind → WOp → List Term → Term
+    -- The payload layout. A word operation stores `wordLay` of its
+    -- kind. `wsome` of ordinary data stores `dataL`, the slot Elixir
+    -- fills with `{:data, name}`. A pair is not stored.
+    Wrd : Layout → WOp → List Term → Term
 
   data Arm : Set where
     arm : String → List String → Term → Arm
@@ -261,17 +262,24 @@ sameKind lx ly = join (layKind lx) (layKind ly)
 
 binW : (WKind → Layout) → WOp → List Term → List Layout → Result (Term × Layout)
 binW ret op (x ∷ y ∷ []) (lx ∷ ly ∷ []) with sameKind lx ly
-... | just k  = ok (Wrd k op (x ∷ y ∷ []) , ret k)
+... | just k  = ok (Wrd (wordLay k) op (x ∷ y ∷ []) , ret k)
 ... | nothing = fail "c:unsupported"
 binW _ _ _ _ = fail "c:unsupported"
+
+-- A machine payload keeps the word layout. Ordinary data is that
+-- value: the option's payload layout is dataL. A pair stays
+-- c:unsupported, as Elixir's word_image does.
+wsomeData : Term → Layout → Result (Term × Layout)
+wsomeData t (dataL name) = ok (Wrd (dataL name) wsome (t ∷ []) , optL (dataL name))
+wsomeData _ _            = fail "c:unsupported"
 
 -- wnone has no payload kind. optL opaqueL is a placeholder; elabFun
 -- keeps the return layout taken from the function's type.
 wordImage : WOp → List Term → List Layout → Result (Term × Layout)
-wordImage (wlit k n) [] [] = ok (Wrd k (wlit k n) [] , wordLay k)
-wordImage (wof k) (t ∷ []) (natL ∷ []) = ok (Wrd k (wof k) (t ∷ []) , wordLay k)
+wordImage (wlit k n) [] [] = ok (Wrd (wordLay k) (wlit k n) [] , wordLay k)
+wordImage (wof k) (t ∷ []) (natL ∷ []) = ok (Wrd (wordLay k) (wof k) (t ∷ []) , wordLay k)
 wordImage wton (t ∷ []) (lay ∷ []) with layKind lay
-... | just k  = ok (Wrd k wton (t ∷ []) , natL)
+... | just k  = ok (Wrd (wordLay k) wton (t ∷ []) , natL)
 ... | nothing = fail "c:unsupported"
 wordImage wadd ts ls = binW wordLay wadd ts ls
 wordImage wsub ts ls = binW wordLay wsub ts ls
@@ -288,23 +296,23 @@ wordImage weq ts ls = binW (λ _ → wboolL) weq ts ls
 wordImage wlt ts ls = binW (λ _ → wboolL) wlt ts ls
 wordImage wle ts ls = binW (λ _ → wboolL) wle ts ls
 wordImage wnot (t ∷ []) (lay ∷ []) with layKind lay
-... | just k  = ok (Wrd k wnot (t ∷ []) , wordLay k)
+... | just k  = ok (Wrd (wordLay k) wnot (t ∷ []) , wordLay k)
 ... | nothing = fail "c:unsupported"
 wordImage wshl (x ∷ a ∷ []) (lx ∷ natL ∷ []) with layKind lx
-... | just k  = ok (Wrd k wshl (x ∷ a ∷ []) , wordLay k)
+... | just k  = ok (Wrd (wordLay k) wshl (x ∷ a ∷ []) , wordLay k)
 ... | nothing = fail "c:unsupported"
 wordImage wshr (x ∷ a ∷ []) (lx ∷ natL ∷ []) with layKind lx
-... | just k  = ok (Wrd k wshr (x ∷ a ∷ []) , wordLay k)
+... | just k  = ok (Wrd (wordLay k) wshr (x ∷ a ∷ []) , wordLay k)
 ... | nothing = fail "c:unsupported"
 wordImage (wcast k) (t ∷ []) (lay ∷ []) with layKind lay
-... | just _  = ok (Wrd k (wcast k) (t ∷ []) , wordLay k)
+... | just _  = ok (Wrd (wordLay k) (wcast k) (t ∷ []) , wordLay k)
 ... | nothing = fail "c:unsupported"
-wordImage wtrue [] [] = ok (Wrd ku8 wtrue [] , wboolL)
-wordImage wfalse [] [] = ok (Wrd ku8 wfalse [] , wboolL)
+wordImage wtrue [] [] = ok (Wrd (wordLay ku8) wtrue [] , wboolL)
+wordImage wfalse [] [] = ok (Wrd (wordLay ku8) wfalse [] , wboolL)
 wordImage wsome (t ∷ []) (lay ∷ []) with layKind lay
-... | just k  = ok (Wrd k wsome (t ∷ []) , optL (wordLay k))
-... | nothing = fail "c:unsupported"
-wordImage wnone [] [] = ok (Wrd ku8 wnone [] , optL opaqueL)
+... | just k  = ok (Wrd (wordLay k) wsome (t ∷ []) , optL (wordLay k))
+... | nothing = wsomeData t lay
+wordImage wnone [] [] = ok (Wrd (wordLay ku8) wnone [] , optL opaqueL)
 wordImage _ _ _ = fail "c:unsupported"
 
 ------------------------------------------------------------------------
@@ -988,3 +996,17 @@ box-erased : termOf (elaborate boxSig 0 [] boxMatch)
            ≡ ok (Match (Con "Box" "mk" (Su Ze ∷ []))
                    (arm "mk" ("b1" ∷ []) (Let "b0" erasedL Ze (Var "b1")) ∷ []))
 box-erased = refl
+
+-- `wsome` of a word keeps the word layout. `wsome` of data stores
+-- dataL in the same slot. A pair has no image.
+wsome-word : wordImage wsome (Var "n" ∷ []) (u64L ∷ [])
+           ≡ ok (Wrd u64L wsome (Var "n" ∷ []) , optL u64L)
+wsome-word = refl
+
+wsome-data : wordImage wsome (Var "c" ∷ []) (dataL "Cell" ∷ [])
+           ≡ ok (Wrd (dataL "Cell") wsome (Var "c" ∷ []) , optL (dataL "Cell"))
+wsome-data = refl
+
+wsome-pair : wordImage wsome (Var "p" ∷ []) (pairL (dataL "Cell") u64L ∷ [])
+           ≡ fail "c:unsupported"
+wsome-pair = refl

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.20.44
+
+`wsome t` is checked against an expected `Opt A`, and `t` is checked against `A`. A data constructor is accepted there. C, Rust, Zig, Elixir, and JavaScript run that value. Assembly stays the Nat fragment.
+
+A constructor used as the seed of `unfold seed (λ (x : S) → …)` is checked at `S`. A step that is not a λ still infers the seed.
+
+`Opt` of a pair of data checks. Elixir runs that pair. C, Rust, Zig, and JavaScript may refuse it. A constructor of another family under a present `Opt` is a conversion failure.
+
+### Manual
+
+- Terms. Machine numbers. Streams. Emit. Extending.
+
+### Package
+
+- Version 0.20.44.
+
 ## 0.20.43
 
 `mix muro.synth` ranks a policy over a finite `all-states` when `State` is not a finite enumeration. `step` of every action in `all-actions` stays inside that cover. `solve` at a cover state is the best immediate reward among the states reached in `n` steps, and the evidence is the same eventually-periodic certificate as on a finite enumeration. The split follows the constructors, fields, lists, and Nats of the cover. A state outside the cover has an empty ranking, so the homomorphism does not order it. A cover that `step` leaves, and an empty `all-states`, leave the policy book without a ranking.

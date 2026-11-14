@@ -450,6 +450,10 @@ forget-⇐ (⇐-unf Ds cA c st sh Dp _ _) =
   conv (t-unfG (forget-⇒ Ds) cA st sh (forget-⇐ Dp)) (≈-sym c)
 forget-⇐ (⇐-unfR Ds cA c st nf Dp _ _) =
   conv (t-unfR (forget-⇒ Ds) cA st nf (forget-⇐ Dp)) (≈-sym c)
+forget-⇐ (⇐-unfA Ds c st sh Dp _ _) =
+  conv (t-unfG (forget-⇐ Ds) ≈-refl st sh (forget-⇐ Dp)) (≈-sym c)
+forget-⇐ (⇐-unfRA Ds c st nf Dp _ _) =
+  conv (t-unfR (forget-⇐ Ds) ≈-refl st nf (forget-⇐ Dp)) (≈-sym c)
 
 forget-args args-[] = a-[] ≈-refl
 forget-args (args-snoc Ar c _ Da _) = ▹-snoc (forget-args Ar) c (forget-⇐ Da)

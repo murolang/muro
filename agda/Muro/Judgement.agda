@@ -383,6 +383,30 @@ data _,_⊢[_]_⇐_⊣_ σ Γ where
     → combine m su bus ≡ ok uses
     → σ , Γ ⊢[ m ] unf seed (pair (inst h seed) (inst t seed)) ⇐ T ⊣ uses
 
+  -- The seed does not infer. It is checked at the λ's annotation,
+  -- which is the seed type, so there is no separate A ≈ S.
+  ⇐-unfA : ∀ {m q seed A su h t T T′ Eh G fam u0 bus uses}
+    → σ , Γ ⊢[ m ] seed ⇐ A ⊣ su
+    → σ ⊢[ spec ] T ≈ T′
+    → unfStepOf A T′ ≡ ok (G , fam)
+    → T′ ≡ nu (prod (wk Eh) (var Fin.zero))
+    → σ , ext Γ q A ⊢[ m ] pair h t ⇐ wk G ⊣ (u0 ∷ bus)
+    → checkBound m q u0 ≡ ok tt
+    → combine m su bus ≡ ok uses
+    → σ , Γ ⊢[ m ] unf seed (lam q A (pair h t)) ⇐ T ⊣ uses
+
+  -- Same seed, at a declared family. The subject uncons reads is the
+  -- pair instantiated at the seed.
+  ⇐-unfRA : ∀ {m q seed A su h t T T′ G fam u0 bus uses}
+    → σ , Γ ⊢[ m ] seed ⇐ A ⊣ su
+    → σ ⊢[ spec ] T ≈ T′
+    → unfStepOf A T′ ≡ ok (G , fam)
+    → fam ≡ true
+    → σ , ext Γ q A ⊢[ m ] pair h t ⇐ wk G ⊣ (u0 ∷ bus)
+    → checkBound m q u0 ≡ ok tt
+    → combine m su bus ≡ ok uses
+    → σ , Γ ⊢[ m ] unf seed (pair (inst h seed) (inst t seed)) ⇐ T ⊣ uses
+
   -- A constructor application ctor di ci a₁ … aₙ is checked against a
   -- data type (Check: viewData on the expected type, then
   -- checkCtorApp). The parameters come from the expected type, not from
@@ -471,6 +495,10 @@ MotiveOk σ Γ di ps ((q , T) ∷ ixs) P =
   ⇐-unf Ds cA (≈-trans (≈-sym c′) c) ng sh Dp bnd cu
 ⇐-≈ (⇐-unfR Ds cA c ng nf Dp bnd cu) c′ =
   ⇐-unfR Ds cA (≈-trans (≈-sym c′) c) ng nf Dp bnd cu
+⇐-≈ (⇐-unfA Ds c ng sh Dp bnd cu) c′ =
+  ⇐-unfA Ds (≈-trans (≈-sym c′) c) ng sh Dp bnd cu
+⇐-≈ (⇐-unfRA Ds c ng nf Dp bnd cu) c′ =
+  ⇐-unfRA Ds (≈-trans (≈-sym c′) c) ng nf Dp bnd cu
 
 σ-empty : Sig
 σ-empty = mkSig [] []
