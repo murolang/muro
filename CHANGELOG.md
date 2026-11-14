@@ -14,7 +14,9 @@ meet both : server may fail with task may fail
 
 Every receive from a marked party has a failure arm. The arm may name a reason. A send has no arm. A send toward a party that has stopped is dropped, and the stop is seen at the next receive from that party.
 
-The configuration graph of a marked meeting includes, at every point, a run where that party stops. It takes no further step. A message it has not sent is lost. A message already on the queue toward the survivor may arrive, and it may be dropped. A formula that holds only on the report path fails on that run. A meeting that does not mark a party keeps the graph it had.
+The configuration graph of a marked meeting includes, wherever that party has not halted, a run where that party stops. It takes no further step. A party that has reached `done` or `stop` does not stop again. A message it has not sent is lost. A message already on the queue toward the survivor may arrive, and it may be dropped. A formula that holds only on the report path fails on that run. A meeting that does not mark a party keeps the graph it had.
+
+`role dead` is that early stop. It is not `done`, and it is not `stopped`. A positional `match` stops before a bare `fail`, so that word stays the failure arm of the receive. The crash steps stay in the Elixir checker.
 
 `examples/may-fail-free.muro` is a server that holds a slot until a task reports or the task stops. The failure arm releases the slot, and the slot is released on every run. The same meeting with no failure arm is refused. An arm that does not release the slot fails the `leads_to`.
 
