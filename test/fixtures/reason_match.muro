@@ -1,0 +1,17 @@
+data Report : Type where
+  ok : Report
+
+data Why : Type where
+  killed : Why
+  shutdown : Why
+
+session task-work := send Report end
+session server-wait := recv Report end
+
+conform task : task-work := put ok done
+
+conform server : server-wait :=
+  get (r : Report) done
+  fail (w : Why) (match w done done)
+
+meet wire : server with task may fail buffer 1
