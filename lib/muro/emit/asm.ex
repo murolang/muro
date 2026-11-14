@@ -4,8 +4,8 @@ defmodule Muro.Emit.Asm do
   Run bodies are the image from `Muro.IR`.
 
   The text is what the assembler translates. A refusal is the elaboration's,
-  or `asm:scope` when the image is outside this Nat fragment. `asm:scope`
-  leaves the image well formed.
+  `c:string` when the image carries a string, or `asm:scope` when the image
+  is outside this Nat fragment. `asm:scope` leaves the image well formed.
   """
 
   alias Muro.{Emit, IR}
@@ -40,7 +40,11 @@ defmodule Muro.Emit.Asm do
       :ok ->
         case IR.elaborate(book) do
           {:ok, funs} ->
-            if scope_ok?(funs), do: compile(book, funs, stem), else: {:error, "asm:scope"}
+            cond do
+              string_image?(funs) -> {:error, "c:string"}
+              scope_ok?(funs) -> compile(book, funs, stem)
+              true -> {:error, "asm:scope"}
+            end
 
           {:error, reason} ->
             {:error, reason}
@@ -229,6 +233,30 @@ defmodule Muro.Emit.Asm do
       _ -> nil
     end)
   end
+
+  # The Nat fragment has no string register. A length-carrying string is
+  # the C, Rust, and Zig image. This backend keeps the refusal.
+  defp string_image?(funs) do
+    Enum.any?(funs, fn fun ->
+      string_lay?(fun.ret) or Enum.any?(fun.params, fn {_n, lay} -> string_lay?(lay) end) or
+        string_tm?(fun.body)
+    end)
+  end
+
+  defp string_lay?(:string), do: true
+  defp string_lay?({:opt, a}), do: string_lay?(a)
+  defp string_lay?({:pair, a, b}), do: string_lay?(a) or string_lay?(b)
+  defp string_lay?({:stream, a}), do: string_lay?(a)
+  defp string_lay?(_), do: false
+
+  defp string_tm?({:str, _}), do: true
+  defp string_tm?({:scat, _, _}), do: true
+  defp string_tm?({:slen, _}), do: true
+  defp string_tm?({:seq, _, _}), do: true
+  defp string_tm?({:sbytes, _}), do: true
+  defp string_tm?(tm) when is_tuple(tm), do: Enum.any?(Tuple.to_list(tm), &string_tm?/1)
+  defp string_tm?(tm) when is_list(tm), do: Enum.any?(tm, &string_tm?/1)
+  defp string_tm?(_), do: false
 
   defp scope_ok?(funs) do
     Enum.all?(funs, fn fun ->

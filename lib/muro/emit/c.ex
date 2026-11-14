@@ -14,7 +14,8 @@ defmodule Muro.Emit.C do
   and `I64` are passed by value. Signed wrapping goes through `uint64_t`.
   A shift past the width and a division by zero are not evaluated.
   `F32`, `Tensor`, `addt`, and `packI` are refused (`c:machine`).
-  A string is refused (`c:string`). A lambda applied on the spot is a
+  A string is `muro__str`: a pointer and an octet length, passed by value.
+  Scalar 0 is an octet in that buffer. A lambda applied on the spot is a
   local. An unapplied lambda, and a call of a local function, are
   `c:lambda`. An unboxed product in a pair, a stream seed, or an
   `Opt` is `c:unboxed`. An `Opt` of ordinary data is a pointer.
@@ -226,12 +227,13 @@ defmodule Muro.Emit.C do
           {:ok, sigs, texts, extras} ->
             runs = Emit.run_defs(book)
             bytes? = bytes_image?(funs) or data_field_bytes?(book)
+            strings? = strings_image?(funs) or data_field_string?(book)
 
             with :ok <- Emit.refuse_may_fail(book),
                  :ok <- Emit.refuse_unboxed_opt(book, funs),
                  {:ok, opts} <- opt_typedefs(funs, book, bytes?) do
-              {:ok, header(book, sigs, stem, nm, opts, bytes?),
-               source(book, runs, sigs, texts, extras, stem, nm, opts, bytes?), sigs}
+              {:ok, header(book, sigs, stem, nm, opts, bytes?, strings?),
+               source(book, runs, sigs, texts, extras, stem, nm, opts, bytes?, strings?), sigs}
             end
 
           {:error, _} = err ->
@@ -297,7 +299,9 @@ defmodule Muro.Emit.C do
       scope: scope
     }
 
-    with {:ok, {pre, expr, _lay, st}} <- emit_ir(fun.body, env, st, sig.ret) do
+    with {:ok, {pre, expr, lay, st}} <- emit_ir(fun.body, env, st, sig.ret) do
+      expr = as_ret(expr, lay, fun.ret)
+
       discards =
         bound
         |> Enum.reject(fn {n, _c, _lay} -> uses?(fun.body, n) end)
@@ -413,7 +417,9 @@ defmodule Muro.Emit.C do
       if unboxed_lay?(st.book, la) or unboxed_lay?(st.book, lb) do
         {:error, "c:unboxed"}
       else
-        {:ok, {squash([pre, pre2]), "#{g("mk_pair")}(#{ea}, #{eb})", {:pair, la, lb}, st}}
+        {:ok,
+         {squash([pre, pre2]), "#{g("mk_pair")}(#{slot_store(ea, la)}, #{slot_store(eb, lb)})",
+          {:pair, la, lb}, st}}
       end
     end
   end
@@ -437,8 +443,8 @@ defmodule Muro.Emit.C do
           squash([
             pre,
             "#{pair_ptr()}#{sname} = #{ex};",
-            "void *#{ca} = #{sname}->#{g("field_fst")};",
-            "void *#{cb} = #{sname}->#{g("field_snd")};",
+            bind_half_c(ca, sname, g("field_fst"), la),
+            bind_half_c(cb, sname, g("field_snd"), lb),
             unused,
             pre2
           ])
@@ -486,7 +492,9 @@ defmodule Muro.Emit.C do
           saved = st.scope
 
           with {:ok, {src, st}} <- emit_step_fun(step, slots, seed_p, id, env_ty, st) do
-            expr = "#{g("stream_new")}(#{seed_ex}, #{env_ex}, #{g("step", id)})"
+            expr =
+              "#{g("stream_new")}(#{slot_store(seed_ex, seed_lay)}, #{env_ex}, #{g("step", id)})"
+
             st = %{st | steps: st.steps ++ [src], scope: saved}
 
             {:ok,
@@ -587,7 +595,11 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:sbytes, _}, _env, _st, _expect), do: {:error, "c:string"}
+  defp emit_ir({:sbytes, s}, env, st, _expect) do
+    with {:ok, {pre, ex, lay, st}} <- emit_ir(s, env, st, str_ty()) do
+      {:ok, {pre, "#{g("str_bytes")}(#{as_str(ex, lay)})", :slice, st}}
+    end
+  end
 
   defp emit_ir({:bunc, s}, env, st, _expect) do
     nothing = Map.get(st.nm.ctors, {"Maybe", "nothing"})
@@ -651,11 +663,74 @@ defmodule Muro.Emit.C do
     end
   end
 
-  defp emit_ir({:str, _}, _env, _st, _expect), do: {:error, "c:string"}
-  defp emit_ir({:scat, _, _}, _env, _st, _expect), do: {:error, "c:string"}
-  defp emit_ir({:slen, _}, _env, _st, _expect), do: {:error, "c:string"}
-  defp emit_ir({:seq, _, _}, _env, _st, _expect), do: {:error, "c:string"}
+  defp emit_ir({:str, bin}, _env, st, _expect) when is_binary(bin) do
+    if bin == "" do
+      {:ok, {"", "#{g("str_empty")}()", :string, st}}
+    else
+      {name, st} = news(st)
+      bytes = bin |> :binary.bin_to_list() |> Enum.map_join(", ", &Integer.to_string/1)
+      pre = "static const uint8_t #{name}[] = {#{bytes}};"
+      expr = "(#{g("str")}){#{name}, sizeof #{name}}"
+      {:ok, {pre, expr, :string, st}}
+    end
+  end
+
+  defp emit_ir({:scat, a, b}, env, st, _expect) do
+    with {:ok, {pa, ea, la, st}} <- emit_ir(a, env, st, str_ty()),
+         {:ok, {pb, eb, lb, st}} <- emit_ir(b, env, st, str_ty()) do
+      {:ok,
+       {squash([pa, pb]), "#{g("str_cat")}(#{as_str(ea, la)}, #{as_str(eb, lb)})", :string, st}}
+    end
+  end
+
+  defp emit_ir({:slen, a}, env, st, _expect) do
+    with {:ok, {pre, ex, lay, st}} <- emit_ir(a, env, st, str_ty()) do
+      {:ok, {pre, "#{g("str_len")}(#{as_str(ex, lay)})", :nat, st}}
+    end
+  end
+
+  defp emit_ir({:seq, a, b}, env, st, _expect) do
+    with {:ok, {pa, ea, la, st}} <- emit_ir(a, env, st, str_ty()),
+         {:ok, {pb, eb, lb, st}} <- emit_ir(b, env, st, str_ty()) do
+      {:ok,
+       {squash([pa, pb]), "#{g("str_eq")}(#{as_str(ea, la)}, #{as_str(eb, lb)})", :wbool, st}}
+    end
+  end
+
   defp emit_ir(_other, _env, _st, _expect), do: {:error, "c:unsupported"}
+
+  # A pair slot and a stream seed are `void *`. The struct is copied
+  # once; the octets stay where they are. A value that is already a
+  # string is passed through.
+  defp slot_store(ex, :string), do: "#{g("box_str")}(#{ex})"
+  defp slot_store(ex, _lay), do: ex
+
+  defp as_str(ex, :string), do: ex
+  defp as_str(ex, _lay), do: "*(#{g("str")} *)(#{ex})"
+
+  defp adapt(ex, lay, ty) do
+    cond do
+      lay == :string and String.trim(ty) == "void *" -> slot_store(ex, :string)
+      String.trim(ty) == g("str") and lay != :string -> as_str(ex, lay)
+      true -> ex
+    end
+  end
+
+  defp bind_half_c(name, sname, field, :string) do
+    "#{g("str")} #{name} = *(#{g("str")} *)#{sname}->#{field};"
+  end
+
+  defp bind_half_c(name, sname, field, _lay) do
+    "void *#{name} = #{sname}->#{field};"
+  end
+
+  defp str_ty, do: g("str") <> " "
+
+  defp cap_ref(ep, field, :string), do: "(*((#{g("str")} *)#{ep}->#{field}))"
+  defp cap_ref(ep, field, _lay), do: "#{ep}->#{field}"
+
+  defp seed_load(seedp, :string), do: "*(#{g("str")} *)#{seedp}"
+  defp seed_load(seedp, _lay), do: seedp
 
   defp match_expect(expect, lay, book) do
     if String.trim(expect) == "void *" do
@@ -671,8 +746,11 @@ defmodule Muro.Emit.C do
 
     Enum.reduce_while(paired, {:ok, [], [], st}, fn {arg, ty}, {:ok, pres, exprs, st} ->
       case emit_ir(arg, env, st, ty) do
-        {:ok, {pre, ex, _lay, st}} -> {:cont, {:ok, pres ++ [pre], exprs ++ [ex], st}}
-        {:error, _} = err -> {:halt, err}
+        {:ok, {pre, ex, lay, st}} ->
+          {:cont, {:ok, pres ++ [pre], exprs ++ [adapt(ex, lay, ty)], st}}
+
+        {:error, _} = err ->
+          {:halt, err}
       end
     end)
     |> case do
@@ -695,10 +773,13 @@ defmodule Muro.Emit.C do
   # A pointer or a scalar accepts 0. A struct does not: `muro__slice t = 0`
   # is a type error. `{0}` is the universal initializer, and a scalar
   # written that way trips -Wbraces-around-scalar under -Wall.
+  # A string is a struct whose pointer must not be a bare 0. The empty
+  # value is a complete initializer, and the match arms overwrite it.
   defp init_temp(expect, tname) do
     ty = String.trim(expect)
 
     cond do
+      ty == g("str") -> "#{expect}#{tname} = #{g("str_empty")}();"
       String.ends_with?(ty, "*") -> "#{expect}#{tname} = 0;"
       ty in ["uint8_t", "uint32_t", "uint64_t", "int64_t", "size_t"] -> "#{expect}#{tname} = 0;"
       ty == String.trim(atom_ty()) -> "#{expect}#{tname} = 0;"
@@ -1026,8 +1107,11 @@ defmodule Muro.Emit.C do
   defp emit_outers(slots, env, st) do
     Enum.reduce_while(slots, {:ok, [], [], st}, fn {_n, _f, tm, _lay}, {:ok, pres, exprs, st} ->
       case emit_ir(tm, env, st, "void *") do
-        {:ok, {pre, ex, _lay, st}} -> {:cont, {:ok, pres ++ [pre], exprs ++ [ex], st}}
-        {:error, _} = err -> {:halt, err}
+        {:ok, {pre, ex, lay, st}} ->
+          {:cont, {:ok, pres ++ [pre], exprs ++ [slot_store(ex, lay)], st}}
+
+        {:error, _} = err ->
+          {:halt, err}
       end
     end)
     |> case do
@@ -1063,7 +1147,7 @@ defmodule Muro.Emit.C do
 
     cap_env =
       Enum.reduce(Enum.reverse(slots), [], fn {name, field, _tm, lay}, env ->
-        [{name, "#{ep}->#{field}", lay} | env]
+        [{name, cap_ref(ep, field, lay), lay} | env]
       end)
 
     visible =
@@ -1080,7 +1164,7 @@ defmodule Muro.Emit.C do
           # The parameter is still named; a dead local is -Wunused-variable.
           if uses?(step.body, sname) do
             {local, visible} = Name.bind(spell(sname), visible)
-            line = "  #{ctype(slay, st.book)}#{local} = #{seedp};"
+            line = "  #{ctype(slay, st.book)}#{local} = #{seed_load(seedp, slay)};"
             {line, [{sname, local, slay} | cap_env], visible}
           else
             {"  (void)#{seedp};", cap_env, visible}
@@ -1171,6 +1255,11 @@ defmodule Muro.Emit.C do
   defp lay_of({:bsub, _, _, _}, _env, _st), do: :slice
   defp lay_of({:btil, _, _}, _env, _st), do: :slice
   defp lay_of({:baft, _, _}, _env, _st), do: :slice
+  defp lay_of({:str, _}, _env, _st), do: :string
+  defp lay_of({:scat, _, _}, _env, _st), do: :string
+  defp lay_of({:slen, _}, _env, _st), do: :nat
+  defp lay_of({:seq, _, _}, _env, _st), do: :wbool
+  defp lay_of({:sbytes, _}, _env, _st), do: :slice
   defp lay_of({:wrd, k, op, _}, _env, _st), do: wrd_lay(k, op)
 
   defp lay_of({:match, scrut, arms}, env, st) do
@@ -1273,6 +1362,7 @@ defmodule Muro.Emit.C do
 
   defp type_layout(_book, :bytes), do: :slice
   defp type_layout(_book, :slice), do: :slice
+  defp type_layout(_book, :string), do: :string
   defp type_layout(_book, :nat), do: :nat
   defp type_layout(_book, :unit), do: :unit
   defp type_layout(_book, :atom), do: {:data, "Atom"}
@@ -1414,7 +1504,14 @@ defmodule Muro.Emit.C do
       end
 
     {tmp, st} = news(st)
-    pre = "#{ty} #{tmp};\n#{tmp}.tag = 0;\n#{tmp}.val = 0;"
+
+    pre =
+      if ty == opt_name(:string) do
+        "#{ty} #{tmp} = {.tag = 0, .val = #{g("str_empty")}()};"
+      else
+        "#{ty} #{tmp};\n#{tmp}.tag = 0;\n#{tmp}.val = 0;"
+      end
+
     {:ok, {pre, tmp, {:opt, :opaque}, st}}
   end
 
@@ -1743,6 +1840,7 @@ defmodule Muro.Emit.C do
   defp lay_tag(:wbool), do: "bool"
   defp lay_tag(:unit), do: "unit"
   defp lay_tag(:slice), do: "slice"
+  defp lay_tag(:string), do: "str"
   defp lay_tag(:opaque), do: "opaque"
   defp lay_tag({:opt, p}), do: "opt_" <> lay_tag(p)
   defp lay_tag({:data, name}), do: "d_" <> to_string(name)
@@ -1781,6 +1879,7 @@ defmodule Muro.Emit.C do
   defp ctype(:wbool, _book), do: "uint8_t "
   defp ctype(:slice, _book), do: g("slice") <> " "
   defp ctype(:bytes, _book), do: g("slice") <> " "
+  defp ctype(:string, _book), do: str_ty()
   defp ctype({:opt, pay}, _book), do: opt_name(pay) <> " "
   defp ctype({:word, {:ty, :u8}, []}, book), do: ctype(:u8, book)
   defp ctype({:word, {:ty, :u32}, []}, book), do: ctype(:u32, book)
@@ -1821,7 +1920,7 @@ defmodule Muro.Emit.C do
     s |> String.split("\n") |> Enum.map_join("\n", &(pad <> &1))
   end
 
-  defp header(book, sigs, stem, nm, opts, bytes?) do
+  defp header(book, sigs, stem, nm, opts, bytes?, strings?) do
     guard = guard(stem)
 
     parts = [
@@ -1833,6 +1932,7 @@ defmodule Muro.Emit.C do
       nat_struct(),
       unit_struct(),
       if(bytes?, do: bytes_header(), else: ""),
+      if(strings?, do: string_header(), else: ""),
       data_typedefs(book),
       opts,
       atom_enum(book, nm),
@@ -1845,7 +1945,7 @@ defmodule Muro.Emit.C do
     join_parts(parts)
   end
 
-  defp source(book, runs, sigs, funs, extras, stem, nm, _opts, bytes?) do
+  defp source(book, runs, sigs, funs, extras, stem, nm, _opts, bytes?, strings?) do
     internals =
       sigs
       |> Enum.reject(& &1.export)
@@ -1858,6 +1958,7 @@ defmodule Muro.Emit.C do
       if(bytes?, do: "#include <string.h>\n" <> bytes_helpers(), else: ""),
       nat_helpers(),
       unit_helpers(),
+      if(strings?, do: "#include <string.h>\n" <> string_helpers(bytes?), else: ""),
       pair_helpers(runs),
       stream_helpers(runs, stream_declared?(sigs, book)),
       data_ctors(book, nm, sigs),
@@ -1979,6 +2080,145 @@ defmodule Muro.Emit.C do
   end
 
   defp slice_ty, do: g("slice") <> " "
+
+  defp as_ret(expr, lay, :string) when lay != :string, do: as_str(expr, lay)
+  defp as_ret(expr, _lay, _ret), do: expr
+
+  defp strings_image?(funs) do
+    Enum.any?(funs, fn fun ->
+      string_lay?(fun.ret) or Enum.any?(fun.params, fn {_n, lay} -> string_lay?(lay) end) or
+        ir_has_string?(fun.body)
+    end)
+  end
+
+  defp string_lay?(:string), do: true
+  defp string_lay?({:opt, a}), do: string_lay?(a)
+  defp string_lay?({:pair, a, b}), do: string_lay?(a) or string_lay?(b)
+  defp string_lay?({:stream, a}), do: string_lay?(a)
+  defp string_lay?(_), do: false
+
+  defp ir_has_string?({:str, _}), do: true
+  defp ir_has_string?({:scat, _, _}), do: true
+  defp ir_has_string?({:slen, _}), do: true
+  defp ir_has_string?({:seq, _, _}), do: true
+  defp ir_has_string?({:sbytes, _}), do: true
+  defp ir_has_string?(tm) when is_tuple(tm), do: Enum.any?(Tuple.to_list(tm), &ir_has_string?/1)
+  defp ir_has_string?(tm) when is_list(tm), do: Enum.any?(tm, &ir_has_string?/1)
+  defp ir_has_string?(_), do: false
+
+  defp data_field_string?(book) do
+    Enum.any?(book, fn
+      %{kind: :data, ctors: cs} -> Enum.any?(cs, &mentions_string_ty?(&1.type))
+      _ -> false
+    end)
+  end
+
+  defp mentions_string_ty?(:string), do: true
+
+  defp mentions_string_ty?(t) when is_tuple(t),
+    do: Enum.any?(Tuple.to_list(t), &mentions_string_ty?/1)
+
+  defp mentions_string_ty?(t) when is_list(t), do: Enum.any?(t, &mentions_string_ty?/1)
+  defp mentions_string_ty?(_), do: false
+
+  defp string_header do
+    ty = g("str")
+    empty = g("empty_str")
+    emp = g("str_empty")
+
+    """
+    #include <stddef.h>
+    typedef struct { const uint8_t *p; size_t n; } #{ty};
+    static const uint8_t #{empty}[1] = {0};
+    __attribute__((unused)) static inline #{ty} #{emp}(void) {
+      return (#{ty}){#{empty}, 0};
+    }
+    """
+    |> String.trim()
+  end
+
+  defp string_helpers(bytes?) do
+    ty = g("str")
+    eq = g("str_eq")
+    cat = g("str_cat")
+    len = g("str_len")
+    box = g("box_str")
+    emp = g("str_empty")
+    alloc = g("ALLOC")
+    nat = g("nat")
+    zero = g("zero")
+    suc = g("suc")
+    bytes = if bytes?, do: str_bytes_helper(), else: ""
+
+    """
+    __attribute__((unused)) static uint8_t #{eq}(#{ty} a, #{ty} b) {
+      if (a.n != b.n) return 0;
+      if (a.n == 0) return 1;
+      return memcmp(a.p, b.p, a.n) == 0;
+    }
+
+    __attribute__((unused)) static #{ty} #{cat}(#{ty} a, #{ty} b) {
+      size_t n;
+      uint8_t *p;
+      if (b.n > SIZE_MAX - a.n) abort();
+      n = a.n + b.n;
+      if (n == 0) return #{emp}();
+      p = #{alloc}(n);
+      if (p == 0) abort();
+      if (a.n != 0) memcpy(p, a.p, a.n);
+      if (b.n != 0) memcpy(p + a.n, b.p, b.n);
+      return (#{ty}){p, n};
+    }
+
+    /* Counts Unicode scalars by walking lead bytes. The buffer must be well-formed
+       UTF-8. A string muro emits always is. A malformed host string may be miscounted. */
+    __attribute__((unused)) static #{nat} *#{len}(#{ty} s) {
+      size_t i = 0;
+      size_t k = 0;
+      size_t w;
+      uint8_t c;
+      #{nat} *n;
+      while (i < s.n) {
+        c = s.p[i];
+        w = 1;
+        if ((c & 0xE0) == 0xC0) w = 2;
+        else if ((c & 0xF0) == 0xE0) w = 3;
+        else if ((c & 0xF8) == 0xF0) w = 4;
+        if (w > s.n - i) w = s.n - i;
+        i += w;
+        k++;
+      }
+      n = #{zero}();
+      while (k != 0) {
+        n = #{suc}(n);
+        k--;
+      }
+      return n;
+    }
+
+    __attribute__((unused)) static #{ty} *#{box}(#{ty} s) {
+      #{ty} *p = #{alloc}(sizeof *p);
+      if (p == 0) abort();
+      *p = s;
+      return p;
+    }
+    #{bytes}
+    """
+    |> String.trim()
+  end
+
+  defp str_bytes_helper do
+    ty = g("str")
+    sl = g("slice")
+    conv = g("str_bytes")
+
+    """
+    __attribute__((unused)) static #{sl} #{conv}(#{ty} s) {
+      return (#{sl}){s.p, s.n};
+    }
+    """
+    |> String.trim()
+  end
 
   defp bytes_image?(funs) do
     Enum.any?(funs, fn fun ->
