@@ -2,7 +2,7 @@
 
 ## 0.21.3
 
-C, Rust, and Zig emit a `String`. The value is a pointer and an octet length, so a scalar 0 is a string. `strCat` concatenates, `strLen` counts scalars, `strEq` compares, and `strBytes` is those octets. Elixir still emits a UTF-8 binary. JavaScript still emits `{ string: "…" }` and leaves an atom as a string. Assembly still refuses a string (`c:string`).
+C, Rust, and Zig emit a `String`. The value is a pointer and an octet length, so a scalar 0 is a string. `strCat` concatenates, `strLen` counts scalars, `strEq` compares, and `strBytes` is those octets. Elixir still emits a UTF-8 binary. JavaScript still emits `{ string: "…" }` and leaves an atom as a string. Assembly still refuses a string (`c:string`). Rust `strCat` and `bytesCat` abort when the combined length would wrap `usize`, the same as C and Zig. `strLen` walks lead bytes and assumes well-formed UTF-8. A string muro emits always is. A malformed host string may be miscounted.
 
 ### Manual
 

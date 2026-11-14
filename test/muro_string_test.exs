@@ -256,6 +256,11 @@ defmodule Muro.StringTest do
     assert {:ok, _} = Muro.emit_rust(path)
     assert {:ok, _} = Muro.emit_zig(path)
 
+    rust = File.read!(Path.join(dir, "string.rs"))
+    assert rust =~ "a.n.checked_add(b.n)"
+    assert rust =~ "::std::process::abort()"
+    refute rust =~ "let n = a.n + b.n"
+
     File.write!(Path.join(dir, "main.c"), string_c_main())
     assert gcc!(dir, "string.c", "string.o", ["-c"]) == :ok
     assert gcc!(dir, "main.c", "string_bin") == :ok

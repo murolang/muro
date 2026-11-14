@@ -1555,7 +1555,10 @@ defmodule Muro.Emit.Rust do
     }
 
     fn #{cat}(a: #{sl}, b: #{sl}) -> #{sl} {
-        let n = a.n + b.n;
+        let n = match a.n.checked_add(b.n) {
+            ::std::option::Option::Some(n) => n,
+            ::std::option::Option::None => ::std::process::abort(),
+        };
         if n == 0 { return #{emp}(); }
         let mut buf = ::std::vec::Vec::<u8>::with_capacity(n);
         if a.n != 0 { buf.extend_from_slice(unsafe { ::std::slice::from_raw_parts(a.p, a.n) }); }
@@ -1651,7 +1654,10 @@ defmodule Muro.Emit.Rust do
     }
 
     fn #{cat}(a: #{ty}, b: #{ty}) -> #{ty} {
-        let n = a.n + b.n;
+        let n = match a.n.checked_add(b.n) {
+            ::std::option::Option::Some(n) => n,
+            ::std::option::Option::None => ::std::process::abort(),
+        };
         if n == 0 { return #{emp}(); }
         let mut buf = ::std::vec::Vec::<u8>::with_capacity(n);
         if a.n != 0 { buf.extend_from_slice(unsafe { ::std::slice::from_raw_parts(a.p, a.n) }); }
@@ -1661,6 +1667,8 @@ defmodule Muro.Emit.Rust do
         #{ty} { p: p, n: n }
     }
 
+    // Counts Unicode scalars by walking lead bytes. The buffer must be well-formed
+    // UTF-8. A string muro emits always is. A malformed host string may be miscounted.
     fn #{len}(s: #{ty}) -> #{g("Nat")} {
         let mut i = 0usize;
         let mut k = 0u64;

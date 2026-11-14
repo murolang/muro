@@ -100,7 +100,10 @@ fn muro__slice_eq(a: muro__slice, b: muro__slice) -> bool {
 }
 
 fn muro__bytes_cat(a: muro__slice, b: muro__slice) -> muro__slice {
-    let n = a.n + b.n;
+    let n = match a.n.checked_add(b.n) {
+        ::std::option::Option::Some(n) => n,
+        ::std::option::Option::None => ::std::process::abort(),
+    };
     if n == 0 { return muro__slice_empty(); }
     let mut buf = ::std::vec::Vec::<u8>::with_capacity(n);
     if a.n != 0 { buf.extend_from_slice(unsafe { ::std::slice::from_raw_parts(a.p, a.n) }); }

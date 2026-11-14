@@ -2170,6 +2170,8 @@ defmodule Muro.Emit.C do
       return (#{ty}){p, n};
     }
 
+    /* Counts Unicode scalars by walking lead bytes. The buffer must be well-formed
+       UTF-8. A string muro emits always is. A malformed host string may be miscounted. */
     __attribute__((unused)) static #{nat} *#{len}(#{ty} s) {
       size_t i = 0;
       size_t k = 0;

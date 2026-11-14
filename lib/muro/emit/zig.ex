@@ -2485,6 +2485,8 @@ defmodule Muro.Emit.Zig do
         return .{ .p = #{buf}.ptr, .n = #{sn} };
     }
 
+    // Counts Unicode scalars by walking lead bytes. The buffer must be well-formed
+    // UTF-8. A string muro emits always is. A malformed host string may be miscounted.
     fn #{len}(#{al()}: #{alloc_ty()}, #{s}: #{ty}) !*const #{nat} {
         var #{i}: usize = 0;
         var #{k}: u64 = 0;
