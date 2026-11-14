@@ -29,7 +29,12 @@ defmodule Muro.Synth.Term do
   The shape of `name` after aliases.
 
   `{:enum, name, ctors}` is a data type whose constructors take nothing.
-  `{:open, reason}` is not a finite term walk.
+  `{:data, name, rows}` is a datatype with fields. A field is that
+  field's schema, or `%{schema, qty, name}` when the telescope named
+  a quantity. `{:rec, name}` is a back-edge to the datatype `name`
+  already being read, so the Elixir term stays finite.
+  `{:open, reason}` is not a finite term walk. `"mutual"` is a
+  back-edge to a different datatype.
   """
   def schema(book, name) when is_list(book) and is_binary(name) do
     of_type(book, {:var, name}, MapSet.new())
@@ -70,7 +75,7 @@ defmodule Muro.Synth.Term do
   """
   def templates(schema, states, taken, max_depth) do
     values = Enum.map(states, &value_of/1)
-    specs = collect(schema, values, [], 0, max_depth)
+    specs = collect(schema, values, [], 0, max_depth, %{})
     name_specs(specs, taken)
   end
 
@@ -85,7 +90,7 @@ defmodule Muro.Synth.Term do
 
     specs =
       schema
-      |> diffs(left, right, [])
+      |> diffs(left, right, [], %{})
       |> Enum.flat_map(fn {path, sub, a, b} -> local(sub, [a, b], path) end)
       |> Enum.reject(fn spec -> Enum.any?(existing, &(spec_key(&1) == spec_key(spec))) end)
 
@@ -131,8 +136,10 @@ defmodule Muro.Synth.Term do
   @doc """
   Whether two values of `schema` can be compared by a run.
 
-  A finite inhabitant list is not required. A function, a cycle, or any
-  other open field cannot.
+  A finite inhabitant list is not required. A direct back-edge to the
+  datatype being compared can: the run recurses on that field. A
+  function, a mutual family, a linear field, an erased constructor
+  argument, or a back-edge under a list or a product cannot.
   """
   def equatable?(schema) do
     match?({:ok, _}, eq_nodes(schema, []))
@@ -204,7 +211,7 @@ defmodule Muro.Synth.Term do
 
   defp of_declared(book, name, seen) do
     if MapSet.member?(seen, name) do
-      {:open, "cycle"}
+      {:rec, name}
     else
       case Enum.find(book, &(Map.get(&1, :kind) == :data and &1.name == name)) do
         nil ->
@@ -222,12 +229,19 @@ defmodule Muro.Synth.Term do
 
           rows =
             Enum.zip(ctors, fields)
-            |> Enum.map(fn {ctor, fs} -> %{name: ctor.name, fields: fs} end)
+            |> Enum.map(fn {ctor, fs} ->
+              %{name: ctor.name, fields: fs, erased: erased_arg?(Map.get(ctor, :type))}
+            end)
 
-          if Enum.all?(fields, &(&1 == [])) do
-            {:enum, name, Enum.map(ctors, & &1.name)}
-          else
-            {:data, name, rows}
+          cond do
+            Enum.all?(fields, &(&1 == [])) ->
+              {:enum, name, Enum.map(ctors, & &1.name)}
+
+            mutual_rows?(rows, name) ->
+              {:open, "mutual"}
+
+            true ->
+              {:data, name, rows}
           end
       end
     end
@@ -237,13 +251,79 @@ defmodule Muro.Synth.Term do
     read_fields(book, Map.get(ctor, :type), seen)
   end
 
+  # An erased argument is not in the emitted value, so it is not a field.
+  # A relevant field keeps the telescope's quantity and binder. A bare
+  # arrow's binder is "_", and that is not a name.
   defp read_fields(book, {:pi, :erased, _, _, cod}, seen), do: read_fields(book, cod, seen)
 
-  defp read_fields(book, {:pi, _qty, dom, _name, cod}, seen) do
-    [of_type(book, dom, seen) | read_fields(book, cod, seen)]
+  defp read_fields(book, {:pi, qty, dom, name, cod}, seen) do
+    field = %{schema: of_type(book, dom, seen), qty: qty, name: field_binder(name)}
+    [field | read_fields(book, cod, seen)]
   end
 
   defp read_fields(_book, _ty, _seen), do: []
+
+  # An erased argument is dropped from the value. A pattern that omitted
+  # it would not match the constructor's telescope, so that datatype is
+  # not given an equality run.
+  defp erased_arg?({:pi, :erased, _, _, _}), do: true
+  defp erased_arg?({:pi, _, _, _, cod}), do: erased_arg?(cod)
+  defp erased_arg?(_ty), do: false
+
+  defp field_binder(name) when is_binary(name) and name != "_", do: name
+  defp field_binder(_name), do: nil
+
+  # Older schemas, and tests, store a bare schema in `fields`.
+  defp field_schema(%{schema: schema}), do: schema
+  defp field_schema(schema), do: schema
+
+  # A linear binder cannot be dropped in the unequal arm.
+  defp linear_field?(%{qty: qty}), do: Muro.Grade.kernel_qty(qty) == :linear
+  defp linear_field?(_field), do: false
+
+  # A back-edge is mutual when it does not name the nearest datatype.
+  # A nested datatype may refer to itself. A back-edge to an ancestor
+  # is the mutual family.
+  defp mutual_rows?(rows, name) do
+    Enum.any?(rows, fn row ->
+      Enum.any?(row.fields, &foreign_rec?(field_schema(&1), name))
+    end)
+  end
+
+  defp foreign_rec?({:open, "mutual"}, _enclosing), do: true
+  defp foreign_rec?({:rec, name}, name), do: false
+  defp foreign_rec?({:rec, _other}, _enclosing), do: true
+
+  defp foreign_rec?({:data, name, rows}, _enclosing) do
+    Enum.any?(rows, fn row ->
+      Enum.any?(row.fields, &foreign_rec?(field_schema(&1), name))
+    end)
+  end
+
+  defp foreign_rec?({:list, elem}, enclosing), do: foreign_rec?(elem, enclosing)
+
+  defp foreign_rec?({:prod, left, right}, enclosing) do
+    foreign_rec?(left, enclosing) or foreign_rec?(right, enclosing)
+  end
+
+  defp foreign_rec?(_, _enclosing), do: false
+
+  defp resolve({:rec, name}, bound) do
+    case Map.fetch(bound, name) do
+      {:ok, schema} -> schema
+      :error -> {:rec, name}
+    end
+  end
+
+  defp resolve(schema, _bound), do: schema
+
+  defp bind_data({:data, name, _} = schema, bound), do: Map.put(bound, name, schema)
+  defp bind_data(_schema, bound), do: bound
+
+  defp enter(schema, bound) do
+    schema = resolve(schema, bound)
+    {schema, bind_data(schema, bound)}
+  end
 
   defp unfold(book, {:var, name}, seen) do
     if MapSet.member?(seen, name) do
@@ -292,6 +372,7 @@ defmodule Muro.Synth.Term do
   defp grow(:nat, _cap), do: :open
   defp grow({:list, _}, _cap), do: :open
   defp grow({:open, _}, _cap), do: :open
+  defp grow({:rec, _}, _cap), do: :open
 
   defp grow({:enum, _name, ctors}, _cap) do
     {:ok, Enum.map(ctors, &{:atom, &1})}
@@ -324,7 +405,7 @@ defmodule Muro.Synth.Term do
 
   defp grow_fields(fields, cap) do
     Enum.reduce_while(fields, {:ok, [[]]}, fn field, {:ok, acc} ->
-      case grow(field, cap) do
+      case grow(field_schema(field), cap) do
         :open ->
           {:halt, :open}
 
@@ -379,23 +460,30 @@ defmodule Muro.Synth.Term do
 
   defp realize({:packed, value, spell, label}), do: {value, spell, label}
 
-  defp pack(:nat, raw) do
+  defp pack(schema, raw), do: pack(schema, raw, %{})
+
+  defp pack(schema, raw, bound) do
+    {schema, bound} = enter(schema, bound)
+    pack_schema(schema, raw, bound)
+  end
+
+  defp pack_schema(:nat, raw, _bound) do
     case canon_nat(raw) do
       {:ok, n} -> {:ok, n, spell_nat(n), "n#{n}"}
       :error -> :error
     end
   end
 
-  defp pack({:enum, _name, ctors}, raw) when is_atom(raw) do
+  defp pack_schema({:enum, _name, ctors}, raw, _bound) when is_atom(raw) do
     case Enum.find(ctors, &(atom_of(&1) == raw)) do
       nil -> :error
       name -> {:ok, raw, name, name}
     end
   end
 
-  defp pack({:enum, _, _}, _), do: :error
+  defp pack_schema({:enum, _, _}, _, _), do: :error
 
-  defp pack({:data, _name, ctors}, raw) do
+  defp pack_schema({:data, _name, ctors}, raw, bound) do
     tag = tag_atom(raw)
 
     case Enum.find(ctors, &(atom_of(&1.name) == tag)) do
@@ -408,9 +496,9 @@ defmodule Muro.Synth.Term do
         if length(fields) != length(ctor.fields) do
           :error
         else
-          decoded = Enum.zip(ctor.fields, fields)
+          decoded = Enum.zip(Enum.map(ctor.fields, &field_schema/1), fields)
 
-          case decode_fields(decoded) do
+          case decode_fields(decoded, bound) do
             :error ->
               :error
 
@@ -422,13 +510,13 @@ defmodule Muro.Synth.Term do
     end
   end
 
-  defp pack({:list, elem}, raw) do
+  defp pack_schema({:list, elem}, raw, bound) do
     case canon_list(raw) do
       :error ->
         :error
 
       {:ok, items} ->
-        case decode_list_items(elem, items) do
+        case decode_list_items(elem, items, bound) do
           :error ->
             :error
 
@@ -441,46 +529,47 @@ defmodule Muro.Synth.Term do
     end
   end
 
-  defp pack({:prod, left, right}, {a, b}) do
-    with {:ok, lv, ls, ll} <- pack(left, a),
-         {:ok, rv, rs, rl} <- pack(right, b) do
+  defp pack_schema({:prod, left, right}, {a, b}, bound) do
+    with {:ok, lv, ls, ll} <- pack(left, a, bound),
+         {:ok, rv, rs, rl} <- pack(right, b, bound) do
       {:ok, {lv, rv}, "(#{ls}, #{rs})", "#{ll}-#{rl}"}
     else
       _ -> :error
     end
   end
 
-  defp pack({:open, _}, _), do: :error
-  defp pack(_schema, _raw), do: :error
+  defp pack_schema({:open, _}, _, _), do: :error
+  defp pack_schema(_schema, _raw, _bound), do: :error
 
   defp rows_to_ast(rows) do
     Enum.map(rows, fn {value, spell, label} -> {:packed, value, spell, label} end)
   end
 
-  defp decode_fields(pairs) do
+  defp decode_fields(pairs, bound) do
     Enum.reduce_while(pairs, {:ok, []}, fn {schema, raw}, {:ok, acc} ->
-      case pack(schema, raw) do
+      case pack(schema, raw, bound) do
         {:ok, value, spell, label} -> {:cont, {:ok, acc ++ [{value, spell, label}]}}
         :error -> {:halt, :error}
       end
     end)
   end
 
-  defp decode_list_items(elem, items) do
+  defp decode_list_items(elem, items, bound) do
     Enum.reduce_while(items, {:ok, []}, fn raw, {:ok, acc} ->
-      case pack(elem, raw) do
+      case pack(elem, raw, bound) do
         {:ok, value, spell, label} -> {:cont, {:ok, acc ++ [{value, spell, label}]}}
         :error -> {:halt, :error}
       end
     end)
   end
 
-  defp collect(schema, values, path, depth, max_depth) do
+  defp collect(schema, values, path, depth, max_depth, bound) do
+    {schema, bound} = enter(schema, bound)
     here = local(schema, values, path)
 
     below =
       if depth < max_depth do
-        descend(schema, values, path, depth, max_depth)
+        descend(schema, values, path, depth, max_depth, bound)
       else
         []
       end
@@ -581,7 +670,7 @@ defmodule Muro.Synth.Term do
   end
 
   defp pair_indexes(fields) do
-    indexed = Enum.with_index(fields)
+    indexed = fields |> Enum.map(&field_schema/1) |> Enum.with_index()
 
     for {left, i} <- indexed,
         {right, j} <- indexed,
@@ -605,16 +694,16 @@ defmodule Muro.Synth.Term do
   defp family({:enum, name, ctors}), do: {:enum, name, ctors}
   defp family(_), do: nil
 
-  defp descend({:data, _, [ctor]}, values, path, depth, max_depth) do
+  defp descend({:data, _, [ctor]}, values, path, depth, max_depth, bound) do
     ctor.fields
     |> Enum.with_index()
     |> Enum.flat_map(fn {field, i} ->
       projected = Enum.map(values, &data_field(&1, i))
-      collect(field, projected, path ++ [i], depth + 1, max_depth)
+      collect(field_schema(field), projected, path ++ [i], depth + 1, max_depth, bound)
     end)
   end
 
-  defp descend({:data, _, ctors}, values, path, depth, max_depth) do
+  defp descend({:data, _, ctors}, values, path, depth, max_depth, bound) do
     Enum.flat_map(ctors, fn ctor ->
       subset = Enum.filter(values, &(tag_name(&1, ctors) == ctor.name))
 
@@ -623,38 +712,42 @@ defmodule Muro.Synth.Term do
       |> Enum.flat_map(fn {field, i} ->
         projected = Enum.map(subset, &data_field(&1, i))
 
-        field
-        |> collect(projected, path ++ [i], depth + 1, max_depth)
+        field_schema(field)
+        |> collect(projected, path ++ [i], depth + 1, max_depth, bound)
         |> Enum.map(&add_guard(&1, path, ctor.name))
       end)
     end)
   end
 
-  defp descend({:prod, left, right}, values, path, depth, max_depth) do
-    collect(left, Enum.map(values, &elem(&1, 0)), path ++ [0], depth + 1, max_depth) ++
-      collect(right, Enum.map(values, &elem(&1, 1)), path ++ [1], depth + 1, max_depth)
+  defp descend({:prod, left, right}, values, path, depth, max_depth, bound) do
+    collect(left, Enum.map(values, &elem(&1, 0)), path ++ [0], depth + 1, max_depth, bound) ++
+      collect(right, Enum.map(values, &elem(&1, 1)), path ++ [1], depth + 1, max_depth, bound)
   end
 
   # A list element is a later invention, not part of the first horizon.
-  defp descend({:list, _}, _values, _path, _depth, _max_depth), do: []
-  defp descend(_schema, _values, _path, _depth, _max_depth), do: []
+  defp descend({:list, _}, _values, _path, _depth, _max_depth, _bound), do: []
+  defp descend(_schema, _values, _path, _depth, _max_depth, _bound), do: []
 
   defp add_guard(spec, prefix, ctor) do
     Map.update(spec, :guards, [{prefix, ctor}], &(&1 ++ [{prefix, ctor}]))
   end
 
-  defp diffs(schema, left, right, path) do
+  defp diffs(schema, left, right, path, bound) do
+    {schema, bound} = enter(schema, bound)
+
     if left == right do
       []
     else
-      diff_at(schema, left, right, path)
+      diff_at(schema, left, right, path, bound)
     end
   end
 
-  defp diff_at({:enum, _, _} = schema, left, right, path), do: [{path, schema, left, right}]
-  defp diff_at(:nat, left, right, path), do: [{path, :nat, left, right}]
+  defp diff_at({:enum, _, _} = schema, left, right, path, _bound),
+    do: [{path, schema, left, right}]
 
-  defp diff_at({:data, _, ctors} = schema, left, right, path) do
+  defp diff_at(:nat, left, right, path, _bound), do: [{path, :nat, left, right}]
+
+  defp diff_at({:data, _, ctors} = schema, left, right, path, bound) do
     ltag = tag_name(left, ctors)
     rtag = tag_name(right, ctors)
 
@@ -666,16 +759,16 @@ defmodule Muro.Synth.Term do
       ctor.fields
       |> Enum.with_index()
       |> Enum.flat_map(fn {field, i} ->
-        diffs(field, data_field(left, i), data_field(right, i), path ++ [i])
+        diffs(field_schema(field), data_field(left, i), data_field(right, i), path ++ [i], bound)
       end)
     end
   end
 
-  defp diff_at({:prod, a, b}, {l1, r1}, {l2, r2}, path) do
-    diffs(a, l1, l2, path ++ [0]) ++ diffs(b, r1, r2, path ++ [1])
+  defp diff_at({:prod, a, b}, {l1, r1}, {l2, r2}, path, bound) do
+    diffs(a, l1, l2, path ++ [0], bound) ++ diffs(b, r1, r2, path ++ [1], bound)
   end
 
-  defp diff_at({:list, elem} = schema, left, right, path) do
+  defp diff_at({:list, elem} = schema, left, right, path, bound) do
     here = [{path, schema, left, right}]
     ls = list_items(left)
     rs = list_items(right)
@@ -684,12 +777,12 @@ defmodule Muro.Synth.Term do
       ls
       |> Enum.zip(rs)
       |> Enum.with_index()
-      |> Enum.flat_map(fn {{a, b}, i} -> diffs(elem, a, b, path ++ [i]) end)
+      |> Enum.flat_map(fn {{a, b}, i} -> diffs(elem, a, b, path ++ [i], bound) end)
 
     here ++ deeper
   end
 
-  defp diff_at(_, _, _, _), do: []
+  defp diff_at(_, _, _, _, _), do: []
 
   defp name_specs(specs, taken) do
     Enum.map_reduce(specs, taken, fn spec, taken ->
@@ -746,14 +839,20 @@ defmodule Muro.Synth.Term do
     }
   end
 
-  defp dig(schema, [], value, guards) do
+  defp dig(schema, path, value, guards), do: dig(schema, path, value, guards, %{})
+
+  defp dig(schema, [], value, guards, bound) do
+    {schema, _bound} = enter(schema, bound)
+
     case require_guard(guards, [], value, schema) do
       :miss -> :miss
       :ok -> {:ok, schema, value}
     end
   end
 
-  defp dig(schema, [index | rest], value, guards) do
+  defp dig(schema, [index | rest], value, guards, bound) do
+    {schema, bound} = enter(schema, bound)
+
     case require_guard(guards, [], value, schema) do
       :miss ->
         :miss
@@ -761,19 +860,23 @@ defmodule Muro.Synth.Term do
       :ok ->
         case step_field(schema, index, value) do
           :miss -> :miss
-          {:ok, sub, child} -> dig_from(sub, rest, child, guards, [index])
+          {:ok, sub, child} -> dig_from(sub, rest, child, guards, [index], bound)
         end
     end
   end
 
-  defp dig_from(schema, [], value, guards, walked) do
+  defp dig_from(schema, [], value, guards, walked, bound) do
+    {schema, _bound} = enter(schema, bound)
+
     case require_guard(guards, walked, value, schema) do
       :miss -> :miss
       :ok -> {:ok, schema, value}
     end
   end
 
-  defp dig_from(schema, [index | rest], value, guards, walked) do
+  defp dig_from(schema, [index | rest], value, guards, walked, bound) do
+    {schema, bound} = enter(schema, bound)
+
     case require_guard(guards, walked, value, schema) do
       :miss ->
         :miss
@@ -781,7 +884,7 @@ defmodule Muro.Synth.Term do
       :ok ->
         case step_field(schema, index, value) do
           :miss -> :miss
-          {:ok, sub, child} -> dig_from(sub, rest, child, guards, walked ++ [index])
+          {:ok, sub, child} -> dig_from(sub, rest, child, guards, walked ++ [index], bound)
         end
     end
   end
@@ -806,7 +909,7 @@ defmodule Muro.Synth.Term do
 
       ctor ->
         if index < length(ctor.fields) do
-          {:ok, Enum.at(ctor.fields, index), data_field(value, index)}
+          {:ok, field_schema(Enum.at(ctor.fields, index)), data_field(value, index)}
         else
           :miss
         end
@@ -917,11 +1020,21 @@ defmodule Muro.Synth.Term do
 
   defp enum_name(_, _), do: nil
 
-  defp test_at(schema, hole, [], spec, helpers, walked) do
+  defp test_at(schema, hole, path, spec, helpers, walked) do
+    test_at(schema, hole, path, spec, helpers, walked, %{})
+  end
+
+  defp test_at(schema, hole, [], spec, helpers, walked, bound) do
+    {schema, _bound} = enter(schema, bound)
     leaf_test(schema, hole, spec, helpers, walked)
   end
 
-  defp test_at({:data, _, ctors} = schema, hole, [index | rest], spec, helpers, walked) do
+  defp test_at(schema, hole, [index | rest], spec, helpers, walked, bound) do
+    {schema, bound} = enter(schema, bound)
+    test_step(schema, hole, index, rest, spec, helpers, walked, bound)
+  end
+
+  defp test_step({:data, _, ctors} = schema, hole, index, rest, spec, helpers, walked, bound) do
     wanted = guard_ctor(spec, walked)
 
     arms =
@@ -931,8 +1044,8 @@ defmodule Muro.Synth.Term do
         else
           binder = "x#{length(walked)}"
           binders = focus(ctor, index, binder)
-          field = Enum.at(ctor.fields, index)
-          inner = test_at(field, binder, rest, spec, helpers, walked ++ [index])
+          field = ctor.fields |> Enum.at(index) |> field_schema()
+          inner = test_at(field, binder, rest, spec, helpers, walked ++ [index], bound)
           "| #{pat(ctor.name, binders)} => #{inner}"
         end
       end)
@@ -940,22 +1053,21 @@ defmodule Muro.Synth.Term do
     match_bool(hole, arms, schema)
   end
 
-  defp test_at({:prod, left, right}, hole, [index | rest], spec, helpers, walked) do
+  defp test_step({:prod, left, right}, hole, index, rest, spec, helpers, walked, bound) do
     binder = "x#{length(walked)}"
     {b0, b1} = if index == 0, do: {binder, "_"}, else: {"_", binder}
     field = if index == 0, do: left, else: right
-    inner = test_at(field, binder, rest, spec, helpers, walked ++ [index])
+    inner = test_at(field, binder, rest, spec, helpers, walked ++ [index], bound)
     match_bool(hole, "| (#{b0}, #{b1}) => #{inner}", {:prod, left, right})
   end
 
-  defp test_at({:list, elem}, hole, [index | rest], spec, helpers, walked) do
+  defp test_step({:list, elem}, hole, index, rest, spec, helpers, walked, bound) do
     binder = "x#{length(walked)}"
-    inner = test_at(elem, binder, rest, spec, helpers, walked ++ [index])
-    peel = peel_cons(hole, index, binder, inner, type_name(elem))
-    peel
+    inner = test_at(elem, binder, rest, spec, helpers, walked ++ [index], bound)
+    peel_cons(hole, index, binder, inner, type_name(elem))
   end
 
-  defp test_at(_schema, _hole, _path, _spec, _helpers, _walked), do: "false"
+  defp test_step(_schema, _hole, _index, _rest, _spec, _helpers, _walked, _bound), do: "false"
 
   defp leaf_test({:enum, _, ctors}, hole, %{kind: :ctor_is, tag: tag}, _helpers, _walked) do
     arms =
@@ -1340,25 +1452,40 @@ defmodule Muro.Synth.Term do
   defp default_of(:nat), do: "0"
   defp default_of({:enum, _name, [ctor | _]}), do: ctor
 
-  defp open({:data, name, ctors}, hole, plug, type_of, body_of, k) do
-    var = "k#{k}"
-    motive = "(λ (#{var} : #{name}) → #{type_of.(plug.(var))})"
-
-    arms =
-      Enum.map_join(ctors, "\n", fn ctor ->
-        binders = binders(length(ctor.fields), k)
-        local = app_src(ctor.name, binders)
-        inner = open_fields(ctor.fields, binders, local, plug, type_of, body_of, k + 1)
-        "| #{pat(ctor.name, binders)} => #{inner}"
-      end)
-
-    """
-    (match #{hole} motive #{motive}
-    #{arms})
-    """
+  # `seen` stops a second visit to the same datatype. Exhaustive
+  # equality is only emitted for a finite inhabitant list, which has
+  # no back-edge; the set is the guard if one is handed in.
+  defp open(schema, hole, plug, type_of, body_of, k) do
+    open(schema, hole, plug, type_of, body_of, k, MapSet.new())
   end
 
-  defp open({:enum, name, ctors}, hole, plug, type_of, body_of, k) do
+  defp open({:data, name, ctors}, hole, plug, type_of, body_of, k, seen) do
+    if MapSet.member?(seen, name) do
+      body_of.(hole)
+    else
+      var = "k#{k}"
+      motive = "(λ (#{var} : #{name}) → #{type_of.(plug.(var))})"
+      seen = MapSet.put(seen, name)
+
+      arms =
+        Enum.map_join(ctors, "\n", fn ctor ->
+          binders = binders(length(ctor.fields), k)
+          local = app_src(ctor.name, binders)
+
+          inner =
+            open_fields(ctor.fields, binders, local, plug, type_of, body_of, k + 1, seen)
+
+          "| #{pat(ctor.name, binders)} => #{inner}"
+        end)
+
+      """
+      (match #{hole} motive #{motive}
+      #{arms})
+      """
+    end
+  end
+
+  defp open({:enum, name, ctors}, hole, plug, type_of, body_of, k, _seen) do
     var = "k#{k}"
     motive = "(λ (#{var} : #{name}) → #{type_of.(plug.(var))})"
     arms = Enum.map_join(ctors, "\n", fn ctor -> "| #{ctor} => #{body_of.(ctor)}" end)
@@ -1369,13 +1496,13 @@ defmodule Muro.Synth.Term do
     """
   end
 
-  defp open({:prod, left, right} = schema, hole, plug, type_of, body_of, k) do
+  defp open({:prod, left, right} = schema, hole, plug, type_of, body_of, k, seen) do
     var = "k#{k}"
     b0 = "f#{k}_0"
     b1 = "f#{k}_1"
     local = "(#{b0}, #{b1})"
     motive = "(λ (#{var} : #{type_name(schema)}) → #{type_of.(plug.(var))})"
-    inner = open_fields([left, right], [b0, b1], local, plug, type_of, body_of, k + 1)
+    inner = open_fields([left, right], [b0, b1], local, plug, type_of, body_of, k + 1, seen)
 
     """
     (match #{hole} motive #{motive}
@@ -1383,17 +1510,27 @@ defmodule Muro.Synth.Term do
     """
   end
 
-  defp open(_schema, hole, _plug, _type_of, body_of, _k), do: body_of.(hole)
+  defp open(_schema, hole, _plug, _type_of, body_of, _k, _seen), do: body_of.(hole)
 
-  defp open_fields([], _binders, local, _plug, _type_of, body_of, _k), do: body_of.(local)
+  defp open_fields([], _binders, local, _plug, _type_of, body_of, _k, _seen),
+    do: body_of.(local)
 
-  defp open_fields([field | rest], [binder | binders], local, plug, type_of, body_of, k) do
+  defp open_fields([field | rest], [binder | binders], local, plug, type_of, body_of, k, seen) do
     on_concrete = fn concrete ->
-      open_fields(rest, binders, subst(local, binder, concrete), plug, type_of, body_of, k + 1)
+      open_fields(
+        rest,
+        binders,
+        subst(local, binder, concrete),
+        plug,
+        type_of,
+        body_of,
+        k + 1,
+        seen
+      )
     end
 
     plug_src = fn src -> plug.(subst(local, binder, src)) end
-    open(field, binder, plug_src, type_of, on_concrete, k)
+    open(field_schema(field), binder, plug_src, type_of, on_concrete, k, seen)
   end
 
   defp binders(0, _k), do: []
@@ -1411,6 +1548,7 @@ defmodule Muro.Synth.Term do
   defp type_name(:nat), do: "Nat"
   defp type_name({:enum, name, _}), do: name
   defp type_name({:data, name, _}), do: name
+  defp type_name({:rec, name}), do: name
   defp type_name({:list, elem}), do: "(List #{type_name(elem)})"
   defp type_name({:prod, left, right}), do: "(#{type_name(left)} × #{type_name(right)})"
   defp type_name({:open, _}), do: "Type"
@@ -1511,54 +1649,113 @@ defmodule Muro.Synth.Term do
   end
 
   # Dependencies before the type that uses them. A repeated schema is one
-  # function. A function, a cycle, or an empty declaration is not a run.
-  defp eq_nodes(schema, acc) do
+  # function. `opening` is the datatype whose equality is being built:
+  # a direct back-edge to it is that same function. A back-edge under a
+  # list or a product is not a run, because a field is smaller only when
+  # its type is the datatype being matched. A linear field is not a run:
+  # the unequal arm would drop it. A function or an empty declaration
+  # is not a run.
+  defp eq_nodes(schema, acc), do: eq_nodes(schema, acc, MapSet.new())
+
+  defp eq_nodes(schema, acc, opening) do
     if schema in acc do
       {:ok, acc}
     else
-      case schema do
-        :nat ->
-          {:ok, acc ++ [:nat]}
+      eq_fresh(schema, acc, opening)
+    end
+  end
 
-        {:enum, _, ctors} when ctors != [] ->
-          {:ok, acc ++ [schema]}
+  defp eq_fresh({:rec, name}, acc, opening) do
+    cond do
+      MapSet.member?(opening, name) -> {:ok, acc}
+      Enum.any?(acc, &match?({:data, ^name, _}, &1)) -> {:ok, acc}
+      true -> :open
+    end
+  end
 
-        {:list, elem} ->
-          case eq_nodes(elem, acc) do
-            {:ok, acc} -> {:ok, acc ++ [schema]}
-            :open -> :open
-          end
+  defp eq_fresh(:nat, acc, _opening), do: {:ok, acc ++ [:nat]}
 
-        {:prod, left, right} ->
-          with {:ok, acc} <- eq_nodes(left, acc),
-               {:ok, acc} <- eq_nodes(right, acc) do
-            {:ok, acc ++ [schema]}
-          end
+  defp eq_fresh({:enum, _, ctors} = schema, acc, _opening) when ctors != [] do
+    {:ok, acc ++ [schema]}
+  end
 
-        {:data, _, rows} when rows != [] ->
-          case eq_rows(rows, acc) do
-            {:ok, acc} -> {:ok, acc ++ [schema]}
-            :open -> :open
-          end
-
-        _ ->
-          :open
+  defp eq_fresh({:list, elem} = schema, acc, opening) do
+    if refers_opening?(elem, opening) do
+      :open
+    else
+      case eq_nodes(elem, acc, opening) do
+        {:ok, acc} -> {:ok, acc ++ [schema]}
+        :open -> :open
       end
     end
   end
 
-  defp eq_rows(rows, acc) do
+  defp eq_fresh({:prod, left, right} = schema, acc, opening) do
+    if refers_opening?(left, opening) or refers_opening?(right, opening) do
+      :open
+    else
+      with {:ok, acc} <- eq_nodes(left, acc, opening),
+           {:ok, acc} <- eq_nodes(right, acc, opening) do
+        {:ok, acc ++ [schema]}
+      end
+    end
+  end
+
+  defp eq_fresh({:data, name, rows} = schema, acc, opening) when rows != [] do
+    cond do
+      linear_rows?(rows) or erased_rows?(rows) ->
+        :open
+
+      true ->
+        opening = MapSet.put(opening, name)
+
+        case eq_rows(rows, acc, opening) do
+          {:ok, acc} -> {:ok, acc ++ [schema]}
+          :open -> :open
+        end
+    end
+  end
+
+  defp eq_fresh(_schema, _acc, _opening), do: :open
+
+  defp linear_rows?(rows) do
+    Enum.any?(rows, fn row -> Enum.any?(row.fields, &linear_field?/1) end)
+  end
+
+  defp erased_rows?(rows) do
+    Enum.any?(rows, &Map.get(&1, :erased, false))
+  end
+
+  # A recursive occurrence of a datatype whose equality is already being
+  # built. A nested datatype is walked on its own; this only sees a
+  # back-edge that would have to be matched under a list or a product.
+  defp refers_opening?({:rec, name}, opening), do: MapSet.member?(opening, name)
+  defp refers_opening?({:list, elem}, opening), do: refers_opening?(elem, opening)
+
+  defp refers_opening?({:prod, left, right}, opening) do
+    refers_opening?(left, opening) or refers_opening?(right, opening)
+  end
+
+  defp refers_opening?({:data, _name, rows}, opening) do
+    Enum.any?(rows, fn row ->
+      Enum.any?(row.fields, &refers_opening?(field_schema(&1), opening))
+    end)
+  end
+
+  defp refers_opening?(_schema, _opening), do: false
+
+  defp eq_rows(rows, acc, opening) do
     Enum.reduce_while(rows, {:ok, acc}, fn row, {:ok, acc} ->
-      case eq_row(row.fields, acc) do
+      case eq_row(row.fields, acc, opening) do
         {:ok, acc} -> {:cont, {:ok, acc}}
         :open -> {:halt, :open}
       end
     end)
   end
 
-  defp eq_row(fields, acc) do
+  defp eq_row(fields, acc, opening) do
     Enum.reduce_while(fields, {:ok, acc}, fn field, {:ok, acc} ->
-      case eq_nodes(field, acc) do
+      case eq_nodes(field_schema(field), acc, opening) do
         {:ok, acc} -> {:cont, {:ok, acc}}
         :open -> {:halt, :open}
       end
@@ -1693,10 +1890,21 @@ defmodule Muro.Synth.Term do
 
   defp eq_calls(fields, xs, ys, names) do
     fields
+    |> Enum.map(&field_schema/1)
     |> Enum.zip(xs)
     |> Enum.zip(ys)
-    |> Enum.map(fn {{field, x}, y} -> "#{Map.fetch!(names, field)} #{x} #{y}" end)
+    |> Enum.map(fn {{field, x}, y} -> "#{eq_fun(names, field)} #{x} #{y}" end)
   end
+
+  # A back-edge uses the function reserved for that datatype.
+  defp eq_fun(names, {:rec, name}) do
+    Enum.find_value(names, fn
+      {{:data, ^name, _}, fun} -> fun
+      _ -> nil
+    end)
+  end
+
+  defp eq_fun(names, schema), do: Map.fetch!(names, schema)
 
   defp eq_and([]), do: "true"
   defp eq_and([one]), do: one
@@ -1734,7 +1942,7 @@ defmodule Muro.Synth.Term do
 
     done = fn piece, here, k -> finish_cover(piece, here, body_of, k) end
 
-    case split(schema, scrutinee, & &1, cands, type_of, done, miss, 0) do
+    case split(schema, scrutinee, & &1, cands, type_of, done, miss, 0, %{}) do
       {:ok, text, _k} -> {:ok, text}
       :open -> :open
     end
@@ -1747,26 +1955,30 @@ defmodule Muro.Synth.Term do
     end
   end
 
-  defp split(_schema, hole, embed, [], _type_of, _continue, miss, k) do
+  defp split(_schema, hole, embed, [], _type_of, _continue, miss, k, _bound) do
     {:ok, miss.(embed.(hole)), k}
   end
 
-  defp split(schema, hole, embed, cands, type_of, continue, miss, k) do
+  # `bound` resolves `{:rec, name}` to the datatype already being split.
+  # The split still follows the value, so a finite cover stays finite.
+  defp split(schema, hole, embed, cands, type_of, continue, miss, k, bound) do
+    {schema, bound} = enter(schema, bound)
+
     case schema do
       :nat ->
         split_nat(hole, embed, cands, type_of, continue, miss, k)
 
       {:list, elem} ->
-        split_list(elem, hole, embed, cands, type_of, continue, miss, k)
+        split_list(elem, hole, embed, cands, type_of, continue, miss, k, bound)
 
       {:enum, name, ctors} ->
         split_enum(name, ctors, hole, embed, cands, type_of, continue, miss, k)
 
       {:data, name, rows} ->
-        split_data(name, rows, hole, embed, cands, type_of, continue, miss, k)
+        split_data(name, rows, hole, embed, cands, type_of, continue, miss, k, bound)
 
       {:prod, left, right} ->
-        split_prod(left, right, hole, embed, cands, type_of, continue, miss, k)
+        split_prod(left, right, hole, embed, cands, type_of, continue, miss, k, bound)
 
       _ ->
         :open
@@ -1831,7 +2043,7 @@ defmodule Muro.Synth.Term do
   defp suc_spell("0"), do: "suc 0"
   defp suc_spell(rest), do: "suc " <> arg(rest)
 
-  defp split_list(elem, hole, embed, cands, type_of, continue, miss, k) do
+  defp split_list(elem, hole, embed, cands, type_of, continue, miss, k, bound) do
     case list_rank(cands) do
       :open ->
         :open
@@ -1844,7 +2056,7 @@ defmodule Muro.Synth.Term do
 
         with {:ok, nil_body, _} <- arm_or_miss(nils, "nil", continue, miss, embed, k),
              {:ok, cons_body, _} <-
-               cons_arm(elem, h, t, conses, embed, type_of, continue, miss, k) do
+               cons_arm(elem, h, t, conses, embed, type_of, continue, miss, k, bound) do
           text =
             match_arms(hole, motive, [
               "| nil => #{nil_body}",
@@ -1872,11 +2084,11 @@ defmodule Muro.Synth.Term do
     end
   end
 
-  defp cons_arm(_elem, h, t, [], embed, _type_of, _continue, miss, k) do
+  defp cons_arm(_elem, h, t, [], embed, _type_of, _continue, miss, k, _bound) do
     {:ok, miss.(embed.("(cons #{h} #{t})")), k}
   end
 
-  defp cons_arm(elem, h, t, conses, embed, type_of, continue, miss, k) do
+  defp cons_arm(elem, h, t, conses, embed, type_of, continue, miss, k, bound) do
     projected =
       Enum.map(conses, fn cand ->
         {:cons, head, tail} = cand.focus
@@ -1908,7 +2120,8 @@ defmodule Muro.Synth.Term do
             type_of,
             cont,
             miss,
-            k_here
+            k_here,
+            bound
           )
       end
     end
@@ -1921,7 +2134,8 @@ defmodule Muro.Synth.Term do
       type_of,
       step,
       miss,
-      k + 1
+      k + 1,
+      bound
     )
   end
 
@@ -1951,24 +2165,24 @@ defmodule Muro.Synth.Term do
     end)
   end
 
-  defp split_data(name, rows, hole, embed, cands, type_of, continue, miss, k) do
+  defp split_data(name, rows, hole, embed, cands, type_of, continue, miss, k, bound) do
     var = "u#{k}"
     motive = "(λ (#{var} : #{name}) → #{type_of.(embed.(var))})"
 
-    case data_arms(rows, cands, embed, type_of, continue, miss, k) do
+    case data_arms(rows, cands, embed, type_of, continue, miss, k, bound) do
       :open -> :open
       {:ok, arms} -> {:ok, match_arms(hole, motive, arms), k}
     end
   end
 
-  defp data_arms(rows, cands, embed, type_of, continue, miss, k) do
+  defp data_arms(rows, cands, embed, type_of, continue, miss, k, bound) do
     Enum.reduce_while(rows, {:ok, [], cands}, fn row, {:ok, arms, left} ->
       case take_row(row, left) do
         :open ->
           {:halt, :open}
 
         {:ok, group, rest} ->
-          case row_arm(row, group, embed, type_of, continue, miss, k) do
+          case row_arm(row, group, embed, type_of, continue, miss, k, bound) do
             :open -> {:halt, :open}
             {:ok, arm, _} -> {:cont, {:ok, arms ++ [arm], rest}}
           end
@@ -2006,13 +2220,13 @@ defmodule Muro.Synth.Term do
     end
   end
 
-  defp row_arm(row, [], embed, _type_of, _continue, miss, k) do
+  defp row_arm(row, [], embed, _type_of, _continue, miss, k, _bound) do
     binders = field_binders(row.fields, k)
     local = app_src(row.name, binders)
     {:ok, "| #{pat(row.name, binders)} => #{miss.(embed.(local))}", k}
   end
 
-  defp row_arm(row, group, embed, type_of, continue, miss, k) do
+  defp row_arm(row, group, embed, type_of, continue, miss, k, bound) do
     binders = field_binders(row.fields, k)
     local = app_src(row.name, binders)
 
@@ -2021,7 +2235,19 @@ defmodule Muro.Synth.Term do
         push(cand, {:fields, raw_fields(cand.focus)})
       end)
 
-    case split_fields(row.fields, binders, local, seeded, embed, type_of, continue, miss, k, :arg) do
+    case split_fields(
+           row.fields,
+           binders,
+           local,
+           seeded,
+           embed,
+           type_of,
+           continue,
+           miss,
+           k,
+           :arg,
+           bound
+         ) do
       :open -> :open
       {:ok, inner, k2} -> {:ok, "| #{pat(row.name, binders)} => #{inner}", k2}
     end
@@ -2030,7 +2256,19 @@ defmodule Muro.Synth.Term do
   defp field_binders([], _k), do: []
   defp field_binders(fields, k), do: Enum.map(0..(length(fields) - 1), &"f#{k}_#{&1}")
 
-  defp split_fields([], _binders, local, cands, _embed, _type_of, continue, _miss, k, _wrap) do
+  defp split_fields(
+         [],
+         _binders,
+         local,
+         cands,
+         _embed,
+         _type_of,
+         continue,
+         _miss,
+         k,
+         _wrap,
+         _bound
+       ) do
     case drop_frame(cands, :fields, []) do
       :open -> :open
       {:ok, cands} -> continue.(local, cands, k)
@@ -2047,7 +2285,8 @@ defmodule Muro.Synth.Term do
          continue,
          miss,
          k,
-         wrap
+         wrap,
+         bound
        ) do
     case take_field(cands) do
       :open ->
@@ -2069,19 +2308,21 @@ defmodule Muro.Synth.Term do
             continue,
             miss,
             k_here,
-            wrap
+            wrap,
+            bound
           )
         end
 
         split(
-          field,
+          field_schema(field),
           binder,
           embed_one,
           projected,
           type_of,
           step,
           miss,
-          k + 1
+          k + 1,
+          bound
         )
     end
   end
@@ -2115,7 +2356,7 @@ defmodule Muro.Synth.Term do
     end
   end
 
-  defp split_prod(left, right, hole, embed, cands, type_of, continue, miss, k) do
+  defp split_prod(left, right, hole, embed, cands, type_of, continue, miss, k, bound) do
     a = "p#{k}_0"
     b = "p#{k}_1"
     var = "q#{k}"
@@ -2153,7 +2394,8 @@ defmodule Muro.Synth.Term do
                 type_of,
                 cont,
                 miss,
-                k_here
+                k_here,
+                bound
               )
           end
         end
@@ -2166,7 +2408,8 @@ defmodule Muro.Synth.Term do
                type_of,
                step,
                miss,
-               k + 1
+               k + 1,
+               bound
              ) do
           :open -> :open
           {:ok, inner, k2} -> {:ok, match_arms(hole, motive, ["| (#{a}, #{b}) => #{inner}"]), k2}

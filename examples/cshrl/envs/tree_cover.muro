@@ -1,0 +1,40 @@
+-- tree_cover.muro — a binary tree of Nat, with no declared feature.
+--
+-- The state is a tree. The cover is `tip 0` and `bin (tip 0) (tip 0)`.
+-- go and stay both stay put. The tip pays 1 for stay and 0 for go.
+-- The bin pays 1 for go and 0 for stay.
+-- Nothing in this book names a feature.
+import "../std/nat.muro"
+import "../lib/agent.muro"
+
+data State : Type where
+  tip : Π (n : Nat) → State
+  bin : Π (+ l : State) → Π (r : State) → State
+
+data Action : Type where
+  go : Action
+  stay : Action
+
+def Reward : spec Type := Nat
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Reward)
+      | tip n =>
+          (match a motive (λ _ → State × Reward)
+            | go => (tip n, 0)
+            | stay => (tip n, suc 0))
+      | bin l r =>
+          (match a motive (λ _ → State × Reward)
+            | go => (bin l r, suc 0)
+            | stay => (bin l r, 0))
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons go (cons stay nil)
+def default-action : run Action := stay
+def horizon : run Nat := 0
+
+def all-states : run List State :=
+  cons (tip 0) (cons (bin (tip 0) (tip 0)) nil)

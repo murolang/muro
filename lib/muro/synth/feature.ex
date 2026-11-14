@@ -169,8 +169,10 @@ defmodule Muro.Synth.Feature do
   end
 
   # A finite inhabitant list is an exhaustive match. An open structured
-  # state is a run over its schema. A function, a cycle, or any other
-  # schema with no such run has neither test. A nullary state stays.
+  # state is a run over its schema. A direct inductive back-edge is
+  # that run. A function, a mutual family, a linear field, an erased
+  # constructor argument, or a back-edge under a list or a product has
+  # neither test. A nullary state stays.
   defp state_comparable?(host) do
     cond do
       host[:structured] != true ->
