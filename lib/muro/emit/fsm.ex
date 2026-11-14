@@ -3,10 +3,12 @@ defmodule Muro.Emit.Fsm do
   Emit each session as a pure state machine.
 
   The module is data and functions. It starts no process and names no
-  transport. The host threads the state through `init`, `send`, `recv`,
-  and `down`. `down/1` takes a failure arm that binds no reason.
-  `down/2` takes one that does, and checks the reason the host supplies.
-  Where the protocol has no failure arm, `down` is an error.
+  transport. The host threads the state through `init`, `send`, and
+  `recv`. A book that marks a party also has `down/1` and `down/2`.
+  `down/1` takes a failure arm that binds no reason. `down/2` takes one
+  that does, and checks the reason the host supplies. Where the protocol
+  has no failure arm, `down` is an error. A book that does not mark a
+  party emits no `down`.
   """
 
   alias Muro.{Ast, Emit, Session}
@@ -143,14 +145,14 @@ defmodule Muro.Emit.Fsm do
           "def unquote(:send)(state, value)",
           "muro_fsm_step(#{inspect(key)}, :send, state, value)",
           "def recv(state, value)",
-          "muro_fsm_step(#{inspect(key)}, :recv, state, value)",
-          "def down(state)",
-          "def down(state, reason)",
-          "muro_fsm_down(#{inspect(key)}, state, nil)",
-          "muro_fsm_done?(#{inspect(key)}, state)",
-          "muro_fsm_expected(#{inspect(key)}, state)",
-          entry.end_step
-        ] ++ init
+          "muro_fsm_step(#{inspect(key)}, :recv, state, value)"
+        ] ++
+          down_clauses(book, key) ++
+          [
+            "muro_fsm_done?(#{inspect(key)}, state)",
+            "muro_fsm_expected(#{inspect(key)}, state)",
+            entry.end_step
+          ] ++ init
       end)
 
     %{
@@ -161,6 +163,18 @@ defmodule Muro.Emit.Fsm do
         Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}),
       clauses: clauses
     }
+  end
+
+  defp down_clauses(book, key) do
+    if Enum.any?(book, &Muro.Fail.marked?/1) do
+      [
+        "def down(state)",
+        "def down(state, reason)",
+        "muro_fsm_down(#{inspect(key)}, state, nil)"
+      ]
+    else
+      []
+    end
   end
 
   defp book_label(path, opts) do
@@ -1170,9 +1184,26 @@ defmodule Muro.Emit.Fsm do
       """
 
     text
+    |> gate(Enum.any?(book, &Muro.Fail.marked?/1))
     |> Code.format_string!()
     |> IO.iodata_to_binary()
     |> Kernel.<>("\n")
+  end
+
+  # `#||fail` regions are the may-fail image. A book with no mark drops
+  # them before formatting, so the text matches an emitter with no `down`.
+  defp gate(src, true), do: strip_marker(src, "fail")
+
+  defp gate(src, false), do: drop_region(src, "fail")
+
+  defp drop_region(src, name) do
+    Regex.replace(~r/^[ \t]*#\|\|#{name}\n.*?^[ \t]*#\|\|\/#{name}\n/ms, src, "")
+  end
+
+  defp strip_marker(src, name) do
+    src
+    |> String.replace(~r/^[ \t]*#\|\|#{name}\n/m, "")
+    |> String.replace(~r/^[ \t]*#\|\|\/#{name}\n/m, "")
   end
 
   defp repr_source(book, names) do
@@ -1328,8 +1359,10 @@ defmodule Muro.Emit.Fsm do
           case muro_fsm_expose(st) do
             %{p: {:end, step}} -> {:error, {:unexpected, step, :done, value}}
             %{p: {:stuck, step}} -> {:error, {:unexpected, step, :done, value}}
+            #||fail
             %{p: {:left, step}} -> {:error, {:unexpected, step, :stop, value}}
             %{p: {:arm, _}} = st -> muro_fsm_arm_step(dir, st, value)
+            #||/fail
             st -> muro_fsm_act(dir, st, value)
           end
 
@@ -1342,6 +1375,7 @@ defmodule Muro.Emit.Fsm do
       {:error, {:unexpected, muro_fsm_end(key), :done, value}}
     end
 
+    #||fail
     @doc false
     def muro_fsm_down(key, state, reason) do
       shown = muro_fsm_down_value(reason)
@@ -1373,6 +1407,7 @@ defmodule Muro.Emit.Fsm do
       end
     end
 
+    #||/fail
     @doc false
     def muro_fsm_done?(key, state) do
       case muro_fsm_prep(key, state) do
@@ -1417,6 +1452,7 @@ defmodule Muro.Emit.Fsm do
       end
     end
 
+    #||fail
     defp muro_fsm_walk(state, [:down | rest], index, key, complete?) do
       case muro_fsm_down(key, state, nil) do
         {:ok, next} -> muro_fsm_walk(next, rest, index + 1, key, complete?)
@@ -1431,6 +1467,7 @@ defmodule Muro.Emit.Fsm do
       end
     end
 
+    #||/fail
     defp muro_fsm_walk(state, [other | _rest], index, key, _complete?) do
       {:error, {index, {:unexpected, muro_fsm_at(state), muro_fsm_expected(key, state), other}}}
     end
@@ -1525,8 +1562,10 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_expose(%{p: {:choose, step, _, _}} = st, _seen), do: %{st | s: step}
     defp muro_fsm_expose(%{p: {:branch, step, _, _}} = st, _seen), do: %{st | s: step}
     defp muro_fsm_expose(%{p: {:stuck, step}} = st, _seen), do: %{st | s: step}
+    #||fail
     defp muro_fsm_expose(%{p: {:left, step}} = st, _seen), do: %{st | s: step}
     defp muro_fsm_expose(%{p: {:arm, _}} = st, _seen), do: st
+    #||/fail
     defp muro_fsm_expose(st, _seen), do: st
 
     defp muro_fsm_enter(name, args, env) when is_binary(name) do
@@ -1796,6 +1835,7 @@ defmodule Muro.Emit.Fsm do
       {:error, {:unexpected, step, muro_fsm_expect(st), value}}
     end
 
+    #||fail
     defp muro_fsm_down_value(nil), do: :down
     defp muro_fsm_down_value({:reason, value}), do: value
 
@@ -1827,16 +1867,11 @@ defmodule Muro.Emit.Fsm do
     end
 
     defp muro_fsm_apply_arm(st, {:pick, name, arms}) when is_atom(name) do
-      case Map.get(st.e, name) do
-        nil ->
-          {:error, {:unexpected, st.s, :down, name}}
+      muro_fsm_apply_bound(st, name, arms)
+    end
 
-        value ->
-          case muro_fsm_arm_pick(value, arms) do
-            {:ok, next} -> muro_fsm_apply_arm(st, next)
-            :error -> {:error, {:unexpected, st.s, {:down, :bit}, value}}
-          end
-      end
+    defp muro_fsm_apply_arm(st, {:split, name, arms}) when is_atom(name) do
+      muro_fsm_apply_bound(st, name, arms)
     end
 
     defp muro_fsm_apply_arm(st, :finish) do
@@ -1849,6 +1884,30 @@ defmodule Muro.Emit.Fsm do
 
     defp muro_fsm_apply_arm(st, skel) do
       {:ok, %{st | p: {:arm, skel}}}
+    end
+
+    defp muro_fsm_apply_bound(st, name, arms) do
+      case Map.fetch(st.e, name) do
+        :error ->
+          {:error, {:unexpected, st.s, :down, name}}
+
+        {:ok, value} ->
+          case muro_fsm_arm_pick(value, arms) do
+            {:ok, next, pairs} ->
+              muro_fsm_apply_arm(%{st | e: muro_fsm_store_arm(st.e, pairs)}, next)
+
+            :error ->
+              {:error, {:unexpected, st.s, :down, value}}
+          end
+      end
+    end
+
+    defp muro_fsm_store_arm(env, pairs) do
+      Enum.reduce(pairs, env, fn
+        {:_, _value}, env -> env
+        {name, value}, env when is_atom(name) -> Map.put(env, name, value)
+        _, env -> env
+      end)
     end
 
     defp muro_fsm_arm_step(dir, %{p: {:arm, {:fail_at, recv, _, _}}} = st, value) do
@@ -1929,7 +1988,9 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_arm_expect({:choose, bit, _}, _env), do: {:send_pick, [bit]}
     defp muro_fsm_arm_expect({:offer, _, _}, _env), do: {:recv_pick, [:b0, :b1]}
     defp muro_fsm_arm_expect({:index, _, _, _}, _env), do: {:recv, :bit}
-    defp muro_fsm_arm_expect(_, _), do: :done
+    defp muro_fsm_arm_expect({:pick, _, _}, _env), do: :stuck
+    defp muro_fsm_arm_expect({:split, _, _}, _env), do: :stuck
+    defp muro_fsm_arm_expect(_, _), do: :stuck
 
     defp muro_fsm_arm_value({:var, name}, env) do
       case Map.get(env, name) do
@@ -1940,22 +2001,21 @@ defmodule Muro.Emit.Fsm do
 
     defp muro_fsm_arm_value(value, _env), do: {:ok, value}
 
+    # A constructor arm binds its fields. A split on one of those fields
+    # is the nested match. A numeral arm is the decimal spelling. `_`
+    # is the arm that remains. `{:ok, next, pairs}` carries the bindings.
     defp muro_fsm_arm_pick(value, arms) do
-      tag =
-        cond do
-          is_atom(value) -> Atom.to_string(value)
-          is_tuple(value) and tuple_size(value) >= 1 and is_atom(elem(value, 0)) ->
-            Atom.to_string(elem(value, 0))
-
-          true ->
-            nil
-        end
+      fields = muro_fsm_wire_fields(value)
+      names = for {:arm, c, _, _} <- arms, is_binary(c), do: c
+      tag = muro_fsm_fail_tag(value, names)
 
       named =
-        Enum.find_value(arms, fn
-          {:arm, c, _, next} when is_binary(c) and c == tag -> {:ok, next}
-          _ -> nil
-        end)
+        if is_binary(tag) do
+          Enum.find_value(arms, fn
+            {:arm, c, _, _} = arm when c == tag -> muro_fsm_open_arm(arm, tag, fields)
+            _ -> nil
+          end)
+        end
 
       cond do
         named != nil ->
@@ -1963,20 +2023,104 @@ defmodule Muro.Emit.Fsm do
 
         value == :b0 ->
           case arms do
-            [next | _] -> {:ok, muro_fsm_bare_arm(next)}
+            [next | _] -> {:ok, muro_fsm_bare_arm(next), []}
             _ -> :error
           end
 
         value == :b1 ->
           case arms do
-            [_, next | _] -> {:ok, muro_fsm_bare_arm(next)}
+            [_, next | _] -> {:ok, muro_fsm_bare_arm(next), []}
             _ -> :error
           end
 
         true ->
-          :error
+          muro_fsm_fail_wild(arms, fields)
       end
     end
+
+    defp muro_fsm_fail_tag(value, names) do
+      raw =
+        cond do
+          is_atom(value) -> Atom.to_string(value)
+          is_integer(value) and value >= 0 -> Integer.to_string(value)
+          is_tuple(value) and tuple_size(value) >= 1 and is_atom(elem(value, 0)) ->
+            Atom.to_string(elem(value, 0))
+
+          true ->
+            nil
+        end
+
+      case raw do
+        tag when is_binary(tag) ->
+          case Muro.Emit.source_ctor(names, tag) do
+            {:ok, name} -> name
+            :error -> tag
+          end
+
+        _ ->
+          nil
+      end
+    end
+
+    defp muro_fsm_fail_wild(arms, fields) do
+      Enum.find_value(arms, fn
+        {:arm, "_", binders, body} when is_list(binders) and length(binders) == length(fields) ->
+          {:ok, body, Enum.zip(binders, fields)}
+
+        _ ->
+          nil
+      end) || :error
+    end
+
+    defp muro_fsm_open_arm({:arm, ctor, binders, {:split, name, inner}}, expected, fields)
+         when is_binary(ctor) and is_list(binders) and is_list(fields) and is_atom(name) and
+                is_list(inner) do
+      pairs = Enum.zip(binders, fields)
+
+      cond do
+        ctor != expected ->
+          :error
+
+        length(binders) != length(fields) ->
+          :error
+
+        true ->
+          case List.keyfind(pairs, name, 0) do
+            {^name, value} ->
+              case muro_fsm_arm_pick(value, inner) do
+                {:ok, next, extra} -> {:ok, next, pairs ++ extra}
+                :error -> :error
+              end
+
+            nil ->
+              :error
+          end
+      end
+    end
+
+    defp muro_fsm_open_arm({:arm, ctor, binders, {:pick, name, inner}}, expected, fields)
+         when is_binary(ctor) and is_list(binders) and is_atom(name) and is_list(inner) do
+      if is_list(binders) and name in binders do
+        muro_fsm_open_arm({:arm, ctor, binders, {:split, name, inner}}, expected, fields)
+      else
+        cond do
+          ctor != expected -> :error
+          length(binders) != length(fields) -> :error
+          true -> {:ok, {:pick, name, inner}, Enum.zip(binders, fields)}
+        end
+      end
+    end
+
+    defp muro_fsm_open_arm({:arm, ctor, binders, body}, expected, fields)
+         when is_binary(ctor) and is_list(binders) and is_list(fields) do
+      cond do
+        ctor != expected -> :error
+        length(binders) != length(fields) -> :error
+        true -> {:ok, body, Enum.zip(binders, fields)}
+      end
+    end
+
+    defp muro_fsm_open_arm(arm, _expected, _fields), do: {:ok, muro_fsm_bare_arm(arm), []}
 
     defp muro_fsm_bare_arm({:arm, _, _, next}), do: next
     defp muro_fsm_bare_arm(next), do: next
@@ -1986,6 +2130,7 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_arm_desc(:tt), do: :unit
     defp muro_fsm_arm_desc(_), do: :nat
 
+    #||/fail
     defp muro_fsm_expect(%{p: {:end, _}}), do: :done
     defp muro_fsm_expect(%{p: {:stuck, _}}), do: :done
 
@@ -2017,8 +2162,10 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_expect(%{p: {:irecv, _, _, _, _}}), do: {:recv, :bit}
     defp muro_fsm_expect(%{p: {:choose, _, _, _}}), do: {:send_pick, [:b0, :b1]}
     defp muro_fsm_expect(%{p: {:branch, _, _, _}}), do: {:recv_pick, [:b0, :b1]}
+    #||fail
     defp muro_fsm_expect(%{p: {:left, _}}), do: :stop
     defp muro_fsm_expect(%{p: {:arm, skel}, e: env}), do: muro_fsm_arm_expect(skel, env)
+    #||/fail
     defp muro_fsm_expect(_), do: :done
 
     defp muro_fsm_expect_ty(st, ty) do
@@ -2383,9 +2530,11 @@ defmodule Muro.Emit.Fsm do
 
     defp muro_fsm_templates, do: #{lit(sessions |> Map.new())}
 
+    #||fail
     # An empty literal map makes Map.get always return nil.
     defp muro_fsm_fails, do: :maps.from_list(#{lit(Map.to_list(fail_tables(st.book, st)))})
 
+    #||/fail
     defp muro_fsm_duals, do: #{lit(duals)}
 
     defp muro_fsm_ends, do: #{lit(ends)}
@@ -2760,6 +2909,7 @@ defmodule Muro.Emit.Fsm do
         #{parent}.muro_fsm_step(#{inspect(key)}, :recv, state, value)
       end
 
+      #||fail
       def down(state) do
         #{parent}.muro_fsm_down(#{inspect(key)}, state, nil)
       end
@@ -2768,6 +2918,7 @@ defmodule Muro.Emit.Fsm do
         #{parent}.muro_fsm_down(#{inspect(key)}, state, {:reason, reason})
       end
 
+      #||/fail
       def done?(state), do: #{parent}.muro_fsm_done?(#{inspect(key)}, state)
 
       def expected(state), do: #{parent}.muro_fsm_expected(#{inspect(key)}, state)
