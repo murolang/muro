@@ -2034,7 +2034,7 @@ defmodule Muro.Emit.Fsm do
           end
 
         true ->
-          muro_fsm_fail_wild(arms, fields)
+          muro_fsm_positional(value, arms) || muro_fsm_fail_wild(arms, fields)
       end
     end
 
@@ -2052,7 +2052,7 @@ defmodule Muro.Emit.Fsm do
 
       case raw do
         tag when is_binary(tag) ->
-          case Muro.Emit.source_ctor(names, tag) do
+          case muro_fsm_source_ctor(names, tag) do
             {:ok, name} -> name
             :error -> tag
           end
@@ -2060,6 +2060,64 @@ defmodule Muro.Emit.Fsm do
         _ ->
           nil
       end
+    end
+
+    # The safe map is `elixir_atom_name` for a constructor whose host
+    # atom differs from its source name. The host atom wins when both
+    # name this declaration. A label that is itself a constructor stays.
+    defp muro_fsm_source_ctor(names, label) when is_binary(label) do
+      mapped = Map.get(muro_fsm_safe_to_source(), label, label)
+
+      cond do
+        mapped in names -> {:ok, mapped}
+        label in names -> {:ok, label}
+        true -> :error
+      end
+    end
+
+    # A positional list is one arm per constructor, in declaration order.
+    # The order is on the payload declaration. A named arm does not use it.
+    defp muro_fsm_positional(value, arms) when is_list(arms) do
+      if muro_fsm_bare_arms(arms) do
+        case muro_fsm_fail_tag(value, []) do
+          tag when is_binary(tag) ->
+            case muro_fsm_order_hit(tag, length(arms)) do
+              {_order, _name, i} when is_integer(i) ->
+                case Enum.at(arms, i) do
+                  nil -> nil
+                  arm -> {:ok, muro_fsm_bare_arm(arm), []}
+                end
+
+              _ ->
+                nil
+            end
+
+          _ ->
+            nil
+        end
+      end
+    end
+
+    defp muro_fsm_positional(_, _), do: nil
+
+    defp muro_fsm_bare_arms(arms) do
+      Enum.all?(arms, fn
+        {:arm, ctor, _, _} when is_binary(ctor) -> false
+        _ -> true
+      end)
+    end
+
+    defp muro_fsm_order_hit(tag, n) when is_binary(tag) and is_integer(n) do
+      Enum.find_value(Map.values(muro_fsm_decls()), fn
+        %{order: order} when is_list(order) and length(order) == n ->
+          case muro_fsm_source_ctor(order, tag) do
+            {:ok, name} -> {order, name, Enum.find_index(order, &(&1 == name))}
+            :error -> nil
+          end
+
+        _ ->
+          nil
+      end)
     end
 
     defp muro_fsm_fail_wild(arms, fields) do
@@ -2100,7 +2158,7 @@ defmodule Muro.Emit.Fsm do
 
     defp muro_fsm_open_arm({:arm, ctor, binders, {:pick, name, inner}}, expected, fields)
          when is_binary(ctor) and is_list(binders) and is_atom(name) and is_list(inner) do
-      if is_list(binders) and name in binders do
+      if name in binders do
         muro_fsm_open_arm({:arm, ctor, binders, {:split, name, inner}}, expected, fields)
       else
         cond do

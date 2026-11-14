@@ -12,6 +12,14 @@ A declared cover is ranked when the terms themselves can be split. A function fi
 
 - Version 0.21.6.
 
+## 0.21.5
+
+A state machine and an OTP process are plain Elixir, including a book that marks `may fail`. They compile and run in a project that does not depend on Muro. `down/2` matches the reason the host supplies, and `down/1` takes an arm that binds none.
+
+### Package
+
+- Version 0.21.5.
+
 ## 0.21.4
 
 `mix muro.synth` accepts an inductive `State`, including one that refers to itself. A finite non-empty `all-states` is the cover. Two values are compared by matching constructors and recursing on a field of that same datatype. The certificate ranks that cover. A state outside the cover has an empty ranking.

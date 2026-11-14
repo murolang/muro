@@ -543,7 +543,7 @@ defmodule IndexedOtp do
 
     case raw_tag(value) do
       raw when is_binary(raw) ->
-        case Muro.Emit.source_ctor(names, raw) do
+        case muro_source_ctor(names, raw) do
           {:ok, tag} ->
             case named_index(arms, tag, 0) do
               i when is_integer(i) -> open_pick(Enum.at(arms, i), tag, fields)
@@ -618,7 +618,7 @@ defmodule IndexedOtp do
       if is_binary(raw) do
         Enum.find_value(Map.values(data_decls()), fn
           %{order: order, ctors: ctors} when is_list(order) and is_map(ctors) ->
-            case Muro.Emit.source_ctor(Map.keys(ctors), raw) do
+            case muro_source_ctor(Map.keys(ctors), raw) do
               {:ok, name} ->
                 if length(order) == n and name in order, do: name, else: nil
 
@@ -693,15 +693,29 @@ defmodule IndexedOtp do
   # A nullary constructor is an atom. A constructor with fields is a
   # tagged tuple. `{:par, i}` is a parameter of this declaration.
   # `{:self, args}` is this declaration. `{:dat, name, args}` is another.
-  defp data_decls, do: %{}
+  defp data_decls, do: :maps.from_list([])
 
-  defp run_book, do: %{runs: [], decls: []}
+  defp muro_eval_run(name, args) when is_binary(name) and is_list(args), do: {:run, name, args}
+  defp muro_safe_to_source, do: :maps.from_list([])
+
+  # One decode of a host label. The safe map is `elixir_atom_name`
+  # for a constructor whose host atom differs from its source name.
+  # The host atom wins when both name this declaration.
+  defp muro_source_ctor(names, label) when is_binary(label) do
+    mapped = Map.get(muro_safe_to_source(), label, label)
+
+    cond do
+      mapped in names -> {:ok, mapped}
+      label in names -> {:ok, label}
+      true -> :error
+    end
+  end
 
   # One decode of the host atom against this declaration's constructors.
   defp ctor_source(ctors, tag) when is_atom(tag) do
     names = if is_map(ctors), do: Map.keys(ctors), else: []
 
-    case Muro.Emit.source_ctor(names, Atom.to_string(tag)) do
+    case muro_source_ctor(names, Atom.to_string(tag)) do
       {:ok, name} -> name
       :error -> Atom.to_string(tag)
     end
@@ -801,7 +815,7 @@ defmodule IndexedOtp do
   defp substitute({:run, name, args}, bindings) when is_binary(name) and is_list(args) do
     args = Enum.map(args, &substitute(&1, bindings))
     _ = muro_host(name)
-    Muro.Session.eval_run(name, args, run_book())
+    muro_eval_run(name, args)
   end
 
   defp substitute(tuple, bindings) when is_tuple(tuple) do

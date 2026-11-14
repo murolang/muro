@@ -12,7 +12,10 @@ defmodule Muro.EmitReserveTest do
 
   test "template helpers are reserved, and a meeting of each name runs" do
     assert "data_decls" in Helpers.otp()
-    assert "run_book" in Helpers.otp()
+    assert "muro_eval_run" in Helpers.otp()
+    assert "muro_source_ctor" in Helpers.otp()
+    assert "muro_safe_to_source" in Helpers.otp()
+    refute "run_book" in Helpers.otp()
     assert "ctor_source" in Helpers.otp()
     assert "exchange" in Helpers.otp()
     assert "muro_host" in Helpers.otp()
