@@ -2980,10 +2980,21 @@ defmodule Muro.Parser do
     end
   end
 
+  # A positional arm stops before a bare `fail`, so `with_fail` can take
+  # that word as the receive's failure arm. An empty list is still
+  # "expected a process". `(fail)` and `| … => fail` are processes named
+  # `fail`, and they are parsed by the parenthesis and the named-arm forms.
   defp parse_match_arms(s, acc, bound) do
     s = skip(s)
 
     cond do
+      word_kw?(s, "fail") ->
+        if acc == [] do
+          {:error, err(s, "expected a process")}
+        else
+          {:ok, Enum.reverse(acc), s}
+        end
+
       proc_start?(s) ->
         case parse_proc(s, bound) do
           {:ok, p, rest} -> parse_match_arms(rest, [p | acc], bound)
