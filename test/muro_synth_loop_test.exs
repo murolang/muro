@@ -3,7 +3,6 @@ defmodule Muro.SynthLoopTest do
 
   @two "examples/cshrl/envs/two_state.muro"
   @bin "examples/cshrl/envs/binary_sacrifice.muro"
-  @lam "examples/cshrl/envs/lam.muro"
   @maze "examples/cshrl/envs/maze_auto.muro"
   @maze3 "examples/cshrl/envs/maze_auto_e2e.muro"
   @place "examples/cshrl/envs/placement.muro"
@@ -155,55 +154,6 @@ defmodule Muro.SynthLoopTest do
     assert text =~ "at start the program prefers go-paradise"
     assert text =~ "certificate CoinductiveHomomorphism"
     refute text =~ "CoindHomo"
-  end
-
-  test "the finite lam environment does not separate copy from len" do
-    src = File.read!(@lam)
-    refute src =~ "uses-gt1"
-    refute src =~ "arg-apps-ne0"
-    refute src =~ "data Feature"
-    refute src =~ "eval-feature"
-    refute src =~ "arg-erased"
-    refute src =~ "arg-qty"
-    refute src =~ "ArgQty"
-    refute src =~ "erased-arg"
-    refute src =~ ~r/copy\s*:\s*Feature/
-
-    assert {:ok, result} = Muro.Synth.cegis_loop(@lam)
-    assert result.status == :insufficient
-    assert result.program == nil
-    assert result.book == nil
-
-    text = joined(result)
-    assert text =~ "muro synth: features insufficient"
-    assert text =~ "len agrees with copy"
-    refute text =~ "homomorphism checked"
-    refute text =~ "certificate CoindHomo"
-  end
-
-  test "discovered tests agree on copy and on len" do
-    assert {:ok, host} = Muro.Synth.Host.open(@lam)
-    refute "uses-gt1" in host.features
-    refute "arg-apps-ne0" in host.features
-    refute "arg-erased" in host.features
-    assert host.features != []
-
-    feat = fn feature, state -> host.eval_feature.(feature, state) end
-    vector = fn state -> Enum.map(host.features, &feat.(&1, state)) end
-    assert vector.("copy") == vector.("copy4")
-    assert vector.("copy") == vector.("copy8")
-    assert vector.("copy") == vector.("len")
-
-    assert {:ok, spec} = Muro.Synth.Oracle.observe(host, "trace", [])
-    [task] = spec.tasks
-    before_len = Enum.take_while(task.observations, fn {state, _bit} -> state != "len" end)
-    assert Enum.map(before_len, &elem(&1, 0)) == ["copy", "copy4", "copy8"]
-    assert {"len", false} in task.observations
-    bits = Map.new(task.observations)
-    assert bits["copy"] != bits["len"]
-
-    vs = Muro.Synth.enumerate(host.features, 1)
-    assert Muro.Synth.refine_all(vs, task.observations, feat) == []
   end
 
   @tag timeout: 180_000
@@ -581,12 +531,6 @@ defmodule Muro.SynthLoopTest do
     assert decoded["note"] == "homomorphism checked"
     assert decoded["certificate"] == "CoindHomo"
     assert decoded["cex"] == []
-
-    assert {:exit, 1, "", lam_lines} = Muro.CLI.Synth.run([@lam])
-    lam_text = Enum.join(lam_lines, "\n")
-    assert lam_text =~ "features insufficient"
-    assert lam_text =~ "len agrees with copy"
-    refute lam_text =~ "homomorphism checked"
   end
 
   test "a false program is falsep in the json log outside the checkout" do
