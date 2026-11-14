@@ -24,7 +24,6 @@ In brief: `examples/cshrl/` is [CSHRL](https://github.com/doctorcorral/csh-rl) i
 | `envs/skill_investment.muro` | `SkillInvestment` |
 | `lib/synth.muro` | A predicate program: `eval`, `propagation`, `vs-shrinks`, `sufficient-cegis` |
 | `envs/synth_bit.muro` | Two carriers, one feature, one representative |
-| `envs/lam.muro` | A finite substitution graph. Not a validated synthesis target. It declares no feature |
 | `envs/maze_auto.muro` | A corridor with no declared feature. `trace` checks `CoindHomo` for the reward of `go` |
 | `envs/maze_auto_e2e.muro` | The three-cell maze with no declared feature. `trace` checks `CoindHomo` for `Fwd` |
 | `envs/placement.muro` | Two rows on a board, no declared feature. `trace` checks `CoindHomo` for the comparison of the rows |
