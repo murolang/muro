@@ -65,13 +65,24 @@ defmodule Muro.Synth.Term do
     end
   end
 
-  @doc """
-  Structural templates at `path` depth `max_depth`.
+  # Fields opened along a path. The first pass opens one. A later
+  # pass opens one more, and stops at this bound. The number is not
+  # a fixture's depth.
+  @path_bound 3
+  @first_path_depth 1
 
-  Depth 0 is the value itself. A greater depth opens one field.
-  A list element is not opened here. Invention does that.
-  A bare `Nat` at the root is not a template: that would be a threshold
-  on a state index.
+  def path_bound, do: @path_bound
+  def first_path_depth, do: @first_path_depth
+
+  @doc """
+  Structural templates at paths of length at most `max_depth`.
+
+  Depth 0 is the value itself. Each greater depth opens one field.
+  Resolving a back-edge does not spend a step: the field that
+  carried the name already did, and a name already opened is not
+  walked past `max_depth`. A list element is not a field step.
+  Invention reads that difference. A bare `Nat` at the root is not
+  a template: that would be a threshold on a state index.
   """
   def templates(schema, states, taken, max_depth) do
     values = Enum.map(states, &value_of/1)
@@ -596,8 +607,17 @@ defmodule Muro.Synth.Term do
     ctor_tests(schema, path) ++
       compare_tests(schema, values, path) ++
       nat_tests(schema, values, path) ++
-      len_tests(schema, values, path)
+      len_tests(schema, values, path) ++
+      binder_tests(schema, values, path)
   end
+
+  # A relevant field records `qty` and `name`. The quantity is the
+  # telescope's grade, the same at every value of that constructor, so
+  # a test of it is constant or a duplicate of `ctor-is`. A use count
+  # is not a reading of the value: the binder name does not occur in
+  # the term. A later encoding that stores a grade or an occurrence
+  # in the value fills this in.
+  defp binder_tests(_schema, _values, _path), do: []
 
   defp ctor_tests({:enum, _, ctors}, path) when length(ctors) >= 2 do
     Enum.map(ctors, &%{kind: :ctor_is, path: path, tag: &1})
@@ -739,7 +759,8 @@ defmodule Muro.Synth.Term do
       collect(right, Enum.map(values, &elem(&1, 1)), path ++ [1], depth + 1, max_depth, bound)
   end
 
-  # A list element is a later invention, not part of the first horizon.
+  # A list's tests are the positions and the length, at this node.
+  # An element is not a field step. Invention reads a list difference.
   defp descend({:list, _}, _values, _path, _depth, _max_depth, _bound), do: []
   defp descend(_schema, _values, _path, _depth, _max_depth, _bound), do: []
 

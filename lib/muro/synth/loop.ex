@@ -141,10 +141,65 @@ defmodule Muro.Synth.Loop do
   end
 
   # A collapse is a missing structural test when the two terms differ.
-  # Each round separates at least the pair it was given, so the number
-  # of rounds is at most the size of the cover. When the new tests do
-  # not separate the pair, the report stays `features insufficient`.
+  # The next pass opens one more field, up to the path bound, and
+  # enumerates every path again. Invention then reads the subterm
+  # where the two values differ, including a list element and a
+  # field past the bound. Each invention round separates at least
+  # the pair it was given, so the number of those rounds is at most
+  # the size of the cover. When the new tests do not separate the
+  # pair, the report stays `features insufficient`.
   defp invent(
+         host,
+         spec,
+         depth,
+         max_depth,
+         rounds,
+         score,
+         anchor,
+         checker,
+         fuel,
+         left,
+         earlier,
+         later,
+         predicted,
+         oracle,
+         task
+       ) do
+    case Muro.Synth.Feature.deepen(host, earlier, later) do
+      {:ok, specs, path_depth} ->
+        host = install_paths(host, specs, path_depth)
+        search(host, spec, depth, max_depth, rounds, score, anchor, checker, fuel, left)
+
+      {:stop, specs, path_depth} ->
+        host = if specs, do: install_paths(host, specs, path_depth), else: host
+
+        invent_at(
+          host,
+          spec,
+          depth,
+          max_depth,
+          rounds,
+          score,
+          anchor,
+          checker,
+          fuel,
+          left,
+          earlier,
+          later,
+          predicted,
+          oracle,
+          task
+        )
+    end
+  end
+
+  defp install_paths(host, specs, path_depth) do
+    host
+    |> Muro.Synth.Host.install_features(specs)
+    |> Map.put(:path_depth, path_depth)
+  end
+
+  defp invent_at(
          host,
          spec,
          depth,
