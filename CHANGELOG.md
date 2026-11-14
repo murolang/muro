@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.21.4
+## 0.21.3
 
 `mix muro.synth` accepts an inductive `State`, including one that refers to itself. A finite non-empty `all-states` is the cover. Two values are compared by matching constructors and recursing on a field of that same datatype. The certificate ranks that cover. A state outside the cover has an empty ranking.
 
@@ -14,7 +14,7 @@ A family of datatypes that refer to one another is refused. A recursive `State` 
 
 ### Package
 
-- Version 0.21.4.
+- Version 0.21.3.
 
 ## 0.21.0
 
