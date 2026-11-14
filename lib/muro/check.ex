@@ -3255,7 +3255,19 @@ defmodule Muro.Check do
         {:error, "Opt takes no arguments"}
 
       {:some, _, [t]} ->
-        word_una(k, book, rs, gamma, m, t, &Word.opt_ty/1)
+        case word_una(k, book, rs, gamma, m, t, &Word.opt_ty/1) do
+          {:ok, _} = ok ->
+            ok
+
+          {:error, "machine integer operation expects a machine integer"} ->
+            {:error, "wsome requires an expected Opt type"}
+
+          {:error, "constructor requires an expected data type"} ->
+            {:error, "wsome requires an expected Opt type"}
+
+          other ->
+            other
+        end
 
       {:some, _, _} ->
         {:error, "wsome takes one word"}
@@ -3467,26 +3479,51 @@ defmodule Muro.Check do
 
       # ⇐-unf. Bare ν substitutes the seed for Y (Stream). An applied
       # family substitutes ν F for Y and applies the indices, so the
-      # recursive component is the predicate at the tail.
+      # recursive component is the predicate at the tail. A seed that
+      # infers is ⇐-unf / ⇐-unfR. A seed that does not infer is checked
+      # at the annotation (⇐-unfA / ⇐-unfRA).
       {:unf, seed, {:lam, q, a_ann, x, t}} ->
-        with {:ok, {s_ty, seed_u}} <- infer(k, book, rs, gamma, mode, seed),
-             :ok <- conv(k, book, names_of(rs, gamma), a_ann, s_ty),
-             {:ok, {goal, fam}} <- unf_step(k, book, rs, gamma, a, s_ty),
-             :ok <- bare_stream(k, book, fam, a),
-             :ok <- if(Grade.kernel_qty(q) == :reuse, do: guard_copy(k, book, s_ty), else: :ok),
-             {:ok, [u0 | us]} <-
-               check(
-                 k,
-                 book,
-                 push_name(ext_rec(step_rec(rs, fam), false, false), x),
-                 ext(gamma, q, s_ty),
-                 mode,
-                 t,
-                 Subst.wk(goal)
-               ),
-             :ok <- check_bound(mode, q, u0),
-             :ok <- check_unfold(k, book, mode, rs, {:lam, q, a_ann, x, t}),
-             do: combine(mode, seed_u, us)
+        case infer(k, book, rs, gamma, mode, seed) do
+          {:ok, {s_ty, seed_u}} ->
+            with :ok <- conv(k, book, names_of(rs, gamma), a_ann, s_ty),
+                 {:ok, {goal, fam}} <- unf_step(k, book, rs, gamma, a, s_ty),
+                 :ok <- bare_stream(k, book, fam, a),
+                 :ok <-
+                   if(Grade.kernel_qty(q) == :reuse, do: guard_copy(k, book, s_ty), else: :ok),
+                 {:ok, [u0 | us]} <-
+                   check(
+                     k,
+                     book,
+                     push_name(ext_rec(step_rec(rs, fam), false, false), x),
+                     ext(gamma, q, s_ty),
+                     mode,
+                     t,
+                     Subst.wk(goal)
+                   ),
+                 :ok <- check_bound(mode, q, u0),
+                 :ok <- check_unfold(k, book, mode, rs, {:lam, q, a_ann, x, t}),
+                 do: combine(mode, seed_u, us)
+
+          {:error, _} ->
+            with {:ok, seed_u} <- check(k, book, rs, gamma, mode, seed, a_ann),
+                 {:ok, {goal, fam}} <- unf_step(k, book, rs, gamma, a, a_ann),
+                 :ok <- bare_stream(k, book, fam, a),
+                 :ok <-
+                   if(Grade.kernel_qty(q) == :reuse, do: guard_copy(k, book, a_ann), else: :ok),
+                 {:ok, [u0 | us]} <-
+                   check(
+                     k,
+                     book,
+                     push_name(ext_rec(step_rec(rs, fam), false, false), x),
+                     ext(gamma, q, a_ann),
+                     mode,
+                     t,
+                     Subst.wk(goal)
+                   ),
+                 :ok <- check_bound(mode, q, u0),
+                 :ok <- check_unfold(k, book, mode, rs, {:lam, q, a_ann, x, t}),
+                 do: combine(mode, seed_u, us)
+        end
 
       {:unf, seed, f} ->
         with {:ok, {s_ty, seed_u}} <- infer(k, book, rs, gamma, mode, seed),
@@ -3524,6 +3561,26 @@ defmodule Muro.Check do
           end
         end
 
+      # ⇐-wsome / ⇐-wsomeD. The expected type is Opt, after whnf.
+      # The payload is checked at that Opt's argument.
+      {:word, :some, [t]} ->
+        with {:ok, t1} <- whnf(k, book, a) do
+          case t1 do
+            {:word, {:optk, kd}, []} ->
+              check_wsome_at(k, book, rs, gamma, mode, t, Word.word_ty(kd))
+
+            {:word, :opt, [ty]} ->
+              case is_data(k, book, ty) do
+                {:ok, true} -> check_wsome_at(k, book, rs, gamma, mode, t, ty)
+                {:ok, false} -> wsome_conv(k, book, rs, gamma, mode, t, a)
+                err -> err
+              end
+
+            _ ->
+              wsome_conv(k, book, rs, gamma, mode, t, a)
+          end
+        end
+
       # ⇐-ctor / ⇐-conv
       _ ->
         case {view_data(k, book, a, names_of(rs, gamma)), ctor_spine(book, e)} do
@@ -3535,6 +3592,73 @@ defmodule Muro.Check do
           _ ->
             infer_conv(k, book, rs, gamma, mode, e, a)
         end
+    end
+  end
+
+  # Infer the payload of wsome and convert Opt of its word kind to the
+  # expected type. A payload that is not a machine integer, and a
+  # constructor with no expected data type, are both "wsome requires an
+  # expected Opt type". This does not infer the wsome term itself
+  # (Agda: wsomeConv).
+  defp wsome_conv(k, book, rs, gamma, mode, t, expected) do
+    case infer(k, book, rs, gamma, mode, t) do
+      {:error, "machine integer operation expects a machine integer"} ->
+        {:error, "wsome requires an expected Opt type"}
+
+      {:error, "constructor requires an expected data type"} ->
+        {:error, "wsome requires an expected Opt type"}
+
+      {:error, _} = err ->
+        err
+
+      {:ok, {tp, u}} ->
+        with {:ok, tp1} <- whnf(k, book, tp) do
+          case Word.kind_of_ty(tp1) do
+            {:ok, kx} ->
+              with :ok <- conv(k, book, names_of(rs, gamma), Word.opt_ty(kx), expected) do
+                {:ok, u}
+              end
+
+            :error ->
+              {:error, "wsome requires an expected Opt type"}
+          end
+        end
+    end
+  end
+
+  # The payload of wsome, at the Opt's argument. A constructor whose
+  # family is not that argument is a conversion failure: the Opt is
+  # already present. A constructor of that family keeps the error from
+  # its fields.
+  defp check_wsome_at(k, book, rs, gamma, mode, t, expected) do
+    case check(k, book, rs, gamma, mode, t, expected) do
+      {:error, "constructor requires an expected data type"} = err ->
+        wsome_ctor_conv(k, book, rs, gamma, t, expected, err)
+
+      other ->
+        other
+    end
+  end
+
+  defp wsome_ctor_conv(k, book, rs, gamma, t, expected, err) do
+    case ctor_spine(book, t) do
+      {:ok, {dname, _ci, _args}} ->
+        if same_family?(k, book, expected, dname) do
+          err
+        else
+          want = Print.term(expected, names_of(rs, gamma))
+          {:error, "cannot convert #{dname} ≁ #{want}"}
+        end
+
+      _ ->
+        err
+    end
+  end
+
+  defp same_family?(k, book, expected, dname) do
+    case view_data(k, book, expected, []) do
+      {:ok, {_d, name, _ps, _is}} -> name == dname
+      _ -> false
     end
   end
 

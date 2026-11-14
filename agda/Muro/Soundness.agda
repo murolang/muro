@@ -1333,11 +1333,143 @@ check-sound k σ rs {Γ = Γ} m {A = T} {u = uses} G FΓ (f-unf {s = seed} {f = 
 
 -- unfold seed (λ _ → (h, t)). A stream is the λ (⇐-unf). A declared
 -- family is the instantiated pair (⇐-unfR): uncons of the λ wraps, and
--- that wrap is not the family's tail.
+-- that wrap is not the family's tail. A seed that does not infer is
+-- checked at the annotation (⇐-unfA, ⇐-unfRA).
 check-sound k σ {n = n} rs {Γ = Γ} m {A = T} {u = uses} G FΓ
     (f-unf {s = seed} Fs (f-lam {q = q} {A = A} {t = pair h t} FA (f-pair Fh Ft)) fs-pair) FT eq
   with infer k σ rs Γ m seed in ieq
-... | fail _ = ⊥-elim (fail≢ok eq)
+... | fail _ = seedChk eq
+  where
+    seedChk :
+      (check k σ rs Γ m seed A >>= λ seedU →
+       unfStep k σ T A >>= λ (goal , fam) →
+       (if fam then ok tt else whnf k σ T >>= λ T′ → guard "bare ν is not a stream" (lamForm T′)) >>
+       (if eqQty q reuse then isCopy k σ A >>= guard notCopy else ok tt) >>
+       check k σ (extRec (if fam then setGuard rs else rs) false false) (ext Γ q A) m (pair h t) (wk goal) >>= λ bodyU →
+       let (u₀ , us) = headTailU bodyU
+       in checkBound m q u₀ >>
+          checkUnfold k σ m rs (lam q A (pair h t)) >>
+          combine m seedU us)
+      ≡ ok uses
+      → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
+    seedChk eq′ with check k σ rs Γ m seed A in seq
+    ... | fail _ = ⊥-elim (fail≢ok eq′)
+    ... | ok seedU with unfStep k σ T A in ustep
+    ... | fail _ = ⊥-elim (fail≢ok eq′)
+    ... | ok (goal , true) = famA eq′
+      where
+        famA :
+          ((if true then ok tt else whnf k σ T >>= λ T′ → guard "bare ν is not a stream" (lamForm T′)) >>
+           (if eqQty q reuse then isCopy k σ A >>= guard notCopy else ok tt) >>
+           check k σ (extRec (setGuard rs) false false) (ext Γ q A) m (pair h t) (wk goal) >>= λ bodyU →
+           let (u₀ , us) = headTailU bodyU
+           in checkBound m q u₀ >>
+              checkUnfold k σ m rs (lam q A (pair h t)) >>
+              combine m seedU us)
+          ≡ ok uses
+          → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
+        famA eq1 with (if eqQty q reuse then isCopy k σ A >>= guard notCopy else ok tt)
+        ... | fail _ = ⊥-elim (fail≢ok eq1)
+        ... | ok tt with check k σ (extRec (setGuard rs) false false) (ext Γ q A) m (pair h t) (wk goal) in beq
+        ... | fail _ = ⊥-elim (fail≢ok eq1)
+        ... | ok (u₀ Vec.∷ bus) with checkBound m q u₀ in bb
+        ... | fail _ = ⊥-elim (fail≢ok eq1)
+        ... | ok tt with checkUnfold k σ m rs (lam q A (pair h t))
+        ... | fail _ = ⊥-elim (fail≢ok eq1)
+        ... | ok tt = fromSeed (check-sound k σ rs m G FΓ Fs FA seq)
+          where
+            fromSeed : Chk {σ} Γ m seed A seedU → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
+            fromSeed (chk Ds) with >>=-ok ustep
+            ... | T′ , wheq , sEq with check-sound k σ (extRec (setGuard rs) false false) m G
+                                        (FragCtx-ext FΓ FA) (f-pair Fh Ft)
+                                        (Frag-wk (unfStepOf-Frag A T′ FA (whnf-Frag k σ (GoodSig.frag G) FT wheq) sEq)) beq
+            ... | chk Dp = chk′ (⇐-unfRA Ds (whnf-≈ k σ (GoodSig.frag G) FT wheq) sEq refl Dp bb eq1)
+            ... | chk′ _ = miss
+            ... | miss = miss
+            fromSeed (chk′ _) = miss
+            fromSeed miss = miss
+    ... | ok (goal , false) = streamA eq′
+      where
+        streamA :
+          ((if false then ok tt else whnf k σ T >>= λ T′ → guard "bare ν is not a stream" (lamForm T′)) >>
+           (if eqQty q reuse then isCopy k σ A >>= guard notCopy else ok tt) >>
+           check k σ (extRec rs false false) (ext Γ q A) m (pair h t) (wk goal) >>= λ bodyU →
+           let (u₀ , us) = headTailU bodyU
+           in checkBound m q u₀ >>
+              checkUnfold k σ m rs (lam q A (pair h t)) >>
+              combine m seedU us)
+          ≡ ok uses
+          → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
+        streamA eq1 = onWhnf eq1
+          where
+            onUnf : (T′ : Tm n) → whnf k σ T ≡ ok T′ → lamForm T′ ≡ true
+              → unfStepOf A T′ ≡ ok (goal , false)
+              → (u₀ : Use) (bus : UseVec n)
+              → check k σ (extRec rs false false) (ext Γ q A) m (pair h t) (wk goal) ≡ ok (u₀ Vec.∷ bus)
+              → checkBound m q u₀ ≡ ok tt
+              → (checkUnfold k σ m rs (lam q A (pair h t)) >> combine m seedU bus) ≡ ok uses
+              → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
+            onUnf T′ wheq leq sEq u₀ bus beq bb eq2 with checkUnfold k σ m rs (lam q A (pair h t))
+            ... | fail _ = ⊥-elim (fail≢ok eq2)
+            ... | ok tt = fromSeed (check-sound k σ rs m G FΓ Fs FA seq)
+              where
+                Eh : Tm n
+                Eh = proj₁ (lamForm-inv (whnf-Frag k σ (GoodSig.frag G) FT wheq) leq)
+                shp : T′ ≡ nu (prod (wk Eh) (var Fin.zero))
+                shp = proj₂ (lamForm-inv (whnf-Frag k σ (GoodSig.frag G) FT wheq) leq)
+                fromSeed : Chk {σ} Γ m seed A seedU → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
+                fromSeed (chk Ds) with check-sound k σ (extRec rs false false) m G
+                                       (FragCtx-ext FΓ FA) (f-pair Fh Ft)
+                                       (Frag-wk (unfStepOf-Frag A T′ FA (whnf-Frag k σ (GoodSig.frag G) FT wheq) sEq)) beq
+                ... | chk Dp = chk (⇐-unfA Ds (whnf-≈ k σ (GoodSig.frag G) FT wheq) sEq shp Dp bb eq2)
+                ... | chk′ _ = miss
+                ... | miss = miss
+                fromSeed (chk′ _) = miss
+                fromSeed miss = miss
+            onBnd : (T′ : Tm n) → whnf k σ T ≡ ok T′ → lamForm T′ ≡ true
+              → unfStepOf A T′ ≡ ok (goal , false)
+              → (u₀ : Use) (bus : UseVec n)
+              → check k σ (extRec rs false false) (ext Γ q A) m (pair h t) (wk goal) ≡ ok (u₀ Vec.∷ bus)
+              → (checkBound m q u₀ >> checkUnfold k σ m rs (lam q A (pair h t)) >> combine m seedU bus) ≡ ok uses
+              → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
+            onBnd T′ wheq leq sEq u₀ bus beq eq2 with checkBound m q u₀ in bb
+            ... | fail _ = ⊥-elim (fail≢ok eq2)
+            ... | ok tt = onUnf T′ wheq leq sEq u₀ bus beq bb eq2
+            onChk : (T′ : Tm n) → whnf k σ T ≡ ok T′ → lamForm T′ ≡ true
+              → unfStepOf A T′ ≡ ok (goal , false)
+              → (check k σ (extRec rs false false) (ext Γ q A) m (pair h t) (wk goal) >>= λ bodyU →
+                 let (u₀ , us) = headTailU bodyU in
+                 checkBound m q u₀ >> checkUnfold k σ m rs (lam q A (pair h t)) >> combine m seedU us)
+                ≡ ok uses → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
+            onChk T′ wheq leq sEq eq2 with check k σ (extRec rs false false) (ext Γ q A) m (pair h t) (wk goal) in beq
+            ... | fail _ = ⊥-elim (fail≢ok eq2)
+            ... | ok (u₀ Vec.∷ bus) = onBnd T′ wheq leq sEq u₀ bus beq eq2
+            onLam : (T′ : Tm n) → whnf k σ T ≡ ok T′
+              → (guard "bare ν is not a stream" (lamForm T′) >>
+                 (if eqQty q reuse then isCopy k σ A >>= guard notCopy else ok tt) >>
+                 check k σ (extRec rs false false) (ext Γ q A) m (pair h t) (wk goal) >>= λ bodyU →
+                 let (u₀ , us) = headTailU bodyU in
+                 checkBound m q u₀ >> checkUnfold k σ m rs (lam q A (pair h t)) >> combine m seedU us)
+                ≡ ok uses → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
+            onLam T′ wheq eq2 with lamForm T′ in leq
+            ... | false = ⊥-elim (fail≢ok eq2)
+            ... | true with (if eqQty q reuse then isCopy k σ A >>= guard notCopy else ok tt)
+            ... | fail _ = ⊥-elim (fail≢ok eq2)
+            ... | ok tt =
+              let T″ , weq2 , sEq0 = >>=-ok ustep
+                  sEq = subst (λ z → unfStepOf A z ≡ ok (goal , false))
+                              (sym (ok-inj (trans (sym wheq) weq2))) sEq0
+              in onChk T′ wheq leq sEq eq2
+            onWhnf :
+              ((if false then ok tt else whnf k σ T >>= λ T′ → guard "bare ν is not a stream" (lamForm T′)) >>
+               (if eqQty q reuse then isCopy k σ A >>= guard notCopy else ok tt) >>
+               check k σ (extRec (if false then setGuard rs else rs) false false) (ext Γ q A) m (pair h t) (wk goal) >>= λ bodyU →
+               let (u₀ , us) = headTailU bodyU in
+               checkBound m q u₀ >> checkUnfold k σ m rs (lam q A (pair h t)) >> combine m seedU us)
+              ≡ ok uses → Chk {σ} Γ m (unf seed (lam q A (pair h t))) T uses
+            onWhnf eq2 with whnf k σ T in wheq
+            ... | fail _ = ⊥-elim (fail≢ok eq2)
+            ... | ok T′ = onLam T′ wheq eq2
 ... | ok (S , seedU) with conv k σ A S in aeq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok tt with unfStep k σ T S in seq

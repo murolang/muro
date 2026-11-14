@@ -311,6 +311,8 @@ match o motive (λ _ → U64)
   | wnone => toU64 0
 ```
 
+`wsome t` is checked at an expected `Opt A`, and `t` is checked at `A`. `wnone` is checked at that same `Opt`. Without an expected `Opt`, `wsome` still requires a word. `Opt` of a pair of data checks. C, Rust, Zig, and JavaScript may refuse that pair (`c:unsupported`). An `Opt` of ordinary data, such as `Opt Cell`, still emits on those backends.
+
 `n` has the quantity of the scrutinee when the scrutinee is a variable, the same way a `suc` binder does. A closed scrutinee reduces, so `match (bytesEq b"a" b"a") … | wtrue => suc 0 | wfalse => 0` is `suc 0` by `refl`, and `match (sliceGet b"ab" (toU64 0)) … | wsome n => n | wnone => toU8 0` is `toU8 97` by `refl`. `examples/word_match.muro` is the worked book. A `match` whose result is a `Slice` returns that view. An arm that returns `slice s off len` still points into `s`.
 
 ## A bounded field

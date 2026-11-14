@@ -75,6 +75,8 @@ ctor-no-⇐ () (⇐-pair _ _ _ _)
 ctor-no-⇐ () (⇐-letp _ _ _ _ _ _)
 ctor-no-⇐ () (⇐-unf _ _ _ _ _ _ _ _)
 ctor-no-⇐ () (⇐-unfR _ _ _ _ _ _ _ _)
+ctor-no-⇐ () (⇐-unfA _ _ _ _ _ _ _)
+ctor-no-⇐ () (⇐-unfRA _ _ _ _ _ _ _)
 
 dty-no-⇒ : ∀ {n} {Γ : Ctx n} {m i as e B u}
   → Spine (dty i) as e → σ-empty , Γ ⊢[ m ] e ⇒ B ⊣ u → ⊥
@@ -94,6 +96,8 @@ dty-no-⇐ () (⇐-pair _ _ _ _)
 dty-no-⇐ () (⇐-letp _ _ _ _ _ _)
 dty-no-⇐ () (⇐-unf _ _ _ _ _ _ _ _)
 dty-no-⇐ () (⇐-unfR _ _ _ _ _ _ _ _)
+dty-no-⇐ () (⇐-unfA _ _ _ _ _ _ _)
+dty-no-⇐ () (⇐-unfRA _ _ _ _ _ _ _)
 
 ctor-no⊨ : ∀ {n} {Γ : Ctx n} {m i j as e A}
   → Spine (ctor i j) as e → σ-empty , Γ ⊨⁰[ m ] e ∶ A → ⊥
@@ -205,6 +209,8 @@ ne-untyped-⇐ (ne-foreign ()) (⇐-pair _ _ _ _)
 ne-untyped-⇐ (ne-letp ne) (⇐-letp D _ _ _ _ _) = ne-untyped-⇒ ne D
 ne-untyped-⇐ (ne-foreign ()) (⇐-unf _ _ _ _ _ _ _ _)
 ne-untyped-⇐ (ne-foreign ()) (⇐-unfR _ _ _ _ _ _ _ _)
+ne-untyped-⇐ (ne-foreign ()) (⇐-unfA _ _ _ _ _ _ _)
+ne-untyped-⇐ (ne-foreign ()) (⇐-unfRA _ _ _ _ _ _ _)
 
 -- unfStepOf on an application succeeds only when the head is ν, so the
 -- application is a ν spine and stays one under reduction.
@@ -340,6 +346,10 @@ Empty-nf nf-unf (⇐-conv (⇒-unf _ _ _ _ _) c) with ≈-shape h-nu h-empty c
 Empty-nf nf-unf (⇐-unf _ _ c _ refl _ _ _) with ≈-shape h-empty h-nu c
 ... | ()
 Empty-nf nf-unf (⇐-unfR _ _ cT st _ _ _ _) =
+  ⊥-elim (rigid-spine h-empty (λ ()) st cT)
+Empty-nf nf-unf (⇐-unfA _ c _ refl _ _ _) with ≈-shape h-empty h-nu c
+... | ()
+Empty-nf nf-unf (⇐-unfRA _ cT st _ _ _ _) =
   ⊥-elim (rigid-spine h-empty (λ ()) st cT) 
 
 
@@ -452,6 +462,10 @@ nf-nat-prog nf-unf (⇐-unf _ _ c _ refl _ _ _) with ≈-shape h-nat h-nu c
 ... | ()
 nf-nat-prog nf-unf (⇐-unfR _ _ cT st _ _ _ _) =
   ⊥-elim (rigid-spine h-nat (λ ()) st cT)
+nf-nat-prog nf-unf (⇐-unfA _ c _ refl _ _ _) with ≈-shape h-nat h-nu c
+... | ()
+nf-nat-prog nf-unf (⇐-unfRA _ cT st _ _ _ _) =
+  ⊥-elim (rigid-spine h-nat (λ ()) st cT)
 
 nf-unit-prog : ∀ {e P t u} →
   Nf σ-empty evid e → σ-empty , ε ⊢[ evid ] e ⇐ unit ⊣ u →
@@ -489,6 +503,10 @@ nf-unit-prog nf-unf (⇐-conv (⇒-unf _ _ _ _ _) c) with ≈-shape h-nu h-unit 
 nf-unit-prog nf-unf (⇐-unf _ _ c _ refl _ _ _) with ≈-shape h-unit h-nu c
 ... | ()
 nf-unit-prog nf-unf (⇐-unfR _ _ cT st _ _ _ _) =
+  ⊥-elim (rigid-spine h-unit (λ ()) st cT)
+nf-unit-prog nf-unf (⇐-unfA _ c _ refl _ _ _) with ≈-shape h-unit h-nu c
+... | ()
+nf-unit-prog nf-unf (⇐-unfRA _ cT st _ _ _ _) =
   ⊥-elim (rigid-spine h-unit (λ ()) st cT)
 
 nf-eq-prog : ∀ {eq E A l r P t u} →
@@ -559,6 +577,8 @@ progress-⇐ (⇐-letp De c _ _ _ _) with progress-⇒ De
 ... | inj₁ nf = nf-prod-prog nf De c
 progress-⇐ (⇐-unf _ _ _ _ _ _ _ _) = inj₁ nf-unf
 progress-⇐ (⇐-unfR _ _ _ _ _ _ _ _) = inj₁ nf-unf
+progress-⇐ (⇐-unfA _ _ _ _ _ _ _) = inj₁ nf-unf
+progress-⇐ (⇐-unfRA _ _ _ _ _ _ _) = inj₁ nf-unf
 
 progress-⇒ (⇒-var-evid {x = ()} _)
 progress-⇒ ⇒-ze = inj₁ nf-ze

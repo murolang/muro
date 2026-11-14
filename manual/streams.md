@@ -30,6 +30,8 @@ A ν value is built by an `unfold`.
 unfold seed (λ (s : S) → (head, next_seed))
 ```
 
+The seed is checked at `S`. A data constructor is accepted there. A step that is not a λ still infers the seed, so a constructor in that position is refused.
+
 The body is a pair. Productivity, in `run` and `evidence`: the block may not occur in the pair’s **head**, and in the **tail** it may occur only as a guarded tail. With `B` the block:
 
 ```

@@ -1797,7 +1797,8 @@ defmodule Muro.Emit.JS do
 
   defp emit_wrd(k, op, args, st) do
     h = st.h
-    ks = js_str(Atom.to_string(k))
+    # :some of ordinary data carries the data layout, not a word kind.
+    ks = if is_atom(k), do: js_str(Atom.to_string(k)), else: "\"\""
 
     with {:ok, es} <- emit_many(args, st) do
       at = fn i -> Enum.at(es, i) end
