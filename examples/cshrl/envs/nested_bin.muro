@@ -1,0 +1,50 @@
+-- nested_bin.muro — a constructor under a recursive child, with no declared feature.
+--
+-- The state is a tree. The cover is two bins whose right child is
+-- `tip 0`. The left child is a bin in both. One field further, that
+-- bin holds a tip in one tree and a bin in the other. move and stay
+-- both swap the two trees. Every reward is positive. On the tree
+-- whose nested child is a tip, stay pays 2 and move pays 1. On the
+-- other tree the payments are reversed. No action stays put, and
+-- neither state is absorbing. Nothing in this book names a feature.
+import "../std/nat.muro"
+import "../lib/agent.muro"
+
+data State : Type where
+  tip : Π (n : Nat) → State
+  bin : Π (+ l : State) → Π (r : State) → State
+
+data Action : Type where
+  move : Action
+  stay : Action
+
+def Reward : spec Type := Nat
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Reward)
+      | tip _ => (bin (bin (tip 0) (tip 0)) (tip 0), 0)
+      | bin l _ =>
+          (match l motive (λ _ → State × Reward)
+            | tip _ => (bin (bin (tip 0) (tip 0)) (tip 0), 0)
+            | bin inner _ =>
+                (match inner motive (λ _ → State × Reward)
+                  | tip _ =>
+                      (match a motive (λ _ → State × Reward)
+                        | move => (bin (bin (bin (tip 0) (tip 0)) (tip 0)) (tip 0), suc 0)
+                        | stay => (bin (bin (bin (tip 0) (tip 0)) (tip 0)) (tip 0), suc (suc 0)))
+                  | bin _ _ =>
+                      (match a motive (λ _ → State × Reward)
+                        | move => (bin (bin (tip 0) (tip 0)) (tip 0), suc (suc 0))
+                        | stay => (bin (bin (tip 0) (tip 0)) (tip 0), suc 0))))
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons move (cons stay nil)
+def default-action : run Action := stay
+def horizon : run Nat := 0
+
+def all-states : run List State :=
+  cons (bin (bin (tip 0) (tip 0)) (tip 0))
+    (cons (bin (bin (bin (tip 0) (tip 0)) (tip 0)) (tip 0)) nil)
