@@ -29,21 +29,22 @@ defmodule Muro.IR do
   (`Muro.Load.file/1`, then `Muro.Prelude.for_emit/1`).
 
   Returns `{:ok, funs}` or `{:error, reason}`. `reason` is `c:lambda`,
-  `c:machine`, `c:stream`, `c:string`, `c:erased`, or `c:unsupported`. With
+  `c:machine`, `c:stream`, `c:erased`, or `c:unsupported`. With
   `closures: true` a refusal is `{:named, reason, def_name}` instead.
   That path may also record `{:data, name, args}`. The default image
   keeps the bare reason and `{:data, name}`.
 
   `opts` may set `closures: true`. That path elaborates a lambda as a
   closure instead of `c:lambda`, and a definition with fewer λs than Πs
-  is applied to the missing parameters. It also elaborates a string as
-  `{:str, utf8}`, `{:scat, a, b}`, `{:slen, a}`, or `{:seq, a, b}`.
+  is applied to the missing parameters. A string is `{:str, utf8}`,
+  `{:scat, a, b}`, `{:slen, a}`, or `{:seq, a, b}` on every image.
   The default, `closures: false`, is the image C, Rust, and Zig emit.
-  That image refuses a string. A `Bytes` or a `Slice` is `:slice` on every
-  image: `{:byt, binary}`, `{:bcat, a, b}`, `{:blen, a}`, `{:beq, a, b}`,
-  `{:bsub, s, off, len}`, `{:bget, s, i}`, `{:bunc, s}`, `{:btil, s, b}`,
-  `{:baft, s, b}`, `{:bfold, step, caps, z, s}`. `strBytes` of a closed
-  string is `{:byt, utf8}`. An open string on the default image is `c:string`.
+  A `Bytes` or a `Slice` is `:slice` on every image: `{:byt, binary}`,
+  `{:bcat, a, b}`, `{:blen, a}`, `{:beq, a, b}`, `{:bsub, s, off, len}`,
+  `{:bget, s, i}`, `{:bunc, s}`, `{:btil, s, b}`, `{:baft, s, b}`,
+  `{:bfold, step, caps, z, s}`. `strBytes` of a closed string is
+  `{:byt, utf8}`. An open `strBytes` is `{:sbytes, s}`. Assembly still
+  refuses a string (`c:string`).
   """
   def elaborate(book, opts \\ []) when is_list(book) and is_list(opts) do
     st = %{
@@ -582,24 +583,24 @@ defmodule Muro.IR do
     end
   end
 
-  defp elab_form(%{closures: true}, {:slit, bin}, _ctx, k) when is_binary(bin) do
+  defp elab_form(_st, {:slit, bin}, _ctx, k) when is_binary(bin) do
     ok({:str, bin}, :string, [], k)
   end
 
-  defp elab_form(%{closures: true} = st, {:scat, a, b}, ctx, k) do
+  defp elab_form(st, {:scat, a, b}, ctx, k) do
     with {:ok, ea} <- elab(st, a, ctx, k),
          {:ok, eb} <- elab(st, b, ctx, ea.k) do
       ok({:scat, ea.tm, eb.tm}, :string, ea.steps ++ eb.steps, eb.k)
     end
   end
 
-  defp elab_form(%{closures: true} = st, {:slen, a}, ctx, k) do
+  defp elab_form(st, {:slen, a}, ctx, k) do
     with {:ok, ea} <- elab(st, a, ctx, k) do
       ok({:slen, ea.tm}, :nat, ea.steps, ea.k)
     end
   end
 
-  defp elab_form(%{closures: true} = st, {:seq, a, b}, ctx, k) do
+  defp elab_form(st, {:seq, a, b}, ctx, k) do
     with {:ok, ea} <- elab(st, a, ctx, k),
          {:ok, eb} <- elab(st, b, ctx, ea.k) do
       ok({:seq, ea.tm, eb.tm}, :wbool, ea.steps ++ eb.steps, eb.k)
@@ -671,12 +672,8 @@ defmodule Muro.IR do
         ok({:byt, bin}, :slice, [], k)
 
       :open ->
-        if st.closures do
-          with {:ok, es} <- elab(st, s, ctx, k) do
-            ok({:sbytes, es.tm}, :slice, es.steps, es.k)
-          end
-        else
-          {:error, "c:string"}
+        with {:ok, es} <- elab(st, s, ctx, k) do
+          ok({:sbytes, es.tm}, :slice, es.steps, es.k)
         end
     end
   end
@@ -859,8 +856,7 @@ defmodule Muro.IR do
   defp layout_of(_st, :empty), do: {:ok, :opaque}
   defp layout_of(_st, {:idt, _, _, _}), do: {:ok, :opaque}
   defp layout_of(_st, :atom), do: {:ok, {:data, "Atom"}}
-  defp layout_of(%{closures: true}, :string), do: {:ok, :string}
-  defp layout_of(_st, :string), do: {:error, "c:string"}
+  defp layout_of(_st, :string), do: {:ok, :string}
   defp layout_of(_st, :bytes), do: {:ok, :slice}
   defp layout_of(_st, :slice), do: {:ok, :slice}
 
@@ -958,11 +954,6 @@ defmodule Muro.IR do
     end
   end
 
-  defp bad_head(:string), do: "c:string"
-  defp bad_head({:slit, _}), do: "c:string"
-  defp bad_head({:scat, _, _}), do: "c:string"
-  defp bad_head({:slen, _}), do: "c:string"
-  defp bad_head({:seq, _, _}), do: "c:string"
   defp bad_head(:f32ty), do: "c:machine"
   defp bad_head({:tensor, _, _}), do: "c:machine"
   defp bad_head({:addi, _, _}), do: "c:machine"
@@ -1094,6 +1085,9 @@ defmodule Muro.IR do
         case lay do
           {:data, name} when is_binary(name) ->
             {:ok, {{:wrd, lay, :some, [t]}, {:opt, lay}}}
+
+          :string ->
+            {:ok, {{:wrd, :string, :some, [t]}, {:opt, :string}}}
 
           _ ->
             {:error, "c:unsupported"}
