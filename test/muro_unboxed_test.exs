@@ -250,6 +250,44 @@ defmodule Muro.UnboxedTest do
 
     assert {:error, msg} = check(stream_named())
     assert msg =~ "constructor requires an expected data type"
+
+    assert {:error, msg} = check(wsome_opt_u64())
+    assert msg =~ "cannot convert Cell ≁ U64"
+    refute msg =~ "constructor requires an expected data type"
+
+    assert {:error, msg} = check(wsome_opt_u8())
+    assert msg =~ "cannot convert Cell ≁ U8"
+
+    assert {:error, msg} = check(wsome_opt_i64())
+    assert msg =~ "cannot convert Cell ≁ I64"
+
+    assert {:error, msg} = check(wsome_opt_box())
+    assert msg =~ "cannot convert Cell ≁ Box"
+    refute msg =~ "constructor requires an expected data type"
+  end
+
+  test "Elixir runs wsome of a pair of data, and the other backends refuse it" do
+    src = wsome_pair()
+    assert check(src) == :ok
+    assert check(wsome_more()) == :ok
+
+    dir = tmp("wsomepair")
+    path = Path.join(dir, "pair.muro")
+    File.write!(path, src)
+    assert Muro.check_file(path) == :ok
+
+    assert {:ok, ex} = Muro.emit_file(path, Muro.WsomePairEx)
+    Code.compile_string(ex)
+    assert apply(Muro.WsomePairEx, :wrapped, []) == {:some, {{:cell, 7}, 1}}
+
+    assert {:error, cmsg} = Muro.emit_c(path, nif: false)
+    assert cmsg =~ "c:unsupported"
+    assert {:error, rmsg} = Muro.emit_rust(path)
+    assert rmsg =~ "c:unsupported"
+    assert {:error, zmsg} = Muro.emit_zig(path)
+    assert zmsg =~ "c:unsupported"
+    assert {:error, jmsg} = Muro.emit_js(path)
+    assert jmsg =~ "c:unsupported"
   end
 
   test "Elixir, Rust, Zig, and JavaScript run wsome of boxed data" do
@@ -764,6 +802,54 @@ defmodule Muro.UnboxedTest do
       cell : Π (n : U64) → Cell
 
     def bad : run Opt Cell := wsome (toU64 7)
+    """
+  end
+
+  defp wsome_pair do
+    """
+    data Cell : Type where
+      cell : Π (n : U64) → Cell
+
+    def wrapped : run Opt (Cell × U64) := wsome (cell (toU64 7), toU64 1)
+    """
+  end
+
+  defp wsome_opt_u64 do
+    """
+    data Cell : Type where
+      cell : Π (n : U64) → Cell
+
+    def bad : run Opt U64 := wsome (cell (toU64 7))
+    """
+  end
+
+  defp wsome_opt_u8 do
+    """
+    data Cell : Type where
+      cell : Π (n : U64) → Cell
+
+    def bad : run Opt U8 := wsome (cell (toU64 7))
+    """
+  end
+
+  defp wsome_opt_i64 do
+    """
+    data Cell : Type where
+      cell : Π (n : U64) → Cell
+
+    def bad : run Opt I64 := wsome (cell (toU64 7))
+    """
+  end
+
+  defp wsome_opt_box do
+    """
+    data Cell : Type where
+      cell : Π (n : U64) → Cell
+
+    data Box : Type where
+      box : Π (n : U64) → Box
+
+    def bad : run Opt Box := wsome (cell (toU64 7))
     """
   end
 
