@@ -15,7 +15,9 @@ defmodule Muro.IR do
   `{:opt, payload}`, `:string`, `:slice`. `{:data, name}` is `dataL`. `:erased` marks the let of
   an erased constructor field (`{:let, x, :erased, :ze, body}`). Emitters
   match that layout and ignore the payload. The field stays live at
-  `:opaque`, so a use is `Var`. A word term is `{:wrd, kind, op, args}`.
+  `:opaque`, so a use is `Var`. A word term is `{:wrd, layout, op, args}`.
+  A word operation stores its kind there. `wsome` of ordinary data stores
+  `{:data, name}`. A pair does not: that image is `c:unsupported`.
   `closures: true` also uses `{:fn, arg, ret}`, `{:lam, name, lay, body}`,
   `{:appv, fun, arg}`, and `{:data, name, args}`. The default image does not.
   """
