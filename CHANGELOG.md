@@ -6,6 +6,8 @@
 
 A constructor used as the seed of `unfold seed (λ (x : S) → …)` is checked at `S`. A step that is not a λ still infers the seed.
 
+`Opt` of a pair of data checks. Elixir runs that pair. C, Rust, Zig, and JavaScript may refuse it. A constructor of another family under a present `Opt` is a conversion failure.
+
 ### Manual
 
 - Terms. Machine numbers. Streams. Emit. Extending.
