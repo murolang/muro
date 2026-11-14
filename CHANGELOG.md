@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.20.46
+## 0.21.0
+
+A minor bump for `may fail`.
 
 OTP monitors a party marked `may fail`. A `:DOWN` that is not a halt, while the survivor is at a receive from that peer, runs the failure arm. A reason on the arm is the `:DOWN` reason. A `match` on that reason binds the constructor's fields. A `put` to a peer already observed dead is consumed. Protocol `done` and protocol `stop` are not that arm.
 
@@ -18,7 +20,7 @@ C, Rust, Zig, and JavaScript still refuse a marked book with `c:mayfail`, and so
 
 ### Package
 
-- Version 0.20.46.
+- Version 0.21.0.
 
 ## 0.20.45
 
