@@ -146,6 +146,21 @@ defmodule Muro.Synth.Term do
   end
 
   @doc """
+  A reason this schema cannot be ranked, or `nil`.
+
+  The certificate peels a finite cover. A function field, a linear
+  field, and an erased constructor argument are not that peeling:
+  a function is not a value, a linear binder would be dropped in
+  an unused arm, and an erased argument is absent from the value
+  but required in the constructor's telescope. A back-edge under
+  a list or a product is not this peeling either: a `let` parses,
+  and `rank` of the bound pair does not convert in the evidence.
+  """
+  def cert_refusal(schema) do
+    refusal_in(schema)
+  end
+
+  @doc """
   `name` decides whether two states are the same value.
 
   The comparison matches constructors and walks fields, lists, and
@@ -1058,7 +1073,7 @@ defmodule Muro.Synth.Term do
     {b0, b1} = if index == 0, do: {binder, "_"}, else: {"_", binder}
     field = if index == 0, do: left, else: right
     inner = test_at(field, binder, rest, spec, helpers, walked ++ [index], bound)
-    match_bool(hole, "| (#{b0}, #{b1}) => #{inner}", {:prod, left, right})
+    let_pair(hole, b0, b1, inner)
   end
 
   defp test_step({:list, elem}, hole, index, rest, spec, helpers, walked, bound) do
@@ -1136,7 +1151,7 @@ defmodule Muro.Synth.Term do
   end
 
   defp field_call({:prod, _, _}, hole, _spec, _i, _j, fun) do
-    match_bool(hole, "| (x0, x1) => #{fun} x0 x1", :prod)
+    let_pair(hole, "x0", "x1", "#{fun} x0 x1")
   end
 
   defp field_call(_, _, _, _, _, _), do: "false"
@@ -1496,18 +1511,12 @@ defmodule Muro.Synth.Term do
     """
   end
 
-  defp open({:prod, left, right} = schema, hole, plug, type_of, body_of, k, seen) do
-    var = "k#{k}"
+  defp open({:prod, left, right}, hole, plug, type_of, body_of, k, seen) do
     b0 = "f#{k}_0"
     b1 = "f#{k}_1"
     local = "(#{b0}, #{b1})"
-    motive = "(λ (#{var} : #{type_name(schema)}) → #{type_of.(plug.(var))})"
     inner = open_fields([left, right], [b0, b1], local, plug, type_of, body_of, k + 1, seen)
-
-    """
-    (match #{hole} motive #{motive}
-    | (#{b0}, #{b1}) => #{inner})
-    """
+    let_pair(hole, b0, b1, inner)
   end
 
   defp open(_schema, hole, _plug, _type_of, body_of, _k, _seen), do: body_of.(hole)
@@ -1543,6 +1552,12 @@ defmodule Muro.Synth.Term do
     Regex.replace(~r/(?<![A-Za-z0-9_-])#{Regex.escape(binder)}(?![A-Za-z0-9_-])/, src, fn _ ->
       repl
     end)
+  end
+
+  # A pair is opened with `let`, not a match arm. `| (a, b) =>` is not
+  # a constructor pattern.
+  defp let_pair(hole, a, b, inner) do
+    "(let (#{a}, #{b}) = #{hole} in #{inner})"
   end
 
   defp type_name(:nat), do: "Nat"
@@ -1726,6 +1741,54 @@ defmodule Muro.Synth.Term do
     Enum.any?(rows, &Map.get(&1, :erased, false))
   end
 
+  defp refusal_in({:open, "function"}), do: "State has a function field"
+
+  defp refusal_in({:data, name, rows}) do
+    cond do
+      erased_rows?(rows) ->
+        "State has an erased constructor argument"
+
+      linear_rows?(rows) ->
+        "State has a linear field"
+
+      rec_under_container?(rows, name) ->
+        "State recursion under List/product cannot be certified"
+
+      true ->
+        Enum.find_value(rows, fn row ->
+          Enum.find_value(row.fields, &refusal_in(field_schema(&1)))
+        end)
+    end
+  end
+
+  defp refusal_in({:list, elem}), do: refusal_in(elem)
+  defp refusal_in({:prod, left, right}), do: refusal_in(left) || refusal_in(right)
+  defp refusal_in(_schema), do: nil
+
+  # A back-edge under a list or a product, including through a nested
+  # datatype. Direct fields of the datatype being split are not this.
+  defp rec_under_container?(rows, name) when is_binary(name) do
+    rec_under_container?(rows, MapSet.new([name]))
+  end
+
+  defp rec_under_container?(rows, opening) when is_list(rows) do
+    Enum.any?(rows, fn row ->
+      Enum.any?(row.fields, &container_rec?(field_schema(&1), opening))
+    end)
+  end
+
+  defp container_rec?({:list, elem}, opening), do: refers_opening?(elem, opening)
+
+  defp container_rec?({:prod, left, right}, opening) do
+    refers_opening?(left, opening) or refers_opening?(right, opening)
+  end
+
+  defp container_rec?({:data, name, rows}, opening) do
+    rec_under_container?(rows, MapSet.put(opening, name))
+  end
+
+  defp container_rec?(_schema, _opening), do: false
+
   # A recursive occurrence of a datatype whose equality is already being
   # built. A nested datatype is walked on its own; this only sees a
   # back-edge that would have to be matched under a list or a product.
@@ -1848,12 +1911,13 @@ defmodule Muro.Synth.Term do
   end
 
   defp eq_body({:prod, left, right}, _fun, names) do
-    """
-    (match x motive (λ _ → Bool)
-      | (a, b) =>
-          (match y motive (λ _ → Bool)
-            | (c, d) => #{eq_and(["#{Map.fetch!(names, left)} a c", "#{Map.fetch!(names, right)} b d"])}))
-    """
+    inner =
+      eq_and([
+        "#{Map.fetch!(names, left)} a c",
+        "#{Map.fetch!(names, right)} b d"
+      ])
+
+    let_pair("x", "a", "b", let_pair("y", "c", "d", inner))
   end
 
   defp eq_body({:data, _, rows}, _fun, names) do
@@ -1898,10 +1962,13 @@ defmodule Muro.Synth.Term do
 
   # A back-edge uses the function reserved for that datatype.
   defp eq_fun(names, {:rec, name}) do
-    Enum.find_value(names, fn
-      {{:data, ^name, _}, fun} -> fun
-      _ -> nil
-    end)
+    case Enum.find(names, fn
+           {{:data, ^name, _}, _fun} -> true
+           _ -> false
+         end) do
+      {_schema, fun} -> fun
+      nil -> raise KeyError, key: {:rec, name}, term: names
+    end
   end
 
   defp eq_fun(names, schema), do: Map.fetch!(names, schema)
@@ -2359,10 +2426,7 @@ defmodule Muro.Synth.Term do
   defp split_prod(left, right, hole, embed, cands, type_of, continue, miss, k, bound) do
     a = "p#{k}_0"
     b = "p#{k}_1"
-    var = "q#{k}"
     local = "(#{a}, #{b})"
-    schema = {:prod, left, right}
-    motive = "(λ (#{var} : #{type_name(schema)}) → #{type_of.(embed.(var))})"
 
     case pair_cands(cands) do
       :open ->
@@ -2412,7 +2476,7 @@ defmodule Muro.Synth.Term do
                bound
              ) do
           :open -> :open
-          {:ok, inner, k2} -> {:ok, match_arms(hole, motive, ["| (#{a}, #{b}) => #{inner}"]), k2}
+          {:ok, inner, k2} -> {:ok, let_pair(hole, a, b, inner), k2}
         end
     end
   end

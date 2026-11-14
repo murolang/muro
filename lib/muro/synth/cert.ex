@@ -236,17 +236,41 @@ defmodule Muro.Synth.Cert do
       host[:all_states] == [] ->
         {:error, "all-states is empty"}
 
-      cover_only?(host) and not Term.equatable?(host.schema) ->
-        {:error, "the cover cannot be split"}
-
-      cover_only?(host) and not closed_cover?(host, host.all_states, host.actions) ->
-        {:error, "all-states is not closed under step"}
-
       cover_only?(host) ->
-        {:ok, host.all_states}
+        cover_states(host)
 
       true ->
         :open
+    end
+  end
+
+  defp cover_states(host) do
+    cond do
+      is_binary(msg = Term.cert_refusal(host.schema)) ->
+        {:error, msg}
+
+      not closed_cover?(host, host.all_states, host.actions) ->
+        {:error, "all-states is not closed under step"}
+
+      not cover_splittable?(host) ->
+        {:error, "the cover cannot be split"}
+
+      true ->
+        {:ok, host.all_states}
+    end
+  end
+
+  # A finite cover is split by peeling the terms themselves. Equality
+  # of the schema is a different question: a back-edge under a product
+  # has no equality run, and the cover can still be ranked.
+  defp cover_splittable?(host) do
+    miss = fn _src -> "Empty" end
+    body = fn _spell -> "Unit" end
+    type = fn _src -> "Type" end
+
+    case Term.cover_match(host.schema, "s", host.all_states, type, body, miss) do
+      {:ok, _text} -> true
+      :open -> false
     end
   end
 

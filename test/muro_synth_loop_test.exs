@@ -342,6 +342,25 @@ defmodule Muro.SynthLoopTest do
     assert text =~ "certificate CoindHomo"
   end
 
+  test "product recursion opens and the certificate is refused" do
+    dir = tmp()
+    path = write_book(dir, "prod-rec.muro", product_rec_src())
+
+    assert {:ok, host} = Muro.Synth.Host.open(path)
+    assert host.structured
+    assert Enum.map(host.all_states, & &1.spell) == ["(tip 0)", "(fork ((tip 0), (tip 0)))"]
+    refute Muro.Synth.Term.equatable?(host.schema)
+
+    assert Muro.Synth.Term.cert_refusal(host.schema) ==
+             "State recursion under List/product cannot be certified"
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert result.reason == "State recursion under List/product cannot be certified"
+    refute result.book =~ "evidence CoindHomo"
+    refute result.book =~ "def rank"
+  end
+
   @tag timeout: 180_000
   test "a bit under two constructors is invented and certified" do
     src = File.read!(@nest)
@@ -534,7 +553,12 @@ defmodule Muro.SynthLoopTest do
   end
 
   test "a false program is falsep in the json log outside the checkout" do
-    parent = Path.join(System.tmp_dir!(), "muro_synth_cwd_#{System.unique_integer([:positive])}")
+    parent =
+      Path.join(
+        System.tmp_dir!(),
+        "muro_synth_cwd_#{System.unique_integer([:positive])}_#{System.system_time(:nanosecond)}"
+      )
+
     File.mkdir_p!(parent)
     book_path = Path.expand(@stay)
 
@@ -1094,7 +1118,10 @@ defmodule Muro.SynthLoopTest do
 
   test "stdout import resolves when the book is saved in the current directory" do
     parent =
-      Path.join(System.tmp_dir!(), "muro_synth_stdout_#{System.unique_integer([:positive])}")
+      Path.join(
+        System.tmp_dir!(),
+        "muro_synth_stdout_#{System.unique_integer([:positive])}_#{System.system_time(:nanosecond)}"
+      )
 
     nested = Path.join(parent, "nested")
     File.mkdir_p!(nested)
@@ -1539,6 +1566,71 @@ defmodule Muro.SynthLoopTest do
     assert {:error, :usage, "State is mutually inductive"} = Muro.Synth.Host.open(path)
   end
 
+  test "List State is not strictly positive" do
+    dir = tmp()
+
+    path =
+      write_book(dir, "list-rec.muro", """
+      import "std:bool.muro"
+      import "std:list.muro"
+
+      data State : Type where
+        tip : Π (n : Nat) → State
+        kids : Π (xs : List State) → State
+
+      data Action : Type where
+        go : Action
+
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+
+      def all-actions : run List Action := cons go nil
+      def horizon : run Nat := 0
+      def all-states : run List State := cons (tip 0) nil
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :book, msg} = Muro.Synth.Host.open(path)
+    assert msg =~ "constructor is not strictly positive"
+  end
+
+  test "a linear field opens and the certificate is refused" do
+    dir = tmp()
+    path = write_book(dir, "linear.muro", linear_cover_src())
+
+    assert {:ok, host} = Muro.Synth.Host.open(path)
+    assert host.structured
+    assert Muro.Synth.Term.cert_refusal(host.schema) == "State has a linear field"
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+    assert result.status == :policy
+    assert result.reason == "State has a linear field"
+    refute result.book =~ "evidence CoindHomo"
+    refute result.book =~ "def rank"
+  end
+
+  test "an erased constructor argument is refused" do
+    dir = tmp()
+    path = write_book(dir, "erased.muro", erased_cover_src())
+
+    assert {:error, :usage, "State has an erased constructor argument"} =
+             Muro.Synth.Host.open(path)
+
+    assert {:error, :usage, "State has an erased constructor argument"} =
+             Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+  end
+
+  test "a function field is refused" do
+    dir = tmp()
+    path = write_book(dir, "fun.muro", function_cover_src())
+
+    assert {:error, :usage, "State has a function field"} = Muro.Synth.Host.open(path)
+
+    assert {:error, :usage, "State has a function field"} =
+             Muro.Synth.cegis_loop(path, depth: 0, max_depth: 0)
+  end
+
   test "more than 32 inhabitants without all-states is refused" do
     dir = tmp()
 
@@ -1682,6 +1774,29 @@ defmodule Muro.SynthLoopTest do
       def diff-arm : evidence {dyn-same none (some 0) ≡ false : Bool} := refl
       def same-some : evidence {dyn-same (some 0) (some 0) ≡ true : Bool} := refl
       def diff-suc : evidence {dyn-same (some 0) (some (suc 0)) ≡ false : Bool} := refl
+      """)
+
+    assert Muro.check_file(path) == :ok
+  end
+
+  test "schema equality of a product uses let" do
+    schema = {:data, "State", [%{name: "cell", fields: [{:prod, :nat, :nat}]}]}
+    assert {:ok, text, _taken} = Muro.Synth.Term.eq_source("dyn-same", schema, MapSet.new())
+    assert text =~ "let ("
+    refute text =~ "| (a, b) =>"
+    dir = tmp()
+
+    path =
+      write_book(dir, "pair-eq.muro", """
+      import "std:bool.muro"
+
+      data State : Type where
+        cell : Π (p : Nat × Nat) → State
+
+      #{text}
+      def same-zero : evidence {dyn-same (cell (0, 0)) (cell (0, 0)) ≡ true : Bool} := refl
+      def diff-fst : evidence {dyn-same (cell (0, 0)) (cell (suc 0, 0)) ≡ false : Bool} := refl
+      def diff-snd : evidence {dyn-same (cell (0, 0)) (cell (0, suc 0)) ≡ false : Bool} := refl
       """)
 
     assert Muro.check_file(path) == :ok
@@ -1878,6 +1993,121 @@ defmodule Muro.SynthLoopTest do
   defp prefer_go(dir), do: write_book(dir, "prefer.muro", prefer_src())
 
   defp two_hot(dir), do: write_book(dir, "hot.muro", two_hot_src())
+
+  defp product_rec_src do
+    """
+    import "std:bool.muro"
+    import "std:list.muro"
+
+    data State : Type where
+      tip : Π (n : Nat) → State
+      fork : Π (p : State × State) → State
+
+    data Action : Type where
+      go : Action
+      stay : Action
+
+    def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+      λ (s : State) → λ (a : Action) →
+        match s motive (λ _ → State × Nat)
+          | tip n =>
+              (match a motive (λ _ → State × Nat)
+                | go => (tip n, 0)
+                | stay => (tip n, suc 0))
+          | fork p =>
+              (match a motive (λ _ → State × Nat)
+                | go => (fork p, suc 0)
+                | stay => (fork p, 0))
+
+    def all-actions : run List Action := cons go (cons stay nil)
+    def horizon : run Nat := 0
+    def all-states : run List State :=
+      cons (tip 0) (cons (fork (tip 0, tip 0)) nil)
+    #{leb_src()}
+    #{ranking_names()}
+    """
+  end
+
+  defp linear_cover_src do
+    """
+    import "std:bool.muro"
+    import "std:list.muro"
+
+    data State : Type where
+      tip : Π (%1 n : Nat) → State
+      bin : Π (%1 n : Nat) → State
+
+    data Action : Type where
+      go : Action
+      stay : Action
+
+    def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+      λ (s : State) → λ (a : Action) →
+        match s motive (λ _ → State × Nat)
+          | tip n =>
+              (match a motive (λ _ → State × Nat)
+                | go => (tip n, 0)
+                | stay => (tip n, suc 0))
+          | bin n =>
+              (match a motive (λ _ → State × Nat)
+                | go => (bin n, suc 0)
+                | stay => (bin n, 0))
+
+    def all-actions : run List Action := cons go (cons stay nil)
+    def horizon : run Nat := 0
+    def all-states : run List State := cons (tip 0) (cons (bin 0) nil)
+    #{leb_src()}
+    #{ranking_names()}
+    """
+  end
+
+  defp erased_cover_src do
+    """
+    import "std:bool.muro"
+    import "std:list.muro"
+
+    data State : Type where
+      box : Π (- x : Nat) → Π (y : Nat) → State
+
+    data Action : Type where
+      go : Action
+
+    def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+      λ (s : State) → λ (_ : Action) →
+        match s motive (λ _ → State × Nat)
+          | box x y => (box 0 y, 0)
+
+    def all-actions : run List Action := cons go nil
+    def horizon : run Nat := 0
+    def all-states : run List State := cons (box 0 0) nil
+    #{leb_src()}
+    """
+  end
+
+  defp function_cover_src do
+    """
+    import "std:bool.muro"
+    import "std:list.muro"
+
+    def idN : run Π (n : Nat) → Nat := λ (n : Nat) → n
+
+    data State : Type where
+      cell : Π (n : Nat) → Π (f : Π (k : Nat) → Nat) → State
+
+    data Action : Type where
+      go : Action
+
+    def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+      λ (s : State) → λ (_ : Action) →
+        match s motive (λ _ → State × Nat)
+          | cell n f => (cell n f, 0)
+
+    def all-actions : run List Action := cons go nil
+    def horizon : run Nat := 0
+    def all-states : run List State := cons (cell 0 idN) nil
+    #{leb_src()}
+    """
+  end
 
   defp write_book(dir, name, src) do
     path = Path.join(dir, name)
