@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.21.2
+## 0.21.1
 
 `examples/cshrl/envs/lam.muro` is removed. It was a finite substitution graph of labels, not a term-reduction environment, and it is ill-posed as a synthesis target.
 
@@ -10,7 +10,7 @@
 
 ### Package
 
-- Version 0.21.2.
+- Version 0.21.1.
 
 ## 0.21.0
 
