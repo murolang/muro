@@ -6,7 +6,7 @@ All definitions can show the grades the checker recorded. `?view=all&grades=on` 
 
 Synthesis, at `?view=synth`, draws the state graph of an environment: the constructors of `State`, and the steps the book writes between them. A report from `mix muro.synth --json`, opened with `?trace=`, shows the version-space sizes, the surviving predicate, and whether the run was certified. The carriers named in `cex` are lit on the last round. A state is ranked when that report is certified, and unsettled otherwise. A report may also carry `rounds` and `states`. `rounds` gives each round its own size and its own carriers. `states` names each state `ranked` or `unsettled`, and the certificate when the report has one. Those two keys are the hook a later search can fill. This version does not record a counterexample on each round inside the search. Opening the view does not run a search.
 
-Install it by adding `{:muro_visor, "~> 0.3.0"}` to a Mix project. A published package depends on `muro ~> 0.20.12`. A checkout builds against the repository. It does not emit code and it does not change the wall.
+Install it by adding `{:muro_visor, "~> 0.3.0"}` to a Mix project. A published package depends on `muro ~> 0.21.0`. A checkout builds against the repository. It does not emit code and it does not change the wall.
 
 ## 0.2.1
 
