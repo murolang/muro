@@ -152,6 +152,7 @@ defmodule Muro.Synth.Host do
 
     host
     |> Map.put(:hints, hints)
+    |> Map.put(:path_depth, Muro.Synth.Term.first_path_depth())
     |> install_features(specs)
   end
 

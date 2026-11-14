@@ -9,6 +9,7 @@ defmodule Muro.SynthLoopTest do
   @nest "examples/cshrl/envs/nested_bit.muro"
   @cover "examples/cshrl/envs/list_cover.muro"
   @tree "examples/cshrl/envs/tree_cover.muro"
+  @deep "examples/cshrl/envs/nested_bin.muro"
   @neg "test/fixtures/synth_neg.muro"
   @gap "test/fixtures/synth_gap.muro"
   @stay "test/fixtures/synth_false.muro"
@@ -339,6 +340,35 @@ defmodule Muro.SynthLoopTest do
     assert text =~ "program: (feat has-pos-reward-go)"
     assert text =~ "at (tip 0) the program prefers stay"
     assert text =~ "at (bin (tip 0) (tip 0)) the program prefers go"
+    assert text =~ "certificate CoindHomo"
+  end
+
+  @tag timeout: 180_000
+  test "a constructor under a recursive child is enumerated and certified" do
+    src = File.read!(@deep)
+    refute src =~ "data Feature"
+    refute src =~ "eval-feature"
+
+    assert {:ok, missed} = Muro.Synth.cegis_loop(@deep, structural: false, depth: 0, max_depth: 0)
+    assert missed.status == :insufficient
+    assert missed.book == nil
+    assert joined(missed) =~ "muro synth: features insufficient"
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(@deep, depth: 0, max_depth: 0)
+    assert result.status == :certified
+    assert result.certificate == "CoindHomo"
+    assert result.program == {:feat, "ctor-is-p0-0-bin"}
+    assert result.book =~ "def survivor : run PredProg := (feat ctor-is-p0-0-bin)"
+    assert result.book =~ "ctor-is-p0-0-bin : Feature"
+    assert result.book =~ "evidence CoindHomo rank"
+    refute result.book =~ "has-pos-reward"
+    refute result.book =~ "CoinductiveHomomorphism"
+
+    text = joined(result)
+    assert text =~ "muro synth: homomorphism checked"
+    assert text =~ "program: (feat ctor-is-p0-0-bin)"
+    assert text =~ "at (bin (bin (tip 0) (tip 0)) (tip 0)) the program prefers stay"
+    assert text =~ "at (bin (bin (bin (tip 0) (tip 0)) (tip 0)) (tip 0)) the program prefers move"
     assert text =~ "certificate CoindHomo"
   end
 
@@ -1559,6 +1589,36 @@ defmodule Muro.SynthLoopTest do
       def all-actions : run List Action := cons go nil
       def horizon : run Nat := 0
       def all-states : run List State := cons (ev ez) nil
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, "State is mutually inductive"} = Muro.Synth.Host.open(path)
+  end
+
+  test "wrapper recursion is mutually inductive" do
+    dir = tmp()
+
+    path =
+      write_book(dir, "wrap.muro", """
+      import "std:bool.muro"
+      import "std:list.muro"
+
+      data Box : Type where
+        box : Π (s : State) → Box
+
+      data State : Type where
+        wrap : Π (b : Box) → State
+
+      data Action : Type where
+        go : Action
+
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+
+      def all-actions : run List Action := cons go nil
+      def horizon : run Nat := 0
+      def all-states : run List State := nil
       def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
         λ (_ : Nat) → λ (_ : Nat) → true
       """)

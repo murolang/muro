@@ -21,8 +21,9 @@ defmodule Muro.Synth.Feature do
   # When `State` has a field, structural templates are read off that
   # term: the constructor, equality of two fields, a field equal to a
   # closed Nat, and on a list (or on the fields of one constructor)
-  # `vals-eq`, `spread-eq`, `pair-any`, and `len-is`. An atomic `State`
-  # is not walked. A bare Nat state is not a template.
+  # `vals-eq`, `spread-eq`, `pair-any`, and `len-is`. The first pass
+  # opens one field. A later pass opens more, up to `Term.path_bound/0`.
+  # An atomic `State` is not walked. A bare Nat state is not a template.
 
   @doc """
   Features for `host`, hints first-filtered with the dynamics templates.
@@ -36,10 +37,7 @@ defmodule Muro.Synth.Feature do
     candidates = enumerate(host, states, hints, taken)
     eval = fn spec, state -> eval_spec(host, &host.eval_feature.(&1, &2), spec, state) end
 
-    candidates
-    |> filter_nontrivial(states, eval)
-    |> drop_subsumed()
-    |> drop_equivalent(states, eval)
+    reduce(candidates, states, eval)
   end
 
   @doc """
@@ -91,7 +89,7 @@ defmodule Muro.Synth.Feature do
 
   defp enumerate_structural(host, states, taken) do
     if host[:structured] && host[:structural] != false && host[:schema] do
-      Muro.Synth.Term.templates(host.schema, states, taken, 1)
+      Muro.Synth.Term.templates(host.schema, states, taken, Muro.Synth.Term.first_path_depth())
     else
       {[], taken}
     end
@@ -127,11 +125,7 @@ defmodule Muro.Synth.Feature do
           hint_eval = host.hint_eval
           eval = fn spec, state -> eval_spec(host, hint_eval, spec, state) end
 
-          reduced =
-            specs
-            |> filter_nontrivial(states, eval)
-            |> drop_subsumed()
-            |> drop_equivalent(states, eval)
+          reduced = reduce(specs, states, eval)
 
           if separates?(reduced, earlier, later, eval), do: reduced, else: []
         end
@@ -144,6 +138,81 @@ defmodule Muro.Synth.Feature do
 
   defp structural_host?(host) do
     host[:structured] == true and host[:structural] != false and host[:schema] != nil
+  end
+
+  @doc """
+  Re-enumerate structural tests one field deeper, up to the path bound.
+
+  `{:ok, specs, depth}` separates `earlier` from `later`. `{:stop, specs,
+  depth}` has reached the bound, or this host has no structural walk.
+  `specs` is `nil` when nothing was re-enumerated. The caller filters
+  nothing further: the specs here are already reduced.
+  """
+  def deepen(host, earlier, later) do
+    depth = Map.get(host, :path_depth, Muro.Synth.Term.first_path_depth())
+
+    cond do
+      not structural_host?(host) ->
+        {:stop, nil, depth}
+
+      depth >= Muro.Synth.Term.path_bound() ->
+        {:stop, nil, depth}
+
+      true ->
+        climb(host, depth, earlier, later)
+    end
+  end
+
+  defp climb(host, depth, earlier, later) do
+    next = depth + 1
+    specs = enumerate_at(host, next)
+    hint_eval = Map.get(host, :hint_eval, host.eval_feature)
+    eval = fn spec, state -> eval_spec(host, hint_eval, spec, state) end
+
+    cond do
+      separates?(specs, earlier, later, eval) ->
+        {:ok, specs, next}
+
+      next >= Muro.Synth.Term.path_bound() ->
+        {:stop, specs, next}
+
+      true ->
+        host = host |> Map.put(:feature_specs, specs) |> Map.put(:path_depth, next)
+        climb(host, next, earlier, later)
+    end
+  end
+
+  defp enumerate_at(host, depth) do
+    states = Muro.Synth.Oracle.cover(host)
+    {dyn, hints} = partition_specs(host.feature_specs || [])
+    taken = taken_names(host.book)
+
+    taken =
+      Enum.reduce(dyn ++ hints, taken, fn spec, taken ->
+        take(taken, spec.name)
+      end)
+
+    {structural, _taken} = Muro.Synth.Term.templates(host.schema, states, taken, depth)
+    hint_eval = Map.get(host, :hint_eval, host.eval_feature)
+    eval = fn spec, state -> eval_spec(host, hint_eval, spec, state) end
+    reduce(dyn ++ structural ++ hints, states, eval)
+  end
+
+  defp partition_specs(specs) do
+    dyn =
+      Enum.filter(specs, fn spec ->
+        spec.kind in [:has_pos_reward, :is_self_loop, :leads_terminal]
+      end)
+
+    hints = Enum.filter(specs, &(&1.kind == :hint))
+    {dyn, hints}
+  end
+
+  defp reduce(specs, states, eval) do
+    specs
+    |> filter_nontrivial(states, eval)
+    |> drop_subsumed()
+    |> drop_equivalent(states, eval)
   end
 
   defp enumerate_dyn(host, states, taken) do
