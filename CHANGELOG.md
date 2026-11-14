@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.21.6
+
+A declared cover is ranked when the terms themselves can be split. A function field is refused when the environment is opened: `State has a function field`. An erased constructor argument is refused then too: `State has an erased constructor argument`. A linear field still opens, and the certificate is refused: `State has a linear field`. Recursion under `List` or a product still opens, and the certificate is refused: `State recursion under List/product cannot be certified`. Those limits also mean two values have no equality run, so `is-self-loop` and `leads-terminal` are omitted. A product that does not recurse is compared with `let`. A field of type `List State` is not strictly positive. Wrapper recursion through another datatype stays `State is mutually inductive`.
+
+### Manual
+
+- Synthesis. Examples.
+
+### Package
+
+- Version 0.21.6.
+
 ## 0.21.5
 
 A state machine and an OTP process are plain Elixir, including a book that marks `may fail`. They compile and run in a project that does not depend on Muro. `down/2` matches the reason the host supplies, and `down/1` takes an arm that binds none.

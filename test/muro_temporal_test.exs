@@ -438,7 +438,7 @@ defmodule Muro.TemporalTest do
     path = Path.join(dir, "plain.muro")
     File.write!(path, "def z : run Nat := 0\n")
     version = Mix.Tasks.Muro.version()
-    out = capture_io(fn -> assert Mix.Tasks.Muro.Check.run([path]) == :ok end)
+    out = check_out(path)
 
     assert out ==
              """
@@ -455,7 +455,7 @@ defmodule Muro.TemporalTest do
 
     version = Mix.Tasks.Muro.version()
 
-    out = capture_io(fn -> assert Mix.Tasks.Muro.Check.run([path]) == :ok end)
+    out = check_out(path)
 
     assert out ==
              """
@@ -654,5 +654,14 @@ defmodule Muro.TemporalTest do
   # The ExUnit header records the book hash. The module body does not.
   defp comparable(%{exunit: source} = emitted) do
     %{emitted | exunit: String.replace(source, ~r/@muro_book ".*"/, ~s(@muro_book "HASH"))}
+  end
+
+  # Mix.Shell.IO.info prints "==> muro" the first time the shell is used
+  # after another project has taken it. Which test runs first decides
+  # whether this capture sees the line, so it is dropped here.
+  defp check_out(path) do
+    fn -> assert Mix.Tasks.Muro.Check.run([path]) == :ok end
+    |> capture_io()
+    |> String.replace(~r/^==> \S+\n/m, "")
   end
 end

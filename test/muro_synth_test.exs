@@ -107,7 +107,10 @@ defmodule Muro.SynthTest do
     src = Synth.policy([{pred, :go}], :stay, spell)
 
     path =
-      Path.join(System.tmp_dir!(), "muro_synth_policy_#{System.unique_integer([:positive])}.muro")
+      Path.join(
+        System.tmp_dir!(),
+        "muro_synth_policy_#{System.unique_integer([:positive])}_#{System.system_time(:nanosecond)}.muro"
+      )
 
     File.write!(path, src)
 
@@ -125,7 +128,10 @@ defmodule Muro.SynthTest do
     neg = Synth.policy([{negated, :go}], :stay, spell)
 
     neg_path =
-      Path.join(System.tmp_dir!(), "muro_synth_neg_#{System.unique_integer([:positive])}.muro")
+      Path.join(
+        System.tmp_dir!(),
+        "muro_synth_neg_#{System.unique_integer([:positive])}_#{System.system_time(:nanosecond)}.muro"
+      )
 
     File.write!(neg_path, neg)
     assert Muro.check_file(neg_path) == :ok
@@ -193,7 +199,12 @@ defmodule Muro.SynthTest do
   end
 
   test "a failed refl names the obligation" do
-    dir = Path.join(System.tmp_dir!(), "muro_synth_cex_#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "muro_synth_cex_#{System.unique_integer([:positive])}_#{System.system_time(:nanosecond)}"
+      )
+
     File.mkdir_p!(dir)
     path = Path.join(dir, "bad.muro")
 
@@ -333,7 +344,12 @@ defmodule Muro.SynthTest do
   end
 
   test "concurrent checks in one anchor keep distinct books" do
-    dir = Path.join(System.tmp_dir!(), "muro_synth_conc_#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "muro_synth_conc_#{System.unique_integer([:positive])}_#{System.system_time(:nanosecond)}"
+      )
+
     File.mkdir_p!(dir)
     parent = self()
 
@@ -366,7 +382,12 @@ defmodule Muro.SynthTest do
   end
 
   test "a temporary name that already exists is not overwritten" do
-    dir = Path.join(System.tmp_dir!(), "muro_synth_claim_#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "muro_synth_claim_#{System.unique_integer([:positive])}_#{System.system_time(:nanosecond)}"
+      )
+
     File.mkdir_p!(dir)
     taken = Path.join(dir, "taken.muro")
     File.write!(taken, "keep\n")
@@ -414,7 +435,12 @@ defmodule Muro.SynthTest do
   end
 
   test "a failed write of a temporary book is not checked and leaves no file" do
-    dir = Path.join(System.tmp_dir!(), "muro_synth_write_#{System.unique_integer([:positive])}")
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "muro_synth_write_#{System.unique_integer([:positive])}_#{System.system_time(:nanosecond)}"
+      )
+
     File.mkdir_p!(dir)
 
     partial = fn io, data ->

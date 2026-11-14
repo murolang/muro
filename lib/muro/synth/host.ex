@@ -175,21 +175,40 @@ defmodule Muro.Synth.Host do
       {:open, "mutual"} ->
         {:error, :usage, "State is mutually inductive"}
 
+      {:open, "function"} ->
+        {:error, :usage, "State has a function field"}
+
       schema ->
-        case Muro.Synth.Term.inhabitants(schema) do
-          {:ok, inhabitants} ->
-            {:ok, {:structured, schema, inhabitants}}
+        # A linear field still opens: search can run. The certificate
+        # refuses it later. A function field and an erased constructor
+        # argument are not values the cover can name.
+        case Muro.Synth.Term.cert_refusal(schema) do
+          "State has a function field" = msg ->
+            {:error, :usage, msg}
 
-          :cap ->
-            open_or(
-              book,
-              schema,
-              "State has more than #{Muro.Synth.Term.cap()} inhabitants; declare all-states"
-            )
+          "State has an erased constructor argument" = msg ->
+            {:error, :usage, msg}
 
-          :open ->
-            open_or(book, schema, "State constructors take arguments; declare all-states")
+          _ ->
+            inhabitants_or_cover(book, schema)
         end
+    end
+  end
+
+  defp inhabitants_or_cover(book, schema) do
+    case Muro.Synth.Term.inhabitants(schema) do
+      {:ok, inhabitants} ->
+        {:ok, {:structured, schema, inhabitants}}
+
+      :cap ->
+        open_or(
+          book,
+          schema,
+          "State has more than #{Muro.Synth.Term.cap()} inhabitants; declare all-states"
+        )
+
+      :open ->
+        open_or(book, schema, "State constructors take arguments; declare all-states")
     end
   end
 

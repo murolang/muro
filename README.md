@@ -16,21 +16,21 @@ The language book is [`manual/`](manual/index.md). That is what [muro-lang.dev](
 
 ## Install
 
-[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.21.5. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
+[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.21.6. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ```elixir
 def deps do
   [
-    {:muro, "~> 0.21.5"}
+    {:muro, "~> 0.21.6"}
   ]
 end
 ```
 
 `nx`, `makeup`, and `elixir_make` are optional. A project that depends on muro does not fetch them. Checking a book and emitting Elixir do not load them.
 
-The archive installs `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` in any directory, with or without a `mix.exs`. Install it from Hex: `mix archive.install hex muro`. A pinned version uses `mix archive.install hex muro 0.21.5`. From a checkout: `mix archive.build && mix archive.install muro-0.21.5.ez`. From GitHub, Mix fetches the default branch and builds the archive: `mix archive.install github murolang/muro`. See [Committed modules](manual/gen.md).
+The archive installs `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` in any directory, with or without a `mix.exs`. Install it from Hex: `mix archive.install hex muro`. A pinned version uses `mix archive.install hex muro 0.21.6`. From a checkout: `mix archive.build && mix archive.install muro-0.21.6.ez`. From GitHub, Mix fetches the default branch and builds the archive: `mix archive.install github murolang/muro`. See [Committed modules](manual/gen.md).
 
-A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.21.5`. It carries its own Erlang runtime. `muro check`, `muro synth`, `muro emit`, and `muro gen` are the same commands. `muro ui path.muro` prints how to install `muro_visor` and does not start the explorer. The manifest is `muro.toml`. See [The executable](manual/binary.md) and [Visual explorer](manual/explorer.md).
+A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.21.6`. It carries its own Erlang runtime. `muro check`, `muro synth`, `muro emit`, and `muro gen` are the same commands. `muro ui path.muro` prints how to install `muro_visor` and does not start the explorer. The manifest is `muro.toml`. See [The executable](manual/binary.md) and [Visual explorer](manual/explorer.md).
 
 Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. `mix muro --version` prints the copy that ran. A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks. A book of `U8`, `U32`, `U64`, or `I64` emits calls to `Muro.Word`. Compiling that module needs the dependency above. See [Machine numbers](manual/machine.md).
 
