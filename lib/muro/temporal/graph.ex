@@ -81,15 +81,17 @@ defmodule Muro.Temporal.Graph do
   end
 
   @doc """
-  Successors the search follows. A bad view contributes none. A finished
-  configuration contributes none here; `edges` keeps its stutter.
+  Successors the search follows. A bad view contributes its death and
+  drop steps, and no ordinary step. A finished configuration contributes
+  none here; `edges` keeps its stutter. An unmarked meeting has no death
+  and no drop, so a bad view there contributes nothing.
   """
   def steps_of(g, conf) do
     left = react_l(g, conf)
     right = react_r(g, conf)
 
     if bad?(left) or bad?(right) do
-      []
+      extra(g, conf)
     else
       from(left, :lside) ++ from(right, :rside) ++ extra(g, conf)
     end
