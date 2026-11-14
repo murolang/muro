@@ -1988,7 +1988,13 @@ defmodule Muro.SynthLoopTest do
   end
 
   defp tmp do
-    path = Path.join(System.tmp_dir!(), "muro_synth_loop_#{System.unique_integer([:positive])}")
+    path =
+      Path.join(
+        System.tmp_dir!(),
+        "muro_synth_loop_#{System.unique_integer([:positive])}_#{System.system_time(:nanosecond)}"
+      )
+
+    File.rm_rf!(path)
     File.mkdir_p!(path)
     path
   end
