@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.21.3
+
+C, Rust, and Zig emit a `String`. The value is a pointer and an octet length, so a scalar 0 is a string. `strCat` concatenates, `strLen` counts scalars, `strEq` compares, and `strBytes` is those octets. Elixir still emits a UTF-8 binary. JavaScript still emits `{ string: "…" }` and leaves an atom as a string. Assembly still refuses a string (`c:string`).
+
+### Manual
+
+- Emit. Terms. Examples. Extending.
+
+### Package
+
+- Version 0.21.3.
+
 ## 0.21.0
 
 A minor bump for `may fail`.
