@@ -172,6 +172,9 @@ defmodule Muro.Synth.Host do
       {:open, "indices"} ->
         {:error, :usage, "State has indices"}
 
+      {:open, "mutual"} ->
+        {:error, :usage, "State is mutually inductive"}
+
       schema ->
         case Muro.Synth.Term.inhabitants(schema) do
           {:ok, inhabitants} ->

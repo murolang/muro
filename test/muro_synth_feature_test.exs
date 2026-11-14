@@ -197,6 +197,103 @@ defmodule Muro.SynthFeatureTest do
     assert Enum.any?(specs, &(&1.kind == :has_pos_reward))
   end
 
+  test "a recursive datatype keeps a back-edge" do
+    schema =
+      parsed_schema("""
+      data State : Type where
+        tip : Π (n : Nat) → State
+        bin : Π (+ l : State) → Π (r : State) → State
+      """)
+
+    refute match?({:open, _}, schema)
+    assert {:data, "State", rows} = schema
+    bin = Enum.find(rows, &(&1.name == "bin"))
+
+    assert bin.fields == [
+             %{schema: {:rec, "State"}, qty: :reuse, name: "l"},
+             %{schema: {:rec, "State"}, qty: :affine, name: "r"}
+           ]
+
+    assert Muro.Synth.Term.equatable?(schema)
+    assert Muro.Synth.Term.inhabitants(schema) == :open
+
+    raw = {:bin, {:tip, 0}, {:tip, {:suc, 0}}}
+    assert {:ok, term} = Muro.Synth.Term.decode(raw, schema)
+    assert term.value == {:bin, {:tip, 0}, {:tip, 1}}
+    assert term.spell == "(bin (tip 0) (tip (suc 0)))"
+
+    {specs, _} = Muro.Synth.Term.templates(schema, [{:tip, 0}, raw], MapSet.new(), 1)
+    assert Enum.any?(specs, &(&1.kind == :ctor_is and &1.tag == "bin" and &1.path == []))
+    assert Enum.any?(specs, &(&1.kind == :nat_is and &1.path == [0]))
+    refute Enum.any?(specs, &(&1.path == [0, 0]))
+  end
+
+  test "a back-edge under a list or a product is not equatable" do
+    listed =
+      parsed_schema("""
+      data State : Type where
+        tip : State
+        nest : Π (xs : List State) → State
+      """)
+
+    refute match?({:open, _}, listed)
+    refute Muro.Synth.Term.equatable?(listed)
+    assert {:ok, term} = Muro.Synth.Term.decode({:nest, {:cons, :tip, nil}}, listed)
+    assert term.value == {:nest, {:cons, :tip, nil}}
+
+    paired =
+      parsed_schema("""
+      data State : Type where
+        tip : State
+        pair : Π (p : State × State) → State
+      """)
+
+    refute Muro.Synth.Term.equatable?(paired)
+  end
+
+  test "a linear field and an erased argument are not equatable" do
+    linear =
+      parsed_schema("""
+      data State : Type where
+        tip : State
+        bin : Π (%1 l : State) → Π (r : State) → State
+      """)
+
+    refute Muro.Synth.Term.equatable?(linear)
+
+    erased =
+      parsed_schema("""
+      data State : Type where
+        box : Π (- x : Nat) → Π (y : Nat) → State
+      """)
+
+    refute match?({:open, "cycle"}, erased)
+    refute Muro.Synth.Term.equatable?(erased)
+  end
+
+  test "a mutual family is an open schema" do
+    schema =
+      parsed_schema("""
+      data Even : Type where
+        ez : Even
+        es : Π (o : Odd) → Even
+
+      data Odd : Type where
+        oz : Odd
+        os : Π (e : Even) → Odd
+
+      data State : Type where
+        ev : Π (e : Even) → State
+      """)
+
+    assert schema == {:open, "mutual"}
+  end
+
+  defp parsed_schema(src) do
+    assert {:ok, book} = Muro.Parser.parse(src)
+    Muro.Synth.Term.schema(book, "State")
+  end
+
   defp pos_host, do: host(step: pos_step())
 
   defp pos_step do

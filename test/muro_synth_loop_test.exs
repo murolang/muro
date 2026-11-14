@@ -9,6 +9,7 @@ defmodule Muro.SynthLoopTest do
   @place "examples/cshrl/envs/placement.muro"
   @nest "examples/cshrl/envs/nested_bit.muro"
   @cover "examples/cshrl/envs/list_cover.muro"
+  @tree "examples/cshrl/envs/tree_cover.muro"
   @neg "test/fixtures/synth_neg.muro"
   @gap "test/fixtures/synth_gap.muro"
   @stay "test/fixtures/synth_false.muro"
@@ -350,6 +351,44 @@ defmodule Muro.SynthLoopTest do
     assert text =~ "program: (feat has-pos-reward-go)"
     assert text =~ "at (cell nil) the program prefers stay"
     assert text =~ "at (cell (cons 0 nil)) the program prefers go"
+    assert text =~ "certificate CoindHomo"
+  end
+
+  test "a recursive all-states cover decodes as states" do
+    assert {:ok, host} = Muro.Synth.Host.open(@tree)
+    assert host.structured
+    assert host.inhabitants == nil
+    assert Enum.map(host.all_states, & &1.spell) == ["(tip 0)", "(bin (tip 0) (tip 0))"]
+    assert Muro.Synth.Term.equatable?(host.schema)
+    refute match?({:open, _}, host.schema)
+  end
+
+  @tag timeout: 180_000
+  test "a tree cover certifies the reward of go" do
+    src = File.read!(@tree)
+    refute src =~ "data Feature"
+    refute src =~ "eval-feature"
+
+    assert {:ok, result} = Muro.Synth.cegis_loop(@tree, depth: 0, max_depth: 0)
+    assert result.status == :certified
+    assert result.certificate == "CoindHomo"
+    assert result.program == {:feat, "has-pos-reward-go"}
+    assert result.book =~ "def survivor : run PredProg := (feat has-pos-reward-go)"
+    assert result.book =~ "evidence CoindHomo rank"
+    assert result.book =~ "cert-cover-miss"
+
+    assert result.book =~
+             "def cert-solve-tip-n0 : evidence Π (n : Nat) → {solve (tip 0) n ≡ suc 0 : Nat}"
+
+    assert result.book =~
+             "def cert-solve-bin-tip-n0-tip-n0 : evidence Π (n : Nat) → {solve (bin (tip 0) (tip 0)) n ≡ suc 0 : Nat}"
+
+    refute result.book =~ "CoinductiveHomomorphism"
+    text = joined(result)
+    assert text =~ "muro synth: homomorphism checked"
+    assert text =~ "program: (feat has-pos-reward-go)"
+    assert text =~ "at (tip 0) the program prefers stay"
+    assert text =~ "at (bin (tip 0) (tip 0)) the program prefers go"
     assert text =~ "certificate CoindHomo"
   end
 
@@ -1493,6 +1532,69 @@ defmodule Muro.SynthLoopTest do
              Muro.Synth.Host.open(path)
   end
 
+  test "a recursive State without all-states is refused" do
+    dir = tmp()
+
+    path =
+      write_book(dir, "tree.muro", """
+      import "std:bool.muro"
+      import "std:list.muro"
+
+      data State : Type where
+        tip : Π (n : Nat) → State
+        bin : Π (l : State) → Π (r : State) → State
+
+      data Action : Type where
+        go : Action
+
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+
+      def all-actions : run List Action := cons go nil
+      def horizon : run Nat := 0
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, "State constructors take arguments; declare all-states"} =
+             Muro.Synth.Host.open(path)
+  end
+
+  test "a mutually inductive State is refused" do
+    dir = tmp()
+
+    path =
+      write_book(dir, "mutual.muro", """
+      import "std:bool.muro"
+      import "std:list.muro"
+
+      data Even : Type where
+        ez : Even
+        es : Π (o : Odd) → Even
+
+      data Odd : Type where
+        oz : Odd
+        os : Π (e : Even) → Odd
+
+      data State : Type where
+        ev : Π (e : Even) → State
+
+      data Action : Type where
+        go : Action
+
+      def step : run Π (s : State) → Π (a : Action) → State × Nat :=
+        λ (s : State) → λ (_ : Action) → (s, 0)
+
+      def all-actions : run List Action := cons go nil
+      def horizon : run Nat := 0
+      def all-states : run List State := cons (ev ez) nil
+      def leb : run Π (m : Nat) → Π (n : Nat) → Bool :=
+        λ (_ : Nat) → λ (_ : Nat) → true
+      """)
+
+    assert {:error, :usage, "State is mutually inductive"} = Muro.Synth.Host.open(path)
+  end
+
   test "more than 32 inhabitants without all-states is refused" do
     dir = tmp()
 
@@ -1636,6 +1738,38 @@ defmodule Muro.SynthLoopTest do
       def diff-arm : evidence {dyn-same none (some 0) ≡ false : Bool} := refl
       def same-some : evidence {dyn-same (some 0) (some 0) ≡ true : Bool} := refl
       def diff-suc : evidence {dyn-same (some 0) (some (suc 0)) ≡ false : Bool} := refl
+      """)
+
+    assert Muro.check_file(path) == :ok
+  end
+
+  test "schema equality recurses on a tree" do
+    assert {:ok, book} =
+             Muro.Parser.parse("""
+             data State : Type where
+               tip : Π (n : Nat) → State
+               bin : Π (+ l : State) → Π (r : State) → State
+             """)
+
+    schema = Muro.Synth.Term.schema(book, "State")
+    assert {:ok, text, _taken} = Muro.Synth.Term.eq_source("dyn-same", schema, MapSet.new())
+    dir = tmp()
+
+    path =
+      write_book(dir, "tree-eq.muro", """
+      import "std:bool.muro"
+
+      data State : Type where
+        tip : Π (n : Nat) → State
+        bin : Π (+ l : State) → Π (r : State) → State
+
+      #{text}
+      def same-tip : evidence {dyn-same (tip 0) (tip 0) ≡ true : Bool} := refl
+      def diff-nat : evidence {dyn-same (tip 0) (tip (suc 0)) ≡ false : Bool} := refl
+      def same-bin : evidence {dyn-same (bin (tip 0) (tip 0)) (bin (tip 0) (tip 0)) ≡ true : Bool} := refl
+      def diff-arm : evidence {dyn-same (tip 0) (bin (tip 0) (tip 0)) ≡ false : Bool} := refl
+      def diff-child : evidence {dyn-same (bin (tip 0) (tip 0)) (bin (tip (suc 0)) (tip 0)) ≡ false : Bool} := refl
+      def nest : evidence {dyn-same (bin (bin (tip 0) (tip (suc 0))) (tip 0)) (bin (bin (tip 0) (tip (suc 0))) (tip 0)) ≡ true : Bool} := refl
       """)
 
     assert Muro.check_file(path) == :ok
