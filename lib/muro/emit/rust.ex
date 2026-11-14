@@ -4,8 +4,9 @@ defmodule Muro.Emit.Rust do
   Run bodies are the image from `Muro.IR`.
 
   The text is what `rustc` translates. A refusal is the elaboration's:
-  `c:lambda`, `c:machine`, `c:stream`, `c:string`, `c:erased`,
-  `c:unboxed`, `c:unsupported`. An `unboxed data` value is the enum.
+  `c:lambda`, `c:machine`, `c:stream`, `c:erased`,
+  `c:unboxed`, `c:unsupported`. A string is `muro__str`, a `#[repr(C)]`
+  pointer and octet length. An `unboxed data` value is the enum.
   It is not wrapped in `Rc`. An `Opt` of that value is `c:unboxed`.
 
   Identifiers come from `Muro.Emit.Name`. A source name is spelled there.
@@ -175,6 +176,7 @@ defmodule Muro.Emit.Rust do
         "#![allow(dead_code, unused_variables, non_snake_case, non_camel_case_types, unused_parens)]",
         runtime(),
         bytes_runtime(book, funs),
+        string_runtime(book, funs),
         atom_enum(atoms),
         data_items(book, types, variants, ctor_fns, file_scope),
         Enum.join(fns, "\n\n")
@@ -489,7 +491,11 @@ defmodule Muro.Emit.Rust do
     end
   end
 
-  defp emit_tm({:sbytes, _}, _env, _st), do: {:error, "c:string"}
+  defp emit_tm({:sbytes, s}, env, st) do
+    with {:ok, {ls, ex, lay, st}} <- emit_tm(s, env, st) do
+      {:ok, {ls, "#{g("str_bytes")}(#{as_str(ex, lay, st)})", :slice, st}}
+    end
+  end
 
   defp emit_tm({:bunc, s}, env, st) do
     nothing = Map.get(st.ctor_fns, {"Maybe", "nothing"})
@@ -550,11 +556,44 @@ defmodule Muro.Emit.Rust do
     end
   end
 
-  defp emit_tm({:str, _}, _env, _st), do: {:error, "c:string"}
-  defp emit_tm({:scat, _, _}, _env, _st), do: {:error, "c:string"}
-  defp emit_tm({:slen, _}, _env, _st), do: {:error, "c:string"}
-  defp emit_tm({:seq, _, _}, _env, _st), do: {:error, "c:string"}
+  defp emit_tm({:str, bin}, _env, st) when is_binary(bin) do
+    if bin == "" do
+      {:ok, {[], "#{g("str_empty")}()", :string, st}}
+    else
+      {tmp, st} = local(st, g("lit"))
+      bytes = bin |> :binary.bin_to_list() |> Enum.map_join(", ", &Integer.to_string/1)
+      lines = ["let #{tmp}: &'static [u8] = &[#{bytes}];"]
+      expr = "#{g("str")} { p: #{tmp}.as_ptr(), n: #{tmp}.len() }"
+      {:ok, {lines, expr, :string, st}}
+    end
+  end
+
+  defp emit_tm({:scat, a, b}, env, st) do
+    with {:ok, {la, ea, laya, st}} <- emit_tm(a, env, st),
+         {:ok, {lb, eb, layb, st}} <- emit_tm(b, env, st) do
+      expr = "#{g("str_cat")}(#{as_str(ea, laya, st)}, #{as_str(eb, layb, st)})"
+      {:ok, {la ++ lb, expr, :string, st}}
+    end
+  end
+
+  defp emit_tm({:slen, a}, env, st) do
+    with {:ok, {ls, ex, lay, st}} <- emit_tm(a, env, st) do
+      {:ok, {ls, "#{g("str_len")}(#{as_str(ex, lay, st)})", :nat, st}}
+    end
+  end
+
+  defp emit_tm({:seq, a, b}, env, st) do
+    with {:ok, {la, ea, laya, st}} <- emit_tm(a, env, st),
+         {:ok, {lb, eb, layb, st}} <- emit_tm(b, env, st) do
+      expr = "#{g("str_eq")}(#{as_str(ea, laya, st)}, #{as_str(eb, layb, st)})"
+      {:ok, {la ++ lb, expr, :wbool, st}}
+    end
+  end
+
   defp emit_tm(_other, _env, _st), do: {:error, "c:unsupported"}
+
+  defp as_str(ex, :string, _st), do: ex
+  defp as_str(ex, _lay, st), do: coerce(ex, :opaque, :string, st)
 
   defp emit_list(ts, env, st) do
     Enum.reduce_while(ts, {:ok, [], [], [], st}, fn t, {:ok, lines, exprs, lays, st} ->
@@ -1013,6 +1052,7 @@ defmodule Muro.Emit.Rust do
   defp rty(:wbool, _st), do: "bool"
   defp rty({:opt, pay}, st), do: "::std::option::Option<#{rty(pay, st)}>"
   defp rty(:slice, _st), do: g("slice")
+  defp rty(:string, _st), do: g("str")
   defp rty(:nat, _st), do: g("Nat")
   defp rty(:unit, _st), do: g("Unit")
   defp rty(:opaque, _st), do: g("Erased")
@@ -1080,6 +1120,7 @@ defmodule Muro.Emit.Rust do
   defp type_layout(book, {:word, :opt, [a]}), do: {:opt, type_layout(book, a)}
   defp type_layout(_book, :bytes), do: :slice
   defp type_layout(_book, :slice), do: :slice
+  defp type_layout(_book, :string), do: :string
   defp type_layout(_book, _), do: :opaque
 
   defp telescope(t), do: telescope(t, [])
@@ -1436,6 +1477,10 @@ defmodule Muro.Emit.Rust do
     if bytes_image?(book, funs), do: bytes_helpers(), else: ""
   end
 
+  defp string_runtime(book, funs) do
+    if string_image?(book, funs), do: string_helpers(bytes_image?(book, funs)), else: ""
+  end
+
   defp bytes_image?(book, funs) do
     Enum.any?(funs, fn fun ->
       fun.ret == :slice or Enum.any?(fun.params, fn {_n, lay} -> lay == :slice end) or
@@ -1510,7 +1555,10 @@ defmodule Muro.Emit.Rust do
     }
 
     fn #{cat}(a: #{sl}, b: #{sl}) -> #{sl} {
-        let n = a.n + b.n;
+        let n = match a.n.checked_add(b.n) {
+            ::std::option::Option::Some(n) => n,
+            ::std::option::Option::None => ::std::process::abort(),
+        };
         if n == 0 { return #{emp}(); }
         let mut buf = ::std::vec::Vec::<u8>::with_capacity(n);
         if a.n != 0 { buf.extend_from_slice(unsafe { ::std::slice::from_raw_parts(a.p, a.n) }); }
@@ -1542,6 +1590,112 @@ defmodule Muro.Emit.Rust do
             i += 1;
         }
         #{emp}()
+    }
+    """
+    |> String.trim()
+  end
+
+  defp string_image?(book, funs) do
+    Enum.any?(funs, fn fun ->
+      string_lay?(fun.ret) or Enum.any?(fun.params, fn {_n, lay} -> string_lay?(lay) end) or
+        ir_string?(fun.body)
+    end) or
+      Enum.any?(data_decls(book), fn d ->
+        Enum.any?(d.ctors, fn c -> Enum.any?(ctor_fields(book, c.name), &string_lay?/1) end)
+      end)
+  end
+
+  defp string_lay?(:string), do: true
+  defp string_lay?({:opt, a}), do: string_lay?(a)
+  defp string_lay?({:pair, a, b}), do: string_lay?(a) or string_lay?(b)
+  defp string_lay?({:stream, a}), do: string_lay?(a)
+  defp string_lay?(_), do: false
+
+  defp ir_string?(t) when is_tuple(t) do
+    case t do
+      {:str, _} -> true
+      {:scat, _, _} -> true
+      {:slen, _} -> true
+      {:seq, _, _} -> true
+      {:sbytes, _} -> true
+      other -> other |> Tuple.to_list() |> Enum.any?(&ir_string?/1)
+    end
+  end
+
+  defp ir_string?(t) when is_list(t), do: Enum.any?(t, &ir_string?/1)
+  defp ir_string?(:string), do: true
+  defp ir_string?(_), do: false
+
+  defp string_helpers(bytes?) do
+    ty = g("str")
+    empty = g("empty_str")
+    emp = g("str_empty")
+    eq = g("str_eq")
+    cat = g("str_cat")
+    len = g("str_len")
+    bytes = if bytes?, do: rust_str_bytes(), else: ""
+
+    """
+    #[derive(::std::clone::Clone, ::std::marker::Copy)]
+    #[repr(C)]
+    pub struct #{ty} { pub p: *const u8, pub n: usize }
+
+    #[allow(non_upper_case_globals)]
+    static #{empty}: u8 = 0;
+
+    fn #{emp}() -> #{ty} {
+        #{ty} { p: &#{empty} as *const u8, n: 0 }
+    }
+
+    fn #{eq}(a: #{ty}, b: #{ty}) -> bool {
+        if a.n != b.n { return false; }
+        if a.n == 0 { return true; }
+        unsafe { ::std::slice::from_raw_parts(a.p, a.n) == ::std::slice::from_raw_parts(b.p, b.n) }
+    }
+
+    fn #{cat}(a: #{ty}, b: #{ty}) -> #{ty} {
+        let n = match a.n.checked_add(b.n) {
+            ::std::option::Option::Some(n) => n,
+            ::std::option::Option::None => ::std::process::abort(),
+        };
+        if n == 0 { return #{emp}(); }
+        let mut buf = ::std::vec::Vec::<u8>::with_capacity(n);
+        if a.n != 0 { buf.extend_from_slice(unsafe { ::std::slice::from_raw_parts(a.p, a.n) }); }
+        if b.n != 0 { buf.extend_from_slice(unsafe { ::std::slice::from_raw_parts(b.p, b.n) }); }
+        let p = buf.as_ptr();
+        ::std::mem::forget(buf);
+        #{ty} { p: p, n: n }
+    }
+
+    // Counts Unicode scalars by walking lead bytes. The buffer must be well-formed
+    // UTF-8. A string muro emits always is. A malformed host string may be miscounted.
+    fn #{len}(s: #{ty}) -> #{g("Nat")} {
+        let mut i = 0usize;
+        let mut k = 0u64;
+        while i < s.n {
+            let c = unsafe { *s.p.add(i) };
+            let mut w = 1usize;
+            if (c & 0xE0) == 0xC0 { w = 2; }
+            else if (c & 0xF0) == 0xE0 { w = 3; }
+            else if (c & 0xF8) == 0xF0 { w = 4; }
+            if w > s.n - i { w = s.n - i; }
+            i += w;
+            k += 1;
+        }
+        #{g("from_u64")}(k)
+    }
+    #{bytes}
+    """
+    |> String.trim()
+  end
+
+  defp rust_str_bytes do
+    ty = g("str")
+    sl = g("slice")
+
+    """
+    fn #{g("str_bytes")}(s: #{ty}) -> #{sl} {
+        #{sl} { p: s.p, n: s.n }
     }
     """
     |> String.trim()

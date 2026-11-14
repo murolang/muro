@@ -261,6 +261,9 @@ defmodule Muro.BytesTest do
     assert rust =~ "pub struct muro__slice { pub p: *const u8, pub n: usize }"
     assert rust =~ "pub fn muro__slice_of"
     assert rust =~ "with_capacity"
+    assert rust =~ "a.n.checked_add(b.n)"
+    assert rust =~ "::std::process::abort()"
+    refute rust =~ "let n = a.n + b.n"
     refute rust =~ "c:bytes"
     assert rustc!(dir, "bytes.rs") == :ok
   end

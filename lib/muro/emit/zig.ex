@@ -4,8 +4,9 @@ defmodule Muro.Emit.Zig do
   Run bodies are the image from `Muro.IR`.
 
   The text is what `zig` translates. A refusal is the elaboration's:
-  `c:lambda`, `c:machine`, `c:stream`, `c:string`, `c:erased`,
-  `c:unboxed`, `c:unsupported`. An `Opt` of unboxed data is `c:unboxed`.
+  `c:lambda`, `c:machine`, `c:stream`, `c:erased`,
+  `c:unboxed`, `c:unsupported`. A string is `muro__str`, an `extern struct`
+  of a pointer and an octet length. An `Opt` of unboxed data is `c:unboxed`.
 
   Every run takes an allocator first and returns an error union. A caller
   can pass a `muro__std.heap.ArenaAllocator` and reset it. `Nat` and user
@@ -387,10 +388,15 @@ defmodule Muro.Emit.Zig do
       {rn, st} = local(st, spell(name))
 
       line =
-        if lay == :opaque do
-          "const #{rn} = #{g("seed")};"
-        else
-          "const #{rn} = #{g("reveal")}(#{zty(lay, st)}, #{g("seed")});"
+        cond do
+          lay == :opaque ->
+            "const #{rn} = #{g("seed")};"
+
+          lay == :string ->
+            "const #{rn} = #{g("reveal")}(#{zty(:string, st)}, #{g("seed")}).*;"
+
+          true ->
+            "const #{rn} = #{g("reveal")}(#{zty(lay, st)}, #{g("seed")});"
         end
 
       {[line], [{name, rn, lay}], st}
@@ -729,7 +735,12 @@ defmodule Muro.Emit.Zig do
     end
   end
 
-  defp emit_tm({:sbytes, _}, _env, _st), do: {:error, "c:string"}
+  defp emit_tm({:sbytes, s}, env, st) do
+    with {:ok, {ls, ex, lay, eff, st}} <- emit_tm(s, env, st) do
+      expr = "#{g("str_bytes")}(#{as_str(force(ex, eff), lay, st)})"
+      {:ok, {ls, expr, :slice, :pure, st}}
+    end
+  end
 
   defp emit_tm({:bunc, s}, env, st) do
     nothing = Map.get(st.ctor_fns, {"Maybe", "nothing"})
@@ -800,11 +811,55 @@ defmodule Muro.Emit.Zig do
     end
   end
 
-  defp emit_tm({:str, _}, _env, _st), do: {:error, "c:string"}
-  defp emit_tm({:scat, _, _}, _env, _st), do: {:error, "c:string"}
-  defp emit_tm({:slen, _}, _env, _st), do: {:error, "c:string"}
-  defp emit_tm({:seq, _, _}, _env, _st), do: {:error, "c:string"}
+  defp emit_tm({:str, bin}, _env, st) when is_binary(bin) do
+    if bin == "" do
+      {:ok, {[], "#{g("str_empty")}()", :string, :pure, st}}
+    else
+      {tmp, st} = local(st, g("lit"))
+      bytes = bin |> :binary.bin_to_list() |> Enum.map_join(", ", &Integer.to_string/1)
+      lines = ["const #{tmp} = struct { const data = [_]u8{#{bytes}}; };"]
+
+      # `@as` keeps the value a `muro__str` after it is bound. An untyped
+      # `.{ .p, .n }` becomes its own struct, and Zig will not pass that
+      # to `box_str`.
+      expr =
+        "@as(#{g("str")}, .{ .p = @as([*]const u8, @ptrCast(&#{tmp}.data)), .n = #{tmp}.data.len })"
+
+      {:ok, {lines, expr, :string, :pure, st}}
+    end
+  end
+
+  defp emit_tm({:scat, a, b}, env, st) do
+    with {:ok, {la, ea, laya, eaeff, st}} <- emit_tm(a, env, st),
+         {:ok, {lb, eb, layb, ebeff, st}} <- emit_tm(b, env, st) do
+      expr =
+        "#{g("str_cat")}(#{al()}, #{as_str(force(ea, eaeff), laya, st)}, #{as_str(force(eb, ebeff), layb, st)})"
+
+      {:ok, {la ++ lb, expr, :string, :fail, st}}
+    end
+  end
+
+  defp emit_tm({:slen, a}, env, st) do
+    with {:ok, {ls, ex, lay, eff, st}} <- emit_tm(a, env, st) do
+      expr = "#{g("str_len")}(#{al()}, #{as_str(force(ex, eff), lay, st)})"
+      {:ok, {ls, expr, :nat, :fail, st}}
+    end
+  end
+
+  defp emit_tm({:seq, a, b}, env, st) do
+    with {:ok, {la, ea, laya, eaeff, st}} <- emit_tm(a, env, st),
+         {:ok, {lb, eb, layb, ebeff, st}} <- emit_tm(b, env, st) do
+      expr =
+        "#{g("str_eq")}(#{as_str(force(ea, eaeff), laya, st)}, #{as_str(force(eb, ebeff), layb, st)})"
+
+      {:ok, {la ++ lb, expr, :wbool, :pure, st}}
+    end
+  end
+
   defp emit_tm(_other, _env, _st), do: {:error, "c:unsupported"}
+
+  defp as_str(ex, :string, _st), do: ex
+  defp as_str(ex, _lay, st), do: "#{g("reveal")}(#{zty(:string, st)}, #{ex}).*"
 
   defp emit_list(ts, env, st) do
     Enum.reduce_while(ts, {:ok, [], [], [], [], st}, fn t, {:ok, lines, exprs, lays, effs, st} ->
@@ -1114,11 +1169,25 @@ defmodule Muro.Emit.Zig do
   end
 
   defp bind_half(slot, :opaque, _st), do: slot
+
+  defp bind_half(slot, :string, st),
+    do: "#{g("reveal")}(#{zty(:string, st)}, #{slot}).*"
+
   defp bind_half(slot, lay, st), do: "#{g("reveal")}(#{zty(lay, st)}, #{slot})"
 
   defp coerce(ex, :never, _to, _st), do: ex
   defp coerce(ex, from, to, _st) when from == to, do: ex
   defp coerce("null", {:opt, _}, {:opt, _} = to, st), do: "@as(#{zty(to, st)}, null)"
+
+  # A pair slot and a stream seed are `*const anyopaque`. Copy the struct
+  # once. The octets stay where they are. Reading them back is `.*`.
+  defp coerce(ex, :string, :opaque, _st) do
+    "#{g("erase")}(try #{g("box_str")}(#{al()}, #{ex}))"
+  end
+
+  defp coerce(ex, :opaque, :string, st) do
+    "#{g("reveal")}(#{zty(:string, st)}, #{ex}).*"
+  end
 
   defp coerce(ex, from, to, st) do
     cond do
@@ -1342,7 +1411,9 @@ defmodule Muro.Emit.Zig do
   defp z_from_u64(:u64, bits), do: "(#{bits})"
   defp z_from_u64(:i64, bits), do: "@as(i64, @bitCast(#{bits}))"
 
-  defp pty(lay, st) when lay in [:u8, :u32, :u64, :i64, :wbool, :slice], do: zty(lay, st)
+  defp pty(lay, st) when lay in [:u8, :u32, :u64, :i64, :wbool, :slice, :string],
+    do: zty(lay, st)
+
   defp pty({:opt, _} = lay, st), do: zty(lay, st)
 
   defp pty({:data, name} = lay, st) do
@@ -1352,6 +1423,7 @@ defmodule Muro.Emit.Zig do
   defp pty(lay, st), do: "*const " <> zty(lay, st)
 
   defp zty(:slice, _st), do: g("slice")
+  defp zty(:string, _st), do: g("str")
   defp zty(:u8, _st), do: "u8"
   defp zty(:u32, _st), do: "u32"
   defp zty(:u64, _st), do: "u64"
@@ -1440,6 +1512,7 @@ defmodule Muro.Emit.Zig do
   defp type_layout(book, {:word, :opt, [a]}), do: {:opt, type_layout(book, a)}
   defp type_layout(_book, :bytes), do: :slice
   defp type_layout(_book, :slice), do: :slice
+  defp type_layout(_book, :string), do: :string
   defp type_layout(_book, _), do: :opaque
 
   defp telescope(t), do: telescope(t, [])
@@ -2001,7 +2074,11 @@ defmodule Muro.Emit.Zig do
       lays?(funs, &(&1 == :slice)) or Enum.any?(fields, &(&1 == :slice)) or
         Enum.any?(funs, &zig_bytes?(&1.body))
 
-    %{pair: pair?, stream: stream?, bytes: bytes?}
+    strings? =
+      lays?(funs, &string_lay?/1) or Enum.any?(fields, &string_lay?/1) or
+        Enum.any?(funs, &zig_string?(&1.body))
+
+    %{pair: pair?, stream: stream?, bytes: bytes?, strings: strings?}
   end
 
   defp runtime(flags) do
@@ -2011,7 +2088,8 @@ defmodule Muro.Emit.Zig do
       erase_runtime(),
       if(flags.pair, do: pair_runtime(), else: ""),
       if(flags.stream, do: stream_runtime(), else: ""),
-      if(flags.bytes, do: bytes_runtime(), else: "")
+      if(flags.bytes, do: bytes_runtime(), else: ""),
+      if(flags.strings, do: string_runtime(flags.bytes), else: "")
     ]
 
     parts |> Enum.reject(&(&1 == "")) |> Enum.join("\n\n")
@@ -2329,6 +2407,124 @@ defmodule Muro.Emit.Zig do
             i += 1;
         }
         return #{emp}();
+    }
+    """
+    |> String.trim()
+  end
+
+  defp string_lay?(:string), do: true
+  defp string_lay?({:opt, a}), do: string_lay?(a)
+  defp string_lay?({:pair, a, b}), do: string_lay?(a) or string_lay?(b)
+  defp string_lay?({:stream, a}), do: string_lay?(a)
+  defp string_lay?(_), do: false
+
+  defp zig_string?(t) when is_tuple(t) do
+    case t do
+      {:str, _} -> true
+      {:scat, _, _} -> true
+      {:slen, _} -> true
+      {:seq, _, _} -> true
+      {:sbytes, _} -> true
+      other -> other |> Tuple.to_list() |> Enum.any?(&zig_string?/1)
+    end
+  end
+
+  defp zig_string?(t) when is_list(t), do: Enum.any?(t, &zig_string?/1)
+  defp zig_string?(:string), do: true
+  defp zig_string?(_), do: false
+
+  defp string_runtime(bytes?) do
+    ty = g("str")
+    empty = g("empty_str")
+    emp = g("str_empty")
+    eq = g("str_eq")
+    cat = g("str_cat")
+    len = g("str_len")
+    box = g("box_str")
+    nat = g("Nat")
+    stdlib = stdn()
+    bytes = if bytes?, do: zig_str_bytes(), else: ""
+    # Locals go through Name.gen. A source spelling has no `__`, and Zig
+    # refuses a local that shadows a function in the same file (`def n`).
+    a = g("sa")
+    b = g("sb")
+    s = g("ss")
+    ov = g("sov")
+    sn = g("sn")
+    buf = g("sbuf")
+    i = g("si")
+    k = g("sk")
+    c = g("sc")
+    w = g("sw")
+    p = g("sp")
+
+    """
+    pub const #{ty} = extern struct { p: [*]const u8, n: usize };
+
+    const #{empty} = [_]u8{0};
+
+    fn #{emp}() #{ty} {
+        return .{ .p = @as([*]const u8, @ptrCast(&#{empty})), .n = 0 };
+    }
+
+    fn #{eq}(#{a}: #{ty}, #{b}: #{ty}) u8 {
+        if (#{a}.n != #{b}.n) return 0;
+        if (#{a}.n == 0) return 1;
+        if (#{stdlib}.mem.eql(u8, #{a}.p[0..#{a}.n], #{b}.p[0..#{b}.n])) return 1;
+        return 0;
+    }
+
+    fn #{cat}(#{al()}: #{alloc_ty()}, #{a}: #{ty}, #{b}: #{ty}) !#{ty} {
+        const #{ov} = @addWithOverflow(#{a}.n, #{b}.n);
+        if (#{ov}[1] != 0) return error.Overflow;
+        const #{sn} = #{ov}[0];
+        if (#{sn} == 0) return #{emp}();
+        const #{buf} = try #{al()}.alloc(u8, #{sn});
+        if (#{a}.n != 0) @memcpy(#{buf}[0..#{a}.n], #{a}.p[0..#{a}.n]);
+        if (#{b}.n != 0) @memcpy(#{buf}[#{a}.n..#{sn}], #{b}.p[0..#{b}.n]);
+        return .{ .p = #{buf}.ptr, .n = #{sn} };
+    }
+
+    // Counts Unicode scalars by walking lead bytes. The buffer must be well-formed
+    // UTF-8. A string muro emits always is. A malformed host string may be miscounted.
+    fn #{len}(#{al()}: #{alloc_ty()}, #{s}: #{ty}) !*const #{nat} {
+        var #{i}: usize = 0;
+        var #{k}: u64 = 0;
+        while (#{i} < #{s}.n) {
+            const #{c} = #{s}.p[#{i}];
+            var #{w}: usize = 1;
+            if ((#{c} & 0xE0) == 0xC0) {
+                #{w} = 2;
+            } else if ((#{c} & 0xF0) == 0xE0) {
+                #{w} = 3;
+            } else if ((#{c} & 0xF8) == 0xF0) {
+                #{w} = 4;
+            }
+            if (#{w} > #{s}.n - #{i}) #{w} = #{s}.n - #{i};
+            #{i} += #{w};
+            #{k} += 1;
+        }
+        return #{g("from_u64")}(#{al()}, #{k});
+    }
+
+    fn #{box}(#{al()}: #{alloc_ty()}, #{s}: #{ty}) !*#{ty} {
+        const #{p} = try #{al()}.create(#{ty});
+        #{p}.* = #{s};
+        return #{p};
+    }
+    #{bytes}
+    """
+    |> String.trim()
+  end
+
+  defp zig_str_bytes do
+    ty = g("str")
+    sl = g("slice")
+    s = g("ss")
+
+    """
+    fn #{g("str_bytes")}(#{s}: #{ty}) #{sl} {
+        return .{ .p = #{s}.p, .n = #{s}.n };
     }
     """
     |> String.trim()
