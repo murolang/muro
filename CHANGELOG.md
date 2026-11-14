@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.21.6
+
+A declared cover is ranked when the terms themselves can be split. A function field is refused when the environment is opened: `State has a function field`. An erased constructor argument is refused then too: `State has an erased constructor argument`. A linear field still opens, and the certificate is refused: `State has a linear field`. Recursion under `List` or a product still opens, and the certificate is refused: `State recursion under List/product cannot be certified`. Those limits also mean two values have no equality run, so `is-self-loop` and `leads-terminal` are omitted. A product that does not recurse is compared with `let`. A field of type `List State` is not strictly positive. Wrapper recursion through another datatype stays `State is mutually inductive`.
+
+### Manual
+
+- Synthesis. Examples.
+
+### Package
+
+- Version 0.21.6.
+
 ## 0.21.4
 
 `mix muro.synth` accepts an inductive `State`, including one that refers to itself. A finite non-empty `all-states` is the cover. Two values are compared by matching constructors and recursing on a field of that same datatype. The certificate ranks that cover. A state outside the cover has an empty ranking.
