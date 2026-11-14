@@ -15,7 +15,7 @@ defmodule Mix.Tasks.Muro.Ui do
   The task prints the URL of the address it binds and opens it.
   IPv4 loopback is `http://127.0.0.1:4017/`. An IPv6 address is
   `http://[::1]:4017/`. A hostname is `http://localhost:4017/`.
-  In a Mix project, add `{:muro_visor, "~> 0.3.0"}` and run `mix deps.get`
+  In a Mix project, add `{:muro_visor, "~> 0.3.1"}` and run `mix deps.get`
   first. Outside a project, the task installs that package and starts it.
   """
 
@@ -53,14 +53,14 @@ defmodule Mix.Tasks.Muro.Ui do
         :ok
 
       Mix.Project.get() == nil ->
-        Mix.install([{:muro_visor, "~> 0.3.0"}])
+        Mix.install([{:muro_visor, "~> 0.3.1"}])
         :ok
 
       true ->
         Mix.raise("""
         muro_visor is not running in this project. Add it to mix.exs:
 
-            {:muro_visor, "~> 0.3.0"}
+            {:muro_visor, "~> 0.3.1"}
 
         Then fetch it and open the book:
 
