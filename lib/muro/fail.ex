@@ -112,7 +112,10 @@ defmodule Muro.Fail do
   defp walk({:call, _}, _need?, _peer, _who, _book), do: :ok
   defp walk(:done, _need?, _peer, _who, _book), do: :ok
   defp walk(:stop, _need?, _peer, _who, _book), do: :ok
-  defp walk(_other, _need?, _peer, _who, _book), do: :ok
+
+  defp walk(_other, _need?, _peer, who, _book) do
+    {:error, "#{who}: unknown process"}
+  end
 
   defp walk_under({:get, _, _, body}, need?, peer, who, book),
     do: walk(body, need?, peer, who, book)
