@@ -17,9 +17,11 @@ defmodule Muro.Temporal.Graph do
   itself.
 
   A meeting that marks a party `may fail` appends death and drop edges
-  after that list. A meeting that does not mark one appends nothing, and
-  this module stays the transcription of the Agda development, which has
-  no failure.
+  after that list. Death is only while that party has not halted: a
+  party at `done` or `stop` has no death edge, and a party that is
+  already dead has no second one. A meeting that does not mark one
+  appends nothing, and this module stays the transcription of the Agda
+  development, which has no failure.
   """
 
   @doc """
@@ -299,13 +301,20 @@ defmodule Muro.Temporal.Graph do
 
   defp death_edges(g, conf), do: die(g, conf, :l) ++ die(g, conf, :r)
 
+  # A marked party dies only while it has not halted. `done` and `stop`
+  # stay where they are. A party that is already dead has no second death.
   defp die(g, conf, side) do
-    if may?(g, side) and not dead?(ptr(conf, side)) do
+    i = ptr(conf, side)
+
+    if may?(g, side) and not dead?(i) and not side_halt(code_of(g, side), i) do
       [{die_tag(side), set_ptr(conf, :dead, side)}]
     else
       []
     end
   end
+
+  defp code_of(g, :l), do: g.code_l
+  defp code_of(g, :r), do: g.code_r
 
   # The head of a queue is dropped once either end of that queue has
   # stopped. Toward the survivor that is one run beside delivery. Toward

@@ -7,7 +7,7 @@ defmodule Muro.MayFailTest do
 
   @missing "examples/may-fail-missing.muro:15:1: miss: server: get (r : Report) does not handle failure of task"
 
-  @held "examples/may-fail-hold.muro:20:1: held: (server at first get) leads_to (server done) fails in hold (server : server-wait, task : task-work) after task put ok, task died, task dropped ok, server fail; then forever: the meeting has finished"
+  @held "examples/may-fail-hold.muro:20:1: held: (server at first get) leads_to (server done) fails in hold (server : server-wait, task : task-work) after task died, server fail; then forever: the meeting has finished"
 
   test "may fail prints on the party it marks, and buffer stays last" do
     assert {:ok, book} =
@@ -107,7 +107,7 @@ defmodule Muro.MayFailTest do
     assert Muro.check_file("examples/may-fail-free.muro") == :ok
 
     assert Check.temporal_lines() == [
-             "temporal freed: holds in 7 reachable states, 11 transitions"
+             "temporal freed: holds in 5 reachable states, 6 transitions"
            ]
   end
 
@@ -123,7 +123,7 @@ defmodule Muro.MayFailTest do
     assert Muro.check_file("examples/may-fail-send.muro") == :ok
 
     assert Check.temporal_lines() == [
-             "temporal freed: holds in 14 reachable states, 21 transitions"
+             "temporal freed: holds in 12 reachable states, 16 transitions"
            ]
   end
 
