@@ -278,6 +278,7 @@ defmodule Muro.Temporal do
   def holds?(g, {:imp, p, q}, conf), do: not holds?(g, p, conf) or holds?(g, q, conf)
   def holds?(g, {:done, side}, conf), do: block_kind(g, side, conf) == :done
   def holds?(g, {:stopped, side}, conf), do: block_kind(g, side, conf) == :stop
+  def holds?(g, {:dead, side}, conf), do: block_kind(g, side, conf) == :dead
   def holds?(_g, {:at, side, index}, conf), do: ptr(conf, side) == index
 
   def holds?(g, {:eq, side, slot, lit}, conf) do
@@ -640,6 +641,10 @@ defmodule Muro.Temporal do
 
   defp resolve_prop(book, g, {:stopped, role}) do
     with {:ok, side} <- role_side(book, g, role), do: {:ok, {:stopped, side}}
+  end
+
+  defp resolve_prop(book, g, {:dead, role}) do
+    with {:ok, side} <- role_side(book, g, role), do: {:ok, {:dead, side}}
   end
 
   defp resolve_prop(book, g, {:empty, role}) do
@@ -1006,6 +1011,7 @@ defmodule Muro.Temporal do
   def pp_prop({:imp, p, q}), do: "#{pp_prop(p)} implies #{pp_prop(q)}"
   def pp_prop({:done, role}), do: "#{role} done"
   def pp_prop({:stopped, role}), do: "#{role} stopped"
+  def pp_prop({:dead, role}), do: "#{role} dead"
   def pp_prop({:at, role, n, verb}), do: "#{role} at #{ordinal(n)} #{verb}"
   def pp_prop({:eq, role, name, val}), do: "#{role} has #{name} = #{pp_val(val)}"
   def pp_prop({:lt, role, name, n}), do: "#{role} has #{name} < #{n}"

@@ -1280,6 +1280,9 @@ defmodule Muro.Parser do
         word_kw?(rest, "stopped") ->
           {:ok, {:stopped, role}, after_kw(rest, "stopped")}
 
+        word_kw?(rest, "dead") ->
+          {:ok, {:dead, role}, after_kw(rest, "dead")}
+
         word_kw?(rest, "at") ->
           parse_at(role, after_kw(rest, "at"))
 
@@ -1287,7 +1290,7 @@ defmodule Muro.Parser do
           parse_has(role, after_kw(rest, "has"))
 
         true ->
-          {:error, err(rest, "expected done, stopped, at, or has")}
+          {:error, err(rest, "expected done, stopped, dead, at, or has")}
       end
     end
   end

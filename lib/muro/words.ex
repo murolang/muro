@@ -26,7 +26,7 @@ defmodule Muro.Words do
   # only as the arm after a receive. Classified here so the highlighter
   # and the parser share the spelling, the way `buffer` is.
   @may_fail ~w(may fail)
-  @temporal ~w(forall always eventually leads_to implies or and not true false inbox is empty full stopped has first second third st nd rd th)
+  @temporal ~w(forall always eventually leads_to implies or and not true false inbox is empty full stopped dead has first second third st nd rd th)
   @repr ~w(else boolean integer nil interned string list optional nullable tuple map_of map open)
 
   @types ~w(Atom String Bytes Slice Type Nat I64 U8 U32 U64 WBool Opt F32 Tensor Unit Empty Stream Always Bit Vec run spec evidence internal)

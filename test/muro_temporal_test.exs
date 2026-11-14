@@ -292,7 +292,7 @@ defmodule Muro.TemporalTest do
     assert msg =~ "nested temporal operator"
 
     assert {:error, msg} = Parser.parse("temporal t : wire := under fair always true\n")
-    assert msg =~ "expected done, stopped, at, or has"
+    assert msg =~ "expected done, stopped, dead, at, or has"
 
     src = """
     session echo := rec X. send Nat (recv Nat X)
