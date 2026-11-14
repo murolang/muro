@@ -501,7 +501,11 @@ defmodule Muro.Gen do
 
       _kind ->
         book = loaded |> Muro.Prelude.for_emit() |> Muro.Grade.erase_book()
-        {:ok, Muro.Emit.emit_module(entry.module, book), []}
+
+        case Muro.Emit.refuse_may_fail(book) do
+          :ok -> {:ok, Muro.Emit.emit_module(entry.module, book), []}
+          {:error, message} -> {:error, message}
+        end
     end
   end
 

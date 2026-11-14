@@ -91,6 +91,15 @@ defmodule Muro.Temporal.Elab do
     end
   end
 
+  # The reason is not a temporal slot. The arm does not see the payload
+  # the receive would have bound.
+  defp elab({:on_fail, recv, _reason, arm}, book, scope, names) do
+    with {:ok, recv} <- elab(recv, book, scope, names),
+         {:ok, arm} <- elab(arm, book, scope, names) do
+      {:ok, {:on_fail, recv, arm}}
+    end
+  end
+
   defp elab(_other, _book, _scope, _names), do: {:error, @fragment}
 
   defp elab_get_match(ty, name, arms, book, scope, names) do
@@ -236,6 +245,7 @@ defmodule Muro.Temporal.Elab do
   defp mu_names({:pick0, body}, acc), do: mu_names(body, acc)
   defp mu_names({:pick1, body}, acc), do: mu_names(body, acc)
   defp mu_names({:cover, p, q}, acc), do: mu_names(q, mu_names(p, acc))
+  defp mu_names({:on_fail, recv, _, arm}, acc), do: mu_names(arm, mu_names(recv, acc))
   defp mu_names(:done, acc), do: acc
   defp mu_names(:stop, acc), do: acc
   defp mu_names({:call, _}, acc), do: acc
@@ -267,6 +277,7 @@ defmodule Muro.Temporal.Elab do
   defp binders({:pick0, body}, acc), do: binders(body, acc)
   defp binders({:pick1, body}, acc), do: binders(body, acc)
   defp binders({:cover, p, q}, acc), do: binders(q, binders(p, acc))
+  defp binders({:on_fail, recv, _, arm}, acc), do: binders(arm, binders(recv, acc))
   defp binders(_, acc), do: acc
 
   defp binders_arms(arms, acc) do

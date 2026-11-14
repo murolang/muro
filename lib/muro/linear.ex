@@ -113,6 +113,7 @@ defmodule Muro.Linear do
   # Every arm is consumed. An empty match is one use. One abandoned arm is none.
   defp consume({:match, _, arms}), do: arms_use(arms)
   # A jump does not finish. `rec X. done` does, and it is one use.
+  defp consume({:on_fail, recv, _, arm}), do: once(consume(recv), consume(arm))
   defp consume({:rec, _, body}), do: consume(body)
   defp consume({:call, _}), do: :u0
 

@@ -9,7 +9,7 @@ summary: Each session endpoint is a pure state machine. The transport stays with
 
 `--backend fsm` prints one module for the book's sessions. A host that already has a transport (an RPC, an HTTP exchange, a queue, a websocket, a call between nodes made by other means) steps that module around the messages it sends and receives. The module does not start a process, and it does not talk to a peer.
 
-This is not a replacement for `--backend otp`. The OTP image is a GenServer that owns a mailbox. The state machine is the check that the messages a host already exchanges follow the protocol the meeting proved. The OTP image is unchanged.
+This is not a replacement for `--backend otp`. The OTP image is a GenServer that owns a mailbox. The state machine is the check that the messages a host already exchanges follow the protocol the meeting proved. The OTP image is unchanged. A meeting marked `may fail` is refused (`c:mayfail`). A `down` step is the next image of that meeting.
 
 ## One end
 

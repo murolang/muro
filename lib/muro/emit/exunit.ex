@@ -47,7 +47,8 @@ defmodule Muro.Emit.ExUnitSuite do
     scope = Prelude.for_check(book)
     names = Emit.elixir_names(Prelude.for_emit(book))
 
-    with {:ok, files} <- candidate_files(path, opts),
+    with :ok <- Emit.refuse_may_fail(book),
+         {:ok, files} <- candidate_files(path, opts),
          {:ok, db_book} <- Ast.book_to_db(scope, params: :open) do
       ctx = %{
         fuel: fuel,

@@ -3901,7 +3901,8 @@ defmodule Muro.Check do
          :ok <- guard_sits(book, lp, left),
          :ok <- guard_sits(book, rp, right),
          {:ok, l} <- process_session(book, lp),
-         {:ok, r} <- process_session(book, rp) do
+         {:ok, r} <- process_session(book, rp),
+         :ok <- Muro.Fail.arms(book, d, lp, rp) do
       case meet_ends(book, l, r, left, right, Map.get(d, :buffer)) do
         {:ok, graph} -> {:graph, name, l.session, graph}
         {:error, msg} -> {:error, "#{loc}#{name}: #{msg}"}
@@ -4070,6 +4071,18 @@ defmodule Muro.Check do
   # A recursion variable is not a payload. The value context is unchanged.
   defp check_proc_vars({:rec, _name, body}, ctx, book, span),
     do: check_proc_vars(body, ctx, book, Muro.Session.step_down(span, 0))
+
+  defp check_proc_vars({:on_fail, recv, reason, arm}, ctx, book, span) do
+    with :ok <- check_proc_vars(recv, ctx, book, span) do
+      ctx1 =
+        case reason do
+          {_ty, name} -> MapSet.put(ctx, name)
+          _ -> ctx
+        end
+
+      check_proc_vars(arm, ctx1, book, Muro.Session.step_down(span, 0))
+    end
+  end
 
   defp check_proc_vars({:call, _name}, _ctx, _book, _span), do: :ok
 

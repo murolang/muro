@@ -292,7 +292,7 @@ defmodule Muro.TemporalTest do
     assert msg =~ "nested temporal operator"
 
     assert {:error, msg} = Parser.parse("temporal t : wire := under fair always true\n")
-    assert msg =~ "expected done, stopped, at, or has"
+    assert msg =~ "expected done, stopped, dead, at, or has"
 
     src = """
     session echo := rec X. send Nat (recv Nat X)
@@ -408,20 +408,26 @@ defmodule Muro.TemporalTest do
       dest = Path.join(dir, Path.basename(path))
       extra = "\ntemporal hold : #{name} := always true\n"
       File.write!(dest, src)
-      assert Muro.check_file(dest) == :ok
-      File.write!(dest, src <> extra)
 
       case Muro.check_file(dest) do
         :ok ->
-          File.write!(dest, src)
-          before = emit_all(dest)
           File.write!(dest, src <> extra)
-          assert comparable(before) == comparable(emit_all(dest))
+
+          case Muro.check_file(dest) do
+            :ok ->
+              File.write!(dest, src)
+              before = emit_image(dest)
+              File.write!(dest, src <> extra)
+              assert image_key(before) == image_key(emit_image(dest))
+
+            {:error, msg} ->
+              assert msg =~ "payload outside the temporal fragment"
+              assert {:error, emitted} = Muro.emit_file(dest, :Hold)
+              assert emitted =~ "payload outside the temporal fragment"
+          end
 
         {:error, msg} ->
-          assert msg =~ "payload outside the temporal fragment"
-          assert {:error, emitted} = Muro.emit_file(dest, :Hold)
-          assert emitted =~ "payload outside the temporal fragment"
+          assert msg =~ "does not handle failure of" or msg =~ "task died", path
       end
     end
   end
@@ -597,6 +603,29 @@ defmodule Muro.TemporalTest do
       0 -> Enum.reverse(acc)
     end
   end
+
+  @mayfail "c:mayfail\nmay fail is checked and not emitted"
+
+  # A book that marks a party keeps the refusal when a declaration is
+  # appended. Every other buffered example keeps the emitted image.
+  defp emit_image(path) do
+    case Muro.emit_file(path, :Book) do
+      {:error, @mayfail} = err ->
+        assert Muro.emit_exunit(path, :BookTest) == err
+        assert Muro.emit_fsm(path, :BookFsm) == err
+        assert Muro.emit_c(path) == err
+        assert Muro.emit_rust(path) == err
+        assert Muro.emit_zig(path) == err
+        assert Muro.emit_asm(path) == err
+        err
+
+      {:ok, _} ->
+        emit_all(path)
+    end
+  end
+
+  defp image_key({:error, _} = err), do: err
+  defp image_key(emitted), do: comparable(emitted)
 
   defp emit_all(path) do
     assert {:ok, elixir} = Muro.emit_file(path, :Book)

@@ -165,7 +165,8 @@ defmodule Muro.Emit.C do
       {:ok, funs} ->
         nm = name_map(book)
 
-        with :ok <- Emit.refuse_unboxed_opt(book, funs),
+        with :ok <- Emit.refuse_may_fail(book),
+             :ok <- Emit.refuse_unboxed_opt(book, funs),
              {:ok, sigs, _texts, _extras} <- compile_funs(funs, book, nm),
              {:ok, groups, _} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
           {:ok, c_outline(book, sigs, groups)}
@@ -226,7 +227,8 @@ defmodule Muro.Emit.C do
             runs = Emit.run_defs(book)
             bytes? = bytes_image?(funs) or data_field_bytes?(book)
 
-            with :ok <- Emit.refuse_unboxed_opt(book, funs),
+            with :ok <- Emit.refuse_may_fail(book),
+                 :ok <- Emit.refuse_unboxed_opt(book, funs),
                  {:ok, opts} <- opt_typedefs(funs, book, bytes?) do
               {:ok, header(book, sigs, stem, nm, opts, bytes?),
                source(book, runs, sigs, texts, extras, stem, nm, opts, bytes?), sigs}

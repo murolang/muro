@@ -276,6 +276,8 @@ defmodule Muro.Async do
     end
   end
 
+  defp act(conf, side, {:on_fail, recv, _, _}), do: act(conf, side, recv)
+
   defp act(conf, side, {:put, ty, val, cont}) do
     if length(out_queue(conf, side)) >= conf.k do
       :wait
@@ -680,6 +682,10 @@ defmodule Muro.Async do
     grow_puts(body, MapSet.put(active, name), book)
   end
 
+  defp grow_puts({:on_fail, recv, _, arm}, active, book) do
+    grow_puts(recv, active, book) or grow_puts(arm, active, book)
+  end
+
   defp grow_puts({:call, _name}, _active, _book), do: false
 
   # A received name at the top of a put is an echo. Under a constructor it
@@ -726,6 +732,10 @@ defmodule Muro.Async do
   end
 
   defp reaches?({:rec, name, body}, active), do: reaches?(body, MapSet.delete(active, name))
+
+  defp reaches?({:on_fail, recv, _, arm}, active) do
+    reaches?(recv, active) or reaches?(arm, active)
+  end
 
   defp reaches?({:call, name}, active), do: MapSet.member?(active, name)
 

@@ -22,7 +22,11 @@ defmodule Muro.Words do
   @talk @talk_stop ++ ~w(with)
   @choreo ~w(roles chooses)
   @place ~w(ambient node any fixed stay cross at buffer)
-  @temporal ~w(forall always eventually leads_to implies or and not true false inbox is empty full stopped has first second third st nd rd th)
+  # Keywords only as the two-word mark on a party of a meet, and `fail`
+  # only as the arm after a receive. Classified here so the highlighter
+  # and the parser share the spelling, the way `buffer` is.
+  @may_fail ~w(may fail)
+  @temporal ~w(forall always eventually leads_to implies or and not true false inbox is empty full stopped dead has first second third st nd rd th)
   @repr ~w(else boolean integer nil interned string list optional nullable tuple map_of map open)
 
   @types ~w(Atom String Bytes Slice Type Nat I64 U8 U32 U64 WBool Opt F32 Tensor Unit Empty Stream Always Bit Vec run spec evidence internal)
@@ -73,6 +77,7 @@ defmodule Muro.Words do
               @talk ++
               @choreo ++
               @place ++
+              @may_fail ++
               @temporal ++
               @repr ++
               @term
@@ -133,6 +138,7 @@ defmodule Muro.Words do
   def talk_stop_words, do: @talk_stop
   def choreo_words, do: @choreo
   def place_words, do: @place
+  def may_fail_words, do: @may_fail
   def temporal_words, do: @temporal
   def repr_words, do: @repr
 

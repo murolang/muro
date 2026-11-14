@@ -12,8 +12,16 @@ defmodule Muro.Temporal.Graph do
   | `steps_of/2` | the real successors of `edges` (`Muro.Temporal.real`) |
 
   Left is tried before right, the order `merge` uses. The stutter edge is
-  last and only at a finished configuration. `steps_of` drops it: the
-  breadth-first search does not follow a configuration to itself.
+  last among those three, and only at a finished configuration. `steps_of`
+  drops it: the breadth-first search does not follow a configuration to
+  itself.
+
+  A meeting that marks a party `may fail` appends death and drop edges
+  after that list. Death is only while that party has not halted: a
+  party at `done` or `stop` has no death edge, and a party that is
+  already dead has no second one. A meeting that does not mark one
+  appends nothing, and this module stays the transcription of the Agda
+  development, which has no failure.
   """
 
   @doc """
@@ -27,49 +35,65 @@ defmodule Muro.Temporal.Graph do
   Transcribes `AsyncRec.reactL`.
   """
   def react_l(g, conf) do
-    react(g, conf, Enum.at(g.code_l, il(conf)), :l)
+    if dead?(il(conf)), do: :wait, else: react(g, conf, Enum.at(g.code_l, il(conf)), :l)
   end
 
   @doc """
   Transcribes `AsyncRec.reactR`.
   """
   def react_r(g, conf) do
-    react(g, conf, Enum.at(g.code_r, ir(conf)), :r)
+    if dead?(ir(conf)), do: :wait, else: react(g, conf, Enum.at(g.code_r, ir(conf)), :r)
   end
 
   @doc """
-  Transcribes `AsyncRec.view`.
+  Transcribes `AsyncRec.view`. A bad view that still has a death or a
+  drop is that step: the configuration is not stuck.
   """
   def view(g, conf) do
-    merge(g, conf, react_l(g, conf), react_r(g, conf))
+    case merge(g, conf, react_l(g, conf), react_r(g, conf)) do
+      {:bad, _} = bad ->
+        case extra(g, conf) do
+          [] -> bad
+          [{_, dest} | rest] -> {:go, dest, Enum.map(rest, &elem(&1, 1))}
+        end
+
+      other ->
+        other
+    end
   end
 
   @doc """
-  Transcribes `AsyncRec.halted`.
+  Transcribes `AsyncRec.halted`. A party that has stopped early is halted.
   """
   def halted(g, conf) do
-    halt?(Enum.at(g.code_l, il(conf))) and halt?(Enum.at(g.code_r, ir(conf)))
+    side_halt(g.code_l, il(conf)) and side_halt(g.code_r, ir(conf))
   end
 
   @doc """
   Transcribes `Muro.Temporal.edges`. Left, then right, then the stutter.
+  Death and drop follow, and only when the meeting asked for them.
   """
   def edges(g, conf) do
-    from(react_l(g, conf), :lside) ++ from(react_r(g, conf), :rside) ++ stutter(g, conf)
+    from(react_l(g, conf), :lside) ++
+      from(react_r(g, conf), :rside) ++
+      stutter(g, conf) ++
+      extra(g, conf)
   end
 
   @doc """
-  Successors the search follows. A bad view contributes none. A finished
-  configuration contributes none here; `edges` keeps its stutter.
+  Successors the search follows. A bad view contributes its death and
+  drop steps, and no ordinary step. A finished configuration contributes
+  none here; `edges` keeps its stutter. An unmarked meeting has no death
+  and no drop, so a bad view there contributes nothing.
   """
   def steps_of(g, conf) do
     left = react_l(g, conf)
     right = react_r(g, conf)
 
     if bad?(left) or bad?(right) do
-      []
+      extra(g, conf)
     else
-      from(left, :lside) ++ from(right, :rside)
+      from(left, :lside) ++ from(right, :rside) ++ extra(g, conf)
     end
   end
 
@@ -109,18 +133,32 @@ defmodule Muro.Temporal.Graph do
   defp react(g, conf, %{k: :pick0, cont: i}, side), do: enq(g, conf, {:lab, false}, i, side)
   defp react(g, conf, %{k: :pick1, cont: i}, side), do: enq(g, conf, {:lab, true}, i, side)
 
-  defp react(g, conf, %{k: :get, tag: tag, slot: slot, cont: i}, side) do
-    on_get(g, conf, tag, slot, i, side)
+  defp react(g, conf, %{k: :get, tag: tag, slot: slot, cont: i} = blk, side) do
+    case on_get(g, conf, tag, slot, i, side) do
+      :wait -> maybe_fail(g, conf, blk, side)
+      other -> other
+    end
   end
 
-  defp react(g, conf, %{k: :cover, c0: i, c1: j}, side), do: on_cover(g, conf, i, j, side)
-
-  defp react(g, conf, %{k: :iget, slot: slot, c0: i, c1: j}, side) do
-    on_iget(g, conf, slot, i, j, side)
+  defp react(g, conf, %{k: :cover, c0: i, c1: j} = blk, side) do
+    case on_cover(g, conf, i, j, side) do
+      :wait -> maybe_fail(g, conf, blk, side)
+      other -> other
+    end
   end
 
-  defp react(g, conf, %{k: :mget, tag: tag, slot: slot, arms: arms}, side) do
-    on_mget(g, conf, tag, slot, arms, side)
+  defp react(g, conf, %{k: :iget, slot: slot, c0: i, c1: j} = blk, side) do
+    case on_iget(g, conf, slot, i, j, side) do
+      :wait -> maybe_fail(g, conf, blk, side)
+      other -> other
+    end
+  end
+
+  defp react(g, conf, %{k: :mget, tag: tag, slot: slot, arms: arms} = blk, side) do
+    case on_mget(g, conf, tag, slot, arms, side) do
+      :wait -> maybe_fail(g, conf, blk, side)
+      other -> other
+    end
   end
 
   defp on_get(g, conf, tag, slot, i, side) do
@@ -234,15 +272,82 @@ defmodule Muro.Temporal.Graph do
   defp bad?({:bad, _}), do: true
   defp bad?(_), do: false
 
+  # A send to a party that has already stopped is consumed and not queued.
   defp enq(g, conf, tok, i, side) do
-    queue = outbox(conf, side)
+    if dead?(ptr(conf, other(side))) do
+      {:go, set_ptr(conf, i, side)}
+    else
+      queue = outbox(conf, side)
 
-    if length(queue) < g.cap do
-      {:go, set_ptr(set_out(conf, snoc(queue, tok), side), i, side)}
+      if length(queue) < g.cap do
+        {:go, set_ptr(set_out(conf, snoc(queue, tok), side), i, side)}
+      else
+        :wait
+      end
+    end
+  end
+
+  # The failure arm fires only once the peer has stopped and this inbox
+  # is empty. A message still queued can be taken or dropped first.
+  defp maybe_fail(_g, conf, blk, side) do
+    fail = Map.get(blk, :fail)
+
+    if dead?(ptr(conf, other(side))) and is_integer(fail) do
+      {:go, set_ptr(conf, fail, side)}
     else
       :wait
     end
   end
+
+  defp extra(g, conf), do: death_edges(g, conf) ++ drop_edges(g, conf)
+
+  defp death_edges(g, conf), do: die(g, conf, :l) ++ die(g, conf, :r)
+
+  # A marked party dies only while it has not halted. `done` and `stop`
+  # stay where they are. A party that is already dead has no second death.
+  defp die(g, conf, side) do
+    i = ptr(conf, side)
+
+    if may?(g, side) and not dead?(i) and not side_halt(code_of(g, side), i) do
+      [{die_tag(side), set_ptr(conf, :dead, side)}]
+    else
+      []
+    end
+  end
+
+  defp code_of(g, :l), do: g.code_l
+  defp code_of(g, :r), do: g.code_r
+
+  # The head of a queue is dropped once either end of that queue has
+  # stopped. Toward the survivor that is one run beside delivery. Toward
+  # the party that stopped, the message will not be read.
+  defp drop_edges(_g, conf), do: drop_q(conf, :l) ++ drop_q(conf, :r)
+
+  defp drop_q(conf, side) do
+    q = outbox(conf, side)
+
+    if q != [] and (dead?(ptr(conf, side)) or dead?(ptr(conf, other(side)))) do
+      [{drop_tag(side), set_out(conf, tl(q), side)}]
+    else
+      []
+    end
+  end
+
+  defp may?(g, :l), do: Map.get(g, :may_l, false)
+  defp may?(g, :r), do: Map.get(g, :may_r, false)
+  defp ptr(conf, :l), do: il(conf)
+  defp ptr(conf, :r), do: ir(conf)
+  defp other(:l), do: :r
+  defp other(:r), do: :l
+  defp die_tag(:l), do: :ldie
+  defp die_tag(:r), do: :rdie
+  defp drop_tag(:l), do: :ldrop
+  defp drop_tag(:r), do: :rdrop
+  defp dead?(:dead), do: true
+  defp dead?(_), do: false
+
+  defp side_halt(_code, :dead), do: true
+  defp side_halt(code, i), do: halt?(Enum.at(code, i))
 
   defp jump(conf, i, rest, env, side) do
     conf

@@ -1,0 +1,19 @@
+-- The server sends, then receives. The send has no failure arm.
+-- A message to a task that has already stopped is dropped. The stop
+-- is handled at the receive, and that arm releases the slot.
+
+data Report : Type where
+  ok : Report
+
+session task-work := recv Nat (send Report end)
+session server-work := send Nat (recv Report end)
+
+conform task : task-work :=
+  get (n : Nat) (put ok done)
+
+conform server : server-work :=
+  put 0 (get (r : Report) done fail done)
+
+meet wire : server with task may fail buffer 1
+
+temporal freed : wire := (server at first get) leads_to (server done)

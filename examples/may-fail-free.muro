@@ -1,0 +1,19 @@
+-- The failure arm releases the slot. The report path and the run
+-- where the task stops both end with the server done.
+
+data Report : Type where
+  ok : Report
+
+session task-work := send Report end
+session server-wait := recv Report end
+
+conform task : task-work := put ok done
+
+conform server : server-wait :=
+  get (r : Report) done
+  fail
+    done
+
+meet free : server with task may fail buffer 1
+
+temporal freed : free := (server at first get) leads_to (server done)

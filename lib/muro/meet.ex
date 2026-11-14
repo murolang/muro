@@ -316,6 +316,15 @@ defmodule Muro.Meet do
     end
   end
 
+  # The failure arm is not how the two success continuations meet.
+  defp step({:on_fail, recv, _, _}, q, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
+    step(recv, q, lp, rq, li, ri, penv, qenv, seen, fuel, book)
+  end
+
+  defp step(p, {:on_fail, recv, _, _}, lp, rq, li, ri, penv, qenv, seen, fuel, book) do
+    step(p, recv, lp, rq, li, ri, penv, qenv, seen, fuel, book)
+  end
+
   # `done-done` and `stop-stop`.
   defp step(:done, :done, _lp, _rq, _li, _ri, _penv, _qenv, _seen, _fuel, _book), do: :ok
   defp step(:stop, :stop, _lp, _rq, _li, _ri, _penv, _qenv, _seen, _fuel, _book), do: :ok

@@ -212,9 +212,7 @@ defmodule Muro.Temporal do
     end
   end
 
-  defp dest({:lside, dest}), do: dest
-  defp dest({:rside, dest}), do: dest
-  defp dest({:fin, dest}), do: dest
+  defp dest({who, dest}) when is_atom(who), do: dest
   defp dest(dest), do: dest
 
   @doc """
@@ -280,6 +278,7 @@ defmodule Muro.Temporal do
   def holds?(g, {:imp, p, q}, conf), do: not holds?(g, p, conf) or holds?(g, q, conf)
   def holds?(g, {:done, side}, conf), do: block_kind(g, side, conf) == :done
   def holds?(g, {:stopped, side}, conf), do: block_kind(g, side, conf) == :stop
+  def holds?(g, {:dead, side}, conf), do: block_kind(g, side, conf) == :dead
   def holds?(_g, {:at, side, index}, conf), do: ptr(conf, side) == index
 
   def holds?(g, {:eq, side, slot, lit}, conf) do
@@ -407,7 +406,7 @@ defmodule Muro.Temporal do
 
   defp first_out(edges, zset, conf) do
     Enum.find(Map.get(edges, conf, []), fn
-      {who, dest} when who in [:lside, :rside, :fin] -> MapSet.member?(zset, dest)
+      {who, dest} when is_atom(who) -> MapSet.member?(zset, dest)
       _ -> false
     end)
   end
@@ -474,7 +473,9 @@ defmodule Muro.Temporal do
          name_r: meet.right,
          session_l: session_of(book, left),
          session_r: session_of(book, right),
-         meeting: meet.name
+         meeting: meet.name,
+         may_l: party_may(meet, :left),
+         may_r: party_may(meet, :right)
        }}
     end
   end
@@ -484,6 +485,10 @@ defmodule Muro.Temporal do
       nil -> {:error, "unknown meeting #{name}"}
       meet -> {:ok, meet}
     end
+  end
+
+  defp party_may(meet, side) do
+    meet |> Map.get(:may_fail, %{}) |> Map.get(side, false)
   end
 
   defp needs_buffer(%{buffer: n}) when is_integer(n), do: :ok
@@ -636,6 +641,10 @@ defmodule Muro.Temporal do
 
   defp resolve_prop(book, g, {:stopped, role}) do
     with {:ok, side} <- role_side(book, g, role), do: {:ok, {:stopped, side}}
+  end
+
+  defp resolve_prop(book, g, {:dead, role}) do
+    with {:ok, side} <- role_side(book, g, role), do: {:ok, {:dead, side}}
   end
 
   defp resolve_prop(book, g, {:empty, role}) do
@@ -893,14 +902,37 @@ defmodule Muro.Temporal do
   defp labels(g, steps), do: Enum.map_join(steps, ", ", &step_label(g, &1))
 
   defp step_label(_g, {:fin, _src, _dest}), do: "the meeting has finished"
+  defp step_label(g, {:ldie, _src, _dest}), do: "#{g.name_l} died"
+  defp step_label(g, {:rdie, _src, _dest}), do: "#{g.name_r} died"
 
-  defp step_label(g, {:lside, src, _dest}) do
-    "#{g.name_l} #{act_label(g, Enum.at(g.code_l, il(src)), src, :l)}"
+  defp step_label(g, {:ldrop, src, _dest}) do
+    "#{g.name_l} dropped #{queue_head(g, l2r(src))}"
   end
 
-  defp step_label(g, {:rside, src, _dest}) do
-    "#{g.name_r} #{act_label(g, Enum.at(g.code_r, ir(src)), src, :r)}"
+  defp step_label(g, {:rdrop, src, _dest}) do
+    "#{g.name_r} dropped #{queue_head(g, r2l(src))}"
   end
+
+  defp step_label(g, {:lside, src, dest}) do
+    "#{g.name_l} #{fired(g, src, dest, :l)}"
+  end
+
+  defp step_label(g, {:rside, src, dest}) do
+    "#{g.name_r} #{fired(g, src, dest, :r)}"
+  end
+
+  defp fired(g, src, dest, side) do
+    code = if side == :l, do: g.code_l, else: g.code_r
+    i = ptr(src, side)
+    blk = if i == :dead, do: nil, else: Enum.at(code, i)
+    if fail_fire?(blk, dest, side), do: "fail", else: act_label(g, blk, src, side)
+  end
+
+  defp fail_fire?(%{fail: fail}, dest, side) when is_integer(fail), do: ptr(dest, side) == fail
+  defp fail_fire?(_, _, _), do: false
+
+  defp queue_head(g, [tok | _]), do: tok_show(g, tok)
+  defp queue_head(_g, _), do: "?"
 
   defp act_label(_g, %{k: :put, atom: atom}, _src, _side), do: "put #{atom_show(atom)}"
 
@@ -939,11 +971,14 @@ defmodule Muro.Temporal do
   defp act_label(_g, _, _src, _side), do: "?"
 
   defp dump(g, conf) do
-    left = block_show(Enum.at(g.code_l, il(conf)))
-    right = block_show(Enum.at(g.code_r, ir(conf)))
+    left = side_show(g.code_l, il(conf))
+    right = side_show(g.code_r, ir(conf))
 
     "#{g.name_l}: #{left}; #{g.name_r}: #{right}; l2r: #{queue_show(g, l2r(conf))}; r2l: #{queue_show(g, r2l(conf))}"
   end
+
+  defp side_show(_code, :dead), do: "dead"
+  defp side_show(code, i), do: block_show(Enum.at(code, i))
 
   defp block_show(%{show: show}), do: show
   defp block_show(_), do: "?"
@@ -976,6 +1011,7 @@ defmodule Muro.Temporal do
   def pp_prop({:imp, p, q}), do: "#{pp_prop(p)} implies #{pp_prop(q)}"
   def pp_prop({:done, role}), do: "#{role} done"
   def pp_prop({:stopped, role}), do: "#{role} stopped"
+  def pp_prop({:dead, role}), do: "#{role} dead"
   def pp_prop({:at, role, n, verb}), do: "#{role} at #{ordinal(n)} #{verb}"
   def pp_prop({:eq, role, name, val}), do: "#{role} has #{name} = #{pp_val(val)}"
   def pp_prop({:lt, role, name, n}), do: "#{role} has #{name} < #{n}"
@@ -1011,8 +1047,10 @@ defmodule Muro.Temporal do
     end
   end
 
-  defp block_kind(g, :l, conf), do: kind_of(Enum.at(g.code_l, il(conf)))
-  defp block_kind(g, :r, conf), do: kind_of(Enum.at(g.code_r, ir(conf)))
+  defp block_kind(g, :l, conf), do: kind_at(g.code_l, il(conf))
+  defp block_kind(g, :r, conf), do: kind_at(g.code_r, ir(conf))
+  defp kind_at(_code, :dead), do: :dead
+  defp kind_at(code, i), do: kind_of(Enum.at(code, i))
   defp kind_of(%{k: k}), do: k
   defp kind_of(_), do: nil
 

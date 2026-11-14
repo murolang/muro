@@ -162,7 +162,8 @@ defmodule Muro.Emit.JS do
   defp compile(book, opts) do
     path = Keyword.get(opts, :path, "book.muro")
 
-    with :ok <- refuse_host(book),
+    with :ok <- Emit.refuse_may_fail(book),
+         :ok <- refuse_host(book),
          :ok <- refuse_run_session(book),
          {:ok, image} <- Session.prepare(book, path, opts),
          :ok <- clash_book(book, image),

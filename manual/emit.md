@@ -9,6 +9,8 @@ summary: What becomes Elixir. C, Rust, Zig, and JavaScript print the closed run.
 
 In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. A `temporal` declaration is evidence about one meeting, so the Zig backend omits it with the others. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend zig` writes that same closed run as Zig. `--backend js` writes that run as an ES module and a declaration file, and a lambda is a closure. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--backend fsm` writes each session endpoint as a state machine and leaves the transport with the host. `--node` writes one call for each cross, on the node the flag names.
 
+A meeting that marks a party `may fail` is checked and is not emitted. Every backend refuses that book with `c:mayfail`, including `--backend otp`, `--backend fsm`, `--backend asm`, and `--node`. The declaration stays in the book. A monitor for that mark, and a `down` step of the state machine, are the next image.
+
 ## From a file
 
 ```
@@ -145,7 +147,7 @@ An integer `buffer N` on a paired meeting uses another wire for data and choice.
 
 A paired process stays up after its skeleton reaches `done`. It sends `{:muro_settled, from}` once its unacked set is empty, its queue is empty, and it is not waiting to send. It stops `:normal` after the peer's settled message has been applied. The caller of a meeting sees that reason on the monitor, later than the return of the meeting function. A peer `DOWN` whose reason is not `:normal` stops this process with `{:shutdown, :abandon}`, including while it is yielded for credit or waiting to settle. A `:normal` `DOWN` before this process has settled is the same abandon, including one already recorded when a full buffer yields. A `:normal` `DOWN` after this process has settled, while an id is still unacked or a token is still queued, is `{:shutdown, :orphan}` even when the peer sent no settled message. The same orphan is the stop when the peer has settled and this process still holds an unacked id or a queued token. A compatible generated pair that finishes the handshake stops `:normal`. A data or choice tuple whose `from` is the peer and whose arity belongs to the other cap stops `{:shutdown, :incompatible_wire}`. A message from another pid is still ignored. Pairing an integer buffer with a nil buffer, or with `start/2`, is a manual composition. The server has one peer. A protocol message is taken when `from` is that pid. Another pid does not move credit or the handshake. `from` is not a check of the sending BEAM process. Regenerate every generated process that shares a conversation, and run that set as one version. The formal account is the Agda model. The executable checker is not that theorem. Temporal and fairness transfer to this schedule is unproved.
 
-The server talks to one peer. The run emitters still omit the protocol and the process. The BEAM runs this server. The proof stops at the conformance derivation.
+The server talks to one peer. The run emitters still omit the protocol and the process. The BEAM runs this server. The proof stops at the conformance derivation. A meeting marked `may fail` is refused before any file is written (`c:mayfail`). This image does not yet follow that mark with a monitor of the party.
 
 A `read` is the same process. The actions are the reading's process, and the child module is the reading's name.
 
@@ -169,7 +171,7 @@ That writes `examples/meet_otp.ex`. The module is `MeetOtp`. `meet wire : pong w
 
 ## Fsm
 
-`--backend fsm` prints one module on standard output. It does not write a file. `meet.muro` is `MeetFsm`, and `session ping` is `MeetFsm.Ping`. `init`, `send`, `recv`, and `done?` step that end. The host sends the message on its own transport. The wire form is the one this OTP section names: a nat is an integer, a bit is `:b0` or `:b1`, unit is `:tt`, a pair is a tuple, a record is a map, a vector is a list, a choice is `{:pick, :b0}` or `{:pick, :b1}`. An evidence payload is still the nat alone, and the machine also checks the bound. The OTP image does not. See [State machines](fsm.md).
+`--backend fsm` prints one module on standard output. It does not write a file. `meet.muro` is `MeetFsm`, and `session ping` is `MeetFsm.Ping`. `init`, `send`, `recv`, and `done?` step that end. The host sends the message on its own transport. The wire form is the one this OTP section names: a nat is an integer, a bit is `:b0` or `:b1`, unit is `:tt`, a pair is a tuple, a record is a map, a vector is a list, a choice is `{:pick, :b0}` or `{:pick, :b1}`. An evidence payload is still the nat alone, and the machine also checks the bound. The OTP image does not. A meeting marked `may fail` is refused (`c:mayfail`). This image does not yet take a `down` step. See [State machines](fsm.md).
 
 ## Node
 
