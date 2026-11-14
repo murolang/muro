@@ -233,14 +233,6 @@ defmodule Muro.Emit.Otp do
   # `#||fail` / `#||plain` regions are the may-fail image and the unmarked
   # image. A book with no mark keeps the plain text, byte for byte with
   # the emitter that has no failure arm. A marked book keeps the fail text.
-  # Key order follows the atom table, so it moves when other modules
-  # load. The unmarked image keeps `runs` first.
-  defp fragment_text(%{runs: runs, decls: decls}) do
-    runs = inspect(runs, limit: :infinity, charlists: :as_lists)
-    decls = inspect(decls, limit: :infinity, charlists: :as_lists)
-    "%{runs: #{runs}, decls: #{decls}}"
-  end
-
   defp fail_marked?(book), do: Enum.any?(book, &Muro.Fail.marked?/1)
 
   defp gate(src, true) do
@@ -437,6 +429,8 @@ defmodule Muro.Emit.Otp do
 
   defp source(parent, mods, decls, fragment, hosts, marked) do
     children = Enum.map_join(mods, "\n\n", &child(parent, &1, marked))
+    eval_block = eval_block(Muro.Emit.HostRun.clauses(fragment))
+    safe = safe_list(decls)
 
     """
     defmodule #{parent} do
@@ -1130,7 +1124,7 @@ defmodule Muro.Emit.Otp do
             end
 
           true ->
-            fail_wild(arms, fields)
+            positional_fail(value, arms) || fail_wild(arms, fields)
         end
       end
 
@@ -1148,7 +1142,7 @@ defmodule Muro.Emit.Otp do
 
         case raw do
           tag when is_binary(tag) ->
-            case Muro.Emit.source_ctor(names, tag) do
+            case muro_source_ctor(names, tag) do
               {:ok, name} -> name
               :error -> tag
             end
@@ -1166,6 +1160,51 @@ defmodule Muro.Emit.Otp do
           _ ->
             nil
         end) || :error
+      end
+
+      # A positional list is one arm per constructor, in declaration order.
+      # The order is on the payload declaration. A named arm does not use it.
+      defp positional_fail(value, arms) when is_list(arms) do
+        if bare_arms(arms) do
+          case fail_tag(value, []) do
+            tag when is_binary(tag) ->
+              case order_hit(tag, length(arms)) do
+                {_order, name, i} when is_integer(i) ->
+                  case Enum.at(arms, i) do
+                    nil -> nil
+                    arm -> open_fail_pick(arm, name, [])
+                  end
+
+                _ ->
+                  nil
+              end
+
+            _ ->
+              nil
+          end
+        end
+      end
+
+      defp positional_fail(_, _), do: nil
+
+      defp bare_arms(arms) do
+        Enum.all?(arms, fn
+          {:arm, ctor, _, _} when is_binary(ctor) -> false
+          _ -> true
+        end)
+      end
+
+      defp order_hit(tag, n) when is_binary(tag) and is_integer(n) do
+        Enum.find_value(Map.values(data_decls()), fn
+          %{order: order} when is_list(order) and length(order) == n ->
+            case muro_source_ctor(order, tag) do
+              {:ok, name} -> {order, name, Enum.find_index(order, &(&1 == name))}
+              :error -> nil
+            end
+
+          _ ->
+            nil
+        end)
       end
 
       defp open_fail_pick({:arm, ctor, binders, {:split, name, inner}}, expected, fields)
@@ -1196,7 +1235,7 @@ defmodule Muro.Emit.Otp do
 
       defp open_fail_pick({:arm, ctor, binders, {:pick, name, inner}}, expected, fields)
            when is_binary(ctor) and is_list(binders) and is_atom(name) and is_list(inner) do
-        if is_list(binders) and name in binders do
+        if name in binders do
           open_fail_pick({:arm, ctor, binders, {:split, name, inner}}, expected, fields)
         else
           cond do
@@ -1277,7 +1316,7 @@ defmodule Muro.Emit.Otp do
 
         case raw_tag(value) do
           raw when is_binary(raw) ->
-            case Muro.Emit.source_ctor(names, raw) do
+            case muro_source_ctor(names, raw) do
               {:ok, tag} ->
                 case named_index(arms, tag, 0) do
                   i when is_integer(i) -> open_pick(Enum.at(arms, i), tag, fields)
@@ -1352,7 +1391,7 @@ defmodule Muro.Emit.Otp do
           if is_binary(raw) do
             Enum.find_value(Map.values(data_decls()), fn
               %{order: order, ctors: ctors} when is_list(order) and is_map(ctors) ->
-                case Muro.Emit.source_ctor(Map.keys(ctors), raw) do
+                case muro_source_ctor(Map.keys(ctors), raw) do
                   {:ok, name} ->
                     if length(order) == n and name in order, do: name, else: nil
 
@@ -1427,15 +1466,29 @@ defmodule Muro.Emit.Otp do
       # A nullary constructor is an atom. A constructor with fields is a
       # tagged tuple. `{:par, i}` is a parameter of this declaration.
       # `{:self, args}` is this declaration. `{:dat, name, args}` is another.
-      defp data_decls, do: #{inspect(decls, limit: :infinity)}
+      defp data_decls, do: :maps.from_list(#{decl_pairs(decls)})
 
-      defp run_book, do: #{fragment_text(fragment)}
+    #{indent(eval_block, 2)}
+      defp muro_safe_to_source, do: :maps.from_list(#{safe})
+
+      # One decode of a host label. The safe map is `elixir_atom_name`
+      # for a constructor whose host atom differs from its source name.
+      # The host atom wins when both name this declaration.
+      defp muro_source_ctor(names, label) when is_binary(label) do
+        mapped = Map.get(muro_safe_to_source(), label, label)
+
+        cond do
+          mapped in names -> {:ok, mapped}
+          label in names -> {:ok, label}
+          true -> :error
+        end
+      end
 
       # One decode of the host atom against this declaration's constructors.
       defp ctor_source(ctors, tag) when is_atom(tag) do
         names = if is_map(ctors), do: Map.keys(ctors), else: []
 
-        case Muro.Emit.source_ctor(names, Atom.to_string(tag)) do
+        case muro_source_ctor(names, Atom.to_string(tag)) do
           {:ok, name} -> name
           :error -> Atom.to_string(tag)
         end
@@ -1535,7 +1588,7 @@ defmodule Muro.Emit.Otp do
       defp substitute({:run, name, args}, bindings) when is_binary(name) and is_list(args) do
         args = Enum.map(args, &substitute(&1, bindings))
         _ = muro_host(name)
-        Muro.Session.eval_run(name, args, run_book())
+        muro_eval_run(name, args)
       end
 
       defp substitute(tuple, bindings) when is_tuple(tuple) do
@@ -1574,6 +1627,66 @@ defmodule Muro.Emit.Otp do
     |> String.replace("-", "_")
     |> Macro.camelize()
     |> Kernel.<>("Otp")
+  end
+
+  # `muro_eval_run/2` is the value `Session.eval_run/3` would return.
+  # `/3` with `:raw` is one run: `{:ok, host}` or `:error`. `:error`
+  # becomes the `{:run, name, args}` sentinel only at the boundary.
+  # A fragment whose runs never return a host has no `/3`: the `{:ok, _}`
+  # arm would be unreachable, and Elixir warns.
+  defp eval_block(%{text: text, ok: true}) do
+    """
+    defp muro_eval_run(name, args) when is_binary(name) and is_list(args) do
+      case muro_eval_run(name, args, :raw) do
+        {:ok, value} -> value
+        :error -> {:run, name, args}
+      end
+    end
+
+    #{text}
+    defp muro_eval_run(name, args, :raw) when is_binary(name) and is_list(args), do: :error
+    """
+    |> String.trim()
+  end
+
+  defp eval_block(_compiled) do
+    """
+    defp muro_eval_run(name, args) when is_binary(name) and is_list(args), do: {:run, name, args}
+    """
+    |> String.trim()
+  end
+
+  # `:maps.from_list/1`, not `%{}`. An empty literal map makes `Map.get`
+  # return its default, and Elixir 1.20 warns that the call is redundant.
+  defp decl_pairs(decls) when is_map(decls) do
+    decls
+    |> Map.to_list()
+    |> Enum.sort()
+    |> inspect(limit: :infinity, charlists: :as_lists)
+  end
+
+  # Host atom → source constructor, and only when the two spellings differ.
+  # `Map.new/1` keeps the last pair when two constructors share an atom.
+  defp safe_list(decls) when is_map(decls) do
+    decls
+    |> Enum.flat_map(fn
+      {_name, %{ctors: ctors}} when is_map(ctors) ->
+        Enum.flat_map(ctors, fn
+          {ctor, _} when is_binary(ctor) ->
+            safe = Muro.Emit.elixir_atom_name(ctor)
+            if safe == ctor, do: [], else: [{safe, ctor}]
+
+          _ ->
+            []
+        end)
+
+      _ ->
+        []
+    end)
+    |> Map.new()
+    |> Map.to_list()
+    |> Enum.sort()
+    |> inspect(limit: :infinity, charlists: :as_lists)
   end
 
   defp indent(code, n) do
