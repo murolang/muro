@@ -1,12 +1,12 @@
 # Changelog
 
-## 0.21.4
+## 0.21.5
 
 A state machine and an OTP process are plain Elixir, including a book that marks `may fail`. They compile and run in a project that does not depend on Muro. `down/2` matches the reason the host supplies, and `down/1` takes an arm that binds none.
 
 ### Package
 
-- Version 0.21.4.
+- Version 0.21.5.
 
 ## 0.21.3
 
