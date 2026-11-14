@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.21.4
+
+`mix muro.synth` accepts an inductive `State`, including one that refers to itself. A finite non-empty `all-states` is the cover. Two values are compared by matching constructors and recursing on a field of that same datatype. The certificate ranks that cover. A state outside the cover has an empty ranking.
+
+A family of datatypes that refer to one another is refused. A recursive `State` with no `all-states` is refused. Parameters and indices stay refused.
+
+`examples/cshrl/envs/tree_cover.muro` declares no feature. The state is a binary tree of Nat. The cover is `tip 0` and `bin (tip 0) (tip 0)`. The survivor is `(feat has-pos-reward-go)`. It prefers `stay` at the tip and `go` at the bin, and the book checks `CoindHomo`.
+
+### Manual
+
+- Synthesis. Examples.
+
+### Package
+
+- Version 0.21.4.
+
 ## 0.21.0
 
 A minor bump for `may fail`.
