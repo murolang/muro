@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.20.46
+
+OTP monitors a party marked `may fail`. A `:DOWN` that is not a halt, while the survivor is at a receive from that peer, runs the failure arm. A reason on the arm is the `:DOWN` reason. A `put` to a peer already observed dead is consumed. Protocol `done` and protocol `stop` are not that arm.
+
+A message that reached the mailbox is applied before `:DOWN`. The checker still counts a run that drops a message already queued. This image does not take that run.
+
+The state machine takes the same arm with `down/1` and `down/2`. `down/2` supplies the reason and checks it. Where the protocol has no failure arm, `down` is an error. The module starts no process.
+
+C, Rust, Zig, and JavaScript still refuse a marked book with `c:mayfail`, and so do assembly, `--node`, and the ExUnit backend.
+
+### Manual
+
+- Emit. State machines. Sessions. Temporal. Limits. Examples. Extending. For agents.
+
+### Package
+
+- Version 0.20.46.
+
 ## 0.20.45
 
 A two-party meeting can mark a party that stops before `end`. The mark sits on that party, and `buffer N` stays last.
