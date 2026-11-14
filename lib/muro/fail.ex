@@ -41,7 +41,8 @@ defmodule Muro.Fail do
 
   @doc """
   `{:error, "c:mayfail\\n..."}` when a meeting marks a party. `:ok` when
-  none does. Emit calls this. The checker does not.
+  none does. Backends that do not emit the mark call this. OTP and the
+  state machine do not. The checker does not.
   """
   def refuse_emit(book) when is_list(book) do
     if Enum.any?(book, &marked?/1) do

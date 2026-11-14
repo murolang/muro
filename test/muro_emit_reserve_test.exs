@@ -42,6 +42,7 @@ defmodule Muro.EmitReserveTest do
     assert "send" in Helpers.fsm_child()
     assert "recv" in Helpers.fsm_child()
     assert "done?" in Helpers.fsm_child()
+    assert "down" in Helpers.fsm_child()
     assert "muro_book" in Helpers.exunit()
     assert "callbacks" in Helpers.exunit()
     assert "impl_mod" in Helpers.exunit()

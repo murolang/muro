@@ -92,6 +92,26 @@ defmodule Muro.Session do
   """
   def carry(proc, book), do: carry_go(proc, prepare(book), %{})
 
+  @doc """
+  `carry/2`, keeping a failure arm.
+
+  A process with no failure arm is `carry/2`. An arm is
+  `{:fail_at, receive, reason, arm}`. `reason` is `nil` or
+  `{type, name}`. The success skeleton is unchanged.
+  """
+  def carry_fail(proc, book) do
+    prepared = prepare(book)
+
+    if on_fail_proc?(proc),
+      do: carry_fail_go(proc, prepared, %{}),
+      else: carry_go(proc, prepared, %{})
+  end
+
+  @doc false
+  def carry_kept(proc, book, ctx \\ %{}) when is_map(ctx) do
+    carry_fail_go(proc, prepare(book), ctx)
+  end
+
   @doc false
   def inhabits?(val, ty, ctx, book) when is_map(ctx) and is_list(book) do
     answer(val, ty, ctx, prepare(book)) == :yes
@@ -613,6 +633,89 @@ defmodule Muro.Session do
 
   defp carry_bind(ctx, :_), do: ctx
   defp carry_bind(ctx, name), do: Map.put(ctx, name, true)
+
+  defp on_fail_proc?({:on_fail, _, _, _}), do: true
+  defp on_fail_proc?({:put, _, _, p}), do: on_fail_proc?(p)
+  defp on_fail_proc?({:get, _, _, p}), do: on_fail_proc?(p)
+  defp on_fail_proc?({:pick0, p}), do: on_fail_proc?(p)
+  defp on_fail_proc?({:pick1, p}), do: on_fail_proc?(p)
+  defp on_fail_proc?({:cover, p, q}), do: on_fail_proc?(p) or on_fail_proc?(q)
+  defp on_fail_proc?({:iget, _, p, q}), do: on_fail_proc?(p) or on_fail_proc?(q)
+
+  defp on_fail_proc?({:match, _, arms}) do
+    Enum.any?(arms, &on_fail_proc?(arm_body(&1)))
+  end
+
+  defp on_fail_proc?({:rec, _, p}), do: on_fail_proc?(p)
+  defp on_fail_proc?(_), do: false
+
+  # The success continuation does not see the reason. The arm does.
+  defp carry_fail_go({:on_fail, recv, reason, arm}, book, ctx) do
+    {:fail_at, carry_fail_go(recv, book, ctx), reason,
+     carry_fail_go(arm, book, bind_fail(ctx, reason))}
+  end
+
+  defp carry_fail_go(:done, _book, _ctx), do: :finish
+  defp carry_fail_go(:stop, _book, _ctx), do: :leave
+
+  defp carry_fail_go({:put, _ty, val, p}, book, ctx) do
+    {:say, runtime(resolve_val(val, book, ctx)), carry_fail_go(p, book, ctx)}
+  end
+
+  defp carry_fail_go({:get, ty, name, p}, book, ctx) do
+    {:hear, ty, name, carry_fail_go(p, book, carry_bind(ctx, name))}
+  end
+
+  defp carry_fail_go({:pick0, p}, book, ctx), do: {:choose, :b0, carry_fail_go(p, book, ctx)}
+  defp carry_fail_go({:pick1, p}, book, ctx), do: {:choose, :b1, carry_fail_go(p, book, ctx)}
+
+  defp carry_fail_go({:cover, p, q}, book, ctx) do
+    {:offer, carry_fail_go(p, book, ctx), carry_fail_go(q, book, ctx)}
+  end
+
+  defp carry_fail_go({:iget, name, p, q}, book, ctx) do
+    ctx1 = carry_bind(ctx, name)
+    {:index, name, carry_fail_go(p, book, ctx1), carry_fail_go(q, book, ctx1)}
+  end
+
+  defp carry_fail_go({:match, name, arms}, book, ctx) do
+    {:pick, name, Enum.map(arms, &carry_fail_arm(&1, book, ctx))}
+  end
+
+  defp carry_fail_go({:rec, name, body}, book, ctx) do
+    {:loop, name, carry_fail_go(body, book, ctx)}
+  end
+
+  defp carry_fail_go({:call, name}, _book, _ctx), do: {:jump, name}
+
+  defp carry_fail_arm({:arm, c, xs, {:match, name, inner}}, book, ctx)
+       when is_list(xs) and is_list(inner) do
+    ctx1 = Enum.reduce(xs, ctx, &carry_bind(&2, &1))
+
+    body =
+      if name in xs do
+        {:split, name, Enum.map(inner, &carry_fail_arm(&1, book, ctx1))}
+      else
+        {:pick, Enum.map(inner, &carry_fail_arm(&1, book, ctx1))}
+      end
+
+    {:arm, c, xs, body}
+  end
+
+  defp carry_fail_arm({:arm, c, xs, p}, book, ctx) do
+    ctx1 = Enum.reduce(xs, ctx, &carry_bind(&2, &1))
+    {:arm, c, xs, carry_fail_go(p, book, ctx1)}
+  end
+
+  defp carry_fail_arm({:prod, pat, p}, book, ctx) do
+    ctx1 = Enum.reduce(pat_binders(pat), ctx, &carry_bind(&2, &1))
+    {:prod, pat, carry_fail_go(p, book, ctx1)}
+  end
+
+  defp carry_fail_arm(p, book, ctx), do: carry_fail_go(p, book, ctx)
+
+  defp bind_fail(ctx, {_ty, name}) when is_atom(name), do: Map.put(ctx, name, true)
+  defp bind_fail(ctx, _), do: ctx
 
   defp resolve_val({:var, name} = val, book, ctx) do
     cond do

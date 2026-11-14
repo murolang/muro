@@ -45,8 +45,9 @@ defmodule Muro.Emit do
   @doc """
   `{:error, "c:mayfail\\n..."}` when a meeting marks a party that may fail.
 
-  Every backend refuses the book. The declaration is not erased: the
-  failure arm the checker accepted is not yet the handling that runs.
+  C, Rust, Zig, JavaScript, assembly, the node image, and ExUnit call
+  this. OTP and the state machine emit the mark. The declaration is not
+  erased.
   """
   def refuse_may_fail(book) when is_list(book), do: Muro.Fail.refuse_emit(book)
 

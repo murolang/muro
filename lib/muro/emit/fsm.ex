@@ -3,7 +3,10 @@ defmodule Muro.Emit.Fsm do
   Emit each session as a pure state machine.
 
   The module is data and functions. It starts no process and names no
-  transport. The host threads the state through `init`, `send`, and `recv`.
+  transport. The host threads the state through `init`, `send`, `recv`,
+  and `down`. `down/1` takes a failure arm that binds no reason.
+  `down/2` takes one that does, and checks the reason the host supplies.
+  Where the protocol has no failure arm, `down` is an error.
   """
 
   alias Muro.{Ast, Emit, Session}
@@ -77,12 +80,7 @@ defmodule Muro.Emit.Fsm do
     end
   end
 
-  defp plan(book, path, opts) do
-    case Emit.refuse_may_fail(book) do
-      {:error, _} = err -> err
-      :ok -> plan_sessions(book, path, opts)
-    end
-  end
+  defp plan(book, path, opts), do: plan_sessions(book, path, opts)
 
   defp plan_sessions(book, path, opts) do
     label = book_label(path, opts)
@@ -146,6 +144,9 @@ defmodule Muro.Emit.Fsm do
           "muro_fsm_step(#{inspect(key)}, :send, state, value)",
           "def recv(state, value)",
           "muro_fsm_step(#{inspect(key)}, :recv, state, value)",
+          "def down(state)",
+          "def down(state, reason)",
+          "muro_fsm_down(#{inspect(key)}, state, nil)",
           "muro_fsm_done?(#{inspect(key)}, state)",
           "muro_fsm_expected(#{inspect(key)}, state)",
           entry.end_step
@@ -1023,6 +1024,123 @@ defmodule Muro.Emit.Fsm do
 
   defp subst_ix(other, _sub), do: other
 
+  # A failure arm is not a protocol step. The step string of the receive
+  # records the arm the conforming process wrote, so `down` can take it.
+  defp fail_tables(book, st) do
+    Enum.reduce(book, %{}, fn
+      %{kind: :conform, session: session, proc: proc}, acc when not is_nil(proc) ->
+        case sess_name(session) do
+          name when is_binary(name) ->
+            case Map.fetch(st.opened, name) do
+              {:ok, %{proto: proto}} -> Map.merge(acc, zip_fail(proto, proc, book, %{}))
+              _ -> acc
+            end
+
+          _ ->
+            acc
+        end
+
+      _, acc ->
+        acc
+    end)
+  end
+
+  defp sess_name(name) when is_binary(name), do: name
+  defp sess_name({:sess, name, _}) when is_binary(name), do: name
+  defp sess_name(_), do: nil
+
+  defp zip_fail(proto, {:on_fail, recv, reason, arm}, book, acc) do
+    acc = record_arm(proto, reason, arm, book, acc)
+    zip_fail(proto, recv, book, acc)
+  end
+
+  defp zip_fail({:recv, _, _, cont}, {:get, _, _, proc}, book, acc),
+    do: zip_fail(cont, proc, book, acc)
+
+  defp zip_fail({:drecv, _, _, _, cont}, {:get, _, _, proc}, book, acc),
+    do: zip_fail(cont, proc, book, acc)
+
+  defp zip_fail({:erecv, _, _, _, cont}, {:get, _, _, proc}, book, acc),
+    do: zip_fail(cont, proc, book, acc)
+
+  defp zip_fail({:send, _, _, cont}, {:put, _, _, proc}, book, acc),
+    do: zip_fail(cont, proc, book, acc)
+
+  defp zip_fail({:dsend, _, _, _, cont}, {:put, _, _, proc}, book, acc),
+    do: zip_fail(cont, proc, book, acc)
+
+  defp zip_fail({:esend, _, _, _, cont}, {:put, _, _, proc}, book, acc),
+    do: zip_fail(cont, proc, book, acc)
+
+  defp zip_fail({:isend, _, _, left, _}, {:put, _, :b0, proc}, book, acc),
+    do: zip_fail(left, proc, book, acc)
+
+  defp zip_fail({:isend, _, _, _, right}, {:put, _, :b1, proc}, book, acc),
+    do: zip_fail(right, proc, book, acc)
+
+  defp zip_fail({:choose, _, left, _}, {:pick0, proc}, book, acc),
+    do: zip_fail(left, proc, book, acc)
+
+  defp zip_fail({:choose, _, _, right}, {:pick1, proc}, book, acc),
+    do: zip_fail(right, proc, book, acc)
+
+  defp zip_fail({:branch, _, left, right}, {:cover, p, q}, book, acc) do
+    zip_fail(right, q, book, zip_fail(left, p, book, acc))
+  end
+
+  defp zip_fail({:irecv, _, _, left, right}, {:iget, _, p, q}, book, acc) do
+    zip_fail(right, q, book, zip_fail(left, p, book, acc))
+  end
+
+  defp zip_fail({:rec, _, body}, {:rec, _, proc}, book, acc),
+    do: zip_fail(body, proc, book, acc)
+
+  defp zip_fail({:case, _, parmas}, {:match, _, arms}, book, acc) do
+    Enum.reduce(Enum.zip(arms, parmas), acc, fn {arm, {_tag, proto}}, acc ->
+      zip_fail(proto, Session.arm_body(arm), book, acc)
+    end)
+  end
+
+  defp zip_fail(proto, {:match, _, arms}, book, acc) do
+    Enum.reduce(arms, acc, fn arm, acc ->
+      zip_fail(proto, Session.arm_body(arm), book, acc)
+    end)
+  end
+
+  defp zip_fail({:svar, _}, _proc, _book, acc), do: acc
+  defp zip_fail({:sjump, _, _}, _proc, _book, acc), do: acc
+  defp zip_fail({:end, _}, _proc, _book, acc), do: acc
+  defp zip_fail(_proto, _proc, _book, acc), do: acc
+
+  defp record_arm(proto, reason, arm, book, acc) do
+    case arm_step(proto) do
+      step when is_binary(step) ->
+        why = arm_reason(reason)
+
+        ctx =
+          case why do
+            {_ty, name} when is_atom(name) -> %{name => true}
+            _ -> %{}
+          end
+
+        Map.put(acc, step, {why, Session.carry_kept(arm, book, ctx)})
+
+      _ ->
+        acc
+    end
+  end
+
+  defp arm_step({:recv, step, _, _}), do: step
+  defp arm_step({:drecv, step, _, _, _}), do: step
+  defp arm_step({:erecv, step, _, _, _}), do: step
+  defp arm_step({:branch, step, _, _}), do: step
+  defp arm_step({:irecv, step, _, _, _}), do: step
+  defp arm_step(_), do: nil
+
+  defp arm_reason(nil), do: nil
+  defp arm_reason({ty, name}) when is_atom(name), do: {ty, name}
+  defp arm_reason(_), do: nil
+
   # ---- source --------------------------------------------------------------
 
   defp source(module, book, st) do
@@ -1210,6 +1328,8 @@ defmodule Muro.Emit.Fsm do
           case muro_fsm_expose(st) do
             %{p: {:end, step}} -> {:error, {:unexpected, step, :done, value}}
             %{p: {:stuck, step}} -> {:error, {:unexpected, step, :done, value}}
+            %{p: {:left, step}} -> {:error, {:unexpected, step, :stop, value}}
+            %{p: {:arm, _}} = st -> muro_fsm_arm_step(dir, st, value)
             st -> muro_fsm_act(dir, st, value)
           end
 
@@ -1220,6 +1340,37 @@ defmodule Muro.Emit.Fsm do
 
     def muro_fsm_step(key, _dir, _state, value) do
       {:error, {:unexpected, muro_fsm_end(key), :done, value}}
+    end
+
+    @doc false
+    def muro_fsm_down(key, state, reason) do
+      shown = muro_fsm_down_value(reason)
+
+      case muro_fsm_prep(key, state) do
+        {:ok, st} ->
+          case muro_fsm_expose(st) do
+            %{p: {:end, step}} ->
+              {:error, {:unexpected, step, :done, shown}}
+
+            %{p: {:stuck, step}} ->
+              {:error, {:unexpected, step, :done, shown}}
+
+            %{p: {:left, step}} ->
+              {:error, {:unexpected, step, :stop, shown}}
+
+            %{p: {:arm, {:fail_at, _recv, need, arm}}} = st ->
+              muro_fsm_take_down(st, need, arm, reason)
+
+            st ->
+              case muro_fsm_fail_at(st) do
+                {need, arm} -> muro_fsm_take_down(st, need, arm, reason)
+                :none -> {:error, {:unexpected, st.s, muro_fsm_expect(st), shown}}
+              end
+          end
+
+        :bad ->
+          {:error, {:unexpected, muro_fsm_end(key), :done, shown}}
+      end
     end
 
     @doc false
@@ -1261,6 +1412,20 @@ defmodule Muro.Emit.Fsm do
 
     defp muro_fsm_walk(state, [{dir, value} | rest], index, key, complete?) when dir in [:send, :recv] do
       case muro_fsm_step(key, dir, state, value) do
+        {:ok, next} -> muro_fsm_walk(next, rest, index + 1, key, complete?)
+        {:error, reason} -> {:error, {index, reason}}
+      end
+    end
+
+    defp muro_fsm_walk(state, [:down | rest], index, key, complete?) do
+      case muro_fsm_down(key, state, nil) do
+        {:ok, next} -> muro_fsm_walk(next, rest, index + 1, key, complete?)
+        {:error, reason} -> {:error, {index, reason}}
+      end
+    end
+
+    defp muro_fsm_walk(state, [{:down, value} | rest], index, key, complete?) do
+      case muro_fsm_down(key, state, {:reason, value}) do
         {:ok, next} -> muro_fsm_walk(next, rest, index + 1, key, complete?)
         {:error, reason} -> {:error, {index, reason}}
       end
@@ -1360,6 +1525,8 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_expose(%{p: {:choose, step, _, _}} = st, _seen), do: %{st | s: step}
     defp muro_fsm_expose(%{p: {:branch, step, _, _}} = st, _seen), do: %{st | s: step}
     defp muro_fsm_expose(%{p: {:stuck, step}} = st, _seen), do: %{st | s: step}
+    defp muro_fsm_expose(%{p: {:left, step}} = st, _seen), do: %{st | s: step}
+    defp muro_fsm_expose(%{p: {:arm, _}} = st, _seen), do: st
     defp muro_fsm_expose(st, _seen), do: st
 
     defp muro_fsm_enter(name, args, env) when is_binary(name) do
@@ -1629,6 +1796,196 @@ defmodule Muro.Emit.Fsm do
       {:error, {:unexpected, step, muro_fsm_expect(st), value}}
     end
 
+    defp muro_fsm_down_value(nil), do: :down
+    defp muro_fsm_down_value({:reason, value}), do: value
+
+    defp muro_fsm_fail_at(%{s: step}) do
+      case Map.get(muro_fsm_fails(), step) do
+        {need, arm} -> {need, arm}
+        _ -> :none
+      end
+    end
+
+    defp muro_fsm_take_down(st, nil, arm, nil), do: muro_fsm_apply_arm(st, arm)
+
+    defp muro_fsm_take_down(st, nil, _arm, {:reason, value}) do
+      {:error, {:unexpected, st.s, :down, value}}
+    end
+
+    defp muro_fsm_take_down(st, {ty, name}, arm, {:reason, value}) when is_atom(name) do
+      case muro_fsm_take(ty, value, st.e) do
+        {:ok, wire} ->
+          muro_fsm_apply_arm(%{st | e: Map.put(st.e, name, wire)}, arm)
+
+        :error ->
+          {:error, {:unexpected, st.s, {:down, muro_fsm_desc(muro_fsm_subst(ty, st.e))}, value}}
+      end
+    end
+
+    defp muro_fsm_take_down(st, {ty, _name}, _arm, nil) do
+      {:error, {:unexpected, st.s, {:down, muro_fsm_desc(muro_fsm_subst(ty, st.e))}, :down}}
+    end
+
+    defp muro_fsm_apply_arm(st, {:pick, name, arms}) when is_atom(name) do
+      case Map.get(st.e, name) do
+        nil ->
+          {:error, {:unexpected, st.s, :down, name}}
+
+        value ->
+          case muro_fsm_arm_pick(value, arms) do
+            {:ok, next} -> muro_fsm_apply_arm(st, next)
+            :error -> {:error, {:unexpected, st.s, {:down, :bit}, value}}
+          end
+      end
+    end
+
+    defp muro_fsm_apply_arm(st, :finish) do
+      {:ok, muro_fsm_expose(%{st | p: {:end, muro_fsm_end(st.k)}})}
+    end
+
+    defp muro_fsm_apply_arm(st, :leave) do
+      {:ok, %{st | p: {:left, st.s}}}
+    end
+
+    defp muro_fsm_apply_arm(st, skel) do
+      {:ok, %{st | p: {:arm, skel}}}
+    end
+
+    defp muro_fsm_arm_step(dir, %{p: {:arm, {:fail_at, recv, _, _}}} = st, value) do
+      muro_fsm_arm_step(dir, %{st | p: {:arm, recv}}, value)
+    end
+
+    defp muro_fsm_arm_step(dir, %{p: {:arm, skel}, s: step} = st, value) do
+      case {dir, skel} do
+        {:send, {:say, raw, next}} ->
+          case muro_fsm_arm_value(raw, st.e) do
+            {:ok, ^value} ->
+              {:ok, muro_fsm_arm_next(st, next)}
+
+            _ ->
+              {:error, {:unexpected, step, muro_fsm_arm_expect(skel, st.e), value}}
+          end
+
+        {:recv, {:hear, ty, name, next}} ->
+          case muro_fsm_take(ty, value, st.e) do
+            {:ok, wire} ->
+              e = if name == :_, do: st.e, else: Map.put(st.e, name, wire)
+              {:ok, muro_fsm_arm_next(%{st | e: e}, next)}
+
+            :error ->
+              {:error,
+               {:unexpected, step, {:recv, muro_fsm_desc(muro_fsm_subst(ty, st.e))}, value}}
+          end
+
+        {:send, {:choose, bit, next}} when value == {:pick, bit} ->
+          {:ok, muro_fsm_arm_next(st, next)}
+
+        {:recv, {:offer, left, right}} ->
+          case value do
+            {:pick, :b0} -> {:ok, muro_fsm_arm_next(st, left)}
+            {:pick, :b1} -> {:ok, muro_fsm_arm_next(st, right)}
+            _ -> {:error, {:unexpected, step, {:recv_pick, [:b0, :b1]}, value}}
+          end
+
+        {:recv, {:index, name, left, right}} ->
+          case value do
+            bit when bit in [:b0, :b1] ->
+              e = if name == :_, do: st.e, else: Map.put(st.e, name, bit)
+              next = if bit == :b0, do: left, else: right
+              {:ok, muro_fsm_arm_next(%{st | e: e}, next)}
+
+            _ ->
+              {:error, {:unexpected, step, {:recv, :bit}, value}}
+          end
+
+        _ ->
+          {:error, {:unexpected, step, muro_fsm_arm_expect(skel, st.e), value}}
+      end
+    end
+
+    defp muro_fsm_arm_next(st, :finish) do
+      muro_fsm_expose(%{st | p: {:end, muro_fsm_end(st.k)}})
+    end
+
+    defp muro_fsm_arm_next(st, :leave), do: %{st | p: {:left, st.s}}
+    defp muro_fsm_arm_next(st, {:loop, _, body}), do: %{st | p: {:arm, body}}
+    defp muro_fsm_arm_next(st, next), do: %{st | p: {:arm, next}}
+
+    defp muro_fsm_arm_expect({:fail_at, recv, _, _}, env), do: muro_fsm_arm_expect(recv, env)
+    defp muro_fsm_arm_expect(:finish, _env), do: :done
+    defp muro_fsm_arm_expect(:leave, _env), do: :stop
+
+    defp muro_fsm_arm_expect({:say, raw, _}, env) do
+      case muro_fsm_arm_value(raw, env) do
+        {:ok, value} -> {:send, muro_fsm_arm_desc(value)}
+        :error -> {:send, :nat}
+      end
+    end
+
+    defp muro_fsm_arm_expect({:hear, ty, _, _}, env) do
+      {:recv, muro_fsm_desc(muro_fsm_subst(ty, env))}
+    end
+
+    defp muro_fsm_arm_expect({:choose, bit, _}, _env), do: {:send_pick, [bit]}
+    defp muro_fsm_arm_expect({:offer, _, _}, _env), do: {:recv_pick, [:b0, :b1]}
+    defp muro_fsm_arm_expect({:index, _, _, _}, _env), do: {:recv, :bit}
+    defp muro_fsm_arm_expect(_, _), do: :done
+
+    defp muro_fsm_arm_value({:var, name}, env) do
+      case Map.get(env, name) do
+        nil -> :error
+        value -> {:ok, value}
+      end
+    end
+
+    defp muro_fsm_arm_value(value, _env), do: {:ok, value}
+
+    defp muro_fsm_arm_pick(value, arms) do
+      tag =
+        cond do
+          is_atom(value) -> Atom.to_string(value)
+          is_tuple(value) and tuple_size(value) >= 1 and is_atom(elem(value, 0)) ->
+            Atom.to_string(elem(value, 0))
+
+          true ->
+            nil
+        end
+
+      named =
+        Enum.find_value(arms, fn
+          {:arm, c, _, next} when is_binary(c) and c == tag -> {:ok, next}
+          _ -> nil
+        end)
+
+      cond do
+        named != nil ->
+          named
+
+        value == :b0 ->
+          case arms do
+            [next | _] -> {:ok, muro_fsm_bare_arm(next)}
+            _ -> :error
+          end
+
+        value == :b1 ->
+          case arms do
+            [_, next | _] -> {:ok, muro_fsm_bare_arm(next)}
+            _ -> :error
+          end
+
+        true ->
+          :error
+      end
+    end
+
+    defp muro_fsm_bare_arm({:arm, _, _, next}), do: next
+    defp muro_fsm_bare_arm(next), do: next
+
+    defp muro_fsm_arm_desc(n) when is_integer(n) and n >= 0, do: :nat
+    defp muro_fsm_arm_desc(bit) when bit in [:b0, :b1], do: :bit
+    defp muro_fsm_arm_desc(:tt), do: :unit
+    defp muro_fsm_arm_desc(_), do: :nat
+
     defp muro_fsm_expect(%{p: {:end, _}}), do: :done
     defp muro_fsm_expect(%{p: {:stuck, _}}), do: :done
 
@@ -1660,6 +2017,8 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_expect(%{p: {:irecv, _, _, _, _}}), do: {:recv, :bit}
     defp muro_fsm_expect(%{p: {:choose, _, _, _}}), do: {:send_pick, [:b0, :b1]}
     defp muro_fsm_expect(%{p: {:branch, _, _, _}}), do: {:recv_pick, [:b0, :b1]}
+    defp muro_fsm_expect(%{p: {:left, _}}), do: :stop
+    defp muro_fsm_expect(%{p: {:arm, skel}, e: env}), do: muro_fsm_arm_expect(skel, env)
     defp muro_fsm_expect(_), do: :done
 
     defp muro_fsm_expect_ty(st, ty) do
@@ -2023,6 +2382,9 @@ defmodule Muro.Emit.Fsm do
     #{calls(st, names)}
 
     defp muro_fsm_templates, do: #{lit(sessions |> Map.new())}
+
+    # An empty literal map makes Map.get always return nil.
+    defp muro_fsm_fails, do: :maps.from_list(#{lit(Map.to_list(fail_tables(st.book, st)))})
 
     defp muro_fsm_duals, do: #{lit(duals)}
 
@@ -2396,6 +2758,14 @@ defmodule Muro.Emit.Fsm do
 
       def recv(state, value) do
         #{parent}.muro_fsm_step(#{inspect(key)}, :recv, state, value)
+      end
+
+      def down(state) do
+        #{parent}.muro_fsm_down(#{inspect(key)}, state, nil)
+      end
+
+      def down(state, reason) do
+        #{parent}.muro_fsm_down(#{inspect(key)}, state, {:reason, reason})
       end
 
       def done?(state), do: #{parent}.muro_fsm_done?(#{inspect(key)}, state)
