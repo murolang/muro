@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+Requires muro `~> 0.21.0`.
+
+Install it by adding `{:muro_visor, "~> 0.3.1"}` to a Mix project. A published package depends on `muro ~> 0.21.0`. A checkout builds against the repository. It does not emit code and it does not change the wall.
+
 ## 0.3.0
 
 All definitions can show the grades the checker recorded. `?view=all&grades=on` fades a definition whose quantities are erased, and leaves a definition that still computes at full opacity. A binder with no grade is left as it was. The legend names runtime and erased, and names `%1` or reuse when a binder carries that quantity. The quantities are the ones `Muro.Grade` stored on the checked book.

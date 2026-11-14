@@ -12,7 +12,7 @@ summary: muro_visor draws a checked book. The compiler does not start it.
 `muro ui path.muro` prints how to install it. It does not start the explorer. Add muro_visor to a Mix project, fetch its dependencies, and open the book with the Mix task:
 
 ```
-{:muro_visor, "~> 0.3.0"}
+{:muro_visor, "~> 0.3.1"}
 mix deps.get
 mix muro.ui path.muro
 ```

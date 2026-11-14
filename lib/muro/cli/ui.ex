@@ -63,7 +63,7 @@ defmodule Muro.CLI.Ui do
       """),
       Muro.CLI.Text.section(
         "INSTALL",
-        Muro.CLI.Text.pre(["{:muro_visor, \"~> 0.3.0\"}", "mix deps.get"])
+        Muro.CLI.Text.pre(["{:muro_visor, \"~> 0.3.1\"}", "mix deps.get"])
       ),
       Muro.CLI.Text.section("OPEN", Muro.CLI.Text.pre(["mix muro.ui #{quoted}"])),
       Muro.CLI.Text.section(
