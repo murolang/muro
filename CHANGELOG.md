@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.21.22
+
+`--backend mbi` writes image format 2 when the exported run calls other run definitions, including a `run internal` and a prelude run it reaches. Each one is a closed term in a `(defs …)` section. The order lets a definition call itself or an earlier definition, and the run refers to them by index. A run that calls no definition still writes format 1, the same bytes as before. Two definitions that call each other, so that one of them would have to name a later index, are refused, and nothing is written. muro-beam loads the file and checks it again. Writing the file is not that check.
+
+### Manual
+
+- MBI images, Emit, For agents, and Examples: a run may call definitions, and the image names them.
+
+### Package
+
+- Version 0.21.22.
+
 ## 0.21.20
 
 A family liveness refusal prints the state the cycle returns to after `then forever`. On the `fail stop` script that state is the family stutter, and `a signal` is held there. The path to the cycle is the same. The counts are the same. The check is the Elixir graph. It is not an Agda proof. `Satisfies` and `every-run-fair` cover meetings only. A family has no fairness filter.

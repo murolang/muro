@@ -252,9 +252,11 @@ defmodule Muro do
   Write `<stem>.mbi` next to `path` only when exactly one exported
   run erases: a function, an application, zero, successor, or a match
   on Nat, with the binder's grade kept. A Π erases as `gpi` when it is
-  the term. A definition, data, a pair, a word, or a stream is refused.
-  An unknown grade is refused. muro-beam loads the image and checks
-  it again. The file is not Erlang BEAM bytecode. Writing the file is
+  the term. A run the entry calls is a closed definition in the image.
+  Data, a pair, a word, or a stream is refused. A name that is not a
+  run, and two definitions that call each other, are refused. An
+  unknown grade is refused. muro-beam loads the image and checks it
+  again. The file is not Erlang BEAM bytecode. Writing the file is
   not that check.
 
   `run internal` is not exported. Spec, evidence, data, and sessions

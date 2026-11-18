@@ -2,12 +2,12 @@
 title: MBI images
 slug: mbi
 order: 27
-summary: muro emit --backend mbi writes exactly one exported run, with its binder grades, as a .mbi image. Writing the file is not acceptance. muro-beam loads the image and checks it again.
+summary: muro emit --backend mbi writes exactly one exported run, with its binder grades, as a .mbi image. Definitions that run calls are in the image. Writing the file is not acceptance. muro-beam loads the image and checks it again.
 ---
 
 # MBI images
 
-In brief: `--backend mbi` writes `<stem>.mbi` beside the book only when the book has exactly one exported `run` and that body erases. The file is the image muro-beam loads. It is not Erlang BEAM bytecode. The binder grades stay. A definition, data, a pair, a word, or a stream is refused. A refusal writes nothing, and an image already at that path stays byte for byte. Writing the file is not acceptance. muro-beam Boundary v1 checks the image again. This backend is not a manifest target. `--backend beam` is refused.
+In brief: `--backend mbi` writes `<stem>.mbi` beside the book only when the book has exactly one exported `run` and that body erases. The file is the image muro-beam loads. It is not Erlang BEAM bytecode. The binder grades stay. A run the entry calls is a closed definition in the image. Data, a pair, a word, or a stream is refused. A refusal writes nothing, and an image already at that path stays byte for byte. Writing the file is not acceptance. muro-beam checks the image again. This backend is not a manifest target. `--backend beam` is refused.
 
 ```
 mix muro.emit path.muro --backend mbi
@@ -22,10 +22,11 @@ muro emit path.muro --backend mbi
 
 ## The file
 
-The file is one line and a trailing newline. Version 1 is the image. Boundary version 1 is the boundary the runtime checks the term against.
+The file is one line and a trailing newline. Version 1 is a run that calls no definition. Version 2 is a run that calls one. Boundary version 1 is the boundary the runtime checks the term against. An empty `(defs)` is not written.
 
 ```
 image    ::= (muro-beam-image 1 (boundary 1) (entry <prog>))
+           | (muro-beam-image 2 (boundary 1) (defs <gtm>+) (entry <prog>))
 prog     ::= (seq <gtm> (done))
 gtm      ::= (gvar <nat>)
            | (gtyp <nat>)
@@ -35,6 +36,7 @@ gtm      ::= (gvar <nat>)
            | gze
            | (gsu <gtm>)
            | (gmatch <gtm> <gtm> <gtm>)
+           | (gref <nat>)
 pair     ::= (<grade> <grade>)
 grade    ::= <point> | (iv <point> <point>)
 point    ::= <nat> | w
@@ -49,6 +51,8 @@ A variable is a de Bruijn index. `0` is the nearest binder. `(gvar 0)` is that v
 
 The domain of `glam` and of `gpi` is dropped. An annotation is dropped. The motive of `gmatch` is dropped. The loader does not recover them. They stay in the book, and they are not part of the image the boundary accepts.
 
+`(gref n)` is definition `n`. The definitions are closed terms, in order, and the entry is not one of them. Definition `i` may name itself or an earlier definition. The entry may name any definition in the section.
+
 `(seq e (done))` is the whole program. `e` is the run. `(done)` does not use the value `e` returns. The binding that `seq` gives that value is the pair `(w 0)`.
 
 `examples/images/once.mbi` is:
@@ -58,6 +62,16 @@ The domain of `glam` and of `gpi` is dropped. An annotation is dropped. The moti
 ```
 
 That is `λ (n : (1, 0) Nat) → n`. An unmarked identity is `((iv 0 1) 0)`. A reusable identity is `(w 0)`. A reusable variable applied to itself is `examples/images/twice.mbi`. An erased binder whose body is `0` is `(0 0)`. `examples/images/pi.mbi` is the image of `Π (n : Nat) → n`. `examples/images/iv.mbi` is the image of `λ (n : ([0, 2], 0) Nat) → n`.
+
+## Definitions
+
+A run the entry reaches is a definition. That includes a `run internal` and a prelude run. Spec, evidence, and data are not. A domain, an annotation, and a match motive do not pull a definition in.
+
+The order is the order in which each call is to itself or to an earlier definition. A run that calls itself uses its own index. The entry is a second copy of the exported run, so a recursive export is both a definition and the entry. A run that calls no definition is version 1, the same bytes as before.
+
+Two definitions that call each other have no such order. One of them would name a later index. That is `mbi:forward-def`. Nothing is written, and an image already at that path stays byte for byte.
+
+`examples/images/plus.mbi` is `plus 2 3`. `plus` calls itself. `examples/images/chain.mbi` is three definitions, each the successor of the one before it. `examples/images/calls.mbi` is an entry that calls two of them.
 
 ## Which definition
 
@@ -89,11 +103,12 @@ The type grade of a quantity atom is `0` because a run use charges one computati
 
 ## Refusals
 
-The message is `mbi:<reason> in <name>`. The reason is the first constructor, not a walk into it.
+The message is `mbi:<reason> in <name>`. The reason is the first constructor, not a walk into it. `forward-def` is the book: the runs that were reached cannot be ordered.
 
 | Reason | Term |
 | --- | --- |
-| `def` | a reference to a definition |
+| `def` | a name that is not a run in the book |
+| `forward-def` | definitions the run reaches that cannot be ordered so each call is to itself or an earlier definition |
 | `data` | a data type, a constructor, or a match on declared data, on `WBool`, or on `Opt` |
 | `pair` | a product, a pair, or `let` of a pair |
 | `stream` | `ν`, `unfold`, `uncons`, `Stream`, `Always`, `~` |

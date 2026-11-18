@@ -71,7 +71,9 @@ defmodule Mix.Tasks.Muro.Emit do
   `--backend mbi` writes `<stem>.mbi` next to the file and prints that
   path only when exactly one exported run erases. The binder grades
   stay. muro-beam loads that file. It is not Erlang BEAM bytecode.
-  A definition, data, a pair, a word, or a stream is refused.
+  Data, a pair, a word, or a stream is refused. A run the entry
+  calls is a definition in the image. A name that is not a run, and
+  two definitions that call each other, are refused.
   Zero exported runs, and more than one, are refused. A refusal
   writes nothing and prints no path. An image already beside the book
   stays byte for byte, including when the book has no exported run.

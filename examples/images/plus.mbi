@@ -1,0 +1,1 @@
+(muro-beam-image 2 (boundary 1) (defs (glam ((iv 0 1) 0) (glam ((iv 0 1) 0) (gmatch (gvar 1) (gvar 0) (gsu (gapp (gapp (gref 0) (gvar 0)) (gvar 1))))))) (entry (seq (gapp (gapp (gref 0) (gsu (gsu gze))) (gsu (gsu (gsu gze)))) (done))))
