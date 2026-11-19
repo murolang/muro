@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.5
+## 0.22.6
 
 `mix muro.emit path.muro --backend pytest` prints one pytest module for the book's closed equations, the same equations `--backend exunit` collects. `mix muro.gen` writes it when an entry sets `kind: :pytest`. Each equation is one test. A skip is a `pytest.mark.skip` test, named in the reason, and is not dropped. A file of unsupplied `param`s is a suite, as it is for ExUnit.
 
@@ -13,6 +13,22 @@ That encoding is not injective across types. A string and a nullary constructor 
 ### Manual
 
 - Closed equations as tests, Pytest, Emit, Committed modules, and The executable: the pytest module, the value encoding, and how the implementation is chosen.
+
+### Package
+
+- Version 0.22.6.
+
+## 0.22.5
+
+`mix muro.fill path.muro --def name` writes a body for that definition. The definition starts as `?`. The search tries terms in order of size, up to `--bound` (default 8): variables in scope, constructors, applications of other names and of functions in scope, and a match on a binder. A term already tried at the same normal form is skipped, including a redex inside a match branch. It does not call the definition being filled. The checker decides. A run is kept only when the book's closed equations about that name still check. Evidence is kept when the type checks, and a spec is kept the same way. The written text is checked again, then a rename in the same directory puts it in place. Past the bound, the file is left unchanged and the command exits non-zero. `out of fuel` is not acceptance.
+
+An import, a param, a body that is not `?`, and a second hole are refused. An application is saturated. An erased argument is not synthesized. An indexed datatype is not searched. A partial application is not a candidate, and neither is a match on `Unit`, `Empty`, a word, or an atom.
+
+This is a search. It is not `mix muro.synth`, and it certifies nothing beyond the checker.
+
+### Manual
+
+- Fill: a definition body filled by search.
 
 ### Package
 

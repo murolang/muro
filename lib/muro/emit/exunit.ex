@@ -55,6 +55,12 @@ defmodule Muro.Emit.ExUnitSuite do
   @doc false
   def display_for(d, ctx), do: Equations.display_for(d, ctx)
 
+  @doc false
+  def closed_equations(book, book_file), do: Equations.closed_equations(book, book_file)
+
+  @doc false
+  def equation_head(d), do: Equations.equation_head(d)
+
   defp source(module, impl, ctx, tests, skips) do
     behaviour = Module.concat(module, Behaviour)
     callbacks = callbacks(tests)
