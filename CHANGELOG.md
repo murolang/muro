@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.8
+## 0.22.9
 
 A family formula can name the instances created before the one that is opening. `earlier_resolved k command` is every earlier instance of that key and that kind. `resolved k command` still counts the instance that is opening, so that atom cannot state that a command opens only once every earlier command of its key has resolved. `examples/keyed-commands.muro` states the property with `earlier_resolved`, and the command is held while an earlier one is unresolved. An instance that has not arrived does not count, and neither does one that arrives while this one is still running. Giving up counts as resolved. When nothing of that key and kind is running, the atom holds.
 
@@ -13,6 +13,20 @@ The family graph for `examples/keyed-slots.muro` stays 171649 states and 729184 
 ### Manual
 
 - Grammar, Temporal, State machines, Limits, Examples, Emit, and Extending: `earlier_resolved`, withdrawing a held instance, and `held while any unresolved`.
+
+### Package
+
+- Version 0.22.9.
+
+## 0.22.8
+
+A merge to main publishes that `mix.exs` version to Hex once the Elixir CI job on that commit is green, then pushes the annotated tag `vX.Y.Z` if it is missing. The publish does not wait for Agda or muro_visor. The publish is skipped when the version is already on Hex. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. The binaries are built only when this commit published the version or created the tag, and that job does not delay the publish. `muro_visor` is not published this way: Hex stages it, and it still needs 2FA.
+
+The repository secret `HEX_API_KEY` is required the first time a version is published. A missing secret fails the publish job with a clear error and does not print the key. Generate one with `mix hex.user key generate --key-name muro-ci --permission api:write` and add it as `HEX_API_KEY` on murolang/muro. The Publish, Release, and CI workflows run on `vars.CI_RUNNER` and do not fall back to a GitHub-hosted runner.
+
+### Manual
+
+- The executable, For agents, and AGENTS.md: a merge publishes the Hex package and the tag, and `muro_visor` is not included.
 
 ### Package
 
