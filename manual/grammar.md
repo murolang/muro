@@ -130,7 +130,7 @@ atom       ::= "Type" | "Nat" | "String" | sliteral | "Bytes" | "Slice" | bliter
              | ident
 
 word       ::= "U8" | "U32" | "U64" | "WBool" | "wtrue" | "wfalse" | "wnone"
-             | "Opt" atom | "wsome" atom
+             | "Opt" atom | "wsome" atom | "wlink" atom
              | "toU8" atom | "toU32" atom | "toU64" atom | "toI64" atom | "toNat" atom
              | "noti" atom | "asU8" atom | "asU32" atom | "asU64" atom | "asI64" atom
              | "addi" atom atom | "subi" atom atom | "muli" atom atom

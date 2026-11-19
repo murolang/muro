@@ -34,6 +34,7 @@ open import Muro.Base
 open import Muro.Syntax
 open import Muro.Subst
 open import Muro.Word using (wordStep; wordTy; optTy)
+open import Muro.WordLink using (decide; Link)
 open import Muro.Env public
 open import Muro.Tag using (tmTag)
 open import Muro.Spine using (unspine; ctorSpine; dtyArgs; defArgs)
@@ -850,6 +851,15 @@ data _,_⊢[_]_⇐_ σ Γ where
   ⇐-wsomeD : ∀ {m A t}
     → σ , Γ ⊢[ m ] t ⇐ A
     → σ , Γ ⊢[ m ] word wsome (t ∷ []) ⇐ word wopt (A ∷ [])
+
+  -- wlink is evidence. The hypothesis is inferred and the goal is one
+  -- of the unsigned word-to-Nat statements (Muro.WordLink). plus, minus,
+  -- times, and Le in that statement are the standard definitions. Not in run.
+  ⇐-wlink : ∀ {m h H G}
+    → eqMode m run ≡ false
+    → Link σ H G
+    → σ , Γ ⊢[ m ] h ⇒ H
+    → σ , Γ ⊢[ m ] word wlink (h ∷ []) ⇐ G
 
   -- let (a, b) = e in t: the tensor eliminator. Both components are
   -- bound affine (a at var 1, b at var 0); the body is checked against
@@ -2494,6 +2504,7 @@ mutual
     go (woptk _) _ _ = fail "Opt takes no arguments"
     go wsome _ (t ∷ []) = wsomeGo (una t optTy)
     go wsome _ _ = fail "wsome takes one word"
+    go wlink _ _ = fail "wlink requires an expected type"
     go wnone _ _ = fail "wnone requires an expected Opt type"
 
   -- ⇐-lam: against a Π after whnf; otherwise inferred and converted.
@@ -2589,6 +2600,14 @@ mutual
           true  → check k σ rs Γ m t A
           false → wsomeConv k σ T (infer k σ rs Γ m t)
       _ → wsomeConv k σ T (infer k σ rs Γ m t)
+
+  -- ⇐-wlink. Checked, not inferred. The hypothesis is used once.
+  check′ k σ rs Γ m (word wlink (h ∷ [])) T =
+    if eqMode m run then fail "no promotion: wlink in run mode"
+    else infer k σ rs Γ m h >>= λ (H , u) →
+         decide σ H T >>= λ _ → ok u
+  check′ k σ rs Γ m (word wlink _) _ =
+    fail "wlink takes one proof"
 
   -- ⇐-ctor / ⇐-conv (default)
   check′ k σ rs Γ m e A = checkAgainst k σ rs Γ m e A (viewData k σ A) (ctorSpine e)

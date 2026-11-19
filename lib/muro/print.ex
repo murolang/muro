@@ -362,6 +362,7 @@ defmodule Muro.Print do
   defp word_head({:optk, k}), do: "Opt #{word_kind(k)}"
   defp word_head(:some), do: "wsome"
   defp word_head(:none), do: "wnone"
+  defp word_head(:link), do: "wlink"
 
   defp word_kind(:u8), do: "U8"
   defp word_kind(:u32), do: "U32"

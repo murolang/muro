@@ -42,6 +42,20 @@ Unsigned `lti` and `lei` compare the residues. Signed `lti` and `lei` compare th
 
 Closed equations over these types reduce. `{addi (noti (toU8 0)) (toU8 (suc 0)) ≡ toU8 0 : U8}` is `refl`.
 
+## Word and Nat
+
+`wlink` is evidence. It is checked against an expected type, the way `refl` is, and a `run` term that contains it is refused. For `U8`, `U32`, and `U64`, and for `addc`, `subc`, and `mulc`, the checker accepts three statements:
+
+- `addc a b ≡ wsome c` gives `toNat c ≡ plus (toNat a) (toNat b)`. `subc` gives the same with `minus`, and `mulc` with `times`.
+- That `wsome` gives the fit. For `addc` and `mulc` the fit is `Le` of the successor of the Nat result below the modulus, 256, 2^32, or 2^64. For `subc` the fit is `Le (toNat b) (toNat a)`.
+- The fit gives the `wsome`. The payload is `toU8`, `toU32`, or `toU64` of that Nat result.
+
+`plus`, `minus`, `times`, and `Le` in those statements are the standard definitions: `plus` from the prelude, `minus` and `Le` from `std:le.muro`, and `times` from `std:word.muro`. A book that binds one of those names to a different definition is refused. The modulus is that closed numeral. `I64` is outside these statements: `toNat` of −1 is 2^64−1, so the Nat equation does not hold. Wrapping `addi`, `subi`, and `muli` are a different operation.
+
+`import "std:word.muro"` states each of those lemmas ([Library](library.md)). A closed equation still reduces on its own. `addc` of `toU64 4294967295` and 1 is `wsome` of `toU64 4294967296`. The same pair at `U32` is `wnone`. `mulc` of `toU64 4294967296` with itself is `wnone`. The book also sums three `U64` amounts under the fit and cites the value lemma for the Nat total.
+
+`wlink` is erased before emit. The emitters are unchanged.
+
 ## What the emitters write
 
 C uses `uint8_t`, `uint32_t`, `uint64_t`, and `int64_t`, by value. A host passes an `int64_t`, including −1, and `lti` compares those signed values. Signed wrapping is unsigned arithmetic, cast back. Checked operations use `__builtin_add_overflow`, `__builtin_sub_overflow`, and `__builtin_mul_overflow`. A shift walks the `Nat` and stops at the width, so a shift of 64 bits is not evaluated. `divi` and `remi` test the divisor, and the signed minimum over −1, before `/` or `%`. `Opt` is a struct with `tag` and `val`, tag 0 for `wnone` and tag 1 for `wsome`. An `Opt` of ordinary data is that struct, and `val` is a pointer to the data. `WBool` is `uint8_t`, 1 or 0. A `match` on `WBool` is a test of that word. A `match` on `Opt` is a test of `tag`, and the payload is `val`. Neither walks `Nat` and neither allocates.
@@ -73,6 +87,6 @@ There is no second index language. A tensor shape is an `I64`.
 - Index a `Vec` by a word. Lengths in [indexed data](indexed.md) are Peano.
 - A shift or a division that steps outside the guards above. The guards are the result, not a host exception.
 
-The statements are `agda/Muro/Word.agda`, checked under `--safe`. `ofNat∘toNat` and `toNat∘ofNat` are the two round trips. `wrapAdd-mod`, `wrapSub-mod`, and `wrapMul-mod` are the wrapping operations modulo 2^w. `checkedAdd-iff`, `checkedSub-iff`, and `checkedMul-iff` say a checked operation returns a value exactly when the result fits. `div-iff` and `rem-iff` say division and remainder return a value exactly when the divisor is legal.
+The statements are `agda/Muro/Word.agda`, checked under `--safe`. `ofNat∘toNat` and `toNat∘ofNat` are the two round trips. `wrapAdd-mod`, `wrapSub-mod`, and `wrapMul-mod` are the wrapping operations modulo 2^w. `checkedAdd-iff`, `checkedSub-iff`, and `checkedMul-iff` say a checked operation returns a value exactly when the result fits. `div-iff` and `rem-iff` say division and remainder return a value exactly when the divisor is legal. `agda/Muro/WordLink.agda` is the evidence above: the value equation and both directions of the fit, for unsigned `addc`, `subc`, and `mulc`, from `checkedAdd-val`, `checkedSub-val`, `checkedMul-val`, and those fit facts. `I64` is not among them.
 
 Next: [Emit](emit.md).

@@ -18,6 +18,22 @@ That encoding is not injective across types. A string and a nullary constructor 
 
 - Version 0.22.4.
 
+## 0.22.3
+
+Checked arithmetic on U8, U32, and U64 agrees with Nat. `std:word.muro` gives the value lemma and both directions of the fit lemma for `addc`, `subc`, and `mulc`. A bound below the width turns a checked sum into `wsome`, and the payload's `toNat` is the Nat sum. I64 is outside these lemmas: `toNat` of −1 is 2^64−1.
+
+`wlink` is the evidence the checker accepts for those statements. It is erased. The emitters are unchanged.
+
+`wlink` accepts `plus`, `minus`, `times`, and `Le` only when they are the standard definitions: `plus` from the prelude, `minus` and `Le` from `std:le.muro`, and `times` from `std:word.muro`. A book that defines one of those names differently is refused.
+
+### Manual
+
+- Machine numbers, Library, Grammar, Limits, and Extending: the unsigned word-to-Nat lemmas, and why I64 is outside them.
+
+### Package
+
+- Version 0.22.3. The version goes from 0.22.0 to 0.22.3 because 0.22.1 and 0.22.2 are taken by other open pull requests.
+
 ## 0.22.1
 
 `--backend fsm` emits one dispatcher per keyed family, beside the session machines. `new/0` starts it. `arrive/4` takes the state, the key, the constructor, and the creation index, and returns `{:open, id, state}` or `{:held, id, state}`. `resolved/2` returns the instances that opening releases. `check_trace/1` replays a list of those steps. An unknown id is an error and does not raise.

@@ -30,7 +30,7 @@ Nothing is inferred: there are no implicits, unification, metavariables or tacti
 - [The executable](https://muro-lang.dev/docs/binary): The self-contained `muro` binary, `muro.toml`, gen for C, Rust, Zig, and assembly, init, and `muro skills add`.
 - [Host representations](https://muro-lang.dev/docs/repr): A repr states the host shape of a data type. Emit writes strict decode and encode. Decode returns `{:ok, value, table}`. Encode takes that table.
 - [Packages](https://muro-lang.dev/docs/packages): Import a book from a git or Hex package at the version `muro.lock` records. `mix muro.deps.get` fetches `muro_deps/` and writes the lock.
-- [Library](https://muro-lang.dev/docs/library): The ordinary library, imported as `std:`. Bool, Le, List, Maybe, comparison, and a binary successor.
+- [Library](https://muro-lang.dev/docs/library): The ordinary library, imported as `std:`. Bool, Le, List, Maybe, comparison, a binary successor, and unsigned word arithmetic.
 - [Limits](https://muro-lang.dev/docs/limits): What the language does not do. Facts about the checker, not a roadmap.
 
 ## Examples
@@ -39,6 +39,7 @@ Nothing is inferred: there are no implicits, unification, metavariables or tacti
 - [half_ok.muro](https://github.com/murolang/muro/blob/main/examples/half_ok.muro): The canonical book: a spec, a program, and a theorem about it.
 - [examples/ on GitHub](https://github.com/murolang/muro/tree/main/examples): All example programs.
 - [lib/muro/std/suc_bin.muro](https://github.com/murolang/muro/blob/main/lib/muro/std/suc_bin.muro): Library binary successor, imported as `std:suc_bin.muro`. Inductive Nat stays primary. `sucBin` is a Mealy machine on `List Bit`.
+- [lib/muro/std/word.muro](https://github.com/murolang/muro/blob/main/lib/muro/std/word.muro): Unsigned word-to-Nat lemmas for `addc`, `subc`, and `mulc`, imported as `std:word.muro`.
 
 ## Repository
 

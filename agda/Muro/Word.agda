@@ -746,6 +746,7 @@ wordStep-res-canon wfalse _ ()
 wordStep-res-canon (woptk _) _ ()
 wordStep-res-canon wsome _ ()
 wordStep-res-canon wnone _ ()
+wordStep-res-canon wlink _ ()
 
 wordStep-args-canon : ∀ {n} op (ts : List (Tm n)) {r} → wordStep op ts ≡ just r → AllC ts
 wordStep-args-canon (wof k) (t ∷ []) eq with ℕ← t
@@ -844,6 +845,7 @@ wordStep-args-canon wfalse _ ()
 wordStep-args-canon (woptk _) _ ()
 wordStep-args-canon wsome _ ()
 wordStep-args-canon wnone _ ()
+wordStep-args-canon wlink _ ()
 
 -- A successful step reads only closed values. Renaming or substituting
 -- those values recomputes the same contractum. Kind agreement is split
@@ -1236,6 +1238,7 @@ wordStep-ren ρ wfalse _ ()
 wordStep-ren ρ (woptk _) _ ()
 wordStep-ren ρ wsome _ ()
 wordStep-ren ρ wnone _ ()
+wordStep-ren ρ wlink _ ()
 
 wordStep-sub : ∀ {n m} (σ : Data.Fin.Base.Fin n → Tm m) op (ts : List (Tm n)) {r}
   → wordStep op ts ≡ just r → wordStep op (subList σ ts) ≡ just (sub σ r)
@@ -1336,6 +1339,7 @@ wordStep-sub σ wfalse _ ()
 wordStep-sub σ (woptk _) _ ()
 wordStep-sub σ wsome _ ()
 wordStep-sub σ wnone _ ()
+wordStep-sub σ wlink _ ()
 
 ------------------------------------------------------------------------
 -- Closed residue computations. Each one is definitional.
