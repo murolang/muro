@@ -1,0 +1,194 @@
+name: Publish
+
+on:
+  push:
+    branches: [main]
+
+# The concurrency group lives on the Hex job only, so a binary build
+# cannot delay the next publish. This workflow starts on the same push
+# as CI and waits only for the Elixir check, not Agda or muro_visor.
+
+permissions:
+  contents: write
+  checks: read
+  actions: read
+
+jobs:
+  publish:
+    name: Hex and tag
+    if: github.ref == 'refs/heads/main'
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 30
+    concurrency:
+      group: publish-hex-main
+      cancel-in-progress: false
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: Wait for the Elixir check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # Never print GH_TOKEN. Do not enable xtrace in this step.
+          if ! command -v python3 >/dev/null 2>&1; then
+            echo "::error::python3 is required to wait for the Elixir check"
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json, os, sys, time, urllib.error, urllib.request
+
+          sha = os.environ["SHA"]
+          repo = os.environ["REPO"]
+          token = os.environ["GH_TOKEN"]
+          url = (
+              f"https://api.github.com/repos/{repo}/commits/{sha}/check-runs"
+              f"?check_name=Elixir&per_page=100"
+          )
+          deadline = time.time() + 25 * 60
+          interval = 10
+
+          def fetch():
+              req = urllib.request.Request(
+                  url,
+                  headers={
+                      "Authorization": f"Bearer {token}",
+                      "Accept": "application/vnd.github+json",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                      "User-Agent": "muro-publish",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=30) as res:
+                      return res.status, json.load(res)
+              except urllib.error.HTTPError as e:
+                  body = e.read().decode("utf-8", "replace")
+                  return e.code, body
+
+          while time.time() < deadline:
+              code, payload = fetch()
+              if code != 200:
+                  print(f"check-runs API returned {code}; retrying", file=sys.stderr)
+                  time.sleep(interval)
+                  continue
+              runs = payload.get("check_runs") or []
+              if not runs:
+                  print("Elixir check not posted yet")
+                  time.sleep(interval)
+                  continue
+              runs.sort(key=lambda r: r.get("started_at") or r.get("id") or 0)
+              latest = runs[-1]
+              status = latest.get("status")
+              conclusion = latest.get("conclusion")
+              print(f"Elixir check {latest.get('id')}: status={status} conclusion={conclusion}")
+              if status != "completed":
+                  time.sleep(interval)
+                  continue
+              if conclusion == "success":
+                  sys.exit(0)
+              print(
+                  f"::error::Elixir check concluded {conclusion}; muro was not published.",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print(
+              "::error::Timed out waiting 25 minutes for the Elixir check to complete; muro was not published.",
+              file=sys.stderr,
+          )
+          sys.exit(1)
+          PY
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Read the package version
+        id: meta
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^[[:space:]]*version: "\([^"]*\)".*/\1/p' mix.exs | head -1)
+          test -n "$version"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "package version ${version} at ${{ github.sha }}"
+
+      - name: Check whether the version is already on Hex
+        id: hex
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+          code=$(curl -sS -o /tmp/hex-muro-release.json -w "%{http_code}" \
+            "https://hex.pm/api/packages/muro/releases/${version}")
+          if [ "$code" = "200" ]; then
+            echo "muro ${version} is already on Hex; skipping publish"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          elif [ "$code" = "404" ]; then
+            echo "muro ${version} is not on Hex yet"
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Unexpected Hex API status ${code} for muro ${version}"
+            exit 1
+          fi
+
+      - uses: jdx/mise-action@v4
+        if: steps.hex.outputs.needed == 'true'
+
+      - name: Publish to Hex
+        if: steps.hex.outputs.needed == 'true'
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+          # Never print HEX_API_KEY. Do not enable xtrace in this step.
+          if [ -z "${HEX_API_KEY}" ]; then
+            echo "::error::The HEX_API_KEY repository secret is not set. Generate a key with \`mix hex.user key generate --key-name muro-ci --permission api:write\` and add it as HEX_API_KEY on murolang/muro. muro ${version} was not published."
+            exit 1
+          fi
+          mix local.hex --force
+          mix hex.publish --yes
+
+      - name: Create and push the annotated tag
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.tag }}"
+          version="${{ steps.meta.outputs.version }}"
+          sha="${{ github.sha }}"
+          test -n "$tag"
+          test -n "$sha"
+
+          peeled=$(git ls-remote --tags origin "refs/tags/${tag}^{}" | awk '{print $1}')
+          direct=$(git ls-remote --tags origin "refs/tags/${tag}" | awk '{print $1}')
+          if [ -n "$peeled" ]; then
+            existing="$peeled"
+          else
+            existing="$direct"
+          fi
+
+          if [ -n "$existing" ]; then
+            if [ "$existing" != "$sha" ]; then
+              echo "::error::tag ${tag} already points at ${existing}, not ${sha}"
+              exit 1
+            fi
+            echo "tag ${tag} already points at ${sha}"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "muro ${version}" "$sha"
+          git push origin "refs/tags/${tag}"
+          echo "pushed ${tag} at ${sha}"
+
+  binaries:
+    name: Binaries
+    needs: publish
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.publish.outputs.tag }}
