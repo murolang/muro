@@ -72,7 +72,7 @@ mix muro.emit path.muro --backend zig       # <name>.zig
 mix muro.emit path.muro --backend asm       # <name>.s, Cortex-M0, Nat run
 mix muro.emit path.muro --backend js        # <name>.mjs and <name>.d.ts; node runs the module
 mix muro.emit path.muro --backend fsm       # one state machine per session, on stdout
-mix muro.emit path.muro --backend mbi       # <stem>.mbi, exactly one graded run for muro-beam
+mix muro.emit path.muro --backend mbi       # <stem>.mbi, exactly one graded run; a run it calls is a closed definition
 ```
 
 ```elixir

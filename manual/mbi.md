@@ -18,11 +18,11 @@ muro emit path.muro --backend mbi
 {:ok, files} = Muro.emit_mbi("path.muro")
 ```
 
-`files` is a list of one path, the `.mbi`. That result is exactly one exported run whose body erased. The image is written only in that case. Any refusal writes nothing and leaves an image already at that path byte for byte. That includes a book that does not check, a book with no exported run (`mbi:entry`), and a book with more than one exported run.
+`files` is a list of one path, the `.mbi`. That result is exactly one exported run whose body erased. The image is written only in that case. The bytes go to a temporary file in the same directory and are renamed over `<stem>.mbi`, so the path holds the previous file or the whole image. Any refusal writes nothing and leaves an image already at that path byte for byte. That includes a book that does not check, a book with no exported run (`mbi:entry`), and a book with more than one exported run.
 
 ## The file
 
-The file is one line and a trailing newline. Version 1 is a run that calls no definition. Version 2 is a run that calls one. Boundary version 1 is the boundary the runtime checks the term against. An empty `(defs)` is not written.
+The file is one line and a trailing newline. Version 1 is a run that calls no definition. Version 2 is a run that calls at least one definition. Boundary version 1 is the boundary the runtime checks the term against. An empty `(defs)` is not written.
 
 ```
 image    ::= (muro-beam-image 1 (boundary 1) (entry <prog>))
@@ -132,6 +132,8 @@ The message is `mbi:<reason> in <name>`. The reason is the first constructor, no
 ## What muro-beam checks
 
 Writing the file is not acceptance. A successful emit means the book had exactly one exported run and that body erased. Acceptance is `InBoundary` on the closed term, in [muro-beam Boundary v1](https://github.com/doctorcorral/muro-beam/blob/main/agda/MuroBeam/Boundary.agda) (`MuroBeam.Boundary`, `boundary-version` is 1). That module is the authority. This emitter does not call it. A term in the file can fail `InBoundary`.
+
+The files in `examples/images/` are checked here against the grammar on this page. The check requires one line, version 1 with no `(defs)` or version 2 with a non-empty `(defs)`, a `gref` only to itself or an earlier definition, and no free `gvar` or `gtyp` in a definition or the entry. It does not call muro-beam `load`, `decideB`, or `InBoundary`. A closed term the boundary refuses still passes.
 
 `seq` asks the term to lie inside the boundary, then runs the grade check in `run`, then checks `(done)` at grade `(w 0)`. `(done)` uses nothing. `w` and `0` accept zero uses, so `(seq e (done))` checks when `e` checks and lies inside the boundary.
 

@@ -332,9 +332,9 @@ defmodule Muro.EmitMbiTest do
     assert emit_src(chain_src()) == golden("chain")
     assert emit_src(calls_src()) == golden("calls")
     assert emit_src(loop_src()) == golden("loop")
-    assert emit_src("def n : run Nat := plus 0 0\n") == plus_zero()
-    assert emit_src(File.read!("examples/internal_ok.muro")) == internal_image()
-    assert emit_src(ordered_src()) == ordered_image()
+    assert emit_src("def n : run Nat := plus 0 0\n") == golden("plus_zero")
+    assert emit_src(File.read!("examples/internal_ok.muro")) == golden("internal_ok")
+    assert emit_src(ordered_src()) == golden("ordered")
 
     assert emit_src("""
            def hidden : run internal Nat := suc 0
@@ -355,8 +355,10 @@ defmodule Muro.EmitMbiTest do
 
     assert {:error, "mbi:forward-def in main"} = Muro.emit_mbi(path)
     assert File.read!(file) == prior
+    refute Enum.any?(File.ls!(dir), &String.ends_with?(&1, ".tmp"))
     assert {:raise, "", "mbi:forward-def in main"} = Muro.CLI.Emit.run([path, "--backend", "mbi"])
     assert File.read!(file) == prior
+    refute Enum.any?(File.ls!(dir), &String.ends_with?(&1, ".tmp"))
 
     assert {:error, "mbi:pair in main"} =
              Mbi.render([
@@ -374,7 +376,7 @@ defmodule Muro.EmitMbiTest do
              ])
   end
 
-  test "every image matches the muro-beam grammar" do
+  test "every image matches the image grammar and names no free variable" do
     paths = Path.wildcard("examples/images/*.mbi")
     assert paths != []
 
@@ -395,6 +397,57 @@ defmodule Muro.EmitMbiTest do
     refute check_image("(muro-beam-image 1 (boundary 1) (entry (seq (gvar 01) (done))))\n") == :ok
 
     refute check_image("(muro-beam-image 1 (boundary 1) (entry (seq gze (done))))") == :ok
+
+    # A free gvar is legal IMAGE.md syntax. This harness refuses it.
+    # load, decideB, and InBoundary are not run.
+    refute check_image(
+             "(muro-beam-image 2 (boundary 1) (defs (gvar 0)) (entry (seq gze (done))))\n"
+           ) == :ok
+
+    refute check_image("(muro-beam-image 1 (boundary 1) (entry (seq (gvar 0) (done))))\n") == :ok
+
+    refute check_image(
+             "(muro-beam-image 1 (boundary 1) (entry (seq (gmatch gze (gvar 0) (gvar 0)) (done))))\n"
+           ) == :ok
+
+    refute check_image(
+             "(muro-beam-image 1 (boundary 1) (entry (seq (gmatch gze gze (gvar 1)) (done))))\n"
+           ) == :ok
+
+    refute check_image("(muro-beam-image 1 (boundary 1) (entry (seq (gtyp 0) (done))))\n") == :ok
+
+    assert check_image(
+             "(muro-beam-image 1 (boundary 1) (entry (seq (glam ((iv 0 1) 0) (gtyp 0)) (done))))\n"
+           ) == :ok
+  end
+
+  test "a run named only in a domain, a motive, or an annotation is not a definition" do
+    # `ghost` is `suc 0`. It is not called. Format 1 has no `(gsu …)` and no `(defs)`.
+    assert emit_src(domain_only_src()) ==
+             Mbi.show_pure({:glam, {:iv, 0, 1}, 0, :gze}) <> "\n"
+
+    assert emit_src(motive_only_src()) ==
+             Mbi.show_pure(
+               {:gmatch, :gze, {:glam, {:iv, 0, 1}, 0, :gze}, {:glam, {:iv, 0, 1}, 0, :gze}}
+             ) <> "\n"
+
+    ghost = %{name: "ghost", mode: :run, export: false, type: :nat, body: {:su, :ze}}
+
+    ann = %{name: "main", mode: :run, type: :nat, body: {:ann, :ze, {:var, "ghost"}}}
+
+    assert {:ok, image, ""} = Mbi.render([ghost, ann])
+    assert image == Mbi.show_pure(:gze) <> "\n"
+  end
+
+  test "a success renames a temporary in the same directory over the image" do
+    dir = tmp_dir()
+    path = write_book(dir, "id", affine_src())
+    file = Path.join(dir, "id.mbi")
+    File.write!(file, "prior-image\n")
+
+    assert {:ok, [^file]} = Muro.emit_mbi(path)
+    assert File.read!(file) == golden("affine")
+    refute Enum.any?(File.ls!(dir), &String.ends_with?(&1, ".tmp"))
   end
 
   test "a domain is dropped, so a data type written there is not a refusal" do
@@ -739,25 +792,37 @@ defmodule Muro.EmitMbiTest do
     """
   end
 
-  defp plus_zero do
-    String.replace(
-      golden("plus"),
-      "(gapp (gref 0) (gsu (gsu gze))) (gsu (gsu (gsu gze)))",
-      "(gapp (gref 0) gze) gze"
-    )
+  defp domain_only_src do
+    """
+    data Box : Nat → Type where
+      box : Π (n : Nat) → Box n
+
+    def ghost : run internal Nat := suc 0
+
+    def main : run Π (b : Box ghost) → Nat :=
+      λ (b : Box ghost) → 0
+    """
   end
 
-  defp internal_image do
-    "(muro-beam-image 2 (boundary 1) (defs (glam ((iv 0 1) 0) (gsu (gvar 0)))) (entry (seq (glam ((iv 0 1) 0) (gapp (gref 0) (gvar 0))) (done))))\n"
+  defp motive_only_src do
+    """
+    data Box : Nat → Type where
+      box : Π (n : Nat) → Box n
+
+    def ghost : run internal Nat := suc 0
+
+    def main : run Π (_ : Box (suc 0)) → Nat :=
+      match 0 motive (λ (k : Nat) → Π (_ : Box ghost) → Nat)
+        | 0 => λ (_ : Box (suc 0)) → 0
+        | suc _ => λ (_ : Box (suc 0)) → 0
+    """
   end
 
-  defp ordered_image do
-    "(muro-beam-image 2 (boundary 1) (defs gze (gsu (gref 0))) (entry (seq (gref 1) (done))))\n"
-  end
-
-  # The image grammar in doctorcorral/muro-beam docs/IMAGE.md. An empty
-  # `(defs)` nest is junk. Definition i may gref i or an earlier index.
-  # The entry may gref any definition. A natural has no leading zero.
+  # IMAGE.md syntax, plus a closed term. One line. Version 1 has no
+  # definitions. Version 2 has a non-empty (defs). Definition i may
+  # gref i or an earlier index. The entry may gref any definition.
+  # A gvar or gtyp must sit under a binder. A natural has no leading
+  # zero. This does not call muro-beam load, decideB, or InBoundary.
   defp check_image(text) do
     cond do
       not String.ends_with?(text, "\n") ->
@@ -784,7 +849,7 @@ defmodule Muro.EmitMbiTest do
   end
 
   defp image?(["muro-beam-image", "1", ["boundary", "1"], ["entry", ["seq", term, ["done"]]]]) do
-    term?(term) and grefs_below?(term, 0)
+    term?(term) and grefs_below?(term, 0) and closed?(term)
   end
 
   defp image?([
@@ -797,7 +862,8 @@ defmodule Muro.EmitMbiTest do
        when terms != [] do
     Enum.all?(terms, &term?/1) and term?(term) and
       Enum.with_index(terms) |> Enum.all?(fn {t, i} -> grefs_at_most?(t, i) end) and
-      grefs_below?(term, length(terms))
+      grefs_below?(term, length(terms)) and
+      Enum.all?(terms, &closed?/1) and closed?(term)
   end
 
   defp image?(_), do: false
@@ -855,6 +921,24 @@ defmodule Muro.EmitMbiTest do
   defp grefs_below?(["gtyp", _], _), do: true
   defp grefs_below?("gze", _), do: true
   defp grefs_below?(_, _), do: false
+
+  # `glam` and `gpi` each open one binder. The successor arm of
+  # `gmatch` opens one. The entry and each definition start closed.
+  defp closed?(term), do: closed?(term, 0)
+  defp closed?(["gvar", n], depth), do: String.to_integer(n) < depth
+  defp closed?(["gtyp", n], depth), do: String.to_integer(n) < depth
+  defp closed?(["gref", _], _depth), do: true
+  defp closed?(["glam", _, body], depth), do: closed?(body, depth + 1)
+  defp closed?(["gpi", _, body], depth), do: closed?(body, depth + 1)
+  defp closed?(["gapp", f, a], depth), do: closed?(f, depth) and closed?(a, depth)
+  defp closed?(["gsu", e], depth), do: closed?(e, depth)
+
+  defp closed?(["gmatch", e, z, s], depth) do
+    closed?(e, depth) and closed?(z, depth) and closed?(s, depth + 1)
+  end
+
+  defp closed?("gze", _depth), do: true
+  defp closed?(_, _depth), do: false
 
   defp show_sexp(atom) when is_binary(atom), do: atom
 
