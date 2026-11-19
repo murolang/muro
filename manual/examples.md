@@ -7,7 +7,7 @@ summary: Every file in examples/ and what it is for.
 
 # Examples
 
-In brief: every file in the sections above Refused checks with `mix muro.check path`. They are the worked book, not sketches. Prefer copying from here over inventing syntax. The files under Refused are what that command turns down.
+In brief: the files in the sections above Refused check with `mix muro.check path`. `examples/fill/add1.muro` is the input to `mix muro.fill` and its body is `?`. `examples/fill/add1.filled.muro` is the book that command writes, and that file checks. They are the worked book, not sketches. Prefer copying from here over inventing syntax. The files under Refused are what that command turns down.
 
 Check one file:
 
@@ -690,6 +690,10 @@ See [Machine numbers](machine.md).
 ## using_prelude.muro
 
 Uses `sym`, `cong`, and `pred` from the prelude and defines none of them. `before` is `pred (suc (suc 0))`. There is no Agda twin: the prelude is an Elixir book, not a kernel rule. See [Terms](language.md#prelude).
+
+## fill/add1.muro
+
+`add1` starts as `?`. `mix muro.fill examples/fill/add1.muro --def add1` writes `λ (n : Nat) → suc(n)`. The three closed equations are the specification. `examples/fill/add1.filled.muro` is that result, and it checks. The input does not. See [Fill](fill.md).
 
 ## Refused
 

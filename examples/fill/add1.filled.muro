@@ -1,0 +1,11 @@
+def add1 : run Π (n : Nat) → Nat :=
+  λ (n : Nat) → suc(n)
+
+def add1-0 : evidence {add1 0 ≡ suc(0) : Nat} :=
+  refl
+
+def add1-1 : evidence {add1 suc(0) ≡ suc(suc(0)) : Nat} :=
+  refl
+
+def add1-2 : evidence {add1 suc(suc(0)) ≡ suc(suc(suc(0))) : Nat} :=
+  refl

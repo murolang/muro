@@ -1,12 +1,28 @@
 # Changelog
 
-## 0.22.5
+## 0.22.6
 
 `--backend mbi` writes image format 2 when the exported run calls other run definitions, including a `run internal` and a prelude run it reaches. Each one is a closed term in a `(defs …)` section. The order lets a definition call itself or an earlier definition, and the run refers to them by index. A run that calls no definition still writes format 1, the same bytes as before. Two definitions that call each other, so that one of them would have to name a later index, are refused, and nothing is written. muro-beam loads the file and checks it again. Writing the file is not that check. The bytes are renamed into place, so the path holds the previous file or the whole image.
 
 ### Manual
 
 - MBI images, Emit, For agents, and Examples: a run may call definitions, and the image names them.
+
+### Package
+
+- Version 0.22.6.
+
+## 0.22.5
+
+`mix muro.fill path.muro --def name` writes a body for that definition. The definition starts as `?`. The search tries terms in order of size, up to `--bound` (default 8): variables in scope, constructors, applications of other names and of functions in scope, and a match on a binder. A term already tried at the same normal form is skipped, including a redex inside a match branch. It does not call the definition being filled. The checker decides. A run is kept only when the book's closed equations about that name still check. Evidence is kept when the type checks, and a spec is kept the same way. The written text is checked again, then a rename in the same directory puts it in place. Past the bound, the file is left unchanged and the command exits non-zero. `out of fuel` is not acceptance.
+
+An import, a param, a body that is not `?`, and a second hole are refused. An application is saturated. An erased argument is not synthesized. An indexed datatype is not searched. A partial application is not a candidate, and neither is a match on `Unit`, `Empty`, a word, or an atom.
+
+This is a search. It is not `mix muro.synth`, and it certifies nothing beyond the checker.
+
+### Manual
+
+- Fill: a definition body filled by search.
 
 ### Package
 
