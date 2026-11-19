@@ -2,11 +2,14 @@
 
 ## 0.22.9
 
-CI runs the Agda job only when it has something to check. A new `Changes` job diffs a pull request against its base with git. The Agda job runs when the pull request changes a file under `agda/`, the `Makefile`, or a file under `.github/workflows/`, and on every push to main and every manual run. On any other pull request the `Agda 2.8.0` check reports as skipped, and a required check counts a skipped job as passing. If the `Changes` job fails, Agda runs. `make agda` reads only those files, so a skipped run could not have had another result. The Elixir and muro_visor jobs, the Publish and Release workflows, and the runners are unchanged.
+CI runs the Agda job only when it has something to check. A new `Changes` job diffs a pull request against its base with git. The Agda job runs when the pull request changes a file under `agda/`, the `Makefile`, or a file under `.github/workflows/`, and on every push to main and every manual run. On any other pull request the `Agda 2.8.0` check reports as skipped, and a required check counts a skipped job as passing. If the `Changes` job fails, Agda runs. `make agda` reads only those files, so a skipped run could not have had another result. The Agda job also waits for the Elixir job, so Elixir gets a runner first.
+
+The Hex publish and the tag are now the `Hex and tag` job in CI, and the Publish workflow is removed. The job needs the Elixir job and runs only for a push to main, so it is queued after Elixir succeeds and never holds a runner while it waits. Before, the Publish job held one runner while it polled for the Elixir check. That check could not start while the other runner was on Agda, and the poll timed out after 25 minutes. The rest is unchanged: the publish is skipped when the version is already on Hex, it uses `HEX_API_KEY`, it pushes the annotated tag if it is missing, and the `publish-hex-main` group is on that job only. The `Binaries` job then calls the Release workflow in its own group, so the binaries never delay the publish. A push to main now gets a CI concurrency group of its own commit, so a later merge does not cancel an earlier publish. A pull request still cancels its own older run. Every job still runs on `vars.CI_RUNNER`.
 
 ### Manual
 
 - README and Extending the kernel: when CI runs `make agda`.
+- The executable, For agents, and AGENTS.md: the `Hex and tag` job in CI publishes after the Elixir job.
 
 ### Package
 
