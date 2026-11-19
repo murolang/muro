@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.7
+## 0.22.8
 
 A keyed family holds a `signal` while an earlier instance of its key, already arrived, is unresolved. That rule is proved for any number of keys and any number of instances. An opened `signal` has every earlier instance of its key that had already arrived resolved. An instance that arrives later can still be live beside it. Arrival, resolve, and rerun keep the rule. A held `signal` opens in the step that resolves the last earlier instance of its key. Whether an instance is held depends only on its own key.
 
@@ -11,6 +11,18 @@ The family graph is unchanged: 171649 reachable states, 729184 transitions. That
 ### Manual
 
 - Temporal, Limits, State machines, Examples, and Extending: the hold rule is proved for any number of keys. The family graph remains the check of the generated dispatcher.
+
+### Package
+
+- Version 0.22.8.
+
+## 0.22.7
+
+`--backend mbi` writes image format 2 when the exported run calls other run definitions, including a `run internal` and a prelude run it reaches. Each one is a closed term in a `(defs …)` section. The order lets a definition call itself or an earlier definition, and the run refers to them by index. A run that calls no definition still writes format 1, the same bytes as before. Two definitions that call each other, so that one of them would have to name a later index, are refused, and nothing is written. muro-beam loads the file and checks it again. Writing the file is not that check. The bytes are renamed into place, so the path holds the previous file or the whole image.
+
+### Manual
+
+- MBI images, Emit, For agents, and Examples: a run may call definitions, and the image names them.
 
 ### Package
 

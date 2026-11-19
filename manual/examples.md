@@ -226,7 +226,7 @@ def many : run Π (n : (ω, 0) Nat) → Nat :=
   λ (n : (ω, 0) Nat) → plus n n
 ```
 
-`once` returns its argument. `many` adds it to itself. The pair is evidence. Emit erases it, so the module is the one the book would emit with the pairs removed. `--backend mbi` keeps the pair. The image of `once` is `examples/images/once.mbi`. `many` is refused, because it calls `plus`. The files in `examples/images/` are those images, including the Π image `pi.mbi`, the interval image `iv.mbi`, and `twice.mbi`. They are not books. An unused grade `1`, a second use of grade `1`, and a type that mentions a variable whose type grade is `0` are refused; those books live in `test/muro_grade_test.exs`.
+`once` returns its argument. `many` adds it to itself. The pair is evidence. Emit erases it, so the module is the one the book would emit with the pairs removed. `--backend mbi` keeps the pair. The image of `once` is `examples/images/once.mbi`. The book has two exported runs, so nothing is written. `many` calls `plus`, and the image of that run alone names `plus`. The files in `examples/images/` are those images, including the Π image `pi.mbi`, the interval image `iv.mbi`, and `twice.mbi`. They are not books. An unused grade `1`, a second use of grade `1`, and a type that mentions a variable whose type grade is `0` are refused; those books live in `test/muro_grade_test.exs`.
 
 See [Terms](language.md#binders-and-quantities).
 
