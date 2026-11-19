@@ -395,6 +395,31 @@ defmodule Muro.CliTest do
     assert text =~ "mix deps.get"
     assert text =~ "urllib.error.URLError"
     assert text =~ "release-binaries-"
+
+    # Every plan outcome: a merge without a version bump is a quiet no-op,
+    # and a needed publish with the tag on another commit stops.
+    assert text =~ "create_tag=true"
+    assert text =~ "release=false"
+    assert text =~ "leaving the tag and skipping the binary build"
+    assert text =~ "was not published."
+    assert text =~ "if: steps.plan.outputs.create_tag == 'true'"
+    assert text =~ "if: steps.hex.outputs.needed == 'true'"
+
+    # The version is checked before any shell uses it, and values reach
+    # run: blocks through env, never through ${{ }} interpolation.
+    assert text =~ "invalid mix.exs version"
+    assert release =~ "invalid mix.exs version"
+
+    for wf <- [text, release] do
+      for block <-
+            Regex.scan(~r/run: \|\n((?:          .*\n|\s*\n)+)/, wf, capture: :all_but_first) do
+        refute hd(block) =~ "${{"
+      end
+    end
+
+    refute text =~ "actions: read"
+    refute text =~ "github.ref == 'refs/heads/main'"
+    assert text =~ "max(runs"
   end
 
   defp assert_same(fun, argv, cd \\ nil) do

@@ -74,7 +74,7 @@ jobs:
                       )
                       time.sleep(interval)
                       continue
-              except (urllib.error.URLError, OSError, TimeoutError) as e:
+              except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
                   print(f"check-runs API error ({e}); retrying", file=sys.stderr)
                   time.sleep(interval)
                   continue
