@@ -14,10 +14,10 @@ In brief: `muro` is a self-contained executable. It carries its own Erlang runti
 Release assets are one file per target, named `muro-<version>-<os>-<arch>`, with a `.sha256` file beside each:
 
 ```
-muro-0.22.8-macos-aarch64
-muro-0.22.8-macos-x86_64
-muro-0.22.8-linux-x86_64
-muro-0.22.8-linux-aarch64
+muro-0.22.9-macos-aarch64
+muro-0.22.9-macos-x86_64
+muro-0.22.9-linux-x86_64
+muro-0.22.9-linux-aarch64
 ```
 
 The Linux binaries are built against musl, so one file runs on glibc and on Alpine. The asset name does not contain `musl`.
@@ -25,17 +25,19 @@ The Linux binaries are built against musl, so one file runs on glibc and on Alpi
 [mise](https://mise.jdx.dev/) installs the asset for the host:
 
 ```
-mise use -g github:murolang/muro@0.22.8
+mise use -g github:murolang/muro@0.22.9
 ```
 
 If mise reports `No versions found` or a 404 from `mise-versions.jdx.dev`, its version mirror does not list the release yet. Turn the mirror off and ask GitHub directly:
 
 ```
 mise settings set use_versions_host false
-mise use -g github:murolang/muro@0.22.8
+mise use -g github:murolang/muro@0.22.9
 ```
 
-`mise install muro` from the mise registry follows once the assets exist. A tag `v*` builds the four files, then smokes the Linux binary in a container with no Elixir and no Erlang. The assets are attached to the GitHub release only after that smoke succeeds. A failed smoke publishes nothing. The Hex package's dependencies are unchanged. Burrito builds the executable and is not a runtime dependency of the package.
+`mise install muro` from the mise registry follows once the assets exist. When a merge lands on main, the Publish workflow waits for the Elixir CI job on that commit, then publishes that `mix.exs` version to Hex if it is not already there, and pushes the annotated tag `vX.Y.Z` if it is missing. It does not wait for Agda or muro_visor. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. When this commit published the version or created the tag, the Release workflow builds the four files, smokes the Linux binary in a container with no Elixir and no Erlang, and attaches the assets to the GitHub release only after that smoke succeeds. A failed smoke publishes no binaries. The Hex package is already on Hex by then, and its dependencies are unchanged. Burrito builds the executable and is not a runtime dependency of the package.
+
+The first publish of a version needs the repository secret `HEX_API_KEY`. Generate a key with `mix hex.user key generate --key-name muro-ci --permission api:write` and add it as `HEX_API_KEY` on murolang/muro. A missing secret fails the publish job with a clear error and does not print the key. `muro_visor` (`ui/`) is not published this way: Hex stages that package, and it still needs 2FA. Pushing a `v*` tag, or running the Release workflow by hand, still rebuilds the binaries for an existing tag.
 
 ```
 muro --version
@@ -86,7 +88,7 @@ muro.toml and [package.metadata.muro] in Cargo.toml both define a manifest
 Three or more end with `all define a manifest`.
 
 ```toml
-muro = "0.22.8"
+muro = "0.22.9"
 fuel = 2000          # optional
 backend = "rust"     # optional default for [[modules]]
 

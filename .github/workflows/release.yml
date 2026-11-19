@@ -15,6 +15,12 @@ on:
         required: false
         type: boolean
         default: false
+  workflow_call:
+    inputs:
+      tag:
+        description: Existing tag to build and attach to the GitHub release
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -22,12 +28,14 @@ permissions:
 jobs:
   release:
     name: Self-contained binaries
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.CI_RUNNER }}
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
+          # workflow_call keeps the caller's event_name (push), so key off
+          # inputs.tag. A tag push has no input and uses github.sha.
+          ref: ${{ inputs.tag || github.sha }}
 
       - name: Read the package version
         id: version
@@ -35,20 +43,22 @@ jobs:
           set -euo pipefail
           version=$(sed -n 's/^[[:space:]]*version: "\([^"]*\)".*/\1/p' mix.exs | head -1)
           test -n "$version"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z]+)*$'; then
+            echo "::error::invalid mix.exs version ${version}"
+            exit 1
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "package version ${version}"
 
       - name: Require the tag to match mix.exs
         if: github.event_name != 'pull_request'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag="${{ inputs.tag }}"
-          else
-            tag="${{ github.ref_name }}"
-          fi
-          tag="${tag#refs/tags/}"
+          version="$VERSION"
+          tag="${TAG#refs/tags/}"
           expected="v${version}"
           if [ "$tag" != "$expected" ]; then
             echo "::error::tag ${tag} does not match mix.exs version ${version} (expected ${expected})"
@@ -81,9 +91,11 @@ jobs:
         run: MIX_ENV=burrito mix release
 
       - name: Name the assets
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
+          version="$VERSION"
           mkdir -p dist
           name_one() {
             src="$1"
@@ -98,11 +110,18 @@ jobs:
           name_one burrito_out/muro_linux_x86_64 linux-x86_64
           name_one burrito_out/muro_linux_aarch64 linux-aarch64
 
+      # On a hand rebuild, use the smoke scripts from the commit that
+      # dispatched the workflow. A tag push and a Publish workflow_call
+      # keep the scripts already in the checked-out tag.
       - name: Load the smoke scripts from the workflow commit
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          git fetch --depth=1 origin "${{ github.ref }}"
-          git checkout "${{ github.sha }}" -- scripts/release-linux-smoke.sh scripts/release-std-smoke.sh
+          git fetch --depth=1 origin "$WORKFLOW_REF"
+          git checkout "$WORKFLOW_SHA" -- scripts/release-linux-smoke.sh scripts/release-std-smoke.sh
 
       - name: Smoke the matching Linux binary
         run: bash scripts/release-linux-smoke.sh dist
@@ -136,9 +155,10 @@ jobs:
         if: ${{ github.event_name != 'pull_request' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
+          version="$VERSION"
           test -n "$version"
           tag="v${version}"
           if ! gh release view "$tag" >/dev/null 2>&1; then
