@@ -14,6 +14,26 @@ The tests call a Python module the host names. The default is the file stem (`ro
 
 - Version 0.22.4.
 
+## 0.22.1
+
+`--backend fsm` emits one dispatcher per keyed family, beside the session machines. `new/0` starts it. `arrive/4` takes the state, the key, the constructor, and the creation index, and returns `{:open, id, state}` or `{:held, id, state}`. `resolved/2` returns the instances that opening releases. `check_trace/1` replays a list of those steps. An unknown id is an error and does not raise.
+
+A signal stays held while an earlier arrived instance of its key is unresolved. An init is not held. Instances of a key need not arrive in creation order. The key is the workflow, compared with `==`, and a dispatcher keyed that way holds slightly more across runs of one workflow. The session machines are unchanged. Elixir, C, Rust, Zig, JavaScript, assembly, OTP, `--node`, and ExUnit still omit the family. A meeting marked `may fail` is still refused by C, Rust, Zig, JavaScript, assembly, `--node`, and ExUnit.
+
+The dispatcher is generated code. On the fixed script, an accepted sequence is checked against the family graph. That check is not an Agda proof. The family counts are unchanged.
+
+`resolved` drops the instance. The state keeps the live instances of each key, and the id of a live instance records its key. A call fetches that key. A repeat of a live instance, the same key and creation index while it is open or held, is an error. A repeat of a forgotten instance is not caught. `resolved` of a forgotten id returns `{:error, {:unknown, id}}`.
+
+Each end of the meeting has `finish/3` and `finish/4`. One call takes that session to its end and resolves the instance, and returns what `resolved` returns. `check_trace/1` also replays that end's sends, receives, and `down`. It reports an instance when every stepped party of that id has reached `done` and the instance was never resolved. One party still in the meeting is not that report. These checks are the emitted code and the family graph. They are not an Agda proof.
+
+### Manual
+
+- State machines, Emit, Temporal, Limits, and Examples: the family dispatcher drops a resolved instance, and `finish` ties the session end to that call.
+
+### Package
+
+- Version 0.22.1.
+
 ## 0.22.0
 
 Emitted Elixir carries a `Nat` as a non-negative integer. It was `0` and `{:suc, n}`, so a run that took a large number built and walked one tuple per unit: `plus 1000000 3` allocated a million tuples, and the state machine refused a nat above 100_000 for a run it called. A closed numeral is that integer literal. `suc` adds one. A `match` on `0` and `suc` is a `case` on `0` and on a positive integer, and the `suc` arm rebinds the predecessor as the integer minus one. A negative integer, a float, or any other term raises `CaseClauseError`, as `{:suc, _}` did not match before. A recursive run that is not a library operation still takes one call per unit of the value it recurses on. Nat stays Peano in the book. The checker, the proofs, and every other backend are unchanged.

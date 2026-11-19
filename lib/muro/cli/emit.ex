@@ -22,7 +22,7 @@ defmodule Muro.CLI.Emit do
           "js      <stem>.mjs and <stem>.d.ts beside the book",
           "asm     <stem>.s, Thumb for Cortex-M0",
           "otp     <stem>_otp.ex, a GenServer per process",
-          "fsm     one state-machine module on standard output",
+          "fsm     one state machine per session, plus a family dispatcher",
           "exunit  one ExUnit module for the closed equations",
           "pytest  one pytest module for the closed equations",
           "mbi     <stem>.mbi beside the book, exactly one graded run"
@@ -66,7 +66,7 @@ defmodule Muro.CLI.Emit do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro emit reads one .muro file, checks it, and emits run definitions. Spec and evidence are omitted. elixir, the default, prints one module on standard output and writes no file. c, rust, zig, and asm write a file beside the book and print that path. js writes <stem>.mjs and <stem>.d.ts beside the book and prints both paths. The executable does not load a Mix project, so c writes the .h and the .c only and does not build a NIF. otp writes a GenServer for each conforming process. fsm prints a state machine and leaves the transport with the host. exunit prints one ExUnit module for the book's closed equations. pytest prints one pytest module for those same equations. mbi writes <stem>.mbi beside the book only when exactly one exported run erases, and prints that path. The binder grades stay. A refusal writes nothing and prints no path. An image already beside the book stays byte for byte, including when the book has no exported run and when it has more than one. muro-beam loads that file. It is not Erlang BEAM bytecode. A definition, data, a pair, a word, or a stream is refused. Zero exported runs, and more than one, are refused. muro-beam checks the image again. Writing the file is not that check. Nothing here is a proof that the host translation is the book. The proof stops at the run image.
+      muro emit reads one .muro file, checks it, and emits run definitions. Spec and evidence are omitted. elixir, the default, prints one module on standard output and writes no file. c, rust, zig, and asm write a file beside the book and print that path. js writes <stem>.mjs and <stem>.d.ts beside the book and prints both paths. The executable does not load a Mix project, so c writes the .h and the .c only and does not build a NIF. otp writes a GenServer for each conforming process. fsm prints a state machine and, for a keyed family that checks, one dispatcher, and leaves the transport with the host. exunit prints one ExUnit module for the book's closed equations. pytest prints one pytest module for those same equations. mbi writes <stem>.mbi beside the book only when exactly one exported run erases, and prints that path. The binder grades stay. A refusal writes nothing and prints no path. An image already beside the book stays byte for byte, including when the book has no exported run and when it has more than one. muro-beam loads that file. It is not Erlang BEAM bytecode. A definition, data, a pair, a word, or a stream is refused. Zero exported runs, and more than one, are refused. muro-beam checks the image again. Writing the file is not that check. Nothing here is a proof that the host translation is the book. The proof stops at the run image.
       """),
       Muro.CLI.Text.section(
         "USAGE",

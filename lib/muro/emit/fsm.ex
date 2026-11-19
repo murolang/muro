@@ -9,6 +9,16 @@ defmodule Muro.Emit.Fsm do
   that does, and checks the reason the host supplies. Where the protocol
   has no failure arm, `down` is an error. A book that does not mark a
   party emits no `down`.
+
+  A keyed family that checks is one more child. `new/0` starts it.
+  `arrive/4` takes the key, the constructor, and the creation index.
+  `resolved/2` drops that open instance and lists the instances that
+  opening releases. The state keeps the live instances of each key,
+  and the id of a live instance records its key. `check_trace/1`
+  replays those steps and the session steps of an instance. Each end
+  of the meeting has `finish/3` and `finish/4`: one call takes that
+  session to `done` and resolves the instance. The child does not run
+  the meeting. This child is generated code. It is not an Agda proof.
   """
 
   alias Muro.{Ast, Emit, Session}
@@ -82,7 +92,11 @@ defmodule Muro.Emit.Fsm do
     end
   end
 
-  defp plan(book, path, opts), do: plan_sessions(book, path, opts)
+  defp plan(book, path, opts) do
+    with {:ok, st} <- plan_sessions(book, path, opts) do
+      {:ok, Map.put(st, :families, ready_families(book))}
+    end
+  end
 
   defp plan_sessions(book, path, opts) do
     label = book_label(path, opts)
@@ -127,6 +141,9 @@ defmodule Muro.Emit.Fsm do
         }
       end)
 
+    fams = family_mods(st)
+    ends = session_dispatchers(st)
+
     clauses =
       Enum.flat_map(st.sessions, fn sess ->
         camel = Map.fetch!(aliases, sess.name)
@@ -148,6 +165,7 @@ defmodule Muro.Emit.Fsm do
           "muro_fsm_step(#{inspect(key)}, :recv, state, value)"
         ] ++
           down_clauses(book, key) ++
+          finish_heads(Map.get(ends, key)) ++
           [
             "muro_fsm_done?(#{inspect(key)}, state)",
             "muro_fsm_expected(#{inspect(key)}, state)",
@@ -156,13 +174,25 @@ defmodule Muro.Emit.Fsm do
       end)
 
     %{
-      names: [inspect(module) | Map.values(aliases)] |> Enum.uniq(),
+      names:
+        [inspect(module) | Map.values(aliases)]
+        |> Enum.uniq()
+        |> Kernel.++(Enum.map(fams, &elem(&1, 1))),
       elixir: Emit.elixir_names(book),
       signatures: signatures,
       layouts:
         Enum.map(signatures, &%{name: &1.source, layout: &1.layout, params: &1.param_layouts}),
-      clauses: clauses
+      clauses: clauses ++ family_clauses(fams)
     }
+  end
+
+  defp finish_heads(nil), do: []
+
+  defp finish_heads(_cams) do
+    [
+      "def finish(session_state, family_state, id)",
+      "def finish(session_state, step, family_state, id)"
+    ]
   end
 
   defp down_clauses(book, key) do
@@ -1182,6 +1212,18 @@ defmodule Muro.Emit.Fsm do
       #{indent(children(module, st), 2)}
       end
       """
+
+    text =
+      case family_source(module, st) do
+        "" ->
+          text
+
+        disp ->
+          trimmed = String.trim_trailing(text)
+
+          String.replace_suffix(trimmed, "end", String.trim_trailing(disp) <> "\nend") <>
+            "\n"
+      end
 
     text
     |> gate(Enum.any?(book, &Muro.Fail.marked?/1))
@@ -2915,23 +2957,24 @@ defmodule Muro.Emit.Fsm do
   defp children(module, st) do
     parent = inspect(module)
     aliases = Emit.elixir_modules(Enum.map(st.sessions, & &1.name))
+    ends = session_dispatchers(st)
 
     mods =
       Enum.map(st.sessions, fn sess ->
         camel = Map.fetch!(aliases, sess.name)
         entry = Map.fetch!(st.opened, sess.name)
-        child(parent, camel, sess.name, entry.params)
+        child(parent, camel, sess.name, entry.params, Map.get(ends, sess.name))
       end)
 
     Enum.join(mods, "\n\n")
   end
 
-  defp child(parent, camel, key, params) do
+  defp child(parent, camel, key, params, finish) do
     """
     defmodule #{camel} do
       @moduledoc \"\"\"
       One end of session `#{key}`. The state is opaque: thread it, compare it
-      with ==, and do not depend on its shape.
+      with ==, and do not depend on its shape.#{finish_blurb(finish)}
       \"\"\"
 
       #{init_fun(parent, key, params)}
@@ -2959,6 +3002,8 @@ defmodule Muro.Emit.Fsm do
       def expected(state), do: #{parent}.muro_fsm_expected(#{inspect(key)}, state)
 
       #{trace_fun(parent, key, params)}
+
+      #{finish_src(parent, key, finish)}
     end
     """
   end
@@ -3036,5 +3081,633 @@ defmodule Muro.Emit.Fsm do
       "" -> ""
       line -> pad <> line
     end)
+  end
+
+  # A family that checks becomes one pure child. Resolved instances
+  # leave. Live instances sit under their key, and a live id records
+  # that key. `finish` on a meeting end resolves when that session is
+  # at `done`. `check_trace` replays the dispatcher and those session
+  # steps. An id the child did not return is an error tuple, and the
+  # call does not raise.
+  defp ready_families(book) do
+    book
+    |> Enum.filter(&(Map.get(&1, :kind) == :family))
+    |> Enum.filter(&family_ready?(book, &1))
+  end
+
+  defp family_ready?(book, family) do
+    Muro.Family.check_decl(book, family, nil) == :ok
+  end
+
+  defp family_mods(st) do
+    used =
+      st.sessions
+      |> Enum.map(& &1.name)
+      |> Emit.elixir_modules()
+      |> Map.values()
+      |> MapSet.new()
+
+    {mods, _} =
+      Enum.map_reduce(st.families, used, fn fam, used ->
+        {mod, used} = Muro.Emit.Name.claim(Emit.elixir_alias(fam.name), used)
+        {{fam, mod}, used}
+      end)
+
+    mods
+  end
+
+  defp family_clauses(fams) do
+    Enum.flat_map(fams, fn {_fam, camel} ->
+      [
+        "defmodule #{camel} do",
+        "def new",
+        "def arrive(state, key, kind, index)",
+        "def resolved(state, id)",
+        "def check_trace(trace)"
+      ]
+    end)
+  end
+
+  defp finish_blurb(nil), do: ""
+
+  defp finish_blurb(_cams) do
+    " `finish/3` and `finish/4` take this end to `done` and resolve the family instance."
+  end
+
+  defp finish_src(_parent, _key, nil), do: ""
+
+  defp finish_src(parent, key, camels) do
+    resolve = finish_resolve(parent, camels)
+    shown = inspect(key)
+
+    """
+    def finish(session_state, family_state, id) do
+      case ended(session_state) do
+        {:ok, _} -> #{resolve}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+
+    def finish(session_state, step, family_state, id) do
+      case land(session_state, step) do
+        {:ok, _} -> #{resolve}
+        {:error, reason} -> {:error, reason}
+      end
+    end
+
+    defp ended(session_state) do
+      if #{parent}.muro_fsm_done?(#{shown}, session_state) do
+        {:ok, session_state}
+      else
+        {:error, {:unfinished, #{parent}.muro_fsm_expected(#{shown}, session_state)}}
+      end
+    end
+
+    defp land(session_state, {:send, value}) do
+      landed(#{parent}.muro_fsm_step(#{shown}, :send, session_state, value))
+    end
+
+    defp land(session_state, {:recv, value}) do
+      landed(#{parent}.muro_fsm_step(#{shown}, :recv, session_state, value))
+    end
+
+    #||fail
+    defp land(session_state, :down) do
+      landed(#{parent}.muro_fsm_down(#{shown}, session_state, nil))
+    end
+
+    defp land(session_state, {:down, reason}) do
+      landed(#{parent}.muro_fsm_down(#{shown}, session_state, {:reason, reason}))
+    end
+
+    #||/fail
+    defp land(_session_state, other), do: {:error, {:step, other}}
+
+    defp landed({:ok, next}) do
+      if #{parent}.muro_fsm_done?(#{shown}, next) do
+        {:ok, next}
+      else
+        {:error, {:unfinished, #{parent}.muro_fsm_expected(#{shown}, next)}}
+      end
+    end
+
+    defp landed({:error, reason}), do: {:error, reason}
+    defp landed(other), do: {:error, {:session, other}}
+    """
+  end
+
+  defp finish_resolve(parent, [camel]) do
+    "#{parent}.#{camel}.resolved(family_state, id)"
+  end
+
+  defp finish_resolve(_parent, camels) do
+    names = Enum.map_join(camels, ", ", &inspect(String.to_atom(&1)))
+
+    """
+    (
+            _ = {family_state, id}
+            {:error, {:family, [#{names}]}}
+          )
+    """
+    |> String.trim()
+  end
+
+  defp family_source(module, st) do
+    parent = inspect(module)
+
+    st
+    |> family_mods()
+    |> Enum.map_join("\n\n", fn {fam, camel} ->
+      dispatcher(fam, camel, parent, family_parties(st, fam))
+    end)
+  end
+
+  defp session_dispatchers(st) do
+    Enum.reduce(family_mods(st), %{}, fn {fam, camel}, acc ->
+      Enum.reduce(family_parties(st, fam), acc, fn {_atom, session, _arity}, acc ->
+        Map.update(acc, session, [camel], fn cams ->
+          if camel in cams, do: cams, else: cams ++ [camel]
+        end)
+      end)
+    end)
+  end
+
+  defp family_parties(st, %{meeting: meeting}) do
+    case Enum.find(st.book, &match?(%{kind: :meet, name: ^meeting}, &1)) do
+      %{left: left, right: right} ->
+        [left, right]
+        |> Enum.flat_map(&party_of(st, &1))
+        |> Enum.uniq_by(&elem(&1, 0))
+
+      _ ->
+        []
+    end
+  end
+
+  defp party_of(st, conform) when is_binary(conform) do
+    case Enum.find(st.book, &match?(%{kind: :conform, name: ^conform}, &1)) do
+      %{session: session} ->
+        case session_name(session) do
+          nil ->
+            []
+
+          name ->
+            case st.opened[name] do
+              %{params: params} when is_list(params) ->
+                [{String.to_atom(Emit.elixir_atom_name(conform)), name, length(params)}]
+
+              _ ->
+                []
+            end
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp party_of(_st, _conform), do: []
+
+  defp session_name(name) when is_binary(name), do: name
+  defp session_name({:sess, name, _args}) when is_binary(name), do: name
+  defp session_name(_session), do: nil
+
+  defp party_clauses(parties) do
+    lines =
+      Enum.map(parties, fn {atom, session, arity} ->
+        "defp party(#{inspect(atom)}), do: {#{inspect(session)}, #{arity}}"
+      end)
+
+    Enum.join(lines ++ ["defp party(_party), do: :error"], "\n")
+  end
+
+  defp dispatcher(family, camel, parent, parties) do
+    rules = Enum.map_join(family.rules, "\n", &rule_clause/1)
+    clauses = party_clauses(parties)
+
+    """
+    defmodule #{camel} do
+      @moduledoc \"\"\"
+      Dispatcher for family `#{family.name}`. The state is opaque: thread it
+      and compare it with ==. The key is compared with ==. A call fetches
+      that key and does not walk the other keys. `arrive` takes the creation
+      index. A kind that is never held opens on arrival. A kind held while
+      an earlier instance is unresolved stays held until every earlier
+      arrived instance of its key is resolved. An instance that has not
+      arrived is not unresolved. `resolved` drops the instance and lists the
+      instances this resolution opens. The state keeps the live instances.
+      A repeat of a live instance is an error. A repeat of a forgotten
+      instance is a new instance. A forgotten id is `{:error, {:unknown, id}}`.
+      An unknown id is an error and does not raise. `check_trace` replays
+      arrivals, resolutions, and the session steps of an open instance.
+      \"\"\"
+
+      def new, do: %{n: 0, by: %{}, id: %{}}
+
+      def arrive(state, key, kind, index) do
+        with {:ok, st} <- read(state),
+             :ok <- index_ok(index),
+             {:ok, hold} <- hold_of(kind),
+             {:ok, rows} <- rows_of(st, key),
+             :ok <- fresh(rows, key, index, st),
+             {:ok, phase} <- phase_of(rows, hold, index, st) do
+          id = st.n
+          rows = Map.put(rows, index, {id, kind, phase})
+          next = %{n: id + 1, by: Map.put(st.by, key, rows), id: Map.put(st.id, id, {key, index})}
+          {phase, id, next}
+        else
+          {:error, reason} -> {:error, reason}
+        end
+      end
+
+      def resolved(state, id) do
+        with {:ok, st} <- read(state),
+             {:ok, key, index} <- locate(st, id),
+             {:ok, rows} <- rows_of(st, key),
+             {:ok, _kind} <- open_row(rows, index, id, st),
+             {:ok, released, rows} <- take_released(Map.delete(rows, index), key, st) do
+          by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)
+          {:ok, released, %{st | by: by, id: Map.delete(st.id, id)}}
+        else
+          {:error, reason} -> {:error, reason}
+        end
+      end
+
+      def check_trace(trace) when is_list(trace), do: walk(new(), %{}, trace, 0)
+      def check_trace(other), do: {:error, {:trace, other}}
+
+      #{rules}
+      defp rule(_kind), do: :error
+
+      defp read(%{n: n, by: by, id: ids} = st)
+           when is_integer(n) and n >= 0 and is_map(by) and is_map(ids) do
+        {:ok, st}
+      end
+
+      defp read(other), do: {:error, {:state, other}}
+
+      defp index_ok(index) when is_integer(index) and index >= 0, do: :ok
+      defp index_ok(index), do: {:error, {:index, index}}
+
+      defp hold_of(kind) do
+        case rule(kind) do
+          :error -> {:error, {:kind, kind}}
+          hold -> {:ok, hold}
+        end
+      end
+
+      defp rows_of(st, key) do
+        case Map.fetch(st.by, key) do
+          :error -> {:ok, %{}}
+          {:ok, rows} when is_map(rows) -> {:ok, rows}
+          {:ok, _} -> {:error, {:state, st}}
+        end
+      end
+
+      defp fresh(rows, key, index, st) do
+        case Map.fetch(rows, index) do
+          :error ->
+            :ok
+
+          {:ok, {id, kind, phase}}
+          when is_integer(id) and id >= 0 and is_atom(kind) and phase in [:open, :held] ->
+            {:error, {:duplicate, key, index}}
+
+          {:ok, _} ->
+            {:error, {:state, st}}
+        end
+      end
+
+      #{phase_bodies(family)}
+
+      defp locate(st, id) do
+        case Map.fetch(st.id, id) do
+          {:ok, {key, index}} when is_integer(index) and index >= 0 -> {:ok, key, index}
+          {:ok, _} -> {:error, {:state, st}}
+          :error -> {:error, {:unknown, id}}
+        end
+      end
+
+      defp open_row(rows, index, id, st) do
+        case Map.fetch(rows, index) do
+          {:ok, {^id, kind, :open}} when is_atom(kind) -> {:ok, kind}
+          {:ok, {^id, kind, :held}} when is_atom(kind) -> {:error, {:held, id}}
+          _ -> {:error, {:state, st}}
+        end
+      end
+
+      defp take_released(rows, key, st) do
+        case scan(rows) do
+          :bad ->
+            {:error, {:state, st}}
+
+          :ok ->
+            case held_rows(rows) do
+              :bad ->
+                {:error, {:state, st}}
+
+              held ->
+                released =
+                  held
+                  |> Enum.filter(fn {ix, _id, _kind} -> not blocked?(rows, ix) end)
+                  |> Enum.sort_by(fn {ix, id, _kind} -> {ix, id} end)
+
+                rows =
+                  Enum.reduce(released, rows, fn {ix, id, kind}, rows ->
+                    Map.put(rows, ix, {id, kind, :open})
+                  end)
+
+                list = Enum.map(released, fn {_ix, id, kind} -> {id, key, kind} end)
+                {:ok, list, rows}
+            end
+        end
+      end
+
+      #{held_body(family)}
+
+      defp scan(rows) do
+        if Enum.all?(rows, &row_ok?/1), do: :ok, else: :bad
+      end
+
+      defp row_ok?({ix, {id, kind, phase}})
+           when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) and
+                  phase in [:open, :held],
+           do: true
+
+      defp row_ok?(_row), do: false
+
+      defp blocked?(rows, index) do
+        Enum.any?(rows, fn {ix, {_id, _kind, phase}} -> ix < index and phase in [:open, :held] end)
+      end
+
+      defp walk(disp, seen, [], _i), do: leaked(disp, seen)
+
+      defp walk(disp, seen, [{:arrive, key, kind, index} | rest], i) do
+        case arrive(disp, key, kind, index) do
+          {:error, reason} -> {:error, {i, reason}}
+          {_phase, _id, disp} -> walk(disp, seen, rest, i + 1)
+        end
+      end
+
+      defp walk(disp, seen, [{:resolved, id} | rest], i) do
+        case resolve_step(disp, seen, id) do
+          {:ok, disp, seen} -> walk(disp, seen, rest, i + 1)
+          {:error, reason} -> {:error, {i, reason}}
+        end
+      end
+
+      defp walk(disp, seen, [{party, id, action} | rest], i) when is_atom(party) do
+        case live(disp, id) do
+          {:error, reason} ->
+            {:error, {i, reason}}
+
+          {:ok, :held, _key, _kind} ->
+            {:error, {i, {:held, id}}}
+
+          {:ok, :open, _key, _kind} ->
+            case step_end(seen, party, id, action) do
+              {:ok, sess} -> walk(disp, Map.put(seen, {id, party}, sess), rest, i + 1)
+              {:error, reason} -> {:error, {i, reason}}
+            end
+        end
+      end
+
+      defp walk(_disp, _seen, [other | _rest], i), do: {:error, {i, {:step, other}}}
+
+      defp resolve_step(disp, seen, id) do
+        sessions = sessions_of(seen, id)
+
+        cond do
+          sessions == [] ->
+            commit(disp, seen, id)
+
+          settled?(sessions) ->
+            commit(disp, drop_id(seen, id), id)
+
+          true ->
+            {:error, {:unfinished, id}}
+        end
+      end
+
+      defp sessions_of(seen, id) do
+        for {{^id, _party}, sess} <- seen, do: sess
+      end
+
+      defp settled?(sessions), do: sessions != [] and Enum.all?(sessions, &at_done?/1)
+
+      defp commit(disp, seen, id) do
+        case resolved(disp, id) do
+          {:ok, _released, disp} -> {:ok, disp, seen}
+          {:error, reason} -> {:error, reason}
+        end
+      end
+
+      defp drop_id(seen, id) do
+        Map.reject(seen, fn {{i, _party}, _sess} -> i == id end)
+      end
+
+      defp step_end(seen, party, id, action) do
+        case party(party) do
+          :error ->
+            {:error, {:party, party}}
+
+          {session, arity} ->
+            prev = Map.get(seen, {id, party})
+
+            cond do
+              is_nil(prev) and arity != 0 ->
+                {:error, {:session_args, party}}
+
+              true ->
+                state =
+                  case prev do
+                    nil -> #{parent}.muro_fsm_init(session, [])
+                    {_session, stored} -> stored
+                  end
+
+                case apply_end(session, state, action) do
+                  {:ok, next} -> {:ok, {session, next}}
+                  {:error, reason} -> {:error, reason}
+                end
+            end
+        end
+      end
+
+      defp apply_end(session, state, {:send, value}) do
+        stepped(#{parent}.muro_fsm_step(session, :send, state, value))
+      end
+
+      defp apply_end(session, state, {:recv, value}) do
+        stepped(#{parent}.muro_fsm_step(session, :recv, state, value))
+      end
+
+      #||fail
+      defp apply_end(session, state, :down) do
+        stepped(#{parent}.muro_fsm_down(session, state, nil))
+      end
+
+      defp apply_end(session, state, {:down, reason}) do
+        stepped(#{parent}.muro_fsm_down(session, state, {:reason, reason}))
+      end
+
+      #||/fail
+      defp apply_end(_session, _state, other), do: {:error, {:step, other}}
+
+      defp stepped({:ok, next}), do: {:ok, next}
+      defp stepped({:error, reason}), do: {:error, reason}
+      defp stepped(other), do: {:error, {:session, other}}
+
+      defp at_done?({session, state}), do: #{parent}.muro_fsm_done?(session, state)
+
+      defp live(disp, id) do
+        case Map.fetch(disp.id, id) do
+          {:ok, {key, index}} when is_integer(index) and index >= 0 ->
+            case Map.fetch(disp.by, key) do
+              {:ok, rows} when is_map(rows) ->
+                case Map.fetch(rows, index) do
+                  {:ok, {^id, kind, phase}} when is_atom(kind) and phase in [:open, :held] ->
+                    {:ok, phase, key, kind}
+
+                  _ ->
+                    {:error, {:state, disp}}
+                end
+
+              _ ->
+                {:error, {:state, disp}}
+            end
+
+          {:ok, _} ->
+            {:error, {:state, disp}}
+
+          :error ->
+            {:error, {:unknown, id}}
+        end
+      end
+
+      defp leaked(disp, seen) do
+        ids =
+          seen
+          |> Enum.map(fn {{id, _party}, _sess} -> id end)
+          |> Enum.uniq()
+          |> Enum.filter(fn id ->
+            settled?(sessions_of(seen, id)) and match?({:ok, _phase, _key, _kind}, live(disp, id))
+          end)
+          |> Enum.sort()
+
+        case ids do
+          [] ->
+            :ok
+
+          [id | _] ->
+            case live(disp, id) do
+              {:ok, _phase, key, kind} -> {:error, {:unresolved, id, key, kind}}
+              {:error, reason} -> {:error, reason}
+            end
+        end
+      end
+
+      #{clauses}
+    end
+    """
+  end
+
+  # `hold_of` only passes a hold this family's `rule` returns. A clause for
+  # any other hold is unused, and Elixir 1.20 rejects the generated module.
+  defp phase_bodies(family) do
+    holds = family.rules |> Enum.map(& &1.hold) |> Enum.uniq()
+
+    parts =
+      Enum.flat_map(holds, fn
+        :never ->
+          ["defp phase_of(_rows, :never, _index, _st), do: {:ok, :open}"]
+
+        :earlier ->
+          [earlier_phase(), earlier_scan()]
+
+        hold ->
+          ["defp phase_of(_rows, #{inspect(hold)}, _index, st), do: {:error, {:state, st}}"]
+      end)
+
+    case parts do
+      [] -> "defp phase_of(_rows, _hold, _index, st), do: {:error, {:state, st}}"
+      _ -> Enum.join(parts, "\n\n")
+    end
+  end
+
+  # A heredoc here would be scanned as a parent helper. `earlier?` is a
+  # child function, and a `?` name is not a run.
+  defp earlier_phase do
+    Enum.join(
+      [
+        "defp phase_of(rows, :earlier, index, st) do",
+        "  case earlier?(rows, index) do",
+        "    :clear -> {:ok, :open}",
+        "    :blocked -> {:ok, :held}",
+        "    :bad -> {:error, {:state, st}}",
+        "  end",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  defp earlier_scan do
+    Enum.join(
+      [
+        "defp earlier?(rows, index) do",
+        "  Enum.reduce_while(rows, :clear, fn entry, acc ->",
+        "    case entry do",
+        "      {ix, {id, kind, phase}}",
+        "      when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) and",
+        "             phase in [:open, :held] ->",
+        "        if ix < index, do: {:cont, :blocked}, else: {:cont, acc}",
+        "",
+        "      _ ->",
+        "        {:halt, :bad}",
+        "    end",
+        "  end)",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  defp held_body(family) do
+    if Enum.any?(family.rules, &(&1.hold == :earlier)) do
+      """
+      defp held_rows(rows) do
+        Enum.reduce_while(rows, [], fn
+          {ix, {id, kind, :held}}, acc ->
+            if rule(kind) == :earlier, do: {:cont, [{ix, id, kind} | acc]}, else: {:halt, :bad}
+
+          {_ix, {_id, _kind, :open}}, acc ->
+            {:cont, acc}
+
+          _, _ ->
+            {:halt, :bad}
+        end)
+      end
+      """
+    else
+      """
+      defp held_rows(rows) do
+        Enum.reduce_while(rows, [], fn
+          {_ix, {_id, _kind, :held}}, _acc ->
+            {:halt, :bad}
+
+          {_ix, {_id, _kind, :open}}, acc ->
+            {:cont, acc}
+
+          _, _ ->
+            {:halt, :bad}
+        end)
+      end
+      """
+    end
+  end
+
+  defp rule_clause(%{ctor: ctor, hold: hold}) do
+    atom = String.to_atom(Emit.elixir_atom_name(ctor))
+    "defp rule(#{inspect(atom)}), do: #{inspect(hold)}"
   end
 end

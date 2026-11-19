@@ -102,7 +102,7 @@ lib/muro/emit/equations.ex closed equations shared by the ExUnit and pytest suit
 lib/muro/emit/exunit.ex closed equations → one ExUnit module (`--backend exunit`, `kind: :exunit`)
 lib/muro/emit/pytest.ex closed equations → one pytest module (`--backend pytest`, `kind: :pytest`)
 lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a marked peer is monitored and a `:DOWN` that is not a halt takes the failure arm; a book with no mark emits the previous module (`--backend otp`)
-lib/muro/emit/fsm.ex    a session endpoint is a state machine; a marked book has `down/1` and `down/2` for a failure arm; a book with no mark emits no `down`; the transport stays with the host (`--backend fsm`)
+lib/muro/emit/fsm.ex    a session endpoint is a state machine; a marked book has `down/1` and `down/2` for a failure arm; a book with no mark emits no `down`; a keyed family that checks is a child with `new/0`, `arrive/4`, `resolved/2` (the instance leaves), and `check_trace/1` (arrivals, resolutions, and `{party, id, send|recv|down}`); each meeting end has `finish/3` and `finish/4`; the transport stays with the host (`--backend fsm`)
 lib/muro/emit/c_session.ex a session endpoint is a pure step written as C; the actions are the ones the state machine takes, init takes `uint64_t`, and `down` is not emitted (`--backend c`)
 lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
 lib/muro/emit/mbi.ex    exactly one exported run as an .mbi image (`--backend mbi`); muro-beam loads it; not a manifest target

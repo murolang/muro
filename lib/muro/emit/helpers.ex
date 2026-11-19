@@ -90,7 +90,7 @@ defmodule Muro.Emit.Helpers.Scan do
     not Regex.match?(~r/^[ \t]*defp? muro_fsm_/m, body) and
       (String.contains?(body, "defmodule \#{camel}") or
          String.contains?(body, "def unquote(:send)") or
-         Regex.match?(~r/^[ \t]*def (init|recv|expected|check_trace|done\?)\b/m, body))
+         Regex.match?(~r/^[ \t]*def (init|recv|expected|check_trace|done\?|finish)\b/m, body))
   end
 
   defp heredocs(src) do
