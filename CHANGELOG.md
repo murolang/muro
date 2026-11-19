@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.22.6
+
+A family formula can name the instances created before the one that is opening. `earlier_resolved k command` is every earlier instance of that key and that kind. `resolved k command` still counts the instance that is opening, so that atom cannot state that a command opens only once every earlier command of its key has resolved. `examples/keyed-commands.muro` states the property with `earlier_resolved`, and the command is held while an earlier one is unresolved. An instance that has not arrived does not count, and neither does one that arrives while this one is still running. Giving up counts as resolved. When nothing of that key and kind is running, the atom holds.
+
+`withdraw(state, id)` resolves a held instance without opening it, and returns the instances that this releases, the same shape as `resolved`. An open instance, one that has already left, and one the dispatcher has never returned cannot be withdrawn. `resolved` of an id that has left is still unknown. A later held instance of that key opens once the earlier ones are gone, the same as after a resolution. `check_trace` accepts `{:withdraw, id}` on the same rule.
+
+`held while any unresolved` holds an instance while any other instance of the same key is open. The instance is not held by itself, and another held instance does not hold it. The dispatcher opens at most one such instance of a key, the one with the least creation index. When that release also opens an instance held behind an earlier one, the instances held by any open one stay held. An older command that arrives while a newer one of the same key is running stays held. Under `held while earlier unresolved` that older command opens.
+
+The family graph for `examples/keyed-slots.muro` stays 171649 states and 729184 transitions. Withdrawing a held instance is a step the host takes. It is not an edge of the counted script, so a held signal is still opened by that script. `examples/keyed-commands.muro` holds its formula in 370 reachable states and 835 transitions. These checks are the family graph and the emitted dispatcher. They are not an Agda proof. `agda/Muro/Temporal.agda` is unchanged.
+
+### Manual
+
+- Grammar, Temporal, State machines, Limits, Examples, Emit, and Extending: `earlier_resolved`, withdrawing a held instance, and `held while any unresolved`.
+
+### Package
+
+- Version 0.22.6.
+
 ## 0.22.5
 
 `mix muro.fill path.muro --def name` writes a body for that definition. The definition starts as `?`. The search tries terms in order of size, up to `--bound` (default 8): variables in scope, constructors, applications of other names and of functions in scope, and a match on a binder. A term already tried at the same normal form is skipped, including a redex inside a match branch. It does not call the definition being filled. The checker decides. A run is kept only when the book's closed equations about that name still check. Evidence is kept when the type checks, and a spec is kept the same way. The written text is checked again, then a rename in the same directory puts it in place. Past the bound, the file is left unchanged and the command exits non-zero. `out of fuel` is not acceptance.

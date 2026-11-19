@@ -482,7 +482,20 @@ temporal no-starve : slots :=
   forall (k : key). (held k signal) leads_to (opened k signal)
 ```
 
-The same book with `signal never held` in place of `signal held while earlier unresolved` is refused: `a signal` opens while `a init` is still running. Deleting the rule outright is `no rule for signal`. The meeting may fail, so Elixir, C, Rust, Zig, JavaScript, assembly, and ExUnit refuse the book with `c:mayfail`, with or without the family. OTP emits the meeting and omits the family and the formula. The state machine emits the meeting and one dispatcher for the family, and omits the formula. `resolved` drops the instance. `Slots.finish` names that family and takes one end to `done`. `:resolve` drops the instance. `:rerun` keeps it, and the held signal stays held until a later `:resolve`. `ServerWait.finish` and `TaskWork.finish` do the same when this is the only family on that end, including `down` into the failure arm. The dispatcher's `check_trace` replays those steps with `arrive`, `resolved`, and `rerun`. See [Temporal](temporal.md#a-keyed-family) and [State machines](fsm.md#a-keyed-family).
+The same book with `signal never held` in place of `signal held while earlier unresolved` is refused: `a signal` opens while `a init` is still running. Deleting the rule outright is `no rule for signal`. The meeting may fail, so Elixir, C, Rust, Zig, JavaScript, assembly, and ExUnit refuse the book with `c:mayfail`, with or without the family. OTP emits the meeting and omits the family and the formula. The state machine emits the meeting and one dispatcher for the family, and omits the formula. `resolved` drops the instance. `Slots.finish` names that family and takes one end to `done`. `:resolve` drops the instance. `:rerun` keeps it, and the held signal stays held until a later `:resolve`. `ServerWait.finish` and `TaskWork.finish` do the same when this is the only family on that end, including `down` into the failure arm. The dispatcher's `check_trace` replays those steps with `arrive`, `resolved`, `rerun`, and `withdraw`. `withdraw` drops a held instance. That step is not an edge of the counted script, so the counts above stay. See [Temporal](temporal.md#a-keyed-family) and [State machines](fsm.md#a-keyed-family).
+
+## keyed-commands.muro
+
+One command at a time, stated on the instances created before the one opening.
+
+```
+family commands : slot per key of Command
+  command held while earlier unresolved
+temporal one-at-a-time : commands :=
+  forall (k : key). always ((opened k command) implies (earlier_resolved k command))
+```
+
+`resolved k command` would count the command that is opening, and that command is not resolved on that step, so the formula would be refused. `mix muro.check` prints `family commands: slot per key of Command`, then `temporal one-at-a-time: holds in 370 reachable states, 835 transitions`. The meeting does not mark a party, so the state machine, Elixir, C, Rust, Zig, JavaScript, assembly, and ExUnit emit it. The formula is omitted. `Commands.withdraw` drops a held command. `held while any unresolved` is the other hold: an older command that arrives while a newer one of the same key is open stays held, and the two do not run together. See [Temporal](temporal.md#a-keyed-family).
 
 ## place.muro
 

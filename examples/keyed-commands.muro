@@ -1,0 +1,27 @@
+-- One command at a time, stated on the instances that were created
+-- before the one opening. resolved would count that command too, and
+-- the command is not resolved on the step it opens.
+-- The command opens when no earlier arrived instance of its key is
+-- unresolved. An instance that has not arrived does not.
+
+data Command : Type where
+  command : Command
+
+data Report : Type where
+  ok : Report
+
+session task-work := send Report end
+session server-wait := recv Report end
+
+conform task : task-work := put ok done
+
+conform server : server-wait :=
+  get (r : Report) done
+
+meet slot : server with task buffer 1
+
+family commands : slot per key of Command
+  command held while earlier unresolved
+
+temporal one-at-a-time : commands :=
+  forall (k : key). always ((opened k command) implies (earlier_resolved k command))

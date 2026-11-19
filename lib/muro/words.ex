@@ -27,9 +27,10 @@ defmodule Muro.Words do
   # and the parser share the spelling, the way `buffer` is.
   @may_fail ~w(may fail)
   @temporal ~w(forall always eventually leads_to implies or and not true false inbox is empty full stopped dead has first second third st nd rd th)
-  # Keywords of `family name :` and of the atoms `opened`/`held`/`resolved`.
-  # The parser reserves them only in those forms.
-  @family ~w(per key of never held while earlier unresolved opened resolved)
+  # Keywords of `family name :`, of the hold rules, and of the atoms
+  # `opened`, `held`, `resolved`, and `earlier_resolved`. The parser
+  # reserves them only in those forms.
+  @family ~w(per key of never held while earlier unresolved any earlier_resolved opened resolved)
   @repr ~w(else boolean integer nil interned string list optional nullable tuple map_of map open)
   # Keywords only inside `prefix name :`. `start` is the position and
   # `pick` selects an arm. Classified here so the highlighter and the

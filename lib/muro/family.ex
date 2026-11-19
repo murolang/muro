@@ -230,7 +230,7 @@ defmodule Muro.Family do
   end
 
   defp walk_formula(_book, _data, _env, _other) do
-    {:error, "a family formula names opened, held, or resolved"}
+    {:error, "a family formula names opened, held, resolved, or earlier_resolved"}
   end
 
   defp walk_prop(_book, _data, _env, true), do: :ok
@@ -250,12 +250,13 @@ defmodule Muro.Family do
     with :ok <- walk_prop(book, data, env, p), do: walk_prop(book, data, env, q)
   end
 
-  defp walk_prop(book, data, env, {atom, key, kind}) when atom in [:opened, :held, :resolved] do
+  defp walk_prop(book, data, env, {atom, key, kind})
+       when atom in [:opened, :held, :resolved, :earlier_resolved] do
     with :ok <- expect_key(book, env, atom, key), do: expect_ctor(data, kind)
   end
 
   defp walk_prop(_book, _data, _env, _other) do
-    {:error, "a family formula names opened, held, or resolved"}
+    {:error, "a family formula names opened, held, resolved, or earlier_resolved"}
   end
 
   defp expect_key(book, env, atom, key) do

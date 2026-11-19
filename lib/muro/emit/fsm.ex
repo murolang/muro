@@ -2969,13 +2969,13 @@ defmodule Muro.Emit.Fsm do
       Enum.map(st.sessions, fn sess ->
         camel = Map.fetch!(aliases, sess.name)
         entry = Map.fetch!(st.opened, sess.name)
-        child(parent, camel, sess.name, entry.params, Map.get(ends, sess.name))
+        child(module, parent, camel, sess.name, entry.params, Map.get(ends, sess.name))
       end)
 
     Enum.join(mods, "\n\n")
   end
 
-  defp child(parent, camel, key, params, finish) do
+  defp child(module, parent, camel, key, params, finish) do
     """
     defmodule #{camel} do
       @moduledoc \"\"\"
@@ -3009,7 +3009,7 @@ defmodule Muro.Emit.Fsm do
 
       #{trace_fun(parent, key, params)}
 
-      #{finish_src(parent, key, finish)}
+      #{finish_src(module, parent, key, finish)}
     end
     """
   end
@@ -3151,9 +3151,9 @@ defmodule Muro.Emit.Fsm do
     " Where more than one family uses this end, `finish` returns `{:error, {:family, names, form}}` once the session is at `done` and does not resolve. `form` is `finish(family_state, id, session_state, step)` on the family child."
   end
 
-  defp finish_src(_parent, _key, nil), do: ""
+  defp finish_src(_module, _parent, _key, nil), do: ""
 
-  defp finish_src(parent, key, camels) do
+  defp finish_src(module, parent, key, camels) do
     shown = inspect(key)
 
     """
@@ -3193,7 +3193,7 @@ defmodule Muro.Emit.Fsm do
       {:error, {:outcome, outcome}}
     end
 
-    #{finish_commit(parent, camels)}
+    #{finish_commit(module, camels)}
     defp ended(session_state) do
       if #{parent}.muro_fsm_done?(#{shown}, session_state) do
         {:ok, session_state}
@@ -3235,14 +3235,18 @@ defmodule Muro.Emit.Fsm do
     """
   end
 
-  defp finish_commit(parent, [camel]) do
+  # `parent.Commands` is not a call when `parent` is not an alias
+  # (`:"Elixir.CSess.1".Commands` does not parse). The child atom does.
+  defp finish_commit(module, [camel]) do
+    child = inspect(Module.concat(module, camel))
+
     """
-    defp commit(family_state, id, :resolve), do: #{parent}.#{camel}.resolved(family_state, id)
-    defp commit(family_state, id, :rerun), do: #{parent}.#{camel}.retain(family_state, id)
+    defp commit(family_state, id, :resolve), do: #{child}.resolved(family_state, id)
+    defp commit(family_state, id, :rerun), do: #{child}.retain(family_state, id)
     """
   end
 
-  defp finish_commit(_parent, camels) do
+  defp finish_commit(_module, camels) do
     names = Enum.map_join(camels, ", ", &inspect(String.to_atom(&1)))
 
     """
@@ -3463,21 +3467,30 @@ defmodule Muro.Emit.Fsm do
       that key and does not walk the other keys. `arrive` takes the creation
       index. A kind that is never held opens on arrival. A kind held while
       an earlier instance is unresolved stays held until every earlier
-      arrived instance of its key is resolved. An instance that has not
-      arrived is not unresolved. `resolved` drops the instance and lists the
-      instances this resolution opens. The state keeps the live instances.
-      A repeat of a live instance is an error. A repeat of a forgotten
-      instance is a new instance. A forgotten id is `{:error, {:unknown, id}}`.
-      An unknown id is an error and does not raise. `finish` takes this
-      family's state, the id, and one end's session. `:resolve` drops the
-      instance. `:rerun` keeps the row and every held row of its key. It
-      reads that one row and does not walk the key. `check_trace` replays
-      arrivals, resolutions, reruns, and the session steps of an open
-      instance. A rerun clears that id's session, so the next step starts
-      again.
+      arrived instance of its key is resolved. A kind held while any other
+      instance of its key is open stays held until no other instance of that
+      key is open. The instance does not hold itself. A held instance is not
+      open, so it does not hold another. When several held instances could
+      open, the least creation index opens. An instance that has not
+      arrived is not unresolved. `resolved` drops an open instance and lists
+      the instances this resolution opens. `withdraw` drops a held instance
+      without opening it, and lists the instances that release does. An open
+      id is `{:error, {:opened, id}}`. An id that has resolved or been
+      withdrawn is `{:error, {:resolved, id}}`. An id this child never
+      returned is `{:error, {:unknown, id}}`. The call does not raise. The
+      live rows are the open and held instances. Ids that have left are
+      remembered so a later withdraw is not reported as unknown. `resolved`
+      of an id that has left is still `{:error, {:unknown, id}}`. A repeat
+      of a live instance is an error. A repeat of a forgotten instance is a
+      new instance. `finish` takes this family's state, the id, and one
+      end's session. `:resolve` drops the instance. `:rerun` keeps the row
+      and every held row of its key. It reads that one row and does not walk
+      the key. `check_trace` replays arrivals, resolutions, withdrawals,
+      reruns, and the session steps of an open instance. A rerun clears
+      that id's session, so the next step starts again.
       \"\"\"
 
-      def new, do: %{n: 0, by: %{}, id: %{}}
+      def new, do: %{n: 0, by: %{}, id: %{}, done: %{}}
 
       def arrive(state, key, kind, index) do
         with {:ok, st} <- read(state),
@@ -3488,7 +3501,7 @@ defmodule Muro.Emit.Fsm do
              {:ok, phase} <- phase_of(rows, hold, index, st) do
           id = st.n
           rows = Map.put(rows, index, {id, kind, phase})
-          next = %{n: id + 1, by: Map.put(st.by, key, rows), id: Map.put(st.id, id, {key, index})}
+          next = %{st | n: id + 1, by: Map.put(st.by, key, rows), id: Map.put(st.id, id, {key, index})}
           {phase, id, next}
         else
           {:error, reason} -> {:error, reason}
@@ -3502,7 +3515,20 @@ defmodule Muro.Emit.Fsm do
              {:ok, _kind} <- open_row(rows, index, id, st),
              {:ok, released, rows} <- take_released(Map.delete(rows, index), key, st) do
           by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)
-          {:ok, released, %{st | by: by, id: Map.delete(st.id, id)}}
+          next = %{st | by: by, id: Map.delete(st.id, id), done: Map.put(st.done, id, true)}
+          {:ok, released, next}
+        else
+          {:error, reason} -> {:error, reason}
+        end
+      end
+
+      def withdraw(state, id) do
+        with {:ok, st} <- read(state),
+             {:ok, key, index, rows} <- held_only(st, id),
+             {:ok, released, rows} <- take_released(Map.delete(rows, index), key, st) do
+          by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)
+          next = %{st | by: by, id: Map.delete(st.id, id), done: Map.put(st.done, id, true)}
+          {:ok, released, next}
         else
           {:error, reason} -> {:error, reason}
         end
@@ -3515,8 +3541,8 @@ defmodule Muro.Emit.Fsm do
       #{rules}
       defp rule(_kind), do: :error
 
-      defp read(%{n: n, by: by, id: ids} = st)
-           when is_integer(n) and n >= 0 and is_map(by) and is_map(ids) do
+      defp read(%{n: n, by: by, id: ids, done: done} = st)
+           when is_integer(n) and n >= 0 and is_map(by) and is_map(ids) and is_map(done) do
         {:ok, st}
       end
 
@@ -3564,6 +3590,29 @@ defmodule Muro.Emit.Fsm do
         end
       end
 
+      defp held_only(st, id) do
+        case Map.fetch(st.id, id) do
+          {:ok, {key, index}} when is_integer(index) and index >= 0 ->
+            case Map.fetch(st.by, key) do
+              {:ok, rows} when is_map(rows) ->
+                case Map.fetch(rows, index) do
+                  {:ok, {^id, _kind, :held}} -> {:ok, key, index, rows}
+                  {:ok, {^id, _kind, :open}} -> {:error, {:opened, id}}
+                  _ -> {:error, {:state, st}}
+                end
+
+              _ ->
+                {:error, {:state, st}}
+            end
+
+          {:ok, _} ->
+            {:error, {:state, st}}
+
+          :error ->
+            if Map.has_key?(st.done, id), do: {:error, {:resolved, id}}, else: {:error, {:unknown, id}}
+        end
+      end
+
       defp open_row(rows, index, id, st) do
         case Map.fetch(rows, index) do
           {:ok, {^id, kind, :open}} when is_atom(kind) -> {:ok, kind}
@@ -3585,7 +3634,8 @@ defmodule Muro.Emit.Fsm do
               held ->
                 released =
                   held
-                  |> Enum.filter(fn {ix, _id, _kind} -> not blocked?(rows, ix) end)
+                  |> Enum.filter(fn {ix, _id, kind} -> not blocked?(rows, kind, ix) end)
+                  |> one_of_any()
                   |> Enum.sort_by(fn {ix, id, _kind} -> {ix, id} end)
 
                 rows =
@@ -3612,9 +3662,8 @@ defmodule Muro.Emit.Fsm do
 
       defp row_ok?(_row), do: false
 
-      defp blocked?(rows, index) do
-        Enum.any?(rows, fn {ix, {_id, _kind, phase}} -> ix < index and phase in [:open, :held] end)
-      end
+      #{blocked_body(family)}
+      #{one_body(family)}
 
       defp walk(disp, seen, [], _i), do: leaked(disp, seen)
 
@@ -3635,6 +3684,13 @@ defmodule Muro.Emit.Fsm do
       defp walk(disp, seen, [{:rerun, id} | rest], i) do
         case rerun_step(disp, seen, id) do
           {:ok, disp, seen} -> walk(disp, seen, rest, i + 1)
+          {:error, reason} -> {:error, {i, reason}}
+        end
+      end
+
+      defp walk(disp, seen, [{:withdraw, id} | rest], i) do
+        case withdraw(disp, id) do
+          {:ok, _released, disp} -> walk(disp, seen, rest, i + 1)
           {:error, reason} -> {:error, {i, reason}}
         end
       end
@@ -3811,24 +3867,117 @@ defmodule Muro.Emit.Fsm do
   # `hold_of` only passes a hold this family's `rule` returns. A clause for
   # any other hold is unused, and Elixir 1.20 rejects the generated module.
   defp phase_bodies(family) do
-    holds = family.rules |> Enum.map(& &1.hold) |> Enum.uniq()
+    holds = hold_list(family)
 
-    parts =
-      Enum.flat_map(holds, fn
+    clauses =
+      Enum.map(holds, fn
         :never ->
-          ["defp phase_of(_rows, :never, _index, _st), do: {:ok, :open}"]
+          "defp phase_of(_rows, :never, _index, _st), do: {:ok, :open}"
 
         :earlier ->
-          [earlier_phase(), earlier_scan()]
+          earlier_phase()
+
+        :any ->
+          any_phase()
 
         hold ->
-          ["defp phase_of(_rows, #{inspect(hold)}, _index, st), do: {:error, {:state, st}}"]
+          "defp phase_of(_rows, #{inspect(hold)}, _index, st), do: {:error, {:state, st}}"
       end)
 
-    case parts do
+    helpers =
+      Enum.flat_map(holds, fn
+        :earlier -> [earlier_scan()]
+        :any -> [any_scan()]
+        _ -> []
+      end)
+
+    case clauses do
       [] -> "defp phase_of(_rows, _hold, _index, st), do: {:error, {:state, st}}"
-      _ -> Enum.join(parts, "\n\n")
+      _ -> Enum.join(clauses ++ helpers, "\n\n")
     end
+  end
+
+  # A clause for a hold `rule` never returns is dead, and Elixir rejects it.
+  # These bodies are joined, not heredocs: a heredoc is scanned as a host
+  # helper, and `blocked?` would then reserve a run name.
+  defp blocked_body(family) do
+    arms =
+      Enum.flat_map(hold_list(family), fn
+        :earlier ->
+          [
+            Enum.join(
+              [
+                "    :earlier ->",
+                "      Enum.any?(rows, fn {ix, {_id, _kind, phase}} ->",
+                "        ix < index and phase in [:open, :held]",
+                "      end)"
+              ],
+              "\n"
+            )
+          ]
+
+        :any ->
+          [
+            Enum.join(
+              [
+                "    :any ->",
+                "      Enum.any?(rows, fn {ix, {_id, _kind, phase}} ->",
+                "        ix != index and phase == :open",
+                "      end)"
+              ],
+              "\n"
+            )
+          ]
+
+        _ ->
+          []
+      end)
+
+    if arms == [] do
+      "defp blocked?(_rows, _kind, _index), do: true"
+    else
+      Enum.join(
+        [
+          "defp blocked?(rows, kind, index) do",
+          "  case rule(kind) do",
+          Enum.join(arms, "\n"),
+          "    _ ->",
+          "      true",
+          "  end",
+          "end"
+        ],
+        "\n"
+      )
+    end
+  end
+
+  # At most one `any` instance of a key opens. The least creation index
+  # wins. A release that also opens some other kind leaves the `any` rows
+  # held: opening that other kind is an open instance of the key.
+  defp one_body(family) do
+    if :any in hold_list(family) do
+      Enum.join(
+        [
+          "defp one_of_any(released) do",
+          "  case Enum.split_with(released, fn {_ix, _id, kind} -> rule(kind) == :any end) do",
+          "    {[], rest} ->",
+          "      rest",
+          "",
+          "    {anys, rest} ->",
+          "      keep = Enum.min_by(anys, fn {ix, id, _kind} -> {ix, id} end)",
+          "      if rest == [], do: [keep], else: rest",
+          "  end",
+          "end"
+        ],
+        "\n"
+      )
+    else
+      "defp one_of_any(released), do: released"
+    end
+  end
+
+  defp hold_list(family) do
+    family.rules |> Enum.map(& &1.hold) |> Enum.uniq()
   end
 
   # A heredoc here would be scanned as a parent helper. `earlier?` is a
@@ -3842,6 +3991,45 @@ defmodule Muro.Emit.Fsm do
         "    :blocked -> {:ok, :held}",
         "    :bad -> {:error, {:state, st}}",
         "  end",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  defp any_phase do
+    Enum.join(
+      [
+        "defp phase_of(rows, :any, index, st) do",
+        "  case any_open?(rows, index) do",
+        "    :clear -> {:ok, :open}",
+        "    :blocked -> {:ok, :held}",
+        "    :bad -> {:error, {:state, st}}",
+        "  end",
+        "end"
+      ],
+      "\n"
+    )
+  end
+
+  defp any_scan do
+    Enum.join(
+      [
+        "defp any_open?(rows, index) do",
+        "  Enum.reduce_while(rows, :clear, fn entry, acc ->",
+        "    case entry do",
+        "      {ix, {id, kind, :open}}",
+        "      when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) ->",
+        "        if ix != index, do: {:cont, :blocked}, else: {:cont, acc}",
+        "",
+        "      {ix, {id, kind, :held}}",
+        "      when is_integer(ix) and ix >= 0 and is_integer(id) and id >= 0 and is_atom(kind) ->",
+        "        {:cont, acc}",
+        "",
+        "      _ ->",
+        "        {:halt, :bad}",
+        "    end",
+        "  end)",
         "end"
       ],
       "\n"
@@ -3870,36 +4058,54 @@ defmodule Muro.Emit.Fsm do
   end
 
   defp held_body(family) do
-    if Enum.any?(family.rules, &(&1.hold == :earlier)) do
-      """
-      defp held_rows(rows) do
-        Enum.reduce_while(rows, [], fn
-          {ix, {id, kind, :held}}, acc ->
-            if rule(kind) == :earlier, do: {:cont, [{ix, id, kind} | acc]}, else: {:halt, :bad}
+    holds = hold_list(family)
 
-          {_ix, {_id, _kind, :open}}, acc ->
-            {:cont, acc}
-
-          _, _ ->
-            {:halt, :bad}
-        end)
-      end
-      """
+    if :earlier in holds or :any in holds do
+      Enum.join(
+        [
+          "defp held_rows(rows) do",
+          "  Enum.reduce_while(rows, [], fn",
+          "    {ix, {id, kind, :held}}, acc ->",
+          "      if #{held_pred(holds)},",
+          "        do: {:cont, [{ix, id, kind} | acc]},",
+          "        else: {:halt, :bad}",
+          "",
+          "    {_ix, {_id, _kind, :open}}, acc ->",
+          "      {:cont, acc}",
+          "",
+          "    _, _ ->",
+          "      {:halt, :bad}",
+          "  end)",
+          "end"
+        ],
+        "\n"
+      )
     else
-      """
-      defp held_rows(rows) do
-        Enum.reduce_while(rows, [], fn
-          {_ix, {_id, _kind, :held}}, _acc ->
-            {:halt, :bad}
+      Enum.join(
+        [
+          "defp held_rows(rows) do",
+          "  Enum.reduce_while(rows, [], fn",
+          "    {_ix, {_id, _kind, :held}}, _acc ->",
+          "      {:halt, :bad}",
+          "",
+          "    {_ix, {_id, _kind, :open}}, acc ->",
+          "      {:cont, acc}",
+          "",
+          "    _, _ ->",
+          "      {:halt, :bad}",
+          "  end)",
+          "end"
+        ],
+        "\n"
+      )
+    end
+  end
 
-          {_ix, {_id, _kind, :open}}, acc ->
-            {:cont, acc}
-
-          _, _ ->
-            {:halt, :bad}
-        end)
-      end
-      """
+  defp held_pred(holds) do
+    cond do
+      :earlier in holds and :any in holds -> "rule(kind) in [:earlier, :any]"
+      :earlier in holds -> "rule(kind) == :earlier"
+      :any in holds -> "rule(kind) == :any"
     end
   end
 
