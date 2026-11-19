@@ -162,7 +162,7 @@ defmodule Muro.Synth.Cert do
     end
   end
 
-  defp key(vector, states), do: Enum.map(states, &nat_int(vector[&1]))
+  defp key(vector, states), do: Enum.map(states, &vector[&1])
 
   defp at(%{transient: t, period: p, seq: seq}, n) do
     idx = if n < t, do: n, else: t + rem(n - t, p)
@@ -178,7 +178,7 @@ defmodule Muro.Synth.Cert do
 
     Enum.find(0..t, fn start ->
       Enum.all?(start..(t - 1)//1, fn n ->
-        nat_int(at(orbit, n + p)[state]) == nat_int(at(orbit, n)[state])
+        at(orbit, n + p)[state] == at(orbit, n)[state]
       end)
     end)
   end
@@ -672,13 +672,10 @@ defmodule Muro.Synth.Cert do
     left != right and right == winner
   end
 
-  defp closed_nat?(0), do: true
-  defp closed_nat?({:suc, n}), do: closed_nat?(n)
   defp closed_nat?(n) when is_integer(n) and n >= 0, do: true
   defp closed_nat?(_value), do: false
 
   defp spell_nat(0), do: "0"
-  defp spell_nat({:suc, n}), do: spell_nat(nat_int({:suc, n}))
   # A closed numeral, not a tower of successors. Small numerals stay
   # written as successors so an existing certificate is unchanged.
   defp spell_nat(n) when is_integer(n) and n >= 10, do: Integer.to_string(n)
@@ -687,10 +684,6 @@ defmodule Muro.Synth.Cert do
     rest = spell_nat(n - 1)
     if rest == "0", do: "suc 0", else: "suc (" <> rest <> ")"
   end
-
-  defp nat_int(0), do: 0
-  defp nat_int({:suc, n}), do: 1 + nat_int(n)
-  defp nat_int(n) when is_integer(n) and n >= 0, do: n
 
   defp paren(term) do
     if String.contains?(term, " ") or String.contains?(term, "("), do: "(#{term})", else: term

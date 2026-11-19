@@ -114,8 +114,8 @@ defmodule Muro.Emit.Helpers do
   # read from the template text, so a new helper is reserved when the
   # template starts defining it.
   #
-  # A run shares a module with the FSM interpreter, the NIF loader, the
-  # Elixir `muro_nat_to_int` helper, and the repr helpers. It does not
+  # A run shares a module with the FSM interpreter, the NIF loader, and
+  # the repr helpers. It does not
   # share a module with an OTP meeting, a node call, an ExUnit suite, or
   # the FSM child endpoint (`init`, `send`, `recv`). Those stay out of
   # `runs/0`, so a run named `step` or `send` keeps that name.

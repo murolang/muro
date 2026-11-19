@@ -425,12 +425,9 @@ defmodule Muro.EmitJSSessionTest do
     book = parse!(cap)
     parent = compile_fsm!(book, "cap.muro")
     sess = child(parent, "s")
-    over = {:box, 100_001}
-
-    assert {:error, {:unexpected, step, {:nat_at_most, 100_000}, ^over}} =
-             sess.recv(sess.init(), over)
-
-    assert step =~ "first recv (b : Box)"
+    # The Elixir machine passes the integer to the run. The JavaScript
+    # machine still caps a nat passed to a run at 100_000.
+    assert {:ok, _} = sess.recv(sess.init(), {:box, 100_001})
 
     {_source, _types, dir} = emit_book!(book, "cap.muro")
 

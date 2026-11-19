@@ -128,7 +128,7 @@ All terms check. Evidence never becomes a run.
 
 The version line is the copy that ran.
 
-You just wrote a `run` function. `plus` will emit as an ordinary Elixir `def`. `Nat` is Peano: `0` and `suc`.
+You just wrote a `run` function. `plus` will emit as an ordinary Elixir `def`. `Nat` is Peano in the book: `0` and `suc`. In emitted Elixir it is a non-negative integer.
 
 ## What has to be written
 

@@ -16,8 +16,8 @@ defmodule Muro.Repr do
   names a declared key in the other host form (`{:ambiguous_key, key}`).
 
   An ambiguous repr is refused here, at check time, and the message names
-  both constructors. `integer` builds a Peano `Nat` with a tail call and
-  refuses an integer above `@muro_repr_nat_max` (1_000_000). The same guard
+  both constructors. A `Nat` is a non-negative integer on both sides, so
+  `integer` decodes to the same integer. `@muro_repr_nat_max` (1_000_000)
   bounds how many interned names a table may hold.
   """
 
@@ -27,7 +27,7 @@ defmodule Muro.Repr do
   @nat_max 1_000_000
 
   @helper_names %{
-    nat: ~w(muro_repr_decode_nat muro_repr_encode_nat muro_repr_nat_from),
+    nat: ~w(muro_repr_decode_nat muro_repr_encode_nat),
     bool: ~w(muro_repr_decode_bool muro_repr_encode_bool),
     fetch: ~w(muro_repr_fetch),
     tag: ~w(muro_repr_tag),
@@ -844,14 +844,8 @@ defmodule Muro.Repr do
 
   defp d1_ctor(ctors, name), do: Enum.find(ctors, &(&1.name == name))
 
-  defp fallback_term({:numeral, n}, :nat, _i, _ctx)
-       when is_integer(n) and n >= 0 and n <= @nat_max do
+  defp fallback_term({:numeral, n}, :nat, _i, _ctx) when is_integer(n) and n >= 0 do
     {:ok, {:num, n}}
-  end
-
-  defp fallback_term({:numeral, n}, :nat, i, ctx) do
-    {:error,
-     blame(ctx, "constructor #{ctx.ctor} field #{i}: #{n} is above the Nat guard #{@nat_max}")}
   end
 
   defp fallback_term({:numeral, _n}, ty, i, ctx) do
@@ -1579,7 +1573,7 @@ defmodule Muro.Repr do
       {:else, inner, {:num, _}} ->
         features(
           inner,
-          acc |> MapSet.put(:fallback) |> MapSet.put(:fallback_nat) |> MapSet.put(:nat)
+          MapSet.put(acc, :fallback)
         )
 
       {:else, inner, _} ->
@@ -2018,7 +2012,7 @@ defmodule Muro.Repr do
   end
 
   defp fallback_src({:atom, atom}), do: atom_src(atom)
-  defp fallback_src({:num, n}), do: "muro_repr_nat_from(#{Integer.to_string(n)})"
+  defp fallback_src({:num, n}), do: Integer.to_string(n)
 
   defp nil_mode_src(nil), do: ":nothing"
   defp nil_mode_src(:drop), do: ":error"
@@ -2225,15 +2219,15 @@ defmodule Muro.Repr do
       |> maybe(:interned, feats, interned_helpers(feats))
       |> maybe(:bin, feats, bin_helpers())
       |> maybe(:map_of, feats, map_of_helpers())
-      |> maybe(:fallback, feats, else_helpers(feats))
+      |> maybe(:fallback, feats, else_helpers())
 
     Enum.join(parts, "\n\n")
   end
 
-  # The guard is shared by `integer` and by interned names. A book that uses
-  # neither must not carry an unused attribute.
+  # The guard bounds an interned name table. A book without one must not
+  # carry an unused attribute.
   defp maybe_nat_max(acc, feats) do
-    if MapSet.member?(feats, :nat) or MapSet.member?(feats, :interned) do
+    if MapSet.member?(feats, :interned) do
       acc ++ [nat_max_attr()]
     else
       acc
@@ -2305,21 +2299,16 @@ defmodule Muro.Repr do
   end
 
   # `decode_nat` exists only where an integer shape is decoded. An interned
-  # name still needs `nat_from` and `encode_nat`, and must not carry the
+  # name still needs `encode_nat`, and must not carry the
   # unused decoder.
   defp decode_nat_helpers do
     """
-    defp muro_repr_decode_nat(value, _path, table)
-         when is_integer(value) and value >= 0 and value <= @muro_repr_nat_max do
-      {:ok, muro_repr_nat_from(value), table}
-    end
-
-    defp muro_repr_decode_nat(value, path, _table) when is_integer(value) and value < 0 do
-      {:error, {path, {:negative_integer, value}}}
+    defp muro_repr_decode_nat(value, _path, table) when is_integer(value) and value >= 0 do
+      {:ok, value, table}
     end
 
     defp muro_repr_decode_nat(value, path, _table) when is_integer(value) do
-      {:error, {path, {:nat_too_large, value}}}
+      {:error, {path, {:negative_integer, value}}}
     end
 
     defp muro_repr_decode_nat(value, path, _table), do: {:error, {path, {:not_integer, value}}}
@@ -2328,21 +2317,7 @@ defmodule Muro.Repr do
 
   defp nat_term_helpers do
     """
-    defp muro_repr_nat_from(0), do: 0
-
-    defp muro_repr_nat_from(n) when is_integer(n) and n > 0 do
-      muro_repr_nat_from(n, 0)
-    end
-
-    defp muro_repr_nat_from(0, acc), do: acc
-
-    defp muro_repr_nat_from(n, acc) when is_integer(n) and n > 0 do
-      muro_repr_nat_from(n - 1, {:suc, acc})
-    end
-
-    defp muro_repr_encode_nat(value), do: muro_repr_encode_nat(value, 0)
-    defp muro_repr_encode_nat(0, acc), do: acc
-    defp muro_repr_encode_nat({:suc, value}, acc), do: muro_repr_encode_nat(value, acc + 1)
+    defp muro_repr_encode_nat(value) when is_integer(value) and value >= 0, do: value
     """
   end
 
@@ -2552,7 +2527,7 @@ defmodule Muro.Repr do
   # A Nat-only book must not mention the binary helpers, and the other way round.
   defp name_term_nat do
     """
-    defp muro_repr_name_term(i, :nat), do: muro_repr_nat_from(i)
+    defp muro_repr_name_term(i, :nat), do: i
     """
     |> String.trim()
   end
@@ -2806,21 +2781,7 @@ defmodule Muro.Repr do
   # does not make the head live: the domain is the call sites of this helper.
   # The manual rule stays a body decision, so the clause is not dead whatever
   # those fallbacks are.
-  #
-  # `{:nat_too_large, _}` is the same kind of decision. It is kept only when
-  # the book has a numeral fallback. Without one, that reason at this path is
-  # replaced, including when a named type's own decode returns it at its root.
-  defp else_helpers(feats) do
-    nat =
-      if MapSet.member?(feats, :fallback_nat) do
-        """
-        {:nat_too_large, _} ->
-          err
-        """
-      else
-        ""
-      end
-
+  defp else_helpers do
     """
     defp muro_repr_else({:ok, got, table}, _path, _incoming, _fallback), do: {:ok, got, table}
 
@@ -2828,7 +2789,7 @@ defmodule Muro.Repr do
       case reason do
         {:ambiguous_key, _} ->
           err
-        #{nat}
+
         _ ->
           if path === at, do: {:ok, fallback, incoming}, else: err
       end

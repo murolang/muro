@@ -73,7 +73,7 @@ def natsFrom : run Π (n : Nat) → Stream Nat :=
 {:ok, src} = Muro.emit_file("examples/nats.muro", Muro.Nats)
 Code.eval_string(src)
 Muro.Nats.natsFrom(0) |> Stream.take(3) |> Enum.to_list()
-# [0, {:suc, 0}, {:suc, {:suc, 0}}]
+# [0, 1, 2]
 ```
 
 Emit of a checked run Stream is `Stream.unfold/2`. The pair is `{head, next_seed}`. `uncons` becomes two replayable views (`Enum.take/2` and `Stream.drop/2`); affinity was already checked.

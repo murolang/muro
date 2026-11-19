@@ -491,7 +491,7 @@ defmodule Muro.SynthLoopTest do
     assert suc.value == {:tip, 1}
 
     assert {%{value: {:tip, 0}}, 0} = host.step.(zero, "go")
-    assert {%{value: {:tip, 1}, spell: "(tip (suc 0))"}, {:suc, 0}} = host.step.(suc, "go")
+    assert {%{value: {:tip, 1}, spell: "(tip (suc 0))"}, 1} = host.step.(suc, "go")
     assert {%{value: {:tip, 1}}, 0} = host.step.(suc, "stay")
   end
 
@@ -508,7 +508,7 @@ defmodule Muro.SynthLoopTest do
     assert suc.value == {:tip, 1}
 
     assert {%{value: {:tip, 0}}, 0} = host.step.(zero, "go")
-    assert {%{value: {:tip, 1}, spell: "(tip (suc 0))"}, {:suc, 0}} = host.step.(suc, "go")
+    assert {%{value: {:tip, 1}, spell: "(tip (suc 0))"}, 1} = host.step.(suc, "go")
     assert {%{value: {:tip, 1}}, 0} = host.step.(suc, "stay")
 
     refute host.hint_eval.("big", zero)

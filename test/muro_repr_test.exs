@@ -509,7 +509,7 @@ defmodule Muro.ReprTest do
     assert source =~ "def decode_outcome("
     assert source =~ "def encode_outcome("
     assert source =~ "def decode_shape("
-    assert source =~ "@muro_repr_nat_max 1_000_000"
+    refute source =~ "@muro_repr_nat_max"
 
     # Mix.Shell.IO.info prints "==> muro" the first time the shell is used
     # after another project has taken it. Dep compilation does that, and
@@ -547,13 +547,7 @@ defmodule Muro.ReprTest do
     assert mod.decode_entry(%{"id" => nil}) == {:error, {["id"], {:not_integer, nil}}}
     assert mod.decode_entry(%{"id" => -1}) == {:error, {["id"], {:negative_integer, -1}}}
 
-    assert_nat_rejected(
-      mod,
-      %{"id" => 1_000_001},
-      ["id"],
-      {:nat_too_large, 1_000_001},
-      :decode_entry
-    )
+    assert {:ok, {:entry, 1_000_001, _}, _} = mod.decode_entry(%{"id" => 1_000_001})
 
     assert mod.decode_entry(:no) == {:error, {[], {:not_map, :no}}}
     assert mod.decode_entry(%{"enabled" => true}) == {:error, {[], {:missing_key, "id"}}}
@@ -643,8 +637,8 @@ defmodule Muro.ReprTest do
       assert mod.decode_row(mod.encode_row(row_muro, table)) == {:ok, row_muro, table}
 
       id = :rand.uniform(6) - 1
-      assert mod.decode_open(%{"id" => id}) == {:ok, {:open, peano(id)}, table}
-      assert mod.encode_open({:open, peano(id)}, table) == %{"id" => id}
+      assert mod.decode_open(%{"id" => id}) == {:ok, {:open, id}, table}
+      assert mod.encode_open({:open, id}, table) == %{"id" => id}
 
       {tree_host, tree_muro} = gen_tree(3)
       assert mod.decode_tree(tree_host) == {:ok, tree_muro, table}
@@ -935,28 +929,18 @@ defmodule Muro.ReprTest do
     end
   end
 
-  # Never build a Peano term above 10_000. A failed assertion inspects its
-  # value, and a million-deep `{:suc, _}` chain exhausts the machine.
-  # `decode_nat(1_000_001)` is only the integer. The boundary (the largest
-  # accepted integer, and one past it) uses a copy whose guard is 10_000.
-  test "Nat decode and encode stay within the guard" do
+  test "Nat decode and encode are the host integer, at any size" do
     mod = codec()
 
-    for n <- [0, 1, 1000] do
-      assert_nat_integer(mod, n)
+    for n <- [0, 1, 1000, 1_000_001, 10_000_000_000] do
+      assert {:ok, ^n, table} = mod.decode_nat(n)
+      assert mod.encode_nat(n, table) == n
     end
 
-    assert_nat_rejected(mod, 1_000_001, [], {:nat_too_large, 1_000_001}, :decode_nat)
     assert mod.decode_nat(-1) == {:error, {[], {:negative_integer, -1}}}
     assert mod.decode_nat(1.0) == {:error, {[], {:not_integer, 1.0}}}
     assert mod.decode_nat("1") == {:error, {[], {:not_integer, "1"}}}
     assert mod.decode_nat(nil) == {:error, {[], {:not_integer, nil}}}
-
-    limited = nat_limit_codec(10_000)
-    assert_nat_integer(limited, 0)
-    assert_nat_integer(limited, 10_000)
-    assert_nat_rejected(limited, 10_001, [], {:nat_too_large, 10_001}, :decode_nat)
-    assert_nat_rejected(limited, 1_000_001, [], {:nat_too_large, 1_000_001}, :decode_nat)
   end
 
   test "other backends ignore a repr" do
@@ -1208,13 +1192,12 @@ defmodule Muro.ReprTest do
            """) ==
              "6:1: repr Box: constructor box field 0: a numeral is a fallback for Nat, and this field has type Bool; nullary constructors are true, false"
 
-    assert error("""
+    assert ok!("""
            data Box : Type where
              box : Nat → Box
            repr Box := tuple { integer else 1000001 }
            repr Nat := integer
-           """) ==
-             "3:1: repr Box: constructor box field 0: 1000001 is above the Nat guard 1000000"
+           """)
   end
 
   test "two interned arms overlap, and a string reached through a reference still overlaps" do
@@ -1279,9 +1262,9 @@ defmodule Muro.ReprTest do
 
     assert mod.decode_bool(true) == {:ok, true, empty}
     assert mod.decode_bool(false, empty) == {:ok, false, empty}
-    assert mod.decode_nat(3) == {:ok, peano(3), empty}
-    assert mod.decode_nat(3, known) == {:ok, peano(3), known}
-    assert mod.encode_nat(peano(3), known) == 3
+    assert mod.decode_nat(3) == {:ok, 3, empty}
+    assert mod.decode_nat(3, known) == {:ok, 3, known}
+    assert mod.encode_nat(3, known) == 3
     assert mod.encode_bool(false, empty) == false
     assert mod.decode_bool(mod.encode_bool(true, empty), empty) == {:ok, true, empty}
 
@@ -1358,7 +1341,7 @@ defmodule Muro.ReprTest do
     assert mod.encode_wrap({:wrap, 0}, blank) == ""
 
     assert_raise ArgumentError, "encode_wrap: no name for index 1", fn ->
-      mod.encode_wrap({:wrap, {:suc, 0}}, empty)
+      mod.encode_wrap({:wrap, 1}, empty)
     end
 
     reserved = mod.muro_repr_table_new(["*"])
@@ -1369,7 +1352,7 @@ defmodule Muro.ReprTest do
 
     labels = Enum.map(0..20, fn i -> "n" <> Integer.to_string(i) end)
     {:ok, {:names, nat_list}, nat_table} = mod.decode_names(labels)
-    assert muro_list(nat_list) == Enum.map(0..20, &peano/1)
+    assert muro_list(nat_list) == Enum.to_list(0..20)
     assert mod.muro_repr_table_names(nat_table) == labels
     assert mod.encode_names({:names, nat_list}, nat_table) == labels
 
@@ -1393,20 +1376,20 @@ defmodule Muro.ReprTest do
     {:ok, _, kept} = mod.decode_names(["b", "a"], start)
     assert mod.muro_repr_table_names(kept) == ["a", "b"]
 
-    {:ok, {:twin, 0, {:suc, 0}}, twin_table} = mod.decode_twin({"b", "a"})
+    {:ok, {:twin, 0, 1}, twin_table} = mod.decode_twin({"b", "a"})
     assert mod.muro_repr_table_names(twin_table) == ["b", "a"]
-    assert mod.encode_twin({:twin, 0, {:suc, 0}}, twin_table) == {"b", "a"}
+    assert mod.encode_twin({:twin, 0, 1}, twin_table) == {"b", "a"}
 
     first = %{"a" => "second", "z" => "first"}
     second = %{"z" => "first", "a" => "second"}
     {:ok, rec1, t1} = mod.decode_rec(first)
     {:ok, rec2, t2} = mod.decode_rec(second)
-    assert rec1 == {:rec, 0, {:suc, 0}}
+    assert rec1 == {:rec, 0, 1}
     assert rec1 == rec2
     assert t1 == t2
     assert mod.muro_repr_table_names(t1) == ["first", "second"]
 
-    {:ok, {:link, {:cons, {0, {:suc, 0}}, nil}}, link_table} = mod.decode_link(%{"b" => "a"})
+    {:ok, {:link, {:cons, {0, 1}, nil}}, link_table} = mod.decode_link(%{"b" => "a"})
     assert mod.muro_repr_table_names(link_table) == ["b", "a"]
 
     assert mod.decode_link(%{"b" => "a"}) == mod.decode_link(%{"b" => "a"})
@@ -1438,7 +1421,7 @@ defmodule Muro.ReprTest do
     {:ok, {:rows, {:cons, {:item, 0, true}, nil}}, ^empty} = mod.decode_rows(%{0 => true})
     assert mod.encode_rows({:rows, {:cons, {:item, 0, true}, nil}}, empty) == %{0 => true}
 
-    {:ok, {:bag, {:cons, {0, false}, {:cons, {{:suc, 0}, true}, nil}}}, ^empty} =
+    {:ok, {:bag, {:cons, {0, false}, {:cons, {1, true}, nil}}}, ^empty} =
       mod.decode_bag(%{1 => true, 0 => false})
 
     keys = Enum.to_list(0..40)
@@ -1466,7 +1449,7 @@ defmodule Muro.ReprTest do
     assert mod.encode_nat_map(nat_va, nat_ta) == nat_a
 
     {:ok, {:collide, collide_list}, _} = mod.decode_collide(%{1.0 => true, 1 => false})
-    assert muro_list(collide_list) == [{peano(1), false}, {0, true}]
+    assert muro_list(collide_list) == [{1, false}, {0, true}]
 
     assert mod.decode_collide(%{0 => true, 1.0 => false}) ==
              {:error, {[], {:keys_collide, 0, 1.0}}}
@@ -1477,11 +1460,11 @@ defmodule Muro.ReprTest do
       mod.encode_bag(duplicate, empty)
     end
 
-    unsorted = {:bag, {:cons, {peano(2), true}, {:cons, {0, false}, nil}}}
+    unsorted = {:bag, {:cons, {2, true}, {:cons, {0, false}, nil}}}
     encoded = mod.encode_bag(unsorted, empty)
     assert encoded == %{2 => true, 0 => false}
     {:ok, ordered, ^empty} = mod.decode_bag(encoded)
-    assert ordered == {:bag, {:cons, {0, false}, {:cons, {peano(2), true}, nil}}}
+    assert ordered == {:bag, {:cons, {0, false}, {:cons, {2, true}, nil}}}
     assert ordered != unsorted
     assert mod.decode_bag(mod.encode_bag(ordered, empty), empty) == {:ok, ordered, empty}
 
@@ -1516,26 +1499,23 @@ defmodule Muro.ReprTest do
     assert mod.encode_fall({:fall, false}, empty) == {false}
     assert mod.decode_fall(mod.encode_fall({:fall, false}, empty)) == {:ok, {:fall, false}, empty}
 
-    assert mod.decode_count({1}) == {:ok, {:count, {:suc, 0}}, empty}
+    assert mod.decode_count({1}) == {:ok, {:count, 1}, empty}
     assert mod.decode_count({0}) == {:ok, {:count, 0}, empty}
     assert mod.decode_count({-1}) == {:ok, {:count, 0}, empty}
     assert mod.decode_count({"x"}) == {:ok, {:count, 0}, empty}
     assert mod.decode_count({nil}) == {:ok, {:count, 0}, empty}
-    assert mod.decode_count({1_000_001}) == {:error, {[0], {:nat_too_large, 1_000_001}}}
+    assert mod.decode_count({1_000_001}) == {:ok, {:count, 1_000_001}, empty}
     assert mod.encode_count({:count, 0}, empty) == {0}
 
-    # A numeral fallback anywhere in the book keeps `{:nat_too_large, _}`.
-    # A named fallback, in a book with no numeral fallback, replaces that
-    # reason when it is reported at the fallback's own path.
     named = compile_book(ok!(named_nat_src()), ReprElseNamed)
-    assert named.decode_hold({1_000_001}) == {:ok, {:hold, :zero}, empty}
+    assert named.decode_hold({1_000_001}) == {:ok, {:hold, {:count, 1_000_001}}, empty}
     assert named.decode_hold({-1}) == {:ok, {:hold, :zero}, empty}
     assert {:ok, {:hold, {:count, two}}, ^empty} = named.decode_hold({2})
     assert named.encode_hold({:hold, {:count, two}}, empty) == {2}
 
     kept = compile_book(ok!(named_nat_src() <> numeral_box_src()), ReprElseKept)
-    assert kept.decode_hold({1_000_001}) == {:error, {[0], {:nat_too_large, 1_000_001}}}
-    assert kept.decode_box({1_000_001}) == {:error, {[0], {:nat_too_large, 1_000_001}}}
+    assert kept.decode_hold({1_000_001}) == {:ok, {:hold, {:count, 1_000_001}}, empty}
+    assert kept.decode_box({1_000_001}) == {:ok, {:box, 1_000_001}, empty}
     assert kept.decode_box({-1}) == {:ok, {:box, 0}, empty}
     assert kept.decode_hold({2}) == {:ok, {:hold, {:count, two}}, empty}
 
@@ -1575,12 +1555,11 @@ defmodule Muro.ReprTest do
     assert mod.decode_hold({%{"n" => 1, "z" => 2}}) == {:ok, {:hold, :no}, empty}
     assert mod.decode_hold({%{"n" => "x"}}) == {:error, {[0, "n"], {:not_integer, "x"}}}
 
-    assert mod.decode_hold({%{"n" => 1_000_001}}) ==
-             {:error, {[0, "n"], {:nat_too_large, 1_000_001}}}
+    assert mod.decode_hold({%{"n" => 1_000_001}}) == {:ok, {:hold, {:yes, 1_000_001}}, empty}
 
-    assert mod.decode_hold({%{"n" => 2}}) == {:ok, {:hold, {:yes, peano(2)}}, empty}
+    assert mod.decode_hold({%{"n" => 2}}) == {:ok, {:hold, {:yes, 2}}, empty}
     assert mod.encode_hold({:hold, :no}, empty) == {nil}
-    assert mod.encode_hold({:hold, {:yes, peano(2)}}, empty) == {%{"n" => 2}}
+    assert mod.encode_hold({:hold, {:yes, 2}}, empty) == {%{"n" => 2}}
   end
 
   test "the names example decodes the issue wire" do
@@ -1595,9 +1574,7 @@ defmodule Muro.ReprTest do
     expected =
       {:template,
        {:cons, {:binding, :wild, {:cons, {:entry, :wild, {:just, true}}, nil}},
-        {:cons,
-         {:binding, {:named, 0}, {:cons, {:entry, {:named, {:suc, 0}}, {:just, false}}, nil}},
-         nil}}}
+        {:cons, {:binding, {:named, 0}, {:cons, {:entry, {:named, 1}, {:just, false}}, nil}}, nil}}}
 
     assert {:ok, got, table} = mod.decode_template(wire)
     assert got == expected
@@ -1608,14 +1585,12 @@ defmodule Muro.ReprTest do
     off =
       {:template,
        {:cons, {:binding, :wild, {:cons, {:entry, :wild, {:just, false}}, nil}},
-        {:cons,
-         {:binding, {:named, 0}, {:cons, {:entry, {:named, {:suc, 0}}, {:just, false}}, nil}},
-         nil}}}
+        {:cons, {:binding, {:named, 0}, {:cons, {:entry, {:named, 1}, {:just, false}}, nil}}, nil}}}
 
     reads_off = String.to_atom(Emit.elixir_base("reads-off"))
     count_entries = String.to_atom(Emit.elixir_base("count-entries"))
     assert apply(mod, reads_off, [expected]) == off
-    assert apply(mod, count_entries, [expected]) == {:suc, {:suc, 0}}
+    assert apply(mod, count_entries, [expected]) == 2
 
     assert mod.encode_template(off, table) == %{
              "*" => [%{"relation" => "*", "read" => false}],
@@ -1632,9 +1607,7 @@ defmodule Muro.ReprTest do
     preset_term =
       {:template,
        {:cons, {:binding, :wild, {:cons, {:entry, :wild, {:just, true}}, nil}},
-        {:cons,
-         {:binding, {:named, {:suc, 0}}, {:cons, {:entry, {:named, 0}, {:just, false}}, nil}},
-         nil}}}
+        {:cons, {:binding, {:named, 1}, {:cons, {:entry, {:named, 0}, {:just, false}}, nil}}, nil}}}
 
     assert mod.decode_template(wire, preset) == {:ok, preset_term, preset}
     assert mod.muro_repr_table_names(preset) == ["token", "auth"]
@@ -2290,64 +2263,17 @@ defmodule Muro.ReprTest do
   defp bin_term(i) when rem(i, 2) == 1, do: {:d1, bin_term(div(i - 1, 2))}
   defp bin_term(i) when i > 0, do: {:d2, bin_term(div(i - 2, 2))}
 
-  defp peano(n), do: peano(n, 0)
-  defp peano(0, acc), do: acc
-  defp peano(n, acc) when n > 0, do: peano(n - 1, {:suc, acc})
-
-  # Compare the integer encode returns. Do not assert on the Peano term.
-  defp assert_nat_integer(mod, n) when is_integer(n) and n >= 0 and n <= 10_000 do
-    case mod.decode_nat(n) do
-      {:ok, v, table} ->
-        assert mod.encode_nat(v, table) == n
-
-      other ->
-        flunk("decode_nat(#{n}) failed: #{inspect(other, limit: 5)}")
-    end
-  end
-
-  # A success is discarded. Inspecting `{:ok, nat}` is what exhausts memory.
-  defp assert_nat_rejected(mod, value, path, reason, fun) do
-    case apply(mod, fun, [value]) do
-      {:ok, _, _} ->
-        flunk("#{fun} built a Nat from #{inspect(value, limit: 5)}")
-
-      {:error, {^path, ^reason}} ->
-        :ok
-
-      other ->
-        flunk("#{fun} returned #{inspect(other, limit: 8)}")
-    end
-  end
-
-  defp nat_limit_codec(max) when is_integer(max) and max > 0 and max <= 10_000 do
-    book =
-      ok!("""
-      repr Nat := integer
-      """)
-
-    source = Emit.emit_module(ReprNatLimit, book)
-    needle = "@muro_repr_nat_max 1_000_000"
-    assert source =~ needle
-
-    source =
-      String.replace(source, needle, "@muro_repr_nat_max #{Integer.to_string(max)}",
-        global: false
-      )
-
-    compile_source(source, ReprNatLimit)
-  end
-
   defp gen_list do
     n = :rand.uniform(8) - 1
     xs = if n == 0, do: [], else: Enum.map(1..n, fn _ -> :rand.uniform(6) - 1 end)
-    muro = Enum.reduce(Enum.reverse(xs), nil, fn k, acc -> {:cons, peano(k), acc} end)
+    muro = Enum.reduce(Enum.reverse(xs), nil, fn k, acc -> {:cons, k, acc} end)
     {xs, {:bag, muro}}
   end
 
   defp gen_pair do
     n = :rand.uniform(6) - 1
     bit = Enum.random([true, false])
-    {{n, bit}, {:pair, peano(n), bit}}
+    {{n, bit}, {:pair, n, bit}}
   end
 
   defp gen_row do
@@ -2365,8 +2291,8 @@ defmodule Muro.ReprTest do
         false -> {:just, false}
       end
 
-    note_m = if note == nil, do: :nothing, else: {:just, peano(note)}
-    {host, {:row, peano(id), flag_m, note_m}}
+    note_m = if note == nil, do: :nothing, else: {:just, note}
+    {host, {:row, id, flag_m, note_m}}
   end
 
   defp gen_tree(0), do: {nil, :leaf}
@@ -2378,7 +2304,7 @@ defmodule Muro.ReprTest do
       n = :rand.uniform(4) - 1
       {h1, t1} = gen_tree(d - 1)
       {h2, t2} = gen_tree(d - 1)
-      {{n, h1, h2}, {:node, peano(n), t1, t2}}
+      {{n, h1, h2}, {:node, n, t1, t2}}
     end
   end
 
@@ -2386,11 +2312,11 @@ defmodule Muro.ReprTest do
     case :rand.uniform(3) do
       1 ->
         n = :rand.uniform(5) - 1
-        {%{"kind" => "circle", "r" => n}, {:circle, peano(n)}}
+        {%{"kind" => "circle", "r" => n}, {:circle, n}}
 
       2 ->
         n = :rand.uniform(5) - 1
-        {%{"kind" => "square", "side" => n}, {:square, peano(n)}}
+        {%{"kind" => "square", "side" => n}, {:square, n}}
 
       3 ->
         {nil, :empty}

@@ -309,7 +309,7 @@ defmodule Muro.DepsTest do
     assert suc_src =~ "def step"
     Code.eval_string(suc_src)
     Code.eval_string(same_src)
-    assert apply(Muro.DepsParamSuc, :got, []) == {:suc, 0}
+    assert apply(Muro.DepsParamSuc, :got, []) == 1
     assert apply(Muro.DepsParamSame, :got, []) == 0
 
     bare = write_file(dir, "bare.muro", "import \"pkg:shared/lib.muro\"\n")

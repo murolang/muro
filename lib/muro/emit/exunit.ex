@@ -632,8 +632,8 @@ defmodule Muro.Emit.ExUnitSuite do
 
           Application.put_env(:muro, #{inspect(module)}, YourAdapter)
 
-      Comparisons use emitted shapes (`0`, `{:suc, n}`, `:tt`, constructor
-      tuples, pairs). Host data arrives with repr (#131).
+      Comparisons use emitted shapes (a non-negative integer for a Nat,
+      `:tt`, constructor tuples, pairs). Host data arrives with repr (#131).
       \"\"\"
 
     #{skip_block(skips)}

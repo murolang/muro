@@ -111,11 +111,10 @@ defmodule Muro.Synth.Term do
   @doc """
   The state `step` and `eval-feature` receive.
 
-  A decoded Nat is a host integer. The book matches Peano `0` and
-  `{:suc, n}`. Every Nat in `schema` is that Peano term. A list, a
-  product, and a field of a datatype, including a field whose type is
-  the datatype itself, are walked the same way. Other fields stay as
-  decoded.
+  A decoded Nat is a host integer, and so is a Nat in the emitted book.
+  A list, a product, and a field of a datatype, including a field whose
+  type is the datatype itself, are walked the same way. Other fields
+  stay as decoded.
   """
   def to_book(value, schema), do: to_book(value, schema, %{})
 
@@ -1720,33 +1719,15 @@ defmodule Muro.Synth.Term do
   defp list_label([]), do: "nil"
   defp list_label(labels), do: "cons-" <> Enum.join(labels, "-")
 
-  defp canon_nat(0), do: {:ok, 0}
   defp canon_nat(n) when is_integer(n) and n >= 0, do: {:ok, n}
-
-  defp canon_nat({:suc, n}) do
-    case canon_nat(n) do
-      {:ok, k} -> {:ok, k + 1}
-      :error -> :error
-    end
-  end
-
   defp canon_nat(_), do: :error
-
-  defp peano(n) when is_integer(n) and n >= 0, do: peano(n, 0)
-  defp peano(0, acc), do: acc
-  defp peano(n, acc) when n > 0, do: peano(n - 1, {:suc, acc})
 
   defp to_book(value, schema, bound) do
     {schema, bound} = enter(schema, bound)
     to_book_schema(schema, value, bound)
   end
 
-  defp to_book_schema(:nat, value, _bound) do
-    case canon_nat(value) do
-      {:ok, n} -> peano(n)
-      :error -> value
-    end
-  end
+  defp to_book_schema(:nat, value, _bound), do: value
 
   defp to_book_schema({:enum, _, _}, value, _bound), do: value
 

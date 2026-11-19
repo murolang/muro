@@ -31,19 +31,19 @@ defmodule Muro.StdOrdTest do
     [{^mod, _bin}] = Code.compile_string(source)
     lex = String.to_atom(Muro.Emit.elixir_base("lex-tag"))
 
-    assert apply(mod, lex, [n(0), n(0), n(0), n(0)]) == n(1)
-    assert apply(mod, lex, [n(0), n(1), n(0), n(0)]) == n(2)
-    assert apply(mod, lex, [n(0), n(0), n(0), n(1)]) == n(0)
-    assert apply(mod, lex, [n(1), n(0), n(0), n(5)]) == n(2)
-    assert apply(mod, lex, [n(2), n(0), n(2), n(1)]) == n(0)
-    assert apply(mod, lex, [n(2), n(1), n(2), n(1)]) == n(1)
+    assert apply(mod, lex, [0, 0, 0, 0]) == 1
+    assert apply(mod, lex, [0, 1, 0, 0]) == 2
+    assert apply(mod, lex, [0, 0, 0, 1]) == 0
+    assert apply(mod, lex, [1, 0, 0, 5]) == 2
+    assert apply(mod, lex, [2, 0, 2, 1]) == 0
+    assert apply(mod, lex, [2, 1, 2, 1]) == 1
 
-    left = n(@elixir_huge)
-    right = n(@elixir_huge)
+    left = @elixir_huge
+    right = @elixir_huge
     before = reductions()
-    {us, tag} = :timer.tc(fn -> apply(mod, lex, [n(0), left, n(1), right]) end)
+    {us, tag} = :timer.tc(fn -> apply(mod, lex, [0, left, 1, right]) end)
     spent = reductions() - before
-    assert tag == n(0)
+    assert tag == 0
     assert us < @fast_us, "elixir walked the tails in #{us} us"
     assert spent < @fast_reds, "elixir spent #{spent} reductions on unequal heads"
   end
@@ -143,9 +143,6 @@ defmodule Muro.StdOrdTest do
           | gt => suc (suc 0)
     """
   end
-
-  defp n(0), do: 0
-  defp n(k) when k > 0, do: Enum.reduce(1..k, 0, fn _, acc -> {:suc, acc} end)
 
   defp reductions do
     {:reductions, n} = Process.info(self(), :reductions)

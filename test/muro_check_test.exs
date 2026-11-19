@@ -111,8 +111,7 @@ defmodule Muro.CheckTest do
   test "emitted half of eight is four" do
     src = Emit.emit_module(Muro.NatLive, Example.book())
     Code.eval_string(src)
-    eight = Enum.reduce(1..8, 0, fn _, n -> {:suc, n} end)
-    assert call("NatLive", :half, [eight]) == {:suc, {:suc, {:suc, {:suc, 0}}}}
+    assert call("NatLive", :half, [8]) == 4
   end
 
   test "zeros.muro parses, checks, and emits only zeros" do
@@ -137,8 +136,8 @@ defmodule Muro.CheckTest do
     refute out =~ "swap-ok"
     Code.eval_string(out)
 
-    assert call("PairLet", :addPair, [{{:suc, 0}, {:suc, {:suc, 0}}}]) ==
-             {:suc, {:suc, {:suc, 0}}}
+    assert call("PairLet", :addPair, [{1, 2}]) ==
+             3
 
     assert call("PairLet", :swap, [{1, 2}]) == {2, 1}
   end
@@ -150,13 +149,13 @@ defmodule Muro.CheckTest do
     refute out =~ "add2-ok"
     Code.eval_string(out)
 
-    assert call("HigherOrder", :nats, []) |> Enum.take(3) == [0, {:suc, 0}, {:suc, {:suc, 0}}]
+    assert call("HigherOrder", :nats, []) |> Enum.take(3) == [0, 1, 2]
 
     assert call("HigherOrder", :add2, []) ==
-             {:cons, {:suc, {:suc, 0}}, {:cons, {:suc, {:suc, {:suc, 0}}}, nil}}
+             {:cons, 2, {:cons, 3, nil}}
 
-    assert call("HigherOrder", String.to_atom(Emit.elixir_base("len-one")), []) == {:suc, 0}
-    assert call("HigherOrder", :adder, [{:suc, 0}, {:suc, 0}]) == {:suc, {:suc, 0}}
+    assert call("HigherOrder", String.to_atom(Emit.elixir_base("len-one")), []) == 1
+    assert call("HigherOrder", :adder, [1, 1]) == 2
   end
 
   test "emit: extra arguments apply the result; an eta-reduced match body takes its binder" do
@@ -181,10 +180,10 @@ defmodule Muro.CheckTest do
     Code.eval_string(out)
 
     assert call("EmitEta", :seven, []) ==
-             {:suc, {:suc, {:suc, {:suc, {:suc, {:suc, {:suc, 0}}}}}}}
+             7
 
-    assert call("EmitEta", :picker, [0, {:suc, 0}]) == {:suc, 0}
-    assert call("EmitEta", :pick, [{:suc, 0}, {:suc, 0}]) == {:suc, 0}
+    assert call("EmitEta", :picker, [0, 1]) == 1
+    assert call("EmitEta", :pick, [1, 1]) == 1
   end
 
   test "a keyword is a whole word: successor, reflect, ttl, Natural, matcher are names" do
@@ -290,8 +289,8 @@ defmodule Muro.CheckTest do
 
     out = Emit.emit_module(Muro.RunAliasEx, book)
     Code.eval_string(out)
-    assert call("RunAliasEx", :two, []) == {:suc, {:suc, 0}}
-    assert call("RunAliasEx", :swap, [{0, {:suc, 0}}]) == {{:suc, 0}, 0}
+    assert call("RunAliasEx", :two, []) == 2
+    assert call("RunAliasEx", :swap, [{0, 1}]) == {1, 0}
 
     {:ok, bad} =
       Parser.parse("""
@@ -366,7 +365,7 @@ defmodule Muro.CheckTest do
     out = Emit.emit_module(Muro.ResultEx, book)
     Code.eval_string(out)
     assert call("ResultEx", :pred, [0]) == {:error, :tt}
-    assert call("ResultEx", :pred, [{:suc, 0}]) == {:ok, 0}
+    assert call("ResultEx", :pred, [1]) == {:ok, 0}
     assert call("ResultEx", :orZero, [{:error, :tt}]) == 0
     assert call("ResultEx", :orZero, [{:ok, 3}]) == 3
   end
@@ -390,7 +389,7 @@ defmodule Muro.CheckTest do
 
     out = Emit.emit_module(Muro.SecondEx, book)
     Code.eval_string(out)
-    assert call("SecondEx", :second, [call("SecondEx", :natsFrom, [0])]) == {:suc, 0}
+    assert call("SecondEx", :second, [call("SecondEx", :natsFrom, [0])]) == 1
   end
 
   test "an application argument may be followed by a colon on the same line" do
@@ -465,8 +464,8 @@ defmodule Muro.CheckTest do
 
     assert call("Nats", :natsFrom, [0]) |> Stream.take(3) |> Enum.to_list() == [
              0,
-             {:suc, 0},
-             {:suc, {:suc, 0}}
+             1,
+             2
            ]
   end
 
@@ -1180,7 +1179,7 @@ defmodule Muro.CheckTest do
     assert out =~ ~r/\bdef ones2\b/
     refute out =~ "length-ones2"
     Code.eval_string(out)
-    assert call("Lists", :length, [call("Lists", :ones2, [])]) == {:suc, {:suc, 0}}
+    assert call("Lists", :length, [call("Lists", :ones2, [])]) == 2
   end
 
   test "maybe.muro checks; fromMaybe runs" do
@@ -1189,7 +1188,7 @@ defmodule Muro.CheckTest do
     assert out =~ ~r/\bdef fromMaybe\b/
     refute out =~ "fromJust1"
     Code.eval_string(out)
-    assert call("MaybeEx", :fromMaybe, [0, {:just, {:suc, 0}}]) == {:suc, 0}
+    assert call("MaybeEx", :fromMaybe, [0, {:just, 1}]) == 1
     assert call("MaybeEx", :fromMaybe, [0, :nothing]) == 0
   end
 
@@ -1203,7 +1202,7 @@ defmodule Muro.CheckTest do
     refute out =~ "size-t2"
     Code.eval_string(out)
     t2 = {:node, :leaf, {:node, :leaf, :leaf}}
-    assert call("Trees", :size, [t2]) == {:suc, {:suc, 0}}
+    assert call("Trees", :size, [t2]) == 2
   end
 
   test "strict positivity rejects Bad" do
@@ -1227,8 +1226,8 @@ defmodule Muro.CheckTest do
     assert out =~ ~r/\bdef ones1\b/
     refute out =~ "lookup-ok"
     Code.eval_string(out)
-    ones1 = {:vcons, 0, {:suc, 0}, :vnil}
-    assert call("Vecs", :lookup, [{:fzero, 0}, ones1]) == {:suc, 0}
+    ones1 = {:vcons, 0, 1, :vnil}
+    assert call("Vecs", :lookup, [{:fzero, 0}, ones1]) == 1
   end
 
   # The equation of a rewrite is evidence, or spec inside a spec term: a
@@ -1685,12 +1684,12 @@ defmodule Muro.CheckTest do
     assert call("NxAdd", :addI, [3, 4]) == 7
   end
 
-  test "Peano Nat is not emitted as s64 except through toI64" do
+  test "a Nat is a host integer, and toI64 of a numeral is that integer" do
     src = File.read!("examples/nx_add.muro")
     assert {:ok, book} = Parser.parse(src)
     out = Emit.emit_module(Muro.NxNatEmit, book)
-    assert out =~ "{:suc,"
-    assert out =~ "muro_nat_to_int"
+    refute out =~ "{:suc,"
+    assert out =~ "Muro.Word.of(:i64, 1)"
   end
 
   test "kernel identity on F32 is refused" do
@@ -2429,7 +2428,7 @@ defmodule Muro.CheckTest do
     assert {:ok, src} = Muro.emit_file(top, Muro.ParamEx)
     refute src =~ "param"
     Code.eval_string(src)
-    assert call("ParamEx", :two, []) == {:suc, {:suc, 0}}
+    assert call("ParamEx", :two, []) == 2
 
     assert {:error, msg} = Muro.check_file(Path.join(dir, "lib.muro"))
     assert msg =~ "lib.muro:1:1: param S is supplied by a file that imports this one"
@@ -2521,7 +2520,7 @@ defmodule Muro.CheckTest do
     out = Emit.emit_module(Muro.KernelNameEx, book)
     assert out =~ "import Kernel, except: [max: 2, length: 1]"
     Code.eval_string(out)
-    assert call("KernelNameEx", :top, []) == {:suc, {:suc, 0}}
+    assert call("KernelNameEx", :top, []) == 2
     assert call("KernelNameEx", :min, [0]) == 0
   end
 
@@ -2827,11 +2826,6 @@ defmodule Muro.CheckTest do
     assert {:error, msg} = Muro.check_file("examples/cshrl/lib/core.muro")
     assert msg =~ "is supplied by a file that imports this one"
 
-    nat = fn
-      _f, 0 -> 0
-      f, {:suc, n} -> 1 + f.(f, n)
-    end
-
     load = fn path, mod ->
       assert Muro.check_file(path) == :ok
       assert {:ok, src} = Muro.emit_file(path, Module.concat(Muro, mod))
@@ -2842,7 +2836,6 @@ defmodule Muro.CheckTest do
     take = fn mod, fun, start, k ->
       call(mod, fun, [start])
       |> Enum.take(k)
-      |> Enum.map(fn {a, r} -> {a, nat.(nat, r)} end)
     end
 
     load.("examples/cshrl/envs/two_state.muro", "CshrlTwo")
@@ -2864,7 +2857,7 @@ defmodule Muro.CheckTest do
     assert take.("CshrlSkill", successor, :novice, 5) ==
              [train: 0, train: 0, train: 0, work: 5, work: 5]
 
-    assert call("CshrlSkill", :value, [:novice]) |> Enum.take(5) |> Enum.map(&nat.(nat, &1)) ==
+    assert call("CshrlSkill", :value, [:novice]) |> Enum.take(5) ==
              [1, 2, 3, 5, 5]
 
     assert Muro.check_file("examples/cshrl/envs/optimal.muro") == :ok
@@ -2980,7 +2973,7 @@ defmodule Muro.CheckTest do
 
     eleven = call("StdSucBin", :eleven, [])
     assert call("StdSucBin", :fromBits, [bits11]) == eleven
-    assert call("StdSucBin", :fromBits, [bits12]) == {:suc, eleven}
+    assert call("StdSucBin", :fromBits, [bits12]) == eleven + 1
   end
 
   # The module exists only after Code.eval_string, so a literal remote call warns.

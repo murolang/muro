@@ -135,7 +135,7 @@ defmodule Muro.WordMatchTest do
     [{WordMatch, _bin}] = Code.compile_string(src)
     call = fn fun, args -> apply(WordMatch, fun, args) end
     assert call.(:pick, [true]) == 0
-    assert call.(:pick, [false]) == {:suc, 0}
+    assert call.(:pick, [false]) == 1
     assert call.(:pickWord, [true]) == 0
     assert call.(:pickWord, [false]) == 1
     assert call.(:eqByte, [97, 97]) == 1
@@ -160,7 +160,7 @@ defmodule Muro.WordMatchTest do
     assert call.(:oneField, [{:rec, 3, 4}]) == 3
     assert call.(:ignore, [0]) == 0
     assert call.(:seeOk, [:ok]) == 0
-    assert call.(:seeOk, [:bad]) == {:suc, 0}
+    assert call.(:seeOk, [:bad]) == 1
   end
 
   test "Rust matches WBool and Opt without allocating, and a Slice arm stays in the buffer" do

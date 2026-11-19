@@ -369,9 +369,9 @@ defmodule Muro.EmitJSTest do
     assert String.trim(out) == "1\n2\n2"
 
     {_js_names, ex, mod} = load_pair(path)
-    assert peano_to_int(apply(mod, fun_atom(ex, "one"), [])) == 1
-    assert peano_to_int(apply(mod, fun_atom(ex, "live"), [])) == 2
-    assert peano_to_int(apply(mod, fun_atom(ex, "steps"), [peano_n(2)])) == 2
+    assert apply(mod, fun_atom(ex, "one"), []) == 1
+    assert apply(mod, fun_atom(ex, "live"), []) == 2
+    assert apply(mod, fun_atom(ex, "steps"), [2]) == 2
   end
 
   test "parameterized data and streams carry their type arguments" do
@@ -1274,10 +1274,10 @@ defmodule Muro.EmitJSTest do
     assert String.trim(out) == "1000000\n0\n1\n7"
 
     {_js, ex, mod} = load_pair(path)
-    assert peano_to_int(apply(mod, fun_atom(ex, "count"), [peano_n(1_000_000), 0])) == 1_000_000
-    assert peano_to_int(apply(mod, fun_atom(ex, "even"), [peano_n(20_000)])) == 0
-    assert peano_to_int(apply(mod, fun_atom(ex, "odd"), [peano_n(20_000)])) == 1
-    assert peano_to_int(apply(mod, fun_atom(ex, "count"), [peano_n(4), peano_n(3)])) == 7
+    assert apply(mod, fun_atom(ex, "count"), [1_000_000, 0]) == 1_000_000
+    assert apply(mod, fun_atom(ex, "even"), [20_000]) == 0
+    assert apply(mod, fun_atom(ex, "odd"), [20_000]) == 1
+    assert apply(mod, fun_atom(ex, "count"), [4, 3]) == 7
   end
 
   @tag skip: @node_skip
@@ -1675,12 +1675,11 @@ defmodule Muro.EmitJSTest do
     apply(mod, fun_atom(names, name), Enum.map(args, &ex_val(&1, mod, names)))
   end
 
-  defp ex_val({:nat, 0}, _mod, _names), do: 0
-  defp ex_val({:nat, n}, _mod, _names) when n > 0, do: {:suc, ex_val({:nat, n - 1}, nil, nil)}
+  defp ex_val({:nat, n}, _mod, _names), do: n
   defp ex_val(:tt, _mod, _names), do: :tt
   defp ex_val({:atom, name}, _mod, _names), do: String.to_atom(name)
   defp ex_val({:string, bin}, _mod, _names), do: bin
-  defp ex_val({:host, :suc}, _mod, _names), do: fn n -> {:suc, n} end
+  defp ex_val({:host, :suc}, _mod, _names), do: fn n -> n + 1 end
   defp ex_val({:host, :id}, _mod, _names), do: fn n -> n end
 
   defp ex_val({:data, tag, fields}, mod, names) do
@@ -1690,7 +1689,6 @@ defmodule Muro.EmitJSTest do
 
   defp ex_val({:pair, a, b}, mod, names), do: {ex_val(a, mod, names), ex_val(b, mod, names)}
 
-  defp canon({:suc, n}), do: Integer.to_string(1 + peano_int(n))
   defp canon(n) when is_integer(n), do: Integer.to_string(n)
   defp canon(f) when is_function(f), do: "fn"
   defp canon(%Stream{}), do: "stream"
@@ -1707,18 +1705,6 @@ defmodule Muro.EmitJSTest do
         "(" <> canon(a) <> "," <> canon(b) <> ")"
     end
   end
-
-  defp peano_int(0), do: 0
-  defp peano_int({:suc, n}), do: 1 + peano_int(n)
-  defp peano_int(n) when is_integer(n), do: n
-
-  defp peano_n(0), do: 0
-  defp peano_n(n) when n > 0, do: Enum.reduce(1..n, 0, fn _, acc -> {:suc, acc} end)
-
-  defp peano_to_int(n), do: peano_to_int(n, 0)
-  defp peano_to_int(0, acc), do: acc
-  defp peano_to_int({:suc, n}, acc), do: peano_to_int(n, acc + 1)
-  defp peano_to_int(n, acc) when is_integer(n), do: acc + n
 
   defp load_pair(path) do
     {:ok, book} = Muro.Load.file(path)

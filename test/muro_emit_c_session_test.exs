@@ -157,7 +157,7 @@ defmodule Muro.EmitCSessionTest do
     assert msg =~ "cannot call run both"
   end
 
-  test "a nat above the run cap is refused and the state stays" do
+  test "a nat above the C run cap is refused there and the state stays" do
     text = """
     data Bool : Type where
       true : Bool
@@ -179,11 +179,15 @@ defmodule Muro.EmitCSessionTest do
 
     over = {:wire, :data, "box", [{:wire, :nat, 100_001}]}
 
-    assert {:error, {:unexpected, step, {:nat_at_most, 100_000}, _}} =
-             mod.recv(state, {:box, 100_001})
+    # The Elixir machine passes the integer to the run. A C run still takes
+    # a Peano Nat, so the C machine keeps its cap of 100_000.
+    assert {:ok, _} = mod.recv(state, {:box, 100_001})
 
-    assert step == state.s
-    replay!(bin, mod, "s", [], state, [{:recv, over}])
+    capped =
+      {:step, [], :recv, sexpr(over), 1, state.s, show({:nat_at_most, @cap}), state.s, false}
+
+    {script, wants} = script("s", [], [capped])
+    compare!("s", "s", [], wants, run_c!(bin, script))
 
     inside = {:wire, :data, "box", [{:wire, :nat, 3}]}
     assert {:ok, done} = mod.recv(state, {:box, 3})

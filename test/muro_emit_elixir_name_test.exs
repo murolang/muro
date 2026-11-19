@@ -178,9 +178,9 @@ defmodule Muro.EmitElixirNameTest do
     refute suite =~ "impl.muro__goldenzdsilence"
 
     assert [{HostsImpl, _}] = Code.compile_string(elixir)
-    assert apply(HostsImpl, :golden_silence, []) == {:suc, 0}
-    assert apply(HostsImpl, :muro__Bit, []) == {:suc, {:suc, 0}}
-    assert apply(HostsImpl, :bit, []) == {:suc, {:suc, {:suc, 0}}}
+    assert apply(HostsImpl, :golden_silence, []) == 1
+    assert apply(HostsImpl, :muro__Bit, []) == 2
+    assert apply(HostsImpl, :bit, []) == 3
     assert apply(HostsImpl, :see, []) == 0
 
     Code.compile_file(Path.join(dir, "hosts.ex"))

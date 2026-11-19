@@ -30,7 +30,7 @@ defmodule Muro.EmitReserveTest do
     assert "muro_fsm_tag" in Helpers.runs()
     assert "muro_fsm_safe_to_source" in Helpers.runs()
     assert "muro_fsm_source_to_safe" in Helpers.runs()
-    assert "muro_nat_to_int" in Helpers.runs()
+    refute "muro_nat_to_int" in Helpers.runs()
     assert "muro_repr_decode_nat" in Helpers.runs()
     assert "muro_repr_nat_max" in Helpers.runs()
     assert "muro_repr_name_term" in Helpers.runs()

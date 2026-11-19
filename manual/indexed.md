@@ -87,9 +87,9 @@ def lookup-ok : evidence {lookup Nat suc(0) (fzero 0) ones1 ≡ suc 0 : Nat} :=
 {:ok, src} = Muro.emit_file("examples/vec.muro", Muro.Vecs)
 Code.eval_string(src)
 Muro.Vecs.lookup({:fzero, 0}, Muro.Vecs.ones1())
-# {:suc, 0}
+# 1
 ```
 
-`A` was erased, so the Elixir arity starts at `n`. `n` is Peano `{:suc, 0}`. There is no bounds check in the emitted function: the index and the vector were already the same length in the type.
+`A` was erased, so the Elixir arity starts at `n`. `n` is the integer `0`. There is no bounds check in the emitted function: the index and the vector were already the same length in the type.
 
 Next: [Streams](streams.md).

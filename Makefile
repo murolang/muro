@@ -73,6 +73,7 @@ agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Frag.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Tag.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Word.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/NatPrim.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/String.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Bytes.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/WordElim.agda

@@ -418,7 +418,7 @@ defmodule Muro.EmitFsmTest do
     assert loop.done?(st) == false
   end
 
-  test "a nat above the run cap is refused before a Peano term is built" do
+  test "a nat is passed to a run as the host integer, at any size" do
     {parent, src} =
       emit_text!("cap.muro", """
       data Bool : Type where
@@ -433,12 +433,8 @@ defmodule Muro.EmitFsmTest do
 
     assert_pure(src)
     sess = child(parent, "s")
-    over = {:box, 100_001}
-
-    assert {:error, {:unexpected, step, {:nat_at_most, 100_000}, ^over}} =
-             sess.recv(sess.init(), over)
-
-    assert step =~ "first recv (b : Box)"
+    assert {:ok, st} = sess.recv(sess.init(), {:box, 10_000_000_000})
+    assert sess.done?(st)
     assert {:ok, st} = sess.recv(sess.init(), {:box, 3})
     assert sess.done?(st)
   end

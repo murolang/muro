@@ -334,7 +334,6 @@ defmodule Muro.Synth.Reach do
   defp bits_of(bits, state), do: Map.fetch!(bits, key(state))
 
   defp positive?(0), do: false
-  defp positive?({:suc, _n}), do: true
   defp positive?(n) when is_integer(n), do: n > 0
   defp positive?(_reward), do: false
 

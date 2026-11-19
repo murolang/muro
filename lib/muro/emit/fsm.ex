@@ -1335,8 +1335,6 @@ defmodule Muro.Emit.Fsm do
     safe = safe_maps(decls)
 
     """
-    @muro_fsm_cap 100_000
-
     @doc false
     def muro_fsm_init(key, args) do
       _ = muro_fsm_host(key)
@@ -1741,7 +1739,6 @@ defmodule Muro.Emit.Fsm do
         true ->
           case muro_fsm_select(scrut, host_value, ty, arms, st) do
             {:ok, proto} -> {:ok, muro_fsm_expose(%{st | p: proto})}
-            :cap -> {:error, {:unexpected, st.s, {:nat_at_most, @muro_fsm_cap}, host_value}}
             :error -> {:error, {:unexpected, st.s, expected, host_value}}
           end
       end
@@ -1764,9 +1761,6 @@ defmodule Muro.Emit.Fsm do
       case muro_fsm_to_emitted(Map.get(st.e, name), ty) do
         {:ok, arg} ->
           muro_fsm_by_tag(muro_fsm_emitted_arm(muro_fsm_call(fname, arg), arms), arms)
-
-        :cap ->
-          :cap
 
         :error ->
           :error
@@ -2395,11 +2389,7 @@ defmodule Muro.Emit.Fsm do
 
     defp muro_fsm_desc(other), do: other
 
-    defp muro_fsm_to_emitted(n, :nat) when is_integer(n) and n >= 0 and n <= @muro_fsm_cap do
-      {:ok, muro_fsm_peano(n, 0)}
-    end
-
-    defp muro_fsm_to_emitted(n, :nat) when is_integer(n) and n > @muro_fsm_cap, do: :cap
+    defp muro_fsm_to_emitted(n, :nat) when is_integer(n) and n >= 0, do: {:ok, n}
     defp muro_fsm_to_emitted(_, :nat), do: :error
     defp muro_fsm_to_emitted(bit, :bit) when bit in [:b0, :b1], do: {:ok, bit}
     defp muro_fsm_to_emitted(:tt, :unit), do: {:ok, :tt}
@@ -2481,12 +2471,6 @@ defmodule Muro.Emit.Fsm do
         {:ok, conv} -> {:ok, muro_fsm_pack(tag, conv, :emitted)}
         other -> other
       end
-    end
-
-    defp muro_fsm_peano(0, acc), do: acc
-
-    defp muro_fsm_peano(n, acc) when is_integer(n) and n > 0 do
-      muro_fsm_peano(n - 1, {:suc, acc})
     end
 
     #{from_emitted(reprs)}
@@ -2785,19 +2769,12 @@ defmodule Muro.Emit.Fsm do
 
   defp from_emitted(_reprs) do
     """
-    defp muro_fsm_from_emitted(value, ty), do: muro_fsm_from_emitted(value, ty, 0)
+    defp muro_fsm_from_emitted(n, :nat) when is_integer(n) and n >= 0, do: {:ok, n}
+    defp muro_fsm_from_emitted(_, :nat), do: :error
+    defp muro_fsm_from_emitted(bit, :bit) when bit in [:b0, :b1], do: {:ok, bit}
+    defp muro_fsm_from_emitted(:tt, :unit), do: {:ok, :tt}
 
-    defp muro_fsm_from_emitted(0, :nat, n) when is_integer(n) and n >= 0, do: {:ok, n}
-
-    defp muro_fsm_from_emitted({:suc, rest}, :nat, n) when is_integer(n) and n < 1_000_000 do
-      muro_fsm_from_emitted(rest, :nat, n + 1)
-    end
-
-    defp muro_fsm_from_emitted(_, :nat, _), do: :error
-    defp muro_fsm_from_emitted(bit, :bit, _) when bit in [:b0, :b1], do: {:ok, bit}
-    defp muro_fsm_from_emitted(:tt, :unit, _), do: {:ok, :tt}
-
-    defp muro_fsm_from_emitted({x, y}, {:pair, a, b}, _) do
+    defp muro_fsm_from_emitted({x, y}, {:pair, a, b}) do
       case muro_fsm_from_emitted(x, a) do
         {:ok, x} ->
           case muro_fsm_from_emitted(y, b) do
@@ -2810,15 +2787,15 @@ defmodule Muro.Emit.Fsm do
       end
     end
 
-    defp muro_fsm_from_emitted(map, {:rec, fields}, _) when is_list(fields) and is_map(map) do
+    defp muro_fsm_from_emitted(map, {:rec, fields}) when is_list(fields) and is_map(map) do
       muro_fsm_unemit_rec(fields, map, [])
     end
 
-    defp muro_fsm_from_emitted(list, {:vec, elem, _ix}, _) when is_list(list) do
+    defp muro_fsm_from_emitted(list, {:vec, elem, _ix}) when is_list(list) do
       muro_fsm_unemit_list(list, elem, [])
     end
 
-    defp muro_fsm_from_emitted(value, {:dat, name, args}, _) when is_list(args) do
+    defp muro_fsm_from_emitted(value, {:dat, name, args}) when is_list(args) do
       case Map.get(muro_fsm_decls(), name) do
         %{ctors: ctors} ->
           tag = muro_fsm_source_tag(ctors, value)
@@ -2837,7 +2814,7 @@ defmodule Muro.Emit.Fsm do
       end
     end
 
-    defp muro_fsm_from_emitted(_, _, _), do: :error
+    defp muro_fsm_from_emitted(_, _), do: :error
 
     defp muro_fsm_unemit_rec([], _map, acc), do: {:ok, Map.new(acc)}
 

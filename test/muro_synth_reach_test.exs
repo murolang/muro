@@ -55,7 +55,7 @@ defmodule Muro.SynthReachTest do
       horizon: 1,
       actions: ["go"],
       all_states: [here],
-      step: fn state, "go" -> {state, {:suc, 0}} end
+      step: fn state, "go" -> {state, 1} end
     }
 
     {text, _taken} =
@@ -166,7 +166,7 @@ defmodule Muro.SynthReachTest do
       all_states: [zero, one],
       step: fn state, action ->
         case {state.value, action} do
-          {{:at, 0}, "go"} -> {one, {:suc, 0}}
+          {{:at, 0}, "go"} -> {one, 1}
           {{:at, 0}, "stay"} -> {zero, 0}
           {{:at, _n}, "go"} -> {one, 0}
           {{:at, _n}, "stay"} -> {state, 0}

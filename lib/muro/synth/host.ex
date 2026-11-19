@@ -78,7 +78,7 @@ defmodule Muro.Synth.Host do
         # of the list as written, including a repeat of an earlier action.
         decoded = listed |> decode_list() |> Enum.map(&source!(host, &1))
         actions = Enum.uniq(decoded)
-        horizon = host |> call("horizon", []) |> nat_int()
+        horizon = call(host, "horizon", [])
 
         all_states =
           if exported?(host, "all-states", 0) do
@@ -113,7 +113,7 @@ defmodule Muro.Synth.Host do
             {decode_state!(host, next), reward}
           end)
           |> Map.put(:leb, fn left, right ->
-            truth!(call(host, "leb", [emit_nat(left), emit_nat(right)]))
+            truth!(call(host, "leb", [left, right]))
           end)
           |> Map.put(:eval_feature, fn feature, state ->
             truth!(call(host, "eval-feature", [atom!(host, feature), state_arg(host, state)]))
@@ -335,10 +335,8 @@ defmodule Muro.Synth.Host do
     end
   end
 
-  # A decoded Nat is a host integer. Emitted `step` and `eval-feature`
-  # match Peano `0` and `{:suc, n}`. The state sent into the book is
-  # that Peano term, at every Nat the schema names. `leb` is unchanged:
-  # it compares the reward `step` returned, which is already that shape.
+  # A decoded Nat is a host integer, the same value emitted `step` and
+  # `eval-feature` match.
   defp state_arg(host, %Muro.Synth.Term{value: value}) do
     if host.structured do
       Muro.Synth.Term.to_book(value, host.schema)
@@ -662,17 +660,6 @@ defmodule Muro.Synth.Host do
 
   defp decode_list(tail) when tail in [nil, nil], do: []
   defp decode_list({:cons, head, tail}), do: [head | decode_list(tail)]
-
-  defp nat_int(0), do: 0
-  defp nat_int({:suc, n}), do: 1 + nat_int(n)
-  defp nat_int(n) when is_integer(n) and n >= 0, do: n
-
-  # `leb` is emitted as a match on zero and suc. A reward the search
-  # stored as an integer has to be that chain before the call.
-  defp emit_nat(n) when is_integer(n) and n >= 0, do: do_emit_nat(n, 0)
-  defp emit_nat(other), do: other
-  defp do_emit_nat(0, acc), do: acc
-  defp do_emit_nat(n, acc) when n > 0, do: do_emit_nat(n - 1, {:suc, acc})
 
   defp truth!(true), do: true
   defp truth!(false), do: false

@@ -151,13 +151,13 @@ A 0-argument constructor is an atom: `:nil`, `:nothing`, `:leaf`.
 
 Otherwise a tagged tuple: `{:cons, a, as}`, `{:just, a}`, `{:node, l, r}`.
 
-`ones2()` is `{:cons, {:suc, 0}, {:cons, {:suc, 0}, :nil}}`.
+`ones2()` is `{:cons, 1, {:cons, 1, :nil}}`.
 
 ```
 {:ok, src} = Muro.emit_file("examples/list.muro", Muro.Lists)
 Code.eval_string(src)
 Muro.Lists.length(Muro.Lists.ones2())
-# {:suc, {:suc, 0}}
+# 2
 ```
 
 A `repr` states the host shape of a declared type and emits decode and encode. Decode returns `{:ok, value, table}`. The type is still this inductive type. See [Host representations](repr.md).

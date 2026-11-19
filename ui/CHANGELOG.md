@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2
+
+Requires muro `~> 0.22.0`. Emitted Elixir in that release carries a `Nat` as an integer; the explorer draws books and does not read emitted values, so nothing on the page changes.
+
+Install it by adding `{:muro_visor, "~> 0.3.2"}` to a Mix project. A published package depends on `muro ~> 0.22.0`. A checkout builds against the repository. It does not emit code and it does not change the wall.
+
 ## 0.3.1
 
 Requires muro `~> 0.21.0`.

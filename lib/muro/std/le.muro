@@ -1,4 +1,4 @@
--- le.muro — ≤ on Nat, and max.
+-- le.muro — ≤ on Nat, max, min, and truncated subtraction.
 -- Le m n computes: Unit when m ≤ n, Empty otherwise.
 -- A closed inequality is tt. A false one is eliminated with matchEmpty.
 
@@ -94,3 +94,57 @@ def max-mono-right : evidence Π (m : Nat) → Π (n : Nat) → Π (k : Nat) →
                   | 0 => λ (nk : Empty) →
                       matchEmpty nk motive (λ _ → Le (suc (max p q)) (suc p))
                   | suc r => λ (nk : Le q r) → max-mono-right p q r nk
+
+-- The smaller of the two numbers. Each argument is used once.
+def min : run Π (m : Nat) → Π (n : Nat) → Nat :=
+  λ (m : Nat) → λ (n : Nat) →
+    match m motive (λ _ → Nat)
+      | 0 => 0
+      | suc p =>
+          (match n motive (λ _ → Nat)
+            | 0 => 0
+            | suc q => suc (min p q))
+
+-- min m n ≤ m.
+def le-min-left : evidence Π (m : Nat) → Π (n : Nat) → Le (min m n) m :=
+  λ (m : Nat) →
+    match m motive (λ (x : Nat) → Π (n : Nat) → Le (min x n) x)
+      | 0 => λ (n : Nat) → tt
+      | suc p => λ (n : Nat) →
+          match n motive (λ (y : Nat) → Le (min (suc p) y) (suc p))
+            | 0 => tt
+            | suc q => le-min-left p q
+
+-- min m n ≤ n.
+def le-min-right : evidence Π (m : Nat) → Π (n : Nat) → Le (min m n) n :=
+  λ (m : Nat) →
+    match m motive (λ (x : Nat) → Π (n : Nat) → Le (min x n) n)
+      | 0 => λ (n : Nat) → tt
+      | suc p => λ (n : Nat) →
+          match n motive (λ (y : Nat) → Le (min (suc p) y) y)
+            | 0 => tt
+            | suc q => le-min-right p q
+
+-- m minus n, and 0 when n is larger. Each argument is used once.
+def minus : run Π (m : Nat) → Π (n : Nat) → Nat :=
+  λ (m : Nat) → λ (n : Nat) →
+    match n motive (λ _ → Nat)
+      | 0 => m
+      | suc q =>
+          (match m motive (λ _ → Nat)
+            | 0 => 0
+            | suc p => minus p q)
+
+-- When m ≤ n, minus m n is 0.
+def minus-le-zero : evidence Π (m : Nat) → Π (n : Nat) → Π (mn : Le m n) → {minus m n ≡ 0 : Nat} :=
+  λ (m : Nat) →
+    match m motive (λ (x : Nat) → Π (n : Nat) → Π (mn : Le x n) → {minus x n ≡ 0 : Nat})
+      | 0 => λ (n : Nat) →
+          match n motive (λ (y : Nat) → Π (mn : Le 0 y) → {minus 0 y ≡ 0 : Nat})
+            | 0 => λ (mn : Le 0 0) → refl
+            | suc q => λ (mn : Le 0 (suc q)) → refl
+      | suc p => λ (n : Nat) →
+          match n motive (λ (y : Nat) → Π (mn : Le (suc p) y) → {minus (suc p) y ≡ 0 : Nat})
+            | 0 => λ (mn : Empty) →
+                matchEmpty mn motive (λ _ → {minus (suc p) 0 ≡ 0 : Nat})
+            | suc q => λ (mn : Le p q) → minus-le-zero p q mn

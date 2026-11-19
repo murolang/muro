@@ -2,12 +2,12 @@
 title: Machine numbers
 slug: machine
 order: 12
-summary: U8, U32, U64, and I64 are fixed-width residues. F32 and Tensor stay Nx. Nat stays Peano.
+summary: U8, U32, U64, and I64 are fixed-width residues. F32 and Tensor stay Nx. Nat stays Peano in the book.
 ---
 
 # Machine numbers
 
-In brief: `U8`, `U32`, `U64`, and `I64` are fixed-width residues. Wrapping arithmetic stays inside the width. Checked arithmetic, division, and remainder return `Opt`. Comparisons return `WBool`. There is no implicit coercion. Nat stays Peano. `F32` and `Tensor` stay Nx.
+In brief: `U8`, `U32`, `U64`, and `I64` are fixed-width residues. Wrapping arithmetic stays inside the width. Checked arithmetic, division, and remainder return `Opt`. Comparisons return `WBool`. There is no implicit coercion. Nat stays Peano in the book, and emitted Elixir carries it as a non-negative integer ([Emit](emit.md#how-values-look)). `F32` and `Tensor` stay Nx.
 
 ## Residues
 
@@ -50,7 +50,7 @@ Zig uses `u8`, `u32`, `u64`, and `i64`, with `+%`, `-%`, and `*%`. Checked opera
 
 Rust uses `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `checked_add`, `checked_sub`, `checked_mul`, `checked_div`, and `checked_rem`. A shift uses `<<` or `>>` only when the amount is below the width. `Opt` is `Option`. `WBool` is `bool`. A `match` on `WBool` is `true` and `false`. A `match` on `Opt` is `Some` and `None`. Neither builds an `Rc`.
 
-Elixir emits the residue as an integer. A word operation carries a width when either operand is a word, including a literal on the right of a nested operation. `sliceLen` and `bytesLen` are `U64`. A name with no arguments carries the width of its type, and of its body when the type does not name one. `noti` and a shift read that width from their operand. `examples/word_kind.muro` is `subi (sliceLen s) (addi (sliceLen rest) (toU64 1))` and `andi n (noti mask)` where `mask : run U64 := toU64 7`. An `I64` value is that residue, not a negative integer. `Opt` is `{:some, n}` or `:none`. `WBool` is `true` or `false`. A `match` on `WBool` is those two booleans. A `match` on `Opt` is `{:some, n}` and `:none`. JavaScript emits the same boolean, and `Opt` as `{k: "some", v}` or `{k: "none"}`. A closed word is a function. A residue that is not a closed literal is a call to `Muro.Word`: `of`, `cast`, the wrapping and checked operations, the shifts, and the bitwise operations. Those calls run in the host. The Mix archive checks the book and emits the module, and it does not put `Muro.Word` on the host's compile path. The host project depends on muro (`{:muro, "~> 0.20.31"}`). Without that dependency, `mix compile --warnings-as-errors` reports `Muro.Word` as undefined, and calling the emitted function raises `UndefinedFunctionError`. The OTP backend does not emit `run` bodies. Assembly stays the `Nat` fragment (`asm:scope`). A `match` on `WBool` or `Opt` is outside that fragment.
+Elixir emits the residue as an integer. A word operation carries a width when either operand is a word, including a literal on the right of a nested operation. `sliceLen` and `bytesLen` are `U64`. A name with no arguments carries the width of its type, and of its body when the type does not name one. `noti` and a shift read that width from their operand. `examples/word_kind.muro` is `subi (sliceLen s) (addi (sliceLen rest) (toU64 1))` and `andi n (noti mask)` where `mask : run U64 := toU64 7`. An `I64` value is that residue, not a negative integer. `toNat` of a residue is that integer, because a `Nat` is an integer there too. `Opt` is `{:some, n}` or `:none`. `WBool` is `true` or `false`. A `match` on `WBool` is those two booleans. A `match` on `Opt` is `{:some, n}` and `:none`. JavaScript emits the same boolean, and `Opt` as `{k: "some", v}` or `{k: "none"}`. A closed word is a function. A residue that is not a closed literal is a call to `Muro.Word`: `of`, `cast`, the wrapping and checked operations, the shifts, and the bitwise operations. Those calls run in the host. The Mix archive checks the book and emits the module, and it does not put `Muro.Word` on the host's compile path. The host project depends on muro (`{:muro, "~> 0.22.0"}`). Without that dependency, `mix compile --warnings-as-errors` reports `Muro.Word` as undefined, and calling the emitted function raises `UndefinedFunctionError`. The OTP backend does not emit `run` bodies. Assembly stays the `Nat` fragment (`asm:scope`). A `match` on `WBool` or `Opt` is outside that fragment.
 
 `F32`, `Tensor`, `addt`, and `packI` are refused (`c:machine`).
 

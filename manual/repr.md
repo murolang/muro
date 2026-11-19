@@ -53,7 +53,7 @@ The subject is a declared `data` type with no parameters and no indices, or `Nat
 | Shape | Host value | Muro value |
 | --- | --- | --- |
 | `boolean` | `true` / `false` | `:true` / `:false` |
-| `integer` | a non-negative integer | Peano `Nat` (`0`, `{:suc, n}`) |
+| `integer` | a non-negative integer | `Nat`, the same integer |
 | `nil` | `nil` | the constructor the shape is bound to |
 | `:circle` | the atom `:circle` | that constructor, or a fixed tag |
 | `"circle"` | the string `"circle"` | that constructor, or a fixed tag |
@@ -123,7 +123,7 @@ A duplicate name, a non-binary, or a value that is not a list raises `ArgumentEr
 
 The table grows in first-seen order. First-seen order is the order in which decode visits `interned string` positions. That traversal is fixed by the repr, never by map iteration: fixed-key maps and tuples in the order the repr lists their entries, lists in element order, a `map_of` in sorted wire-key order and, inside one pair, the key before the value. A name already in the table, from the host's starting table or from earlier in the same decode, keeps its index. The same wire value decoded twice yields the same value and the same table. Two maps built by inserting the same pairs in opposite orders do too, including a map of more than 32 keys, where the VM's iteration order changes.
 
-The next index is `map_size(by_name)`. An index above `@muro_repr_nat_max` (`1_000_000`) is `{:too_many_names, max}` at the position being decoded. The guard is the same one an integer uses, because a name is built as that numeral. The attribute is emitted only when the book decodes an integer or interns a name.
+The next index is `map_size(by_name)`. An index above `@muro_repr_nat_max` (`1_000_000`) is `{:too_many_names, max}` at the position being decoded. The guard bounds the size of a name table. The attribute is emitted only when the book interns a name.
 
 Encode looks the index up in `by_index`. An index the table does not have raises `ArgumentError` naming the index and the function: `encode_wrap: no name for index 1`. Encode never extends a table.
 
@@ -133,7 +133,7 @@ Encode looks the index up in `by_index`. An index the table does not have raises
 
 It is valid only when the field type is exactly one of these:
 
-1. `Nat`. The name with index `i` is the Peano term of `i`, the same term `integer` builds.
+1. `Nat`. The name with index `i` is the integer `i`, the same value `integer` decodes.
 2. A binary-numeral type, recognised by shape and not by name. It is a declared `data` type with no parameters and no indices and exactly three constructors: one nullary, and two that each have exactly one field of the type itself. The nullary constructor may sit in any declaration position. In declaration order the first unary constructor is `d1` and the second is `d2`. The index `i` is the bijective base-2 numeral: `i = 0` is the nullary constructor; an odd `i` is `d1` of the numeral for `(i - 1) / 2`; an even `i > 0` is `d2` of the numeral for `(i - 2) / 2`. Every index has exactly one term, and every term of the type has exactly one index, so encode is total on values of the type. The codec builds and reads the term with loops no deeper than the number of bits.
 
 Every other type is refused at `mix muro.check`. The message names the constructor, the field index, the type, and the allowed targets:
@@ -180,14 +180,14 @@ The ambiguity check treats `map_of` as the class of a map that accepts any keys.
 
 `else` may follow only `boolean`, `integer`, or a bare type name that has its own repr. It is refused after `list`, `optional`, `nullable`, `tuple`, `map`, `map_of`, `interned string`, a choice, or another `else`. It is refused as the whole body of a repr and as the whole shape of a choice arm (`ctor => boolean else false`). The enclosing container must already have decided the host class, so the fallback can only sit in a component: a tuple or map entry, a `list` element, an `optional` or `nullable` payload, or a `map_of` key or value. Each refusal names the constructor and the field.
 
-The fallback value is written in the book. It is a nullary constructor of the field's type, or, for a `Nat` field, a numeral at most the Nat guard. An unknown name, a constructor that takes fields, a numeral on a non-Nat field, or a numeral above the guard is refused. The message names the type and lists its nullary constructors. `Nat`'s nullary constructor is `0`. The codec builds the value at decode time: the Peano term for a numeral, the atom for a constructor.
+The fallback value is written in the book. It is a nullary constructor of the field's type, or, for a `Nat` field, a numeral. An unknown name, a constructor that takes fields, or a numeral on a non-Nat field is refused. The message names the type and lists its nullary constructors. `Nat`'s nullary constructor is `0`. The codec writes the value: the integer for a numeral, the atom for a constructor.
 
-The fallback replaces an error whose path equals the position of that shape. It does not replace an error deeper inside, a missing map key, or an integer above the Nat guard. `{:nat_too_large, v}` is a resource limit, not data.
+The fallback replaces an error whose path equals the position of that shape. It does not replace an error deeper inside, or a missing map key.
 
 | Shape | Replaced by the fallback | Left as an error |
 | --- | --- | --- |
 | `boolean else v` | every present value that is not `true` or `false`, including `nil`, `1`, `"yes"`, and a map | — |
-| `integer else v`, or `Nat else v` | a present value that is not an integer, or a negative integer | `{:nat_too_large, v}` |
+| `integer else v`, or `Nat else v` | a present value that is not an integer, or a negative integer | — |
 | `Name else v` | a present value for which `decode_name` fails at its own root: a wrong host class, `{:no_variant, …}`, `{:expected, …}`, a missing or unexpected key of that type's map | an error whose path is deeper than that root, and `{:ambiguous_key, key}` |
 | any `S else v` written as a map entry | — | the entry is absent: `{:missing_key, key}` |
 
@@ -210,9 +210,8 @@ The first error in a fixed order is the one returned: for an open map, an ambigu
 | `{:not_boolean, v}` | `boolean`, and `v` is not `true` or `false` |
 | `{:not_integer, v}` | `integer`, and `v` is not an integer |
 | `{:negative_integer, v}` | a negative integer for a `Nat` |
-| `{:nat_too_large, v}` | an integer above the Nat guard; a fallback does not replace it |
 | `{:not_string, v}` | `interned string`, and `v` is not a valid UTF-8 binary |
-| `{:too_many_names, max}` | a new name would need an index above the Nat guard |
+| `{:too_many_names, max}` | a new name would need an index above `@muro_repr_nat_max` |
 | `{:not_map, v}` | a map or `map_of` shape, and `v` is not a map |
 | `{:not_list, v}` | a list shape, and `v` is not a proper list |
 | `{:not_tuple, v}` | a tuple shape, and `v` is not a tuple |
@@ -262,17 +261,15 @@ The same check applies inside a shape that has to pick, such as `nullable` of a 
 
 ## Nat
 
-`Nat` is Peano in the emitted module: `0` and `{:suc, n}`. Decode of an integer builds that term with a tail call, one constructor per unit. Encode counts the chain with an accumulator. Both are linear in the value.
+`Nat` is a non-negative integer in the emitted module, so decode of an integer is that integer and encode returns it. Neither walks the value, and there is no upper bound, so a host that decodes untrusted input bounds the integer itself. A negative integer is `{:negative_integer, v}`. A float, a string, or `nil` is `{:not_integer, v}`.
 
-An integer above the guard is `{:nat_too_large, v}`. The guard is the module attribute `@muro_repr_nat_max`, set to `1_000_000` in the generated code, so the limit is visible and the same on every run. A negative integer is `{:negative_integer, v}`. A float, a string, or `nil` is `{:not_integer, v}`.
-
-An interned name whose target is `Nat` builds the same Peano term, so the same guard bounds the table. A binary-numeral target, described above, is the other numeral a name may use. Its terms are as deep as the bit count, not as deep as the index. `std:suc_bin.muro` is a library successor on `List Bit`; it is not an interned-name target. Keep host integers and `Nat` names inside the guard, or intern into a binary numeral.
+An interned name whose target is `Nat` is its index. `@muro_repr_nat_max`, set to `1_000_000` in the generated code, bounds how many names one table holds. A binary-numeral target, described above, is the other numeral a name may use. Its terms are as deep as the bit count, not as deep as the index. `std:suc_bin.muro` is a library successor on `List Bit`; it is not an interned-name target.
 
 ## In a host
 
 `<type>` is the type name in snake case. `Entry` is `entry`. `HttpRequest` is `http_request`. `-` and `'` become `_`. A snake form that is not a function name, or that contains `__`, uses the Elixir function spelling instead. The functions are public. A name that collides with a run, with another type's snake case, or with a codec helper is refused, and the error names both. The table helpers (`muro_repr_table_new`, `muro_repr_table_names`, and the private helpers they use) are on that list in every repr, including a book that interns nothing.
 
-Reprs from imported books are emitted in book order, the same way runs from imports are. A book with no repr emits the same module text as before. A feature's private helpers are emitted only when the book uses that feature, so a boolean repr does not carry the Nat guard or the name decoder.
+Reprs from imported books are emitted in book order, the same way runs from imports are. A book with no repr emits the same module text as before. A feature's private helpers are emitted only when the book uses that feature, so a boolean repr does not carry the name table guard or the name decoder.
 
 `mix muro.emit path.muro` prints the module. `mix muro.gen` writes it at the path the manifest names, and the codec is part of that file. `mix muro.gen --check` fails when the repr changes, because the book hash changed, and it fails when the codec is edited by hand. See [Committed modules](gen.md).
 
@@ -305,7 +302,7 @@ Host.Repr.decode_entry(%{"id" => 3, "enabled" => 1})
 # {:error, {["enabled"], {:not_boolean, 1}}}
 ```
 
-The host terms on both ends are maps, booleans, and integers. Nothing in the call builds `{:suc, _}` or `{:just, _}`.
+The host terms on both ends are maps, booleans, and integers. Nothing in the call builds `{:just, _}`.
 
 `examples/repr_names.muro` is the wire whose keys are data. `Key` is `wild` for the literal `"*"` and `named` of an interned `Nat` for every other string. `Entry` is a map. A missing `"read"` is `nothing`. Any other present value that is not a boolean, including `nil`, is `just false`. `Template` is a one-field newtype over a list of bindings, and the wire is a map from a key to a list of entries.
 
@@ -325,13 +322,13 @@ v
 #   {:binding, :wild, {:cons, {:entry, :wild, {:just, true}}, nil}},
 #   {:cons,
 #    {:binding, {:named, 0},
-#     {:cons, {:entry, {:named, {:suc, 0}}, {:just, false}}, nil}},
+#     {:cons, {:entry, {:named, 1}, {:just, false}}, nil}},
 #    nil}}}
 ```
 
 `"*"` sorts before `"auth"`. `wild` takes the literal, so `"*"` is not a name. `"auth"` is seen as the map key and is index 0. `"token"` is seen as the relation and is index 1.
 
-`reads_off` turns every `read` flag to `just false`. `count_entries` of this value is `{:suc, {:suc, 0}}`.
+`reads_off` turns every `read` flag to `just false`. `count_entries` of this value is `2`.
 
 ```elixir
 Host.ReprNames.encode_template(Host.ReprNames.reads_off(v), table)
@@ -341,7 +338,7 @@ Host.ReprNames.encode_template(Host.ReprNames.reads_off(v), table)
 # }
 
 Host.ReprNames.count_entries(v)
-# {:suc, {:suc, 0}}
+# 2
 
 Host.ReprNames.decode_template(Host.ReprNames.encode_template(v, table), table)
 # {:ok, v, table}
@@ -352,7 +349,7 @@ A starting table keeps the indices the host already assigned. `"*"` is still `wi
 ```elixir
 preset = Host.ReprNames.muro_repr_table_new(["token", "auth"])
 {:ok, known, ^preset} = Host.ReprNames.decode_template(wire, preset)
-# "auth" is {:named, {:suc, 0}} and "token" is {:named, 0}
+# "auth" is {:named, 1} and "token" is {:named, 0}
 Host.ReprNames.encode_template(known, preset) == wire
 # true
 ```

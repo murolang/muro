@@ -108,10 +108,10 @@ defmodule Muro.EmitExunitTest do
     refute source =~ "all-n"
     refute source =~ "zero-eq"
     refute source =~ "head-zeros"
-    assert source =~ "impl.round({:suc, {:suc, 0}}) == {:suc, {:suc, 0}}"
-    assert source =~ "impl.golden() == {:suc, {:suc, 0}}"
-    assert source =~ "impl.pred2({:suc, {:suc, 0}}) == {:ok, {:suc, 0}}"
-    assert source =~ "impl.pair() == {{:suc, 0}, {:suc, {:suc, 0}}}"
+    assert source =~ "impl.round(2) == 2"
+    assert source =~ "impl.golden() == 2"
+    assert source =~ "impl.pred2(2) == {:ok, 1}"
+    assert source =~ "impl.pair() == {1, 2}"
     assert source =~ "@callback round(term()) :: term()"
     assert source =~ "@callback golden() :: term()"
     assert source =~ "@impl_mod Round"
@@ -383,7 +383,7 @@ defmodule Muro.EmitExunitTest do
     assert {:ok, %{source: source, skips: [], tests: 1}} =
              Muro.emit_exunit(path, UseTest, root: dir, book: "use.muro")
 
-    assert source =~ "impl.m() == {:suc, 0}"
+    assert source =~ "impl.m() == 1"
     refute source =~ "n-ok"
     refute source =~ "impl.n"
   end

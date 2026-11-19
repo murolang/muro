@@ -553,19 +553,23 @@ defmodule Muro.EmitCGapsTest do
 
     mod = compile_source!(source, CGapsId)
     assert mod.idClassOf(0) == :id_none
-    assert mod.idClassOf({:suc, 0}) == :id_bad
-    assert mod.idClassOf({:suc, {:suc, 0}}) == :id_unknown
+    assert mod.idClassOf(1) == :id_bad
+    assert mod.idClassOf(2) == :id_unknown
     assert mod.idNumber(0) == 0
-    assert mod.idNumber({:suc, 0}) == 0
-    assert mod.idNumber({:suc, {:suc, 0}}) == 1
+    assert mod.idNumber(1) == 0
+    assert mod.idNumber(2) == 1
     assert mod.idCount(0) == 2
-    assert mod.idCount({:suc, 0}) == 3
-    assert mod.idTag(:id_missing) == {:suc, {:suc, {:suc, 0}}}
-    assert mod.idTag(:id_present) == {:suc, {:suc, {:suc, {:suc, 0}}}}
+    assert mod.idCount(1) == 3
+    assert mod.idTag(:id_missing) == 3
+    assert mod.idTag(:id_present) == 4
   end
 
   defp fun_body!(source, name, next) do
-    stop = if next, do: "\\n+\\s*def #{next}\\b", else: "(?:\\n+\\s*defp\\b|\\s*\\z)"
+    stop =
+      if next,
+        do: "\\n+\\s*def #{next}\\b",
+        else: "(?:\\n+\\s*defp\\b|\\n+end\\s*\\z|\\s*\\z)"
+
     regex = Regex.compile!("def #{name}\\(.*?\\n  end(?=#{stop})", "s")
 
     case Regex.run(regex, source) do

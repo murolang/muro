@@ -24,6 +24,5 @@ defmodule FnvSlice do
   def hashA do
     hash("a")
   end
-  defp muro_nat_to_int(0), do: 0
-  defp muro_nat_to_int({:suc, n}), do: 1 + muro_nat_to_int(n)
+
 end

@@ -98,7 +98,7 @@ defmodule Bytes do
   end
   
   def at0 do
-    (fn s, i -> if i >= 0 and i < byte_size(s), do: {:some, :binary.at(s, i)}, else: :none end).("ab", Muro.Word.of(:u64, muro_nat_to_int(0)))
+    (fn s, i -> if i >= 0 and i < byte_size(s), do: {:some, :binary.at(s, i)}, else: :none end).("ab", Muro.Word.of(:u64, 0))
   end
   
   def at1 do
@@ -126,8 +126,7 @@ defmodule Bytes do
   end
   
   def sum2 do
-    (fn f, z, s -> recur = fn recur, acc, cur -> case cur do <<>> -> acc; <<b, rest::binary>> -> recur.(recur, f.(b).(rest).(acc), rest) end end; recur.(recur, z, s) end).(fn x0 -> fn _ -> fn x2 -> Muro.Word.add(:u64, x2, Muro.Word.cast(:u64, x0)) end end end, Muro.Word.of(:u64, muro_nat_to_int(0)), <<1, 2>>)
+    (fn f, z, s -> recur = fn recur, acc, cur -> case cur do <<>> -> acc; <<b, rest::binary>> -> recur.(recur, f.(b).(rest).(acc), rest) end end; recur.(recur, z, s) end).(fn x0 -> fn _ -> fn x2 -> Muro.Word.add(:u64, x2, Muro.Word.cast(:u64, x0)) end end end, Muro.Word.of(:u64, 0), <<1, 2>>)
   end
-  defp muro_nat_to_int(0), do: 0
-  defp muro_nat_to_int({:suc, n}), do: 1 + muro_nat_to_int(n)
+
 end

@@ -22,7 +22,7 @@ These are left out of the suite and out of the skip list. They are not closed eq
 
 Each candidate becomes one test or one skipped line. The count of tests plus the count of skips is the count of candidates.
 
-Arguments and the result are normalized with the checker's fuel (`Muro.Check.normalize/3`, default 2000). A nullary `run` used as an argument or a result, such as `golden-x`, is replaced by that value. The value is then printed with the shapes in [How values look](emit.md#how-values-look): `0`, `{:suc, n}`, `:tt`, an atom for a constructor with no fields, `{:ctor, args…}`, `{a, b}`. `Muro.Emit.emit_closed/2` is that printer. A later `repr` (#131) hooks in there.
+Arguments and the result are normalized with the checker's fuel (`Muro.Check.normalize/3`, default 2000). A nullary `run` used as an argument or a result, such as `golden-x`, is replaced by that value. The value is then printed with the shapes in [How values look](emit.md#how-values-look): a non-negative integer for a `Nat`, `:tt`, an atom for a constructor with no fields, `{:ctor, args…}`, `{a, b}`. `Muro.Emit.emit_closed/2` is that printer. A later `repr` (#131) hooks in there.
 
 Host data arrives with repr (#131). Until then the suite compares emitted shapes. A map such as `%{"id" => 3, "enabled" => true}` is not what the assertion sees.
 
@@ -33,7 +33,7 @@ One test per equation:
 ```elixir
 test "priv/muro/rounding.muro round-ok" do
   impl = ...
-  assert impl.round({:suc, 0}) == {:suc, 0}, "priv/muro/rounding.muro:4 round-ok"
+  assert impl.round(1) == 1, "priv/muro/rounding.muro:4 round-ok"
 end
 ```
 
@@ -143,7 +143,7 @@ defmodule MyApp.Rounding do
 end
 ```
 
-`test/test_helper.exs` registers the case and points the suite at `MyApp.Rounding`, as above. `mix test` runs `round-ok` against that function. The arguments and the expected result are emitted shapes, `{:suc, 0}` in this equation.
+`test/test_helper.exs` registers the case and points the suite at `MyApp.Rounding`, as above. `mix test` runs `round-ok` against that function. The arguments and the expected result are emitted shapes, the integer `1` in this equation.
 
 ### Remote service
 
@@ -163,15 +163,11 @@ defmodule MyApp.RoundingAdapter do
         []
       )
 
-    decode(body)
+    List.to_integer(body)
   end
 
-  # n and the result are emitted shapes, 0 or {:suc, _}, until repr (#131).
-  defp encode(0), do: ~c"0"
-  defp encode({:suc, n}), do: [?s | encode(n)]
-
-  defp decode(~c"0"), do: 0
-  defp decode([?s | n]), do: {:suc, decode(n)}
+  # n and the result are emitted shapes: a Nat is a non-negative integer.
+  defp encode(n), do: Integer.to_charlist(n)
 end
 ```
 

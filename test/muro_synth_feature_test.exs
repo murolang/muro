@@ -15,7 +15,7 @@ defmodule Muro.SynthFeatureTest do
       host(
         states: ["a", "b"],
         actions: ["go"],
-        step: fn state, "go" -> {state, {:suc, 0}} end
+        step: fn state, "go" -> {state, 1} end
       )
 
     assert Feature.discover(host, []) == []
@@ -64,7 +64,7 @@ defmodule Muro.SynthFeatureTest do
         actions: ["go", "stay"],
         step: fn
           "a", _action -> {"a", 0}
-          "b", _action -> {"b", {:suc, 0}}
+          "b", _action -> {"b", 1}
         end
       )
 
@@ -220,13 +220,13 @@ defmodule Muro.SynthFeatureTest do
     assert Muro.Synth.Term.cert_refusal(schema) == nil
     assert Muro.Synth.Term.inhabitants(schema) == :open
 
-    raw = {:bin, {:tip, 0}, {:tip, {:suc, 0}}}
+    raw = {:bin, {:tip, 0}, {:tip, 1}}
     assert {:ok, term} = Muro.Synth.Term.decode(raw, schema)
     assert term.value == {:bin, {:tip, 0}, {:tip, 1}}
     assert term.spell == "(bin (tip 0) (tip (suc 0)))"
 
     assert Muro.Synth.Term.to_book(term.value, schema) ==
-             {:bin, {:tip, 0}, {:tip, {:suc, 0}}}
+             {:bin, {:tip, 0}, {:tip, 1}}
 
     {specs, _} = Muro.Synth.Term.templates(schema, [{:tip, 0}, raw], MapSet.new(), 1)
     assert Enum.any?(specs, &(&1.kind == :ctor_is and &1.tag == "bin" and &1.path == []))
@@ -332,12 +332,12 @@ defmodule Muro.SynthFeatureTest do
         cell : Π (xs : List Nat) → State
       """)
 
-    raw = {:cell, {:cons, {:suc, {:suc, 0}}, {:cons, 0, nil}}}
+    raw = {:cell, {:cons, 2, {:cons, 0, nil}}}
     assert {:ok, term} = Muro.Synth.Term.decode(raw, listed)
     assert term.value == {:cell, {:cons, 2, {:cons, 0, nil}}}
 
     assert Muro.Synth.Term.to_book(term.value, listed) ==
-             {:cell, {:cons, {:suc, {:suc, 0}}, {:cons, 0, nil}}}
+             {:cell, {:cons, 2, {:cons, 0, nil}}}
 
     paired =
       parsed_schema("""
@@ -345,10 +345,10 @@ defmodule Muro.SynthFeatureTest do
         hold : Π (p : Nat × Nat) → State
       """)
 
-    pair = {:hold, {{:suc, 0}, 0}}
+    pair = {:hold, {1, 0}}
     assert {:ok, held} = Muro.Synth.Term.decode(pair, paired)
     assert held.value == {:hold, {1, 0}}
-    assert Muro.Synth.Term.to_book(held.value, paired) == {:hold, {{:suc, 0}, 0}}
+    assert Muro.Synth.Term.to_book(held.value, paired) == {:hold, {1, 0}}
   end
 
   test "a back-edge under a list or a product is not equatable" do
@@ -530,7 +530,7 @@ defmodule Muro.SynthFeatureTest do
   defp pos_step do
     fn
       "a", "go" -> {"a", 0}
-      "b", "go" -> {"b", {:suc, 0}}
+      "b", "go" -> {"b", 1}
     end
   end
 

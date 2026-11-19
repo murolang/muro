@@ -935,7 +935,7 @@ EOF
   have "$names_run" '"relation" => "token"' "repr names token relation"
   have "$names_run" '"read" => true' "repr names read true"
   have "$names_run" '"read" => false' "repr names read false"
-  have "$names_run" 'NAMES_COUNT {:suc, {:suc, 0}}' "repr names count"
+  have "$names_run" 'NAMES_COUNT 2' "repr names count"
 
   cat > bad_repr.muro <<'EOF'
 data E : Type where

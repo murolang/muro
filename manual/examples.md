@@ -683,7 +683,7 @@ The method and the path of one request line, as `Slice` views. `method` is the p
 
 ## nx_add.muro
 
-`addI` is wrapping `I64` addition. `addt` and `packI` are still Nx, and `doubled` is `[2, 4]` after `Nx.to_flat_list/1`. Nat stays Peano.
+`addI` is wrapping `I64` addition. `addt` and `packI` are still Nx, and `doubled` is `[2, 4]` after `Nx.to_flat_list/1`.
 
 See [Machine numbers](machine.md).
 
