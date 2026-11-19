@@ -2622,7 +2622,7 @@ defmodule Muro.Emit.Fsm do
 
     #||fail
     # An empty literal map makes Map.get always return nil.
-    defp muro_fsm_fails, do: :maps.from_list(#{lit(Map.to_list(fail_tables(st.book, st)))})
+    defp muro_fsm_fails, do: :maps.from_list(#{lit(Enum.sort(Map.to_list(fail_tables(st.book, st))))})
 
     #||/fail
     defp muro_fsm_duals, do: #{lit(duals)}
@@ -2632,13 +2632,13 @@ defmodule Muro.Emit.Fsm do
     defp muro_fsm_end(key), do: Map.get(muro_fsm_ends(), key, "")
 
     # An empty literal map makes Map.get always return its default.
-    defp muro_fsm_decls, do: :maps.from_list(#{lit(Map.to_list(decls))})
+    defp muro_fsm_decls, do: :maps.from_list(#{lit(Enum.sort(Map.to_list(decls)))})
 
     defp muro_fsm_reprs, do: #{lit(reprs)}
 
-    defp muro_fsm_source_to_safe, do: :maps.from_list(#{lit(Map.to_list(safe.to))})
+    defp muro_fsm_source_to_safe, do: :maps.from_list(#{lit(Enum.sort(Map.to_list(safe.to)))})
 
-    defp muro_fsm_safe_to_source, do: :maps.from_list(#{lit(Map.to_list(safe.from))})
+    defp muro_fsm_safe_to_source, do: :maps.from_list(#{lit(Enum.sort(Map.to_list(safe.from)))})
 
     # One host decode, at this boundary. The result is a source tag.
     # `muro_fsm_payload?` and `muro_fsm_to_emitted` read that tag and do
@@ -2956,8 +2956,16 @@ defmodule Muro.Emit.Fsm do
     |> String.trim()
   end
 
+  # Since OTP 26 a small map with atom keys iterates in atom-table order,
+  # which depends on what the VM loaded first. Sorting the keys keeps the
+  # emitted text the same in every VM.
   defp lit(term) do
-    inspect(term, limit: :infinity, printable_limit: :infinity, charlists: :as_lists)
+    inspect(term,
+      limit: :infinity,
+      printable_limit: :infinity,
+      charlists: :as_lists,
+      custom_options: [sort_maps: true]
+    )
   end
 
   defp children(module, st) do

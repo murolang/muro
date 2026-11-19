@@ -227,8 +227,11 @@ defmodule Muro.Emit.Otp do
     Session.carry_fail(proc, book)
   end
 
-  defp skel_text(term, true), do: inspect(term, limit: :infinity)
-  defp skel_text(term, false), do: inspect(term)
+  # Map keys are sorted so the text does not depend on atom-table order.
+  defp skel_text(term, true),
+    do: inspect(term, limit: :infinity, custom_options: [sort_maps: true])
+
+  defp skel_text(term, false), do: inspect(term, custom_options: [sort_maps: true])
 
   # `#||fail` / `#||plain` regions are the may-fail image and the unmarked
   # image. A book with no mark keeps the plain text, byte for byte with
@@ -1662,7 +1665,7 @@ defmodule Muro.Emit.Otp do
     decls
     |> Map.to_list()
     |> Enum.sort()
-    |> inspect(limit: :infinity, charlists: :as_lists)
+    |> inspect(limit: :infinity, charlists: :as_lists, custom_options: [sort_maps: true])
   end
 
   # Host atom → source constructor, and only when the two spellings differ.
@@ -1686,7 +1689,7 @@ defmodule Muro.Emit.Otp do
     |> Map.new()
     |> Map.to_list()
     |> Enum.sort()
-    |> inspect(limit: :infinity, charlists: :as_lists)
+    |> inspect(limit: :infinity, charlists: :as_lists, custom_options: [sort_maps: true])
   end
 
   defp indent(code, n) do
