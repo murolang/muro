@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.6
+## 0.22.7
 
 A family formula can name the instances created before the one that is opening. `earlier_resolved k command` is every earlier instance of that key and that kind. `resolved k command` still counts the instance that is opening, so that atom cannot state that a command opens only once every earlier command of its key has resolved. `examples/keyed-commands.muro` states the property with `earlier_resolved`, and the command is held while an earlier one is unresolved. An instance that has not arrived does not count, and neither does one that arrives while this one is still running. Giving up counts as resolved. When nothing of that key and kind is running, the atom holds.
 
@@ -13,6 +13,14 @@ The family graph for `examples/keyed-slots.muro` stays 171649 states and 729184 
 ### Manual
 
 - Grammar, Temporal, State machines, Limits, Examples, Emit, and Extending: `earlier_resolved`, withdrawing a held instance, and `held while any unresolved`.
+
+### Package
+
+- Version 0.22.7.
+
+## 0.22.6
+
+`--backend fsm` and `--backend otp` print a declaration's map with its keys sorted. Since OTP 26 a small map with atom keys iterates in atom-table order, and that order depends on what the VM loaded first. The same book emitted `%{ctors: …, order: …, np: …}` in a fresh VM and another order inside a long test run, so `mix muro.gen --check` failed in a host's test suite on a module `mix muro.gen` had just written. The FSM literals and the OTP declarations and skeletons now pass `custom_options: [sort_maps: true]` to `inspect`. The FSM emitter also sorts the outer pair lists of the declarations, fail tables, and host-atom maps before printing them. A book whose emitted maps had one key, or no map, emits the same text. Run `mix muro.gen` once to rewrite a committed module that has a declaration with more than one key.
 
 ### Package
 
