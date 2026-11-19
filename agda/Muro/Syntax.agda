@@ -58,6 +58,7 @@ data WOp : Set where
   woptk : WKind → WOp                 -- Opt of a word kind, saturated
   wsome : WOp
   wnone : WOp
+  wlink : WOp                         -- evidence: unsigned word agrees with Nat
 
 wk≡ᵇ : WKind → WKind → Bool
 wk≡ᵇ ku8  ku8  = true
@@ -96,6 +97,7 @@ wop≡ᵇ wopt        wopt         = true
 wop≡ᵇ (woptk k)   (woptk k′)   = wk≡ᵇ k k′
 wop≡ᵇ wsome       wsome        = true
 wop≡ᵇ wnone       wnone        = true
+wop≡ᵇ wlink       wlink        = true
 wop≡ᵇ _           _            = false
 
 showKind : WKind → String
@@ -134,6 +136,7 @@ showWOp wopt       = "Opt"
 showWOp (woptk k)  = "Opt " ++ showKind k
 showWOp wsome      = "wsome"
 showWOp wnone      = "wnone"
+showWOp wlink      = "wlink"
 
 ------------------------------------------------------------------------
 -- de Bruijn terms. Index n is the number of free variables.

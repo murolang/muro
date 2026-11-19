@@ -182,6 +182,7 @@ defmodule Muro.Ast do
           | {:optk, word_kind()}
           | :some
           | :none
+          | :link
 
   @type defn :: %{
           name: name,

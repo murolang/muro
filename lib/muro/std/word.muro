@@ -1,0 +1,292 @@
+-- word.muro — unsigned checked arithmetic agrees with Nat.
+--
+-- wlink is the evidence. It accepts plus, minus, times, and Le only
+-- as the standard definitions: plus from the prelude, minus and Le
+-- from le.muro, and times from this book. A different binding is
+-- refused. I64 is not here: toNat of −1 is 2^64−1, so the Nat
+-- equation does not hold.
+
+import "le.muro"
+
+-- minus is le.muro's truncated subtraction. times is not in that book.
+def times : run internal Π (+n : Nat) → Π (m : Nat) → Nat :=
+  λ (+n : Nat) → λ (m : Nat) →
+    match m motive (λ _ → Nat)
+      | 0 => 0
+      | suc mp => plus n (times n mp)
+
+def addc-val-u8 : evidence
+    Π (a : U8) → Π (b : U8) → Π (c : U8) →
+    Π (h : {addc a b ≡ wsome c : Opt U8}) →
+    {toNat c ≡ plus (toNat a) (toNat b) : Nat} :=
+  λ (a : U8) → λ (b : U8) → λ (c : U8) →
+  λ (h : {addc a b ≡ wsome c : Opt U8}) →
+    wlink h
+
+def addc-fit-u8 : evidence
+    Π (a : U8) → Π (b : U8) → Π (c : U8) →
+    Π (h : {addc a b ≡ wsome c : Opt U8}) →
+    Le (suc (plus (toNat a) (toNat b))) 256 :=
+  λ (a : U8) → λ (b : U8) → λ (c : U8) →
+  λ (h : {addc a b ≡ wsome c : Opt U8}) →
+    wlink h
+
+def addc-some-u8 : evidence
+    Π (a : U8) → Π (b : U8) →
+    Π (h : Le (suc (plus (toNat a) (toNat b))) 256) →
+    {addc a b ≡ wsome (toU8 (plus (toNat a) (toNat b))) : Opt U8} :=
+  λ (a : U8) → λ (b : U8) →
+  λ (h : Le (suc (plus (toNat a) (toNat b))) 256) →
+    wlink h
+
+def subc-val-u8 : evidence
+    Π (a : U8) → Π (b : U8) → Π (c : U8) →
+    Π (h : {subc a b ≡ wsome c : Opt U8}) →
+    {toNat c ≡ minus (toNat a) (toNat b) : Nat} :=
+  λ (a : U8) → λ (b : U8) → λ (c : U8) →
+  λ (h : {subc a b ≡ wsome c : Opt U8}) →
+    wlink h
+
+def subc-fit-u8 : evidence
+    Π (a : U8) → Π (b : U8) → Π (c : U8) →
+    Π (h : {subc a b ≡ wsome c : Opt U8}) →
+    Le (toNat b) (toNat a) :=
+  λ (a : U8) → λ (b : U8) → λ (c : U8) →
+  λ (h : {subc a b ≡ wsome c : Opt U8}) →
+    wlink h
+
+def subc-some-u8 : evidence
+    Π (a : U8) → Π (b : U8) →
+    Π (h : Le (toNat b) (toNat a)) →
+    {subc a b ≡ wsome (toU8 (minus (toNat a) (toNat b))) : Opt U8} :=
+  λ (a : U8) → λ (b : U8) →
+  λ (h : Le (toNat b) (toNat a)) →
+    wlink h
+
+def mulc-val-u8 : evidence
+    Π (a : U8) → Π (b : U8) → Π (c : U8) →
+    Π (h : {mulc a b ≡ wsome c : Opt U8}) →
+    {toNat c ≡ times (toNat a) (toNat b) : Nat} :=
+  λ (a : U8) → λ (b : U8) → λ (c : U8) →
+  λ (h : {mulc a b ≡ wsome c : Opt U8}) →
+    wlink h
+
+def mulc-fit-u8 : evidence
+    Π (a : U8) → Π (b : U8) → Π (c : U8) →
+    Π (h : {mulc a b ≡ wsome c : Opt U8}) →
+    Le (suc (times (toNat a) (toNat b))) 256 :=
+  λ (a : U8) → λ (b : U8) → λ (c : U8) →
+  λ (h : {mulc a b ≡ wsome c : Opt U8}) →
+    wlink h
+
+def mulc-some-u8 : evidence
+    Π (a : U8) → Π (b : U8) →
+    Π (h : Le (suc (times (toNat a) (toNat b))) 256) →
+    {mulc a b ≡ wsome (toU8 (times (toNat a) (toNat b))) : Opt U8} :=
+  λ (a : U8) → λ (b : U8) →
+  λ (h : Le (suc (times (toNat a) (toNat b))) 256) →
+    wlink h
+
+def addc-val-u32 : evidence
+    Π (a : U32) → Π (b : U32) → Π (c : U32) →
+    Π (h : {addc a b ≡ wsome c : Opt U32}) →
+    {toNat c ≡ plus (toNat a) (toNat b) : Nat} :=
+  λ (a : U32) → λ (b : U32) → λ (c : U32) →
+  λ (h : {addc a b ≡ wsome c : Opt U32}) →
+    wlink h
+
+def addc-fit-u32 : evidence
+    Π (a : U32) → Π (b : U32) → Π (c : U32) →
+    Π (h : {addc a b ≡ wsome c : Opt U32}) →
+    Le (suc (plus (toNat a) (toNat b))) 4294967296 :=
+  λ (a : U32) → λ (b : U32) → λ (c : U32) →
+  λ (h : {addc a b ≡ wsome c : Opt U32}) →
+    wlink h
+
+def addc-some-u32 : evidence
+    Π (a : U32) → Π (b : U32) →
+    Π (h : Le (suc (plus (toNat a) (toNat b))) 4294967296) →
+    {addc a b ≡ wsome (toU32 (plus (toNat a) (toNat b))) : Opt U32} :=
+  λ (a : U32) → λ (b : U32) →
+  λ (h : Le (suc (plus (toNat a) (toNat b))) 4294967296) →
+    wlink h
+
+def subc-val-u32 : evidence
+    Π (a : U32) → Π (b : U32) → Π (c : U32) →
+    Π (h : {subc a b ≡ wsome c : Opt U32}) →
+    {toNat c ≡ minus (toNat a) (toNat b) : Nat} :=
+  λ (a : U32) → λ (b : U32) → λ (c : U32) →
+  λ (h : {subc a b ≡ wsome c : Opt U32}) →
+    wlink h
+
+def subc-fit-u32 : evidence
+    Π (a : U32) → Π (b : U32) → Π (c : U32) →
+    Π (h : {subc a b ≡ wsome c : Opt U32}) →
+    Le (toNat b) (toNat a) :=
+  λ (a : U32) → λ (b : U32) → λ (c : U32) →
+  λ (h : {subc a b ≡ wsome c : Opt U32}) →
+    wlink h
+
+def subc-some-u32 : evidence
+    Π (a : U32) → Π (b : U32) →
+    Π (h : Le (toNat b) (toNat a)) →
+    {subc a b ≡ wsome (toU32 (minus (toNat a) (toNat b))) : Opt U32} :=
+  λ (a : U32) → λ (b : U32) →
+  λ (h : Le (toNat b) (toNat a)) →
+    wlink h
+
+def mulc-val-u32 : evidence
+    Π (a : U32) → Π (b : U32) → Π (c : U32) →
+    Π (h : {mulc a b ≡ wsome c : Opt U32}) →
+    {toNat c ≡ times (toNat a) (toNat b) : Nat} :=
+  λ (a : U32) → λ (b : U32) → λ (c : U32) →
+  λ (h : {mulc a b ≡ wsome c : Opt U32}) →
+    wlink h
+
+def mulc-fit-u32 : evidence
+    Π (a : U32) → Π (b : U32) → Π (c : U32) →
+    Π (h : {mulc a b ≡ wsome c : Opt U32}) →
+    Le (suc (times (toNat a) (toNat b))) 4294967296 :=
+  λ (a : U32) → λ (b : U32) → λ (c : U32) →
+  λ (h : {mulc a b ≡ wsome c : Opt U32}) →
+    wlink h
+
+def mulc-some-u32 : evidence
+    Π (a : U32) → Π (b : U32) →
+    Π (h : Le (suc (times (toNat a) (toNat b))) 4294967296) →
+    {mulc a b ≡ wsome (toU32 (times (toNat a) (toNat b))) : Opt U32} :=
+  λ (a : U32) → λ (b : U32) →
+  λ (h : Le (suc (times (toNat a) (toNat b))) 4294967296) →
+    wlink h
+
+def addc-val-u64 : evidence
+    Π (a : U64) → Π (b : U64) → Π (c : U64) →
+    Π (h : {addc a b ≡ wsome c : Opt U64}) →
+    {toNat c ≡ plus (toNat a) (toNat b) : Nat} :=
+  λ (a : U64) → λ (b : U64) → λ (c : U64) →
+  λ (h : {addc a b ≡ wsome c : Opt U64}) →
+    wlink h
+
+def addc-fit-u64 : evidence
+    Π (a : U64) → Π (b : U64) → Π (c : U64) →
+    Π (h : {addc a b ≡ wsome c : Opt U64}) →
+    Le (suc (plus (toNat a) (toNat b))) 18446744073709551616 :=
+  λ (a : U64) → λ (b : U64) → λ (c : U64) →
+  λ (h : {addc a b ≡ wsome c : Opt U64}) →
+    wlink h
+
+def addc-some-u64 : evidence
+    Π (a : U64) → Π (b : U64) →
+    Π (h : Le (suc (plus (toNat a) (toNat b))) 18446744073709551616) →
+    {addc a b ≡ wsome (toU64 (plus (toNat a) (toNat b))) : Opt U64} :=
+  λ (a : U64) → λ (b : U64) →
+  λ (h : Le (suc (plus (toNat a) (toNat b))) 18446744073709551616) →
+    wlink h
+
+def subc-val-u64 : evidence
+    Π (a : U64) → Π (b : U64) → Π (c : U64) →
+    Π (h : {subc a b ≡ wsome c : Opt U64}) →
+    {toNat c ≡ minus (toNat a) (toNat b) : Nat} :=
+  λ (a : U64) → λ (b : U64) → λ (c : U64) →
+  λ (h : {subc a b ≡ wsome c : Opt U64}) →
+    wlink h
+
+def subc-fit-u64 : evidence
+    Π (a : U64) → Π (b : U64) → Π (c : U64) →
+    Π (h : {subc a b ≡ wsome c : Opt U64}) →
+    Le (toNat b) (toNat a) :=
+  λ (a : U64) → λ (b : U64) → λ (c : U64) →
+  λ (h : {subc a b ≡ wsome c : Opt U64}) →
+    wlink h
+
+def subc-some-u64 : evidence
+    Π (a : U64) → Π (b : U64) →
+    Π (h : Le (toNat b) (toNat a)) →
+    {subc a b ≡ wsome (toU64 (minus (toNat a) (toNat b))) : Opt U64} :=
+  λ (a : U64) → λ (b : U64) →
+  λ (h : Le (toNat b) (toNat a)) →
+    wlink h
+
+def mulc-val-u64 : evidence
+    Π (a : U64) → Π (b : U64) → Π (c : U64) →
+    Π (h : {mulc a b ≡ wsome c : Opt U64}) →
+    {toNat c ≡ times (toNat a) (toNat b) : Nat} :=
+  λ (a : U64) → λ (b : U64) → λ (c : U64) →
+  λ (h : {mulc a b ≡ wsome c : Opt U64}) →
+    wlink h
+
+def mulc-fit-u64 : evidence
+    Π (a : U64) → Π (b : U64) → Π (c : U64) →
+    Π (h : {mulc a b ≡ wsome c : Opt U64}) →
+    Le (suc (times (toNat a) (toNat b))) 18446744073709551616 :=
+  λ (a : U64) → λ (b : U64) → λ (c : U64) →
+  λ (h : {mulc a b ≡ wsome c : Opt U64}) →
+    wlink h
+
+def mulc-some-u64 : evidence
+    Π (a : U64) → Π (b : U64) →
+    Π (h : Le (suc (times (toNat a) (toNat b))) 18446744073709551616) →
+    {mulc a b ≡ wsome (toU64 (times (toNat a) (toNat b))) : Opt U64} :=
+  λ (a : U64) → λ (b : U64) →
+  λ (h : Le (suc (times (toNat a) (toNat b))) 18446744073709551616) →
+    wlink h
+
+def minus-closed : evidence {minus 5 3 ≡ 2 : Nat} := refl
+
+def times-closed : evidence {times 4 3 ≡ 12 : Nat} := refl
+
+def boundary-u64 : evidence
+    {addc (toU64 4294967295) (toU64 1) ≡ wsome (toU64 4294967296) : Opt U64} :=
+  refl
+
+def boundary-u32 : evidence
+    {addc (toU32 4294967295) (toU32 1) ≡ wnone : Opt U32} :=
+  refl
+
+def boundary-mul : evidence
+    {mulc (toU64 4294967296) (toU64 4294967296) ≡ wnone : Opt U64} :=
+  refl
+
+def cup : run U8 := toU8 200
+
+def lid : run U8 := toU8 50
+
+def cup-bound : evidence Le (suc (plus (toNat cup) (toNat lid))) 256 := tt
+
+def cup-sum : evidence
+    {addc cup lid ≡ wsome (toU8 (plus (toNat cup) (toNat lid))) : Opt U8} :=
+  addc-some-u8 cup lid cup-bound
+
+-- Centidollars. The sums are closed, and the equations cite the lemmas.
+def coffee : run U64 := toU64 100
+
+def tip : run U64 := toU64 25
+
+def tax : run U64 := toU64 10
+
+def line-bound : evidence
+    Le (suc (plus (toNat coffee) (toNat tip))) 18446744073709551616 :=
+  tt
+
+def line : evidence
+    {addc coffee tip ≡ wsome (toU64 (plus (toNat coffee) (toNat tip))) : Opt U64} :=
+  addc-some-u64 coffee tip line-bound
+
+def line-nat : evidence
+    {toNat (toU64 (plus (toNat coffee) (toNat tip))) ≡ plus (toNat coffee) (toNat tip) : Nat} :=
+  addc-val-u64 coffee tip (toU64 (plus (toNat coffee) (toNat tip))) line
+
+-- 100 + 25, the closed word. line-nat is that sum as Nat.
+def subtotal : run U64 := toU64 125
+
+def bill-bound : evidence
+    Le (suc (plus (toNat subtotal) (toNat tax))) 18446744073709551616 :=
+  tt
+
+def bill : evidence
+    {addc subtotal tax ≡ wsome (toU64 (plus (toNat subtotal) (toNat tax))) : Opt U64} :=
+  addc-some-u64 subtotal tax bill-bound
+
+def bill-nat : evidence
+    {toNat (toU64 (plus (toNat subtotal) (toNat tax))) ≡ plus (toNat subtotal) (toNat tax) : Nat} :=
+  addc-val-u64 subtotal tax (toU64 (plus (toNat subtotal) (toNat tax))) bill

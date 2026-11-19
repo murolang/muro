@@ -4775,6 +4775,9 @@ defmodule Muro.Parser do
       word_kw?(s, "wsome") ->
         parse_word_unary(s, "wsome", :some)
 
+      word_kw?(s, "wlink") ->
+        parse_word_unary(s, "wlink", :link)
+
       word_kw?(s, "F32") ->
         leaf(s, :f32ty, after_kw(s, "F32"))
 

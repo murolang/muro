@@ -17,6 +17,7 @@ open import Muro.Check public
 import Muro.String
 import Muro.Bytes
 import Muro.WordElim
+import Muro.WordLink
 import Muro.SubstLemmas
 import Muro.Spine
 import Muro.Reduction

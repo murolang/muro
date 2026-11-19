@@ -2,25 +2,25 @@
 title: Library
 slug: library
 order: 16
-summary: The ordinary library, imported as std:. Bool, Le, List, Maybe, comparison, and a binary successor.
+summary: The ordinary library, imported as std:. Bool, Le, List, Maybe, comparison, a binary successor, and unsigned word arithmetic.
 ---
 
 # Library
 
-In brief: six ordinary `.muro` books ship inside the compiler. `import "std:list.muro"` loads that copy. The bytes are the same from a Hex package, from the self-contained executable, and from a checkout of this repository.
+In brief: seven ordinary `.muro` books ship inside the compiler. `import "std:list.muro"` loads that copy. The bytes are the same from a Hex package, from the self-contained executable, and from a checkout of this repository.
 
 ```
 import "std:list.muro"
 ```
 
-The name after `std:` is a file in the library: `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, `ord.muro`, or `suc_bin.muro`. A name that is not one of those is an error at the import, and the message lists the books:
+The name after `std:` is a file in the library: `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, `ord.muro`, `suc_bin.muro`, or `word.muro`. A name that is not one of those is an error at the import, and the message lists the books:
 
 ```
 unknown standard library book "nope.muro"
-available books: bool.muro, le.muro, list.muro, maybe.muro, ord.muro, suc_bin.muro
+available books: bool.muro, le.muro, list.muro, maybe.muro, ord.muro, suc_bin.muro, word.muro
 ```
 
-`..`, a leading `/`, a backslash, or any other path that leaves the library is refused: `import "std:../le.muro" leaves the standard library`. A relative import written inside a library book stays in the library. `suc_bin.muro` imports `list.muro`, `list.muro` imports `maybe.muro`, `maybe.muro` imports `bool.muro`, and `ord.muro` imports `le.muro`. A book reached by two imports, directly or through another book, joins once.
+`..`, a leading `/`, a backslash, or any other path that leaves the library is refused: `import "std:../le.muro" leaves the standard library`. A relative import written inside a library book stays in the library. `suc_bin.muro` imports `list.muro`, `list.muro` imports `maybe.muro`, `maybe.muro` imports `bool.muro`, `ord.muro` imports `le.muro`, and `word.muro` imports `le.muro`. A book reached by two imports, directly or through another book, joins once.
 
 The id of a loaded book is `std:list.muro`, not a path on disk. An error inside a library book is reported at that id. `mix muro.gen` hashes an imported library book as `std/<file>`. The prelude is not in that hash. The version pin covers the checker, the emitter, the prelude, and this library. Changing a library book changes the hash of every book that imports it.
 
@@ -83,6 +83,22 @@ A binary successor beside inductive `Nat`. It imports `list.muro`. Machine integ
 Evidence: `sucBits-id`, `sucBin-step`, `fromBits-toBits`, `sucBin-corresp` (`fromBits (sucBin (toBits n)) ≡ suc n`), `suc-11` (the bits of 11 step to the bits of 12), `bits11-nat`, and `suc-11-nat`.
 
 Check on disk with `mix muro.check lib/muro/std/suc_bin.muro`. Import it with `import "std:suc_bin.muro"`.
+
+## word.muro
+
+Unsigned checked arithmetic agrees with Nat. It imports `le.muro`, and `minus` is that book's truncated subtraction. `times` is `run internal` here. `wlink` accepts `plus`, `minus`, `times`, and `Le` only as these definitions. A different binding is refused. `I64` is outside this book: `toNat` of −1 is 2^64−1.
+
+For `U8`, `U32`, and `U64`, and for `addc`, `subc`, and `mulc`, the book gives three lemmas. The body of each is `wlink`.
+
+- `addc-val-u64`, and the `u8` and `u32` twins, with `subc-val-*` and `mulc-val-*`, say `toNat` of the payload is `plus`, `minus`, or `times` of the two `toNat`s.
+- `addc-fit-*` and `mulc-fit-*` say that `wsome` gives `Le` of the successor of that Nat result below the modulus. `subc-fit-*` says `Le (toNat b) (toNat a)`.
+- `addc-some-*` and `mulc-some-*` turn that bound into `wsome` of `toU8`, `toU32`, or `toU64` of the Nat result. `subc-some-*` turns `Le (toNat b) (toNat a)` into `wsome` of `toUk` of `minus`.
+
+A closed equation is still `refl`. `boundary-u64` is `addc` of `toU64 4294967295` and 1, `wsome` of `toU64 4294967296`. `boundary-u32` is that pair at `U32`, and it is `wnone`. `boundary-mul` is `mulc` of `toU64 4294967296` with itself, and it is `wnone`.
+
+`coffee`, `tip`, and `tax` are `U64` amounts, 100, 25, and 10. `line` is the checked sum of coffee and tip, and `line-nat` cites `addc-val-u64` for that Nat total. `subtotal` is the closed word 125. `bill` adds tax under the fit, and `bill-nat` cites `addc-val-u64` again.
+
+Check on disk with `mix muro.check lib/muro/std/word.muro`. Import it with `import "std:word.muro"`. See [Machine numbers](machine.md).
 
 ## Examples
 

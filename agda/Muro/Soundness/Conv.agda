@@ -619,6 +619,7 @@ wop≡ᵇ-sound wopt wopt _ = refl
 wop≡ᵇ-sound (woptk k) (woptk k′) eq = cong woptk (wk≡ᵇ-sound k k′ eq)
 wop≡ᵇ-sound wsome wsome _ = refl
 wop≡ᵇ-sound wnone wnone _ = refl
+wop≡ᵇ-sound wlink wlink _ = refl
 
 synEq-sound : ∀ {n} (u v : Tm n) → synEq u v ≡ true → u ≡ v
 synEqL-sound : ∀ {n} (us vs : List (Tm n)) → synEqList us vs ≡ true → us ≡ vs

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.22.3
+
+Checked arithmetic on U8, U32, and U64 agrees with Nat. `std:word.muro` gives the value lemma and both directions of the fit lemma for `addc`, `subc`, and `mulc`. A bound below the width turns a checked sum into `wsome`, and the payload's `toNat` is the Nat sum. I64 is outside these lemmas: `toNat` of −1 is 2^64−1.
+
+`wlink` is the evidence the checker accepts for those statements. It is erased. The emitters are unchanged.
+
+`wlink` accepts `plus`, `minus`, `times`, and `Le` only when they are the standard definitions: `plus` from the prelude, `minus` and `Le` from `std:le.muro`, and `times` from `std:word.muro`. A book that defines one of those names differently is refused.
+
+### Manual
+
+- Machine numbers, Library, Grammar, Limits, and Extending: the unsigned word-to-Nat lemmas, and why I64 is outside them.
+
+### Package
+
+- Version 0.22.3. The version goes from 0.22.0 to 0.22.3 because 0.22.1 and 0.22.2 are taken by other open pull requests.
+
 ## 0.22.2
 
 `--backend mbi` writes image format 2 when the exported run calls other run definitions, including a `run internal` and a prelude run it reaches. Each one is a closed term in a `(defs …)` section. The order lets a definition call itself or an earlier definition, and the run refers to them by index. A run that calls no definition still writes format 1, the same bytes as before. Two definitions that call each other, so that one of them would have to name a later index, are refused, and nothing is written. muro-beam loads the file and checks it again. Writing the file is not that check. The bytes are renamed into place, so the path holds the previous file or the whole image.

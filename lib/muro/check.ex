@@ -4,7 +4,7 @@ defmodule Muro.Check do
   from `Muro.Check` (`⇒-var-run`, `⇐-refl`, …). There is no promotion.
   """
 
-  alias Muro.{Ast, Grade, Place, Print, Repr, Subst, Word}
+  alias Muro.{Ast, Grade, Place, Print, Repr, Subst, Word, WordLink}
 
   # Default fuel. Fuel bounds reduction (whnf, conversion, isData, the
   # index-clash test); everything else is structural recursion on the
@@ -3280,6 +3280,10 @@ defmodule Muro.Check do
       {:some, _, _} ->
         {:error, "wsome takes one word"}
 
+      # wlink is checked against the goal (⇐-wlink). It has no inferred type.
+      {:link, _, _} ->
+        {:error, "wlink requires an expected type"}
+
       {:none, _, _} ->
         {:error, "wnone requires an expected Opt type"}
     end
@@ -3588,6 +3592,26 @@ defmodule Muro.Check do
               wsome_conv(k, book, rs, gamma, mode, t, a)
           end
         end
+
+      # ⇐-wlink. Checked, not inferred. The hypothesis is used once.
+      {:word, :link, [h]} ->
+        if mode == :run do
+          {:error, "no promotion: wlink in run mode"}
+        else
+          case infer(k, book, rs, gamma, mode, h) do
+            {:ok, {h_ty, uses}} ->
+              case WordLink.accept(book, h_ty, a) do
+                :ok -> {:ok, uses}
+                {:error, msg} -> {:error, msg}
+              end
+
+            {:error, _} = err ->
+              err
+          end
+        end
+
+      {:word, :link, _} ->
+        {:error, "wlink takes one proof"}
 
       # ⇐-ctor / ⇐-conv
       _ ->
