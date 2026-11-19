@@ -104,9 +104,7 @@ jobs:
 
   agda:
     name: Agda 2.8.0
-    # Soundness is killed on the Mac runners. They skip the swap step below.
-    # The hosted runner has 16 GB and adds 16 GB of swap for that check.
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
     # Muro.Soundness typechecks one large mutual block. On a 16 GB runner
     # that check is killed; the swap gives it room. The cache of
     # agda/_build makes a rerun with unchanged sources fast. A changed
