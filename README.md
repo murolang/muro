@@ -86,7 +86,7 @@ A definition is in the book the moment `Parser.parse/1` returns it. The checker 
 | [Terms](manual/language.md) | Π, λ, match, quantities |
 | [Sessions](manual/sessions.md) | The protocol two processes follow |
 | [Choreography](manual/choreography.md) | A global type projected to each pair of roles |
-| [State machines](manual/fsm.md) | A session endpoint the host steps itself |
+| [State machines](manual/fsm.md) | A session endpoint the host steps itself, and a dispatcher for a keyed family |
 | [Grammar](manual/grammar.md) | What the parser implements |
 | [Host representations](manual/repr.md) | `repr`, strict decode and encode |
 | [Examples](manual/examples.md) | Every file in `examples/` |

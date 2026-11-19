@@ -2,12 +2,12 @@
 title: State machines
 slug: fsm
 order: 22
-summary: Each session endpoint is a pure state machine. The transport stays with the host.
+summary: Each session endpoint is a pure state machine, and a keyed family is one dispatcher. The transport stays with the host.
 ---
 
 # State machines
 
-`--backend fsm` prints one module for the book's sessions. A host that already has a transport (an RPC, an HTTP exchange, a queue, a websocket, a call between nodes made by other means) steps that module around the messages it sends and receives. The module does not start a process, and it does not talk to a peer.
+`--backend fsm` prints one module for the book's sessions. A host that already has a transport (an RPC, an HTTP exchange, a queue, a websocket, a call between nodes made by other means) steps that module around the messages it sends and receives. The module does not start a process, and it does not talk to a peer. A keyed family that checks is one more child of that module. The session children are unchanged. See [A keyed family](#a-keyed-family).
 
 This is not a replacement for `--backend otp`. The OTP image is a GenServer that owns a mailbox and monitors a marked peer. The state machine is the check that the messages a host already exchanges follow the protocol the meeting proved. A meeting marked `may fail` is accepted. `down` takes the failure arm. A meeting that does not mark a party emits no `down`. The module still starts no process.
 
@@ -133,6 +133,54 @@ When the book has a `repr` for a payload type (#131), that type's host form is t
 ## State
 
 State is opaque. Store it, thread it, and compare it with `==`. Do not depend on its shape. It is plain data: atoms, integers, binaries, and lists. A value that is not a state of this session is `:unexpected`, with this session's `end` step, and `done?` is false. Nothing raises.
+
+## A keyed family
+
+A family that checks is one child, named for the family. `examples/keyed-slots.muro` is `KeyedSlotsFsm.Slots`. The child does not run the meeting. The host calls `resolved` when that instance should stop blocking, including when the instance gives up. Giving up counts as resolved for the rule, and it is not delivered.
+
+```elixir
+state = KeyedSlotsFsm.Slots.new()
+{:open, id, state} = KeyedSlotsFsm.Slots.arrive(state, "a", :init, 0)
+{:held, sig, state} = KeyedSlotsFsm.Slots.arrive(state, "a", :signal, 1)
+{:ok, [{sig, "a", :signal}], state} = KeyedSlotsFsm.Slots.resolved(state, id)
+```
+
+`new/0` returns the empty state.
+
+`arrive/4` takes the state, the key, the constructor, and the creation index. The constructor is the atom of a nullary constructor of the kind (`:init`, `:signal`). The creation index is a non-negative integer. Instances of one key need not arrive in creation order. An earlier index can arrive after a later one has opened. The call returns `{:open, id, state}` or `{:held, id, state}`. `id` starts at 0 and counts arrivals.
+
+A kind written `never held` opens on arrival. A second init of a key opens at once. A kind written `held while earlier unresolved` stays held while any earlier arrived instance of its key is unresolved. An earlier init is one of those, and so is an earlier signal. An instance that has not arrived is not unresolved. A signal with no earlier unresolved instance of its key opens at once. There is no third outcome.
+
+`resolved/2` takes the state and an id this child returned while that instance was open. It returns `{:ok, released, state}`. `released` lists `{id, key, kind}` for the instances this resolution opens, in creation-index order, and may be empty. The resolved instance leaves the state. An id that is still held is `{:error, {:held, id}}`. A forgotten id, and an id this child never returned, are `{:error, {:unknown, id}}`. The call does not return `{:error, {:resolved, id}}`. The call does not raise. Opening one instance does not release another key.
+
+The state keeps the live instances, open or held, and the id of each live instance records its key. One counter is the next id. A call fetches that key and does not touch the other keys. `arrive` is O(L) in that key's live rows. `resolved` is O(L²) in those rows: `take_released` calls `blocked?` once per held row, and each `blocked?` walks the rows. A value that has the shape of a state is accepted at that boundary. A bad row is reported by the call that fetches it. A held id returns `{:error, {:held, id}}` from that one row.
+
+A repeat of a live instance, the same key and the same creation index while that instance is open or held, is `{:error, {:duplicate, key, index}}`. A repeat of a forgotten instance is not caught. The row is gone, and the dispatcher does not keep forgotten indices. An index at or below a forgotten one is not, by itself, a repeat: a later arrival may carry an earlier creation index, and that arrival is a new instance.
+
+The key is compared with `==`. It is the workflow. A call fetches that key. Live instances of one workflow share the rule, including across runs of that workflow, and that is accepted. The guarantee is the instances that have arrived and are still live. A signal that opens before an earlier init arrives does not wait for that init. `no-overtake` is about the instances known when the signal opened.
+
+State is opaque. Thread it and compare it with `==`. A value that is not a state of this child is `{:error, …}`.
+
+`check_trace/1` replays a list from `new()`. A dispatcher step is `{:arrive, key, kind, index}` or `{:resolved, id}`. A session step is `{party, id, action}`. `party` is the conform atom, `:server` or `:task` on `examples/keyed-slots.muro`. `action` is `{:send, value}`, `{:recv, value}`, `:down`, or `{:down, reason}`. It returns `:ok`, or `{:error, {index, reason}}` for the first bad step. `index` is zero-based. A value that is not a list is `{:error, …}`. There is no `check_trace/2`.
+
+`resolved` with no session step for that id is the instance giving up. It counts as resolved, and it is not delivered. `resolved` when every stepped party of that id is at `done` resolves the instance. `resolved` when a stepped party is not at `done` is `{:error, {index, {:unfinished, id}}}`, and the instance stays. At the end of the trace, an instance is `{:error, {:unresolved, id, key, kind}}` when every stepped party of that id is at `done` and the instance was never resolved. A `down` into a failure arm that ends in `done` counts as that party's `done`. One party at `done` while another stepped party is not is still the meeting, and the trace is `:ok`. The id is the smallest such id. A `down` into an arm that ends in `stop` is not that error. A session step on a held id is `{:error, {index, {:held, id}}}`. A session step on an unknown id is `{:error, {index, {:unknown, id}}}`.
+
+Each end of the family's meeting has `finish/3` and `finish/4` on the session child. `examples/keyed-slots.muro` puts them on `ServerWait` and `TaskWork`.
+
+```elixir
+{:ok, released, state} = KeyedSlotsFsm.ServerWait.finish(session, :down, state, id)
+{:ok, released, state} = KeyedSlotsFsm.ServerWait.finish(session, state, id)
+```
+
+`finish/4` takes the session state, one step, the dispatcher state, and the id. The step is `{:send, value}`, `{:recv, value}`, `:down`, or `{:down, reason}`. The step has to land on `done`: the report or the completion, or `down` into a failure arm that ends in `done`. The call then resolves that id. It returns what `resolved` returns. The host makes one call for the instance's end, including the task's `:DOWN`, and the dispatcher drops the instance in that call.
+
+`finish/3` takes a session state that is already at `done`, the dispatcher state, and the id, and resolves it the same way.
+
+A session that is not at an end this call can reach is `{:error, …}`. The call does not raise. A held id and a forgotten id are the errors `resolved` returns. `down` into an arm that ends in `stop` is `{:error, {:unfinished, :stop}}`, and the instance stays. Where two families share the end, the call is `{:error, {:family, names}}` and it does not resolve. The session child's own `check_trace` is that end alone. It does not resolve the family.
+
+This child is generated code. The family graph is an Elixir check of a fixed script. The tests on `examples/keyed-slots.muro` replay one trace, refuse an unknown id, and check that every accepted sequence of `arrive` and `resolved` over that script is a run of the family graph. A sequence on some other key is outside that script. Neither check is an Agda proof. The counts stay 171649 reachable states, 729184 transitions.
+
+A family that does not check is not emitted. A book with no family emits the same module as before. OTP, Elixir, C, Rust, Zig, JavaScript, assembly, `--node`, and ExUnit still omit the family. A meeting marked `may fail` is still refused by those backends with `c:mayfail`. The state machine accepts that meeting, as it did before, and emits this child beside the session children.
 
 ## What emit refuses
 

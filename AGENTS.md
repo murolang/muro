@@ -43,7 +43,7 @@ mix muro.synth path.muro                    # version space; exit 0 is the check
 mix muro.synth path.muro --out out.muro --oracle trace
 mix muro --version                          # the copy that ran
 mix muro.init                               # muro.exs and priv/muro/
-mix muro.emit path.muro --backend fsm           # one state machine per session, on stdout
+mix muro.emit path.muro --backend fsm           # one state machine per session, and one dispatcher per keyed family, on stdout
 mix muro.emit path.muro --backend exunit       # ExUnit suite on stdout; a param library is accepted
 mix muro.emit path.muro --backend exunit --imports  # also that book's direct imports
 mix muro.gen                                 # write the modules the manifest names
@@ -71,7 +71,7 @@ mix muro.emit path.muro --backend rust      # <name>.rs
 mix muro.emit path.muro --backend zig       # <name>.zig
 mix muro.emit path.muro --backend asm       # <name>.s, Cortex-M0, Nat run
 mix muro.emit path.muro --backend js        # <name>.mjs and <name>.d.ts; node runs the module
-mix muro.emit path.muro --backend fsm       # one state machine per session, on stdout
+mix muro.emit path.muro --backend fsm       # one state machine per session, and one dispatcher per keyed family, on stdout
 mix muro.emit path.muro --backend mbi       # <stem>.mbi, exactly one graded run; a run it calls is a closed definition
 ```
 

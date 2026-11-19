@@ -507,7 +507,7 @@ defmodule Muro.FamilyTest do
            """) == :ok
   end
 
-  test "emit skips the family" do
+  test "emit skips the family except the state-machine dispatcher" do
     plain = """
     def z : run Nat := 0
     data Event : Type where
@@ -532,10 +532,18 @@ defmodule Muro.FamilyTest do
     File.write!(path, plain)
     before = image(path)
     File.write!(path, fam)
-    assert before == image(path)
+    after_image = image(path)
+    assert Map.delete(before, :fsm) == Map.delete(after_image, :fsm)
+    refute before.fsm =~ "defmodule Slots do"
+    assert after_image.fsm =~ "defmodule Slots do"
+    assert after_image.fsm =~ "def arrive(state, key, kind, index)"
+    assert after_image.fsm =~ "def resolved(state, id)"
+    assert after_image.fsm =~ "def check_trace(trace)"
+    assert after_image.fsm =~ "defmodule Ping do"
+    assert after_image.fsm =~ "defmodule Pong do"
   end
 
-  test "keyed-slots emit matches the book without the family" do
+  test "keyed-slots emit keeps every backend but the state-machine dispatcher" do
     src = File.read!("examples/keyed-slots.muro")
     bare_src = String.replace(src, ~r/\nfamily slots :[\s\S]*\z/, "\n")
     refute bare_src =~ "family slots"
@@ -544,9 +552,15 @@ defmodule Muro.FamilyTest do
     File.mkdir_p!(dir)
     path = Path.join(dir, "keyed-slots.muro")
     File.write!(path, bare_src)
-    before = slot_image(path)
+    {fsm_before, otp_before} = slot_image(path)
     File.write!(path, src)
-    assert before == slot_image(path)
+    {fsm_after, otp_after} = slot_image(path)
+    assert otp_before == otp_after
+    refute fsm_before =~ "defmodule Slots do"
+    assert fsm_after =~ "defmodule Slots do"
+    assert fsm_after =~ "def arrive(state, key, kind, index)"
+    assert fsm_after =~ "defmodule ServerWait do"
+    assert fsm_before =~ "defmodule ServerWait do"
   end
 
   defp slot_image(path) do

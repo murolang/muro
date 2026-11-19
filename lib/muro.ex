@@ -197,11 +197,14 @@ defmodule Muro do
   Elixir source for each session of `path`, as a pure state machine.
 
   `module` is the parent (`MeetFsm`). One child module per session is
-  the API. Nothing is written next to the book: a manifest entry needs
-  the source as a string. `opts` is `fuel:`, `root:`, and `book:` (the
-  label printed in a step). A book that does not check returns
-  `{:error, message}`. A library of unsupplied `param`s is refused,
-  as for `emit_file/3`.
+  the API. A keyed family that checks is one more child: `new/0`,
+  `arrive/4`, `resolved/2`, and `check_trace/1`. `resolved` drops the
+  instance. Each end of the meeting has `finish/3` and `finish/4`.
+  Nothing is written
+  next to the book: a manifest entry needs the source as a string.
+  `opts` is `fuel:`, `root:`, and `book:` (the label printed in a step).
+  A book that does not check returns `{:error, message}`. A library of
+  unsupplied `param`s is refused, as for `emit_file/3`.
   """
   def emit_fsm(path, module, opts \\ []) when is_atom(module) do
     with {:ok, book} <- checked_book(path, opts) do

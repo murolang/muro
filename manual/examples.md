@@ -482,7 +482,7 @@ temporal no-starve : slots :=
   forall (k : key). (held k signal) leads_to (opened k signal)
 ```
 
-The same book with `signal never held` in place of `signal held while earlier unresolved` is refused: `a signal` opens while `a init` is still running. Deleting the rule outright is `no rule for signal`. The meeting may fail, so Elixir, C, Rust, Zig, JavaScript, assembly, and ExUnit refuse the book with `c:mayfail`, with or without the family. OTP and the state machine omit the family and the formula and emit the meeting. See [Temporal](temporal.md#a-keyed-family).
+The same book with `signal never held` in place of `signal held while earlier unresolved` is refused: `a signal` opens while `a init` is still running. Deleting the rule outright is `no rule for signal`. The meeting may fail, so Elixir, C, Rust, Zig, JavaScript, assembly, and ExUnit refuse the book with `c:mayfail`, with or without the family. OTP emits the meeting and omits the family and the formula. The state machine emits the meeting and one dispatcher for the family, and omits the formula. `resolved` drops the instance. `ServerWait.finish` and `TaskWork.finish` take that end to `done` and resolve it, including `down` into the failure arm. The dispatcher's `check_trace` replays those steps with `arrive` and `resolved`. See [Temporal](temporal.md#a-keyed-family) and [State machines](fsm.md#a-keyed-family).
 
 ## place.muro
 

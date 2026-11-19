@@ -27,7 +27,8 @@ defmodule Muro.Emit do
   Run definitions in book order. Data, spec, and evidence are omitted.
   A temporal declaration has mode evidence, so it is omitted here and in
   every backend that reads this list, including Zig. A family is spec,
-  so it is omitted the same way.
+  so it is omitted the same way. `--backend fsm` emits a dispatcher for
+  a family that checks; that child is not in this list.
   `run internal` stays in the list; its `export` flag is false.
   """
   def run_defs(book) when is_list(book) do
