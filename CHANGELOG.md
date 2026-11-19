@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.8
+
+A merge to main publishes that `mix.exs` version to Hex once the Elixir CI job on that commit is green, then pushes the annotated tag `vX.Y.Z` if it is missing. The publish does not wait for Agda or muro_visor. The publish is skipped when the version is already on Hex. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. The binaries are built only when this commit published the version or created the tag, and that job does not delay the publish. `muro_visor` is not published this way: Hex stages it, and it still needs 2FA.
+
+The repository secret `HEX_API_KEY` is required the first time a version is published. A missing secret fails the publish job with a clear error and does not print the key. Generate one with `mix hex.user key generate --key-name muro-ci --permission api:write` and add it as `HEX_API_KEY` on murolang/muro. The Publish, Release, and CI workflows run on `vars.CI_RUNNER` and do not fall back to a GitHub-hosted runner.
+
+### Manual
+
+- The executable, For agents, and AGENTS.md: a merge publishes the Hex package and the tag, and `muro_visor` is not included.
+
+### Package
+
+- Version 0.22.8.
+
 ## 0.22.7
 
 `--backend mbi` writes image format 2 when the exported run calls other run definitions, including a `run internal` and a prelude run it reaches. Each one is a closed term in a `(defs …)` section. The order lets a definition call itself or an earlier definition, and the run refers to them by index. A run that calls no definition still writes format 1, the same bytes as before. Two definitions that call each other, so that one of them would have to name a later index, are refused, and nothing is written. muro-beam loads the file and checks it again. Writing the file is not that check. The bytes are renamed into place, so the path holds the previous file or the whole image.
