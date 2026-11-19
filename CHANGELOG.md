@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.4
+## 0.22.5
 
 `mix muro.emit path.muro --backend pytest` prints one pytest module for the book's closed equations, the same equations `--backend exunit` collects. `mix muro.gen` writes it when an entry sets `kind: :pytest`. Each equation is one test. A skip is a `pytest.mark.skip` test, named in the reason, and is not dropped. A file of unsupplied `param`s is a suite, as it is for ExUnit.
 
@@ -13,6 +13,24 @@ That encoding is not injective across types. A string and a nullary constructor 
 ### Manual
 
 - Closed equations as tests, Pytest, Emit, Committed modules, and The executable: the pytest module, the value encoding, and how the implementation is chosen.
+
+### Package
+
+- Version 0.22.5.
+
+## 0.22.4
+
+A keyed family's dispatcher has `finish`. `Events.finish(state, id, session, step)` takes that session to its end. The outcome is `:resolve` or `:rerun`. `:resolve` is the default: the instance leaves, and the call returns what `resolved` returns. `:rerun` keeps the instance unresolved. Its row stays, and a held row of its key stays held. The host starts a new session for that id. There is no bound on reruns. A later `:resolve` drops the instance, on success, on a permanent error, or on the attempt that gives up.
+
+When one family uses a session, that session's `finish` takes the same outcome. When two families share the session, that call is `{:error, {:family, names, form}}` and it does not resolve. The old 2-tuple `{:family, names}` is removed. `form` is `finish(family_state, id, session_state, step)`. Each family's `finish` releases only that family's rows.
+
+`check_trace` accepts `{:rerun, id}` after every stepped party of that id is at `done`. A later step for that id starts a new session. An attempt that reaches `done` and is neither rerun nor resolved is still reported as unresolved.
+
+The family graph is unchanged. It still allows one rerun, then give-up. This outcome is the emitted dispatcher. It is not an Agda proof.
+
+### Manual
+
+- State machines, Emit, Temporal, Limits, Examples, and Extending: `finish` on the family, and a rerun that leaves the instance unresolved.
 
 ### Package
 

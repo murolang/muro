@@ -102,7 +102,7 @@ lib/muro/emit/equations.ex closed equations shared by the ExUnit and pytest suit
 lib/muro/emit/exunit.ex closed equations → one ExUnit module (`--backend exunit`, `kind: :exunit`)
 lib/muro/emit/pytest.ex closed equations → one pytest module (`--backend pytest`, `kind: :pytest`)
 lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a marked peer is monitored and a `:DOWN` that is not a halt takes the failure arm; a book with no mark emits the previous module (`--backend otp`)
-lib/muro/emit/fsm.ex    a session endpoint is a state machine; a marked book has `down/1` and `down/2` for a failure arm; a book with no mark emits no `down`; a keyed family that checks is a child with `new/0`, `arrive/4`, `resolved/2` (the instance leaves), and `check_trace/1` (arrivals, resolutions, and `{party, id, send|recv|down}`); each meeting end has `finish/3` and `finish/4`; the transport stays with the host (`--backend fsm`)
+lib/muro/emit/fsm.ex    a session endpoint is a state machine; a marked book has `down/1` and `down/2` for a failure arm; a book with no mark emits no `down`; a keyed family that checks is a child with `new/0`, `arrive/4`, `resolved/2` (the instance leaves), `finish` (`:resolve` or `:rerun`), and `check_trace/1` (arrivals, resolutions, reruns, and `{party, id, send|recv|down}`); each meeting end has `finish`, and `:rerun` when one family uses that end; two families on one end name `finish` on the family child; the transport stays with the host (`--backend fsm`)
 lib/muro/emit/c_session.ex a session endpoint is a pure step written as C; the actions are the ones the state machine takes, init takes `uint64_t`, and `down` is not emitted (`--backend c`)
 lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
 lib/muro/emit/mbi.ex    exactly one exported run as an .mbi image (`--backend mbi`); muro-beam loads it; not a manifest target
@@ -153,7 +153,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.4`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.5`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -166,7 +166,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.22.4.ez
+mix archive.install muro-0.22.5.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -239,7 +239,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then:
 
 ```
-Muro v0.22.4
+Muro v0.22.5
 All terms check. Evidence never becomes a run.
 ```
 

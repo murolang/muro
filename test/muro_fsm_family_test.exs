@@ -500,25 +500,221 @@ defmodule Muro.FsmFamilyTest do
         init never held
       """)
 
-    assert src =~ "{:error, {:family, [:Slots, :Spare]}}"
+    form = "finish(family_state, id, session_state, step)"
+    assert src =~ "{:error, {:family, [:Slots, :Spare], #{inspect(form)}}}"
 
     server = Module.concat(parent, ServerWait)
     task = Module.concat(parent, TaskWork)
     state = disp.new()
     assert {:open, 0, state} = disp.arrive(state, "a", :init, 0)
 
-    assert {:error, {:family, [:Slots, :Spare]}} =
+    assert {:error, {:family, [:Slots, :Spare], ^form}} =
              server.finish(server.init(), {:recv, :ok}, state, 0)
 
     assert {:ok, [], _} = disp.resolved(state, 0)
 
     {:ok, done} = server.recv(server.init(), :ok)
     assert server.done?(done)
-    assert {:error, {:family, [:Slots, :Spare]}} = server.finish(done, state, 0)
+    assert {:error, {:family, [:Slots, :Spare], ^form}} = server.finish(done, state, 0)
+    assert {:error, {:family, [:Slots, :Spare], ^form}} = server.finish(done, state, 0, :rerun)
     assert {:ok, [], _} = disp.resolved(state, 0)
 
     assert {:ok, [], freed} = task.finish(task.init(), {:send, :ok}, state, 0)
     assert {:error, {:unknown, 0}} = disp.resolved(freed, 0)
+  end
+
+  test "two families on one session finish apart" do
+    {_disp, parent, _src} =
+      compile_parent!("""
+      data Event : Type where
+        init : Event
+        signal : Event
+
+      data Command : Type where
+        pause : Command
+        resume : Command
+
+      data Report : Type where
+        ok : Report
+
+      session task-work := send Report end
+      session server-wait := recv Report end
+
+      conform task : task-work := put ok done
+
+      conform server : server-wait :=
+        get (r : Report) done
+        fail
+          done
+
+      meet slot : server with task may fail buffer 1
+
+      family events : slot per key of Event
+        init never held
+        signal held while earlier unresolved
+
+      family commands : slot per key of Command
+        pause held while earlier unresolved
+        resume held while earlier unresolved
+      """)
+
+    events = Module.concat(parent, Events)
+    commands = Module.concat(parent, Commands)
+    server = Module.concat(parent, ServerWait)
+    form = "finish(family_state, id, session_state, step)"
+
+    es = events.new()
+    cs = commands.new()
+    assert {:open, 0, es} = events.arrive(es, "wf", :init, 0)
+    assert {:held, 1, es} = events.arrive(es, "wf", :signal, 1)
+    assert {:open, 0, cs} = commands.arrive(cs, "wf", :pause, 0)
+    assert {:held, 1, cs} = commands.arrive(cs, "wf", :resume, 1)
+
+    assert {:error, {:family, [:Events, :Commands], ^form}} =
+             server.finish(server.init(), :down, es, 0)
+
+    assert {:error, {:family, [:Events, :Commands], ^form}} =
+             server.finish(server.init(), :down, es, 0, :rerun)
+
+    assert {:error, {:held, 1}} = events.resolved(es, 1)
+    assert {:error, {:held, 1}} = commands.resolved(cs, 1)
+
+    assert {:ok, [{1, "wf", :signal}], es} = events.finish(es, 0, server.init(), :down)
+    assert {:error, {:unknown, 0}} = events.resolved(es, 0)
+    assert {:ok, [], _} = events.resolved(es, 1)
+    assert {:error, {:held, 1}} = commands.resolved(cs, 1)
+    assert cs.by["wf"][0] == {0, :pause, :open}
+    assert cs.by["wf"][1] == {1, :resume, :held}
+
+    assert {:ok, [{1, "wf", :resume}], cs} = commands.finish(cs, 0, server.init(), :down)
+    assert {:error, {:unknown, 0}} = commands.resolved(cs, 0)
+    assert {:ok, [], _} = commands.resolved(cs, 1)
+    assert es.by["wf"][1] == {1, :signal, :open}
+  end
+
+  test "a rerun keeps the row and the signal opens only when the init resolves", %{
+    disp: disp,
+    parent: parent
+  } do
+    server = Module.concat(parent, ServerWait)
+    state = disp.new()
+    assert {:open, 0, state} = disp.arrive(state, "a", :init, 0)
+    assert {:held, 1, state} = disp.arrive(state, "a", :signal, 1)
+    assert function_exported?(disp, :finish, 3)
+    assert function_exported?(disp, :finish, 4)
+    assert function_exported?(disp, :finish, 5)
+
+    assert {:error, {:unfinished, _}} = disp.finish(state, 0, server.init(), :rerun)
+    assert {:error, {:duplicate, "a", 0}} = disp.arrive(state, "a", :init, 0)
+    assert {:error, {:unknown, 9}} = disp.finish(state, 9, server.init(), :down, :rerun)
+    assert {:error, {:unknown, 9}} = server.finish(server.init(), :down, state, 9, :rerun)
+    assert {:error, {:held, 1}} = disp.finish(state, 1, server.init(), :down, :rerun)
+
+    assert {:ok, [], rerun} = disp.finish(state, 0, server.init(), :down, :rerun)
+    assert rerun.by == state.by
+    assert rerun.id == state.id
+    assert {:error, {:held, 1}} = disp.resolved(rerun, 1)
+    assert {:ok, [], again} = server.finish(server.init(), :down, rerun, 0, :rerun)
+    assert again.by["a"][0] == {0, :init, :open}
+    assert again.by["a"][1] == {1, :signal, :held}
+
+    assert {:ok, [{1, "a", :signal}], opened} = disp.finish(again, 0, server.init(), {:recv, :ok})
+    assert {:error, {:unknown, 0}} = disp.resolved(opened, 0)
+    assert {:ok, [], _} = disp.resolved(opened, 1)
+
+    death_rerun_success = [
+      {:arrive, "a", :init, 0},
+      {:arrive, "a", :signal, 1},
+      {:server, 0, :down},
+      {:rerun, 0},
+      {:server, 0, {:recv, :ok}},
+      {:resolved, 0},
+      {:server, 1, {:recv, :ok}},
+      {:resolved, 1}
+    ]
+
+    assert :ok = disp.check_trace(death_rerun_success)
+
+    assert {:error, {4, {:held, 1}}} =
+             disp.check_trace([
+               {:arrive, "a", :init, 0},
+               {:arrive, "a", :signal, 1},
+               {:server, 0, :down},
+               {:rerun, 0},
+               {:server, 1, {:recv, :ok}}
+             ])
+
+    assert {:error, {:unresolved, 0, "a", :init}} =
+             disp.check_trace([
+               {:arrive, "a", :init, 0},
+               {:arrive, "a", :signal, 1},
+               {:server, 0, :down},
+               {:rerun, 0},
+               {:server, 0, :down}
+             ])
+
+    assert :ok =
+             disp.check_trace([
+               {:arrive, "a", :init, 0},
+               {:server, 0, :down},
+               {:rerun, 0},
+               {:server, 0, :down},
+               {:rerun, 0},
+               {:server, 0, {:recv, :ok}},
+               {:resolved, 0}
+             ])
+
+    assert {:error, {1, {:unfinished, 0}}} =
+             disp.check_trace([
+               {:arrive, "a", :init, 0},
+               {:rerun, 0}
+             ])
+
+    assert {:error, {2, {:held, 1}}} =
+             disp.check_trace([
+               {:arrive, "a", :init, 0},
+               {:arrive, "a", :signal, 1},
+               {:rerun, 1}
+             ])
+
+    assert {:error, {0, {:unknown, 4}}} = disp.check_trace([{:rerun, 4}])
+  end
+
+  test "finish/3 and finish/4 with :rerun take a session that is already at done", %{
+    disp: disp,
+    parent: parent
+  } do
+    server = Module.concat(parent, ServerWait)
+    state = disp.new()
+    assert {:open, 0, state} = disp.arrive(state, "a", :init, 0)
+    assert {:held, 1, state} = disp.arrive(state, "a", :signal, 1)
+    {:ok, done} = server.recv(server.init(), :ok)
+    assert server.done?(done)
+
+    assert {:ok, [], kept} = disp.finish(state, 0, done, :rerun)
+    assert kept.by["a"][0] == {0, :init, :open}
+    assert kept.by["a"][1] == {1, :signal, :held}
+    assert {:error, {:held, 1}} = disp.resolved(kept, 1)
+
+    assert {:ok, [{1, "a", :signal}], opened} = disp.finish(kept, 0, done)
+    assert {:error, {:unknown, 0}} = disp.resolved(opened, 0)
+    assert {:ok, [], _} = disp.resolved(opened, 1)
+  end
+
+  test "a bad outcome is refused on the family and on the session", %{
+    disp: disp,
+    parent: parent
+  } do
+    server = Module.concat(parent, ServerWait)
+    state = disp.new()
+    assert {:open, 0, state} = disp.arrive(state, "a", :init, 0)
+    session = server.init()
+
+    assert {:error, {:outcome, :nope}} = disp.finish(state, 0, session, :nope)
+    assert {:error, {:outcome, :nope}} = disp.finish(state, 0, session, :down, :nope)
+    assert {:error, {:outcome, :nope}} = server.finish(session, state, 0, :nope)
+    assert {:error, {:outcome, :nope}} = server.finish(session, :down, state, 0, :nope)
+    assert state.by["a"][0] == {0, :init, :open}
   end
 
   defp hold_of(disp, state, id) do
@@ -765,9 +961,28 @@ defmodule Muro.FsmFamilyTest do
   end
 
   defp compile!(path) do
+    {disp, parent, src} = compile_parent_path!(path, Slots)
+    assert src =~ "defmodule Slots do"
+    {disp, parent, src}
+  end
+
+  defp compile_src!(src) do
+    {disp, parent, src} = compile_parent!(src, Slots)
+    assert src =~ "defmodule Slots do"
+    {disp, parent, src}
+  end
+
+  defp compile_parent!(src, family \\ nil) do
+    dir = System.tmp_dir!() |> Path.join("muro-fsm-fam-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    path = Path.join(dir, "book.muro")
+    File.write!(path, src)
+    compile_parent_path!(path, family)
+  end
+
+  defp compile_parent_path!(path, family) do
     parent = Module.concat(["FsmFam#{System.unique_integer([:positive])}"])
     assert {:ok, src} = Muro.emit_fsm(path, parent)
-    assert src =~ "defmodule Slots do"
     assert src =~ "def new"
     assert src =~ "def arrive"
     assert src =~ "def resolved"
@@ -781,15 +996,8 @@ defmodule Muro.FsmFamilyTest do
 
     assert warnings == [], inspect(warnings, limit: 20)
     assert parent in Enum.map(mods, &elem(&1, 0))
-    {Module.concat(parent, Slots), parent, src}
-  end
-
-  defp compile_src!(src) do
-    dir = System.tmp_dir!() |> Path.join("muro-fsm-fam-#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
-    path = Path.join(dir, "book.muro")
-    File.write!(path, src)
-    compile!(path)
+    disp = if family, do: Module.concat(parent, family), else: nil
+    {disp, parent, src}
   end
 
   defp purge_fam do
