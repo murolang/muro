@@ -12,10 +12,22 @@ defmodule Muro.CliHelpTest do
     Muro.CLI.Deps,
     Muro.CLI.Mutate,
     Muro.CLI.Synth,
+    Muro.CLI.Fill,
     Muro.CLI.Ui
   ]
 
-  @commands ["check", "emit", "gen", "init", "skills", "deps.get", "mutate", "synth", "ui"]
+  @commands [
+    "check",
+    "emit",
+    "gen",
+    "init",
+    "skills",
+    "deps.get",
+    "mutate",
+    "synth",
+    "fill",
+    "ui"
+  ]
 
   @doc_urls [
     "https://muro-lang.dev",
@@ -30,6 +42,7 @@ defmodule Muro.CliHelpTest do
     "https://muro-lang.dev/docs/gen",
     "https://muro-lang.dev/docs/mutate",
     "https://muro-lang.dev/docs/synth",
+    "https://muro-lang.dev/docs/fill",
     "https://muro-lang.dev/docs/explorer",
     "https://muro-lang.dev/docs/packages",
     "https://muro-lang.dev/docs/library",
@@ -72,6 +85,7 @@ defmodule Muro.CliHelpTest do
           "deps.get",
           "mutate",
           "synth",
+          "fill",
           "ui"
         ] do
       assert text =~ command
@@ -215,6 +229,13 @@ defmodule Muro.CliHelpTest do
     assert mutate =~ "surviv"
     assert mutate =~ "Default: #{Muro.Mutate.default_max_mutants()}."
     assert mutate =~ "Default: #{Muro.Check.default_fuel()}."
+
+    fill = Muro.CLI.Fill.help()
+    assert fill =~ "Default: #{Muro.Fill.default_bound()}."
+    assert fill =~ "Default: #{Muro.Check.default_fuel()}."
+    assert fill =~ "https://muro-lang.dev/docs/fill"
+    assert fill =~ "import or param"
+    assert fill =~ "A spec is kept the same way."
   end
 
   test "an unknown command or a bad flag names itself on stderr" do
@@ -237,6 +258,7 @@ defmodule Muro.CliHelpTest do
           {["deps.get", "--nope"], "--nope"},
           {["mutate", "--nope"], "--nope"},
           {["synth", "--nope"], "--nope"},
+          {["fill", "--nope"], "--nope"},
           {["ui", "--nope"], "--nope"},
           {["check", "--fuel"], "--fuel"}
         ] do
@@ -458,6 +480,14 @@ defmodule Muro.CliHelpTest do
     if "--check" in rest do
       {out, err, code} = run_in(dir, ["gen"])
       assert code == 0, "preparing gen --check failed\n#{out}\n#{err}"
+    end
+  end
+
+  defp prepare(dir, ["fill" | rest]) do
+    for path <- rest, String.ends_with?(path, ".muro") do
+      dest = Path.join(dir, path)
+      File.mkdir_p!(Path.dirname(dest))
+      File.cp!("examples/fill/add1.muro", dest)
     end
   end
 

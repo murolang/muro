@@ -126,6 +126,10 @@ pages:
     slug: synth
     title: Synthesis
     summary: mix muro.synth searches a version space of predicate programs on a checked environment.
+  - file: fill.md
+    slug: fill
+    title: Fill
+    summary: mix muro.fill writes one definition body by search. The checker decides.
   - file: explorer.md
     slug: explorer
     title: Visual explorer

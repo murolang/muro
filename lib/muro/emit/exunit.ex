@@ -103,6 +103,19 @@ defmodule Muro.Emit.ExUnitSuite do
     end
   end
 
+  @doc false
+  def closed_equations(book, book_file) when is_list(book) and is_binary(book_file) do
+    Enum.filter(book, &own_equation?(&1, book_file))
+  end
+
+  @doc false
+  def equation_head(%{type: {:idt, _ty, lhs, _rhs}}) do
+    {head, _args} = named_spine(lhs, [])
+    head_name(head)
+  end
+
+  def equation_head(_other), do: nil
+
   defp own_equation?(d, book_file) do
     Map.get(d, :kind, :def) == :def and Map.get(d, :mode) == :evidence and
       is_binary(Map.get(d, :file)) and same_file?(d.file, book_file) and
