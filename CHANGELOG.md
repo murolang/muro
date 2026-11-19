@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.7
+
+`mix muro.synth` runs one procedure. The procedure is `traces`, the version-space search on a book's `step` and the observations that `step` supports. `--on traces` selects it. A book that defines `step` selects it when `--on` is omitted. The search is unchanged: the same candidates, the same order, the same policy book.
+
+A book with no `step` and no observations is refused. It has nothing to synthesize against. `--on` accepts `traces` and no other value.
+
+### Manual
+
+- Synthesis: `--on traces`, the default, and the refusal.
+
+### Package
+
+- Version 0.22.7.
+
 ## 0.22.6
 
 `--backend fsm` and `--backend otp` print a declaration's map with its keys sorted. Since OTP 26 a small map with atom keys iterates in atom-table order, and that order depends on what the VM loaded first. The same book emitted `%{ctors: …, order: …, np: …}` in a fresh VM and another order inside a long test run, so `mix muro.gen --check` failed in a host's test suite on a module `mix muro.gen` had just written. The FSM literals and the OTP declarations and skeletons now pass `custom_options: [sort_maps: true]` to `inspect`. The FSM emitter also sorts the outer pair lists of the declarations, fail tables, and host-atom maps before printing them. A book whose emitted maps had one key, or no map, emits the same text. Run `mix muro.gen` once to rewrite a committed module that has a declaration with more than one key.
