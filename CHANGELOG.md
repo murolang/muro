@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.7
+
+`--backend mbi` writes image format 2 when the exported run calls other run definitions, including a `run internal` and a prelude run it reaches. Each one is a closed term in a `(defs …)` section. The order lets a definition call itself or an earlier definition, and the run refers to them by index. A run that calls no definition still writes format 1, the same bytes as before. Two definitions that call each other, so that one of them would have to name a later index, are refused, and nothing is written. muro-beam loads the file and checks it again. Writing the file is not that check. The bytes are renamed into place, so the path holds the previous file or the whole image.
+
+### Manual
+
+- MBI images, Emit, For agents, and Examples: a run may call definitions, and the image names them.
+
+### Package
+
+- Version 0.22.7.
+
 ## 0.22.6
 
 `--backend fsm` and `--backend otp` print a declaration's map with its keys sorted. Since OTP 26 a small map with atom keys iterates in atom-table order, and that order depends on what the VM loaded first. The same book emitted `%{ctors: …, order: …, np: …}` in a fresh VM and another order inside a long test run, so `mix muro.gen --check` failed in a host's test suite on a module `mix muro.gen` had just written. The FSM literals and the OTP declarations and skeletons now pass `custom_options: [sort_maps: true]` to `inspect`. The FSM emitter also sorts the outer pair lists of the declarations, fail tables, and host-atom maps before printing them. A book whose emitted maps had one key, or no map, emits the same text. Run `mix muro.gen` once to rewrite a committed module that has a declaration with more than one key.
