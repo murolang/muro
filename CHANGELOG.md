@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.4
+
+`mix muro.emit path.muro --backend pytest` prints one pytest module for the book's closed equations, the same equations `--backend exunit` collects. `mix muro.gen` writes it when an entry sets `kind: :pytest`. Each equation is one test. A skip is a `pytest.mark.skip` test, named in the reason, and is not dropped. A file of unsupplied `param`s is a suite, as it is for ExUnit.
+
+The tests call a Python module the host names. The default is the file stem (`rounding.muro` calls `rounding.round`). `--impl` and `impl:` bake another module into the file. `MURO_IMPL_<STEM>` overrides that module when the tests run, and the file does not change. A `Nat` is an int. A word is an int: `U8`, `U32`, and `U64` are the residue, and `I64` is the signed value. A constructor with no fields is its name as a str. A constructor with fields is a tuple with the name first. A pair is a 2-tuple. `tt` is `None`. A string literal is a str. A bytes literal is a bytes value. A function, a stream, or a value with no Python literal is a skip.
+
+### Manual
+
+- Closed equations as tests, Pytest, Emit, Committed modules, and The executable: the pytest module, the value encoding, and how the implementation is chosen.
+
+### Package
+
+- Version 0.22.4.
+
 ## 0.22.0
 
 Emitted Elixir carries a `Nat` as a non-negative integer. It was `0` and `{:suc, n}`, so a run that took a large number built and walked one tuple per unit: `plus 1000000 3` allocated a million tuples, and the state machine refused a nat above 100_000 for a run it called. A closed numeral is that integer literal. `suc` adds one. A `match` on `0` and `suc` is a `case` on `0` and on a positive integer, and the `suc` arm rebinds the predecessor as the integer minus one. A negative integer, a float, or any other term raises `CaseClauseError`, as `{:suc, _}` did not match before. A recursive run that is not a library operation still takes one call per unit of the value it recurses on. Nat stays Peano in the book. The checker, the proofs, and every other backend are unchanged.

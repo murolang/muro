@@ -70,6 +70,10 @@ pages:
     slug: exunit
     title: Closed equations as tests
     summary: A book's closed equations become one ExUnit module. The tests call an implementation the host names. A skip is printed and recorded.
+  - file: pytest.md
+    slug: pytest
+    title: Pytest
+    summary: A book's closed equations become one pytest module. The tests call a Python module the host names. A skip is a marked test and is recorded.
   - file: gen.md
     slug: gen
     title: Committed modules

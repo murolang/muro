@@ -1,7 +1,7 @@
 defmodule Mix.Tasks.Muro.Emit do
   use Mix.Task
 
-  @shortdoc "Emit run definitions as Elixir, C, Rust, Zig, JavaScript, or Cortex-M assembly, a session as OTP or a state machine, a cross as a call, closed equations as ExUnit, or exactly one graded run as an .mbi image"
+  @shortdoc "Emit run definitions as Elixir, C, Rust, Zig, JavaScript, or Cortex-M assembly, a session as OTP or a state machine, a cross as a call, closed equations as ExUnit or pytest, or exactly one graded run as an .mbi image"
 
   @moduledoc """
   Emit the `run` definitions of a `.muro` file.
@@ -16,6 +16,7 @@ defmodule Mix.Tasks.Muro.Emit do
       mix muro.emit path.muro --backend otp
       mix muro.emit path.muro --backend fsm
       mix muro.emit path.muro --backend exunit
+      mix muro.emit path.muro --backend pytest
       mix muro.emit path.muro --backend mbi
       mix muro.emit path.muro --node a
 
@@ -31,11 +32,18 @@ defmodule Mix.Tasks.Muro.Emit do
   listed on standard error, then a line `N tests, M skipped`. Standard
   output is only the module. `--node` with this backend is refused.
 
-  A file with `param`s is refused by every backend except `exunit`.
-  `--backend exunit` checks those params as assumptions and emits the
-  closed equations. `--imports` with `--backend exunit` also collects
-  the closed equations of the files this book imports directly. It is
-  an error with any other backend. Absent, the suite is this file only.
+  `--backend pytest` prints one pytest module for those same equations.
+  The implementation it calls by default is the file stem (`rounding`).
+  `--impl` bakes another Python module into the file. `MURO_IMPL_<STEM>`
+  selects a module when the tests run. Skipped equations are listed on
+  standard error, then a line `N tests, M skipped`. Standard output is
+  only the module. `--node` with this backend is refused.
+
+  A file with `param`s is refused by every backend except `exunit` and
+  `pytest`. Those two check the params as assumptions and emit the
+  closed equations. `--imports` with either backend also collects the
+  closed equations of the files this book imports directly. It is an
+  error with any other backend. Absent, the suite is this file only.
 
   `--backend c` writes `<name>.h` and `<name>.c` next to the file and
   prints those paths. A `run` stream is emitted. Tensors are refused.

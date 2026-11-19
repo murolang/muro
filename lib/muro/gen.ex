@@ -36,6 +36,7 @@ defmodule Muro.Gen do
   one C target, and the `.mjs` and the `.d.ts` of one JavaScript
   target. An `:elixir` entry emits with `Muro.Emit.emit_module/2`.
   An `:exunit` entry emits with `Muro.Emit.ExUnitSuite.render/4`.
+  A `:pytest` entry emits with `Muro.Emit.Pytest.render/3`.
   A `:fsm` entry emits with `Muro.Emit.Fsm.render/4`. A `:c` entry calls
   `Muro.Emit.C.prepare/2` and writes the `.c` target and the `.h`
   beside it. A `:rust` entry calls `Muro.Emit.Rust.render/2`. A
@@ -48,17 +49,19 @@ defmodule Muro.Gen do
   and with `Code.format_string!/2` otherwise. `.ex` and `.exs` are
   formatted even when the formatter inputs do not list the file. The
   header is comments, so formatting does not rewrite it. `:c`,
-  `:rust`, `:zig`, `:asm`, and `:js` are not formatted. The body hash is the
-  emitter's text. There is no timestamp and no absolute path.
+  `:rust`, `:zig`, `:asm`, `:js`, and `:pytest` are not formatted.
+  The body hash is the emitter's text. There is no timestamp and no
+  absolute path.
 
-  The header comment is `#` for Elixir, `//` for C, Rust, Zig, JavaScript,
+  The header comment is `#` for Elixir and pytest, `//` for C, Rust, Zig, JavaScript,
   the C header, and the declaration file, and `@` for Cortex-M assembly. The words of the two
   lines are the same.
 
-  An ExUnit entry's body lists skipped equations in a comment. That
-  comment is part of the body hash. `generate/3` prints one
-  `skipped` line per skip after the target's `written` or `unchanged`
-  line. `check/3` does not print skips; a change to the skipped set
+  An ExUnit entry's body lists skipped equations in a comment. A
+  pytest entry lists each skip as a `pytest.mark.skip` test. That
+  text is part of the body hash. `generate/3` prints one `skipped`
+  line per skip after the target's `written` or `unchanged` line.
+  `check/3` does not print skips; a change to the skipped set
   changes the book, so the target is stale.
 
   When a committed Elixir, ExUnit, or FSM target's header names a
@@ -270,11 +273,11 @@ defmodule Muro.Gen do
     end
   end
 
-  # One load per book. A book with a non-exunit target is loaded closed.
-  # That copy is reused for an exunit target of the same book when the
-  # closed load succeeds. An exunit-only book is loaded with
-  # `params: :open`, which is the check exunit already used. A closed
-  # failure is loaded open only when an exunit target still needs a
+  # One load per book. A book with a target other than exunit or pytest
+  # is loaded closed. That copy is reused for a suite target of the same
+  # book when the closed load succeeds. A suite-only book is loaded with
+  # `params: :open`, which is the check those backends already used. A
+  # closed failure is loaded open only when a suite target still needs a
   # book, so a param library keeps its assumption check and the other
   # targets keep the closed error.
   defp load_cache(manifest, root, opts) do
@@ -291,8 +294,8 @@ defmodule Muro.Gen do
   defp load_one(manifest, root, book_rel, skip?) do
     entries = Enum.filter(manifest.modules, &(&1.book == book_rel))
     path = Muro.Manifest.book_path(root, hd(entries))
-    exunit? = Enum.any?(entries, &(Map.get(&1, :kind) == :exunit))
-    closed? = Enum.any?(entries, &(Map.get(&1, :kind) != :exunit))
+    suite? = Enum.any?(entries, &suite_kind?(&1))
+    closed? = Enum.any?(entries, &(not suite_kind?(&1)))
     base = [fuel: manifest.fuel, root: root]
     base = if skip?, do: Keyword.put(base, :check, false), else: base
 
@@ -304,7 +307,7 @@ defmodule Muro.Gen do
       end
 
     open =
-      if exunit? and not match?({:ok, _, _}, closed) do
+      if suite? and not match?({:ok, _, _}, closed) do
         Muro.Load.open(path, Keyword.put(base, :params, :open))
       else
         :untried
@@ -316,7 +319,7 @@ defmodule Muro.Gen do
   defp book_for(entry, cache) do
     %{closed: closed, open: open} = Map.fetch!(cache, entry.book)
 
-    if Map.get(entry, :kind) == :exunit do
+    if suite_kind?(entry) do
       case closed do
         {:ok, _, _} = ok ->
           ok
@@ -364,8 +367,26 @@ defmodule Muro.Gen do
       kind when kind in [:c, :rust, :zig, :asm, :js] ->
         render_native(root, entry, version, loaded, lines, kind)
 
+      :pytest ->
+        render_pytest(root, entry, version, fuel, loaded, lines)
+
       _kind ->
         render_elixir(root, entry, version, fuel, loaded, lines)
+    end
+  end
+
+  defp render_pytest(root, entry, version, fuel, loaded, lines) do
+    with {:ok, source, skips} <- emit_loaded(root, entry, fuel, loaded) do
+      body = ensure_newline(source)
+
+      file =
+        header(version, entry.book, book_hash(root, entry.book), body_hash(body), lines) <> body
+
+      if coherent?(file, root, entry, version, lines) do
+        {:ok, [%{rel: entry.target, contents: file}], {lines, skips}}
+      else
+        {:error, "generated header does not describe #{entry.target}"}
+      end
     end
   end
 
@@ -485,6 +506,25 @@ defmodule Muro.Gen do
                Muro.Grade.erase_book(loaded),
                opts
              ) do
+          {:ok, %{source: source, skips: skips}} -> {:ok, source, skips}
+          {:error, message} -> {:error, message}
+        end
+
+      :pytest ->
+        opts = [
+          fuel: fuel,
+          root: root,
+          book: entry.book,
+          imports: Map.get(entry, :imports, false)
+        ]
+
+        opts =
+          case Map.get(entry, :impl) do
+            nil -> opts
+            impl -> Keyword.put(opts, :impl, impl)
+          end
+
+        case Muro.Emit.Pytest.render(path, Muro.Grade.erase_book(loaded), opts) do
           {:ok, %{source: source, skips: skips}} -> {:ok, source, skips}
           {:error, message} -> {:error, message}
         end
@@ -713,6 +753,10 @@ defmodule Muro.Gen do
 
   defp elixir_kind?(entry) do
     Map.get(entry, :kind, :elixir) in [:elixir, :exunit, :fsm]
+  end
+
+  defp suite_kind?(entry) do
+    Map.get(entry, :kind) in [:exunit, :pytest]
   end
 
   defp hash_problems(content, header, current, rel, entry, version, book_ok?, emit) do

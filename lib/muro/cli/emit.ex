@@ -24,6 +24,7 @@ defmodule Muro.CLI.Emit do
           "otp     <stem>_otp.ex, a GenServer per process",
           "fsm     one state-machine module on standard output",
           "exunit  one ExUnit module for the closed equations",
+          "pytest  one pytest module for the closed equations",
           "mbi     <stem>.mbi beside the book, exactly one graded run"
         ]
       },
@@ -40,7 +41,15 @@ defmodule Muro.CLI.Emit do
         type: :boolean,
         default: "false",
         doc:
-          "With --backend exunit, also collect the closed equations of the files this book imports directly. It is an error with any other backend. Absent, the suite is this file only."
+          "With --backend exunit or --backend pytest, also collect the closed equations of the files this book imports directly. It is an error with any other backend. Absent, the suite is this file only."
+      },
+      %{
+        name: :impl,
+        type: :string,
+        value: "MODULE",
+        default: "the file stem",
+        doc:
+          "With --backend pytest, the Python module the tests import. Each segment is an identifier and not a keyword. Other backends refuse the flag. Absent, the module is the file stem. MURO_IMPL_<STEM> overrides it when the tests run, and that does not change the file."
       },
       %{
         name: :prefix,
@@ -57,13 +66,13 @@ defmodule Muro.CLI.Emit do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro emit reads one .muro file, checks it, and emits run definitions. Spec and evidence are omitted. elixir, the default, prints one module on standard output and writes no file. c, rust, zig, and asm write a file beside the book and print that path. js writes <stem>.mjs and <stem>.d.ts beside the book and prints both paths. The executable does not load a Mix project, so c writes the .h and the .c only and does not build a NIF. otp writes a GenServer for each conforming process. fsm prints a state machine and leaves the transport with the host. exunit prints one ExUnit module for the book's closed equations. mbi writes <stem>.mbi beside the book only when exactly one exported run erases, and prints that path. The binder grades stay. A refusal writes nothing and prints no path. An image already beside the book stays byte for byte, including when the book has no exported run and when it has more than one. muro-beam loads that file. It is not Erlang BEAM bytecode. A definition, data, a pair, a word, or a stream is refused. Zero exported runs, and more than one, are refused. muro-beam checks the image again. Writing the file is not that check. Nothing here is a proof that the host translation is the book. The proof stops at the run image.
+      muro emit reads one .muro file, checks it, and emits run definitions. Spec and evidence are omitted. elixir, the default, prints one module on standard output and writes no file. c, rust, zig, and asm write a file beside the book and print that path. js writes <stem>.mjs and <stem>.d.ts beside the book and prints both paths. The executable does not load a Mix project, so c writes the .h and the .c only and does not build a NIF. otp writes a GenServer for each conforming process. fsm prints a state machine and leaves the transport with the host. exunit prints one ExUnit module for the book's closed equations. pytest prints one pytest module for those same equations. mbi writes <stem>.mbi beside the book only when exactly one exported run erases, and prints that path. The binder grades stay. A refusal writes nothing and prints no path. An image already beside the book stays byte for byte, including when the book has no exported run and when it has more than one. muro-beam loads that file. It is not Erlang BEAM bytecode. A definition, data, a pair, a word, or a stream is refused. Zero exported runs, and more than one, are refused. muro-beam checks the image again. Writing the file is not that check. Nothing here is a proof that the host translation is the book. The proof stops at the run image.
       """),
       Muro.CLI.Text.section(
         "USAGE",
         Muro.CLI.Text.pre([
           "muro emit path.muro [--backend NAME] [--node NAME] [--imports]",
-          "    [--prefix TEXT]"
+          "    [--prefix TEXT] [--impl MODULE]"
         ])
       ),
       Muro.CLI.Text.section(
@@ -83,6 +92,7 @@ defmodule Muro.CLI.Emit do
             {"muro emit book.muro --backend js", "Write book.mjs and book.d.ts."},
             {"muro emit book.muro --backend c", "Write book.h and book.c. No NIF."},
             {"muro emit book.muro --backend exunit", "Print an ExUnit module."},
+            {"muro emit book.muro --backend pytest", "Print a pytest module."},
             {"muro emit book.muro --backend mbi", "Write book.mbi beside the book."}
           ],
           "\n\n"
@@ -118,28 +128,35 @@ defmodule Muro.CLI.Emit do
         node = Keyword.get(parsed, :node)
         imports? = Keyword.get(parsed, :imports, false)
         prefix = Keyword.get(parsed, :prefix)
+        impl = Keyword.get(parsed, :impl)
 
         case paths do
-          [path] -> emit(path, backend, node, imports?, nif, prefix)
+          [path] -> emit(path, backend, node, imports?, nif, prefix, impl)
           _other -> {:raise, "", "expected one path"}
         end
     end
   end
 
-  defp emit(path, backend, node, imports?, nif, prefix) do
+  defp emit(path, backend, node, imports?, nif, prefix, impl) do
     cond do
       backend == "beam" ->
         {:raise, "",
          "--backend beam is refused. Use --backend mbi. The file is the .mbi image muro-beam loads, not Erlang BEAM bytecode."}
 
-      imports? and backend != "exunit" ->
-        {:raise, "", "--imports is only valid with --backend exunit"}
+      imports? and backend not in ["exunit", "pytest"] ->
+        {:raise, "", "--imports is only valid with --backend exunit or --backend pytest"}
+
+      impl not in [nil, ""] and backend != "pytest" ->
+        {:raise, "", "--impl is only valid with --backend pytest"}
 
       prefix not in [nil, ""] and backend != "c" ->
         {:raise, "", "--prefix is only valid with --backend c"}
 
       backend == "exunit" and is_nil(node) ->
         emit_exunit(path, imports?)
+
+      backend == "pytest" and is_nil(node) ->
+        emit_pytest(path, imports?, impl)
 
       backend == "c" and is_nil(node) ->
         emit_c(path, nif, prefix)
@@ -163,6 +180,30 @@ defmodule Muro.CLI.Emit do
 
       {:error, message} ->
         {:raise, "", message}
+    end
+  end
+
+  defp emit_pytest(path, imports?, impl) do
+    cond do
+      is_binary(impl) and impl != "" and not Muro.Emit.Pytest.module_name?(impl) ->
+        {:raise, "", "--impl must be a Python module name, got: #{inspect(impl)}"}
+
+      true ->
+        opts = if imports?, do: [imports: true], else: []
+        opts = if is_binary(impl) and impl != "", do: Keyword.put(opts, :impl, impl), else: opts
+
+        case Muro.emit_pytest(path, opts) do
+          {:ok, %{source: src, skips: skips, tests: n}} ->
+            stderr =
+              Enum.map_join(skips, fn skip ->
+                "skipped #{skip.name} (#{skip.file}:#{skip.line}): #{skip.reason}\n"
+              end) <> "#{n} tests, #{length(skips)} skipped\n"
+
+            {:ok, src <> "\n", stderr}
+
+          {:error, message} ->
+            {:raise, "", message}
+        end
     end
   end
 

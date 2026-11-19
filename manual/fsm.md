@@ -163,6 +163,6 @@ The refusal is the whole module. A book that does not check is refused by the ch
 {"priv/muro/meet.muro", Host.MeetFsm, "lib/host/meet_fsm.ex", [kind: :fsm]}
 ```
 
-`impl:` and `imports:` on a `:fsm` entry are errors, and the message names the entry index. They remain valid only for `kind: :exunit`. The header, the hashes, `written` / `unchanged`, `--check`, a stale book, and a hand edit are the same as for the other kinds.
+`impl:` and `imports:` on a `:fsm` entry are errors, and the message names the entry index. They remain valid only for `kind: :exunit` and `kind: :pytest`. The header, the hashes, `written` / `unchanged`, `--check`, a stale book, and a hand edit are the same as for the other kinds.
 
 The child of `session ping` is `Host.MeetFsm.Ping`. Each child has `init`, `send`, `recv`, and `done?`. A book that marks a party also gives each child `down/1` and `down/2`. A book that does not mark a party emits no `down`. A session name whose function spelling is plain snake case (lowercase words of letters and digits joined by single underscores) camelizes: `ping` is `Ping`, `foo_bar` is `FooBar`, and `grant-end` is `GrantEnd`. Any other name is `M` plus the function spelling (`and` is `Mmuro__and`). Two sessions that camelize to the same name are `Ping` and `Ping_2`.

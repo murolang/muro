@@ -65,11 +65,11 @@ defmodule Muro do
   are the equations the suite lists and does not run. A book that does
   not check returns `{:error, message}` and no module.
 
-  This is the one entry point that loads with `params: :open`. A `param`
-  nobody supplied is an assumption, so a library of params can be the
-  suite. Every other backend still refuses that library. `imports: true`
-  also collects closed equations from the files this book imports
-  directly. The default is `false`.
+  This entry point, and `emit_pytest/2`, load with `params: :open`. A
+  `param` nobody supplied is an assumption, so a library of params can
+  be the suite. Every other backend still refuses that library.
+  `imports: true` also collects closed equations from the files this
+  book imports directly. The default is `false`.
 
   The bytes compare emitted shapes. Host data arrives with `repr` (#131),
   in `Muro.Emit.emit_closed/2`.
@@ -86,6 +86,33 @@ defmodule Muro do
         Grade.erase_book(book),
         Keyword.put(opts, :fuel, fuel)
       )
+    end
+  end
+
+  @doc """
+  Emit the closed equations of `path` as a pytest module.
+
+  The implementation defaults to the file stem (`rounding.muro` calls
+  `rounding.round`), unless `opts` sets `impl:` to a Python module
+  name. `opts` also accepts `fuel:`, `root:`, `book:`, and `imports:`.
+
+  Returns `{:ok, %{source: source, skips: skips, tests: n}}`. `skips`
+  are the equations the suite lists and does not run. A book that does
+  not check returns `{:error, message}` and no module.
+
+  This loads with `params: :open`, the same way `emit_exunit/3` does.
+  `imports: true` also collects closed equations from the files this
+  book imports directly. The default is `false`.
+
+  Values are the literals `Muro.Emit.Pytest.print_value/2` prints.
+  """
+  def emit_pytest(path, opts \\ []) when is_binary(path) and is_list(opts) do
+    fuel = Keyword.get(opts, :fuel, Muro.Check.default_fuel())
+
+    load_opts = [fuel: fuel, root: Keyword.get(opts, :root), params: :open]
+
+    with {:ok, book} <- Load.file(path, load_opts) do
+      Emit.Pytest.render(path, Grade.erase_book(book), Keyword.put(opts, :fuel, fuel))
     end
   end
 
