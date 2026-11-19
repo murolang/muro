@@ -376,7 +376,15 @@ defmodule Muro.CliTest do
     refute ci =~ "vars.CI_RUNNER ||"
     assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, text)) == 1
     assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, release)) == 1
-    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, ci)) == 3
+    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, ci)) == 4
+
+    # Agda is gated by the changes job, never by a workflow paths: filter,
+    # so the required Agda check reports (as skipped) on every pull request.
+    refute ci =~ ~r/^\s*paths(-ignore)?:/m
+    assert ci =~ "needs: changes"
+    assert ci =~ "needs.changes.outputs.agda != 'false'"
+    assert ci =~ "git diff --name-only HEAD^1 HEAD"
+    assert ci =~ ~S"^(agda/|Makefile$|\.github/workflows/)"
 
     assert text =~ "check_name=Elixir"
     assert text =~ "already on Hex"
