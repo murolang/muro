@@ -7,7 +7,8 @@ defmodule Muro.Family do
   `leads_to` are decided on the fixed script in `Muro.Family.Graph`.
   A formula over a family that does not check is
   `skipped because <family> does not check`, and the formula is not walked.
-  The decision is the Elixir graph. It is not an Agda proof.
+  That search checks the generated dispatcher. The hold rule is proved
+  in `agda/Muro/Family.agda`. `Muro.Family.Step` is that step.
   """
 
   @run_msg "temporal formulas do not mention run definitions"

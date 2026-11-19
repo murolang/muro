@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.22.7
+
+A keyed family holds a `signal` while an earlier instance of its key, already arrived, is unresolved. That rule is proved for any number of keys and any number of instances. An opened `signal` has every earlier instance of its key that had already arrived resolved. An instance that arrives later can still be live beside it. Arrival, resolve, and rerun keep the rule. A held `signal` opens in the step that resolves the last earlier instance of its key. Whether an instance is held depends only on its own key.
+
+A state that breaks the rule, however many keys it has, already breaks it on one key and two instances. Those two sit on the script the family graph explores for key `a`: an `init` before a `signal`, or a `signal` before a later `signal`.
+
+The family graph is unchanged: 171649 reachable states, 729184 transitions. That search checks the generated dispatcher on the fixed script. It is a regression check of that program. It is not this proof. The program that writes the dispatcher is not proved. `init` is never held. `finish` is still `:resolve` or `:rerun`.
+
+### Manual
+
+- Temporal, Limits, State machines, Examples, and Extending: the hold rule is proved for any number of keys. The family graph remains the check of the generated dispatcher.
+
+### Package
+
+- Version 0.22.7.
+
 ## 0.22.6
 
 `--backend fsm` and `--backend otp` print a declaration's map with its keys sorted. Since OTP 26 a small map with atom keys iterates in atom-table order, and that order depends on what the VM loaded first. The same book emitted `%{ctors: …, order: …, np: …}` in a fresh VM and another order inside a long test run, so `mix muro.gen --check` failed in a host's test suite on a module `mix muro.gen` had just written. The FSM literals and the OTP declarations and skeletons now pass `custom_options: [sort_maps: true]` to `inspect`. The FSM emitter also sorts the outer pair lists of the declarations, fail tables, and host-atom maps before printing them. A book whose emitted maps had one key, or no map, emits the same text. Run `mix muro.gen` once to rewrite a committed module that has a declaration with more than one key.
