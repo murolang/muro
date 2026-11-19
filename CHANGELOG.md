@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.8
+## 0.22.9
 
 `mix muro.emit path.muro --backend pytest` prints one pytest module for the book's closed equations, the same equations `--backend exunit` collects. `mix muro.gen` writes it when an entry sets `kind: :pytest`. Each equation is one test. A skip is a `pytest.mark.skip` test, named in the reason, and is not dropped. A file of unsupplied `param`s is a suite, as it is for ExUnit.
 
@@ -13,6 +13,20 @@ That encoding is not injective across types. A string and a nullary constructor 
 ### Manual
 
 - Closed equations as tests, Pytest, Emit, Committed modules, and The executable: the pytest module, the value encoding, and how the implementation is chosen.
+
+### Package
+
+- Version 0.22.9.
+
+## 0.22.8
+
+A merge to main publishes that `mix.exs` version to Hex once the Elixir CI job on that commit is green, then pushes the annotated tag `vX.Y.Z` if it is missing. The publish does not wait for Agda or muro_visor. The publish is skipped when the version is already on Hex. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. The binaries are built only when this commit published the version or created the tag, and that job does not delay the publish. `muro_visor` is not published this way: Hex stages it, and it still needs 2FA.
+
+The repository secret `HEX_API_KEY` is required the first time a version is published. A missing secret fails the publish job with a clear error and does not print the key. Generate one with `mix hex.user key generate --key-name muro-ci --permission api:write` and add it as `HEX_API_KEY` on murolang/muro. The Publish, Release, and CI workflows run on `vars.CI_RUNNER` and do not fall back to a GitHub-hosted runner.
+
+### Manual
+
+- The executable, For agents, and AGENTS.md: a merge publishes the Hex package and the tag, and `muro_visor` is not included.
 
 ### Package
 
