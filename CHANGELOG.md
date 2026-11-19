@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.9
+
+CI runs the Agda job only when it has something to check. A new `Changes` job diffs a pull request against its base with git. The Agda job runs when the pull request changes a file under `agda/`, the `Makefile`, or a file under `.github/workflows/`, and on every push to main and every manual run. On any other pull request the `Agda 2.8.0` check reports as skipped, and a required check counts a skipped job as passing. If the `Changes` job fails, Agda runs. `make agda` reads only those files, so a skipped run could not have had another result. The Elixir and muro_visor jobs, the Publish and Release workflows, and the runners are unchanged.
+
+### Manual
+
+- README and Extending the kernel: when CI runs `make agda`.
+
+### Package
+
+- Version 0.22.9.
+
 ## 0.22.8
 
 A merge to main publishes that `mix.exs` version to Hex once the Elixir CI job on that commit is green, then pushes the annotated tag `vX.Y.Z` if it is missing. The publish does not wait for Agda or muro_visor. The publish is skipped when the version is already on Hex. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. The binaries are built only when this commit published the version or created the tag, and that job does not delay the publish. `muro_visor` is not published this way: Hex stages it, and it still needs 2FA.
