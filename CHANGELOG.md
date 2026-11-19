@@ -2,9 +2,9 @@
 
 ## 0.22.5
 
-A merge to main publishes that `mix.exs` version to Hex once the Elixir CI job on that commit is green, then pushes the annotated tag `vX.Y.Z`. The publish does not wait for Agda or muro_visor. The publish is skipped when the version is already on Hex. The self-contained binaries are built after the tag exists, and that job does not delay the publish. `muro_visor` is not published this way: Hex stages it, and it still needs 2FA.
+A merge to main publishes that `mix.exs` version to Hex once the Elixir CI job on that commit is green, then pushes the annotated tag `vX.Y.Z` if it is missing. The publish does not wait for Agda or muro_visor. The publish is skipped when the version is already on Hex. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. The binaries are built only when this commit published the version or created the tag, and that job does not delay the publish. `muro_visor` is not published this way: Hex stages it, and it still needs 2FA.
 
-The repository secret `HEX_API_KEY` is required the first time a version is published. A missing secret fails the publish job with a clear error and does not print the key. Generate one with `mix hex.user key generate --key-name muro-ci --permission api:write` and add it as `HEX_API_KEY` on murolang/muro.
+The repository secret `HEX_API_KEY` is required the first time a version is published. A missing secret fails the publish job with a clear error and does not print the key. Generate one with `mix hex.user key generate --key-name muro-ci --permission api:write` and add it as `HEX_API_KEY` on murolang/muro. The Publish, Release, and CI workflows run on `vars.CI_RUNNER` and do not fall back to a GitHub-hosted runner.
 
 ### Manual
 

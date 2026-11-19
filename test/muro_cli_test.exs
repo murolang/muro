@@ -336,10 +336,14 @@ defmodule Muro.CliTest do
     assert text =~ "zig-${zarch}-linux-0.15.2"
     assert text =~ "0.15.2"
     assert text =~ "scripts/release-linux-smoke.sh"
-    assert text =~ "vars.CI_RUNNER || 'ubuntu-24.04'"
+    assert text =~ "vars.CI_RUNNER"
 
-    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \|\| 'ubuntu-24\.04' \}\}/, text)) ==
-             1
+    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, text)) == 1
+
+    refute text =~ "vars.CI_RUNNER ||"
+    assert text =~ "inputs.tag || github.sha"
+    assert text =~ "inputs.tag || github.ref_name"
+    refute text =~ "github.event_name == 'workflow_call'"
 
     assert smoke =~ "muro --version"
     assert smoke =~ "muro check"
@@ -359,6 +363,38 @@ defmodule Muro.CliTest do
     assert after_smoke =~ "--clobber"
     assert after_smoke =~ "inputs.dry_run"
     assert after_smoke =~ "github.event_name != 'pull_request'"
+  end
+
+  test "the publish workflow waits for Elixir, publishes to Hex, and calls the release workflow" do
+    text = File.read!(".github/workflows/publish.yml")
+    release = File.read!(".github/workflows/release.yml")
+    ci = File.read!(".github/workflows/ci.yml")
+
+    assert text =~ "vars.CI_RUNNER"
+    refute text =~ "vars.CI_RUNNER ||"
+    refute release =~ "vars.CI_RUNNER ||"
+    refute ci =~ "vars.CI_RUNNER ||"
+    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, text)) == 1
+    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, release)) == 1
+    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, ci)) == 3
+
+    assert text =~ "check_name=Elixir"
+    assert text =~ "already on Hex"
+    assert text =~ "needed=false"
+    assert text =~ "git push origin"
+    assert text =~ "refs/tags/"
+    assert text =~ "uses: ./.github/workflows/release.yml"
+    assert release =~ "workflow_call:"
+    assert text =~ "needs.publish.outputs.release == 'true'"
+    assert text =~ "steps.plan.outputs.release"
+    assert release =~ "inputs.tag || github.sha"
+    refute release =~ "hex.publish"
+    refute text =~ "cd ui"
+    refute text =~ "packages/muro_visor"
+    refute text =~ "hex.publish package"
+    assert text =~ "mix deps.get"
+    assert text =~ "urllib.error.URLError"
+    assert text =~ "release-binaries-"
   end
 
   defp assert_same(fun, argv, cd \\ nil) do
