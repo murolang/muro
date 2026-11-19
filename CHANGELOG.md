@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.7
+## 0.22.8
 
 `mix muro.synth` runs one procedure. The procedure is `traces`, the version-space search on a book's `step` and the observations that `step` supports. `--on traces` selects it. A book that defines `step` selects it when `--on` is omitted. The search is unchanged: the same candidates, the same order, the same policy book.
 
@@ -9,6 +9,18 @@ A book with no `step` and no observations is refused. It has nothing to synthesi
 ### Manual
 
 - Synthesis: `--on traces`, the default, and the refusal.
+
+### Package
+
+- Version 0.22.8.
+
+## 0.22.7
+
+`--backend mbi` writes image format 2 when the exported run calls other run definitions, including a `run internal` and a prelude run it reaches. Each one is a closed term in a `(defs …)` section. The order lets a definition call itself or an earlier definition, and the run refers to them by index. A run that calls no definition still writes format 1, the same bytes as before. Two definitions that call each other, so that one of them would have to name a later index, are refused, and nothing is written. muro-beam loads the file and checks it again. Writing the file is not that check. The bytes are renamed into place, so the path holds the previous file or the whole image.
+
+### Manual
+
+- MBI images, Emit, For agents, and Examples: a run may call definitions, and the image names them.
 
 ### Package
 
