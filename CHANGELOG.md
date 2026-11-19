@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.7
+## 0.22.8
 
 `mix muro.emit path.muro --backend pytest` prints one pytest module for the book's closed equations, the same equations `--backend exunit` collects. `mix muro.gen` writes it when an entry sets `kind: :pytest`. Each equation is one test. A skip is a `pytest.mark.skip` test, named in the reason, and is not dropped. A file of unsupplied `param`s is a suite, as it is for ExUnit.
 
@@ -13,6 +13,18 @@ That encoding is not injective across types. A string and a nullary constructor 
 ### Manual
 
 - Closed equations as tests, Pytest, Emit, Committed modules, and The executable: the pytest module, the value encoding, and how the implementation is chosen.
+
+### Package
+
+- Version 0.22.8.
+
+## 0.22.7
+
+`--backend mbi` writes image format 2 when the exported run calls other run definitions, including a `run internal` and a prelude run it reaches. Each one is a closed term in a `(defs …)` section. The order lets a definition call itself or an earlier definition, and the run refers to them by index. A run that calls no definition still writes format 1, the same bytes as before. Two definitions that call each other, so that one of them would have to name a later index, are refused, and nothing is written. muro-beam loads the file and checks it again. Writing the file is not that check. The bytes are renamed into place, so the path holds the previous file or the whole image.
+
+### Manual
+
+- MBI images, Emit, For agents, and Examples: a run may call definitions, and the image names them.
 
 ### Package
 
