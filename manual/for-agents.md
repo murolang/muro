@@ -103,7 +103,7 @@ lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a marked p
 lib/muro/emit/fsm.ex    a session endpoint is a state machine; a marked book has `down/1` and `down/2` for a failure arm; a book with no mark emits no `down`; a keyed family that checks is a child with `new/0`, `arrive/4`, `resolved/2` (an open instance leaves), `withdraw/2` (a held instance resolves without opening), `finish` (`:resolve` or `:rerun`), and `check_trace/1` (arrivals, resolutions, withdrawals, reruns, and `{party, id, send|recv|down}`). A rule is `never held`, `held while earlier unresolved`, or `held while any unresolved`. `earlier_resolved k kind` names the earlier instances of that key and kind; each meeting end has `finish`, and `:rerun` when one family uses that end; two families on one end name `finish` on the family child; the transport stays with the host (`--backend fsm`)
 lib/muro/emit/c_session.ex a session endpoint is a pure step written as C; the actions are the ones the state machine takes, init takes `uint64_t`, and `down` is not emitted (`--backend c`)
 lib/muro/emit/node.ex   a cross, and a cross reading, is one call and one monitor (`--node`)
-lib/muro/emit/mbi.ex    exactly one exported run as an .mbi image (`--backend mbi`); muro-beam loads it; not a manifest target
+lib/muro/emit/mbi.ex    exactly one exported run as an .mbi image (`--backend mbi`); a run it calls is a definition in the image; muro-beam loads it; not a manifest target
 lib/muro/example.ex     same book as Agda
 lib/muro/mutate.ex      mutants of run definitions (`mix muro.mutate`)
 lib/muro/synth.ex       version-space search on an emitted step (`mix muro.synth`)
@@ -153,7 +153,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.fill`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.7`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.8`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -166,7 +166,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.22.7.ez
+mix archive.install muro-0.22.8.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -185,7 +185,7 @@ A script run with `mix run --no-start` does not see the archive. Archives are on
 
 `--backend zig` writes `<name>.zig` next to the file. `zig` translates it. The proof stops at the run image.
 
-`--backend mbi` writes `<stem>.mbi` next to the file only when the book has exactly one exported run and that body erases, and the binder grades stay. Any refusal, including a book with no exported run and a book with more than one, writes nothing and leaves an image already at that path byte for byte. The file is the image muro-beam loads. It is not Erlang BEAM bytecode. A definition, data, a pair, a word, or a stream is refused. muro-beam checks the image again. Writing the file is not that check. The page is [MBI images](mbi.md).
+`--backend mbi` writes `<stem>.mbi` next to the file only when the book has exactly one exported run and that body erases, and the binder grades stay. Any refusal, including a book with no exported run and a book with more than one, writes nothing and leaves an image already at that path byte for byte. The file is the image muro-beam loads. It is not Erlang BEAM bytecode. A run the entry calls is a closed definition in the image. A name that is not a run, data, a pair, a word, or a stream is refused. Two definitions that call each other are refused. muro-beam checks the image again. Writing the file is not that check. The page is [MBI images](mbi.md).
 
 `--backend c` writes C. A session in the book is also a pure step, and the host keeps the transport. The Mix task builds a NIF when the working directory is the loaded Mix project. Add `{:elixir_make, "~> 0.10", runtime: false}` to the project deps, or run the task inside a project that depends on muro. Without `elixir_make`, that NIF stops and names the dependency. Outside the loaded project the task writes the `.h` and the `.c` only, and so does the executable. `nx` and `makeup` are optional. Checking and emitting Elixir do not load them.
 
@@ -239,7 +239,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then:
 
 ```
-Muro v0.22.7
+Muro v0.22.8
 All terms check. Evidence never becomes a run.
 ```
 

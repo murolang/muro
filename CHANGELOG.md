@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.7
+## 0.22.8
 
 A family formula can name the instances created before the one that is opening. `earlier_resolved k command` is every earlier instance of that key and that kind. `resolved k command` still counts the instance that is opening, so that atom cannot state that a command opens only once every earlier command of its key has resolved. `examples/keyed-commands.muro` states the property with `earlier_resolved`, and the command is held while an earlier one is unresolved. An instance that has not arrived does not count, and neither does one that arrives while this one is still running. Giving up counts as resolved. When nothing of that key and kind is running, the atom holds.
 
@@ -13,6 +13,18 @@ The family graph for `examples/keyed-slots.muro` stays 171649 states and 729184 
 ### Manual
 
 - Grammar, Temporal, State machines, Limits, Examples, Emit, and Extending: `earlier_resolved`, withdrawing a held instance, and `held while any unresolved`.
+
+### Package
+
+- Version 0.22.8.
+
+## 0.22.7
+
+`--backend mbi` writes image format 2 when the exported run calls other run definitions, including a `run internal` and a prelude run it reaches. Each one is a closed term in a `(defs …)` section. The order lets a definition call itself or an earlier definition, and the run refers to them by index. A run that calls no definition still writes format 1, the same bytes as before. Two definitions that call each other, so that one of them would have to name a later index, are refused, and nothing is written. muro-beam loads the file and checks it again. Writing the file is not that check. The bytes are renamed into place, so the path holds the previous file or the whole image.
+
+### Manual
+
+- MBI images, Emit, For agents, and Examples: a run may call definitions, and the image names them.
 
 ### Package
 
