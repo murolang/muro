@@ -258,9 +258,11 @@ defmodule Muro do
   Write `<stem>.mbi` next to `path` only when exactly one exported
   run erases: a function, an application, zero, successor, or a match
   on Nat, with the binder's grade kept. A Π erases as `gpi` when it is
-  the term. A definition, data, a pair, a word, or a stream is refused.
-  An unknown grade is refused. muro-beam loads the image and checks
-  it again. The file is not Erlang BEAM bytecode. Writing the file is
+  the term. A run the entry calls is a closed definition in the image.
+  Data, a pair, a word, or a stream is refused. A name that is not a
+  run, and two definitions that call each other, are refused. An
+  unknown grade is refused. muro-beam loads the image and checks it
+  again. The file is not Erlang BEAM bytecode. Writing the file is
   not that check.
 
   `run internal` is not exported. Spec, evidence, data, and sessions
@@ -271,8 +273,10 @@ defmodule Muro do
   when one body erases, and the error names the other runs. When every
   exported run fails, the message is those reasons. A book that does
   not check writes nothing and leaves a previous image byte for byte.
-  `opts` is `fuel:` and `root:`, as in `check_file/2`. This is not a
-  manifest target.
+  On success the bytes are written to a temporary file in the same
+  directory and renamed over the image, so the path holds the previous
+  file or the whole image. `opts` is `fuel:` and `root:`, as in
+  `check_file/2`. This is not a manifest target.
   """
   def emit_mbi(path, opts \\ []) do
     stem = Path.basename(path, ".muro")
@@ -282,7 +286,7 @@ defmodule Muro do
     with {:ok, book} <- Load.file(path, opts) do
       case Emit.Mbi.render(Prelude.for_emit(book)) do
         {:ok, image, ""} ->
-          File.write!(file, image)
+          write_image(file, image)
           {:ok, [file]}
 
         # One body erased and another exported run remains. The image
@@ -295,6 +299,21 @@ defmodule Muro do
         {:error, message} ->
           {:error, message}
       end
+    end
+  end
+
+  # Same directory as `file`, so the rename is atomic on that filesystem.
+  # A refusal never calls this. `File.rm/1` drops a temporary left behind
+  # when the write or the rename raises, and does nothing after a rename.
+  defp write_image(file, image) do
+    tmp =
+      file <> "." <> Integer.to_string(System.unique_integer([:positive])) <> ".tmp"
+
+    try do
+      File.write!(tmp, image)
+      File.rename!(tmp, file)
+    after
+      File.rm(tmp)
     end
   end
 
