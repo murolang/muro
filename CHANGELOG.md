@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.6
+## 0.22.7
 
 A merge to main publishes that `mix.exs` version to Hex once the Elixir CI job on that commit is green, then pushes the annotated tag `vX.Y.Z` if it is missing. The publish does not wait for Agda or muro_visor. The publish is skipped when the version is already on Hex. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. The binaries are built only when this commit published the version or created the tag, and that job does not delay the publish. `muro_visor` is not published this way: Hex stages it, and it still needs 2FA.
 
@@ -9,6 +9,14 @@ The repository secret `HEX_API_KEY` is required the first time a version is publ
 ### Manual
 
 - The executable, For agents, and AGENTS.md: a merge publishes the Hex package and the tag, and `muro_visor` is not included.
+
+### Package
+
+- Version 0.22.7.
+
+## 0.22.6
+
+`--backend fsm` and `--backend otp` print a declaration's map with its keys sorted. Since OTP 26 a small map with atom keys iterates in atom-table order, and that order depends on what the VM loaded first. The same book emitted `%{ctors: …, order: …, np: …}` in a fresh VM and another order inside a long test run, so `mix muro.gen --check` failed in a host's test suite on a module `mix muro.gen` had just written. The FSM literals and the OTP declarations and skeletons now pass `custom_options: [sort_maps: true]` to `inspect`. The FSM emitter also sorts the outer pair lists of the declarations, fail tables, and host-atom maps before printing them. A book whose emitted maps had one key, or no map, emits the same text. Run `mix muro.gen` once to rewrite a committed module that has a declaration with more than one key.
 
 ### Package
 
