@@ -6,6 +6,10 @@
 
 The tests call a Python module the host names. The default is the file stem (`rounding.muro` calls `rounding.round`). `--impl` and `impl:` bake another module into the file. `MURO_IMPL_<STEM>` overrides that module when the tests run, and the file does not change. A `Nat` is an int. A word is an int: `U8`, `U32`, and `U64` are the residue, and `I64` is the signed value. A constructor with no fields is its name as a str. A constructor with fields is a tuple with the name first. A pair is a 2-tuple. `tt` is `None`. A string literal is a str. A bytes literal is a bytes value. A function, a stream, or a value with no Python literal is a skip.
 
+That encoding is not injective across types. A string and a nullary constructor are both a str. A `Nat` and a `U8` are both an int. A same-type literal is sound.
+
+`MURO_IMPL_<STEM>` folds the book stem: a hyphen becomes `_`, any other character outside `[A-Za-z0-9_]` becomes `_`, and the result is uppercased. `foo-bar.muro` and `foo_bar.muro` are both `MURO_IMPL_FOO_BAR`. `mix muro.gen` refuses a manifest whose pytest entries fold to one variable.
+
 ### Manual
 
 - Closed equations as tests, Pytest, Emit, Committed modules, and The executable: the pytest module, the value encoding, and how the implementation is chosen.

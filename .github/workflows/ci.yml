@@ -23,7 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install the ARM assembler and QEMU
+      - name: Install the ARM assembler, QEMU, and python3-pytest
         run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi qemu-system-arm python3 python3-pytest
 
       - uses: dtolnay/rust-toolchain@stable

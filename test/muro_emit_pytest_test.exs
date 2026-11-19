@@ -5,17 +5,22 @@ defmodule Muro.EmitPytestTest do
 
   alias Muro.Emit.Pytest
 
-  # Resolved when this file is compiled. Create the venv before mix test
-  # so this sees it. GitHub Actions sets CI. A missing pytest fails the
-  # file in that case, and skips locally.
+  # Resolved when this file is compiled. MURO_PYTEST_PYTHON names the
+  # interpreter when it is set. Otherwise this is python3 on PATH.
+  # The live tests run `python3 -m pytest`. A missing pytest skips
+  # them locally. CI raises so the job cannot pass without it.
   @python (
             env = System.get_env("MURO_PYTEST_PYTHON")
-            venv = "/private/tmp/pytest-backend-venv/bin/python3"
 
             cond do
-              is_binary(env) and env != "" and File.regular?(env) -> env
-              File.regular?(venv) -> venv
-              true -> System.find_executable("python3")
+              is_binary(env) and env != "" and File.regular?(env) ->
+                env
+
+              is_binary(env) and env != "" ->
+                System.find_executable(env)
+
+              true ->
+                System.find_executable("python3")
             end
           )
 
@@ -104,6 +109,9 @@ defmodule Muro.EmitPytestTest do
     assert Pytest.impl_env("examples/rounding.muro") == "MURO_IMPL_ROUNDING"
     assert Pytest.impl_env("word-kind.muro") == "MURO_IMPL_WORD_KIND"
     assert Pytest.impl_env("half_ok.muro") == "MURO_IMPL_HALF_OK"
+    assert Pytest.impl_env("foo-bar.muro") == "MURO_IMPL_FOO_BAR"
+    assert Pytest.impl_env("foo_bar.muro") == Pytest.impl_env("foo-bar.muro")
+    assert Pytest.impl_env("a/foo-bar.muro") == Pytest.impl_env("b/foo_bar.muro")
     assert Pytest.module_name?("pkg.rounding")
     refute Pytest.module_name?("class")
     refute Pytest.module_name?("my.class")
@@ -180,9 +188,13 @@ defmodule Muro.EmitPytestTest do
     assert source =~ "os.environ.get(_MURO_IMPL_ENV)"
     refute source =~ dir
 
+    # ExUnit skips neg-ok because that normal form is a machine term.
+    # Pytest keeps the equation. The candidate counts match. This does
+    # not compare the ExUnit source.
     {:ok, ex} = Muro.emit_exunit(path, RoundingTest, root: dir, book: "rounding.muro")
     assert ex.tests + length(ex.skips) == length(@names)
     assert "neg-ok" in Enum.map(ex.skips, & &1.name)
+    assert Enum.find(ex.skips, &(&1.name == "neg-ok")).reason =~ "machine term"
     refute Enum.any?(skips, &(&1.name == "neg-ok"))
 
     {stdout, stderr} = capture_emit([path, "--backend", "pytest"])
@@ -360,6 +372,47 @@ defmodule Muro.EmitPytestTest do
     refute source =~ "rounding_good"
   end
 
+  @tag skip: @pytest_skip
+  test "round/2 where round/1 is expected names round/1" do
+    {dir, path} = book("rounding.muro", @book)
+
+    assert {:ok, %{source: source}} =
+             Muro.emit_pytest(path, root: dir, book: "rounding.muro")
+
+    File.write!(Path.join(dir, "rounding_test.py"), source)
+    File.write!(Path.join(dir, "rounding.py"), wrong_arity())
+
+    {out, code} = pytest(dir)
+    assert code == 1
+    assert out =~ "implementation module rounding does not export round/1"
+  end
+
+  test "mix muro.gen refuses pytest entries that share one MURO_IMPL variable" do
+    dir = tmp_dir()
+    write_book(dir, "foo-bar.muro", "def n : run Nat := 0\n")
+    write_book(dir, "foo_bar.muro", "def n : run Nat := 0\n")
+    write_book(dir, "other.muro", "def n : run Nat := 0\n")
+
+    File.write!(Path.join(dir, "muro.exs"), """
+    [
+      muro: "#{Mix.Tasks.Muro.version()}",
+      modules: [
+        {"foo-bar.muro", "test/foo_bar_a.py", [kind: :pytest]},
+        {"other.muro", "test/other_test.py", [kind: :pytest]},
+        {"foo_bar.muro", "test/foo_bar_b.py", [kind: :pytest]}
+      ]
+    ]
+    """)
+
+    message = check_error(dir, [])
+
+    assert message =~
+             "MURO_IMPL_FOO_BAR is shared by pytest modules entries 1 (foo-bar.muro), 3 (foo_bar.muro)"
+
+    refute File.exists?(Path.join(dir, "test/foo_bar_a.py"))
+    refute File.exists?(Path.join(dir, "test/other_test.py"))
+  end
+
   defp correct_impl do
     ~S"""
     def round(n):
@@ -412,6 +465,10 @@ defmodule Muro.EmitPytestTest do
 
   defp missing_round do
     String.replace(correct_impl(), ~r/def round\(n\):\n    return n\n\n/, "")
+  end
+
+  defp wrong_arity do
+    String.replace(correct_impl(), "def round(n):", "def round(n, extra):")
   end
 
   defp pytest(dir, extra \\ %{}) do
@@ -482,9 +539,9 @@ defmodule Muro.EmitPytestTest do
     path
   end
 
-  defp check_error(dir) do
+  defp check_error(dir, args \\ ["--check"]) do
     in_dir(dir, fn ->
-      assert_raise Mix.Error, fn -> Mix.Tasks.Muro.Gen.run(["--check"]) end
+      assert_raise Mix.Error, fn -> Mix.Tasks.Muro.Gen.run(args) end
     end).message
   end
 

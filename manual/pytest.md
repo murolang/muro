@@ -1,7 +1,7 @@
 ---
 title: Pytest
 slug: pytest
-order: 14
+order: 28
 summary: A book's closed equations become one pytest module. The tests call a Python module the host names. A skip is a marked test and is recorded.
 ---
 
@@ -57,7 +57,9 @@ The default module is the file stem, folded the same way. `rounding.muro` calls 
 
 The module is chosen in three places. The file stem is the default. `--impl` on `mix muro.emit`, and `impl:` on a `kind: :pytest` entry, bake another name into the file. At run time the environment variable overrides that name, and the file's bytes do not change.
 
-The variable is `MURO_IMPL_` plus the stem. Hyphens become `_`, every other character outside `[A-Za-z0-9_]` becomes `_`, and the result is uppercased. `rounding.muro` is `MURO_IMPL_ROUNDING`. `half_ok.muro` is `MURO_IMPL_HALF_OK`. `word-kind.muro` is `MURO_IMPL_WORD_KIND`. `2nd.muro` is `MURO_IMPL_2ND`. The stem is the file's stem, not the `muro_` prefix of a digit fold, and not the module `--impl` baked in.
+The variable is `MURO_IMPL_` plus the stem. Hyphens become `_`, every other character outside `[A-Za-z0-9_]` becomes `_`, and the result is uppercased. `rounding.muro` is `MURO_IMPL_ROUNDING`. `half_ok.muro` is `MURO_IMPL_HALF_OK`. `word-kind.muro` is `MURO_IMPL_WORD_KIND`. `2nd.muro` is `MURO_IMPL_2ND`. The stem is the file's basename, not the `muro_` prefix of a digit fold, and not the module `--impl` baked in.
+
+The fold is not injective. `foo-bar.muro` and `foo_bar.muro` are both `MURO_IMPL_FOO_BAR`. `Foo.muro` and `foo.muro` are both `MURO_IMPL_FOO`. `a/foo-bar.muro` and `b/foo_bar.muro` fold together, because only the basename is used. `mix muro.gen` refuses a manifest whose pytest entries fold to one variable. The message names that variable and each entry.
 
 The fixture reads `os.environ.get` of that variable, and otherwise the baked default, then `importlib.import_module`. It is module-scoped. A module that cannot be imported fails before the tests, and the message names the module: `implementation module rounding could not be imported`. A called function that is missing, or whose signature does not accept the arity, fails the same way and names `round/1`. Several missing functions are joined in that message. `inspect.signature` decides the arity. A function that raises `ValueError` or `TypeError` from `signature` is accepted. A varargs parameter accepts an arity at least the required positional count. Otherwise the arity must sit between the required positional count and the positional count. Only the functions the runnable tests call are checked. A skipped test is not in that list.
 
@@ -89,6 +91,8 @@ A nullary constructor is the string. It is not a 1-tuple. A constructor is a dat
 A string built by `strCat`, and a string built by reading bytes, prints when every piece is a literal and the text is valid UTF-8. Bytes built by concatenation print when every piece is a literal. Anything else in that family is a skip.
 
 A function, a stream, an open name, `F32`, `Tensor`, and a word operation that does not reduce to a literal are skips. A word equation that ExUnit skips as a machine term is a test here when the normal form is a literal.
+
+The encoding is not injective across types. A `String` and a nullary constructor are both a Python `str`. A `Nat` and a `U8` are both a Python `int`. A pair whose first component is a string and a unary constructor can also coincide: `("box", 2)` is that pair and it is `box` of `2`. A cross-type `==` can therefore pass when the two sides have different Muro types. Same-type literals are sound. A form this printer cannot write is a skip, and a skip is not compared.
 
 ## Param libraries
 

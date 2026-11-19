@@ -128,6 +128,8 @@ defmodule Muro.Emit.Pytest do
   `[A-Za-z0-9_]` becomes `_`, and the result is uppercased.
   `rounding.muro` is `MURO_IMPL_ROUNDING`. `half_ok.muro` is
   `MURO_IMPL_HALF_OK`. `word-kind.muro` is `MURO_IMPL_WORD_KIND`.
+  `foo-bar.muro` and `foo_bar.muro` are both `MURO_IMPL_FOO_BAR`.
+  `Muro.Manifest` refuses pytest entries that share one variable.
   """
   def impl_env(path) when is_binary(path) do
     stem =
@@ -168,10 +170,13 @@ defmodule Muro.Emit.Pytest do
   end
 
   defp partition(items) do
-    Enum.reduce(items, {[], []}, fn
-      {:test, test}, {tests, skips} -> {tests ++ [test], skips}
-      {:skip, skip}, {tests, skips} -> {tests, skips ++ [skip]}
-    end)
+    {tests, skips} =
+      Enum.reduce(items, {[], []}, fn
+        {:test, test}, {tests, skips} -> {[test | tests], skips}
+        {:skip, skip}, {tests, skips} -> {tests, [skip | skips]}
+      end)
+
+    {Enum.reverse(tests), Enum.reverse(skips)}
   end
 
   defp source(ctx, impl, path, tests, items) do

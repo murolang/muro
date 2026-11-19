@@ -39,7 +39,10 @@ defmodule Muro.Manifest do
   alias atom, an unknown option, an unknown kind, `impl:` on an
   entry that is not `:exunit` or `:pytest`, or `imports:` on an
   entry that is not `:exunit` or `:pytest`. `imports:` must be a
-  boolean. A pytest `impl:` must be a Python module name.
+  boolean. A pytest `impl:` must be a Python module name. Two
+  pytest entries whose book stems fold to one `MURO_IMPL_` variable
+  are refused. `foo-bar.muro` and `foo_bar.muro` are both
+  `MURO_IMPL_FOO_BAR`.
 
   `module` is required for `:elixir`, `:fsm`, and `:exunit`. A
   `:c`, `:rust`, `:zig`, `:asm`, `:js`, or `:pytest` entry may omit
@@ -743,17 +746,41 @@ defmodule Muro.Manifest do
   end
 
   defp validate_modules(modules, root, errors) do
-    {entries, errors, _seen} =
+    {indexed, errors, _seen} =
       modules
       |> Enum.with_index(1)
-      |> Enum.reduce({[], errors, %{}}, fn {entry, index}, {entries, errors, seen} ->
+      |> Enum.reduce({[], errors, %{}}, fn {entry, index}, {indexed, errors, seen} ->
         {entry, entry_errors, seen} = validate_entry(entry, index, root, seen)
         {seen, header_errors} = reserve_header(entry, index, root, seen)
-        entries = if entry == nil, do: entries, else: entries ++ [entry]
-        {entries, errors ++ entry_errors ++ header_errors, seen}
+        indexed = if entry == nil, do: indexed, else: indexed ++ [{index, entry}]
+        {indexed, errors ++ entry_errors ++ header_errors, seen}
       end)
 
-    {entries, errors}
+    entries = Enum.map(indexed, fn {_index, entry} -> entry end)
+    {entries, errors ++ pytest_env_errors(indexed)}
+  end
+
+  # `MURO_IMPL_<STEM>` folds `-` and `_` together and uppercases the
+  # basename. Two pytest entries that share that variable cannot name
+  # two implementations when the tests run.
+  defp pytest_env_errors(indexed) do
+    indexed
+    |> Enum.filter(fn {_index, entry} -> entry.kind == :pytest end)
+    |> Enum.group_by(fn {_index, entry} -> Muro.Emit.Pytest.impl_env(entry.book) end)
+    |> Enum.flat_map(fn {env, group} ->
+      case group do
+        [_one] ->
+          []
+
+        many ->
+          listed =
+            Enum.map_join(many, ", ", fn {index, entry} ->
+              "#{index} (#{entry.book})"
+            end)
+
+          ["#{env} is shared by pytest modules entries #{listed}"]
+      end
+    end)
   end
 
   defp validate_entry({book, target, opts}, index, root, seen)
