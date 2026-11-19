@@ -198,8 +198,11 @@ defmodule Muro do
 
   `module` is the parent (`MeetFsm`). One child module per session is
   the API. A keyed family that checks is one more child: `new/0`,
-  `arrive/4`, `resolved/2`, and `check_trace/1`. `resolved` drops the
-  instance. Each end of the meeting has `finish/3` and `finish/4`.
+  `arrive/4`, `resolved/2`, `finish`, and `check_trace/1`. `resolved`
+  drops the instance. `finish` takes `:resolve` or `:rerun`. `:rerun`
+  keeps the row. Each end of the meeting has `finish`. When one family
+  uses that end, the outcome is the same. When two families share it,
+  the call names `finish` on the family child.
   Nothing is written
   next to the book: a manifest entry needs the source as a string.
   `opts` is `fuel:`, `root:`, and `book:` (the label printed in a step).

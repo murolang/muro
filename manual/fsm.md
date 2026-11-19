@@ -153,7 +153,7 @@ A kind written `never held` opens on arrival. A second init of a key opens at on
 
 `resolved/2` takes the state and an id this child returned while that instance was open. It returns `{:ok, released, state}`. `released` lists `{id, key, kind}` for the instances this resolution opens, in creation-index order, and may be empty. The resolved instance leaves the state. An id that is still held is `{:error, {:held, id}}`. A forgotten id, and an id this child never returned, are `{:error, {:unknown, id}}`. The call does not return `{:error, {:resolved, id}}`. The call does not raise. Opening one instance does not release another key.
 
-The state keeps the live instances, open or held, and the id of each live instance records its key. One counter is the next id. A call fetches that key and does not touch the other keys. `arrive` is O(L) in that key's live rows. `resolved` is O(L²) in those rows: `take_released` calls `blocked?` once per held row, and each `blocked?` walks the rows. A value that has the shape of a state is accepted at that boundary. A bad row is reported by the call that fetches it. A held id returns `{:error, {:held, id}}` from that one row.
+The state keeps the live instances, open or held, and the id of each live instance records its key. One counter is the next id. A call fetches that key and does not touch the other keys. `arrive` is O(L) in that key's live rows. `resolved` is O(L²) in those rows: `take_released` calls `blocked?` once per held row, and each `blocked?` walks the rows. `:rerun` reads that one row and does not walk the key. A value that has the shape of a state is accepted at that boundary. A bad row is reported by the call that fetches it. A held id returns `{:error, {:held, id}}` from that one row.
 
 A repeat of a live instance, the same key and the same creation index while that instance is open or held, is `{:error, {:duplicate, key, index}}`. A repeat of a forgotten instance is not caught. The row is gone, and the dispatcher does not keep forgotten indices. An index at or below a forgotten one is not, by itself, a repeat: a later arrival may carry an earlier creation index, and that arrival is a new instance.
 
@@ -161,22 +161,37 @@ The key is compared with `==`. It is the workflow. A call fetches that key. Live
 
 State is opaque. Thread it and compare it with `==`. A value that is not a state of this child is `{:error, …}`.
 
-`check_trace/1` replays a list from `new()`. A dispatcher step is `{:arrive, key, kind, index}` or `{:resolved, id}`. A session step is `{party, id, action}`. `party` is the conform atom, `:server` or `:task` on `examples/keyed-slots.muro`. `action` is `{:send, value}`, `{:recv, value}`, `:down`, or `{:down, reason}`. It returns `:ok`, or `{:error, {index, reason}}` for the first bad step. `index` is zero-based. A value that is not a list is `{:error, …}`. There is no `check_trace/2`.
+`check_trace/1` replays a list from `new()`. A dispatcher step is `{:arrive, key, kind, index}`, `{:resolved, id}`, or `{:rerun, id}`. A session step is `{party, id, action}`. `party` is the conform atom, `:server` or `:task` on `examples/keyed-slots.muro`. `action` is `{:send, value}`, `{:recv, value}`, `:down`, or `{:down, reason}`. It returns `:ok`, or `{:error, {index, reason}}` for the first bad step. `index` is zero-based. A value that is not a list is `{:error, …}`. There is no `check_trace/2`.
 
 `resolved` with no session step for that id is the instance giving up. It counts as resolved, and it is not delivered. `resolved` when every stepped party of that id is at `done` resolves the instance. `resolved` when a stepped party is not at `done` is `{:error, {index, {:unfinished, id}}}`, and the instance stays. At the end of the trace, an instance is `{:error, {:unresolved, id, key, kind}}` when every stepped party of that id is at `done` and the instance was never resolved. A `down` into a failure arm that ends in `done` counts as that party's `done`. One party at `done` while another stepped party is not is still the meeting, and the trace is `:ok`. The id is the smallest such id. A `down` into an arm that ends in `stop` is not that error. A session step on a held id is `{:error, {index, {:held, id}}}`. A session step on an unknown id is `{:error, {index, {:unknown, id}}}`.
 
-Each end of the family's meeting has `finish/3` and `finish/4` on the session child. `examples/keyed-slots.muro` puts them on `ServerWait` and `TaskWork`.
+`{:rerun, id}` keeps that instance unresolved. Every stepped party of the id has to be at `done`. The row stays, and a held row of its key stays held. The trace then accepts a new session for the same id: the next `{party, id, action}` starts from `init`. There is no bound. A later `{:resolved, id}` drops the instance. That call is success, a permanent error, or the attempt that gives up. `{:rerun, id}` with no ended session, or with a party that is not at `done`, is `{:error, {index, {:unfinished, id}}}`. An unknown id is `{:error, {index, {:unknown, id}}}`. A held id is `{:error, {index, {:held, id}}}`. An attempt that reaches `done` after a rerun, and is neither rerun nor resolved, is still `{:error, {:unresolved, id, key, kind}}`. A trace that ends on `{:rerun, id}` passes as a prefix, so a forgotten final resolve is not caught by `check_trace` alone.
+
+The family child has `finish`. The module is the family. `examples/keyed-slots.muro` puts it on `Slots`.
 
 ```elixir
+{:ok, [], state} = KeyedSlotsFsm.Slots.finish(state, id, session, :down, :rerun)
+{:ok, released, state} = KeyedSlotsFsm.Slots.finish(state, id, session, :down)
+{:ok, released, state} = KeyedSlotsFsm.Slots.finish(state, id, session)
+```
+
+`finish/5` takes the family state, the id, the session state, one step, and the outcome. The step is `{:send, value}`, `{:recv, value}`, `:down`, or `{:down, reason}`. It has to land on `done`. The outcome is `:resolve` or `:rerun`. `finish/4` takes the family state, the id, the session state, and the step, and the outcome is `:resolve`. `finish/4` with `:resolve` or `:rerun` in place of the step, and `finish/3`, take a session state that is already at `done`.
+
+`:resolve` returns what `resolved` returns. The instance leaves. `:rerun` returns `{:ok, [], state}` and that state is the one the host passed. The row stays. A held row of the key stays held. The call reads that id's row and does not walk the key. A forgotten id is `{:error, {:unknown, id}}`. A held id is `{:error, {:held, id}}`. A session that this meeting's ends do not own is `{:error, {:session, session}}`. A session that is not at an end this call can reach is `{:error, …}`. The call does not raise.
+
+Two families can name one meeting, and so one session. Each family's `finish` releases only that family's rows. The host holds the other family's state, and this call does not take it.
+
+Each end of the family's meeting has `finish` on the session child as well. `examples/keyed-slots.muro` puts it on `ServerWait` and `TaskWork`. When one family uses that end, the call is the one above, with the arguments in the session child's order, and the outcome defaults to `:resolve`.
+
+```elixir
+{:ok, [], state} = KeyedSlotsFsm.ServerWait.finish(session, :down, state, id, :rerun)
 {:ok, released, state} = KeyedSlotsFsm.ServerWait.finish(session, :down, state, id)
 {:ok, released, state} = KeyedSlotsFsm.ServerWait.finish(session, state, id)
 ```
 
-`finish/4` takes the session state, one step, the dispatcher state, and the id. The step is `{:send, value}`, `{:recv, value}`, `:down`, or `{:down, reason}`. The step has to land on `done`: the report or the completion, or `down` into a failure arm that ends in `done`. The call then resolves that id. It returns what `resolved` returns. The host makes one call for the instance's end, including the task's `:DOWN`, and the dispatcher drops the instance in that call.
+`finish/4` takes the session state, one step, the dispatcher state, and the id. `finish/5` takes the outcome after the id. `finish/3` takes a session state that is already at `done`. `finish(session, state, id, :rerun)` is that same end with the outcome. `:rerun` leaves the instance unresolved, as on the family child. `:resolve` drops it.
 
-`finish/3` takes a session state that is already at `done`, the dispatcher state, and the id, and resolves it the same way.
-
-A session that is not at an end this call can reach is `{:error, …}`. The call does not raise. A held id and a forgotten id are the errors `resolved` returns. `down` into an arm that ends in `stop` is `{:error, {:unfinished, :stop}}`, and the instance stays. Where two families share the end, the call is `{:error, {:family, names}}` and it does not resolve. The session child's own `check_trace` is that end alone. It does not resolve the family.
+A session that is not at an end this call can reach is `{:error, …}`. The call does not raise. A held id and a forgotten id are the errors `resolved` returns. `down` into an arm that ends in `stop` is `{:error, {:unfinished, :stop}}`, and the instance stays. Where two families share the end, the call is `{:error, {:family, names, form}}` once the session is at `done`, and it does not resolve. `names` are the family modules. `form` is `finish(family_state, id, session_state, step)`. The host calls that form on the family child. The session child's own `check_trace` is that end alone. It does not resolve the family.
 
 This child is generated code. The family graph is an Elixir check of a fixed script. The tests on `examples/keyed-slots.muro` replay one trace, refuse an unknown id, and check that every accepted sequence of `arrive` and `resolved` over that script is a run of the family graph. A sequence on some other key is outside that script. Neither check is an Agda proof. The counts stay 171649 reachable states, 729184 transitions.
 

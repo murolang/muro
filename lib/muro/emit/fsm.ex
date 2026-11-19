@@ -14,11 +14,15 @@ defmodule Muro.Emit.Fsm do
   `arrive/4` takes the key, the constructor, and the creation index.
   `resolved/2` drops that open instance and lists the instances that
   opening releases. The state keeps the live instances of each key,
-  and the id of a live instance records its key. `check_trace/1`
-  replays those steps and the session steps of an instance. Each end
-  of the meeting has `finish/3` and `finish/4`: one call takes that
-  session to `done` and resolves the instance. The child does not run
-  the meeting. This child is generated code. It is not an Agda proof.
+  and the id of a live instance records its key. `finish` on that
+  child names the family: it takes the session to `done` and then
+  either resolves the instance or leaves it unresolved for another
+  session. `check_trace/1` replays those steps, a rerun, and the
+  session steps of an instance. Each end of the meeting has `finish`
+  too. One family on that end resolves, or reruns, through this child.
+  Two families on that end do not: the error names `finish` on the
+  family child. The child does not run the meeting. This child is
+  generated code. It is not an Agda proof.
   """
 
   alias Muro.{Ast, Emit, Session}
@@ -191,7 +195,9 @@ defmodule Muro.Emit.Fsm do
   defp finish_heads(_cams) do
     [
       "def finish(session_state, family_state, id)",
-      "def finish(session_state, step, family_state, id)"
+      "def finish(session_state, step, family_state, id)",
+      "def finish(session_state, family_state, id, outcome)",
+      "def finish(session_state, step, family_state, id, outcome)"
     ]
   end
 
@@ -3085,10 +3091,13 @@ defmodule Muro.Emit.Fsm do
 
   # A family that checks becomes one pure child. Resolved instances
   # leave. Live instances sit under their key, and a live id records
-  # that key. `finish` on a meeting end resolves when that session is
-  # at `done`. `check_trace` replays the dispatcher and those session
-  # steps. An id the child did not return is an error tuple, and the
-  # call does not raise.
+  # that key. `finish` on the family child names that family. `:resolve`
+  # drops the instance. `:rerun` keeps the row and does not walk the
+  # key. `finish` on a meeting end does the same when one family uses
+  # that session. Two families on one end return the family-child form
+  # and do not resolve. `check_trace` replays the dispatcher, a rerun,
+  # and those session steps. An id the child did not return is an error
+  # tuple, and the call does not raise.
   defp ready_families(book) do
     book
     |> Enum.filter(&(Map.get(&1, :kind) == :family))
@@ -3123,6 +3132,10 @@ defmodule Muro.Emit.Fsm do
         "def new",
         "def arrive(state, key, kind, index)",
         "def resolved(state, id)",
+        "def finish(state, id, session_state)",
+        "def finish(state, id, session_state, step)",
+        "def finish(state, id, session_state, outcome)",
+        "def finish(state, id, session_state, step, outcome)",
         "def check_trace(trace)"
       ]
     end)
@@ -3130,31 +3143,57 @@ defmodule Muro.Emit.Fsm do
 
   defp finish_blurb(nil), do: ""
 
+  defp finish_blurb([_camel]) do
+    " `finish/3`, `finish/4`, and `finish/5` take this end to `done` and resolve the family instance. The outcome `:rerun` leaves that instance unresolved."
+  end
+
   defp finish_blurb(_cams) do
-    " `finish/3` and `finish/4` take this end to `done` and resolve the family instance."
+    " Where more than one family uses this end, `finish` returns `{:error, {:family, names, form}}` once the session is at `done` and does not resolve. `form` is `finish(family_state, id, session_state, step)` on the family child."
   end
 
   defp finish_src(_parent, _key, nil), do: ""
 
   defp finish_src(parent, key, camels) do
-    resolve = finish_resolve(parent, camels)
     shown = inspect(key)
 
     """
     def finish(session_state, family_state, id) do
       case ended(session_state) do
-        {:ok, _} -> #{resolve}
+        {:ok, _} -> commit(family_state, id, :resolve)
         {:error, reason} -> {:error, reason}
       end
+    end
+
+    def finish(session_state, family_state, id, outcome)
+        when is_map(family_state) and is_integer(id) and outcome in [:resolve, :rerun] do
+      case ended(session_state) do
+        {:ok, _} -> commit(family_state, id, outcome)
+        {:error, reason} -> {:error, reason}
+      end
+    end
+
+    def finish(session_state, family_state, id, outcome)
+        when is_map(family_state) and is_integer(id) do
+      _ = {session_state, family_state, id}
+      {:error, {:outcome, outcome}}
     end
 
     def finish(session_state, step, family_state, id) do
+      finish(session_state, step, family_state, id, :resolve)
+    end
+
+    def finish(session_state, step, family_state, id, outcome) when outcome in [:resolve, :rerun] do
       case land(session_state, step) do
-        {:ok, _} -> #{resolve}
+        {:ok, _} -> commit(family_state, id, outcome)
         {:error, reason} -> {:error, reason}
       end
     end
 
+    def finish(_session_state, _step, _family_state, _id, outcome) do
+      {:error, {:outcome, outcome}}
+    end
+
+    #{finish_commit(parent, camels)}
     defp ended(session_state) do
       if #{parent}.muro_fsm_done?(#{shown}, session_state) do
         {:ok, session_state}
@@ -3196,20 +3235,22 @@ defmodule Muro.Emit.Fsm do
     """
   end
 
-  defp finish_resolve(parent, [camel]) do
-    "#{parent}.#{camel}.resolved(family_state, id)"
+  defp finish_commit(parent, [camel]) do
+    """
+    defp commit(family_state, id, :resolve), do: #{parent}.#{camel}.resolved(family_state, id)
+    defp commit(family_state, id, :rerun), do: #{parent}.#{camel}.retain(family_state, id)
+    """
   end
 
-  defp finish_resolve(_parent, camels) do
+  defp finish_commit(_parent, camels) do
     names = Enum.map_join(camels, ", ", &inspect(String.to_atom(&1)))
 
     """
-    (
-            _ = {family_state, id}
-            {:error, {:family, [#{names}]}}
-          )
+    defp commit(family_state, id, outcome) do
+      _ = {family_state, id, outcome}
+      {:error, {:family, [#{names}], "finish(family_state, id, session_state, step)"}}
+    end
     """
-    |> String.trim()
   end
 
   defp family_source(module, st) do
@@ -3272,6 +3313,135 @@ defmodule Muro.Emit.Fsm do
   defp session_name({:sess, name, _args}) when is_binary(name), do: name
   defp session_name(_session), do: nil
 
+  # `finish` on the family child names the family. `:resolve` is
+  # `resolved`. `:rerun` reads that one open row and returns the same
+  # state, so a held row of the key stays held. It does not call
+  # `take_released`. The session key is the one this meeting's ends use.
+  defp family_finish(parent, parties) do
+    sessions =
+      parties
+      |> Enum.map(fn {_atom, session, _arity} -> session end)
+      |> Enum.uniq()
+
+    keys = Enum.map_join(sessions, ", ", &inspect/1)
+
+    """
+    def finish(state, id, session_state) do
+      close(state, id, session_state, :resolve)
+    end
+
+    def finish(state, id, session_state, :resolve) do
+      close(state, id, session_state, :resolve)
+    end
+
+    def finish(state, id, session_state, :rerun) do
+      close(state, id, session_state, :rerun)
+    end
+
+    def finish(state, id, session_state, outcome) when is_atom(outcome) and outcome != :down do
+      _ = {state, id, session_state}
+      {:error, {:outcome, outcome}}
+    end
+
+    def finish(state, id, session_state, step) do
+      step_close(state, id, session_state, step, :resolve)
+    end
+
+    def finish(state, id, session_state, step, outcome) when outcome in [:resolve, :rerun] do
+      step_close(state, id, session_state, step, outcome)
+    end
+
+    def finish(state, id, session_state, step, outcome) do
+      _ = {state, id, session_state, step}
+      {:error, {:outcome, outcome}}
+    end
+
+    @doc false
+    def retain(state, id) do
+      with {:ok, st} <- read(state),
+           {:ok, key, index} <- locate(st, id),
+           {:ok, rows} <- rows_of(st, key),
+           {:ok, _kind} <- open_row(rows, index, id, st) do
+        {:ok, [], st}
+      else
+        {:error, reason} -> {:error, reason}
+      end
+    end
+
+    defp close(state, id, session_state, outcome) do
+      case ended(session_state) do
+        {:ok, _} -> apply_outcome(state, id, outcome)
+        {:error, reason} -> {:error, reason}
+      end
+    end
+
+    defp step_close(state, id, session_state, step, outcome) do
+      case land(session_state, step) do
+        {:ok, _} -> apply_outcome(state, id, outcome)
+        {:error, reason} -> {:error, reason}
+      end
+    end
+
+    defp apply_outcome(state, id, :resolve), do: resolved(state, id)
+    defp apply_outcome(state, id, :rerun), do: retain(state, id)
+
+    defp session_key(%{k: key}) when is_binary(key), do: key
+    defp session_key(_state), do: nil
+
+    defp ended(session_state) do
+      case session_key(session_state) do
+        key when key in [#{keys}] ->
+          if #{parent}.muro_fsm_done?(key, session_state) do
+            {:ok, session_state}
+          else
+            {:error, {:unfinished, #{parent}.muro_fsm_expected(key, session_state)}}
+          end
+
+        _ ->
+          {:error, {:session, session_state}}
+      end
+    end
+
+    defp land(session_state, step) do
+      case session_key(session_state) do
+        key when key in [#{keys}] -> land_at(key, session_state, step)
+        _ -> {:error, {:session, session_state}}
+      end
+    end
+
+    defp land_at(key, session_state, {:send, value}) do
+      landed(key, #{parent}.muro_fsm_step(key, :send, session_state, value))
+    end
+
+    defp land_at(key, session_state, {:recv, value}) do
+      landed(key, #{parent}.muro_fsm_step(key, :recv, session_state, value))
+    end
+
+    #||fail
+    defp land_at(key, session_state, :down) do
+      landed(key, #{parent}.muro_fsm_down(key, session_state, nil))
+    end
+
+    defp land_at(key, session_state, {:down, reason}) do
+      landed(key, #{parent}.muro_fsm_down(key, session_state, {:reason, reason}))
+    end
+
+    #||/fail
+    defp land_at(_key, _session_state, other), do: {:error, {:step, other}}
+
+    defp landed(key, {:ok, next}) do
+      if #{parent}.muro_fsm_done?(key, next) do
+        {:ok, next}
+      else
+        {:error, {:unfinished, #{parent}.muro_fsm_expected(key, next)}}
+      end
+    end
+
+    defp landed(_key, {:error, reason}), do: {:error, reason}
+    defp landed(_key, other), do: {:error, {:session, other}}
+    """
+  end
+
   defp party_clauses(parties) do
     lines =
       Enum.map(parties, fn {atom, session, arity} ->
@@ -3298,8 +3468,13 @@ defmodule Muro.Emit.Fsm do
       instances this resolution opens. The state keeps the live instances.
       A repeat of a live instance is an error. A repeat of a forgotten
       instance is a new instance. A forgotten id is `{:error, {:unknown, id}}`.
-      An unknown id is an error and does not raise. `check_trace` replays
-      arrivals, resolutions, and the session steps of an open instance.
+      An unknown id is an error and does not raise. `finish` takes this
+      family's state, the id, and one end's session. `:resolve` drops the
+      instance. `:rerun` keeps the row and every held row of its key. It
+      reads that one row and does not walk the key. `check_trace` replays
+      arrivals, resolutions, reruns, and the session steps of an open
+      instance. A rerun clears that id's session, so the next step starts
+      again.
       \"\"\"
 
       def new, do: %{n: 0, by: %{}, id: %{}}
@@ -3333,6 +3508,7 @@ defmodule Muro.Emit.Fsm do
         end
       end
 
+      #{family_finish(parent, parties)}
       def check_trace(trace) when is_list(trace), do: walk(new(), %{}, trace, 0)
       def check_trace(other), do: {:error, {:trace, other}}
 
@@ -3456,6 +3632,13 @@ defmodule Muro.Emit.Fsm do
         end
       end
 
+      defp walk(disp, seen, [{:rerun, id} | rest], i) do
+        case rerun_step(disp, seen, id) do
+          {:ok, disp, seen} -> walk(disp, seen, rest, i + 1)
+          {:error, reason} -> {:error, {i, reason}}
+        end
+      end
+
       defp walk(disp, seen, [{party, id, action} | rest], i) when is_atom(party) do
         case live(disp, id) do
           {:error, reason} ->
@@ -3499,6 +3682,20 @@ defmodule Muro.Emit.Fsm do
         case resolved(disp, id) do
           {:ok, _released, disp} -> {:ok, disp, seen}
           {:error, reason} -> {:error, reason}
+        end
+      end
+
+      defp rerun_step(disp, seen, id) do
+        case retain(disp, id) do
+          {:ok, [], disp} ->
+            if settled?(sessions_of(seen, id)) do
+              {:ok, disp, drop_id(seen, id)}
+            else
+              {:error, {:unfinished, id}}
+            end
+
+          {:error, reason} ->
+            {:error, reason}
         end
       end
 
