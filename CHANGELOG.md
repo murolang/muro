@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.12
+## 0.22.13
 
 `mix muro.synth` runs one procedure. The procedure is `traces`, the version-space search on a book's `step` and the observations that `step` supports. `--on traces` selects it. A book that defines `step` selects it when `--on` is omitted. The search is unchanged: the same candidates, the same order, the same policy book.
 
@@ -9,6 +9,22 @@ A book with no `step` and no observations is refused. It has nothing to synthesi
 ### Manual
 
 - Synthesis: `--on traces`, the default, and the refusal.
+
+### Package
+
+- Version 0.22.13.
+
+## 0.22.12
+
+A keyed family holds a `signal` while an earlier instance of its key, already arrived, is unresolved. That rule is proved for any number of keys and any number of instances. An opened `signal` has every earlier instance of its key that had already arrived resolved. An instance that arrives later can still be live beside it. Arrival, resolve, and rerun keep the rule. A held `signal` opens in the step that resolves the last earlier instance of its key. Whether an instance is held depends only on its own key.
+
+A state that breaks the rule, however many keys it has, already breaks it on one key and two instances. Those two sit on the script the family graph explores for key `a`: an `init` before a `signal`, or a `signal` before a later `signal`.
+
+The family graph for that script is unchanged: 171649 reachable states, 729184 transitions. That search checks the generated dispatcher on the fixed script. It is a regression check of that program. It is not this proof. The program that writes the dispatcher is not proved. `init` is never held. `finish` is still `:resolve` or `:rerun`. `held while any unresolved`, withdrawing a held instance, and `earlier_resolved` stay the Elixir check.
+
+### Manual
+
+- Temporal, Limits, State machines, Examples, and Extending: the hold rule is proved for any number of keys. The family graph remains the check of the generated dispatcher.
 
 ### Package
 

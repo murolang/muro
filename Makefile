@@ -3,7 +3,7 @@ AGDA  ?= agda
 AFLAGS := --no-libraries -i agda -i vendor/agda-stdlib/src --warning=noUnsupportedIndexedMatch
 
 # The Agda tree — Judgement, Wall, Consistency, Typing, Convert,
-# Reduction, Spine, Data, Frag, Tag, Session, Prefix, Rec, Dual, Meet, Talk, Choreo, Seated, Held, Arrow, Grade, Beam, Linear, Place, Located, the checker Check and its
+# Reduction, Spine, Data, Frag, Tag, Session, Prefix, Rec, Dual, Meet, Talk, Choreo, Seated, Held, Arrow, Grade, Beam, Linear, Place, Family, Located, the checker Check and its
 # soundness proof Soundness (with Soundness.Conv, Soundness.Views),
 # what they import (Base, Syntax, Subst, SubstLemmas, Env), Async,
 # AsyncSync, AsyncRec, Temporal (Source, Bridge, Graph, Safety, Live,
@@ -16,7 +16,8 @@ AFLAGS := --no-libraries -i agda -i vendor/agda-stdlib/src --warning=noUnsupport
 # that imports one of those carries it too. `Muro.Linear` imports `Muro.Rec`.
 # Check is structurally recursive on the term, with fuel only where it reduces.
 # Productive is the observation theorem for an accepted unfold. It is --safe
-# and is not imported by Check or Soundness.
+# and is not imported by Check or Soundness. Family is the keyed-family
+# hold rule. It is --safe and is not imported by Muro.agda.
 .PHONY: agda agda-safe agda-all agda-soundness agda-syntax agda-check elixir clean
 
 agda: agda-safe agda-all
@@ -67,6 +68,7 @@ agda-safe:
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Beam.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Linear.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Place.agda
+	$(AGDA) $(AFLAGS) --safe agda/Muro/Family.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Located.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Wall.agda
 	$(AGDA) $(AFLAGS) --safe agda/Muro/Consistency.agda

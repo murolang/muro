@@ -13,7 +13,9 @@ defmodule Muro.Family.Graph do
   by the script, and `examples/keyed-slots.muro` keeps its count.
 
   `always`, `eventually`, and `leads_to` are decided here, on the
-  same search. Nothing in this module is an Agda proof.
+  same search. Nothing in this module is an Agda proof. The hold rule
+  `held while earlier unresolved` is proved in `agda/Muro/Family.agda`.
+  This search checks the generated dispatcher on the fixed script.
 
   A count of reachable states is a model hypothesis, not
   data-independence. The model is one retry and the fixed script.
