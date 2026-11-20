@@ -408,7 +408,7 @@ defmodule Muro.CliTest do
     refute release =~ "hex.publish"
     refute text =~ "cd ui"
     refute text =~ "packages/muro_visor"
-    refute text =~ "hex.publish package"
+    assert text =~ "mix hex.publish package --yes"
     assert text =~ "mix deps.get"
     assert text =~ "release-binaries-"
 

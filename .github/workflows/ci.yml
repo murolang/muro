@@ -428,7 +428,7 @@ jobs:
           fi
           mix local.hex --force
           mix deps.get
-          mix hex.publish --yes
+          mix hex.publish package --yes
 
       - name: Create and push the annotated tag
         if: steps.plan.outputs.create_tag == 'true'
