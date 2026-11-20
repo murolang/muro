@@ -153,7 +153,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.fill`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.8`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.9`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -166,7 +166,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.22.8.ez
+mix archive.install muro-0.22.9.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -239,7 +239,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then:
 
 ```
-Muro v0.22.8
+Muro v0.22.9
 All terms check. Evidence never becomes a run.
 ```
 
@@ -265,6 +265,6 @@ Full list: [Limits](limits.md).
 
 ## Releasing
 
-Merging a version bump to main is the publish. Once the Elixir CI job on that commit is green, the Publish workflow publishes the `mix.exs` version to Hex unless that version is already there, pushes the annotated tag `vX.Y.Z` if it is missing, and then builds the self-contained binaries. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. The publish does not wait for Agda or muro_visor, and the binary job does not delay the Hex publish. `muro_visor` is not published this way: Hex stages it, and it still needs 2FA.
+Merging a version bump to main is the publish. Once the Elixir CI job on that commit is green, the `Hex and tag` job in CI publishes the `mix.exs` version to Hex unless that version is already there, pushes the annotated tag `vX.Y.Z` if it is missing, and then builds the self-contained binaries. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. The publish does not wait for Agda or muro_visor, and the binary job does not delay the Hex publish. `muro_visor` is not published this way: Hex stages it, and it still needs 2FA.
 
 The first publish through this workflow needs the repository secret `HEX_API_KEY`. Generate a key with `mix hex.user key generate --key-name muro-ci --permission api:write` and add it as `HEX_API_KEY` on murolang/muro. A missing secret fails the publish job with a clear error and does not print the key. The executable page is [The executable](binary.md).

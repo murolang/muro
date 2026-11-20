@@ -365,10 +365,11 @@ defmodule Muro.CliTest do
     assert after_smoke =~ "github.event_name != 'pull_request'"
   end
 
-  test "the publish workflow waits for Elixir, publishes to Hex, and calls the release workflow" do
-    text = File.read!(".github/workflows/publish.yml")
+  test "CI publishes to Hex after Elixir on main and calls the release workflow" do
     release = File.read!(".github/workflows/release.yml")
     ci = File.read!(".github/workflows/ci.yml")
+    refute File.exists?(".github/workflows/publish.yml")
+    [_, text] = String.split(ci, "\n  publish:\n", parts: 2)
 
     assert text =~ "vars.CI_RUNNER"
     refute text =~ "vars.CI_RUNNER ||"
@@ -376,9 +377,25 @@ defmodule Muro.CliTest do
     refute ci =~ "vars.CI_RUNNER ||"
     assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, text)) == 1
     assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, release)) == 1
-    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, ci)) == 3
+    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, ci)) == 5
 
-    assert text =~ "check_name=Elixir"
+    # Agda is gated by the changes job, never by a workflow paths: filter,
+    # so the required Agda check reports (as skipped) on every pull request.
+    refute ci =~ ~r/^\s*paths(-ignore)?:/m
+    assert ci =~ "needs: [changes, elixir]"
+    assert ci =~ "needs.changes.outputs.agda != 'false'"
+    assert ci =~ "git diff --name-only HEAD^1 HEAD"
+    assert ci =~ ~S"^(agda/|Makefile$|\.github/workflows/)"
+
+    # The publish job is queued only after Elixir succeeds, so it never
+    # holds a runner while waiting, and it runs only for a push to main.
+    assert text =~ "needs: elixir"
+    assert text =~ "if: github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    assert text =~ "group: publish-hex-main"
+    refute text =~ "check-runs"
+    refute ci =~ "check_name=Elixir"
+    # A later push to main never cancels an earlier publish.
+    assert ci =~ "github.event_name == 'pull_request' && github.ref || github.sha"
     assert text =~ "already on Hex"
     assert text =~ "needed=false"
     assert text =~ "git push origin"
@@ -391,9 +408,8 @@ defmodule Muro.CliTest do
     refute release =~ "hex.publish"
     refute text =~ "cd ui"
     refute text =~ "packages/muro_visor"
-    refute text =~ "hex.publish package"
+    assert text =~ "mix hex.publish package --yes"
     assert text =~ "mix deps.get"
-    assert text =~ "urllib.error.URLError"
     assert text =~ "release-binaries-"
 
     # Every plan outcome: a merge without a version bump is a quiet no-op,
@@ -410,7 +426,7 @@ defmodule Muro.CliTest do
     assert text =~ "invalid mix.exs version"
     assert release =~ "invalid mix.exs version"
 
-    for wf <- [text, release] do
+    for wf <- [ci, release] do
       for block <-
             Regex.scan(~r/run: \|\n((?:          .*\n|\s*\n)+)/, wf, capture: :all_but_first) do
         refute hd(block) =~ "${{"
@@ -418,8 +434,6 @@ defmodule Muro.CliTest do
     end
 
     refute text =~ "actions: read"
-    refute text =~ "github.ref == 'refs/heads/main'"
-    assert text =~ "max(runs"
   end
 
   defp assert_same(fun, argv, cd \\ nil) do
