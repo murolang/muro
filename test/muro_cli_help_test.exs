@@ -223,6 +223,7 @@ defmodule Muro.CliHelpTest do
           "fsm",
           "exunit",
           "pytest",
+          "rust-test",
           "mbi"
         ] do
       assert emit =~ backend

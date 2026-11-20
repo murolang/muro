@@ -49,11 +49,54 @@ defmodule Muro.Emit.Rust do
     tags = ~w(
       Nat NatNode Unit Erased Pair Stream Atom
       zero suc erase reveal from_u64 to_u64
+      pair pair_raw pair_eq pair_eq_raw
       field_seed field_step tag_zero tag_suc
       seed n p k s t c x e rc v
     )
 
     Enum.map(tags, &Name.gen/1) ++ [Name.gen("step", 0), Name.gen("a", 0), Name.gen("node_List")]
+  end
+
+  @doc false
+  def keyword?(name) when is_binary(name), do: MapSet.member?(@rust_keywords, name)
+
+  # `r#crate`, `r#self`, `r#super`, and `r#Self` are not identifiers.
+  @doc false
+  def raw_forbidden?(name) when is_binary(name), do: name in ~w(crate self super Self)
+
+  @doc false
+  def word_lit(k, n) when k in [:u8, :u32, :u64, :i64] and is_integer(n), do: r_lit(k, n)
+
+  @doc false
+  def unboxed?(book, name) when is_list(book), do: unboxed_name?(book, name)
+
+  # True when the Rust type of `lay` implements `PartialEq` and `Debug`.
+  # A pair does, because `muro__Pair` carries the comparison. A recursive
+  # data type is comparable when its fields are, counting the type itself
+  # as already decided.
+  @doc false
+  def comparable?(book, lay) when is_list(book), do: comparable_lay?(book, lay, MapSet.new())
+
+  # Names `render/2` would allocate for this book, before step symbols.
+  # A test printer closes over this so a constructor spelling is the one
+  # the image calls.
+  @doc false
+  def glossary(book) when is_list(book) do
+    spell = &spell/1
+    {types, taken} = type_names(book, MapSet.new(), spell)
+    {ctor_fns, taken} = ctor_fn_names(book, taken, spell)
+    variants = variant_names(book)
+    atoms = atom_variants(book)
+    {names, taken} = names_of(book, taken, spell)
+
+    %{
+      types: types,
+      ctor_fns: ctor_fns,
+      variants: variants,
+      atoms: atoms,
+      names: names,
+      taken: taken
+    }
   end
 
   defp spell(name), do: Name.spell(name, @forbidden)
@@ -136,26 +179,21 @@ defmodule Muro.Emit.Rust do
     with {:ok, groups, step_map} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
       user_funs = Enum.map(groups, fn {fun, _} -> fun end)
       steps = Enum.flat_map(groups, fn {_fun, ss} -> ss end)
-      spell = &spell/1
-      {types, taken} = type_names(book, MapSet.new(), spell)
-      {ctor_fns, taken} = ctor_fn_names(book, taken, spell)
-      variants = variant_names(book)
-      atoms = atom_variants(book)
-      {names, taken} = names_of(book, taken, spell)
-      {step_names, taken} = name_steps(steps, taken)
+      gloss = glossary(book)
+      {step_names, taken} = name_steps(steps, gloss.taken)
       file_scope = Name.open(taken)
 
       st0 = %{
         book: book,
-        names: names,
+        names: gloss.names,
         step_names: step_names,
         funs: Map.new(user_funs, &{&1.name, &1}),
         steps: step_map,
         step_ids: MapSet.new(steps),
-        types: types,
-        ctor_fns: ctor_fns,
-        variants: variants,
-        atoms: atoms,
+        types: gloss.types,
+        ctor_fns: gloss.ctor_fns,
+        variants: gloss.variants,
+        atoms: gloss.atoms,
         file_scope: file_scope
       }
 
@@ -331,11 +369,19 @@ defmodule Muro.Emit.Rust do
   defp emit_tm({:pair, a, b}, env, st) do
     with {:ok, {al, ae, alay, st}} <- emit_tm(a, env, st),
          {:ok, {bl, be, blay, st}} <- emit_tm(b, env, st) do
-      if unboxed_lay?(st.book, alay) or unboxed_lay?(st.book, blay) do
-        {:error, "c:unboxed"}
-      else
-        expr = "#{g("Pair")}(#{coerce(ae, alay, :opaque, st)}, #{coerce(be, blay, :opaque, st)})"
-        {:ok, {al ++ bl, expr, {:pair, alay, blay}, st}}
+      cond do
+        unboxed_lay?(st.book, alay) or unboxed_lay?(st.book, blay) ->
+          {:error, "c:unboxed"}
+
+        comparable?(st.book, alay) and comparable?(st.book, blay) ->
+          expr = "#{g("pair")}(#{coerce(ae, alay, alay, st)}, #{coerce(be, blay, blay, st)})"
+          {:ok, {al ++ bl, expr, {:pair, alay, blay}, st}}
+
+        true ->
+          expr =
+            "#{g("pair_raw")}(#{coerce(ae, alay, :opaque, st)}, #{coerce(be, blay, :opaque, st)})"
+
+          {:ok, {al ++ bl, expr, {:pair, alay, blay}, st}}
       end
     end
   end
@@ -374,7 +420,7 @@ defmodule Muro.Emit.Rust do
         "let #{t} = #{g("Stream")} { #{g("field_seed")}: #{p}.1.clone(), #{g("field_step")}: #{s}.#{g("field_step")}.clone() };"
       ]
 
-      expr = "#{g("Pair")}(#{p}.0.clone(), #{g("erase")}(#{t}))"
+      expr = "#{g("pair_raw")}(#{p}.0.clone(), #{g("erase")}(#{t}))"
       {:ok, {lines ++ more, expr, uncons_lay(elay), st}}
     end
   end
@@ -513,7 +559,7 @@ defmodule Muro.Emit.Rust do
         {byte, st} = local(st, nil)
         {rest, st} = local(st, nil)
         sl = g("slice")
-        pair = g("Pair")
+        pair = g("pair")
         erase = g("erase")
 
         lines = lines ++ ["let #{cur} = #{ex};"]
@@ -522,7 +568,7 @@ defmodule Muro.Emit.Rust do
         if #{cur}.n == 0 { #{nothing}() } else {
             let #{byte}: u8 = unsafe { *#{cur}.p };
             let #{rest} = #{sl} { p: unsafe { #{cur}.p.add(1) }, n: #{cur}.n - 1 };
-            #{just}(#{erase}(#{pair}(#{erase}(#{byte}), #{erase}(#{rest}))))
+            #{just}(#{erase}(#{pair}(#{byte}, #{rest})))
         }
         """
 
@@ -1154,6 +1200,62 @@ defmodule Muro.Emit.Rust do
   defp unboxed_lay?(book, {:data, name}), do: unboxed_name?(book, name)
   defp unboxed_lay?(_book, _lay), do: false
 
+  defp comparable_lay?(_book, lay, _seen)
+       when lay in [:nat, :unit, :u8, :u32, :u64, :i64, :wbool, :slice, :string, :never],
+       do: true
+
+  defp comparable_lay?(_book, {:data, "Atom"}, _seen), do: true
+
+  defp comparable_lay?(book, {:opt, pay}, seen) do
+    not unboxed_lay?(book, pay) and comparable_lay?(book, pay, seen)
+  end
+
+  # `muro__Pair` compares through the function stored at construction,
+  # so a pair field is comparable exactly when both halves are.
+  defp comparable_lay?(book, {:pair, a, b}, seen) do
+    comparable_lay?(book, a, seen) and comparable_lay?(book, b, seen)
+  end
+
+  defp comparable_lay?(book, {:data, name}, seen) do
+    if MapSet.member?(seen, name) do
+      true
+    else
+      comparable_data?(book, name, seen)
+    end
+  end
+
+  defp comparable_lay?(_book, _lay, _seen), do: false
+
+  defp comparable_data?(book, name, seen) do
+    seen = MapSet.put(seen, name)
+
+    case Enum.find(data_decls(book), &(&1.name == name)) do
+      nil ->
+        false
+
+      d ->
+        Enum.all?(d.ctors, fn c ->
+          Enum.all?(ctor_fields(book, c.name), &comparable_lay?(book, &1, seen))
+        end)
+    end
+  end
+
+  defp boxed_derives(book, name) do
+    if comparable?(book, {:data, name}) do
+      "#[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]"
+    else
+      "#[derive(::std::clone::Clone)]"
+    end
+  end
+
+  defp unboxed_derives(book, name) do
+    if comparable?(book, {:data, name}) do
+      "#[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::fmt::Debug)]"
+    else
+      "#[derive(::std::clone::Clone, ::std::marker::Copy)]"
+    end
+  end
+
   defp lookup(env, name) do
     Enum.find_value(env, fn
       {^name, rn, lay} -> {rn, lay}
@@ -1298,13 +1400,15 @@ defmodule Muro.Emit.Rust do
             "#{node}::#{v}(#{inner})"
           end
 
-        "fn #{fn_name}(#{args}) -> #{type} {\n    #{type}(::std::rc::Rc::new(#{build}))\n}"
+        "pub fn #{fn_name}(#{args}) -> #{type} {\n    #{type}(::std::rc::Rc::new(#{build}))\n}"
       end)
 
+    derives = boxed_derives(book, d.name)
+
     """
-    #[derive(::std::clone::Clone)]
+    #{derives}
     pub struct #{type}(::std::rc::Rc<#{node}>);
-    #[derive(::std::clone::Clone)]
+    #{derives}
     enum #{node} {
     #{variants_txt}
     }
@@ -1356,11 +1460,11 @@ defmodule Muro.Emit.Rust do
             "#{type}::#{v}(#{inner})"
           end
 
-        "fn #{fn_name}(#{args}) -> #{type} {\n    #{build}\n}"
+        "pub fn #{fn_name}(#{args}) -> #{type} {\n    #{build}\n}"
       end)
 
     """
-    #[derive(::std::clone::Clone, ::std::marker::Copy)]
+    #{unboxed_derives(book, d.name)}
     pub enum #{type} {
     #{variants_txt}
     }
@@ -1376,7 +1480,7 @@ defmodule Muro.Emit.Rust do
     vars = Enum.map_join(atoms, "\n", fn {_name, v} -> "    #{v}," end)
 
     """
-    #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::cmp::Eq)]
+    #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::cmp::Eq, ::std::fmt::Debug)]
     pub enum #{g("Atom")} {
     #{vars}
     }
@@ -1423,9 +1527,9 @@ defmodule Muro.Emit.Rust do
         }
     }
 
-    #[derive(::std::clone::Clone)]
+    #[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]
     pub struct #{nat}(::std::rc::Rc<#{node}>);
-    #[derive(::std::clone::Clone)]
+    #[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]
     enum #{node} {
         #{zero},
         #{suc}(#{nat}),
@@ -1462,11 +1566,50 @@ defmodule Muro.Emit.Rust do
         }
     }
 
-    #[derive(::std::clone::Clone, ::std::marker::Copy)]
+    #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::fmt::Debug)]
     pub struct #{unit};
 
     #[derive(::std::clone::Clone)]
-    pub struct #{pair}(#{erased}, #{erased});
+    pub struct #{pair}(
+        #{erased},
+        #{erased},
+        fn(&#{pair}, &#{pair}) -> bool,
+    );
+
+    fn #{g("pair_eq")}<A: ::std::cmp::PartialEq + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::clone::Clone + 'static>(
+        #{g("a")}: &#{pair},
+        #{g("b")}: &#{pair},
+    ) -> bool {
+        #{g("reveal")}::<A>(#{g("a")}.0.clone()) == #{g("reveal")}::<A>(#{g("b")}.0.clone())
+            && #{g("reveal")}::<B>(#{g("a")}.1.clone()) == #{g("reveal")}::<B>(#{g("b")}.1.clone())
+    }
+
+    fn #{g("pair_eq_raw")}(_#{g("a")}: &#{pair}, _#{g("b")}: &#{pair}) -> bool {
+        false
+    }
+
+    pub fn #{g("pair")}<A: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static>(
+        #{g("a")}: A,
+        #{g("b")}: B,
+    ) -> #{pair} {
+        #{pair}(#{g("erase")}(#{g("a")}), #{g("erase")}(#{g("b")}), #{g("pair_eq")}::<A, B>)
+    }
+
+    pub fn #{g("pair_raw")}(#{g("a")}: #{erased}, #{g("b")}: #{erased}) -> #{pair} {
+        #{pair}(#{g("a")}, #{g("b")}, #{g("pair_eq_raw")})
+    }
+
+    impl ::std::cmp::PartialEq for #{pair} {
+        fn eq(&self, other: &Self) -> bool {
+            (self.2)(self, other)
+        }
+    }
+
+    impl ::std::fmt::Debug for #{pair} {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            f.write_str("#{pair}(..)")
+        }
+    }
 
     #[derive(::std::clone::Clone)]
     pub struct #{stream} {
@@ -1529,9 +1672,15 @@ defmodule Muro.Emit.Rust do
     aft = g("slice_after")
 
     """
-    #[derive(::std::clone::Clone, ::std::marker::Copy)]
+    #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::fmt::Debug)]
     #[repr(C)]
     pub struct #{sl} { pub p: *const u8, pub n: usize }
+
+    impl ::std::cmp::PartialEq for #{sl} {
+        fn eq(&self, other: &Self) -> bool {
+            #{eq}(*self, *other)
+        }
+    }
 
     #[allow(non_upper_case_globals)]
     static #{empty}: u8 = 0;
@@ -1640,9 +1789,15 @@ defmodule Muro.Emit.Rust do
     bytes = if bytes?, do: rust_str_bytes(), else: ""
 
     """
-    #[derive(::std::clone::Clone, ::std::marker::Copy)]
+    #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::fmt::Debug)]
     #[repr(C)]
     pub struct #{ty} { pub p: *const u8, pub n: usize }
+
+    impl ::std::cmp::PartialEq for #{ty} {
+        fn eq(&self, other: &Self) -> bool {
+            #{eq}(*self, *other)
+        }
+    }
 
     #[allow(non_upper_case_globals)]
     static #{empty}: u8 = 0;

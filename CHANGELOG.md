@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.15
+
+`mix muro.emit path.muro --backend rust-test` prints one Rust test file for the book's closed equations, the same equations `--backend exunit` and `--backend pytest` collect. `mix muro.gen` writes it when an entry sets `kind: :rust_test`. Each equation is one test. A skip is a `#[test]` function marked `#[ignore]`, named in the reason, and is not dropped. A file of unsupplied `param`s is a suite.
+
+The tests call the emitted `<stem>.rs` beside the test file. `rustc --test` accepts the two files as siblings. `--impl` and `impl:` bake another Rust path into the file. The path is fixed when the file is written. A `Nat` is `muro__from_u64`. A `Nat` that does not fit in `u64` is a skip. Data, pairs, atoms, strings, and words print as the Rust image spells them. A function, a stream, a machine term, an erased value, and an unboxed `Opt` are skips.
+
+### Manual
+
+- Rust tests, Emit, Closed equations as tests, Pytest, and Committed modules: the Rust test file, the value encoding, and how the implementation is chosen.
+
+### Package
+
+- Version 0.22.15.
+
 ## 0.22.14
 
 `held while any unresolved` is proved for any number of keys and any number of instances, including a family that holds one kind while an earlier instance is unresolved and another while any other instance of the key is open. At most one instance held that way is open for a key. An opened instance under `held while earlier unresolved` still has every earlier instance of its key that had already arrived resolved. A held instance, of either rule, has some opened instance of its key. The host is not obliged to resolve.

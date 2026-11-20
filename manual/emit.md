@@ -48,6 +48,7 @@ mix muro.emit path.muro --backend otp
 mix muro.emit path.muro --backend fsm
 mix muro.emit path.muro --backend exunit
 mix muro.emit path.muro --backend pytest
+mix muro.emit path.muro --backend rust-test
 mix muro.emit path.muro --backend mbi
 mix muro.emit path.muro --node a
 ```
@@ -334,9 +335,9 @@ If you want a book in the test suite, parse/check/emit it from `test/muro_check_
 
 `--backend exunit` prints one ExUnit module for the book's closed equations, the same text as `Muro.emit_exunit/3`. The test module is the file stem plus `Test` (`rounding.muro` prints `RoundingTest`). The implementation it calls by default is the stem (`Rounding`). Skipped equations go to standard error, then a line `N tests, M skipped`. Standard output is only the module. `--node` with this backend is refused.
 
-This backend and `--backend pytest` accept a file whose `param`s are not supplied. They check them as assumptions. Elixir, C, Rust, Zig, JavaScript, assembly, OTP, and `--node` still refuse that file with `param <name> is supplied by a file that imports this one`.
+This backend, `--backend pytest`, and `--backend rust-test` accept a file whose `param`s are not supplied. They check them as assumptions. Elixir, C, Rust, Zig, JavaScript, assembly, OTP, and `--node` still refuse that file with `param <name> is supplied by a file that imports this one`.
 
-`--imports` is valid with `--backend exunit` and `--backend pytest`. It also collects the closed equations of the files the book imports directly. With any other backend it is an error: `--imports is only valid with --backend exunit or --backend pytest`. Absent, the suite is this file only.
+`--imports` is valid with `--backend exunit`, `--backend pytest`, and `--backend rust-test`. It also collects the closed equations of the files the book imports directly. With any other backend it is an error: `--imports is only valid with --backend exunit, --backend pytest, or --backend rust-test`. Absent, the suite is this file only.
 
 The tests call an implementation the host names. [Closed equations as tests](exunit.md) is the collection, the behaviour, the adapter, param libraries, imported equations, and the skip list. `mix muro.gen` writes the same suite when an entry sets `kind: :exunit`. `imports: true` on that entry is `--imports`.
 
@@ -345,5 +346,11 @@ The tests call an implementation the host names. [Closed equations as tests](exu
 `--backend pytest` prints one pytest module for those same equations, the same text as `Muro.emit_pytest/2`. The implementation it calls by default is the file stem (`rounding.muro` calls `rounding.round`). `--impl MODULE` bakes another Python module into the file. `MURO_IMPL_<STEM>` selects a module when the tests run, and the file does not change. A skip is a `pytest.mark.skip` test. Skipped equations go to standard error, then a line `N tests, M skipped`. Standard output is only the module. `--node` with this backend is refused. `mix muro.gen` writes the file when an entry sets `kind: :pytest`.
 
 [Pytest](pytest.md) is the value encoding, the identifier fold, and how the implementation is chosen.
+
+## Rust tests
+
+`--backend rust-test` prints one Rust test file for those same equations, the same text as `Muro.emit_rust_test/2`. The tests call the emitted `<stem>.rs` beside the file (`rounding.muro` calls `rounding::round`). `rustc --test` accepts the two files as siblings. `--impl PATH` bakes another Rust path into the file. The path is fixed when the file is written. A skip is a `#[test]` function marked `#[ignore]`. Skipped equations go to standard error, then a line `N tests, M skipped`. Standard output is only the file. `--node` with this backend is refused. `mix muro.gen` writes the file when an entry sets `kind: :rust_test`.
+
+[Rust tests](rust-test.md) is the value encoding, the identifier fold, and how the implementation is chosen.
 
 Next: [Closed equations as tests](exunit.md).

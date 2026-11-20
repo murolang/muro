@@ -19,9 +19,9 @@ pub fn muro__reveal<T: 'static + ::std::clone::Clone>(muro__e: muro__Erased) -> 
     }
 }
 
-#[derive(::std::clone::Clone)]
+#[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]
 pub struct muro__Nat(::std::rc::Rc<muro__NatNode>);
-#[derive(::std::clone::Clone)]
+#[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]
 enum muro__NatNode {
     muro__tag_zero,
     muro__tag_suc(muro__Nat),
@@ -58,11 +58,50 @@ pub fn muro__to_u64(muro__n: &muro__Nat) -> ::std::primitive::u64 {
     }
 }
 
-#[derive(::std::clone::Clone, ::std::marker::Copy)]
+#[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::fmt::Debug)]
 pub struct muro__Unit;
 
 #[derive(::std::clone::Clone)]
-pub struct muro__Pair(muro__Erased, muro__Erased);
+pub struct muro__Pair(
+    muro__Erased,
+    muro__Erased,
+    fn(&muro__Pair, &muro__Pair) -> bool,
+);
+
+fn muro__pair_eq<A: ::std::cmp::PartialEq + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::clone::Clone + 'static>(
+    muro__a: &muro__Pair,
+    muro__b: &muro__Pair,
+) -> bool {
+    muro__reveal::<A>(muro__a.0.clone()) == muro__reveal::<A>(muro__b.0.clone())
+        && muro__reveal::<B>(muro__a.1.clone()) == muro__reveal::<B>(muro__b.1.clone())
+}
+
+fn muro__pair_eq_raw(_muro__a: &muro__Pair, _muro__b: &muro__Pair) -> bool {
+    false
+}
+
+pub fn muro__pair<A: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static>(
+    muro__a: A,
+    muro__b: B,
+) -> muro__Pair {
+    muro__Pair(muro__erase(muro__a), muro__erase(muro__b), muro__pair_eq::<A, B>)
+}
+
+pub fn muro__pair_raw(muro__a: muro__Erased, muro__b: muro__Erased) -> muro__Pair {
+    muro__Pair(muro__a, muro__b, muro__pair_eq_raw)
+}
+
+impl ::std::cmp::PartialEq for muro__Pair {
+    fn eq(&self, other: &Self) -> bool {
+        (self.2)(self, other)
+    }
+}
+
+impl ::std::fmt::Debug for muro__Pair {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        f.write_str("muro__Pair(..)")
+    }
+}
 
 #[derive(::std::clone::Clone)]
 pub struct muro__Stream {
@@ -70,9 +109,15 @@ pub struct muro__Stream {
     muro__field_step: ::std::rc::Rc<dyn ::std::ops::Fn(muro__Erased) -> muro__Pair>,
 }
 
-#[derive(::std::clone::Clone, ::std::marker::Copy)]
+#[derive(::std::clone::Clone, ::std::marker::Copy, ::std::fmt::Debug)]
 #[repr(C)]
 pub struct muro__slice { pub p: *const u8, pub n: usize }
+
+impl ::std::cmp::PartialEq for muro__slice {
+    fn eq(&self, other: &Self) -> bool {
+        muro__slice_eq(*self, *other)
+    }
+}
 
 #[allow(non_upper_case_globals)]
 static muro__empty_bytes: u8 = 0;
