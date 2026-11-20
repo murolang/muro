@@ -3,11 +3,14 @@ defmodule Muro.Family.StepTest do
 
   alias Muro.Family.Step
 
-  # Generated Events and Commands, checked against `Muro.Family.Step`.
-  # Those names are the Agda names in `agda/Muro/Family.agda`:
-  # `holdOf`, `blocked?`, `decide`, `onKey`, `arriveTo`, `resolveTo`,
-  # `touchTo`, `NoOvertake`, `HeldBlocked`, `BadOpen`, `script-a`,
-  # `script-b`. This file does not build the family graph.
+  # Generated Events, Commands, Orders, and Mixes, checked against
+  # `Muro.Family.Step`. Those names are the Agda names in
+  # `agda/Muro/Family.agda`: `holdOf`, `blocked?`, `anyBlocked?`,
+  # `decide`, `decideMode`, `onKey`, `arriveTo`, `arriveMode`,
+  # `resolveTo`, `resolveMode`, `withdrawTo`, `touchTo`, `touchMode`,
+  # `NoOvertake`, `NoOvertakeR`, `HeldBlocked`, `BadOpen`, `AtMostOne`,
+  # `EarlierResolved`, `RulesInv`, `script-a`, `script-b`. This file
+  # does not build the family graph.
 
   @book """
   data Event : Type where
@@ -50,18 +53,34 @@ defmodule Muro.Family.StepTest do
 
   family commands : command-slot per key of Command
     command held while earlier unresolved
+
+  data Order : Type where
+    order : Order
+
+  data Mix : Type where
+    early : Mix
+    wide : Mix
+
+  family orders : slot per key of Order
+    order held while any unresolved
+
+  family mixes : slot per key of Mix
+    early held while earlier unresolved
+    wide held while any unresolved
   """
 
   @events Step.proved_rules()
   @commands %{command: :earlier}
+  @orders %{order: :any}
+  @mixes %{early: :earlier, wide: :any}
   @keys ~w(k0 k1 k2 k3)
   @event_parties %{server: {"server-wait", 0}, task: {"task-work", 0}}
   @command_parties %{waiter: {"command-wait", 0}, worker: {"command-work", 0}}
 
   setup_all do
-    {parent, events, commands} = compile!()
+    {parent, events, commands, orders, mixes} = compile!()
     on_exit(&purge/0)
-    [parent: parent, events: events, commands: commands]
+    [parent: parent, events: events, commands: commands, orders: orders, mixes: mixes]
   end
 
   test "an opened signal carries the rows that had already arrived", %{events: events} do
@@ -302,6 +321,177 @@ defmodule Muro.Family.StepTest do
     assert {:error, {:kind, :init}} = commands.arrive(state, "wf", :init, 2)
     assert Step.view(ref) == Step.view_disp(state)
     assert {:ok, [{1, "wf", :command}], _} = commands.resolved(state, 0)
+    assert Step.earlier_resolved?(ref.rows, "wf", :command)
+  end
+
+  test "one any of a key is open, and release opens the least index", %{orders: orders} do
+    ref = Step.empty()
+    assert {:ok, :open, 0, ref} = Step.arrive(ref, "a", :order, 5, @orders)
+    assert {:ok, :held, 1, ref} = Step.arrive(ref, "a", :order, 1, @orders)
+    assert {:ok, :held, 2, ref} = Step.arrive(ref, "a", :order, 0, @orders)
+    assert Step.at_most_one_any?(ref.rows, @orders)
+    assert Step.invariant?(ref, @orders)
+    assert Step.earlier_resolved?(ref.rows, "a", :order)
+    refute Step.held_blocked?(ref.rows)
+
+    assert {:ok, [{2, "a", :order}], ref} = Step.resolve(ref, 0, @orders)
+    assert Enum.find(ref.rows, &(&1.id == 2)).phase == :open
+    assert Enum.find(ref.rows, &(&1.id == 1)).phase == :held
+    assert Step.invariant?(ref, @orders)
+    assert Step.earlier_resolved?(ref.rows, "a", :order)
+
+    state = orders.new()
+    assert {:open, 0, state} = orders.arrive(state, "a", :order, 5)
+    assert {:held, 1, state} = orders.arrive(state, "a", :order, 1)
+    assert {:held, 2, state} = orders.arrive(state, "a", :order, 0)
+    assert {:ok, [{2, "a", :order}], state} = orders.resolved(state, 0)
+    assert Step.view(ref) == Step.view_disp(state)
+    assert ref.next == state.n
+  end
+
+  test "a mixed family opens the any and leaves the earlier row held", %{mixes: mixes} do
+    ref = Step.empty()
+    assert {:ok, :open, 0, ref} = Step.arrive(ref, "a", :early, 2, @mixes)
+    assert {:ok, :held, 1, ref} = Step.arrive(ref, "a", :wide, 0, @mixes)
+    assert {:ok, :held, 2, ref} = Step.arrive(ref, "a", :early, 1, @mixes)
+    assert Step.invariant?(ref, @mixes)
+    assert Step.earlier_resolved?(ref.rows, "a", :early)
+    assert Step.earlier_resolved?(ref.rows, "a", :wide)
+
+    early = Enum.find(ref.rows, &(&1.id == 2))
+    least = Step.least_earlier(ref.rows, early)
+    assert least.id == 1
+    assert least.phase == :held
+
+    assert {:ok, [{1, "a", :wide}], ref} = Step.resolve(ref, 0, @mixes)
+    assert Enum.find(ref.rows, &(&1.id == 1)).phase == :open
+    assert Enum.find(ref.rows, &(&1.id == 2)).phase == :held
+    assert Step.invariant?(ref, @mixes)
+    assert Step.earlier_resolved?(ref.rows, "a", :early)
+    assert Step.earlier_resolved?(ref.rows, "a", :wide)
+
+    state = mixes.new()
+    assert {:open, 0, state} = mixes.arrive(state, "a", :early, 2)
+    assert {:held, 1, state} = mixes.arrive(state, "a", :wide, 0)
+    assert {:held, 2, state} = mixes.arrive(state, "a", :early, 1)
+    assert {:ok, [{1, "a", :wide}], state} = mixes.resolved(state, 0)
+    assert Step.view(ref) == Step.view_disp(state)
+  end
+
+  test "withdraw drops a held instance and does not block a later one", %{mixes: mixes} do
+    ref = Step.empty()
+    assert {:ok, :open, 0, ref} = Step.arrive(ref, "a", :early, 2, @mixes)
+    assert {:ok, :held, 1, ref} = Step.arrive(ref, "a", :wide, 0, @mixes)
+    assert {:ok, :held, 2, ref} = Step.arrive(ref, "a", :early, 1, @mixes)
+    assert {:error, {:opened, 0}} = Step.withdraw(ref, 0, @mixes)
+
+    assert {:ok, [{2, "a", :early}], ref} = Step.withdraw(ref, 1, @mixes)
+    assert {:error, {:unknown, 1}} = Step.live(ref, 1)
+    assert Enum.find(ref.rows, &(&1.id == 2)).phase == :open
+    assert Enum.find(ref.rows, &(&1.id == 0)).phase == :open
+    assert {:error, {:resolved, 1}} = Step.withdraw(ref, 1, @mixes)
+    assert {:error, {:unknown, 1}} = Step.resolve(ref, 1, @mixes)
+    assert {:error, {:unknown, 9}} = Step.withdraw(ref, 9, @mixes)
+
+    assert Step.fresh?(ref.rows, "a", 0)
+    assert {:ok, :held, 3, ref} = Step.arrive(ref, "a", :wide, 0, @mixes)
+    assert {:error, {:resolved, 1}} = Step.withdraw(ref, 1, @mixes)
+    assert Step.invariant?(ref, @mixes)
+    assert Step.earlier_resolved?(ref.rows, "a", :early)
+    assert Step.earlier_resolved?(ref.rows, "a", :wide)
+
+    state = mixes.new()
+    assert {:open, 0, state} = mixes.arrive(state, "a", :early, 2)
+    assert {:held, 1, state} = mixes.arrive(state, "a", :wide, 0)
+    assert {:held, 2, state} = mixes.arrive(state, "a", :early, 1)
+    assert {:error, {:opened, 0}} = mixes.withdraw(state, 0)
+    assert {:ok, [{2, "a", :early}], state} = mixes.withdraw(state, 1)
+    assert {:error, {:resolved, 1}} = mixes.withdraw(state, 1)
+    assert {:error, {:unknown, 1}} = mixes.resolved(state, 1)
+    assert {:error, {:unknown, 9}} = mixes.withdraw(state, 9)
+    assert {:held, 3, state} = mixes.arrive(state, "a", :wide, 0)
+    assert Step.view(ref) == Step.view_disp(state)
+  end
+
+  test "an opened never can break earlier_resolved while the invariant holds" do
+    beside = [
+      row("a", 1, 1, 0, 0, :init, :open),
+      row("a", 0, 0, 0, 0, :init, :open)
+    ]
+
+    assert Step.invariant?(%{next: 2, tick: 1, rows: beside}, @events)
+    refute Step.earlier_resolved?(beside, "a", :init)
+
+    both = [
+      row("a", 0, 0, 0, 0, :order, :open),
+      row("a", 1, 1, 0, 0, :order, :open)
+    ]
+
+    refute Step.at_most_one_any?(both, @orders)
+    refute Step.invariant?(%{next: 2, tick: 1, rows: both}, @orders)
+
+    stamped = [
+      row("a", 1, 1, 0, 0, :order, :open),
+      row("a", 0, 0, 0, 0, :order, :held)
+    ]
+
+    refute Step.earlier_resolved?(stamped, "a", :order)
+    refute Step.invariant?(%{next: 2, tick: 1, rows: stamped}, @orders)
+  end
+
+  test "holding an any reads only its own key", %{orders: orders} do
+    ref = Step.empty()
+    assert {:ok, :open, 0, ref} = Step.arrive(ref, "k0", :order, 0, @orders)
+    assert {:ok, :held, 1, ref} = Step.arrive(ref, "k0", :order, 1, @orders)
+    before = Step.on_key(ref.rows, "k0")
+    assert {:ok, :open, 2, ref} = Step.arrive(ref, "k1", :order, 1, @orders)
+    assert Step.on_key(ref.rows, "k0") == before
+    assert Step.decide(ref.rows, "k1", 1, :order, @orders) == :open
+
+    assert Step.decide(ref.rows, "k1", 1, :order, @orders) ==
+             Step.decide(Step.on_key(ref.rows, "k1"), "k1", 1, :order, @orders)
+
+    assert Step.any_blocked?(ref.rows, "k1", 1) ==
+             Step.any_blocked?(Step.on_key(ref.rows, "k1"), "k1", 1)
+
+    refute Step.any_blocked?(ref.rows, "k1", 1)
+    assert Step.any_blocked?(ref.rows, "k0", 1)
+
+    state = orders.new()
+    assert {:open, 0, state} = orders.arrive(state, "k0", :order, 0)
+    assert {:held, 1, state} = orders.arrive(state, "k0", :order, 1)
+    assert {:open, 2, state} = orders.arrive(state, "k1", :order, 1)
+    assert Step.view(ref) == Step.view_disp(state)
+  end
+
+  test "check_trace accepts withdraw on any and on a mixed family", %{
+    orders: orders,
+    mixes: mixes,
+    parent: parent
+  } do
+    :rand.seed(:exsss, {22, 6, 270})
+
+    Enum.each(1..20, fn _trial ->
+      agree_withdraw(orders, parent, @event_parties, @orders, [:order])
+      agree_withdraw(mixes, parent, @event_parties, @mixes, [:early, :wide])
+    end)
+  end
+
+  test "random any and mixed steps match the generated dispatchers", %{
+    orders: orders,
+    mixes: mixes
+  } do
+    :rand.seed(:exsss, {22, 6, 271})
+
+    stats =
+      Enum.reduce(1..20, empty_stats(), fn _trial, stats ->
+        stats = random_wide(orders, @orders, [:order], stats)
+        random_wide(mixes, @mixes, [:early, :wide], stats)
+      end)
+
+    assert stats.held > 0
+    assert stats.opened > 0
+    assert MapSet.size(stats.keys) > 1
   end
 
   defp agree(disp, parent, parties, rules, kinds) do
@@ -312,9 +502,17 @@ defmodule Muro.Family.StepTest do
     assert reference_trace(parent, parties, rules, illegal) == disp.check_trace(illegal)
   end
 
-  defp legal_trace(parent, parties, rules, kinds, n) do
+  defp agree_withdraw(disp, parent, parties, rules, kinds) do
+    {trace, _ref} = legal_trace(parent, parties, rules, kinds, 25, :withdraw)
+    assert reference_trace(parent, parties, rules, trace) == disp.check_trace(trace)
+
+    illegal = trace ++ [Enum.random([{:withdraw, 99}, {:resolved, 99}])]
+    assert reference_trace(parent, parties, rules, illegal) == disp.check_trace(illegal)
+  end
+
+  defp legal_trace(parent, parties, rules, kinds, n, extra \\ :none) do
     Enum.reduce(1..n, {[], Step.empty(), %{}}, fn _, {trace, ref, seen} ->
-      act = legal_act(parent, ref, seen, kinds, parties)
+      act = legal_act(parent, ref, seen, kinds, parties, extra)
 
       {:ok, ref, seen} =
         case oracle_step(parent, parties, rules, ref, seen, act) do
@@ -330,14 +528,15 @@ defmodule Muro.Family.StepTest do
     |> then(fn {trace, ref, _seen} -> {trace, ref} end)
   end
 
-  defp legal_act(parent, ref, seen, kinds, parties) do
+  defp legal_act(parent, ref, seen, kinds, parties, extra) do
     options =
       Enum.filter(
         [
           arrival(ref, kinds),
           resolve_ready(parent, ref, seen),
           rerun_ready(parent, ref, seen),
-          session_ready(ref, seen, parties)
+          session_ready(ref, seen, parties),
+          if(extra == :withdraw, do: withdraw_ready(ref))
         ],
         &is_tuple/1
       )
@@ -369,6 +568,13 @@ defmodule Muro.Family.StepTest do
     case open_ids(parent, ref, seen, [:done]) do
       [] -> nil
       ids -> {:rerun, Enum.random(ids)}
+    end
+  end
+
+  defp withdraw_ready(ref) do
+    case Enum.filter(ref.rows, &(&1.phase == :held)) do
+      [] -> nil
+      rows -> {:withdraw, Enum.random(rows).id}
     end
   end
 
@@ -405,6 +611,15 @@ defmodule Muro.Family.StepTest do
     |> elem(2)
   end
 
+  defp random_wide(disp, rules, kinds, stats) do
+    Enum.reduce(1..40, {disp.new(), Step.empty(), stats}, fn _step, {dstate, ref, stats} ->
+      act = wide_act(rules, kinds)
+      {dstate, ref, stats} = step_family(disp, dstate, ref, rules, act, stats)
+      {dstate, ref, stats}
+    end)
+    |> elem(2)
+  end
+
   defp wild_act(rules, kinds) do
     key = Enum.random(@keys)
     kind = Enum.random(kinds)
@@ -417,6 +632,15 @@ defmodule Muro.Family.StepTest do
       8 -> {:arrive, key, :nope, index}
       9 -> {:arrive, key, kind, -1}
       10 -> {:arrive, key, Enum.random(Map.keys(rules)), index}
+    end
+  end
+
+  # `wild_act` keeps its 1–10 split. Withdraw is an extra draw, used
+  # only by the any and mixed walk.
+  defp wide_act(rules, kinds) do
+    case :rand.uniform(12) do
+      n when n <= 10 -> wild_act(rules, kinds)
+      _ -> {:withdraw, :rand.uniform(16) - 1}
     end
   end
 
@@ -438,7 +662,7 @@ defmodule Muro.Family.StepTest do
         assert ref2.next == dstate2.n
         assert Step.invariant?(ref2, rules)
         assert_local(ref2, rules)
-        assert_progress(ref2)
+        assert_progress(ref2, rules)
         {dstate2, ref2, observe(stats, ref, ref2)}
     end
   end
@@ -471,6 +695,13 @@ defmodule Muro.Family.StepTest do
     end
   end
 
+  defp disp_act(disp, state, {:withdraw, id}) do
+    case disp.withdraw(state, id) do
+      {:error, reason} -> {state, {:error, reason}}
+      {:ok, released, state} -> {state, {:ok, released}}
+    end
+  end
+
   defp disp_act(disp, state, {:rerun, id}) do
     case disp.retain(state, id) do
       {:error, reason} -> {state, {:error, reason}}
@@ -492,6 +723,13 @@ defmodule Muro.Family.StepTest do
     end
   end
 
+  defp ref_act(state, rules, {:withdraw, id}) do
+    case Step.withdraw(state, id, rules) do
+      {:error, reason} -> {state, {:error, reason}}
+      {:ok, released, state} -> {state, {:ok, released}}
+    end
+  end
+
   defp ref_act(state, _rules, {:rerun, id}) do
     case Step.rerun(state, id) do
       {:error, reason} -> {state, {:error, reason}}
@@ -508,31 +746,65 @@ defmodule Muro.Family.StepTest do
 
       assert Step.blocked?(ref.rows, row.key, row.index) ==
                Step.blocked?(Step.on_key(ref.rows, row.key), row.key, row.index)
+
+      assert Step.any_blocked?(ref.rows, row.key, row.index) ==
+               Step.any_blocked?(Step.on_key(ref.rows, row.key), row.key, row.index)
     end
   end
 
-  defp assert_progress(ref) do
+  # `noStarve`. A held row has some opened row of its key. When the key
+  # has no `any` row, `onlyEarlier-open` still says the least earlier
+  # row is opened. `HeldBlocked` is that earlier-only fact.
+  defp assert_progress(ref, rules) do
     for row <- ref.rows, row.phase == :held do
-      least = Step.least_earlier(ref.rows, row)
-      assert least
-      assert least.phase == :open
-      assert least.index < row.index
-      assert Step.blocked?(ref.rows, row.key, row.index)
+      assert Enum.any?(ref.rows, &(&1.key == row.key and &1.phase == :open))
     end
 
-    for row <- ref.rows, not Step.blocked?(ref.rows, row.key, row.index) do
+    for row <- ref.rows,
+        hold(rules, row) != :any,
+        not Step.blocked?(ref.rows, row.key, row.index) do
       assert row.phase == :open
     end
 
-    assert Step.held_blocked?(ref.rows)
+    for row <- ref.rows, row.phase == :held, hold(rules, row) == :earlier do
+      any_on_key? = Enum.any?(ref.rows, &(&1.key == row.key and hold(rules, &1) == :any))
+
+      if not any_on_key? do
+        least = Step.least_earlier(ref.rows, row)
+        assert least
+        assert least.phase == :open
+        assert least.index < row.index
+        assert Step.blocked?(ref.rows, row.key, row.index)
+      end
+    end
+
+    if not Enum.any?(ref.rows, &(hold(rules, &1) == :any)) do
+      assert Step.held_blocked?(ref.rows)
+    end
+
+    for {kind, mode} <- rules, mode in [:earlier, :any], key <- keys_of(ref) do
+      assert Step.earlier_resolved?(ref.rows, key, kind)
+    end
+
+    assert Step.at_most_one_any?(ref.rows, rules)
   end
 
+  defp hold(rules, row) do
+    case Step.hold_of(rules, row.kind) do
+      {:ok, mode} -> mode
+      {:error, _} -> :unknown
+    end
+  end
+
+  defp keys_of(ref), do: ref.rows |> Enum.map(& &1.key) |> Enum.uniq()
+
   # `check_trace` agrees with this walk. A family step is `arriveTo`,
-  # `resolveTo`, or `touchTo`. A session step is `meet` (`touchTo`)
-  # plus the generated session machine. `{:rerun, id}` and a resolve
-  # that has started a session also require every session of that id
-  # to be at `done`. That requirement is the dispatcher's. It is not
-  # Agda `touchTo`. `replay/2` is the family relation without it.
+  # `resolveTo`, `withdrawTo`, or `touchTo`. A session step is `meet`
+  # (`touchTo`) plus the generated session machine. `{:rerun, id}` and
+  # a resolve that has started a session also require every session of
+  # that id to be at `done`. That requirement is the dispatcher's. It
+  # is not Agda `touchTo`. `{:withdraw, id}` does not read the session
+  # map. `replay/2` is the family relation without the session condition.
   defp reference_trace(parent, parties, rules, trace) do
     walked =
       Enum.reduce_while(Enum.with_index(trace), {:ok, Step.empty(), %{}}, fn {act, i},
@@ -572,6 +844,13 @@ defmodule Muro.Family.StepTest do
 
       true ->
         {:error, {:unfinished, id}}
+    end
+  end
+
+  defp oracle_step(_parent, _parties, rules, ref, seen, {:withdraw, id}) do
+    case Step.withdraw(ref, id, rules) do
+      {:ok, _released, ref} -> {:ok, ref, seen}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -747,7 +1026,9 @@ defmodule Muro.Family.StepTest do
 
     assert warnings == [], inspect(warnings, limit: 20)
     assert parent in Enum.map(mods, &elem(&1, 0))
-    {parent, Module.concat(parent, Events), Module.concat(parent, Commands)}
+
+    {parent, Module.concat(parent, Events), Module.concat(parent, Commands),
+     Module.concat(parent, Orders), Module.concat(parent, Mixes)}
   end
 
   defp purge do

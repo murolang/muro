@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.22.14
+
+`held while any unresolved` is proved for any number of keys and any number of instances, including a family that holds one kind while an earlier instance is unresolved and another while any other instance of the key is open. At most one instance held that way is open for a key. An opened instance under `held while earlier unresolved` still has every earlier instance of its key that had already arrived resolved. A held instance, of either rule, has some opened instance of its key. The host is not obliged to resolve.
+
+`withdraw` drops a held instance and releases the same way `resolved` does. An id that has been withdrawn does not return, and it does not keep a later instance of its key held. `earlier_resolved` is that known-at-open reading for both rules, including one family that uses both. It does not hold for a kind that is never held.
+
+A violation is still one key and two instances. It lands on the script the family graph explores for key `a` when the opened instance is held while an earlier one is unresolved and the earlier instance is never held or held the same way. Two open instances of `held while any unresolved`, and an overtake whose earlier instance is held that way, do not land on that script. One instance is not a violation.
+
+The family graph is unchanged. `examples/keyed-slots.muro` stays 171649 reachable states and 729184 transitions. `examples/keyed-commands.muro` stays 370 reachable states and 835 transitions. Those counts check the generated dispatcher on the fixed script. They are not this proof. The program that writes the dispatcher, the meeting steps, one retry then give-up, `fail stop`, and `resolved k init` stay outside it.
+
+### Manual
+
+- Temporal, Limits, State machines, and Extending: `held while any unresolved`, withdrawing a held instance, and `earlier_resolved` are in the same proof. The family-graph counts stay the check of the generated dispatcher.
+
+### Package
+
+- Version 0.22.14.
+
 ## 0.22.13
 
 `mix muro.synth` runs one procedure. The procedure is `traces`, the version-space search on a book's `step` and the observations that `step` supports. `--on traces` selects it. A book that defines `step` selects it when `--on` is omitted. The search is unchanged: the same candidates, the same order, the same policy book.

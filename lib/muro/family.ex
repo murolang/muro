@@ -7,9 +7,12 @@ defmodule Muro.Family do
   `leads_to` are decided on the fixed script in `Muro.Family.Graph`.
   A formula over a family that does not check is
   `skipped because <family> does not check`, and the formula is not walked.
-  That search checks the generated dispatcher. The hold rule
-  `held while earlier unresolved` is proved in `agda/Muro/Family.agda`.
-  `Muro.Family.Step` is that step.
+  That search checks the generated dispatcher. The hold rules
+  `held while earlier unresolved` and `held while any unresolved`,
+  `withdraw` of a held instance, and `earlier_resolved` are proved in
+  `agda/Muro/Family.agda`. `Muro.Family.Step` is that step. The
+  generator, the meeting steps, one retry then give-up, `fail stop`,
+  and `resolved k init` are not.
   """
 
   @run_msg "temporal formulas do not mention run definitions"

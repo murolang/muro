@@ -6,23 +6,44 @@ defmodule Muro.Family.Step do
   against those definitions. It is not extracted from them. The names
   below are the Agda names.
 
-  `hold_of/1` is `holdOf`: `init` is `never`, `signal` is `earlier`.
-  A generated family whose constructor is held while an earlier instance
-  is unresolved uses that same `earlier` clause. `blocked?/3` is
-  `blocked?`. `decide/5` is `decide`. `on_key/2` is `onKey`. `arrive/5`
-  is `arriveTo`. `resolve/3` is `resolveTo`. `touch/2` is `touchTo`, and
-  `rerun/2` and `meet/2` are that same transition. `apply` in Agda sends
-  `Act.arrive key index kind` to `arriveTo state key kind index`.
+  `proved_rules/0` is `holdOf` for the kind this file started with:
+  `init` is `never`, `signal` is `earlier`. `hold_of/2` reads a family's
+  rules. `:any` is Agda `many`: held while any other row of the key is
+  open. `blocked?/3` is `earlierBlocked?`. `any_blocked?/3` is
+  `anyBlocked?`. Elixir takes `(rows, key, index)` and skips same-index
+  rows; Agda takes `(rs, k)` and counts `opened` rows. They agree under
+  `NoDupIx` and held subjects on release, not off-invariant. `decide/5`
+  is `decide` for `never` and `earlier`, and `decideMode` when the hold
+  is `any`. `on_key/2` is `onKey`. `arrive/5` is `arriveTo` and
+  `arriveMode`. `resolve/3` is `resolveTo` and `resolveMode`.
+  `withdraw/3` is `withdrawTo` on the successful path: a held row leaves
+  and the release is the release of `resolveMode`. Elixir returns
+  `:resolved`, `:unknown`, and `:opened`; Agda returns `nothing`.
+  `touch/2` is `touchTo` and `touchMode`. `rerun/2` and `meet/2` are
+  that same transition. `apply` in Agda sends `Act.arrive key index
+  kind` to `arriveTo state key kind index`, and `withdrawR` to
+  `withdrawTo`.
 
-  `no_overtake?/2` is `NoOvertake`. `bad_open?/2` is `BadOpen`. An opened
-  signal is a violation when an earlier live row of its key was already
-  born at the tick the signal opened (`born ≤ openedAt`). A row that
-  arrives later has a greater birth tick and is not a violation.
-  `held_blocked?/1` is `HeldBlocked`. `least_earlier/2` is `pick` on
-  `Earlier`. `invariant?/2` is `Invariant`: distinct ids, distinct
-  key-and-index pairs, ids below `next`, birth and open ticks below
-  `tick`, a held row is a signal, every held row has an earlier live
-  row of its key, and `NoOvertake`.
+  `no_overtake?/2` is `NoOvertake` and `NoOvertakeR`. `bad_open?/2` is
+  `BadOpen`. Both check the `mearlier` shape only. The two-open-`many`
+  case of `BadFamily` is `at_most_one_any?/2` (`AtMostOne`) and
+  `ResolvedAny`. An opened signal is a violation when an earlier live
+  row of its key was already born at the tick the signal opened
+  (`born ≤ openedAt`). A row that arrives later has a greater birth
+  tick and is not a violation.
+  `held_blocked?/1` is `HeldBlocked`. It is the earlier-only fact: every
+  held row has a smaller live index. A held `any` row need not.
+  `least_earlier/2` is `pick` on `Earlier`. `at_most_one_any?/2` is
+  `AtMostOne`. `earlier_resolved?/3` is `EarlierResolved`: an opened
+  row of that key and kind has no earlier live row of the same key and
+  kind whose birth is at most its open tick. The opening row is not
+  earlier than itself. A row that arrives later does not refute it.
+  It holds for `earlier` and for `any`. It does not hold for `never`.
+  `invariant?/2` is `RulesInv`: distinct ids, distinct key-and-index
+  pairs, ids below `next`, birth and open ticks below `tick`, a held
+  row is `earlier` or `any`, a held `earlier` row has an earlier live
+  row, a held `any` row has another open row of its key, `AtMostOne`,
+  `NoOvertake`, and `ResolvedAny`.
 
   `script_a/0` is `script-a`: `init` at 0, `signal` at 1, `signal` at 2.
   `script_b/0` is `script-b`: `init` at 0.
@@ -35,12 +56,15 @@ defmodule Muro.Family.Step do
   a rerun, and a resolve that has started a session, to land on `done`.
   That session condition is not `touchTo`.
 
-  `release?` opens a held row of the resolved key when `holdOf` of its
-  kind is `earlier` and `blocked?` is false on the list after the
-  removal. On the proved kind, `earlier` is `signal`, which is Agda
-  `isSignal`. The released list is sorted by `{index, id}`, which is
-  the list the dispatcher returns. Agda `openAll` keeps list order.
-  Membership is the same.
+  `open_all` is `openAll` / `opens?`. A held `earlier` row of the
+  released key opens when `earlierBlocked?` is false. A held `any` row
+  opens only when no row of the key is open, no `earlier` row of the
+  key opens in that same release, and no smaller `{index, id}` `any`
+  row is also free. The released list is sorted by `{index, id}`,
+  which is the list the dispatcher returns. Agda `openAll` keeps list
+  order. Membership is the same. On a family whose holds are `never`
+  and `earlier` only, that release is every unblocked held `earlier`
+  row.
 
   The meeting graph, one retry then give-up, `fail stop`, and the
   program that writes the dispatcher are not this module.
@@ -60,26 +84,41 @@ defmodule Muro.Family.Step do
   """
   def hold_of(rules, kind) do
     case Map.fetch(rules, kind) do
-      {:ok, hold} when hold in [:never, :earlier] -> {:ok, hold}
+      {:ok, hold} when hold in [:never, :earlier, :any] -> {:ok, hold}
       _ -> {:error, {:kind, kind}}
     end
   end
 
   @doc """
-  Agda `blocked?`. True when a live row of `key` has a creation index
-  strictly below `index`. A resolved instance is not in `rows`.
+  Agda `earlierBlocked?`. True when a live row of `key` has a creation
+  index strictly below `index`. A resolved instance is not in `rows`.
   """
   def blocked?(rows, key, index) do
     Enum.any?(rows, fn row -> row.key == key and row.index < index end)
   end
 
   @doc """
-  Agda `decide`. `never` opens. `earlier` holds when `blocked?` is true
-  and opens otherwise. The phase `:open` is Agda `opened`.
+  Agda `anyBlocked?`. True when a row of `key` other than `index` is
+  open. A held row is not open, so a held subject does not block
+  itself. On arrival the new row is not in `rows`. Elixir takes
+  `(rows, key, index)` and skips same-index rows; Agda takes `(rs, k)`
+  and counts `opened` rows. They agree under `NoDupIx` and held
+  subjects on release, not off-invariant.
+  """
+  def any_blocked?(rows, key, index) do
+    Enum.any?(rows, fn row ->
+      row.key == key and row.index != index and row.phase == :open
+    end)
+  end
+
+  @doc """
+  Agda `decide` and `decideMode`. `never` opens. `earlier` holds when
+  `earlierBlocked?` is true. `any` holds when `anyBlocked?` is true.
+  The phase `:open` is Agda `opened`.
   """
   def decide(rows, key, index, kind, rules) do
     {:ok, hold} = hold_of(rules, kind)
-    assign(hold, blocked?(rows, key, index))
+    assign(hold, rows, key, index)
   end
 
   @doc "Agda `onKey`."
@@ -127,10 +166,10 @@ defmodule Muro.Family.Step do
   end
 
   @doc """
-  Agda `resolveTo`. An opened row leaves. Each held signal of that key
-  which `release?` accepts is stamped open at the current tick, then
-  the tick advances. A held id is `{:held, id}`. An unknown id is
-  `{:unknown, id}`.
+  Agda `resolveTo` and `resolveMode`. An opened row leaves. `openAll`
+  stamps the rows that release, then the tick advances. A held id is
+  `{:held, id}`. An id that is not live is `{:unknown, id}`, including
+  an id that has already left.
   """
   def resolve(state, id, rules) do
     case find(state.rows, id) do
@@ -141,9 +180,28 @@ defmodule Muro.Family.Step do
         {:error, {:held, id}}
 
       %{phase: :open, key: key} ->
-        gone = remove(state.rows, id)
-        {rows, released} = open_all(key, gone, state.tick, rules)
-        {:ok, released, %{state | tick: state.tick + 1, rows: rows}}
+        release(state, id, key, rules)
+    end
+  end
+
+  @doc """
+  Agda `withdrawTo`. A held row leaves and `openAll` runs, the same
+  release as `resolveMode`. The successful path matches `withdrawTo`.
+  Elixir returns richer error atoms: an open id is `{:opened, id}`;
+  an id below `next` that is not live has left, `{:resolved, id}`;
+  any other missing id is `{:unknown, id}`. Agda returns `nothing` in
+  each of those cases.
+  """
+  def withdraw(state, id, rules) do
+    case find(state.rows, id) do
+      %{phase: :open} ->
+        {:error, {:opened, id}}
+
+      %{phase: :held, key: key} ->
+        release(state, id, key, rules)
+
+      nil ->
+        if left?(state, id), do: {:error, {:resolved, id}}, else: {:error, {:unknown, id}}
     end
   end
 
@@ -203,8 +261,10 @@ defmodule Muro.Family.Step do
   end
 
   @doc """
-  Agda `BadOpen`. An opened signal, and an earlier live row of its key
-  whose birth tick is at most the signal's open tick.
+  Agda `BadOpen`. The `mearlier` shape only: an opened signal, and an
+  earlier live row of its key whose birth tick is at most the signal's
+  open tick. The two-open-`many` case of `BadFamily` is
+  `at_most_one_any?/2` (`AtMostOne`) and `ResolvedAny`.
   """
   def bad_open?(rows, rules) do
     Enum.any?(rows, fn opened ->
@@ -216,8 +276,38 @@ defmodule Muro.Family.Step do
     end)
   end
 
-  @doc "Agda `NoOvertake`, the negation of `BadOpen`."
+  @doc """
+  Agda `NoOvertake` and `NoOvertakeR`, the negation of `BadOpen`.
+  The `mearlier` shape only. The two-open-`many` case of `BadFamily`
+  is `at_most_one_any?/2` (`AtMostOne`) and `ResolvedAny`.
+  """
   def no_overtake?(rows, rules), do: not bad_open?(rows, rules)
+
+  @doc """
+  Agda `AtMostOne`. At most one opened row whose hold is `any` for
+  each key.
+  """
+  def at_most_one_any?(rows, rules) do
+    rows
+    |> Enum.filter(&(&1.phase == :open and any?(rules, &1)))
+    |> Enum.group_by(& &1.key)
+    |> Enum.all?(fn {_key, group} -> length(group) <= 1 end)
+  end
+
+  @doc """
+  Agda `EarlierResolved`. For every opened row of `key` and `kind`,
+  no earlier live row of that same key and kind was born at or before
+  the open tick. Vacuous when nothing of that key and kind is open.
+  """
+  def earlier_resolved?(rows, key, kind) do
+    Enum.all?(rows, fn opened ->
+      opened.key != key or opened.kind != kind or opened.phase != :open or
+        not Enum.any?(rows, fn earlier ->
+          earlier.key == key and earlier.kind == kind and earlier.index < opened.index and
+            earlier.born <= opened.opened_at
+        end)
+    end)
+  end
 
   @doc """
   Agda `HeldBlocked`. Every held row has an earlier live row of its key.
@@ -230,15 +320,18 @@ defmodule Muro.Family.Step do
   end
 
   @doc """
-  Agda `Invariant` for this state and this family's rules. `signal` in
-  the proof is a kind whose hold is `earlier`.
+  Agda `RulesInv`. The earlier-only fields are `Invariant`. A held row
+  is `earlier` or `any`. `HeldEarlier`, `HeldAny`, `AtMostOne`,
+  `NoOvertake`, and `ResolvedAny` are the rest. `HeldBlocked` stays
+  `held_blocked?/1` and is not required once a kind is `any`.
   """
   def invariant?(state, rules) do
     rows = state.rows
 
     unique_ids?(rows) and unique_index?(rows) and ids_below?(rows, state.next) and
-      clock?(rows, state.tick) and held_signal?(rows, rules) and held_blocked?(rows) and
-      no_overtake?(rows, rules)
+      clock?(rows, state.tick) and held_mode?(rows, rules) and held_earlier?(rows, rules) and
+      held_any?(rows, rules) and at_most_one_any?(rows, rules) and no_overtake?(rows, rules) and
+      resolved_any?(rows, rules)
   end
 
   @doc """
@@ -251,7 +344,7 @@ defmodule Muro.Family.Step do
   def script_b, do: [{:init, 0}]
 
   @doc """
-  Family steps only: `arriveTo`, `resolveTo`, and `touchTo`.
+  Family steps only: `arriveTo`, `resolveTo`, `withdrawTo`, and `touchTo`.
 
   `{:rerun, id}` succeeds here whenever the row is opened. `check_trace`
   also requires the id's sessions to be at `done`. That extra refusal
@@ -280,6 +373,13 @@ defmodule Muro.Family.Step do
     end
   end
 
+  defp family_act(state, {:withdraw, id}, rules) do
+    case withdraw(state, id, rules) do
+      {:ok, _released, state} -> {:ok, state}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
   defp family_act(state, {:rerun, id}, _rules) do
     case rerun(state, id) do
       {:ok, [], state} -> {:ok, state}
@@ -294,40 +394,72 @@ defmodule Muro.Family.Step do
     end
   end
 
-  defp assign(:never, _blocked), do: :open
-  defp assign(:earlier, true), do: :held
-  defp assign(:earlier, false), do: :open
+  defp assign(:never, _rows, _key, _index), do: :open
+  defp assign(:earlier, rows, key, index), do: phase_of(blocked?(rows, key, index))
+  defp assign(:any, rows, key, index), do: phase_of(any_blocked?(rows, key, index))
+
+  defp phase_of(true), do: :held
+  defp phase_of(false), do: :open
 
   defp index_ok(index) when is_integer(index) and index >= 0, do: :ok
   defp index_ok(index), do: {:error, {:index, index}}
 
   defp signal?(rules, row), do: match?({:ok, :earlier}, hold_of(rules, row.kind))
+  defp any?(rules, row), do: match?({:ok, :any}, hold_of(rules, row.kind))
 
-  # Agda `release?`: same key, held, `isSignal`, and not `blocked?` on
-  # the post-removal list. `isSignal` is `holdOf kd ≡ earlier`.
-  defp release?(key, all, row, rules) do
-    row.key == key and row.phase == :held and signal?(rules, row) and
-      not blocked?(all, row.key, row.index)
+  defp left?(state, id), do: is_integer(id) and id >= 0 and id < state.next
+
+  defp release(state, id, key, rules) do
+    gone = remove(state.rows, id)
+    {rows, released} = open_all(key, gone, state.tick, rules)
+    {:ok, released, %{state | tick: state.tick + 1, rows: rows}}
   end
 
-  # Agda `openAll` / `stamp`. The list handed to `blocked?` is the
-  # pre-update list. The released tuples follow the dispatcher's
-  # `{index, id}` order.
+  # Agda `opens?`. `earlierClause` is an unblocked held `earlier` row.
+  # `anyClause` is an unblocked held `any` row, and only when no
+  # `earlier` row opens and no smaller `any` row is free. The list
+  # `blocked` reads is the list after the removal.
+  defp candidate?(key, all, row, rules) do
+    row.key == key and row.phase == :held and
+      cond do
+        signal?(rules, row) -> not blocked?(all, row.key, row.index)
+        any?(rules, row) -> not any_blocked?(all, row.key, row.index)
+        true -> false
+      end
+  end
+
+  # The dispatcher's `one_of_any`, which is `hasEarlierCand` and
+  # `smallerAny?`. No `any` candidate: open every `earlier` candidate.
+  # Only `any` candidates: open the least `{index, id}`. Both: open
+  # the `earlier` candidates and leave the `any` rows held.
+  defp one_of_any(candidates, rules) do
+    {anys, rest} = Enum.split_with(candidates, &any?(rules, &1))
+
+    cond do
+      anys == [] -> rest
+      rest == [] -> [Enum.min_by(anys, &{&1.index, &1.id})]
+      true -> rest
+    end
+  end
+
+  # Agda `openAll` / `stamp`. Released tuples follow `{index, id}`.
   defp open_all(key, all, tick, rules) do
-    {rows, released} =
-      Enum.map_reduce(all, [], fn row, acc ->
-        if release?(key, all, row, rules) do
-          opened = %{row | opened_at: tick, phase: :open}
-          {opened, [{row.index, row.id, row.key, row.kind} | acc]}
+    chosen = all |> Enum.filter(&candidate?(key, all, &1, rules)) |> one_of_any(rules)
+    chosen_ids = MapSet.new(chosen, & &1.id)
+
+    rows =
+      Enum.map(all, fn row ->
+        if MapSet.member?(chosen_ids, row.id) do
+          %{row | opened_at: tick, phase: :open}
         else
-          {row, acc}
+          row
         end
       end)
 
     released =
-      released
-      |> Enum.sort_by(fn {index, id, _key, _kind} -> {index, id} end)
-      |> Enum.map(fn {_index, id, key, kind} -> {id, key, kind} end)
+      chosen
+      |> Enum.sort_by(&{&1.index, &1.id})
+      |> Enum.map(&{&1.id, &1.key, &1.kind})
 
     {rows, released}
   end
@@ -356,7 +488,35 @@ defmodule Muro.Family.Step do
     end)
   end
 
-  defp held_signal?(rows, rules) do
-    Enum.all?(rows, fn row -> row.phase != :held or signal?(rules, row) end)
+  defp held_mode?(rows, rules) do
+    Enum.all?(rows, fn row ->
+      row.phase != :held or signal?(rules, row) or any?(rules, row)
+    end)
+  end
+
+  defp held_earlier?(rows, rules) do
+    Enum.all?(rows, fn row ->
+      row.phase != :held or not signal?(rules, row) or
+        Enum.any?(rows, &(&1.key == row.key and &1.index < row.index))
+    end)
+  end
+
+  defp held_any?(rows, rules) do
+    Enum.all?(rows, fn row ->
+      row.phase != :held or not any?(rules, row) or
+        Enum.any?(rows, &(&1.key == row.key and &1.phase == :open))
+    end)
+  end
+
+  # Agda `ResolvedAny`. An opened `any` row has no earlier live row of
+  # the same kind born at or before its open tick.
+  defp resolved_any?(rows, rules) do
+    Enum.all?(rows, fn opened ->
+      not (opened.phase == :open and any?(rules, opened)) or
+        not Enum.any?(rows, fn earlier ->
+          earlier.kind == opened.kind and earlier.key == opened.key and
+            earlier.index < opened.index and earlier.born <= opened.opened_at
+        end)
+    end)
   end
 end
