@@ -244,10 +244,11 @@ defmodule Muro.FsmFamilyTest do
     src: src
   } do
     assert src =~ "def new, do: %{n: 0, by: %{}, id: %{}}"
+    assert src =~ "def withdraw(state, id)"
     assert src =~ "def finish(session_state, family_state, id)"
     assert src =~ "def finish(session_state, step, family_state, id)"
     assert src =~ "defp party(:server)"
-    refute src =~ "{:error, {:resolved"
+    assert src =~ "{:error, {:resolved, id}}"
 
     server = Module.concat(parent, ServerWait)
     task = Module.concat(parent, TaskWork)

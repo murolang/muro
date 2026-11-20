@@ -8,6 +8,10 @@ defmodule Muro.Family.Graph do
   Instances of one key may arrive in any order. An earlier creation
   index can arrive after a later one has opened.
 
+  `withdraw/3` resolves a held instance without opening it. That host
+  step is not one of the counted runs: a held signal is still opened
+  by the script, and `examples/keyed-slots.muro` keeps its count.
+
   `always`, `eventually`, and `leads_to` are decided here, on the
   same search. Nothing in this module is an Agda proof.
 
@@ -97,14 +101,21 @@ defmodule Muro.Family.Graph do
   end
 
   @doc false
-  def instances(book, %{key: key, rules: rules}) do
+  def instances(book, %{name: family_name, key: key, rules: rules}) do
     data = Enum.find(book, &(&1[:kind] == :data and &1.name == key))
     ctors = Enum.map(data.ctors, & &1.name)
     hold = Map.new(rules, &{&1.ctor, &1.hold})
 
+    # Two instances when one can sit behind another, and when a formula
+    # names `earlier_resolved` of that constructor. One instance would
+    # make that atom vacuous. `never` with no such atom stays one.
+    named = earlier_kinds(book, family_name)
+
     script_a =
       Enum.flat_map(ctors, fn ctor ->
-        if hold[ctor] == :earlier, do: [ctor, ctor], else: [ctor]
+        if hold[ctor] in [:earlier, :any] or MapSet.member?(named, ctor),
+          do: [ctor, ctor],
+          else: [ctor]
       end)
 
     script_b = [hd(ctors)]
@@ -120,6 +131,33 @@ defmodule Muro.Family.Graph do
   defp tagged(key, script) do
     Enum.with_index(script, fn kind, index -> {key, kind, index} end)
   end
+
+  # Constructors an `earlier_resolved` atom of this family names. The
+  # script then has an earlier sibling, so the atom is not vacuous.
+  defp earlier_kinds(book, family) do
+    book
+    |> Enum.filter(&match?(%{kind: :temporal, meeting: ^family}, &1))
+    |> Enum.flat_map(&formula_atoms(&1.formula))
+    |> Enum.reduce(MapSet.new(), fn
+      {:earlier_resolved, kind}, acc -> MapSet.put(acc, kind)
+      _, acc -> acc
+    end)
+  end
+
+  defp formula_atoms({:forall, _, _, formula}), do: formula_atoms(formula)
+  defp formula_atoms({:always, prop}), do: formula_atoms(prop)
+  defp formula_atoms({:eventually, prop}), do: formula_atoms(prop)
+  defp formula_atoms({:leads_to, p, q}), do: formula_atoms(p) ++ formula_atoms(q)
+  defp formula_atoms({:not, prop}), do: formula_atoms(prop)
+  defp formula_atoms({:and, p, q}), do: formula_atoms(p) ++ formula_atoms(q)
+  defp formula_atoms({:or, p, q}), do: formula_atoms(p) ++ formula_atoms(q)
+  defp formula_atoms({:imp, p, q}), do: formula_atoms(p) ++ formula_atoms(q)
+
+  defp formula_atoms({atom, _key, kind})
+       when atom in [:opened, :held, :resolved, :earlier_resolved],
+       do: [{atom, kind}]
+
+  defp formula_atoms(_other), do: []
 
   @doc """
   `{:ok, states, transitions}` when every instance of the formula holds.
@@ -161,19 +199,35 @@ defmodule Muro.Family.Graph do
     end
   end
 
-  # A held kind is running only when every earlier instance of its key
-  # that was already known at that opening is resolved. A kind that is
-  # never held has no such obligation.
+  # A kind held on earlier instances is running only when every earlier
+  # instance of its key that was already known at that opening is resolved.
+  # A kind held while any other instance of its key is open is running
+  # only when no other instance known at that opening is still running.
+  # A kind that is never held has no such obligation.
   @doc false
   def respects?(g, state) do
     Enum.all?(g.instances, fn inst ->
       case phase(state, inst.id) do
         {:run, _, _, mask} ->
-          g.rules[inst.kind] == :never or earlier_clear?(g, state, inst, mask)
+          case g.rules[inst.kind] do
+            :never -> true
+            :earlier -> earlier_clear?(g, state, inst, mask)
+            :any -> any_clear?(g, state, inst)
+          end
 
         _ ->
           true
       end
+    end)
+  end
+
+  # Another instance of the key that was known at this opening and is
+  # still running means this instance opened beside it. One that arrives
+  # later was not known, and a kind that is never held may open then.
+  defp any_clear?(g, state, inst) do
+    Enum.all?(g.instances, fn other ->
+      other.id == inst.id or other.key != inst.key or
+        not (running?(phase(state, other.id)) and known_at_open?(state, inst.id, other.id))
     end)
   end
 
@@ -278,7 +332,7 @@ defmodule Muro.Family.Graph do
         instantiate_to(p, q, binders, g.keys)
 
       {:ok, _} ->
-        {:error, "a family formula names opened, held, or resolved"}
+        {:error, "a family formula names opened, held, resolved, or earlier_resolved"}
     end
   end
 
@@ -322,7 +376,8 @@ defmodule Muro.Family.Graph do
   defp subst({:or, p, q}, var, key), do: {:or, subst(p, var, key), subst(q, var, key)}
   defp subst({:imp, p, q}, var, key), do: {:imp, subst(p, var, key), subst(q, var, key)}
 
-  defp subst({atom, name, kind}, var, key) when atom in [:opened, :held, :resolved] do
+  defp subst({atom, name, kind}, var, key)
+       when atom in [:opened, :held, :resolved, :earlier_resolved] do
     {atom, if(name == var, do: key, else: name), kind}
   end
 
@@ -344,6 +399,18 @@ defmodule Muro.Family.Graph do
   defp holds(g, state, {:held, key, kind}) do
     Enum.any?(g.instances, fn inst ->
       inst.key == key and inst.kind == kind and phase(state, inst.id) == :held
+    end)
+  end
+
+  # Every earlier instance of this key and constructor, relative to each
+  # one that is opening. The opening instance is not earlier than itself.
+  # An earlier instance counts when it was known at that opening. One
+  # that arrives later does not refute the atom while this opening runs.
+  # When nothing of that key and constructor is running, the atom holds.
+  defp holds(g, state, {:earlier_resolved, key, kind}) do
+    Enum.all?(g.instances, fn inst ->
+      inst.key != key or inst.kind != kind or not running?(phase(state, inst.id)) or
+        earlier_of?(g, state, inst)
     end)
   end
 
@@ -373,6 +440,18 @@ defmodule Muro.Family.Graph do
       not Enum.any?(runners, fn other ->
         other.id != inst.id and not known_at_open?(state, other.id, inst.id)
       end)
+  end
+
+  # Earlier means a smaller creation index of the same key and constructor.
+  # The opening instance is not earlier than itself. An earlier instance
+  # counts when it was known at that opening.
+  defp earlier_of?(g, state, inst) do
+    Enum.all?(g.instances, fn other ->
+      other.key != inst.key or other.kind != inst.kind or other.id == inst.id or
+        other.index >= inst.index or
+        not known_at_open?(state, inst.id, other.id) or
+        resolved?(phase(state, other.id))
+    end)
   end
 
   # `@bound` is one retry. `instances/2` is the fixed script. The
@@ -460,15 +539,56 @@ defmodule Muro.Family.Graph do
 
   # `never` opens on arrival, including a second init of a key whose
   # first init is still running. `earlier` opens when every earlier
-  # known instance of the key is resolved. An instance that has not
-  # arrived is not unresolved.
+  # known instance of the key is resolved. `any` opens when no other
+  # instance of the key is open. This instance does not hold itself,
+  # and a held instance is not open, so it does not hold another.
+  # An instance that has not arrived is not unresolved.
   defp opens?(g, state, inst) do
-    g.rules[inst.kind] == :never or
-      Enum.all?(g.instances, fn other ->
-        other.key != inst.key or other.index >= inst.index or
-          not unresolved?(phase(state, other.id))
-      end)
+    case g.rules[inst.kind] do
+      :never ->
+        true
+
+      :earlier ->
+        Enum.all?(g.instances, fn other ->
+          other.key != inst.key or other.index >= inst.index or
+            not unresolved?(phase(state, other.id))
+        end)
+
+      :any ->
+        Enum.all?(g.instances, fn other ->
+          other.id == inst.id or other.key != inst.key or not running?(phase(state, other.id))
+        end)
+    end
   end
+
+  @doc false
+  def openable(g, state) do
+    for inst <- g.instances,
+        phase(state, inst.id) == :held and opens?(g, state, inst),
+        do: inst.id
+  end
+
+  # A held instance becomes resolved and the meeting does not run.
+  # Absent is not an instance the host has been given. Gave up counts
+  # as resolved. This step is not taken by `reachable/1`.
+  @doc false
+  def withdraw(_g, state, id) when is_integer(id) do
+    cond do
+      id < 0 or id >= tuple_size(state) ->
+        {:error, {:unknown, id}}
+
+      true ->
+        case phase(state, id) do
+          :held -> {:ok, put_phase(state, id, :resolved)}
+          :absent -> {:error, {:unknown, id}}
+          :resolved -> {:error, {:resolved, id}}
+          :gave_up -> {:error, {:resolved, id}}
+          {:run, _, _, _} -> {:error, {:opened, id}}
+        end
+    end
+  end
+
+  def withdraw(_g, _state, id), do: {:error, {:unknown, id}}
 
   defp meet_steps(g, state, inst, conf, attempt, known) do
     Enum.map(Meet.steps_of(g.meet, conf), fn {who, dest} ->
