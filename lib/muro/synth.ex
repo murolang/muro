@@ -61,17 +61,102 @@ defmodule Muro.Synth do
   @doc """
   Evaluate `pred` at `state`. `feat.(feature, state)` is one test.
   """
-  def eval(true, _feat, _state), do: true
-  def eval(false, _feat, _state), do: false
-  def eval({:feat, feature}, feat, state), do: feat.(feature, state)
-  def eval({:and, p, q}, feat, state), do: eval(p, feat, state) and eval(q, feat, state)
-  def eval({:or, p, q}, feat, state), do: eval(p, feat, state) or eval(q, feat, state)
-  def eval({:not, p}, feat, state), do: not eval(p, feat, state)
-  def eval({:self, _stem, _action, nil}, _feat, _state), do: false
-  def eval({:self, _stem, _action, feature}, feat, state), do: feat.(feature, state)
+  def eval(pred, feat, state) do
+    {:ok, value, :infinity} = eval(pred, feat, state, :infinity)
+    value
+  end
 
-  def eval({:other, _stem, _action, features}, feat, state) when is_list(features) do
-    Enum.any?(features, &feat.(&1, state))
+  @doc """
+  Evaluate `pred` at `state` under a fuel bound.
+
+  One unit of fuel is one predicate constructor this walk visits, in
+  `eval/3`'s order, including the short-circuit of `and` and `or`. An
+  `other` spends one unit for its constructor and one unit for each
+  column it reads.
+
+  `fuel` is a non-negative integer, or `:infinity` for an unbounded
+  walk. The result is `{:ok, value, fuel_left}` when the walk finishes,
+  and `:out_of_fuel` when a constructor is needed and no fuel remains.
+  `:infinity` never returns `:out_of_fuel`.
+  """
+  def eval(true, _feat, _state, fuel) do
+    case charge(fuel) do
+      {:ok, left} -> {:ok, true, left}
+      :out_of_fuel -> :out_of_fuel
+    end
+  end
+
+  def eval(false, _feat, _state, fuel) do
+    case charge(fuel) do
+      {:ok, left} -> {:ok, false, left}
+      :out_of_fuel -> :out_of_fuel
+    end
+  end
+
+  def eval({:feat, feature}, feat, state, fuel) do
+    case charge(fuel) do
+      {:ok, left} -> {:ok, feat.(feature, state), left}
+      :out_of_fuel -> :out_of_fuel
+    end
+  end
+
+  def eval({:not, pred}, feat, state, fuel) do
+    case charge(fuel) do
+      :out_of_fuel ->
+        :out_of_fuel
+
+      {:ok, left} ->
+        case eval(pred, feat, state, left) do
+          {:ok, value, rest} -> {:ok, not value, rest}
+          :out_of_fuel -> :out_of_fuel
+        end
+    end
+  end
+
+  def eval({:and, p, q}, feat, state, fuel) do
+    case charge(fuel) do
+      :out_of_fuel ->
+        :out_of_fuel
+
+      {:ok, left} ->
+        case eval(p, feat, state, left) do
+          {:ok, false, rest} -> {:ok, false, rest}
+          {:ok, true, rest} -> eval(q, feat, state, rest)
+          :out_of_fuel -> :out_of_fuel
+        end
+    end
+  end
+
+  def eval({:or, p, q}, feat, state, fuel) do
+    case charge(fuel) do
+      :out_of_fuel ->
+        :out_of_fuel
+
+      {:ok, left} ->
+        case eval(p, feat, state, left) do
+          {:ok, true, rest} -> {:ok, true, rest}
+          {:ok, false, rest} -> eval(q, feat, state, rest)
+          :out_of_fuel -> :out_of_fuel
+        end
+    end
+  end
+
+  def eval({:self, _stem, _action, nil}, _feat, _state, fuel) do
+    case charge(fuel) do
+      {:ok, left} -> {:ok, false, left}
+      :out_of_fuel -> :out_of_fuel
+    end
+  end
+
+  def eval({:self, _stem, _action, feature}, feat, state, fuel) do
+    eval({:feat, feature}, feat, state, fuel)
+  end
+
+  def eval({:other, _stem, _action, features}, feat, state, fuel) when is_list(features) do
+    case charge(fuel) do
+      :out_of_fuel -> :out_of_fuel
+      {:ok, left} -> any_column(features, feat, state, left)
+    end
   end
 
   @doc """
@@ -980,4 +1065,24 @@ defmodule Muro.Synth do
   end
 
   defp consistent?(pred, {state, bit}, feat), do: eval(pred, feat, state) == bit
+
+  defp any_column([], _feat, _state, fuel), do: {:ok, false, fuel}
+
+  defp any_column([feature | rest], feat, state, fuel) do
+    case charge(fuel) do
+      :out_of_fuel ->
+        :out_of_fuel
+
+      {:ok, left} ->
+        if feat.(feature, state) do
+          {:ok, true, left}
+        else
+          any_column(rest, feat, state, left)
+        end
+    end
+  end
+
+  defp charge(:infinity), do: {:ok, :infinity}
+  defp charge(fuel) when is_integer(fuel) and fuel > 0, do: {:ok, fuel - 1}
+  defp charge(fuel) when is_integer(fuel) and fuel <= 0, do: :out_of_fuel
 end

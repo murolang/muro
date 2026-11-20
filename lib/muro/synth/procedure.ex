@@ -100,7 +100,7 @@ defmodule Muro.Synth.Procedure do
 
   @doc false
   def no_step_message do
-    "the book has no step and observations to synthesize against"
+    "the book has no step and no observations to synthesize against"
   end
 
   @doc """

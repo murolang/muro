@@ -146,6 +146,7 @@ defmodule Muro.SynthProcedureTest do
 
   test "a book with no step is refused and an unknown --on lists traces" do
     message = Procedure.no_step_message()
+    assert message == "the book has no step and no observations to synthesize against"
     refute message =~ "--on"
 
     for path <- ["examples/sort.muro", "examples/half_ok.muro"] do

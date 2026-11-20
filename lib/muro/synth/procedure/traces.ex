@@ -151,106 +151,34 @@ defmodule Muro.Synth.Procedure.Traces do
     end)
   end
 
-  defp eval_step(true, _feat, _state, fuel) do
-    case charge(fuel) do
-      {:ok, left} -> {:ok, true, left}
-      :out_of_fuel -> :out_of_fuel
+  defp eval_step(pred, feat, state, fuel) do
+    case pred do
+      true ->
+        Synth.eval(pred, feat, state, fuel)
+
+      false ->
+        Synth.eval(pred, feat, state, fuel)
+
+      {:feat, _} ->
+        Synth.eval(pred, feat, state, fuel)
+
+      {:not, _} ->
+        Synth.eval(pred, feat, state, fuel)
+
+      {:and, _, _} ->
+        Synth.eval(pred, feat, state, fuel)
+
+      {:or, _, _} ->
+        Synth.eval(pred, feat, state, fuel)
+
+      {:self, _, _, _} ->
+        Synth.eval(pred, feat, state, fuel)
+
+      {:other, _, _, features} when is_list(features) ->
+        Synth.eval(pred, feat, state, fuel)
+
+      other ->
+        raise ArgumentError, "not a predicate: #{inspect(other)}"
     end
   end
-
-  defp eval_step(false, _feat, _state, fuel) do
-    case charge(fuel) do
-      {:ok, left} -> {:ok, false, left}
-      :out_of_fuel -> :out_of_fuel
-    end
-  end
-
-  defp eval_step({:feat, feature}, feat, state, fuel) do
-    case charge(fuel) do
-      {:ok, left} -> {:ok, feat.(feature, state), left}
-      :out_of_fuel -> :out_of_fuel
-    end
-  end
-
-  defp eval_step({:not, pred}, feat, state, fuel) do
-    case charge(fuel) do
-      :out_of_fuel ->
-        :out_of_fuel
-
-      {:ok, left} ->
-        case eval_step(pred, feat, state, left) do
-          {:ok, value, rest} -> {:ok, not value, rest}
-          :out_of_fuel -> :out_of_fuel
-        end
-    end
-  end
-
-  defp eval_step({:and, p, q}, feat, state, fuel) do
-    case charge(fuel) do
-      :out_of_fuel ->
-        :out_of_fuel
-
-      {:ok, left} ->
-        case eval_step(p, feat, state, left) do
-          {:ok, false, rest} -> {:ok, false, rest}
-          {:ok, true, rest} -> eval_step(q, feat, state, rest)
-          :out_of_fuel -> :out_of_fuel
-        end
-    end
-  end
-
-  defp eval_step({:or, p, q}, feat, state, fuel) do
-    case charge(fuel) do
-      :out_of_fuel ->
-        :out_of_fuel
-
-      {:ok, left} ->
-        case eval_step(p, feat, state, left) do
-          {:ok, true, rest} -> {:ok, true, rest}
-          {:ok, false, rest} -> eval_step(q, feat, state, rest)
-          :out_of_fuel -> :out_of_fuel
-        end
-    end
-  end
-
-  defp eval_step({:self, _stem, _action, nil}, _feat, _state, fuel) do
-    case charge(fuel) do
-      {:ok, left} -> {:ok, false, left}
-      :out_of_fuel -> :out_of_fuel
-    end
-  end
-
-  defp eval_step({:self, _stem, _action, feature}, feat, state, fuel) do
-    eval_step({:feat, feature}, feat, state, fuel)
-  end
-
-  defp eval_step({:other, _stem, _action, features}, feat, state, fuel) when is_list(features) do
-    case charge(fuel) do
-      :out_of_fuel -> :out_of_fuel
-      {:ok, left} -> any_column(features, feat, state, left)
-    end
-  end
-
-  defp eval_step(other, _feat, _state, _fuel) do
-    raise ArgumentError, "not a predicate: #{inspect(other)}"
-  end
-
-  defp any_column([], _feat, _state, fuel), do: {:ok, false, fuel}
-
-  defp any_column([feature | rest], feat, state, fuel) do
-    case charge(fuel) do
-      :out_of_fuel ->
-        :out_of_fuel
-
-      {:ok, left} ->
-        if feat.(feature, state) do
-          {:ok, true, left}
-        else
-          any_column(rest, feat, state, left)
-        end
-    end
-  end
-
-  defp charge(fuel) when is_integer(fuel) and fuel > 0, do: {:ok, fuel - 1}
-  defp charge(fuel) when is_integer(fuel) and fuel <= 0, do: :out_of_fuel
 end
