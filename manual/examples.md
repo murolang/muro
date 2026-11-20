@@ -486,16 +486,16 @@ The same book with `signal never held` in place of `signal held while earlier un
 
 ## keyed-commands.muro
 
-One command at a time, stated on the instances created before the one opening.
+Commands of a key open in creation order, stated on the instances created before the one opening. It is not one at a time: an older command that arrives late opens beside a newer one that is running.
 
 ```
 family commands : slot per key of Command
   command held while earlier unresolved
-temporal one-at-a-time : commands :=
+temporal earlier-first : commands :=
   forall (k : key). always ((opened k command) implies (earlier_resolved k command))
 ```
 
-`resolved k command` would count the command that is opening, and that command is not resolved on that step, so the formula would be refused. `mix muro.check` prints `family commands: slot per key of Command`, then `temporal one-at-a-time: holds in 370 reachable states, 835 transitions`. The meeting does not mark a party, so the state machine, Elixir, C, Rust, Zig, JavaScript, assembly, and ExUnit emit it. The formula is omitted. `Commands.withdraw` drops a held command. `held while any unresolved` is the other hold: an older command that arrives while a newer one of the same key is open stays held, and the two do not run together. See [Temporal](temporal.md#a-keyed-family).
+`resolved k command` would count the command that is opening, and that command is not resolved on that step, so the formula would be refused. `mix muro.check` prints `family commands: slot per key of Command`, then `temporal earlier-first: holds in 370 reachable states, 835 transitions`. The meeting does not mark a party, so the state machine, Elixir, C, Rust, Zig, JavaScript, assembly, and ExUnit emit it. The formula is omitted. `Commands.withdraw` drops a held command. `held while any unresolved` is the other hold: an older command that arrives while a newer one of the same key is open stays held, and the two do not run together. See [Temporal](temporal.md#a-keyed-family).
 
 ## place.muro
 

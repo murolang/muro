@@ -3486,9 +3486,12 @@ defmodule Muro.Emit.Fsm do
       id is `{:error, {:opened, id}}`. An id that has resolved or been
       withdrawn is `{:error, {:resolved, id}}`. An id this child never
       returned is `{:error, {:unknown, id}}`. The call does not raise. The
-      live rows are the open and held instances. Ids that have left are
-      remembered so a later withdraw is not reported as unknown. `resolved`
-      of an id that has left is still `{:error, {:unknown, id}}`. A repeat
+      live rows are the open and held instances. Ids come from one counter
+      and are not reused, so an id below the counter that is not live has
+      left. No row is kept for it, and the state does not grow with ids that
+      have left. `resolved` of an id that has left is `{:error, {:unknown,
+      id}}`, as it was before `withdraw`: a repeated resolution is not told
+      apart from an id this child never returned. A repeat
       of a live instance is an error. A repeat of a forgotten instance is a
       new instance. `finish` takes this family's state, the id, and one
       end's session. `:resolve` drops the instance. `:rerun` keeps the row
@@ -3498,7 +3501,7 @@ defmodule Muro.Emit.Fsm do
       that id's session, so the next step starts again.
       \"\"\"
 
-      def new, do: %{n: 0, by: %{}, id: %{}, done: %{}}
+      def new, do: %{n: 0, by: %{}, id: %{}}
 
       def arrive(state, key, kind, index) do
         with {:ok, st} <- read(state),
@@ -3523,7 +3526,7 @@ defmodule Muro.Emit.Fsm do
              {:ok, _kind} <- open_row(rows, index, id, st),
              {:ok, released, rows} <- take_released(Map.delete(rows, index), key, st) do
           by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)
-          next = %{st | by: by, id: Map.delete(st.id, id), done: Map.put(st.done, id, true)}
+          next = %{st | by: by, id: Map.delete(st.id, id)}
           {:ok, released, next}
         else
           {:error, reason} -> {:error, reason}
@@ -3535,7 +3538,7 @@ defmodule Muro.Emit.Fsm do
              {:ok, key, index, rows} <- held_only(st, id),
              {:ok, released, rows} <- take_released(Map.delete(rows, index), key, st) do
           by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)
-          next = %{st | by: by, id: Map.delete(st.id, id), done: Map.put(st.done, id, true)}
+          next = %{st | by: by, id: Map.delete(st.id, id)}
           {:ok, released, next}
         else
           {:error, reason} -> {:error, reason}
@@ -3549,8 +3552,8 @@ defmodule Muro.Emit.Fsm do
       #{rules}
       defp rule(_kind), do: :error
 
-      defp read(%{n: n, by: by, id: ids, done: done} = st)
-           when is_integer(n) and n >= 0 and is_map(by) and is_map(ids) and is_map(done) do
+      defp read(%{n: n, by: by, id: ids} = st)
+           when is_integer(n) and n >= 0 and is_map(by) and is_map(ids) do
         {:ok, st}
       end
 
@@ -3617,9 +3620,13 @@ defmodule Muro.Emit.Fsm do
             {:error, {:state, st}}
 
           :error ->
-            if Map.has_key?(st.done, id), do: {:error, {:resolved, id}}, else: {:error, {:unknown, id}}
+            if left?(st, id), do: {:error, {:resolved, id}}, else: {:error, {:unknown, id}}
         end
       end
+
+      # Ids are handed out from the counter and never reused, so an id
+      # below it that is not live has left. Nothing is kept per left id.
+      defp left?(st, id), do: is_integer(id) and id >= 0 and id < st.n
 
       defp open_row(rows, index, id, st) do
         case Map.fetch(rows, index) do

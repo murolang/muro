@@ -243,7 +243,7 @@ defmodule Muro.FsmFamilyTest do
     parent: parent,
     src: src
   } do
-    assert src =~ "def new, do: %{n: 0, by: %{}, id: %{}, done: %{}}"
+    assert src =~ "def new, do: %{n: 0, by: %{}, id: %{}}"
     assert src =~ "def withdraw(state, id)"
     assert src =~ "def finish(session_state, family_state, id)"
     assert src =~ "def finish(session_state, step, family_state, id)"
