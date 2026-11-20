@@ -7,9 +7,18 @@ defmodule Mix.Tasks.Muro.Synth do
   Search a version space against a checked environment.
 
       mix muro.synth path.muro
+      mix muro.synth path.muro --on traces
       mix muro.synth path.muro --oracle trace
       mix muro.synth path.muro --oracle successor --depth 0
       mix muro.synth path.muro --out out.muro --fuel 2000
+
+  `--on` names the procedure. `traces` is the version-space search
+  on the book's `step` and the observations that `step` supports.
+  It is the only accepted value. A book that defines `step` selects
+  `traces` when `--on` is omitted. A book with no `step` has no
+  observations to synthesize against. The command refuses it, and
+  the message does not name a flag. An unknown `--on` value is
+  refused, and the message lists the accepted values.
 
   The book is checked first. A book that does not check is refused
   (exit 2) and is not searched. The search calls that book's emitted

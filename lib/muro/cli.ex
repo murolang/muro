@@ -70,8 +70,8 @@ defmodule Muro.CLI do
              "    [--max-mutants-per-def N] [--max-survivors N]"
            ], "Change run definitions and report which evidence still holds."},
           {[
-             "synth path.muro [--oracle NAME] [--depth N] [--fuel N]",
-             "    [--out out.muro] [--json]"
+             "synth path.muro [--on NAME] [--oracle NAME] [--depth N]",
+             "    [--fuel N] [--out out.muro] [--json]"
            ], "Search a version space. Exit 0 is a checked homomorphism."},
           {"fill path.muro --def NAME [--bound N]",
            "Fill one definition body by search. The checker decides."},

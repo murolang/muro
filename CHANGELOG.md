@@ -18,6 +18,20 @@ The family graph is unchanged. `examples/keyed-slots.muro` stays 171649 reachabl
 
 - Version 0.22.14.
 
+## 0.22.13
+
+`mix muro.synth` runs one procedure. The procedure is `traces`, the version-space search on a book's `step` and the observations that `step` supports. `--on traces` selects it. A book that defines `step` selects it when `--on` is omitted. The search is unchanged: the same candidates, the same order, the same policy book.
+
+A book with no `step` and no observations is refused. It has nothing to synthesize against. `--on` accepts `traces` and no other value.
+
+### Manual
+
+- Synthesis: `--on traces`, the default, and the refusal.
+
+### Package
+
+- Version 0.22.13.
+
 ## 0.22.12
 
 A keyed family holds a `signal` while an earlier instance of its key, already arrived, is unresolved. That rule is proved for any number of keys and any number of instances. An opened `signal` has every earlier instance of its key that had already arrived resolved. An instance that arrives later can still be live beside it. Arrival, resolve, and rerun keep the rule. A held `signal` opens in the step that resolves the last earlier instance of its key. Whether an instance is held depends only on its own key.

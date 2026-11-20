@@ -1013,8 +1013,16 @@ defmodule Muro.SynthLoopTest do
 
     bare = Path.join(dir, "book.muro")
     File.write!(bare, "def one : run Nat := 0\n")
-    assert {:exit, 2, "", lines} = Muro.CLI.Synth.run([bare])
-    assert Enum.join(lines, "\n") =~ "does not define State"
+    assert {:exit, 2, "", [message]} = Muro.CLI.Synth.run([bare])
+    assert message == Muro.Synth.Procedure.no_step_message()
+    refute message =~ "--on"
+
+    step = Path.join(dir, "step.muro")
+    File.write!(step, "def step : run Nat := 0\n")
+    assert {:exit, 2, "", lines} = Muro.CLI.Synth.run([step])
+    text = Enum.join(lines, "\n")
+    assert text =~ "does not define State"
+    refute text =~ "no step"
   end
 
   test "unknown oracle, a negative depth, and an existing --out are refusals" do

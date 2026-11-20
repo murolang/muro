@@ -11,11 +11,14 @@ summary: mix muro.synth searches a version space of predicate programs on a chec
 
 ```
 mix muro.synth path.muro
+mix muro.synth path.muro --on traces
 mix muro.synth path.muro --oracle trace
 mix muro.synth path.muro --oracle successor --depth 0
 mix muro.synth path.muro --out out.muro --fuel 2000
 muro synth path.muro
 ```
+
+`--on` selects the procedure. `traces` is the version-space search on this page, and it is the only procedure. A book that defines `step` selects `traces` when `--on` is omitted. The observations are the ones `step` supports. A book with no `step` and no observations is refused, and the message does not name a flag. An unknown `--on` value is refused, and the message lists the accepted values. The candidates, their order, and the book are the ones this search already writes.
 
 The predicate theory is [CSHRL](cshrl.md). `examples/cshrl/envs/synth_bit.muro` is the one-bit book: `eval` of `truep` is the deployed policy.
 
@@ -114,6 +117,7 @@ The paper's structural templates are specified for `List ℕ`, and indexed by po
 
 | Flag | Meaning |
 | --- | --- |
+| `--on NAME` | The procedure. `traces` is the version-space search on the book's `step` and the observations that `step` supports. It is the only accepted value. A book that defines `step` selects `traces` when the flag is omitted. A book with no `step` and no observations is refused, and the message does not name a flag. An unknown value is refused, and the message lists the accepted values. |
 | `--oracle NAME` | `trace` (the default), `successor`, or `coind-homo`. |
 | `--depth N` | Initial predicate depth. Default 0. An empty space is searched one depth further. |
 | `--out out.muro` | Write the policy book here. The path must not already exist. A path that is present when the book is written is the same refusal, and the file is not replaced. A write that fails removes the partial file. Without this flag the book is printed on standard output and nothing is written. That book's environment import is relative to the current directory. |
@@ -124,4 +128,4 @@ The paper's structural templates are specified for `List ℕ`, and indexed by po
 | --- | --- |
 | 0 | The output book checks and contains the homomorphism for the synthesized ranking, on the `step` the search called. `trace` and `coind-homo` check `CoindHomo`. `successor` checks `CoinductiveHomomorphism`. |
 | 1 | The report names an empty version space, a counterexample, a homomorphism that is not derivable, an oracle that cannot label a pair, features that cannot separate two carriers, or a policy whose environment does not define the homomorphism. A book that typechecks and does not contain that evidence is this exit. |
-| 2 | The book does not check, it does not follow the environment convention, the oracle name is unknown, `--out` already exists, or a policy book or a temporary book cannot be written. The diagnostic is the one the write returned. |
+| 2 | The book does not check, it does not follow the environment convention, it has no `step` and no observations to synthesize against, `--on` is not an accepted value, the oracle name is unknown, `--out` already exists, or a policy book or a temporary book cannot be written. The diagnostic is the one the command returned. |
