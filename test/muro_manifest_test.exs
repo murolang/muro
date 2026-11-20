@@ -539,6 +539,46 @@ defmodule Muro.ManifestTest do
     assert imports =~ "modules entry 1: imports: is only valid for kind: :exunit"
   end
 
+  test "refuses pytest entries that fold to one MURO_IMPL variable" do
+    dir = tmp_dir()
+    write_book(dir, "foo-bar.muro")
+    write_book(dir, "foo_bar.muro")
+    write_book(dir, "nested/foo-bar.muro")
+    write_book(dir, "kept.muro")
+
+    assert {:error, message} =
+             Muro.Manifest.validate(
+               [
+                 muro: "1.0.0",
+                 modules: [
+                   {"foo-bar.muro", "test/a.py", [kind: :pytest]},
+                   {"kept.muro", "test/kept.py", [kind: :pytest]},
+                   {"foo_bar.muro", "test/b.py", [kind: :pytest]},
+                   {"nested/foo-bar.muro", "test/c.py", [kind: :pytest]}
+                 ]
+               ],
+               dir
+             )
+
+    assert message =~
+             "MURO_IMPL_FOO_BAR is shared by pytest modules entries 1 (foo-bar.muro), 3 (foo_bar.muro), 4 (nested/foo-bar.muro)"
+
+    assert {:ok, manifest} =
+             Muro.Manifest.validate(
+               [
+                 muro: "1.0.0",
+                 modules: [
+                   {"foo-bar.muro", FooBar, "test/a_test.exs", [kind: :exunit]},
+                   {"foo_bar.muro", FooUnderscore, "test/b_test.exs", [kind: :exunit]},
+                   {"kept.muro", "test/kept.py", [kind: :pytest]}
+                 ]
+               ],
+               dir
+             )
+
+    assert Enum.map(manifest.modules, & &1.kind) == [:exunit, :exunit, :pytest]
+  end
+
   test "version pin names both versions" do
     assert Muro.Manifest.version_pin("0.18.3", "0.18.3") == :ok
 

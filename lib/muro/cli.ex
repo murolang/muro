@@ -58,7 +58,7 @@ defmodule Muro.CLI do
           {"check [path.muro] [--fuel N]",
            "Type-check a book, or the built-in book when the path is omitted."},
           {"emit path.muro [--backend NAME] [--node NAME] [--imports]",
-           "Emit run code: elixir, c, rust, zig, asm, js, otp, fsm, exunit, or mbi."},
+           "Emit run code: elixir, c, rust, zig, asm, js, otp, fsm, exunit, pytest, or mbi."},
           {"gen [--check] [--skip-check]",
            "Write the modules the manifest names. --check only compares. Each book is type-checked once. --skip-check does not type-check."},
           {"init [--ci github] [--backend NAME] [--cargo-metadata]",

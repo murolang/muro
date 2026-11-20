@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.9
+## 0.22.11
 
 `mix muro.synth` runs one procedure. The procedure is `traces`, the version-space search on a book's `step` and the observations that `step` supports. `--on traces` selects it. A book that defines `step` selects it when `--on` is omitted. The search is unchanged: the same candidates, the same order, the same policy book.
 
@@ -9,6 +9,39 @@ A book with no `step` and no observations is refused. It has nothing to synthesi
 ### Manual
 
 - Synthesis: `--on traces`, the default, and the refusal.
+
+### Package
+
+- Version 0.22.11.
+
+## 0.22.10
+
+`mix muro.emit path.muro --backend pytest` prints one pytest module for the book's closed equations, the same equations `--backend exunit` collects. `mix muro.gen` writes it when an entry sets `kind: :pytest`. Each equation is one test. A skip is a `pytest.mark.skip` test, named in the reason, and is not dropped. A file of unsupplied `param`s is a suite, as it is for ExUnit.
+
+The tests call a Python module the host names. The default is the file stem (`rounding.muro` calls `rounding.round`). `--impl` and `impl:` bake another module into the file. `MURO_IMPL_<STEM>` overrides that module when the tests run, and the file does not change. A `Nat` is an int. A word is an int: `U8`, `U32`, and `U64` are the residue, and `I64` is the signed value. A constructor with no fields is its name as a str. A constructor with fields is a tuple with the name first. A pair is a 2-tuple. `tt` is `None`. A string literal is a str. A bytes literal is a bytes value. A function, a stream, or a value with no Python literal is a skip.
+
+That encoding is not injective across types. A string and a nullary constructor are both a str. A `Nat` and a `U8` are both an int. A same-type literal is sound.
+
+`MURO_IMPL_<STEM>` folds the book stem: a hyphen becomes `_`, any other character outside `[A-Za-z0-9_]` becomes `_`, and the result is uppercased. `foo-bar.muro` and `foo_bar.muro` are both `MURO_IMPL_FOO_BAR`. `mix muro.gen` refuses a manifest whose pytest entries fold to one variable.
+
+### Manual
+
+- Closed equations as tests, Pytest, Emit, Committed modules, and The executable: the pytest module, the value encoding, and how the implementation is chosen.
+
+### Package
+
+- Version 0.22.10.
+
+## 0.22.9
+
+CI runs the Agda job only when it has something to check. A new `Changes` job diffs a pull request against its base with git. The Agda job runs when the pull request changes a file under `agda/`, the `Makefile`, or a file under `.github/workflows/`, and on every push to main and every manual run. On any other pull request the `Agda 2.8.0` check reports as skipped, and a required check counts a skipped job as passing. If the `Changes` job fails, Agda runs. `make agda` reads only those files, so a skipped run could not have had another result. The Agda job also waits for the Elixir job, so Elixir gets a runner first.
+
+The Hex publish and the tag are now the `Hex and tag` job in CI, and the Publish workflow is removed. The job needs the Elixir job and runs only for a push to main, so it is queued after Elixir succeeds and never holds a runner while it waits. Before, the Publish job held one runner while it polled for the Elixir check. That check could not start while the other runner was on Agda, and the poll timed out after 25 minutes. The rest is unchanged: the publish is skipped when the version is already on Hex, it uses `HEX_API_KEY`, it pushes the annotated tag if it is missing, and the `publish-hex-main` group is on that job only. The `Binaries` job then calls the Release workflow in its own group, so the binaries never delay the publish. A push to main now gets a CI concurrency group of its own commit, so a later merge does not cancel an earlier publish. A pull request still cancels its own older run. Every job still runs on `vars.CI_RUNNER`.
+
+### Manual
+
+- README and Extending the kernel: when CI runs `make agda`.
+- The executable, For agents, and AGENTS.md: the `Hex and tag` job in CI publishes after the Elixir job.
 
 ### Package
 
