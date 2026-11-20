@@ -137,7 +137,7 @@ make agda
 
 `make agda` is `agda --no-libraries -i agda -i vendor/agda-stdlib/src --safe`, first on the theorem modules (`Muro.Wall`, `Muro.Consistency`, `Muro.Frag`, `Muro.Tag`, `Muro.Check`, `Muro.Soundness`, which import `Muro.Typing`, `Muro.Data`, `Muro.Convert`, `Muro.Reduction`, `Muro.Spine`, `Muro.SubstLemmas`, `Muro.Soundness.Conv`, `Muro.Soundness.Views`), then on the whole tree with the examples. `make agda-soundness` checks `Muro.Soundness` alone; it takes about ten minutes. The stdlib checkout ships extra `.agda-lib` files that must not be loaded.
 
-CI runs the Elixir job and `make agda` on every push and pull request.
+CI runs the Elixir job on every push and pull request. It runs `make agda` on every push to main, on a manual run, and on a pull request that changes `agda/`, the `Makefile`, or a file under `.github/workflows/`. On any other pull request the Agda check reports as skipped, which the required check accepts.
 
 ## Named FOAS (parser output)
 
