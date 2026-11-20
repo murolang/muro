@@ -7,8 +7,9 @@ defmodule Muro.Family do
   `leads_to` are decided on the fixed script in `Muro.Family.Graph`.
   A formula over a family that does not check is
   `skipped because <family> does not check`, and the formula is not walked.
-  That search checks the generated dispatcher. The hold rule is proved
-  in `agda/Muro/Family.agda`. `Muro.Family.Step` is that step.
+  That search checks the generated dispatcher. The hold rule
+  `held while earlier unresolved` is proved in `agda/Muro/Family.agda`.
+  `Muro.Family.Step` is that step.
   """
 
   @run_msg "temporal formulas do not mention run definitions"
@@ -231,7 +232,7 @@ defmodule Muro.Family do
   end
 
   defp walk_formula(_book, _data, _env, _other) do
-    {:error, "a family formula names opened, held, or resolved"}
+    {:error, "a family formula names opened, held, resolved, or earlier_resolved"}
   end
 
   defp walk_prop(_book, _data, _env, true), do: :ok
@@ -251,12 +252,13 @@ defmodule Muro.Family do
     with :ok <- walk_prop(book, data, env, p), do: walk_prop(book, data, env, q)
   end
 
-  defp walk_prop(book, data, env, {atom, key, kind}) when atom in [:opened, :held, :resolved] do
+  defp walk_prop(book, data, env, {atom, key, kind})
+       when atom in [:opened, :held, :resolved, :earlier_resolved] do
     with :ok <- expect_key(book, env, atom, key), do: expect_ctor(data, kind)
   end
 
   defp walk_prop(_book, _data, _env, _other) do
-    {:error, "a family formula names opened, held, or resolved"}
+    {:error, "a family formula names opened, held, resolved, or earlier_resolved"}
   end
 
   defp expect_key(book, env, atom, key) do

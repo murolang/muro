@@ -1,16 +1,81 @@
 # Changelog
 
-## 0.22.8
+## 0.22.12
 
 A keyed family holds a `signal` while an earlier instance of its key, already arrived, is unresolved. That rule is proved for any number of keys and any number of instances. An opened `signal` has every earlier instance of its key that had already arrived resolved. An instance that arrives later can still be live beside it. Arrival, resolve, and rerun keep the rule. A held `signal` opens in the step that resolves the last earlier instance of its key. Whether an instance is held depends only on its own key.
 
 A state that breaks the rule, however many keys it has, already breaks it on one key and two instances. Those two sit on the script the family graph explores for key `a`: an `init` before a `signal`, or a `signal` before a later `signal`.
 
-The family graph is unchanged: 171649 reachable states, 729184 transitions. That search checks the generated dispatcher on the fixed script. It is a regression check of that program. It is not this proof. The program that writes the dispatcher is not proved. `init` is never held. `finish` is still `:resolve` or `:rerun`.
+The family graph for that script is unchanged: 171649 reachable states, 729184 transitions. That search checks the generated dispatcher on the fixed script. It is a regression check of that program. It is not this proof. The program that writes the dispatcher is not proved. `init` is never held. `finish` is still `:resolve` or `:rerun`. `held while any unresolved`, withdrawing a held instance, and `earlier_resolved` stay the Elixir check.
 
 ### Manual
 
 - Temporal, Limits, State machines, Examples, and Extending: the hold rule is proved for any number of keys. The family graph remains the check of the generated dispatcher.
+
+### Package
+
+- Version 0.22.12.
+
+## 0.22.11
+
+A family formula can name the instances created before the one that is opening. `earlier_resolved k command` is every earlier instance of that key and that kind. `resolved k command` still counts the instance that is opening, so that atom cannot state that a command opens only once every earlier command of its key has resolved. `examples/keyed-commands.muro` states the property with `earlier_resolved`, and the command is held while an earlier one is unresolved. The commands of a key open in creation order. That is not one at a time: an older command that arrives late opens beside a newer one that is running. An instance that has not arrived does not count, and neither does one that arrives while this one is still running. Giving up counts as resolved. When nothing of that key and kind is running, the atom holds.
+
+`withdraw(state, id)` resolves a held instance without opening it, and returns the instances that this releases, the same shape as `resolved`. An open instance, one that has already left, and one the dispatcher has never returned cannot be withdrawn. `resolved` of an id that has left is still unknown. The state keeps nothing for an id that has left: ids come from one counter and are not reused, so an id below the counter that is not live has left. A later held instance of that key opens once the earlier ones are gone, the same as after a resolution. `check_trace` accepts `{:withdraw, id}` on the same rule.
+
+`held while any unresolved` holds an instance while any other instance of the same key is open. The instance is not held by itself, and another held instance does not hold it. The dispatcher opens at most one such instance of a key, the one with the least creation index. When that release also opens an instance held behind an earlier one, the instances held by any open one stay held. An older command that arrives while a newer one of the same key is running stays held. Under `held while earlier unresolved` that older command opens. The family graph lets any openable instance open, so it holds every choice the dispatcher makes and more. Tests walk every dispatcher step under `held while any unresolved`, and under `earlier` and `any` in one family, as a run of that graph, with the same refusals.
+
+The family graph for `examples/keyed-slots.muro` stays 171649 states and 729184 transitions. Withdrawing a held instance is a step the host takes. It is not an edge of the counted script, so a held signal is still opened by that script. `examples/keyed-commands.muro` holds its formula in 370 reachable states and 835 transitions. These checks are the family graph and the emitted dispatcher. They are not an Agda proof. `agda/Muro/Temporal.agda` is unchanged.
+
+### Manual
+
+- Grammar, Temporal, State machines, Limits, Examples, Emit, and Extending: `earlier_resolved`, withdrawing a held instance, and `held while any unresolved`.
+
+### Package
+
+- Version 0.22.11.
+
+## 0.22.10
+
+`mix muro.emit path.muro --backend pytest` prints one pytest module for the book's closed equations, the same equations `--backend exunit` collects. `mix muro.gen` writes it when an entry sets `kind: :pytest`. Each equation is one test. A skip is a `pytest.mark.skip` test, named in the reason, and is not dropped. A file of unsupplied `param`s is a suite, as it is for ExUnit.
+
+The tests call a Python module the host names. The default is the file stem (`rounding.muro` calls `rounding.round`). `--impl` and `impl:` bake another module into the file. `MURO_IMPL_<STEM>` overrides that module when the tests run, and the file does not change. A `Nat` is an int. A word is an int: `U8`, `U32`, and `U64` are the residue, and `I64` is the signed value. A constructor with no fields is its name as a str. A constructor with fields is a tuple with the name first. A pair is a 2-tuple. `tt` is `None`. A string literal is a str. A bytes literal is a bytes value. A function, a stream, or a value with no Python literal is a skip.
+
+That encoding is not injective across types. A string and a nullary constructor are both a str. A `Nat` and a `U8` are both an int. A same-type literal is sound.
+
+`MURO_IMPL_<STEM>` folds the book stem: a hyphen becomes `_`, any other character outside `[A-Za-z0-9_]` becomes `_`, and the result is uppercased. `foo-bar.muro` and `foo_bar.muro` are both `MURO_IMPL_FOO_BAR`. `mix muro.gen` refuses a manifest whose pytest entries fold to one variable.
+
+### Manual
+
+- Closed equations as tests, Pytest, Emit, Committed modules, and The executable: the pytest module, the value encoding, and how the implementation is chosen.
+
+### Package
+
+- Version 0.22.10.
+
+## 0.22.9
+
+CI runs the Agda job only when it has something to check. A new `Changes` job diffs a pull request against its base with git. The Agda job runs when the pull request changes a file under `agda/`, the `Makefile`, or a file under `.github/workflows/`, and on every push to main and every manual run. On any other pull request the `Agda 2.8.0` check reports as skipped, and a required check counts a skipped job as passing. If the `Changes` job fails, Agda runs. `make agda` reads only those files, so a skipped run could not have had another result. The Agda job also waits for the Elixir job, so Elixir gets a runner first.
+
+The Hex publish and the tag are now the `Hex and tag` job in CI, and the Publish workflow is removed. The job needs the Elixir job and runs only for a push to main, so it is queued after Elixir succeeds and never holds a runner while it waits. Before, the Publish job held one runner while it polled for the Elixir check. That check could not start while the other runner was on Agda, and the poll timed out after 25 minutes. The rest is unchanged: the publish is skipped when the version is already on Hex, it uses `HEX_API_KEY`, it pushes the annotated tag if it is missing, and the `publish-hex-main` group is on that job only. The `Binaries` job then calls the Release workflow in its own group, so the binaries never delay the publish. A push to main now gets a CI concurrency group of its own commit, so a later merge does not cancel an earlier publish. A pull request still cancels its own older run. Every job still runs on `vars.CI_RUNNER`.
+
+### Manual
+
+- README and Extending the kernel: when CI runs `make agda`.
+- The executable, For agents, and AGENTS.md: the `Hex and tag` job in CI publishes after the Elixir job.
+
+### Package
+
+- Version 0.22.9.
+
+## 0.22.8
+
+A merge to main publishes that `mix.exs` version to Hex once the Elixir CI job on that commit is green, then pushes the annotated tag `vX.Y.Z` if it is missing. The publish does not wait for Agda or muro_visor. The publish is skipped when the version is already on Hex. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. The binaries are built only when this commit published the version or created the tag, and that job does not delay the publish. `muro_visor` is not published this way: Hex stages it, and it still needs 2FA.
+
+The repository secret `HEX_API_KEY` is required the first time a version is published. A missing secret fails the publish job with a clear error and does not print the key. Generate one with `mix hex.user key generate --key-name muro-ci --permission api:write` and add it as `HEX_API_KEY` on murolang/muro. The Publish, Release, and CI workflows run on `vars.CI_RUNNER` and do not fall back to a GitHub-hosted runner.
+
+### Manual
+
+- The executable, For agents, and AGENTS.md: a merge publishes the Hex package and the tag, and `muro_visor` is not included.
 
 ### Package
 

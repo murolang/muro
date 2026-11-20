@@ -64,6 +64,13 @@ defmodule Muro.CliTest do
       "exunit"
     ])
 
+    assert_same(fn -> Mix.Tasks.Muro.Emit.run([half, "--backend", "pytest"]) end, [
+      "emit",
+      half,
+      "--backend",
+      "pytest"
+    ])
+
     assert_same(fn -> Mix.Tasks.Muro.Emit.run([half, "--backend", "nope"]) end, [
       "emit",
       half,
@@ -336,10 +343,14 @@ defmodule Muro.CliTest do
     assert text =~ "zig-${zarch}-linux-0.15.2"
     assert text =~ "0.15.2"
     assert text =~ "scripts/release-linux-smoke.sh"
-    assert text =~ "vars.CI_RUNNER || 'ubuntu-24.04'"
+    assert text =~ "vars.CI_RUNNER"
 
-    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \|\| 'ubuntu-24\.04' \}\}/, text)) ==
-             1
+    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, text)) == 1
+
+    refute text =~ "vars.CI_RUNNER ||"
+    assert text =~ "inputs.tag || github.sha"
+    assert text =~ "inputs.tag || github.ref_name"
+    refute text =~ "github.event_name == 'workflow_call'"
 
     assert smoke =~ "muro --version"
     assert smoke =~ "muro check"
@@ -359,6 +370,77 @@ defmodule Muro.CliTest do
     assert after_smoke =~ "--clobber"
     assert after_smoke =~ "inputs.dry_run"
     assert after_smoke =~ "github.event_name != 'pull_request'"
+  end
+
+  test "CI publishes to Hex after Elixir on main and calls the release workflow" do
+    release = File.read!(".github/workflows/release.yml")
+    ci = File.read!(".github/workflows/ci.yml")
+    refute File.exists?(".github/workflows/publish.yml")
+    [_, text] = String.split(ci, "\n  publish:\n", parts: 2)
+
+    assert text =~ "vars.CI_RUNNER"
+    refute text =~ "vars.CI_RUNNER ||"
+    refute release =~ "vars.CI_RUNNER ||"
+    refute ci =~ "vars.CI_RUNNER ||"
+    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, text)) == 1
+    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, release)) == 1
+    assert length(Regex.scan(~r/runs-on: \$\{\{ vars\.CI_RUNNER \}\}/, ci)) == 5
+
+    # Agda is gated by the changes job, never by a workflow paths: filter,
+    # so the required Agda check reports (as skipped) on every pull request.
+    refute ci =~ ~r/^\s*paths(-ignore)?:/m
+    assert ci =~ "needs: [changes, elixir]"
+    assert ci =~ "needs.changes.outputs.agda != 'false'"
+    assert ci =~ "git diff --name-only HEAD^1 HEAD"
+    assert ci =~ ~S"^(agda/|Makefile$|\.github/workflows/)"
+
+    # The publish job is queued only after Elixir succeeds, so it never
+    # holds a runner while waiting, and it runs only for a push to main.
+    assert text =~ "needs: elixir"
+    assert text =~ "if: github.event_name == 'push' && github.ref == 'refs/heads/main'"
+    assert text =~ "group: publish-hex-main"
+    refute text =~ "check-runs"
+    refute ci =~ "check_name=Elixir"
+    # A later push to main never cancels an earlier publish.
+    assert ci =~ "github.event_name == 'pull_request' && github.ref || github.sha"
+    assert text =~ "already on Hex"
+    assert text =~ "needed=false"
+    assert text =~ "git push origin"
+    assert text =~ "refs/tags/"
+    assert text =~ "uses: ./.github/workflows/release.yml"
+    assert release =~ "workflow_call:"
+    assert text =~ "needs.publish.outputs.release == 'true'"
+    assert text =~ "steps.plan.outputs.release"
+    assert release =~ "inputs.tag || github.sha"
+    refute release =~ "hex.publish"
+    refute text =~ "cd ui"
+    refute text =~ "packages/muro_visor"
+    assert text =~ "mix hex.publish package --yes"
+    assert text =~ "mix deps.get"
+    assert text =~ "release-binaries-"
+
+    # Every plan outcome: a merge without a version bump is a quiet no-op,
+    # and a needed publish with the tag on another commit stops.
+    assert text =~ "create_tag=true"
+    assert text =~ "release=false"
+    assert text =~ "leaving the tag and skipping the binary build"
+    assert text =~ "was not published."
+    assert text =~ "if: steps.plan.outputs.create_tag == 'true'"
+    assert text =~ "if: steps.hex.outputs.needed == 'true'"
+
+    # The version is checked before any shell uses it, and values reach
+    # run: blocks through env, never through ${{ }} interpolation.
+    assert text =~ "invalid mix.exs version"
+    assert release =~ "invalid mix.exs version"
+
+    for wf <- [ci, release] do
+      for block <-
+            Regex.scan(~r/run: \|\n((?:          .*\n|\s*\n)+)/, wf, capture: :all_but_first) do
+        refute hd(block) =~ "${{"
+      end
+    end
+
+    refute text =~ "actions: read"
   end
 
   defp assert_same(fun, argv, cd \\ nil) do

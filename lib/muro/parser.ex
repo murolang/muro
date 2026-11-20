@@ -1293,7 +1293,7 @@ defmodule Muro.Parser do
 
           word_kw?(rest, "held") ->
             case hold_while(skip(after_kw(rest, "held"))) do
-              {:ok, rest} -> {:ok, %{ctor: ctor, hold: :earlier}, rest}
+              {:ok, hold, rest} -> {:ok, %{ctor: ctor, hold: hold}, rest}
               :error -> {:error, err(rest, hold_rule())}
             end
 
@@ -1308,15 +1308,26 @@ defmodule Muro.Parser do
 
   defp hold_while(s) do
     with {:ok, rest} <- kw(s, "while"),
-         {:ok, rest} <- kw(skip(rest), "earlier"),
+         {:ok, hold, rest} <- hold_span(skip(rest)),
          {:ok, rest} <- kw(skip(rest), "unresolved") do
-      {:ok, rest}
+      {:ok, hold, rest}
     else
       _ -> :error
     end
   end
 
-  defp hold_rule, do: "expected never held or held while earlier unresolved"
+  # `earlier` is creation order. `any` is every other instance of the key.
+  defp hold_span(s) do
+    cond do
+      word_kw?(s, "earlier") -> {:ok, :earlier, after_kw(s, "earlier")}
+      word_kw?(s, "any") -> {:ok, :any, after_kw(s, "any")}
+      true -> :error
+    end
+  end
+
+  defp hold_rule do
+    "expected never held, held while earlier unresolved, or held while any unresolved"
+  end
 
   defp parse_formula(s) do
     s = skip(s)
@@ -1512,6 +1523,10 @@ defmodule Muro.Parser do
       has_prefix?(s, "(") ->
         parse_paren(s, &parse_prop/1)
 
+      # `earlier_resolved k command` is the instances before the one opening.
+      word_kw?(s, "earlier_resolved") ->
+        parse_family_atom(s)
+
       # `opened done` stays a role atom. `opened k signal` is an instance.
       word_kw?(s, "opened") or word_kw?(s, "held") or word_kw?(s, "resolved") ->
         if role_verb?(skip(after_atom_word(s))) do
@@ -1577,6 +1592,7 @@ defmodule Muro.Parser do
   defp parse_family_atom(s) do
     word =
       cond do
+        word_kw?(s, "earlier_resolved") -> "earlier_resolved"
         word_kw?(s, "opened") -> "opened"
         word_kw?(s, "held") -> "held"
         word_kw?(s, "resolved") -> "resolved"
@@ -1598,6 +1614,7 @@ defmodule Muro.Parser do
     end
   end
 
+  defp family_atom("earlier_resolved"), do: :earlier_resolved
   defp family_atom("opened"), do: :opened
   defp family_atom("held"), do: :held
   defp family_atom("resolved"), do: :resolved

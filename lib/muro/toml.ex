@@ -25,7 +25,7 @@ defmodule Muro.Toml do
   `[[package.metadata.muro.modules]]`).
   """
 
-  @backends ~w(elixir c rust zig asm js fsm exunit)
+  @backends ~w(elixir c rust zig asm js fsm exunit pytest)
   @dep_name ~r/\A[a-z][a-z0-9_]*\z/
 
   @doc """
@@ -933,9 +933,13 @@ defmodule Muro.Toml do
          {:ok, target} <- field_string(table, "target", index, path),
          {:ok, kind} <- field_kind(table, index, path, default),
          {:ok, module} <- field_module(table, index, path),
-         {:ok, c_prefix} <- field_c_prefix(table, index, path) do
+         {:ok, c_prefix} <- field_c_prefix(table, index, path),
+         {:ok, impl} <- field_impl(table, index, path),
+         {:ok, imports} <- field_imports(table, index, path) do
       opts = [kind: kind]
       opts = if c_prefix == nil, do: opts, else: Keyword.put(opts, :c_prefix, c_prefix)
+      opts = if impl == nil, do: opts, else: Keyword.put(opts, :impl, impl)
+      opts = if imports == nil, do: opts, else: Keyword.put(opts, :imports, imports)
 
       entry =
         if module == nil do
@@ -949,7 +953,7 @@ defmodule Muro.Toml do
   end
 
   defp module_keys(table, index, path) do
-    case Map.keys(table) -- ["book", "target", "backend", "module", "c_prefix"] do
+    case Map.keys(table) -- ["book", "target", "backend", "module", "c_prefix", "impl", "imports"] do
       [] ->
         :ok
 
@@ -1004,6 +1008,32 @@ defmodule Muro.Toml do
 
       node ->
         {:error, "#{path}:#{node_line(node)}: modules entry #{index}: c_prefix must be a string"}
+    end
+  end
+
+  defp field_impl(table, index, path) do
+    case Map.get(table, "impl") do
+      nil ->
+        {:ok, nil}
+
+      {:string, value, _line} ->
+        {:ok, value}
+
+      node ->
+        {:error, "#{path}:#{node_line(node)}: modules entry #{index}: impl must be a string"}
+    end
+  end
+
+  defp field_imports(table, index, path) do
+    case Map.get(table, "imports") do
+      nil ->
+        {:ok, nil}
+
+      {:bool, value, _line} ->
+        {:ok, value}
+
+      node ->
+        {:error, "#{path}:#{node_line(node)}: modules entry #{index}: imports must be a boolean"}
     end
   end
 

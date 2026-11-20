@@ -6,25 +6,74 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A pull request cancels its own older run. A push to main or a manual
+# run gets a group of its own commit, so a later merge never cancels the
+# Hex publish, the tag, or the binaries of an earlier one.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  # Decides whether the Agda job has anything to check. `make agda` reads
+  # only agda/, the Makefile, and this workflow (which pins Agda and the
+  # stdlib), so a pull request that touches none of the paths below cannot
+  # change its result. Pushes to main and manual runs always run Agda.
+  # A skipped job still reports its check as skipped, which a required
+  # status check accepts; a paths: filter on the workflow would leave the
+  # required check missing instead.
+  changes:
+    name: Changes
+    runs-on: ${{ vars.CI_RUNNER }}
+    timeout-minutes: 5
+    outputs:
+      agda: ${{ steps.diff.outputs.agda }}
+    steps:
+      - uses: actions/checkout@v5
+        if: github.event_name == 'pull_request'
+        with:
+          # The pull_request ref is the merge commit. Its first parent is
+          # the base branch, so HEAD^1..HEAD is exactly what the PR changes.
+          fetch-depth: 2
+
+      - name: Paths that need Agda
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "$EVENT: Agda always runs"
+            echo "agda=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! files=$(git diff --name-only HEAD^1 HEAD); then
+            echo "::warning::could not diff the pull request against its base; running Agda"
+            echo "agda=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s\n' "$files" | sed 's/^/changed: /'
+          if printf '%s\n' "$files" | grep -E -q '^(agda/|Makefile$|\.github/workflows/)'; then
+            echo "Agda inputs changed: Agda runs"
+            echo "agda=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "no Agda inputs changed: Agda is skipped"
+            echo "agda=false" >> "$GITHUB_OUTPUT"
+          fi
+
   elixir:
     name: Elixir
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.CI_RUNNER }}
     timeout-minutes: 20
     env:
       MIX_ENV: test
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install the ARM assembler and QEMU
-        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi qemu-system-arm
+      - name: Install the ARM assembler, QEMU, and python3-pytest
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi qemu-system-arm python3 python3-pytest
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -104,7 +153,14 @@ jobs:
 
   agda:
     name: Agda 2.8.0
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    # Agda waits for Elixir, so Elixir (and the Hex publish on main) gets
+    # a runner first instead of queueing behind an hours-long Agda check.
+    # Runs unless the changes job decided `false`. If that job fails, its
+    # output is empty and Agda still runs rather than being skipped. A
+    # failed Elixir job does not skip Agda.
+    needs: [changes, elixir]
+    if: ${{ !cancelled() && needs.changes.outputs.agda != 'false' }}
+    runs-on: ${{ vars.CI_RUNNER }}
     # Muro.Soundness typechecks one large mutual block. On a 16 GB runner
     # that check is killed; the swap gives it room. The cache of
     # agda/_build makes a rerun with unchanged sources fast. A changed
@@ -189,7 +245,7 @@ jobs:
 
   visor:
     name: muro_visor
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.CI_RUNNER }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -241,3 +297,168 @@ jobs:
         run: |
           mix deps.get
           mix test test/muro_emit_examples_test.exs
+
+  # A merge to main publishes the mix.exs version once the Elixir job on
+  # that commit is green. The job is queued only after Elixir succeeds, so
+  # it never holds a runner while it waits, and it does not wait for Agda
+  # or muro_visor. The concurrency group lives on this job only, so a
+  # binary build cannot delay the next publish.
+  publish:
+    name: Hex and tag
+    needs: elixir
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ${{ vars.CI_RUNNER }}
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-hex-main
+      cancel-in-progress: false
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+      release: ${{ steps.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Read the package version
+        id: meta
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^[[:space:]]*version: "\([^"]*\)".*/\1/p' mix.exs | head -1)
+          test -n "$version"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+(\.[0-9]+)*([.-][0-9A-Za-z]+)*$'; then
+            echo "::error::invalid mix.exs version ${version}"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "package version ${version} at ${SHA}"
+
+      - name: Check whether the version is already on Hex
+        id: hex
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          version="$VERSION"
+          code=$(curl -sS -o /tmp/hex-muro-release.json -w "%{http_code}" \
+            "https://hex.pm/api/packages/muro/releases/${version}")
+          if [ "$code" = "200" ]; then
+            echo "muro ${version} is already on Hex; skipping publish"
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          elif [ "$code" = "404" ]; then
+            echo "muro ${version} is not on Hex yet"
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Unexpected Hex API status ${code} for muro ${version}"
+            exit 1
+          fi
+
+      - name: Plan the tag and the binary build
+        id: plan
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA: ${{ github.sha }}
+          HEX_NEEDED: ${{ steps.hex.outputs.needed }}
+        run: |
+          set -euo pipefail
+          tag="$TAG"
+          version="$VERSION"
+          sha="$SHA"
+          needed="$HEX_NEEDED"
+          test -n "$tag"
+          test -n "$sha"
+
+          peeled=$(git ls-remote --tags origin "refs/tags/${tag}^{}" | awk '{print $1}')
+          direct=$(git ls-remote --tags origin "refs/tags/${tag}" | awk '{print $1}')
+          if [ -n "$peeled" ]; then
+            existing="$peeled"
+          else
+            existing="$direct"
+          fi
+
+          if [ -z "$existing" ]; then
+            echo "tag ${tag} is missing"
+            echo "create_tag=true" >> "$GITHUB_OUTPUT"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$existing" = "$sha" ]; then
+            echo "tag ${tag} already points at ${sha}"
+            echo "create_tag=false" >> "$GITHUB_OUTPUT"
+            if [ "$needed" = "true" ]; then
+              echo "release=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "release=false" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          if [ "$needed" = "true" ]; then
+            echo "::error::tag ${tag} already points at ${existing}, not ${sha}; muro ${version} was not published."
+            exit 1
+          fi
+
+          echo "tag ${tag} already points at ${existing}, not ${sha}; leaving the tag and skipping the binary build"
+          echo "create_tag=false" >> "$GITHUB_OUTPUT"
+          echo "release=false" >> "$GITHUB_OUTPUT"
+
+      - uses: jdx/mise-action@v4
+        if: steps.hex.outputs.needed == 'true'
+
+      - name: Publish to Hex
+        if: steps.hex.outputs.needed == 'true'
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          set -euo pipefail
+          version="$VERSION"
+          # Never print HEX_API_KEY. Do not enable xtrace in this step.
+          if [ -z "${HEX_API_KEY}" ]; then
+            echo "::error::The HEX_API_KEY repository secret is not set. Generate a key with \`mix hex.user key generate --key-name muro-ci --permission api:write\` and add it as HEX_API_KEY on murolang/muro. muro ${version} was not published."
+            exit 1
+          fi
+          mix local.hex --force
+          mix deps.get
+          mix hex.publish package --yes
+
+      - name: Create and push the annotated tag
+        if: steps.plan.outputs.create_tag == 'true'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          tag="$TAG"
+          version="$VERSION"
+          sha="$SHA"
+          test -n "$tag"
+          test -n "$sha"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "muro ${version}" "$sha"
+          git push origin "refs/tags/${tag}"
+          echo "pushed ${tag} at ${sha}"
+
+  binaries:
+    name: Binaries
+    needs: publish
+    if: needs.publish.outputs.release == 'true'
+    concurrency:
+      group: release-binaries-${{ needs.publish.outputs.tag }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.publish.outputs.tag }}

@@ -1,7 +1,8 @@
-# The image of every example except the keyed family. A family is spec,
-# so emit skips it. The digest is one sha256 per book, of the picture
-# below. Keyed-slots is the book the family change adds. The C image of
-# a session includes the step.
+# The image of every example except a keyed family. A family is spec,
+# so emit skips it on every backend but the state machine. The digest is
+# one sha256 per book, of the picture below. keyed-slots.muro and
+# keyed-commands.muro are the family books. The C image of a session
+# includes the step.
 #
 # What is compared
 #
@@ -31,14 +32,15 @@
 # (OTP 28.1). The visor matrix is those two. The Elixir job runs it
 # again on Elixir 1.20.4 (OTP 29).
 defmodule Muro.EmitExamples do
-  @exclude "keyed-slots.muro"
+  # Family books are spec plus one dispatcher. The digest is every other example.
+  @exclude ["keyed-slots.muro", "keyed-commands.muro"]
 
   def lines(root \\ "examples") do
     root
     |> Path.join("**/*.muro")
     |> Path.wildcard()
     |> Enum.sort()
-    |> Enum.reject(&String.ends_with?(&1, @exclude))
+    |> Enum.reject(fn path -> Enum.any?(@exclude, &String.ends_with?(path, &1)) end)
     |> Enum.map(fn path ->
       rel = Path.relative_to(path, root)
       if System.get_env("MURO_EMIT_DIGEST") == "1", do: IO.puts(:stderr, rel)

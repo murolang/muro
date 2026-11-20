@@ -1,0 +1,30 @@
+-- Commands of one key open in creation order. A command opens only
+-- when every instance of its key that was created before it, and has
+-- arrived, is resolved. earlier_resolved names those instances.
+-- resolved would count the opening command too, and that command is
+-- not resolved on the step it opens. An instance that has not arrived
+-- does not count. This is not one at a time: an older command that
+-- arrives late opens beside a newer one that is running.
+-- held while any unresolved keeps two commands of a key apart.
+
+data Command : Type where
+  command : Command
+
+data Report : Type where
+  ok : Report
+
+session task-work := send Report end
+session server-wait := recv Report end
+
+conform task : task-work := put ok done
+
+conform server : server-wait :=
+  get (r : Report) done
+
+meet slot : server with task buffer 1
+
+family commands : slot per key of Command
+  command held while earlier unresolved
+
+temporal earlier-first : commands :=
+  forall (k : key). always ((opened k command) implies (earlier_resolved k command))
