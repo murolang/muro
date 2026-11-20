@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.11
+## 0.22.12
 
 `mix muro.synth` runs one procedure. The procedure is `traces`, the version-space search on a book's `step` and the observations that `step` supports. `--on traces` selects it. A book that defines `step` selects it when `--on` is omitted. The search is unchanged: the same candidates, the same order, the same policy book.
 
@@ -9,6 +9,24 @@ A book with no `step` and no observations is refused. It has nothing to synthesi
 ### Manual
 
 - Synthesis: `--on traces`, the default, and the refusal.
+
+### Package
+
+- Version 0.22.12.
+
+## 0.22.11
+
+A family formula can name the instances created before the one that is opening. `earlier_resolved k command` is every earlier instance of that key and that kind. `resolved k command` still counts the instance that is opening, so that atom cannot state that a command opens only once every earlier command of its key has resolved. `examples/keyed-commands.muro` states the property with `earlier_resolved`, and the command is held while an earlier one is unresolved. The commands of a key open in creation order. That is not one at a time: an older command that arrives late opens beside a newer one that is running. An instance that has not arrived does not count, and neither does one that arrives while this one is still running. Giving up counts as resolved. When nothing of that key and kind is running, the atom holds.
+
+`withdraw(state, id)` resolves a held instance without opening it, and returns the instances that this releases, the same shape as `resolved`. An open instance, one that has already left, and one the dispatcher has never returned cannot be withdrawn. `resolved` of an id that has left is still unknown. The state keeps nothing for an id that has left: ids come from one counter and are not reused, so an id below the counter that is not live has left. A later held instance of that key opens once the earlier ones are gone, the same as after a resolution. `check_trace` accepts `{:withdraw, id}` on the same rule.
+
+`held while any unresolved` holds an instance while any other instance of the same key is open. The instance is not held by itself, and another held instance does not hold it. The dispatcher opens at most one such instance of a key, the one with the least creation index. When that release also opens an instance held behind an earlier one, the instances held by any open one stay held. An older command that arrives while a newer one of the same key is running stays held. Under `held while earlier unresolved` that older command opens. The family graph lets any openable instance open, so it holds every choice the dispatcher makes and more. Tests walk every dispatcher step under `held while any unresolved`, and under `earlier` and `any` in one family, as a run of that graph, with the same refusals.
+
+The family graph for `examples/keyed-slots.muro` stays 171649 states and 729184 transitions. Withdrawing a held instance is a step the host takes. It is not an edge of the counted script, so a held signal is still opened by that script. `examples/keyed-commands.muro` holds its formula in 370 reachable states and 835 transitions. These checks are the family graph and the emitted dispatcher. They are not an Agda proof. `agda/Muro/Temporal.agda` is unchanged.
+
+### Manual
+
+- Grammar, Temporal, State machines, Limits, Examples, Emit, and Extending: `earlier_resolved`, withdrawing a held instance, and `held while any unresolved`.
 
 ### Package
 

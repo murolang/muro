@@ -317,7 +317,8 @@ defmodule Muro.FamilyTest do
                init held forever
              """)
 
-    assert msg =~ "expected never held or held while earlier unresolved"
+    assert msg =~
+             "expected never held, held while earlier unresolved, or held while any unresolved"
   end
 
   # `resolved k init` is every counting init, and there may be none.
@@ -497,6 +498,8 @@ defmodule Muro.FamilyTest do
            def held : run Nat := 0
            def opened : run Nat := 0
            def resolved : run Nat := 0
+           def earlier_resolved : run Nat := 0
+           def any : run Nat := 0
            """) == :ok
 
     assert check("""
@@ -538,6 +541,7 @@ defmodule Muro.FamilyTest do
     assert after_image.fsm =~ "defmodule Slots do"
     assert after_image.fsm =~ "def arrive(state, key, kind, index)"
     assert after_image.fsm =~ "def resolved(state, id)"
+    assert after_image.fsm =~ "def withdraw(state, id)"
     assert after_image.fsm =~ "def check_trace(trace)"
     assert after_image.fsm =~ "defmodule Ping do"
     assert after_image.fsm =~ "defmodule Pong do"
