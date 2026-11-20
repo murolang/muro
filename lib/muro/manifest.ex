@@ -21,12 +21,14 @@ defmodule Muro.Manifest do
       to the project root. The module is an alias atom
       (`MyApp.Billing.Rounding`). A 3-tuple is an Elixir module.
       `opts` is a keyword list: `kind: :elixir` (the default),
-      `kind: :exunit`, `kind: :fsm`, `kind: :c`, `kind: :rust`,
-      `kind: :zig`, `kind: :asm`, or `kind: :js`, and for `:exunit` an optional `impl:` alias,
-      the implementation the suite tests by default, and an optional
-      `imports:` boolean. `imports: true` collects closed equations
-      from the files that book imports directly. The default is
-      `false`. `imports:` on an `:elixir` entry is an error.
+      `kind: :exunit`, `kind: :pytest`, `kind: :fsm`, `kind: :c`,
+      `kind: :rust`, `kind: :zig`, `kind: :asm`, or `kind: :js`.
+      For `:exunit`, an optional `impl:` alias is the implementation
+      the suite tests by default. For `:pytest`, `impl:` is a Python
+      module name. An optional `imports:` boolean is valid for both.
+      `imports: true` collects closed equations from the files that
+      book imports directly. The default is `false`. `imports:` on an
+      `:elixir` entry is an error.
       `c_prefix:` is only valid for `kind: :c`. It is a C identifier,
       including the separator (`admit_`), prepended to every run and
       to that book's session entry points. Omitted, those names stay
@@ -35,12 +37,17 @@ defmodule Muro.Manifest do
   A book or a target that leaves the project root is refused, and so
   is a missing book, a duplicate target, a module that is not an
   alias atom, an unknown option, an unknown kind, `impl:` on an
-  entry that is not `:exunit`, or `imports:` on an entry that is
-  not `:exunit`. `imports:` must be a boolean.
+  entry that is not `:exunit` or `:pytest`, or `imports:` on an
+  entry that is not `:exunit` or `:pytest`. `imports:` must be a
+  boolean. A pytest `impl:` must be a Python module name. Two
+  pytest entries whose book stems fold to one `MURO_IMPL_` variable
+  are refused. `foo-bar.muro` and `foo_bar.muro` are both
+  `MURO_IMPL_FOO_BAR`.
 
   `module` is required for `:elixir`, `:fsm`, and `:exunit`. A
-  `:c`, `:rust`, `:zig`, `:asm`, or `:js` entry may omit it. The target then ends
-  with `.c`, `.rs`, `.zig`, `.s`, or `.mjs`. A `:c` target also reserves the `.h`
+  `:c`, `:rust`, `:zig`, `:asm`, `:js`, or `:pytest` entry may omit
+  it. The target then ends with `.c`, `.rs`, `.zig`, `.s`, `.mjs`,
+  or `.py`. A `:c` target also reserves the `.h`
   written beside it, and a `:js` target reserves the `.d.ts`. That path is checked as a target before
   generation: a directory is refused, and it is a duplicate when
   another entry names it. `backend` on a TOML manifest is the default kind
@@ -699,14 +706,15 @@ defmodule Muro.Manifest do
       :error ->
         {nil, errors}
 
-      {:ok, backend} when backend in [:elixir, :c, :rust, :zig, :asm, :js, :fsm, :exunit] ->
+      {:ok, backend}
+      when backend in [:elixir, :c, :rust, :zig, :asm, :js, :fsm, :exunit, :pytest] ->
         {backend, errors}
 
       {:ok, backend} ->
         {nil,
          errors ++
            [
-             "manifest backend: must be elixir, c, rust, zig, asm, js, fsm, or exunit, got: #{inspect(backend)}"
+             "manifest backend: must be elixir, c, rust, zig, asm, js, fsm, exunit, or pytest, got: #{inspect(backend)}"
            ]}
     end
   end
@@ -738,17 +746,41 @@ defmodule Muro.Manifest do
   end
 
   defp validate_modules(modules, root, errors) do
-    {entries, errors, _seen} =
+    {indexed, errors, _seen} =
       modules
       |> Enum.with_index(1)
-      |> Enum.reduce({[], errors, %{}}, fn {entry, index}, {entries, errors, seen} ->
+      |> Enum.reduce({[], errors, %{}}, fn {entry, index}, {indexed, errors, seen} ->
         {entry, entry_errors, seen} = validate_entry(entry, index, root, seen)
         {seen, header_errors} = reserve_header(entry, index, root, seen)
-        entries = if entry == nil, do: entries, else: entries ++ [entry]
-        {entries, errors ++ entry_errors ++ header_errors, seen}
+        indexed = if entry == nil, do: indexed, else: indexed ++ [{index, entry}]
+        {indexed, errors ++ entry_errors ++ header_errors, seen}
       end)
 
-    {entries, errors}
+    entries = Enum.map(indexed, fn {_index, entry} -> entry end)
+    {entries, errors ++ pytest_env_errors(indexed)}
+  end
+
+  # `MURO_IMPL_<STEM>` folds `-` and `_` together and uppercases the
+  # basename. Two pytest entries that share that variable cannot name
+  # two implementations when the tests run.
+  defp pytest_env_errors(indexed) do
+    indexed
+    |> Enum.filter(fn {_index, entry} -> entry.kind == :pytest end)
+    |> Enum.group_by(fn {_index, entry} -> Muro.Emit.Pytest.impl_env(entry.book) end)
+    |> Enum.flat_map(fn {env, group} ->
+      case group do
+        [_one] ->
+          []
+
+        many ->
+          listed =
+            Enum.map_join(many, ", ", fn {index, entry} ->
+              "#{index} (#{entry.book})"
+            end)
+
+          ["#{env} is shared by pytest modules entries #{listed}"]
+      end
+    end)
   end
 
   defp validate_entry({book, target, opts}, index, root, seen)
@@ -856,7 +888,7 @@ defmodule Muro.Manifest do
       :error ->
         {:elixir, []}
 
-      {:ok, kind} when kind in [:elixir, :exunit, :fsm, :c, :rust, :zig, :asm, :js] ->
+      {:ok, kind} when kind in [:elixir, :exunit, :pytest, :fsm, :c, :rust, :zig, :asm, :js] ->
         {kind, []}
 
       {:ok, kind} ->
@@ -873,16 +905,17 @@ defmodule Muro.Manifest do
         errors =
           []
           |> impl_kind_error(kind, kind_ok?, index)
-          |> impl_alias_error(impl, index)
+          |> impl_alias_error(impl, kind, index)
 
         if errors == [], do: {impl, []}, else: {nil, errors}
     end
   end
 
-  defp impl_kind_error(errors, :exunit, true, _index), do: errors
+  defp impl_kind_error(errors, kind, true, _index) when kind in [:exunit, :pytest], do: errors
 
   defp impl_kind_error(errors, _kind, true, index) do
-    errors ++ ["modules entry #{index}: impl: is only valid for kind: :exunit"]
+    errors ++
+      ["modules entry #{index}: impl: is only valid for kind: :exunit or kind: :pytest"]
   end
 
   defp impl_kind_error(errors, _kind, false, _index), do: errors
@@ -902,10 +935,11 @@ defmodule Muro.Manifest do
     end
   end
 
-  defp import_kind_error(errors, :exunit, true, _index), do: errors
+  defp import_kind_error(errors, kind, true, _index) when kind in [:exunit, :pytest], do: errors
 
   defp import_kind_error(errors, _kind, true, index) do
-    errors ++ ["modules entry #{index}: imports: is only valid for kind: :exunit"]
+    errors ++
+      ["modules entry #{index}: imports: is only valid for kind: :exunit or kind: :pytest"]
   end
 
   defp import_kind_error(errors, _kind, false, _index), do: errors
@@ -958,7 +992,16 @@ defmodule Muro.Manifest do
       ["modules entry #{index}: c_prefix: must be a C identifier prefix, got: #{inspect(value)}"]
   end
 
-  defp impl_alias_error(errors, impl, index) do
+  defp impl_alias_error(errors, impl, :pytest, index) do
+    if Muro.Emit.Pytest.module_name?(impl) do
+      errors
+    else
+      errors ++
+        ["modules entry #{index}: impl must be a Python module name, got: #{inspect(impl)}"]
+    end
+  end
+
+  defp impl_alias_error(errors, impl, _kind, index) do
     if alias_atom?(impl) do
       errors
     else
@@ -1013,7 +1056,8 @@ defmodule Muro.Manifest do
     end
   end
 
-  defp validate_module(nil, _index, kind) when kind in [:c, :rust, :zig, :asm, :js], do: []
+  defp validate_module(nil, _index, kind) when kind in [:c, :rust, :zig, :asm, :js, :pytest],
+    do: []
 
   defp validate_module(module, index, _kind) do
     if alias_atom?(module) do
@@ -1028,6 +1072,7 @@ defmodule Muro.Manifest do
   defp extension_errors(:zig, rel, index), do: extension_errors(rel, ".zig", :zig, index)
   defp extension_errors(:asm, rel, index), do: extension_errors(rel, ".s", :asm, index)
   defp extension_errors(:js, rel, index), do: extension_errors(rel, ".mjs", :js, index)
+  defp extension_errors(:pytest, rel, index), do: extension_errors(rel, ".py", :pytest, index)
   defp extension_errors(_kind, _rel, _index), do: []
 
   defp extension_errors(rel, suffix, kind, index) do

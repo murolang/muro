@@ -7,7 +7,7 @@ summary: A book's closed equations become one ExUnit module. The tests call an i
 
 # Closed equations as tests
 
-In brief: `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the closed equations in that file. `mix muro.gen` writes the same module when an entry sets `kind: :exunit`. Each test is named `"<file> <def-name>"`. The file and line are in the assertion message. The suite calls an implementation module the host selects. It does not call the emitted module unless that module is the implementation. A file of `param`s is a suite. `--imports` also collects the equations of the files this book imports directly.
+In brief: `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the closed equations in that file. `mix muro.gen` writes the same module when an entry sets `kind: :exunit`. Each test is named `"<file> <def-name>"`. The file and line are in the assertion message. The suite calls an implementation module the host selects. It does not call the emitted module unless that module is the implementation. A file of `param`s is a suite. `--imports` also collects the equations of the files this book imports directly. The same equations are a pytest module. The page is [Pytest](pytest.md).
 
 ## What is collected
 
@@ -181,7 +181,7 @@ A wrong answer fails the test whose name is `priv/muro/rounding.muro round-ok`. 
 
 ## Param libraries
 
-A library states what every implementation supplies, and its closed equations are the suite those implementations run. `mix muro.emit kit.muro --backend exunit` checks the file with the params as assumptions and prints the module. `mix muro.check kit.muro`, and `mix muro.emit kit.muro` with no backend, still refuse it: `param decide is supplied by a file that imports this one`. The same message is what a `kind: :elixir` manifest entry reports. The loader option is `params: :open`. Only `Muro.emit_exunit/3`, `mix muro.emit --backend exunit`, and a `kind: :exunit` entry pass it.
+A library states what every implementation supplies, and its closed equations are the suite those implementations run. `mix muro.emit kit.muro --backend exunit` checks the file with the params as assumptions and prints the module. `mix muro.check kit.muro`, and `mix muro.emit kit.muro` with no backend, still refuse it: `param decide is supplied by a file that imports this one`. The same message is what a `kind: :elixir` manifest entry reports. The loader option is `params: :open`. Only `Muro.emit_exunit/3`, `Muro.emit_pytest/2`, `mix muro.emit --backend exunit`, `mix muro.emit --backend pytest`, and a `kind: :exunit` or `kind: :pytest` entry pass it.
 
 ```muro
 data Key : Type where
@@ -305,7 +305,7 @@ A larger library, a `decide` of a key and a list whose silence and empty cases a
 ]
 ```
 
-`mix muro.emit impl.muro --backend exunit --imports` is the same collection. `--imports` with `--backend elixir`, or with `c`, `rust`, `zig`, `asm`, `otp`, `fsm`, or `--node`, is an error. `imports:` on a `kind: :elixir` entry is an error and names the entry index (`modules entry 1: imports: is only valid for kind: :exunit`). A non-boolean is `imports: must be a boolean`.
+`mix muro.emit impl.muro --backend exunit --imports` is the same collection. `--backend pytest` collects it too. `--imports` with `--backend elixir`, or with `c`, `rust`, `zig`, `asm`, `otp`, `fsm`, or `--node`, is an error: `--imports is only valid with --backend exunit or --backend pytest`. `imports:` on a `kind: :elixir` entry is an error and names the entry index (`modules entry 1: imports: is only valid for kind: :exunit or kind: :pytest`). A non-boolean is `imports: must be a boolean`.
 
 A `pkg:` import is a direct import like any other. The test is named with the file under the project root, `muro_deps/shared/wire.muro wire-ok`, not with the `pkg:` spelling. A `std:` import is named with its id, `std:bool.muro not-not`, and that id is not expanded to a path.
 
@@ -374,7 +374,7 @@ A 3-tuple is still an Elixir module. An ExUnit entry adds a keyword list:
 ]
 ```
 
-`kind` defaults to `:elixir`. `impl` is optional and only valid for `:exunit`. It must be an alias atom. `imports:` is optional, only valid for `:exunit`, and must be a boolean. The default is `false`. Unknown options, an unknown kind, `impl:` on an Elixir entry, `imports:` on an Elixir entry, a non-boolean `imports:`, and an `impl` that is not an alias are errors, and the message names the entry index (`modules entry 1: …`). A 4-tuple that is not a keyword list is the same error as a malformed 3-tuple: `modules entry 1 is not {book, module, target}`.
+`kind` defaults to `:elixir`. `impl` is optional. On `:exunit` it is an alias atom. On `:pytest` it is a Python module name; that page is [Pytest](pytest.md). `imports:` is optional, valid for `:exunit` and `:pytest`, and must be a boolean. The default is `false`. Unknown options, an unknown kind, `impl:` on an Elixir entry, `imports:` on an Elixir entry, a non-boolean `imports:`, an ExUnit `impl` that is not an alias, and a pytest `impl` that is not a Python module name are errors, and the message names the entry index (`modules entry 1: …`). A 4-tuple that is not a keyword list is the same error as a malformed 3-tuple: `modules entry 1 is not {book, module, target}`.
 
 The usual target is `test/<name>_test.exs`. `test/support/<name>.ex` is the layout above, the one where `@behaviour` is checked at compile time. Formatting uses the project's `.formatter.exs`. `Mix.Tasks.Format.formatter_for_file/2` formats `.ex` and `.exs` when a formatter file exists, including a file the `inputs` list does not cover. The bytes are a fixed point of that formatting.
 

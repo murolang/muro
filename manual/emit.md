@@ -9,7 +9,7 @@ summary: What becomes Elixir. C, Rust, Zig, and JavaScript print the closed run.
 
 In brief: emit keeps `run`. `run internal` is `defp`. Spec and evidence are omitted. A `temporal` declaration is evidence about one meeting, so the Zig backend omits it with the others. A family is spec. Elixir, C, Rust, Zig, JavaScript, assembly, OTP, `--node`, and ExUnit omit it. `--backend fsm` emits one dispatcher for a family that checks, beside the session machines. Erased Π-arguments are dropped from the generated arity. A non-run fragment that somehow remains becomes `raise "erased term"`. `--backend c` writes C for closed `Nat`, data, and `run` streams, and each session as a pure step the host drives. An exported run of `Nat` arguments and a `Nat` result is also a NIF. `--backend rust` writes the same closed run as Rust. `--backend zig` writes that same closed run as Zig. `--backend js` writes that run as an ES module and a declaration file, and a lambda is a closure. `--backend asm` writes a Cortex-M0 `Nat` run. `--backend otp` writes a GenServer for each process that conforms to a session. `--backend fsm` writes each session endpoint as a state machine and leaves the transport with the host. `--node` writes one call for each cross, on the node the flag names.
 
-A meeting that marks a party `may fail` is checked. `--backend otp` monitors that party and runs the failure arm when the peer dies before it has halted. `--backend fsm` takes the same arm with `down`. C, Rust, Zig, JavaScript, assembly, `--node`, and the ExUnit backend still refuse the book with `c:mayfail`. The declaration stays in the book.
+A meeting that marks a party `may fail` is checked. `--backend otp` monitors that party and runs the failure arm when the peer dies before it has halted. `--backend fsm` takes the same arm with `down`. C, Rust, Zig, JavaScript, assembly, `--node`, the ExUnit backend, and the pytest backend still refuse the book with `c:mayfail`. The declaration stays in the book.
 
 ## From a file
 
@@ -47,6 +47,7 @@ mix muro.emit path.muro --backend asm
 mix muro.emit path.muro --backend otp
 mix muro.emit path.muro --backend fsm
 mix muro.emit path.muro --backend exunit
+mix muro.emit path.muro --backend pytest
 mix muro.emit path.muro --backend mbi
 mix muro.emit path.muro --node a
 ```
@@ -333,10 +334,16 @@ If you want a book in the test suite, parse/check/emit it from `test/muro_check_
 
 `--backend exunit` prints one ExUnit module for the book's closed equations, the same text as `Muro.emit_exunit/3`. The test module is the file stem plus `Test` (`rounding.muro` prints `RoundingTest`). The implementation it calls by default is the stem (`Rounding`). Skipped equations go to standard error, then a line `N tests, M skipped`. Standard output is only the module. `--node` with this backend is refused.
 
-This is the one backend that accepts a file whose `param`s are not supplied. It checks them as assumptions. Elixir, C, Rust, Zig, JavaScript, assembly, OTP, and `--node` still refuse that file with `param <name> is supplied by a file that imports this one`.
+This backend and `--backend pytest` accept a file whose `param`s are not supplied. They check them as assumptions. Elixir, C, Rust, Zig, JavaScript, assembly, OTP, and `--node` still refuse that file with `param <name> is supplied by a file that imports this one`.
 
-`--imports` is valid only with `--backend exunit`. It also collects the closed equations of the files the book imports directly. With any other backend it is an error: `--imports is only valid with --backend exunit`. Absent, the suite is this file only.
+`--imports` is valid with `--backend exunit` and `--backend pytest`. It also collects the closed equations of the files the book imports directly. With any other backend it is an error: `--imports is only valid with --backend exunit or --backend pytest`. Absent, the suite is this file only.
 
 The tests call an implementation the host names. [Closed equations as tests](exunit.md) is the collection, the behaviour, the adapter, param libraries, imported equations, and the skip list. `mix muro.gen` writes the same suite when an entry sets `kind: :exunit`. `imports: true` on that entry is `--imports`.
+
+## Pytest
+
+`--backend pytest` prints one pytest module for those same equations, the same text as `Muro.emit_pytest/2`. The implementation it calls by default is the file stem (`rounding.muro` calls `rounding.round`). `--impl MODULE` bakes another Python module into the file. `MURO_IMPL_<STEM>` selects a module when the tests run, and the file does not change. A skip is a `pytest.mark.skip` test. Skipped equations go to standard error, then a line `N tests, M skipped`. Standard output is only the module. `--node` with this backend is refused. `mix muro.gen` writes the file when an entry sets `kind: :pytest`.
+
+[Pytest](pytest.md) is the value encoding, the identifier fold, and how the implementation is chosen.
 
 Next: [Closed equations as tests](exunit.md).
