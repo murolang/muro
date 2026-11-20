@@ -134,6 +134,7 @@ agda/Muro/Grade.agda    a grade pair `(c, t)` on a binder; `ungraded-fragment` i
 agda/Muro/Beam.agda     erase a core term to the grade judgment; `GTm` and `decide` are unchanged; not a Tm
 agda/Muro/Linear.agda   multiplicity on a session endpoint; λ¹ must be used once; ⊸ accepts or returns it; the protocol is `SExp`, so `rec` and a declared data payload are endpoints; `dualS` keeps both; `--safe --guardedness`; not a Tm
 agda/Muro/Place.agda    placement coeffect; ambient by default; one boundary; run has no seat
+agda/Muro/Family.agda   keyed-family hold rule, any number of keys; a signal opens against the instances of its key that had already arrived; the generator is not this proof; `--safe`; not imported by Muro.agda
 agda/Muro/Located.agda  a session at a place; `endpoint` and `read` follow the sitting; `--node` follows a cross reading; `--backend otp` follows the process
 agda/Muro/Tag.agda      constructor tags (Check compares tags before structure)
 agda/Muro/Spine.agda    application spines (constructor / dty applications), spine views
@@ -155,7 +156,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.fill`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.11`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.12`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -168,7 +169,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.22.11.ez
+mix archive.install muro-0.22.12.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -242,7 +243,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then:
 
 ```
-Muro v0.22.11
+Muro v0.22.12
 All terms check. Evidence never becomes a run.
 ```
 

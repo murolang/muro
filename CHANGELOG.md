@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.22.12
+
+A keyed family holds a `signal` while an earlier instance of its key, already arrived, is unresolved. That rule is proved for any number of keys and any number of instances. An opened `signal` has every earlier instance of its key that had already arrived resolved. An instance that arrives later can still be live beside it. Arrival, resolve, and rerun keep the rule. A held `signal` opens in the step that resolves the last earlier instance of its key. Whether an instance is held depends only on its own key.
+
+A state that breaks the rule, however many keys it has, already breaks it on one key and two instances. Those two sit on the script the family graph explores for key `a`: an `init` before a `signal`, or a `signal` before a later `signal`.
+
+The family graph for that script is unchanged: 171649 reachable states, 729184 transitions. That search checks the generated dispatcher on the fixed script. It is a regression check of that program. It is not this proof. The program that writes the dispatcher is not proved. `init` is never held. `finish` is still `:resolve` or `:rerun`. `held while any unresolved`, withdrawing a held instance, and `earlier_resolved` stay the Elixir check.
+
+### Manual
+
+- Temporal, Limits, State machines, Examples, and Extending: the hold rule is proved for any number of keys. The family graph remains the check of the generated dispatcher.
+
+### Package
+
+- Version 0.22.12.
+
 ## 0.22.11
 
 A family formula can name the instances created before the one that is opening. `earlier_resolved k command` is every earlier instance of that key and that kind. `resolved k command` still counts the instance that is opening, so that atom cannot state that a command opens only once every earlier command of its key has resolved. `examples/keyed-commands.muro` states the property with `earlier_resolved`, and the command is held while an earlier one is unresolved. The commands of a key open in creation order. That is not one at a time: an older command that arrives late opens beside a newer one that is running. An instance that has not arrived does not count, and neither does one that arrives while this one is still running. Giving up counts as resolved. When nothing of that key and kind is running, the atom holds.
