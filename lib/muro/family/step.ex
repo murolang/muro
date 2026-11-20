@@ -10,19 +10,27 @@ defmodule Muro.Family.Step do
   `init` is `never`, `signal` is `earlier`. `hold_of/2` reads a family's
   rules. `:any` is Agda `many`: held while any other row of the key is
   open. `blocked?/3` is `earlierBlocked?`. `any_blocked?/3` is
-  `anyBlocked?`. `decide/5` is `decide` for `never` and `earlier`, and
-  `decideMode` when the hold is `any`. `on_key/2` is `onKey`.
-  `arrive/5` is `arriveTo` and `arriveMode`. `resolve/3` is `resolveTo`
-  and `resolveMode`. `withdraw/3` is `withdrawTo`: a held row leaves and
-  the release is the release of `resolveMode`. `touch/2` is `touchTo`
-  and `touchMode`. `rerun/2` and `meet/2` are that same transition.
-  `apply` in Agda sends `Act.arrive key index kind` to `arriveTo state
-  key kind index`, and `withdrawR` to `withdrawTo`.
+  `anyBlocked?`. Elixir takes `(rows, key, index)` and skips same-index
+  rows; Agda takes `(rs, k)` and counts `opened` rows. They agree under
+  `NoDupIx` and held subjects on release, not off-invariant. `decide/5`
+  is `decide` for `never` and `earlier`, and `decideMode` when the hold
+  is `any`. `on_key/2` is `onKey`. `arrive/5` is `arriveTo` and
+  `arriveMode`. `resolve/3` is `resolveTo` and `resolveMode`.
+  `withdraw/3` is `withdrawTo` on the successful path: a held row leaves
+  and the release is the release of `resolveMode`. Elixir returns
+  `:resolved`, `:unknown`, and `:opened`; Agda returns `nothing`.
+  `touch/2` is `touchTo` and `touchMode`. `rerun/2` and `meet/2` are
+  that same transition. `apply` in Agda sends `Act.arrive key index
+  kind` to `arriveTo state key kind index`, and `withdrawR` to
+  `withdrawTo`.
 
-  `no_overtake?/2` is `NoOvertake`. `bad_open?/2` is `BadOpen`. An opened
-  signal is a violation when an earlier live row of its key was already
-  born at the tick the signal opened (`born ≤ openedAt`). A row that
-  arrives later has a greater birth tick and is not a violation.
+  `no_overtake?/2` is `NoOvertake` and `NoOvertakeR`. `bad_open?/2` is
+  `BadOpen`. Both check the `mearlier` shape only. The two-open-`many`
+  case of `BadFamily` is `at_most_one_any?/2` (`AtMostOne`) and
+  `ResolvedAny`. An opened signal is a violation when an earlier live
+  row of its key was already born at the tick the signal opened
+  (`born ≤ openedAt`). A row that arrives later has a greater birth
+  tick and is not a violation.
   `held_blocked?/1` is `HeldBlocked`. It is the earlier-only fact: every
   held row has a smaller live index. A held `any` row need not.
   `least_earlier/2` is `pick` on `Earlier`. `at_most_one_any?/2` is
@@ -92,7 +100,10 @@ defmodule Muro.Family.Step do
   @doc """
   Agda `anyBlocked?`. True when a row of `key` other than `index` is
   open. A held row is not open, so a held subject does not block
-  itself. On arrival the new row is not in `rows`.
+  itself. On arrival the new row is not in `rows`. Elixir takes
+  `(rows, key, index)` and skips same-index rows; Agda takes `(rs, k)`
+  and counts `opened` rows. They agree under `NoDupIx` and held
+  subjects on release, not off-invariant.
   """
   def any_blocked?(rows, key, index) do
     Enum.any?(rows, fn row ->
@@ -175,9 +186,11 @@ defmodule Muro.Family.Step do
 
   @doc """
   Agda `withdrawTo`. A held row leaves and `openAll` runs, the same
-  release as `resolveMode`. An open id is `{:opened, id}`. An id below
-  `next` that is not live has left: `{:resolved, id}`. Any other
-  missing id is `{:unknown, id}`.
+  release as `resolveMode`. The successful path matches `withdrawTo`.
+  Elixir returns richer error atoms: an open id is `{:opened, id}`;
+  an id below `next` that is not live has left, `{:resolved, id}`;
+  any other missing id is `{:unknown, id}`. Agda returns `nothing` in
+  each of those cases.
   """
   def withdraw(state, id, rules) do
     case find(state.rows, id) do
@@ -248,8 +261,10 @@ defmodule Muro.Family.Step do
   end
 
   @doc """
-  Agda `BadOpen`. An opened signal, and an earlier live row of its key
-  whose birth tick is at most the signal's open tick.
+  Agda `BadOpen`. The `mearlier` shape only: an opened signal, and an
+  earlier live row of its key whose birth tick is at most the signal's
+  open tick. The two-open-`many` case of `BadFamily` is
+  `at_most_one_any?/2` (`AtMostOne`) and `ResolvedAny`.
   """
   def bad_open?(rows, rules) do
     Enum.any?(rows, fn opened ->
@@ -261,7 +276,11 @@ defmodule Muro.Family.Step do
     end)
   end
 
-  @doc "Agda `NoOvertake` and `NoOvertakeR`, the negation of `BadOpen`."
+  @doc """
+  Agda `NoOvertake` and `NoOvertakeR`, the negation of `BadOpen`.
+  The `mearlier` shape only. The two-open-`many` case of `BadFamily`
+  is `at_most_one_any?/2` (`AtMostOne`) and `ResolvedAny`.
+  """
   def no_overtake?(rows, rules), do: not bad_open?(rows, rules)
 
   @doc """

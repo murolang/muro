@@ -34,9 +34,10 @@
 -- `onKey`, `arriveTo`, `resolveTo`, `touchTo`, `NoOvertake`,
 -- `HeldBlocked`, `BadOpen`, `script-a`, and `script-b` by those names.
 --
--- The second half, from `Mode` on, is the same step for an arbitrary
--- rule table: `mnever`, `mearlier`, and `many`. It keeps every theorem
--- above. `decideMode`, `anyBlocked?`, `earlierBlocked?`, `arriveMode`,
+-- The second half, from `Mode` on, is a parallel `Rules` development
+-- of the same step for an arbitrary rule table: `mnever`, `mearlier`,
+-- and `many`. It is not a transport of the theorems above.
+-- `decideMode`, `anyBlocked?`, `earlierBlocked?`, `arriveMode`,
 -- `resolveMode`, `withdrawTo`, `touchMode`, `RulesInv`, `AtMostOne`,
 -- `NoOvertakeR`, `EarlierResolved`, `noStarve`, `withdrawGone`,
 -- `cutoffTwo`, `cutoffScript`, and `anyGap` are the names `Step` uses.
