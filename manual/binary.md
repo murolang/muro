@@ -14,10 +14,10 @@ In brief: `muro` is a self-contained executable. It carries its own Erlang runti
 Release assets are one file per target, named `muro-<version>-<os>-<arch>`, with a `.sha256` file beside each:
 
 ```
-muro-0.22.12-macos-aarch64
-muro-0.22.12-macos-x86_64
-muro-0.22.12-linux-x86_64
-muro-0.22.12-linux-aarch64
+muro-0.22.13-macos-aarch64
+muro-0.22.13-macos-x86_64
+muro-0.22.13-linux-x86_64
+muro-0.22.13-linux-aarch64
 ```
 
 The Linux binaries are built against musl, so one file runs on glibc and on Alpine. The asset name does not contain `musl`.
@@ -25,14 +25,14 @@ The Linux binaries are built against musl, so one file runs on glibc and on Alpi
 [mise](https://mise.jdx.dev/) installs the asset for the host:
 
 ```
-mise use -g github:murolang/muro@0.22.12
+mise use -g github:murolang/muro@0.22.13
 ```
 
 If mise reports `No versions found` or a 404 from `mise-versions.jdx.dev`, its version mirror does not list the release yet. Turn the mirror off and ask GitHub directly:
 
 ```
 mise settings set use_versions_host false
-mise use -g github:murolang/muro@0.22.12
+mise use -g github:murolang/muro@0.22.13
 ```
 
 `mise install muro` from the mise registry follows once the assets exist. When a merge lands on main, the `Hex and tag` job in CI starts after the Elixir job on that commit succeeds. It publishes that `mix.exs` version to Hex if it is not already there, and pushes the annotated tag `vX.Y.Z` if it is missing. It does not wait for Agda or muro_visor. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. When this commit published the version or created the tag, the Release workflow builds the four files, smokes the Linux binary in a container with no Elixir and no Erlang, and attaches the assets to the GitHub release only after that smoke succeeds. A failed smoke publishes no binaries. The Hex package is already on Hex by then, and its dependencies are unchanged. Burrito builds the executable and is not a runtime dependency of the package.
@@ -56,12 +56,12 @@ muro init [--ci github] [--backend BACKEND] [--cargo-metadata]
 muro skills add
 muro deps.get
 muro mutate path.muro [--only NAME] [--json] [--fuel N] [--max-mutants-per-def N] [--max-survivors N]
-muro synth path.muro [--oracle NAME] [--depth N] [--out out.muro] [--fuel N] [--json]
+muro synth path.muro [--on NAME] [--oracle NAME] [--depth N] [--out out.muro] [--fuel N] [--json]
 muro fill path.muro --def NAME [--bound N] [--fuel N]
 muro --version
 ```
 
-Each command takes the same flags as its Mix task and prints the same lines. Where a Mix task raises, the executable prints that message on stderr and exits 1. `muro mutate` exits 1 when survivors exceed `--max-survivors` and exits 2 when the book does not check, as `mix muro.mutate` does. Each classified mutant prints `<id> <operator> <outcome>` on standard error. A run that builds no mutants prints no such line. `muro synth` prints the book on standard output unless `--out` is set, and prints the report on standard error. It exits 0 when that book checks and contains the homomorphism of the synthesized ranking. It exits 1 for a report, including a policy whose environment does not define the homomorphism. It exits 2 when the book does not check, as `mix muro.synth` does. The page is [Synthesis](synth.md).
+Each command takes the same flags as its Mix task and prints the same lines. Where a Mix task raises, the executable prints that message on stderr and exits 1. `muro mutate` exits 1 when survivors exceed `--max-survivors` and exits 2 when the book does not check, as `mix muro.mutate` does. Each classified mutant prints `<id> <operator> <outcome>` on standard error. A run that builds no mutants prints no such line. `muro synth` prints the book on standard output unless `--out` is set, and prints the report on standard error. It exits 0 when that book checks and contains the homomorphism of the synthesized ranking. It exits 1 for a report, including a policy whose environment does not define the homomorphism. It exits 2 when the book does not check, when the book has no `step` and no observations to synthesize against, and when `--on` is not an accepted value, as `mix muro.synth` does. The page is [Synthesis](synth.md).
 
 `muro fill path.muro --def name` writes one definition body by search. The body starts as `?`. A run is kept when the book's closed equations about that name still check. Evidence is kept when the type checks. It is a search. It is not `muro synth`, and it certifies nothing beyond the checker. The page is [Fill](fill.md).
 
@@ -88,7 +88,7 @@ muro.toml and [package.metadata.muro] in Cargo.toml both define a manifest
 Three or more end with `all define a manifest`.
 
 ```toml
-muro = "0.22.12"
+muro = "0.22.13"
 fuel = 2000          # optional
 backend = "rust"     # optional default for [[modules]]
 

@@ -109,6 +109,8 @@ lib/muro/emit/mbi.ex    exactly one exported run as an .mbi image (`--backend mb
 lib/muro/example.ex     same book as Agda
 lib/muro/mutate.ex      mutants of run definitions (`mix muro.mutate`)
 lib/muro/synth.ex       version-space search on an emitted step (`mix muro.synth`)
+lib/muro/synth/procedure.ex  one search the command can run: generate, evaluate, rank
+lib/muro/synth/procedure/traces.ex  the version-space search (`--on traces`)
 lib/muro/fill.ex        one definition body by search (`mix muro.fill`); the checker decides
 lib/mix/tasks/muro.check.ex
 lib/mix/tasks/muro.mutate.ex
@@ -156,7 +158,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.fill`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.12`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.13`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -169,7 +171,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.22.12.ez
+mix archive.install muro-0.22.13.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -227,6 +229,7 @@ mix muro.check
 mix muro.check examples/half_ok.muro
 mix muro.mutate examples/half_ok.muro --only half
 mix muro.synth path.muro
+mix muro.synth path.muro --on traces
 mix muro.fill path.muro --def name
 mix muro.emit path.muro --backend exunit
 mix muro.emit path.muro --backend exunit --imports
@@ -243,7 +246,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then:
 
 ```
-Muro v0.22.12
+Muro v0.22.13
 All terms check. Evidence never becomes a run.
 ```
 

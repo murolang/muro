@@ -13,6 +13,15 @@ defmodule Muro.CLI.Synth do
 
     [
       %{
+        name: :on,
+        type: :string,
+        value: "NAME",
+        default: "traces, when the book defines step",
+        doc:
+          "The procedure. traces searches the version space of predicate programs on the book's step and the observations that step supports. A book that defines step selects traces when this flag is omitted. A book with no step has no observations to synthesize against. The command refuses it, and the message does not name a flag. The only accepted value is traces. An unknown value is refused, and the message lists the accepted values.",
+        lines: Muro.Synth.Procedure.accepted()
+      },
+      %{
         name: :oracle,
         type: :string,
         value: "NAME",
@@ -61,10 +70,13 @@ defmodule Muro.CLI.Synth do
       Muro.CLI.Text.prose("""
       muro synth reads one checked environment and searches a version space of predicate programs. The search calls that book's emitted step. A program that misses an observation is dropped. The smallest program that matches every observation is the policy the result book deploys, and eval runs it. A score does not decide who survives. The checker sees that policy and, when the environment defines it, the homomorphism of the ranking that reads the policy. It does not see the search. Exit 0 is that checked homomorphism.
       """),
+      Muro.CLI.Text.prose("""
+      --on names the procedure. traces is the version-space search. It is the only accepted value. A book that defines step selects traces when --on is omitted. The observations are the ones that step supports. A book with no step has no observations to synthesize against. The command refuses it, and the message does not name a flag. An unknown value is refused, and the message lists the accepted values.
+      """),
       Muro.CLI.Text.section(
         "USAGE",
         Muro.CLI.Text.pre([
-          "muro synth path.muro [--oracle NAME] [--depth N]",
+          "muro synth path.muro [--on NAME] [--oracle NAME] [--depth N]",
           "    [--out out.muro] [--fuel N] [--json]"
         ])
       ),
@@ -78,7 +90,8 @@ defmodule Muro.CLI.Synth do
       Muro.CLI.Text.section(
         "EXAMPLES",
         Muro.CLI.Text.examples([
-          {"muro synth book.muro", "Exits 2. The book is not an environment."}
+          {"muro synth book.muro",
+           "Exits 2. A book with no step has nothing to synthesize against."}
         ])
       ),
       Muro.CLI.Text.section(
@@ -89,7 +102,7 @@ defmodule Muro.CLI.Synth do
           {"1",
            "The report names an empty space, a counterexample, a homomorphism that is not derivable, a silent oracle, features that cannot separate two carriers, or a policy whose environment does not define the homomorphism."},
           {"2",
-           "The book does not check, it is not an environment, the oracle name is unknown, --out already exists, or a policy book or a temporary book cannot be written."}
+           "The book does not check, it is not an environment, it has no step and no observations to synthesize against, --on is not an accepted value, the oracle name is unknown, --out already exists, or a policy book or a temporary book cannot be written."}
         ])
       ),
       Muro.CLI.Text.section(
@@ -126,11 +139,15 @@ defmodule Muro.CLI.Synth do
 
   defp go(path, opts, hooks) do
     out = Keyword.get(opts, :out)
+    on = Keyword.get(opts, :on)
     oracle = Keyword.get(opts, :oracle, "trace")
     depth = Keyword.get(opts, :depth, Muro.Synth.Loop.default_depth())
     fuel = Keyword.get(opts, :fuel, Muro.Check.default_fuel())
 
     cond do
+      not accepted_on?(on) ->
+        {:exit, 2, "", [Muro.Synth.Procedure.unknown_on(on)]}
+
       oracle not in @oracles ->
         {:exit, 2, "", ["unknown oracle #{oracle}"]}
 
@@ -138,27 +155,43 @@ defmodule Muro.CLI.Synth do
         {:exit, 2, "", ["#{out} already exists"]}
 
       true ->
-        # Printed on standard output, the book is saved in the current
-        # directory, so the import is relative to that directory. `--out`
-        # is relative to the file that was written.
-        anchor =
-          if is_binary(out),
-            do: Path.dirname(Path.expand(out)),
-            else: File.cwd!()
-
-        case Muro.Synth.cegis_loop(path, loop_opts(oracle, depth, fuel, anchor, hooks)) do
+        case Muro.Synth.Procedure.select(path, fuel) do
           {:error, :book, message} ->
             {:exit, 2, "", [message, "refusing to synthesize from a book that does not check"]}
 
           {:error, :usage, message} ->
             {:exit, 2, "", [message]}
 
-          {:error, :storage, message} ->
-            {:exit, 2, "", [message]}
-
-          {:ok, result} ->
-            present(result, out, Keyword.get(opts, :json, false), hooks)
+          {:ok, Muro.Synth.Procedure.Traces} ->
+            search(path, out, oracle, depth, fuel, opts, hooks)
         end
+    end
+  end
+
+  defp accepted_on?(nil), do: true
+  defp accepted_on?(name) when is_binary(name), do: name in Muro.Synth.Procedure.accepted()
+
+  defp search(path, out, oracle, depth, fuel, opts, hooks) do
+    # Printed on standard output, the book is saved in the current
+    # directory, so the import is relative to that directory. `--out`
+    # is relative to the file that was written.
+    anchor =
+      if is_binary(out),
+        do: Path.dirname(Path.expand(out)),
+        else: File.cwd!()
+
+    case Muro.Synth.Procedure.Traces.run(path, loop_opts(oracle, depth, fuel, anchor, hooks)) do
+      {:error, :book, message} ->
+        {:exit, 2, "", [message, "refusing to synthesize from a book that does not check"]}
+
+      {:error, :usage, message} ->
+        {:exit, 2, "", [message]}
+
+      {:error, :storage, message} ->
+        {:exit, 2, "", [message]}
+
+      {:ok, result} ->
+        present(result, out, Keyword.get(opts, :json, false), hooks)
     end
   end
 
