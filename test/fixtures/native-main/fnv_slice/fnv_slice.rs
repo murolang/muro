@@ -59,9 +59,9 @@ pub fn muro__reveal<T: 'static + ::std::clone::Clone>(muro__e: muro__Erased) -> 
     }
 }
 
-#[derive(::std::clone::Clone, ::std::fmt::Debug)]
+#[derive(::std::clone::Clone)]
 pub struct muro__Nat(::std::rc::Rc<muro__NatNode>);
-#[derive(::std::clone::Clone, ::std::fmt::Debug)]
+#[derive(::std::clone::Clone)]
 enum muro__NatNode {
     muro__tag_zero,
     muro__tag_suc(muro__Nat),
@@ -98,8 +98,9 @@ pub fn muro__to_u64(muro__n: &muro__Nat) -> ::std::primitive::u64 {
     }
 }
 
-// A derived `PartialEq` or `Drop` walks one `suc` per call.
+// A derived `PartialEq`, `Debug`, or `Drop` walks one `suc` per call.
 // `100000`, the largest `Nat` a Rust test builds, overflows that walk.
+// `Debug` prints the count, which is what `assert_eq!` writes on failure.
 impl ::std::cmp::PartialEq for muro__Nat {
     fn eq(&self, other: &Self) -> bool {
         let mut muro__a = self.clone();
@@ -112,6 +113,27 @@ impl ::std::cmp::PartialEq for muro__Nat {
                     muro__b = muro__q.clone();
                 }
                 _ => return false,
+            }
+        }
+    }
+}
+
+impl ::std::fmt::Debug for muro__Nat {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        let mut muro__n = self.clone();
+        let mut muro__k: ::std::primitive::u64 = 0;
+        loop {
+            match &*muro__n.0 {
+                muro__NatNode::muro__tag_zero => {
+                    return ::std::write!(f, "muro__Nat({})", muro__k);
+                }
+                muro__NatNode::muro__tag_suc(muro__p) => {
+                    if muro__k == ::std::primitive::u64::MAX {
+                        return f.write_str("muro__Nat(max)");
+                    }
+                    muro__k += 1;
+                    muro__n = muro__p.clone();
+                }
             }
         }
     }
