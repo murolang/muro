@@ -57,7 +57,7 @@ pages:
   - file: either.md
     slug: either
     title: Either and Dec
-    summary: Disjoint union and decisions. Not LEM.
+    summary: Disjoint union and decisions. LEM is an evidence axiom.
   - file: machine.md
     slug: machine
     title: Machine numbers

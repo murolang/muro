@@ -24,7 +24,7 @@ coordinator -> alice : prepare
 coordinator -> alice : prepare Nat
 ```
 
-`→` is the same arrow. The label is a name. The payload is optional and defaults to `Unit`. It is the type a `send` writes, and it does not bind a name. `prepare Nat` carries `Nat`. `prepare` carries `Unit`. A payload argument stops before a token that begins something else. The words are `def`, `data`, `session`, `conform`, `prefix`, `meet`, `place`, `scheme`, `move`, `endpoint`, `read`, `talk`, `choreography`, `seat`, `link`, `relay`, `import`, `param`, `where`, `nu`, `ν`, `end`, `send`, `recv`, `choose`, `branch`, `rec`, `case`, `on`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `over`, `say`, and `offer`. `temporal <name> :`, `family <name> :`, and `repr <name> :=` stop as well. A name followed by `->`, `→`, `chooses`, or `:` is the next interaction or a branch label, not an argument. `)` and `}` stop, and `end` closes a choice. Parentheses group a payload that would otherwise look like one (`(Reply)`, `(Maybe (List Nat))`). `Maybe Nat` is a payload. The wrong number of arguments is the session refusal `<name> takes <n> arguments, given <k>`, and one parameter is `argument`.
+`→` is the same arrow. The label is a name. The payload is optional and defaults to `Unit`. It is the type a `send` writes, and it does not bind a name. `prepare Nat` carries `Nat`. `prepare` carries `Unit`. A payload argument stops before a token that begins something else. The words are `def`, `data`, `session`, `conform`, `prefix`, `meet`, `place`, `scheme`, `move`, `endpoint`, `read`, `talk`, `choreography`, `seat`, `link`, `relay`, `import`, `param`, `axiom`, `where`, `nu`, `ν`, `end`, `send`, `recv`, `choose`, `branch`, `rec`, `case`, `on`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `over`, `say`, and `offer`. `temporal <name> :`, `family <name> :`, and `repr <name> :=` stop as well. A name followed by `->`, `→`, `chooses`, or `:` is the next interaction or a branch label, not an argument. `)` and `}` stop, and `end` closes a choice. Parentheses group a payload that would otherwise look like one (`(Reply)`, `(Maybe (List Nat))`). `Maybe Nat` is a payload. The wrong number of arguments is the session refusal `<name> takes <n> arguments, given <k>`, and one parameter is `argument`.
 
 A choice is one role selecting a labelled branch. Two or more branches are required.
 
@@ -131,7 +131,7 @@ The coordinator's session with alice is `choose end end`. The chooser is an end 
 
 ## What the checker prints
 
-After `Muro v…`, after any temporal lines, and before `All terms check. Evidence never becomes a run.`, one line per ordered pair of distinct roles, in the order the roles were written:
+After `Muro v…`, after any temporal lines, and before any axiom-dependency line and `All terms check. Evidence never becomes a run.`, one line per ordered pair of distinct roles, in the order the roles were written:
 
 ```
 choreography ping: a with b = send Nat end

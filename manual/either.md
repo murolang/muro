@@ -2,12 +2,12 @@
 title: Either and Dec
 slug: either
 order: 11
-summary: Disjoint union and decisions. Not LEM.
+summary: Disjoint union and decisions. LEM is an evidence axiom.
 ---
 
 # Either and Dec
 
-In brief: `A ⊎ B` is `data Either`. `Dec P` is `P ⊎ (P → Empty)`: a decision for a particular `P`, not LEM. There is no inhabitant of `Π (P : Type) → Dec P`.
+In brief: `A ⊎ B` is `data Either`. `Dec P` is `P ⊎ (P → Empty)`: a decision for a particular `P`. Excluded middle for every `P` is the evidence axiom `LEM` in `lib/Classical.muro`, not a proof. A `run` that depends on it is refused.
 
 ## Either
 
@@ -44,7 +44,7 @@ def Dec : spec Π (P : Type) → Type :=
 
 A value of `Dec P` is either a witness of `P` or a function that turns a witness into `Empty`. That is a decision for **this** `P`. It is not an axiom that every type is decidable.
 
-There is no inhabitant of `Π (P : Type) → Dec P`.
+`Π (P : Type) → Dec P` is not proved. `lib/Classical.muro` declares that type as the evidence axiom `LEM`, with no body, and proves `dne` from `LEM` by matching on `LEM P` and `matchEmpty` in the `right` branch. A `run` that depends on `LEM` is refused. Choice and Markov's principle are not declared.
 
 ## evenDec
 

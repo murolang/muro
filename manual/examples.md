@@ -598,7 +598,7 @@ See [Streams](streams.md).
 
 ## even_dec.muro
 
-`Dec P = P ⊎ (P → Empty)`. `evenDec` decides `IsEven n`. A decision, not LEM. Evidence; not emitted.
+`Dec P = P ⊎ (P → Empty)`. `evenDec` decides `IsEven n`. A decision for that predicate. Excluded middle for every type is the axiom `LEM` in `lib/Classical.muro`. Evidence; not emitted.
 
 ## either_run.muro
 

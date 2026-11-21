@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.15
+
+An axiom is a declaration with a type and no body. The type is evidence. A `?` is still an unsolved goal.
+
+`lib/Classical.muro` declares `LEM`, excluded middle at `Type`, and proves `dne` from it. `mix muro.check` prints the axioms a definition depends on. A definition that depends on none is silent. A `run` that depends on an axiom is refused, and it is not emitted.
+
+### Manual
+
+- Terms, Grammar, The wall, Either, Limits, Extending, and For agents: an axiom, the dependency lines, and the refusal of a `run` that reaches one. `lib/Classical.muro` is `LEM` and `dne`.
+
+### Package
+
+- Version 0.22.15.
+
 ## 0.22.14
 
 `held while any unresolved` is proved for any number of keys and any number of instances, including a family that holds one kind while an earlier instance is unresolved and another while any other instance of the key is open. At most one instance held that way is open for a key. An opened instance under `held while earlier unresolved` still has every earlier instance of its key that had already arrived resolved. A held instance, of either rule, has some opened instance of its key. The host is not obliged to resolve.

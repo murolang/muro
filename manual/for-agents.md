@@ -22,7 +22,8 @@ In brief: two jobs. Do not mix them. This page is the operational contract. Huma
 - `pred`, `plus`, `inj-suc`, `plus_suc`, `sym`, and `cong` are already in scope (`lib/muro/prelude.muro`). Defining one of those names replaces it, and drops any prelude definition that refers to it.
 - Use only tags `run`, `run internal`, `spec`, `evidence`.
 - Write a library for many environments with `param` entries, and check it through a file that supplies them with `def` or `data` of the same names and tags ([Params](language.md#params)). `mix muro.check` on the library itself names the params it is missing.
-- Leave `?` only while a term is unfinished. A hole always fails and is not in the finished book.
+- Leave `?` only while a term is unfinished. A hole always fails and is not in the finished book. A `?` is not an axiom.
+- An axiom is `axiom NAME : evidence TYPE`, with no body. Only that declaration is an axiom. The type is evidence. `lib/Classical.muro` declares `LEM` and proves `dne` from it. Import it by a relative path. It is not an `std:` book. `mix muro.check` prints `<name>: depends on <File.axiom>` for a definition that reaches an axiom, and stays silent when none do. A `run` that depends on an axiom is refused and is not emitted.
 
 **Do not**
 
@@ -158,7 +159,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.fill`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.14`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.15`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -171,7 +172,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.22.14.ez
+mix archive.install muro-0.22.15.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -243,14 +244,14 @@ mix muro.deps.get  # fetch muro_deps/ and write muro.lock
 make agda          # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then:
+On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then one line per definition that depends on an axiom (`dne: depends on Classical.LEM`), then:
 
 ```
-Muro v0.22.14
+Muro v0.22.15
 All terms check. Evidence never becomes a run.
 ```
 
-A book with no keyed family, no temporal declaration, and no choreography prints those two lines and nothing between them. A book that imports packages prints `conforms to <name> <version> (sha256 <hash>)` after that sentence, one line per package it loaded. A book that imports none, and `mix muro.check` with no path, print only those two lines. With no path the task checks the built-in book (`Muro.Example.book/0`), the same book as `examples/half_ok.muro`. It does not walk `examples/`.
+A book with no keyed family, no temporal declaration, no choreography, and no definition that depends on an axiom prints those two lines and nothing between them. A book that imports packages prints `conforms to <name> <version> (sha256 <hash>)` after that sentence, one line per package it loaded. A book that imports none, and `mix muro.check` with no path, print only those two lines. With no path the task checks the built-in book (`Muro.Example.book/0`), the same book as `examples/half_ok.muro`. It does not walk `examples/`.
 
 `Muro.Check.check_sig/2` returns `:ok` on a well-typed book, or `{:error, msg}` with every definition error in book order. `check_sig(book, fuel: n)` sets the fuel for each definition. Definitions are checked concurrently; the fuel is the bound, not a wall-clock timeout.
 
@@ -266,7 +267,7 @@ Elixir constraints when you are in Job B: ASCII identifiers only. Do not define 
 
 ## What is not in the language
 
-Type : Type, cubical, tactics, implicits, unification, metavariables (a `?` always fails; it does not unify; `mix muro.fill` replaces a `?` that is the whole body of one definition), extra quantities, `+` on Stream or Either, typing raw Elixir, emitting spec or evidence.
+Type : Type, cubical, tactics, implicits, unification, metavariables (a `?` always fails; it does not unify; `mix muro.fill` replaces a `?` that is the whole body of one definition), extra quantities, `+` on Stream or Either, typing raw Elixir, emitting spec or evidence, an axiom whose tag is not evidence, a run that depends on an axiom.
 
 Full list: [Limits](limits.md).
 
