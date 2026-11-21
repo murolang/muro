@@ -79,8 +79,10 @@ defmodule Muro.EmitRustTestSuiteTest do
   def step-ok : evidence {step 0 ≡ suc 0 : Nat} := refl
   """
 
-  # A direct boxed cycle is walked on a heap stack. `Twin` reaches
-  # itself only through a pair, so it keeps the derived walk.
+  # A direct boxed cycle is walked on a heap stack. `Nest` is that cycle
+  # and also stores itself in a pair, so the pair is on the same walk.
+  # `Twin` reaches itself only through a pair, so it keeps the derived walk.
+  # `Spine` carries a `Mark` that can cross the 1024-byte print.
   @deep """
   data Color : Type where
     red : Color
@@ -99,6 +101,16 @@ defmodule Muro.EmitRustTestSuiteTest do
   data Twin : Type where
     tip : Twin
     bin : Twin × Twin → Twin
+  data Nest : Type where
+    tipn : Nest
+    grow : Nest → Nest
+    wrap : Nest × Unit → Nest
+  data Mark : Type where
+    aaaaaaaaaaaaaaaaaaaaaaa : Mark
+    baaaaaaaaaaaaaaaaaaaaaa : Mark
+  data Spine : Type where
+    stop : Spine
+    link : Mark → Spine → Spine
   def len0 : run Π (xs : NatList) → Nat :=
     λ (xs : NatList) →
       match xs motive (λ _ → Nat)
@@ -556,10 +568,19 @@ defmodule Muro.EmitRustTestSuiteTest do
     assert image =~ "fn muro__fmt_NatList("
     assert image =~ "fn muro__drop_NatList("
     assert image =~ "out.push_str(\"...\")"
-    assert image =~ "out.len() >= 1024"
-    assert image =~ "is_char_boundary"
-    assert image =~ "Owned(::std::format!"
+    assert image =~ "1024usize.saturating_sub(out.len())"
+    assert image =~ "is_char_boundary(end)"
+    refute image =~ "out.len() >= 1024"
+    refute image =~ "Owned(::std::format!"
+    assert image =~ "if !stopped {"
+    assert image =~ "::std::boxed::Box::new(move || ::std::format!"
     assert image =~ "NatList({}: {})"
+    assert image =~ "impl ::std::cmp::PartialEq for Nest"
+    assert image =~ "impl ::std::fmt::Debug for Nest"
+    assert image =~ "impl ::std::ops::Drop for Nest"
+    assert image =~ "muro__try_reveal::<Nest>"
+    assert image =~ "downcast::<Nest>"
+    assert image =~ "impl ::std::fmt::Debug for Spine"
 
     assert image =~
              "enum muro__node_NatList {\n    nil,\n    cons(muro__Nat, NatList),\n}"
@@ -592,6 +613,7 @@ defmodule Muro.EmitRustTestSuiteTest do
   end
 
   @tag skip: @rustc_skip
+  @tag timeout: 180_000
   test "rustc compares, prints, and frees a deep declared value on a small stack" do
     {dir, path} = book("deep.muro", @deep)
     assert {:ok, [rs]} = Muro.emit_rust(path)
@@ -687,11 +709,54 @@ defmodule Muro.EmitRustTestSuiteTest do
                 let amsg = caught(|| assert_eq!(m0, m2, "mutual cap"));
                 drop(m0);
                 drop(m2);
-                (nmsg, amsg)
+
+                let spine = |last_diff: bool| {
+                    let same = deep::aaaaaaaaaaaaaaaaaaaaaaa();
+                    let diff = deep::baaaaaaaaaaaaaaaaaaaaaa();
+                    let mut s = deep::stop();
+                    let mut n = 0u64;
+                    while n < 24 {
+                        let mark = if n == 0 && last_diff { diff.clone() } else { same.clone() };
+                        s = deep::link(mark, s);
+                        n += 1;
+                    }
+                    s
+                };
+                let s0 = spine(false);
+                let s1 = spine(true);
+                let t0 = ::std::format!("{:?}", s0);
+                let t1 = ::std::format!("{:?}", s1);
+                drop(s0);
+                drop(s1);
+
+                let nest = |n: u64| {
+                    let mut v = deep::tipn();
+                    let mut i = 0u64;
+                    while i < n {
+                        if i % 2 == 0 {
+                            v = deep::wrap(deep::muro__pair(v, deep::muro__Unit));
+                        } else {
+                            v = deep::grow(v);
+                        }
+                        i += 1;
+                    }
+                    v
+                };
+                let u0 = nest(100000);
+                let u1 = nest(100000);
+                assert!(u0 == u1);
+                drop(u1);
+                let u2 = nest(99999);
+                assert!(u0 != u2);
+                let d0 = ::std::format!("{:?}", u0);
+                let d2 = ::std::format!("{:?}", u2);
+                drop(u0);
+                drop(u2);
+                (nmsg, amsg, t0, t1, d0, d2)
             })
             .unwrap()
             .join();
-        let (nmsg, amsg) = match ran {
+        let (nmsg, amsg, t0, t1, d0, d2) = match ran {
             ::std::result::Result::Ok(msgs) => msgs,
             ::std::result::Result::Err(_) => panic!("deep walk panicked"),
         };
@@ -701,6 +766,25 @@ defmodule Muro.EmitRustTestSuiteTest do
         assert!(amsg.contains("mutual cap"), "{amsg}");
         assert!(amsg.contains("A(16385:"), "{amsg}");
         assert!(amsg.contains("A(16383:"), "{amsg}");
+        assert!(t0.starts_with("Spine(25:"), "{t0}");
+        assert!(t1.starts_with("Spine(25:"), "{t1}");
+        let body0 = t0.split_once(": ").unwrap().1.strip_suffix(')').unwrap();
+        let body1 = t1.split_once(": ").unwrap().1.strip_suffix(')').unwrap();
+        assert!(body0.ends_with("..."), "{body0}");
+        assert!(body1.ends_with("..."), "{body1}");
+        let p0 = &body0[..body0.len() - 3];
+        let p1 = &body1[..body1.len() - 3];
+        assert_eq!(p0.len(), 1024, "{}", p0.len());
+        assert_eq!(p1.len(), 1024, "{}", p1.len());
+        let diff = p0.bytes().zip(p1.bytes()).position(|(x, y)| x != y);
+        let at = diff.expect("prints matched");
+        assert_eq!(at, 1006, "diff at {at}: {:?} vs {:?}", &p0[at.saturating_sub(16)..at + 8], &p1[at..at + 8]);
+        assert_eq!(&p0[..at], &p1[..at]);
+        assert!(d0.starts_with("Nest(100001:"), "{d0}");
+        assert!(d2.starts_with("Nest(100000:"), "{d2}");
+        assert!(d0.ends_with("...)"), "{d0}");
+        assert!(d2.ends_with("...)"), "{d2}");
+        assert_ne!(d0, d2);
     }
     """)
 

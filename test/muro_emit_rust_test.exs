@@ -865,9 +865,12 @@ defmodule Muro.EmitRustTest do
            }
            """
 
-    assert source =~ "fn muro__pair_fmt<"
+    assert source =~ "fn muro__pair_fmt("
+    assert source =~ "muro__erased_fmt(&muro__p.0, muro__f)?;"
+    assert source =~ "muro__erased_fmt(&muro__p.1, muro__f)?;"
+    assert source =~ "muro__f.write_str(\"..\")"
     assert source =~ "(self.3)(self, f)"
-    refute source =~ "f.write_str(\"muro__Pair(..)\")\n    }\n}"
+    refute source =~ "fn muro__pair_fmt_raw("
 
     out =
       run_rust!(
@@ -883,17 +886,29 @@ defmodule Muro.EmitRustTest do
             let c = pairs::muro__pair(pairs::muro__from_u64(1), pairs::muro__from_u64(3));
             assert!(a != c);
             let shown = format!("{a:?} {c:?}");
+            assert_eq!(format!("{a:?}"), "muro__Pair(muro__Nat(1), muro__Nat(2))");
             assert!(shown.contains("muro__Pair("), "{shown}");
             assert!(shown.contains("muro__Nat(1)"), "{shown}");
             assert!(shown.contains("muro__Nat(2)"), "{shown}");
             assert!(shown.contains("muro__Nat(3)"), "{shown}");
             assert!(format!("{a:?}") != format!("{c:?}"));
+            assert_eq!(format!("{:?}", pairs::wrap()), "muro__Pair(muro__Nat(0), ..)");
             let r = pairs::muro__pair_raw(pairs::muro__erase(()), pairs::muro__erase(()));
             let s = pairs::muro__pair_raw(pairs::muro__erase(()), pairs::muro__erase(()));
             assert!(r == r.clone());
             assert!(r == s);
             assert!(a != r);
-            assert_eq!(format!("{r:?}"), "muro__Pair(..)");
+            assert_eq!(format!("{r:?}"), "muro__Pair((), ())");
+            let hidden = pairs::muro__pair_raw(
+                pairs::muro__erase_opaque(()),
+                pairs::muro__erase_opaque(()),
+            );
+            assert_eq!(format!("{hidden:?}"), "muro__Pair(.., ..)");
+            let mixed = pairs::muro__pair_raw(
+                pairs::muro__erase(pairs::muro__from_u64(3)),
+                pairs::muro__erase_opaque(()),
+            );
+            assert_eq!(format!("{mixed:?}"), "muro__Pair(muro__Nat(3), ..)");
             println!("ok");
         }
         """,

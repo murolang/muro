@@ -49,8 +49,9 @@ defmodule Muro.Emit.Rust do
     tags = ~w(
       Nat NatNode Unit Erased Pair Stream Atom
       zero suc erase reveal from_u64 to_u64
-      pair pair_raw pair_eq pair_eq_raw pair_fmt pair_fmt_raw
-      erase_opaque erased_eq erased_id erased_same try_reveal
+      pair pair_raw pair_eq pair_eq_raw pair_fmt
+      erase_opaque erased_eq erased_id erased_same erased_debug erased_hidden erased_fmt
+      try_reveal f
       field_seed field_step tag_zero tag_suc
       seed n p k s t c x e rc v
     )
@@ -958,9 +959,9 @@ defmodule Muro.Emit.Rust do
   defp coerce(ex, from, to, st),
     do: "#{g("reveal")}::<#{rty(to, st)}>(#{erase_expr(ex, from, st)})"
 
-  # `muro__erase` requires `PartialEq`. A stream, a function, or data
-  # whose fields are not comparable has no such implementation, so it is
-  # erased with allocation identity instead.
+  # `muro__erase` requires `PartialEq` and `Debug`. A stream, a function,
+  # or data whose fields are not comparable has no such implementation,
+  # so it is erased with allocation identity and prints `..`.
   defp erase_expr(ex, from, st) do
     fun = if comparable?(st.book, from), do: g("erase"), else: g("erase_opaque")
     "#{fun}(#{ex})"
@@ -1261,10 +1262,12 @@ defmodule Muro.Emit.Rust do
   # A boxed type that reaches itself through a boxed field does not
   # derive `PartialEq` or `Debug`. Those walks, and `Drop`, are emitted
   # as a heap stack. `Debug` also prints each field outside the cycle.
-  # The text keeps at most 1024 bytes of that print, then `...`.
-  # `Opt` of the type being defined is not strictly positive, so it does
-  # not check. A cycle reached only through a pair keeps the derived
-  # walk. Unboxed data cannot be recursive.
+  # The text keeps the longest prefix that fits in 1024 bytes and ends
+  # on a character boundary, then `...`. A field of the cycle that stores
+  # the cycle inside a pair is walked on that same stack. `Opt` of the
+  # type being defined is not strictly positive, so it does not check.
+  # A cycle reached only through a pair keeps the derived walk. Unboxed
+  # data cannot be recursive.
   defp boxed_derives(book, name) do
     cond do
       cyclic_boxed?(book, name) ->
@@ -1455,9 +1458,10 @@ defmodule Muro.Emit.Rust do
 
   # A boxed type is cyclic when a boxed field reaches the type again,
   # including under `Opt`. Two types that contain each other are one
-  # cycle. `Opt` of the type being defined does not check. A cycle
-  # reached only through a pair is not this walk: that field keeps the
-  # derived impl. Unboxed data cannot be recursive.
+  # cycle. `Opt` of the type being defined does not check. A pair does
+  # not make the cycle. A field of a cycle that stores the cycle inside
+  # a pair is still walked here, on the heap stack. A cycle reached only
+  # through a pair keeps the derived impl. Unboxed data cannot be recursive.
   defp cyclic_boxed?(book, name), do: scc_of(book, name) != nil
 
   defp cycle_leader?(book, name) do
@@ -1512,6 +1516,18 @@ defmodule Muro.Emit.Rust do
   defp peel_opts(lay), do: peel_opts(lay, 0)
   defp peel_opts({:opt, inner}, n), do: peel_opts(inner, n + 1)
   defp peel_opts(lay, n), do: {n, lay}
+
+  # A pair does not put a type in the cycle. Once the type is in the
+  # cycle, a component that reaches it is still part of the heap walk.
+  defp reaches_scc?(lay, scc) do
+    {_opts, core} = peel_opts(lay)
+
+    case core do
+      {:data, name} -> name in scc
+      {:pair, a, b} -> reaches_scc?(a, scc) or reaches_scc?(b, scc)
+      _ -> false
+    end
+  end
 
   defp sccs(graph) do
     start = %{i: 0, stack: [], on: MapSet.new(), ix: %{}, low: %{}, out: [], seen: MapSet.new()}
@@ -1731,18 +1747,13 @@ defmodule Muro.Emit.Rust do
   end
 
   defp drop_binder(lay, i, scc) do
-    {opts, core} = peel_opts(lay)
+    {opts, _core} = peel_opts(lay)
+    name = g("a", i)
 
-    case core do
-      {:data, name} ->
-        cond do
-          name in scc and opts == 0 -> "mut #{g("a", i)}"
-          name in scc -> g("a", i)
-          true -> "_"
-        end
-
-      _ ->
-        "_"
+    cond do
+      not reaches_scc?(lay, scc) -> "_"
+      opts == 0 -> "mut #{name}"
+      true -> name
     end
   end
 
@@ -1759,37 +1770,93 @@ defmodule Muro.Emit.Rust do
   end
 
   defp drop_steal(lay, var, scc, types, frame) do
-    {opts, core} = peel_opts(lay)
-
-    case core do
-      {:data, name} ->
-        if name in scc do
-          [wrap_opts_drop(opts, var, frame, rust_type(types, name), hole_var(types, name))]
-        else
-          []
-        end
-
-      _ ->
-        []
+    if reaches_scc?(lay, scc) do
+      [drop_known(lay, var, scc, types, frame)]
+    else
+      []
     end
   end
 
-  defp wrap_opts_drop(0, var, frame, rust_name, hole) do
-    """
-    if ::std::rc::Rc::strong_count(&#{var}.0) == 1 {
-        stack.push(#{frame}::#{rust_name}(::std::mem::replace(&mut #{var}.0, #{hole}.clone())));
-    }
-    """
-    |> String.trim()
+  defp drop_known(lay, var, scc, types, frame) do
+    {opts, core} = peel_opts(lay)
+    inner = drop_core(core, var, scc, types, frame)
+    wrap_opts_drop(opts, var, inner)
   end
 
-  defp wrap_opts_drop(n, var, frame, rust_name, hole) do
-    inner = wrap_opts_drop(n - 1, var, frame, rust_name, hole)
+  defp drop_core({:data, name}, var, scc, types, frame) do
+    if name in scc do
+      hole = hole_var(types, name)
+      rust = rust_type(types, name)
+
+      """
+      if ::std::rc::Rc::strong_count(&#{var}.0) == 1 {
+          stack.push(#{frame}::#{rust}(::std::mem::replace(&mut #{var}.0, #{hole}.clone())));
+      }
+      """
+      |> String.trim()
+    else
+      ""
+    end
+  end
+
+  defp drop_core({:pair, x, y}, var, scc, types, frame) do
+    [x, y]
+    |> Enum.with_index()
+    |> Enum.map(fn {lay, i} ->
+      slot = if i == 0, do: "l", else: "r"
+      drop_component(lay, "#{var}.#{i}", "#{var}#{slot}", scc, types, frame)
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+  end
+
+  defp drop_core(_core, _var, _scc, _types, _frame), do: ""
+
+  # The component is an erased value inside a pair. Take it out before the
+  # pair drops, or the component's `Drop` runs on the call stack.
+  defp drop_component(lay, expr, bind, scc, types, frame) do
+    if reaches_scc?(lay, scc) do
+      rust = rty(lay, %{types: types})
+      {opts, _} = peel_opts(lay)
+      owned = if opts == 0, do: "mut #{bind}", else: bind
+      inner = drop_known(lay, bind, scc, types, frame)
+
+      """
+      {
+          let #{bind}_slot: ::std::rc::Rc<dyn ::std::any::Any> = ::std::rc::Rc::new(());
+          let #{bind}_payload = ::std::mem::replace(&mut #{expr}.0, #{bind}_slot);
+          match ::std::rc::Rc::downcast::<#{rust}>(#{bind}_payload) {
+              ::std::result::Result::Ok(#{bind}_rc) => {
+                  if ::std::rc::Rc::strong_count(&#{bind}_rc) == 1 {
+                      match ::std::rc::Rc::try_unwrap(#{bind}_rc) {
+                          ::std::result::Result::Ok(#{owned}) => {
+                              #{inner}
+                          }
+                          ::std::result::Result::Err(_) => {}
+                      }
+                  }
+              }
+              ::std::result::Result::Err(#{bind}_payload) => {
+                  ::std::mem::drop(#{bind}_payload);
+              }
+          }
+      }
+      """
+      |> String.trim()
+    else
+      ""
+    end
+  end
+
+  defp wrap_opts_drop(0, _var, inner), do: inner
+
+  defp wrap_opts_drop(n, var, inner) do
+    nested = wrap_opts_drop(n - 1, var, inner)
 
     """
     match #{var} {
         ::std::option::Option::Some(mut #{var}) => {
-            #{inner}
+            #{nested}
         }
         ::std::option::Option::None => {}
     }
@@ -1816,6 +1883,10 @@ defmodule Muro.Emit.Rust do
       end)
 
     """
+    // A value this image builds is a tree: each constructor allocates a
+    // fresh node. A clone shares a node, and this walk visits that node
+    // again. There is no cycle to cut, so this walk has no visited set.
+    // A host-built cycle is outside the image. `Debug` records its path.
     enum #{frame} {
     #{enum_vars}
     }
@@ -1899,21 +1970,64 @@ defmodule Muro.Emit.Rust do
   end
 
   defp eq_field(lay, ae, be, scc, types, frame) do
+    if reaches_scc?(lay, scc) do
+      eq_known(lay, ae, be, scc, types, frame)
+    else
+      "if #{ae} != #{be} { return false; }"
+    end
+  end
+
+  defp eq_known(lay, an, bn, scc, types, frame) do
     {opts, core} = peel_opts(lay)
 
-    case core do
-      {:data, name} ->
-        if name in scc do
-          push =
-            "stack.push(#{frame}::#{rust_type(types, name)}(#{ae}.0.clone(), #{be}.0.clone()));"
+    inner =
+      case core do
+        {:data, name} ->
+          if name in scc do
+            "stack.push(#{frame}::#{rust_type(types, name)}(#{an}.0.clone(), #{bn}.0.clone()));"
+          else
+            "if #{an} != #{bn} { return false; }"
+          end
 
-          wrap_opts_eq(opts, ae, be, push)
-        else
-          "if #{ae} != #{be} { return false; }"
-        end
+        {:pair, x, y} ->
+          eq_pair(x, y, an, bn, scc, types, frame)
 
-      _ ->
-        "if #{ae} != #{be} { return false; }"
+        _ ->
+          "if #{an} != #{bn} { return false; }"
+      end
+
+    wrap_opts_eq(opts, an, bn, inner)
+  end
+
+  defp eq_pair(x, y, an, bn, scc, types, frame) do
+    left = eq_component(x, "#{an}.0", "#{bn}.0", "#{an}l", "#{bn}l", scc, types, frame)
+    right = eq_component(y, "#{an}.1", "#{bn}.1", "#{an}r", "#{bn}r", scc, types, frame)
+    left <> "\n" <> right
+  end
+
+  # `a_expr` is an erased component. Reveal it before walking a part of
+  # the cycle, so the pair's `PartialEq` does not re-enter this walk.
+  defp eq_component(lay, a_expr, b_expr, an, bn, scc, types, frame) do
+    if reaches_scc?(lay, scc) do
+      rust = rty(lay, %{types: types})
+      inner = eq_known(lay, an, bn, scc, types, frame)
+
+      """
+      match (
+          #{g("try_reveal")}::<#{rust}>(&#{a_expr}),
+          #{g("try_reveal")}::<#{rust}>(&#{b_expr}),
+      ) {
+          (::std::option::Option::Some(#{an}), ::std::option::Option::Some(#{bn})) => {
+              #{inner}
+          }
+          _ => {
+              if !#{g("erased_same")}(&#{a_expr}, &#{b_expr}) { return false; }
+          }
+      }
+      """
+      |> String.trim()
+    else
+      "if !#{g("erased_same")}(&#{a_expr}, &#{b_expr}) { return false; }"
     end
   end
 
@@ -1963,9 +2077,11 @@ defmodule Muro.Emit.Rust do
 
     """
     // The cycle is walked on a heap stack. A field outside the cycle is
-    // printed, so two values that differ there do not share a string when
-    // the difference is in the prefix. The text keeps 1024 bytes, then `...`.
-    // A node still on the path is a cycle and is printed as `...`.
+    // printed. The text keeps the longest prefix that fits in 1024 bytes
+    // and ends on a character boundary, then `...`. A field that crosses
+    // that boundary contributes the bytes that fit. Once that prefix is
+    // full, a later field is not formatted. The node count still includes
+    // every node. A node still on the path is a cycle and is printed as `...`.
     enum #{frame} {
     #{enum_vars}
     }
@@ -1973,7 +2089,7 @@ defmodule Muro.Emit.Rust do
     enum #{job} {
         Node(#{frame}),
         Text(&'static str),
-        Owned(::std::string::String),
+        Owned(::std::boxed::Box<dyn ::std::ops::FnOnce() -> ::std::string::String>),
         Leave(#{frame}),
     }
 
@@ -1981,18 +2097,19 @@ defmodule Muro.Emit.Rust do
         if *stopped {
             return;
         }
-        if out.len() >= 1024 || s.len() > 1024 - out.len() {
-            if s.len() > 1024 && out.len() < 1024 {
-                let mut end = 1024 - out.len();
-                while end > 0 && !s.is_char_boundary(end) {
-                    end -= 1;
-                }
+        let room = 1024usize.saturating_sub(out.len());
+        if s.len() <= room {
+            out.push_str(s);
+        } else {
+            let mut end = room;
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end > 0 {
                 out.push_str(&s[..end]);
             }
             out.push_str("...");
             *stopped = true;
-        } else {
-            out.push_str(s);
         }
     }
 
@@ -2009,7 +2126,12 @@ defmodule Muro.Emit.Rust do
             };
             match job {
                 #{job}::Text(s) => #{keep}(out, &mut stopped, s),
-                #{job}::Owned(s) => #{keep}(out, &mut stopped, &s),
+                #{job}::Owned(render) => {
+                    if !stopped {
+                        let rendered = render();
+                        #{keep}(out, &mut stopped, &rendered);
+                    }
+                }
                 #{job}::Leave(kept) => {
                     let p = match &kept {
     #{leave}
@@ -2124,26 +2246,88 @@ defmodule Muro.Emit.Rust do
   end
 
   defp fmt_field_push(lay, var, scc, types, frame, job) do
+    if reaches_scc?(lay, scc) do
+      fmt_scc(lay, var, scc, types, frame, job)
+    else
+      fmt_owned_push(var, job)
+    end
+  end
+
+  defp fmt_scc(lay, var, scc, types, frame, job) do
     {opts, core} = peel_opts(lay)
 
-    case core do
-      {:data, name} ->
-        if name in scc do
-          inner =
-            "stack.push(#{job}::Node(#{frame}::#{rust_type(types, name)}(#{var}.0.clone())));"
+    inner =
+      case core do
+        {:data, name} ->
+          "stack.push(#{job}::Node(#{frame}::#{rust_type(types, name)}(#{var}.0.clone())));"
 
-          wrap_opts_push(opts, var, inner, job)
-        else
-          fmt_owned_push(var, job)
-        end
+        {:pair, x, y} ->
+          fmt_pair(x, y, var, scc, types, frame, job)
+      end
 
-      _ ->
-        fmt_owned_push(var, job)
+    wrap_opts_push(opts, var, inner, job)
+  end
+
+  # Jobs are pushed so the first component is printed first. A component
+  # in the cycle is another node. Any other component is its `Debug`, or
+  # `..` when the erased value has no printer for that type.
+  defp fmt_pair(x, y, var, scc, types, frame, job) do
+    pair = g("Pair")
+    right = fmt_erased(y, "#{var}.1", "#{var}r", scc, types, frame, job)
+    left = fmt_erased(x, "#{var}.0", "#{var}l", scc, types, frame, job)
+
+    [
+      "stack.push(#{job}::Text(\")\"));",
+      right,
+      "stack.push(#{job}::Text(\", \"));",
+      left,
+      "stack.push(#{job}::Text(\"#{pair}(\"));"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp fmt_erased(lay, expr, bind, scc, types, frame, job) do
+    rust = rty(lay, %{types: types})
+
+    if reaches_scc?(lay, scc) do
+      inner = fmt_scc(lay, bind, scc, types, frame, job)
+
+      """
+      match #{g("try_reveal")}::<#{rust}>(&#{expr}) {
+          ::std::option::Option::Some(#{bind}) => {
+              #{inner}
+          }
+          ::std::option::Option::None => {
+              stack.push(#{job}::Text(".."));
+          }
+      }
+      """
+      |> String.trim()
+    else
+      """
+      if !stopped {
+          match #{g("try_reveal")}::<#{rust}>(&#{expr}) {
+              ::std::option::Option::Some(#{bind}) => {
+                  stack.push(#{job}::Owned(::std::boxed::Box::new(move || ::std::format!("{:?}", #{bind}))));
+              }
+              ::std::option::Option::None => {
+                  stack.push(#{job}::Text(".."));
+              }
+          }
+      }
+      """
+      |> String.trim()
     end
   end
 
   defp fmt_owned_push(var, job) do
-    "stack.push(#{job}::Owned(::std::format!(\"{:?}\", #{var})));"
+    """
+    if !stopped {
+        let #{var}_shown = #{var}.clone();
+        stack.push(#{job}::Owned(::std::boxed::Box::new(move || ::std::format!("{:?}", #{var}_shown))));
+    }
+    """
+    |> String.trim()
   end
 
   defp wrap_opts_push(0, _var, inner, _job), do: inner
@@ -2260,12 +2444,14 @@ defmodule Muro.Emit.Rust do
     b = g("b")
     q = g("q")
     s = g("s")
+    f = g("f")
 
     """
     #[derive(::std::clone::Clone)]
     pub struct #{erased}(
         ::std::rc::Rc<dyn ::std::any::Any>,
         fn(&(dyn ::std::any::Any), &(dyn ::std::any::Any)) -> bool,
+        fn(&(dyn ::std::any::Any), &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result,
     );
 
     fn #{g("erased_eq")}<T: ::std::cmp::PartialEq + 'static>(
@@ -2297,12 +2483,33 @@ defmodule Muro.Emit.Rust do
             && (#{g("b")}.1)(#{g("b")}.0.as_ref(), #{g("a")}.0.as_ref())
     }
 
-    pub fn #{g("erase")}<T: ::std::cmp::PartialEq + 'static>(#{x}: T) -> #{erased} {
-        #{erased}(::std::rc::Rc::new(#{x}), #{g("erased_eq")}::<T>)
+    fn #{g("erased_debug")}<T: ::std::fmt::Debug + 'static>(
+        #{a}: &(dyn ::std::any::Any),
+        #{f}: &mut ::std::fmt::Formatter<'_>,
+    ) -> ::std::fmt::Result {
+        match #{a}.downcast_ref::<T>() {
+            ::std::option::Option::Some(#{a}) => ::std::fmt::Debug::fmt(#{a}, #{f}),
+            ::std::option::Option::None => #{f}.write_str(".."),
+        }
+    }
+
+    fn #{g("erased_hidden")}(
+        _: &(dyn ::std::any::Any),
+        #{f}: &mut ::std::fmt::Formatter<'_>,
+    ) -> ::std::fmt::Result {
+        #{f}.write_str("..")
+    }
+
+    fn #{g("erased_fmt")}(#{e}: &#{erased}, #{f}: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        (#{e}.2)(#{e}.0.as_ref(), #{f})
+    }
+
+    pub fn #{g("erase")}<T: ::std::cmp::PartialEq + ::std::fmt::Debug + 'static>(#{x}: T) -> #{erased} {
+        #{erased}(::std::rc::Rc::new(#{x}), #{g("erased_eq")}::<T>, #{g("erased_debug")}::<T>)
     }
 
     pub fn #{g("erase_opaque")}<T: 'static>(#{x}: T) -> #{erased} {
-        #{erased}(::std::rc::Rc::new(#{x}), #{g("erased_id")}::<T>)
+        #{erased}(::std::rc::Rc::new(#{x}), #{g("erased_id")}::<T>, #{g("erased_hidden")})
     }
 
     fn #{g("try_reveal")}<T: 'static + ::std::clone::Clone>(#{e}: &#{erased}) -> ::std::option::Option<T> {
@@ -2462,33 +2669,18 @@ defmodule Muro.Emit.Rust do
         #{g("erased_same")}(&#{g("a")}.0, &#{g("b")}.0) && #{g("erased_same")}(&#{g("a")}.1, &#{g("b")}.1)
     }
 
-    fn #{g("pair_fmt")}<A: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static>(
+    // Each component prints through the printer stored on the erased value.
+    // A component with `Debug` prints as that. A component with none prints
+    // `..`. One hidden component does not hide the other.
+    fn #{g("pair_fmt")}(
         #{g("p")}: &#{pair},
-        #{g("f")}: &mut ::std::fmt::Formatter<'_>,
+        #{f}: &mut ::std::fmt::Formatter<'_>,
     ) -> ::std::fmt::Result {
-        match (
-            #{g("try_reveal")}::<A>(&#{g("p")}.0),
-            #{g("try_reveal")}::<B>(&#{g("p")}.1),
-        ) {
-            (
-                ::std::option::Option::Some(#{g("a")}),
-                ::std::option::Option::Some(#{g("b")}),
-            ) => {
-                #{g("f")}.write_str("#{pair}(")?;
-                ::std::fmt::Debug::fmt(&#{g("a")}, #{g("f")})?;
-                #{g("f")}.write_str(", ")?;
-                ::std::fmt::Debug::fmt(&#{g("b")}, #{g("f")})?;
-                #{g("f")}.write_str(")")
-            }
-            _ => #{g("f")}.write_str("#{pair}(..)"),
-        }
-    }
-
-    fn #{g("pair_fmt_raw")}(
-        _: &#{pair},
-        #{g("f")}: &mut ::std::fmt::Formatter<'_>,
-    ) -> ::std::fmt::Result {
-        #{g("f")}.write_str("#{pair}(..)")
+        #{f}.write_str("#{pair}(")?;
+        #{g("erased_fmt")}(&#{g("p")}.0, #{f})?;
+        #{f}.write_str(", ")?;
+        #{g("erased_fmt")}(&#{g("p")}.1, #{f})?;
+        #{f}.write_str(")")
     }
 
     pub fn #{g("pair")}<A: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static>(
@@ -2499,12 +2691,12 @@ defmodule Muro.Emit.Rust do
             #{g("erase")}(#{g("a")}),
             #{g("erase")}(#{g("b")}),
             #{g("pair_eq")}::<A, B>,
-            #{g("pair_fmt")}::<A, B>,
+            #{g("pair_fmt")},
         )
     }
 
     pub fn #{g("pair_raw")}(#{g("a")}: #{erased}, #{g("b")}: #{erased}) -> #{pair} {
-        #{pair}(#{g("a")}, #{g("b")}, #{g("pair_eq_raw")}, #{g("pair_fmt_raw")})
+        #{pair}(#{g("a")}, #{g("b")}, #{g("pair_eq_raw")}, #{g("pair_fmt")})
     }
 
     impl ::std::cmp::PartialEq for #{pair} {
