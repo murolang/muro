@@ -49,7 +49,7 @@ defmodule Muro.Emit.Rust do
     tags = ~w(
       Nat NatNode Unit Erased Pair Stream Atom
       zero suc erase reveal from_u64 to_u64
-      pair pair_raw pair_eq pair_eq_raw
+      pair pair_raw pair_eq pair_eq_raw pair_fmt pair_fmt_raw
       erase_opaque erased_eq erased_id erased_same try_reveal
       field_seed field_step tag_zero tag_suc
       seed n p k s t c x e rc v
@@ -1260,9 +1260,10 @@ defmodule Muro.Emit.Rust do
 
   # A boxed type that reaches itself through a boxed field does not
   # derive `PartialEq` or `Debug`. Those walks, and `Drop`, are emitted
-  # as a heap stack. `Opt` of the type being defined is not strictly
-  # positive, so it does not check. A cycle reached only through a pair
-  # keeps the derived walk. Unboxed data cannot be recursive.
+  # as a heap stack. `Debug` also prints each field outside the cycle.
+  # `Opt` of the type being defined is not strictly positive, so it does
+  # not check. A cycle reached only through a pair keeps the derived
+  # walk. Unboxed data cannot be recursive.
   defp boxed_derives(book, name) do
     cond do
       cyclic_boxed?(book, name) ->
@@ -1935,6 +1936,7 @@ defmodule Muro.Emit.Rust do
   defp fmt_walk(book, scc, types, variants) do
     leader = hd(scc)
     frame = g("fmt_frame_" <> rust_type(types, leader))
+    job = g("fmt_job_" <> rust_type(types, leader))
     fun = g("fmt_" <> rust_type(types, leader))
 
     enum_vars =
@@ -1942,26 +1944,55 @@ defmodule Muro.Emit.Rust do
         "    #{rust_type(types, name)}(::std::rc::Rc<#{node_of(types, name)}>),"
       end)
 
-    arms = Enum.map_join(scc, "\n", &fmt_frame_arm(book, &1, scc, types, variants, frame))
+    arms = Enum.map_join(scc, "\n", &fmt_frame_arm(book, &1, scc, types, variants, frame, job))
+
+    leave =
+      Enum.map_join(scc, "\n", fn name ->
+        type = rust_type(types, name)
+        "    #{frame}::#{type}(n) => ::std::rc::Rc::as_ptr(n) as *const (),"
+      end)
 
     impls = Enum.map_join(scc, "\n\n", &fmt_impl(&1, types, frame, fun))
 
     """
+    // The cycle is walked on a heap stack. A field outside the cycle is
+    // printed, so two values that differ only there do not share a string.
+    // A node still on the path is a cycle and is printed as `...`.
     enum #{frame} {
     #{enum_vars}
     }
 
-    fn #{fun}(start: #{frame}) -> ::std::primitive::u64 {
+    enum #{job} {
+        Node(#{frame}),
+        Text(&'static str),
+        Owned(::std::string::String),
+        Leave(#{frame}),
+    }
+
+    fn #{fun}(start: #{frame}, out: &mut ::std::string::String) -> ::std::primitive::u64 {
         let mut stack = ::std::vec::Vec::new();
-        stack.push(start);
+        stack.push(#{job}::Node(start));
+        let mut path = ::std::collections::HashSet::<*const ()>::new();
         let mut k: ::std::primitive::u64 = 0;
         loop {
-            let frame = match stack.pop() {
-                ::std::option::Option::Some(frame) => frame,
+            let job = match stack.pop() {
+                ::std::option::Option::Some(job) => job,
                 ::std::option::Option::None => return k,
             };
-            match frame {
+            match job {
+                #{job}::Text(s) => out.push_str(s),
+                #{job}::Owned(s) => out.push_str(&s),
+                #{job}::Leave(kept) => {
+                    let p = match &kept {
+    #{leave}
+                    };
+                    let _ = path.remove(&p);
+                }
+                #{job}::Node(kept) => {
+                    match kept {
     #{indent(arms, 4)}
+                    }
+                }
             }
         }
     }
@@ -1977,15 +2008,16 @@ defmodule Muro.Emit.Rust do
     """
     impl ::std::fmt::Debug for #{type} {
         fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-            let k = #{fun}(#{frame}::#{type}(self.0.clone()));
-            ::std::write!(f, "#{type}({})", k)
+            let mut body = ::std::string::String::new();
+            let k = #{fun}(#{frame}::#{type}(self.0.clone()), &mut body);
+            ::std::write!(f, "#{type}({}: {})", k, body)
         }
     }
     """
     |> String.trim()
   end
 
-  defp fmt_frame_arm(book, name, scc, types, variants, frame) do
+  defp fmt_frame_arm(book, name, scc, types, variants, frame, job) do
     type = rust_type(types, name)
     node = node_of(types, name)
     d = data_by(book, name)
@@ -1994,14 +2026,18 @@ defmodule Muro.Emit.Rust do
       Enum.map(d.ctors, fn c ->
         fields = ctor_fields(book, c.name)
         variant = Map.fetch!(variants, {name, c.name})
-        pat = fmt_pat(node, variant, fields, scc)
-        body = fmt_body(fields, scc, types, frame)
+        pat = fmt_pat(node, variant, fields)
+        body = fmt_ctor_push(type, variant, fields, scc, types, frame, job)
         "    #{pat} => {\n#{body}    }"
       end)
 
     hole_arm =
       if fieldless_variant(book, name, variants) == nil do
-        ["    #{node}::#{g("hole")} => {}"]
+        hole = g("hole")
+
+        [
+          "    #{node}::#{hole} => {\n        stack.push(#{job}::Text(\"#{type}::#{hole}\"));\n    }"
+        ]
       else
         []
       end
@@ -2010,10 +2046,17 @@ defmodule Muro.Emit.Rust do
 
     """
     #{frame}::#{type}(n) => {
+        let p = ::std::rc::Rc::as_ptr(&n) as *const ();
+        if path.contains(&p) {
+            out.push_str("...");
+            continue;
+        }
         if k == ::std::primitive::u64::MAX {
             return k;
         }
+        let _ = path.insert(p);
         k += 1;
+        stack.push(#{job}::Leave(#{frame}::#{type}(n.clone())));
         match &*n {
     #{inner}
         }
@@ -2022,66 +2065,74 @@ defmodule Muro.Emit.Rust do
     |> String.trim()
   end
 
-  defp fmt_pat(node, variant, [], _scc), do: "#{node}::#{variant}"
+  defp fmt_pat(node, variant, []), do: "#{node}::#{variant}"
 
-  defp fmt_pat(node, variant, fields, scc) do
-    binders =
-      fields
-      |> Enum.with_index()
-      |> Enum.map_join(", ", fn {lay, i} ->
-        if steals?(lay, scc), do: g("a", i), else: "_"
-      end)
-
+  defp fmt_pat(node, variant, fields) do
+    binders = Enum.map_join(0..(length(fields) - 1), ", ", &g("a", &1))
     "#{node}::#{variant}(#{binders})"
   end
 
-  defp steals?(lay, scc) do
-    case peel_opts(lay) do
-      {_n, {:data, name}} -> name in scc
-      _ -> false
-    end
+  # Jobs are pushed so the first field is printed first. A field in the
+  # cycle is another node on the heap stack. Any other field is its
+  # `Debug`, which is how a payload difference shows up.
+  defp fmt_ctor_push(type, variant, [], _scc, _types, _frame, job) do
+    "        stack.push(#{job}::Text(\"#{type}::#{variant}\"));\n"
   end
 
-  defp fmt_body(fields, scc, types, frame) do
-    lines =
+  defp fmt_ctor_push(type, variant, fields, scc, types, frame, job) do
+    field_lines =
       fields
       |> Enum.with_index()
-      |> Enum.flat_map(fn {lay, i} -> fmt_steal(lay, g("a", i), scc, types, frame) end)
+      |> Enum.reverse()
+      |> Enum.map(fn {lay, i} -> fmt_field_push(lay, g("a", i), scc, types, frame, job) end)
+      |> Enum.intersperse("stack.push(#{job}::Text(\", \"));")
 
-    case lines do
-      [] -> ""
-      _ -> Enum.map_join(lines, "\n", &indent(&1, 8)) <> "\n"
-    end
+    lines =
+      ["stack.push(#{job}::Text(\")\"));"] ++
+        field_lines ++
+        ["stack.push(#{job}::Text(\"#{type}::#{variant}(\"));"]
+
+    Enum.map_join(lines, "\n", &indent(&1, 8)) <> "\n"
   end
 
-  defp fmt_steal(lay, var, scc, types, frame) do
+  defp fmt_field_push(lay, var, scc, types, frame, job) do
     {opts, core} = peel_opts(lay)
 
     case core do
       {:data, name} ->
         if name in scc do
-          push = "stack.push(#{frame}::#{rust_type(types, name)}(#{var}.0.clone()));"
-          [wrap_opts_fmt(opts, var, push)]
+          inner =
+            "stack.push(#{job}::Node(#{frame}::#{rust_type(types, name)}(#{var}.0.clone())));"
+
+          wrap_opts_push(opts, var, inner, job)
         else
-          []
+          fmt_owned_push(var, job)
         end
 
       _ ->
-        []
+        fmt_owned_push(var, job)
     end
   end
 
-  defp wrap_opts_fmt(0, _var, inner), do: inner
+  defp fmt_owned_push(var, job) do
+    "stack.push(#{job}::Owned(::std::format!(\"{:?}\", #{var})));"
+  end
 
-  defp wrap_opts_fmt(n, var, inner) do
-    nested = wrap_opts_fmt(n - 1, var, inner)
+  defp wrap_opts_push(0, _var, inner, _job), do: inner
+
+  defp wrap_opts_push(n, var, inner, job) do
+    nested = wrap_opts_push(n - 1, var, inner, job)
 
     """
     match #{var} {
         ::std::option::Option::Some(#{var}) => {
+            stack.push(#{job}::Text(")"));
             #{nested}
+            stack.push(#{job}::Text("Some("));
         }
-        ::std::option::Option::None => {}
+        ::std::option::Option::None => {
+            stack.push(#{job}::Text("None"));
+        }
     }
     """
     |> String.trim()
@@ -2353,6 +2404,7 @@ defmodule Muro.Emit.Rust do
         #{erased},
         #{erased},
         fn(&#{pair}, &#{pair}) -> bool,
+        fn(&#{pair}, &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result,
     );
 
     fn #{g("pair_eq")}<A: ::std::cmp::PartialEq + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::clone::Clone + 'static>(
@@ -2382,15 +2434,49 @@ defmodule Muro.Emit.Rust do
         #{g("erased_same")}(&#{g("a")}.0, &#{g("b")}.0) && #{g("erased_same")}(&#{g("a")}.1, &#{g("b")}.1)
     }
 
+    fn #{g("pair_fmt")}<A: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static>(
+        #{g("p")}: &#{pair},
+        #{g("f")}: &mut ::std::fmt::Formatter<'_>,
+    ) -> ::std::fmt::Result {
+        match (
+            #{g("try_reveal")}::<A>(&#{g("p")}.0),
+            #{g("try_reveal")}::<B>(&#{g("p")}.1),
+        ) {
+            (
+                ::std::option::Option::Some(#{g("a")}),
+                ::std::option::Option::Some(#{g("b")}),
+            ) => {
+                #{g("f")}.write_str("#{pair}(")?;
+                ::std::fmt::Debug::fmt(&#{g("a")}, #{g("f")})?;
+                #{g("f")}.write_str(", ")?;
+                ::std::fmt::Debug::fmt(&#{g("b")}, #{g("f")})?;
+                #{g("f")}.write_str(")")
+            }
+            _ => #{g("f")}.write_str("#{pair}(..)"),
+        }
+    }
+
+    fn #{g("pair_fmt_raw")}(
+        _: &#{pair},
+        #{g("f")}: &mut ::std::fmt::Formatter<'_>,
+    ) -> ::std::fmt::Result {
+        #{g("f")}.write_str("#{pair}(..)")
+    }
+
     pub fn #{g("pair")}<A: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static>(
         #{g("a")}: A,
         #{g("b")}: B,
     ) -> #{pair} {
-        #{pair}(#{g("erase")}(#{g("a")}), #{g("erase")}(#{g("b")}), #{g("pair_eq")}::<A, B>)
+        #{pair}(
+            #{g("erase")}(#{g("a")}),
+            #{g("erase")}(#{g("b")}),
+            #{g("pair_eq")}::<A, B>,
+            #{g("pair_fmt")}::<A, B>,
+        )
     }
 
     pub fn #{g("pair_raw")}(#{g("a")}: #{erased}, #{g("b")}: #{erased}) -> #{pair} {
-        #{pair}(#{g("a")}, #{g("b")}, #{g("pair_eq_raw")})
+        #{pair}(#{g("a")}, #{g("b")}, #{g("pair_eq_raw")}, #{g("pair_fmt_raw")})
     }
 
     impl ::std::cmp::PartialEq for #{pair} {
@@ -2401,7 +2487,7 @@ defmodule Muro.Emit.Rust do
 
     impl ::std::fmt::Debug for #{pair} {
         fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-            f.write_str("#{pair}(..)")
+            (self.3)(self, f)
         }
     }
 

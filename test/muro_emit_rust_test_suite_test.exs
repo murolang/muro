@@ -555,6 +555,9 @@ defmodule Muro.EmitRustTestSuiteTest do
     assert image =~ "fn muro__eq_NatList("
     assert image =~ "fn muro__fmt_NatList("
     assert image =~ "fn muro__drop_NatList("
+    assert image =~ "out.push_str(\"...\")"
+    assert image =~ "Owned(::std::format!"
+    assert image =~ "NatList({}: {})"
 
     assert image =~
              "enum muro__node_NatList {\n    nil,\n    cons(muro__Nat, NatList),\n}"
@@ -620,6 +623,21 @@ defmodule Muro.EmitRustTestSuiteTest do
             .spawn(|| {
                 assert!(deep::tip() == deep::tip());
                 let z = deep::muro__from_u64(0);
+                let one = deep::muro__from_u64(1);
+                let p0 = deep::cons(z.clone(), deep::cons(z.clone(), deep::nil()));
+                let p1 = deep::cons(one.clone(), deep::cons(z.clone(), deep::nil()));
+                assert!(p0 != p1);
+                let s0 = ::std::format!("{:?}", p0);
+                let s1 = ::std::format!("{:?}", p1);
+                assert!(s0 != s1, "{s0} vs {s1}");
+                assert!(s0.contains("NatList(3:"), "{s0}");
+                assert!(s1.contains("NatList(3:"), "{s1}");
+                assert!(s0.contains("muro__Nat(0)"), "{s0}");
+                assert!(s1.contains("muro__Nat(1)"), "{s1}");
+                assert!(!s0.contains("muro__Nat(1)"), "{s0}");
+                drop(p0);
+                drop(p1);
+                drop(one);
                 let natlist = |n: u64| {
                     let mut xs = deep::nil();
                     let mut i = 0u64;

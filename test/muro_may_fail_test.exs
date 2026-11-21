@@ -263,6 +263,7 @@ defmodule Muro.MayFailTest do
 
     assert {:error, @refuse} = Muro.emit_file(path, MayFail)
     assert {:error, @refuse} = Muro.emit_exunit(path, MayFailEmitTest)
+    assert {:error, @refuse} = Muro.emit_pytest(path, [])
     assert {:error, @refuse} = Muro.emit_c(path, nif: false)
     assert {:error, @refuse} = Muro.emit_rust(path)
     assert {:error, @refuse} = Muro.emit_rust_test(path)
