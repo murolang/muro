@@ -839,6 +839,58 @@ defmodule Muro.EmitRustTest do
     |> Enum.uniq()
   end
 
+  test "a typed pair compares by contents and a raw pair equals itself" do
+    dir = tmp_dir()
+
+    File.write!(Path.join(dir, "pairs.muro"), """
+    ν Stream (A : Type) : Type where
+      uncons : Stream A → A × Stream A
+
+    def zeros : run Stream Nat :=
+      unfold 0 (λ (_ : Nat) → (0, 0))
+
+    def wrap : run Nat × Stream Nat :=
+      (0, zeros)
+
+    def nums : run Nat × Nat :=
+      (suc 0, suc (suc 0))
+    """)
+
+    emit_rust!(dir, "pairs")
+    source = File.read!(Path.join(dir, "pairs.rs"))
+
+    assert source =~ """
+           fn muro__pair_eq_raw(muro__a: &muro__Pair, muro__b: &muro__Pair) -> bool {
+               muro__erased_same(&muro__a.0, &muro__b.0) && muro__erased_same(&muro__a.1, &muro__b.1)
+           }
+           """
+
+    out =
+      run_rust!(
+        dir,
+        """
+        fn main() {
+            let w = pairs::wrap();
+            assert!(w == w.clone());
+            let a = pairs::nums();
+            let b = pairs::muro__pair(pairs::muro__from_u64(1), pairs::muro__from_u64(2));
+            assert!(a == b);
+            let c = pairs::muro__pair(pairs::muro__from_u64(1), pairs::muro__from_u64(3));
+            assert!(a != c);
+            let r = pairs::muro__pair_raw(pairs::muro__erase(()), pairs::muro__erase(()));
+            let s = pairs::muro__pair_raw(pairs::muro__erase(()), pairs::muro__erase(()));
+            assert!(r == r.clone());
+            assert!(r == s);
+            assert!(a != r);
+            println!("ok");
+        }
+        """,
+        ["pairs"]
+      )
+
+    assert out == "ok\n"
+  end
+
   test "a closed numeral is the successor chain" do
     dir = tmp_dir()
     File.write!(Path.join(dir, "two.muro"), "def two : run Nat := 2\n")

@@ -3,10 +3,50 @@
 #![allow(dead_code, unused_variables, non_snake_case, non_camel_case_types, unused_parens)]
 
 #[derive(::std::clone::Clone)]
-pub struct muro__Erased(::std::rc::Rc<dyn ::std::any::Any>);
+pub struct muro__Erased(
+    ::std::rc::Rc<dyn ::std::any::Any>,
+    fn(&(dyn ::std::any::Any), &(dyn ::std::any::Any)) -> bool,
+);
 
-pub fn muro__erase<T: 'static>(muro__x: T) -> muro__Erased {
-    muro__Erased(::std::rc::Rc::new(muro__x))
+fn muro__erased_eq<T: ::std::cmp::PartialEq + 'static>(
+    muro__a: &(dyn ::std::any::Any),
+    muro__b: &(dyn ::std::any::Any),
+) -> bool {
+    match (muro__a.downcast_ref::<T>(), muro__b.downcast_ref::<T>()) {
+        (::std::option::Option::Some(muro__a), ::std::option::Option::Some(muro__b)) => {
+            muro__a == muro__b
+        }
+        _ => false,
+    }
+}
+
+fn muro__erased_id<T: 'static>(
+    muro__a: &(dyn ::std::any::Any),
+    muro__b: &(dyn ::std::any::Any),
+) -> bool {
+    match (muro__a.downcast_ref::<T>(), muro__b.downcast_ref::<T>()) {
+        (::std::option::Option::Some(muro__a), ::std::option::Option::Some(muro__b)) => {
+            ::std::ptr::eq(muro__a, muro__b)
+        }
+        _ => false,
+    }
+}
+
+fn muro__erased_same(muro__a: &muro__Erased, muro__b: &muro__Erased) -> bool {
+    (muro__a.1)(muro__a.0.as_ref(), muro__b.0.as_ref())
+        && (muro__b.1)(muro__b.0.as_ref(), muro__a.0.as_ref())
+}
+
+pub fn muro__erase<T: ::std::cmp::PartialEq + 'static>(muro__x: T) -> muro__Erased {
+    muro__Erased(::std::rc::Rc::new(muro__x), muro__erased_eq::<T>)
+}
+
+pub fn muro__erase_opaque<T: 'static>(muro__x: T) -> muro__Erased {
+    muro__Erased(::std::rc::Rc::new(muro__x), muro__erased_id::<T>)
+}
+
+fn muro__try_reveal<T: 'static + ::std::clone::Clone>(muro__e: &muro__Erased) -> ::std::option::Option<T> {
+    muro__e.0.downcast_ref::<T>().cloned()
 }
 
 pub fn muro__reveal<T: 'static + ::std::clone::Clone>(muro__e: muro__Erased) -> T {
@@ -72,12 +112,27 @@ fn muro__pair_eq<A: ::std::cmp::PartialEq + ::std::clone::Clone + 'static, B: ::
     muro__a: &muro__Pair,
     muro__b: &muro__Pair,
 ) -> bool {
-    muro__reveal::<A>(muro__a.0.clone()) == muro__reveal::<A>(muro__b.0.clone())
-        && muro__reveal::<B>(muro__a.1.clone()) == muro__reveal::<B>(muro__b.1.clone())
+    match (
+        muro__try_reveal::<A>(&muro__a.0),
+        muro__try_reveal::<A>(&muro__b.0),
+        muro__try_reveal::<B>(&muro__a.1),
+        muro__try_reveal::<B>(&muro__b.1),
+    ) {
+        (
+            ::std::option::Option::Some(muro__a),
+            ::std::option::Option::Some(muro__b),
+            ::std::option::Option::Some(muro__x),
+            ::std::option::Option::Some(muro__y),
+        ) => muro__a == muro__b && muro__x == muro__y,
+        _ => false,
+    }
 }
 
-fn muro__pair_eq_raw(_muro__a: &muro__Pair, _muro__b: &muro__Pair) -> bool {
-    false
+// Compares the comparison each component carries. A component erased
+// with `PartialEq` compares by that. A component with none compares
+// by allocation. Either way the pair equals itself.
+fn muro__pair_eq_raw(muro__a: &muro__Pair, muro__b: &muro__Pair) -> bool {
+    muro__erased_same(&muro__a.0, &muro__b.0) && muro__erased_same(&muro__a.1, &muro__b.1)
 }
 
 pub fn muro__pair<A: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static>(
@@ -93,7 +148,7 @@ pub fn muro__pair_raw(muro__a: muro__Erased, muro__b: muro__Erased) -> muro__Pai
 
 impl ::std::cmp::PartialEq for muro__Pair {
     fn eq(&self, other: &Self) -> bool {
-        (self.2)(self, other)
+        (self.2)(self, other) && (other.2)(other, self)
     }
 }
 

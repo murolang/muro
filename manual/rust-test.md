@@ -68,7 +68,7 @@ The file defines `MURO_BOOK`, the book sha256, the same hash an ExUnit suite sto
 
 ## Values
 
-Arguments and the result are normalized with the checker's fuel (`Muro.Check.normalize/3`, default 2000), the same normalization the ExUnit suite uses. `Muro.Emit.RustTest.print_value/3` is the one printer. A `repr` plugs in there. The spellings are the ones `--backend rust` writes, so a constructor in the test is the constructor in the image.
+Arguments and the result are normalized with the checker's fuel (`Muro.Check.normalize/3`, default 2000), the same normalization the ExUnit suite uses. `Muro.Emit.RustTest.print_value/3` is the one printer. The spellings are the ones `--backend rust` writes, so a constructor in the test is the constructor in the image.
 
 | Muro value | Rust |
 | --- | --- |
@@ -85,7 +85,7 @@ Arguments and the result are normalized with the checker's fuel (`Muro.Check.nor
 | string literal | a `muro__str` of a static byte slice |
 | bytes literal | a `muro__slice` of a static byte slice |
 
-A `Nat` above `18446744073709551615` is a skip: `normal form is a Nat that does not fit in u64`. `muro__from_u64` builds the same chain `suc` builds, and the image compares `Nat` by that chain.
+A `Nat` above `18446744073709551615` is a skip: `normal form is a Nat that does not fit in u64`. A `Nat` above `100000` that still fits is a skip: `normal form is a Nat above 100000`. `muro__from_u64` builds one successor per unit, and the image compares `Nat` by that chain. `100000` is printed. `100001` is the skip.
 
 A word equation that ExUnit skips as a machine term is a test here when the normal form is a literal. `subi (toI64 0) (toI64 1)` prints `(18446744073709551615u64 as i64)`.
 

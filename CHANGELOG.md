@@ -4,7 +4,9 @@
 
 `mix muro.emit path.muro --backend rust-test` prints one Rust test file for the book's closed equations, the same equations `--backend exunit` and `--backend pytest` collect. `mix muro.gen` writes it when an entry sets `kind: :rust_test`. Each equation is one test. A skip is a `#[test]` function marked `#[ignore]`, named in the reason, and is not dropped. A file of unsupplied `param`s is a suite.
 
-The tests call the emitted `<stem>.rs` beside the test file. `rustc --test` accepts the two files as siblings. `--impl` and `impl:` bake another Rust path into the file. The path is fixed when the file is written. A `Nat` is `muro__from_u64`. A `Nat` that does not fit in `u64` is a skip. Data, pairs, atoms, strings, and words print as the Rust image spells them. A function, a stream, a machine term, an erased value, and an unboxed `Opt` are skips.
+The tests call the emitted `<stem>.rs` beside the test file. `rustc --test` accepts the two files as siblings. `--impl` and `impl:` bake another Rust path into the file. The path is fixed when the file is written. A `Nat` is `muro__from_u64`. A `Nat` that does not fit in `u64` is a skip, and so is a `Nat` above 100000: the image builds one successor per unit. Data, pairs, atoms, strings, and words print as the Rust image spells them. A function, a stream, a machine term, an erased value, and an unboxed `Opt` are skips.
+
+`--backend rust` builds a pair as three fields, the two components and the comparison. `muro__pair` takes components that implement `PartialEq` and `Debug`. `muro__pair_raw` takes erased components. A pair equals itself. A component that implements `PartialEq` compares by that. A component that does not compares by allocation. An erased value carries that comparison beside the payload. A constructor of declared data is `pub`. `Nat`, `Unit`, comparable declared data, `Atom`, `muro__slice`, and `muro__str` implement `PartialEq` and `Debug`. `muro__slice` and `muro__str` compare the bytes.
 
 ### Manual
 

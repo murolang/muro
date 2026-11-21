@@ -191,7 +191,12 @@ defmodule Muro.EmitRustTestSuiteTest do
     assert RustTest.print_value({:nat, 2}, []) == {:ok, "muro__from_u64(2)"}
 
     assert RustTest.print_value({:nat, 18_446_744_073_709_551_615}, []) ==
-             {:ok, "muro__from_u64(18446744073709551615)"}
+             {:error, {:text, "normal form is a Nat above 100000"}}
+
+    assert RustTest.print_value({:nat, 100_000}, []) == {:ok, "muro__from_u64(100000)"}
+
+    assert RustTest.print_value({:nat, 100_001}, []) ==
+             {:error, {:text, "normal form is a Nat above 100000"}}
 
     assert RustTest.print_value({:nat, 18_446_744_073_709_551_616}, []) ==
              {:error, {:text, "normal form is a Nat that does not fit in u64"}}
@@ -452,6 +457,55 @@ defmodule Muro.EmitRustTestSuiteTest do
     """)
 
     assert check_error(dir) =~ "stale target"
+  end
+
+  test "muro.toml backend rust-test is written by muro gen" do
+    dir = tmp_dir()
+
+    write_book(dir, "priv/muro/round.muro", """
+    def round : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → n
+    def round-ok : evidence {round (suc 0) ≡ suc 0 : Nat} := refl
+    def wide : run Nat := 100001
+    def wide-ok : evidence {wide ≡ 100001 : Nat} := refl
+    """)
+
+    File.write!(Path.join(dir, "muro.toml"), """
+    muro = "#{Mix.Tasks.Muro.version()}"
+    backend = "rust-test"
+
+    [[modules]]
+    book = "priv/muro/round.muro"
+    target = "test/rounding_test.rs"
+    impl = "crate::rounding"
+    """)
+
+    output =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+      end)
+
+    assert output =~ "written test/rounding_test.rs\n"
+    assert output =~ "skipped test/rounding_test.rs: wide-ok (priv/muro/round.muro:"
+    assert output =~ "normal form is a Nat above 100000"
+
+    suite = File.read!(Path.join(dir, "test/rounding_test.rs"))
+    assert {:ok, header} = Muro.Gen.parse_header(suite)
+    assert header.book == "priv/muro/round.muro"
+    assert header.version == Mix.Tasks.Muro.version()
+    assert header.body =~ "fn round_ok()"
+    assert header.body =~ "crate::rounding::round("
+    assert header.body =~ "#[ignore = "
+    assert header.body =~ "normal form is a Nat above 100000"
+    refute suite =~ "muro__from_u64(100001)"
+    refute suite =~ dir
+
+    check =
+      in_dir(dir, fn ->
+        capture(fn -> Mix.Tasks.Muro.Gen.run(["--check"]) end)
+      end)
+
+    assert check == "ok\n"
   end
 
   @tag skip: @rustc_skip

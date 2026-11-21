@@ -21,6 +21,10 @@ defmodule Muro.Emit.RustTest do
   alias Muro.Emit.{Equations, Name, Rust}
 
   @u64_max 18_446_744_073_709_551_615
+  # `muro__from_u64` builds one successor per unit. The same cap the C
+  # session image uses before it builds a Peano nat. Above it, the test
+  # is a skip instead of a chain that hangs or exhausts memory.
+  @nat_build_max 100_000
 
   @doc """
   `{:ok, %{source: source, skips: skips, tests: n}}` or
@@ -392,6 +396,9 @@ defmodule Muro.Emit.RustTest do
 
   defp nat_src(n, _prefix) when n > @u64_max,
     do: {:error, {:text, "normal form is a Nat that does not fit in u64"}}
+
+  defp nat_src(n, _prefix) when is_integer(n) and n > @nat_build_max,
+    do: {:error, {:text, "normal form is a Nat above #{@nat_build_max}"}}
 
   defp nat_src(n, prefix) when is_integer(n) and n >= 0 do
     {:ok, "#{prefix}#{Name.gen("from_u64")}(#{n})"}

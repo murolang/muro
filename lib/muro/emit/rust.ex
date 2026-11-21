@@ -50,6 +50,7 @@ defmodule Muro.Emit.Rust do
       Nat NatNode Unit Erased Pair Stream Atom
       zero suc erase reveal from_u64 to_u64
       pair pair_raw pair_eq pair_eq_raw
+      erase_opaque erased_eq erased_id erased_same try_reveal
       field_seed field_step tag_zero tag_suc
       seed n p k s t c x e rc v
     )
@@ -70,10 +71,11 @@ defmodule Muro.Emit.Rust do
   @doc false
   def unboxed?(book, name) when is_list(book), do: unboxed_name?(book, name)
 
-  # True when the Rust type of `lay` implements `PartialEq` and `Debug`.
-  # A pair does, because `muro__Pair` carries the comparison. A recursive
-  # data type is comparable when its fields are, counting the type itself
-  # as already decided.
+  # True when `muro__pair` can name `lay`: the Rust type implements
+  # `PartialEq` and `Debug`. A pair does when both halves do. A raw pair
+  # still implements `PartialEq`, through the comparison stored on each
+  # erased component. A recursive data type is comparable when its fields
+  # are, counting the type itself as already decided.
   @doc false
   def comparable?(book, lay) when is_list(book), do: comparable_lay?(book, lay, MapSet.new())
 
@@ -420,7 +422,7 @@ defmodule Muro.Emit.Rust do
         "let #{t} = #{g("Stream")} { #{g("field_seed")}: #{p}.1.clone(), #{g("field_step")}: #{s}.#{g("field_step")}.clone() };"
       ]
 
-      expr = "#{g("pair_raw")}(#{p}.0.clone(), #{g("erase")}(#{t}))"
+      expr = "#{g("pair_raw")}(#{p}.0.clone(), #{g("erase_opaque")}(#{t}))"
       {:ok, {lines ++ more, expr, uncons_lay(elay), st}}
     end
   end
@@ -944,9 +946,19 @@ defmodule Muro.Emit.Rust do
   defp coerce("None", {:opt, _}, {:opt, pay}, st),
     do: "::std::option::Option::<#{rty(pay, st)}>::None"
 
-  defp coerce(ex, _from, :opaque, _st), do: "#{g("erase")}(#{ex})"
+  defp coerce(ex, from, :opaque, st), do: erase_expr(ex, from, st)
   defp coerce(ex, :opaque, to, st), do: "#{g("reveal")}::<#{rty(to, st)}>(#{ex})"
-  defp coerce(ex, _from, to, st), do: "#{g("reveal")}::<#{rty(to, st)}>(#{g("erase")}(#{ex}))"
+
+  defp coerce(ex, from, to, st),
+    do: "#{g("reveal")}::<#{rty(to, st)}>(#{erase_expr(ex, from, st)})"
+
+  # `muro__erase` requires `PartialEq`. A stream, a function, or data
+  # whose fields are not comparable has no such implementation, so it is
+  # erased with allocation identity instead.
+  defp erase_expr(ex, from, st) do
+    fun = if comparable?(st.book, from), do: g("erase"), else: g("erase_opaque")
+    "#{fun}(#{ex})"
+  end
 
   defp pair_halves({:pair, a, b}), do: {a, b}
   defp pair_halves(_), do: {:opaque, :opaque}
@@ -1210,8 +1222,8 @@ defmodule Muro.Emit.Rust do
     not unboxed_lay?(book, pay) and comparable_lay?(book, pay, seen)
   end
 
-  # `muro__Pair` compares through the function stored at construction,
-  # so a pair field is comparable exactly when both halves are.
+  # `muro__pair` names both halves, so a pair field is comparable exactly
+  # when both halves are. `muro__pair_raw` still compares.
   defp comparable_lay?(book, {:pair, a, b}, seen) do
     comparable_lay?(book, a, seen) and comparable_lay?(book, b, seen)
   end
@@ -1511,10 +1523,50 @@ defmodule Muro.Emit.Rust do
 
     """
     #[derive(::std::clone::Clone)]
-    pub struct #{erased}(::std::rc::Rc<dyn ::std::any::Any>);
+    pub struct #{erased}(
+        ::std::rc::Rc<dyn ::std::any::Any>,
+        fn(&(dyn ::std::any::Any), &(dyn ::std::any::Any)) -> bool,
+    );
 
-    pub fn #{g("erase")}<T: 'static>(#{x}: T) -> #{erased} {
-        #{erased}(::std::rc::Rc::new(#{x}))
+    fn #{g("erased_eq")}<T: ::std::cmp::PartialEq + 'static>(
+        #{g("a")}: &(dyn ::std::any::Any),
+        #{g("b")}: &(dyn ::std::any::Any),
+    ) -> bool {
+        match (#{g("a")}.downcast_ref::<T>(), #{g("b")}.downcast_ref::<T>()) {
+            (::std::option::Option::Some(#{g("a")}), ::std::option::Option::Some(#{g("b")})) => {
+                #{g("a")} == #{g("b")}
+            }
+            _ => false,
+        }
+    }
+
+    fn #{g("erased_id")}<T: 'static>(
+        #{g("a")}: &(dyn ::std::any::Any),
+        #{g("b")}: &(dyn ::std::any::Any),
+    ) -> bool {
+        match (#{g("a")}.downcast_ref::<T>(), #{g("b")}.downcast_ref::<T>()) {
+            (::std::option::Option::Some(#{g("a")}), ::std::option::Option::Some(#{g("b")})) => {
+                ::std::ptr::eq(#{g("a")}, #{g("b")})
+            }
+            _ => false,
+        }
+    }
+
+    fn #{g("erased_same")}(#{g("a")}: &#{erased}, #{g("b")}: &#{erased}) -> bool {
+        (#{g("a")}.1)(#{g("a")}.0.as_ref(), #{g("b")}.0.as_ref())
+            && (#{g("b")}.1)(#{g("b")}.0.as_ref(), #{g("a")}.0.as_ref())
+    }
+
+    pub fn #{g("erase")}<T: ::std::cmp::PartialEq + 'static>(#{x}: T) -> #{erased} {
+        #{erased}(::std::rc::Rc::new(#{x}), #{g("erased_eq")}::<T>)
+    }
+
+    pub fn #{g("erase_opaque")}<T: 'static>(#{x}: T) -> #{erased} {
+        #{erased}(::std::rc::Rc::new(#{x}), #{g("erased_id")}::<T>)
+    }
+
+    fn #{g("try_reveal")}<T: 'static + ::std::clone::Clone>(#{e}: &#{erased}) -> ::std::option::Option<T> {
+        #{e}.0.downcast_ref::<T>().cloned()
     }
 
     pub fn #{g("reveal")}<T: 'static + ::std::clone::Clone>(#{e}: #{erased}) -> T {
@@ -1580,12 +1632,27 @@ defmodule Muro.Emit.Rust do
         #{g("a")}: &#{pair},
         #{g("b")}: &#{pair},
     ) -> bool {
-        #{g("reveal")}::<A>(#{g("a")}.0.clone()) == #{g("reveal")}::<A>(#{g("b")}.0.clone())
-            && #{g("reveal")}::<B>(#{g("a")}.1.clone()) == #{g("reveal")}::<B>(#{g("b")}.1.clone())
+        match (
+            #{g("try_reveal")}::<A>(&#{g("a")}.0),
+            #{g("try_reveal")}::<A>(&#{g("b")}.0),
+            #{g("try_reveal")}::<B>(&#{g("a")}.1),
+            #{g("try_reveal")}::<B>(&#{g("b")}.1),
+        ) {
+            (
+                ::std::option::Option::Some(#{g("a")}),
+                ::std::option::Option::Some(#{g("b")}),
+                ::std::option::Option::Some(#{g("x")}),
+                ::std::option::Option::Some(#{g("y")}),
+            ) => #{g("a")} == #{g("b")} && #{g("x")} == #{g("y")},
+            _ => false,
+        }
     }
 
-    fn #{g("pair_eq_raw")}(_#{g("a")}: &#{pair}, _#{g("b")}: &#{pair}) -> bool {
-        false
+    // Compares the comparison each component carries. A component erased
+    // with `PartialEq` compares by that. A component with none compares
+    // by allocation. Either way the pair equals itself.
+    fn #{g("pair_eq_raw")}(#{g("a")}: &#{pair}, #{g("b")}: &#{pair}) -> bool {
+        #{g("erased_same")}(&#{g("a")}.0, &#{g("b")}.0) && #{g("erased_same")}(&#{g("a")}.1, &#{g("b")}.1)
     }
 
     pub fn #{g("pair")}<A: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static>(
@@ -1601,7 +1668,7 @@ defmodule Muro.Emit.Rust do
 
     impl ::std::cmp::PartialEq for #{pair} {
         fn eq(&self, other: &Self) -> bool {
-            (self.2)(self, other)
+            (self.2)(self, other) && (other.2)(other, self)
         }
     }
 
