@@ -350,6 +350,106 @@ defmodule Muro.EmitRustTestSuiteTest do
              Muro.CLI.Emit.run([path, "--backend", "rust-test", "--node", "a"])
   end
 
+  @forbidden_clash """
+  def round : run Π (n : Nat) → Nat :=
+    λ (n : Nat) → n
+  def crate : evidence {round 0 ≡ 0 : Nat} := refl
+  def crate_ : evidence {round (suc 0) ≡ suc 0 : Nat} := refl
+  def self : evidence {round 0 ≡ 0 : Nat} := refl
+  def self_ : evidence {round 0 ≡ 0 : Nat} := refl
+  def super : evidence {round 0 ≡ 0 : Nat} := refl
+  def super_ : evidence {round 0 ≡ 0 : Nat} := refl
+  def Self : evidence {round 0 ≡ 0 : Nat} := refl
+  def Self_ : evidence {round 0 ≡ 0 : Nat} := refl
+  """
+
+  test "a finished keyword does not collide with an evidence of that spelling" do
+    {dir, path} = book("idents.muro", @forbidden_clash)
+
+    assert {:ok, %{source: source, tests: 8, skips: []}} =
+             Muro.emit_rust_test(path, root: dir, book: "idents.muro")
+
+    assert fn_names(source) == [
+             "crate_",
+             "crate__2",
+             "self_",
+             "self__2",
+             "super_",
+             "super__2",
+             "Self_",
+             "Self__2"
+           ]
+
+    assert {:ok, %{source: baked, tests: 8, skips: []}} =
+             Muro.emit_rust_test(path, root: dir, book: "idents.muro", impl: "crate::idents")
+
+    assert fn_names(baked) == fn_names(source)
+    assert baked =~ "crate::idents::round("
+    refute baked =~ "#[path"
+
+    {dir, crate_path} = book("crate.muro", @forbidden_clash)
+
+    assert {:ok, %{source: reserved}} =
+             Muro.emit_rust_test(crate_path, root: dir, book: "crate.muro")
+
+    assert reserved =~ "mod crate_;"
+    assert fn_names(reserved) |> Enum.take(2) == ["crate_2", "crate__2"]
+    refute reserved =~ "fn crate_()"
+
+    assert {:ok, %{source: crate_baked}} =
+             Muro.emit_rust_test(crate_path, root: dir, book: "crate.muro", impl: "crate::idents")
+
+    assert fn_names(crate_baked) |> Enum.take(2) == ["crate_", "crate__2"]
+    refute crate_baked =~ "fn crate_2()"
+  end
+
+  test "a Nat above 100000 used as an argument is a skip" do
+    {dir, path} =
+      book("wide.muro", """
+      def round : run Π (n : Nat) → Nat :=
+        λ (n : Nat) → n
+      def wide-arg : evidence {round 100001 ≡ 100001 : Nat} := refl
+      def fit : evidence {round 100000 ≡ 100000 : Nat} := refl
+      """)
+
+    assert {:ok, %{source: source, tests: 1, skips: skips}} =
+             Muro.emit_rust_test(path, root: dir, book: "wide.muro")
+
+    assert [%{name: "wide-arg", reason: reason, line: line}] = skips
+    assert reason == "argument 1 normal form is a Nat above 100000"
+    assert source =~ "#[ignore = #{inspect("wide-arg (wide.muro:#{line}): #{reason}")}]"
+    assert source =~ "fn fit()"
+    assert source =~ "muro__from_u64(100000)"
+    refute source =~ "100001"
+  end
+
+  @tag skip: @rustc_skip
+  test "rustc accepts a finished keyword beside the suffixed evidence" do
+    {dir, path} = book("idents.muro", @forbidden_clash)
+
+    assert {:ok, %{source: source}} =
+             Muro.emit_rust_test(path, root: dir, book: "idents.muro")
+
+    File.write!(Path.join(dir, "idents_test.rs"), source)
+    assert {:ok, [rs]} = Muro.emit_rust(path)
+    assert Path.basename(rs) == "idents.rs"
+
+    {out, code} = rustc_test(dir, "idents_test.rs")
+    assert code == 0, out
+    assert out =~ "8 passed"
+    refute out =~ "warning:", out
+
+    assert {:ok, %{source: baked}} =
+             Muro.emit_rust_test(path, root: dir, book: "idents.muro", impl: "idents")
+
+    File.write!(Path.join(dir, "idents_impl_test.rs"), baked)
+
+    {impl_out, impl_code} = rustc_extern_test(dir, "idents_impl_test.rs", "idents")
+    assert impl_code == 0, impl_out
+    assert impl_out =~ "8 passed"
+    refute impl_out =~ "warning:", impl_out
+  end
+
   test "rust-test accepts an unsupplied param and --imports" do
     {dir, path} = book("lib.muro", @open_param)
 
@@ -550,6 +650,12 @@ defmodule Muro.EmitRustTestSuiteTest do
     Regex.scan(~r/^fn /m, source) |> length()
   end
 
+  defp fn_names(source) do
+    ~r/^fn ([^\(]+)\(\)/m
+    |> Regex.scan(source)
+    |> Enum.map(fn [_, name] -> name end)
+  end
+
   defp line_of(source, name) do
     source
     |> String.split("\n")
@@ -618,5 +724,55 @@ defmodule Muro.EmitRustTestSuiteTest do
         {compiled, status}
       end
     end)
+  end
+
+  defp rustc_extern_test(dir, file, crate) do
+    {lib_out, lib_status} =
+      System.cmd(
+        @rustc,
+        [
+          "--edition",
+          "2021",
+          "--crate-type",
+          "lib",
+          "--crate-name",
+          crate,
+          "#{crate}.rs",
+          "-o",
+          "lib#{crate}.rlib"
+        ],
+        cd: dir,
+        stderr_to_stdout: true
+      )
+
+    if lib_status == 0 do
+      System.cmd(
+        @rustc,
+        [
+          "--edition",
+          "2021",
+          "--test",
+          "--extern",
+          "#{crate}=lib#{crate}.rlib",
+          file,
+          "-o",
+          "suite-impl"
+        ],
+        cd: dir,
+        stderr_to_stdout: true
+      )
+      |> then(fn {compiled, status} ->
+        if status == 0 do
+          {ran, ran_status} =
+            System.cmd(Path.join(dir, "suite-impl"), [], stderr_to_stdout: true)
+
+          {lib_out <> compiled <> ran, ran_status}
+        else
+          {lib_out <> compiled, status}
+        end
+      end)
+    else
+      {lib_out, lib_status}
+    end
   end
 end

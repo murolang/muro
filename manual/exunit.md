@@ -7,7 +7,7 @@ summary: A book's closed equations become one ExUnit module. The tests call an i
 
 # Closed equations as tests
 
-In brief: `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the closed equations in that file. `mix muro.gen` writes the same module when an entry sets `kind: :exunit`. Each test is named `"<file> <def-name>"`. The file and line are in the assertion message. The suite calls an implementation module the host selects. It does not call the emitted module unless that module is the implementation. A file of `param`s is a suite. `--imports` also collects the equations of the files this book imports directly. The same equations are a pytest module. The page is [Pytest](pytest.md).
+In brief: `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the closed equations in that file. `mix muro.gen` writes the same module when an entry sets `kind: :exunit`. Each test is named `"<file> <def-name>"`. The file and line are in the assertion message. The suite calls an implementation module the host selects. It does not call the emitted module unless that module is the implementation. A file of `param`s is a suite. `--imports` also collects the equations of the files this book imports directly. The same equations are a pytest module and a Rust test file. The pages are [Pytest](pytest.md) and [Rust tests](rust-test.md).
 
 ## What is collected
 

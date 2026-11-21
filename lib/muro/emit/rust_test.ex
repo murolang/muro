@@ -148,14 +148,17 @@ defmodule Muro.Emit.RustTest do
 
   defp claim_test(name, used, reserved), do: claim_free(fold_plain(name), used, reserved)
 
+  # `Name.claim` records the folded spelling. `finish_ident` then
+  # rewrites `crate` to `crate_`. Record that finished spelling too,
+  # or an evidence named `crate_` is a second `fn crate_()`.
   defp claim_free(base, used, reserved) do
     {chosen, used} = Name.claim(base, used)
     finished = finish_ident(chosen)
 
-    if finished in reserved do
-      claim_free(base, used, reserved)
+    if finished in reserved or (finished != chosen and MapSet.member?(used, finished)) do
+      claim_free(base, MapSet.put(used, finished), reserved)
     else
-      {finished, used}
+      {finished, MapSet.put(used, finished)}
     end
   end
 

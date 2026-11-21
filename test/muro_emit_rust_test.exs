@@ -872,6 +872,7 @@ defmodule Muro.EmitRustTest do
         fn main() {
             let w = pairs::wrap();
             assert!(w == w.clone());
+            assert!(pairs::wrap() != pairs::wrap());
             let a = pairs::nums();
             let b = pairs::muro__pair(pairs::muro__from_u64(1), pairs::muro__from_u64(2));
             assert!(a == b);

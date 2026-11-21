@@ -16,8 +16,7 @@ defmodule Muro.Emit.Equations do
   exported, a param reached only by evaluation, fuel) are decided
   here. The value of an argument or a result is printed by `opts[:print]`,
   which defaults to `Muro.Emit.emit_closed/2`. A backend that wants
-  another literal passes its own printer. That printer is the place a
-  later `repr` plugs in. It returns `{:ok, source}` or
+  another literal passes its own printer. It returns `{:ok, source}` or
   `{:error, reason}`, and `reason` is `:function`, `:stream`,
   `:machine`, `:open`, `:shape`, or `{:text, message}`.
   """

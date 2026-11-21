@@ -74,13 +74,13 @@ written lib/my_app/billing/rounding.ex
 unchanged lib/my_app/billing/rounding.ex
 ```
 
-A book that loaded packages prints each `conforms to` line under that target, indented by two spaces. An ExUnit target prints one more line per skipped equation, after its `written` or `unchanged` line and after any `conforms to` lines:
+A book that loaded packages prints each `conforms to` line under that target, indented by two spaces. An ExUnit target, a pytest target, and a Rust test target print one more line per skipped equation, after the `written` or `unchanged` line and after any `conforms to` lines:
 
 ```
 skipped test/rounding_test.exs: step-ok (priv/muro/rounding.muro:8): step is run internal and is not exported
 ```
 
-`--check` does not print those lines. The same lines are comments in the generated file, inside the body, so the body hash covers them. A book change that only alters the skipped set changes the book hash, and the stale message below reports it.
+`--check` does not print those lines. The skip is in the generated file, inside the body, so the body hash covers it: an ExUnit comment, a `pytest.mark.skip` test, or a `#[ignore]` test. A book change that only alters the skipped set changes the book hash, and the stale message below reports it.
 
 An unchanged target is not rewritten. Its modification time stays.
 

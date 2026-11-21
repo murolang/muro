@@ -45,7 +45,7 @@ A source name becomes a test function in four steps.
 3. Claim that name, in book order, over every candidate, tests and skips together. A second claim of the same base is the base plus `_` and a decimal starting at 2. `round-ok` and `round_ok` are `round_ok` and `round_ok_2`.
 4. A keyword that can be raw is `r#` plus the identifier. `loop` is `r#loop`. `fn` is `r#fn`. `crate`, `self`, `super`, and `Self` cannot be raw, so each gains a trailing `_`. `crate` is `crate_`.
 
-The claim happens before `r#` is added. A second `fn` is `fn_2`, and the module name `r#fn` is reserved the same way, so the evidence `fn` in `fn.muro` is `fn_2`. `MURO_BOOK` is reserved. When the tests include the sibling file, the module identifier is reserved too.
+The claim happens before `r#` is added, and the finished identifier is recorded. `crate` finishes as `crate_`, so an evidence named `crate_` is `crate__2`. The same split holds for `self` and `self_`, `super` and `super_`, and `Self` and `Self_`. A second `fn` is `fn_2`, and the module name `r#fn` is reserved the same way, so the evidence `fn` in `fn.muro` is `fn_2`. `MURO_BOOK` is reserved. When the tests include the sibling file, the module identifier is reserved too. `--impl` does not reserve that identifier, and the finished names still do not collide.
 
 A call uses the spelling the Rust image gives that run, not this fold. `box` is `box_k`. A run named `loop` is `loop_k`. A run named `u64` is `u64_k`. The test function `r#loop` and the run `loop_k` are different names. Every call is qualified with the module path, so a test named `round` does not hide the run `round`.
 
@@ -85,7 +85,7 @@ Arguments and the result are normalized with the checker's fuel (`Muro.Check.nor
 | string literal | a `muro__str` of a static byte slice |
 | bytes literal | a `muro__slice` of a static byte slice |
 
-A `Nat` above `18446744073709551615` is a skip: `normal form is a Nat that does not fit in u64`. A `Nat` above `100000` that still fits is a skip: `normal form is a Nat above 100000`. `muro__from_u64` builds one successor per unit, and the image compares `Nat` by that chain. `100000` is printed. `100001` is the skip.
+A `Nat` above `18446744073709551615` is a skip: `normal form is a Nat that does not fit in u64`. A `Nat` above `100000` that still fits is a skip: `normal form is a Nat above 100000`. The same sentences name the argument when that `Nat` is an argument (`argument 1 normal form is a Nat above 100000`). `muro__from_u64` builds one successor per unit, and the image compares `Nat` by that chain. `100000` is printed. `100001` is the skip.
 
 A word equation that ExUnit skips as a machine term is a test here when the normal form is a literal. `subi (toI64 0) (toI64 1)` prints `(18446744073709551615u64 as i64)`.
 
