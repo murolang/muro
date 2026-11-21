@@ -730,7 +730,8 @@ defmodule Muro.Emit.Rust do
                  end
              end
            end) do
-      {expr, lay} = finish_match(scrut, rendered, st)
+      extra = if needs_hole?(st.book, dname), do: ["_ => ::std::process::abort()"], else: []
+      {expr, lay} = finish_match(scrut, rendered, st, extra)
       {:ok, expr, lay, st}
     end
   end
@@ -873,7 +874,7 @@ defmodule Muro.Emit.Rust do
 
   defp owned_node(ex), do: "(*((#{ex}).0)).clone()"
 
-  defp finish_match(scrut, arms, st) do
+  defp finish_match(scrut, arms, st, extra \\ []) do
     target = join_lay(Enum.map(arms, fn {_, _, lay} -> lay end))
 
     rendered =
@@ -881,10 +882,15 @@ defmodule Muro.Emit.Rust do
         "#{pat} => #{coerce(body, lay, target, st)}"
       end)
 
+    body =
+      [rendered | extra]
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join(",\n")
+
     expr =
       """
       match (#{scrut}) {
-      #{indent(rendered, 4)},
+      #{indent(body, 4)},
       }
       """
       |> String.trim()
@@ -1252,11 +1258,21 @@ defmodule Muro.Emit.Rust do
     end
   end
 
+  # A boxed type that reaches itself through a boxed field does not
+  # derive `PartialEq` or `Debug`. Those walks, and `Drop`, are emitted
+  # as a heap stack. `Opt` of the type being defined is not strictly
+  # positive, so it does not check. A cycle reached only through a pair
+  # keeps the derived walk. Unboxed data cannot be recursive.
   defp boxed_derives(book, name) do
-    if comparable?(book, {:data, name}) do
-      "#[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]"
-    else
-      "#[derive(::std::clone::Clone)]"
+    cond do
+      cyclic_boxed?(book, name) ->
+        "#[derive(::std::clone::Clone)]"
+
+      comparable?(book, {:data, name}) ->
+        "#[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]"
+
+      true ->
+        "#[derive(::std::clone::Clone)]"
     end
   end
 
@@ -1416,16 +1432,657 @@ defmodule Muro.Emit.Rust do
       end)
 
     derives = boxed_derives(book, d.name)
+    hole = if needs_hole?(book, d.name), do: "\n    #{g("hole")},", else: ""
+
+    walks =
+      if cycle_leader?(book, d.name), do: cycle_walks(book, d.name, types, variants), else: ""
 
     """
     #{derives}
     pub struct #{type}(::std::rc::Rc<#{node}>);
     #{derives}
     enum #{node} {
-    #{variants_txt}
+    #{variants_txt}#{hole}
     }
 
     #{ctors}
+    #{walks}
+    """
+    |> String.trim()
+  end
+
+  # A boxed type is cyclic when a boxed field reaches the type again,
+  # including under `Opt`. Two types that contain each other are one
+  # cycle. `Opt` of the type being defined does not check. A cycle
+  # reached only through a pair is not this walk: that field keeps the
+  # derived impl. Unboxed data cannot be recursive.
+  defp cyclic_boxed?(book, name), do: scc_of(book, name) != nil
+
+  defp cycle_leader?(book, name) do
+    case scc_of(book, name) do
+      nil -> false
+      scc -> hd(scc) == name
+    end
+  end
+
+  defp needs_hole?(book, name) do
+    case scc_of(book, name) do
+      nil -> false
+      _scc -> fieldless_ctor(book, name) == nil
+    end
+  end
+
+  defp scc_of(book, name) do
+    graph = boxed_graph(book)
+
+    graph
+    |> sccs()
+    |> Enum.filter(&nontrivial_scc?(&1, graph))
+    |> Enum.find(fn scc -> name in scc end)
+    |> case do
+      nil -> nil
+      scc -> in_book_order(book, scc)
+    end
+  end
+
+  defp boxed_graph(book) do
+    decls = Enum.reject(data_decls(book), &(Map.get(&1, :unboxed) == true))
+    names = MapSet.new(Enum.map(decls, & &1.name))
+
+    Map.new(decls, fn d ->
+      edges =
+        d.ctors
+        |> Enum.flat_map(fn c -> ctor_fields(book, c.name) end)
+        |> Enum.flat_map(&direct_boxed_refs(&1, names))
+        |> Enum.uniq()
+
+      {d.name, edges}
+    end)
+  end
+
+  defp direct_boxed_refs(lay, names) do
+    case peel_opts(lay) do
+      {_n, {:data, name}} -> if MapSet.member?(names, name), do: [name], else: []
+      _ -> []
+    end
+  end
+
+  defp peel_opts(lay), do: peel_opts(lay, 0)
+  defp peel_opts({:opt, inner}, n), do: peel_opts(inner, n + 1)
+  defp peel_opts(lay, n), do: {n, lay}
+
+  defp sccs(graph) do
+    start = %{i: 0, stack: [], on: MapSet.new(), ix: %{}, low: %{}, out: [], seen: MapSet.new()}
+
+    graph
+    |> Map.keys()
+    |> Enum.reduce(start, fn n, st ->
+      if MapSet.member?(st.seen, n), do: st, else: connect(n, graph, st)
+    end)
+    |> Map.fetch!(:out)
+  end
+
+  defp connect(v, graph, st) do
+    i = st.i
+
+    st = %{
+      st
+      | i: st.i + 1,
+        ix: Map.put(st.ix, v, i),
+        low: Map.put(st.low, v, i),
+        stack: [v | st.stack],
+        on: MapSet.put(st.on, v),
+        seen: MapSet.put(st.seen, v)
+    }
+
+    st =
+      Enum.reduce(Map.get(graph, v, []), st, fn w, st ->
+        cond do
+          not Map.has_key?(graph, w) ->
+            st
+
+          not MapSet.member?(st.seen, w) ->
+            st = connect(w, graph, st)
+            %{st | low: Map.put(st.low, v, min(Map.fetch!(st.low, v), Map.fetch!(st.low, w)))}
+
+          MapSet.member?(st.on, w) ->
+            %{st | low: Map.put(st.low, v, min(Map.fetch!(st.low, v), Map.fetch!(st.ix, w)))}
+
+          true ->
+            st
+        end
+      end)
+
+    if Map.fetch!(st.low, v) == Map.fetch!(st.ix, v) do
+      {comp, stack, on} = pop_scc(st.stack, st.on, v, [])
+      %{st | stack: stack, on: on, out: [comp | st.out]}
+    else
+      st
+    end
+  end
+
+  defp pop_scc([v | stack], on, v, acc),
+    do: {Enum.reverse([v | acc]), stack, MapSet.delete(on, v)}
+
+  defp pop_scc([h | stack], on, v, acc),
+    do: pop_scc(stack, MapSet.delete(on, h), v, [h | acc])
+
+  defp nontrivial_scc?([one], graph), do: one in Map.get(graph, one, [])
+  defp nontrivial_scc?(scc, _graph) when length(scc) > 1, do: true
+
+  defp in_book_order(book, names) do
+    order = book |> data_decls() |> Enum.with_index() |> Map.new(fn {d, i} -> {d.name, i} end)
+    Enum.sort_by(names, &Map.fetch!(order, &1))
+  end
+
+  defp data_by(book, name), do: Enum.find(data_decls(book), &(&1.name == name))
+
+  defp fieldless_ctor(book, name) do
+    name
+    |> then(&data_by(book, &1))
+    |> Map.fetch!(:ctors)
+    |> Enum.find(fn c -> ctor_fields(book, c.name) == [] end)
+  end
+
+  defp fieldless_variant(book, name, variants) do
+    case fieldless_ctor(book, name) do
+      nil -> nil
+      c -> Map.fetch!(variants, {name, c.name})
+    end
+  end
+
+  defp sentinel_variant(book, name, variants) do
+    case fieldless_variant(book, name, variants) do
+      nil -> g("hole")
+      variant -> variant
+    end
+  end
+
+  defp rust_type(types, name), do: Map.fetch!(types, name)
+  defp node_of(types, name), do: g("node_" <> rust_type(types, name))
+  defp hole_var(types, name), do: "hole_" <> rust_type(types, name)
+
+  defp cycle_walks(book, leader, types, variants) do
+    scc = scc_of(book, leader)
+    eq? = Enum.all?(scc, &comparable?(book, {:data, &1}))
+
+    [
+      drop_walk(book, scc, types, variants),
+      if(eq?, do: eq_walk(book, scc, types, variants), else: ""),
+      if(eq?, do: fmt_walk(book, scc, types, variants), else: "")
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
+  end
+
+  defp drop_walk(book, scc, types, variants) do
+    leader = hd(scc)
+    frame = g("drop_frame_" <> rust_type(types, leader))
+    fun = g("drop_" <> rust_type(types, leader))
+
+    enum_vars =
+      Enum.map_join(scc, "\n", fn name ->
+        "    #{rust_type(types, name)}(::std::rc::Rc<#{node_of(types, name)}>),"
+      end)
+
+    holes =
+      Enum.map_join(scc, "\n", fn name ->
+        "let #{hole_var(types, name)} = ::std::rc::Rc::new(#{node_of(types, name)}::#{sentinel_variant(book, name, variants)});"
+      end)
+
+    arms = Enum.map_join(scc, "\n", &drop_frame_arm(book, &1, scc, types, variants, frame))
+
+    impls =
+      Enum.map_join(scc, "\n\n", &drop_impl(book, &1, types, variants, frame, fun))
+
+    """
+    // This cycle is walked on a heap stack. A derived impl would take one call per node.
+    enum #{frame} {
+    #{enum_vars}
+    }
+
+    fn #{fun}(start: #{frame}) {
+        let mut stack = ::std::vec::Vec::new();
+        stack.push(start);
+    #{indent(holes, 4)}
+        loop {
+            let frame = match stack.pop() {
+                ::std::option::Option::Some(frame) => frame,
+                ::std::option::Option::None => return,
+            };
+            match frame {
+    #{indent(arms, 4)}
+            }
+        }
+    }
+
+    #{impls}
+    """
+    |> String.trim()
+  end
+
+  defp drop_impl(book, name, types, variants, frame, fun) do
+    type = rust_type(types, name)
+
+    """
+    impl ::std::ops::Drop for #{type} {
+        fn drop(&mut self) {
+            if ::std::rc::Rc::strong_count(&self.0) != 1 {
+                return;
+            }
+            let hole = ::std::rc::Rc::new(#{node_of(types, name)}::#{sentinel_variant(book, name, variants)});
+            let rc = ::std::mem::replace(&mut self.0, hole);
+            #{fun}(#{frame}::#{type}(rc));
+        }
+    }
+    """
+    |> String.trim()
+  end
+
+  defp drop_frame_arm(book, name, scc, types, variants, frame) do
+    type = rust_type(types, name)
+    node = node_of(types, name)
+    d = data_by(book, name)
+
+    ctor_arms =
+      Enum.map(d.ctors, fn c ->
+        fields = ctor_fields(book, c.name)
+        variant = Map.fetch!(variants, {name, c.name})
+        pat = drop_pat(node, variant, fields, scc)
+        body = drop_body(fields, scc, types, frame)
+        "    ::std::result::Result::Ok(#{pat}) => {\n#{body}    }"
+      end)
+
+    hole_arm =
+      if fieldless_variant(book, name, variants) == nil do
+        ["    ::std::result::Result::Ok(#{node}::#{g("hole")}) => {}"]
+      else
+        []
+      end
+
+    inner =
+      (ctor_arms ++ hole_arm ++ ["    ::std::result::Result::Err(_) => {}"])
+      |> Enum.join("\n")
+
+    """
+    #{frame}::#{type}(n) => {
+        if ::std::rc::Rc::strong_count(&n) != 1 {
+            continue;
+        }
+        match ::std::rc::Rc::try_unwrap(n) {
+    #{inner}
+        }
+    }
+    """
+    |> String.trim()
+  end
+
+  defp drop_pat(node, variant, [], _scc), do: "#{node}::#{variant}"
+
+  defp drop_pat(node, variant, fields, scc) do
+    binders =
+      fields
+      |> Enum.with_index()
+      |> Enum.map_join(", ", fn {lay, i} -> drop_binder(lay, i, scc) end)
+
+    "#{node}::#{variant}(#{binders})"
+  end
+
+  defp drop_binder(lay, i, scc) do
+    {opts, core} = peel_opts(lay)
+
+    case core do
+      {:data, name} ->
+        cond do
+          name in scc and opts == 0 -> "mut #{g("a", i)}"
+          name in scc -> g("a", i)
+          true -> "_"
+        end
+
+      _ ->
+        "_"
+    end
+  end
+
+  defp drop_body(fields, scc, types, frame) do
+    lines =
+      fields
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {lay, i} -> drop_steal(lay, g("a", i), scc, types, frame) end)
+
+    case lines do
+      [] -> ""
+      _ -> Enum.map_join(lines, "\n", &indent(&1, 8)) <> "\n"
+    end
+  end
+
+  defp drop_steal(lay, var, scc, types, frame) do
+    {opts, core} = peel_opts(lay)
+
+    case core do
+      {:data, name} ->
+        if name in scc do
+          [wrap_opts_drop(opts, var, frame, rust_type(types, name), hole_var(types, name))]
+        else
+          []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp wrap_opts_drop(0, var, frame, rust_name, hole) do
+    """
+    if ::std::rc::Rc::strong_count(&#{var}.0) == 1 {
+        stack.push(#{frame}::#{rust_name}(::std::mem::replace(&mut #{var}.0, #{hole}.clone())));
+    }
+    """
+    |> String.trim()
+  end
+
+  defp wrap_opts_drop(n, var, frame, rust_name, hole) do
+    inner = wrap_opts_drop(n - 1, var, frame, rust_name, hole)
+
+    """
+    match #{var} {
+        ::std::option::Option::Some(mut #{var}) => {
+            #{inner}
+        }
+        ::std::option::Option::None => {}
+    }
+    """
+    |> String.trim()
+  end
+
+  defp eq_walk(book, scc, types, variants) do
+    leader = hd(scc)
+    frame = g("eq_frame_" <> rust_type(types, leader))
+    fun = g("eq_" <> rust_type(types, leader))
+
+    enum_vars =
+      Enum.map_join(scc, "\n", fn name ->
+        node = node_of(types, name)
+        "    #{rust_type(types, name)}(::std::rc::Rc<#{node}>, ::std::rc::Rc<#{node}>),"
+      end)
+
+    arms = Enum.map_join(scc, "\n", &eq_frame_arm(book, &1, scc, types, variants, frame))
+
+    impls =
+      Enum.map_join(scc, "\n\n", fn name ->
+        eq_impl(name, types, frame, fun)
+      end)
+
+    """
+    enum #{frame} {
+    #{enum_vars}
+    }
+
+    fn #{fun}(start: #{frame}) -> bool {
+        let mut stack = ::std::vec::Vec::new();
+        stack.push(start);
+        loop {
+            let frame = match stack.pop() {
+                ::std::option::Option::Some(frame) => frame,
+                ::std::option::Option::None => return true,
+            };
+            match frame {
+    #{indent(arms, 4)}
+            }
+        }
+    }
+
+    #{impls}
+    """
+    |> String.trim()
+  end
+
+  defp eq_impl(name, types, frame, fun) do
+    type = rust_type(types, name)
+
+    """
+    impl ::std::cmp::PartialEq for #{type} {
+        fn eq(&self, other: &Self) -> bool {
+            #{fun}(#{frame}::#{type}(self.0.clone(), other.0.clone()))
+        }
+    }
+    """
+    |> String.trim()
+  end
+
+  defp eq_frame_arm(book, name, scc, types, variants, frame) do
+    type = rust_type(types, name)
+    node = node_of(types, name)
+    d = data_by(book, name)
+
+    ctor_arms =
+      Enum.map(d.ctors, fn c ->
+        fields = ctor_fields(book, c.name)
+        variant = Map.fetch!(variants, {name, c.name})
+        left = eq_pat(node, variant, fields, "a")
+        right = eq_pat(node, variant, fields, "b")
+        body = eq_body(fields, scc, types, frame)
+        "    (#{left}, #{right}) => {\n#{body}    }"
+      end)
+
+    inner = Enum.join(ctor_arms ++ ["    _ => return false,"], "\n")
+
+    """
+    #{frame}::#{type}(a, b) => {
+        match (&*a, &*b) {
+    #{inner}
+        }
+    }
+    """
+    |> String.trim()
+  end
+
+  defp eq_pat(node, variant, [], _side), do: "#{node}::#{variant}"
+
+  defp eq_pat(node, variant, fields, side) do
+    binders = Enum.map_join(0..(length(fields) - 1), ", ", &g(side, &1))
+    "#{node}::#{variant}(#{binders})"
+  end
+
+  defp eq_body(fields, scc, types, frame) do
+    lines =
+      fields
+      |> Enum.with_index()
+      |> Enum.map(fn {lay, i} -> eq_field(lay, g("a", i), g("b", i), scc, types, frame) end)
+
+    case lines do
+      [] -> ""
+      _ -> Enum.map_join(lines, "\n", &indent(&1, 8)) <> "\n"
+    end
+  end
+
+  defp eq_field(lay, ae, be, scc, types, frame) do
+    {opts, core} = peel_opts(lay)
+
+    case core do
+      {:data, name} ->
+        if name in scc do
+          push =
+            "stack.push(#{frame}::#{rust_type(types, name)}(#{ae}.0.clone(), #{be}.0.clone()));"
+
+          wrap_opts_eq(opts, ae, be, push)
+        else
+          "if #{ae} != #{be} { return false; }"
+        end
+
+      _ ->
+        "if #{ae} != #{be} { return false; }"
+    end
+  end
+
+  defp wrap_opts_eq(0, _ae, _be, inner), do: inner
+
+  defp wrap_opts_eq(n, ae, be, inner) do
+    nested = wrap_opts_eq(n - 1, ae, be, inner)
+
+    """
+    match (#{ae}, #{be}) {
+        (::std::option::Option::Some(#{ae}), ::std::option::Option::Some(#{be})) => {
+            #{nested}
+        }
+        (::std::option::Option::None, ::std::option::Option::None) => {}
+        _ => return false,
+    }
+    """
+    |> String.trim()
+  end
+
+  defp fmt_walk(book, scc, types, variants) do
+    leader = hd(scc)
+    frame = g("fmt_frame_" <> rust_type(types, leader))
+    fun = g("fmt_" <> rust_type(types, leader))
+
+    enum_vars =
+      Enum.map_join(scc, "\n", fn name ->
+        "    #{rust_type(types, name)}(::std::rc::Rc<#{node_of(types, name)}>),"
+      end)
+
+    arms = Enum.map_join(scc, "\n", &fmt_frame_arm(book, &1, scc, types, variants, frame))
+
+    impls = Enum.map_join(scc, "\n\n", &fmt_impl(&1, types, frame, fun))
+
+    """
+    enum #{frame} {
+    #{enum_vars}
+    }
+
+    fn #{fun}(start: #{frame}) -> ::std::primitive::u64 {
+        let mut stack = ::std::vec::Vec::new();
+        stack.push(start);
+        let mut k: ::std::primitive::u64 = 0;
+        loop {
+            let frame = match stack.pop() {
+                ::std::option::Option::Some(frame) => frame,
+                ::std::option::Option::None => return k,
+            };
+            match frame {
+    #{indent(arms, 4)}
+            }
+        }
+    }
+
+    #{impls}
+    """
+    |> String.trim()
+  end
+
+  defp fmt_impl(name, types, frame, fun) do
+    type = rust_type(types, name)
+
+    """
+    impl ::std::fmt::Debug for #{type} {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            let k = #{fun}(#{frame}::#{type}(self.0.clone()));
+            ::std::write!(f, "#{type}({})", k)
+        }
+    }
+    """
+    |> String.trim()
+  end
+
+  defp fmt_frame_arm(book, name, scc, types, variants, frame) do
+    type = rust_type(types, name)
+    node = node_of(types, name)
+    d = data_by(book, name)
+
+    ctor_arms =
+      Enum.map(d.ctors, fn c ->
+        fields = ctor_fields(book, c.name)
+        variant = Map.fetch!(variants, {name, c.name})
+        pat = fmt_pat(node, variant, fields, scc)
+        body = fmt_body(fields, scc, types, frame)
+        "    #{pat} => {\n#{body}    }"
+      end)
+
+    hole_arm =
+      if fieldless_variant(book, name, variants) == nil do
+        ["    #{node}::#{g("hole")} => {}"]
+      else
+        []
+      end
+
+    inner = Enum.join(ctor_arms ++ hole_arm, "\n")
+
+    """
+    #{frame}::#{type}(n) => {
+        if k == ::std::primitive::u64::MAX {
+            return k;
+        }
+        k += 1;
+        match &*n {
+    #{inner}
+        }
+    }
+    """
+    |> String.trim()
+  end
+
+  defp fmt_pat(node, variant, [], _scc), do: "#{node}::#{variant}"
+
+  defp fmt_pat(node, variant, fields, scc) do
+    binders =
+      fields
+      |> Enum.with_index()
+      |> Enum.map_join(", ", fn {lay, i} ->
+        if steals?(lay, scc), do: g("a", i), else: "_"
+      end)
+
+    "#{node}::#{variant}(#{binders})"
+  end
+
+  defp steals?(lay, scc) do
+    case peel_opts(lay) do
+      {_n, {:data, name}} -> name in scc
+      _ -> false
+    end
+  end
+
+  defp fmt_body(fields, scc, types, frame) do
+    lines =
+      fields
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {lay, i} -> fmt_steal(lay, g("a", i), scc, types, frame) end)
+
+    case lines do
+      [] -> ""
+      _ -> Enum.map_join(lines, "\n", &indent(&1, 8)) <> "\n"
+    end
+  end
+
+  defp fmt_steal(lay, var, scc, types, frame) do
+    {opts, core} = peel_opts(lay)
+
+    case core do
+      {:data, name} ->
+        if name in scc do
+          push = "stack.push(#{frame}::#{rust_type(types, name)}(#{var}.0.clone()));"
+          [wrap_opts_fmt(opts, var, push)]
+        else
+          []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp wrap_opts_fmt(0, _var, inner), do: inner
+
+  defp wrap_opts_fmt(n, var, inner) do
+    nested = wrap_opts_fmt(n - 1, var, inner)
+
+    """
+    match #{var} {
+        ::std::option::Option::Some(#{var}) => {
+            #{nested}
+        }
+        ::std::option::Option::None => {}
+    }
     """
     |> String.trim()
   end
@@ -1583,9 +2240,9 @@ defmodule Muro.Emit.Rust do
         }
     }
 
-    #[derive(::std::clone::Clone, ::std::fmt::Debug)]
+    #[derive(::std::clone::Clone)]
     pub struct #{nat}(::std::rc::Rc<#{node}>);
-    #[derive(::std::clone::Clone, ::std::fmt::Debug)]
+    #[derive(::std::clone::Clone)]
     enum #{node} {
         #{zero},
         #{suc}(#{nat}),
@@ -1622,8 +2279,9 @@ defmodule Muro.Emit.Rust do
         }
     }
 
-    // A derived `PartialEq` or `Drop` walks one `suc` per call.
+    // A derived `PartialEq`, `Debug`, or `Drop` walks one `suc` per call.
     // `100000`, the largest `Nat` a Rust test builds, overflows that walk.
+    // `Debug` prints the count, which is what `assert_eq!` writes on failure.
     impl ::std::cmp::PartialEq for #{nat} {
         fn eq(&self, other: &Self) -> bool {
             let mut #{a} = self.clone();
@@ -1636,6 +2294,27 @@ defmodule Muro.Emit.Rust do
                         #{b} = #{q}.clone();
                     }
                     _ => return false,
+                }
+            }
+        }
+    }
+
+    impl ::std::fmt::Debug for #{nat} {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            let mut #{n} = self.clone();
+            let mut #{k}: ::std::primitive::u64 = 0;
+            loop {
+                match &*#{n}.0 {
+                    #{node}::#{zero} => {
+                        return ::std::write!(f, "#{nat}({})", #{k});
+                    }
+                    #{node}::#{suc}(#{p}) => {
+                        if #{k} == ::std::primitive::u64::MAX {
+                            return f.write_str("#{nat}(max)");
+                        }
+                        #{k} += 1;
+                        #{n} = #{p}.clone();
+                    }
                 }
             }
         }

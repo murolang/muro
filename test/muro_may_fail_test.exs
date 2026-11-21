@@ -265,6 +265,8 @@ defmodule Muro.MayFailTest do
     assert {:error, @refuse} = Muro.emit_exunit(path, MayFailEmitTest)
     assert {:error, @refuse} = Muro.emit_c(path, nif: false)
     assert {:error, @refuse} = Muro.emit_rust(path)
+    assert {:error, @refuse} = Muro.emit_rust_test(path)
+    assert {:raise, "", @refuse} = Muro.CLI.Emit.run([path, "--backend", "rust-test"])
     assert {:error, @refuse} = Muro.emit_zig(path)
     assert {:error, @refuse} = Muro.emit_js(path)
     assert {:error, @refuse} = Muro.emit_asm(path)

@@ -24,7 +24,8 @@ defmodule Muro.Emit.RustTest do
   # `muro__from_u64` builds one successor per unit. The same cap the C
   # session image uses before it builds a Peano nat. Above it, the test
   # is a skip instead of a chain that hangs or exhausts memory.
-  # Comparison and `Drop` walk a chain of this size in a loop.
+  # Comparison, `Debug`, and `Drop` walk a chain of this size in a loop.
+  # `Debug` prints the count, so a failing `assert_eq!` reports that line.
   @nat_build_max 100_000
 
   @doc """

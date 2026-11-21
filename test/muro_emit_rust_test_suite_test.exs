@@ -79,6 +79,39 @@ defmodule Muro.EmitRustTestSuiteTest do
   def step-ok : evidence {step 0 ≡ suc 0 : Nat} := refl
   """
 
+  # A direct boxed cycle is walked on a heap stack. `Twin` reaches
+  # itself only through a pair, so it keeps the derived walk.
+  @deep """
+  data Color : Type where
+    red : Color
+    box : Nat → Color
+  data NatList : Type where
+    nil : NatList
+    cons : Nat → NatList → NatList
+  data Knot : Type where
+    go : Knot → Knot
+  data A : Type where
+    a0 : A
+    a1 : B → A
+  data B : Type where
+    b0 : B
+    b1 : A → B
+  data Twin : Type where
+    tip : Twin
+    bin : Twin × Twin → Twin
+  def len0 : run Π (xs : NatList) → Nat :=
+    λ (xs : NatList) →
+      match xs motive (λ _ → Nat)
+        | nil => 0
+        | cons _ _ => suc 0
+  def peel : run Π (k : Knot) → Nat :=
+    λ (k : Knot) →
+      match k motive (λ _ → Nat)
+        | go _ => 0
+  def keep : run Π (xs : NatList) → NatList :=
+    λ (xs : NatList) → xs
+  """
+
   @skips_book """
   def round : run Π (n : Nat) → Nat :=
     λ (n : Nat) → n
@@ -440,8 +473,9 @@ defmodule Muro.EmitRustTestSuiteTest do
     assert source =~ "fn fit()"
 
     # `fit` is the emitted equality. This second test is the unequal
-    # pair, a shared clone, and `Drop`, on a stack too small for a
-    # recursive walk of 100000 successors.
+    # pair, a failing `assert_eq!` that prints both counts, a shared
+    # clone, and `Drop`, on a stack too small for a recursive walk of
+    # 100000 successors.
     extra = """
     #[test]
     fn cap_ne() {
@@ -453,6 +487,12 @@ defmodule Muro.EmitRustTestSuiteTest do
                 assert!(a == b);
                 let d = wide::muro__from_u64(99999);
                 assert!(a != d);
+                let prev = ::std::panic::take_hook();
+                ::std::panic::set_hook(Box::new(|_| {}));
+                let failed = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(|| {
+                    assert_eq!(a, d, "wide.muro:4 fit");
+                }));
+                ::std::panic::set_hook(prev);
                 let c = a.clone();
                 assert!(a == c);
                 drop(c);
@@ -460,10 +500,24 @@ defmodule Muro.EmitRustTestSuiteTest do
                 drop(a);
                 drop(b);
                 drop(d);
+                failed
             })
             .unwrap()
             .join();
-        assert!(ran.is_ok());
+        let payload = match ran {
+            ::std::result::Result::Ok(::std::result::Result::Err(payload)) => payload,
+            _ => panic!("expected the compare to fail"),
+        };
+        let msg = match payload.downcast_ref::<::std::string::String>() {
+            ::std::option::Option::Some(text) => text.clone(),
+            ::std::option::Option::None => match payload.downcast_ref::<&str>() {
+                ::std::option::Option::Some(text) => (*text).to_string(),
+                ::std::option::Option::None => ::std::string::String::new(),
+            },
+        };
+        assert!(msg.contains("wide.muro:4 fit"), "{msg}");
+        assert!(msg.contains("muro__Nat(100000)"), "{msg}");
+        assert!(msg.contains("muro__Nat(99999)"), "{msg}");
     }
     """
 
@@ -473,22 +527,157 @@ defmodule Muro.EmitRustTestSuiteTest do
     image = File.read!(rs)
 
     assert String.contains?(image, "impl ::std::cmp::PartialEq for muro__Nat")
+    assert String.contains?(image, "impl ::std::fmt::Debug for muro__Nat")
     assert String.contains?(image, "impl ::std::ops::Drop for muro__Nat")
+    refute String.contains?(image, "impl ::std::fmt::Debug for muro__NatNode")
 
-    refute String.contains?(
-             image,
-             "PartialEq, ::std::fmt::Debug)]\npub struct muro__Nat"
-           )
-
-    refute String.contains?(
-             image,
-             "PartialEq, ::std::fmt::Debug)]\nenum muro__NatNode"
-           )
+    refute String.contains?(image, "fmt::Debug)]\npub struct muro__Nat")
+    refute String.contains?(image, "fmt::Debug)]\nenum muro__NatNode")
 
     {out, code} = rustc_test(dir, "wide_test.rs", ["--test-threads=1"])
     assert code == 0, out
     assert out =~ "2 passed"
     assert out =~ "1 ignored"
+    refute out =~ "stack overflow"
+    refute out =~ "warning:", out
+  end
+
+  test "a boxed cycle walks on a heap stack and a pair cycle stays derived" do
+    {_dir, path} = book("deep.muro", @deep)
+    assert {:ok, [rs]} = Muro.emit_rust(path)
+    image = File.read!(rs)
+
+    assert image =~ "#[derive(::std::clone::Clone)]\npub struct NatList("
+    refute image =~ "fmt::Debug)]\npub struct NatList("
+    assert image =~ "impl ::std::cmp::PartialEq for NatList"
+    assert image =~ "impl ::std::fmt::Debug for NatList"
+    assert image =~ "impl ::std::ops::Drop for NatList"
+    assert image =~ "fn muro__eq_NatList("
+    assert image =~ "fn muro__fmt_NatList("
+    assert image =~ "fn muro__drop_NatList("
+
+    assert image =~
+             "enum muro__node_NatList {\n    nil,\n    cons(muro__Nat, NatList),\n}"
+
+    assert image =~
+             "#[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]\npub struct Color("
+
+    refute image =~ "impl ::std::ops::Drop for Color"
+
+    assert image =~ "enum muro__node_Knot {\n    go(Knot),\n    muro__hole,\n}"
+    assert image =~ "impl ::std::ops::Drop for Knot"
+    assert image =~ "_ => ::std::process::abort()"
+    assert length(String.split(image, "_ => ::std::process::abort()")) == 2
+
+    assert image =~ "impl ::std::cmp::PartialEq for A {"
+    assert image =~ "impl ::std::cmp::PartialEq for B {"
+    assert image =~ "impl ::std::ops::Drop for A {"
+    assert image =~ "impl ::std::ops::Drop for B {"
+    assert image =~ "muro__drop_A(muro__drop_frame_A::B("
+    refute image =~ "fn muro__drop_B("
+
+    assert image =~
+             "#[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]\npub struct Twin("
+
+    refute image =~ "impl ::std::cmp::PartialEq for Twin"
+    refute image =~ "impl ::std::fmt::Debug for Twin"
+    refute image =~ "impl ::std::ops::Drop for Twin"
+    assert image =~ "pub fn len0("
+    assert image =~ "pub fn peel("
+  end
+
+  @tag skip: @rustc_skip
+  test "rustc compares, prints, and frees a deep declared value on a small stack" do
+    {dir, path} = book("deep.muro", @deep)
+    assert {:ok, [rs]} = Muro.emit_rust(path)
+    assert Path.basename(rs) == "deep.rs"
+
+    File.write!(Path.join(dir, "deep_test.rs"), """
+    #[path = "deep.rs"]
+    mod deep;
+
+    fn caught(f: impl FnOnce()) -> ::std::string::String {
+        let prev = ::std::panic::take_hook();
+        ::std::panic::set_hook(Box::new(|_| {}));
+        let failed = ::std::panic::catch_unwind(::std::panic::AssertUnwindSafe(f));
+        ::std::panic::set_hook(prev);
+        match failed {
+            ::std::result::Result::Ok(()) => panic!("expected a failing compare"),
+            ::std::result::Result::Err(payload) => match payload.downcast_ref::<::std::string::String>() {
+                ::std::option::Option::Some(text) => text.clone(),
+                ::std::option::Option::None => match payload.downcast_ref::<&str>() {
+                    ::std::option::Option::Some(text) => (*text).to_string(),
+                    ::std::option::Option::None => ::std::string::String::new(),
+                },
+            },
+        }
+    }
+
+    #[test]
+    fn deep_cap() {
+        let ran = ::std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                assert!(deep::tip() == deep::tip());
+                let z = deep::muro__from_u64(0);
+                let natlist = |n: u64| {
+                    let mut xs = deep::nil();
+                    let mut i = 0u64;
+                    while i < n {
+                        xs = deep::cons(z.clone(), xs);
+                        i += 1;
+                    }
+                    xs
+                };
+                let a = natlist(100000);
+                let b = natlist(100000);
+                assert!(a == b);
+                drop(b);
+                let c = natlist(99999);
+                let nmsg = caught(|| assert_eq!(a, c, "natlist cap"));
+                drop(a);
+                drop(c);
+                drop(z);
+
+                let chain = |n: u64| {
+                    let mut a = deep::a0();
+                    let mut i = 0u64;
+                    while i < n {
+                        let b = deep::b1(a);
+                        a = deep::a1(b);
+                        i += 1;
+                    }
+                    a
+                };
+                let m0 = chain(8192);
+                let m1 = chain(8192);
+                assert!(m0 == m1);
+                drop(m1);
+                let m2 = chain(8191);
+                let amsg = caught(|| assert_eq!(m0, m2, "mutual cap"));
+                drop(m0);
+                drop(m2);
+                (nmsg, amsg)
+            })
+            .unwrap()
+            .join();
+        let (nmsg, amsg) = match ran {
+            ::std::result::Result::Ok(msgs) => msgs,
+            ::std::result::Result::Err(_) => panic!("deep walk panicked"),
+        };
+        assert!(nmsg.contains("natlist cap"), "{nmsg}");
+        assert!(nmsg.contains("NatList(100001)"), "{nmsg}");
+        assert!(nmsg.contains("NatList(100000)"), "{nmsg}");
+        assert!(amsg.contains("mutual cap"), "{amsg}");
+        assert!(amsg.contains("A(16385)"), "{amsg}");
+        assert!(amsg.contains("A(16383)"), "{amsg}");
+    }
+    """)
+
+    {out, code} = rustc_test(dir, "deep_test.rs", ["--test-threads=1"])
+    assert code == 0, out
+    assert out =~ "1 passed"
+    refute out =~ "stack overflow"
     refute out =~ "warning:", out
   end
 
