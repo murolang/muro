@@ -59,9 +59,9 @@ pub fn muro__reveal<T: 'static + ::std::clone::Clone>(muro__e: muro__Erased) -> 
     }
 }
 
-#[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]
+#[derive(::std::clone::Clone, ::std::fmt::Debug)]
 pub struct muro__Nat(::std::rc::Rc<muro__NatNode>);
-#[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]
+#[derive(::std::clone::Clone, ::std::fmt::Debug)]
 enum muro__NatNode {
     muro__tag_zero,
     muro__tag_suc(muro__Nat),
@@ -93,6 +93,50 @@ pub fn muro__to_u64(muro__n: &muro__Nat) -> ::std::primitive::u64 {
             muro__NatNode::muro__tag_suc(muro__p) => {
                 muro__k += 1;
                 muro__n = muro__p.clone();
+            }
+        }
+    }
+}
+
+// A derived `PartialEq` or `Drop` walks one `suc` per call.
+// `100000`, the largest `Nat` a Rust test builds, overflows that walk.
+impl ::std::cmp::PartialEq for muro__Nat {
+    fn eq(&self, other: &Self) -> bool {
+        let mut muro__a = self.clone();
+        let mut muro__b = other.clone();
+        loop {
+            match (&*muro__a.0, &*muro__b.0) {
+                (muro__NatNode::muro__tag_zero, muro__NatNode::muro__tag_zero) => return true,
+                (muro__NatNode::muro__tag_suc(muro__p), muro__NatNode::muro__tag_suc(muro__q)) => {
+                    muro__a = muro__p.clone();
+                    muro__b = muro__q.clone();
+                }
+                _ => return false,
+            }
+        }
+    }
+}
+
+impl ::std::ops::Drop for muro__Nat {
+    fn drop(&mut self) {
+        if ::std::rc::Rc::strong_count(&self.0) != 1 {
+            return;
+        }
+        if matches!(&*self.0, muro__NatNode::muro__tag_zero) {
+            return;
+        }
+        let muro__s = muro__zero();
+        let mut muro__n = ::std::mem::replace(&mut self.0, muro__s.0.clone());
+        loop {
+            if ::std::rc::Rc::strong_count(&muro__n) != 1 {
+                return;
+            }
+            match ::std::rc::Rc::try_unwrap(muro__n) {
+                ::std::result::Result::Ok(muro__NatNode::muro__tag_zero) => return,
+                ::std::result::Result::Ok(muro__NatNode::muro__tag_suc(mut muro__p)) => {
+                    muro__n = ::std::mem::replace(&mut muro__p.0, muro__s.0.clone());
+                }
+                ::std::result::Result::Err(_) => return,
             }
         }
     }

@@ -24,6 +24,7 @@ defmodule Muro.Emit.RustTest do
   # `muro__from_u64` builds one successor per unit. The same cap the C
   # session image uses before it builds a Peano nat. Above it, the test
   # is a skip instead of a chain that hangs or exhausts memory.
+  # Comparison and `Drop` walk a chain of this size in a loop.
   @nat_build_max 100_000
 
   @doc """
@@ -96,9 +97,10 @@ defmodule Muro.Emit.RustTest do
 
   @doc """
   True when `name` is a Rust path. Each segment is an identifier that
-  is not a keyword, a path keyword (`crate`, `self`, `super`, `Self`),
-  or `r#` plus an identifier that is not one of those four. An empty
-  segment is refused.
+  is not a keyword, or a path keyword (`crate`, `self`, `super`,
+  `Self`), or `r#` plus an identifier that is not one of those four.
+  An empty segment is refused. `segment?/1` accepts a path keyword and
+  refuses `r#` in front of one.
   """
   def module_path?(name) when is_binary(name) and name != "" do
     segs = String.split(name, "::", trim: false)
@@ -183,6 +185,7 @@ defmodule Muro.Emit.RustTest do
     end
   end
 
+  # A path keyword is a segment. `r#` plus a path keyword is not.
   defp segment?("r#" <> ident) do
     identifier?(ident) and not Rust.raw_forbidden?(ident)
   end

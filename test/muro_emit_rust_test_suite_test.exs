@@ -424,6 +424,75 @@ defmodule Muro.EmitRustTestSuiteTest do
   end
 
   @tag skip: @rustc_skip
+  test "rustc compares two Nats of 100000, equal and unequal" do
+    {dir, path} =
+      book("wide.muro", """
+      def round : run Π (n : Nat) → Nat :=
+        λ (n : Nat) → n
+      def wide-arg : evidence {round 100001 ≡ 100001 : Nat} := refl
+      def fit : evidence {round 100000 ≡ 100000 : Nat} := refl
+      """)
+
+    assert {:ok, %{source: source, tests: 1, skips: skips}} =
+             Muro.emit_rust_test(path, root: dir, book: "wide.muro")
+
+    assert length(skips) == 1
+    assert source =~ "fn fit()"
+
+    # `fit` is the emitted equality. This second test is the unequal
+    # pair, a shared clone, and `Drop`, on a stack too small for a
+    # recursive walk of 100000 successors.
+    extra = """
+    #[test]
+    fn cap_ne() {
+        let ran = ::std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| {
+                let a = wide::muro__from_u64(100000);
+                let b = wide::muro__from_u64(100000);
+                assert!(a == b);
+                let d = wide::muro__from_u64(99999);
+                assert!(a != d);
+                let c = a.clone();
+                assert!(a == c);
+                drop(c);
+                assert!(wide::muro__to_u64(&a) == 100000);
+                drop(a);
+                drop(b);
+                drop(d);
+            })
+            .unwrap()
+            .join();
+        assert!(ran.is_ok());
+    }
+    """
+
+    File.write!(Path.join(dir, "wide_test.rs"), source <> "\n" <> extra)
+    assert {:ok, [rs]} = Muro.emit_rust(path)
+    assert Path.basename(rs) == "wide.rs"
+    image = File.read!(rs)
+
+    assert String.contains?(image, "impl ::std::cmp::PartialEq for muro__Nat")
+    assert String.contains?(image, "impl ::std::ops::Drop for muro__Nat")
+
+    refute String.contains?(
+             image,
+             "PartialEq, ::std::fmt::Debug)]\npub struct muro__Nat"
+           )
+
+    refute String.contains?(
+             image,
+             "PartialEq, ::std::fmt::Debug)]\nenum muro__NatNode"
+           )
+
+    {out, code} = rustc_test(dir, "wide_test.rs", ["--test-threads=1"])
+    assert code == 0, out
+    assert out =~ "2 passed"
+    assert out =~ "1 ignored"
+    refute out =~ "warning:", out
+  end
+
+  @tag skip: @rustc_skip
   test "rustc accepts a finished keyword beside the suffixed evidence" do
     {dir, path} = book("idents.muro", @forbidden_clash)
 
@@ -711,14 +780,16 @@ defmodule Muro.EmitRustTestSuiteTest do
     dir
   end
 
-  defp rustc_test(dir, file) do
+  defp rustc_test(dir, file, args \\ []) do
     System.cmd(@rustc, ["--edition", "2021", "--test", file, "-o", "suite"],
       cd: dir,
       stderr_to_stdout: true
     )
     |> then(fn {compiled, status} ->
       if status == 0 do
-        {ran, ran_status} = System.cmd(Path.join(dir, "suite"), [], stderr_to_stdout: true)
+        {ran, ran_status} =
+          System.cmd(Path.join(dir, "suite"), args, stderr_to_stdout: true)
+
         {compiled <> ran, ran_status}
       else
         {compiled, status}

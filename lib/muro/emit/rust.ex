@@ -1520,6 +1520,10 @@ defmodule Muro.Emit.Rust do
     n = g("n")
     k = g("k")
     p = g("p")
+    a = g("a")
+    b = g("b")
+    q = g("q")
+    s = g("s")
 
     """
     #[derive(::std::clone::Clone)]
@@ -1579,9 +1583,9 @@ defmodule Muro.Emit.Rust do
         }
     }
 
-    #[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]
+    #[derive(::std::clone::Clone, ::std::fmt::Debug)]
     pub struct #{nat}(::std::rc::Rc<#{node}>);
-    #[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]
+    #[derive(::std::clone::Clone, ::std::fmt::Debug)]
     enum #{node} {
         #{zero},
         #{suc}(#{nat}),
@@ -1613,6 +1617,50 @@ defmodule Muro.Emit.Rust do
                 #{node}::#{suc}(#{p}) => {
                     #{k} += 1;
                     #{n} = #{p}.clone();
+                }
+            }
+        }
+    }
+
+    // A derived `PartialEq` or `Drop` walks one `suc` per call.
+    // `100000`, the largest `Nat` a Rust test builds, overflows that walk.
+    impl ::std::cmp::PartialEq for #{nat} {
+        fn eq(&self, other: &Self) -> bool {
+            let mut #{a} = self.clone();
+            let mut #{b} = other.clone();
+            loop {
+                match (&*#{a}.0, &*#{b}.0) {
+                    (#{node}::#{zero}, #{node}::#{zero}) => return true,
+                    (#{node}::#{suc}(#{p}), #{node}::#{suc}(#{q})) => {
+                        #{a} = #{p}.clone();
+                        #{b} = #{q}.clone();
+                    }
+                    _ => return false,
+                }
+            }
+        }
+    }
+
+    impl ::std::ops::Drop for #{nat} {
+        fn drop(&mut self) {
+            if ::std::rc::Rc::strong_count(&self.0) != 1 {
+                return;
+            }
+            if matches!(&*self.0, #{node}::#{zero}) {
+                return;
+            }
+            let #{s} = #{g("zero")}();
+            let mut #{n} = ::std::mem::replace(&mut self.0, #{s}.0.clone());
+            loop {
+                if ::std::rc::Rc::strong_count(&#{n}) != 1 {
+                    return;
+                }
+                match ::std::rc::Rc::try_unwrap(#{n}) {
+                    ::std::result::Result::Ok(#{node}::#{zero}) => return,
+                    ::std::result::Result::Ok(#{node}::#{suc}(mut #{p})) => {
+                        #{n} = ::std::mem::replace(&mut #{p}.0, #{s}.0.clone());
+                    }
+                    ::std::result::Result::Err(_) => return,
                 }
             }
         }

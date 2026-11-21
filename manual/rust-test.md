@@ -62,7 +62,7 @@ mod rounding;
 
 `rustc --edition 2021 --test` accepts the two files as siblings. A Cargo `tests/` directory does not reach into `src/` that way. Pass `--impl crate::module`, or `impl:` on the manifest entry, and the tests call that path. The path is baked into the file. There is no environment override.
 
-`--impl` and `impl:` are a Rust path. Each segment is an identifier that is not a keyword, a path keyword (`crate`, `self`, `super`, `Self`), or `r#` plus an identifier that is not one of those four. `crate::rounding` and `r#fn` are accepted. `fn`, `r#crate`, `a::`, and `1bad` are refused: `impl must be a Rust path`. `--impl` with any backend other than `pytest` and `rust-test` is `--impl is only valid with --backend pytest or --backend rust-test`.
+`--impl` and `impl:` are a Rust path. Each segment is an identifier that is not a keyword, or a path keyword (`crate`, `self`, `super`, `Self`), or `r#` plus an identifier that is not one of those four. `crate::rounding`, `self::a`, and `r#fn` are accepted. `fn`, `r#crate`, `a::`, and `1bad` are refused: `impl must be a Rust path`. `--impl` with any backend other than `pytest` and `rust-test` is `--impl is only valid with --backend pytest or --backend rust-test`.
 
 The file defines `MURO_BOOK`, the book sha256, the same hash an ExUnit suite stores in `@muro_book`. The inner attribute allows an unused module, that constant, and the names a book spells.
 
@@ -85,7 +85,7 @@ Arguments and the result are normalized with the checker's fuel (`Muro.Check.nor
 | string literal | a `muro__str` of a static byte slice |
 | bytes literal | a `muro__slice` of a static byte slice |
 
-A `Nat` above `18446744073709551615` is a skip: `normal form is a Nat that does not fit in u64`. A `Nat` above `100000` that still fits is a skip: `normal form is a Nat above 100000`. The same sentences name the argument when that `Nat` is an argument (`argument 1 normal form is a Nat above 100000`). `muro__from_u64` builds one successor per unit, and the image compares `Nat` by that chain. `100000` is printed. `100001` is the skip.
+A `Nat` above `18446744073709551615` is a skip: `normal form is a Nat that does not fit in u64`. A `Nat` above `100000` that still fits is a skip: `normal form is a Nat above 100000`. The same sentences name the argument when that `Nat` is an argument (`argument 1 normal form is a Nat above 100000`). `muro__from_u64` builds one successor per unit. The image compares a `Nat` by walking that chain in a loop, and frees the chain in a loop, so `100000` compares and is freed. `100000` is printed. `100001` is the skip.
 
 A word equation that ExUnit skips as a machine term is a test here when the normal form is a literal. `subi (toI64 0) (toI64 1)` prints `(18446744073709551615u64 as i64)`.
 
