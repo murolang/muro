@@ -1,0 +1,15 @@
+-- Classical.muro — excluded middle as an evidence axiom.
+-- dne is proved from LEM: match on LEM P, and matchEmpty in the right branch.
+-- Either is the sum P ⊎ Q. left and right are its constructors.
+
+data Either (A : Type) (B : Type) : Type where
+  left  : A → Either A B
+  right : B → Either A B
+
+axiom LEM : evidence Π (P : Type) → (P ⊎ (P → Empty))
+
+def dne : evidence Π (P : Type) → ((P → Empty) → Empty) → P :=
+  λ (P : Type) → λ (nn : (P → Empty) → Empty) →
+    match LEM P motive (λ _ → P)
+      | left p => p
+      | right np => matchEmpty (nn np) motive (λ _ → P)

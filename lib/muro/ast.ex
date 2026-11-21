@@ -631,6 +631,9 @@ defmodule Muro.Ast do
           Map.get(d, :kind) == :param ->
             {:error, param_left(d)}
 
+          Map.get(d, :kind) == :axiom ->
+            axiom_to_db(d)
+
           Map.get(d, :kind) == :data ->
             data_to_db(d)
 
@@ -727,6 +730,15 @@ defmodule Muro.Ast do
     end
   end
 
+  # An axiom has a type and no body. The file stays, so a dependency
+  # line can name the book the axiom was declared in.
+  defp axiom_to_db(%{type: ty} = d) do
+    case to_db(ty) do
+      {:ok, ty1} -> {:ok, %{d | type: ty1}}
+      err -> err
+    end
+  end
+
   defp param_left(d) do
     "#{Muro.Print.loc_prefix(Map.get(d, :loc))}param #{d.name} is supplied by a file that imports this one"
   end
@@ -739,6 +751,9 @@ defmodule Muro.Ast do
         acc
 
       %{kind: :param, type: ty}, acc ->
+        atoms_in(ty, acc)
+
+      %{kind: :axiom, type: ty}, acc ->
         atoms_in(ty, acc)
 
       %{kind: :data, params: params, ctors: ctors} = d, acc ->
