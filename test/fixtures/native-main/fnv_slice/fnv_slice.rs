@@ -172,6 +172,7 @@ pub struct muro__Pair(
     muro__Erased,
     muro__Erased,
     fn(&muro__Pair, &muro__Pair) -> bool,
+    fn(&muro__Pair, &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result,
 );
 
 fn muro__pair_eq<A: ::std::cmp::PartialEq + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::clone::Clone + 'static>(
@@ -201,15 +202,49 @@ fn muro__pair_eq_raw(muro__a: &muro__Pair, muro__b: &muro__Pair) -> bool {
     muro__erased_same(&muro__a.0, &muro__b.0) && muro__erased_same(&muro__a.1, &muro__b.1)
 }
 
+fn muro__pair_fmt<A: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static>(
+    muro__p: &muro__Pair,
+    muro__f: &mut ::std::fmt::Formatter<'_>,
+) -> ::std::fmt::Result {
+    match (
+        muro__try_reveal::<A>(&muro__p.0),
+        muro__try_reveal::<B>(&muro__p.1),
+    ) {
+        (
+            ::std::option::Option::Some(muro__a),
+            ::std::option::Option::Some(muro__b),
+        ) => {
+            muro__f.write_str("muro__Pair(")?;
+            ::std::fmt::Debug::fmt(&muro__a, muro__f)?;
+            muro__f.write_str(", ")?;
+            ::std::fmt::Debug::fmt(&muro__b, muro__f)?;
+            muro__f.write_str(")")
+        }
+        _ => muro__f.write_str("muro__Pair(..)"),
+    }
+}
+
+fn muro__pair_fmt_raw(
+    _: &muro__Pair,
+    muro__f: &mut ::std::fmt::Formatter<'_>,
+) -> ::std::fmt::Result {
+    muro__f.write_str("muro__Pair(..)")
+}
+
 pub fn muro__pair<A: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static>(
     muro__a: A,
     muro__b: B,
 ) -> muro__Pair {
-    muro__Pair(muro__erase(muro__a), muro__erase(muro__b), muro__pair_eq::<A, B>)
+    muro__Pair(
+        muro__erase(muro__a),
+        muro__erase(muro__b),
+        muro__pair_eq::<A, B>,
+        muro__pair_fmt::<A, B>,
+    )
 }
 
 pub fn muro__pair_raw(muro__a: muro__Erased, muro__b: muro__Erased) -> muro__Pair {
-    muro__Pair(muro__a, muro__b, muro__pair_eq_raw)
+    muro__Pair(muro__a, muro__b, muro__pair_eq_raw, muro__pair_fmt_raw)
 }
 
 impl ::std::cmp::PartialEq for muro__Pair {
@@ -220,7 +255,7 @@ impl ::std::cmp::PartialEq for muro__Pair {
 
 impl ::std::fmt::Debug for muro__Pair {
     fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-        f.write_str("muro__Pair(..)")
+        (self.3)(self, f)
     }
 }
 
