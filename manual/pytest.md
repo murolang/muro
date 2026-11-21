@@ -63,7 +63,7 @@ The fold is not injective. `foo-bar.muro` and `foo_bar.muro` are both `MURO_IMPL
 
 The fixture reads `os.environ.get` of that variable, and otherwise the baked default, then `importlib.import_module`. It is module-scoped. A module that cannot be imported fails before the tests, and the message names the module: `implementation module rounding could not be imported`. A called function that is missing, or whose signature does not accept the arity, fails the same way and names `round/1`. Several missing functions are joined in that message. `inspect.signature` decides the arity. A function that raises `ValueError` or `TypeError` from `signature` is accepted. A varargs parameter accepts an arity at least the required positional count. Otherwise the arity must sit between the required positional count and the positional count. Only the functions the runnable tests call are checked. A skipped test is not in that list.
 
-`--impl` and `impl:` are a dotted Python module. Each segment is an identifier and not a keyword. `pkg.rounding` is accepted. `class`, `my.class`, `.rounding`, and `1bad` are refused: `impl must be a Python module name`. `--impl` with any other backend is `--impl is only valid with --backend pytest`.
+`--impl` and `impl:` are a dotted Python module. Each segment is an identifier and not a keyword. `pkg.rounding` is accepted. `class`, `my.class`, `.rounding`, and `1bad` are refused: `impl must be a Python module name`. `--impl` with any other backend is `--impl is only valid with --backend pytest or --backend rust-test`.
 
 The module defines `MURO_BOOK`, the book sha256, the same hash an ExUnit suite stores in `@muro_book`.
 
@@ -96,9 +96,9 @@ The encoding is not injective across types. A `String` and a nullary constructor
 
 ## Param libraries
 
-`Muro.emit_pytest/2`, `mix muro.emit --backend pytest`, and a `kind: :pytest` entry check a library of unsupplied `param`s as assumptions (`params: :open`). `mix muro.check`, and every other backend, still refuse the file. A `run` param at the head of a side is a call, `muro_impl.p()`. An `evidence` param is not a call and not a candidate.
+`Muro.emit_pytest/2`, `mix muro.emit --backend pytest`, and a `kind: :pytest` entry check a library of unsupplied `param`s as assumptions (`params: :open`). `mix muro.check`, and every backend other than `exunit`, `pytest`, and `rust-test`, still refuse the file. A `run` param at the head of a side is a call, `muro_impl.p()`. An `evidence` param is not a call and not a candidate.
 
-`--imports` collects the same files the ExUnit flag collects. It is an error with any backend other than `exunit` and `pytest`: `--imports is only valid with --backend exunit or --backend pytest`.
+`--imports` collects the same files the ExUnit flag collects. It is an error with any backend other than `exunit`, `pytest`, and `rust-test`: `--imports is only valid with --backend exunit, --backend pytest, or --backend rust-test`.
 
 ## Manifest
 

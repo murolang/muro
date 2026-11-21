@@ -2,6 +2,8 @@ defmodule Muro.Emit.Equations do
   @moduledoc """
   Closed equations collected for a host test suite.
 
+  ExUnit, pytest, and the Rust test file share this collector.
+
   A candidate is an `evidence` definition whose type is an equation
   `{f a₁ … aₙ ≡ b : T}`, and `f` is a name. Quantified evidence and an
   equation whose head is not a name are not candidates. By default the
@@ -14,8 +16,7 @@ defmodule Muro.Emit.Equations do
   exported, a param reached only by evaluation, fuel) are decided
   here. The value of an argument or a result is printed by `opts[:print]`,
   which defaults to `Muro.Emit.emit_closed/2`. A backend that wants
-  another literal passes its own printer. That printer is the place a
-  later `repr` plugs in. It returns `{:ok, source}` or
+  another literal passes its own printer. It returns `{:ok, source}` or
   `{:error, reason}`, and `reason` is `:function`, `:stream`,
   `:machine`, `:open`, `:shape`, or `{:text, message}`.
   """
