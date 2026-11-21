@@ -556,6 +556,8 @@ defmodule Muro.EmitRustTestSuiteTest do
     assert image =~ "fn muro__fmt_NatList("
     assert image =~ "fn muro__drop_NatList("
     assert image =~ "out.push_str(\"...\")"
+    assert image =~ "out.len() >= 1024"
+    assert image =~ "is_char_boundary"
     assert image =~ "Owned(::std::format!"
     assert image =~ "NatList({}: {})"
 
@@ -635,6 +637,8 @@ defmodule Muro.EmitRustTestSuiteTest do
                 assert!(s0.contains("muro__Nat(0)"), "{s0}");
                 assert!(s1.contains("muro__Nat(1)"), "{s1}");
                 assert!(!s0.contains("muro__Nat(1)"), "{s0}");
+                assert!(!s0.ends_with("..."), "{s0}");
+                assert!(!s1.ends_with("..."), "{s1}");
                 drop(p0);
                 drop(p1);
                 drop(one);
@@ -651,7 +655,15 @@ defmodule Muro.EmitRustTestSuiteTest do
                 let b = natlist(100000);
                 assert!(a == b);
                 drop(b);
+                let shown = ::std::format!("{:?}", a);
+                assert!(shown.starts_with("NatList(100001:"), "{shown}");
+                assert!(shown.contains("muro__Nat(0)"), "{shown}");
+                assert!(shown.len() < 2048, "{}", shown.len());
+                assert!(shown.ends_with("...)"), "{shown}");
                 let c = natlist(99999);
+                let shown_c = ::std::format!("{:?}", c);
+                assert!(shown_c.starts_with("NatList(100000:"), "{shown_c}");
+                assert!(shown_c.ends_with("...)"), "{shown_c}");
                 let nmsg = caught(|| assert_eq!(a, c, "natlist cap"));
                 drop(a);
                 drop(c);
@@ -684,11 +696,11 @@ defmodule Muro.EmitRustTestSuiteTest do
             ::std::result::Result::Err(_) => panic!("deep walk panicked"),
         };
         assert!(nmsg.contains("natlist cap"), "{nmsg}");
-        assert!(nmsg.contains("NatList(100001)"), "{nmsg}");
-        assert!(nmsg.contains("NatList(100000)"), "{nmsg}");
+        assert!(nmsg.contains("NatList(100001:"), "{nmsg}");
+        assert!(nmsg.contains("NatList(100000:"), "{nmsg}");
         assert!(amsg.contains("mutual cap"), "{amsg}");
-        assert!(amsg.contains("A(16385)"), "{amsg}");
-        assert!(amsg.contains("A(16383)"), "{amsg}");
+        assert!(amsg.contains("A(16385:"), "{amsg}");
+        assert!(amsg.contains("A(16383:"), "{amsg}");
     }
     """)
 

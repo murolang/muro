@@ -1261,6 +1261,7 @@ defmodule Muro.Emit.Rust do
   # A boxed type that reaches itself through a boxed field does not
   # derive `PartialEq` or `Debug`. Those walks, and `Drop`, are emitted
   # as a heap stack. `Debug` also prints each field outside the cycle.
+  # The text keeps at most 1024 bytes of that print, then `...`.
   # `Opt` of the type being defined is not strictly positive, so it does
   # not check. A cycle reached only through a pair keeps the derived
   # walk. Unboxed data cannot be recursive.
@@ -1938,13 +1939,19 @@ defmodule Muro.Emit.Rust do
     frame = g("fmt_frame_" <> rust_type(types, leader))
     job = g("fmt_job_" <> rust_type(types, leader))
     fun = g("fmt_" <> rust_type(types, leader))
+    keep = g("fmt_keep_" <> rust_type(types, leader))
 
     enum_vars =
       Enum.map_join(scc, "\n", fn name ->
         "    #{rust_type(types, name)}(::std::rc::Rc<#{node_of(types, name)}>),"
       end)
 
-    arms = Enum.map_join(scc, "\n", &fmt_frame_arm(book, &1, scc, types, variants, frame, job))
+    arms =
+      Enum.map_join(
+        scc,
+        "\n",
+        &fmt_frame_arm(book, &1, scc, types, variants, frame, job, keep)
+      )
 
     leave =
       Enum.map_join(scc, "\n", fn name ->
@@ -1956,7 +1963,8 @@ defmodule Muro.Emit.Rust do
 
     """
     // The cycle is walked on a heap stack. A field outside the cycle is
-    // printed, so two values that differ only there do not share a string.
+    // printed, so two values that differ there do not share a string when
+    // the difference is in the prefix. The text keeps 1024 bytes, then `...`.
     // A node still on the path is a cycle and is printed as `...`.
     enum #{frame} {
     #{enum_vars}
@@ -1969,10 +1977,30 @@ defmodule Muro.Emit.Rust do
         Leave(#{frame}),
     }
 
+    fn #{keep}(out: &mut ::std::string::String, stopped: &mut bool, s: &str) {
+        if *stopped {
+            return;
+        }
+        if out.len() >= 1024 || s.len() > 1024 - out.len() {
+            if s.len() > 1024 && out.len() < 1024 {
+                let mut end = 1024 - out.len();
+                while end > 0 && !s.is_char_boundary(end) {
+                    end -= 1;
+                }
+                out.push_str(&s[..end]);
+            }
+            out.push_str("...");
+            *stopped = true;
+        } else {
+            out.push_str(s);
+        }
+    }
+
     fn #{fun}(start: #{frame}, out: &mut ::std::string::String) -> ::std::primitive::u64 {
         let mut stack = ::std::vec::Vec::new();
         stack.push(#{job}::Node(start));
         let mut path = ::std::collections::HashSet::<*const ()>::new();
+        let mut stopped = false;
         let mut k: ::std::primitive::u64 = 0;
         loop {
             let job = match stack.pop() {
@@ -1980,8 +2008,8 @@ defmodule Muro.Emit.Rust do
                 ::std::option::Option::None => return k,
             };
             match job {
-                #{job}::Text(s) => out.push_str(s),
-                #{job}::Owned(s) => out.push_str(&s),
+                #{job}::Text(s) => #{keep}(out, &mut stopped, s),
+                #{job}::Owned(s) => #{keep}(out, &mut stopped, &s),
                 #{job}::Leave(kept) => {
                     let p = match &kept {
     #{leave}
@@ -2017,7 +2045,7 @@ defmodule Muro.Emit.Rust do
     |> String.trim()
   end
 
-  defp fmt_frame_arm(book, name, scc, types, variants, frame, job) do
+  defp fmt_frame_arm(book, name, scc, types, variants, frame, job, keep) do
     type = rust_type(types, name)
     node = node_of(types, name)
     d = data_by(book, name)
@@ -2048,7 +2076,7 @@ defmodule Muro.Emit.Rust do
     #{frame}::#{type}(n) => {
         let p = ::std::rc::Rc::as_ptr(&n) as *const ();
         if path.contains(&p) {
-            out.push_str("...");
+            #{keep}(out, &mut stopped, "...");
             continue;
         }
         if k == ::std::primitive::u64::MAX {
