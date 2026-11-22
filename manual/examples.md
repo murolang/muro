@@ -604,11 +604,13 @@ See [Streams](streams.md).
 
 Imports `std:classical.muro`. `excluded` is `LEM`. `from_neg` is `dne`, the proof of double-negation elimination from `LEM`. `zero` is a `run` and does not mention either. `LEM` is an axiom. `dne` is a proof. Checking this file prints `excluded`, `from_neg`, and `dne`, each `depends on classical.LEM`. `zero` is silent, and it is emitted.
 
-## irrational_power.muro
+## drinker.muro
 
-There exist irrational numbers `a` and `b` such that `a^b` is rational. Muro has no real numbers, and this book does not prove the arithmetic. `exists_irrational_power` takes an abstract `Num`, a predicate `Rational`, operations `pow` and `mul`, and the constants `sqrt2` and `two`. Five evidence hypotheses are binders, not axioms: `sqrt2` is irrational, `(x^y)^z = x^(y*z)`, `mul sqrt2 sqrt2 = two`, `pow sqrt2 two = two`, and `two` is rational. `sqrt_tower` chains those three equations with `rewrite` and `cong`.
+The drinker paradox. For an inhabited domain and a predicate, some element is such that if it satisfies the predicate, every element does. Muro has no dependent pair whose second component is an arbitrary predicate: a data parameter is `Type`, and `Type` has no type. Existence is the elimination form. Every consequence of such an element holds.
 
-The only axiom is `LEM`, imported from `std:classical.muro`. The proof matches `LEM` at `Rational (pow sqrt2 sqrt2)`. It does not choose a pair. The result is `Either` of the two cases. The left case is the pair `(sqrt2, sqrt2)`: both components are `sqrt2`, so the irrationality hypothesis is used twice, and the power is rational by the left of `LEM`. The right case is the pair `(pow sqrt2 sqrt2, sqrt2)`: the base is irrational by the right of `LEM`, the exponent is irrational by hypothesis, and the power rewrites to `two`, which is rational. `zero` is a `run` that does not mention the theorem. Checking this file prints `exists_irrational_power: depends on classical.LEM`. `zero` is silent, and it is emitted.
+`someone` is the inhabitant. `All` is the proposition that everyone drinks. `from_all` and `to_all` identify `All` with `Π (y : D) → Drinks y`. Those are hypotheses, not axioms. A written `Π` is not an evidence term, so `LEM` cannot take the quantifier itself. `counterexample` turns "not everyone" into a non-drinker by `dne`. The proof matches `LEM` at `All`. On the left, the given inhabitant is the witness, because the consequent holds. On the right, the non-drinker is the witness, because the implication is vacuous. It does not decide which. The only axiom is `LEM`, imported from `std:classical.muro`.
+
+The proof is non-constructive, so a `run` cannot use it. A `run` that reaches the theorem reaches `LEM`, the checker refuses that run, and it is not emitted. `zero` does not mention the theorem. Checking this file prints `counterexample`, `drinker`, and `dne`, each `depends on classical.LEM`. `zero` is silent, and it is emitted.
 
 See [Library](library.md#classicalmuro) and [The wall](wall.md#axioms).
 

@@ -143,12 +143,14 @@ defmodule Muro.AxiomTest do
     assert wall =~ "std:classical.muro"
   end
 
-  test "examples/irrational_power.muro checks and a reaching run is refused" do
-    path = "examples/irrational_power.muro"
+  test "examples/drinker.muro checks and a reaching run is refused" do
+    path = "examples/drinker.muro"
     assert Muro.check_file(path) == :ok
 
     assert Muro.Check.axiom_lines() == [
-             "exists_irrational_power: depends on classical.LEM"
+             "counterexample: depends on classical.LEM",
+             "drinker: depends on classical.LEM",
+             "dne: depends on classical.LEM"
            ]
 
     version = Mix.Tasks.Muro.version()
@@ -156,27 +158,30 @@ defmodule Muro.AxiomTest do
     assert check_out(path) ==
              """
              Muro v#{version}
-             exists_irrational_power: depends on classical.LEM
+             counterexample: depends on classical.LEM
+             drinker: depends on classical.LEM
+             dne: depends on classical.LEM
              All terms check. Evidence never becomes a run.
              """
 
-    assert {:ok, src} = Muro.emit_file(path, IrrationalPower)
+    assert {:ok, src} = Muro.emit_file(path, DrinkerEx)
     assert src =~ "def zero"
     refute src =~ "LEM"
-    refute src =~ "exists_irrational_power"
+    refute src =~ "drinker"
+    refute src =~ "counterexample"
 
     bad =
-      write!("bad-power.muro", """
+      write!("bad-drinker.muro", """
       #{File.read!(path)}
       def bad : run Nat :=
-        (λ (- _ : Stmt) → 0) exists_irrational_power
+        (λ (- _ : Drinker) → 0) drinker
       """)
 
     assert {:error, msg} = Muro.check_file(bad)
     assert msg =~ "bad: a run depends on classical.LEM"
     refute msg =~ "zero: a run depends on"
 
-    assert {:error, emit} = Muro.emit_file(bad, BadPower)
+    assert {:error, emit} = Muro.emit_file(bad, BadDrinker)
     assert emit =~ "bad: a run depends on classical.LEM"
   end
 
