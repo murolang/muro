@@ -7,7 +7,7 @@ summary: A computable Real in run, a classical CReal in evidence and spec, and a
 
 # Reals
 
-In brief: a computable `Real` may appear in a `run` and is emitted. A classical `CReal` lives only in `evidence` and `spec`. The map between them is evidence and is erased. This page is a design memo. `std:real-comp.muro` and `std:real-class.muro` are not in the library yet. Snippets below are proposed source, not checked books.
+In brief: a computable `Real` may appear in a `run` and is emitted. A classical `CReal` lives only in `evidence` and `spec`. The map between them is evidence and is erased. This page is a design memo. `std:real-comp.muro` and `std:real-class.muro` are not in the library yet. Snippets below are proposed source, not checked books. A proposed `def` includes `:= ?`: it parses, and the checker refuses it as an unsolved hole until a later stage fills it. An axiom has no body.
 
 ## The hybrid
 
@@ -27,12 +27,12 @@ Muro already has coinduction: `Stream` is primitive, and a declared `ν` family 
 
 The ordinary library has no rational and no dyadic type. Stage 2 defines a signed dyadic type first (`Dyadic`: an integer numerator and a power-of-two denominator). Machine `I64` is a residue and is not that type.
 
-A checked scratch book packed `Nat → Nat` and a modulus `Nat → Nat` as data, and a `run` read them. The same shape, with `Dyadic` in place of `Nat`, is the real:
+A constructor that binds `seq` and `mod` affinely refuses a `run` that reads the sequence twice (`affine variable used twice`). The fields are reusable, and so are their arguments, so addition can use a sequence more than once and `add x x` is allowed. A scratch book with a stand-in `Dyadic` checks that shape, including `add x x`.
 
 ```
 -- proposed
 data Real : Type where
-  mk : (seq : Nat → Dyadic) → (mod : Nat → Nat) → Real
+  mk : Π (+ seq : Π (+ n : Nat) → Dyadic) → Π (+ mod : Π (+ k : Nat) → Nat) → Real
 ```
 
 `seq n` is the approximation at index `n`. `mod k` is a point after which two approximations differ by at most `2^{-k}`: if `m` and `n` are at least `mod k`, then `|seq m - seq n| ≤ 2^{-k}`. That inequality is a `spec` on the representation, not a `run` test.
@@ -48,24 +48,24 @@ data Near : Type where
   gt : Near
   close : Near
 
-def compare : run Π (ε : Dyadic) → Π (x : Real) → Π (y : Real) → Near
+def compare : run Π (eps : Dyadic) → Π (x : Real) → Π (y : Real) → Near := ?
 ```
 
-If `|x - y|` is clearly larger than `ε`, the result is `lt` or `gt`. Otherwise it is `close`. Equality of reals is a `spec` relation. It is not decidable, and it is not a `run`.
+`lt` means `x` is less than `y` by more than `eps`, and `gt` means `x` is greater than `y` by more than `eps`, the same polarity as `compare` on `Nat` in `std:ord.muro` (`lt` is `suc m ≤ n`). Otherwise the result is `close`. A binder named `ε` does not parse; the precision in source is `eps`. Equality of reals is a `spec` relation. It is not decidable, and it is not a `run`.
 
 ```
 -- proposed
-def EqReal : spec Π (x : Real) → Π (y : Real) → Type
+def EqReal : spec Π (x : Real) → Π (y : Real) → Type := ?
 ```
 
 `EqReal x y` says the sequences agree in the limit, using the two moduli. A square root is a `run`. Non-negativity is constructive evidence, not a classical axiom, so it may be an erased argument of that run:
 
 ```
 -- proposed
-def sqrt : run Π (x : Real) → Π (- nn : Nonneg x) → Real
+def sqrt : run Π (x : Real) → Π (- nn : Nonneg x) → Real := ?
 ```
 
-The result's modulus is computed from `x` and the requested precision. A numeric backend that emits floating-point or arbitrary-precision arithmetic is out of scope. The representation stores a function. The kernel allows a Π in a run type. Elixir can emit it. A function argument is outside the closed run image that C, Rust, and assembly emit ([Library](library.md)).
+The result is a `Real`, so its modulus is part of that value and is computed from `x`. The type does not take a separate precision. A numeric backend that emits floating-point or arbitrary-precision arithmetic is out of scope. The representation stores a function. The kernel allows a Π in a run type. Elixir can emit it. A function argument is outside the closed run image that C, Rust, and assembly emit ([Library](library.md)).
 
 ## Classical layer
 
@@ -99,7 +99,7 @@ def IrrationalPower : spec Type :=
     Irrational a → Irrational b → Rational (cpow a b) → Q) →
   Q
 
-def irrational_power : evidence IrrationalPower
+def irrational_power : evidence IrrationalPower := ?
 ```
 
 The proof may use `LEM` (the usual case split on whether `√2^{√2}` is rational). `Irrational`, `Rational`, and `cpow` are defined in the same book from the field structure. An intermediate-value statement has the same shape: every consequence of a root in the interval holds.
@@ -110,11 +110,11 @@ The future embedding and the agreement theorems are evidence. They are erased. T
 
 ```
 -- proposed
-def embed : evidence Π (x : Real) → CReal
+def embed : evidence Π (x : Real) → CReal := ?
 
 def add-agree : evidence
   Π (x : Real) → Π (y : Real) →
-  EqCReal (embed (add x y)) (cadd (embed x) (embed y))
+  EqCReal (embed (add x y)) (cadd (embed x) (embed y)) := ?
 ```
 
 The direction of the cut is this way only. `add`, `mul`, `neg`, `compare`, and `sqrt` are `run`s in the computable book. They do not mention `CReal` or its axioms. The agreement theorems are evidence *about* those runs, through `embed`. They may depend on the classical axioms. The runs themselves must not. If a `run` reached `lub` or `CReal`, the checker would refuse it with `bad: a run depends on <File.axiom>`, the same refusal as for `LEM`.
