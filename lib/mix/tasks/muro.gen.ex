@@ -17,22 +17,25 @@ defmodule Mix.Tasks.Muro.Gen do
   Muro version. A mismatch is an error and names both versions.
   `fuel:` is optional. `modules:` lists `{book, module, target}` or
   `{book, module, target, opts}`. A 3-tuple emits Elixir. `opts` may
-  set `kind: :exunit`, `kind: :pytest`, `kind: :fsm`, `kind: :c`,
-  `kind: :rust`, `kind: :zig`, `kind: :asm`, or `kind: :js`. For
-  `:exunit`, `impl: An.Adapter` and `imports: true`. For `:pytest`,
-  `impl:` is a Python module name. A `:c`, `:rust`, `:zig`, `:asm`,
-  `:js`, or `:pytest` entry may omit the module
+  set `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`, `kind: :fsm`,
+  `kind: :c`, `kind: :rust`, `kind: :zig`, `kind: :asm`, or `kind: :js`.
+  For `:exunit`, `impl: An.Adapter` and `imports: true`. For `:pytest`,
+  `impl:` is a Python module name. For `:rust_test`, `impl:` is a Rust
+  path. A `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, or
+  `:rust_test` entry may omit the module
   (`{book, target, [kind: :c]}`). `:c` also writes the `.h`
   beside the `.c`. `:js` also writes the `.d.ts` beside the `.mjs`.
-  A pytest target ends with `.py` and is not formatted. `imports:` is
-  a boolean, default `false`, and is valid for `:exunit` and
-  `:pytest`. `imports: true` also collects the closed equations of
-  the files that book imports directly. An ExUnit target is usually
+  A pytest target ends with `.py` and is not formatted. A Rust test
+  target ends with `.rs` and is not formatted. `imports:` is
+  a boolean, default `false`, and is valid for `:exunit`, `:pytest`,
+  and `:rust_test`. `imports: true` also collects the closed equations
+  of the files that book imports directly. An ExUnit target is usually
   `test/<name>_test.exs`. After the `written` or `unchanged` line,
   one `skipped <target>: …` line is printed per equation the suite
   cannot express. `--check` does not print those lines. A
-  `kind: :exunit` or `kind: :pytest` entry checks a library of
-  unsupplied `param`s. A `kind: :elixir` entry still refuses it.
+  `kind: :exunit`, `kind: :pytest`, or `kind: :rust_test` entry checks
+  a library of unsupplied `param`s. A `kind: :elixir` entry still
+  refuses it.
 
   `muro_deps:` lists packages `import "pkg:..."` may load. `mix muro.gen`
   does not fetch them. A book that imports a package carries one

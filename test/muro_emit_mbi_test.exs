@@ -471,7 +471,8 @@ defmodule Muro.EmitMbiTest do
     assert {:raise, "", "--node writes the placement calls"} =
              Muro.CLI.Emit.run([path, "--backend", "mbi", "--node", "a"])
 
-    assert {:raise, "", "--imports is only valid with --backend exunit or --backend pytest"} =
+    assert {:raise, "",
+            "--imports is only valid with --backend exunit, --backend pytest, or --backend rust-test"} =
              Muro.CLI.Emit.run([path, "--backend", "mbi", "--imports"])
 
     bad = write_book(dir, "bad", "def n : run Nat := (0, 0)\n")

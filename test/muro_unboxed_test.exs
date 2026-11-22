@@ -139,7 +139,10 @@ defmodule Muro.UnboxedTest do
     File.cp!("examples/unboxed.muro", Path.join(dir, "unboxed.muro"))
     assert {:ok, [rs]} = Muro.emit_rust(Path.join(dir, "unboxed.muro"))
     source = File.read!(rs)
-    assert source =~ "#[derive(::std::clone::Clone, ::std::marker::Copy)]"
+
+    assert source =~
+             "#[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::fmt::Debug)]"
+
     assert source =~ "pub enum Acc"
     scan = rust_fn(source, "scan")
     refute scan =~ "Rc::new"
