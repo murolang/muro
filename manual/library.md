@@ -122,6 +122,8 @@ Check the embedded book on disk with `mix muro.check lib/muro/std/classical.muro
 
 `examples/classical.muro` imports the book. `excluded` is `LEM`, `from_neg` is `dne`, and `zero` is a `run` that mentions neither. `examples/drinker.muro` is the drinker paradox on that import. `D` is a domain, `Drinks` a predicate, and `someone` an inhabitant of `D`. `All` is the proposition that everyone drinks. `from_all` and `to_all` identify `All` with `Π (y : D) → Drinks y`. Those binders are hypotheses, not axioms: a written `Π` is not an evidence term, so `LEM` cannot take the quantifier itself. A predicate family `Π (_ : A) → Type` is not a valid data parameter, so a polymorphic dependent pair over an arbitrary predicate cannot be declared. A witness type on a closed domain does check. The existence here is the elimination form, every consequence of such an element, so the theorem is for an arbitrary `D` and `Drinks`. `LEM` is the only axiom. The proof matches `LEM` at `All` and does not choose the element. Checking the file prints `counterexample`, `drinker`, and `dne`, each `depends on classical.LEM`. `zero` does not mention the theorem. It is silent, and it is emitted.
 
+A design for a computable `Real` and a classical `CReal` is [Reals](reals.md). Those books are not in the library yet.
+
 ## Examples
 
 `examples/list.muro` and `examples/maybe.muro` import the library books and declare nothing of their own. `examples/sort.muro`, `examples/higher_order.muro`, and `examples/second_field.muro` import `std:list.muro`. Check a library book on disk with `mix muro.check lib/muro/std/le.muro`, or check an import from any directory:

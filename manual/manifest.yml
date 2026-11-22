@@ -98,6 +98,10 @@ pages:
     slug: library
     title: Library
     summary: The ordinary library, imported as std:. Bool, excluded middle, Le, List, Maybe, comparison, a binary successor, and unsigned word arithmetic.
+  - file: reals.md
+    slug: reals
+    title: Reals
+    summary: A computable Real in run, a classical CReal in evidence and spec, and an erased bridge. This is a design memo. The books are not written yet.
   - file: grammar.md
     slug: grammar
     title: Grammar

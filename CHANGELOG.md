@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.18
+
+The manual has a design for hybrid reals: a computable `Real` in `run`, a classical `CReal` in evidence and spec, and an erased bridge. The library books are not written yet.
+
+### Manual
+
+- Reals: the representation, the axioms, the elimination form of the existence theorems, and the direction of the cut.
+
+### Package
+
+- Version 0.22.18.
+
 ## 0.22.17
 
 The manual states what an axiom may prove and what `mix muro.check` prints. A reached `spec` or `evidence` that depends on an axiom is a line. A `run` that reaches an axiom is refused, and it is not emitted. `std:classical.muro` remains the book that declares `LEM` and proves `dne`.
