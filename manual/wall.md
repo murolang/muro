@@ -54,7 +54,7 @@ A `run` definition has a run type, used or not: the codomains of its Π, each si
 
 An axiom is a declaration with a type and no body. The tag is `evidence`. It does not reduce. Other evidence may use it, and a spec may mention it. Classical principles stay in evidence and spec. They do not sit in a `run`'s dependency cone. `std:classical.muro` declares excluded middle. See [Library](library.md#classicalmuro).
 
-`mix muro.check` prints one line for each definition the entry file reaches that depends on an axiom, other than a `run` or a `run internal`. Checking `lib/muro/std/classical.muro` prints `dne: depends on classical.LEM`. An imported definition the entry file does not reach is not a line. A reached `spec` or `evidence` is a line, and the check still succeeds.
+`mix muro.check` prints one line for each definition the entry file reaches that depends on an axiom, other than a `run` or a `run internal`. The entry file reaches every definition it declares, and every definition mentioned from one it reaches. An imported definition that chain does not mention is not a line. Lines are in book order. Several axioms on one line are separated by `, `, in the order those axioms are declared. Checking `lib/muro/std/classical.muro` prints `dne: depends on classical.LEM`. A reached `spec` or `evidence` is a line, and the check still succeeds.
 
 A `run` or a `run internal` that reaches an axiom is not one of those lines. The check refuses the book, and that run is not emitted. The error names the run. One refusal the checker emits is:
 

@@ -6,9 +6,11 @@
 -- A written Π is not an evidence term, so LEM cannot be applied to the
 -- quantifier itself. All : Type is that proposition, and to_all / from_all
 -- say it is "everyone drinks".
--- Existence is the elimination form. A data parameter is Type, and Type has
--- no type, so Σ (x : D). P x is not a data declaration. "There is such an x"
--- means every consequence Q of such an x holds.
+-- Existence is the elimination form. A predicate family (Π (_ : A) → Type)
+-- is not a valid data parameter, so a polymorphic dependent pair over an
+-- arbitrary predicate cannot be declared. A witness type on a closed domain
+-- does check. This book keeps the elimination form so the theorem is for
+-- an arbitrary D and Drinks: every consequence Q of such an x holds.
 -- The proof is non-constructive. It matches LEM at All and does not inspect
 -- the domain, so it does not decide who x is. The other case is a person who
 -- does not drink, recovered by double-negation elimination rather than by a
