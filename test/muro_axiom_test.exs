@@ -112,6 +112,19 @@ defmodule Muro.AxiomTest do
     assert msg =~ "bad: a run depends on direct.LEM"
   end
 
+  test "a run internal that reaches an axiom is refused and not emitted" do
+    path =
+      write!("hidden.muro", """
+      axiom LEM : evidence Nat
+      def bad : run internal Nat := LEM
+      """)
+
+    assert {:error, msg} = Muro.check_file(path)
+    assert msg =~ "bad: a run depends on hidden.LEM"
+    assert {:error, emit} = Muro.emit_file(path, Hidden)
+    assert emit =~ "bad: a run depends on hidden.LEM"
+  end
+
   test "a run that does not reach the axiom is emitted" do
     path =
       write!("beside.muro", """

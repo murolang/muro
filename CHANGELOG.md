@@ -4,11 +4,11 @@
 
 An axiom is a declaration with a type and no body. The type is evidence. A `?` is still an unsolved goal.
 
-`std:classical.muro` declares `LEM`, excluded middle at `Type`, and proves `dne` from it. The same import works from a Hex package, from the self-contained executable, and from a checkout. `mix muro.check` prints the axioms a definition the entry file reaches depends on. An imported definition the entry file does not reach is silent. A `run` that depends on an axiom is refused, and it is not emitted.
+`std:classical.muro` declares `LEM`, excluded middle at `Type`, and proves `dne` from it. The same import works from a Hex package, from the self-contained executable, and from a checkout. That import declares `Either`, `left`, and `right`. A book that imports it does not declare them again. `mix muro.check` prints the axioms a definition the entry file reaches depends on. An imported definition the entry file does not reach is silent. A `run`, and a `run internal`, that depends on an axiom is refused, and it is not emitted.
 
 ### Manual
 
-- Library, Terms, Grammar, The wall, Either, Limits, Extending, For agents, and Examples: `std:classical.muro`, the dependency lines of the entry file, and the refusal of a `run` that reaches an axiom. `LEM` is the axiom. `dne` is the proof.
+- Library, Terms, Grammar, The wall, Either, Limits, Extending, For agents, and Examples: `std:classical.muro`, the dependency lines of the entry file, and the refusal of a `run` or a `run internal` that reaches an axiom. `LEM` is the axiom. `dne` is the proof. A book that imports `std:classical.muro` does not declare `Either` again. `mix muro.check lib/muro/std/classical.muro` checks that book.
 
 ### Package
 

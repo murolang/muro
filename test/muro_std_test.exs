@@ -115,10 +115,17 @@ defmodule Muro.StdTest do
   end
 
   test "examples that import the standard library check" do
-    for name <-
-          ~w(list.muro maybe.muro sort.muro higher_order.muro second_field.muro classical.muro) do
+    for name <- ~w(list.muro maybe.muro sort.muro higher_order.muro second_field.muro) do
       assert Muro.check_file(Path.join("examples", name)) == :ok
     end
+
+    assert Muro.check_file("examples/classical.muro") == :ok
+
+    assert Muro.Check.axiom_lines() == [
+             "excluded: depends on classical.LEM",
+             "from_neg: depends on classical.LEM",
+             "dne: depends on classical.LEM"
+           ]
   end
 
   defp tmp do
