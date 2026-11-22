@@ -27,7 +27,7 @@ Muro already has coinduction: `Stream` is primitive, and a declared `ν` family 
 
 The ordinary library has no rational and no dyadic type. Stage 2 defines a signed dyadic type first (`Dyadic`: an integer numerator and a power-of-two denominator). Machine `I64` is a residue and is not that type.
 
-A constructor that binds `seq` and `mod` affinely refuses a `run` that reads the sequence twice (`affine variable used twice`). The fields are reusable, and so are their arguments, so addition can use a sequence more than once and `add x x` is allowed. A scratch book with a stand-in `Dyadic` checks that shape, including `add x x`.
+A constructor that binds `seq` and `mod` affinely refuses a `run` that reads the sequence twice (`affine variable used twice`). Reusable fields let an operation read a sequence more than once. That is not enough for `add x x`: the caller's `x` must be reusable, and `add`, `mul`, and `neg` take reusable `Real` arguments so a body may use an argument more than once. A scratch book with a stand-in `Dyadic` checks `λ (+ x : Real) → add x x`.
 
 ```
 -- proposed
@@ -37,7 +37,14 @@ data Real : Type where
 
 `seq n` is the approximation at index `n`. `mod k` is a point after which two approximations differ by at most `2^{-k}`: if `m` and `n` are at least `mod k`, then `|seq m - seq n| ≤ 2^{-k}`. That inequality is a `spec` on the representation, not a `run` test.
 
-Addition, multiplication, and negation are `run`. They act on the sequences pointwise and compute a new modulus. They are total.
+Addition, multiplication, and negation are `run`. They act on the sequences pointwise and compute a new modulus. They are total. Their `Real` arguments are reusable:
+
+```
+-- proposed
+def add : run Π (+ x : Real) → Π (+ y : Real) → Real := ?
+def mul : run Π (+ x : Real) → Π (+ y : Real) → Real := ?
+def neg : run Π (+ x : Real) → Real := ?
+```
 
 Comparison is a `run` that takes a precision, not a decision of equality. `Ordering` in `std:ord.muro` is `lt`, `eq`, and `gt`. Close is not equality, so comparison uses its own type:
 
@@ -131,7 +138,7 @@ This page is Stage 0. No checker, emitter, or library book is added here.
 
 **Stage 1.** `std:real-class.muro` with the axioms, the irrational-power theorem (or IVT) as evidence, and a manual section that explains the cut. `mix muro.check` prints the depends-lines and refuses a `run` that reaches those axioms.
 
-**Stage 2.** A dyadic (or rational) type, then `std:real-comp.muro`: the representation, `run` arithmetic, `compare`, `EqReal`, and `sqrt` with a modulus. Evidence that the operations are correct for the representation, with no dependence on the classical axioms.
+**Stage 2.** A dyadic (or rational) type, then `std:real-comp.muro`: the representation, `run` arithmetic with reusable `Real` arguments, `compare`, `EqReal`, and `sqrt` whose modulus is inside the returned `Real`. Evidence that the operations are correct for the representation, with no dependence on the classical axioms.
 
 **Stage 3.** The erased embedding, the agreement theorems, and one book that uses both layers: a computable algorithm together with a classical existence proof that is erased.
 
