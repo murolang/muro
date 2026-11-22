@@ -270,24 +270,12 @@ A conversion error uses the same printer: `cannot convert Nat ≁ {n ≡ 0 : Nat
 An axiom is a declaration with a type and no body. Only that declaration is an axiom.
 
 ```
-axiom LEM : evidence Π (P : Type) → (P ⊎ (P → Empty))
+axiom NAME : evidence TYPE
 ```
 
 The tag is `evidence`. `run`, `run internal`, and `spec` are refused, and the message is `<name>: an axiom is evidence`. The declaration does not reduce. A hole in the type is still an unsolved goal.
 
-`std:classical.muro` declares `LEM` at that type. It also declares `Either`, because the sum is not in the prelude. `dne` is proved from `LEM`: match on `LEM P`, return the witness from `left`, and `matchEmpty` the contradiction in `right`. `LEM` is not a proof of excluded middle. Choice and Markov's principle are not declared. Agda does not postulate excluded middle. The import is `import "std:classical.muro"`. That id is the same book from a Hex package, from the self-contained executable, and from a checkout. It brings `Either`, `left`, `right`, `LEM`, and `dne` into scope. `examples/classical.muro` is a book to copy.
-
-`mix muro.check` and `muro check` print one line for each definition the entry file reaches that depends on an axiom, other than a `run` or a `run internal`. The entry file reaches every definition it declares. It reaches a definition mentioned in the type or the body of a definition it reaches. A definition in an imported book that this chain does not mention is not printed. Importing `std:classical.muro` and not mentioning `LEM` or `dne` prints no line. Mentioning `dne` prints a line for that definition and a line for `dne`.
-
-`mix muro.check lib/muro/std/classical.muro` checks that file. `dne` is declared in the entry file:
-
-```
-dne: depends on classical.LEM
-```
-
-Lines are in book order: the entry file, then each imported book, in the order the imports were loaded. The axiom is named by the file stem and the declaration. `std:classical.muro` is the stem `classical`. Several axioms on one line are separated by `, `, in the order those axioms are declared in the joined book. A definition that reaches none is silent. An axiom is not listed as depending on itself.
-
-A `spec` or `evidence` definition that is reached and depends on an axiom is printed, and the check still succeeds. A `run` or a `run internal` that reaches an axiom is refused (`<name>: a run depends on <File.axiom>`), including a `run` in an imported book that the entry file does not mention, including through another definition and through an erased argument. That run is not emitted. Evidence that does not reach an axiom may still be passed to a `run` as an erased argument, and that run is emitted.
+What an axiom may prove, what `mix muro.check` prints, and the refusal of a `run` that reaches one are in [The wall](wall.md#axioms). `std:classical.muro` declares excluded middle. See [Library](library.md#classicalmuro).
 
 ## match
 

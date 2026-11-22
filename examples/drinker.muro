@@ -1,0 +1,77 @@
+-- drinker.muro — the drinker paradox.
+-- For an inhabited domain D and a predicate Drinks, there is an element x
+-- such that if x drinks, then every element drinks.
+-- The only axiom is LEM, from std:classical.muro. The other binders are
+-- hypotheses, not axioms. someone : D says D is inhabited.
+-- A written Π is not an evidence term, so LEM cannot be applied to the
+-- quantifier itself. All : Type is that proposition, and to_all / from_all
+-- say it is "everyone drinks".
+-- Existence is the elimination form. A predicate family (Π (_ : A) → Type)
+-- is not a valid data parameter, so a polymorphic dependent pair over an
+-- arbitrary predicate cannot be declared. A witness type on a closed domain
+-- does check. This book keeps the elimination form so the theorem is for
+-- an arbitrary D and Drinks: every consequence Q of such an x holds.
+-- The proof is non-constructive. It matches LEM at All and does not inspect
+-- the domain, so it does not decide who x is. The other case is a person who
+-- does not drink, recovered by double-negation elimination rather than by a
+-- search. A run cannot use this proof: a run that reaches it reaches LEM,
+-- the checker refuses that run, and it is not emitted. zero does not mention
+-- the theorem.
+
+import "std:classical.muro"
+
+-- If not everyone drinks, someone does not.
+-- "No non-drinker yields Q" plus to_all implies that everyone drinks, which
+-- contradicts not_all. dne at Q returns Q. No extra axiom.
+def counterexample : evidence
+    Π (D : Type) →
+    Π (Drinks : Π (- x : D) → Type) →
+    Π (All : Type) →
+    Π (to_all : (Π (y : D) → Drinks y) → All) →
+    Π (not_all : All → Empty) →
+    Π (Q : Type) →
+    (Π (x : D) → (Drinks x → Empty) → Q) →
+    Q :=
+  λ (D : Type) →
+  λ (Drinks : Π (- x : D) → Type) →
+  λ (All : Type) →
+  λ (to_all : (Π (y : D) → Drinks y) → All) →
+  λ (not_all : All → Empty) →
+  λ (Q : Type) →
+  λ (k : Π (x : D) → (Drinks x → Empty) → Q) →
+    dne Q (λ (nq : Q → Empty) →
+      not_all (to_all (λ (y : D) →
+        dne (Drinks y) (λ (nd : Drinks y → Empty) →
+          nq (k y nd)))))
+
+-- Left: All holds, so the given inhabitant is the witness.
+-- Right: a non-drinker is the witness. Drinks x → everyone is vacuous.
+def Drinker : spec Type :=
+  Π (D : Type) →
+  Π (Drinks : Π (- x : D) → Type) →
+  Π (someone : D) →
+  Π (All : Type) →
+  Π (from_all : All → Π (y : D) → Drinks y) →
+  Π (to_all : (Π (y : D) → Drinks y) → All) →
+  Π (Q : Type) →
+  (Π (x : D) → (Drinks x → Π (y : D) → Drinks y) → Q) →
+  Q
+
+def drinker : evidence Drinker :=
+  λ (D : Type) →
+  λ (Drinks : Π (- x : D) → Type) →
+  λ (someone : D) →
+  λ (All : Type) →
+  λ (from_all : All → Π (y : D) → Drinks y) →
+  λ (to_all : (Π (y : D) → Drinks y) → All) →
+  λ (Q : Type) →
+  λ (k : Π (x : D) → (Drinks x → Π (y : D) → Drinks y) → Q) →
+    match LEM All motive (λ _ → Q)
+      | left all =>
+          k someone (λ (_ : Drinks someone) → from_all all)
+      | right not_all =>
+          counterexample D Drinks All to_all not_all Q (λ (x : D) → λ (nd : Drinks x → Empty) →
+            k x (λ (dx : Drinks x) → λ (y : D) →
+              matchEmpty (nd dx) motive (λ _ → Drinks y)))
+
+def zero : run Nat := 0

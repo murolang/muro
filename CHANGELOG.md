@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.22.17
+
+The manual states what an axiom may prove and what `mix muro.check` prints. A reached `spec` or `evidence` that depends on an axiom is a line. A `run` that reaches an axiom is refused, and it is not emitted. `std:classical.muro` remains the book that declares `LEM` and proves `dne`.
+
+`examples/drinker.muro` is the drinker paradox. In an inhabited domain, some element is such that if it satisfies the predicate, every element does. The inhabitant and the spelling of "everyone" are hypotheses. `LEM` is the only axiom. The proof does not choose the element. A run that reaches it is refused.
+
+### Manual
+
+- The wall, the library, and For agents: an axiom, the depends-line of the entry file, and the refusal of a run that reaches one. Terms, Either, and the agent notes point there.
+- Examples: `examples/drinker.muro`. The inhabitant and the spelling of "everyone" are hypotheses. `LEM` is the only axiom.
+
+### Package
+
+- Version 0.22.17.
+
 ## 0.22.16
 
 An axiom is a declaration with a type and no body. The type is evidence. A `?` is still an unsolved goal.

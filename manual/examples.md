@@ -604,6 +604,16 @@ See [Streams](streams.md).
 
 Imports `std:classical.muro`. `excluded` is `LEM`. `from_neg` is `dne`, the proof of double-negation elimination from `LEM`. `zero` is a `run` and does not mention either. `LEM` is an axiom. `dne` is a proof. Checking this file prints `excluded`, `from_neg`, and `dne`, each `depends on classical.LEM`. `zero` is silent, and it is emitted.
 
+## drinker.muro
+
+The drinker paradox. For an inhabited domain and a predicate, some element is such that if it satisfies the predicate, every element does. A predicate family `Π (_ : A) → Type` is not a valid data parameter, so a polymorphic dependent pair over an arbitrary predicate cannot be declared. A witness type on a closed domain does check. This book keeps the elimination form so the theorem is for an arbitrary domain and predicate. Every consequence of such an element holds.
+
+`someone` is the inhabitant. `All` is the proposition that everyone drinks. `from_all` and `to_all` identify `All` with `Π (y : D) → Drinks y`. Those are hypotheses, not axioms. A written `Π` is not an evidence term, so `LEM` cannot take the quantifier itself. `counterexample` turns "not everyone" into a non-drinker by `dne`. The proof matches `LEM` at `All`. On the left, the given inhabitant is the witness, because the consequent holds. On the right, the non-drinker is the witness, because the implication is vacuous. It does not decide which. The only axiom is `LEM`, imported from `std:classical.muro`.
+
+The proof is non-constructive, so a `run` cannot use it. A `run` that reaches the theorem reaches `LEM`, the checker refuses that run, and it is not emitted. `zero` does not mention the theorem. Checking this file prints `counterexample`, `drinker`, and `dne`, each `depends on classical.LEM`. `zero` is silent, and it is emitted.
+
+See [Library](library.md#classicalmuro) and [The wall](wall.md#axioms).
+
 ## either_run.muro
 
 A `run` sum. `fromLeft` emits `{:left, _}` / `{:right, _}`.

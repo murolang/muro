@@ -125,6 +125,66 @@ defmodule Muro.AxiomTest do
     assert emit =~ "bad: a run depends on hidden.LEM"
   end
 
+  test "manual/wall.md quotes the hidden.LEM refusal the checker emits" do
+    path =
+      write!("hidden.muro", """
+      axiom LEM : evidence Nat
+      def bad : run internal Nat := LEM
+      """)
+
+    assert {:error, msg} = Muro.check_file(path)
+
+    refusal = "bad: a run depends on hidden.LEM"
+
+    assert Enum.any?(String.split(msg, "\n"), &String.ends_with?(&1, refusal))
+
+    wall = File.read!("manual/wall.md")
+    assert refusal in String.split(wall, "\n")
+    assert wall =~ "std:classical.muro"
+  end
+
+  test "examples/drinker.muro checks and a reaching run is refused" do
+    path = "examples/drinker.muro"
+    assert Muro.check_file(path) == :ok
+
+    assert Muro.Check.axiom_lines() == [
+             "counterexample: depends on classical.LEM",
+             "drinker: depends on classical.LEM",
+             "dne: depends on classical.LEM"
+           ]
+
+    version = Mix.Tasks.Muro.version()
+
+    assert check_out(path) ==
+             """
+             Muro v#{version}
+             counterexample: depends on classical.LEM
+             drinker: depends on classical.LEM
+             dne: depends on classical.LEM
+             All terms check. Evidence never becomes a run.
+             """
+
+    assert {:ok, src} = Muro.emit_file(path, DrinkerEx)
+    assert src =~ "def zero"
+    refute src =~ "LEM"
+    refute src =~ "drinker"
+    refute src =~ "counterexample"
+
+    bad =
+      write!("bad-drinker.muro", """
+      #{File.read!(path)}
+      def bad : run Nat :=
+        (λ (- _ : Drinker) → 0) drinker
+      """)
+
+    assert {:error, msg} = Muro.check_file(bad)
+    assert msg =~ "bad: a run depends on classical.LEM"
+    refute msg =~ "zero: a run depends on"
+
+    assert {:error, emit} = Muro.emit_file(bad, BadDrinker)
+    assert emit =~ "bad: a run depends on classical.LEM"
+  end
+
   test "a run that does not reach the axiom is emitted" do
     path =
       write!("beside.muro", """

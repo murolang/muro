@@ -102,18 +102,25 @@ Check on disk with `mix muro.check lib/muro/std/word.muro`. Import it with `impo
 
 ## classical.muro
 
-Excluded middle at `Type`, as an evidence axiom. `LEM` has no body. `dne` is proved from `LEM`: match on `LEM P`, return the witness from `left`, and `matchEmpty` the contradiction in `right`. The book declares `Either`, because the sum is not in the prelude. Choice and Markov's principle are not declared. `LEM` is not a proof of excluded middle. Agda does not postulate it.
+Excluded middle at `Type`, as an evidence axiom. `LEM` has no body:
+
+```
+axiom LEM : evidence Π (P : Type) → (P ⊎ (P → Empty))
+```
+
+`dne` is proved from `LEM`: match on `LEM P`, return the witness from `left`, and `matchEmpty` the contradiction in `right`. The book declares `Either`, `left`, and `right`, because the sum is not in the prelude. A book that imports it uses those names and does not declare them again. Choice and Markov's principle are not declared. `LEM` is not a proof of excluded middle. Agda does not postulate it.
 
 ```
 import "std:classical.muro"
-
-def excluded : evidence Π (P : Type) → (P ⊎ (P → Empty)) :=
-  λ (P : Type) → LEM P
 ```
 
-That import is the id `std:classical.muro`. It is the same book from a Hex package, from the self-contained executable, and from a checkout. There is no relative path and no manifest entry. `examples/classical.muro` is the book to copy. It also names `dne`.
+That import is the id `std:classical.muro`. It is the same book from a Hex package, from the self-contained executable, and from a checkout. There is no relative path and no manifest entry.
 
-Check the embedded book on disk with `mix muro.check lib/muro/std/classical.muro`. That check prints `dne: depends on classical.LEM`, because `dne` is declared in the file being checked. A file that imports `std:classical.muro` and does not mention `LEM` or `dne` prints no such line. See [Terms](language.md#axioms).
+A `spec` or an `evidence` definition may depend on `LEM`. A `run` or a `run internal` that reaches an axiom is refused and is not emitted. The lines `mix muro.check` prints, and the refusal, are in [The wall](wall.md#axioms).
+
+Check the embedded book on disk with `mix muro.check lib/muro/std/classical.muro`. That check prints `dne: depends on classical.LEM`, because `dne` is declared in the file being checked. A file that imports `std:classical.muro` and does not mention `LEM` or `dne` prints no such line.
+
+`examples/classical.muro` imports the book. `excluded` is `LEM`, `from_neg` is `dne`, and `zero` is a `run` that mentions neither. `examples/drinker.muro` is the drinker paradox on that import. `D` is a domain, `Drinks` a predicate, and `someone` an inhabitant of `D`. `All` is the proposition that everyone drinks. `from_all` and `to_all` identify `All` with `Π (y : D) → Drinks y`. Those binders are hypotheses, not axioms: a written `Π` is not an evidence term, so `LEM` cannot take the quantifier itself. A predicate family `Π (_ : A) → Type` is not a valid data parameter, so a polymorphic dependent pair over an arbitrary predicate cannot be declared. A witness type on a closed domain does check. The existence here is the elimination form, every consequence of such an element, so the theorem is for an arbitrary `D` and `Drinks`. `LEM` is the only axiom. The proof matches `LEM` at `All` and does not choose the element. Checking the file prints `counterexample`, `drinker`, and `dne`, each `depends on classical.LEM`. `zero` does not mention the theorem. It is silent, and it is emitted.
 
 ## Examples
 
