@@ -125,6 +125,61 @@ defmodule Muro.AxiomTest do
     assert emit =~ "bad: a run depends on hidden.LEM"
   end
 
+  test "manual/wall.md quotes the hidden.LEM refusal the checker emits" do
+    path =
+      write!("hidden.muro", """
+      axiom LEM : evidence Nat
+      def bad : run internal Nat := LEM
+      """)
+
+    assert {:error, msg} = Muro.check_file(path)
+
+    refusal = "bad: a run depends on hidden.LEM"
+
+    assert Enum.any?(String.split(msg, "\n"), &String.ends_with?(&1, refusal))
+
+    wall = File.read!("manual/wall.md")
+    assert refusal in String.split(wall, "\n")
+    assert wall =~ "std:classical.muro"
+  end
+
+  test "examples/irrational_power.muro checks and a reaching run is refused" do
+    path = "examples/irrational_power.muro"
+    assert Muro.check_file(path) == :ok
+
+    assert Muro.Check.axiom_lines() == [
+             "exists_irrational_power: depends on classical.LEM"
+           ]
+
+    version = Mix.Tasks.Muro.version()
+
+    assert check_out(path) ==
+             """
+             Muro v#{version}
+             exists_irrational_power: depends on classical.LEM
+             All terms check. Evidence never becomes a run.
+             """
+
+    assert {:ok, src} = Muro.emit_file(path, IrrationalPower)
+    assert src =~ "def zero"
+    refute src =~ "LEM"
+    refute src =~ "exists_irrational_power"
+
+    bad =
+      write!("bad-power.muro", """
+      #{File.read!(path)}
+      def bad : run Nat :=
+        (λ (- _ : Stmt) → 0) exists_irrational_power
+      """)
+
+    assert {:error, msg} = Muro.check_file(bad)
+    assert msg =~ "bad: a run depends on classical.LEM"
+    refute msg =~ "zero: a run depends on"
+
+    assert {:error, emit} = Muro.emit_file(bad, BadPower)
+    assert emit =~ "bad: a run depends on classical.LEM"
+  end
+
   test "a run that does not reach the axiom is emitted" do
     path =
       write!("beside.muro", """

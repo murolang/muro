@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.22.17
+
+The manual states what an axiom may prove and what `mix muro.check` prints. A reached `spec` or `evidence` that depends on an axiom is a line. A `run` that reaches an axiom is refused, and it is not emitted. `std:classical.muro` remains the book that declares `LEM` and proves `dne`.
+
+`examples/irrational_power.muro` states that there are irrational numbers `a` and `b` such that `a^b` is rational. Muro has no real numbers. The number, the rationality predicate, power, multiplication, and the arithmetic facts are hypotheses of the theorem. `LEM` is the only axiom. The proof does not choose a pair: either both numbers are the square root of two and that power is rational, or the base is that power and the exponent is the square root of two.
+
+### Manual
+
+- The wall, the library, and For agents: an axiom, the depends-line of the entry file, and the refusal of a run that reaches one. Terms, Either, and the agent notes point there.
+- Examples: `examples/irrational_power.muro`. The arithmetic facts are hypotheses. `LEM` is the only axiom.
+
+### Package
+
+- Version 0.22.17.
+
 ## 0.22.16
 
 An axiom is a declaration with a type and no body. The type is evidence. A `?` is still an unsolved goal.

@@ -604,6 +604,14 @@ See [Streams](streams.md).
 
 Imports `std:classical.muro`. `excluded` is `LEM`. `from_neg` is `dne`, the proof of double-negation elimination from `LEM`. `zero` is a `run` and does not mention either. `LEM` is an axiom. `dne` is a proof. Checking this file prints `excluded`, `from_neg`, and `dne`, each `depends on classical.LEM`. `zero` is silent, and it is emitted.
 
+## irrational_power.muro
+
+There exist irrational numbers `a` and `b` such that `a^b` is rational. Muro has no real numbers, and this book does not prove the arithmetic. `exists_irrational_power` takes an abstract `Num`, a predicate `Rational`, operations `pow` and `mul`, and the constants `sqrt2` and `two`. Five evidence hypotheses are binders, not axioms: `sqrt2` is irrational, `(x^y)^z = x^(y*z)`, `mul sqrt2 sqrt2 = two`, `pow sqrt2 two = two`, and `two` is rational. `sqrt_tower` chains those three equations with `rewrite` and `cong`.
+
+The only axiom is `LEM`, imported from `std:classical.muro`. The proof matches `LEM` at `Rational (pow sqrt2 sqrt2)`. It does not choose a pair. The result is `Either` of the two cases. The left case is the pair `(sqrt2, sqrt2)`: both components are `sqrt2`, so the irrationality hypothesis is used twice, and the power is rational by the left of `LEM`. The right case is the pair `(pow sqrt2 sqrt2, sqrt2)`: the base is irrational by the right of `LEM`, the exponent is irrational by hypothesis, and the power rewrites to `two`, which is rational. `zero` is a `run` that does not mention the theorem. Checking this file prints `exists_irrational_power: depends on classical.LEM`. `zero` is silent, and it is emitted.
+
+See [Library](library.md#classicalmuro) and [The wall](wall.md#axioms).
+
 ## either_run.muro
 
 A `run` sum. `fromLeft` emits `{:left, _}` / `{:right, _}`.

@@ -1,0 +1,93 @@
+-- irrational_power.muro — there exist irrational a, b such that a^b is rational.
+-- Muro has no real numbers. Num, Rational, pow, and mul are abstract.
+-- The five arithmetic facts are binders of the theorem. They are hypotheses,
+-- not axioms. The only axiom is LEM, from std:classical.muro.
+-- The proof matches LEM at Rational (pow sqrt2 sqrt2) and does not choose
+-- a pair. Either (sqrt2, sqrt2) works, or (pow sqrt2 sqrt2, sqrt2) works.
+-- zero does not mention the theorem.
+
+import "std:classical.muro"
+
+data And (A : Type) (B : Type) : Type where
+  both : A → B → And A B
+
+-- (x^y)^z = x^(y*z), mul sqrt2 sqrt2 = two, and pow sqrt2 two = two,
+-- chained with rewrite and cong. No axiom.
+def sqrt_tower : evidence
+    Π (Num : Type) →
+    Π (pow : Π (- x : Num) → Π (- y : Num) → Num) →
+    Π (mul : Π (- x : Num) → Π (- y : Num) → Num) →
+    Π (- sqrt2 : Num) →
+    Π (- two : Num) →
+    Π (pow_mul : Π (- x : Num) → Π (- y : Num) → Π (- z : Num) →
+         {pow (pow x y) z ≡ pow x (mul y z) : Num}) →
+    Π (mul_sqrt : {mul sqrt2 sqrt2 ≡ two : Num}) →
+    Π (pow_two : {pow sqrt2 two ≡ two : Num}) →
+    {pow (pow sqrt2 sqrt2) sqrt2 ≡ two : Num} :=
+  λ (Num : Type) →
+  λ (pow : Π (- x : Num) → Π (- y : Num) → Num) →
+  λ (mul : Π (- x : Num) → Π (- y : Num) → Num) →
+  λ (- sqrt2 : Num) →
+  λ (- two : Num) →
+  λ (pow_mul : Π (- x : Num) → Π (- y : Num) → Π (- z : Num) →
+       {pow (pow x y) z ≡ pow x (mul y z) : Num}) →
+  λ (mul_sqrt : {mul sqrt2 sqrt2 ≡ two : Num}) →
+  λ (pow_two : {pow sqrt2 two ≡ two : Num}) →
+    rewrite (pow_mul sqrt2 sqrt2 sqrt2) motive (λ z → {z ≡ two : Num}) in
+    rewrite (cong Num Num (λ (w : Num) → pow sqrt2 w) (mul sqrt2 sqrt2) two mul_sqrt)
+      motive (λ z → {z ≡ two : Num}) in
+    rewrite pow_two motive (λ z → {z ≡ two : Num}) in
+    refl
+
+-- A pair works when both components are irrational and the power is rational.
+-- Left: a and b are both sqrt2, so one irrationality proof is used twice.
+-- Right: a is pow sqrt2 sqrt2, b is sqrt2, and a^b rewrites to two.
+def Stmt : spec Type :=
+  Π (Num : Type) →
+  Π (Rational : Π (- x : Num) → Type) →
+  Π (pow : Π (- x : Num) → Π (- y : Num) → Num) →
+  Π (mul : Π (- x : Num) → Π (- y : Num) → Num) →
+  Π (- sqrt2 : Num) →
+  Π (- two : Num) →
+  Π (+ sqrt2_irrational : (Rational sqrt2 → Empty)) →
+  Π (pow_mul : Π (- x : Num) → Π (- y : Num) → Π (- z : Num) →
+       {pow (pow x y) z ≡ pow x (mul y z) : Num}) →
+  Π (mul_sqrt : {mul sqrt2 sqrt2 ≡ two : Num}) →
+  Π (pow_two : {pow sqrt2 two ≡ two : Num}) →
+  Π (two_rational : Rational two) →
+  Either
+    (And (Rational sqrt2 → Empty)
+         (And (Rational sqrt2 → Empty) (Rational (pow sqrt2 sqrt2))))
+    (And (Rational (pow sqrt2 sqrt2) → Empty)
+         (And (Rational sqrt2 → Empty)
+              (Rational (pow (pow sqrt2 sqrt2) sqrt2))))
+
+def exists_irrational_power : evidence Stmt :=
+  λ (Num : Type) →
+  λ (Rational : Π (- x : Num) → Type) →
+  λ (pow : Π (- x : Num) → Π (- y : Num) → Num) →
+  λ (mul : Π (- x : Num) → Π (- y : Num) → Num) →
+  λ (- sqrt2 : Num) →
+  λ (- two : Num) →
+  λ (+ sqrt2_irrational : (Rational sqrt2 → Empty)) →
+  λ (pow_mul : Π (- x : Num) → Π (- y : Num) → Π (- z : Num) →
+       {pow (pow x y) z ≡ pow x (mul y z) : Num}) →
+  λ (mul_sqrt : {mul sqrt2 sqrt2 ≡ two : Num}) →
+  λ (pow_two : {pow sqrt2 two ≡ two : Num}) →
+  λ (two_rational : Rational two) →
+    match LEM (Rational (pow sqrt2 sqrt2)) motive (λ _ →
+      Either
+        (And (Rational sqrt2 → Empty)
+             (And (Rational sqrt2 → Empty) (Rational (pow sqrt2 sqrt2))))
+        (And (Rational (pow sqrt2 sqrt2) → Empty)
+             (And (Rational sqrt2 → Empty)
+                  (Rational (pow (pow sqrt2 sqrt2) sqrt2)))))
+      | left is_rat =>
+          left (both sqrt2_irrational (both sqrt2_irrational is_rat))
+      | right not_rat =>
+          right (both not_rat (both sqrt2_irrational (
+            rewrite (sqrt_tower Num pow mul sqrt2 two pow_mul mul_sqrt pow_two)
+              motive (λ z → Rational z) in
+            two_rational)))
+
+def zero : run Nat := 0
