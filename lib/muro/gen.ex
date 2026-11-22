@@ -37,6 +37,7 @@ defmodule Muro.Gen do
   target. An `:elixir` entry emits with `Muro.Emit.emit_module/2`.
   An `:exunit` entry emits with `Muro.Emit.ExUnitSuite.render/4`.
   A `:pytest` entry emits with `Muro.Emit.Pytest.render/3`.
+  A `:rust_test` entry emits with `Muro.Emit.RustTest.render/3`.
   A `:fsm` entry emits with `Muro.Emit.Fsm.render/4`. A `:c` entry calls
   `Muro.Emit.C.prepare/2` and writes the `.c` target and the `.h`
   beside it. A `:rust` entry calls `Muro.Emit.Rust.render/2`. A
@@ -49,16 +50,18 @@ defmodule Muro.Gen do
   and with `Code.format_string!/2` otherwise. `.ex` and `.exs` are
   formatted even when the formatter inputs do not list the file. The
   header is comments, so formatting does not rewrite it. `:c`,
-  `:rust`, `:zig`, `:asm`, `:js`, and `:pytest` are not formatted.
+  `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, and `:rust_test` are not formatted.
   The body hash is the emitter's text. There is no timestamp and no
   absolute path.
 
   The header comment is `#` for Elixir and pytest, `//` for C, Rust, Zig, JavaScript,
+  a Rust test file,
   the C header, and the declaration file, and `@` for Cortex-M assembly. The words of the two
   lines are the same.
 
   An ExUnit entry's body lists skipped equations in a comment. A
-  pytest entry lists each skip as a `pytest.mark.skip` test. That
+  pytest entry lists each skip as a `pytest.mark.skip` test. A Rust
+  test entry lists each skip as a `#[ignore]` test. That
   text is part of the body hash. `generate/3` prints one `skipped`
   line per skip after the target's `written` or `unchanged` line.
   `check/3` does not print skips; a change to the skipped set
@@ -224,8 +227,9 @@ defmodule Muro.Gen do
 
   `{:ok, lines}` is one `written` or `unchanged` line per target,
   followed by that target's `conforms to` lines indented by two
-  spaces. An ExUnit target then adds one `skipped` line per skipped
-  equation. An unchanged target is not opened for writing.
+  spaces. An ExUnit, pytest, or Rust test target then adds one
+  `skipped` line per skipped equation. An unchanged target is not
+  opened for writing.
   `{:error, message}` means at least one book failed; nothing was
   written.
 
@@ -273,10 +277,11 @@ defmodule Muro.Gen do
     end
   end
 
-  # One load per book. A book with a target other than exunit or pytest
-  # is loaded closed. That copy is reused for a suite target of the same
-  # book when the closed load succeeds. A suite-only book is loaded with
-  # `params: :open`, which is the check those backends already used. A
+  # One load per book. A book with a target other than exunit, pytest,
+  # or rust-test is loaded closed. That copy is reused for a suite target
+  # of the same book when the closed load succeeds. A suite-only book is
+  # loaded with `params: :open`, which is the check those backends already
+  # used. A
   # closed failure is loaded open only when a suite target still needs a
   # book, so a param library keeps its assumption check and the other
   # targets keep the closed error.
@@ -370,8 +375,27 @@ defmodule Muro.Gen do
       :pytest ->
         render_pytest(root, entry, version, fuel, loaded, lines)
 
+      :rust_test ->
+        render_rust_test(root, entry, version, fuel, loaded, lines)
+
       _kind ->
         render_elixir(root, entry, version, fuel, loaded, lines)
+    end
+  end
+
+  defp render_rust_test(root, entry, version, fuel, loaded, lines) do
+    with {:ok, source, skips} <- emit_loaded(root, entry, fuel, loaded) do
+      body = ensure_newline(source)
+
+      file =
+        header(version, entry.book, book_hash(root, entry.book), body_hash(body), lines, "// ") <>
+          body
+
+      if coherent?(file, root, entry, version, lines) do
+        {:ok, [%{rel: entry.target, contents: file}], {lines, skips}}
+      else
+        {:error, "generated header does not describe #{entry.target}"}
+      end
     end
   end
 
@@ -525,6 +549,25 @@ defmodule Muro.Gen do
           end
 
         case Muro.Emit.Pytest.render(path, Muro.Grade.erase_book(loaded), opts) do
+          {:ok, %{source: source, skips: skips}} -> {:ok, source, skips}
+          {:error, message} -> {:error, message}
+        end
+
+      :rust_test ->
+        opts = [
+          fuel: fuel,
+          root: root,
+          book: entry.book,
+          imports: Map.get(entry, :imports, false)
+        ]
+
+        opts =
+          case Map.get(entry, :impl) do
+            nil -> opts
+            impl -> Keyword.put(opts, :impl, impl)
+          end
+
+        case Muro.Emit.RustTest.render(path, Muro.Grade.erase_book(loaded), opts) do
           {:ok, %{source: source, skips: skips}} -> {:ok, source, skips}
           {:error, message} -> {:error, message}
         end
@@ -756,7 +799,7 @@ defmodule Muro.Gen do
   end
 
   defp suite_kind?(entry) do
-    Map.get(entry, :kind) in [:exunit, :pytest]
+    Map.get(entry, :kind) in [:exunit, :pytest, :rust_test]
   end
 
   defp hash_problems(content, header, current, rel, entry, version, book_ok?, emit) do

@@ -49,11 +49,57 @@ defmodule Muro.Emit.Rust do
     tags = ~w(
       Nat NatNode Unit Erased Pair Stream Atom
       zero suc erase reveal from_u64 to_u64
+      pair pair_raw pair_eq pair_eq_raw pair_fmt
+      erase_opaque erased_eq erased_id erased_same erased_debug erased_hidden erased_fmt
+      try_reveal f
       field_seed field_step tag_zero tag_suc
       seed n p k s t c x e rc v
     )
 
     Enum.map(tags, &Name.gen/1) ++ [Name.gen("step", 0), Name.gen("a", 0), Name.gen("node_List")]
+  end
+
+  @doc false
+  def keyword?(name) when is_binary(name), do: MapSet.member?(@rust_keywords, name)
+
+  # `r#crate`, `r#self`, `r#super`, and `r#Self` are not identifiers.
+  @doc false
+  def raw_forbidden?(name) when is_binary(name), do: name in ~w(crate self super Self)
+
+  @doc false
+  def word_lit(k, n) when k in [:u8, :u32, :u64, :i64] and is_integer(n), do: r_lit(k, n)
+
+  @doc false
+  def unboxed?(book, name) when is_list(book), do: unboxed_name?(book, name)
+
+  # True when `muro__pair` can name `lay`: the Rust type implements
+  # `PartialEq` and `Debug`. A pair does when both halves do. A raw pair
+  # still implements `PartialEq`, through the comparison stored on each
+  # erased component. A recursive data type is comparable when its fields
+  # are, counting the type itself as already decided.
+  @doc false
+  def comparable?(book, lay) when is_list(book), do: comparable_lay?(book, lay, MapSet.new())
+
+  # Names `render/2` would allocate for this book, before step symbols.
+  # A test printer closes over this so a constructor spelling is the one
+  # the image calls.
+  @doc false
+  def glossary(book) when is_list(book) do
+    spell = &spell/1
+    {types, taken} = type_names(book, MapSet.new(), spell)
+    {ctor_fns, taken} = ctor_fn_names(book, taken, spell)
+    variants = variant_names(book)
+    atoms = atom_variants(book)
+    {names, taken} = names_of(book, taken, spell)
+
+    %{
+      types: types,
+      ctor_fns: ctor_fns,
+      variants: variants,
+      atoms: atoms,
+      names: names,
+      taken: taken
+    }
   end
 
   defp spell(name), do: Name.spell(name, @forbidden)
@@ -136,26 +182,21 @@ defmodule Muro.Emit.Rust do
     with {:ok, groups, step_map} <- Emit.partition_funs(funs, Emit.run_defs(book)) do
       user_funs = Enum.map(groups, fn {fun, _} -> fun end)
       steps = Enum.flat_map(groups, fn {_fun, ss} -> ss end)
-      spell = &spell/1
-      {types, taken} = type_names(book, MapSet.new(), spell)
-      {ctor_fns, taken} = ctor_fn_names(book, taken, spell)
-      variants = variant_names(book)
-      atoms = atom_variants(book)
-      {names, taken} = names_of(book, taken, spell)
-      {step_names, taken} = name_steps(steps, taken)
+      gloss = glossary(book)
+      {step_names, taken} = name_steps(steps, gloss.taken)
       file_scope = Name.open(taken)
 
       st0 = %{
         book: book,
-        names: names,
+        names: gloss.names,
         step_names: step_names,
         funs: Map.new(user_funs, &{&1.name, &1}),
         steps: step_map,
         step_ids: MapSet.new(steps),
-        types: types,
-        ctor_fns: ctor_fns,
-        variants: variants,
-        atoms: atoms,
+        types: gloss.types,
+        ctor_fns: gloss.ctor_fns,
+        variants: gloss.variants,
+        atoms: gloss.atoms,
         file_scope: file_scope
       }
 
@@ -331,11 +372,19 @@ defmodule Muro.Emit.Rust do
   defp emit_tm({:pair, a, b}, env, st) do
     with {:ok, {al, ae, alay, st}} <- emit_tm(a, env, st),
          {:ok, {bl, be, blay, st}} <- emit_tm(b, env, st) do
-      if unboxed_lay?(st.book, alay) or unboxed_lay?(st.book, blay) do
-        {:error, "c:unboxed"}
-      else
-        expr = "#{g("Pair")}(#{coerce(ae, alay, :opaque, st)}, #{coerce(be, blay, :opaque, st)})"
-        {:ok, {al ++ bl, expr, {:pair, alay, blay}, st}}
+      cond do
+        unboxed_lay?(st.book, alay) or unboxed_lay?(st.book, blay) ->
+          {:error, "c:unboxed"}
+
+        comparable?(st.book, alay) and comparable?(st.book, blay) ->
+          expr = "#{g("pair")}(#{coerce(ae, alay, alay, st)}, #{coerce(be, blay, blay, st)})"
+          {:ok, {al ++ bl, expr, {:pair, alay, blay}, st}}
+
+        true ->
+          expr =
+            "#{g("pair_raw")}(#{coerce(ae, alay, :opaque, st)}, #{coerce(be, blay, :opaque, st)})"
+
+          {:ok, {al ++ bl, expr, {:pair, alay, blay}, st}}
       end
     end
   end
@@ -374,7 +423,7 @@ defmodule Muro.Emit.Rust do
         "let #{t} = #{g("Stream")} { #{g("field_seed")}: #{p}.1.clone(), #{g("field_step")}: #{s}.#{g("field_step")}.clone() };"
       ]
 
-      expr = "#{g("Pair")}(#{p}.0.clone(), #{g("erase")}(#{t}))"
+      expr = "#{g("pair_raw")}(#{p}.0.clone(), #{g("erase_opaque")}(#{t}))"
       {:ok, {lines ++ more, expr, uncons_lay(elay), st}}
     end
   end
@@ -513,7 +562,7 @@ defmodule Muro.Emit.Rust do
         {byte, st} = local(st, nil)
         {rest, st} = local(st, nil)
         sl = g("slice")
-        pair = g("Pair")
+        pair = g("pair")
         erase = g("erase")
 
         lines = lines ++ ["let #{cur} = #{ex};"]
@@ -522,7 +571,7 @@ defmodule Muro.Emit.Rust do
         if #{cur}.n == 0 { #{nothing}() } else {
             let #{byte}: u8 = unsafe { *#{cur}.p };
             let #{rest} = #{sl} { p: unsafe { #{cur}.p.add(1) }, n: #{cur}.n - 1 };
-            #{just}(#{erase}(#{pair}(#{erase}(#{byte}), #{erase}(#{rest}))))
+            #{just}(#{erase}(#{pair}(#{byte}, #{rest})))
         }
         """
 
@@ -682,7 +731,8 @@ defmodule Muro.Emit.Rust do
                  end
              end
            end) do
-      {expr, lay} = finish_match(scrut, rendered, st)
+      extra = if needs_hole?(st.book, dname), do: ["_ => ::std::process::abort()"], else: []
+      {expr, lay} = finish_match(scrut, rendered, st, extra)
       {:ok, expr, lay, st}
     end
   end
@@ -825,7 +875,7 @@ defmodule Muro.Emit.Rust do
 
   defp owned_node(ex), do: "(*((#{ex}).0)).clone()"
 
-  defp finish_match(scrut, arms, st) do
+  defp finish_match(scrut, arms, st, extra \\ []) do
     target = join_lay(Enum.map(arms, fn {_, _, lay} -> lay end))
 
     rendered =
@@ -833,10 +883,15 @@ defmodule Muro.Emit.Rust do
         "#{pat} => #{coerce(body, lay, target, st)}"
       end)
 
+    body =
+      [rendered | extra]
+      |> Enum.reject(&(&1 == ""))
+      |> Enum.join(",\n")
+
     expr =
       """
       match (#{scrut}) {
-      #{indent(rendered, 4)},
+      #{indent(body, 4)},
       }
       """
       |> String.trim()
@@ -898,9 +953,19 @@ defmodule Muro.Emit.Rust do
   defp coerce("None", {:opt, _}, {:opt, pay}, st),
     do: "::std::option::Option::<#{rty(pay, st)}>::None"
 
-  defp coerce(ex, _from, :opaque, _st), do: "#{g("erase")}(#{ex})"
+  defp coerce(ex, from, :opaque, st), do: erase_expr(ex, from, st)
   defp coerce(ex, :opaque, to, st), do: "#{g("reveal")}::<#{rty(to, st)}>(#{ex})"
-  defp coerce(ex, _from, to, st), do: "#{g("reveal")}::<#{rty(to, st)}>(#{g("erase")}(#{ex}))"
+
+  defp coerce(ex, from, to, st),
+    do: "#{g("reveal")}::<#{rty(to, st)}>(#{erase_expr(ex, from, st)})"
+
+  # `muro__erase` requires `PartialEq` and `Debug`. A stream, a function,
+  # or data whose fields are not comparable has no such implementation,
+  # so it is erased with allocation identity and prints `..`.
+  defp erase_expr(ex, from, st) do
+    fun = if comparable?(st.book, from), do: g("erase"), else: g("erase_opaque")
+    "#{fun}(#{ex})"
+  end
 
   defp pair_halves({:pair, a, b}), do: {a, b}
   defp pair_halves(_), do: {:opaque, :opaque}
@@ -1154,6 +1219,79 @@ defmodule Muro.Emit.Rust do
   defp unboxed_lay?(book, {:data, name}), do: unboxed_name?(book, name)
   defp unboxed_lay?(_book, _lay), do: false
 
+  defp comparable_lay?(_book, lay, _seen)
+       when lay in [:nat, :unit, :u8, :u32, :u64, :i64, :wbool, :slice, :string, :never],
+       do: true
+
+  defp comparable_lay?(_book, {:data, "Atom"}, _seen), do: true
+
+  defp comparable_lay?(book, {:opt, pay}, seen) do
+    not unboxed_lay?(book, pay) and comparable_lay?(book, pay, seen)
+  end
+
+  # `muro__pair` names both halves, so a pair field is comparable exactly
+  # when both halves are. `muro__pair_raw` still compares.
+  defp comparable_lay?(book, {:pair, a, b}, seen) do
+    comparable_lay?(book, a, seen) and comparable_lay?(book, b, seen)
+  end
+
+  defp comparable_lay?(book, {:data, name}, seen) do
+    if MapSet.member?(seen, name) do
+      true
+    else
+      comparable_data?(book, name, seen)
+    end
+  end
+
+  defp comparable_lay?(_book, _lay, _seen), do: false
+
+  defp comparable_data?(book, name, seen) do
+    seen = MapSet.put(seen, name)
+
+    case Enum.find(data_decls(book), &(&1.name == name)) do
+      nil ->
+        false
+
+      d ->
+        Enum.all?(d.ctors, fn c ->
+          Enum.all?(ctor_fields(book, c.name), &comparable_lay?(book, &1, seen))
+        end)
+    end
+  end
+
+  # A boxed type that reaches itself through a boxed field does not
+  # derive `PartialEq` or `Debug`. Those walks, and `Drop`, are emitted
+  # as a heap stack. `Debug` also prints each field outside the cycle.
+  # The text keeps the longest prefix that fits in 1024 bytes and ends
+  # on a character boundary, then `...`. A field of the cycle that stores
+  # the cycle inside a pair is walked on that same stack. `Opt` of the
+  # type being defined is not strictly positive, so it does not check.
+  # A cycle reached only through a pair keeps the derived `Drop`,
+  # `PartialEq`, and `Debug`. A cycle that goes out through a boxed
+  # field and back only through a pair does too: `direct_boxed_refs`
+  # does not follow pairs, so neither type is cyclic in the boxed-ref
+  # SCC graph. Unboxed data cannot be recursive.
+  defp boxed_derives(book, name) do
+    cond do
+      cyclic_boxed?(book, name) ->
+        "#[derive(::std::clone::Clone)]"
+
+      comparable?(book, {:data, name}) ->
+        "#[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]"
+
+      true ->
+        "#[derive(::std::clone::Clone)]"
+    end
+  end
+
+  defp unboxed_derives(book, name) do
+    if comparable?(book, {:data, name}) do
+      "#[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::fmt::Debug)]"
+    else
+      "#[derive(::std::clone::Clone, ::std::marker::Copy)]"
+    end
+  end
+
   defp lookup(env, name) do
     Enum.find_value(env, fn
       {^name, rn, lay} -> {rn, lay}
@@ -1298,18 +1436,926 @@ defmodule Muro.Emit.Rust do
             "#{node}::#{v}(#{inner})"
           end
 
-        "fn #{fn_name}(#{args}) -> #{type} {\n    #{type}(::std::rc::Rc::new(#{build}))\n}"
+        "pub fn #{fn_name}(#{args}) -> #{type} {\n    #{type}(::std::rc::Rc::new(#{build}))\n}"
       end)
 
+    derives = boxed_derives(book, d.name)
+    hole = if needs_hole?(book, d.name), do: "\n    #{g("hole")},", else: ""
+
+    walks =
+      if cycle_leader?(book, d.name), do: cycle_walks(book, d.name, types, variants), else: ""
+
     """
-    #[derive(::std::clone::Clone)]
+    #{derives}
     pub struct #{type}(::std::rc::Rc<#{node}>);
-    #[derive(::std::clone::Clone)]
+    #{derives}
     enum #{node} {
-    #{variants_txt}
+    #{variants_txt}#{hole}
     }
 
     #{ctors}
+    #{walks}
+    """
+    |> String.trim()
+  end
+
+  # A boxed type is cyclic when a boxed field reaches the type again,
+  # including under `Opt`. Two types that contain each other are one
+  # cycle. `Opt` of the type being defined does not check. A pair does
+  # not make the cycle. A field of a cycle that stores the cycle inside
+  # a pair is still walked here, on the heap stack. A cycle reached only
+  # through a pair keeps the derived `Drop`, `PartialEq`, and `Debug`.
+  # A cycle that goes out through a boxed field and back only through a
+  # pair keeps them too. `direct_boxed_refs` does not follow pairs, so
+  # neither type is in a boxed-ref SCC. Unboxed data cannot be recursive.
+  defp cyclic_boxed?(book, name), do: scc_of(book, name) != nil
+
+  defp cycle_leader?(book, name) do
+    case scc_of(book, name) do
+      nil -> false
+      scc -> hd(scc) == name
+    end
+  end
+
+  defp needs_hole?(book, name) do
+    case scc_of(book, name) do
+      nil -> false
+      _scc -> fieldless_ctor(book, name) == nil
+    end
+  end
+
+  defp scc_of(book, name) do
+    graph = boxed_graph(book)
+
+    graph
+    |> sccs()
+    |> Enum.filter(&nontrivial_scc?(&1, graph))
+    |> Enum.find(fn scc -> name in scc end)
+    |> case do
+      nil -> nil
+      scc -> in_book_order(book, scc)
+    end
+  end
+
+  defp boxed_graph(book) do
+    decls = Enum.reject(data_decls(book), &(Map.get(&1, :unboxed) == true))
+    names = MapSet.new(Enum.map(decls, & &1.name))
+
+    Map.new(decls, fn d ->
+      edges =
+        d.ctors
+        |> Enum.flat_map(fn c -> ctor_fields(book, c.name) end)
+        |> Enum.flat_map(&direct_boxed_refs(&1, names))
+        |> Enum.uniq()
+
+      {d.name, edges}
+    end)
+  end
+
+  # A pair is not an edge. `R` with a boxed field of `S`, and `S` with a
+  # field of `R × Nat`, is not a cycle in this graph. Both types keep the
+  # derived `Drop`, `PartialEq`, and `Debug`. A deep value of either type
+  # can overflow the stack. This function does not follow pairs.
+  defp direct_boxed_refs(lay, names) do
+    case peel_opts(lay) do
+      {_n, {:data, name}} -> if MapSet.member?(names, name), do: [name], else: []
+      _ -> []
+    end
+  end
+
+  defp peel_opts(lay), do: peel_opts(lay, 0)
+  defp peel_opts({:opt, inner}, n), do: peel_opts(inner, n + 1)
+  defp peel_opts(lay, n), do: {n, lay}
+
+  # A pair does not put a type in the cycle. Once the type is in the
+  # cycle, a component that reaches it is still part of the heap walk.
+  defp reaches_scc?(lay, scc) do
+    {_opts, core} = peel_opts(lay)
+
+    case core do
+      {:data, name} -> name in scc
+      {:pair, a, b} -> reaches_scc?(a, scc) or reaches_scc?(b, scc)
+      _ -> false
+    end
+  end
+
+  defp sccs(graph) do
+    start = %{i: 0, stack: [], on: MapSet.new(), ix: %{}, low: %{}, out: [], seen: MapSet.new()}
+
+    graph
+    |> Map.keys()
+    |> Enum.reduce(start, fn n, st ->
+      if MapSet.member?(st.seen, n), do: st, else: connect(n, graph, st)
+    end)
+    |> Map.fetch!(:out)
+  end
+
+  defp connect(v, graph, st) do
+    i = st.i
+
+    st = %{
+      st
+      | i: st.i + 1,
+        ix: Map.put(st.ix, v, i),
+        low: Map.put(st.low, v, i),
+        stack: [v | st.stack],
+        on: MapSet.put(st.on, v),
+        seen: MapSet.put(st.seen, v)
+    }
+
+    st =
+      Enum.reduce(Map.get(graph, v, []), st, fn w, st ->
+        cond do
+          not Map.has_key?(graph, w) ->
+            st
+
+          not MapSet.member?(st.seen, w) ->
+            st = connect(w, graph, st)
+            %{st | low: Map.put(st.low, v, min(Map.fetch!(st.low, v), Map.fetch!(st.low, w)))}
+
+          MapSet.member?(st.on, w) ->
+            %{st | low: Map.put(st.low, v, min(Map.fetch!(st.low, v), Map.fetch!(st.ix, w)))}
+
+          true ->
+            st
+        end
+      end)
+
+    if Map.fetch!(st.low, v) == Map.fetch!(st.ix, v) do
+      {comp, stack, on} = pop_scc(st.stack, st.on, v, [])
+      %{st | stack: stack, on: on, out: [comp | st.out]}
+    else
+      st
+    end
+  end
+
+  defp pop_scc([v | stack], on, v, acc),
+    do: {Enum.reverse([v | acc]), stack, MapSet.delete(on, v)}
+
+  defp pop_scc([h | stack], on, v, acc),
+    do: pop_scc(stack, MapSet.delete(on, h), v, [h | acc])
+
+  defp nontrivial_scc?([one], graph), do: one in Map.get(graph, one, [])
+  defp nontrivial_scc?(scc, _graph) when length(scc) > 1, do: true
+
+  defp in_book_order(book, names) do
+    order = book |> data_decls() |> Enum.with_index() |> Map.new(fn {d, i} -> {d.name, i} end)
+    Enum.sort_by(names, &Map.fetch!(order, &1))
+  end
+
+  defp data_by(book, name), do: Enum.find(data_decls(book), &(&1.name == name))
+
+  defp fieldless_ctor(book, name) do
+    name
+    |> then(&data_by(book, &1))
+    |> Map.fetch!(:ctors)
+    |> Enum.find(fn c -> ctor_fields(book, c.name) == [] end)
+  end
+
+  defp fieldless_variant(book, name, variants) do
+    case fieldless_ctor(book, name) do
+      nil -> nil
+      c -> Map.fetch!(variants, {name, c.name})
+    end
+  end
+
+  defp sentinel_variant(book, name, variants) do
+    case fieldless_variant(book, name, variants) do
+      nil -> g("hole")
+      variant -> variant
+    end
+  end
+
+  defp rust_type(types, name), do: Map.fetch!(types, name)
+  defp node_of(types, name), do: g("node_" <> rust_type(types, name))
+  defp hole_var(types, name), do: "hole_" <> rust_type(types, name)
+
+  defp cycle_walks(book, leader, types, variants) do
+    scc = scc_of(book, leader)
+    eq? = Enum.all?(scc, &comparable?(book, {:data, &1}))
+
+    [
+      drop_walk(book, scc, types, variants),
+      if(eq?, do: eq_walk(book, scc, types, variants), else: ""),
+      if(eq?, do: fmt_walk(book, scc, types, variants), else: "")
+    ]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n\n")
+  end
+
+  defp drop_walk(book, scc, types, variants) do
+    leader = hd(scc)
+    frame = g("drop_frame_" <> rust_type(types, leader))
+    fun = g("drop_" <> rust_type(types, leader))
+
+    enum_vars =
+      Enum.map_join(scc, "\n", fn name ->
+        "    #{rust_type(types, name)}(::std::rc::Rc<#{node_of(types, name)}>),"
+      end)
+
+    holes =
+      Enum.map_join(scc, "\n", fn name ->
+        "let #{hole_var(types, name)} = ::std::rc::Rc::new(#{node_of(types, name)}::#{sentinel_variant(book, name, variants)});"
+      end)
+
+    arms = Enum.map_join(scc, "\n", &drop_frame_arm(book, &1, scc, types, variants, frame))
+
+    impls =
+      Enum.map_join(scc, "\n\n", &drop_impl(book, &1, types, variants, frame, fun))
+
+    """
+    // This cycle is walked on a heap stack. A derived impl would take one call per node.
+    enum #{frame} {
+    #{enum_vars}
+    }
+
+    fn #{fun}(start: #{frame}) {
+        let mut stack = ::std::vec::Vec::new();
+        stack.push(start);
+    #{indent(holes, 4)}
+        loop {
+            let frame = match stack.pop() {
+                ::std::option::Option::Some(frame) => frame,
+                ::std::option::Option::None => return,
+            };
+            match frame {
+    #{indent(arms, 4)}
+            }
+        }
+    }
+
+    #{impls}
+    """
+    |> String.trim()
+  end
+
+  defp drop_impl(book, name, types, variants, frame, fun) do
+    type = rust_type(types, name)
+
+    """
+    impl ::std::ops::Drop for #{type} {
+        fn drop(&mut self) {
+            if ::std::rc::Rc::strong_count(&self.0) != 1 {
+                return;
+            }
+            let hole = ::std::rc::Rc::new(#{node_of(types, name)}::#{sentinel_variant(book, name, variants)});
+            let rc = ::std::mem::replace(&mut self.0, hole);
+            #{fun}(#{frame}::#{type}(rc));
+        }
+    }
+    """
+    |> String.trim()
+  end
+
+  defp drop_frame_arm(book, name, scc, types, variants, frame) do
+    type = rust_type(types, name)
+    node = node_of(types, name)
+    d = data_by(book, name)
+
+    ctor_arms =
+      Enum.map(d.ctors, fn c ->
+        fields = ctor_fields(book, c.name)
+        variant = Map.fetch!(variants, {name, c.name})
+        pat = drop_pat(node, variant, fields, scc)
+        body = drop_body(fields, scc, types, frame)
+        "    ::std::result::Result::Ok(#{pat}) => {\n#{body}    }"
+      end)
+
+    hole_arm =
+      if fieldless_variant(book, name, variants) == nil do
+        ["    ::std::result::Result::Ok(#{node}::#{g("hole")}) => {}"]
+      else
+        []
+      end
+
+    inner =
+      (ctor_arms ++ hole_arm ++ ["    ::std::result::Result::Err(_) => {}"])
+      |> Enum.join("\n")
+
+    """
+    #{frame}::#{type}(n) => {
+        if ::std::rc::Rc::strong_count(&n) != 1 {
+            continue;
+        }
+        match ::std::rc::Rc::try_unwrap(n) {
+    #{inner}
+        }
+    }
+    """
+    |> String.trim()
+  end
+
+  defp drop_pat(node, variant, [], _scc), do: "#{node}::#{variant}"
+
+  defp drop_pat(node, variant, fields, scc) do
+    binders =
+      fields
+      |> Enum.with_index()
+      |> Enum.map_join(", ", fn {lay, i} -> drop_binder(lay, i, scc) end)
+
+    "#{node}::#{variant}(#{binders})"
+  end
+
+  defp drop_binder(lay, i, scc) do
+    {opts, _core} = peel_opts(lay)
+    name = g("a", i)
+
+    cond do
+      not reaches_scc?(lay, scc) -> "_"
+      opts == 0 -> "mut #{name}"
+      true -> name
+    end
+  end
+
+  defp drop_body(fields, scc, types, frame) do
+    lines =
+      fields
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {lay, i} -> drop_steal(lay, g("a", i), scc, types, frame) end)
+
+    case lines do
+      [] -> ""
+      _ -> Enum.map_join(lines, "\n", &indent(&1, 8)) <> "\n"
+    end
+  end
+
+  defp drop_steal(lay, var, scc, types, frame) do
+    if reaches_scc?(lay, scc) do
+      [drop_known(lay, var, scc, types, frame)]
+    else
+      []
+    end
+  end
+
+  defp drop_known(lay, var, scc, types, frame) do
+    {opts, core} = peel_opts(lay)
+    inner = drop_core(core, var, scc, types, frame)
+    wrap_opts_drop(opts, var, inner)
+  end
+
+  defp drop_core({:data, name}, var, scc, types, frame) do
+    if name in scc do
+      hole = hole_var(types, name)
+      rust = rust_type(types, name)
+
+      """
+      if ::std::rc::Rc::strong_count(&#{var}.0) == 1 {
+          stack.push(#{frame}::#{rust}(::std::mem::replace(&mut #{var}.0, #{hole}.clone())));
+      }
+      """
+      |> String.trim()
+    else
+      ""
+    end
+  end
+
+  defp drop_core({:pair, x, y}, var, scc, types, frame) do
+    [x, y]
+    |> Enum.with_index()
+    |> Enum.map(fn {lay, i} ->
+      slot = if i == 0, do: "l", else: "r"
+      drop_component(lay, "#{var}.#{i}", "#{var}#{slot}", scc, types, frame)
+    end)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
+  end
+
+  defp drop_core(_core, _var, _scc, _types, _frame), do: ""
+
+  # The component is an erased value inside a pair. Take it out before the
+  # pair drops, or the component's `Drop` runs on the call stack.
+  defp drop_component(lay, expr, bind, scc, types, frame) do
+    if reaches_scc?(lay, scc) do
+      rust = rty(lay, %{types: types})
+      {opts, _} = peel_opts(lay)
+      owned = if opts == 0, do: "mut #{bind}", else: bind
+      inner = drop_known(lay, bind, scc, types, frame)
+
+      """
+      {
+          let #{bind}_slot: ::std::rc::Rc<dyn ::std::any::Any> = ::std::rc::Rc::new(());
+          let #{bind}_payload = ::std::mem::replace(&mut #{expr}.0, #{bind}_slot);
+          match ::std::rc::Rc::downcast::<#{rust}>(#{bind}_payload) {
+              ::std::result::Result::Ok(#{bind}_rc) => {
+                  if ::std::rc::Rc::strong_count(&#{bind}_rc) == 1 {
+                      match ::std::rc::Rc::try_unwrap(#{bind}_rc) {
+                          ::std::result::Result::Ok(#{owned}) => {
+                              #{inner}
+                          }
+                          ::std::result::Result::Err(_) => {}
+                      }
+                  }
+              }
+              ::std::result::Result::Err(#{bind}_payload) => {
+                  ::std::mem::drop(#{bind}_payload);
+              }
+          }
+      }
+      """
+      |> String.trim()
+    else
+      ""
+    end
+  end
+
+  defp wrap_opts_drop(0, _var, inner), do: inner
+
+  defp wrap_opts_drop(n, var, inner) do
+    nested = wrap_opts_drop(n - 1, var, inner)
+
+    """
+    match #{var} {
+        ::std::option::Option::Some(mut #{var}) => {
+            #{nested}
+        }
+        ::std::option::Option::None => {}
+    }
+    """
+    |> String.trim()
+  end
+
+  defp eq_walk(book, scc, types, variants) do
+    leader = hd(scc)
+    frame = g("eq_frame_" <> rust_type(types, leader))
+    fun = g("eq_" <> rust_type(types, leader))
+
+    enum_vars =
+      Enum.map_join(scc, "\n", fn name ->
+        node = node_of(types, name)
+        "    #{rust_type(types, name)}(::std::rc::Rc<#{node}>, ::std::rc::Rc<#{node}>),"
+      end)
+
+    arms = Enum.map_join(scc, "\n", &eq_frame_arm(book, &1, scc, types, variants, frame))
+
+    impls =
+      Enum.map_join(scc, "\n\n", fn name ->
+        eq_impl(name, types, frame, fun)
+      end)
+
+    """
+    // A value this image builds is a DAG: each constructor allocates a
+    // fresh node. A clone shares a node, and this walk visits that node
+    // again. Sharing is not a cycle, so this walk has no visited set.
+    // A host-built cycle is outside the image. `Debug` records its path.
+    enum #{frame} {
+    #{enum_vars}
+    }
+
+    fn #{fun}(start: #{frame}) -> bool {
+        let mut stack = ::std::vec::Vec::new();
+        stack.push(start);
+        loop {
+            let frame = match stack.pop() {
+                ::std::option::Option::Some(frame) => frame,
+                ::std::option::Option::None => return true,
+            };
+            match frame {
+    #{indent(arms, 4)}
+            }
+        }
+    }
+
+    #{impls}
+    """
+    |> String.trim()
+  end
+
+  defp eq_impl(name, types, frame, fun) do
+    type = rust_type(types, name)
+
+    """
+    impl ::std::cmp::PartialEq for #{type} {
+        fn eq(&self, other: &Self) -> bool {
+            #{fun}(#{frame}::#{type}(self.0.clone(), other.0.clone()))
+        }
+    }
+    """
+    |> String.trim()
+  end
+
+  defp eq_frame_arm(book, name, scc, types, variants, frame) do
+    type = rust_type(types, name)
+    node = node_of(types, name)
+    d = data_by(book, name)
+
+    ctor_arms =
+      Enum.map(d.ctors, fn c ->
+        fields = ctor_fields(book, c.name)
+        variant = Map.fetch!(variants, {name, c.name})
+        left = eq_pat(node, variant, fields, "a")
+        right = eq_pat(node, variant, fields, "b")
+        body = eq_body(fields, scc, types, frame)
+        "    (#{left}, #{right}) => {\n#{body}    }"
+      end)
+
+    inner = Enum.join(ctor_arms ++ ["    _ => return false,"], "\n")
+
+    """
+    #{frame}::#{type}(a, b) => {
+        match (&*a, &*b) {
+    #{inner}
+        }
+    }
+    """
+    |> String.trim()
+  end
+
+  defp eq_pat(node, variant, [], _side), do: "#{node}::#{variant}"
+
+  defp eq_pat(node, variant, fields, side) do
+    binders = Enum.map_join(0..(length(fields) - 1), ", ", &g(side, &1))
+    "#{node}::#{variant}(#{binders})"
+  end
+
+  defp eq_body(fields, scc, types, frame) do
+    lines =
+      fields
+      |> Enum.with_index()
+      |> Enum.map(fn {lay, i} -> eq_field(lay, g("a", i), g("b", i), scc, types, frame) end)
+
+    case lines do
+      [] -> ""
+      _ -> Enum.map_join(lines, "\n", &indent(&1, 8)) <> "\n"
+    end
+  end
+
+  defp eq_field(lay, ae, be, scc, types, frame) do
+    if reaches_scc?(lay, scc) do
+      eq_known(lay, ae, be, scc, types, frame)
+    else
+      "if #{ae} != #{be} { return false; }"
+    end
+  end
+
+  defp eq_known(lay, an, bn, scc, types, frame) do
+    {opts, core} = peel_opts(lay)
+
+    inner =
+      case core do
+        {:data, name} ->
+          if name in scc do
+            "stack.push(#{frame}::#{rust_type(types, name)}(#{an}.0.clone(), #{bn}.0.clone()));"
+          else
+            "if #{an} != #{bn} { return false; }"
+          end
+
+        {:pair, x, y} ->
+          eq_pair(x, y, an, bn, scc, types, frame)
+
+        _ ->
+          "if #{an} != #{bn} { return false; }"
+      end
+
+    wrap_opts_eq(opts, an, bn, inner)
+  end
+
+  defp eq_pair(x, y, an, bn, scc, types, frame) do
+    left = eq_component(x, "#{an}.0", "#{bn}.0", "#{an}l", "#{bn}l", scc, types, frame)
+    right = eq_component(y, "#{an}.1", "#{bn}.1", "#{an}r", "#{bn}r", scc, types, frame)
+    left <> "\n" <> right
+  end
+
+  # `a_expr` is an erased component. Reveal it before walking a part of
+  # the cycle, so the pair's `PartialEq` does not re-enter this walk.
+  defp eq_component(lay, a_expr, b_expr, an, bn, scc, types, frame) do
+    if reaches_scc?(lay, scc) do
+      rust = rty(lay, %{types: types})
+      inner = eq_known(lay, an, bn, scc, types, frame)
+
+      """
+      match (
+          #{g("try_reveal")}::<#{rust}>(&#{a_expr}),
+          #{g("try_reveal")}::<#{rust}>(&#{b_expr}),
+      ) {
+          (::std::option::Option::Some(#{an}), ::std::option::Option::Some(#{bn})) => {
+              #{inner}
+          }
+          _ => {
+              if !#{g("erased_same")}(&#{a_expr}, &#{b_expr}) { return false; }
+          }
+      }
+      """
+      |> String.trim()
+    else
+      "if !#{g("erased_same")}(&#{a_expr}, &#{b_expr}) { return false; }"
+    end
+  end
+
+  defp wrap_opts_eq(0, _ae, _be, inner), do: inner
+
+  defp wrap_opts_eq(n, ae, be, inner) do
+    nested = wrap_opts_eq(n - 1, ae, be, inner)
+
+    """
+    match (#{ae}, #{be}) {
+        (::std::option::Option::Some(#{ae}), ::std::option::Option::Some(#{be})) => {
+            #{nested}
+        }
+        (::std::option::Option::None, ::std::option::Option::None) => {}
+        _ => return false,
+    }
+    """
+    |> String.trim()
+  end
+
+  defp fmt_walk(book, scc, types, variants) do
+    leader = hd(scc)
+    frame = g("fmt_frame_" <> rust_type(types, leader))
+    job = g("fmt_job_" <> rust_type(types, leader))
+    fun = g("fmt_" <> rust_type(types, leader))
+    keep = g("fmt_keep_" <> rust_type(types, leader))
+
+    enum_vars =
+      Enum.map_join(scc, "\n", fn name ->
+        "    #{rust_type(types, name)}(::std::rc::Rc<#{node_of(types, name)}>),"
+      end)
+
+    arms =
+      Enum.map_join(
+        scc,
+        "\n",
+        &fmt_frame_arm(book, &1, scc, types, variants, frame, job, keep)
+      )
+
+    leave =
+      Enum.map_join(scc, "\n", fn name ->
+        type = rust_type(types, name)
+        "    #{frame}::#{type}(n) => ::std::rc::Rc::as_ptr(n) as *const (),"
+      end)
+
+    impls = Enum.map_join(scc, "\n\n", &fmt_impl(&1, types, frame, fun))
+
+    """
+    // The cycle is walked on a heap stack. A field outside the cycle is
+    // printed. The text keeps the longest prefix that fits in 1024 bytes
+    // and ends on a character boundary, then `...`. A field that crosses
+    // that boundary contributes the bytes that fit. Once that prefix is
+    // full, a later field is not formatted. The node count still includes
+    // every node. A node still on the path is a cycle and is printed as `...`.
+    enum #{frame} {
+    #{enum_vars}
+    }
+
+    enum #{job} {
+        Node(#{frame}),
+        Text(&'static str),
+        Owned(::std::boxed::Box<dyn ::std::ops::FnOnce() -> ::std::string::String>),
+        Leave(#{frame}),
+    }
+
+    fn #{keep}(out: &mut ::std::string::String, stopped: &mut bool, s: &str) {
+        if *stopped {
+            return;
+        }
+        let room = 1024usize.saturating_sub(out.len());
+        if s.len() <= room {
+            out.push_str(s);
+        } else {
+            let mut end = room;
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end > 0 {
+                out.push_str(&s[..end]);
+            }
+            out.push_str("...");
+            *stopped = true;
+        }
+    }
+
+    fn #{fun}(start: #{frame}, out: &mut ::std::string::String) -> ::std::primitive::u64 {
+        let mut stack = ::std::vec::Vec::new();
+        stack.push(#{job}::Node(start));
+        let mut path = ::std::collections::HashSet::<*const ()>::new();
+        let mut stopped = false;
+        let mut k: ::std::primitive::u64 = 0;
+        loop {
+            let job = match stack.pop() {
+                ::std::option::Option::Some(job) => job,
+                ::std::option::Option::None => return k,
+            };
+            match job {
+                #{job}::Text(s) => #{keep}(out, &mut stopped, s),
+                #{job}::Owned(render) => {
+                    if !stopped {
+                        let rendered = render();
+                        #{keep}(out, &mut stopped, &rendered);
+                    }
+                }
+                #{job}::Leave(kept) => {
+                    let p = match &kept {
+    #{leave}
+                    };
+                    let _ = path.remove(&p);
+                }
+                #{job}::Node(kept) => {
+                    match kept {
+    #{indent(arms, 4)}
+                    }
+                }
+            }
+        }
+    }
+
+    #{impls}
+    """
+    |> String.trim()
+  end
+
+  defp fmt_impl(name, types, frame, fun) do
+    type = rust_type(types, name)
+
+    """
+    impl ::std::fmt::Debug for #{type} {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            let mut body = ::std::string::String::new();
+            let k = #{fun}(#{frame}::#{type}(self.0.clone()), &mut body);
+            ::std::write!(f, "#{type}({}: {})", k, body)
+        }
+    }
+    """
+    |> String.trim()
+  end
+
+  defp fmt_frame_arm(book, name, scc, types, variants, frame, job, keep) do
+    type = rust_type(types, name)
+    node = node_of(types, name)
+    d = data_by(book, name)
+
+    ctor_arms =
+      Enum.map(d.ctors, fn c ->
+        fields = ctor_fields(book, c.name)
+        variant = Map.fetch!(variants, {name, c.name})
+        pat = fmt_pat(node, variant, fields)
+        body = fmt_ctor_push(type, variant, fields, scc, types, frame, job)
+        "    #{pat} => {\n#{body}    }"
+      end)
+
+    hole_arm =
+      if fieldless_variant(book, name, variants) == nil do
+        hole = g("hole")
+
+        [
+          "    #{node}::#{hole} => {\n        stack.push(#{job}::Text(\"#{type}::#{hole}\"));\n    }"
+        ]
+      else
+        []
+      end
+
+    inner = Enum.join(ctor_arms ++ hole_arm, "\n")
+
+    """
+    #{frame}::#{type}(n) => {
+        let p = ::std::rc::Rc::as_ptr(&n) as *const ();
+        if path.contains(&p) {
+            #{keep}(out, &mut stopped, "...");
+            continue;
+        }
+        if k == ::std::primitive::u64::MAX {
+            return k;
+        }
+        let _ = path.insert(p);
+        k += 1;
+        stack.push(#{job}::Leave(#{frame}::#{type}(n.clone())));
+        match &*n {
+    #{inner}
+        }
+    }
+    """
+    |> String.trim()
+  end
+
+  defp fmt_pat(node, variant, []), do: "#{node}::#{variant}"
+
+  defp fmt_pat(node, variant, fields) do
+    binders = Enum.map_join(0..(length(fields) - 1), ", ", &g("a", &1))
+    "#{node}::#{variant}(#{binders})"
+  end
+
+  # Jobs are pushed so the first field is printed first. A field in the
+  # cycle is another node on the heap stack. Any other field is its
+  # `Debug`, which is how a payload difference shows up.
+  defp fmt_ctor_push(type, variant, [], _scc, _types, _frame, job) do
+    "        stack.push(#{job}::Text(\"#{type}::#{variant}\"));\n"
+  end
+
+  defp fmt_ctor_push(type, variant, fields, scc, types, frame, job) do
+    field_lines =
+      fields
+      |> Enum.with_index()
+      |> Enum.reverse()
+      |> Enum.map(fn {lay, i} -> fmt_field_push(lay, g("a", i), scc, types, frame, job) end)
+      |> Enum.intersperse("stack.push(#{job}::Text(\", \"));")
+
+    lines =
+      ["stack.push(#{job}::Text(\")\"));"] ++
+        field_lines ++
+        ["stack.push(#{job}::Text(\"#{type}::#{variant}(\"));"]
+
+    Enum.map_join(lines, "\n", &indent(&1, 8)) <> "\n"
+  end
+
+  defp fmt_field_push(lay, var, scc, types, frame, job) do
+    if reaches_scc?(lay, scc) do
+      fmt_scc(lay, var, scc, types, frame, job)
+    else
+      fmt_owned_push(var, job)
+    end
+  end
+
+  defp fmt_scc(lay, var, scc, types, frame, job) do
+    {opts, core} = peel_opts(lay)
+
+    inner =
+      case core do
+        {:data, name} ->
+          "stack.push(#{job}::Node(#{frame}::#{rust_type(types, name)}(#{var}.0.clone())));"
+
+        {:pair, x, y} ->
+          fmt_pair(x, y, var, scc, types, frame, job)
+      end
+
+    wrap_opts_push(opts, var, inner, job)
+  end
+
+  # Jobs are pushed so the first component is printed first. A component
+  # in the cycle is another node. Any other component is its `Debug`, or
+  # `..` when the erased value has no printer for that type.
+  defp fmt_pair(x, y, var, scc, types, frame, job) do
+    pair = g("Pair")
+    right = fmt_erased(y, "#{var}.1", "#{var}r", scc, types, frame, job)
+    left = fmt_erased(x, "#{var}.0", "#{var}l", scc, types, frame, job)
+
+    [
+      "stack.push(#{job}::Text(\")\"));",
+      right,
+      "stack.push(#{job}::Text(\", \"));",
+      left,
+      "stack.push(#{job}::Text(\"#{pair}(\"));"
+    ]
+    |> Enum.join("\n")
+  end
+
+  defp fmt_erased(lay, expr, bind, scc, types, frame, job) do
+    rust = rty(lay, %{types: types})
+
+    if reaches_scc?(lay, scc) do
+      inner = fmt_scc(lay, bind, scc, types, frame, job)
+
+      """
+      match #{g("try_reveal")}::<#{rust}>(&#{expr}) {
+          ::std::option::Option::Some(#{bind}) => {
+              #{inner}
+          }
+          ::std::option::Option::None => {
+              stack.push(#{job}::Text(".."));
+          }
+      }
+      """
+      |> String.trim()
+    else
+      """
+      if !stopped {
+          match #{g("try_reveal")}::<#{rust}>(&#{expr}) {
+              ::std::option::Option::Some(#{bind}) => {
+                  stack.push(#{job}::Owned(::std::boxed::Box::new(move || ::std::format!("{:?}", #{bind}))));
+              }
+              ::std::option::Option::None => {
+                  stack.push(#{job}::Text(".."));
+              }
+          }
+      }
+      """
+      |> String.trim()
+    end
+  end
+
+  defp fmt_owned_push(var, job) do
+    """
+    if !stopped {
+        let #{var}_shown = #{var}.clone();
+        stack.push(#{job}::Owned(::std::boxed::Box::new(move || ::std::format!("{:?}", #{var}_shown))));
+    }
+    """
+    |> String.trim()
+  end
+
+  defp wrap_opts_push(0, _var, inner, _job), do: inner
+
+  defp wrap_opts_push(n, var, inner, job) do
+    nested = wrap_opts_push(n - 1, var, inner, job)
+
+    """
+    match #{var} {
+        ::std::option::Option::Some(#{var}) => {
+            stack.push(#{job}::Text(")"));
+            #{nested}
+            stack.push(#{job}::Text("Some("));
+        }
+        ::std::option::Option::None => {
+            stack.push(#{job}::Text("None"));
+        }
+    }
     """
     |> String.trim()
   end
@@ -1356,11 +2402,11 @@ defmodule Muro.Emit.Rust do
             "#{type}::#{v}(#{inner})"
           end
 
-        "fn #{fn_name}(#{args}) -> #{type} {\n    #{build}\n}"
+        "pub fn #{fn_name}(#{args}) -> #{type} {\n    #{build}\n}"
       end)
 
     """
-    #[derive(::std::clone::Clone, ::std::marker::Copy)]
+    #{unboxed_derives(book, d.name)}
     pub enum #{type} {
     #{variants_txt}
     }
@@ -1376,7 +2422,7 @@ defmodule Muro.Emit.Rust do
     vars = Enum.map_join(atoms, "\n", fn {_name, v} -> "    #{v}," end)
 
     """
-    #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::cmp::Eq)]
+    #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::cmp::Eq, ::std::fmt::Debug)]
     pub enum #{g("Atom")} {
     #{vars}
     }
@@ -1404,13 +2450,80 @@ defmodule Muro.Emit.Rust do
     n = g("n")
     k = g("k")
     p = g("p")
+    a = g("a")
+    b = g("b")
+    q = g("q")
+    s = g("s")
+    f = g("f")
 
     """
     #[derive(::std::clone::Clone)]
-    pub struct #{erased}(::std::rc::Rc<dyn ::std::any::Any>);
+    pub struct #{erased}(
+        ::std::rc::Rc<dyn ::std::any::Any>,
+        fn(&(dyn ::std::any::Any), &(dyn ::std::any::Any)) -> bool,
+        fn(&(dyn ::std::any::Any), &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result,
+    );
 
-    pub fn #{g("erase")}<T: 'static>(#{x}: T) -> #{erased} {
-        #{erased}(::std::rc::Rc::new(#{x}))
+    fn #{g("erased_eq")}<T: ::std::cmp::PartialEq + 'static>(
+        #{g("a")}: &(dyn ::std::any::Any),
+        #{g("b")}: &(dyn ::std::any::Any),
+    ) -> bool {
+        match (#{g("a")}.downcast_ref::<T>(), #{g("b")}.downcast_ref::<T>()) {
+            (::std::option::Option::Some(#{g("a")}), ::std::option::Option::Some(#{g("b")})) => {
+                #{g("a")} == #{g("b")}
+            }
+            _ => false,
+        }
+    }
+
+    fn #{g("erased_id")}<T: 'static>(
+        #{g("a")}: &(dyn ::std::any::Any),
+        #{g("b")}: &(dyn ::std::any::Any),
+    ) -> bool {
+        match (#{g("a")}.downcast_ref::<T>(), #{g("b")}.downcast_ref::<T>()) {
+            (::std::option::Option::Some(#{g("a")}), ::std::option::Option::Some(#{g("b")})) => {
+                ::std::ptr::eq(#{g("a")}, #{g("b")})
+            }
+            _ => false,
+        }
+    }
+
+    fn #{g("erased_same")}(#{g("a")}: &#{erased}, #{g("b")}: &#{erased}) -> bool {
+        (#{g("a")}.1)(#{g("a")}.0.as_ref(), #{g("b")}.0.as_ref())
+            && (#{g("b")}.1)(#{g("b")}.0.as_ref(), #{g("a")}.0.as_ref())
+    }
+
+    fn #{g("erased_debug")}<T: ::std::fmt::Debug + 'static>(
+        #{a}: &(dyn ::std::any::Any),
+        #{f}: &mut ::std::fmt::Formatter<'_>,
+    ) -> ::std::fmt::Result {
+        match #{a}.downcast_ref::<T>() {
+            ::std::option::Option::Some(#{a}) => ::std::fmt::Debug::fmt(#{a}, #{f}),
+            ::std::option::Option::None => #{f}.write_str(".."),
+        }
+    }
+
+    fn #{g("erased_hidden")}(
+        _: &(dyn ::std::any::Any),
+        #{f}: &mut ::std::fmt::Formatter<'_>,
+    ) -> ::std::fmt::Result {
+        #{f}.write_str("..")
+    }
+
+    fn #{g("erased_fmt")}(#{e}: &#{erased}, #{f}: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        (#{e}.2)(#{e}.0.as_ref(), #{f})
+    }
+
+    pub fn #{g("erase")}<T: ::std::cmp::PartialEq + ::std::fmt::Debug + 'static>(#{x}: T) -> #{erased} {
+        #{erased}(::std::rc::Rc::new(#{x}), #{g("erased_eq")}::<T>, #{g("erased_debug")}::<T>)
+    }
+
+    pub fn #{g("erase_opaque")}<T: 'static>(#{x}: T) -> #{erased} {
+        #{erased}(::std::rc::Rc::new(#{x}), #{g("erased_id")}::<T>, #{g("erased_hidden")})
+    }
+
+    fn #{g("try_reveal")}<T: 'static + ::std::clone::Clone>(#{e}: &#{erased}) -> ::std::option::Option<T> {
+        #{e}.0.downcast_ref::<T>().cloned()
     }
 
     pub fn #{g("reveal")}<T: 'static + ::std::clone::Clone>(#{e}: #{erased}) -> T {
@@ -1462,11 +2575,151 @@ defmodule Muro.Emit.Rust do
         }
     }
 
-    #[derive(::std::clone::Clone, ::std::marker::Copy)]
+    // A derived `PartialEq`, `Debug`, or `Drop` walks one `suc` per call.
+    // `100000`, the largest `Nat` a Rust test builds, overflows that walk.
+    // `Debug` prints the count, which is what `assert_eq!` writes on failure.
+    impl ::std::cmp::PartialEq for #{nat} {
+        fn eq(&self, other: &Self) -> bool {
+            let mut #{a} = self.clone();
+            let mut #{b} = other.clone();
+            loop {
+                match (&*#{a}.0, &*#{b}.0) {
+                    (#{node}::#{zero}, #{node}::#{zero}) => return true,
+                    (#{node}::#{suc}(#{p}), #{node}::#{suc}(#{q})) => {
+                        #{a} = #{p}.clone();
+                        #{b} = #{q}.clone();
+                    }
+                    _ => return false,
+                }
+            }
+        }
+    }
+
+    impl ::std::fmt::Debug for #{nat} {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            let mut #{n} = self.clone();
+            let mut #{k}: ::std::primitive::u64 = 0;
+            loop {
+                match &*#{n}.0 {
+                    #{node}::#{zero} => {
+                        return ::std::write!(f, "#{nat}({})", #{k});
+                    }
+                    #{node}::#{suc}(#{p}) => {
+                        if #{k} == ::std::primitive::u64::MAX {
+                            return f.write_str("#{nat}(max)");
+                        }
+                        #{k} += 1;
+                        #{n} = #{p}.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    impl ::std::ops::Drop for #{nat} {
+        fn drop(&mut self) {
+            if ::std::rc::Rc::strong_count(&self.0) != 1 {
+                return;
+            }
+            if matches!(&*self.0, #{node}::#{zero}) {
+                return;
+            }
+            let #{s} = #{g("zero")}();
+            let mut #{n} = ::std::mem::replace(&mut self.0, #{s}.0.clone());
+            loop {
+                if ::std::rc::Rc::strong_count(&#{n}) != 1 {
+                    return;
+                }
+                match ::std::rc::Rc::try_unwrap(#{n}) {
+                    ::std::result::Result::Ok(#{node}::#{zero}) => return,
+                    ::std::result::Result::Ok(#{node}::#{suc}(mut #{p})) => {
+                        #{n} = ::std::mem::replace(&mut #{p}.0, #{s}.0.clone());
+                    }
+                    ::std::result::Result::Err(_) => return,
+                }
+            }
+        }
+    }
+
+    #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::fmt::Debug)]
     pub struct #{unit};
 
     #[derive(::std::clone::Clone)]
-    pub struct #{pair}(#{erased}, #{erased});
+    pub struct #{pair}(
+        #{erased},
+        #{erased},
+        fn(&#{pair}, &#{pair}) -> bool,
+        fn(&#{pair}, &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result,
+    );
+
+    fn #{g("pair_eq")}<A: ::std::cmp::PartialEq + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::clone::Clone + 'static>(
+        #{g("a")}: &#{pair},
+        #{g("b")}: &#{pair},
+    ) -> bool {
+        match (
+            #{g("try_reveal")}::<A>(&#{g("a")}.0),
+            #{g("try_reveal")}::<A>(&#{g("b")}.0),
+            #{g("try_reveal")}::<B>(&#{g("a")}.1),
+            #{g("try_reveal")}::<B>(&#{g("b")}.1),
+        ) {
+            (
+                ::std::option::Option::Some(#{g("a")}),
+                ::std::option::Option::Some(#{g("b")}),
+                ::std::option::Option::Some(#{g("x")}),
+                ::std::option::Option::Some(#{g("y")}),
+            ) => #{g("a")} == #{g("b")} && #{g("x")} == #{g("y")},
+            _ => false,
+        }
+    }
+
+    // Compares the comparison each component carries. A component erased
+    // with `PartialEq` compares by that. A component with none compares
+    // by allocation. Either way the pair equals itself.
+    fn #{g("pair_eq_raw")}(#{g("a")}: &#{pair}, #{g("b")}: &#{pair}) -> bool {
+        #{g("erased_same")}(&#{g("a")}.0, &#{g("b")}.0) && #{g("erased_same")}(&#{g("a")}.1, &#{g("b")}.1)
+    }
+
+    // Each component prints through the printer stored on the erased value.
+    // A component with `Debug` prints as that. A component with none prints
+    // `..`. One hidden component does not hide the other.
+    fn #{g("pair_fmt")}(
+        #{g("p")}: &#{pair},
+        #{f}: &mut ::std::fmt::Formatter<'_>,
+    ) -> ::std::fmt::Result {
+        #{f}.write_str("#{pair}(")?;
+        #{g("erased_fmt")}(&#{g("p")}.0, #{f})?;
+        #{f}.write_str(", ")?;
+        #{g("erased_fmt")}(&#{g("p")}.1, #{f})?;
+        #{f}.write_str(")")
+    }
+
+    pub fn #{g("pair")}<A: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static>(
+        #{g("a")}: A,
+        #{g("b")}: B,
+    ) -> #{pair} {
+        #{pair}(
+            #{g("erase")}(#{g("a")}),
+            #{g("erase")}(#{g("b")}),
+            #{g("pair_eq")}::<A, B>,
+            #{g("pair_fmt")},
+        )
+    }
+
+    pub fn #{g("pair_raw")}(#{g("a")}: #{erased}, #{g("b")}: #{erased}) -> #{pair} {
+        #{pair}(#{g("a")}, #{g("b")}, #{g("pair_eq_raw")}, #{g("pair_fmt")})
+    }
+
+    impl ::std::cmp::PartialEq for #{pair} {
+        fn eq(&self, other: &Self) -> bool {
+            (self.2)(self, other) && (other.2)(other, self)
+        }
+    }
+
+    impl ::std::fmt::Debug for #{pair} {
+        fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+            (self.3)(self, f)
+        }
+    }
 
     #[derive(::std::clone::Clone)]
     pub struct #{stream} {
@@ -1529,9 +2782,15 @@ defmodule Muro.Emit.Rust do
     aft = g("slice_after")
 
     """
-    #[derive(::std::clone::Clone, ::std::marker::Copy)]
+    #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::fmt::Debug)]
     #[repr(C)]
     pub struct #{sl} { pub p: *const u8, pub n: usize }
+
+    impl ::std::cmp::PartialEq for #{sl} {
+        fn eq(&self, other: &Self) -> bool {
+            #{eq}(*self, *other)
+        }
+    }
 
     #[allow(non_upper_case_globals)]
     static #{empty}: u8 = 0;
@@ -1640,9 +2899,15 @@ defmodule Muro.Emit.Rust do
     bytes = if bytes?, do: rust_str_bytes(), else: ""
 
     """
-    #[derive(::std::clone::Clone, ::std::marker::Copy)]
+    #[derive(::std::clone::Clone, ::std::marker::Copy, ::std::fmt::Debug)]
     #[repr(C)]
     pub struct #{ty} { pub p: *const u8, pub n: usize }
+
+    impl ::std::cmp::PartialEq for #{ty} {
+        fn eq(&self, other: &Self) -> bool {
+            #{eq}(*self, *other)
+        }
+    }
 
     #[allow(non_upper_case_globals)]
     static #{empty}: u8 = 0;

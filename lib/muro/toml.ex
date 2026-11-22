@@ -25,7 +25,7 @@ defmodule Muro.Toml do
   `[[package.metadata.muro.modules]]`).
   """
 
-  @backends ~w(elixir c rust zig asm js fsm exunit pytest)
+  @backends ~w(elixir c rust zig asm js fsm exunit pytest rust-test)
   @dep_name ~r/\A[a-z][a-z0-9_]*\z/
 
   @doc """
@@ -1162,6 +1162,7 @@ defmodule Muro.Toml do
   defp node_line({:aot, _, line}), do: line
   defp node_line(_other), do: 1
 
+  defp backend_atom("rust-test"), do: {:ok, :rust_test}
   defp backend_atom(value) when value in @backends, do: {:ok, String.to_atom(value)}
   defp backend_atom(_value), do: :error
 

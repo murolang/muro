@@ -49,9 +49,10 @@ defmodule Muro.Emit do
   @doc """
   `{:error, "c:mayfail\\n..."}` when a meeting marks a party that may fail.
 
-  C, Rust, Zig, JavaScript, assembly, the node image, and ExUnit call
-  this. OTP and the state machine emit the mark. The declaration is not
-  erased.
+  C, Rust, Zig, JavaScript, assembly, the node image, ExUnit, pytest,
+  and rust-test call this. ExUnit, pytest, and rust-test share the
+  call through `Muro.Emit.Equations.collect/3`. OTP and the state
+  machine emit the mark. The declaration is not erased.
   """
   def refuse_may_fail(book) when is_list(book), do: Muro.Fail.refuse_emit(book)
 

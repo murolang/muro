@@ -100,9 +100,10 @@ lib/muro/std/*.muro     bool, classical, le, list, maybe, ord, suc_bin, word
 lib/muro/axiom.ex       declared axioms; lines for definitions the entry file reaches; a run that reaches one is refused
 lib/muro/emit.ex        run → Elixir source
 lib/muro/repr.ex        a repr: check the host shape and emit decode/1, decode/2, and encode/2. Not a kernel term.
-lib/muro/emit/equations.ex closed equations shared by the ExUnit and pytest suites
+lib/muro/emit/equations.ex closed equations shared by the ExUnit, pytest, and Rust test suites
 lib/muro/emit/exunit.ex closed equations → one ExUnit module (`--backend exunit`, `kind: :exunit`)
 lib/muro/emit/pytest.ex closed equations → one pytest module (`--backend pytest`, `kind: :pytest`)
+lib/muro/emit/rust_test.ex closed equations → one Rust test file (`--backend rust-test`, `kind: :rust_test`)
 lib/muro/emit/otp.ex    a conformance, and a reading, is a GenServer; a marked peer is monitored and a `:DOWN` that is not a halt takes the failure arm; a book with no mark emits the previous module (`--backend otp`)
 lib/muro/emit/fsm.ex    a session endpoint is a state machine; a marked book has `down/1` and `down/2` for a failure arm; a book with no mark emits no `down`; a keyed family that checks is a child with `new/0`, `arrive/4`, `resolved/2` (an open instance leaves), `withdraw/2` (a held instance resolves without opening), `finish` (`:resolve` or `:rerun`), and `check_trace/1` (arrivals, resolutions, withdrawals, reruns, and `{party, id, send|recv|down}`). A rule is `never held`, `held while earlier unresolved`, or `held while any unresolved`. `earlier_resolved k kind` names the earlier instances of that key and kind; each meeting end has `finish`, and `:rerun` when one family uses that end; two families on one end name `finish` on the family child; the transport stays with the host (`--backend fsm`)
 lib/muro/emit/c_session.ex a session endpoint is a pure step written as C; the actions are the ones the state machine takes, init takes `uint64_t`, and `down` is not emitted (`--backend c`)
@@ -160,7 +161,7 @@ test/muro_check_test.exs
 
 `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.fill`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` run in any directory once the archive is installed, with or without a `mix.exs`.
 
-A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.15`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
+A project without Elixir uses the self-contained executable: `mise use -g github:murolang/muro@0.22.16`. If mise answers `No versions found` or a 404 from `mise-versions.jdx.dev`, run `mise settings set use_versions_host false` first. The commands are `muro check`, `muro emit`, `muro gen`, `muro init`, `muro skills add`, `muro deps.get`, `muro mutate`, `muro synth`, `muro fill`, and `muro ui`. `muro ui path.muro` prints how to install muro_visor and does not start the explorer. The page is [Visual explorer](explorer.md). The manifest is `muro.toml` or `[package.metadata.muro]` in `Cargo.toml`. The executable page is [The executable](binary.md).
 
 Install it from Hex:
 
@@ -173,7 +174,7 @@ Alternatively, from a checkout of this version:
 ```
 mix deps.get
 mix archive.build
-mix archive.install muro-0.22.15.ez
+mix archive.install muro-0.22.16.ez
 ```
 
 From GitHub, Mix fetches the default branch and builds the archive:
@@ -188,7 +189,7 @@ mix archive.install github murolang/muro
 
 A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks. Use `mix muro.check` and `mix muro.emit`.
 
-`mix muro.emit path.muro` prints the Elixir module. `mix muro.emit path.muro > path.ex` saves it. `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the book's closed equations, including a library whose `param`s are not supplied. `mix muro.emit path.muro --backend pytest` prints one pytest module for those same equations. `--imports` with either backend also collects the files the book imports directly. The pages are [Closed equations as tests](exunit.md) and [Pytest](pytest.md).
+`mix muro.emit path.muro` prints the Elixir module. `mix muro.emit path.muro > path.ex` saves it. `mix muro.emit path.muro --backend exunit` prints one ExUnit module for the book's closed equations, including a library whose `param`s are not supplied. `mix muro.emit path.muro --backend pytest` prints one pytest module for those same equations. `mix muro.emit path.muro --backend rust-test` prints one Rust test file for those same equations. `--imports` with any of these three also collects the files the book imports directly. The pages are [Closed equations as tests](exunit.md), [Pytest](pytest.md), and [Rust tests](rust-test.md).
 
 `--backend zig` writes `<name>.zig` next to the file. `zig` translates it. The proof stops at the run image.
 
@@ -216,7 +217,7 @@ Generated files are not edited by hand.
 Nearest example: manual/examples.md#{{example}}.
 <!-- muro:end -->
 
-`muro.exs` at the project root, a `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml` names each book and the target path. Elixir, fsm, and exunit entries also name the module. A pytest entry names a `.py` target and may omit the module. An entry may add `[kind: :exunit, impl: Adapter, imports: true]`, `[kind: :pytest, impl: "host.rounding"]`, or `[kind: :c]`, `[kind: :rust]`, `[kind: :zig]`, `[kind: :asm]`, or `[kind: :js]`. `imports:` is valid on an exunit entry and on a pytest entry. `muro:` is the version the books are checked with. `muro gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions. One invocation type-checks each book once and emits every target of that book from that copy, including both files of a C target. `--skip-check` does not type-check; `--check --skip-check` still compares bytes. The default type-checks.
+`muro.exs` at the project root, a `:muro` key in `mix.exs`, `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml` names each book and the target path. Elixir, fsm, and exunit entries also name the module. A pytest entry names a `.py` target and may omit the module. A Rust test entry names a `.rs` target and may omit the module. An entry may add `[kind: :exunit, impl: Adapter, imports: true]`, `[kind: :pytest, impl: "host.rounding"]`, `[kind: :rust_test, impl: "crate::rounding"]`, or `[kind: :c]`, `[kind: :rust]`, `[kind: :zig]`, `[kind: :asm]`, or `[kind: :js]`. `imports:` is valid on an exunit entry, a pytest entry, and a Rust test entry. `muro:` is the version the books are checked with. `muro gen` and `mix muro.gen --check` refuse to run when it differs from the running version. The message names both versions. One invocation type-checks each book once and emits every target of that book from that copy, including both files of a C target. `--skip-check` does not type-check; `--check --skip-check` still compares bytes. The default type-checks.
 
 `mix muro.init` creates `muro.exs` and `priv/muro/`. It prints a note that points at `muro skills add`. It does not write `AGENTS.md`. `muro init --backend` stores that backend as the manifest's top-level `backend`. `muro init` writes the one manifest the directory calls for. If `muro.exs`, `muro.toml`, or `[package.metadata.muro]` is already present, it prints a diff of that file in its own format and leaves every file as it is. `mix muro.init --ci github` writes `.github/workflows/muro.yml`. The job installs the archive with `mix archive.install hex muro <version> --force`, with the version from the manifest, and runs `mix muro.gen --check`. `muro init --ci github` installs the executable and runs `muro gen --check`.
 
@@ -236,6 +237,7 @@ mix muro.fill path.muro --def name
 mix muro.emit path.muro --backend exunit
 mix muro.emit path.muro --backend exunit --imports
 mix muro.emit path.muro --backend pytest
+mix muro.emit path.muro --backend rust-test
 mix muro --version
 mix muro.init
 mix muro.gen
@@ -248,7 +250,7 @@ make agda          # Job B only; needs vendor/agda-stdlib v2.3
 On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then one line per definition the entry file reaches that depends on an axiom (`dne: depends on classical.LEM` when the entry file is `lib/muro/std/classical.muro`), then:
 
 ```
-Muro v0.22.15
+Muro v0.22.16
 All terms check. Evidence never becomes a run.
 ```
 

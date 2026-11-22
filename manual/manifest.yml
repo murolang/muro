@@ -74,6 +74,10 @@ pages:
     slug: pytest
     title: Pytest
     summary: A book's closed equations become one pytest module. The tests call a Python module the host names. A skip is a marked test and is recorded.
+  - file: rust-test.md
+    slug: rust-test
+    title: Rust tests
+    summary: A book's closed equations become one Rust test file. The tests call the emitted Rust. A skip is an ignored test and is recorded.
   - file: gen.md
     slug: gen
     title: Committed modules

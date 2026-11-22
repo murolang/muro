@@ -3,10 +3,72 @@
 #![allow(dead_code, unused_variables, non_snake_case, non_camel_case_types, unused_parens)]
 
 #[derive(::std::clone::Clone)]
-pub struct muro__Erased(::std::rc::Rc<dyn ::std::any::Any>);
+pub struct muro__Erased(
+    ::std::rc::Rc<dyn ::std::any::Any>,
+    fn(&(dyn ::std::any::Any), &(dyn ::std::any::Any)) -> bool,
+    fn(&(dyn ::std::any::Any), &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result,
+);
 
-pub fn muro__erase<T: 'static>(muro__x: T) -> muro__Erased {
-    muro__Erased(::std::rc::Rc::new(muro__x))
+fn muro__erased_eq<T: ::std::cmp::PartialEq + 'static>(
+    muro__a: &(dyn ::std::any::Any),
+    muro__b: &(dyn ::std::any::Any),
+) -> bool {
+    match (muro__a.downcast_ref::<T>(), muro__b.downcast_ref::<T>()) {
+        (::std::option::Option::Some(muro__a), ::std::option::Option::Some(muro__b)) => {
+            muro__a == muro__b
+        }
+        _ => false,
+    }
+}
+
+fn muro__erased_id<T: 'static>(
+    muro__a: &(dyn ::std::any::Any),
+    muro__b: &(dyn ::std::any::Any),
+) -> bool {
+    match (muro__a.downcast_ref::<T>(), muro__b.downcast_ref::<T>()) {
+        (::std::option::Option::Some(muro__a), ::std::option::Option::Some(muro__b)) => {
+            ::std::ptr::eq(muro__a, muro__b)
+        }
+        _ => false,
+    }
+}
+
+fn muro__erased_same(muro__a: &muro__Erased, muro__b: &muro__Erased) -> bool {
+    (muro__a.1)(muro__a.0.as_ref(), muro__b.0.as_ref())
+        && (muro__b.1)(muro__b.0.as_ref(), muro__a.0.as_ref())
+}
+
+fn muro__erased_debug<T: ::std::fmt::Debug + 'static>(
+    muro__a: &(dyn ::std::any::Any),
+    muro__f: &mut ::std::fmt::Formatter<'_>,
+) -> ::std::fmt::Result {
+    match muro__a.downcast_ref::<T>() {
+        ::std::option::Option::Some(muro__a) => ::std::fmt::Debug::fmt(muro__a, muro__f),
+        ::std::option::Option::None => muro__f.write_str(".."),
+    }
+}
+
+fn muro__erased_hidden(
+    _: &(dyn ::std::any::Any),
+    muro__f: &mut ::std::fmt::Formatter<'_>,
+) -> ::std::fmt::Result {
+    muro__f.write_str("..")
+}
+
+fn muro__erased_fmt(muro__e: &muro__Erased, muro__f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+    (muro__e.2)(muro__e.0.as_ref(), muro__f)
+}
+
+pub fn muro__erase<T: ::std::cmp::PartialEq + ::std::fmt::Debug + 'static>(muro__x: T) -> muro__Erased {
+    muro__Erased(::std::rc::Rc::new(muro__x), muro__erased_eq::<T>, muro__erased_debug::<T>)
+}
+
+pub fn muro__erase_opaque<T: 'static>(muro__x: T) -> muro__Erased {
+    muro__Erased(::std::rc::Rc::new(muro__x), muro__erased_id::<T>, muro__erased_hidden)
+}
+
+fn muro__try_reveal<T: 'static + ::std::clone::Clone>(muro__e: &muro__Erased) -> ::std::option::Option<T> {
+    muro__e.0.downcast_ref::<T>().cloned()
 }
 
 pub fn muro__reveal<T: 'static + ::std::clone::Clone>(muro__e: muro__Erased) -> T {
@@ -58,11 +120,151 @@ pub fn muro__to_u64(muro__n: &muro__Nat) -> ::std::primitive::u64 {
     }
 }
 
-#[derive(::std::clone::Clone, ::std::marker::Copy)]
+// A derived `PartialEq`, `Debug`, or `Drop` walks one `suc` per call.
+// `100000`, the largest `Nat` a Rust test builds, overflows that walk.
+// `Debug` prints the count, which is what `assert_eq!` writes on failure.
+impl ::std::cmp::PartialEq for muro__Nat {
+    fn eq(&self, other: &Self) -> bool {
+        let mut muro__a = self.clone();
+        let mut muro__b = other.clone();
+        loop {
+            match (&*muro__a.0, &*muro__b.0) {
+                (muro__NatNode::muro__tag_zero, muro__NatNode::muro__tag_zero) => return true,
+                (muro__NatNode::muro__tag_suc(muro__p), muro__NatNode::muro__tag_suc(muro__q)) => {
+                    muro__a = muro__p.clone();
+                    muro__b = muro__q.clone();
+                }
+                _ => return false,
+            }
+        }
+    }
+}
+
+impl ::std::fmt::Debug for muro__Nat {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        let mut muro__n = self.clone();
+        let mut muro__k: ::std::primitive::u64 = 0;
+        loop {
+            match &*muro__n.0 {
+                muro__NatNode::muro__tag_zero => {
+                    return ::std::write!(f, "muro__Nat({})", muro__k);
+                }
+                muro__NatNode::muro__tag_suc(muro__p) => {
+                    if muro__k == ::std::primitive::u64::MAX {
+                        return f.write_str("muro__Nat(max)");
+                    }
+                    muro__k += 1;
+                    muro__n = muro__p.clone();
+                }
+            }
+        }
+    }
+}
+
+impl ::std::ops::Drop for muro__Nat {
+    fn drop(&mut self) {
+        if ::std::rc::Rc::strong_count(&self.0) != 1 {
+            return;
+        }
+        if matches!(&*self.0, muro__NatNode::muro__tag_zero) {
+            return;
+        }
+        let muro__s = muro__zero();
+        let mut muro__n = ::std::mem::replace(&mut self.0, muro__s.0.clone());
+        loop {
+            if ::std::rc::Rc::strong_count(&muro__n) != 1 {
+                return;
+            }
+            match ::std::rc::Rc::try_unwrap(muro__n) {
+                ::std::result::Result::Ok(muro__NatNode::muro__tag_zero) => return,
+                ::std::result::Result::Ok(muro__NatNode::muro__tag_suc(mut muro__p)) => {
+                    muro__n = ::std::mem::replace(&mut muro__p.0, muro__s.0.clone());
+                }
+                ::std::result::Result::Err(_) => return,
+            }
+        }
+    }
+}
+
+#[derive(::std::clone::Clone, ::std::marker::Copy, ::std::cmp::PartialEq, ::std::fmt::Debug)]
 pub struct muro__Unit;
 
 #[derive(::std::clone::Clone)]
-pub struct muro__Pair(muro__Erased, muro__Erased);
+pub struct muro__Pair(
+    muro__Erased,
+    muro__Erased,
+    fn(&muro__Pair, &muro__Pair) -> bool,
+    fn(&muro__Pair, &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result,
+);
+
+fn muro__pair_eq<A: ::std::cmp::PartialEq + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::clone::Clone + 'static>(
+    muro__a: &muro__Pair,
+    muro__b: &muro__Pair,
+) -> bool {
+    match (
+        muro__try_reveal::<A>(&muro__a.0),
+        muro__try_reveal::<A>(&muro__b.0),
+        muro__try_reveal::<B>(&muro__a.1),
+        muro__try_reveal::<B>(&muro__b.1),
+    ) {
+        (
+            ::std::option::Option::Some(muro__a),
+            ::std::option::Option::Some(muro__b),
+            ::std::option::Option::Some(muro__x),
+            ::std::option::Option::Some(muro__y),
+        ) => muro__a == muro__b && muro__x == muro__y,
+        _ => false,
+    }
+}
+
+// Compares the comparison each component carries. A component erased
+// with `PartialEq` compares by that. A component with none compares
+// by allocation. Either way the pair equals itself.
+fn muro__pair_eq_raw(muro__a: &muro__Pair, muro__b: &muro__Pair) -> bool {
+    muro__erased_same(&muro__a.0, &muro__b.0) && muro__erased_same(&muro__a.1, &muro__b.1)
+}
+
+// Each component prints through the printer stored on the erased value.
+// A component with `Debug` prints as that. A component with none prints
+// `..`. One hidden component does not hide the other.
+fn muro__pair_fmt(
+    muro__p: &muro__Pair,
+    muro__f: &mut ::std::fmt::Formatter<'_>,
+) -> ::std::fmt::Result {
+    muro__f.write_str("muro__Pair(")?;
+    muro__erased_fmt(&muro__p.0, muro__f)?;
+    muro__f.write_str(", ")?;
+    muro__erased_fmt(&muro__p.1, muro__f)?;
+    muro__f.write_str(")")
+}
+
+pub fn muro__pair<A: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static, B: ::std::cmp::PartialEq + ::std::fmt::Debug + ::std::clone::Clone + 'static>(
+    muro__a: A,
+    muro__b: B,
+) -> muro__Pair {
+    muro__Pair(
+        muro__erase(muro__a),
+        muro__erase(muro__b),
+        muro__pair_eq::<A, B>,
+        muro__pair_fmt,
+    )
+}
+
+pub fn muro__pair_raw(muro__a: muro__Erased, muro__b: muro__Erased) -> muro__Pair {
+    muro__Pair(muro__a, muro__b, muro__pair_eq_raw, muro__pair_fmt)
+}
+
+impl ::std::cmp::PartialEq for muro__Pair {
+    fn eq(&self, other: &Self) -> bool {
+        (self.2)(self, other) && (other.2)(other, self)
+    }
+}
+
+impl ::std::fmt::Debug for muro__Pair {
+    fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+        (self.3)(self, f)
+    }
+}
 
 #[derive(::std::clone::Clone)]
 pub struct muro__Stream {
