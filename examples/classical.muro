@@ -1,0 +1,13 @@
+-- classical.muro — excluded middle, imported as std:classical.muro.
+-- LEM is an axiom. dne is proved from LEM. zero does not use either.
+-- The same import works from a Hex package, from the executable, and from a checkout.
+
+import "std:classical.muro"
+
+def excluded : evidence Π (P : Type) → (P ⊎ (P → Empty)) :=
+  λ (P : Type) → LEM P
+
+def from_neg : evidence Π (P : Type) → ((P → Empty) → Empty) → P :=
+  dne
+
+def zero : run Nat := 0

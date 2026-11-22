@@ -11,7 +11,7 @@ In brief: one sort `Type`. Binders are written. Application is juxtaposition. `m
 
 ## The book
 
-A `.muro` file is a **book**: a sequence of `import`, `param`, `ν`, `data`, `talk`, `choreography`, `session`, `conform`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `seat`, `link`, and `def` entries.
+A `.muro` file is a **book**: a sequence of `import`, `param`, `axiom`, `ν`, `data`, `talk`, `choreography`, `session`, `conform`, `place`, `scheme`, `move`, `endpoint`, `read`, `meet`, `seat`, `link`, and `def` entries.
 
 ```
 def name : tag type := body
@@ -34,7 +34,7 @@ conform pong : ping := get Nat (put 1 done)
 
 The payload is a nat, a bit, unit, a pair, a record of named fields, a vector, or a non-indexed declared data type applied to payload arguments (`send Bool end`). A pair is a tuple. A record is a map whose keys are fixed in the type, in the order written. `send` and `recv` each name that type and one continuation. `recv (n : Nat)` binds `n`, and a later payload may mention `n` as the length of a vector. `send (d : Nat) {d ≤ w}` sends a nat at most `w`, and the process owes that evidence. `recv (b : Bit) on S T` receives a bit and continues as one of the two protocols. `b0` takes the first and `b1` takes the second. The sender writes `put b0` or `put b1`. `get (b : Bit) on P Q` offers both arms and binds the bit. `put` sends a literal, a name a `get` bound, or the value an in-scope `run` definition computes from its arguments. A run that calls itself, or a run declared later, is not a put source. The continuation of `get` may match on that value. The received value chooses which process runs, and every arm conforms to the one continuation. `get Nat` receives a value and does not name it. `get (k : Nat)` binds it to `k`, and the continuation can send `k` at that type. A name bound twice is the inner binding. `choose` is the process's choice (`pick0`, `pick1`). `branch` is the other side's choice, and `cover` offers both arms. `done` closes the channel at `end`. `stop` abandons it, at any protocol.
 
-A payload argument stops before a token that begins something else. The words are `def`, `data`, `session`, `conform`, `prefix`, `meet`, `place`, `scheme`, `move`, `endpoint`, `read`, `talk`, `choreography`, `seat`, `link`, `relay`, `import`, `param`, `where`, `nu`, `ν`, `end`, `send`, `recv`, `choose`, `branch`, `rec`, `case`, `on`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `over`, `say`, and `offer`. `unboxed data` stops the same way `data` does. `temporal <name> :`, `family <name> :`, and `repr <name> :=` stop as well. A name followed by `->`, `→`, `chooses`, or `:` stops, and so do `)` and `}`. A recursion variable in scope is the continuation (`send Bool X`). Parentheses group a payload (`(Reply)`, `(Maybe (List Nat))`). Omitting `end` after the payload is a parse error at that point, and the message says `end` was expected. The next declaration stays where it is. A declared data type takes exactly as many arguments as it has parameters. `Reply takes 0 arguments, given 2` is the refusal, and one parameter is `argument`.
+A payload argument stops before a token that begins something else. The words are `def`, `data`, `session`, `conform`, `prefix`, `meet`, `place`, `scheme`, `move`, `endpoint`, `read`, `talk`, `choreography`, `seat`, `link`, `relay`, `import`, `param`, `axiom`, `where`, `nu`, `ν`, `end`, `send`, `recv`, `choose`, `branch`, `rec`, `case`, `on`, `done`, `stop`, `put`, `get`, `pick0`, `pick1`, `cover`, `over`, `say`, and `offer`. `unboxed data` stops the same way `data` does. `temporal <name> :`, `family <name> :`, and `repr <name> :=` stop as well. A name followed by `->`, `→`, `chooses`, or `:` stops, and so do `)` and `}`. A recursion variable in scope is the continuation (`send Bool X`). Parentheses group a payload (`(Reply)`, `(Maybe (List Nat))`). Omitting `end` after the payload is a parse error at that point, and the message says `end` was expected. The next declaration stays where it is. A declared data type takes exactly as many arguments as it has parameters. `Reply takes 0 arguments, given 2` is the refusal, and one parameter is `argument`.
 
 ```
 session box := send (Bit * {x : Nat, y : Nat}) end
@@ -144,7 +144,7 @@ The checker sees the whole book, so a `read` may name an endpoint declared later
 
 `import "list.muro"` names a file. The path is relative to the importing file, and the string is the whole path. The file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A file reached by two imports, directly or through another file, is loaded once. A cycle of imports is an error. `examples/sort.muro` imports `std:list.muro` and does not declare `List`.
 
-`import "std:list.muro"` loads a book of the ordinary library compiled into the compiler. The id is `std:list.muro`, not a path on disk, so the same import works from a Hex package, from the self-contained executable, and from this repository. The books are `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, `ord.muro`, `suc_bin.muro`, and `word.muro`. A name that is not one of them is an error at the import, and the message lists the books. `..`, a leading `/`, a backslash, or any path that leaves the library is refused. A relative import inside a library book stays in the library. A library book reached twice joins once. See [Library](library.md).
+`import "std:list.muro"` loads a book of the ordinary library compiled into the compiler. The id is `std:list.muro`, not a path on disk, so the same import works from a Hex package, from the self-contained executable, and from this repository. The books are `bool.muro`, `classical.muro`, `le.muro`, `list.muro`, `maybe.muro`, `ord.muro`, `suc_bin.muro`, and `word.muro`. A name that is not one of them is an error at the import, and the message lists the books. `..`, a leading `/`, a backslash, or any path that leaves the library is refused. A relative import inside a library book stays in the library. A library book reached twice joins once. See [Library](library.md).
 
 `import "pkg:shared_wire/wire.muro"` loads a file from a package named in the manifest, at the version `muro.lock` records. A file that differs from the lock is refused. See [Packages](packages.md). `std:` is not a package and is not fetched.
 
@@ -261,9 +261,33 @@ context:
   n : Nat
 ```
 
-The prefix is `line:col`. `expected` is the type the hole must inhabit, or `(none; infer)` when the hole is the head of an inference. `context` lists the binders in scope, oldest first. A hole is not a metavariable: nothing is unified, nothing is postponed, and a book that still contains `?` does not check. Fill it.
+The prefix is `line:col`. `expected` is the type the hole must inhabit, or `(none; infer)` when the hole is the head of an inference. `context` lists the binders in scope, oldest first. A hole is not a metavariable: nothing is unified, nothing is postponed, and a book that still contains `?` does not check. Fill it. A `?` is not an axiom.
 
 A conversion error uses the same printer: `cannot convert Nat ≁ {n ≡ 0 : Nat}`, not `#0`.
+
+## Axioms
+
+An axiom is a declaration with a type and no body. Only that declaration is an axiom.
+
+```
+axiom LEM : evidence Π (P : Type) → (P ⊎ (P → Empty))
+```
+
+The tag is `evidence`. `run`, `run internal`, and `spec` are refused, and the message is `<name>: an axiom is evidence`. The declaration does not reduce. A hole in the type is still an unsolved goal.
+
+`std:classical.muro` declares `LEM` at that type. It also declares `Either`, because the sum is not in the prelude. `dne` is proved from `LEM`: match on `LEM P`, return the witness from `left`, and `matchEmpty` the contradiction in `right`. `LEM` is not a proof of excluded middle. Choice and Markov's principle are not declared. Agda does not postulate excluded middle. The import is `import "std:classical.muro"`. That id is the same book from a Hex package, from the self-contained executable, and from a checkout. It brings `Either`, `left`, `right`, `LEM`, and `dne` into scope. `examples/classical.muro` is a book to copy.
+
+`mix muro.check` and `muro check` print one line for each definition the entry file reaches that depends on an axiom, other than a `run` or a `run internal`. The entry file reaches every definition it declares. It reaches a definition mentioned in the type or the body of a definition it reaches. A definition in an imported book that this chain does not mention is not printed. Importing `std:classical.muro` and not mentioning `LEM` or `dne` prints no line. Mentioning `dne` prints a line for that definition and a line for `dne`.
+
+`mix muro.check lib/muro/std/classical.muro` checks that file. `dne` is declared in the entry file:
+
+```
+dne: depends on classical.LEM
+```
+
+Lines are in book order: the entry file, then each imported book, in the order the imports were loaded. The axiom is named by the file stem and the declaration. `std:classical.muro` is the stem `classical`. Several axioms on one line are separated by `, `, in the order those axioms are declared in the joined book. A definition that reaches none is silent. An axiom is not listed as depending on itself.
+
+A `spec` or `evidence` definition that is reached and depends on an axiom is printed, and the check still succeeds. A `run` or a `run internal` that reaches an axiom is refused (`<name>: a run depends on <File.axiom>`), including a `run` in an imported book that the entry file does not mention, including through another definition and through an erased argument. That run is not emitted. Evidence that does not reach an axiom may still be passed to a `run` as an erased argument, and that run is emitted.
 
 ## match
 

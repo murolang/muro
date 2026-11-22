@@ -16,21 +16,21 @@ The language book is [`manual/`](manual/index.md). That is what [muro-lang.dev](
 
 ## Install
 
-[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.22.15. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
+[muro on Hex](https://hex.pm/packages/muro) is published by the [murolang](https://hex.pm/users/murolang) organization. Current release: 0.22.16. Releases are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ```elixir
 def deps do
   [
-    {:muro, "~> 0.22.15"}
+    {:muro, "~> 0.22.16"}
   ]
 end
 ```
 
 `nx`, `makeup`, and `elixir_make` are optional. A project that depends on muro does not fetch them. Checking a book and emitting Elixir do not load them.
 
-The archive installs `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.fill`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` in any directory, with or without a `mix.exs`. Install it from Hex: `mix archive.install hex muro`. A pinned version uses `mix archive.install hex muro 0.22.15`. From a checkout: `mix archive.build && mix archive.install muro-0.22.15.ez`. From GitHub, Mix fetches the default branch and builds the archive: `mix archive.install github murolang/muro`. See [Committed modules](manual/gen.md).
+The archive installs `mix muro.check`, `mix muro.mutate`, `mix muro.synth`, `mix muro.fill`, `mix muro.emit`, `mix muro.gen`, `mix muro.init`, and `mix muro.deps.get` in any directory, with or without a `mix.exs`. Install it from Hex: `mix archive.install hex muro`. A pinned version uses `mix archive.install hex muro 0.22.16`. From a checkout: `mix archive.build && mix archive.install muro-0.22.16.ez`. From GitHub, Mix fetches the default branch and builds the archive: `mix archive.install github murolang/muro`. See [Committed modules](manual/gen.md).
 
-A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.22.15`. It carries its own Erlang runtime. `muro check`, `muro synth`, `muro fill`, `muro emit`, and `muro gen` are the same commands. `muro ui path.muro` prints how to install `muro_visor` and does not start the explorer. The manifest is `muro.toml`. See [The executable](manual/binary.md) and [Visual explorer](manual/explorer.md).
+A project without Elixir installs the self-contained executable: `mise use -g github:murolang/muro@0.22.16`. It carries its own Erlang runtime. `muro check`, `muro synth`, `muro fill`, `muro emit`, and `muro gen` are the same commands. `muro ui path.muro` prints how to install `muro_visor` and does not start the explorer. The manifest is `muro.toml`. See [The executable](manual/binary.md) and [Visual explorer](manual/explorer.md).
 
 Inside a project that depends on muro, the project's copy runs after `app.start`. Inside any other project, or outside a project, the archive's copy runs and the host is neither compiled nor started. `mix muro --version` prints the copy that ran. A script run with `mix run --no-start` does not see the archive. Archives are on the code path only for Mix tasks. A book of `U8`, `U32`, `U64`, or `I64` emits calls to `Muro.Word`. Compiling that module needs the dependency above. See [Machine numbers](manual/machine.md).
 
@@ -70,7 +70,7 @@ A definition is in the book the moment `Parser.parse/1` returns it. The checker 
 
 ## Library
 
-[`lib/muro/std/suc_bin.muro`](lib/muro/std/suc_bin.muro) is a binary successor, imported as `std:suc_bin.muro`. Inductive `Nat` stays the number type. Machine integers do not replace it. `sucBin` is a Mealy machine on `List Bit`, least significant bit first, and the carry is the state. `fromBits (sucBin (toBits n)) ≡ suc n`. The bits of 11 step to the bits of 12. There is no fixed width. [`lib/muro/std/word.muro`](lib/muro/std/word.muro) is the unsigned word-to-Nat lemmas, imported as `std:word.muro`. See [Library](manual/library.md).
+[`lib/muro/std/suc_bin.muro`](lib/muro/std/suc_bin.muro) is a binary successor, imported as `std:suc_bin.muro`. Inductive `Nat` stays the number type. Machine integers do not replace it. `sucBin` is a Mealy machine on `List Bit`, least significant bit first, and the carry is the state. `fromBits (sucBin (toBits n)) ≡ suc n`. The bits of 11 step to the bits of 12. There is no fixed width. [`lib/muro/std/word.muro`](lib/muro/std/word.muro) is the unsigned word-to-Nat lemmas, imported as `std:word.muro`. [`lib/muro/std/classical.muro`](lib/muro/std/classical.muro) is excluded middle at `Type`, imported as `std:classical.muro`. `LEM` is an axiom. `dne` is a proof. See [Library](manual/library.md).
 
 ---
 
@@ -81,7 +81,7 @@ A definition is in the book the moment `Parser.parse/1` returns it. The checker 
 | [Start](manual/start.md) | Install, first file, emit |
 | [MBI images](manual/mbi.md) | `muro emit --backend mbi` writes the .mbi image muro-beam loads |
 | [The executable](manual/binary.md) | Self-contained `muro`, `muro.toml`, init, `muro skills add` |
-| [Library](manual/library.md) | Ordinary library as `std:`. Bool, Le, List, Maybe, comparison, binary successor, unsigned word arithmetic |
+| [Library](manual/library.md) | Ordinary library as `std:`. Bool, excluded middle, Le, List, Maybe, comparison, binary successor, unsigned word arithmetic |
 | [The wall](manual/wall.md) | spec / evidence / run |
 | [Terms](manual/language.md) | Π, λ, match, quantities |
 | [Sessions](manual/sessions.md) | The protocol two processes follow |

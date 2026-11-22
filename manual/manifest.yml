@@ -57,7 +57,7 @@ pages:
   - file: either.md
     slug: either
     title: Either and Dec
-    summary: Disjoint union and decisions. Not LEM.
+    summary: Disjoint union and decisions. LEM is an evidence axiom.
   - file: machine.md
     slug: machine
     title: Machine numbers
@@ -97,7 +97,7 @@ pages:
   - file: library.md
     slug: library
     title: Library
-    summary: The ordinary library, imported as std:. Bool, Le, List, Maybe, comparison, a binary successor, and unsigned word arithmetic.
+    summary: The ordinary library, imported as std:. Bool, excluded middle, Le, List, Maybe, comparison, a binary successor, and unsigned word arithmetic.
   - file: grammar.md
     slug: grammar
     title: Grammar

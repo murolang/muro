@@ -22,7 +22,7 @@ defmodule Muro.CLI.Check do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro check type-checks one .muro file, or the built-in book when no path is given. It reads that file and the prelude. It writes nothing. On success it prints the version, then one line per keyed family and one line per temporal declaration that holds, in book order, then one line per projected pair of each choreography, then "All terms check. Evidence never becomes a run." A book with no keyed family, no temporal declaration, and no choreography prints the success sentence immediately after the version. A book that imports packages then prints one "conforms to" line per package. A refusal prints the version and every failing definition, in book order. out of fuel means the checker stopped reducing. It is not acceptance. Copy syntax from the examples rather than writing it from memory.
+      muro check type-checks one .muro file, or the built-in book when no path is given. It reads that file and the prelude. It writes nothing. On success it prints the version, then one line per keyed family and one line per temporal declaration that holds, in book order, then one line per projected pair of each choreography, then one line per definition the entry file reaches that depends on an axiom and is not a run, then "All terms check. Evidence never becomes a run." The entry file reaches every definition it declares, and every definition mentioned from one it reaches. An imported definition that chain does not mention is not printed. Several axioms on one line are separated by a comma and a space, in the order the axioms are declared. A spec or evidence definition that is reached is printed and the check still succeeds. A book with no keyed family, no temporal declaration, no choreography, and no reached definition that depends on an axiom prints the success sentence immediately after the version. A book that imports packages then prints one "conforms to" line per package. A refusal prints the version and every failing definition, in book order. A run that depends on an axiom is refused, including a run in an imported book, and it is not emitted. out of fuel means the checker stopped reducing. It is not acceptance. Copy syntax from the examples rather than writing it from memory.
       """),
       Muro.CLI.Text.section(
         "USAGE",
@@ -104,11 +104,12 @@ defmodule Muro.CLI.Check do
   end
 
   defp finish(:ok, version) do
-    {:ok, version <> temporal() <> choreo() <> success(), ""}
+    {:ok, version <> temporal() <> choreo() <> axioms() <> success(), ""}
   end
 
   defp finish({:ok, lines}, version) do
-    {:ok, version <> temporal() <> choreo() <> success() <> Muro.CLI.join_lines(lines), ""}
+    {:ok,
+     version <> temporal() <> choreo() <> axioms() <> success() <> Muro.CLI.join_lines(lines), ""}
   end
 
   defp finish({:error, message}, version) do
@@ -127,6 +128,13 @@ defmodule Muro.CLI.Check do
   # One line per projected pair. Empty when the book has no choreography.
   defp choreo do
     Muro.Check.choreo_lines()
+    |> Enum.map(&(&1 <> "\n"))
+    |> Enum.join()
+  end
+
+  # One line per definition that reaches an axiom. Empty when none do.
+  defp axioms do
+    Muro.Check.axiom_lines()
     |> Enum.map(&(&1 <> "\n"))
     |> Enum.join()
   end

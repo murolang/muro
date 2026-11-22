@@ -368,6 +368,12 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      axiom_start?(s) ->
+        case parse_axiom(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
       may_fail_mark?(s) ->
         {:error, err(s, may_fail_only())}
 
@@ -4254,6 +4260,29 @@ defmodule Muro.Parser do
   # `def name : run|spec|evidence …` is a core definition.
   # `def name : (s : session) ⊸ …` is an endpoint function. The type
   # starts with `(`, which a tagged definition does not.
+  defp axiom_start?(s), do: word_kw?(s, "axiom")
+
+  # A type and no body. The checker requires the evidence tag.
+  defp parse_axiom(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "axiom"),
+         {:ok, name, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, tag, rest} <- parse_mode(skip(rest)),
+         {:ok, ty, type_span, rest} <- parse_body_term(skip(rest)) do
+      base = %{
+        kind: :axiom,
+        name: name,
+        type: ty,
+        loc: loc,
+        type_span: type_span
+      }
+
+      {:ok, Map.merge(base, tag), rest}
+    end
+  end
+
   defp parse_def(s) do
     loc = here(s)
 

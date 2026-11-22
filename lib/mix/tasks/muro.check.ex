@@ -29,14 +29,24 @@ defmodule Mix.Tasks.Muro.Check do
   declaration that holds prints `temporal <name>: holds in <n> reachable
   states`. Those lines are in book order. Each choreography then prints
   one `choreography <name>: <role> with <role> = <session>` line per
-  ordered pair of roles. On success the next line is
+  ordered pair of roles. Each definition the entry file reaches that
+  depends on an axiom and is not a `run` then prints
+  `<name>: depends on <File.axiom>`. The entry file reaches every
+  definition it declares, and every definition mentioned from one it
+  reaches. An imported definition that chain does not mention is not
+  printed. Several axioms on one line are separated by `, `, in the
+  order the axioms are declared. On success the next line is
   `All terms check. Evidence never becomes a run.` A book with no
-  family, no temporal declaration, and no choreography prints that line
-  immediately after the version. When the book imports packages, one
+  family, no temporal declaration, no choreography, and no reached
+  definition that depends on an axiom prints that line immediately
+  after the version. When the book imports packages, one
   `conforms to <name> <version> (sha256 <hash>)` line follows for each
   package it loaded. A book that imports no package, and the built-in
   check with no path, print only those two lines. A refusal prints the
-  errors after the version line.
+  errors after the version line. A `run` that depends on an axiom is
+  one of those errors, including a `run` in an imported book, and it
+  is not emitted. A `spec` or `evidence` definition that is reached
+  and depends on an axiom is a line, not an error.
   """
 
   def run(args) do

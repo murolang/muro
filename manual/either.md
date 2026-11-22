@@ -2,22 +2,24 @@
 title: Either and Dec
 slug: either
 order: 11
-summary: Disjoint union and decisions. Not LEM.
+summary: Disjoint union and decisions. LEM is an evidence axiom.
 ---
 
 # Either and Dec
 
-In brief: `A ⊎ B` is `data Either`. `Dec P` is `P ⊎ (P → Empty)`: a decision for a particular `P`, not LEM. There is no inhabitant of `Π (P : Type) → Dec P`.
+In brief: `A ⊎ B` is `data Either`. `Dec P` is `P ⊎ (P → Empty)`: a decision for a particular `P`. Excluded middle for every `P` is the evidence axiom `LEM` in `std:classical.muro`, not a proof. A `run` that depends on it is refused.
 
 ## Either
 
-Declare it in the book. The infix `⊎` desugars to `Either A B`. ASCII is the name `Either`.
+A book that needs the sum, and does not import `std:classical.muro`, declares it. `examples/either_run.muro` and `examples/even_dec.muro` declare it. The infix `⊎` desugars to `Either A B`. ASCII is the name `Either`.
 
 ```
 data Either (A : Type) (B : Type) : Type where
   left  : A → Either A B
   right : B → Either A B
 ```
+
+`std:classical.muro` declares this same sum: `Either`, `left`, and `right`. A book that imports it uses those names. It does not declare them again. Two declarations of one name are a duplicate name. `examples/classical.muro` imports the book and declares no `Either`.
 
 `left` and `right` are checked against an expected Either. Match has an explicit motive, same shape as other data.
 
@@ -44,7 +46,7 @@ def Dec : spec Π (P : Type) → Type :=
 
 A value of `Dec P` is either a witness of `P` or a function that turns a witness into `Empty`. That is a decision for **this** `P`. It is not an axiom that every type is decidable.
 
-There is no inhabitant of `Π (P : Type) → Dec P`.
+`Π (P : Type) → Dec P` is not proved. `std:classical.muro` declares that type as the evidence axiom `LEM`, with no body, and proves `dne` from `LEM` by matching on `LEM P` and `matchEmpty` in the `right` branch. Import it with `import "std:classical.muro"`. That import already declares `Either`, `left`, and `right`. The importing book does not declare them again. That id is the same book from a Hex package, from the self-contained executable, and from a checkout. `examples/classical.muro` uses `LEM` and `dne`. A `run`, and a `run internal`, that depends on `LEM` is refused. Choice and Markov's principle are not declared. Agda does not postulate excluded middle.
 
 ## evenDec
 

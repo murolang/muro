@@ -606,6 +606,10 @@ defmodule Muro.Check do
       {:ok, %{kind: :param}} ->
         {:ok, {:def, name}}
 
+      # An axiom has no body. It does not reduce.
+      {:ok, %{kind: :axiom}} ->
+        {:ok, {:def, name}}
+
       {:ok, %{mode: :run} = d} ->
         whnf(k - 1, book, d.body, unfold)
 
@@ -3981,6 +3985,20 @@ defmodule Muro.Check do
     end
   end
 
+  # An axiom is evidence. It has a type and no body. It does not unfold.
+  # A tag other than evidence is refused. A hole in the type is still
+  # an unsolved goal.
+  def check_def(book, %{kind: :axiom, name: name, mode: mode, type: ty} = d, k) do
+    if mode == :evidence do
+      with :ok <- fail_at(d, "type", check_ty(k, book, empty_rec(), [], ty)),
+           :ok <- fail_at(d, "grade", grade_type(mode, ty)) do
+        :ok
+      end
+    else
+      {:error, "#{Print.loc_prefix(Map.get(d, :loc))}#{name}: an axiom is evidence"}
+    end
+  end
+
   # An open param is an assumption: the type is checked, and there is no
   # body to unfold. `params: :open` is the only way one reaches this clause.
   def check_def(book, %{kind: :param, mode: mode, type: ty} = d, k) do
@@ -4668,6 +4686,7 @@ defmodule Muro.Check do
           :link,
           :relay,
           :param,
+          :axiom,
           :prefix
         ],
         do: name
@@ -4899,6 +4918,7 @@ defmodule Muro.Check do
   @graphs_key {__MODULE__, :meeting_graphs}
   @temporal_key {__MODULE__, :temporal_lines}
   @choreo_key {__MODULE__, :choreo_lines}
+  @axiom_key {__MODULE__, :axiom_lines}
 
   @doc false
   def begin_meeting_graphs, do: Process.put(@graphs_key, %{})
@@ -4960,6 +4980,17 @@ defmodule Muro.Check do
   def choreo_lines, do: Process.get(@choreo_key, [])
 
   @doc """
+  Dependency lines of the book just checked, in book order.
+
+  Each line is `<name>: depends on <File.axiom>`. The lines are the
+  definitions the entry file reaches. Empty when that check was
+  refused, or when none of those definitions depend on an axiom. An
+  axiom is not listed as depending on itself. An imported definition
+  the entry file does not reach is absent.
+  """
+  def axiom_lines, do: Process.get(@axiom_key, [])
+
+  @doc """
   Check a named book. Options: `fuel: n` (default `default_fuel/0`).
 
   Each definition other than a temporal declaration or a keyed family
@@ -4988,6 +5019,7 @@ defmodule Muro.Check do
     note_check()
     Process.delete(@temporal_key)
     Process.delete(@choreo_key)
+    Process.delete(@axiom_key)
     fuel = Keyword.get(opts, :fuel, @fuel)
     # `params: :open` keeps unsupplied params as assumptions. The default
     # refuses them. Only `Muro.Load` passes `:open`, and only when the
@@ -5025,6 +5057,14 @@ defmodule Muro.Check do
         |> Enum.map(&elem(&1, 1))
 
       errors = for {:error, msg} <- outcomes, do: msg
+
+      {axiom_msgs, axiom_lines} =
+        case Muro.Axiom.report(book, entry: Keyword.get(opts, :entry)) do
+          {:ok, lines} -> {[], lines}
+          {:error, msg} -> {[msg], []}
+        end
+
+      errors = errors ++ axiom_msgs
       notes = for {:note, line} <- outcomes, do: line
 
       choreos =
@@ -5039,6 +5079,7 @@ defmodule Muro.Check do
           Process.put(@graphs_key, Map.merge(prev, Map.new(graphs)))
           if notes != [], do: Process.put(@temporal_key, notes)
           if choreos != [], do: Process.put(@choreo_key, choreos)
+          if axiom_lines != [], do: Process.put(@axiom_key, axiom_lines)
           :ok
 
         msgs ->

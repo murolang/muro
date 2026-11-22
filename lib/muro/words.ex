@@ -7,10 +7,10 @@ defmodule Muro.Words do
   cannot drift from the grammar.
   """
 
-  @decl ~w(def data session conform prefix meet place scheme move endpoint read talk choreography seat link relay import param where)
+  @decl ~w(def data session conform prefix meet place scheme move endpoint read talk choreography seat link relay import param axiom where)
   # A book entry on its own. `place` and `relay` are declaration words too;
   # the parser tells those from a type by what follows the word.
-  @book ~w(def data param import session conform prefix where)
+  @book ~w(def data param import session conform prefix axiom where)
   @pay_stop ~w(end send recv choose branch rec case on done stop put get pick0 pick1 cover where)
   @reserved ~w(end send recv choose branch rec case done stop put get pick0 pick1 cover match on Nat Bit Unit Vec dual seen)
   @proc ~w(done stop put get pick0 pick1 cover rec match end send recv choose branch on)
@@ -77,7 +77,7 @@ defmodule Muro.Words do
     "<"
   ]
 
-  @naming ~w(def data session conform prefix meet place scheme talk choreography param endpoint seat link temporal repr family) ++
+  @naming ~w(def data session conform prefix meet place scheme talk choreography param axiom endpoint seat link temporal repr family) ++
             @nu
 
   @keywords @pay_stop ++
