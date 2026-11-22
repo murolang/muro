@@ -245,7 +245,7 @@ mix muro.deps.get  # fetch muro_deps/ and write muro.lock
 make agda          # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then one line per definition the entry file reaches that depends on an axiom (`dne: depends on classical.LEM` when the entry file is `std:classical.muro`), then:
+On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then one line per definition the entry file reaches that depends on an axiom (`dne: depends on classical.LEM` when the entry file is `lib/muro/std/classical.muro`), then:
 
 ```
 Muro v0.22.15
