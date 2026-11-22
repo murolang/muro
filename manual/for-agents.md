@@ -23,7 +23,7 @@ In brief: two jobs. Do not mix them. This page is the operational contract. Huma
 - Use only tags `run`, `run internal`, `spec`, `evidence`.
 - Write a library for many environments with `param` entries, and check it through a file that supplies them with `def` or `data` of the same names and tags ([Params](language.md#params)). `mix muro.check` on the library itself names the params it is missing.
 - Leave `?` only while a term is unfinished. A hole always fails and is not in the finished book. A `?` is not an axiom.
-- An axiom is `axiom NAME : evidence TYPE`, with no body. Only that declaration is an axiom. The type is evidence. `lib/Classical.muro` declares `LEM` and proves `dne` from it. Import it by a relative path. It is not an `std:` book. `mix muro.check` prints `<name>: depends on <File.axiom>` for a definition that reaches an axiom, and stays silent when none do. A `run` that depends on an axiom is refused and is not emitted.
+- An axiom is `axiom NAME : evidence TYPE`, with no body. Only that declaration is an axiom. The type is evidence. `std:classical.muro` declares `LEM` and proves `dne` from it. Import it with `import "std:classical.muro"`. That id is the same book from a Hex package, from the self-contained executable, and from a checkout. `examples/classical.muro` is a book to copy. `mix muro.check` and `muro check` print `<name>: depends on <File.axiom>` for a definition the entry file reaches that depends on an axiom. The entry file reaches every definition it declares, and every definition mentioned from one it reaches. An imported definition that chain does not mention is silent. Importing `std:classical.muro` without mentioning `LEM` or `dne` prints no line. Several axioms on one line are separated by `, `, in declaration order. A `spec` or `evidence` definition that is reached is printed and the check still succeeds. A `run` that depends on an axiom is refused and is not emitted, including a `run` in an imported book. Evidence that does not reach an axiom may still be passed to a `run` as an erased argument.
 
 **Do not**
 
@@ -96,7 +96,8 @@ lib/muro/prelude.ex     book behind every checked file
 lib/muro/prelude.muro   pred, plus, inj-suc, plus_suc, sym, cong
 lib/muro/load.ex        import: a relative path, pkg:, and std:
 lib/muro/std.ex         the ordinary library, embedded at compile time
-lib/muro/std/*.muro     bool, le, list, maybe, ord, suc_bin
+lib/muro/std/*.muro     bool, classical, le, list, maybe, ord, suc_bin, word
+lib/muro/axiom.ex       declared axioms; lines for definitions the entry file reaches; a run that reaches one is refused
 lib/muro/emit.ex        run → Elixir source
 lib/muro/repr.ex        a repr: check the host shape and emit decode/1, decode/2, and encode/2. Not a kernel term.
 lib/muro/emit/equations.ex closed equations shared by the ExUnit and pytest suites
@@ -244,14 +245,14 @@ mix muro.deps.get  # fetch muro_deps/ and write muro.lock
 make agda          # Job B only; needs vendor/agda-stdlib v2.3
 ```
 
-On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then one line per definition that depends on an axiom (`dne: depends on Classical.LEM`), then:
+On success, `mix muro.check` prints the version that checked the book, then one line per keyed family and one line per temporal declaration, in book order, then one line per projected pair of each choreography, then one line per definition the entry file reaches that depends on an axiom (`dne: depends on classical.LEM` when the entry file is `std:classical.muro`), then:
 
 ```
 Muro v0.22.15
 All terms check. Evidence never becomes a run.
 ```
 
-A book with no keyed family, no temporal declaration, no choreography, and no definition that depends on an axiom prints those two lines and nothing between them. A book that imports packages prints `conforms to <name> <version> (sha256 <hash>)` after that sentence, one line per package it loaded. A book that imports none, and `mix muro.check` with no path, print only those two lines. With no path the task checks the built-in book (`Muro.Example.book/0`), the same book as `examples/half_ok.muro`. It does not walk `examples/`.
+A book with no keyed family, no temporal declaration, no choreography, and no reached definition that depends on an axiom prints those two lines and nothing between them. An imported definition the entry file does not reach is not a line. A `run` that reaches an axiom is a refusal, not a line. A book that imports packages prints `conforms to <name> <version> (sha256 <hash>)` after that sentence, one line per package it loaded. A book that imports none, and `mix muro.check` with no path, print only those two lines. With no path the task checks the built-in book (`Muro.Example.book/0`), the same book as `examples/half_ok.muro`. It does not walk `examples/`.
 
 `Muro.Check.check_sig/2` returns `:ok` on a well-typed book, or `{:error, msg}` with every definition error in book order. `check_sig(book, fuel: n)` sets the fuel for each definition. Definitions are checked concurrently; the fuel is the bound, not a wall-clock timeout.
 

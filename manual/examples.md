@@ -598,7 +598,11 @@ See [Streams](streams.md).
 
 ## even_dec.muro
 
-`Dec P = P ⊎ (P → Empty)`. `evenDec` decides `IsEven n`. A decision for that predicate. Excluded middle for every type is the axiom `LEM` in `lib/Classical.muro`. Evidence; not emitted.
+`Dec P = P ⊎ (P → Empty)`. `evenDec` decides `IsEven n`. A decision for that predicate. Excluded middle for every type is the axiom `LEM` in `std:classical.muro`. Evidence; not emitted.
+
+## classical.muro
+
+Imports `std:classical.muro`. `excluded` is `LEM`. `from_neg` is `dne`, the proof of double-negation elimination from `LEM`. `zero` is a `run` and does not mention either. `LEM` is an axiom. `dne` is a proof. Checking this file prints `excluded`, `from_neg`, and `dne`, each `depends on classical.LEM`. `zero` is silent, and it is emitted.
 
 ## either_run.muro
 

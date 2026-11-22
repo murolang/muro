@@ -4,11 +4,11 @@
 
 An axiom is a declaration with a type and no body. The type is evidence. A `?` is still an unsolved goal.
 
-`lib/Classical.muro` declares `LEM`, excluded middle at `Type`, and proves `dne` from it. `mix muro.check` prints the axioms a definition depends on. A definition that depends on none is silent. A `run` that depends on an axiom is refused, and it is not emitted.
+`std:classical.muro` declares `LEM`, excluded middle at `Type`, and proves `dne` from it. The same import works from a Hex package, from the self-contained executable, and from a checkout. `mix muro.check` prints the axioms a definition the entry file reaches depends on. An imported definition the entry file does not reach is silent. A `run` that depends on an axiom is refused, and it is not emitted.
 
 ### Manual
 
-- Terms, Grammar, The wall, Either, Limits, Extending, and For agents: an axiom, the dependency lines, and the refusal of a `run` that reaches one. `lib/Classical.muro` is `LEM` and `dne`.
+- Library, Terms, Grammar, The wall, Either, Limits, Extending, For agents, and Examples: `std:classical.muro`, the dependency lines of the entry file, and the refusal of a `run` that reaches an axiom. `LEM` is the axiom. `dne` is the proof.
 
 ### Package
 

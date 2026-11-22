@@ -4982,9 +4982,11 @@ defmodule Muro.Check do
   @doc """
   Dependency lines of the book just checked, in book order.
 
-  Each line is `<name>: depends on <File.axiom>`. Empty when that check
-  was refused, or when no definition depends on an axiom. An axiom is
-  not listed as depending on itself.
+  Each line is `<name>: depends on <File.axiom>`. The lines are the
+  definitions the entry file reaches. Empty when that check was
+  refused, or when none of those definitions depend on an axiom. An
+  axiom is not listed as depending on itself. An imported definition
+  the entry file does not reach is absent.
   """
   def axiom_lines, do: Process.get(@axiom_key, [])
 
@@ -5057,7 +5059,7 @@ defmodule Muro.Check do
       errors = for {:error, msg} <- outcomes, do: msg
 
       {axiom_msgs, axiom_lines} =
-        case Muro.Axiom.report(book) do
+        case Muro.Axiom.report(book, entry: Keyword.get(opts, :entry)) do
           {:ok, lines} -> {[], lines}
           {:error, msg} -> {[msg], []}
         end

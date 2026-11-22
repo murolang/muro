@@ -55,7 +55,7 @@ defmodule Muro.StdTest do
     assert msg =~ "unknown standard library book \"nope.muro\""
 
     assert msg =~
-             "available books: bool.muro, le.muro, list.muro, maybe.muro, ord.muro, suc_bin.muro, word.muro"
+             "available books: bool.muro, classical.muro, le.muro, list.muro, maybe.muro, ord.muro, suc_bin.muro, word.muro"
 
     assert msg =~ "missing.muro:1:1:"
 
@@ -115,7 +115,8 @@ defmodule Muro.StdTest do
   end
 
   test "examples that import the standard library check" do
-    for name <- ~w(list.muro maybe.muro sort.muro higher_order.muro second_field.muro) do
+    for name <-
+          ~w(list.muro maybe.muro sort.muro higher_order.muro second_field.muro classical.muro) do
       assert Muro.check_file(Path.join("examples", name)) == :ok
     end
   end

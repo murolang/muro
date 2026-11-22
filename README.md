@@ -70,7 +70,7 @@ A definition is in the book the moment `Parser.parse/1` returns it. The checker 
 
 ## Library
 
-[`lib/muro/std/suc_bin.muro`](lib/muro/std/suc_bin.muro) is a binary successor, imported as `std:suc_bin.muro`. Inductive `Nat` stays the number type. Machine integers do not replace it. `sucBin` is a Mealy machine on `List Bit`, least significant bit first, and the carry is the state. `fromBits (sucBin (toBits n)) ≡ suc n`. The bits of 11 step to the bits of 12. There is no fixed width. [`lib/muro/std/word.muro`](lib/muro/std/word.muro) is the unsigned word-to-Nat lemmas, imported as `std:word.muro`. See [Library](manual/library.md).
+[`lib/muro/std/suc_bin.muro`](lib/muro/std/suc_bin.muro) is a binary successor, imported as `std:suc_bin.muro`. Inductive `Nat` stays the number type. Machine integers do not replace it. `sucBin` is a Mealy machine on `List Bit`, least significant bit first, and the carry is the state. `fromBits (sucBin (toBits n)) ≡ suc n`. The bits of 11 step to the bits of 12. There is no fixed width. [`lib/muro/std/word.muro`](lib/muro/std/word.muro) is the unsigned word-to-Nat lemmas, imported as `std:word.muro`. [`lib/muro/std/classical.muro`](lib/muro/std/classical.muro) is excluded middle at `Type`, imported as `std:classical.muro`. `LEM` is an axiom. `dne` is a proof. See [Library](manual/library.md).
 
 ---
 
@@ -81,7 +81,7 @@ A definition is in the book the moment `Parser.parse/1` returns it. The checker 
 | [Start](manual/start.md) | Install, first file, emit |
 | [MBI images](manual/mbi.md) | `muro emit --backend mbi` writes the .mbi image muro-beam loads |
 | [The executable](manual/binary.md) | Self-contained `muro`, `muro.toml`, init, `muro skills add` |
-| [Library](manual/library.md) | Ordinary library as `std:`. Bool, Le, List, Maybe, comparison, binary successor, unsigned word arithmetic |
+| [Library](manual/library.md) | Ordinary library as `std:`. Bool, excluded middle, Le, List, Maybe, comparison, binary successor, unsigned word arithmetic |
 | [The wall](manual/wall.md) | spec / evidence / run |
 | [Terms](manual/language.md) | Π, λ, match, quantities |
 | [Sessions](manual/sessions.md) | The protocol two processes follow |

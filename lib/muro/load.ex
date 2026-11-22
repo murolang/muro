@@ -371,7 +371,7 @@ defmodule Muro.Load do
     book = Enum.map(book, &relocate(&1, path, ctx))
     Check.begin_meeting_graphs()
 
-    case Check.check_sig(Prelude.for_check(book), opts) do
+    case Check.check_sig(Prelude.for_check(book), Keyword.put(opts, :entry, path)) do
       :ok ->
         case Muro.Emit.elixir_clash(book) do
           :ok ->

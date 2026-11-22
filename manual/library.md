@@ -2,22 +2,22 @@
 title: Library
 slug: library
 order: 16
-summary: The ordinary library, imported as std:. Bool, Le, List, Maybe, comparison, a binary successor, and unsigned word arithmetic.
+summary: The ordinary library, imported as std:. Bool, excluded middle, Le, List, Maybe, comparison, a binary successor, and unsigned word arithmetic.
 ---
 
 # Library
 
-In brief: seven ordinary `.muro` books ship inside the compiler. `import "std:list.muro"` loads that copy. The bytes are the same from a Hex package, from the self-contained executable, and from a checkout of this repository.
+In brief: eight ordinary `.muro` books ship inside the compiler. `import "std:list.muro"` loads that copy. The bytes are the same from a Hex package, from the self-contained executable, and from a checkout of this repository.
 
 ```
 import "std:list.muro"
 ```
 
-The name after `std:` is a file in the library: `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, `ord.muro`, `suc_bin.muro`, or `word.muro`. A name that is not one of those is an error at the import, and the message lists the books:
+The name after `std:` is a file in the library: `bool.muro`, `classical.muro`, `le.muro`, `list.muro`, `maybe.muro`, `ord.muro`, `suc_bin.muro`, or `word.muro`. A name that is not one of those is an error at the import, and the message lists the books:
 
 ```
 unknown standard library book "nope.muro"
-available books: bool.muro, le.muro, list.muro, maybe.muro, ord.muro, suc_bin.muro, word.muro
+available books: bool.muro, classical.muro, le.muro, list.muro, maybe.muro, ord.muro, suc_bin.muro, word.muro
 ```
 
 `..`, a leading `/`, a backslash, or any other path that leaves the library is refused: `import "std:../le.muro" leaves the standard library`. A relative import written inside a library book stays in the library. `suc_bin.muro` imports `list.muro`, `list.muro` imports `maybe.muro`, `maybe.muro` imports `bool.muro`, `ord.muro` imports `le.muro`, and `word.muro` imports `le.muro`. A book reached by two imports, directly or through another book, joins once.
@@ -99,6 +99,21 @@ A closed equation is still `refl`. `boundary-u64` is `addc` of `toU64 4294967295
 `coffee`, `tip`, and `tax` are `U64` amounts, 100, 25, and 10. `line` is the checked sum of coffee and tip, and `line-nat` cites `addc-val-u64` for that Nat total. `subtotal` is the closed word 125. `bill` adds tax under the fit, and `bill-nat` cites `addc-val-u64` again.
 
 Check on disk with `mix muro.check lib/muro/std/word.muro`. Import it with `import "std:word.muro"`. See [Machine numbers](machine.md).
+
+## classical.muro
+
+Excluded middle at `Type`, as an evidence axiom. `LEM` has no body. `dne` is proved from `LEM`: match on `LEM P`, return the witness from `left`, and `matchEmpty` the contradiction in `right`. The book declares `Either`, because the sum is not in the prelude. Choice and Markov's principle are not declared. `LEM` is not a proof of excluded middle. Agda does not postulate it.
+
+```
+import "std:classical.muro"
+
+def excluded : evidence Π (P : Type) → (P ⊎ (P → Empty)) :=
+  λ (P : Type) → LEM P
+```
+
+That import is the id `std:classical.muro`. It is the same book from a Hex package, from the self-contained executable, and from a checkout. There is no relative path and no manifest entry. `examples/classical.muro` is the book to copy. It also names `dne`.
+
+Check the embedded book on disk with `mix muro.check lib/muro/std/classical.muro`. That check prints `dne: depends on classical.LEM`, because `dne` is declared in the file being checked. A file that imports `std:classical.muro` and does not mention `LEM` or `dne` prints no such line. See [Terms](language.md#axioms).
 
 ## Examples
 

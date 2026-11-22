@@ -7,9 +7,15 @@ defmodule Muro.Axiom do
   not an axiom.
 
   A definition depends on the axioms named in its type or its body,
-  and on the axioms those definitions depend on. `mix muro.check`
-  prints that set. A definition that depends on none is silent. A
-  `run` that depends on an axiom is refused.
+  and on the axioms those definitions depend on.
+
+  `mix muro.check` and `muro check` print that set for the definitions
+  the entry file reaches. The entry file reaches every definition it
+  declares, and every definition mentioned from one it reaches. An
+  imported definition that chain does not mention is silent. A
+  definition that depends on none is silent. A `run` that depends on
+  an axiom is refused wherever it sits in the joined book, because
+  that run is emitted.
   """
 
   alias Muro.Print
@@ -17,13 +23,17 @@ defmodule Muro.Axiom do
   @doc """
   Dependency lines for `book`, or the refusals of its `run` definitions.
 
-  `book` is de Bruijn. `{:ok, lines}` is in book order. Each line is
-  `<name>: depends on <File.axiom>`. Several axioms are separated by
-  `, `, in the order the axioms are declared. `{:error, message}` is
-  one refusal per `run`, in book order, separated by a blank line.
-  A book with no axiom has no lines.
+  `book` is de Bruijn. `entry:` is the file the check was asked for.
+  `{:ok, lines}` is in book order, and only for definitions that file
+  reaches. Each line is `<name>: depends on <File.axiom>`. Several
+  axioms are separated by `, `, in the order the axioms are declared.
+  `{:error, message}` is one refusal per `run` that reaches an axiom,
+  in book order, separated by a blank line, including a `run` the
+  entry file does not mention. A book with no axiom has no lines.
+  Omitting `entry:` reports every non-`run` definition, which is the
+  book handed to `Muro.Check.check_sig/2` when no file was loaded.
   """
-  def report(book) when is_list(book) do
+  def report(book, opts \\ []) when is_list(book) and is_list(opts) do
     axioms = for %{kind: :axiom, name: name} = d <- book, is_binary(name), do: d
 
     case axioms do
@@ -35,11 +45,36 @@ defmodule Muro.Axiom do
         labels = Map.new(axioms, fn d -> {d.name, label(d)} end)
         order = Enum.map(axioms, & &1.name)
         reached = closure(direct, MapSet.new(order))
-        split(term_decls(book), reached, order, labels)
+        scope = scope(book, Keyword.get(opts, :entry), direct)
+        split(term_decls(book), reached, order, labels, scope)
     end
   end
 
-  defp split(decls, reached, order, labels) do
+  # Names the entry file reaches. No entry means the whole book.
+  defp scope(book, nil, _direct) do
+    MapSet.new(for d <- term_decls(book), do: d.name)
+  end
+
+  defp scope(book, entry, direct) when is_binary(entry) do
+    roots = for d <- term_decls(book), Map.get(d, :file) == entry, do: d.name
+    grow(MapSet.new(roots), direct)
+  end
+
+  defp grow(set, direct) do
+    more =
+      Enum.reduce(set, [], fn n, acc ->
+        Enum.reduce(Map.get(direct, n, []), acc, fn r, acc ->
+          if MapSet.member?(set, r), do: acc, else: [r | acc]
+        end)
+      end)
+
+    case more do
+      [] -> set
+      _ -> grow(MapSet.union(set, MapSet.new(more)), direct)
+    end
+  end
+
+  defp split(decls, reached, order, labels, scope) do
     {errors, lines} =
       Enum.reduce(decls, {[], []}, fn d, {errors, lines} ->
         set = Map.get(reached, d.name, MapSet.new())
@@ -56,8 +91,11 @@ defmodule Muro.Axiom do
 
             {errors ++ [msg], lines}
 
-          true ->
+          MapSet.member?(scope, d.name) ->
             {errors, lines ++ ["#{d.name}: depends on #{show(names, labels)}"]}
+
+          true ->
+            {errors, lines}
         end
       end)
 

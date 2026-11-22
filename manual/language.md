@@ -144,7 +144,7 @@ The checker sees the whole book, so a `read` may name an endpoint declared later
 
 `import "list.muro"` names a file. The path is relative to the importing file, and the string is the whole path. The file is checked, and its data, constructors, and definitions come into scope. Evidence stays in scope for a proof and is erased on emit. There is no seal. A missing file is an error that prints the path. A name already declared in the importer is an error that prints both sites. A file reached by two imports, directly or through another file, is loaded once. A cycle of imports is an error. `examples/sort.muro` imports `std:list.muro` and does not declare `List`.
 
-`import "std:list.muro"` loads a book of the ordinary library compiled into the compiler. The id is `std:list.muro`, not a path on disk, so the same import works from a Hex package, from the self-contained executable, and from this repository. The books are `bool.muro`, `le.muro`, `list.muro`, `maybe.muro`, `ord.muro`, `suc_bin.muro`, and `word.muro`. A name that is not one of them is an error at the import, and the message lists the books. `..`, a leading `/`, a backslash, or any path that leaves the library is refused. A relative import inside a library book stays in the library. A library book reached twice joins once. See [Library](library.md).
+`import "std:list.muro"` loads a book of the ordinary library compiled into the compiler. The id is `std:list.muro`, not a path on disk, so the same import works from a Hex package, from the self-contained executable, and from this repository. The books are `bool.muro`, `classical.muro`, `le.muro`, `list.muro`, `maybe.muro`, `ord.muro`, `suc_bin.muro`, and `word.muro`. A name that is not one of them is an error at the import, and the message lists the books. `..`, a leading `/`, a backslash, or any path that leaves the library is refused. A relative import inside a library book stays in the library. A library book reached twice joins once. See [Library](library.md).
 
 `import "pkg:shared_wire/wire.muro"` loads a file from a package named in the manifest, at the version `muro.lock` records. A file that differs from the lock is refused. See [Packages](packages.md). `std:` is not a package and is not fetched.
 
@@ -275,15 +275,19 @@ axiom LEM : evidence Π (P : Type) → (P ⊎ (P → Empty))
 
 The tag is `evidence`. `run`, `run internal`, and `spec` are refused, and the message is `<name>: an axiom is evidence`. The declaration does not reduce. A hole in the type is still an unsolved goal.
 
-`lib/Classical.muro` declares `LEM` at that type. It also declares `Either`, because the sum is not in the prelude. `dne` is proved from `LEM`: match on `LEM P`, return the witness from `left`, and `matchEmpty` the contradiction in `right`. `LEM` is not a proof of excluded middle. Choice and Markov's principle are not declared. Import the file by a relative path. It is not an `std:` book. The import brings `Either`, `left`, `right`, `LEM`, and `dne` into scope.
+`std:classical.muro` declares `LEM` at that type. It also declares `Either`, because the sum is not in the prelude. `dne` is proved from `LEM`: match on `LEM P`, return the witness from `left`, and `matchEmpty` the contradiction in `right`. `LEM` is not a proof of excluded middle. Choice and Markov's principle are not declared. Agda does not postulate excluded middle. The import is `import "std:classical.muro"`. That id is the same book from a Hex package, from the self-contained executable, and from a checkout. It brings `Either`, `left`, `right`, `LEM`, and `dne` into scope. `examples/classical.muro` is a book to copy.
 
-`mix muro.check` prints one line for each definition that reaches an axiom, in book order:
+`mix muro.check` and `muro check` print one line for each definition the entry file reaches that depends on an axiom and is not a `run`. The entry file reaches every definition it declares. It reaches a definition mentioned in the type or the body of a definition it reaches. A definition in an imported book that this chain does not mention is not printed. Importing `std:classical.muro` and not mentioning `LEM` or `dne` prints no line. Mentioning `dne` prints a line for that definition and a line for `dne`.
+
+Checking `std:classical.muro` itself, `dne` is declared in the entry file:
 
 ```
-dne: depends on Classical.LEM
+dne: depends on classical.LEM
 ```
 
-The axiom is named by the file stem and the declaration. Several axioms are separated by `, `, in the order they are declared. A definition that reaches none is silent. An axiom is not listed as depending on itself. A `run` that reaches an axiom is refused (`<name>: a run depends on <File.axiom>`), including through another definition and through an erased argument, and that run is not emitted.
+Lines are in book order: the entry file, then each imported book, in the order the imports were loaded. The axiom is named by the file stem and the declaration. `std:classical.muro` is the stem `classical`. Several axioms on one line are separated by `, `, in the order those axioms are declared in the joined book. A definition that reaches none is silent. An axiom is not listed as depending on itself.
+
+A `spec` or `evidence` definition that is reached and depends on an axiom is printed, and the check still succeeds. A `run` that reaches an axiom is refused (`<name>: a run depends on <File.axiom>`), including a `run` in an imported book that the entry file does not mention, including through another definition and through an erased argument. That run is not emitted. Evidence that does not reach an axiom may still be passed to a `run` as an erased argument, and that run is emitted.
 
 ## match
 

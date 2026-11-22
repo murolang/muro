@@ -549,7 +549,11 @@ defmodule Muro.Ast do
           base
         end
 
-      {:ok, if(Map.has_key?(d, :loc), do: Map.put(base, :loc, d.loc), else: base)}
+      base = if Map.has_key?(d, :loc), do: Map.put(base, :loc, d.loc), else: base
+      # The declaring file stays, so a dependency line can tell an
+      # entry-file definition from one that arrived by import.
+      base = if Map.has_key?(d, :file), do: Map.put(base, :file, d.file), else: base
+      {:ok, base}
     end
   end
 

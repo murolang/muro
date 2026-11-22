@@ -13,7 +13,7 @@ In brief: this is the grammar `lib/muro/parser.ex` implements. ASCII aliases are
 book       ::= (import | param | axiom | nu | data | repr | talk | choreography | session | conform | prefix | place | scheme | move | endpoint | read | meet | temporal | family | seat | link | def)*
 import     ::= "import" string             -- relative, "pkg:…", or "std:…"
 param      ::= "param" ident ":" tag term  -- supplied by an importing file
-axiom      ::= "axiom" ident ":" tag term  -- evidence, no body
+axiom      ::= "axiom" ident ":" tag term  -- no body; the checker requires evidence
 nu         ::= ("ν" | "nu") ident binder+ ":" "Type" "where" "uncons" ":" term
 data       ::= ["unboxed"] "data" ident binder* ":" telescope "where" (ident ":" term)+
 repr       ::= "repr" ident ":=" (rshape | rvariant ("|" rvariant)*)
@@ -182,6 +182,8 @@ space      ::= [ \t\n\r] | comment
 ```
 
 ## Notes the grammar does not say loudly enough
+
+`axiom` parses a name, a tag, and a type, and it has no body. The grammar accepts `run`, `run internal`, `spec`, and `evidence`. The checker requires `evidence`. Any other tag is `<name>: an axiom is evidence`.
 
 Application is juxtaposition (`f a b`). `motive`, `in`, and `def` never start an argument. Digits start atoms, so `| 0 =>` parses. `wtrue` then `wfalse` is a match on `WBool`. `wsome` then `wnone` is a match on `Opt`. Those heads are the kernel constructors, and the arms are in that order. A later data production does not take them. A session `case` and a process `match` accept `| 0 =>` through `| w =>` as arm labels. The label is the decimal spelling that was written, so `| 00 =>` is `00` and it is not the arm `0`.
 
