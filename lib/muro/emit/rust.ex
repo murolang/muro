@@ -1266,10 +1266,11 @@ defmodule Muro.Emit.Rust do
   # on a character boundary, then `...`. A field of the cycle that stores
   # the cycle inside a pair is walked on that same stack. `Opt` of the
   # type being defined is not strictly positive, so it does not check.
-  # A cycle reached only through a pair keeps the derived walk. A cycle
-  # that goes out through a boxed field and back only through a pair
-  # does too: `direct_boxed_refs` does not follow pairs, so neither type
-  # is cyclic in the boxed-ref SCC graph. Unboxed data cannot be recursive.
+  # A cycle reached only through a pair keeps the derived `Drop`,
+  # `PartialEq`, and `Debug`. A cycle that goes out through a boxed
+  # field and back only through a pair does too: `direct_boxed_refs`
+  # does not follow pairs, so neither type is cyclic in the boxed-ref
+  # SCC graph. Unboxed data cannot be recursive.
   defp boxed_derives(book, name) do
     cond do
       cyclic_boxed?(book, name) ->
@@ -1463,10 +1464,10 @@ defmodule Muro.Emit.Rust do
   # cycle. `Opt` of the type being defined does not check. A pair does
   # not make the cycle. A field of a cycle that stores the cycle inside
   # a pair is still walked here, on the heap stack. A cycle reached only
-  # through a pair keeps the derived impl. A cycle that goes out through
-  # a boxed field and back only through a pair keeps it too.
-  # `direct_boxed_refs` does not follow pairs, so neither type is in a
-  # boxed-ref SCC. Unboxed data cannot be recursive.
+  # through a pair keeps the derived `Drop`, `PartialEq`, and `Debug`.
+  # A cycle that goes out through a boxed field and back only through a
+  # pair keeps them too. `direct_boxed_refs` does not follow pairs, so
+  # neither type is in a boxed-ref SCC. Unboxed data cannot be recursive.
   defp cyclic_boxed?(book, name), do: scc_of(book, name) != nil
 
   defp cycle_leader?(book, name) do
