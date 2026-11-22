@@ -81,10 +81,16 @@ defmodule Muro.EmitRustTestSuiteTest do
 
   # A direct boxed cycle is walked on a heap stack. `Nest` is that cycle
   # and also stores itself in a pair, so the pair is on the same walk.
-  # `Twin` reaches itself only through a pair, so it keeps the derived walk.
-  # `Spine` carries a `Mark` that crosses the 1024-byte print. The test
-  # checks that the first difference is inside that prefix. It does not
-  # pin the byte.
+  # `Twin` reaches itself only through a pair, so it keeps the derived
+  # `Drop`, `PartialEq`, and `Debug`. `R` holds `S` in a boxed field, and
+  # `S` holds `R` only inside `R × Nat`. That pair is not an edge, so
+  # neither type is in a boxed-ref SCC, and both keep those derived
+  # impls. `Share` is a boxed cycle with two children. Cloning one node
+  # into both children shares that node, and `PartialEq` compares the
+  # diamond. `Spine` carries a `Mark` that crosses the 1024-byte print.
+  # Both capped prefixes are 1024 bytes. `expect` is the check that they
+  # differ, so that `Mark` sits inside the prefix. A position in those
+  # slices is not a separate bound. The test does not pin the byte.
   @deep """
   data Color : Type where
     red : Color
@@ -113,6 +119,13 @@ defmodule Muro.EmitRustTestSuiteTest do
   data Spine : Type where
     stop : Spine
     link : Mark → Spine → Spine
+  data R : Type where
+    r1 : S → R
+  data S : Type where
+    s1 : R × Nat → S
+  data Share : Type where
+    leaf : Share
+    both : Share → Share → Share
   def len0 : run Π (xs : NatList) → Nat :=
     λ (xs : NatList) →
       match xs motive (λ _ → Nat)
@@ -610,6 +623,26 @@ defmodule Muro.EmitRustTestSuiteTest do
     refute image =~ "impl ::std::cmp::PartialEq for Twin"
     refute image =~ "impl ::std::fmt::Debug for Twin"
     refute image =~ "impl ::std::ops::Drop for Twin"
+
+    assert image =~
+             "#[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]\npub struct R("
+
+    assert image =~
+             "#[derive(::std::clone::Clone, ::std::cmp::PartialEq, ::std::fmt::Debug)]\npub struct S("
+
+    refute image =~ "impl ::std::cmp::PartialEq for R {"
+    refute image =~ "impl ::std::fmt::Debug for R {"
+    refute image =~ "impl ::std::ops::Drop for R {"
+    refute image =~ "impl ::std::cmp::PartialEq for S {"
+    refute image =~ "impl ::std::fmt::Debug for S {"
+    refute image =~ "impl ::std::ops::Drop for S {"
+    refute image =~ "fn muro__eq_R("
+    refute image =~ "fn muro__eq_S("
+    refute image =~ "fn muro__drop_R("
+    refute image =~ "fn muro__drop_S("
+
+    assert image =~ "impl ::std::cmp::PartialEq for Share {"
+    refute image =~ "fmt::Debug)]\npub struct Share("
     assert image =~ "pub fn len0("
     assert image =~ "pub fn peel("
   end
@@ -754,6 +787,25 @@ defmodule Muro.EmitRustTestSuiteTest do
                 let d2 = ::std::format!("{:?}", u2);
                 drop(u0);
                 drop(u2);
+
+                let leaf = deep::leaf();
+                let shared = deep::both(leaf.clone(), leaf.clone());
+                let diamond = deep::both(shared.clone(), shared.clone());
+                let again = deep::both(shared.clone(), shared.clone());
+                assert!(diamond == again);
+                let separate = deep::both(
+                    deep::both(leaf.clone(), leaf.clone()),
+                    deep::both(leaf.clone(), leaf.clone()),
+                );
+                assert!(diamond == separate);
+                let skew = deep::both(shared.clone(), leaf.clone());
+                assert!(diamond != skew);
+                drop(diamond);
+                drop(again);
+                drop(separate);
+                drop(skew);
+                drop(shared);
+                drop(leaf);
                 (nmsg, amsg, t0, t1, d0, d2)
             })
             .unwrap()
@@ -779,12 +831,11 @@ defmodule Muro.EmitRustTestSuiteTest do
         assert_eq!(p0.len(), 1024, "{}", p0.len());
         assert_eq!(p1.len(), 1024, "{}", p1.len());
         let diff = p0.bytes().zip(p1.bytes()).position(|(x, y)| x != y);
-        let at = diff.expect("the capped prefixes matched");
-        // The differing `Mark` is the field that crosses the cap. The
-        // byte moves when the printer changes. The guarantee is that
-        // the first difference lies inside the 1024-byte prefix.
-        assert!(at < 1024, "diff at {at}");
-        assert_eq!(&p0[..at], &p1[..at]);
+        // Both slices are 1024 bytes, so a position in them is already
+        // inside the cap. `expect` is the check that the prefixes differ,
+        // which places the differing `Mark` inside the prefix. The index
+        // is not a separate bound, and this test does not pin it.
+        diff.expect("the capped prefixes matched");
         assert!(d0.starts_with("Nest(100001:"), "{d0}");
         assert!(d2.starts_with("Nest(100000:"), "{d2}");
         assert!(d0.ends_with("...)"), "{d0}");

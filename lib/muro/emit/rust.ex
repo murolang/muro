@@ -1269,7 +1269,7 @@ defmodule Muro.Emit.Rust do
   # A cycle reached only through a pair keeps the derived walk. A cycle
   # that goes out through a boxed field and back only through a pair
   # does too: `direct_boxed_refs` does not follow pairs, so neither type
-  # is cyclic here. Unboxed data cannot be recursive.
+  # is cyclic in the boxed-ref SCC graph. Unboxed data cannot be recursive.
   defp boxed_derives(book, name) do
     cond do
       cyclic_boxed?(book, name) ->
@@ -1465,8 +1465,8 @@ defmodule Muro.Emit.Rust do
   # a pair is still walked here, on the heap stack. A cycle reached only
   # through a pair keeps the derived impl. A cycle that goes out through
   # a boxed field and back only through a pair keeps it too.
-  # `direct_boxed_refs` does not follow pairs, so neither type is in the
-  # cycle. Unboxed data cannot be recursive.
+  # `direct_boxed_refs` does not follow pairs, so neither type is in a
+  # boxed-ref SCC. Unboxed data cannot be recursive.
   defp cyclic_boxed?(book, name), do: scc_of(book, name) != nil
 
   defp cycle_leader?(book, name) do
@@ -1513,7 +1513,8 @@ defmodule Muro.Emit.Rust do
 
   # A pair is not an edge. `R` with a boxed field of `S`, and `S` with a
   # field of `R × Nat`, is not a cycle in this graph. Both types keep the
-  # derived walk. This function does not follow pairs.
+  # derived `Drop`, `PartialEq`, and `Debug`. A deep value of either type
+  # can overflow the stack. This function does not follow pairs.
   defp direct_boxed_refs(lay, names) do
     case peel_opts(lay) do
       {_n, {:data, name}} -> if MapSet.member?(names, name), do: [name], else: []
