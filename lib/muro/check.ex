@@ -503,7 +503,7 @@ defmodule Muro.Check do
 
   defp whnf(k, book, {:app, f, a}, unfold) do
     case whnf(k - 1, book, f, unfold) do
-      {:ok, {:lam, _, _, _, t}} -> whnf(k - 1, book, Subst.inst(t, a), unfold)
+      {:ok, {:lam, q, _, _, t}} -> whnf_app(k - 1, book, q, t, a, unfold)
       {:ok, f1} -> {:ok, {:app, f1, a}}
       err -> err
     end
@@ -657,6 +657,14 @@ defmodule Muro.Check do
     end
   end
 
+  # `wsome`, `wnone`, `wtrue`, and `wfalse` are values. A payload is a
+  # field, not an input the operation has to reduce. Forcing it here
+  # spends fuel on a field the next consumer may never read. A fold
+  # reduces a payload the next step reads. Conversion compares payloads
+  # when the two words are the same operation.
+  defp whnf(_k, _book, {:word, op, _} = t, _unfold) when op in [:some, :none, true, false],
+    do: {:ok, t}
+
   # Arguments share one fuel budget. An empty spine does not spend it,
   # so a nullary word still reduces at fuel 1.
   defp whnf(k, book, {:word, op, ts}, unfold) do
@@ -764,13 +772,125 @@ defmodule Muro.Check do
   end
 
   defp whnf(k, book, {tag, ty, z, f, s}, unfold) when tag in [:bfold, :afold] do
+    plan = acc_plan(book, f)
+
     with {:ok, z1} <- whnf(k - 1, book, z, unfold),
+         {:ok, z1} <- whnf_acc(k - 1, book, z1, unfold, 0, plan),
          {:ok, s1} <- whnf(k - 1, book, s, unfold) do
-      fold_go(k - 1, book, tag, ty, z1, f, s1, unfold)
+      fold_go(k - 1, book, tag, ty, z1, f, s1, unfold, plan)
     end
   end
 
   defp whnf(_, _, t, _), do: {:ok, t}
+
+  # A reusable argument mentioned at least twice on one path is reduced
+  # once, so a fold step does not rebuild it on every octet. `whnf` fuel
+  # is a depth bound: a clause enters each sub-reduction at `k - 1` and
+  # does not get back what that reduction did not use. The argument is
+  # that nested reduction. The body keeps `k`, which is the call-by-name
+  # bound for the same beta. Affine, linear, and erased binders stay
+  # call-by-name. Fuel 1 would enter the argument at 0, and `whnf(0)`
+  # fails before looking, so that beta stays call-by-name too.
+  defp whnf_app(k, book, q, body, a, unfold) do
+    if k > 1 and Grade.kernel_qty(q) == :reuse and reused?(body) do
+      with {:ok, a1} <- whnf(k - 1, book, a, unfold) do
+        whnf(k, book, Subst.inst(body, a1), unfold)
+      end
+    else
+      whnf(k, book, Subst.inst(body, a), unfold)
+    end
+  end
+
+  # Two mentions on one path. A match motive is not reduced, so it is
+  # not a mention. Arms are alternatives: the count is the max, not the sum.
+  defp reused?(body), do: var_uses(0, body, 0) >= 2
+
+  defp var_uses(_x, _t, n) when n >= 2, do: 2
+  defp var_uses(x, {:var, y}, n) when x == y, do: n + 1
+  defp var_uses(_x, {:var, _}, n), do: n
+  defp var_uses(x, {:pi, _, a, _, b}, n), do: var_uses(x + 1, b, var_uses(x, a, n))
+  defp var_uses(x, {:lam, _, a, _, t}, n), do: var_uses(x + 1, t, var_uses(x, a, n))
+  defp var_uses(x, {:app, f, a}, n), do: var_uses(x, a, var_uses(x, f, n))
+  defp var_uses(x, {:su, t}, n), do: var_uses(x, t, n)
+  defp var_uses(x, {:prod, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:pair, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:letp, e, t}, n), do: var_uses(x + 2, t, var_uses(x, e, n))
+  defp var_uses(x, {:nu, f}, n), do: var_uses(x + 1, f, n)
+  defp var_uses(x, {:bisim, s, t}, n), do: var_uses(x, t, var_uses(x, s, n))
+
+  defp var_uses(x, {:matom, e, _p, bs}, n) do
+    n = var_uses(x, e, n)
+    cap(n, arm_count(bs, fn {_, b} -> var_uses(x, b, 0) end))
+  end
+
+  defp var_uses(x, {:mdata, e, _p, bs}, n) do
+    n = var_uses(x, e, n)
+    cap(n, arm_count(bs, fn {_, ar, b} -> var_uses(x + ar, b, 0) end))
+  end
+
+  defp var_uses(x, {tag, e, _p, bs}, n) when tag in [:mwbool, :mopt] do
+    n = var_uses(x, e, n)
+    cap(n, arm_count(bs, fn {_, ar, b} -> var_uses(x + ar, b, 0) end))
+  end
+
+  defp var_uses(x, {:mnat, e, _p, z, s}, n) do
+    n = var_uses(x, e, n)
+    cap(n, max(var_uses(x, z, 0), var_uses(x + 1, s, 0)))
+  end
+
+  # The motive is the branch's type. It is not a computational use.
+  defp var_uses(x, {:memp, e, _p}, n), do: var_uses(x, e, n)
+
+  defp var_uses(x, {:munit, e, _p, u}, n), do: var_uses(x, u, var_uses(x, e, n))
+
+  defp var_uses(x, {:unf, s, f}, n), do: var_uses(x, f, var_uses(x, s, n))
+  defp var_uses(x, {:ucons, s}, n), do: var_uses(x, s, n)
+  defp var_uses(x, {:idt, a, b, c}, n), do: var_uses(x, c, var_uses(x, b, var_uses(x, a, n)))
+  defp var_uses(x, {:rwt, e, p, t}, n), do: var_uses(x, t, var_uses(x + 1, p, var_uses(x, e, n)))
+  defp var_uses(x, {:ann, e, a}, n), do: var_uses(x, a, var_uses(x, e, n))
+  defp var_uses(x, {:tensor, d, s}, n), do: var_uses(x, s, var_uses(x, d, n))
+  defp var_uses(x, {:addi, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:muli, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:addt, t, u}, n), do: var_uses(x, u, var_uses(x, t, n))
+  defp var_uses(x, {:toi64, t}, n), do: var_uses(x, t, n)
+  defp var_uses(x, {:packi, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+
+  defp var_uses(x, {:word, _, args}, n),
+    do: Enum.reduce(args, n, fn a, n -> var_uses(x, a, n) end)
+
+  defp var_uses(x, {:scat, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:slen, a}, n), do: var_uses(x, a, n)
+  defp var_uses(x, {:seq, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:bcat, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:blen, a}, n), do: var_uses(x, a, n)
+  defp var_uses(x, {:beq, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:xlen, a}, n), do: var_uses(x, a, n)
+  defp var_uses(x, {:xeq, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:bget, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:aget, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:btil, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:baft, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:bunc, a}, n), do: var_uses(x, a, n)
+  defp var_uses(x, {:sbytes, a}, n), do: var_uses(x, a, n)
+
+  defp var_uses(x, {:bsub, a, b, c}, n),
+    do: var_uses(x, c, var_uses(x, b, var_uses(x, a, n)))
+
+  defp var_uses(x, {tag, ty, z, f, s}, n) when tag in [:bfold, :afold],
+    do: var_uses(x, s, var_uses(x, f, var_uses(x, z, var_uses(x, ty, n))))
+
+  defp var_uses(_x, _t, n), do: n
+
+  defp cap(n, m) when n >= 2 or m >= 2 or n + m >= 2, do: 2
+  defp cap(n, m), do: n + m
+
+  # The most one arm mentions. Arms are alternatives, so the sum would
+  # count two paths as one.
+  defp arm_count(bs, f) do
+    Enum.reduce(bs, 0, fn b, m ->
+      if m >= 2, do: 2, else: max(m, f.(b))
+    end)
+  end
 
   defp whnf_word_arm(k, book, bs, name, args, stuck, unfold) do
     case Enum.find(bs, fn {n, _, _} -> n == name end) do
@@ -869,19 +989,244 @@ defmodule Muro.Check do
   defp byte_opt({:some, b}), do: {:word, :some, [u8_lit(b)]}
   defp byte_opt(:none), do: {:word, :none, []}
 
-  defp fold_go(_k, _book, _tag, _ty, z, _f, {:blit, <<>>}, _unfold), do: {:ok, z}
+  defp fold_go(_k, _book, _tag, _ty, z, _f, {:blit, <<>>}, _unfold, _plan), do: {:ok, z}
 
-  defp fold_go(k, book, tag, ty, z, f, {:blit, <<b, rest::binary>>}, unfold) when k > 0 do
+  defp fold_go(k, book, tag, ty, z, f, {:blit, <<b, rest::binary>>}, unfold, plan)
+       when k > 0 do
     step = {:app, {:app, {:app, f, u8_lit(b)}, {:blit, rest}}, z}
 
-    with {:ok, z1} <- whnf(k, book, step, unfold) do
-      fold_go(k - 1, book, tag, ty, z1, f, {:blit, rest}, unfold)
+    with {:ok, z1} <- whnf(k, book, step, unfold),
+         {:ok, z1} <- whnf_acc(k, book, z1, unfold, 0, plan) do
+      fold_go(k - 1, book, tag, ty, z1, f, {:blit, rest}, unfold, plan)
     end
   end
 
-  defp fold_go(0, _book, _tag, _ty, _z, _f, _s, _unfold), do: {:error, @out_of_fuel}
+  defp fold_go(0, _book, _tag, _ty, _z, _f, _s, _unfold, _plan), do: {:error, @out_of_fuel}
 
-  defp fold_go(_k, _book, tag, ty, z, f, s, _unfold), do: {:ok, {tag, ty, z, f, s}}
+  defp fold_go(_k, _book, tag, ty, z, f, s, _unfold, _plan), do: {:ok, {tag, ty, z, f, s}}
+
+  # A fold step returns a value. Fields of that value are the next
+  # octet's inputs. Reduce a field the next step reads, sixteen
+  # constructors deep, so the next octet does not rebuild it. A field
+  # the step does not read stays as the step returned it. One read is
+  # enough: the next octet recomputes whatever it opens. Two reads is
+  # the cut for sharing a beta argument, which is a different walk.
+  # `Opt` and `WBool` are word spines (`wsome` carries one payload).
+  # Depth 0 is the accumulator. Depths 0 through 15 are the sixteen
+  # constructors that are opened.
+  @acc_depth 16
+  @acc_chase 4
+
+  defp whnf_acc(_k, _book, t, _unfold, depth, _plan) when depth >= @acc_depth, do: {:ok, t}
+
+  defp whnf_acc(_k, _book, t, _unfold, _depth, plan) when plan in [:skip, :none], do: {:ok, t}
+
+  defp whnf_acc(k, book, t, unfold, depth, plan) do
+    case acc_opened(book, t) do
+      {:ok, name, args, rebuild} ->
+        plans = plans_for(plan, name, length(args))
+
+        with {:ok, args1} <- whnf_selected(k, book, args, plans, unfold, depth) do
+          {:ok, if(args1 == args, do: t, else: rebuild.(args1))}
+        end
+
+      :error ->
+        {:ok, t}
+    end
+  end
+
+  defp whnf_selected(_k, _book, [], _plans, _unfold, _depth), do: {:ok, []}
+
+  defp whnf_selected(k, book, [a | as], [p | ps], unfold, depth) do
+    with {:ok, a1} <- whnf_one(k, book, a, p, unfold, depth),
+         {:ok, as1} <- whnf_selected(k, book, as, ps, unfold, depth) do
+      {:ok, [a1 | as1]}
+    end
+  end
+
+  defp whnf_selected(k, book, args, [], unfold, depth) do
+    whnf_selected(k, book, args, List.duplicate(:read, length(args)), unfold, depth)
+  end
+
+  defp whnf_one(_k, _book, a, plan, _unfold, _depth) when plan in [:skip, :none], do: {:ok, a}
+
+  defp whnf_one(k, book, a, :read, unfold, depth) do
+    with {:ok, a1} <- whnf(k, book, a, unfold) do
+      whnf_acc(k, book, a1, unfold, depth + 1, :all)
+    end
+  end
+
+  defp whnf_one(k, book, a, plan, unfold, depth) do
+    with {:ok, a1} <- whnf(k, book, a, unfold) do
+      whnf_acc(k, book, a1, unfold, depth + 1, plan)
+    end
+  end
+
+  # The step is `U8 → Slice → A → A`. Peel those three binders when
+  # they are already lambdas, or the body of a definition that is.
+  # The accumulator is then var 0. A match on it, or a `let` of a pair,
+  # says which fields are read. A call that passes it is opened, a few
+  # definitions deep, and the same test is applied to the body. Anything
+  # else keeps every field: dropping the walk loses the folds that read
+  # the accumulator inside a helper.
+  defp acc_plan(book, f), do: acc_peel(book, f, 3, MapSet.new())
+
+  defp acc_peel(book, body, 0, _seen), do: acc_chase(book, body, 0, @acc_chase)
+  defp acc_peel(book, {:lam, _, _, _, t}, n, seen), do: acc_peel(book, t, n - 1, seen)
+  defp acc_peel(book, {:ann, t, _}, n, seen), do: acc_peel(book, t, n, seen)
+
+  defp acc_peel(book, {:def, name}, n, seen) do
+    if MapSet.member?(seen, name) do
+      :all
+    else
+      case lookup_def(book, name) do
+        {:ok, %{kind: kind}} when kind in [:axiom, :param] -> :all
+        {:ok, %{body: body}} -> acc_peel(book, body, n, MapSet.put(seen, name))
+        _ -> :all
+      end
+    end
+  end
+
+  defp acc_peel(_book, _t, _n, _seen), do: :all
+
+  defp acc_chase(_book, _term, _x, 0), do: :all
+
+  defp acc_chase(book, term, x, depth) do
+    term = strip_ann(term)
+
+    cond do
+      match_on?(term, x) -> by_ctor_plan(term)
+      letp_on?(term, x) -> pair_plan(term)
+      true -> acc_chase_call(book, term, x, depth)
+    end
+  end
+
+  defp acc_chase_call(book, term, x, depth) do
+    case sole_call(term, x) do
+      {:ok, head, args} ->
+        case apply_args(book, head, args, @acc_chase) do
+          {:ok, inner} -> acc_chase(book, inner, x, depth - 1)
+          :error -> if var_uses(x, term, 0) >= 1, do: :all, else: :none
+        end
+
+      :error ->
+        if var_uses(x, term, 0) >= 1, do: :all, else: :none
+    end
+  end
+
+  defp by_ctor_plan({_tag, _e, _p, arms}) do
+    {:by_ctor,
+     Map.new(arms, fn {name, ar, arm} ->
+       {name, field_plans(arm, ar)}
+     end)}
+  end
+
+  # The last binder is var 0. The first field is var `ar - 1`.
+  defp field_plans(arm, ar) do
+    for i <- 0..(ar - 1)//1 do
+      if var_uses(ar - 1 - i, arm, 0) >= 1, do: :read, else: :skip
+    end
+  end
+
+  # `let (a, b) = e in t`: b is var 0, a is var 1.
+  defp pair_plan({:letp, _e, arm}) do
+    {:pair, field_use(arm, 1), field_use(arm, 0)}
+  end
+
+  defp field_use(arm, v), do: if(var_uses(v, arm, 0) >= 1, do: :read, else: :skip)
+
+  defp match_on?({tag, e, _p, _arms}, x) when tag in [:mdata, :mopt, :mwbool],
+    do: on_var?(e, x)
+
+  defp match_on?(_, _), do: false
+
+  defp letp_on?({:letp, e, _arm}, x), do: on_var?(e, x)
+  defp letp_on?(_, _), do: false
+
+  defp on_var?({:var, x}, x), do: true
+  defp on_var?({:ann, t, _}, x), do: on_var?(t, x)
+  defp on_var?(_, _), do: false
+
+  defp sole_call(term, x) do
+    {head, args} = apps(term)
+
+    case Enum.split_with(args, &(&1 == {:var, x})) do
+      {[_], rest} ->
+        if occurs?(x, head) or Enum.any?(rest, &occurs?(x, &1)),
+          do: :error,
+          else: {:ok, head, args}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp apply_args(_book, _t, _args, 0), do: :error
+  defp apply_args(_book, t, [], _n), do: {:ok, t}
+  defp apply_args(book, {:ann, t, _}, args, n), do: apply_args(book, t, args, n)
+
+  defp apply_args(book, {:def, name}, args, n) do
+    case lookup_def(book, name) do
+      {:ok, %{kind: kind}} when kind in [:axiom, :param] -> :error
+      {:ok, %{body: body}} -> apply_args(book, body, args, n - 1)
+      _ -> :error
+    end
+  end
+
+  defp apply_args(book, {:lam, _, _, _, body}, [arg | args], n),
+    do: apply_args(book, Subst.inst(body, arg), args, n)
+
+  defp apply_args(_book, _t, _args, _n), do: :error
+
+  defp plans_for(plan, _name, n) when plan in [:all, :read], do: List.duplicate(:read, n)
+  defp plans_for({:pair, a, b}, :pair, 2), do: [a, b]
+
+  defp plans_for({:by_ctor, map}, name, n) when is_binary(name) do
+    case Map.get(map, name) do
+      plans when is_list(plans) and length(plans) == n -> plans
+      # A missing arm does not read these fields. A length mismatch is
+      # not that fact, so every field stays on the eager walk.
+      nil -> List.duplicate(:skip, n)
+      _ -> List.duplicate(:read, n)
+    end
+  end
+
+  defp plans_for(_plan, _name, n), do: List.duplicate(:read, n)
+
+  defp acc_opened(_book, {:word, :some, [a]}),
+    do: {:ok, "wsome", [a], fn [a1] -> {:word, :some, [a1]} end}
+
+  defp acc_opened(_book, {:word, :none, []}),
+    do: {:ok, "wnone", [], fn _ -> {:word, :none, []} end}
+
+  defp acc_opened(_book, {:word, true, []}),
+    do: {:ok, "wtrue", [], fn _ -> {:word, true, []} end}
+
+  defp acc_opened(_book, {:word, false, []}),
+    do: {:ok, "wfalse", [], fn _ -> {:word, false, []} end}
+
+  defp acc_opened(_book, {:pair, a, b}),
+    do: {:ok, :pair, [a, b], fn [a1, b1] -> {:pair, a1, b1} end}
+
+  defp acc_opened(book, t) do
+    case ctor_spine(book, t) do
+      {:ok, {_dname, _ci, args}} ->
+        {h, _} = apps(t)
+
+        case h do
+          {:def, name} -> {:ok, name, args, fn args1 -> reapply(h, args1) end}
+          _ -> :error
+        end
+
+      :error ->
+        :error
+    end
+  end
+
+  defp strip_ann({:ann, t, _}), do: strip_ann(t)
+  defp strip_ann(t), do: t
+
+  defp reapply(head, args), do: Enum.reduce(args, head, fn a, f -> {:app, f, a} end)
 
   defp whnf_words(_k, _book, [], _unfold), do: {:ok, []}
 
@@ -5038,7 +5383,8 @@ defmodule Muro.Check do
 
       def_slots =
         defs
-        |> Task.async_stream(fn {d, i} -> {i, check_def(book, d, fuel)} end,
+        |> Task.async_stream(
+          fn {d, i} -> {i, check_def(book, d, fuel)} end,
           ordered: true,
           timeout: :infinity
         )

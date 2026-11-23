@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.21
+## 0.22.22
 
 `skip_below(state, index)` is a host call on a keyed family's dispatcher and on `Muro.Family.Step`. The host promises that nothing at or below `index` arrives again, for any key. The state keeps one integer `floor`, initially `-1`. A call with `index <= floor` returns `{:ok, state}` and the same state. An index that is not a non-negative integer is `{:error, {:index, index}}`. `arrive` of an index at or below the floor is `{:error, {:departed, key, index}}`, for `init` and for a signal, including a first arrival this child has never seen. That refusal is the host's promise, and it is the one way this call refuses a legitimate arrival.
 
@@ -17,6 +17,20 @@ The floor sits outside `agda/Muro/Family.agda`, as the departed guard does. Refu
 ### Manual
 
 - Limits, State machines, Temporal, and Emit: `skip_below`, the floor, the compaction, the restart cursor, and the memory bound. The floor only refuses arrivals, so the family-graph counts stay the check of the generated dispatcher.
+
+### Package
+
+- Version 0.22.22.
+
+## 0.22.21
+
+`sliceFold` and `bytesFold` reduce each accumulator field the next step reads, before the next octet, sixteen constructors deep. That field is a constructor argument, one side of a pair, or the payload of `wsome`. `wtrue` and `wfalse` are the same walk. A field the step does not read stays as the step returned it. A step the checker cannot read that way still reduces every field. A reusable argument mentioned at least twice on one path is reduced once, one fuel below the body, and each mention sees that value. A match motive is not a mention, and the count is the most one arm mentions. Affine, linear, and erased arguments stay call-by-name. `whnf` fuel is a depth bound: each sub-reduction starts one lower, and nothing is handed back. Sharing, and reducing a field the next step reads, can change which checks finish under a given fuel. The equations are unchanged. A transfer-encoding scan that rebuilt a constructor field on every matching byte, and an `Expect` comparison that rebuilt a trimmed slice on every byte, spent minutes on one `refl`. The same scans now reduce with the buffer.
+
+### Manual
+
+- Terms: a fold reduces the accumulator fields the next step reads, sixteen deep.
+- Terms: a reusable argument mentioned twice on one path is reduced once, one fuel below the body.
+- Limits: `whnf` fuel is a per-path depth bound.
 
 ### Package
 
