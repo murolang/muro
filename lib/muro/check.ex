@@ -791,6 +791,8 @@ defmodule Muro.Check do
     end
   end
 
+  # Two mentions on one path. A match motive is not reduced, so it is
+  # not a mention. Arms are alternatives: the count is the max, not the sum.
   defp reused?(body), do: var_uses(0, body, 0) >= 2
 
   defp var_uses(_x, _t, n) when n >= 2, do: 2
@@ -806,30 +808,30 @@ defmodule Muro.Check do
   defp var_uses(x, {:nu, f}, n), do: var_uses(x + 1, f, n)
   defp var_uses(x, {:bisim, s, t}, n), do: var_uses(x, t, var_uses(x, s, n))
 
-  defp var_uses(x, {:matom, e, p, bs}, n) do
-    n = var_uses(x + 1, p, var_uses(x, e, n))
-    Enum.reduce(bs, n, fn {_, b}, n -> var_uses(x, b, n) end)
+  defp var_uses(x, {:matom, e, _p, bs}, n) do
+    n = var_uses(x, e, n)
+    cap(n, arm_count(bs, fn {_, b} -> var_uses(x, b, 0) end))
   end
 
-  defp var_uses(x, {:mdata, e, p, bs}, n) do
-    n = var_uses(x + 1, p, var_uses(x, e, n))
-    Enum.reduce(bs, n, fn {_, ar, b}, n -> var_uses(x + ar, b, n) end)
+  defp var_uses(x, {:mdata, e, _p, bs}, n) do
+    n = var_uses(x, e, n)
+    cap(n, arm_count(bs, fn {_, ar, b} -> var_uses(x + ar, b, 0) end))
   end
 
-  defp var_uses(x, {tag, e, p, bs}, n) when tag in [:mwbool, :mopt] do
-    n = var_uses(x + 1, p, var_uses(x, e, n))
-    Enum.reduce(bs, n, fn {_, ar, b}, n -> var_uses(x + ar, b, n) end)
+  defp var_uses(x, {tag, e, _p, bs}, n) when tag in [:mwbool, :mopt] do
+    n = var_uses(x, e, n)
+    cap(n, arm_count(bs, fn {_, ar, b} -> var_uses(x + ar, b, 0) end))
   end
 
-  defp var_uses(x, {:mnat, e, p, z, s}, n) do
-    n = var_uses(x, z, var_uses(x + 1, p, var_uses(x, e, n)))
-    var_uses(x + 1, s, n)
+  defp var_uses(x, {:mnat, e, _p, z, s}, n) do
+    n = var_uses(x, e, n)
+    cap(n, max(var_uses(x, z, 0), var_uses(x + 1, s, 0)))
   end
 
-  defp var_uses(x, {:memp, e, p}, n), do: var_uses(x + 1, p, var_uses(x, e, n))
+  # The motive is the branch's type. It is not a computational use.
+  defp var_uses(x, {:memp, e, _p}, n), do: var_uses(x, e, n)
 
-  defp var_uses(x, {:munit, e, p, u}, n),
-    do: var_uses(x, u, var_uses(x + 1, p, var_uses(x, e, n)))
+  defp var_uses(x, {:munit, e, _p, u}, n), do: var_uses(x, u, var_uses(x, e, n))
 
   defp var_uses(x, {:unf, s, f}, n), do: var_uses(x, f, var_uses(x, s, n))
   defp var_uses(x, {:ucons, s}, n), do: var_uses(x, s, n)
@@ -868,6 +870,17 @@ defmodule Muro.Check do
     do: var_uses(x, s, var_uses(x, f, var_uses(x, z, var_uses(x, ty, n))))
 
   defp var_uses(_x, _t, n), do: n
+
+  defp cap(n, m) when n >= 2 or m >= 2 or n + m >= 2, do: 2
+  defp cap(n, m), do: n + m
+
+  # The most one arm mentions. Arms are alternatives, so the sum would
+  # count two paths as one.
+  defp arm_count(bs, f) do
+    Enum.reduce(bs, 0, fn b, m ->
+      if m >= 2, do: 2, else: max(m, f.(b))
+    end)
+  end
 
   defp whnf_word_arm(k, book, bs, name, args, stuck, unfold) do
     case Enum.find(bs, fn {n, _, _} -> n == name end) do
