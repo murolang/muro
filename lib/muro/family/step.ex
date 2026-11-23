@@ -15,7 +15,14 @@ defmodule Muro.Family.Step do
   `NoDupIx` and held subjects on release, not off-invariant. `decide/5`
   is `decide` for `never` and `earlier`, and `decideMode` when the hold
   is `any`. `on_key/2` is `onKey`. `arrive/5` is `arriveTo` and
-  `arriveMode`. `resolve/3` is `resolveTo` and `resolveMode`.
+  `arriveMode`, and it refuses a creation index that has departed.
+  That refusal is not `arriveTo`: Agda `fresh?` reads the live rows.
+  The departed prefix and gap set remember host creation indices.
+  The record is exact. Memory is O(departed instances) per key in
+  general. O(keys + permanent gaps) holds only when indices are
+  dense per key, or when holes are skipped.
+  They are not a field of the Agda state. `resolve/3` is `resolveTo`
+  and `resolveMode`.
   `withdraw/3` is `withdrawTo` on the successful path: a held row leaves
   and the release is the release of `resolveMode`. Elixir returns
   `:resolved`, `:unknown`, and `:opened`; Agda returns `nothing`.
@@ -76,7 +83,7 @@ defmodule Muro.Family.Step do
   def proved_rules, do: %{init: :never, signal: :earlier}
 
   @doc "Agda `empty`."
-  def empty, do: %{next: 0, tick: 0, rows: []}
+  def empty, do: %{next: 0, tick: 0, rows: [], departed: %{}}
 
   @doc """
   `holdOf` read from a family's rules. An unknown kind is the
@@ -132,37 +139,56 @@ defmodule Muro.Family.Step do
   @doc """
   Agda `arriveTo`. The new row's `born` and `opened_at` are the current
   tick, then the tick advances. `decide` reads the rows from before
-  the arrival.
+  the arrival. An index that has departed is `{:departed, key, index}`.
+  Agda `fresh?` does not refuse that index: it reads the live rows.
   """
   def arrive(state, key, kind, index, rules) do
     with :ok <- index_ok(index),
          {:ok, _hold} <- hold_of(rules, kind) do
-      if fresh?(state.rows, key, index) do
-        phase = decide(state.rows, key, index, kind, rules)
-        id = state.next
+      cond do
+        not fresh?(state.rows, key, index) ->
+          {:error, {:duplicate, key, index}}
 
-        row = %{
-          key: key,
-          index: index,
-          id: id,
-          born: state.tick,
-          opened_at: state.tick,
-          kind: kind,
-          phase: phase
-        }
+        departed?(state, key, index) ->
+          {:error, {:departed, key, index}}
 
-        state = %{
-          state
-          | next: id + 1,
-            tick: state.tick + 1,
-            rows: [row | state.rows]
-        }
+        true ->
+          phase = decide(state.rows, key, index, kind, rules)
+          id = state.next
 
-        {:ok, phase, id, state}
-      else
-        {:error, {:duplicate, key, index}}
+          row = %{
+            key: key,
+            index: index,
+            id: id,
+            born: state.tick,
+            opened_at: state.tick,
+            kind: kind,
+            phase: phase
+          }
+
+          state = %{
+            state
+            | next: id + 1,
+              tick: state.tick + 1,
+              rows: [row | state.rows]
+          }
+
+          {:ok, phase, id, state}
       end
     end
+  end
+
+  @doc """
+  True when creation index `index` of `key` has departed.
+
+  `P` starts at -1, before the first valid index. Every index `i` with
+  `i <= P` has departed. The gap map holds departed indices strictly
+  above `P`. A key with no record has departed nothing. This predicate
+  is not Agda `fresh?`.
+  """
+  def departed?(state, key, index) when is_integer(index) do
+    {prefix, gaps} = departed_record(state, key)
+    index <= prefix or Map.has_key?(gaps, index)
   end
 
   @doc """
@@ -410,9 +436,42 @@ defmodule Muro.Family.Step do
   defp left?(state, id), do: is_integer(id) and id >= 0 and id < state.next
 
   defp release(state, id, key, rules) do
-    gone = remove(state.rows, id)
-    {rows, released} = open_all(key, gone, state.tick, rules)
-    {:ok, released, %{state | tick: state.tick + 1, rows: rows}}
+    %{index: index} = find(state.rows, id)
+    rest = remove(state.rows, id)
+    {rows, released} = open_all(key, rest, state.tick, rules)
+    state = %{state | tick: state.tick + 1, rows: rows}
+    {:ok, released, note_departed(state, key, index)}
+  end
+
+  # Host creation indices. `P` is -1 until a departure folds up to it.
+  # A gap stays in the map until `P + 1` is that gap. Not an Agda field.
+  defp note_departed(state, key, index) do
+    departed = Map.get(state, :departed, %{})
+    {prefix, gaps} = departed_record(state, key)
+
+    if index <= prefix or Map.has_key?(gaps, index) do
+      state
+    else
+      {prefix, gaps} = fold_prefix(prefix, Map.put(gaps, index, true))
+      %{state | departed: Map.put(departed, key, {prefix, gaps})}
+    end
+  end
+
+  defp departed_record(state, key) do
+    case Map.fetch(Map.get(state, :departed, %{}), key) do
+      {:ok, {prefix, gaps}} when is_integer(prefix) and is_map(gaps) -> {prefix, gaps}
+      :error -> {-1, %{}}
+    end
+  end
+
+  defp fold_prefix(prefix, gaps) do
+    next = prefix + 1
+
+    if Map.has_key?(gaps, next) do
+      fold_prefix(next, Map.delete(gaps, next))
+    else
+      {prefix, gaps}
+    end
   end
 
   # Agda `opens?`. `earlierClause` is an unblocked held `earlier` row.
