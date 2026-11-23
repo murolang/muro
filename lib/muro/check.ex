@@ -837,6 +837,7 @@ defmodule Muro.Check do
   defp var_uses(x, {:addt, t, u}, n), do: var_uses(x, u, var_uses(x, t, n))
   defp var_uses(x, {:toi64, t}, n), do: var_uses(x, t, n)
   defp var_uses(x, {:packi, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+
   defp var_uses(x, {:word, _, args}, n),
     do: Enum.reduce(args, n, fn a, n -> var_uses(x, a, n) end)
 
