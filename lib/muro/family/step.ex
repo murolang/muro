@@ -139,7 +139,7 @@ defmodule Muro.Family.Step do
   @doc """
   Agda `arriveTo`. The new row's `born` and `opened_at` are the current
   tick, then the tick advances. `decide` reads the rows from before
-  the arrival. An index that has departed is `{:forgotten, key, index}`.
+  the arrival. An index that has departed is `{:departed, key, index}`.
   Agda `fresh?` does not refuse that index: it reads the live rows.
   """
   def arrive(state, key, kind, index, rules) do
@@ -150,7 +150,7 @@ defmodule Muro.Family.Step do
           {:error, {:duplicate, key, index}}
 
         departed?(state, key, index) ->
-          {:error, {:forgotten, key, index}}
+          {:error, {:departed, key, index}}
 
         true ->
           phase = decide(state.rows, key, index, kind, rules)

@@ -215,7 +215,7 @@ defmodule Muro.FamilyMoreTest do
     assert Map.keys(withdrawn) |> Enum.sort() == [:by, :departed, :id, :n]
     assert withdrawn.n == 3
     assert withdrawn.departed["a"] == {-1, %{1 => true}}
-    assert {:error, {:forgotten, "a", 1}} = disp.arrive(withdrawn, "a", :command, 1)
+    assert {:error, {:departed, "a", 1}} = disp.arrive(withdrawn, "a", :command, 1)
     refute inspect(withdrawn.by) =~ ":resolved"
     refute inspect(withdrawn.id) =~ ":resolved"
 
@@ -224,8 +224,8 @@ defmodule Muro.FamilyMoreTest do
     assert released.departed["a"] == {1, %{}}
     assert {:error, {:unknown, 1}} = disp.resolved(released, 1)
     assert {:error, {:resolved, 1}} = disp.withdraw(released, 1)
-    assert {:error, {:forgotten, "a", 0}} = disp.arrive(released, "a", :command, 0)
-    assert {:error, {:forgotten, "a", 1}} = disp.arrive(released, "a", :command, 1)
+    assert {:error, {:departed, "a", 0}} = disp.arrive(released, "a", :command, 0)
+    assert {:error, {:departed, "a", 1}} = disp.arrive(released, "a", :command, 1)
 
     fresh = disp.new()
     assert {:open, 0, fresh} = disp.arrive(fresh, "a", :command, 0)

@@ -74,7 +74,7 @@ defmodule Muro.FsmFamilyTest do
     assert {:error, {:duplicate, "a", 0}} = disp.arrive(state, "a", :signal, 0)
     assert {:ok, [{1, "a", :signal}], state} = disp.resolved(state, 0)
     assert {:error, {:unknown, 0}} = disp.resolved(state, 0)
-    assert {:error, {:forgotten, "a", 0}} = disp.arrive(state, "a", :init, 0)
+    assert {:error, {:departed, "a", 0}} = disp.arrive(state, "a", :init, 0)
     assert {:error, {:duplicate, "a", 1}} = disp.arrive(state, "a", :signal, 1)
 
     assert {:error, {2, {:unknown, 0}}} =
@@ -88,7 +88,7 @@ defmodule Muro.FsmFamilyTest do
     assert {:open, 0, state} = disp.arrive(state, "a", :signal, 5)
     assert {:ok, [], state} = disp.resolved(state, 0)
     assert {:open, 1, state} = disp.arrive(state, "a", :signal, 3)
-    assert {:error, {:forgotten, "a", 5}} = disp.arrive(state, "a", :signal, 5)
+    assert {:error, {:departed, "a", 5}} = disp.arrive(state, "a", :signal, 5)
   end
 
   test "a departed creation index is refused and a gap still folds", %{disp: disp, parent: parent} do
@@ -98,11 +98,11 @@ defmodule Muro.FsmFamilyTest do
     assert {:open, 0, state} = disp.arrive(state, "a", :init, 0)
     assert {:held, 1, state} = disp.arrive(state, "a", :signal, 1)
     assert {:ok, [{1, "a", :signal}], done} = disp.finish(state, 0, server.init(), :down)
-    assert {:error, {:forgotten, "a", 0}} = disp.arrive(done, "a", :init, 0)
+    assert {:error, {:departed, "a", 0}} = disp.arrive(done, "a", :init, 0)
     assert {:error, {:unknown, 0}} = disp.resolved(done, 0)
     assert done.departed["a"] == {0, %{}}
 
-    assert {:error, {2, {:forgotten, "a", 0}}} =
+    assert {:error, {2, {:departed, "a", 0}}} =
              disp.check_trace([
                {:arrive, "a", :init, 0},
                {:resolved, 0},
@@ -114,7 +114,7 @@ defmodule Muro.FsmFamilyTest do
     assert {:held, 1, state} = disp.arrive(state, "a", :signal, 1)
     assert {:ok, [], withdrawn} = disp.withdraw(state, 1)
     assert withdrawn.departed["a"] == {-1, %{1 => true}}
-    assert {:error, {:forgotten, "a", 1}} = disp.arrive(withdrawn, "a", :signal, 1)
+    assert {:error, {:departed, "a", 1}} = disp.arrive(withdrawn, "a", :signal, 1)
     assert {:error, {:resolved, 1}} = disp.withdraw(withdrawn, 1)
     assert {:error, {:unknown, 9}} = disp.withdraw(withdrawn, 9)
     assert {:error, {:unknown, 9}} = disp.withdraw(disp.new(), 9)
@@ -122,7 +122,7 @@ defmodule Muro.FsmFamilyTest do
     assert {:held, 2, later} = disp.arrive(withdrawn, "a", :signal, 2)
     assert {:held, _} = hold_of(disp, later, 2)
 
-    assert {:error, {3, {:forgotten, "a", 1}}} =
+    assert {:error, {3, {:departed, "a", 1}}} =
              disp.check_trace([
                {:arrive, "a", :init, 0},
                {:arrive, "a", :signal, 1},
@@ -133,9 +133,9 @@ defmodule Muro.FsmFamilyTest do
     state = disp.new()
     assert {:open, 0, state} = disp.arrive(state, "a", :signal, 4)
     assert {:ok, [], left} = disp.resolved(state, 0)
-    assert {:error, {:forgotten, "a", 4}} = disp.arrive(left, "a", :signal, 4)
+    assert {:error, {:departed, "a", 4}} = disp.arrive(left, "a", :signal, 4)
 
-    assert {:error, {2, {:forgotten, "a", 4}}} =
+    assert {:error, {2, {:departed, "a", 4}}} =
              disp.check_trace([
                {:arrive, "a", :signal, 4},
                {:resolved, 0},
@@ -149,22 +149,22 @@ defmodule Muro.FsmFamilyTest do
     assert {:open, 1, state} = disp.arrive(state, "a", :init, 0)
     assert {:ok, [], state} = disp.resolved(state, 1)
     assert state.departed["a"] == {0, %{2 => true}}
-    assert {:error, {:forgotten, "a", 0}} = disp.arrive(state, "a", :init, 0)
-    assert {:error, {:forgotten, "a", 2}} = disp.arrive(state, "a", :signal, 2)
+    assert {:error, {:departed, "a", 0}} = disp.arrive(state, "a", :init, 0)
+    assert {:error, {:departed, "a", 2}} = disp.arrive(state, "a", :signal, 2)
     assert {:open, 2, state} = disp.arrive(state, "a", :signal, 1)
     assert {:ok, [], state} = disp.resolved(state, 2)
     assert state.departed["a"] == {2, %{}}
     assert map_size(elem(state.departed["a"], 1)) == 0
-    assert {:error, {:forgotten, "a", 0}} = disp.arrive(state, "a", :init, 0)
-    assert {:error, {:forgotten, "a", 1}} = disp.arrive(state, "a", :signal, 1)
-    assert {:error, {:forgotten, "a", 2}} = disp.arrive(state, "a", :signal, 2)
+    assert {:error, {:departed, "a", 0}} = disp.arrive(state, "a", :init, 0)
+    assert {:error, {:departed, "a", 1}} = disp.arrive(state, "a", :signal, 1)
+    assert {:error, {:departed, "a", 2}} = disp.arrive(state, "a", :signal, 2)
     assert {:open, 3, state} = disp.arrive(state, "a", :init, 3)
     assert {:open, 4, other} = disp.arrive(state, "b", :init, 0)
     assert other.departed["a"] == {2, %{}}
     refute Map.has_key?(other.departed, "b")
-    assert {:error, {:forgotten, "a", 0}} = disp.arrive(other, "a", :init, 0)
+    assert {:error, {:departed, "a", 0}} = disp.arrive(other, "a", :init, 0)
 
-    assert {:error, {6, {:forgotten, "a", 1}}} =
+    assert {:error, {6, {:departed, "a", 1}}} =
              disp.check_trace([
                {:arrive, "a", :signal, 2},
                {:resolved, 0},
@@ -187,7 +187,7 @@ defmodule Muro.FsmFamilyTest do
                {:resolved, 3}
              ])
 
-    assert {:error, {8, {:forgotten, "a", 5}}} =
+    assert {:error, {8, {:departed, "a", 5}}} =
              disp.check_trace([
                {:arrive, "a", :signal, 5},
                {:resolved, 0},
@@ -204,7 +204,7 @@ defmodule Muro.FsmFamilyTest do
     assert {:ok, skipped} = disp.skip(state, "a", 0)
     assert skipped.departed["a"] == {0, %{}}
     assert {:ok, ^skipped} = disp.skip(skipped, "a", 0)
-    assert {:error, {:forgotten, "a", 0}} = disp.arrive(skipped, "a", :init, 0)
+    assert {:error, {:departed, "a", 0}} = disp.arrive(skipped, "a", :init, 0)
     assert {:error, {:index, -1}} = disp.skip(skipped, "a", -1)
     assert {:open, 0, live} = disp.arrive(skipped, "a", :signal, 2)
     assert {:error, {:duplicate, "a", 2}} = disp.skip(live, "a", 2)
@@ -222,7 +222,7 @@ defmodule Muro.FsmFamilyTest do
                {:skip, "a", 1}
              ])
 
-    assert {:error, {4, {:forgotten, "a", 2}}} =
+    assert {:error, {4, {:departed, "a", 2}}} =
              disp.check_trace([
                {:skip, "a", 0},
                {:arrive, "a", :init, 2},

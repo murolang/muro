@@ -3496,7 +3496,7 @@ defmodule Muro.Emit.Fsm do
       was before `withdraw`. Per key, `departed` stores a prefix `P` and a
       map of creation indices strictly above `P`. `P` starts at -1, so no
       index has departed. An index `i` with `i <= P`, and an index in that
-      map, has left. `arrive` of that index is `{:error, {:forgotten, key,
+      map, has left. `arrive` of that index is `{:error, {:departed, key,
       index}}`, for an init and for a signal. On departure the index joins
       the map when it is above `P`, and `P` advances while `P + 1` is in the
       map. A later first arrival of an earlier index is accepted. The
@@ -3637,7 +3637,7 @@ defmodule Muro.Emit.Fsm do
 
               {:ok, {prefix, gaps}} ->
                 if index <= prefix or Map.has_key?(gaps, index) do
-                  {:error, {:forgotten, key, index}}
+                  {:error, {:departed, key, index}}
                 else
                   :ok
                 end

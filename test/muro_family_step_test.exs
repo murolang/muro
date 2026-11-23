@@ -396,7 +396,7 @@ defmodule Muro.Family.StepTest do
     assert Step.fresh?(ref.rows, "a", 0)
     assert Step.departed?(ref, "a", 0)
     assert ref.departed["a"] == {0, %{}}
-    assert {:error, {:forgotten, "a", 0}} = Step.arrive(ref, "a", :wide, 0, @mixes)
+    assert {:error, {:departed, "a", 0}} = Step.arrive(ref, "a", :wide, 0, @mixes)
     assert {:ok, :held, 3, ref} = Step.arrive(ref, "a", :wide, 3, @mixes)
     assert {:error, {:resolved, 1}} = Step.withdraw(ref, 1, @mixes)
     assert Step.invariant?(ref, @mixes)
@@ -412,7 +412,7 @@ defmodule Muro.Family.StepTest do
     assert {:error, {:resolved, 1}} = mixes.withdraw(state, 1)
     assert {:error, {:unknown, 1}} = mixes.resolved(state, 1)
     assert {:error, {:unknown, 9}} = mixes.withdraw(state, 9)
-    assert {:error, {:forgotten, "a", 0}} = mixes.arrive(state, "a", :wide, 0)
+    assert {:error, {:departed, "a", 0}} = mixes.arrive(state, "a", :wide, 0)
     assert {:held, 3, state} = mixes.arrive(state, "a", :wide, 3)
     assert Step.view(ref) == Step.view_disp(state)
   end
