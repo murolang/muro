@@ -2,7 +2,7 @@
 
 ## 0.22.20
 
-A keyed family's dispatcher refuses a second arrival of a creation index that has left. Per key it keeps a departed prefix `P` and a set `S` of creation indices strictly above `P`. Creation indices are non-negative integers. `P` starts at `-1`, the predecessor of the first index, and a key with no departures has no record. `finish` with `:resolve`, `resolved`, and `withdraw` add the index to `S` when it is above `P`, then advance `P` while `P + 1` is in `S` and drop that index from `S`. `arrive` of an index at or below `P`, or of an index in `S`, is `{:error, {:forgotten, key, index}}`, for `init` and for a signal. An earlier index that has not arrived still opens after a later index of the same key has left. A different key has its own record. A new index of the same key is accepted. The memory is `O(keys + permanent gaps)`. A gap that later arrives and then departs folds into `P`, and `S` shrinks. `S` keeps an index the host never delivers.
+A keyed family's dispatcher refuses a second arrival of a creation index that has left. Per key it keeps a departed prefix `P` and a set `S` of creation indices strictly above `P`. Creation indices are non-negative integers. `P` starts at `-1`, the predecessor of the first index, and a key with no departures has no record. `finish` with `:resolve`, `resolved`, and `withdraw` add the index to `S` when it is above `P`, then advance `P` while `P + 1` is in `S` and drop that index from `S`. `arrive` of an index at or below `P`, or of an index in `S`, is `{:error, {:forgotten, key, index}}`, for `init` and for a signal. An earlier index that has not arrived still opens after a later index of the same key has left. A different key has its own record. A new index of the same key is accepted. The record is exact. Memory is `O(departed instances)` per key in general. `P` advances only when creation indices are dense per key, or when holes are `skip`ped; only then is the bound `O(keys + permanent gaps)`. A global sequence, such as a shared nextval, leaves a gap at every index that belongs to another key, so `P` does not advance and `S` grows with every finished instance of that key. A gap that later arrives and then departs folds into `P`, and `S` shrinks. `S` keeps an index the host never delivers.
 
 `skip(state, key, index)` marks an index departed without opening it, so a hole the host will not fill can fold. `drop_key(state, key)` deletes that key's record when the key has no live row. After `drop_key`, an arrival of an index that had departed is a first arrival. That is the repeat this call stops catching. A key the host does not drop, and whose gaps never close and are not skipped, keeps its set.
 
@@ -12,7 +12,7 @@ A keyed family's dispatcher refuses a second arrival of a creation index that ha
 
 ### Manual
 
-- Limits, State machines, Temporal, and Emit: the departed prefix and gap set, `skip`, `drop_key`, and the `O(keys + permanent gaps)` bound. `resolved` of a left id stays unknown. The family-graph counts stay the check of the generated dispatcher.
+- Limits, State machines, Temporal, and Emit: the departed prefix and gap set, `skip`, `drop_key`, and the memory bound: exact, `O(departed instances)` per key in general, and `O(keys + permanent gaps)` only when indices are dense per key or holes are skipped. `resolved` of a left id stays unknown. The family-graph counts stay the check of the generated dispatcher.
 
 ### Package
 

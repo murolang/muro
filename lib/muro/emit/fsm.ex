@@ -3499,7 +3499,11 @@ defmodule Muro.Emit.Fsm do
       map, has left. `arrive` of that index is `{:error, {:forgotten, key,
       index}}`, for an init and for a signal. On departure the index joins
       the map when it is above `P`, and `P` advances while `P + 1` is in the
-      map. A later first arrival of an earlier index is accepted. `skip`
+      map. A later first arrival of an earlier index is accepted. The
+      record is exact. `P` advances only when indices are dense per key
+      or holes are skipped. In general the memory is O(departed
+      instances) per key. The bound is O(keys + permanent gaps) only in
+      those dense or skipped cases. `skip`
       marks an index departed. `drop_key` deletes one key's prefix and map
       when that key has no live row. `finish` takes this family's state, the
       id, and one end's session. `:resolve` drops the instance. `:rerun`
@@ -3681,7 +3685,14 @@ defmodule Muro.Emit.Fsm do
 
       # `P` is -1 when the key has no record. Every index `i` with
       # `i <= P` has departed. `gaps` holds departed indices strictly
-      # above `P`. A missing key is that empty record.
+      # above `P`. A missing key is that empty record. `P` advances
+      # only while `P + 1` is already in that map, so indices must be
+      # dense per key or the host must skip the holes. A global
+      # sequence leaves a gap at every index that belongs to another
+      # key, so `P` stays put and the map grows with every finished
+      # instance. Memory is O(departed instances) per key in general,
+      # and O(keys + permanent gaps) only when indices are dense per
+      # key or holes are skipped.
       defp record(st, key) do
         case Map.fetch(st.departed, key) do
           :error ->

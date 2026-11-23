@@ -18,6 +18,9 @@ defmodule Muro.Family.Step do
   `arriveMode`, and it refuses a creation index that has departed.
   That refusal is not `arriveTo`: Agda `fresh?` reads the live rows.
   The departed prefix and gap set remember host creation indices.
+  The record is exact. Memory is O(departed instances) per key in
+  general. O(keys + permanent gaps) holds only when indices are
+  dense per key, or when holes are skipped.
   They are not a field of the Agda state. `resolve/3` is `resolveTo`
   and `resolveMode`.
   `withdraw/3` is `withdrawTo` on the successful path: a held row leaves
