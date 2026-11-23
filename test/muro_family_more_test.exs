@@ -198,7 +198,7 @@ defmodule Muro.FamilyMoreTest do
   test "the dispatcher withdraws a held command and then releases the later one" do
     {disp, _parent, src} = compile!(@commands, Commands)
     assert src =~ "def withdraw(state, id)"
-    assert src =~ "def new, do: %{n: 0, by: %{}, id: %{}}"
+    assert src =~ "def new, do: %{n: 0, by: %{}, id: %{}, departed: %{}}"
 
     state = disp.new()
     assert {:open, 0, state} = disp.arrive(state, "a", :command, 0)
@@ -210,16 +210,22 @@ defmodule Muro.FamilyMoreTest do
     assert withdrawn.by["a"][2] == {2, :command, :held}
     refute Map.has_key?(withdrawn.by["a"], 1)
     refute Map.has_key?(withdrawn.id, 1)
-    # Nothing is kept for an id that has left. The counter tells it apart.
-    assert Map.keys(withdrawn) |> Enum.sort() == [:by, :id, :n]
+    # The id map drops an id that has left. The counter tells it apart.
+    # The creation index stays above this key's prefix.
+    assert Map.keys(withdrawn) |> Enum.sort() == [:by, :departed, :id, :n]
     assert withdrawn.n == 3
+    assert withdrawn.departed["a"] == {-1, %{1 => true}}
+    assert {:error, {:departed, "a", 1}} = disp.arrive(withdrawn, "a", :command, 1)
     refute inspect(withdrawn.by) =~ ":resolved"
     refute inspect(withdrawn.id) =~ ":resolved"
 
     assert {:ok, [{2, "a", :command}], released} = disp.resolved(withdrawn, 0)
     assert released.by["a"][2] == {2, :command, :open}
+    assert released.departed["a"] == {1, %{}}
     assert {:error, {:unknown, 1}} = disp.resolved(released, 1)
     assert {:error, {:resolved, 1}} = disp.withdraw(released, 1)
+    assert {:error, {:departed, "a", 0}} = disp.arrive(released, "a", :command, 0)
+    assert {:error, {:departed, "a", 1}} = disp.arrive(released, "a", :command, 1)
 
     fresh = disp.new()
     assert {:open, 0, fresh} = disp.arrive(fresh, "a", :command, 0)
@@ -296,7 +302,13 @@ defmodule Muro.FamilyMoreTest do
     assert any_state.by["a"][2] == {2, :command, :held}
 
     # A held row does not block a later arrival. The instance does not hold itself.
-    lone = %{n: 1, by: %{"a" => %{0 => {0, :command, :held}}}, id: %{0 => {"a", 0}}}
+    lone = %{
+      n: 1,
+      by: %{"a" => %{0 => {0, :command, :held}}},
+      id: %{0 => {"a", 0}},
+      departed: %{}
+    }
+
     assert {:open, 1, opened} = any.arrive(lone, "a", :command, 1)
     assert opened.by["a"][0] == {0, :command, :held}
     assert opened.by["a"][1] == {1, :command, :open}
@@ -341,7 +353,8 @@ defmodule Muro.FamilyMoreTest do
           3 => {2, :early, :held}
         }
       },
-      id: %{0 => {"a", 0}, 1 => {"a", 1}, 2 => {"a", 3}}
+      id: %{0 => {"a", 0}, 1 => {"a", 1}, 2 => {"a", 3}},
+      departed: %{}
     }
 
     assert {:ok, [{0, "a", :early}], next} = disp.withdraw(state, 2)

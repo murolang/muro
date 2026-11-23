@@ -74,7 +74,7 @@ defmodule Muro.FsmFamilyTest do
     assert {:error, {:duplicate, "a", 0}} = disp.arrive(state, "a", :signal, 0)
     assert {:ok, [{1, "a", :signal}], state} = disp.resolved(state, 0)
     assert {:error, {:unknown, 0}} = disp.resolved(state, 0)
-    assert {:open, 2, state} = disp.arrive(state, "a", :init, 0)
+    assert {:error, {:departed, "a", 0}} = disp.arrive(state, "a", :init, 0)
     assert {:error, {:duplicate, "a", 1}} = disp.arrive(state, "a", :signal, 1)
 
     assert {:error, {2, {:unknown, 0}}} =
@@ -87,7 +87,190 @@ defmodule Muro.FsmFamilyTest do
     state = disp.new()
     assert {:open, 0, state} = disp.arrive(state, "a", :signal, 5)
     assert {:ok, [], state} = disp.resolved(state, 0)
-    assert {:open, 1, _state} = disp.arrive(state, "a", :signal, 3)
+    assert {:open, 1, state} = disp.arrive(state, "a", :signal, 3)
+    assert {:error, {:departed, "a", 5}} = disp.arrive(state, "a", :signal, 5)
+  end
+
+  test "a departed creation index is refused and a gap still folds", %{disp: disp, parent: parent} do
+    server = Module.concat(parent, ServerWait)
+
+    state = disp.new()
+    assert {:open, 0, state} = disp.arrive(state, "a", :init, 0)
+    assert {:held, 1, state} = disp.arrive(state, "a", :signal, 1)
+    assert {:ok, [{1, "a", :signal}], done} = disp.finish(state, 0, server.init(), :down)
+    assert {:error, {:departed, "a", 0}} = disp.arrive(done, "a", :init, 0)
+    assert {:error, {:unknown, 0}} = disp.resolved(done, 0)
+    assert done.departed["a"] == {0, %{}}
+
+    assert {:error, {2, {:departed, "a", 0}}} =
+             disp.check_trace([
+               {:arrive, "a", :init, 0},
+               {:resolved, 0},
+               {:arrive, "a", :init, 0}
+             ])
+
+    state = disp.new()
+    assert {:open, 0, state} = disp.arrive(state, "a", :init, 0)
+    assert {:held, 1, state} = disp.arrive(state, "a", :signal, 1)
+    assert {:ok, [], withdrawn} = disp.withdraw(state, 1)
+    assert withdrawn.departed["a"] == {-1, %{1 => true}}
+    assert {:error, {:departed, "a", 1}} = disp.arrive(withdrawn, "a", :signal, 1)
+    assert {:error, {:resolved, 1}} = disp.withdraw(withdrawn, 1)
+    assert {:error, {:unknown, 9}} = disp.withdraw(withdrawn, 9)
+    assert {:error, {:unknown, 9}} = disp.withdraw(disp.new(), 9)
+    assert {:error, {:duplicate, "a", 0}} = disp.arrive(withdrawn, "a", :init, 0)
+    assert {:held, 2, later} = disp.arrive(withdrawn, "a", :signal, 2)
+    assert {:held, _} = hold_of(disp, later, 2)
+
+    assert {:error, {3, {:departed, "a", 1}}} =
+             disp.check_trace([
+               {:arrive, "a", :init, 0},
+               {:arrive, "a", :signal, 1},
+               {:withdraw, 1},
+               {:arrive, "a", :signal, 1}
+             ])
+
+    state = disp.new()
+    assert {:open, 0, state} = disp.arrive(state, "a", :signal, 4)
+    assert {:ok, [], left} = disp.resolved(state, 0)
+    assert {:error, {:departed, "a", 4}} = disp.arrive(left, "a", :signal, 4)
+
+    assert {:error, {2, {:departed, "a", 4}}} =
+             disp.check_trace([
+               {:arrive, "a", :signal, 4},
+               {:resolved, 0},
+               {:arrive, "a", :signal, 4}
+             ])
+
+    state = disp.new()
+    assert {:open, 0, state} = disp.arrive(state, "a", :signal, 2)
+    assert {:ok, [], state} = disp.resolved(state, 0)
+    assert state.departed["a"] == {-1, %{2 => true}}
+    assert {:open, 1, state} = disp.arrive(state, "a", :init, 0)
+    assert {:ok, [], state} = disp.resolved(state, 1)
+    assert state.departed["a"] == {0, %{2 => true}}
+    assert {:error, {:departed, "a", 0}} = disp.arrive(state, "a", :init, 0)
+    assert {:error, {:departed, "a", 2}} = disp.arrive(state, "a", :signal, 2)
+    assert {:open, 2, state} = disp.arrive(state, "a", :signal, 1)
+    assert {:ok, [], state} = disp.resolved(state, 2)
+    assert state.departed["a"] == {2, %{}}
+    assert map_size(elem(state.departed["a"], 1)) == 0
+    assert {:error, {:departed, "a", 0}} = disp.arrive(state, "a", :init, 0)
+    assert {:error, {:departed, "a", 1}} = disp.arrive(state, "a", :signal, 1)
+    assert {:error, {:departed, "a", 2}} = disp.arrive(state, "a", :signal, 2)
+    assert {:open, 3, state} = disp.arrive(state, "a", :init, 3)
+    assert {:open, 4, other} = disp.arrive(state, "b", :init, 0)
+    assert other.departed["a"] == {2, %{}}
+    refute Map.has_key?(other.departed, "b")
+    assert {:error, {:departed, "a", 0}} = disp.arrive(other, "a", :init, 0)
+
+    assert {:error, {6, {:departed, "a", 1}}} =
+             disp.check_trace([
+               {:arrive, "a", :signal, 2},
+               {:resolved, 0},
+               {:arrive, "a", :init, 0},
+               {:resolved, 1},
+               {:arrive, "a", :signal, 1},
+               {:resolved, 2},
+               {:arrive, "a", :signal, 1}
+             ])
+
+    assert :ok =
+             disp.check_trace([
+               {:arrive, "a", :signal, 5},
+               {:resolved, 0},
+               {:arrive, "a", :signal, 3},
+               {:resolved, 1},
+               {:arrive, "b", :init, 0},
+               {:resolved, 2},
+               {:arrive, "a", :init, 6},
+               {:resolved, 3}
+             ])
+
+    assert {:error, {8, {:departed, "a", 5}}} =
+             disp.check_trace([
+               {:arrive, "a", :signal, 5},
+               {:resolved, 0},
+               {:arrive, "a", :signal, 3},
+               {:resolved, 1},
+               {:arrive, "a", :init, 0},
+               {:resolved, 2},
+               {:arrive, "a", :signal, 4},
+               {:resolved, 3},
+               {:arrive, "a", :signal, 5}
+             ])
+
+    state = disp.new()
+    assert {:ok, skipped} = disp.skip(state, "a", 0)
+    assert skipped.departed["a"] == {0, %{}}
+    assert {:ok, ^skipped} = disp.skip(skipped, "a", 0)
+    assert {:error, {:departed, "a", 0}} = disp.arrive(skipped, "a", :init, 0)
+    assert {:error, {:index, -1}} = disp.skip(skipped, "a", -1)
+    assert {:open, 0, live} = disp.arrive(skipped, "a", :signal, 2)
+    assert {:error, {:duplicate, "a", 2}} = disp.skip(live, "a", 2)
+    assert {:ok, folded} = disp.skip(live, "a", 1)
+    assert folded.departed["a"] == {1, %{}}
+    assert folded.by["a"][2] == {0, :signal, :open}
+    assert {:ok, [], cleared} = disp.resolved(folded, 0)
+    assert cleared.departed["a"] == {2, %{}}
+
+    assert :ok =
+             disp.check_trace([
+               {:skip, "a", 0},
+               {:arrive, "a", :init, 2},
+               {:resolved, 0},
+               {:skip, "a", 1}
+             ])
+
+    assert {:error, {4, {:departed, "a", 2}}} =
+             disp.check_trace([
+               {:skip, "a", 0},
+               {:arrive, "a", :init, 2},
+               {:resolved, 0},
+               {:skip, "a", 1},
+               {:arrive, "a", :init, 2}
+             ])
+
+    state = disp.new()
+    assert {:open, 0, state} = disp.arrive(state, "a", :init, 0)
+    assert {:error, {:live, "a"}} = disp.drop_key(state, "a")
+    assert {:ok, [], gone} = disp.resolved(state, 0)
+    assert gone.departed["a"] == {0, %{}}
+    assert {:ok, dropped} = disp.drop_key(gone, "a")
+    refute Map.has_key?(dropped.departed, "a")
+    assert {:open, 1, _restarted} = disp.arrive(dropped, "a", :init, 0)
+    assert {:ok, fresh} = disp.drop_key(disp.new(), "missing")
+    assert fresh == disp.new()
+
+    assert :ok =
+             disp.check_trace([
+               {:arrive, "a", :init, 0},
+               {:resolved, 0},
+               {:drop, "a"},
+               {:arrive, "a", :init, 0},
+               {:resolved, 1}
+             ])
+
+    assert {:error, {1, {:live, "a"}}} =
+             disp.check_trace([
+               {:arrive, "a", :init, 0},
+               {:drop, "a"}
+             ])
+
+    state = disp.new()
+    assert {:open, 0, state} = disp.arrive(state, "b", :init, 0)
+    poison = put_in(state, [:departed, "a"], :bad)
+    assert {:open, 1, _} = disp.arrive(poison, "b", :init, 1)
+    assert {:error, {:state, _}} = disp.arrive(poison, "a", :init, 0)
+
+    old = %{n: 0, by: %{}, id: %{}}
+    assert {:error, {:state, ^old}} = disp.arrive(old, "a", :init, 0)
+
+    below = %{disp.new() | departed: %{"a" => {-2, %{}}}}
+    assert {:error, {:state, _}} = disp.arrive(below, "a", :init, 0)
+
+    overlap = %{disp.new() | departed: %{"a" => {1, %{1 => true}}}}
+    assert {:error, {:state, _}} = disp.arrive(overlap, "a", :init, 3)
   end
 
   test "a later signal opens before its init arrives, and an earlier signal blocks the next",
@@ -243,7 +426,9 @@ defmodule Muro.FsmFamilyTest do
     parent: parent,
     src: src
   } do
-    assert src =~ "def new, do: %{n: 0, by: %{}, id: %{}}"
+    assert src =~ "def new, do: %{n: 0, by: %{}, id: %{}, departed: %{}}"
+    assert src =~ "def skip(state, key, index)"
+    assert src =~ "def drop_key(state, key)"
     assert src =~ "def withdraw(state, id)"
     assert src =~ "def finish(session_state, family_state, id)"
     assert src =~ "def finish(session_state, step, family_state, id)"
@@ -614,6 +799,8 @@ defmodule Muro.FsmFamilyTest do
     assert {:ok, [], rerun} = disp.finish(state, 0, server.init(), :down, :rerun)
     assert rerun.by == state.by
     assert rerun.id == state.id
+    assert rerun.departed == state.departed
+    assert {:error, {:duplicate, "a", 0}} = disp.arrive(rerun, "a", :init, 0)
     assert {:error, {:held, 1}} = disp.resolved(rerun, 1)
     assert {:ok, [], again} = server.finish(server.init(), :down, rerun, 0, :rerun)
     assert again.by["a"][0] == {0, :init, :open}

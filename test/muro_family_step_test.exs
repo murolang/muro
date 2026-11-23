@@ -394,7 +394,10 @@ defmodule Muro.Family.StepTest do
     assert {:error, {:unknown, 9}} = Step.withdraw(ref, 9, @mixes)
 
     assert Step.fresh?(ref.rows, "a", 0)
-    assert {:ok, :held, 3, ref} = Step.arrive(ref, "a", :wide, 0, @mixes)
+    assert Step.departed?(ref, "a", 0)
+    assert ref.departed["a"] == {0, %{}}
+    assert {:error, {:departed, "a", 0}} = Step.arrive(ref, "a", :wide, 0, @mixes)
+    assert {:ok, :held, 3, ref} = Step.arrive(ref, "a", :wide, 3, @mixes)
     assert {:error, {:resolved, 1}} = Step.withdraw(ref, 1, @mixes)
     assert Step.invariant?(ref, @mixes)
     assert Step.earlier_resolved?(ref.rows, "a", :early)
@@ -409,7 +412,8 @@ defmodule Muro.Family.StepTest do
     assert {:error, {:resolved, 1}} = mixes.withdraw(state, 1)
     assert {:error, {:unknown, 1}} = mixes.resolved(state, 1)
     assert {:error, {:unknown, 9}} = mixes.withdraw(state, 9)
-    assert {:held, 3, state} = mixes.arrive(state, "a", :wide, 0)
+    assert {:error, {:departed, "a", 0}} = mixes.arrive(state, "a", :wide, 0)
+    assert {:held, 3, state} = mixes.arrive(state, "a", :wide, 3)
     assert Step.view(ref) == Step.view_disp(state)
   end
 
@@ -542,16 +546,25 @@ defmodule Muro.Family.StepTest do
       )
 
     case options do
-      [] -> {:arrive, "k0", hd(kinds), 0}
-      _ -> Enum.random(options)
+      [] ->
+        index =
+          Enum.find(0..64, fn index ->
+            Step.fresh?(ref.rows, "k0", index) and not Step.departed?(ref, "k0", index)
+          end)
+
+        {:arrive, "k0", hd(kinds), index}
+
+      _ ->
+        Enum.random(options)
     end
   end
 
   defp arrival(ref, kinds) do
     key = Enum.random(@keys)
-    used = ref.rows |> Enum.filter(&(&1.key == key)) |> MapSet.new(& &1.index)
 
-    case Enum.find(0..8, &(not MapSet.member?(used, &1))) do
+    case Enum.find(0..8, fn index ->
+           Step.fresh?(ref.rows, key, index) and not Step.departed?(ref, key, index)
+         end) do
       nil -> nil
       index -> {:arrive, key, Enum.random(kinds), index}
     end
