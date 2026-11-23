@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.22.20
+
+`sliceFold` and `bytesFold` reduce the fields of a constructor the step returns before the next octet, sixteen constructors deep. An unrestricted field the next step uses again is a literal, not an unreduced copy of the previous step. A reusable argument the body mentions more than once is reduced once, and each mention sees that value, so a fold does not rebuild it on every octet. An argument the body never mentions is left alone. A transfer-encoding scan that rebuilt a constructor field on every matching byte, and an `Expect` comparison that rebuilt a trimmed slice on every byte, spent minutes on one `refl`. The same scans now reduce with the buffer. The equations are unchanged. Fuel still bounds each reduction.
+
+### Manual
+
+- Terms: a fold reduces constructor fields of the accumulator before the next octet.
+- Terms: a reusable argument mentioned more than once is reduced once.
+
+### Package
+
+- Version 0.22.20.
+
 ## 0.22.19
 
 GitHub counts `.muro` files in language statistics without labeling them as another language. `.gitattributes` sets `linguist-detectable` and does not set `linguist-language`. A Linguist grammar for muro highlighting is later work.

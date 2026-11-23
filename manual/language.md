@@ -248,6 +248,8 @@ ASCII: `Pi`, `lam`, `->`.
 
 A non-dependent arrow `A → B` is `Π (_ : A) → B` with an affine ignored binder.
 
+A reusable argument the body mentions more than once is reduced once at the application, and each mention sees that value. A fold step then does not rebuild the argument on every octet. An argument the body never mentions is left alone.
+
 Application is juxtaposition: `f a b`. `motive`, `in`, and `def` never start an argument.
 
 ## Holes
@@ -379,7 +381,7 @@ b"\xFF"
 
 The escapes are `\\`, `\"`, `\n`, `\r`, `\t`, and `\xHH`. `\xHH` is exactly two hex digits and is any octet, including `00` and `FF`. There is no interpolation and no `\u{…}`. A raw UTF-8 byte in the source is that octet, so `b"é"` has length two and `"é"` has length one. `b"\xFF"` has length one and is not a Unicode scalar.
 
-`bytesLen` and `sliceLen` are the number of octets, as a `U64`. `bytesEq` and `sliceEq` compare octets and return a `WBool`. `bytesCat` concatenates two `Bytes` values. `slice s off len` is the `len` octets at `off`. An index past the end, or a length that does not fit, is the empty view. `sliceGet` and `bytesGet` return `Opt U8`: `wsome` of the octet, or `wnone`. `sliceUntil s b` is the prefix before the first `b`, or the whole view when `b` does not occur. `sliceAfter s b` is the suffix strictly after that octet, or empty when it does not occur. `sliceUncons` returns `Maybe (U8 × Slice)` from `std:maybe.muro`: `just` of the head and the leftover view, or `nothing`. `sliceFold` and `bytesFold` walk the octets. The step is `U8 → Slice → A → A`, and the leftover is a view even when the value being folded is a `Bytes`. `strBytes` is the UTF-8 encoding of a `String`.
+`bytesLen` and `sliceLen` are the number of octets, as a `U64`. `bytesEq` and `sliceEq` compare octets and return a `WBool`. `bytesCat` concatenates two `Bytes` values. `slice s off len` is the `len` octets at `off`. An index past the end, or a length that does not fit, is the empty view. `sliceGet` and `bytesGet` return `Opt U8`: `wsome` of the octet, or `wnone`. `sliceUntil s b` is the prefix before the first `b`, or the whole view when `b` does not occur. `sliceAfter s b` is the suffix strictly after that octet, or empty when it does not occur. `sliceUncons` returns `Maybe (U8 × Slice)` from `std:maybe.muro`: `just` of the head and the leftover view, or `nothing`. `sliceFold` and `bytesFold` walk the octets. The step is `U8 → Slice → A → A`, and the leftover is a view even when the value being folded is a `Bytes`. The next octet sees constructor fields of that accumulator reduced, sixteen constructors deep, so a field the step uses again is not an unreduced copy of the previous step. A reusable slice the fold mentions more than once is that same reduced value. `strBytes` is the UTF-8 encoding of a `String`.
 
 `Bytes` and `Slice` are Data, so `+` applies. The type formers themselves are erased: writing `Bytes` as a value is `no promotion: Bytes is an erased term`. A bytes value does not inhabit `String` or `Atom`, and neither inhabits `Bytes`. A `Bytes` literal does inhabit `Slice`. A session payload of `Bytes` or `Slice` is refused (`ill-formed payload`).
 

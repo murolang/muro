@@ -503,7 +503,7 @@ defmodule Muro.Check do
 
   defp whnf(k, book, {:app, f, a}, unfold) do
     case whnf(k - 1, book, f, unfold) do
-      {:ok, {:lam, _, _, _, t}} -> whnf(k - 1, book, Subst.inst(t, a), unfold)
+      {:ok, {:lam, q, _, _, t}} -> whnf_app(k - 1, book, q, t, a, unfold)
       {:ok, f1} -> {:ok, {:app, f1, a}}
       err -> err
     end
@@ -765,12 +765,101 @@ defmodule Muro.Check do
 
   defp whnf(k, book, {tag, ty, z, f, s}, unfold) when tag in [:bfold, :afold] do
     with {:ok, z1} <- whnf(k - 1, book, z, unfold),
+         {:ok, z1} <- whnf_acc(k - 1, book, z1, unfold, 0),
          {:ok, s1} <- whnf(k - 1, book, s, unfold) do
       fold_go(k - 1, book, tag, ty, z1, f, s1, unfold)
     end
   end
 
   defp whnf(_, _, t, _), do: {:ok, t}
+
+  # A reusable argument the body mentions more than once is reduced once.
+  # Each use sees that value, so a fold step does not rebuild it on every
+  # octet. An argument the body never mentions is left alone.
+  defp whnf_app(k, book, q, body, a, unfold) do
+    if Grade.kernel_qty(q) == :reuse and reused?(body) do
+      with {:ok, a1} <- whnf(k, book, a, unfold) do
+        whnf(k, book, Subst.inst(body, a1), unfold)
+      end
+    else
+      whnf(k, book, Subst.inst(body, a), unfold)
+    end
+  end
+
+  defp reused?(body), do: var_uses(0, body, 0) >= 2
+
+  defp var_uses(_x, _t, n) when n >= 2, do: 2
+  defp var_uses(x, {:var, y}, n) when x == y, do: n + 1
+  defp var_uses(_x, {:var, _}, n), do: n
+  defp var_uses(x, {:pi, _, a, _, b}, n), do: var_uses(x + 1, b, var_uses(x, a, n))
+  defp var_uses(x, {:lam, _, a, _, t}, n), do: var_uses(x + 1, t, var_uses(x, a, n))
+  defp var_uses(x, {:app, f, a}, n), do: var_uses(x, a, var_uses(x, f, n))
+  defp var_uses(x, {:su, t}, n), do: var_uses(x, t, n)
+  defp var_uses(x, {:prod, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:pair, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:letp, e, t}, n), do: var_uses(x + 2, t, var_uses(x, e, n))
+  defp var_uses(x, {:nu, f}, n), do: var_uses(x + 1, f, n)
+  defp var_uses(x, {:bisim, s, t}, n), do: var_uses(x, t, var_uses(x, s, n))
+
+  defp var_uses(x, {:matom, e, p, bs}, n) do
+    n = var_uses(x + 1, p, var_uses(x, e, n))
+    Enum.reduce(bs, n, fn {_, b}, n -> var_uses(x, b, n) end)
+  end
+
+  defp var_uses(x, {:mdata, e, p, bs}, n) do
+    n = var_uses(x + 1, p, var_uses(x, e, n))
+    Enum.reduce(bs, n, fn {_, ar, b}, n -> var_uses(x + ar, b, n) end)
+  end
+
+  defp var_uses(x, {tag, e, p, bs}, n) when tag in [:mwbool, :mopt] do
+    n = var_uses(x + 1, p, var_uses(x, e, n))
+    Enum.reduce(bs, n, fn {_, ar, b}, n -> var_uses(x + ar, b, n) end)
+  end
+
+  defp var_uses(x, {:mnat, e, p, z, s}, n) do
+    n = var_uses(x, z, var_uses(x + 1, p, var_uses(x, e, n)))
+    var_uses(x + 1, s, n)
+  end
+
+  defp var_uses(x, {:memp, e, p}, n), do: var_uses(x + 1, p, var_uses(x, e, n))
+
+  defp var_uses(x, {:munit, e, p, u}, n),
+    do: var_uses(x, u, var_uses(x + 1, p, var_uses(x, e, n)))
+
+  defp var_uses(x, {:unf, s, f}, n), do: var_uses(x, f, var_uses(x, s, n))
+  defp var_uses(x, {:ucons, s}, n), do: var_uses(x, s, n)
+  defp var_uses(x, {:idt, a, b, c}, n), do: var_uses(x, c, var_uses(x, b, var_uses(x, a, n)))
+  defp var_uses(x, {:rwt, e, p, t}, n), do: var_uses(x, t, var_uses(x + 1, p, var_uses(x, e, n)))
+  defp var_uses(x, {:ann, e, a}, n), do: var_uses(x, a, var_uses(x, e, n))
+  defp var_uses(x, {:tensor, d, s}, n), do: var_uses(x, s, var_uses(x, d, n))
+  defp var_uses(x, {:addi, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:muli, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:addt, t, u}, n), do: var_uses(x, u, var_uses(x, t, n))
+  defp var_uses(x, {:toi64, t}, n), do: var_uses(x, t, n)
+  defp var_uses(x, {:packi, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:word, _, args}, n), do: Enum.reduce(args, n, fn a, n -> var_uses(x, a, n) end)
+  defp var_uses(x, {:scat, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:slen, a}, n), do: var_uses(x, a, n)
+  defp var_uses(x, {:seq, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:bcat, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:blen, a}, n), do: var_uses(x, a, n)
+  defp var_uses(x, {:beq, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:xlen, a}, n), do: var_uses(x, a, n)
+  defp var_uses(x, {:xeq, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:bget, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:aget, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:btil, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:baft, a, b}, n), do: var_uses(x, b, var_uses(x, a, n))
+  defp var_uses(x, {:bunc, a}, n), do: var_uses(x, a, n)
+  defp var_uses(x, {:sbytes, a}, n), do: var_uses(x, a, n)
+
+  defp var_uses(x, {:bsub, a, b, c}, n),
+    do: var_uses(x, c, var_uses(x, b, var_uses(x, a, n)))
+
+  defp var_uses(x, {tag, ty, z, f, s}, n) when tag in [:bfold, :afold],
+    do: var_uses(x, s, var_uses(x, f, var_uses(x, z, var_uses(x, ty, n))))
+
+  defp var_uses(_x, _t, n), do: n
 
   defp whnf_word_arm(k, book, bs, name, args, stuck, unfold) do
     case Enum.find(bs, fn {n, _, _} -> n == name end) do
@@ -874,7 +963,8 @@ defmodule Muro.Check do
   defp fold_go(k, book, tag, ty, z, f, {:blit, <<b, rest::binary>>}, unfold) when k > 0 do
     step = {:app, {:app, {:app, f, u8_lit(b)}, {:blit, rest}}, z}
 
-    with {:ok, z1} <- whnf(k, book, step, unfold) do
+    with {:ok, z1} <- whnf(k, book, step, unfold),
+         {:ok, z1} <- whnf_acc(k, book, z1, unfold, 0) do
       fold_go(k - 1, book, tag, ty, z1, f, {:blit, rest}, unfold)
     end
   end
@@ -882,6 +972,52 @@ defmodule Muro.Check do
   defp fold_go(0, _book, _tag, _ty, _z, _f, _s, _unfold), do: {:error, @out_of_fuel}
 
   defp fold_go(_k, _book, tag, ty, z, f, s, _unfold), do: {:ok, {tag, ty, z, f, s}}
+
+  # A fold step returns a value. Constructor fields of that value are the
+  # next octet's inputs. Reduce each field once, a few constructors deep.
+  # An unrestricted field the next step uses more than once is then a
+  # literal, not an unreduced copy of the previous step.
+  @acc_depth 16
+
+  defp whnf_acc(_k, _book, t, _unfold, depth) when depth > @acc_depth, do: {:ok, t}
+
+  defp whnf_acc(k, book, t, unfold, depth) do
+    case ctor_spine(book, t) do
+      {:ok, {_dname, _ci, args}} ->
+        with {:ok, args1} <- whnf_fields(k, book, args, unfold, depth) do
+          {:ok, if(args1 == args, do: t, else: reapply(elem(apps(t), 0), args1))}
+        end
+
+      :error ->
+        case t do
+          {:pair, a, b} ->
+            with {:ok, a1} <- whnf_field(k, book, a, unfold, depth),
+                 {:ok, b1} <- whnf_field(k, book, b, unfold, depth) do
+              {:ok, if(a1 == a and b1 == b, do: t, else: {:pair, a1, b1})}
+            end
+
+          _ ->
+            {:ok, t}
+        end
+    end
+  end
+
+  defp whnf_fields(_k, _book, [], _unfold, _depth), do: {:ok, []}
+
+  defp whnf_fields(k, book, [a | as], unfold, depth) do
+    with {:ok, a1} <- whnf_field(k, book, a, unfold, depth),
+         {:ok, as1} <- whnf_fields(k, book, as, unfold, depth) do
+      {:ok, [a1 | as1]}
+    end
+  end
+
+  defp whnf_field(k, book, t, unfold, depth) do
+    with {:ok, t1} <- whnf(k, book, t, unfold) do
+      whnf_acc(k, book, t1, unfold, depth + 1)
+    end
+  end
+
+  defp reapply(head, args), do: Enum.reduce(args, head, fn a, f -> {:app, f, a} end)
 
   defp whnf_words(_k, _book, [], _unfold), do: {:ok, []}
 
@@ -5038,7 +5174,8 @@ defmodule Muro.Check do
 
       def_slots =
         defs
-        |> Task.async_stream(fn {d, i} -> {i, check_def(book, d, fuel)} end,
+        |> Task.async_stream(
+          fn {d, i} -> {i, check_def(book, d, fuel)} end,
           ordered: true,
           timeout: :infinity
         )
