@@ -308,6 +308,7 @@ defmodule Muro.FamilyMoreTest do
       id: %{0 => {"a", 0}},
       departed: %{}
     }
+
     assert {:open, 1, opened} = any.arrive(lone, "a", :command, 1)
     assert opened.by["a"][0] == {0, :command, :held}
     assert opened.by["a"][1] == {1, :command, :open}
