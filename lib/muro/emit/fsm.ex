@@ -3511,7 +3511,13 @@ defmodule Muro.Emit.Fsm do
       are skipped. `skip_below` raises the floor, drops gap entries at or
       below it, and deletes a key that then holds nothing above it. Memory
       is then O(keys with a departure above the floor + gap entries above
-      the floor). `skip` marks an index departed. `skip` and `skip_below`
+      the floor). `skip_below` above the floor walks every key's departed
+      record, O(keys) per call, so call it periodically, not on every
+      event. A restarted host can call `skip_below` with a persisted
+      low-water mark, the greatest index such that every index at or below
+      it has left. The highest finished index is not that mark: after an
+      out-of-order finish it refuses an earlier unfinished index.
+      `skip` marks an index departed. `skip` and `skip_below`
       with an index at or below the floor return the same state and do not
       read or validate the per-key departed record. `skip` still checks the
       live row first. A malformed record is reported by the next call that

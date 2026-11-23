@@ -216,7 +216,9 @@ defmodule Muro.Family.Step do
   at or below the new floor are dropped. A prefix below the floor is
   raised to the floor, then `P` advances while
   `P + 1` is in the gap map. A key that then holds nothing strictly above
-  the floor loses its record. A live row is left in place. A missing
+  the floor loses its record. A live row is left in place. A call
+  above the floor walks every key's departed record, O(keys), so a host
+  calls it periodically, not on every event. A missing
   `floor` is -1, as a missing `departed` map is empty. A present `floor`
   that is not an integer at least -1 is `{:state, state}`.
   """
