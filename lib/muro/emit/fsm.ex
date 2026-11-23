@@ -3140,6 +3140,9 @@ defmodule Muro.Emit.Fsm do
         "def new",
         "def arrive(state, key, kind, index)",
         "def resolved(state, id)",
+        "def withdraw(state, id)",
+        "def skip(state, key, index)",
+        "def drop_key(state, key)",
         "def finish(state, id, session_state)",
         "def finish(state, id, session_state, step)",
         "def finish(state, id, session_state, outcome)",
@@ -3488,20 +3491,26 @@ defmodule Muro.Emit.Fsm do
       returned is `{:error, {:unknown, id}}`. The call does not raise. The
       live rows are the open and held instances. Ids come from one counter
       and are not reused, so an id below the counter that is not live has
-      left. No row is kept for it, and the state does not grow with ids that
-      have left. `resolved` of an id that has left is `{:error, {:unknown,
-      id}}`, as it was before `withdraw`: a repeated resolution is not told
-      apart from an id this child never returned. A repeat
-      of a live instance is an error. A repeat of a forgotten instance is a
-      new instance. `finish` takes this family's state, the id, and one
-      end's session. `:resolve` drops the instance. `:rerun` keeps the row
-      and every held row of its key. It reads that one row and does not walk
-      the key. `check_trace` replays arrivals, resolutions, withdrawals,
-      reruns, and the session steps of an open instance. A rerun clears
-      that id's session, so the next step starts again.
+      left. `withdraw` tells that id from an id this child never returned.
+      `resolved` of an id that has left is `{:error, {:unknown, id}}`, as it
+      was before `withdraw`. Per key, `departed` stores a prefix `P` and a
+      map of creation indices strictly above `P`. `P` starts at -1, so no
+      index has departed. An index `i` with `i <= P`, and an index in that
+      map, has left. `arrive` of that index is `{:error, {:forgotten, key,
+      index}}`, for an init and for a signal. On departure the index joins
+      the map when it is above `P`, and `P` advances while `P + 1` is in the
+      map. A later first arrival of an earlier index is accepted. `skip`
+      marks an index departed. `drop_key` deletes one key's prefix and map
+      when that key has no live row. `finish` takes this family's state, the
+      id, and one end's session. `:resolve` drops the instance. `:rerun`
+      keeps the row and every held row of its key. It reads that one row and
+      does not walk the key. `check_trace` replays arrivals, resolutions,
+      withdrawals, skips, drops, reruns, and the session steps of an open
+      instance. A rerun clears that id's session, so the next step starts
+      again.
       \"\"\"
 
-      def new, do: %{n: 0, by: %{}, id: %{}}
+      def new, do: %{n: 0, by: %{}, id: %{}, departed: %{}}
 
       def arrive(state, key, kind, index) do
         with {:ok, st} <- read(state),
@@ -3524,9 +3533,10 @@ defmodule Muro.Emit.Fsm do
              {:ok, key, index} <- locate(st, id),
              {:ok, rows} <- rows_of(st, key),
              {:ok, _kind} <- open_row(rows, index, id, st),
-             {:ok, released, rows} <- take_released(Map.delete(rows, index), key, st) do
+             {:ok, released, rows} <- take_released(Map.delete(rows, index), key, st),
+             {:ok, departed} <- remember_map(st, key, index) do
           by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)
-          next = %{st | by: by, id: Map.delete(st.id, id)}
+          next = %{st | by: by, id: Map.delete(st.id, id), departed: departed}
           {:ok, released, next}
         else
           {:error, reason} -> {:error, reason}
@@ -3536,10 +3546,40 @@ defmodule Muro.Emit.Fsm do
       def withdraw(state, id) do
         with {:ok, st} <- read(state),
              {:ok, key, index, rows} <- held_only(st, id),
-             {:ok, released, rows} <- take_released(Map.delete(rows, index), key, st) do
+             {:ok, released, rows} <- take_released(Map.delete(rows, index), key, st),
+             {:ok, departed} <- remember_map(st, key, index) do
           by = if rows == %{}, do: Map.delete(st.by, key), else: Map.put(st.by, key, rows)
-          next = %{st | by: by, id: Map.delete(st.id, id)}
+          next = %{st | by: by, id: Map.delete(st.id, id), departed: departed}
           {:ok, released, next}
+        else
+          {:error, reason} -> {:error, reason}
+        end
+      end
+
+      def skip(state, key, index) do
+        with {:ok, st} <- read(state),
+             :ok <- index_ok(index),
+             {:ok, rows} <- rows_of(st, key),
+             :ok <- not_live(rows, key, index, st),
+             {:ok, {prefix, gaps}} <- record(st, key) do
+          cond do
+            index <= prefix or Map.has_key?(gaps, index) ->
+              {:ok, st}
+
+            true ->
+              {prefix, gaps} = fold_prefix(prefix, Map.put(gaps, index, true))
+              {:ok, %{st | departed: Map.put(st.departed, key, {prefix, gaps})}}
+          end
+        else
+          {:error, reason} -> {:error, reason}
+        end
+      end
+
+      def drop_key(state, key) do
+        with {:ok, st} <- read(state),
+             {:ok, rows} <- rows_of(st, key),
+             :ok <- idle(rows, key) do
+          {:ok, %{st | departed: Map.delete(st.departed, key)}}
         else
           {:error, reason} -> {:error, reason}
         end
@@ -3552,8 +3592,8 @@ defmodule Muro.Emit.Fsm do
       #{rules}
       defp rule(_kind), do: :error
 
-      defp read(%{n: n, by: by, id: ids} = st)
-           when is_integer(n) and n >= 0 and is_map(by) and is_map(ids) do
+      defp read(%{n: n, by: by, id: ids, departed: departed} = st)
+           when is_integer(n) and n >= 0 and is_map(by) and is_map(ids) and is_map(departed) do
         {:ok, st}
       end
 
@@ -3579,15 +3619,25 @@ defmodule Muro.Emit.Fsm do
 
       defp fresh(rows, key, index, st) do
         case Map.fetch(rows, index) do
-          :error ->
-            :ok
-
           {:ok, {id, kind, phase}}
           when is_integer(id) and id >= 0 and is_atom(kind) and phase in [:open, :held] ->
             {:error, {:duplicate, key, index}}
 
           {:ok, _} ->
             {:error, {:state, st}}
+
+          :error ->
+            case record(st, key) do
+              {:error, reason} ->
+                {:error, reason}
+
+              {:ok, {prefix, gaps}} ->
+                if index <= prefix or Map.has_key?(gaps, index) do
+                  {:error, {:forgotten, key, index}}
+                else
+                  :ok
+                end
+            end
         end
       end
 
@@ -3625,8 +3675,76 @@ defmodule Muro.Emit.Fsm do
       end
 
       # Ids are handed out from the counter and never reused, so an id
-      # below it that is not live has left. Nothing is kept per left id.
+      # below it that is not live has left. The id map does not keep it.
+      # The creation index is remembered by `remember_map`.
       defp left?(st, id), do: is_integer(id) and id >= 0 and id < st.n
+
+      # `P` is -1 when the key has no record. Every index `i` with
+      # `i <= P` has departed. `gaps` holds departed indices strictly
+      # above `P`. A missing key is that empty record.
+      defp record(st, key) do
+        case Map.fetch(st.departed, key) do
+          :error ->
+            {:ok, {-1, %{}}}
+
+          {:ok, {prefix, gaps}} when is_integer(prefix) and prefix >= -1 and is_map(gaps) ->
+            if gaps_ok?(prefix, gaps), do: {:ok, {prefix, gaps}}, else: {:error, {:state, st}}
+
+          _ ->
+            {:error, {:state, st}}
+        end
+      end
+
+      defp gaps_ok?(prefix, gaps) do
+        Enum.all?(gaps, fn
+          {ix, _} when is_integer(ix) and ix > prefix -> true
+          _ -> false
+        end)
+      end
+
+      defp remember_map(st, key, index) do
+        case record(st, key) do
+          {:error, reason} ->
+            {:error, reason}
+
+          {:ok, {prefix, gaps}} ->
+            cond do
+              index <= prefix or Map.has_key?(gaps, index) ->
+                {:error, {:state, st}}
+
+              true ->
+                {prefix, gaps} = fold_prefix(prefix, Map.put(gaps, index, true))
+                {:ok, Map.put(st.departed, key, {prefix, gaps})}
+            end
+        end
+      end
+
+      defp fold_prefix(prefix, gaps) do
+        next = prefix + 1
+
+        if Map.has_key?(gaps, next) do
+          fold_prefix(next, Map.delete(gaps, next))
+        else
+          {prefix, gaps}
+        end
+      end
+
+      defp not_live(rows, key, index, st) do
+        case Map.fetch(rows, index) do
+          :error ->
+            :ok
+
+          {:ok, {id, kind, phase}}
+          when is_integer(id) and id >= 0 and is_atom(kind) and phase in [:open, :held] ->
+            {:error, {:duplicate, key, index}}
+
+          {:ok, _} ->
+            {:error, {:state, st}}
+        end
+      end
+
+      defp idle(rows, _key) when map_size(rows) == 0, do: :ok
+      defp idle(_rows, key), do: {:error, {:live, key}}
 
       defp open_row(rows, index, id, st) do
         case Map.fetch(rows, index) do
@@ -3706,6 +3824,20 @@ defmodule Muro.Emit.Fsm do
       defp walk(disp, seen, [{:withdraw, id} | rest], i) do
         case withdraw(disp, id) do
           {:ok, _released, disp} -> walk(disp, seen, rest, i + 1)
+          {:error, reason} -> {:error, {i, reason}}
+        end
+      end
+
+      defp walk(disp, seen, [{:skip, key, index} | rest], i) do
+        case skip(disp, key, index) do
+          {:ok, disp} -> walk(disp, seen, rest, i + 1)
+          {:error, reason} -> {:error, {i, reason}}
+        end
+      end
+
+      defp walk(disp, seen, [{:drop, key} | rest], i) do
+        case drop_key(disp, key) do
+          {:ok, disp} -> walk(disp, seen, rest, i + 1)
           {:error, reason} -> {:error, {i, reason}}
         end
       end
