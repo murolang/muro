@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.19
+
+GitHub counts `.muro` files in language statistics without labeling them as another language. `.gitattributes` sets `linguist-detectable` and does not set `linguist-language`. A Linguist grammar for muro highlighting is later work.
+
+### Repository
+
+- `.gitattributes`: `*.muro linguist-detectable`.
+
+### Package
+
+- Version 0.22.19.
+
 ## 0.22.18
 
 The manual has a design for hybrid reals: a computable `Real` in `run`, a classical `CReal` in evidence and spec, and an erased bridge. The library books are not written yet.
