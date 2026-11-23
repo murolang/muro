@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.22.21
+
+`sliceFold` and `bytesFold` reduce each accumulator field the next step reads, before the next octet, sixteen constructors deep. That field is a constructor argument, one side of a pair, or the payload of `wsome`. `wtrue` and `wfalse` are the same walk. A field the step does not read stays as the step returned it. A step the checker cannot read that way still reduces every field. A reusable argument mentioned at least twice on one path is reduced once, one fuel below the body, and each mention sees that value. A match motive is not a mention, and the count is the most one arm mentions. Affine, linear, and erased arguments stay call-by-name. `whnf` fuel is a depth bound: each sub-reduction starts one lower, and nothing is handed back. Sharing, and reducing a field the next step reads, can change which checks finish under a given fuel. The equations are unchanged. A transfer-encoding scan that rebuilt a constructor field on every matching byte, and an `Expect` comparison that rebuilt a trimmed slice on every byte, spent minutes on one `refl`. The same scans now reduce with the buffer.
+
+### Manual
+
+- Terms: a fold reduces the accumulator fields the next step reads, sixteen deep.
+- Terms: a reusable argument mentioned twice on one path is reduced once, one fuel below the body.
+- Limits: `whnf` fuel is a per-path depth bound.
+
+### Package
+
+- Version 0.22.21.
+
 ## 0.22.20
 
 A keyed family's dispatcher refuses a second arrival of a creation index that has left. Per key it keeps a departed prefix `P` and a set `S` of creation indices strictly above `P`. Creation indices are non-negative integers. `P` starts at `-1`, the predecessor of the first index, and a key with no departures has no record. `finish` with `:resolve`, `resolved`, and `withdraw` add the index to `S` when it is above `P`, then advance `P` while `P + 1` is in `S` and drop that index from `S`. `arrive` of an index at or below `P`, or of an index in `S`, is `{:error, {:departed, key, index}}`, for `init` and for a signal. An earlier index that has not arrived still opens after a later index of the same key has left. A different key has its own record. A new index of the same key is accepted. The record is exact. Memory is `O(departed instances)` per key in general. `P` advances only when creation indices are dense per key, or when holes are `skip`ped; only then is the bound `O(keys + permanent gaps)`. A global sequence, such as a shared nextval, leaves a gap at every index that belongs to another key, so `P` does not advance and `S` grows with every finished instance of that key. A gap that later arrives and then departs folds into `P`, and `S` shrinks. `S` keeps an index the host never delivers.
