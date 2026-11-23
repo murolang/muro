@@ -192,6 +192,14 @@ defmodule Muro.Family.Step do
   index `i` with `i <= P` has departed. The gap map holds departed
   indices strictly above `P`. A key with no record has departed nothing
   above the floor. This predicate is not Agda `fresh?`.
+
+  A missing `floor` is -1, as on `empty/0`. A present `floor` that is
+  not an integer at least -1 does not match. The call fails the way a
+  departed record that is not `{P, S}` fails, and it does not read that
+  floor as -1. An error tuple does not fit: callers use the result as
+  a boolean. `arrive`, `resolve`, `withdraw`, and `skip_below` are the
+  host boundary. They return `{:error, {:state, state}}` for that floor
+  and do not raise.
   """
   def departed?(state, key, index) when is_integer(index) do
     {prefix, gaps} = departed_record(state, key)
@@ -202,9 +210,11 @@ defmodule Muro.Family.Step do
   Host promise: nothing at or below `index` arrives again, for any key.
 
   `floor` starts at -1. A call with `index <= floor` returns the same
-  state. The argument is a non-negative integer, the same check as a
-  creation index. Gap entries at or below the new floor are dropped. A
-  prefix below the floor is raised to the floor, then `P` advances while
+  state and does not read or validate the departed records. A malformed
+  record is reported by the next call that reads it. The argument is a
+  non-negative integer, the same check as a creation index. Gap entries
+  at or below the new floor are dropped. A prefix below the floor is
+  raised to the floor, then `P` advances while
   `P + 1` is in the gap map. A key that then holds nothing strictly above
   the floor loses its record. A live row is left in place. A missing
   `floor` is -1, as a missing `departed` map is empty. A present `floor`
@@ -217,8 +227,13 @@ defmodule Muro.Family.Step do
         {:ok, state}
       else
         case compact_departed(state, index) do
-          {:ok, departed} -> {:ok, %{state | departed: departed, floor: index}}
-          {:error, reason} -> {:error, reason}
+          {:ok, departed} ->
+            # `|` cannot add `floor` when the key is missing. A missing
+            # floor is -1, and this call stores the new one.
+            {:ok, state |> Map.put(:departed, departed) |> Map.put(:floor, index)}
+
+          {:error, reason} ->
+            {:error, reason}
         end
       end
     end
@@ -469,7 +484,7 @@ defmodule Muro.Family.Step do
 
   # A missing floor is -1, as a missing `departed` map is empty. The
   # generated dispatcher rejects a missing floor. A present bad floor
-  # is refused here.
+  # is `{:error, {:state, state}}` from the host calls.
   defp take_floor(state) do
     case Map.fetch(state, :floor) do
       :error ->
@@ -483,10 +498,13 @@ defmodule Muro.Family.Step do
     end
   end
 
+  # A missing floor is -1. A present bad floor does not match, as
+  # `departed_record` does not match a record that is not `{P, S}`.
+  # This reader does not turn that floor into -1. `departed?` uses it
+  # because a boolean predicate cannot return `{:state, state}`.
   defp floor_value(state) do
     case take_floor(state) do
       {:ok, floor} -> floor
-      {:error, _} -> -1
     end
   end
 

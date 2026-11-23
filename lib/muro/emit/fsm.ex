@@ -3511,9 +3511,12 @@ defmodule Muro.Emit.Fsm do
       are skipped. `skip_below` raises the floor, drops gap entries at or
       below it, and deletes a key that then holds nothing above it. Memory
       is then O(keys with a departure above the floor + gap entries above
-      the floor). `skip` marks an index departed. An index at or below the
-      floor is already departed. `drop_key` deletes one key's prefix and map
-      when that key has no live row. The floor stays. `finish` takes this
+      the floor). `skip` marks an index departed. `skip` and `skip_below`
+      with an index at or below the floor return the same state and do not
+      read or validate the per-key departed record. `skip` still checks the
+      live row first. A malformed record is reported by the next call that
+      reads it. `drop_key` deletes one key's prefix and map when that key
+      has no live row. The floor stays. `finish` takes this
       family's state, the id, and one end's session. `:resolve` drops the
       instance. `:rerun` keeps the row and every held row of its key. It
       reads that one row and does not walk the key. `check_trace` replays

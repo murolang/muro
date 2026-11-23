@@ -12,6 +12,8 @@ The floor sits outside `agda/Muro/Family.agda`, as the departed guard does. Refu
 
 **Breaking:** `new/0` stores `floor`. A state from 0.22.20, `%{n, by, id, departed}` with no `floor`, is `{:error, {:state, state}}`. Regenerate every committed fsm module that emits a keyed family. `Muro.Family.Step` treats a missing `floor` as `-1`, as it treats a missing `departed` map.
 
+`Muro.Family.Step.departed?/3` no longer reads a present `floor` that is not an integer at least `-1` as `-1`. The call fails to match, the same way a departed record that is not `{P, S}` fails to match. A missing `floor` is still `-1`. `skip_below` on a state with no `floor` key stores the new floor. That call used to raise `KeyError`.
+
 ### Manual
 
 - Limits, State machines, Temporal, and Emit: `skip_below`, the floor, the compaction, the restart cursor, and the memory bound. The floor only refuses arrivals, so the family-graph counts stay the check of the generated dispatcher.
