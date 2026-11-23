@@ -14,6 +14,8 @@ The floor sits outside `agda/Muro/Family.agda`, as the departed guard does. Refu
 
 In `Muro.Family.Step`, `skip_below` on a state with no `floor` stores the new floor. A present `floor` that is not an integer at least `-1` is `{:error, {:state, state}}` from `arrive`, `resolve`, `withdraw`, and `skip_below`, and `departed?/3` fails to match on it, as it does on a departed record that is not `{P, S}`.
 
+A definition's descent block is the strongly connected component of the call graph, computed once for the book. The block is the same set as before: a definition is in it when each can reach the other. The old walk re-explored every path, so a run whose body only calls a wide chain of other runs spent seconds deciding that its block is itself. Affine and linear arguments stay call-by-name.
+
 ### Manual
 
 - Limits, State machines, Temporal, and Emit: `skip_below`, the floor, the compaction, the restart low-water mark, the cost of a call, and the memory bound. The floor only refuses arrivals, so the family-graph counts stay the check of the generated dispatcher.

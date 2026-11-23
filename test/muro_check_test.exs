@@ -2976,6 +2976,15 @@ defmodule Muro.CheckTest do
     assert call("StdSucBin", :fromBits, [bits12]) == eleven + 1
   end
 
+  # Each layer calls both definitions in the next layer. The descent block
+  # of each one is itself. A path-visited search of that dag does not finish
+  # within the timeout; one walk of the call graph does.
+  @tag timeout: 30_000
+  test "a wide call dag decides its descent blocks in one walk" do
+    assert {:ok, book} = Parser.parse(wide_dag(24))
+    assert Check.check_sig(book) == :ok
+  end
+
   # The module exists only after Code.eval_string, so a literal remote call warns.
   # Head is the seed binder. Annotation and unit match are kernel forms.
   defp stream_head_src do
@@ -3085,5 +3094,28 @@ defmodule Muro.CheckTest do
     def g-later : evidence Π (A : Type) → Π (k : Nat) → {g A suc(0) k ≡ g A 0 k : Nat} :=
       λ (A : Type) → λ (k : Nat) → refl
     """
+  end
+
+  defp wide_dag(depth) do
+    layers =
+      for i <- 0..(depth - 1), j <- 0..1 do
+        """
+        def n#{i}_#{j} : run Nat :=
+          match n#{i + 1}_0 motive (λ _ → Nat)
+            | 0 => n#{i + 1}_1
+            | suc k => n#{i + 1}_1
+        """
+      end
+
+    bottoms = """
+    def n#{depth}_0 : run Nat := 0
+    def n#{depth}_1 : run Nat := 0
+    def top : run Nat :=
+      match n0_0 motive (λ _ → Nat)
+        | 0 => n0_1
+        | suc k => n0_1
+    """
+
+    IO.iodata_to_binary([layers, bottoms])
   end
 end
