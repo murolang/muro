@@ -272,6 +272,9 @@ defmodule Muro.Family.StepTest do
     assert stats.held > 0
     assert stats.opened > 0
     assert MapSet.size(stats.keys) > 1
+    assert stats.at_or_below > 0
+    assert stats.above > 0
+    assert stats.past > 0
   end
 
   test "a hand-built overtake is BadOpen and sits on script-a" do
@@ -481,6 +484,156 @@ defmodule Muro.Family.StepTest do
     end)
   end
 
+  test "skip_below matches the generated dispatcher", %{events: events, parent: parent} do
+    script = [
+      {:arrive, "a", :init, 0},
+      {:arrive, "a", :signal, 1},
+      {:arrive, "b", :init, 3},
+      {:skip_below, 0},
+      {:withdraw, 1},
+      {:resolved, 0},
+      {:arrive, "a", :init, 2},
+      {:resolved, 3},
+      {:skip_below, 2},
+      {:arrive, "b", :signal, 4},
+      {:skip_below, 1},
+      {:arrive, "c", :init, 1},
+      {:arrive, "c", :init, 5},
+      {:skip_below, -1}
+    ]
+
+    {dstate, ref} =
+      Enum.reduce(script, {events.new(), Step.empty()}, fn act, {dstate, ref} ->
+        {dstate, dres} = disp_act(events, dstate, act)
+        {ref, rres} = ref_act(ref, @events, act)
+
+        assert dres == rres,
+               "act #{inspect(act)} dispatcher #{inspect(dres)} reference #{inspect(rres)}"
+
+        assert Step.view(ref) == Step.view_disp(dstate)
+        assert ref.floor == dstate.floor
+        assert ref.departed == dstate.departed
+        assert ref.next == dstate.n
+        {dstate, ref}
+      end)
+
+    assert dstate.floor == 2
+    assert dstate.departed == %{}
+    assert dstate.by["b"][3] == {2, :init, :open}
+    assert dstate.by["b"][4] == {4, :signal, :held}
+    assert dstate.by["c"][5] == {5, :init, :open}
+    assert {:error, {:departed, "c", 1}} = events.arrive(dstate, "c", :init, 1)
+    assert {:error, {:departed, "c", 1}} = Step.arrive(ref, "c", :init, 1, @events)
+    assert Step.departed?(ref, "z", 2)
+    refute Step.departed?(ref, "z", 3)
+
+    trace = [
+      {:arrive, "a", :init, 0},
+      {:resolved, 0},
+      {:skip_below, 0},
+      {:arrive, "b", :init, 1},
+      {:arrive, "a", :init, 0}
+    ]
+
+    assert reference_trace(parent, @event_parties, @events, trace) == events.check_trace(trace)
+
+    assert {:error, {0, {:index, -1}}} = events.check_trace([{:skip_below, -1}])
+
+    assert reference_trace(parent, @event_parties, @events, [{:skip_below, -1}]) ==
+             events.check_trace([{:skip_below, -1}])
+  end
+
+  test "a missing floor behaves as empty's floor of -1" do
+    bare_empty = Map.delete(Step.empty(), :floor)
+    refute Map.has_key?(bare_empty, :floor)
+
+    assert Step.arrive(bare_empty, "a", :init, -1, @events) ==
+             Step.arrive(Step.empty(), "a", :init, -1, @events)
+
+    assert Step.resolve(bare_empty, 0, @events) == Step.resolve(Step.empty(), 0, @events)
+    assert Step.withdraw(bare_empty, 0, @events) == Step.withdraw(Step.empty(), 0, @events)
+    refute Step.departed?(bare_empty, "z", 0)
+    assert Step.departed?(bare_empty, "z", 0) == Step.departed?(Step.empty(), "z", 0)
+
+    assert {:ok, :open, 0, opened_bare} = Step.arrive(bare_empty, "a", :init, 0, @events)
+    assert {:ok, :open, 0, opened} = Step.arrive(Step.empty(), "a", :init, 0, @events)
+    assert_same_floor(opened_bare, opened)
+
+    assert {:ok, raised_bare} = Step.skip_below(bare_empty, 0)
+    assert {:ok, raised} = Step.skip_below(Step.empty(), 0)
+    assert raised_bare == raised
+    assert raised.floor == 0
+
+    base = %{
+      Step.empty()
+      | departed: %{
+          "a" => {1, %{3 => true, 6 => true}},
+          "b" => {-1, %{0 => true}}
+        }
+    }
+
+    bare = Map.delete(base, :floor)
+
+    assert Step.departed?(bare, "a", 1)
+    assert Step.departed?(bare, "a", 6)
+    refute Step.departed?(bare, "a", 2)
+    refute Step.departed?(bare, "z", 0)
+
+    for index <- 0..6 do
+      assert Step.departed?(bare, "a", index) == Step.departed?(base, "a", index)
+      assert Step.departed?(bare, "z", index) == Step.departed?(base, "z", index)
+    end
+
+    assert {:error, {:departed, "a", 1}} = Step.arrive(bare, "a", :init, 1, @events)
+    assert {:error, {:departed, "a", 1}} = Step.arrive(base, "a", :init, 1, @events)
+    assert Step.resolve(bare, 0, @events) == Step.resolve(base, 0, @events)
+    assert Step.withdraw(bare, 0, @events) == Step.withdraw(base, 0, @events)
+
+    assert {:ok, :open, 0, from_bare} = Step.arrive(bare, "a", :init, 2, @events)
+    assert {:ok, :open, 0, from_base} = Step.arrive(base, "a", :init, 2, @events)
+    assert_same_floor(from_bare, from_base)
+
+    assert {:ok, :held, 1, held_bare} = Step.arrive(from_bare, "a", :signal, 4, @events)
+    assert {:ok, :held, 1, held_base} = Step.arrive(from_base, "a", :signal, 4, @events)
+    assert {:ok, released, done_bare} = Step.resolve(held_bare, 0, @events)
+    assert {:ok, ^released, done_base} = Step.resolve(held_base, 0, @events)
+    assert_same_floor(done_bare, done_base)
+
+    assert {:ok, :open, 0, w_bare} = Step.arrive(bare, "a", :init, 2, @events)
+    assert {:ok, :held, 1, w_bare} = Step.arrive(w_bare, "a", :signal, 4, @events)
+    assert {:ok, :open, 0, w_base} = Step.arrive(base, "a", :init, 2, @events)
+    assert {:ok, :held, 1, w_base} = Step.arrive(w_base, "a", :signal, 4, @events)
+    assert {:error, {:opened, 0}} = Step.withdraw(w_bare, 0, @events)
+    assert {:error, {:opened, 0}} = Step.withdraw(w_base, 0, @events)
+    assert {:ok, wrel, wdone_bare} = Step.withdraw(w_bare, 1, @events)
+    assert {:ok, ^wrel, wdone_base} = Step.withdraw(w_base, 1, @events)
+    assert_same_floor(wdone_bare, wdone_base)
+
+    assert {:ok, floored_bare} = Step.skip_below(bare, 4)
+    assert {:ok, floored_base} = Step.skip_below(base, 4)
+    assert floored_bare == floored_base
+    assert floored_bare.floor == 4
+    assert floored_bare.departed["a"] == {4, %{6 => true}}
+    refute Map.has_key?(floored_bare.departed, "b")
+  end
+
+  test "a bad floor is {:state, state} and departed? does not read it as -1" do
+    {:ok, :open, 0, live} = Step.arrive(Step.empty(), "a", :init, 0, @events)
+
+    for bad <- [-2, :x, 1.5] do
+      state = %{live | floor: bad}
+
+      assert {:error, {:state, ^state}} = Step.arrive(state, "a", :signal, 1, @events)
+      assert {:error, {:state, ^state}} = Step.resolve(state, 0, @events)
+      assert {:error, {:state, ^state}} = Step.withdraw(state, 0, @events)
+      assert {:error, {:state, ^state}} = Step.skip_below(state, 1)
+
+      assert_raise CaseClauseError, ~r/\{:error,\s*\{:state,/, fn ->
+        Step.departed?(state, "a", 0)
+      end
+    end
+  end
+
   test "random any and mixed steps match the generated dispatchers", %{
     orders: orders,
     mixes: mixes
@@ -496,6 +649,9 @@ defmodule Muro.Family.StepTest do
     assert stats.held > 0
     assert stats.opened > 0
     assert MapSet.size(stats.keys) > 1
+    assert stats.at_or_below > 0
+    assert stats.above > 0
+    assert stats.past > 0
   end
 
   defp agree(disp, parent, parties, rules, kinds) do
@@ -540,7 +696,8 @@ defmodule Muro.Family.StepTest do
           resolve_ready(parent, ref, seen),
           rerun_ready(parent, ref, seen),
           session_ready(ref, seen, parties),
-          if(extra == :withdraw, do: withdraw_ready(ref))
+          if(extra == :withdraw, do: withdraw_ready(ref)),
+          legal_skip_below(ref)
         ],
         &is_tuple/1
       )
@@ -613,24 +770,87 @@ defmodule Muro.Family.StepTest do
   defp completing(party) when party in [:server, :waiter], do: :down
   defp completing(party) when party in [:task, :worker], do: {:send, :ok}
 
-  defp empty_stats, do: %{held: 0, opened: 0, keys: MapSet.new()}
+  defp empty_stats do
+    %{held: 0, opened: 0, keys: MapSet.new(), at_or_below: 0, above: 0, past: 0}
+  end
 
   defp random_family(disp, rules, kinds, stats) do
     Enum.reduce(1..40, {disp.new(), Step.empty(), stats}, fn _step, {dstate, ref, stats} ->
-      act = wild_act(rules, kinds)
-      {dstate, ref, stats} = step_family(disp, dstate, ref, rules, act, stats)
-      {dstate, ref, stats}
+      {act, stats} = maybe_skip_below(ref, wild_act(rules, kinds), stats)
+      step_family(disp, dstate, ref, rules, act, stats)
     end)
     |> elem(2)
   end
 
   defp random_wide(disp, rules, kinds, stats) do
     Enum.reduce(1..40, {disp.new(), Step.empty(), stats}, fn _step, {dstate, ref, stats} ->
-      act = wide_act(rules, kinds)
-      {dstate, ref, stats} = step_family(disp, dstate, ref, rules, act, stats)
-      {dstate, ref, stats}
+      {act, stats} = maybe_skip_below(ref, wide_act(rules, kinds), stats)
+      step_family(disp, dstate, ref, rules, act, stats)
     end)
     |> elem(2)
+  end
+
+  # One draw in six is `skip_below`. The rest keep `wild_act`'s 1–10
+  # split, and `wide_act`'s withdraw draw.
+  defp maybe_skip_below(ref, act, stats) do
+    if :rand.uniform(6) == 1 do
+      {class, act} = skip_below_step(ref)
+      {act, Map.update!(stats, class, &(&1 + 1))}
+    else
+      {act, stats}
+    end
+  end
+
+  # At or below the floor (a no-op once the floor is at least 0, and
+  # `{:index, -1}` while it is still -1), strictly above it, or past
+  # every live row.
+  defp skip_below_step(ref) do
+    floor = ref.floor
+    live = Enum.map(ref.rows, & &1.index)
+    hi = if live == [], do: floor, else: Enum.max(live)
+
+    case :rand.uniform(3) do
+      1 when floor >= 0 ->
+        {:at_or_below, {:skip_below, :rand.uniform(floor + 1) - 1}}
+
+      1 ->
+        {:at_or_below, {:skip_below, -1}}
+
+      2 ->
+        {:above, {:skip_below, above_floor_index(floor, live)}}
+
+      3 ->
+        {:past, {:skip_below, max(floor, hi) + :rand.uniform(3)}}
+    end
+  end
+
+  defp above_floor_index(floor, live) do
+    case Enum.filter(live, &(&1 > floor)) do
+      [] ->
+        floor + 1
+
+      above ->
+        floor + :rand.uniform(Enum.max(above) - floor)
+    end
+  end
+
+  # A legal trace only takes a non-negative index, and it stays inside
+  # 0..40 so a later arrival still has a fresh index in 0..64.
+  defp legal_skip_below(ref) do
+    floor = ref.floor
+    live = Enum.map(ref.rows, & &1.index)
+    hi = if live == [], do: floor, else: Enum.max(live)
+
+    case :rand.uniform(3) do
+      1 when floor >= 0 ->
+        {:skip_below, :rand.uniform(min(floor, 40) + 1) - 1}
+
+      2 ->
+        {:skip_below, min(max(floor + 1, 0), 40)}
+
+      _ ->
+        {:skip_below, min(max(floor, hi) + 1, 40)}
+    end
   end
 
   defp wild_act(rules, kinds) do
@@ -673,6 +893,8 @@ defmodule Muro.Family.StepTest do
       _ ->
         assert Step.view(ref2) == Step.view_disp(dstate2)
         assert ref2.next == dstate2.n
+        assert ref2.floor == dstate2.floor
+        assert ref2.departed == dstate2.departed
         assert Step.invariant?(ref2, rules)
         assert_local(ref2, rules)
         assert_progress(ref2, rules)
@@ -691,7 +913,19 @@ defmodule Muro.Family.StepTest do
             match?(%{phase: :open}, Enum.find(later.rows, &(&1.id == row.id)))
         end)
 
-    %{held: held, opened: opened, keys: keys}
+    %{stats | held: held, opened: opened, keys: keys}
+  end
+
+  defp assert_same_floor(left, right) do
+    assert Map.get(left, :floor, -1) == Map.get(right, :floor, -1)
+    assert Map.delete(left, :floor) == Map.delete(right, :floor)
+  end
+
+  defp disp_act(disp, state, {:skip_below, index}) do
+    case disp.skip_below(state, index) do
+      {:error, reason} -> {state, {:error, reason}}
+      {:ok, state} -> {state, :ok}
+    end
   end
 
   defp disp_act(disp, state, {:arrive, key, kind, index}) do
@@ -719,6 +953,13 @@ defmodule Muro.Family.StepTest do
     case disp.retain(state, id) do
       {:error, reason} -> {state, {:error, reason}}
       {:ok, [], state} -> {state, :ok}
+    end
+  end
+
+  defp ref_act(state, _rules, {:skip_below, index}) do
+    case Step.skip_below(state, index) do
+      {:error, reason} -> {state, {:error, reason}}
+      {:ok, state} -> {state, :ok}
     end
   end
 
@@ -837,6 +1078,13 @@ defmodule Muro.Family.StepTest do
       {:ok, ref, seen} ->
         assert Step.invariant?(ref, rules)
         leak(parent, ref, seen)
+    end
+  end
+
+  defp oracle_step(_parent, _parties, _rules, ref, seen, {:skip_below, index}) do
+    case Step.skip_below(ref, index) do
+      {:ok, ref} -> {:ok, ref, seen}
+      {:error, reason} -> {:error, reason}
     end
   end
 

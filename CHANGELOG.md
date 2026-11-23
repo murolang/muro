@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.22.22
+
+`skip_below(state, index)` is a host call on a keyed family's dispatcher and on `Muro.Family.Step`. The host promises that nothing at or below `index` arrives again, for any key. The state keeps one integer `floor`, initially `-1`. A call with `index <= floor` returns `{:ok, state}` and the same state. An index that is not a non-negative integer is `{:error, {:index, index}}`. `arrive` of an index at or below the floor is `{:error, {:departed, key, index}}`, for `init` and for a signal, including a first arrival this child has never seen. That refusal is the host's promise, and it is the one way this call refuses a legitimate arrival.
+
+On `skip_below` the floor rises. Gap entries at or below the floor are dropped. A prefix below the floor is raised to the floor, and `P` then advances while `P + 1` is in `S`. A key that then holds nothing strictly above the floor loses its record. A later departure above the floor folds from `max(P, floor)`. A departure at or below the floor writes nothing. A live row at or below the floor stays live and leaves by `resolved` or `withdraw` as it does today. `skip` of an index at or below the floor is a no-op after the live-row check. That no-op, and `skip_below` at or below the floor, do not read or validate the per-key departed record; a malformed record is reported by the next call that reads it. `drop_key` is unchanged and does not move the floor.
+
+Above the floor the prefix and the gap set stay exact. While `floor` stays `-1`, memory is the 0.22.20 bound. After `skip_below`, memory is `O(keys with a departure above the floor + gap entries above the floor)`. `skip_below` above the floor walks every key's departed record, O(keys) per call, so a host calls it periodically, not on every event. A global sequence, such as a shared nextval, can keep that bound by calling `skip_below` with the low-water mark. `new/0` starts at `-1`, so a host that restarts has lost the record. Before replaying it can call `skip_below` with a persisted low-water mark, the greatest creation index such that every index at or below it has left, so a redelivery at or below that mark is refused. The persisted number must be that mark, not the highest finished index: when work finishes out of order, the highest finished index can sit above an unfinished one, and that index's redelivery would be refused as departed.
+
+The floor sits outside `agda/Muro/Family.agda`, as the departed guard does. Refusing an arrival only removes runs, so `no-overtake` and the proved hold rules still hold. The family graph is unchanged. `examples/keyed-slots.muro` stays 171649 reachable states and 729184 transitions. `examples/keyed-commands.muro` stays 370 reachable states and 835 transitions. `skip_below` is a host step. It is not an edge of that script. `check_trace` takes `{:skip_below, index}`.
+
+**Breaking:** `new/0` stores `floor`. A state from 0.22.20 or 0.22.21, `%{n, by, id, departed}` with no `floor`, is `{:error, {:state, state}}`. Regenerate every committed fsm module that emits a keyed family. `Muro.Family.Step` treats a missing `floor` as `-1`, as it treats a missing `departed` map.
+
+In `Muro.Family.Step`, `skip_below` on a state with no `floor` stores the new floor. A present `floor` that is not an integer at least `-1` is `{:error, {:state, state}}` from `arrive`, `resolve`, `withdraw`, and `skip_below`, and `departed?/3` fails to match on it, as it does on a departed record that is not `{P, S}`.
+
+### Manual
+
+- Limits, State machines, Temporal, and Emit: `skip_below`, the floor, the compaction, the restart low-water mark, the cost of a call, and the memory bound. The floor only refuses arrivals, so the family-graph counts stay the check of the generated dispatcher.
+
+### Package
+
+- Version 0.22.22.
+
 ## 0.22.21
 
 `sliceFold` and `bytesFold` reduce each accumulator field the next step reads, before the next octet, sixteen constructors deep. That field is a constructor argument, one side of a pair, or the payload of `wsome`. `wtrue` and `wfalse` are the same walk. A field the step does not read stays as the step returned it. A step the checker cannot read that way still reduces every field. A reusable argument mentioned at least twice on one path is reduced once, one fuel below the body, and each mention sees that value. A match motive is not a mention, and the count is the most one arm mentions. Affine, linear, and erased arguments stay call-by-name. `whnf` fuel is a depth bound: each sub-reduction starts one lower, and nothing is handed back. Sharing, and reducing a field the next step reads, can change which checks finish under a given fuel. The equations are unchanged. A transfer-encoding scan that rebuilt a constructor field on every matching byte, and an `Expect` comparison that rebuilt a trimmed slice on every byte, spent minutes on one `refl`. The same scans now reduce with the buffer.
