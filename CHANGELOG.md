@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.22.21
+
+`skip_below(state, index)` is a host call on a keyed family's dispatcher and on `Muro.Family.Step`. The host promises that nothing at or below `index` arrives again, for any key. The state keeps one integer `floor`, initially `-1`. A call with `index <= floor` returns `{:ok, state}` and the same state. An index that is not a non-negative integer is `{:error, {:index, index}}`. `arrive` of an index at or below the floor is `{:error, {:departed, key, index}}`, for `init` and for a signal, including a first arrival this child has never seen. That refusal is the host's promise, and it is the one way this call refuses a legitimate arrival.
+
+On `skip_below` the floor rises. Gap entries at or below the floor are dropped. A prefix below the floor is raised to the floor, and `P` then advances while `P + 1` is in `S`. A key that then holds nothing strictly above the floor loses its record. A later departure above the floor folds from `max(P, floor)`. A departure at or below the floor writes nothing. A live row at or below the floor stays live and leaves by `resolved` or `withdraw` as it does today. `skip` of an index at or below the floor is a no-op after the live-row check. `drop_key` is unchanged and does not move the floor.
+
+Above the floor the prefix and the gap set stay exact. While `floor` stays `-1`, memory is the 0.22.20 bound. After `skip_below`, memory is `O(keys with a departure above the floor + gap entries above the floor)`. A global sequence, such as a shared nextval, can keep that bound by calling `skip_below` with the low-water mark. A host that restarts can set the floor from a persisted cursor before replaying, so a redelivery at or below that cursor is refused. `new/0` itself starts at `-1` and has lost the record.
+
+The floor sits outside `agda/Muro/Family.agda`, as the departed guard does. Refusing an arrival only removes runs, so `no-overtake` and the proved hold rules still hold. The family graph is unchanged. `examples/keyed-slots.muro` stays 171649 reachable states and 729184 transitions. `examples/keyed-commands.muro` stays 370 reachable states and 835 transitions. `skip_below` is a host step. It is not an edge of that script. `check_trace` takes `{:skip_below, index}`.
+
+**Breaking:** `new/0` stores `floor`. A state from 0.22.20, `%{n, by, id, departed}` with no `floor`, is `{:error, {:state, state}}`. Regenerate every committed fsm module that emits a keyed family. `Muro.Family.Step` treats a missing `floor` as `-1`, as it treats a missing `departed` map.
+
+### Manual
+
+- Limits, State machines, Temporal, and Emit: `skip_below`, the floor, the compaction, the restart cursor, and the memory bound. The floor only refuses arrivals, so the family-graph counts stay the check of the generated dispatcher.
+
+### Package
+
+- Version 0.22.21.
+
 ## 0.22.20
 
 A keyed family's dispatcher refuses a second arrival of a creation index that has left. Per key it keeps a departed prefix `P` and a set `S` of creation indices strictly above `P`. Creation indices are non-negative integers. `P` starts at `-1`, the predecessor of the first index, and a key with no departures has no record. `finish` with `:resolve`, `resolved`, and `withdraw` add the index to `S` when it is above `P`, then advance `P` while `P + 1` is in `S` and drop that index from `S`. `arrive` of an index at or below `P`, or of an index in `S`, is `{:error, {:departed, key, index}}`, for `init` and for a signal. An earlier index that has not arrived still opens after a later index of the same key has left. A different key has its own record. A new index of the same key is accepted. The record is exact. Memory is `O(departed instances)` per key in general. `P` advances only when creation indices are dense per key, or when holes are `skip`ped; only then is the bound `O(keys + permanent gaps)`. A global sequence, such as a shared nextval, leaves a gap at every index that belongs to another key, so `P` does not advance and `S` grows with every finished instance of that key. A gap that later arrives and then departs folds into `P`, and `S` shrinks. `S` keeps an index the host never delivers.

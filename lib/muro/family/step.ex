@@ -18,10 +18,15 @@ defmodule Muro.Family.Step do
   `arriveMode`, and it refuses a creation index that has departed.
   That refusal is not `arriveTo`: Agda `fresh?` reads the live rows.
   The departed prefix and gap set remember host creation indices.
-  The record is exact. Memory is O(departed instances) per key in
-  general. O(keys + permanent gaps) holds only when indices are
-  dense per key, or when holes are skipped.
-  They are not a field of the Agda state. `resolve/3` is `resolveTo`
+  `floor` is one integer, initially -1. `skip_below/2` raises it.
+  An index at or below the floor has departed for every key, including
+  a first arrival. The record above the floor is exact. While the
+  floor stays -1, memory is O(departed instances) per key in general,
+  and O(keys + permanent gaps) only when indices are dense per key or
+  holes are skipped. After `skip_below`, memory is O(keys with a
+  departure above the floor + gap entries above the floor). The floor
+  and the departed record are not fields of the Agda state. `resolve/3`
+  is `resolveTo`
   and `resolveMode`.
   `withdraw/3` is `withdrawTo` on the successful path: a held row leaves
   and the release is the release of `resolveMode`. Elixir returns
@@ -83,7 +88,7 @@ defmodule Muro.Family.Step do
   def proved_rules, do: %{init: :never, signal: :earlier}
 
   @doc "Agda `empty`."
-  def empty, do: %{next: 0, tick: 0, rows: [], departed: %{}}
+  def empty, do: %{next: 0, tick: 0, rows: [], departed: %{}, floor: -1}
 
   @doc """
   `holdOf` read from a family's rules. An unknown kind is the
@@ -144,7 +149,8 @@ defmodule Muro.Family.Step do
   """
   def arrive(state, key, kind, index, rules) do
     with :ok <- index_ok(index),
-         {:ok, _hold} <- hold_of(rules, kind) do
+         {:ok, _hold} <- hold_of(rules, kind),
+         {:ok, _floor} <- take_floor(state) do
       cond do
         not fresh?(state.rows, key, index) ->
           {:error, {:duplicate, key, index}}
@@ -181,14 +187,41 @@ defmodule Muro.Family.Step do
   @doc """
   True when creation index `index` of `key` has departed.
 
-  `P` starts at -1, before the first valid index. Every index `i` with
-  `i <= P` has departed. The gap map holds departed indices strictly
-  above `P`. A key with no record has departed nothing. This predicate
-  is not Agda `fresh?`.
+  `floor` starts at -1. Every index `i` with `i <= floor` has departed,
+  for every key. `P` starts at -1, before the first valid index. Every
+  index `i` with `i <= P` has departed. The gap map holds departed
+  indices strictly above `P`. A key with no record has departed nothing
+  above the floor. This predicate is not Agda `fresh?`.
   """
   def departed?(state, key, index) when is_integer(index) do
     {prefix, gaps} = departed_record(state, key)
-    index <= prefix or Map.has_key?(gaps, index)
+    index <= floor_value(state) or index <= prefix or Map.has_key?(gaps, index)
+  end
+
+  @doc """
+  Host promise: nothing at or below `index` arrives again, for any key.
+
+  `floor` starts at -1. A call with `index <= floor` returns the same
+  state. The argument is a non-negative integer, the same check as a
+  creation index. Gap entries at or below the new floor are dropped. A
+  prefix below the floor is raised to the floor, then `P` advances while
+  `P + 1` is in the gap map. A key that then holds nothing strictly above
+  the floor loses its record. A live row is left in place. A missing
+  `floor` is -1, as a missing `departed` map is empty. A present `floor`
+  that is not an integer at least -1 is `{:state, state}`.
+  """
+  def skip_below(state, index) do
+    with :ok <- index_ok(index),
+         {:ok, floor} <- take_floor(state) do
+      if index <= floor do
+        {:ok, state}
+      else
+        case compact_departed(state, index) do
+          {:ok, departed} -> {:ok, %{state | departed: departed, floor: index}}
+          {:error, reason} -> {:error, reason}
+        end
+      end
+    end
   end
 
   @doc """
@@ -198,15 +231,17 @@ defmodule Muro.Family.Step do
   an id that has already left.
   """
   def resolve(state, id, rules) do
-    case find(state.rows, id) do
-      nil ->
-        {:error, {:unknown, id}}
+    with {:ok, _floor} <- take_floor(state) do
+      case find(state.rows, id) do
+        nil ->
+          {:error, {:unknown, id}}
 
-      %{phase: :held} ->
-        {:error, {:held, id}}
+        %{phase: :held} ->
+          {:error, {:held, id}}
 
-      %{phase: :open, key: key} ->
-        release(state, id, key, rules)
+        %{phase: :open, key: key} ->
+          release(state, id, key, rules)
+      end
     end
   end
 
@@ -219,15 +254,17 @@ defmodule Muro.Family.Step do
   each of those cases.
   """
   def withdraw(state, id, rules) do
-    case find(state.rows, id) do
-      %{phase: :open} ->
-        {:error, {:opened, id}}
+    with {:ok, _floor} <- take_floor(state) do
+      case find(state.rows, id) do
+        %{phase: :open} ->
+          {:error, {:opened, id}}
 
-      %{phase: :held, key: key} ->
-        release(state, id, key, rules)
+        %{phase: :held, key: key} ->
+          release(state, id, key, rules)
 
-      nil ->
-        if left?(state, id), do: {:error, {:resolved, id}}, else: {:error, {:unknown, id}}
+        nil ->
+          if left?(state, id), do: {:error, {:resolved, id}}, else: {:error, {:unknown, id}}
+      end
     end
   end
 
@@ -430,6 +467,29 @@ defmodule Muro.Family.Step do
   defp index_ok(index) when is_integer(index) and index >= 0, do: :ok
   defp index_ok(index), do: {:error, {:index, index}}
 
+  # A missing floor is -1, as a missing `departed` map is empty. The
+  # generated dispatcher rejects a missing floor. A present bad floor
+  # is refused here.
+  defp take_floor(state) do
+    case Map.fetch(state, :floor) do
+      :error ->
+        {:ok, -1}
+
+      {:ok, floor} when is_integer(floor) and floor >= -1 ->
+        {:ok, floor}
+
+      {:ok, _} ->
+        {:error, {:state, state}}
+    end
+  end
+
+  defp floor_value(state) do
+    case take_floor(state) do
+      {:ok, floor} -> floor
+      {:error, _} -> -1
+    end
+  end
+
   defp signal?(rules, row), do: match?({:ok, :earlier}, hold_of(rules, row.kind))
   defp any?(rules, row), do: match?({:ok, :any}, hold_of(rules, row.kind))
 
@@ -444,17 +504,87 @@ defmodule Muro.Family.Step do
   end
 
   # Host creation indices. `P` is -1 until a departure folds up to it.
-  # A gap stays in the map until `P + 1` is that gap. Not an Agda field.
+  # A gap stays in the map until `P + 1` is that gap. An index at or
+  # below `floor` writes nothing: the floor already covers it. A later
+  # departure above the floor folds from `max(P, floor)`. Not an Agda field.
   defp note_departed(state, key, index) do
-    departed = Map.get(state, :departed, %{})
-    {prefix, gaps} = departed_record(state, key)
+    floor = floor_value(state)
 
-    if index <= prefix or Map.has_key?(gaps, index) do
+    if index <= floor do
       state
     else
-      {prefix, gaps} = fold_prefix(prefix, Map.put(gaps, index, true))
-      %{state | departed: Map.put(departed, key, {prefix, gaps})}
+      departed = Map.get(state, :departed, %{})
+      {prefix, gaps} = departed_record(state, key)
+
+      case store_departure(departed, key, prefix, gaps, floor, index) do
+        :already -> state
+        {:ok, departed} -> %{state | departed: departed}
+      end
     end
+  end
+
+  defp compact_departed(state, floor) do
+    departed = Map.get(state, :departed, %{})
+
+    Enum.reduce_while(departed, {:ok, %{}}, fn {key, rec}, {:ok, acc} ->
+      case squash_record(rec, floor, state) do
+        {:error, reason} -> {:halt, {:error, reason}}
+        :drop -> {:cont, {:ok, acc}}
+        {:keep, kept} -> {:cont, {:ok, Map.put(acc, key, kept)}}
+      end
+    end)
+  end
+
+  defp squash_record({prefix, gaps}, floor, state)
+       when is_integer(prefix) and prefix >= -1 and is_map(gaps) do
+    if gaps_ok?(prefix, gaps) do
+      case pack(prefix, gaps, floor) do
+        :drop -> :drop
+        kept -> {:keep, kept}
+      end
+    else
+      {:error, {:state, state}}
+    end
+  end
+
+  defp squash_record(_rec, _floor, state), do: {:error, {:state, state}}
+
+  # Raise a prefix below the floor up to the floor, drop gaps at or
+  # below that prefix, then fold. Nothing strictly above the floor
+  # means the key's record is dropped.
+  defp pack(prefix, gaps, floor) do
+    prefix = if prefix < floor, do: floor, else: prefix
+    gaps = Map.filter(gaps, fn {ix, _} -> ix > prefix end)
+    {prefix, gaps} = fold_prefix(prefix, gaps)
+
+    if prefix <= floor and map_size(gaps) == 0 do
+      :drop
+    else
+      {prefix, gaps}
+    end
+  end
+
+  defp store_departure(departed, key, prefix, gaps, floor, index) do
+    case pack(prefix, gaps, floor) do
+      :drop ->
+        {prefix, gaps} = fold_prefix(floor, %{index => true})
+        {:ok, Map.put(departed, key, {prefix, gaps})}
+
+      {prefix, gaps} ->
+        if index <= prefix or Map.has_key?(gaps, index) do
+          :already
+        else
+          {prefix, gaps} = fold_prefix(prefix, Map.put(gaps, index, true))
+          {:ok, Map.put(departed, key, {prefix, gaps})}
+        end
+    end
+  end
+
+  defp gaps_ok?(prefix, gaps) do
+    Enum.all?(gaps, fn
+      {ix, _} when is_integer(ix) and ix > prefix -> true
+      _ -> false
+    end)
   end
 
   defp departed_record(state, key) do

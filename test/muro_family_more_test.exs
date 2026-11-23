@@ -198,7 +198,7 @@ defmodule Muro.FamilyMoreTest do
   test "the dispatcher withdraws a held command and then releases the later one" do
     {disp, _parent, src} = compile!(@commands, Commands)
     assert src =~ "def withdraw(state, id)"
-    assert src =~ "def new, do: %{n: 0, by: %{}, id: %{}, departed: %{}}"
+    assert src =~ "def new, do: %{n: 0, by: %{}, id: %{}, departed: %{}, floor: -1}"
 
     state = disp.new()
     assert {:open, 0, state} = disp.arrive(state, "a", :command, 0)
@@ -212,7 +212,7 @@ defmodule Muro.FamilyMoreTest do
     refute Map.has_key?(withdrawn.id, 1)
     # The id map drops an id that has left. The counter tells it apart.
     # The creation index stays above this key's prefix.
-    assert Map.keys(withdrawn) |> Enum.sort() == [:by, :departed, :id, :n]
+    assert Map.keys(withdrawn) |> Enum.sort() == [:by, :departed, :floor, :id, :n]
     assert withdrawn.n == 3
     assert withdrawn.departed["a"] == {-1, %{1 => true}}
     assert {:error, {:departed, "a", 1}} = disp.arrive(withdrawn, "a", :command, 1)
@@ -306,7 +306,8 @@ defmodule Muro.FamilyMoreTest do
       n: 1,
       by: %{"a" => %{0 => {0, :command, :held}}},
       id: %{0 => {"a", 0}},
-      departed: %{}
+      departed: %{},
+      floor: -1
     }
 
     assert {:open, 1, opened} = any.arrive(lone, "a", :command, 1)
@@ -354,7 +355,8 @@ defmodule Muro.FamilyMoreTest do
         }
       },
       id: %{0 => {"a", 0}, 1 => {"a", 1}, 2 => {"a", 3}},
-      departed: %{}
+      departed: %{},
+      floor: -1
     }
 
     assert {:ok, [{0, "a", :early}], next} = disp.withdraw(state, 2)

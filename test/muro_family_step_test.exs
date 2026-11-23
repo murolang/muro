@@ -481,6 +481,65 @@ defmodule Muro.Family.StepTest do
     end)
   end
 
+  test "skip_below matches the generated dispatcher", %{events: events, parent: parent} do
+    script = [
+      {:arrive, "a", :init, 0},
+      {:arrive, "a", :signal, 1},
+      {:arrive, "b", :init, 3},
+      {:skip_below, 0},
+      {:withdraw, 1},
+      {:resolved, 0},
+      {:arrive, "a", :init, 2},
+      {:resolved, 3},
+      {:skip_below, 2},
+      {:arrive, "b", :signal, 4},
+      {:skip_below, 1},
+      {:arrive, "c", :init, 1},
+      {:arrive, "c", :init, 5},
+      {:skip_below, -1}
+    ]
+
+    {dstate, ref} =
+      Enum.reduce(script, {events.new(), Step.empty()}, fn act, {dstate, ref} ->
+        {dstate, dres} = disp_act(events, dstate, act)
+        {ref, rres} = ref_act(ref, @events, act)
+
+        assert dres == rres,
+               "act #{inspect(act)} dispatcher #{inspect(dres)} reference #{inspect(rres)}"
+
+        assert Step.view(ref) == Step.view_disp(dstate)
+        assert ref.floor == dstate.floor
+        assert ref.departed == dstate.departed
+        assert ref.next == dstate.n
+        {dstate, ref}
+      end)
+
+    assert dstate.floor == 2
+    assert dstate.departed == %{}
+    assert dstate.by["b"][3] == {2, :init, :open}
+    assert dstate.by["b"][4] == {4, :signal, :held}
+    assert dstate.by["c"][5] == {5, :init, :open}
+    assert {:error, {:departed, "c", 1}} = events.arrive(dstate, "c", :init, 1)
+    assert {:error, {:departed, "c", 1}} = Step.arrive(ref, "c", :init, 1, @events)
+    assert Step.departed?(ref, "z", 2)
+    refute Step.departed?(ref, "z", 3)
+
+    trace = [
+      {:arrive, "a", :init, 0},
+      {:resolved, 0},
+      {:skip_below, 0},
+      {:arrive, "b", :init, 1},
+      {:arrive, "a", :init, 0}
+    ]
+
+    assert reference_trace(parent, @event_parties, @events, trace) == events.check_trace(trace)
+
+    assert {:error, {0, {:index, -1}}} = events.check_trace([{:skip_below, -1}])
+
+    assert reference_trace(parent, @event_parties, @events, [{:skip_below, -1}]) ==
+             events.check_trace([{:skip_below, -1}])
+  end
+
   test "random any and mixed steps match the generated dispatchers", %{
     orders: orders,
     mixes: mixes
@@ -694,6 +753,13 @@ defmodule Muro.Family.StepTest do
     %{held: held, opened: opened, keys: keys}
   end
 
+  defp disp_act(disp, state, {:skip_below, index}) do
+    case disp.skip_below(state, index) do
+      {:error, reason} -> {state, {:error, reason}}
+      {:ok, state} -> {state, :ok}
+    end
+  end
+
   defp disp_act(disp, state, {:arrive, key, kind, index}) do
     case disp.arrive(state, key, kind, index) do
       {:error, reason} -> {state, {:error, reason}}
@@ -719,6 +785,13 @@ defmodule Muro.Family.StepTest do
     case disp.retain(state, id) do
       {:error, reason} -> {state, {:error, reason}}
       {:ok, [], state} -> {state, :ok}
+    end
+  end
+
+  defp ref_act(state, _rules, {:skip_below, index}) do
+    case Step.skip_below(state, index) do
+      {:error, reason} -> {state, {:error, reason}}
+      {:ok, state} -> {state, :ok}
     end
   end
 
@@ -837,6 +910,13 @@ defmodule Muro.Family.StepTest do
       {:ok, ref, seen} ->
         assert Step.invariant?(ref, rules)
         leak(parent, ref, seen)
+    end
+  end
+
+  defp oracle_step(_parent, _parties, _rules, ref, seen, {:skip_below, index}) do
+    case Step.skip_below(ref, index) do
+      {:ok, ref} -> {:ok, ref, seen}
+      {:error, reason} -> {:error, reason}
     end
   end
 

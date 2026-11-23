@@ -18,7 +18,9 @@ defmodule Muro.Emit.Fsm do
   child names the family: it takes the session to `done` and then
   either resolves the instance or leaves it unresolved for another
   session. `check_trace/1` replays those steps, a rerun, and the
-  session steps of an instance. Each end of the meeting has `finish`
+  session steps of an instance. `skip_below/2` sets one floor for every
+  key. An arrival at or below that floor is the departed refusal. Each
+  end of the meeting has `finish`
   too. One family on that end resolves, or reruns, through this child.
   Two families on that end do not: the error names `finish` on the
   family child. The child does not run the meeting. This child is
@@ -3143,6 +3145,7 @@ defmodule Muro.Emit.Fsm do
         "def withdraw(state, id)",
         "def skip(state, key, index)",
         "def drop_key(state, key)",
+        "def skip_below(state, index)",
         "def finish(state, id, session_state)",
         "def finish(state, id, session_state, step)",
         "def finish(state, id, session_state, outcome)",
@@ -3494,27 +3497,32 @@ defmodule Muro.Emit.Fsm do
       left. `withdraw` tells that id from an id this child never returned.
       `resolved` of an id that has left is `{:error, {:unknown, id}}`, as it
       was before `withdraw`. Per key, `departed` stores a prefix `P` and a
-      map of creation indices strictly above `P`. `P` starts at -1, so no
-      index has departed. An index `i` with `i <= P`, and an index in that
-      map, has left. `arrive` of that index is `{:error, {:departed, key,
-      index}}`, for an init and for a signal. On departure the index joins
-      the map when it is above `P`, and `P` advances while `P + 1` is in the
-      map. A later first arrival of an earlier index is accepted. The
-      record is exact. `P` advances only when indices are dense per key
-      or holes are skipped. In general the memory is O(departed
-      instances) per key. The bound is O(keys + permanent gaps) only in
-      those dense or skipped cases. `skip`
-      marks an index departed. `drop_key` deletes one key's prefix and map
-      when that key has no live row. `finish` takes this family's state, the
-      id, and one end's session. `:resolve` drops the instance. `:rerun`
-      keeps the row and every held row of its key. It reads that one row and
-      does not walk the key. `check_trace` replays arrivals, resolutions,
-      withdrawals, skips, drops, reruns, and the session steps of an open
-      instance. A rerun clears that id's session, so the next step starts
-      again.
+      map of creation indices strictly above `P`. `P` starts at -1. The
+      state also stores one `floor`, starting at -1. An index has left when
+      it is at or below `floor`, at or below `P`, or in that map. `arrive`
+      of that index is `{:error, {:departed, key, index}}`, for an init and
+      for a signal, including a first arrival the floor covers. On departure
+      an index above the floor joins the map, folding from `max(P, floor)`,
+      and `P` advances while `P + 1` is in the map. A departure at or below
+      the floor writes nothing. A later first arrival of an earlier index
+      above the floor is accepted. Above the floor the record is exact.
+      While `floor` stays -1, memory is O(departed instances) per key, and
+      O(keys + permanent gaps) only when indices are dense per key or holes
+      are skipped. `skip_below` raises the floor, drops gap entries at or
+      below it, and deletes a key that then holds nothing above it. Memory
+      is then O(keys with a departure above the floor + gap entries above
+      the floor). `skip` marks an index departed. An index at or below the
+      floor is already departed. `drop_key` deletes one key's prefix and map
+      when that key has no live row. The floor stays. `finish` takes this
+      family's state, the id, and one end's session. `:resolve` drops the
+      instance. `:rerun` keeps the row and every held row of its key. It
+      reads that one row and does not walk the key. `check_trace` replays
+      arrivals, resolutions, withdrawals, skips, drops, `skip_below`,
+      reruns, and the session steps of an open instance. A rerun clears
+      that id's session, so the next step starts again.
       \"\"\"
 
-      def new, do: %{n: 0, by: %{}, id: %{}, departed: %{}}
+      def new, do: %{n: 0, by: %{}, id: %{}, departed: %{}, floor: -1}
 
       def arrive(state, key, kind, index) do
         with {:ok, st} <- read(state),
@@ -3564,15 +3572,22 @@ defmodule Muro.Emit.Fsm do
         with {:ok, st} <- read(state),
              :ok <- index_ok(index),
              {:ok, rows} <- rows_of(st, key),
-             :ok <- not_live(rows, key, index, st),
-             {:ok, {prefix, gaps}} <- record(st, key) do
+             :ok <- not_live(rows, key, index, st) do
           cond do
-            index <= prefix or Map.has_key?(gaps, index) ->
+            index <= st.floor ->
               {:ok, st}
 
             true ->
-              {prefix, gaps} = fold_prefix(prefix, Map.put(gaps, index, true))
-              {:ok, %{st | departed: Map.put(st.departed, key, {prefix, gaps})}}
+              case record(st, key) do
+                {:error, reason} ->
+                  {:error, reason}
+
+                {:ok, {prefix, gaps}} ->
+                  case store_departure(st.departed, key, prefix, gaps, st.floor, index) do
+                    :already -> {:ok, st}
+                    {:ok, departed} -> {:ok, %{st | departed: departed}}
+                  end
+              end
           end
         else
           {:error, reason} -> {:error, reason}
@@ -3589,6 +3604,22 @@ defmodule Muro.Emit.Fsm do
         end
       end
 
+      def skip_below(state, index) do
+        with {:ok, st} <- read(state),
+             :ok <- index_ok(index) do
+          if index <= st.floor do
+            {:ok, st}
+          else
+            case compact_departed(st, index) do
+              {:ok, departed} -> {:ok, %{st | departed: departed, floor: index}}
+              {:error, reason} -> {:error, reason}
+            end
+          end
+        else
+          {:error, reason} -> {:error, reason}
+        end
+      end
+
       #{family_finish(parent, parties)}
       def check_trace(trace) when is_list(trace), do: walk(new(), %{}, trace, 0)
       def check_trace(other), do: {:error, {:trace, other}}
@@ -3596,8 +3627,9 @@ defmodule Muro.Emit.Fsm do
       #{rules}
       defp rule(_kind), do: :error
 
-      defp read(%{n: n, by: by, id: ids, departed: departed} = st)
-           when is_integer(n) and n >= 0 and is_map(by) and is_map(ids) and is_map(departed) do
+      defp read(%{n: n, by: by, id: ids, departed: departed, floor: floor} = st)
+           when is_integer(n) and n >= 0 and is_map(by) and is_map(ids) and is_map(departed) and
+                  is_integer(floor) and floor >= -1 do
         {:ok, st}
       end
 
@@ -3636,7 +3668,7 @@ defmodule Muro.Emit.Fsm do
                 {:error, reason}
 
               {:ok, {prefix, gaps}} ->
-                if index <= prefix or Map.has_key?(gaps, index) do
+                if index <= st.floor or index <= prefix or Map.has_key?(gaps, index) do
                   {:error, {:departed, key, index}}
                 else
                   :ok
@@ -3684,15 +3716,18 @@ defmodule Muro.Emit.Fsm do
       defp left?(st, id), do: is_integer(id) and id >= 0 and id < st.n
 
       # `P` is -1 when the key has no record. Every index `i` with
-      # `i <= P` has departed. `gaps` holds departed indices strictly
-      # above `P`. A missing key is that empty record. `P` advances
-      # only while `P + 1` is already in that map, so indices must be
-      # dense per key or the host must skip the holes. A global
-      # sequence leaves a gap at every index that belongs to another
-      # key, so `P` stays put and the map grows with every finished
-      # instance. Memory is O(departed instances) per key in general,
-      # and O(keys + permanent gaps) only when indices are dense per
-      # key or holes are skipped.
+      # `i <= floor` has departed, and so has every `i <= P`. `gaps`
+      # holds departed indices strictly above `P`. A missing key is
+      # that empty record. `P` advances only while `P + 1` is already
+      # in that map. A departure above the floor folds from
+      # `max(P, floor)`, so a dense run above the floor stays one
+      # prefix. While `floor` stays -1, indices must be dense per key
+      # or the host must skip the holes. A global sequence leaves a
+      # gap at every index that belongs to another key, so `P` stays
+      # put and the map grows with every finished instance.
+      # `skip_below` drops what the floor covers. Memory is then
+      # O(keys with a departure above the floor + gap entries above
+      # the floor).
       defp record(st, key) do
         case Map.fetch(st.departed, key) do
           :error ->
@@ -3714,18 +3749,75 @@ defmodule Muro.Emit.Fsm do
       end
 
       defp remember_map(st, key, index) do
-        case record(st, key) do
-          {:error, reason} ->
-            {:error, reason}
+        cond do
+          index <= st.floor ->
+            {:ok, st.departed}
 
-          {:ok, {prefix, gaps}} ->
-            cond do
-              index <= prefix or Map.has_key?(gaps, index) ->
-                {:error, {:state, st}}
+          true ->
+            case record(st, key) do
+              {:error, reason} ->
+                {:error, reason}
 
-              true ->
-                {prefix, gaps} = fold_prefix(prefix, Map.put(gaps, index, true))
-                {:ok, Map.put(st.departed, key, {prefix, gaps})}
+              {:ok, {prefix, gaps}} ->
+                case store_departure(st.departed, key, prefix, gaps, st.floor, index) do
+                  :already -> {:error, {:state, st}}
+                  {:ok, departed} -> {:ok, departed}
+                end
+            end
+        end
+      end
+
+      defp compact_departed(st, floor) do
+        Enum.reduce_while(st.departed, {:ok, %{}}, fn {key, rec}, {:ok, acc} ->
+          case squash_record(rec, floor, st) do
+            {:error, reason} -> {:halt, {:error, reason}}
+            :drop -> {:cont, {:ok, acc}}
+            {:keep, kept} -> {:cont, {:ok, Map.put(acc, key, kept)}}
+          end
+        end)
+      end
+
+      defp squash_record({prefix, gaps}, floor, st)
+           when is_integer(prefix) and prefix >= -1 and is_map(gaps) do
+        if gaps_ok?(prefix, gaps) do
+          case pack(prefix, gaps, floor) do
+            :drop -> :drop
+            kept -> {:keep, kept}
+          end
+        else
+          {:error, {:state, st}}
+        end
+      end
+
+      defp squash_record(_rec, _floor, st), do: {:error, {:state, st}}
+
+      # A prefix below the floor is raised to the floor. Gaps at or
+      # below that prefix are dropped, then `P` folds. A record with
+      # nothing strictly above the floor is dropped.
+      defp pack(prefix, gaps, floor) do
+        prefix = if prefix < floor, do: floor, else: prefix
+        gaps = Map.filter(gaps, fn {ix, _} -> ix > prefix end)
+        {prefix, gaps} = fold_prefix(prefix, gaps)
+
+        if prefix <= floor and map_size(gaps) == 0 do
+          :drop
+        else
+          {prefix, gaps}
+        end
+      end
+
+      defp store_departure(departed, key, prefix, gaps, floor, index) do
+        case pack(prefix, gaps, floor) do
+          :drop ->
+            {prefix, gaps} = fold_prefix(floor, %{index => true})
+            {:ok, Map.put(departed, key, {prefix, gaps})}
+
+          {prefix, gaps} ->
+            if index <= prefix or Map.has_key?(gaps, index) do
+              :already
+            else
+              {prefix, gaps} = fold_prefix(prefix, Map.put(gaps, index, true))
+              {:ok, Map.put(departed, key, {prefix, gaps})}
             end
         end
       end
@@ -3848,6 +3940,13 @@ defmodule Muro.Emit.Fsm do
 
       defp walk(disp, seen, [{:drop, key} | rest], i) do
         case drop_key(disp, key) do
+          {:ok, disp} -> walk(disp, seen, rest, i + 1)
+          {:error, reason} -> {:error, {i, reason}}
+        end
+      end
+
+      defp walk(disp, seen, [{:skip_below, index} | rest], i) do
+        case skip_below(disp, index) do
           {:ok, disp} -> walk(disp, seen, rest, i + 1)
           {:error, reason} -> {:error, {i, reason}}
         end

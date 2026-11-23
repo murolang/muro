@@ -273,6 +273,230 @@ defmodule Muro.FsmFamilyTest do
     assert {:error, {:state, _}} = disp.arrive(overlap, "a", :init, 3)
   end
 
+  test "skip_below is a monotonic floor over every key", %{disp: disp} do
+    state = disp.new()
+    assert state.floor == -1
+    assert {:ok, once} = disp.skip_below(state, 4)
+    assert once.floor == 4
+    assert once.departed == %{}
+    assert once.by == state.by and once.id == state.id and once.n == state.n
+    assert {:ok, ^once} = disp.skip_below(once, 4)
+    assert {:ok, ^once} = disp.skip_below(once, 2)
+    assert {:ok, ^once} = disp.skip_below(once, 0)
+    assert {:error, {:index, -1}} = disp.skip_below(once, -1)
+    assert {:error, {:index, 1.5}} = disp.skip_below(once, 1.5)
+    assert {:error, {:index, :nope}} = disp.skip_below(once, :nope)
+
+    assert {:error, {:departed, "a", 0}} = disp.arrive(once, "a", :init, 0)
+    assert {:error, {:departed, "a", 4}} = disp.arrive(once, "a", :signal, 4)
+    assert {:error, {:departed, "b", 4}} = disp.arrive(once, "b", :init, 4)
+    assert {:error, {:departed, "b", 1}} = disp.arrive(once, "b", :signal, 1)
+    assert {:open, 0, above} = disp.arrive(once, "a", :init, 5)
+    assert {:held, 1, above} = disp.arrive(above, "a", :signal, 6)
+    assert above.floor == 4
+    assert above.by["a"][5] == {0, :init, :open}
+    assert above.by["a"][6] == {1, :signal, :held}
+
+    # A restart lost the record. The persisted cursor is the floor.
+    assert {:ok, restarted} = disp.skip_below(disp.new(), 10)
+    assert restarted.departed == %{}
+    assert {:error, {:departed, "a", 10}} = disp.arrive(restarted, "a", :init, 10)
+    assert {:error, {:departed, "b", 0}} = disp.arrive(restarted, "b", :signal, 0)
+    assert {:open, 0, _} = disp.arrive(restarted, "a", :init, 11)
+
+    stale = %{n: 0, by: %{}, id: %{}, departed: %{}}
+    assert {:error, {:state, ^stale}} = disp.skip_below(stale, 0)
+    assert {:error, {:state, ^stale}} = disp.arrive(stale, "a", :init, 0)
+    bad = %{disp.new() | floor: -2}
+    assert {:error, {:state, ^bad}} = disp.skip_below(bad, 0)
+    assert {:error, {:state, ^bad}} = disp.arrive(bad, "a", :init, 0)
+  end
+
+  test "skip_below compacts departed records and leaves live rows", %{disp: disp} do
+    state = disp.new()
+    assert {:ok, state} = disp.skip(state, "a", 0)
+    assert {:ok, state} = disp.skip(state, "a", 1)
+    assert state.departed["a"] == {1, %{}}
+    assert {:ok, state} = disp.skip(state, "b", 8)
+    assert {:ok, state} = disp.skip(state, "b", 3)
+    assert state.departed["b"] == {-1, %{3 => true, 8 => true}}
+    assert {:ok, state} = disp.skip(state, "c", 4)
+    assert {:open, 0, state} = disp.arrive(state, "d", :init, 2)
+    assert {:held, 1, state} = disp.arrive(state, "d", :signal, 4)
+    assert {:open, 2, state} = disp.arrive(state, "e", :init, 9)
+
+    assert {:ok, floored} = disp.skip_below(state, 5)
+    assert floored.floor == 5
+    refute Map.has_key?(floored.departed, "a")
+    refute Map.has_key?(floored.departed, "c")
+    assert floored.departed["b"] == {5, %{8 => true}}
+    assert floored.by["d"][2] == {0, :init, :open}
+    assert floored.by["d"][4] == {1, :signal, :held}
+    assert floored.by["e"][9] == {2, :init, :open}
+    assert floored.id == state.id
+    assert {:error, {:duplicate, "d", 2}} = disp.arrive(floored, "d", :init, 2)
+    assert {:error, {:duplicate, "d", 4}} = disp.arrive(floored, "d", :signal, 4)
+    assert {:error, {:duplicate, "d", 2}} = disp.skip(floored, "d", 2)
+    assert {:ok, ^floored} = disp.skip(floored, "d", 1)
+    assert {:ok, ^floored} = disp.skip(floored, "a", 5)
+    assert {:error, {:departed, "a", 1}} = disp.arrive(floored, "a", :init, 1)
+    assert {:error, {:departed, "b", 8}} = disp.arrive(floored, "b", :signal, 8)
+    assert {:error, {:departed, "z", 5}} = disp.arrive(floored, "z", :init, 5)
+    assert {:open, 3, above} = disp.arrive(floored, "a", :signal, 6)
+    assert above.departed["b"] == {5, %{8 => true}}
+
+    assert {:ok, marked} = disp.skip(floored, "a", 7)
+    assert marked.departed["a"] == {5, %{7 => true}}
+    assert marked.by == floored.by
+    assert {:error, {:departed, "a", 7}} = disp.arrive(marked, "a", :signal, 7)
+
+    assert {:ok, [{1, "d", :signal}], released} = disp.resolved(floored, 0)
+    assert {:ok, [{1, "d", :signal}], plain} = disp.resolved(state, 0)
+    assert released.by == plain.by
+    assert released.id == plain.id
+    refute Map.has_key?(released.departed, "d")
+    assert plain.departed["d"] == {-1, %{2 => true}}
+    assert released.by["d"][4] == {1, :signal, :open}
+    assert {:ok, [], released} = disp.resolved(released, 1)
+    refute Map.has_key?(released.departed, "d")
+    assert {:error, {:departed, "d", 2}} = disp.arrive(released, "d", :init, 2)
+    assert {:error, {:departed, "d", 4}} = disp.arrive(released, "d", :signal, 4)
+
+    held = floored
+    assert {:ok, [], held} = disp.withdraw(held, 1)
+    assert held.by["d"][2] == {0, :init, :open}
+    refute Map.has_key?(held.by["d"], 4)
+    refute Map.has_key?(held.departed, "d")
+    assert {:ok, [], held} = disp.resolved(held, 0)
+    refute Map.has_key?(held.departed, "d")
+    assert held.floor == 5
+
+    assert {:error, {:live, "e"}} = disp.drop_key(floored, "e")
+    assert {:ok, [], gone} = disp.resolved(floored, 2)
+    assert gone.departed["e"] == {5, %{9 => true}}
+    assert {:ok, dropped} = disp.drop_key(gone, "e")
+    refute Map.has_key?(dropped.departed, "e")
+    assert dropped.floor == 5
+    assert {:open, _, _} = disp.arrive(dropped, "e", :init, 9)
+    assert {:error, {:departed, "e", 4}} = disp.arrive(dropped, "e", :signal, 4)
+
+    poison = put_in(floored, [:departed, "a"], :bad)
+    assert {:ok, ^poison} = disp.skip_below(poison, 5)
+    assert {:ok, ^poison} = disp.skip_below(poison, 3)
+    assert {:ok, ^poison} = disp.skip(poison, "a", 1)
+    assert {:error, {:state, _}} = disp.skip_below(poison, 6)
+    assert {:error, {:state, _}} = disp.skip(poison, "a", 8)
+  end
+
+  test "a departure above the floor stays exact and folds from the floor", %{disp: disp} do
+    state = disp.new()
+    assert {:ok, state} = disp.skip(state, "a", 1)
+    assert {:ok, state} = disp.skip(state, "a", 4)
+    assert state.departed["a"] == {-1, %{1 => true, 4 => true}}
+    assert {:ok, state} = disp.skip_below(state, 2)
+    assert state.departed["a"] == {2, %{4 => true}}
+    assert {:error, {:departed, "a", 1}} = disp.arrive(state, "a", :init, 1)
+    assert {:error, {:departed, "a", 2}} = disp.arrive(state, "a", :init, 2)
+    assert {:error, {:departed, "b", 2}} = disp.arrive(state, "b", :signal, 2)
+    assert {:open, 0, state} = disp.arrive(state, "a", :init, 3)
+    assert {:error, {:departed, "a", 4}} = disp.arrive(state, "a", :signal, 4)
+    assert {:ok, [], state} = disp.resolved(state, 0)
+    assert state.departed["a"] == {4, %{}}
+    assert {:error, {:departed, "a", 4}} = disp.arrive(state, "a", :init, 4)
+    assert {:open, 1, _} = disp.arrive(state, "a", :init, 5)
+
+    dense = disp.new()
+    assert {:ok, dense} = disp.skip_below(dense, 5)
+    assert {:open, 0, dense} = disp.arrive(dense, "a", :init, 6)
+    assert {:ok, [], dense} = disp.resolved(dense, 0)
+    assert dense.departed["a"] == {6, %{}}
+    refute Map.has_key?(elem(dense.departed["a"], 1), 6)
+    assert {:open, 1, dense} = disp.arrive(dense, "a", :init, 7)
+    assert {:ok, [], dense} = disp.resolved(dense, 1)
+    assert dense.departed["a"] == {7, %{}}
+    assert {:ok, dense} = disp.skip(dense, "a", 9)
+    assert dense.departed["a"] == {7, %{9 => true}}
+    assert {:error, {:departed, "a", 6}} = disp.arrive(dense, "a", :init, 6)
+    assert {:open, 2, _} = disp.arrive(dense, "a", :init, 8)
+
+    covered = disp.new()
+    assert {:ok, covered} = disp.skip(covered, "a", 0)
+    assert {:ok, covered} = disp.skip(covered, "a", 1)
+    assert {:ok, covered} = disp.skip(covered, "a", 2)
+    assert covered.departed["a"] == {2, %{}}
+    assert {:ok, kept} = disp.skip_below(covered, 0)
+    assert kept.departed["a"] == {2, %{}}
+    assert {:ok, cleared} = disp.skip_below(kept, 2)
+    refute Map.has_key?(cleared.departed, "a")
+    assert {:error, {:departed, "a", 2}} = disp.arrive(cleared, "a", :init, 2)
+    assert {:open, 0, _} = disp.arrive(cleared, "a", :init, 3)
+  end
+
+  test "check_trace replays skip_below", %{disp: disp} do
+    assert :ok =
+             disp.check_trace([
+               {:arrive, "a", :init, 0},
+               {:resolved, 0},
+               {:skip_below, 0},
+               {:arrive, "b", :init, 1},
+               {:resolved, 1}
+             ])
+
+    assert {:error, {4, {:departed, "a", 0}}} =
+             disp.check_trace([
+               {:skip_below, 4},
+               {:arrive, "b", :signal, 5},
+               {:resolved, 0},
+               {:skip_below, 1},
+               {:arrive, "a", :init, 0}
+             ])
+
+    assert {:error, {0, {:index, -1}}} = disp.check_trace([{:skip_below, -1}])
+
+    assert {:error, {1, {:index, :nope}}} =
+             disp.check_trace([{:skip_below, 3}, {:skip_below, :nope}])
+
+    assert :ok =
+             disp.check_trace([
+               {:skip_below, 3},
+               {:skip_below, 3},
+               {:skip_below, 1},
+               {:arrive, "a", :init, 4},
+               {:resolved, 0}
+             ])
+  end
+
+  test "periodic skip_below bounds a global creation sequence", %{disp: disp} do
+    keys = ~w(a b c d)
+    live_cap = 4
+    span_limit = 6
+
+    {plain, _popen, floored, _fopen, max_weight, plain_gaps} =
+      Enum.reduce(0..239, {disp.new(), [], disp.new(), [], 0, 0}, fn i, acc ->
+        {plain, popen, floored, fopen, max_w, gaps} = acc
+        key = Enum.at(keys, rem(i, length(keys)))
+        {:open, id, plain} = disp.arrive(plain, key, :init, i)
+        {:open, ^id, floored} = disp.arrive(floored, key, :init, i)
+        popen = [{i, id} | popen]
+        fopen = [{i, id} | fopen]
+        {plain, popen} = drain_global(disp, plain, popen, live_cap, span_limit)
+        {floored, fopen} = drain_global(disp, floored, fopen, live_cap, span_limit)
+        floored = raise_low_water(disp, floored, fopen, i)
+        weight = departed_weight(floored)
+        assert weight <= 16
+        assert_above_floor(floored)
+        {plain, popen, floored, fopen, max(max_w, weight), max(gaps, gap_count(plain))}
+      end)
+
+    assert plain.floor == -1
+    assert max_weight <= 16
+    assert plain_gaps >= 100
+    assert plain_gaps > max_weight
+    assert floored.floor > 0
+    assert {:error, {:departed, "a", 0}} = disp.arrive(floored, "a", :init, 0)
+    assert {:open, _, _} = disp.arrive(floored, "z", :init, floored.floor + 1_000)
+  end
+
   test "a later signal opens before its init arrives, and an earlier signal blocks the next",
        %{disp: disp} do
     search = search!()
@@ -426,9 +650,10 @@ defmodule Muro.FsmFamilyTest do
     parent: parent,
     src: src
   } do
-    assert src =~ "def new, do: %{n: 0, by: %{}, id: %{}, departed: %{}}"
+    assert src =~ "def new, do: %{n: 0, by: %{}, id: %{}, departed: %{}, floor: -1}"
     assert src =~ "def skip(state, key, index)"
     assert src =~ "def drop_key(state, key)"
+    assert src =~ "def skip_below(state, index)"
     assert src =~ "def withdraw(state, id)"
     assert src =~ "def finish(session_state, family_state, id)"
     assert src =~ "def finish(session_state, step, family_state, id)"
@@ -1130,6 +1355,85 @@ defmodule Muro.FsmFamilyTest do
   defp show(trace) when is_list(trace), do: inspect(Enum.reverse(trace))
 
   defp who(inst), do: "#{inst.key} #{inst.kind} #{inst.index}"
+
+  defp drain_global(disp, state, opens, live_cap, span_limit) do
+    span = open_span(opens)
+
+    cond do
+      length(opens) <= live_cap and span < span_limit ->
+        {state, opens}
+
+      span >= span_limit and opens != [] ->
+        {{_index, id}, rest} = pop_oldest(opens)
+        assert {:ok, [], state} = disp.resolved(state, id)
+        drain_global(disp, state, rest, live_cap, span_limit)
+
+      length(opens) > live_cap ->
+        {{_index, id}, rest} = pop_newest(opens)
+        assert {:ok, [], state} = disp.resolved(state, id)
+        drain_global(disp, state, rest, live_cap, span_limit)
+
+      true ->
+        {state, opens}
+    end
+  end
+
+  defp raise_low_water(disp, state, [], arrived) do
+    assert {:ok, state} = disp.skip_below(state, arrived)
+    state
+  end
+
+  defp raise_low_water(disp, state, opens, _arrived) do
+    floor_ix = Enum.min(Enum.map(opens, &elem(&1, 0))) - 1
+
+    if floor_ix >= 0 do
+      assert {:ok, state} = disp.skip_below(state, floor_ix)
+      state
+    else
+      state
+    end
+  end
+
+  defp open_span([]), do: 0
+
+  defp open_span(opens) do
+    idxs = Enum.map(opens, &elem(&1, 0))
+    Enum.max(idxs) - Enum.min(idxs)
+  end
+
+  defp pop_oldest(opens) do
+    oldest = Enum.min_by(opens, &elem(&1, 0))
+    {oldest, List.delete(opens, oldest)}
+  end
+
+  defp pop_newest(opens) do
+    newest = Enum.max_by(opens, &elem(&1, 0))
+    {newest, List.delete(opens, newest)}
+  end
+
+  defp departed_weight(state) do
+    Enum.reduce(state.departed, 0, fn {_key, {_prefix, gaps}}, acc ->
+      acc + 1 + map_size(gaps)
+    end)
+  end
+
+  defp gap_count(state) do
+    Enum.reduce(state.departed, 0, fn {_key, {_prefix, gaps}}, acc ->
+      acc + map_size(gaps)
+    end)
+  end
+
+  defp assert_above_floor(state) do
+    for {_key, {prefix, gaps}} <- state.departed do
+      assert prefix >= state.floor
+      assert prefix > state.floor or map_size(gaps) > 0
+
+      Enum.each(gaps, fn {ix, _} ->
+        assert ix > state.floor
+        assert ix > prefix
+      end)
+    end
+  end
 
   defp two_inits do
     [
