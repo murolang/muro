@@ -773,12 +773,17 @@ defmodule Muro.Check do
 
   defp whnf(_, _, t, _), do: {:ok, t}
 
-  # A reusable argument the body mentions more than once is reduced once.
-  # Each use sees that value, so a fold step does not rebuild it on every
-  # octet. An argument the body never mentions is left alone.
+  # A reusable argument mentioned at least twice on one path is reduced
+  # once, so a fold step does not rebuild it on every octet. `whnf` fuel
+  # is a depth bound: a clause enters each sub-reduction at `k - 1` and
+  # does not get back what that reduction did not use. The argument is
+  # that nested reduction. The body keeps `k`, which is the call-by-name
+  # bound for the same beta. Affine, linear, and erased binders stay
+  # call-by-name. Fuel 1 would enter the argument at 0, and `whnf(0)`
+  # fails before looking, so that beta stays call-by-name too.
   defp whnf_app(k, book, q, body, a, unfold) do
-    if Grade.kernel_qty(q) == :reuse and reused?(body) do
-      with {:ok, a1} <- whnf(k, book, a, unfold) do
+    if k > 1 and Grade.kernel_qty(q) == :reuse and reused?(body) do
+      with {:ok, a1} <- whnf(k - 1, book, a, unfold) do
         whnf(k, book, Subst.inst(body, a1), unfold)
       end
     else
