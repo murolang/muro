@@ -2,12 +2,13 @@
 
 ## 0.22.20
 
-`sliceFold` and `bytesFold` reduce the fields of a constructor the step returns before the next octet, sixteen constructors deep. An unrestricted field the next step uses again is a literal, not an unreduced copy of the previous step. A reusable argument the body mentions more than once is reduced once, and each mention sees that value, so a fold does not rebuild it on every octet. An argument the body never mentions is left alone. A transfer-encoding scan that rebuilt a constructor field on every matching byte, and an `Expect` comparison that rebuilt a trimmed slice on every byte, spent minutes on one `refl`. The same scans now reduce with the buffer. The equations are unchanged. Fuel still bounds each reduction.
+`sliceFold` and `bytesFold` reduce each accumulator field the next step reads, before the next octet, sixteen constructors deep. That field is a constructor argument, one side of a pair, or the payload of `wsome`. `wtrue` and `wfalse` are the same walk. A field the step does not read stays as the step returned it. A step the checker cannot read that way still reduces every field. A reusable argument mentioned at least twice on one path is reduced once, one fuel below the body, and each mention sees that value. A match motive is not a mention, and the count is the most one arm mentions. Affine, linear, and erased arguments stay call-by-name. `whnf` fuel is a depth bound: each sub-reduction starts one lower, and nothing is handed back. Sharing, and reducing a field the next step reads, can change which checks finish under a given fuel. The equations are unchanged. A transfer-encoding scan that rebuilt a constructor field on every matching byte, and an `Expect` comparison that rebuilt a trimmed slice on every byte, spent minutes on one `refl`. The same scans now reduce with the buffer.
 
 ### Manual
 
-- Terms: a fold reduces constructor fields of the accumulator before the next octet.
-- Terms: a reusable argument mentioned more than once is reduced once.
+- Terms: a fold reduces the accumulator fields the next step reads, sixteen deep.
+- Terms: a reusable argument mentioned twice on one path is reduced once, one fuel below the body.
+- Limits: `whnf` fuel is a per-path depth bound.
 
 ### Package
 
