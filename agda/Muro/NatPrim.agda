@@ -8,8 +8,11 @@
 --
 -- Each `…M` below is the library definition, transcribed clause for
 -- clause from `lib/muro/prelude.muro`, `lib/muro/std/le.muro`, and
--- `lib/muro/std/ord.muro`. The transcription is not checked against the
--- `.muro` text. Each `host…` is the emitted Elixir expression over ℤ,
+-- `lib/muro/std/ord.muro`. `Muro.Emit.NatPrim` pins the de Bruijn type
+-- and body of each bundled definition, so an edit of those `.muro`
+-- sources fails until this transcription, the proofs below, and the
+-- pin are updated together. Each `host…` is the emitted Elixir
+-- expression over ℤ,
 -- because Elixir integers are signed: `minus` is `max(x0 - x1, 0)`, and
 -- the subtraction can go below zero before the max. The emitted function
 -- is guarded on `is_integer(x) and x >= 0`, so it is only called at
