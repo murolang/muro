@@ -127,13 +127,20 @@ nthQty (pi _ _ B) (suc i) = nthQty B i
 nthQty _          _       = fail "recursive-call spine longer than Π telescope"
 
 ------------------------------------------------------------------------
-------------------------------------------------------------------------
 -- Mentions of a de Bruijn index, capped at two. A reusable beta
 -- argument is shared when the body mentions it twice on one path
 -- (`lib/muro/check.ex` `reused?` / `var_uses`). A match motive is
--- not a mention. Arms are alternatives: the count is the max.
+-- not a mention. Arms are alternatives: the count is the max
+-- (`cap⊔`, like `arm_count`). A mention in the scrutinee and a
+-- mention in an arm sit on one path, so those two are added and
+-- capped at two (`cap`, like Elixir `cap`).
 ------------------------------------------------------------------------
 
+-- Elixir `cap`: 2 when n ≥ 2, m ≥ 2, or n + m ≥ 2, otherwise n + m.
+cap : ℕ → ℕ → ℕ
+cap n m = if (2 ≤ᵇ n) ∨ (2 ≤ᵇ m) ∨ (2 ≤ᵇ n + m) then 2 else n + m
+
+-- Max of two counts, capped at two. Arms are alternatives.
 cap⊔ : ℕ → ℕ → ℕ
 cap⊔ n m = if 2 ≤ᵇ n ⊔ m then 2 else n ⊔ m
 
@@ -155,9 +162,9 @@ mutual
   varUses′ _ empty n = n
   varUses′ _ (dty _) n = n
   varUses′ _ (ctor _ _) n = n
-  varUses′ x (mData e _ bs) n = cap⊔ (varUses x e n) (armUses x bs)
+  varUses′ x (mData e _ bs) n = cap (varUses x e n) (armUses x bs)
   varUses′ x (mNat e _ z s) n =
-    cap⊔ (varUses x e n) (cap⊔ (varUses x z 0) (varUses (suc x) s 0))
+    cap (varUses x e n) (cap⊔ (varUses x z 0) (varUses (suc x) s 0))
   varUses′ x (mEmp e _) n = varUses x e n
   varUses′ x (mUnit e _ u) n = varUses x u (varUses x e n)
   varUses′ x (idt A a b) n = varUses x b (varUses x a (varUses x A n))

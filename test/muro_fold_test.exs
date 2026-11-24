@@ -168,6 +168,26 @@ defmodule Muro.FoldTest do
     assert {:pair, :ze, :ze} = wtrue
   end
 
+  # The scrutinee mentions x once and one arm mentions it once. Those
+  # sit on one path, so the argument is shared and reduced to 0 before
+  # the body. The pair is already a value, so the match stays, but its
+  # scrutinee is 0 rather than the unreduced application.
+  test "a use in the scrutinee and a use in one arm share the argument" do
+    src = """
+    def go : run (Nat * Nat) :=
+      (λ (+ x : Nat) →
+        (match x motive (λ _ → Nat)
+           | 0 => 0
+           | suc _ => x,
+         0))
+      ((λ (+ y : Nat) → 0) 0)
+    """
+
+    assert {:ok, {:pair, match, :ze}} = reduce(src)
+    assert {:mnat, :ze, :nat, :ze, :ze} = match
+    refute app?(match)
+  end
+
   # Both mentions are in the motive. The arms do not read x. The motive
   # is still in the result because the scrutinee is an axiom, which does
   # not reduce, and the pair is already a value.
