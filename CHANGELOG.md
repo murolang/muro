@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.22.23
+## 0.22.24
 
 A keyed family can say that a message may be delivered again, and a book can state that opening the same `init` twice is harmless.
 
@@ -13,6 +13,14 @@ A temporal formula over that family may say `relies idempotent init`. When the f
 ### Manual
 
 - Grammar, State machines, Sessions, Temporal, Limits, and The wall: the mark, the contract, and the line a formula prints when it relies on `idempotent init`.
+
+### Package
+
+- Version 0.22.24.
+
+## 0.22.23
+
+A definition's descent block is the strongly connected component of the call graph, computed once for the book. The block is the same set as before: a definition is in it when each can reach the other. The old walk re-explored every path, so a run whose body only calls a wide chain of other runs spent seconds deciding that its block is itself. Affine and linear arguments stay call-by-name.
 
 ### Package
 
