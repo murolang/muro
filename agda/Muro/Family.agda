@@ -3437,3 +3437,57 @@ reach-no-bad prev bad = g-no-bad (rules-reach-inv prev) bad
 reach-resolved : ∀ {ρ s k kd} → RulesReach ρ s →
   (ρ kd ≡ mearlier ⊎ ρ kd ≡ many) → EarlierResolved (rowsR s) k kd
 reach-resolved prev m = inv-resolved (rules-reach-inv prev) m
+
+------------------------------------------------------------------------
+-- Arrival-sequence hypothesis.
+--
+-- This appendix does not change `Invariant`, `NoOvertake`, or the wall.
+-- The default sequence permits a smaller creation index after a larger
+-- one of the same key. `InOrder` is a non-decreasing list of creation
+-- indices: a smaller index after a larger one is refused. `Dense` is
+-- the list `0, 1, …` with no hole. A script that lists a smaller index
+-- after a larger one is not `InOrder`. A script whose indices are not
+-- `0, 1, …` is not `Dense`.
+------------------------------------------------------------------------
+
+data InOrder : List ℕ → Set where
+  ord-nil : InOrder []
+  ord-one : ∀ {n} → InOrder (n ∷ [])
+  ord-step : ∀ {m n rest} → m ≤ n → InOrder (n ∷ rest) → InOrder (m ∷ n ∷ rest)
+
+-- `Dense n xs` is the list `n, n+1, …` with no hole. `Dense zero`
+-- is the creation indices of one key.
+data Dense : ℕ → List ℕ → Set where
+  den-nil : ∀ {n} → Dense n []
+  den-cons : ∀ {n rest} → Dense (suc n) rest → Dense n (n ∷ rest)
+
+-- The fixed script on key `a` is indices 0, 1, 2. Key `b` is 0.
+script-indices : List ℕ
+script-indices = zero ∷ suc zero ∷ suc (suc zero) ∷ []
+
+script-in-order : InOrder script-indices
+script-in-order = ord-step z≤n (ord-step (s≤s z≤n) ord-one)
+
+script-dense : Dense zero script-indices
+script-dense = den-cons (den-cons (den-cons den-nil))
+
+script-b-indices : List ℕ
+script-b-indices = zero ∷ []
+
+script-b-in-order : InOrder script-b-indices
+script-b-in-order = ord-one
+
+script-b-dense : Dense zero script-b-indices
+script-b-dense = den-cons den-nil
+
+late-script : List ℕ
+late-script = suc zero ∷ zero ∷ []
+
+late-refused : InOrder late-script → ⊥
+late-refused (ord-step () _)
+
+gap-script : List ℕ
+gap-script = zero ∷ suc (suc zero) ∷ []
+
+gap-refused : Dense zero gap-script → ⊥
+gap-refused (den-cons ())

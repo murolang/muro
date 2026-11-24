@@ -234,16 +234,18 @@ family slots: slot per key of Event
 temporal echo-answered: holds in 8 reachable states, 8 transitions
 ```
 
-A family marked `may redeliver` prints that mark on its line. The state count is the count of the unmarked family. The transition count is that count plus one per state. A formula that says `relies idempotent init`, and holds, prints a second line immediately after its count:
+A family marked `may redeliver` prints that mark on its line. The state count is the count of the unmarked family. The transition count is that count plus one per state. A formula that says `relies` and a closed-list entry, and holds, prints a second line immediately after its count. The entry is `idempotent init`, `in order`, or `dense`:
 
 ```
 family slots: wire per key of Event may redeliver
 temporal plain: holds in N reachable states, M transitions
 temporal waived: holds in N reachable states, M transitions
 waived: depends on contract idempotent init
+ordered: depends on contract in order
+packed: depends on contract dense
 ```
 
-`N` is the number of reachable states, the same number the family has without the mark. `M` counts the widened successor table: one extra step on each of those states. Both formulas of one family print that same pair. `plain` does not depend on the contract. `may redeliver` is not a `depends on` line. The account is [State machines](fsm.md#an-external-contract).
+`N` is the number of reachable states. With `may redeliver` and no narrowing contract, it is the same number the family has without the mark, and `M` counts one extra step on each of those states. `in order` and `dense` narrow the arrivals, so that pair is the narrowed graph, with or without `skip`. `plain` does not depend on a contract. `may redeliver` is not a `depends on` line. The account is [State machines](fsm.md#an-external-contract).
 
 The family line names the meeting and the kind. It is not a count of states. A temporal line over a meeting counts that meeting: the distinct configurations reachable from its start, then the successor table, a left step, a right step, and the finish self-loop at a finished configuration. It is not the number of breadth-first parent links. Declarations of one meeting print the same pair, because the graph is built once. A temporal line over a family counts the family graph. That count is a model hypothesis, not data-independence: one retry, on the fixed script. It checks the generated dispatcher. The hold rule is [The hold rule](#the-hold-rule). The checker builds the graph once for the family, and that search is the cost of the check. The second count is that successor table: an arrival that opens or holds, a meeting step, a retry, a give-up, a resolve, and one self-loop when no instance can move. Withdrawing a held instance is a host step and is not one of those edges. `always`, `eventually`, and `leads_to` declarations of one family print the same pair when they hold. A refusal replaces the counts, and the family line is not printed. A family liveness refusal appends the cycle state after the stutter. A book with no family and no temporal declaration prints the lines it printed before this page existed. A `conforms to` line from an imported package stays after the success sentence. `--fuel` does not change a temporal verdict. The meeting refusals listed in [Limits](limits.md) are unchanged. A family has its own list there.
 

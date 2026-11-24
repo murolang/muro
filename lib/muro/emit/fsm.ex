@@ -3112,7 +3112,12 @@ defmodule Muro.Emit.Fsm do
     book
     |> Enum.filter(&(Map.get(&1, :kind) == :family))
     |> Enum.filter(&family_ready?(book, &1))
-    |> Enum.map(&Map.put(&1, :waiver, Muro.Contract.waiver_of(book, &1.name)))
+    |> Enum.map(fn family ->
+      family
+      |> Map.put(:waiver, Muro.Contract.waiver_of(book, family.name))
+      |> Map.put(:in_order, Muro.Contract.entry(book, family.name, :in_order))
+      |> Map.put(:dense, Muro.Contract.entry(book, family.name, :dense))
+    end)
   end
 
   defp family_ready?(book, family) do
@@ -4130,17 +4135,44 @@ defmodule Muro.Emit.Fsm do
     end
     """
 
-    apply_waiver(src, waiver_mode(family))
+    apply_contracts(src, family)
   end
 
-  # The heredoc above is the 0.22.22 dispatcher. `:none` returns that
-  # text unchanged, so a family with no contract, or with only
-  # `may redeliver`, emits the same child as 0.22.22. A waiver splices
-  # three exact 0.22.22 phrases for a generated `fresh` and, when
-  # `skip`, the departed `:already` clause. `skip` opts out of catching
-  # an `init` the floor or the departed record would have refused. A
-  # live row of that index stays a duplicate, so one index is never two
-  # live rows.
+  # The heredoc above is the 0.22.22 dispatcher. No contract, and
+  # `may redeliver` alone, return that text unchanged. `idempotent init`
+  # splices three exact phrases. `dense` without `in order` splices the
+  # gap check onto that same `fresh` and keeps `{prefix, gaps}`.
+  # `in order` replaces the departed record with `{seen, prefix}` and
+  # does not also run the waiver splice: one `fresh` carries the waiver,
+  # the late arrival, and the gap. `skip` drops that entry's run-time
+  # check. A live row of an index stays a duplicate, so one index is
+  # never two live rows.
+  defp apply_contracts(src, family) do
+    in_order = order_mode(family)
+    dense = dense_mode(family)
+    waiver = waiver_mode(family)
+
+    cond do
+      in_order != :none ->
+        apply_in_order(src, in_order, dense, waiver)
+
+      waiver != :none or dense == :assert ->
+        src = apply_waiver(src, waiver)
+        if dense == :assert, do: apply_dense(src), else: src
+
+      true ->
+        src
+    end
+  end
+
+  defp order_mode(%{in_order: %{skip: true}}), do: :skip
+  defp order_mode(%{in_order: %{skip: false}}), do: :assert
+  defp order_mode(_family), do: :none
+
+  defp dense_mode(%{dense: %{skip: true}}), do: :skip
+  defp dense_mode(%{dense: %{skip: false}}), do: :assert
+  defp dense_mode(_family), do: :none
+
   defp waiver_mode(%{waiver: %{skip: true}}), do: :skip
   defp waiver_mode(%{waiver: %{skip: false}}), do: :assert
   defp waiver_mode(_family), do: :none
@@ -4265,6 +4297,403 @@ defmodule Muro.Emit.Fsm do
           "    end",
           "  end",
           ""
+        ],
+      "\n"
+    )
+  end
+
+  # `in order` does not call `apply_waiver/2`. One `fresh` carries the
+  # waiver, the late arrival, and a dense gap, and the departed record
+  # becomes `{seen, prefix}`.
+  defp apply_in_order(src, order, dense, waiver) do
+    src
+    |> replace_once(arrive_chain(), arrive_chain_order())
+    |> replace_once(fresh_block(:none), waterline_fresh(order, dense, waiver))
+    |> replace_once(skip_gaps(), skip_waterline())
+    |> replace_span(gaps_record_start(), not_live_start(), waterline_record())
+    |> replace_span(gaps_doc_start(), finish_doc_start(), waterline_doc(order, dense))
+  end
+
+  defp apply_dense(src) do
+    src
+    |> replace_once(dense_ok(), dense_gap())
+    |> replace_once(record_start(), index_gap_fun() <> record_start())
+  end
+
+  defp replace_span(src, start_marker, end_marker, new) do
+    case String.split(src, start_marker, parts: 2) do
+      [pre, rest] ->
+        case String.split(rest, end_marker, parts: 2) do
+          [_old, post] ->
+            pre <> new <> end_marker <> post
+
+          _ ->
+            raise "dispatcher is missing the end of #{inspect(start_marker)}"
+        end
+
+      _ ->
+        raise "dispatcher is missing #{inspect(start_marker)}"
+    end
+  end
+
+  defp arrive_chain do
+    Enum.join(
+      [
+        "         :ok <- fresh(rows, key, index, st),",
+        "         {:ok, phase} <- phase_of(rows, hold, index, st) do",
+        "      id = st.n",
+        "      rows = Map.put(rows, index, {id, kind, phase})",
+        "      next = %{st | n: id + 1, by: Map.put(st.by, key, rows), id: Map.put(st.id, id, {key, index})}"
+      ],
+      "\n"
+    )
+  end
+
+  defp arrive_chain_order do
+    Enum.join(
+      [
+        "         {:ok, departed} <- fresh(rows, key, index, st, kind),",
+        "         {:ok, phase} <- phase_of(rows, hold, index, st) do",
+        "      id = st.n",
+        "      rows = Map.put(rows, index, {id, kind, phase})",
+        "      next = %{st | n: id + 1, by: Map.put(st.by, key, rows), id: Map.put(st.id, id, {key, index}), departed: departed}"
+      ],
+      "\n"
+    )
+  end
+
+  defp skip_gaps do
+    Enum.join(
+      [
+        "            {:ok, {prefix, gaps}} ->",
+        "              case store_departure(st.departed, key, prefix, gaps, st.floor, index) do",
+        "                :already -> {:ok, st}",
+        "                {:ok, departed} -> {:ok, %{st | departed: departed}}",
+        "              end"
+      ],
+      "\n"
+    )
+  end
+
+  defp skip_waterline do
+    Enum.join(
+      [
+        "            {:ok, {seen, prefix}} ->",
+        "              if index <= prefix do",
+        "                {:ok, st}",
+        "              else",
+        "                {:ok, %{st | departed: Map.put(st.departed, key, {max(seen, index), index})}}",
+        "              end"
+      ],
+      "\n"
+    )
+  end
+
+  defp gaps_record_start, do: "  # `P` is -1 when the key has no record."
+  defp not_live_start, do: "  defp not_live(rows, key, index, st) do\n"
+  defp gaps_doc_start, do: "Per key, `departed` stores a prefix `P`"
+  defp finish_doc_start, do: "`finish` takes this"
+  defp record_start, do: "  defp record(st, key) do\n"
+
+  defp dense_ok do
+    Enum.join(
+      [
+        "            else",
+        "              :ok",
+        "            end"
+      ],
+      "\n"
+    )
+  end
+
+  defp dense_gap do
+    Enum.join(
+      [
+        "            else",
+        "              if index_gap?(rows, prefix, gaps, index) do",
+        "                {:error, {:contract, :dense, key, index}}",
+        "              else",
+        "                :ok",
+        "              end",
+        "            end"
+      ],
+      "\n"
+    )
+  end
+
+  defp index_gap_fun do
+    Enum.join(
+      [
+        "  defp index_gap?(rows, prefix, gaps, index) do",
+        "    if index > prefix + 1 do",
+        "      Enum.any?((prefix + 1)..(index - 1)//1, fn j ->",
+        "        not Map.has_key?(gaps, j) and not Map.has_key?(rows, j)",
+        "      end)",
+        "    else",
+        "      false",
+        "    end",
+        "  end",
+        "",
+        ""
+      ],
+      "\n"
+    )
+  end
+
+  defp waterline_fresh(order, dense, waiver) do
+    kind = if waiver == :none, do: "_kind", else: "kind"
+
+    live_body =
+      if waiver == :assert do
+        [
+          "        if kind == :init and live == :init do",
+          "          {:error, {:contract, :idempotent_init, key, index}}",
+          "        else",
+          "          {:error, {:duplicate, key, index}}",
+          "        end"
+        ]
+      else
+        ["        {:error, {:duplicate, key, index}}"]
+      end
+
+    covered =
+      cond do
+        waiver == :assert ->
+          [
+            "                if kind == :init do",
+            "                  {:error, {:contract, :idempotent_init, key, index}}",
+            "                else",
+            "                  {:error, {:departed, key, index}}",
+            "                end"
+          ]
+
+        waiver == :skip ->
+          [
+            "                if kind == :init do",
+            "                  {:ok, note_arrival(st.departed, key, seen, prefix, index)}",
+            "                else",
+            "                  {:error, {:departed, key, index}}",
+            "                end"
+          ]
+
+        true ->
+          ["                {:error, {:departed, key, index}}"]
+      end
+
+    late =
+      if order == :assert do
+        [
+          "              index <= seen ->",
+          "                {:error, {:contract, :in_order, key, index}}"
+        ]
+      else
+        []
+      end
+
+    gap =
+      if dense == :assert do
+        [
+          "              index > seen + 1 ->",
+          "                {:error, {:contract, :dense, key, index}}"
+        ]
+      else
+        []
+      end
+
+    Enum.join(
+      [
+        "  defp fresh(rows, key, index, st, #{kind}) do",
+        "    case Map.fetch(rows, index) do",
+        "      {:ok, {id, live, phase}}",
+        "      when is_integer(id) and id >= 0 and is_atom(live) and phase in [:open, :held] ->"
+      ] ++
+        live_body ++
+        [
+          "",
+          "      {:ok, _} ->",
+          "        {:error, {:state, st}}",
+          "",
+          "      :error ->",
+          "        case record(st, key) do",
+          "          {:error, reason} ->",
+          "            {:error, reason}",
+          "",
+          "          {:ok, {seen, prefix}} ->",
+          "            cond do",
+          "              index <= st.floor or index <= prefix ->"
+        ] ++
+        covered ++
+        late ++
+        gap ++
+        [
+          "              true ->",
+          "                {:ok, note_arrival(st.departed, key, seen, prefix, index)}",
+          "            end",
+          "        end",
+          "    end",
+          "  end",
+          ""
+        ],
+      "\n"
+    )
+  end
+
+  defp waterline_record do
+    Enum.join(
+      [
+        "  # `{seen, prefix}` replaces the gap map. `seen` is the highest",
+        "  # accepted index, or -1. `prefix` is the waterline: every index",
+        "  # at or below it has departed. A missing key is `{-1, -1}`.",
+        "  # `seen` is at least `prefix`. An out-of-order departure, while a",
+        "  # smaller index of the key is still live, does not move `prefix`",
+        "  # and is not stored on its own. A later arrival of that index is",
+        "  # the in-order refusal while the check is on. When nothing smaller",
+        "  # is live, `prefix` jumps to the departing index and the range",
+        "  # below it, including holes, has left. `skip` raises both numbers",
+        "  # to that index. A live row below the new waterline stays live,",
+        "  # and leaving it writes nothing. `skip_below` raises `prefix` to",
+        "  # the floor and drops a key whose `seen` is then covered.",
+        "  defp record(st, key) do",
+        "    case Map.fetch(st.departed, key) do",
+        "      :error ->",
+        "        {:ok, {-1, -1}}",
+        "",
+        "      {:ok, {seen, prefix}}",
+        "      when is_integer(seen) and seen >= -1 and is_integer(prefix) and prefix >= -1 and",
+        "             seen >= prefix ->",
+        "        {:ok, {seen, prefix}}",
+        "",
+        "      _ ->",
+        "        {:error, {:state, st}}",
+        "    end",
+        "  end",
+        "",
+        "  defp note_arrival(departed, key, seen, prefix, index) do",
+        "    Map.put(departed, key, {max(seen, index), prefix})",
+        "  end",
+        "",
+        "  defp remember_map(st, key, index) do",
+        "    cond do",
+        "      index <= st.floor ->",
+        "        {:ok, st.departed}",
+        "",
+        "      true ->",
+        "        case record(st, key) do",
+        "          {:error, reason} ->",
+        "            {:error, reason}",
+        "",
+        "          {:ok, {seen, prefix}} ->",
+        "            if index <= prefix do",
+        "              {:ok, st.departed}",
+        "            else",
+        "              prefix =",
+        "                if index == prefix + 1 or not lower_live?(st, key, index) do",
+        "                  index",
+        "                else",
+        "                  prefix",
+        "                end",
+        "",
+        "              {:ok, Map.put(st.departed, key, {seen, prefix})}",
+        "            end",
+        "        end",
+        "    end",
+        "  end",
+        "",
+        "  defp lower_live?(st, key, index) do",
+        "    case Map.get(st.by, key) do",
+        "      rows when is_map(rows) ->",
+        "        Enum.any?(rows, fn",
+        "          {ix, {_id, _kind, phase}}",
+        "          when is_integer(ix) and ix < index and phase in [:open, :held] ->",
+        "            true",
+        "",
+        "          _ ->",
+        "            false",
+        "        end)",
+        "",
+        "      _ ->",
+        "        false",
+        "    end",
+        "  end",
+        "",
+        "  defp compact_departed(st, floor) do",
+        "    Enum.reduce_while(st.departed, {:ok, %{}}, fn {key, rec}, {:ok, acc} ->",
+        "      case squash_record(rec, floor, st) do",
+        "        {:error, reason} -> {:halt, {:error, reason}}",
+        "        :drop -> {:cont, {:ok, acc}}",
+        "        {:keep, kept} -> {:cont, {:ok, Map.put(acc, key, kept)}}",
+        "      end",
+        "    end)",
+        "  end",
+        "",
+        "  defp squash_record({seen, prefix}, floor, _st)",
+        "       when is_integer(seen) and seen >= -1 and is_integer(prefix) and prefix >= -1 and",
+        "              seen >= prefix do",
+        "    prefix = if prefix < floor, do: floor, else: prefix",
+        "",
+        "    if seen <= floor do",
+        "      :drop",
+        "    else",
+        "      {:keep, {seen, prefix}}",
+        "    end",
+        "  end",
+        "",
+        "  defp squash_record(_rec, _floor, st), do: {:error, {:state, st}}",
+        "",
+        ""
+      ],
+      "\n"
+    )
+  end
+
+  defp waterline_doc(order, dense) do
+    late =
+      if order == :assert do
+        [
+          "  An index above the waterline and at or below `seen` is",
+          "  `{:error, {:contract, :in_order, key, index}}`."
+        ]
+      else
+        [
+          "  The in-order check is off. An index above the waterline and at",
+          "  or below `seen` is accepted."
+        ]
+      end
+
+    gap =
+      if dense == :assert do
+        [
+          "  An index above `seen + 1` is",
+          "  `{:error, {:contract, :dense, key, index}}`."
+        ]
+      else
+        []
+      end
+
+    Enum.join(
+      [
+        "Per key, `departed` stores `{seen, prefix}`. `seen` is the highest",
+        "  accepted creation index, or -1. `prefix` is the waterline: every",
+        "  index at or below it has departed. Both start at -1. A missing key",
+        "  is that pair. There is no map of departed indices. `seen` is at",
+        "  least `prefix`. The state also stores one `floor`, starting at -1.",
+        "  An index at or below `floor` or `prefix` has left."
+      ] ++
+        late ++
+        gap ++
+        [
+          "  On departure the waterline jumps to that index when no live row",
+          "  of the key has a smaller index, and the indices in between have",
+          "  left. A departure that still has a smaller live row does not move",
+          "  the waterline, and that index is not stored on its own. A later",
+          "  arrival of it is refused while the in-order check is on, and it",
+          "  is accepted when the check is off. `skip` raises `seen` and",
+          "  `prefix` to that index. A live row below the new waterline stays",
+          "  live, and when it leaves the departure writes nothing.",
+          "  `skip_below` raises `prefix` up to the floor and drops a key",
+          "  whose `seen` is then at or below the floor. `seen` above the floor",
+          "  is kept. `drop_key` deletes one key's pair when that key has no",
+          "  live row. The floor stays. "
         ],
       "\n"
     )

@@ -42,7 +42,9 @@ defmodule Muro.Words do
   # Keywords of `contract name :`, of `relies` after a temporal formula,
   # and of the family mark `may redeliver`. The parser reserves them only
   # in those forms. `init` stays an identifier: it is a common constructor.
-  @contract ~w(idempotent redeliver relies skip dense dedupe)
+  # `in` is already a term word (`let in`). `order` is a keyword only in
+  # `in order`.
+  @contract ~w(idempotent redeliver relies skip dense dedupe order)
 
   @extra_decl ["temporal", "repr", "family", "contract"]
 
