@@ -4,7 +4,8 @@ defmodule Muro.Gen do
   what the books emit.
 
   Each target starts with two comment lines, and one more line per
-  package the book loaded. The first names the running Muro version,
+  package the book loaded, except an `:mbi` image, which is written
+  without that header. The first names the running Muro version,
   the book path relative to the project root (`/` separators), the
   book sha256, and the body sha256. Each package line is
   `# Conforms to <name> <version> (sha256 <hash>).`. The next line
@@ -43,14 +44,18 @@ defmodule Muro.Gen do
   beside it. A `:rust` entry calls `Muro.Emit.Rust.render/2`. A
   `:zig` entry calls `Muro.Emit.Zig.render/2`. An `:asm` entry calls
   `Muro.Emit.Asm.render/2`. A `:js` entry calls `Muro.Emit.JS.render/3`
-  and writes the `.mjs` target and the `.d.ts` beside it. The stem passed to those emitters is the
+  and writes the `.mjs` target and the `.d.ts` beside it. An `:otp`
+  entry calls `Muro.Emit.Otp.render/2` and writes a `.ex` target,
+  formatted like an Elixir module. An `:mbi` entry calls
+  `Muro.Emit.Mbi.render/1` and writes a `.mbi` image without a gen
+  header; `check/3` compares the image bytes. The stem passed to those emitters is the
   book basename.
   The Elixir bytes are formatted with the project's `.formatter.exs`
   when that file exists (`Mix.Tasks.Format.formatter_for_file/2`),
   and with `Code.format_string!/2` otherwise. `.ex` and `.exs` are
   formatted even when the formatter inputs do not list the file. The
   header is comments, so formatting does not rewrite it. `:c`,
-  `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, and `:rust_test` are not formatted.
+  `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi` are not formatted.
   The body hash is the emitter's text. There is no timestamp and no
   absolute path.
 

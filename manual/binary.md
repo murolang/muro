@@ -2,7 +2,7 @@
 title: The executable
 slug: binary
 order: 16
-summary: The self-contained muro binary, muro.toml, gen for C, Rust, Zig, JavaScript, and assembly, init, and muro skills add.
+summary: The self-contained muro binary, muro.toml, gen for C, Rust, Zig, JavaScript, assembly, OTP, and MBI, init, and muro skills add.
 ---
 
 # The executable
@@ -143,14 +143,14 @@ In a `Cargo.toml`, tables other than `[package.metadata.muro]` and its children 
 {"muro/rounding.muro", "src/rounding.s", [kind: :asm]}
 {"muro/ping.muro", "lib/ping_otp.ex", [kind: :otp]}
 {"muro/rounding.muro", "src/rounding.mjs", [kind: :js]}
-{"muro/rounding.muro", "src/rounding.mbi", [kind: :mbi]}
+{"muro/one.muro", "src/one.mbi", [kind: :mbi]}
 {"muro/rounding.muro", "test/rounding_test.py", [kind: :pytest]}
 {"muro/rounding.muro", "test/rounding_test.rs", [kind: :rust_test]}
 ```
 
 A missing `kind:` in `muro.exs` is still `:elixir`.
 
-The header is the same two lines and the same hashes as an Elixir target, except an `:mbi` image, which is written without a gen header: `muro gen --check` compares the image bytes. A C source includes the header written beside the target, so `src/rounding.c` from book `muro/half.muro` includes `rounding.h`. A JavaScript entry writes the `.d.ts` beside the `.mjs`, and `muro gen --check` checks that file the same way. The comment mark is `# ` for pytest, `// ` for C, Rust, Zig, JavaScript, and a Rust test file, including the `.h` and the `.d.ts`, and `@ ` for Cortex-M assembly. Formatting is left alone for these kinds, so the body hash is the sha256 of the emitter's text. `muro gen --check` reports a missing, stale, hand-edited, or differing target, or a header that names another version, with the same messages it uses for Elixir. The `.h` beside a C target is checked the same way. See [Committed modules](gen.md).
+The header is the same two lines and the same hashes as an Elixir target, except an `:mbi` image, which is written without a gen header: `muro gen --check` compares the image bytes. A C source includes the header written beside the target, so `src/rounding.c` from book `muro/half.muro` includes `rounding.h`. A JavaScript entry writes the `.d.ts` beside the `.mjs`, and `muro gen --check` checks that file the same way. The comment mark is `# ` for pytest, `// ` for C, Rust, Zig, JavaScript, and a Rust test file, including the `.h` and the `.d.ts`, and `@ ` for Cortex-M assembly. Formatting is left alone for `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi`, so the body hash is the sha256 of the emitter's text. An `:otp` target is a `.ex` file and is formatted the same way as an Elixir target. `muro gen --check` reports a missing, stale, hand-edited, or differing target, or a header that names another version, with the same messages it uses for Elixir. The `.h` beside a C target is checked the same way. See [Committed modules](gen.md).
 
 ## init
 
@@ -171,7 +171,7 @@ The header is the same two lines and the same hashes as an Elixir target, except
 
 `mix muro.init` still refuses to overwrite `muro.exs` or a `:muro` key. It prints a note. The note says generated files are not edited by hand, and it points at `muro skills add`.
 
-It does not write `AGENTS.md`.
+It does not write `AGENTS.md` or the skill files.
 
 `--ci github` writes `.github/workflows/muro.yml` only when that file is absent. On the executable, the job installs `muro-<version>-linux-x86_64` at the pinned version and runs `muro gen --check`. On `mix muro.init --ci github`, the job installs the archive and runs `mix muro.gen --check`, as [Committed modules](gen.md) describes. An existing workflow file is left in place. When the manifest is new and the workflow file exists, init exits 1 and names `.github/workflows/muro.yml`. When the manifest already exists, init prints the diff and does not add a workflow.
 

@@ -37,7 +37,7 @@ defmodule Muro.CLI.Init do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro init looks at the working directory and writes one manifest, pinned to the running version, plus one commented example entry. mix.exs gets muro.exs and priv/muro/. Cargo.toml gets muro.toml and muro/, with Rust as the backend. A CMakeLists.txt, meson.build, or Makefile, and neither mix.exs nor Cargo.toml, gets muro.toml and muro/ for C. Anything else gets muro.toml with modules = [] and muro/. An existing manifest at muro.exs, muro.toml, or [package.metadata.muro] is left in place. Init prints a diff of that file and exits 0. It does not write a second manifest, and it does not write AGENTS.md. It prints a note that points at muro skills add.
+      muro init looks at the working directory and writes one manifest, pinned to the running version, plus one commented example entry. mix.exs gets muro.exs and priv/muro/. Cargo.toml gets muro.toml and muro/, with Rust as the backend. A CMakeLists.txt, meson.build, or Makefile, and neither mix.exs nor Cargo.toml, gets muro.toml and muro/ for C. Anything else gets muro.toml with modules = [] and muro/. An existing manifest at muro.exs, muro.toml, or [package.metadata.muro] is left in place. Init prints a diff of that file and exits 0. It does not write a second manifest, and it does not write AGENTS.md or the skill files. It prints a note that points at muro skills add.
       """),
       Muro.CLI.Text.section(
         "USAGE",

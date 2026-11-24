@@ -233,8 +233,14 @@ defmodule Muro.CliHelpTest do
     assert gen =~ "--check"
     assert gen =~ "https://muro-lang.dev/docs/gen"
     assert gen =~ "book hash" or gen =~ "body hash" or gen =~ "header"
+    gen_plain = String.replace(gen, ~r/\s+/, " ")
+    assert gen_plain =~ "muro.toml or [package.metadata.muro] is the default kind"
+    assert gen_plain =~ "a missing kind on an entry still defaults to elixir"
 
-    assert Muro.CLI.Init.help() =~ "https://muro-lang.dev/docs/binary"
+    init = Muro.CLI.Init.help()
+    assert init =~ "https://muro-lang.dev/docs/binary"
+    init_plain = String.replace(init, ~r/\s+/, " ")
+    assert init_plain =~ "does not write AGENTS.md or the skill files"
     assert Muro.CLI.Skills.help() =~ "https://muro-lang.dev/docs/binary"
     assert Muro.CLI.Deps.help() =~ "https://muro-lang.dev/docs/packages"
     mutate = Muro.CLI.Mutate.help()
