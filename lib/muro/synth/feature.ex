@@ -80,7 +80,9 @@ defmodule Muro.Synth.Feature do
   # An action-indexed kind is a stem. The name is the prefix the
   # templates already use. A structural test has no action, so it is
   # not a stem. The actions are the ones `all-actions` still lists, in
-  # that order, and only where the test survived the cover filter.
+  # that order. A constant test is dropped. A column whose truth
+  # vector duplicates an earlier test is kept, so `selfp` and `otherp`
+  # still mean the stem at that action.
   @family_order [:has_pos_reward, :is_self_loop, :leads_terminal, :reaches_pos]
   @stem_names %{
     has_pos_reward: "has-pos-reward",
@@ -304,7 +306,22 @@ defmodule Muro.Synth.Feature do
     specs
     |> filter_nontrivial(states, eval)
     |> drop_subsumed()
+    |> drop_equivalent(states, eval, true)
+  end
+
+  @doc """
+  Feature names the version-space walk enumerates.
+
+  A stem column whose truth vector duplicates an earlier test stays in
+  `specs`, so `selfp` and `otherp` can read it. The walk only needs one
+  atom per vector, so this keeps the earlier name.
+  """
+  def search_names(specs, states, eval) when is_list(specs) do
+    specs
+    |> filter_nontrivial(states, eval)
+    |> drop_subsumed()
     |> drop_equivalent(states, eval)
+    |> Enum.map(& &1.name)
   end
 
   defp enumerate_dyn(host, states, taken) do
@@ -456,12 +473,17 @@ defmodule Muro.Synth.Feature do
   end
 
   # Two features with one truth vector on the cover define the same
-  # atom of the version space. Keep the earlier one.
-  defp drop_equivalent(specs, states, eval) do
+  # atom of the version space. Keep the earlier one. A stem column is
+  # exempt when `keep_stems?` is set: dropping it would make `selfp`
+  # and `otherp` read that action as false.
+  defp drop_equivalent(specs, states, eval, keep_stems? \\ false) do
     Enum.reduce(specs, [], fn spec, kept ->
       vector = Enum.map(states, &eval.(spec, &1))
 
-      if Enum.any?(kept, fn other -> Enum.map(states, &eval.(other, &1)) == vector end) do
+      duplicate? =
+        Enum.any?(kept, fn other -> Enum.map(states, &eval.(other, &1)) == vector end)
+
+      if duplicate? and not (keep_stems? and family_spec?(spec)) do
         kept
       else
         kept ++ [spec]

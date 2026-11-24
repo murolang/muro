@@ -1,0 +1,46 @@
+-- Three actions on a three-state ring. `up` and `left` pay 1 at the
+-- same state, so their has-pos-reward columns are the same truth
+-- vector. `right` pays at a different state. The cover filter used to
+-- drop the later column, and then `selfp`/`otherp` read that action as
+-- false. The tests keep both columns and check the generated book.
+import "../../examples/cshrl/std/nat.muro"
+import "../../examples/cshrl/lib/agent.muro"
+
+data State : Type where
+  s0 : State
+  s1 : State
+  s2 : State
+
+data Action : Type where
+  up : Action
+  left : Action
+  right : Action
+
+def Reward : spec Type := Nat
+
+def step : run Π (s : State) → Π (act : Action) → State × Reward :=
+  λ (s : State) → λ (act : Action) →
+    match s motive (λ _ → State × Reward)
+      | s0 =>
+          (match act motive (λ _ → State × Reward)
+            | up => (s0, suc 0)
+            | left => (s0, suc 0)
+            | right => (s2, 0))
+      | s1 =>
+          (match act motive (λ _ → State × Reward)
+            | up => (s1, 0)
+            | left => (s1, 0)
+            | right => (s0, 0))
+      | s2 =>
+          (match act motive (λ _ → State × Reward)
+            | up => (s2, 0)
+            | left => (s2, 0)
+            | right => (s1, suc 0))
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons up (cons left (cons right nil))
+def default-action : run Action := up
+def horizon : run Nat := 0
+def all-states : run List State := cons s0 (cons s1 (cons s2 nil))

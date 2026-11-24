@@ -1,0 +1,39 @@
+-- `go` and `copy` take the same step and pay the same reward, so their
+-- has-pos-reward columns are the same truth vector. `stay` waits at
+-- start. A policy that prefers `go` certifies, and the deployed
+-- PredProg is the checked term, not the Finder.
+import "../../examples/cshrl/std/nat.muro"
+import "../../examples/cshrl/lib/agent.muro"
+
+data State : Type where
+  start : State
+  goal : State
+
+data Action : Type where
+  go : Action
+  copy : Action
+  stay : Action
+
+def Reward : spec Type := Nat
+
+def step : run Π (s : State) → Π (act : Action) → State × Reward :=
+  λ (s : State) → λ (act : Action) →
+    match s motive (λ _ → State × Reward)
+      | start =>
+          (match act motive (λ _ → State × Reward)
+            | go => (goal, 0)
+            | copy => (goal, 0)
+            | stay => (start, 0))
+      | goal =>
+          (match act motive (λ _ → State × Reward)
+            | go => (goal, suc 0)
+            | copy => (goal, suc 0)
+            | stay => (goal, suc 0))
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons go (cons copy (cons stay nil))
+def default-action : run Action := go
+def horizon : run Nat := suc 0
+def all-states : run List State := cons start (cons goal nil)

@@ -2,14 +2,17 @@
 
 ## 0.22.27
 
-Generated synthesis books no longer use fixed single-letter binders that can shadow an environment name.
+A stem column whose truth vector duplicates an earlier test stays in the family that `selfp` and `otherp` read.
 
-`eval-feature` and the compiled `PredProg` evaluator used to bind their Carrier argument as `c`, and certificate and helper code used `x`, `y`, `z`, `s`, and the other short names a user's action, state, feature, or constructor might already have. An environment with an action named `c` then rendered terms such as `step c c`, and the book failed to check. The synthesizer now builds a reserved set from the loaded environment and freshened identifiers (`c-2`, `c-3`, ...) that cannot collide with a reserved name or with one that only shares a prefix. The stock evaluator is used only when every preferred spelling is still free. A fixture whose actions are `c`, `x`, `y`, and `z` and whose states are `s` and `t` still synthesizes a certified `PredProg` whose generated book checks.
+The cover filter still drops a constant test, and the version-space walk still keeps one atom per truth vector, so synthesis does not enumerate a later column as a second feature test. That later column remains a column of its stem. `selfp stem a` is that action's test, even when the test agrees with an earlier one. `otherp stem a` is the disjunction of the same stem at every other action, including an action whose column was the same vector. The generated book declares that test, and `stem-at` reads it rather than `false`. Elixir `Synth.eval` and the checked `PredProg` agree. A constant column is still false. Four queens still keeps the same four size-4 programs and 454 distinct signatures. The walk considers 11226 programs, because those atoms now read every non-constant stem column.
+
+### Manual
+
+- Synthesis: a duplicate stem column remains a column of `selfp` and `otherp`. The walk keeps one atom per vector.
 
 ### Package
 
 - Version 0.22.27.
-
 
 ## 0.22.26
 

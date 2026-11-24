@@ -373,6 +373,7 @@ defmodule Muro.Synth do
         atom -> {atom, sig_fun.(atom)}
       end)
 
+    sigs = family_column_sigs(sigs, families, sig_fun)
     {quant_atoms, quant_sigs} = quantifier_atoms(families, sigs)
     atoms = atoms ++ quant_atoms
     sigs = Map.merge(sigs, quant_sigs)
@@ -992,6 +993,24 @@ defmodule Muro.Synth do
     else
       Enum.reduce(1..k, 1, fn i, acc -> div(acc * (n - k + i), i) end)
     end
+  end
+
+  # A stem column that is not a feat atom still needs a signature:
+  # `self` and `other` read it, and a missing signature is refused
+  # rather than treated as false.
+  defp family_column_sigs(sigs, families, sig_fun) do
+    Enum.reduce(families, sigs, fn family, sigs ->
+      Enum.reduce(family.actions, sigs, fn action, sigs ->
+        feature = family_column!(family, family.by_action, action)
+        key = {:feat, feature}
+
+        if Map.has_key?(sigs, key) do
+          sigs
+        else
+          Map.put(sigs, key, sig_fun.(key))
+        end
+      end)
+    end)
   end
 
   # `self` reads the action's own column. `other` is the pointwise

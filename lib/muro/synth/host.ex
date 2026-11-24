@@ -134,9 +134,16 @@ defmodule Muro.Synth.Host do
       Muro.Synth.Feature.eval_spec(host, hint_eval, spec, state)
     end
 
+    eval_spec = fn spec, state ->
+      Muro.Synth.Feature.eval_spec(host, hint_eval, spec, state)
+    end
+
+    features =
+      Muro.Synth.Feature.search_names(specs, Muro.Synth.Oracle.cover(host), eval_spec)
+
     host
     |> Map.put(:feature_specs, specs)
-    |> Map.put(:features, Enum.map(specs, & &1.name))
+    |> Map.put(:features, features)
     |> Map.put(:eval_feature, eval)
     |> Map.put(:hint_eval, hint_eval)
   end
