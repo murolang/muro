@@ -56,8 +56,9 @@ defmodule Muro.SynthFeatureTest do
     assert Enum.any?(specs, &(&1.kind == :is_self_loop))
   end
 
-  test "a second feature with the same truth vector is dropped" do
-    # stay pays exactly when go does, so the later template is the same atom.
+  test "a second stem column with the same truth vector is kept for selfp and otherp" do
+    # stay pays exactly when go does. The later template is the same
+    # search atom, but the family still has a column at stay.
     host =
       host(
         states: ["a", "b"],
@@ -68,7 +69,20 @@ defmodule Muro.SynthFeatureTest do
         end
       )
 
-    assert [%{name: "has-pos-reward-go", kind: :has_pos_reward}] = Feature.discover(host, [])
+    specs = Feature.discover(host, [])
+
+    assert Enum.map(specs, &{&1.name, &1.kind, &1.action}) == [
+             {"has-pos-reward-go", :has_pos_reward, "go"},
+             {"has-pos-reward-stay", :has_pos_reward, "stay"}
+           ]
+
+    eval = fn spec, state -> Feature.eval_spec(host, host.eval_feature, spec, state) end
+    assert Feature.search_names(specs, host.states, eval) == ["has-pos-reward-go"]
+
+    [family] = Feature.families(specs, host.actions)
+    assert family.stem == "has-pos-reward"
+    assert family.actions == ["go", "stay"]
+    assert family.by_action["stay"] == "has-pos-reward-stay"
   end
 
   test "a declared feature equivalent to a dynamics feature is dropped" do

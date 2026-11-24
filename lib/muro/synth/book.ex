@@ -838,9 +838,11 @@ defmodule Muro.Synth.Book do
   end
 
   # An action the family has no column for is false: the cover filter
-  # dropped that test, and `Synth.eval` reads the same family, so `self`
-  # there is false and `other` leaves it out. An action the family has a
-  # column for always has a constructor, because `feature_plan/3`
+  # dropped a constant test, and `Synth.eval` reads the same family, so
+  # `self` there is false and `other` leaves it out. A column whose
+  # truth vector duplicates an earlier test is kept, so `stem-at` and
+  # `other-at` still mean the stem at that action. An action the family
+  # has a column for always has a constructor, because `feature_plan/3`
   # declares every column of a quantified stem. A column with no
   # constructor is a plan that disagrees with `other-at`, and the book is
   # refused rather than read as false.

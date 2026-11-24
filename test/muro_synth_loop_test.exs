@@ -387,7 +387,7 @@ defmodule Muro.SynthLoopTest do
              [4, 283]
            ]
 
-    assert result.considered == 8_138
+    assert result.considered == 11_226
     assert result.distinct == 454
     assert result.enum_ms < 120_000
     assert Enum.map(result.program, &Muro.Synth.render/1) == Enum.map(~w(c0 c1 c2 c3), &pred[&1])
@@ -433,7 +433,7 @@ defmodule Muro.SynthLoopTest do
     assert text =~ "certificate CoindHomo"
     assert text =~ "program: #{pred["c0"]}"
     assert text =~ "enumeration"
-    assert text =~ "considered 8138"
+    assert text =~ "considered 11226"
     assert text =~ "distinct 454"
     assert text =~ "predicate size bound 18"
     assert text =~ "book open"

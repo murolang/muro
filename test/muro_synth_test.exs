@@ -364,7 +364,7 @@ defmodule Muro.SynthTest do
     assert Muro.check_file("test/fixtures/synth_quant.muro") == :ok
   end
 
-  test "a family column with no signature is refused, not dropped" do
+  test "a family column that is not a feat atom still gets a signature" do
     family = %{
       stem: "reaches-pos",
       kind: :reaches_pos,
@@ -373,19 +373,23 @@ defmodule Muro.SynthTest do
     }
 
     feat = fn _, state -> state == :on end
+    states = [:on, :off]
 
-    assert_raise ArgumentError,
-                 ~r/reaches-pos has columns with no signature: reaches-pos-b/,
-                 fn ->
-                   Synth.enumerate_sized(
-                     ["reaches-pos-a"],
-                     2,
-                     &Synth.signature(&1, [:on, :off], feat),
-                     2,
-                     nil,
-                     families: [family]
-                   )
-                 end
+    # `reaches-pos-b` is not a search atom, but the family still reads
+    # it, so the walk signs the column instead of refusing or dropping it.
+    {:ok, index, _meta} =
+      Synth.enumerate_sized(
+        ["reaches-pos-a"],
+        2,
+        &Synth.signature(&1, states, feat),
+        2,
+        nil,
+        families: [family]
+      )
+
+    other_b = {:other, "reaches-pos", "b", ["reaches-pos-a"]}
+    assert {kept, 1, _} = Map.fetch!(index, Synth.signature(other_b, states, feat))
+    assert Synth.signature(kept, states, feat) == Synth.signature(other_b, states, feat)
 
     listed = %{family | by_action: %{"a" => "reaches-pos-a"}}
 
