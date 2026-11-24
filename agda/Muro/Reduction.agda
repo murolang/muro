@@ -94,11 +94,11 @@ data _⊢[_]_⇛_ σ m where
     → σ ⊢[ m ] ucons (unf s (pair h t)) ⇛ pair h′ t′
   -- match on a constructor application: the j-th branch applied to the
   -- constructor's arguments (Check.dataWhnf)
-  ⇛-ιdata : ∀ {i j as as′ e P bs b b′}
+  ⇛-ιdata : ∀ {i j as as′ e P ars bs b b′}
     → Spine (ctor i j) as e
     → lookupList bs j ≡ ok b
     → σ ⊢[ m ] as ⇛L as′ → σ ⊢[ m ] b ⇛ b′
-    → σ ⊢[ m ] mData e P bs ⇛ appsFrom b′ as′
+    → σ ⊢[ m ] mData e P ars bs ⇛ appsFrom b′ as′
   -- congruence
   ⇛-var   : ∀ {x} → σ ⊢[ m ] var x ⇛ var x
   ⇛-typ   : σ ⊢[ m ] typ ⇛ typ
@@ -116,9 +116,9 @@ data _⊢[_]_⇛_ σ m where
   ⇛-empty : σ ⊢[ m ] empty ⇛ empty
   ⇛-dty   : ∀ {i} → σ ⊢[ m ] dty i ⇛ dty i
   ⇛-ctor  : ∀ {i j} → σ ⊢[ m ] ctor i j ⇛ ctor i j
-  ⇛-mData : ∀ {e e′ P P′ bs bs′}
+  ⇛-mData : ∀ {e e′ P P′ ars bs bs′}
     → σ ⊢[ m ] e ⇛ e′ → σ ⊢[ m ] P ⇛ P′ → σ ⊢[ m ] bs ⇛L bs′
-    → σ ⊢[ m ] mData e P bs ⇛ mData e′ P′ bs′
+    → σ ⊢[ m ] mData e P ars bs ⇛ mData e′ P′ ars bs′
   ⇛-mNat  : ∀ {e e′ P P′ z z′ s s′}
     → σ ⊢[ m ] e ⇛ e′ → σ ⊢[ m ] P ⇛ P′ → σ ⊢[ m ] z ⇛ z′ → σ ⊢[ m ] s ⇛ s′
     → σ ⊢[ m ] mNat e P z s ⇛ mNat e′ P′ z′ s′
@@ -191,7 +191,7 @@ mutual
   ⇛-refl empty = ⇛-empty
   ⇛-refl (dty i) = ⇛-dty
   ⇛-refl (ctor i j) = ⇛-ctor
-  ⇛-refl (mData e P bs) = ⇛-mData (⇛-refl e) (⇛-refl P) (⇛L-refl bs)
+  ⇛-refl (mData e P ars bs) = ⇛-mData (⇛-refl e) (⇛-refl P) (⇛L-refl bs)
   ⇛-refl (mNat e P z s) = ⇛-mNat (⇛-refl e) (⇛-refl P) (⇛-refl z) (⇛-refl s)
   ⇛-refl (mEmp e P) = ⇛-mEmp (⇛-refl e) (⇛-refl P)
   ⇛-refl (mUnit e P u) = ⇛-mUnit (⇛-refl e) (⇛-refl P) (⇛-refl u)
@@ -480,14 +480,14 @@ devDef m i (ok d)   = devDef′ i d (allowedDef (Def.dmode d) m)
 -- application with a branch. The arguments of the developed scrutinee
 -- are read back with unspine (dev-Spine: they are the developed
 -- arguments), and the branch is read from the developed branch list.
-devData′ : ∀ {n} → List (Tm n) → Result (Tm n) → Tm n → Tm (suc n) → List (Tm n) → Tm n
-devData′ as′ (ok b′)   _  _  _   = appsFrom b′ as′
-devData′ as′ (fail _)  e′ P′ bs′ = mData e′ P′ bs′
+devData′ : ∀ {n} → List (Tm n) → Result (Tm n) → Tm n → Tm (suc n) → List ℕ → List (Tm n) → Tm n
+devData′ as′ (ok b′)   _  _  _ _   = appsFrom b′ as′
+devData′ as′ (fail _)  e′ P′ ars bs′ = mData e′ P′ ars bs′
 
-devData : ∀ {n} → Tm n × List (Tm n) → Tm n → Tm (suc n) → List (Tm n) → Tm n
-devData (ctor i j , _) e′ P′ bs′ =
-  devData′ (proj₂ (unspine e′)) (lookupList bs′ j) e′ P′ bs′
-devData _ e′ P′ bs′ = mData e′ P′ bs′
+devData : ∀ {n} → Tm n × List (Tm n) → Tm n → Tm (suc n) → List ℕ → List (Tm n) → Tm n
+devData (ctor i j , _) e′ P′ ars bs′ =
+  devData′ (proj₂ (unspine e′)) (lookupList bs′ j) e′ P′ ars bs′
+devData _ e′ P′ ars bs′ = mData e′ P′ ars bs′
 
 mutual
   -- The λ-body is split before the index, and the index is split by
@@ -528,7 +528,7 @@ mutual
   dev σ m empty = empty
   dev σ m (dty i) = dty i
   dev σ m (ctor i j) = ctor i j
-  dev σ m (mData e P bs) = devData (unspine e) (dev σ m e) (dev σ m P) (devL σ m bs)
+  dev σ m (mData e P ars bs) = devData (unspine e) (dev σ m e) (dev σ m P) ars (devL σ m bs)
   dev σ m (mNat ze P z s) = dev σ m z
   dev σ m (mNat (su u) P z s) = inst (dev σ m s) (dev σ m u)
   dev σ m (mNat e P z s) = mNat (dev σ m e) (dev σ m P) (dev σ m z) (dev σ m s)
@@ -767,22 +767,22 @@ mutual
 
   -- mData: the development contracts the redex iff the scrutinee is a
   -- constructor application with a branch.
-  tri-ιdata : ∀ {σ m n} {i j} {as as′ : List (Tm n)} {e : Tm n} {P : Tm (suc n)} {bs : List (Tm n)} {b b′}
+  tri-ιdata : ∀ {σ m n} {i j} {as as′ : List (Tm n)} {e : Tm n} {P : Tm (suc n)} {ars} {bs : List (Tm n)} {b b′}
     → Spine (ctor i j) as e → lookupList bs j ≡ ok b
     → σ ⊢[ m ] as′ ⇛L devL σ m as → σ ⊢[ m ] b′ ⇛ dev σ m b
-    → σ ⊢[ m ] appsFrom b′ as′ ⇛ dev σ m (mData e P bs)
+    → σ ⊢[ m ] appsFrom b′ as′ ⇛ dev σ m (mData e P ars bs)
   tri-ιdata {σ} {m} {bs = bs} sp lk as* b*
     rewrite Spine→unspine head-ctor sp
           | Spine→unspine head-ctor (dev-Spine {σ} {m} dh-ctor sp)
           | lookupList-devL {σ} {m} bs _ lk = ⇛-appsFrom b* as*
 
-  tri-mData-ctor : ∀ {σ m n} {i j} {as : List (Tm n)} {e e′ : Tm n} {P P′ : Tm (suc n)} {bs bs′ : List (Tm n)}
+  tri-mData-ctor : ∀ {σ m n} {i j} {as : List (Tm n)} {e e′ : Tm n} {P P′ : Tm (suc n)} {ars} {bs bs′ : List (Tm n)}
     → Spine (ctor i j) as e
     → σ ⊢[ m ] e ⇛ e′ → σ ⊢[ m ] e′ ⇛ dev σ m e → σ ⊢[ m ] P′ ⇛ dev σ m P
     → σ ⊢[ m ] bs′ ⇛L devL σ m bs
-    → σ ⊢[ m ] mData e′ P′ bs′ ⇛
+    → σ ⊢[ m ] mData e′ P′ ars bs′ ⇛
         devData′ (proj₂ (unspine (dev σ m e))) (lookupList (devL σ m bs) j)
-          (dev σ m e) (dev σ m P) (devL σ m bs)
+          (dev σ m e) (dev σ m P) ars (devL σ m bs)
   tri-mData-ctor {σ} {m} {j = j} {bs = bs} sp e⇛ e* P* bs*
     rewrite Spine→unspine head-ctor (dev-Spine {σ} {m} dh-ctor sp)
     with lookupList bs j in lk
@@ -795,10 +795,10 @@ mutual
     with Spine-unique head-ctor head-ctor sp″ (dev-Spine {σ} {m} dh-ctor sp)
   ...       | refl , refl = ⇛-ιdata sp′ lk′ as′⇛ b′⇛
 
-  tri-mData : ∀ {σ m n} {e e′ : Tm n} {P P′ : Tm (suc n)} {bs bs′ : List (Tm n)}
+  tri-mData : ∀ {σ m n} {e e′ : Tm n} {P P′ : Tm (suc n)} {ars} {bs bs′ : List (Tm n)}
     → σ ⊢[ m ] e ⇛ e′ → σ ⊢[ m ] e′ ⇛ dev σ m e → σ ⊢[ m ] P′ ⇛ dev σ m P
     → σ ⊢[ m ] bs′ ⇛L devL σ m bs
-    → σ ⊢[ m ] mData e′ P′ bs′ ⇛ dev σ m (mData e P bs)
+    → σ ⊢[ m ] mData e′ P′ ars bs′ ⇛ dev σ m (mData e P ars bs)
   tri-mData {e = e} {P = P} e⇛ e* P* bs* with unspine e in eq
   ... | (ctor i j , as) = tri-mData-ctor {P = P} (unspine→Spine′ eq) e⇛ e* P* bs*
   ... | (var _ , _) = ⇛-mData e* P* bs*
@@ -813,7 +813,7 @@ mutual
   ... | (one , _) = ⇛-mData e* P* bs*
   ... | (empty , _) = ⇛-mData e* P* bs*
   ... | (dty _ , _) = ⇛-mData e* P* bs*
-  ... | (mData _ _ _ , _) = ⇛-mData e* P* bs*
+  ... | (mData _ _ ars _ , _) = ⇛-mData e* P* bs*
   ... | (mNat _ _ _ _ , _) = ⇛-mData e* P* bs*
   ... | (mEmp _ _ , _) = ⇛-mData e* P* bs*
   ... | (mUnit _ _ _ , _) = ⇛-mData e* P* bs*
@@ -855,7 +855,7 @@ mutual
   tri-app {f = empty} _ f* a* = ⇛-app f* a*
   tri-app {f = dty _} _ f* a* = ⇛-app f* a*
   tri-app {f = ctor _ _} _ f* a* = ⇛-app f* a*
-  tri-app {f = mData _ _ _} _ f* a* = ⇛-app f* a*
+  tri-app {f = mData _ _ ars _} _ f* a* = ⇛-app f* a*
   tri-app {f = mNat _ _ _ _} _ f* a* = ⇛-app f* a*
   tri-app {f = mEmp _ _} _ f* a* = ⇛-app f* a*
   tri-app {f = mUnit _ _ _} _ f* a* = ⇛-app f* a*
@@ -898,7 +898,7 @@ mutual
   tri-mNat {e = empty} _ e* P* z* s* = ⇛-mNat e* P* z* s*
   tri-mNat {e = dty _} _ e* P* z* s* = ⇛-mNat e* P* z* s*
   tri-mNat {e = ctor _ _} _ e* P* z* s* = ⇛-mNat e* P* z* s*
-  tri-mNat {e = mData _ _ _} _ e* P* z* s* = ⇛-mNat e* P* z* s*
+  tri-mNat {e = mData _ _ ars _} _ e* P* z* s* = ⇛-mNat e* P* z* s*
   tri-mNat {e = mNat _ _ _ _} _ e* P* z* s* = ⇛-mNat e* P* z* s*
   tri-mNat {e = mEmp _ _} _ e* P* z* s* = ⇛-mNat e* P* z* s*
   tri-mNat {e = mUnit _ _ _} _ e* P* z* s* = ⇛-mNat e* P* z* s*
@@ -941,7 +941,7 @@ mutual
   tri-mUnit {e = empty} _ e* P* u* = ⇛-mUnit e* P* u*
   tri-mUnit {e = dty _} _ e* P* u* = ⇛-mUnit e* P* u*
   tri-mUnit {e = ctor _ _} _ e* P* u* = ⇛-mUnit e* P* u*
-  tri-mUnit {e = mData _ _ _} _ e* P* u* = ⇛-mUnit e* P* u*
+  tri-mUnit {e = mData _ _ ars _} _ e* P* u* = ⇛-mUnit e* P* u*
   tri-mUnit {e = mNat _ _ _ _} _ e* P* u* = ⇛-mUnit e* P* u*
   tri-mUnit {e = mEmp _ _} _ e* P* u* = ⇛-mUnit e* P* u*
   tri-mUnit {e = mUnit _ _ _} _ e* P* u* = ⇛-mUnit e* P* u*
@@ -984,7 +984,7 @@ mutual
   tri-letp {e = empty} _ e* t* = ⇛-letp e* t*
   tri-letp {e = dty _} _ e* t* = ⇛-letp e* t*
   tri-letp {e = ctor _ _} _ e* t* = ⇛-letp e* t*
-  tri-letp {e = mData _ _ _} _ e* t* = ⇛-letp e* t*
+  tri-letp {e = mData _ _ ars _} _ e* t* = ⇛-letp e* t*
   tri-letp {e = mNat _ _ _ _} _ e* t* = ⇛-letp e* t*
   tri-letp {e = mEmp _ _} _ e* t* = ⇛-letp e* t*
   tri-letp {e = mUnit _ _ _} _ e* t* = ⇛-letp e* t*
@@ -1027,7 +1027,7 @@ mutual
   tri-rwt {e = empty} _ e* P* t* = ⇛-rwt e* P* t*
   tri-rwt {e = dty _} _ e* P* t* = ⇛-rwt e* P* t*
   tri-rwt {e = ctor _ _} _ e* P* t* = ⇛-rwt e* P* t*
-  tri-rwt {e = mData _ _ _} _ e* P* t* = ⇛-rwt e* P* t*
+  tri-rwt {e = mData _ _ ars _} _ e* P* t* = ⇛-rwt e* P* t*
   tri-rwt {e = mNat _ _ _ _} _ e* P* t* = ⇛-rwt e* P* t*
   tri-rwt {e = mEmp _ _} _ e* P* t* = ⇛-rwt e* P* t*
   tri-rwt {e = mUnit _ _ _} _ e* P* t* = ⇛-rwt e* P* t*
@@ -1078,7 +1078,7 @@ mutual
   tri-ucons {e = empty} _ e* = ⇛-ucons e*
   tri-ucons {e = dty _} _ e* = ⇛-ucons e*
   tri-ucons {e = ctor _ _} _ e* = ⇛-ucons e*
-  tri-ucons {e = mData _ _ _} _ e* = ⇛-ucons e*
+  tri-ucons {e = mData _ _ ars _} _ e* = ⇛-ucons e*
   tri-ucons {e = mNat _ _ _ _} _ e* = ⇛-ucons e*
   tri-ucons {e = mEmp _ _} _ e* = ⇛-ucons e*
   tri-ucons {e = mUnit _ _ _} _ e* = ⇛-ucons e*
@@ -1113,7 +1113,7 @@ mutual
   tri-ucons {e = unf _ empty} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (dty _)} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (ctor _ _)} _ e* = ⇛-ucons e*
-  tri-ucons {e = unf _ (mData _ _ _)} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (mData _ _ ars _)} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (mNat _ _ _ _)} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (mEmp _ _)} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (mUnit _ _ _)} _ e* = ⇛-ucons e*
@@ -1153,7 +1153,7 @@ mutual
   tri-ucons {e = unf _ (lam _ _ empty)} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (lam _ _ (dty _))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (lam _ _ (ctor _ _))} _ e* = ⇛-ucons e*
-  tri-ucons {e = unf _ (lam _ _ (mData _ _ _))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf _ (lam _ _ (mData _ _ ars _))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (lam _ _ (mNat _ _ _ _))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (lam _ _ (mEmp _ _))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf _ (lam _ _ (mUnit _ _ _))} _ e* = ⇛-ucons e*
@@ -1189,7 +1189,7 @@ mutual
   tri-ucons {e = unf empty (lam _ _ (var zero))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf (dty _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf (ctor _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
-  tri-ucons {e = unf (mData _ _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
+  tri-ucons {e = unf (mData _ _ ars _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf (mNat _ _ _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf (mEmp _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*
   tri-ucons {e = unf (mUnit _ _ _) (lam _ _ (var zero))} _ e* = ⇛-ucons e*

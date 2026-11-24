@@ -9,6 +9,7 @@ module Muro.ExampleVec where
 
 open import Data.Fin.Base using (zero; suc)
 open import Data.List.Base using (List; []; _∷_)
+open import Data.Nat.Base using () renaming (zero to nzero; suc to nsuc)
 open import Data.Product.Base using (_,_)
 open import Data.Unit.Base using (⊤; tt)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
@@ -75,7 +76,7 @@ vheadTm =
     (lam erased nat
       (lam affine (app (app (dty 1) (var (suc zero))) (su (var zero)))
         (mData (var zero) (lam affine (app (app (dty 1) (var (suc (suc (suc zero))))) (var zero))
-          (var (suc (suc (suc (suc zero)))))) (ze ∷ (lam affine nat
+          (var (suc (suc (suc (suc zero)))))) (nzero ∷ nsuc (nsuc (nsuc nzero)) ∷ []) (ze ∷ (lam affine nat
           (lam affine (var (suc (suc (suc zero))))
             (lam affine (app (app (dty 1) (var (suc (suc (suc (suc zero)))))) (var (suc zero)))
               (var (suc zero))))) ∷ []))))
@@ -93,7 +94,7 @@ vtailTm =
     (lam erased nat
       (lam affine (app (app (dty 1) (var (suc zero))) (su (var zero)))
         (mData (var zero) (lam affine (app (app (dty 1) (var (suc (suc (suc zero))))) (var zero))
-          (app (app (dty 1) (var (suc (suc (suc (suc zero)))))) (app (def 0) (var (suc zero))))) (ze ∷ (lam affine nat
+          (app (app (dty 1) (var (suc (suc (suc (suc zero)))))) (app (def 0) (var (suc zero))))) (nzero ∷ nsuc (nsuc (nsuc nzero)) ∷ []) (ze ∷ (lam affine nat
           (lam affine (var (suc (suc (suc zero))))
             (lam affine (app (app (dty 1) (var (suc (suc (suc (suc zero)))))) (var (suc zero)))
               (var zero)))) ∷ []))))
@@ -119,7 +120,7 @@ lookupTm =
         (lam affine (app (app (dty 1) (var (suc (suc zero)))) (var (suc zero)))
           (app (mData (var (suc zero)) (lam affine (app (dty 0) (var zero))
             (pi affine (app (app (dty 1) (var (suc (suc (suc (suc (suc zero))))))) (var (suc zero)))
-              (var (suc (suc (suc (suc (suc (suc zero))))))))) ((lam affine nat
+              (var (suc (suc (suc (suc (suc (suc zero))))))))) (nsuc nzero ∷ nsuc (nsuc nzero) ∷ []) ((lam affine nat
             (lam affine (app (app (dty 1) (var (suc (suc (suc (suc zero)))))) (su (var zero)))
               (app (app (app (def 1) (var (suc (suc (suc (suc (suc zero))))))) (var (suc zero))) (var zero)))) ∷ (lam affine nat
             (lam affine (app (dty 0) (var zero))

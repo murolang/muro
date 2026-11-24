@@ -211,6 +211,33 @@ defmodule Muro.FoldTest do
     assert app?(match)
   end
 
+  # The nil arm starts with a body λ (the motive returns a Π). Its
+  # domain mentions A, and the scrutinee mentions A once more, so
+  # cap(1, 1) = 2 and the argument is shared. Peeling every leading
+  # λ would skip that domain and leave the count at 1.
+  test "a mention in a body-λ domain of an mData arm counts" do
+    src = """
+    data List (A : Type) : Type where
+      nil : List A
+      cons : Π (+ a : A) → Π (+ t : List A) → List A
+
+    def go : run (Nat * Nat) :=
+      (λ (+ A : Type) →
+        ((match ((λ (+ xs : List A) → xs) nil) motive (λ _ → Π (_ : A) → Nat)
+            | nil => λ (_ : A) → 0
+            | cons a t => λ (_ : A) → 0)
+         0,
+         0))
+      ((λ (+ Y : Type) → Nat) Nat)
+    """
+
+    # The pair is already a value, so the match is not ι-reduced. Sharing
+    # is visible in the body-λ domains: they are Nat, not an unreduced app.
+    assert {:ok, {:pair, {:app, {:mdata, _scrut, _mot, arms}, :ze}, :ze}} = reduce(src)
+    assert {"nil", 0, {:lam, :affine, :nat, "_", :ze}} in arms
+    assert {"cons", 2, {:lam, :affine, :nat, "_", :ze}} in arms
+  end
+
   # At remaining fuel 1 the beta stays call-by-name, even when the
   # body mentions the binder twice. Fuel 2 on `reduce` leaves 1 after
   # the head is already a λ. Fuel 4 is enough to share.

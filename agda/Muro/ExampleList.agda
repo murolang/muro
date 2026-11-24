@@ -8,6 +8,7 @@ module Muro.ExampleList where
 
 open import Data.Fin.Base using (zero; suc)
 open import Data.List.Base using (List; []; _∷_)
+open import Data.Nat.Base using () renaming (zero to nzero; suc to nsuc)
 open import Data.Unit.Base using (⊤; tt)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
@@ -37,7 +38,7 @@ lengthTm : Tm 0
 lengthTm =
   lam erased typ
     (lam affine (app (dty 0) (var zero))
-      (mData (var zero) nat (ze ∷ (lam affine (var (suc zero))
+      (mData (var zero) nat (nzero ∷ nsuc (nsuc nzero) ∷ []) (ze ∷ (lam affine (var (suc zero))
         (lam affine (app (dty 0) (var (suc (suc zero))))
           (su (app (app (def 0) (var (suc (suc (suc zero))))) (var zero))))) ∷ [])))
 
@@ -89,7 +90,7 @@ consArm₀ =
       ze)
 
 listMatchA : Tm 1
-listMatchA = mData nilA nat (ze ∷ consArm₀ ∷ [])
+listMatchA = mData nilA nat (nzero ∷ nsuc (nsuc nzero) ∷ []) (ze ∷ consArm₀ ∷ [])
 
 field-types-not-counted : varUses 0 listMatchA 0 ≡ 1
 field-types-not-counted = refl
@@ -102,7 +103,20 @@ consArm₁ =
       (var (suc (suc zero))))
 
 listMatchA-body : Tm 1
-listMatchA-body = mData nilA typ (ze ∷ consArm₁ ∷ [])
+listMatchA-body = mData nilA typ (nzero ∷ nsuc (nsuc nzero) ∷ []) (ze ∷ consArm₁ ∷ [])
 
 field-body-is-counted : varUses 0 listMatchA-body 0 ≡ 2
 field-body-is-counted = refl
+
+-- The nil arm's constructor arity is 0, so a body that starts with λ
+-- is not a field binder: a mention of A in that λ's domain is counted.
+-- The scrutinee mentions A once, the domain once, and cap 1 1 ≡ 2.
+-- Skipping every leading λ would skip the domain and leave the count at 1.
+nilArmBodyLam : Tm 1
+nilArmBodyLam = lam affine (var zero) ze
+
+listMatchBodyLam : Tm 1
+listMatchBodyLam = mData nilA nat (nzero ∷ nsuc (nsuc nzero) ∷ []) (nilArmBodyLam ∷ consArm₀ ∷ [])
+
+body-lam-domain-counted : varUses 0 listMatchBodyLam 0 ≡ 2
+body-lam-domain-counted = refl

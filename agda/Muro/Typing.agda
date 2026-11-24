@@ -211,14 +211,14 @@ data _,_⊨⁰[_]_∶_ σ Γ where
     → CtorApp σ Γ m i j as A
     → σ , Γ ⊨⁰[ m ] e ∶ A
 
-  t-mData : ∀ {m e di ps is d P bs}
+  t-mData : ∀ {m e di ps is d P ars bs}
     → σ , Γ ⊨[ m ] e ∶ appsFrom (dty di) (ps ++ is)
     → lookupData σ di ≡ ok d
     → length ps ≡ nparams d
     → length is ≡ nidxs d
     → Mot⊨ σ Γ di ps (DataDecl.idxs d) P
     → σ , Γ ⊨[ m ] bs brs⟨ di , ps , is , P , 0 ⟩ DataDecl.ctors d
-    → σ , Γ ⊨⁰[ m ] mData e P bs ∶ motApp P is e
+    → σ , Γ ⊨⁰[ m ] mData e P ars bs ∶ motApp P is e
 
   t-def : ∀ {m i d}
     → lookupDef σ i ≡ ok d
@@ -585,7 +585,7 @@ applyFam-ren ρ one (i ∷ is) = applyFam-ren ρ (app one i) is
 applyFam-ren ρ empty (i ∷ is) = applyFam-ren ρ (app empty i) is
 applyFam-ren ρ (dty x) (i ∷ is) = applyFam-ren ρ (app (dty x) i) is
 applyFam-ren ρ (ctor x y) (i ∷ is) = applyFam-ren ρ (app (ctor x y) i) is
-applyFam-ren ρ (mData e P bs) (i ∷ is) = applyFam-ren ρ (app (mData e P bs) i) is
+applyFam-ren ρ (mData e P ars bs) (i ∷ is) = applyFam-ren ρ (app (mData e P ars bs) i) is
 applyFam-ren ρ (mNat e P z s) (i ∷ is) = applyFam-ren ρ (app (mNat e P z s) i) is
 applyFam-ren ρ (mEmp e P) (i ∷ is) = applyFam-ren ρ (app (mEmp e P) i) is
 applyFam-ren ρ (mUnit e P u) (i ∷ is) = applyFam-ren ρ (app (mUnit e P u) i) is
@@ -631,7 +631,7 @@ unfFam-ren ρ S one (_ ∷ _) ()
 unfFam-ren ρ S empty (_ ∷ _) ()
 unfFam-ren ρ S (dty _) (_ ∷ _) ()
 unfFam-ren ρ S (ctor _ _) (_ ∷ _) ()
-unfFam-ren ρ S (mData _ _ _) (_ ∷ _) ()
+unfFam-ren ρ S (mData _ _ ars _) (_ ∷ _) ()
 unfFam-ren ρ S (mNat _ _ _ _) (_ ∷ _) ()
 unfFam-ren ρ S (mEmp _ _) (_ ∷ _) ()
 unfFam-ren ρ S (mUnit _ _ _) (_ ∷ _) ()
@@ -679,7 +679,7 @@ unfStepOf-ren ρ S (app f a) eq = go f (a ∷ []) eq
   go empty _ ()
   go (dty _) _ ()
   go (ctor _ _) _ ()
-  go (mData _ _ _) _ ()
+  go (mData _ _ ars _) _ ()
   go (mNat _ _ _ _) _ ()
   go (mEmp _ _) _ ()
   go (mUnit _ _ _) _ ()
@@ -714,7 +714,7 @@ unfStepOf-ren ρ S one ()
 unfStepOf-ren ρ S empty ()
 unfStepOf-ren ρ S (dty _) ()
 unfStepOf-ren ρ S (ctor _ _) ()
-unfStepOf-ren ρ S (mData _ _ _) ()
+unfStepOf-ren ρ S (mData _ _ ars _) ()
 unfStepOf-ren ρ S (mNat _ _ _ _) ()
 unfStepOf-ren ρ S (mEmp _ _) ()
 unfStepOf-ren ρ S (mUnit _ _ _) ()
@@ -923,7 +923,7 @@ applyFam-apps one (i ∷ is) = applyFam-apps (app one i) is
 applyFam-apps empty (i ∷ is) = applyFam-apps (app empty i) is
 applyFam-apps (dty x) (i ∷ is) = applyFam-apps (app (dty x) i) is
 applyFam-apps (ctor x y) (i ∷ is) = applyFam-apps (app (ctor x y) i) is
-applyFam-apps (mData e P bs) (i ∷ is) = applyFam-apps (app (mData e P bs) i) is
+applyFam-apps (mData e P ars bs) (i ∷ is) = applyFam-apps (app (mData e P ars bs) i) is
 applyFam-apps (mNat e P z s) (i ∷ is) = applyFam-apps (app (mNat e P z s) i) is
 applyFam-apps (mEmp e P) (i ∷ is) = applyFam-apps (app (mEmp e P) i) is
 applyFam-apps (mUnit e P u) (i ∷ is) = applyFam-apps (app (mUnit e P u) i) is
@@ -981,7 +981,7 @@ unfFam-sub τ S one (_ ∷ _) ()
 unfFam-sub τ S empty (_ ∷ _) ()
 unfFam-sub τ S (dty _) (_ ∷ _) ()
 unfFam-sub τ S (ctor _ _) (_ ∷ _) ()
-unfFam-sub τ S (mData _ _ _) (_ ∷ _) ()
+unfFam-sub τ S (mData _ _ ars _) (_ ∷ _) ()
 unfFam-sub τ S (mNat _ _ _ _) (_ ∷ _) ()
 unfFam-sub τ S (mEmp _ _) (_ ∷ _) ()
 unfFam-sub τ S (mUnit _ _ _) (_ ∷ _) ()
@@ -1032,7 +1032,7 @@ unfStepOf-sub {σ = σ} τ S (app f a) eq = go f (a ∷ []) eq
   go empty _ ()
   go (dty _) _ ()
   go (ctor _ _) _ ()
-  go (mData _ _ _) _ ()
+  go (mData _ _ ars _) _ ()
   go (mNat _ _ _ _) _ ()
   go (mEmp _ _) _ ()
   go (mUnit _ _ _) _ ()
@@ -1067,7 +1067,7 @@ unfStepOf-sub τ S one ()
 unfStepOf-sub τ S empty ()
 unfStepOf-sub τ S (dty _) ()
 unfStepOf-sub τ S (ctor _ _) ()
-unfStepOf-sub τ S (mData _ _ _) ()
+unfStepOf-sub τ S (mData _ _ ars _) ()
 unfStepOf-sub τ S (mNat _ _ _ _) ()
 unfStepOf-sub τ S (mEmp _ _) ()
 unfStepOf-sub τ S (mUnit _ _ _) ()
@@ -1582,7 +1582,7 @@ nu-app-body {σ = σ} {T = T} {G = G} {fam = fam} eq c with ≈→join c
     go empty _ _ () _
     go (dty _) _ _ () _
     go (ctor _ _) _ _ () _
-    go (mData _ _ _) _ _ () _
+    go (mData _ _ ars _) _ _ () _
     go (mNat _ _ _ _) _ _ () _
     go (mEmp _ _) _ _ () _
     go (mUnit _ _ _) _ _ () _
@@ -1636,7 +1636,7 @@ stream-goal {σ = σ} {Eh = Eh} {T = T} {G = G} {fam = fam} cU cT st = go _ st (
   go empty () _
   go (dty _) () _
   go (ctor _ _) () _
-  go (mData _ _ _) () _
+  go (mData _ _ ars _) () _
   go (mNat _ _ _ _) () _
   go (mEmp _ _) () _
   go (mUnit _ _ _) () _
@@ -1751,7 +1751,7 @@ apps-apply one (i ∷ is) = apps-apply (app one i) is
 apps-apply empty (i ∷ is) = apps-apply (app empty i) is
 apps-apply (dty k) (i ∷ is) = apps-apply (app (dty k) i) is
 apps-apply (ctor di ci) (i ∷ is) = apps-apply (app (ctor di ci) i) is
-apps-apply (mData e P bs) (i ∷ is) = apps-apply (app (mData e P bs) i) is
+apps-apply (mData e P ars bs) (i ∷ is) = apps-apply (app (mData e P ars bs) i) is
 apps-apply (mNat e P z s) (i ∷ is) = apps-apply (app (mNat e P z s) i) is
 apps-apply (mEmp e P) (i ∷ is) = apps-apply (app (mEmp e P) i) is
 apps-apply (mUnit e P u) (i ∷ is) = apps-apply (app (mUnit e P u) i) is
@@ -1838,7 +1838,7 @@ fam-of {n = n} {S = S} {f = f} {a = a} {G = G} {fam = fam} eq = go f a [] refl e
   go (nu empty) _ _ _ ()
   go (nu (dty _)) _ _ _ ()
   go (nu (ctor _ _)) _ _ _ ()
-  go (nu (mData _ _ _)) _ _ _ ()
+  go (nu (mData _ _ ars _)) _ _ _ ()
   go (nu (mNat _ _ _ _)) _ _ _ ()
   go (nu (mEmp _ _)) _ _ _ ()
   go (nu (mUnit _ _ _)) _ _ _ ()
@@ -1874,7 +1874,7 @@ fam-of {n = n} {S = S} {f = f} {a = a} {G = G} {fam = fam} eq = go f a [] refl e
   go empty _ _ _ ()
   go (dty _) _ _ _ ()
   go (ctor _ _) _ _ _ ()
-  go (mData _ _ _) _ _ _ ()
+  go (mData _ _ ars _) _ _ _ ()
   go (mNat _ _ _ _) _ _ _ ()
   go (mEmp _ _) _ _ _ ()
   go (mUnit _ _ _) _ _ _ ()
@@ -1980,7 +1980,7 @@ fam-goal {T0 = app _ _} {T′ = one} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = empty} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = dty _} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = ctor _ _} _ _ _ ()
-fam-goal {T0 = app _ _} {T′ = mData _ _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = mData _ _ ars _} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = mNat _ _ _ _} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = mEmp _ _} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = mUnit _ _ _} _ _ _ ()
@@ -2016,7 +2016,7 @@ fam-goal {T0 = one} ()
 fam-goal {T0 = empty} ()
 fam-goal {T0 = dty _} ()
 fam-goal {T0 = ctor _ _} ()
-fam-goal {T0 = mData _ _ _} ()
+fam-goal {T0 = mData _ _ ars _} ()
 fam-goal {T0 = mNat _ _ _ _} ()
 fam-goal {T0 = mEmp _ _} ()
 fam-goal {T0 = mUnit _ _ _} ()

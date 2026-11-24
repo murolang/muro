@@ -157,7 +157,10 @@ data Tm (n : ℕ) : Set where
   -- Data: D params indices, constructor D.j, match with a motive.
   dty   : ℕ → Tm n
   ctor  : (di ci : ℕ) → Tm n
-  mData : Tm n → Tm (suc n) → List (Tm n) → Tm n
+  -- ars is the constructor field arity of each arm, in declaration
+  -- order. Renaming and substitution copy it. varUses skips exactly
+  -- that many leading λs, matching Elixir var_uses(x + ar, b, 0).
+  mData : Tm n → Tm (suc n) → List ℕ → List (Tm n) → Tm n
   -- match with explicit motive
   mNat  : (scrut : Tm n) (mot : Tm (suc n))
           (tz : Tm n) (ts : Tm (suc n)) → Tm n
@@ -236,7 +239,7 @@ mutual
   showTm empty        = "Empty"
   showTm (dty i)      = "D" ++ show i
   showTm (ctor i j)   = "c" ++ show i ++ "." ++ show j
-  showTm (mData e P _) =
+  showTm (mData e P ars _) =
     "match " ++ showTm e ++ " motive " ++ showTm P
   showTm (mNat e P z s) =
     "matchNat " ++ showTm e ++ " motive " ++ showTm P ++

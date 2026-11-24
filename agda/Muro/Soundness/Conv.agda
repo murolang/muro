@@ -7,7 +7,7 @@
 --   whnf-sound   whnf k σ t ≡ ok u → t ≈ u in spec, and u is in the
 --                fragment. Call-by-name clauses still produce a ⟶*
 --                reduct, hence ≈. A reusable beta that shares the
---                argument uses ≈-inst: a ⟶* a′ gives inst t a ≈ inst t a′,
+--                argument uses ≈-inst: a ≈ a′ gives inst t a ≈ inst t a′,
 --                so the result is still convertible to the original term.
 --                Running out of fuel is a failure, never a result.
 --   whnf-agree   a ⟶* reduct of t (the call-by-name strategy) and a
@@ -46,7 +46,7 @@ open import Muro.Convert hiding (≈-map; ≈-ucons)
 open import Muro.Check
   using (whnf; whnfApp; whnfApp′; shareView; shareViewOf; ShareView; shareHere; noShare; reused; share-eq;
          reuseWhnf; ReuseWhnf; cbn; shared;
-         uconsWhnf; dataWhnf; synEq; synEqD; synEqList; conv; convGo; convStuck; convProgress;
+         uconsWhnf; dataWhnf; synEq; synEqD; synEqList; eqNatList; conv; convGo; convStuck; convProgress;
          convWhnf; convN; convND; convArgs; eqFin; inSeen; isOOF; stuckForm; _orFuel_)
 
 ------------------------------------------------------------------------
@@ -87,9 +87,9 @@ mEmp-e* ≈-refl = ≈-refl
 mEmp-e* (≈-sym c) = ≈-sym (mEmp-e* c)
 mEmp-e* (≈-trans c d) = ≈-trans (mEmp-e* c) (mEmp-e* d)
 
-mData-e* : ∀ {σ m n} {e e′ : Tm n} {P bs} → σ ⊢[ m ] e ≈ e′
-  → σ ⊢[ m ] mData e P bs ≈ mData e′ P bs
-mData-e* {P = P} {bs = bs} (≈-step d) = ≈-step (⇛-mData d (⇛-refl P) (⇛L-refl bs))
+mData-e* : ∀ {σ m n} {e e′ : Tm n} {P ars bs} → σ ⊢[ m ] e ≈ e′
+  → σ ⊢[ m ] mData e P ars bs ≈ mData e′ P ars bs
+mData-e* {P = P} {ars = ars} {bs = bs} (≈-step d) = ≈-step (⇛-mData d (⇛-refl P) (⇛L-refl bs))
 mData-e* ≈-refl = ≈-refl
 mData-e* (≈-sym c) = ≈-sym (mData-e* c)
 mData-e* (≈-trans c d) = ≈-trans (mData-e* c) (mData-e* d)
@@ -206,7 +206,7 @@ abstract
     ...   | r , F | refl = app-f* r , f-app F Fa
     go (suc k) (acc rs) σ fs (f-app Ff Fa) eq | ok (ctor _ _) with go k (rs (n<1+n k)) σ fs Ff feq | ok-inj eq
     ...   | r , F | refl = app-f* r , f-app F Fa
-    go (suc k) (acc rs) σ fs (f-app Ff Fa) eq | ok (mData _ _ _) with go k (rs (n<1+n k)) σ fs Ff feq | ok-inj eq
+    go (suc k) (acc rs) σ fs (f-app Ff Fa) eq | ok (mData _ _ ars _) with go k (rs (n<1+n k)) σ fs Ff feq | ok-inj eq
     ...   | r , F | refl = app-f* r , f-app F Fa
     go (suc k) (acc rs) σ fs (f-app Ff Fa) eq | ok (mNat _ _ _ _) with go k (rs (n<1+n k)) σ fs Ff feq | ok-inj eq
     ...   | r , F | refl = app-f* r , f-app F Fa
@@ -285,7 +285,7 @@ abstract
     ...   | r , F | refl = mNat-e* r , f-mNat F FP Fz Fs
     go (suc k) (acc rs) σ fs (f-mNat Fe FP Fz Fs) eq | ok (ctor _ _) with go k (rs (n<1+n k)) σ fs Fe eeq | ok-inj eq
     ...   | r , F | refl = mNat-e* r , f-mNat F FP Fz Fs
-    go (suc k) (acc rs) σ fs (f-mNat Fe FP Fz Fs) eq | ok (mData _ _ _) with go k (rs (n<1+n k)) σ fs Fe eeq | ok-inj eq
+    go (suc k) (acc rs) σ fs (f-mNat Fe FP Fz Fs) eq | ok (mData _ _ ars _) with go k (rs (n<1+n k)) σ fs Fe eeq | ok-inj eq
     ...   | r , F | refl = mNat-e* r , f-mNat F FP Fz Fs
     go (suc k) (acc rs) σ fs (f-mNat Fe FP Fz Fs) eq | ok (mNat _ _ _ _) with go k (rs (n<1+n k)) σ fs Fe eeq | ok-inj eq
     ...   | r , F | refl = mNat-e* r , f-mNat F FP Fz Fs
@@ -363,7 +363,7 @@ abstract
     ...   | r , F | refl = mUnit-e* r , f-mUnit F FP Fu
     go (suc k) (acc rs) σ fs (f-mUnit Fe FP Fu) eq | ok (ctor _ _) with go k (rs (n<1+n k)) σ fs Fe eeq | ok-inj eq
     ...   | r , F | refl = mUnit-e* r , f-mUnit F FP Fu
-    go (suc k) (acc rs) σ fs (f-mUnit Fe FP Fu) eq | ok (mData _ _ _) with go k (rs (n<1+n k)) σ fs Fe eeq | ok-inj eq
+    go (suc k) (acc rs) σ fs (f-mUnit Fe FP Fu) eq | ok (mData _ _ ars _) with go k (rs (n<1+n k)) σ fs Fe eeq | ok-inj eq
     ...   | r , F | refl = mUnit-e* r , f-mUnit F FP Fu
     go (suc k) (acc rs) σ fs (f-mUnit Fe FP Fu) eq | ok (mNat _ _ _ _) with go k (rs (n<1+n k)) σ fs Fe eeq | ok-inj eq
     ...   | r , F | refl = mUnit-e* r , f-mUnit F FP Fu
@@ -418,7 +418,7 @@ abstract
     ...   | r , F | refl = mEmp-e* r , f-mEmp F FP
     -- mData: ι-data when the scrutinee normalises to a constructor spine
     -- with a branch
-    go (suc k) (acc rs) σ fs (f-mData {e} {P} {bs} Fe FP Fbs) eq with whnf k σ e in eeq
+    go (suc k) (acc rs) σ fs (f-mData {e} {P} {_} {bs} Fe FP Fbs) eq with whnf k σ e in eeq
     ... | fail _ = ⊥-elim (fail≢ok eq)
     ... | ok e′ with go k (rs (n<1+n k)) σ fs Fe eeq
     ...   | r , Fe′ with ctorSpine e′ in ceq
@@ -462,7 +462,7 @@ abstract
     ...   | r , F | refl = letp-e* r , f-letp F Ft
     go (suc k) (acc rs) σ fs (f-letp Fe Ft) eq | ok (ctor _ _) with go k (rs (n<1+n k)) σ fs Fe eeq | ok-inj eq
     ...   | r , F | refl = letp-e* r , f-letp F Ft
-    go (suc k) (acc rs) σ fs (f-letp Fe Ft) eq | ok (mData _ _ _) with go k (rs (n<1+n k)) σ fs Fe eeq | ok-inj eq
+    go (suc k) (acc rs) σ fs (f-letp Fe Ft) eq | ok (mData _ _ ars _) with go k (rs (n<1+n k)) σ fs Fe eeq | ok-inj eq
     ...   | r , F | refl = letp-e* r , f-letp F Ft
     go (suc k) (acc rs) σ fs (f-letp Fe Ft) eq | ok (mNat _ _ _ _) with go k (rs (n<1+n k)) σ fs Fe eeq | ok-inj eq
     ...   | r , F | refl = letp-e* r , f-letp F Ft
@@ -579,6 +579,13 @@ abstract
 ≡ᵇ-sound : ∀ {i j} → (i ≡ᵇ j) ≡ true → i ≡ j
 ≡ᵇ-sound {i} {j} eq = ≡ᵇ⇒≡ i j (subst T (sym eq) tt)
 
+eqNatList-sound : ∀ {xs ys} → eqNatList xs ys ≡ true → xs ≡ ys
+eqNatList-sound {[]} {[]} refl = refl
+eqNatList-sound {x ∷ xs} {y ∷ ys} eq with ∧-true eq
+... | e1 , e2 = cong₂ _∷_ (≡ᵇ-sound e1) (eqNatList-sound e2)
+eqNatList-sound {[]} {_ ∷ _} ()
+eqNatList-sound {_ ∷ _} {[]} ()
+
 eqFin-sound : ∀ {n} (i j : Fin n) → eqFin i j ≡ true → i ≡ j
 eqFin-sound zero zero _ = refl
 eqFin-sound (suc i) (suc j) eq = cong suc (eqFin-sound i j eq)
@@ -693,8 +700,8 @@ synEqD-sound empty empty sh-empty sh-empty _ = refl
 synEqD-sound (dty a) (dty a′) sh-dty sh-dty eq = cong dty (≡ᵇ-sound eq)
 synEqD-sound (ctor a b) (ctor a′ b′) sh-ctor sh-ctor eq with ∧-true eq
 ... | e1 , e2 = cong₂ ctor (≡ᵇ-sound e1) (≡ᵇ-sound e2)
-synEqD-sound (mData a b c) (mData a′ b′ c′) sh-mData sh-mData eq with ∧-true₃ eq
-... | e1 , e2 , e3 = cong₃ mData (synEq-sound a a′ e1) (synEq-sound b b′ e2) (synEqL-sound c c′ e3)
+synEqD-sound (mData a b ars c) (mData a′ b′ ars′ c′) sh-mData sh-mData eq with ∧-true₄ eq
+... | e0 , e1 , e2 , e3 = cong₄ mData (synEq-sound a a′ e1) (synEq-sound b b′ e2) (eqNatList-sound e0) (synEqL-sound c c′ e3)
 synEqD-sound (mNat a b c d) (mNat a′ b′ c′ d′) sh-mNat sh-mNat eq with ∧-true₄ eq
 ... | e1 , e2 , e3 , e4 = cong₄ mNat (synEq-sound a a′ e1) (synEq-sound b b′ e2) (synEq-sound c c′ e3) (synEq-sound d d′ e4)
 synEqD-sound (mEmp a b) (mEmp a′ b′) sh-mEmp sh-mEmp eq with ∧-true eq
@@ -844,23 +851,23 @@ synEqD-sound (word op ts) (word op′ ts′) sh-word sh-word eq with ∧-true eq
 ⇛L-++ˡ [] d = d
 ⇛L-++ˡ (p ∷ pre) d = ⇛L-∷ (⇛-refl p) (⇛L-++ˡ pre d)
 
-≈-mData-bs : ∀ {σ m n} {e : Tm n} {P} (pre : List (Tm n)) {bs bs′}
-  → σ ⊢[ m ] bs ≈L bs′ → σ ⊢[ m ] mData e P (pre ++ bs) ≈ mData e P (pre ++ bs′)
+≈-mData-bs : ∀ {σ m n} {e : Tm n} {P ars} (pre : List (Tm n)) {bs bs′}
+  → σ ⊢[ m ] bs ≈L bs′ → σ ⊢[ m ] mData e P ars (pre ++ bs) ≈ mData e P ars (pre ++ bs′)
 ≈-mData-bs pre ≈L-[] = ≈-refl
-≈-mData-bs {σ} {m} {e = e} {P} pre (≈L-∷ {a} {b} {as} {bs} c cs) =
+≈-mData-bs {σ} {m} {e = e} {P} {ars} pre (≈L-∷ {a} {b} {as} {bs} c cs) =
   ≈-trans
-    (≈-map (λ x → mData e P (pre ++ x ∷ as))
+    (≈-map (λ x → mData e P ars (pre ++ x ∷ as))
            (λ d → ⇛-mData (⇛-refl _) (⇛-refl _) (⇛L-++ˡ pre (⇛L-∷ d (⇛L-refl as)))) c)
-    (subst₂ (λ xs ys → σ ⊢[ m ] mData e P xs ≈ mData e P ys)
+    (subst₂ (λ xs ys → σ ⊢[ m ] mData e P ars xs ≈ mData e P ars ys)
             (++-assoc pre (b ∷ []) as) (++-assoc pre (b ∷ []) bs)
             (≈-mData-bs (pre ++ b ∷ []) cs))
 
-≈-mData : ∀ {σ m n} {e e′ : Tm n} {P P′ bs bs′}
+≈-mData : ∀ {σ m n} {e e′ : Tm n} {P P′ ars bs bs′}
   → σ ⊢[ m ] e ≈ e′ → σ ⊢[ m ] P ≈ P′ → σ ⊢[ m ] bs ≈L bs′
-  → σ ⊢[ m ] mData e P bs ≈ mData e′ P′ bs′
-≈-mData {e′ = e′} {P} {P′} {bs} ce cP cbs =
-  ≈-trans (≈-map (λ x → mData x P bs) (λ d → ⇛-mData d (⇛-refl _) (⇛L-refl _)) ce)
-  (≈-trans (≈-map (λ x → mData e′ x bs) (λ d → ⇛-mData (⇛-refl _) d (⇛L-refl _)) cP)
+  → σ ⊢[ m ] mData e P ars bs ≈ mData e′ P′ ars bs′
+≈-mData {e′ = e′} {P} {P′} {ars} {bs} ce cP cbs =
+  ≈-trans (≈-map (λ x → mData x P ars bs) (λ d → ⇛-mData d (⇛-refl _) (⇛L-refl _)) ce)
+  (≈-trans (≈-map (λ x → mData e′ x ars bs) (λ d → ⇛-mData (⇛-refl _) d (⇛L-refl _)) cP)
            (≈-mData-bs [] cbs))
 
 ------------------------------------------------------------------------
@@ -990,8 +997,12 @@ convND-sound k σ seen (sh-dty {i}) (sh-dty {j}) fs _ _ eq with ≡ᵇ-sound {i}
 convND-sound k σ seen (sh-ctor {i} {j}) (sh-ctor {i′} {j′}) fs _ _ eq with ∧-true (guard-ok eq)
 ... | ei , ej with ≡ᵇ-sound {i} {i′} ei | ≡ᵇ-sound {j} {j′} ej
 ...   | refl | refl = ≈-refl
-convND-sound k σ seen sh-mData sh-mData fs (f-mData Fe FP Fbs) (f-mData Fe′ FP′ Fbs′) eq with >>-ok₂ eq
-... | (_ , ce) , (_ , cP) , cbs =
+convND-sound k σ seen sh-mData sh-mData fs
+  (f-mData {ars = ars} Fe FP Fbs) (f-mData {ars = ars′} Fe′ FP′ Fbs′) eq
+  with >>-ok₃ eq
+... | (_ , g) , (_ , ce) , (_ , cP) , cbs
+  with eqNatList-sound {xs = ars} {ys = ars′} (guard-ok g)
+...   | refl =
   ≈-mData (convGo-sound k σ seen fs Fe Fe′ ce) (convGo-sound k σ seen fs FP FP′ cP) (convArgs-sound seen k σ fs Fbs Fbs′ cbs)
 convND-sound k σ seen sh-mNat sh-mNat fs (f-mNat Fe FP Fz Fs) (f-mNat Fe′ FP′ Fz′ Fs′) eq with >>-ok₃ eq
 ... | (_ , ce) , (_ , cP) , (_ , cz) , cs =

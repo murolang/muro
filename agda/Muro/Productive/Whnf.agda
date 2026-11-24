@@ -65,10 +65,10 @@ mEmp-star ⇛*-refl = ⇛*-refl
 mEmp-star {P = P} (⇛*-step d r) =
   ⇛*-step (⇛-mEmp d (⇛-refl P)) (mEmp-star r)
 
-mData-star : ∀ {σ n} {e e′ : Tm n} {P bs}
-  → σ ⊢[ spec ] e ⇛* e′ → σ ⊢[ spec ] mData e P bs ⇛* mData e′ P bs
+mData-star : ∀ {σ n} {e e′ : Tm n} {P ars bs}
+  → σ ⊢[ spec ] e ⇛* e′ → σ ⊢[ spec ] mData e P ars bs ⇛* mData e′ P ars bs
 mData-star ⇛*-refl = ⇛*-refl
-mData-star {P = P} {bs = bs} (⇛*-step d r) =
+mData-star {P = P} {ars = ars} {bs = bs} (⇛*-step d r) =
   ⇛*-step (⇛-mData d (⇛-refl P) (⇛L-refl bs)) (mData-star r)
 
 letp-star : ∀ {σ n} {e e′ : Tm n} {t}
@@ -116,7 +116,7 @@ ucons-go k σ (unf (one) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (one) (
 ucons-go k σ (unf (empty) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (empty) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf (dty wi) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (dty wi) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf (ctor wi wj) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (ctor wi wj) (lam q1 A1 (var Fin.zero))) v eq
-ucons-go k σ (unf (mData we wP wbs) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (mData we wP wbs) (lam q1 A1 (var Fin.zero))) v eq
+ucons-go k σ (unf (mData we wP ars wbs) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (mData we wP ars wbs) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf (mNat we wP wz ws) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (mNat we wP wz ws) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf (mEmp we wP) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (mEmp we wP) (lam q1 A1 (var Fin.zero))) v eq
 ucons-go k σ (unf (mUnit we wP wu) (lam q1 A1 (var Fin.zero))) v eq = stay σ (unf (mUnit we wP wu) (lam q1 A1 (var Fin.zero))) v eq
@@ -153,7 +153,7 @@ ucons-go k σ (unf s (lam q1 A1 (one))) v eq = stay σ (unf s (lam q1 A1 (one)))
 ucons-go k σ (unf s (lam q1 A1 (empty))) v eq = stay σ (unf s (lam q1 A1 (empty))) v eq
 ucons-go k σ (unf s (lam q1 A1 (dty wi))) v eq = stay σ (unf s (lam q1 A1 (dty wi))) v eq
 ucons-go k σ (unf s (lam q1 A1 (ctor wi wj))) v eq = stay σ (unf s (lam q1 A1 (ctor wi wj))) v eq
-ucons-go k σ (unf s (lam q1 A1 (mData we wP wbs))) v eq = stay σ (unf s (lam q1 A1 (mData we wP wbs))) v eq
+ucons-go k σ (unf s (lam q1 A1 (mData we wP ars wbs))) v eq = stay σ (unf s (lam q1 A1 (mData we wP ars wbs))) v eq
 ucons-go k σ (unf s (lam q1 A1 (mNat we wP wz ws))) v eq = stay σ (unf s (lam q1 A1 (mNat we wP wz ws))) v eq
 ucons-go k σ (unf s (lam q1 A1 (mEmp we wP))) v eq = stay σ (unf s (lam q1 A1 (mEmp we wP))) v eq
 ucons-go k σ (unf s (lam q1 A1 (mUnit we wP wu))) v eq = stay σ (unf s (lam q1 A1 (mUnit we wP wu))) v eq
@@ -188,7 +188,7 @@ ucons-go k σ (unf s (one)) v eq = stay σ (unf s (one)) v eq
 ucons-go k σ (unf s (empty)) v eq = stay σ (unf s (empty)) v eq
 ucons-go k σ (unf s (dty wi)) v eq = stay σ (unf s (dty wi)) v eq
 ucons-go k σ (unf s (ctor wi wj)) v eq = stay σ (unf s (ctor wi wj)) v eq
-ucons-go k σ (unf s (mData we wP wbs)) v eq = stay σ (unf s (mData we wP wbs)) v eq
+ucons-go k σ (unf s (mData we wP ars wbs)) v eq = stay σ (unf s (mData we wP ars wbs)) v eq
 ucons-go k σ (unf s (mNat we wP wz ws)) v eq = stay σ (unf s (mNat we wP wz ws)) v eq
 ucons-go k σ (unf s (mEmp we wP)) v eq = stay σ (unf s (mEmp we wP)) v eq
 ucons-go k σ (unf s (mUnit we wP wu)) v eq = stay σ (unf s (mUnit we wP wu)) v eq
@@ -224,7 +224,7 @@ ucons-go k σ (one) v eq = stay σ (one) v eq
 ucons-go k σ (empty) v eq = stay σ (empty) v eq
 ucons-go k σ (dty wi) v eq = stay σ (dty wi) v eq
 ucons-go k σ (ctor wi wj) v eq = stay σ (ctor wi wj) v eq
-ucons-go k σ (mData we wP wbs) v eq = stay σ (mData we wP wbs) v eq
+ucons-go k σ (mData we wP ars wbs) v eq = stay σ (mData we wP ars wbs) v eq
 ucons-go k σ (mNat we wP wz ws) v eq = stay σ (mNat we wP wz ws) v eq
 ucons-go k σ (mEmp we wP) v eq = stay σ (mEmp we wP) v eq
 ucons-go k σ (mUnit we wP wu) v eq = stay σ (mUnit we wP wu) v eq
@@ -351,7 +351,7 @@ abstract
     ... | r | refl = app-star r
     go (suc k) (acc rs) σ (app f a) v eq | ok (ctor wi wj) with go k (rs (n<1+n k)) σ f (ctor wi wj) weq | ok-inj eq
     ... | r | refl = app-star r
-    go (suc k) (acc rs) σ (app f a) v eq | ok (mData we wP wbs) with go k (rs (n<1+n k)) σ f (mData we wP wbs) weq | ok-inj eq
+    go (suc k) (acc rs) σ (app f a) v eq | ok (mData we wP ars wbs) with go k (rs (n<1+n k)) σ f (mData we wP ars wbs) weq | ok-inj eq
     ... | r | refl = app-star r
     go (suc k) (acc rs) σ (app f a) v eq | ok (mNat we wP wz ws) with go k (rs (n<1+n k)) σ f (mNat we wP wz ws) weq | ok-inj eq
     ... | r | refl = app-star r
@@ -432,7 +432,7 @@ abstract
     ... | r | refl = mNat-star r
     go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (ctor wi wj) with go k (rs (n<1+n k)) σ e (ctor wi wj) weq | ok-inj eq
     ... | r | refl = mNat-star r
-    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (mData we wP wbs) with go k (rs (n<1+n k)) σ e (mData we wP wbs) weq | ok-inj eq
+    go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (mData we wP ars wbs) with go k (rs (n<1+n k)) σ e (mData we wP ars wbs) weq | ok-inj eq
     ... | r | refl = mNat-star r
     go (suc k) (acc rs) σ (mNat e P z s) v eq | ok (mNat we wP wz ws) with go k (rs (n<1+n k)) σ e (mNat we wP wz ws) weq | ok-inj eq
     ... | r | refl = mNat-star r
@@ -511,7 +511,7 @@ abstract
     ... | r | refl = mUnit-star r
     go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (ctor wi wj) with go k (rs (n<1+n k)) σ e (ctor wi wj) weq | ok-inj eq
     ... | r | refl = mUnit-star r
-    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (mData we wP wbs) with go k (rs (n<1+n k)) σ e (mData we wP wbs) weq | ok-inj eq
+    go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (mData we wP ars wbs) with go k (rs (n<1+n k)) σ e (mData we wP ars wbs) weq | ok-inj eq
     ... | r | refl = mUnit-star r
     go (suc k) (acc rs) σ (mUnit e P u) v eq | ok (mNat we wP wz ws) with go k (rs (n<1+n k)) σ e (mNat we wP wz ws) weq | ok-inj eq
     ... | r | refl = mUnit-star r
@@ -563,16 +563,16 @@ abstract
     ... | fail _ = ⊥-elim (fail≢ok eq)
     ... | ok e′ with go k (rs (n<1+n k)) σ e e′ weq | ok-inj eq
     ... | r | refl = mEmp-star r
-    go (suc k) (acc rs) σ (mData e P bs) v eq with whnf k σ e in weq
+    go (suc k) (acc rs) σ (mData e P ars bs) v eq with whnf k σ e in weq
     ... | fail _ = ⊥-elim (fail≢ok eq)
     ... | ok e′ with go k (rs (n<1+n k)) σ e e′ weq
     ... | r with ctorSpine e′ in ceq
     ... | nothing with ok-inj eq
     ... | refl = mData-star r
-    go (suc k) (acc rs) σ (mData e P bs) v eq | ok e′ | r | just (di , ci , args) with lookupList bs ci in leq
+    go (suc k) (acc rs) σ (mData e P ars bs) v eq | ok e′ | r | just (di , ci , args) with lookupList bs ci in leq
     ... | fail _ with ok-inj eq
     ... | refl = mData-star r
-    go (suc k) (acc rs) σ (mData e P bs) v eq | ok e′ | r | just (di , ci , args) | ok b
+    go (suc k) (acc rs) σ (mData e P ars bs) v eq | ok e′ | r | just (di , ci , args) | ok b
       with ctorSpine-just ceq
     ... | sp =
       ⇛*-trans (mData-star r)
@@ -611,7 +611,7 @@ abstract
     ... | r | refl = letp-star r
     go (suc k) (acc rs) σ (letp e t) v eq | ok (ctor wi wj) with go k (rs (n<1+n k)) σ e (ctor wi wj) weq | ok-inj eq
     ... | r | refl = letp-star r
-    go (suc k) (acc rs) σ (letp e t) v eq | ok (mData we wP wbs) with go k (rs (n<1+n k)) σ e (mData we wP wbs) weq | ok-inj eq
+    go (suc k) (acc rs) σ (letp e t) v eq | ok (mData we wP ars wbs) with go k (rs (n<1+n k)) σ e (mData we wP ars wbs) weq | ok-inj eq
     ... | r | refl = letp-star r
     go (suc k) (acc rs) σ (letp e t) v eq | ok (mNat we wP wz ws) with go k (rs (n<1+n k)) σ e (mNat we wP wz ws) weq | ok-inj eq
     ... | r | refl = letp-star r

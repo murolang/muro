@@ -235,7 +235,7 @@ ok-nu-app {S = S} {G = G} {fam = fam} {f = f} {a = a} eq = go f a [] eq
   go empty _ _ ()
   go (dty _) _ _ ()
   go (ctor _ _) _ _ ()
-  go (mData _ _ _) _ _ ()
+  go (mData _ _ ars _) _ _ ()
   go (mNat _ _ _ _) _ _ ()
   go (mEmp _ _) _ _ ()
   go (mUnit _ _ _) _ _ ()
@@ -293,7 +293,7 @@ rigid-spine {σ = σ} {S = S} {G = G} {fam = fam} {s = s} hs diff eq c with ≈�
   side {empty} () _ _
   side {dty _} () _ _
   side {ctor _ _} () _ _
-  side {mData _ _ _} () _ _
+  side {mData _ _ ars _} () _ _
   side {mNat _ _ _ _} () _ _
   side {mEmp _ _} () _ _
   side {mUnit _ _ _} () _ _

@@ -95,7 +95,7 @@ data Ne σ m where
   ne-mUnit   : ∀ {e P u} → Ne σ m e → Ne σ m (mUnit e P u)
   ne-mEmp    : ∀ {e P} → Ne σ m e → Ne σ m (mEmp e P)
   ne-rwt     : ∀ {eq P t} → Ne σ m eq → Ne σ m (rwt eq P t)
-  ne-mData   : ∀ {e P bs} → Ne σ m e → Ne σ m (mData e P bs)
+  ne-mData   : ∀ {e P ars bs} → Ne σ m e → Ne σ m (mData e P ars bs)
   ne-letp    : ∀ {e t} → Ne σ m e → Ne σ m (letp e t)
   ne-ucons   : ∀ {s} → Ne σ m s → Ne σ m (ucons s)
   ne-foreign : ∀ {t} → Foreign t → Ne σ m t
@@ -170,14 +170,14 @@ data _⊢[_]_⟶_ (σ : Sig) (m : Mode) {n} : Tm n → Tm n → Set where
   ann-e : ∀ {e A}
     → σ ⊢[ m ] ann e A ⟶ e
 
-  ι-data : ∀ {i j as e P bs b}
+  ι-data : ∀ {i j as e P ars bs b}
     → Spine (ctor i j) as e
     → lookupList bs j ≡ ok b
-    → σ ⊢[ m ] mData e P bs ⟶ appsFrom b as
+    → σ ⊢[ m ] mData e P ars bs ⟶ appsFrom b as
 
-  mData-e : ∀ {e e′ P bs}
+  mData-e : ∀ {e e′ P ars bs}
     → σ ⊢[ m ] e ⟶ e′
-    → σ ⊢[ m ] mData e P bs ⟶ mData e′ P bs
+    → σ ⊢[ m ] mData e P ars bs ⟶ mData e′ P ars bs
 
   ι-letp : ∀ {a b t}
     → σ ⊢[ m ] letp (pair a b) t ⟶ inst₂ t a b
@@ -318,7 +318,7 @@ det (ι-data sp lk) (ι-data sp′ lk′) with Spine-unique head-ctor head-ctor 
 ...   | refl = refl
 det (ι-data sp _) (mData-e s) = ⊥-elim (Spine-no-step dh-ctor sp s)
 det (mData-e s) (ι-data sp _) = ⊥-elim (Spine-no-step dh-ctor sp s)
-det (mData-e s) (mData-e s′) = cong (λ e → mData e _ _) (det s s′)
+det (mData-e s) (mData-e s′) = cong (λ e → mData e _ _ _) (det s s′)
 det ι-letp ι-letp = refl
 det ι-letp (letp-e ())
 det (letp-e ()) ι-letp
@@ -399,7 +399,7 @@ data _⊢[_]_≈_ (σ : Sig) (m : Mode) {n} : Tm n → Tm n → Set where
 ⟶→≈ (rwt-e s) = ≈-map (λ e → rwt e _ _) (λ d → ⇛-rwt d (⇛-refl _) (⇛-refl _)) (⟶→≈ s)
 ⟶→≈ ann-e = ≈-step (⇛-ann (⇛-refl _))
 ⟶→≈ (ι-data sp lk) = ≈-step (⇛-ιdata sp lk (⇛L-refl _) (⇛-refl _))
-⟶→≈ (mData-e s) = ≈-map (λ e → mData e _ _) (λ d → ⇛-mData d (⇛-refl _) (⇛L-refl _)) (⟶→≈ s)
+⟶→≈ (mData-e s) = ≈-map (λ e → mData e _ _ _) (λ d → ⇛-mData d (⇛-refl _) (⇛L-refl _)) (⟶→≈ s)
 ⟶→≈ ι-letp = ≈-step (⇛-ιletp (⇛-refl _) (⇛-refl _) (⇛-refl _))
 ⟶→≈ (letp-e s) = ≈-map (λ e → letp e _) (λ d → ⇛-letp d (⇛-refl _)) (⟶→≈ s)
 ⟶→≈ ι-ucons-p = ≈-step (⇛-ιβp (⇛-refl _) (⇛-refl _) (⇛-refl _) (⇛-refl _))

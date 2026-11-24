@@ -212,7 +212,7 @@ nuKindAt-Frag _ one f-one refl = f-typ
 nuKindAt-Frag _ empty f-empty refl = f-typ
 nuKindAt-Frag _ (dty _) f-dty refl = f-typ
 nuKindAt-Frag _ (ctor _ _) f-ctor refl = f-typ
-nuKindAt-Frag _ (mData _ _ _) (f-mData _ _ _) refl = f-typ
+nuKindAt-Frag _ (mData _ _ ars _) (f-mData _ _ _) refl = f-typ
 nuKindAt-Frag _ (mNat _ _ _ _) (f-mNat _ _ _ _) refl = f-typ
 nuKindAt-Frag _ (mEmp _ _) (f-mEmp _ _) refl = f-typ
 nuKindAt-Frag _ (mUnit _ _ _) (f-mUnit _ _ _) refl = f-typ
@@ -336,7 +336,7 @@ applyFam-Frag one (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app one i) is (
 applyFam-Frag empty (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app empty i) is (f-app Ft Fi) Fis
 applyFam-Frag (dty d) (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app (dty d) i) is (f-app Ft Fi) Fis
 applyFam-Frag (ctor d c) (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app (ctor d c) i) is (f-app Ft Fi) Fis
-applyFam-Frag (mData e P bs) (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app (mData e P bs) i) is (f-app Ft Fi) Fis
+applyFam-Frag (mData e P ars bs) (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app (mData e P ars bs) i) is (f-app Ft Fi) Fis
 applyFam-Frag (mNat e P z s) (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app (mNat e P z s) i) is (f-app Ft Fi) Fis
 applyFam-Frag (mEmp e P) (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app (mEmp e P) i) is (f-app Ft Fi) Fis
 applyFam-Frag (mUnit e P u) (i ∷ is) Ft (fl-∷ Fi Fis) = applyFam-Frag (app (mUnit e P u) i) is (f-app Ft Fi) Fis
@@ -411,7 +411,7 @@ unspine-go-Frag one acc Ft Facc = one , acc , refl , Ft , Facc
 unspine-go-Frag empty acc Ft Facc = empty , acc , refl , Ft , Facc
 unspine-go-Frag (dty d) acc Ft Facc = dty d , acc , refl , Ft , Facc
 unspine-go-Frag (ctor d c) acc Ft Facc = ctor d c , acc , refl , Ft , Facc
-unspine-go-Frag (mData e P bs) acc Ft Facc = mData e P bs , acc , refl , Ft , Facc
+unspine-go-Frag (mData e P ars bs) acc Ft Facc = mData e P ars bs , acc , refl , Ft , Facc
 unspine-go-Frag (mNat e P z s) acc Ft Facc = mNat e P z s , acc , refl , Ft , Facc
 unspine-go-Frag (mEmp e P) acc Ft Facc = mEmp e P , acc , refl , Ft , Facc
 unspine-go-Frag (mUnit e P u) acc Ft Facc = mUnit e P u , acc , refl , Ft , Facc
@@ -501,7 +501,7 @@ unfStepOf-Frag S (dty d) FS Ft eq with unspine-Frag (dty d) Ft
 ... | h , as , refl , Fh , Fas = unfSpine-Frag FS Fh Fas eq
 unfStepOf-Frag S (ctor d c) FS Ft eq with unspine-Frag (ctor d c) Ft
 ... | h , as , refl , Fh , Fas = unfSpine-Frag FS Fh Fas eq
-unfStepOf-Frag S (mData e P bs) FS Ft eq with unspine-Frag (mData e P bs) Ft
+unfStepOf-Frag S (mData e P ars bs) FS Ft eq with unspine-Frag (mData e P ars bs) Ft
 ... | h , as , refl , Fh , Fas = unfSpine-Frag FS Fh Fas eq
 unfStepOf-Frag S (mNat e P z s) FS Ft eq with unspine-Frag (mNat e P z s) Ft
 ... | h , as , refl , Fh , Fas = unfSpine-Frag FS Fh Fas eq
@@ -845,7 +845,7 @@ infer-sound k σ rs spec hd G FΓ (f-dty {i = i}) eq with lookupData σ i in leq
 infer-sound k σ rs m hd G FΓ f-ctor eq = ⊥-elim (fail≢ok eq)
 
 -- match on data
-infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-mData {e = e} {P = P} {bs = bs} Fe FP Fbs) eq with infer k σ rs Γ m e in ieq
+infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-mData {e = e} {P = P} {ars = ars} {bs = bs} Fe FP Fbs) eq with infer k σ rs Γ m e in ieq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok (et , eu) with viewData k σ et in veq
 ...   | fail _ = ⊥-elim (fail≢ok eq)
@@ -890,7 +890,7 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-mData {e = e} {P = P} {bs = bs} Fe F
       → length params ≡ nparams d → length idxs ≡ nidxs d
       → Maybe (MotiveOk σ Γ di params (DataDecl.idxs d) P)
       → Maybe (σ , Γ ⊢[ m ] bs brs⟨ di , params , idxs , P , 0 ⟩ DataDecl.ctors d ⊣ bu)
-      → Inf {σ} Γ m (mData e P bs) (appsFrom (lam q D P) (idxs ++ (e ∷ []))) uses
+      → Inf {σ} Γ m (mData e P ars bs) (appsFrom (lam q D P) (idxs ++ (e ∷ []))) uses
     matchGo Fidxs fs pieq lps lidx (just mot) (just brs) =
       inf (Frag-appsFrom (f-lam FD FP) (FragL-++ Fidxs (fl-∷ Fe fl-[])))
         (⇒-mData De
@@ -1292,7 +1292,7 @@ check-sound k σ rs m {e = one} G FΓ Fe FA eq = checkAgainst-sound k σ rs m G 
 check-sound k σ rs m {e = empty} G FΓ Fe FA eq = checkAgainst-sound k σ rs m G FΓ Fe FA eq
 check-sound k σ rs m {e = dty _} G FΓ Fe FA eq = checkAgainst-sound k σ rs m G FΓ Fe FA eq
 check-sound k σ rs m {e = ctor _ _} G FΓ Fe FA eq = checkAgainst-sound k σ rs m G FΓ Fe FA eq
-check-sound k σ rs m {e = mData _ _ _} G FΓ Fe FA eq = checkAgainst-sound k σ rs m G FΓ Fe FA eq
+check-sound k σ rs m {e = mData _ _ ars _} G FΓ Fe FA eq = checkAgainst-sound k σ rs m G FΓ Fe FA eq
 check-sound k σ rs m {e = mNat _ _ _ _} G FΓ Fe FA eq = checkAgainst-sound k σ rs m G FΓ Fe FA eq
 check-sound k σ rs m {e = mEmp _ _} G FΓ Fe FA eq = checkAgainst-sound k σ rs m G FΓ Fe FA eq
 check-sound k σ rs m {e = mUnit _ _ _} G FΓ Fe FA eq = checkAgainst-sound k σ rs m G FΓ Fe FA eq
@@ -1981,7 +1981,7 @@ checkTy-sound k σ rs {Γ = Γ} {A = A@(su _)} G FΓ Fe eq with infer k σ rs Γ
 checkTy-sound k σ rs {Γ = Γ} {A = A@(dty _)} G FΓ Fe eq with infer k σ rs Γ spec A in ieq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok (T , _) = checkTy-el k σ rs G FΓ Fe ieq eq
-checkTy-sound k σ rs {Γ = Γ} {A = A@(mData _ _ _)} G FΓ Fe eq with infer k σ rs Γ spec A in ieq
+checkTy-sound k σ rs {Γ = Γ} {A = A@(mData _ _ ars _)} G FΓ Fe eq with infer k σ rs Γ spec A in ieq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok (T , _) = checkTy-el k σ rs G FΓ Fe ieq eq
 checkTy-sound k σ rs {Γ = Γ} {A = A@(mNat _ _ _ _)} G FΓ Fe eq with infer k σ rs Γ spec A in ieq
@@ -2136,7 +2136,7 @@ unfStepOf-fam {n = n} {S = S} {S′ = S′} {T = T} {G = G} eq = on T eq
   spine (nu empty) (_ ∷ _) ()
   spine (nu (dty _)) (_ ∷ _) ()
   spine (nu (ctor _ _)) (_ ∷ _) ()
-  spine (nu (mData _ _ _)) (_ ∷ _) ()
+  spine (nu (mData _ _ ars _)) (_ ∷ _) ()
   spine (nu (mNat _ _ _ _)) (_ ∷ _) ()
   spine (nu (mEmp _ _)) (_ ∷ _) ()
   spine (nu (mUnit _ _ _)) (_ ∷ _) ()
@@ -2172,7 +2172,7 @@ unfStepOf-fam {n = n} {S = S} {S′ = S′} {T = T} {G = G} eq = on T eq
   spine empty _ ()
   spine (dty _) _ ()
   spine (ctor _ _) _ ()
-  spine (mData _ _ _) _ ()
+  spine (mData _ _ ars _) _ ()
   spine (mNat _ _ _ _) _ ()
   spine (mEmp _ _) _ ()
   spine (mUnit _ _ _) _ ()
@@ -2211,7 +2211,7 @@ unfStepOf-fam {n = n} {S = S} {S′ = S′} {T = T} {G = G} eq = on T eq
   on empty ()
   on (dty _) ()
   on (ctor _ _) ()
-  on (mData _ _ _) ()
+  on (mData _ _ ars _) ()
   on (mNat _ _ _ _) ()
   on (mEmp _ _) ()
   on (mUnit _ _ _) ()
