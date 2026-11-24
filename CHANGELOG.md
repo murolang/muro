@@ -20,6 +20,18 @@ The arrival-sequence hypothesis is in `agda/Muro/Family.agda`. The wall is uncha
 
 - Version 0.22.26.
 
+## 0.22.25
+
+The six library `Nat` runs that Elixir emits as integer operations (`pred` and `plus` from the prelude, `max`, `min`, and `minus` from `std:le.muro`, and `compare` from `std:ord.muro`) are pinned to their clause-for-clause transcription in `agda/Muro/NatPrim.agda`. `Muro.Emit.NatPrim` hashes the de Bruijn type and body of each bundled definition and compares that digest with a recorded pin when the library is loaded. A change to the type or the body fails the pin, names the definition, and points at `agda/Muro/NatPrim.agda`, so the transcription and the proof are updated together. A file that redefines one of those names, or a mutant of its body, is still not swapped and keeps the emitted recursion. The remaining trust is that Elixir integer arithmetic is ℤ arithmetic, and that the emitted function is guarded to take only non-negative integers.
+
+### Manual
+
+- Emit: the library `Nat` operations are pinned to `agda/Muro/NatPrim.agda`.
+
+### Package
+
+- Version 0.22.25.
+
 ## 0.22.24
 
 A keyed family can say that a message may be delivered again, and a book can state that opening the same `init` twice is harmless.
