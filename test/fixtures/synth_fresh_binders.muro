@@ -1,0 +1,61 @@
+-- Environment whose action, state, and constructor names are the
+-- single-letter binders generated books used to hard-code. From s,
+-- c reaches t and its reward; x, y, and z wait. The search should
+-- still return a certified PredProg whose book checks.
+import "../../examples/cshrl/std/nat.muro"
+import "../../examples/cshrl/lib/agent.muro"
+
+data State : Type where
+  s : State
+  t : State
+
+data Action : Type where
+  c : Action
+  x : Action
+  y : Action
+  z : Action
+
+-- Reserve other binders that generated helpers and certificates use,
+-- so a prefix-sharing clash is also exercised.
+data Marker : Type where
+  a : Marker
+  b : Marker
+  f : Marker
+  p : Marker
+  q : Marker
+  r : Marker
+  n : Marker
+  k : Marker
+  m : Marker
+  j : Marker
+  d : Marker
+  h : Marker
+  A : Marker
+  xs : Marker
+  ys : Marker
+  n1 : Marker
+  m1 : Marker
+
+def Reward : spec Type := Nat
+
+def move : run Π (st : State) → Π (act : Action) → State :=
+  λ (st : State) → λ (act : Action) →
+    match st motive (λ _ → State)
+      | s => (match act motive (λ _ → State) | c => t | x => s | y => s | z => s)
+      | t => t
+
+def reward-fn : run Π (st : State) → Reward :=
+  λ (st : State) → match st motive (λ _ → Reward) | s => 0 | t => suc 0
+
+def step : run Π (st : State) → Π (act : Action) → State × Reward :=
+  λ (st : State) → λ (act : Action) → step-from (move st act)
+
+def step-from : run Π (+ st : State) → State × Reward := λ (+ st : State) → (st, reward-fn st)
+
+def le : spec Π (rw : Reward) → Π (qv : Reward) → Type := Le
+def max : run Π (rw : Reward) → Π (qv : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons c (cons x (cons y (cons z nil)))
+def default-action : run Action := c
+def horizon : run Nat := suc 0
+def all-states : run List State := cons s (cons t nil)

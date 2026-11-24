@@ -1,4 +1,5 @@
 defmodule Muro.Synth.Cert do
+  alias Muro.Synth.Names
   @moduledoc false
 
   alias Muro.Synth.Term
@@ -38,8 +39,8 @@ defmodule Muro.Synth.Cert do
 
   # Same term as `prefer/2`, with the two action variables named.
   @doc false
-  def preference(actions, winner, left \\ "a", right \\ "b") do
-    prefer(actions, winner, left, right)
+  def preference(actions, winner, left \\ nil, right \\ nil) do
+    prefer(actions, winner, left || Names.current("a"), right || Names.current("b"))
   end
 
   defp render_cover(host, arms, oracle, bound) do
@@ -284,7 +285,7 @@ defmodule Muro.Synth.Cert do
     body = fn _spell -> "Unit" end
     type = fn _src -> "Type" end
 
-    case Term.cover_match(host.schema, "s", host.all_states, type, body, miss) do
+    case Term.cover_match(host.schema, Names.current("s"), host.all_states, type, body, miss) do
       {:ok, _text} -> true
       :open -> false
     end
@@ -427,12 +428,12 @@ defmodule Muro.Synth.Cert do
       steps = Enum.map(host.actions, &next(host, state, &1))
 
       """
-      def #{name} : evidence Π (n : Nat) → {solve #{Term.spell(state)} n ≡ #{const} : #{vocab.reward}} :=
-        λ (n : Nat) →
-          match n motive (λ (k : Nat) → {solve #{Term.spell(state)} k ≡ #{const} : #{vocab.reward}})
+      def #{name} : evidence Π (#{Names.current("n")} : Nat) → {solve #{Term.spell(state)} #{Names.current("n")} ≡ #{const} : #{vocab.reward}} :=
+        λ (#{Names.current("n")} : Nat) →
+          match #{Names.current("n")} motive (λ (#{Names.current("k")} : Nat) → {solve #{Term.spell(state)} #{Names.current("k")} ≡ #{const} : #{vocab.reward}})
             | 0 => refl
-            | suc m =>
-                #{rewrite_chain(steps, solves, const, vocab, &spell_nat(values[&1]), &"solve #{Term.spell(&1)} m")}
+            | suc #{Names.current("m")} =>
+                #{rewrite_chain(steps, solves, const, vocab, &spell_nat(values[&1]), &"solve #{Term.spell(&1)} #{Names.current("m")}")}
       """
     end)
   end
@@ -452,7 +453,7 @@ defmodule Muro.Synth.Cert do
       lemma = Map.fetch!(solves, state)
 
       """
-      rewrite #{lemma} m motive (λ z → {#{nest} ≡ #{rhs} : #{vocab.reward}}) in
+      rewrite #{lemma} #{Names.current("m")} motive (λ #{Names.current("z")} → {#{nest} ≡ #{rhs} : #{vocab.reward}}) in
       #{acc}\
       """
       |> String.trim_trailing()
@@ -461,7 +462,7 @@ defmodule Muro.Synth.Cert do
 
   defp rewrite_slot(state, current, index, order, shown, fresh) do
     cond do
-      state == current -> "z"
+      state == current -> Names.current("z")
       Enum.find_index(order, &(&1 == state)) < index -> shown.(state)
       true -> fresh.(state)
     end
@@ -499,13 +500,14 @@ defmodule Muro.Synth.Cert do
   end
 
   defp below_type(_host, :action, state, left, right) do
-    "Π (n : Nat) → le (action-at #{Term.spell(state)} #{Term.spell(left)} n) (action-at #{Term.spell(state)} #{Term.spell(right)} n)"
+    "Π (#{Names.current("n")} : Nat) → le (action-at #{Term.spell(state)} #{Term.spell(left)} #{Names.current("n")}) (action-at #{Term.spell(state)} #{Term.spell(right)} #{Names.current("n")})"
   end
 
   defp below_type(host, :successor, state, left, right) do
     left_state = next(host, state, left)
     right_state = next(host, state, right)
-    "Π (n : Nat) → le (solve #{Term.spell(left_state)} n) (solve #{Term.spell(right_state)} n)"
+
+    "Π (#{Names.current("n")} : Nat) → le (solve #{Term.spell(left_state)} #{Names.current("n")}) (solve #{Term.spell(right_state)} #{Names.current("n")})"
   end
 
   defp proof_pairs(host, arms, states, actions, kind) do
@@ -531,23 +533,23 @@ defmodule Muro.Synth.Cert do
   defp action_below(host, state, left, right, solves, values) do
     tail =
       if next(host, state, left) == next(host, state, right) do
-        "le-refl (solve #{Term.spell(next(host, state, left))} m)"
+        "le-refl (solve #{Term.spell(next(host, state, left))} #{Names.current("m")})"
       else
         left_state = next(host, state, left)
         right_state = next(host, state, right)
         const = spell_nat(values[left_state])
 
         """
-        rewrite #{solves[left_state]} m motive (λ z → le z (solve #{Term.spell(right_state)} m)) in
-        rewrite #{solves[right_state]} m motive (λ z → le #{paren(const)} z) in tt\
+        rewrite #{solves[left_state]} #{Names.current("m")} motive (λ #{Names.current("z")} → le #{Names.current("z")} (solve #{Term.spell(right_state)} #{Names.current("m")})) in
+        rewrite #{solves[right_state]} #{Names.current("m")} motive (λ #{Names.current("z")} → le #{paren(const)} #{Names.current("z")}) in tt\
         """
       end
 
     """
-    λ (n : Nat) →
-      match n motive (λ (k : Nat) → le (action-at #{Term.spell(state)} #{Term.spell(left)} k) (action-at #{Term.spell(state)} #{Term.spell(right)} k))
+    λ (#{Names.current("n")} : Nat) →
+      match #{Names.current("n")} motive (λ (#{Names.current("k")} : Nat) → le (action-at #{Term.spell(state)} #{Term.spell(left)} #{Names.current("k")}) (action-at #{Term.spell(state)} #{Term.spell(right)} #{Names.current("k")}))
         | 0 => tt
-        | suc m =>
+        | suc #{Names.current("m")} =>
             #{tail}\
     """
   end
@@ -558,9 +560,9 @@ defmodule Muro.Synth.Cert do
     const = spell_nat(values[left_state])
 
     """
-    λ (n : Nat) →
-      rewrite #{solves[left_state]} n motive (λ z → le z (solve #{Term.spell(right_state)} n)) in
-      rewrite #{solves[right_state]} n motive (λ z → le #{paren(const)} z) in tt\
+    λ (#{Names.current("n")} : Nat) →
+      rewrite #{solves[left_state]} #{Names.current("n")} motive (λ #{Names.current("z")} → le #{Names.current("z")} (solve #{Term.spell(right_state)} #{Names.current("n")})) in
+      rewrite #{solves[right_state]} #{Names.current("n")} motive (λ #{Names.current("z")} → le #{paren(const)} #{Names.current("z")}) in tt\
     """
   end
 
@@ -591,7 +593,7 @@ defmodule Muro.Synth.Cert do
   defp leaf_type(kind, rank, state, left, right) do
     fun = stream_fun(kind)
 
-    "Π (r : #{rank} #{Term.spell(state)} #{Term.spell(left)} #{Term.spell(right)}) → Dom Reward le (#{fun} #{Term.spell(state)} #{Term.spell(left)}) (#{fun} #{Term.spell(state)} #{Term.spell(right)})"
+    "Π (#{Names.current("r")} : #{rank} #{Term.spell(state)} #{Term.spell(left)} #{Term.spell(right)}) → Dom Reward le (#{fun} #{Term.spell(state)} #{Term.spell(left)}) (#{fun} #{Term.spell(state)} #{Term.spell(right)})"
   end
 
   defp leaf_body(host, kind, state, left, right, winner, below) do
@@ -610,26 +612,26 @@ defmodule Muro.Synth.Cert do
   defp unit?(winner, left, right), do: left == right or prefers?(winner, left, right)
 
   defp empty_body(kind, state, left, right) do
-    "λ (r : Empty) → matchEmpty r motive (λ _ → Dom Reward le (#{stream(kind, state, left)}) (#{stream(kind, state, right)}))"
+    "λ (#{Names.current("r")} : Empty) → matchEmpty #{Names.current("r")} motive (λ _ → Dom Reward le (#{stream(kind, state, left)}) (#{stream(kind, state, right)}))"
   end
 
   defp dom_refl(:action, _host, state, action) do
-    "λ (r : Unit) → dom-refl Reward le le-refl (action-value #{Term.spell(state)} #{action})"
+    "λ (#{Names.current("r")} : Unit) → dom-refl Reward le le-refl (action-value #{Term.spell(state)} #{action})"
   end
 
   defp dom_refl(:successor, host, state, action) do
-    "λ (r : Unit) → dom-refl Reward le le-refl (value #{Term.spell(next(host, state, action))})"
+    "λ (#{Names.current("r")} : Unit) → dom-refl Reward le le-refl (value #{Term.spell(next(host, state, action))})"
   end
 
   defp tabulate(:action, _host, state, left, right, lemma) do
-    "λ (r : Unit) → tabulate-dom Reward le (λ (n : Nat) → action-at #{Term.spell(state)} #{Term.spell(left)} n) (λ (n : Nat) → action-at #{Term.spell(state)} #{Term.spell(right)} n) #{lemma} 0"
+    "λ (#{Names.current("r")} : Unit) → tabulate-dom Reward le (λ (#{Names.current("n")} : Nat) → action-at #{Term.spell(state)} #{Term.spell(left)} #{Names.current("n")}) (λ (#{Names.current("n")} : Nat) → action-at #{Term.spell(state)} #{Term.spell(right)} #{Names.current("n")}) #{lemma} 0"
   end
 
   defp tabulate(:successor, host, state, left, right, lemma) do
     left_state = next(host, state, left)
     right_state = next(host, state, right)
 
-    "λ (r : Unit) → tabulate-dom Reward le (λ (n : Nat) → solve #{Term.spell(left_state)} n) (λ (n : Nat) → solve #{Term.spell(right_state)} n) #{lemma} 0"
+    "λ (#{Names.current("r")} : Unit) → tabulate-dom Reward le (λ (#{Names.current("n")} : Nat) → solve #{Term.spell(left_state)} #{Names.current("n")}) (λ (#{Names.current("n")} : Nat) → solve #{Term.spell(right_state)} #{Names.current("n")}) #{lemma} 0"
   end
 
   defp stream(kind, state, action), do: "#{stream_fun(kind)} #{Term.spell(state)} #{action}"
@@ -760,7 +762,7 @@ defmodule Muro.Synth.Cert do
   defp rank_cover(host, bound, arms, actions, rank, states) do
     case Term.cover_match(
            host.schema,
-           "s",
+           Names.current("s"),
            states,
            fn _src -> "Type" end,
            fn _spell -> rank_match(bound, arms, actions) end,
@@ -772,8 +774,8 @@ defmodule Muro.Synth.Cert do
       {:ok, body} ->
         {:ok,
          """
-         def #{rank} : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
-           λ (s : State) → λ (a : Action) → λ (b : Action) →
+         def #{rank} : spec Π (#{Names.current("s")} : State) → Π (#{Names.current("a")} : Action) → Π (#{Names.current("b")} : Action) → Type :=
+           λ (#{Names.current("s")} : State) → λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) →
              #{body}
          """}
     end
@@ -785,16 +787,19 @@ defmodule Muro.Synth.Cert do
 
     typed = fn src ->
       safe = atom_src(src)
-      "Π (r : #{rank} #{safe} a b) → Dom Reward le (#{fun} #{safe} a) (#{fun} #{safe} b)"
+
+      "Π (#{Names.current("r")} : #{rank} #{safe} #{Names.current("a")} #{Names.current("b")}) → Dom Reward le (#{fun} #{safe} #{Names.current("a")}) (#{fun} #{safe} #{Names.current("b")})"
     end
 
     case Term.cover_match(
            host.schema,
-           "s",
+           Names.current("s"),
            states,
            typed,
            fn spell -> action_nest(Map.fetch!(by_spell, spell), actions, rank, kind, leaves) end,
-           fn src -> "#{miss_name} #{atom_src(src)} a b" end
+           fn src ->
+             "#{miss_name} #{atom_src(src)} #{Names.current("a")} #{Names.current("b")}"
+           end
          ) do
       :open ->
         :open
@@ -803,7 +808,7 @@ defmodule Muro.Synth.Cert do
         {:ok,
          """
          def #{name} : evidence #{target} #{rank} :=
-           λ (a : Action) → λ (b : Action) → λ (s : State) →
+           λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) → λ (#{Names.current("s")} : State) →
              #{body}
          """}
     end
@@ -816,9 +821,9 @@ defmodule Muro.Synth.Cert do
     fun = stream_fun(kind)
 
     """
-    def #{name} : evidence Π (+ s : State) → Π (+ a : Action) → Π (+ b : Action) → Π (r : Empty) → Dom Reward le (#{fun} s a) (#{fun} s b) :=
-      λ (+ s : State) → λ (+ a : Action) → λ (+ b : Action) → λ (r : Empty) →
-        matchEmpty r motive (λ _ → Dom Reward le (#{fun} s a) (#{fun} s b))
+    def #{name} : evidence Π (+ #{Names.current("s")} : State) → Π (+ #{Names.current("a")} : Action) → Π (+ #{Names.current("b")} : Action) → Π (#{Names.current("r")} : Empty) → Dom Reward le (#{fun} #{Names.current("s")} #{Names.current("a")}) (#{fun} #{Names.current("s")} #{Names.current("b")}) :=
+      λ (+ #{Names.current("s")} : State) → λ (+ #{Names.current("a")} : Action) → λ (+ #{Names.current("b")} : Action) → λ (#{Names.current("r")} : Empty) →
+        matchEmpty #{Names.current("r")} motive (λ _ → Dom Reward le (#{fun} #{Names.current("s")} #{Names.current("a")}) (#{fun} #{Names.current("s")} #{Names.current("b")}))
     """
   end
 
@@ -832,8 +837,8 @@ defmodule Muro.Synth.Cert do
 
   defp rank_text(bound, arms, actions, rank) do
     """
-    def #{rank} : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
-      λ (s : State) → λ (a : Action) → λ (b : Action) →
+    def #{rank} : spec Π (#{Names.current("s")} : State) → Π (#{Names.current("a")} : Action) → Π (#{Names.current("b")} : Action) → Type :=
+      λ (#{Names.current("s")} : State) → λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) →
         #{rank_match(bound, arms, actions)}
     """
   end
@@ -842,7 +847,7 @@ defmodule Muro.Synth.Cert do
     decl = Map.fetch!(bound.decl, arm.name)
 
     """
-    (match #{bound.names.eval} #{decl} s motive (λ _ → Type)
+    (match #{bound.names.eval} #{decl} #{Names.current("s")} motive (λ _ → Type)
       | true =>
           #{prefer(actions, arm.action)}
       | false =>
@@ -854,7 +859,7 @@ defmodule Muro.Synth.Cert do
     decl = Map.fetch!(bound.decl, arm.name)
 
     """
-    (match #{bound.names.eval} #{decl} s motive (λ _ → Type)
+    (match #{bound.names.eval} #{decl} #{Names.current("s")} motive (λ _ → Type)
       | true =>
           #{prefer(actions, arm.action)}
       | false =>
@@ -862,7 +867,8 @@ defmodule Muro.Synth.Cert do
     """
   end
 
-  defp prefer(actions, winner), do: prefer(actions, winner, "a", "b")
+  defp prefer(actions, winner),
+    do: prefer(actions, winner, Names.current("a"), Names.current("b"))
 
   defp prefer(actions, winner, left_var, right_var) do
     branches =
@@ -899,8 +905,8 @@ defmodule Muro.Synth.Cert do
 
     """
     def #{name} : evidence #{target} #{rank} :=
-      λ (a : Action) → λ (b : Action) → λ (s : State) →
-        match s motive (λ (x : State) → Π (r : #{rank} x a b) → Dom Reward le (#{fun} x a) (#{fun} x b))
+      λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) → λ (#{Names.current("s")} : State) →
+        match #{Names.current("s")} motive (λ (#{Names.current("x")} : State) → Π (#{Names.current("r")} : #{rank} #{Names.current("x")} #{Names.current("a")} #{Names.current("b")}) → Dom Reward le (#{fun} #{Names.current("x")} #{Names.current("a")}) (#{fun} #{Names.current("x")} #{Names.current("b")}))
     #{Enum.map_join(states, "\n", &state_branch(&1, actions, rank, kind, leaves))}
     """
   end
@@ -915,18 +921,19 @@ defmodule Muro.Synth.Cert do
     body =
       Term.exhaust(
         host.schema,
-        "s",
+        Names.current("s"),
         fn src ->
-          "Π (r : #{rank} #{src} a b) → Dom Reward le (#{fun} #{src} a) (#{fun} #{src} b)"
+          "Π (#{Names.current("r")} : #{rank} #{src} #{Names.current("a")} #{Names.current("b")}) → Dom Reward le (#{fun} #{src} #{Names.current("a")}) (#{fun} #{src} #{Names.current("b")})"
         end,
         fn spell ->
           action_nest(Map.fetch!(by_spell, spell), actions, rank, kind, leaves)
-        end
+        end,
+        bound_binders()
       )
 
     """
     def #{name} : evidence #{target} #{rank} :=
-      λ (a : Action) → λ (b : Action) → λ (s : State) →
+      λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) → λ (#{Names.current("s")} : State) →
         #{body}
     """
   end
@@ -943,13 +950,13 @@ defmodule Muro.Synth.Cert do
 
         """
         | #{Term.spell(left)} =>
-            (match b motive (λ (z : Action) → Π (r : #{rank} #{Term.spell(state)} #{Term.spell(left)} z) → Dom Reward le (#{fun} #{Term.spell(state)} #{Term.spell(left)}) (#{fun} #{Term.spell(state)} z))
+            (match #{Names.current("b")} motive (λ (#{Names.current("z")} : Action) → Π (#{Names.current("r")} : #{rank} #{Term.spell(state)} #{Term.spell(left)} #{Names.current("z")}) → Dom Reward le (#{fun} #{Term.spell(state)} #{Term.spell(left)}) (#{fun} #{Term.spell(state)} #{Names.current("z")}))
         #{rights})
         """
       end)
 
     """
-    (match a motive (λ (y : Action) → Π (r : #{rank} #{Term.spell(state)} y b) → Dom Reward le (#{fun} #{Term.spell(state)} y) (#{fun} #{Term.spell(state)} b))
+    (match #{Names.current("a")} motive (λ (#{Names.current("y")} : Action) → Π (#{Names.current("r")} : #{rank} #{Term.spell(state)} #{Names.current("y")} #{Names.current("b")}) → Dom Reward le (#{fun} #{Term.spell(state)} #{Names.current("y")}) (#{fun} #{Term.spell(state)} #{Names.current("b")}))
     #{arms})
     """
   end
@@ -966,14 +973,14 @@ defmodule Muro.Synth.Cert do
 
         """
         | #{Term.spell(left)} =>
-            (match b motive (λ (z : Action) → Π (r : #{rank} #{Term.spell(state)} #{Term.spell(left)} z) → Dom Reward le (#{fun} #{Term.spell(state)} #{Term.spell(left)}) (#{fun} #{Term.spell(state)} z))
+            (match #{Names.current("b")} motive (λ (#{Names.current("z")} : Action) → Π (#{Names.current("r")} : #{rank} #{Term.spell(state)} #{Term.spell(left)} #{Names.current("z")}) → Dom Reward le (#{fun} #{Term.spell(state)} #{Term.spell(left)}) (#{fun} #{Term.spell(state)} #{Names.current("z")}))
         #{rights})
         """
       end)
 
     """
     | #{Term.spell(state)} =>
-        (match a motive (λ (y : Action) → Π (r : #{rank} #{Term.spell(state)} y b) → Dom Reward le (#{fun} #{Term.spell(state)} y) (#{fun} #{Term.spell(state)} b))
+        (match #{Names.current("a")} motive (λ (#{Names.current("y")} : Action) → Π (#{Names.current("r")} : #{rank} #{Term.spell(state)} #{Names.current("y")} #{Names.current("b")}) → Dom Reward le (#{fun} #{Term.spell(state)} #{Names.current("y")}) (#{fun} #{Term.spell(state)} #{Names.current("b")}))
     #{arms})
     """
   end
@@ -1170,7 +1177,7 @@ defmodule Muro.Synth.Cert do
     t = orbit.transient
 
     type =
-      "Π (n : Nat) → {solve #{Term.spell(plan.state)} #{shift_term("n", t)} ≡ #{const} : #{vocab.reward}}"
+      "Π (#{Names.current("n")} : Nat) → {solve #{Term.spell(plan.state)} #{shift_term(Names.current("n"), t)} ≡ #{const} : #{vocab.reward}}"
 
     evidence_def(plan.lemma, type, aligned_body(host, plan.state, vocab, orbit, solves, const))
   end
@@ -1180,7 +1187,7 @@ defmodule Muro.Synth.Cert do
     steps = Enum.map(host.actions, &next(host, state, &1))
     rhs = const
     shown = fn succ -> spell_nat(at(orbit, t)[succ]) end
-    fresh = fn succ -> "solve #{Term.spell(succ)} #{shift_term("m", t)}" end
+    fresh = fn succ -> "solve #{Term.spell(succ)} #{shift_term(Names.current("m"), t)}" end
     chain = rewrite_chain(steps, solves, rhs, vocab, shown, fresh)
 
     goal = fn var ->
@@ -1188,10 +1195,10 @@ defmodule Muro.Synth.Cert do
     end
 
     """
-    λ (n : Nat) →
-      match n motive (λ (k : Nat) → {#{goal.("k")}})
+    λ (#{Names.current("n")} : Nat) →
+      match #{Names.current("n")} motive (λ (#{Names.current("k")} : Nat) → {#{goal.(Names.current("k"))}})
         | 0 => refl
-        | suc m =>
+        | suc #{Names.current("m")} =>
             #{chain}
     """
   end
@@ -1199,9 +1206,9 @@ defmodule Muro.Synth.Cert do
   defp repeat_text(host, plan, vocab, orbit, solves) do
     t = orbit.transient
     p = orbit.period
-    left = "solve #{Term.spell(plan.state)} #{shift_term("n", t + p)}"
-    right = "solve #{Term.spell(plan.state)} #{shift_term("n", t)}"
-    type = "Π (n : Nat) → {#{left} ≡ #{right} : #{vocab.reward}}"
+    left = "solve #{Term.spell(plan.state)} #{shift_term(Names.current("n"), t + p)}"
+    right = "solve #{Term.spell(plan.state)} #{shift_term(Names.current("n"), t)}"
+    type = "Π (#{Names.current("n")} : Nat) → {#{left} ≡ #{right} : #{vocab.reward}}"
     evidence_def(plan.lemma, type, repeat_body(host, plan.state, vocab, orbit, solves))
   end
 
@@ -1209,9 +1216,9 @@ defmodule Muro.Synth.Cert do
     t = orbit.transient
     p = orbit.period
     steps = Enum.map(host.actions, &next(host, state, &1))
-    rhs = "solve #{Term.spell(state)} #{shift_term("m", t + 1)}"
-    shown = fn succ -> "solve #{Term.spell(succ)} #{shift_term("m", t)}" end
-    fresh = fn succ -> "solve #{Term.spell(succ)} #{shift_term("m", t + p)}" end
+    rhs = "solve #{Term.spell(state)} #{shift_term(Names.current("m"), t + 1)}"
+    shown = fn succ -> "solve #{Term.spell(succ)} #{shift_term(Names.current("m"), t)}" end
+    fresh = fn succ -> "solve #{Term.spell(succ)} #{shift_term(Names.current("m"), t + p)}" end
     chain = rewrite_chain(steps, solves, rhs, vocab, shown, fresh)
 
     eq = fn var ->
@@ -1219,10 +1226,10 @@ defmodule Muro.Synth.Cert do
     end
 
     """
-    λ (n : Nat) →
-      match n motive (λ (k : Nat) → {#{eq.("k")}})
+    λ (#{Names.current("n")} : Nat) →
+      match #{Names.current("n")} motive (λ (#{Names.current("k")} : Nat) → {#{eq.(Names.current("k"))}})
         | 0 => refl
-        | suc m =>
+        | suc #{Names.current("m")} =>
             #{chain}
     """
   end
@@ -1233,11 +1240,11 @@ defmodule Muro.Synth.Cert do
     const = spell_nat(plan.const)
 
     type =
-      "Π (n : Nat) → {solve #{Term.spell(plan.state)} #{shift_term("n", plan.onset)} ≡ #{const} : #{vocab.reward}}"
+      "Π (#{Names.current("n")} : Nat) → {solve #{Term.spell(plan.state)} #{shift_term(Names.current("n"), plan.onset)} ≡ #{const} : #{vocab.reward}}"
 
     body = """
-    λ (n : Nat) →
-      #{peel(plan.state, plan.lemma, const, vocab.reward, plan.onset, t, "n")}
+    λ (#{Names.current("n")} : Nat) →
+      #{peel(plan.state, plan.lemma, const, vocab.reward, plan.onset, t, Names.current("n"))}
     """
 
     evidence_def(plan.wrapper, type, body)
@@ -1248,11 +1255,11 @@ defmodule Muro.Synth.Cert do
   end
 
   defp peel(state, lemma, const, reward, onset, t, var) do
-    nxt = "m#{onset}"
-    idx = shift_term("k", onset)
+    nxt = fresh_local("m#{onset}")
+    idx = shift_term(Names.current("k"), onset)
 
     """
-    (match #{var} motive (λ (k : Nat) → {solve #{Term.spell(state)} #{idx} ≡ #{const} : #{reward}})
+    (match #{var} motive (λ (#{Names.current("k")} : Nat) → {solve #{Term.spell(state)} #{idx} ≡ #{const} : #{reward}})
       | 0 => refl
       | suc #{nxt} =>
           #{peel(state, lemma, const, reward, onset + 1, t, nxt)})
@@ -1289,7 +1296,9 @@ defmodule Muro.Synth.Cert do
       {prelude, le_body, taken, le_obs} =
         compare_of(le_name, next_l, next_r, orbit, solves, taken, le_ob, tag)
 
-      le_ty = "Π (n : Nat) → le (solve #{Term.spell(next_l)} n) (solve #{Term.spell(next_r)} n)"
+      le_ty =
+        "Π (#{Names.current("n")} : Nat) → le (solve #{Term.spell(next_l)} #{Names.current("n")}) (solve #{Term.spell(next_r)} #{Names.current("n")})"
+
       defs = prelude ++ [evidence_def(le_name, le_ty, le_body)]
       {defs, action_form_body(host, state, left, right, le_name), taken, le_obs ++ [ob]}
     end
@@ -1305,16 +1314,16 @@ defmodule Muro.Synth.Cert do
   defp action_form_body(host, state, left, right, call) do
     tail =
       if call == nil do
-        "le-refl (solve #{Term.spell(next(host, state, left))} m)"
+        "le-refl (solve #{Term.spell(next(host, state, left))} #{Names.current("m")})"
       else
-        "#{call} m"
+        "#{call} #{Names.current("m")}"
       end
 
     """
-    λ (n : Nat) →
-      match n motive (λ (k : Nat) → le (action-at #{Term.spell(state)} #{Term.spell(left)} k) (action-at #{Term.spell(state)} #{Term.spell(right)} k))
+    λ (#{Names.current("n")} : Nat) →
+      match #{Names.current("n")} motive (λ (#{Names.current("k")} : Nat) → le (action-at #{Term.spell(state)} #{Term.spell(left)} #{Names.current("k")}) (action-at #{Term.spell(state)} #{Term.spell(right)} #{Names.current("k")}))
         | 0 => tt
-        | suc m =>
+        | suc #{Names.current("m")} =>
             #{tail}
     """
   end
@@ -1329,16 +1338,16 @@ defmodule Muro.Synth.Cert do
     cond do
       p == 1 ->
         body = """
-        λ (n : Nat) →
-          #{const_nest(left, right, solves, at(orbit, t)[left], t, "n", 0)}
+        λ (#{Names.current("n")} : Nat) →
+          #{const_nest(left, right, solves, at(orbit, t)[left], t, Names.current("n"), 0)}
         """
 
         {[], body, taken, [ob]}
 
       t == 0 ->
         body = """
-        λ (n : Nat) →
-          #{cycle_nest(left, right, solves, 0, p, name, "n", 0)}
+        λ (#{Names.current("n")} : Nat) →
+          #{cycle_nest(left, right, solves, 0, p, name, Names.current("n"), 0)}
         """
 
         {[], body, taken, [ob]}
@@ -1347,16 +1356,16 @@ defmodule Muro.Synth.Cert do
         {cycle, taken} = Muro.Synth.Book.reserve("cert-cycle-#{tag}", taken)
 
         cycle_ty =
-          "Π (n : Nat) → le (solve #{Term.spell(left)} #{shift_term("n", t)}) (solve #{Term.spell(right)} #{shift_term("n", t)})"
+          "Π (#{Names.current("n")} : Nat) → le (solve #{Term.spell(left)} #{shift_term(Names.current("n"), t)}) (solve #{Term.spell(right)} #{shift_term(Names.current("n"), t)})"
 
         cycle_body = """
-        λ (n : Nat) →
-          #{cycle_nest(left, right, solves, t, p, cycle, "n", 0)}
+        λ (#{Names.current("n")} : Nat) →
+          #{cycle_nest(left, right, solves, t, p, cycle, Names.current("n"), 0)}
         """
 
         outer = """
-        λ (n : Nat) →
-          #{transient_nest(left, right, t, cycle, "n", 0)}
+        λ (#{Names.current("n")} : Nat) →
+          #{transient_nest(left, right, t, cycle, Names.current("n"), 0)}
         """
 
         {[evidence_def(cycle, cycle_ty, cycle_body)], outer, taken, [%{ob | name: cycle}, ob]}
@@ -1368,18 +1377,18 @@ defmodule Muro.Synth.Cert do
     shown = spell_nat(const_left)
 
     """
-    rewrite #{solves[left]} #{var} motive (λ z → le z (solve #{Term.spell(right)} #{idx})) in
-    rewrite #{solves[right]} #{var} motive (λ z → le #{paren(shown)} z) in tt\
+    rewrite #{solves[left]} #{var} motive (λ #{Names.current("z")} → le #{Names.current("z")} (solve #{Term.spell(right)} #{idx})) in
+    rewrite #{solves[right]} #{var} motive (λ #{Names.current("z")} → le #{paren(shown)} #{Names.current("z")}) in tt\
     """
     |> String.trim_trailing()
   end
 
   defp const_nest(left, right, solves, const_left, t, var, depth) do
-    nxt = if depth == t - 1, do: "m", else: "k#{depth}"
-    idx = shift_term("k", depth)
+    nxt = if depth == t - 1, do: Names.current("m"), else: fresh_local("k#{depth}")
+    idx = shift_term(Names.current("k"), depth)
 
     """
-    (match #{var} motive (λ (k : Nat) → le (solve #{Term.spell(left)} #{idx}) (solve #{Term.spell(right)} #{idx}))
+    (match #{var} motive (λ (#{Names.current("k")} : Nat) → le (solve #{Term.spell(left)} #{idx}) (solve #{Term.spell(right)} #{idx}))
       | 0 => tt
       | suc #{nxt} =>
           #{const_nest(left, right, solves, const_left, t, nxt, depth + 1)})
@@ -1391,19 +1400,19 @@ defmodule Muro.Synth.Cert do
     small = shift_term(var, t)
 
     """
-    rewrite #{solves[left]} #{var} motive (λ z → le z (solve #{Term.spell(right)} #{big})) in
-    rewrite #{solves[right]} #{var} motive (λ z → le (solve #{Term.spell(left)} #{small}) z) in
+    rewrite #{solves[left]} #{var} motive (λ #{Names.current("z")} → le #{Names.current("z")} (solve #{Term.spell(right)} #{big})) in
+    rewrite #{solves[right]} #{var} motive (λ #{Names.current("z")} → le (solve #{Term.spell(left)} #{small}) #{Names.current("z")}) in
     #{self_name} #{var}\
     """
     |> String.trim_trailing()
   end
 
   defp cycle_nest(left, right, solves, t, p, self_name, var, depth) do
-    nxt = if depth == p - 1, do: "m", else: "k#{depth}"
-    idx = shift_term("k", t + depth)
+    nxt = if depth == p - 1, do: Names.current("m"), else: fresh_local("k#{depth}")
+    idx = shift_term(Names.current("k"), t + depth)
 
     """
-    (match #{var} motive (λ (k : Nat) → le (solve #{Term.spell(left)} #{idx}) (solve #{Term.spell(right)} #{idx}))
+    (match #{var} motive (λ (#{Names.current("k")} : Nat) → le (solve #{Term.spell(left)} #{idx}) (solve #{Term.spell(right)} #{idx}))
       | 0 => tt
       | suc #{nxt} =>
           #{cycle_nest(left, right, solves, t, p, self_name, nxt, depth + 1)})
@@ -1413,11 +1422,11 @@ defmodule Muro.Synth.Cert do
   defp transient_nest(_left, _right, t, cycle, var, depth) when depth == t, do: "#{cycle} #{var}"
 
   defp transient_nest(left, right, t, cycle, var, depth) do
-    nxt = if depth == t - 1, do: "m", else: "k#{depth}"
-    idx = shift_term("k", depth)
+    nxt = if depth == t - 1, do: Names.current("m"), else: fresh_local("k#{depth}")
+    idx = shift_term(Names.current("k"), depth)
 
     """
-    (match #{var} motive (λ (k : Nat) → le (solve #{Term.spell(left)} #{idx}) (solve #{Term.spell(right)} #{idx}))
+    (match #{var} motive (λ (#{Names.current("k")} : Nat) → le (solve #{Term.spell(left)} #{idx}) (solve #{Term.spell(right)} #{idx}))
       | 0 => tt
       | suc #{nxt} =>
           #{transient_nest(left, right, t, cycle, nxt, depth + 1)})
@@ -1439,5 +1448,18 @@ defmodule Muro.Synth.Cert do
   defp nat_arg(n) do
     term = spell_nat(n)
     if term == "0", do: "0", else: paren(term)
+  end
+
+  defp bound_binders do
+    Process.get(:muro_synth_binders) || %{}
+  end
+
+  defp fresh_local(base) do
+    taken =
+      bound_binders()
+      |> Map.values()
+      |> Enum.reduce(MapSet.new(), fn name, acc -> Names.take(acc, name) end)
+
+    Names.fresh(base, taken)
   end
 end
