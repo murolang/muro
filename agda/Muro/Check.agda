@@ -133,7 +133,10 @@ nthQty _          _       = fail "recursive-call spine longer than Π telescope"
 -- not a mention. Arms are alternatives: the count is the max
 -- (`cap⊔`, like `arm_count`). A mention in the scrutinee and a
 -- mention in an arm sit on one path, so those two are added and
--- capped at two (`cap`, like Elixir `cap`).
+-- capped at two (`cap`, like Elixir `cap`). An mData arm is a λ
+-- telescope for the constructor fields (`checkBrPi`); those
+-- domains are field types, which Elixir does not count
+-- (`var_uses(x + ar, b, 0)` on the body under `ar` binders).
 ------------------------------------------------------------------------
 
 -- Elixir `cap`: 2 when n ≥ 2, m ≥ 2, or n + m ≥ 2, otherwise n + m.
@@ -192,9 +195,28 @@ mutual
   varUsesList _ [] n = n
   varUsesList x (t ∷ ts) n = varUsesList x ts (varUses x t n)
 
+  -- Skip `ar` leading λs without counting their domains, then count
+  -- the body at `x + ar`. Mirrors Elixir `var_uses(x + ar, b, 0)`.
+  skipArmLams : ∀ {n} → ℕ → ℕ → Tm n → ℕ
+  skipArmLams x zero t = varUses x t 0
+  skipArmLams x (suc ar) (lam _ _ t) = skipArmLams (suc x) ar t
+  skipArmLams x (suc _) t = varUses x t 0
+
+  -- Leading λs of a well-typed mData arm are the constructor fields.
+  -- Constructor arity is not stored on the term, so this is that
+  -- telescope's length. A body that itself starts with a λ (a Π
+  -- motive) is also skipped; Elixir would count a mention in such
+  -- a domain. Field types are the case this has to get right.
+  fieldArity : ∀ {n} → Tm n → ℕ
+  fieldArity (lam _ _ t) = suc (fieldArity t)
+  fieldArity _           = 0
+
+  dataArmUses : ∀ {n} → ℕ → Tm n → ℕ
+  dataArmUses x b = skipArmLams x (fieldArity b) b
+
   armUses : ∀ {n} → ℕ → List (Tm n) → ℕ
   armUses _ [] = 0
-  armUses x (b ∷ bs) = cap⊔ (varUses x b 0) (armUses x bs)
+  armUses x (b ∷ bs) = cap⊔ (dataArmUses x b) (armUses x bs)
 
 reused : ∀ {n} → Tm n → Bool
 reused t = 2 ≤ᵇ varUses 0 t 0

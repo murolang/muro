@@ -188,6 +188,46 @@ defmodule Muro.FoldTest do
     refute app?(match)
   end
 
+  # A appears once in the domain `List A` of the inner λ, and again in
+  # the cons field types (`a : A`, `t : List A`). Elixir does not count
+  # those field types, so the argument is not shared and stays an
+  # application. Surface terms have no `{e : A}` ascription.
+  test "a field-binder type does not count as a use in a data match" do
+    src = """
+    data List (A : Type) : Type where
+      nil : List A
+      cons : Π (+ a : A) → Π (+ t : List A) → List A
+
+    def go : run (Nat * Nat) :=
+      (λ (+ A : Type) →
+        (match ((λ (+ xs : List A) → xs) nil) motive (λ _ → Nat)
+           | nil => 0
+           | cons a t => 0,
+         0))
+      ((λ (+ Y : Type) → Nat) Nat)
+    """
+
+    assert {:ok, {:pair, match, :ze}} = reduce(src)
+    assert app?(match)
+  end
+
+  # At remaining fuel 1 the beta stays call-by-name, even when the
+  # body mentions the binder twice. Fuel 2 on `reduce` leaves 1 after
+  # the head is already a λ. Fuel 4 is enough to share.
+  test "fuel 1 does not share a twice-used reusable argument" do
+    src = """
+    def go : run (Nat * Nat) :=
+      (λ (+ x : Nat) → (x, x))
+      ((λ (+ y : Nat) → 0) 0)
+    """
+
+    assert {:ok, {:pair, a, b}} = reduce(src, 2)
+    assert app?(a)
+    assert app?(b)
+
+    assert {:ok, {:pair, :ze, :ze}} = reduce(src, 4)
+  end
+
   # Both mentions are in the motive. The arms do not read x. The motive
   # is still in the result because the scrutinee is an axiom, which does
   # not reduce, and the pair is already a value.

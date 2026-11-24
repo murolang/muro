@@ -71,3 +71,38 @@ listBook =
 
 length-ones2-checks : checkSig! listBook ≡ ok tt
 length-ones2-checks = refl
+
+------------------------------------------------------------------------
+-- varUses on an mData arm does not count field-binder types, matching
+-- Elixir `var_uses(x + ar, b, 0)`. A is var zero at this scope:
+-- the scrutinee `nil A` mentions it once; the cons field types mention
+-- it again; the arm bodies do not. The count is 1, not 2.
+------------------------------------------------------------------------
+
+nilA : Tm 1
+nilA = app (ctor 0 0) (var zero)
+
+consArm₀ : Tm 1
+consArm₀ =
+  lam affine (var zero)
+    (lam affine (app (dty 0) (var (suc zero)))
+      ze)
+
+listMatchA : Tm 1
+listMatchA = mData nilA nat (ze ∷ consArm₀ ∷ [])
+
+field-types-not-counted : varUses 0 listMatchA 0 ≡ 1
+field-types-not-counted = refl
+
+-- The cons body mentions A once; that use is counted.
+consArm₁ : Tm 1
+consArm₁ =
+  lam affine (var zero)
+    (lam affine (app (dty 0) (var (suc zero)))
+      (var (suc (suc zero))))
+
+listMatchA-body : Tm 1
+listMatchA-body = mData nilA typ (ze ∷ consArm₁ ∷ [])
+
+field-body-is-counted : varUses 0 listMatchA-body 0 ≡ 2
+field-body-is-counted = refl
