@@ -17,6 +17,14 @@ defmodule Muro.Family.Graph do
   `held while earlier unresolved` is proved in `agda/Muro/Family.agda`.
   This search checks the generated dispatcher on the fixed script.
 
+  A family marked `may redeliver` adds one self-loop on every reachable
+  state. The tag is `:redeliver`. The state does not change: a message
+  already reflected there can be seen again. It is not a second live
+  row, and it is not a fairness assumption. The state count stays. The
+  transition count grows by one per state. `always` sees the same
+  states. `eventually` and `leads_to` hold only when they hold if that
+  step can be taken forever. An unmarked family keeps today's edges.
+
   A count of reachable states is a model hypothesis, not
   data-independence. The model is one retry and the fixed script.
   """
@@ -56,7 +64,7 @@ defmodule Muro.Family.Graph do
       instances = Keyword.get(opts, :instances) || instances(book, family)
       rules = Map.new(family.rules, &{&1.ctor, &1.hold})
 
-      remember({mg, instances, rules, family.name}, fn ->
+      remember({mg, instances, rules, family.name, Map.get(family, :redeliver, false)}, fn ->
         compose(family, mg, instances, rules)
       end)
     end
@@ -75,6 +83,7 @@ defmodule Muro.Family.Graph do
       server: server,
       task: task,
       init: Meet.init(mg),
+      redeliver: Map.get(family, :redeliver, false),
       start: Tuple.duplicate(:absent, length(instances))
     }
 
@@ -497,10 +506,18 @@ defmodule Muro.Family.Graph do
   @doc false
   def edges(g, state) do
     case real_steps(g, state) do
-      [] -> [{:stay, state}]
-      steps -> steps
+      [] -> finish_edges(g, state)
+      steps -> redeliver_edges(g, state, steps)
     end
   end
+
+  # A missing or false flag returns today's list. `steps ++ []` would
+  # be a new list, and a pinned edge comparison would fail.
+  defp finish_edges(%{redeliver: true}, state), do: [{:stay, state}, {:redeliver, state}]
+  defp finish_edges(_g, state), do: [{:stay, state}]
+
+  defp redeliver_edges(%{redeliver: true}, state, steps), do: steps ++ [{:redeliver, state}]
+  defp redeliver_edges(_g, _state, steps), do: steps
 
   defp real_steps(g, state) do
     Enum.flat_map(g.instances, &instance_steps(g, state, &1))
@@ -761,6 +778,7 @@ defmodule Muro.Family.Graph do
   defp step_name(g, _src, _dest, {:retry, id}), do: "#{who(g, id)} retries"
   defp step_name(g, _src, _dest, {:give_up, id}), do: "#{who(g, id)} gives up"
   defp step_name(_g, _src, _dest, :stay), do: "the family has finished"
+  defp step_name(_g, _src, _dest, :redeliver), do: "a message is redelivered"
 
   defp step_name(g, src, dest, {:meet, id, who}) do
     "#{who(g, id)} #{meet_name(g, who, run_conf(phase(src, id)), run_conf(phase(dest, id)))}"

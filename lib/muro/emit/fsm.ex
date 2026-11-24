@@ -3112,6 +3112,7 @@ defmodule Muro.Emit.Fsm do
     book
     |> Enum.filter(&(Map.get(&1, :kind) == :family))
     |> Enum.filter(&family_ready?(book, &1))
+    |> Enum.map(&Map.put(&1, :waiver, Muro.Contract.waiver_of(book, &1.name)))
   end
 
   defp family_ready?(book, family) do
@@ -3473,7 +3474,7 @@ defmodule Muro.Emit.Fsm do
     rules = Enum.map_join(family.rules, "\n", &rule_clause/1)
     clauses = party_clauses(parties)
 
-    """
+    src = """
     defmodule #{camel} do
       @moduledoc \"\"\"
       Dispatcher for family `#{family.name}`. The state is opaque: thread it
@@ -4128,6 +4129,112 @@ defmodule Muro.Emit.Fsm do
       #{clauses}
     end
     """
+
+    case Map.get(family, :waiver) do
+      nil -> src
+      %{skip: skip?} -> apply_waiver(src, skip?)
+    end
+  end
+
+  # The heredoc above is the 0.22.22 dispatcher. A waiver rewrites the
+  # fresh check after that text is built, so a family with no contract
+  # returns the heredoc unchanged. `skip` opts out of catching an `init`
+  # the floor or the departed record would have refused. A live row of
+  # that index stays a duplicate, so one index is never two live rows.
+  defp apply_waiver(src, skip?) do
+    call = ":ok <- fresh(rows, key, index, st),"
+
+    unless String.contains?(src, call) do
+      raise "dispatcher is missing the fresh call"
+    end
+
+    src = String.replace(src, call, ":ok <- fresh(rows, key, index, st, kind),", global: false)
+
+    fresh = ~r/^( *)defp fresh\(rows, key, index, st\) do\n.*?^\1end\n/ms
+
+    src =
+      if Regex.match?(fresh, src) do
+        Regex.replace(fresh, src, fn _whole, pad -> fresh_fun(pad, skip?) end, global: false)
+      else
+        raise "dispatcher is missing fresh/4"
+      end
+
+    if skip? do
+      already = ":already -> {:error, {:state, st}}"
+
+      unless String.contains?(src, already) do
+        raise "dispatcher is missing the departed :already clause"
+      end
+
+      String.replace(src, already, ":already -> {:ok, st.departed}", global: false)
+    else
+      src
+    end
+  end
+
+  defp fresh_fun(pad, skip?) do
+    p = fn n -> pad <> String.duplicate("  ", n) end
+
+    live =
+      if skip? do
+        "#{p.(3)}{:error, {:duplicate, key, index}}"
+      else
+        [
+          "#{p.(3)}if kind == :init and live == :init do",
+          "#{p.(4)}{:error, {:contract, :idempotent_init, key, index}}",
+          "#{p.(3)}else",
+          "#{p.(4)}{:error, {:duplicate, key, index}}",
+          "#{p.(3)}end"
+        ]
+      end
+
+    departed =
+      if skip? do
+        [
+          "#{p.(5)}if kind == :init do",
+          "#{p.(6)}:ok",
+          "#{p.(5)}else",
+          "#{p.(6)}{:error, {:departed, key, index}}",
+          "#{p.(5)}end"
+        ]
+      else
+        [
+          "#{p.(5)}if kind == :init do",
+          "#{p.(6)}{:error, {:contract, :idempotent_init, key, index}}",
+          "#{p.(5)}else",
+          "#{p.(6)}{:error, {:departed, key, index}}",
+          "#{p.(5)}end"
+        ]
+      end
+
+    [
+      "#{pad}defp fresh(rows, key, index, st, kind) do",
+      "#{p.(1)}case Map.fetch(rows, index) do",
+      "#{p.(2)}{:ok, {id, live, phase}}",
+      "#{p.(2)}when is_integer(id) and id >= 0 and is_atom(live) and phase in [:open, :held] ->",
+      live,
+      "",
+      "#{p.(2)}{:ok, _} ->",
+      "#{p.(3)}{:error, {:state, st}}",
+      "",
+      "#{p.(2)}:error ->",
+      "#{p.(3)}case record(st, key) do",
+      "#{p.(4)}{:error, reason} ->",
+      "#{p.(5)}{:error, reason}",
+      "",
+      "#{p.(4)}{:ok, {prefix, gaps}} ->",
+      "#{p.(5)}if index <= st.floor or index <= prefix or Map.has_key?(gaps, index) do",
+      departed,
+      "#{p.(5)}else",
+      "#{p.(6)}:ok",
+      "#{p.(5)}end",
+      "#{p.(3)}end",
+      "#{p.(1)}end",
+      "#{pad}end",
+      ""
+    ]
+    |> List.flatten()
+    |> Enum.join("\n")
   end
 
   # `hold_of` only passes a hold this family's `rule` returns. A clause for

@@ -6463,6 +6463,7 @@ defmodule Muro.Session do
               :meet,
               :temporal,
               :family,
+              :contract,
               :talk,
               :choreography,
               :repr,

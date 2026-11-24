@@ -27,7 +27,10 @@ defmodule Mix.Tasks.Muro.Check do
   version from the application spec). Each keyed family then prints
   `family <name>: <meeting> per key of <kind>`, and each temporal
   declaration that holds prints `temporal <name>: holds in <n> reachable
-  states`. Those lines are in book order. Each choreography then prints
+  states`. A family marked `may redeliver` prints that mark on the same
+  line. A formula that says `relies idempotent init`, and holds, prints
+  `<name>: depends on contract idempotent init` on the next line.
+  `may redeliver` is not that line. Those lines are in book order. Each choreography then prints
   one `choreography <name>: <role> with <role> = <session>` line per
   ordered pair of roles. Each definition the entry file reaches that
   depends on an axiom and is not a `run` then prints

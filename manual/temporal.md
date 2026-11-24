@@ -114,7 +114,7 @@ family slots : slot per key of Event
   signal held while earlier unresolved
 ```
 
-`slots` is the family. `slot` is the meeting. `Event` is the kind. `init never held` opens that kind when the instance arrives. `signal held while earlier unresolved` opens it when no earlier arrived instance of its key is unresolved. An instance that has not arrived is not unresolved. `command held while any unresolved` opens that kind when no other instance of its key is open. The instance does not hold itself. A held instance is not open, so it does not hold another. An instance that has not arrived is not open. When several of those instances could open, the dispatcher opens the least creation index. The graph allows any one of them to open, and it does not leave two of the same key open together. A release that also opens an instance of another kind leaves the `any` rows held. A constructor with no rule is refused. There is no default rule.
+`slots` is the family. `slot` is the meeting. `Event` is the kind. `may redeliver` may follow the kind, before the rules, and it widens the graph this check walks. `init never held` opens that kind when the instance arrives. `signal held while earlier unresolved` opens it when no earlier arrived instance of its key is unresolved. An instance that has not arrived is not unresolved. `command held while any unresolved` opens that kind when no other instance of its key is open. The instance does not hold itself. A held instance is not open, so it does not hold another. An instance that has not arrived is not open. When several of those instances could open, the dispatcher opens the least creation index. The graph allows any one of them to open, and it does not leave two of the same key open together. A release that also opens an instance of another kind leaves the `any` rows held. A constructor with no rule is refused. There is no default rule.
 
 `withdraw` drops a held instance. The meeting does not run. On the graph that instance becomes resolved. The step is not one of the counted runs: a held signal is still opened by the script, and `examples/keyed-slots.muro` keeps its count. The dispatcher returns the instances that release does, the same list `resolved` returns. An open id, an id that has already left, and an id the child never returned are refused. `resolved` of an id that has left is still unknown. The dispatcher also keeps, per key, the departed prefix and gap set in [State machines](fsm.md#a-keyed-family). `arrive` of a creation index that has left is `{:error, {:departed, key, index}}`. An earlier index that has not arrived is still a first arrival after a later index of the same key has left. `check_trace` takes `{:withdraw, id}`, `{:skip, key, index}`, `{:drop, key}`, and `{:skip_below, index}` on that same rule. `skip_below` raises one floor for every key. An arrival at or below that floor is the departed refusal, including a first arrival. The call is the host's promise that nothing at or below the index arrives again. A live row at or below the floor stays live. Memory above the floor is the departures the floor has not yet covered, as [State machines](fsm.md#a-keyed-family) states. A later held instance releases as it does after `resolved`.
 
@@ -205,6 +205,8 @@ The program that writes the dispatcher is not proved. `Muro.Family.Step` follows
 
 `Satisfies`, `solo-bounded`, and `every-run-fair` cover meetings only. The book formulas of a keyed family are checked in Elixir, and that check has no fairness filter. The hold rule is [The hold rule](#the-hold-rule).
 
+`may redeliver` adds a self-loop on the family graph. It is not a fairness premise, and a formula does not rely on it. The account is [State machines](fsm.md#an-external-contract).
+
 There is no fairness filter and no `under fair` clause. `Satisfies` quantifies over every infinite run of a meeting, including a run that finishes and then stutters. A stretch of consecutive steps of one side has length at most `Φ` of that side, where `Φ` of the left at `c` is `(cap ∸ |l2r|) + |r2l|` and `Φ` of the right swaps the queues (`solo-bounded`). On a run that never finishes, the left side moves infinitely often and the right side moves infinitely often (`every-run-fair`). Those lemmas describe the meeting graph. They are not a premise the formula may assume. The statements are in [Limits](limits.md#what-is-proved-and-what-is-not). A fairness clause would be a parse error.
 
 ## A refusal
@@ -231,6 +233,17 @@ After `Muro v…`, and before `All terms check. Evidence never becomes a run.`, 
 family slots: slot per key of Event
 temporal echo-answered: holds in 8 reachable states, 8 transitions
 ```
+
+A family marked `may redeliver` prints that mark on its line. The state count is the count of the unmarked family. The transition count is that count plus one per state. A formula that says `relies idempotent init`, and holds, prints a second line immediately after its count:
+
+```
+family slots: wire per key of Event may redeliver
+temporal plain: holds in N reachable states, M transitions
+temporal waived: holds in N reachable states, M transitions
+waived: depends on contract idempotent init
+```
+
+`N` is the number of reachable states, the same number the family has without the mark. `M` counts the widened successor table: one extra step on each of those states. Both formulas of one family print that same pair. `plain` does not depend on the contract. `may redeliver` is not a `depends on` line. The account is [State machines](fsm.md#an-external-contract).
 
 The family line names the meeting and the kind. It is not a count of states. A temporal line over a meeting counts that meeting: the distinct configurations reachable from its start, then the successor table, a left step, a right step, and the finish self-loop at a finished configuration. It is not the number of breadth-first parent links. Declarations of one meeting print the same pair, because the graph is built once. A temporal line over a family counts the family graph. That count is a model hypothesis, not data-independence: one retry, on the fixed script. It checks the generated dispatcher. The hold rule is [The hold rule](#the-hold-rule). The checker builds the graph once for the family, and that search is the cost of the check. The second count is that successor table: an arrival that opens or holds, a meeting step, a retry, a give-up, a resolve, and one self-loop when no instance can move. Withdrawing a held instance is a host step and is not one of those edges. `always`, `eventually`, and `leads_to` declarations of one family print the same pair when they hold. A refusal replaces the counts, and the family line is not printed. A family liveness refusal appends the cycle state after the stutter. A book with no family and no temporal declaration prints the lines it printed before this page existed. A `conforms to` line from an imported package stays after the success sentence. `--fuel` does not change a temporal verdict. The meeting refusals listed in [Limits](limits.md) are unchanged. A family has its own list there.
 

@@ -178,6 +178,7 @@ defmodule Muro.Check do
               :meet,
               :temporal,
               :family,
+              :contract,
               :talk,
               :choreography,
               :repr,
@@ -4298,9 +4299,15 @@ defmodule Muro.Check do
   # this clause: the meeting was already checked, and the declaration
   # reads that recorded outcome. Fuel does not reduce a formula.
   def check_def(book, %{kind: :temporal, meeting: meeting, formula: formula} = d, fuel) do
-    case find_family(book, meeting) do
-      nil -> temporal_report(d, Muro.Temporal.judge(book, d, fuel))
-      family -> temporal_report(d, Muro.Family.judge_formula(book, family, formula))
+    case relies_status(book, d) do
+      {:error, msg} ->
+        temporal_report(d, {:error, msg})
+
+      :ok ->
+        case find_family(book, meeting) do
+          nil -> temporal_report(d, Muro.Temporal.judge(book, d, fuel))
+          family -> temporal_report(d, Muro.Family.judge_formula(book, family, formula))
+        end
     end
   end
 
@@ -4311,6 +4318,9 @@ defmodule Muro.Check do
   def check_def(book, %{kind: :family} = d, fuel) do
     family_report(d, Muro.Family.check_decl(book, d, fuel))
   end
+
+  # A contract is not an evidence term. The closed list decides it.
+  def check_def(book, %{kind: :contract} = d, _fuel), do: Muro.Contract.check(book, d)
 
   # Host representation. No kernel term. `Muro.Repr` is the contract.
   def check_def(book, %{kind: :repr} = d, _fuel), do: Repr.check_entry(book, d)
@@ -4391,10 +4401,45 @@ defmodule Muro.Check do
       # The sentence stands beside the count in the manual. A meeting
       # uses this same line, and that count is the proved graph.
       {:ok, n, m} ->
-        {:note, "temporal #{name}: holds in #{n} reachable states, #{transitions(m)}"}
+        holds = "temporal #{name}: holds in #{n} reachable states, #{transitions(m)}"
+
+        case Map.get(d, :relies) do
+          :idempotent_init ->
+            {:notes, [holds, "#{name}: depends on contract idempotent init"]}
+
+          _ ->
+            {:note, holds}
+        end
 
       {:error, msg} ->
         {:error, "#{loc}#{name}: #{msg}"}
+    end
+  end
+
+  # `relies` names a waiver the family declared. A widening mark is not
+  # one of those, and a meeting has no contract to rely on. The message
+  # has no declaration name: `temporal_report/2` adds it.
+  defp relies_status(book, %{meeting: meeting} = d) do
+    case Map.get(d, :relies) do
+      nil -> :ok
+      entry -> relies_declared(book, meeting, entry)
+    end
+  end
+
+  defp relies_status(_book, _d), do: :ok
+
+  defp relies_declared(book, meeting, entry) do
+    case find_family(book, meeting) do
+      nil ->
+        {:error, "a formula over a meeting does not rely on a contract"}
+
+      family ->
+        if Muro.Contract.declared?(book, family.name, entry) do
+          :ok
+        else
+          {:error,
+           "assumes contract #{Muro.Contract.spell(entry)}, which #{family.name} does not declare"}
+        end
     end
   end
 
@@ -5024,6 +5069,7 @@ defmodule Muro.Check do
           :meet,
           :temporal,
           :family,
+          :contract,
           :talk,
           :choreography,
           :repr,
@@ -5411,7 +5457,13 @@ defmodule Muro.Check do
         end
 
       errors = errors ++ axiom_msgs
-      notes = for {:note, line} <- outcomes, do: line
+
+      notes =
+        Enum.flat_map(outcomes, fn
+          {:note, line} -> [line]
+          {:notes, lines} when is_list(lines) -> lines
+          _ -> []
+        end)
 
       choreos =
         for {:choreo, lines} <- outcomes, line <- lines do
@@ -5460,11 +5512,19 @@ defmodule Muro.Check do
 
     meet_slots =
       Enum.map(over_meet, fn {d, i} ->
-        {i,
-         temporal_report(
-           d,
-           Muro.Temporal.judge_prepared(book, d, Map.fetch!(prepared, d.meeting))
-         )}
+        outcome =
+          case relies_status(book, d) do
+            :ok ->
+              temporal_report(
+                d,
+                Muro.Temporal.judge_prepared(book, d, Map.fetch!(prepared, d.meeting))
+              )
+
+            {:error, msg} ->
+              temporal_report(d, {:error, msg})
+          end
+
+        {i, outcome}
       end)
 
     family_preps =
@@ -5480,7 +5540,20 @@ defmodule Muro.Check do
       Enum.map(over_family, fn {d, i} ->
         family = find_family(book, d.meeting)
         {status, prep} = Map.fetch!(family_preps, family.name)
-        {i, temporal_report(d, Muro.Family.judge_formula(book, family, d.formula, status, prep))}
+
+        outcome =
+          case relies_status(book, d) do
+            :ok ->
+              temporal_report(
+                d,
+                Muro.Family.judge_formula(book, family, d.formula, status, prep)
+              )
+
+            {:error, msg} ->
+              temporal_report(d, {:error, msg})
+          end
+
+        {i, outcome}
       end)
 
     meet_slots ++ family_slots
@@ -5491,8 +5564,9 @@ defmodule Muro.Check do
   # the graph. `eventually` and `leads_to` read the same search.
   defp family_prep(book, family, :ok, decls) do
     formulas =
-      for {%{meeting: name, formula: formula}, _i} <- decls,
+      for {%{meeting: name, formula: formula} = d, _i} <- decls,
           name == family.name,
+          relies_status(book, d) == :ok,
           do: formula
 
     if Muro.Family.needs_graph?(book, family, formulas) do
@@ -5517,6 +5591,7 @@ defmodule Muro.Check do
       :absent -> :absent
       :ok -> :ok
       {:note, _} -> :ok
+      {:notes, _} -> :ok
       {:graph, _, _, _} -> :ok
       {:error, _} -> :unchecked
     end

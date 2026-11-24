@@ -652,6 +652,7 @@ defmodule Muro.Ast do
             :meet,
             :temporal,
             :family,
+            :contract,
             :talk,
             :choreography,
             :repr,
@@ -691,6 +692,8 @@ defmodule Muro.Ast do
   defp entry_names(%{kind: :move}), do: []
   # A repr names the data type again. The data entry already owns that name.
   defp entry_names(%{kind: :repr}), do: []
+  # A contract names a family that already has a name. It does not take one.
+  defp entry_names(%{kind: :contract}), do: []
 
   defp entry_names(%{kind: :data, name: name, ctors: ctors} = d) do
     loc = Map.get(d, :loc)

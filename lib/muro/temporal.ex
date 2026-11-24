@@ -43,6 +43,7 @@ defmodule Muro.Temporal do
           case Muro.Check.check_def(book, meet, fuel) do
             :ok -> :ok
             {:note, _} -> :ok
+            {:notes, _} -> :ok
             {:graph, _, _, _} -> :ok
             {:error, _} -> :unchecked
           end
@@ -889,6 +890,7 @@ defmodule Muro.Temporal do
           :read,
           :meet,
           :family,
+          :contract,
           :talk,
           :choreography,
           :repr,

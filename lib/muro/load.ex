@@ -614,6 +614,8 @@ defmodule Muro.Load do
   defp decl_names(%{kind: :move}), do: []
   # Same name as the data type. Duplicate reprs are the checker's refusal.
   defp decl_names(%{kind: :repr}), do: []
+  # A contract names a family that already has a name. It does not take one.
+  defp decl_names(%{kind: :contract}), do: []
   defp decl_names(%{name: name}), do: [name]
 
   defp ensure_deps(%{deps: {:ok, _deps}} = ctx), do: {:ok, ctx}
