@@ -131,6 +131,36 @@ defmodule Muro.EmitNatTest do
     assert source =~ "Kernel.max(x0, x1)"
   end
 
+  test "the six bundled library Nat definitions match their NatPrim pins" do
+    assert Muro.Emit.NatPrim.verify_pins!() == :ok
+    lib = Muro.Emit.NatPrim.library_defs()
+    assert Enum.sort(Map.keys(lib)) == Enum.sort(~w(pred plus max min minus compare))
+  end
+
+  # A change to the type or the body of a pinned definition must fail
+  # loudly and point at the Agda transcription. The bundled files are
+  # not edited: the test supplies a drifted copy to `verify_pins/1`.
+  for name <- ~w(pred plus max min minus compare) do
+    @name name
+
+    test "a changed type of #{name} fails the pin and points at NatPrim.agda" do
+      assert_pin_drift(@name, fn {ty, body, src} -> {{:su, ty}, body, src} end)
+    end
+
+    test "a changed body of #{name} fails the pin and points at NatPrim.agda" do
+      assert_pin_drift(@name, fn {ty, body, src} -> {ty, {:su, body}, src} end)
+    end
+  end
+
+  defp assert_pin_drift(name, fun) do
+    lib = Muro.Emit.NatPrim.library_defs()
+    drifted = Map.update!(lib, name, fun)
+    assert {:error, msg} = Muro.Emit.NatPrim.verify_pins(drifted)
+    assert msg =~ name
+    assert msg =~ "agda/Muro/NatPrim.agda"
+    assert_raise ArgumentError, msg, fn -> Muro.Emit.NatPrim.verify_pins!(drifted) end
+  end
+
   # Prelude runs are `run internal`; exported here so the test can call them.
   defp library_source(:prelude), do: String.replace(Prelude.source(), "run internal", "run")
 
