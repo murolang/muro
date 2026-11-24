@@ -205,6 +205,58 @@ defmodule Muro.SkillsTest do
     assert Muro.Skills.block(nil) =~ "<!-- muro:begin -->"
   end
 
+  test "each installed skill has valid YAML frontmatter" do
+    dir = tmp()
+    assert {:ok, _} = Muro.Skills.add(dir)
+
+    for rel <- Muro.Skills.skill_relpaths(), String.ends_with?(rel, "/SKILL.md") do
+      text = File.read!(Path.join(dir, rel))
+      assert {:ok, meta, body} = parse_skill_frontmatter(text), rel
+      assert meta["name"] == Path.basename(Path.dirname(rel))
+      assert is_binary(meta["description"]) and meta["description"] != ""
+      assert body != ""
+
+      # The book description is the one that used to be invalid YAML.
+      if meta["name"] == "muro-book" do
+        assert meta["description"] =~ ": "
+      end
+    end
+  end
+
+  test "a description with a colon is rejected when left unquoted" do
+    bad = """
+    ---
+    name: muro-book
+    description: Write and structure a Muro book: tags, defs, and theorems
+    ---
+
+    body
+    """
+
+    assert {:error, _} = parse_skill_frontmatter(bad)
+  end
+
+  test "skills add leaves other skill folders and extra files in place" do
+    dir = tmp()
+    other = Path.join(dir, ".agents/skills/user-notes/SKILL.md")
+    File.mkdir_p!(Path.dirname(other))
+    File.write!(other, "keep me\n")
+    extra = Path.join(dir, ".agents/skills/muro-book/notes.md")
+    File.mkdir_p!(Path.dirname(extra))
+    File.write!(extra, "my notes\n")
+
+    assert {:ok, written} = Muro.Skills.add(dir)
+    assert File.read!(other) == "keep me\n"
+    assert File.read!(extra) == "my notes\n"
+    refute Enum.any?(written, &String.contains?(&1, "user-notes"))
+    refute Enum.any?(written, &String.contains?(&1, "notes.md"))
+    assert File.regular?(Path.join(dir, ".agents/skills/muro-book/SKILL.md"))
+
+    assert {:ok, _} = Muro.Skills.add(dir)
+    assert File.read!(other) == "keep me\n"
+    assert File.read!(extra) == "my notes\n"
+  end
+
   test "the commands follow the manifest backend" do
     dir = tmp()
     version = Mix.Tasks.Muro.version()
@@ -248,7 +300,7 @@ defmodule Muro.SkillsTest do
     assert text =~ version
 
     synth = File.read!(Path.join(dir, ".agents/skills/muro-synth/SKILL.md"))
-    assert synth =~ "name: muro-synth"
+    assert synth =~ ~s(name: "muro-synth")
     assert synth =~ "The synthesized PredProg is itself the certified term."
     assert synth =~ "It is not the Finder's ranking."
 
@@ -304,4 +356,141 @@ defmodule Muro.SkillsTest do
       {rel, File.read!(Path.join(dir, rel))}
     end)
   end
+
+  # A minimal strict frontmatter reader: only `key: value` lines, values
+  # either a double-quoted YAML string or a safe plain identifier. An
+  # unquoted value that contains `: ` is rejected, which is the bug the
+  # book skill used to have.
+  defp parse_skill_frontmatter(text) do
+    with {:ok, block, body} <- split_frontmatter(text),
+         {:ok, meta} <- parse_frontmatter_block(block) do
+      {:ok, meta, body}
+    end
+  end
+
+  defp split_frontmatter(text) do
+    case String.split(text, "\n", parts: 2) do
+      ["---", rest] ->
+        case String.split(rest, "\n---\n", parts: 2) do
+          [block, body] -> {:ok, block, body}
+          _ -> {:error, :no_closing_fence}
+        end
+
+      _ ->
+        {:error, :no_opening_fence}
+    end
+  end
+
+  defp parse_frontmatter_block(block) do
+    block
+    |> String.split("\n")
+    |> Enum.reduce_while({:ok, %{}}, fn
+      line, {:ok, acc} ->
+        case parse_frontmatter_line(line) do
+          {:ok, key, value} ->
+            if Map.has_key?(acc, key) do
+              {:halt, {:error, {:duplicate, key}}}
+            else
+              {:cont, {:ok, Map.put(acc, key, value)}}
+            end
+
+          {:error, reason} ->
+            {:halt, {:error, reason}}
+        end
+    end)
+  end
+
+  defp parse_frontmatter_line(line) do
+    case Regex.run(~r/\A([A-Za-z_][A-Za-z0-9_]*):(?: (.*))?\z/, line) do
+      [_, key] ->
+        {:error, {:empty_value, key}}
+
+      [_, key, value] ->
+        case parse_frontmatter_value(value) do
+          {:ok, parsed} -> {:ok, key, parsed}
+          {:error, reason} -> {:error, reason}
+        end
+
+      nil ->
+        {:error, {:bad_line, line}}
+    end
+  end
+
+  defp parse_frontmatter_value(<<"\"", rest::binary>>) do
+    parse_quoted_yaml(rest, [])
+  end
+
+  defp parse_frontmatter_value(value) do
+    cond do
+      value == "" ->
+        {:error, :empty_value}
+
+      String.contains?(value, ": ") ->
+        {:error, :unquoted_colon}
+
+      String.contains?(value, [
+        "#",
+        ":",
+        "&",
+        "*",
+        "!",
+        "%",
+        "@",
+        "`",
+        ",",
+        "[",
+        "]",
+        "{",
+        "}",
+        "\\"
+      ]) ->
+        {:error, :unsafe_plain}
+
+      Regex.match?(~r/\A[A-Za-z0-9][A-Za-z0-9._-]*\z/, value) ->
+        {:ok, value}
+
+      true ->
+        {:error, :unsafe_plain}
+    end
+  end
+
+  defp parse_quoted_yaml(<<>>, _acc), do: {:error, :unterminated_string}
+
+  defp parse_quoted_yaml(<<"\"", rest::binary>>, acc) do
+    if rest == "" do
+      {:ok, acc |> Enum.reverse() |> IO.iodata_to_binary()}
+    else
+      {:error, :trailing_junk}
+    end
+  end
+
+  defp parse_quoted_yaml(<<"\\\\", rest::binary>>, acc),
+    do: parse_quoted_yaml(rest, ["\\" | acc])
+
+  defp parse_quoted_yaml(<<"\\\"", rest::binary>>, acc),
+    do: parse_quoted_yaml(rest, ["\"" | acc])
+
+  defp parse_quoted_yaml(<<"\\n", rest::binary>>, acc),
+    do: parse_quoted_yaml(rest, ["\n" | acc])
+
+  defp parse_quoted_yaml(<<"\\r", rest::binary>>, acc),
+    do: parse_quoted_yaml(rest, ["\\r" | acc])
+
+  defp parse_quoted_yaml(<<"\\t", rest::binary>>, acc),
+    do: parse_quoted_yaml(rest, ["\\t" | acc])
+
+  defp parse_quoted_yaml(<<"\\u", a, b, c, d, rest::binary>>, acc)
+       when a in ?0..?9 or a in ?A..?F or a in ?a..?f do
+    hex = <<a, b, c, d>>
+
+    case Integer.parse(hex, 16) do
+      {code, ""} -> parse_quoted_yaml(rest, [<<code::utf8>> | acc])
+      _ -> {:error, :bad_unicode_escape}
+    end
+  end
+
+  defp parse_quoted_yaml(<<"\\", _::binary>>, _acc), do: {:error, :bad_escape}
+
+  defp parse_quoted_yaml(<<c::utf8, rest::binary>>, acc),
+    do: parse_quoted_yaml(rest, [<<c::utf8>> | acc])
 end

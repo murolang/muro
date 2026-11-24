@@ -151,12 +151,40 @@ defmodule Muro.Skills do
 
     """
     ---
-    name: muro-#{name}
-    description: #{meta.description}
+    name: #{yaml_double_quoted("muro-#{name}")}
+    description: #{yaml_double_quoted(meta.description)}
     ---
 
     #{body}
     """
+  end
+
+  # Always a double-quoted YAML scalar, so a colon in the description
+  # cannot be read as a mapping indicator.
+  defp yaml_double_quoted(text) when is_binary(text) do
+    [?", yaml_escape(text, []), ?"]
+    |> IO.iodata_to_binary()
+  end
+
+  defp yaml_escape(<<>>, acc), do: Enum.reverse(acc)
+  defp yaml_escape(<<?\\, rest::binary>>, acc), do: yaml_escape(rest, ["\\\\" | acc])
+  defp yaml_escape(<<?", rest::binary>>, acc), do: yaml_escape(rest, ["\\\"" | acc])
+  defp yaml_escape(<<?\n, rest::binary>>, acc), do: yaml_escape(rest, ["\\n" | acc])
+  defp yaml_escape(<<?\r, rest::binary>>, acc), do: yaml_escape(rest, ["\\r" | acc])
+  defp yaml_escape(<<?\t, rest::binary>>, acc), do: yaml_escape(rest, ["\\t" | acc])
+
+  defp yaml_escape(<<c::utf8, rest::binary>>, acc) when c < 0x20 do
+    yaml_escape(rest, ["\\u" <> yaml_hex4(c) | acc])
+  end
+
+  defp yaml_escape(<<c::utf8, rest::binary>>, acc) do
+    yaml_escape(rest, [<<c::utf8>> | acc])
+  end
+
+  defp yaml_hex4(c) do
+    c
+    |> Integer.to_string(16)
+    |> String.pad_leading(4, "0")
   end
 
   @doc """
