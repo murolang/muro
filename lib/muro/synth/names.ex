@@ -5,7 +5,7 @@ defmodule Muro.Synth.Names do
   # environment already uses is not reused: `fresh/2` walks `base-2`,
   # `base-3`, ... until the full identifier is free, including a
   # reserved name that shares the prefix.
-  @standard ~w(c f p q r a b s t x y z n k m j d h A xs ys n1 m1)
+  @standard ~w(c f p q r a b s t x y z n k m j d h i u A xs ys n1 m1)
 
   # Primitives, prelude runs, and lexicon words the generated book
   # mentions as globals. They are not always present as book entries
@@ -54,9 +54,26 @@ defmodule Muro.Synth.Names do
     Enum.all?(bases, &(Map.fetch!(binders, &1) == &1))
   end
 
-  @doc false
+  @doc """
+  Binders and the reserved set for one generated book.
+
+  The process dictionary keys `:muro_synth_binders` and
+  `:muro_synth_taken` are only valid inside this wrapper, which
+  `Book.render/4` uses while it emits a policy book. Callers that
+  already have the reserved set must pass it as `with_binders/3`.
+  The arity-2 form only extends a reserved set that is already
+  installed; it is refused when that set is absent, so it cannot
+  silently forget environment names.
+  """
   def with_binders(binders, fun) when is_map(binders) and is_function(fun, 0) do
-    with_binders(binders, taken_of(binders), fun)
+    case Process.get(:muro_synth_taken) do
+      %MapSet{} = existing ->
+        with_binders(binders, Enum.reduce(Map.values(binders), existing, &take(&2, &1)), fun)
+
+      _ ->
+        raise ArgumentError,
+              "Names.with_binders/2 needs :muro_synth_taken already set; pass the reserved set to with_binders/3"
+    end
   end
 
   def with_binders(binders, taken, fun)
@@ -74,29 +91,53 @@ defmodule Muro.Synth.Names do
     end
   end
 
-  @doc "The binder for a preferred spelling in the current generated book."
-  def current(base) when is_binary(base) do
+  @doc """
+  The reserved set installed for the book being rendered, or an empty
+  set outside `with_binders/3`.
+  """
+  def taken do
+    case Process.get(:muro_synth_taken) do
+      %MapSet{} = taken -> taken
+      _ -> MapSet.new()
+    end
+  end
+
+  @doc "Union of `extra` with the reserved set of the current book, if any."
+  def merge_taken(extra) when is_struct(extra, MapSet) do
+    MapSet.union(taken(), extra)
+  end
+
+  @doc """
+  A fresh binder for `base` against the current book's reserved set.
+
+  The reserved set is updated so a later binder cannot reuse the name.
+  A local `taken` is merged in when the caller is walking a nest.
+  """
+  def alloc_current(base, taken \\ nil) when is_binary(base) do
+    taken = merge_taken(taken || MapSet.new())
+
     case Process.get(:muro_synth_binders) do
       %{} = binders ->
         case Map.fetch(binders, base) do
           {:ok, name} ->
-            name
+            {name, take(taken, name)}
 
           :error ->
-            taken = Process.get(:muro_synth_taken) || taken_of(binders)
             {name, taken} = alloc(base, taken)
             Process.put(:muro_synth_binders, Map.put(binders, base, name))
             Process.put(:muro_synth_taken, taken)
-            name
+            {name, taken}
         end
 
       _ ->
-        fresh(base, MapSet.new())
+        alloc(base, taken)
     end
   end
 
-  defp taken_of(binders) do
-    Enum.reduce(Map.values(binders), MapSet.new(), &take(&2, &1))
+  @doc "The binder for a preferred spelling in the current generated book."
+  def current(base) when is_binary(base) do
+    {name, _} = alloc_current(base)
+    name
   end
 
   defp restore(key, nil), do: Process.delete(key)

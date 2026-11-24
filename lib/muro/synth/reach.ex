@@ -110,12 +110,12 @@ defmodule Muro.Synth.Reach do
       horizon_body(any_rec, paren(spell), Map.fetch!(by_spell, spell), host.horizon, binders)
     end
 
-    j = Map.get(binders, "j", "j")
+    j = Names.current("j")
     miss = fn src -> "#{any_rec} #{paren(src)} #{j}" end
 
     Term.cover_match(
       host.schema,
-      Map.get(binders, "s", "s"),
+      Names.current("s"),
       states,
       fn _src -> "Bool" end,
       body_of,
@@ -125,16 +125,16 @@ defmodule Muro.Synth.Reach do
 
   # `bits` is `best_pos` at horizons 1..horizon. The last `suc` is
   # every larger horizon, and it calls the recurrence.
-  defp horizon_body(any_rec, spell, [], _horizon, binders) do
-    "#{any_rec} #{spell} #{Map.get(binders, "j", "j")}"
+  defp horizon_body(any_rec, spell, [], _horizon, _binders) do
+    "#{any_rec} #{spell} #{Names.current("j")}"
   end
 
   defp horizon_body(any_rec, spell, bits, horizon, binders) do
-    nest(any_rec, spell, bits, horizon, Map.get(binders, "j", "j"), 0, binders)
+    nest(any_rec, spell, bits, horizon, Names.current("j"), 0, binders)
   end
 
-  defp nest(any_rec, spell, [bit], horizon, var, index, binders) do
-    nxt = Map.get(binders, "rk#{index}") || Names.fresh("rk#{index}", taken_of(binders))
+  defp nest(any_rec, spell, [bit], horizon, var, index, _binders) do
+    nxt = Names.current("rk#{index}")
 
     """
     (match #{var} motive (λ _ → Bool)
@@ -144,7 +144,7 @@ defmodule Muro.Synth.Reach do
   end
 
   defp nest(any_rec, spell, [bit | rest], horizon, var, index, binders) do
-    nxt = Map.get(binders, "rk#{index}") || Names.fresh("rk#{index}", taken_of(binders))
+    nxt = Names.current("rk#{index}")
 
     """
     (match #{var} motive (λ _ → Bool)
@@ -161,9 +161,9 @@ defmodule Muro.Synth.Reach do
   # match reading the table, and `any` calls that, so the agreement
   # stays a chain of closed bits.
   defp front(best, known, one, one_tab, any, pos, actions, known_text, best_rec, binders) do
-    s = Map.get(binders, "s", "s")
+    s = Names.current("s")
     k = Map.get(binders, "k", "k")
-    j = Map.get(binders, "j", "j")
+    j = Names.current("j")
     a = Map.get(binders, "a", "a")
 
     """
@@ -200,9 +200,9 @@ defmodule Muro.Synth.Reach do
   # call from `suc j` is the smaller argument, and `any` is later in
   # the block.
   defp recursive(best, one, any, pos, actions, binders) do
-    s = Map.get(binders, "s", "s")
+    s = Names.current("s")
     k = Map.get(binders, "k", "k")
-    j = Map.get(binders, "j", "j")
+    j = Names.current("j")
     a = Map.get(binders, "a", "a")
 
     """
@@ -227,9 +227,9 @@ defmodule Muro.Synth.Reach do
   # The last action is the false-to-false match, the same term a
   # fold over the action list reduces to. A bare call is the same
   # bool and is not that term.
-  defp any_body(one, [action], binders) do
-    s = Map.get(binders, "s", "s")
-    j = Map.get(binders, "j", "j")
+  defp any_body(one, [action], _binders) do
+    s = Names.current("s")
+    j = Names.current("j")
 
     """
     (match (#{one} #{s} #{action} #{j}) motive (λ _ → Bool)
@@ -239,8 +239,8 @@ defmodule Muro.Synth.Reach do
   end
 
   defp any_body(one, [action | rest], binders) do
-    s = Map.get(binders, "s", "s")
-    j = Map.get(binders, "j", "j")
+    s = Names.current("s")
+    j = Names.current("j")
 
     """
     (match (#{one} #{s} #{action} #{j}) motive (λ _ → Bool)
@@ -390,11 +390,5 @@ defmodule Muro.Synth.Reach do
       String.contains?(spell, " ") or String.contains?(spell, "\n") -> "(#{spell})"
       true -> spell
     end
-  end
-
-  defp taken_of(binders) when is_map(binders) do
-    binders
-    |> Map.values()
-    |> Enum.reduce(MapSet.new(), fn name, acc -> Names.take(acc, name) end)
   end
 end

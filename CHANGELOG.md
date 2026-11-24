@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.22.28
+
+Generated synthesis books no longer use fixed binders that can shadow an environment name.
+
+`eval-feature` and the compiled `PredProg` evaluator used to bind their Carrier argument as `c`, and certificate and helper code used `x`, `y`, `z`, `s`, `i`, `u`, and the other short names a user's action, state, feature, or constructor might already have. An environment with an action named `c` then rendered terms such as `step c c`, and the book failed to check. The synthesizer now builds a reserved set from the loaded environment and freshened identifiers (`c-2`, `c-3`, ...) that cannot collide with a reserved name or with one that only shares a prefix. Nested and dynamic binders (`k0`, `rk0`, `e0`, `act`, `car`, and the rest) use that same reserved set, and the list-equality names `i` and `u` are preferred spellings in the standard table. The stock evaluator is used only when every preferred spelling is still free. Fixtures whose actions or constructors include `c`, `i`, `u`, `k0`, and `rk0` still synthesize a certified `PredProg` whose generated book checks.
+
+### Package
+
+- Version 0.22.28.
+
+
 ## 0.22.27
 
 A stem column whose truth vector duplicates an earlier test stays in the family that `selfp` and `otherp` read.

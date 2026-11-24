@@ -1454,12 +1454,5 @@ defmodule Muro.Synth.Cert do
     Process.get(:muro_synth_binders) || %{}
   end
 
-  defp fresh_local(base) do
-    taken =
-      bound_binders()
-      |> Map.values()
-      |> Enum.reduce(MapSet.new(), fn name, acc -> Names.take(acc, name) end)
-
-    Names.fresh(base, taken)
-  end
+  defp fresh_local(base), do: Names.current(base)
 end

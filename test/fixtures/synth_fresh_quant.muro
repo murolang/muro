@@ -1,0 +1,46 @@
+-- Quantified stem environment whose constructors reserve the
+-- generated `act` and `car` binders of stem-at / other-at / eval.
+import "../../examples/cshrl/std/nat.muro"
+import "../../examples/cshrl/lib/agent.muro"
+
+data State : Type where
+  s0 : State
+  s1 : State
+  s2 : State
+
+data Action : Type where
+  up : Action
+  left : Action
+  right : Action
+
+data Marker : Type where
+  car : Marker
+
+def Reward : spec Type := Nat
+
+def step : run Π (st : State) → Π (actn : Action) → State × Reward :=
+  λ (st : State) → λ (actn : Action) →
+    match st motive (λ _ → State × Reward)
+      | s0 =>
+          (match actn motive (λ _ → State × Reward)
+            | up => (s0, suc 0)
+            | left => (s1, 0)
+            | right => (s2, 0))
+      | s1 =>
+          (match actn motive (λ _ → State × Reward)
+            | up => (s1, 0)
+            | left => (s2, suc 0)
+            | right => (s0, 0))
+      | s2 =>
+          (match actn motive (λ _ → State × Reward)
+            | up => (s2, 0)
+            | left => (s0, 0)
+            | right => (s1, suc 0))
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons up (cons left (cons right nil))
+def default-action : run Action := up
+def horizon : run Nat := 0
+def all-states : run List State := cons s0 (cons s1 (cons s2 nil))

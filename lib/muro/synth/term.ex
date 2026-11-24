@@ -199,7 +199,7 @@ defmodule Muro.Synth.Term do
   """
   def exhaust(schema, scrutinee, type_of, body_of, binders \\ %{})
       when is_function(type_of, 1) do
-    taken = taken_of(binders)
+    taken = Names.merge_taken(taken_of(binders))
     open(schema, scrutinee, & &1, type_of, body_of, 0, MapSet.new(), taken)
   end
 
@@ -1631,7 +1631,7 @@ defmodule Muro.Synth.Term do
     if MapSet.member?(seen, name) do
       body_of.(hole)
     else
-      {var, taken} = Names.alloc("k#{k}", taken)
+      {var, taken} = Names.alloc_current("k#{k}", taken)
       motive = "(λ (#{var} : #{name}) → #{type_of.(plug.(var))})"
       seen = MapSet.put(seen, name)
 
@@ -1654,7 +1654,7 @@ defmodule Muro.Synth.Term do
   end
 
   defp open({:enum, name, ctors}, hole, plug, type_of, body_of, k, _seen, taken) do
-    {var, _taken} = Names.alloc("k#{k}", taken)
+    {var, _taken} = Names.alloc_current("k#{k}", taken)
     motive = "(λ (#{var} : #{name}) → #{type_of.(plug.(var))})"
     arms = Enum.map_join(ctors, "\n", fn ctor -> "| #{ctor} => #{body_of.(ctor)}" end)
 
@@ -1665,8 +1665,8 @@ defmodule Muro.Synth.Term do
   end
 
   defp open({:prod, left, right}, hole, plug, type_of, body_of, k, seen, taken) do
-    {b0, taken} = Names.alloc("f#{k}_0", taken)
-    {b1, taken} = Names.alloc("f#{k}_1", taken)
+    {b0, taken} = Names.alloc_current("f#{k}_0", taken)
+    {b1, taken} = Names.alloc_current("f#{k}_1", taken)
     local = "(#{b0}, #{b1})"
 
     inner =
@@ -1713,7 +1713,7 @@ defmodule Muro.Synth.Term do
 
   defp field_binders(n, k, taken) do
     Enum.map_reduce(0..(n - 1)//1, taken, fn i, taken ->
-      Names.alloc("f#{k}_#{i}", taken)
+      Names.alloc_current("f#{k}_#{i}", taken)
     end)
   end
 
@@ -2208,16 +2208,16 @@ defmodule Muro.Synth.Term do
 
   defp eq_binders(_prefix, 0, _bn, taken), do: {[], taken}
 
-  defp eq_binders(prefix, n, bn, taken) do
+  defp eq_binders(prefix, n, _bn, taken) do
     Enum.map_reduce(0..(n - 1)//1, taken, fn i, taken ->
       base = "#{prefix}#{i}"
-      name = Map.get(bn, base) || Names.fresh(base, taken)
-      {name, Names.take(taken, name)}
+      {name, taken} = Names.alloc_current(base, taken)
+      {name, taken}
     end)
   end
 
   defp b(binders, base) when is_map(binders) do
-    Map.get(binders, base) || Names.fresh(base, MapSet.new())
+    Map.get(binders, base) || Names.current(base)
   end
 
   defp indexed(binders, prefix, i) do
@@ -2321,8 +2321,8 @@ defmodule Muro.Synth.Term do
   end
 
   defp nat_from(hole, embed, prefix, cands, depth, type_of, continue, miss, k) do
-    var = "n#{k}_#{depth}"
-    suc_var = "s#{k}_#{depth}"
+    var = Names.current("n#{k}_#{depth}")
+    suc_var = Names.current("s#{k}_#{depth}")
     motive = "(λ (#{var} : Nat) → #{type_of.(embed.(prefix.(var)))})"
     here = Enum.filter(cands, &(&1.n == depth))
     deeper = Enum.filter(cands, &(&1.n > depth))
@@ -2361,9 +2361,9 @@ defmodule Muro.Synth.Term do
         :open
 
       {:ok, nils, conses} ->
-        var = "l#{k}"
-        h = "h#{k}"
-        t = "t#{k}"
+        var = Names.current("l#{k}")
+        h = Names.current("h#{k}")
+        t = Names.current("t#{k}")
         motive = "(λ (#{var} : #{type_name({:list, elem})}) → #{type_of.(embed.(var))})"
 
         with {:ok, nil_body, _} <- arm_or_miss(nils, "nil", continue, miss, embed, k),
@@ -2452,7 +2452,7 @@ defmodule Muro.Synth.Term do
   end
 
   defp split_enum(name, ctors, hole, embed, cands, type_of, continue, miss, k) do
-    var = "e#{k}"
+    var = Names.current("e#{k}")
     motive = "(λ (#{var} : #{name}) → #{type_of.(embed.(var))})"
     known = MapSet.new(ctors, &atom_of/1)
 
@@ -2478,7 +2478,7 @@ defmodule Muro.Synth.Term do
   end
 
   defp split_data(name, rows, hole, embed, cands, type_of, continue, miss, k, bound) do
-    var = "u#{k}"
+    var = Names.current("u#{k}")
     motive = "(λ (#{var} : #{name}) → #{type_of.(embed.(var))})"
 
     case data_arms(rows, cands, embed, type_of, continue, miss, k, bound) do
@@ -2566,7 +2566,9 @@ defmodule Muro.Synth.Term do
   end
 
   defp field_binders([], _k), do: []
-  defp field_binders(fields, k), do: Enum.map(0..(length(fields) - 1), &"f#{k}_#{&1}")
+
+  defp field_binders(fields, k),
+    do: Enum.map(0..(length(fields) - 1), &Names.current("f#{k}_#{&1}"))
 
   defp split_fields(
          [],
@@ -2669,8 +2671,8 @@ defmodule Muro.Synth.Term do
   end
 
   defp split_prod(left, right, hole, embed, cands, type_of, continue, miss, k, bound) do
-    a = "p#{k}_0"
-    b = "p#{k}_1"
+    a = Names.current("p#{k}_0")
+    b = Names.current("p#{k}_1")
     local = "(#{a}, #{b})"
 
     case pair_cands(cands) do

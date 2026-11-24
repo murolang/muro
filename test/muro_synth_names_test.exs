@@ -56,4 +56,35 @@ defmodule Muro.Synth.NamesTest do
       assert Names.current("ha") == "ha-2"
     end)
   end
+
+  test "standard bases include the list-equality binders i and u" do
+    assert "i" in Names.standard_bases()
+    assert "u" in Names.standard_bases()
+  end
+
+  test "table freshens i and u when they are reserved" do
+    taken = Names.take(MapSet.new(), ["i", "u"])
+    {binders, taken} = Names.table(taken)
+    assert binders["i"] == "i-2"
+    assert binders["u"] == "u-2"
+    assert Names.free?(binders) == false
+    assert MapSet.member?(taken, "i-2")
+  end
+
+  test "current freshens nested k0 and rk0 against the reserved set" do
+    taken = Names.take(MapSet.new(), ["k0", "rk0", "k0-2"])
+    {binders, taken} = Names.table(taken)
+
+    Names.with_binders(binders, taken, fn ->
+      assert Names.current("k0") == "k0-3"
+      assert Names.current("rk0") == "rk0-2"
+      assert Names.current("k0") == "k0-3"
+    end)
+  end
+
+  test "with_binders/2 is refused when the reserved set is absent" do
+    assert_raise ArgumentError, ~r/with_binders\/2/, fn ->
+      Names.with_binders(%{"c" => "c"}, fn -> Names.current("c") end)
+    end
+  end
 end
