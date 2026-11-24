@@ -918,7 +918,7 @@ defmodule Muro.Synth.Loop do
     vs = Synth.enumerate(host.features, depth)
     kept = Synth.refine_all(vs, task.observations, feat)
     specs = List.wrap(host[:feature_specs])
-    names = Enum.map(specs, & &1.name)
+    names = List.wrap(host[:features])
     kinds = specs |> Enum.map(&kind_word/1) |> Enum.uniq()
     path_depth = Map.get(host, :path_depth, Term.first_path_depth())
     path_bound = Term.path_bound()
@@ -1000,7 +1000,7 @@ defmodule Muro.Synth.Loop do
   # does not deploy a predicate.
   defp empty(host, versions, depth, search \\ nil) do
     specs = List.wrap(host[:feature_specs])
-    names = Enum.map(specs, & &1.name)
+    names = List.wrap(host[:features])
     kinds = specs |> Enum.map(&kind_word/1) |> Enum.uniq()
     path_depth = Map.get(host, :path_depth, Term.first_path_depth())
     path_bound = Term.path_bound()
