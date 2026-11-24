@@ -17,8 +17,16 @@ defmodule Muro.IR.Share do
      appears there more than once, is bound once with `let` at the top
      of that term and each occurrence becomes the variable. A call that
      only some paths evaluate is never hoisted above the branch, so no
-     path does work it did not do before. Arms and binder bodies are
-     shared the same way, inside their own scope.
+     path does work it did not do before. An arm that aborts is a path:
+     it evaluates what it binds before `abort` and nothing else, so a
+     call the other arms make is not hoisted above a match with such an
+     arm. Arms, binder bodies, and the value a hoist binds are shared
+     the same way, inside their own scope.
+
+  Inlining is bounded twice: a callee's inlined body is at most
+  `inline_max` nodes, and the whole image grows by at most `grow_max`
+  nodes (by default the size of the image, so it at most doubles). A
+  run whose inlining would pass that budget is shared without it.
 
   The emitted program computes the same value as the checked term. A
   word operation, a constructor, and a byte literal are not shared:
@@ -31,7 +39,9 @@ defmodule Muro.IR.Share do
   @doc """
   Rewrite `funs` (the list `Muro.IR.elaborate/1` returns). Order,
   names, parameters, and layouts are kept. `opts` may set `inline: false`
-  (hoisting only) or `share: false` (return `funs` unchanged).
+  (hoisting only), `share: false` (return `funs` unchanged),
+  `inline_max:` (nodes per inlined callee), or `grow_max:` (nodes the
+  whole image may grow by inlining).
   """
   def funs(funs, opts \\ []) when is_list(funs) do
     if Keyword.get(opts, :share, true) do
@@ -43,12 +53,21 @@ defmodule Muro.IR.Share do
       hoists = :counters.new(1, [])
       taken = taken_names(funs)
       heavy = heavy_set(by_name)
+      known = for f <- funs, known?(f.body), do: f
+
+      grow =
+        Keyword.get_lazy(opts, :grow_max, fn -> Enum.reduce(known, 0, &(&2 + size(&1.body))) end)
+
+      budget = :counters.new(1, [])
+      :counters.put(budget, 1, grow)
 
       ctx = %{
         hoists: hoists,
         fresh: :ets.new(:share_fresh, [:set, :private]),
         heavy: heavy,
         max: Keyword.get(opts, :inline_max, @inline_max),
+        budget: budget,
+        reach: reach_map(by_name),
         by_name: by_name,
         counter: counter,
         taken: taken,
@@ -152,34 +171,71 @@ defmodule Muro.IR.Share do
   # only shares inside itself keeps calling it.
   defp optimize(fun, ctx, inline?) do
     if known?(fun.body) do
-      before = :counters.get(ctx.hoists, 1)
-      lays = Map.new(fun.params)
+      body = if inline?, do: inline_run(fun, ctx), else: fun.body
 
-      body =
-        if inline? do
-          scope = MapSet.union(MapSet.new(Enum.map(fun.params, &elem(&1, 0))), binders(fun.body))
-          full = propagate(inlined_body(fun, ctx, MapSet.new()), lays, ctx)
-          wanted = repeated_keys(full, scope, ctx)
+      case shared(body, ctx) do
+        {:ok, out} ->
+          # The image grows by what inlining added. Past the budget the
+          # run is shared without inlining.
+          grow = size(out) - size(fun.body)
 
-          if MapSet.size(wanted) == 0,
-            do: fun.body,
-            else:
-              selective(
-                fun.body,
-                lays,
-                %{scope: scope, wanted: wanted},
-                ctx,
-                MapSet.new([fun.name])
-              )
-        else
-          fun.body
-        end
+          if body == fun.body or grow <= :counters.get(ctx.budget, 1) do
+            if body != fun.body, do: :counters.sub(ctx.budget, 1, max(grow, 0))
+            {:ok, out}
+          else
+            shared(fun.body, ctx)
+          end
 
-      body = share(body, ctx)
-      if :counters.get(ctx.hoists, 1) > before, do: {:ok, body}, else: :skip
+        :skip ->
+          :skip
+      end
     else
       :skip
     end
+  end
+
+  defp shared(body, ctx) do
+    before = :counters.get(ctx.hoists, 1)
+    out = share(body, ctx)
+    if :counters.get(ctx.hoists, 1) > before, do: {:ok, out}, else: :skip
+  end
+
+  defp inline_run(fun, ctx) do
+    scope = stable_names(fun)
+    lays = Map.new(fun.params)
+    full = propagate(inlined_body(fun, ctx, MapSet.new()), lays, ctx)
+    wanted = repeated_keys(full, scope, ctx)
+
+    if MapSet.size(wanted) == 0,
+      do: fun.body,
+      else:
+        selective(fun.body, lays, %{scope: scope, wanted: wanted}, ctx, MapSet.new([fun.name]))
+  end
+
+  # The caller's names whose meaning is one binding: a parameter no
+  # binder of the body reuses, or a binder the body binds exactly once
+  # and that is no parameter. A call over these names has one value
+  # wherever it appears, so counting it twice means it is repeated.
+  defp stable_names(fun) do
+    counts = binder_counts(fun.body, %{})
+    params = MapSet.new(fun.params, &elem(&1, 0))
+
+    ps = for p <- params, not Map.has_key?(counts, p), into: MapSet.new(), do: p
+    bs = for {b, 1} <- counts, not MapSet.member?(params, b), into: MapSet.new(), do: b
+    MapSet.union(ps, bs)
+  end
+
+  defp binder_counts(t, acc) do
+    own =
+      case t do
+        {:let, x, _, _, _} -> [x]
+        {:letp, a, b, _, _} -> [a, b]
+        {:match, _, arms} -> Enum.flat_map(arms, fn {:arm, _, ns, _} -> ns end)
+        _ -> []
+      end
+
+    acc = Enum.reduce(own, acc, fn x, a -> Map.update(a, x, 1, &(&1 + 1)) end)
+    Enum.reduce(children(t), acc, &binder_counts/2)
   end
 
   # Calls to a folding run, in `scope` names, that `t` makes twice or more.
@@ -190,6 +246,9 @@ defmodule Muro.IR.Share do
     |> MapSet.new(fn {k, _} -> k end)
   end
 
+  # `scope` is `stable_names/1` of the caller: each name in it has one
+  # binding in the caller, and an inlined body binds only fresh names,
+  # so equal keys over it have one value.
   defp heavy_keys({:call, name, args} = t, scope, ctx, acc) do
     acc =
       if MapSet.member?(ctx.heavy, name) and MapSet.subset?(free_vars(t), scope),
@@ -242,23 +301,54 @@ defmodule Muro.IR.Share do
     do: map_children(t, &selective(&1, lays, want, ctx, seen))
 
   # The body of `fun` with every inlinable call inside it inlined.
+  # The result depends on which runs `seen` already holds, since those
+  # stay calls, so the memo is keyed by the part of `seen` that `fun`
+  # can reach.
   defp inlined_body(fun, ctx, seen) do
-    case :ets.lookup(ctx.memo, memo_key(fun)) do
-      [{_, body}] ->
-        body
+    if MapSet.member?(seen, fun.name) do
+      fun.body
+    else
+      key = memo_key(fun, seen, ctx)
 
-      [] ->
-        body =
-          if MapSet.member?(seen, fun.name),
-            do: fun.body,
-            else: inline(fun.body, ctx, MapSet.put(seen, fun.name))
+      case :ets.lookup(ctx.memo, key) do
+        [{_, body}] ->
+          body
 
-        :ets.insert(ctx.memo, {memo_key(fun), body})
-        body
+        [] ->
+          body = inline(fun.body, ctx, MapSet.put(seen, fun.name))
+          :ets.insert(ctx.memo, {key, body})
+          body
+      end
     end
   end
 
-  defp memo_key(fun), do: {Map.get(fun, :generated, false), fun.name}
+  defp memo_key(fun, seen, ctx) do
+    generated = Map.get(fun, :generated, false)
+    reach = if generated, do: MapSet.new(), else: Map.get(ctx.reach, fun.name, MapSet.new())
+    {generated, fun.name, MapSet.intersection(seen, reach)}
+  end
+
+  # Runs each source run calls, directly or not.
+  defp reach_map(by_name) do
+    calls =
+      Map.new(by_name, fn {n, f} ->
+        {n, if(known?(f.body), do: called(f.body), else: MapSet.new())}
+      end)
+
+    Map.new(calls, fn {n, _} -> {n, close(calls, Map.get(calls, n), MapSet.new())} end)
+  end
+
+  defp close(calls, todo, acc) do
+    new = MapSet.difference(todo, acc)
+
+    if MapSet.size(new) == 0 do
+      acc
+    else
+      acc = MapSet.union(acc, new)
+      next = Enum.reduce(new, MapSet.new(), &MapSet.union(&2, Map.get(calls, &1, MapSet.new())))
+      close(calls, next, acc)
+    end
+  end
 
   # ---------------------------------------------------------------- inline
 
@@ -551,16 +641,18 @@ defmodule Muro.IR.Share do
   defp strict({:letp, a, b, e, body}, bound),
     do: MapSet.union(strict(e, bound), strict(body, bound |> MapSet.put(a) |> MapSet.put(b)))
 
+  # Every arm is a path, an arm that aborts included: it evaluates what
+  # it binds before `abort`, and nothing after. A call the arms share is
+  # strict only when each arm, that one too, evaluates it. The scrutinee
+  # is evaluated on every path.
   defp strict({:match, scrut, arms}, bound) do
-    live =
-      arms
-      |> Enum.reject(fn {:arm, _, _, tm} -> unreachable?(tm) end)
-      |> Enum.map(fn {:arm, _, names, tm} ->
+    per_arm =
+      Enum.map(arms, fn {:arm, _, names, tm} ->
         strict(tm, MapSet.union(bound, MapSet.new(names)))
       end)
 
     arms_strict =
-      case live do
+      case per_arm do
         [] -> MapSet.new()
         [s | ss] -> Enum.reduce(ss, s, &MapSet.intersection/2)
       end
@@ -573,10 +665,6 @@ defmodule Muro.IR.Share do
     |> children()
     |> Enum.reduce(MapSet.new(), &MapSet.union(&2, strict(&1, bound)))
   end
-
-  defp unreachable?(:abort), do: true
-  defp unreachable?({:let, _, _, _, :abort}), do: true
-  defp unreachable?(_), do: false
 
   # Replace `key` by `{:var, v}` wherever its free variables still mean
   # what they mean at the top of `t`.

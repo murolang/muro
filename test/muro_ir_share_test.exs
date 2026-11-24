@@ -199,6 +199,185 @@ defmodule Muro.IRShareTest do
     refute c_fun(src, "count") =~ ~r/if \(\w+\) break;/
   end
 
+  # Hand-built images for the edge cases. `count` folds, so it is heavy;
+  # `wrap` and the others only call it.
+  defp lit(n), do: {:wrd, :u64, {:lit, :u64, n}, []}
+  defp add(a, b), do: {:wrd, :u64, :addi, [a, b]}
+  defp cnt(x), do: {:call, "count", [var: x]}
+
+  defp run(name, params, body), do: %{name: name, params: params, ret: :u64, body: body}
+
+  defp image(extra) do
+    [
+      run("count", [{"s", :slice}], {:bfold, "step0", [], lit(0), {:var, "s"}}),
+      run("wrap", [{"s", :slice}], cnt("s"))
+      | extra
+    ]
+  end
+
+  defp shared_body(funs, name, opts \\ []), do: body(Muro.IR.Share.funs(funs, opts), name)
+
+  test "an arm that aborts is a path: nothing the other arms make is hoisted above it" do
+    rep = add(cnt("s"), cnt("s"))
+    m = {:match, {:var, "p"}, [{:arm, "yes", [], rep}, {:arm, "no", [], :abort}]}
+    funs = image([run("f", [{"p", :pick}, {"s", :slice}], m)])
+
+    assert {:match, {:var, "p"}, [{:arm, "yes", [], yes}, {:arm, "no", [], :abort}]} =
+             shared_body(funs, "f")
+
+    assert {:let, _, :u64, {:call, "count", [var: "s"]}, _} = yes
+    assert calls(yes, "count") == 1
+  end
+
+  test "an arm that binds a call before it aborts evaluates it, so it may be hoisted" do
+    m =
+      {:match, {:var, "p"},
+       [
+         {:arm, "yes", [], add(cnt("s"), cnt("s"))},
+         {:arm, "no", [], {:let, "z", :u64, cnt("s"), :abort}}
+       ]}
+
+    funs = image([run("f", [{"p", :pick}, {"s", :slice}], m)])
+
+    assert {:let, v, :u64, {:call, "count", [var: "s"]}, {:match, _, arms}} =
+             shared_body(funs, "f")
+
+    assert calls(arms, "count") == 0
+    assert [_, {:arm, "no", [], {:let, "z", :u64, {:var, ^v}, :abort}}] = arms
+  end
+
+  test "a call in the scrutinee is on every path; one only in an arm is not" do
+    m = {:match, cnt("s"), [{:arm, "a", [], cnt("s")}, {:arm, "b", [], lit(1)}]}
+    funs = image([run("f", [{"s", :slice}], m)])
+
+    assert {:let, v, :u64, {:call, "count", [var: "s"]},
+            {:match, {:var, v}, [{:arm, "a", [], {:var, v}}, {:arm, "b", [], _}]}} =
+             shared_body(funs, "f")
+
+    # count s twice, but only in arm a of the inner match: it stays there.
+    inner =
+      {:match, {:var, "q"}, [{:arm, "a", [], add(cnt("s"), cnt("s"))}, {:arm, "b", [], lit(1)}]}
+
+    outer =
+      add(cnt("t"), {:match, {:var, "p"}, [{:arm, "a", [], inner}, {:arm, "b", [], lit(2)}]})
+
+    g = run("g", [{"p", :pick}, {"q", :pick}, {"s", :slice}, {"t", :slice}], outer)
+    out = shared_body(image([g]), "g")
+    assert {:wrd, :u64, :addi, [{:call, "count", [var: "t"]}, {:match, {:var, "p"}, _}]} = out
+
+    assert {:match, _, [{:arm, "a", [], {:match, {:var, "q"}, [{:arm, "a", [], a}, _]}}, _]} =
+             Enum.at(elem(out, 3), 1)
+
+    assert {:let, _, :u64, {:call, "count", [var: "s"]}, _} = a
+  end
+
+  test "a call over a shadowed name is not the caller's call" do
+    # count s at the top and count s under an arm that rebinds s are two
+    # values: nothing is shared.
+    m = {:match, {:var, "p"}, [{:arm, "c", ["s"], cnt("s")}]}
+    f = run("f", [{"p", :pick}, {"s", :slice}], add(cnt("s"), m))
+    assert shared_body(image([f]), "f") == f.body
+
+    # Inlining wrap s would expose count s beside the arm's count s, but
+    # those differ, so wrap stays a call. count t is still shared.
+    g =
+      run(
+        "g",
+        [{"p", :pick}, {"s", :slice}, {"t", :slice}],
+        add(add({:call, "wrap", [var: "s"]}, m), add(cnt("t"), cnt("t")))
+      )
+
+    out = shared_body(image([g]), "g")
+    assert calls(out, "wrap") == 1
+    assert calls(out, "count") == 2
+    assert {:let, _, :u64, {:call, "count", [var: "t"]}, _} = out
+  end
+
+  test "the image grows by at most grow_max nodes" do
+    # fat s adds nodes around count s, so inlining it grows a run.
+    fat = run("fat", [{"s", :slice}], add(add(cnt("s"), lit(1)), add(lit(2), lit(3))))
+    body = add(add({:call, "fat", [var: "s"]}, cnt("s")), cnt("s"))
+    funs = image([fat, run("f", [{"s", :slice}], body), run("g", [{"s", :slice}], body)])
+    total = fn fs -> fs |> Enum.map(&size_of(&1.body)) |> Enum.sum() end
+    base = total.(Muro.IR.Share.funs(funs, inline: false))
+
+    # No budget: fat stays a call, count s is still hoisted.
+    none = Muro.IR.Share.funs(funs, grow_max: 0)
+    assert calls(body(none, "f"), "fat") == 1
+    assert calls(body(none, "f"), "count") == 1
+    assert total.(none) == base
+
+    # The default budget takes both.
+    full = Muro.IR.Share.funs(funs)
+    assert calls(body(full, "f"), "fat") == 0
+    assert calls(body(full, "g"), "fat") == 0
+    one = size_of(body(full, "f")) - size_of(body(none, "f"))
+    assert one > 0
+
+    # Room for one: f takes it, g keeps calling fat.
+    some = Muro.IR.Share.funs(funs, grow_max: one)
+    assert total.(some) - base <= one
+    assert calls(body(some, "f"), "fat") == 0
+    assert calls(body(some, "g"), "fat") == 1
+  end
+
+  test "inlining does not depend on the order the runs are visited" do
+    # h1 and h2 call each other. Each inlines the other once; the memo
+    # must not hand h2 the body it got while h1 was being inlined.
+    h1 = run("h1", [{"s", :slice}], add({:call, "h2", [var: "s"]}, cnt("s")))
+    h2 = run("h2", [{"s", :slice}], add({:call, "h1", [var: "s"]}, cnt("s")))
+    funs = image([h1, h2])
+    a = Muro.IR.Share.funs(funs)
+    b = Muro.IR.Share.funs(Enum.reverse(funs))
+
+    for n <- ["h1", "h2"] do
+      assert normal(body(a, n)) == normal(body(b, n))
+    end
+  end
+
+  test "a call repeated inside a hoisted value is hoisted too" do
+    k = {:call, "pair2", [cnt("s"), cnt("s")]}
+    p2 = run("pair2", [{"a", :u64}, {"b", :u64}], add({:var, "a"}, {:var, "b"}))
+    funs = image([p2, run("f", [{"s", :slice}], add(k, k))])
+
+    assert {:let, c, :u64, {:call, "count", [var: "s"]},
+            {:let, v, :u64, {:call, "pair2", [var: c, var: c]},
+             {:wrd, :u64, :addi, [var: v, var: v]}}} = shared_body(funs, "f", inline: false)
+  end
+
+  defp size_of(t) do
+    cond do
+      is_tuple(t) -> 1 + (t |> Tuple.to_list() |> Enum.map(&size_of/1) |> Enum.sum())
+      is_list(t) -> t |> Enum.map(&size_of/1) |> Enum.sum()
+      true -> 0
+    end
+  end
+
+  # Fresh names renumbered in order of first appearance.
+  defp normal(t) do
+    {out, _} = norm(t, %{})
+    out
+  end
+
+  defp norm(x, m) when is_binary(x) do
+    if x =~ ~r/_s\d+$/ do
+      case m do
+        %{^x => y} -> {y, m}
+        _ -> {"v#{map_size(m)}", Map.put(m, x, "v#{map_size(m)}")}
+      end
+    else
+      {x, m}
+    end
+  end
+
+  defp norm(t, m) when is_tuple(t) do
+    {l, m} = norm(Tuple.to_list(t), m)
+    {List.to_tuple(l), m}
+  end
+
+  defp norm(l, m) when is_list(l), do: Enum.map_reduce(l, m, &norm/2)
+  defp norm(x, m), do: {x, m}
+
   # Same answers with and without sharing, from the compiled C.
   test "shared and plain C agree", %{book: book, dir: dir} do
     inputs = ["a", "abc", "abxcd", "x", "hello, world", String.duplicate("x", 300)]
