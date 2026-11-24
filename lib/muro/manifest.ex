@@ -47,9 +47,9 @@ defmodule Muro.Manifest do
   `MURO_IMPL_FOO_BAR`.
 
   `module` is required for `:elixir`, `:fsm`, and `:exunit`. A
-  `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, or `:rust_test`
+  `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:otp`, `:mbi`, `:pytest`, or `:rust_test`
   entry may omit it. The target then ends with `.c`, `.rs`, `.zig`,
-  `.s`, `.mjs`, or `.py`. A `:rust` target and a `:rust_test` target
+  `.s`, `.mjs`, `.ex`, `.mbi`, or `.py`. A `:rust` target and a `:rust_test` target
   both end in `.rs`. The kind tells them apart. A `:c` target also reserves the `.h`
   written beside it, and a `:js` target reserves the `.d.ts`. That path is checked as a target before
   generation: a directory is refused, and it is a duplicate when
@@ -716,7 +716,9 @@ defmodule Muro.Manifest do
              :rust,
              :zig,
              :asm,
+             :otp,
              :js,
+             :mbi,
              :fsm,
              :exunit,
              :pytest,
@@ -728,7 +730,7 @@ defmodule Muro.Manifest do
         {nil,
          errors ++
            [
-             "manifest backend: must be elixir, c, rust, zig, asm, js, fsm, exunit, pytest, or rust-test, got: #{inspect(backend)}"
+             "manifest backend: must be elixir, c, rust, zig, asm, otp, js, mbi, fsm, exunit, pytest, or rust-test, got: #{inspect(backend)}"
            ]}
     end
   end
@@ -909,11 +911,13 @@ defmodule Muro.Manifest do
              :pytest,
              :rust_test,
              :fsm,
+             :otp,
              :c,
              :rust,
              :zig,
              :asm,
-             :js
+             :js,
+             :mbi
            ] ->
         {kind, []}
 
@@ -1100,7 +1104,7 @@ defmodule Muro.Manifest do
   end
 
   defp validate_module(nil, _index, kind)
-       when kind in [:c, :rust, :zig, :asm, :js, :pytest, :rust_test],
+       when kind in [:c, :rust, :zig, :asm, :js, :otp, :mbi, :pytest, :rust_test],
        do: []
 
   defp validate_module(module, index, _kind) do
@@ -1120,6 +1124,9 @@ defmodule Muro.Manifest do
 
   defp extension_errors(:rust_test, rel, index),
     do: extension_errors(rel, ".rs", :rust_test, index)
+
+  defp extension_errors(:otp, rel, index), do: extension_errors(rel, ".ex", :otp, index)
+  defp extension_errors(:mbi, rel, index), do: extension_errors(rel, ".mbi", :mbi, index)
 
   defp extension_errors(_kind, _rel, _index), do: []
 

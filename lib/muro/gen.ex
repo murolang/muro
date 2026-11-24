@@ -372,6 +372,9 @@ defmodule Muro.Gen do
       kind when kind in [:c, :rust, :zig, :asm, :js] ->
         render_native(root, entry, version, loaded, lines, kind)
 
+      :mbi ->
+        render_mbi(root, entry, loaded)
+
       :pytest ->
         render_pytest(root, entry, version, fuel, loaded, lines)
 
@@ -423,6 +426,23 @@ defmodule Muro.Gen do
       else
         {:error, "generated header does not describe #{entry.target}"}
       end
+    end
+  end
+
+  # An .mbi image has no gen header. muro-beam reads the file as
+  # written by Emit.Mbi. A header would be a different image.
+  defp render_mbi(_root, entry, loaded) do
+    book = Muro.Prelude.for_emit(loaded)
+
+    case Muro.Emit.Mbi.render(book) do
+      {:ok, image, ""} ->
+        {:ok, [%{rel: entry.target, contents: image}], {[], []}}
+
+      {:ok, _image, refused} ->
+        {:error, refused}
+
+      {:error, message} ->
+        {:error, message}
     end
   end
 
@@ -572,6 +592,12 @@ defmodule Muro.Gen do
           {:error, message} -> {:error, message}
         end
 
+      :otp ->
+        book = loaded |> Muro.Prelude.for_emit() |> Muro.Grade.erase_book()
+        stem = Path.basename(entry.book, ".muro")
+        {:ok, source} = Muro.Emit.Otp.render(book, stem)
+        {:ok, source, []}
+
       :fsm ->
         book = loaded |> Muro.Prelude.for_emit() |> Muro.Grade.erase_book()
 
@@ -698,6 +724,38 @@ defmodule Muro.Gen do
 
       {:error, message} ->
         [does_not_check(entry, message) | target_problems(entry, root, version, false, nil)]
+    end
+  end
+
+  defp target_problems(%{kind: :mbi} = entry, root, _version, book_ok?, emit) do
+    rel = entry.target
+    path = Path.expand(rel, root)
+
+    cond do
+      not File.regular?(path) ->
+        ["#{rel}: missing target for #{entry.book}"]
+
+      not book_ok? or is_nil(emit) ->
+        []
+
+      true ->
+        case render_cached(emit) do
+          {:ok, files, _notes} ->
+            case Enum.find(files, &(&1.rel == rel)) do
+              %{contents: contents} ->
+                if File.read!(path) == contents do
+                  []
+                else
+                  ["#{rel}: differs from what #{entry.book} emits"]
+                end
+
+              _other ->
+                ["#{rel}: differs from what #{entry.book} emits"]
+            end
+
+          _other ->
+            ["#{rel}: differs from what #{entry.book} emits"]
+        end
     end
   end
 

@@ -129,6 +129,50 @@ defmodule Muro.InitBinTest do
     assert cli_status(unknown, ["init", "--backend", "nope"]) == 1
   end
 
+  test "init --backend otp and mbi are stored and skills add uses them" do
+    otp = tmp()
+    assert cli(otp, ["init", "--backend", "otp"]) =~ "created muro.toml\n"
+    otp_toml = File.read!(Path.join(otp, "muro.toml"))
+    assert otp_toml =~ ~s(backend = "otp")
+    assert otp_toml =~ ~s(target = "lib/my_app/billing/rounding_otp.ex")
+    assert {:ok, %{backend: :otp}} = Muro.Manifest.load(otp)
+
+    assert {:ok, _} = Muro.Skills.add(otp)
+    otp_agents = File.read!(Path.join(otp, "AGENTS.md"))
+    assert otp_agents =~ "muro emit path.muro --backend otp\n"
+    assert otp_agents =~ ".agents/skills/muro-book/examples/meet.muro"
+
+    forced_otp = tmp()
+    File.write!(Path.join(forced_otp, "mix.exs"), mix_exs())
+    assert cli(forced_otp, ["init", "--backend", "otp"]) =~ "created muro.exs\n"
+    otp_exs = File.read!(Path.join(forced_otp, "muro.exs"))
+    assert otp_exs =~ "backend: :otp,"
+    assert otp_exs =~ "rounding_otp.ex"
+    assert otp_exs =~ "kind: :otp"
+    assert {:ok, %{backend: :otp}} = Muro.Manifest.load(forced_otp)
+
+    mbi = tmp()
+    assert cli(mbi, ["init", "--backend", "mbi"]) =~ "created muro.toml\n"
+    mbi_toml = File.read!(Path.join(mbi, "muro.toml"))
+    assert mbi_toml =~ ~s(backend = "mbi")
+    assert mbi_toml =~ ~s(target = "src/rounding.mbi")
+    assert {:ok, %{backend: :mbi}} = Muro.Manifest.load(mbi)
+
+    assert {:ok, _} = Muro.Skills.add(mbi)
+    mbi_agents = File.read!(Path.join(mbi, "AGENTS.md"))
+    assert mbi_agents =~ "muro emit path.muro --backend mbi\n"
+    assert mbi_agents =~ ".agents/skills/muro-book/examples/half_ok.muro"
+
+    forced_mbi = tmp()
+    File.write!(Path.join(forced_mbi, "mix.exs"), mix_exs())
+    assert cli(forced_mbi, ["init", "--backend", "mbi"]) =~ "created muro.exs\n"
+    mbi_exs = File.read!(Path.join(forced_mbi, "muro.exs"))
+    assert mbi_exs =~ "backend: :mbi,"
+    assert mbi_exs =~ "src/rounding.mbi"
+    assert mbi_exs =~ "kind: :mbi"
+    assert {:ok, %{backend: :mbi}} = Muro.Manifest.load(forced_mbi)
+  end
+
   test "mix muro.init --backend js stores the entry and refuses an unknown backend" do
     version = Mix.Tasks.Muro.version()
     dir = tmp()

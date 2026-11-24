@@ -14,10 +14,10 @@ In brief: `muro` is a self-contained executable. It carries its own Erlang runti
 Release assets are one file per target, named `muro-<version>-<os>-<arch>`, with a `.sha256` file beside each:
 
 ```
-muro-0.22.28-macos-aarch64
-muro-0.22.28-macos-x86_64
-muro-0.22.28-linux-x86_64
-muro-0.22.28-linux-aarch64
+muro-0.22.29-macos-aarch64
+muro-0.22.29-macos-x86_64
+muro-0.22.29-linux-x86_64
+muro-0.22.29-linux-aarch64
 ```
 
 The Linux binaries are built against musl, so one file runs on glibc and on Alpine. The asset name does not contain `musl`.
@@ -25,14 +25,14 @@ The Linux binaries are built against musl, so one file runs on glibc and on Alpi
 [mise](https://mise.jdx.dev/) installs the asset for the host:
 
 ```
-mise use -g github:murolang/muro@0.22.28
+mise use -g github:murolang/muro@0.22.29
 ```
 
 If mise reports `No versions found` or a 404 from `mise-versions.jdx.dev`, its version mirror does not list the release yet. Turn the mirror off and ask GitHub directly:
 
 ```
 mise settings set use_versions_host false
-mise use -g github:murolang/muro@0.22.28
+mise use -g github:murolang/muro@0.22.29
 ```
 
 `mise install muro` from the mise registry follows once the assets exist. When a merge lands on main, the `Hex and tag` job in CI starts after the Elixir job on that commit succeeds. It publishes that `mix.exs` version to Hex if it is not already there, and pushes the annotated tag `vX.Y.Z` if it is missing. It does not wait for Agda or muro_visor. A push that does not bump the version succeeds without moving an existing tag and without building the binaries. When this commit published the version or created the tag, the Release workflow builds the four files, smokes the Linux binary in a container with no Elixir and no Erlang, and attaches the assets to the GitHub release only after that smoke succeeds. A failed smoke publishes no binaries. The Hex package is already on Hex by then, and its dependencies are unchanged. Burrito builds the executable and is not a runtime dependency of the package.
@@ -49,7 +49,7 @@ prints `Muro v` and the version, the same line as `mix muro --version`.
 
 ```
 muro check path.muro
-muro emit path.muro [--backend elixir|c|rust|zig|asm|otp|fsm|exunit|pytest|rust-test] [--node NAME] [--imports] [--prefix TEXT] [--impl MODULE]
+muro emit path.muro [--backend elixir|c|rust|zig|asm|otp|js|mbi|fsm|exunit|pytest|rust-test] [--node NAME] [--imports] [--prefix TEXT] [--impl MODULE]
 muro gen
 muro gen --check
 muro init [--ci github] [--backend BACKEND] [--cargo-metadata]
@@ -88,7 +88,7 @@ muro.toml and [package.metadata.muro] in Cargo.toml both define a manifest
 Three or more end with `all define a manifest`.
 
 ```toml
-muro = "0.22.28"
+muro = "0.22.29"
 fuel = 2000          # optional
 backend = "rust"     # optional default for [[modules]]
 
@@ -161,7 +161,7 @@ The header is the same two lines and the same hashes as an Elixir target. A C so
 | `CMakeLists.txt`, `meson.build`, or a `Makefile`, and neither `mix.exs` nor `Cargo.toml` | `muro.toml` and `muro/` | c |
 | none of these | `muro.toml` with `modules = []`, and `muro/` | none |
 
-`--backend asm` overrides the detected backend and stores it as the manifest's top-level `backend`, so `muro skills add` and later commands use `asm`. On `muro.exs` the key is `backend: :asm`. On `muro.toml` and `[package.metadata.muro]` it is `backend = "asm"`. `--backend elixir` stores that key too. Without `--backend`, a Mix project still omits it. The flag does not change which file is written. There is no detection of embedded projects. `--backend` accepts `elixir`, `c`, `rust`, `zig`, `asm`, `js`, `fsm`, `exunit`, `pytest`, or `rust-test`.
+`--backend asm` overrides the detected backend and stores it as the manifest's top-level `backend`, so `muro skills add` and later commands use `asm`. On `muro.exs` the key is `backend: :asm`. On `muro.toml` and `[package.metadata.muro]` it is `backend = "asm"`. `--backend elixir` stores that key too. Without `--backend`, a Mix project still omits it. The flag does not change which file is written. There is no detection of embedded projects. `--backend` accepts `elixir`, `c`, `rust`, `zig`, `asm`, `otp`, `js`, `mbi`, `fsm`, `exunit`, `pytest`, or `rust-test`.
 
 `--cargo-metadata` on a directory with `Cargo.toml` appends `[package.metadata.muro]` and writes `muro/`. It does not write `muro.toml`. Without a `Cargo.toml` it exits 1 and writes nothing.
 
@@ -179,8 +179,10 @@ It does not write `AGENTS.md`.
 muro skills add
 ```
 
-writes the agent section into `AGENTS.md`, and into `CLAUDE.md` when that file already exists. It creates `AGENTS.md` when `AGENTS.md` is missing. It never creates `CLAUDE.md`. It touches nothing outside its block.
+writes the agent index into `AGENTS.md`, and into `CLAUDE.md` when that file already exists, and writes the agent skills under `.agents/skills/`. It creates `AGENTS.md` when `AGENTS.md` is missing. It never creates `CLAUDE.md`. It does not write `.cursor/skills` or `.claude/skills`. Those trees are left to the editor. Copy or symlink the `muro-*` skill folders there if the editor only loads them from that path.
 
-The block is delimited by `<!-- muro:begin -->` and `<!-- muro:end -->`. A marker counts only as a whole line. A trailing carriage return is allowed, so a CRLF file is recognised. A mention of either marker inside a sentence is not a marker. A rerun replaces the lines between the markers and nothing else, keeps the file's line endings, and the file is byte-identical. A file with no markers gets the block appended, in those same line endings. A file with unbalanced markers is refused with `<file>:<line>: unbalanced muro marker`, and neither file is written.
+The index block is delimited by `<!-- muro:begin -->` and `<!-- muro:end -->`. A marker counts only as a whole line. A trailing carriage return is allowed, so a CRLF file is recognised. A mention of either marker inside a sentence is not a marker. A rerun replaces the lines between the markers and nothing else, keeps the file's line endings, overwrites the skill files with the same bytes, and the files are byte-identical. A file with no markers gets the block appended, in those same line endings. A file with unbalanced markers is refused with `<file>:<line>: unbalanced muro marker`, and neither the agent files nor the skills are written.
 
-The wording comes from [For agents](for-agents.md) at build time, so the executable carries it. That file is part of the Hex package, so compiling the package, or an archive built from it, reads the same source. The wording is the same for every backend. The commands and the example anchor are filled from the manifest's `backend`, or from the backend `muro init` would detect. The block states the two jobs (spec and evidence; `run` is what is emitted), the wall, the commands for this project (`muro check`, `muro emit` or `muro gen`, and `muro gen --check`), that every binder is typed and every motive is written, that generated files are not edited by hand, and a pointer to the nearest example in [Examples](examples.md).
+The wording comes from marked sections of the manual at build time, so the executable carries it. [For agents](for-agents.md), [Committed modules](gen.md), and [Synthesis](synth.md) are part of the Hex package, so compiling the package, or an archive built from it, reads the same source. The index is filled from the project: the running version, the commands (including `muro synth`, `muro fill`, `muro mutate`, `muro deps.get`, and `muro check --fuel`), and the nearest bundled example. The skills themselves are self-contained. They link to https://muro-lang.dev/docs rather than to `manual/` paths that a user project does not have. Three small example books (`half_ok.muro`, `nats.muro`, `meet.muro`) are written under `.agents/skills/muro-book/examples/`.
+
+The index is two to four kilobytes. It states the two jobs and the wall, lists every emit backend (`elixir`, `c`, `rust`, `zig`, `asm`, `otp`, `js`, `mbi`, `fsm`, `exunit`, `pytest`, `rust-test`), points at the six skills (`muro-book`, `muro-check`, `muro-emit`, `muro-gen`, `muro-synth`, `muro-contracts`), and records that the synthesized PredProg is itself the certified term, not the Finder's ranking. Skill bodies are distilled from the manual; they do not dump the emit or limits pages.

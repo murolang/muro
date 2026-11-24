@@ -406,7 +406,7 @@ defmodule Muro.GenTest do
     assert output =~ "created priv/muro/"
 
     assert output =~
-             "Run `muro skills add` to write the commands for this project into AGENTS.md."
+             "Run `muro skills add` to write the agent index into AGENTS.md and the skills under .agents/skills/."
 
     refute File.exists?(Path.join(dir, "AGENTS.md"))
     assert File.dir?(Path.join(dir, "priv/muro"))

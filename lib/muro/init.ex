@@ -138,7 +138,7 @@ defmodule Muro.Init do
   def note do
     """
     Generated files are not edited by hand. The .muro file is the source. Run mix muro.gen after changing it.
-    Run `muro skills add` to write the commands for this project into AGENTS.md.
+    Run `muro skills add` to write the agent index into AGENTS.md and the skills under .agents/skills/.
     """
   end
 
@@ -448,6 +448,8 @@ defmodule Muro.Init do
   defp example_paths(:zig), do: {"src/rounding.zig", nil}
   defp example_paths(:asm), do: {"src/rounding.s", nil}
   defp example_paths(:js), do: {"src/rounding.mjs", nil}
+  defp example_paths(:otp), do: {"lib/my_app/billing/rounding_otp.ex", nil}
+  defp example_paths(:mbi), do: {"src/rounding.mbi", nil}
   defp example_paths(nil), do: {"src/rounding.rs", nil}
 
   # No backend keeps the historical `muro.exs`, which omits the key.

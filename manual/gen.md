@@ -225,7 +225,7 @@ The task prints a note:
 
 ```
 Generated files are not edited by hand. The .muro file is the source. Run mix muro.gen after changing it.
-Run `muro skills add` to write the commands for this project into AGENTS.md.
+Run `muro skills add` to write the agent index into AGENTS.md and the skills under `.agents/skills/`.
 ```
 
 It does not write that file. `muro skills add` does. `muro init` writes the manifest for the directory it finds. When `muro.exs`, `muro.toml`, or `[package.metadata.muro]` already exists, it prints a diff of that file and exits 0. It does not write a second manifest. See [The executable](binary.md).
@@ -233,3 +233,44 @@ It does not write that file. `muro skills add` does. `muro init` writes the mani
 The three tasks run from the archive, with no Mix project, and inside a project that depends on muro. When a project depends on muro and the archive is also installed, Mix uses the project's copy.
 
 Next: [Host representations](repr.md).
+
+## Agent skill: committed modules
+
+<!-- muro-skill:gen:begin -->
+# Committed modules and version pins
+
+`muro gen` reads the manifest and writes the modules it names. The `.muro` file is the source. Do not edit a generated file by hand. Change the `.muro` file and run `muro gen`.
+
+Docs: [Committed modules](https://muro-lang.dev/docs/gen), [The executable](https://muro-lang.dev/docs/binary), [Packages](https://muro-lang.dev/docs/packages).
+
+## Manifest
+
+The manifest is `muro.toml` at the project root, or `[package.metadata.muro]` in `Cargo.toml`. A Mix project uses `muro.exs`. Loading more than one manifest is an error.
+
+It pins muro to a version, which must equal the running version. This copy is **{{version}}**. `muro gen` and `muro gen --check` refuse to run when the pin differs from the running version. The message names both versions.
+
+Each entry names a book and a target. `elixir`, `fsm`, and `exunit` also name a module. `otp` names a `.ex` target and may omit the module (the emitter names the module from the book stem). `pytest` names a target ending in `.py` and may omit the module. `rust-test` names a target ending in `.rs` and may omit the module. `c`, `rust`, `zig`, `asm`, `js`, and `mbi` name a target ending in `.c`, `.rs`, `.zig`, `.s`, `.mjs`, or `.mbi`. A C target also writes the `.h` beside it. A JavaScript entry also writes the `.d.ts` beside the `.mjs`. An optional `fuel` is the checker's bound. An optional top-level `backend` is the kind of every entry that omits one, and is the backend `muro skills add` writes into `muro emit`.
+
+The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256, except an `.mbi` image, which is written without that header.
+
+## Commands
+
+```
+muro init
+muro init --backend NAME
+muro gen
+muro gen --check
+muro gen --skip-check
+muro deps.get
+mix muro.init
+mix muro.gen
+mix muro.gen --check
+mix muro.deps.get
+```
+
+`muro init` looks at the working directory and writes one manifest, pinned to the running version, plus one commented example entry. It does not write `AGENTS.md`. It prints a note that points at `muro skills add`. `--backend` stores that backend on the manifest. The value is elixir, c, rust, zig, asm, otp, js, mbi, fsm, exunit, pytest, or rust-test.
+
+One `muro gen` invocation type-checks each book once, then emits every target of that book from that copy, including both files of a C target. If one book fails, it writes nothing. A target that already matches is left untouched. `--skip-check` does not type-check; the caller has already checked. `--check --skip-check` still compares bytes. The default type-checks. `muro gen --check` fails when a committed module and its book disagree.
+
+`muro deps.get` fetches `muro_deps/` and writes `muro.lock`. A book that imports packages prints one `conforms to <name> <version> (sha256 <hash>)` line per package after a successful check.
+<!-- muro-skill:gen:end -->
