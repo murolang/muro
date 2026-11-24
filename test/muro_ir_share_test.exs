@@ -151,9 +151,12 @@ defmodule Muro.IRShareTest do
   test "a call only some paths make is not hoisted above the branch", %{funs: funs} do
     shared = Muro.IR.Share.funs(funs)
     # Inlining both pickCounts would expose two count calls, each under
-    # its own yes arm. Neither is on every path, so nothing is shared
-    # and branchy keeps its elaborated body.
-    assert body(shared, "branchy") == body(funs, "branchy")
+    # its own yes arm. Neither is on every path, so no count is bound
+    # above a match. pickCount p s itself is on every path: bound once.
+    b = body(shared, "branchy")
+    assert count_outside_arms(b) == 0
+    assert calls(b, "pickCount") == 1
+    assert {:let, _, :u64, {:call, "pickCount", [var: "p", var: "s"]}, _} = b
     assert body(shared, "pickCount") == body(funs, "pickCount")
   end
 
@@ -164,6 +167,34 @@ defmodule Muro.IRShareTest do
     assert calls(body(hoisted, "viaWrap"), "wrap") == 1
   end
 
+  test "inline: false and the default agree on a directly repeated call", %{funs: funs} do
+    plain = Muro.IR.Share.funs(funs, inline: false)
+    full = Muro.IR.Share.funs(funs)
+
+    for {name, callee} <- [
+          {"twice", "count"},
+          {"both", "count"},
+          {"nested", "count"},
+          {"branchy", "pickCount"}
+        ] do
+      assert calls(body(plain, name), callee) == calls(body(full, name), callee), name
+    end
+  end
+
+  test "grow_max: 0 and inline: false never share more than the default", %{funs: funs} do
+    full = Muro.IR.Share.funs(funs)
+
+    for opts <- [[inline: false], [grow_max: 0]] do
+      less = Muro.IR.Share.funs(funs, opts)
+
+      for f <- funs, not Map.get(f, :generated, false) do
+        a = folds(full, body(full, f.name))
+        b = folds(less, body(less, f.name))
+        assert a <= b, inspect({f.name, opts, a, b})
+      end
+    end
+  end
+
   test "the C emitter calls the fold once in twice and viaWrap", %{book: book} do
     {:ok, {_h, src}} = Muro.Emit.C.render(book, "shared")
     {:ok, {_h, plain}} = Muro.Emit.C.render(book, "shared", share: false)
@@ -171,7 +202,34 @@ defmodule Muro.IRShareTest do
     assert length(Regex.scan(~r/\bcount\(/, c_fun(src, "twice"))) == 1
     assert length(Regex.scan(~r/\bcount\(/, c_fun(src, "viaWrap"))) == 1
     refute c_fun(src, "viaWrap") =~ ~r/\bwrap\(/
-    assert c_fun(src, "branchy") == c_fun(plain, "branchy")
+    assert length(Regex.scan(~r/\bpickCount\(/, c_fun(plain, "branchy"))) == 2
+    assert length(Regex.scan(~r/\bpickCount\(/, c_fun(src, "branchy"))) == 1
+  end
+
+  test "grow_max reaches the C emitter" do
+    # fat2 adds nodes around count s, so with no budget viaFat keeps
+    # calling it, and with the default it inlines it and folds once.
+    extra = """
+
+    def fat2 : run Π (+ s : Slice) → U64 :=
+      λ (+ s : Slice) → addi (addi (count s) (toU64 1)) (muli (toU64 2) (toU64 3))
+
+    def viaFat : run Π (+ s : Slice) → U64 :=
+      λ (+ s : Slice) → addi (fat2 s) (count s)
+    """
+
+    dir = Path.join(System.tmp_dir!(), "muro_share_g#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf!(dir) end)
+    path = Path.join(dir, "fat.muro")
+    File.write!(path, @book <> extra)
+    {:ok, b} = Muro.Load.file(path)
+    b = Muro.Prelude.for_emit(b)
+    {:ok, {_h, none}} = Muro.Emit.C.render(b, "fat", grow_max: 0)
+    {:ok, {_h, full}} = Muro.Emit.C.render(b, "fat")
+    assert c_fun(none, "viaFat") =~ ~r/\bfat2\(/
+    refute c_fun(full, "viaFat") =~ ~r/\bfat2\(/
+    assert length(Regex.scan(~r/\bcount\(/, c_fun(full, "viaFat"))) == 1
   end
 
   test "the Rust emitter calls the fold once in twice", %{book: book} do
@@ -199,6 +257,68 @@ defmodule Muro.IRShareTest do
       [_, rest] = String.split(noinl, ~r/fn viaWrap\(/, parts: 2)
       [text | _] = String.split(rest, "\n}\n", parts: 2)
       assert text =~ ~r/\bwrap\(/
+    end
+  end
+
+  @tag :rust
+  test "the shared Rust computes twice and viaWrap", %{book: book, dir: dir} do
+    rustc = System.find_executable("rustc") || Path.join(System.user_home!(), ".cargo/bin/rustc")
+
+    if File.regular?(rustc) do
+      sub = Path.join(dir, "rs")
+      File.mkdir_p!(sub)
+      {:ok, src} = Muro.Emit.Rust.render(book, "shared")
+      File.write!(Path.join(sub, "shared.rs"), src)
+
+      File.write!(Path.join(sub, "main.rs"), """
+      mod shared;
+      fn main() {
+          for s in ["abc", "", "hello, world"] {
+              let b = s.as_bytes();
+              let sl = shared::muro__slice_of(b.as_ptr(), b.len());
+              println!("{} {}", shared::twice(sl), shared::viaWrap(sl));
+          }
+      }
+      """)
+
+      {out, 0} =
+        System.cmd(rustc, ~w(--edition 2021 -A warnings main.rs -o main_rs),
+          cd: sub,
+          stderr_to_stdout: true
+        )
+
+      assert out == ""
+      assert {"6 33\n0 0\n24 132\n", 0} = System.cmd(Path.join(sub, "main_rs"), [])
+    end
+  end
+
+  @tag :zig
+  test "the shared Zig computes twice and viaWrap", %{book: book, dir: dir} do
+    if zig = System.find_executable("zig") do
+      sub = Path.join(dir, "zig")
+      File.mkdir_p!(sub)
+      {:ok, src} = Muro.Emit.Zig.render(book, "shared")
+      File.write!(Path.join(sub, "shared.zig"), src)
+
+      File.write!(Path.join(sub, "main.zig"), """
+      const std = @import("std");
+      const shared = @import("shared.zig");
+      pub fn main() !void {
+          const a = std.heap.page_allocator;
+          const out = std.fs.File.stdout();
+          for ([_][]const u8{ "abc", "", "hello, world" }) |s| {
+              const sl = shared.muro__slice_of(s.ptr, s.len);
+              var buf: [64]u8 = undefined;
+              const line = try std.fmt.bufPrint(&buf, "{d} {d}\\n", .{ try shared.twice(a, sl), try shared.viaWrap(a, sl) });
+              try out.writeAll(line);
+          }
+      }
+      """)
+
+      assert {"6 33\n0 0\n24 132\n", 0} =
+               System.cmd(zig, ~w(run main.zig --global-cache-dir) ++ [Path.join(sub, ".zcache")],
+                 cd: sub
+               )
     end
   end
 
@@ -383,6 +503,38 @@ defmodule Muro.IRShareTest do
             {:let, v, :u64, {:call, "pair2", [var: c, var: c]},
              {:wrd, :u64, :addi, [var: v, var: v]}}} = shared_body(funs, "f", inline: false)
   end
+
+  # count calls that are not under a match arm.
+  defp count_outside_arms({:match, s, _arms}), do: count_outside_arms(s)
+  defp count_outside_arms({:call, "count", args}), do: 1 + count_outside_arms(args)
+
+  defp count_outside_arms(t) when is_tuple(t),
+    do: t |> Tuple.to_list() |> count_outside_arms()
+
+  defp count_outside_arms(l) when is_list(l),
+    do: l |> Enum.map(&count_outside_arms/1) |> Enum.sum()
+
+  defp count_outside_arms(_), do: 0
+
+  # Folds the worst path of `t` runs, each call expanded through the
+  # bodies in `fs`.
+  defp folds(fs, {:call, "count", args}), do: 1 + folds(fs, args)
+
+  defp folds(fs, {:call, name, args}) do
+    case Enum.find(fs, &(&1.name == name and not Map.get(&1, :generated, false))) do
+      nil -> folds(fs, args)
+      f -> folds(fs, f.body) + folds(fs, args)
+    end
+  end
+
+  defp folds(fs, {:match, s, arms}),
+    do:
+      folds(fs, s) +
+        (arms |> Enum.map(fn {:arm, _, _, tm} -> folds(fs, tm) end) |> Enum.max(fn -> 0 end))
+
+  defp folds(fs, t) when is_tuple(t), do: folds(fs, Tuple.to_list(t))
+  defp folds(fs, l) when is_list(l), do: l |> Enum.map(&folds(fs, &1)) |> Enum.sum()
+  defp folds(_fs, _), do: 0
 
   # Fresh names renumbered in order of first appearance.
   defp normal(t) do

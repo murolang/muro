@@ -33,8 +33,11 @@ defmodule Muro.IR.Share do
   every copy a hoist later removes, which is why the default is twice
   the image and not once. Runs draw on it smallest growth first, then by name, so
   which runs inline does not depend on the order of the list; a run
-  whose inlining would pass what is left is shared without it. Inlined
-  bodies do not depend on that order either.
+  whose inlining would pass what is left, or whose inlined body has
+  nothing to hoist, is shared as elaborated, so inlining never shares
+  less than `inline: false`. Inlined bodies do not depend on that order
+  either. A generated fold or stream step is never inlined into and
+  draws nothing on the budget; it is still shared.
 
   The emitted program computes the same value as the checked term. A
   word operation, a constructor, and a byte literal are not shared:
@@ -187,11 +190,15 @@ defmodule Muro.IR.Share do
   # who gets the budget does not depend on the order of `funs`; a run
   # whose growth does not fit what is left is shared as elaborated, and
   # its inlined body is never shared. A run whose inlined body shares
-  # nothing keeps its elaborated body and draws nothing.
+  # nothing draws nothing and is shared as elaborated.
   defp optimize_all(funs, ctx, inline?) do
     plans =
       for {fun, i} <- Enum.with_index(funs), known?(fun.body) do
-        body = if inline?, do: inline_run(fun, ctx), else: fun.body
+        # A generated fold or stream step is never inlined into: it runs
+        # once per octet or element, so it keeps calling its run, and it
+        # draws nothing on the budget. It is still shared.
+        inline_here? = inline? and not Map.get(fun, :generated, false)
+        body = if inline_here?, do: inline_run(fun, ctx), else: fun.body
         {i, fun, body, size(body) - size(fun.body)}
       end
 
@@ -207,8 +214,11 @@ defmodule Muro.IR.Share do
               :counters.sub(ctx.budget, 1, max(grow, 0))
               {:ok, out}
 
+            # The inlined body has nothing to hoist: drop it, draw
+            # nothing, and share the run as elaborated, so inlining never
+            # shares less than `inline: false`.
             :skip ->
-              :skip
+              shared(fun.body, ctx)
           end
         else
           shared(fun.body, ctx)
@@ -599,8 +609,10 @@ defmodule Muro.IR.Share do
   defp share_inside({:let, x, lay, v, b}, ctx),
     do: {:let, x, lay, share(v, ctx), share(b, ctx)}
 
+  # A pair's value is evaluated exactly when the letp is, as a let's
+  # value is, so it takes the same `share/2`.
   defp share_inside({:letp, a, b, e, body}, ctx),
-    do: {:letp, a, b, share_inside(e, ctx), share(body, ctx)}
+    do: {:letp, a, b, share(e, ctx), share(body, ctx)}
 
   defp share_inside({:match, scrut, arms}, ctx) do
     {:match, share_inside(scrut, ctx),
