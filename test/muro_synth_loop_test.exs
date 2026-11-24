@@ -21,6 +21,7 @@ defmodule Muro.SynthLoopTest do
   @stay "test/fixtures/synth_false.muro"
   @chain "test/fixtures/synth_chain.muro"
   @retry "test/fixtures/synth_retry.muro"
+  @binders "test/fixtures/synth_fresh_binders.muro"
 
   test "two state trace certifies prefer go" do
     assert {:ok, result} = Muro.Synth.cegis_loop(@two, depth: 0, max_depth: 0)
@@ -44,6 +45,28 @@ defmodule Muro.SynthLoopTest do
     assert text =~ "carrier start bit true"
     assert text =~ "certificate CoindHomo"
     assert hd(result.versions) > List.last(result.versions)
+  end
+
+  test "clashing action and state names still certify a PredProg book" do
+    assert {:ok, result} = Muro.Synth.cegis_loop(@binders, depth: 0, max_depth: 0)
+    assert result.status == :certified
+    assert result.certificate == "CoindHomo"
+    assert result.book =~ "def survivor-c : run PredProg := truep"
+    assert result.book =~ "match eval survivor"
+    assert result.book =~ "evidence CoindHomo rank"
+    refute result.book =~ "Finder"
+    refute result.book =~ "def survivor : run PredProg := find-policy"
+    refute result.book =~ "λ (+ c : Carrier)"
+    refute result.book =~ "step c c"
+    assert result.book =~ "| true => c"
+    assert result.book =~ "λ (+ c-2 : Carrier)"
+    assert result.book =~ "λ (+ s-2 : State)"
+    assert result.book =~ "λ (+ f-2 : Feature)"
+
+    text = joined(result)
+    assert text =~ "muro synth: homomorphism checked"
+    assert text =~ "certificate CoindHomo"
+    assert text =~ "prefers c"
   end
 
   test "hiding go does not certify a preference for go" do

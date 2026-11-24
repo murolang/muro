@@ -1,0 +1,37 @@
+-- Actions named i and u, the binders list-equality used to hard-code.
+-- From s, i reaches t and its reward; u waits. Synthesis should still
+-- return a certified PredProg whose book checks.
+import "../../examples/cshrl/std/nat.muro"
+import "../../examples/cshrl/lib/agent.muro"
+
+data State : Type where
+  s : State
+  t : State
+
+data Action : Type where
+  i : Action
+  u : Action
+
+def Reward : spec Type := Nat
+
+def move : run Π (st : State) → Π (act : Action) → State :=
+  λ (st : State) → λ (act : Action) →
+    match st motive (λ _ → State)
+      | s => (match act motive (λ _ → State) | i => t | u => s)
+      | t => t
+
+def reward-fn : run Π (st : State) → Reward :=
+  λ (st : State) → match st motive (λ _ → Reward) | s => 0 | t => suc 0
+
+def step : run Π (st : State) → Π (act : Action) → State × Reward :=
+  λ (st : State) → λ (act : Action) → step-from (move st act)
+
+def step-from : run Π (+ st : State) → State × Reward := λ (+ st : State) → (st, reward-fn st)
+
+def le : spec Π (rw : Reward) → Π (qv : Reward) → Type := Le
+def max : run Π (rw : Reward) → Π (qv : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons i (cons u nil)
+def default-action : run Action := i
+def horizon : run Nat := suc 0
+def all-states : run List State := cons s (cons t nil)

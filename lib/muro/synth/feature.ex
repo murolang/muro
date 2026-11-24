@@ -491,38 +491,9 @@ defmodule Muro.Synth.Feature do
     end)
   end
 
-  defp taken_names(book) when is_list(book) do
-    Enum.reduce(book, MapSet.new(), fn entry, acc ->
-      Enum.reduce(entry_names(entry), acc, &take(&2, &1))
-    end)
-  end
+  defp taken_names(book), do: Muro.Synth.Names.reserved(book)
 
-  defp taken_names(_book), do: MapSet.new()
+  defp fresh(base, taken), do: Muro.Synth.Names.fresh(base, taken)
 
-  defp entry_names(%{kind: :data, name: name, ctors: ctors}),
-    do: [name | Enum.map(ctors, & &1.name)]
-
-  defp entry_names(%{kind: :import}), do: []
-  defp entry_names(%{name: name}), do: [name]
-  defp entry_names(_entry), do: []
-
-  defp fresh(base, taken) do
-    if occupied?(base, taken) do
-      n = Enum.find(2..10_000, &(not occupied?("#{base}-#{&1}", taken)))
-      "#{base}-#{n}"
-    else
-      base
-    end
-  end
-
-  defp occupied?(name, taken) do
-    MapSet.member?(taken, name) or
-      MapSet.member?(taken, {:elixir, Muro.Emit.elixir_base(name)})
-  end
-
-  defp take(taken, name) do
-    taken
-    |> MapSet.put(name)
-    |> MapSet.put({:elixir, Muro.Emit.elixir_base(name)})
-  end
+  defp take(taken, name), do: Muro.Synth.Names.take(taken, name)
 end

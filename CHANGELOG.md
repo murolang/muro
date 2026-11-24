@@ -1,10 +1,10 @@
 # Changelog
 
-## 0.22.28
+## 0.22.29
 
 Agda `Check.whnf` shares a reusable beta argument the same way Elixir `whnf_app` does (Option 1 of #283).
 
-When the remaining fuel is greater than 1, the binder is reusable (`reuse`), and the body mentions that binder at least twice on one path, the argument is reduced once, one fuel below the body, and that value is substituted. Affine and erased binders, and a beta whose remaining fuel is 1, stay call-by-name. Motives of `mData`, `mNat`, `mEmp`, and `mUnit` are not counted; a rewrite motive is; arms take the maximum, not the sum.
+When the remaining fuel is greater than 1, the binder is reusable (`reuse`), and the body mentions that binder at least twice on one path, the argument is reduced once, one fuel below the body, and that value is substituted. Affine and erased binders, and a beta whose remaining fuel is 1, stay call-by-name. Motives of `mData`, `mNat`, `mEmp`, and `mUnit` are not counted; a rewrite motive is; arms take the maximum, not the sum. A mention in the scrutinee and a mention in an arm sit on one path, so those counts are added and capped at two, matching Elixir `cap`.
 
 The weak-head relation `⟶` stays call-by-name. A sharing result is still a `⇛*` reduct (`⇛*-inst`) and is convertible (`≈`). `whnf-sound` now concludes `t ≈ u` (and `Frag u`) rather than `t ⟶* u`. `whnf-agree` says a call-by-name `⟶*` reduct and a sharing `whnf` result convert when both exist. The well-founded fuel recursion and the `abstract` wrappers on `whnf-sound` and `whnf-red` keep `Conv` and `Views` from unfolding that recursion into `Soundness`.
 
@@ -13,6 +13,16 @@ The weak-head relation `⟶` stays call-by-name. A sharing result is still a `�
 ### Manual
 
 - Extending: reusable beta sharing in `Check.whnf`, `whnf-sound` in `≈`, and `whnf-agree`.
+
+### Package
+
+- Version 0.22.29.
+
+## 0.22.28
+
+Generated synthesis books no longer use fixed binders that can shadow an environment name.
+
+`eval-feature` and the compiled `PredProg` evaluator used to bind their Carrier argument as `c`, and certificate and helper code used `x`, `y`, `z`, `s`, `i`, `u`, and the other short names a user's action, state, feature, or constructor might already have. An environment with an action named `c` then rendered terms such as `step c c`, and the book failed to check. The synthesizer now builds a reserved set from the loaded environment and freshened identifiers (`c-2`, `c-3`, ...) that cannot collide with a reserved name or with one that only shares a prefix. Nested and dynamic binders (`k0`, `rk0`, `e0`, `act`, `car`, and the rest) use that same reserved set, including during `Book.render`'s bind step (so Reach, exhaust, and cover_match see environment names before they allocate), and the list-equality names `i` and `u` are preferred spellings in the standard table. The stock evaluator is used only when every preferred spelling is still free. `Book.alloc` freshens against the union of the local set and the process reserved set, so a Feature named `rk0` cannot reuse the Reach binder `rk0-2`. Fixtures whose actions or constructors include `c`, `i`, `u`, `k0`, and `rk0` still synthesize a certified `PredProg` whose generated book checks.
 
 ### Package
 
