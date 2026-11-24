@@ -112,6 +112,12 @@ muro__nat *n = two();
 arena_at = 0;
 ```
 
+## Shared calls
+
+C, Rust, and Zig print a run after one pass over its image, `Muro.IR.Share`. Every run is pure and total, so two calls of one run on the same arguments, in the same scope, have one value. A call that every path through a term evaluates, and that appears there more than once, is bound once at the top of that term, and each occurrence reads that binding. A call that only some paths evaluate stays where it was, so no path does work the checked term does not. An arm, and the body of a binder, are shared the same way inside their own scope. Before that, a call of a run that folds, or calls one that does, may be inlined under fresh names: when its body is at most 1500 nodes, it has no fold of its own, some argument is not closed, and its expansion holds a call, in the caller's own names, that the caller evaluates more than once once everything is inlined. A call whose callee only shares inside itself stays a call, so a per-octet fold step keeps calling its run. That is how `framedEnd s` and `bodyShort s`, which each call `scan s`, scan once in a run that asks both. A run in which nothing is shared keeps its elaborated body, so inlining alone changes nothing that is printed. Every run is still emitted, with the same name, parameters, and result. Only `call` is shared: a word operation, a constructor, and a byte literal are not. `Muro.IR.elaborate/2` is unchanged and still mirrors `agda/Muro/IR.agda`. Elixir, OTP, JavaScript, and Cortex-M do not take this pass.
+
+A C fold stops early when its step leaves the accumulator alone from some state on. When the step is, or calls a run that is, `match acc | c fields => match g | k => acc | ...` and `g` reads only those fields, the loop tests `g` before each octet and leaves when it takes `k`. Every later step would return that same accumulator, so the result is the same. A step of any other shape walks every octet, as before.
+
 ## A Nat run is a NIF
 
 An exported run whose live arguments and result are `Nat` is a NIF entry. When the working directory is the loaded Mix project, `--backend c` writes `<stem>_nif.h`, `<stem>_nif.c`, `<stem>.mk`, and `<stem>.ex` beside the C, and `elixir_make` runs that makefile. The library is `priv/<stem>.so`. The module is the camelized stem (`half_ok.muro` is `HalfOk`). `HalfOk.half(4)` is the integer `2`, and `HalfOk.plus(2, 3)` is `5`. Outside that directory, and in the self-contained executable, the same command writes the `.h` and the `.c` only.

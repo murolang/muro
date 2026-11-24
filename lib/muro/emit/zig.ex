@@ -95,7 +95,7 @@ defmodule Muro.Emit.Zig do
       {:ok, funs} ->
         with :ok <- Emit.refuse_may_fail(book),
              :ok <- Emit.refuse_unboxed_opt(book, funs) do
-          compile(book, funs, stem)
+          compile(book, Muro.IR.Share.funs(funs), stem)
         end
 
       {:error, reason} ->
