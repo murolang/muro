@@ -40,9 +40,13 @@ defmodule Muro.Family do
 
   @doc """
   The success line `family <name>: <meeting> per key of <kind>`.
+
+  A family marked `may redeliver` appends that mark. The mark widens
+  the graph. It is not a contract a formula depends on.
   """
-  def line(%{name: name, meeting: meeting, key: key}) do
-    "family #{name}: #{meeting} per key of #{key}"
+  def line(%{name: name, meeting: meeting, key: key} = family) do
+    mark = if Map.get(family, :redeliver, false), do: " may redeliver", else: ""
+    "family #{name}: #{meeting} per key of #{key}#{mark}"
   end
 
   @doc """
@@ -133,6 +137,7 @@ defmodule Muro.Family do
         case Muro.Check.check_def(book, meet, fuel) do
           :ok -> :ok
           {:note, _} -> :ok
+          {:notes, _} -> :ok
           {:graph, _, _, _} -> :ok
           {:choreo, _} -> :ok
           {:error, _} -> :unchecked
@@ -308,6 +313,7 @@ defmodule Muro.Family do
               :meet,
               :temporal,
               :family,
+              :contract,
               :talk,
               :choreography,
               :repr,

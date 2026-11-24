@@ -338,6 +338,12 @@ defmodule Muro.Parser do
           err -> err
         end
 
+      contract_start?(s) ->
+        case parse_contract(s) do
+          {:ok, d, rest} -> noted(s, d, rest, acc)
+          err -> err
+        end
+
       talk_start?(s) ->
         case parse_talk(s) do
           {:ok, d, rest} -> noted(s, d, rest, acc)
@@ -373,6 +379,9 @@ defmodule Muro.Parser do
           {:ok, d, rest} -> noted(s, d, rest, acc)
           err -> err
         end
+
+      may_redeliver_mark?(s) ->
+        {:error, err(s, redeliver_only())}
 
       may_fail_mark?(s) ->
         {:error, err(s, may_fail_only())}
@@ -1130,6 +1139,9 @@ defmodule Muro.Parser do
   # `family name :` is an entry. `def family` and `family : Box` are not.
   defp family_start?(s), do: family_entry?(s)
 
+  # `contract name :` is an entry. `def contract` and `contract : Box` are not.
+  defp contract_start?(s), do: contract_entry?(s)
+
   # meet wire : pong with peer
   # meet wire : server with task may fail buffer 1
   # `meet` and `with` are keywords only in this form. `may fail` is a
@@ -1170,10 +1182,15 @@ defmodule Muro.Parser do
     if word_kw?(s, "may") do
       rest = s |> after_kw("may") |> skip()
 
-      if word_kw?(rest, "fail") do
-        {:ok, true, after_kw(rest, "fail")}
-      else
-        {:error, err(s, may_fail_only())}
+      cond do
+        word_kw?(rest, "fail") ->
+          {:ok, true, after_kw(rest, "fail")}
+
+        word_kw?(rest, "redeliver") ->
+          {:error, err(s, redeliver_only())}
+
+        true ->
+          {:error, err(s, may_fail_only())}
       end
     else
       {:ok, false, s}
@@ -1187,11 +1204,23 @@ defmodule Muro.Parser do
 
   defp may_fail_only, do: "may fail is only a mark on a party of a meet"
 
+  defp may_redeliver_mark?(s) do
+    s = skip(s)
+    word_kw?(s, "may") and word_kw?(skip(after_kw(s, "may")), "redeliver")
+  end
+
+  defp redeliver_only, do: "may redeliver is only a mark on a family"
+
   defp refuse_stray_may_fail(s) do
-    if may_fail_mark?(s) do
-      {:error, err(skip(s), may_fail_only())}
-    else
-      {:ok, s}
+    cond do
+      may_redeliver_mark?(s) ->
+        {:error, err(skip(s), redeliver_only())}
+
+      may_fail_mark?(s) ->
+        {:error, err(skip(s), may_fail_only())}
+
+      true ->
+        {:ok, s}
     end
   end
 
@@ -1222,7 +1251,8 @@ defmodule Muro.Parser do
          {:ok, rest} <- tok(skip(rest), ":"),
          {:ok, meeting, rest} <- ident(skip(rest)),
          {:ok, rest} <- tok(skip(rest), ":="),
-         {:ok, formula, rest} <- parse_formula(skip(rest)) do
+         {:ok, formula, rest} <- parse_formula(skip(rest)),
+         {:ok, relies, rest} <- parse_relies(skip(rest)) do
       {:ok,
        %{
          kind: :temporal,
@@ -1230,6 +1260,7 @@ defmodule Muro.Parser do
          mode: :evidence,
          meeting: meeting,
          formula: formula,
+         relies: relies,
          loc: loc
        }, rest}
     end
@@ -1251,6 +1282,7 @@ defmodule Muro.Parser do
          {:ok, rest} <- kw(skip(rest), "key"),
          {:ok, rest} <- kw(skip(rest), "of"),
          {:ok, key, rest} <- ident(skip(rest)),
+         {:ok, redeliver, rest} <- parse_family_redeliver(skip(rest)),
          {:ok, rules, rest} <- parse_family_rules(skip(rest)) do
       {:ok,
        %{
@@ -1259,9 +1291,134 @@ defmodule Muro.Parser do
          mode: :spec,
          meeting: meeting,
          key: key,
+         redeliver: redeliver,
          rules: rules,
          loc: loc
        }, rest}
+    end
+  end
+
+  # `may redeliver` sits after the kind and before the rules. `may fail`
+  # stays the meeting mark. Any other `may` here is still this mark.
+  defp parse_family_redeliver(s) do
+    s = skip(s)
+
+    if word_kw?(s, "may") do
+      rest = s |> after_kw("may") |> skip()
+
+      cond do
+        word_kw?(rest, "redeliver") ->
+          rest = after_kw(rest, "redeliver")
+          skipped = skip(rest)
+
+          if word_kw?(skipped, "skip") do
+            {:error, err(skipped, "skip is a mark on a contract entry, not on may redeliver")}
+          else
+            {:ok, true, rest}
+          end
+
+        word_kw?(rest, "fail") ->
+          {:error, err(s, may_fail_only())}
+
+        true ->
+          {:error, err(s, redeliver_only())}
+      end
+    else
+      {:ok, false, s}
+    end
+  end
+
+  # contract slots : idempotent init
+  # contract slots : idempotent init skip
+  # `contract` is a keyword only as `contract name :`. The entry is one
+  # name from a closed list. `skip` is a keyword only after that entry.
+  defp parse_contract(s) do
+    loc = here(s)
+
+    with {:ok, rest} <- kw(s, "contract"),
+         {:ok, family, rest} <- ident(skip(rest)),
+         {:ok, rest} <- tok(skip(rest), ":"),
+         {:ok, entry, rest} <- parse_closed_entry(skip(rest)),
+         {:ok, skip?, rest} <- parse_contract_skip(skip(rest)) do
+      {:ok, %{kind: :contract, family: family, entry: entry, skip: skip?, loc: loc}, rest}
+    end
+  end
+
+  defp parse_contract_skip(s) do
+    if word_kw?(s, "skip") do
+      {:ok, true, after_kw(s, "skip")}
+    else
+      {:ok, false, s}
+    end
+  end
+
+  # relies idempotent init
+  # Only after a formula. `skip` stays on the contract entry.
+  defp parse_relies(s) do
+    s = skip(s)
+
+    if word_kw?(s, "relies") do
+      rest = s |> after_kw("relies") |> skip()
+
+      cond do
+        may_redeliver_mark?(rest) ->
+          {:error, err(rest, "may redeliver is a mark, not a contract a formula relies on")}
+
+        true ->
+          with {:ok, entry, rest} <- parse_closed_entry(rest) do
+            rest = skip(rest)
+
+            if word_kw?(rest, "skip") do
+              {:error, err(rest, "skip is a mark on a contract entry")}
+            else
+              {:ok, entry, rest}
+            end
+          end
+      end
+    else
+      {:ok, nil, s}
+    end
+  end
+
+  # The closed list. Implemented entries return. Reserved names are
+  # refused here, so a later version can accept the same words.
+  defp parse_closed_entry(s) do
+    s = skip(s)
+
+    cond do
+      may_redeliver_mark?(s) ->
+        {:error, err(s, "may redeliver is a mark on a family, not a contract entry")}
+
+      may_fail_mark?(s) ->
+        {:error, err(s, may_fail_only())}
+
+      word_kw?(s, "idempotent") ->
+        rest = s |> after_kw("idempotent") |> skip()
+
+        case ident(rest) do
+          {:ok, "init", rest} -> {:ok, :idempotent_init, rest}
+          _ -> {:error, err(rest, "expected init")}
+        end
+
+      word_kw?(s, "in") ->
+        rest = s |> after_kw("in") |> skip()
+
+        case ident(rest) do
+          {:ok, "order", _} -> {:error, err(s, "in order is not in this version")}
+          _ -> {:error, err(s, "unknown contract entry in")}
+        end
+
+      word_kw?(s, "dense") ->
+        {:error, err(s, "dense is not in this version")}
+
+      word_kw?(s, "dedupe") ->
+        {:error, err(s, "dedupe is not in this version")}
+
+      true ->
+        case ident(s) do
+          {:ok, word, _} -> {:error, err(s, "unknown contract entry #{word}")}
+          _ -> {:error, err(s, "expected a contract entry")}
+        end
     end
   end
 
@@ -1283,7 +1440,22 @@ defmodule Muro.Parser do
   defp family_rule_stop?(s), do: choreo_boundary?(s)
 
   defp parse_family_rule(s) do
-    case ident(skip(s)) do
+    s = skip(s)
+
+    cond do
+      may_redeliver_mark?(s) ->
+        {:error, err(s, redeliver_only())}
+
+      may_fail_mark?(s) ->
+        {:error, err(s, may_fail_only())}
+
+      true ->
+        parse_family_rule_ctor(s)
+    end
+  end
+
+  defp parse_family_rule_ctor(s) do
+    case ident(s) do
       {:ok, ctor, rest} ->
         rest = skip(rest)
 
@@ -2152,8 +2324,8 @@ defmodule Muro.Parser do
       word_kw?(s, "import") or word_kw?(s, "session") or word_kw?(s, "conform") or
       nu_start?(s) or place_entry?(s) or scheme_entry?(s) or move_entry?(s) or
       endpoint_entry?(s) or read_entry?(s) or meet_entry?(s) or temporal_entry?(s) or
-      family_entry?(s) or talk_start?(s) or choreography_start?(s) or seat_start?(s) or
-      link_start?(s) or repr_start?(s)
+      family_entry?(s) or contract_entry?(s) or talk_start?(s) or choreography_start?(s) or
+      seat_start?(s) or link_start?(s) or repr_start?(s)
   end
 
   defp parse_talk(s) do
@@ -2208,6 +2380,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_redeliver_mark?(s) ->
+        {:error, err(s, redeliver_only())}
+
       may_fail_mark?(s) ->
         {:error, err(s, may_fail_only())}
 
@@ -2379,14 +2554,18 @@ defmodule Muro.Parser do
     unboxed_data?(s) or Enum.any?(Words.book_words(), &word_kw?(s, &1)) or nu_start?(s) or
       place_entry?(s) or
       scheme_entry?(s) or move_entry?(s) or endpoint_entry?(s) or read_entry?(s) or
-      meet_entry?(s) or temporal_entry?(s) or family_entry?(s) or talk_start?(s) or
-      choreography_start?(s) or seat_start?(s) or link_start?(s) or repr_start?(s)
+      meet_entry?(s) or temporal_entry?(s) or family_entry?(s) or contract_entry?(s) or
+      talk_start?(s) or choreography_start?(s) or seat_start?(s) or link_start?(s) or
+      repr_start?(s)
   end
 
   defp parse_talk_term(s) do
     s = skip(s)
 
     cond do
+      may_redeliver_mark?(s) ->
+        {:error, err(s, redeliver_only())}
+
       may_fail_mark?(s) ->
         {:error, err(s, may_fail_only())}
 
@@ -2539,6 +2718,9 @@ defmodule Muro.Parser do
   # A family is `family name :`. A constructor `family : Box` is not one.
   defp family_entry?(s), do: colon_entry?(s, "family")
 
+  # A contract is `contract name :`. A constructor `contract : Box` is not one.
+  defp contract_entry?(s), do: colon_entry?(s, "contract")
+
   # A meeting is `meet name :`. A constructor `meet : Box` is not one.
   defp meet_entry?(s) do
     if word_kw?(s, "meet") do
@@ -2561,6 +2743,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_redeliver_mark?(s) ->
+        {:error, err(s, redeliver_only())}
+
       may_fail_mark?(s) ->
         {:error, err(s, may_fail_only())}
 
@@ -3117,6 +3302,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_redeliver_mark?(s) ->
+        {:error, err(s, redeliver_only())}
+
       may_fail_mark?(s) ->
         {:error, err(s, may_fail_only())}
 
@@ -4393,6 +4581,9 @@ defmodule Muro.Parser do
     s = skip(s)
 
     cond do
+      may_redeliver_mark?(s) ->
+        {:error, err(s, redeliver_only())}
+
       may_fail_mark?(s) ->
         {:error, err(s, may_fail_only())}
 

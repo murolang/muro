@@ -201,7 +201,37 @@ A session that is not at an end this call can reach is `{:error, …}`. The call
 
 This child is generated code. The hold rule `held while earlier unresolved` is proved in `agda/Muro/Family.agda` for any number of keys. `Muro.Family.Step` is that step, and the tests drive the generated `Events` and `Commands` modules against it, including `check_trace`. The family graph remains an Elixir check of the fixed script: the tests on `examples/keyed-slots.muro` replay one trace, refuse an unknown id, and check that every accepted sequence of `arrive` and `resolved` over that script is a run of the family graph. A sequence on some other key is outside that script. That search checks the generated dispatcher. It is not the proof. The program that writes this child is not proved. The counts stay 171649 reachable states, 729184 transitions. The departed guard and the floor only refuse arrivals, so each removes runs and never adds one, which is why `no-overtake` and the hold rules still hold and these counts do not change. Withdrawing a held instance is a host step and is not one of those runs, so a held signal is still opened by the script. `skip`, `drop_key`, and `skip_below` are host steps in the same way. `held while any unresolved`, `earlier_resolved`, and `withdraw` are the same proof, for any number of keys. The counts are not that proof. The generator, the meeting steps, one retry then give-up, `fail stop`, and `resolved k init` stay outside it.
 
-A family that does not check is not emitted. A book with no family emits the same module as before. OTP, Elixir, C, Rust, Zig, JavaScript, assembly, `--node`, and ExUnit still omit the family. A meeting marked `may fail` is still refused by those backends with `c:mayfail`. The state machine accepts that meeting, as it did before, and emits this child beside the session children.
+A family that does not check is not emitted. A book with no family emits the same module as before. OTP, Elixir, C, Rust, Zig, JavaScript, assembly, `--node`, and ExUnit still omit the family. A meeting marked `may fail` is still refused by those backends with `c:mayfail`. The state machine accepts that meeting, as it did before, and emits this child beside the session children. A contract and the mark `may redeliver` are below. A book that declares neither emits this child as it did before.
+
+## An external contract
+
+A book states an external contract from a closed list. The form is `contract <family> : <entry>`. `skip` may follow the entry. The declaration has no mode and no body. It is not an axiom, not a `param`, not the family, and not the meeting mark `may fail`. A `run` that reaches an axiom is still refused, and it is still not emitted. That refusal is [The wall](wall.md#axioms).
+
+`may redeliver` is a mark on the family, after the kind and before the rules.
+
+```
+family slots : wire per key of Event may redeliver
+  init never held
+```
+
+The mark widens the family graph. Every reachable state gains one step that delivers a message again and stays in that state. The tag on a refusal is `a message is redelivered`. The state does not change, and the step does not open a second live row. The number of states is unchanged. The number of transitions grows by one per state, including the start and a state in which the family has finished. `always` sees those same states. `eventually` and `leads_to` hold only when they still hold if that step is taken forever. Nothing is trusted, and the step is not a fairness premise. The checker does not print the mark as `depends on`. The generated dispatcher is unchanged. `examples/keyed-slots.muro` does not carry the mark, and it stays 171649 reachable states and 729184 transitions. `examples/keyed-commands.muro` stays 370 reachable states and 835 transitions. `agda/Muro/Family.agda` is unchanged.
+
+`contract slots : idempotent init` states that a repeat of `init` which opens is harmless. The dispatcher still checks. That repeat is `{:error, {:contract, :idempotent_init, key, index}}`. `check_trace` reports that reason as `{:error, {index, reason}}`, and `index` there is the step. The case is an `init` arriving while an `init` of that index is live, and an `init` arriving at an index the departed record or the floor already covers. The departed record does not store the constructor, so an `init` at a covered index is this case whatever kind left. A live row of another kind, and an arrival of another kind, stay `{:error, {:duplicate, key, index}}` or `{:error, {:departed, key, index}}`. A first `init` opens as it does today. One index is never two live rows.
+
+`contract slots : idempotent init skip` does not catch that repeat. An `init` the departed record or the floor would have refused opens a new row. A live row of the same index stays `{:error, {:duplicate, key, index}}`. A signal at a departed index, and a signal at or below the floor, stay `{:error, {:departed, key, index}}`. The accepted repeat is a new opening. A later `resolved` of that row succeeds, and a further `init` after that row has left opens another row. That opening is a run-time step. The family graph the checker explores does not add it, and `relies` only gates the declaration and the depends line. [Limits](limits.md#a-keyed-family) states that bound. Dedupe would have dropped the repeat from the trace. `skip/3` and `skip_below/2` are unchanged.
+
+A book with no contract emits the dispatcher above: the same `fresh`, the same duplicate, and the same departed refusal.
+
+A temporal formula over the family may say `relies idempotent init`.
+
+```
+temporal plain : slots := always true
+temporal waived : slots := always true relies idempotent init
+```
+
+When `waived` holds, the checker prints its count and then `waived: depends on contract idempotent init`. `plain` does not. A formula cannot rely on a contract the family did not declare. A formula over a meeting cannot rely on a contract. `may redeliver` is a mark, and a formula does not rely on it. `skip` is a mark on the contract entry.
+
+`in order`, `dense`, and `dedupe` parse as names of this list and are refused: they are not in this version. An unknown entry is refused. The words are keywords only in the forms on this page. `init` stays an identifier. The grammar is [Grammar](grammar.md).
 
 ## What emit refuses
 

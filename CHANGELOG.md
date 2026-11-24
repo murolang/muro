@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.22.24
+
+A keyed family can say that a message may be delivered again, and a book can state that opening the same `init` twice is harmless.
+
+`may redeliver` follows the kind, before the rules: `family slots : slot per key of Event may redeliver`. The family graph gains one step on every reachable state. That step delivers a message again and stays in the state. The number of states is unchanged. The number of transitions grows by one per state. `always` is the same states. `eventually` and `leads_to` hold only when they still hold if that step is taken forever. The checker prints the mark on the family line. It does not print the mark as `depends on`. The generated dispatcher is unchanged. `examples/keyed-slots.muro` stays 171649 reachable states and 729184 transitions. `examples/keyed-commands.muro` stays 370 reachable states and 835 transitions. `agda/Muro/Family.agda` is unchanged.
+
+`contract slots : idempotent init` states that a repeat of `init` which opens is harmless. The dispatcher still checks, and that repeat is `{:error, {:contract, :idempotent_init, key, index}}`. `check_trace` reports the same reason. `contract slots : idempotent init skip` does not catch it: an `init` the departed record or the floor would have refused opens a new row. A live row of the same index stays `{:error, {:duplicate, key, index}}`, so one index is never two live rows. A signal is unchanged. The accepted repeat is a new opening. A book with no contract emits the same dispatcher as 0.22.22.
+
+A temporal formula over that family may say `relies idempotent init`. When the formula holds, the checker prints its count and then `<name>: depends on contract idempotent init`. A formula that does not say `relies` does not. A formula cannot rely on a contract the family did not declare, and it cannot rely on `may redeliver`. A second `contract` of the same family and entry is refused, including when one comes from an import and when one is `skip` and the other is not. `in order`, `dense`, and `dedupe` are refused: they are not in this version. A contract is not an axiom. A run that reaches an axiom is still refused.
+
+### Manual
+
+- Grammar, State machines, Sessions, Temporal, Limits, and The wall: the mark, the contract, and the line a formula prints when it relies on `idempotent init`.
+
+### Package
+
+- Version 0.22.24.
+
 ## 0.22.23
 
 A definition's descent block is the strongly connected component of the call graph, computed once for the book. The block is the same set as before: a definition is in it when each can reach the other. The old walk re-explored every path, so a run whose body only calls a wide chain of other runs spent seconds deciding that its block is itself. Affine and linear arguments stay call-by-name.

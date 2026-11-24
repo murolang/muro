@@ -3112,6 +3112,7 @@ defmodule Muro.Emit.Fsm do
     book
     |> Enum.filter(&(Map.get(&1, :kind) == :family))
     |> Enum.filter(&family_ready?(book, &1))
+    |> Enum.map(&Map.put(&1, :waiver, Muro.Contract.waiver_of(book, &1.name)))
   end
 
   defp family_ready?(book, family) do
@@ -3473,7 +3474,7 @@ defmodule Muro.Emit.Fsm do
     rules = Enum.map_join(family.rules, "\n", &rule_clause/1)
     clauses = party_clauses(parties)
 
-    """
+    src = """
     defmodule #{camel} do
       @moduledoc \"\"\"
       Dispatcher for family `#{family.name}`. The state is opaque: thread it
@@ -4128,6 +4129,145 @@ defmodule Muro.Emit.Fsm do
       #{clauses}
     end
     """
+
+    apply_waiver(src, waiver_mode(family))
+  end
+
+  # The heredoc above is the 0.22.22 dispatcher. `:none` returns that
+  # text unchanged, so a family with no contract, or with only
+  # `may redeliver`, emits the same child as 0.22.22. A waiver splices
+  # three exact 0.22.22 phrases for a generated `fresh` and, when
+  # `skip`, the departed `:already` clause. `skip` opts out of catching
+  # an `init` the floor or the departed record would have refused. A
+  # live row of that index stays a duplicate, so one index is never two
+  # live rows.
+  defp waiver_mode(%{waiver: %{skip: true}}), do: :skip
+  defp waiver_mode(%{waiver: %{skip: false}}), do: :assert
+  defp waiver_mode(_family), do: :none
+
+  defp apply_waiver(src, :none), do: src
+
+  defp apply_waiver(src, mode) do
+    src
+    |> replace_once(fresh_call(:none), fresh_call(mode))
+    |> replace_once(fresh_block(:none), fresh_block(mode))
+    |> replace_once(already_clause(:none), already_clause(mode))
+  end
+
+  defp replace_once(src, old, new) do
+    case String.split(src, old, parts: 3) do
+      [pre, post] -> pre <> new <> post
+      _ -> raise "dispatcher is missing a unique #{inspect(old)}"
+    end
+  end
+
+  defp fresh_call(:none), do: ":ok <- fresh(rows, key, index, st),"
+  defp fresh_call(_mode), do: ":ok <- fresh(rows, key, index, st, kind),"
+
+  defp already_clause(:skip), do: ":already -> {:ok, st.departed}"
+  defp already_clause(_mode), do: ":already -> {:error, {:state, st}}"
+
+  # Post-dedent text of the 0.22.22 `fresh/4`, and the waiver variants.
+  # Joined lines, not a heredoc: a heredoc here would be scanned as a
+  # host helper.
+  defp fresh_block(:none) do
+    Enum.join(
+      [
+        "  defp fresh(rows, key, index, st) do",
+        "    case Map.fetch(rows, index) do",
+        "      {:ok, {id, kind, phase}}",
+        "      when is_integer(id) and id >= 0 and is_atom(kind) and phase in [:open, :held] ->",
+        "        {:error, {:duplicate, key, index}}",
+        "",
+        "      {:ok, _} ->",
+        "        {:error, {:state, st}}",
+        "",
+        "      :error ->",
+        "        case record(st, key) do",
+        "          {:error, reason} ->",
+        "            {:error, reason}",
+        "",
+        "          {:ok, {prefix, gaps}} ->",
+        "            if index <= st.floor or index <= prefix or Map.has_key?(gaps, index) do",
+        "              {:error, {:departed, key, index}}",
+        "            else",
+        "              :ok",
+        "            end",
+        "        end",
+        "    end",
+        "  end",
+        ""
+      ],
+      "\n"
+    )
+  end
+
+  defp fresh_block(mode) do
+    live =
+      if mode == :skip do
+        ["        {:error, {:duplicate, key, index}}"]
+      else
+        [
+          "        if kind == :init and live == :init do",
+          "          {:error, {:contract, :idempotent_init, key, index}}",
+          "        else",
+          "          {:error, {:duplicate, key, index}}",
+          "        end"
+        ]
+      end
+
+    departed =
+      if mode == :skip do
+        [
+          "            if kind == :init do",
+          "              :ok",
+          "            else",
+          "              {:error, {:departed, key, index}}",
+          "            end"
+        ]
+      else
+        [
+          "            if kind == :init do",
+          "              {:error, {:contract, :idempotent_init, key, index}}",
+          "            else",
+          "              {:error, {:departed, key, index}}",
+          "            end"
+        ]
+      end
+
+    Enum.join(
+      [
+        "  defp fresh(rows, key, index, st, kind) do",
+        "    case Map.fetch(rows, index) do",
+        "      {:ok, {id, live, phase}}",
+        "      when is_integer(id) and id >= 0 and is_atom(live) and phase in [:open, :held] ->"
+      ] ++
+        live ++
+        [
+          "",
+          "      {:ok, _} ->",
+          "        {:error, {:state, st}}",
+          "",
+          "      :error ->",
+          "        case record(st, key) do",
+          "          {:error, reason} ->",
+          "            {:error, reason}",
+          "",
+          "          {:ok, {prefix, gaps}} ->",
+          "            if index <= st.floor or index <= prefix or Map.has_key?(gaps, index) do"
+        ] ++
+        departed ++
+        [
+          "            else",
+          "              :ok",
+          "            end",
+          "        end",
+          "    end",
+          "  end",
+          ""
+        ],
+      "\n"
+    )
   end
 
   # `hold_of` only passes a hold this family's `rule` returns. A clause for

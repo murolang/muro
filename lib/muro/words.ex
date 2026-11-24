@@ -39,7 +39,12 @@ defmodule Muro.Words do
 
   @types ~w(Atom String Bytes Slice Type Nat I64 U8 U32 U64 WBool Opt F32 Tensor Unit Empty Stream Always Bit Vec run spec evidence internal)
   @nu ["ν", "nu"]
-  @extra_decl ["temporal", "repr", "family"]
+  # Keywords of `contract name :`, of `relies` after a temporal formula,
+  # and of the family mark `may redeliver`. The parser reserves them only
+  # in those forms. `init` stays an identifier: it is a common constructor.
+  @contract ~w(idempotent redeliver relies skip dense dedupe)
+
+  @extra_decl ["temporal", "repr", "family", "contract"]
 
   @term ~w(matchEmpty rewrite unfold motive let in uncons packI toI64 toU8 toU32 toU64 toNat asU8 asU32 asU64 asI64 bisim addi subi muli addc subc mulc divi remi eqi lti lei andi ori xori noti shli shri addt head tail refl fst snd suc tt b0 b1 wsome wtrue wfalse wnone wlink rep dual seen strCat strLen strEq bytesLen sliceLen bytesEq sliceEq bytesCat bytesGet sliceGet slice sliceUncons bytesFold sliceFold strBytes sliceUntil sliceAfter)
 
@@ -77,7 +82,7 @@ defmodule Muro.Words do
     "<"
   ]
 
-  @naming ~w(def data session conform prefix meet place scheme talk choreography param axiom endpoint seat link temporal repr family) ++
+  @naming ~w(def data session conform prefix meet place scheme talk choreography param axiom endpoint seat link temporal repr family contract) ++
             @nu
 
   @keywords @pay_stop ++
@@ -88,6 +93,7 @@ defmodule Muro.Words do
               @may_fail ++
               @temporal ++
               @family ++
+              @contract ++
               @repr ++
               @prefix_move ++
               @term
@@ -151,6 +157,7 @@ defmodule Muro.Words do
   def may_fail_words, do: @may_fail
   def temporal_words, do: @temporal
   def family_words, do: @family
+  def contract_words, do: @contract
   def repr_words, do: @repr
 
   def nu_words, do: @nu
