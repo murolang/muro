@@ -945,12 +945,18 @@ defmodule Muro.Synth.Book do
   @doc false
   def reserve(base, taken), do: alloc(base, taken)
 
+  # Freshen against the union of the caller's set and the process
+  # reserved set installed by `with_binders/3`. Reach and Term may
+  # have already reserved binders such as `rk0-2` in the process
+  # dictionary without returning them in `taken`; allocating only
+  # against the local set would mint the same spelling again.
   defp alloc(base, taken) do
+    taken = Names.merge_taken(taken)
     {name, taken} = Names.alloc(base, taken)
 
     case Process.get(:muro_synth_taken) do
-      %MapSet{} = current ->
-        Process.put(:muro_synth_taken, Names.take(current, name))
+      %MapSet{} ->
+        Process.put(:muro_synth_taken, taken)
 
       _ ->
         :ok

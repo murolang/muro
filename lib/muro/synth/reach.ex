@@ -53,17 +53,23 @@ defmodule Muro.Synth.Reach do
 
     # A class proof on a large cover inducts on the recurrence. The
     # per-state table is not part of that certificate.
-    if Process.get(:muro_synth_class_recur) != true and tabulate?(host, states, actions) do
-      case prepare(host, states) do
-        :recur ->
-          {recursive(best, one, any, pos, actions, binders), taken}
+    {text, taken} =
+      if Process.get(:muro_synth_class_recur) != true and tabulate?(host, states, actions) do
+        case prepare(host, states) do
+          :recur ->
+            {recursive(best, one, any, pos, actions, binders), taken}
 
-        {:ok, bits} ->
-          tabulated(host, states, bits, best, one, any, pos, actions, taken, rec, binders)
+          {:ok, bits} ->
+            tabulated(host, states, bits, best, one, any, pos, actions, taken, rec, binders)
+        end
+      else
+        {recursive(best, one, any, pos, actions, binders), taken}
       end
-    else
-      {recursive(best, one, any, pos, actions, binders), taken}
-    end
+
+    # Nest and cover binders are reserved with `Names.current/1`, which
+    # updates the process set. Merge that set back so a later `Book.alloc`
+    # cannot reuse `rk0-2` as a Feature constructor.
+    {text, Names.merge_taken(taken)}
   end
 
   defp tabulated(host, states, bits, best, one, any, pos, actions, taken, rec, binders) do

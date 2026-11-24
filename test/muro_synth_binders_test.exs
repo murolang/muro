@@ -9,6 +9,9 @@ defmodule Muro.SynthBindersTest do
   @list "test/fixtures/synth_fresh_list.muro"
   @quant "test/fixtures/synth_fresh_quant.muro"
   @reach_js "test/fixtures/synth_fresh_reach_js.muro"
+  @feat_rk0 "test/fixtures/synth_fresh_feat_rk0.muro"
+  @class "test/fixtures/synth_fresh_class.muro"
+  @class_actions ~w(c0 c1 c2 c3)
 
   test "actions named i and u still certify a PredProg book" do
     assert {:ok, result} = Muro.Synth.cegis_loop(@iu, depth: 0, max_depth: 0)
@@ -94,6 +97,54 @@ defmodule Muro.SynthBindersTest do
     assert Muro.check_file(path) == :ok
   end
 
+  test "Book.render keeps Feature rk0, k0, and f0_0 distinct from Reach binders" do
+    {dir, src, meta} =
+      render_reach(@feat_rk0, also_self_loop: true, also_hints: ["rk0", "k0", "f0_0"])
+
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    assert meta.kind == :certified
+    refute src =~ "find-policy"
+    assert src =~ "rk0-2"
+    assert src =~ "k0-2"
+    assert src =~ "f0_0-2"
+    assert_distinct_spelling(src, "rk0")
+    assert_distinct_spelling(src, "k0")
+    assert_distinct_spelling(src, "f0_0")
+
+    path = Path.join(dir, "feat-rk0.muro")
+    File.write!(path, src)
+    assert Muro.check_file(path) == :ok
+  end
+
+  @tag timeout: 180_000
+  test "ClassCert freshens reserved standard binders and the book checks" do
+    assert {:ok, host} = Muro.Synth.Host.open(@class)
+    assert {:ok, specs} = Synth.Feature.extend_reach(host)
+    host = Muro.Synth.Host.install_features(host, specs)
+    arms = class_arms()
+    dir = tmp()
+    on_exit(fn -> File.rm_rf(dir) end)
+
+    assert {:ok, src, meta} = Muro.Synth.Book.render(host, arms, dir, "coind-homo")
+    assert meta.kind == :certified
+    assert meta.class_proof == true
+    refute src =~ "find-policy"
+    refute src =~ "find-ranking"
+    refute src =~ "λ (c : Config)"
+    refute src =~ "Π (c : Config)"
+    refute src =~ "λ (s : State)"
+    refute src =~ "Π (s : State)"
+    assert src =~ "λ (c-2 : Config)" or src =~ "Π (c-2 : Config)"
+    assert src =~ "s-2"
+    assert src =~ "a-2"
+    assert src =~ "class-ongoing"
+
+    path = Path.join(dir, "class.muro")
+    File.write!(path, src)
+    assert Muro.check_file(path) == :ok
+  end
+
   test "quantified act and car binders miss reserved constructors and the book checks" do
     assert {:ok, host} = Muro.Synth.Host.open(@quant)
     families = Synth.Feature.families(host.feature_specs, host.actions)
@@ -169,6 +220,26 @@ defmodule Muro.SynthBindersTest do
         :same -> flunk("expected reaches-pos to extend on #{path}")
       end
 
+    host =
+      case Keyword.get(opts, :also_hints, []) do
+        [] ->
+          host
+
+        names ->
+          present = MapSet.new(host.feature_specs, & &1.name)
+
+          added =
+            names
+            |> Enum.reject(&MapSet.member?(present, &1))
+            |> Enum.map(&%{name: &1, kind: :hint, action: nil})
+
+          if added == [] do
+            host
+          else
+            Muro.Synth.Host.install_features(host, host.feature_specs ++ added)
+          end
+      end
+
     families = Synth.Feature.families(host.feature_specs, host.actions)
     reach = Enum.find(families, &(&1.stem == "reaches-pos"))
     assert reach, "expected a reaches-pos family on #{path}"
@@ -183,6 +254,12 @@ defmodule Muro.SynthBindersTest do
       else
         preds
       end
+
+    preds =
+      preds ++
+        Enum.map(Keyword.get(opts, :also_hints, []), fn name ->
+          {:feat, name}
+        end)
 
     arms =
       preds
@@ -223,7 +300,62 @@ defmodule Muro.SynthBindersTest do
     {dir, head}
   end
 
-  defp joined(result), do: Enum.join(result.lines, "\n")
+  defp assert_distinct_spelling(src, base) do
+    escaped = Regex.escape(base)
+
+    binders =
+      Regex.scan(~r/(?:suc |λ \(|spot )(#{escaped}-\d+)/, src)
+      |> Enum.map(&Enum.at(&1, 1))
+      |> Enum.uniq()
+
+    ctors =
+      Regex.scan(~r/^  (#{escaped}-\d+) : /m, src)
+      |> Enum.map(&Enum.at(&1, 1))
+      |> Enum.uniq()
+
+    assert binders != [], "expected freshened binder #{base}-N in reach or exhaust"
+    assert ctors != [], "expected freshened Feature constructor #{base}-N"
+
+    assert MapSet.disjoint?(MapSet.new(binders), MapSet.new(ctors)),
+           "#{base} binder #{inspect(binders)} collided with constructor #{inspect(ctors)}"
+  end
+
+  defp class_arms do
+    others = fn action ->
+      for other <- @class_actions, other != action, do: "reaches-pos-#{other}"
+    end
+
+    spec = fn action, pred ->
+      %{
+        name: "survivor-#{action}",
+        pred: pred,
+        action: action,
+        else: "c0",
+        observations: []
+      }
+    end
+
+    [
+      spec.(
+        "c0",
+        {:or, {:feat, "has-pos-reward-c0"}, {:not, {:other, "reaches-pos", "c0", others.("c0")}}}
+      ),
+      spec.(
+        "c1",
+        {:or, {:feat, "reaches-pos-c1"}, {:not, {:other, "reaches-pos", "c1", others.("c1")}}}
+      ),
+      spec.(
+        "c2",
+        {:or, {:feat, "reaches-pos-c2"}, {:not, {:other, "reaches-pos", "c2", others.("c2")}}}
+      ),
+      spec.(
+        "c3",
+        {:or, {:feat, "has-pos-reward-c0"}, {:not, {:other, "reaches-pos", "c3", others.("c3")}}}
+      )
+    ]
+  end
+
+  defp joined(result), do: Enum.join(result.lines, "\\n")
 
   defp write_book(dir, name, src) do
     path = Path.join(dir, name)

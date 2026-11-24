@@ -134,7 +134,14 @@ defmodule Muro.Synth.Names do
     end
   end
 
-  @doc "The binder for a preferred spelling in the current generated book."
+  @doc """
+  The binder for a preferred spelling in the current generated book.
+
+  Call this only inside `with_binders/3`. Outside that wrapper the
+  process reserved set is empty, so a name the environment already
+  uses is not avoided. `Book.render/4` installs the wrapper before
+  any binder is emitted.
+  """
   def current(base) when is_binary(base) do
     {name, _} = alloc_current(base)
     name
