@@ -5107,33 +5107,159 @@ defmodule Muro.Check do
 
   defp mentions(_, acc), do: acc
 
-  defp rec_callees(book, name, names) do
-    case Enum.find(book, &(&1[:name] == name and rec_mode?(&1[:mode]))) do
-      nil -> []
-      d -> mentions(Map.get(d, :body)) |> Enum.filter(&(&1 in names))
-    end
+  # The descent block is the strongly connected component of `name` in
+  # the call graph: j is in it when `name` reaches j and j reaches `name`.
+  # Kosaraju builds every component in one walk. A path-visited search
+  # re-explores every route through a dag, so a run that only calls a wide
+  # chain still spent seconds deciding that its block is itself.
+  @comp_key {__MODULE__, :components}
+
+  defp component(book, name) do
+    map =
+      case Process.get(@comp_key) do
+        {:for, ^book, map} ->
+          map
+
+        _ ->
+          map = scc_map(book)
+          Process.put(@comp_key, {:for, book, map})
+          map
+      end
+
+    Map.get(map, name, MapSet.new())
   end
 
-  defp reaches?(edges, src, tgt), do: walk(edges, src, tgt, MapSet.new())
+  defp scc_map(book) do
+    names = Enum.uniq(rec_names(book))
+    edges = call_edges(book, names)
 
-  defp walk(_edges, cur, tgt, _vis) when cur == tgt, do: true
+    Enum.reduce(kosaraju(names, edges), %{}, fn comp, acc ->
+      set = MapSet.new(comp)
+      Enum.reduce(comp, acc, &Map.put(&2, &1, set))
+    end)
+  end
 
-  defp walk(edges, cur, tgt, vis) do
+  @doc false
+  def descent_block(book, name) when is_list(book), do: component(book, name)
+
+  # The previous path-visited search, for tests. It is the same
+  # mutual-reachability set, and it is not used by the checker.
+  @doc false
+  def descent_block_by_paths(book, name) when is_list(book) do
+    names = Enum.uniq(rec_names(book))
+    edges = call_edges(book, names)
+
+    names
+    |> Enum.filter(fn j -> path_reaches?(edges, name, j) and path_reaches?(edges, j, name) end)
+    |> MapSet.new()
+  end
+
+  defp path_reaches?(edges, src, tgt), do: path_walk(edges, src, tgt, MapSet.new())
+
+  defp path_walk(_edges, cur, tgt, _vis) when cur == tgt, do: true
+
+  defp path_walk(edges, cur, tgt, vis) do
     if MapSet.member?(vis, cur) do
       false
     else
       vis = MapSet.put(vis, cur)
-      Enum.any?(Map.get(edges, cur, []), &walk(edges, &1, tgt, vis))
+      Enum.any?(Map.get(edges, cur, []), &path_walk(edges, &1, tgt, vis))
     end
   end
 
-  defp component(book, name) do
-    names = rec_names(book)
-    edges = Map.new(names, fn n -> {n, rec_callees(book, n, names)} end)
+  # The first rec-mode entry of a name, as `Enum.find` on the book.
+  # A later entry with the same name is not the callee body.
+  defp call_edges(book, names) do
+    set = MapSet.new(names)
 
-    names
-    |> Enum.filter(fn j -> reaches?(edges, name, j) and reaches?(edges, j, name) end)
-    |> MapSet.new()
+    first =
+      Enum.reduce(book, %{}, fn d, acc ->
+        name = d[:name]
+
+        if name != nil and rec_mode?(d[:mode]) and not Map.has_key?(acc, name) do
+          Map.put(acc, name, d)
+        else
+          acc
+        end
+      end)
+
+    Map.new(names, fn n ->
+      callees =
+        case Map.get(first, n) do
+          nil ->
+            []
+
+          d ->
+            d
+            |> Map.get(:body)
+            |> mentions()
+            |> Enum.filter(&MapSet.member?(set, &1))
+        end
+
+      {n, callees}
+    end)
+  end
+
+  # Decreasing finish time, then one transpose walk per component.
+  defp kosaraju(names, edges) do
+    rev = reverse_edges(names, edges)
+
+    {order, _vis} =
+      Enum.reduce(names, {[], MapSet.new()}, fn n, {ord, vis} ->
+        if MapSet.member?(vis, n), do: {ord, vis}, else: finish_from(n, edges, ord, vis)
+      end)
+
+    {_vis, comps} =
+      Enum.reduce(order, {MapSet.new(), []}, fn n, {vis, acc} ->
+        if MapSet.member?(vis, n) do
+          {vis, acc}
+        else
+          {comp, vis} = assign_from(n, rev, vis)
+          {vis, [comp | acc]}
+        end
+      end)
+
+    comps
+  end
+
+  defp reverse_edges(names, edges) do
+    empty = Map.new(names, &{&1, []})
+
+    Enum.reduce(edges, empty, fn {n, cs}, rev ->
+      Enum.reduce(cs, rev, fn c, rev -> Map.update!(rev, c, &[n | &1]) end)
+    end)
+  end
+
+  defp finish_from(start, edges, ord, vis) do
+    finish([{:enter, start}], edges, ord, vis)
+  end
+
+  defp finish([], _edges, ord, vis), do: {ord, vis}
+
+  defp finish([{:exit, n} | stack], edges, ord, vis),
+    do: finish(stack, edges, [n | ord], vis)
+
+  defp finish([{:enter, n} | stack], edges, ord, vis) do
+    if MapSet.member?(vis, n) do
+      finish(stack, edges, ord, vis)
+    else
+      vis = MapSet.put(vis, n)
+      kids = for m <- Map.get(edges, n, []), do: {:enter, m}
+      finish(kids ++ [{:exit, n} | stack], edges, ord, vis)
+    end
+  end
+
+  defp assign_from(start, rev, vis), do: assign([start], rev, vis, [])
+
+  defp assign([], _rev, vis, comp), do: {comp, vis}
+
+  defp assign([n | stack], rev, vis, comp) do
+    if MapSet.member?(vis, n) do
+      assign(stack, rev, vis, comp)
+    else
+      vis = MapSet.put(vis, n)
+      assign(Map.get(rev, n, []) ++ stack, rev, vis, [n | comp])
+    end
   end
 
   # The candidate assignments of the block: a non-erased position for each
@@ -5381,10 +5507,17 @@ defmodule Muro.Check do
 
       {temps, fams} = Enum.split_with(late, fn {d, _} -> match?(%{kind: :temporal}, d) end)
 
+      # One descent-block map for every definition. Each task checks one
+      # definition and would otherwise rebuild the call graph.
+      comps = scc_map(book)
+
       def_slots =
         defs
         |> Task.async_stream(
-          fn {d, i} -> {i, check_def(book, d, fuel)} end,
+          fn {d, i} ->
+            Process.put(@comp_key, {:for, book, comps})
+            {i, check_def(book, d, fuel)}
+          end,
           ordered: true,
           timeout: :infinity
         )
