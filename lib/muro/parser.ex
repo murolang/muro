@@ -1308,7 +1308,14 @@ defmodule Muro.Parser do
 
       cond do
         word_kw?(rest, "redeliver") ->
-          {:ok, true, after_kw(rest, "redeliver")}
+          rest = after_kw(rest, "redeliver")
+          skipped = skip(rest)
+
+          if word_kw?(skipped, "skip") do
+            {:error, err(skipped, "skip is a mark on a contract entry, not on may redeliver")}
+          else
+            {:ok, true, rest}
+          end
 
         word_kw?(rest, "fail") ->
           {:error, err(s, may_fail_only())}

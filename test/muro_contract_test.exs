@@ -118,6 +118,9 @@ defmodule Muro.ContractTest do
            #{once()}
              may redeliver
            """) =~ "may redeliver is only a mark on a family"
+
+    assert parse_error(once(" may redeliver skip")) =~
+             "skip is a mark on a contract entry, not on may redeliver"
   end
 
   test "a reserved entry is refused by the checker with the same words" do
@@ -281,6 +284,7 @@ defmodule Muro.ContractTest do
     plain = emit!(slots())
     marked = emit!(slots(redeliver: true))
     assert plain == marked
+    assert plain =~ fresh_v22_22()
     assert plain =~ "defp fresh(rows, key, index, st) do"
     refute plain =~ "defp fresh(rows, key, index, st, kind) do"
     refute plain =~ ":idempotent_init"
@@ -398,6 +402,164 @@ defmodule Muro.ContractTest do
     refute out =~ "may redeliver"
   end
 
+  test "a duplicate contract across imports is refused" do
+    dir = tmp()
+    File.write!(Path.join(dir, "base.muro"), slots())
+
+    File.write!(Path.join(dir, "lib.muro"), """
+    import "base.muro"
+    contract slots : idempotent init
+    """)
+
+    same = Path.join(dir, "same.muro")
+
+    File.write!(same, """
+    import "lib.muro"
+    contract slots : idempotent init
+    """)
+
+    assert {:error, msg} = Muro.check_file(same)
+    assert msg =~ "duplicate contract idempotent init"
+
+    conflict = Path.join(dir, "conflict.muro")
+
+    File.write!(conflict, """
+    import "lib.muro"
+    contract slots : idempotent init skip
+    """)
+
+    assert {:error, msg} = Muro.check_file(conflict)
+    assert msg =~ "duplicate contract idempotent init"
+
+    File.write!(Path.join(dir, "other.muro"), """
+    import "base.muro"
+    contract slots : idempotent init skip
+    """)
+
+    both = Path.join(dir, "both.muro")
+
+    File.write!(both, """
+    import "lib.muro"
+    import "other.muro"
+    """)
+
+    assert {:error, msg} = Muro.check_file(both)
+    assert msg =~ "duplicate contract idempotent init"
+  end
+
+  test "an imported contract is checked, reported, and emitted" do
+    dir = tmp()
+    File.write!(Path.join(dir, "lib.muro"), slots(contract: :assert))
+    use = Path.join(dir, "use.muro")
+
+    File.write!(use, """
+    import "lib.muro"
+    temporal waived : slots := always true relies idempotent init
+    """)
+
+    assert :ok = Muro.check_file(use)
+    assert "waived: depends on contract idempotent init" in Check.temporal_lines()
+
+    parent = Module.concat(["ContractFam#{System.unique_integer([:positive])}"])
+    assert {:ok, fsm} = Muro.emit_fsm(use, parent)
+    {mods, diags} = Code.with_diagnostics(fn -> Code.compile_string(fsm) end)
+
+    warnings =
+      Enum.filter(diags, &(match?(%{severity: :warning}, &1) or match?({:warning, _}, &1)))
+
+    assert warnings == [], inspect(warnings, limit: 20)
+    disp = Module.concat(parent, Slots)
+    assert disp in Enum.map(mods, &elem(&1, 0))
+    assert {:ok, floor} = disp.skip_below(disp.new(), 0)
+    assert {:error, {:contract, :idempotent_init, "a", 0}} = disp.arrive(floor, "a", :init, 0)
+  end
+
+  test "check_trace reports an asserted contract under skip_below" do
+    {disp, _src} = compile!(slots(contract: :assert))
+
+    assert {:error, {1, {:contract, :idempotent_init, "a", 0}}} =
+             disp.check_trace([{:skip_below, 0}, {:arrive, "a", :init, 0}])
+  end
+
+  test "check_trace accepts a skip reopen after resolved and after skip_below" do
+    {disp, _src} = compile!(slots(contract: :skip))
+
+    assert :ok =
+             disp.check_trace([
+               {:arrive, "a", :init, 0},
+               {:resolved, 0},
+               {:arrive, "a", :init, 0},
+               {:resolved, 1}
+             ])
+
+    assert :ok =
+             disp.check_trace([
+               {:skip_below, 0},
+               {:arrive, "a", :init, 0},
+               {:resolved, 0}
+             ])
+  end
+
+  test "a skip reopen that departs again still refuses a signal at that index" do
+    {disp, _src} = compile!(slots(contract: :skip))
+
+    state = disp.new()
+    assert {:open, 0, state} = disp.arrive(state, "a", :init, 0)
+    assert {:ok, _, done} = disp.resolved(state, 0)
+    assert {:open, 1, again} = disp.arrive(done, "a", :init, 0)
+    assert {:ok, _, done2} = disp.resolved(again, 1)
+    assert {:error, {:departed, "a", 0}} = disp.arrive(done2, "a", :signal, 0)
+    assert {:open, 2, _} = disp.arrive(done2, "a", :init, 0)
+
+    assert {:ok, floor} = disp.skip_below(disp.new(), 0)
+    assert floor.floor == 0
+    assert {:open, 0, opened} = disp.arrive(floor, "a", :init, 0)
+    assert {:ok, _, left} = disp.resolved(opened, 0)
+    assert left.floor == 0
+    assert {:error, {:departed, "a", 0}} = disp.arrive(left, "a", :signal, 0)
+    assert {:open, 1, _} = disp.arrive(left, "a", :init, 0)
+  end
+
+  test "relies is per family" do
+    src = """
+    #{two_families()}
+    contract first : idempotent init
+    temporal bad : second := always true relies idempotent init
+    """
+
+    assert {:error, msg} = no_family_graph(fn -> check(src) end)
+    assert msg =~ "bad: assumes contract idempotent init, which second does not declare"
+  end
+
+  test "relies still prints when the contract is skip" do
+    src = """
+    #{slots(contract: :skip)}
+    temporal waived : slots := always true relies idempotent init
+    """
+
+    assert check(src) == :ok
+    assert "waived: depends on contract idempotent init" in Check.temporal_lines()
+  end
+
+  test "leads_to is refused under may redeliver" do
+    formula =
+      "temporal opens : slots := forall (k : key). (held k signal) leads_to (opened k signal)"
+
+    assert check("""
+           #{slots()}
+           #{formula}
+           """) == :ok
+
+    assert {:error, msg} =
+             check("""
+             #{slots(redeliver: true)}
+             #{formula}
+             """)
+
+    assert msg =~ "a message is redelivered"
+    assert msg =~ "opens:"
+  end
+
   test "elixir and the other backends omit the contract" do
     path = write!(slots(contract: :assert, redeliver: true))
     assert {:ok, elixir} = Muro.emit_file(path, Book)
@@ -423,6 +585,66 @@ defmodule Muro.ContractTest do
     assert {:ok, %{source: suite}} = Muro.emit_exunit(path, BookTest)
     refute suite =~ "idempotent"
     refute suite =~ "idempotent_init"
+  end
+
+  defp two_families do
+    """
+    data Event : Type where
+      init : Event
+      signal : Event
+    session ping := send Nat end
+    session pong := recv Nat end
+    conform a : ping := put 0 done
+    conform b : pong := get (n : Nat) done
+    meet wire : a with b buffer 1
+    family first : wire per key of Event
+      init never held
+      signal held while earlier unresolved
+    family second : wire per key of Event
+      init never held
+      signal held while earlier unresolved
+    """
+  end
+
+  # Exact `fresh/4` as 0.22.22 emits it inside the parent module
+  # (the family child is indented two spaces). A no-contract
+  # dispatcher must contain this block.
+  defp fresh_v22_22 do
+    Enum.join(
+      [
+        "    defp fresh(rows, key, index, st) do",
+        "      case Map.fetch(rows, index) do",
+        "        {:ok, {id, kind, phase}}",
+        "        when is_integer(id) and id >= 0 and is_atom(kind) and phase in [:open, :held] ->",
+        "          {:error, {:duplicate, key, index}}",
+        "",
+        "        {:ok, _} ->",
+        "          {:error, {:state, st}}",
+        "",
+        "        :error ->",
+        "          case record(st, key) do",
+        "            {:error, reason} ->",
+        "              {:error, reason}",
+        "",
+        "            {:ok, {prefix, gaps}} ->",
+        "              if index <= st.floor or index <= prefix or Map.has_key?(gaps, index) do",
+        "                {:error, {:departed, key, index}}",
+        "              else",
+        "                :ok",
+        "              end",
+        "          end",
+        "      end",
+        "    end",
+        ""
+      ],
+      "\n"
+    )
+  end
+
+  defp tmp do
+    dir = Path.join(System.tmp_dir!(), "muro-contract-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    dir
   end
 
   defp once(mark \\ "") do

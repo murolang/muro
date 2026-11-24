@@ -80,24 +80,15 @@ defmodule Muro.Contract do
     end
   end
 
-  # Both declarations are checked against the whole book. The earliest
-  # location is the one that stands. A later one is the duplicate.
-  defp one_entry(book, %{family: family, entry: entry, loc: loc}) do
-    earlier =
-      Enum.any?(book, fn
-        %{kind: :contract, family: ^family, entry: ^entry, loc: other} ->
-          loc_before?(other, loc)
-
-        _ ->
-          false
-      end)
-
-    if earlier, do: {:error, "duplicate contract #{spell(entry)}"}, else: :ok
+  # Both declarations are checked against the whole joined book, after
+  # imports have been relocated. The first `{family, entry}` in book
+  # order stands. A later one is a duplicate, including when one is
+  # `skip` and the other is not, and including a `{file, line, col}`
+  # location from `Load.relocate/3`.
+  defp one_entry(book, %{family: family, entry: entry} = decl) do
+    case Enum.find(book, &match?(%{kind: :contract, family: ^family, entry: ^entry}, &1)) do
+      ^decl -> :ok
+      _other -> {:error, "duplicate contract #{spell(entry)}"}
+    end
   end
-
-  defp loc_before?({l1, c1}, {l2, c2}) when is_integer(l1) and is_integer(c1) do
-    l1 < l2 or (l1 == l2 and c1 < c2)
-  end
-
-  defp loc_before?(_, _), do: false
 end
