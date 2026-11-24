@@ -595,8 +595,11 @@ defmodule Muro.Gen do
       :otp ->
         book = loaded |> Muro.Prelude.for_emit() |> Muro.Grade.erase_book()
         stem = Path.basename(entry.book, ".muro")
-        {:ok, source} = Muro.Emit.Otp.render(book, stem)
-        {:ok, source, []}
+
+        case Muro.Emit.Otp.render(book, stem) do
+          {:ok, source} -> {:ok, source, []}
+          {:error, message} -> {:error, message}
+        end
 
       :fsm ->
         book = loaded |> Muro.Prelude.for_emit() |> Muro.Grade.erase_book()

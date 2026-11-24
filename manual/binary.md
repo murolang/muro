@@ -101,11 +101,11 @@ git = "https://example.com/rounding.git"
 tag = "v1"
 ```
 
-`muro` is required. `fuel` is an optional positive integer. The default is the fuel `muro check` uses. `backend` is optional. It is `elixir`, `c`, `rust`, `zig`, `asm`, `js`, `fsm`, `exunit`, `pytest`, or `rust-test`, and it is the kind of every `[[modules]]` entry that omits `backend`. An entry that omits `backend` when the file omits it too is `modules entry N: missing backend`, and the message names the line.
+`muro` is required. `fuel` is an optional positive integer. The default is the fuel `muro check` uses. `backend` is optional. It is `elixir`, `c`, `rust`, `zig`, `asm`, `otp`, `js`, `mbi`, `fsm`, `exunit`, `pytest`, or `rust-test`, and it is the kind of every `[[modules]]` entry that omits `backend`. An entry that omits `backend` when the file omits it too is `modules entry N: missing backend`, and the message names the line.
 
 `book` and `target` are required. Paths are relative to the project root. A book or a target outside the project is refused, a missing book is refused, and a duplicate target is refused. The errors name the entry index, as they do for `muro.exs`.
 
-`module` is an alias string (`"MyApp.Billing.Rounding"`). It is required for `elixir`, `fsm`, and `exunit`. A `c`, `rust`, `zig`, `asm`, `js`, `pytest`, or `rust-test` entry omits it. The `c` target ends with `.c`, and the header is written beside it with the same stem (`src/rounding.c` also reserves `src/rounding.h`). A `js` target ends with `.mjs`, and the declaration file is written beside it (`src/rounding.mjs` also reserves `src/rounding.d.ts`). That path is checked as a target before generation, including when it is already a directory. The error names the entry index. The `rust` target ends with `.rs`. The `zig` target ends with `.zig`. The `asm` target ends with `.s`. The `pytest` target ends with `.py`. `impl` on that entry is a Python module name (`"host.rounding"`). A `rust-test` target ends with `.rs`, and `impl` on that entry is a Rust path (`"crate::rounding"`). `imports` is a boolean and is valid on `exunit`, `pytest`, and `rust-test`. A wrong suffix is `modules entry N: target for kind :rust must end with .rs`.
+`module` is an alias string (`"MyApp.Billing.Rounding"`). It is required for `elixir`, `fsm`, and `exunit`. A `c`, `rust`, `zig`, `asm`, `otp`, `js`, `mbi`, `pytest`, or `rust-test` entry omits it. The `c` target ends with `.c`, and the header is written beside it with the same stem (`src/rounding.c` also reserves `src/rounding.h`). A `js` target ends with `.mjs`, and the declaration file is written beside it (`src/rounding.mjs` also reserves `src/rounding.d.ts`). That path is checked as a target before generation, including when it is already a directory. The error names the entry index. The `rust` target ends with `.rs`. The `zig` target ends with `.zig`. The `asm` target ends with `.s`. An `otp` target ends with `.ex`. An `mbi` target ends with `.mbi`. The `pytest` target ends with `.py`. `impl` on that entry is a Python module name (`"host.rounding"`). A `rust-test` target ends with `.rs`, and `impl` on that entry is a Rust path (`"crate::rounding"`). `imports` is a boolean and is valid on `exunit`, `pytest`, and `rust-test`. A wrong suffix is `modules entry N: target for kind :rust must end with .rs`.
 
 `muro_deps` is the same set of packages as `muro_deps:` in `muro.exs`. Each name is a table:
 
@@ -134,21 +134,23 @@ In a `Cargo.toml`, tables other than `[package.metadata.muro]` and its children 
 
 ## gen
 
-`muro gen` and `mix muro.gen` write `elixir`, `exunit`, `pytest`, `rust-test`, `fsm`, `c`, `rust`, `zig`, `asm`, and `js` targets. In `muro.exs` the native entries, a pytest entry, and a Rust test entry may omit the module:
+`muro gen` and `mix muro.gen` write `elixir`, `exunit`, `pytest`, `rust-test`, `fsm`, `c`, `rust`, `zig`, `asm`, `otp`, `js`, and `mbi` targets. In `muro.exs` the native entries, an otp entry, an mbi entry, a pytest entry, and a Rust test entry may omit the module:
 
 ```
 {"muro/rounding.muro", "src/rounding.rs", [kind: :rust]}
 {"muro/rounding.muro", "src/rounding.zig", [kind: :zig]}
 {"muro/rounding.muro", "src/rounding.c", [kind: :c]}
 {"muro/rounding.muro", "src/rounding.s", [kind: :asm]}
+{"muro/ping.muro", "lib/ping_otp.ex", [kind: :otp]}
 {"muro/rounding.muro", "src/rounding.mjs", [kind: :js]}
+{"muro/rounding.muro", "src/rounding.mbi", [kind: :mbi]}
 {"muro/rounding.muro", "test/rounding_test.py", [kind: :pytest]}
 {"muro/rounding.muro", "test/rounding_test.rs", [kind: :rust_test]}
 ```
 
 A missing `kind:` in `muro.exs` is still `:elixir`.
 
-The header is the same two lines and the same hashes as an Elixir target. A C source includes the header written beside the target, so `src/rounding.c` from book `muro/half.muro` includes `rounding.h`. A JavaScript entry writes the `.d.ts` beside the `.mjs`, and `muro gen --check` checks that file the same way. The comment mark is `# ` for pytest, `// ` for C, Rust, Zig, JavaScript, and a Rust test file, including the `.h` and the `.d.ts`, and `@ ` for Cortex-M assembly. Formatting is left alone for these kinds, so the body hash is the sha256 of the emitter's text. `muro gen --check` reports a missing, stale, hand-edited, or differing target, or a header that names another version, with the same messages it uses for Elixir. The `.h` beside a C target is checked the same way. See [Committed modules](gen.md).
+The header is the same two lines and the same hashes as an Elixir target, except an `:mbi` image, which is written without a gen header: `muro gen --check` compares the image bytes. A C source includes the header written beside the target, so `src/rounding.c` from book `muro/half.muro` includes `rounding.h`. A JavaScript entry writes the `.d.ts` beside the `.mjs`, and `muro gen --check` checks that file the same way. The comment mark is `# ` for pytest, `// ` for C, Rust, Zig, JavaScript, and a Rust test file, including the `.h` and the `.d.ts`, and `@ ` for Cortex-M assembly. Formatting is left alone for these kinds, so the body hash is the sha256 of the emitter's text. `muro gen --check` reports a missing, stale, hand-edited, or differing target, or a header that names another version, with the same messages it uses for Elixir. The `.h` beside a C target is checked the same way. See [Committed modules](gen.md).
 
 ## init
 

@@ -101,8 +101,10 @@ defmodule Mix.Tasks.Muro.Emit do
   writes nothing and prints no path. An image already beside the book
   stays byte for byte, including when the book has no exported run.
   muro-beam checks the image again. Writing the file is not that
-  check. This is not a manifest target. `--backend beam` is refused.
-  See the MBI images page.
+  check. A manifest entry may use `kind: :mbi`, or a top-level
+  `backend` of `mbi`. That entry names a `.mbi` target and may omit
+  the module. The image is written without a gen header.
+  `--backend beam` is refused. See the MBI images page.
 
   `--node` writes `<stem>_node.ex` next to the file and prints that
   path. `place.muro` with `--node a` is `place_node.ex`. Each `cross`

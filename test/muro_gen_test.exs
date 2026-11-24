@@ -1346,6 +1346,57 @@ defmodule Muro.GenTest do
     assert File.read!(Path.join(dir, "src/one.mbi")) == mbi
   end
 
+  test "gen refuses a multi-run book as an mbi target and writes nothing" do
+    dir = tmp_dir()
+    write_book(dir, "priv/muro/one.muro", @one)
+
+    write_book(dir, "priv/muro/two.muro", """
+    def a : run Nat := 0
+    def b : run Nat := suc 0
+    """)
+
+    write_manifest(dir, [
+      {"priv/muro/one.muro", "src/one.mbi", [kind: :mbi]},
+      {"priv/muro/two.muro", "src/two.mbi", [kind: :mbi]}
+    ])
+
+    decoy = Path.join(dir, "src/two.mbi")
+    File.mkdir_p!(Path.dirname(decoy))
+    File.write!(decoy, "leave me\n")
+
+    error =
+      in_dir(dir, fn ->
+        assert_raise Mix.Error, fn -> Mix.Tasks.Muro.Gen.run([]) end
+      end)
+
+    assert error.message =~ "src/two.mbi: priv/muro/two.muro is refused by the mbi backend"
+    assert error.message =~ "mbi:entry in b"
+    assert error.message =~ "muro.gen wrote nothing"
+    refute File.exists?(Path.join(dir, "src/one.mbi"))
+    assert File.read!(decoy) == "leave me\n"
+  end
+
+  test "gen --check reports a drifted mbi image" do
+    dir = tmp_dir()
+    write_book(dir, "priv/muro/one.muro", @one)
+    write_manifest(dir, [{"priv/muro/one.muro", "src/one.mbi", [kind: :mbi]}])
+
+    in_dir(dir, fn ->
+      capture(fn -> Mix.Tasks.Muro.Gen.run([]) end)
+    end)
+
+    target = Path.join(dir, "src/one.mbi")
+    original = File.read!(target)
+    drifted = original <> <<0>>
+    File.write!(target, drifted)
+
+    message = check_error(dir)
+    assert message =~ "src/one.mbi: differs from what priv/muro/one.muro emits"
+    refute message =~ "stale target"
+    refute message =~ "hand-edited target"
+    assert File.read!(target) == drifted
+  end
+
   defp project do
     dir = tmp_dir()
     write_book(dir, "priv/muro/one.muro", @one)

@@ -13,7 +13,9 @@ defmodule Muro.SkillsTest do
     text = File.read!(Path.join(dir, "AGENTS.md"))
     assert String.starts_with?(text, "<!-- muro:begin -->\n")
     assert String.ends_with?(text, "<!-- muro:end -->\n")
-    assert byte_size(text) in 2000..4096
+    assert text == Muro.Skills.block(nil)
+    # The index is a short entry point, not a dump of the manual.
+    assert byte_size(text) < 8_192
     assert text =~ "Muro has two jobs: spec and evidence. `run` is what is emitted."
     assert text =~ "The wall: a spec never becomes evidence. Evidence never becomes a run."
     assert text =~ "muro check\n"

@@ -18,13 +18,16 @@ defmodule Mix.Tasks.Muro.Gen do
   `fuel:` is optional. `modules:` lists `{book, module, target}` or
   `{book, module, target, opts}`. A 3-tuple emits Elixir. `opts` may
   set `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`, `kind: :fsm`,
-  `kind: :c`, `kind: :rust`, `kind: :zig`, `kind: :asm`, or `kind: :js`.
+  `kind: :c`, `kind: :rust`, `kind: :zig`, `kind: :asm`, `kind: :otp`,
+  `kind: :js`, or `kind: :mbi`.
   For `:exunit`, `impl: An.Adapter` and `imports: true`. For `:pytest`,
   `impl:` is a Python module name. For `:rust_test`, `impl:` is a Rust
-  path. A `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, or
-  `:rust_test` entry may omit the module
+  path. A `:c`, `:rust`, `:zig`, `:asm`, `:otp`, `:js`, `:mbi`,
+  `:pytest`, or `:rust_test` entry may omit the module
   (`{book, target, [kind: :c]}`). `:c` also writes the `.h`
   beside the `.c`. `:js` also writes the `.d.ts` beside the `.mjs`.
+  An `:otp` target ends with `.ex`. An `:mbi` target ends with `.mbi`
+  and is written without a gen header.
   A pytest target ends with `.py` and is not formatted. A Rust test
   target ends with `.rs` and is not formatted. `imports:` is
   a boolean, default `false`, and is valid for `:exunit`, `:pytest`,
