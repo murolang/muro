@@ -1,4 +1,6 @@
 defmodule Muro.Synth.Term do
+  alias Muro.Synth.Names
+
   @moduledoc false
 
   # A structured state is a term. Nullary states stay binaries, and
@@ -172,18 +174,20 @@ defmodule Muro.Synth.Term do
     kind in [:ctor_is, :vals_eq, :spread_eq, :pair_any, :len_is, :nat_is]
   end
 
-  def render_helpers(specs, taken) do
+  def render_helpers(specs, taken, binders \\ %{}) do
     struct_specs = Enum.filter(specs, &structural?/1)
 
     if struct_specs == [] do
       {%{text: "", funs: %{}}, taken}
     else
-      build_helpers(struct_specs, taken)
+      build_helpers(struct_specs, taken, binders)
     end
   end
 
-  def render_clause(schema, spec, ctor, helpers) do
-    body = test_at(schema, "c", Map.get(spec, :path, []), spec, helpers, [])
+  def render_clause(schema, spec, ctor, helpers, binders \\ %{}) do
+    body =
+      test_at(schema, b(binders, "c"), Map.get(spec, :path, []), spec, helpers, [], %{}, binders)
+
     "      | #{ctor} => #{body}"
   end
 
@@ -193,8 +197,10 @@ defmodule Muro.Synth.Term do
   `type_of.(src)` is the type of a branch at that source term.
   `body_of.(src)` is the branch once the term is concrete.
   """
-  def exhaust(schema, scrutinee, type_of, body_of) when is_function(type_of, 1) do
-    open(schema, scrutinee, & &1, type_of, body_of, 0)
+  def exhaust(schema, scrutinee, type_of, body_of, binders \\ %{})
+      when is_function(type_of, 1) do
+    taken = Names.merge_taken(taken_of(binders))
+    open(schema, scrutinee, & &1, type_of, body_of, 0, MapSet.new(), taken)
   end
 
   @doc """
@@ -231,7 +237,7 @@ defmodule Muro.Synth.Term do
   Nats. It does not enumerate inhabitants. `:open` means no such run
   exists. The caller must not emit an empty match in its place.
   """
-  def eq_source(name, schema, taken) when is_binary(name) do
+  def eq_source(name, schema, taken, binders \\ %{}) when is_binary(name) do
     case eq_nodes(schema, []) do
       :open ->
         :open
@@ -243,22 +249,39 @@ defmodule Muro.Synth.Term do
             {Map.put(map, node, fun), taken}
           end)
 
-        aux = Enum.map_join(nodes, "\n", &eq_def(&1, Map.fetch!(names, &1), names))
-        {:ok, aux <> "\n" <> eq_root(name, Map.fetch!(names, schema)), taken}
+        aux =
+          Enum.map_join(nodes, "\n", &eq_def(&1, Map.fetch!(names, &1), names, binders, taken))
+
+        {:ok, aux <> "\n" <> eq_root(name, Map.fetch!(names, schema), binders), taken}
     end
   end
 
-  def same_source(name, schema, inhabitants) when is_list(inhabitants) do
+  def same_source(name, schema, inhabitants, binders \\ %{}) when is_list(inhabitants) do
+    s = b(binders, "s")
+    t = b(binders, "t")
+
     body =
-      exhaust(schema, "s", fn _ -> "Bool" end, fn spell ->
-        exhaust(schema, "t", fn _ -> "Bool" end, fn other ->
-          if other == spell, do: "true", else: "false"
-        end)
-      end)
+      exhaust(
+        schema,
+        s,
+        fn _ -> "Bool" end,
+        fn spell ->
+          exhaust(
+            schema,
+            t,
+            fn _ -> "Bool" end,
+            fn other ->
+              if other == spell, do: "true", else: "false"
+            end,
+            binders
+          )
+        end,
+        binders
+      )
 
     """
-    def #{name} : run Π (+ s : State) → Π (+ t : State) → Bool :=
-      λ (+ s : State) → λ (+ t : State) →
+    def #{name} : run Π (+ #{s} : State) → Π (+ #{t} : State) → Bool :=
+      λ (+ #{s} : State) → λ (+ #{t} : State) →
         #{body}
     """
   end
@@ -1118,21 +1141,17 @@ defmodule Muro.Synth.Term do
 
   defp enum_name(_, _), do: nil
 
-  defp test_at(schema, hole, path, spec, helpers, walked) do
-    test_at(schema, hole, path, spec, helpers, walked, %{})
-  end
-
-  defp test_at(schema, hole, [], spec, helpers, walked, bound) do
+  defp test_at(schema, hole, [], spec, helpers, walked, bound, bn) do
     {schema, _bound} = enter(schema, bound)
-    leaf_test(schema, hole, spec, helpers, walked)
+    leaf_test(schema, hole, spec, helpers, walked, bn)
   end
 
-  defp test_at(schema, hole, [index | rest], spec, helpers, walked, bound) do
+  defp test_at(schema, hole, [index | rest], spec, helpers, walked, bound, bn) do
     {schema, bound} = enter(schema, bound)
-    test_step(schema, hole, index, rest, spec, helpers, walked, bound)
+    test_step(schema, hole, index, rest, spec, helpers, walked, bound, bn)
   end
 
-  defp test_step({:data, _, ctors} = schema, hole, index, rest, spec, helpers, walked, bound) do
+  defp test_step({:data, _, ctors} = schema, hole, index, rest, spec, helpers, walked, bound, bn) do
     wanted = guard_ctor(spec, walked)
 
     arms =
@@ -1140,10 +1159,10 @@ defmodule Muro.Synth.Term do
         if wanted != nil and ctor.name != wanted do
           "| #{pat(ctor.name, wild(ctor))} => false"
         else
-          binder = "x#{length(walked)}"
+          binder = path_binder(bn, walked)
           binders = focus(ctor, index, binder)
           field = ctor.fields |> Enum.at(index) |> field_schema()
-          inner = test_at(field, binder, rest, spec, helpers, walked ++ [index], bound)
+          inner = test_at(field, binder, rest, spec, helpers, walked ++ [index], bound, bn)
           "| #{pat(ctor.name, binders)} => #{inner}"
         end
       end)
@@ -1151,23 +1170,24 @@ defmodule Muro.Synth.Term do
     match_bool(hole, arms, schema)
   end
 
-  defp test_step({:prod, left, right}, hole, index, rest, spec, helpers, walked, bound) do
-    binder = "x#{length(walked)}"
+  defp test_step({:prod, left, right}, hole, index, rest, spec, helpers, walked, bound, bn) do
+    binder = path_binder(bn, walked)
     {b0, b1} = if index == 0, do: {binder, "_"}, else: {"_", binder}
     field = if index == 0, do: left, else: right
-    inner = test_at(field, binder, rest, spec, helpers, walked ++ [index], bound)
+    inner = test_at(field, binder, rest, spec, helpers, walked ++ [index], bound, bn)
     let_pair(hole, b0, b1, inner)
   end
 
-  defp test_step({:list, elem}, hole, index, rest, spec, helpers, walked, bound) do
-    binder = "x#{length(walked)}"
-    inner = test_at(elem, binder, rest, spec, helpers, walked ++ [index], bound)
-    peel_cons(hole, index, binder, inner, type_name(elem))
+  defp test_step({:list, elem}, hole, index, rest, spec, helpers, walked, bound, bn) do
+    binder = path_binder(bn, walked)
+    inner = test_at(elem, binder, rest, spec, helpers, walked ++ [index], bound, bn)
+    peel_cons(hole, index, binder, inner, type_name(elem), bn)
   end
 
-  defp test_step(_schema, _hole, _index, _rest, _spec, _helpers, _walked, _bound), do: "false"
+  defp test_step(_schema, _hole, _index, _rest, _spec, _helpers, _walked, _bound, _bn),
+    do: "false"
 
-  defp leaf_test({:enum, _, ctors}, hole, %{kind: :ctor_is, tag: tag}, _helpers, _walked) do
+  defp leaf_test({:enum, _, ctors}, hole, %{kind: :ctor_is, tag: tag}, _helpers, _walked, _bn) do
     arms =
       Enum.map_join(ctors, "\n", fn ctor ->
         bit = if ctor == tag, do: "true", else: "false"
@@ -1177,7 +1197,7 @@ defmodule Muro.Synth.Term do
     match_bool(hole, arms, {:enum, "", ctors})
   end
 
-  defp leaf_test({:data, _, ctors}, hole, %{kind: :ctor_is, tag: tag}, _helpers, _walked) do
+  defp leaf_test({:data, _, ctors}, hole, %{kind: :ctor_is, tag: tag}, _helpers, _walked, _bn) do
     arms =
       Enum.map_join(ctors, "\n", fn ctor ->
         bit = if ctor.name == tag, do: "true", else: "false"
@@ -1187,34 +1207,48 @@ defmodule Muro.Synth.Term do
     match_bool(hole, arms, {:data, "", ctors})
   end
 
-  defp leaf_test(:nat, hole, %{kind: :nat_is, n: n}, helpers, _walked) do
+  defp leaf_test(:nat, hole, %{kind: :nat_is, n: n}, helpers, _walked, _bn) do
     "#{helpers.nat_eq} #{hole} #{spell_nat(n)}"
   end
 
-  defp leaf_test({:list, elem}, hole, %{kind: :len_is, n: n}, helpers, _walked) do
+  defp leaf_test({:list, elem}, hole, %{kind: :len_is, n: n}, helpers, _walked, _bn) do
     "#{helpers.nat_eq} (#{helpers.list_len} #{type_name(elem)} #{hole}) #{spell_nat(n)}"
   end
 
-  defp leaf_test(schema, hole, %{view: :fields, i: i, j: j, kind: kind} = spec, helpers, _walked)
+  defp leaf_test(
+         schema,
+         hole,
+         %{view: :fields, i: i, j: j, kind: kind} = spec,
+         helpers,
+         _walked,
+         bn
+       )
        when kind in [:vals_eq, :spread_eq, :pair_any] do
     key = {:cmp, kind, spec.elem, abs(j - i)}
     fun = Map.fetch!(helpers.funs, key)
-    field_call(schema, hole, spec, i, j, fun)
+    field_call(schema, hole, spec, i, j, fun, bn)
   end
 
-  defp leaf_test({:list, _elem}, hole, %{view: :list, kind: kind, i: i, j: j} = spec, helpers, _)
+  defp leaf_test(
+         {:list, _elem},
+         hole,
+         %{view: :list, kind: kind, i: i, j: j} = spec,
+         helpers,
+         _,
+         _bn
+       )
        when kind in [:vals_eq, :spread_eq, :pair_any] do
     key = {:list_cmp, kind, spec.elem, i, j}
     fun = Map.fetch!(helpers.funs, key)
     "#{fun} #{hole}"
   end
 
-  defp leaf_test(_, _, _, _, _), do: "false"
+  defp leaf_test(_, _, _, _, _, _), do: "false"
 
-  defp field_call({:data, _, ctors}, hole, spec, i, j, fun) do
+  defp field_call({:data, _, ctors}, hole, spec, i, j, fun, bn) do
     ctor = Enum.find(ctors, &(&1.name == (spec.ctor || hd(ctors).name)))
-    xi = "x#{i}"
-    xj = "x#{j}"
+    xi = indexed(bn, "x", i)
+    xj = indexed(bn, "x", j)
     binders = focus_two(ctor, i, xi, j, xj)
 
     arms =
@@ -1233,13 +1267,15 @@ defmodule Muro.Synth.Term do
     match_bool(hole, arms, {:data, "", ctors})
   end
 
-  defp field_call({:prod, _, _}, hole, _spec, _i, _j, fun) do
-    let_pair(hole, "x0", "x1", "#{fun} x0 x1")
+  defp field_call({:prod, _, _}, hole, _spec, _i, _j, fun, bn) do
+    x0 = indexed(bn, "x", 0)
+    x1 = indexed(bn, "x", 1)
+    let_pair(hole, x0, x1, "#{fun} #{x0} #{x1}")
   end
 
-  defp field_call(_, _, _, _, _, _), do: "false"
+  defp field_call(_, _, _, _, _, _, _), do: "false"
 
-  defp peel_cons(hole, 0, binder, inner, _elem) do
+  defp peel_cons(hole, 0, binder, inner, _elem, _bn) do
     """
     (match #{hole} motive (λ _ → Bool)
       | nil => false
@@ -1247,11 +1283,13 @@ defmodule Muro.Synth.Term do
     """
   end
 
-  defp peel_cons(hole, index, binder, inner, _elem) do
+  defp peel_cons(hole, index, binder, inner, _elem, bn) do
+    t = b(bn, "t")
+
     """
     (match #{hole} motive (λ _ → Bool)
       | nil => false
-      | cons _ t => #{peel_cons("t", index - 1, binder, inner, nil)})
+      | cons _ #{t} => #{peel_cons(t, index - 1, binder, inner, nil, bn)})
     """
   end
 
@@ -1292,9 +1330,9 @@ defmodule Muro.Synth.Term do
   defp pat(ctor, []), do: ctor
   defp pat(ctor, binders), do: ctor <> " " <> Enum.join(binders, " ")
 
-  defp build_helpers(specs, taken) do
+  defp build_helpers(specs, taken, binders) do
     needs = helper_needs(specs)
-    {funs, taken, parts} = emit_helpers(needs, taken)
+    {funs, taken, parts} = emit_helpers(needs, taken, binders)
     text = parts |> Enum.reject(&(&1 == "")) |> Enum.join("\n")
 
     {%{
@@ -1346,10 +1384,10 @@ defmodule Muro.Synth.Term do
 
   defp needs_list(set, _, _), do: set
 
-  defp emit_helpers(needs, taken) do
+  defp emit_helpers(needs, taken, binders) do
     {funs, taken, parts} =
       Enum.reduce(ordered_needs(needs), {%{}, taken, []}, fn need, {funs, taken, parts} ->
-        {key, base, source} = helper_def(need, funs)
+        {key, base, source} = helper_def(need, funs, binders)
         {name, taken} = Muro.Synth.Book.reserve(base, taken)
         text = source.(name)
         {Map.put(funs, key, name), taken, parts ++ [text]}
@@ -1368,119 +1406,152 @@ defmodule Muro.Synth.Term do
     Enum.filter(keys, &MapSet.member?(needs, &1))
   end
 
-  defp helper_def(:nat_eq, _funs), do: {:nat_eq, "nat-eq", &nat_eq_source/1}
-  defp helper_def(:nat_abs, _funs), do: {:nat_abs, "nat-abs", &nat_abs_source/1}
-  defp helper_def(:bit_or, _funs), do: {:bit_or, "bit-or", &bit_or_source/1}
-  defp helper_def(:list_len, _funs), do: {:list_len, "list-len", &list_len_source/1}
-  defp helper_def(:list_has, _funs), do: {:list_has, "list-has", &list_has_source/1}
-  defp helper_def(:list_at, _funs), do: {:list_at, "list-at", &list_at_source/1}
+  defp helper_def(:nat_eq, _funs, bn), do: {:nat_eq, "nat-eq", &nat_eq_source(&1, bn)}
+  defp helper_def(:nat_abs, _funs, bn), do: {:nat_abs, "nat-abs", &nat_abs_source(&1, bn)}
+  defp helper_def(:bit_or, _funs, bn), do: {:bit_or, "bit-or", &bit_or_source(&1, bn)}
+  defp helper_def(:list_len, _funs, bn), do: {:list_len, "list-len", &list_len_source(&1, bn)}
+  defp helper_def(:list_has, _funs, bn), do: {:list_has, "list-has", &list_has_source(&1, bn)}
+  defp helper_def(:list_at, _funs, bn), do: {:list_at, "list-at", &list_at_source(&1, bn)}
 
-  defp helper_def({:enum_fun, {:enum, name, ctors}}, _funs) do
-    {{:enum, name}, "nat-of-#{name}", fn def_name -> enum_nat_source(def_name, name, ctors) end}
+  defp helper_def({:enum_fun, {:enum, name, ctors}}, _funs, bn) do
+    {{:enum, name}, "nat-of-#{name}",
+     fn def_name -> enum_nat_source(def_name, name, ctors, bn) end}
   end
 
-  defp helper_def({:cmp, kind, elem, gap}, funs) do
+  defp helper_def({:cmp, kind, elem, gap}, funs, bn) do
     key = {:cmp, kind, elem, gap}
     base = "cmp-#{kind_word(kind)}-#{elem_word(elem)}-#{gap}"
-    {key, base, fn def_name -> cmp_source(def_name, kind, elem, gap, funs) end}
+    {key, base, fn def_name -> cmp_source(def_name, kind, elem, gap, funs, bn) end}
   end
 
-  defp helper_def({:list_cmp, kind, elem, i, j}, funs) do
+  defp helper_def({:list_cmp, kind, elem, i, j}, funs, bn) do
     key = {:list_cmp, kind, elem, i, j}
     base = "cmp-list-#{kind_word(kind)}-#{elem_word(elem)}-#{i}-#{j}"
-    {key, base, fn def_name -> list_cmp_source(def_name, kind, elem, i, j, funs) end}
+    {key, base, fn def_name -> list_cmp_source(def_name, kind, elem, i, j, funs, bn) end}
   end
 
   defp elem_word(:nat), do: "Nat"
   defp elem_word({:enum, name, _}), do: name
 
-  defp nat_eq_source(name) do
+  defp nat_eq_source(name, bn) do
+    n = b(bn, "n")
+    m = b(bn, "m")
+    n1 = b(bn, "n1")
+    m1 = b(bn, "m1")
+
     """
-    def #{name} : run Π (+ n : Nat) → Π (+ m : Nat) → Bool :=
-      λ (+ n : Nat) → λ (+ m : Nat) →
-        match n motive (λ _ → Bool)
+    def #{name} : run Π (+ #{n} : Nat) → Π (+ #{m} : Nat) → Bool :=
+      λ (+ #{n} : Nat) → λ (+ #{m} : Nat) →
+        match #{n} motive (λ _ → Bool)
           | 0 =>
-              (match m motive (λ _ → Bool)
+              (match #{m} motive (λ _ → Bool)
                 | 0 => true
                 | suc _ => false)
-          | suc n1 =>
-              (match m motive (λ _ → Bool)
+          | suc #{n1} =>
+              (match #{m} motive (λ _ → Bool)
                 | 0 => false
-                | suc m1 => #{name} n1 m1)
+                | suc #{m1} => #{name} #{n1} #{m1})
     """
   end
 
-  defp nat_abs_source(name) do
+  defp nat_abs_source(name, bn) do
     monus = name <> "-monus"
+    n = b(bn, "n")
+    m = b(bn, "m")
+    n1 = b(bn, "n1")
+    m1 = b(bn, "m1")
 
     """
-    def #{monus} : run Π (+ n : Nat) → Π (+ m : Nat) → Nat :=
-      λ (+ n : Nat) → λ (+ m : Nat) →
-        match n motive (λ _ → Nat)
+    def #{monus} : run Π (+ #{n} : Nat) → Π (+ #{m} : Nat) → Nat :=
+      λ (+ #{n} : Nat) → λ (+ #{m} : Nat) →
+        match #{n} motive (λ _ → Nat)
           | 0 => 0
-          | suc n1 =>
-              (match m motive (λ _ → Nat)
-                | 0 => suc n1
-                | suc m1 => #{monus} n1 m1)
-    def #{name} : run Π (+ n : Nat) → Π (+ m : Nat) → Nat :=
-      λ (+ n : Nat) → λ (+ m : Nat) →
-        plus (#{monus} n m) (#{monus} m n)
+          | suc #{n1} =>
+              (match #{m} motive (λ _ → Nat)
+                | 0 => suc #{n1}
+                | suc #{m1} => #{monus} #{n1} #{m1})
+    def #{name} : run Π (+ #{n} : Nat) → Π (+ #{m} : Nat) → Nat :=
+      λ (+ #{n} : Nat) → λ (+ #{m} : Nat) →
+        plus (#{monus} #{n} #{m}) (#{monus} #{m} #{n})
     """
   end
 
-  defp bit_or_source(name) do
+  defp bit_or_source(name, bn) do
+    p0 = b(bn, "p")
+    q0 = b(bn, "q")
+
     """
-    def #{name} : run Π (p : Bool) → Π (q : Bool) → Bool :=
-      λ (p : Bool) → λ (q : Bool) →
-        match p motive (λ _ → Bool)
+    def #{name} : run Π (#{p0} : Bool) → Π (#{q0} : Bool) → Bool :=
+      λ (#{p0} : Bool) → λ (#{q0} : Bool) →
+        match #{p0} motive (λ _ → Bool)
           | true => true
-          | false => q
+          | false => #{q0}
     """
   end
 
-  defp list_len_source(name) do
+  defp list_len_source(name, bn) do
+    a = b(bn, "A")
+    xs = b(bn, "xs")
+    ys = b(bn, "ys")
+
     """
-    def #{name} : run Π (- A : Type) → Π (xs : List A) → Nat :=
-      λ (- A : Type) → λ (xs : List A) →
-        match xs motive (λ _ → Nat)
+    def #{name} : run Π (- #{a} : Type) → Π (#{xs} : List #{a}) → Nat :=
+      λ (- #{a} : Type) → λ (#{xs} : List #{a}) →
+        match #{xs} motive (λ _ → Nat)
           | nil => 0
-          | cons _ ys => suc (#{name} A ys)
+          | cons _ #{ys} => suc (#{name} #{a} #{ys})
     """
   end
 
-  defp list_has_source(name) do
+  defp list_has_source(name, bn) do
+    a = b(bn, "A")
+    xs = b(bn, "xs")
+    n = b(bn, "n")
+    n1 = b(bn, "n1")
+    ys = b(bn, "ys")
+
     """
-    def #{name} : run Π (- A : Type) → Π (xs : List A) → Π (n : Nat) → Bool :=
-      λ (- A : Type) → λ (xs : List A) → λ (n : Nat) →
-        match n motive (λ _ → Bool)
+    def #{name} : run Π (- #{a} : Type) → Π (#{xs} : List #{a}) → Π (#{n} : Nat) → Bool :=
+      λ (- #{a} : Type) → λ (#{xs} : List #{a}) → λ (#{n} : Nat) →
+        match #{n} motive (λ _ → Bool)
           | 0 =>
-              (match xs motive (λ _ → Bool)
+              (match #{xs} motive (λ _ → Bool)
                 | nil => false
                 | cons _ _ => true)
-          | suc n1 =>
-              (match xs motive (λ _ → Bool)
+          | suc #{n1} =>
+              (match #{xs} motive (λ _ → Bool)
                 | nil => false
-                | cons _ ys => #{name} A ys n1)
+                | cons _ #{ys} => #{name} #{a} #{ys} #{n1})
     """
   end
 
-  defp list_at_source(name) do
+  defp list_at_source(name, bn) do
+    a = b(bn, "A")
+    xs = b(bn, "xs")
+    n = b(bn, "n")
+    d = b(bn, "d")
+    h = b(bn, "h")
+    n1 = b(bn, "n1")
+    ys = b(bn, "ys")
+
     """
-    def #{name} : run Π (- A : Type) → Π (xs : List A) → Π (n : Nat) → Π (d : A) → A :=
-      λ (- A : Type) → λ (xs : List A) → λ (n : Nat) → λ (d : A) →
-        match n motive (λ _ → A)
+    def #{name} : run Π (- #{a} : Type) → Π (#{xs} : List #{a}) → Π (#{n} : Nat) → Π (#{d} : #{a}) → #{a} :=
+      λ (- #{a} : Type) → λ (#{xs} : List #{a}) → λ (#{n} : Nat) → λ (#{d} : #{a}) →
+        match #{n} motive (λ _ → #{a})
           | 0 =>
-              (match xs motive (λ _ → A)
-                | nil => d
-                | cons h _ => h)
-          | suc n1 =>
-              (match xs motive (λ _ → A)
-                | nil => d
-                | cons _ ys => #{name} A ys n1 d)
+              (match #{xs} motive (λ _ → #{a})
+                | nil => #{d}
+                | cons #{h} _ => #{h})
+          | suc #{n1} =>
+              (match #{xs} motive (λ _ → #{a})
+                | nil => #{d}
+                | cons _ #{ys} => #{name} #{a} #{ys} #{n1} #{d})
     """
   end
 
-  defp enum_nat_source(name, type_name, ctors) do
+  defp enum_nat_source(name, type_name, ctors, bn) do
+    x = b(bn, "x")
+
     arms =
       ctors
       |> Enum.with_index()
@@ -1489,20 +1560,22 @@ defmodule Muro.Synth.Term do
       end)
 
     """
-    def #{name} : run Π (+ x : #{type_name}) → Nat :=
-      λ (+ x : #{type_name}) →
-        match x motive (λ _ → Nat)
+    def #{name} : run Π (+ #{x} : #{type_name}) → Nat :=
+      λ (+ #{x} : #{type_name}) →
+        match #{x} motive (λ _ → Nat)
     #{arms}
     """
   end
 
-  defp cmp_source(name, kind, elem, gap, funs) do
+  defp cmp_source(name, kind, elem, gap, funs, bn) do
     type_name = elem_type(elem)
-    body = cmp_body(kind, elem, gap, "x", "y", funs)
+    x = b(bn, "x")
+    y = b(bn, "y")
+    body = cmp_body(kind, elem, gap, x, y, funs)
 
     """
-    def #{name} : run Π (+ x : #{type_name}) → Π (+ y : #{type_name}) → Bool :=
-      λ (+ x : #{type_name}) → λ (+ y : #{type_name}) →
+    def #{name} : run Π (+ #{x} : #{type_name}) → Π (+ #{y} : #{type_name}) → Bool :=
+      λ (+ #{x} : #{type_name}) → λ (+ #{y} : #{type_name}) →
         #{body}
     """
   end
@@ -1528,18 +1601,19 @@ defmodule Muro.Synth.Term do
     "(#{Map.fetch!(funs, {:enum, name})} #{var})"
   end
 
-  defp list_cmp_source(name, kind, elem, i, j, funs) do
+  defp list_cmp_source(name, kind, elem, i, j, funs, bn) do
     ty = elem_type(elem)
     default = default_of(elem)
     cmp = Map.fetch!(funs, {:cmp, kind, elem, abs(j - i)})
     has = funs.list_has
     at = funs.list_at
+    xs = b(bn, "xs")
 
     """
-    def #{name} : run Π (+ xs : List #{ty}) → Bool :=
-      λ (+ xs : List #{ty}) →
-        (match (#{has} #{ty} xs #{spell_nat(j)}) motive (λ _ → Bool)
-          | true => #{cmp} (#{at} #{ty} xs #{spell_nat(i)} #{default}) (#{at} #{ty} xs #{spell_nat(j)} #{default})
+    def #{name} : run Π (+ #{xs} : List #{ty}) → Bool :=
+      λ (+ #{xs} : List #{ty}) →
+        (match (#{has} #{ty} #{xs} #{spell_nat(j)}) motive (λ _ → Bool)
+          | true => #{cmp} (#{at} #{ty} #{xs} #{spell_nat(i)} #{default}) (#{at} #{ty} #{xs} #{spell_nat(j)} #{default})
           | false => false)
     """
   end
@@ -1553,25 +1627,21 @@ defmodule Muro.Synth.Term do
   # `seen` stops a second visit to the same datatype. Exhaustive
   # equality is only emitted for a finite inhabitant list, which has
   # no back-edge; the set is the guard if one is handed in.
-  defp open(schema, hole, plug, type_of, body_of, k) do
-    open(schema, hole, plug, type_of, body_of, k, MapSet.new())
-  end
-
-  defp open({:data, name, ctors}, hole, plug, type_of, body_of, k, seen) do
+  defp open({:data, name, ctors}, hole, plug, type_of, body_of, k, seen, taken) do
     if MapSet.member?(seen, name) do
       body_of.(hole)
     else
-      var = "k#{k}"
+      {var, taken} = Names.alloc_current("k#{k}", taken)
       motive = "(λ (#{var} : #{name}) → #{type_of.(plug.(var))})"
       seen = MapSet.put(seen, name)
 
       arms =
         Enum.map_join(ctors, "\n", fn ctor ->
-          binders = binders(length(ctor.fields), k)
+          {binders, taken} = field_binders(length(ctor.fields), k, taken)
           local = app_src(ctor.name, binders)
 
           inner =
-            open_fields(ctor.fields, binders, local, plug, type_of, body_of, k + 1, seen)
+            open_fields(ctor.fields, binders, local, plug, type_of, body_of, k + 1, seen, taken)
 
           "| #{pat(ctor.name, binders)} => #{inner}"
         end)
@@ -1583,8 +1653,8 @@ defmodule Muro.Synth.Term do
     end
   end
 
-  defp open({:enum, name, ctors}, hole, plug, type_of, body_of, k, _seen) do
-    var = "k#{k}"
+  defp open({:enum, name, ctors}, hole, plug, type_of, body_of, k, _seen, taken) do
+    {var, _taken} = Names.alloc_current("k#{k}", taken)
     motive = "(λ (#{var} : #{name}) → #{type_of.(plug.(var))})"
     arms = Enum.map_join(ctors, "\n", fn ctor -> "| #{ctor} => #{body_of.(ctor)}" end)
 
@@ -1594,20 +1664,33 @@ defmodule Muro.Synth.Term do
     """
   end
 
-  defp open({:prod, left, right}, hole, plug, type_of, body_of, k, seen) do
-    b0 = "f#{k}_0"
-    b1 = "f#{k}_1"
+  defp open({:prod, left, right}, hole, plug, type_of, body_of, k, seen, taken) do
+    {b0, taken} = Names.alloc_current("f#{k}_0", taken)
+    {b1, taken} = Names.alloc_current("f#{k}_1", taken)
     local = "(#{b0}, #{b1})"
-    inner = open_fields([left, right], [b0, b1], local, plug, type_of, body_of, k + 1, seen)
+
+    inner =
+      open_fields([left, right], [b0, b1], local, plug, type_of, body_of, k + 1, seen, taken)
+
     let_pair(hole, b0, b1, inner)
   end
 
-  defp open(_schema, hole, _plug, _type_of, body_of, _k, _seen), do: body_of.(hole)
+  defp open(_schema, hole, _plug, _type_of, body_of, _k, _seen, _taken), do: body_of.(hole)
 
-  defp open_fields([], _binders, local, _plug, _type_of, body_of, _k, _seen),
+  defp open_fields([], _binders, local, _plug, _type_of, body_of, _k, _seen, _taken),
     do: body_of.(local)
 
-  defp open_fields([field | rest], [binder | binders], local, plug, type_of, body_of, k, seen) do
+  defp open_fields(
+         [field | rest],
+         [binder | binders],
+         local,
+         plug,
+         type_of,
+         body_of,
+         k,
+         seen,
+         taken
+       ) do
     on_concrete = fn concrete ->
       open_fields(
         rest,
@@ -1617,16 +1700,22 @@ defmodule Muro.Synth.Term do
         type_of,
         body_of,
         k + 1,
-        seen
+        seen,
+        taken
       )
     end
 
     plug_src = fn src -> plug.(subst(local, binder, src)) end
-    open(field_schema(field), binder, plug_src, type_of, on_concrete, k, seen)
+    open(field_schema(field), binder, plug_src, type_of, on_concrete, k, seen, taken)
   end
 
-  defp binders(0, _k), do: []
-  defp binders(n, k), do: Enum.map(0..(n - 1)//1, &"f#{k}_#{&1}")
+  defp field_binders(0, _k, taken), do: {[], taken}
+
+  defp field_binders(n, k, taken) do
+    Enum.map_reduce(0..(n - 1)//1, taken, fn i, taken ->
+      Names.alloc_current("f#{k}_#{i}", taken)
+    end)
+  end
 
   defp app_src(ctor, []), do: ctor
   defp app_src(ctor, args), do: "(" <> Enum.join([ctor | Enum.map(args, &arg/1)], " ") <> ")"
@@ -1651,24 +1740,9 @@ defmodule Muro.Synth.Term do
   defp type_name({:prod, left, right}), do: "(#{type_name(left)} × #{type_name(right)})"
   defp type_name({:open, _}), do: "Type"
 
-  defp fresh(base, taken) do
-    if occupied?(base, taken) do
-      n = Enum.find(2..10_000, &(not occupied?("#{base}-#{&1}", taken)))
-      "#{base}-#{n}"
-    else
-      base
-    end
-  end
+  defp fresh(base, taken), do: Names.fresh(base, taken)
 
-  defp occupied?(name, taken) do
-    MapSet.member?(taken, name) or MapSet.member?(taken, {:elixir, Muro.Emit.elixir_base(name)})
-  end
-
-  defp take(taken, name) do
-    taken
-    |> MapSet.put(name)
-    |> MapSet.put({:elixir, Muro.Emit.elixir_base(name)})
-  end
+  defp take(taken, name), do: Names.take(taken, name)
 
   defp tag_atom(atom) when is_atom(atom), do: atom
   defp tag_atom(tuple) when is_tuple(tuple) and tuple_size(tuple) >= 1, do: elem(tuple, 0)
@@ -1956,42 +2030,55 @@ defmodule Muro.Synth.Term do
   defp eq_word({:list, elem}), do: "list-#{eq_word(elem)}"
   defp eq_word({:prod, left, right}), do: "#{eq_word(left)}-#{eq_word(right)}"
 
-  defp eq_root(name, fun) do
+  defp eq_root(name, fun, bn) do
+    s = b(bn, "s")
+    t = b(bn, "t")
+
     """
-    def #{name} : run Π (+ s : State) → Π (+ t : State) → Bool :=
-      λ (+ s : State) → λ (+ t : State) →
-        #{fun} s t
+    def #{name} : run Π (+ #{s} : State) → Π (+ #{t} : State) → Bool :=
+      λ (+ #{s} : State) → λ (+ #{t} : State) →
+        #{fun} #{s} #{t}
     """
   end
 
-  defp eq_def(schema, fun, names) do
+  defp eq_def(schema, fun, names, bn, taken) do
     ty = eq_type(schema)
+    x = b(bn, "x")
+    y = b(bn, "y")
 
     """
-    def #{fun} : run Π (x : #{ty}) → Π (y : #{ty}) → Bool :=
-      λ (x : #{ty}) → λ (y : #{ty}) →
-        #{eq_body(schema, fun, names)}
+    def #{fun} : run Π (#{x} : #{ty}) → Π (#{y} : #{ty}) → Bool :=
+      λ (#{x} : #{ty}) → λ (#{y} : #{ty}) →
+        #{eq_body(schema, fun, names, bn, taken)}
     """
   end
 
   defp eq_type(:nat), do: "Nat"
   defp eq_type(schema), do: type_name(schema)
 
-  defp eq_body(:nat, fun, _names) do
+  defp eq_body(:nat, fun, _names, bn, _taken) do
+    x = b(bn, "x")
+    y = b(bn, "y")
+    x1 = indexed(bn, "x", 1)
+    y1 = indexed(bn, "y", 1)
+
     """
-    (match x motive (λ _ → Bool)
+    (match #{x} motive (λ _ → Bool)
       | 0 =>
-          (match y motive (λ _ → Bool)
+          (match #{y} motive (λ _ → Bool)
             | 0 => true
             | suc _ => false)
-      | suc x1 =>
-          (match y motive (λ _ → Bool)
+      | suc #{x1} =>
+          (match #{y} motive (λ _ → Bool)
             | 0 => false
-            | suc y1 => #{fun} x1 y1))
+            | suc #{y1} => #{fun} #{x1} #{y1}))
     """
   end
 
-  defp eq_body({:enum, _, ctors}, _fun, _names) do
+  defp eq_body({:enum, _, ctors}, _fun, _names, bn, _taken) do
+    x = b(bn, "x")
+    y = b(bn, "y")
+
     arms =
       Enum.map_join(ctors, "\n", fn ctor ->
         inner =
@@ -2002,51 +2089,67 @@ defmodule Muro.Synth.Term do
 
         """
           | #{ctor} =>
-              (match y motive (λ _ → Bool)
+              (match #{y} motive (λ _ → Bool)
         #{inner})
         """
       end)
 
     """
-    (match x motive (λ _ → Bool)
+    (match #{x} motive (λ _ → Bool)
     #{arms})
     """
   end
 
-  defp eq_body({:list, elem}, fun, names) do
+  defp eq_body({:list, elem}, fun, names, bn, _taken) do
     elem_eq = Map.fetch!(names, elem)
+    x = b(bn, "x")
+    y = b(bn, "y")
+    h = b(bn, "h")
+    t = b(bn, "t")
+    i = b(bn, "i")
+    u = b(bn, "u")
 
     """
-    (match x motive (λ _ → Bool)
+    (match #{x} motive (λ _ → Bool)
       | nil =>
-          (match y motive (λ _ → Bool)
+          (match #{y} motive (λ _ → Bool)
             | nil => true
             | cons _ _ => false)
-      | cons h t =>
-          (match y motive (λ _ → Bool)
+      | cons #{h} #{t} =>
+          (match #{y} motive (λ _ → Bool)
             | nil => false
-            | cons i u => #{eq_and(["#{elem_eq} h i", "#{fun} t u"])}))
+            | cons #{i} #{u} => #{eq_and(["#{elem_eq} #{h} #{i}", "#{fun} #{t} #{u}"])}))
     """
   end
 
-  defp eq_body({:prod, left, right}, _fun, names) do
+  defp eq_body({:prod, left, right}, _fun, names, bn, _taken) do
+    x = b(bn, "x")
+    y = b(bn, "y")
+    a = b(bn, "a")
+    b0 = b(bn, "b")
+    c = b(bn, "c")
+    d = b(bn, "d")
+
     inner =
       eq_and([
-        "#{Map.fetch!(names, left)} a c",
-        "#{Map.fetch!(names, right)} b d"
+        "#{Map.fetch!(names, left)} #{a} #{c}",
+        "#{Map.fetch!(names, right)} #{b0} #{d}"
       ])
 
-    let_pair("x", "a", "b", let_pair("y", "c", "d", inner))
+    let_pair(x, a, b0, let_pair(y, c, d, inner))
   end
 
-  defp eq_body({:data, _, rows}, _fun, names) do
+  defp eq_body({:data, _, rows}, _fun, names, bn, taken) do
+    x = b(bn, "x")
+    y = b(bn, "y")
+
     arms =
       Enum.map_join(rows, "\n", fn row ->
-        xs = eq_binders("p", length(row.fields))
+        {xs, taken} = eq_binders("p", length(row.fields), bn, taken)
 
         inner =
           Enum.map_join(rows, "\n", fn other ->
-            ys = eq_binders("q", length(other.fields))
+            {ys, _taken} = eq_binders("q", length(other.fields), bn, taken)
 
             body =
               if other.name == row.name do
@@ -2060,13 +2163,13 @@ defmodule Muro.Synth.Term do
 
         """
           | #{pat(row.name, xs)} =>
-              (match y motive (λ _ → Bool)
+              (match #{y} motive (λ _ → Bool)
         #{inner})
         """
       end)
 
     """
-    (match x motive (λ _ → Bool)
+    (match #{x} motive (λ _ → Bool)
     #{arms})
     """
   end
@@ -2103,8 +2206,31 @@ defmodule Muro.Synth.Term do
     """
   end
 
-  defp eq_binders(_prefix, 0), do: []
-  defp eq_binders(prefix, n), do: Enum.map(0..(n - 1)//1, &"#{prefix}#{&1}")
+  defp eq_binders(_prefix, 0, _bn, taken), do: {[], taken}
+
+  defp eq_binders(prefix, n, _bn, taken) do
+    Enum.map_reduce(0..(n - 1)//1, taken, fn i, taken ->
+      base = "#{prefix}#{i}"
+      {name, taken} = Names.alloc_current(base, taken)
+      {name, taken}
+    end)
+  end
+
+  defp b(binders, base) when is_map(binders) do
+    Map.get(binders, base) || Names.current(base)
+  end
+
+  defp indexed(binders, prefix, i) do
+    b(binders, "#{prefix}#{i}")
+  end
+
+  defp path_binder(bn, walked), do: indexed(bn, "x", length(walked))
+
+  defp taken_of(binders) when is_map(binders) do
+    binders
+    |> Map.values()
+    |> Enum.reduce(MapSet.new(), fn name, acc -> Names.take(acc, name) end)
+  end
 
   @doc """
   A match on `scrutinee` that follows only the terms in `states`.
@@ -2195,8 +2321,8 @@ defmodule Muro.Synth.Term do
   end
 
   defp nat_from(hole, embed, prefix, cands, depth, type_of, continue, miss, k) do
-    var = "n#{k}_#{depth}"
-    suc_var = "s#{k}_#{depth}"
+    var = Names.current("n#{k}_#{depth}")
+    suc_var = Names.current("s#{k}_#{depth}")
     motive = "(λ (#{var} : Nat) → #{type_of.(embed.(prefix.(var)))})"
     here = Enum.filter(cands, &(&1.n == depth))
     deeper = Enum.filter(cands, &(&1.n > depth))
@@ -2235,9 +2361,9 @@ defmodule Muro.Synth.Term do
         :open
 
       {:ok, nils, conses} ->
-        var = "l#{k}"
-        h = "h#{k}"
-        t = "t#{k}"
+        var = Names.current("l#{k}")
+        h = Names.current("h#{k}")
+        t = Names.current("t#{k}")
         motive = "(λ (#{var} : #{type_name({:list, elem})}) → #{type_of.(embed.(var))})"
 
         with {:ok, nil_body, _} <- arm_or_miss(nils, "nil", continue, miss, embed, k),
@@ -2326,7 +2452,7 @@ defmodule Muro.Synth.Term do
   end
 
   defp split_enum(name, ctors, hole, embed, cands, type_of, continue, miss, k) do
-    var = "e#{k}"
+    var = Names.current("e#{k}")
     motive = "(λ (#{var} : #{name}) → #{type_of.(embed.(var))})"
     known = MapSet.new(ctors, &atom_of/1)
 
@@ -2352,7 +2478,7 @@ defmodule Muro.Synth.Term do
   end
 
   defp split_data(name, rows, hole, embed, cands, type_of, continue, miss, k, bound) do
-    var = "u#{k}"
+    var = Names.current("u#{k}")
     motive = "(λ (#{var} : #{name}) → #{type_of.(embed.(var))})"
 
     case data_arms(rows, cands, embed, type_of, continue, miss, k, bound) do
@@ -2440,7 +2566,9 @@ defmodule Muro.Synth.Term do
   end
 
   defp field_binders([], _k), do: []
-  defp field_binders(fields, k), do: Enum.map(0..(length(fields) - 1), &"f#{k}_#{&1}")
+
+  defp field_binders(fields, k),
+    do: Enum.map(0..(length(fields) - 1), &Names.current("f#{k}_#{&1}"))
 
   defp split_fields(
          [],
@@ -2543,8 +2671,8 @@ defmodule Muro.Synth.Term do
   end
 
   defp split_prod(left, right, hole, embed, cands, type_of, continue, miss, k, bound) do
-    a = "p#{k}_0"
-    b = "p#{k}_1"
+    a = Names.current("p#{k}_0")
+    b = Names.current("p#{k}_1")
     local = "(#{a}, #{b})"
 
     case pair_cands(cands) do

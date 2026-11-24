@@ -1,0 +1,172 @@
+-- queens4 with reserved ClassCert binders (c, a, s, t, m, n, x, y,
+-- xs, ys, z). Book.render of the reach-family ranking must freshen
+-- those Names.current spellings so they do not capture the Marker
+-- constructors.
+-- queens4.muro — 4 rows, one queen per row.
+--
+-- The board is the list of columns chosen so far, one column per row.
+-- An action chooses the column of the next row and appends it. Two
+-- entries that share a column, or whose columns differ by the distance
+-- between their rows, end the run: the state stays there and the reward
+-- is 0. A board of length 4 with no such pair is finished and stays
+-- there with reward 100. A shorter board with no such pair continues,
+-- and the reward is 0. The horizon is 4. The cover is every safe
+-- board of length at most 4, together with the dead state. Nothing
+-- in this book names a template.
+import "../../examples/cshrl/std/nat.muro"
+import "../../examples/cshrl/lib/agent.muro"
+
+data State : Type where
+  ongoing : Π (xs : List Nat) → State
+  dead : State
+  solved : Π (xs : List Nat) → State
+
+data Action : Type where
+  c0 : Action
+  c1 : Action
+  c2 : Action
+  c3 : Action
+
+
+data Marker : Type where
+  c : Marker
+  a : Marker
+  s : Marker
+  t : Marker
+  m : Marker
+  n : Marker
+  x : Marker
+  y : Marker
+  xs : Marker
+  ys : Marker
+  z : Marker
+
+def Reward : spec Type := Nat
+
+def board-same : run Π (+ n : Nat) → Π (+ m : Nat) → Bool :=
+  λ (+ n : Nat) → λ (+ m : Nat) →
+    match n motive (λ _ → Bool)
+      | 0 =>
+          (match m motive (λ _ → Bool)
+            | 0 => true
+            | suc _ => false)
+      | suc n1 =>
+          (match m motive (λ _ → Bool)
+            | 0 => false
+            | suc m1 => board-same n1 m1)
+
+def board-monus : run Π (+ n : Nat) → Π (+ m : Nat) → Nat :=
+  λ (+ n : Nat) → λ (+ m : Nat) →
+    match n motive (λ _ → Nat)
+      | 0 => 0
+      | suc n1 =>
+          (match m motive (λ _ → Nat)
+            | 0 => suc n1
+            | suc m1 => board-monus n1 m1)
+
+def board-gap : run Π (+ n : Nat) → Π (+ m : Nat) → Nat :=
+  λ (+ n : Nat) → λ (+ m : Nat) →
+    plus (board-monus n m) (board-monus m n)
+
+def board-or : run Π (p : Bool) → Π (q : Bool) → Bool :=
+  λ (p : Bool) → λ (q : Bool) →
+    match p motive (λ _ → Bool)
+      | true => true
+      | false => q
+
+def board-clash : run Π (+ x : Nat) → Π (+ y : Nat) → Π (+ d : Nat) → Bool :=
+  λ (+ x : Nat) → λ (+ y : Nat) → λ (+ d : Nat) →
+    board-or (board-same x y) (board-same (board-gap x y) d)
+
+def board-hits : run Π (+ x : Nat) → Π (+ d : Nat) → Π (ys : List Nat) → Bool :=
+  λ (+ x : Nat) → λ (+ d : Nat) → λ (ys : List Nat) →
+    match ys motive (λ _ → Bool)
+      | nil => false
+      | cons y rest =>
+          (match (board-clash x y d) motive (λ _ → Bool)
+            | true => true
+            | false => board-hits x (suc d) rest)
+
+def board-tail : run Π (+ xs : List Nat) → List Nat :=
+  λ (+ xs : List Nat) →
+    match xs motive (λ _ → List Nat)
+      | nil => nil
+      | cons _ ys => ys
+
+def board-blocked : run Π (+ xs : List Nat) → Bool :=
+  λ (+ xs : List Nat) →
+    match xs motive (λ _ → Bool)
+      | nil => false
+      | cons x rest =>
+          (match (board-hits x (suc 0) (board-tail xs)) motive (λ _ → Bool)
+            | true => true
+            | false => board-blocked rest)
+
+def board-length : run Π (xs : List Nat) → Nat :=
+  λ (xs : List Nat) →
+    match xs motive (λ _ → Nat)
+      | nil => 0
+      | cons _ ys => suc (board-length ys)
+
+def board-full : run Π (xs : List Nat) → Bool :=
+  λ (xs : List Nat) → board-same (board-length xs) 4
+
+def board-column : run Π (+ a : Action) → Nat :=
+  λ (+ a : Action) →
+    match a motive (λ _ → Nat)
+      | c0 => 0
+      | c1 => 1
+      | c2 => 2
+      | c3 => 3
+
+def board-snoc : run Π (+ xs : List Nat) → Π (+ x : Nat) → List Nat :=
+  λ (+ xs : List Nat) → λ (+ x : Nat) →
+    match xs motive (λ _ → List Nat)
+      | nil => cons x nil
+      | cons y ys => cons y (board-snoc ys x)
+
+def board-extend : run Π (+ xs : List Nat) → Π (+ a : Action) → List Nat :=
+  λ (+ xs : List Nat) → λ (+ a : Action) → board-snoc xs (board-column a)
+
+def board-judge : run Π (+ ys : List Nat) → State × Reward :=
+  λ (+ ys : List Nat) →
+    match (board-blocked ys) motive (λ _ → State × Reward)
+      | true => (dead, 0)
+      | false =>
+          (match (board-full ys) motive (λ _ → State × Reward)
+            | true => (solved ys, 100)
+            | false => (ongoing ys, 0))
+
+def step : run Π (s : State) → Π (a : Action) → State × Reward :=
+  λ (s : State) → λ (a : Action) →
+    match s motive (λ _ → State × Reward)
+      | ongoing xs => board-judge (board-extend xs a)
+      | dead => (dead, 0)
+      | solved xs => (solved xs, 100)
+
+def le : spec Π (r : Reward) → Π (q : Reward) → Type := Le
+def max : run Π (r : Reward) → Π (q : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := (cons c0 (cons c1 (cons c2 (cons c3 nil))))
+def default-action : run Action := c0
+def horizon : run Nat := 4
+
+def all-states : run List State :=
+  cons (ongoing nil)
+    (cons (ongoing (cons 0 nil))
+    (cons (ongoing (cons 1 nil))
+    (cons (ongoing (cons 2 nil))
+    (cons (ongoing (cons 3 nil))
+    (cons (ongoing (cons 0 (cons 2 nil)))
+    (cons (ongoing (cons 0 (cons 3 nil)))
+    (cons (ongoing (cons 1 (cons 3 nil)))
+    (cons (ongoing (cons 2 (cons 0 nil)))
+    (cons (ongoing (cons 3 (cons 0 nil)))
+    (cons (ongoing (cons 3 (cons 1 nil)))
+    (cons (ongoing (cons 0 (cons 3 (cons 1 nil))))
+    (cons (ongoing (cons 1 (cons 3 (cons 0 nil))))
+    (cons (ongoing (cons 2 (cons 0 (cons 3 nil))))
+    (cons (ongoing (cons 3 (cons 0 (cons 2 nil))))
+    (cons (solved (cons 1 (cons 3 (cons 0 (cons 2 nil)))))
+    (cons (solved (cons 2 (cons 0 (cons 3 (cons 1 nil)))))
+    (cons dead nil)))))))))))))))))

@@ -6,6 +6,7 @@ defmodule Muro.Synth.ClassCert do
   # other survivor keeps the cover split. This book does not call a Finder.
 
   alias Muro.Synth.Cert
+  alias Muro.Synth.Names
 
   @atom_cap 16
   # A cover this small still gets the per-state agreement table. queens4
@@ -215,69 +216,69 @@ defmodule Muro.Synth.ClassCert do
     def Config : spec Type := List Nat
     def solved-reward : run Reward := #{reward}
     def class-dead : run State := dead
-    def class-ongoing : run Π (c : Config) → State :=
-      λ (c : Config) → ongoing c
-    def class-solved : run Π (c : Config) → State :=
-      λ (c : Config) → solved c
-    def class-blocked : run Π (+ c : Config) → Bool := board-blocked
-    def class-full : run Π (c : Config) → Bool := board-full
-    def class-place : run Π (+ c : Config) → Π (+ a : Action) → Config := board-extend
-    def class-length : run Π (c : Config) → Nat := board-length
+    def class-ongoing : run Π (#{Names.current("c")} : Config) → State :=
+      λ (#{Names.current("c")} : Config) → ongoing #{Names.current("c")}
+    def class-solved : run Π (#{Names.current("c")} : Config) → State :=
+      λ (#{Names.current("c")} : Config) → solved #{Names.current("c")}
+    def class-blocked : run Π (+ #{Names.current("c")} : Config) → Bool := board-blocked
+    def class-full : run Π (#{Names.current("c")} : Config) → Bool := board-full
+    def class-place : run Π (+ #{Names.current("c")} : Config) → Π (+ #{Names.current("a")} : Action) → Config := board-extend
+    def class-length : run Π (#{Names.current("c")} : Config) → Nat := board-length
 
-    def state-view : evidence Π (s : State) → StateView s :=
-      λ (s : State) →
-        match s motive (λ (t : State) → StateView t)
-          | ongoing c => view-ongoing c
+    def state-view : evidence Π (#{Names.current("s")} : State) → StateView #{Names.current("s")} :=
+      λ (#{Names.current("s")} : State) →
+        match #{Names.current("s")} motive (λ (#{Names.current("t")} : State) → StateView #{Names.current("t")})
+          | ongoing #{Names.current("c")} => view-ongoing #{Names.current("c")}
           | dead => view-dead
-          | solved c => view-solved c
+          | solved #{Names.current("c")} => view-solved #{Names.current("c")}
 
     def zero-lt-R : evidence le (suc bottom) solved-reward := tt
 
-    def board-same-nat : evidence Π (m : Nat) → Π (n : Nat) →
-                                  {board-same m n ≡ nat-eq m n : Bool} :=
-      λ (m : Nat) →
-        match m motive (λ (x : Nat) → Π (n : Nat) → {board-same x n ≡ nat-eq x n : Bool})
-          | 0 => λ (n : Nat) →
-              match n motive (λ (y : Nat) → {board-same 0 y ≡ nat-eq 0 y : Bool})
+    def board-same-nat : evidence Π (#{Names.current("m")} : Nat) → Π (#{Names.current("n")} : Nat) →
+                                  {board-same #{Names.current("m")} #{Names.current("n")} ≡ nat-eq #{Names.current("m")} #{Names.current("n")} : Bool} :=
+      λ (#{Names.current("m")} : Nat) →
+        match #{Names.current("m")} motive (λ (#{Names.current("x")} : Nat) → Π (#{Names.current("n")} : Nat) → {board-same #{Names.current("x")} #{Names.current("n")} ≡ nat-eq #{Names.current("x")} #{Names.current("n")} : Bool})
+          | 0 => λ (#{Names.current("n")} : Nat) →
+              match #{Names.current("n")} motive (λ (#{Names.current("y")} : Nat) → {board-same 0 #{Names.current("y")} ≡ nat-eq 0 #{Names.current("y")} : Bool})
                 | 0 => refl
                 | suc _ => refl
-          | suc m1 => λ (n : Nat) →
-              match n motive (λ (y : Nat) → {board-same (suc m1) y ≡ nat-eq (suc m1) y : Bool})
+          | suc #{Names.current("m1")} => λ (#{Names.current("n")} : Nat) →
+              match #{Names.current("n")} motive (λ (#{Names.current("y")} : Nat) → {board-same (suc #{Names.current("m1")}) #{Names.current("y")} ≡ nat-eq (suc #{Names.current("m1")}) #{Names.current("y")} : Bool})
                 | 0 => refl
-                | suc n1 => board-same-nat m1 n1
+                | suc #{Names.current("n1")} => board-same-nat #{Names.current("m1")} #{Names.current("n1")}
 
-    def full-is-length : evidence Π (c : Config) →
-                                  {class-full c ≡ nat-eq (class-length c) horizon : Bool} :=
-      λ (c : Config) → board-same-nat (class-length c) horizon
+    def full-is-length : evidence Π (#{Names.current("c")} : Config) →
+                                  {class-full #{Names.current("c")} ≡ nat-eq (class-length #{Names.current("c")}) horizon : Bool} :=
+      λ (#{Names.current("c")} : Config) → board-same-nat (class-length #{Names.current("c")}) horizon
 
-    def step-dead : evidence Π (a : Action) →
-                             {step class-dead a ≡ (class-dead, bottom) : State × Reward} :=
-      λ (a : Action) → refl
+    def step-dead : evidence Π (#{Names.current("a")} : Action) →
+                             {step class-dead #{Names.current("a")} ≡ (class-dead, bottom) : State × Reward} :=
+      λ (#{Names.current("a")} : Action) → refl
 
-    def step-solved : evidence Π (c : Config) → Π (a : Action) →
-                               {step (class-solved c) a ≡ (class-solved c, solved-reward) : State × Reward} :=
-      λ (c : Config) → λ (a : Action) → refl
+    def step-solved : evidence Π (#{Names.current("c")} : Config) → Π (#{Names.current("a")} : Action) →
+                               {step (class-solved #{Names.current("c")}) #{Names.current("a")} ≡ (class-solved #{Names.current("c")}, solved-reward) : State × Reward} :=
+      λ (#{Names.current("c")} : Config) → λ (#{Names.current("a")} : Action) → refl
 
-    def step-ongoing : evidence Π (c : Config) → Π (a : Action) →
-                                {step (class-ongoing c) a ≡ class-judge (class-place c a) : State × Reward} :=
-      λ (c : Config) → λ (a : Action) → refl
+    def step-ongoing : evidence Π (#{Names.current("c")} : Config) → Π (#{Names.current("a")} : Action) →
+                                {step (class-ongoing #{Names.current("c")}) #{Names.current("a")} ≡ class-judge (class-place #{Names.current("c")} #{Names.current("a")}) : State × Reward} :=
+      λ (#{Names.current("c")} : Config) → λ (#{Names.current("a")} : Action) → refl
 
-    def length-snoc : evidence Π (xs : List Nat) → Π (x : Nat) →
-                               {board-length (board-snoc xs x) ≡ suc (board-length xs) : Nat} :=
-      λ (xs : List Nat) → λ (x : Nat) →
-        match xs motive (λ (ys : List Nat) → {board-length (board-snoc ys x) ≡ suc (board-length ys) : Nat})
+    def length-snoc : evidence Π (#{Names.current("xs")} : List Nat) → Π (#{Names.current("x")} : Nat) →
+                               {board-length (board-snoc #{Names.current("xs")} #{Names.current("x")}) ≡ suc (board-length #{Names.current("xs")}) : Nat} :=
+      λ (#{Names.current("xs")} : List Nat) → λ (#{Names.current("x")} : Nat) →
+        match #{Names.current("xs")} motive (λ (#{Names.current("ys")} : List Nat) → {board-length (board-snoc #{Names.current("ys")} #{Names.current("x")}) ≡ suc (board-length #{Names.current("ys")}) : Nat})
           | nil => refl
-          | cons y ys =>
-              rewrite length-snoc ys x motive (λ z → {suc z ≡ suc (suc (board-length ys)) : Nat}) in
+          | cons #{Names.current("y")} #{Names.current("ys")} =>
+              rewrite length-snoc #{Names.current("ys")} #{Names.current("x")} motive (λ #{Names.current("z")} → {suc #{Names.current("z")} ≡ suc (suc (board-length #{Names.current("ys")})) : Nat}) in
               refl
 
-    def length-place : evidence Π (c : Config) → Π (a : Action) →
-                                {class-length (class-place c a) ≡ suc (class-length c) : Nat} :=
-      λ (c : Config) → λ (a : Action) → length-snoc c (board-column a)
+    def length-place : evidence Π (#{Names.current("c")} : Config) → Π (#{Names.current("a")} : Action) →
+                                {class-length (class-place #{Names.current("c")} #{Names.current("a")}) ≡ suc (class-length #{Names.current("c")}) : Nat} :=
+      λ (#{Names.current("c")} : Config) → λ (#{Names.current("a")} : Action) → length-snoc #{Names.current("c")} (board-column #{Names.current("a")})
 
-    def in-actions : evidence Π (a : Action) → Elem a all-actions :=
-      λ (a : Action) →
-        match a motive (λ (x : Action) → Elem x all-actions)
+    def in-actions : evidence Π (#{Names.current("a")} : Action) → Elem #{Names.current("a")} all-actions :=
+      λ (#{Names.current("a")} : Action) →
+        match #{Names.current("a")} motive (λ (#{Names.current("x")} : Action) → Elem #{Names.current("x")} all-actions)
     #{branches}
     """
   end
@@ -299,145 +300,145 @@ defmodule Muro.Synth.ClassCert do
     n = names.notb
 
     """
-    def class-orb-true : evidence Π (a : Bool) → Π (b : Bool) →
-                                  Π (h : {a ≡ true : Bool}) →
-                                  {#{o} a b ≡ true : Bool} :=
-      λ (a : Bool) → λ (b : Bool) → λ (h : {a ≡ true : Bool}) →
-        rewrite h motive (λ z → {#{o} z b ≡ true : Bool}) in refl
+    def class-orb-true : evidence Π (#{Names.current("a")} : Bool) → Π (#{Names.current("b")} : Bool) →
+                                  Π (#{Names.current("h")} : {#{Names.current("a")} ≡ true : Bool}) →
+                                  {#{o} #{Names.current("a")} #{Names.current("b")} ≡ true : Bool} :=
+      λ (#{Names.current("a")} : Bool) → λ (#{Names.current("b")} : Bool) → λ (#{Names.current("h")} : {#{Names.current("a")} ≡ true : Bool}) →
+        rewrite #{Names.current("h")} motive (λ #{Names.current("z")} → {#{o} #{Names.current("z")} #{Names.current("b")} ≡ true : Bool}) in refl
 
-    def class-orb-false : evidence Π (a : Bool) → Π (b : Bool) → Π (c : Bool) →
-                                   Π (ha : {a ≡ false : Bool}) →
-                                   Π (hb : {b ≡ c : Bool}) →
-                                   {#{o} a b ≡ c : Bool} :=
-      λ (a : Bool) → λ (b : Bool) → λ (c : Bool) →
-      λ (ha : {a ≡ false : Bool}) → λ (hb : {b ≡ c : Bool}) →
-        rewrite ha motive (λ z → {#{o} z b ≡ c : Bool}) in
-          (rewrite hb motive (λ z → {z ≡ c : Bool}) in refl)
+    def class-orb-false : evidence Π (#{Names.current("a")} : Bool) → Π (#{Names.current("b")} : Bool) → Π (#{Names.current("c")} : Bool) →
+                                   Π (#{Names.current("ha")} : {#{Names.current("a")} ≡ false : Bool}) →
+                                   Π (#{Names.current("hb")} : {#{Names.current("b")} ≡ #{Names.current("c")} : Bool}) →
+                                   {#{o} #{Names.current("a")} #{Names.current("b")} ≡ #{Names.current("c")} : Bool} :=
+      λ (#{Names.current("a")} : Bool) → λ (#{Names.current("b")} : Bool) → λ (#{Names.current("c")} : Bool) →
+      λ (#{Names.current("ha")} : {#{Names.current("a")} ≡ false : Bool}) → λ (#{Names.current("hb")} : {#{Names.current("b")} ≡ #{Names.current("c")} : Bool}) →
+        rewrite #{Names.current("ha")} motive (λ #{Names.current("z")} → {#{o} #{Names.current("z")} #{Names.current("b")} ≡ #{Names.current("c")} : Bool}) in
+          (rewrite #{Names.current("hb")} motive (λ #{Names.current("z")} → {#{Names.current("z")} ≡ #{Names.current("c")} : Bool}) in refl)
 
-    def class-andb-true : evidence Π (a : Bool) → Π (b : Bool) → Π (c : Bool) →
-                                   Π (ha : {a ≡ true : Bool}) →
-                                   Π (hb : {b ≡ c : Bool}) →
-                                   {#{a} a b ≡ c : Bool} :=
-      λ (a : Bool) → λ (b : Bool) → λ (c : Bool) →
-      λ (ha : {a ≡ true : Bool}) → λ (hb : {b ≡ c : Bool}) →
-        rewrite ha motive (λ z → {#{a} z b ≡ c : Bool}) in
-          (rewrite hb motive (λ z → {z ≡ c : Bool}) in refl)
+    def class-andb-true : evidence Π (#{Names.current("a")} : Bool) → Π (#{Names.current("b")} : Bool) → Π (#{Names.current("c")} : Bool) →
+                                   Π (#{Names.current("ha")} : {#{Names.current("a")} ≡ true : Bool}) →
+                                   Π (#{Names.current("hb")} : {#{Names.current("b")} ≡ #{Names.current("c")} : Bool}) →
+                                   {#{a} #{Names.current("a")} #{Names.current("b")} ≡ #{Names.current("c")} : Bool} :=
+      λ (#{Names.current("a")} : Bool) → λ (#{Names.current("b")} : Bool) → λ (#{Names.current("c")} : Bool) →
+      λ (#{Names.current("ha")} : {#{Names.current("a")} ≡ true : Bool}) → λ (#{Names.current("hb")} : {#{Names.current("b")} ≡ #{Names.current("c")} : Bool}) →
+        rewrite #{Names.current("ha")} motive (λ #{Names.current("z")} → {#{a} #{Names.current("z")} #{Names.current("b")} ≡ #{Names.current("c")} : Bool}) in
+          (rewrite #{Names.current("hb")} motive (λ #{Names.current("z")} → {#{Names.current("z")} ≡ #{Names.current("c")} : Bool}) in refl)
 
-    def class-andb-false : evidence Π (a : Bool) → Π (b : Bool) →
-                                    Π (h : {a ≡ false : Bool}) →
-                                    {#{a} a b ≡ false : Bool} :=
-      λ (a : Bool) → λ (b : Bool) → λ (h : {a ≡ false : Bool}) →
-        rewrite h motive (λ z → {#{a} z b ≡ false : Bool}) in refl
+    def class-andb-false : evidence Π (#{Names.current("a")} : Bool) → Π (#{Names.current("b")} : Bool) →
+                                    Π (#{Names.current("h")} : {#{Names.current("a")} ≡ false : Bool}) →
+                                    {#{a} #{Names.current("a")} #{Names.current("b")} ≡ false : Bool} :=
+      λ (#{Names.current("a")} : Bool) → λ (#{Names.current("b")} : Bool) → λ (#{Names.current("h")} : {#{Names.current("a")} ≡ false : Bool}) →
+        rewrite #{Names.current("h")} motive (λ #{Names.current("z")} → {#{a} #{Names.current("z")} #{Names.current("b")} ≡ false : Bool}) in refl
 
-    def class-notb-true : evidence Π (a : Bool) → Π (h : {a ≡ false : Bool}) →
-                                   {#{n} a ≡ true : Bool} :=
-      λ (a : Bool) → λ (h : {a ≡ false : Bool}) →
-        rewrite h motive (λ z → {#{n} z ≡ true : Bool}) in refl
+    def class-notb-true : evidence Π (#{Names.current("a")} : Bool) → Π (#{Names.current("h")} : {#{Names.current("a")} ≡ false : Bool}) →
+                                   {#{n} #{Names.current("a")} ≡ true : Bool} :=
+      λ (#{Names.current("a")} : Bool) → λ (#{Names.current("h")} : {#{Names.current("a")} ≡ false : Bool}) →
+        rewrite #{Names.current("h")} motive (λ #{Names.current("z")} → {#{n} #{Names.current("z")} ≡ true : Bool}) in refl
 
-    def class-notb-false : evidence Π (a : Bool) → Π (h : {a ≡ true : Bool}) →
-                                    {#{n} a ≡ false : Bool} :=
-      λ (a : Bool) → λ (h : {a ≡ true : Bool}) →
-        rewrite h motive (λ z → {#{n} z ≡ false : Bool}) in refl
+    def class-notb-false : evidence Π (#{Names.current("a")} : Bool) → Π (#{Names.current("h")} : {#{Names.current("a")} ≡ true : Bool}) →
+                                    {#{n} #{Names.current("a")} ≡ false : Bool} :=
+      λ (#{Names.current("a")} : Bool) → λ (#{Names.current("h")} : {#{Names.current("a")} ≡ true : Bool}) →
+        rewrite #{Names.current("h")} motive (λ #{Names.current("z")} → {#{n} #{Names.current("z")} ≡ false : Bool}) in refl
     """
   end
 
   defp tie_lemmas do
     """
-    def class-hit-ask : run Π (+ s : State) → Π (+ y : Action) → Bool :=
-      λ (+ s : State) → λ (+ y : Action) → hit s y horizon
+    def class-hit-ask : run Π (+ #{Names.current("s")} : State) → Π (+ #{Names.current("y")} : Action) → Bool :=
+      λ (+ #{Names.current("s")} : State) → λ (+ #{Names.current("y")} : Action) → hit #{Names.current("s")} #{Names.current("y")} horizon
 
-    def class-cons-false : evidence Π (+ ask : Π (+ y : Action) → Bool) →
-                                    Π (+ x : Action) →
-                                    Π (rest : List Action) →
-                                    Π (hf : {ask x ≡ false : Bool}) →
-                                    Π (hr : {hit-fold ask rest ≡ false : Bool}) →
-                                    {hit-fold ask (cons x rest) ≡ false : Bool} :=
-      λ (+ ask : Π (+ y : Action) → Bool) → λ (+ x : Action) → λ (rest : List Action) →
-      λ (hf : {ask x ≡ false : Bool}) →
-      λ (hr : {hit-fold ask rest ≡ false : Bool}) →
-        rewrite (fold-cons-eq ask x rest)
-          motive (λ z → {z ≡ false : Bool})
+    def class-cons-false : evidence Π (+ #{Names.current("ask")} : Π (+ #{Names.current("y")} : Action) → Bool) →
+                                    Π (+ #{Names.current("x")} : Action) →
+                                    Π (#{Names.current("rest")} : List Action) →
+                                    Π (#{Names.current("hf")} : {#{Names.current("ask")} #{Names.current("x")} ≡ false : Bool}) →
+                                    Π (#{Names.current("hr")} : {hit-fold #{Names.current("ask")} #{Names.current("rest")} ≡ false : Bool}) →
+                                    {hit-fold #{Names.current("ask")} (cons #{Names.current("x")} #{Names.current("rest")}) ≡ false : Bool} :=
+      λ (+ #{Names.current("ask")} : Π (+ #{Names.current("y")} : Action) → Bool) → λ (+ #{Names.current("x")} : Action) → λ (#{Names.current("rest")} : List Action) →
+      λ (#{Names.current("hf")} : {#{Names.current("ask")} #{Names.current("x")} ≡ false : Bool}) →
+      λ (#{Names.current("hr")} : {hit-fold #{Names.current("ask")} #{Names.current("rest")} ≡ false : Bool}) →
+        rewrite (fold-cons-eq #{Names.current("ask")} #{Names.current("x")} #{Names.current("rest")})
+          motive (λ #{Names.current("z")} → {#{Names.current("z")} ≡ false : Bool})
         in
-        rewrite hf
-          motive (λ b →
-            {(match b motive (λ _ → Bool)
+        rewrite #{Names.current("hf")}
+          motive (λ #{Names.current("b")} →
+            {(match #{Names.current("b")} motive (λ _ → Bool)
                | true => true
-               | false => hit-fold ask rest) ≡ false : Bool})
-        in hr
+               | false => hit-fold #{Names.current("ask")} #{Names.current("rest")}) ≡ false : Bool})
+        in #{Names.current("hr")}
     """
   end
 
   defp bridge_eqs(dyn) do
     """
-    def class-pos-eq : evidence Π (q : Reward) → {#{dyn.pos} q ≡ class-pos q : Bool} :=
-      λ (q : Reward) →
-        match q motive (λ x → {#{dyn.pos} x ≡ class-pos x : Bool})
+    def class-pos-eq : evidence Π (#{Names.current("q")} : Reward) → {#{dyn.pos} #{Names.current("q")} ≡ class-pos #{Names.current("q")} : Bool} :=
+      λ (#{Names.current("q")} : Reward) →
+        match #{Names.current("q")} motive (λ #{Names.current("x")} → {#{dyn.pos} #{Names.current("x")} ≡ class-pos #{Names.current("x")} : Bool})
           | 0 => refl
           | suc _ => refl
 
-    def class-best-eq : evidence Π (+ t : State) → Π (+ n : Nat) →
-                                 {#{dyn.best} t n ≡
-                                  (match n motive (λ _ → Bool)
+    def class-best-eq : evidence Π (+ #{Names.current("t")} : State) → Π (+ #{Names.current("n")} : Nat) →
+                                 {#{dyn.best} #{Names.current("t")} #{Names.current("n")} ≡
+                                  (match #{Names.current("n")} motive (λ _ → Bool)
                                     | 0 => false
-                                    | suc j => #{dyn.any} t j) : Bool} :=
-      λ (+ t : State) → λ (+ n : Nat) → refl
+                                    | suc #{Names.current("j")} => #{dyn.any} #{Names.current("t")} #{Names.current("j")}) : Bool} :=
+      λ (+ #{Names.current("t")} : State) → λ (+ #{Names.current("n")} : Nat) → refl
 
-    def class-one-eq : evidence Π (+ t : State) → Π (+ b : Action) → Π (+ n : Nat) →
-                                {#{dyn.one} t b n ≡
-                                 (match (#{dyn.pos} (snd (step t b))) motive (λ _ → Bool)
+    def class-one-eq : evidence Π (+ #{Names.current("t")} : State) → Π (+ #{Names.current("b")} : Action) → Π (+ #{Names.current("n")} : Nat) →
+                                {#{dyn.one} #{Names.current("t")} #{Names.current("b")} #{Names.current("n")} ≡
+                                 (match (#{dyn.pos} (snd (step #{Names.current("t")} #{Names.current("b")}))) motive (λ _ → Bool)
                                    | true => true
-                                   | false => #{dyn.best} (fst (step t b)) n) : Bool} :=
-      λ (+ t : State) → λ (+ b : Action) → λ (+ n : Nat) → refl
+                                   | false => #{dyn.best} (fst (step #{Names.current("t")} #{Names.current("b")})) #{Names.current("n")}) : Bool} :=
+      λ (+ #{Names.current("t")} : State) → λ (+ #{Names.current("b")} : Action) → λ (+ #{Names.current("n")} : Nat) → refl
 
-    def class-any-eq : evidence Π (+ t : State) → Π (+ n : Nat) →
-                                {#{dyn.any} t n ≡
-                                 hit-fold (λ (+ b : Action) → #{dyn.one} t b n) all-actions : Bool} :=
-      λ (+ t : State) → λ (+ n : Nat) → refl
+    def class-any-eq : evidence Π (+ #{Names.current("t")} : State) → Π (+ #{Names.current("n")} : Nat) →
+                                {#{dyn.any} #{Names.current("t")} #{Names.current("n")} ≡
+                                 hit-fold (λ (+ #{Names.current("b")} : Action) → #{dyn.one} #{Names.current("t")} #{Names.current("b")} #{Names.current("n")}) all-actions : Bool} :=
+      λ (+ #{Names.current("t")} : State) → λ (+ #{Names.current("n")} : Nat) → refl
     """
   end
 
   defp reach_defs(actions, dyn) do
     arms =
       Enum.map_join(actions, "\n", fn action ->
-        "      | #{action} => #{dyn.one} s #{action} horizon"
+        "      | #{action} => #{dyn.one} #{Names.current("s")} #{action} horizon"
       end)
 
     eqs =
       Enum.map_join(actions, "\n", fn action ->
-        "      | #{action} => #{bridge(dyn, "s", action)}"
+        "      | #{action} => #{bridge(dyn, Names.current("s"), action)}"
       end)
 
     """
-    def class-reach : run Π (+ s : State) → Π (+ a : Action) → Bool :=
-      λ (+ s : State) → λ (+ a : Action) →
-        match a motive (λ _ → Bool)
+    def class-reach : run Π (+ #{Names.current("s")} : State) → Π (+ #{Names.current("a")} : Action) → Bool :=
+      λ (+ #{Names.current("s")} : State) → λ (+ #{Names.current("a")} : Action) →
+        match #{Names.current("a")} motive (λ _ → Bool)
     #{arms}
 
-    def class-reach-eq : evidence Π (+ s : State) → Π (+ a : Action) →
-                                  {class-reach s a ≡ hit s a horizon : Bool} :=
-      λ (+ s : State) → λ (+ a : Action) →
-        match a motive (λ x → {class-reach s x ≡ hit s x horizon : Bool})
+    def class-reach-eq : evidence Π (+ #{Names.current("s")} : State) → Π (+ #{Names.current("a")} : Action) →
+                                  {class-reach #{Names.current("s")} #{Names.current("a")} ≡ hit #{Names.current("s")} #{Names.current("a")} horizon : Bool} :=
+      λ (+ #{Names.current("s")} : State) → λ (+ #{Names.current("a")} : Action) →
+        match #{Names.current("a")} motive (λ #{Names.current("x")} → {class-reach #{Names.current("s")} #{Names.current("x")} ≡ hit #{Names.current("s")} #{Names.current("x")} horizon : Bool})
     #{eqs}
     """
   end
 
   defp conflict_def(dyn) do
     """
-    def class-atom-conflict : evidence Π (+ s : State) → Π (+ a : Action) →
-                                       Π (hp : {#{dyn.pos} (snd (step s a)) ≡ true : Bool}) →
-                                       Π (hn : {#{dyn.one} s a horizon ≡ false : Bool}) →
+    def class-atom-conflict : evidence Π (+ #{Names.current("s")} : State) → Π (+ #{Names.current("a")} : Action) →
+                                       Π (#{Names.current("hp")} : {#{dyn.pos} (snd (step #{Names.current("s")} #{Names.current("a")})) ≡ true : Bool}) →
+                                       Π (#{Names.current("hn")} : {#{dyn.one} #{Names.current("s")} #{Names.current("a")} horizon ≡ false : Bool}) →
                                        Empty :=
-      λ (+ s : State) → λ (+ a : Action) →
-      λ (hp : {#{dyn.pos} (snd (step s a)) ≡ true : Bool}) →
-      λ (hn : {#{dyn.one} s a horizon ≡ false : Bool}) →
-        reach-conflict s a
-          (rewrite (sym Bool (#{dyn.pos} (snd (step s a))) (class-pos (snd (step s a)))
-                     (class-pos-eq (snd (step s a))))
-            motive (λ z → {z ≡ true : Bool})
-          in hp)
-          (rewrite (sym Bool (#{dyn.one} s a horizon) (hit s a horizon) (#{bridge(dyn, "s", "a")}))
-            motive (λ z → {z ≡ false : Bool})
-          in hn)
+      λ (+ #{Names.current("s")} : State) → λ (+ #{Names.current("a")} : Action) →
+      λ (#{Names.current("hp")} : {#{dyn.pos} (snd (step #{Names.current("s")} #{Names.current("a")})) ≡ true : Bool}) →
+      λ (#{Names.current("hn")} : {#{dyn.one} #{Names.current("s")} #{Names.current("a")} horizon ≡ false : Bool}) →
+        reach-conflict #{Names.current("s")} #{Names.current("a")}
+          (rewrite (sym Bool (#{dyn.pos} (snd (step #{Names.current("s")} #{Names.current("a")}))) (class-pos (snd (step #{Names.current("s")} #{Names.current("a")})))
+                     (class-pos-eq (snd (step #{Names.current("s")} #{Names.current("a")}))))
+            motive (λ #{Names.current("z")} → {#{Names.current("z")} ≡ true : Bool})
+          in #{Names.current("hp")})
+          (rewrite (sym Bool (#{dyn.one} #{Names.current("s")} #{Names.current("a")} horizon) (hit #{Names.current("s")} #{Names.current("a")} horizon) (#{bridge(dyn, Names.current("s"), Names.current("a"))}))
+            motive (λ #{Names.current("z")} → {#{Names.current("z")} ≡ false : Bool})
+          in #{Names.current("hn")})
     """
   end
 
@@ -451,17 +452,17 @@ defmodule Muro.Synth.ClassCert do
       formula = term(arm.pred, ctx)
 
       """
-      def class-arm-eq-#{index} : evidence Π (+ s : State) →
-                                         {#{bound.names.eval} #{decl} s ≡ #{formula} : Bool} :=
-        λ (+ s : State) → refl
+      def class-arm-eq-#{index} : evidence Π (+ #{Names.current("s")} : State) →
+                                         {#{bound.names.eval} #{decl} #{Names.current("s")} ≡ #{formula} : Bool} :=
+        λ (+ #{Names.current("s")} : State) → refl
       """
     end)
   end
 
   defp rank_def(bound, arms, actions) do
     """
-    def rank : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
-      λ (s : State) → λ (a : Action) → λ (b : Action) →
+    def rank : spec Π (#{Names.current("s")} : State) → Π (#{Names.current("a")} : Action) → Π (#{Names.current("b")} : Action) → Type :=
+      λ (#{Names.current("s")} : State) → λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) →
         #{Cert.cascade(bound, arms, actions)}
     """
   end
@@ -472,9 +473,9 @@ defmodule Muro.Synth.ClassCert do
     prefs =
       Enum.map_join(actions, "\n", fn action ->
         """
-        def class-pref-#{action} : spec Π (y : Action) → Π (z : Action) → Type :=
-          λ (y : Action) → λ (z : Action) →
-            #{Cert.preference(actions, action, "y", "z")}
+        def class-pref-#{action} : spec Π (#{Names.current("y")} : Action) → Π (#{Names.current("z")} : Action) → Type :=
+          λ (#{Names.current("y")} : Action) → λ (#{Names.current("z")} : Action) →
+            #{Cert.preference(actions, action, Names.current("y"), Names.current("z"))}
         """
       end)
 
@@ -483,21 +484,21 @@ defmodule Muro.Synth.ClassCert do
       |> Enum.with_index()
       |> Enum.reverse()
       |> Enum.map_join("\n", fn {arm, index} ->
-        ev = "#{bound.names.eval} #{Map.fetch!(bound.decl, arm.name)} s"
+        ev = "#{bound.names.eval} #{Map.fetch!(bound.decl, arm.name)} #{Names.current("s")}"
         rest = Enum.drop(arms, index + 1)
 
         false_ty =
           if rest == [] do
-            "class-pref-#{arm.else} a b"
+            "class-pref-#{arm.else} #{Names.current("a")} #{Names.current("b")}"
           else
-            "class-rank-#{index + 1} s a b"
+            "class-rank-#{index + 1} #{Names.current("s")} #{Names.current("a")} #{Names.current("b")}"
           end
 
         """
-        def class-rank-#{index} : spec Π (s : State) → Π (a : Action) → Π (b : Action) → Type :=
-          λ (s : State) → λ (a : Action) → λ (b : Action) →
+        def class-rank-#{index} : spec Π (#{Names.current("s")} : State) → Π (#{Names.current("a")} : Action) → Π (#{Names.current("b")} : Action) → Type :=
+          λ (#{Names.current("s")} : State) → λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) →
             (match #{ev} motive (λ _ → Type)
-              | true => class-pref-#{arm.action} a b
+              | true => class-pref-#{arm.action} #{Names.current("a")} #{Names.current("b")}
               | false => #{false_ty})
         """
       end)
@@ -517,7 +518,7 @@ defmodule Muro.Synth.ClassCert do
 
   defp win_def(index, winner, arms, bound, ctx) do
     params = win_params(index, arms, bound)
-    goal = goal("a", winner)
+    goal = goal(Names.current("a"), winner)
 
     body =
       table(ctx.atoms, %{
@@ -526,15 +527,15 @@ defmodule Muro.Synth.ClassCert do
           index: index,
           winner: winner,
           goal: goal,
-          eq_true: "e#{index}",
-          eq_false: Enum.map(0..(index - 1)//1, &"e#{&1}")
+          eq_true: Names.current("e#{index}"),
+          eq_false: Enum.map(0..(index - 1)//1, &Names.current("e#{&1}"))
       })
 
     """
-    def class-win-#{index} : evidence Π (+ s : State) → Π (+ a : Action) →
+    def class-win-#{index} : evidence Π (+ #{Names.current("s")} : State) → Π (+ #{Names.current("a")} : Action) →
     #{param_types(params)}
                                     #{goal} :=
-      λ (+ s : State) → λ (+ a : Action) →
+      λ (+ #{Names.current("s")} : State) → λ (+ #{Names.current("a")} : Action) →
     #{param_lams(params)}
         #{body}
     """
@@ -543,10 +544,10 @@ defmodule Muro.Synth.ClassCert do
   defp else_def(winner, arms, bound, ctx) do
     params =
       Enum.map(Enum.with_index(arms), fn {arm, index} ->
-        {"e#{index}", eval_eq(bound, arm, false)}
+        {Names.current("e#{index}"), eval_eq(bound, arm, false)}
       end)
 
-    goal = goal("a", winner)
+    goal = goal(Names.current("a"), winner)
 
     body =
       table(ctx.atoms, %{
@@ -556,14 +557,14 @@ defmodule Muro.Synth.ClassCert do
           winner: winner,
           goal: goal,
           eq_true: nil,
-          eq_false: Enum.map(0..(length(arms) - 1)//1, &"e#{&1}")
+          eq_false: Enum.map(0..(length(arms) - 1)//1, &Names.current("e#{&1}"))
       })
 
     """
-    def class-win-else : evidence Π (+ s : State) → Π (+ a : Action) →
+    def class-win-else : evidence Π (+ #{Names.current("s")} : State) → Π (+ #{Names.current("a")} : Action) →
     #{param_types(params)}
                                   #{goal} :=
-      λ (+ s : State) → λ (+ a : Action) →
+      λ (+ #{Names.current("s")} : State) → λ (+ #{Names.current("a")} : Action) →
     #{param_lams(params)}
         #{body}
     """
@@ -572,16 +573,16 @@ defmodule Muro.Synth.ClassCert do
   defp win_params(index, arms, bound) do
     prior =
       Enum.map(0..(index - 1)//1, fn j ->
-        {"e#{j}", eval_eq(bound, Enum.at(arms, j), false)}
+        {Names.current("e#{j}"), eval_eq(bound, Enum.at(arms, j), false)}
       end)
 
-    [{"e#{index}", eval_eq(bound, Enum.at(arms, index), true)} | prior]
+    [{Names.current("e#{index}"), eval_eq(bound, Enum.at(arms, index), true)} | prior]
   end
 
   defp eval_eq(bound, arm, bit) do
     decl = Map.fetch!(bound.decl, arm.name)
     word = if bit, do: "true", else: "false"
-    "{#{bound.names.eval} #{decl} s ≡ #{word} : Bool}"
+    "{#{bound.names.eval} #{decl} #{Names.current("s")} ≡ #{word} : Bool}"
   end
 
   defp param_types(params) do
@@ -598,30 +599,30 @@ defmodule Muro.Synth.ClassCert do
 
   defp apply_def(arms, bound, actions) do
     """
-    def class-apply : evidence Π (+ s : State) → Π (+ a : Action) → Π (+ b : Action) →
-                               Π (r : rank s a b) →
-                               Dom Reward le (action-value s a) (action-value s b) :=
-      λ (+ s : State) → λ (+ a : Action) → λ (+ b : Action) → λ (r : rank s a b) →
-        #{cascade(arms, bound, actions, "r", 0, [])}
+    def class-apply : evidence Π (+ #{Names.current("s")} : State) → Π (+ #{Names.current("a")} : Action) → Π (+ #{Names.current("b")} : Action) →
+                               Π (#{Names.current("r")} : rank #{Names.current("s")} #{Names.current("a")} #{Names.current("b")}) →
+                               Dom Reward le (action-value #{Names.current("s")} #{Names.current("a")}) (action-value #{Names.current("s")} #{Names.current("b")}) :=
+      λ (+ #{Names.current("s")} : State) → λ (+ #{Names.current("a")} : Action) → λ (+ #{Names.current("b")} : Action) → λ (#{Names.current("r")} : rank #{Names.current("s")} #{Names.current("a")} #{Names.current("b")}) →
+        #{cascade(arms, bound, actions, Names.current("r"), 0, [])}
     """
   end
 
   defp cascade([arm | rest], bound, actions, proof, index, prior) do
     ev = eval_app(bound, arm)
-    ename = "e#{index}"
-    dom = goal("a", "b")
-    true_ty = "class-pref-#{arm.action} a b"
+    ename = Names.current("e#{index}")
+    dom = goal(Names.current("a"), Names.current("b"))
+    true_ty = "class-pref-#{arm.action} #{Names.current("a")} #{Names.current("b")}"
 
     false_ty =
       if rest == [] do
-        "class-pref-#{arm.else} a b"
+        "class-pref-#{arm.else} #{Names.current("a")} #{Names.current("b")}"
       else
-        "class-rank-#{index + 1} s a b"
+        "class-rank-#{index + 1} #{Names.current("s")} #{Names.current("a")} #{Names.current("b")}"
       end
 
     win = fn left ->
       args = Enum.join([ename | prior], " ")
-      "class-win-#{index} s #{left} #{args}"
+      "class-win-#{index} #{Names.current("s")} #{left} #{args}"
     end
 
     false_body =
@@ -629,25 +630,25 @@ defmodule Muro.Synth.ClassCert do
         args = Enum.join(prior ++ [ename], " ")
 
         else_call = fn left ->
-          "class-win-else s #{left} #{args}"
+          "class-win-else #{Names.current("s")} #{left} #{args}"
         end
 
-        "#{split(actions, arm.else, else_call)} q"
+        "#{split(actions, arm.else, else_call)} #{Names.current("q")}"
       else
-        cascade(rest, bound, actions, "q", index + 1, prior ++ [ename])
+        cascade(rest, bound, actions, Names.current("q"), index + 1, prior ++ [ename])
       end
 
     inner = """
-    (match bit motive (λ _ → Type)
+    (match #{Names.current("bit")} motive (λ _ → Type)
       | true => #{true_ty}
       | false => #{false_ty})
     """
 
     """
-    (match #{ev} motive (λ bit → {#{ev} ≡ bit : Bool} → Π (q : #{String.trim(inner)}) → #{dom})
-      | true => λ (#{ename} : {#{ev} ≡ true : Bool}) → λ (q : #{true_ty}) →
-          #{split(actions, arm.action, win)} q
-      | false => λ (#{ename} : {#{ev} ≡ false : Bool}) → λ (q : #{false_ty}) →
+    (match #{ev} motive (λ #{Names.current("bit")} → {#{ev} ≡ #{Names.current("bit")} : Bool} → Π (#{Names.current("q")} : #{String.trim(inner)}) → #{dom})
+      | true => λ (#{ename} : {#{ev} ≡ true : Bool}) → λ (#{Names.current("q")} : #{true_ty}) →
+          #{split(actions, arm.action, win)} #{Names.current("q")}
+      | false => λ (#{ename} : {#{ev} ≡ false : Bool}) → λ (#{Names.current("q")} : #{false_ty}) →
           #{false_body})
     refl
     #{proof}
@@ -656,11 +657,11 @@ defmodule Muro.Synth.ClassCert do
   end
 
   defp eval_app(bound, arm) do
-    "#{bound.names.eval} #{Map.fetch!(bound.decl, arm.name)} s"
+    "#{bound.names.eval} #{Map.fetch!(bound.decl, arm.name)} #{Names.current("s")}"
   end
 
   defp split(actions, winner, call) do
-    pref = "class-pref-#{winner} y b"
+    pref = "class-pref-#{winner} #{Names.current("y")} #{Names.current("b")}"
 
     branches =
       Enum.map_join(actions, "\n", fn left ->
@@ -668,14 +669,14 @@ defmodule Muro.Synth.ClassCert do
       end)
 
     """
-    (match a motive (λ y → Π (r : #{pref}) → #{goal("y", "b")})
+    (match #{Names.current("a")} motive (λ #{Names.current("y")} → Π (#{Names.current("r")} : #{pref}) → #{goal(Names.current("y"), Names.current("b"))})
       #{branches})
     """
     |> String.trim()
   end
 
   defp b_match(actions, left, winner, call) do
-    cells = "class-pref-#{winner} #{left} z"
+    cells = "class-pref-#{winner} #{left} #{Names.current("z")}"
 
     branches =
       Enum.map_join(actions, "\n", fn right ->
@@ -683,7 +684,7 @@ defmodule Muro.Synth.ClassCert do
       end)
 
     """
-    (match b motive (λ z → Π (r : #{cells}) → #{goal(left, "z")})
+    (match #{Names.current("b")} motive (λ #{Names.current("z")} → Π (#{Names.current("r")} : #{cells}) → #{goal(left, Names.current("z"))})
       #{branches})
     """
     |> String.trim()
@@ -692,21 +693,21 @@ defmodule Muro.Synth.ClassCert do
   defp split_leaf(left, right, winner, call) do
     cond do
       left == right ->
-        "λ (u : Unit) → class-same s #{left}"
+        "λ (#{Names.current("u")} : Unit) → class-same #{Names.current("s")} #{left}"
 
       right == winner ->
-        "λ (u : Unit) → #{call.(left)}"
+        "λ (#{Names.current("u")} : Unit) → #{call.(left)}"
 
       true ->
-        "λ (r : Empty) → matchEmpty r motive (λ _ → #{goal(left, right)})"
+        "λ (#{Names.current("r")} : Empty) → matchEmpty #{Names.current("r")} motive (λ _ → #{goal(left, right)})"
     end
   end
 
   defp preserves_def do
     """
     def preserves : evidence CoindHomo rank :=
-      λ (a : Action) → λ (b : Action) → λ (s : State) → λ (r : rank s a b) →
-        class-apply s a b r
+      λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) → λ (#{Names.current("s")} : State) → λ (#{Names.current("r")} : rank #{Names.current("s")} #{Names.current("a")} #{Names.current("b")}) →
+        class-apply #{Names.current("s")} #{Names.current("a")} #{Names.current("b")} #{Names.current("r")}
     """
   end
 
@@ -732,7 +733,7 @@ defmodule Muro.Synth.ClassCert do
       hyp = Map.fetch!(ctx.hyps, atom)
 
       """
-      (match #{term} motive (λ b → {#{term} ≡ b : Bool} → #{ctx.goal})
+      (match #{term} motive (λ #{Names.current("bit")} → {#{term} ≡ #{Names.current("bit")} : Bool} → #{ctx.goal})
         | true => λ (#{hyp} : {#{term} ≡ true : Bool}) →
             #{table(rest, put_bit(ctx, atom, true))}
         | false => λ (#{hyp} : {#{term} ≡ false : Bool}) →
@@ -939,20 +940,20 @@ defmodule Muro.Synth.ClassCert do
     hyp = Map.fetch!(ctx.hyps, {:reach, ctx.winner})
 
     """
-    class-from-true s #{ctx.winner} a
-      (λ (+ b : Action) → class-reach s b)
-      (λ (+ b : Action) → class-reach-eq s b)
+    class-from-true #{Names.current("s")} #{ctx.winner} #{Names.current("a")}
+      (λ (+ #{Names.current("b")} : Action) → class-reach #{Names.current("s")} #{Names.current("b")})
+      (λ (+ #{Names.current("b")} : Action) → class-reach-eq #{Names.current("s")} #{Names.current("b")})
       #{hyp}
     """
     |> String.trim()
   end
 
   defp tie_leaf(ctx) do
-    "class-from-miss s a #{ctx.winner} (#{tie_proof(ctx)})"
+    "class-from-miss #{Names.current("s")} #{Names.current("a")} #{ctx.winner} (#{tie_proof(ctx)})"
   end
 
   defp tie_proof(ctx) do
-    ask = "(class-hit-ask s)"
+    ask = "(class-hit-ask #{Names.current("s")})"
 
     chain =
       Enum.reduce(Enum.reverse(ctx.actions), "fold-nil-eq #{ask}", fn action, acc ->
@@ -962,8 +963,8 @@ defmodule Muro.Synth.ClassCert do
       end)
 
     """
-    rewrite (any-fold s horizon)
-      motive (λ z → {z ≡ false : Bool})
+    rewrite (any-fold #{Names.current("s")} horizon)
+      motive (λ #{Names.current("z")} → {#{Names.current("z")} ≡ false : Bool})
     in
       #{chain}
     """
@@ -976,11 +977,11 @@ defmodule Muro.Synth.ClassCert do
   # horizon, one action list per successor.
   defp reach_false(action, ctx) do
     hyp = Map.fetch!(ctx.hyps, {:reach, action})
-    one = "#{ctx.one} s #{action} horizon"
+    one = "#{ctx.one} #{Names.current("s")} #{action} horizon"
 
     """
-    rewrite (sym Bool (#{one}) (hit s #{action} horizon) (#{bridge_ctx(ctx, "s", action)}))
-      motive (λ z → {z ≡ false : Bool})
+    rewrite (sym Bool (#{one}) (hit #{Names.current("s")} #{action} horizon) (#{bridge_ctx(ctx, Names.current("s"), action)}))
+      motive (λ #{Names.current("z")} → {#{Names.current("z")} ≡ false : Bool})
     in #{hyp}
     """
     |> String.trim()
@@ -993,7 +994,8 @@ defmodule Muro.Synth.ClassCert do
   defp conflict_leaf(action, ctx) do
     hp = Map.fetch!(ctx.hyps, {:pos, action})
     hn = Map.fetch!(ctx.hyps, {:reach, action})
-    "matchEmpty (class-atom-conflict s #{action} #{hp} #{hn}) motive (λ _ → #{ctx.goal})"
+
+    "matchEmpty (class-atom-conflict #{Names.current("s")} #{action} #{hp} #{hn}) motive (λ _ → #{ctx.goal})"
   end
 
   defp mismatch_leaf(ctx) do
@@ -1017,10 +1019,10 @@ defmodule Muro.Synth.ClassCert do
     matchEmpty
       (class-ft
         (rewrite (sym Bool #{ev} false
-                   (rewrite (class-arm-eq-#{index} s)
-                      motive (λ z → {z ≡ false : Bool})
+                   (rewrite (class-arm-eq-#{index} #{Names.current("s")})
+                      motive (λ #{Names.current("z")} → {#{Names.current("z")} ≡ false : Bool})
                     in #{paren(proof)}))
-           motive (λ z → {z ≡ true : Bool})
+           motive (λ #{Names.current("z")} → {#{Names.current("z")} ≡ true : Bool})
          in #{ctx.eq_true}))
       motive (λ _ → #{ctx.goal})
     """
@@ -1035,10 +1037,10 @@ defmodule Muro.Synth.ClassCert do
     matchEmpty
       (class-ft
         (rewrite (sym Bool #{ev} false #{ef})
-           motive (λ z → {z ≡ true : Bool})
+           motive (λ #{Names.current("z")} → {#{Names.current("z")} ≡ true : Bool})
          in
-           (rewrite (class-arm-eq-#{index} s)
-              motive (λ z → {z ≡ true : Bool})
+           (rewrite (class-arm-eq-#{index} #{Names.current("s")})
+              motive (λ #{Names.current("z")} → {#{Names.current("z")} ≡ true : Bool})
             in #{paren(proof)})))
       motive (λ _ → #{ctx.goal})
     """
@@ -1062,10 +1064,14 @@ defmodule Muro.Synth.ClassCert do
     end)
   end
 
-  defp goal(left, right), do: "Dom Reward le (action-value s #{left}) (action-value s #{right})"
+  defp goal(left, right) do
+    "Dom Reward le (action-value #{Names.current("s")} #{left}) (action-value #{Names.current("s")} #{right})"
+  end
 
   defp hyps(atoms) do
-    Map.new(Enum.with_index(atoms), fn {atom, index} -> {atom, "ha#{index}"} end)
+    Map.new(Enum.with_index(atoms), fn {atom, index} ->
+      {atom, Names.current("ha#{index}")}
+    end)
   end
 
   defp family_pred?(true, _), do: false
@@ -1235,8 +1241,11 @@ defmodule Muro.Synth.ClassCert do
   defp or_term([one], _orb), do: one
   defp or_term([one | rest], orb), do: "(#{orb} #{paren(one)} #{paren(or_term(rest, orb))})"
 
-  defp atom_term({:reach, action}, ctx), do: "(#{ctx.one} s #{action} horizon)"
-  defp atom_term({:pos, action}, ctx), do: "(#{ctx.pos} (snd (step s #{action})))"
+  defp atom_term({:reach, action}, ctx),
+    do: "(#{ctx.one} #{Names.current("s")} #{action} horizon)"
+
+  defp atom_term({:pos, action}, ctx),
+    do: "(#{ctx.pos} (snd (step #{Names.current("s")} #{action})))"
 
   defp prove({:not, pred}, ctx) do
     {bit, proof} = prove(pred, ctx)
