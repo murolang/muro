@@ -3,7 +3,7 @@
 -- Soundness of the executable checker with respect to ⊢, on the ⊢
 -- fragment (Muro.Frag): when Muro.Check says yes, ⊢ has a derivation.
 --
--- Muro.Soundness.Conv   whnf-sound: when whnf k σ t returns ok u, t ⟶* u
+-- Muro.Soundness.Conv   whnf-sound: when whnf k σ t returns ok u, t ≈ u
 --                       (spec) and u is in the fragment; synEq-sound;
 --                       conv-sound: conv k σ u v ≡ ok tt → σ ⊢[ spec ] u ≈ v.
 -- Muro.Soundness.Views  the views (viewPi, viewId, viewData), isData,

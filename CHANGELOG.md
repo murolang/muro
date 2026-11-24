@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.22.28
+
+Agda `Check.whnf` shares a reusable beta argument the same way Elixir `whnf_app` does (Option 1 of #283).
+
+When the remaining fuel is greater than 1, the binder is reusable (`reuse`), and the body mentions that binder at least twice on one path, the argument is reduced once, one fuel below the body, and that value is substituted. Affine and erased binders, and a beta whose remaining fuel is 1, stay call-by-name. Motives of `mData`, `mNat`, `mEmp`, and `mUnit` are not counted; a rewrite motive is; arms take the maximum, not the sum.
+
+The weak-head relation `⟶` stays call-by-name. A sharing result is still a `⇛*` reduct (`⇛*-inst`) and is convertible (`≈`). `whnf-sound` now concludes `t ≈ u` (and `Frag u`) rather than `t ⟶* u`. `whnf-agree` says a call-by-name `⟶*` reduct and a sharing `whnf` result convert when both exist. The well-founded fuel recursion and the `abstract` wrappers on `whnf-sound` and `whnf-red` keep `Conv` and `Views` from unfolding that recursion into `Soundness`.
+
+`--safe` is unchanged: no postulates, no `TERMINATING`.
+
+### Manual
+
+- Extending: reusable beta sharing in `Check.whnf`, `whnf-sound` in `≈`, and `whnf-agree`.
+
+### Package
+
+- Version 0.22.28.
+
 ## 0.22.27
 
 A stem column whose truth vector duplicates an earlier test stays in the family that `selfp` and `otherp` read.

@@ -18,7 +18,7 @@ open import Data.Empty using (⊥; ⊥-elim)
 open import Data.Fin.Base using (Fin; zero; suc; toℕ)
 open import Data.List.Base as List using (List; []; _∷_; length; take; drop)
 open import Data.Maybe.Base using (Maybe; just; nothing)
-open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _<ᵇ_; _+_; _≤_; _<_; z≤n; s≤s)
+open import Data.Nat.Base using (ℕ; zero; suc; _≡ᵇ_; _≤ᵇ_; _<ᵇ_; _+_; _⊔_; _≤_; _<_; z≤n; s≤s)
 open import Data.Nat.Properties using (≡ᵇ⇒≡)
 open import Data.Nat.Induction using (<-wellFounded; Acc; acc)
 open import Data.Nat.Show using (show)
@@ -127,6 +127,91 @@ nthQty (pi _ _ B) (suc i) = nthQty B i
 nthQty _          _       = fail "recursive-call spine longer than Π telescope"
 
 ------------------------------------------------------------------------
+------------------------------------------------------------------------
+-- Mentions of a de Bruijn index, capped at two. A reusable beta
+-- argument is shared when the body mentions it twice on one path
+-- (`lib/muro/check.ex` `reused?` / `var_uses`). A match motive is
+-- not a mention. Arms are alternatives: the count is the max.
+------------------------------------------------------------------------
+
+cap⊔ : ℕ → ℕ → ℕ
+cap⊔ n m = if 2 ≤ᵇ n ⊔ m then 2 else n ⊔ m
+
+mutual
+  varUses : ∀ {n} → ℕ → Tm n → ℕ → ℕ
+  varUses x t n = if 2 ≤ᵇ n then 2 else varUses′ x t n
+
+  varUses′ : ∀ {n} → ℕ → Tm n → ℕ → ℕ
+  varUses′ x (var y) n = if x ≡ᵇ toℕ y then suc n else n
+  varUses′ _ typ n = n
+  varUses′ x (pi _ A B) n = varUses (suc x) B (varUses x A n)
+  varUses′ x (lam _ A t) n = varUses (suc x) t (varUses x A n)
+  varUses′ x (app f a) n = varUses x a (varUses x f n)
+  varUses′ _ nat n = n
+  varUses′ _ ze n = n
+  varUses′ x (su t) n = varUses x t n
+  varUses′ _ unit n = n
+  varUses′ _ one n = n
+  varUses′ _ empty n = n
+  varUses′ _ (dty _) n = n
+  varUses′ _ (ctor _ _) n = n
+  varUses′ x (mData e _ bs) n = cap⊔ (varUses x e n) (armUses x bs)
+  varUses′ x (mNat e _ z s) n =
+    cap⊔ (varUses x e n) (cap⊔ (varUses x z 0) (varUses (suc x) s 0))
+  varUses′ x (mEmp e _) n = varUses x e n
+  varUses′ x (mUnit e _ u) n = varUses x u (varUses x e n)
+  varUses′ x (idt A a b) n = varUses x b (varUses x a (varUses x A n))
+  varUses′ _ rfl n = n
+  varUses′ x (rwt e P t) n = varUses x t (varUses (suc x) P (varUses x e n))
+  varUses′ _ (def _) n = n
+  varUses′ x (ann e A) n = varUses x A (varUses x e n)
+  varUses′ x (prod A B) n = varUses x B (varUses x A n)
+  varUses′ x (pair a b) n = varUses x b (varUses x a n)
+  varUses′ x (letp e t) n = varUses (suc (suc x)) t (varUses x e n)
+  varUses′ x (nu F) n = varUses (suc x) F n
+  varUses′ x (unf s f) n = varUses x f (varUses x s n)
+  varUses′ x (ucons e) n = varUses x e n
+  varUses′ _ i64 n = n
+  varUses′ _ f32ty n = n
+  varUses′ x (tensor d s) n = varUses x s (varUses x d n)
+  varUses′ x (addi a b) n = varUses x b (varUses x a n)
+  varUses′ x (muli a b) n = varUses x b (varUses x a n)
+  varUses′ x (addt t u) n = varUses x u (varUses x t n)
+  varUses′ x (toi64 t) n = varUses x t n
+  varUses′ x (packi a b) n = varUses x b (varUses x a n)
+  varUses′ x (word _ ts) n = varUsesList x ts n
+
+  varUsesList : ∀ {n} → ℕ → List (Tm n) → ℕ → ℕ
+  varUsesList _ [] n = n
+  varUsesList x (t ∷ ts) n = varUsesList x ts (varUses x t n)
+
+  armUses : ∀ {n} → ℕ → List (Tm n) → ℕ
+  armUses _ [] = 0
+  armUses x (b ∷ bs) = cap⊔ (varUses x b 0) (armUses x bs)
+
+reused : ∀ {n} → Tm n → Bool
+reused t = 2 ≤ᵇ varUses 0 t 0
+
+-- When a beta is shared: reusable grade, the body mentions the binder
+-- twice, and the remaining fuel is at least 2, so the argument can be
+-- entered at `suc k` rather than 0.
+data ShareView : ℕ → Qty → ∀ {n} → Tm (suc n) → Set where
+  shareHere : ∀ k {n} (t : Tm (suc n)) → reused t ≡ true → ShareView (suc (suc k)) reuse t
+  noShare   : ∀ k q {n} (t : Tm (suc n)) → ShareView k q t
+
+shareViewOf : ∀ k q {n} (t : Tm (suc n)) → (b : Bool) → b ≡ reused t → ShareView k q t
+-- Affine and erased first so the case tree splits on `q` first and
+-- these two reduce at a variable `k` (needed by `noshare-affine`).
+shareViewOf k             affine t _    _ = noShare k affine t
+shareViewOf k             erased t _    _ = noShare k erased t
+shareViewOf (suc (suc k)) reuse t true  p = shareHere k t (sym p)
+shareViewOf (suc (suc k)) reuse t false p = noShare (suc (suc k)) reuse t
+shareViewOf zero          reuse t _    _ = noShare zero reuse t
+shareViewOf (suc zero)    reuse t _    _ = noShare (suc zero) reuse t
+
+shareView : ∀ k q {n} (t : Tm (suc n)) → ShareView k q t
+shareView k q t = shareViewOf k q t (reused t) refl
+
 -- Weak-head normalisation (β, ι, δ, ann). Fuel is the clock: every
 -- recursive call spends one unit, and running out is a failure of its
 -- own (outOfFuel), never a silently unreduced term.
@@ -145,9 +230,18 @@ idStep s          q A = ok (ucons (unf s (lam q A (var zero))))
 mutual
   whnf : ∀ {n} → ℕ → Sig → Tm n → Result (Tm n)
   whnf zero    _ _ = fail outOfFuel
+  -- A reusable argument mentioned at least twice on one path is
+  -- reduced once, so later mentions see that value. Fuel is a depth
+  -- bound: the argument is entered at one less than the body, and the
+  -- body keeps `k`, the call-by-name bound for the same beta
+  -- (`lib/muro/check.ex` `whnf_app`). Affine and erased binders stay
+  -- call-by-name. Fuel 1 would enter the argument at 0, and `whnf 0`
+  -- fails before looking, so that beta stays call-by-name too. Elixir
+  -- also keeps a linear binder call-by-name; Agda `Qty` has no linear
+  -- constructor.
   whnf (suc k) σ (app f a) with whnf k σ f
   ... | fail e            = fail e
-  ... | ok (lam _ _ t)    = whnf k σ (inst t a)
+  ... | ok (lam q _ t)    = whnfApp k σ q t a
   ... | ok f′             = ok (app f′ a)
   whnf (suc k) σ (mNat e P z s) with whnf k σ e
   ... | fail m      = fail m
@@ -178,6 +272,36 @@ mutual
       (just r) → whnf k σ r
       nothing  → ok (word op ts′)
   whnf (suc _) _ t = ok t
+
+  whnfApp′ : ∀ {n} k σ q (t : Tm (suc n)) (a : Tm n)
+    → ShareView k q t → Result (Tm n)
+  whnfApp′ _ σ _ t a (noShare k′ _ _) = whnf k′ σ (inst t a)
+  whnfApp′ _ σ _ t a (shareHere k′ _ _) =
+    whnf (suc k′) σ a >>= λ a′ → whnf (suc (suc k′)) σ (inst t a′)
+
+  whnfApp : ∀ {n} → ℕ → Sig → Qty → Tm (suc n) → Tm n → Result (Tm n)
+  whnfApp k σ q t a = whnfApp′ k σ q t a (shareView k q t)
+
+  share-eq′ : ∀ {n} k σ (t : Tm (suc n)) (a : Tm n)
+    (b : Bool) (e : b ≡ reused t) → b ≡ true
+    → whnfApp′ (suc (suc k)) σ reuse t a (shareViewOf (suc (suc k)) reuse t b e)
+      ≡ (whnf (suc k) σ a >>= λ a′ → whnf (suc (suc k)) σ (inst t a′))
+  share-eq′ k σ t a true  e refl = refl
+  share-eq′ k σ t a false e ()
+
+  share-eq : ∀ {n} k σ (t : Tm (suc n)) (a : Tm n)
+    → reused t ≡ true
+    → whnfApp (suc (suc k)) σ reuse t a
+      ≡ (whnf (suc k) σ a >>= λ a′ → whnf (suc (suc k)) σ (inst t a′))
+  share-eq k σ t a p = share-eq′ k σ t a (reused t) refl p
+
+  noshare-affine : ∀ {n} k σ (t : Tm (suc n)) a
+    → whnfApp k σ affine t a ≡ whnf k σ (inst t a)
+  noshare-affine k σ t a = refl
+
+  noshare-erased : ∀ {n} k σ (t : Tm (suc n)) a
+    → whnfApp k σ erased t a ≡ whnf k σ (inst t a)
+  noshare-erased k σ t a = refl
 
   whnfList : ∀ {n} → ℕ → Sig → List (Tm n) → Result (List (Tm n))
   whnfList zero _ [] = ok []
@@ -1112,6 +1236,31 @@ true≢false ()
 
 fail≢ok : ∀ {A : Set} {e : String} {a : A} → fail e ≡ ok a → ⊥
 fail≢ok ()
+
+-- Outcome of a reusable beta: call-by-name at fuel k, or the argument
+-- was shared (remaining fuel at least 2) and reduced first.
+data ReuseWhnf {n} (k : ℕ) (σ : Sig) (t : Tm (suc n)) (a u : Tm n) : Set where
+  cbn    : whnf k σ (inst t a) ≡ ok u → ReuseWhnf k σ t a u
+  shared : ∀ k′ a′ → k ≡ suc (suc k′)
+         → whnf (suc k′) σ a ≡ ok a′
+         → whnf k σ (inst t a′) ≡ ok u
+         → ReuseWhnf k σ t a u
+
+reuseWhnf′ : ∀ {n} k σ (t : Tm (suc n)) (a u : Tm n)
+  (b : Bool) (e : b ≡ reused t)
+  → whnfApp′ k σ reuse t a (shareViewOf k reuse t b e) ≡ ok u
+  → ReuseWhnf k σ t a u
+reuseWhnf′ zero           σ t a u b e eq = cbn eq
+reuseWhnf′ (suc zero)     σ t a u b e eq = cbn eq
+reuseWhnf′ (suc (suc k′)) σ t a u false e eq = cbn eq
+reuseWhnf′ (suc (suc k′)) σ t a u true  e eq with whnf (suc k′) σ a in aeq
+... | fail _ = ⊥-elim (fail≢ok eq)
+... | ok a′  = shared k′ a′ refl aeq eq
+
+reuseWhnf : ∀ {n} k σ (t : Tm (suc n)) (a u : Tm n)
+  → whnfApp k σ reuse t a ≡ ok u
+  → ReuseWhnf k σ t a u
+reuseWhnf k σ t a u eq = reuseWhnf′ k σ t a u (reused t) refl eq
 
 ok≢fail : ∀ {A : Set} {a : A} {e : String} → ok a ≡ fail e → ⊥
 ok≢fail ()

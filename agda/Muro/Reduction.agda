@@ -1234,6 +1234,12 @@ data _⊢[_]_⇛*_ (σ : Sig) (m : Mode) {n} : Tm n → Tm n → Set where
 ⇛*-trans ⇛*-refl r = r
 ⇛*-trans (⇛*-step d r) r′ = ⇛*-step d (⇛*-trans r r′)
 
+-- Instantiation is a substitution, so it is a congruence of ⇛*.
+⇛*-inst : ∀ {σ m n} (t : Tm (suc n)) {a a′ : Tm n}
+  → σ ⊢[ m ] a ⇛* a′ → σ ⊢[ m ] inst t a ⇛* inst t a′
+⇛*-inst t ⇛*-refl = ⇛*-refl
+⇛*-inst t (⇛*-step d r) = ⇛*-step (⇛-sub-l t (⇛σ-inst d)) (⇛*-inst t r)
+
 strip : ∀ {σ m n} {t u v : Tm n}
   → σ ⊢[ m ] t ⇛ u → σ ⊢[ m ] t ⇛* v
   → ∃ λ w → (σ ⊢[ m ] u ⇛* w) × (σ ⊢[ m ] v ⇛ w)
