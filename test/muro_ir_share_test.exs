@@ -181,6 +181,27 @@ defmodule Muro.IRShareTest do
     assert length(Regex.scan(~r/\bcount\(/, text)) == 1
   end
 
+  test "C, Rust, and Zig pass the share options through", %{book: book} do
+    {:ok, {_h, plain}} = Muro.Emit.C.render(book, "shared", share: false)
+    {:ok, {_h, noinl}} = Muro.Emit.C.render(book, "shared", inline: false)
+    assert length(Regex.scan(~r/\bcount\(/, c_fun(plain, "twice"))) == 2
+    # Without inlining, wrap stays a call in viaWrap.
+    assert c_fun(noinl, "viaWrap") =~ ~r/\bwrap\(/
+
+    keys = [share: true, inline: true, inline_max: 9, grow_max: 7]
+    assert Muro.IR.Share.opts(keys ++ [path: "x", c_prefix: "p_"]) == keys
+
+    for mod <- [Muro.Emit.Rust, Muro.Emit.Zig] do
+      {:ok, on} = mod.render(book, "shared")
+      {:ok, off} = mod.render(book, "shared", share: false)
+      assert on != off
+      {:ok, noinl} = mod.render(book, "shared", inline: false)
+      [_, rest] = String.split(noinl, ~r/fn viaWrap\(/, parts: 2)
+      [text | _] = String.split(rest, "\n}\n", parts: 2)
+      assert text =~ ~r/\bwrap\(/
+    end
+  end
+
   test "the Zig emitter calls the fold once in twice", %{book: book} do
     {:ok, src} = Muro.Emit.Zig.render(book, "shared")
     [_, rest] = String.split(src, ~r/fn twice\(/, parts: 2)
@@ -293,37 +314,55 @@ defmodule Muro.IRShareTest do
     assert {:let, _, :u64, {:call, "count", [var: "t"]}, _} = out
   end
 
-  test "the image grows by at most grow_max nodes" do
+  test "the image grows by at most grow_max nodes, smallest growth first" do
     # fat s adds nodes around count s, so inlining it grows a run.
     fat = run("fat", [{"s", :slice}], add(add(cnt("s"), lit(1)), add(lit(2), lit(3))))
     body = add(add({:call, "fat", [var: "s"]}, cnt("s")), cnt("s"))
-    funs = image([fat, run("f", [{"s", :slice}], body), run("g", [{"s", :slice}], body)])
-    total = fn fs -> fs |> Enum.map(&size_of(&1.body)) |> Enum.sum() end
-    base = total.(Muro.IR.Share.funs(funs, inline: false))
+    f = run("f", [{"s", :slice}], body)
+    g = run("g", [{"s", :slice}], body)
+    funs = image([fat, f, g])
 
-    # No budget: fat stays a call, count s is still hoisted.
-    none = Muro.IR.Share.funs(funs, grow_max: 0)
-    assert calls(body(none, "f"), "fat") == 1
+    # Inlining fat s puts fat's body, over s, where the call was: in the
+    # pass's own measure that is 8 - 2 nodes per run.
+    one = Muro.IR.Share.size(fat.body) - Muro.IR.Share.size({:call, "fat", [var: "s"]})
+    assert one == 6
+
+    fats = fn fs -> {calls(body(fs, "f"), "fat"), calls(body(fs, "g"), "fat")} end
+
+    # Below one run's growth: fat stays a call, count s is still hoisted.
+    none = Muro.IR.Share.funs(funs, grow_max: one - 1)
+    assert fats.(none) == {1, 1}
     assert calls(body(none, "f"), "count") == 1
-    assert total.(none) == base
+    nobody = fn fs -> Enum.map(fs, &normal(&1.body)) end
+    assert nobody.(none) == nobody.(Muro.IR.Share.funs(funs, inline: false))
 
-    # The default budget takes both.
-    full = Muro.IR.Share.funs(funs)
-    assert calls(body(full, "f"), "fat") == 0
-    assert calls(body(full, "g"), "fat") == 0
-    one = size_of(body(full, "f")) - size_of(body(none, "f"))
-    assert one > 0
+    # Room for one run: f and g grow alike, so the name decides, in
+    # either list order.
+    assert fats.(Muro.IR.Share.funs(funs, grow_max: one)) == {0, 1}
+    assert fats.(Muro.IR.Share.funs(funs, grow_max: 2 * one - 1)) == {0, 1}
+    assert fats.(Muro.IR.Share.funs(image([fat, g, f]), grow_max: one)) == {0, 1}
 
-    # Room for one: f takes it, g keeps calling fat.
-    some = Muro.IR.Share.funs(funs, grow_max: one)
-    assert total.(some) - base <= one
-    assert calls(body(some, "f"), "fat") == 0
-    assert calls(body(some, "g"), "fat") == 1
+    # A run that grows less draws first, wherever it is in the list.
+    h = run("h", [{"s", :slice}], add({:call, "wrap", [var: "s"]}, cnt("s")))
+    big = run("a", [{"s", :slice}], body)
+    order = [image([fat, big, h]), image([fat, h, big])]
+
+    for fs <- order do
+      out = Muro.IR.Share.funs(fs, grow_max: one - 1)
+      assert calls(body(out, "h"), "wrap") == 0
+      assert calls(body(out, "a"), "fat") == 1
+    end
+
+    # Room for both, and the default budget, take both.
+    assert fats.(Muro.IR.Share.funs(funs, grow_max: 2 * one)) == {0, 0}
+    assert fats.(Muro.IR.Share.funs(funs)) == {0, 0}
   end
 
-  test "inlining does not depend on the order the runs are visited" do
+  test "with room in the budget, inlining does not depend on the order runs are visited" do
     # h1 and h2 call each other. Each inlines the other once; the memo
-    # must not hand h2 the body it got while h1 was being inlined.
+    # must not hand h2 the body it got while h1 was being inlined. The
+    # budget is drawn smallest growth first, not in list order (see the
+    # grow_max test).
     h1 = run("h1", [{"s", :slice}], add({:call, "h2", [var: "s"]}, cnt("s")))
     h2 = run("h2", [{"s", :slice}], add({:call, "h1", [var: "s"]}, cnt("s")))
     funs = image([h1, h2])
@@ -343,14 +382,6 @@ defmodule Muro.IRShareTest do
     assert {:let, c, :u64, {:call, "count", [var: "s"]},
             {:let, v, :u64, {:call, "pair2", [var: c, var: c]},
              {:wrd, :u64, :addi, [var: v, var: v]}}} = shared_body(funs, "f", inline: false)
-  end
-
-  defp size_of(t) do
-    cond do
-      is_tuple(t) -> 1 + (t |> Tuple.to_list() |> Enum.map(&size_of/1) |> Enum.sum())
-      is_list(t) -> t |> Enum.map(&size_of/1) |> Enum.sum()
-      true -> 0
-    end
   end
 
   # Fresh names renumbered in order of first appearance.

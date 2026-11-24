@@ -284,7 +284,7 @@ defmodule Muro.Emit.C do
       nm = name_map(book, prefix)
 
       case compile_funs(
-             Muro.IR.Share.funs(funs, Keyword.take(opts, [:share, :inline, :inline_max])),
+             Muro.IR.Share.funs(funs, Muro.IR.Share.opts(opts)),
              book,
              nm,
              prefix

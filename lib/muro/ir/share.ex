@@ -24,9 +24,17 @@ defmodule Muro.IR.Share do
      the same way, inside their own scope.
 
   Inlining is bounded twice: a callee's inlined body is at most
-  `inline_max` nodes, and the whole image grows by at most `grow_max`
-  nodes (by default the size of the image, so it at most doubles). A
-  run whose inlining would pass that budget is shared without it.
+  `inline_max` nodes, and inlining grows the whole image by at most
+  `grow_max` nodes (by default twice the size of the image, so
+  inlining at most triples it). The budget counts inlining only, before
+  any hoist, so it also bounds the image after hoisting up to one node
+  per hoist: a hoist adds one `let` per shared call and removes every
+  other occurrence. Counted before hoisting, an inlined body still holds
+  every copy a hoist later removes, which is why the default is twice
+  the image and not once. Runs draw on it smallest growth first, then by name, so
+  which runs inline does not depend on the order of the list; a run
+  whose inlining would pass what is left is shared without it. Inlined
+  bodies do not depend on that order either.
 
   The emitted program computes the same value as the checked term. A
   word operation, a constructor, and a byte literal are not shared:
@@ -37,11 +45,17 @@ defmodule Muro.IR.Share do
   @inline_max 1500
 
   @doc """
+  The options of `funs/2` in `opts`, for an emitter to pass through.
+  """
+  def opts(opts) when is_list(opts),
+    do: Keyword.take(opts, [:share, :inline, :inline_max, :grow_max])
+
+  @doc """
   Rewrite `funs` (the list `Muro.IR.elaborate/1` returns). Order,
   names, parameters, and layouts are kept. `opts` may set `inline: false`
   (hoisting only), `share: false` (return `funs` unchanged),
   `inline_max:` (nodes per inlined callee), or `grow_max:` (nodes the
-  whole image may grow by inlining).
+  whole image may grow by inlining, smallest growth first).
   """
   def funs(funs, opts \\ []) when is_list(funs) do
     if Keyword.get(opts, :share, true) do
@@ -56,7 +70,9 @@ defmodule Muro.IR.Share do
       known = for f <- funs, known?(f.body), do: f
 
       grow =
-        Keyword.get_lazy(opts, :grow_max, fn -> Enum.reduce(known, 0, &(&2 + size(&1.body))) end)
+        Keyword.get_lazy(opts, :grow_max, fn ->
+          2 * Enum.reduce(known, 0, &(&2 + size(&1.body)))
+        end)
 
       budget = :counters.new(1, [])
       :counters.put(budget, 1, grow)
@@ -75,12 +91,8 @@ defmodule Muro.IR.Share do
       }
 
       try do
-        Enum.map(funs, fn fun ->
-          case optimize(fun, ctx, inline?) do
-            {:ok, body} -> %{fun | body: body}
-            _ -> fun
-          end
-        end)
+        out = optimize_all(funs, ctx, inline?)
+        Enum.map(Enum.with_index(funs), fn {fun, i} -> Map.get(out, i, fun) end)
       after
         :ets.delete(ctx.memo)
         :ets.delete(ctx.fresh)
@@ -169,29 +181,44 @@ defmodule Muro.IR.Share do
   # expansion holds a call, in this run's own names, that the fully
   # inlined run evaluates more than once. A per-octet step whose callee
   # only shares inside itself keeps calling it.
-  defp optimize(fun, ctx, inline?) do
-    if known?(fun.body) do
-      body = if inline?, do: inline_run(fun, ctx), else: fun.body
-
-      case shared(body, ctx) do
-        {:ok, out} ->
-          # The image grows by what inlining added. Past the budget the
-          # run is shared without inlining.
-          grow = size(out) - size(fun.body)
-
-          if body == fun.body or grow <= :counters.get(ctx.budget, 1) do
-            if body != fun.body, do: :counters.sub(ctx.budget, 1, max(grow, 0))
-            {:ok, out}
-          else
-            shared(fun.body, ctx)
-          end
-
-        :skip ->
-          :skip
+  # Every run is inlined first, then shared. A run whose inlining adds
+  # nodes draws that growth, counted before any hoist, on the budget.
+  # Runs draw in order of that growth, smallest first, then by name, so
+  # who gets the budget does not depend on the order of `funs`; a run
+  # whose growth does not fit what is left is shared as elaborated, and
+  # its inlined body is never shared. A run whose inlined body shares
+  # nothing keeps its elaborated body and draws nothing.
+  defp optimize_all(funs, ctx, inline?) do
+    plans =
+      for {fun, i} <- Enum.with_index(funs), known?(fun.body) do
+        body = if inline?, do: inline_run(fun, ctx), else: fun.body
+        {i, fun, body, size(body) - size(fun.body)}
       end
-    else
-      :skip
-    end
+
+    plans
+    |> Enum.sort_by(fn {i, fun, body, grow} ->
+      {body != fun.body, grow, fun.name, Map.get(fun, :generated, false), i}
+    end)
+    |> Enum.reduce(%{}, fn {i, fun, body, grow}, acc ->
+      res =
+        if body != fun.body and grow <= :counters.get(ctx.budget, 1) do
+          case shared(body, ctx) do
+            {:ok, out} ->
+              :counters.sub(ctx.budget, 1, max(grow, 0))
+              {:ok, out}
+
+            :skip ->
+              :skip
+          end
+        else
+          shared(fun.body, ctx)
+        end
+
+      case res do
+        {:ok, out} -> Map.put(acc, i, %{fun | body: out})
+        :skip -> acc
+      end
+    end)
   end
 
   defp shared(body, ctx) do
@@ -564,8 +591,13 @@ defmodule Muro.IR.Share do
   end
 
   # Children that open a scope or a branch are shared on their own.
+  # A let's value is evaluated exactly when the let is, so every call
+  # strict in it is strict in the let and was already hoisted above it;
+  # `share/2` on the value finds the rest: calls it repeats under its own
+  # binders and arms. That includes the value a hoist bound, so a call
+  # repeated inside it is hoisted in turn.
   defp share_inside({:let, x, lay, v, b}, ctx),
-    do: {:let, x, lay, share_inside(v, ctx), share(b, ctx)}
+    do: {:let, x, lay, share(v, ctx), share(b, ctx)}
 
   defp share_inside({:letp, a, b, e, body}, ctx),
     do: {:letp, a, b, share_inside(e, ctx), share(body, ctx)}
@@ -897,7 +929,10 @@ defmodule Muro.IR.Share do
 
   defp disjoint?(a, b), do: MapSet.disjoint?(a, b)
 
-  defp size(t), do: 1 + Enum.reduce(children(t), 0, &(&2 + size(&1)))
+  @doc """
+  Nodes in an image term, the measure `inline_max:` and `grow_max:` count.
+  """
+  def size(t), do: 1 + Enum.reduce(children(t), 0, &(&2 + size(&1)))
 
   defp taken_names(funs) do
     Enum.reduce(funs, MapSet.new(), fn fun, acc ->
