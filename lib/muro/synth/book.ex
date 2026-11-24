@@ -36,20 +36,26 @@ defmodule Muro.Synth.Book do
   def render(host, arms, anchor, oracle) when is_list(arms) and is_binary(oracle) do
     # Set before `bind`: the reach text is built there, and a large
     # placement cover must not tabulate before the class proof is chosen.
+    # The reserved set is installed before `bind` as well, so Reach,
+    # Term.exhaust, cover_match, and the other emitters see environment
+    # names when they allocate binders.
     if Muro.Synth.ClassCert.recur_only?(host, arms, oracle) do
       Process.put(:muro_synth_class_recur, true)
     end
 
     try do
-      case bind(host, arms) do
-        :error ->
-          {:error, "state equality is not a run"}
+      taken = Names.reserved(host.book)
+      {binders, taken} = Names.table(taken)
 
-        {:ok, bound} ->
-          Names.with_binders(bound.binders, bound.taken, fn ->
+      Names.with_binders(binders, taken, fn ->
+        case bind(host, arms, binders, taken) do
+          :error ->
+            {:error, "state equality is not a run"}
+
+          {:ok, bound} ->
             render_bound(host, arms, anchor, oracle, bound)
-          end)
-      end
+        end
+      end)
     after
       Process.delete(:muro_synth_class_recur)
     end
@@ -351,10 +357,22 @@ defmodule Muro.Synth.Book do
 
   defp predicted_bit(ob, _region, _parsed), do: Map.get(ob, :claimed)
 
+  # Public helpers that only need the bound names still emit Reach
+  # and Term text during `feature_plan`, so they go through this
+  # wrapper. `render/4` installs the same reserved set around both
+  # `bind` and `render_bound`, and must not use this clause: the
+  # wrapper would clear `:muro_synth_taken` before the certificate
+  # is emitted.
   defp bind(host, arms) do
     taken = Names.reserved(host.book)
     {binders, taken} = Names.table(taken)
 
+    Names.with_binders(binders, taken, fn ->
+      bind(host, arms, binders, taken)
+    end)
+  end
+
+  defp bind(host, arms, binders, taken) do
     case feature_plan(host, arms, taken, binders) do
       :error -> :error
       {:ok, plan} -> {:ok, bind_plan(host, arms, plan, binders)}
@@ -925,9 +943,21 @@ defmodule Muro.Synth.Book do
   end
 
   @doc false
-  def reserve(base, taken), do: Names.alloc(base, taken)
+  def reserve(base, taken), do: alloc(base, taken)
 
-  defp alloc(base, taken), do: Names.alloc(base, taken)
+  defp alloc(base, taken) do
+    {name, taken} = Names.alloc(base, taken)
+
+    case Process.get(:muro_synth_taken) do
+      %MapSet{} = current ->
+        Process.put(:muro_synth_taken, Names.take(current, name))
+
+      _ ->
+        :ok
+    end
+
+    {name, taken}
+  end
 
   defp take(taken, names), do: Names.take(taken, names)
 

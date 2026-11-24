@@ -162,9 +162,9 @@ defmodule Muro.Synth.Reach do
   # stays a chain of closed bits.
   defp front(best, known, one, one_tab, any, pos, actions, known_text, best_rec, binders) do
     s = Names.current("s")
-    k = Map.get(binders, "k", "k")
+    k = Names.current("k")
     j = Names.current("j")
-    a = Map.get(binders, "a", "a")
+    a = Names.current("a")
 
     """
     def #{best} : run Π (+ #{s} : State) → Π (+ #{k} : Nat) → Bool :=
@@ -201,9 +201,9 @@ defmodule Muro.Synth.Reach do
   # the block.
   defp recursive(best, one, any, pos, actions, binders) do
     s = Names.current("s")
-    k = Map.get(binders, "k", "k")
+    k = Names.current("k")
     j = Names.current("j")
-    a = Map.get(binders, "a", "a")
+    a = Names.current("a")
 
     """
     def #{best} : run Π (+ #{s} : State) → Π (+ #{k} : Nat) → Bool :=

@@ -8,6 +8,7 @@ defmodule Muro.SynthBindersTest do
   @iu "test/fixtures/synth_fresh_iu.muro"
   @list "test/fixtures/synth_fresh_list.muro"
   @quant "test/fixtures/synth_fresh_quant.muro"
+  @reach_js "test/fixtures/synth_fresh_reach_js.muro"
 
   test "actions named i and u still certify a PredProg book" do
     assert {:ok, result} = Muro.Synth.cegis_loop(@iu, depth: 0, max_depth: 0)
@@ -28,7 +29,7 @@ defmodule Muro.SynthBindersTest do
     assert text =~ "prefers i"
   end
 
-  test "a list cover with k0 and rk0 still certifies a PredProg book" do
+  test "a list cover with reserved f0_0 still certifies a PredProg book" do
     assert {:ok, result} = Muro.Synth.cegis_loop(@list, depth: 0, max_depth: 0)
     assert result.status == :certified
     assert result.certificate == "CoindHomo"
@@ -47,54 +48,49 @@ defmodule Muro.SynthBindersTest do
     refute text =~ "find-policy"
   end
 
-  test "reach nests freshen rk0 when it is reserved and the book checks" do
-    assert {:ok, host} = Muro.Synth.Host.open(@list)
-    taken = Names.reserved(host.book)
-    {binders, taken} = Names.table(taken)
-    {pos, taken} = Muro.Synth.Book.reserve("dyn-pos", taken)
+  test "actions named j and s still certify a PredProg book" do
+    assert {:ok, result} = Muro.Synth.cegis_loop(@reach_js, depth: 0, max_depth: 1)
+    assert result.status == :certified
+    assert result.certificate == "CoindHomo"
+    assert result.book =~ "run PredProg :="
+    assert result.book =~ "evidence CoindHomo rank"
+    refute result.book =~ "Finder"
+    refute result.book =~ "def survivor : run PredProg := find-policy"
+    refute result.book =~ "λ (+ s : State)"
+    assert result.book =~ "s-2"
 
-    reach =
-      Names.with_binders(binders, taken, fn ->
-        {text, _} =
-          Muro.Synth.Reach.sources(
-            host,
-            "dyn-best-pos",
-            "dyn-one",
-            "dyn-any",
-            pos,
-            taken,
-            nil,
-            binders
-          )
+    text = joined(result)
+    assert text =~ "muro synth: homomorphism checked"
+    assert text =~ "certificate CoindHomo"
+    refute text =~ "find-policy"
+  end
 
-        text
-      end)
-
-    refute reach =~ "λ (rk0 :"
-    refute reach =~ "| suc rk0 =>"
-    assert reach =~ "rk0-2"
-    refute reach =~ "Finder"
-
-    r = Map.get(binders, "r", "r")
-
-    pos_src = """
-    def #{pos} : run Π (#{r} : Nat) → Bool :=
-      λ (#{r} : Nat) →
-        match #{r} motive (λ _ → Bool)
-          | 0 => false
-          | suc _ => true
-    """
-
-    dir = tmp()
+  test "Book.render freshens j, s, rk0, k0, and f0_0 on the production path" do
+    {dir, src, meta} = render_reach(@reach_js, also_self_loop: true)
     on_exit(fn -> File.rm_rf(dir) end)
-    path = Path.join(dir, "reach.muro")
 
-    File.write!(path, """
-    import "#{rel_import(dir, @list)}"
-    #{pos_src}
-    #{reach}
-    """)
+    assert meta.kind == :certified
+    refute src =~ "Finder"
 
+    refute src =~ "Π (+ j : Nat)"
+    refute src =~ "λ (+ j : Nat)"
+    refute src =~ "Π (+ s : State)"
+    refute src =~ "λ (+ s : State)"
+    refute src =~ "| suc rk0 =>"
+    refute src =~ "λ (rk0 :"
+    refute src =~ "λ (k0 :"
+    refute src =~ "λ (f0_0 :"
+    assert src =~ "j-2"
+    assert src =~ "s-2"
+    assert src =~ "rk0-2"
+    assert src =~ "k0-2"
+    assert src =~ "f0_0-2"
+    # Action constructors stay bare in any_body / step; only binders freshen.
+    assert src =~ ~r/dyn-one(?:-tab)?\s+s-2\s+j\s+j-2/
+    assert src =~ ~r/dyn-one(?:-tab)?\s+s-2\s+s\s+j-2/
+
+    path = Path.join(dir, "reach-js.muro")
+    File.write!(path, src)
     assert Muro.check_file(path) == :ok
   end
 
@@ -164,40 +160,46 @@ defmodule Muro.SynthBindersTest do
     assert Muro.check_file(path) == :ok
   end
 
-  test "exhaust freshens k0 against a reserved constructor and the book checks" do
-    schema = {:data, "State", [%{name: "here", fields: []}, %{name: "there", fields: []}]}
-    taken = Names.take(MapSet.new(), ["k0"])
-    {binders, taken} = Names.table(taken)
+  defp render_reach(path, opts) do
+    assert {:ok, host} = Muro.Synth.Host.open(path)
 
-    text =
-      Names.with_binders(binders, taken, fn ->
-        Term.same_source("dyn-same", schema, ["here", "there"], binders)
+    host =
+      case Synth.Feature.extend_reach(host) do
+        {:ok, specs} -> Muro.Synth.Host.install_features(host, specs)
+        :same -> flunk("expected reaches-pos to extend on #{path}")
+      end
+
+    families = Synth.Feature.families(host.feature_specs, host.actions)
+    reach = Enum.find(families, &(&1.stem == "reaches-pos"))
+    assert reach, "expected a reaches-pos family on #{path}"
+    action = hd(host.actions)
+    preds = [{:self, reach.stem, action, Map.fetch!(reach.by_action, action)}]
+
+    preds =
+      if Keyword.get(opts, :also_self_loop, false) do
+        loop = Enum.find(families, &(&1.stem == "is-self-loop"))
+        assert loop, "expected an is-self-loop family on #{path}"
+        preds ++ [{:self, loop.stem, action, Map.fetch!(loop.by_action, action)}]
+      else
+        preds
+      end
+
+    arms =
+      preds
+      |> Enum.with_index()
+      |> Enum.map(fn {pred, i} ->
+        %{
+          name: "survivor-#{i}",
+          pred: pred,
+          action: action,
+          else: action,
+          observations: []
+        }
       end)
 
-    refute text =~ "λ (k0 :"
-    assert text =~ "k0-2"
-
     dir = tmp()
-    on_exit(fn -> File.rm_rf(dir) end)
-
-    path =
-      write_book(dir, "exhaust-k0.muro", """
-      import "std:bool.muro"
-
-      data State : Type where
-        here : State
-        there : State
-
-      data Marker : Type where
-        k0 : Marker
-
-      #{text}
-      def same-here : evidence {dyn-same here here ≡ true : Bool} := refl
-      def diff-arm : evidence {dyn-same here there ≡ false : Bool} := refl
-      def same-there : evidence {dyn-same there there ≡ true : Bool} := refl
-      """)
-
-    assert Muro.check_file(path) == :ok
+    assert {:ok, src, meta} = Muro.Synth.Book.render(host, arms, dir, "trace")
+    {dir, src, meta}
   end
 
   defp quant_book(host, preds) do
@@ -220,16 +222,6 @@ defmodule Muro.SynthBindersTest do
     assert head =~ "def stem-at "
     {dir, head}
   end
-
-  defp rel_import(from_dir, to_file) do
-    from = from_dir |> Path.expand() |> Path.split()
-    to = to_file |> Path.expand() |> Path.split()
-    {from, to} = drop_common(from, to)
-    Path.join(List.duplicate("..", length(from)) ++ to)
-  end
-
-  defp drop_common([head | from], [head | to]), do: drop_common(from, to)
-  defp drop_common(from, to), do: {from, to}
 
   defp joined(result), do: Enum.join(result.lines, "\n")
 

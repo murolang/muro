@@ -1,0 +1,46 @@
+-- Delayed reward so reaches-pos is distinct from has-pos-reward, and
+-- a dead absorbing state so it is not a constant column. The State
+-- constructor carries a three-value flag, so the host is structured
+-- and finite: Book.render tabulates Reach (rk0), cover-splits the
+-- field (f0_0), and exhausts equality (k0). Actions are named j and
+-- s, the Reach Nat and State binders, so a bind-time allocation
+-- against an empty reserved set would capture those constructors.
+import "../../examples/cshrl/std/nat.muro"
+import "../../examples/cshrl/lib/agent.muro"
+
+data Flag : Type where
+  off : Flag
+  lit : Flag
+  dead : Flag
+
+data State : Type where
+  spot : Π (flag : Flag) → State
+
+data Action : Type where
+  j : Action
+  s : Action
+
+data Marker : Type where
+  k0 : Marker
+  rk0 : Marker
+  f0_0 : Marker
+
+def Reward : spec Type := Nat
+
+def step : run Π (st : State) → Π (actn : Action) → State × Reward :=
+  λ (st : State) → λ (actn : Action) →
+    match st motive (λ _ → State × Reward)
+      | spot flag =>
+          (match flag motive (λ _ → State × Reward)
+            | off => (spot lit, 0)
+            | lit => (spot lit, suc 0)
+            | dead => (spot dead, 0))
+
+def le : spec Π (rw : Reward) → Π (qv : Reward) → Type := Le
+def max : run Π (rw : Reward) → Π (qv : Reward) → Reward := maxN
+def bottom : run Reward := 0
+def all-actions : run List Action := cons j (cons s nil)
+def default-action : run Action := j
+def horizon : run Nat := suc (suc 0)
+def all-states : run List State :=
+  cons (spot off) (cons (spot lit) (cons (spot dead) nil))
