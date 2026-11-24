@@ -283,6 +283,48 @@ defmodule Muro.SkillsTest do
     assert elixir =~ ".agents/skills/muro-book/examples/half_ok.muro"
   end
 
+  test "skills add writes CLI backend names, including rust-test" do
+    version = Mix.Tasks.Muro.version()
+
+    hyphenated =
+      for name <- Muro.Skills.backends(), String.contains?(name, "-") do
+        {name, name |> String.replace("-", "_") |> String.to_existing_atom()}
+      end
+
+    # rust_test is the kind whose atom contains an underscore.
+    assert hyphenated == [{"rust-test", :rust_test}]
+
+    for {flag, atom} <- hyphenated do
+      toml_dir = tmp()
+
+      File.write!(Path.join(toml_dir, "muro.toml"), """
+      muro = "#{version}"
+      backend = "#{flag}"
+      modules = []
+      """)
+
+      assert {:ok, _} = Muro.Skills.add(toml_dir)
+      toml_text = File.read!(Path.join(toml_dir, "AGENTS.md"))
+      assert toml_text =~ "muro emit path.muro --backend #{flag}\n"
+      refute toml_text =~ "muro emit path.muro --backend #{atom}\n"
+
+      exs_dir = tmp()
+
+      File.write!(Path.join(exs_dir, "muro.exs"), """
+      [
+        muro: "#{version}",
+        backend: :#{atom},
+        modules: []
+      ]
+      """)
+
+      assert {:ok, _} = Muro.Skills.add(exs_dir)
+      exs_text = File.read!(Path.join(exs_dir, "AGENTS.md"))
+      assert exs_text =~ "muro emit path.muro --backend #{flag}\n"
+      refute exs_text =~ "muro emit path.muro --backend #{atom}\n"
+    end
+  end
+
   test "installed skills name every backend, synth rules, and the mix.exs version" do
     dir = tmp()
     assert {:ok, _} = Muro.Skills.add(dir)
@@ -305,6 +347,10 @@ defmodule Muro.SkillsTest do
     assert synth =~ ~s(name: "muro-synth")
     assert synth =~ "The synthesized PredProg is itself the certified term."
     assert synth =~ "It is not the Finder's ranking."
+
+    gen = File.read!(Path.join(dir, ".agents/skills/muro-gen/SKILL.md"))
+    assert gen =~ "muro.toml"
+    assert gen =~ "a missing `kind` on an entry still defaults to `:elixir`"
 
     for {name, source} <- [
           {"half_ok.muro", "examples/half_ok.muro"},

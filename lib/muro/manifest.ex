@@ -22,7 +22,8 @@ defmodule Muro.Manifest do
       (`MyApp.Billing.Rounding`). A 3-tuple is an Elixir module.
       `opts` is a keyword list: `kind: :elixir` (the default),
       `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`, `kind: :fsm`,
-      `kind: :c`, `kind: :rust`, `kind: :zig`, `kind: :asm`, or `kind: :js`.
+      `kind: :c`, `kind: :rust`, `kind: :zig`, `kind: :asm`, `kind: :otp`,
+      `kind: :js`, or `kind: :mbi`.
       For `:exunit`, an optional `impl:` alias is the implementation
       the suite tests by default. For `:pytest`, `impl:` is a Python
       module name. For `:rust_test`, `impl:` is a Rust path. An optional

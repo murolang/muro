@@ -288,7 +288,7 @@ defmodule Muro.Skills do
     """
     muro check
     muro check --fuel 20000 path.muro
-    muro emit path.muro --backend #{backend}
+    muro emit path.muro --backend #{backend_cli(backend)}
     muro gen
     muro gen --check
     muro gen --skip-check
@@ -298,6 +298,13 @@ defmodule Muro.Skills do
     muro deps.get
     """
     |> String.trim_trailing("\n")
+  end
+
+  # CLI flags use a hyphen (`rust-test`); manifest atoms use an underscore.
+  defp backend_cli(backend) when is_atom(backend) do
+    backend
+    |> Atom.to_string()
+    |> String.replace("_", "-")
   end
 
   defp example(:c), do: "nats"

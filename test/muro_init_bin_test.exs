@@ -134,7 +134,9 @@ defmodule Muro.InitBinTest do
     assert cli(otp, ["init", "--backend", "otp"]) =~ "created muro.toml\n"
     otp_toml = File.read!(Path.join(otp, "muro.toml"))
     assert otp_toml =~ ~s(backend = "otp")
-    assert otp_toml =~ ~s(target = "lib/my_app/billing/rounding_otp.ex")
+    assert otp_toml =~ ~s(book = "muro/ping.muro")
+    assert otp_toml =~ ~s(target = "lib/ping_otp.ex")
+    refute otp_toml =~ "rounding.muro"
     assert {:ok, %{backend: :otp}} = Muro.Manifest.load(otp)
 
     assert {:ok, _} = Muro.Skills.add(otp)
@@ -147,15 +149,17 @@ defmodule Muro.InitBinTest do
     assert cli(forced_otp, ["init", "--backend", "otp"]) =~ "created muro.exs\n"
     otp_exs = File.read!(Path.join(forced_otp, "muro.exs"))
     assert otp_exs =~ "backend: :otp,"
-    assert otp_exs =~ "rounding_otp.ex"
-    assert otp_exs =~ "kind: :otp"
+    assert otp_exs =~ ~s({"priv/muro/ping.muro", "lib/ping_otp.ex", [kind: :otp]})
+    refute otp_exs =~ "rounding.muro"
     assert {:ok, %{backend: :otp}} = Muro.Manifest.load(forced_otp)
 
     mbi = tmp()
     assert cli(mbi, ["init", "--backend", "mbi"]) =~ "created muro.toml\n"
     mbi_toml = File.read!(Path.join(mbi, "muro.toml"))
     assert mbi_toml =~ ~s(backend = "mbi")
-    assert mbi_toml =~ ~s(target = "src/rounding.mbi")
+    assert mbi_toml =~ ~s(book = "muro/one.muro")
+    assert mbi_toml =~ ~s(target = "src/one.mbi")
+    refute mbi_toml =~ "rounding.muro"
     assert {:ok, %{backend: :mbi}} = Muro.Manifest.load(mbi)
 
     assert {:ok, _} = Muro.Skills.add(mbi)
@@ -168,8 +172,8 @@ defmodule Muro.InitBinTest do
     assert cli(forced_mbi, ["init", "--backend", "mbi"]) =~ "created muro.exs\n"
     mbi_exs = File.read!(Path.join(forced_mbi, "muro.exs"))
     assert mbi_exs =~ "backend: :mbi,"
-    assert mbi_exs =~ "src/rounding.mbi"
-    assert mbi_exs =~ "kind: :mbi"
+    assert mbi_exs =~ ~s({"priv/muro/one.muro", "src/one.mbi", [kind: :mbi]})
+    refute mbi_exs =~ "rounding.muro"
     assert {:ok, %{backend: :mbi}} = Muro.Manifest.load(forced_mbi)
   end
 

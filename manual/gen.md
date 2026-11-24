@@ -39,6 +39,8 @@ A `c`, `rust`, `zig`, `asm`, `otp`, `js`, `mbi`, `pytest`, or `rust_test` entry 
 {"muro/rounding.muro", "src/rounding.rs", [kind: :rust]}
 {"muro/rounding.muro", "src/rounding.zig", [kind: :zig]}
 {"muro/rounding.muro", "src/rounding.mjs", [kind: :js]}
+{"muro/ping.muro", "lib/ping_otp.ex", [kind: :otp]}
+{"muro/one.muro", "src/one.mbi", [kind: :mbi]}
 {"muro/rounding.muro", "test/rounding_test.py", [kind: :pytest, impl: "host.rounding"]}
 {"muro/rounding.muro", "test/rounding_test.rs", [kind: :rust_test, impl: "crate::rounding"]}
 ```
@@ -249,7 +251,7 @@ The manifest is `muro.toml` at the project root, or `[package.metadata.muro]` in
 
 It pins muro to a version, which must equal the running version. This copy is **{{version}}**. `muro gen` and `muro gen --check` refuse to run when the pin differs from the running version. The message names both versions.
 
-Each entry names a book and a target. `elixir`, `fsm`, and `exunit` also name a module. `otp` names a `.ex` target and may omit the module (the emitter names the module from the book stem). `pytest` names a target ending in `.py` and may omit the module. `rust-test` names a target ending in `.rs` and may omit the module. `c`, `rust`, `zig`, `asm`, `js`, and `mbi` name a target ending in `.c`, `.rs`, `.zig`, `.s`, `.mjs`, or `.mbi`. A C target also writes the `.h` beside it. A JavaScript entry also writes the `.d.ts` beside the `.mjs`. An optional `fuel` is the checker's bound. An optional top-level `backend` is the kind of every entry that omits one, and is the backend `muro skills add` writes into `muro emit`.
+Each entry names a book and a target. `elixir`, `fsm`, and `exunit` also name a module. `otp` names a `.ex` target and may omit the module (the emitter names the module from the book stem). `pytest` names a target ending in `.py` and may omit the module. `rust-test` names a target ending in `.rs` and may omit the module. `c`, `rust`, `zig`, `asm`, `js`, and `mbi` name a target ending in `.c`, `.rs`, `.zig`, `.s`, `.mjs`, or `.mbi`. A C target also writes the `.h` beside it. A JavaScript entry also writes the `.d.ts` beside the `.mjs`. An optional `fuel` is the checker's bound. An optional top-level `backend` in `muro.toml` or `[package.metadata.muro]` is the default kind for every entry that omits one, and is the backend `muro skills add` writes into `muro emit`. A top-level `backend` in `muro.exs` is also the backend `muro skills add` writes into `muro emit`, but a missing `kind` on an entry still defaults to `:elixir`.
 
 The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256, except an `.mbi` image, which is written without that header.
 

@@ -211,7 +211,7 @@ defmodule Muro.Init do
     backend = "#{backend}"
 
     # [[modules]]
-    # book = "muro/rounding.muro"
+    # book = "muro/#{example_book(backend)}"
     # target = "#{target}"
     #{module_line}modules = []
     """
@@ -243,7 +243,7 @@ defmodule Muro.Init do
     #{backend_line}modules = []
 
     # [[package.metadata.muro.modules]]
-    # book = "muro/rounding.muro"
+    # book = "muro/#{example_book(backend || :rust)}"
     # target = "#{target}"
     #{module_line}
     """
@@ -435,6 +435,10 @@ defmodule Muro.Init do
     end
   end
 
+  defp example_book(:otp), do: "ping.muro"
+  defp example_book(:mbi), do: "one.muro"
+  defp example_book(_backend), do: "rounding.muro"
+
   defp example_paths(:elixir), do: {"lib/my_app/billing/rounding.ex", "MyApp.Billing.Rounding"}
   defp example_paths(:exunit), do: {"test/rounding_test.exs", "MyApp.Billing.RoundingTest"}
   defp example_paths(:pytest), do: {"test/rounding_test.py", nil}
@@ -448,8 +452,8 @@ defmodule Muro.Init do
   defp example_paths(:zig), do: {"src/rounding.zig", nil}
   defp example_paths(:asm), do: {"src/rounding.s", nil}
   defp example_paths(:js), do: {"src/rounding.mjs", nil}
-  defp example_paths(:otp), do: {"lib/my_app/billing/rounding_otp.ex", nil}
-  defp example_paths(:mbi), do: {"src/rounding.mbi", nil}
+  defp example_paths(:otp), do: {"lib/ping_otp.ex", nil}
+  defp example_paths(:mbi), do: {"src/one.mbi", nil}
   defp example_paths(nil), do: {"src/rounding.rs", nil}
 
   # No backend keeps the historical `muro.exs`, which omits the key.
@@ -462,9 +466,9 @@ defmodule Muro.Init do
 
     entry =
       if module do
-        ~s|# {"priv/muro/rounding.muro", #{module}, "#{target}", [kind: :#{backend}]}|
+        ~s|# {"priv/muro/#{example_book(backend)}", #{module}, "#{target}", [kind: :#{backend}]}|
       else
-        ~s|# {"priv/muro/rounding.muro", "#{target}", [kind: :#{backend}]}|
+        ~s|# {"priv/muro/#{example_book(backend)}", "#{target}", [kind: :#{backend}]}|
       end
 
     """
