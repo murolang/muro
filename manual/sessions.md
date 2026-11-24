@@ -595,7 +595,7 @@ meet back : server may fail with task
 meet both : server may fail with task may fail buffer 1
 ```
 
-`may` and `fail` are keywords only in this form, the way `buffer` is a keyword only after the right-hand process and only with a numeral. `def may : run Nat := 0` and `def fail : run Nat := 0` stay definitions. `may fail` in a `run` term is an application. On a talk, a choreography, a link, a seat, an endpoint, an endpoint function, or a process, the same two words are `may fail is only a mark on a party of a meet`. `may redeliver` is a mark on a family, after the kind. It sits beside this mark. The account is [State machines](fsm.md#an-external-contract).
+`may` and `fail` are keywords only in this form, the way `buffer` is a keyword only after the right-hand process and only with a numeral. `def may : run Nat := 0` and `def fail : run Nat := 0` stay definitions. `may fail` in a `run` term is an application. On a talk, a choreography, a link, a seat, an endpoint, an endpoint function, or a process, the same two words are `may fail is only a mark on a party of a meet`. `may redeliver` is a mark on a family, after the kind. It sits beside this mark. `contract <family> : in order` and `contract <family> : dense` narrow that family's arrivals. The account is [State machines](fsm.md#an-external-contract).
 
 Every receive from a marked party has a failure arm. The arm is a process, written after the continuation of that receive:
 

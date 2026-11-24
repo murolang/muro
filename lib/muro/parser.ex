@@ -1380,8 +1380,8 @@ defmodule Muro.Parser do
     end
   end
 
-  # The closed list. Implemented entries return. Reserved names are
-  # refused here, so a later version can accept the same words.
+  # The closed list. `idempotent init`, `in order`, and `dense` return.
+  # `dedupe` is refused here, so a later version can accept the same word.
   defp parse_closed_entry(s) do
     s = skip(s)
 
@@ -1404,12 +1404,12 @@ defmodule Muro.Parser do
         rest = s |> after_kw("in") |> skip()
 
         case ident(rest) do
-          {:ok, "order", _} -> {:error, err(s, "in order is not in this version")}
+          {:ok, "order", rest} -> {:ok, :in_order, rest}
           _ -> {:error, err(s, "unknown contract entry in")}
         end
 
       word_kw?(s, "dense") ->
-        {:error, err(s, "dense is not in this version")}
+        {:ok, :dense, after_kw(s, "dense")}
 
       word_kw?(s, "dedupe") ->
         {:error, err(s, "dedupe is not in this version")}

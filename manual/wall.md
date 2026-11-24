@@ -64,7 +64,7 @@ bad: a run depends on hidden.LEM
 
 That is `def bad : run internal Nat := LEM` in a file named `hidden.muro`. A `run` reached only through an erased argument is the same kind of refusal (`bad: a run depends on Classical.LEM`). A `run` in an imported book that reaches an axiom refuses the book even when the entry file does not mention that run. The checker does not print a depends-line for the run.
 
-A contract is not an axiom and not `LEM`. It is not an evidence term. Declaring one does not emit an axiom, and a `run` that reaches an axiom is still refused when the book also declares a contract. A formula that holds and says `relies idempotent init` prints `<name>: depends on contract idempotent init`. That line is not an axiom line. The contract is [State machines](fsm.md#an-external-contract).
+A contract is not an axiom and not `LEM`. It is not an evidence term. Declaring one does not emit an axiom, and a `run` that reaches an axiom is still refused when the book also declares a contract. A formula that holds and says `relies idempotent init`, `relies in order`, or `relies dense` prints `<name>: depends on contract <entry>`. That line is not an axiom line. The contract is [State machines](fsm.md#an-external-contract).
 
 ## What is checked in spec
 

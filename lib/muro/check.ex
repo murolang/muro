@@ -4404,11 +4404,11 @@ defmodule Muro.Check do
         holds = "temporal #{name}: holds in #{n} reachable states, #{transitions(m)}"
 
         case Map.get(d, :relies) do
-          :idempotent_init ->
-            {:notes, [holds, "#{name}: depends on contract idempotent init"]}
-
-          _ ->
+          nil ->
             {:note, holds}
+
+          entry ->
+            {:notes, [holds, "#{name}: depends on contract #{Muro.Contract.spell(entry)}"]}
         end
 
       {:error, msg} ->

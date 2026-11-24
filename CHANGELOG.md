@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.22.26
+
+A keyed family can state `in order` or `dense`.
+
+`contract slots : in order` narrows the arrivals the checker explores: an earlier creation index does not arrive after a later one of that key is already present. `contract slots : dense` narrows them so an index does not arrive while a smaller index of that key is still absent. A script that creates an index late, or that leaves a gap, is refused. A contract set that leaves no arrival is refused, and so is a contract that removes every run a formula's premise needs. `skip` after the entry drops the run-time check and still narrows the graph.
+
+The dispatcher checks by default. A late arrival is `{:error, {:contract, :in_order, key, index}}`. A gap is `{:error, {:contract, :dense, key, index}}`. `check_trace` reports the same reason. Under `in order` the dispatcher keeps a waterline per key, `{seen, prefix}`, and does not keep a growing set of departed indices. `may redeliver` and `idempotent init` are unchanged. A book with no contract emits the same dispatcher as 0.22.24.
+
+A temporal formula may say `relies in order` or `relies dense`. When it holds, the checker prints its count and then `<name>: depends on contract in order`, or `dense`. A formula that does not say `relies` does not. `dedupe` is still not in this version.
+
+The arrival-sequence hypothesis is in `agda/Muro/Family.agda`. The wall is unchanged. `examples/keyed-slots.muro` stays 171649 reachable states and 729184 transitions. `examples/keyed-commands.muro` stays 370 reachable states and 835 transitions.
+
+### Manual
+
+- Grammar, State machines, Sessions, Temporal, Limits, and The wall: `in order`, `dense`, the waterline, and the line a formula prints when it relies on one of them.
+
+### Package
+
+- Version 0.22.26.
+
 ## 0.22.24
 
 A keyed family can say that a message may be delivered again, and a book can state that opening the same `init` twice is harmless.

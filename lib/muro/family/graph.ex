@@ -25,6 +25,13 @@ defmodule Muro.Family.Graph do
   states. `eventually` and `leads_to` hold only when they hold if that
   step can be taken forever. An unmarked family keeps today's edges.
 
+  `in order` omits an arrival whose key already has a strictly later
+  creation index present. `dense` omits an arrival while a strictly
+  earlier creation index of that key is still absent. Either mark is
+  the declaration, with or without `skip`. A mark that leaves no
+  arrival is refused. A `leads_to` whose premise holds in the unmarked
+  graph and in no state of the narrowed graph is refused.
+
   A count of reachable states is a model hypothesis, not
   data-independence. The model is one retry and the fixed script.
   """
@@ -63,14 +70,29 @@ defmodule Muro.Family.Graph do
          {:ok, %{g: mg}} <- Muro.Temporal.prepare(book, meet.name, :ok) do
       instances = Keyword.get(opts, :instances) || instances(book, family)
       rules = Map.new(family.rules, &{&1.ctor, &1.hold})
+      narrow = Muro.Contract.narrowing(book, family.name)
 
-      remember({mg, instances, rules, family.name, Map.get(family, :redeliver, false)}, fn ->
-        compose(family, mg, instances, rules)
-      end)
+      with :ok <- script_gate(instances, narrow) do
+        remember(
+          {mg, instances, rules, family.name, Map.get(family, :redeliver, false), narrow.in_order,
+           narrow.dense},
+          fn -> compose(family, mg, instances, rules, narrow) end
+        )
+      end
     end
   end
 
-  defp compose(family, mg, instances, rules) do
+  defp script_gate(instances, %{in_order: in_order, dense: dense}) do
+    with :ok <- gate(instances, in_order, :in_order),
+         :ok <- gate(instances, dense, :dense) do
+      :ok
+    end
+  end
+
+  defp gate(_instances, false, _entry), do: :ok
+  defp gate(instances, true, entry), do: Muro.Contract.creation(instances, entry)
+
+  defp compose(family, mg, instances, rules, narrow) do
     {server, task} = roles(mg)
 
     g = %{
@@ -84,13 +106,42 @@ defmodule Muro.Family.Graph do
       task: task,
       init: Meet.init(mg),
       redeliver: Map.get(family, :redeliver, false),
+      in_order: narrow.in_order,
+      dense: narrow.dense,
       start: Tuple.duplicate(:absent, length(instances))
     }
 
     {states, parents, transitions, edges} = reachable(g)
 
-    {:ok, %{g: g, states: states, parents: parents, transitions: transitions, edges: edges}}
+    if emptied?(g, edges) do
+      {:error, empty_msg(g)}
+    else
+      {:ok, %{g: g, states: states, parents: parents, transitions: transitions, edges: edges}}
+    end
   end
+
+  # A narrowing that leaves only the stutter, and the redelivery loop,
+  # has no arrival. The fixed script does not do this: its least index
+  # can still arrive. The guard is the refusal if a contract set does.
+  @doc false
+  def emptied?(%{instances: instances} = g, edges) when is_list(instances) and is_map(edges) do
+    narrowing?(g) and instances != [] and
+      Enum.all?(edges, fn {_state, steps} ->
+        Enum.all?(steps, fn
+          {:stay, _} -> true
+          {:redeliver, _} -> true
+          _ -> false
+        end)
+      end)
+  end
+
+  def emptied?(_g, _edges), do: false
+
+  defp empty_msg(%{in_order: true, dense: true}), do: "in order and dense leave no run"
+  defp empty_msg(%{in_order: true}), do: "in order leaves no run"
+  defp empty_msg(%{dense: true}), do: "dense leaves no run"
+
+  defp narrowing?(g), do: Map.get(g, :in_order, false) or Map.get(g, :dense, false)
 
   # The worked script is about 171649 states. The suite sets
   # `:family_graph_cache` and reuses one search. A check outside the
@@ -278,23 +329,47 @@ defmodule Muro.Family.Graph do
   end
 
   defp verdict(%{g: g, states: states, parents: parents} = search, {:leads_to, p, q}) do
-    if Enum.any?(states, &holds(g, &1, p)) do
-      region = Enum.filter(states, fn state -> not holds(g, state, q) end)
-      z = prune(search, region)
-      zset = MapSet.new(z)
+    cond do
+      Enum.any?(states, &holds(g, &1, p)) ->
+        region = Enum.filter(states, fn state -> not holds(g, state, q) end)
+        z = prune(search, region)
+        zset = MapSet.new(z)
 
-      case Enum.find(states, fn state -> holds(g, state, p) and MapSet.member?(zset, state) end) do
-        nil ->
-          nil
+        case Enum.find(states, fn state -> holds(g, state, p) and MapSet.member?(zset, state) end) do
+          nil ->
+            nil
 
-        state ->
-          {stem, loop} = lasso(search, z, state)
-          {:no, live_msg(g, {:leads_to, p, q}, trace(parents, state), stem, loop)}
-      end
-    else
-      nil
+          state ->
+            {stem, loop} = lasso(search, z, state)
+            {:no, live_msg(g, {:leads_to, p, q}, trace(parents, state), stem, loop)}
+        end
+
+      premise_removed?(search, p) ->
+        {:no, premise_msg(g)}
+
+      true ->
+        nil
     end
   end
+
+  # An unmarked `leads_to` whose premise is nowhere still holds. The
+  # refusal is a premise the unmarked graph can reach and the narrowed
+  # graph cannot. Key `b` has no signal, so that key stays vacuous.
+  defp premise_removed?(%{g: g} = search, p) do
+    narrowing?(g) and wide_premise?(search, p)
+  end
+
+  defp wide_premise?(%{g: g}, p) do
+    wide = %{g | in_order: false, dense: false}
+    {states, _parents, _transitions, _edges} = reachable(wide)
+    Enum.any?(states, &holds(wide, &1, p))
+  end
+
+  defp premise_msg(%{in_order: true, dense: true}),
+    do: "in order and dense remove every run the premise needs"
+
+  defp premise_msg(%{in_order: true}), do: "in order removes every run the premise needs"
+  defp premise_msg(%{dense: true}), do: "dense removes every run the premise needs"
 
   defp prune(%{edges: edges}, region) when is_map(edges) do
     Temporal.prune_dests(region, destinations(region, edges))
@@ -526,7 +601,7 @@ defmodule Muro.Family.Graph do
   defp instance_steps(g, state, inst) do
     case phase(state, inst.id) do
       :absent ->
-        [arrival(g, state, inst)]
+        if arrival_ok?(g, state, inst), do: [arrival(g, state, inst)], else: []
 
       :held ->
         if opens?(g, state, inst) do
@@ -546,6 +621,26 @@ defmodule Muro.Family.Graph do
       _ ->
         []
     end
+  end
+
+  # A missing flag is today's arrival. `in order` refuses a creation
+  # index that shows up after a later one of the same key. `dense`
+  # refuses an arrival that would skip a smaller index still absent.
+  defp arrival_ok?(g, state, inst) do
+    (not Map.get(g, :in_order, false) or not late?(g, state, inst)) and
+      (not Map.get(g, :dense, false) or not gap?(g, state, inst))
+  end
+
+  defp late?(g, state, inst) do
+    Enum.any?(g.instances, fn other ->
+      other.key == inst.key and other.index > inst.index and phase(state, other.id) != :absent
+    end)
+  end
+
+  defp gap?(g, state, inst) do
+    Enum.any?(g.instances, fn other ->
+      other.key == inst.key and other.index < inst.index and phase(state, other.id) == :absent
+    end)
   end
 
   defp arrival(g, state, inst) do
