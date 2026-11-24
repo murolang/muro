@@ -2976,6 +2976,197 @@ defmodule Muro.CheckTest do
     assert call("StdSucBin", :fromBits, [bits12]) == eleven + 1
   end
 
+  # Descent blocks are computed on the de Bruijn book that `check_sig` uses.
+  # `mentions/1` collects `{:def, n}` after `Ast.book_to_db/1`.
+  defp same_block!(book, name) do
+    db =
+      case book do
+        [] ->
+          []
+
+        _ ->
+          assert {:ok, db} = Ast.book_to_db(book)
+          db
+      end
+
+    got = Check.descent_block(db, name)
+    assert got == Check.descent_block_by_paths(db, name)
+    got
+  end
+
+  test "a non-recursive singleton is its own descent block" do
+    assert {:ok, book} = Parser.parse("def a : run Nat := 0\n")
+    assert same_block!(book, "a") == MapSet.new(["a"])
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a self-recursive singleton is its own descent block" do
+    src = """
+    def pred : run Π (n : Nat) → Nat :=
+      λ (n : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => 0
+          | suc k => pred k
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert same_block!(book, "pred") == MapSet.new(["pred"])
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a mutual 2-cycle shares one descent block" do
+    src = File.read!("examples/even_odd.muro")
+    assert {:ok, book} = Parser.parse(src)
+    block = MapSet.new(["even", "odd"])
+    assert same_block!(book, "even") == block
+    assert same_block!(book, "odd") == block
+    assert same_block!(book, "even-two") == MapSet.new(["even-two"])
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a mutual 3-cycle shares one descent block" do
+    src = """
+    def a : run Π (n : Nat) → Nat :=
+      λ (n : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => 0
+          | suc k => b k
+    def b : run Π (n : Nat) → Nat :=
+      λ (n : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => 0
+          | suc k => c k
+    def c : run Π (n : Nat) → Nat :=
+      λ (n : Nat) →
+        match n motive (λ _ → Nat)
+          | 0 => 0
+          | suc k => a k
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    block = MapSet.new(["a", "b", "c"])
+    assert same_block!(book, "a") == block
+    assert same_block!(book, "b") == block
+    assert same_block!(book, "c") == block
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a diamond DAG gives each definition its own descent block" do
+    src = """
+    def d : run Nat := 0
+    def b : run Nat :=
+      match d motive (λ _ → Nat)
+        | 0 => d
+        | suc k => d
+    def c : run Nat :=
+      match d motive (λ _ → Nat)
+        | 0 => d
+        | suc k => d
+    def a : run Nat :=
+      match b motive (λ _ → Nat)
+        | 0 => c
+        | suc k => c
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+
+    for name <- ["a", "b", "c", "d"] do
+      assert same_block!(book, name) == MapSet.new([name])
+    end
+
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "a shadowed local binder is not a call to a top-level def" do
+    src = """
+    def f : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → g n
+    def g : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → (λ (f : Nat) → f) n
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert same_block!(book, "f") == MapSet.new(["f"])
+    assert same_block!(book, "g") == MapSet.new(["g"])
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "imported defs join the call graph and stay out of a non-cyclic block" do
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "muro-descent-import-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(dir)
+    lib = Path.join(dir, "ident.muro")
+    src = Path.join(dir, "twice.muro")
+
+    File.write!(lib, """
+    def ident : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → n
+    """)
+
+    File.write!(src, """
+    import "ident.muro"
+    def twice : run Π (n : Nat) → Nat :=
+      λ (n : Nat) → ident (ident n)
+    """)
+
+    try do
+      assert {:ok, book} = Muro.Load.file(src, check: false)
+      assert same_block!(book, "ident") == MapSet.new(["ident"])
+      assert same_block!(book, "twice") == MapSet.new(["twice"])
+      assert Check.check_sig(book) == :ok
+    after
+      File.rm_rf!(dir)
+    end
+  end
+
+  test "constructors, specs, evidence, and runs keep separate descent blocks" do
+    src = """
+    data Color : Type where
+      red : Color
+      blue : Color
+    def paint : run Color := red
+    def IsRed : spec Π (c : Color) → Type :=
+      λ (c : Color) →
+        match c motive (λ _ → Type)
+          | red => Unit
+          | blue => Empty
+    def red-is-red : evidence IsRed red := tt
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert same_block!(book, "paint") == MapSet.new(["paint"])
+    assert same_block!(book, "IsRed") == MapSet.new(["IsRed"])
+    assert same_block!(book, "red-is-red") == MapSet.new(["red-is-red"])
+    assert same_block!(book, "red") == MapSet.new([])
+    assert same_block!(book, "Color") == MapSet.new([])
+    assert Check.check_sig(book) == :ok
+  end
+
+  test "an empty book and a missing name have an empty descent block" do
+    assert same_block!([], "x") == MapSet.new([])
+    assert {:ok, book} = Parser.parse("def a : run Nat := 0\n")
+    assert same_block!(book, "missing") == MapSet.new([])
+  end
+
+  test "duplicate mentions of a callee do not enlarge the descent block" do
+    src = """
+    def b : run Nat := 0
+    def a : run Nat :=
+      match b motive (λ _ → Nat)
+        | 0 => b
+        | suc k => b
+    """
+
+    assert {:ok, book} = Parser.parse(src)
+    assert same_block!(book, "a") == MapSet.new(["a"])
+    assert same_block!(book, "b") == MapSet.new(["b"])
+    assert Check.check_sig(book) == :ok
+  end
+
   # Each layer calls both definitions in the next layer. The descent block
   # of each one is itself. A path-visited search of that dag does not finish
   # within the timeout; one walk of the call graph does.

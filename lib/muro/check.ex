@@ -5139,6 +5139,34 @@ defmodule Muro.Check do
     end)
   end
 
+  @doc false
+  def descent_block(book, name) when is_list(book), do: component(book, name)
+
+  # The previous path-visited search, for tests. It is the same
+  # mutual-reachability set, and it is not used by the checker.
+  @doc false
+  def descent_block_by_paths(book, name) when is_list(book) do
+    names = Enum.uniq(rec_names(book))
+    edges = call_edges(book, names)
+
+    names
+    |> Enum.filter(fn j -> path_reaches?(edges, name, j) and path_reaches?(edges, j, name) end)
+    |> MapSet.new()
+  end
+
+  defp path_reaches?(edges, src, tgt), do: path_walk(edges, src, tgt, MapSet.new())
+
+  defp path_walk(_edges, cur, tgt, _vis) when cur == tgt, do: true
+
+  defp path_walk(edges, cur, tgt, vis) do
+    if MapSet.member?(vis, cur) do
+      false
+    else
+      vis = MapSet.put(vis, cur)
+      Enum.any?(Map.get(edges, cur, []), &path_walk(edges, &1, tgt, vis))
+    end
+  end
+
   # The first rec-mode entry of a name, as `Enum.find` on the book.
   # A later entry with the same name is not the callee body.
   defp call_edges(book, names) do

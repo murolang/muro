@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.22.23
+
+A definition's descent block is the strongly connected component of the call graph, computed once for the book. The block is the same set as before: a definition is in it when each can reach the other. The old walk re-explored every path, so a run whose body only calls a wide chain of other runs spent seconds deciding that its block is itself. Affine and linear arguments stay call-by-name.
+
+### Package
+
+- Version 0.22.23.
+
 ## 0.22.22
 
 `skip_below(state, index)` is a host call on a keyed family's dispatcher and on `Muro.Family.Step`. The host promises that nothing at or below `index` arrives again, for any key. The state keeps one integer `floor`, initially `-1`. A call with `index <= floor` returns `{:ok, state}` and the same state. An index that is not a non-negative integer is `{:error, {:index, index}}`. `arrive` of an index at or below the floor is `{:error, {:departed, key, index}}`, for `init` and for a signal, including a first arrival this child has never seen. That refusal is the host's promise, and it is the one way this call refuses a legitimate arrival.
@@ -13,8 +21,6 @@ The floor sits outside `agda/Muro/Family.agda`, as the departed guard does. Refu
 **Breaking:** `new/0` stores `floor`. A state from 0.22.20 or 0.22.21, `%{n, by, id, departed}` with no `floor`, is `{:error, {:state, state}}`. Regenerate every committed fsm module that emits a keyed family. `Muro.Family.Step` treats a missing `floor` as `-1`, as it treats a missing `departed` map.
 
 In `Muro.Family.Step`, `skip_below` on a state with no `floor` stores the new floor. A present `floor` that is not an integer at least `-1` is `{:error, {:state, state}}` from `arrive`, `resolve`, `withdraw`, and `skip_below`, and `departed?/3` fails to match on it, as it does on a departed record that is not `{P, S}`.
-
-A definition's descent block is the strongly connected component of the call graph, computed once for the book. The block is the same set as before: a definition is in it when each can reach the other. The old walk re-explored every path, so a run whose body only calls a wide chain of other runs spent seconds deciding that its block is itself. Affine and linear arguments stay call-by-name.
 
 ### Manual
 
