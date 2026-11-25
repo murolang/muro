@@ -4,7 +4,7 @@ defmodule Muro.MixProject do
   def project do
     [
       app: :muro,
-      version: "0.22.30",
+      version: "0.22.31",
       elixir: "~> 1.15",
       start_permanent: Mix.env() in [:prod, :burrito],
       deps: deps(),
@@ -148,7 +148,8 @@ defmodule Muro.MixProject do
         "GitHub" => "https://github.com/murolang/muro",
         "Site" => "https://muro-lang.dev"
       },
-      files: ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md manual/for-agents.md)
+      files:
+        ~w(lib .formatter.exs mix.exs README.md LICENSE CHANGELOG.md manual/for-agents.md manual/gen.md manual/synth.md examples/half_ok.muro examples/nats.muro examples/meet.muro)
     ]
   end
 end

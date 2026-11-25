@@ -4,7 +4,8 @@ defmodule Muro.Gen do
   what the books emit.
 
   Each target starts with two comment lines, and one more line per
-  package the book loaded. The first names the running Muro version,
+  package the book loaded, except an `:mbi` image, which is written
+  without that header. The first names the running Muro version,
   the book path relative to the project root (`/` separators), the
   book sha256, and the body sha256. Each package line is
   `# Conforms to <name> <version> (sha256 <hash>).`. The next line
@@ -43,14 +44,18 @@ defmodule Muro.Gen do
   beside it. A `:rust` entry calls `Muro.Emit.Rust.render/2`. A
   `:zig` entry calls `Muro.Emit.Zig.render/2`. An `:asm` entry calls
   `Muro.Emit.Asm.render/2`. A `:js` entry calls `Muro.Emit.JS.render/3`
-  and writes the `.mjs` target and the `.d.ts` beside it. The stem passed to those emitters is the
+  and writes the `.mjs` target and the `.d.ts` beside it. An `:otp`
+  entry calls `Muro.Emit.Otp.render/2` and writes a `.ex` target,
+  formatted like an Elixir module. An `:mbi` entry calls
+  `Muro.Emit.Mbi.render/1` and writes a `.mbi` image without a gen
+  header; `check/3` compares the image bytes. The stem passed to those emitters is the
   book basename.
   The Elixir bytes are formatted with the project's `.formatter.exs`
   when that file exists (`Mix.Tasks.Format.formatter_for_file/2`),
   and with `Code.format_string!/2` otherwise. `.ex` and `.exs` are
   formatted even when the formatter inputs do not list the file. The
   header is comments, so formatting does not rewrite it. `:c`,
-  `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, and `:rust_test` are not formatted.
+  `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi` are not formatted.
   The body hash is the emitter's text. There is no timestamp and no
   absolute path.
 
@@ -372,6 +377,9 @@ defmodule Muro.Gen do
       kind when kind in [:c, :rust, :zig, :asm, :js] ->
         render_native(root, entry, version, loaded, lines, kind)
 
+      :mbi ->
+        render_mbi(root, entry, loaded)
+
       :pytest ->
         render_pytest(root, entry, version, fuel, loaded, lines)
 
@@ -423,6 +431,23 @@ defmodule Muro.Gen do
       else
         {:error, "generated header does not describe #{entry.target}"}
       end
+    end
+  end
+
+  # An .mbi image has no gen header. muro-beam reads the file as
+  # written by Emit.Mbi. A header would be a different image.
+  defp render_mbi(_root, entry, loaded) do
+    book = Muro.Prelude.for_emit(loaded)
+
+    case Muro.Emit.Mbi.render(book) do
+      {:ok, image, ""} ->
+        {:ok, [%{rel: entry.target, contents: image}], {[], []}}
+
+      {:ok, _image, refused} ->
+        {:error, refused}
+
+      {:error, message} ->
+        {:error, message}
     end
   end
 
@@ -572,6 +597,15 @@ defmodule Muro.Gen do
           {:error, message} -> {:error, message}
         end
 
+      :otp ->
+        book = loaded |> Muro.Prelude.for_emit() |> Muro.Grade.erase_book()
+        stem = Path.basename(entry.book, ".muro")
+
+        case Muro.Emit.Otp.render(book, stem) do
+          {:ok, source} -> {:ok, source, []}
+          {:error, message} -> {:error, message}
+        end
+
       :fsm ->
         book = loaded |> Muro.Prelude.for_emit() |> Muro.Grade.erase_book()
 
@@ -698,6 +732,38 @@ defmodule Muro.Gen do
 
       {:error, message} ->
         [does_not_check(entry, message) | target_problems(entry, root, version, false, nil)]
+    end
+  end
+
+  defp target_problems(%{kind: :mbi} = entry, root, _version, book_ok?, emit) do
+    rel = entry.target
+    path = Path.expand(rel, root)
+
+    cond do
+      not File.regular?(path) ->
+        ["#{rel}: missing target for #{entry.book}"]
+
+      not book_ok? or is_nil(emit) ->
+        []
+
+      true ->
+        case render_cached(emit) do
+          {:ok, files, _notes} ->
+            case Enum.find(files, &(&1.rel == rel)) do
+              %{contents: contents} ->
+                if File.read!(path) == contents do
+                  []
+                else
+                  ["#{rel}: differs from what #{entry.book} emits"]
+                end
+
+              _other ->
+                ["#{rel}: differs from what #{entry.book} emits"]
+            end
+
+          _other ->
+            ["#{rel}: differs from what #{entry.book} emits"]
+        end
     end
   end
 

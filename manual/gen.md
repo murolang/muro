@@ -7,7 +7,7 @@ summary: A manifest names each book, module, and target. mix muro.gen writes the
 
 # Committed modules
 
-In brief: a project commits the Elixir a book emits. `muro.exs` names the module and the path. `mix muro.gen` type-checks each book once, formats the module, and writes every target of that book from that copy. `mix muro.gen --check` writes nothing and fails when a committed file is not what that copy emits. The running Muro version must equal `muro:`.
+In brief: a project commits the Elixir a book emits. `muro.exs` names the module and the path. `mix muro.gen` type-checks each book once, formats an Elixir, ExUnit, FSM, or OTP target, adds the header except on an `:mbi` image, and writes every target of that book from that copy. `mix muro.gen --check` writes nothing and fails when a committed file is not what that copy emits. The running Muro version must equal `muro:`.
 
 `mix muro.emit` prints a module. It does not choose a path under `lib/`, format with the project's `.formatter.exs`, or record which book the file came from. This page is that step.
 
@@ -31,19 +31,21 @@ An Elixir module of a book that uses `U8`, `U32`, `U64`, or `I64` calls `Muro.Wo
 ]
 ```
 
-`muro:` is required. It is the version string the books are checked with. `fuel:` is optional. The default is the fuel `mix muro.check` uses (`Muro.Check.default_fuel/0`, 2000). `modules:` is required. It may be empty. Each entry is `{book_path, module, target_path}` or `{book_path, module, target_path, opts}`. A 3-tuple emits Elixir. `opts` is a keyword list: `kind: :elixir` (the default), `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`, `kind: :fsm`, `kind: :c`, `kind: :rust`, `kind: :zig`, `kind: :asm`, or `kind: :js`. For `:exunit`, an optional `impl:` alias is the implementation the suite calls by default. For `:pytest`, `impl:` is a Python module name. For `:rust_test`, `impl:` is a Rust path. Each of those three takes an optional `imports:` boolean. `imports: true` also collects the closed equations of the files that book imports directly. The default is `false`. `imports:` on an `:elixir` entry is an error, and a non-boolean is an error. `c_prefix:` is only valid for `kind: :c`. It is a C identifier and it includes the separator (`admit_`). It is prepended to every run, to that book's session entry points, to each data struct, and to that struct's tag enum. Omitted, those names stay the source spellings. The prelude structs, the session ABI, `muro__slice`, `muro__str`, an `Opt` typedef, and the atom enum stay unprefixed. [Emit](emit.md) lists the rest. An empty string, a string that is not an identifier, and `c_prefix:` on another kind are errors. In `muro.toml` the same text is `c_prefix` on a module whose backend is `c`. Unknown options, an unknown kind, `impl:` on an Elixir entry, and an `impl` that is not an alias are errors, and the message names the entry index. `impl:` and `imports:` on a `:fsm` entry are the same error: both are only valid for `kind: :exunit`, `kind: :pytest`, and `kind: :rust_test`. The page for the suite is [Closed equations as tests](exunit.md). The page for the pytest module is [Pytest](pytest.md). The page for the Rust test file is [Rust tests](rust-test.md). The page for the state machine is [State machines](fsm.md).
+`muro:` is required. It is the version string the books are checked with. `fuel:` is optional. The default is the fuel `mix muro.check` uses (`Muro.Check.default_fuel/0`, 2000). `modules:` is required. It may be empty. Each entry is `{book_path, module, target_path}` or `{book_path, module, target_path, opts}`. A 3-tuple emits Elixir. `opts` is a keyword list: `kind: :elixir` (the default), `kind: :exunit`, `kind: :pytest`, `kind: :rust_test`, `kind: :fsm`, `kind: :c`, `kind: :rust`, `kind: :zig`, `kind: :asm`, `kind: :js`, `kind: :otp`, or `kind: :mbi`. For `:exunit`, an optional `impl:` alias is the implementation the suite calls by default. For `:pytest`, `impl:` is a Python module name. For `:rust_test`, `impl:` is a Rust path. Each of those three takes an optional `imports:` boolean. `imports: true` also collects the closed equations of the files that book imports directly. The default is `false`. `imports:` on an `:elixir` entry is an error, and a non-boolean is an error. `c_prefix:` is only valid for `kind: :c`. It is a C identifier and it includes the separator (`admit_`). It is prepended to every run, to that book's session entry points, to each data struct, and to that struct's tag enum. Omitted, those names stay the source spellings. The prelude structs, the session ABI, `muro__slice`, `muro__str`, an `Opt` typedef, and the atom enum stay unprefixed. [Emit](emit.md) lists the rest. An empty string, a string that is not an identifier, and `c_prefix:` on another kind are errors. In `muro.toml` the same text is `c_prefix` on a module whose backend is `c`. Unknown options, an unknown kind, `impl:` on an Elixir entry, and an `impl` that is not an alias are errors, and the message names the entry index. `impl:` and `imports:` on a `:fsm` entry are the same error: both are only valid for `kind: :exunit`, `kind: :pytest`, and `kind: :rust_test`. The page for the suite is [Closed equations as tests](exunit.md). The page for the pytest module is [Pytest](pytest.md). The page for the Rust test file is [Rust tests](rust-test.md). The page for the state machine is [State machines](fsm.md).
 
-A `c`, `rust`, `zig`, `asm`, `js`, `pytest`, or `rust_test` entry may omit the module. The target ends with `.c`, `.rs`, `.zig`, `.s`, `.mjs`, or `.py`. A `:rust_test` target ends with `.rs`, the same suffix as `:rust`:
+A `c`, `rust`, `zig`, `asm`, `otp`, `js`, `mbi`, `pytest`, or `rust_test` entry may omit the module. The target ends with `.c`, `.rs`, `.zig`, `.s`, `.ex`, `.mjs`, `.mbi`, or `.py`. A `:rust_test` target ends with `.rs`, the same suffix as `:rust`:
 
 ```
 {"muro/rounding.muro", "src/rounding.rs", [kind: :rust]}
 {"muro/rounding.muro", "src/rounding.zig", [kind: :zig]}
 {"muro/rounding.muro", "src/rounding.mjs", [kind: :js]}
+{"muro/ping.muro", "lib/ping_otp.ex", [kind: :otp]}
+{"muro/one.muro", "src/one.mbi", [kind: :mbi]}
 {"muro/rounding.muro", "test/rounding_test.py", [kind: :pytest, impl: "host.rounding"]}
 {"muro/rounding.muro", "test/rounding_test.rs", [kind: :rust_test, impl: "crate::rounding"]}
 ```
 
-A `:c` target also writes the header beside it (`src/rounding.c` writes `src/rounding.h`). The source's `#include` names that header (`rounding.h`), the target stem, including when the book is `muro/half.muro`. That header is checked as a target before anything is written, including when the path is already a directory. The error names the entry index. It is also a target for `mix muro.gen --check`. A `:js` target writes the declaration file beside the module (`src/rounding.mjs` writes `src/rounding.d.ts`) and reserves that path the same way. These kinds are not formatted, and neither is `:pytest` or `:rust_test`. The body hash is the sha256 of the emitter's text. The comment mark is `# ` for pytest, `// ` for C, Rust, Zig, JavaScript, and a Rust test file, including the `.h` and the `.d.ts`, and `@ ` for Cortex-M assembly. A Rust test `impl:` that is not a Rust path is an error and names the entry index. `kind: :rust` and `kind: :rust_test` both end in `.rs`. The words of the header are the ones below. A pytest `impl:` that is not a Python module name is an error and names the entry index. Two pytest entries whose book stems fold to one `MURO_IMPL_` variable are refused. `foo-bar.muro` and `foo_bar.muro` are both `MURO_IMPL_FOO_BAR`. The fold is on [Pytest](pytest.md).
+A `:c` target also writes the header beside it (`src/rounding.c` writes `src/rounding.h`). The source's `#include` names that header (`rounding.h`), the target stem, including when the book is `muro/half.muro`. That header is checked as a target before anything is written, including when the path is already a directory. The error names the entry index. It is also a target for `mix muro.gen --check`. A `:js` target writes the declaration file beside the module (`src/rounding.mjs` writes `src/rounding.d.ts`) and reserves that path the same way. Formatting is left alone for `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi`, so the body hash is the sha256 of the emitter's text. An `:otp` target is a `.ex` file and is formatted the same way as an Elixir target. The comment mark is `# ` for pytest, `// ` for C, Rust, Zig, JavaScript, and a Rust test file, including the `.h` and the `.d.ts`, and `@ ` for Cortex-M assembly. A Rust test `impl:` that is not a Rust path is an error and names the entry index. `kind: :rust` and `kind: :rust_test` both end in `.rs`. The words of the header are the ones below, except an `:mbi` image, which is written without that header. A pytest `impl:` that is not a Python module name is an error and names the entry index. Two pytest entries whose book stems fold to one `MURO_IMPL_` variable are refused. `foo-bar.muro` and `foo_bar.muro` are both `MURO_IMPL_FOO_BAR`. The fold is on [Pytest](pytest.md).
 
 A project without `mix.exs` uses `muro.toml`, or `[package.metadata.muro]` in `Cargo.toml`. The keys mean the same thing. `backend` there is the default kind. The page is [The executable](binary.md).
 
@@ -67,7 +69,7 @@ c:host in home (place)
 muro.gen wrote nothing
 ```
 
-Otherwise it emits each module, formats it, adds the header, and writes the target, creating directories. One line per target:
+Otherwise it emits each module, formats an Elixir, ExUnit, FSM, or OTP target, adds the header except on an `:mbi` image, and writes the target, creating directories. One line per target:
 
 ```
 written lib/my_app/billing/rounding.ex
@@ -90,7 +92,7 @@ Formatting uses the project's `.formatter.exs` when that file exists (`Mix.Tasks
 
 ## Header
 
-The first two lines of each target:
+The first two lines of each target are the header, except an `:mbi` image, which is written without that header:
 
 ```
 # Generated by Muro 0.20.17 from priv/muro/rounding.muro (book sha256 <hex>, body sha256 <hex>).
@@ -225,11 +227,52 @@ The task prints a note:
 
 ```
 Generated files are not edited by hand. The .muro file is the source. Run mix muro.gen after changing it.
-Run `muro skills add` to write the commands for this project into AGENTS.md.
+Run `muro skills add` to write the agent index into AGENTS.md and the skills under `.agents/skills/`.
 ```
 
-It does not write that file. `muro skills add` does. `muro init` writes the manifest for the directory it finds. When `muro.exs`, `muro.toml`, or `[package.metadata.muro]` already exists, it prints a diff of that file and exits 0. It does not write a second manifest. See [The executable](binary.md).
+It does not write `AGENTS.md` or the skill files. `muro skills add` does. `muro init` writes the manifest for the directory it finds. When `muro.exs`, `muro.toml`, or `[package.metadata.muro]` already exists, it prints a diff of that file and exits 0. It does not write a second manifest. See [The executable](binary.md).
 
 The three tasks run from the archive, with no Mix project, and inside a project that depends on muro. When a project depends on muro and the archive is also installed, Mix uses the project's copy.
 
 Next: [Host representations](repr.md).
+
+## Agent skill: committed modules
+
+<!-- muro-skill:gen:begin -->
+# Committed modules and version pins
+
+`muro gen` reads the manifest and writes the modules it names. The `.muro` file is the source. Do not edit a generated file by hand. Change the `.muro` file and run `muro gen`.
+
+Docs: [Committed modules](https://muro-lang.dev/docs/gen), [The executable](https://muro-lang.dev/docs/binary), [Packages](https://muro-lang.dev/docs/packages).
+
+## Manifest
+
+The manifest is `muro.toml` at the project root, or `[package.metadata.muro]` in `Cargo.toml`. A Mix project uses `muro.exs`. Loading more than one manifest is an error.
+
+It pins muro to a version, which must equal the running version. This copy is **{{version}}**. `muro gen` and `muro gen --check` refuse to run when the pin differs from the running version. The message names both versions.
+
+Each entry names a book and a target. `elixir`, `fsm`, and `exunit` also name a module. `otp` names a `.ex` target and may omit the module (the emitter names the module from the book stem). `pytest` names a target ending in `.py` and may omit the module. `rust-test` names a target ending in `.rs` and may omit the module. `c`, `rust`, `zig`, `asm`, `js`, and `mbi` name a target ending in `.c`, `.rs`, `.zig`, `.s`, `.mjs`, or `.mbi`. A C target also writes the `.h` beside it. A JavaScript entry also writes the `.d.ts` beside the `.mjs`. An optional `fuel` is the checker's bound. An optional top-level `backend` in `muro.toml` or `[package.metadata.muro]` is the default kind for every entry that omits one, and is the backend `muro skills add` writes into `muro emit`. A top-level `backend` in `muro.exs` is also the backend `muro skills add` writes into `muro emit`, but a missing `kind` on an entry still defaults to `:elixir`.
+
+The file starts with a header that names the book, the Muro version, the book sha256, and the body sha256, except an `.mbi` image, which is written without that header.
+
+## Commands
+
+```
+muro init
+muro init --backend NAME
+muro gen
+muro gen --check
+muro gen --skip-check
+muro deps.get
+mix muro.init
+mix muro.gen
+mix muro.gen --check
+mix muro.deps.get
+```
+
+`muro init` looks at the working directory and writes one manifest, pinned to the running version, plus one commented example entry. It does not write `AGENTS.md` or the skill files. It prints a note that points at `muro skills add`. `--backend` stores that backend on the manifest. The value is elixir, c, rust, zig, asm, otp, js, mbi, fsm, exunit, pytest, or rust-test.
+
+One `muro gen` invocation type-checks each book once, then emits every target of that book from that copy, including both files of a C target. If one book fails, it writes nothing. A target that already matches is left untouched. `--skip-check` does not type-check; the caller has already checked. `--check --skip-check` still compares bytes. The default type-checks. `muro gen --check` fails when a committed module and its book disagree.
+
+`muro deps.get` fetches `muro_deps/` and writes `muro.lock`. A book that imports packages prints one `conforms to <name> <version> (sha256 <hash>)` line per package after a successful check.
+<!-- muro-skill:gen:end -->

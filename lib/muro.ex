@@ -331,7 +331,9 @@ defmodule Muro do
   On success the bytes are written to a temporary file in the same
   directory and renamed over the image, so the path holds the previous
   file or the whole image. `opts` is `fuel:` and `root:`, as in
-  `check_file/2`. This is not a manifest target.
+  `check_file/2`. A manifest entry may use `kind: :mbi`, or a
+  top-level `backend` of `mbi`. That entry names a `.mbi` target and
+  may omit the module. The image is written without a gen header.
   """
   def emit_mbi(path, opts \\ []) do
     stem = Path.basename(path, ".muro")

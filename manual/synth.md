@@ -129,3 +129,59 @@ The paper's structural templates are specified for `List ℕ`, and indexed by po
 | 0 | The output book checks and contains the homomorphism for the synthesized ranking, on the `step` the search called. `trace` and `coind-homo` check `CoindHomo`. `successor` checks `CoinductiveHomomorphism`. |
 | 1 | The report names an empty version space, a counterexample, a homomorphism that is not derivable, an oracle that cannot label a pair, features that cannot separate two carriers, or a policy whose environment does not define the homomorphism. A book that typechecks and does not contain that evidence is this exit. |
 | 2 | The book does not check, it does not follow the environment convention, it has no `step` and no observations to synthesize against, `--on` is not an accepted value, the oracle name is unknown, `--out` already exists, or a policy book or a temporary book cannot be written. The diagnostic is the one the command returned. |
+
+## Agent skill: synthesis, fill, and mutation
+
+<!-- muro-skill:synth:begin -->
+# Synthesis, fill, and mutation
+
+`muro synth` searches a version space of predicate programs against one checked environment. Exit 0 is the checked output book. **The synthesized PredProg is itself the certified term.** It is not the Finder's ranking. Do not paste a Finder ranking into the book and treat that as the certificate. The checker must accept the synthesized predicate as `CoindHomo` or `CoinductiveHomomorphism` on the `step` the search called.
+
+Docs: [Synthesis](https://muro-lang.dev/docs/synth), [CSHRL](https://muro-lang.dev/docs/cshrl), [Fill](https://muro-lang.dev/docs/fill), [Mutation](https://muro-lang.dev/docs/mutate).
+
+## synth
+
+```
+muro synth path.muro
+muro synth path.muro --on traces
+muro synth path.muro --oracle trace
+muro synth path.muro --oracle successor --depth 0
+muro synth path.muro --out out.muro --fuel 2000
+mix muro.synth path.muro
+mix muro.synth path.muro --on traces
+```
+
+`--on traces` selects the version-space search. `traces` is the only accepted value. A book that defines `step` selects `traces` when `--on` is omitted. A book with no `step` and no observations is refused, and the message does not name a flag.
+
+The book must already check. The search calls that book's emitted `step`. A program that misses an observation is dropped. The smallest program that matches every observation is the policy the result book deploys, and `eval` runs it. When the environment defines the homomorphism the oracle asks for, the same book defines `rank` from the surviving predicate and the evidence for that ranking, and the checker sees the evidence on the same `step`. It does not see the search.
+
+`muro synth` prints the book on standard output unless `--out` is set, and prints the report on standard error.
+
+| Exit | Meaning |
+| --- | --- |
+| 0 | The output book checks and contains the homomorphism for the synthesized ranking, on the `step` the search called. `trace` and `coind-homo` check `CoindHomo`. `successor` checks `CoinductiveHomomorphism`. |
+| 1 | A report: an empty version space, a counterexample, a homomorphism that is not derivable, or a policy whose environment does not define the homomorphism. |
+| 2 | The book does not check, it has no `step` and no observations, `--on` is not an accepted value, or `--out` already exists. |
+
+`--fuel` is fuel for the environment and for the policy book. `out of fuel` is not acceptance.
+
+## fill
+
+```
+muro fill path.muro --def name
+muro fill path.muro --def name --bound N --fuel N
+mix muro.fill path.muro --def name
+```
+
+`muro fill` writes a body for a definition whose body is `?`. It tries terms in order of size. A run is kept when the book's closed equations about that name still check. Evidence is kept when the type checks. A spec is kept the same way. It is a search. It is not `muro synth`, and it certifies nothing beyond the checker.
+
+## mutate
+
+```
+muro mutate path.muro
+muro mutate path.muro --only name --json
+mix muro.mutate path.muro
+```
+
+`muro mutate` reports which evidence fails when a `run` definition changes. It exits 1 when survivors exceed `--max-survivors` and exits 2 when the book does not check.
+<!-- muro-skill:synth:end -->

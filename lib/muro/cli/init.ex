@@ -21,7 +21,7 @@ defmodule Muro.CLI.Init do
         value: "NAME",
         default: "the backend this directory selects",
         doc:
-          "Store this backend on the manifest. It does not change which file is written. The value is elixir, c, rust, zig, asm, js, fsm, exunit, pytest, or rust-test. Without the flag, a Mix project omits the key."
+          "Store this backend on the manifest. It does not change which file is written. The value is elixir, c, rust, zig, asm, otp, js, mbi, fsm, exunit, pytest, or rust-test. Without the flag, a Mix project omits the key."
       },
       %{
         name: :cargo_metadata,
@@ -37,7 +37,7 @@ defmodule Muro.CLI.Init do
   def help do
     Muro.CLI.Text.page([
       Muro.CLI.Text.prose("""
-      muro init looks at the working directory and writes one manifest, pinned to the running version, plus one commented example entry. mix.exs gets muro.exs and priv/muro/. Cargo.toml gets muro.toml and muro/, with Rust as the backend. A CMakeLists.txt, meson.build, or Makefile, and neither mix.exs nor Cargo.toml, gets muro.toml and muro/ for C. Anything else gets muro.toml with modules = [] and muro/. An existing manifest at muro.exs, muro.toml, or [package.metadata.muro] is left in place. Init prints a diff of that file and exits 0. It does not write a second manifest, and it does not write AGENTS.md. It prints a note that points at muro skills add.
+      muro init looks at the working directory and writes one manifest, pinned to the running version, plus one commented example entry. mix.exs gets muro.exs and priv/muro/. Cargo.toml gets muro.toml and muro/, with Rust as the backend. A CMakeLists.txt, meson.build, or Makefile, and neither mix.exs nor Cargo.toml, gets muro.toml and muro/ for C. Anything else gets muro.toml with modules = [] and muro/. An existing manifest at muro.exs, muro.toml, or [package.metadata.muro] is left in place. Init prints a diff of that file and exits 0. It does not write a second manifest, and it does not write AGENTS.md or the skill files. It prints a note that points at muro skills add.
       """),
       Muro.CLI.Text.section(
         "USAGE",
@@ -148,7 +148,7 @@ defmodule Muro.CLI.Init do
 
   defp backend_value("rust-test"), do: {:ok, :rust_test}
 
-  defp backend_value(name) when name in ~w(elixir c rust zig asm js fsm exunit pytest) do
+  defp backend_value(name) when name in ~w(elixir c rust zig asm otp js mbi fsm exunit pytest) do
     {:ok, String.to_atom(name)}
   end
 

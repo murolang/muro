@@ -63,7 +63,7 @@ defmodule Muro.CLI do
            "Write the modules the manifest names. --check only compares. Each book is type-checked once. --skip-check does not type-check."},
           {"init [--ci github] [--backend NAME] [--cargo-metadata]",
            "Write the one manifest this directory calls for."},
-          {"skills add", "Write the agent guidance into AGENTS.md."},
+          {"skills add", "Write the agent guidance into AGENTS.md and .agents/skills/."},
           {"deps.get", "Fetch muro_deps and write muro.lock."},
           {[
              "mutate path.muro [--only NAME] [--json] [--fuel N]",
@@ -85,7 +85,7 @@ defmodule Muro.CLI do
           "muro init writes the manifest. Copy a .muro file from the examples.",
           "muro check book.muro",
           "muro gen writes the module. muro gen --check compares it in CI.",
-          "muro skills add records the commands in AGENTS.md."
+          "muro skills add records the commands in AGENTS.md and .agents/skills/."
         ])
       ),
       Muro.CLI.Text.section(
@@ -96,7 +96,7 @@ defmodule Muro.CLI do
           {"muro init", "In a Cargo project, write muro.toml and muro/."},
           {"muro gen", "Write the targets the manifest names."},
           {"muro gen --check", "Exits 0 when those targets match. Writes nothing."},
-          {"muro skills add", "Write the guidance into AGENTS.md."}
+          {"muro skills add", "Write the guidance into AGENTS.md and .agents/skills/."}
         ])
       ),
       Muro.CLI.Text.section(
@@ -116,7 +116,7 @@ defmodule Muro.CLI do
         "IF YOU ARE AN AGENT",
         Muro.CLI.Text.pre([
           "Read https://muro-lang.dev/docs/for-agents first, or run",
-          "muro skills add to write that guidance into AGENTS.md.",
+          "muro skills add to write that guidance into AGENTS.md and .agents/skills/.",
           "Copy syntax from https://muro-lang.dev/docs/examples",
           "rather than writing it from memory. out of fuel is not acceptance."
         ])
