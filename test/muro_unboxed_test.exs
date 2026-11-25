@@ -362,10 +362,19 @@ defmodule Muro.UnboxedTest do
     if @zig do
       assert {:ok, [zig]} = Muro.emit_zig(path)
       zsrc = File.read!(zig)
-      zgo = body(zsrc, "fn go(", "fn stop(")
-      zstop = body(zsrc, "fn stop(", "pub fn code(")
-      refute zgo =~ "create"
-      refute zstop =~ "create"
+      # `on` and `off` call `code` at a known constructor, so each body
+      # is that arm. The constructor is not built.
+      assert zsrc =~ ".go =>"
+      assert zsrc =~ ".stop =>"
+
+      assert zsrc =~
+               "pub fn on(muro__allocator: muro__std.mem.Allocator) !u64 {\n    _ = muro__allocator;\n    return @as(u64, 1);\n}"
+
+      assert zsrc =~
+               "pub fn off(muro__allocator: muro__std.mem.Allocator) !u64 {\n    _ = muro__allocator;\n    return @as(u64, 2);\n}"
+
+      refute zsrc =~ "fn go("
+      refute zsrc =~ "fn stop("
       File.write!(Path.join(dir, "check.zig"), flag_zig())
       assert zig_test!(dir) == :ok
     end

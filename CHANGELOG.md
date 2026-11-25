@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.22.33
+
+C, Rust, and Zig keep a large run as a call instead of copying it into every caller. A match whose scrutinee is already a constructor, a word, or a comparison fixed by an enclosing arm keeps the arm that can run.
+
+A wrapper such as `framedEnd s` still shares its `scan s` with the caller. `cost: false` is the previous inlining. `spec: false` keeps every arm. Every run is still emitted. The checked term is unchanged.
+
+On the HTTP step book, C object text at `-O2` drops from 205 KB to 139 KB when the header end is carried in the step, and from 174 KB to 128 KB on the previous step. `onBuf` stays a call.
+
+### Manual
+
+- Emit: a large run stays a call. A known scrutinee drops the arms that cannot run.
+
+### Package
+
+- Version 0.22.33.
+
 ## 0.22.32
 
 Agda `Check.checkBranches` asks a clash arm to bind its constructor's fields, as Elixir `branch_arity` does (follow-up to #291).

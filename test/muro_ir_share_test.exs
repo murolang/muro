@@ -898,4 +898,294 @@ defmodule Muro.IRShareTest do
 
     assert status == 0, out
   end
+
+  test "the default agrees with cost: false, spec: false on the share book", %{funs: funs} do
+    old = Muro.IR.Share.funs(funs, cost: false, spec: false)
+    now = Muro.IR.Share.funs(funs)
+
+    for f <- funs, not Map.get(f, :generated, false) do
+      assert normal(body(old, f.name)) == normal(body(now, f.name)), f.name
+    end
+  end
+
+  test "a large exported run used twice stays a call" do
+    body = pad(add(cnt("s"), cnt("s")), 90)
+    assert Muro.IR.Share.size(body) > 160
+    big = run("big", [{"s", :slice}], body)
+
+    caller =
+      run("f", [{"s", :slice}], add({:call, "big", [var: "s"]}, {:call, "big", [var: "s"]}))
+
+    for fs <- [image([big, caller]), image([caller, big])] do
+      out = Muro.IR.Share.funs(fs)
+      assert calls(body(out, "f"), "big") == 1
+      assert calls(body(out, "big"), "count") == 1
+      assert normal(body(out, "f")) == normal(body(Muro.IR.Share.funs(Enum.reverse(fs)), "f"))
+    end
+
+    off = Muro.IR.Share.funs(image([big, caller]), cost: false, spec: false, grow_max: 100_000)
+    assert calls(body(off, "f"), "big") == 0
+  end
+
+  test "a thin exported wrapper of a large run stays a call" do
+    wide = pad(add(cnt("s"), cnt("s")), 90)
+    assert Muro.IR.Share.size(wide) > 160
+    inner = run("inner", [{"s", :slice}], wide)
+    shell = run("shell", [{"s", :slice}], {:call, "inner", [var: "s"]})
+
+    caller =
+      run("f", [{"s", :slice}], add({:call, "shell", [var: "s"]}, {:call, "shell", [var: "s"]}))
+
+    out = Muro.IR.Share.funs(image([inner, shell, caller]), grow_max: 100_000)
+    assert calls(body(out, "f"), "shell") == 1
+    assert calls(body(out, "shell"), "inner") == 1
+
+    off =
+      Muro.IR.Share.funs(image([inner, shell, caller]),
+        cost: false,
+        spec: false,
+        grow_max: 100_000
+      )
+
+    assert calls(body(off, "f"), "shell") == 0
+  end
+
+  test "dup_max keeps a run a call, and one internal copy is inlined when it is the only site" do
+    fat = run("fat", [{"s", :slice}], add(add(cnt("s"), lit(1)), add(lit(2), lit(3))))
+    caller = run("f", [{"s", :slice}], add(add({:call, "fat", [var: "s"]}, cnt("s")), cnt("s")))
+    funs = image([fat, caller])
+    assert calls(body(Muro.IR.Share.funs(funs, dup_max: 7), "f"), "fat") == 1
+    assert calls(body(Muro.IR.Share.funs(funs), "f"), "fat") == 0
+
+    wide = pad(add(cnt("s"), cnt("s")), 90)
+    assert Muro.IR.Share.size(wide) > 160
+    one = Map.put(run("wide", [{"s", :slice}], wide), :export, false)
+    once = run("once", [{"s", :slice}], add({:call, "wide", [var: "s"]}, cnt("s")))
+
+    twice =
+      run("twice", [{"s", :slice}], add({:call, "wide", [var: "s"]}, {:call, "wide", [var: "s"]}))
+
+    fs = image([one, once, twice])
+    out = Muro.IR.Share.funs(fs, grow_max: 100_000)
+    assert calls(body(out, "once"), "wide") == 0
+    assert calls(body(out, "twice"), "wide") == 1
+  end
+
+  test "a known nonzero end drops the fold, and spec: false keeps it", %{dir: dir} do
+    path = Path.join(dir, "hend.muro")
+    File.write!(path, File.read!("test/fixtures/share_hend.muro"))
+    {:ok, book} = Muro.Load.file(path)
+    book = Muro.Prelude.for_emit(book)
+    {:ok, funs} = Muro.IR.elaborate(book)
+    shared = Muro.IR.Share.funs(funs)
+    assert calls(false_arm(body(shared, "hot")), "foldEnd") == 0
+    assert calls(false_arm(body(shared, "hot")), "endAt") == 0
+    assert calls(true_arm(body(shared, "hot")), "foldEnd") == 1
+    assert calls(body(shared, "known"), "foldEnd") == 0
+    assert calls(body(shared, "known"), "endAt") == 0
+
+    kept = Muro.IR.Share.funs(funs, spec: false)
+    # Without specialisation the false arm still reaches the fold, as a
+    # call of `endAt` or as that body copied in for a hoist.
+    missed = false_arm(body(kept, "hot"))
+    assert calls(missed, "endAt") + calls(missed, "foldEnd") >= 1
+    assert calls(body(kept, "endAt"), "foldEnd") == 1
+
+    # The same bodies either way the runs are listed.
+    rev = Muro.IR.Share.funs(Enum.reverse(funs))
+
+    for name <- ["hot", "known", "endAt"] do
+      assert normal(body(shared, name)) == normal(body(rev, name))
+    end
+
+    outs =
+      for {tag, opts} <- [{"on", []}, {"off", [share: false]}] do
+        sub = Path.join(dir, "hend_" <> tag)
+        File.mkdir_p!(sub)
+        {:ok, {h, c}} = Muro.Emit.C.render(book, "hend", opts)
+        File.write!(Path.join(sub, "hend.h"), h)
+        File.write!(Path.join(sub, "hend.c"), c)
+
+        File.write!(Path.join(sub, "main.c"), """
+        #include <stdio.h>
+        #include "hend.h"
+        int main(void) {
+          static const uint8_t b[] = {97, 98};
+          muro__slice s = {b, 2};
+          printf("%llu %llu %llu\\n",
+            (unsigned long long)known(s),
+            (unsigned long long)hot(2, s),
+            (unsigned long long)hot(0, s));
+          return 0;
+        }
+        """)
+
+        cc!(sub, ~w(hend.c main.c -o main_bin))
+        {out, 0} = System.cmd(Path.join(sub, "main_bin"), [], stderr_to_stdout: true)
+        out
+      end
+
+    assert outs == ["1 3 2\n", "1 3 2\n"]
+  end
+
+  test "a fact does not cross a rebinding, a join, a sibling arm, or a different variable" do
+    fold = run("headerEnd", [{"s", :slice}], {:bfold, "step0", [], lit(0), {:var, "s"}})
+    eq = fn v -> {:wrd, :u64, :eq, [{:var, v}, lit(0)]} end
+
+    inner =
+      {:match, eq.("h"),
+       [{:arm, "wtrue", [], {:call, "headerEnd", [var: "s"]}}, {:arm, "wfalse", [], {:var, "h"}}]}
+
+    rebound =
+      run(
+        "rebound",
+        [{"h", :u64}, {"z", :u64}, {"s", :slice}],
+        {:match, eq.("h"),
+         [
+           {:arm, "wtrue", [], lit(0)},
+           {:arm, "wfalse", [], {:let, "h", :u64, {:var, "z"}, inner}}
+         ]}
+      )
+
+    joined =
+      run(
+        "joined",
+        [{"p", {:data, "Pick"}}, {"s", :slice}],
+        {:let, "b", {:data, "Bool"},
+         {:match, {:var, "p"},
+          [
+            {:arm, "yes", [], {:con, "Bool", "true", []}},
+            {:arm, "no", [], {:con, "Bool", "false", []}}
+          ]},
+         {:match, {:var, "b"},
+          [{:arm, "true", [], {:call, "headerEnd", [var: "s"]}}, {:arm, "false", [], lit(0)}]}}
+      )
+
+    other =
+      run(
+        "other",
+        [{"h", :u64}, {"z", :u64}, {"s", :slice}],
+        {:match, eq.("h"),
+         [
+           {:arm, "wfalse", [],
+            {:match, eq.("z"),
+             [{:arm, "wtrue", [], {:call, "headerEnd", [var: "s"]}}, {:arm, "wfalse", [], lit(0)}]}},
+           {:arm, "wtrue", [], lit(1)}
+         ]}
+      )
+
+    sibling =
+      run(
+        "sibling",
+        [{"h", :u64}, {"s", :slice}],
+        {:match, eq.("h"),
+         [
+           {:arm, "wfalse", [], lit(7)},
+           {:arm, "wtrue", [], inner}
+         ]}
+      )
+
+    shadow =
+      run(
+        "shadow",
+        [{"p", {:data, "Pick"}}, {"s", :slice}],
+        {:match, {:var, "p"},
+         [
+           {:arm, "yes", ["p"],
+            {:match, {:var, "p"},
+             [
+               {:arm, "yes", [], {:call, "headerEnd", [var: "s"]}},
+               {:arm, "no", [], lit(0)}
+             ]}},
+           {:arm, "no", [], lit(1)}
+         ]}
+      )
+
+    unknown =
+      run(
+        "unknown",
+        [{"s", :slice}],
+        {:match, {:call, "headerEnd", [var: "s"]},
+         [
+           {:arm, "a", [], {:call, "headerEnd", [var: "s"]}},
+           {:arm, "b", [], lit(0)}
+         ]}
+      )
+
+    nat =
+      run(
+        "nat",
+        [{"n", :nat}, {"s", :slice}],
+        {:match, {:var, "n"},
+         [
+           {:arm, "zero", [],
+            {:match, {:var, "n"},
+             [
+               {:arm, "zero", [], lit(1)},
+               {:arm, "suc", ["k"], {:call, "headerEnd", [var: "s"]}}
+             ]}},
+           {:arm, "suc", ["n"],
+            {:match, {:var, "n"},
+             [
+               {:arm, "zero", [], {:call, "headerEnd", [var: "s"]}},
+               {:arm, "suc", ["k"], lit(3)}
+             ]}}
+         ]}
+      )
+
+    funs = image([fold, rebound, joined, other, sibling, shadow, unknown, nat])
+    out = Muro.IR.Share.funs(funs)
+
+    assert calls(false_arm(body(out, "rebound")), "headerEnd") == 1
+    assert {:match, {:var, "b"}, [_, _]} = let_body(body(out, "joined"))
+    assert calls(body(out, "joined"), "headerEnd") == 1
+    assert calls(false_arm(body(out, "other")), "headerEnd") == 1
+
+    # The wtrue arm already knows h = 0, so the inner comparison keeps
+    # the fold. The wfalse arm knows h ≠ 0; that fact belongs to the
+    # sibling and must not delete the fold.
+    sib = true_arm(body(out, "sibling"))
+    assert calls(sib, "headerEnd") == 1
+    refute match?({:match, _, _}, sib)
+    assert calls(arm_named(body(out, "shadow"), "yes"), "headerEnd") == 1
+
+    # A call is not a known constructor. Both arms stay. The two
+    # identical calls may be hoisted; that does not pick an arm.
+    unk = body(out, "unknown")
+    assert calls(unk, "headerEnd") == 1
+    assert {:match, scrut, [_, _] = arms} = let_body(unk)
+    refute match?({:call, _, _}, scrut)
+
+    assert Enum.all?(arms, fn {:arm, _, _, tm} -> tm != :abort end)
+
+    assert calls(arm_named(body(out, "nat"), "zero"), "headerEnd") == 0
+    assert calls(arm_named(body(out, "nat"), "suc"), "headerEnd") == 1
+  end
+
+  defp pad(t, 0), do: t
+  defp pad(t, n), do: pad(add(t, lit(n)), n - 1)
+
+  defp false_arm(t), do: find_arm(t, ["wfalse", "false"])
+  defp true_arm(t), do: find_arm(t, ["wtrue", "true"])
+
+  defp find_arm({:let, _, _, _, b}, tags), do: find_arm(b, tags)
+
+  defp find_arm({:match, _, arms}, tags) do
+    Enum.find_value(arms, fn
+      {:arm, c, _, tm} -> if c in tags, do: tm
+      _ -> nil
+    end)
+  end
+
+  defp arm_named({:match, _, arms}, name) do
+    Enum.find_value(arms, fn
+      {:arm, ^name, _, tm} -> tm
+      _ -> nil
+    end)
+  end
+
+  defp arm_named({:let, _, _, _, b}, name), do: arm_named(b, name)
+
+  defp let_body({:let, _, _, _, {:match, _, _} = m}), do: m
+  defp let_body({:let, _, _, _, b}), do: let_body(b)
 end

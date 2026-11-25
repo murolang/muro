@@ -34,13 +34,32 @@ defmodule Muro.IR.Share do
   the image and not once. Runs draw on it smallest growth first, then by name, so
   which runs inline does not depend on the order of the list; a run
   whose inlining would pass what is left is shared as elaborated. A run
-  that fits keeps its inlined body only when a hoist took place in it
-  and its worst path does no more heavy work (folds, streams, and
-  `uncons`, followed through calls) than its elaborated body
-  shared without inlining;
-  otherwise it keeps that one and draws nothing. Inlined bodies do not depend on that order
+  that fits keeps its inlined body only when a hoist took place in it,
+  or the body shrank, and its worst path does no more heavy work
+  (folds, streams, and `uncons`, followed through calls) than its
+  elaborated body shared without inlining; otherwise it keeps that one
+  and draws nothing. Inlined bodies do not depend on that order
   either. A generated fold or stream step is never inlined into and
   draws nothing on the budget; it is still shared.
+
+  Size decides a copy. The size is the body after the calls inside it
+  that this pass would inline, so a thin wrapper of a large run counts
+  as that run. A body bigger than `dup_max` nodes that is exported
+  stays a call, so a caller does not carry a second copy of it. A body
+  of that size that is not exported is inlined at the first site in
+  the term when the caller names it once and that shares a call, and
+  the later sites stay calls. A comparison that only returns a
+  constructor, at most `inline_small` nodes, is inlined at a match
+  scrutinee when that match commutes onto the comparison. A body of
+  at most `dup_max` nodes that known arguments shrink below the call
+  is inlined there.
+
+  Known values. A match whose scrutinee is already a constructor, a
+  word, or a comparison fixed by an enclosing arm keeps the arm that
+  can run. The fact holds in that arm, through a `let` that does not
+  rebind the name, and not in a sibling arm. An arm that aborts stays
+  until the scrutinee rules it out. `cost: false` is the previous
+  inlining. `spec: false` keeps every arm.
 
   The emitted program computes the same value as the checked term. A
   word operation, a constructor, and a byte literal are not shared:
@@ -49,19 +68,35 @@ defmodule Muro.IR.Share do
   """
 
   @inline_max 1500
+  @inline_small 48
+  @dup_max 160
 
   @doc """
   The options of `funs/2` in `opts`, for an emitter to pass through.
   """
   def opts(opts) when is_list(opts),
-    do: Keyword.take(opts, [:share, :inline, :inline_max, :grow_max])
+    do:
+      Keyword.take(opts, [
+        :share,
+        :inline,
+        :inline_max,
+        :grow_max,
+        :cost,
+        :spec,
+        :dup_max,
+        :inline_small
+      ])
 
   @doc """
   Rewrite `funs` (the list `Muro.IR.elaborate/1` returns). Order,
   names, parameters, and layouts are kept. `opts` may set `inline: false`
   (hoisting only), `share: false` (return `funs` unchanged),
-  `inline_max:` (nodes per inlined callee), or `grow_max:` (nodes the
-  whole image may grow by inlining, smallest growth first).
+  `inline_max:` (nodes per inlined callee), `grow_max:` (nodes the
+  whole image may grow by inlining, smallest growth first),
+  `cost: false` (the previous inlining), `spec: false` (keep every
+  match arm), `dup_max:` (nodes of the inlined body; a larger exported
+  run stays a call), or `inline_small:` (nodes; a comparison of that
+  size may be inlined at a match scrutinee).
   """
   def funs(funs, opts \\ []) when is_list(funs) do
     if Keyword.get(opts, :share, true) do
@@ -94,7 +129,11 @@ defmodule Muro.IR.Share do
         counter: counter,
         taken: taken,
         memo: :ets.new(:share, [:set, :private]),
-        work: :ets.new(:share_work, [:set, :private])
+        work: :ets.new(:share_work, [:set, :private]),
+        cost: Keyword.get(opts, :cost, true),
+        spec: Keyword.get(opts, :spec, true),
+        dup_max: Keyword.get(opts, :dup_max, @dup_max),
+        small: Keyword.get(opts, :inline_small, @inline_small)
       }
 
       try do
@@ -202,30 +241,35 @@ defmodule Muro.IR.Share do
 
   # ---------------------------------------------------------------- driver
 
-  # A run with nothing to share keeps its elaborated body, so inlining
-  # alone never changes what is emitted. A call is inlined only when its
-  # expansion holds a call, in this run's own names, that the fully
-  # inlined run evaluates more than once. A per-octet step whose callee
-  # only shares inside itself keeps calling it.
-  # Every run is inlined first, then shared. A run whose inlining adds
-  # nodes draws that growth, counted before any hoist, on the budget.
-  # Runs draw in order of that growth, smallest first, then by name, so
-  # who gets the budget does not depend on the order of `funs`; a run
-  # whose growth does not fit what is left is shared as elaborated, and
-  # its inlined body is never shared. A run that fits is shared both
-  # ways, inlined and as elaborated, and keeps the inlined body only
-  # when a hoist took place in it and its worst path does no more heavy
-  # work (`work/2`) than the
-  # elaborated one does once shared; otherwise it keeps that one and
-  # draws nothing.
+  # A run with nothing to share and nothing to prune keeps its
+  # elaborated body. A call is inlined only when its expansion holds a
+  # call, in this run's own names, that the fully inlined run evaluates
+  # more than once, or a known argument makes the body smaller than the
+  # call, or the call is the scrutinee of a match and the body is a
+  # small comparison. A per-octet step is never inlined into and is not
+  # specialised: `stop/2` reads its shape.
+  # Growth is the inlined body minus the elaborated body, after
+  # specialisation and before any hoist. Runs draw smallest growth
+  # first, then by name. A run that fits keeps the candidate when a
+  # hoist took place, or the body shrank, and its worst path does no
+  # more heavy work than the elaborated body shared without inlining.
   defp optimize_all(funs, ctx, inline?) do
     plans =
       for {fun, i} <- Enum.with_index(funs), known?(fun.body) do
         # A generated fold or stream step is never inlined into: it runs
         # once per octet or element, so it keeps calling its run, and it
-        # draws nothing on the budget. It is still shared.
-        inline_here? = inline? and not Map.get(fun, :generated, false)
-        body = if inline_here?, do: inline_run(fun, ctx), else: fun.body
+        # draws nothing on the budget. It is still shared. It is not
+        # specialised, so the early-exit test keeps its shape.
+        gen = Map.get(fun, :generated, false)
+        inline_here? = inline? and not gen
+
+        body =
+          cond do
+            inline_here? -> inline_run(fun, ctx)
+            ctx.spec and not gen -> spec_only(fun, ctx)
+            true -> fun.body
+          end
+
         {i, fun, body, size(body) - size(fun.body)}
       end
 
@@ -234,25 +278,7 @@ defmodule Muro.IR.Share do
       {body != fun.body, grow, fun.name, Map.get(fun, :generated, false), i}
     end)
     |> Enum.reduce(%{}, fn {i, fun, body, grow}, acc ->
-      res =
-        if body != fun.body and grow <= :counters.get(ctx.budget, 1) do
-          plain = shared(fun.body, ctx)
-
-          # The inlined body is kept only when some hoist took place in
-          # it and its worst-path heavy work (folds, streams, uncons) is
-          # no more than the elaborated body's, shared as `inline: false`
-          # shares it. Otherwise that body is kept and nothing is drawn.
-          # This compares worst paths, not each individual path.
-          with {:ok, out} <- shared(body, ctx),
-               true <- work(out, ctx) <= work(shared_body(plain, fun), ctx) do
-            :counters.sub(ctx.budget, 1, max(grow, 0))
-            {:ok, out}
-          else
-            _ -> plain
-          end
-        else
-          shared(fun.body, ctx)
-        end
+      res = judge(fun, body, grow, ctx)
 
       case res do
         {:ok, out} -> Map.put(acc, i, %{fun | body: out})
@@ -261,8 +287,67 @@ defmodule Muro.IR.Share do
     end)
   end
 
-  defp shared_body({:ok, out}, _fun), do: out
-  defp shared_body(:skip, fun), do: fun.body
+  # `body == fun.body` is the elaborated term: share it and draw
+  # nothing. A candidate that grows past the budget is dropped; a
+  # specialisation of the elaborated body can still replace it, and
+  # that draws nothing. Otherwise keep the candidate when its worst
+  # path is no heavier and either a hoist took place or the term got
+  # strictly smaller or lighter.
+  defp judge(fun, body, grow, ctx) do
+    cond do
+      body == fun.body ->
+        shared(fun.body, ctx)
+
+      grow > :counters.get(ctx.budget, 1) ->
+        fallback(fun, ctx)
+
+      true ->
+        plain = shared(fun.body, ctx)
+        cand = shared(body, ctx)
+        pb = shared_body(plain, fun.body)
+        cb = shared_body(cand, body)
+        wp = work(pb, ctx)
+        wc = work(cb, ctx)
+        hoist? = match?({:ok, _}, cand)
+        better? = wc < wp or size(cb) < size(pb)
+
+        if wc <= wp and (hoist? or better?) do
+          :counters.sub(ctx.budget, 1, max(grow, 0))
+          if hoist?, do: cand, else: {:ok, cb}
+        else
+          plain
+        end
+    end
+  end
+
+  # Inlining did not fit. A specialisation that shrinks the elaborated
+  # body still replaces it, and draws nothing on the budget.
+  defp fallback(fun, ctx) do
+    spec =
+      if ctx.spec and not Map.get(fun, :generated, false),
+        do: spec_only(fun, ctx),
+        else: fun.body
+
+    if spec == fun.body or size(spec) >= size(fun.body) do
+      shared(fun.body, ctx)
+    else
+      plain = shared(fun.body, ctx)
+      cand = shared(spec, ctx)
+      pb = shared_body(plain, fun.body)
+      cb = shared_body(cand, spec)
+
+      if work(cb, ctx) <= work(pb, ctx) do
+        if match?({:ok, _}, cand), do: cand, else: {:ok, cb}
+      else
+        plain
+      end
+    end
+  end
+
+  # `:skip` means the hoist left the term as it was given. The caller
+  # passes that term, so a specialisation that shares nothing is kept.
+  defp shared_body({:ok, out}, _input), do: out
+  defp shared_body(:skip, input), do: input
 
   # Heavy work on the worst path through `t`: each fold, stream, or
   # `uncons` it evaluates, and each call of a run, counted through that
@@ -327,11 +412,29 @@ defmodule Muro.IR.Share do
     lays = Map.new(fun.params)
     full = propagate(inlined_body(fun, ctx, MapSet.new()), lays, ctx)
     wanted = repeated_keys(full, scope, ctx)
+    want = %{scope: scope, wanted: wanted, sites: site_counts(fun.body)}
 
-    if MapSet.size(wanted) == 0,
-      do: fun.body,
-      else:
-        selective(fun.body, lays, %{scope: scope, wanted: wanted}, ctx, MapSet.new([fun.name]))
+    if ctx.cost do
+      {body, _} = pass(fun.body, lays, %{}, want, ctx, MapSet.new([fun.name]), %{}, :term, true)
+      body
+    else
+      body =
+        if MapSet.size(wanted) == 0,
+          do: fun.body,
+          else: selective(fun.body, lays, want, ctx, MapSet.new([fun.name]))
+
+      if ctx.spec, do: spec_only_tm(body, lays, ctx), else: body
+    end
+  end
+
+  defp spec_only(fun, ctx) do
+    spec_only_tm(fun.body, Map.new(fun.params), ctx)
+  end
+
+  defp spec_only_tm(body, lays, ctx) do
+    want = %{scope: MapSet.new(), wanted: MapSet.new(), sites: %{}}
+    {out, _} = pass(body, lays, %{}, want, ctx, MapSet.new(), %{}, :term, false)
+    out
   end
 
   # The caller's names whose meaning is one binding: a parameter no
@@ -677,6 +780,811 @@ defmodule Muro.IR.Share do
   end
 
   defp subst_var(t, x, y), do: map_children(t, &subst_var(&1, x, y))
+
+  # ------------------------------------------------- cost and specialise
+
+  # One left-to-right walk. `inl` is false when only specialisation
+  # runs. `pos` is `:scrut` for the scrutinee of a match, so a small
+  # comparison there can be inlined. `copied` counts a large internal
+  # run already spliced into this term.
+  defp pass(t, lays, facts, want, ctx, seen, copied, pos, inl) do
+    case t do
+      {:call, name, args} ->
+        pass_call(name, args, lays, facts, want, ctx, seen, copied, pos, inl)
+
+      {:let, x, lay, v, b} ->
+        pass_let(x, lay, v, b, lays, facts, want, ctx, seen, copied, inl)
+
+      {:letp, a, b, e, body} ->
+        pass_letp(a, b, e, body, lays, facts, want, ctx, seen, copied, inl)
+
+      {:match, scrut, arms} ->
+        pass_match(scrut, arms, lays, facts, want, ctx, seen, copied, inl)
+
+      _ ->
+        pass_node(t, lays, facts, want, ctx, seen, copied, inl)
+    end
+  end
+
+  defp pass_call(name, args, lays, facts, want, ctx, seen, copied, _pos, inl) do
+    {args, copied} = pass_list(args, lays, facts, want, ctx, seen, copied, inl)
+    call = {:call, name, args}
+
+    if not inl do
+      {call, copied}
+    else
+      case decide(name, args, lays, facts, want, ctx, seen, copied) do
+        :no -> {call, copied}
+        mode -> splice(mode, name, args, lays, facts, want, ctx, seen, copied)
+      end
+    end
+  end
+
+  defp decide(name, args, lays, facts, want, ctx, seen, copied) do
+    callee = Map.get(ctx.by_name, name)
+
+    cond do
+      heavy_here?(name, args, lays, want, ctx, seen) -> :heavy
+      shrink_here?(callee, args, facts, ctx, seen) -> :shrink
+      once_here?(name, args, lays, want, ctx, seen, copied) -> :once
+      true -> :no
+    end
+  end
+
+  # A match scrutinee whose body is itself a small match. `pass_match/9`
+  # inlines it only when the outer match commutes onto that comparison,
+  # and leaves the call when it does not.
+  defp scrut_small?(nil, _args, _pos, _ctx, _seen), do: false
+
+  defp scrut_small?(callee, args, pos, ctx, seen) do
+    pos == :scrut and ctx.spec and size(callee.body) <= ctx.small and
+      match_body?(callee.body) and light?(callee, args, ctx, seen)
+  end
+
+  # The copy is the inlined body, not the source body. A wrapper whose
+  # source is one call still counts as the run it pulls in.
+  defp heavy_here?(name, args, lays, want, ctx, seen) do
+    case Map.get(ctx.by_name, name) do
+      %{} = callee ->
+        expanded_size(callee, ctx, seen) <= ctx.dup_max and
+          wanted_hit?(name, args, lays, want, ctx, seen)
+
+      _ ->
+        false
+    end
+  end
+
+  defp shrink_here?(nil, _args, _facts, _ctx, _seen), do: false
+
+  defp shrink_here?(callee, args, facts, ctx, seen) do
+    ctx.spec and expanded_size(callee, ctx, seen) <= ctx.dup_max and
+      light?(callee, args, ctx, seen) and
+      (map_size(facts) > 0 or Enum.any?(args, &known_arg?(&1, facts)))
+  end
+
+  # One copy of a large internal run, and only when the caller names it
+  # once. A second copy would do the callee's work and still call it.
+  defp once_here?(name, args, lays, want, ctx, seen, copied) do
+    case Map.get(ctx.by_name, name) do
+      %{} = callee ->
+        sz = expanded_size(callee, ctx, seen)
+
+        not exported?(callee) and Map.get(copied, name, 0) == 0 and
+          Map.get(want.sites, name, 0) == 1 and sz > ctx.dup_max and
+          wanted_hit?(name, args, lays, want, ctx, seen)
+
+      _ ->
+        false
+    end
+  end
+
+  defp wanted_hit?(name, args, lays, want, ctx, seen) do
+    if MapSet.size(want.wanted) == 0 do
+      false
+    else
+      with {:ok, callee, _} <- inline_target(name, args, ctx, seen),
+           full = propagate(expand(callee, inlined_body(callee, ctx, seen), args, ctx), lays, ctx),
+           keys = MapSet.new(Map.keys(heavy_keys(full, want.scope, ctx, %{}))),
+           false <- MapSet.disjoint?(keys, want.wanted) do
+        true
+      else
+        _ -> false
+      end
+    end
+  end
+
+  defp light?(callee, args, ctx, seen) do
+    not MapSet.member?(seen, callee.name) and inlinable_sig?(callee, args) and
+      known?(callee.body) and inlinable_body?(callee.body) and size(callee.body) <= ctx.max
+  end
+
+  defp match_body?(t) do
+    case peel_lets(t) do
+      {:match, _, _} -> true
+      _ -> false
+    end
+  end
+
+  defp exported?(callee), do: Map.get(callee, :export, true)
+
+  defp expanded_size(callee, ctx, seen), do: size(inlined_body(callee, ctx, seen))
+
+  defp known_arg?({:wrd, _, {:lit, _, n}, []}, _facts) when is_integer(n), do: true
+  defp known_arg?(:ze, _facts), do: true
+  defp known_arg?({:su, {:var, _}}, _facts), do: true
+  defp known_arg?({:con, _, _, []}, _facts), do: true
+  defp known_arg?({:wrd, _, b, []}, _facts) when b in [true, false], do: true
+  defp known_arg?({:var, x}, facts), do: Map.has_key?(facts, x)
+  defp known_arg?(_, _), do: false
+
+  defp splice(mode, name, args, lays, facts, want, ctx, seen, copied) do
+    callee = Map.fetch!(ctx.by_name, name)
+    seen2 = MapSet.put(seen, name)
+    body = propagate(expand(callee, callee.body, args, ctx), lays, ctx)
+    {out, copied2} = pass(body, lays, facts, want, ctx, seen2, copied, :term, true)
+    call = {:call, name, args}
+
+    case mode do
+      :shrink ->
+        if size(out) < size(call), do: {out, copied2}, else: {call, copied}
+
+      :once ->
+        {out, Map.update(copied2, name, 1, &(&1 + 1))}
+
+      :heavy ->
+        {out, copied2}
+    end
+  end
+
+  defp pass_let(x, lay, v, b, lays, facts, want, ctx, seen, copied, inl) do
+    {v, copied} = pass(v, lays, facts, want, ctx, seen, copied, :term, inl)
+    facts1 = Map.delete(facts, x)
+    lays1 = Map.put(lays, x, lay)
+    facts1 = learn_value(x, v, lay, facts1, lays)
+    {b, copied} = pass(b, lays1, facts1, want, ctx, seen, copied, :term, inl)
+
+    cond do
+      fresh_var?(x, lay, v, b, lays, ctx) ->
+        {:var, y} = v
+        {subst_var(b, x, y), copied}
+
+      :ets.member(ctx.fresh, x) and pure_value?(v) and not MapSet.member?(free_vars(b), x) ->
+        {b, copied}
+
+      :ets.member(ctx.fresh, x) and b == {:var, x} and pure_value?(v) ->
+        {v, copied}
+
+      true ->
+        {{:let, x, lay, v, b}, copied}
+    end
+  end
+
+  defp fresh_var?(x, lay, {:var, y}, b, lays, ctx) do
+    :ets.member(ctx.fresh, x) and lay != :erased and Map.get(lays, y) == lay and
+      not rebinds?(b, y)
+  end
+
+  defp fresh_var?(_, _, _, _, _, _), do: false
+
+  defp pass_letp(a, b, e, body, lays, facts, want, ctx, seen, copied, inl) do
+    {e, copied} = pass(e, lays, facts, want, ctx, seen, copied, :term, inl)
+    lays1 = lays |> Map.delete(a) |> Map.delete(b)
+    facts1 = facts |> Map.delete(a) |> Map.delete(b)
+    {body, copied} = pass(body, lays1, facts1, want, ctx, seen, copied, :term, inl)
+    {{:letp, a, b, e, body}, copied}
+  end
+
+  # Inline a small comparison only when the outer match commutes onto
+  # it. A scrutinee that does not commute stays a call, so the larger
+  # match is not copied in.
+  defp commute_scrut(scrut, arms, lays, facts, want, ctx, seen, copied, inl) do
+    case scrut_expand(scrut, lays, facts, want, ctx, seen, copied, inl) do
+      {:ok, expanded, copied2} ->
+        case fuse_match(expanded, arms, ctx) do
+          {:ok, inner, as, lets} -> {:ok, inner, as, lets, copied2}
+          :no -> fuse_or_no(scrut, arms, ctx, copied)
+        end
+
+      :no ->
+        fuse_or_no(scrut, arms, ctx, copied)
+    end
+  end
+
+  defp fuse_or_no(scrut, arms, ctx, copied) do
+    case fuse_match(scrut, arms, ctx) do
+      {:ok, inner, as, lets} -> {:ok, inner, as, lets, copied}
+      :no -> :no
+    end
+  end
+
+  defp scrut_expand({:call, name, args} = call, lays, facts, want, ctx, seen, copied, inl) do
+    callee = Map.get(ctx.by_name, name)
+
+    if scrut_small?(callee, args, :scrut, ctx, seen) do
+      seen2 = MapSet.put(seen, name)
+      body = propagate(expand(callee, callee.body, args, ctx), lays, ctx)
+      {out, copied2} = pass(body, lays, facts, want, ctx, seen2, copied, :term, inl)
+      if out != call, do: {:ok, out, copied2}, else: :no
+    else
+      :no
+    end
+  end
+
+  defp scrut_expand(_, _, _, _, _, _, _, _), do: :no
+
+  defp pass_match(scrut, arms, lays, facts, want, ctx, seen, copied, inl) do
+    {scrut, copied} = pass(scrut, lays, facts, want, ctx, seen, copied, :term, inl)
+    plain = finish_match(scrut, arms, [], lays, facts, want, ctx, seen, copied, inl, ctx.spec)
+
+    if ctx.spec do
+      # A commute that is dropped must not consume fresh names. The
+      # counter is global, so a rejected copy would rename a later binder.
+      mark = :counters.get(ctx.counter, 1)
+
+      case commute_scrut(scrut, arms, lays, facts, want, ctx, seen, copied, inl) do
+        {:ok, inner, as, lets, copied2} ->
+          {term, copied3} =
+            finish_match(inner, as, lets, lays, facts, want, ctx, seen, copied2, inl, true)
+
+          # A commute that does not shrink the match is dropped. Both
+          # arms of a comparison that is not yet known stay as the call.
+          if size(term) < size(elem(plain, 0)) do
+            {term, copied3}
+          else
+            :counters.put(ctx.counter, 1, mark)
+            plain
+          end
+
+        :no ->
+          :counters.put(ctx.counter, 1, mark)
+          plain
+      end
+    else
+      plain
+    end
+  end
+
+  defp finish_match(scrut, arms, lets, lays, facts, want, ctx, seen, copied, inl, spec?) do
+    {term, copied} =
+      if spec? do
+        case reduce_match(scrut, arms, lays, facts) do
+          {:done, tag, names, body} ->
+            facts2 = arm_facts(scrut, tag, names, facts, lays)
+            pass(body, Map.drop(lays, names), facts2, want, ctx, seen, copied, :term, inl)
+
+          :keep ->
+            arms = kill_dead(scrut, arms, lays, facts)
+            pass_arms(scrut, arms, lays, facts, want, ctx, seen, copied, inl)
+        end
+      else
+        pass_arms(scrut, arms, lays, facts, want, ctx, seen, copied, inl)
+      end
+
+    {rewrap(lets, term), copied}
+  end
+
+  defp pass_arms(scrut, arms, lays, facts, want, ctx, seen, copied, inl) do
+    {arms, copied} =
+      Enum.map_reduce(arms, copied, fn {:arm, c, names, tm}, copied ->
+        lays2 = Map.drop(lays, names)
+        facts2 = arm_facts(scrut, c, names, facts, lays)
+        {tm, copied} = pass(tm, lays2, facts2, want, ctx, seen, copied, :term, inl)
+        {{:arm, c, names, tm}, copied}
+      end)
+
+    {{:match, scrut, arms}, copied}
+  end
+
+  defp pass_list(ts, lays, facts, want, ctx, seen, copied, inl) do
+    Enum.map_reduce(ts, copied, fn t, copied ->
+      pass(t, lays, facts, want, ctx, seen, copied, :term, inl)
+    end)
+  end
+
+  defp pass_node(t, lays, facts, want, ctx, seen, copied, inl) do
+    {kids, copied} = pass_list(children(t), lays, facts, want, ctx, seen, copied, inl)
+    {put_children(t, kids), copied}
+  end
+
+  # ---- facts
+
+  defp arm_facts(scrut, tag, names, facts, lays) do
+    facts = Enum.reduce(names, facts, &Map.delete(&2, &1))
+    learn_scrut(scrut, tag, names, facts, lays)
+  end
+
+  defp learn_scrut({:var, x}, tag, names, facts, lays) do
+    if x in names, do: facts, else: learn_tag(x, tag, names, facts, lays)
+  end
+
+  defp learn_scrut({:wrd, _, :eq, [a, b]}, tag, _names, facts, _lays) do
+    cond do
+      false_tag?(tag) -> learn_ne(a, b, facts)
+      true_tag?(tag) -> learn_eq(a, b, facts)
+      true -> facts
+    end
+  end
+
+  defp learn_scrut(_, _, _, facts, _), do: facts
+
+  defp learn_tag(x, "zero", _names, facts, lays) do
+    if Map.get(lays, x) == :nat,
+      do: put_fact(facts, x, {:nat, :zero}),
+      else: put_ctor(facts, x, "zero", [])
+  end
+
+  defp learn_tag(x, "suc", [p], facts, lays) do
+    if Map.get(lays, x) == :nat,
+      do: put_fact(facts, x, {:nat, :suc, p}),
+      else: put_ctor(facts, x, "suc", [p])
+  end
+
+  defp learn_tag(x, "wtrue", _, facts, lays) do
+    if Map.get(lays, x) == :wbool,
+      do: put_fact(facts, x, {:wbool, true}),
+      else: put_ctor(facts, x, "wtrue", [])
+  end
+
+  defp learn_tag(x, "wfalse", _, facts, lays) do
+    if Map.get(lays, x) == :wbool,
+      do: put_fact(facts, x, {:wbool, false}),
+      else: put_ctor(facts, x, "wfalse", [])
+  end
+
+  defp learn_tag(x, tag, names, facts, _lays), do: put_ctor(facts, x, tag, names)
+
+  defp put_ctor(facts, x, tag, names), do: put_fact(facts, x, {:ctor, tag, names})
+
+  defp learn_value(x, {:var, y}, lay, facts, lays) do
+    if Map.get(lays, y) == lay do
+      case Map.get(facts, y) do
+        nil -> facts
+        f -> put_fact(facts, x, f)
+      end
+    else
+      facts
+    end
+  end
+
+  defp learn_value(x, {:wrd, _, {:lit, _, n}, []}, _lay, facts, _lays) when is_integer(n),
+    do: put_fact(facts, x, {:wlit, n})
+
+  defp learn_value(x, :ze, :nat, facts, _lays), do: put_fact(facts, x, {:nat, :zero})
+
+  defp learn_value(x, {:su, {:var, p}}, :nat, facts, _lays),
+    do: put_fact(facts, x, {:nat, :suc, p})
+
+  defp learn_value(x, {:con, _, tag, args}, _lay, facts, _lays) do
+    if Enum.all?(args, &match?({:var, _}, &1)) do
+      put_ctor(facts, x, tag, Enum.map(args, fn {:var, v} -> v end))
+    else
+      facts
+    end
+  end
+
+  defp learn_value(x, {:wrd, _, b, []}, _lay, facts, _lays) when b in [true, false],
+    do: put_fact(facts, x, {:wbool, b})
+
+  defp learn_value(_x, _v, _lay, facts, _lays), do: facts
+
+  # A fact already stored is kept. A word literal, a constructor, and a
+  # nat are not replaced by a weaker comparison.
+  defp put_fact(facts, x, fact) do
+    case Map.get(facts, x) do
+      nil -> Map.put(facts, x, fact)
+      ^fact -> facts
+      {:wlit, _} -> facts
+      {:nat, _} -> facts
+      {:ctor, _, _} -> facts
+      {:wbool, _} -> facts
+      _ -> Map.put(facts, x, fact)
+    end
+  end
+
+  defp learn_eq(a, b, facts) do
+    facts
+    |> eq_side(a, b)
+    |> eq_side(b, a)
+  end
+
+  defp eq_side(facts, {:var, x}, {:wrd, _, {:lit, _, n}, []}) when is_integer(n),
+    do: put_fact(facts, x, {:wlit, n})
+
+  defp eq_side(facts, {:var, x}, {:var, y}) do
+    case Map.get(facts, y) do
+      nil -> facts
+      f -> put_fact(facts, x, f)
+    end
+  end
+
+  defp eq_side(facts, _, _), do: facts
+
+  defp learn_ne(a, b, facts) do
+    facts
+    |> ne_side(a, b)
+    |> ne_side(b, a)
+  end
+
+  defp ne_side(facts, {:var, x}, other) do
+    case lit_of(other, facts) do
+      {:ok, n} when is_integer(n) ->
+        put_fact(facts, x, {:ne_word, n})
+
+      _ ->
+        case other do
+          {:var, y} -> put_fact(facts, x, {:ne_var, y})
+          _ -> facts
+        end
+    end
+  end
+
+  defp ne_side(facts, _, _), do: facts
+
+  defp true_tag?(tag), do: tag in ["wtrue", "true"]
+  defp false_tag?(tag), do: tag in ["wfalse", "false"]
+
+  # ---- reduce
+
+  # Commute `match (match s | k => ctor) | ctor => body` when every
+  # inner arm is a constructor with no fields, so each outer body is
+  # placed once under the arm that returns it. A let the outer bodies
+  # do not name stays wrapped around the match.
+  defp fuse_match(scrut, outers, ctx) do
+    case peel_safe(scrut, outers) do
+      {lets, {:match, inner, iarms}} ->
+        if fuse_ok?(outers, iarms, ctx) do
+          arms =
+            Enum.map(iarms, fn {:arm, c, [], val} ->
+              {:ok, tag} = ctor_tag(val)
+              {:arm, _, _, body} = Enum.find(outers, &match?({:arm, ^tag, _, _}, &1))
+              {:arm, c, [], body}
+            end)
+
+          {:ok, inner, arms, lets}
+        else
+          :no
+        end
+
+      _ ->
+        :no
+    end
+  end
+
+  defp fuse_ok?(outers, iarms, ctx) do
+    tags =
+      Enum.map(iarms, fn
+        {:arm, _, [], val} -> ctor_tag(val)
+        _ -> :no
+      end)
+
+    known = Enum.all?(tags, &match?({:ok, _}, &1))
+
+    uses =
+      Enum.reduce(tags, %{}, fn
+        {:ok, tag}, acc -> Map.update(acc, tag, 1, &(&1 + 1))
+        _, acc -> acc
+      end)
+
+    known and
+      Enum.all?(tags, fn {:ok, tag} -> Enum.any?(outers, &match?({:arm, ^tag, _, _}, &1)) end) and
+      Enum.all?(outers, fn {:arm, tag, _, body} ->
+        Map.get(uses, tag, 0) <= 1 or size(body) <= ctx.small
+      end)
+  end
+
+  defp peel_safe({:let, x, lay, v, b}, outers) do
+    if Enum.any?(outers, fn {:arm, _, _, body} -> MapSet.member?(free_vars(body), x) end) do
+      {[], {:let, x, lay, v, b}}
+    else
+      {lets, inner} = peel_safe(b, outers)
+      {[{x, lay, v} | lets], inner}
+    end
+  end
+
+  defp peel_safe(t, _outers), do: {[], t}
+
+  defp peel_lets({:let, _, _, _, b}), do: peel_lets(b)
+  defp peel_lets(t), do: t
+
+  defp rewrap([], inner), do: inner
+  defp rewrap([{x, lay, v} | lets], inner), do: {:let, x, lay, v, rewrap(lets, inner)}
+
+  defp ctor_tag({:con, _, tag, []}), do: {:ok, tag}
+  defp ctor_tag({:wrd, _, true, []}), do: {:ok, "wtrue"}
+  defp ctor_tag({:wrd, _, false, []}), do: {:ok, "wfalse"}
+  defp ctor_tag(:ze), do: {:ok, "zero"}
+  defp ctor_tag(:tt), do: {:ok, "tt"}
+  defp ctor_tag(_), do: :no
+
+  # The live arm, when the scrutinee is a pure value and every field
+  # the arm binds is a variable. Anything else keeps the match, so a
+  # call in the scrutinee still runs.
+  defp reduce_match(scrut, arms, lays, facts) do
+    if pure_value?(scrut) do
+      case which_arm(scrut, arms, lays, facts) do
+        {:ok, {:arm, tag, names, body}, fields} ->
+          case bind_fields(names, fields) do
+            {:ok, substs} -> {:done, tag, names, apply_substs(body, substs)}
+            :no -> :keep
+          end
+
+        :no ->
+          :keep
+      end
+    else
+      :keep
+    end
+  end
+
+  defp which_arm(scrut, arms, lays, facts) do
+    case which_tag(scrut, arms, lays, facts) do
+      {:ok, tag, fields} ->
+        case Enum.find(arms, &match?({:arm, ^tag, _, _}, &1)) do
+          nil -> :no
+          arm -> {:ok, arm, fields}
+        end
+
+      :no ->
+        :no
+    end
+  end
+
+  defp which_tag(scrut, arms, lays, facts) do
+    found =
+      cond do
+        match?({:ok, true}, cmp_result(scrut, facts)) ->
+          {:ok, pick_tag(arms, ["wtrue", "true"]), []}
+
+        match?({:ok, false}, cmp_result(scrut, facts)) ->
+          {:ok, pick_tag(arms, ["wfalse", "false"]), []}
+
+        true ->
+          value_tag(scrut, lays, facts)
+      end
+
+    case normalize_tag(found) do
+      # `zero` / `suc` are also ordinary constructors. A nat arm is
+      # taken only from a nat fact or from `ze` / `su` themselves.
+      {:ok, tag, _} = ok ->
+        if tag in ["zero", "suc"] and nat_arms?(arms) and not nat_scrut?(scrut, lays, facts),
+          do: :no,
+          else: ok
+
+      :no ->
+        :no
+    end
+  end
+
+  defp nat_arms?(arms) do
+    Enum.map(arms, fn {:arm, c, _, _} -> c end) |> Enum.sort() == ["suc", "zero"]
+  end
+
+  defp nat_scrut?(:ze, _, _), do: true
+  defp nat_scrut?({:su, _}, _, _), do: true
+
+  defp nat_scrut?({:var, x}, lays, facts),
+    do: Map.get(lays, x) == :nat or match?({:nat, _}, Map.get(facts, x))
+
+  defp nat_scrut?(_, _, _), do: false
+
+  defp normalize_tag({:ok, :no, _}), do: :no
+  defp normalize_tag({:ok, tag, fields}) when is_binary(tag), do: {:ok, tag, fields}
+  defp normalize_tag(:no), do: :no
+
+  defp pick_tag(arms, prefs) do
+    Enum.find(prefs, :no, fn t -> Enum.any?(arms, &match?({:arm, ^t, _, _}, &1)) end)
+  end
+
+  defp value_tag(:ze, _lays, _facts), do: {:ok, "zero", []}
+  defp value_tag({:su, {:var, p}}, _lays, _facts), do: {:ok, "suc", [{:var, p}]}
+  defp value_tag({:wrd, _, true, []}, _lays, _facts), do: {:ok, "wtrue", []}
+  defp value_tag({:wrd, _, false, []}, _lays, _facts), do: {:ok, "wfalse", []}
+  defp value_tag({:con, _, tag, args}, _lays, _facts), do: {:ok, tag, args}
+
+  defp value_tag({:var, x}, lays, facts) do
+    case Map.get(facts, x) do
+      {:nat, :zero} -> {:ok, "zero", []}
+      {:nat, :suc, p} when is_binary(p) -> {:ok, "suc", [{:var, p}]}
+      {:wbool, true} -> {:ok, "wtrue", []}
+      {:wbool, false} -> {:ok, "wfalse", []}
+      {:wlit, 0} -> if(Map.get(lays, x) == :nat, do: {:ok, "zero", []}, else: :no)
+      {:ctor, tag, fields} -> {:ok, tag, Enum.map(fields, &{:var, &1})}
+      _ -> :no
+    end
+  end
+
+  defp value_tag(_, _, _), do: :no
+
+  defp bind_fields(names, fields) when length(names) == length(fields) do
+    if Enum.all?(fields, &match?({:var, _}, &1)) do
+      {:ok, Enum.zip(names, Enum.map(fields, fn {:var, v} -> v end))}
+    else
+      :no
+    end
+  end
+
+  defp bind_fields(_, _), do: :no
+
+  defp apply_substs(body, substs) do
+    Enum.reduce(substs, body, fn {from, to}, acc -> subst_var(acc, from, to) end)
+  end
+
+  # An arm the scrutinee cannot take becomes `abort`. The arm stays, so
+  # the emitters still see every constructor. A tag that is not one of
+  # the arms aborts nothing.
+  defp kill_dead(scrut, arms, lays, facts) do
+    case which_tag(scrut, arms, lays, facts) do
+      {:ok, tag, _} ->
+        if Enum.any?(arms, &match?({:arm, ^tag, _, _}, &1)) do
+          Enum.map(arms, fn {:arm, c, ns, _tm} = arm ->
+            if c == tag, do: arm, else: {:arm, c, ns, :abort}
+          end)
+        else
+          arms
+        end
+
+      :no ->
+        arms
+    end
+  end
+
+  defp cmp_result({:wrd, k, op, [a, b]}, facts) when op in [:eq, :lt, :le] do
+    case {lit_of(a, facts), lit_of(b, facts)} do
+      {{:ok, n}, {:ok, m}} ->
+        if op == :eq or k != :i64, do: {:ok, apply_cmp(op, n, m)}, else: :unknown
+
+      _ ->
+        cond do
+          op == :eq and ne?(a, b, facts) -> {:ok, false}
+          op == :eq and same?(a, b, facts) -> {:ok, true}
+          true -> :unknown
+        end
+    end
+  end
+
+  defp cmp_result(_, _), do: :unknown
+
+  defp apply_cmp(:eq, n, m), do: n == m
+  defp apply_cmp(:lt, n, m), do: n < m
+  defp apply_cmp(:le, n, m), do: n <= m
+
+  defp lit_of({:wrd, _, {:lit, _, n}, []}, _facts) when is_integer(n), do: {:ok, n}
+  defp lit_of({:var, x}, facts), do: lit_fact(Map.get(facts, x))
+  defp lit_of(_, _), do: :no
+
+  defp lit_fact({:wlit, n}) when is_integer(n), do: {:ok, n}
+  defp lit_fact(_), do: :no
+
+  defp ne?(a, b, facts) do
+    ne_pair?(a, b, facts) or ne_pair?(b, a, facts)
+  end
+
+  defp ne_pair?({:var, x}, other, facts) do
+    case Map.get(facts, x) do
+      {:ne_word, n} -> match?({:ok, ^n}, lit_of(other, facts))
+      {:ne_var, y} -> other == {:var, y}
+      _ -> false
+    end
+  end
+
+  defp ne_pair?(_, _, _), do: false
+
+  defp same?({:var, x}, {:var, x}, _facts), do: true
+
+  defp same?(a, b, facts) do
+    case {lit_of(a, facts), lit_of(b, facts)} do
+      {{:ok, n}, {:ok, n}} -> true
+      _ -> false
+    end
+  end
+
+  defp pure_value?({:var, _}), do: true
+  defp pure_value?(:ze), do: true
+  defp pure_value?(:tt), do: true
+  defp pure_value?({:su, u}), do: pure_value?(u)
+  defp pure_value?({:con, _, _, args}), do: Enum.all?(args, &pure_value?/1)
+  defp pure_value?({:wrd, _, {:lit, _, n}, []}) when is_integer(n), do: true
+  defp pure_value?({:wrd, _, b, []}) when b in [true, false], do: true
+
+  defp pure_value?({:wrd, _, op, args}) when op in [:eq, :lt, :le],
+    do: Enum.all?(args, &pure_value?/1)
+
+  defp pure_value?(_), do: false
+
+  defp site_counts(t), do: sites(t, %{})
+
+  defp sites({:call, n, args}, acc) do
+    acc = Map.update(acc, n, 1, &(&1 + 1))
+    Enum.reduce(args, acc, &sites/2)
+  end
+
+  defp sites(t, acc), do: Enum.reduce(children(t), acc, &sites/2)
+
+  defp put_children(t, kids) do
+    case t do
+      {:su, _} ->
+        [u] = kids
+        {:su, u}
+
+      {:call, n, _} ->
+        {:call, n, kids}
+
+      {:con, d, c, _} ->
+        {:con, d, c, kids}
+
+      {:wrd, k, op, _} ->
+        {:wrd, k, op, kids}
+
+      {:pair, _, _} ->
+        [a, b] = kids
+        {:pair, a, b}
+
+      {:uncons, _} ->
+        [e] = kids
+        {:uncons, e}
+
+      {:stream, _, caps, s} ->
+        [seed | cap_ts] = kids
+        {:stream, seed, zip_caps(caps, cap_ts), s}
+
+      {:bfold, s, caps, _, _} ->
+        {cap_ts, [z, x]} = Enum.split(kids, length(caps))
+        {:bfold, s, zip_caps(caps, cap_ts), z, x}
+
+      {:bcat, _, _} ->
+        [a, b] = kids
+        {:bcat, a, b}
+
+      {:blen, _} ->
+        [a] = kids
+        {:blen, a}
+
+      {:beq, _, _} ->
+        [a, b] = kids
+        {:beq, a, b}
+
+      {:bsub, _, _, _} ->
+        [s, o, n] = kids
+        {:bsub, s, o, n}
+
+      {:bget, _, _} ->
+        [s, i] = kids
+        {:bget, s, i}
+
+      {:btil, _, _} ->
+        [s, b] = kids
+        {:btil, s, b}
+
+      {:baft, _, _} ->
+        [s, b] = kids
+        {:baft, s, b}
+
+      {:sbytes, _} ->
+        [s] = kids
+        {:sbytes, s}
+
+      {:bunc, _} ->
+        [s] = kids
+        {:bunc, s}
+
+      {:scat, _, _} ->
+        [a, b] = kids
+        {:scat, a, b}
+
+      {:slen, _} ->
+        [a] = kids
+        {:slen, a}
+
+      {:seq, _, _} ->
+        [a, b] = kids
+        {:seq, a, b}
+
+      _ ->
+        t
+    end
+  end
+
+  defp zip_caps(caps, ts), do: Enum.zip(Enum.map(caps, &elem(&1, 0)), ts)
 
   # ------------------------------------------------------------------ share
 
