@@ -192,8 +192,8 @@ defmodule Muro.IRShareTest do
       less = Muro.IR.Share.funs(funs, opts)
 
       for f <- funs, not Map.get(f, :generated, false) do
-        a = folds(full, body(full, f.name))
-        b = folds(less, body(less, f.name))
+        a = heavy(full, body(full, f.name))
+        b = heavy(less, body(less, f.name))
         assert a <= b, inspect({f.name, opts, a, b})
       end
     end
@@ -469,23 +469,36 @@ defmodule Muro.IRShareTest do
       funs = image([pc, f])
       plain = Muro.IR.Share.funs(funs, inline: false)
       full = Muro.IR.Share.funs(funs)
-      assert folds(full, body(full, "f")) <= folds(plain, body(plain, "f"))
-      assert folds(full, body(full, "f")) == 2
-      assert folds(plain, body(plain, "f")) == 2
+      assert heavy(full, body(full, "f")) <= heavy(plain, body(plain, "f"))
+      assert heavy(full, body(full, "f")) == 2
+      assert heavy(plain, body(plain, "f")) == 2
       assert calls(body(full, "f"), "pickCount") == 1
     end
   end
 
   test "the heavy-work oracle counts folds, streams and uncons" do
     stream = {:stream, lit(0), [], "step"}
-    assert folds([], stream) == 1
-    assert folds([], {:uncons, stream}) == 2
-    assert folds([], {:bfold, "step", [], lit(0), {:var, "s"}}) == 1
+    assert heavy([], stream) == 1
+    assert heavy([], {:uncons, stream}) == 2
+    assert heavy([], {:bfold, "step", [], lit(0), {:var, "s"}}) == 1
 
-    assert folds(
+    assert heavy(
              [],
              {:match, lit(0), [{:arm, "a", [], stream}, {:arm, "b", [], {:uncons, stream}}]}
            ) == 2
+
+    # A call to count is followed through its bfold body, not hard-coded.
+    assert heavy(image([]), cnt("s")) == 1
+
+    # A run with no fold, stream, or uncons, and none in what it calls,
+    # is outside the heavy set: the call costs nothing.
+    light = run("light", [], add(lit(1), lit(2)))
+    assert heavy([light], {:call, "light", []}) == 0
+
+    # A run that is heavy only because of an erased let still has the
+    # same max(body, 1) floor as work/2, even when the body walks to 0.
+    erased = run("erased", [], {:let, "x", :erased, lit(0), lit(1)})
+    assert heavy([erased], {:call, "erased", []}) == 1
   end
 
   test "a generated step that would grow is not inlined into and draws nothing" do
@@ -587,49 +600,163 @@ defmodule Muro.IRShareTest do
 
   # Heavy work on the worst path through `t`, each call expanded through
   # the bodies in `fs`: folds, streams, and uncons, as in Share.work/2.
-  # A run that reaches itself counts one unit there, the same
-  # `:busy -> 1` cycle break as `work/2`.
-  defp folds(fs, t), do: folds(fs, t, MapSet.new())
+  # A call of a heavy run uses the same `:busy -> 1` cycle break,
+  # `max(body, 1)` floor, and heavy-set gate as `work/2`. A call of a
+  # run that is not in that set (no fold, stream, `uncons`, or erased
+  # let in it or in what it calls) costs only its arguments.
+  defp heavy(fs, t) when is_list(fs) do
+    by_name = for f <- fs, not Map.get(f, :generated, false), into: %{}, do: {f.name, f}
+    work = :ets.new(:share_test_work, [:set, :private])
 
-  defp folds(fs, {:call, "count", args}, busy), do: 1 + folds(fs, args, busy)
-
-  defp folds(fs, {:call, name, args}, busy) do
-    own =
-      case Enum.find(fs, &(&1.name == name and not Map.get(&1, :generated, false))) do
-        nil ->
-          0
-
-        f ->
-          if MapSet.member?(busy, name) do
-            1
-          else
-            folds(fs, f.body, MapSet.put(busy, name))
-          end
-      end
-
-    own + folds(fs, args, busy)
+    try do
+      heavy(t, %{by_name: by_name, heavy: heavy_runs(by_name), work: work})
+    after
+      :ets.delete(work)
+    end
   end
 
-  defp folds(fs, {:match, s, arms}, busy),
-    do:
-      folds(fs, s, busy) +
-        (arms
-         |> Enum.map(fn {:arm, _, _, tm} -> folds(fs, tm, busy) end)
-         |> Enum.max(fn -> 0 end))
+  defp heavy({:call, name, args}, ctx) do
+    own =
+      case Map.get(ctx.by_name, name) do
+        %{body: b} -> if MapSet.member?(ctx.heavy, name), do: run_heavy(name, b, ctx), else: 0
+        nil -> 0
+      end
 
-  defp folds(fs, {:bfold, _, caps, z, bytes}, busy),
-    do:
-      1 + folds(fs, Enum.map(caps, &elem(&1, 1)), busy) + folds(fs, z, busy) +
-        folds(fs, bytes, busy)
+    own + Enum.reduce(args, 0, &(&2 + heavy(&1, ctx)))
+  end
 
-  defp folds(fs, {:stream, seed, caps, _step}, busy),
-    do: 1 + folds(fs, seed, busy) + folds(fs, Enum.map(caps, &elem(&1, 1)), busy)
+  defp heavy({:match, s, arms}, ctx) do
+    worst = arms |> Enum.map(fn {:arm, _, _, tm} -> heavy(tm, ctx) end) |> Enum.max(fn -> 0 end)
+    heavy(s, ctx) + worst
+  end
 
-  defp folds(fs, {:uncons, stream}, busy), do: 1 + folds(fs, stream, busy)
+  defp heavy(t, ctx) do
+    own =
+      case t do
+        {:bfold, _, _, _, _} -> 1
+        {:stream, _, _, _} -> 1
+        {:uncons, _} -> 1
+        _ -> 0
+      end
 
-  defp folds(fs, t, busy) when is_tuple(t), do: folds(fs, Tuple.to_list(t), busy)
-  defp folds(fs, l, busy) when is_list(l), do: l |> Enum.map(&folds(fs, &1, busy)) |> Enum.sum()
-  defp folds(_fs, _, _busy), do: 0
+    own + Enum.reduce(kids(t), 0, &(&2 + heavy(&1, ctx)))
+  end
+
+  defp run_heavy(name, body, ctx) do
+    case :ets.lookup(ctx.work, name) do
+      [{_, :busy}] ->
+        1
+
+      [{_, n}] ->
+        n
+
+      [] ->
+        :ets.insert(ctx.work, {name, :busy})
+        n = if known_tm?(body), do: max(heavy(body, ctx), 1), else: 1
+        :ets.insert(ctx.work, {name, n})
+        n
+    end
+  end
+
+  defp heavy_runs(by_name) do
+    direct =
+      for {n, f} <- by_name,
+          known_tm?(f.body),
+          not inlinable_tm?(f.body),
+          into: MapSet.new(),
+          do: n
+
+    calls =
+      Map.new(by_name, fn {n, f} ->
+        {n, if(known_tm?(f.body), do: called_names(f.body), else: MapSet.new())}
+      end)
+
+    grow_runs(direct, calls)
+  end
+
+  defp grow_runs(set, calls) do
+    more =
+      for {n, cs} <- calls,
+          not MapSet.member?(set, n),
+          not MapSet.disjoint?(cs, set),
+          into: set,
+          do: n
+
+    if MapSet.size(more) == MapSet.size(set), do: set, else: grow_runs(more, calls)
+  end
+
+  defp inlinable_tm?(t) do
+    not has_node?(t, fn
+      {:bfold, _, _, _, _} -> true
+      {:stream, _, _, _} -> true
+      {:uncons, _} -> true
+      {:let, _, :erased, _, _} -> true
+      _ -> false
+    end)
+  end
+
+  defp has_node?(t, pred), do: pred.(t) or Enum.any?(kids(t), &has_node?(&1, pred))
+
+  defp called_names({:call, n, args}),
+    do: Enum.reduce(args, MapSet.new([n]), &MapSet.union(&2, called_names(&1)))
+
+  defp called_names(t),
+    do: Enum.reduce(kids(t), MapSet.new(), &MapSet.union(&2, called_names(&1)))
+
+  defp known_tm?(t) do
+    try do
+      walk_tm(t)
+      true
+    catch
+      :unknown -> false
+    end
+  end
+
+  defp walk_tm({:let, _, _, v, b}), do: walk_tm(v) && walk_tm(b)
+  defp walk_tm({:letp, _, _, e, b}), do: walk_tm(e) && walk_tm(b)
+
+  defp walk_tm({:match, s, arms}) when is_list(arms),
+    do: walk_tm(s) && Enum.all?(arms, fn {:arm, _, _, tm} -> walk_tm(tm) end)
+
+  defp walk_tm(t), do: Enum.all?(kids(t), &walk_tm/1)
+
+  # Term children, the same set `Share` walks. Unknown nodes raise
+  # `:unknown`, so `known_tm?/1` matches `known?/1`.
+  defp kids(t) do
+    case t do
+      :ze -> []
+      :tt -> []
+      :abort -> []
+      {:nat, _} -> []
+      {:var, _} -> []
+      {:byt, _} -> []
+      {:str, _} -> []
+      {:su, u} -> [u]
+      {:call, _, args} -> args
+      {:con, _, _, args} -> args
+      {:wrd, _, _, args} -> args
+      {:pair, a, b} -> [a, b]
+      {:uncons, e} -> [e]
+      {:stream, seed, caps, _} -> [seed | Enum.map(caps, &elem(&1, 1))]
+      {:bfold, _, caps, z, s} -> Enum.map(caps, &elem(&1, 1)) ++ [z, s]
+      {:bcat, a, b} -> [a, b]
+      {:blen, a} -> [a]
+      {:beq, a, b} -> [a, b]
+      {:bsub, s, o, n} -> [s, o, n]
+      {:bget, s, i} -> [s, i]
+      {:btil, s, b} -> [s, b]
+      {:baft, s, b} -> [s, b]
+      {:sbytes, s} -> [s]
+      {:bunc, s} -> [s]
+      {:scat, a, b} -> [a, b]
+      {:slen, a} -> [a]
+      {:seq, a, b} -> [a, b]
+      {:let, _, _, v, b} -> [v, b]
+      {:letp, _, _, e, b} -> [e, b]
+      {:match, s, arms} -> [s | Enum.map(arms, fn {:arm, _, _, tm} -> tm end)]
+      _ -> throw(:unknown)
+    end
+  end
 
   # Fresh names renumbered in order of first appearance.
   defp normal(t) do
