@@ -2267,7 +2267,9 @@ mutual
 
   -- One branch per constructor, in declaration order. A constructor
   -- whose target indices clash with the scrutinee's cannot occur: its
-  -- branch is consumed and not checked.
+  -- branch is consumed and not checked, except that it must bind the
+  -- constructor's fields (`armLams` at `piCount rest`, Elixir
+  -- `branch_arity`), so `varUses` peels exactly field λs off every arm.
   checkBranches : ∀ {n} → ℕ → Sig → RecSt n → Ctx n → Mode → ℕ → Bool → List (Tm n) → List (Tm n) → Tm n → ℕ → List Ctor → List (Tm n) → Result (UseVec n)
   checkBranches _ _ _ _ _ _ _ _ _ _ _ [] [] = ok u0s
   checkBranches k σ rs Γ m di sm params idxs mot ci (c ∷ cs) bs =
@@ -2276,7 +2278,9 @@ mutual
       true →
         case bs of λ where
           []        → fail ("missing branch for " ++ Ctor.cname c)
-          (_ ∷ bs′) →
+          (b ∷ bs′) →
+            guard ("clash branch for " ++ Ctor.cname c ++ " does not bind its fields")
+              (armLams (piCount rest) b) >>
             checkBranches k σ rs Γ m di sm params idxs mot (suc ci) cs bs′
       false →
         case bs of λ where

@@ -1891,7 +1891,8 @@ checkBranches-sound k σ {n} rs {Γ = Γ} m di sm {np} {params = params} {is} {q
 ... | ok tele with instParams-sound k σ (GoodSig.frag G) (Frag-closed Fc) Fps (Tel-ren fromZero tlc) ipeq
 ...   | ip , Fty , tl rewrite npeq with clashes k σ np is tele in cleq
 ...     | fail _ = ⊥-elim (fail≢ok eq)
-...     | ok true = skipRest (checkBranches-sound k σ rs m di sm G FΓ Fps Fis FD FP Fbs′ rest npeq lps eq)
+...     | ok true = skipRest (checkBranches-sound k σ rs m di sm G FΓ Fps Fis FD FP Fbs′ rest npeq lps
+                               (proj₂ (>>-ok {r = guard _ (armLams (piCount tele) b)} eq)))
   where
     skipRest : ∀ {v} → Maybe (σ , Γ ⊢[ m ] bs brs⟨ di , params , is , P , suc ci ⟩ cs ⊣ v)
       → Maybe (σ , Γ ⊢[ m ] (b ∷ bs) brs⟨ di , params , is , P , ci ⟩ (c ∷ cs) ⊣ v)

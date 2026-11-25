@@ -7,6 +7,7 @@
 {-# OPTIONS --safe #-}
 module Muro.ExampleVec where
 
+open import Data.Bool.Base using (Bool; true; false)
 open import Data.Fin.Base using (zero; suc)
 open import Data.List.Base using (List; []; _∷_)
 open import Data.Nat.Base using () renaming (zero to nzero; suc to nsuc)
@@ -169,3 +170,37 @@ vecBook =
 
 lookup-ok-checks : checkSig! vecBook ≡ ok tt
 lookup-ok-checks = refl
+
+-- A clash arm must bind its constructor's fields (Check.checkBranches,
+-- Elixir `branch_arity`). vnilNat : (A : Type) → Vec A ze → Nat. vcons
+-- targets su m, which clashes with ze, so its arm is consumed unchecked,
+-- but it still needs its three field λs: with them the book checks,
+-- without them it is refused.
+vnilNatTy : Tm 0
+vnilNatTy =
+  pi erased typ
+    (pi affine (app (app (dty 1) (var zero)) ze)
+      nat)
+
+vnilNatTm : Tm 2 → Tm 0
+vnilNatTm consArm =
+  lam erased typ
+    (lam affine (app (app (dty 1) (var zero)) ze)
+      (mData (var zero) (lam affine (app (app (dty 1) (var (suc (suc zero)))) (var zero)) nat)
+        (nzero ∷ nsuc (nsuc (nsuc nzero)) ∷ [])
+        (ze ∷ consArm ∷ [])))
+
+clashBook : Tm 2 → Sig
+clashBook consArm =
+  mkSig (finDecl ∷ vecDecl ∷ [])
+    ( mkDef "vnilNat" run vnilNatTy (vnilNatTm consArm) ∷ [] )
+
+rejected : Result ⊤ → Bool
+rejected (ok _)   = false
+rejected (fail _) = true
+
+clash-arm-binds-checks : checkSig! (clashBook (lam affine nat (lam affine nat (lam affine nat ze)))) ≡ ok tt
+clash-arm-binds-checks = refl
+
+clash-arm-short-refused : rejected (checkSig! (clashBook ze)) ≡ true
+clash-arm-short-refused = refl

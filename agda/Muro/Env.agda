@@ -78,6 +78,14 @@ piCount : ∀ {n} → Tm n → ℕ
 piCount (pi _ _ B) = suc (piCount B)
 piCount _          = 0
 
+-- An arm binds `ar` fields: it has at least `ar` leading λs (more are
+-- the body's). Check asks this of a clash arm, whose λs checkBrPi does
+-- not walk, as Elixir `branch_arity` asks `ar == pi_count(rest)`.
+armLams : ∀ {n} → ℕ → Tm n → Bool
+armLams zero    _           = true
+armLams (suc a) (lam _ _ t) = armLams a t
+armLams (suc _) _           = false
+
 ctorFieldArity : ℕ → Ctor → ℕ
 ctorFieldArity np c = piCount (Ctor.ctype c) ∸ np
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.22.32
+
+Agda `Check.checkBranches` asks a clash arm to bind its constructor's fields, as Elixir `branch_arity` does (follow-up to #291).
+
+A constructor whose target indices clash with the scrutinee's still has its arm consumed unchecked, but the arm must now open with at least one λ per field of the constructor's telescope at the parameters (`Env.armLams` at `piCount rest`, Elixir `ar == pi_count(rest)`). Before, any term was accepted there, so `varUses` could peel the wrong binders off a short clash arm. `Muro.Soundness` takes the extra guard; ⊢ and ⊨ are unchanged, since a clash arm is not typed. `Muro.ExampleVec` checks a clash arm with its three field λs and refuses one without.
+
+`--safe` is unchanged: no postulates, no `TERMINATING`.
+
+### Manual
+
+- Extending: the ⊢ and ⊨ bullets state the `mData` arity premise (`ars ≡ ctorFieldArities d`), and the `Check` bullet says a clash arm must bind its fields.
+
+### Package
+
+- Version 0.22.32.
+
 ## 0.22.31
 
 C, Rust, and Zig compute a repeated pure call once.
