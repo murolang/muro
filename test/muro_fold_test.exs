@@ -168,6 +168,93 @@ defmodule Muro.FoldTest do
     assert {:pair, :ze, :ze} = wtrue
   end
 
+  # The scrutinee mentions x once and one arm mentions it once. Those
+  # sit on one path, so the argument is shared and reduced to 0 before
+  # the body. The pair is already a value, so the match stays, but its
+  # scrutinee is 0 rather than the unreduced application.
+  test "a use in the scrutinee and a use in one arm share the argument" do
+    src = """
+    def go : run (Nat * Nat) :=
+      (λ (+ x : Nat) →
+        (match x motive (λ _ → Nat)
+           | 0 => 0
+           | suc _ => x,
+         0))
+      ((λ (+ y : Nat) → 0) 0)
+    """
+
+    assert {:ok, {:pair, match, :ze}} = reduce(src)
+    assert {:mnat, :ze, :nat, :ze, :ze} = match
+    refute app?(match)
+  end
+
+  # A appears once in the domain `List A` of the inner λ, and again in
+  # the cons field types (`a : A`, `t : List A`). Elixir does not count
+  # those field types, so the argument is not shared and stays an
+  # application. Surface terms have no `{e : A}` ascription.
+  test "a field-binder type does not count as a use in a data match" do
+    src = """
+    data List (A : Type) : Type where
+      nil : List A
+      cons : Π (+ a : A) → Π (+ t : List A) → List A
+
+    def go : run (Nat * Nat) :=
+      (λ (+ A : Type) →
+        (match ((λ (+ xs : List A) → xs) nil) motive (λ _ → Nat)
+           | nil => 0
+           | cons a t => 0,
+         0))
+      ((λ (+ Y : Type) → Nat) Nat)
+    """
+
+    assert {:ok, {:pair, match, :ze}} = reduce(src)
+    assert app?(match)
+  end
+
+  # The nil arm starts with a body λ (the motive returns a Π). Its
+  # domain mentions A, and the scrutinee mentions A once more, so
+  # cap(1, 1) = 2 and the argument is shared. Peeling every leading
+  # λ would skip that domain and leave the count at 1.
+  test "a mention in a body-λ domain of an mData arm counts" do
+    src = """
+    data List (A : Type) : Type where
+      nil : List A
+      cons : Π (+ a : A) → Π (+ t : List A) → List A
+
+    def go : run (Nat * Nat) :=
+      (λ (+ A : Type) →
+        ((match ((λ (+ xs : List A) → xs) nil) motive (λ _ → Π (_ : A) → Nat)
+            | nil => λ (_ : A) → 0
+            | cons a t => λ (_ : A) → 0)
+         0,
+         0))
+      ((λ (+ Y : Type) → Nat) Nat)
+    """
+
+    # The pair is already a value, so the match is not ι-reduced. Sharing
+    # is visible in the body-λ domains: they are Nat, not an unreduced app.
+    assert {:ok, {:pair, {:app, {:mdata, _scrut, _mot, arms}, :ze}, :ze}} = reduce(src)
+    assert {"nil", 0, {:lam, :affine, :nat, "_", :ze}} in arms
+    assert {"cons", 2, {:lam, :affine, :nat, "_", :ze}} in arms
+  end
+
+  # At remaining fuel 1 the beta stays call-by-name, even when the
+  # body mentions the binder twice. Fuel 2 on `reduce` leaves 1 after
+  # the head is already a λ. Fuel 4 is enough to share.
+  test "fuel 1 does not share a twice-used reusable argument" do
+    src = """
+    def go : run (Nat * Nat) :=
+      (λ (+ x : Nat) → (x, x))
+      ((λ (+ y : Nat) → 0) 0)
+    """
+
+    assert {:ok, {:pair, a, b}} = reduce(src, 2)
+    assert app?(a)
+    assert app?(b)
+
+    assert {:ok, {:pair, :ze, :ze}} = reduce(src, 4)
+  end
+
   # Both mentions are in the motive. The arms do not read x. The motive
   # is still in the result because the scrutinee is an axiom, which does
   # not reduce, and the pair is already a value.

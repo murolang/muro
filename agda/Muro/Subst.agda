@@ -36,7 +36,7 @@ mutual
   ren ρ empty         = empty
   ren ρ (dty i)       = dty i
   ren ρ (ctor i j)    = ctor i j
-  ren ρ (mData e P bs)= mData (ren ρ e) (ren (lift ρ) P) (renList ρ bs)
+  ren ρ (mData e P ars bs)= mData (ren ρ e) (ren (lift ρ) P) ars (renList ρ bs)
   ren ρ (mNat e P z s)= mNat (ren ρ e) (ren (lift ρ) P) (ren ρ z) (ren (lift ρ) s)
   ren ρ (mEmp e P)    = mEmp (ren ρ e) (ren (lift ρ) P)
   ren ρ (mUnit e P u) = mUnit (ren ρ e) (ren (lift ρ) P) (ren ρ u)
@@ -98,7 +98,7 @@ mutual
   renM ρ empty = ok empty
   renM ρ (dty i) = ok (dty i)
   renM ρ (ctor i j) = ok (ctor i j)
-  renM ρ (mData e P bs) = mData <$> renM ρ e ⊛ renM (liftM ρ) P ⊛ renMList ρ bs
+  renM ρ (mData e P ars bs) = (λ e′ P′ bs′ → mData e′ P′ ars bs′) <$> renM ρ e ⊛ renM (liftM ρ) P ⊛ renMList ρ bs
   renM ρ (mNat e P z s) = mNat <$> renM ρ e ⊛ renM (liftM ρ) P ⊛ renM ρ z ⊛ renM (liftM ρ) s
   renM ρ (mEmp e P) = mEmp <$> renM ρ e ⊛ renM (liftM ρ) P
   renM ρ (mUnit e P u) = mUnit <$> renM ρ e ⊛ renM (liftM ρ) P ⊛ renM ρ u
@@ -204,7 +204,7 @@ mutual
   sub σ empty          = empty
   sub σ (dty i)        = dty i
   sub σ (ctor i j)     = ctor i j
-  sub σ (mData e P bs) = mData (sub σ e) (sub (lifts σ) P) (subList σ bs)
+  sub σ (mData e P ars bs) = mData (sub σ e) (sub (lifts σ) P) ars (subList σ bs)
   sub σ (mNat e P z s) = mNat (sub σ e) (sub (lifts σ) P) (sub σ z) (sub (lifts σ) s)
   sub σ (mEmp e P)     = mEmp (sub σ e) (sub (lifts σ) P)
   sub σ (mUnit e P u)  = mUnit (sub σ e) (sub (lifts σ) P) (sub σ u)

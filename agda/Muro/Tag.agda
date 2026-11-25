@@ -26,7 +26,7 @@ tmTag one = 9
 tmTag empty = 10
 tmTag (dty _) = 11
 tmTag (ctor _ _) = 12
-tmTag (mData _ _ _) = 13
+tmTag (mData _ _ _ _) = 13
 tmTag (mNat _ _ _ _) = 14
 tmTag (mEmp _ _) = 15
 tmTag (mUnit _ _ _) = 16
@@ -65,7 +65,7 @@ data TmShape {n} : ℕ → Tm n → Set where
   sh-empty : TmShape 10 empty
   sh-dty : ∀ {a} → TmShape 11 (dty a)
   sh-ctor : ∀ {a b} → TmShape 12 (ctor a b)
-  sh-mData : ∀ {a b c} → TmShape 13 (mData a b c)
+  sh-mData : ∀ {a b c d} → TmShape 13 (mData a b c d)
   sh-mNat : ∀ {a b c d} → TmShape 14 (mNat a b c d)
   sh-mEmp : ∀ {a b} → TmShape 15 (mEmp a b)
   sh-mUnit : ∀ {a b c} → TmShape 16 (mUnit a b c)
@@ -104,7 +104,7 @@ shape one = sh-one
 shape empty = sh-empty
 shape (dty _) = sh-dty
 shape (ctor _ _) = sh-ctor
-shape (mData _ _ _) = sh-mData
+shape (mData _ _ _ _) = sh-mData
 shape (mNat _ _ _ _) = sh-mNat
 shape (mEmp _ _) = sh-mEmp
 shape (mUnit _ _ _) = sh-mUnit

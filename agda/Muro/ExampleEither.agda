@@ -9,6 +9,7 @@ module Muro.ExampleEither where
 
 open import Data.Fin.Base using (zero; suc)
 open import Data.List.Base using (List; []; _∷_)
+open import Data.Nat.Base using () renaming (zero to nzero; suc to nsuc)
 open import Data.Unit.Base using (⊤; tt)
 open import Relation.Binary.PropositionalEquality.Core using (_≡_; refl)
 
@@ -70,7 +71,7 @@ evenDecTm =
       (mNat (var zero) (app (def 1) (app (def 0) (su (var zero))))
         (app (ctor 0 1) (lam affine (app (def 0) (su ze))
           (mEmp (var zero) empty)))
-        (mData (app (def 2) (var zero)) (app (def 1) (app (def 0) (su (su (var (suc zero)))))) ((lam affine (app (def 0) (var zero))
+        (mData (app (def 2) (var zero)) (app (def 1) (app (def 0) (su (su (var (suc zero)))))) (nsuc nzero ∷ nsuc nzero ∷ []) ((lam affine (app (def 0) (var zero))
           (app (ctor 0 0) (var zero))) ∷ (lam affine (pi affine (app (def 0) (var zero))
           empty)
           (app (ctor 0 1) (var zero))) ∷ []))))

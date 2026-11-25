@@ -167,7 +167,7 @@ prodData-sound k σ {A = A} fs (f-prod FA FB) eq with isData k σ A in aeq
 isData-sound (suc k) σ {t = t} fs Ft eq with whnf (suc k) σ t in weq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok t′ with whnf-sound (suc k) σ fs Ft weq
-...   | r , F = d-conv (⟶*→≈ r) (isDataN-sound k σ fs F eq)
+...   | r , F = d-conv r (isDataN-sound k σ fs F eq)
 
 isDataN-sound k σ {t = t} fs Ft eq with unspine t in ueq
 ... | p with dataN p
@@ -200,7 +200,7 @@ isCopyN-sound : ∀ k σ {n} {t : Tm n} → FragSig σ → Frag t → isCopyN k 
 isCopy-sound (suc k) σ {t = t} fs Ft eq with whnf (suc k) σ t in weq
 ... | fail _ = ⊥-elim (fail≢ok eq)
 ... | ok t′ with whnf-sound (suc k) σ fs Ft weq
-...   | r , F = c-conv (⟶*→≈ r) (isCopyN-sound k σ fs F eq)
+...   | r , F = c-conv r (isCopyN-sound k σ fs F eq)
 
 isCopyN-sound k σ {t = t} fs Ft eq with copyView t
 ... | cv-pi = c-pi
