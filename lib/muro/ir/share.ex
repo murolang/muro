@@ -34,8 +34,9 @@ defmodule Muro.IR.Share do
   the image and not once. Runs draw on it smallest growth first, then by name, so
   which runs inline does not depend on the order of the list; a run
   whose inlining would pass what is left is shared as elaborated. A run
-  that fits keeps its inlined body only when its worst path does no
-  more heavy work than its elaborated body shared without inlining;
+  that fits keeps its inlined body only when a hoist took place in it
+  and its worst path does no more heavy work than its elaborated body
+  shared without inlining;
   otherwise it keeps that one and draws nothing. Inlined bodies do not depend on that order
   either. A generated fold or stream step is never inlined into and
   draws nothing on the budget; it is still shared.
@@ -194,7 +195,8 @@ defmodule Muro.IR.Share do
   # whose growth does not fit what is left is shared as elaborated, and
   # its inlined body is never shared. A run that fits is shared both
   # ways, inlined and as elaborated, and keeps the inlined body only
-  # when its worst path does no more heavy work (`work/2`) than the
+  # when a hoist took place in it and its worst path does no more heavy
+  # work (`work/2`) than the
   # elaborated one does once shared; otherwise it keeps that one and
   # draws nothing.
   defp optimize_all(funs, ctx, inline?) do
@@ -218,10 +220,10 @@ defmodule Muro.IR.Share do
           plain = shared(fun.body, ctx)
 
           # The inlined body is kept only when some hoist took place in
-          # it and its worst path folds no more than the elaborated
-          # body's, shared as `inline: false` shares it. Otherwise that
-          # body is kept and nothing is drawn, so on every path this run
-          # does no more heavy work than with `inline: false`.
+          # it and its worst-path heavy work (folds, streams, uncons) is
+          # no more than the elaborated body's, shared as `inline: false`
+          # shares it. Otherwise that body is kept and nothing is drawn.
+          # This compares worst paths, not each individual path.
           with {:ok, out} <- shared(body, ctx),
                true <- work(out, ctx) <= work(shared_body(plain, fun), ctx) do
             :counters.sub(ctx.budget, 1, max(grow, 0))
@@ -274,7 +276,11 @@ defmodule Muro.IR.Share do
     own + Enum.reduce(children(t), 0, &(&2 + work(&1, ctx)))
   end
 
-  # A run that reaches itself counts one unit there.
+  # A run that reaches itself counts one unit there to break the cycle.
+  # This undercounts mutually recursive SCCs: it is a finite heuristic,
+  # not a bound on recursive runtime. Both sides of the keep comparison
+  # use the same memoized callee costs, so cycle breaking does not change
+  # that comparison's meaning (worst-path work under this measure).
   defp run_work(name, body, ctx) do
     case :ets.lookup(ctx.work, name) do
       [{_, :busy}] ->
@@ -736,8 +742,6 @@ defmodule Muro.IR.Share do
     own = if disjoint?(free_vars(t), bound), do: MapSet.new([t]), else: MapSet.new()
     Enum.reduce(args, own, &MapSet.union(&2, strict(&1, bound)))
   end
-
-  defp strict({:let, _x, _lay, v, :abort}, bound), do: strict(v, bound)
 
   defp strict({:let, x, _lay, v, b}, bound),
     do: MapSet.union(strict(v, bound), strict(b, MapSet.put(bound, x)))

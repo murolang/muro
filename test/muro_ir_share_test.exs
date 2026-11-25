@@ -470,9 +470,22 @@ defmodule Muro.IRShareTest do
       plain = Muro.IR.Share.funs(funs, inline: false)
       full = Muro.IR.Share.funs(funs)
       assert folds(full, body(full, "f")) <= folds(plain, body(plain, "f"))
+      assert folds(full, body(full, "f")) == 2
       assert folds(plain, body(plain, "f")) == 2
       assert calls(body(full, "f"), "pickCount") == 1
     end
+  end
+
+  test "the heavy-work oracle counts folds, streams and uncons" do
+    stream = {:stream, lit(0), [], "step"}
+    assert folds([], stream) == 1
+    assert folds([], {:uncons, stream}) == 2
+    assert folds([], {:bfold, "step", [], lit(0), {:var, "s"}}) == 1
+
+    assert folds(
+             [],
+             {:match, lit(0), [{:arm, "a", [], stream}, {:arm, "b", [], {:uncons, stream}}]}
+           ) == 2
   end
 
   test "a generated step that would grow is not inlined into and draws nothing" do
@@ -572,8 +585,8 @@ defmodule Muro.IRShareTest do
 
   defp count_outside_arms(_), do: 0
 
-  # Folds the worst path of `t` runs, each call expanded through the
-  # bodies in `fs`.
+  # Heavy work on the worst path through `t`, each call expanded through
+  # the bodies in `fs`: folds, streams, and uncons, as in Share.work/2.
   defp folds(fs, {:call, "count", args}), do: 1 + folds(fs, args)
 
   defp folds(fs, {:call, name, args}) do
@@ -587,6 +600,14 @@ defmodule Muro.IRShareTest do
     do:
       folds(fs, s) +
         (arms |> Enum.map(fn {:arm, _, _, tm} -> folds(fs, tm) end) |> Enum.max(fn -> 0 end))
+
+  defp folds(fs, {:bfold, _, caps, z, bytes}),
+    do: 1 + folds(fs, Enum.map(caps, &elem(&1, 1))) + folds(fs, z) + folds(fs, bytes)
+
+  defp folds(fs, {:stream, seed, caps, _step}),
+    do: 1 + folds(fs, seed) + folds(fs, Enum.map(caps, &elem(&1, 1)))
+
+  defp folds(fs, {:uncons, stream}), do: 1 + folds(fs, stream)
 
   defp folds(fs, t) when is_tuple(t), do: folds(fs, Tuple.to_list(t))
   defp folds(fs, l) when is_list(l), do: l |> Enum.map(&folds(fs, &1)) |> Enum.sum()
