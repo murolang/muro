@@ -7,7 +7,7 @@ summary: A manifest names each book, module, and target. mix muro.gen writes the
 
 # Committed modules
 
-In brief: a project commits the Elixir a book emits. `muro.exs` names the module and the path. `mix muro.gen` type-checks each book once, formats the module, and writes every target of that book from that copy. `mix muro.gen --check` writes nothing and fails when a committed file is not what that copy emits. The running Muro version must equal `muro:`.
+In brief: a project commits the Elixir a book emits. `muro.exs` names the module and the path. `mix muro.gen` type-checks each book once, formats an Elixir, ExUnit, FSM, or OTP target, adds the header except on an `:mbi` image, and writes every target of that book from that copy. `mix muro.gen --check` writes nothing and fails when a committed file is not what that copy emits. The running Muro version must equal `muro:`.
 
 `mix muro.emit` prints a module. It does not choose a path under `lib/`, format with the project's `.formatter.exs`, or record which book the file came from. This page is that step.
 

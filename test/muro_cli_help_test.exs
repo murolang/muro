@@ -237,6 +237,14 @@ defmodule Muro.CliHelpTest do
     gen_plain = String.replace(gen, ~r/\s+/, " ")
     assert gen_plain =~ "muro.toml or [package.metadata.muro] is the default kind"
     assert gen_plain =~ "a missing kind on an entry still defaults to elixir"
+    assert gen_plain =~ "mbi image is written without a gen header"
+
+    mix_gen = Mix.Task.moduledoc(Mix.Tasks.Muro.Gen) |> String.replace(~r/\s+/, " ")
+    assert mix_gen =~ "formats an Elixir, ExUnit, FSM, or OTP target"
+    assert mix_gen =~ "adds the header except on an `:mbi` image"
+
+    assert mix_gen =~
+             "Formatting is left alone for `:c`, `:rust`, `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi`"
 
     init = Muro.CLI.Init.help()
     assert init =~ "https://muro-lang.dev/docs/binary"

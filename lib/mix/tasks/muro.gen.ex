@@ -26,10 +26,12 @@ defmodule Mix.Tasks.Muro.Gen do
   `:pytest`, or `:rust_test` entry may omit the module
   (`{book, target, [kind: :c]}`). `:c` also writes the `.h`
   beside the `.c`. `:js` also writes the `.d.ts` beside the `.mjs`.
-  An `:otp` target ends with `.ex`. An `:mbi` target ends with `.mbi`
-  and is written without a gen header.
-  A pytest target ends with `.py` and is not formatted. A Rust test
-  target ends with `.rs` and is not formatted. `imports:` is
+  An `:otp` target ends with `.ex` and is formatted the same way as
+  an Elixir target. An `:mbi` target ends with `.mbi` and is written
+  without a gen header. Formatting is left alone for `:c`, `:rust`,
+  `:zig`, `:asm`, `:js`, `:pytest`, `:rust_test`, and `:mbi`. A pytest
+  target ends with `.py`. A Rust test target ends with `.rs`.
+  `imports:` is
   a boolean, default `false`, and is valid for `:exunit`, `:pytest`,
   and `:rust_test`. `imports: true` also collects the closed equations
   of the files that book imports directly. An ExUnit target is usually
@@ -51,9 +53,10 @@ defmodule Mix.Tasks.Muro.Gen do
   `.mjs` and `.d.ts`. If any book fails, it prints each failure and
   writes nothing. A book that checks, and that the backend then
   refuses, is reported as refused by that backend, and nothing is
-  written. When every book is emitted, it formats each module with
-  the project's `.formatter.exs` when that file exists, adds the
-  header, and writes the target, creating directories. One line per
+  written. When every book is emitted, it formats an Elixir, ExUnit,
+  FSM, or OTP target with the project's `.formatter.exs` when that
+  file exists, adds the header except on an `:mbi` image, and writes
+  the target, creating directories. One line per
   target says `written` or `unchanged`. A package-using target then
   prints each `conforms to` line indented by two spaces. An ExUnit
   target then lists each skipped equation. An unchanged file is not
