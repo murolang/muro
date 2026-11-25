@@ -142,7 +142,7 @@ mutual
   occℕ-ren-avoid k ρ (app f a) hyp =
     ∨-both-false (occℕ-ren-avoid k ρ f hyp) (occℕ-ren-avoid k ρ a hyp)
   occℕ-ren-avoid k ρ (su t) hyp = occℕ-ren-avoid k ρ t hyp
-  occℕ-ren-avoid k ρ (mData e P bs) hyp =
+  occℕ-ren-avoid k ρ (mData e P ars bs) hyp =
     ∨-both-false (occℕ-ren-avoid k ρ e hyp)
       (∨-both-false (occℕ-ren-avoid (suc k) (lift ρ) P (lift-avoid k ρ hyp))
                     (occℕList-ren-avoid k ρ bs hyp))
@@ -250,7 +250,7 @@ mutual
               (occℕ-thin-body k i t)
   occℕ-thin k i (app f a) = cong₂ _∨_ (occℕ-thin k i f) (occℕ-thin k i a)
   occℕ-thin k i (su t) = occℕ-thin k i t
-  occℕ-thin k i (mData e P bs) =
+  occℕ-thin k i (mData e P ars bs) =
     cong₂ _∨_ (occℕ-thin k i e)
       (cong₂ _∨_ (occℕ-thin-body k i P)
                  (occℕList-thin k i bs))
@@ -364,7 +364,7 @@ mutual
     cong₂ _∨_ (occℕ-sub i σ A hyp) (occℕ-sub (suc i) (lifts σ) t (lifts-occ i σ hyp))
   occℕ-sub i σ (app f a) hyp = cong₂ _∨_ (occℕ-sub i σ f hyp) (occℕ-sub i σ a hyp)
   occℕ-sub i σ (su t) hyp = occℕ-sub i σ t hyp
-  occℕ-sub i σ (mData e P bs) hyp =
+  occℕ-sub i σ (mData e P ars bs) hyp =
     cong₂ _∨_ (occℕ-sub i σ e hyp)
       (cong₂ _∨_ (occℕ-sub (suc i) (lifts σ) P (lifts-occ i σ hyp))
                  (occℕList-sub i σ bs hyp))
@@ -436,7 +436,7 @@ mutual
     cong₂ _∨_ (occℕ-occurs x A) (occℕ-occurs (suc x) t)
   occℕ-occurs x (app f a) = cong₂ _∨_ (occℕ-occurs x f) (occℕ-occurs x a)
   occℕ-occurs x (su t) = occℕ-occurs x t
-  occℕ-occurs x (mData e P bs) =
+  occℕ-occurs x (mData e P ars bs) =
     cong₂ _∨_ (occℕ-occurs x e)
       (cong₂ _∨_ (occℕ-occurs (suc x) P) (occℕList-occurs x bs))
   occℕ-occurs x (mNat e P z s) =
@@ -520,7 +520,7 @@ mutual
     cong₂ _∨_ (hasSelf-ren B ρ A) (hasSelf-ren B (lift ρ) C)
   hasSelf-ren B ρ (prod A C) = cong₂ _∨_ (hasSelf-ren B ρ A) (hasSelf-ren B ρ C)
   hasSelf-ren B ρ (nu F) = hasSelf-ren B (lift ρ) F
-  hasSelf-ren B ρ (mData e P bs) =
+  hasSelf-ren B ρ (mData e P ars bs) =
     cong₂ _∨_ (hasSelf-ren B ρ e)
       (cong₂ _∨_ (hasSelf-ren B (lift ρ) P) (hasSelfList-ren B ρ bs))
   hasSelf-ren B ρ (mNat e P z u) =
@@ -624,15 +624,15 @@ mnat-s B τ e P z s hyp (suc y) oc =
              (∨-right {a = occurs (suc y) P}
                (∨-right {a = occurs y z} oc))))
 
-bind-list-hyp : ∀ {n m} B (τ : Fin n → Tm m) (e : Tm n) (bs : List (Tm n)) (P : Tm (suc n))
-  → (∀ x → occurs x (mData e P bs) ≡ true → hasSelf B (τ x) ≡ false)
+bind-list-hyp : ∀ {n m} B (τ : Fin n → Tm m) (e : Tm n) (bs : List (Tm n)) (P : Tm (suc n)) {ars}
+  → (∀ x → occurs x (mData e P ars bs) ≡ true → hasSelf B (τ x) ≡ false)
   → ∀ y → occurs y P ≡ true → hasSelf B (lifts τ y) ≡ false
 bind-list-hyp B τ e bs P hyp =
   bind-hyp B τ e P λ x oc →
     hyp x (push∨ {a = occurs x e} {b = occurs (suc x) P} {c = occursList x bs} oc)
 
-list-in : ∀ {n m} B (τ : Fin n → Tm m) (e : Tm n) (P : Tm (suc n)) (bs : List (Tm n))
-  → (∀ x → occurs x (mData e P bs) ≡ true → hasSelf B (τ x) ≡ false)
+list-in : ∀ {n m} B (τ : Fin n → Tm m) (e : Tm n) (P : Tm (suc n)) (bs : List (Tm n)) {ars}
+  → (∀ x → occurs x (mData e P ars bs) ≡ true → hasSelf B (τ x) ≡ false)
   → ∀ x → occursList x bs ≡ true → hasSelf B (τ x) ≡ false
 list-in B τ e P _ hyp x oc =
   hyp x (∨-right {a = occurs x e} (∨-right {a = occurs (suc x) P} oc))
@@ -738,13 +738,13 @@ mutual
                  (hasSelf-sub-occ B τ C hC (λ x oc → hyp x (∨-right oc)))
   hasSelf-sub-occ B τ (nu F) ht hyp =
     hasSelf-sub-occ B (lifts τ) F ht (nu-hyp B τ F hyp)
-  hasSelf-sub-occ B τ (mData e P bs) ht hyp =
+  hasSelf-sub-occ B τ (mData e P ars bs) ht hyp =
     let he , rest = ∨-false₂ (hasSelf B e) (hasSelf B P ∨ hasSelfList B bs) ht
         hP , hbs = ∨-false₂ (hasSelf B P) (hasSelfList B bs) rest
     in ∨-both-false (hasSelf-sub-occ B τ e he (λ x oc → hyp x (∨-left oc)))
          (∨-both-false
-           (hasSelf-sub-occ B (lifts τ) P hP (bind-list-hyp B τ e bs P hyp))
-           (hasSelfList-sub-occ B τ bs hbs (list-in B τ e P bs hyp)))
+           (hasSelf-sub-occ B (lifts τ) P hP (bind-list-hyp B τ e bs P {ars} hyp))
+           (hasSelfList-sub-occ B τ bs hbs (list-in B τ e P bs {ars} hyp)))
   hasSelf-sub-occ B τ (mNat e P z s) ht hyp =
     let he , rest = ∨-false₂ (hasSelf B e) (hasSelf B P ∨ hasSelf B z ∨ hasSelf B s) ht
         hP , rest′ = ∨-false₂ (hasSelf B P) (hasSelf B z ∨ hasSelf B s) rest
@@ -1095,7 +1095,7 @@ shape-sub {σ = σ} B {t = t} τ hf (sh-other p) = shape-other τ t hf p
   shape-other _ empty _ _ = sh-other refl
   shape-other _ (dty _) _ _ = sh-other refl
   shape-other _ (ctor _ _) _ _ = sh-other refl
-  shape-other _ (mData _ _ _) _ _ = sh-other refl
+  shape-other _ (mData _ _ ars _) _ _ = sh-other refl
   shape-other _ (mNat _ _ _ _) _ _ = sh-other refl
   shape-other _ (mEmp _ _) _ _ = sh-other refl
   shape-other _ (mUnit _ _ _) _ _ = sh-other refl
@@ -2262,7 +2262,7 @@ AllUnf k σ B (app f a) = AllUnf k σ B f × AllUnf k σ B a
 AllUnf k σ B (su t) = AllUnf k σ B t
 AllUnf k σ B (lam _ A t) = AllUnf k σ B A × AllUnf k σ B t
 AllUnf k σ B (pi _ A C) = AllUnf k σ B A × AllUnf k σ B C
-AllUnf k σ B (mData e P bs) = AllUnf k σ B e × AllUnf k σ B P × AllUnfList k σ B bs
+AllUnf k σ B (mData e P ars bs) = AllUnf k σ B e × AllUnf k σ B P × AllUnfList k σ B bs
 AllUnf k σ B (mNat e P z s) =
   AllUnf k σ B e × AllUnf k σ B P × AllUnf k σ B z × AllUnf k σ B s
 AllUnf k σ B (mEmp e P) = AllUnf k σ B e × AllUnf k σ B P
@@ -2370,7 +2370,7 @@ mutual
   seedWalk-all k σ B Γ m (pi q A C) eq =
     let eA , eC = split>> eq
     in seedWalk-all k σ B Γ m A eA , seedWalk-all k σ B (ext Γ q A) m C eC
-  seedWalk-all k σ B Γ m (mData e P bs) eq =
+  seedWalk-all k σ B Γ m (mData e P ars bs) eq =
     let eep , ebs = split>> {r = seedWalk k σ B Γ m e >> seedWalk k σ B (mDataΓ k σ Γ m e) m P} eq
         ee , eP = split>> {r = seedWalk k σ B Γ m e} eep
     in seedWalk-all k σ B Γ m e ee
@@ -2738,7 +2738,7 @@ stepFact {n} B (lam q A u) eq = onLam u eq
   onLam empty ()
   onLam (dty _) ()
   onLam (ctor _ _) ()
-  onLam (mData _ _ _) ()
+  onLam (mData _ _ ars _) ()
   onLam (mNat _ _ _ _) ()
   onLam (mEmp _ _) ()
   onLam (mUnit _ _ _) ()
@@ -2775,7 +2775,7 @@ stepFact _ one ()
 stepFact _ empty ()
 stepFact _ (dty _) ()
 stepFact _ (ctor _ _) ()
-stepFact _ (mData _ _ _) ()
+stepFact _ (mData _ _ ars _) ()
 stepFact _ (mNat _ _ _ _) ()
 stepFact _ (mEmp _ _) ()
 stepFact _ (mUnit _ _ _) ()
@@ -2835,7 +2835,7 @@ shapeOf _ σ B one _ = shape-rest {σ} B one refl
 shapeOf _ σ B empty _ = shape-rest {σ} B empty refl
 shapeOf _ σ B (dty i) _ = shape-rest {σ} B (dty i) refl
 shapeOf _ σ B (ctor i j) _ = shape-rest {σ} B (ctor i j) refl
-shapeOf _ σ B (mData e P bs) _ = shape-rest {σ} B (mData e P bs) refl
+shapeOf _ σ B (mData e P ars bs) _ = shape-rest {σ} B (mData e P ars bs) refl
 shapeOf _ σ B (mNat e P z s) _ = shape-rest {σ} B (mNat e P z s) refl
 shapeOf _ σ B (mEmp e P) _ = shape-rest {σ} B (mEmp e P) refl
 shapeOf _ σ B (mUnit e P u) _ = shape-rest {σ} B (mUnit e P u) refl
@@ -2934,11 +2934,11 @@ mutual
       → Seen σ B d e
       → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst P a))
       → Seen σ B d (mEmp e P)
-    seen-mdata : ∀ {d e P bs}
+    seen-mdata : ∀ {d e P ars bs}
       → Seen σ B d e
       → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst P a))
       → SeenList σ B d bs
-      → Seen σ B d (mData e P bs)
+      → Seen σ B d (mData e P ars bs)
     seen-rwt : ∀ {d e P t}
       → Seen σ B d e
       → (∀ a → hasSelf B a ≡ false → Seen σ B d (inst P a))
@@ -3048,7 +3048,7 @@ see-other _ _ one _ _ _ _ = seen-stop refl
 see-other _ _ empty _ _ _ _ = seen-stop refl
 see-other _ _ (dty _) _ _ _ _ = seen-stop refl
 see-other _ _ (ctor _ _) _ _ _ _ = seen-stop refl
-see-other _ _ (mData _ _ _) _ _ _ _ = seen-stop refl
+see-other _ _ (mData _ _ ars _) _ _ _ _ = seen-stop refl
 see-other _ _ (mNat _ _ _ _) _ _ _ _ = seen-stop refl
 see-other _ _ (mEmp _ _) _ _ _ _ = seen-stop refl
 see-other _ _ (mUnit _ _ _) _ _ _ _ = seen-stop refl
@@ -3170,7 +3170,7 @@ see-term k σ B (lam q A t) bod (uA , ut) ρ hf d =
 see-term k σ B (pi q A C) bod (uA , uC) ρ hf d =
   seen-pi (see-term k σ B A bod uA ρ hf d)
     (open1 σ B k C bod uC ρ hf d)
-see-term k σ B (mData e P bs) bod (ue , uP , ubs) ρ hf d =
+see-term k σ B (mData e P ars bs) bod (ue , uP , ubs) ρ hf d =
   seen-mdata (see-term k σ B e bod ue ρ hf d)
     (open1 σ B k P bod uP ρ hf d)
     (see-list k σ B bs bod ubs ρ hf d)

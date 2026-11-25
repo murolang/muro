@@ -189,7 +189,7 @@ ne-untyped-⇒ (ne-mNat ne) (⇒-mNat D _ _ _ _ _) = ne-untyped-⇐ ne D
 ne-untyped-⇒ (ne-mUnit ne) (⇒-mUnit D _ _ _) = ne-untyped-⇐ ne D
 ne-untyped-⇒ (ne-mEmp ne) (⇒-mEmp D _) = ne-untyped-⇐ ne D
 ne-untyped-⇒ (ne-rwt ne) (⇒-rwt D _ _ _) = ne-untyped-⇒ ne D
-ne-untyped-⇒ (ne-mData ne) (⇒-mData D _ _ _ _ _ _ _) = ne-untyped-⇒ ne D
+ne-untyped-⇒ (ne-mData ne) (⇒-mData D _ _ _ _ _ _ _ _) = ne-untyped-⇒ ne D
 ne-untyped-⇒ (ne-letp ne) (⇒-letp D _ _ _ _ _ _) = ne-untyped-⇒ ne D
 ne-untyped-⇒ (ne-ucons ne) (⇒-ucons D _ _) = ne-untyped-⇒ ne D
 ne-untyped-⇒ (ne-foreign f-i64) ()
@@ -235,7 +235,7 @@ ok-nu-app {S = S} {G = G} {fam = fam} {f = f} {a = a} eq = go f a [] eq
   go empty _ _ ()
   go (dty _) _ _ ()
   go (ctor _ _) _ _ ()
-  go (mData _ _ _) _ _ ()
+  go (mData _ _ ars _) _ _ ()
   go (mNat _ _ _ _) _ _ ()
   go (mEmp _ _) _ _ ()
   go (mUnit _ _ _) _ _ ()
@@ -293,7 +293,7 @@ rigid-spine {σ = σ} {S = S} {G = G} {fam = fam} {s = s} hs diff eq c with ≈�
   side {empty} () _ _
   side {dty _} () _ _
   side {ctor _ _} () _ _
-  side {mData _ _ _} () _ _
+  side {mData _ _ ars _} () _ _
   side {mNat _ _ _ _} () _ _
   side {mEmp _ _} () _ _
   side {mUnit _ _ _} () _ _
@@ -613,7 +613,7 @@ progress-⇒ (⇒-mEmp De _) with progress-⇐ De
 progress-⇒ (⇒-mUnit De _ _ _) with progress-⇐ De
 ... | inj₁ nf = nf-unit-prog nf De
 ... | inj₂ (_ , s) = inj₂ (_ , mUnit-e s)
-progress-⇒ (⇒-mData _ _ lk _ _ _ _ _) = ⊥-elim (fail≢ok lk)
+progress-⇒ (⇒-mData _ _ lk _ _ _ _ _ _) = ⊥-elim (fail≢ok lk)
 progress-⇒ (⇒-def lk _) = ⊥-elim (fail≢ok lk)
 progress-⇒ (⇒-ann _ _) = inj₂ (_ , ann-e)
 progress-⇒ (⇒-pair _ _ _) = inj₁ nf-pair
@@ -645,7 +645,7 @@ ne-untyped⁰ (ne-mNat ne) (t-mNat De _ _ _) = ne-untyped⊨ ne De
 ne-untyped⁰ (ne-mUnit ne) (t-mUnit De _ _) = ne-untyped⊨ ne De
 ne-untyped⁰ (ne-mEmp ne) (t-mEmp De _) = ne-untyped⊨ ne De
 ne-untyped⁰ (ne-rwt ne) (t-rwt Deq _ _) = ne-untyped⊨ ne Deq
-ne-untyped⁰ (ne-mData ne) (t-mData De _ _ _ _ _) = ne-untyped⊨ ne De
+ne-untyped⁰ (ne-mData ne) (t-mData De _ _ _ _ _ _) = ne-untyped⊨ ne De
 ne-untyped⁰ (ne-letp ne) (t-letp De _) = ne-untyped⊨ ne De
 ne-untyped⁰ (ne-ucons ne) (t-ucons Ds _ _) = ne-untyped⊨ ne Ds
 ne-untyped⁰ (ne-foreign ()) (t-nu _)

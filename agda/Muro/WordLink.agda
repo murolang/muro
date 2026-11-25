@@ -373,6 +373,11 @@ nsame m n with m ≟ n
 ... | yes p = just p
 ... | no _  = nothing
 
+nsameL : (xs ys : List ℕ) → Maybe (xs ≡ ys)
+nsameL [] [] = just refl
+nsameL (x ∷ xs) (y ∷ ys) = cong₂ _∷_ <$>ᵐ nsame x y <*>ᵐ nsameL xs ys
+nsameL _ _ = nothing
+
 fsame : ∀ {n} (i j : Fin n) → Maybe (i ≡ j)
 fsame i j with i ≟F j
 ... | yes p = just p
@@ -441,8 +446,8 @@ mutual
   same empty empty = just refl
   same (dty i) (dty j) = cong dty <$>ᵐ nsame i j
   same (ctor d c) (ctor d′ c′) = cong₂ ctor <$>ᵐ nsame d d′ <*>ᵐ nsame c c′
-  same (mData e p bs) (mData e′ p′ bs′) =
-    cong₃ mData <$>ᵐ same e e′ <*>ᵐ same p p′ <*>ᵐ sameL bs bs′
+  same (mData e p ars bs) (mData e′ p′ ars′ bs′) =
+    cong₄ mData <$>ᵐ same e e′ <*>ᵐ same p p′ <*>ᵐ nsameL ars ars′ <*>ᵐ sameL bs bs′
   same (mNat e p z s) (mNat e′ p′ z′ s′) =
     cong₄ mNat <$>ᵐ same e e′ <*>ᵐ same p p′ <*>ᵐ same z z′ <*>ᵐ same s s′
   same (mEmp e p) (mEmp e′ p′) = cong₂ mEmp <$>ᵐ same e e′ <*>ᵐ same p p′

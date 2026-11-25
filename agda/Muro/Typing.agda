@@ -211,14 +211,15 @@ data _,_⊨⁰[_]_∶_ σ Γ where
     → CtorApp σ Γ m i j as A
     → σ , Γ ⊨⁰[ m ] e ∶ A
 
-  t-mData : ∀ {m e di ps is d P bs}
+  t-mData : ∀ {m e di ps is d P ars bs}
     → σ , Γ ⊨[ m ] e ∶ appsFrom (dty di) (ps ++ is)
     → lookupData σ di ≡ ok d
+    → ars ≡ ctorFieldArities d
     → length ps ≡ nparams d
     → length is ≡ nidxs d
     → Mot⊨ σ Γ di ps (DataDecl.idxs d) P
     → σ , Γ ⊨[ m ] bs brs⟨ di , ps , is , P , 0 ⟩ DataDecl.ctors d
-    → σ , Γ ⊨⁰[ m ] mData e P bs ∶ motApp P is e
+    → σ , Γ ⊨⁰[ m ] mData e P ars bs ∶ motApp P is e
 
   t-def : ∀ {m i d}
     → lookupDef σ i ≡ ok d
@@ -424,8 +425,8 @@ forget-⇒ (⇒-mEmp De W) = conv (t-mEmp (forget-⇐ De) (forget-wf W)) ≈-ref
 forget-⇒ (⇒-mUnit De W Du _) =
   conv (t-mUnit (forget-⇐ De) (forget-wf W) (forget-⇐ Du)) ≈-refl
 forget-⇒ (⇒-dty lk) = conv (t-dty lk) ≈-refl
-forget-⇒ (⇒-mData De c lk lps lis M Bs _) =
-  conv (t-mData (conv-≈ (forget-⇒ De) c) lk lps lis (forget-mot M) (forget-brs Bs)) ≈-refl
+forget-⇒ (⇒-mData De c lk ars≡ lps lis M Bs _) =
+  conv (t-mData (conv-≈ (forget-⇒ De) c) lk ars≡ lps lis (forget-mot M) (forget-brs Bs)) ≈-refl
 forget-⇒ (⇒-def lk al) = conv (t-def lk al) ≈-refl
 forget-⇒ (⇒-ann W D) = conv (t-ann (forget-wf W) (forget-⇐ D)) ≈-refl
 forget-⇒ (⇒-prod DA DB) = conv (t-prod (forget-⇐ DA) (forget-⇐ DB)) ≈-refl
@@ -513,8 +514,8 @@ fieldMode-mono reuse  h = h
 ⊨⁰-mode h (t-mUnit De W Du) = t-mUnit (⊨-mode h De) W (⊨-mode h Du)
 ⊨⁰-mode ≤ᵐ-spec (t-dty lk) = t-dty lk
 ⊨⁰-mode h (t-ctor sp c) = t-ctor sp (ca-mode h c)
-⊨⁰-mode h (t-mData De lk lps lis M Bs) =
-  t-mData (⊨-mode h De) lk lps lis M (brs-mode h Bs)
+⊨⁰-mode h (t-mData De lk ars≡ lps lis M Bs) =
+  t-mData (⊨-mode h De) lk ars≡ lps lis M (brs-mode h Bs)
 ⊨⁰-mode h (t-def {d = d} lk al) = t-def lk (allowedDef-mono (Def.dmode d) h al)
 ⊨⁰-mode h (t-ann W D) = t-ann W (⊨-mode h D)
 ⊨⁰-mode ≤ᵐ-spec (t-prod DA DB) = t-prod DA DB
@@ -585,7 +586,7 @@ applyFam-ren ρ one (i ∷ is) = applyFam-ren ρ (app one i) is
 applyFam-ren ρ empty (i ∷ is) = applyFam-ren ρ (app empty i) is
 applyFam-ren ρ (dty x) (i ∷ is) = applyFam-ren ρ (app (dty x) i) is
 applyFam-ren ρ (ctor x y) (i ∷ is) = applyFam-ren ρ (app (ctor x y) i) is
-applyFam-ren ρ (mData e P bs) (i ∷ is) = applyFam-ren ρ (app (mData e P bs) i) is
+applyFam-ren ρ (mData e P ars bs) (i ∷ is) = applyFam-ren ρ (app (mData e P ars bs) i) is
 applyFam-ren ρ (mNat e P z s) (i ∷ is) = applyFam-ren ρ (app (mNat e P z s) i) is
 applyFam-ren ρ (mEmp e P) (i ∷ is) = applyFam-ren ρ (app (mEmp e P) i) is
 applyFam-ren ρ (mUnit e P u) (i ∷ is) = applyFam-ren ρ (app (mUnit e P u) i) is
@@ -631,7 +632,7 @@ unfFam-ren ρ S one (_ ∷ _) ()
 unfFam-ren ρ S empty (_ ∷ _) ()
 unfFam-ren ρ S (dty _) (_ ∷ _) ()
 unfFam-ren ρ S (ctor _ _) (_ ∷ _) ()
-unfFam-ren ρ S (mData _ _ _) (_ ∷ _) ()
+unfFam-ren ρ S (mData _ _ ars _) (_ ∷ _) ()
 unfFam-ren ρ S (mNat _ _ _ _) (_ ∷ _) ()
 unfFam-ren ρ S (mEmp _ _) (_ ∷ _) ()
 unfFam-ren ρ S (mUnit _ _ _) (_ ∷ _) ()
@@ -679,7 +680,7 @@ unfStepOf-ren ρ S (app f a) eq = go f (a ∷ []) eq
   go empty _ ()
   go (dty _) _ ()
   go (ctor _ _) _ ()
-  go (mData _ _ _) _ ()
+  go (mData _ _ ars _) _ ()
   go (mNat _ _ _ _) _ ()
   go (mEmp _ _) _ ()
   go (mUnit _ _ _) _ ()
@@ -714,7 +715,7 @@ unfStepOf-ren ρ S one ()
 unfStepOf-ren ρ S empty ()
 unfStepOf-ren ρ S (dty _) ()
 unfStepOf-ren ρ S (ctor _ _) ()
-unfStepOf-ren ρ S (mData _ _ _) ()
+unfStepOf-ren ρ S (mData _ _ ars _) ()
 unfStepOf-ren ρ S (mNat _ _ _ _) ()
 unfStepOf-ren ρ S (mEmp _ _) ()
 unfStepOf-ren ρ S (mUnit _ _ _) ()
@@ -829,11 +830,11 @@ mot-ren : ∀ {σ n k} {ρ : Fin n → Fin k} {Γ Δ di ps ixs P}
 ⊨⁰-ren {ρ = ρ} r (t-dty {d = d} lk) rewrite dtyType-ren ρ (DataDecl.pqtys d) (DataDecl.idxs d) =
   t-dty lk
 ⊨⁰-ren {ρ = ρ} r (t-ctor sp c) = t-ctor (Spine-ren ρ sp) (ca-ren r c)
-⊨⁰-ren {ρ = ρ} r (t-mData {e = e} {di} {ps} {is} {P = P} De lk lps lis M Bs)
+⊨⁰-ren {ρ = ρ} r (t-mData {e = e} {di} {ps} {is} {P = P} De lk ars≡ lps lis M Bs)
   rewrite ren-motApp ρ P is e =
   t-mData (⊨-≡ (trans (ren-appsFrom ρ (dty di) (ps ++ is)) (cong (appsFrom (dty di)) (renList-++ ρ ps is)))
              (⊨-ren r De))
-    lk (trans (renList-length ρ ps) lps) (trans (renList-length ρ is) lis)
+    lk ars≡ (trans (renList-length ρ ps) lps) (trans (renList-length ρ is) lis)
     (mot-ren r M) (brs-ren r Bs)
 ⊨⁰-ren {ρ = ρ} r (t-def {d = d} lk al) rewrite closed-ren ρ (Def.dtype d) = t-def lk al
 ⊨⁰-ren r (t-ann W D) = t-ann (wf-ren r W) (⊨-ren r D)
@@ -923,7 +924,7 @@ applyFam-apps one (i ∷ is) = applyFam-apps (app one i) is
 applyFam-apps empty (i ∷ is) = applyFam-apps (app empty i) is
 applyFam-apps (dty x) (i ∷ is) = applyFam-apps (app (dty x) i) is
 applyFam-apps (ctor x y) (i ∷ is) = applyFam-apps (app (ctor x y) i) is
-applyFam-apps (mData e P bs) (i ∷ is) = applyFam-apps (app (mData e P bs) i) is
+applyFam-apps (mData e P ars bs) (i ∷ is) = applyFam-apps (app (mData e P ars bs) i) is
 applyFam-apps (mNat e P z s) (i ∷ is) = applyFam-apps (app (mNat e P z s) i) is
 applyFam-apps (mEmp e P) (i ∷ is) = applyFam-apps (app (mEmp e P) i) is
 applyFam-apps (mUnit e P u) (i ∷ is) = applyFam-apps (app (mUnit e P u) i) is
@@ -981,7 +982,7 @@ unfFam-sub τ S one (_ ∷ _) ()
 unfFam-sub τ S empty (_ ∷ _) ()
 unfFam-sub τ S (dty _) (_ ∷ _) ()
 unfFam-sub τ S (ctor _ _) (_ ∷ _) ()
-unfFam-sub τ S (mData _ _ _) (_ ∷ _) ()
+unfFam-sub τ S (mData _ _ ars _) (_ ∷ _) ()
 unfFam-sub τ S (mNat _ _ _ _) (_ ∷ _) ()
 unfFam-sub τ S (mEmp _ _) (_ ∷ _) ()
 unfFam-sub τ S (mUnit _ _ _) (_ ∷ _) ()
@@ -1032,7 +1033,7 @@ unfStepOf-sub {σ = σ} τ S (app f a) eq = go f (a ∷ []) eq
   go empty _ ()
   go (dty _) _ ()
   go (ctor _ _) _ ()
-  go (mData _ _ _) _ ()
+  go (mData _ _ ars _) _ ()
   go (mNat _ _ _ _) _ ()
   go (mEmp _ _) _ ()
   go (mUnit _ _ _) _ ()
@@ -1067,7 +1068,7 @@ unfStepOf-sub τ S one ()
 unfStepOf-sub τ S empty ()
 unfStepOf-sub τ S (dty _) ()
 unfStepOf-sub τ S (ctor _ _) ()
-unfStepOf-sub τ S (mData _ _ _) ()
+unfStepOf-sub τ S (mData _ _ ars _) ()
 unfStepOf-sub τ S (mNat _ _ _ _) ()
 unfStepOf-sub τ S (mEmp _ _) ()
 unfStepOf-sub τ S (mUnit _ _ _) ()
@@ -1211,10 +1212,10 @@ mot-sub : ∀ {σ n k m₀} {τ : Fin n → Tm k} {Γ Δ di ps ixs P}
 ⊨⁰-sub {τ = τ} lm s (t-dty {d = d} lk) =
   conv (t-dty lk) (≈-≡ (sym (dtyType-sub τ (DataDecl.pqtys d) (DataDecl.idxs d))))
 ⊨⁰-sub {τ = τ} lm s (t-ctor sp c) = conv (t-ctor (Spine-sub τ sp) (ca-sub lm s c)) ≈-refl
-⊨⁰-sub {τ = τ} lm s (t-mData {e = e} {di} {ps} {is} {P = P} De lk lps lis M Bs) =
+⊨⁰-sub {τ = τ} lm s (t-mData {e = e} {di} {ps} {is} {P = P} De lk ars≡ lps lis M Bs) =
   conv (t-mData (⊨-≡ (trans (sub-appsFrom τ (dty di) (ps ++ is)) (cong (appsFrom (dty di)) (subList-++ τ ps is)))
                    (⊨-sub lm s De))
-          lk (trans (subList-length τ ps) lps) (trans (subList-length τ is) lis)
+          lk ars≡ (trans (subList-length τ ps) lps) (trans (subList-length τ is) lis)
           (mot-sub s M) (brs-sub lm s Bs))
     (≈-≡ (sym (sub-motApp τ P is e)))
 ⊨⁰-sub {τ = τ} lm s (t-def {d = d} lk al) =
@@ -1360,7 +1361,7 @@ ctor-inv () (t-mNat _ _ _ _)
 ctor-inv () (t-mEmp _ _)
 ctor-inv () (t-mUnit _ _ _)
 ctor-inv () (t-dty _)
-ctor-inv () (t-mData _ _ _ _ _ _)
+ctor-inv () (t-mData _ _ _ _ _ _ _)
 ctor-inv () (t-def _ _)
 ctor-inv () (t-ann _ _)
 ctor-inv () (t-prod _ _)
@@ -1582,7 +1583,7 @@ nu-app-body {σ = σ} {T = T} {G = G} {fam = fam} eq c with ≈→join c
     go empty _ _ () _
     go (dty _) _ _ () _
     go (ctor _ _) _ _ () _
-    go (mData _ _ _) _ _ () _
+    go (mData _ _ ars _) _ _ () _
     go (mNat _ _ _ _) _ _ () _
     go (mEmp _ _) _ _ () _
     go (mUnit _ _ _) _ _ () _
@@ -1636,7 +1637,7 @@ stream-goal {σ = σ} {Eh = Eh} {T = T} {G = G} {fam = fam} cU cT st = go _ st (
   go empty () _
   go (dty _) () _
   go (ctor _ _) () _
-  go (mData _ _ _) () _
+  go (mData _ _ ars _) () _
   go (mNat _ _ _ _) () _
   go (mEmp _ _) () _
   go (mUnit _ _ _) () _
@@ -1751,7 +1752,7 @@ apps-apply one (i ∷ is) = apps-apply (app one i) is
 apps-apply empty (i ∷ is) = apps-apply (app empty i) is
 apps-apply (dty k) (i ∷ is) = apps-apply (app (dty k) i) is
 apps-apply (ctor di ci) (i ∷ is) = apps-apply (app (ctor di ci) i) is
-apps-apply (mData e P bs) (i ∷ is) = apps-apply (app (mData e P bs) i) is
+apps-apply (mData e P ars bs) (i ∷ is) = apps-apply (app (mData e P ars bs) i) is
 apps-apply (mNat e P z s) (i ∷ is) = apps-apply (app (mNat e P z s) i) is
 apps-apply (mEmp e P) (i ∷ is) = apps-apply (app (mEmp e P) i) is
 apps-apply (mUnit e P u) (i ∷ is) = apps-apply (app (mUnit e P u) i) is
@@ -1838,7 +1839,7 @@ fam-of {n = n} {S = S} {f = f} {a = a} {G = G} {fam = fam} eq = go f a [] refl e
   go (nu empty) _ _ _ ()
   go (nu (dty _)) _ _ _ ()
   go (nu (ctor _ _)) _ _ _ ()
-  go (nu (mData _ _ _)) _ _ _ ()
+  go (nu (mData _ _ ars _)) _ _ _ ()
   go (nu (mNat _ _ _ _)) _ _ _ ()
   go (nu (mEmp _ _)) _ _ _ ()
   go (nu (mUnit _ _ _)) _ _ _ ()
@@ -1874,7 +1875,7 @@ fam-of {n = n} {S = S} {f = f} {a = a} {G = G} {fam = fam} eq = go f a [] refl e
   go empty _ _ _ ()
   go (dty _) _ _ _ ()
   go (ctor _ _) _ _ _ ()
-  go (mData _ _ _) _ _ _ ()
+  go (mData _ _ ars _) _ _ _ ()
   go (mNat _ _ _ _) _ _ _ ()
   go (mEmp _ _) _ _ _ ()
   go (mUnit _ _ _) _ _ _ ()
@@ -1980,7 +1981,7 @@ fam-goal {T0 = app _ _} {T′ = one} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = empty} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = dty _} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = ctor _ _} _ _ _ ()
-fam-goal {T0 = app _ _} {T′ = mData _ _ _} _ _ _ ()
+fam-goal {T0 = app _ _} {T′ = mData _ _ ars _} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = mNat _ _ _ _} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = mEmp _ _} _ _ _ ()
 fam-goal {T0 = app _ _} {T′ = mUnit _ _ _} _ _ _ ()
@@ -2016,7 +2017,7 @@ fam-goal {T0 = one} ()
 fam-goal {T0 = empty} ()
 fam-goal {T0 = dty _} ()
 fam-goal {T0 = ctor _ _} ()
-fam-goal {T0 = mData _ _ _} ()
+fam-goal {T0 = mData _ _ ars _} ()
 fam-goal {T0 = mNat _ _ _ _} ()
 fam-goal {T0 = mEmp _ _} ()
 fam-goal {T0 = mUnit _ _ _} ()
@@ -2131,9 +2132,9 @@ pres⁰ wf (t-rwt Deq W Dt) (rwt-e s) =
   conv (t-rwt (pres wf Deq s) W Dt) ≈-refl
 -- data
 pres⁰ wf (t-ctor sp _) s = ⊥-elim (Spine-no-step dh-ctor sp s)
-pres⁰ wf (t-mData De lk lps lis M Bs) (ι-data sp lkb) = pres-ιdata sp lkb De lk lps Bs
-pres⁰ wf (t-mData {is = is} {P = P} De lk lps lis M Bs) (mData-e s) =
-  conv (t-mData (pres wf De s) lk lps lis M Bs) (≈-motApp P (≈L-refl is) (step-≈ s))
+pres⁰ wf (t-mData De lk ars≡ lps lis M Bs) (ι-data sp lkb) = pres-ιdata sp lkb De lk lps Bs
+pres⁰ wf (t-mData {is = is} {P = P} De lk ars≡ lps lis M Bs) (mData-e s) =
+  conv (t-mData (pres wf De s) lk ars≡ lps lis M Bs) (≈-motApp P (≈L-refl is) (step-≈ s))
 -- ann
 pres⁰ wf (t-ann W D) ann-e = D
 -- let (a, b) = (a₀, b₀) in t

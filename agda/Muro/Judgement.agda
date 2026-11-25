@@ -230,19 +230,22 @@ data _,_⊢[_]_⇒_⊣_ σ Γ where
   -- dty di applied to its parameters and indices (Check: viewData); the
   -- motive is over the indices and the scrutinee (MotiveOk); one branch
   -- per constructor in declaration order, typed by BrTy or skipped when
-  -- its indices clash. The type is the motive at the scrutinee's
-  -- indices and the scrutinee. Check returns the motive as a λ applied
-  -- to indices and scrutinee, which is β-convertible to motApp.
-  ⇒-mData : ∀ {m e E di ps is d P bs eu bu uses}
+  -- its indices clash. The arity list on the match equals each
+  -- constructor's field count (`ctorFieldArities`). The type is the
+  -- motive at the scrutinee's indices and the scrutinee. Check returns
+  -- the motive as a λ applied to indices and scrutinee, which is
+  -- β-convertible to motApp.
+  ⇒-mData : ∀ {m e E di ps is d P ars bs eu bu uses}
     → σ , Γ ⊢[ m ] e ⇒ E ⊣ eu
     → σ ⊢[ spec ] E ≈ appsFrom (dty di) (ps ++ is)
     → lookupData σ di ≡ ok d
+    → ars ≡ ctorFieldArities d
     → length ps ≡ nparams d
     → length is ≡ nidxs d
     → MotiveOk σ Γ di ps (DataDecl.idxs d) P
     → σ , Γ ⊢[ m ] bs brs⟨ di , ps , is , P , 0 ⟩ DataDecl.ctors d ⊣ bu
     → combine m eu bu ≡ ok uses
-    → σ , Γ ⊢[ m ] mData e P bs ⇒ motApp P is e ⊣ uses
+    → σ , Γ ⊢[ m ] mData e P ars bs ⇒ motApp P is e ⊣ uses
 
   ⇒-def : ∀ {m i d}
     → lookupDef σ i ≡ ok d
