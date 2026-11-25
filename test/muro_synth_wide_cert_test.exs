@@ -11,7 +11,7 @@ defmodule Muro.Synth.WideCertTest do
     refute Muro.Synth.Cert.wide_host?(host)
   end
 
-  test "a cyclic cover past 1500 cells checks one arm per state" do
+  test "a cyclic cover past 1500 cells shares one arm per winning action" do
     assert {:ok, host} = Muro.Synth.Host.open(@wide)
     assert Muro.Synth.Cert.wide_host?(host)
 
@@ -22,6 +22,7 @@ defmodule Muro.Synth.WideCertTest do
     assert result.certificate == "CoindHomo"
     assert result.book =~ "-- wide cover"
     assert result.book =~ "def cert-arm-action-"
+    assert [_one] = Regex.scan(~r/^def cert-arm-action-/m, result.book)
     assert result.book =~ "def cert-miss-action"
     assert result.book =~ "def cert-same-action"
     refute result.book =~ "def cert-leaf-"

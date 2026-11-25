@@ -1,5 +1,5 @@
 -- Four positions and twenty actions. 4 × 20 × 20 = 1600 cells, so the
--- certificate is the wide cover: one arm per state, shared miss and
+-- certificate is the wide cover: one arm per winning action, shared miss and
 -- same lemmas, and one-step solve equations. `go` walks toward `tok 0`.
 -- `a02` swaps `tok 1` with `tok 2`. Every other action stays. The sink
 -- pays 1. The state graph has a cycle, and the value still settles.

@@ -67,6 +67,9 @@ defmodule Muro.Synth.Book do
       Process.delete(:muro_synth_class_recur)
       Process.delete(:muro_synth_wide)
       Process.delete(:muro_synth_concrete)
+      Process.delete(:muro_synth_prefers)
+      Process.delete(:muro_synth_choice)
+      Process.delete(:muro_synth_rank_step)
     end
   end
 

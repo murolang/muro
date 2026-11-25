@@ -641,45 +641,13 @@ defmodule Muro.Synth.Cert do
     end)
   end
 
-  # One expression per cell, not one definition. `cert-miss` and
-  # `cert-same` are the empty ranking and the equal-action diagonal.
-  # A preferring pair still names its pointwise lemma.
-  defp wide_leaves(host, arms, states, actions, _rank, kind, below, taken) do
+  # The pointwise lemmas stay. The |A|×|A| split is one arm per winning
+  # action, so the cell map is not copied onto every state.
+  defp wide_leaves(_host, _arms, _states, _actions, _rank, kind, below, taken) do
     {miss, taken} = Muro.Synth.Book.reserve("cert-miss-#{kind}", taken)
     {same, taken} = Muro.Synth.Book.reserve("cert-same-#{kind}", taken)
-
-    cells =
-      for state <- states, left <- actions, right <- actions do
-        {state, left, right}
-      end
-
-    exprs =
-      Map.new(cells, fn {state, left, right} ->
-        winner = chosen(host, arms, state)
-
-        expr =
-          cond do
-            not unit?(winner, left, right) ->
-              "#{miss} #{atom_src(Term.spell(state))} #{Term.spell(left)} #{Term.spell(right)}"
-
-            left == right ->
-              "#{same} #{atom_src(Term.spell(state))} #{Term.spell(left)}"
-
-            not needs_below?(host, kind, state, left, right) ->
-              dom_refl(kind, host, state, left)
-
-            true ->
-              tabulate(kind, host, state, left, right, Map.fetch!(below, {state, left, right}))
-          end
-
-        {{state, left, right}, nest_cell(expr)}
-      end)
-
-    {["-- wide cover\n", wide_helpers(kind, miss, same)], taken, [], exprs}
-  end
-
-  defp nest_cell(expr) do
-    if String.contains?(expr, "\n"), do: "(\n#{expr})", else: expr
+    ctx = %{below: below, miss: miss, same: same, kind: kind}
+    {["-- wide cover\n", wide_helpers(kind, miss, same)], taken, [], ctx}
   end
 
   defp wide_helpers(kind, miss, same) do
@@ -822,12 +790,103 @@ defmodule Muro.Synth.Cert do
   end
 
   defp seal(host, bound, arms, actions, rank, states, proofs, taken) do
-    if cover_only?(host) do
-      seal_cover(host, bound, arms, actions, rank, states, proofs, taken)
-    else
-      {:ok, seal_closed(host, bound, arms, actions, rank, states, proofs, taken)}
+    {preface, taken} = wide_preface(host, bound, arms, actions, states, taken)
+
+    sealed =
+      if cover_only?(host) do
+        seal_cover(host, bound, arms, actions, rank, states, proofs, taken)
+      else
+        {:ok, seal_closed(host, bound, arms, actions, rank, states, proofs, taken)}
+      end
+
+    case sealed do
+      {:ok, tail} -> {:ok, [preface | tail]}
+      other -> other
     end
   end
+
+  # Named preferences, one chain of `eval`, and one `refl` per state that
+  # the deployed policy selects the winner. The arm reads the names.
+  defp wide_preface(host, bound, arms, actions, states, taken) do
+    if wide?(states, actions) do
+      {prefers, prefer_text, taken} = prefer_block(arms, actions, taken)
+      Process.put(:muro_synth_prefers, prefers)
+      Process.put(:muro_synth_choice, Map.new(states, &{&1, chosen(host, arms, &1)}))
+
+      {step_text, taken} =
+        if cover_only?(host) do
+          {name, taken} = Muro.Synth.Book.reserve("rank-step", taken)
+          Process.put(:muro_synth_rank_step, name)
+          {rank_step_def(name, bound, arms, prefers), taken}
+        else
+          Process.delete(:muro_synth_rank_step)
+          {"", taken}
+        end
+
+      {picks, taken} = policy_picks(bound, states, taken)
+      {[prefer_text, step_text, picks], taken}
+    else
+      Process.delete(:muro_synth_prefers)
+      Process.delete(:muro_synth_choice)
+      Process.delete(:muro_synth_rank_step)
+      {"", taken}
+    end
+  end
+
+  defp prefer_block(arms, actions, taken) do
+    named =
+      arms
+      |> Enum.flat_map(&[&1.action, &1.else])
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq_by(&action_key/1)
+
+    {rows, taken} =
+      Enum.map_reduce(named, taken, fn action, taken ->
+        {name, taken} = Muro.Synth.Book.reserve("prefer-#{Term.label(action)}", taken)
+
+        defn = """
+        def #{name} : spec Π (#{Names.current("a")} : Action) → Π (#{Names.current("b")} : Action) → Type :=
+          λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) →
+            #{prefer(actions, action)}
+        """
+
+        {{action_key(action), name, defn}, taken}
+      end)
+
+    {Map.new(rows, fn {key, name, _} -> {key, name} end), Enum.map(rows, &elem(&1, 2)), taken}
+  end
+
+  defp rank_step_def(name, bound, arms, prefers) do
+    s = Names.current("s")
+    a = Names.current("a")
+    b = Names.current("b")
+
+    """
+    def #{name} : spec Π (#{s} : State) → Π (#{a} : Action) → Π (#{b} : Action) → Type :=
+      λ (#{s} : State) → λ (#{a} : Action) → λ (#{b} : Action) →
+        #{rank_match_named(bound, arms, prefers)}
+    """
+  end
+
+  defp policy_picks(bound, states, taken) do
+    choice = Process.get(:muro_synth_choice)
+
+    Enum.map_reduce(states, taken, fn state, taken ->
+      winner = Map.fetch!(choice, state)
+      {name, taken} = Muro.Synth.Book.reserve("cert-picks-#{Term.label(state)}", taken)
+      spell = atom_src(Term.spell(state))
+      win = Term.spell(winner)
+
+      defn = """
+      def #{name} : evidence {#{bound.policy} #{spell} ≡ #{win} : Action} :=
+        refl
+      """
+
+      {defn, taken}
+    end)
+  end
+
+  defp action_key(action), do: Term.spell(action)
 
   defp seal_closed(host, bound, arms, actions, rank, states, proofs, taken) do
     texts = Enum.map(proofs, fn {_name, _target, _kind, _leaves, text} -> text end)
@@ -869,12 +928,23 @@ defmodule Muro.Synth.Cert do
   # On the cover, `rank` is `eval` of the survivor. Off it, `rank` is
   # Empty, so the universal homomorphism does not order that state.
   defp rank_cover(host, bound, arms, actions, rank, states) do
+    body_of =
+      if wide?(states, actions) do
+        step = Process.get(:muro_synth_rank_step)
+
+        fn spell ->
+          "#{step} #{atom_src(spell)} #{Names.current("a")} #{Names.current("b")}"
+        end
+      else
+        fn _spell -> rank_match(bound, arms, actions) end
+      end
+
     case Term.cover_match(
            host.schema,
            Names.current("s"),
            states,
            fn _src -> "Type" end,
-           fn _spell -> rank_match(bound, arms, actions) end,
+           body_of,
            fn _src -> "Empty" end
          ) do
       :open ->
@@ -1034,11 +1104,48 @@ defmodule Muro.Synth.Cert do
   end
 
   defp rank_text(bound, arms, actions, rank) do
+    body =
+      case Process.get(:muro_synth_prefers) do
+        %{} = prefers -> rank_match_named(bound, arms, prefers)
+        _ -> rank_match(bound, arms, actions)
+      end
+
     """
     def #{rank} : spec Π (#{Names.current("s")} : State) → Π (#{Names.current("a")} : Action) → Π (#{Names.current("b")} : Action) → Type :=
       λ (#{Names.current("s")} : State) → λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) →
-        #{rank_match(bound, arms, actions)}
+        #{body}
     """
+  end
+
+  defp rank_match_named(bound, [arm], prefers) do
+    decl = Map.fetch!(bound.decl, arm.name)
+    s = Names.current("s")
+
+    """
+    (match #{bound.names.eval} #{decl} #{s} motive (λ _ → Type)
+      | true =>
+          #{prefer_ref(prefers, arm.action)}
+      | false =>
+          #{prefer_ref(prefers, arm.else)})
+    """
+  end
+
+  defp rank_match_named(bound, [arm | rest], prefers) do
+    decl = Map.fetch!(bound.decl, arm.name)
+    s = Names.current("s")
+
+    """
+    (match #{bound.names.eval} #{decl} #{s} motive (λ _ → Type)
+      | true =>
+          #{prefer_ref(prefers, arm.action)}
+      | false =>
+          #{rank_match_named(bound, rest, prefers)})
+    """
+  end
+
+  defp prefer_ref(prefers, action) do
+    name = Map.fetch!(prefers, action_key(action))
+    "#{name} #{Names.current("a")} #{Names.current("b")}"
   end
 
   defp rank_match(bound, [arm], actions) do
@@ -1145,28 +1252,148 @@ defmodule Muro.Synth.Cert do
     {text, taken}
   end
 
-  defp wide_arm_bundle(states, actions, rank, kind, leaves, taken) do
+  # One `under` per state and one arm per winning action. The arm's
+  # ranking is the named preference, which `rank` reduces to.
+  defp wide_arm_bundle(states, actions, _rank, kind, ctx, taken) do
     fun = stream_fun(kind)
+    choice = Process.get(:muro_synth_choice)
+    prefers = Process.get(:muro_synth_prefers)
+    a = Names.current("a")
+    b = Names.current("b")
 
-    {rows, taken} =
+    {under_rows, taken} =
       Enum.map_reduce(states, taken, fn state, taken ->
-        {arm, taken} = Muro.Synth.Book.reserve("cert-arm-#{kind}-#{Term.label(state)}", taken)
-        spell = atom_src(Term.spell(state))
-        body = action_nest(state, actions, rank, kind, leaves)
-
-        defn = """
-        def #{arm} : evidence Π (#{Names.current("a")} : Action) → Π (#{Names.current("b")} : Action) → Π (#{Names.current("r")} : #{rank} #{spell} #{Names.current("a")} #{Names.current("b")}) → Dom Reward le (#{fun} #{spell} #{Names.current("a")}) (#{fun} #{spell} #{Names.current("b")}) :=
-          λ (#{Names.current("a")} : Action) → λ (#{Names.current("b")} : Action) →
-            #{body}
-        """
-
-        {{state, "#{arm} #{Names.current("a")} #{Names.current("b")}", defn}, taken}
+        winner = Map.fetch!(choice, state)
+        {uname, taken} = Muro.Synth.Book.reserve("cert-under-#{kind}-#{Term.label(state)}", taken)
+        {{state, uname, under_def(uname, state, actions, winner, kind, ctx)}, taken}
       end)
 
-    text = Enum.map(rows, &elem(&1, 2))
-    calls = Map.new(rows, fn {state, call, _defn} -> {state, call} end)
+    winners =
+      states
+      |> Enum.map(&Map.fetch!(choice, &1))
+      |> Enum.uniq_by(&action_key/1)
+
+    {arm_rows, taken} =
+      Enum.map_reduce(winners, taken, fn winner, taken ->
+        {aname, taken} = Muro.Synth.Book.reserve("cert-arm-#{kind}-#{Term.label(winner)}", taken)
+        prefer = Map.fetch!(prefers, action_key(winner))
+
+        {{action_key(winner), aname,
+          shared_arm_def(aname, actions, winner, kind, fun, prefer, ctx)}, taken}
+      end)
+
+    arm_by = Map.new(arm_rows, fn {key, name, _} -> {key, name} end)
+    under_by = Map.new(under_rows, fn {state, name, _} -> {state, name} end)
+
+    calls =
+      Map.new(states, fn state ->
+        winner = Map.fetch!(choice, state)
+        arm = Map.fetch!(arm_by, action_key(winner))
+        under = Map.fetch!(under_by, state)
+        {state, "#{arm} #{atom_src(Term.spell(state))} #{under} #{a} #{b}"}
+      end)
+
+    text = Enum.map(under_rows, &elem(&1, 2)) ++ Enum.map(arm_rows, &elem(&1, 2))
     {text, calls, taken}
   end
+
+  defp under_def(name, state, actions, winner, kind, ctx) do
+    a = Names.current("a")
+    n = Names.current("n")
+    y = Names.current("y")
+    spell = atom_src(Term.spell(state))
+    win = atom_src(Term.spell(winner))
+    motive = "le (#{pointwise(kind, spell, y, n)}) (#{pointwise(kind, spell, win, n)})"
+
+    branches =
+      Enum.map_join(actions, "\n", fn action ->
+        body =
+          if action_key(action) == action_key(winner) do
+            "le-refl (#{pointwise(kind, spell, win, n)})"
+          else
+            case Map.fetch(ctx.below, {state, action, winner}) do
+              {:ok, lemma} -> "#{lemma} #{n}"
+              :error -> "le-refl (#{pointwise(kind, spell, atom_src(Term.spell(action)), n)})"
+            end
+          end
+
+        "| #{Term.spell(action)} => #{body}"
+      end)
+
+    evidence_def(
+      name,
+      "Π (#{a} : Action) → Π (#{n} : Nat) → le (#{pointwise(kind, spell, a, n)}) (#{pointwise(kind, spell, win, n)})",
+      """
+      λ (#{a} : Action) → λ (#{n} : Nat) →
+        match #{a} motive (λ (#{y} : Action) → #{motive})
+      #{branches}
+      """
+    )
+  end
+
+  defp shared_arm_def(name, actions, winner, kind, fun, prefer, ctx) do
+    s = Names.current("s")
+    a = Names.current("a")
+    b = Names.current("b")
+    u = Names.current("u")
+    r = Names.current("r")
+    y = Names.current("y")
+    z = Names.current("z")
+    n = Names.current("n")
+    j = Names.current("j")
+    win = atom_src(Term.spell(winner))
+
+    under_ty =
+      "Π (#{j} : Action) → Π (#{n} : Nat) → le (#{pointwise(kind, s, j, n)}) (#{pointwise(kind, s, win, n)})"
+
+    arms =
+      Enum.map_join(actions, "\n", fn left ->
+        left_s = atom_src(Term.spell(left))
+
+        rights =
+          Enum.map_join(actions, "\n", fn right ->
+            right_s = atom_src(Term.spell(right))
+
+            "        | #{Term.spell(right)} => #{arm_cell(kind, fun, s, u, r, n, left_s, right_s, win, ctx)}"
+          end)
+
+        """
+        | #{Term.spell(left)} =>
+            (match #{b} motive (λ (#{z} : Action) → Π (#{r} : #{prefer} #{left_s} #{z}) → Dom Reward le (#{fun} #{s} #{left_s}) (#{fun} #{s} #{z}))
+        #{rights})
+        """
+      end)
+
+    evidence_def(
+      name,
+      "Π (+ #{s} : State) → Π (#{u} : #{under_ty}) → Π (+ #{a} : Action) → Π (#{b} : Action) → Π (#{r} : #{prefer} #{a} #{b}) → Dom Reward le (#{fun} #{s} #{a}) (#{fun} #{s} #{b})",
+      """
+      λ (+ #{s} : State) → λ (#{u} : #{under_ty}) → λ (+ #{a} : Action) → λ (#{b} : Action) →
+        (match #{a} motive (λ (#{y} : Action) → Π (#{r} : #{prefer} #{y} #{b}) → Dom Reward le (#{fun} #{s} #{y}) (#{fun} #{s} #{b}))
+      #{arms})
+      """
+    )
+  end
+
+  defp arm_cell(_kind, _fun, s, u, r, n, left, right, winner, ctx) do
+    cond do
+      left == right ->
+        "#{ctx.same} #{s} #{left}"
+
+      right == winner ->
+        "λ (#{r} : Unit) → tabulate-dom Reward le (λ (#{n} : Nat) → #{pointwise_kind(ctx.kind, s, left, n)}) (λ (#{n} : Nat) → #{pointwise_kind(ctx.kind, s, winner, n)}) (#{u} #{left}) 0"
+
+      true ->
+        "#{ctx.miss} #{s} #{left} #{right}"
+    end
+  end
+
+  defp pointwise(kind, state, action, n), do: pointwise_kind(kind, state, action, n)
+
+  defp pointwise_kind(:action, state, action, n), do: "action-at #{state} #{action} #{n}"
+
+  defp pointwise_kind(:successor, state, action, n),
+    do: "solve (fst (step #{state} #{action})) #{n}"
 
   defp preserves_closed(name, target, states, actions, rank, kind, leaves) do
     fun = stream_fun(kind)
