@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.22.33
+
+C, Rust, and Zig inline a large run when that removes a repeated fold, stream, or `uncons` from the caller's worst path, and leave it a call when the copy would not. A call that does not fold, stream, or uncons does not justify the copy, and the choice does not depend on the order the runs are listed. A match whose scrutinee is already a constructor, a word, or a comparison fixed by an enclosing arm keeps the arm that can run. Rebinding a name drops a comparison or a field that mentioned it. A match on a known pair reads the field the arm names.
+
+A wrapper such as `framedEnd s` still shares its `scan s` with the caller. `cost: false` is the previous inlining. `spec: false` keeps every arm. Every run is still emitted. The checked term is unchanged.
+
+On the HTTP step book, C object text at `-O2` is 149 KB when the header end is carried in the step, and 134 KB on the previous step. The previous inlining was 205 KB and 174 KB.
+
+### Manual
+
+- Emit: a large run is inlined when that removes a repeated fold from the caller's worst path. A known scrutinee drops the arms that cannot run. Rebinding a name drops a comparison or a field that mentioned it. A match on a known pair reads the field the arm names.
+
+### Package
+
+- Version 0.22.33.
+
 ## 0.22.32
 
 Agda `Check.checkBranches` asks a clash arm to bind its constructor's fields, as Elixir `branch_arity` does (follow-up to #291).

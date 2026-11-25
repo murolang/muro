@@ -34,13 +34,48 @@ defmodule Muro.IR.Share do
   the image and not once. Runs draw on it smallest growth first, then by name, so
   which runs inline does not depend on the order of the list; a run
   whose inlining would pass what is left is shared as elaborated. A run
-  that fits keeps its inlined body only when a hoist took place in it
-  and its worst path does no more heavy work (folds, streams, and
-  `uncons`, followed through calls) than its elaborated body
-  shared without inlining;
-  otherwise it keeps that one and draws nothing. Inlined bodies do not depend on that order
+  that fits keeps its inlined body only when a hoist took place in it,
+  or the body shrank, and its worst path does no more heavy work
+  (folds, streams, and `uncons`, followed through calls) than its
+  elaborated body shared without inlining; otherwise it keeps that one
+  and draws nothing. Inlined bodies do not depend on that order
   either. A generated fold or stream step is never inlined into and
   draws nothing on the budget; it is still shared.
+
+  Size decides a copy that does not change the work. The size is the
+  body after the calls inside it that this pass would inline, so a thin
+  wrapper of a large run counts as that run. A body of at most
+  `dup_max` nodes is inlined when its expansion holds a repeated call
+  in the caller's names, or known arguments shrink it below the call.
+  A body bigger than `dup_max` nodes, exported or not, stays a call
+  when copying it does not lower the caller's worst-path heavy work,
+  and is inlined at every such site when the copy does. That work is
+  each fold, stream, and `uncons` on the body this pass emits, with
+  no floor: a walk of zero stays zero. An erased let makes a run
+  heavy for the small-inline set, and it adds nothing to this count,
+  so it cannot justify the copy. A repeated call that does not fold,
+  stream, or uncons does not by itself justify it either. Runs that
+  call one another are one component. Each is charged the folds of
+  the whole component, the same number whichever of them is asked
+  first, so the choice does not depend on the order the runs are
+  listed. Copying one of them is not a saving while the copy still
+  calls another. A run that only shares a fold with itself is not
+  copied into its callers: the callee already hoists that fold, and
+  the call costs the same as the copy. The folds are the work this
+  measure can see; call overhead and the size of the body in the
+  instruction cache are not. The copy is
+  still bounded by `inline_max` and by `grow_max`. A comparison that
+  only returns a constructor, at most `inline_small` nodes, is inlined
+  at a match scrutinee when that match commutes onto the comparison.
+
+  Known values. A match whose scrutinee is already a constructor, a
+  word, or a comparison fixed by an enclosing arm keeps the arm that
+  can run. The fact holds in that arm, through a binding that does not
+  reuse the name or a name the fact mentions, and not in a sibling
+  arm. A match on a known pair substitutes every field at once, so a
+  permuted arm reads the field it names. An arm that aborts stays
+  until the scrutinee rules it out. `cost: false` is the previous
+  inlining. `spec: false` keeps every arm.
 
   The emitted program computes the same value as the checked term. A
   word operation, a constructor, and a byte literal are not shared:
@@ -49,19 +84,36 @@ defmodule Muro.IR.Share do
   """
 
   @inline_max 1500
+  @inline_small 48
+  @dup_max 160
 
   @doc """
   The options of `funs/2` in `opts`, for an emitter to pass through.
   """
   def opts(opts) when is_list(opts),
-    do: Keyword.take(opts, [:share, :inline, :inline_max, :grow_max])
+    do:
+      Keyword.take(opts, [
+        :share,
+        :inline,
+        :inline_max,
+        :grow_max,
+        :cost,
+        :spec,
+        :dup_max,
+        :inline_small
+      ])
 
   @doc """
   Rewrite `funs` (the list `Muro.IR.elaborate/1` returns). Order,
   names, parameters, and layouts are kept. `opts` may set `inline: false`
   (hoisting only), `share: false` (return `funs` unchanged),
-  `inline_max:` (nodes per inlined callee), or `grow_max:` (nodes the
-  whole image may grow by inlining, smallest growth first).
+  `inline_max:` (nodes per inlined callee), `grow_max:` (nodes the
+  whole image may grow by inlining, smallest growth first),
+  `cost: false` (the previous inlining), `spec: false` (keep every
+  match arm), `dup_max:` (nodes of the inlined body; a larger run stays
+  a call unless inlining it lowers the caller's worst-path heavy work),
+  or `inline_small:` (nodes; a comparison of that size may be inlined
+  at a match scrutinee).
   """
   def funs(funs, opts \\ []) when is_list(funs) do
     if Keyword.get(opts, :share, true) do
@@ -69,6 +121,7 @@ defmodule Muro.IR.Share do
       # A generated fold or stream step is never called by name, and its
       # name (`stepN`) may also be a source run's name.
       by_name = for f <- funs, not Map.get(f, :generated, false), into: %{}, do: {f.name, f}
+      {scc_of, scc_members} = components(by_name)
       counter = :counters.new(1, [])
       hoists = :counters.new(1, [])
       taken = taken_names(funs)
@@ -94,7 +147,21 @@ defmodule Muro.IR.Share do
         counter: counter,
         taken: taken,
         memo: :ets.new(:share, [:set, :private]),
-        work: :ets.new(:share_work, [:set, :private])
+        work: :ets.new(:share_work, [:set, :private]),
+        chosen: :ets.new(:share_chosen, [:set, :private]),
+        costs: :ets.new(:share_cost, [:set, :private]),
+        scc_lock: :ets.new(:share_scc, [:set, :private]),
+        scc_of: scc_of,
+        scc_members: scc_members,
+        did_save: :ets.new(:share_save, [:bag, :private]),
+        gens: :counters.new(1, []),
+        save_gen: 0,
+        save: false,
+        save_block: MapSet.new(),
+        cost: Keyword.get(opts, :cost, true),
+        spec: Keyword.get(opts, :spec, true),
+        dup_max: Keyword.get(opts, :dup_max, @dup_max),
+        small: Keyword.get(opts, :inline_small, @inline_small)
       }
 
       try do
@@ -104,6 +171,10 @@ defmodule Muro.IR.Share do
         :ets.delete(ctx.memo)
         :ets.delete(ctx.fresh)
         :ets.delete(ctx.work)
+        :ets.delete(ctx.chosen)
+        :ets.delete(ctx.costs)
+        :ets.delete(ctx.scc_lock)
+        :ets.delete(ctx.did_save)
       end
     else
       funs
@@ -113,9 +184,13 @@ defmodule Muro.IR.Share do
   @doc """
   Worst-path heavy work of `t` under the non-generated runs in `funs`.
 
-  This is the same measure the keep rule uses (`work/2`): each fold,
+  This is the measure the keep rule uses (`work/2`): each fold,
   stream, and `uncons`, followed through calls, with the `:busy -> 1`
-  cycle break and the `max(body, 1)` floor on a heavy run.
+  cycle break and the `max(body, 1)` floor on a heavy run. Both sides
+  of that comparison use the floor, including a heavy run whose walk
+  has no fold, so the number stays the one the keep rule locks. A
+  large copy does not use it. That count has no floor, an erased let
+  adds nothing, and a mutual component is charged once.
   """
   def path_work(funs, t) when is_list(funs) do
     by_name = for f <- funs, not Map.get(f, :generated, false), into: %{}, do: {f.name, f}
@@ -202,30 +277,37 @@ defmodule Muro.IR.Share do
 
   # ---------------------------------------------------------------- driver
 
-  # A run with nothing to share keeps its elaborated body, so inlining
-  # alone never changes what is emitted. A call is inlined only when its
-  # expansion holds a call, in this run's own names, that the fully
-  # inlined run evaluates more than once. A per-octet step whose callee
-  # only shares inside itself keeps calling it.
-  # Every run is inlined first, then shared. A run whose inlining adds
-  # nodes draws that growth, counted before any hoist, on the budget.
-  # Runs draw in order of that growth, smallest first, then by name, so
-  # who gets the budget does not depend on the order of `funs`; a run
-  # whose growth does not fit what is left is shared as elaborated, and
-  # its inlined body is never shared. A run that fits is shared both
-  # ways, inlined and as elaborated, and keeps the inlined body only
-  # when a hoist took place in it and its worst path does no more heavy
-  # work (`work/2`) than the
-  # elaborated one does once shared; otherwise it keeps that one and
-  # draws nothing.
+  # A run with nothing to share and nothing to prune keeps its
+  # elaborated body. A call is inlined only when its expansion holds a
+  # call, in this run's own names, that the fully inlined run evaluates
+  # more than once, or a known argument makes the body smaller than the
+  # call, or the call is the scrutinee of a match and the body is a
+  # small comparison. A per-octet step is never inlined into and is not
+  # specialised: `stop/2` reads its shape.
+  # Growth is the inlined body minus the elaborated body, after
+  # specialisation and before any hoist. Runs draw smallest growth
+  # first, then by name. A run that fits keeps the candidate when a
+  # hoist took place, or the body shrank, and its worst path does no
+  # more heavy work than the elaborated body shared without inlining.
+  # A body larger than `dup_max` is a candidate only when the copy
+  # lowers that work against the callee after this same pass.
   defp optimize_all(funs, ctx, inline?) do
     plans =
       for {fun, i} <- Enum.with_index(funs), known?(fun.body) do
         # A generated fold or stream step is never inlined into: it runs
         # once per octet or element, so it keeps calling its run, and it
-        # draws nothing on the budget. It is still shared.
-        inline_here? = inline? and not Map.get(fun, :generated, false)
-        body = if inline_here?, do: inline_run(fun, ctx), else: fun.body
+        # draws nothing on the budget. It is still shared. It is not
+        # specialised, so the early-exit test keeps its shape.
+        gen = Map.get(fun, :generated, false)
+        inline_here? = inline? and not gen
+
+        body =
+          cond do
+            inline_here? -> inline_run(fun, ctx)
+            ctx.spec and not gen -> spec_only(fun, ctx)
+            true -> fun.body
+          end
+
         {i, fun, body, size(body) - size(fun.body)}
       end
 
@@ -234,25 +316,7 @@ defmodule Muro.IR.Share do
       {body != fun.body, grow, fun.name, Map.get(fun, :generated, false), i}
     end)
     |> Enum.reduce(%{}, fn {i, fun, body, grow}, acc ->
-      res =
-        if body != fun.body and grow <= :counters.get(ctx.budget, 1) do
-          plain = shared(fun.body, ctx)
-
-          # The inlined body is kept only when some hoist took place in
-          # it and its worst-path heavy work (folds, streams, uncons) is
-          # no more than the elaborated body's, shared as `inline: false`
-          # shares it. Otherwise that body is kept and nothing is drawn.
-          # This compares worst paths, not each individual path.
-          with {:ok, out} <- shared(body, ctx),
-               true <- work(out, ctx) <= work(shared_body(plain, fun), ctx) do
-            :counters.sub(ctx.budget, 1, max(grow, 0))
-            {:ok, out}
-          else
-            _ -> plain
-          end
-        else
-          shared(fun.body, ctx)
-        end
+      res = judge(fun, body, grow, ctx)
 
       case res do
         {:ok, out} -> Map.put(acc, i, %{fun | body: out})
@@ -261,8 +325,67 @@ defmodule Muro.IR.Share do
     end)
   end
 
-  defp shared_body({:ok, out}, _fun), do: out
-  defp shared_body(:skip, fun), do: fun.body
+  # `body == fun.body` is the elaborated term: share it and draw
+  # nothing. A candidate that grows past the budget is dropped; a
+  # specialisation of the elaborated body can still replace it, and
+  # that draws nothing. Otherwise keep the candidate when its worst
+  # path is no heavier and either a hoist took place or the term got
+  # strictly smaller or lighter.
+  defp judge(fun, body, grow, ctx) do
+    cond do
+      body == fun.body ->
+        shared(fun.body, ctx)
+
+      grow > :counters.get(ctx.budget, 1) ->
+        fallback(fun, ctx)
+
+      true ->
+        plain = shared(fun.body, ctx)
+        cand = shared(body, ctx)
+        pb = shared_body(plain, fun.body)
+        cb = shared_body(cand, body)
+        wp = work(pb, ctx)
+        wc = work(cb, ctx)
+        hoist? = match?({:ok, _}, cand)
+        better? = wc < wp or size(cb) < size(pb)
+
+        if wc <= wp and (hoist? or better?) do
+          :counters.sub(ctx.budget, 1, max(grow, 0))
+          if hoist?, do: cand, else: {:ok, cb}
+        else
+          plain
+        end
+    end
+  end
+
+  # Inlining did not fit. A specialisation that shrinks the elaborated
+  # body still replaces it, and draws nothing on the budget.
+  defp fallback(fun, ctx) do
+    spec =
+      if ctx.spec and not Map.get(fun, :generated, false),
+        do: spec_only(fun, ctx),
+        else: fun.body
+
+    if spec == fun.body or size(spec) >= size(fun.body) do
+      shared(fun.body, ctx)
+    else
+      plain = shared(fun.body, ctx)
+      cand = shared(spec, ctx)
+      pb = shared_body(plain, fun.body)
+      cb = shared_body(cand, spec)
+
+      if work(cb, ctx) <= work(pb, ctx) do
+        if match?({:ok, _}, cand), do: cand, else: {:ok, cb}
+      else
+        plain
+      end
+    end
+  end
+
+  # `:skip` means the hoist left the term as it was given. The caller
+  # passes that term, so a specialisation that shares nothing is kept.
+  defp shared_body({:ok, out}, _input), do: out
+  defp shared_body(:skip, input), do: input
 
   # Heavy work on the worst path through `t`: each fold, stream, or
   # `uncons` it evaluates, and each call of a run, counted through that
@@ -295,11 +418,13 @@ defmodule Muro.IR.Share do
     own + Enum.reduce(children(t), 0, &(&2 + work(&1, ctx)))
   end
 
-  # A run that reaches itself counts one unit there to break the cycle.
+  # The keep rule's cycle break and floor. Both sides of that comparison
+  # use this table. A heavy run whose walk has no fold is one, so
+  # `path_work/2` stays the number the keep rule locks. A large copy
+  # does not read this table: `chosen_cost/2` is zero when the only
+  # weight would have been this floor or an erased let.
   # This undercounts mutually recursive SCCs: it is a finite heuristic,
-  # not a bound on recursive runtime. Both sides of the keep comparison
-  # use the same memoized callee costs, so cycle breaking does not change
-  # that comparison's meaning (worst-path work under this measure).
+  # not a bound on recursive runtime.
   defp run_work(name, body, ctx) do
     case :ets.lookup(ctx.work, name) do
       [{_, :busy}] ->
@@ -316,6 +441,139 @@ defmodule Muro.IR.Share do
     end
   end
 
+  # `work/2` charged at the body this pass emits for the callee, without
+  # the keep rule's floor. A body that does not fold, stream, or uncons
+  # costs nothing here, erased let included.
+  defp work_at({:call, name, args}, ctx) do
+    own =
+      case Map.get(ctx.by_name, name) do
+        %{} -> if MapSet.member?(ctx.heavy, name), do: chosen_cost(name, ctx), else: 0
+        nil -> 0
+      end
+
+    own + Enum.reduce(args, 0, &(&2 + work_at(&1, ctx)))
+  end
+
+  defp work_at({:match, s, arms}, ctx) do
+    worst =
+      arms |> Enum.map(fn {:arm, _, _, tm} -> work_at(tm, ctx) end) |> Enum.max(fn -> 0 end)
+
+    work_at(s, ctx) + worst
+  end
+
+  defp work_at(t, ctx) do
+    own =
+      case t do
+        {:bfold, _, _, _, _} -> 1
+        {:stream, _, _, _} -> 1
+        {:uncons, _} -> 1
+        _ -> 0
+      end
+
+    own + Enum.reduce(children(t), 0, &(&2 + work_at(&1, ctx)))
+  end
+
+  # Folds, streams, and `uncons` on the body this pass emits. No floor:
+  # a walk of zero stays zero, so an erased let cannot buy a large copy.
+  # A self-call while that body is being measured is zero, which cuts
+  # the cycle without charging a fold that is not there. Runs that call
+  # one another are measured once, with those calls at zero, and every
+  # member stores that same total.
+  defp chosen_cost(name, ctx) do
+    case :ets.lookup(ctx.costs, name) do
+      [{_, n}] when is_integer(n) ->
+        n
+
+      [{_, :busy}] ->
+        0
+
+      [{_, :open}] ->
+        0
+
+      [] ->
+        members = component_members(name, ctx)
+
+        if length(members) > 1 do
+          resolve_component(members, ctx)
+
+          case :ets.lookup(ctx.costs, name) do
+            [{_, n}] when is_integer(n) -> n
+            _ -> 0
+          end
+        else
+          case :ets.lookup(ctx.chosen, name) do
+            [{_, :busy}] -> 0
+            _ -> trivial_cost(name, ctx)
+          end
+        end
+    end
+  end
+
+  defp trivial_cost(name, ctx) do
+    :ets.insert(ctx.costs, {name, :busy})
+
+    n =
+      case Map.get(ctx.by_name, name) do
+        %{body: b} = fun ->
+          shared = share(inline_run(fun, ctx), ctx)
+          if known?(b), do: work_at(shared, ctx), else: 0
+
+        nil ->
+          0
+      end
+
+    :ets.insert(ctx.costs, {name, n})
+    n
+  end
+
+  defp component_members(name, ctx) do
+    case Map.get(ctx.scc_of, name) do
+      nil -> []
+      id -> Map.fetch!(ctx.scc_members, id)
+    end
+  end
+
+  # Ask every member, in name order, before any of them is on the
+  # `chosen` stack. Cross-calls stay `:open` and cost nothing, so the
+  # total is the folds of the component and does not follow visit order.
+  defp resolve_component(members, ctx) do
+    id = Map.fetch!(ctx.scc_of, hd(members))
+
+    if :ets.insert_new(ctx.scc_lock, {id}) do
+      try do
+        Enum.each(members, &:ets.insert(ctx.costs, {&1, :open}))
+        Enum.each(members, &inline_run(Map.fetch!(ctx.by_name, &1), ctx))
+
+        sum =
+          Enum.reduce(members, 0, fn name, acc ->
+            fun = Map.fetch!(ctx.by_name, name)
+            acc + work_at(share(inline_run(fun, ctx), ctx), ctx)
+          end)
+
+        Enum.each(members, &:ets.insert(ctx.costs, {&1, sum}))
+      after
+        :ets.delete(ctx.scc_lock, id)
+      end
+    end
+  end
+
+  defp ensure_component(%{name: name}, ctx) do
+    members = component_members(name, ctx)
+
+    if length(members) > 1 and not component_resolved?(members, ctx) do
+      resolve_component(members, ctx)
+    end
+  end
+
+  defp component_resolved?(members, ctx) do
+    Enum.all?(members, fn name ->
+      case :ets.lookup(ctx.costs, name) do
+        [{_, n}] when is_integer(n) -> true
+        _ -> false
+      end
+    end)
+  end
+
   defp shared(body, ctx) do
     before = :counters.get(ctx.hoists, 1)
     out = share(body, ctx)
@@ -323,15 +581,182 @@ defmodule Muro.IR.Share do
   end
 
   defp inline_run(fun, ctx) do
+    case :ets.lookup(ctx.chosen, fun.name) do
+      [{_, :busy}] ->
+        fun.body
+
+      [{_, body}] ->
+        body
+
+      [] ->
+        # Before `:busy`, so a mutual component is not measured from
+        # inside one member's walk. That walk would price the others
+        # at the cycle cut and the total would follow the list order.
+        ensure_component(fun, ctx)
+
+        case :ets.lookup(ctx.chosen, fun.name) do
+          [{_, :busy}] ->
+            fun.body
+
+          [{_, body}] ->
+            body
+
+          [] ->
+            :ets.insert(ctx.chosen, {fun.name, :busy})
+            body = inline_run1(fun, ctx)
+            :ets.insert(ctx.chosen, {fun.name, body})
+            body
+        end
+    end
+  end
+
+  defp inline_run1(fun, ctx) do
     scope = stable_names(fun)
     lays = Map.new(fun.params)
     full = propagate(inlined_body(fun, ctx, MapSet.new()), lays, ctx)
     wanted = repeated_keys(full, scope, ctx)
+    want = %{scope: scope, wanted: wanted, sites: site_counts(fun.body)}
 
-    if MapSet.size(wanted) == 0,
-      do: fun.body,
-      else:
-        selective(fun.body, lays, %{scope: scope, wanted: wanted}, ctx, MapSet.new([fun.name]))
+    if ctx.cost do
+      choose_inline(fun, lays, want, ctx)
+    else
+      body =
+        if MapSet.size(wanted) == 0,
+          do: fun.body,
+          else: selective(fun.body, lays, want, ctx, MapSet.new([fun.name]))
+
+      if ctx.spec, do: spec_only_tm(body, lays, ctx), else: body
+    end
+  end
+
+  # A callee above `dup_max` is copied only when that copy lowers the
+  # worst-path count of folds, streams, and `uncons`. The call is
+  # charged after the callee's own pass, with no floor, so a fold the
+  # callee already hoists is not a saving and neither is an erased let.
+  # Small callees take one pass.
+  defp choose_inline(fun, lays, want, ctx) do
+    if may_save?(fun.body, ctx, MapSet.new([fun.name])) do
+      choose_save(fun, lays, want, ctx)
+    else
+      {body, _} = run_pass(fun, lays, want, %{ctx | save: false, save_block: MapSet.new()})
+      body
+    end
+  end
+
+  defp choose_save(fun, lays, want, ctx) do
+    off = %{ctx | save: false, save_block: MapSet.new()}
+    {capped, _} = run_pass(fun, lays, want, off)
+    cw = emitted(capped, ctx)
+    {saved, gen} = run_pass(fun, lays, want, %{ctx | save: true, save_block: MapSet.new()})
+    names = save_names(ctx, gen)
+    sw = if names == [], do: cw, else: emitted(saved, ctx)
+
+    if names != [] and sw < cw do
+      tighten(fun, lays, want, ctx, names, saved, sw, cw, capped)
+    else
+      capped
+    end
+  end
+
+  # Drop a large copy that the joint inline does not need. Refusing it
+  # must not raise the worst path, and on a tie it must not grow the
+  # body. Names are sorted so the choice does not follow book order.
+  # The capped pass has already filled the cost table, so a trial does
+  # not choose a callee's body again.
+  defp tighten(fun, lays, want, ctx, names, saved, sw, cw, capped) do
+    {block, _bw, _} =
+      Enum.reduce(Enum.sort(names), {MapSet.new(), sw, size(saved)}, fn name, {block, bw, bs} ->
+        trial_block = MapSet.put(block, name)
+
+        {trial, _} =
+          run_pass(fun, lays, want, %{ctx | save: true, save_block: trial_block})
+
+        tw = emitted(trial, ctx)
+        ts = size(trial)
+
+        if tw < bw or (tw == bw and ts <= bs) do
+          {trial_block, tw, ts}
+        else
+          {block, bw, bs}
+        end
+      end)
+
+    cond do
+      MapSet.size(block) == 0 ->
+        saved
+
+      true ->
+        {body, _} = run_pass(fun, lays, want, %{ctx | save: true, save_block: block})
+        if emitted(body, ctx) < cw, do: body, else: capped
+    end
+  end
+
+  defp run_pass(fun, lays, want, ctx) do
+    gen = next_gen(ctx)
+
+    body =
+      pass(
+        fun.body,
+        lays,
+        %{},
+        want,
+        %{ctx | save_gen: gen},
+        MapSet.new([fun.name]),
+        true
+      )
+
+    {body, gen}
+  end
+
+  defp next_gen(ctx) do
+    :counters.add(ctx.gens, 1, 1)
+    :counters.get(ctx.gens, 1)
+  end
+
+  defp save_names(ctx, gen) do
+    ctx.did_save
+    |> :ets.lookup(gen)
+    |> Enum.map(fn {_gen, name} -> name end)
+    |> Enum.uniq()
+  end
+
+  defp may_save?(t, ctx, seen) do
+    case t do
+      {:call, name, args} ->
+        large_callee?(name, ctx, seen) or Enum.any?(args, &may_save?(&1, ctx, seen))
+
+      other ->
+        Enum.any?(children(other), &may_save?(&1, ctx, seen))
+    end
+  end
+
+  defp large_callee?(name, ctx, seen) do
+    case Map.get(ctx.by_name, name) do
+      %{} = callee ->
+        not MapSet.member?(seen, name) and expanded_size(callee, ctx, seen) > ctx.dup_max
+
+      _ ->
+        false
+    end
+  end
+
+  # Worst-path heavy work of the term this pass will emit. A call costs
+  # the callee's body after the callee's own inlines and hoist, not the
+  # elaborated body: that one still holds the folds the callee shares
+  # with itself.
+  defp emitted(t, ctx) do
+    t
+    |> share(ctx)
+    |> work_at(ctx)
+  end
+
+  defp spec_only(fun, ctx) do
+    spec_only_tm(fun.body, Map.new(fun.params), ctx)
+  end
+
+  defp spec_only_tm(body, lays, ctx) do
+    want = %{scope: MapSet.new(), wanted: MapSet.new(), sites: %{}}
+    pass(body, lays, %{}, want, ctx, MapSet.new(), false)
   end
 
   # The caller's names whose meaning is one binding: a parameter no
@@ -548,6 +973,99 @@ defmodule Muro.IR.Share do
 
   defp called(t), do: Enum.reduce(children(t), MapSet.new(), &MapSet.union(&2, called(&1)))
 
+  # Strongly connected components of the call graph, Kosaraju. A
+  # self-call is a component of one. Members are sorted, so a later
+  # walk of the component does not follow the list the book used.
+  # The finish list is built by an explicit stack: a protocol book
+  # can chain more calls than the process stack would hold.
+  defp components(by_name) do
+    names = MapSet.new(Map.keys(by_name))
+
+    graph =
+      Map.new(by_name, fn {n, f} ->
+        callees = if known?(f.body), do: called(f.body), else: MapSet.new()
+        {n, MapSet.intersection(callees, names)}
+      end)
+
+    graph
+    |> Map.keys()
+    |> Enum.sort()
+    |> finish_order(graph)
+    |> assign_components(transpose(graph))
+  end
+
+  defp finish_order(nodes, graph) do
+    nodes
+    |> Enum.map(&{:enter, &1})
+    |> dfs_finish(graph, [], MapSet.new())
+  end
+
+  defp dfs_finish([], _graph, order, _seen), do: order
+
+  defp dfs_finish([{:exit, n} | rest], graph, order, seen),
+    do: dfs_finish(rest, graph, [n | order], seen)
+
+  defp dfs_finish([{:enter, n} | rest], graph, order, seen) do
+    if MapSet.member?(seen, n) do
+      dfs_finish(rest, graph, order, seen)
+    else
+      kids =
+        graph
+        |> Map.get(n, MapSet.new())
+        |> Enum.sort()
+        |> Enum.map(&{:enter, &1})
+
+      dfs_finish(kids ++ [{:exit, n} | rest], graph, order, MapSet.put(seen, n))
+    end
+  end
+
+  defp transpose(graph) do
+    Enum.reduce(graph, %{}, fn {n, ms}, acc ->
+      acc = Map.put_new(acc, n, MapSet.new())
+
+      Enum.reduce(ms, acc, fn m, acc ->
+        Map.update(acc, m, MapSet.new([n]), &MapSet.put(&1, n))
+      end)
+    end)
+  end
+
+  # `order` starts with the last finished node, which is the order the
+  # second pass wants. Do not reverse it.
+  defp assign_components(order, rev) do
+    {sof, mem, _, _} =
+      Enum.reduce(order, {%{}, %{}, MapSet.new(), 0}, fn n, {sof, mem, seen, id} ->
+        if MapSet.member?(seen, n) do
+          {sof, mem, seen, id}
+        else
+          {comp, seen} = collect_component([{:enter, n}], rev, [], seen)
+          comp = Enum.sort(comp)
+          sof = Enum.reduce(comp, sof, &Map.put(&2, &1, id))
+          {sof, Map.put(mem, id, comp), seen, id + 1}
+        end
+      end)
+
+    {sof, mem}
+  end
+
+  defp collect_component([], _rev, comp, seen), do: {comp, seen}
+
+  defp collect_component([{:exit, n} | rest], rev, comp, seen),
+    do: collect_component(rest, rev, [n | comp], seen)
+
+  defp collect_component([{:enter, n} | rest], rev, comp, seen) do
+    if MapSet.member?(seen, n) do
+      collect_component(rest, rev, comp, seen)
+    else
+      kids =
+        rev
+        |> Map.get(n, MapSet.new())
+        |> Enum.sort()
+        |> Enum.map(&{:enter, &1})
+
+      collect_component(kids ++ [{:exit, n} | rest], rev, comp, MapSet.put(seen, n))
+    end
+  end
+
   defp inlinable_sig?(callee, args) do
     not Map.get(callee, :generated, false) and length(callee.params) == length(args) and
       Enum.all?([callee.ret | Enum.map(callee.params, &elem(&1, 1))], &plain_lay?/1)
@@ -563,6 +1081,8 @@ defmodule Muro.IR.Share do
   defp plain_lay?({:fn, _, _}), do: false
   defp plain_lay?(_), do: true
 
+  # An erased let keeps the run out of the small-inline set. It is not
+  # a fold, and the large-copy count does not charge it.
   defp inlinable_body?(t) do
     not contains?(t, fn
       {:bfold, _, _, _, _} -> true
@@ -677,6 +1197,943 @@ defmodule Muro.IR.Share do
   end
 
   defp subst_var(t, x, y), do: map_children(t, &subst_var(&1, x, y))
+
+  # ------------------------------------------------- cost and specialise
+
+  # One left-to-right walk. `inl` is false when only specialisation
+  # runs. A small comparison is inlined at a match scrutinee by
+  # `commute_scrut/8`, which asks `scrut_small?/4` itself.
+  defp pass(t, lays, facts, want, ctx, seen, inl) do
+    case t do
+      {:call, name, args} ->
+        pass_call(name, args, lays, facts, want, ctx, seen, inl)
+
+      {:let, x, lay, v, b} ->
+        pass_let(x, lay, v, b, lays, facts, want, ctx, seen, inl)
+
+      {:letp, a, b, e, body} ->
+        pass_letp(a, b, e, body, lays, facts, want, ctx, seen, inl)
+
+      {:match, scrut, arms} ->
+        pass_match(scrut, arms, lays, facts, want, ctx, seen, inl)
+
+      _ ->
+        pass_node(t, lays, facts, want, ctx, seen, inl)
+    end
+  end
+
+  defp pass_call(name, args, lays, facts, want, ctx, seen, inl) do
+    args = pass_list(args, lays, facts, want, ctx, seen, inl)
+    call = {:call, name, args}
+
+    if not inl do
+      call
+    else
+      case decide(name, args, lays, facts, want, ctx, seen) do
+        :no -> call
+        mode -> splice(mode, name, args, lays, facts, want, ctx, seen)
+      end
+    end
+  end
+
+  defp decide(name, args, lays, facts, want, ctx, seen) do
+    callee = Map.get(ctx.by_name, name)
+
+    cond do
+      heavy_here?(name, args, lays, want, ctx, seen) -> :heavy
+      shrink_here?(callee, args, facts, ctx, seen) -> :shrink
+      save_here?(name, args, lays, want, ctx, seen) -> :save
+      true -> :no
+    end
+  end
+
+  # A match scrutinee whose body is itself a small match. The outer
+  # match inlines it only when that match commutes onto the comparison,
+  # and leaves the call when it does not. The caller is `scrut_expand/7`,
+  # which only runs for a scrutinee.
+  defp scrut_small?(nil, _args, _ctx, _seen), do: false
+
+  defp scrut_small?(callee, args, ctx, seen) do
+    ctx.spec and size(callee.body) <= ctx.small and match_body?(callee.body) and
+      light?(callee, args, ctx, seen)
+  end
+
+  # The copy is the inlined body, not the source body. A wrapper whose
+  # source is one call still counts as the run it pulls in.
+  defp heavy_here?(name, args, lays, want, ctx, seen) do
+    case Map.get(ctx.by_name, name) do
+      %{} = callee ->
+        expanded_size(callee, ctx, seen) <= ctx.dup_max and
+          wanted_hit?(name, args, lays, want, ctx, seen)
+
+      _ ->
+        false
+    end
+  end
+
+  defp shrink_here?(nil, _args, _facts, _ctx, _seen), do: false
+
+  defp shrink_here?(callee, args, facts, ctx, seen) do
+    ctx.spec and expanded_size(callee, ctx, seen) <= ctx.dup_max and
+      light?(callee, args, ctx, seen) and
+      (map_size(facts) > 0 or Enum.any?(args, &known_arg?(&1, facts)))
+  end
+
+  # Above `dup_max` the copy has to pay for itself in worst-path work.
+  # `choose_save/4` is what checks the saving; this only admits the splice
+  # on the pass that is allowed to try it. A member of the caller's own
+  # mutual component is not admitted: the copy still calls the other
+  # member, and while the component is being measured those calls cost
+  # nothing, which would look like a saving that is not one.
+  defp save_here?(name, args, lays, want, ctx, seen) do
+    ctx.save and not MapSet.member?(ctx.save_block, name) and not mutual_copy?(name, seen, ctx) and
+      case Map.get(ctx.by_name, name) do
+        %{} = callee ->
+          expanded_size(callee, ctx, seen) > ctx.dup_max and
+            wanted_hit?(name, args, lays, want, ctx, seen)
+
+        _ ->
+          false
+      end
+  end
+
+  defp mutual_copy?(name, seen, ctx) do
+    case Map.get(ctx.scc_of, name) do
+      nil ->
+        false
+
+      id ->
+        length(Map.get(ctx.scc_members, id, [])) > 1 and
+          Enum.any?(seen, &(Map.get(ctx.scc_of, &1) == id))
+    end
+  end
+
+  defp wanted_hit?(name, args, lays, want, ctx, seen) do
+    if MapSet.size(want.wanted) == 0 do
+      false
+    else
+      with {:ok, callee, _} <- inline_target(name, args, ctx, seen),
+           full =
+             propagate(expand(callee, inlined_body(callee, ctx, seen), args, ctx), lays, ctx),
+           keys = MapSet.new(Map.keys(heavy_keys(full, want.scope, ctx, %{}))),
+           false <- MapSet.disjoint?(keys, want.wanted) do
+        true
+      else
+        _ -> false
+      end
+    end
+  end
+
+  defp light?(callee, args, ctx, seen) do
+    not MapSet.member?(seen, callee.name) and inlinable_sig?(callee, args) and
+      known?(callee.body) and inlinable_body?(callee.body) and size(callee.body) <= ctx.max
+  end
+
+  defp match_body?(t) do
+    case peel_lets(t) do
+      {:match, _, _} -> true
+      _ -> false
+    end
+  end
+
+  defp expanded_size(callee, ctx, seen), do: size(inlined_body(callee, ctx, seen))
+
+  defp known_arg?({:wrd, _, {:lit, _, n}, []}, _facts) when is_integer(n), do: true
+  defp known_arg?(:ze, _facts), do: true
+  defp known_arg?({:su, {:var, _}}, _facts), do: true
+  defp known_arg?({:con, _, _, []}, _facts), do: true
+  defp known_arg?({:wrd, _, b, []}, _facts) when b in [true, false], do: true
+  defp known_arg?({:var, x}, facts), do: Map.has_key?(facts, x)
+  defp known_arg?(_, _), do: false
+
+  defp splice(mode, name, args, lays, facts, want, ctx, seen) do
+    callee = Map.fetch!(ctx.by_name, name)
+    seen2 = MapSet.put(seen, name)
+    body = propagate(expand(callee, callee.body, args, ctx), lays, ctx)
+    out = pass(body, lays, facts, want, ctx, seen2, true)
+    call = {:call, name, args}
+
+    case mode do
+      :shrink ->
+        if size(out) < size(call), do: out, else: call
+
+      :save ->
+        :ets.insert(ctx.did_save, {ctx.save_gen, name})
+        out
+
+      :heavy ->
+        out
+    end
+  end
+
+  defp pass_let(x, lay, v, b, lays, facts, want, ctx, seen, inl) do
+    v = pass(v, lays, facts, want, ctx, seen, inl)
+    # The value was checked in the outer scope. `lays` stays that scope.
+    facts1 = scrub(facts, [x])
+    lays1 = Map.put(lays, x, lay)
+    facts1 = learn_value(x, v, lay, facts1, lays)
+    b = pass(b, lays1, facts1, want, ctx, seen, inl)
+
+    cond do
+      fresh_var?(x, lay, v, b, lays, ctx) ->
+        {:var, y} = v
+        subst_var(b, x, y)
+
+      :ets.member(ctx.fresh, x) and pure_value?(v) and not MapSet.member?(free_vars(b), x) ->
+        b
+
+      :ets.member(ctx.fresh, x) and b == {:var, x} and pure_value?(v) ->
+        v
+
+      true ->
+        {:let, x, lay, v, b}
+    end
+  end
+
+  defp fresh_var?(x, lay, {:var, y}, b, lays, ctx) do
+    :ets.member(ctx.fresh, x) and lay != :erased and Map.get(lays, y) == lay and
+      not rebinds?(b, y)
+  end
+
+  defp fresh_var?(_, _, _, _, _, _), do: false
+
+  defp pass_letp(a, b, e, body, lays, facts, want, ctx, seen, inl) do
+    e = pass(e, lays, facts, want, ctx, seen, inl)
+    lays1 = lays |> Map.delete(a) |> Map.delete(b)
+    facts1 = scrub(facts, [a, b])
+    body = pass(body, lays1, facts1, want, ctx, seen, inl)
+    {:letp, a, b, e, body}
+  end
+
+  # Inline a small comparison only when the outer match commutes onto
+  # it. A scrutinee that does not commute stays a call, so the larger
+  # match is not copied in.
+  defp commute_scrut(scrut, arms, lays, facts, want, ctx, seen, inl) do
+    case scrut_expand(scrut, lays, facts, want, ctx, seen, inl) do
+      {:ok, expanded} ->
+        case fuse_match(expanded, arms, ctx) do
+          {:ok, inner, as, lets} -> {:ok, inner, as, lets}
+          :no -> fuse_or_no(scrut, arms, ctx)
+        end
+
+      :no ->
+        fuse_or_no(scrut, arms, ctx)
+    end
+  end
+
+  defp fuse_or_no(scrut, arms, ctx) do
+    case fuse_match(scrut, arms, ctx) do
+      {:ok, inner, as, lets} -> {:ok, inner, as, lets}
+      :no -> :no
+    end
+  end
+
+  defp scrut_expand({:call, name, args} = call, lays, facts, want, ctx, seen, inl) do
+    callee = Map.get(ctx.by_name, name)
+
+    if scrut_small?(callee, args, ctx, seen) do
+      seen2 = MapSet.put(seen, name)
+      body = propagate(expand(callee, callee.body, args, ctx), lays, ctx)
+      out = pass(body, lays, facts, want, ctx, seen2, inl)
+      if out != call, do: {:ok, out}, else: :no
+    else
+      :no
+    end
+  end
+
+  defp scrut_expand(_, _, _, _, _, _, _), do: :no
+
+  defp pass_match(scrut, arms, lays, facts, want, ctx, seen, inl) do
+    scrut = pass(scrut, lays, facts, want, ctx, seen, inl)
+    plain = finish_match(scrut, arms, [], lays, facts, want, ctx, seen, inl, ctx.spec)
+
+    if ctx.spec do
+      # A commute that is dropped must not consume fresh names. The
+      # counter is global, so a rejected copy would rename a later binder.
+      mark = :counters.get(ctx.counter, 1)
+
+      case commute_scrut(scrut, arms, lays, facts, want, ctx, seen, inl) do
+        {:ok, inner, as, lets} ->
+          term = finish_match(inner, as, lets, lays, facts, want, ctx, seen, inl, true)
+
+          # A commute that does not shrink the match is dropped. Both
+          # arms of a comparison that is not yet known stay as the call.
+          if size(term) < size(plain) do
+            term
+          else
+            :counters.put(ctx.counter, 1, mark)
+            plain
+          end
+
+        :no ->
+          :counters.put(ctx.counter, 1, mark)
+          plain
+      end
+    else
+      plain
+    end
+  end
+
+  defp finish_match(scrut, arms, lets, lays, facts, want, ctx, seen, inl, spec?) do
+    term =
+      if spec? do
+        case reduce_match(scrut, arms, lays, facts, ctx) do
+          {:done, tag, names, body} ->
+            # The arm was substituted away. Its binders are not in scope,
+            # so a fact learned here keeps the outer names.
+            facts2 = arm_facts(scrut, tag, names, facts, lays, :reduced)
+            pass(body, Map.drop(lays, names), facts2, want, ctx, seen, inl)
+
+          :keep ->
+            arms = kill_dead(scrut, arms, lays, facts)
+            pass_arms(scrut, arms, lays, facts, want, ctx, seen, inl)
+        end
+      else
+        pass_arms(scrut, arms, lays, facts, want, ctx, seen, inl)
+      end
+
+    rewrap(lets, term)
+  end
+
+  defp pass_arms(scrut, arms, lays, facts, want, ctx, seen, inl) do
+    arms =
+      Enum.map(arms, fn {:arm, c, names, tm} ->
+        lays2 = Map.drop(lays, names)
+        facts2 = arm_facts(scrut, c, names, facts, lays, :enter)
+        tm = pass(tm, lays2, facts2, want, ctx, seen, inl)
+        {:arm, c, names, tm}
+      end)
+
+    {:match, scrut, arms}
+  end
+
+  defp pass_list(ts, lays, facts, want, ctx, seen, inl) do
+    Enum.map(ts, &pass(&1, lays, facts, want, ctx, seen, inl))
+  end
+
+  defp pass_node(t, lays, facts, want, ctx, seen, inl) do
+    put_children(t, pass_list(children(t), lays, facts, want, ctx, seen, inl))
+  end
+
+  # ---- facts
+
+  # A fact names the binders in scope when it was learned. A new binder
+  # shadows every one of those names, so the fact is dropped with the
+  # key. `let`, `letp`, and a match arm that is kept all do this. The
+  # parameter lets an inlined run is given are ordinary lets, so they
+  # do too. A fold or a stream step is a separate function and is not
+  # specialised, so its binders never see these facts.
+  defp scrub(facts, names) do
+    drop = MapSet.new(names)
+
+    facts
+    |> Map.drop(names)
+    |> Map.filter(fn {_k, fact} -> not fact_mentions?(fact, drop) end)
+  end
+
+  defp fact_mentions?({:ne_var, y}, drop), do: MapSet.member?(drop, y)
+  defp fact_mentions?({:nat, :suc, p}, drop), do: MapSet.member?(drop, p)
+
+  defp fact_mentions?({:ctor, _, fields}, drop),
+    do: Enum.any?(fields, &MapSet.member?(drop, &1))
+
+  defp fact_mentions?(_, _), do: false
+
+  # `:enter` is an arm that stays. Its binders shadow, so facts that
+  # name them go, and the scrutinee is recorded against these binders.
+  # `:reduced` is an arm that was substituted away. Those names are not
+  # introduced. The fact keeps the outer binders: retargeting it at the
+  # eliminated ones would point it out of scope.
+  defp arm_facts(scrut, tag, names, facts, lays, :enter) do
+    facts = scrub(facts, names)
+    learn_scrut(scrut, tag, names, facts, lays, :refresh)
+  end
+
+  defp arm_facts(scrut, tag, names, facts, lays, :reduced) do
+    learn_scrut(scrut, tag, names, facts, lays, :keep)
+  end
+
+  defp learn_scrut({:var, x}, tag, names, facts, lays, mode) do
+    if x in names, do: facts, else: learn_tag(x, tag, names, facts, lays, mode)
+  end
+
+  defp learn_scrut({:wrd, _, :eq, [a, b]}, tag, _names, facts, _lays, _mode) do
+    cond do
+      false_tag?(tag) -> learn_ne(a, b, facts)
+      true_tag?(tag) -> learn_eq(a, b, facts)
+      true -> facts
+    end
+  end
+
+  defp learn_scrut(_, _, _, facts, _, _), do: facts
+
+  defp learn_tag(x, "zero", _names, facts, lays, mode) do
+    if Map.get(lays, x) == :nat,
+      do: put_fact(facts, x, {:nat, :zero}, mode),
+      else: put_ctor(facts, x, "zero", [], mode)
+  end
+
+  defp learn_tag(x, "suc", [p], facts, lays, mode) do
+    if Map.get(lays, x) == :nat,
+      do: put_fact(facts, x, {:nat, :suc, p}, mode),
+      else: put_ctor(facts, x, "suc", [p], mode)
+  end
+
+  defp learn_tag(x, "wtrue", _, facts, lays, mode) do
+    if Map.get(lays, x) == :wbool,
+      do: put_fact(facts, x, {:wbool, true}, mode),
+      else: put_ctor(facts, x, "wtrue", [], mode)
+  end
+
+  defp learn_tag(x, "wfalse", _, facts, lays, mode) do
+    if Map.get(lays, x) == :wbool,
+      do: put_fact(facts, x, {:wbool, false}, mode),
+      else: put_ctor(facts, x, "wfalse", [], mode)
+  end
+
+  defp learn_tag(x, tag, names, facts, _lays, mode),
+    do: put_ctor(facts, x, tag, names, mode)
+
+  defp put_ctor(facts, x, tag, names, mode),
+    do: put_fact(facts, x, {:ctor, tag, names}, mode)
+
+  # The value is in the outer scope. A fact built from it that names
+  # the new binder is about that outer name, so it does not belong to
+  # the binding.
+  defp learn_value(x, v, lay, facts, lays) do
+    facts = learn_bound(x, v, lay, facts, lays)
+
+    case Map.get(facts, x) do
+      nil ->
+        facts
+
+      fact ->
+        if fact_mentions?(fact, MapSet.new([x])), do: Map.delete(facts, x), else: facts
+    end
+  end
+
+  defp learn_bound(x, {:var, y}, lay, facts, lays) do
+    if Map.get(lays, y) == lay do
+      case Map.get(facts, y) do
+        nil -> facts
+        f -> put_fact(facts, x, f)
+      end
+    else
+      facts
+    end
+  end
+
+  defp learn_bound(x, {:wrd, _, {:lit, _, n}, []}, _lay, facts, _lays) when is_integer(n),
+    do: put_fact(facts, x, {:wlit, n})
+
+  defp learn_bound(x, :ze, :nat, facts, _lays), do: put_fact(facts, x, {:nat, :zero})
+
+  defp learn_bound(x, {:su, {:var, p}}, :nat, facts, _lays),
+    do: put_fact(facts, x, {:nat, :suc, p})
+
+  defp learn_bound(x, {:con, _, tag, args}, _lay, facts, _lays) do
+    if Enum.all?(args, &match?({:var, _}, &1)) do
+      put_ctor(facts, x, tag, Enum.map(args, fn {:var, v} -> v end), :keep)
+    else
+      facts
+    end
+  end
+
+  defp learn_bound(x, {:wrd, _, b, []}, _lay, facts, _lays) when b in [true, false],
+    do: put_fact(facts, x, {:wbool, b})
+
+  defp learn_bound(_x, _v, _lay, facts, _lays), do: facts
+
+  # `:refresh` is the arm that is kept: its binders are the fields now,
+  # even when a fact for this scrutinee already named the outer ones.
+  # `:keep` is everywhere else. A word literal, a constructor, and a
+  # nat are not replaced by a weaker comparison.
+  defp put_fact(facts, x, fact, mode \\ :keep)
+
+  defp put_fact(facts, x, fact, :refresh), do: Map.put(facts, x, fact)
+
+  defp put_fact(facts, x, fact, :keep) do
+    case Map.get(facts, x) do
+      nil -> Map.put(facts, x, fact)
+      ^fact -> facts
+      {:wlit, _} -> facts
+      {:nat, _} -> facts
+      {:nat, _, _} -> facts
+      {:ctor, _, _} -> facts
+      {:wbool, _} -> facts
+      _ -> Map.put(facts, x, fact)
+    end
+  end
+
+  defp learn_eq(a, b, facts) do
+    facts
+    |> eq_side(a, b)
+    |> eq_side(b, a)
+  end
+
+  defp eq_side(facts, {:var, x}, {:wrd, _, {:lit, _, n}, []}) when is_integer(n),
+    do: put_fact(facts, x, {:wlit, n})
+
+  defp eq_side(facts, {:var, x}, {:var, y}) do
+    case Map.get(facts, y) do
+      nil -> facts
+      f -> put_fact(facts, x, f)
+    end
+  end
+
+  defp eq_side(facts, _, _), do: facts
+
+  defp learn_ne(a, b, facts) do
+    facts
+    |> ne_side(a, b)
+    |> ne_side(b, a)
+  end
+
+  defp ne_side(facts, {:var, x}, other) do
+    case lit_of(other, facts) do
+      {:ok, n} when is_integer(n) ->
+        put_fact(facts, x, {:ne_word, n})
+
+      _ ->
+        case other do
+          {:var, y} -> put_fact(facts, x, {:ne_var, y})
+          _ -> facts
+        end
+    end
+  end
+
+  defp ne_side(facts, _, _), do: facts
+
+  defp true_tag?(tag), do: tag in ["wtrue", "true"]
+  defp false_tag?(tag), do: tag in ["wfalse", "false"]
+
+  # ---- reduce
+
+  # Commute `match (match s | k => ctor) | ctor => body` when every
+  # inner arm is a constructor with no fields, so each outer body is
+  # placed once under the arm that returns it. A let the outer bodies
+  # do not name stays wrapped around the match.
+  defp fuse_match(scrut, outers, ctx) do
+    case peel_safe(scrut, outers) do
+      {lets, {:match, inner, iarms}} ->
+        if fuse_ok?(outers, iarms, ctx) do
+          arms =
+            Enum.map(iarms, fn {:arm, c, [], val} ->
+              {:ok, tag} = ctor_tag(val)
+              {:arm, _, _, body} = Enum.find(outers, &match?({:arm, ^tag, _, _}, &1))
+              {:arm, c, [], body}
+            end)
+
+          {:ok, inner, arms, lets}
+        else
+          :no
+        end
+
+      _ ->
+        :no
+    end
+  end
+
+  defp fuse_ok?(outers, iarms, ctx) do
+    tags =
+      Enum.map(iarms, fn
+        {:arm, _, [], val} -> ctor_tag(val)
+        _ -> :no
+      end)
+
+    known = Enum.all?(tags, &match?({:ok, _}, &1))
+
+    uses =
+      Enum.reduce(tags, %{}, fn
+        {:ok, tag}, acc -> Map.update(acc, tag, 1, &(&1 + 1))
+        _, acc -> acc
+      end)
+
+    known and
+      Enum.all?(tags, fn {:ok, tag} -> Enum.any?(outers, &match?({:arm, ^tag, _, _}, &1)) end) and
+      Enum.all?(outers, fn {:arm, tag, _, body} ->
+        Map.get(uses, tag, 0) <= 1 or size(body) <= ctx.small
+      end)
+  end
+
+  defp peel_safe({:let, x, lay, v, b}, outers) do
+    if Enum.any?(outers, fn {:arm, _, _, body} -> MapSet.member?(free_vars(body), x) end) do
+      {[], {:let, x, lay, v, b}}
+    else
+      {lets, inner} = peel_safe(b, outers)
+      {[{x, lay, v} | lets], inner}
+    end
+  end
+
+  defp peel_safe(t, _outers), do: {[], t}
+
+  defp peel_lets({:let, _, _, _, b}), do: peel_lets(b)
+  defp peel_lets(t), do: t
+
+  defp rewrap([], inner), do: inner
+  defp rewrap([{x, lay, v} | lets], inner), do: {:let, x, lay, v, rewrap(lets, inner)}
+
+  defp ctor_tag({:con, _, tag, []}), do: {:ok, tag}
+  defp ctor_tag({:wrd, _, true, []}), do: {:ok, "wtrue"}
+  defp ctor_tag({:wrd, _, false, []}), do: {:ok, "wfalse"}
+  defp ctor_tag(:ze), do: {:ok, "zero"}
+  defp ctor_tag(:tt), do: {:ok, "tt"}
+  defp ctor_tag(_), do: :no
+
+  # The live arm, when the scrutinee is a pure value and every field
+  # the arm binds is a variable. Anything else keeps the match, so a
+  # call in the scrutinee still runs.
+  defp reduce_match(scrut, arms, lays, facts, ctx) do
+    if pure_value?(scrut) do
+      case which_arm(scrut, arms, lays, facts) do
+        {:ok, {:arm, tag, names, body}, fields} ->
+          case bind_fields(names, fields) do
+            {:ok, substs} -> {:done, tag, names, apply_substs(body, substs, ctx)}
+            :no -> :keep
+          end
+
+        :no ->
+          :keep
+      end
+    else
+      :keep
+    end
+  end
+
+  defp which_arm(scrut, arms, lays, facts) do
+    case which_tag(scrut, arms, lays, facts) do
+      {:ok, tag, fields} ->
+        case Enum.find(arms, &match?({:arm, ^tag, _, _}, &1)) do
+          nil -> :no
+          arm -> {:ok, arm, fields}
+        end
+
+      :no ->
+        :no
+    end
+  end
+
+  defp which_tag(scrut, arms, lays, facts) do
+    found =
+      cond do
+        match?({:ok, true}, cmp_result(scrut, facts)) ->
+          {:ok, pick_tag(arms, ["wtrue", "true"]), []}
+
+        match?({:ok, false}, cmp_result(scrut, facts)) ->
+          {:ok, pick_tag(arms, ["wfalse", "false"]), []}
+
+        true ->
+          value_tag(scrut, lays, facts)
+      end
+
+    case normalize_tag(found) do
+      # `zero` / `suc` are also ordinary constructors. A nat arm is
+      # taken only from a nat fact or from `ze` / `su` themselves.
+      {:ok, tag, _} = ok ->
+        if tag in ["zero", "suc"] and nat_arms?(arms) and not nat_scrut?(scrut, lays, facts),
+          do: :no,
+          else: ok
+
+      :no ->
+        :no
+    end
+  end
+
+  defp nat_arms?(arms) do
+    Enum.map(arms, fn {:arm, c, _, _} -> c end) |> Enum.sort() == ["suc", "zero"]
+  end
+
+  defp nat_scrut?(:ze, _, _), do: true
+  defp nat_scrut?({:su, _}, _, _), do: true
+
+  defp nat_scrut?({:var, x}, lays, facts),
+    do: Map.get(lays, x) == :nat or nat_fact?(Map.get(facts, x))
+
+  defp nat_scrut?(_, _, _), do: false
+
+  # `{:nat, :suc, p}` is the fact `learn_eq` copies onto a word when the
+  # other side is a successor. `{:nat, _}` is the zero fact and a nat
+  # literal. A data constructor named suc is not either of these.
+  defp nat_fact?({:nat, :suc, p}) when is_binary(p), do: true
+  defp nat_fact?({:nat, _}), do: true
+  defp nat_fact?(_), do: false
+
+  defp normalize_tag({:ok, :no, _}), do: :no
+  defp normalize_tag({:ok, tag, fields}) when is_binary(tag), do: {:ok, tag, fields}
+  defp normalize_tag(:no), do: :no
+
+  defp pick_tag(arms, prefs) do
+    Enum.find(prefs, :no, fn t -> Enum.any?(arms, &match?({:arm, ^t, _, _}, &1)) end)
+  end
+
+  defp value_tag(:ze, _lays, _facts), do: {:ok, "zero", []}
+  defp value_tag({:su, {:var, p}}, _lays, _facts), do: {:ok, "suc", [{:var, p}]}
+  defp value_tag({:wrd, _, true, []}, _lays, _facts), do: {:ok, "wtrue", []}
+  defp value_tag({:wrd, _, false, []}, _lays, _facts), do: {:ok, "wfalse", []}
+  defp value_tag({:con, _, tag, args}, _lays, _facts), do: {:ok, tag, args}
+
+  defp value_tag({:var, x}, lays, facts) do
+    case Map.get(facts, x) do
+      {:nat, :zero} -> {:ok, "zero", []}
+      {:nat, :suc, p} when is_binary(p) -> {:ok, "suc", [{:var, p}]}
+      {:wbool, true} -> {:ok, "wtrue", []}
+      {:wbool, false} -> {:ok, "wfalse", []}
+      {:wlit, 0} -> if(Map.get(lays, x) == :nat, do: {:ok, "zero", []}, else: :no)
+      {:ctor, tag, fields} -> {:ok, tag, Enum.map(fields, &{:var, &1})}
+      _ -> :no
+    end
+  end
+
+  defp value_tag(_, _, _), do: :no
+
+  defp bind_fields(names, fields) when length(names) == length(fields) do
+    if Enum.all?(fields, &match?({:var, _}, &1)) do
+      {:ok, Enum.zip(names, Enum.map(fields, fn {:var, v} -> v end))}
+    else
+      :no
+    end
+  end
+
+  defp bind_fields(_, _), do: :no
+
+  # Every field at once. A sequential walk of `pair y x => y` with
+  # `y` bound to `x` and `x` bound to `y` would read `y` back.
+  # A binder that is itself a target is renamed first, so
+  # `let x = z in y` does not capture the `x` just substituted for `y`.
+  defp apply_substs(body, substs, ctx) do
+    subst_sim(body, Map.new(substs), ctx)
+  end
+
+  defp subst_sim(tm, map, _ctx) when map_size(map) == 0, do: tm
+
+  defp subst_sim({:var, x}, map, _ctx) do
+    case Map.get(map, x) do
+      nil -> {:var, x}
+      y -> {:var, y}
+    end
+  end
+
+  defp subst_sim({:let, x, lay, v, b}, map, ctx) do
+    v = subst_sim(v, map, ctx)
+    map = Map.delete(map, x)
+    {x, b, map} = avoid_capture(x, b, map, ctx)
+    {:let, x, lay, v, subst_sim(b, map, ctx)}
+  end
+
+  defp subst_sim({:letp, a, b, e, body}, map, ctx) do
+    e = subst_sim(e, map, ctx)
+    map = map |> Map.delete(a) |> Map.delete(b)
+    {a, body, map} = avoid_capture(a, body, map, ctx)
+    {b, body, map} = avoid_capture(b, body, map, ctx)
+    {:letp, a, b, e, subst_sim(body, map, ctx)}
+  end
+
+  defp subst_sim({:match, scrut, arms}, map, ctx) do
+    scrut = subst_sim(scrut, map, ctx)
+
+    arms =
+      Enum.map(arms, fn {:arm, c, names, tm} ->
+        inner = Enum.reduce(names, map, &Map.delete(&2, &1))
+
+        {names, tm} =
+          Enum.map_reduce(names, tm, fn name, tm ->
+            {name2, tm, _map} = avoid_capture(name, tm, inner, ctx)
+            {name2, tm}
+          end)
+
+        {:arm, c, names, subst_sim(tm, inner, ctx)}
+      end)
+
+    {:match, scrut, arms}
+  end
+
+  defp subst_sim(tm, map, ctx), do: map_children(tm, &subst_sim(&1, map, ctx))
+
+  defp avoid_capture(z, body, map, ctx) do
+    if Enum.any?(map, fn {_from, to} -> to == z end) do
+      z2 = fresh(z, ctx)
+      {z2, subst_var(body, z, z2), map}
+    else
+      {z, body, map}
+    end
+  end
+
+  # An arm the scrutinee cannot take becomes `abort`. The arm stays, so
+  # the emitters still see every constructor. A tag that is not one of
+  # the arms aborts nothing.
+  defp kill_dead(scrut, arms, lays, facts) do
+    case which_tag(scrut, arms, lays, facts) do
+      {:ok, tag, _} ->
+        if Enum.any?(arms, &match?({:arm, ^tag, _, _}, &1)) do
+          Enum.map(arms, fn {:arm, c, ns, _tm} = arm ->
+            if c == tag, do: arm, else: {:arm, c, ns, :abort}
+          end)
+        else
+          arms
+        end
+
+      :no ->
+        arms
+    end
+  end
+
+  defp cmp_result({:wrd, k, op, [a, b]}, facts) when op in [:eq, :lt, :le] do
+    case {lit_of(a, facts), lit_of(b, facts)} do
+      {{:ok, n}, {:ok, m}} ->
+        if op == :eq or k != :i64, do: {:ok, apply_cmp(op, n, m)}, else: :unknown
+
+      _ ->
+        cond do
+          op == :eq and ne?(a, b, facts) -> {:ok, false}
+          op == :eq and same?(a, b, facts) -> {:ok, true}
+          true -> :unknown
+        end
+    end
+  end
+
+  defp cmp_result(_, _), do: :unknown
+
+  defp apply_cmp(:eq, n, m), do: n == m
+  defp apply_cmp(:lt, n, m), do: n < m
+  defp apply_cmp(:le, n, m), do: n <= m
+
+  defp lit_of({:wrd, _, {:lit, _, n}, []}, _facts) when is_integer(n), do: {:ok, n}
+  defp lit_of({:var, x}, facts), do: lit_fact(Map.get(facts, x))
+  defp lit_of(_, _), do: :no
+
+  defp lit_fact({:wlit, n}) when is_integer(n), do: {:ok, n}
+  defp lit_fact(_), do: :no
+
+  defp ne?(a, b, facts) do
+    ne_pair?(a, b, facts) or ne_pair?(b, a, facts)
+  end
+
+  defp ne_pair?({:var, x}, other, facts) do
+    case Map.get(facts, x) do
+      {:ne_word, n} -> match?({:ok, ^n}, lit_of(other, facts))
+      {:ne_var, y} -> other == {:var, y}
+      _ -> false
+    end
+  end
+
+  defp ne_pair?(_, _, _), do: false
+
+  defp same?({:var, x}, {:var, x}, _facts), do: true
+
+  defp same?(a, b, facts) do
+    case {lit_of(a, facts), lit_of(b, facts)} do
+      {{:ok, n}, {:ok, n}} -> true
+      _ -> false
+    end
+  end
+
+  defp pure_value?({:var, _}), do: true
+  defp pure_value?(:ze), do: true
+  defp pure_value?(:tt), do: true
+  defp pure_value?({:su, u}), do: pure_value?(u)
+  defp pure_value?({:con, _, _, args}), do: Enum.all?(args, &pure_value?/1)
+  defp pure_value?({:wrd, _, {:lit, _, n}, []}) when is_integer(n), do: true
+  defp pure_value?({:wrd, _, b, []}) when b in [true, false], do: true
+
+  defp pure_value?({:wrd, _, op, args}) when op in [:eq, :lt, :le],
+    do: Enum.all?(args, &pure_value?/1)
+
+  defp pure_value?(_), do: false
+
+  defp site_counts(t), do: sites(t, %{})
+
+  defp sites({:call, n, args}, acc) do
+    acc = Map.update(acc, n, 1, &(&1 + 1))
+    Enum.reduce(args, acc, &sites/2)
+  end
+
+  defp sites(t, acc), do: Enum.reduce(children(t), acc, &sites/2)
+
+  defp put_children(t, kids) do
+    case t do
+      {:su, _} ->
+        [u] = kids
+        {:su, u}
+
+      {:call, n, _} ->
+        {:call, n, kids}
+
+      {:con, d, c, _} ->
+        {:con, d, c, kids}
+
+      {:wrd, k, op, _} ->
+        {:wrd, k, op, kids}
+
+      {:pair, _, _} ->
+        [a, b] = kids
+        {:pair, a, b}
+
+      {:uncons, _} ->
+        [e] = kids
+        {:uncons, e}
+
+      {:stream, _, caps, s} ->
+        [seed | cap_ts] = kids
+        {:stream, seed, zip_caps(caps, cap_ts), s}
+
+      {:bfold, s, caps, _, _} ->
+        {cap_ts, [z, x]} = Enum.split(kids, length(caps))
+        {:bfold, s, zip_caps(caps, cap_ts), z, x}
+
+      {:bcat, _, _} ->
+        [a, b] = kids
+        {:bcat, a, b}
+
+      {:blen, _} ->
+        [a] = kids
+        {:blen, a}
+
+      {:beq, _, _} ->
+        [a, b] = kids
+        {:beq, a, b}
+
+      {:bsub, _, _, _} ->
+        [s, o, n] = kids
+        {:bsub, s, o, n}
+
+      {:bget, _, _} ->
+        [s, i] = kids
+        {:bget, s, i}
+
+      {:btil, _, _} ->
+        [s, b] = kids
+        {:btil, s, b}
+
+      {:baft, _, _} ->
+        [s, b] = kids
+        {:baft, s, b}
+
+      {:sbytes, _} ->
+        [s] = kids
+        {:sbytes, s}
+
+      {:bunc, _} ->
+        [s] = kids
+        {:bunc, s}
+
+      {:scat, _, _} ->
+        [a, b] = kids
+        {:scat, a, b}
+
+      {:slen, _} ->
+        [a] = kids
+        {:slen, a}
+
+      {:seq, _, _} ->
+        [a, b] = kids
+        {:seq, a, b}
+
+      _ ->
+        t
+    end
+  end
+
+  defp zip_caps(caps, ts), do: Enum.zip(Enum.map(caps, &elem(&1, 0)), ts)
 
   # ------------------------------------------------------------------ share
 

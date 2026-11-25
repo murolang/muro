@@ -70,7 +70,7 @@ Maybe *effective(Item *f) {
   Item *muro__s_0 = f;
   switch (muro__s_0->muro__field_tag) {
   case 0: {
-  muro__t_0 = just(mark(f));
+  muro__t_0 = just(true_k());
   break;
   }
   case 1: {

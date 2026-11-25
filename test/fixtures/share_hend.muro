@@ -1,0 +1,36 @@
+-- A stored end of 0 means the fold still has to run. Any other end is
+-- that value. `hot` has already taken the nonzero arm, so the fold
+-- inside `endAt` is dead there. `known` passes a nonzero literal.
+
+import "std:bool.muro"
+
+def foldEnd : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) →
+    sliceFold U64 (toU64 0)
+      (λ (_b : U8) → λ (_r : Slice) → λ (acc : U64) → addi acc (toU64 1))
+      s
+
+def eq0 : run Π (+ h : U64) → Bool :=
+  λ (+ h : U64) →
+    match (eqi h (toU64 0)) motive (λ _ → Bool)
+      | wtrue => true
+      | wfalse => false
+
+def endAt : run Π (+ h : U64) → Π (+ s : Slice) → U64 :=
+  λ (+ h : U64) → λ (+ s : Slice) →
+    match (eq0 h) motive (λ _ → U64)
+      | true => foldEnd s
+      | false => h
+
+def hot : run Π (+ h : U64) → Π (+ s : Slice) → U64 :=
+  λ (+ h : U64) → λ (+ s : Slice) →
+    match (eq0 h) motive (λ _ → U64)
+      | true => foldEnd s
+      | false => addi (endAt h s) (toU64 1)
+
+def known : run Π (+ s : Slice) → U64 :=
+  λ (+ s : Slice) → endAt (toU64 1) s
+
+def known-ok : evidence {known b"ab" ≡ toU64 1 : U64} := refl
+def hot-zero : evidence {hot (toU64 0) b"ab" ≡ toU64 2 : U64} := refl
+def hot-kept : evidence {hot (toU64 2) b"ab" ≡ toU64 3 : U64} := refl

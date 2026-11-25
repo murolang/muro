@@ -127,8 +127,13 @@ defmodule Muro.EmitZigTest do
     source = File.read!(emit_zig!(dir, "data"))
     assert source =~ "pub const Bool = union(enum)"
     assert source =~ "true_k,"
-    assert source =~ "const muro__val_Bool_true_k: Bool = .true_k;"
-    assert source =~ "fn true_k() *const Bool"
+    # `zero` is `pick true`, and that arm is `0`, so `true` is not
+    # constructed. A fieldless constructor that is built is one static.
+    assert source =~ "const muro__val_Bool_false_k: Bool = .false_k;"
+    assert source =~ "fn false_k() *const Bool"
+    assert source =~ "pub fn zzero(muro__allocator: muro__std.mem.Allocator) !*const muro__Nat"
+    assert source =~ "return muro__zero();"
+    refute source =~ "true_k()"
     assert source =~ "const muro__val_Tok_zzed: Tok = .zzed;"
     assert source =~ "fn zzed() *const Tok"
     refute source =~ "fn one("
