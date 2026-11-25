@@ -224,6 +224,14 @@ showDef n = "def" ++ show n
 -- Pretty-printer (debugging the decision procedure).
 ------------------------------------------------------------------------
 
+showNats : List ℕ → String
+showNats []       = "[]"
+showNats (x ∷ xs) = "[" ++ showNatsGo x xs ++ "]"
+  where
+    showNatsGo : ℕ → List ℕ → String
+    showNatsGo y []       = show y
+    showNatsGo y (z ∷ zs) = show y ++ ", " ++ showNatsGo z zs
+
 mutual
   showTm : ∀ {n} → Tm n → String
   showTm (var i)      = "v" ++ show (toℕ i)
@@ -240,7 +248,7 @@ mutual
   showTm (dty i)      = "D" ++ show i
   showTm (ctor i j)   = "c" ++ show i ++ "." ++ show j
   showTm (mData e P ars _) =
-    "match " ++ showTm e ++ " motive " ++ showTm P
+    "match " ++ showTm e ++ " motive " ++ showTm P ++ " ars " ++ showNats ars
   showTm (mNat e P z s) =
     "matchNat " ++ showTm e ++ " motive " ++ showTm P ++
     " | 0 => " ++ showTm z ++ " | suc => " ++ showTm s

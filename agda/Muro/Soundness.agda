@@ -50,7 +50,7 @@ open import Muro.Data hiding (subst₂)
 open import Muro.Check
   using (whnf; conv; apps; viewPi; viewId; viewProd; viewData; isData; isCopy; notCopy; fieldUses; instParams; isRunType;
          infer; check; checkTy; checkAgainst; checkCtorApp; inferCtorSpine; inferConv;
-         checkLam; checkBr; checkBrPi; checkBranches; checkMotive; firstMotLam; nparamsOf;
+         checkLam; checkBr; checkBrPi; checkBranches; checkMotive; firstMotLam; nparamsOf; eqNatList;
          clashes; RecSt; extRec; lamRec; scrutOk; checkRec; selfApplied;
          infer′; floatIdOk;
          isDType; checkDef; checkBody; checkBodyAt; retryBody; checkAt; argPositions; pickPos; checkDefs; checkDatas; checkSig; emptyRec; defRec; zeroPos;
@@ -851,7 +851,9 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-mData {e = e} {P = P} {ars = ars} {b
 ...   | fail _ = ⊥-elim (fail≢ok eq)
 ...   | ok (di , params , idxs) with viewData-sound k σ veq
 ...     | et′ , d , args , wheq , leq , sp , lenA , peq , ieq′ rewrite leq
-      with checkMotive k σ rs Γ di (DataDecl.idxs d) params P in meq
+      with guard "mData constructor arity mismatch" (eqNatList ars (ctorFieldArities d)) in geq
+...     | fail _ = ⊥-elim (fail≢ok eq)
+...     | ok tt with checkMotive k σ rs Γ di (DataDecl.idxs d) params P in meq
 ...     | fail _ = ⊥-elim (fail≢ok eq)
 ...     | ok tt with infer-sound k σ rs m false G FΓ Fe ieq
 ...       | miss = miss
@@ -896,7 +898,7 @@ infer-sound k σ rs {Γ = Γ} m hd G FΓ (f-mData {e = e} {P = P} {ars = ars} {b
         (⇒-mData De
           (≈-trans c (≈-trans (whnf-≈ k σ fs Fet wheq)
             (≈-≡ (trans (Spine-≡ sp) (cong (appsFrom (dty di)) (sym pieq))))))
-          leq lps lidx mot brs ceq)
+          leq (eqNatList-sound (guard-ok geq)) lps lidx mot brs ceq)
         (≈-sym (motApp-β idxs))
     matchGo _ _ _ _ _ (just _) nothing = miss
     matchGo _ _ _ _ _ nothing _ = miss

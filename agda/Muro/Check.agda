@@ -208,9 +208,10 @@ mutual
   skipArmLams x (suc ar) (lam _ _ t) = skipArmLams (suc x) ar t
   skipArmLams x (suc _) t = varUses x t 0
 
-  -- Zip constructor arities with arms. A missing arity (ill-typed,
-  -- shorter list) contributes 0, so the count cannot rise from a
-  -- field type and become unsound.
+  -- Zip constructor arities with arms. Check, ⊢, and ⊨ require
+  -- `ars` to equal the constructors' field counts (`ctorFieldArities`),
+  -- so this peels exactly the field λs. A short list (ill-typed)
+  -- contributes 0.
   armUses : ∀ {n} → ℕ → List ℕ → List (Tm n) → ℕ
   armUses _ _ [] = 0
   armUses _ [] _ = 0
@@ -804,6 +805,7 @@ data _,_⊢[_]_⇒_ σ Γ where
 
   ⇒-mData : ∀ {m di params idxs e P ars bs d}
     → lookupData σ di ≡ ok d
+    → ars ≡ ctorFieldArities d
     → σ , Γ ⊢[ m ] e ⇐ appsFrom (dty di) (List._++_ params idxs)
     → σ , Γ ⊢[ m ] mData e P ars bs ⇒ motApp P idxs e
 
@@ -2420,6 +2422,7 @@ mutual
     infer k σ rs Γ m e >>= λ (et , eu) →
     viewData k σ et >>= λ (di , params , idxs) →
     lookupData σ di >>= λ d →
+    guard "mData constructor arity mismatch" (eqNatList ars (ctorFieldArities d)) >>
     checkMotive k σ rs Γ di (DataDecl.idxs d) params P >>
     let motFun = firstMotLam di (DataDecl.idxs d) params P
     in checkBranches k σ rs Γ m di (scrutOk rs e) params idxs motFun 0 (DataDecl.ctors d) bs >>= λ bu →

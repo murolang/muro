@@ -214,6 +214,7 @@ data _,_⊨⁰[_]_∶_ σ Γ where
   t-mData : ∀ {m e di ps is d P ars bs}
     → σ , Γ ⊨[ m ] e ∶ appsFrom (dty di) (ps ++ is)
     → lookupData σ di ≡ ok d
+    → ars ≡ ctorFieldArities d
     → length ps ≡ nparams d
     → length is ≡ nidxs d
     → Mot⊨ σ Γ di ps (DataDecl.idxs d) P
@@ -424,8 +425,8 @@ forget-⇒ (⇒-mEmp De W) = conv (t-mEmp (forget-⇐ De) (forget-wf W)) ≈-ref
 forget-⇒ (⇒-mUnit De W Du _) =
   conv (t-mUnit (forget-⇐ De) (forget-wf W) (forget-⇐ Du)) ≈-refl
 forget-⇒ (⇒-dty lk) = conv (t-dty lk) ≈-refl
-forget-⇒ (⇒-mData De c lk lps lis M Bs _) =
-  conv (t-mData (conv-≈ (forget-⇒ De) c) lk lps lis (forget-mot M) (forget-brs Bs)) ≈-refl
+forget-⇒ (⇒-mData De c lk ars≡ lps lis M Bs _) =
+  conv (t-mData (conv-≈ (forget-⇒ De) c) lk ars≡ lps lis (forget-mot M) (forget-brs Bs)) ≈-refl
 forget-⇒ (⇒-def lk al) = conv (t-def lk al) ≈-refl
 forget-⇒ (⇒-ann W D) = conv (t-ann (forget-wf W) (forget-⇐ D)) ≈-refl
 forget-⇒ (⇒-prod DA DB) = conv (t-prod (forget-⇐ DA) (forget-⇐ DB)) ≈-refl
@@ -513,8 +514,8 @@ fieldMode-mono reuse  h = h
 ⊨⁰-mode h (t-mUnit De W Du) = t-mUnit (⊨-mode h De) W (⊨-mode h Du)
 ⊨⁰-mode ≤ᵐ-spec (t-dty lk) = t-dty lk
 ⊨⁰-mode h (t-ctor sp c) = t-ctor sp (ca-mode h c)
-⊨⁰-mode h (t-mData De lk lps lis M Bs) =
-  t-mData (⊨-mode h De) lk lps lis M (brs-mode h Bs)
+⊨⁰-mode h (t-mData De lk ars≡ lps lis M Bs) =
+  t-mData (⊨-mode h De) lk ars≡ lps lis M (brs-mode h Bs)
 ⊨⁰-mode h (t-def {d = d} lk al) = t-def lk (allowedDef-mono (Def.dmode d) h al)
 ⊨⁰-mode h (t-ann W D) = t-ann W (⊨-mode h D)
 ⊨⁰-mode ≤ᵐ-spec (t-prod DA DB) = t-prod DA DB
@@ -829,11 +830,11 @@ mot-ren : ∀ {σ n k} {ρ : Fin n → Fin k} {Γ Δ di ps ixs P}
 ⊨⁰-ren {ρ = ρ} r (t-dty {d = d} lk) rewrite dtyType-ren ρ (DataDecl.pqtys d) (DataDecl.idxs d) =
   t-dty lk
 ⊨⁰-ren {ρ = ρ} r (t-ctor sp c) = t-ctor (Spine-ren ρ sp) (ca-ren r c)
-⊨⁰-ren {ρ = ρ} r (t-mData {e = e} {di} {ps} {is} {P = P} De lk lps lis M Bs)
+⊨⁰-ren {ρ = ρ} r (t-mData {e = e} {di} {ps} {is} {P = P} De lk ars≡ lps lis M Bs)
   rewrite ren-motApp ρ P is e =
   t-mData (⊨-≡ (trans (ren-appsFrom ρ (dty di) (ps ++ is)) (cong (appsFrom (dty di)) (renList-++ ρ ps is)))
              (⊨-ren r De))
-    lk (trans (renList-length ρ ps) lps) (trans (renList-length ρ is) lis)
+    lk ars≡ (trans (renList-length ρ ps) lps) (trans (renList-length ρ is) lis)
     (mot-ren r M) (brs-ren r Bs)
 ⊨⁰-ren {ρ = ρ} r (t-def {d = d} lk al) rewrite closed-ren ρ (Def.dtype d) = t-def lk al
 ⊨⁰-ren r (t-ann W D) = t-ann (wf-ren r W) (⊨-ren r D)
@@ -1211,10 +1212,10 @@ mot-sub : ∀ {σ n k m₀} {τ : Fin n → Tm k} {Γ Δ di ps ixs P}
 ⊨⁰-sub {τ = τ} lm s (t-dty {d = d} lk) =
   conv (t-dty lk) (≈-≡ (sym (dtyType-sub τ (DataDecl.pqtys d) (DataDecl.idxs d))))
 ⊨⁰-sub {τ = τ} lm s (t-ctor sp c) = conv (t-ctor (Spine-sub τ sp) (ca-sub lm s c)) ≈-refl
-⊨⁰-sub {τ = τ} lm s (t-mData {e = e} {di} {ps} {is} {P = P} De lk lps lis M Bs) =
+⊨⁰-sub {τ = τ} lm s (t-mData {e = e} {di} {ps} {is} {P = P} De lk ars≡ lps lis M Bs) =
   conv (t-mData (⊨-≡ (trans (sub-appsFrom τ (dty di) (ps ++ is)) (cong (appsFrom (dty di)) (subList-++ τ ps is)))
                    (⊨-sub lm s De))
-          lk (trans (subList-length τ ps) lps) (trans (subList-length τ is) lis)
+          lk ars≡ (trans (subList-length τ ps) lps) (trans (subList-length τ is) lis)
           (mot-sub s M) (brs-sub lm s Bs))
     (≈-≡ (sym (sub-motApp τ P is e)))
 ⊨⁰-sub {τ = τ} lm s (t-def {d = d} lk al) =
@@ -1360,7 +1361,7 @@ ctor-inv () (t-mNat _ _ _ _)
 ctor-inv () (t-mEmp _ _)
 ctor-inv () (t-mUnit _ _ _)
 ctor-inv () (t-dty _)
-ctor-inv () (t-mData _ _ _ _ _ _)
+ctor-inv () (t-mData _ _ _ _ _ _ _)
 ctor-inv () (t-def _ _)
 ctor-inv () (t-ann _ _)
 ctor-inv () (t-prod _ _)
@@ -2131,9 +2132,9 @@ pres⁰ wf (t-rwt Deq W Dt) (rwt-e s) =
   conv (t-rwt (pres wf Deq s) W Dt) ≈-refl
 -- data
 pres⁰ wf (t-ctor sp _) s = ⊥-elim (Spine-no-step dh-ctor sp s)
-pres⁰ wf (t-mData De lk lps lis M Bs) (ι-data sp lkb) = pres-ιdata sp lkb De lk lps Bs
-pres⁰ wf (t-mData {is = is} {P = P} De lk lps lis M Bs) (mData-e s) =
-  conv (t-mData (pres wf De s) lk lps lis M Bs) (≈-motApp P (≈L-refl is) (step-≈ s))
+pres⁰ wf (t-mData De lk ars≡ lps lis M Bs) (ι-data sp lkb) = pres-ιdata sp lkb De lk lps Bs
+pres⁰ wf (t-mData {is = is} {P = P} De lk ars≡ lps lis M Bs) (mData-e s) =
+  conv (t-mData (pres wf De s) lk ars≡ lps lis M Bs) (≈-motApp P (≈L-refl is) (step-≈ s))
 -- ann
 pres⁰ wf (t-ann W D) ann-e = D
 -- let (a, b) = (a₀, b₀) in t
