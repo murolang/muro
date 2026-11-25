@@ -250,7 +250,17 @@ defmodule Muro.IRShareTest do
     # Without inlining, wrap stays a call in viaWrap.
     assert c_fun(noinl, "viaWrap") =~ ~r/\bwrap\(/
 
-    keys = [share: true, inline: true, inline_max: 9, grow_max: 7]
+    keys = [
+      share: true,
+      inline: true,
+      inline_max: 9,
+      grow_max: 7,
+      cost: false,
+      spec: false,
+      dup_max: 3,
+      inline_small: 4
+    ]
+
     assert Muro.IR.Share.opts(keys ++ [path: "x", c_prefix: "p_"]) == keys
 
     for mod <- [Muro.Emit.Rust, Muro.Emit.Zig] do
@@ -1053,11 +1063,31 @@ defmodule Muro.IRShareTest do
     assert calls(body(shared, "known"), "endAt") == 0
 
     kept = Muro.IR.Share.funs(funs, spec: false)
-    # Without specialisation the false arm still reaches the fold, as a
-    # call of `endAt` or as that body copied in for a hoist.
-    missed = false_arm(body(kept, "hot"))
-    assert calls(missed, "endAt") + calls(missed, "foldEnd") >= 1
-    assert calls(body(kept, "endAt"), "foldEnd") == 1
+    # `eq0 h` is shared. `endAt` is copied into the false arm, and that
+    # copy still matches on the same call. Both arms of both matches stay.
+    one = lit(1)
+
+    assert {:let, sh, {:data, "Bool"}, {:call, "eq0", [var: "h"]},
+            {:match, {:var, sh},
+             [
+               {:arm, "true", [], {:call, "foldEnd", [var: "s"]}},
+               {:arm, "false", [],
+                {:wrd, :u64, :add,
+                 [
+                   {:match, {:var, sh},
+                    [
+                      {:arm, "true", [], {:call, "foldEnd", [var: "s"]}},
+                      {:arm, "false", [], {:var, "h"}}
+                    ]},
+                   ^one
+                 ]}}
+             ]}} = body(kept, "hot")
+
+    assert {:match, {:call, "eq0", [var: "h"]},
+            [
+              {:arm, "true", [], {:call, "foldEnd", [var: "s"]}},
+              {:arm, "false", [], {:var, "h"}}
+            ]} = body(kept, "endAt")
 
     # The same bodies either way the runs are listed.
     rev = Muro.IR.Share.funs(Enum.reverse(funs))
@@ -1215,7 +1245,15 @@ defmodule Muro.IRShareTest do
     sib = true_arm(body(out, "sibling"))
     assert calls(sib, "headerEnd") == 1
     refute match?({:match, _, _}, sib)
-    assert calls(arm_named(body(out, "shadow"), "yes"), "headerEnd") == 1
+    # The payload `p` is a different binding from the parameter. The
+    # inner match stays, and the fold stays in its yes arm.
+    zero = lit(0)
+
+    assert {:match, {:var, "p"},
+            [
+              {:arm, "yes", [], {:call, "headerEnd", [var: "s"]}},
+              {:arm, "no", [], ^zero}
+            ]} = arm_named(body(out, "shadow"), "yes")
 
     # A call is not a known constructor. Both arms stay. The two
     # identical calls may be hoisted; that does not pick an arm.
@@ -1229,6 +1267,413 @@ defmodule Muro.IRShareTest do
     assert calls(arm_named(body(out, "nat"), "zero"), "headerEnd") == 0
     assert calls(arm_named(body(out, "nat"), "suc"), "headerEnd") == 1
   end
+
+  # `eq a b` is false, then `a` is bound again. The new `a` is not the
+  # value the comparison rejected. The inner comparison stays.
+  test "rebinding a name a comparison mentions does not keep the comparison" do
+    arms = [
+      {:arm, "wtrue", [], lit(1)},
+      {:arm, "wfalse", [], lit(0)}
+    ]
+
+    let_a =
+      run(
+        "let",
+        [{"a", :u64}, {"b", :u64}],
+        {:match, eq("a", "b"),
+         [
+           {:arm, "wtrue", [], lit(1)},
+           {:arm, "wfalse", [], {:let, "a", :u64, {:var, "b"}, {:match, eq("a", "b"), arms}}}
+         ]}
+      )
+
+    pair =
+      run(
+        "letp",
+        [{"a", :u64}, {"c", :u64}, {"q", :u64}, {"r", :u64}],
+        {:match, eq("a", "c"),
+         [
+           {:arm, "wtrue", [], lit(1)},
+           {:arm, "wfalse", [],
+            {:letp, "a", "b", {:pair, {:var, "q"}, {:var, "r"}}, {:match, eq("a", "c"), arms}}}
+         ]}
+      )
+
+    arm =
+      run(
+        "arm",
+        [{"a", :u64}, {"b", :u64}, {"p", {:data, "Pick"}}],
+        {:match, eq("a", "b"),
+         [
+           {:arm, "wtrue", [], lit(1)},
+           {:arm, "wfalse", [],
+            {:match, {:var, "p"},
+             [
+               {:arm, "yes", ["a"], {:match, eq("a", "b"), arms}},
+               {:arm, "no", [], lit(2)}
+             ]}}
+         ]}
+      )
+
+    out = Muro.IR.Share.funs([let_a, pair, arm])
+    assert {:let, "a", :u64, {:var, "b"}, {:match, _, ^arms}} = false_arm(body(out, "let"))
+
+    assert {:letp, "a", "b", {:pair, {:var, "q"}, {:var, "r"}}, {:match, _, ^arms}} =
+             false_arm(body(out, "letp"))
+
+    two = lit(2)
+
+    assert {:match, {:var, "p"},
+            [
+              {:arm, "yes", ["a"], {:match, _, ^arms}},
+              {:arm, "no", [], ^two}
+            ]} = false_arm(body(out, "arm"))
+  end
+
+  # The field name in the fact is the outer binding. Reusing that name
+  # for a new value must not make the match read the new value.
+  test "rebinding a field or a successor does not retarget it" do
+    field =
+      run(
+        "field",
+        [{"x", {:data, "A"}}, {"y", {:data, "A"}}, {"z", {:data, "A"}}],
+        {:let, "v", {:data, "Pair"}, {:con, "Pair", "pair", [{:var, "x"}, {:var, "y"}]},
+         {:let, "x", {:data, "A"}, {:var, "z"},
+          {:match, {:var, "v"}, [{:arm, "pair", ["a", "b"], {:var, "a"}}]}}}
+      )
+
+    suc =
+      run(
+        "suc",
+        [{"p", :nat}, {"q", :nat}],
+        {:let, "x", :nat, {:su, {:var, "p"}},
+         {:let, "p", :nat, {:var, "q"},
+          {:match, {:var, "x"}, [{:arm, "zero", [], lit(0)}, {:arm, "suc", ["k"], {:var, "k"}}]}}}
+      )
+
+    # The outer arm is substituted away. Its binder `k` is not in scope.
+    # The inner match still reads the predecessor `p`.
+    nest =
+      run(
+        "nest",
+        [{"p", :nat}],
+        {:let, "x", :nat, {:su, {:var, "p"}},
+         {:match, {:var, "x"},
+          [
+            {:arm, "zero", [], lit(0)},
+            {:arm, "suc", ["k"],
+             {:match, {:var, "x"},
+              [{:arm, "zero", [], lit(1)}, {:arm, "suc", ["m"], {:var, "m"}}]}}
+          ]}}
+      )
+
+    out = Muro.IR.Share.funs([field, suc, nest])
+
+    assert {:let, "v", {:data, "Pair"}, {:con, "Pair", "pair", [{:var, "x"}, {:var, "y"}]},
+            {:let, "x", {:data, "A"}, {:var, "z"},
+             {:match, {:var, "v"}, [{:arm, "pair", ["a", "b"], {:var, "a"}}]}}} =
+             body(out, "field")
+
+    zero = lit(0)
+
+    assert {:let, "x", :nat, {:su, {:var, "p"}},
+            {:let, "p", :nat, {:var, "q"},
+             {:match, {:var, "x"}, [{:arm, "zero", [], ^zero}, {:arm, "suc", ["k"], {:var, "k"}}]}}} =
+             body(out, "suc")
+
+    assert {:let, "x", :nat, {:su, {:var, "p"}}, {:var, "p"}} = body(out, "nest")
+  end
+
+  # `v` is `pair x y`. The arm `pair y x` binds the first field as `y`.
+  # That `y` is `x`. A let in the arm that reuses `x` must not capture it.
+  test "a permuted pair arm reads the field it names" do
+    straight =
+      run(
+        "straight",
+        [{"x", {:data, "A"}}, {"y", {:data, "A"}}],
+        {:let, "v", {:data, "Pair"}, {:con, "Pair", "pair", [{:var, "x"}, {:var, "y"}]},
+         {:match, {:var, "v"}, [{:arm, "pair", ["y", "x"], {:var, "y"}}]}}
+      )
+
+    captured =
+      run(
+        "captured",
+        [{"x", {:data, "A"}}, {"y", {:data, "A"}}, {"z", {:data, "A"}}],
+        {:let, "v", {:data, "Pair"}, {:con, "Pair", "pair", [{:var, "x"}, {:var, "y"}]},
+         {:match, {:var, "v"},
+          [
+            {:arm, "pair", ["y", "x"],
+             {:let, "x", {:data, "A"}, {:var, "z"}, {:pair, {:var, "x"}, {:var, "y"}}}}
+          ]}}
+      )
+
+    out = Muro.IR.Share.funs([straight, captured])
+
+    assert {:let, "v", {:data, "Pair"}, {:con, "Pair", "pair", [{:var, "x"}, {:var, "y"}]},
+            {:var, "x"}} = body(out, "straight")
+
+    # `y` is the first field, which is `x`. The let reuses `x`. That
+    # binder is renamed, then copied to `z`, so the pair is `(z, x)`
+    # and not `(x, x)`.
+    assert {:let, "v", {:data, "Pair"}, {:con, "Pair", "pair", [{:var, "x"}, {:var, "y"}]},
+            {:pair, {:var, "z"}, {:var, "x"}}} = body(out, "captured")
+  end
+
+  # `w`'s arm reuses `x` and `y`. Those are `w`'s fields, not `v`'s.
+  # The inner match on `v` stays, and its body is its own first field.
+  test "a nested rematch under a shadowing arm does not read the outer field" do
+    nest =
+      run(
+        "nest",
+        [{"v", {:data, "Pair"}}, {"w", {:data, "Pair"}}],
+        {:match, {:var, "v"},
+         [
+           {:arm, "pair", ["x", "y"],
+            {:match, {:var, "w"},
+             [
+               {:arm, "pair", ["x", "y"],
+                {:match, {:var, "v"}, [{:arm, "pair", ["a", "b"], {:var, "a"}}]}}
+             ]}}
+         ]}
+      )
+
+    out = Muro.IR.Share.funs([nest])
+
+    assert {:match, {:var, "v"},
+            [
+              {:arm, "pair", ["x", "y"],
+               {:match, {:var, "w"},
+                [
+                  {:arm, "pair", ["x", "y"],
+                   {:match, {:var, "v"}, [{:arm, "pair", ["a", "b"], {:var, "a"}}]}}
+                ]}}
+            ]} = body(out, "nest")
+  end
+
+  test "shrink inlines a run whose known argument makes it smaller" do
+    pick =
+      run(
+        "pick",
+        [{"b", {:data, "Bool"}}],
+        {:match, {:var, "b"}, [{:arm, "true", [], lit(1)}, {:arm, "false", [], lit(2)}]}
+      )
+
+    known = run("known", [], {:call, "pick", [{:con, "Bool", "true", []}]})
+
+    open = run("open", [{"b", {:data, "Bool"}}], {:call, "pick", [var: "b"]})
+
+    fact =
+      run(
+        "fact",
+        [{"b", {:data, "Bool"}}],
+        {:match, {:var, "b"},
+         [
+           {:arm, "true", [], {:call, "pick", [var: "b"]}},
+           {:arm, "false", [], lit(0)}
+         ]}
+      )
+
+    funs = [pick, known, open, fact]
+    out = Muro.IR.Share.funs(funs)
+    one = lit(1)
+    zero = lit(0)
+    assert body(out, "known") == one
+    assert calls(body(out, "open"), "pick") == 1
+
+    assert {:match, {:var, "b"},
+            [
+              {:arm, "true", [], ^one},
+              {:arm, "false", [], ^zero}
+            ]} = body(out, "fact")
+
+    off = Muro.IR.Share.funs(funs, cost: false)
+    assert {:call, "pick", [{:con, "Bool", "true", []}]} = body(off, "known")
+    assert calls(body(Muro.IR.Share.funs(funs, spec: false), "fact"), "pick") == 1
+  end
+
+  test "a small comparison commutes onto a match, and a large live arm stays a call" do
+    cmp =
+      run(
+        "cmp",
+        [{"b", {:data, "Bool"}}],
+        {:match, {:var, "b"},
+         [
+           {:arm, "true", [], {:con, "Bool", "true", []}},
+           {:arm, "false", [], {:con, "Bool", "false", []}}
+         ]}
+      )
+
+    assert Muro.IR.Share.size(cmp.body) <= 48
+
+    caller =
+      run(
+        "f",
+        [{"b", {:data, "Bool"}}],
+        {:match, {:call, "cmp", [var: "b"]},
+         [{:arm, "true", [], lit(1)}, {:arm, "false", [], lit(2)}]}
+      )
+
+    out = Muro.IR.Share.funs([cmp, caller])
+    one = lit(1)
+    two = lit(2)
+
+    assert {:match, {:var, "b"}, [{:arm, "true", [], ^one}, {:arm, "false", [], ^two}]} =
+             body(out, "f")
+
+    assert calls(body(out, "f"), "cmp") == 0
+
+    tiny = Muro.IR.Share.funs([cmp, caller], inline_small: Muro.IR.Share.size(cmp.body) - 1)
+    assert {:match, {:call, "cmp", [var: "b"]}, _} = body(tiny, "f")
+
+    big = run("big", [{"s", :slice}], pad(add(lit(1), lit(2)), 80))
+    assert Muro.IR.Share.size(big.body) > 160
+
+    gate =
+      run(
+        "gate",
+        [{"b", {:data, "Bool"}}, {"s", :slice}],
+        {:match, {:var, "b"},
+         [
+           {:arm, "true", [], {:call, "big", [var: "s"]}},
+           {:arm, "false", [], {:con, "Bool", "false", []}}
+         ]}
+      )
+
+    assert Muro.IR.Share.size(gate.body) <= 48
+
+    unknown =
+      run(
+        "unknown",
+        [{"b", {:data, "Bool"}}, {"s", :slice}],
+        {:match, {:call, "gate", [var: "b", var: "s"]},
+         [{:arm, "true", [], lit(1)}, {:arm, "false", [], lit(0)}]}
+      )
+
+    known =
+      run(
+        "known",
+        [{"s", :slice}],
+        {:match, {:call, "gate", [{:con, "Bool", "true", []}, {:var, "s"}]},
+         [{:arm, "true", [], lit(1)}, {:arm, "false", [], lit(0)}]}
+      )
+
+    gated = Muro.IR.Share.funs([big, gate, unknown, known], grow_max: 100_000)
+    assert calls(body(gated, "unknown"), "gate") == 1
+    assert calls(body(gated, "unknown"), "big") == 0
+
+    # The known arm of `gate` is the call. The match stays on that call.
+    # `big` is larger than `dup_max` and is not a fold, so it is not copied.
+    assert body(gated, "known") ==
+             {:match, {:call, "big", [var: "s"]},
+              [{:arm, "true", [], lit(1)}, {:arm, "false", [], lit(0)}]}
+
+    assert calls(body(gated, "known"), "big") == 1
+    assert Muro.IR.Share.size(body(gated, "known")) < 20
+  end
+
+  test "a generated fold or stream step is not specialised" do
+    step =
+      {:match, {:con, "Bool", "true", []},
+       [{:arm, "true", [], lit(1)}, {:arm, "false", [], lit(0)}]}
+
+    fold =
+      run("step0", [{"b", :u8}, {"r", :slice}, {"acc", :u64}], step)
+      |> Map.merge(%{generated: true, fold: true})
+
+    stream =
+      run("step1", [{"seed", :u64}], step)
+      |> Map.put(:generated, true)
+
+    plain = run("plain", [], step)
+    use = run("use", [{"s", :slice}], {:bfold, "step0", [], lit(0), {:var, "s"}})
+    out = Muro.IR.Share.funs([fold, stream, plain, use])
+    assert body_gen(out, "step0") == step
+    assert body_gen(out, "step1") == step
+    assert body(out, "plain") == lit(1)
+  end
+
+  test "a large exported run used once stays a call unless the copy lowers worst-path work" do
+    wide = pad(add(cnt("s"), cnt("s")), 90)
+    assert Muro.IR.Share.size(wide) > 160
+    exported = Map.put(run("wide", [{"s", :slice}], wide), :export, true)
+    once = run("once", [{"s", :slice}], {:call, "wide", [var: "s"]})
+    hot = run("hot", [{"s", :slice}], add({:call, "wide", [var: "s"]}, cnt("s")))
+
+    stayed = Muro.IR.Share.funs(image([exported, once]), grow_max: 100_000)
+    assert calls(body(stayed, "once"), "wide") == 1
+
+    saved = Muro.IR.Share.funs(image([exported, hot]), grow_max: 100_000)
+    assert calls(body(saved, "hot"), "wide") == 0
+    assert calls(body(saved, "hot"), "count") == 1
+
+    plain = Muro.IR.Share.funs(image([exported, hot]), inline: false)
+
+    assert Muro.IR.Share.path_work(saved, body(saved, "hot")) <
+             Muro.IR.Share.path_work(plain, body(plain, "hot"))
+  end
+
+  test "Rust and Zig compute the known end", %{dir: dir} do
+    path = Path.join(dir, "hend.muro")
+    File.write!(path, File.read!("test/fixtures/share_hend.muro"))
+    {:ok, book} = Muro.Load.file(path)
+    book = Muro.Prelude.for_emit(book)
+
+    if rustc = @rustc do
+      sub = Path.join(dir, "hend_rs")
+      File.mkdir_p!(sub)
+      {:ok, src} = Muro.Emit.Rust.render(book, "hend")
+      File.write!(Path.join(sub, "hend.rs"), src)
+
+      File.write!(Path.join(sub, "main.rs"), """
+      mod hend;
+      fn main() {
+          let b = [97u8, 98];
+          let s = hend::muro__slice_of(b.as_ptr(), b.len());
+          println!("{} {} {}", hend::known(s), hend::hot(2u64, s), hend::hot(0u64, s));
+      }
+      """)
+
+      {out, 0} =
+        System.cmd(rustc, ~w(--edition 2021 -A warnings main.rs -o main_rs),
+          cd: sub,
+          stderr_to_stdout: true
+        )
+
+      assert out == ""
+      assert {"1 3 2\n", 0} = System.cmd(Path.join(sub, "main_rs"), [])
+    end
+
+    if zig = @zig do
+      sub = Path.join(dir, "hend_zig")
+      File.mkdir_p!(sub)
+      {:ok, src} = Muro.Emit.Zig.render(book, "hend")
+      File.write!(Path.join(sub, "hend.zig"), src)
+
+      File.write!(Path.join(sub, "main.zig"), """
+      const std = @import("std");
+      const hend = @import("hend.zig");
+      pub fn main() !void {
+          const a = std.heap.page_allocator;
+          const raw = [_]u8{97, 98};
+          const b: []const u8 = &raw;
+          const s = hend.muro__slice_of(b.ptr, b.len);
+          const out = std.fs.File.stdout();
+          var buf: [64]u8 = undefined;
+          const line = try std.fmt.bufPrint(&buf, "{d} {d} {d}\\n", .{
+            try hend.known(a, s), try hend.hot(a, 2, s), try hend.hot(a, 0, s)
+          });
+          try out.writeAll(line);
+      }
+      """)
+
+      assert {"1 3 2\n", 0} =
+               System.cmd(zig, ~w(run main.zig --global-cache-dir) ++ [Path.join(sub, ".zcache")],
+                 cd: sub
+               )
+    end
+  end
+
+  defp eq(a, b), do: {:wrd, :u64, :eq, [{:var, a}, {:var, b}]}
 
   defp pad(t, 0), do: t
   defp pad(t, n), do: pad(add(t, lit(n)), n - 1)

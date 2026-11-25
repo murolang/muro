@@ -63,8 +63,10 @@ defmodule Muro.IR.Share do
 
   Known values. A match whose scrutinee is already a constructor, a
   word, or a comparison fixed by an enclosing arm keeps the arm that
-  can run. The fact holds in that arm, through a `let` that does not
-  rebind the name, and not in a sibling arm. An arm that aborts stays
+  can run. The fact holds in that arm, through a binding that does not
+  reuse the name or a name the fact mentions, and not in a sibling
+  arm. A match on a known pair substitutes every field at once, so a
+  permuted arm reads the field it names. An arm that aborts stays
   until the scrutinee rules it out. `cost: false` is the previous
   inlining. `spec: false` keeps every arm.
 
@@ -1102,7 +1104,8 @@ defmodule Muro.IR.Share do
       false
     else
       with {:ok, callee, _} <- inline_target(name, args, ctx, seen),
-           full = propagate(expand(callee, inlined_body(callee, ctx, seen), args, ctx), lays, ctx),
+           full =
+             propagate(expand(callee, inlined_body(callee, ctx, seen), args, ctx), lays, ctx),
            keys = MapSet.new(Map.keys(heavy_keys(full, want.scope, ctx, %{}))),
            false <- MapSet.disjoint?(keys, want.wanted) do
         true
@@ -1156,7 +1159,8 @@ defmodule Muro.IR.Share do
 
   defp pass_let(x, lay, v, b, lays, facts, want, ctx, seen, copied, inl) do
     {v, copied} = pass(v, lays, facts, want, ctx, seen, copied, :term, inl)
-    facts1 = Map.delete(facts, x)
+    # The value was checked in the outer scope. `lays` stays that scope.
+    facts1 = scrub(facts, [x])
     lays1 = Map.put(lays, x, lay)
     facts1 = learn_value(x, v, lay, facts1, lays)
     {b, copied} = pass(b, lays1, facts1, want, ctx, seen, copied, :term, inl)
@@ -1187,7 +1191,7 @@ defmodule Muro.IR.Share do
   defp pass_letp(a, b, e, body, lays, facts, want, ctx, seen, copied, inl) do
     {e, copied} = pass(e, lays, facts, want, ctx, seen, copied, :term, inl)
     lays1 = lays |> Map.delete(a) |> Map.delete(b)
-    facts1 = facts |> Map.delete(a) |> Map.delete(b)
+    facts1 = scrub(facts, [a, b])
     {body, copied} = pass(body, lays1, facts1, want, ctx, seen, copied, :term, inl)
     {{:letp, a, b, e, body}, copied}
   end
@@ -1265,9 +1269,11 @@ defmodule Muro.IR.Share do
   defp finish_match(scrut, arms, lets, lays, facts, want, ctx, seen, copied, inl, spec?) do
     {term, copied} =
       if spec? do
-        case reduce_match(scrut, arms, lays, facts) do
+        case reduce_match(scrut, arms, lays, facts, ctx) do
           {:done, tag, names, body} ->
-            facts2 = arm_facts(scrut, tag, names, facts, lays)
+            # The arm was substituted away. Its binders are not in scope,
+            # so a fact learned here keeps the outer names.
+            facts2 = arm_facts(scrut, tag, names, facts, lays, :reduced)
             pass(body, Map.drop(lays, names), facts2, want, ctx, seen, copied, :term, inl)
 
           :keep ->
@@ -1285,7 +1291,7 @@ defmodule Muro.IR.Share do
     {arms, copied} =
       Enum.map_reduce(arms, copied, fn {:arm, c, names, tm}, copied ->
         lays2 = Map.drop(lays, names)
-        facts2 = arm_facts(scrut, c, names, facts, lays)
+        facts2 = arm_facts(scrut, c, names, facts, lays, :enter)
         {tm, copied} = pass(tm, lays2, facts2, want, ctx, seen, copied, :term, inl)
         {{:arm, c, names, tm}, copied}
       end)
@@ -1306,16 +1312,47 @@ defmodule Muro.IR.Share do
 
   # ---- facts
 
-  defp arm_facts(scrut, tag, names, facts, lays) do
-    facts = Enum.reduce(names, facts, &Map.delete(&2, &1))
-    learn_scrut(scrut, tag, names, facts, lays)
+  # A fact names the binders in scope when it was learned. A new binder
+  # shadows every one of those names, so the fact is dropped with the
+  # key. `let`, `letp`, and a match arm that is kept all do this. The
+  # parameter lets an inlined run is given are ordinary lets, so they
+  # do too. A fold or a stream step is a separate function and is not
+  # specialised, so its binders never see these facts.
+  defp scrub(facts, names) do
+    drop = MapSet.new(names)
+
+    facts
+    |> Map.drop(names)
+    |> Map.filter(fn {_k, fact} -> not fact_mentions?(fact, drop) end)
   end
 
-  defp learn_scrut({:var, x}, tag, names, facts, lays) do
-    if x in names, do: facts, else: learn_tag(x, tag, names, facts, lays)
+  defp fact_mentions?({:ne_var, y}, drop), do: MapSet.member?(drop, y)
+  defp fact_mentions?({:nat, :suc, p}, drop), do: MapSet.member?(drop, p)
+
+  defp fact_mentions?({:ctor, _, fields}, drop),
+    do: Enum.any?(fields, &MapSet.member?(drop, &1))
+
+  defp fact_mentions?(_, _), do: false
+
+  # `:enter` is an arm that stays. Its binders shadow, so facts that
+  # name them go, and the scrutinee is recorded against these binders.
+  # `:reduced` is an arm that was substituted away. Those names are not
+  # introduced. The fact keeps the outer binders: retargeting it at the
+  # eliminated ones would point it out of scope.
+  defp arm_facts(scrut, tag, names, facts, lays, :enter) do
+    facts = scrub(facts, names)
+    learn_scrut(scrut, tag, names, facts, lays, :refresh)
   end
 
-  defp learn_scrut({:wrd, _, :eq, [a, b]}, tag, _names, facts, _lays) do
+  defp arm_facts(scrut, tag, names, facts, lays, :reduced) do
+    learn_scrut(scrut, tag, names, facts, lays, :keep)
+  end
+
+  defp learn_scrut({:var, x}, tag, names, facts, lays, mode) do
+    if x in names, do: facts, else: learn_tag(x, tag, names, facts, lays, mode)
+  end
+
+  defp learn_scrut({:wrd, _, :eq, [a, b]}, tag, _names, facts, _lays, _mode) do
     cond do
       false_tag?(tag) -> learn_ne(a, b, facts)
       true_tag?(tag) -> learn_eq(a, b, facts)
@@ -1323,37 +1360,54 @@ defmodule Muro.IR.Share do
     end
   end
 
-  defp learn_scrut(_, _, _, facts, _), do: facts
+  defp learn_scrut(_, _, _, facts, _, _), do: facts
 
-  defp learn_tag(x, "zero", _names, facts, lays) do
+  defp learn_tag(x, "zero", _names, facts, lays, mode) do
     if Map.get(lays, x) == :nat,
-      do: put_fact(facts, x, {:nat, :zero}),
-      else: put_ctor(facts, x, "zero", [])
+      do: put_fact(facts, x, {:nat, :zero}, mode),
+      else: put_ctor(facts, x, "zero", [], mode)
   end
 
-  defp learn_tag(x, "suc", [p], facts, lays) do
+  defp learn_tag(x, "suc", [p], facts, lays, mode) do
     if Map.get(lays, x) == :nat,
-      do: put_fact(facts, x, {:nat, :suc, p}),
-      else: put_ctor(facts, x, "suc", [p])
+      do: put_fact(facts, x, {:nat, :suc, p}, mode),
+      else: put_ctor(facts, x, "suc", [p], mode)
   end
 
-  defp learn_tag(x, "wtrue", _, facts, lays) do
+  defp learn_tag(x, "wtrue", _, facts, lays, mode) do
     if Map.get(lays, x) == :wbool,
-      do: put_fact(facts, x, {:wbool, true}),
-      else: put_ctor(facts, x, "wtrue", [])
+      do: put_fact(facts, x, {:wbool, true}, mode),
+      else: put_ctor(facts, x, "wtrue", [], mode)
   end
 
-  defp learn_tag(x, "wfalse", _, facts, lays) do
+  defp learn_tag(x, "wfalse", _, facts, lays, mode) do
     if Map.get(lays, x) == :wbool,
-      do: put_fact(facts, x, {:wbool, false}),
-      else: put_ctor(facts, x, "wfalse", [])
+      do: put_fact(facts, x, {:wbool, false}, mode),
+      else: put_ctor(facts, x, "wfalse", [], mode)
   end
 
-  defp learn_tag(x, tag, names, facts, _lays), do: put_ctor(facts, x, tag, names)
+  defp learn_tag(x, tag, names, facts, _lays, mode),
+    do: put_ctor(facts, x, tag, names, mode)
 
-  defp put_ctor(facts, x, tag, names), do: put_fact(facts, x, {:ctor, tag, names})
+  defp put_ctor(facts, x, tag, names, mode),
+    do: put_fact(facts, x, {:ctor, tag, names}, mode)
 
-  defp learn_value(x, {:var, y}, lay, facts, lays) do
+  # The value is in the outer scope. A fact built from it that names
+  # the new binder is about that outer name, so it does not belong to
+  # the binding.
+  defp learn_value(x, v, lay, facts, lays) do
+    facts = learn_bound(x, v, lay, facts, lays)
+
+    case Map.get(facts, x) do
+      nil ->
+        facts
+
+      fact ->
+        if fact_mentions?(fact, MapSet.new([x])), do: Map.delete(facts, x), else: facts
+    end
+  end
+
+  defp learn_bound(x, {:var, y}, lay, facts, lays) do
     if Map.get(lays, y) == lay do
       case Map.get(facts, y) do
         nil -> facts
@@ -1364,35 +1418,42 @@ defmodule Muro.IR.Share do
     end
   end
 
-  defp learn_value(x, {:wrd, _, {:lit, _, n}, []}, _lay, facts, _lays) when is_integer(n),
+  defp learn_bound(x, {:wrd, _, {:lit, _, n}, []}, _lay, facts, _lays) when is_integer(n),
     do: put_fact(facts, x, {:wlit, n})
 
-  defp learn_value(x, :ze, :nat, facts, _lays), do: put_fact(facts, x, {:nat, :zero})
+  defp learn_bound(x, :ze, :nat, facts, _lays), do: put_fact(facts, x, {:nat, :zero})
 
-  defp learn_value(x, {:su, {:var, p}}, :nat, facts, _lays),
+  defp learn_bound(x, {:su, {:var, p}}, :nat, facts, _lays),
     do: put_fact(facts, x, {:nat, :suc, p})
 
-  defp learn_value(x, {:con, _, tag, args}, _lay, facts, _lays) do
+  defp learn_bound(x, {:con, _, tag, args}, _lay, facts, _lays) do
     if Enum.all?(args, &match?({:var, _}, &1)) do
-      put_ctor(facts, x, tag, Enum.map(args, fn {:var, v} -> v end))
+      put_ctor(facts, x, tag, Enum.map(args, fn {:var, v} -> v end), :keep)
     else
       facts
     end
   end
 
-  defp learn_value(x, {:wrd, _, b, []}, _lay, facts, _lays) when b in [true, false],
+  defp learn_bound(x, {:wrd, _, b, []}, _lay, facts, _lays) when b in [true, false],
     do: put_fact(facts, x, {:wbool, b})
 
-  defp learn_value(_x, _v, _lay, facts, _lays), do: facts
+  defp learn_bound(_x, _v, _lay, facts, _lays), do: facts
 
-  # A fact already stored is kept. A word literal, a constructor, and a
+  # `:refresh` is the arm that is kept: its binders are the fields now,
+  # even when a fact for this scrutinee already named the outer ones.
+  # `:keep` is everywhere else. A word literal, a constructor, and a
   # nat are not replaced by a weaker comparison.
-  defp put_fact(facts, x, fact) do
+  defp put_fact(facts, x, fact, mode \\ :keep)
+
+  defp put_fact(facts, x, fact, :refresh), do: Map.put(facts, x, fact)
+
+  defp put_fact(facts, x, fact, :keep) do
     case Map.get(facts, x) do
       nil -> Map.put(facts, x, fact)
       ^fact -> facts
       {:wlit, _} -> facts
       {:nat, _} -> facts
+      {:nat, _, _} -> facts
       {:ctor, _, _} -> facts
       {:wbool, _} -> facts
       _ -> Map.put(facts, x, fact)
@@ -1517,12 +1578,12 @@ defmodule Muro.IR.Share do
   # The live arm, when the scrutinee is a pure value and every field
   # the arm binds is a variable. Anything else keeps the match, so a
   # call in the scrutinee still runs.
-  defp reduce_match(scrut, arms, lays, facts) do
+  defp reduce_match(scrut, arms, lays, facts, ctx) do
     if pure_value?(scrut) do
       case which_arm(scrut, arms, lays, facts) do
         {:ok, {:arm, tag, names, body}, fields} ->
           case bind_fields(names, fields) do
-            {:ok, substs} -> {:done, tag, names, apply_substs(body, substs)}
+            {:ok, substs} -> {:done, tag, names, apply_substs(body, substs, ctx)}
             :no -> :keep
           end
 
@@ -1623,8 +1684,66 @@ defmodule Muro.IR.Share do
 
   defp bind_fields(_, _), do: :no
 
-  defp apply_substs(body, substs) do
-    Enum.reduce(substs, body, fn {from, to}, acc -> subst_var(acc, from, to) end)
+  # Every field at once. A sequential walk of `pair y x => y` with
+  # `y` bound to `x` and `x` bound to `y` would read `y` back.
+  # A binder that is itself a target is renamed first, so
+  # `let x = z in y` does not capture the `x` just substituted for `y`.
+  defp apply_substs(body, substs, ctx) do
+    subst_sim(body, Map.new(substs), ctx)
+  end
+
+  defp subst_sim(tm, map, _ctx) when map_size(map) == 0, do: tm
+
+  defp subst_sim({:var, x}, map, _ctx) do
+    case Map.get(map, x) do
+      nil -> {:var, x}
+      y -> {:var, y}
+    end
+  end
+
+  defp subst_sim({:let, x, lay, v, b}, map, ctx) do
+    v = subst_sim(v, map, ctx)
+    map = Map.delete(map, x)
+    {x, b, map} = avoid_capture(x, b, map, ctx)
+    {:let, x, lay, v, subst_sim(b, map, ctx)}
+  end
+
+  defp subst_sim({:letp, a, b, e, body}, map, ctx) do
+    e = subst_sim(e, map, ctx)
+    map = map |> Map.delete(a) |> Map.delete(b)
+    {a, body, map} = avoid_capture(a, body, map, ctx)
+    {b, body, map} = avoid_capture(b, body, map, ctx)
+    {:letp, a, b, e, subst_sim(body, map, ctx)}
+  end
+
+  defp subst_sim({:match, scrut, arms}, map, ctx) do
+    scrut = subst_sim(scrut, map, ctx)
+
+    arms =
+      Enum.map(arms, fn {:arm, c, names, tm} ->
+        inner = Enum.reduce(names, map, &Map.delete(&2, &1))
+
+        {names, tm} =
+          Enum.map_reduce(names, tm, fn name, tm ->
+            {name2, tm, _map} = avoid_capture(name, tm, inner, ctx)
+            {name2, tm}
+          end)
+
+        {:arm, c, names, subst_sim(tm, inner, ctx)}
+      end)
+
+    {:match, scrut, arms}
+  end
+
+  defp subst_sim(tm, map, ctx), do: map_children(tm, &subst_sim(&1, map, ctx))
+
+  defp avoid_capture(z, body, map, ctx) do
+    if Enum.any?(map, fn {_from, to} -> to == z end) do
+      z2 = fresh(z, ctx)
+      {z2, subst_var(body, z, z2), map}
+    else
+      {z, body, map}
+    end
   end
 
   # An arm the scrutinee cannot take becomes `abort`. The arm stays, so

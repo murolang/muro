@@ -204,7 +204,9 @@ defmodule Muro.Emit.C do
 
   Run bodies are printed from `Muro.IR`. A refusal is that elaboration's.
   `opts` are the ones `prepare/3` takes. `path:` is the file a session
-  error names.
+  error names. The `Muro.IR.Share.funs/2` options are `share:`,
+  `inline:`, `inline_max:`, `grow_max:`, `cost:`, `spec:`, `dup_max:`,
+  and `inline_small:`.
   """
   def render(book, stem, opts \\ []) when is_list(book) and is_binary(stem) and is_list(opts) do
     case prepare(book, stem, opts) do
@@ -273,7 +275,9 @@ defmodule Muro.Emit.C do
 
   A signature is `%{name, export, params, ret}`. `name` is the C spelling.
   `params` is `{ctype, c_name}` for each live argument. `run internal` has
-  `export: false`.
+  `export: false`. `opts` may hold `c_prefix:`, `path:`, and the
+  `Muro.IR.Share.funs/2` options `share:`, `inline:`, `inline_max:`,
+  `grow_max:`, `cost:`, `spec:`, `dup_max:`, and `inline_small:`.
   """
   def prepare(book, stem, opts \\ []) when is_list(book) and is_binary(stem) and is_list(opts) do
     prefix = Keyword.get(opts, :c_prefix, "")
